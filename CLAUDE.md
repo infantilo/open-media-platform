@@ -23,3 +23,9 @@ umgekehrt.
 
 Gerade initialisiert (leeres Git-Repo, Branch `main`). Struktur, Stack und
 Ziele werden noch festgelegt.
+
+## Architekturplan
+
+Siehe `ARCHITECTURE.md` — Standard-Basis (EBU DMF, MXL, NMOS/ST2110), Tech-
+Stack-Entscheidungen, Node-Contract, Phasenplan. Bei Architektur-Entscheidungen
+dort nachlesen/fortschreiben.
