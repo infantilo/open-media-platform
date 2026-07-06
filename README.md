@@ -1,5 +1,7 @@
 # OpenMediaPlatform
 
+![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
+
 Neues, eigenständiges Projekt (getrennt von `PIPELINE CONTROLLER`).
 
 ## Status
