@@ -29,3 +29,10 @@ Ziele werden noch festgelegt.
 Siehe `ARCHITECTURE.md` — Standard-Basis (EBU DMF, MXL, NMOS/ST2110), Tech-
 Stack-Entscheidungen, Node-Contract, Phasenplan. Bei Architektur-Entscheidungen
 dort nachlesen/fortschreiben.
+
+## Umsetzung
+
+Die Implementierung folgt `UMSETZUNG.md`: Schritt-für-Schritt-Plan für
+Claude Sonnet (Pro-Plan), jeder Schritt mit Verifikationskriterien. Bei
+Implementierungsarbeit: dortige Arbeitsregeln (§0) befolgen, genau einen
+Schritt pro Sitzung, Status-Checkliste pflegen.

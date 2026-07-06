@@ -2,6 +2,10 @@
 
 Referenzdokument. Bei jeder größeren Entscheidung hierher zurückkommen und fortschreiben.
 
+> **Umsetzung:** Der Schritt-für-Schritt-Plan für die Implementierung (mit
+> Claude Sonnet / Claude Code, Pro-Plan, jeder Schritt einzeln verifizierbar)
+> steht in `UMSETZUNG.md`. Dieses Dokument bleibt die Architektur-Referenz.
+
 ## 1. Vision
 
 Offene, modulare Broadcast-/Streaming-Plattform (TV, Radio, OTT) als europäische
@@ -157,6 +161,42 @@ lädt Bundles per nativem `import()`. Kein Framework-Zwang für Plugin-Autoren,
 keine Build-Toolchain-Kopplung Shell↔Node, minimal-Dependency-Shell (vanilla
 TS + Custom Elements).
 
+### 4.5a Flow-Editor: grafisches Verschalten der Nodes (AMPP-artig)
+
+Die zentrale Operator-Oberfläche der Shell ist ein **Node-Graph-Editor**
+(vergleichbar mit AMPP-Flows / Node-RED): jeder Node erscheint als Kachel mit
+Ein-/Ausgangs-Ports, Verbindungen werden per Drag & Drop gezogen. Der Editor
+ist reine Projektion der Standards — er erfindet kein eigenes Datenmodell:
+
+- **Kacheln** = IS-04-Resources aus der Registry (Nodes/Devices, Ports =
+  Senders/Receivers). Erscheint ein neuer Node im Netz, erscheint er
+  automatisch in der Seitenleiste — kein Konfigurieren.
+- **Kanten** = IS-05-Connections. Drag & Drop von Output- auf Input-Port führt
+  den IS-05-PATCH aus; Trennen ebenso. Der Graph zeigt also immer den echten
+  Routing-Zustand, nie eine lokale Kopie.
+- **Verschachtelung/Gruppen**: mehrere Kacheln lassen sich zu einem
+  auf-/zuklappbaren **Makro-Block** gruppieren (z.B. „Regie 1" = Playout +
+  Mixer + Grafik). Das mappt konzeptionell auf die `NcBlock`-Hierarchie aus
+  MS-05-02 (§11.1): zunächst reine UI-Gruppierung (Layout-Persistenz),
+  später echte Composite-Nodes.
+- **Status-Overlay**: Tally/Health/Alarme aus dem NATS-Bus färben Kacheln und
+  Kanten live (rot = on air, grau = offline …).
+- **Parameter-Panel**: Klick auf eine Kachel öffnet ein aus dem
+  IS-12/14-Descriptor **generisch generiertes** Einstellungs-Panel; liefert
+  der Node ein eigenes UI-Bundle (§4.5), wird stattdessen dieses eingebettet.
+- **Snapshots/Szenen**: kompletter Graph-Zustand (Verbindungen + Parameter)
+  speicher- und abrufbar — Operator-Workflow „Sendung X laden".
+
+**Leitprinzip Operator-Einfachheit:** Ein Operator editiert nie Config-Dateien
+und muss keine IP-Adressen kennen. Alles, was verbunden werden kann, ist im
+Graph sichtbar; alles, was eingestellt werden kann, kommt aus dem
+Self-Describe der Nodes.
+
+Technik: vanilla TS + Custom Elements + **SVG-Canvas, selbst implementiert**
+(Pan/Zoom/Drag sind überschaubar; ein Framework wie React Flow würde die
+No-Framework-Linie aus §4.5 brechen). Layout/Gruppen/Snapshots landen in
+PostgreSQL (§4.4).
+
 ### 4.6 Sicherheit/Zertifikate
 
 Smallstep CA (step-ca, ein Go-Binary) als interne CA für mTLS zwischen
@@ -206,7 +246,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 
 | Phase | Inhalt | Träger |
 |---|---|---|
-| **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
+| **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
 | **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
