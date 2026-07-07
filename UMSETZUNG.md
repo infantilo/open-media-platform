@@ -484,7 +484,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 
 | Schritt | Status | Commit | Datum |
 |---|---|---|---|
-| A1 | offen | | |
+| A1 | erledigt | [A1] Repo-Struktur & Werkzeuge | 2026-07-07 |
 | A2 | offen | | |
 | A3 | offen | | |
 | A4 | offen | | |
