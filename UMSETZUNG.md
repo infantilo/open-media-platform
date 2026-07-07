@@ -487,7 +487,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A1 | erledigt | [A1] Repo-Struktur & Werkzeuge | 2026-07-07 |
 | A2 | erledigt | [A2] NATS als Quadlet (Dev-Fallback: podman run) | 2026-07-07 |
 | A3 | erledigt | [A3] NMOS-Registry (nmos-cpp) | 2026-07-07 |
-| A4 | offen | | |
+| A4 | erledigt | [A4] Go-Orchestrator-Skeleton | 2026-07-07 |
 | A5 | offen | | |
 | A6 | offen | | |
 | A7 | offen | | |

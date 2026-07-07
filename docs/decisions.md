@@ -95,3 +95,18 @@ JSON-Array (Erreichbarkeit), zusätzliche Fremd-Nodes erscheinen ab Schritt
 A5/A7. Gleiche Fallback-Begründung wie A2 (Podman 4.3.1 ohne Quadlets) gilt
 auch hier — `deploy/quadlets/omp-nmos-registry.container` bleibt Referenz,
 `make up`/`down` starten den Container direkt per `podman run`.
+
+## 2026-07-07 — Verifikations-Kommando angepasst (Schritt A4)
+
+**Problem:** `UMSETZUNG.md` A4 verifiziert mit `go run ./orchestrator` —
+das funktioniert nicht, weil `orchestrator/` laut A1 ein **eigenes**
+Go-Modul ist (`go mod init .../orchestrator` innerhalb des Verzeichnisses),
+das Repo-Root selbst aber kein Go-Modul ist. `go` sucht das Hauptmodul nur
+in der aktuellen/übergeordneten Verzeichniskette, nicht in
+Unterverzeichnissen, daher: „cannot find main module".
+
+**Lösung:** Äquivalent aus dem Modulverzeichnis selbst ausführen:
+`cd orchestrator && go run .` (so auch im `Makefile`, `build`/`test`-Targets
+machen das bereits seit A1). Funktional identisch, betrifft nur die
+Aufruf-Syntax. `OMP_UI_DIR` defaultet passend dazu auf `../ui` (relativ zu
+`orchestrator/` als Arbeitsverzeichnis).
