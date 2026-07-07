@@ -66,3 +66,32 @@ Workflow ausreichend (`make up` startet den Container bei Bedarf neu).
 Sobald eine Podman-Version ≥ 4.4 verfügbar ist (z. B. auf einem echten
 Zielsystem), kann `up`/`down` auf den Quadlet-Pfad umgestellt werden, ohne
 die `.container`-Datei zu ändern.
+
+## 2026-07-07 — NMOS-Registry-Image (Schritt A3)
+
+**Image-Wahl:** `docker.io/rhastie/nmos-cpp:latest` (wie in `UMSETZUNG.md`
+A3 vorgeschlagen) — verpackt die Referenzimplementierung `sony/nmos-cpp`
+(cpprestsdk/Boost/OpenSSL, aktiv gepflegt) inkl. Registration-, Query- und
+Node-API sowie optionalem MQTT-Broker. Alternative (`Mellanox/docker-nmos-cpp`)
+geprüft, aber `rhastie`-Image ist gebräuchlicher (auch für den offiziellen
+Easy-NMOS-Testaufbau verwendet) und einfacher konfigurierbar (ein
+JSON-Config-Volume statt Build-Time-Flags).
+
+**Konfiguration:** `deploy/nmos/registry.json` wird nach `/home/registry.json`
+gemountet (`RUN_NODE=FALSE`, damit der Container nur die Registry startet,
+nicht zusätzlich einen Sony-Referenz-Node). `http_port=8010` bedient
+Registration- **und** Query-REST-API auf demselben Port (Standardverhalten
+von nmos-cpp — beide APIs sind Pfad-getrennt: `/x-nmos/registration/...`
+bzw. `/x-nmos/query/...`), `query_ws_port=8011` das Query-WebSocket für
+Subscriptions.
+
+**Abweichung von der Verifikationserwartung in `UMSETZUNG.md`:** Die dort
+angegebene Erwartung `GET .../query/v1.3/nodes → []` trifft auf dieses
+Image nicht zu — der Registry-Prozess registriert sich selbst als NMOS-Node
+(Selbstbeschreibung für IS-04-Discovery), daher liefert eine frische
+Registry ein Array mit **einem** Eintrag (dem Registry-Node selbst), nicht
+ein leeres Array. Tatsächliches Kriterium: Query-API antwortet mit gültigem
+JSON-Array (Erreichbarkeit), zusätzliche Fremd-Nodes erscheinen ab Schritt
+A5/A7. Gleiche Fallback-Begründung wie A2 (Podman 4.3.1 ohne Quadlets) gilt
+auch hier — `deploy/quadlets/omp-nmos-registry.container` bleibt Referenz,
+`make up`/`down` starten den Container direkt per `podman run`.

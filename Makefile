@@ -22,9 +22,20 @@ up:
 			-p 4222:4222 -p 8222:8222 \
 			docker.io/library/nats:latest -js -m 8222; \
 	fi
+	@if podman container exists omp-nmos-registry; then \
+		podman start omp-nmos-registry; \
+	else \
+		podman run -d --name omp-nmos-registry --restart=always \
+			-p 8010:8010 -p 8011:8011 \
+			-v $(CURDIR)/deploy/nmos/registry.json:/home/registry.json:ro,Z \
+			-e RUN_NODE=FALSE \
+			docker.io/rhastie/nmos-cpp:latest; \
+	fi
 
 down:
 	-podman stop omp-nats
 	-podman rm omp-nats
+	-podman stop omp-nmos-registry
+	-podman rm omp-nmos-registry
 
 ci: check

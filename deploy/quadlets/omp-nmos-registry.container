@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenMediaPlatform NMOS Registry (nmos-cpp, IS-04/05)
+After=network-online.target
+
+[Container]
+Image=docker.io/rhastie/nmos-cpp:latest
+ContainerName=omp-nmos-registry
+Environment=RUN_NODE=FALSE
+Volume=%h/OpenMediaPlatform/deploy/nmos/registry.json:/home/registry.json:ro,Z
+PublishPort=8010:8010
+PublishPort=8011:8011
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

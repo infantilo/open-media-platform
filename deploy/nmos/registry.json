@@ -1,0 +1,8 @@
+{
+  "pri": 100,
+  "logging_level": 0,
+  "http_port": 8010,
+  "query_ws_port": 8011,
+  "label": "omp-registry",
+  "registration_expiry_interval": 12
+}
