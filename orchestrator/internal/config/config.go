@@ -15,18 +15,24 @@ type Config struct {
 	NatsURL string
 	// UIDir ist das Verzeichnis, aus dem die UI-Shell statisch ausgeliefert wird.
 	UIDir string
+	// DataDir ist das Verzeichnis für persistente Orchestrator-Daten
+	// (aktuell: Layouts, B5) — Datei-Backend, bis PostgreSQL in Phase D
+	// (D1) übernimmt.
+	DataDir string
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
-// OMP_REGISTRY_URL, OMP_NATS_URL und OMP_UI_DIR; fehlende Werte fallen auf
-// Defaults für den lokalen Dev-Betrieb zurück (Registry/NATS-Ports aus
-// UMSETZUNG.md A2/A3, UIDir relativ zum orchestrator/-Arbeitsverzeichnis).
+// OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR und OMP_DATA_DIR; fehlende
+// Werte fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
+// NATS-Ports aus UMSETZUNG.md A2/A3, UIDir/DataDir relativ zum
+// orchestrator/-Arbeitsverzeichnis).
 func Load() Config {
 	return Config{
 		Listen:      getEnv("OMP_LISTEN", ":8000"),
 		RegistryURL: getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
 		NatsURL:     getEnv("OMP_NATS_URL", "nats://localhost:4222"),
 		UIDir:       getEnv("OMP_UI_DIR", "../ui"),
+		DataDir:     getEnv("OMP_DATA_DIR", "../data"),
 	}
 }
 

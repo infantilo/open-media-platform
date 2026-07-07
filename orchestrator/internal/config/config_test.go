@@ -7,6 +7,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMP_REGISTRY_URL", "")
 	t.Setenv("OMP_NATS_URL", "")
 	t.Setenv("OMP_UI_DIR", "")
+	t.Setenv("OMP_DATA_DIR", "")
 
 	cfg := Load()
 
@@ -22,6 +23,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.UIDir != "../ui" {
 		t.Errorf("UIDir = %q, want %q", cfg.UIDir, "../ui")
 	}
+	if cfg.DataDir != "../data" {
+		t.Errorf("DataDir = %q, want %q", cfg.DataDir, "../data")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -29,6 +33,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OMP_REGISTRY_URL", "http://registry.example:8010")
 	t.Setenv("OMP_NATS_URL", "nats://nats.example:4222")
 	t.Setenv("OMP_UI_DIR", "/srv/omp/ui")
+	t.Setenv("OMP_DATA_DIR", "/srv/omp/data")
 
 	cfg := Load()
 
@@ -43,5 +48,8 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.UIDir != "/srv/omp/ui" {
 		t.Errorf("UIDir = %q, want %q", cfg.UIDir, "/srv/omp/ui")
+	}
+	if cfg.DataDir != "/srv/omp/data" {
+		t.Errorf("DataDir = %q, want %q", cfg.DataDir, "/srv/omp/data")
 	}
 }

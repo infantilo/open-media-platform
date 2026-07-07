@@ -14,6 +14,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -43,6 +44,30 @@ func (f fakeEventSubscriber) Subscribe() (<-chan sse.Event, func()) {
 	return f.ch, func() {}
 }
 
+// fakeLayoutStore ist ein einfacher In-Memory-Test-Double für LayoutStore.
+type fakeLayoutStore struct{ data map[string]json.RawMessage }
+
+func (f fakeLayoutStore) Get(name string) (json.RawMessage, error) {
+	if f.data == nil {
+		return nil, layouts.ErrNotFound
+	}
+	data, ok := f.data[name]
+	if !ok {
+		return nil, layouts.ErrNotFound
+	}
+	return data, nil
+}
+
+func (f fakeLayoutStore) Put(name string, data json.RawMessage) error {
+	if !json.Valid(data) {
+		return layouts.ErrInvalidJSON
+	}
+	if f.data != nil {
+		f.data[name] = data
+	}
+	return nil
+}
+
 // fakeGraphService ist ein Test-Double für GraphService, das feste
 // Rückgaben liefert und aufgezeichnete Connect/Disconnect-Aufrufe
 // nachprüfbar macht.
@@ -68,7 +93,7 @@ func (f *fakeGraphService) Disconnect(ctx context.Context, receiverID string) er
 }
 
 func TestHandleHealthz(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -86,7 +111,7 @@ func TestHandleHealthz(t *testing.T) {
 }
 
 func TestHandleInfo(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/info", nil))
@@ -110,7 +135,7 @@ func TestHandleNodes(t *testing.T) {
 	lister := fakeNodeLister{nodes: []registry.NodeView{
 		{ID: "node-1", Label: "Fake Node", Online: true, Devices: []registry.DeviceView{}, Senders: []registry.SenderView{}, Receivers: []registry.ReceiverView{}},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
@@ -128,7 +153,7 @@ func TestHandleNodes(t *testing.T) {
 }
 
 func TestHandleNodesEmptyListSerializesAsEmptyArray(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
@@ -142,7 +167,7 @@ func TestHandleEventsStreamsBroadcastEvents(t *testing.T) {
 	ch := make(chan sse.Event, 1)
 	ch <- sse.Event{Type: "omp.health.test", Data: []byte(`{"ok":true}`)}
 
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: ch}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: ch}, &fakeGraphService{}, fakeLayoutStore{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
@@ -186,7 +211,7 @@ func TestHandleNodeProxyDescriptor(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/descriptor", nil))
@@ -213,7 +238,7 @@ func TestHandleNodeProxyPatchParam(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", strings.NewReader(`{"value":-6}`))
@@ -238,7 +263,7 @@ func TestHandleNodeProxyMethod(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-1/methods/reset", nil))
@@ -249,7 +274,7 @@ func TestHandleNodeProxyMethod(t *testing.T) {
 }
 
 func TestHandleNodeProxyUnknownNodeReturns404(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/does-not-exist/descriptor", nil))
@@ -264,7 +289,7 @@ func TestHandleGraph(t *testing.T) {
 		Nodes: []graph.Node{{ID: "node-1", Label: "Node 1"}},
 		Edges: []graph.Edge{{ID: "recv-1", FromSender: "send-1", ToReceiver: "recv-1", State: "active"}},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc)
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/graph", nil))
@@ -283,7 +308,7 @@ func TestHandleGraph(t *testing.T) {
 
 func TestHandlePostGraphEdge(t *testing.T) {
 	svc := &fakeGraphService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc)
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"send-1","to":"recv-1"}`))
@@ -299,7 +324,7 @@ func TestHandlePostGraphEdge(t *testing.T) {
 
 func TestHandlePostGraphEdgeUnknownReceiverReturns404(t *testing.T) {
 	svc := &fakeGraphService{connectErr: graph.ErrUnknownReceiver}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc)
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"send-1","to":"nope"}`))
@@ -312,7 +337,7 @@ func TestHandlePostGraphEdgeUnknownReceiverReturns404(t *testing.T) {
 
 func TestHandleDeleteGraphEdge(t *testing.T) {
 	svc := &fakeGraphService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc)
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/graph/edges/recv-1", nil))
@@ -325,6 +350,51 @@ func TestHandleDeleteGraphEdge(t *testing.T) {
 	}
 }
 
+func TestHandleGetLayoutNotFound(t *testing.T) {
+	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/layouts/default", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandlePutThenGetLayoutRoundTrips(t *testing.T) {
+	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store)
+
+	body := `{"positions":{"node-1":{"x":1,"y":2}},"groups":{}}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/layouts/default", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/layouts/default", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", rec.Code)
+	}
+	if strings.TrimSpace(rec.Body.String()) != body {
+		t.Errorf("GET body = %s, want %s", rec.Body.String(), body)
+	}
+}
+
+func TestHandlePutLayoutInvalidJSONReturns400(t *testing.T) {
+	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/layouts/default", strings.NewReader("not json")))
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestStaticUIServing(t *testing.T) {
 	dir := t.TempDir()
 	const html = "<html><body>OpenMediaPlatform UI-Platzhalter</body></html>"
@@ -332,7 +402,7 @@ func TestStaticUIServing(t *testing.T) {
 		t.Fatalf("failed to write placeholder index.html: %v", err)
 	}
 
-	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{})
+	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))

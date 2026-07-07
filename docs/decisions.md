@@ -517,3 +517,61 @@ erscheinen nach Kill+Neustart kurzzeitig zwei Kacheln mit demselben
 Label (eine grau/tot, eine grün/neu), bis die tote Registrierung nach
 60s aus der Registry fällt — im Browser bestätigt und als erwartetes
 Verhalten erkannt.
+
+## 2026-07-07 — B5: Gruppen-Datenmodell, Layout-API, Port-Promotion ohne
+Edge-IDs im Orchestrator
+
+**Datenmodell (`ui/graph/groups.ts`):** Gruppenbaum als flache Map
+(`Record<string, GroupNode>`), jede Gruppe kennt ihre direkten Kinder
+(`nodeIds`/`groupIds`) und ihren `parentId` (null = Top-Level). Reine
+Funktionen: `topLevelItems` (welche Nodes/Gruppen sind an einer
+gegebenen Szene sichtbar — Top-Level-Nodes werden implizit aus „nicht in
+irgendeiner Gruppe" abgeleitet, nicht extra gespeichert),
+`flattenMembers` (rekursive Mitgliederliste für Port-Promotion),
+`createGroup`/`dissolveGroup`, `breadcrumbPath`, `promotedPorts`. Port-
+Promotion-Regel: ein Port ist sichtbar (promotet), außer seine einzige
+Verbindung verläuft komplett innerhalb der Gruppe — unverbundene Ports
+gelten als nach außen offen. 25 `deno test`-Fälle, inklusive
+verschachtelter Gruppen (Edge zwischen zwei Untergruppen ist aus Sicht
+der gemeinsamen Elterngruppe intern, aus Sicht der einzelnen Untergruppe
+aber extern).
+
+**Kein `effectiveTileId`/Baum-Traversal beim Rendern nötig:** Ursprünglich
+geplant, um zu bestimmen, auf welcher sichtbaren Kachel ein Port bei
+verschachtelten Gruppen landet. Stattdessen baut `flow-canvas.ts` bei
+jedem Render eine `portLocation`-Map ausschließlich aus den an der
+aktuellen Szene tatsächlich sichtbaren Kacheln (echte Nodes + `promotedPorts`
+jeder sichtbaren Gruppe) — ein Port, der in keiner sichtbaren Kachel
+auftaucht, ist automatisch „tiefer verschachtelt, hier nicht relevant",
+eine Kante mit beiden Enden auf derselben Kachel ist automatisch
+„intern auf dieser Ebene". Einfacher als Baum-Traversal und ergibt sich
+direkt aus der ohnehin nötigen Render-Vorbereitung.
+
+**Orchestrator (`internal/layouts`):** Datei-Backend für benannte
+JSON-Blobs (`GET|PUT /api/v1/layouts/<name>`), Struktur des Blobs ist dem
+Orchestrator unbekannt (reines Opak-Speichern, `ui/graph/flow-canvas.ts`
+schreibt `{positions, groups}`). Name-Validierung
+(`^[a-zA-Z0-9_-]+$`) schützt vor Path-Traversal — getestet mit
+`../escape`, `a/b`, `a\b`, leerem String, Leerzeichen. Neuer
+`OMP_DATA_DIR` (Default `../data`, analog zu `OMP_UI_DIR`).
+`localStorage`-Positionspersistenz aus B2 vollständig durch diesen
+Server-Endpunkt ersetzt (fixer Layout-Name `"default"` — mehrere
+benannte Layouts/Umschalten ist Sache späterer Schritte, z. B. B7
+Snapshots).
+
+**Bug beim Browser-Test gefunden und behoben:** Doppelklick zum Öffnen
+einer Gruppe funktionierte zunächst nicht. Ursache: `#onTilePointerDown`
+und der Hintergrund-`#onPointerDown` riefen bei **jedem** Klick
+unbedingt `#render()` auf (auch ohne Auswahländerung), was
+`viewportGroup.replaceChildren()` ausführt und damit den angeklickten
+DOM-Knoten durch einen neuen ersetzt — der Browser erkennt einen
+Doppelklick aber nur, wenn beide Klicks denselben DOM-Knoten treffen.
+Zusätzlich löste jede noch so kleine Mausbewegung während eines Klicks
+(„Jitter") im Node-Drag-Zweig von `#onPointerMove` ebenfalls einen
+Re-Render aus. Behoben durch: (1) `#render()` nur noch aufrufen, wenn
+sich die Auswahl tatsächlich ändert, (2) eine 3px-Bewegungsschwelle
+(`DRAG_THRESHOLD_PX`) im Node-Drag-Zweig, unterhalb derer keine
+Positionsänderung/kein Re-Render ausgelöst wird. Im Browser verifiziert:
+Mehrfachauswahl, Gruppieren (3 Nodes → 1 Kachel mit 3 promoteten
+Inputs/Outputs, da unverbunden), Doppelklick zum Öffnen, Breadcrumb
+zurück zu Root, Gruppe auflösen, Reload behält Gruppen+Positionen.

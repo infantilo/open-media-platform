@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -60,8 +62,9 @@ func main() {
 	go poller.Run(ctx)
 
 	graphSvc := graph.NewService(store, is05.NewClient(nil))
+	layoutStore := layouts.NewStore(filepath.Join(cfg.DataDir, "layouts"))
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -12,3 +12,6 @@ build/
 
 # Deno
 /ui/.deno/
+
+# Orchestrator-Laufzeitdaten (Layouts, B5) — Datei-Backend, kein Quellcode
+/data/

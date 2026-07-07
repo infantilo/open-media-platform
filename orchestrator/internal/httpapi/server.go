@@ -49,10 +49,18 @@ type GraphService interface {
 	Disconnect(ctx context.Context, receiverID string) error
 }
 
+// LayoutStore persistiert benannte Layout-Blobs (implementiert von
+// *layouts.Store) — der Orchestrator kennt deren Struktur nicht, reines
+// Opak-Speichern (UMSETZUNG.md B5).
+type LayoutStore interface {
+	Get(name string) (json.RawMessage, error)
+	Put(name string, data json.RawMessage) error
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
-// /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph
-// und statisches Serving von cfg.UIDir unter /.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService) http.Handler {
+// /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph,
+// /api/v1/layouts und statisches Serving von cfg.UIDir unter /.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
@@ -65,6 +73,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/graph", handleGraph(graphSvc))
 	mux.HandleFunc("POST /api/v1/graph/edges", handlePostGraphEdge(graphSvc))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))
+	mux.HandleFunc("GET /api/v1/layouts/{name}", handleGetLayout(layoutStore))
+	mux.HandleFunc("PUT /api/v1/layouts/{name}", handlePutLayout(layoutStore))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
 	return mux
 }
