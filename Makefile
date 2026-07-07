@@ -1,13 +1,15 @@
 .PHONY: build test check up down ci
 
+GO_MODULES := orchestrator nodes/mock
+
 build:
-	cd orchestrator && go build ./...
+	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
 
 test:
-	cd orchestrator && go test ./...
+	$(foreach m,$(GO_MODULES),cd $(m) && go test ./... && cd $(CURDIR) &&) true
 
 check:
-	cd orchestrator && go vet ./... && go test ./...
+	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts
 
 # Dev-Fallback statt systemd-Quadlets: die auf dieser Maschine verfügbare

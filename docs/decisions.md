@@ -166,3 +166,30 @@ CLI-Tool). Offizielles `natscli` (`github.com/nats-io/natscli`) per `go
 install` nachgezogen — passt zum „ein Binary pro Werkzeug"-Muster
 (ARCHITECTURE.md §4.1) und wird für Event-Bus-Debugging auch in späteren
 Schritten (B4 Tally-Events, C-Phase) wiederkehrend gebraucht.
+
+## 2026-07-07 — Mock-Node: eigenes Go-Modul, Scope-Grenze zu A8 (Schritt A7)
+
+**Modul-Layout:** `nodes/mock/` ist ein eigenständiges Go-Modul (eigenes
+`go.mod`), kein Teil des Orchestrator-Moduls — konsistent mit dem
+Node-Contract (`ARCHITECTURE.md` §5: "eigenständiger Prozess/Container",
+unabhängig baubar/startbar) und damit, dass künftige echte Media-Nodes
+(Phase C) ohnehin als separate Rust-Crates kommen. UUIDs für IS-04-IDs
+werden mit einer ~10-Zeilen-Eigenimplementierung (`internal/idgen`, RFC
+4122 v4) erzeugt statt einer Library — Minimal-Dependency-Regel.
+
+**Scope-Grenze zu A8:** `GET /descriptor.json` liefert bewusst nur einen
+einzigen, schreibbaren Parameter (`label`) und keine Methoden. A8 fügt
+laut `UMSETZUNG.md` explizit einen weiteren Parameter (`gain`) und eine
+Methode (`reset()`) hinzu und formalisiert das Format als JSON-Schema
+(`docs/descriptor-v0.schema.json`) mit generischem Orchestrator-Proxy
+(`GET/PATCH /api/v1/nodes/<id>/params/<name>`). A7 liefert nur die
+Node-seitigen Endpunkte (`GET/PATCH /params/<name>` direkt am Mock-Node),
+noch ohne Orchestrator-Proxy und ohne Schema-Datei — sonst würde A8 keine
+neue Substanz mehr haben (Arbeitsregel §0.2: "keine Features aus späteren
+Schritten mitnehmen").
+
+**Resilienz:** Sowohl NATS- als auch Registry-Verbindung sind beim Start
+nicht fatal (Retry-Loop mit 2s-Backoff für die Registrierung, gleiches
+`RetryOnFailedConnect`-Muster wie im Orchestrator für NATS). Schlägt ein
+Heartbeat mit HTTP 404 fehl (Registry hat die Node vergessen, z. B. nach
+Neustart), registriert sich der Mock-Node automatisch neu.

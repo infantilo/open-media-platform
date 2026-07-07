@@ -490,7 +490,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A4 | erledigt | [A4] Go-Orchestrator-Skeleton | 2026-07-07 |
 | A5 | erledigt | [A5] Registry-Anbindung: Node-Inventar | 2026-07-07 |
 | A6 | erledigt | [A6] Event-Bus-Anbindung + Live-Updates | 2026-07-07 |
-| A7 | offen | | |
+| A7 | erledigt | [A7] Mock-Node omp-mock | 2026-07-07 |
 | A8 | offen | | |
 | A9 | offen | | |
 | B1 | offen | | |
