@@ -8,15 +8,24 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// healthStaleAfter ist der Schwellwert für die NATS-Health-basierte
+// Offline-Erkennung (UMSETZUNG.md B4: "~10s"), deutlich unter
+// registration_expiry_interval (12s, deploy/nmos/registry.json), damit
+// eine tote Node schon als offline markiert wird, bevor die Registry sie
+// vollständig entfernt.
+const healthStaleAfter = 10 * time.Second
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -27,8 +36,9 @@ func main() {
 	defer stop()
 
 	hub := sse.NewHub()
+	healthTracker := health.NewTracker()
 
-	nc, err := eventbus.Connect(cfg.NatsURL, hub)
+	nc, err := eventbus.Connect(cfg.NatsURL, hub, healthTracker.Touch)
 	if err != nil {
 		slog.Error("nats connect failed, continuing without event bus", "error", err)
 	} else {
@@ -37,6 +47,8 @@ func main() {
 
 	store := registry.NewStore()
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
+	poller.HealthTracker = healthTracker
+	poller.HealthStaleAfter = healthStaleAfter
 	poller.OnChange = func(eventType string, node registry.NodeView) {
 		data, err := json.Marshal(node)
 		if err != nil {

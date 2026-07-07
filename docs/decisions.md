@@ -461,3 +461,43 @@ HTTP 409, nur die gültige Verbindung bleibt bestehen.
 Nodes/Receivern skaliert das linear mit der Node-Zahl. Für Mock-Maßstab
 unkritisch, bei Bedarf später cachen (gleiche Überlegung wie beim
 Graph-Aufbau selbst, siehe B1-Eintrag oben).
+
+## 2026-07-07 — B4: Offline schneller als Registry-Expiry; Tally-Subject
+neu definiert
+
+**Problem:** Die Verifikation verlangt „Mock-Node killen → Kachel wird
+binnen ~10s als offline markiert" — die IS-04-Registry entfernt eine
+tote Node aber erst nach vollen 12s (`registration_expiry_interval`,
+deploy/nmos/registry.json) komplett aus dem Query-API-Ergebnis. Eine
+entfernte Node hätte gar keine Kachel mehr, auf der man „offline"
+anzeigen könnte.
+
+**Lösung:** Neuer `internal/health.Tracker` im Orchestrator merkt sich,
+wann zuletzt ein NATS-Health-Event (`omp.health.<id>`, A7) für eine Node
+eingetroffen ist (`Touch`, ausgelöst über einen neuen `onHealth`-Callback
+in `eventbus.Connect`). Der Registry-Poller (A5/A6) markiert eine Node
+als offline (`Online = false`), sobald ihr letztes Health-Event länger
+als `HealthStaleAfter` (10s, `main.go`) zurückliegt — **bevor** die
+Registry sie nach 12s ganz entfernt. Da `Online` bereits Teil des
+diffbaren `NodeView` ist, erzeugt das automatisch ein reguläres
+`node.updated`-SSE-Event über die bestehende A6-Diff-Logik — keine neue
+Event-Art nötig. Live verifiziert: Mock-Node getötet →
+`node.updated` mit `online:false` nach ~10s, `node.removed` nach ~12s;
+Neustart → wieder `online:true`.
+
+**Tally-Subject `omp.tally.<id>` neu definiert:** Weder
+`ARCHITECTURE.md` noch `UMSETZUNG.md` legen einen NATS-Subject für
+Tally-Events fest (A7 nennt nur `omp.health.<id>` für Health). Analog
+dazu `omp.tally.<id>` mit Body `{"on": bool}` gewählt — passt zum
+bestehenden Namensschema, wird vom generischen `omp.>`-Abo (A6) bereits
+mitgeliefert, keine Orchestrator-Änderung nötig, nur Frontend-seitiges
+Auswerten des SSE-Event-Typs. Live verifiziert:
+`nats pub omp.tally.<id> '{"on":true}'` erscheint im SSE-Stream.
+
+**Frontend:** `flow-canvas.ts` abonniert `/api/v1/events` per
+`EventSource`; `node.added/updated/removed` lösen ein Neuladen des
+Graphen aus (einfacher und robuster als Client-seitiges Patchen
+einzelner Felder), `omp.tally.<id>` färbt die betroffene Kachel rot
+(Vorrang vor der Health-Randfarbe). Reconnect mit exponentiellem Backoff
+(1s → 15s, zurückgesetzt bei erfolgreichem `onopen`) statt
+`EventSource`s festem Standard-Retry-Intervall.

@@ -55,16 +55,26 @@ type DragState =
   | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point }
   | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point };
 
+const SSE_RECONNECT_INITIAL_DELAY_MS = 1000;
+const SSE_RECONNECT_MAX_DELAY_MS = 15000;
+const NODE_INVENTORY_EVENT_TYPES = new Set(["node.added", "node.updated", "node.removed"]);
+const TALLY_EVENT_PREFIX = "omp.tally.";
+
 export class FlowCanvas extends HTMLElement {
   #viewport: Viewport = { ...IDENTITY_VIEWPORT };
   #positions: Record<string, Point> = {};
   #graph: Graph = { nodes: [], edges: [] };
+  #tally: Record<string, boolean> = {};
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
   #selectedEdgeId: string | null = null;
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
+
+  #eventSource: EventSource | null = null;
+  #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
+  #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
   #onKeyDown = (ev: KeyboardEvent) => {
     if (!this.#selectedEdgeId) return;
@@ -79,10 +89,67 @@ export class FlowCanvas extends HTMLElement {
     this.#buildSkeleton();
     document.addEventListener("keydown", this.#onKeyDown);
     this.#fetchAndRender();
+    this.#connectEvents();
   }
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this.#onKeyDown);
+    clearTimeout(this.#reconnectTimer);
+    this.#eventSource?.close();
+  }
+
+  // Verbindet den Live-Status-Overlay-Stream (UMSETZUNG.md B4): Node-
+  // Inventar-Änderungen (A6) lösen ein Neuladen des Graphen aus,
+  // Tally-Events (omp.tally.<id>) färben die betroffene Kachel rot.
+  // Bei Verbindungsabbruch reconnectet mit exponentiellem Backoff statt
+  // sich auf EventSources festen Standard-Retry zu verlassen.
+  #connectEvents() {
+    const es = new EventSource("/api/v1/events");
+    this.#eventSource = es;
+
+    es.onopen = () => {
+      this.#reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
+    };
+    es.onmessage = (ev) => this.#handleServerEvent(ev);
+    es.onerror = () => {
+      es.close();
+      this.#scheduleReconnect();
+    };
+  }
+
+  #scheduleReconnect() {
+    clearTimeout(this.#reconnectTimer);
+    this.#reconnectTimer = setTimeout(() => this.#connectEvents(), this.#reconnectDelayMs);
+    this.#reconnectDelayMs = Math.min(this.#reconnectDelayMs * 2, SSE_RECONNECT_MAX_DELAY_MS);
+  }
+
+  #handleServerEvent(ev: MessageEvent) {
+    let parsed: { type: string; data: unknown };
+    try {
+      parsed = JSON.parse(ev.data);
+    } catch {
+      return;
+    }
+
+    if (NODE_INVENTORY_EVENT_TYPES.has(parsed.type)) {
+      this.#fetchAndRender();
+      return;
+    }
+
+    if (parsed.type.startsWith(TALLY_EVENT_PREFIX)) {
+      const nodeId = parsed.type.slice(TALLY_EVENT_PREFIX.length);
+      const on = (parsed.data as { on?: boolean } | null)?.on === true;
+      this.#setTally(nodeId, on);
+    }
+  }
+
+  #setTally(nodeId: string, on: boolean) {
+    if (on) {
+      this.#tally[nodeId] = true;
+    } else {
+      delete this.#tally[nodeId];
+    }
+    this.#render();
   }
 
   #loadPositions() {
@@ -167,13 +234,15 @@ export class FlowCanvas extends HTMLElement {
     g.setAttribute("data-id", node.id);
     g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
 
+    const onTally = this.#tally[node.id] === true;
+
     const body = document.createElementNS(SVG_NS, "rect");
     body.setAttribute("width", String(NODE_WIDTH));
     body.setAttribute("height", String(height));
     body.setAttribute("rx", "4");
-    body.setAttribute("fill", "#2d2d2d");
-    body.setAttribute("stroke", healthColor(node.health));
-    body.setAttribute("stroke-width", "2");
+    body.setAttribute("fill", onTally ? "#8b1a1a" : "#2d2d2d");
+    body.setAttribute("stroke", onTally ? "#ff3b3b" : healthColor(node.health));
+    body.setAttribute("stroke-width", onTally ? "3" : "2");
     g.appendChild(body);
 
     const header = document.createElementNS(SVG_NS, "rect");

@@ -18,6 +18,14 @@ const PollInterval = 2 * time.Second
 // Stand bei "node.removed").
 type ChangeFunc func(eventType string, node NodeView)
 
+// healthChecker ist die von Poller genutzte Teilmenge von
+// *health.Tracker — als Interface gehalten, um einen Import-Zyklus
+// registry↔health zu vermeiden und Poller-Tests ohne echten Tracker zu
+// erlauben.
+type healthChecker interface {
+	IsStale(nodeID string, threshold time.Duration) bool
+}
+
 // Poller fragt periodisch die Query-API ab, schreibt das Ergebnis in den
 // Store und meldet Änderungen gegenüber dem vorherigen Snapshot an
 // OnChange (falls gesetzt).
@@ -30,6 +38,17 @@ type Poller struct {
 	// oder veränderten Node aufgerufen. Optional — nil bedeutet "kein
 	// Interesse an Änderungsereignissen" (z. B. in Tests).
 	OnChange ChangeFunc
+
+	// HealthTracker und HealthStaleAfter erlauben eine schnellere
+	// Offline-Erkennung als die IS-04-Registry-Expiry (12s, siehe
+	// deploy/nmos/registry.json): Nodes, deren letztes NATS-Health-Event
+	// (omp.health.<id>) länger als HealthStaleAfter zurückliegt, werden
+	// als offline markiert, auch wenn sie im Registry-Snapshot noch
+	// existieren (UMSETZUNG.md B4). Optional — HealthTracker == nil
+	// deaktiviert die Prüfung (Registry-Präsenz bleibt einzige
+	// Online-Quelle, wie in A5).
+	HealthTracker    healthChecker
+	HealthStaleAfter time.Duration
 }
 
 // NewPoller verbindet einen Client mit einem Store.
@@ -61,10 +80,24 @@ func (p *Poller) pollOnce(ctx context.Context) {
 		slog.Warn("registry poll failed", "error", err)
 		return
 	}
+	p.applyHealthStaleness(nodes)
 	if p.OnChange != nil {
 		p.notifyChanges(nodes)
 	}
 	p.store.Set(nodes)
+}
+
+// applyHealthStaleness markiert Nodes als offline, deren letztes
+// NATS-Health-Event länger als HealthStaleAfter zurückliegt.
+func (p *Poller) applyHealthStaleness(nodes []NodeView) {
+	if p.HealthTracker == nil || p.HealthStaleAfter <= 0 {
+		return
+	}
+	for i := range nodes {
+		if nodes[i].Online && p.HealthTracker.IsStale(nodes[i].ID, p.HealthStaleAfter) {
+			nodes[i].Online = false
+		}
+	}
 }
 
 // notifyChanges vergleicht nodes mit dem zuletzt gesehenen Stand und ruft

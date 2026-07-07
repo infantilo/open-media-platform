@@ -505,7 +505,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | B1 | erledigt | [B1] Graph-API im Orchestrator | 2026-07-07 |
 | B2 | erledigt | [B2] SVG-Canvas Pan/Zoom | 2026-07-07 |
 | B3 | erledigt | [B3] Drag & Drop-Verbindungen | 2026-07-07 |
-| B4 | offen | | |
+| B4 | Code fertig, Browser-Check durch Nutzer ausstehend | [B4] Live-Status-Overlay | 2026-07-07 |
 | B5 | offen | | |
 | B6 | offen | | |
 | B7 | offen | | |
