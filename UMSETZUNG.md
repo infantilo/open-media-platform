@@ -503,7 +503,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A8 | erledigt | [A8] Descriptor v0 + Parameter-Proxy | 2026-07-07 |
 | A9 | erledigt | [A9] CI-Grundgerüst | 2026-07-07 |
 | B1 | erledigt | [B1] Graph-API im Orchestrator | 2026-07-07 |
-| B2 | Code fertig, Browser-Check durch Nutzer ausstehend | [B2] SVG-Canvas Pan/Zoom | 2026-07-07 |
+| B2 | erledigt | [B2] SVG-Canvas Pan/Zoom | 2026-07-07 |
 | B3 | offen | | |
 | B4 | offen | | |
 | B5 | offen | | |
