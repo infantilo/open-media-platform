@@ -110,3 +110,34 @@ Unterverzeichnissen, daher: „cannot find main module".
 machen das bereits seit A1). Funktional identisch, betrifft nur die
 Aufruf-Syntax. `OMP_UI_DIR` defaultet passend dazu auf `../ui` (relativ zu
 `orchestrator/` als Arbeitsverzeichnis).
+
+## 2026-07-07 — jq nachinstalliert (Schritt A5)
+
+`jq` war nicht installiert, wird aber von den in `UMSETZUNG.md` selbst
+vorgegebenen Verifikationskommandos vorausgesetzt (A5, A8, ...). Via
+`apt-get install jq` nachgezogen (Debian-Paket, aktuell genug für reines
+JSON-Filtering, keine Versionsbindung an das Projekt).
+
+## 2026-07-07 — IS-04-Feldnamen aus der Spezifikation, nicht aus dem
+Gedächtnis (Schritt A5)
+
+Gemäß Arbeitsregel §0.6 wurden die tatsächlichen v1.3-JSON-Schemas aus
+`AMWA-TV/is-04` (Branch `v1.3.x`, vormals `AMWA-TV/nmos-discovery-registration`
+— Repo wurde umbenannt) nachgeschlagen statt Feldnamen zu raten:
+`resource_core.json`, `node.json`, `device.json`, `sender.json`,
+`receiver_core.json`/`receiver_video.json`. Wichtigster Fund: das
+Medien-**Format** steht bei Sendern nur indirekt über `flow_id` → Flow-
+Resource (`flow.format`) zur Verfügung, bei Receivern dagegen direkt als
+eigenes `format`-Feld am Receiver selbst — deshalb lösen
+`internal/registry/client.go` (`buildSnapshot`) und das Fake-Node-Skript
+das unterschiedlich auf. Das Fake-Node-Skript registriert bewusst keinen
+Flow (nicht Teil der A5-Anweisung), daher hat der Fake-Sender im
+Testaufbau ein leeres `format`-Feld — das ist korrekt, kein Bug.
+
+**Nebenbefund:** Ohne wiederholten Heartbeat (`POST
+.../health/nodes/<id>`) verschwindet der Fake-Node nach
+`registration_expiry_interval` (12 s, `deploy/nmos/registry.json`) wieder
+aus der Registry — Standard-IS-04-Verhalten. Das Skript sendet einen
+einmaligen Heartbeat direkt nach der Registrierung, das reicht für die
+Verifikation, aber für längere manuelle Tests muss das Skript ggf. erneut
+ausgeführt werden.

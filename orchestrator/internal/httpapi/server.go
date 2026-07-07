@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
 
 // AppName identifiziert den Orchestrator in /api/v1/info und Logs.
@@ -21,12 +22,21 @@ type InfoResponse struct {
 	Version string `json:"version"`
 }
 
+// NodeLister liefert den zuletzt bekannten Node-Snapshot (implementiert von
+// *registry.Store); als Interface gehalten, damit Handler-Tests ohne
+// echten Poller auskommen.
+type NodeLister interface {
+	List() []registry.NodeView
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
-// /healthz, /api/v1/info und statisches Serving von cfg.UIDir unter /.
-func NewHandler(cfg config.Config) http.Handler {
+// /healthz, /api/v1/info, /api/v1/nodes und statisches Serving von
+// cfg.UIDir unter /.
+func NewHandler(cfg config.Config, nodes NodeLister) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
+	mux.HandleFunc("GET /api/v1/nodes", handleNodes(nodes))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
 	return mux
 }
@@ -37,6 +47,12 @@ func handleHealthz(w http.ResponseWriter, r *http.Request) {
 
 func handleInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, InfoResponse{Name: AppName, Version: Version})
+}
+
+func handleNodes(nodes NodeLister) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, nodes.List())
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

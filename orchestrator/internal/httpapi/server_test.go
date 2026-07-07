@@ -10,10 +10,17 @@ import (
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 )
 
+// fakeNodeLister ist ein einfacher Test-Double für NodeLister, damit
+// Handler-Tests ohne echten Poller/Registry-Client auskommen.
+type fakeNodeLister struct{ nodes []registry.NodeView }
+
+func (f fakeNodeLister) List() []registry.NodeView { return f.nodes }
+
 func TestHandleHealthz(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -31,7 +38,7 @@ func TestHandleHealthz(t *testing.T) {
 }
 
 func TestHandleInfo(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/info", nil))
@@ -51,6 +58,38 @@ func TestHandleInfo(t *testing.T) {
 	}
 }
 
+func TestHandleNodes(t *testing.T) {
+	lister := fakeNodeLister{nodes: []registry.NodeView{
+		{ID: "node-1", Label: "Fake Node", Online: true, Devices: []registry.DeviceView{}, Senders: []registry.SenderView{}, Receivers: []registry.ReceiverView{}},
+	}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var body []registry.NodeView
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON body: %v", err)
+	}
+	if len(body) != 1 || body[0].Label != "Fake Node" {
+		t.Fatalf("nodes = %+v, want one Fake Node", body)
+	}
+}
+
+func TestHandleNodesEmptyListSerializesAsEmptyArray(t *testing.T) {
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
+
+	if strings.TrimSpace(rec.Body.String()) != "[]" && strings.TrimSpace(rec.Body.String()) != "null" {
+		t.Fatalf("body = %q, want JSON array", rec.Body.String())
+	}
+}
+
 func TestStaticUIServing(t *testing.T) {
 	dir := t.TempDir()
 	const html = "<html><body>OpenMediaPlatform UI-Platzhalter</body></html>"
@@ -58,7 +97,7 @@ func TestStaticUIServing(t *testing.T) {
 		t.Fatalf("failed to write placeholder index.html: %v", err)
 	}
 
-	h := NewHandler(config.Config{UIDir: dir})
+	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{})
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
