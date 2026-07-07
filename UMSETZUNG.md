@@ -477,6 +477,15 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Spezial-Hardware möglich (Loopback, Interop mit ffmpeg/OBS).
 - **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
   — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
+- **D6 (geplant, noch nicht detailliert)** Resource-Aware Placement &
+  Live-Migration: Host-Telemetrie über NATS, Placement-Engine
+  (advisory zuerst), Make-before-break-Migrationsprotokoll —
+  Konzept siehe `ARCHITECTURE.md` §6.1. Node-Contract-Grundlage
+  (State-Export/Import + Readiness-Signal, §5 Punkt 6) muss vor dem
+  SDK-v1-Freeze (Ende Phase C) stehen, auch wenn D6 selbst erst hier
+  detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
+  nur das Protokoll simulierbar, nicht der Ausfallfreiheits-Anspruch
+  selbst.
 
 ---
 

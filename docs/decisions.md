@@ -239,3 +239,37 @@ Kenntnis). `GET /api/v1/nodes/<id>/descriptor`,
 Proxies (`orchestrator/internal/httpapi/proxy.go`) — der Orchestrator
 parst den Descriptor nicht, validiert ihn nicht gegen das Schema und
 kennt keine Parameter-/Methodennamen.
+
+## 2026-07-07 — Resource-Aware Placement & Live-Migration: geprüft, geparkt
+(vor Schritt A9)
+
+**Kontext:** Nutzer-Anforderung, dass der Orchestrator jederzeit
+Ressourcenmetriken aller Hosts/VMs kennen und überlastete Nodes
+proaktiv per Make-before-break (neue Instanz starten, verifizieren,
+IS-05-Umschaltung, dann Teardown) auf einen anderen Host migrieren soll,
+bevor ein Audio-/Video-Ausfall entsteht (Beispiel: überlasteter DVE-Node).
+
+**Vorgehen:** Anforderung von Claude Fable gegen `ARCHITECTURE.md` prüfen
+lassen (unabhängige Zweitmeinung vor einer Architekturänderung).
+Ergebnis: passt philosophisch zu EBU DMF/Node-Lifecycle, erweitert die
+Orchestrator-Rolle aber von „Lifecycle + Routing" zu „Scheduler" — echte
+Erweiterung, keine Detailarbeit. Fehlende Bausteine: Host-Telemetrie
+(über NATS, kein neues Transportmittel), eine Placement-Engine (reines
+Custom-Design, zunächst advisory statt automatisch), ein
+Make-before-break-Protokoll (State-Export/Import + Readiness-Signal als
+Node-Contract-Erweiterung). Auf dem Single-Host-Dev-Rechner (kein
+zweiter Host, kein 2110-Netz) nur das Protokoll simulierbar, nicht der
+Ausfallfreiheits-Anspruch selbst.
+
+**Entscheidung:** Anforderung akzeptiert, Timing geparkt.
+- `ARCHITECTURE.md` §5 (Node-Contract) um Punkt 6 ergänzt: State-Export/
+  Import + „media-ready"-Signal — **jetzt** in die Spec aufgenommen, weil
+  SDK v1 (Ende Phase C) den Contract für Community-Nodes einfriert;
+  nachträgliches Ergänzen wäre ein Breaking Change.
+- `ARCHITECTURE.md` neuer Abschnitt §6.1 „Resource-Aware Placement &
+  Live-Migration (geplant, ab P2)" dokumentiert Konzept, Bausteine,
+  Standards-Abdeckung und Testbarkeits-Grenzen.
+- `UMSETZUNG.md` Phase D um Punkt D6 (geplant, nicht detailliert)
+  ergänzt.
+- **Keine** A–C-Schritte ändern dadurch ihren Scope; A9 (CI-Grundgerüst)
+  läuft wie geplant weiter.

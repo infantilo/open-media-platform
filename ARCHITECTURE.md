@@ -212,6 +212,13 @@ Jeder Node — intern oder Drittanbieter — MUSS:
 3. `/ui/manifest.json` + `/ui/bundle.js` bereitstellen (optional, falls UI).
 4. Media-I/O über MXL (lokal) oder ST 2110 (Netz) sprechen — nie proprietär.
 5. Als eigenständiger Prozess/Container laufen, unabhängig neustartbar.
+6. **(ab SDK v1, P1 — siehe §6.1)** Seinen vollständigen Parameterzustand
+   über den bestehenden Descriptor exportier- und reimportierbar machen und
+   ein „media-ready"-Signal liefern, sobald er nach dem Start tatsächlich
+   Medien produziert/konsumiert. Grundlage für ressourcenbewusste
+   Make-before-break-Migration (§6.1) — Nachrüsten nach SDK-Freeze wäre
+   ein Breaking Change für alle Community-Nodes, deshalb von Anfang an im
+   Contract statt später ergänzt.
 
 Damit ist „Drittanbieter erweitert die Plattform" = neues Image + Registrierung,
 kein Plattform-Fork.
@@ -235,6 +242,57 @@ kein Plattform-Fork.
   bleibt innerhalb der Facility gekapselt, niemand muss neue Protokolle
   erfinden.
 
+### 6.1 Resource-Aware Placement & Live-Migration (geplant, ab P2)
+
+**Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
+jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete
+Maschine einen Audio-/Video-Ausfall verursacht (z. B. ein zu schwerer
+DVE-Node), proaktiv eine neue Instanz auf einem anderen Host starten,
+deren Betriebsbereitschaft prüfen, den Media-Pfad per IS-05 dorthin
+umschalten (Make-before-break) und erst danach die alte Instanz beenden.
+
+**Einordnung:** Passt philosophisch zu EBU DMF (lose gekoppelte,
+orchestrierte Media-Functions) und dem bestehenden
+Node-Lifecycle-Auftrag des Orchestrators (§3) — erweitert dessen Rolle
+aber von „Lifecycle + Routing" zu „Scheduler". Das ist eine echte
+Erweiterung, keine Detailarbeit, und braucht drei neue Bausteine:
+
+1. **Telemetrie:** Host-Metriken (CPU/RAM/GPU/NIC-Auslastung) periodisch
+   über den bestehenden NATS-Bus publizieren (kein neues Transportmittel
+   nötig) — leichtgewichtiger Host-Agent statt Eigenentwicklung eines
+   Protokolls; ab der Cloud-Stufe (k3s, §4.3) liefert `metrics-server`
+   einen Teil davon bereits mit.
+2. **Placement-Engine:** reines Custom-Design (Scoring/Schwellwerte/
+   Trend-Erkennung) im Orchestrator — existiert in keinem der genutzten
+   Standards. Erste Ausbaustufe bewusst **advisory** (Alarm +
+   Vorschlag), nicht sofort automatisch migrierend.
+3. **Make-before-break-Protokoll:** neue Instanz starten → Zustand
+   übernehmen (Node-Contract §5 Punkt 6) → Betriebsbereitschaft
+   verifizieren (Health + Descriptor + tatsächlich fließende Medien) →
+   IS-05-Umschaltung der Downstream-Receiver → Drain → Teardown der alten
+   Instanz. Für Node-Typen mit kontinuierlichem visuellem Zustand
+   (Beispiel DVE mitten in einer Transition) ist „unterbrechungsfrei" in
+   v1 als **kein Ausfall**, nicht als **unsichtbare Bildschnitt-Fortsetzung**
+   zu verstehen — ehrlich im Scope halten statt zu versprechen, was nur
+   mit PTP-referenziertem Frame-genauem State-Handoff ginge.
+
+**Standards-Abdeckung:** IS-04 (neue Instanz entdecken), IS-05 (die
+eigentliche Umschaltung), Descriptor-Selbstbeschreibung (Zustand
+exportieren, „kostenlos" wenn Parameter vollständig sind), ST 2022-7 als
+verwandte, aber andere Antwort (Redundanz statt Migration). Nicht
+abgedeckt: Telemetrie-Format, Placement-Logik, Migrations-Orchestrierung,
+Umschalt-Timing — das ist Eigenentwicklung. k3s reschedult reaktiv
+(kill/restart), das ist kein Ersatz für Make-before-break.
+
+**Testbarkeit:** Auf der aktuellen Single-Host-Dev-Maschine (kein zweiter
+Host, kein 2110-Netz, siehe §8) nur das Protokoll simulierbar (z. B. zwei
+Podman-„virtuelle Hosts" mit fingierten Metriken), nicht der
+Ausfallfreiheits-Anspruch selbst — das spricht dafür, Schnittstellen
+(Node-Contract-Klausel, Telemetrie-Event-Schema, Migrations-Zustandsmaschine)
+früh festzulegen, die eigentliche Umsetzung/Verifikation aber erst ab P2
+(Platform-Hardening, parallel zu Community-Nodes) bzw. der Cloud/k3s-Stufe
+anzugehen. Keine A–C-Schritte in `UMSETZUNG.md` ändern dadurch ihren Scope.
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als
@@ -248,7 +306,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes | Community + Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
 | **P4 – Demo-Vorbereitung** | Minimal-Grafik-Node (kein volles OGraf/AI nötig), Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
