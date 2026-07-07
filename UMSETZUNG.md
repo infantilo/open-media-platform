@@ -485,7 +485,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | Schritt | Status | Commit | Datum |
 |---|---|---|---|
 | A1 | erledigt | [A1] Repo-Struktur & Werkzeuge | 2026-07-07 |
-| A2 | offen | | |
+| A2 | erledigt | [A2] NATS als Quadlet (Dev-Fallback: podman run) | 2026-07-07 |
 | A3 | offen | | |
 | A4 | offen | | |
 | A5 | offen | | |

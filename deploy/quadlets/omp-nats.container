@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenMediaPlatform Event-Bus (NATS)
+After=network-online.target
+
+[Container]
+Image=docker.io/library/nats:latest
+ContainerName=omp-nats
+Exec=-js -m 8222
+PublishPort=4222:4222
+PublishPort=8222:8222
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target
