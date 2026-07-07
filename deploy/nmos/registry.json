@@ -4,5 +4,5 @@
   "http_port": 8010,
   "query_ws_port": 8011,
   "label": "omp-registry",
-  "registration_expiry_interval": 12
+  "registration_expiry_interval": 60
 }

@@ -501,3 +501,19 @@ einzelner Felder), `omp.tally.<id>` färbt die betroffene Kachel rot
 (Vorrang vor der Health-Randfarbe). Reconnect mit exponentiellem Backoff
 (1s → 15s, zurückgesetzt bei erfolgreichem `onopen`) statt
 `EventSource`s festem Standard-Retry-Intervall.
+
+**Browser-Verifikation deckte ein Timing-Problem auf:**
+`registration_expiry_interval` stand bei 12s (A3) — nur 2s nach dem
+10s-Health-Staleness-Schwellwert. Die Kachel wurde zwar korrekt als
+offline markiert, verschwand aber praktisch gleichzeitig wieder
+(`node.removed` bei 12s) — im Browser real getestet: nicht sichtbar
+als „wurde grau", sondern nur als „ist verschwunden". Behoben durch
+`deploy/nmos/registry.json`: `registration_expiry_interval` von 12 auf
+**60s** erhöht — Health-Staleness (10s) und Registry-Expiry (60s) sind
+jetzt weit genug auseinander, damit die Offline-Kachel tatsächlich eine
+Weile sichtbar bleibt, bevor sie ganz verschwindet. Nebeneffekt (kein
+Bug): Da jeder Mock-Node-Neustart eine neue zufällige ID bekommt,
+erscheinen nach Kill+Neustart kurzzeitig zwei Kacheln mit demselben
+Label (eine grau/tot, eine grün/neu), bis die tote Registrierung nach
+60s aus der Registry fällt — im Browser bestätigt und als erwartetes
+Verhalten erkannt.
