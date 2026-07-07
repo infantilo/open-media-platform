@@ -30,6 +30,15 @@ import {
   promotedPorts,
   topLevelItems,
 } from "./groups.ts";
+import {
+  controlKindFor,
+  type ControlKind,
+  type Descriptor,
+  enumValues,
+  type MethodSpec,
+  numberRange,
+  type ParamSpec,
+} from "./controls.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -82,8 +91,8 @@ interface PortLocation {
 }
 
 type DragState =
-  | { kind: "pan"; startScreen: Point; startViewport: Viewport }
-  | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point }
+  | { kind: "pan"; startScreen: Point; startViewport: Viewport; moved: boolean }
+  | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point; moved: boolean }
   | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point }
   | { kind: "select"; startScreen: Point };
 
@@ -111,6 +120,8 @@ export class FlowCanvas extends HTMLElement {
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
   #breadcrumbBar!: HTMLDivElement;
+  #panelContainer!: HTMLDivElement;
+  #panelNodeId: string | null = null;
 
   #eventSource: EventSource | null = null;
   #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
@@ -261,10 +272,19 @@ export class FlowCanvas extends HTMLElement {
       "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
       "display:flex;gap:6px;align-items:center;z-index:10;";
 
-    this.replaceChildren(svg, breadcrumb);
+    const panel = document.createElement("div");
+    panel.setAttribute("data-role", "parameter-panel");
+    panel.style.cssText =
+      "position:absolute;top:0;right:0;bottom:0;width:280px;" +
+      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
+      "padding:10px;padding-top:36px;overflow-y:auto;display:none;" +
+      "z-index:20;border-left:1px solid #444;box-sizing:border-box;";
+
+    this.replaceChildren(svg, breadcrumb, panel);
     this.#svg = svg;
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
+    this.#panelContainer = panel;
   }
 
   async #fetchAndRender() {
@@ -600,6 +620,7 @@ export class FlowCanvas extends HTMLElement {
       nodeId: tileId,
       startScreen: this.#screenPoint(ev),
       startWorld,
+      moved: false,
     };
   }
 
@@ -646,6 +667,7 @@ export class FlowCanvas extends HTMLElement {
       kind: "pan",
       startScreen: this.#screenPoint(ev),
       startViewport: { ...this.#viewport },
+      moved: false,
     };
   }
 
@@ -656,6 +678,7 @@ export class FlowCanvas extends HTMLElement {
     if (this.#drag.kind === "pan") {
       const dx = current.x - this.#drag.startScreen.x;
       const dy = current.y - this.#drag.startScreen.y;
+      if (Math.hypot(dx, dy) >= DRAG_THRESHOLD_PX) this.#drag.moved = true;
       this.#viewport = {
         x: this.#drag.startViewport.x + dx,
         y: this.#drag.startViewport.y + dy,
@@ -683,6 +706,7 @@ export class FlowCanvas extends HTMLElement {
     // aus und der Browser erkennt einen nachfolgenden Doppelklick nicht
     // mehr auf derselben Kachel.
     if (Math.hypot(dxScreen, dyScreen) < DRAG_THRESHOLD_PX) return;
+    this.#drag.moved = true;
 
     const dxWorld = dxScreen / this.#viewport.scale;
     const dyWorld = dyScreen / this.#viewport.scale;
@@ -695,11 +719,17 @@ export class FlowCanvas extends HTMLElement {
 
   #onPointerUp(ev: PointerEvent) {
     if (this.#drag?.kind === "node") {
-      this.#saveLayout();
+      if (this.#drag.moved) {
+        this.#saveLayout();
+      } else {
+        this.#openParameterPanel(this.#drag.nodeId);
+      }
     } else if (this.#drag?.kind === "connect") {
       this.#finishConnect(ev);
     } else if (this.#drag?.kind === "select") {
       this.#finishSelection(ev);
+    } else if (this.#drag?.kind === "pan" && !this.#drag.moved) {
+      this.#closePanel();
     }
     this.#drag = null;
   }
@@ -865,6 +895,257 @@ export class FlowCanvas extends HTMLElement {
       await this.#fetchAndRender();
     } catch (err) {
       this.#showToast(`Trennen fehlgeschlagen: ${err}`);
+    }
+  }
+
+  // --- Parameter-Panel (UMSETZUNG.md B6) ---
+
+  async #openParameterPanel(nodeId: string) {
+    if (!this.#graph.nodes.some((n) => n.id === nodeId)) return; // Gruppen haben keinen Descriptor
+    this.#panelNodeId = nodeId;
+    this.#panelContainer.style.display = "block";
+    this.#panelContainer.replaceChildren();
+    const loading = document.createElement("p");
+    loading.textContent = "Lädt…";
+    this.#panelContainer.appendChild(loading);
+
+    const mounted = await this.#tryMountUIBundle(nodeId);
+    if (mounted) return;
+
+    await this.#renderGenericPanel(nodeId);
+  }
+
+  #closePanel() {
+    if (this.#panelNodeId === null) return;
+    this.#panelNodeId = null;
+    this.#panelContainer.style.display = "none";
+    this.#panelContainer.replaceChildren();
+  }
+
+  #panelCloseButton(): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.textContent = "✕";
+    btn.style.cssText = "position:absolute;top:8px;right:8px;cursor:pointer;";
+    btn.addEventListener("click", () => this.#closePanel());
+    return btn;
+  }
+
+  // Versucht, das node-eigene UI-Bundle zu laden (ARCHITECTURE.md §4.5):
+  // liefert der Node /ui/manifest.json + /ui/bundle.js, wird dessen
+  // Custom Element per nativem import() geladen statt des generischen
+  // Panels. Liefert false, wenn der Node kein Bundle hat (404 o. ä.) —
+  // dann übernimmt #renderGenericPanel.
+  async #tryMountUIBundle(nodeId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/ui/manifest.json`);
+      if (!res.ok) return false;
+      const manifest = (await res.json()) as { tag?: string };
+      if (!manifest.tag) return false;
+
+      await import(/* webpackIgnore: true */ `/api/v1/nodes/${nodeId}/ui/bundle.js`);
+
+      this.#panelContainer.replaceChildren();
+      this.#panelContainer.appendChild(this.#panelCloseButton());
+      const el = document.createElement(manifest.tag);
+      el.setAttribute("node-id", nodeId);
+      this.#panelContainer.appendChild(el);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async #renderGenericPanel(nodeId: string) {
+    let descriptor: Descriptor;
+    try {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/descriptor`);
+      if (!res.ok) throw new Error(String(res.status));
+      descriptor = await res.json();
+    } catch (err) {
+      this.#panelContainer.replaceChildren();
+      this.#panelContainer.appendChild(this.#panelCloseButton());
+      const p = document.createElement("p");
+      p.textContent = `Descriptor konnte nicht geladen werden: ${err}`;
+      this.#panelContainer.appendChild(p);
+      return;
+    }
+
+    this.#panelContainer.replaceChildren();
+    this.#panelContainer.appendChild(this.#panelCloseButton());
+
+    const node = this.#graph.nodes.find((n) => n.id === nodeId);
+    const title = document.createElement("h3");
+    title.textContent = node?.label ?? nodeId;
+    title.style.cssText = "margin:0 0 8px 0;font-size:14px;";
+    this.#panelContainer.appendChild(title);
+
+    for (const param of descriptor.parameters) {
+      const value = await this.#fetchParamValue(nodeId, param.name);
+      this.#panelContainer.appendChild(this.#buildParamRow(nodeId, param, value));
+    }
+
+    if (descriptor.methods.length > 0) {
+      const hr = document.createElement("hr");
+      hr.style.borderColor = "#444";
+      this.#panelContainer.appendChild(hr);
+    }
+    for (const method of descriptor.methods) {
+      const btn = document.createElement("button");
+      btn.textContent = method.name;
+      btn.style.cssText = "display:block;margin:6px 0;cursor:pointer;";
+      btn.addEventListener("click", () => this.#invokeMethod(nodeId, method));
+      this.#panelContainer.appendChild(btn);
+    }
+  }
+
+  async #fetchParamValue(nodeId: string, name: string): Promise<unknown> {
+    try {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${name}`);
+      if (res.ok) return (await res.json()).value;
+    } catch {
+      // Steuerelement zeigt dann einen Platzhalter.
+    }
+    return null;
+  }
+
+  #buildParamRow(nodeId: string, param: ParamSpec, value: unknown): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-role", "param-row");
+    wrapper.setAttribute("data-param-name", param.name);
+    wrapper.style.cssText = "margin:8px 0;";
+
+    const label = document.createElement("label");
+    label.textContent = param.name + (param.unit ? ` (${param.unit})` : "");
+    label.style.cssText = "display:block;margin-bottom:2px;color:#aaa;";
+    wrapper.appendChild(label);
+
+    const control = this.#buildControlElement(controlKindFor(param), param, value, (newValue) => {
+      this.#patchParam(nodeId, param, newValue, wrapper);
+    });
+    wrapper.appendChild(control);
+    return wrapper;
+  }
+
+  #buildControlElement(
+    kind: ControlKind,
+    param: ParamSpec,
+    value: unknown,
+    onCommit: (newValue: unknown) => void,
+  ): HTMLElement {
+    switch (kind) {
+      case "slider": {
+        const container = document.createElement("div");
+        container.style.cssText = "display:flex;gap:6px;align-items:center;";
+
+        const range = numberRange(param);
+        const slider = document.createElement("input");
+        slider.type = "range";
+        if (range) {
+          slider.min = String(range.min);
+          slider.max = String(range.max);
+        }
+        slider.value = String(value ?? 0);
+        slider.style.flex = "1";
+
+        const numberField = document.createElement("input");
+        numberField.type = "number";
+        numberField.value = String(value ?? 0);
+        numberField.style.width = "56px";
+
+        const commit = (raw: string) => {
+          slider.value = raw;
+          numberField.value = raw;
+          onCommit(Number(raw));
+        };
+        slider.addEventListener("input", () => commit(slider.value));
+        numberField.addEventListener("change", () => commit(numberField.value));
+
+        container.append(slider, numberField);
+        return container;
+      }
+      case "toggle": {
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = value === true;
+        checkbox.addEventListener("change", () => onCommit(checkbox.checked));
+        return checkbox;
+      }
+      case "select": {
+        const select = document.createElement("select");
+        for (const option of enumValues(param)) {
+          const opt = document.createElement("option");
+          opt.value = option;
+          opt.textContent = option;
+          if (option === value) opt.selected = true;
+          select.appendChild(opt);
+        }
+        select.addEventListener("change", () => onCommit(select.value));
+        return select;
+      }
+      case "text": {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = String(value ?? "");
+        input.addEventListener("change", () => onCommit(input.value));
+        return input;
+      }
+      case "readonly":
+      default: {
+        const span = document.createElement("span");
+        span.textContent = String(value ?? "–");
+        return span;
+      }
+    }
+  }
+
+  // Optimistisches UI: der Control-Wert wurde bereits geändert, bevor
+  // dieser PATCH-Aufruf startet. Schlägt er fehl, wird der tatsächliche
+  // Server-Wert neu abgefragt und die Zeile damit neu aufgebaut — der
+  // Server-Wert ist die Wahrheit (UMSETZUNG.md B6), nicht der zuletzt
+  // versuchte Client-Wert.
+  async #patchParam(nodeId: string, param: ParamSpec, newValue: unknown, wrapper: HTMLElement) {
+    try {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${param.name}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: newValue }),
+      });
+      if (res.ok) return;
+      const text = await res.text();
+      this.#showToast(`Parameter „${param.name}" fehlgeschlagen: ${text || res.status}`);
+    } catch (err) {
+      this.#showToast(`Parameter „${param.name}" fehlgeschlagen: ${err}`);
+    }
+
+    const serverValue = await this.#fetchParamValue(nodeId, param.name);
+    wrapper.replaceWith(this.#buildParamRow(nodeId, param, serverValue));
+  }
+
+  async #invokeMethod(nodeId: string, method: MethodSpec) {
+    let body: Record<string, unknown> | undefined;
+    if (method.args.length > 0) {
+      body = {};
+      for (const arg of method.args) {
+        const raw = prompt(`Wert für „${arg.name}" (${arg.type}):`);
+        if (raw === null) return; // Abbruch
+        body[arg.name] = arg.type === "number" ? Number(raw) : arg.type === "boolean" ? raw === "true" : raw;
+      }
+    }
+
+    try {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/methods/${method.name}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Methode „${method.name}" fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      await this.#renderGenericPanel(nodeId);
+    } catch (err) {
+      this.#showToast(`Methode „${method.name}" fehlgeschlagen: ${err}`);
     }
   }
 

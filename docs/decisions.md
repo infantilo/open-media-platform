@@ -575,3 +575,58 @@ Positionsänderung/kein Re-Render ausgelöst wird. Im Browser verifiziert:
 Mehrfachauswahl, Gruppieren (3 Nodes → 1 Kachel mit 3 promoteten
 Inputs/Outputs, da unverbunden), Doppelklick zum Öffnen, Breadcrumb
 zurück zu Root, Gruppe auflösen, Reload behält Gruppen+Positionen.
+
+## 2026-07-07 — B6: Parameter-Panel + Node-UI-Bundles
+
+**Klick-vs-Drag-Unterscheidung wiederverwendet:** Die B5-Bewegungsschwelle
+(`DRAG_THRESHOLD_PX`) trägt jetzt zusätzlich das `moved`-Flag auf
+`DragState` (sowohl „node" als auch „pan"). Ein Node-Klick ohne
+nennenswerte Bewegung öffnet das Parameter-Panel, ein Klick auf leere
+Fläche schließt es — ohne die bereits eingebaute Klick-Toleranz doppelt
+zu verwalten.
+
+**Descriptor→Control-Mapping** (`ui/graph/controls.ts`): reine Funktion
+`controlKindFor` (number→Slider, boolean→Toggle, enum→Select,
+string→Textfeld, `readonly` überschreibt den Typ, unbekannte Typen
+fallen auf schreibgeschützte Anzeige zurück statt ein falsches
+Steuerelement zu bauen), plus `numberRange`/`enumValues` zur
+Wertebereich-Extraktion. 12 `deno test`-Fälle.
+
+**Optimistisches UI mit Rollback:** Ein Steuerelement übernimmt den
+Client-Wert sofort (z. B. Slider-Drag), der PATCH läuft im Hintergrund.
+Bei Fehlschlag wird **nicht** der zuletzt versuchte Wert zurückgesetzt,
+sondern der tatsächliche Server-Wert per erneutem `GET .../params/<name>`
+abgefragt und die Zeile damit neu aufgebaut — „Server-Wert ist die
+Wahrheit" (UMSETZUNG.md B6) gilt auch für den Rollback-Fall, nicht nur
+für den Erfolgsfall.
+
+**Node-UI-Bundle-Proxy:** `GET /api/v1/nodes/<id>/ui/manifest.json` und
+`/ui/bundle.js` sind zwei weitere Registrierungen des bereits aus A8
+bestehenden generischen `handleNodeProxy`-Helpers — keine neue
+Proxy-Logik nötig. Frontend probiert bei jedem Panel-Öffnen zuerst das
+Manifest (404 → generisches Panel); die in `ARCHITECTURE.md` §4.5
+erwähnte Alternative (Manifest-Präsenz als Extension-Tag direkt am
+IS-04-Node-Resource ablesen, um das Probing zu vermeiden) ist bewusst
+zurückgestellt — bei Bedarf später als Optimierung nachrüstbar, ohne
+den Proxy-Mechanismus zu ändern.
+
+**Manifest-Schema selbst festgelegt:** Weder `ARCHITECTURE.md` noch
+`UMSETZUNG.md` spezifizieren den exakten Inhalt von `manifest.json`.
+Gewählt: `{name, version, tag}` — `tag` ist der Custom-Element-Name, den
+die Shell nach dem `import()` des Bundles instanziiert
+(`document.createElement(manifest.tag)`). Das Bundle selbst schützt
+seine `customElements.define`-Aufrufe mit einer `get()`-Prüfung, damit
+mehrere Node-Instanzen mit demselben Tag-Namen (unterschiedliche
+Bundle-URLs, gleicher Tag) nicht kollidieren.
+
+**Mock-Node-Beispiel-Bundle:** `--ui-bundle`-Flag (Default aus) hält die
+meisten Mock-Instanzen beim generischen Panel, damit dessen Slider/
+Toggle/Select-Pfad weiterhin browser-testbar bleibt; eine geflaggte
+Instanz demonstriert den Bundle-Pfad (eigenes Custom Element mit Shadow
+DOM, `+1 dB`/`-1 dB`-Buttons auf `gain`). Dateien eingebettet via
+`go:embed` (`nodes/mock/internal/uibundle`).
+
+Verifiziert: Slider-Änderung an Mock A landet nachweislich am Server
+(`curl` bestätigt `-6`); Mock mit `--ui-bundle` zeigt sein eigenes
+Element statt des generischen Panels; Klick auf leere Fläche schließt
+das Panel.

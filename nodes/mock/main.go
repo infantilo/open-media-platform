@@ -16,6 +16,7 @@ import (
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/health"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/idgen"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/is04"
+	"github.com/infantilo/openmediaplatform/nodes/mock/internal/uibundle"
 )
 
 // heartbeatInterval gilt sowohl für den IS-04-Heartbeat als auch für die
@@ -30,6 +31,7 @@ func main() {
 	senders := flag.Int("senders", 1, "Anzahl simulierter Sender")
 	receivers := flag.Int("receivers", 1, "Anzahl simulierter Receiver")
 	port := flag.Int("port", 9001, "Port des Mock-Node-HTTP-API (descriptor.json, params)")
+	uiBundle := flag.Bool("ui-bundle", false, "Beispiel-Node-UI-Bundle servieren (/ui/manifest.json, /ui/bundle.js) statt des generischen Descriptor-Panels")
 	flag.Parse()
 
 	registryURL := getEnv("OMP_REGISTRY_URL", "http://localhost:8010")
@@ -91,6 +93,9 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", descriptor.Handler(store))
 	mux.Handle("/x-nmos/connection/", connection.Handler(connStore))
+	if *uiBundle {
+		mux.Handle("/ui/", uibundle.Handler())
+	}
 
 	go func() {
 		addr := fmt.Sprintf(":%d", *port)

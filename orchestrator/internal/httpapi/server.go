@@ -70,6 +70,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, "/methods/{name}"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", handleNodeProxy(nodes, "/ui/manifest.json"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", handleNodeProxy(nodes, "/ui/bundle.js"))
 	mux.HandleFunc("GET /api/v1/graph", handleGraph(graphSvc))
 	mux.HandleFunc("POST /api/v1/graph/edges", handlePostGraphEdge(graphSvc))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))

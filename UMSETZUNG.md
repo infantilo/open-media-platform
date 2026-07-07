@@ -507,7 +507,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | B3 | erledigt | [B3] Drag & Drop-Verbindungen | 2026-07-07 |
 | B4 | erledigt | [B4] Live-Status-Overlay | 2026-07-07 |
 | B5 | erledigt | [B5] Gruppen/Verschachtelung | 2026-07-07 |
-| B6 | offen | | |
+| B6 | erledigt | [B6] Parameter-Panel + Node-UI-Bundles | 2026-07-07 |
 | B7 | offen | | |
 | C1 | offen | | |
 | C2 | offen | | |

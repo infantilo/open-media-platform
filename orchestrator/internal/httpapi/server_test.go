@@ -200,6 +200,43 @@ func TestHandleEventsStreamsBroadcastEvents(t *testing.T) {
 	}
 }
 
+func TestHandleNodeProxyUIManifestAndBundle(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ui/manifest.json":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"name":"omp-mock-panel","version":"0.1.0","tag":"omp-mock-panel"}`))
+		case "/ui/bundle.js":
+			w.Header().Set("Content-Type", "text/javascript")
+			w.Write([]byte(`customElements.define("omp-mock-panel", class extends HTMLElement {});`))
+		default:
+			t.Errorf("unexpected proxied path %q", r.URL.Path)
+		}
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/ui/manifest.json", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "omp-mock-panel") {
+		t.Fatalf("manifest body = %q, want to contain tag name", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/ui/bundle.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bundle status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "customElements.define") {
+		t.Fatalf("bundle body = %q, want to contain customElements.define", rec.Body.String())
+	}
+}
+
 func TestHandleNodeProxyDescriptor(t *testing.T) {
 	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/descriptor.json" {
