@@ -1,7 +1,8 @@
-// <omp-flow-canvas>: rendert /api/v1/graph als SVG-Kacheln mit Pan/Zoom
-// und verschiebbaren Nodes (UMSETZUNG.md B2). Reine Koordinatenlogik
-// steckt in geometry.ts (dort per `deno test` geprüft) — dieses Modul
-// bindet sie nur an DOM-/Fetch-/Storage-APIs.
+// <omp-flow-canvas>: rendert /api/v1/graph als SVG-Kacheln mit Pan/Zoom,
+// verschiebbaren Nodes (B2) und Drag&Drop-Verbindungen (B3). Reine
+// Koordinaten-/Kompatibilitätslogik steckt in geometry.ts/
+// compatibility.ts (dort per `deno test` geprüft) — dieses Modul bindet
+// sie nur an DOM-/Fetch-/Storage-APIs.
 
 import {
   defaultPosition,
@@ -16,6 +17,7 @@ import {
   worldToScreen,
   zoomAt,
 } from "./geometry.ts";
+import { portsCompatible } from "./compatibility.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const POSITIONS_STORAGE_KEY = "omp-flow-positions";
@@ -23,6 +25,7 @@ const POSITIONS_STORAGE_KEY = "omp-flow-positions";
 interface GraphPort {
   id: string;
   label: string;
+  format: string;
 }
 
 interface GraphNode {
@@ -45,23 +48,41 @@ interface Graph {
   edges: GraphEdge[];
 }
 
+type PortSide = "input" | "output";
+
 type DragState =
   | { kind: "pan"; startScreen: Point; startViewport: Viewport }
-  | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point };
+  | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point }
+  | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point };
 
 export class FlowCanvas extends HTMLElement {
   #viewport: Viewport = { ...IDENTITY_VIEWPORT };
   #positions: Record<string, Point> = {};
   #graph: Graph = { nodes: [], edges: [] };
   #drag: DragState | null = null;
+  #rubberBand: SVGPathElement | null = null;
+  #selectedEdgeId: string | null = null;
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
 
+  #onKeyDown = (ev: KeyboardEvent) => {
+    if (!this.#selectedEdgeId) return;
+    if (ev.key === "Delete" || ev.key === "Backspace") {
+      ev.preventDefault();
+      this.#deleteSelectedEdge();
+    }
+  };
+
   connectedCallback() {
     this.#loadPositions();
     this.#buildSkeleton();
+    document.addEventListener("keydown", this.#onKeyDown);
     this.#fetchAndRender();
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener("keydown", this.#onKeyDown);
   }
 
   #loadPositions() {
@@ -171,10 +192,13 @@ export class FlowCanvas extends HTMLElement {
     g.appendChild(title);
 
     node.inputs.forEach((port, i) => {
-      g.appendChild(this.#renderPort(port, i, node.inputs.length, "input", pos, height));
+      const circle = this.#renderPort(port, i, node.inputs.length, "input", pos, height);
+      g.appendChild(circle);
     });
     node.outputs.forEach((port, i) => {
-      g.appendChild(this.#renderPort(port, i, node.outputs.length, "output", pos, height));
+      const circle = this.#renderPort(port, i, node.outputs.length, "output", pos, height);
+      circle.addEventListener("pointerdown", (ev) => this.#onOutputPortPointerDown(ev, port));
+      g.appendChild(circle);
     });
 
     g.addEventListener("pointerdown", (ev) => this.#onNodePointerDown(ev, node.id));
@@ -186,7 +210,7 @@ export class FlowCanvas extends HTMLElement {
     port: GraphPort,
     index: number,
     count: number,
-    side: "input" | "output",
+    side: PortSide,
     nodePos: Point,
     height: number,
   ): SVGCircleElement {
@@ -198,6 +222,8 @@ export class FlowCanvas extends HTMLElement {
     circle.setAttribute("fill", side === "input" ? "#5b9bd5" : "#70ad47");
     circle.setAttribute("data-role", "port");
     circle.setAttribute("data-port-id", port.id);
+    circle.setAttribute("data-port-side", side);
+    circle.setAttribute("data-format", port.format);
     const titleEl = document.createElementNS(SVG_NS, "title");
     titleEl.textContent = port.label;
     circle.appendChild(titleEl);
@@ -209,6 +235,7 @@ export class FlowCanvas extends HTMLElement {
     const to = this.#findPortWorldPosition(edge.toReceiver, "input");
     if (!from || !to) return null;
 
+    const selected = edge.id === this.#selectedEdgeId;
     const midX = (from.x + to.x) / 2;
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute(
@@ -216,14 +243,20 @@ export class FlowCanvas extends HTMLElement {
       `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`,
     );
     path.setAttribute("fill", "none");
-    path.setAttribute("stroke", edge.state === "active" ? "#e0a030" : "#666");
-    path.setAttribute("stroke-width", "2");
+    path.setAttribute("stroke", selected ? "#ffffff" : edge.state === "active" ? "#e0a030" : "#666");
+    path.setAttribute("stroke-width", selected ? "3" : "2");
     path.setAttribute("data-role", "edge");
     path.setAttribute("data-id", edge.id);
+    path.style.cursor = "pointer";
+    path.addEventListener("pointerdown", (ev) => {
+      ev.stopPropagation();
+      this.#selectedEdgeId = edge.id;
+      this.#render();
+    });
     return path;
   }
 
-  #findPortWorldPosition(portId: string, side: "input" | "output"): Point | null {
+  #findPortWorldPosition(portId: string, side: PortSide): Point | null {
     for (const node of this.#graph.nodes) {
       const ports = side === "input" ? node.inputs : node.outputs;
       const index = ports.findIndex((p) => p.id === portId);
@@ -247,8 +280,25 @@ export class FlowCanvas extends HTMLElement {
     };
   }
 
+  #onOutputPortPointerDown(ev: PointerEvent, port: GraphPort) {
+    ev.stopPropagation();
+    this.#svg.setPointerCapture(ev.pointerId);
+    const fromWorld = this.#findPortWorldPosition(port.id, "output") ?? { x: 0, y: 0 };
+    this.#drag = {
+      kind: "connect",
+      fromPortId: port.id,
+      fromFormat: port.format,
+      fromWorld,
+      currentScreen: this.#screenPoint(ev),
+    };
+    this.#highlightIncompatiblePorts(port.format);
+    this.#updateRubberBand();
+  }
+
   #onPointerDown(ev: PointerEvent) {
     if (this.#drag) return;
+    this.#selectedEdgeId = null;
+    this.#render();
     this.#svg.setPointerCapture(ev.pointerId);
     this.#drag = {
       kind: "pan",
@@ -273,6 +323,12 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
 
+    if (this.#drag.kind === "connect") {
+      this.#drag = { ...this.#drag, currentScreen: current };
+      this.#updateRubberBand();
+      return;
+    }
+
     const dxScreen = current.x - this.#drag.startScreen.x;
     const dyScreen = current.y - this.#drag.startScreen.y;
     const dxWorld = dxScreen / this.#viewport.scale;
@@ -284,9 +340,11 @@ export class FlowCanvas extends HTMLElement {
     this.#render();
   }
 
-  #onPointerUp(_ev: PointerEvent) {
+  #onPointerUp(ev: PointerEvent) {
     if (this.#drag?.kind === "node") {
       this.#savePositions();
+    } else if (this.#drag?.kind === "connect") {
+      this.#finishConnect(ev);
     }
     this.#drag = null;
   }
@@ -301,6 +359,121 @@ export class FlowCanvas extends HTMLElement {
   #screenPoint(ev: MouseEvent): Point {
     const rect = this.#svg.getBoundingClientRect();
     return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+  }
+
+  #highlightIncompatiblePorts(fromFormat: string) {
+    const inputs = this.#viewportGroup.querySelectorAll('[data-port-side="input"]');
+    inputs.forEach((el) => {
+      const format = el.getAttribute("data-format") ?? "";
+      const compatible = portsCompatible(fromFormat, format);
+      const svgEl = el as SVGElement;
+      svgEl.style.opacity = compatible ? "1" : "0.25";
+      svgEl.style.pointerEvents = compatible ? "auto" : "none";
+    });
+  }
+
+  #clearPortHighlights() {
+    const ports = this.#viewportGroup.querySelectorAll('[data-role="port"]');
+    ports.forEach((el) => {
+      const svgEl = el as SVGElement;
+      svgEl.style.opacity = "1";
+      svgEl.style.pointerEvents = "auto";
+    });
+  }
+
+  #updateRubberBand() {
+    if (this.#drag?.kind !== "connect") return;
+    const toWorld = screenToWorld(this.#drag.currentScreen, this.#viewport);
+    const from = this.#drag.fromWorld;
+    const midX = (from.x + toWorld.x) / 2;
+    const d = `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${toWorld.y}, ${toWorld.x} ${toWorld.y}`;
+
+    if (!this.#rubberBand) {
+      const path = document.createElementNS(SVG_NS, "path");
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", "#ffffff");
+      path.setAttribute("stroke-width", "2");
+      path.setAttribute("stroke-dasharray", "4 4");
+      path.setAttribute("data-role", "rubber-band");
+      this.#viewportGroup.appendChild(path);
+      this.#rubberBand = path;
+    }
+    this.#rubberBand.setAttribute("d", d);
+  }
+
+  #removeRubberBand() {
+    this.#rubberBand?.remove();
+    this.#rubberBand = null;
+  }
+
+  #finishConnect(ev: PointerEvent) {
+    if (this.#drag?.kind !== "connect") return;
+    const fromPortId = this.#drag.fromPortId;
+
+    this.#clearPortHighlights();
+    this.#removeRubberBand();
+
+    const target = document.elementFromPoint(ev.clientX, ev.clientY);
+    const portEl = target?.closest('[data-role="port"][data-port-side="input"]');
+    if (!portEl) return; // Drop außerhalb eines kompatiblen Ports: Kante wird nicht gezeichnet.
+
+    const toPortId = portEl.getAttribute("data-port-id");
+    if (!toPortId) return;
+
+    this.#createEdge(fromPortId, toPortId);
+  }
+
+  async #createEdge(fromSender: string, toReceiver: string) {
+    try {
+      const response = await fetch("/api/v1/graph/edges", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from: fromSender, to: toReceiver }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        this.#showToast(`Verbindung fehlgeschlagen: ${text || response.status}`);
+        return;
+      }
+      await this.#fetchAndRender();
+    } catch (err) {
+      this.#showToast(`Verbindung fehlgeschlagen: ${err}`);
+    }
+  }
+
+  #deleteSelectedEdge() {
+    const edgeId = this.#selectedEdgeId;
+    if (!edgeId) return;
+    this.#removeEdge(edgeId);
+  }
+
+  async #removeEdge(edgeId: string) {
+    try {
+      const response = await fetch(`/api/v1/graph/edges/${encodeURIComponent(edgeId)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        this.#showToast(`Trennen fehlgeschlagen: ${text || response.status}`);
+        return;
+      }
+      this.#selectedEdgeId = null;
+      await this.#fetchAndRender();
+    } catch (err) {
+      this.#showToast(`Trennen fehlgeschlagen: ${err}`);
+    }
+  }
+
+  #showToast(message: string) {
+    const toast = document.createElement("div");
+    toast.textContent = message;
+    toast.setAttribute("data-role", "toast");
+    toast.style.cssText =
+      "position:fixed;bottom:16px;left:50%;transform:translateX(-50%);" +
+      "background:#c0392b;color:#fff;padding:8px 16px;border-radius:4px;" +
+      "font-family:sans-serif;font-size:13px;z-index:1000;opacity:0.95;";
+    this.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
   }
 }
 

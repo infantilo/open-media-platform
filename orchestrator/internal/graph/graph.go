@@ -14,9 +14,14 @@ import (
 )
 
 // Port ist ein Ein- oder Ausgang einer Kachel (Receiver bzw. Sender).
+// Format kommt unverändert aus dem IS-04-Snapshot (registry.SenderView/
+// ReceiverView) und erlaubt der UI, inkompatible Ports beim Drag & Drop
+// zu erkennen (UMSETZUNG.md B3) — der Orchestrator selbst entscheidet
+// nichts über Kompatibilität.
 type Port struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Format string `json:"format"`
 }
 
 // Node ist eine Kachel im Flow-Editor.
@@ -148,10 +153,10 @@ func buildNodes(views []registry.NodeView) []Node {
 	for _, v := range views {
 		n := Node{ID: v.ID, Label: v.Label, Inputs: []Port{}, Outputs: []Port{}, Health: health(v)}
 		for _, r := range v.Receivers {
-			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label})
+			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format})
 		}
 		for _, sn := range v.Senders {
-			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label})
+			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label, Format: sn.Format})
 		}
 		nodes = append(nodes, n)
 	}

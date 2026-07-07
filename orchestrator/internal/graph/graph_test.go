@@ -13,8 +13,8 @@ func strPtr(s string) *string { return &s }
 func TestBuildNodesMapsPortsAndHealth(t *testing.T) {
 	views := []registry.NodeView{{
 		ID: "node-1", Label: "Node 1", Online: true,
-		Senders:   []registry.SenderView{{ID: "send-1", Label: "Sender 1"}},
-		Receivers: []registry.ReceiverView{{ID: "recv-1", Label: "Receiver 1"}},
+		Senders:   []registry.SenderView{{ID: "send-1", Label: "Sender 1", Format: "urn:x-nmos:format:video"}},
+		Receivers: []registry.ReceiverView{{ID: "recv-1", Label: "Receiver 1", Format: "urn:x-nmos:format:video"}},
 	}}
 
 	nodes := buildNodes(views)
@@ -26,11 +26,11 @@ func TestBuildNodesMapsPortsAndHealth(t *testing.T) {
 	if n.Health != "ok" {
 		t.Errorf("Health = %q, want ok", n.Health)
 	}
-	if len(n.Outputs) != 1 || n.Outputs[0].ID != "send-1" {
-		t.Errorf("Outputs = %+v, want one send-1", n.Outputs)
+	if len(n.Outputs) != 1 || n.Outputs[0].ID != "send-1" || n.Outputs[0].Format != "urn:x-nmos:format:video" {
+		t.Errorf("Outputs = %+v, want one send-1 with video format", n.Outputs)
 	}
-	if len(n.Inputs) != 1 || n.Inputs[0].ID != "recv-1" {
-		t.Errorf("Inputs = %+v, want one recv-1", n.Inputs)
+	if len(n.Inputs) != 1 || n.Inputs[0].ID != "recv-1" || n.Inputs[0].Format != "urn:x-nmos:format:video" {
+		t.Errorf("Inputs = %+v, want one recv-1 with video format", n.Inputs)
 	}
 }
 

@@ -398,3 +398,35 @@ selbst, kein Code-Problem.
   einen echten Browser. Bleibt als manuelle Checkliste für den Nutzer
   offen (siehe Antwort im Chat), passend zur in `UMSETZUNG.md` Phase B
   ohnehin vorgesehenen Nutzer-Browser-Verifikation.
+
+## 2026-07-07 — B3: Format-Feld im Graph-API, bekannte Mock-Limitation
+
+`graph.Port` bekommt ein `Format`-Feld (aus `registry.SenderView.Format`/
+`ReceiverView.Format`, unverändert durchgereicht) — Grundlage für die
+Port-Kompatibilitätsprüfung beim Drag & Drop. Reine Logik in
+`ui/graph/compatibility.ts` (`portsCompatible`), per `deno test` geprüft
+(5 Tests): gleiches Format kompatibel, unterschiedliches Format
+inkompatibel, ein unbekanntes (leeres) Format auf einer Seite wird als
+kompatibel behandelt statt vorsorglich zu blockieren.
+
+**Bekannte Einschränkung der aktuellen Mock-Nodes:** Sender-Formate sind
+immer `""` (unbekannt), weil der Mock-Node laut A5/A7-Entscheidung
+bewusst keinen Flow registriert (Format eines Senders wird nur über den
+referenzierten Flow aufgelöst). Dadurch ist mit den aktuellen
+Mock-Nodes **kein** Format-Mismatch zwischen Sender und Receiver
+provozierbar — das Ausgrauen inkompatibler Ports lässt sich im Browser
+also aktuell nicht sichtbar demonstrieren, nur die zugrundeliegende
+Logik (`portsCompatible`) ist getestet. Sollte in einem späteren Schritt
+(z. B. wenn Mock-Nodes optional Flows registrieren, oder spätestens mit
+der echten Playout-Node in Phase C) nachprüfbar werden.
+
+Drag & Drop selbst (Verbindung ziehen, Kante serverseitig anlegen,
+Kante auswählen + Entf löschen, Fehler-Toast bei abgelehntem Server-Call)
+folgt demselben Muster wie Node-Drag/Pan aus B2 (Pointer-Events,
+`stopPropagation` zur Unterscheidung von Port-/Node-/Hintergrund-Klicks).
+Serverseitig verifiziert (curl): `POST .../graph/edges` → 200, Kante
+erscheint in `GET .../graph`, `DELETE .../graph/edges/<id>` → 200,
+Kante verschwindet wieder. Die eigentliche Browser-Interaktion
+(Ziehen, Ausgrauen, Kante anklicken+löschen) erfordert wie in B2 eine
+manuelle Nutzer-Verifikation (Chromium-Sandbox-Problem weiterhin
+ungelöst).
