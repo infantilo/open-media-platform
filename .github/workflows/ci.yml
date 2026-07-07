@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: make ci
+        run: make ci
+
+  # Platzhalter für Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen
+  # Registry + Nodes in CI. Noch deaktiviert — braucht laufende
+  # Registry-/Node-Container, die erst mit dem Compose-/Quadlet-Setup aus
+  # D2 automatisiert bereitgestellt werden.
+  amwa-nmos-testing:
+    runs-on: ubuntu-latest
+    if: false
+    steps:
+      - run: echo "AMWA NMOS Testing Tool folgt in Schritt D2 (UMSETZUNG.md)"

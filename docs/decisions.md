@@ -273,3 +273,26 @@ Ausfallfreiheits-Anspruch selbst.
   ergänzt.
 - **Keine** A–C-Schritte ändern dadurch ihren Scope; A9 (CI-Grundgerüst)
   läuft wie geplant weiter.
+
+## 2026-07-07 — CI: GitHub Actions statt nur `make ci` (Schritt A9)
+
+Repo hat bereits einen GitHub-Remote (`origin` →
+`github.com/infantilo/open-media-platform`, `gh auth status` bestätigt
+eingeloggt) — daher laut `UMSETZUNG.md` A9 GitHub-Actions-Workflow
+(`.github/workflows/ci.yml`) statt nur lokalem `make ci` gebaut. Ein Job
+(`check`) führt `make ci` aus (Go vet/test beider Module + `deno check`,
+inkl. Descriptor-Schema-Validierung aus A8 — kein separater Schritt
+nötig, da bereits Teil von `nodes/mock`s `go test`). Zweiter Job
+(`amwa-nmos-testing`) als deaktivierter Platzhalter (`if: false`) für
+Schritt D2. Verifiziert per frischem `git clone` in ein Temp-Verzeichnis
++ `make ci` (lokal, ohne GitHub) — funktioniert, da alle Tests
+selbstständig sind (keine laufende Registry/NATS-Container nötig) und
+der Schema-Pfad in `nodes/mock/internal/descriptor/schema_test.go` über
+`runtime.Caller` relativ zur Testdatei aufgelöst wird, nicht über das
+Arbeitsverzeichnis.
+
+**Noch nicht gepusht:** Die lokalen Commits (inkl. A1–A9) liegen noch
+nicht auf `origin` — der Workflow läuft also erst in GitHub Actions,
+sobald gepusht wird. Push ist eine sichtbare Aktion auf einem geteilten
+Remote, daher bewusst nicht automatisch ausgeführt; separate
+Nutzer-Entscheidung.
