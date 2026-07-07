@@ -58,6 +58,10 @@ var (
 	// API-Basis-URL hat (kein "api.endpoints"-Eintrag in ihrem
 	// IS-04-Node-Resource).
 	ErrNodeUnreachable = errors.New("graph: node has no reachable api endpoint")
+	// ErrRoutingLoop wird geliefert, wenn die angefragte Verbindung eine
+	// Feedback-Schleife im Node-Signalfluss schließen würde (Node A
+	// speist über eine Kette von Kanten am Ende wieder sich selbst).
+	ErrRoutingLoop = errors.New("graph: connecting would create a routing loop")
 )
 
 // NodeLister liefert den zuletzt bekannten Node-Snapshot (implementiert
@@ -94,17 +98,34 @@ func (s *Service) Graph(ctx context.Context) Graph {
 
 // Connect PATCHt den Receiver toReceiver auf fromSender (sofortige
 // Aktivierung) — der eigentliche IS-05-PATCH hinter POST
-// /api/v1/graph/edges.
+// /api/v1/graph/edges. Lehnt Verbindungen ab, die eine Feedback-
+// Schleife im Node-Signalfluss schließen würden (ErrRoutingLoop):
+// generische Prüfung über die bestehenden Kanten, ohne Node-Typ-Wissen
+// — konservativ angenommen wird, dass jeder Node mit Ein- und
+// Ausgängen seine Ausgänge von seinen Eingängen ableitet.
 func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) error {
-	node, ok := findNodeByReceiver(s.nodes.List(), toReceiver)
+	views := s.nodes.List()
+
+	receiverNode, ok := findNodeByReceiver(views, toReceiver)
 	if !ok {
 		return ErrUnknownReceiver
 	}
-	if node.APIBaseURL == "" {
+	if receiverNode.APIBaseURL == "" {
 		return ErrNodeUnreachable
 	}
+
+	if senderNode, ok := findNodeByPort(views, fromSender); ok {
+		if senderNode.ID == receiverNode.ID {
+			return ErrRoutingLoop
+		}
+		signalGraph := buildNodeSignalGraph(views, s.buildEdges(ctx, views))
+		if reachable(signalGraph, receiverNode.ID, senderNode.ID) {
+			return ErrRoutingLoop
+		}
+	}
+
 	sender := fromSender
-	return s.is05.PatchStaged(ctx, node.APIBaseURL, toReceiver, &sender, true)
+	return s.is05.PatchStaged(ctx, receiverNode.APIBaseURL, toReceiver, &sender, true)
 }
 
 // Disconnect trennt receiverID — der IS-05-PATCH hinter DELETE
@@ -179,4 +200,67 @@ func findNodeByReceiver(views []registry.NodeView, receiverID string) (registry.
 		}
 	}
 	return registry.NodeView{}, false
+}
+
+// findNodeByPort findet die Node, zu der ein Port (Sender- oder
+// Receiver-ID) gehört — genutzt für die generische Loop-Erkennung, die
+// beide Portarten gleich behandelt.
+func findNodeByPort(views []registry.NodeView, portID string) (registry.NodeView, bool) {
+	for _, v := range views {
+		for _, r := range v.Receivers {
+			if r.ID == portID {
+				return v, true
+			}
+		}
+		for _, sn := range v.Senders {
+			if sn.ID == portID {
+				return v, true
+			}
+		}
+	}
+	return registry.NodeView{}, false
+}
+
+// buildNodeSignalGraph bildet ab, welche Nodes über bestehende Kanten
+// Signale an welche anderen Nodes weiterreichen (Sender-Node ->
+// Receiver-Node). Reine Funktion auf bereits bekannten Views/Edges,
+// unabhängig von buildEdges' IS-05-Aufrufen testbar.
+func buildNodeSignalGraph(views []registry.NodeView, edges []Edge) map[string][]string {
+	g := make(map[string][]string)
+	for _, e := range edges {
+		senderNode, ok := findNodeByPort(views, e.FromSender)
+		if !ok {
+			continue
+		}
+		receiverNode, ok := findNodeByPort(views, e.ToReceiver)
+		if !ok {
+			continue
+		}
+		g[senderNode.ID] = append(g[senderNode.ID], receiverNode.ID)
+	}
+	return g
+}
+
+// reachable prüft per Breitensuche, ob to von from aus über g erreichbar
+// ist (inklusive from == to).
+func reachable(g map[string][]string, from, to string) bool {
+	if from == to {
+		return true
+	}
+	visited := map[string]bool{from: true}
+	queue := []string{from}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		for _, next := range g[current] {
+			if next == to {
+				return true
+			}
+			if !visited[next] {
+				visited[next] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return false
 }

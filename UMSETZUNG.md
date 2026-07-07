@@ -504,7 +504,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A9 | erledigt | [A9] CI-Grundgerüst | 2026-07-07 |
 | B1 | erledigt | [B1] Graph-API im Orchestrator | 2026-07-07 |
 | B2 | erledigt | [B2] SVG-Canvas Pan/Zoom | 2026-07-07 |
-| B3 | Code fertig, Browser-Check durch Nutzer ausstehend | [B3] Drag & Drop-Verbindungen | 2026-07-07 |
+| B3 | erledigt | [B3] Drag & Drop-Verbindungen | 2026-07-07 |
 | B4 | offen | | |
 | B5 | offen | | |
 | B6 | offen | | |

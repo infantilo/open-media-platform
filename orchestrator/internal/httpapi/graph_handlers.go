@@ -52,6 +52,8 @@ func writeGraphError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, graph.ErrUnknownReceiver):
 		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, graph.ErrRoutingLoop):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, graph.ErrNodeUnreachable):
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	default:

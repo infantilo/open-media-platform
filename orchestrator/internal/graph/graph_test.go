@@ -155,6 +155,69 @@ func TestServiceConnectUnknownReceiverReturnsError(t *testing.T) {
 	}
 }
 
+func TestServiceConnectRejectsSelfLoop(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-A", APIBaseURL: "http://a",
+		Senders:   []registry.SenderView{{ID: "send-A"}},
+		Receivers: []registry.ReceiverView{{ID: "recv-A"}},
+	}}
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client())
+
+	if err := svc.Connect(context.Background(), "send-A", "recv-A"); err != ErrRoutingLoop {
+		t.Fatalf("Connect() error = %v, want ErrRoutingLoop", err)
+	}
+}
+
+func TestServiceConnectRejectsTwoNodeLoop(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}, Receivers: []registry.ReceiverView{{ID: "recv-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Senders: []registry.SenderView{{ID: "send-B"}}, Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // bestehend: A -> B
+
+	svc := NewService(fakeNodeLister{views}, client)
+
+	// B -> A würde die Schleife A -> B -> A schließen.
+	if err := svc.Connect(context.Background(), "send-B", "recv-A"); err != ErrRoutingLoop {
+		t.Fatalf("Connect() error = %v, want ErrRoutingLoop", err)
+	}
+}
+
+func TestServiceConnectAllowsChainWithoutLoop(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}, Receivers: []registry.ReceiverView{{ID: "recv-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Senders: []registry.SenderView{{ID: "send-B"}}, Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+		{ID: "node-C", APIBaseURL: "http://c", Senders: []registry.SenderView{{ID: "send-C"}}, Receivers: []registry.ReceiverView{{ID: "recv-C"}}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
+
+	svc := NewService(fakeNodeLister{views}, client)
+
+	if err := svc.Connect(context.Background(), "send-B", "recv-C"); err != nil { // B -> C, keine Schleife
+		t.Fatalf("Connect() error = %v, want nil", err)
+	}
+}
+
+func TestServiceConnectRejectsThreeNodeLoop(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}, Receivers: []registry.ReceiverView{{ID: "recv-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Senders: []registry.SenderView{{ID: "send-B"}}, Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+		{ID: "node-C", APIBaseURL: "http://c", Senders: []registry.SenderView{{ID: "send-C"}}, Receivers: []registry.ReceiverView{{ID: "recv-C"}}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
+	client.active["recv-C"] = is05.ActiveResource{SenderID: strPtr("send-B"), MasterEnable: true} // B -> C
+
+	svc := NewService(fakeNodeLister{views}, client)
+
+	// C -> A würde A -> B -> C -> A schließen.
+	if err := svc.Connect(context.Background(), "send-C", "recv-A"); err != ErrRoutingLoop {
+		t.Fatalf("Connect() error = %v, want ErrRoutingLoop", err)
+	}
+}
+
 func TestServiceDisconnectPatchesReceiverWithNilSender(t *testing.T) {
 	views := []registry.NodeView{{
 		ID: "node-1", APIBaseURL: "http://mock:9001",

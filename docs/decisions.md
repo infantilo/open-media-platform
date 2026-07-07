@@ -430,3 +430,34 @@ Kante verschwindet wieder. Die eigentliche Browser-Interaktion
 (Ziehen, Ausgrauen, Kante anklicken+löschen) erfordert wie in B2 eine
 manuelle Nutzer-Verifikation (Chromium-Sandbox-Problem weiterhin
 ungelöst).
+
+## 2026-07-07 — Routing-Loop-Erkennung ergänzt (Nutzer-Feedback nach B3)
+
+**Anlass:** Nutzer wies nach der B3-Verifikation darauf hin, dass eine
+Erkennung für Routing-Feedback-Schleifen vorgesehen werden sollte (Node A
+→ Node B → ... → zurück zu Node A). Direkt umgesetzt statt nur als
+Backlog-Punkt notiert, weil es sich sauber und generisch in
+`graph.Service.Connect` einfügt, ohne Node-Typ-Wissen zu brauchen.
+
+**Ansatz:** Konservative Annahme — jeder Node mit Ein- **und**
+Ausgängen wird so behandelt, als würden seine Ausgänge von seinen
+Eingängen abhängen (nicht node-typ-spezifisch geprüft, da der
+Orchestrator laut Architektur nichts über Node-Interna wissen soll).
+Vor jedem `Connect()` wird aus den **bestehenden** Kanten ein
+Node-zu-Node-Signalfluss-Graph gebaut (`buildNodeSignalGraph`); die
+neue Verbindung wird abgelehnt (`ErrRoutingLoop`, HTTP 409), wenn die
+Ziel-Node im bestehenden Graphen bereits die Quell-Node erreichen kann
+(dann würde die neue Kante die Schleife schließen) — inklusive
+Selbst-Loop (Node verbindet sich mit sich selbst).
+
+**Getestet:** Selbst-Loop, Zwei-Knoten-Schleife (A→B, dann B→A
+versucht), Drei-Knoten-Schleife (A→B→C, dann C→A versucht) sowie ein
+erlaubter loop-freier Fall (A→B, dann B→C). Zusätzlich live gegen zwei
+echte Mock-Nodes verifiziert (curl): beide Schleifen-Versuche liefern
+HTTP 409, nur die gültige Verbindung bleibt bestehen.
+
+**Bekannte Grenze:** Die Prüfung ist pro `Connect()`-Aufruf live (fragt
+`buildEdges` erneut ab, ein IS-05-Call pro Receiver) — bei sehr vielen
+Nodes/Receivern skaliert das linear mit der Node-Zahl. Für Mock-Maßstab
+unkritisch, bei Bedarf später cachen (gleiche Überlegung wie beim
+Graph-Aufbau selbst, siehe B1-Eintrag oben).
