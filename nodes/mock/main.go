@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/nodes/mock/internal/connection"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/descriptor"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/health"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/idgen"
@@ -85,11 +86,16 @@ func main() {
 	}
 
 	store := descriptor.NewStore(*label)
+	connStore := connection.NewReceiverStore(receiverIDs)
+
+	mux := http.NewServeMux()
+	mux.Handle("/", descriptor.Handler(store))
+	mux.Handle("/x-nmos/connection/", connection.Handler(connStore))
 
 	go func() {
 		addr := fmt.Sprintf(":%d", *port)
 		slog.Info("mock node http api listening", "addr", addr)
-		if err := http.ListenAndServe(addr, descriptor.Handler(store)); err != nil {
+		if err := http.ListenAndServe(addr, mux); err != nil {
 			slog.Error("mock node http api stopped", "error", err)
 		}
 	}()

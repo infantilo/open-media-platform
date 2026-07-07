@@ -296,3 +296,45 @@ nicht auf `origin` — der Workflow läuft also erst in GitHub Actions,
 sobald gepusht wird. Push ist eine sichtbare Aktion auf einem geteilten
 Remote, daher bewusst nicht automatisch ausgeführt; separate
 Nutzer-Entscheidung.
+
+## 2026-07-07 — IS-05-Feldnamen aus der Spezifikation; Scope-Grenzen (B1)
+
+**Spezifikation nachgeschlagen** (Arbeitsregel §0.6): IS-05 v1.1-Schemas
+aus `AMWA-TV/is-05` (Branch `v1.1.x`) — `sender-receiver-base.json`,
+`receiver-stage-schema.json`, `receiver-response-schema.json`,
+`activation-schema.json`, `receiver-transport-file.json`,
+`receiver_transport_params.json`. Bestätigt: Receiver-Resource (staged
+**und** active) hat die Form `{sender_id, master_enable, activation,
+transport_file, transport_params}`; `activation.mode` kennt u. a.
+`"activate_immediate"`; `transport_params` darf `[{}]` sein, wenn kein
+Transport-Detail zu setzen ist.
+
+**Scope-Grenzen bewusst gezogen** (nur was B1 tatsächlich braucht):
+- Nur der **Receiver**-seitige Connection-Endpoint wurde im Mock-Node
+  implementiert (`nodes/mock/internal/connection`) — Kanten werden laut
+  `UMSETZUNG.md` B1 ausschließlich aus Receiver-Active-Endpoints
+  abgeleitet und per PATCH auf den Receiver hergestellt/getrennt.
+  Sender-seitige Connection-Endpoints (die ein vollständiger
+  IS-05-Node zusätzlich bräuchte) sind nicht Teil dieses Schritts.
+- Nur `staged`/`active` implementiert, nicht `constraints/` oder
+  `transporttype/` — die Basis-Discovery-Endpunkte
+  (`/single/receivers/`, `/single/receivers/<id>/`) fehlen ebenfalls.
+  Kann bei Bedarf für echte IS-05-Konformität (Schritt D2, AMWA NMOS
+  Testing Tool) nachgezogen werden.
+- Der Mock-Node-eigene PATCH-Endpoint akzeptiert immer alle drei Felder
+  (`sender_id`, `master_enable`, `activation`) statt echter
+  Teil-Updates wie im vollen IS-05-Standard — ausreichend, weil nur der
+  eigene Orchestrator-Proxy diesen Endpoint anspricht, kein
+  Drittanbieter-Controller.
+
+**Edge-ID = Receiver-ID:** IS-05 kennt keine Kanten-IDs; da ein Receiver
+immer höchstens eine aktive Connection hat, ist die Receiver-ID eine
+natürliche, eindeutige Edge-ID ohne zusätzliches Datenmodell im
+Orchestrator.
+
+**Graph-Aufbau ist live, nicht gecacht:** `GET /api/v1/graph` fragt bei
+jedem Request die Active-Endpoints aller Receiver frisch ab (ein
+HTTP-Call pro Receiver), statt auf den 2s-Registry-Poller (A5)
+aufzusetzen — passt zu "kompletter **Ist**-Zustand" aus der
+Schrittbeschreibung. Bei wachsender Node-Zahl ggf. später cachen/
+parallelisieren; für Mock-Maßstab unkritisch.

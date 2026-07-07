@@ -3,11 +3,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -39,10 +41,18 @@ type EventSubscriber interface {
 	Subscribe() (<-chan sse.Event, func())
 }
 
+// GraphService baut den Flow-Editor-Graphen und führt IS-05-
+// Verbindungsänderungen aus (implementiert von *graph.Service).
+type GraphService interface {
+	Graph(ctx context.Context) graph.Graph
+	Connect(ctx context.Context, fromSender, toReceiver string) error
+	Disconnect(ctx context.Context, receiverID string) error
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
-// /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events und statisches
-// Serving von cfg.UIDir unter /.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber) http.Handler {
+// /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph
+// und statisches Serving von cfg.UIDir unter /.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
@@ -52,6 +62,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber) htt
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, "/methods/{name}"))
+	mux.HandleFunc("GET /api/v1/graph", handleGraph(graphSvc))
+	mux.HandleFunc("POST /api/v1/graph/edges", handlePostGraphEdge(graphSvc))
+	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
 	return mux
 }

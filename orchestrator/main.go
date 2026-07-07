@@ -11,7 +11,9 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -45,7 +47,9 @@ func main() {
 	}
 	go poller.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store, hub)
+	graphSvc := graph.NewService(store, is05.NewClient(nil))
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
