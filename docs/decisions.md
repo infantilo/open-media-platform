@@ -141,3 +141,28 @@ aus der Registry — Standard-IS-04-Verhalten. Das Skript sendet einen
 einmaligen Heartbeat direkt nach der Registrierung, das reicht für die
 Verifikation, aber für längere manuelle Tests muss das Skript ggf. erneut
 ausgeführt werden.
+
+## 2026-07-07 — nats.go als Ausnahme von der Minimal-Dependency-Regel
+(Schritt A6)
+
+`github.com/nats-io/nats.go` (offizieller NATS-Client) eingebunden — wie in
+`UMSETZUNG.md` A6 explizit als Ausnahme vorgesehen. Begründung: Ein
+eigener minimaler NATS-Client wäre unnötiges Risiko (Reconnect-Logik,
+Protokoll-Details) für ein zentrales Infrastrukturstück; der offizielle
+Client ist schlank genug (Transitive Deps: `nkeys`, `nuid`,
+`klauspost/compress`, `golang.org/x/{crypto,sys}` — alle für
+NATS-Auth/Kompression, kein Bloat). Initial-Connect ist nicht fatal
+(`RetryOnFailedConnect` + `MaxReconnects(-1)`): der Orchestrator startet
+auch, wenn NATS gerade nicht erreichbar ist, und verbindet sich im
+Hintergrund nach — konsistent mit der Resilienz-Linie aus
+`internal/registry.Poller` (A5).
+
+## 2026-07-07 — NATS-CLI (`natscli`) nachinstalliert (Schritt A6)
+
+Für die in `UMSETZUNG.md` A6 vorgesehene Verifikation (`nats pub ...`)
+gibt es weder im `nats:latest`-Container noch auf dem Host ein `nats`-CLI
+(das offizielle NATS-Server-Image enthält nur `nats-server`, nicht das
+CLI-Tool). Offizielles `natscli` (`github.com/nats-io/natscli`) per `go
+install` nachgezogen — passt zum „ein Binary pro Werkzeug"-Muster
+(ARCHITECTURE.md §4.1) und wird für Event-Bus-Debugging auch in späteren
+Schritten (B4 Tally-Events, C-Phase) wiederkehrend gebraucht.

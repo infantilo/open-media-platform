@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -9,8 +10,10 @@ import (
 	"syscall"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 func main() {
@@ -21,11 +24,28 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	hub := sse.NewHub()
+
+	nc, err := eventbus.Connect(cfg.NatsURL, hub)
+	if err != nil {
+		slog.Error("nats connect failed, continuing without event bus", "error", err)
+	} else {
+		defer nc.Close()
+	}
+
 	store := registry.NewStore()
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
+	poller.OnChange = func(eventType string, node registry.NodeView) {
+		data, err := json.Marshal(node)
+		if err != nil {
+			slog.Warn("failed to marshal node for event", "error", err)
+			return
+		}
+		hub.Broadcast(sse.Event{Type: eventType, Data: data})
+	}
 	go poller.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store)
+	handler := httpapi.NewHandler(cfg, store, hub)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

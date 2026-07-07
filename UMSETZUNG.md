@@ -489,7 +489,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A3 | erledigt | [A3] NMOS-Registry (nmos-cpp) | 2026-07-07 |
 | A4 | erledigt | [A4] Go-Orchestrator-Skeleton | 2026-07-07 |
 | A5 | erledigt | [A5] Registry-Anbindung: Node-Inventar | 2026-07-07 |
-| A6 | offen | | |
+| A6 | erledigt | [A6] Event-Bus-Anbindung + Live-Updates | 2026-07-07 |
 | A7 | offen | | |
 | A8 | offen | | |
 | A9 | offen | | |
