@@ -338,3 +338,63 @@ HTTP-Call pro Receiver), statt auf den 2s-Registry-Poller (A5)
 aufzusetzen — passt zu "kompletter **Ist**-Zustand" aus der
 Schrittbeschreibung. Bei wachsender Node-Zahl ggf. später cachen/
 parallelisieren; für Mock-Maßstab unkritisch.
+
+## 2026-07-07 — TS-im-Browser-Problem gelöst: `deno bundle` (Schritt B2)
+
+**Problem:** `ARCHITECTURE.md` §4.5 fordert vanilla TS + nativen
+`import()` ohne npm-Build, aber Browser können `.ts`-Dateien nicht
+ausführen (keine Type-Erasure zur Laufzeit). Der Go-Orchestrator liefert
+`ui/` unverändert als statische Dateien aus (`http.FileServer`) — ohne
+Übersetzungsschritt bricht `<script type="module" src=".../*.ts">` im
+Browser.
+
+**Lösung:** `deno bundle` (in Deno 2.9 wiedereingeführt, als
+„experimental" markiert) übersetzt `ui/graph/flow-canvas.ts` +
+importierte Module zu einer einzigen ESM-JS-Datei
+(`ui/dist/flow-canvas.js`, nicht versioniert, `.gitignore`s bestehende
+`dist/`-Regel greift bereits). Kein Node/npm beteiligt — passt zur
+„ein Werkzeug pro Aufgabe"-Linie (Deno wird sowieso schon für
+Type-Checking/Tests genutzt). Neuer `make ui`-Target (Abhängigkeit von
+`make build`) erzeugt das Bundle; `docs/descriptor-v0.schema.json`-Stil
+„Quelle bleibt .ts, Artefakt ist Build-Output" wird damit für die UI
+fortgesetzt. Da `deno bundle` als experimentell markiert ist: falls es
+in einer künftigen Deno-Version entfernt/geändert wird, ist der
+Fallback ein winziges eigenes Skript auf Basis von `deno_emit`/`esbuild`
+via `npm:`-Import (immer noch kein installiertes Node/npm nötig, da
+Deno npm-Pakete selbst auflöst).
+
+**`deno.json` am Repo-Root ergänzt:** Deno nimmt standardmäßig eine
+Nicht-Browser-Umgebung an (`lib` ohne `dom`). Ohne Konfiguration schlägt
+`deno check` bei jeder Nutzung von `document`/`HTMLElement`/etc. fehl.
+Config-Datei musste am **Repo-Root** liegen (nicht in `ui/`), weil Denos
+automatische Config-Suche beim Aufruf `deno check ui/**/*.ts` vom
+aktuellen Arbeitsverzeichnis (Repo-Root) aus nur nach oben sucht, nicht
+in Unterverzeichnisse hinein.
+
+## 2026-07-07 — Browser-Verifikation in dieser Sandbox nicht möglich (B2)
+
+Chromium (`apt install chromium`) für eine automatisierte
+Headless-Verifikation installiert, um über die reine `deno test`-Logik
+hinaus auch das tatsächliche Rendering zu prüfen. Chromium stürzt in
+dieser Ausführungsumgebung reproduzierbar ab (`Trace/breakpoint trap,
+core dumped`), unabhängig von der Flag-Kombination (`--no-sandbox`,
+`--disable-dev-shm-usage`, `--disable-setuid-sandbox`,
+`--single-process`, `--no-zygote`, `--headless=old`,
+`--disable-seccomp-filter-sandbox`) — vermutlich eine
+Sandbox-/Seccomp-Einschränkung der Claude-Code-Ausführungsumgebung
+selbst, kein Code-Problem.
+
+**Stattdessen verifiziert:**
+- `deno check`/`deno test` grün (reine Geometrie-Logik).
+- Mit laufendem Orchestrator + 2 Mock-Nodes: `GET /api/v1/graph`
+  liefert exakt die von `flow-canvas.ts` erwartete Form (`nodes[].id/
+  label/inputs[]/outputs[]/health`, `edges[]`).
+  `GET /` liefert das neue `index.html` mit `<omp-flow-canvas>`,
+  `GET /dist/flow-canvas.js` liefert das Bundle mit korrektem
+  `Content-Type: text/javascript`; `node --check` bestätigt gültige
+  JS-Syntax des Bundles.
+- **Nicht verifiziert:** tatsächliches Rendering, Pan/Zoom-Interaktion,
+  Node-Drag, `localStorage`-Persistenz über Reload — das erfordert
+  einen echten Browser. Bleibt als manuelle Checkliste für den Nutzer
+  offen (siehe Antwort im Chat), passend zur in `UMSETZUNG.md` Phase B
+  ohnehin vorgesehenen Nutzer-Browser-Verifikation.

@@ -1,9 +1,16 @@
-.PHONY: build test check up down ci
+.PHONY: build test check up down ci ui
 
 GO_MODULES := orchestrator nodes/mock
 
-build:
+build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
+
+# Bundelt die Flow-Editor-Custom-Elements zu browserlauffähigem JS (ui/dist,
+# nicht versioniert). Browser können kein .ts ausführen; `deno bundle`
+# übernimmt das Stripping der Typen ohne Node/npm-Build-Toolchain.
+ui:
+	mkdir -p ui/dist
+	deno bundle ui/graph/flow-canvas.ts -o ui/dist/flow-canvas.js
 
 test:
 	$(foreach m,$(GO_MODULES),cd $(m) && go test ./... && cd $(CURDIR) &&) true
@@ -11,6 +18,7 @@ test:
 check:
 	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts
+	deno test ui/
 
 # Dev-Fallback statt systemd-Quadlets: die auf dieser Maschine verfügbare
 # Podman-Version (Debian bookworm, 4.3.1) unterstützt Quadlets erst ab 4.4+
