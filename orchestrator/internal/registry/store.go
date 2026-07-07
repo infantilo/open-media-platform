@@ -31,3 +31,15 @@ func (s *Store) List() []NodeView {
 	copy(out, s.nodes)
 	return out
 }
+
+// Get liefert den zuletzt gespeicherten Stand eines einzelnen Nodes.
+func (s *Store) Get(id string) (NodeView, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.nodes {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return NodeView{}, false
+}

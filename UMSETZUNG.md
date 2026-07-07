@@ -491,7 +491,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | A5 | erledigt | [A5] Registry-Anbindung: Node-Inventar | 2026-07-07 |
 | A6 | erledigt | [A6] Event-Bus-Anbindung + Live-Updates | 2026-07-07 |
 | A7 | erledigt | [A7] Mock-Node omp-mock | 2026-07-07 |
-| A8 | offen | | |
+| A8 | erledigt | [A8] Descriptor v0 + Parameter-Proxy | 2026-07-07 |
 | A9 | offen | | |
 | B1 | offen | | |
 | B2 | offen | | |

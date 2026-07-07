@@ -6,8 +6,23 @@ package registry
 // Felder werden von encoding/json stillschweigend ignoriert.
 
 type is04Node struct {
-	ID    string `json:"id"`
-	Label string `json:"label"`
+	ID    string      `json:"id"`
+	Label string      `json:"label"`
+	API   is04NodeAPI `json:"api"`
+}
+
+// is04NodeAPI/is04NodeEndpoint decoden nur das erste Node-API-Endpoint —
+// Standard-IS-04-Feld (node.json "api.endpoints"), keine Node-Typ-
+// Kenntnis. Wird als Basis-URL für den generischen Parameter-/Methoden-
+// Proxy (A8) genutzt.
+type is04NodeAPI struct {
+	Endpoints []is04NodeEndpoint `json:"endpoints"`
+}
+
+type is04NodeEndpoint struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
 }
 
 type is04Device struct {
@@ -40,12 +55,13 @@ type is04Flow struct {
 // (ARCHITECTURE.md §2/§11.1: "kein Orchestrator-Sonderwissen", nur
 // Standard-IS-04-Felder).
 type NodeView struct {
-	ID        string         `json:"id"`
-	Label     string         `json:"label"`
-	Online    bool           `json:"online"`
-	Devices   []DeviceView   `json:"devices"`
-	Senders   []SenderView   `json:"senders"`
-	Receivers []ReceiverView `json:"receivers"`
+	ID         string         `json:"id"`
+	Label      string         `json:"label"`
+	Online     bool           `json:"online"`
+	Devices    []DeviceView   `json:"devices"`
+	Senders    []SenderView   `json:"senders"`
+	Receivers  []ReceiverView `json:"receivers"`
+	APIBaseURL string         `json:"api_base_url"`
 }
 
 // DeviceView ist die normalisierte Sicht auf ein IS-04-Device.

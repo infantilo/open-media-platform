@@ -26,9 +26,11 @@ type InfoResponse struct {
 
 // NodeLister liefert den zuletzt bekannten Node-Snapshot (implementiert von
 // *registry.Store); als Interface gehalten, damit Handler-Tests ohne
-// echten Poller auskommen.
+// echten Poller auskommen. Get wird vom generischen Parameter-/Methoden-
+// Proxy (A8) genutzt, um die API-Basis-URL eines Nodes aufzulösen.
 type NodeLister interface {
 	List() []registry.NodeView
+	Get(id string) (registry.NodeView, bool)
 }
 
 // EventSubscriber liefert einen Event-Kanal für einen neuen SSE-Client
@@ -46,6 +48,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber) htt
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
 	mux.HandleFunc("GET /api/v1/nodes", handleNodes(nodes))
 	mux.HandleFunc("GET /api/v1/events", handleEvents(events))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", handleNodeProxy(nodes, "/descriptor.json"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, "/methods/{name}"))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
 	return mux
 }

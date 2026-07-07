@@ -97,12 +97,13 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 	views := make([]NodeView, 0, len(nodes))
 	for _, n := range nodes {
 		view := NodeView{
-			ID:        n.ID,
-			Label:     n.Label,
-			Online:    true, // Präsenz in der Registry == online; Expiry entfernt tote Nodes serverseitig (siehe registration_expiry_interval).
-			Devices:   []DeviceView{},
-			Senders:   []SenderView{},
-			Receivers: []ReceiverView{},
+			ID:         n.ID,
+			Label:      n.Label,
+			Online:     true, // Präsenz in der Registry == online; Expiry entfernt tote Nodes serverseitig (siehe registration_expiry_interval).
+			Devices:    []DeviceView{},
+			Senders:    []SenderView{},
+			Receivers:  []ReceiverView{},
+			APIBaseURL: apiBaseURL(n),
 		}
 
 		for _, d := range devicesByNode[n.ID] {
@@ -135,4 +136,16 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 	}
 
 	return views
+}
+
+// apiBaseURL konstruiert die Basis-URL für das Node-eigene HTTP-API aus
+// dem ersten IS-04-"api.endpoints"-Eintrag (Standardfeld jeder Node-
+// Resource) — Grundlage für den generischen Parameter-/Methoden-Proxy
+// (A8), ohne dass der Orchestrator etwas über den Node-Typ wüsste.
+func apiBaseURL(n is04Node) string {
+	if len(n.API.Endpoints) == 0 {
+		return ""
+	}
+	ep := n.API.Endpoints[0]
+	return fmt.Sprintf("%s://%s:%d", ep.Protocol, ep.Host, ep.Port)
 }

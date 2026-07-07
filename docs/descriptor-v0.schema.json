@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openmediaplatform.local/schemas/descriptor-v0.schema.json",
+  "title": "OMP Descriptor v0",
+  "description": "Selbstbeschreibung eines Nodes: Parameter und Methoden. Flaches, bewusst einfaches Format (ARCHITECTURE.md §8 Fallback-Klausel) mit einer Mapping-Notiz nach IS-12/14 (MS-05-02 Control Framework) in docs/decisions.md — Ziel ist eine spätere Migration, sobald IS-12/14-Tooling ausgereift ist, ohne dass sich das grundlegende Konzept (selbstbeschreibende Parameter/Methoden statt Orchestrator-Hardcoding) ändert.",
+  "type": "object",
+  "required": ["parameters", "methods"],
+  "properties": {
+    "parameters": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/parameter" }
+    },
+    "methods": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/method" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "parameter": {
+      "type": "object",
+      "description": "Ein Parameter, den ein Node über GET/PATCH /params/<name> lesbar bzw. (falls nicht readonly) schreibbar macht.",
+      "required": ["name", "type", "readonly"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["number", "boolean", "enum", "string"]
+        },
+        "unit": {
+          "description": "Physikalische Einheit (z. B. \"dB\"), nur für numerische Parameter relevant. Fehlt oder null, wenn nicht anwendbar.",
+          "type": ["string", "null"]
+        },
+        "range": {
+          "description": "Wertebereich. Für type=number: min/max. Für type=enum: erlaubte values. Fehlt oder null, wenn nicht anwendbar (z. B. type=string, type=boolean).",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["min", "max"],
+              "properties": {
+                "min": { "type": "number" },
+                "max": { "type": "number" }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": ["values"],
+              "properties": {
+                "values": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "readonly": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "method": {
+      "type": "object",
+      "description": "Eine Methode, die ein Node über POST /methods/<name> ausführt.",
+      "required": ["name", "args"],
+      "properties": {
+        "name": { "type": "string" },
+        "args": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/methodArg" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "methodArg": {
+      "type": "object",
+      "required": ["name", "type"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": ["number", "boolean", "enum", "string"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

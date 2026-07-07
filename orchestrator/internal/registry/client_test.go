@@ -64,3 +64,35 @@ func TestBuildSnapshotNodeWithoutDevicesHasEmptySlices(t *testing.T) {
 		t.Errorf("Senders = %v, want empty non-nil slice", views[0].Senders)
 	}
 }
+
+func TestApiBaseURLFromNodeEndpoint(t *testing.T) {
+	n := is04Node{
+		ID: "node-1",
+		API: is04NodeAPI{
+			Endpoints: []is04NodeEndpoint{{Host: "127.0.0.1", Port: 9001, Protocol: "http"}},
+		},
+	}
+	if got := apiBaseURL(n); got != "http://127.0.0.1:9001" {
+		t.Errorf("apiBaseURL() = %q, want http://127.0.0.1:9001", got)
+	}
+}
+
+func TestApiBaseURLWithoutEndpointsIsEmpty(t *testing.T) {
+	n := is04Node{ID: "node-1"}
+	if got := apiBaseURL(n); got != "" {
+		t.Errorf("apiBaseURL() = %q, want empty string", got)
+	}
+}
+
+func TestBuildSnapshotIncludesAPIBaseURL(t *testing.T) {
+	nodes := []is04Node{{
+		ID: "node-1", Label: "Node 1",
+		API: is04NodeAPI{Endpoints: []is04NodeEndpoint{{Host: "127.0.0.1", Port: 9001, Protocol: "http"}}},
+	}}
+
+	views := buildSnapshot(nodes, nil, nil, nil, nil)
+
+	if views[0].APIBaseURL != "http://127.0.0.1:9001" {
+		t.Errorf("APIBaseURL = %q, want http://127.0.0.1:9001", views[0].APIBaseURL)
+	}
+}

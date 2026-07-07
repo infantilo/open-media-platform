@@ -193,3 +193,49 @@ nicht fatal (Retry-Loop mit 2s-Backoff für die Registrierung, gleiches
 `RetryOnFailedConnect`-Muster wie im Orchestrator für NATS). Schlägt ein
 Heartbeat mit HTTP 404 fehl (Registry hat die Node vergessen, z. B. nach
 Neustart), registriert sich der Mock-Node automatisch neu.
+
+## 2026-07-07 — Descriptor v0: Format und IS-12/14-Mapping-Notiz (Schritt A8)
+
+**Format:** `docs/descriptor-v0.schema.json` (JSON Schema draft-07) — ein
+Node beschreibt sich über `parameters[]` (name, type ∈
+{number,boolean,enum,string}, unit, range, readonly) und `methods[]`
+(name, args[]). Bewusst flach, kein Objektbaum — Fallback-Klausel
+`ARCHITECTURE.md` §8 ("einfacheres eigenes JSON-Schema-basiertes
+Self-Describe-Format mit klarer Migrationsschiene zu IS-12/14").
+
+**Mapping-Notiz nach IS-12/14 (MS-05-02 Control Framework)**, für die
+spätere Migration:
+- Ein Node-Descriptor entspricht künftig einem Root-`NcBlock`
+  (`ARCHITECTURE.md` §11.1); jeder `parameter` wird zu einer
+  `NcProperty` eines `NcWorker`-Members, jede `method` zu einer
+  `NcMethod`.
+- `type: number` mit `range.min/max` → `NcParamConstraintNumber`;
+  `type: enum` mit `range.values` → `NcParamConstraintString`/enum-artige
+  Einschränkung; `readonly` → `NcPropertyConstraints`/fehlende
+  Setter-Methode.
+- `unit` hat in MS-05-02 keine 1:1-Entsprechung als eigenes Feld
+  (Einheiten stecken dort meist in der Property-Semantik/Dokumentation
+  der jeweiligen Standardklasse) — bleibt in v0 als eigenes,
+  migrationsfreundliches Feld erhalten.
+- **Bewusst nicht jetzt umgesetzt:** Standardklassen-Wiederverwendung
+  (`ARCHITECTURE.md` §11.1 Punkt 2), Class-IDs, Authority-Key — das ist
+  P1-Arbeit an der echten Playout-Node (Schritt C1), nicht am Mock.
+
+**Schema-Validierung:** `github.com/santhosh-tekuri/jsonschema/v6`
+(Apache-2.0) als Test-Only-Dependency in `nodes/mock` — Standardbibliothek
+hat keinen JSON-Schema-Validator; eine Handschrift-Prüfung der immer
+gleichen Feldnamen im Go-Code selbst hätte gegenüber der Schema-Datei
+driften können, ohne dass ein Test das bemerkt. Validiert sowohl, dass
+der echte Mock-Descriptor dem Schema genügt, als auch, dass das Schema
+offensichtlich falsche Descriptoren tatsächlich ablehnt (kein
+All-erlaubend-Schema).
+
+**Orchestrator-Proxy:** Neues Feld `NodeView.APIBaseURL`
+(`orchestrator/internal/registry`), aus dem ersten `api.endpoints`-Eintrag
+des IS-04-Node-Resource konstruiert (Standardfeld, keine Node-Typ-
+Kenntnis). `GET /api/v1/nodes/<id>/descriptor`,
+`GET|PATCH /api/v1/nodes/<id>/params/<name>`,
+`POST /api/v1/nodes/<id>/methods/<name>` sind reine HTTP-Passthrough-
+Proxies (`orchestrator/internal/httpapi/proxy.go`) — der Orchestrator
+parst den Descriptor nicht, validiert ihn nicht gegen das Schema und
+kennt keine Parameter-/Methodennamen.
