@@ -74,6 +74,15 @@ interface LayoutBlob {
   groups: GroupTree;
 }
 
+interface SnapshotSummary {
+  id: string;
+  label: string;
+}
+
+interface ApplyResult {
+  errors: string[];
+}
+
 interface TileSpec {
   id: string;
   label: string;
@@ -122,6 +131,7 @@ export class FlowCanvas extends HTMLElement {
   #breadcrumbBar!: HTMLDivElement;
   #panelContainer!: HTMLDivElement;
   #panelNodeId: string | null = null;
+  #snapshotBar!: HTMLDivElement;
 
   #eventSource: EventSource | null = null;
   #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
@@ -157,6 +167,7 @@ export class FlowCanvas extends HTMLElement {
   async #init() {
     await this.#loadLayout();
     await this.#fetchAndRender();
+    await this.#renderSnapshotBar();
   }
 
   async #loadLayout() {
@@ -280,11 +291,20 @@ export class FlowCanvas extends HTMLElement {
       "padding:10px;padding-top:36px;overflow-y:auto;display:none;" +
       "z-index:20;border-left:1px solid #444;box-sizing:border-box;";
 
-    this.replaceChildren(svg, breadcrumb, panel);
+    const snapshotBar = document.createElement("div");
+    snapshotBar.setAttribute("data-role", "snapshot-bar");
+    snapshotBar.style.cssText =
+      "position:absolute;bottom:0;left:0;right:0;padding:6px 10px;" +
+      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
+      "display:flex;gap:8px;align-items:center;z-index:10;" +
+      "border-top:1px solid #444;box-sizing:border-box;";
+
+    this.replaceChildren(svg, breadcrumb, panel, snapshotBar);
     this.#svg = svg;
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
     this.#panelContainer = panel;
+    this.#snapshotBar = snapshotBar;
   }
 
   async #fetchAndRender() {
@@ -1146,6 +1166,80 @@ export class FlowCanvas extends HTMLElement {
       await this.#renderGenericPanel(nodeId);
     } catch (err) {
       this.#showToast(`Methode „${method.name}" fehlgeschlagen: ${err}`);
+    }
+  }
+
+  // --- Snapshots/Szenen (UMSETZUNG.md B7) ---
+
+  async #renderSnapshotBar() {
+    this.#snapshotBar.replaceChildren();
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Snapshot speichern";
+    saveBtn.style.cursor = "pointer";
+    saveBtn.addEventListener("click", () => this.#saveSnapshot());
+    this.#snapshotBar.appendChild(saveBtn);
+
+    const list = document.createElement("div");
+    list.style.cssText = "display:flex;gap:6px;overflow-x:auto;min-width:0;flex:1;";
+    this.#snapshotBar.appendChild(list);
+
+    try {
+      const res = await fetch("/api/v1/snapshots");
+      if (res.ok) {
+        const snaps = (await res.json()) as SnapshotSummary[];
+        for (const snap of snaps) {
+          const chip = document.createElement("button");
+          chip.textContent = snap.label || snap.id.slice(0, 8);
+          chip.title = "Szene anwenden";
+          chip.style.cssText = "cursor:pointer;white-space:nowrap;flex-shrink:0;";
+          chip.addEventListener("click", () => this.#applySnapshot(snap.id));
+          list.appendChild(chip);
+        }
+        list.scrollLeft = list.scrollWidth;
+      }
+    } catch {
+      // Liste bleibt leer, wenn der Server (noch) nicht erreichbar ist.
+    }
+  }
+
+  async #saveSnapshot() {
+    const label = prompt("Name der Szene:", "Neue Szene");
+    if (!label) return;
+
+    try {
+      const res = await fetch("/api/v1/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (!res.ok) {
+        this.#showToast(`Snapshot speichern fehlgeschlagen: ${res.status}`);
+        return;
+      }
+      await this.#renderSnapshotBar();
+    } catch (err) {
+      this.#showToast(`Snapshot speichern fehlgeschlagen: ${err}`);
+    }
+  }
+
+  async #applySnapshot(id: string) {
+    try {
+      const res = await fetch(`/api/v1/snapshots/${id}/apply`, { method: "POST" });
+      if (!res.ok) {
+        this.#showToast(`Snapshot anwenden fehlgeschlagen: ${res.status}`);
+        return;
+      }
+      const result = (await res.json()) as ApplyResult;
+      if (result.errors.length > 0) {
+        this.#showToast(`Snapshot mit ${result.errors.length} Fehler(n) angewendet`);
+      }
+      await this.#fetchAndRender();
+      if (this.#panelNodeId !== null) {
+        await this.#openParameterPanel(this.#panelNodeId);
+      }
+    } catch (err) {
+      this.#showToast(`Snapshot anwenden fehlgeschlagen: ${err}`);
     }
   }
 

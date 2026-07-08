@@ -630,3 +630,51 @@ Verifiziert: Slider-Änderung an Mock A landet nachweislich am Server
 (`curl` bestätigt `-6`); Mock mit `--ui-bundle` zeigt sein eigenes
 Element statt des generischen Panels; Klick auf leere Fläche schließt
 das Panel.
+
+## 2026-07-08 — B7: Snapshots/Szenen + zwei Frontend-Refresh-Bugs
+
+**Backend** (`orchestrator/internal/snapshots`): Erfassung/Wiederherstellung
+laufen ausschließlich über bestehende Standard-Endpunkte (Graph-API,
+generischer Parameter-Proxy aus A8) — kein Sonderwissen über Node-Typen.
+`Service.Create` sammelt Kanten (`graph.Service.Graph`) und alle
+schreibbaren Parameterwerte aller erreichbaren Nodes (Descriptor →
+Namen filtern → je Name `GET`); `Service.Apply` stellt in der Reihenfolge
+Parameter-zuerst-dann-Kanten wieder her und sammelt Fehler statt beim
+ersten abzubrechen (`ApplyResult.Errors`, nie `null`). Datei-Store wie
+schon bei `layouts` (D1 macht später PostgreSQL daraus).
+
+**Bug-Report nach Browser-Test:** neuer Snapshot-Chip erschien erst nach
+vollständigem Seiten-Reload; nach Snapshot-Apply zeigte das
+Parameter-Panel erst nach erneutem Anklicken des Nodes die
+wiederhergestellten Werte.
+
+**Erste Hypothese (falsch, aber nicht schädlich):** Browser-HTTP-Caching
+der GET-Antworten. `noStoreForAPI`-Middleware (`Cache-Control: no-store`
+für alle `/api/v1/*`) ergänzt und verifiziert (per `curl`), Nutzer
+bestätigte aber unverändertes Verhalten — Hypothese damit widerlegt.
+Middleware bleibt trotzdem drin (schadet nicht, ist für generische
+GET-Endpunkte ohnehin korrektes Verhalten), war aber nicht die Ursache.
+
+**Tatsächliche Ursachen (beide reine Frontend-Logik-Bugs,
+`ui/graph/flow-canvas.ts`):**
+1. `#applySnapshot()` rief nach dem Apply nur `#fetchAndRender()` auf
+   (aktualisiert Graph/Kacheln), aber nie das ggf. offene
+   Parameter-Panel — Werte blieben sichtbar veraltet, bis
+   `#openParameterPanel()` durch erneutes Anklicken neu lief. Fix: nach
+   `#fetchAndRender()` zusätzlich `#openParameterPanel(this.#panelNodeId)`
+   erneut aufrufen, falls ein Panel offen ist.
+2. Die Chip-Liste der Snapshot-Leiste hatte kein `min-width:0`/
+   `flex-shrink:0`, wodurch ein neu angehängter Chip im horizontal
+   scrollenden Container außerhalb des sichtbaren Bereichs landen konnte,
+   ohne dass der Nutzer einen Hinweis auf einen neuen Eintrag hatte. Fix:
+   Flex-Sizing korrigiert, Liste scrollt nach jedem Render automatisch
+   zum neuesten Chip.
+
+Lehre: Ein rein Backend-seitiger Fix-Versuch (Cache-Control) an einem
+Frontend-Logik-Bug retestet zwangsläufig „unverändert" — das ist selbst
+schon ein Signal gegen die Caching-Hypothese, nicht nur ein neutrales
+Nichtergebnis.
+
+Verifiziert: `make check` grün (Go + Deno, alle Module); Backend-Flow
+End-to-End per `curl` bestätigt (Create → Get → List → Apply); Browser-
+Retest beim Nutzer ausstehend/bestätigt vor diesem Commit.

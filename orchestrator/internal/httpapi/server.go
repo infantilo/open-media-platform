@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -57,10 +59,19 @@ type LayoutStore interface {
 	Put(name string, data json.RawMessage) error
 }
 
+// SnapshotService erfasst und stellt Szenen wieder her (implementiert
+// von *snapshots.Service, UMSETZUNG.md B7).
+type SnapshotService interface {
+	Create(ctx context.Context, label string) (snapshots.Snapshot, error)
+	List() ([]snapshots.Snapshot, error)
+	Apply(ctx context.Context, id string) (snapshots.ApplyResult, error)
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
 // /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph,
-// /api/v1/layouts und statisches Serving von cfg.UIDir unter /.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore) http.Handler {
+// /api/v1/layouts, /api/v1/snapshots und statisches Serving von
+// cfg.UIDir unter /.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
@@ -77,8 +88,29 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))
 	mux.HandleFunc("GET /api/v1/layouts/{name}", handleGetLayout(layoutStore))
 	mux.HandleFunc("PUT /api/v1/layouts/{name}", handlePutLayout(layoutStore))
+	mux.HandleFunc("GET /api/v1/snapshots", handleListSnapshots(snapshotSvc))
+	mux.HandleFunc("POST /api/v1/snapshots", handleCreateSnapshot(snapshotSvc))
+	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", handleApplySnapshot(snapshotSvc))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
-	return mux
+	return noStoreForAPI(mux)
+}
+
+// noStoreForAPI markiert alle /api/v1/*-Antworten als nicht cachebar.
+// Ohne das kann der Browser GET-Antworten (Graph, Nodes, Snapshot-Liste,
+// Node-Proxy-Parameter …) je nach Heuristik zwischenspeichern und nach
+// einer Änderung veraltete Daten zeigen, bis ein vollständiger Reload
+// einen echten Request erzwingt — im Browser bei B7 beobachtet
+// (Snapshot-Leiste aktualisierte sich nicht sofort, Parameter-Panel
+// zeigte nach einem Apply erst nach erneuter Node-Auswahl den neuen
+// Wert). Statisches UI-Serving (/, /dist/…) ist von der Regel
+// ausgenommen, da Caching dort unproblematisch/gewünscht ist.
+func noStoreForAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func handleHealthz(w http.ResponseWriter, r *http.Request) {

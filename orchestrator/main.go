@@ -19,6 +19,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -63,8 +64,9 @@ func main() {
 
 	graphSvc := graph.NewService(store, is05.NewClient(nil))
 	layoutStore := layouts.NewStore(filepath.Join(cfg.DataDir, "layouts"))
+	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(filepath.Join(cfg.DataDir, "snapshots")))
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
