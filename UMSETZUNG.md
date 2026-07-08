@@ -486,6 +486,14 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
   nur das Protokoll simulierbar, nicht der Ausfallfreiheits-Anspruch
   selbst.
+- **D7 (geplant, noch nicht detailliert)** Workflow-Bereitstellung &
+  -Verteilung: neues Objekt „Workflow" (Rollen + Verbindungs-Template +
+  Platzierungs-Hinweise), Katalog-Descriptor (optional pro Node), Start/
+  Stop ganzer Bundles (Quadlets bare-metal, Helm-Äquivalent cloud) —
+  Konzept siehe `ARCHITECTURE.md` §6.2. Teilt den Host-Telemetrie-/
+  Start-Agenten mit D6, deshalb zusammen mit D6 sequenziert, nach D4
+  (2110/MXL). Anders als D6 **kein** Node-Contract-Zusatz vor dem
+  SDK-Freeze nötig (Katalog-Descriptor ist rein additiv, nachrüstbar).
 
 ---
 

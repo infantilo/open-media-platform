@@ -293,6 +293,82 @@ früh festzulegen, die eigentliche Umsetzung/Verifikation aber erst ab P2
 (Platform-Hardening, parallel zu Community-Nodes) bzw. der Cloud/k3s-Stufe
 anzugehen. Keine A–C-Schritte in `UMSETZUNG.md` ändern dadurch ihren Scope.
 
+### 6.2 Workflow-Bereitstellung & -Verteilung (geplant, ab Phase D)
+
+**Anforderung:** Vizrt AMPP OS erlaubt Operator:innen, nach Login
+App-Kategorien (Core Apps, Inputs, Play & Record) zu wählen und per Klick
+eine Anwendung als Workload dynamisch auf einer verfügbaren Ressource
+(Edge-Server oder Cloud-Instanz) zu starten; ein „Workflow Designer"
+verdrahtet Container über Vorlagen statt Handinstallation; ganze Workflows
+(z. B. ein Regieplatz) lassen sich manuell oder zeitgesteuert
+starten/stoppen, um Ressourcen freizugeben. OMP hat dafür heute keine
+Entsprechung: Nodes werden rein passiv entdeckt, sobald sie bereits laufen
+(Dev: `go run`/`podman run`, On-Prem: von Hand vorbereitete
+systemd-Quadlets, Cloud: vorbereitete k3s-Pods, §4.3) — es gibt weder
+einen Katalog noch ein „Klick startet Instanz auf Host X" noch ein
+Bundle-weises Start/Stop. Das ist eine andere Frage als §6.1: dort geht es
+um das Verschieben bereits laufender Instanzen unter Last, hier um das
+Erst-Provisionieren und um das gezielte Freigeben von Ressourcen durch
+Stoppen ganzer Bündel.
+
+**Einordnung:** Neues erstklassiges Objekt **„Workflow"** — Name, benötigte
+Node-Rollen, logisches Verbindungs-Template (Rolle→Rolle, wird beim
+Erscheinen konkreter Node-IDs zu echten IS-05-Connections aufgelöst),
+optionale Platzierungs-Hinweise, Lifecycle-Status (gestartet/gestoppt).
+Bewusst getrennt von zwei bestehenden Konzepten: ein **Node** ist ein
+einzelner laufender, selbstregistrierter Prozess; ein **Snapshot** (B7)
+erfasst/reproduziert Parameter- und Kantenzustand bereits laufender Nodes,
+startet aber nie einen Prozess. Ein Workflow bestimmt, welche Prozesse
+überhaupt existieren und wo — Start eines Workflows kann Prozesse
+provisionieren, ein Snapshot kann anschließend den initialen
+Parameterzustand darüberlegen; beide Konzepte ergänzen sich, ohne sich zu
+überschneiden.
+
+Zwei-Stufen-Antwort statt erzwungener Parität über alle Deployment-Stufen:
+
+1. **Cloud (k3s):** kein Neubau eines Schedulers — ein Workflow-„Katalog"
+   bzw. dessen Platzierung entspricht einem Helm-Release-Äquivalent;
+   Start/Stop ist Skalieren auf/von null bzw. Apply/Delete, hinter einer
+   Orchestrator-API + einem Flow-Editor-Button verborgen. OMPs eigener
+   Anteil ist nur der NMOS-Glue: ein Listener auf `node.added` (nutzt den
+   bestehenden SSE-Mechanismus aus A6/B1), der das wartende
+   Verbindungs-Template eines Workflows automatisch anwendet, sobald
+   dessen erwartete Nodes registriert sind.
+2. **Bare-Metal/Quadlets:** zuerst nur Start/Stop **vorab platzierter**
+   Quadlet-Units je Bundle — kein Scheduling, deckt aber den
+   AMPP-Kernwunsch „Regieplatz startet/stoppt als Ganzes, Ressourcen frei"
+   bereits weitgehend ab. Echtes dynamisches „starte irgendwo, wo Platz
+   ist" auf Bare-Metal braucht denselben Host-Telemetrie-Agenten, der
+   ohnehin für §6.1 geplant ist — dieser Agent wird deshalb von Anfang an
+   für **zwei Verben** ausgelegt („Metriken melden" für §6.1, „dieses
+   Image starten" für Workflows) statt zwei getrennte Subsysteme zu bauen.
+
+**Node-Contract-Berührung:** minimal und **nicht eilig** — anders als die
+State-Export/Readiness-Klausel für §6.1 (§5 Punkt 6), die vor dem
+SDK-v1-Freeze stehen musste, ist ein Katalog-Descriptor (z. B. ein
+OCI-Label oder eine kleine `catalog.json` mit Node-Typ/Rolle/
+Ressourcen-Hinweisen) rein optional: Nodes ohne dieses Label erscheinen
+einfach nicht im Self-Service-Katalog und bleiben wie heute manuell
+deploybar. Kann nach dem SDK-Freeze ergänzt werden, ohne bestehende
+Community-Nodes zu brechen — deshalb **kein** neuer Punkt in §5 jetzt.
+
+**Standards-Abdeckung:** IS-04 (Node-Erscheinen erkennen, löst
+Verbindungs-Templates auf), IS-05 (die eigentliche Verkabelung). Nicht
+abgedeckt: Katalog-Format, Placement-Logik, Workflow-Zustandsmaschine,
+Start/Stop-Protokoll für Quadlets/k3s — das ist Eigenentwicklung analog zu
+§6.1. Kein Ersatz für Helm/ArgoCD auf der Cloud-Stufe, sondern schmale
+NMOS-Glue-Schicht darüber.
+
+**Testbarkeit:** Auf der aktuellen Single-Host-Dev-Maschine nur das
+Verbindungs-Template-Protokoll simulierbar (z. B. ein Mock-Workflow, der
+beim Start eines zweiten Mock-Nodes automatisch eine Kante zieht), nicht
+Mehr-Host-Placement selbst — wie bei §6.1 spricht das dafür, die
+Schnittstellen (Workflow-Objekt, Verbindungs-Template, Katalog-Descriptor)
+früh festzulegen, Umsetzung/Verifikation aber erst in Phase D (D7,
+sequenziert nach D4 „2110/MXL" und zusammen mit D6, da beide Bausteine
+denselben Telemetrie-/Start-Agenten teilen) anzugehen. Keine A–C-Schritte
+in `UMSETZUNG.md` ändern dadurch ihren Scope.
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als
@@ -306,7 +382,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1) | Community + Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1), Workflow-Bereitstellung & -Verteilung (§6.2) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
 | **P4 – Demo-Vorbereitung** | Minimal-Grafik-Node (kein volles OGraf/AI nötig), Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |

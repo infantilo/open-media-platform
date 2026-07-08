@@ -678,3 +678,51 @@ Nichtergebnis.
 Verifiziert: `make check` grün (Go + Deno, alle Module); Backend-Flow
 End-to-End per `curl` bestätigt (Create → Get → List → Apply); Browser-
 Retest beim Nutzer ausstehend/bestätigt vor diesem Commit.
+## 2026-07-08 — Workflow-Bereitstellung & -Verteilung: geprüft, geparkt
+(nach B7, vor Phase C)
+
+**Kontext:** Nutzer-Vergleich mit Vizrt AMPP OS: dort wählt man nach Login
+App-Kategorien (Core Apps, Inputs, Play & Record), Klick startet die
+Anwendung als Workload dynamisch auf einer verfügbaren Ressource
+(Edge-Server oder Cloud-Instanz); ein „Workflow Designer" verdrahtet
+Container über Vorlagen statt Handinstallation; ganze Workflows (z. B. ein
+Regieplatz) lassen sich manuell oder zeitgesteuert starten/stoppen, um
+Ressourcen freizugeben. Zweite, separat gestellte Frage im selben Kontext
+(zusammengesetzte Operator-UI für einen Mixer aus mehreren Microservices,
+vergleichbar Vizrt VECTAR) wurde ebenfalls von Fable geprüft, aber
+**nicht** als neuer Architektur-Abschnitt übernommen — nur als
+Diskussionsstand im Gespräch festgehalten (additives
+„Repräsentant/Coordinator"-Muster auf der bestehenden Flow-Editor-
+Gruppierung, §4.5a; bei Bedarf später erneut aufgreifen).
+
+**Vorgehen:** Beide Anforderungen von Claude Fable gegen `ARCHITECTURE.md`
+prüfen lassen (unabhängige Zweitmeinung vor einer Architekturänderung,
+wie schon bei §6.1). Ergebnis für die Deployment-Frage: echte Lücke,
+klar unterscheidbar von §6.1 (dort Migration bereits laufender
+Instanzen, hier Erst-Provisionierung + Bundle-weises Start/Stop zur
+Ressourcen-Freigabe). Empfehlung: neues Objekt „Workflow" (Rollen +
+Verbindungs-Template + Platzierungs-Hinweise), getrennt von Node
+(laufender Prozess) und Snapshot (B7, Zustand bereits laufender Nodes).
+Zwei-Stufen-Antwort statt Neubau eines eigenen Schedulers: Cloud-Stufe
+nutzt k3s/Helm-Äquivalent + schmale NMOS-Glue (Auto-Wiring bei
+`node.added`); Bare-Metal-Stufe zunächst nur Start/Stop vorab platzierter
+Quadlet-Units je Bundle (deckt den AMPP-Kernwunsch weitgehend ab), echtes
+Placement erst mit demselben Host-Telemetrie-Agenten, der ohnehin für
+§6.1 geplant ist (ein Agent, zwei Verben: Metriken melden + Image
+starten, statt zwei Subsysteme).
+
+**Entscheidung:** Anforderung akzeptiert, Timing geparkt.
+- `ARCHITECTURE.md` neuer Abschnitt §6.2 „Workflow-Bereitstellung &
+  -Verteilung (geplant, ab Phase D)" dokumentiert Konzept, die
+  Zwei-Stufen-Antwort, Standards-Abdeckung und Testbarkeits-Grenzen.
+- **Kein** neuer Punkt in §5 (Node-Contract) jetzt — anders als bei §6.1
+  ist der Katalog-Descriptor rein additiv/optional und kann nach dem
+  SDK-v1-Freeze ergänzt werden, ohne Community-Nodes zu brechen.
+- `ARCHITECTURE.md` §7-Phasenplan-Tabelle: P2-Zeile um „Workflow-
+  Bereitstellung & -Verteilung (§6.2)" ergänzt (war zuvor nicht genannt,
+  nur implizit über §6.1 vermutbar).
+- `UMSETZUNG.md` Phase D um Punkt D7 (geplant, nicht detailliert)
+  ergänzt, bewusst zusammen mit D6 sequenziert (gemeinsamer
+  Telemetrie-/Start-Agent), nach D4 (2110/MXL).
+- **Keine** A–C-Schritte ändern dadurch ihren Scope; Phase C
+  (Playout-Node) startet wie geplant als Nächstes.
