@@ -726,7 +726,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C2 | erledigt | [C2] GStreamer-Grundpipeline | 2026-07-09 |
 | C3 | erledigt | [C3] Netz-Ausgang (RTP, 2110-vorbereitet) | 2026-07-09 |
 | C4-prep | erledigt | [C4-prep] SDK: Methoden-Argumente im generischen Method-Dispatch | 2026-07-09 |
-| C4 | offen | | |
+| C4 | erledigt | [C4] MXL-Fundament (install-mxl.sh + omp-mediaio::mxl + SDK-Transport/Flow) | 2026-07-09 |
 | C5 | offen | | |
 | C6 | offen | | |
 | C7 | offen | | |

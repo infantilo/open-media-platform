@@ -109,6 +109,19 @@ impl RtpVideoOutput {
         })
     }
 
+    /// Setzt/ändert das Ziel. RTP-spezifisch (Host+Port) — kein Teil des
+    /// generischen `Output`-Traits (siehe `lib.rs`).
+    pub fn set_destination(&self, host: &str, port: u16) {
+        self.udpsink.set_property("host", host);
+        self.udpsink.set_property("port", port as i32);
+        *self.destination.lock().expect("lock poisoned") = (host.to_string(), port);
+    }
+
+    /// Aktuelles Ziel (Host, Port).
+    pub fn destination(&self) -> (String, u16) {
+        self.destination.lock().expect("lock poisoned").clone()
+    }
+
     /// SDP-Beschreibung des aktuellen Ziels/Formats (RFC 4175 / ST
     /// 2110-20-artig) — Inhalt von `.../transportfile` (IS-05).
     pub fn sdp(&self) -> String {
@@ -134,17 +147,7 @@ impl Output for RtpVideoOutput {
         self.valve.set_property("drop", !active);
     }
 
-    fn set_destination(&self, host: &str, port: u16) {
-        self.udpsink.set_property("host", host);
-        self.udpsink.set_property("port", port as i32);
-        *self.destination.lock().expect("lock poisoned") = (host.to_string(), port);
-    }
-
     fn is_active(&self) -> bool {
         !self.valve.property::<bool>("drop")
-    }
-
-    fn destination(&self) -> (String, u16) {
-        self.destination.lock().expect("lock poisoned").clone()
     }
 }

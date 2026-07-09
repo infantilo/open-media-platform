@@ -87,7 +87,11 @@ impl ParamStore for PlayoutStore {
         Err(SetError::ReadOnly)
     }
 
-    fn invoke(&self, name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+    fn invoke(
+        &self,
+        name: &str,
+        _args: &serde_json::Map<String, Value>,
+    ) -> Result<(), InvokeError> {
         // Kein echter Effekt in C2/C3 (keine Playlist, die zurückgesetzt
         // werden könnte) — Platzhalter, damit der Node schon jetzt eine
         // Methode im Panel zeigt; echte Semantik folgt mit der
@@ -194,6 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![SenderSpec {
                 id: Some(sender_id),
                 manifest_href: Some(manifest_href),
+                ..Default::default()
             }],
             receivers: 0,
         },

@@ -8,3 +8,14 @@ publish = false
 
 [dependencies]
 gstreamer = "0.25.3"
+gstreamer-app = { version = "0.25", optional = true }
+serde_json = { version = "1", optional = true }
+mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"], optional = true }
+mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"], optional = true }
+
+# Feature `mxl`: MXL-Zero-Copy-Ein-/Ausgang (`UMSETZUNG.md` C4). Default aus,
+# damit Mock/Playout ohne geklontes/gebautes MXL-Repo bauen
+# (`deploy/dev/install-mxl.sh` muss vorher gelaufen sein, siehe
+# docs/decisions.md 2026-07-09 "MXL-GStreamer-Integration richtiggestellt").
+[features]
+mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app", "dep:serde_json"]

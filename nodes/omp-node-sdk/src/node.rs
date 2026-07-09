@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::health;
-use crate::is04::{self, Device, HeartbeatError, NodeResource, Receiver, RegistryClient, Sender};
+use crate::is04::{
+    self, Device, Flow, HeartbeatError, NodeResource, Receiver, RegistryClient, Sender, Source,
+};
 use crate::server::{self, ParamStore};
 
 type BoxError = Box<dyn Error + Send + Sync>;
@@ -46,11 +48,29 @@ pub struct NodeConfig {
 /// (z. B. um `manifest_href` auf einen von der ID abhängigen Pfad wie
 /// `.../senders/<id>/transportfile` zu setzen, `UMSETZUNG.md` C3), geben
 /// `id` selbst vor (`crate::idgen::new_v4()`) statt es generieren zu
-/// lassen.
+/// lassen. `transport` überschreibt den Default (RTP) — z. B.
+/// `is04::TRANSPORT_MXL`. `flow` registriert zusätzlich eine Source+Flow
+/// und setzt `flow_id` auf dem Sender (`UMSETZUNG.md` C4: Flow-UUID ==
+/// MXL-`flow-id`-Konvention — `FlowSpec.id` sollte daher die tatsächliche
+/// MXL-`flow-id` des Nodes sein, nicht separat generiert werden).
 #[derive(Default)]
 pub struct SenderSpec {
     pub id: Option<String>,
     pub manifest_href: Option<String>,
+    pub transport: Option<String>,
+    pub flow: Option<FlowSpec>,
+}
+
+/// Video-Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`). `id` sollte
+/// die MXL-`flow-id` des schreibenden Nodes sein (Konvention Flow-UUID ==
+/// MXL-flow-id, `UMSETZUNG.md` C4) — ohne `id` wird eine neue UUID generiert,
+/// die dann selbst als MXL-`flow-id` verwendet werden muss.
+pub struct FlowSpec {
+    pub id: Option<String>,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub grain_rate_numerator: u32,
+    pub grain_rate_denominator: u32,
 }
 
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
@@ -108,17 +128,35 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         sender_ids.clone(),
         receiver_ids.clone(),
     );
+    let mut sources: Vec<Source> = vec![];
+    let mut flows: Vec<Flow> = vec![];
     let senders: Vec<Sender> = sender_ids
         .iter()
         .zip(&config.senders)
         .enumerate()
         .map(|(i, (id, spec))| {
-            let mut sender = Sender::new(
-                id,
-                &format!("{} Sender {}", config.label, i + 1),
-                &device_id,
-            );
+            let label = format!("{} Sender {}", config.label, i + 1);
+            let mut sender = Sender::new(id, &label, &device_id);
             sender.manifest_href = spec.manifest_href.clone();
+            if let Some(transport) = &spec.transport {
+                sender.transport = transport.clone();
+            }
+            if let Some(flow_spec) = &spec.flow {
+                let source_id = crate::idgen::new_v4();
+                let flow_id = flow_spec.id.clone().unwrap_or_else(crate::idgen::new_v4);
+                sources.push(Source::new_video(&source_id, &label, &device_id));
+                flows.push(Flow::new_video(
+                    &flow_id,
+                    &label,
+                    &device_id,
+                    &source_id,
+                    flow_spec.frame_width,
+                    flow_spec.frame_height,
+                    flow_spec.grain_rate_numerator,
+                    flow_spec.grain_rate_denominator,
+                ));
+                sender.flow_id = Some(flow_id);
+            }
             sender
         })
         .collect();
@@ -140,7 +178,16 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     let bind_addr = format!("0.0.0.0:{}", config.port);
     server::spawn(&bind_addr, store)?;
 
-    register_with_retry(&registry, &node_res, &device_res, &senders, &receivers).await;
+    register_with_retry(
+        &registry,
+        &node_res,
+        &device_res,
+        &sources,
+        &flows,
+        &senders,
+        &receivers,
+    )
+    .await;
     eprintln!("omp-node-sdk: node registered: {node_id}");
 
     let publisher = match health::Publisher::connect(&config.nats_url).await {
@@ -163,6 +210,8 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         node_id,
         node_res,
         device_res,
+        sources,
+        flows,
         senders,
         receivers,
         publisher,
@@ -188,6 +237,8 @@ async fn heartbeat_loop(
     node_id: String,
     node_res: NodeResource,
     device_res: Device,
+    sources: Vec<Source>,
+    flows: Vec<Flow>,
     senders: Vec<Sender>,
     receivers: Vec<Receiver>,
     publisher: Option<Arc<health::Publisher>>,
@@ -206,7 +257,16 @@ async fn heartbeat_loop(
         match heartbeat_result {
             Ok(Ok(())) => {}
             Ok(Err(HeartbeatError::NotRegistered)) => {
-                register_with_retry(&registry, &node_res, &device_res, &senders, &receivers).await;
+                register_with_retry(
+                    &registry,
+                    &node_res,
+                    &device_res,
+                    &sources,
+                    &flows,
+                    &senders,
+                    &receivers,
+                )
+                .await;
             }
             Ok(Err(e)) => eprintln!("omp-node-sdk: heartbeat failed: {e}"),
             Err(e) => eprintln!("omp-node-sdk: heartbeat task panicked: {e}"),
@@ -231,10 +291,13 @@ async fn heartbeat_loop(
 /// Fehlern bis zum Erfolg (verhindert, dass eine kurzzeitig nicht
 /// erreichbare Registry den Node abstürzen lässt — gleiche Resilienz-Linie
 /// wie `registerWithRetry` im Go-Mock-Node).
+#[allow(clippy::too_many_arguments)]
 async fn register_with_retry(
     registry: &RegistryClient,
     node: &NodeResource,
     device: &Device,
+    sources: &[Source],
+    flows: &[Flow],
     senders: &[Sender],
     receivers: &[Receiver],
 ) {
@@ -242,12 +305,20 @@ async fn register_with_retry(
         let registry = registry.clone();
         let node = node.clone();
         let device = device.clone();
+        let sources = sources.to_vec();
+        let flows = flows.to_vec();
         let senders = senders.to_vec();
         let receivers = receivers.to_vec();
 
         let result = tokio::task::spawn_blocking(move || -> Result<(), is04::RegisterError> {
             registry.register("node", &node)?;
             registry.register("device", &device)?;
+            for s in &sources {
+                registry.register("source", s)?;
+            }
+            for f in &flows {
+                registry.register("flow", f)?;
+            }
             for s in &senders {
                 registry.register("sender", s)?;
             }

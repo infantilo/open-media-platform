@@ -25,10 +25,10 @@ MXL_PRESET="${MXL_PRESET:-Linux-GCC-Release}"
 MXL_DOMAIN="${MXL_DOMAIN:-/dev/shm/omp-mxl}"
 VCPKG_ROOT="${VCPKG_ROOT:-$HOME/vcpkg}"
 
-echo "== System-Pakete (cmake, ninja, bison/flex fürs vcpkg-Paket libpcap, ...) =="
-if ! command -v cmake >/dev/null || ! command -v bison >/dev/null; then
+echo "== System-Pakete (cmake, ninja, bison/flex fürs vcpkg-Paket libpcap, libclang fürs Rust-mxl-sys-bindgen, ...) =="
+if ! command -v cmake >/dev/null || ! command -v bison >/dev/null || ! command -v clang >/dev/null; then
   sudo apt-get update -y
-  sudo apt-get install -y cmake build-essential pkg-config curl git ninja-build bison flex
+  sudo apt-get install -y cmake build-essential pkg-config curl git ninja-build bison flex libclang-dev clang
 fi
 
 if ! command -v cargo >/dev/null; then

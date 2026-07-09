@@ -1252,3 +1252,72 @@ erfolgreicher Build + Loopback-Test):
   oben (drei Services, GUI-Launch, C4–C11-Schrittfolge, „Demo 2"-
   Neudefinition) — nur die Baustein-Ebene „wie genau spricht Rust mit
   MXL" war falsch und ist jetzt korrigiert.
+
+## 2026-07-09 — C4 (MXL-Fundament) fertig: `omp-mediaio::mxl` + SDK-Erweiterung, End-to-End verifiziert
+
+**Umgesetzt** (siehe `nodes/omp-mediaio/src/mxl.rs`,
+`nodes/omp-node-sdk/src/is04.rs`, `nodes/omp-node-sdk/src/node.rs`):
+
+- `Output`-Trait wie geplant abgespeckt (nur noch `set_active`/
+  `is_active`); `RtpVideoOutput::set_destination`/`destination` sind jetzt
+  inhärente Methoden statt Trait-Methoden (Aufrufstelle in
+  `playout/src/main.rs` unverändert, da Methodenauflösung inhärente
+  Methoden mitfindet).
+- `omp-mediaio` bekommt ein Feature `mxl` (default aus): Pfad-Abhängigkeiten
+  auf `third_party/mxl/rust/mxl` + `rust/mxl-sys` (Feature
+  `mxl-not-built`, damit `cargo build` **nicht** selbst nochmal CMake
+  aufruft — das erledigt einmalig `install-mxl.sh`), plus
+  `gstreamer-app`/`serde_json`.
+- `MxlVideoOutput`: `videoconvert ! videoscale ! videorate !
+  capsfilter(v210) ! valve ! appsink`, dahinter ein Schreib-Thread
+  (`mxl::GrainWriter`). **Vereinfachung ggü.
+  `tools/mxl-gst/testsrc.cpp`** (dokumentiert im Code, kein Rätselraten):
+  kein TAI-Clock-Alignment der Pipeline und keine PTS→Index-Umrechnung —
+  stattdessen wird der Grain-Index einmalig per `get_current_index()`
+  initialisiert und pro Sample um 1 erhöht. Korrekt, solange Samples nahe
+  am konfigurierten Takt ankommen (gegeben bei `videotestsrc`/
+  `videorate`), ohne Drift-Selbstkorrektur — für die Test-Trias (C5–C7)
+  ausreichend, bei Bedarf später auf das PTS-basierte Verfahren wechselbar.
+- `MxlVideoInput`: liest die Flow-Definition eines fremden Flows per
+  `get_flow_def()` (JSON, liefert Breite/Höhe/Rate — kein hartkodiertes
+  Wissen nötig), dahinter ein Lese-Thread (`mxl::GrainReader`), der Grains
+  in ein `appsrc do-timestamp=true` schiebt.
+- **Offene C4-Frage beantwortet (nicht angenommen, sondern durch die
+  Architektur der Lösung entschieden):** Für den Lese-Pfad übernimmt
+  `appsrc do-timestamp=true` exakt die Rolle von PIPELINE CONTROLLERs
+  `intervideosrc … do-timestamp=true` — verwirft die ursprüngliche
+  Grain-Herkunftszeit, stempelt mit der Laufzeit der lesenden Pipeline neu.
+  Für den Schreib-Pfad wird die PTS-Frage durch die oben genannte
+  Vereinfachung umgangen (kein PTS-Grain-Index-Mapping nötig, da über
+  `get_current_index()` statt Timestamp-Konversion gearbeitet wird).
+- `omp-node-sdk::is04`: `TRANSPORT_MXL`-Konstante, neue `Source`-/
+  `Flow`-Resources (Felder gegen `specs.amwa.tv`/`AMWA-TV/is-04` v1.3.x
+  `resource_core.json`+`source_core.json`+`source_generic.json` bzw.
+  `flow_core.json`+`flow_video.json` verifiziert, nicht geraten).
+  `SenderSpec` bekommt `transport`/`flow: Option<FlowSpec>`; bei
+  gesetztem `flow` registriert `start()` automatisch eine passende
+  Source+Flow und setzt `sender.flow_id` — Konvention Flow-UUID ==
+  MXL-`flow-id` (`FlowSpec.id` sollte vom Aufrufer auf die tatsächliche
+  MXL-`flow-id` gesetzt werden).
+
+**Zwei weitere, beim Bauen entdeckte Toolchain-Lücken** (in
+`deploy/dev/install-mxl.sh` behoben, nicht vorher bekannt/dokumentiert):
+`libclang-dev`+`clang` fehlten (nötig für `mxl-sys`s `bindgen`-Build-Skript,
+sonst "Unable to find libclang"). Zusätzlich musste MXLs Flow-JSON einen
+Pflicht-Tag `urn:x-nmos:tag:grouphint/v1.0` im Format
+`<group-name>:<role-in-group>` tragen (sonst "Invalid or missing group
+hint tag" bzw. "Invalid group hint value ..." — Format aus der
+Fehlermeldung + dem mitgelieferten `v210_flow.json`-Beispiel abgeleitet,
+nicht geraten).
+
+**Verifikation bestanden:** `cargo test -p omp-mediaio --features mxl`
+(mit `source deploy/dev/mxl.env`) — echter End-to-End-Test
+(`mxl::tests::write_then_read_loopback`): schreibt ~50 `videotestsrc`-
+Frames über `MxlVideoOutput` in einen Flow, liest ihn über einen zweiten,
+unabhängigen `MxlContext` (simuliert einen zweiten Prozess) über
+`MxlVideoInput` zurück, zählt über eine Pad-Probe angekommene Buffer am
+`fakesink` — grün. `cargo build`/`cargo clippy`/`cargo test` für den
+gesamten Workspace (mit und ohne `--features mxl`) sowie `cargo deny
+check` bleiben grün.
+
+C4 damit abgeschlossen. Weiter mit C5 (`omp-source`).

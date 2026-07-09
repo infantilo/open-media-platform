@@ -16,6 +16,12 @@ const INTERFACE_NAME: &str = "eth0";
 const TRANSPORT_RTP: &str = "urn:x-nmos:transport:rtp";
 const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
 
+/// Transport-URN für MXL-Zero-Copy-Sender/-Receiver (`UMSETZUNG.md` C4).
+/// `x-omp`, weil MXL (Stand v1.0.1) keine eigene registrierte NMOS-
+/// Transport-URN hat — Migrationspunkt, falls AMWA/EBU später eine
+/// Standard-URN definieren.
+pub const TRANSPORT_MXL: &str = "urn:x-omp:transport:mxl";
+
 fn now_version() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -168,6 +174,108 @@ impl Sender {
                 receiver_id: None,
                 active: false,
             },
+        }
+    }
+}
+
+/// Minimale, gültige IS-04-v1.3-Source-Resource (generisches Video, kein
+/// Audio) — Pflichtfeld-Kombination aus `resource_core.json` +
+/// `source_core.json` + `source_generic.json`, gegen die AMWA-Spec
+/// verifiziert (specs.amwa.tv / `AMWA-TV/is-04` v1.3.x), nicht geraten.
+/// Jeder MXL-Sender braucht eine Source (Flows referenzieren `source_id`),
+/// aber für OMPs Zwecke (keine Rig-Topologie, ein Sender = eine Source)
+/// reicht dieses generische Minimum.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Source {
+    pub id: String,
+    pub version: String,
+    pub label: String,
+    pub description: String,
+    pub tags: HashMap<String, Vec<String>>,
+    pub caps: HashMap<String, Value>,
+    pub device_id: String,
+    pub parents: Vec<String>,
+    pub clock_name: Option<String>,
+    pub format: String,
+}
+
+impl Source {
+    pub fn new_video(id: &str, label: &str, device_id: &str) -> Self {
+        Source {
+            id: id.to_string(),
+            version: now_version(),
+            label: label.to_string(),
+            description: String::new(),
+            tags: HashMap::new(),
+            caps: HashMap::new(),
+            device_id: device_id.to_string(),
+            parents: vec![],
+            clock_name: None,
+            format: FORMAT_VIDEO.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrainRate {
+    pub numerator: u32,
+    pub denominator: u32,
+}
+
+/// Minimale, gültige IS-04-v1.3-Flow-Resource (Video) — Pflichtfelder aus
+/// `resource_core.json` + `flow_core.json` + `flow_video.json`, gegen die
+/// AMWA-Spec verifiziert. Konvention (`UMSETZUNG.md` C4): bei MXL-Sendern
+/// ist `id` **identisch mit der MXL-`flow-id`** (`mxlsink`-Äquivalent des
+/// schreibenden Nodes) — macht Discovery rein IS-04-basiert (C7), ohne
+/// Seitenkanal zwischen NMOS und MXL-Domain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Flow {
+    pub id: String,
+    pub version: String,
+    pub label: String,
+    pub description: String,
+    pub tags: HashMap<String, Vec<String>>,
+    pub source_id: String,
+    pub device_id: String,
+    pub parents: Vec<String>,
+    pub grain_rate: GrainRate,
+    pub format: String,
+    pub frame_width: u32,
+    pub frame_height: u32,
+    pub colorspace: String,
+    pub interlace_mode: String,
+}
+
+impl Flow {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_video(
+        id: &str,
+        label: &str,
+        device_id: &str,
+        source_id: &str,
+        frame_width: u32,
+        frame_height: u32,
+        grain_rate_numerator: u32,
+        grain_rate_denominator: u32,
+    ) -> Self {
+        Flow {
+            id: id.to_string(),
+            version: now_version(),
+            label: label.to_string(),
+            description: String::new(),
+            tags: HashMap::new(),
+            source_id: source_id.to_string(),
+            device_id: device_id.to_string(),
+            parents: vec![],
+            grain_rate: GrainRate {
+                numerator: grain_rate_numerator,
+                denominator: grain_rate_denominator,
+            },
+            format: FORMAT_VIDEO.to_string(),
+            frame_width,
+            frame_height,
+            colorspace: "BT709".to_string(),
+            interlace_mode: "progressive".to_string(),
         }
     }
 }
