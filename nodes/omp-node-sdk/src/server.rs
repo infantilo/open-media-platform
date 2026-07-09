@@ -46,7 +46,12 @@ pub trait ParamStore: Send + Sync + 'static {
     fn descriptor(&self) -> Descriptor;
     fn get(&self, name: &str) -> Option<Value>;
     fn set(&self, name: &str, value: Value) -> Result<(), SetError>;
-    fn invoke(&self, name: &str) -> Result<(), InvokeError>;
+
+    /// `args` ist ein flaches JSON-Objekt Argumentname → Wert (leer, wenn
+    /// die Methode keine Argumente hat oder der Aufrufer keinen Body
+    /// mitschickt) — genau das Wire-Format, das die Flow-Editor-UI seit
+    /// B6 bereits sendet (`ui/graph/flow-canvas.ts#invokeMethod`).
+    fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError>;
 
     /// Fallback für Pfade jenseits der vier generischen Routen
     /// (`/descriptor.json`, `/params/<name>`, `/methods/<name>`) — z. B.
@@ -122,7 +127,16 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
     if *method == Method::Post
         && let Some(name) = url.strip_prefix("/methods/")
     {
-        return match store.invoke(name) {
+        let args = if body.is_empty() {
+            serde_json::Map::new()
+        } else {
+            match serde_json::from_slice::<Value>(body) {
+                Ok(Value::Object(map)) => map,
+                Ok(_) => return error_response(400, "method body must be a JSON object"),
+                Err(_) => return error_response(400, "invalid JSON body"),
+            }
+        };
+        return match store.invoke(name, &args) {
             Ok(()) => json_response(200, &serde_json::json!({"ok": true})),
             Err(_) => error_response(404, "unknown method"),
         };
