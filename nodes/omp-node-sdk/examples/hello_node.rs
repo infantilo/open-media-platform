@@ -78,7 +78,11 @@ impl ParamStore for HelloStore {
         Ok(())
     }
 
-    fn invoke(&self, name: &str) -> Result<(), InvokeError> {
+    fn invoke(
+        &self,
+        name: &str,
+        _args: &serde_json::Map<String, Value>,
+    ) -> Result<(), InvokeError> {
         if name != "reset" {
             return Err(InvokeError::Unknown);
         }

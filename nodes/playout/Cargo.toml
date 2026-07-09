@@ -10,5 +10,6 @@ publish = false
 gstreamer = "0.25.3"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio" }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }

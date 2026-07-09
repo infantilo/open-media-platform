@@ -1,12 +1,13 @@
 //! RTP-Dev-Implementierung von [`crate::Output`] (`UMSETZUNG.md` C3:
 //! "RTP, 2110-vorbereitet") — pragmatischer Entwicklungs-Codec statt
 //! echtem ST 2110, hinter demselben Trait wie eine spätere 2110/MXL-
-//! Implementierung. `videoconvert` (Farbraum) + `videoscale` (Auflösung)
-//! + `capsfilter` erzwingen ein festes, RFC-4175-kompatibles Rohbildformat
-//! (UYVY, 640×480) unabhängig vom nativen Format/Auflösung der Quelle —
-//! `videoconvert` allein wandelt nur den Farbraum, ohne `videoscale` bliebe
-//! die native Auflösung der Quelle erhalten und die Caps-Verhandlung vor
-//! `rtpvrawpay` würde fehlschlagen, sobald sie von 640×480 abweicht.
+//! Implementierung. `videoconvert` (Farbraum), `videoscale` (Auflösung)
+//! und `capsfilter` erzwingen gemeinsam ein festes, RFC-4175-kompatibles
+//! Rohbildformat (UYVY, 640×480) unabhängig vom nativen Format/Auflösung
+//! der Quelle — `videoconvert` allein wandelt nur den Farbraum, ohne
+//! `videoscale` bliebe die native Auflösung der Quelle erhalten und die
+//! Caps-Verhandlung vor `rtpvrawpay` würde fehlschlagen, sobald sie von
+//! 640×480 abweicht.
 
 use std::sync::Mutex;
 
@@ -48,8 +49,9 @@ impl RtpVideoOutput {
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| format!("videoconvert: {e}"))?;
-        let videoscale =
-            gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
+        let videoscale = gst::ElementFactory::make("videoscale")
+            .build()
+            .map_err(|e| format!("videoscale: {e}"))?;
         let caps = gst::ElementFactory::make("capsfilter")
             .property(
                 "caps",
@@ -87,8 +89,16 @@ impl RtpVideoOutput {
             .and_then(|()| pipeline.add(&udpsink))
             .map_err(|e| format!("add rtp output elements: {e}"))?;
 
-        gst::Element::link_many([upstream, &videoconvert, &videoscale, &caps, &payloader, &valve, &udpsink])
-            .map_err(|e| format!("link rtp output chain: {e}"))?;
+        gst::Element::link_many([
+            upstream,
+            &videoconvert,
+            &videoscale,
+            &caps,
+            &payloader,
+            &valve,
+            &udpsink,
+        ])
+        .map_err(|e| format!("link rtp output chain: {e}"))?;
 
         Ok(RtpVideoOutput {
             valve,

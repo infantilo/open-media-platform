@@ -18,3 +18,7 @@ build/
 
 # Claude Code lokale Projekt-Settings/Lock-Dateien
 /.claude/
+
+# Generierte Testclips (C4, scripts/generate_test_clips.sh) — keine
+# Binärdateien im Repo
+/nodes/playout/test-clips/
