@@ -834,3 +834,76 @@ klare Lizenzbasis, bevor sie eigene Nodes beitragen.
   Lizenzprüfung aus, ändert aber nichts an der eigentlichen Frage. Nutzer
   entscheidet, dann `LICENSE`-Datei(en) + `license`-Feld ergänzen und
   `ignore` zurück auf `false` setzen.
+
+## 2026-07-09 — C2: GStreamer-Grundpipeline, SDK-Erweiterung
+`start()`/`NodeHandle`, async-nats-Flush-Bug
+
+**GStreamer-Pipeline** (`nodes/playout/src/pipeline.rs`): zwei einfache
+Ketten, `videotestsrc ! capsfilter(framerate=<konfigurierbar>) ! fakesink`
+und `audiotestsrc ! fakesink`, beide mit `sync=true` — ohne `sync=true`
+spielt `fakesink` so schnell wie die CPU erlaubt statt im
+Pipeline-Takt, dann wäre eine "gemessene Bildrate" bedeutungslos.
+Bildratenmessung über eine Pad-Probe (`PadProbeType::BUFFER`) am
+Video-Fakesink, die einen `AtomicU64`-Zähler erhöht; ein 1s-Poll-Takt
+liest ihn aus (`swap(0, ...)`) und ergibt direkt Buffer/s = FPS.
+Video-/Audio-Element-Namen und Framerate sind über
+`OMP_PLAYOUT_VIDEO_ELEMENT`/`OMP_PLAYOUT_AUDIO_ELEMENT`/
+`OMP_PLAYOUT_FRAMERATE` konfigurierbar — absichtlich, damit die in
+`UMSETZUNG.md` C2 geforderte Verifikation ("ungültiges Element per Env")
+ohne Code-Änderung reproduzierbar ist.
+
+**Bus-Fehler laufen auf einem eigenen `std::thread`**, nicht in der
+Tokio-Runtime: `Bus::timed_pop_filtered` blockiert für die Dauer des
+Timeouts, das darf die async Registrierungs-/Heartbeat-Schleife des SDK
+nicht stören. Kommunikation zurück zum async Haupt-Task über einen
+`tokio::sync::mpsc`-Kanal (`pipeline::Event::{Fps, Error}`).
+
+**SDK-Erweiterung, keine Playout-spezifische Lösung:** C2 brauchte eine
+Möglichkeit, aus dem Node-eigenen Code heraus (nicht nur aus dem SDK
+selbst) zusätzliche Events über dieselbe NATS-Verbindung zu
+veröffentlichen (Alarme, `omp.alert.<id>`). Das ging mit der bisherigen
+`omp_node_sdk::run()`-Signatur nicht (blockierte für immer, gab dem
+Aufrufer nie die Kontrolle zurück). Deshalb `node.rs` umgebaut:
+- **`start()`** (neu) baut/registriert alles wie bisher, startet
+  Heartbeat/Health-Publish aber als Hintergrund-`tokio::spawn`-Task und
+  gibt sofort ein **`NodeHandle`** zurück (`node_id` + `publish_alert()`).
+- **`run()`** bleibt für einfache Nodes ohne eigene Nutzlast
+  (`hello_node`) als dünner Wrapper: `start()` + `pending().await`.
+- `health.rs` bekommt `Alert{node_id, message}` +
+  `Publisher::publish_alert()` (Subject `omp.alert.<id>`) — der
+  Orchestrator braucht dafür **keine** Änderung, `internal/eventbus`
+  abonniert bereits generisch `omp.>` und leitet jedes Subject 1:1 an den
+  SSE-Hub weiter (verifiziert: Alarm erscheint unverändert als
+  `omp.alert.<id>`-Event auf `/api/v1/events`).
+
+**Bug gefunden+gefixt: async-nats puffert Publishes, `flush()` fehlte.**
+Erster Alarm-Test: Log zeigte "pipeline error"/Alarm-Code lief durch,
+NATS-Subscriber (`nats sub omp.alert.>`) empfing aber nichts — reiner
+Timing-Bug, kein Logikfehler. `async_nats::Client::publish()` schreibt
+nur in einen internen Puffer, ein Hintergrund-Task sendet ihn erst
+später über den Socket; da der Alarm oft das Letzte ist, was ein Node
+vor dem Beenden tut (hier: `timeout`-Prozessende direkt nach dem
+Error-Pfad), kam der Hintergrund-Task nie mehr zum Zug. Health-Publish
+(periodisch, jeder Tick holt Rückstand von selbst auf) war davon nicht
+sichtbar betroffen, aber prinzipiell derselben Race unterworfen. Fix:
+`Publisher::publish_alert()` ruft nach `publish()` zusätzlich
+`client.flush().await` — danach im NATS-Subscriber wie im
+SSE-Endpunkt nachweislich sichtbar.
+
+**`fps`-Parameter statt reiner Log-Zeile:** `PlayoutStore` (ParamStore-
+Trait-Implementierung) exponiert `fps` als readonly-Zahl-Parameter —
+zusätzlich zum geforderten Log-Output, weil der Trait ohnehin
+implementiert werden muss und ein sichtbarer Wert im generischen
+Parameter-Panel (B6) die Verifikation im Browser genauso unterstützt.
+`reset`-Methode ist ein No-Op-Platzhalter (kein Playlist-Zustand vor C4),
+nur damit der Node schon jetzt eine Methode im Panel zeigt.
+
+**Verifiziert:** `cargo run -p playout` registriert sich, Health "ok" auf
+`/api/v1/events`; `params/fps` liefert über den generischen Proxy Werte
+≈24–26 (Ziel "≈ 25/50" laut `UMSETZUNG.md`); `OMP_PLAYOUT_VIDEO_ELEMENT`
+auf einen erfundenen Namen gesetzt → Pipeline-Aufbau schlägt sofort fehl,
+Alarm erscheint sowohl über direktes NATS-Subscribe als auch über
+`/api/v1/events`, der Node-Prozess bleibt dabei voll funktionsfähig
+(registriert, Descriptor/Heartbeat laufen weiter) — "Prozess bleibt
+kontrollierbar" erfüllt. `cargo test`, `cargo clippy -D warnings`,
+`cargo deny check`, `cargo audit` grün.

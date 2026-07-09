@@ -518,7 +518,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | B6 | erledigt | [B6] Parameter-Panel + Node-UI-Bundles | 2026-07-07 |
 | B7 | erledigt | [B7] Snapshots/Szenen | 2026-07-08 |
 | C1 | erledigt | [C1] Rust-Workspace + omp-node-sdk Skeleton | 2026-07-09 |
-| C2 | offen | | |
+| C2 | erledigt | [C2] GStreamer-Grundpipeline | 2026-07-09 |
 | C3 | offen | | |
 | C4 | offen | | |
 | C5 | offen | | |

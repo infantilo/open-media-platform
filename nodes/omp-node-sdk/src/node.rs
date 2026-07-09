@@ -3,6 +3,14 @@
 //! (`health`) zu dem Lifecycle, den jeder Node braucht — Rust-Pendant zu
 //! `main()` im Go-Mock-Node (`nodes/mock/main.go`), als wiederverwendbare
 //! Funktion statt kopierbarem Beispielcode.
+//!
+//! `start()` gibt sofort ein [`NodeHandle`] zurück und hält
+//! Registrierung/Heartbeat/Health-Publish als Hintergrund-Task am Laufen —
+//! nötig, damit Nodes mit eigener Nutzlast (z. B. der Playout-Node mit
+//! seiner GStreamer-Pipeline, `UMSETZUNG.md` C2) nebenläufig arbeiten und
+//! zusätzliche Events (z. B. Alarme) über dieselbe NATS-Verbindung
+//! veröffentlichen können. `run()` bleibt als einfacher Wrapper für Nodes
+//! ohne eigene Nutzlast (z. B. `examples/hello_node.rs`).
 
 use std::error::Error;
 use std::sync::Arc;
@@ -32,10 +40,42 @@ pub struct NodeConfig {
     pub receivers: usize,
 }
 
+/// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
+/// die Möglichkeit, zusätzliche Events wie Alarme zu veröffentlichen.
+#[derive(Clone)]
+pub struct NodeHandle {
+    pub node_id: String,
+    publisher: Option<Arc<health::Publisher>>,
+}
+
+impl NodeHandle {
+    /// Veröffentlicht einen Alarm auf `omp.alert.<node_id>` (z. B. bei
+    /// einem Pipeline-Fehler, `UMSETZUNG.md` C2). Kein NATS verbunden ⇒
+    /// stiller No-Op, nur eine Log-Zeile — Alarme sind Zusatzinformation,
+    /// kein Ersatz für den Health-Mechanismus.
+    pub async fn publish_alert(&self, message: impl Into<String>) {
+        let Some(publisher) = &self.publisher else {
+            eprintln!(
+                "omp-node-sdk: alert dropped (no nats connection): {}",
+                message.into()
+            );
+            return;
+        };
+        let alert = health::Alert {
+            node_id: self.node_id.clone(),
+            message: message.into(),
+        };
+        if let Err(e) = publisher.publish_alert(&alert).await {
+            eprintln!("omp-node-sdk: alert publish failed: {e}");
+        }
+    }
+}
+
 /// Baut IS-04-Resources, registriert sie, startet den Descriptor-Server und
-/// hält Heartbeat + Health-Publish am Laufen, bis der Prozess beendet wird.
-/// `store` ist die einzige Node-spezifische Eingabe.
-pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), BoxError> {
+/// hält Heartbeat + Health-Publish als Hintergrund-Task am Laufen. `store`
+/// ist die einzige Node-spezifische Eingabe. Gibt sofort nach erfolgreicher
+/// Erstregistrierung zurück.
+pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<NodeHandle, BoxError> {
     let node_id = crate::idgen::new_v4();
     let device_id = crate::idgen::new_v4();
     let sender_ids: Vec<String> = (0..config.senders)
@@ -85,7 +125,7 @@ pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), B
     eprintln!("omp-node-sdk: node registered: {node_id}");
 
     let publisher = match health::Publisher::connect(&config.nats_url).await {
-        Ok(p) => Some(p),
+        Ok(p) => Some(Arc::new(p)),
         Err(e) => {
             eprintln!(
                 "omp-node-sdk: nats connect failed, continuing without health publishing: {e}"
@@ -94,6 +134,48 @@ pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), B
         }
     };
 
+    let handle = NodeHandle {
+        node_id: node_id.clone(),
+        publisher: publisher.clone(),
+    };
+
+    tokio::spawn(heartbeat_loop(
+        registry,
+        node_id,
+        node_res,
+        device_res,
+        senders,
+        receivers,
+        publisher,
+        config.label,
+        config.senders,
+        config.receivers,
+    ));
+
+    Ok(handle)
+}
+
+/// Wie `start()`, hält den aufrufenden Task danach aber unbegrenzt am
+/// Laufen — für Nodes ohne eigene Nutzlast (z. B. `hello_node`), die
+/// selbst nichts anderes zu tun haben, als registriert zu bleiben.
+pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), BoxError> {
+    let _handle = start(config, store).await?;
+    std::future::pending().await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn heartbeat_loop(
+    registry: RegistryClient,
+    node_id: String,
+    node_res: NodeResource,
+    device_res: Device,
+    senders: Vec<Sender>,
+    receivers: Vec<Receiver>,
+    publisher: Option<Arc<health::Publisher>>,
+    label: String,
+    sender_count: usize,
+    receiver_count: usize,
+) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
         interval.tick().await;
@@ -114,10 +196,10 @@ pub async fn run(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<(), B
         if let Some(publisher) = &publisher {
             let status = health::Status {
                 node_id: node_id.clone(),
-                label: config.label.clone(),
+                label: label.clone(),
                 status: "ok".to_string(),
-                senders: config.senders,
-                receivers: config.receivers,
+                senders: sender_count,
+                receivers: receiver_count,
             };
             if let Err(e) = publisher.publish(&status).await {
                 eprintln!("omp-node-sdk: health publish failed: {e}");

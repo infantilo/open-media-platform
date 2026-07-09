@@ -15,5 +15,5 @@ pub mod node;
 pub mod server;
 
 pub use descriptor::{Descriptor, MethodArg, MethodSpec, ParamSpec, ParamType, Range};
-pub use node::{NodeConfig, run};
+pub use node::{NodeConfig, NodeHandle, run, start};
 pub use server::{InvokeError, ParamStore, SetError};
