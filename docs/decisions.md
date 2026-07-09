@@ -1014,3 +1014,58 @@ Browser nötig für die Kernlogik):**
   Verhalten unverändert, zusätzlich durch die neuen Go-Tests abgesichert).
 - `cargo test`, `cargo clippy -D warnings`, `cargo deny check`, `cargo
   audit` (Rust) sowie `go test ./...` (Orchestrator) grün.
+
+## 2026-07-09 — MXL-Zeitpunkt: geprüft (Fable), Timing bewusst anders
+entschieden als empfohlen
+
+**Kontext:** Nutzer-Anforderung: Inter-Node-Medientransport muss beim
+Vorführen des Projekts über MXL-Zero-Copy laufen, nicht über Netzwerk
+(RTP, wie in C3 gebaut). Von Claude recherchiert:
+`github.com/dmf-mxl/mxl`, v1.0.1 (Mai 2026), Linux Foundation + EBU +
+NABA, Apache-2.0, C++-Kern mit C-API und Rust-Bindings, Build über
+CMake+vcpkg (nicht auf crates.io) — `cmake`/`vcpkg` fehlen auf dieser
+Maschine.
+
+**Fable-Review (unabhängige Zweitmeinung) ergab zwei Teile:**
+1. **Channel-Chain-Granularität:** Player/Mixer/Grafik sollten getrennte
+   Nodes bleiben (unabhängig wiederverwendbar/ersetzbar). Freeze/Failover
+   und Branding dagegen **nicht** trennen — ein gemeinsamer
+   "Master-Control-Node", da beide am selben Einfügepunkt sitzen und
+   mehr Prozessgrenzen hier die Ausfallsicherheit senken statt erhöhen
+   (der Freeze-Switch muss die letzte Inline-Stufe sein; ein Prozess
+   dahinter wäre ein neuer Single Point of Failure). Freeze/Black-
+   Erkennung kann trotzdem ein eigener, abstürzsicherer Probe-Node sein
+   (MXL-Multi-Reader liest kostenlos mit, kein zusätzlicher Hop). Zu
+   Grass Valley AMPP als Vergleich: öffentlich bestätigt ist nur
+   Shared-Memory-Austausch ("FrameCache", auf MXL zulaufend) und dass
+   Playout X/Master Control als **ein** Produkt verkauft wird
+   (Switching+Keying+Branding gebündelt) — die genauen internen
+   Prozessgrenzen sind nicht öffentlich, Fable hat das explizit als
+   Beobachtung aus der Produktgrenze gekennzeichnet, nicht als
+   bestätigte Architektur.
+2. **Empfehlung (nicht so übernommen, siehe Entscheidung unten):** MXL
+   sofort vorziehen als neue Schritte C4a (Toolchain + `MxlVideoOutput`)
+   und C4b (zweiter Node `omp-monitor` als MXL-Consumer, macht Zero-Copy
+   erst vorführbar), vor C4 (Playlist-Engine).
+
+**Entscheidung des Nutzers:** Phase C läuft **wie ursprünglich geplant**
+weiter — C4 (Playlist-Engine v0) ist der nächste Schritt, keine
+C4a/C4b-Einschübe jetzt. MXL wird konkret dann implementiert, **wenn die
+OGraf-Grafik-Integration in den Playout-Node gebaut wird** (aktuell in
+`ARCHITECTURE.md` §7-Phasenplan als P4 "Minimal-Grafik-Node" vermerkt,
+noch kein konkreter `UMSETZUNG.md`-Schritt) — Video-Compositing zwischen
+Playout und einem Grafik-Node ist auch technisch der naheliegendste
+erste Zero-Copy-Anwendungsfall (enges Frame-für-Frame-Zusammenspiel
+zweier Prozesse), nicht der reine Netz-Ausgang aus C3.
+
+**Konsequenz:**
+- `ARCHITECTURE.md` P4-Zeile ergänzt: OGraf-Integration nennt jetzt
+  explizit MXL als vorgesehenen Transport.
+- Kein neuer C4a/C4b-Schritt in `UMSETZUNG.md`; C3s RTP-Ausgang bleibt
+  bis zur OGraf-Integration der tatsächlich genutzte Transport-Pfad des
+  Playout-Node.
+- Die Granularitäts-Empfehlung (Player/Mixer/Grafik getrennt,
+  Freeze+Branding gemeinsam) ist hier dokumentiert, aber **noch nicht**
+  als eigener ARCHITECTURE.md-Abschnitt formalisiert (anders als §6.1/
+  §6.2) — bei Bedarf nachholen, sobald diese Node-Typen tatsächlich
+  angegangen werden.
