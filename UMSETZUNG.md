@@ -439,41 +439,71 @@ die konkrete Implementierung).
 
 **Ziel:** MXL als Zero-Copy-Transport nutzbar machen — Grundlage für C5–C8.
 
+**Wichtige Korrektur ggü. der ursprünglichen Planung** (verifiziert am
+tatsächlich geklonten `v1.0.1`-Tag, nicht angenommen — siehe
+`docs/decisions.md`, 2026-07-09 „MXL-GStreamer-Integration
+richtiggestellt"): MXL bringt **kein** installierbares GStreamer-Plugin
+mit `mxlsrc`/`mxlsink`-Elementen. `tools/mxl-gst/` enthält stattdessen drei
+eigenständige C++-Kommandozeilenprogramme (`mxl-gst-testsrc`,
+`mxl-gst-sink`, `mxl-gst-looping-filesrc`), die selbst intern
+`appsink`/`appsrc` + die MXL-C-API verwenden — nützlich nur als
+Verifikations-/Debug-Werkzeuge. Die echte Rust-Anbindung läuft über die
+mitgelieferten Crates `rust/mxl-sys` (FFI, `bindgen` + `libloading` —
+lädt `libmxl.so` zur Laufzeit per `dlopen`, kein statisches Linken) und
+`rust/mxl` (sicherer Wrapper: `FlowWriter`/`FlowReader`,
+`GrainWriter`/`GrainReader`). `omp-mediaio` bindet diese als
+**Pfad-Abhängigkeit** auf `third_party/mxl/rust/mxl` hinter einem Cargo-
+Feature `mxl` ein (Default aus, damit Mock/Playout ohne geklontes MXL-Repo
+bauen) — unsere Nodes bauen die appsrc/appsink-Brücke selbst, analog zu
+`tools/mxl-gst/testsrc.cpp` (Schreiben: `videotestsrc ! … ! appsink`, dann
+Rust-Code zieht Samples und schreibt Grains) bzw. `sink.cpp` (Lesen:
+Rust-Code liest Grains und schiebt sie in ein `appsrc`, das die Pipeline
+weiterspeist).
+
 **Anweisung:** `deploy/dev/install-mxl.sh`, angelehnt an PIPELINE
 CONTROLLERs `scripts/install-mxl.sh`, aber **auf Tag `v1.0.1` gepinnt**
-(nicht `git pull` auf einem Branch): klont nach `third_party/mxl`
-(gitignored), baut libmxl (CMake-Preset `Linux-GCC-Release`) + das
-mitgelieferte GStreamer-Plugin `gst-mxl-rs` per `cargo build`, schreibt
-`deploy/dev/mxl.env` (`GST_PLUGIN_PATH`, `LD_LIBRARY_PATH`, `MXL_INFO_BIN`).
-Das Plugin wird zur Laufzeit geladen — **kein Cargo-Dependency in
-`omp-mediaio`**. Dort: `Output`-Trait auf reine Aktivierung abspecken
-(`set_active`/`is_active`, `set_destination` raus — RTP-spezifisch, bleibt
-nur an `RtpVideoOutput`); neues Modul `mxl` mit `MxlVideoOutput`
-(`videoconvert ! videoscale ! videorate ! capsfilter(v210,fix WxH@fps) !
-mxlsink flow-id=… domain=…`) und `MxlVideoInput` (`mxlsrc video-flow-id=…
-domain=… ! queue leaky=downstream max-size-buffers=5 ! videoconvert !
-videoscale ! videorate`). Kein generischer `Input`-Trait (verfrüht bei
-einer einzigen Transport-Art). `omp-node-sdk`: neue Transport-Konstante
-`urn:x-omp:transport:mxl`, `SenderSpec`/Receiver-Override für `transport`,
-Konvention **Flow-UUID == MXL-`flow-id`** (macht Discovery rein
-IS-04-basiert, siehe C7). Env `OMP_MXL_DOMAIN` (Default `/dev/shm/mxl`).
+(nicht `git pull` auf einem Branch): bootstrapt `vcpkg` (`$HOME/vcpkg`,
+vom CMake-Preset erwartet), installiert `bison`/`flex` (Build-Abhängigkeit
+von vcpkgs `pcapplusplus`-Paket, unabhängig von unserem Shared-Memory-
+Use-Case, aber ein Pflicht-Dependency im MXL-`vcpkg.json`), klont nach
+`third_party/mxl` (gitignored), baut libmxl + `tools/` (CMake-Preset
+`Linux-GCC-Release`), schreibt `deploy/dev/mxl.env`
+(`LD_LIBRARY_PATH`, `OMP_MXL_DOMAIN`, `MXL_INFO_BIN`,
+`MXL_GST_TESTSRC_BIN`, `MXL_GST_SINK_BIN`). In `omp-mediaio`:
+`Output`-Trait auf reine Aktivierung abspecken (`set_active`/`is_active`,
+`set_destination` raus — RTP-spezifisch, bleibt nur an `RtpVideoOutput`);
+neues, Feature-gated Modul `mxl` mit `MxlVideoOutput` (GStreamer-seitig
+`videoconvert ! videoscale ! videorate ! capsfilter(v210, fix WxH@fps) !
+appsink`, dahinter eine `mxl::FlowWriter` + `GrainWriter`-Schreibschleife
+auf einem eigenen Thread) und `MxlVideoInput` (`mxl::FlowReader` +
+`GrainReader`-Leseschleife auf eigenem Thread, schiebt Buffer in ein
+`appsrc`, danach `videoconvert ! videoscale ! videorate`). Kein
+generischer `Input`-Trait (verfrüht bei einer einzigen Transport-Art).
+`omp-node-sdk`: neue Transport-Konstante `urn:x-omp:transport:mxl`,
+`SenderSpec`/Receiver-Override für `transport`, Konvention **Flow-UUID ==
+MXL-`flow-id`** (macht Discovery rein IS-04-basiert, siehe C7). Env
+`OMP_MXL_DOMAIN` (Default `/dev/shm/omp-mxl`).
 
 **Verifikation:**
 ```sh
 ./deploy/dev/install-mxl.sh
 source deploy/dev/mxl.env
-mxl-gst-testsrc …                          # erzeugt einen Test-Flow
-mxl-info                                   # zeigt den Flow
-gst-launch-1.0 mxlsrc video-flow-id=<id> domain=$OMP_MXL_DOMAIN \
-  ! videoconvert ! fakesink sync=true silent=false
+$MXL_GST_TESTSRC_BIN -d $OMP_MXL_DOMAIN \
+  -v third_party/mxl/lib/tests/data/v210_flow.json -p smpte   # erzeugt einen Test-Flow
+$MXL_INFO_BIN -d $OMP_MXL_DOMAIN -l                           # zeigt den Flow
+cargo test -p omp-mediaio --features mxl                     # Rust-seitiger Loopback-Test:
+  # eigener GrainReader liest den von mxl-gst-testsrc geschriebenen Flow
 ```
 Explizit klären und in `docs/decisions.md` festhalten (nicht raten):
-(a) wie `mxlsrc` GStreamer-Timestamps aus MXLs Grain-/TAI-Zeitmodell
-ableitet (lokal restamped wie `do-timestamp`, oder aus Grain-Indizes —
-beobachten, nicht annehmen); (b) Verhalten, wenn der Flow noch nicht
-existiert oder der Writer neu startet (Fehler, Block, oder transparente
-Wiederaufnahme) — bestimmt, ob C7 Zweige über Quellen-Neustarts hinweg
-offen halten darf.
+(a) wie sich MXLs Grain-/TAI-Zeitmodell auf GStreamer-Timestamps abbilden
+lässt, wenn `MxlVideoInput` Buffer in ein `appsrc` schiebt (grain-Metadaten
+tragen bereits einen GStreamer-Buffer-Timestamp aus der Schreib-Pipeline,
+siehe `mxl-gst-testsrc`-Log: „DiscreteFlow: Set initial grain index to …
+(bufferTs=… ns)" — lokal per `do-timestamp`-Äquivalent restempeln oder die
+mitgelieferte `bufferTs` übernehmen, per Test entscheiden, nicht annehmen);
+(b) Verhalten, wenn der Flow noch nicht existiert oder der Writer neu
+startet (Fehler, Block, oder transparente Wiederaufnahme) — bestimmt, ob
+C7 Zweige über Quellen-Neustarts hinweg offen halten darf.
 
 ### C5 — `omp-source` (Test-Videoquelle → MXL)
 
@@ -481,9 +511,11 @@ offen halten darf.
 Testbild als MXL-Flow.
 
 **Anweisung:** Neues Crate `nodes/omp-source`. Pipeline: `videotestsrc
-is-live=true pattern=<p> ! capsfilter(w,h,fps) ! MxlVideoOutput` —
-`is-live=true` ist die aus C2 fehlende, in PIPELINE CONTROLLER bewährte
-Einstellung. Descriptor: Parameter `pattern` (enum `smpte`/`ball`/
+is-live=true pattern=<p> ! capsfilter(w,h,fps) ! MxlVideoOutput` (Kurzform
+für „… ! appsink, dahinter schreibt `MxlVideoOutput`s Thread die Samples
+per `GrainWriter` in den Flow" — siehe C4-Korrektur, kein echtes
+GStreamer-Element) — `is-live=true` ist die aus C2 fehlende, in PIPELINE
+CONTROLLER bewährte Einstellung. Descriptor: Parameter `pattern` (enum `smpte`/`ball`/
 `snow`/`black`/`bars`/…, live per Property gesetzt — Ausnahme von der
 sonstigen „nur per Pipeline-Neuaufbau ändern"-Regel, da reine
 Property-Änderung, keine Topologie-/Zustandsänderung), readonly `fps`
@@ -507,8 +539,10 @@ Preview-Muster (`PreviewPipeline.js`: `… ! videoscale 640×360 ! videorate
 `multipart/x-mixed-replace; boundary=frame`). Dafür ein zweiter,
 eigenständiger `tiny_http`-Listener auf eigenem Thread
 (`OMP_VIEWER_PREVIEW_PORT`), UI-Bundle ist ein simples `<img src=…>`.
-Pipeline: `MxlVideoInput ! tee` → MJPEG-Zweig (+ optionaler
-`autovideosink`-Zweig über `OMP_VIEWER_SINK` für Terminal-Start),
+Pipeline: `MxlVideoInput ! tee` (Kurzform für „`appsrc`, gespeist von
+`MxlVideoInput`s `GrainReader`-Thread, ! tee" — siehe C4-Korrektur) →
+MJPEG-Zweig (+ optionaler `autovideosink`-Zweig über `OMP_VIEWER_SINK`
+für Terminal-Start),
 `sync=false` durchgehend (umgeht die Timestamp-Frage aus C4 für diesen
 Pfad vollständig, analog `PreviewPipeline.js`). IS-04: 1 Receiver
 (Transport `urn:x-omp:transport:mxl`, `caps.media_types=["video/v210"]`).

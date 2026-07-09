@@ -16,5 +16,9 @@ build/
 # Orchestrator-Laufzeitdaten (Layouts, B5) — Datei-Backend, kein Quellcode
 /data/
 
+# MXL: geklonter/gebauter C++-Kern + generierte Env-Datei (deploy/dev/install-mxl.sh)
+/third_party/mxl/
+/deploy/dev/mxl.env
+
 # Claude Code lokale Projekt-Settings/Lock-Dateien
 /.claude/

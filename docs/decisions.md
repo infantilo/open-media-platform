@@ -1103,20 +1103,18 @@ Trial-and-Error immer erst PIPELINE CONTROLLER konsultieren (jetzt in
 Anforderung, die den Playlist-Weg aus C4 ersetzt.
 
 **Fable-Review (vollständiger Plan, Auftrag: PIPELINE-CONTROLLER-Muster
-konsultieren statt neu zu raten) ergab eine zentrale technische
-Entdeckung, die den vorherigen Eintrag oben in einem Punkt korrigiert:**
-MXL bringt ein eigenes GStreamer-Plugin mit (`rust/gst-mxl-rs` im
-MXL-Repo, `github.com/dmf-mxl/mxl`) — `mxlsink` (Properties `flow-id`,
-`domain`) und `mxlsrc` (Properties `video-flow-id`, `audio-flow-id`,
-`data-flow-id`, `domain`), mit Caps-Mapping `video/x-raw,format=v210 ↔
-video/v210` und `audio/x-raw,F32LE ↔ audio/float32`. Das Plugin wird zur
-Laufzeit über `GST_PLUGIN_PATH` geladen — **kein Cargo-Dependency, kein
-CMake/vcpkg im Rust-Build selbst**, nur einmalig zum Bauen von
-libmxl+Plugin (Skript, analog PIPELINE CONTROLLERs
-`scripts/install-mxl.sh`, aber auf Tag `v1.0.1` gepinnt statt einem
-bewegten Branch zu folgen). Der frühere Plan (Git-Dependency auf die
-MXL-Rust-Bindings hinter einem Cargo-Feature, CMake+vcpkg im Rust-Build)
-ist damit hinfällig.
+konsultieren statt neu zu raten) behauptete eine zentrale technische
+Entdeckung — MXL bringe ein eigenes GStreamer-Plugin mit
+(`rust/gst-mxl-rs`, Elemente `mxlsink`/`mxlsrc`, zur Laufzeit über
+`GST_PLUGIN_PATH` geladen, kein Cargo-Dependency).**
+
+**Diese Behauptung war falsch und wurde beim tatsächlichen Bauen von
+MXL (siehe Eintrag unten, „MXL-GStreamer-Integration richtiggestellt")
+widerlegt** — weder Fable noch PIPELINE CONTROLLERs eigene (dort nie
+tatsächlich gebaute) Doku-Kommentare hatten das am realen Repo verifiziert.
+Die zunächst hierher übernommene Konsequenz („kein Cargo-Dependency, kein
+CMake/vcpkg im Rust-Build") ist damit ebenfalls hinfällig — siehe unten für
+den korrigierten Stand.
 
 **Entscheidung des Nutzers:** Fables vollständigen Plan wie vorgelegt
 übernehmen (`UMSETZUNG.md` entsprechend umgeschrieben — siehe dortige
@@ -1148,11 +1146,11 @@ Phase C). Kernpunkte:
   `UMSETZUNG.md` Phase C). „Demo 2" wird neu definiert als die
   Source/Switcher/Viewer-Trias; die alte Demo-2-Definition (echtes
   Playout) wird zu „Demo 3" nach C10/C11.
-- Offene, ehrlich unbeantwortete Frage (kein Raten): wie `mxlsrc`
-  GStreamer-Timestamps aus MXLs Grain-/TAI-Epoch-Zeitmodell ableitet
-  (restamped lokal wie `do-timestamp`, oder aus Grain-Indizes abgeleitet)
-  — wird in C4 explizit per `gst-launch`-Loopback-Test geklärt, nicht
-  angenommen.
+- Offene, ehrlich unbeantwortete Frage (kein Raten): wie sich MXLs
+  Grain-/TAI-Epoch-Zeitmodell auf GStreamer-Timestamps abbilden lässt —
+  wird in C4 explizit per Loopback-Test geklärt, nicht angenommen (siehe
+  unten: die Form dieses Tests hat sich geändert, da es kein `mxlsrc`-
+  Element gibt, das man per `gst-launch` einhängen könnte).
 
 **Konsequenz:**
 - `ARCHITECTURE.md` P4-Zeile korrigiert (MXL nicht mehr "erst bei OGraf",
@@ -1168,3 +1166,89 @@ Phase C). Kernpunkte:
   Descriptor-Dispatch, unabhängig von C4 nützlich, u.a. für
   `switcher.select(senderId)`); der volle C4-Zwischenstand (Playlist +
   verworfene Pipeline) als Referenz-Commit auf Branch `c4-playlist-wip`.
+
+## 2026-07-09 — MXL-GStreamer-Integration richtiggestellt (am realen v1.0.1-Tag verifiziert)
+
+**Kontext:** Direkt beim Start von C4 (MXL-Fundament) stellte sich beim
+tatsächlichen Klonen/Bauen von `github.com/dmf-mxl/mxl@v1.0.1` heraus,
+dass die im Eintrag oben übernommene Fable-Behauptung („MXL bringt ein
+eigenes GStreamer-Plugin `rust/gst-mxl-rs` mit `mxlsink`/`mxlsrc`-
+Elementen, zur Laufzeit über `GST_PLUGIN_PATH` geladen") **nicht
+zutrifft** — weder Fable noch die (nie tatsächlich gebauten)
+Kommentare in PIPELINE CONTROLLERs `lib/MxlSource.js` hatten das an
+echtem Code verifiziert. Per Arbeitsregel (`UMSETZUNG.md` §0 Punkt 6/9:
+nicht raten, nachschlagen) wurde das jetzt am tatsächlichen Checkout
+geprüft, statt die Behauptung weiterzutragen.
+
+**Tatsächlicher Befund** (verifiziert: `git log`/`git status` des Clones,
+`tools/mxl-gst/CMakeLists.txt`, `grep -r GST_PLUGIN_DEFINE`,
+erfolgreicher Build + Loopback-Test):
+- Es existiert **kein** `rust/gst-mxl-rs`-Verzeichnis und **kein**
+  installierbares GStreamer-Element `mxlsink`/`mxlsink`. Das einzige im
+  gesamten Repo per `GST_PLUGIN_DEFINE`/`gst_element_register`
+  registrierte Element ist `looping_filesrc`
+  (`utils/gst-looping-filesrc/`) — unabhängig von MXL-Flows, ein
+  generisches Datei-Loop-Utility.
+- `tools/mxl-gst/` enthält drei **eigenständige C++-Kommandozeilen-
+  programme** (`add_executable`, nicht `add_library MODULE`):
+  `mxl-gst-testsrc` (Testmuster → MXL-Flow, intern `videotestsrc ! … !
+  appsink`, schreibt Grains über die C-API), `mxl-gst-sink` (MXL-Flow →
+  `autovideosink`/`autoaudiosink`, fix verdrahtet, keine Kopfloses-
+  Display-Option), `mxl-gst-looping-filesrc` (Datei → MXL-Flow, loop).
+  Nützlich als Verifikations-/Debug-Werkzeuge, nicht als Baustein für
+  `omp-mediaio` (kein MJPEG-/Headless-Ausgang, keine Laufzeit-
+  Parametrisierbarkeit für unsere Descriptor-API).
+- Die tatsächliche Rust-Anbindung sind die mitgelieferten Crates
+  `rust/mxl-sys` (FFI: `bindgen` generiert Bindings gegen
+  `lib/include/mxl/*.h`, `libloading` lädt `libmxl.so` **zur Laufzeit
+  per `dlopen`** — mit Feature `mxl-not-built` läuft nicht einmal CMake
+  im `cargo build` selbst mit) und `rust/mxl` (sicherer Wrapper:
+  `FlowWriter`/`FlowReader`, `GrainWriter`/`GrainReader`,
+  `SamplesWriter`/`SamplesReader`). Für `omp-mediaio` heißt das: eine
+  echte (Pfad-)Cargo-Dependency auf `third_party/mxl/rust/mxl`, hinter
+  einem Feature-Flag `mxl` (Default aus), keine Pipeline-Element-Syntax
+  — unsere Nodes bauen die appsink/appsrc-Brücke selbst (siehe
+  `UMSETZUNG.md` C4, korrigierter Abschnitt).
+- `libmxl.so` selbst **braucht weiterhin CMake+vcpkg zum einmaligen
+  Bauen** (nicht Teil des Rust-Builds, nur von `deploy/dev/install-mxl.sh`
+  ausgeführt) — das war schon im allerersten Eintrag (oben, „MXL-Zeitpunkt
+  geprüft") richtig vermutet und wurde jetzt konkret: `cmake --preset
+  Linux-GCC-Release` erwartet `$HOME/vcpkg` (gebootstrapt,
+  `bootstrap-vcpkg.sh --disableMetrics`); `vcpkg.json` zieht u. a.
+  `pcapplusplus` (Linux), was transitiv `bison`/`flex` als Build-Tools
+  braucht (auf dieser Maschine gefehlt, ergänzt in
+  `deploy/dev/install-mxl.sh`). `ninja` war schon vorhanden.
+
+**Konkret durchgeführt und verifiziert:**
+- `deploy/dev/install-mxl.sh` korrigiert (vcpkg-Bootstrap ergänzt,
+  `bison`/`flex` zu den apt-Paketen ergänzt, `gst-mxl-rs`-Abschnitt
+  entfernt, schreibt jetzt `MXL_INFO_BIN`/`MXL_GST_TESTSRC_BIN`/
+  `MXL_GST_SINK_BIN` statt `GST_PLUGIN_PATH`).
+- Vollständiger Build erfolgreich: `libmxl.so` (+ `.so.1`/`.so.1.0`),
+  `tools/mxl-info/mxl-info`, `tools/mxl-gst/mxl-gst-{testsrc,sink,
+  looping-filesrc}`.
+- Loopback-Test: `mxl-gst-testsrc -d /dev/shm/omp-mxl -v
+  lib/tests/data/v210_flow.json -p smpte` erzeugt einen Flow;
+  `mxl-info -d /dev/shm/omp-mxl -l` listet ihn korrekt
+  (`mxl-gst-testsrc-group: mxl:///dev/shm/omp-mxl?id=…`). Log zeigt
+  intern u. a. `videotestsrc … is-live=true do-timestamp=true … !
+  textoverlay ! clockoverlay ! videoconvert ! videoscale ! queue !
+  appsink` und `DiscreteFlow: Set initial grain index to … (bufferTs=…
+  ns)` — bestätigt, dass Grains einen aus der Schreib-Pipeline
+  stammenden Buffer-Timestamp mitführen (relevant für die in C4 noch
+  offene Timestamp-Frage beim Lesen).
+- `mxl-gst-sink` (Lese-Referenz) nicht headless testbar (fest verdrahtet
+  auf `autovideosink`/`autoaudiosink`) — für den eigenen `GrainReader`-
+  Loopback-Test in C4 wird stattdessen direkt gegen die Rust-`mxl`-Crate
+  getestet, nicht gegen dieses Tool.
+
+**Konsequenz:**
+- `UMSETZUNG.md` C4-Abschnitt umgeschrieben (Anweisung + Verifikation),
+  Verweise auf `MxlVideoOutput`/`MxlVideoInput` als Pipeline-Kurzform in
+  C5/C6 mit einem Klarstellungssatz versehen.
+- `deploy/dev/install-mxl.sh` korrigiert (siehe oben) und erfolgreich
+  gegen dieses Dev-System durchlaufen.
+- Keine Änderung an den höherstufigen Entscheidungen aus dem Eintrag
+  oben (drei Services, GUI-Launch, C4–C11-Schrittfolge, „Demo 2"-
+  Neudefinition) — nur die Baustein-Ebene „wie genau spricht Rust mit
+  MXL" war falsch und ist jetzt korrigiert.
