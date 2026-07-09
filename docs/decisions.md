@@ -1069,3 +1069,102 @@ zweier Prozesse), nicht der reine Netz-Ausgang aus C3.
   als eigener ARCHITECTURE.md-Abschnitt formalisiert (anders als §6.1/
   §6.2) — bei Bedarf nachholen, sobald diese Node-Typen tatsächlich
   angegangen werden.
+
+**Diese Entscheidung ist durch den Eintrag unten (2026-07-09, „MXL-Timing
+per Nutzer-Machtwort vorgezogen") überschrieben** — MXL wird jetzt sofort
+gebaut, nicht erst bei OGraf.
+
+## 2026-07-09 — MXL-Timing per Nutzer-Machtwort vorgezogen; C4 (Playlist)
+verworfen zugunsten einer MXL-Demo-Trias
+
+**Kontext:** Während C4 (Playlist-Engine v0, Zwei-Slot-`input-selector`-
+Pipeline im Playout-Prozess) trat ein GStreamer-Bug auf (Buffer-Stillstand
+nach ~1 s ohne Bus-Fehler nach einem Slot-Wechsel). Die Fehlersuche verlief
+als eskalierende Kette von Ad-hoc-Versuchen (`sync-streams=false`,
+`leaky=downstream` — verursachte einen echten Crash —,
+`sync_state_with_parent()`, `Latency`-Bus-Message-Handling), ohne
+Konsultation von `/home/infantilo/PIPELINE CONTROLLER`, obwohl dessen
+`CLAUDE.md`-Verweis genau dafür existiert.
+
+**Nutzer-Intervention (wörtlich):** *"stop guessing. im projekt pipeline
+controller ist alles schon korrekt enthalten was du brauchen würdest!! du
+befolgst nicht die arbeitsanweisungen! NIE raten! aber wichtiger: fabel
+soll den plan ändern: zum testen und als demo für das projekt möchte ich
+folgende microservices, die ich auch mehrfach starten können muss: test
+video source->MXL (ball,smpte,..auswählbar), test video switcher (MXL am
+Eingang, er zeigt dynamisch alle gefundenen sourcen als inputs an, bietet
+dafür buttons (videomixer) und schaltet die gewünscht auf seinen
+ausgang->MXL, test viewer (MXL am Eingang und zeigt das Bild an). Die
+services müssen über die gui gestartet/gestoppt werden können."*
+
+Das ist zweierlei: (a) eine Arbeitsregel — vor GStreamer-Fehlersuche per
+Trial-and-Error immer erst PIPELINE CONTROLLER konsultieren (jetzt in
+`UMSETZUNG.md` §0 als Punkt 9 aufgenommen); (b) eine neue, konkrete
+Anforderung, die den Playlist-Weg aus C4 ersetzt.
+
+**Fable-Review (vollständiger Plan, Auftrag: PIPELINE-CONTROLLER-Muster
+konsultieren statt neu zu raten) ergab eine zentrale technische
+Entdeckung, die den vorherigen Eintrag oben in einem Punkt korrigiert:**
+MXL bringt ein eigenes GStreamer-Plugin mit (`rust/gst-mxl-rs` im
+MXL-Repo, `github.com/dmf-mxl/mxl`) — `mxlsink` (Properties `flow-id`,
+`domain`) und `mxlsrc` (Properties `video-flow-id`, `audio-flow-id`,
+`data-flow-id`, `domain`), mit Caps-Mapping `video/x-raw,format=v210 ↔
+video/v210` und `audio/x-raw,F32LE ↔ audio/float32`. Das Plugin wird zur
+Laufzeit über `GST_PLUGIN_PATH` geladen — **kein Cargo-Dependency, kein
+CMake/vcpkg im Rust-Build selbst**, nur einmalig zum Bauen von
+libmxl+Plugin (Skript, analog PIPELINE CONTROLLERs
+`scripts/install-mxl.sh`, aber auf Tag `v1.0.1` gepinnt statt einem
+bewegten Branch zu folgen). Der frühere Plan (Git-Dependency auf die
+MXL-Rust-Bindings hinter einem Cargo-Feature, CMake+vcpkg im Rust-Build)
+ist damit hinfällig.
+
+**Entscheidung des Nutzers:** Fables vollständigen Plan wie vorgelegt
+übernehmen (`UMSETZUNG.md` entsprechend umgeschrieben — siehe dortige
+Phase C). Kernpunkte:
+- Der Zwei-Slot-`input-selector`-Ansatz aus dem C4-Versuch wird **komplett
+  verworfen**, nicht gefixt — das Grundmuster war falsch. Richtig (aus
+  PIPELINE CONTROLLERs `MasterPipeline.js`/`PlayerPipeline.js`): jede
+  Quelle läuft **durchgehend als eigene, nie dynamisch ge-/entsperrte
+  Pipeline**; ein Selector/Switcher konsumiert von außen
+  (`intervideosrc … do-timestamp=true` dort, MXL hier).
+- `playlist.rs` (reine Playlist-Logik, 12 Tests, kein GStreamer-Wissen)
+  ist weiterhin gute Arbeit und wird für den späteren echten
+  Playout-Umbau (C10/C11) wiederverwendet — liegt bis dahin auf dem
+  Branch `c4-playlist-wip`, nicht auf `main`.
+- Drei debuggte Lehren aus dem C4-Versuch, die den Revert überleben
+  müssen (standen nur als Kommentare im jetzt verworfenen `pipeline.rs`):
+  (a) ein Bus-Poller, der nur auf `ERROR` filtert, muss auch
+  `Latency`-Messages behandeln (`pipeline.recalculate_latency()`);
+  (b) `leaky=downstream` an Queues ist **nicht grundsätzlich
+  crash-gefährlich** (MasterPipeline.js nutzt es durchgehend und sicher —
+  der eigene Crash war setup-spezifisch, vermutlich Interaktion mit
+  gleichzeitig leaky Zweigen an einem `tee`); (c) die eigentliche
+  Bug-Klasse ist das dynamische (Re-)Aktivieren eines zuvor
+  `locked_state`-gesperrten Elements in einer laufenden Pipeline — das
+  ist zu **vermeiden**, nicht zu patchen (Topologie-Änderungen nur per
+  komplettem Pipeline-Neuaufbau oder über durchgehend laufende,
+  vorab-provisionierte Zweige).
+- Neue Schrittfolge C4–C11 ersetzt die alte C4–C6 (Details siehe
+  `UMSETZUNG.md` Phase C). „Demo 2" wird neu definiert als die
+  Source/Switcher/Viewer-Trias; die alte Demo-2-Definition (echtes
+  Playout) wird zu „Demo 3" nach C10/C11.
+- Offene, ehrlich unbeantwortete Frage (kein Raten): wie `mxlsrc`
+  GStreamer-Timestamps aus MXLs Grain-/TAI-Epoch-Zeitmodell ableitet
+  (restamped lokal wie `do-timestamp`, oder aus Grain-Indizes abgeleitet)
+  — wird in C4 explizit per `gst-launch`-Loopback-Test geklärt, nicht
+  angenommen.
+
+**Konsequenz:**
+- `ARCHITECTURE.md` P4-Zeile korrigiert (MXL nicht mehr "erst bei OGraf",
+  sondern ab C4 vorhanden; OGraf-Kompositing nutzt es dann einfach mit).
+- `ARCHITECTURE.md` §6.2 um einen Absatz „Stufe 0 (Dev/Single-Host):
+  Instanz-Launcher" ergänzt (die GUI-Start/Stop-Anforderung ist die
+  kleinste, jetzt schon nötige Ausbaustufe von §6.2, D7 bleibt der volle
+  Zielzustand).
+- `UMSETZUNG.md` §0 Punkt 9 (neu): vor GStreamer-Fehlersuche immer erst
+  PIPELINE CONTROLLER konsultieren.
+- Commit-Split durchgeführt: `[C4-prep] SDK: Methoden-Argumente im
+  generischen Method-Dispatch` auf `main` (Methoden-Argumente im
+  Descriptor-Dispatch, unabhängig von C4 nützlich, u.a. für
+  `switcher.select(senderId)`); der volle C4-Zwischenstand (Playlist +
+  verworfene Pipeline) als Referenz-Commit auf Branch `c4-playlist-wip`.

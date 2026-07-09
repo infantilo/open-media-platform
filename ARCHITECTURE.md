@@ -369,6 +369,44 @@ sequenziert nach D4 „2110/MXL" und zusammen mit D6, da beide Bausteine
 denselben Telemetrie-/Start-Agenten teilen) anzugehen. Keine A–C-Schritte
 in `UMSETZUNG.md` ändern dadurch ihren Scope.
 
+**Stufe 0 (Dev/Single-Host): Instanz-Launcher — vorgezogen nach `UMSETZUNG.md`
+C8 (docs/decisions.md, 2026-07-09).** Die MXL-Demo-Trias (`omp-source`/
+`omp-viewer`/`omp-switcher`, Phase C) braucht schon vor Phase D eine
+minimale, konkrete Ausbaustufe: Start/Stop einer gewählten Node-Instanz
+**aus der GUI**, mehrfach-instanziierbar. Das ist bewusst nicht der volle
+Workflow-Ansatz oben (kein Rollen-Template, keine Platzierung, kein
+Bundle-Start), sondern nur die unterste Schicht, die D7 ohnehin gebraucht
+hätte — vorgezogen, weil ohne sie die drei Test-Services nicht vorführbar
+wären (heute lässt sich kein Node aus der GUI starten, nur `cargo
+run`/Binary von Hand):
+
+- **Katalog statt beliebiger Kommandos:** `deploy/catalog.json` listet
+  bekannte Node-Typen (`{type, label, command[], env{}}`, `command` zeigt
+  auf ein vorgebautes Binary) — der Orchestrator startet **nur**
+  Katalog-Einträge, keine freien Kommandos (Sicherheitsgrenze). Ein neues
+  Feld `runner` (Default `"process"`, später `"podman"`/Quadlet) hält die
+  Tür zur volleren Lösung offen, ohne sie jetzt zu bauen.
+- **Orchestrator-seitig:** neues Paket `internal/launcher` + API
+  (`GET /api/v1/catalog`, `GET /api/v1/instances`,
+  `POST /api/v1/instances {type}`, `DELETE /api/v1/instances/{id}`) —
+  spawnt/killt lokale Subprozesse (Go `os/exec`), vergibt
+  `OMP_INSTANCE_ID`/`OMP_LABEL`/`OMP_PORT=0`. Persistenz von
+  `{id, type, pid}`, damit ein Orchestrator-Neustart noch laufende
+  Kind-Prozesse wiedererkennt (PID-Check) statt sie zu verwaisen.
+- **Korrelation Instanz↔Registry-Node:** neuer IS-04-Node-Tag
+  `urn:x-omp:instance`, den das SDK aus `OMP_INSTANCE_ID` setzt — der
+  Launcher muss dafür keine Ports kennen, die Zuordnung läuft rein über
+  NMOS.
+- **Flow-Editor:** Palette mit Katalog-Typen + Start-Button; ein
+  Stop-Control an Kacheln, deren Node einen bekannten Instanz-Tag trägt.
+  Instanzen erscheinen im Graph über den normalen
+  Selbstregistrierungs-Pfad — der Launcher fasst den Graph nicht an.
+- **Bewusst nicht jetzt:** Platzierung/Host-Wahl (nur ein Host),
+  Container (würde GStreamer+MXL-Images brauchen — echter Aufwand ohne
+  Demo-Nutzen jetzt), Workflow-Bundles, Verbindungs-Templates, Zeitpläne.
+  D7 bleibt der volle Zielzustand; diese Stufe 0 ist dessen lokale
+  „starte dieses Image"-Verb-Implementierung, vorweggenommen.
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als
@@ -384,7 +422,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 | **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
 | **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1), Workflow-Bereitstellung & -Verteilung (§6.2) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
-| **P4 – Demo-Vorbereitung** | Minimal-Grafik-Node (kein volles OGraf/AI nötig) — **Kompositing mit dem Playout-Node über MXL Zero-Copy** (docs/decisions.md, 2026-07-09: erster konkreter MXL-Anwendungsfall, C3s RTP-Ausgang bleibt bis dahin der genutzte Transport), Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
+| **P4 – Demo-Vorbereitung** | Minimal-Grafik-Node (kein volles OGraf/AI nötig) — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
 
 ### 7.1 Zeitplan „Nebenbei" (5–10 h/Woche, ⌀ 30 h/Monat)

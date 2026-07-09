@@ -35,6 +35,13 @@ und werden hier nicht wiederholt — bei Widerspruch gilt `ARCHITECTURE.md`.
 8. **Bei Blockern** (fehlendes Paket, kaputtes Container-Image, unklare
    Spec): Problem + 2–3 Lösungsoptionen kurz dokumentieren
    (`docs/decisions.md`), Empfehlung nennen, Nutzer entscheiden lassen.
+9. **Nicht raten, auch nicht bei GStreamer/Medien-Pipelines** (siehe
+   `docs/decisions.md`, 2026-07-09): Vor Trial-and-Error-Fehlersuche an
+   einer GStreamer-Pipeline immer erst `/home/infantilo/PIPELINE
+   CONTROLLER` konsultieren (insb. `lib/MasterPipeline.js`,
+   `lib/PlayerPipeline.js`, `lib/PreviewPipeline.js`,
+   `scripts/install-mxl.sh`) — Muster übernehmen (nicht Code kopieren,
+   andere Sprache/Kontext), statt das Problem empirisch neu herzuleiten.
 
 ---
 
@@ -62,16 +69,19 @@ schlicht *Projektdauer × Abopreis* — es gibt keine Zusatzkosten pro Token.
 |---|---|---|---|---|
 | **A — Fundament** (P0) | Repo, Podman/Quadlets, NATS, NMOS-Registry, Go-Orchestrator, Mock-Node, Descriptor v0 | A1–A9 | 2–4 Monate | ≈ 45–90 € |
 | **B — Flow-Editor GUI** | Graph-Canvas, Drag&Drop-Routing, Gruppen/Verschachtelung, Parameter-Panels, Snapshots | B1–B7 | 2–4 Monate | ≈ 45–90 € |
-| **C — Playout-Node** (P1-Kern) | Rust + GStreamer, `omp-node-sdk`, Playlist-Engine, Node-UI-Bundle | C1–C6 | 3–5 Monate | ≈ 65–115 € |
-| **D — Hardening & SDK-Release** | mTLS/Auth, AMWA-Testing-Tool in CI, SDK-Doku, 2110/MXL-Pfad | D1–D5 | 3–6 Monate | ≈ 65–135 € |
-| **Gesamt bis demo-fähiger Kern** | | ~27 Schritte | **10–19 Monate** | **≈ 220–430 €** |
+| **C — Playout-Node & MXL-Demo-Trias** (P1-Kern) | Rust + GStreamer, `omp-node-sdk`, RTP-Ausgang (C1–C3), MXL-Fundament + Source/Viewer/Switcher + GUI-Launch (C4–C8), Contract-Test (C9), später echter Playout-Umbau (C10/C11) | C1–C9 (+ C10/C11 später) | 4–6 Monate | ≈ 85–135 € |
+| **D — Hardening & SDK-Release** | mTLS/Auth, AMWA-Testing-Tool in CI, SDK-Doku, 2110-Pfad | D1–D5 | 3–6 Monate | ≈ 65–135 € |
+| **Gesamt bis demo-fähiger Kern** | | ~30 Schritte | **11–20 Monate** | **≈ 240–450 €** |
 
 Einordnung: `ARCHITECTURE.md` §7.1 schätzt P0+P1 konservativ auf ~840 h ohne
 detaillierten Schrittplan. Dieses Dokument reduziert das, weil (a) der
-GUI-/Kern-Scope hier bewusst enger geschnitten ist (2110/PTP/MXL erst in
-Phase D, mock-first davor) und (b) Sonnet den Boilerplate-Anteil (NMOS-Client,
-HTTP-Handler, SVG-Canvas) übernimmt. Bei 15–20 h/Woche halbieren sich Dauer
-und Kosten ungefähr (≈ 5–9 Monate, ≈ 110–210 €).
+GUI-/Kern-Scope hier bewusst enger geschnitten ist (2110/PTP erst in Phase D,
+mock-first davor — MXL dagegen wird bereits in Phase C gebraucht, siehe
+docs/decisions.md 2026-07-09, da es zur Laufzeit als GStreamer-Plugin geladen
+wird und keine Cluster-/PTP-Hardware braucht) und (b) Sonnet den
+Boilerplate-Anteil (NMOS-Client, HTTP-Handler, SVG-Canvas) übernimmt. Bei
+15–20 h/Woche halbieren sich Dauer und Kosten ungefähr (≈ 5–10 Monate, ≈
+120–225 €).
 
 ---
 
@@ -414,50 +424,205 @@ gst-launch-1.0 udpsrc port=5004 caps="…" ! … ! autovideosink   # oder ffplay
 #   den Strom nachweisbar.
 ```
 
-### C4 — Playlist-Engine v0 (2–3)
+Ab hier (C4) ersetzt die **MXL-Demo-Trias** (`omp-source`/`omp-viewer`/
+`omp-switcher`) die ursprünglich geplante Playlist-Engine als nächstes Ziel
+— Entscheidung + Begründung in `docs/decisions.md`, 2026-07-09
+(„MXL-Timing per Nutzer-Machtwort vorgezogen"). Der C1–C3-Playout-Node
+bleibt unverändert als RTP-Referenz-Node im Repo; der echte
+Playlist-/Playout-Umbau folgt später als C10/C11 und nutzt `playlist.rs`
+vom Branch `c4-playlist-wip` (reine Logik, 12 Tests, dort aufbewahrt, weil
+der ursprüngliche Zwei-Slot-`input-selector`-Ansatz — im gleichen
+Decisions-Eintrag beschrieben — grundsätzlich verworfen wurde, nicht nur
+die konkrete Implementierung).
 
-**Ziel:** Das Herzstück: Clips laden, cuen, takes.
+### C4 — MXL-Fundament (2)
 
-**Anweisung:** Descriptor-Methoden `load(uri)`, `append(uri)`, `remove(i)`,
-`cue(i)`, `take()`; Parameter `items`, `currentIndex`, `playheadPosition`,
-`mode` (Struktur = `NcBlock "Playout"`-Beispiel in `ARCHITECTURE.md` §11.1).
-GStreamer: nahtloser Quellenwechsel (`uridecodebin` + Selector-Pattern; bei
-Problemen Erkenntnisse aus PIPELINE CONTROLLER nachschlagen). Zwei
-Test-Clips per Skript generieren (`gst-launch … ! filesink`), keine
-Binärdateien ins Repo.
+**Ziel:** MXL als Zero-Copy-Transport nutzbar machen — Grundlage für C5–C8.
 
-**Verifikation:** Playlist mit 2 generierten Clips laden, `take()` per
-`curl` → RTP-Empfänger zeigt den Wechsel; `playheadPosition` zählt hoch;
-Ende von Clip 1 → automatischer Übergang laut `mode`. Unit-Tests für die
-Playlist-Logik (ohne GStreamer, Logik von Pipeline getrennt halten).
+**Anweisung:** `deploy/dev/install-mxl.sh`, angelehnt an PIPELINE
+CONTROLLERs `scripts/install-mxl.sh`, aber **auf Tag `v1.0.1` gepinnt**
+(nicht `git pull` auf einem Branch): klont nach `third_party/mxl`
+(gitignored), baut libmxl (CMake-Preset `Linux-GCC-Release`) + das
+mitgelieferte GStreamer-Plugin `gst-mxl-rs` per `cargo build`, schreibt
+`deploy/dev/mxl.env` (`GST_PLUGIN_PATH`, `LD_LIBRARY_PATH`, `MXL_INFO_BIN`).
+Das Plugin wird zur Laufzeit geladen — **kein Cargo-Dependency in
+`omp-mediaio`**. Dort: `Output`-Trait auf reine Aktivierung abspecken
+(`set_active`/`is_active`, `set_destination` raus — RTP-spezifisch, bleibt
+nur an `RtpVideoOutput`); neues Modul `mxl` mit `MxlVideoOutput`
+(`videoconvert ! videoscale ! videorate ! capsfilter(v210,fix WxH@fps) !
+mxlsink flow-id=… domain=…`) und `MxlVideoInput` (`mxlsrc video-flow-id=…
+domain=… ! queue leaky=downstream max-size-buffers=5 ! videoconvert !
+videoscale ! videorate`). Kein generischer `Input`-Trait (verfrüht bei
+einer einzigen Transport-Art). `omp-node-sdk`: neue Transport-Konstante
+`urn:x-omp:transport:mxl`, `SenderSpec`/Receiver-Override für `transport`,
+Konvention **Flow-UUID == MXL-`flow-id`** (macht Discovery rein
+IS-04-basiert, siehe C7). Env `OMP_MXL_DOMAIN` (Default `/dev/shm/mxl`).
 
-### C5 — Playout-UI-Bundle
+**Verifikation:**
+```sh
+./deploy/dev/install-mxl.sh
+source deploy/dev/mxl.env
+mxl-gst-testsrc …                          # erzeugt einen Test-Flow
+mxl-info                                   # zeigt den Flow
+gst-launch-1.0 mxlsrc video-flow-id=<id> domain=$OMP_MXL_DOMAIN \
+  ! videoconvert ! fakesink sync=true silent=false
+```
+Explizit klären und in `docs/decisions.md` festhalten (nicht raten):
+(a) wie `mxlsrc` GStreamer-Timestamps aus MXLs Grain-/TAI-Zeitmodell
+ableitet (lokal restamped wie `do-timestamp`, oder aus Grain-Indizes —
+beobachten, nicht annehmen); (b) Verhalten, wenn der Flow noch nicht
+existiert oder der Writer neu startet (Fehler, Block, oder transparente
+Wiederaufnahme) — bestimmt, ob C7 Zweige über Quellen-Neustarts hinweg
+offen halten darf.
 
-**Ziel:** Bediener-UI des Playout im Flow-Editor.
+### C5 — `omp-source` (Test-Videoquelle → MXL)
 
-**Anweisung:** `/ui/manifest.json` + `/ui/bundle.js` am Node: Playlist-Liste,
-Cue/Take-Buttons, Fortschrittsbalken, alles über die generische Param/
-Method-API (kein Sonderprotokoll). Erscheint via B6 automatisch im Panel.
+**Ziel:** Erster der drei Demo-Services: publiziert ein wählbares
+Testbild als MXL-Flow.
 
-**Verifikation:** Browser: Playout-Kachel anklicken → Playlist-UI, Take per
-Button wechselt nachweisbar den RTP-Strom. Tally im Graph (B4) zeigt den
-On-Air-Zustand.
+**Anweisung:** Neues Crate `nodes/omp-source`. Pipeline: `videotestsrc
+is-live=true pattern=<p> ! capsfilter(w,h,fps) ! MxlVideoOutput` —
+`is-live=true` ist die aus C2 fehlende, in PIPELINE CONTROLLER bewährte
+Einstellung. Descriptor: Parameter `pattern` (enum `smpte`/`ball`/
+`snow`/`black`/`bars`/…, live per Property gesetzt — Ausnahme von der
+sonstigen „nur per Pipeline-Neuaufbau ändern"-Regel, da reine
+Property-Änderung, keine Topologie-/Zustandsänderung), readonly `fps`
+(C2-Probe wiederverwendet), readonly `flowId`. IS-04: 1 Sender (Transport
+`urn:x-omp:transport:mxl`) + Flow. Multi-Instanz über `OMP_LABEL`/
+`OMP_PORT` wie beim Mock-Node.
 
-### C6 — Contract-Konformitätstest
+**Verifikation:** Zwei Instanzen mit unterschiedlichem `pattern` starten →
+`mxl-info` zeigt 2 Flows, Registry zeigt 2 MXL-Sender; `pattern` per PATCH
+ändern → `mxl-info`/Loopback-Test zeigt den neuen Testbild-Typ.
+
+### C6 — `omp-viewer` (MXL → Bild)
+
+**Ziel:** Zweiter Demo-Service, erste vorführbare Zero-Copy-Strecke
+(Source → Viewer).
+
+**Anweisung:** Neues Crate `nodes/omp-viewer`. Anzeige headless über
+**MJPEG-über-HTTP im eigenen UI-Bundle** — PIPELINE CONTROLLERs bewährtes
+Preview-Muster (`PreviewPipeline.js`: `… ! videoscale 640×360 ! videorate
+5/1 ! jpegenc quality=70 ! appsink`, ausgeliefert als
+`multipart/x-mixed-replace; boundary=frame`). Dafür ein zweiter,
+eigenständiger `tiny_http`-Listener auf eigenem Thread
+(`OMP_VIEWER_PREVIEW_PORT`), UI-Bundle ist ein simples `<img src=…>`.
+Pipeline: `MxlVideoInput ! tee` → MJPEG-Zweig (+ optionaler
+`autovideosink`-Zweig über `OMP_VIEWER_SINK` für Terminal-Start),
+`sync=false` durchgehend (umgeht die Timestamp-Frage aus C4 für diesen
+Pfad vollständig, analog `PreviewPipeline.js`). IS-04: 1 Receiver
+(Transport `urn:x-omp:transport:mxl`, `caps.media_types=["video/v210"]`).
+**Quellwahl über IS-05-Receiver-PATCH (`sender_id`)**: Viewer löst
+Sender→`flow_id` über die Registry-Query-API auf und baut seine Pipeline
+neu auf. Dadurch funktioniert **Drag & Drop im bestehenden Flow-Editor
+(B3) sofort**, ohne Orchestrator-Änderung. Descriptor: fast leer (readonly
+`connectedFlowId`, `previewUrl`).
+
+**Verifikation:** Browser: Kante `omp-source` → `omp-viewer` im
+Flow-Editor ziehen → Bild erscheint im Parameter-Panel; `pattern` am
+Source ändern → Änderung sichtbar im Viewer, ohne manuellen Eingriff.
+
+### C7 — `omp-switcher` (MXL ×N → Buttons → MXL)
+
+**Ziel:** Dritter Demo-Service: der „Videomixer" — dynamische
+Quellen-Auswahl per Button.
+
+**Anweisung:** Neues Crate `nodes/omp-switcher`. Discovery **rein über
+IS-04**: alle ~2 s `GET /x-nmos/query/v1.3/senders` pollen, nach
+`transport == urn:x-omp:transport:mxl` filtern, eigenen Sender
+ausschließen, Flows für Format/Label joinen (gleicher Poll-Stil wie A5,
+`OMP_REGISTRY_URL` existiert bereits). Pipeline (aus `MasterPipeline.js`
+übernommen, nicht neu erfunden): `input-selector name=isel
+sync-streams=false ! MxlVideoOutput`; `sink_0` permanent ein
+Schwarzbild-Fallback (`videotestsrc is-live=true pattern=black`), damit
+der Ausgang auch bei null Quellen läuft; ein Zweig pro entdeckter Quelle
+(`MxlVideoInput(flow) ! isel.sink_N`). **Ändert sich die entdeckte
+Quellenmenge, wird die gesamte Pipeline neu aufgebaut** (PIPELINE
+CONTROLLERs eigene Antwort auf einen geänderten Live-Quellen-Satz, keine
+Erfindung) — die Ausgangs-`flow-id` bleibt über Neuaufbauten konstant,
+damit Viewer weiter angeschlossen bleiben können. Descriptor: readonly
+`inputs` (`[{senderId, label}]`), readonly `activeInput`, Methode
+`select(senderId)` (braucht die C4-prep-Methoden-Argumente aus dem SDK).
+UI-Bundle: ein Button pro Input, aktiver hervorgehoben. IS-04: 1
+MXL-Sender + Flow; **0 Receiver in v0** — die Auswahl ist interner
+Zustand, keine IS-05-Kante (dokumentierte, bewusste Abweichung von
+§4.5a — ein diskoverybasierter Mixer mit unbegrenzten Eingängen passt
+nicht auf vordeklarierte Receiver; wird beim echten Mixer-Node mit
+Fixbudget-Receivern revidiert).
+
+**Verifikation:** 2 `omp-source`-Instanzen + 1 `omp-switcher` + 1
+`omp-viewer` starten, im Flow-Editor Switcher-Ausgang → Viewer verkabeln;
+Button-Klick am Switcher wechselt nachweisbar das im Viewer sichtbare
+Bild.
+
+### C8 — GUI-Launch (Instanz-Launcher, `ARCHITECTURE.md` §6.2 Stufe 0)
+
+**Ziel:** Die drei Demo-Services (und jeder künftige Node-Typ) lassen
+sich aus der GUI heraus starten/stoppen, mehrfach instanziierbar.
+
+**Anweisung:** `deploy/catalog.json` (`[{type, label, command[], env{}}]`,
+`command` zeigt auf ein vorgebautes Binary; `make nodes` baut sie).
+Orchestrator: neues Paket `internal/launcher` + API (`GET
+/api/v1/catalog`, `GET /api/v1/instances`, `POST /api/v1/instances
+{type}` → spawnt Subprozess mit `OMP_INSTANCE_ID`, `OMP_LABEL`,
+`OMP_PORT=0`, Registry-/NATS-URLs; `DELETE /api/v1/instances/{id}` →
+SIGTERM, Grace, SIGKILL). Persistenz `{id, type, pid}` im bestehenden
+Datenverzeichnis, damit ein Orchestrator-Neustart noch laufende
+Kind-Prozesse per PID-Check wiedererkennt statt sie zu verwaisen.
+`omp-node-sdk`: `OMP_PORT=0` → an Port 0 binden, tatsächlichen Port lesen
+und damit registrieren (macht Multi-Instanz portfrei); neuer IS-04-Tag
+`urn:x-omp:instance` aus `OMP_INSTANCE_ID`. Flow-Editor: Palette mit
+Katalog-Typen + Start-Button, Stop-Control an Kacheln mit Instanz-Tag;
+der Launcher fasst den Graph selbst nicht an (Instanzen erscheinen über
+die normale Selbstregistrierung).
+
+**Verifikation:** Browser: komplette Trias (2× `omp-source`, 1×
+`omp-switcher`, 1× `omp-viewer`) nur über die GUI starten, verkabeln,
+bedienen (Button-Switch) und wieder stoppen — kein Terminal nötig.
+Orchestrator neu starten, während Instanzen laufen → sie bleiben am
+Leben und erscheinen weiter in `/api/v1/instances`.
+
+### C9 — Contract-Konformitätstest
 
 **Ziel:** Der Node-Contract (`ARCHITECTURE.md` §5) wird maschinell prüfbar —
 Grundstein für Community-Nodes.
 
 **Anweisung:** `tools/contract-check/` (Go): prüft gegen einen laufenden
 Node alle Contract-Punkte (IS-04-Registrierung, Descriptor valide gegen
-Schema, Param-Roundtrip, optional UI-Manifest, IS-05 vorhanden). In CI für
-Mock- und Playout-Node ausführen.
+Schema, Param-Roundtrip, optional UI-Manifest, IS-05 vorhanden). In CI
+für Mock-, Playout-, `omp-source`-, `omp-viewer`- und `omp-switcher`-Node
+ausführen.
 
-**Verifikation:** `make contract NODE_URL=…` grün für Mock **und** Playout;
+**Verifikation:** `make contract NODE_URL=…` grün für alle fünf Node-Typen;
 absichtlich kaputter Descriptor → Check schlägt mit klarer Meldung fehl.
 
-**→ Meilenstein „Demo 2":** Echtes Playout, grafisch verschaltet und
-bedient. Ab hier ist das Projekt öffentlich zeigbar (Call for Nodes).
+**→ Meilenstein „Demo 2":** Test-Quellen, Switcher und Viewer werden aus
+der GUI gestartet, per MXL Zero-Copy verschaltet und live geschaltet. Ab
+hier ist das Projekt öffentlich zeigbar (Call for Nodes) — zeigt die
+Plattform-These (modulare Nodes, Standard-Discovery, Zero-Copy-Transport)
+direkt, nicht nur ein einzelnes Node-Feature.
+
+### C10/C11 — Playout v1 (später, nach Demo 2)
+
+**Ziel:** Der echte, playlist-fähige Playout-Node, jetzt mit dem
+korrekten Pipeline-Muster.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C10):** Player-per-Slot
+als eigene, durchgehend laufende Pipelines (analog
+`PlayerPipeline.js`/`MasterPipeline.js`), die MXL publizieren; eine
+Selector-Stufe konsumiert. `playlist.rs` vom Branch `c4-playlist-wip`
+(reine Logik, 12 Tests, unverändert brauchbar) wird wiederverwendet.
+Anschließend C5 aus der alten Zählung (Playout-UI-Bundle: Playlist-Liste,
+Cue/Take-Buttons, Fortschrittsbalken über die generische Param/Method-API).
+
+**Verifikation:** Wie ursprünglich für C4/C5 vorgesehen (Playlist mit 2
+Clips, `take()` schaltet nachweisbar um, automatischer Übergang laut
+`mode`, Tally im Graph zeigt On-Air) — plus: kein Buffer-Stillstand über
+mehrere Slot-Wechsel hinweg (der C4-Bug, jetzt durch das andere
+Pipeline-Muster strukturell ausgeschlossen, nicht nur gefixt).
+
+**→ Meilenstein „Demo 3":** Echtes Playout mit Playlist, grafisch
+verschaltet und bedient.
 
 ---
 
@@ -474,7 +639,9 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   funktionieren mit Token.
 - **D4** `omp-mediaio`: 2110-Implementierung (Software, `st2110`-fähige
   GStreamer-Elemente) + SRT-Gateway-Node; Verifikation soweit ohne
-  Spezial-Hardware möglich (Loopback, Interop mit ffmpeg/OBS).
+  Spezial-Hardware möglich (Loopback, Interop mit ffmpeg/OBS). MXL selbst
+  ist **nicht** mehr Teil von D4 — bereits in Phase C (C4) gebaut, siehe
+  `docs/decisions.md` 2026-07-09.
 - **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
   — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
 - **D6 (geplant, noch nicht detailliert)** Resource-Aware Placement &
@@ -492,8 +659,12 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Stop ganzer Bundles (Quadlets bare-metal, Helm-Äquivalent cloud) —
   Konzept siehe `ARCHITECTURE.md` §6.2. Teilt den Host-Telemetrie-/
   Start-Agenten mit D6, deshalb zusammen mit D6 sequenziert, nach D4
-  (2110/MXL). Anders als D6 **kein** Node-Contract-Zusatz vor dem
+  (2110). Anders als D6 **kein** Node-Contract-Zusatz vor dem
   SDK-Freeze nötig (Katalog-Descriptor ist rein additiv, nachrüstbar).
+  „Stufe 0" davon (einfacher Instanz-Launcher, ein Host, Prozesse statt
+  Bundles) ist bereits in Phase C (C8) vorgezogen, siehe
+  `ARCHITECTURE.md` §6.2 und `docs/decisions.md` 2026-07-09; D7 baut
+  darauf zum vollen Workflow-Objekt aus, ersetzt es nicht.
 
 ---
 
@@ -520,6 +691,11 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C1 | erledigt | [C1] Rust-Workspace + omp-node-sdk Skeleton | 2026-07-09 |
 | C2 | erledigt | [C2] GStreamer-Grundpipeline | 2026-07-09 |
 | C3 | erledigt | [C3] Netz-Ausgang (RTP, 2110-vorbereitet) | 2026-07-09 |
+| C4-prep | erledigt | [C4-prep] SDK: Methoden-Argumente im generischen Method-Dispatch | 2026-07-09 |
 | C4 | offen | | |
 | C5 | offen | | |
 | C6 | offen | | |
+| C7 | offen | | |
+| C8 | offen | | |
+| C9 | offen | | |
+| C10/C11 | offen (später) | | |
