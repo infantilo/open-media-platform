@@ -1,23 +1,61 @@
-//! Playout-Node (`UMSETZUNG.md` C2): produziert Bild und Ton über eine
-//! GStreamer-Testsignal-Pipeline (`pipeline.rs`) und meldet sich wie jeder
-//! Node über `omp-node-sdk` bei der NMOS-Registry an. Ein readonly
-//! `fps`-Parameter macht die gemessene Bildrate im generischen
-//! Parameter-Panel (B6) sichtbar; Pipeline-Fehler werden als NATS-Alarm
-//! über `NodeHandle::publish_alert` gemeldet (der Netz-Ausgang folgt in
-//! C3, hier zunächst headless `fakesink`).
+//! Playout-Node: produziert Bild und Ton über eine GStreamer-Testsignal-
+//! Pipeline (`pipeline.rs`) und meldet sich wie jeder Node über
+//! `omp-node-sdk` bei der NMOS-Registry an. Ein readonly `fps`-Parameter
+//! macht die gemessene Bildrate im generischen Parameter-Panel (B6)
+//! sichtbar; Pipeline-Fehler werden als NATS-Alarm über
+//! `NodeHandle::publish_alert` gemeldet (`UMSETZUNG.md` C2).
+//!
+//! Netz-Ausgang (`UMSETZUNG.md` C3): das Video verlässt den Prozess als
+//! RTP (`omp_mediaio::rtp::RtpVideoOutput`) an eine über IS-05 steuerbare
+//! Ziel-Adresse. `RtpControl`/`RtpSdp` verbinden die generische
+//! IS-05-Sender-Connection-API aus `omp_node_sdk::connection` mit dem
+//! konkreten RTP-Ausgang — der Node selbst kennt nur `omp-mediaio`s
+//! `Output`-Trait, keine RTP-Spezifika.
 
 mod pipeline;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use omp_mediaio::Output;
+use omp_mediaio::rtp::RtpVideoOutput;
+use omp_node_sdk::connection::{SenderConnection, SenderControl, SenderResource, SenderSdp};
 use omp_node_sdk::{
-    Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, SetError,
+    Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
+    SenderSpec, SetError,
 };
 use serde_json::Value;
 
+/// Setzt IS-05-PATCHes (Ziel, Ein/Aus) auf den echten RTP-Ausgang um.
+struct RtpControl {
+    output: Arc<RtpVideoOutput>,
+}
+
+impl SenderControl for RtpControl {
+    fn apply(&self, resource: &SenderResource) {
+        if let Some(leg) = resource.transport_params.first()
+            && let (Some(ip), Some(port)) = (&leg.destination_ip, leg.destination_port)
+        {
+            self.output.set_destination(ip, port);
+        }
+        self.output.set_active(resource.master_enable);
+    }
+}
+
+/// Liefert die SDP des RTP-Ausgangs für `.../transportfile`.
+struct RtpSdp {
+    output: Arc<RtpVideoOutput>,
+}
+
+impl SenderSdp for RtpSdp {
+    fn sdp(&self, _resource: &SenderResource) -> String {
+        self.output.sdp()
+    }
+}
+
 struct PlayoutStore {
     fps: Arc<Mutex<f64>>,
+    connection: Option<Arc<SenderConnection<RtpControl, RtpSdp>>>,
 }
 
 impl ParamStore for PlayoutStore {
@@ -50,7 +88,7 @@ impl ParamStore for PlayoutStore {
     }
 
     fn invoke(&self, name: &str) -> Result<(), InvokeError> {
-        // Kein echter Effekt in C2 (keine Playlist, die zurückgesetzt
+        // Kein echter Effekt in C2/C3 (keine Playlist, die zurückgesetzt
         // werden könnte) — Platzhalter, damit der Node schon jetzt eine
         // Methode im Panel zeigt; echte Semantik folgt mit der
         // Playlist-Engine (C4).
@@ -59,6 +97,16 @@ impl ParamStore for PlayoutStore {
         } else {
             Err(InvokeError::Unknown)
         }
+    }
+
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        let connection = self.connection.as_ref()?;
+        let (status, content_type, body) = connection.handle(method, path, body)?;
+        Some(RawResponse {
+            status,
+            content_type,
+            body,
+        })
     }
 }
 
@@ -77,9 +125,64 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let video_element = env_or("OMP_PLAYOUT_VIDEO_ELEMENT", "videotestsrc");
     let audio_element = env_or("OMP_PLAYOUT_AUDIO_ELEMENT", "audiotestsrc");
     let framerate: i32 = env_or("OMP_PLAYOUT_FRAMERATE", "25").parse()?;
+    let dest_host = env_or("OMP_PLAYOUT_DEST_HOST", "127.0.0.1");
+    let dest_port: u16 = env_or("OMP_PLAYOUT_DEST_PORT", "5004").parse()?;
+
+    // Die Sender-ID wird hier (statt erst in omp-node-sdk) erzeugt, weil
+    // manifest_href von ihr abhängt (.../senders/<id>/transportfile) —
+    // klassisches Henne-Ei-Problem, gelöst über SenderSpec::id.
+    let sender_id = omp_node_sdk::idgen::new_v4();
+    let manifest_href = format!(
+        "http://{host}:{port}/x-nmos/connection/v1.1/single/senders/{sender_id}/transportfile"
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+
+    let pipeline_config = pipeline::Config {
+        video_element,
+        audio_element,
+        framerate_numerator: framerate,
+        framerate_denominator: 1,
+        initial_destination_host: dest_host,
+        initial_destination_port: dest_port,
+    };
+    let pipeline_shutdown = shutdown.clone();
+    let pipeline_thread =
+        std::thread::spawn(move || pipeline::run(pipeline_config, tx, pipeline_shutdown, ready_tx));
 
     let fps = Arc::new(Mutex::new(0.0));
-    let store: Arc<dyn ParamStore> = Arc::new(PlayoutStore { fps: fps.clone() });
+
+    // Wartet, bis die Pipeline (auf ihrem eigenen Thread) den RTP-Ausgang
+    // gebaut hat oder scheitert — erst danach ist bekannt, ob eine
+    // IS-05-Sender-Connection überhaupt angeboten werden kann. Schlägt der
+    // Aufbau fehl (z. B. "ungültiges Element per Env"), bleibt der Node
+    // trotzdem nutzbar: registriert, Heartbeat/Alarm laufen weiter, nur
+    // ohne Sender-Connection-Endpoint (siehe pipeline::Event::Error
+    // weiter unten für den Alarm dazu).
+    let connection = match ready_rx.await {
+        Ok(Ok(output)) => Some(Arc::new(SenderConnection::new(
+            sender_id.clone(),
+            RtpControl {
+                output: output.clone(),
+            },
+            RtpSdp { output },
+        ))),
+        Ok(Err(e)) => {
+            eprintln!("playout: pipeline build failed, sender connection unavailable: {e}");
+            None
+        }
+        Err(_) => {
+            eprintln!("playout: pipeline thread ended before reporting readiness");
+            None
+        }
+    };
+
+    let store: Arc<dyn ParamStore> = Arc::new(PlayoutStore {
+        fps: fps.clone(),
+        connection,
+    });
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -88,25 +191,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: 1,
+            senders: vec![SenderSpec {
+                id: Some(sender_id),
+                manifest_href: Some(manifest_href),
+            }],
             receivers: 0,
         },
         store,
     )
     .await?;
-
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
-    let shutdown = Arc::new(AtomicBool::new(false));
-
-    let pipeline_config = pipeline::Config {
-        video_element,
-        audio_element,
-        framerate_numerator: framerate,
-        framerate_denominator: 1,
-    };
-    let pipeline_shutdown = shutdown.clone();
-    let pipeline_thread =
-        std::thread::spawn(move || pipeline::run(pipeline_config, tx, pipeline_shutdown));
 
     let events = async {
         while let Some(event) = rx.recv().await {

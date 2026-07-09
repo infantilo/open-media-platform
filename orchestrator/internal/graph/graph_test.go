@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
@@ -67,6 +68,10 @@ type fakeIS05Client struct {
 		senderID     *string
 		masterEnable bool
 	}
+	senderPatched map[string]bool
+	// senderErr lässt PatchSenderStaged für die angegebene Sender-ID
+	// fehlschlagen — simuliert einen Node ohne Sender-Connection-API.
+	senderErr map[string]bool
 }
 
 func newFakeIS05Client() *fakeIS05Client {
@@ -76,6 +81,8 @@ func newFakeIS05Client() *fakeIS05Client {
 			senderID     *string
 			masterEnable bool
 		}{},
+		senderPatched: map[string]bool{},
+		senderErr:     map[string]bool{},
 	}
 }
 
@@ -89,6 +96,14 @@ func (f *fakeIS05Client) PatchStaged(ctx context.Context, baseURL, receiverID st
 		masterEnable bool
 	}{senderID, masterEnable}
 	f.active[receiverID] = is05.ActiveResource{SenderID: senderID, MasterEnable: masterEnable}
+	return nil
+}
+
+func (f *fakeIS05Client) PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error {
+	if f.senderErr[senderID] {
+		return fmt.Errorf("fake: sender %s has no connection API", senderID)
+	}
+	f.senderPatched[senderID] = masterEnable
 	return nil
 }
 
@@ -233,5 +248,59 @@ func TestServiceDisconnectPatchesReceiverWithNilSender(t *testing.T) {
 	patched := client.patched["recv-1"]
 	if patched.senderID != nil || patched.masterEnable {
 		t.Errorf("patched = %+v, want nil sender / false", patched)
+	}
+}
+
+func TestServiceConnectAlsoEnablesSender(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+	}
+	client := newFakeIS05Client()
+	svc := NewService(fakeNodeLister{views}, client)
+
+	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	if enabled, ok := client.senderPatched["send-A"]; !ok || !enabled {
+		t.Errorf("senderPatched[send-A] = %v, %v; want true, true", enabled, ok)
+	}
+}
+
+func TestServiceConnectSucceedsEvenIfSenderHasNoConnectionAPI(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+	}
+	client := newFakeIS05Client()
+	client.senderErr["send-A"] = true
+	svc := NewService(fakeNodeLister{views}, client)
+
+	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
+		t.Fatalf("Connect() error = %v, want nil (sender-side failure must not be fatal)", err)
+	}
+
+	patched := client.patched["recv-B"]
+	if patched.senderID == nil || *patched.senderID != "send-A" || !patched.masterEnable {
+		t.Errorf("receiver patch = %+v, want send-A/true despite sender-side failure", patched)
+	}
+}
+
+func TestServiceDisconnectAlsoDisablesPreviousSender(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
+	svc := NewService(fakeNodeLister{views}, client)
+
+	if err := svc.Disconnect(context.Background(), "recv-B"); err != nil {
+		t.Fatalf("Disconnect() error = %v", err)
+	}
+
+	if enabled, ok := client.senderPatched["send-A"]; !ok || enabled {
+		t.Errorf("senderPatched[send-A] = %v, %v; want false, true", enabled, ok)
 	}
 }

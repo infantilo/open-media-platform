@@ -1,7 +1,8 @@
 // Package is05 spricht die Standard-IS-05-Connection-API einzelner Nodes
 // an (nicht die Registry — IS-05 läuft node-zu-node/controller-zu-node,
 // ohne zentrale Instanz). Feldnamen geprüft gegen AMWA-TV/is-05 (Branch
-// v1.1.x, APIs/schemas/receiver-*.json, activation-schema.json).
+// v1.1.x, APIs/schemas/receiver-*.json, sender-stage-schema.json,
+// activation-schema.json).
 package is05
 
 import (
@@ -67,6 +68,43 @@ func (c *Client) PatchStaged(ctx context.Context, baseURL, receiverID string, se
 
 	body, err := json.Marshal(map[string]any{
 		"sender_id":     senderID,
+		"master_enable": masterEnable,
+		"activation":    map[string]any{"mode": "activate_immediate"},
+	})
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("is05: unexpected status %d from PATCH %s", resp.StatusCode, url)
+	}
+	return nil
+}
+
+// PatchSenderStaged schaltet den Ausgang eines Senders ein/aus
+// (master_enable), mit sofortiger Aktivierung. Die Ziel-Adresse
+// (transport_params.destination_ip/_port) bleibt hier unangetastet — das
+// ist node-eigene Konfiguration (UMSETZUNG.md C3, docs/decisions.md);
+// dieser Aufruf steuert bewusst nur Start/Stop, nicht das Ziel. Nicht
+// jeder Node implementiert eine eigene Sender-Connection-API (z. B. der
+// Mock-Node, der nur Receiver-seitig antwortet, Schritt A7/B1) — Aufrufer
+// behandeln einen Fehler hier als nicht fatal.
+func (c *Client) PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error {
+	url := fmt.Sprintf("%s/x-nmos/connection/v1.1/single/senders/%s/staged", baseURL, senderID)
+
+	body, err := json.Marshal(map[string]any{
 		"master_enable": masterEnable,
 		"activation":    map[string]any{"mode": "activate_immediate"},
 	})

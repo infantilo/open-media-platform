@@ -907,3 +907,110 @@ Alarm erscheint sowohl über direktes NATS-Subscribe als auch über
 (registriert, Descriptor/Heartbeat laufen weiter) — "Prozess bleibt
 kontrollierbar" erfüllt. `cargo test`, `cargo clippy -D warnings`,
 `cargo deny check`, `cargo audit` grün.
+
+## 2026-07-09 — C3: Netz-Ausgang (RTP), Sender-seitiges IS-05,
+Orchestrator-Erweiterung
+
+**IS-05-Feldnamen aus der Spezifikation nachgeschlagen** (Arbeitsregel
+§0.6, AMWA-TV/is-05 Branch v1.1.x): `sender-stage-schema.json`
+(`receiver_id`, `master_enable`, `activation`, `transport_params` — kein
+`transport_file` im staged/active-Body, anders als zunächst vermutet),
+`sender_transport_params_rtp.json` (`destination_ip`, `destination_port`,
+`rtp_enabled`), `ConnectionAPI.raml` (`/single/senders/{id}/transportfile`
+liefert die SDP direkt oder per Redirect — hier: direkt).
+
+**Größte offene Frage vor der Umsetzung:** Die bestehende
+Flow-Editor-Verkabelung (B1/B3) PATCHt beim Verbinden ausschließlich den
+**Receiver** (`sender_id` + `master_enable`) — der Sender selbst hat bisher
+gar keine eigene Connection-API (`nodes/mock/internal/connection` ist
+bewusst nur Receiver-seitig, siehe A7/B1-Eintrag oben). Damit ein
+IS-05-PATCH über den Flow-Editor den echten RTP-Ausgang des Playout-Node
+tatsächlich scharf schaltet, musste der Orchestrator selbst erweitert
+werden. Entschieden: `graph.Service.Connect`/`Disconnect` schalten
+**zusätzlich** (best-effort, siehe unten) den Sender-eigenen
+`master_enable` — die Ziel-Adresse bleibt dabei node-eigene Konfiguration
+(Env-Var-Default + direktes IS-05-PATCH), der Orchestrator handelt sie
+nicht dynamisch aus. Begründung: in einem reinen Multicast-2110-Szenario
+(der letztlich angestrebte Normalfall, `ARCHITECTURE.md` §6) kennt der
+Sender sein Ziel ohnehin fest/über seine eigene SDP — eine volle
+Receiver-getriebene Unicast-Zieladress-Aushandlung wäre Vorgriff auf einen
+späteren Schritt und hier nicht nötig, um "Start/Stop übers Flow-Editor"
+ehrlich zu erfüllen.
+
+**Orchestrator-Änderungen** (`internal/is05/client.go`,
+`internal/graph/graph.go`): neue `PatchSenderStaged(ctx, baseURL,
+senderID, masterEnable)`. `Connect` PATCHt wie bisher zuerst den Receiver,
+danach zusätzlich (falls der Sender im aktuellen Registry-Snapshot
+auflösbar ist und eine `APIBaseURL` hat) den Sender auf
+`master_enable=true` — ein Fehler dabei ist **nicht fatal** (nur
+geloggt), da die meisten bestehenden Nodes (Mock-Node) gar keine
+Sender-Connection-API haben und das nicht brechen darf. `Disconnect`
+liest vorher per `GetActive` die zuletzt verbundene Sender-ID aus und
+schaltet sie (ebenso best-effort) auf `master_enable=false`. Neue Tests:
+`TestServiceConnectAlsoEnablesSender`,
+`TestServiceConnectSucceedsEvenIfSenderHasNoConnectionAPI`,
+`TestServiceDisconnectAlsoDisablesPreviousSender`.
+
+**omp-mediaio (neues Crate):** Transport-Abstraktion
+(`ARCHITECTURE.md` §10 Punkt 1, dort als "§10.1" referenziert) — ein
+`Output`-Trait (`set_active`, `set_destination`, `is_active`,
+`destination`) und heute genau eine Implementierung,
+`rtp::RtpVideoOutput`. Kein Node spricht GStreamer-RTP-Elemente direkt;
+eine spätere 2110/MXL-Implementierung ersetzt nur `rtp.rs`, ohne
+Playout-Code zu ändern.
+
+**Pipeline-Erweiterung** (`nodes/playout/src/pipeline.rs`): ein `tee`
+nach dem Framerate-Capsfilter speist zwei unabhängige Zweige — den
+bestehenden FPS-/Health-Zweig (`fakesink`, C2, unverändert) und den neuen
+RTP-Zweig. Der RTP-Zweig braucht zwingend `videoconvert` **und**
+`videoscale` vor dem festen Ziel-Format (UYVY, 640×480): `videoconvert`
+wandelt nur den Farbraum, ohne `videoscale` schlägt die
+Caps-Verhandlung fehl, sobald die native Auflösung der Quelle (z. B.
+`videotestsrc`) von 640×480 abweicht — **Bug beim ersten Live-Test
+gefunden**: Pipeline lief fehlerfrei (keine Bus-ERROR-Message, FPS-Zweig
+unbeeinträchtigt), aber am Empfänger kamen nachweislich keine Pakete an;
+`videoscale` ergänzt hat es behoben (verifiziert per `gst-launch-1.0 -v
+udpsrc port=5004 ! fakesink silent=false`, das `chain`-Nachrichten mit
+tatsächlichen Byte-Zahlen zeigt).
+
+**omp-node-sdk-Erweiterung — generische Sender-Connection-API**
+(`src/connection.rs`, neu): `SenderConnection<C, S>` verwaltet
+staged/active-Zustand für genau einen Sender und delegiert Wirkung
+(`SenderControl::apply`) und SDP-Erzeugung (`SenderSdp::sdp`) an den
+Node. Kein HTTP-Wissen im Modul selbst — angebunden über
+`ParamStore::extra_route` (neuer Default-Trait-Method-Fallback in
+`server.rs`, nach den vier generischen Routen, vor dem endgültigen 404;
+bestehende `ParamStore`-Implementierungen brauchen keine Änderung).
+`RawResponse` transportiert die Antwort transportunabhängig (kein
+`tiny_http`-Typ in der Trait-Signatur).
+
+**Henne-Ei-Problem gelöst — `SenderSpec`:** `manifest_href`
+(`.../senders/<id>/transportfile`) braucht die eigene Sender-ID, die
+bisher aber erst *innerhalb* von `node::start()` generiert wurde. Statt
+eines Sonderfalls für Playout: `NodeConfig.senders` ist jetzt
+`Vec<SenderSpec>` (`id: Option<String>`, `manifest_href: Option<String>`)
+statt einer bloßen Anzahl — ein Node kann seine Sender-ID selbst vorab
+erzeugen (`omp_node_sdk::idgen::new_v4()`), bevor `start()` aufgerufen
+wird, und sie referenzieren. Ohne beides verhält sich ein Sender wie
+zuvor (auto-generierte ID, kein Manifest) — `hello_node.rs` unverändert
+im Verhalten, nur `SenderSpec::default()` statt `senders: 1`.
+
+**Verifiziert (gegen die echte Registry/NATS, per curl/gst-launch, kein
+Browser nötig für die Kernlogik):**
+- `GET .../senders/<id>/staged` und `.../transportfile` liefern
+  korrektes JSON bzw. eine SDP, die exakt zum echten Ausgang passt
+  (Ziel, Format, Framerate).
+- Direktes `PATCH .../staged` (destination + `master_enable`) schaltet
+  den echten RTP-Ausgang nachweislich scharf/stumm: bei `master_enable:
+  true` wächst die Empfänger-Mitschnittdatei kontinuierlich, bei `false`
+  bleibt sie exakt stehen (Größenvergleich über 2 s), erneutes `true`
+  lässt sie sofort weiterwachsen.
+- `POST /api/v1/graph/edges` (identischer Aufruf wie das Flow-Editor-
+  Drag&Drop, B3) schaltet den Sender **automatisch** scharf, `DELETE
+  .../edges/<id>` wieder ab — ohne dass am Playout-Node selbst etwas
+  manuell nachgeholfen werden musste.
+- `MockReceiver` (keine eigene Sender-API) bleibt durch die
+  Orchestrator-Änderung unbeeinträchtigt (bereits in A7/B1 etabliertes
+  Verhalten unverändert, zusätzlich durch die neuen Go-Tests abgesichert).
+- `cargo test`, `cargo clippy -D warnings`, `cargo deny check`, `cargo
+  audit` (Rust) sowie `go test ./...` (Orchestrator) grün.

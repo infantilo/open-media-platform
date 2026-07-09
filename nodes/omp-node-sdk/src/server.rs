@@ -30,6 +30,15 @@ pub enum InvokeError {
     Unknown,
 }
 
+/// Antwort auf eine node-eigene Zusatzroute (siehe
+/// `ParamStore::extra_route`) — transportunabhängig, kein `tiny_http`-Typ
+/// in der Trait-Signatur.
+pub struct RawResponse {
+    pub status: u16,
+    pub content_type: &'static str,
+    pub body: Vec<u8>,
+}
+
 /// Verbindet einen Node mit dem generischen Descriptor-Proxy des
 /// Orchestrators (A8): jeder Node-Autor implementiert nur diesen Trait,
 /// keine eigene HTTP-Logik nötig.
@@ -38,6 +47,15 @@ pub trait ParamStore: Send + Sync + 'static {
     fn get(&self, name: &str) -> Option<Value>;
     fn set(&self, name: &str, value: Value) -> Result<(), SetError>;
     fn invoke(&self, name: &str) -> Result<(), InvokeError>;
+
+    /// Fallback für Pfade jenseits der vier generischen Routen
+    /// (`/descriptor.json`, `/params/<name>`, `/methods/<name>`) — z. B.
+    /// eine node-eigene IS-05-Sender-Connection-API + SDP
+    /// (`UMSETZUNG.md` C3, `crate::connection`). Default: keine
+    /// Zusatzrouten, bestehende Nodes brauchen keine Änderung.
+    fn extra_route(&self, _method: &str, _path: &str, _body: &[u8]) -> Option<RawResponse> {
+        None
+    }
 }
 
 /// Startet den Descriptor-HTTP-Server auf addr und blockiert den
@@ -68,16 +86,15 @@ fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {
 fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
     let method = request.method().clone();
     let url = request.url().to_string();
-    let response = route(&mut request, &method, &url, store);
+
+    let mut body = Vec::new();
+    let _ = request.as_reader().read_to_end(&mut body);
+
+    let response = route(&method, &url, &body, store);
     let _ = request.respond(response);
 }
 
-fn route(
-    request: &mut Request,
-    method: &Method,
-    url: &str,
-    store: &Arc<dyn ParamStore>,
-) -> ResponseBox {
+fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -> ResponseBox {
     if *method == Method::Get && url == "/descriptor.json" {
         return json_response(200, &store.descriptor());
     }
@@ -90,11 +107,7 @@ fn route(
             };
         }
         if *method == Method::Patch {
-            let mut body = String::new();
-            if request.as_reader().read_to_string(&mut body).is_err() {
-                return error_response(400, "invalid JSON body");
-            }
-            let parsed: Result<Value, _> = serde_json::from_str(&body);
+            let parsed: Result<Value, _> = serde_json::from_slice(body);
             let value = match parsed {
                 Ok(v) => v.get("value").cloned().unwrap_or(Value::Null),
                 Err(_) => return error_response(400, "invalid JSON body"),
@@ -113,6 +126,16 @@ fn route(
             Ok(()) => json_response(200, &serde_json::json!({"ok": true})),
             Err(_) => error_response(404, "unknown method"),
         };
+    }
+
+    if let Some(extra) = store.extra_route(method.as_str(), url, body) {
+        return Response::from_data(extra.body)
+            .with_status_code(extra.status)
+            .with_header(
+                Header::from_bytes(&b"Content-Type"[..], extra.content_type.as_bytes())
+                    .expect("valid content-type header value"),
+            )
+            .boxed();
     }
 
     error_response(404, "not found")

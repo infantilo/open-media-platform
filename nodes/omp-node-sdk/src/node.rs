@@ -28,16 +28,29 @@ type BoxError = Box<dyn Error + Send + Sync>;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const REGISTER_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Konfiguration eines Nodes: Label, Netzwerk-Adresse, Anzahl simulierter
-/// Senders/Receivers, Adressen von Registry und NATS.
+/// Konfiguration eines Nodes: Label, Netzwerk-Adresse, Senders/Receivers,
+/// Adressen von Registry und NATS.
 pub struct NodeConfig {
     pub label: String,
     pub host: String,
     pub port: u16,
     pub registry_url: String,
     pub nats_url: String,
-    pub senders: usize,
+    pub senders: Vec<SenderSpec>,
     pub receivers: usize,
+}
+
+/// Beschreibt einen einzelnen Sender. `id`/`manifest_href` sind optional:
+/// ohne beides verhält sich ein Sender wie bisher (auto-generierte ID,
+/// kein Manifest). Nodes, die ihre eigene Sender-ID vorab kennen müssen
+/// (z. B. um `manifest_href` auf einen von der ID abhängigen Pfad wie
+/// `.../senders/<id>/transportfile` zu setzen, `UMSETZUNG.md` C3), geben
+/// `id` selbst vor (`crate::idgen::new_v4()`) statt es generieren zu
+/// lassen.
+#[derive(Default)]
+pub struct SenderSpec {
+    pub id: Option<String>,
+    pub manifest_href: Option<String>,
 }
 
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
@@ -78,8 +91,10 @@ impl NodeHandle {
 pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<NodeHandle, BoxError> {
     let node_id = crate::idgen::new_v4();
     let device_id = crate::idgen::new_v4();
-    let sender_ids: Vec<String> = (0..config.senders)
-        .map(|_| crate::idgen::new_v4())
+    let sender_ids: Vec<String> = config
+        .senders
+        .iter()
+        .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
         .collect();
     let receiver_ids: Vec<String> = (0..config.receivers)
         .map(|_| crate::idgen::new_v4())
@@ -95,15 +110,19 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     );
     let senders: Vec<Sender> = sender_ids
         .iter()
+        .zip(&config.senders)
         .enumerate()
-        .map(|(i, id)| {
-            Sender::new(
+        .map(|(i, (id, spec))| {
+            let mut sender = Sender::new(
                 id,
                 &format!("{} Sender {}", config.label, i + 1),
                 &device_id,
-            )
+            );
+            sender.manifest_href = spec.manifest_href.clone();
+            sender
         })
         .collect();
+    let sender_count = senders.len();
     let receivers: Vec<Receiver> = receiver_ids
         .iter()
         .enumerate()
@@ -148,7 +167,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         receivers,
         publisher,
         config.label,
-        config.senders,
+        sender_count,
         config.receivers,
     ));
 

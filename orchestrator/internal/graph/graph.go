@@ -76,6 +76,7 @@ type NodeLister interface {
 type is05Client interface {
 	GetActive(ctx context.Context, baseURL, receiverID string) (is05.ActiveResource, error)
 	PatchStaged(ctx context.Context, baseURL, receiverID string, senderID *string, masterEnable bool) error
+	PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error
 }
 
 // Service baut den Graphen und führt IS-05-Verbindungsänderungen aus.
@@ -103,6 +104,12 @@ func (s *Service) Graph(ctx context.Context) Graph {
 // generische Prüfung über die bestehenden Kanten, ohne Node-Typ-Wissen
 // — konservativ angenommen wird, dass jeder Node mit Ein- und
 // Ausgängen seine Ausgänge von seinen Eingängen ableitet.
+//
+// Schaltet zusätzlich (best-effort) den Sender-Ausgang selbst scharf
+// (UMSETZUNG.md C3: "IS-05-Connection-API des Nodes steuert ... Start/
+// Stop") — ein Fehler dabei bricht die bereits erfolgreiche Receiver-
+// Verbindung nicht ab, da nicht jeder Node eine eigene Sender-seitige
+// Connection-API implementiert (z. B. der Mock-Node, Schritt A7/B1).
 func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) error {
 	views := s.nodes.List()
 
@@ -114,7 +121,8 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 		return ErrNodeUnreachable
 	}
 
-	if senderNode, ok := findNodeByPort(views, fromSender); ok {
+	senderNode, senderFound := findNodeByPort(views, fromSender)
+	if senderFound {
 		if senderNode.ID == receiverNode.ID {
 			return ErrRoutingLoop
 		}
@@ -125,20 +133,53 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 	}
 
 	sender := fromSender
-	return s.is05.PatchStaged(ctx, receiverNode.APIBaseURL, toReceiver, &sender, true)
+	if err := s.is05.PatchStaged(ctx, receiverNode.APIBaseURL, toReceiver, &sender, true); err != nil {
+		return err
+	}
+
+	if senderFound && senderNode.APIBaseURL != "" {
+		if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, fromSender, true); err != nil {
+			slog.Warn("is05 PatchSenderStaged failed (node may not implement a sender-side connection API)",
+				"sender", fromSender, "error", err)
+		}
+	}
+
+	return nil
 }
 
 // Disconnect trennt receiverID — der IS-05-PATCH hinter DELETE
-// /api/v1/graph/edges/<id>.
+// /api/v1/graph/edges/<id>. Schaltet (best-effort, siehe Connect) auch
+// den zuvor verbundenen Sender wieder ab.
 func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
-	node, ok := findNodeByReceiver(s.nodes.List(), receiverID)
+	views := s.nodes.List()
+
+	node, ok := findNodeByReceiver(views, receiverID)
 	if !ok {
 		return ErrUnknownReceiver
 	}
 	if node.APIBaseURL == "" {
 		return ErrNodeUnreachable
 	}
-	return s.is05.PatchStaged(ctx, node.APIBaseURL, receiverID, nil, false)
+
+	previousSenderID := ""
+	if active, err := s.is05.GetActive(ctx, node.APIBaseURL, receiverID); err == nil && active.SenderID != nil {
+		previousSenderID = *active.SenderID
+	}
+
+	if err := s.is05.PatchStaged(ctx, node.APIBaseURL, receiverID, nil, false); err != nil {
+		return err
+	}
+
+	if previousSenderID != "" {
+		if senderNode, ok := findNodeByPort(views, previousSenderID); ok && senderNode.APIBaseURL != "" {
+			if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, previousSenderID, false); err != nil {
+				slog.Warn("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API)",
+					"sender", previousSenderID, "error", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) buildEdges(ctx context.Context, views []registry.NodeView) []Edge {

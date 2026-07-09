@@ -7,6 +7,7 @@
 //! kopierbarem Beispielcode — siehe `examples/hello_node.rs` für die
 //! minimale Nutzung.
 
+pub mod connection;
 pub mod descriptor;
 pub mod health;
 pub mod idgen;
@@ -15,5 +16,5 @@ pub mod node;
 pub mod server;
 
 pub use descriptor::{Descriptor, MethodArg, MethodSpec, ParamSpec, ParamType, Range};
-pub use node::{NodeConfig, NodeHandle, run, start};
-pub use server::{InvokeError, ParamStore, SetError};
+pub use node::{NodeConfig, NodeHandle, SenderSpec, run, start};
+pub use server::{InvokeError, ParamStore, RawResponse, SetError};

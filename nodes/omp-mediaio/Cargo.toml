@@ -1,0 +1,10 @@
+[package]
+name = "omp-mediaio"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei omp-node-sdk.
+publish = false
+
+[dependencies]
+gstreamer = "0.25.3"

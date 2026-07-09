@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range,
-    SetError,
+    SenderSpec, SetError,
 };
 use serde_json::Value;
 
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: 1,
+            senders: vec![SenderSpec::default()],
             receivers: 1,
         },
         store,

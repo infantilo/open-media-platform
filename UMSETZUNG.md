@@ -519,7 +519,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | B7 | erledigt | [B7] Snapshots/Szenen | 2026-07-08 |
 | C1 | erledigt | [C1] Rust-Workspace + omp-node-sdk Skeleton | 2026-07-09 |
 | C2 | erledigt | [C2] GStreamer-Grundpipeline | 2026-07-09 |
-| C3 | offen | | |
+| C3 | erledigt | [C3] Netz-Ausgang (RTP, 2110-vorbereitet) | 2026-07-09 |
 | C4 | offen | | |
 | C5 | offen | | |
 | C6 | offen | | |

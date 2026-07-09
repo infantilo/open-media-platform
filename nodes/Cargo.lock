@@ -877,6 +877,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-mediaio"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+]
+
+[[package]]
 name = "omp-node-sdk"
 version = "0.1.0"
 dependencies = [
@@ -978,6 +985,7 @@ name = "playout"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
  "tokio",
