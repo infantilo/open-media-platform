@@ -19,6 +19,21 @@ jobs:
         with:
           deno-version: v2.x
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nodes
+
+      # `make ci` ruft u.a. `cargo deny check`/`cargo audit` als CLI-Tools
+      # auf (einzige Quelle der Wahrheit, gleiche Kommandos lokal wie in
+      # CI) — hier als vorgebaute Binaries installiert statt per
+      # `cargo install` (Compile-Zeit aus Quelle wäre mehrere Minuten pro
+      # CI-Lauf, docs/decisions.md Schritt C1).
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+
       - name: make ci
         run: make ci
 

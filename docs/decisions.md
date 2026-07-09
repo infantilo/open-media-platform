@@ -726,3 +726,111 @@ starten, statt zwei Subsysteme).
   Telemetrie-/Start-Agent), nach D4 (2110/MXL).
 - **Keine** A–C-Schritte ändern dadurch ihren Scope; Phase C
   (Playout-Node) startet wie geplant als Nächstes.
+
+## 2026-07-09 — C1: Rust-Toolchain, `omp-node-sdk`-Abhängigkeiten,
+Workspace-Layout
+
+**Rust-Toolchain:** Kein Debian-Paket verwendet (bookworms `rustc` wäre
+veraltet, gleiche Begründung wie bei Go/Deno in A1). Offizieller
+`rustup`-Installer (`https://sh.rustup.rs`), Stable-Channel
+(`rustc 1.96.1`). Auf dieser Maschine war bereits ein
+`~/.rustup`-Settings-File vorhanden (Alt-Installation, vermutlich aus
+PIPELINE-CONTROLLER-Arbeit) — `rustup-init` hat den bestehenden Stable-
+Channel übernommen statt neu zu wählen, `~/.bashrc` sourcte `~/.cargo/env`
+bereits. GStreamer-Dev-Header (`libgstreamer1.0-dev`,
+`libgstreamer-plugins-base1.0-dev`, 1.22.0) waren ebenfalls schon
+installiert — wird erst ab C2 gebraucht, hier nur geprüft.
+
+**Workspace-Layout:** `nodes/Cargo.toml` als reiner Workspace-Root
+(`[workspace] members = ["omp-node-sdk"]`), das SDK-Crate selbst über
+`cargo init --lib` erzeugt. `nodes/mock` (Go) bleibt unverändert
+außerhalb des Rust-Workspace — zwei Sprachen nebeneinander im selben
+`nodes/`-Verzeichnis ist bewusst so vorgesehen (`nodes/README.md`).
+`Cargo.lock` wird committet (wie `go.sum`): reproduzierbare Builds für
+Beispiel-Binaries/Tests, kein Grund für library-typisches
+Nicht-Committen, solange es keine externen Downstream-Konsumenten gibt.
+
+**HTTP-Server (Descriptor-API):** `tiny_http` statt eines
+Async-Frameworks (axum/hyper direkt) — vier simple Routen, kein
+Streaming, kein Concurrency-kritischer Pfad; ein blockierender Server in
+einem eigenen Thread reicht, zusätzliche Framework-Tiefe wäre Overhead
+ohne Gegenwert. `tiny_http` unterstützt `PATCH` nativ (`Method::Patch`),
+kein Sonderfall nötig.
+
+**HTTP-Client (IS-04-Registrierung/Heartbeat):** `ureq` (mit
+`json`-Feature für `send_json`) statt `reqwest` — synchron, deutlich
+kleinerer Abhängigkeitsbaum, passt zum "kein Async nötig, wo kein Async
+gebraucht wird"-Prinzip: die Registrierung/Heartbeat-Aufrufe sind
+seltene (alle 5s), kurze Anfragen, kein Streaming/Concurrency-Bedarf.
+`ureq::Error::StatusCode` wird von Haus aus für alle 4xx/5xx geliefert
+(Erfolg = 2xx/3xx als `Ok`) — deckt die Go-Unterscheidung "200/201 =
+Erfolg" ohne Zusatzcode ab; `404` bei Heartbeat wird explizit auf
+`HeartbeatError::NotRegistered` gemappt (Pendant zu `is04.ErrNotRegistered`
+im Go-Mock-Node).
+
+**NATS-Client:** `async-nats` — offizieller, aktiv gepflegter Rust-Client,
+gleiche Ausnahme von der Minimal-Dependency-Regel wie `nats.go` im Go-Teil
+(`docs/decisions.md`, Schritt A6): ein selbst geschriebener NATS-Client
+wäre reine Protokoll-Neuimplementierung ohne Gegenwert. Bringt zwangsläufig
+`tokio` als Async-Runtime mit (kein sync-natives, gepflegtes NATS-Crate
+verfügbar). Um die restliche SDK-Oberfläche trotzdem synchron/einfach zu
+halten (Node-Autoren sollen `ParamStore` implementieren können, ohne
+Async-Rust zu lernen), läuft nur der NATS-/Heartbeat-Lifecycle
+(`node::run`) in einer minimalen `tokio`-Runtime
+(`features = ["rt", "time", "macros"]`, bewusst kein `rt-multi-thread`,
+kein `net`/`io-util` — nur was der eigene Code direkt nutzt;
+Cargo-Feature-Unification zieht, was `async-nats` selbst zusätzlich
+braucht, ohnehin automatisch); die blockierenden `ureq`-Aufrufe (Register/
+Heartbeat) laufen darin über `tokio::task::spawn_blocking`, damit sie die
+Async-Runtime nicht stallen.
+
+**UUID-Generierung:** Eigene, winzige UUIDv4-Implementierung
+(`src/idgen.rs`) statt der `uuid`-Crate — 1:1 dieselbe Begründung wie
+`nodes/mock/internal/idgen` (Go): Standardverfahren nach RFC 4122 §4.4 ist
+~15 Zeilen, keine Library nötig. Einziger echter Unterschied zu Go: Rusts
+Standardbibliothek hat (anders als `crypto/rand`) **keine** eingebaute
+Zufallsquelle — `getrandom` (Direktabhängigkeit, kein Sammelsurium wie
+`rand`) ist der schmalste Ersatz dafür, ein reiner OS-Syscall-Wrapper.
+
+**Logging:** Kein `log`/`env_logger`-Crate — `eprintln!` für Warnungen,
+reicht für den aktuellen Umfang (kein strukturiertes Logging-Bedürfnis wie
+beim Go-Orchestrator mit `slog`, da hier nur wenige Zeilen Diagnose-Ausgabe
+anfallen). Bei Bedarf später leicht nachrüstbar, ohne die SDK-Schnittstellen
+zu ändern.
+
+**`cargo deny`/`cargo audit`:** Kein Debian-Paket, per `cargo install
+cargo-deny cargo-audit --locked` installiert (Compile-Zeit einmalig,
+reines Dev-Tool, keine Projektabhängigkeit). Ab dem ersten Commit in CI
+(A9-Workflow wird um Rust-Job erweitert).
+
+**Verifiziert:** `examples/hello_node.rs` (Parameter `label`/`gain`,
+Methode `reset` — bewusst identisch zum Go-Mock-Node) registriert sich
+bei der laufenden Registry, erscheint in `GET /api/v1/nodes` des
+Orchestrators; Descriptor/Param-Get/Patch/Method-Invoke über den
+generischen Proxy (A8) funktionieren identisch zum Go-Node; NATS-
+Health-Event läuft nachweislich bis in den SSE-Stream
+(`omp.health.<id>` sichtbar auf `/api/v1/events`). `cargo test` grün.
+
+**Blocker (klein, geparkt): Projektlizenz noch nicht entschieden.**
+`cargo deny check` verlangt ein `license`-Feld für jedes Crate,
+einschließlich der eigenen Workspace-Crates — bislang existiert weder eine
+`LICENSE`-Datei noch eine dokumentierte Lizenzentscheidung für
+OpenMediaPlatform. Das betrifft nicht nur `omp-node-sdk`, sondern das
+gesamte "Call for Nodes"-Community-Modell (§7.3 Kritischer
+Erfolgsfaktor: Community-Geschwindigkeit) — Drittanbieter brauchen eine
+klare Lizenzbasis, bevor sie eigene Nodes beitragen.
+- **Optionen:** (a) Apache-2.0 (Muster in fast der ganzen bisherigen
+  Rust-Abhängigkeitskette, patentfreundlich, in Broadcast-/Rundfunk-Umfeld
+  üblich); (b) MIT (einfachste, permissivste Wahl, aber kein
+  Patentschutz); (c) MIT OR Apache-2.0 Dual-Lizenz (Rust-Ökosystem-Standard,
+  z. B. von `serde`/`tokio` selbst verwendet — passt zur bereits gewählten
+  Sprache/Tech-Stack-Kultur).
+- **Empfehlung:** (c), da es sich nahtlos in die bereits genutzte
+  Rust-Crate-Landschaft einfügt und Beitragenden keine Wahl aufzwingt.
+- **Vorläufige Umgehung (nicht die Entscheidung selbst):** `publish =
+  false` in `nodes/omp-node-sdk/Cargo.toml` + `[licenses.private] ignore
+  = true` in `nodes/deny.toml` — verhindert ein versehentliches
+  crates.io-Publish und nimmt das Crate bis zur Entscheidung von der
+  Lizenzprüfung aus, ändert aber nichts an der eigentlichen Frage. Nutzer
+  entscheidet, dann `LICENSE`-Datei(en) + `license`-Feld ergänzen und
+  `ignore` zurück auf `false` setzen.

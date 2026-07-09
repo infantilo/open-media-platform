@@ -517,7 +517,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | B5 | erledigt | [B5] Gruppen/Verschachtelung | 2026-07-07 |
 | B6 | erledigt | [B6] Parameter-Panel + Node-UI-Bundles | 2026-07-07 |
 | B7 | erledigt | [B7] Snapshots/Szenen | 2026-07-08 |
-| C1 | offen | | |
+| C1 | erledigt | [C1] Rust-Workspace + omp-node-sdk Skeleton | 2026-07-09 |
 | C2 | offen | | |
 | C3 | offen | | |
 | C4 | offen | | |

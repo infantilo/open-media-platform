@@ -15,3 +15,6 @@ build/
 
 # Orchestrator-Laufzeitdaten (Layouts, B5) — Datei-Backend, kein Quellcode
 /data/
+
+# Claude Code lokale Projekt-Settings/Lock-Dateien
+/.claude/
