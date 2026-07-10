@@ -1433,3 +1433,118 @@ Layout).
 C5 damit abgeschlossen. Beide Test-Instanzen und der `nodes/omp-source`-
 Build-Output am Sitzungsende beendet/aufgeräumt; NATS-/NMOS-Registry-
 Container bleiben laufen (persistente Dev-Infrastruktur).
+
+## 2026-07-10 — C6 (`omp-viewer`): SDK-Erweiterung für IS-05-Receiver-Connections
++ MJPEG-Preview
+
+**Ziel erreicht:** Zweiter Demo-Service (`UMSETZUNG.md` C6) — zeigt einen
+per Flow-Editor-Drag&Drop (B3) gewählten MXL-Flow headless über
+MJPEG-über-HTTP an, ohne jede Orchestrator-Änderung.
+
+**SDK-Erweiterungen (Voraussetzung, bevor `omp-viewer` selbst geschrieben
+werden konnte):**
+- `omp-node-sdk::node`: `NodeConfig.receivers` war bisher nur `usize`
+  (reine Anzahl, auto-generierte IDs, RTP-Transport-Default) — für einen
+  Receiver mit eigener IS-05-Connection-API muss die ID aber schon vor
+  `start()` feststehen (gleiches Henne-Ei-Problem wie `SenderSpec::id`/
+  `manifest_href` bei C3). Neuer Typ `ReceiverSpec { id, transport,
+  media_types }`, `NodeConfig.receivers: Vec<ReceiverSpec>` (Breaking
+  Change für die drei bestehenden Aufrufer — `playout`/`omp-source`
+  `receivers: 0` → `vec![]`, `hello_node`-Beispiel `receivers: 1` →
+  `vec![ReceiverSpec::default()]` — vor dem SDK-v1-Freeze unproblematisch,
+  siehe `ARCHITECTURE.md` §5 Punkt 6/§6.1-Notiz).
+- `omp-node-sdk::connection`: `ReceiverConnection<C>`/`ReceiverControl`
+  als Receiver-seitiges Pendant zu C3s `SenderConnection`/`SenderControl`
+  — Rust-Fassung von `nodes/mock/internal/connection` (Go), aber bewusst
+  ohne dessen getrennte staged-/active-Zustandsführung: der Flow-Editor
+  PATCHt laut `orchestrator/internal/is05/client.go` ohnehin immer mit
+  `activation.mode=activate_immediate`, eine Staging-Zwischenstufe hätte
+  keinen Aufrufer (gleiche Vereinfachung wie `SenderConnection` schon für
+  C3 trifft — ein `state`, beide GET-Endpunkte liefern ihn).
+- `omp-node-sdk::is04::RegistryClient::get_sender`: erster Query-API-Call
+  von Rust aus (`GET .../x-nmos/query/v1.3/senders/<id>`, gleiche
+  Registry-Basis-URL wie die Registration-API, siehe
+  `orchestrator/internal/registry/client.go`) — Grundlage für die
+  Quellwahl: der Receiver kennt aus dem PATCH-Body nur `sender_id`, muss
+  daraus `flow_id` ableiten (Konvention Flow-UUID == MXL-`flow-id`, C4).
+
+**`omp-viewer`-Pipeline (`pipeline.rs`):** `MxlVideoInput` (liefert
+bereits `appsrc ! videoconvert ! videoscale ! videorate`, C4) → `tee` →
+MJPEG-Zweig (PIPELINE CONTROLLERs `PreviewPipeline.js`-Muster 1:1
+übernommen: `videoscale 640×360 ! videorate 5/1 ! jpegenc quality=70 !
+appsink sync=false`) + optionaler `autovideosink`-Zweig
+(`OMP_VIEWER_SINK`). Bei jedem Quellwechsel (IS-05-Receiver-PATCH →
+`ViewerControl::apply` → Registry-Query → neue `flow_id`) wird die
+**gesamte Pipeline neu aufgebaut** (alte `ActivePipeline` gedroppt, State
+Null stoppt den `appsrc`, `MxlVideoInput`s Reader-Thread bricht daraufhin
+selbst aus seiner `push_buffer`-Schleife) statt dynamischem
+Pad-Relinking — bewusst dieselbe, einfachere Antwort, die
+`MasterPipeline.js` für einen geänderten Live-Quellen-Satz nutzt (hier auf
+einen einzelnen Input übertragen), keine neu erfundene Technik.
+
+**MJPEG-Ausgabe (`preview.rs`):** zweiter, unabhängiger
+`tiny_http`-Listener (`OMP_VIEWER_PREVIEW_PORT`, Default 9341) — bewusst
+**nicht** über `omp_node_sdk::server`s bestehenden Descriptor-Server
+(dessen Accept-Loop ist single-threaded; eine dauerhaft offene
+MJPEG-Antwort würde sie für alle weiteren Requests blockieren), stattdessen
+ein Thread pro Verbindung. Nutzt `tiny_http::Request::into_writer()` (roher
+Stream-Zugriff, wie im `php-cgi`-Beispiel des Crates) statt
+`Request::respond()`, um Status-Zeile/Header selbst zu schreiben und
+danach beliebig lange weitere `--frame`-Chunks nachzuschieben — Rust-
+Äquivalent zu Node.js' `res.write()`-Pattern in PIPELINE CONTROLLERs
+`server.js`/`PreviewPipeline.js`. Ein `Broadcaster` verteilt jedes vom
+appsink-Callback gezogene JPEG an alle verbundenen Clients (Channel pro
+Client) und hält das letzte Frame vor, damit neu verbindende Clients
+sofort ein Bild sehen; bei Disconnect (`ReceiverControl::apply` ohne
+aktiven Sender) wird das vorgehaltene Frame verworfen.
+
+Auch das eigene `/ui/manifest.json`+`/ui/bundle.js` (`ARCHITECTURE.md`
+§4.5) zeigt direkt auf diesen zweiten Listener, nicht über den
+Orchestrator-Proxy: `orchestrator/internal/httpapi/proxy.go`s
+`handleNodeProxy` macht nur kurzlebige Einzel-Request-Weiterleitungen
+(Descriptor/Params/Methods/UI-Bundle), kein Streaming — das `<img>` im
+Bundle bekommt seine Quelle über den generischen `previewUrl`-Parameter
+(absolute URL zum Preview-Port) und lädt sie direkt vom Browser aus, ohne
+den Orchestrator zu berühren (funktioniert nur, weil Dev-Setup und Browser
+denselben Host sehen — für ein echtes Multi-Host-Deployment bräuchte das
+einen richtigen Streaming-Proxy oder direkte Netzerreichbarkeit, hier
+bewusst nicht vorgezogen).
+
+**Verifikation bestanden (End-to-End, `deploy/dev/mxl.env` gesourced,
+NATS+Registry liefen bereits, Orchestrator + `omp-source` + `omp-viewer`
+frisch gestartet):**
+- `cargo build`/`clippy --all-targets`/`fmt --check`/`test --workspace`
+  (inkl. `omp-mediaio`s `write_then_read_loopback`) sowie `cargo deny
+  check` grün für den gesamten Workspace (jetzt 5 Members).
+- Beide Nodes erscheinen in `GET /api/v1/nodes` (Viewer mit 1 MXL-Receiver,
+  `caps.media_types=["video/v210"]`); `POST /api/v1/graph/edges`
+  (Source-Sender → Viewer-Receiver) liefert 200, `GET /api/v1/graph` zeigt
+  die Kante als `active`.
+- `connectedFlowId` (Parameter-Proxy) wechselt von `""` auf die
+  tatsächliche MXL-`flow-id` des Source-Flows.
+- `GET http://127.0.0.1:9341/preview` liefert einen echten
+  `multipart/x-mixed-replace`-Strom; ein extrahiertes JPEG-Frame zeigt
+  sichtbar das SMPTE-Farbbalkenbild — **visuell bestätigt** (Bild
+  betrachtet, nicht nur Byte-Länge geprüft), schließt damit die in C5
+  zurückgestellte offene Prüfung ("bräuchte omp-viewer, C6") mit ab.
+- `PATCH .../params/pattern` (Source A → `ball`) **ohne** manuellen
+  Eingriff am Viewer: ein danach gezogenes Frame zeigt sichtbar den
+  springenden Ball statt der Farbbalken — bestätigt, dass die Property-
+  Änderung durch den bestehenden MXL-Flow durchgereicht wird, ohne
+  Pipeline-Neuaufbau auf der Source-Seite.
+- `DELETE /api/v1/graph/edges/<id>` trennt: `connectedFlowId` fällt auf
+  `""` zurück, `GET /api/v1/graph` zeigt 0 Kanten; erneutes `POST` derselben
+  Kante verbindet wieder (`connectedFlowId` zeigt erneut die richtige
+  `flow-id`) — Broadcaster-Reset/Pipeline-Teardown/-Neuaufbau beide Wege
+  fehlerfrei, keine Fehler-Log-Zeilen in `omp-viewer`s Ausgabe.
+
+**Nicht Teil von C6 (bewusst zurückgestellt):** kein `master_enable`-
+getrenntes Verhalten über die reine Connect/Disconnect-Semantik hinaus;
+kein Multi-Receiver-Support (ein Receiver pro Viewer-Instanz, wie
+spezifiziert); Terminal-Sichtprüfung über `OMP_VIEWER_SINK`
+(`autovideosink`) nicht separat getestet, da die MJPEG-Prüfung bereits den
+vollständigen Pfad bis zum sichtbaren Bild abdeckt.
+
+C6 damit abgeschlossen. Alle drei Testprozesse (Orchestrator, `omp-source`,
+`omp-viewer`) am Sitzungsende beendet; NATS-/NMOS-Registry-Container
+bleiben laufen (persistente Dev-Infrastruktur).

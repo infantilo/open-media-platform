@@ -200,7 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 manifest_href: Some(manifest_href),
                 ..Default::default()
             }],
-            receivers: 0,
+            receivers: vec![],
         },
         store,
     )

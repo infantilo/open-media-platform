@@ -415,6 +415,24 @@ impl fmt::Display for HeartbeatError {
 
 impl std::error::Error for HeartbeatError {}
 
+/// Fehler beim Abfragen der Query-API.
+#[derive(Debug)]
+pub enum QueryError {
+    Request(String),
+    Status(u16),
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            QueryError::Request(e) => write!(f, "query: {e}"),
+            QueryError::Status(code) => write!(f, "query: unexpected status {code}"),
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}
+
 /// Client für eine Standard-IS-04-Registration-API (v1.3). Hält nur die
 /// Basis-URL, daher billig klonbar (nötig, um Aufrufe per
 /// `spawn_blocking` in einen eigenen Thread zu verschieben).
@@ -446,6 +464,25 @@ impl RegistryClient {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(code)) => Err(RegisterError::Status(code)),
             Err(e) => Err(RegisterError::Request(e.to_string())),
+        }
+    }
+
+    /// Löst einen Sender per Standard-IS-04-Query-API auf (`GET
+    /// .../senders/<id>`, dieselbe Registry-Basis-URL wie die
+    /// Registration-API, siehe `orchestrator/internal/registry/client.go`)
+    /// — Grundlage für `omp-viewer`s Quellwahl über IS-05-Receiver-PATCH
+    /// (`UMSETZUNG.md` C6): der Receiver kennt aus dem PATCH-Body nur die
+    /// `sender_id` und muss daraus `flow_id` ableiten (Konvention
+    /// Flow-UUID == MXL-`flow-id`, `UMSETZUNG.md` C4).
+    pub fn get_sender(&self, sender_id: &str) -> Result<Sender, QueryError> {
+        let url = format!("{}/x-nmos/query/v1.3/senders/{}", self.base_url, sender_id);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<Sender>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
         }
     }
 

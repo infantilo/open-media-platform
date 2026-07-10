@@ -39,7 +39,7 @@ pub struct NodeConfig {
     pub registry_url: String,
     pub nats_url: String,
     pub senders: Vec<SenderSpec>,
-    pub receivers: usize,
+    pub receivers: Vec<ReceiverSpec>,
 }
 
 /// Beschreibt einen einzelnen Sender. `id`/`manifest_href` sind optional:
@@ -71,6 +71,22 @@ pub struct FlowSpec {
     pub frame_height: u32,
     pub grain_rate_numerator: u32,
     pub grain_rate_denominator: u32,
+}
+
+/// Beschreibt einen einzelnen Receiver. `id` optional wie bei
+/// [`SenderSpec`]: Nodes, die vorab eine eigene IS-05-Receiver-Connection-
+/// API dafür anbieten müssen (z. B. `omp-viewer`, `UMSETZUNG.md` C6, über
+/// `crate::connection::ReceiverConnection`), geben `id` selbst vor
+/// (`crate::idgen::new_v4()`), damit sie den `ReceiverConnection`-Endpoint
+/// vor dem Aufruf von `start()` unter der endgültigen ID verdrahten
+/// können — gleiches Henne-Ei-Problem wie bei `SenderSpec::id`/
+/// `manifest_href`. `transport`/`media_types` überschreiben die RTP-
+/// Defaults (z. B. `is04::TRANSPORT_MXL` + `["video/v210"]`).
+#[derive(Default)]
+pub struct ReceiverSpec {
+    pub id: Option<String>,
+    pub transport: Option<String>,
+    pub media_types: Option<Vec<String>>,
 }
 
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
@@ -116,8 +132,10 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .iter()
         .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
         .collect();
-    let receiver_ids: Vec<String> = (0..config.receivers)
-        .map(|_| crate::idgen::new_v4())
+    let receiver_ids: Vec<String> = config
+        .receivers
+        .iter()
+        .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
         .collect();
 
     let node_res = NodeResource::new(&node_id, &config.label, &config.host, config.port);
@@ -161,15 +179,24 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         })
         .collect();
     let sender_count = senders.len();
+    let receiver_count = config.receivers.len();
     let receivers: Vec<Receiver> = receiver_ids
         .iter()
+        .zip(&config.receivers)
         .enumerate()
-        .map(|(i, id)| {
-            Receiver::new(
+        .map(|(i, (id, spec))| {
+            let mut receiver = Receiver::new(
                 id,
                 &format!("{} Receiver {}", config.label, i + 1),
                 &device_id,
-            )
+            );
+            if let Some(transport) = &spec.transport {
+                receiver.transport = transport.clone();
+            }
+            if let Some(media_types) = &spec.media_types {
+                receiver.caps.media_types = media_types.clone();
+            }
+            receiver
         })
         .collect();
 
@@ -217,7 +244,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         publisher,
         config.label,
         sender_count,
-        config.receivers,
+        receiver_count,
     ));
 
     Ok(handle)

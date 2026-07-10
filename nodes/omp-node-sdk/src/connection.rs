@@ -157,3 +157,125 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         )
     }
 }
+
+/// `transport_file` eines Receivers (`receiver-response-schema.json`) —
+/// OMP-Nodes routen keine echten Transport-Files, daher immer `null`/`null`
+/// (gleiche Vereinfachung wie im Go-Pendant, `nodes/mock/internal/
+/// connection/receiver.go`).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ReceiverTransportFile {
+    pub data: Option<String>,
+    #[serde(rename = "type")]
+    pub media_type: Option<String>,
+}
+
+/// `staged`/`active`-Repräsentation eines Receivers
+/// (`receiver-stage-schema.json`). Wie bei [`SenderResource`] keine
+/// getrennte staged/active-Zustandsführung (`UMSETZUNG.md` C6) — der
+/// Flow-Editor (B3) PATCHt ohnehin immer mit
+/// `activation.mode=activate_immediate` (`orchestrator/internal/is05/
+/// client.go`), eine Staging-Zwischenstufe hätte keinen Aufrufer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReceiverResource {
+    pub sender_id: Option<String>,
+    pub master_enable: bool,
+    pub activation: Activation,
+    pub transport_file: ReceiverTransportFile,
+    pub transport_params: Vec<Value>,
+}
+
+impl Default for ReceiverResource {
+    fn default() -> Self {
+        ReceiverResource {
+            sender_id: None,
+            master_enable: false,
+            activation: Activation::default(),
+            transport_file: ReceiverTransportFile::default(),
+            transport_params: vec![Value::Object(serde_json::Map::new())],
+        }
+    }
+}
+
+/// Reagiert auf Zustandsänderungen einer IS-05-Receiver-Connection (z. B.
+/// `omp-viewer`s Quellwahl, `UMSETZUNG.md` C6: `sender_id` auflösen und die
+/// Pipeline neu aufbauen). Node-spezifisch, eine Implementierung pro
+/// Receiver.
+pub trait ReceiverControl: Send + Sync + 'static {
+    fn apply(&self, resource: &ReceiverResource);
+}
+
+/// Rust-Pendant zu `nodes/mock/internal/connection.ReceiverStore`+`Handler`
+/// (Go) für genau einen Receiver pro Instanz — analog zu
+/// [`SenderConnection`], aber ohne SDP-Endpoint (Receiver haben keinen
+/// `/transportfile`).
+pub struct ReceiverConnection<C> {
+    receiver_id: String,
+    control: C,
+    state: Mutex<ReceiverResource>,
+}
+
+impl<C: ReceiverControl> ReceiverConnection<C> {
+    pub fn new(receiver_id: impl Into<String>, control: C) -> Self {
+        ReceiverConnection {
+            receiver_id: receiver_id.into(),
+            control,
+            state: Mutex::new(ReceiverResource::default()),
+        }
+    }
+
+    /// Bearbeitet eine Anfrage, falls `path` zu diesem Receiver gehört —
+    /// `None`, wenn `path` keinen der Endpunkte dieses Receivers trifft.
+    pub fn handle(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Option<(u16, &'static str, Vec<u8>)> {
+        let prefix = format!(
+            "/x-nmos/connection/v1.1/single/receivers/{}/",
+            self.receiver_id
+        );
+        let sub = path.strip_prefix(&prefix)?;
+
+        match (method, sub) {
+            ("GET", "staged") | ("GET", "active") => {
+                let state = self.state.lock().expect("lock poisoned");
+                Some((
+                    200,
+                    "application/json",
+                    serde_json::to_vec(&*state).unwrap_or_default(),
+                ))
+            }
+            ("PATCH", "staged") => Some(self.patch_staged(body)),
+            _ => None,
+        }
+    }
+
+    fn patch_staged(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+        let Ok(patch) = serde_json::from_slice::<Value>(body) else {
+            return (400, "text/plain", b"invalid JSON body".to_vec());
+        };
+
+        let mut state = self.state.lock().expect("lock poisoned");
+        if let Some(v) = patch.get("sender_id")
+            && let Ok(sender_id) = serde_json::from_value(v.clone())
+        {
+            state.sender_id = sender_id;
+        }
+        if let Some(v) = patch.get("master_enable").and_then(Value::as_bool) {
+            state.master_enable = v;
+        }
+        if let Some(activation) = patch.get("activation")
+            && let Ok(activation) = serde_json::from_value(activation.clone())
+        {
+            state.activation = activation;
+        }
+
+        self.control.apply(&state);
+        (
+            200,
+            "application/json",
+            serde_json::to_vec(&*state).unwrap_or_default(),
+        )
+    }
+}

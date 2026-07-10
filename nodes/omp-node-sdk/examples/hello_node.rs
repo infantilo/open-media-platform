@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             registry_url,
             nats_url,
             senders: vec![SenderSpec::default()],
-            receivers: 1,
+            receivers: vec![omp_node_sdk::ReceiverSpec::default()],
         },
         store,
     )
