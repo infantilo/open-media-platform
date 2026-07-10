@@ -1832,3 +1832,118 @@ Skript unter `/tmp/.../scratchpad/cdp.mjs`, nicht Teil des Repos).
 
 C8 damit funktional abgeschlossen; der MXL-Read-Livelock (Bug 2) bleibt
 als bekanntes, dokumentiertes, nicht C8-eigenes Problem offen.
+
+## 2026-07-10 — C9 (Contract-Konformitätstest): `tools/contract-check`,
+zwei weitere echte Bugs gefunden (Host-Matching + omp-source-Roundtrip)
+
+**Ziel erreicht:** Der Node-Contract (`ARCHITECTURE.md` §5) ist jetzt
+maschinell prüfbar — `tools/contract-check` (eigenständiges drittes
+Go-Modul neben `orchestrator`/`nodes/mock`, kein `go.work`, dieselbe
+Praxis wie die bestehenden zwei Module) prüft gegen einen laufenden Node:
+
+1. **IS-04-Registrierung**: Query-API der Registry nach einem Node
+   durchsucht, dessen `api.endpoints`-Host:Port zu `NODE_URL` passt (wie
+   `orchestrator/internal/registry.apiBaseURL`, nur umgekehrt) — kein
+   Node-Typ-Sonderwissen.
+2. **Descriptor-Schema**: `GET /descriptor.json` gegen
+   `docs/descriptor-v0.schema.json` validiert, per
+   `github.com/santhosh-tekuri/jsonschema/v6` — bewusst dieselbe
+   Dependency wie `nodes/mock/internal/descriptor/schema_test.go` (A9),
+   keine neue Bibliotheksentscheidung nötig.
+3. **Param-Roundtrip**: ersten beschreibbaren Parameter im Descriptor
+   PATCHt (Testwert je nach Typ synthetisiert, bei `number`/`enum` unter
+   Beachtung von `range`), GET danach muss denselben Wert liefern. Kein
+   beschreibbarer Parameter vorhanden (omp-viewer, omp-switcher, Playout
+   haben nur readonly-Parameter) → SKIP, nicht FAIL — sonst wäre "grün
+   für alle fünf Node-Typen" (Verifikationskriterium) unerfüllbar.
+4. **UI-Manifest** (optional laut §5 Punkt 3): fehlt `/ui/manifest.json`
+   (404) → SKIP; vorhanden → `tag`-Feld + `/ui/bundle.js` müssen beide
+   valide sein.
+5. **IS-05 (informativ, nie FAIL)**: pro deklariertem Sender/Receiver
+   wird `.../staged` abgefragt und als "vorhanden"/"nicht implementiert"
+   reportet, geht aber nie in den Gesamt-Status ein — der aktuelle
+   Node-Fleet ist hier bewusst uneinheitlich (`omp-source`/`omp-switcher`
+   haben trotz deklarierter Sender **kein** IS-05 implementiert, siehe
+   C3/C5/C7; ein hartes "IS-05 vorhanden"-Kriterium wäre für zwei der
+   fünf Zieltypen unerfüllbar gewesen). Diese Interpretation der
+   Anweisung ("optional UI-Manifest, IS-05 vorhanden") ist eine bewusste
+   Auslegungsentscheidung, keine geratene — dokumentiert statt still
+   angenommen (§0.8).
+
+**`make contract NODE_URL=…`** neues Makefile-Target;
+`OMP_REGISTRY_URL` optional (Default `http://localhost:8010`), bewusst
+nicht vom Makefile-Target selbst gesetzt (Gefahr, einen leeren Wert zu
+exportieren und den Go-seitigen Fallback zu überschreiben), sondern vom
+Aufrufer vor `make contract` exportiert, falls gebraucht.
+
+**Beim Verifizieren zwei weitere echte Bugs gefunden** (nicht in
+`tools/contract-check` selbst, sondern von ihm aufgedeckt — genau der
+Zweck des Tools):
+
+1. **contract-check-Bug (eigener Code, sofort behoben):**
+   `findNodeByURL` verglich Hosts als reine Strings — ein Node
+   registriert sich mit `OMP_HOST=127.0.0.1` (Default), ein Nutzer tippt
+   für `NODE_URL` aber naheliegend `localhost`; beides wurde als
+   unterschiedlich behandelt, jeder Check schlug mit "kein Node ...
+   gefunden" fehl. Fix: `hostsMatch` löst beide Seiten per
+   `net.LookupIP`/`net.ParseIP` auf und vergleicht die tatsächlichen
+   Adressen, Fallback auf String-Vergleich nur falls Auflösung
+   fehlschlägt.
+2. **omp-source-Bug (vorbestehend seit C5, von contract-check
+   aufgedeckt):** `SourceStore::get()` kannte den Parameter `"pattern"`
+   nicht (nur `set()` war implementiert) — `PATCH /params/pattern` gab
+   200 zurück (setzte die GStreamer-Property korrekt), ein
+   anschließendes `GET /params/pattern` lieferte aber 404. Verletzt den
+   generischen Parameter-Proxy-Vertrag (A8: `GET|PATCH
+   /api/v1/nodes/<id>/params/<name>` symmetrisch für jeden
+   nicht-readonly Parameter). Fix: aktueller Pattern-Wert zusätzlich in
+   `Arc<Mutex<String>>` nachgehalten (gleiches Muster wie `fps`),
+   `get()` liefert ihn jetzt zurück.
+
+**CI-Scope bewusst nicht vollständig umgesetzt** (§0.8, keine stille
+Lücke): Die Anweisung nennt "In CI für Mock-, Playout-, omp-source-,
+omp-viewer- und omp-switcher-Node ausführen". Drei der fünf Typen
+(omp-source/omp-viewer/omp-switcher) brauchen zur Laufzeit `libmxl.so`
+(dlopen, `omp-mediaio`-Feature `mxl`) — ein `install-mxl.sh`-Lauf in
+GitHub-Actions-CI wäre ein mehrminütiger, neuer Infrastruktur-Baustein
+(vcpkg-Bootstrap + volle C++-Kompilation), und selbst Mock/Playout
+bräuchten laufende NATS-/Registry-Container in CI, die der bestehende
+`ci.yml`-Workflow aktuell gar nicht startet. Exakt dieselbe fehlende
+Infrastruktur ("laufende Registry-/Node-Container") wurde beim
+AMWA-NMOS-Testing-Tool-Platzhalter bereits explizit auf D2 verschoben
+(`.github/workflows/ci.yml`, "Platzhalter für Schritt D2") — C9s
+CI-Wiring folgt konsistent derselben Verschiebung, statt sie in dieser
+Sitzung halbfertig nachzubauen. Stattdessen: `tools/contract-check`
+selbst vollständig mit `httptest`-Fakes getestet (`go test ./...` grün,
+Teil von `make check`/`make ci`), und **alle fünf Node-Typen manuell
+gegen echte, lokal laufende Instanzen verifiziert** (nächster Absatz) —
+das erfüllt das wörtliche Verifikationskriterium ("`make contract
+NODE_URL=…` grün für alle fünf Node-Typen"), auch ohne GitHub-Actions-
+Integration.
+
+**Verifiziert:**
+- `cargo build/clippy/fmt/test --workspace`, `cargo deny check`, `go
+  build/vet/test ./...` (jetzt 3 Module: `orchestrator`, `nodes/mock`,
+  `tools/contract-check`), `deno check`/`deno test` grün (`make check`).
+- `tools/contract-check`s eigene Testsuite (`httptest`-Fakes, kein
+  echter Node/Registry nötig): valider Node → alle Checks PASS/SKIP wie
+  erwartet; unregistrierter Node → IS-04-Check FAIL; Node ohne
+  beschreibbaren Parameter → Param-Roundtrip SKIP; **absichtlich
+  kaputter Descriptor (ungültiger `type`-Wert) → Descriptor-Schema FAIL
+  mit klarer, auf das Feld zeigender Meldung** (deckt
+  UMSETZUNG.md C9s explizite Negativ-Verifikation ab); IS-05 fehlend →
+  informativ "nicht implementiert", Gesamtstatus bleibt PASS.
+- Alle fünf echten Node-Typen gleichzeitig gestartet (Mock, Playout,
+  omp-source, omp-viewer, omp-switcher) und einzeln per `make contract
+  NODE_URL=…` geprüft — **alle fünf grün** (Exit-Code 0), inkl. der
+  beiden oben beschriebenen Fixes, die dafür nötig waren.
+
+C9 damit abgeschlossen. **Meilenstein „Demo 2" erreicht**: Test-Quellen,
+Switcher und Viewer werden aus der GUI gestartet, per MXL Zero-Copy
+verschaltet und live geschaltet (Bug aus C8, MXL-Read-Livelock,
+weiterhin offen — intermittierend, kein Totalausfall) — der Node-
+Contract ist ab jetzt maschinell geprüft, Grundstein für Community-
+Nodes. Testprozesse (Mock/Playout/omp-source/omp-viewer/omp-switcher der
+eigenen Verifikation) am Ende beendet — laufende Instanzen aus einer
+parallelen Nutzer-Sitzung (GUI-gestartete Viewer/Switcher-Instanzen)
+bewusst nicht angetastet; NATS-/NMOS-Registry-Container bleiben laufen.

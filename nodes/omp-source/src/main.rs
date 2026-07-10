@@ -41,6 +41,7 @@ const DEFAULT_PATTERN: &str = "smpte";
 struct SourceStore {
     fps: Arc<Mutex<f64>>,
     flow_id: String,
+    pattern: Arc<Mutex<String>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -80,6 +81,9 @@ impl ParamStore for SourceStore {
         match name {
             "fps" => Some(serde_json::json!(*self.fps.lock().expect("lock poisoned"))),
             "flowId" => Some(serde_json::json!(self.flow_id)),
+            "pattern" => Some(serde_json::json!(
+                *self.pattern.lock().expect("lock poisoned")
+            )),
             _ => None,
         }
     }
@@ -95,6 +99,7 @@ impl ParamStore for SourceStore {
             return Err(SetError::Unknown);
         }
         self.pipeline.set_pattern(pattern);
+        *self.pattern.lock().expect("lock poisoned") = pattern.to_string();
         Ok(())
     }
 
@@ -120,6 +125,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let initial_pattern = env_or("OMP_SOURCE_PATTERN", DEFAULT_PATTERN);
+    // Für GET /params/pattern nachgehalten (Contract-Check UMSETZUNG.md
+    // C9 fand den Bug: `set()` änderte bisher nur die Pipeline-Property,
+    // `get()` kannte "pattern" gar nicht — PATCH schien zu funktionieren,
+    // ein GET danach lieferte aber 404 statt des gesetzten Werts).
+    let pattern = Arc::new(Mutex::new(initial_pattern.clone()));
     // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
     // manuellem Start.
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
@@ -160,6 +170,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
         fps: fps.clone(),
         flow_id: flow_id.clone(),
+        pattern,
         pipeline: pipeline_handle,
     });
 

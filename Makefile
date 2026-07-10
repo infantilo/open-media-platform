@@ -1,6 +1,6 @@
-.PHONY: build test check up down ci ui nodes
+.PHONY: build test check up down ci ui nodes contract
 
-GO_MODULES := orchestrator nodes/mock
+GO_MODULES := orchestrator nodes/mock tools/contract-check
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
@@ -18,6 +18,15 @@ ui:
 # Launcher vorgebaute Binaries erwartet, kein `cargo run` pro Start.
 nodes:
 	cd nodes && cargo build --workspace --bins
+
+# Prüft den Node-Contract (ARCHITECTURE.md §5) gegen einen laufenden
+# Node (UMSETZUNG.md C9). NODE_URL erforderlich, z. B.:
+#   make contract NODE_URL=http://localhost:9320
+# OMP_REGISTRY_URL optional (Default http://localhost:8010) — falls
+# gebraucht, vor dem Aufruf exportieren, nicht hier setzen (sonst würde
+# ein leerer Wert den Go-seitigen Fallback überschreiben).
+contract:
+	cd tools/contract-check && NODE_URL=$(NODE_URL) go run .
 
 test:
 	$(foreach m,$(GO_MODULES),cd $(m) && go test ./... && cd $(CURDIR) &&) true

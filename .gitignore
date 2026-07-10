@@ -8,6 +8,7 @@ build/
 
 # Go
 /orchestrator/orchestrator
+/tools/contract-check/contract-check
 /nodes/**/target/
 
 # Deno
