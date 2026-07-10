@@ -222,12 +222,32 @@ pub struct GrainRate {
     pub denominator: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowComponent {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub bit_depth: u32,
+}
+
 /// Minimale, gültige IS-04-v1.3-Flow-Resource (Video) — Pflichtfelder aus
-/// `resource_core.json` + `flow_core.json` + `flow_video.json`, gegen die
-/// AMWA-Spec verifiziert. Konvention (`UMSETZUNG.md` C4): bei MXL-Sendern
-/// ist `id` **identisch mit der MXL-`flow-id`** (`mxlsink`-Äquivalent des
-/// schreibenden Nodes) — macht Discovery rein IS-04-basiert (C7), ohne
-/// Seitenkanal zwischen NMOS und MXL-Domain.
+/// `resource_core.json` + `flow_core.json` + `flow_video.json` **und**
+/// `flow_video_raw.json`, gegen die AMWA-Spec verifiziert. Der zunächst
+/// implementierte Feldsatz (nur `flow_video.json`) wurde von nmos-cpp mit
+/// "no subschema has succeeded" abgelehnt: das Registration-API-Schema
+/// (`flow.json`) validiert `data` nicht gegen `flow_video.json` direkt,
+/// sondern gegen `flow_video_raw.json` (o. ä. Coded/Audio/Data-Varianten),
+/// welches zusätzlich `media_type` und `components` verlangt (siehe
+/// `docs/decisions.md`, C5-Blocker-Eintrag). `media_type`/`components`
+/// spiegeln bewusst dieselbe v210-4:2:2-10bit-Struktur wie
+/// `omp-mediaio::mxl::video_flow_def` (das MXL-eigene Flow-JSON) — beide
+/// beschreiben denselben, tatsächlich über MXL laufenden Videostrom, keine
+/// zwei unabhängig geratenen Layouts.
+///
+/// Konvention (`UMSETZUNG.md` C4): bei MXL-Sendern ist `id` **identisch
+/// mit der MXL-`flow-id`** (`mxlsink`-Äquivalent des schreibenden Nodes) —
+/// macht Discovery rein IS-04-basiert (C7), ohne Seitenkanal zwischen
+/// NMOS und MXL-Domain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Flow {
     pub id: String,
@@ -240,6 +260,8 @@ pub struct Flow {
     pub parents: Vec<String>,
     pub grain_rate: GrainRate,
     pub format: String,
+    pub media_type: String,
+    pub components: Vec<FlowComponent>,
     pub frame_width: u32,
     pub frame_height: u32,
     pub colorspace: String,
@@ -272,6 +294,27 @@ impl Flow {
                 denominator: grain_rate_denominator,
             },
             format: FORMAT_VIDEO.to_string(),
+            media_type: "video/v210".to_string(),
+            components: vec![
+                FlowComponent {
+                    name: "Y".to_string(),
+                    width: frame_width,
+                    height: frame_height,
+                    bit_depth: 10,
+                },
+                FlowComponent {
+                    name: "Cb".to_string(),
+                    width: frame_width / 2,
+                    height: frame_height,
+                    bit_depth: 10,
+                },
+                FlowComponent {
+                    name: "Cr".to_string(),
+                    width: frame_width / 2,
+                    height: frame_height,
+                    bit_depth: 10,
+                },
+            ],
             frame_width,
             frame_height,
             colorspace: "BT709".to_string(),

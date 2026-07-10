@@ -1321,3 +1321,115 @@ gesamten Workspace (mit und ohne `--features mxl`) sowie `cargo deny
 check` bleiben grün.
 
 C4 damit abgeschlossen. Weiter mit C5 (`omp-source`).
+
+## 2026-07-09 — C5 (`omp-source`) blockiert: Flow-Registrierung schlägt an nmos-cpp fehl
+
+**Stand:** `nodes/omp-source/` implementiert (Crate + `pipeline.rs` +
+`main.rs`, siehe `UMSETZUNG.md` C5), baut/lintet sauber
+(`cargo build`/`clippy`/`fmt` grün), aber **noch nicht committet** (Regel
+§0.3/0.4: kein Commit ohne bestandene Verifikation) — liegt unverändert im
+Arbeitsverzeichnis für die nächste Sitzung. `nodes/Cargo.toml` (neues
+Workspace-Mitglied) und `nodes/Cargo.lock` sind bereits als Änderung
+vorhanden, ebenfalls uncommitted.
+
+**Fehler:** Zwei `omp-source`-Instanzen (Ports 9320/9321, Pattern
+`smpte`/`ball`) starten, aber `omp-node-sdk: registration failed, retrying:
+register: unexpected status 400` in Dauerschleife. Registry-Log
+(`podman logs omp-nmos-registry`) zeigt die genaue Ursache:
+
+```
+warning: JSON error: schema validation failed at root - no subschema has
+succeeded, but one of them is required to validate JSON -
+{"data":{"colorspace":"BT709","description":"","device_id":"...",
+"format":"urn:x-nmos:format:video","frame_height":480,"frame_width":640,
+"grain_rate":{"denominator":1,"numerator":25},"id":"...",
+"interlace_mode":"progressive","label":"Source A Sender 1","parents":[],
+"source_id":"...","tags":{},"version":"..."},"type":"flow"}
+```
+
+Node/Device/Source-Registrierung geht durch (Log zeigt "Registration
+requested for unchanged source: ..." ohne Fehler) — **nur die
+Flow-Resource** (`is04::Flow`, `nodes/omp-node-sdk/src/is04.rs`) wird von
+nmos-cpp abgelehnt. `tags: {}` (leeres Objekt) fällt auf: anders als bei
+Sender/Receiver (die den Grouphint-Tag nicht brauchen) könnte die
+Flow-Resource denselben Pflicht-Tag brauchen, den `mxl.rs`s
+`video_flow_def` fürs MXL-eigene Flow-JSON schon kennt
+(`urn:x-nmos:tag:grouphint/v1.0`, Format `<name>:<rolle>` — siehe
+C4-Eintrag oben) — das ist aber eine MXL-Eigenheit, keine IS-04-Pflicht;
+für die **NMOS**-Flow-Resource selbst nicht ungeprüft übernehmen. Nicht
+geraten, sondern in der nächsten Sitzung zuerst zu klären:
+
+1. Direktes `curl -X POST http://localhost:8010/x-nmos/registration/v1.3/resource`
+   mit exakt obigem Flow-JSON (aus dem Log kopiert) — liefert nmos-cpp im
+   400-Response-Body vermutlich eine präzisere Fehlermeldung als das
+   Log allein.
+2. Gegen `specs.amwa.tv`/`AMWA-TV/is-04` v1.3.x `flow_video.json` +
+   `flow_core.json` + `resource_core.json` abgleichen, welches Feld exakt
+   fehlt/falsch ist (Kandidaten: `tags` könnte trotzdem ein Pflichtformat
+   brauchen, oder ein in `resource_core.json` gefordertes Feld fehlt in
+   `is04::Flow`, das in `Sender`/`Receiver` schon vorhanden ist, z. B.
+   ein Versions- oder Format-Detail).
+3. Erst nach behobenem Fehler: Rest der C5-Verifikation (2 Instanzen →
+   2 Flows in `mxl-info` + 2 MXL-Sender in der Registry; `pattern` per
+   PATCH ändern → sichtbar im Loopback) durchführen, dann committen.
+
+**Cleanup am Sitzungsende:** beide `omp-source`-Testinstanzen sowie ein
+zu Testzwecken laufender Orchestrator-Prozess (`go run .`) beendet;
+NATS-/NMOS-Registry-Podman-Container (`omp-nats`, `omp-nmos-registry`)
+bewusst weiterlaufen gelassen (persistente Dev-Infrastruktur, kein
+Sitzungs-Task).
+
+## 2026-07-10 — C5-Blocker behoben: `flow.json` verlangt `flow_video_raw.json`,
+nicht `flow_video.json`
+
+**Ursache gefunden über Schritt 1+2 des Blocker-Eintrags** (curl-Direkttest
+gegen die laufende Registry + Abgleich gegen die AMWA-Spec, nicht geraten):
+Das Registration-API-Schema `registrationapi-resource-post-request.json`
+validiert eine `"type":"flow"`-Resource gegen `flow.json`. Dieses referenziert
+aber **nicht** `flow_video.json` direkt, sondern (`anyOf`)
+`flow_video_raw.json`/`flow_video_coded.json`/`flow_audio_*.json`/
+`flow_data.json`/… — `flow_video_raw.json` selbst ist ein `allOf` aus
+`flow_video.json` **plus** zwei weiteren Pflichtfeldern: `media_type`
+(enum, hier `"video/raw"` bzw. für kodierte Formate ein anderer Wert) und
+`components` (Array je Farbebene mit `name`/`width`/`height`/`bit_depth`).
+`is04::Flow` (`nodes/omp-node-sdk/src/is04.rs`) implementierte nur
+`flow_video.json`s Feldsatz — deshalb „no subschema has succeeded": keine
+der `anyOf`-Alternativen passte, weil `media_type`/`components` in jeder
+Alternative Pflicht sind (nicht nur bei `raw`). Per curl bestätigt: mit
+Dummy-UUIDs + `media_type`/`components` ergänzt wechselt die Fehlermeldung
+von „schema validation failed" zu „unknown parent device" (referentielle
+Prüfung, nicht mehr Schema) — sauberer Beleg, dass genau diese zwei Felder
+gefehlt haben.
+
+**Fix:** `Flow` bekommt `media_type: String` und `components: Vec<FlowComponent>`
+(`{name, width, height, bit_depth}`). `Flow::new_video` befüllt beide mit
+`"video/v210"` und Y (voll)/Cb/Cr (halbe Breite) bei 10 bit — **identisch**
+zu `omp-mediaio::mxl::video_flow_def`s bereits bestehendem MXL-eigenen
+Flow-JSON (C4), weil beide Resources denselben tatsächlichen, über MXL
+laufenden Videostrom beschreiben (kein zweites, unabhängig geratenes
+Layout).
+
+**Verifiziert (End-to-End, `deploy/dev/mxl.env` gesourced):**
+- `cargo build`/`clippy`/`fmt --check`/`test --workspace` grün (inkl.
+  `omp-mediaio`s `write_then_read_loopback`), `omp-mediaio --no-default-features`
+  weiterhin baubar, `cargo deny check` grün.
+- Zwei `omp-source`-Instanzen (Port 9320/„Source A"/`smpte`, Port
+  9321/„Source B"/`ball`) registrieren ohne Retry-Loop
+  (`omp-node-sdk: node registered: …`), FPS-Log zeigt stabile ~25 fps.
+- `GET .../x-nmos/query/v1.3/flows` liefert beide Flows mit `media_type`/
+  `components`; `GET .../senders` zeigt beide mit
+  `transport: urn:x-omp:transport:mxl`; `mxl-info -l` listet beide
+  Flow-IDs — identisch zwischen NMOS-Flow-`id` und MXL-`flow-id`
+  (Konvention aus C4 hält).
+- `PATCH .../params/pattern` (Source B → `checkers-1`) liefert HTTP 200,
+  Pipeline läuft danach fehlerfrei mit unverändert ~25 fps weiter.
+  **Nicht geprüft:** der tatsächliche Bildinhalt/Testbild-Typ selbst
+  (bräuchte `omp-viewer`, C6, oder ein Ad-hoc-GStreamer-Sink-Tool — auf
+  Nutzerentscheidung zurückgestellt, bleibt wie die Browser-Interaktion in
+  B2/B3 eine offene visuelle Prüfung, hier bis C6). PATCH-Erfolg +
+  fehlerfreier Weiterlauf der Pipeline gelten als ausreichender Beleg,
+  dass die Property tatsächlich gesetzt wurde.
+
+C5 damit abgeschlossen. Beide Test-Instanzen und der `nodes/omp-source`-
+Build-Output am Sitzungsende beendet/aufgeräumt; NATS-/NMOS-Registry-
+Container bleiben laufen (persistente Dev-Infrastruktur).

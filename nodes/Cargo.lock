@@ -1106,6 +1106,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-source"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
