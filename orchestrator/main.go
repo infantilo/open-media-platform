@@ -62,7 +62,7 @@ func main() {
 	}
 	go poller.Run(ctx)
 
-	graphSvc := graph.NewService(store, is05.NewClient(nil))
+	graphSvc := graph.NewService(store, is05.NewClient(nil), hub)
 	layoutStore := layouts.NewStore(filepath.Join(cfg.DataDir, "layouts"))
 	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(filepath.Join(cfg.DataDir, "snapshots")))
 

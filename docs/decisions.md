@@ -1623,3 +1623,61 @@ C7 damit abgeschlossen. Alle vier Testprozesse (Orchestrator, 2×
 `omp-source`, `omp-switcher`, `omp-viewer`) am Sitzungsende beendet;
 `mxl-info -g` räumt testbedingte verwaiste Flows auf; NATS-/NMOS-Registry-
 Container bleiben laufen (persistente Dev-Infrastruktur).
+
+## 2026-07-10 — Bugfix (Nutzer gemeldet): Kanten erscheinen im Flow-Editor
+erst nach Reload, nicht live
+
+**Gemeldet vom Nutzer:** Beim Zuschauen während der C7-Tests erschien der
+neu gestartete `omp-switcher`-Node live in der UI, die per `curl`
+gezogenen Kanten (Switcher→Viewer) aber erst nach manuellem Reload.
+
+**Ursache:** `ui/graph/flow-canvas.ts`s SSE-Handler (B4) löst ein
+Neuladen des Graphen nur bei `node.added`/`node.updated`/`node.removed`
+aus (`registry.Poller`, A5/A6). Für Kanten-Änderungen
+(`POST`/`DELETE .../graph/edges`) gab es **kein** SSE-Event — der
+Orchestrator kennt Kanten nur als Projektion der IS-05-Active-Endpoints
+der Receiver (B1), nicht als eigenes, im Poller beobachtetes
+Registry-Objekt. Zog der Nutzer selbst per Drag & Drop eine Kante, sah er
+sie trotzdem sofort, weil `#createEdge`/`#removeEdge` nach dem eigenen
+POST/DELETE direkt selbst `#fetchAndRender()` aufrufen (rein
+client-seitiges Nachziehen, kein Server-Broadcast) — eine von *außen*
+erzeugte Kante (anderer Client, Skript, oder wie hier: `curl` während der
+Verifikation) blieb im offenen Tab unsichtbar, bis zufällig ein
+Node-Event oder ein manueller Reload den Graphen neu lud. Bestehende
+Lücke aus B4 (dort nur Health/Tally/Node-Erscheinen als Live-Kriterium
+spezifiziert), keine Regression aus C7 — durch C6/C7s programmatische
+Kantenerzeugung (nicht nur Drag & Drop) aber deutlich sichtbarer
+geworden.
+
+**Fix:**
+- `orchestrator/internal/graph`: neues `EventPublisher`-Interface
+  (`Broadcast(sse.Event)`, implementiert von `*sse.Hub` — optional, darf
+  `nil` sein, gleiches Muster wie `registry.Poller.OnChange`).
+  `Service.Connect`/`Disconnect` publizieren nach erfolgreichem
+  IS-05-PATCH `"edge.added"`/`"edge.removed"` (Payload nur `{"id":
+  <receiverId>}` — die UI reagiert ohnehin mit vollem `GET /api/v1/graph`,
+  der Event-Inhalt ist nur Trigger, keine Datenquelle, analog zu den
+  bestehenden Node-Events).
+- `orchestrator/main.go`: `graph.NewService(store, is05.NewClient(nil),
+  hub)` — Hub wird jetzt auch hier verdrahtet.
+- `ui/graph/flow-canvas.ts`: `NODE_INVENTORY_EVENT_TYPES` →
+  `GRAPH_REFRESH_EVENT_TYPES`, um `edge.added`/`edge.removed` erweitert.
+- Neue Tests (`graph_test.go`, `fakeEventPublisher`): Connect/Disconnect
+  publizieren die passenden Events, ein fehlgeschlagenes `Connect`
+  (`ErrUnknownReceiver`) publiziert nichts.
+
+**Verifiziert:**
+- `go build ./... && go vet ./... && go test ./...` (Orchestrator) grün,
+  `deno check ui/**/*.ts && deno test ui/` grün, `make ui` (Neubau von
+  `ui/dist/flow-canvas.js` — Browser führt kein `.ts` aus, siehe
+  Makefile) ausgeführt.
+- End-to-end: zwei Mock-Nodes (`nodes/mock`, echte IS-05-Receiver-
+  Connection-API) + Orchestrator gestartet, SSE-Stream per `curl -N`
+  mitgeschnitten, Kante per `curl` (nicht per Browser) gezogen und wieder
+  getrennt — Stream zeigt `{"type":"edge.added","data":{"id":"..."}}`
+  bzw. `"edge.removed"` **tatsächlich live**, keine Annahme.
+
+Kein eigener UMSETZUNG.md-Schritt — Bugfix an bereits abgeschlossenem B4/
+B1, gemeldet und freigegeben vom Nutzer während der C7-Sitzung. Test-
+Mock-Nodes und Orchestrator-Testprozess am Ende beendet; NATS-/
+NMOS-Registry-Container bleiben laufen.

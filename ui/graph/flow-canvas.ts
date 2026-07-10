@@ -107,7 +107,19 @@ type DragState =
 
 const SSE_RECONNECT_INITIAL_DELAY_MS = 1000;
 const SSE_RECONNECT_MAX_DELAY_MS = 15000;
-const NODE_INVENTORY_EVENT_TYPES = new Set(["node.added", "node.updated", "node.removed"]);
+// Event-Typen, die ein volles Neuladen des Graphen auslösen: Node-
+// Inventar-Änderungen (registry.Poller) sowie Kanten-Änderungen
+// (graph.Service.publish) — letztere fehlten bis zu einem Bugfix nach
+// C7: eine per API (nicht per eigenem Drag&Drop) erzeugte/getrennte
+// Kante blieb sonst bis zum manuellen Reload unsichtbar, weil nur
+// Node-Events ein Neuladen anstießen.
+const GRAPH_REFRESH_EVENT_TYPES = new Set([
+  "node.added",
+  "node.updated",
+  "node.removed",
+  "edge.added",
+  "edge.removed",
+]);
 const TALLY_EVENT_PREFIX = "omp.tally.";
 const DRAG_THRESHOLD_PX = 3;
 
@@ -203,7 +215,8 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Verbindet den Live-Status-Overlay-Stream (UMSETZUNG.md B4): Node-
-  // Inventar-Änderungen (A6) lösen ein Neuladen des Graphen aus,
+  // Inventar-Änderungen (A6) und Kanten-Änderungen (graph.Service, auch
+  // von fremden Clients/Skripten) lösen ein Neuladen des Graphen aus,
   // Tally-Events (omp.tally.<id>) färben die betroffene Kachel rot.
   // Bei Verbindungsabbruch reconnectet mit exponentiellem Backoff statt
   // sich auf EventSources festen Standard-Retry zu verlassen.
@@ -235,7 +248,7 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
 
-    if (NODE_INVENTORY_EVENT_TYPES.has(parsed.type)) {
+    if (GRAPH_REFRESH_EVENT_TYPES.has(parsed.type)) {
       this.#fetchAndRender();
       return;
     }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 func strPtr(s string) *string { return &s }
@@ -119,7 +120,7 @@ func TestServiceGraphIncludesActiveEdges(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
 
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 	g := svc.Graph(context.Background())
 
 	if len(g.Edges) != 1 {
@@ -137,7 +138,7 @@ func TestServiceGraphOmitsInactiveReceivers(t *testing.T) {
 	}}
 	client := newFakeIS05Client()
 
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 	g := svc.Graph(context.Background())
 
 	if len(g.Edges) != 0 {
@@ -151,7 +152,7 @@ func TestServiceConnectPatchesReceiver(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Connect(context.Background(), "send-1", "recv-1"); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -164,7 +165,7 @@ func TestServiceConnectPatchesReceiver(t *testing.T) {
 }
 
 func TestServiceConnectUnknownReceiverReturnsError(t *testing.T) {
-	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client())
+	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), nil)
 	if err := svc.Connect(context.Background(), "send-1", "does-not-exist"); err != ErrUnknownReceiver {
 		t.Fatalf("Connect() error = %v, want ErrUnknownReceiver", err)
 	}
@@ -176,7 +177,7 @@ func TestServiceConnectRejectsSelfLoop(t *testing.T) {
 		Senders:   []registry.SenderView{{ID: "send-A"}},
 		Receivers: []registry.ReceiverView{{ID: "recv-A"}},
 	}}
-	svc := NewService(fakeNodeLister{views}, newFakeIS05Client())
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-A"); err != ErrRoutingLoop {
 		t.Fatalf("Connect() error = %v, want ErrRoutingLoop", err)
@@ -191,7 +192,7 @@ func TestServiceConnectRejectsTwoNodeLoop(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // bestehend: A -> B
 
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	// B -> A würde die Schleife A -> B -> A schließen.
 	if err := svc.Connect(context.Background(), "send-B", "recv-A"); err != ErrRoutingLoop {
@@ -208,7 +209,7 @@ func TestServiceConnectAllowsChainWithoutLoop(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
 
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Connect(context.Background(), "send-B", "recv-C"); err != nil { // B -> C, keine Schleife
 		t.Fatalf("Connect() error = %v, want nil", err)
@@ -225,7 +226,7 @@ func TestServiceConnectRejectsThreeNodeLoop(t *testing.T) {
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
 	client.active["recv-C"] = is05.ActiveResource{SenderID: strPtr("send-B"), MasterEnable: true} // B -> C
 
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	// C -> A würde A -> B -> C -> A schließen.
 	if err := svc.Connect(context.Background(), "send-C", "recv-A"); err != ErrRoutingLoop {
@@ -239,7 +240,7 @@ func TestServiceDisconnectPatchesReceiverWithNilSender(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Disconnect(context.Background(), "recv-1"); err != nil {
 		t.Fatalf("Disconnect() error = %v", err)
@@ -257,7 +258,7 @@ func TestServiceConnectAlsoEnablesSender(t *testing.T) {
 		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
 	}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -275,7 +276,7 @@ func TestServiceConnectSucceedsEvenIfSenderHasNoConnectionAPI(t *testing.T) {
 	}
 	client := newFakeIS05Client()
 	client.senderErr["send-A"] = true
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
 		t.Fatalf("Connect() error = %v, want nil (sender-side failure must not be fatal)", err)
@@ -294,7 +295,7 @@ func TestServiceDisconnectAlsoDisablesPreviousSender(t *testing.T) {
 	}
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
-	svc := NewService(fakeNodeLister{views}, client)
+	svc := NewService(fakeNodeLister{views}, client, nil)
 
 	if err := svc.Disconnect(context.Background(), "recv-B"); err != nil {
 		t.Fatalf("Disconnect() error = %v", err)
@@ -302,5 +303,57 @@ func TestServiceDisconnectAlsoDisablesPreviousSender(t *testing.T) {
 
 	if enabled, ok := client.senderPatched["send-A"]; !ok || enabled {
 		t.Errorf("senderPatched[send-A] = %v, %v; want false, true", enabled, ok)
+	}
+}
+
+// fakeEventPublisher ist ein Test-Double für EventPublisher, das nur die
+// Typen der empfangenen Events sammelt.
+type fakeEventPublisher struct{ types []string }
+
+func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
+
+func TestServiceConnectPublishesEdgeAddedEvent(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}}
+	pub := &fakeEventPublisher{}
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub)
+
+	if err := svc.Connect(context.Background(), "send-1", "recv-1"); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+
+	if len(pub.types) != 1 || pub.types[0] != "edge.added" {
+		t.Errorf("published events = %v, want [edge.added]", pub.types)
+	}
+}
+
+func TestServiceDisconnectPublishesEdgeRemovedEvent(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}}
+	pub := &fakeEventPublisher{}
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub)
+
+	if err := svc.Disconnect(context.Background(), "recv-1"); err != nil {
+		t.Fatalf("Disconnect() error = %v", err)
+	}
+
+	if len(pub.types) != 1 || pub.types[0] != "edge.removed" {
+		t.Errorf("published events = %v, want [edge.removed]", pub.types)
+	}
+}
+
+func TestServiceConnectErrorDoesNotPublish(t *testing.T) {
+	pub := &fakeEventPublisher{}
+	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), pub)
+
+	if err := svc.Connect(context.Background(), "send-1", "does-not-exist"); err != ErrUnknownReceiver {
+		t.Fatalf("Connect() error = %v, want ErrUnknownReceiver", err)
+	}
+	if len(pub.types) != 0 {
+		t.Errorf("published events = %v, want none", pub.types)
 	}
 }

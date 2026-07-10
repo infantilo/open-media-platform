@@ -6,11 +6,13 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 // Port ist ein Ein- oder Ausgang einer Kachel (Receiver bzw. Sender).
@@ -79,15 +81,44 @@ type is05Client interface {
 	PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error
 }
 
-// Service baut den Graphen und führt IS-05-Verbindungsänderungen aus.
-type Service struct {
-	nodes NodeLister
-	is05  is05Client
+// EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
+// Clients (implementiert von *sse.Hub). Schließt eine Lücke aus B4: bis
+// hierhin lösten nur Node-Inventar-Änderungen ("node.added" etc., siehe
+// registry.Poller) ein Neuladen des Graphen im Browser aus — eine Kante,
+// die ein anderer Client (oder ein Skript) über die API erzeugt/trennt,
+// blieb im eigenen Tab unsichtbar bis zum manuellen Reload. Optional
+// (darf nil sein, z. B. in Tests) wie registry.Poller.OnChange.
+type EventPublisher interface {
+	Broadcast(sse.Event)
 }
 
-// NewService verbindet einen NodeLister mit einem IS-05-Client.
-func NewService(nodes NodeLister, client is05Client) *Service {
-	return &Service{nodes: nodes, is05: client}
+// Service baut den Graphen und führt IS-05-Verbindungsänderungen aus.
+type Service struct {
+	nodes  NodeLister
+	is05   is05Client
+	events EventPublisher
+}
+
+// NewService verbindet einen NodeLister mit einem IS-05-Client und
+// (optional, darf nil sein) einem EventPublisher für Live-Updates.
+func NewService(nodes NodeLister, client is05Client, events EventPublisher) *Service {
+	return &Service{nodes: nodes, is05: client, events: events}
+}
+
+// publish sendet ein "edge.added"/"edge.removed"-Event, falls ein
+// EventPublisher konfiguriert ist. Der Payload enthält nur die
+// Receiver-ID (== Edge-ID) — die UI reagiert ohnehin mit einem vollen
+// GET /api/v1/graph (siehe ui/graph/flow-canvas.ts), der Event-Inhalt
+// selbst ist nur ein Trigger, keine Datenquelle.
+func (s *Service) publish(eventType, receiverID string) {
+	if s.events == nil {
+		return
+	}
+	data, err := json.Marshal(map[string]string{"id": receiverID})
+	if err != nil {
+		return
+	}
+	s.events.Broadcast(sse.Event{Type: eventType, Data: data})
 }
 
 // Graph liefert den kompletten Ist-Zustand: Nodes aus dem Registry-
@@ -144,6 +175,7 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 		}
 	}
 
+	s.publish("edge.added", toReceiver)
 	return nil
 }
 
@@ -179,6 +211,7 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 		}
 	}
 
+	s.publish("edge.removed", receiverID)
 	return nil
 }
 
