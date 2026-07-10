@@ -2000,40 +2000,51 @@ ARCHITECTURE.md, wie schon bei §6.1/§6.2 praktiziert):
 Grundsatzentscheidungen mehr") korrigiert — es gibt jetzt drei (Lizenz
 aus C1 plus die zwei folgenden).
 
-**Offene Entscheidung 1: Identitätslösung für §12 (lokale Konten + AD).**
-- *Problem:* IS-10 braucht eine OAuth2-Token-Ausstellung, die lokale
+**Entschieden (2026-07-10): Identitätslösung für §12 — Option (c),
+eigenes Minimal-User-Management + direkter LDAP-Bind.**
+- *Problem war:* IS-10 braucht eine OAuth2-Token-Ausstellung, die lokale
   Konten **und** AD/LDAP bedient. Ein ausgewachsener Identity Provider
   wäre der schwerste Fremdbaustein des gesamten Stacks.
-- *Optionen:* (a) Voll-IdP einbetten (Keycloak o. ä.) — alles fertig
-  (OIDC, LDAP-Federation, UI), aber Java-Runtime/Betriebsgewicht,
+- *Verworfene Optionen:* (a) Voll-IdP einbetten (Keycloak o. ä.) — alles
+  fertig (OIDC, LDAP-Federation, UI), aber Java-Runtime/Betriebsgewicht,
   klarer Bruch mit der Ein-Binary-Linie; (b) schlanker Go-Ein-Binary-IdP
   (z. B. Dex/ZITADEL-Klasse) — OIDC + LDAP-Connector bei moderatem
-  Gewicht, lokale Konten je nach Produkt begrenzt; (c) minimales
-  eigenes User-Management im Orchestrator (Nutzer/Gruppen in PostgreSQL,
-  §4.4) + direkter LDAP(S)-Bind gegen AD, Token-Ausstellung
-  IS-10-konform selbst — kleinster Fußabdruck, dafür Eigenverantwortung
-  für sicherheitskritischen Code (Passwort-Hashing, Token-Handling).
-- *Empfehlung:* Tendenz (c), mit (b) als Rückfallebene, falls bei der
-  D3-Detailplanung echte OIDC-Föderationsbedürfnisse (mehrere externe
-  Identitätsquellen, SSO über OMP hinaus) sichtbar werden; (a) nur,
-  wenn ein Kunde-/Betreiberumfeld Keycloak ohnehin betreibt.
-  Entscheidung wird erst bei D3-Detailplanung gebraucht — jetzt
-  dokumentiert, nicht entschieden.
+  Gewicht, aber ein zusätzlicher Prozess/Fremd-Betriebsteil, den der
+  Nutzer für den heutigen Ein-Kanal-/Kleinst-Sendezentrum-Scope nicht
+  will.
+- *Entschieden:* Nutzer/Gruppen im Orchestrator selbst (PostgreSQL,
+  §4.4) verwalten, direkter LDAP(S)-Bind gegen AD für die
+  Verzeichnis-Anbindung, Token-Ausstellung IS-10-konform (OAuth2) vom
+  Orchestrator selbst. Kleinster Fußabdruck, passt zur
+  Ein-Binary-Linie des gesamten Stacks — im Gegenzug trägt der
+  Orchestrator die volle Verantwortung für sicherheitskritischen Code
+  (Passwort-Hashing, Token-Ausstellung/-Widerruf); das ist bei D3
+  entsprechend sorgfältig zu implementieren (etablierte Bibliotheken
+  für Hashing/JWT nutzen, nicht selbst kryptografisch entwerfen).
+  Rückfallebene (b) bleibt gedanklich offen, falls bei der
+  D3-Umsetzung echte OIDC-Föderationsbedürfnisse (mehrere externe
+  Identitätsquellen, SSO über OMP hinaus) sichtbar werden — dann neu
+  bewerten, kein Automatismus.
 
-**Offene Entscheidung 2: Render-Technik des OGraf-Nodes (§11.2).**
-- *Problem:* OGraf-Templates sind Web-Tech (HTML/JS/Custom Elements) —
-  irgendein Browser-Renderer muss Frames in die GStreamer-Pipeline
-  liefern.
-- *Optionen:* (a) Headless-Chromium als Begleitprozess des Nodes —
-  exakt das in PIPELINE CONTROLLER produktiv bewährte Muster
-  (GrafixEngine: Screenshots → appsrc), volle Web-Kompatibilität,
-  aber die dickste denkbare Dependency; (b) GStreamer `wpesrc`
-  (WPE WebKit) — rendert direkt als Pipeline-Element mit nativem
-  Alpha-Kanal, deutlich schlanker und näher an der GStreamer-Linie,
-  aber WebKit- statt Chromium-Engine (Kompatibilitätsrisiko für
-  vorhandene Templates); (c) eigener Renderer — ausgeschlossen, OGraf
-  ist per Definition Web-Tech.
-- *Empfehlung:* Bei P4-Beginn (b) zuerst per Praxistest gegen die ~45
-  vorhandenen PIPELINE-CONTROLLER-Templates evaluieren; besteht WPE
-  den Test nicht, ist (a) der bewährte Fallback. Kein Blind-Commit auf
-  eine der beiden jetzt.
+**Entschieden (2026-07-10): Render-Technik des OGraf-Nodes (§11.2) —
+Option (b), GStreamer `wpesrc` (WPE WebKit), zuerst per Praxistest
+verifizieren.**
+- *Problem war:* OGraf-Templates sind Web-Tech (HTML/JS/Custom
+  Elements) — irgendein Browser-Renderer muss Frames in die
+  GStreamer-Pipeline liefern.
+- *Verworfene/zurückgestellte Option:* (a) Headless-Chromium als
+  Begleitprozess — exakt das in PIPELINE CONTROLLER produktiv bewährte
+  Muster (GrafixEngine: Screenshots → appsrc), volle
+  Web-Kompatibilität, aber die dickste denkbare Dependency; bleibt
+  **Fallback**, falls (b) an den vorhandenen Templates scheitert.
+- *Entschieden:* `wpesrc` zuerst — rendert nativ als Pipeline-Element
+  mit echtem Alpha-Kanal, deutlich schlanker und näher an der
+  GStreamer-Linie (4.1a) als ein separater Chromium-Prozess. Risiko
+  bewusst eingegangen: WebKit- statt Chromium-Engine kann bei
+  einzelnen der ~45 vorhandenen PIPELINE-CONTROLLER-Templates
+  inkompatibel sein (Custom-Element-/CSS-Eigenheiten). Verifikation
+  bei P4-Beginn: alle vorhandenen Templates gegen `wpesrc` durchtesten,
+  bevor der OGraf-Node darauf festgelegt wird; bei Scheitern einzelner
+  Templates erst Template-seitig fixen (meist Web-Standard-Cross-Browser-
+  Aufwand), erst wenn das nicht reicht auf (a) zurückfallen — kein
+  Blind-Commit ohne diesen Test.

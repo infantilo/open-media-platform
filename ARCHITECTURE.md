@@ -820,11 +820,12 @@ Konkrete Maßnahmen gegen "an der Marktentwicklung vorbei bauen":
 
 ## 11. Offene Entscheidungen
 
-Offene Grundsatzentscheidungen stehen in `docs/decisions.md` (Stand
-2026-07-10: Projektlizenz [C1-Eintrag], Identity-Provider-Ansatz für §12,
-Render-Technik für den OGraf-Node §11.2) — Rest ist Detailarbeit der
-jeweiligen Phase (siehe 11.1 für die IS-12/14-Methodik, die diese
-Detailarbeit anleitet).
+Nur noch die Projektlizenz ist offen ([C1-Eintrag] in
+`docs/decisions.md`) — Identity-Provider-Ansatz für §12 und Render-Technik
+für den OGraf-Node (§11.2) sind am 2026-07-10 entschieden (siehe
+`docs/decisions.md` für Begründung/verworfene Optionen). Rest ist
+Detailarbeit der jeweiligen Phase (siehe 11.1 für die IS-12/14-Methodik,
+die diese Detailarbeit anleitet).
 
 ### 11.1 Entschieden: IS-12/14-Objektmodell-Methodik
 
@@ -952,10 +953,13 @@ vorgesehen. Wie Alpha über MXL transportiert wird (Pixelformat mit
 Alpha-Kanal vs. getrennte Key+Fill-Flows) ist bei der Umsetzung gegen
 die MXL-Spec zu verifizieren, nicht anzunehmen.
 
-**Offene Entscheidung** (`docs/decisions.md` 2026-07-10):
-Render-Technik — separater Headless-Chromium-Prozess
-(PIPELINE-CONTROLLER-bewährt) vs. GStreamer `wpesrc` (WPE WebKit,
-nativ in der Pipeline, Alpha direkt).
+**Entschieden** (`docs/decisions.md` 2026-07-10): Render-Technik ist
+GStreamer `wpesrc` (WPE WebKit) — nativ in der Pipeline, Alpha direkt,
+schlanker als ein separater Headless-Chromium-Prozess. Vor dem
+Festschreiben im Code: alle ~45 vorhandenen PIPELINE-CONTROLLER-Templates
+gegen `wpesrc` durchtesten (P4-Beginn); Headless-Chromium bleibt
+dokumentierter Fallback, falls einzelne Templates an der WebKit-Engine
+scheitern.
 
 **Phase/Testbarkeit:** P4 (kein neuer C/D-Schritt jetzt; A–C-Scope
 unverändert). Auf der Dev-Maschine vollständig testbar
