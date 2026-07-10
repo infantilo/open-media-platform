@@ -128,8 +128,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
-    let preview_port: u16 = env_or("OMP_VIEWER_PREVIEW_PORT", "9341").parse()?;
+    // Default 0 (freier Port vom OS) statt eines festen Ports: mehrere
+    // vom Instanz-Launcher gestartete Viewer (`UMSETZUNG.md` C8) dürfen
+    // sich sonst genau wie bei `OMP_PORT` keinen festen Port teilen.
+    // `previewUrl` (unten) macht den tatsächlichen Port für die UI
+    // ohnehin dynamisch sichtbar, ein fester Default hätte hier keinen
+    // Mehrwert mehr.
+    let preview_port: u16 = env_or("OMP_VIEWER_PREVIEW_PORT", "0").parse()?;
     let sink_element = std::env::var("OMP_VIEWER_SINK").ok();
+    // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
+    // manuellem Start.
+    let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     // Wie bei playouts Sender-ID (C3): die Receiver-ID wird hier erzeugt,
     // weil der IS-05-Receiver-Connection-Endpoint (ReceiverConnection)
@@ -137,8 +146,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let receiver_id = omp_node_sdk::idgen::new_v4();
 
     let broadcaster = Arc::new(preview::Broadcaster::new());
-    preview::spawn(&format!("0.0.0.0:{preview_port}"), broadcaster.clone())?;
-    let preview_url = format!("http://{host}:{preview_port}/preview");
+    let actual_preview_port =
+        preview::spawn(&format!("0.0.0.0:{preview_port}"), broadcaster.clone())?;
+    let preview_url = format!("http://{host}:{actual_preview_port}/preview");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -201,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 transport: Some(TRANSPORT_MXL.to_string()),
                 media_types: Some(vec!["video/v210".to_string()]),
             }],
+            instance_id,
         },
         store,
     )

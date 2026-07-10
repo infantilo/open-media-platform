@@ -1681,3 +1681,154 @@ Kein eigener UMSETZUNG.md-Schritt — Bugfix an bereits abgeschlossenem B4/
 B1, gemeldet und freigegeben vom Nutzer während der C7-Sitzung. Test-
 Mock-Nodes und Orchestrator-Testprozess am Ende beendet; NATS-/
 NMOS-Registry-Container bleiben laufen.
+
+## 2026-07-10 — C8 (Instanz-Launcher): GUI-Launch der MXL-Demo-Trias,
+zwei echte Bugs beim Verifizieren gefunden
+
+**Ziel erreicht:** Die drei Demo-Services (und jeder künftige Katalog-
+Eintrag) lassen sich aus der GUI heraus starten/stoppen, mehrfach
+instanziierbar, ohne Terminal (`ARCHITECTURE.md` §6.2 Stufe 0).
+
+**Umsetzung (wie spezifiziert, keine Abweichungen):**
+- `deploy/catalog.json`: `{type, label, runner, command[], env{}}` für
+  `omp-source`/`omp-switcher`/`omp-viewer`; `runner` immer `"process"`
+  (Feld nach ARCHITECTURE.md §6.2 bewusst schon vorhanden, nur dieser
+  eine Wert unterstützt).
+- `orchestrator/internal/launcher` (neues Paket): `LoadCatalog`,
+  `Launcher.Start/Stop/List/Catalog`. Start spawnt `os/exec`-Subprozess
+  mit `OMP_INSTANCE_ID`/`OMP_LABEL`/`OMP_PORT=0`/Registry-/NATS-URLs
+  (immer Vorrang vor geerbter/Katalog-`env`, als Map gemergt statt
+  Slice, um doppelte `envp`-Keys zu vermeiden). Stop: SIGTERM, 3s Grace
+  (Polling alle 100ms), danach SIGKILL. Persistenz `{id,type,pid}` unter
+  `<dataDir>/instances.json`; `New()` prüft jede geladene PID per Signal
+  0 und verwirft tote Einträge — ein Orchestrator-Neustart erkennt noch
+  laufende Kind-Prozesse wieder (jetzt als Waisen, von init reparented,
+  aber weiterhin per PID signalisierbar).
+- `omp-node-sdk`: `server::spawn` bindet bei Port 0 einen freien Port
+  und liefert ihn zurück; `node::start` registriert mit dem
+  *tatsächlichen* Port, nicht dem angefragten — macht `OMP_PORT=0`
+  praktikabel für Multi-Instanz. Neuer IS-04-Node-Tag
+  `urn:x-omp:instance` (Konstante `is04::INSTANCE_TAG`) aus
+  `NodeConfig.instance_id`. `omp-viewer`s zweiter Preview-Port
+  (`OMP_VIEWER_PREVIEW_PORT`) auf denselben Port-0-Mechanismus
+  umgestellt (Default jetzt `"0"` statt `"9341"`) — sonst hätten sich
+  mehrere vom Launcher gestartete Viewer einen festen Port geteilt;
+  `previewUrl` macht den tatsächlichen Port ohnehin schon dynamisch
+  sichtbar, ein fester Default hatte keinen Mehrwert mehr.
+- Orchestrator-API: `GET /api/v1/catalog`, `GET/POST /api/v1/instances`,
+  `DELETE /api/v1/instances/{id}` (`internal/httpapi/launcher_handlers.go`).
+  `registry.NodeView`/`graph.Node` bekommen `InstanceID` (aus dem IS-04-
+  Tag) für die UI.
+- UI (`flow-canvas.ts`): linke Katalog-Palette (`GET /api/v1/catalog` +
+  Start-Button pro Typ) sowie ein Stop-Control (⏹) an Kacheln mit
+  `instanceId`. Der Launcher fasst den Graphen selbst nicht an —
+  Instanzen erscheinen über die normale Selbstregistrierung (bestätigt:
+  kein SSE-/Graph-Sonderfall nötig, `edge.added`/`node.added` aus den
+  vorherigen Schritten reichen).
+
+**Bug 1 (gefunden + behoben): Kacheln stapelten sich auf derselben
+Default-Position, wenn mehrere Instanzen kurz hintereinander erscheinen.**
+`ui/graph/flow-canvas.ts#assignMissingPositions` berechnete den Index für
+`defaultPosition(index)` aus der Position eines Nodes *innerhalb des
+aktuellen `/api/v1/graph`-Antwort-Arrays* — dessen Reihenfolge ist nicht
+stabil (nmos-cpps Query-API sortiert praktisch nach letzter Aktivität,
+nicht nach Registrierungsreihenfolge). Erscheint jede neue Instanz in
+einem eigenen `#fetchAndRender()`-Lauf (typisch beim Instanz-Launcher:
+Nodes registrieren nacheinander, nicht im selben Batch), ist der jeweils
+einzige neue Eintrag in diesem Lauf fast immer der zuletzt aktive und
+landet dadurch bei Index 0 — vier per GUI gestartete Instanzen stapelten
+sich beobachtbar alle auf `(40,40)`. **Fix:** Index startet bei
+`Object.keys(this.#positions).length` (Gesamtzahl bereits bekannter
+Positionen), nicht bei 0 pro Aufruf — monoton wachsend über beliebig viele
+getrennte Aufrufe hinweg, keine Kollision mehr möglich. Zusätzlich
+`#fetchAndRender()`-Aufrufe über eine Promise-Kette (`#renderQueue`,
+`#queueFetchAndRender()`) serialisiert, um echte Überlappung bei sehr
+dicht aufeinanderfolgenden SSE-Events strukturell auszuschließen (war im
+konkreten Fall nicht die Ursache, aber ein reales Risiko für dieselbe
+Symptomatik). Zusätzlich musste die SVG-Zeichenfläche selbst um die
+Breite der neuen Palette (160px) nach rechts versetzt werden
+(`svg.style.left`), sonst landeten frisch platzierte Kacheln (nahe world
+x=0) optisch unter der Palette. Gefunden und verifiziert per
+Chromium-Headless (CDP, `/tmp/.../scratchpad/cdp.mjs`), echte
+Browser-Klicks und -Drags, nicht nur curl-Simulation.
+
+**Bug 2 (gefunden, tief untersucht, bewusst nicht in diesem Schritt
+behoben): MXL-Read-Livelock — `omp-viewer` empfängt nach einer Quellwahl
+manchmal dauerhaft keine neuen Frames mehr, ein Thread bleibt bei ~100%
+CPU.** Kein C8-Regressions-Bug — dieselbe Symptomatik trat bereits
+während der C7-Verifikation auf (dort als vermeintlich "session-bedingt,
+durch `mxl-info -g` behoben" fehlgedeutet; C8 hat gezeigt, dass es
+reproduzierbar ist).
+
+*Diagnose (Sub-Agent-Recherche gegen den vendorten MXL-C++-Quellcode
+unter `third_party/mxl`, nicht geraten):* "Grain count"/"Commit batch
+size"/"Sync batch size" haben nichts mit dem Symptom zu tun (Batch-Size-
+Hints sind reine Metadaten, `PosixDiscreteFlowWriter::commit()`
+committet unbedingt bei jedem Aufruf). Der tatsächliche Root Cause ist
+ein TOCTOU-Fenster in `waitUntilChanged` (`lib/internal/src/Sync.cpp`):
+liest der Code den Sync-Zähler, bevor er den Futex-Wait betritt, und
+committet der Writer in genau diesem Fenster erneut, kehrt der Aufruf
+mit "Bedingung erfüllt" zurück, *ohne* je zu warten — `getGrain`s eigene
+`while(true)`-Schleife (C++-intern, nicht die Rust-Schleife) ruft darauf
+sofort erneut `getGrainImpl` auf. Per `/proc/<pid>/task/*/stat`
+verifiziert: ein Thread bei durchgehend ~100% CPU, "Last read time" des
+betroffenen Flows friert dauerhaft ein (in einem Testlauf >230s,
+selbstheilt nicht).
+
+*Versuchter Fix (nicht ausreichend, aber beibehalten):*
+`nodes/omp-mediaio/src/mxl.rs`s `read_loop` bekam einen 5ms-Backoff im
+`Timeout`/`OutOfRangeTooEarly`-Zweig — **behebt den beobachteten
+Extremfall nicht**, weil die Retry-Schleife des Livelocks *innerhalb*
+des einzelnen `get_complete_grain`-FFI-Aufrufs liegt (C++-eigenes
+`while(true)`), die Kontrolle in diesem Fall über Minuten hinweg gar
+nicht zu Rust zurückkehrt und der Sleep folglich nie erreicht wird
+(empirisch bestätigt: CPU-Last unverändert ~100% nach dem Fix). Bleibt
+trotzdem im Code, weil er den milderen Fall (Aufruf kehrt normal mit
+einem Fehler zurück) korrekt entschärft.
+
+*Offen für eine künftige Sitzung* (nicht C8-Scope — betrifft
+`omp-mediaio`, gebaut in C4, von C5/C6/C7 mitgenutzt): entweder (a) Patch
+im vendorten MXL-C++ (Sync.cpp; Risiko: `third_party/mxl` ist
+gitignored/wird per `install-mxl.sh` neu geklont, ein Patch bräuchte
+einen eigenen Anwendungsschritt im Install-Skript), oder (b) Rust-seitige
+Umgehung — z. B. für den Preview-Anwendungsfall (der keine strikt
+sequenzielle Zustellung braucht) regelmäßig das *neueste* verfügbare
+Grain pollen statt einen exakten fortlaufenden Index zu verlangen, was
+den betroffenen Codepfad in `getGrainImpl` eventuell ganz umgeht. Bis
+dahin: Symptom ist intermittierend (nicht bei jeder Quellwahl), C6/C7s
+eigene Verifikationen zeigten bereits erfolgreiche Bild-Zustellung unter
+denselben Umständen — die MXL-Demo-Trias ist nicht durchgehend defekt,
+nur nicht 100% zuverlässig.
+
+**Verifiziert (End-to-End, komplett über echte Browser-Interaktion, kein
+curl-Ersatz für die GUI-Schritte selbst):** Chromium Headless über das
+Chrome-DevTools-Protokoll (rohe WebSocket-JSON-RPC über Node.js' native
+`fetch`/`WebSocket`, kein Playwright/Puppeteer verfügbar/installiert;
+Skript unter `/tmp/.../scratchpad/cdp.mjs`, nicht Teil des Repos).
+- `cargo build/clippy/fmt/test --workspace`, `cargo deny check`, `go
+  build/vet/test ./...`, `deno check`/`deno test` grün; `make ui`
+  (Bundle neu gebaut), `make nodes` (neuer Target, baut alle
+  Katalog-Binaries).
+- Echter Button-Klick (`.click()` auf das tatsächliche DOM-Element, nicht
+  simulierter Fetch) auf "+ Source" → Subprozess startet, registriert
+  sich, erscheint im Graph; Stop-Klick (⏹) → Prozess sauber beendet,
+  verschwindet aus `/api/v1/instances`.
+- Komplette Trias (2× Source, 1× Switcher, 1× Viewer) nur per
+  Palette-Klicks gestartet; Switcher→Viewer-Kante per echtem simuliertem
+  Maus-Drag (`Input.dispatchMouseEvent`-Sequenz auf die tatsächlichen
+  SVG-Port-Koordinaten) gezogen, serverseitig als aktive Kante bestätigt.
+  Switcher-Kachel angeklickt → eigenes UI-Bundle (C7) öffnet sich korrekt
+  eingebettet in der Palette-erweiterten Shell; Quellwahl-Button-Klick →
+  `activeInput` ändert sich nachweisbar.
+- Orchestrator-Prozess während laufender Instanzen hart beendet (`kill
+  -9`) und neu gestartet: Instanz bleibt am Leben (jetzt von init
+  reparented), erscheint weiter in `/api/v1/instances`
+  (`instances.json`-Persistenz + PID-Check bestätigt), lässt sich
+  danach weiterhin sauber stoppen.
+- Alle vier GUI-gestarteten Instanzen am Ende per echtem Stop-Klick
+  beendet; Chromium/Orchestrator-Testprozess beendet, `mxl-info -g`
+  räumt testbedingte verwaiste Flows auf; NATS-/NMOS-Registry-Container
+  bleiben laufen (persistente Dev-Infrastruktur).
+
+C8 damit funktional abgeschlossen; der MXL-Read-Livelock (Bug 2) bleibt
+als bekanntes, dokumentiertes, nicht C8-eigenes Problem offen.

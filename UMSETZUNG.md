@@ -730,6 +730,6 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C5 | erledigt | [C5] omp-source: Test-Videoquelle → MXL (+ IS-04-Flow-Schema-Fix) | 2026-07-10 |
 | C6 | erledigt | [C6] omp-viewer: MXL → MJPEG-Preview (+ SDK: ReceiverSpec/ReceiverConnection) | 2026-07-10 |
 | C7 | erledigt | [C7] omp-switcher: MXL ×N → Buttons → MXL | 2026-07-10 |
-| C8 | offen | | |
+| C8 | erledigt | [C8] GUI-Launch: Instanz-Launcher (Katalog, Start/Stop, Restart-Persistenz) | 2026-07-10 |
 | C9 | offen | | |
 | C10/C11 | offen (später) | | |

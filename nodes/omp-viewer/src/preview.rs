@@ -71,9 +71,18 @@ impl Broadcaster {
 }
 
 /// Bindet addr synchron (Bind-Fehler sofort sichtbar) und verschiebt die
-/// Accept-Loop in einen eigenen Thread.
-pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<()> {
+/// Accept-Loop in einen eigenen Thread. Liefert den tatsächlich
+/// gebundenen Port zurück: bei `addr`s Port `0` (`UMSETZUNG.md` C8, für
+/// mehrere gleichzeitig vom Instanz-Launcher gestartete Viewer nötig,
+/// da sie sich sonst einen festen Preview-Port teilen müssten) weist
+/// das OS einen freien Port zu, den `main.rs` für `previewUrl` braucht.
+pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<u16> {
     let server = Server::http(addr).map_err(std::io::Error::other)?;
+    let port = server
+        .server_addr()
+        .to_ip()
+        .map(|socket_addr| socket_addr.port())
+        .unwrap_or(0);
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
             if request.url() != "/preview" {
@@ -84,7 +93,7 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<()> {
             std::thread::spawn(move || serve_client(request, &broadcaster));
         }
     });
-    Ok(())
+    Ok(port)
 }
 
 fn serve_client(request: Request, broadcaster: &Broadcaster) {

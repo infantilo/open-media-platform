@@ -115,6 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nats_url,
             senders: vec![SenderSpec::default()],
             receivers: vec![omp_node_sdk::ReceiverSpec::default()],
+            instance_id: std::env::var("OMP_INSTANCE_ID").ok(),
         },
         store,
     )

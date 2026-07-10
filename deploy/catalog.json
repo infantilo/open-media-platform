@@ -1,0 +1,23 @@
+[
+  {
+    "type": "omp-source",
+    "label": "Source",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-source"],
+    "env": {}
+  },
+  {
+    "type": "omp-switcher",
+    "label": "Switcher",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-switcher"],
+    "env": {}
+  },
+  {
+    "type": "omp-viewer",
+    "label": "Viewer",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-viewer"],
+    "env": {}
+  }
+]

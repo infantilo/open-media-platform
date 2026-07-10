@@ -104,6 +104,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 			Senders:    []SenderView{},
 			Receivers:  []ReceiverView{},
 			APIBaseURL: apiBaseURL(n),
+			InstanceID: instanceID(n),
 		}
 
 		for _, d := range devicesByNode[n.ID] {
@@ -148,4 +149,20 @@ func apiBaseURL(n is04Node) string {
 	}
 	ep := n.API.Endpoints[0]
 	return fmt.Sprintf("%s://%s:%d", ep.Protocol, ep.Host, ep.Port)
+}
+
+// instanceTagName ist der IS-04-Tag-Name, den omp-node-sdk aus
+// OMP_INSTANCE_ID setzt (UMSETZUNG.md C8, nodes/omp-node-sdk/src/is04.rs
+// INSTANCE_TAG) — dieselbe Konstante lässt sich zwischen Go und Rust
+// nicht teilen, daher hier als String-Literal dupliziert.
+const instanceTagName = "urn:x-omp:instance"
+
+// instanceID liest den ersten Wert von n.Tags["urn:x-omp:instance"],
+// leer wenn der Tag fehlt (manuell gestartete Nodes, alle vor C8).
+func instanceID(n is04Node) string {
+	values := n.Tags[instanceTagName]
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }

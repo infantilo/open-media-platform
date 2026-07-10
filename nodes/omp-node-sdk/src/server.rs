@@ -74,12 +74,22 @@ pub fn serve(addr: &str, store: Arc<dyn ParamStore>) -> std::io::Result<()> {
 /// Bindet addr synchron (Bind-Fehler sind sofort sichtbar) und verschiebt
 /// die Accept-Loop danach in einen eigenen Thread — für `node::run`, das
 /// selbst in einer async-Runtime läuft und nicht blockiert werden darf.
+/// Liefert zusätzlich den tatsächlich gebundenen Port: bei `addr`s Port
+/// `0` (`UMSETZUNG.md` C8, launcherfreundliches Multi-Instanz-Binden)
+/// weist das OS einen freien Port zu, den der Aufrufer (`node::start`)
+/// zur Registrierung braucht, da er im `addr`-String selbst nicht mehr
+/// steht.
 pub fn spawn(
     addr: &str,
     store: Arc<dyn ParamStore>,
-) -> std::io::Result<std::thread::JoinHandle<()>> {
+) -> std::io::Result<(u16, std::thread::JoinHandle<()>)> {
     let server = Server::http(addr).map_err(|e| std::io::Error::other(e.to_string()))?;
-    Ok(std::thread::spawn(move || accept_loop(server, store)))
+    let port = server
+        .server_addr()
+        .to_ip()
+        .map(|socket_addr| socket_addr.port())
+        .unwrap_or(0);
+    Ok((port, std::thread::spawn(move || accept_loop(server, store))))
 }
 
 fn accept_loop(server: Server, store: Arc<dyn ParamStore>) {

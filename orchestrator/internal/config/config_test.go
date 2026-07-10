@@ -8,6 +8,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMP_NATS_URL", "")
 	t.Setenv("OMP_UI_DIR", "")
 	t.Setenv("OMP_DATA_DIR", "")
+	t.Setenv("OMP_CATALOG_PATH", "")
 
 	cfg := Load()
 
@@ -26,6 +27,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.DataDir != "../data" {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, "../data")
 	}
+	if cfg.CatalogPath != "../deploy/catalog.json" {
+		t.Errorf("CatalogPath = %q, want %q", cfg.CatalogPath, "../deploy/catalog.json")
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -34,6 +38,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OMP_NATS_URL", "nats://nats.example:4222")
 	t.Setenv("OMP_UI_DIR", "/srv/omp/ui")
 	t.Setenv("OMP_DATA_DIR", "/srv/omp/data")
+	t.Setenv("OMP_CATALOG_PATH", "/srv/omp/catalog.json")
 
 	cfg := Load()
 
@@ -51,5 +56,8 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.DataDir != "/srv/omp/data" {
 		t.Errorf("DataDir = %q, want %q", cfg.DataDir, "/srv/omp/data")
+	}
+	if cfg.CatalogPath != "/srv/omp/catalog.json" {
+		t.Errorf("CatalogPath = %q, want %q", cfg.CatalogPath, "/srv/omp/catalog.json")
 	}
 }

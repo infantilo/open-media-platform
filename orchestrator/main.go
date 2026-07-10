@@ -17,6 +17,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
@@ -66,7 +67,14 @@ func main() {
 	layoutStore := layouts.NewStore(filepath.Join(cfg.DataDir, "layouts"))
 	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(filepath.Join(cfg.DataDir, "snapshots")))
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc)
+	catalog, err := launcher.LoadCatalog(cfg.CatalogPath)
+	if err != nil {
+		slog.Warn("failed to load instance launcher catalog, GUI-Launch bleibt leer", "path", cfg.CatalogPath, "error", err)
+		catalog = nil
+	}
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

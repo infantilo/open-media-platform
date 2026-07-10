@@ -55,6 +55,9 @@ interface GraphNode {
   inputs: GraphPort[];
   outputs: GraphPort[];
   health: string;
+  // Gesetzt, wenn der Node vom Instanz-Launcher gestartet wurde
+  // (UMSETZUNG.md C8) — Grundlage für den Stop-Control an der Kachel.
+  instanceId?: string;
 }
 
 interface GraphEdge {
@@ -90,6 +93,17 @@ interface TileSpec {
   outputs: GraphPort[];
   kind: "node" | "group";
   health: string;
+  instanceId?: string;
+}
+
+// CatalogEntry (UMSETZUNG.md C8) — Wire-Format identisch zu
+// orchestrator/internal/launcher.CatalogEntry.
+interface CatalogEntry {
+  type: string;
+  label: string;
+  runner: string;
+  command: string[];
+  env: Record<string, string>;
 }
 
 interface PortLocation {
@@ -144,8 +158,11 @@ export class FlowCanvas extends HTMLElement {
   #panelContainer!: HTMLDivElement;
   #panelNodeId: string | null = null;
   #snapshotBar!: HTMLDivElement;
+  #palette!: HTMLDivElement;
 
   #eventSource: EventSource | null = null;
+  // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
+  #renderQueue: Promise<void> = Promise.resolve();
   #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -178,8 +195,9 @@ export class FlowCanvas extends HTMLElement {
 
   async #init() {
     await this.#loadLayout();
-    await this.#fetchAndRender();
+    await this.#queueFetchAndRender();
     await this.#renderSnapshotBar();
+    await this.#renderPalette();
   }
 
   async #loadLayout() {
@@ -249,7 +267,7 @@ export class FlowCanvas extends HTMLElement {
     }
 
     if (GRAPH_REFRESH_EVENT_TYPES.has(parsed.type)) {
-      this.#fetchAndRender();
+      this.#queueFetchAndRender();
       return;
     }
 
@@ -274,10 +292,18 @@ export class FlowCanvas extends HTMLElement {
     this.style.position ||= "relative";
 
     const svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("width", "100%");
-    svg.setAttribute("height", "100%");
     svg.style.touchAction = "none";
     svg.style.background = "#1e1e1e";
+    // Links Platz für die Katalog-Palette lassen (UMSETZUNG.md C8) —
+    // sonst landen frisch platzierte Kacheln (defaultPosition startet
+    // nahe world x=0) optisch unter der Palette. #screenPoint() liest
+    // bei jedem Pointer-Event getBoundingClientRect() der svg neu, die
+    // Pan/Zoom-Koordinatenrechnung bleibt dadurch unverändert korrekt.
+    svg.style.position = "absolute";
+    svg.style.top = "0";
+    svg.style.left = "160px";
+    svg.style.width = "calc(100% - 160px)";
+    svg.style.height = "100%";
 
     const viewportGroup = document.createElementNS(SVG_NS, "g");
     viewportGroup.setAttribute("data-role", "viewport");
@@ -312,12 +338,24 @@ export class FlowCanvas extends HTMLElement {
       "display:flex;gap:8px;align-items:center;z-index:10;" +
       "border-top:1px solid #444;box-sizing:border-box;";
 
-    this.replaceChildren(svg, breadcrumb, panel, snapshotBar);
+    // Katalog-Palette (UMSETZUNG.md C8): Node-Typen aus /api/v1/catalog
+    // mit Start-Button, symmetrisch zum Parameter-Panel auf der rechten
+    // Seite platziert.
+    const palette = document.createElement("div");
+    palette.setAttribute("data-role", "palette");
+    palette.style.cssText =
+      "position:absolute;top:0;left:0;bottom:0;width:160px;" +
+      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
+      "padding:10px;padding-top:36px;overflow-y:auto;" +
+      "z-index:10;border-right:1px solid #444;box-sizing:border-box;";
+
+    this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar);
     this.#svg = svg;
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
     this.#panelContainer = panel;
     this.#snapshotBar = snapshotBar;
+    this.#palette = palette;
   }
 
   async #fetchAndRender() {
@@ -327,15 +365,41 @@ export class FlowCanvas extends HTMLElement {
     this.#render();
   }
 
+  // Serialisiert #fetchAndRender()-Aufrufe über eine Promise-Kette.
+  // Ohne das können mehrere SSE-Events kurz hintereinander (z. B. mehrere
+  // vom Instanz-Launcher gestartete Nodes, die binnen Sekunden alle
+  // registrieren, UMSETZUNG.md C8) überlappende #fetchAndRender()-Läufe
+  // auslösen: jeder liest #positions, bevor der vorherige Lauf seine
+  // frisch zugewiesene defaultPosition() zurückgeschrieben hat, wodurch
+  // mehrere neue Kacheln denselben Index/dieselbe Default-Position
+  // bekommen und sich optisch stapeln (in der Praxis beobachtet: vier
+  // gleichzeitig gestartete Instanzen landeten alle auf (40,40)).
+  #queueFetchAndRender(): Promise<void> {
+    this.#renderQueue = this.#renderQueue.catch(() => {}).then(() => this.#fetchAndRender());
+    return this.#renderQueue;
+  }
+
   #assignMissingPositions() {
     let changed = false;
     const items = this.#itemsAtScope();
-    [...items.nodeIds, ...items.groupIds].forEach((id, index) => {
+    // Index für defaultPosition() startet bei der Anzahl bereits
+    // bekannter Positionen, nicht bei 0 innerhalb dieses Aufrufs: die
+    // Reihenfolge von items.nodeIds folgt der Registry-Rückgabe (z. B.
+    // nach letzter Aktivität sortiert, nicht nach Registrierungs-
+    // reihenfolge) und ist zwischen Aufrufen instabil. Erscheinen neue
+    // Nodes einzeln nacheinander (UMSETZUNG.md C8: mehrere Instanzen
+    // kurz hintereinander aus der GUI gestartet), landet der jeweils
+    // einzige neue Eintrag sonst bei jedem Aufruf erneut auf Index 0 und
+    // alle stapeln sich auf derselben Default-Position — beobachtet mit
+    // vier gestarteten Instanzen, die alle auf (40,40) landeten.
+    let nextIndex = Object.keys(this.#positions).length;
+    for (const id of [...items.nodeIds, ...items.groupIds]) {
       if (!this.#positions[id]) {
-        this.#positions[id] = defaultPosition(index);
+        this.#positions[id] = defaultPosition(nextIndex);
+        nextIndex++;
         changed = true;
       }
-    });
+    }
     if (changed) this.#saveLayout();
   }
 
@@ -374,6 +438,7 @@ export class FlowCanvas extends HTMLElement {
         outputs: node.outputs,
         kind: "node",
         health: node.health,
+        instanceId: node.instanceId,
       });
     }
 
@@ -547,6 +612,31 @@ export class FlowCanvas extends HTMLElement {
     title.setAttribute("font-size", "12");
     title.textContent = isGroup ? `▣ ${tile.label}` : tile.label;
     g.appendChild(title);
+
+    // Stop-Control (UMSETZUNG.md C8): nur an Kacheln, deren Node einen
+    // Instanz-Tag trägt — manuell gestartete/entdeckte Nodes (alle vor
+    // C8) haben keinen Stop-Weg vom Orchestrator aus.
+    if (!isGroup && tile.instanceId) {
+      const instanceId = tile.instanceId;
+      const stopBtn = document.createElementNS(SVG_NS, "text");
+      stopBtn.setAttribute("x", String(NODE_WIDTH - 8));
+      stopBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      stopBtn.setAttribute("text-anchor", "end");
+      stopBtn.setAttribute("fill", "#e05050");
+      stopBtn.setAttribute("font-size", "12");
+      stopBtn.style.cursor = "pointer";
+      stopBtn.setAttribute("data-role", "stop-instance");
+      stopBtn.textContent = "⏹";
+      const stopTitle = document.createElementNS(SVG_NS, "title");
+      stopTitle.textContent = "Instanz stoppen";
+      stopBtn.appendChild(stopTitle);
+      stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      stopBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.#stopInstance(instanceId);
+      });
+      g.appendChild(stopBtn);
+    }
 
     tile.inputs.forEach((port, i) => {
       g.appendChild(this.#renderPort(port, i, tile.inputs.length, "input", pos, height));
@@ -902,7 +992,7 @@ export class FlowCanvas extends HTMLElement {
         this.#showToast(`Verbindung fehlgeschlagen: ${text || response.status}`);
         return;
       }
-      await this.#fetchAndRender();
+      await this.#queueFetchAndRender();
     } catch (err) {
       this.#showToast(`Verbindung fehlgeschlagen: ${err}`);
     }
@@ -925,7 +1015,7 @@ export class FlowCanvas extends HTMLElement {
         return;
       }
       this.#selectedEdgeId = null;
-      await this.#fetchAndRender();
+      await this.#queueFetchAndRender();
     } catch (err) {
       this.#showToast(`Trennen fehlgeschlagen: ${err}`);
     }
@@ -1247,12 +1337,92 @@ export class FlowCanvas extends HTMLElement {
       if (result.errors.length > 0) {
         this.#showToast(`Snapshot mit ${result.errors.length} Fehler(n) angewendet`);
       }
-      await this.#fetchAndRender();
+      await this.#queueFetchAndRender();
       if (this.#panelNodeId !== null) {
         await this.#openParameterPanel(this.#panelNodeId);
       }
     } catch (err) {
       this.#showToast(`Snapshot anwenden fehlgeschlagen: ${err}`);
+    }
+  }
+
+  // --- Instanz-Launcher (UMSETZUNG.md C8) ---
+
+  async #renderPalette() {
+    this.#palette.replaceChildren();
+
+    const heading = document.createElement("div");
+    heading.textContent = "Node-Katalog";
+    heading.style.cssText = "font-weight:bold;margin-bottom:8px;";
+    this.#palette.appendChild(heading);
+
+    try {
+      const res = await fetch("/api/v1/catalog");
+      if (!res.ok) return;
+      const catalog = (await res.json()) as CatalogEntry[];
+
+      if (catalog.length === 0) {
+        const empty = document.createElement("p");
+        empty.textContent = "Katalog leer.";
+        empty.style.cssText = "color:#888;";
+        this.#palette.appendChild(empty);
+        return;
+      }
+
+      for (const entry of catalog) {
+        const btn = document.createElement("button");
+        btn.textContent = `+ ${entry.label}`;
+        btn.title = `${entry.label} starten`;
+        btn.style.cssText =
+          "cursor:pointer;display:block;width:100%;margin-bottom:6px;" +
+          "text-align:left;padding:4px 6px;";
+        btn.addEventListener("click", () => this.#startInstance(entry.type));
+        this.#palette.appendChild(btn);
+      }
+    } catch {
+      // Palette bleibt leer, wenn der Server (noch) nicht erreichbar ist.
+    }
+  }
+
+  async #startInstance(type: string) {
+    try {
+      const res = await fetch("/api/v1/instances", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Start fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      // Kein #fetchAndRender() nötig: die Instanz registriert sich
+      // selbst bei der NMOS-Registry, was ein "node.added"-SSE-Event
+      // auslöst (registry.Poller) — der Graph lädt sich dadurch von
+      // selbst neu, sobald die Instanz tatsächlich erschienen ist.
+      this.#showToast(`${type} wird gestartet …`);
+    } catch (err) {
+      this.#showToast(`Start fehlgeschlagen: ${err}`);
+    }
+  }
+
+  async #stopInstance(instanceId: string) {
+    try {
+      const res = await fetch(`/api/v1/instances/${encodeURIComponent(instanceId)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Stop fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      // Die Kachel verschwindet, sobald der Node aus der Registry
+      // ausläuft (registration_expiry_interval) und ein "node.removed"
+      // die #fetchAndRender() auslöst — kein optimistisches Entfernen
+      // hier, das wäre eine zweite, potenziell falsche Zustandsquelle.
+      this.#showToast("Instanz wird gestoppt …");
+    } catch (err) {
+      this.#showToast(`Stop fehlgeschlagen: ${err}`);
     }
   }
 

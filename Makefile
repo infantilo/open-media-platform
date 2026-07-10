@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui
+.PHONY: build test check up down ci ui nodes
 
 GO_MODULES := orchestrator nodes/mock
 
@@ -12,6 +12,12 @@ build: ui
 ui:
 	mkdir -p ui/dist
 	deno bundle ui/graph/flow-canvas.ts -o ui/dist/flow-canvas.js
+
+# Baut die per deploy/catalog.json vom Instanz-Launcher startbaren Node-
+# Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der
+# Launcher vorgebaute Binaries erwartet, kein `cargo run` pro Start.
+nodes:
+	cd nodes && cargo build --workspace --bins
 
 test:
 	$(foreach m,$(GO_MODULES),cd $(m) && go test ./... && cd $(CURDIR) &&) true

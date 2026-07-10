@@ -11,6 +11,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -67,11 +68,20 @@ type SnapshotService interface {
 	Apply(ctx context.Context, id string) (snapshots.ApplyResult, error)
 }
 
+// LauncherService startet/stoppt Node-Instanzen aus dem Katalog
+// (implementiert von *launcher.Launcher, UMSETZUNG.md C8).
+type LauncherService interface {
+	Catalog() []launcher.CatalogEntry
+	List() []launcher.Instance
+	Start(nodeType string) (launcher.Instance, error)
+	Stop(id string) error
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
 // /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph,
-// /api/v1/layouts, /api/v1/snapshots und statisches Serving von
-// cfg.UIDir unter /.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService) http.Handler {
+// /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog, /api/v1/instances
+// und statisches Serving von cfg.UIDir unter /.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
@@ -91,6 +101,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/snapshots", handleListSnapshots(snapshotSvc))
 	mux.HandleFunc("POST /api/v1/snapshots", handleCreateSnapshot(snapshotSvc))
 	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", handleApplySnapshot(snapshotSvc))
+	mux.HandleFunc("GET /api/v1/catalog", handleCatalog(launcherSvc))
+	mux.HandleFunc("GET /api/v1/instances", handleListInstances(launcherSvc))
+	mux.HandleFunc("POST /api/v1/instances", handlePostInstance(launcherSvc))
+	mux.HandleFunc("DELETE /api/v1/instances/{id}", handleDeleteInstance(launcherSvc))
 	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
 	return noStoreForAPI(mux)
 }

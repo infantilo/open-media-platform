@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use crate::health;
 use crate::is04::{
-    self, Device, Flow, HeartbeatError, NodeResource, Receiver, RegistryClient, Sender, Source,
+    self, Device, Flow, HeartbeatError, INSTANCE_TAG, NodeResource, Receiver, RegistryClient,
+    Sender, Source,
 };
 use crate::server::{self, ParamStore};
 
@@ -40,6 +41,12 @@ pub struct NodeConfig {
     pub nats_url: String,
     pub senders: Vec<SenderSpec>,
     pub receivers: Vec<ReceiverSpec>,
+    /// Setzt den IS-04-Node-Tag `urn:x-omp:instance` (`UMSETZUNG.md` C8):
+    /// vom Instanz-Launcher über `OMP_INSTANCE_ID` vorgegeben, damit der
+    /// Orchestrator eine laufende Instanz mit dem passenden Registry-
+    /// Node korrelieren kann, ohne Ports zu kennen. `None` bei manuell
+    /// (nicht über den Launcher) gestarteten Nodes.
+    pub instance_id: Option<String>,
 }
 
 /// Beschreibt einen einzelnen Sender. `id`/`manifest_href` sind optional:
@@ -138,7 +145,6 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .map(|spec| spec.id.clone().unwrap_or_else(crate::idgen::new_v4))
         .collect();
 
-    let node_res = NodeResource::new(&node_id, &config.label, &config.host, config.port);
     let device_res = Device::new(
         &device_id,
         &format!("{} Device", config.label),
@@ -202,8 +208,20 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
 
     let registry = RegistryClient::new(config.registry_url.clone());
 
+    // `config.port == 0` lässt das OS einen freien Port zuweisen
+    // (`UMSETZUNG.md` C8: der Instanz-Launcher startet mehrere Node-
+    // Instanzen desselben Typs auf einem Host, die sich sonst einen
+    // festen Port teilen müssten) — registriert wird deshalb erst nach
+    // dem tatsächlichen Binden, mit dem wirklich belegten Port.
     let bind_addr = format!("0.0.0.0:{}", config.port);
-    server::spawn(&bind_addr, store)?;
+    let (actual_port, _server_handle) = server::spawn(&bind_addr, store)?;
+
+    let mut node_res = NodeResource::new(&node_id, &config.label, &config.host, actual_port);
+    if let Some(instance_id) = &config.instance_id {
+        node_res
+            .tags
+            .insert(INSTANCE_TAG.to_string(), vec![instance_id.clone()]);
+    }
 
     register_with_retry(
         &registry,

@@ -33,6 +33,10 @@ type Node struct {
 	Inputs  []Port `json:"inputs"`
 	Outputs []Port `json:"outputs"`
 	Health  string `json:"health"`
+	// InstanceID ist gesetzt, wenn der Node vom Instanz-Launcher gestartet
+	// wurde (UMSETZUNG.md C8) — Grundlage für den Stop-Control an der
+	// Kachel (ui/graph/flow-canvas.ts).
+	InstanceID string `json:"instanceId,omitempty"`
 }
 
 // Edge ist eine IS-05-Connection zwischen Sender und Receiver. Die ID
@@ -246,7 +250,7 @@ func (s *Service) buildEdges(ctx context.Context, views []registry.NodeView) []E
 func buildNodes(views []registry.NodeView) []Node {
 	nodes := make([]Node, 0, len(views))
 	for _, v := range views {
-		n := Node{ID: v.ID, Label: v.Label, Inputs: []Port{}, Outputs: []Port{}, Health: health(v)}
+		n := Node{ID: v.ID, Label: v.Label, Inputs: []Port{}, Outputs: []Port{}, Health: health(v), InstanceID: v.InstanceID}
 		for _, r := range v.Receivers {
 			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format})
 		}

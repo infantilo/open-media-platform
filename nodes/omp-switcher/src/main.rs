@@ -122,6 +122,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
+    // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
+    // manuellem Start.
+    let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     // Wie bei omp-source/playout (C5/C3): eigene Sender-/Flow-ID vorab
     // erzeugen — die Discovery (unten) muss den eigenen Sender aus der
@@ -184,6 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ..Default::default()
             }],
             receivers: vec![],
+            instance_id,
         },
         store,
     )

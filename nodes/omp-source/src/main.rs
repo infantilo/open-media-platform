@@ -120,6 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let initial_pattern = env_or("OMP_SOURCE_PATTERN", DEFAULT_PATTERN);
+    // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
+    // manuellem Start.
+    let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     // Flow-UUID == MXL-flow-id-Konvention (`UMSETZUNG.md` C4): dieselbe ID
     // geht sowohl an `MxlVideoOutput` (tatsächlicher Flow in der Domain)
@@ -179,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ..Default::default()
             }],
             receivers: vec![],
+            instance_id,
         },
         store,
     )

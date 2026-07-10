@@ -22,6 +22,13 @@ const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
 /// Standard-URN definieren.
 pub const TRANSPORT_MXL: &str = "urn:x-omp:transport:mxl";
 
+/// IS-04-Node-Tag-Name, den der Instanz-Launcher-korrelierte Node-Wert
+/// trägt (`UMSETZUNG.md` C8) — Wert ist `OMP_INSTANCE_ID`, Schlüssel
+/// dieser konstante String (`orchestrator/internal/registry` liest
+/// denselben Tag-Namen als String-Literal, da Go/Rust keine Konstante
+/// teilen können).
+pub const INSTANCE_TAG: &str = "urn:x-omp:instance";
+
 fn now_version() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

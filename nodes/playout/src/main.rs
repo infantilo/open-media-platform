@@ -125,6 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let port: u16 = env_or("OMP_PORT", "9301").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
+    // Vom Instanz-Launcher gesetzt (`UMSETZUNG.md` C8), sonst leer bei
+    // manuellem Start. Playout ist (noch) nicht im Katalog, unterstützt
+    // den Tag hier aber schon mit, damit `NodeConfig` einheitlich bleibt.
+    let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let video_element = env_or("OMP_PLAYOUT_VIDEO_ELEMENT", "videotestsrc");
     let audio_element = env_or("OMP_PLAYOUT_AUDIO_ELEMENT", "audiotestsrc");
@@ -201,6 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ..Default::default()
             }],
             receivers: vec![],
+            instance_id,
         },
         store,
     )

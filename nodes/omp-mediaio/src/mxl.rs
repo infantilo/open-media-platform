@@ -425,6 +425,36 @@ fn read_loop(
             }
             Err(mxl::Error::Timeout | mxl::Error::OutOfRangeTooEarly) => {
                 // Noch nicht geschrieben — gleichen Index erneut versuchen.
+                // Kurzer Backoff statt sofortigem Retry, als Teilschutz
+                // gegen ein bekanntes TOCTOU-Fenster in MXLs eigener
+                // `waitUntilChanged` (vendored C++, lib/internal/src/
+                // Sync.cpp): committet der Writer zwischen dem Lesen des
+                // Sync-Zählers und dem eigentlichen Futex-Wait erneut,
+                // kehrt der Aufruf sofort zurück, ohne tatsächlich zu
+                // warten.
+                //
+                // **Behebt NICHT den in der Praxis beobachteten
+                // Extremfall** (docs/decisions.md, 2026-07-10 "C8 —
+                // MXL-Read-Livelock"): dort steckt die Retry-Schleife
+                // bereits *innerhalb* des einzelnen `get_complete_grain`-
+                // FFI-Aufrufs (C++-eigenes `while(true)` in `getGrain`,
+                // das bei `OUT_OF_RANGE_TOO_EARLY` selbst erneut
+                // `getGrainImpl` aufruft) — die Kontrolle kommt in diesem
+                // Fall über Minuten hinweg gar nicht zu diesem Rust-Codepfad
+                // zurück, weshalb der Sleep hier nichts bewirkt (per
+                // `/proc/<pid>/task/*/stat` verifiziert: ein Thread bleibt
+                // bei ~100% CPU, "Last read time" des Flows friert dauerhaft
+                // ein). Bleibt trotzdem stehen, weil er den harmloseren
+                // Fall (Aufruf kehrt normal mit `Timeout`/
+                // `OutOfRangeTooEarly` zurück) korrekt entschärft — 5ms
+                // liegen deutlich unter einer Frame-Periode (40ms bei
+                // 25fps) und verzögern kein tatsächlich verfügbares Grain
+                // spürbar. Der Extremfall braucht entweder einen Patch im
+                // vendorten MXL-C++ oder eine Rust-seitige Umgehung (z. B.
+                // "neuestes verfügbares Grain" statt strikt sequenziellem
+                // Index pollen) — nicht in diesem Schritt behoben, siehe
+                // Decisions-Eintrag.
+                thread::sleep(Duration::from_millis(5));
             }
             Err(e) => {
                 eprintln!("omp-mediaio(mxl): get_complete_grain {index} failed: {e}");

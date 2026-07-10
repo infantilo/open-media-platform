@@ -6,9 +6,10 @@ package registry
 // Felder werden von encoding/json stillschweigend ignoriert.
 
 type is04Node struct {
-	ID    string      `json:"id"`
-	Label string      `json:"label"`
-	API   is04NodeAPI `json:"api"`
+	ID    string              `json:"id"`
+	Label string              `json:"label"`
+	API   is04NodeAPI         `json:"api"`
+	Tags  map[string][]string `json:"tags"`
 }
 
 // is04NodeAPI/is04NodeEndpoint decoden nur das erste Node-API-Endpoint —
@@ -62,6 +63,11 @@ type NodeView struct {
 	Senders    []SenderView   `json:"senders"`
 	Receivers  []ReceiverView `json:"receivers"`
 	APIBaseURL string         `json:"api_base_url"`
+	// InstanceID ist der Wert des IS-04-Tags "urn:x-omp:instance" (leer,
+	// wenn der Tag fehlt) — vom Instanz-Launcher gesetzt
+	// (UMSETZUNG.md C8), erlaubt der UI, einen Stop-Control nur an
+	// Kacheln zu zeigen, die tatsächlich vom Launcher gestartet wurden.
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 // DeviceView ist die normalisierte Sicht auf ein IS-04-Device.
