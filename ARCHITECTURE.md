@@ -15,6 +15,25 @@ und (Ziel) Cloud. Jede Funktion (Mediaplayer, Audiomixer, Videomixer, DVE,
 OGraf-Grafik-Engine, Playout, …) ist ein eigenständiger, ersetzbarer Node —
 nichts monolithisch, nichts hartkodiert.
 
+**Zielbild „ganzes Sendezentrum" (2026-07-10):** Der Endzustand ist nicht ein
+einzelner Regieplatz, sondern ein Sendezentrum mit mehreren, dynamisch
+gestarteten Regieplätzen (Bild, Ton, Grafik, …) plus mehreren
+Sendeabwicklungen — manche 24/7, andere nur temporär (Event, Saison,
+Sondersendung). Die Bausteine dafür sind über dieses Dokument verteilt und
+dort im Detail beschrieben: Regieplatz = Workflow-Objekt mit Zeitsteuerung,
+Stop-Sicherheitsabfrage und Ressourcen-Vorprüfung (§6.2), dynamische
+Host-/I/O-Karten-Zuweisung und proaktive Migration (§6.1), reaktives
+Failover bei Service-Crash (§6.3), Microservice-Distribution über die UI
+(§6.4), Rollen-Scoping pro Regieplatz (§12). Redundanz ist dabei
+mehrschichtig und pro Workflow-Klasse verschieden: ST 2022-7 deckt nur
+Netzwerk-Pfade ab (P2); dazu kommen Hot-Standby für kritische Rollen (§6.3)
+und N+1-Reservekapazität auf Host-Ebene als Randbedingung der
+Placement-Engine (§6.1) — 24/7-Sendeabwicklungen brauchen Standby +
+unterbrechungsarme Wartungs-Migration, temporäre Regieplätze primär saubere
+Provisionierung und Ressourcen-Freigabe. Die vollständige Ausarbeitung der
+Redundanz-Klassen ist P2/P3-Scope; hier bewusst nur als Zielbild verankert,
+damit keine frühere Entscheidung dagegen läuft.
+
 ## 2. Standard-Fundament
 
 | Ebene | Standard | Zweck |
@@ -276,6 +295,40 @@ Erweiterung, keine Detailarbeit, und braucht drei neue Bausteine:
    zu verstehen — ehrlich im Scope halten statt zu versprechen, was nur
    mit PTP-referenziertem Frame-genauem State-Handoff ginge.
 
+**Erweiterung (2026-07-10): I/O-Karten als erstklassige Host-Ressource.**
+Anforderung: mehrere Barebone-Hosts mit z. B. Blackmagic-DeckLink- oder
+SDI↔2110-Gateway-Karten (physische SDI-/2110-Ein-/Ausgänge) müssen den
+Workflows (§6.2) dynamisch zugewiesen werden — dynamisches
+Ressourcen-Handling als eine der wichtigsten Projektaufgaben. Das
+Telemetrie-/Placement-Modell oben nannte bisher nur CPU/RAM/GPU/NIC —
+kontinuierliche, teilbare Größen. I/O-Karten/Ports sind eine andere
+Ressourcenklasse: **diskret und exklusiv** (ein Port ist belegt oder
+frei, nicht „zu 70 % ausgelastet"). Drei Konsequenzen:
+
+1. **Telemetrie-Schema:** Der Host-Agent (derselbe „ein Agent, zwei
+   Verben"-Agent aus §6.2) meldet neben Auslastungsmetriken ein
+   **Geräte-Inventar** — Kartentyp, Port-Anzahl/-Richtung,
+   Belegungszustand je Port (frei / belegt durch Instanz X).
+2. **Placement-Engine:** bekommt Claim/Release-Semantik für exklusive
+   Ressourcen; die Platzierungs-Hinweise eines Workflows (§6.2) können
+   Kartenanforderungen deklarieren („Rolle Ingest braucht 1× SDI-In").
+   Harte Bedingungen (Port frei?) werden vor weichen (CPU-Trend)
+   geprüft.
+3. **Migrations-Grenze:** Ein Node, der eine physische Karte nutzt, ist
+   nur auf einen Host mit äquivalenter freier Karte migrierbar — das
+   Make-before-break-Protokoll oben gilt unverändert, aber die
+   Kandidaten-Menge ist hardware-beschränkt; gibt es keinen Ersatz-Host
+   mit Karte, ist der ehrliche Befund „nicht migrierbar" (Alarm), kein
+   stiller Fallback.
+
+Standards dafür: IS-04 beschreibt nur die **registrierte** Node-Sicht
+(Devices/Senders/Receivers), nicht freie Host-Kapazität — das
+Inventar-Format ist Eigenentwicklung wie das restliche
+Telemetrie-Schema. Auf der k3s-Stufe (§4.3) entspricht das dem
+Device-Plugin-/Extended-Resources-Muster, das als Vorbild dient, nicht
+als Abhängigkeit (Bare-Metal/Quadlets brauchen dieselbe Semantik ohne
+k3s).
+
 **Standards-Abdeckung:** IS-04 (neue Instanz entdecken), IS-05 (die
 eigentliche Umschaltung), Descriptor-Selbstbeschreibung (Zustand
 exportieren, „kostenlos" wenn Parameter vollständig sind), ST 2022-7 als
@@ -407,6 +460,189 @@ run`/Binary von Hand):
   D7 bleibt der volle Zielzustand; diese Stufe 0 ist dessen lokale
   „starte dieses Image"-Verb-Implementierung, vorweggenommen.
 
+**Erweiterung (2026-07-10): Regieplatz = Workflow — Zeitsteuerung,
+Stop-Sicherheitsabfrage, Ressourcen-Vorprüfung.**
+
+Anforderung: Ein „Regieplatz" für eine Sendung soll **vor** der Sendung
+entworfen/konfiguriert und dann manuell **oder zeitgesteuert**
+gestartet/gestoppt werden; Stoppen soll eine Sicherheitsabfrage haben
+können; Starten muss vorher prüfen, wo passende Ressourcen frei sind.
+Der Kern davon ist ein Duplikat des Workflow-Objekts oben („Regieplatz"
+ist der Operator-Begriff für einen Workflow: Name, Node-Rollen,
+Verbindungs-Template, Platzierungs-Hinweise, Lifecycle-Status; Entwurf
+vor der Sendung = Anlegen des Workflow-Objekts im gestoppten Zustand,
+plus optional ein Snapshot (B7) als initialer Parameterzustand). Drei
+Punkte fehlten bisher und erweitern §6.2:
+
+1. **Zeitsteuerung (Scheduler):** Ein Workflow bekommt optionale
+   Zeitpläne (`start_at`/`stop_at`, einmalig oder wiederkehrend), die
+   der Orchestrator ausführt. Zeitbasis ist die synchronisierte
+   Systemzeit (NTP) — PTP (§2) ist Media-Zeitbasis, nicht
+   Kontroll-Zeitbasis, hier bewusst nicht vermengt. Verpasste
+   Zeitpunkte (Orchestrator war zum Zeitpunkt down) brauchen eine
+   definierte Nachhol-Regel pro Zeitplan (nachholen / verfallen lassen)
+   statt impliziten Verhaltens — Detail in D7.
+2. **Stop-Sicherheitsabfrage:** Pro Workflow konfigurierbar
+   (`confirm_stop`); die API verlangt dann eine explizite Bestätigung
+   (zweistufig: Stop ohne Bestätigungs-Flag → abgelehnt mit Hinweis,
+   UI zeigt Bestätigungsdialog). Für 24/7-Sendeabwicklungen (§1
+   Zielbild) ist „an" der sinnvolle Default. Wie sich ein
+   **zeitgesteuerter** Stop zu `confirm_stop` verhält (Bestätigung
+   erfolgt sinnvollerweise beim Anlegen des Zeitplans, nicht um 03:00
+   nachts), wird bei D7 festgelegt, nicht hier geraten.
+3. **Ressourcen-Vorprüfung als Start-Vorbedingung:** Der
+   Workflow-Start fragt zuerst Telemetrie/Placement (§6.1, inkl.
+   I/O-Karten-Inventar), ob **alle** Node-Rollen platzierbar sind, und
+   erstellt einen vollständigen Platzierungsplan (Rolle→Host, inkl.
+   exklusiver Karten-Claims), bevor irgendetwas provisioniert wird —
+   kein Teil-Start, der mangels Ressourcen auf halbem Weg hängen
+   bleibt. Damit wird die Placement-Engine aus §6.1 (dort advisory für
+   Migration unter Last) hier zur **harten Vorbedingung** des
+   Workflow-Starts; schlägt die Prüfung fehl, ist das Ergebnis eine
+   verständliche Ablehnung („keine freie SDI-In-Karte"), kein
+   halbgestarteter Regieplatz.
+
+Standards-Abdeckung: unverändert IS-04/IS-05 wie oben;
+Scheduler-Format, Bestätigungs-Protokoll und Platzierungsplan sind
+Eigenentwicklung. Testbarkeit: alle drei Punkte auf der
+Single-Host-Dev-Maschine simulierbar (fingierte Inventare wie bei
+§6.1; Scheduler/Bestätigung sind reine Control-Plane-Logik). Umsetzung
+in D7 (bestehende Sequenzierung nach D4, zusammen mit D6 — unverändert);
+keine A–C-Schritte ändern ihren Scope.
+
+### 6.3 Reaktives Failover: Service-Crash darf den Workflow nicht stoppen (geplant, ab P2)
+
+**Anforderung:** Microservices **und** die Hosts, auf denen sie laufen,
+werden überwacht; oberste Aufgabe: (a) bei knapp werdenden Ressourcen
+proaktiv entscheiden, welcher Service ausfallsicher
+(Make-before-break) auf einen anderen Host umzieht — das ist
+vollständig §6.1; (b) stirbt ein Service **unerwartet**, darf das nie
+zum Ausfall des gesamten Workflows führen — das ist von §6.1 **nicht**
+abgedeckt (dort explizit proaktiv/advisory bei Überlast-Trend, kein
+Crash-Pfad) und auch nicht von ST 2022-7 (P2 — Netzwerk-Pfad-Redundanz,
+kein Prozess-Failover). Dieser reaktive Teil ist ein eigener Baustein.
+
+**Einordnung — vier Stufen, aufeinander aufbauend:**
+
+1. **Crash-Erkennung existiert im Kern schon:** Health-Staleness über
+   den NATS-Bus (B4: offline nach 10 s ohne Health-Event) plus
+   IS-04-Registry-Expiry. Zusätzlich nötig für Media-Nodes: das
+   „media-ready"/„media flowing"-Signal aus dem Node-Contract (§5
+   Punkt 6) auch im Laufenden auswerten — ein Prozess kann leben, aber
+   keine Frames mehr liefern (real belegt: MXL-Read-Livelock, C8-Bug 2
+   in `docs/decisions.md` — Prozess-Lebendigkeit allein ist kein
+   Gesundheitsbeweis).
+2. **Restart-in-place als erste Stufe:** systemd/Quadlet-Restart-Policy
+   bzw. k3s-Rescheduling sind bereits Teil des Stacks (§4.3) — billig,
+   aber Sekunden Ausfall der betroffenen Funktion. Der Orchestrator
+   muss den Neustart nur beobachten (neue Node-ID erscheint per IS-04)
+   und das Verbindungs-Template des Workflows (§6.2) automatisch
+   wieder anwenden — derselbe `node.added`-Glue wie beim
+   Workflow-Start.
+3. **Degradation statt Kettenausfall:** Downstream-Nodes müssen den
+   Ausfall eines Upstream tolerieren, nie mitsterben. Das Muster ist
+   bereits gelebt: `omp-switcher` fällt bei verschwundener Quelle auf
+   Schwarzbild zurück statt den Prozess zu beenden (C7,
+   `docs/decisions.md`). Wird als SDK-Doku-Leitlinie für alle
+   Community-Nodes festgeschrieben (D5) — bewusst **kein** neuer
+   Pflichtpunkt in §5 (nicht maschinell prüfbar wie die bestehenden
+   Punkte, und nachrüstbar ohne Breaking Change).
+4. **Hot-Standby (N+1) für kritische Rollen:** Die Workflow-Definition
+   (§6.2) kann pro Node-Rolle einen mitlaufenden Standby verlangen
+   (Zustand per State-Import aus §5 Punkt 6 nachgeführt oder parallel
+   gespeist). Übernahme = IS-05-Umschaltung der Downstream-Receiver
+   wie in §6.1 — aber zwangsläufig **break-before-make** (die alte
+   Instanz ist tot); Umschaltzeit = Erkennungszeit + IS-05-PATCH,
+   nicht Prozess-Startzeit.
+
+Die Grade sind bewusst unterschiedlich teuer und pro Workflow-Klasse
+wählbar (24/7-Sendeabwicklung: Standby; temporärer Regieplatz:
+Restart + Degradation reicht oft): ST 2022-7 = 0 Frames Verlust (nur
+Netzpfad), Hot-Standby = kurzer Aussetzer, Restart-in-place = Sekunden.
+Welche Rolle welchen Grad braucht, ist Workflow-Konfiguration (§6.2),
+keine globale Plattform-Einstellung.
+
+**Standards-Abdeckung:** IS-04 (Verschwinden/Wiedererscheinen
+erkennen), IS-05 (Umschalten auf Standby), ST 2022-7 (komplementär,
+nur Netzpfad). Nicht abgedeckt: Failover-Zustandsmaschine,
+Standby-Semantik, Erkennungs-Schwellwerte — Eigenentwicklung, eng
+verzahnt mit §6.1 (gleiche Telemetrie, gleiche
+IS-05-Umschalt-Mechanik, anderer Auslöser und andere Reihenfolge).
+
+**Testbarkeit:** Anders als §6.1 vollständig auf der
+Single-Host-Dev-Maschine testbar: `kill -9` eines Nodes + automatische
+Standby-Übernahme/Template-Neuanwendung braucht keinen zweiten Host.
+Umsetzung ab P2, im D6-Umfeld (gleiche Bausteine); Detail-Schritte bei
+der D6-Konkretisierung. Bewusste Nicht-Ziele v1: frame-genaue,
+unsichtbare Übernahme (wie §6.1: „kein Ausfall des Workflows", nicht
+„unsichtbarer Schnitt") und Hochverfügbarkeit des Orchestrators selbst
+(Control-Plane-HA ist ein separates Thema; Nodes und Medien laufen bei
+Orchestrator-Ausfall ohnehin weiter, §4.1).
+
+### 6.4 Microservice-Distribution & -Lifecycle über die UI (geplant, ab P2)
+
+**Anforderung:** Microservices (Node-Images — OMPs eigene wie die von
+Drittanbietern) sollen über die UI installiert/importiert/entfernt/
+versioniert werden können; und es braucht eine Antwort, **in welcher
+Form** solche Microservices Nutzern überhaupt angeboten werden.
+
+**Einordnung:** Neu. §6.2 kennt den Katalog bekannter Typen
+(`deploy/catalog.json` in Stufe 0, später OCI-Label/Descriptor), aber
+der Katalog selbst ist handgepflegt — es gibt keinen UI-Pfad, um neue
+Node-Images hinzuzufügen, zu versionieren oder zu entfernen.
+
+**Angebotsform: OCI-Images in einer OCI-Registry** — exakt der Stack,
+der schon gesetzt ist (§4.3 Podman/k3s), keine neue Paketierungswelt:
+
+- Ein Node-Microservice wird als Multi-Arch-OCI-Image (§8) mit
+  Katalog-Descriptor (OCI-Label bzw. eingebettete `catalog.json`,
+  §6.2) publiziert — von OMP selbst wie von Drittanbietern, in einer
+  beliebigen erreichbaren OCI-Registry (on-prem z. B. als eigener
+  Quadlet-Container, Cloud: jede gehostete Registry).
+- **Installieren/Importieren** = Image-Referenz über die UI in den
+  Plattform-Katalog aufnehmen; der Orchestrator liest den Descriptor
+  aus dem Image und zeigt ihn vor der Aufnahme an.
+- **Versionieren** = Image-Tags für Menschen, intern wird immer der
+  **Digest** gepinnt (reproduzierbar, kein stiller Drift durch
+  bewegliche Tags). Update = neuen Tag/Digest im Katalog wählen;
+  laufende Workflows wechseln **nicht** automatisch, sondern per
+  Make-before-break (§6.1) oder geplantem Workflow-Neustart (§6.2).
+- **Entfernen** = Katalog-Eintrag löschen; laufende Instanzen des Typs
+  werden vorher über den normalen Workflow-/Instanz-Lifecycle gestoppt,
+  nie implizit gekillt.
+
+**Sicherheit (Anschluss an §4.6 und §12):** Nur signierte/
+vertrauenswürdige Images sind zulassbar — Signaturprüfung über die
+Container-Stack-eigenen Mechanismen (Podman `policy.json` /
+sigstore-artige Signaturen); der Vertrauensanker dafür ist bewusst
+**getrennt** von der step-ca-mTLS-CA aus §4.6 (Image-Signatur und
+Transport-TLS sind verschiedene Mechanismen, nicht vermengen).
+Katalog-Verwaltung ist eine administrative Rolle (§12), kein
+Operator-Recht. Aufnahme-Gate: der Contract-Konformitätstest
+(`tools/contract-check`, C9) — ein importierter Node, der den
+Node-Contract (§5) nicht erfüllt, erscheint nicht im
+Operator-Katalog.
+
+**Machbarkeit am bestehenden Stack:** hoch — das `runner`-Feld der
+Stufe 0 (§6.2) ist genau dafür vorgesehen (`"process"` heute,
+`"podman"`/Quadlet bzw. k3s dann); Podman und k3s ziehen Images per
+Digest nativ. Einzige echte Vorarbeit: Container-Images für die
+eigenen Nodes bauen (GStreamer+MXL-Basis-Image — in C8 bewusst
+zurückgestellt, wird hier zur Voraussetzung).
+
+**Standards-Abdeckung:** OCI Image/Distribution Spec (Format,
+Verteilung, Digest-Versionierung). NMOS ist unberührt — ein
+installierter Node registriert sich nach dem Start ganz normal per
+IS-04 und beschreibt sich per Descriptor; genau deshalb braucht der
+Orchestrator auch für fremde Images kein Typ-Sonderwissen (§2).
+Katalog-UI, Signatur-Policy, Descriptor-Format: Eigenentwicklung.
+
+**Testbarkeit:** Vollständig auf der Single-Host-Dev-Maschine
+durchspielbar (lokale Registry als Container, `podman push/pull`),
+sobald die Node-Images existieren. Umsetzung: P2, als Ausbau von D7
+(gleiche Katalog-/Agent-Bausteine); keine A–C-Schritte ändern ihren
+Scope.
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als
@@ -420,9 +656,9 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1), Workflow-Bereitstellung & -Verteilung (§6.2) | Community + Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
-| **P4 – Demo-Vorbereitung** | Minimal-Grafik-Node (kein volles OGraf/AI nötig) — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
+| **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
 
 ### 7.1 Zeitplan „Nebenbei" (5–10 h/Woche, ⌀ 30 h/Monat)
@@ -584,8 +820,11 @@ Konkrete Maßnahmen gegen "an der Marktentwicklung vorbei bauen":
 
 ## 11. Offene Entscheidungen
 
-Aktuell keine offenen Grundsatzentscheidungen mehr — Rest ist P1-Detailarbeit
-(siehe 11.1 für die IS-12/14-Methodik, die diese Detailarbeit anleitet).
+Offene Grundsatzentscheidungen stehen in `docs/decisions.md` (Stand
+2026-07-10: Projektlizenz [C1-Eintrag], Identity-Provider-Ansatz für §12,
+Render-Technik für den OGraf-Node §11.2) — Rest ist Detailarbeit der
+jeweiligen Phase (siehe 11.1 für die IS-12/14-Methodik, die diese
+Detailarbeit anleitet).
 
 ### 11.1 Entschieden: IS-12/14-Objektmodell-Methodik
 
@@ -625,6 +864,106 @@ Nur `PlaylistController` und `ChannelStatus` sind eigene Klassen — der Rest
 (Signal-Health) kommt vom Framework. Genau dieses Verhältnis (minimal-custom,
 maximal-standard) ist der Maßstab für jeden weiteren Node-Typ.
 
+### 11.2 OGraf-Grafik-Node (vollwertig; P4-Scope aufgewertet, 2026-07-10)
+
+**Anforderung:** Ein eigenständiger OGraf-Grafik-Microservice — manuell
+über die UI bedienbar, später zusätzlich vom OMP-Playout steuerbar —
+unter Nutzung des gesamten vorhandenen Grafik-Know-hows aus
+PIPELINE CONTROLLER (Steuerung und UI).
+
+**Einordnung:** OGraf war bisher nur als Zielformat genannt (§2,
+§3-Diagramm); der Phasenplan sah in P4 ausdrücklich einen
+„Minimal-Grafik-Node (kein volles OGraf nötig)" vor — ein Konflikt mit
+dieser Anforderung. Entschieden: der P4-Scope wird **explizit
+aufgewertet** (P4-Zeile in §7 angepasst, keine stille Änderung) zum
+vollwertigen OGraf-Node als weiterem Referenzknoten neben Playout
+(§11.1-Methodik). Das Risiko „mehr P4-Arbeit" ist ehrlich benannt;
+Gegengewicht: der größte Teil ist Know-how-Transfer statt Neuland, und
+die ~45 fertigen OGraf-Templates aus PIPELINE CONTROLLER
+(`templates/grafik/**/*.ograf.json`) sind direkt wiederverwendbar —
+OGraf-Templates sind portables HTML/JS nach EBU-Spec, keine
+Rust-Portierung nötig.
+
+**Know-how-Transfer aus PIPELINE CONTROLLER** (Patterns, nicht
+1:1-Code; verifiziert an `templates/grafik/**/*.ograf.json`,
+`lib/GrafixEngine.js`, `server.js`, `streamdeck.js`):
+
+- **Template-Modell:** `*.ograf.json`-Manifest nach EBU-OGraf-Spec
+  (`ograf.ebu.io` v1): `main` = ES-Modul (Custom Element), `schema` =
+  JSON Schema der Template-Daten (inkl. GDD-Typen wie
+  `color-rrggbb`), `stepCount` für mehrstufige Grafiken,
+  `renderRequirements` (Auflösung/Framerate). Für OMP zentral: das
+  per-Template-JSON-Schema ist die grafik-eigene Entsprechung unseres
+  Descriptor-Selbstbeschreibungs-Prinzips — die UI generiert
+  Eingabemasken pro Template generisch daraus, exakt wie das
+  Parameter-Panel aus dem IS-12/14-Descriptor (§4.5a), kein
+  Template-Sonderwissen im Code.
+- **Lifecycle-Steuerung:** die OGraf-Standard-Methoden am
+  Template-Element — `load()` → `playAction()`, `updateAction({data})`,
+  `stopAction()`; Weiterschalten mehrstufiger Templates per
+  `playAction({goto: step+1})` („Continue").
+- **Steuer-API-Muster:** show/hide/update/continue/status —
+  PIPELINE CONTROLLER: `POST /api/grafik/{show|hide|update|continue}`
+  + `GET /api/grafik/status` (Template-Liste + aktive Instanzen);
+  mehrere Grafik-Instanzen gleichzeitig (eigene ID je Einblendung),
+  Layer-Begriff (Overlay über Video vs. Vollbild-Ersatz);
+  Take/Takeout/Continue zusätzlich als Stream-Deck-Belegung.
+- **Render-Architektur:** Headless-Browser rendert eine Host-Seite,
+  Frames → `appsrc` → Video-Pipeline. Konkrete, dort erarbeitete
+  Erkenntnisse, die hier Neuland ersparen: **Pre-Cue** (OGraf-Module
+  laden per dynamischem `import()` deutlich langsamer als statisches
+  HTML — Template ~2,5 s vor der Einblendung unsichtbar vorladen,
+  sonst erscheint es zu spät oder gar nicht); **adaptive Render-Rate**
+  (volle fps nur bei aktiver Animation, ~1 fps bei statischer Grafik,
+  ~0,2 fps ohne Grafik); **Latenz-Kompensation** als kalibrierbarer
+  Wert (`grafikLatencyMs`).
+- **Playout-Integration (spätere Stufe):** Child-Event-Muster — ein
+  Playlist-Eintrag trägt Grafik-Kinder `{template, data, delay,
+  duration}` relativ zum Clip-Start; dazu Variablen-Auflösung aus dem
+  Playout-Kontext (z. B. Clip-Restlaufzeit) beim Show.
+
+**OMP-Modellierung (nach §11.1-Methodik, Klassennamen bei Umsetzung
+gegen MS-05-02 verifizieren):**
+
+```
+NcBlock "OGrafGraphics"
+├─ NcWorker "TemplateLibrary"   [custom class]
+│    properties: templates[] (aus *.ograf.json gescannt, readonly)
+├─ NcWorker "GraphicsChannel"   [custom class, ggf. mehrfach]
+│    properties: activeGraphics[] (id, template, layer, step)
+│    methods:    show(template, data, layer), update(id, data),
+│                continue(id), hide(id | all)
+└─ Standard-Monitoring-Klassen  [MS-05-02] am MXL-Sender
+```
+
+Die `data`-Argumente von `show`/`update` sind per Template dynamisch
+(JSON Schema aus dem Manifest); der Node validiert sie gegen das
+Template-Schema — der generische Methoden-Dispatch mit Argumenten
+existiert im SDK bereits (C4-prep). Das UI-Bundle des Nodes (§4.5)
+liefert die Grafiker-Bedienoberfläche (Template-Wahl, generiertes
+Formular aus dem Template-Schema, Take/Takeout/Continue) — **manuelle
+Bedienung ab Tag 1**; die Playout-Steuerung kommt später über
+**dieselben** IS-12/14-Methoden (Child-Event-Muster), keine zweite
+API.
+
+**Ausgabe:** MXL-Video-Flow mit Alpha (Key/Fill) — Kompositing per
+MXL-Zero-Copy im Switcher/Playout, wie in der P4-Zeile (§7) bereits
+vorgesehen. Wie Alpha über MXL transportiert wird (Pixelformat mit
+Alpha-Kanal vs. getrennte Key+Fill-Flows) ist bei der Umsetzung gegen
+die MXL-Spec zu verifizieren, nicht anzunehmen.
+
+**Offene Entscheidung** (`docs/decisions.md` 2026-07-10):
+Render-Technik — separater Headless-Chromium-Prozess
+(PIPELINE-CONTROLLER-bewährt) vs. GStreamer `wpesrc` (WPE WebKit,
+nativ in der Pipeline, Alpha direkt).
+
+**Phase/Testbarkeit:** P4 (kein neuer C/D-Schritt jetzt; A–C-Scope
+unverändert). Auf der Dev-Maschine vollständig testbar
+(Headless-Rendering + MXL-Loopback + `omp-viewer` aus C6 als
+Sichtkontrolle). Bekannte Einschränkung: Chromium stürzt in der
+Claude-Code-Sandbox ab (docs/decisions.md, B2) — betrifft nur die
+automatisierte Verifikation dort, nicht das Zielsystem.
+
 ### Entschieden: NMOS-Registry = nmos-cpp (Sony)
 
 Containerisiert (`rhastie/nmos-cpp` o.ä. Image) als eigener Podman-Quadlet-
@@ -643,3 +982,77 @@ Orchestrator und Node — Registry kennt nur Discovery/Connection, keine
 Control-Modelle, also keine Kollision.
 
 Source: [sony/nmos-cpp](https://github.com/sony/nmos-cpp)
+
+## 12. Nutzer- und Rollenmodell (AuthZ, geplant, ab P2 zusammen mit D3)
+
+**Anforderung:** Lokale Benutzerkonten **und** Active-Directory-Anbindung;
+ein Rollenmodell, das Bedienrechte auf Workflows/Regieplätze begrenzt:
+ein Nutzer bzw. eine Gruppe darf nur einen bestimmten Workflow/Regieplatz
+bedienen — der Bildmischer nur den Videomixer seines Regieplatzes, der
+Tonmeister nur sein Mischpult, nicht alles für alle.
+
+**Einordnung:** Neu. §2/§4.6 („IS-10 OAuth2/mTLS von Anfang an") decken
+die **Authentifizierung** von Clients und Nodes sowie die Absicherung der
+APIs ab — aber kein Nutzer-/Gruppen-/Rollenmodell, keine
+Verzeichnisdienst-Anbindung und kein Ressourcen-Scoping. D3
+(`UMSETZUNG.md`) baut die IS-10/mTLS-Transportschicht; dieses Kapitel
+definiert die Autorisierungs-Semantik darüber. Vier Bausteine:
+
+1. **Identität — lokale Konten und AD hinter einer Schnittstelle.**
+   IS-10 basiert auf OAuth2; der natürliche Schnitt ist eine
+   Token-Ausstellung (JWT mit Claims), die beide Identitätsquellen
+   bedient: lokale Konten für kleine/Standalone-Setups,
+   AD/LDAP(S)-Anbindung für Enterprise-Umgebungen. Ob dafür ein
+   externer Identity Provider eingebettet wird oder der Orchestrator
+   ein minimales eigenes User-Management plus direkten LDAP-Bind
+   bekommt, ist eine offene Grundsatzentscheidung
+   (`docs/decisions.md` 2026-07-10) — die AD-Anbindung selbst ist in
+   beiden Fällen Konfiguration, kein Sonder-Code pro Verzeichnisdienst.
+2. **Rollenmodell mit Workflow-Scope.** Rechte sind Tripel aus
+   (Rolle/Gruppe, **Wirkungsbereich**, Verben) — der Wirkungsbereich
+   ist ein Workflow (§6.2) oder eine einzelne Node-Rolle darin, keine
+   globalen Flags. Beispiel: Gruppe „Bildmischer Regie 1" → Verb
+   `operate` auf Node-Rolle „Videomixer" im Workflow „Regie 1".
+   Verben grob: `view` (sehen/Monitoring), `operate`
+   (Parameter/Methoden über den generischen Proxy bedienen),
+   `configure` (Workflows anlegen/ändern/planen, §6.2), `admin`
+   (Katalog §6.4, Nutzer-/Rechteverwaltung). AD-Gruppen mappen auf
+   Rollen, damit die Zuordnung im Verzeichnis gepflegt werden kann.
+3. **Durchsetzung zentral im Orchestrator.** Alle Node-Zugriffe der UI
+   laufen ohnehin über den generischen Parameter-/Methoden-Proxy (A8)
+   und die Graph-/Workflow-APIs — genau **eine** Durchsetzungsstelle;
+   die Nodes selbst bleiben rollenfrei (kein Rollenwissen im
+   Node-Contract §5, bewusst kein neuer Pflichtpunkt). mTLS/IS-10
+   (§4.6/D3) verhindert, dass der Proxy umgangen und ein Node direkt
+   angesprochen wird. Die UI-Shell filtert zusätzlich, was die Rolle
+   nicht erlaubt (der Operator sieht seinen Regieplatz, nicht die
+   ganze Facility) — Filterung ist Komfort, die Durchsetzung liegt
+   immer beim Orchestrator, nie umgekehrt.
+4. **Audit.** Jede schreibende Aktion wird mit Nutzer-Identität
+   protokolliert (wer hat wann welchen Parameter/Workflow geändert).
+
+**Know-how-Transfer PIPELINE CONTROLLER:** Dort existiert bereits ein
+kleines, bewährtes Muster — `users.json`, Session-Tokens, rollen-
+gegatete Endpunkte (`_requireAuth(req, res, ['grafiker','editor'])` pro
+API-Route) und ein User-Action-Log (`_userLog`). Übernommen wird das
+Pattern (Rollen-Gate an genau einer Stelle pro API-Zugriff + Audit-Log,
+Auth deaktivierbar solange kein Nutzer angelegt ist), erweitert um die
+dort fehlende Dimension **Wirkungsbereich**: PIPELINE CONTROLLER kannte
+nur globale Rollen — bei einem Ein-Kanal-System ausreichend, für ein
+Sendezentrum mit mehreren Regieplätzen (§1 Zielbild) nicht.
+
+**Standards-Abdeckung:** NMOS IS-10 / AMWA BCP-003-02 (OAuth2-
+Autorisierung für NMOS-APIs, Token-/Scope-Transport) trägt Tokens und
+API-Schutz. Die Semantik „Rolle X darf Workflow Y bedienen" ist in
+keinem NMOS-Standard definiert — das Claims-auf-Wirkungsbereich-Mapping
+im Orchestrator ist Eigenentwicklung. AD-Anbindung über LDAP(S) bzw.
+OIDC-Föderation ist Konfiguration der gewählten Identitätslösung.
+
+**Testbarkeit:** Vollständig auf der Single-Host-Dev-Maschine testbar —
+zwei Test-Nutzer/-Gruppen, ein Workflow: der „Bildmischer" kann
+Mixer-Parameter PATCHen, bekommt aber 403 auf dem Audio-Node und auf
+fremden Workflows; Audit-Log zeigt die Zugriffe. Umsetzung: P2,
+zusammen mit D3 (D3 liefert Transport + Token, §12 die Semantik
+darüber); keine A–C-Schritte ändern ihren Scope. Bewusste Nicht-Ziele
+v1: kein feldgenaues Parameter-ACL (der Scope endet an Node-Rolle +
+Verb), kein Multi-Tenant-Mandantenmodell.

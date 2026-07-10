@@ -1947,3 +1947,93 @@ Nodes. Testprozesse (Mock/Playout/omp-source/omp-viewer/omp-switcher der
 eigenen Verifikation) am Ende beendet — laufende Instanzen aus einer
 parallelen Nutzer-Sitzung (GUI-gestartete Viewer/Switcher-Instanzen)
 bewusst nicht angetastet; NATS-/NMOS-Registry-Container bleiben laufen.
+
+## 2026-07-10 — Architektur-Review (Fable): sieben Nutzeranforderungen
+gegen ARCHITECTURE.md geprüft und eingeordnet
+
+**Kontext:** Der Nutzer nannte sieben Anforderungen/Fragen (teils
+erwartete Dopplungen zu bereits behandelten Themen). Jede wurde gegen den
+aktuellen Stand von `ARCHITECTURE.md`/`UMSETZUNG.md`/diesem Log geprüft
+(Duplikat / Erweiterung / neu) und `ARCHITECTURE.md` entsprechend
+fortgeschrieben — reine Doku-Arbeit, kein Code, keine Änderung an den
+`UMSETZUNG.md`-Schritten (nur die §7-Phasenplan-Tabelle in
+ARCHITECTURE.md, wie schon bei §6.1/§6.2 praktiziert):
+
+1. **User-Management (lokal + AD, Rollen mit Workflow-Scope): neu** —
+   IS-10/mTLS (§2/§4.6, D3) ist Client-/Node-Auth, kein Nutzer-/
+   Rollen-/AD-Modell. Neuer Abschnitt **§12**.
+2. **OGraf-Microservice: Konflikt mit P4-Scope, aufgelöst als explizite
+   Aufwertung** — P4 sagte „Minimal-Grafik-Node (kein volles OGraf
+   nötig)". Neuer Abschnitt **§11.2** (vollwertiger OGraf-Node als
+   Referenzknoten nach §11.1-Methodik, Know-how-Transfer aus
+   PIPELINE CONTROLLERs GrafixEngine/Grafik-API/OGraf-Templates,
+   manuell ab Tag 1, Playout-Steuerung später über dieselben
+   IS-12/14-Methoden), P4-Zeile in §7 angepasst.
+3. **Regieplatz-Definition (vorab konfigurieren, manuell/zeitgesteuert
+   starten/stoppen, Stop-Bestätigung, Ressourcen-Vorprüfung):
+   größtenteils Duplikat des Workflow-Objekts, drei echte Lücken** —
+   Scheduler, `confirm_stop`, Placement als harte Start-Vorbedingung.
+   Als **Erweiterung in §6.2** ergänzt (Umsetzung D7, unverändert
+   sequenziert).
+4. **DeckLink-/SDI-IP-Karten als zuweisbare Ressource: Erweiterung von
+   §6.1** — Telemetrie/Placement kannte nur CPU/RAM/GPU/NIC; jetzt
+   Geräte-Inventar + Claim/Release für diskrete, exklusive Ressourcen +
+   Migrations-Grenze („nicht migrierbar ohne äquivalente Karte" als
+   ehrlicher Befund).
+5. **Reaktives Failover (Service stirbt ≠ Workflow stirbt): neu** —
+   §6.1 ist explizit proaktiv, 2022-7 nur Netzpfad. Neuer Abschnitt
+   **§6.3** (Erkennung via bestehender Health-Staleness + media-flowing,
+   Restart-in-place, Degradation nach dem gelebten C7-Schwarzbild-Muster
+   als SDK-Leitlinie, Hot-Standby N+1 pro Workflow-Rolle;
+   break-before-make ehrlich benannt).
+6. **Microservices über die UI installieren/versionieren/entfernen:
+   neu** — Angebotsform OCI-Images + Registry (bestehender
+   Podman/k3s-Stack, `runner`-Feld aus §6.2 Stufe 0), Digest-Pinning,
+   Signaturpflicht (Vertrauensanker bewusst getrennt von step-ca),
+   contract-check (C9) als Aufnahme-Gate. Neuer Abschnitt **§6.4**.
+7. **Gesamtziel Sendezentrum (mehrere Regieplätze, 24/7- vs. temporäre
+   Sendeabwicklungen, Redundanz): Zusammenfassung der Punkte 3–5 plus
+   §1-Vision** — als „Zielbild"-Absatz in **§1** verankert
+   (Redundanz-Klassen nur angedeutet, Ausarbeitung P2/P3).
+
+§7-P2-Zeile um §6.3/§6.4/§12 ergänzt; §11-Intro („keine offenen
+Grundsatzentscheidungen mehr") korrigiert — es gibt jetzt drei (Lizenz
+aus C1 plus die zwei folgenden).
+
+**Offene Entscheidung 1: Identitätslösung für §12 (lokale Konten + AD).**
+- *Problem:* IS-10 braucht eine OAuth2-Token-Ausstellung, die lokale
+  Konten **und** AD/LDAP bedient. Ein ausgewachsener Identity Provider
+  wäre der schwerste Fremdbaustein des gesamten Stacks.
+- *Optionen:* (a) Voll-IdP einbetten (Keycloak o. ä.) — alles fertig
+  (OIDC, LDAP-Federation, UI), aber Java-Runtime/Betriebsgewicht,
+  klarer Bruch mit der Ein-Binary-Linie; (b) schlanker Go-Ein-Binary-IdP
+  (z. B. Dex/ZITADEL-Klasse) — OIDC + LDAP-Connector bei moderatem
+  Gewicht, lokale Konten je nach Produkt begrenzt; (c) minimales
+  eigenes User-Management im Orchestrator (Nutzer/Gruppen in PostgreSQL,
+  §4.4) + direkter LDAP(S)-Bind gegen AD, Token-Ausstellung
+  IS-10-konform selbst — kleinster Fußabdruck, dafür Eigenverantwortung
+  für sicherheitskritischen Code (Passwort-Hashing, Token-Handling).
+- *Empfehlung:* Tendenz (c), mit (b) als Rückfallebene, falls bei der
+  D3-Detailplanung echte OIDC-Föderationsbedürfnisse (mehrere externe
+  Identitätsquellen, SSO über OMP hinaus) sichtbar werden; (a) nur,
+  wenn ein Kunde-/Betreiberumfeld Keycloak ohnehin betreibt.
+  Entscheidung wird erst bei D3-Detailplanung gebraucht — jetzt
+  dokumentiert, nicht entschieden.
+
+**Offene Entscheidung 2: Render-Technik des OGraf-Nodes (§11.2).**
+- *Problem:* OGraf-Templates sind Web-Tech (HTML/JS/Custom Elements) —
+  irgendein Browser-Renderer muss Frames in die GStreamer-Pipeline
+  liefern.
+- *Optionen:* (a) Headless-Chromium als Begleitprozess des Nodes —
+  exakt das in PIPELINE CONTROLLER produktiv bewährte Muster
+  (GrafixEngine: Screenshots → appsrc), volle Web-Kompatibilität,
+  aber die dickste denkbare Dependency; (b) GStreamer `wpesrc`
+  (WPE WebKit) — rendert direkt als Pipeline-Element mit nativem
+  Alpha-Kanal, deutlich schlanker und näher an der GStreamer-Linie,
+  aber WebKit- statt Chromium-Engine (Kompatibilitätsrisiko für
+  vorhandene Templates); (c) eigener Renderer — ausgeschlossen, OGraf
+  ist per Definition Web-Tech.
+- *Empfehlung:* Bei P4-Beginn (b) zuerst per Praxistest gegen die ~45
+  vorhandenen PIPELINE-CONTROLLER-Templates evaluieren; besteht WPE
+  den Test nicht, ist (a) der bewährte Fallback. Kein Blind-Commit auf
+  eine der beiden jetzt.
