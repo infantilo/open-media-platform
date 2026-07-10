@@ -486,6 +486,24 @@ impl RegistryClient {
         }
     }
 
+    /// Listet alle bei der Registry registrierten Sender (`GET
+    /// .../senders`, dieselbe Query-API wie `get_sender`) — Grundlage für
+    /// `omp-switcher`s reine IS-04-Discovery (`UMSETZUNG.md` C7, gleicher
+    /// Poll-Stil wie A5/`orchestrator/internal/registry/client.go`, hier
+    /// aber ohne Node-/Device-Join: der Switcher braucht pro Sender nur
+    /// `id`/`label`/`transport`/`flow_id`, kein Graph-Modell).
+    pub fn list_senders(&self) -> Result<Vec<Sender>, QueryError> {
+        let url = format!("{}/x-nmos/query/v1.3/senders", self.base_url);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<Vec<Sender>>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
     /// Hält eine registrierte Node am Leben (muss innerhalb von
     /// `registration_expiry_interval` wiederholt werden).
     pub fn heartbeat(&self, node_id: &str) -> Result<(), HeartbeatError> {

@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["omp-mediaio", "omp-node-sdk", "playout", "omp-source", "omp-viewer"]
+members = [
+    "omp-mediaio",
+    "omp-node-sdk",
+    "playout",
+    "omp-source",
+    "omp-viewer",
+    "omp-switcher",
+]

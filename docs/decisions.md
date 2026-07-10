@@ -1548,3 +1548,78 @@ vollständigen Pfad bis zum sichtbaren Bild abdeckt.
 C6 damit abgeschlossen. Alle drei Testprozesse (Orchestrator, `omp-source`,
 `omp-viewer`) am Sitzungsende beendet; NATS-/NMOS-Registry-Container
 bleiben laufen (persistente Dev-Infrastruktur).
+
+## 2026-07-10 — C7 (`omp-switcher`): Discovery-getriebener Rebuild braucht
+Absturzschutz gegen verwaiste Registry-Einträge
+
+**Ziel erreicht:** Dritter und letzter Demo-Service (`UMSETZUNG.md` C7) —
+Videomixer mit dynamischer, rein IS-04-discovery-basierter Quellenliste
+und Button-Auswahl, ohne Orchestrator-Änderung (0 Receiver in v0, wie
+spezifiziert).
+
+**SDK-Erweiterung:** `omp-node-sdk::is04::RegistryClient::list_senders`
+(`GET .../senders`, gleiche Query-API wie C6s `get_sender`) — einziger
+neuer Baustein, alles andere (Descriptor/Methoden-Dispatch mit
+Argumenten, IS-04-Sender+Flow-Registrierung mit vorab bekannter ID) war
+bereits aus C3/C4-prep/C5 vorhanden.
+
+**Pipeline (`pipeline.rs`), 1:1 aus `MasterPipeline.js` übernommen:**
+`input-selector name=isel sync-streams=false`, `sink_0` permanent
+Schwarzbild (`videotestsrc pattern=black`), ein Zweig pro entdeckter
+Quelle (`MxlVideoInput ! videoconvert!videoscale!videorate!capsfilter(feste
+Maße) ! isel.sink_N`, harmonisiert auf dieselben festen Maße/Framerate wie
+`omp-source`, damit `input-selector` nur zwischen bereits kompatiblen Caps
+umschaltet), danach `isel ! MxlVideoOutput` unter einer über Neuaufbauten
+hinweg konstanten `flow_id`. Zwei getrennte Änderungsarten: eine geänderte
+Quellenmenge (`Command::SetInputs`, aus dem 2s-Discovery-Poll in `main.rs`)
+baut die **gesamte Pipeline neu** auf; ein Button-Klick
+(`Command::Select`) ändert nur `isel`s `active-pad`-Property auf der
+laufenden Pipeline, kein Neuaufbau.
+
+**Beim Verifizieren gefunden und behoben (echter Bug, kein Verifikations-
+Sonderfall):** Ein Rebuild kann fehlschlagen, wenn die Registry
+kurzzeitig einen verwaisten Sender-Eintrag zurückgibt (Node-Prozess
+beendet, aber `registration_expiry_interval` noch nicht abgelaufen) —
+`MxlVideoInput::new` schlägt dann mit "Flow not found" fehl, weil der
+referenzierte MXL-Flow mit dem Schreiber-Prozess verschwunden ist.
+Ursprüngliche Implementierung brach in diesem Fall die gesamte
+Pipeline-Thread-Schleife ab → der komplette `omp-switcher`-Prozess
+beendete sich (`main.rs`s `events`-Future endet, `main()` kehrt zurück) —
+Widerspruch zum Kernanspruch aus C7 ("Ausgang läuft auch bei null
+Quellen") und zur MXL-Flow-Konstanz-Garantie ("Viewer weiter
+angeschlossen bleiben können"), die tote Prozesse gar nicht erst
+gewährleisten kann. **Fix:** Schlägt der Rebuild mit den entdeckten
+Quellen fehl, fällt der Pipeline-Thread auf einen garantiert baubaren
+Schwarzbild-Only-Rebuild zurück statt sich zu beenden; `current_inputs`
+wird trotzdem auf den (fehlgeschlagenen) Versuch gesetzt, damit nicht bei
+jedem 2s-Poll erneut derselbe kaputte Stand versucht wird, bis die
+Registry sich selbst korrigiert (beobachtet: deutlich unter 60s, da
+nmos-cpp verwaiste Einträge offenbar proaktiv aufräumt, nicht erst lazy
+bei Zugriff).
+
+**Verifiziert (End-to-End, sauberer Neustart nach `mxl-info -g`, um
+Altlasten aus vorherigen Debug-Läufen dieser Sitzung auszuschließen):**
+- `cargo build`/`clippy --all-targets`/`fmt --check`/`test --workspace`
+  (inkl. `omp-mediaio`s Loopback-Test) sowie `cargo deny check` grün
+  (Workspace jetzt 6 Members).
+- 2 `omp-source` + 1 `omp-switcher` + 1 `omp-viewer`: Switcher entdeckt
+  beide Quellen automatisch (`GET .../params/inputs` zeigt beide Labels),
+  ohne dass der Switcher neugestartet werden musste.
+- Switcher-Ausgang → Viewer im Graph verkabelt: Schwarzbild-Fallback läuft
+  von Anfang an (~5 fps MJPEG, sichtbar schwarzes Bild) — bestätigt "läuft
+  auch bei null aktiver Auswahl".
+- `POST .../methods/select` (Source A) → **visuell bestätigtes** SMPTE-
+  Farbbalkenbild im Viewer, danach (Source B) → springender Ball, danach
+  (leere `senderId`) → zurück zu Schwarz — jeweils ohne Pipeline-Neuaufbau
+  auf Viewer-Seite, volle ~5 fps Streaming-Rate (487 KB/5s bzw. 114 KB/4s,
+  keine Verzögerung/kein Hängenbleiben mehr, nachdem der Absturz-Fix stand).
+- Ein während der Verifikation reproduzierter, durch Sitzungs-Prozess-
+  Churn ausgelöster verwaister Registry-Eintrag löste den Fallback-Pfad
+  tatsächlich aus (Log-Zeile "falling back to black") — der Switcher blieb
+  am Leben und lieferte danach mit dem korrigierten Quellenstand normal
+  weiter, **live beobachtet**, kein rein hypothetischer Test.
+
+C7 damit abgeschlossen. Alle vier Testprozesse (Orchestrator, 2×
+`omp-source`, `omp-switcher`, `omp-viewer`) am Sitzungsende beendet;
+`mxl-info -g` räumt testbedingte verwaiste Flows auf; NATS-/NMOS-Registry-
+Container bleiben laufen (persistente Dev-Infrastruktur).
