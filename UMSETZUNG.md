@@ -817,7 +817,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C8 | erledigt | [C8] GUI-Launch: Instanz-Launcher (Katalog, Start/Stop, Restart-Persistenz) | 2026-07-10 |
 | C9 | erledigt | [C9] Contract-Konformitätstest (tools/contract-check) | 2026-07-10 |
 | C10 | erledigt | [C10] omp-video-mixer-me: Crosspoint/DVE/Keyer + Tally-Bus im SDK | 2026-07-11 |
-| C11 | offen | | |
+| C11 | erledigt | [C11] omp-audio-mixer: dynamische Kanäle, Gain/EQ, Audio-Follow-Video + MXL-Audio-Fundament im SDK | 2026-07-11 |
 | C12 | offen | | |
 | C13 | offen | | |
 | C14/C15 | offen (später, nach C10–C13) | | |

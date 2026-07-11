@@ -14,7 +14,12 @@ use serde_json::Value;
 
 const INTERFACE_NAME: &str = "eth0";
 const TRANSPORT_RTP: &str = "urn:x-nmos:transport:rtp";
-const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
+/// IS-04-Format-URN für Video-Flows/-Sources — `pub`, damit discovery-
+/// polling Nodes (`omp-switcher`/`omp-video-mixer-me`, C7/C10) MXL-Sender
+/// per `get_flow_format()` danach filtern können, statt den String selbst
+/// zu duplizieren.
+pub const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
+const FORMAT_AUDIO: &str = "urn:x-nmos:format:audio";
 
 /// Transport-URN für MXL-Zero-Copy-Sender/-Receiver (`UMSETZUNG.md` C4).
 /// `x-omp`, weil MXL (Stand v1.0.1) keine eigene registrierte NMOS-
@@ -185,9 +190,21 @@ impl Sender {
     }
 }
 
-/// Minimale, gültige IS-04-v1.3-Source-Resource (generisches Video, kein
-/// Audio) — Pflichtfeld-Kombination aus `resource_core.json` +
-/// `source_core.json` + `source_generic.json`, gegen die AMWA-Spec
+/// Audio-Kanalbeschreibung (`source_audio.json`: `channels[].label`
+/// Pflicht, `symbol` optional aus der VSF-TR-03-Anhang-A-Liste) — gegen
+/// die AMWA-Spec verifiziert (`AMWA-TV/nmos-discovery-registration`,
+/// `APIs/schemas/source_audio.json`, 2026-07-11), nicht geraten.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceChannel {
+    pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+/// Minimale, gültige IS-04-v1.3-Source-Resource, Video **und** Audio
+/// (`channels` optional, nur bei Audio gesetzt, s. u.) — Pflichtfeld-
+/// Kombination aus `resource_core.json` + `source_core.json` +
+/// `source_generic.json`/`source_audio.json`, gegen die AMWA-Spec
 /// verifiziert (specs.amwa.tv / `AMWA-TV/is-04` v1.3.x), nicht geraten.
 /// Jeder MXL-Sender braucht eine Source (Flows referenzieren `source_id`),
 /// aber für OMPs Zwecke (keine Rig-Topologie, ein Sender = eine Source)
@@ -204,6 +221,13 @@ pub struct Source {
     pub parents: Vec<String>,
     pub clock_name: Option<String>,
     pub format: String,
+    /// Nur bei Audio-Sources gesetzt (`source_audio.json`: `channels`
+    /// Pflichtfeld dort, in `source_video.json` unbekannt) — deshalb
+    /// `skip_serializing_if`, damit Video-Sources exakt dasselbe JSON wie
+    /// bisher senden (keine Regression am bereits gegen nmos-cpp
+    /// verifizierten Video-Pfad, C5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<Vec<SourceChannel>>,
 }
 
 impl Source {
@@ -219,6 +243,33 @@ impl Source {
             parents: vec![],
             clock_name: None,
             format: FORMAT_VIDEO.to_string(),
+            channels: None,
+        }
+    }
+
+    /// `channel_count` erzeugt generische Kanal-Labels ("Channel 1", …) —
+    /// reicht fürs Minimalausbau-Ziel (`UMSETZUNG.md` C11); ein Node mit
+    /// echten benannten Kanälen (z. B. "L"/"R") kann `channels` später
+    /// direkt am Rückgabewert überschreiben.
+    pub fn new_audio(id: &str, label: &str, device_id: &str, channel_count: u32) -> Self {
+        let channels = (1..=channel_count.max(1))
+            .map(|n| SourceChannel {
+                label: format!("Channel {n}"),
+                symbol: None,
+            })
+            .collect();
+        Source {
+            id: id.to_string(),
+            version: now_version(),
+            label: label.to_string(),
+            description: String::new(),
+            tags: HashMap::new(),
+            caps: HashMap::new(),
+            device_id: device_id.to_string(),
+            parents: vec![],
+            clock_name: None,
+            format: FORMAT_AUDIO.to_string(),
+            channels: Some(channels),
         }
     }
 }
@@ -328,6 +379,74 @@ impl Flow {
             interlace_mode: "progressive".to_string(),
         }
     }
+}
+
+/// Minimale, gültige IS-04-v1.3-Audio-Flow-Resource — eigener Typ statt
+/// weiterer optionaler Felder auf [`Flow`] (dessen Felder wie
+/// `frame_width`/`components`/`colorspace` sind zwingend video-spezifisch
+/// und für Audio schlicht falsch, kein gemeinsames Schema). Pflichtfeld-
+/// Kombination aus `flow_core.json` + `flow_audio.json` +
+/// `flow_audio_raw.json`, gegen die AMWA-Spec verifiziert
+/// (`AMWA-TV/nmos-discovery-registration`, `APIs/schemas/flow_audio_raw.json`,
+/// 2026-07-11), nicht geraten — `media_type` akzeptiert laut Schema neben
+/// den vier `audio/L*`-PCM-Enum-Werten auch das Muster `^audio\/[^\s\/]+$`,
+/// was `omp_mediaio::mxl`s `"audio/float32"` (MXLs eigene Konvention,
+/// `third_party/mxl/lib/tests/data/audio_flow.json`) direkt abdeckt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioFlow {
+    pub id: String,
+    pub version: String,
+    pub label: String,
+    pub description: String,
+    pub tags: HashMap<String, Vec<String>>,
+    pub source_id: String,
+    pub device_id: String,
+    pub parents: Vec<String>,
+    pub format: String,
+    pub sample_rate: GrainRate,
+    pub media_type: String,
+    pub bit_depth: u32,
+}
+
+impl AudioFlow {
+    pub fn new(
+        id: &str,
+        label: &str,
+        device_id: &str,
+        source_id: &str,
+        sample_rate_numerator: u32,
+        media_type: &str,
+        bit_depth: u32,
+    ) -> Self {
+        AudioFlow {
+            id: id.to_string(),
+            version: now_version(),
+            label: label.to_string(),
+            description: String::new(),
+            tags: HashMap::new(),
+            source_id: source_id.to_string(),
+            device_id: device_id.to_string(),
+            parents: vec![],
+            format: FORMAT_AUDIO.to_string(),
+            sample_rate: GrainRate {
+                numerator: sample_rate_numerator,
+                denominator: 1,
+            },
+            media_type: media_type.to_string(),
+            bit_depth,
+        }
+    }
+}
+
+/// Video- oder Audio-Flow — `#[serde(untagged)]`, damit
+/// `RegistryClient::register("flow", &resource)` exakt das jeweils
+/// innere Objekt sendet (kein zusätzlicher Enum-Diskriminator-Key, den
+/// nmos-cpps Schema nicht kennt).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum FlowResource {
+    Video(Flow),
+    Audio(AudioFlow),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -506,6 +625,32 @@ impl RegistryClient {
             Ok(mut resp) => resp
                 .body_mut()
                 .read_json::<Device>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
+    /// Löst nur das `format`-Feld eines Flows auf (`GET .../flows/<id>`,
+    /// z. B. `"urn:x-nmos:format:video"`/`"urn:x-nmos:format:audio"`) —
+    /// seit `omp-audio-mixer` (`UMSETZUNG.md` C11) gibt es MXL-Sender
+    /// unterschiedlichen Formats im selben Netz; reine
+    /// `transport==MXL`-Discovery (wie `omp-switcher`/
+    /// `omp-video-mixer-me`, C7/C10) würde sonst versuchen, einen
+    /// Audio-Flow als Video-Eingang zu öffnen. Absichtlich nicht der
+    /// volle `Flow`/`AudioFlow`-Typ: der Aufrufer braucht nur das eine
+    /// Feld, beide Flow-Varianten haben es unter demselben Namen.
+    pub fn get_flow_format(&self, flow_id: &str) -> Result<String, QueryError> {
+        #[derive(Deserialize)]
+        struct FlowFormat {
+            format: String,
+        }
+        let url = format!("{}/x-nmos/query/v1.3/flows/{}", self.base_url, flow_id);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<FlowFormat>()
+                .map(|f| f.format)
                 .map_err(|e| QueryError::Request(e.to_string())),
             Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
             Err(e) => Err(QueryError::Request(e.to_string())),

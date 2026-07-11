@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use crate::health;
 use crate::is04::{
-    self, Device, Flow, HeartbeatError, INSTANCE_TAG, NodeResource, Receiver, RegistryClient,
-    Sender, Source,
+    self, AudioFlow, Device, Flow, FlowResource, HeartbeatError, INSTANCE_TAG, NodeResource,
+    Receiver, RegistryClient, Sender, Source,
 };
 use crate::server::{self, ParamStore};
 
@@ -68,16 +68,42 @@ pub struct SenderSpec {
     pub flow: Option<FlowSpec>,
 }
 
-/// Video-Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`). `id` sollte
-/// die MXL-`flow-id` des schreibenden Nodes sein (Konvention Flow-UUID ==
-/// MXL-flow-id, `UMSETZUNG.md` C4) — ohne `id` wird eine neue UUID generiert,
-/// die dann selbst als MXL-`flow-id` verwendet werden muss.
-pub struct FlowSpec {
-    pub id: Option<String>,
-    pub frame_width: u32,
-    pub frame_height: u32,
-    pub grain_rate_numerator: u32,
-    pub grain_rate_denominator: u32,
+/// Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`), Video **oder**
+/// Audio — zwei Varianten statt eines gemeinsamen Felderbags, weil die
+/// IS-04-Pflichtfelder für Video (`frame_width`/`grain_rate`/…) und Audio
+/// (`sample_rate`/`bit_depth`/…) sich nicht überschneiden (s.
+/// `is04::Flow` vs. `is04::AudioFlow`). `id` sollte die MXL-`flow-id` des
+/// schreibenden Nodes sein (Konvention Flow-UUID == MXL-flow-id,
+/// `UMSETZUNG.md` C4) — ohne `id` wird eine neue UUID generiert, die dann
+/// selbst als MXL-`flow-id` verwendet werden muss.
+pub enum FlowSpec {
+    Video {
+        id: Option<String>,
+        frame_width: u32,
+        frame_height: u32,
+        grain_rate_numerator: u32,
+        grain_rate_denominator: u32,
+    },
+    /// `media_type`/`bit_depth` folgen `omp_mediaio::mxl`s Audio-
+    /// Konvention (`"audio/float32"`/32) — hier trotzdem als Argumente
+    /// statt hartkodiert, damit ein künftiger Node mit anderem PCM-Format
+    /// (z. B. `audio/L24`) `is04::AudioFlow` nicht duplizieren muss.
+    Audio {
+        id: Option<String>,
+        sample_rate_numerator: u32,
+        channel_count: u32,
+        media_type: String,
+        bit_depth: u32,
+    },
+}
+
+impl FlowSpec {
+    fn id(&self) -> &Option<String> {
+        match self {
+            FlowSpec::Video { id, .. } => id,
+            FlowSpec::Audio { id, .. } => id,
+        }
+    }
 }
 
 /// Beschreibt einen einzelnen Receiver. `id` optional wie bei
@@ -168,7 +194,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         receiver_ids.clone(),
     );
     let mut sources: Vec<Source> = vec![];
-    let mut flows: Vec<Flow> = vec![];
+    let mut flows: Vec<FlowResource> = vec![];
     let senders: Vec<Sender> = sender_ids
         .iter()
         .zip(&config.senders)
@@ -182,18 +208,54 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
             }
             if let Some(flow_spec) = &spec.flow {
                 let source_id = crate::idgen::new_v4();
-                let flow_id = flow_spec.id.clone().unwrap_or_else(crate::idgen::new_v4);
-                sources.push(Source::new_video(&source_id, &label, &device_id));
-                flows.push(Flow::new_video(
-                    &flow_id,
-                    &label,
-                    &device_id,
-                    &source_id,
-                    flow_spec.frame_width,
-                    flow_spec.frame_height,
-                    flow_spec.grain_rate_numerator,
-                    flow_spec.grain_rate_denominator,
-                ));
+                let flow_id = flow_spec
+                    .id()
+                    .clone()
+                    .unwrap_or_else(crate::idgen::new_v4);
+                match flow_spec {
+                    FlowSpec::Video {
+                        frame_width,
+                        frame_height,
+                        grain_rate_numerator,
+                        grain_rate_denominator,
+                        ..
+                    } => {
+                        sources.push(Source::new_video(&source_id, &label, &device_id));
+                        flows.push(FlowResource::Video(Flow::new_video(
+                            &flow_id,
+                            &label,
+                            &device_id,
+                            &source_id,
+                            *frame_width,
+                            *frame_height,
+                            *grain_rate_numerator,
+                            *grain_rate_denominator,
+                        )));
+                    }
+                    FlowSpec::Audio {
+                        sample_rate_numerator,
+                        channel_count,
+                        media_type,
+                        bit_depth,
+                        ..
+                    } => {
+                        sources.push(Source::new_audio(
+                            &source_id,
+                            &label,
+                            &device_id,
+                            *channel_count,
+                        ));
+                        flows.push(FlowResource::Audio(AudioFlow::new(
+                            &flow_id,
+                            &label,
+                            &device_id,
+                            &source_id,
+                            *sample_rate_numerator,
+                            media_type,
+                            *bit_depth,
+                        )));
+                    }
+                }
                 sender.flow_id = Some(flow_id);
             }
             sender
@@ -298,7 +360,7 @@ async fn heartbeat_loop(
     node_res: NodeResource,
     device_res: Device,
     sources: Vec<Source>,
-    flows: Vec<Flow>,
+    flows: Vec<FlowResource>,
     senders: Vec<Sender>,
     receivers: Vec<Receiver>,
     publisher: Option<Arc<health::Publisher>>,
@@ -357,7 +419,7 @@ async fn register_with_retry(
     node: &NodeResource,
     device: &Device,
     sources: &[Source],
-    flows: &[Flow],
+    flows: &[FlowResource],
     senders: &[Sender],
     receivers: &[Receiver],
 ) {

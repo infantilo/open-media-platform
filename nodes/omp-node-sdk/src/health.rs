@@ -11,7 +11,8 @@
 
 use std::fmt;
 
-use serde::Serialize;
+use futures_util::StreamExt;
+use serde::{Deserialize, Serialize};
 
 /// Auf `omp.health.<node_id>` veröffentlichter Payload — identisches
 /// JSON-Schema wie `health.Status` im Go-Mock-Node.
@@ -42,7 +43,7 @@ pub struct Alert {
 /// (`UMSETZUNG.md` C10) veröffentlicht bei jedem Crosspoint-Wechsel ein
 /// Tally-Off für den zuvor aktiven und ein Tally-On für den neu aktiven
 /// Quell-Node.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tally {
     pub on: bool,
 }
@@ -129,5 +130,75 @@ impl Publisher {
             .await
             .map_err(PublishError::Nats)?;
         self.client.flush().await.map_err(PublishError::Flush)
+    }
+}
+
+/// Abonniert den gesamten Tally-Baum (`omp.tally.>`) — Gegenstück zu
+/// [`Publisher::publish_tally`], erste Nutzung durch `omp-audio-mixer`s
+/// Audio-Follow-Video (`UMSETZUNG.md` C11, `ARCHITECTURE.md` §13.2: „kein
+/// neuer Sync-Mechanismus … derselbe Tally-Mechanismus, der heute schon
+/// Kacheln im Flow-Editor rot färbt"). Eigene NATS-Verbindung, unabhängig
+/// vom `Publisher` (den `NodeHandle` intern für Health/Alert/Tally-Publish
+/// hält) — Abonnieren ist ein grundsätzlich anderer Nutzungspfad
+/// (Empfangs- statt Sende-Richtung) und nicht jeder Node braucht ihn.
+pub async fn subscribe_tally(url: &str) -> Result<TallySubscription, SubscribeError> {
+    let client = async_nats::ConnectOptions::new()
+        .retry_on_initial_connect()
+        .max_reconnects(None)
+        .name("omp-node-sdk-tally-sub")
+        .connect(url)
+        .await
+        .map_err(SubscribeError::Connect)?;
+    let subscriber = client
+        .subscribe("omp.tally.>")
+        .await
+        .map_err(SubscribeError::Subscribe)?;
+    Ok(TallySubscription {
+        _client: client,
+        subscriber,
+    })
+}
+
+#[derive(Debug)]
+pub enum SubscribeError {
+    Connect(async_nats::ConnectError),
+    Subscribe(async_nats::SubscribeError),
+}
+
+impl fmt::Display for SubscribeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SubscribeError::Connect(e) => write!(f, "tally subscribe: connect: {e}"),
+            SubscribeError::Subscribe(e) => write!(f, "tally subscribe: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SubscribeError {}
+
+/// Offenes Tally-Abonnement. `_client` wird nur gehalten, damit die
+/// NATS-Verbindung offen bleibt (kein `Drop`-Sonderverhalten nötig).
+pub struct TallySubscription {
+    _client: async_nats::Client,
+    subscriber: async_nats::Subscriber,
+}
+
+impl TallySubscription {
+    /// Liefert das nächste Tally-Event als `(node_id, on)`, extrahiert aus
+    /// Subject (`omp.tally.<node_id>`) und Body (`{"on": bool}`).
+    /// Überspringt Nachrichten, die nicht zum erwarteten Schema passen
+    /// (z. B. während eines künftigen Schema-Wechsels), statt den Node
+    /// daran abstürzen zu lassen. `None`, wenn die Verbindung endet.
+    pub async fn next(&mut self) -> Option<(String, bool)> {
+        loop {
+            let msg = self.subscriber.next().await?;
+            let Some(node_id) = msg.subject.as_str().strip_prefix("omp.tally.") else {
+                continue;
+            };
+            let Ok(tally) = serde_json::from_slice::<Tally>(&msg.payload) else {
+                continue;
+            };
+            return Some((node_id.to_string(), tally.on));
+        }
     }
 }

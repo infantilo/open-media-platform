@@ -293,6 +293,258 @@ impl Drop for MxlVideoOutput {
     }
 }
 
+fn audio_flow_def(flow_id: &str, label: &str, sample_rate: u32, channel_count: u32) -> String {
+    // Struktur 1:1 nach third_party/mxl/lib/tests/data/audio_flow.json
+    // (offizielles Beispiel) — kein Rätselraten über MXLs Audio-Flow-
+    // Schema. Audio ist bei MXL ein **"continuous"**-Flow (Sample-Ring-
+    // Buffer), kein "discrete"-Grain-Flow wie Video (`third_party/mxl/
+    // docs/Architecture.md`: "Discrete ringbuffers are used for granular
+    // data types such as video ... Continuous ringbuffers are used for
+    // audio") — deshalb kein `grain_rate`-Feld, sondern `sample_rate`,
+    // und `to_samples_writer()` statt `to_grain_writer()` beim Öffnen
+    // (`MxlAudioOutput::new` unten).
+    serde_json::json!({
+        "id": flow_id,
+        "label": label,
+        "description": format!("OpenMediaPlatform: {label}"),
+        "tags": {
+            "urn:x-nmos:tag:grouphint/v1.0": [format!("{flow_id}:Audio")],
+        },
+        "format": "urn:x-nmos:format:audio",
+        "parents": [],
+        "media_type": "audio/float32",
+        "sample_rate": {
+            "numerator": sample_rate,
+        },
+        "channel_count": channel_count,
+        "bit_depth": 32,
+    })
+    .to_string()
+}
+
+fn audio_caps(sample_rate: u32, channels: u32, layout: &str) -> gst::Caps {
+    // `layout=non-interleaved` (planar, ein Kanal nach dem anderen im
+    // gemappten Buffer) passt direkt auf MXLs `channel_data_mut(channel)`-
+    // Zugriff (`SamplesWriteAccess`, ein eigener Byte-Slice pro Kanal) —
+    // kein manuelles Kanal-Deinterleaving nötig. `audiobuffersplit`
+    // akzeptiert aber nur `layout=interleaved` (`gst-inspect-1.0
+    // audiobuffersplit`, Sink- **und** Src-Pad-Template) — deshalb hier
+    // parametrisiert statt fest verdrahtet: interleaved bis inklusive
+    // `audiobuffersplit`, non-interleaved erst danach (s.
+    // `MxlAudioOutput::new`).
+    gst::Caps::builder("audio/x-raw")
+        .field("format", "F32LE")
+        .field("rate", sample_rate as i32)
+        .field("channels", channels as i32)
+        .field("layout", layout)
+        .build()
+}
+
+/// MXL-Audio-Ausgang, Pendant zu [`MxlVideoOutput`] für **continuous**-
+/// Flows (s. `audio_flow_def`). `audiobuffersplit` erzwingt eine feste
+/// Blockgröße (`output-buffer-duration` 1/100 = 10ms, gleicher Batch-Wert
+/// wie der Default im offiziellen `mxl`-Rust-Beispiel
+/// `rust/mxl/examples/flow-writer.rs::write_samples`, dessen Aufruf-Muster
+/// — `open_samples(index, batch_size)`, danach `index += batch_size` —
+/// hier 1:1 übernommen wird, nur mit echten Pipeline-Samples statt
+/// synthetischer Testbytes) — ohne feste Blockgröße hätte jeder
+/// `appsink`-Pull eine andere Byteanzahl, `open_samples` erwartet aber
+/// eine pro Batch vorab bekannte `count`.
+pub struct MxlAudioOutput {
+    valve: gst::Element,
+    running: Arc<AtomicBool>,
+}
+
+impl MxlAudioOutput {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        sample_rate: u32,
+        channels: u32,
+    ) -> Result<Self, String> {
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .build()
+            .map_err(|e| format!("audioconvert: {e}"))?;
+        let audioresample = gst::ElementFactory::make("audioresample")
+            .build()
+            .map_err(|e| format!("audioresample: {e}"))?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", audio_caps(sample_rate, channels, "interleaved"))
+            .build()
+            .map_err(|e| format!("capsfilter(audio): {e}"))?;
+        let split = gst::ElementFactory::make("audiobuffersplit")
+            .property("output-buffer-duration", gst::Fraction::new(1, 100))
+            .build()
+            .map_err(|e| format!("audiobuffersplit: {e}"))?;
+        // Erst nach `audiobuffersplit` auf non-interleaved wandeln (s.
+        // `audio_caps`-Kommentar) — eigener `audioconvert`, weil der
+        // erste bereits für Format/Kanalzahl gebraucht wird und
+        // `audiobuffersplit` zwischen beiden ausschließlich interleaved
+        // akzeptiert.
+        let planar_convert = gst::ElementFactory::make("audioconvert")
+            .build()
+            .map_err(|e| format!("audioconvert (planar): {e}"))?;
+        let planar_caps = gst::ElementFactory::make("capsfilter")
+            .property(
+                "caps",
+                audio_caps(sample_rate, channels, "non-interleaved"),
+            )
+            .build()
+            .map_err(|e| format!("capsfilter(audio planar): {e}"))?;
+        let valve = gst::ElementFactory::make("valve")
+            .name("mxl_audio_output_valve")
+            .property("drop", true)
+            .build()
+            .map_err(|e| format!("valve: {e}"))?;
+        let appsink = gst::ElementFactory::make("appsink")
+            .property("sync", false)
+            .property("max-buffers", 4u32)
+            .property("drop", true)
+            .build()
+            .map_err(|e| format!("appsink: {e}"))?;
+
+        pipeline
+            .add(&audioconvert)
+            .and_then(|()| pipeline.add(&audioresample))
+            .and_then(|()| pipeline.add(&caps))
+            .and_then(|()| pipeline.add(&split))
+            .and_then(|()| pipeline.add(&planar_convert))
+            .and_then(|()| pipeline.add(&planar_caps))
+            .and_then(|()| pipeline.add(&valve))
+            .and_then(|()| pipeline.add(&appsink))
+            .map_err(|e| format!("add mxl audio output elements: {e}"))?;
+
+        gst::Element::link_many([
+            upstream,
+            &audioconvert,
+            &audioresample,
+            &caps,
+            &split,
+            &planar_convert,
+            &planar_caps,
+            &valve,
+            &appsink,
+        ])
+        .map_err(|e| format!("link mxl audio output chain: {e}"))?;
+
+        let flow_def = audio_flow_def(flow_id, label, sample_rate, channels);
+        let (writer, _config, was_created) = context
+            .instance
+            .create_flow_writer(&flow_def, None)
+            .map_err(|e| format!("create_flow_writer(audio): {e}"))?;
+        if !was_created {
+            eprintln!("omp-mediaio(mxl): reusing existing audio flow {flow_id}");
+        }
+        let samples_writer = writer
+            .to_samples_writer()
+            .map_err(|e| format!("to_samples_writer: {e}"))?;
+
+        let sample_rate_r = mxl_sys::Rational {
+            numerator: sample_rate as i64,
+            denominator: 1,
+        };
+        let batch_size = (sample_rate / 100).max(1) as u64;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let running_thread = running.clone();
+        let app_sink: gst_app::AppSink = appsink
+            .clone()
+            .dynamic_cast::<gst_app::AppSink>()
+            .map_err(|_| "appsink: cast to AppSink failed".to_string())?;
+
+        thread::spawn(move || {
+            write_audio_loop(
+                &context,
+                samples_writer,
+                &sample_rate_r,
+                batch_size,
+                channels as usize,
+                &app_sink,
+                &running_thread,
+            );
+        });
+
+        Ok(MxlAudioOutput { valve, running })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_audio_loop(
+    context: &Arc<MxlContext>,
+    samples_writer: mxl::SamplesWriter,
+    sample_rate: &mxl_sys::Rational,
+    batch_size: u64,
+    channels: usize,
+    app_sink: &gst_app::AppSink,
+    running: &Arc<AtomicBool>,
+) {
+    let mut index: Option<u64> = None;
+    while running.load(Ordering::Relaxed) {
+        let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
+            Some(sample) => sample,
+            None => continue,
+        };
+        let Some(buffer) = sample.buffer() else {
+            continue;
+        };
+        let Ok(map) = buffer.map_readable() else {
+            eprintln!("omp-mediaio(mxl): audio buffer map_readable failed, dropping batch");
+            continue;
+        };
+        let bytes = map.as_slice();
+        let bytes_per_channel = bytes.len() / channels.max(1);
+
+        let this_index =
+            *index.get_or_insert_with(|| context.instance.get_current_index(sample_rate));
+
+        match samples_writer.open_samples(this_index, batch_size as usize) {
+            Ok(mut access) => {
+                for channel in 0..access.channels().min(channels) {
+                    let Ok((dst_1, dst_2)) = access.channel_data_mut(channel) else {
+                        continue;
+                    };
+                    let src_start = channel * bytes_per_channel;
+                    let src_end = (src_start + bytes_per_channel).min(bytes.len());
+                    let src = &bytes[src_start..src_end];
+                    let n1 = dst_1.len().min(src.len());
+                    dst_1[..n1].copy_from_slice(&src[..n1]);
+                    let remaining = &src[n1..];
+                    let n2 = dst_2.len().min(remaining.len());
+                    dst_2[..n2].copy_from_slice(&remaining[..n2]);
+                }
+                if let Err(e) = access.commit() {
+                    eprintln!("omp-mediaio(mxl): commit samples at {this_index} failed: {e}");
+                }
+            }
+            Err(e) => {
+                eprintln!("omp-mediaio(mxl): open_samples {this_index} failed: {e}");
+            }
+        }
+
+        index = Some(this_index + batch_size);
+    }
+}
+
+impl Output for MxlAudioOutput {
+    fn set_active(&self, active: bool) {
+        self.valve.set_property("drop", !active);
+    }
+
+    fn is_active(&self) -> bool {
+        !self.valve.property::<bool>("drop")
+    }
+}
+
+impl Drop for MxlAudioOutput {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
 /// MXL-Video-Eingang: Thread liest Grains und schiebt sie in ein `appsrc
 /// do-timestamp=true` (dieselbe Rolle wie PIPELINE CONTROLLERs
 /// `intervideosrc … do-timestamp=true` — verwirft die ursprüngliche

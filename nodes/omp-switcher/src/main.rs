@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use omp_node_sdk::is04;
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -177,7 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![SenderSpec {
                 id: Some(sender_id.clone()),
                 transport: Some(TRANSPORT_MXL.to_string()),
-                flow: Some(FlowSpec {
+                flow: Some(FlowSpec::Video {
                     id: Some(flow_id),
                     frame_width: pipeline::WIDTH,
                     frame_height: pipeline::HEIGHT,
@@ -244,9 +245,33 @@ async fn discovery_loop(
     loop {
         interval.tick().await;
         let registry = registry.clone();
-        let result = tokio::task::spawn_blocking(move || registry.list_senders()).await;
-        let senders = match result {
-            Ok(Ok(senders)) => senders,
+        let own_sender_id = own_sender_id.clone();
+        // Filter + `get_flow_format`-Nachschlag in derselben
+        // `spawn_blocking`-Aufgabe (mehrere synchrone `ureq`-Aufrufe
+        // hintereinander). Seit `omp-audio-mixer` (`UMSETZUNG.md` C11)
+        // melden auch Audio-Nodes MXL-Sender an — nur `transport==MXL`
+        // filtern würde versuchen, deren Flow als Video-Eingang zu
+        // öffnen.
+        let result = tokio::task::spawn_blocking(move || -> Result<Vec<DiscoveredInput>, String> {
+            let senders = registry.list_senders().map_err(|e| e.to_string())?;
+            Ok(senders
+                .into_iter()
+                .filter(|s| s.transport == TRANSPORT_MXL && s.id != own_sender_id)
+                .filter_map(|s| s.flow_id.map(|flow_id| (s.id, s.label, flow_id)))
+                .filter(|(_, _, flow_id)| {
+                    matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO)
+                })
+                .map(|(sender_id, label, flow_id)| DiscoveredInput {
+                    sender_id,
+                    label,
+                    flow_id,
+                })
+                .collect())
+        })
+        .await;
+
+        let discovered = match result {
+            Ok(Ok(discovered)) => discovered,
             Ok(Err(e)) => {
                 eprintln!("omp-switcher: discovery poll failed: {e}");
                 continue;
@@ -256,18 +281,6 @@ async fn discovery_loop(
                 continue;
             }
         };
-
-        let discovered: Vec<DiscoveredInput> = senders
-            .into_iter()
-            .filter(|s| s.transport == TRANSPORT_MXL && s.id != own_sender_id)
-            .filter_map(|s| {
-                s.flow_id.map(|flow_id| DiscoveredInput {
-                    sender_id: s.id,
-                    label: s.label,
-                    flow_id,
-                })
-            })
-            .collect();
 
         *inputs.lock().expect("lock poisoned") = discovered.clone();
         pipeline.set_inputs(discovered);

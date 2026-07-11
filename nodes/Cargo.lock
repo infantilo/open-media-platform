@@ -1082,6 +1082,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-audio-mixer"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-mediaio"
 version = "0.1.0"
 dependencies = [
@@ -1097,6 +1108,7 @@ name = "omp-node-sdk"
 version = "0.1.0"
 dependencies = [
  "async-nats",
+ "futures-util",
  "getrandom 0.4.3",
  "serde",
  "serde_json",

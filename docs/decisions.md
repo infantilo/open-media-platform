@@ -2445,3 +2445,96 @@ gleiche Einordnung wie der B4/Health-Staleness-Fix vom 2026-07-09.
 **Nicht behoben:** `deploy/catalog.json` selbst bleibt unverändert
 (die relativen Pfade sind jetzt korrekt interpretiert, kein Grund sie
 auf absolute Pfade umzustellen — das wäre weniger portabel).
+
+## 2026-07-11 — C11 (`omp-audio-mixer`): MXL-Audio-Fundament im SDK, Scope-Entscheidung „interne Testtöne statt externer MXL-Audio-Eingang", zwei Discovery-Bugfixes
+
+**Kontext:** C11 (`ARCHITECTURE.md` §13.2) verlangt dynamische
+Kanalzahl, Gain/EQ, Audio-Follow-Video gegen C10s Tally-Bus. Anders als
+C10 (baute auf bereits vorhandenem MXL-Video-Fundament, C4) gab es für
+Audio noch **kein** MXL-Fundament (`omp-mediaio` kannte nur
+`MxlVideoInput`/`MxlVideoOutput`) und keinen einzigen MXL-Audio-
+erzeugenden Node im System — beides musste in diesem Schritt mit
+entstehen, nicht nur der Mischer selbst.
+
+**Scope-Entscheidung: Kanal-Audioquelle intern (`audiotestsrc`), nicht
+extern-MXL.** Ein `ChannelStrip` liest keinen externen MXL-Audio-Eingang
+— es gibt keinen Node, der einen liefern könnte (`omp-source`, C5, ist
+reines Video), das wäre ein Henne-Ei-Problem. Jeder Kanal bekommt
+stattdessen einen internen Testton (`audiotestsrc`, Frequenz je Kanal
+unterschiedlich) — Software-Testmittel-Linie wie überall sonst
+(`UMSETZUNG.md` §0 Punkt 7). Der **Ausgang** ist trotzdem ein echter
+MXL-Audio-Flow, keine Simulation.
+
+**MXL-Audio-Fundament (`omp-mediaio::mxl::MxlAudioOutput`), am
+offiziellen Muster verifiziert, nicht geraten:** MXL behandelt Audio
+grundsätzlich anders als Video — „continuous"-Ringpuffer
+(Sample-basiert, `SamplesWriter`/`open_samples`/`channel_data_mut`) statt
+„discrete"-Grains (`third_party/mxl/docs/Architecture.md`: „Discrete
+ringbuffers are used for granular data types such as video ...
+Continuous ringbuffers are used for audio"). Portiert nach dem
+offiziellen `write_samples`-Beispiel (`third_party/mxl/rust/mxl/
+examples/flow-writer.rs`) — Aufruf-Muster `open_samples(index,
+batch_size)`, danach `index += batch_size`, 1:1 übernommen, nur mit
+echten Pipeline-Samples statt synthetischer Testbytes. `audiobuffersplit`
+(GStreamer, `output-buffer-duration=1/100`) erzwingt die feste
+Batch-Größe (10ms, gleicher Default wie im MXL-Beispiel), die
+`open_samples` pro Aufruf vorab kennen muss — **Fallstrick dabei
+gefunden**: `audiobuffersplit` akzeptiert laut `gst-inspect-1.0
+audiobuffersplit` nur `layout=interleaved` auf Sink **und** Src, MXLs
+`channel_data_mut` braucht aber non-interleaved (planare) Kanaldaten —
+deshalb zwei `audioconvert`-Stufen (interleaved bis inklusive
+`audiobuffersplit`, non-interleaved erst danach), nicht eine.
+
+**IS-04-Audio-Resources gegen die Spec verifiziert, nicht geraten**
+(`AMWA-TV/nmos-discovery-registration`, `APIs/schemas/{source_audio,
+flow_audio,flow_audio_raw}.json`, GitHub-API statt Gedächtnis): `Source`
+bekommt ein optionales `channels`-Feld (`skip_serializing_if`, damit
+Video-Sources exakt dasselbe JSON wie bisher senden, keine Regression am
+C5-verifizierten Pfad). `Flow` wird **nicht** mit optionalen Audio-Feldern
+überladen (dessen Felder wie `frame_width`/`components`/`colorspace`
+sind zwingend video-spezifisch) — stattdessen ein eigener `AudioFlow`-Typ
+plus `#[serde(untagged)] enum FlowResource` für die generische
+`register("flow", …)`-Stelle. `node::FlowSpec` wurde von einem
+Video-only-Struct zu einem `Video`/`Audio`-Enum — **Breaking Change am
+SDK**, alle drei bestehenden Aufrufer (`omp-source`, `omp-switcher`,
+`omp-video-mixer-me`) auf `FlowSpec::Video { … }` umgestellt (mechanisch,
+keine Verhaltensänderung). Vertretbar, weil das SDK weiterhin
+projektintern ist (kein externer Konsument vor D5/SDK-v1-Dokument).
+
+**Zwei Discovery-Bugs gefunden und behoben (betreffen C7 **und** C10,
+nicht nur C11):** Sobald ein MXL-Sender mit `format=audio` im Netz
+erscheint, versuchten `omp-switcher`s und `omp-video-mixer-me`s
+Discovery-Loops (beide filtern bisher nur `transport==MXL`) ihn als
+Video-Eingang zu öffnen — Rebuild schlug mit `flow_def: frame_width
+fehlt` fehl, fiel aber dank C7s/C10s bestehendem Schwarzbild-Fallback
+nicht komplett aus. Fix: neue `RegistryClient::get_flow_format(flow_id)`
+(liest nur das `format`-Feld, kein voller `Flow`/`AudioFlow`-Typ nötig,
+beide haben das Feld unter demselben Namen), beide Discovery-Loops
+filtern jetzt zusätzlich auf `format == is04::FORMAT_VIDEO`. War vor C11
+nicht beobachtbar, weil es schlicht keinen zweiten MXL-Format-Typ im
+System gab.
+
+**Audio-Follow-Video-Minimalausbau:** `followMode` ∈ {off, cut,
+crossfade}, aber keine pro-Kanal-konfigurierbare Crossfade-Dauer (fest
+500ms/12 Schritte, `FOLLOW_CROSSFADE_MS`/`_STEPS` in `main.rs`) — §13.2
+nennt `crossfadeMs` als Konzept, nicht als Pflicht-Parameter; volle
+Konfigurierbarkeit bleibt wie Kompressor/Limiter/Aux/Gruppen
+Community-Vertiefung (`UMSETZUNG.md` C11-Text).
+
+**Standardklassen geprüft, nicht angenommen** (`AMWA-TV/ms-05-02`,
+`models/classes/*.json`, GitHub-API): der komplette MS-05-02-
+Kernklassenbaum umfasst nur sechs Klassen (`NcObject`/`NcBlock`/
+`NcWorker`/`NcManager`/`NcDeviceManager`/`NcClassManager`) — keine
+`NcGain`/`NcMute`/EQ-Klasse. Die AES70/OCA-Erwähnung in
+`ARCHITECTURE.md` §11.1/§13.2 ist eine Analogie zu einem verwandten,
+separaten Standardmodell, keine im MS-05-02-Kern tatsächlich
+vorhandene Klasse. Eigene `gain`/`mute`/`eq*`-Properties pro Kanal sind
+damit nach §11.1 Punkt 3 korrekt.
+
+**Contract-Check (C9) fand einen echten Deskriptor-Fehler:** alle
+`channel.<id>.*`-Parameter waren ursprünglich als `readonly: false`
+deklariert, obwohl `set()` (wie bei C10s Nodes) durchgehend
+`SetError::ReadOnly` liefert — Zustandsänderungen laufen nur über die
+`channel.<id>.set*`-Methoden (Range-/`followMode`-Validierung).
+`tools/contract-check`s Param-Roundtrip-Test schlug entsprechend fehl;
+behoben durch `readonly: true` auf allen Kanal-Parametern, danach PASS.

@@ -183,7 +183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             nats_url,
             senders: vec![SenderSpec {
                 transport: Some(TRANSPORT_MXL.to_string()),
-                flow: Some(FlowSpec {
+                flow: Some(FlowSpec::Video {
                     id: Some(flow_id),
                     frame_width: pipeline::WIDTH,
                     frame_height: pipeline::HEIGHT,

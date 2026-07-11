@@ -26,5 +26,12 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-video-mixer-me"],
     "env": {}
+  },
+  {
+    "type": "omp-audio-mixer",
+    "label": "Audio Mixer",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-audio-mixer"],
+    "env": {}
   }
 ]
