@@ -5,6 +5,13 @@
 // /api/v1/nodes/<id>/methods/<name>. Pollt alle 2s (Kanalliste ändert
 // sich per addChannel/removeChannel zur Laufzeit, ARCHITECTURE.md §13.2:
 // "B6 muss Descriptor-Änderungen ohnehin schon per Re-Fetch vertragen").
+//
+// Wichtig: jeder Poll baut NICHT das komplette DOM neu (führte zu
+// sichtbarem Flackern, da Buttons/Inputs bei jedem Tick verworfen und
+// neu erzeugt wurden, inkl. Fokusverlust während der Eingabe) — pro
+// Kanal wird das Element genau einmal erzeugt und danach nur noch in
+// Werten aktualisiert (`updateChannelElement`); gerade fokussierte
+// Inputs werden beim Aktualisieren übersprungen.
 class OmpAudioMixerPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -38,13 +45,14 @@ class OmpAudioMixerPanel extends HTMLElement {
     addRow.className = "add-row";
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Kanal";
-    addBtn.addEventListener("click", () =>
-      call("addChannel", { label: "" }).then(refresh),
-    );
+    addBtn.addEventListener("click", () => call("addChannel", { label: "" }).then(poll));
     addRow.append(addBtn);
 
     const list = document.createElement("div");
-    shadow.append(style, addRow, list);
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = 'keine Kanäle — "+ Kanal" zum Hinzufügen';
+    shadow.append(style, addRow, list, empty);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -59,31 +67,25 @@ class OmpAudioMixerPanel extends HTMLElement {
       return (await res.json()).value;
     };
 
-    const renderChannel = async (ch) => {
-      const id = ch.id;
-      const [gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, override] =
-        await Promise.all([
-          getParam(`channel.${id}.gain`),
-          getParam(`channel.${id}.mute`),
-          getParam(`channel.${id}.eqLow`),
-          getParam(`channel.${id}.eqMid`),
-          getParam(`channel.${id}.eqHigh`),
-          getParam(`channel.${id}.followTarget`),
-          getParam(`channel.${id}.followMode`),
-          getParam(`channel.${id}.overrideEnabled`),
-        ]);
+    // channelId -> { el, gainInput, muteBtn, eqLow/Mid/HighInput,
+    //                followInput, modeSelect, overrideBtn }
+    const channelEls = new Map();
 
+    // Element wird genau einmal pro Kanal gebaut (beim ersten Sichten);
+    // danach nur noch über `updateChannelElement` mit frischen Werten
+    // befüllt, nie neu erzeugt — das ist der eigentliche Flacker-Fix.
+    const createChannelElement = (id, label) => {
       const el = document.createElement("div");
       el.className = "channel";
 
       const head = document.createElement("div");
       head.className = "channel-head";
       const title = document.createElement("strong");
-      title.textContent = ch.label;
+      title.textContent = label;
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "Entfernen";
       removeBtn.addEventListener("click", () =>
-        call("removeChannel", { channelId: id }).then(refresh),
+        call("removeChannel", { channelId: id }).then(poll),
       );
       head.append(title, removeBtn);
 
@@ -94,42 +96,37 @@ class OmpAudioMixerPanel extends HTMLElement {
       const gainInput = document.createElement("input");
       gainInput.type = "number";
       gainInput.step = "0.5";
-      gainInput.value = gain ?? 0;
       gainInput.addEventListener("change", () =>
         call(`channel.${id}.setGain`, { db: parseFloat(gainInput.value) || 0 }),
       );
       const muteBtn = document.createElement("button");
-      muteBtn.textContent = mute ? "Muted" : "Mute";
-      muteBtn.className = mute ? "mute-on" : "";
-      muteBtn.addEventListener("click", () =>
-        call(`channel.${id}.setMute`, { muted: !mute }).then(refresh),
-      );
+      muteBtn.addEventListener("click", () => {
+        const nowMuted = muteBtn.dataset.muted === "true";
+        call(`channel.${id}.setMute`, { muted: !nowMuted }).then(poll);
+      });
       gainRow.append(gainLabel, gainInput, muteBtn);
 
       const eqRow = document.createElement("div");
       eqRow.className = "row";
-      const eqInputs = [];
-      for (const [bandLabel, val] of [
-        ["Low", eqLow],
-        ["Mid", eqMid],
-        ["High", eqHigh],
-      ]) {
+      const makeEqInput = (bandLabel) => {
         const l = document.createElement("label");
         l.textContent = bandLabel;
         const i = document.createElement("input");
         i.type = "number";
         i.step = "1";
-        i.value = val ?? 0;
-        eqInputs.push(i);
         eqRow.append(l, i);
-      }
+        return i;
+      };
+      const eqLowInput = makeEqInput("Low");
+      const eqMidInput = makeEqInput("Mid");
+      const eqHighInput = makeEqInput("High");
       const eqApply = document.createElement("button");
       eqApply.textContent = "EQ setzen";
       eqApply.addEventListener("click", () =>
         call(`channel.${id}.setEq`, {
-          low: parseFloat(eqInputs[0].value) || 0,
-          mid: parseFloat(eqInputs[1].value) || 0,
-          high: parseFloat(eqInputs[2].value) || 0,
+          low: parseFloat(eqLowInput.value) || 0,
+          mid: parseFloat(eqMidInput.value) || 0,
+          high: parseFloat(eqHighInput.value) || 0,
         }),
       );
       eqRow.append(eqApply);
@@ -140,13 +137,11 @@ class OmpAudioMixerPanel extends HTMLElement {
       followLabel.textContent = "Follow Node-ID";
       const followInput = document.createElement("input");
       followInput.type = "text";
-      followInput.value = followTarget || "";
       const modeSelect = document.createElement("select");
       for (const m of ["off", "cut", "crossfade"]) {
         const opt = document.createElement("option");
         opt.value = m;
         opt.textContent = m;
-        if (m === followMode) opt.selected = true;
         modeSelect.append(opt);
       }
       const followApply = document.createElement("button");
@@ -158,35 +153,89 @@ class OmpAudioMixerPanel extends HTMLElement {
         }),
       );
       const overrideBtn = document.createElement("button");
-      overrideBtn.textContent = override ? "Override an" : "Override aus";
-      overrideBtn.className = override ? "override-on" : "";
-      overrideBtn.addEventListener("click", () =>
-        call(`channel.${id}.setOverride`, { enabled: !override }).then(refresh),
-      );
+      overrideBtn.addEventListener("click", () => {
+        const nowOn = overrideBtn.dataset.on === "true";
+        call(`channel.${id}.setOverride`, { enabled: !nowOn }).then(poll);
+      });
       followRow.append(followLabel, followInput, modeSelect, followApply, overrideBtn);
 
       el.append(head, gainRow, eqRow, followRow);
-      return el;
+
+      return {
+        el,
+        gainInput,
+        muteBtn,
+        eqLowInput,
+        eqMidInput,
+        eqHighInput,
+        followInput,
+        modeSelect,
+        overrideBtn,
+      };
     };
 
-    const refresh = async () => {
+    // Nur Werte setzen, keine Elemente neu bauen. Ein gerade fokussierter
+    // Input (Nutzer tippt) wird nicht überschrieben, sonst würde der
+    // nächste Poll mitten in der Eingabe den Wert zurücksetzen.
+    const updateChannelElement = (refs, data) => {
+      const active = refs.el.getRootNode().activeElement;
+      if (refs.gainInput !== active) refs.gainInput.value = data.gain ?? 0;
+      refs.muteBtn.dataset.muted = String(!!data.mute);
+      refs.muteBtn.textContent = data.mute ? "Muted" : "Mute";
+      refs.muteBtn.className = data.mute ? "mute-on" : "";
+      if (refs.eqLowInput !== active) refs.eqLowInput.value = data.eqLow ?? 0;
+      if (refs.eqMidInput !== active) refs.eqMidInput.value = data.eqMid ?? 0;
+      if (refs.eqHighInput !== active) refs.eqHighInput.value = data.eqHigh ?? 0;
+      if (refs.followInput !== active) refs.followInput.value = data.followTarget || "";
+      if (refs.modeSelect !== active) refs.modeSelect.value = data.followMode || "off";
+      refs.overrideBtn.dataset.on = String(!!data.overrideEnabled);
+      refs.overrideBtn.textContent = data.overrideEnabled ? "Override an" : "Override aus";
+      refs.overrideBtn.className = data.overrideEnabled ? "override-on" : "";
+    };
+
+    const fetchChannelData = async (id) => {
+      const [gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled] =
+        await Promise.all([
+          getParam(`channel.${id}.gain`),
+          getParam(`channel.${id}.mute`),
+          getParam(`channel.${id}.eqLow`),
+          getParam(`channel.${id}.eqMid`),
+          getParam(`channel.${id}.eqHigh`),
+          getParam(`channel.${id}.followTarget`),
+          getParam(`channel.${id}.followMode`),
+          getParam(`channel.${id}.overrideEnabled`),
+        ]);
+      return { gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled };
+    };
+
+    const poll = async () => {
       const channelsValue = await getParam("channels");
       const channels = channelsValue || [];
-      list.innerHTML = "";
-      if (channels.length === 0) {
-        const empty = document.createElement("p");
-        empty.className = "empty";
-        empty.textContent = "keine Kanäle — \"+ Kanal\" zum Hinzufügen";
-        list.append(empty);
-        return;
+      const currentIds = new Set(channels.map((c) => c.id));
+
+      for (const [id, refs] of channelEls) {
+        if (!currentIds.has(id)) {
+          refs.el.remove();
+          channelEls.delete(id);
+        }
       }
+
+      empty.style.display = channels.length === 0 ? "" : "none";
+
       for (const ch of channels) {
-        list.append(await renderChannel(ch));
+        let refs = channelEls.get(ch.id);
+        if (!refs) {
+          refs = createChannelElement(ch.id, ch.label);
+          channelEls.set(ch.id, refs);
+          list.append(refs.el);
+        }
+        const data = await fetchChannelData(ch.id);
+        updateChannelElement(refs, data);
       }
     };
 
-    refresh();
-    this._interval = setInterval(refresh, 2000);
+    poll();
+    this._interval = setInterval(poll, 2000);
   }
 
   disconnectedCallback() {
