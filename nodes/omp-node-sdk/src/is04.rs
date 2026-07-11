@@ -19,7 +19,10 @@ const TRANSPORT_RTP: &str = "urn:x-nmos:transport:rtp";
 /// per `get_flow_format()` danach filtern können, statt den String selbst
 /// zu duplizieren.
 pub const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
-const FORMAT_AUDIO: &str = "urn:x-nmos:format:audio";
+/// `pub` aus demselben Grund wie `FORMAT_VIDEO` — `omp-audio-mixer`
+/// (`UMSETZUNG.md` C11) filtert seine Quellen-Discovery per
+/// `get_flow_format()` darauf.
+pub const FORMAT_AUDIO: &str = "urn:x-nmos:format:audio";
 
 /// Transport-URN für MXL-Zero-Copy-Sender/-Receiver (`UMSETZUNG.md` C4).
 /// `x-omp`, weil MXL (Stand v1.0.1) keine eigene registrierte NMOS-

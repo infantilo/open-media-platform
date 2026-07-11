@@ -722,6 +722,206 @@ impl Drop for MxlVideoInput {
     }
 }
 
+/// MXL-Audio-Eingang, Pendant zu [`MxlVideoInput`] für **continuous**-
+/// Flows (s. `audio_flow_def`/`MxlAudioOutput`) — gebraucht seit
+/// `omp-audio-mixer` echte externe Kanalquellen wählen kann
+/// (`UMSETZUNG.md` C11, `channel.<id>.setSource`), nicht nur den
+/// internen Testton. Liest per `SamplesReader::get_samples` (blockierend,
+/// 500ms-Timeout — gleicher Stil wie `MxlVideoInput`s
+/// `get_complete_grain`, inkl. derselben `OutOfRangeTooLate`/
+/// `OutOfRangeTooEarly`-Behandlung, siehe Kommentar dort) feste
+/// 10ms-Batches, verkettet die pro Kanal getrennten Byte-Slices
+/// (`SamplesData::channel_data`) zu einem planaren (non-interleaved)
+/// Puffer und schiebt ihn in ein `appsrc`. `tail` liefert bereits
+/// interleaved-gewandeltes Audio (per `audioconvert`), damit der
+/// Aufrufer (Channel-Strip-Zweig in `omp-audio-mixer`) identisch zum
+/// internen Testton weiterverarbeiten kann, unabhängig von der Quelle.
+pub struct MxlAudioInput {
+    pub tail: gst::Element,
+    /// Alle von diesem Eingang selbst zur Pipeline hinzugefügten Elemente
+    /// (`appsrc`/`audioconvert`/`capsfilter`, in Verkettungsreihenfolge)
+    /// — anders als bei [`MxlVideoInput`] (dort baut der Aufrufer bei
+    /// jeder Quellenänderung die **ganze** Pipeline neu, `omp-switcher`/
+    /// `omp-video-mixer-me`, C7/C10) entfernt `omp-audio-mixer`
+    /// einzelne Kanal-Zweige chirurgisch aus der laufenden Pipeline
+    /// (`UMSETZUNG.md` C11) — dafür muss der Aufrufer jedes Element
+    /// selbst auf `Null` setzen und aus der Pipeline entfernen können,
+    /// nicht nur den Lese-Thread stoppen (das leistet `Drop` weiterhin,
+    /// s. u., aber eben nicht die Pipeline-Aufräumarbeit).
+    pub elements: Vec<gst::Element>,
+    running: Arc<AtomicBool>,
+}
+
+impl MxlAudioInput {
+    pub fn new(pipeline: &gst::Pipeline, context: Arc<MxlContext>, flow_id: &str) -> Result<Self, String> {
+        let flow_def_json = context
+            .instance
+            .get_flow_def(flow_id)
+            .map_err(|e| format!("get_flow_def({flow_id}): {e}"))?;
+        let flow_def: serde_json::Value = serde_json::from_str(&flow_def_json)
+            .map_err(|e| format!("flow_def JSON parsen: {e}"))?;
+        let sample_rate = flow_def["sample_rate"]["numerator"]
+            .as_u64()
+            .ok_or("flow_def: sample_rate.numerator fehlt")? as u32;
+        let channel_count = flow_def["channel_count"]
+            .as_u64()
+            .ok_or("flow_def: channel_count fehlt")? as u32;
+
+        // Interleaved, nicht non-interleaved: `read_audio_loop` verwebt
+        // die pro Kanal getrennten MXL-Bytes (`SamplesData::channel_data`)
+        // unten selbst zu einem interleaved-Puffer, statt einen
+        // non-interleaved-Puffer per `appsrc` einzuspeisen. Grund
+        // (2026-07-11 beim ersten Testlauf gefunden, nicht vorab
+        // erkannt): ein non-interleaved-`GstBuffer` braucht zwingend ein
+        // begleitendes `GstAudioMeta`, das eine echte GStreamer-
+        // Transformation (z. B. `audioconvert`) automatisch mitgibt, ein
+        // von Hand per `Buffer::from_slice` gebauter Puffer aber nicht —
+        // Folge war `gst_audio_buffer_map`-Assertion-Fehler downstream.
+        // Interleaved ist der Default-Layout-Fall, der genau dieses Meta
+        // nicht braucht (`MxlAudioOutput`s Schreibpfad umgeht dasselbe
+        // Problem andersherum: dort erzeugt ein echter `audioconvert` den
+        // non-interleaved-Puffer, nicht Handarbeit — deshalb dort nie
+        // aufgefallen).
+        let appsrc = gst::ElementFactory::make("appsrc")
+            .property("format", gst::Format::Time)
+            .property("is-live", true)
+            .property("do-timestamp", true)
+            .property("caps", audio_caps(sample_rate, channel_count, "interleaved"))
+            .build()
+            .map_err(|e| format!("appsrc: {e}"))?;
+        let convert = gst::ElementFactory::make("audioconvert")
+            .build()
+            .map_err(|e| format!("audioconvert (input): {e}"))?;
+
+        pipeline
+            .add(&appsrc)
+            .and_then(|()| pipeline.add(&convert))
+            .map_err(|e| format!("add mxl audio input elements: {e}"))?;
+        gst::Element::link_many([&appsrc, &convert])
+            .map_err(|e| format!("link mxl audio input chain: {e}"))?;
+
+        let reader = context
+            .instance
+            .create_flow_reader(flow_id)
+            .map_err(|e| format!("create_flow_reader({flow_id}): {e}"))?;
+        let samples_reader = reader
+            .to_samples_reader()
+            .map_err(|e| format!("to_samples_reader: {e}"))?;
+        let sample_rate_r = mxl_sys::Rational {
+            numerator: sample_rate as i64,
+            denominator: 1,
+        };
+        let batch_size = (sample_rate / 100).max(1) as u64;
+
+        let running = Arc::new(AtomicBool::new(true));
+        let running_thread = running.clone();
+        let app_src: gst_app::AppSrc = appsrc
+            .clone()
+            .dynamic_cast::<gst_app::AppSrc>()
+            .map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
+
+        thread::spawn(move || {
+            read_audio_loop(
+                &context,
+                samples_reader,
+                &sample_rate_r,
+                batch_size,
+                &app_src,
+                &running_thread,
+            );
+        });
+
+        Ok(MxlAudioInput {
+            elements: vec![appsrc, convert.clone()],
+            tail: convert,
+            running,
+        })
+    }
+}
+
+/// Bytes pro Sample bei `audio/float32` (32 bit = 4 Byte) — einzige
+/// Audio-`media_type`, die dieser Node schreibt/liest (s.
+/// `audio_flow_def`), deshalb hier fest statt aus dem Flow-Def geparst.
+const BYTES_PER_SAMPLE: usize = 4;
+
+/// Verwebt die pro Kanal getrennten MXL-Byte-Slices
+/// (`SamplesData::channel_data`, je Kanal in bis zu zwei Fragmente
+/// gesplittet, falls der Ringpuffer umbricht) zu einem interleaved
+/// `[s0c0, s0c1, …, s1c0, s1c1, …]`-Puffer, wie ihn ein plain
+/// `audio/x-raw`-Buffer ohne `GstAudioMeta` erwartet (s. Kommentar bei
+/// `MxlAudioInput::new`).
+fn interleave_samples(data: &mxl::SamplesData<'_>) -> Vec<u8> {
+    let channels = data.num_of_channels();
+    if channels == 0 {
+        return Vec::new();
+    }
+    let Ok((d1, d2)) = data.channel_data(0) else {
+        return Vec::new();
+    };
+    let samples_per_channel = (d1.len() + d2.len()) / BYTES_PER_SAMPLE;
+
+    let mut buf = vec![0u8; samples_per_channel * channels * BYTES_PER_SAMPLE];
+    for channel in 0..channels {
+        let Ok((d1, d2)) = data.channel_data(channel) else {
+            continue;
+        };
+        for (sample_index, sample) in d1
+            .chunks_exact(BYTES_PER_SAMPLE)
+            .chain(d2.chunks_exact(BYTES_PER_SAMPLE))
+            .enumerate()
+        {
+            let dst = (sample_index * channels + channel) * BYTES_PER_SAMPLE;
+            buf[dst..dst + BYTES_PER_SAMPLE].copy_from_slice(sample);
+        }
+    }
+    buf
+}
+
+fn read_audio_loop(
+    context: &Arc<MxlContext>,
+    samples_reader: mxl::SamplesReader,
+    sample_rate: &mxl_sys::Rational,
+    batch_size: u64,
+    app_src: &gst_app::AppSrc,
+    running: &Arc<AtomicBool>,
+) {
+    let mut index = context.instance.get_current_index(sample_rate);
+    while running.load(Ordering::Relaxed) {
+        match samples_reader.get_samples(index, batch_size as usize, Duration::from_millis(500)) {
+            Ok(data) => {
+                let buffer = gst::Buffer::from_slice(interleave_samples(&data));
+                if app_src.push_buffer(buffer).is_err() {
+                    break;
+                }
+                index += batch_size;
+            }
+            Err(mxl::Error::OutOfRangeTooLate) => {
+                // Wie bei MxlVideoInputs read_loop: zu weit zurück, auf
+                // den aktuellen Head springen statt endlos veraltete
+                // Indizes anzufragen.
+                index = context.instance.get_current_index(sample_rate);
+            }
+            Err(mxl::Error::Timeout | mxl::Error::OutOfRangeTooEarly) => {
+                // Noch nicht geschrieben — gleichen Index erneut
+                // versuchen (gleicher Backoff/TOCTOU-Vorbehalt wie bei
+                // MxlVideoInputs read_loop, docs/decisions.md 2026-07-10
+                // "C8 — MXL-Read-Livelock").
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => {
+                eprintln!("omp-mediaio(mxl): get_samples {index} failed: {e}");
+                thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+impl Drop for MxlAudioInput {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! End-to-End-Loopback-Test für C4s Verifikationsschritt: schreibt

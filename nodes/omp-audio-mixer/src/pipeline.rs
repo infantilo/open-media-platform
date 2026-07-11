@@ -1,19 +1,20 @@
 //! GStreamer-Pipeline von `omp-audio-mixer` (`UMSETZUNG.md` C11,
 //! `ARCHITECTURE.md` §13.2).
 //!
-//! **Kanal-Audioquelle bewusst intern statt extern-MXL (Scope-Entscheidung,
-//! `docs/decisions.md` 2026-07-11):** Es gibt noch keinen MXL-Audio-
-//! erzeugenden Node im System (`omp-source`, C5, ist reines Video) — ein
-//! Channel-Strip liest deshalb hier **keinen** externen MXL-Audio-Eingang
-//! (das wäre ein Henne-Ei-Problem), sondern speist einen internen
-//! `audiotestsrc`-Testton pro Kanal (unterschiedliche Frequenz je Kanal,
-//! damit mehrere Kanäle im Ausgang unterscheidbar bleiben) — Software-
-//! Testmittel-Linie wie überall sonst im Projekt (`UMSETZUNG.md` §0
-//! Punkt 7). Der **Ausgang** ist trotzdem ein echter MXL-Audio-Flow
-//! (`omp_mediaio::mxl::MxlAudioOutput`, neu in diesem Schritt) — das
-//! Minimalausbau-Ziel (Gain/EQ/Audio-Follow-Video, dynamische Kanalzahl)
-//! ist damit vollständig vorführbar, ohne eine externe Audioquelle
-//! vorwegzunehmen.
+//! **Kanal-Audioquelle: intern per Default, extern per MXL wählbar
+//! (2026-07-11 nachgezogen).** Jeder neu angelegte Kanal startet mit
+//! einem internen `audiotestsrc`-Testton (unterschiedliche Frequenz je
+//! Kanal, Software-Testmittel-Linie, `UMSETZUNG.md` §0 Punkt 7) — zum
+//! Zeitpunkt des ursprünglichen C11-Minimalausbaus gab es noch keinen
+//! MXL-Audio-erzeugenden Node im System (`omp-source`, C5, ist reines
+//! Video), ein extern wählbarer Eingang wäre ein Henne-Ei-Problem
+//! gewesen (`docs/decisions.md` 2026-07-11). Inzwischen kann derselbe
+//! Node selbst als Quelle dienen (sein `MxlAudioOutput`-Sender ist über
+//! IS-04 discoverbar) — `channel.<id>.setSource` schaltet einen Kanal
+//! deshalb auf einen per Discovery gefundenen externen MXL-Audio-Sender
+//! um (`omp_mediaio::mxl::MxlAudioInput`, neu) oder zurück auf den
+//! internen Testton (`senderId=""`). Der **Ausgang** war von Anfang an
+//! ein echter MXL-Audio-Flow (`omp_mediaio::mxl::MxlAudioOutput`).
 //!
 //! **Dynamische Kanalzahl ohne Pipeline-Rebuild:** anders als
 //! `omp-switcher`/`omp-video-mixer-me` (C7/C10, dort zwingt eine
@@ -57,7 +58,7 @@ use std::time::Duration;
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioOutput, MxlContext};
+use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -74,9 +75,20 @@ pub enum Event {
     Error(String),
 }
 
+/// Woher ein Kanal sein Audio bezieht — `Internal` (Testton) oder
+/// `External` (echter MXL-Audio-Flow, per `flow_id` adressiert; die
+/// Sender→Flow-Auflösung passiert vorher in `main.rs`, hier ist nur noch
+/// die fertige `flow_id` bekannt).
+#[derive(Clone)]
+pub enum ChannelSource {
+    Internal { freq: f64 },
+    External { flow_id: String },
+}
+
 enum Command {
-    AddChannel { id: String, freq: f64 },
+    AddChannel { id: String, source: ChannelSource },
     RemoveChannel(String),
+    SetChannelSource { id: String, source: ChannelSource },
     SetGain { id: String, db: f64 },
     SetMute { id: String, muted: bool },
     SetEq { id: String, low: f64, mid: f64, high: f64 },
@@ -88,12 +100,18 @@ pub struct PipelineHandle {
 }
 
 impl PipelineHandle {
-    pub fn add_channel(&self, id: String, freq: f64) {
-        let _ = self.commands.send(Command::AddChannel { id, freq });
+    pub fn add_channel(&self, id: String, source: ChannelSource) {
+        let _ = self.commands.send(Command::AddChannel { id, source });
     }
 
     pub fn remove_channel(&self, id: String) {
         let _ = self.commands.send(Command::RemoveChannel(id));
+    }
+
+    pub fn set_channel_source(&self, id: String, source: ChannelSource) {
+        let _ = self
+            .commands
+            .send(Command::SetChannelSource { id, source });
     }
 
     pub fn set_gain(&self, id: String, db: f64) {
@@ -117,9 +135,17 @@ fn db_to_linear(db: f64) -> f64 {
 }
 
 struct ChannelBranch {
-    src: gst::Element,
+    /// Alle Elemente dieses Zweigs, in Verkettungsreihenfolge (Quelle …
+    /// `eq`) — für sauberes chirurgisches Entfernen (`remove_channel_
+    /// branch`) statt der früheren Peer-Pad-Suche, die nur für den
+    /// Testton-Fall funktionierte. Bei externer Quelle stammen die
+    /// vorderen Elemente aus `MxlAudioInput::elements`.
+    elements: Vec<gst::Element>,
     eq: gst::Element,
     mixer_pad: gst::Pad,
+    /// Hält den Lese-Thread einer externen Quelle am Leben (`Drop`
+    /// stoppt ihn) — `None` beim internen Testton.
+    _external_input: Option<MxlAudioInput>,
 }
 
 struct ActivePipeline {
@@ -135,18 +161,43 @@ impl Drop for ActivePipeline {
     }
 }
 
-fn add_channel_branch(active: &mut ActivePipeline, id: &str, freq: f64) -> Result<(), String> {
+fn add_channel_branch(
+    active: &mut ActivePipeline,
+    context: &Arc<MxlContext>,
+    id: &str,
+    source: &ChannelSource,
+) -> Result<(), String> {
     if active.channels.contains_key(id) {
         return Ok(());
     }
 
-    let src = gst::ElementFactory::make("audiotestsrc")
-        .property("is-live", true)
-        .property("freq", freq)
-        .property("volume", 0.3f64)
-        .build()
-        .map_err(|e| format!("audiotestsrc ({id}): {e}"))?;
-    src.set_property_from_str("wave", "sine");
+    // `tail` = letztes Element der Quelle (verlinkt gleich auf `convert`),
+    // `elements` sammelt alles, was dieser Zweig selbst zur Pipeline
+    // hinzugefügt hat (für `remove_channel_branch`) — bei externer Quelle
+    // bereits von `MxlAudioInput::new` zur Pipeline hinzugefügt, hier nur
+    // übernommen, nicht erneut `pipeline.add()`.
+    let (tail, mut elements, external_input) = match source {
+        ChannelSource::Internal { freq } => {
+            let src = gst::ElementFactory::make("audiotestsrc")
+                .property("is-live", true)
+                .property("freq", *freq)
+                .property("volume", 0.3f64)
+                .build()
+                .map_err(|e| format!("audiotestsrc ({id}): {e}"))?;
+            src.set_property_from_str("wave", "sine");
+            active
+                .pipeline
+                .add(&src)
+                .map_err(|e| format!("add audiotestsrc ({id}): {e}"))?;
+            (src.clone(), vec![src], None)
+        }
+        ChannelSource::External { flow_id } => {
+            let input = MxlAudioInput::new(&active.pipeline, context.clone(), flow_id)
+                .map_err(|e| format!("MxlAudioInput ({id}, flow {flow_id}): {e}"))?;
+            (input.tail.clone(), input.elements.clone(), Some(input))
+        }
+    };
+
     let convert = gst::ElementFactory::make("audioconvert")
         .build()
         .map_err(|e| format!("audioconvert ({id}): {e}"))?;
@@ -157,12 +208,12 @@ fn add_channel_branch(active: &mut ActivePipeline, id: &str, freq: f64) -> Resul
 
     active
         .pipeline
-        .add(&src)
-        .and_then(|()| active.pipeline.add(&convert))
+        .add(&convert)
         .and_then(|()| active.pipeline.add(&eq))
         .map_err(|e| format!("add channel elements ({id}): {e}"))?;
-    gst::Element::link_many([&src, &convert, &eq])
+    gst::Element::link_many([&tail, &convert, &eq])
         .map_err(|e| format!("link channel chain ({id}): {e}"))?;
+    elements.push(convert);
 
     let mixer_pad = active
         .mixer
@@ -176,14 +227,20 @@ fn add_channel_branch(active: &mut ActivePipeline, id: &str, freq: f64) -> Resul
     // Neue Elemente in einer bereits laufenden (PLAYING) Pipeline müssen
     // ihren Zustand explizit an den Elternzustand angleichen — sonst
     // bleiben sie in NULL/READY hängen und liefern nie Daten.
-    for el in [&src, &convert, &eq] {
+    for el in elements.iter().chain(std::iter::once(&eq)) {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
     }
 
+    elements.push(eq.clone());
     active.channels.insert(
         id.to_string(),
-        ChannelBranch { src, eq, mixer_pad },
+        ChannelBranch {
+            elements,
+            eq,
+            mixer_pad,
+            _external_input: external_input,
+        },
     );
     Ok(())
 }
@@ -192,24 +249,17 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
     let Some(branch) = active.channels.remove(id) else {
         return;
     };
-    let convert = branch
-        .src
-        .static_pad("src")
-        .and_then(|p| p.peer())
-        .and_then(|p| p.parent_element());
-
     // Reihenfolge: erst den Mixer-Pad freigeben (stoppt den Datenfluss in
-    // den Mixer sauber), dann die Zweig-Elemente auf NULL setzen und aus
+    // den Mixer sauber), dann jedes Zweig-Element auf NULL setzen und aus
     // der Pipeline entfernen — Gegenrichtung des Aufbaus in
-    // `add_channel_branch`.
+    // `add_channel_branch`. `_external_input` wird beim Drop von `branch`
+    // am Ende dieser Funktion automatisch verworfen, was den Lese-Thread
+    // stoppt (aber nicht dessen Pipeline-Elemente entfernt — die stehen
+    // bereits in `elements` und werden hier explizit aufgeräumt).
     active.mixer.release_request_pad(&branch.mixer_pad);
-    let _ = branch.src.set_state(gst::State::Null);
-    let _ = branch.eq.set_state(gst::State::Null);
-    let _ = active.pipeline.remove(&branch.src);
-    let _ = active.pipeline.remove(&branch.eq);
-    if let Some(convert) = convert {
-        let _ = convert.set_state(gst::State::Null);
-        let _ = active.pipeline.remove(&convert);
+    for el in &branch.elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = active.pipeline.remove(el);
     }
 }
 
@@ -295,13 +345,25 @@ pub fn run(
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(Command::AddChannel { id, freq }) => {
-                if let Err(e) = add_channel_branch(&mut active, &id, freq) {
+            Ok(Command::AddChannel { id, source }) => {
+                if let Err(e) = add_channel_branch(&mut active, &context, &id, &source) {
                     let _ = tx.send(Event::Error(format!("addChannel({id}) failed: {e}")));
                 }
             }
             Ok(Command::RemoveChannel(id)) => {
                 remove_channel_branch(&mut active, &id);
+            }
+            Ok(Command::SetChannelSource { id, source }) => {
+                // Nur ersetzen, wenn der Kanal (noch) existiert — ein
+                // `removeChannel` kurz zuvor darf hier keinen neuen Zweig
+                // ohne zugehörigen Kanal-Zustand in `main.rs` entstehen
+                // lassen.
+                if active.channels.contains_key(&id) {
+                    remove_channel_branch(&mut active, &id);
+                    if let Err(e) = add_channel_branch(&mut active, &context, &id, &source) {
+                        let _ = tx.send(Event::Error(format!("setSource({id}) failed: {e}")));
+                    }
+                }
             }
             Ok(Command::SetGain { id, db }) => {
                 if let Some(branch) = active.channels.get(&id) {

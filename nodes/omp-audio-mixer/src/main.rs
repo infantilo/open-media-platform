@@ -20,8 +20,10 @@ mod uibundle;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_node_sdk::health;
+use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     Range, RawResponse, SenderSpec, SetError,
@@ -53,10 +55,18 @@ struct ChannelState {
     /// Manueller Override (§13.2): unterbricht die Kopplung für diesen
     /// Kanal, ohne den Automatismus anderer Kanäle zu beeinflussen.
     override_enabled: bool,
+    /// Testton-Frequenz, die dieser Kanal bei `addChannel` bekam — bleibt
+    /// über einen Quellwechsel hin und her erhalten, damit `setSource("")`
+    /// (zurück auf intern) immer denselben, wiedererkennbaren Ton liefert
+    /// statt bei jedem Wechsel neu zu würfeln.
+    internal_freq: f64,
+    /// `senderId` der aktuell gewählten externen Quelle, leer = interner
+    /// Testton (`pipeline::ChannelSource::Internal`).
+    source: String,
 }
 
 impl ChannelState {
-    fn new(id: String, label: String) -> Self {
+    fn new(id: String, label: String, internal_freq: f64) -> Self {
         ChannelState {
             id,
             label,
@@ -68,12 +78,24 @@ impl ChannelState {
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
+            internal_freq,
+            source: String::new(),
         }
     }
 }
 
+/// Ein per IS-04-Discovery gefundener externer MXL-Audio-Sender —
+/// wählbar als Kanalquelle (`channel.<id>.setSource`).
+#[derive(Debug, Clone)]
+struct DiscoveredAudioSource {
+    sender_id: String,
+    label: String,
+    flow_id: String,
+}
+
 struct AudioMixerStore {
     channels: Arc<Mutex<Vec<ChannelState>>>,
+    available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
     next_seq: Arc<AtomicU64>,
     pipeline: PipelineHandle,
 }
@@ -112,6 +134,16 @@ impl ParamStore for AudioMixerStore {
             // "crosspoint.inputs" bei omp-video-mixer-me (C10).
             ParamSpec {
                 name: "channels".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            // JSON-Array [{senderId,label}] — per Discovery gefundene
+            // externe MXL-Audio-Sender, wählbar über
+            // `channel.<id>.setSource`.
+            ParamSpec {
+                name: "availableSources".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -159,6 +191,8 @@ impl ParamStore for AudioMixerStore {
                     Some(Range::Number { min: -24.0, max: 12.0 }),
                 ));
             }
+            // `senderId` der externen Quelle, leer = interner Testton.
+            parameters.push(channel_param(id, "source", ParamType::String, None));
             parameters.push(channel_param(id, "followTarget", ParamType::String, None));
             parameters.push(channel_param(
                 id,
@@ -207,6 +241,13 @@ impl ParamStore for AudioMixerStore {
                 ],
             });
             methods.push(MethodSpec {
+                name: format!("channel.{id}.setSource"),
+                args: vec![MethodArg {
+                    name: "senderId".to_string(),
+                    kind: ParamType::String,
+                }],
+            });
+            methods.push(MethodSpec {
                 name: format!("channel.{id}.setFollow"),
                 args: vec![
                     MethodArg {
@@ -241,6 +282,15 @@ impl ParamStore for AudioMixerStore {
                     .collect::<Vec<_>>()
             ));
         }
+        if name == "availableSources" {
+            let sources = self.available_sources.lock().expect("lock poisoned");
+            return Some(serde_json::json!(
+                sources
+                    .iter()
+                    .map(|s| serde_json::json!({"senderId": s.sender_id, "label": s.label}))
+                    .collect::<Vec<_>>()
+            ));
+        }
 
         let (id, prop) = parse_channel_name(name)?;
         let channels = self.channels.lock().expect("lock poisoned");
@@ -252,6 +302,7 @@ impl ParamStore for AudioMixerStore {
             "eqLow" => Some(serde_json::json!(ch.eq_low)),
             "eqMid" => Some(serde_json::json!(ch.eq_mid)),
             "eqHigh" => Some(serde_json::json!(ch.eq_high)),
+            "source" => Some(serde_json::json!(ch.source)),
             "followTarget" => Some(serde_json::json!(ch.follow_target)),
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
             "overrideEnabled" => Some(serde_json::json!(ch.override_enabled)),
@@ -274,11 +325,13 @@ impl ParamStore for AudioMixerStore {
                 let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
                 let id = format!("ch{seq}");
                 let label = label.unwrap_or_else(|| format!("Kanal {seq}"));
+                let freq = channel_freq(seq);
                 self.channels
                     .lock()
                     .expect("lock poisoned")
-                    .push(ChannelState::new(id.clone(), label));
-                self.pipeline.add_channel(id, channel_freq(seq));
+                    .push(ChannelState::new(id.clone(), label, freq));
+                self.pipeline
+                    .add_channel(id, pipeline::ChannelSource::Internal { freq });
                 Ok(())
             }
             "removeChannel" => {
@@ -353,6 +406,42 @@ impl AudioMixerStore {
                 self.pipeline.set_eq(id.to_string(), low, mid, high);
                 Ok(())
             }
+            "setSource" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                if sender_id.is_empty() {
+                    ch.source.clear();
+                    self.pipeline.set_channel_source(
+                        id.to_string(),
+                        pipeline::ChannelSource::Internal { freq: ch.internal_freq },
+                    );
+                } else {
+                    let flow_id = self
+                        .available_sources
+                        .lock()
+                        .expect("lock poisoned")
+                        .iter()
+                        .find(|s| s.sender_id == sender_id)
+                        .map(|s| s.flow_id.clone())
+                        .ok_or(InvokeError::Unknown)?;
+                    ch.source = sender_id.to_string();
+                    self.pipeline
+                        .set_channel_source(id.to_string(), pipeline::ChannelSource::External { flow_id });
+                }
+                // Der neue Zweig startet mit Standardwerten (Gain 0dB,
+                // nicht stumm, EQ flach) — bereits konfigurierte Werte
+                // dieses Kanals erneut anwenden. Reihenfolge garantiert
+                // durch den einen mpsc-Kommandokanal der Pipeline (FIFO):
+                // `SetChannelSource` ist längst verarbeitet, bevor diese
+                // drei Kommandos ankommen.
+                self.pipeline.set_gain(id.to_string(), ch.gain_db);
+                self.pipeline.set_mute(id.to_string(), ch.mute);
+                self.pipeline
+                    .set_eq(id.to_string(), ch.eq_low, ch.eq_mid, ch.eq_high);
+                Ok(())
+            }
             "setFollow" => {
                 let target = args
                     .get("targetNodeId")
@@ -425,11 +514,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let channels: Arc<Mutex<Vec<ChannelState>>> = Arc::new(Mutex::new(Vec::new()));
+    let available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>> = Arc::new(Mutex::new(Vec::new()));
     let store: Arc<dyn ParamStore> = Arc::new(AudioMixerStore {
         channels: channels.clone(),
+        available_sources: available_sources.clone(),
         next_seq: Arc::new(AtomicU64::new(1)),
         pipeline: pipeline_handle.clone(),
     });
+
+    // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
+    // `sender_id` wird gleich in die `SenderSpec` verschoben, also vorher
+    // klonen; `registry_url` ebenso, weil `NodeConfig` sie konsumiert.
+    let own_sender_id = sender_id.clone();
+    let discovery_registry_url = registry_url.clone();
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -458,6 +555,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle);
+    let discovery = discovery_loop(discovery_registry_url, own_sender_id, available_sources);
 
     let events = async {
         while let Some(event) = rx.recv().await {
@@ -479,6 +577,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
         _ = follow_video => {
             eprintln!("omp-audio-mixer: audio-follow-video loop ended");
+        }
+        _ = discovery => {
+            eprintln!("omp-audio-mixer: discovery loop ended");
         }
     }
 
@@ -584,6 +685,56 @@ async fn audio_follow_video_loop(
                     pipeline.set_mute(channel_id_task, true);
                 }
             });
+        }
+    }
+}
+
+/// Pollt alle 2s die IS-04-Query-API nach MXL-Audio-Sendern (gleicher
+/// Poll-Stil wie `omp-switcher`/`omp-video-mixer-me`, C7/C10) — Grundlage
+/// für `channel.<id>.setSource`, damit ein Kanal auf einen echten
+/// externen MXL-Audio-Flow umschalten kann statt nur auf den internen
+/// Testton. Filtert zusätzlich auf `format==audio`
+/// (`RegistryClient::get_flow_format`, dieselbe Notwendigkeit, die C10/C7
+/// erst nach Einführung dieses Nodes traf, s. `docs/decisions.md`
+/// 2026-07-11) — sonst würde ein Video-Sender fälschlich als wählbare
+/// Audioquelle auftauchen.
+async fn discovery_loop(
+    registry_url: String,
+    own_sender_id: String,
+    sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
+) {
+    let registry = RegistryClient::new(registry_url);
+    let mut interval = tokio::time::interval(Duration::from_secs(2));
+    loop {
+        interval.tick().await;
+        let registry = registry.clone();
+        let own_sender_id = own_sender_id.clone();
+        let result = tokio::task::spawn_blocking(
+            move || -> Result<Vec<DiscoveredAudioSource>, String> {
+                let senders = registry.list_senders().map_err(|e| e.to_string())?;
+                Ok(senders
+                    .into_iter()
+                    .filter(|s| s.transport == TRANSPORT_MXL && s.id != own_sender_id)
+                    .filter_map(|s| s.flow_id.map(|flow_id| (s.id, s.label, flow_id)))
+                    .filter(|(_, _, flow_id)| {
+                        matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_AUDIO)
+                    })
+                    .map(|(sender_id, label, flow_id)| DiscoveredAudioSource {
+                        sender_id,
+                        label,
+                        flow_id,
+                    })
+                    .collect())
+            },
+        )
+        .await;
+
+        match result {
+            Ok(Ok(discovered)) => {
+                *sources.lock().expect("lock poisoned") = discovered;
+            }
+            Ok(Err(e)) => eprintln!("omp-audio-mixer: discovery poll failed: {e}"),
+            Err(e) => eprintln!("omp-audio-mixer: discovery poll task panicked: {e}"),
         }
     }
 }

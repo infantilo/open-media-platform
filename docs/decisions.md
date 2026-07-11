@@ -2538,3 +2538,55 @@ deklariert, obwohl `set()` (wie bei C10s Nodes) durchgehend
 `channel.<id>.set*`-Methoden (Range-/`followMode`-Validierung).
 `tools/contract-check`s Param-Roundtrip-Test schlug entsprechend fehl;
 behoben durch `readonly: true` auf allen Kanal-Parametern, danach PASS.
+
+## 2026-07-11 — C11-Nachtrag: echte Kanalquellwahl (`MxlAudioInput` + Discovery), non-interleaved-Puffer-Bug gefunden und behoben
+
+**Kontext:** Nutzerfrage nach dem C11-Abschluss: „wie bestimme ich die
+Source des Kanals?" — zu dem Zeitpunkt gar nicht, jeder Kanal hatte nur
+den internen Testton (bewusste Scope-Entscheidung, s. Eintrag oben). Auf
+Nachfrage entschieden, echte Quellwahl jetzt nachzuziehen statt als
+separaten Schritt zu verschieben.
+
+**Ergänzt:**
+- `omp_mediaio::mxl::MxlAudioInput` — Lese-Gegenstück zu `MxlAudioOutput`
+  (C11), nach demselben offiziellen `read_samples`-Beispiel-Muster
+  (`third_party/mxl/rust/mxl/examples/flow-reader.rs`) wie der
+  Schreibpfad nach `write_samples`. Anders als `MxlVideoInput`
+  (Aufrufer baut bei jeder Quellenänderung die ganze Pipeline neu) legt
+  `MxlAudioInput` seine Elemente (`pub elements: Vec<gst::Element>`)
+  offen, weil `omp-audio-mixer` einzelne Kanal-Zweige chirurgisch
+  aus einer laufenden Pipeline entfernt (C11-Grundprinzip), nicht die
+  ganze Pipeline neu aufbaut.
+- `channel.<id>.setSource(senderId)` + `availableSources`-Discovery
+  (gleicher Poll-Stil wie C7/C10, zusätzlich `get_flow_format`-gefiltert
+  auf `format==audio` — dieselbe Notwendigkeit, die C7/C10 bereits beim
+  ursprünglichen C11-Abschluss traf). `senderId=""` schaltet zurück auf
+  den internen Testton (Frequenz bleibt über den Kanal-Lebenszyklus
+  stabil, `internal_freq` in `ChannelState`). Bereits konfigurierte
+  Gain/Mute/EQ-Werte werden nach einem Quellwechsel erneut angewendet
+  (der neue Pipeline-Zweig startet sonst bei Neutral-Werten) —
+  Reihenfolge garantiert durch den einen mpsc-Kommandokanal der Pipeline
+  (FIFO), kein Extra-Synchronisationsmechanismus nötig.
+
+**Bug gefunden und behoben (nicht vorab erkannt, erst beim Testlauf):**
+`MxlAudioInput` schob anfangs einen non-interleaved-`GstBuffer`
+(`Buffer::from_slice`, von Hand aus den pro Kanal getrennten MXL-Byte-
+Slices zusammengesetzt) in ein `appsrc`, dessen Caps `layout=non-
+interleaved` deklarierten — das crashte nicht, produzierte aber lautlos
+gar keinen Ton mehr: `GStreamer-Audio-CRITICAL
+gst_audio_buffer_map`-Assertion, danach blieb der komplette
+Ausgabe-Flow des konsumierenden Mixers stehen (Head-Index eingefroren,
+per `mxl-info` verifiziert). Ursache: ein non-interleaved-`GstBuffer`
+braucht zwingend ein begleitendes `GstAudioMeta`, das eine echte
+GStreamer-Transformation (z. B. `audioconvert`) automatisch mitgibt —
+ein von Hand per `Buffer::from_slice` gebauter Puffer hat das nicht.
+`MxlAudioOutput`s Schreibpfad hatte dasselbe Problem nie, weil dort ein
+echter `audioconvert` den non-interleaved-Puffer erzeugt (Kommentar in
+`audio_caps`), nicht Handarbeit. Behoben durch Umkehren des Ansatzes:
+`MxlAudioInput` verwebt die MXL-Byte-Slices jetzt selbst zu einem
+**interleaved** Puffer (`interleave_samples()`, neue Funktion in
+`mxl.rs`) — interleaved ist der Meta-freie Default-Fall, `appsrc`
+deklariert entsprechend `layout=interleaved`. End-to-End verifiziert
+(zwei `omp-audio-mixer`-Instanzen, eine als Quelle für die andere,
+`mxl-info`: Head-Index des Konsumenten wächst kontinuierlich, keine
+neuen CRITICAL-Meldungen mehr), `tools/contract-check` PASS.

@@ -89,6 +89,16 @@ class OmpAudioMixerPanel extends HTMLElement {
       );
       head.append(title, removeBtn);
 
+      const sourceRow = document.createElement("div");
+      sourceRow.className = "row";
+      const sourceLabel = document.createElement("label");
+      sourceLabel.textContent = "Quelle";
+      const sourceSelect = document.createElement("select");
+      sourceSelect.addEventListener("change", () =>
+        call(`channel.${id}.setSource`, { senderId: sourceSelect.value }).then(poll),
+      );
+      sourceRow.append(sourceLabel, sourceSelect);
+
       const gainRow = document.createElement("div");
       gainRow.className = "row";
       const gainLabel = document.createElement("label");
@@ -159,10 +169,11 @@ class OmpAudioMixerPanel extends HTMLElement {
       });
       followRow.append(followLabel, followInput, modeSelect, followApply, overrideBtn);
 
-      el.append(head, gainRow, eqRow, followRow);
+      el.append(head, sourceRow, gainRow, eqRow, followRow);
 
       return {
         el,
+        sourceSelect,
         gainInput,
         muteBtn,
         eqLowInput,
@@ -174,11 +185,32 @@ class OmpAudioMixerPanel extends HTMLElement {
       };
     };
 
+    // Baut die Options-Liste eines Quell-Auswahlfelds neu — nur
+    // aufgerufen, wenn sich `availableSources` tatsächlich geändert hat
+    // (s. `poll()`), nicht bei jedem Tick, sonst würde ein gerade
+    // geöffnetes Dropdown ständig zuklappen.
+    const rebuildSourceOptions = (sourceSelect, sources) => {
+      const current = sourceSelect.value;
+      sourceSelect.innerHTML = "";
+      const internalOpt = document.createElement("option");
+      internalOpt.value = "";
+      internalOpt.textContent = "Intern (Testton)";
+      sourceSelect.append(internalOpt);
+      for (const s of sources) {
+        const opt = document.createElement("option");
+        opt.value = s.senderId;
+        opt.textContent = s.label;
+        sourceSelect.append(opt);
+      }
+      sourceSelect.value = current;
+    };
+
     // Nur Werte setzen, keine Elemente neu bauen. Ein gerade fokussierter
     // Input (Nutzer tippt) wird nicht überschrieben, sonst würde der
     // nächste Poll mitten in der Eingabe den Wert zurücksetzen.
     const updateChannelElement = (refs, data) => {
       const active = refs.el.getRootNode().activeElement;
+      if (refs.sourceSelect !== active) refs.sourceSelect.value = data.source || "";
       if (refs.gainInput !== active) refs.gainInput.value = data.gain ?? 0;
       refs.muteBtn.dataset.muted = String(!!data.mute);
       refs.muteBtn.textContent = data.mute ? "Muted" : "Mute";
@@ -194,8 +226,9 @@ class OmpAudioMixerPanel extends HTMLElement {
     };
 
     const fetchChannelData = async (id) => {
-      const [gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled] =
+      const [source, gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled] =
         await Promise.all([
+          getParam(`channel.${id}.source`),
           getParam(`channel.${id}.gain`),
           getParam(`channel.${id}.mute`),
           getParam(`channel.${id}.eqLow`),
@@ -205,12 +238,21 @@ class OmpAudioMixerPanel extends HTMLElement {
           getParam(`channel.${id}.followMode`),
           getParam(`channel.${id}.overrideEnabled`),
         ]);
-      return { gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled };
+      return { source, gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled };
     };
 
+    // Nur neu aufgebaut, wenn sich availableSources tatsächlich ändert
+    // (s. rebuildSourceOptions) — vermeidet, ein offenes Dropdown bei
+    // jedem 2s-Tick zuzuklappen.
+    let lastSourcesKey = "";
+
     const poll = async () => {
-      const channelsValue = await getParam("channels");
+      const [channelsValue, availableSourcesValue] = await Promise.all([
+        getParam("channels"),
+        getParam("availableSources"),
+      ]);
       const channels = channelsValue || [];
+      const availableSources = availableSourcesValue || [];
       const currentIds = new Set(channels.map((c) => c.id));
 
       for (const [id, refs] of channelEls) {
@@ -222,12 +264,21 @@ class OmpAudioMixerPanel extends HTMLElement {
 
       empty.style.display = channels.length === 0 ? "" : "none";
 
+      const sourcesKey = JSON.stringify(availableSources);
+      const sourcesChanged = sourcesKey !== lastSourcesKey;
+      lastSourcesKey = sourcesKey;
+
       for (const ch of channels) {
         let refs = channelEls.get(ch.id);
+        let isNew = false;
         if (!refs) {
           refs = createChannelElement(ch.id, ch.label);
           channelEls.set(ch.id, refs);
           list.append(refs.el);
+          isNew = true;
+        }
+        if (isNew || sourcesChanged) {
+          rebuildSourceOptions(refs.sourceSelect, availableSources);
         }
         const data = await fetchChannelData(ch.id);
         updateChannelElement(refs, data);
