@@ -2273,3 +2273,53 @@ Nutzeranforderung: einfaches Start-Script + ein erstes Handbuch.
   fehl, weil `libmxl.so` in dieser Umgebung nicht installiert ist
   (`deploy/dev/install-mxl.sh` nicht gelaufen) — dokumentiert im
   Handbuch-Troubleshooting statt stillschweigend übergangen.
+
+## 2026-07-11 — Grass-Valley-/AMPP-Referenzen aus ARCHITECTURE.md entfernt, ARCHITECTURE.html gelöscht
+
+**Kontext:** Nutzeranforderung: jede Referenz auf Grass Valley und die
+AMPP-Plattform aus `ARCHITECTURE.md` entfernen; `ARCHITECTURE.html`
+(veraltet) löschen.
+
+- **§1 (Vision):** „Alternative zu Grass Valley AMPP / Matrox Origin" →
+  „Alternative zu proprietären Cloud-Produktionsplattformen (z. B. Matrox
+  Origin)" — Matrox-Erwähnung blieb, war nicht Teil der Anforderung.
+- **§4.5a:** „(AMPP-artig)"/„vergleichbar mit AMPP-Flows / Node-RED" →
+  nur noch „vergleichbar mit Node-RED".
+- **§6.2:** Die Anforderungsbeschreibung nannte „Vizrt AMPP OS" als
+  Vorbild (Attribution war ohnehin falsch — AMPP ist eine
+  Grass-Valley-Plattform, nicht Vizrt) → generalisiert zu „Vergleichbare
+  Cloud-Produktionsplattformen"; „AMPP-Kernwunsch" → „Kernwunsch".
+- **§9/§10 (Marktkompatibilität/Zukunftssicherheit):** Grass Valley aus
+  der Tiger-Team-Vendor-Liste entfernt (6 → 5 Großvendoren: Matrox, Lawo,
+  Riedel, Intel, NVIDIA), Satz über „Grass Valley AMPP integriert MXL
+  bisher nur in R&D-Demos" gestrichen. Andere Vendoren (Matrox, Lawo,
+  Riedel, Intel, NVIDIA, IPMX/AIMS) blieben unverändert — nicht Teil der
+  Anforderung.
+- **§15 „Hardware-Bedienpult-Integration (Beispiel Grass Valley Connected
+  Switcher)" komplett entfernt**, nicht nur umformuliert: der gesamte
+  Abschnitt (Anforderung, Recherche, Ergebnis, Quellen) war inhaltlich
+  eine GV-Fallstudie — ohne den Vendor bliebe nur eine unbelegte
+  Restaussage übrig, die zudem bereits als generisches
+  Adapter-Node-Prinzip in §9 steht („Für Fremdgeräte ohne IS-12/14
+  braucht es pragmatisch Adapter-Nodes"). Löschen statt Generalisieren,
+  um keine unbequellten Vendor-Aussagen unter anonymisiertem Deckmantel
+  stehen zu lassen (verletzt sonst das „nicht raten"-Prinzip des
+  Projekts).
+- **§16 (jetzt §15, Fixed-Latency-Modell):** „Vorbild AMPP"/„AMPPs
+  Latenz-Budget"/„AMPPs 5-Frames-Beispiel" durchgehend durch
+  vendor-neutrale Formulierungen ersetzt — die Konzept-Substanz
+  (Latenzbudget, Delay-Ausgleich) ist unverändert, nur ohne Zuschreibung
+  an ein bestimmtes kommerzielles Produkt.
+- **Renumerierung:** Durch das Löschen von §15 verschieben sich §16→15,
+  §17→16, §18→17, §19→18, §20→19 (inkl. aller Unterabschnitte, z. B.
+  §18.1–18.7 Host-Agent, §19.1–19.3 Orchestrator-Redundanz) — alle
+  Querverweise im Dokument (§7-Phasenplan-Tabelle, §7.4, §13.1 u. a.)
+  entsprechend nachgezogen und verifiziert (kein verwaister §16–§20-Verweis
+  mehr im Dokument).
+- **`ARCHITECTURE.html` gelöscht** (veraltet, Stand 2026-07-03, keine
+  Referenz darauf im Repo).
+- **Bewusst nicht angefasst:** `UMSETZUNG.md` (zwei beiläufige
+  „AMPP-artig"-Erwähnungen in B3/B5) und dieses Log selbst — die
+  Anforderung bezog sich explizit auf „das Architektur-Dokument"
+  (`ARCHITECTURE.md`), und `docs/decisions.md` ist ein Verlauf, der nicht
+  rückwirkend umgeschrieben wird.
