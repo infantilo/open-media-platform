@@ -816,7 +816,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C7 | erledigt | [C7] omp-switcher: MXL ×N → Buttons → MXL | 2026-07-10 |
 | C8 | erledigt | [C8] GUI-Launch: Instanz-Launcher (Katalog, Start/Stop, Restart-Persistenz) | 2026-07-10 |
 | C9 | erledigt | [C9] Contract-Konformitätstest (tools/contract-check) | 2026-07-10 |
-| C10 | offen (nächstes Ziel) | | |
+| C10 | erledigt | [C10] omp-video-mixer-me: Crosspoint/DVE/Keyer + Tally-Bus im SDK | 2026-07-11 |
 | C11 | offen | | |
 | C12 | offen | | |
 | C13 | offen | | |

@@ -7,4 +7,5 @@ members = [
     "omp-source",
     "omp-viewer",
     "omp-switcher",
+    "omp-video-mixer-me",
 ]

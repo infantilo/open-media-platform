@@ -19,5 +19,12 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-viewer"],
     "env": {}
+  },
+  {
+    "type": "omp-video-mixer-me",
+    "label": "Video Mixer M/E",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-video-mixer-me"],
+    "env": {}
   }
 ]

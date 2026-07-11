@@ -1053,7 +1053,24 @@ API.
 MXL-Zero-Copy im Switcher/Playout, wie in der P4-Zeile (§7) bereits
 vorgesehen. Wie Alpha über MXL transportiert wird (Pixelformat mit
 Alpha-Kanal vs. getrennte Key+Fill-Flows) ist bei der Umsetzung gegen
-die MXL-Spec zu verifizieren, nicht anzunehmen.
+die MXL-Spec zu verifizieren, nicht anzunehmen — **Vorabbefund
+2026-07-11** (Fable-Konsultation, am gevendorten Spec-Stand verifiziert):
+`third_party/mxl/lib/tests/data/v210a_flow.json` zeigt `media_type:
+"video/v210a"` als offizielles Beispiel — MXL kennt ein Pixelformat mit
+Alpha-Kanal, die Umsetzung muss das aber trotzdem gegen den dann
+aktuellen Spec-Stand bestätigen, nicht diesen einen Fund als
+abschließend behandeln.
+
+**Scope-Unschärfe zu Demo 3 (offen, 2026-07-11):** §7.4 zählt OGraf
+ausdrücklich zur Demo-3-Definition des kleinen Regieplatzes, die
+`UMSETZUNG.md`-Schrittliste (C10–C13) enthält aber keinen OGraf-Schritt
+und der dortige Demo-3-Meilensteintext nennt nur Bildmischer/
+Audiomischer/Player/Live-Quellen. Nicht stillschweigend aufgelöst —
+Optionen: (a) OGraf als eigenen Schritt in den C10–C13-Block aufnehmen
+(z. B. nach C10, weil dessen Keyer sonst nur eine Testfarbfläche zum
+Keyen hat statt eines echten Sende-Grafikelements), oder (b) die
+§7.4-Erwähnung bewusst auf Demo 4 verschieben. Nutzerentscheidung
+aussteht, siehe `docs/decisions.md` 2026-07-11.
 
 **Entschieden** (`docs/decisions.md` 2026-07-10): Render-Technik ist
 GStreamer `wpesrc` (WPE WebKit) — nativ in der Pipeline, Alpha direkt,
@@ -1441,15 +1458,27 @@ früher am Ausgang an als ein Bildpfad durch DVE+Keyer+Grafik-Kompositing
    Zwischenzustände wie Tally/Preview nicht unnötig zu verzögern). Ergebnis:
    alle Pfade eines Workflows verlassen den Workflow nach exakt
    `targetLatencyFrames` — die aus der Anforderung geforderte Eigenschaft.
-4. **Referenzzeit — zwei Fälle sauber getrennt, nicht vermengt:** Auf
-   ST-2110-Pfaden (Host-übergreifend) sind Delay-Werte PTP-referenziert
-   auszudrücken (§2), damit der Ausgleich netzwerkweit konsistent bleibt.
-   Auf MXL-Zero-Copy-Pfaden (Single-Host, §6 „kein PTP nötig") übernimmt die
-   lokale monotone Grain-Sequenznummer dieselbe Rolle als Ersatztakt — exakt
-   die Unterscheidung, die C4 bereits für die MXL/GStreamer-Timestamp-Frage
-   offengelassen hat (`docs/decisions.md`, 2026-07-09): dort war die Frage
-   pro Node offen, hier wird sie zur Workflow-weiten Budget-Rechnung
-   hochskaliert.
+4. **Referenzzeit — eine durchgehende Referenz, präzisiert 2026-07-11 (Fable-
+   Konsultation, gegen den gevendorten `third_party/mxl`-Spec-Stand
+   v1.0.1 verifiziert, nicht geraten):** Der MXL-Grain-Index ist **kein**
+   lokaler Ersatztakt, sondern absolute TAI-Zeit seit der ST-2059-1-Epoche
+   (`third_party/mxl/docs/Timing.md`: „Index 0 is defined to be index at
+   the beginning of the epoch"). ST-2110-Pfade (PTP-referenziert, §2) und
+   MXL-Zero-Copy-Pfade (Single-Host) teilen sich damit **dieselbe**
+   Zeitreferenz in verschiedenen Einheiten (RTP-Timestamp-Unroll ↔ TAI-ns ↔
+   Grain-Index sind verlustfrei ineinander umrechenbar, `mxl::time`), keine
+   zwei sauber zu trennenden Fälle mehr. Damit konkretisiert sich der
+   Delay-Ausgleich zu: **Ausgangs-Grain(N) = Eingangs-Grain(N) + D**, wobei D
+   die zugewiesene `setOutputDelay()`-Latenz in Grains ist — Ursprungsbezug
+   und Latenzbudget sind dieselbe Mechanik, kein Gegensatz. Voraussetzung
+   dafür ist, dass Nodes den Origin-Index tatsächlich durchreichen statt ihn
+   zu verwerfen — das ist aktuell **nicht** der Fall (siehe
+   `docs/decisions.md`, 2026-07-11 „MXL-Grain-Index ist TAI-Zeit, nicht
+   Ersatztakt"): die C4-Vereinfachung (`do-timestamp=true` beim Lesen,
+   `get_current_index()`+1-Zähler beim Schreiben) verwirft die
+   Ursprungskorrelation an jedem Node-Hop. Für die A–C-Phasen unverändert
+   tragbar (dort geht es um Funktionsnachweis, keine Frame-Attribution);
+   muss vor echter §15-Umsetzung (P2/D) behoben sein.
 5. **Audio-/Daten-Pfade separat, nicht als Kopie des Video-Budgets:** Ein
    Video-Frame-Budget ist kein automatisches Audio-Sample- oder
    Ancillary-Daten-Budget — derselbe Mechanismus (Deklaration + Ausgleich)
@@ -1462,6 +1491,23 @@ früher am Ausgang an als ein Bildpfad durch DVE+Keyer+Grafik-Kompositing
    Kanal profitiert trotzdem vom Latenz-Ausgleich, damit sein Signal nicht
    vor- oder nacheilt), lösen aber nicht dasselbe Problem — nicht
    verwechseln.
+
+   **Metadatenebene, präzisiert 2026-07-11:** frame-genaue Begleitdaten
+   (Timecode, Captions, künftig Grafik-Steuerdaten) laufen als eigener
+   MXL-Datenflow (`format: urn:x-nmos:format:data`, Beispiel
+   `video/smpte291`/ST-2110-40 liegt im gevendorten Spec-Testfundus,
+   `third_party/mxl/lib/tests/data/data_flow.json`) mit `grain_rate` =
+   Videorate — Daten-Grain N gehört per Definition zu Video-Grain N, ein
+   Node wendet auf beide dasselbe `D` an (Punkt 4), dann bleibt die
+   Zuordnung ohne Zusatzmechanismus korrekt. Für Steuerkommandos, die
+   nicht als Medien-Flow reisen (z. B. ein IS-12-„show graphic"- oder
+   Take-Aufruf, der exakt zu einem Grain wirken soll), ist ein optionales
+   `executeAtIndex`-Argument im generischen Methoden-Dispatch (seit
+   C4-prep vorhanden) der vorgesehene Ort — ohne das ist Automation nur
+   „so schnell wie der Control-Plane-Roundtrip", nie frame-genau.
+   `mxlGrainInfo` selbst hat kein Nutzdaten-Korrelationsfeld (nur
+   reservierte Bytes) — die Korrelation läuft ausschließlich über den
+   Index, nicht über ein Zusatzfeld.
 6. **Re-Berechnung bei laufender Graph-Änderung:** Wird während der Sendung
    eine Kante neu gezogen oder ein Node mit anderer deklarierter Latenz
    eingewechselt, muss der betroffene Pfad neu berechnet und die

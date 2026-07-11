@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 // runnerProcess ist der einzige aktuell unterstützte Runner: der
@@ -28,6 +30,19 @@ type CatalogEntry struct {
 // LoadCatalog liest und validiert die Katalog-Datei unter path. Ein
 // fehlender/leerer "runner" wird als "process" behandelt (Default aus
 // ARCHITECTURE.md §6.2).
+//
+// Relative Pfad-Kommandos (z. B. "../nodes/target/debug/omp-source") sind
+// in `deploy/catalog.json` bewusst relativ zum Katalog-**Verzeichnis**
+// geschrieben (`deploy/`), nicht relativ zum cwd des Orchestrator-
+// Prozesses — der Prozess hat mit den absoluten `OMP_UI_DIR`/
+// `OMP_DATA_DIR`-Pfaden aus `deploy/dev/start-omp.sh` gar keine
+// verlässliche Cwd-Konvention mehr (Kommentar dort: "so kann der Prozess
+// ohne umschließende cd-Subshell gestartet werden"). Ohne diese Auflösung
+// bricht `POST /api/v1/instances` (C8) je nach Startverzeichnis mit
+// "no such file or directory" — hier gefunden und behoben beim
+// C10-Verifikationslauf (`UMSETZUNG.md`), kein C10-spezifisches Verhalten.
+// Bare-Kommandos ohne Pfadtrenner (z. B. "true", zukünftig "podman") sind
+// PATH-Lookups und bleiben unverändert.
 func LoadCatalog(path string) ([]CatalogEntry, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -39,6 +54,7 @@ func LoadCatalog(path string) ([]CatalogEntry, error) {
 		return nil, fmt.Errorf("launcher: parse catalog %s: %w", path, err)
 	}
 
+	catalogDir := filepath.Dir(path)
 	for i := range entries {
 		if entries[i].Runner == "" {
 			entries[i].Runner = runnerProcess
@@ -48,6 +64,10 @@ func LoadCatalog(path string) ([]CatalogEntry, error) {
 		}
 		if len(entries[i].Command) == 0 {
 			return nil, fmt.Errorf("launcher: catalog entry %q has an empty command", entries[i].Type)
+		}
+		cmdPath := entries[i].Command[0]
+		if strings.ContainsRune(cmdPath, '/') && !filepath.IsAbs(cmdPath) {
+			entries[i].Command[0] = filepath.Join(catalogDir, cmdPath)
 		}
 	}
 

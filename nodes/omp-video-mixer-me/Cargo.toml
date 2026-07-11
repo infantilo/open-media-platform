@@ -1,0 +1,14 @@
+[package]
+name = "omp-video-mixer-me"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei omp-node-sdk/omp-switcher.
+publish = false
+
+[dependencies]
+gstreamer = "0.25.3"
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

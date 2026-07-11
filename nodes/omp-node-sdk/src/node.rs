@@ -125,6 +125,21 @@ impl NodeHandle {
             eprintln!("omp-node-sdk: alert publish failed: {e}");
         }
     }
+
+    /// Veröffentlicht ein Tally-Event auf `omp.tally.<target_node_id>`
+    /// (`UMSETZUNG.md` C10) — anders als `publish_alert` gilt das Event
+    /// nicht dem eigenen Node, sondern der Kachel `target_node_id` (z. B.
+    /// dem gerade auf Programm geschalteten Quell-Node). Kein NATS
+    /// verbunden ⇒ stiller No-Op wie bei `publish_alert`.
+    pub async fn publish_tally(&self, target_node_id: &str, on: bool) {
+        let Some(publisher) = &self.publisher else {
+            eprintln!("omp-node-sdk: tally dropped (no nats connection): {target_node_id} on={on}");
+            return;
+        };
+        if let Err(e) = publisher.publish_tally(target_node_id, on).await {
+            eprintln!("omp-node-sdk: tally publish failed: {e}");
+        }
+    }
 }
 
 /// Baut IS-04-Resources, registriert sie, startet den Descriptor-Server und

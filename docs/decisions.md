@@ -2323,3 +2323,125 @@ AMPP-Plattform aus `ARCHITECTURE.md` entfernen; `ARCHITECTURE.html`
   Anforderung bezog sich explizit auf „das Architektur-Dokument"
   (`ARCHITECTURE.md`), und `docs/decisions.md` ist ein Verlauf, der nicht
   rückwirkend umgeschrieben wird.
+
+## 2026-07-11 — MXL-Grain-Index ist TAI-Zeit, nicht Ersatztakt (Fable-Konsultation, am gevendorten Spec-Stand verifiziert); OGraf/Demo-3-Scope-Unschärfe offen
+
+**Kontext:** Zwei Nutzerfragen vor dem Start von C10. (1) Fehlt der
+OGraf-Grafik-Node für den „kleinen Regieplatz"-Test? (2) Gibt jeder
+verarbeitende Node den Original-Timestamp der Quelle durch, oder wie
+sonst wird A/V/Metadaten-Synchronität sichergestellt — insbesondere auf
+der MXL/DMF-Metadatenebene? Fable wurde konsultiert (Projektregel:
+Standards nicht raten) und hat dafür statt zu spekulieren den
+gevendorten `third_party/mxl`-Quellstand (v1.0.1, insb.
+`docs/Timing.md`, `lib/include/mxl/{flow,time}.h`, `lib/tests/data/*.json`,
+`rust/mxl/src/instance.rs`) sowie den tatsächlichen OMP-Code
+(`nodes/omp-mediaio/src/mxl.rs`, `omp-node-sdk/src/is04.rs`) gelesen,
+nicht nur `ARCHITECTURE.md`.
+
+**Befund 1 (Kernkorrektur, in §15.1 Punkt 4 eingearbeitet):** Der
+MXL-Grain-Index ist **keine lokale Ersatz-Sequenznummer**, sondern
+absolute TAI-Zeit seit der ST-2059-1-Epoche (`Timing.md`: „Index 0 is
+defined to be index at the beginning of the epoch"). ST-2110-Pfade
+(PTP-referenziert) und MXL-Single-Host-Pfade teilen sich damit
+**dieselbe** Zeitreferenz in unterschiedlichen Einheiten, keine zwei
+grundsätzlich verschiedenen Fälle, wie §15.1 Punkt 4 bisher unterschied.
+Der Delay-Ausgleich aus §15 konkretisiert sich dadurch zu
+„Ausgangs-Grain(N) = Eingangs-Grain(N) + D" — Ursprungsbezug und
+Latenzbudget sind dieselbe Mechanik.
+
+**Befund 2 (Implementierungslücke, noch offen):** Die aktuelle
+OMP-Implementierung erhält diesen Ursprungsbezug **nicht**:
+`MxlVideoInput` schiebt Grains über `appsrc do-timestamp=true` (verwirft
+die Herkunftszeit, C4-Entscheidung), `MxlVideoOutput::write_loop` holt den
+Start-Index einmalig per `get_current_index()` und zählt danach nur +1
+(kein PTS/TAI-Re-Anchor). Für A–C (reiner Funktionsnachweis) bewusst
+tragbar — für §15 (P2/D) und für frame-genaue Metadaten-Attribution
+nicht. **Wird nicht in C10 behoben** (Scope-Disziplin, `UMSETZUNG.md` §0
+Punkt 2: ein Schritt pro Sitzung, C10 ist Deskriptor/Pipeline/Crosspoint,
+nicht Timing-Rearchitektur) — aber C10 ist der erste Node mit
+echtem simultanem Multi-Input-Compositing (Crossfade + Keyer-Layer
+gleichzeitig aktiv), wo die Lücke erstmals praktisch relevant wird.
+**Empfehlung:** PTS/TAI-verankerte Index-Berechnung spätestens vor der
+D5-SDK-v1-Doku bzw. vor dem ersten §15-Umsetzungsschritt nachziehen,
+nicht weiter aufschieben.
+
+**Befund 3 (Metadatenebene, in §15.1 nach Punkt 5 eingearbeitet):**
+Frame-genaue Begleitdaten (Timecode, Captions, künftig
+Grafik-Steuerdaten) gehören als eigener MXL-Datenflow (`format:
+urn:x-nmos:format:data`, Beispiel `video/smpte291`/ST-2110-40 liegt im
+Spec-Testfundus, `lib/tests/data/data_flow.json`) mit `grain_rate` =
+Videorate modelliert — Korrelation läuft automatisch über den identischen
+Grain-Index, kein Zusatzfeld nötig (`mxlGrainInfo` hat ohnehin kein
+Nutzdaten-Korrelationsfeld, nur reservierte Bytes). Für Steuerkommandos
+ohne Medien-Flow-Charakter (z. B. ein frame-genau auszuführender
+IS-12-Methodenaufruf) ist ein optionales `executeAtIndex`-Argument im
+generischen Methoden-Dispatch (seit C4-prep vorhanden) der vorgesehene
+Ort, sonst ist Automation nur „so schnell wie der
+Control-Plane-Roundtrip".
+
+**Befund 4 (SDK-Konventionen, additiv, nicht jetzt umgesetzt):**
+`grouphint` wird aktuell v0-behelfsmäßig mit der Flow-ID gefüllt
+(`omp-mediaio/src/mxl.rs`, als Workaround kommentiert) statt „Instanzname:
+Rolle" — laut `flow.h`-Kommentar „essential for flow discovery by higher
+level applications", also mittelfristig zu korrigieren. `parents`
+(`omp-node-sdk/src/is04.rs`) bleibt bei abgeleiteten Flows (Switcher-/
+künftig Mixer-Ausgang) konstant leer — sollte gesetzt werden, ersetzt
+aber keine frame-genaue Attribution (reine Herkunfts-Lineage). Beide
+Punkte: additive Aufräumarbeit, kein Blocker für C10.
+
+**Offen (Nutzerentscheidung aussteht):** OGraf-Node laut §7.4 Teil von
+Demo 3, aber kein eigener Schritt in der `UMSETZUNG.md` C10–C13-Liste —
+Widerspruch, nicht stillschweigend aufgelöst. In §11.2 als
+„Scope-Unschärfe" vermerkt, zwei Optionen genannt (OGraf-Schritt in
+C10–C13 aufnehmen vs. §7.4-Erwähnung bewusst auf Demo 4 verschieben).
+**Nicht Teil dieser Sitzung** (C10 läuft wie in `UMSETZUNG.md` geplant
+weiter, unabhängig vom Ausgang dieser Frage).
+
+**Beifang:** `third_party/mxl/lib/tests/data/v210a_flow.json` zeigt
+`media_type: "video/v210a"` — die in §11.2 offene Alpha-Transport-Frage
+für den OGraf-Node hat damit einen ersten Beleg (kein Pixelformat mit
+Alpha ist bloße Annahme), muss bei der Umsetzung aber trotzdem gegen den
+dann aktuellen Spec-Stand bestätigt werden.
+
+## 2026-07-11 — C10-Verifikation gefunden: Instanz-Launcher (C8) bricht seit dem Start/Stop-Tooling-Commit, `deploy/catalog.json`-Pfade behoben
+
+**Kontext:** Beim End-to-End-Verifikationslauf von C10 (zwei
+`omp-source` + `omp-video-mixer-me` im Katalog starten) schlug
+`POST /api/v1/instances` für **jeden** Katalog-Eintrag fehl (nicht nur
+den neuen), mit `fork/exec ../nodes/target/debug/omp-source: no such
+file or directory` — ein Regressions-Bug, kein C10-spezifisches
+Problem, aber ein Blocker für dessen Verifikation.
+
+**Ursache:** `deploy/catalog.json`s `command`-Pfade
+(`"../nodes/target/debug/<binary>"`) sind relativ zum
+**Katalog-Verzeichnis** (`deploy/`) geschrieben, wurden von
+`orchestrator/internal/launcher/launcher.go`s `Start()` aber unverändert
+an `exec.Command()` durchgereicht — relativ zum tatsächlichen **cwd des
+Orchestrator-Prozesses**. Das ging nur solange gut, wie der Prozess
+zufällig aus `orchestrator/` gestartet wurde (der alte, von
+`orchestrator/internal/config/config.go`s Default-Kommentaren
+implizierte Zustand: „OMP_UI_DIR=../ui etc. sind relativ zum cwd
+gedacht"). Der jüngste Start/Stop-Tooling-Commit (`deploy/dev/
+start-omp.sh`, git-Historie 2026-07-11) stellte `OMP_UI_DIR`/
+`OMP_DATA_DIR` bewusst auf absolute Pfade um, genau um diese
+Cwd-Abhängigkeit loszuwerden („so kann der Prozess ohne umschließende
+cd-Subshell gestartet werden") — dabei aber `deploy/catalog.json`s
+relative Kommando-Pfade nicht mitgezogen, wodurch der Launcher (C8,
+2026-07-10 verifiziert, **vor** diesem Commit) seitdem kaputt war, ohne
+dass ein Schritt das bemerkt hätte (C8s eigene Verifikation prüft
+Start/Stop einer Instanz, wurde aber nicht nach dem Tooling-Commit
+erneut gegen `make start` durchlaufen).
+
+**Fix:** `LoadCatalog()` (`orchestrator/internal/launcher/catalog.go`)
+löst Pfad-Kommandos (enthalten `/`, nicht bereits absolut) jetzt beim
+Laden gegen das Katalog-Verzeichnis auf (`filepath.Join(filepath.Dir(
+path), cmd)`) — bare Kommandos ohne Pfadtrenner (PATH-Lookup, z. B.
+`"true"`, künftig `"podman"`) bleiben unverändert. Drei neue Tests
+(`catalog_test.go`): Auflösung relativer Pfade, bare Kommandos
+unverändert, bereits absolute Pfade unverändert. Kein Eintrag in
+`UMSETZUNG.md` geändert — reiner Bugfix an bereits abgeschlossenem C8,
+gleiche Einordnung wie der B4/Health-Staleness-Fix vom 2026-07-09.
+
+**Nicht behoben:** `deploy/catalog.json` selbst bleibt unverändert
+(die relativen Pfade sind jetzt korrekt interpretiert, kein Grund sie
+auf absolute Pfade umzustellen — das wäre weniger portabel).

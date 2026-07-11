@@ -493,6 +493,25 @@ impl RegistryClient {
         }
     }
 
+    /// Löst ein Device per Standard-IS-04-Query-API auf (`GET
+    /// .../devices/<id>`) — Grundlage für die Sender→Device→Node-
+    /// Auflösung, die `omp-video-mixer-me` (`UMSETZUNG.md` C10) braucht,
+    /// um beim Crosspoint-Wechsel das Tally-Event (`omp.tally.<node_id>`)
+    /// auf die Kachel des tatsächlich angewählten Quell-**Nodes** zu legen
+    /// (der Discovery-Poll kennt aus der Sender-Liste nur `device_id`,
+    /// nicht `node_id` — beide sind laut IS-04 unterschiedliche Resources).
+    pub fn get_device(&self, device_id: &str) -> Result<Device, QueryError> {
+        let url = format!("{}/x-nmos/query/v1.3/devices/{}", self.base_url, device_id);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<Device>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
     /// Listet alle bei der Registry registrierten Sender (`GET
     /// .../senders`, dieselbe Query-API wie `get_sender`) — Grundlage für
     /// `omp-switcher`s reine IS-04-Discovery (`UMSETZUNG.md` C7, gleicher

@@ -33,6 +33,20 @@ pub struct Alert {
     pub message: String,
 }
 
+/// Auf `omp.tally.<node_id>` veröffentlichter Payload — Body-Schema laut
+/// `docs/decisions.md` (2026-07-07, B4) `{"on": bool}`, `node_id` steckt
+/// nur im Subject, nicht im Body. Färbt die Kachel des referenzierten
+/// Nodes rot, solange `on == true`. Der veröffentlichte `node_id` ist hier
+/// bewusst nicht der eigene Node (anders als bei `Status`/`Alert`),
+/// sondern der einer fremden Kachel — `omp-video-mixer-me`
+/// (`UMSETZUNG.md` C10) veröffentlicht bei jedem Crosspoint-Wechsel ein
+/// Tally-Off für den zuvor aktiven und ein Tally-On für den neu aktiven
+/// Quell-Node.
+#[derive(Debug, Clone, Serialize)]
+pub struct Tally {
+    pub on: bool,
+}
+
 #[derive(Debug)]
 pub enum PublishError {
     Encode(serde_json::Error),
@@ -94,6 +108,22 @@ impl Publisher {
     pub async fn publish_alert(&self, alert: &Alert) -> Result<(), PublishError> {
         let subject = format!("omp.alert.{}", alert.node_id);
         let payload = serde_json::to_vec(alert).map_err(PublishError::Encode)?;
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(PublishError::Nats)?;
+        self.client.flush().await.map_err(PublishError::Flush)
+    }
+
+    /// Veröffentlicht ein Tally-Event auf `omp.tally.<node_id>` und
+    /// wartet auf `flush()` — gleiche Begründung wie bei `publish_alert`:
+    /// ein Crosspoint-Wechsel ist ein diskretes, zeitkritisches Ereignis
+    /// (Operator erwartet sofortiges visuelles Feedback im Graph), kein
+    /// periodischer Herzschlag, der einen verzögerten Publish von selbst
+    /// aufholen würde.
+    pub async fn publish_tally(&self, node_id: &str, on: bool) -> Result<(), PublishError> {
+        let subject = format!("omp.tally.{node_id}");
+        let payload = serde_json::to_vec(&Tally { on }).map_err(PublishError::Encode)?;
         self.client
             .publish(subject, payload.into())
             .await
