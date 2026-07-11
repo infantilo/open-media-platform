@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract
+.PHONY: build test check up down ci ui nodes contract start stop status
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check
 
@@ -65,5 +65,25 @@ down:
 	-podman rm omp-nats
 	-podman stop omp-nmos-registry
 	-podman rm omp-nmos-registry
+
+# Einfacher Einstiegspunkt für die ganze Dev-Umgebung (docs/HANDBUCH.md):
+# NATS + NMOS-Registry (make up) + UI-Bundle + Orchestrator-Binary bauen,
+# Orchestrator im Hintergrund starten, auf /healthz warten.
+start:
+	@./deploy/dev/start-omp.sh
+
+# Stoppt nur den Orchestrator-Prozess (Container laufen weiter, schnelles
+# Neustarten). `make stop ARGS=--all` stoppt zusätzlich NATS/Registry.
+stop:
+	@./deploy/dev/stop-omp.sh $(ARGS)
+
+status:
+	@if [ -f .run/orchestrator.pid ] && kill -0 "$$(cat .run/orchestrator.pid)" 2>/dev/null; then \
+		echo "Orchestrator: läuft (PID $$(cat .run/orchestrator.pid)), http://localhost:8000"; \
+	else \
+		echo "Orchestrator: nicht gestartet (make start)"; \
+	fi
+	@podman container exists omp-nats && echo "NATS: läuft" || echo "NATS: gestoppt"
+	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 
 ci: check

@@ -17,6 +17,10 @@ build/
 # Orchestrator-Laufzeitdaten (Layouts, B5) — Datei-Backend, kein Quellcode
 /data/
 
+# Gebaute Binaries + Laufzeit-PID/Log von deploy/dev/start-omp.sh
+/bin/
+/.run/
+
 # MXL: geklonter/gebauter C++-Kern + generierte Env-Datei (deploy/dev/install-mxl.sh)
 /third_party/mxl/
 /deploy/dev/mxl.env

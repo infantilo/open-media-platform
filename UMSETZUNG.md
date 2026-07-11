@@ -69,7 +69,7 @@ schlicht *Projektdauer × Abopreis* — es gibt keine Zusatzkosten pro Token.
 |---|---|---|---|---|
 | **A — Fundament** (P0) | Repo, Podman/Quadlets, NATS, NMOS-Registry, Go-Orchestrator, Mock-Node, Descriptor v0 | A1–A9 | 2–4 Monate | ≈ 45–90 € |
 | **B — Flow-Editor GUI** | Graph-Canvas, Drag&Drop-Routing, Gruppen/Verschachtelung, Parameter-Panels, Snapshots | B1–B7 | 2–4 Monate | ≈ 45–90 € |
-| **C — Playout-Node & MXL-Demo-Trias** (P1-Kern) | Rust + GStreamer, `omp-node-sdk`, RTP-Ausgang (C1–C3), MXL-Fundament + Source/Viewer/Switcher + GUI-Launch (C4–C8), Contract-Test (C9), später echter Playout-Umbau (C10/C11) | C1–C9 (+ C10/C11 später) | 4–6 Monate | ≈ 85–135 € |
+| **C — Playout-Node, MXL-Demo-Trias & kleiner Regieplatz** (P1-Kern) | Rust + GStreamer, `omp-node-sdk`, RTP-Ausgang (C1–C3), MXL-Fundament + Source/Viewer/Switcher + GUI-Launch (C4–C8), Contract-Test (C9), kleiner manuell bedienter Regieplatz — Bildmischer/Audiomischer/Player/Operator-Console (C10–C13, resequenziert 2026-07-11), danach Playout-Automation-Controller (C14/C15) | C1–C9 (+ C10–C15 später) | 4–6 Monate (Schätzung vor Resequenzierung; siehe `ARCHITECTURE.md` §7.4 zum gemessenen Ist-Tempo) | ≈ 85–135 € |
 | **D — Hardening & SDK-Release** | mTLS/Auth, AMWA-Testing-Tool in CI, SDK-Doku, 2110-Pfad | D1–D5 | 3–6 Monate | ≈ 65–135 € |
 | **Gesamt bis demo-fähiger Kern** | | ~30 Schritte | **11–20 Monate** | **≈ 240–450 €** |
 
@@ -429,7 +429,9 @@ Ab hier (C4) ersetzt die **MXL-Demo-Trias** (`omp-source`/`omp-viewer`/
 — Entscheidung + Begründung in `docs/decisions.md`, 2026-07-09
 („MXL-Timing per Nutzer-Machtwort vorgezogen"). Der C1–C3-Playout-Node
 bleibt unverändert als RTP-Referenz-Node im Repo; der echte
-Playlist-/Playout-Umbau folgt später als C10/C11 und nutzt `playlist.rs`
+Playlist-/Playout-Umbau folgt später als C14/C15 (nach dem kleinen
+Regieplatz C10–C13, resequenziert 2026-07-11, siehe unten) und nutzt
+`playlist.rs`
 vom Branch `c4-playlist-wip` (reine Logik, 12 Tests, dort aufbewahrt, weil
 der ursprüngliche Zwei-Slot-`input-selector`-Ansatz — im gleichen
 Decisions-Eintrag beschrieben — grundsätzlich verworfen wurde, nicht nur
@@ -636,27 +638,105 @@ hier ist das Projekt öffentlich zeigbar (Call for Nodes) — zeigt die
 Plattform-These (modulare Nodes, Standard-Discovery, Zero-Copy-Transport)
 direkt, nicht nur ein einzelnes Node-Feature.
 
-### C10/C11 — Playout v1 (später, nach Demo 2)
+**Resequenziert (2026-07-11, `docs/decisions.md` und `ARCHITECTURE.md`
+§7.4):** Playout-Automation wurde bewusst nach hinten gestellt — sie ruft
+architektonisch nur dieselben IS-12/14-Methoden auf, die die manuell
+bedienten Regieplatz-Nodes ohnehin brauchen (`ARCHITECTURE.md` §13.1/
+§13.2/§13.3), sollte also nicht vor ihnen gebaut werden. Der Rest von
+Phase C ist daher umsortiert: zuerst der kleine, manuell bedienbare
+Regieplatz (C10–C13), danach die Playout-Automation-Vertiefung (C14/C15,
+ehemals C10/C11).
 
-**Ziel:** Der echte, playlist-fähige Playout-Node, jetzt mit dem
-korrekten Pipeline-Muster.
+### C10 — `omp-video-mixer-me` (Bildmischer-Minimalausbau)
 
-**Anweisung (Kurzfassung, Detailplan zu Beginn von C10):** Player-per-Slot
-als eigene, durchgehend laufende Pipelines (analog
-`PlayerPipeline.js`/`MasterPipeline.js`), die MXL publizieren; eine
-Selector-Stufe konsumiert. `playlist.rs` vom Branch `c4-playlist-wip`
-(reine Logik, 12 Tests, unverändert brauchbar) wird wiederverwendet.
-Anschließend C5 aus der alten Zählung (Playout-UI-Bundle: Playlist-Liste,
-Cue/Take-Buttons, Fortschrittsbalken über die generische Param/Method-API).
+**Ziel:** Erster §13.1-Referenzknoten — ein M/E-Bank-Prozess mit
+Crosspoint + 1–2 DVE-Kanälen + 1 Keyer als `NcWorker` im selben `NcBlock`
+(`ARCHITECTURE.md` §13.1/§11.1-Methodik), nicht als separate MXL-verkettete
+Nodes. Baut auf `omp-switcher` (C7) als Ausgangspunkt auf (Discovery-Muster,
+`input-selector`-Pipeline), erweitert um DVE/Keyer/Freeze und die
+IS-12/14-Methodenschicht statt nur Button-Auswahl.
 
-**Verifikation:** Wie ursprünglich für C4/C5 vorgesehen (Playlist mit 2
-Clips, `take()` schaltet nachweisbar um, automatischer Übergang laut
-`mode`, Tally im Graph zeigt On-Air) — plus: kein Buffer-Stillstand über
-mehrere Slot-Wechsel hinweg (der C4-Bug, jetzt durch das andere
-Pipeline-Muster strukturell ausgeschlossen, nicht nur gefixt).
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C10):** Deskriptor +
+Methoden gegen §13.1-Skizze modellieren, Klassennamen gegen aktuelle
+MS-05-02-Spec verifizieren (§11.1 Punkt 2, nicht raten). Volle DVE/Keyer-
+Tiefe (Chroma-Keying-Qualität, komplexe DVE-Transformationen) bleibt
+Community-Scope (§7 P4-Zeile) — hier nur so viel, dass Take/Cut/AutoTrans/
+einfacher Wipe/ein Keyer/ein DVE-Kanal vorführbar sind.
 
-**→ Meilenstein „Demo 3":** Echtes Playout mit Playlist, grafisch
-verschaltet und bedient.
+**Verifikation:** Zwei `omp-source`-Instanzen + `omp-video-mixer-me` im
+Flow-Editor verkabelt; `take()`/`cut()` schalten nachweisbar um (Tally im
+Graph), ein Keyer-Test (z. B. Farbfläche über Hintergrund) sichtbar im
+Viewer (C6).
+
+### C11 — `omp-audio-mixer` (Audiomischpult-Minimalausbau)
+
+**Ziel:** §13.2-Referenzknoten — dynamische Kanalzahl
+(`addChannel`/`removeChannel`), Gain/EQ-Grundklassen (Standardklassen
+zuerst prüfen, §11.1 Punkt 2), Audio-Follow-Video gegen den
+Tally-NATS-Bus des gekoppelten `omp-video-mixer-me` (C10).
+Kompressor/Limiter/Expander/Aux/Gruppen können wie DVE/Keyer bei C10 als
+Community-Vertiefung nachziehen (§7 P4-Zeile) — hier zuerst Gain/EQ/
+Audio-Follow-Video als Minimalausbau.
+
+**Verifikation:** Kanal per `addChannel()` zur Laufzeit hinzufügen (Panel
+zeigt ihn ohne Neustart, B6-Descriptor-Re-Fetch); Crosspoint-Wechsel an
+C10 löst nachweisbar die konfigurierte Audio-Follow-Video-Aktion aus.
+
+### C12 — `omp-player` (Verallgemeinerung, manueller Modus)
+
+**Ziel:** §13.3-Referenzknoten — verallgemeinert den `PlaylistController`-
+Baustein (ursprünglich für Playout geplant, siehe `c4-playlist-wip`) zu
+einem gemeinsamen Crate, das per UI-Bundle-Variante + Konfigurationsprofil
+sowohl als Musik-/Jingle-Player als auch als Videoplayer auftritt.
+Manueller Cue/Take-Betrieb zuerst — Automation folgt in C14/C15.
+
+**Verifikation:** Zwei Instanzen (eine im Jingle-Grid-UI-Modus, eine im
+Videoplayer-UI-Modus) aus dem Katalog gestartet, beide manuell bedienbar,
+beide MXL-Output im Viewer sichtbar.
+
+### C13 — Operator-Console (`ARCHITECTURE.md` §14)
+
+**Ziel:** Zweite Shell-Ansicht neben dem Flow-Editor — ein Testnutzer mit
+nur `operate` auf einer Node-Rolle (§12, sofern D3 zu diesem Zeitpunkt
+schon steht — sonst mit einer vereinfachten Rollen-Stub-Prüfung
+vorwegnehmen, echte Durchsetzung folgt mit D3) landet nach Login direkt
+auf deren UI-Bundle, ohne Graph.
+
+**Verifikation:** `GET /api/v1/me/consoles` liefert die erwartete Liste;
+Browser-Test mit Test-Rollenbindung zeigt direkt das Panel von C10/C11/C12
+statt des Flow-Editors.
+
+**→ Meilenstein „Demo 3":** Kleiner, manuell bedienter Regieplatz —
+Bildmischer, Audiomischer, Player, Live-Quellen, grafisch verschaltet und
+über ein rollen-gescoptes Bedienpult (Operator-Console) statt nur den
+Flow-Editor bedient.
+
+### C14/C15 — Playout-Automation-Controller (vormals C10/C11, jetzt danach)
+
+**Ziel:** Dünne Sequenzierungsschicht, die `playlist.rs`
+(`c4-playlist-wip`, reine Logik, 12 Tests, unverändert brauchbar)
+wiederverwendet, aber **keine eigene Medienpipeline mehr baut** — sie ruft
+dieselben IS-12/14-Methoden von C10/C11/C12 auf, die der manuelle
+Regieplatz bereits bereitstellt (`ARCHITECTURE.md` §13.1–§13.3: „dieselben
+Methoden, keine zweite API"). Der ursprünglich für C1–C3 gebaute
+RTP-Referenz-Playout-Node bleibt unverändert im Repo (kein Rückbau) und
+zählt als eine mögliche `omp-player`-Instanz.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C14):**
+Playlist-Controller-Node, der `load()/append()/remove()/cue()/take()`
+gegen die Ziel-Node-Methoden (Player/Mixer) statt gegen eine eigene
+Pipeline ausführt; UI-Bundle: Playlist-Liste, Cue/Take-Buttons,
+Fortschrittsbalken über die generische Param/Method-API.
+
+**Verifikation:** Playlist mit 2 Clips, `take()` schaltet nachweisbar auf
+C12 um, automatischer Übergang laut `mode`, Tally im Graph zeigt On-Air —
+plus: kein Buffer-Stillstand über mehrere Slot-Wechsel hinweg (der
+C4-Bug, durch das C10-C13-Pipeline-Muster strukturell ausgeschlossen,
+nicht nur gefixt).
+
+**→ Meilenstein „Demo 4":** Regieplatz mit UND ohne Automatisation
+vorführbar — Playout steuert dieselben Nodes, die der Operator manuell
+bedient.
 
 ---
 
@@ -678,10 +758,14 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   `docs/decisions.md` 2026-07-09.
 - **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
   — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
-- **D6 (geplant, noch nicht detailliert)** Resource-Aware Placement &
-  Live-Migration: Host-Telemetrie über NATS, Placement-Engine
-  (advisory zuerst), Make-before-break-Migrationsprotokoll —
-  Konzept siehe `ARCHITECTURE.md` §6.1. Node-Contract-Grundlage
+- **D6 (Host-Agent/Bootstrap jetzt detailliert, Rest noch nicht)**
+  Resource-Aware Placement & Live-Migration: Host-Telemetrie über NATS,
+  Placement-Engine (advisory zuerst), Make-before-break-Migrationsprotokoll
+  — Konzept siehe `ARCHITECTURE.md` §6.1. Die Erkennung/das Bootstrapping
+  entfernter Hosts selbst (`omp-host-agent`, Token-Bootstrap über step-ca,
+  Kommandokanal) ist jetzt konkret in `ARCHITECTURE.md` §19 beschrieben —
+  realistisch der nächste, weil community-unabhängige Baustein nach dem
+  kleinen Regieplatz (C10–C13), siehe §7.4. Node-Contract-Grundlage
   (State-Export/Import + Readiness-Signal, §5 Punkt 6) muss vor dem
   SDK-v1-Freeze (Ende Phase C) stehen, auch wenn D6 selbst erst hier
   detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
@@ -732,4 +816,8 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C7 | erledigt | [C7] omp-switcher: MXL ×N → Buttons → MXL | 2026-07-10 |
 | C8 | erledigt | [C8] GUI-Launch: Instanz-Launcher (Katalog, Start/Stop, Restart-Persistenz) | 2026-07-10 |
 | C9 | erledigt | [C9] Contract-Konformitätstest (tools/contract-check) | 2026-07-10 |
-| C10/C11 | offen (später) | | |
+| C10 | offen (nächstes Ziel) | | |
+| C11 | offen | | |
+| C12 | offen | | |
+| C13 | offen | | |
+| C14/C15 | offen (später, nach C10–C13) | | |

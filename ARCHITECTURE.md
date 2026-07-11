@@ -438,7 +438,10 @@ run`/Binary von Hand):
   auf ein vorgebautes Binary) — der Orchestrator startet **nur**
   Katalog-Einträge, keine freien Kommandos (Sicherheitsgrenze). Ein neues
   Feld `runner` (Default `"process"`, später `"podman"`/Quadlet) hält die
-  Tür zur volleren Lösung offen, ohne sie jetzt zu bauen.
+  Tür zur volleren Lösung offen, ohne sie jetzt zu bauen. Ein weiteres,
+  rein additives Feld `category` (Input/Output/Audio/Video/Grafik/Daten/
+  Control-Gruppierung für die Palette) ist in §13.5 spezifiziert —
+  optional, kein Pflichtfeld dieser Stufe.
 - **Orchestrator-seitig:** neues Paket `internal/launcher` + API
   (`GET /api/v1/catalog`, `GET /api/v1/instances`,
   `POST /api/v1/instances {type}`, `DELETE /api/v1/instances/{id}`) —
@@ -655,10 +658,10 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 | Phase | Inhalt | Träger |
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
-| **P1 – Erster Node + SDK v1** | Playout-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle) **+ Node-Contract/SDK inkl. Doku** — Community-Onboarding startet ab hier | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3) | Community + Du |
-| **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue | Später |
-| **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal | Du + Community |
+| **P1 – Erster Node + SDK v1** | Playout-Referenz-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle, C1–C3 **erledigt**) **+ Node-Contract/SDK inkl. Doku** (D5 offen) — Community-Onboarding startet ab hier. **Resequenziert (§7.4, 2026-07-11):** direkt danach zuerst der kleine manuell bedienbare Regieplatz (§13 Bildmischer/Audiomischer/Player-Minimalausbau + §14 Operator-Console + OGraf §11.2 = „Demo 3"), **erst danach** die Playout-Automation-Vertiefung (ehemals C10/C11) | Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§16), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§18), Remote-Host-Erkennung/Host-Agent (§19, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups) | Community + Du |
+| **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Bei Bedarf auch hier eingeordnet, nicht vorher:** Orchestrator-Redundanz/Control-Plane-HA (§20) — erst relevant, wenn eine echte 24/7-Sendeabwicklung ansteht (§1-Zielbild), nicht für die Demo-Phasen | Später |
+| **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal, DVE/Keyer/Kompressor/Limiter/Expander-**Vertiefung** der in Phase C bereits vorgezogenen §13-Minimalknoten (Grundgerüst siehe P1-Zeile/§7.4), **Ressourcen-Kapazitätsplanung/Kalender (§17)** nach D7, **Remote-Host-Erkennung (§19)** sobald eine zweite Maschine real verfügbar ist | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
 
 ### 7.1 Zeitplan „Nebenbei" (5–10 h/Woche, ⌀ 30 h/Monat)
@@ -713,6 +716,104 @@ nicht mehr dein Zeitbudget. SDK existiert ≠ Leute bauen Nodes. Maßnahmen:
   PIPELINE-CONTROLLER-Umfeld gezielt ansprechen statt auf organisches
   Open-Source-Wachstum zu hoffen — bei einem Nischenmarkt (Broadcast) ist
   gezieltes Community-Seeding effektiver als "build it and they will come".
+
+### 7.4 Realitätscheck (2026-07-11) & Resequenzierung: kleiner Regieplatz vor Playout-Automation
+
+**Anforderung:** Playout-Automation-Demo nach hinten stellen, zuerst eine
+kleine Regieplatz-Demo (manuell bedient); Zeitplan an das bisherige Tempo
+anpassen.
+
+**Gemessenes Tempo (git-Log-Zeitstempel, nicht geschätzt):** Phase A
+(Fundament) + Phase B (Flow-Editor) + Phase C bis C9 (MXL-Demo-Trias +
+Contract-Check) — das, was §2 mit „11–20 Monate, ~30 Schritte" bei
+5–10 h/Woche veranschlagt hatte — wurde tatsächlich in **vier
+Arbeitssitzungen über vier Kalendertage** fertig:
+
+| Datum | Zeitfenster | Fertiggestellt |
+|---|---|---|
+| 2026-07-07 | 09:36–15:57 (≈6,3 h) | A1–B5 |
+| 2026-07-08 | 10:27 (kurz) | B7 |
+| 2026-07-09 | 11:11–17:17 (≈6,1 h) | C1–C4 |
+| 2026-07-10 | 08:51–16:06 (≈7,3 h) | C5–C9 |
+
+Reale Sitzungszeit gesamt: **≈ 20 Stunden** für einen Umfang, den §2
+konservativ auf **hunderte Stunden** geschätzt hatte. Das ist keine kleine
+Korrektur, sondern ein Faktor von grob 20–40×.
+
+**Warum die alte Schätzung so weit danebenlag — ehrlich einordnen, nicht
+einfach linear hochrechnen:** §2/§7.1/§7.2 gingen von „5–10 h/Woche
+nebenbei, Schritte einzeln über Wochen verteilt" aus (UMSETZUNG.md §1: „Ein
+Schritt ≈ 1 Sitzung, 5-Stunden-Fenster"). Tatsächlich laufen mehrere
+Schritte pro Sitzung am Stück, an aufeinanderfolgenden Tagen — die
+Mensch-Zeit-Engpass-Annahme aus `UMSETZUNG.md` §1 galt in der Praxis nicht
+in dieser Form. Zwei Kategorien Restarbeit sind davon aber unterschiedlich
+betroffen:
+
+- **Tempo-getriebene Arbeit** (weiteres Solo-Software-Bauen auf der
+  Single-Host-Dev-Maschine — die neuen §13/§14-Regieplatz-Nodes, der
+  Host-Agent-Grundbau aus §19, SDK-Doku D5): plausibel im selben
+  Größenordnungs-Tempo fortsetzbar, **wenn** die Sitzungsdichte anhält —
+  das ist keine Garantie, nur eine Beobachtung aus vier Tagen, kein
+  Jahresdurchschnitt.
+- **Extern-getriebene Arbeit** (Community-Nodes für DVE/großen Audiomixer/
+  Formatkonverter, §7.3; echte Multi-Host-/2110-Netz-Verifikation, §8;
+  echte Sendezentrum-Redundanz-Erprobung, §20): bleibt von der
+  Sitzungsgeschwindigkeit **unbeeinflusst** — dort entscheiden andere
+  Menschen bzw. echte Hardware, nicht Prompt-Durchsatz. §7.3s Kernaussage
+  („Community-Geschwindigkeit ist der Flaschenhals, nicht deine Stunden")
+  gilt dadurch **stärker** als vorher, nicht schwächer — der eigene Anteil
+  schrumpft relativ zum externen.
+
+**Konsequenz für die Zeitpläne in §7.1/§7.2:** Die dortigen Monats-/
+Jahresangaben werden **nicht** mit einem neuen Faktor umgerechnet (das wäre
+dieselbe Fehlerart wie vorher, nur in die andere Richtung) — sie bleiben
+als Ober-/Sicherheits-Schätzung stehen, gelten aber erkennbar als
+**Worst-Case**, kein Erwartungswert mehr. Statt eines neuen Datums:
+Meilenstein-Reihenfolge statt Kalender-Vorhersage als belastbarere
+Planungseinheit, siehe unten.
+
+**Resequenzierung: kleiner Regieplatz vor Playout-Automation.**
+`UMSETZUNG.md` sah bisher **C10/C11 „Playout v1"** (playlist-fähiger
+Automatisations-Kanal) direkt nach Demo 2 als nächsten Schritt vor.
+Begründung für die Umstellung: Playout-Automation ist architektonisch
+**kein eigener Steuerpfad**, sondern nur ein weiterer Aufrufer derselben
+IS-12/14-Methoden, die die manuell bedienten §13-Nodes ohnehin brauchen
+(bereits so festgelegt: §13.1 „dieselben Methoden … keine zweite API",
+§13.2/§13.3 identisch, §11.2 für OGraf ebenso). Playout-Automation vor den
+eigentlichen Regieplatz-Nodes zu bauen hieße, den Aufrufer vor der Sache zu
+bauen, die er aufruft. Reihenfolge daher umgestellt:
+
+1. **Nächstes Ziel („Demo 3", ersetzt die alte C10/C11-Planung an dieser
+   Stelle):** kleiner, **manuell bedienter** Regieplatz — `VideoMixerME`
+   (§13.1, Minimal-Ausbaustufe: Crosspoint + 1–2 DVE-Kanäle + 1 Keyer,
+   volle DVE/Keyer-Tiefe bleibt wie in §7 vorgesehen Community-Scope),
+   `AudioMixer` (§13.2, Minimal-Ausbaustufe: N Kanäle, EQ+Gain, Aux,
+   Audio-Follow-Video — Kompressor/Limiter/Expander können wie DVE/Keyer
+   nachziehen), `omp-player` (§13.3, manueller Modus zuerst), Operator-
+   Console (§14), dazu die bereits separat für P4 vorgesehene
+   OGraf-Anbindung (§11.2). Alles über Live-Quellen (§13.4) und den
+   bestehenden Flow-Editor/Instanz-Launcher (§6.2 Stufe 0) bedienbar.
+2. **Danach:** Playout-Automation-Controller (die eigentliche C10/C11-
+   Substanz, umbenannt/verschoben, siehe `UMSETZUNG.md`-Änderung) — jetzt
+   spürbar kleiner im Umfang, weil er nur noch eine dünne
+   Sequenzierungs-/Playlist-Schicht ist, die die in Schritt 1 bereits
+   existierenden Node-Methoden aufruft, statt selbst eine neue
+   Medienpipeline zu bauen. Der ursprüngliche C1–C3-RTP-Referenz-Node
+   bleibt unverändert im Repo (bereits gebaut, keine Rückabwicklung
+   nötig) — er zählt architektonisch als eine mögliche `omp-player`-
+   Instanz, wird aber nicht rückwirkend umgebaut.
+3. **P5-Demo unverändert im Ziel:** Regieplatz mit UND ohne Automatisation
+   vorführbar — die Reihenfolge ändert, **was zuerst existiert**, nicht das
+   Endbild aus §7/P5.
+
+Die Phasenplan-Tabelle (§7) wird entsprechend angepasst: P4 führt „§13" nun
+als das nächste konkrete Ziel statt als fernen P4-Punkt; die
+Playout-Automation-Vertiefung wandert sichtbar hinter den kleinen
+Regieplatz. `UMSETZUNG.md`s C10/C11-Abschnitt wird direkt umgeschrieben
+(siehe dortige Änderung, docs/decisions.md 2026-07-11) — anders als reine
+Konzept-Abschnitte ist das hier eine echte Reihenfolge-Entscheidung im
+Umsetzungsplan, kein bloßer Kommentar dazu (gleiche Kategorie wie die
+MXL-Timing-Vorziehung, docs/decisions.md 2026-07-09).
 
 ## 8. Erwartete Unwegbarkeiten — vorab bedacht
 
@@ -1060,3 +1161,739 @@ zusammen mit D3 (D3 liefert Transport + Token, §12 die Semantik
 darüber); keine A–C-Schritte ändern ihren Scope. Bewusste Nicht-Ziele
 v1: kein feldgenaues Parameter-ACL (der Scope endet an Node-Rolle +
 Verb), kein Multi-Tenant-Mandantenmodell.
+
+## 13. Produktions-Microservices für den Regieplatz (geplant, ab P2/P4)
+
+**Anforderung (2026-07-11):** Für einen vorführbaren Regieplatz fehlen noch
+konkrete Node-Typen jenseits von Playout (§7) und OGraf (§11.2): Bildmischer
+(skalierbar mehrere M/E-Ebenen, manuell oder per gemeinsamer Automatisation
+gesteuert), Audiomischpult (EQ/Kompressor/Limiter/Expander/Aux/Gruppen,
+dynamische Kanalzahl, Audio-Follow-Video zum Bildmischer), Musik-/
+Jingle-Player, Videoplayer, Live-Quellen. Zusätzlich die Grundsatzfrage: ist
+der Bildmischer bei uns ein einzelner Node oder eine Verkettung aus
+Switcher/DVE/Keyer/Freeze als separate Nodes?
+
+**Einordnung:** Neu, aber Methodik vollständig aus §11.1 (IS-12/14-
+Objektmodell) und §11.2 (OGraf als zweiter Referenzknoten) übernommen — kein
+neues Muster, nur dessen dritte/vierte/fünfte Anwendung.
+
+### 13.1 Bildmischer: ein Prozess pro M/E-Bank, nicht Switcher+DVE+Keyer als separate Nodes
+
+**Entschieden:** Ein Videomixer ist **ein** Node/Microservice pro
+Mix-Effekt-Bank (M/E) — Switcher-Crosspoint, DVE-Kanäle, Keyer
+(Chroma/Luma/Downstream) und die In-Mixer-Freeze-Funktion leben als
+`NcWorker`-Members **innerhalb desselben** `NcBlock` (§11.1-Methodik), nicht
+als eigenständige, über MXL verkettete Nodes.
+
+Grund: Jeder MXL-Hop zwischen Prozessen ist ein zusätzlicher Latenz-/
+Frame-Schritt und damit ein weiterer Posten im Latenz-Budget (§16) sowie ein
+zusätzlicher potenzieller Ausfallpunkt (§6.3) für eine Funktion, die im
+realen Sendebetrieb als **eine** atomare, frame-genaue Operation erlebt wird
+(eine Transition betrifft Crosspoint, DVE-Position und Keyer gleichzeitig,
+in einem gemeinsamen Pipeline-Takt). Separate Prozesse pro Funktion würden
+genau die Synchronität erschweren, die §16 an anderer Stelle erst mühsam
+wiederherstellen müsste — hier lohnt sich der Prozess-pro-Funktion-Vorteil
+(unabhängige Nodes, §1 Vision) nicht, weil die Funktionen zwingend
+gekoppelt sind, nicht lose.
+
+```
+NcBlock "VideoMixerME1"
+├─ NcWorker "Crosspoint"        [custom class] — Program-/Preset-Bus, Take/Cut/AutoTrans
+├─ NcWorker "DveChannel" ×N     [custom class] — Position/Größe/Border, N konfigurierbar
+├─ NcWorker "Keyer" ×N          [custom class] — Chroma/Luma/DSK, on/off, Clip/Gain
+├─ NcWorker "StillStore"        [custom class] — Freeze von Program/Preset/beliebigem Eingang
+└─ Standard-Monitoring-Klassen  [MS-05-02] an den zugrundeliegenden MXL-Sendern/-Receivern
+```
+
+**Skalierbarkeit „mehrere Ebenen":** bedeutet mehrere unabhängige
+`VideoMixerME`-Node-**Instanzen** (jede eigenständig platzierbar/migrierbar
+nach §6.1), nicht mehr `NcWorker` in einem Prozess. M/E-Verkettung
+(Program-Out von M/E1 speist einen Eingang von M/E2) ist ein ganz normaler
+MXL/2110-Pfad zwischen zwei Nodes — genau das Muster, das §4.5a/B3 schon
+kann, kein Sonderfall.
+
+**Steuerung manuell vs. Automatisation:** dieselben IS-12/14-Methoden
+(`take()`, `autoTrans()`, `select(input)`, …) werden entweder vom
+UI-Bundle des Operators (§14) oder vom Playout-/Automatisations-Node
+(§7, C10/C11) aufgerufen — keine zweite API, exakt das bereits für OGraf
+etablierte Prinzip (§11.2: „Playout-Steuerung kommt später über dieselben
+IS-12/14-Methoden, keine zweite API").
+
+**Abgrenzung Freeze/Still:** Die `StillStore`-Funktion oben ist das
+**In-Mixer-Einfrieren** eines laufenden Signals (Bus/Eingang) — das braucht
+zwingend Zugriff auf die interne Pipeline des Mixers, deshalb dort
+verortet. Ein **eigenständiger** Standbild-/Grafik-Player (z. B. ein Foto
+als normale MXL-Quelle einspeisen) ist dagegen keine Mixer-Funktion,
+sondern deckungsgleich mit dem Videoplayer/OGraf-Fall (§13.3/§11.2) — beide
+Konzepte nicht verwechseln, auch wenn der Alltagsbegriff „Freeze" für
+beide verwendet wird.
+
+DVE/Keyer selbst als Referenz-Implementierung zu bauen bleibt
+Community-Scope wie im Phasenplan vorgesehen (§7: „DVE, großer Audiomixer
+… durch Dritte"); dieser Abschnitt legt nur die **Node-Grenze** fest, an
+der sich Community-Beiträge orientieren, nicht die Umsetzung selbst.
+
+### 13.2 Audiomischpult: dynamische Kanalzahl, Audio-Follow-Video über den bestehenden Tally-Bus
+
+**Entschieden:** Analog zu 13.1 ein Node/Microservice pro Konsolen-Instanz,
+aus demselben Grund (Aux-Sends brauchen gekoppelten Post-Fader-Zugriff auf
+alle Kanalzüge gleichzeitig, EQ/Dynamik-Kette ist pro Kanal ein
+zusammenhängender Sample-genauer Pfad — Verteilung auf mehrere
+MXL-verkettete Prozesse würde Latenz/Phasenlage zwischen Kanälen
+gefährden).
+
+```
+NcBlock "AudioMixer"
+├─ NcWorker "ChannelStrip" ×N    [Standard-Audio-Klassen wo vorhanden, §11.1
+│                                  Punkt 2 — Gain/Mute/EQ/Dynamics-Grundklassen
+│                                  aus MS-05-02/AES70-Ableitung zuerst prüfen,
+│                                  Compressor/Limiter/Expander/Gate custom nur
+│                                  falls der Standard sie nicht abdeckt]
+│    Methoden am NcBlock:  addChannel(), removeChannel(id) — macht die
+│                          Kanalzahl zur Laufzeit-Eigenschaft statt
+│                          Neustart-Parameter
+├─ NcWorker "AuxBus" ×N          [custom class] — Send-Level pro ChannelStrip
+├─ NcWorker "Group/VCA" ×N       [custom class] — Fader-Gruppierung
+├─ NcWorker "AudioFollowVideo"   [custom class] — siehe unten
+└─ Standard-Monitoring-Klassen   [MS-05-02] an den MXL-Sendern/-Receivern
+```
+
+**Dynamische Kanalzahl** ist damit eine Methoden-/Descriptor-Eigenschaft
+(`addChannel`/`removeChannel` ändern den Descriptor zur Laufzeit — das
+generische Parameter-Panel, B6, muss Descriptor-Änderungen ohnehin schon
+per Re-Fetch vertragen), keine Neustart-/Konfigurationsfrage.
+
+**Audio-Follow-Video ohne neuen Sync-Mechanismus:** `AudioFollowVideo`
+abonniert den **bereits existierenden** Tally-/Health-NATS-Bus (§3, B4) des
+gekoppelten `VideoMixerME`-Node (Workflow-Konfiguration verknüpft die
+beiden Node-Rollen, §6.2) und löst bei einer Tally-/Crosspoint-Änderung
+automatisch eine interne Aktion aus (Kanal stumm-/aufschalten, Aux-Routing
+wechseln) — konfigurierbar pro Kanal: `followMode` (`cut` sofort wie das
+Bild, oder `crossfadeMs` für einen weichen Übergang), plus ein manueller
+Override-Schalter pro Kanal (Operator kann die Kopplung jederzeit
+aufheben, ohne den Automatismus für andere Kanäle zu beeinflussen). Das
+ist bewusst **kein** neues Transportmittel — derselbe Tally-Mechanismus,
+der heute schon Kacheln im Flow-Editor rot färbt (B4), treibt hier eine
+Node-interne Methode statt einer UI-Farbe. Steuerung (manuell oder durch
+eine gemeinsame Automatisation) läuft wie bei 13.1 über dieselben
+IS-12/14-Methoden.
+
+### 13.3 Musik-/Jingle-Player und Videoplayer: eine Codebasis, keine drei
+
+**Entschieden:** Statt drei separater Rust-Crates wird der ohnehin für
+Playout geplante `PlaylistController`-Baustein (§11.1, C10/C11) zu einem
+gemeinsamen Crate `omp-player` verallgemeinert. Musik-/Jingle-Player,
+Videoplayer und der große Playout-Kanal unterscheiden sich nur in:
+
+1. **UI-Bundle-Variante** (§4.5): Cart-Wall/Jingle-Grid für den
+   Musik-Player, kompakte Cue/Take-Ansicht für den Videoplayer, volle
+   Playlist-Ansicht für Playout — alle drei generieren sich aus demselben
+   Descriptor, nur unterschiedliche UI-Bundles.
+2. **Default-Konfigurationsprofil** (z. B. Jingle-Player: nur Audio-MXL-
+   Sender, kein Video-Sender im Katalog-Descriptor, §6.2).
+3. **Katalog-Rolle/-Tag** (§13.5) für die Zuordnung in Workflow-Templates.
+
+Grund: `PlaylistController` (load/append/remove/cue/take, §11.1) ist für
+alle drei Rollen dieselbe Funktion in unterschiedlicher Verkleidung — ein
+eigenes Node-Typ-Rewrite pro Rolle wäre die Art von Duplikation, die die
+Node-Contract-Methodik gerade vermeiden soll. Steuerung wie bei 13.1/13.2
+manuell oder durch eine gemeinsame Automatisation über dieselben Methoden.
+
+**Hinweis für die spätere C10/C11-Detaillierung** (`UMSETZUNG.md`, wird
+dort nicht jetzt geändert): bei der Detaillierung von C10/C11 diese
+Verallgemeinerung (`omp-player` statt eines reinen Playout-Crates)
+berücksichtigen, damit Musik-/Jingle-Player und Videoplayer nicht
+nachträglich als Kopie entstehen.
+
+### 13.4 Live-Quellen: bereits abgedeckt, keine neue Node-Art
+
+Live-Kamera-/Zuspiel-Signale kommen entweder (a) direkt per NMOS/ST 2110
+von Fremdgeräten (§9 — heute schon interop-fähig, kein neuer Node nötig,
+nur Discovery) oder (b) über einen Ingest-Node, der eine physische
+Capture-/SDI-2110-Gateway-Karte per `omp-mediaio` kapselt und als
+zuweisbare I/O-Karten-Ressource behandelt wird (§6.1-Erweiterung). Dieser
+Abschnitt fügt bewusst nichts Neues hinzu — er bestätigt nur, dass „Live-
+Quellen" architektonisch bereits abgedeckt ist, damit die Anforderungsliste
+vollständig eingeordnet ist.
+
+### 13.5 Katalog-Kategorien (Erweiterung von §6.2/§6.4)
+
+**Anforderung:** Ein Microservice-Katalog in Kategorien (Input, Output,
+Audio, Video, Daten), damit die Instanz-Launcher-Palette (§6.2 Stufe 0) und
+der spätere UI-Katalog (§6.4) nicht als unsortierte Liste wachsen.
+
+**Umsetzung:** rein additives Feld `category` im bestehenden
+`deploy/catalog.json`-Eintrag bzw. im OCI-Label/`catalog.json` aus §6.4 —
+Enum `input | output | audio | video | graphics | data | control`
+(`graphics` für OGraf/§11.2, `control` für Playout/Automatisation, die
+selbst keine Medien produziert/konsumiert, sondern andere Nodes steuert).
+Keine neue Logik: die Palette (§6.2) gruppiert nur nach diesem Feld, der
+Orchestrator wertet es sonst nicht aus. Fehlt `category`, erscheint der
+Eintrag in einer „Sonstige"-Gruppe statt einen Fehler zu werfen (robust
+gegen ältere Katalog-Einträge/Community-Nodes ohne das Feld).
+
+**Standards-Abdeckung:** keine (reines UI-Ordnungsfeld). **Testbarkeit:**
+trivial (Katalog-JSON mit `category` befüllen, Palette gruppiert sichtbar).
+**Phase:** P2/P4, zusammen mit den jeweiligen Node-Typen aus 13.1–13.3.
+
+## 14. Rollen-gescoptes Operator-Console-UI („virtuelles Pult") (geplant, ab P2 zusammen mit §12/D3)
+
+**Anforderung (2026-07-11):** Ein Bildmeister/Tonmeister an seinem
+Arbeitsplatz soll sein „virtuelles Mischpult" öffnen können, ohne den
+Workflow (Regieplatz) editieren zu dürfen — nur die ihm zugewiesene Rolle
+(z. B. Videomixer) bedienen. Braucht ein eigenes Frontend.
+
+**Einordnung:** Neu, aber keine neue Komponente — eine zweite
+**Präsentation** der bereits vorhandenen Bausteine (§12-Rollenbindung,
+§4.5-UI-Bundle/generisches Parameter-Panel B6), nicht eine zweite
+Bedien-API. §12 definiert bereits die Durchsetzung (Tripel Rolle/
+Wirkungsbereich/Verb, zentral im Orchestrator); hier fehlte bisher nur,
+**wie** ein reiner `operate`-Nutzer überhaupt an sein Pult kommt, ohne den
+vollen Flow-Editor (§4.5a) zu sehen.
+
+**Zwei UI-Oberflächen derselben Shell (§4.5), keine zweite Shell:**
+
+1. **Engineering-Ansicht** — der bestehende Flow-Editor (§4.5a): voller
+   Graph, sichtbar für Nutzer mit `configure`/`admin` irgendwo (§12 Punkt
+   2), gefiltert auf die erlaubten Workflows (§12 Punkt 3, „Filterung ist
+   Komfort, Durchsetzung bleibt beim Orchestrator").
+2. **Console-Ansicht** — neu: für einen Nutzer, dessen Rollenbindungen nur
+   `operate` auf einer oder mehreren Node-Rollen enthalten (der typische
+   Bildmeister-/Tonmeister-Fall), landet die Shell direkt auf dem/den
+   UI-Bundle(s) der zugewiesenen Node(s) — **kein Graph, keine anderen
+   Nodes sichtbar**, exakt das „virtuelle Pult". Technisch identisch mit
+   dem bereits existierenden Parameter-Panel/UI-Bundle-Rendering aus B6 —
+   nur ohne den umschließenden Canvas, vollflächig.
+
+**Neue, kleine API-Ergänzung:** `GET /api/v1/me/consoles` liefert für den
+eingeloggten Nutzer die aufgelöste Liste
+`[{workflowId, workflowLabel, nodeRoleId, nodeLabel, uiBundleUrl}]` aus
+seinen §12-Rollenbindungen. Bei genau einem Eintrag springt die Shell nach
+Login direkt dorthin; bei mehreren (z. B. jemand bedient Bildmischer **und**
+Still-Store) eine schmale Tab-Leiste nur dieser Einträge — nie ein Graph.
+Hat der Nutzer zusätzlich `configure`/`admin` irgendwo, entscheidet die
+Shell für Engineering statt Console als Startansicht (wer konfigurieren
+darf, braucht typischerweise auch den Überblick).
+
+**Kiosk-taugliche Routen:** `/console/<workflowId>/<nodeRoleId>` ist direkt
+verlinkbar/bookmarkbar — ein Arbeitsplatzrechner kann per Kiosk-Browser
+beim Hochfahren direkt auf „sein" Pult starten, wie in echten Regien
+üblich (ein Bildschirm = eine Bedienposition), statt jedes Mal über Login
++ Auswahl zu gehen. Die Zugriffsprüfung läuft trotzdem bei jedem
+API-Aufruf über §12 — die feste Route ist Komfort, keine Sicherheitslücke
+(ein falscher Nutzer an der Kiosk-Maschine bekäme beim Login-Prompt
+trotzdem nur seine eigenen Rechte).
+
+**Node-Contract-Berührung: keine.** Wie in §12 Punkt 3 festgehalten bleibt
+der Node selbst rollenfrei; die Console-Ansicht ist reine
+Orchestrator-/Shell-Komposition aus Rollenauflösung + bereits vorhandenem
+Bundle-Laden. Kein neuer Pflichtpunkt in §5.
+
+**Standards-Abdeckung:** keine zusätzliche (nutzt IS-10/§12 wie es steht).
+**Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine — ein
+`operate`-only-Testnutzer auf einer Mock-Node-Rolle landet nach Login
+direkt auf deren Panel, `GET /api/v1/graph` bzw. die Engineering-Route
+liefert für ihn 403/leer. **Phase:** P2, zusammen mit D3/§12 (gleiche
+Rollen-Infrastruktur, keine separate Vorarbeit nötig).
+
+## 15. Hardware-Bedienpult-Integration (Beispiel Grass Valley Connected Switcher) (Konzept, kein Umsetzungsschritt vor P2)
+
+**Anforderung (2026-07-11):** Würde ein physisches Grass-Valley-„Connected
+Switcher"-Bedienpult (Hardware) theoretisch mit OMP funktionieren?
+
+**Recherche (2026-07-11, nicht geraten):** Zwei Ebenen sauber trennen —
+Signal-/Routing-Ebene und Panel-Steuerungsebene sind unterschiedliche
+Protokolle, auch wenn beide „GV Connected Switcher" heißen.
+
+1. **Signal-/Routing-Ebene: funktioniert bereits heute, kein Adapter
+   nötig.** Grass Valleys K-Frame-Engines (Kayenne/Karrera/K-Frame CS X)
+   und AMPP Edge unterstützen laut Herstellerangaben NMOS AMWA IS-04
+   (Discovery) und IS-05 (Connection Management/Routing) — genau die
+   Standards, die §2/§4.5a bereits als Kern-Discovery-/Routing-Schicht
+   nutzen. Ein GV-Frame kann also wie jedes andere NMOS-Gerät im
+   Flow-Editor **erscheinen und verkabelt werden** (SDI/2110-Signalpfade
+   rein/raus), ohne dass OMP dafür GV-Spezialwissen braucht — deckt sich
+   mit der bereits in §9 getroffenen Einschätzung „ST 2110/NMOS-Ebene ist
+   reif, breite Vendor-Basis".
+2. **Panel→Switcher-Engine-Ebene: proprietär, nicht offen dokumentiert.**
+   Die physischen Bedienpulte selbst (Kayenne-, Karrera-, Korona-, KSP-,
+   Maverik-Panels) sprechen mit ihrer eigenen K-Frame-/Maverik-Engine über
+   ein GV-eigenes Protokoll — das ist nicht Teil von IS-04/05 und nirgends
+   als offener Standard dokumentiert gefunden. Diese Panels sind gebaut,
+   um **GVs eigene** Switcher-Engine zu steuern, nicht ein generisches
+   AMWA-Control-Modell wie unser IS-12/14. Indiz aus der Praxis: selbst die
+   Community rund um Bitfocus Companion (Streamdeck-artige
+   Multi-Vendor-Fernsteuerung) hat GV-Switcher-Steuerung als offenen,
+   nicht-trivialen Integrationswunsch gelistet (kein fertiger offener
+   Adapter) — bestätigt, dass Dritt-Anbindung an GV-Panels grundsätzlich
+   über reverse-engineerte/lizenzierte Adapter läuft, nicht über eine
+   offene Spec.
+
+**Ergebnis:** Ein physisches GV-Bedienpult **direkt** ein OMP-`VideoMixerME`
+(§13.1) steuern zu lassen, ist mit heutigem Kenntnisstand **nicht** ohne
+Weiteres möglich — es gäbe kein offen dokumentiertes Protokoll, das ein
+Adapter-Node ansprechen könnte, ohne GV-seitige SDK-Freigabe. Umgekehrt
+(OMP-Signale in ein GV/AMPP-System einspeisen und dort mit GV-eigenen
+Panels bedienen) funktioniert bereits heute rein über NMOS — das ist die
+realistische Interop-Richtung.
+
+**Architektonische Konsequenz — kein neuer Mechanismus, sondern eine
+Design-Regel für §13.1:** Die IS-12/14-Methoden des `VideoMixerME`
+(`take()`, `cut()`, `select()`, …) müssen so generisch bleiben, dass **jeder
+zukünftige Adapter-Node** (falls GV je ein Panel-SDK freigibt, oder für
+günstigere/offenere Alternativen wie MIDI-/USB-Panels über einen
+Companion-artigen Adapter) sie genau wie ein UI-Bundle-Klick aufrufen kann
+— ein physisches Panel ist architektonisch nur ein weiterer IS-12/14-Client
+derselben Methoden, kein Sonderfall. Das ist dieselbe Adapter-Node-Antwort,
+die §9 bereits für IS-12/14-freie Fremdgeräte allgemein vorsieht („pragmatisch
+Adapter-Nodes … proprietäre Vendor-API → unser IS-12/14-Modell") — hier nur
+konkret auf den GV-Fall angewendet, keine neue Idee.
+
+**Standards-Abdeckung:** IS-04/IS-05 für die Signalebene (heute nutzbar).
+Panel-Protokoll: kein Standard, Eigenrecherche/GV-SDK nötig, falls diese
+Integration je konkret verfolgt wird. **Kein Umsetzungsschritt** — dieser
+Abschnitt ist eine Einordnung/Machbarkeitsaussage für spätere
+Priorisierung, kein neuer C/D-Schritt in `UMSETZUNG.md`.
+
+Sources:
+- [Grass Valley Adds Connected Switcher Panels to its Cloud-Based Live Production Arsenal](https://www.grassvalley.com/press-release/20210201-grass-valley-adds-connected-switcher-panels-to-its-cloud-based-live-production-arsenal/)
+- [K-Frame CS X | Cloud Production Switcher | Grass Valley](https://www.grassvalley.com/products/ampp/k-frame-cs-x/)
+- [AMPP Edge Agile Compute Node datasheet (NMOS IS-04/IS-05 compliance)](https://wwwapps.grassvalley.com/docs/DataSheets/advanced_technology/gv_ampp/AMPP_Edge_DS-PUB-3-1014D-EN.pdf)
+- [GV Orbit Dynamic System Orchestrator (AMWA NMOS IS-04/IS-05/BCP-002-01 integration)](https://www.grassvalley.com/wp-content/uploads/2025/01/gv_orbit_ds-pub-3-0860b-en.pdf)
+- [Grass Valley Switcher Control · Issue #893 · bitfocus/companion-module-requests](https://github.com/bitfocus/companion-module-requests/issues/893)
+
+## 16. Deterministische Ende-zu-Ende-Latenz & A/V/Daten-Synchronität (geplant, ab P2/D-Phase)
+
+**Anforderung (2026-07-11):** Audio-/Video-/Daten-Synchronität muss über den
+gesamten Workflow garantiert sein, unabhängig davon, welche Nodes wie
+verkettet sind. Vorbild AMPP: der Workflow bekommt eine maximale
+Latenz-/Buffer-Vorgabe (z. B. 5 Frames), danach kommen Video/Audio/Daten
+mit exakt dieser Latenz am Workflow-Ende an — unabhängig vom tatsächlichen
+Pfad.
+
+**Einordnung:** Komplett neu und die bisher größte fehlende Fähigkeit im
+Konzept. PTP (§2) liefert bisher nur eine **gemeinsame Zeitbasis** (Takt) —
+das garantiert, dass alle Nodes wissen, „wann jetzt ist", aber **nicht**,
+dass zwei Pfade unterschiedlicher Länge (unterschiedlich viele
+Verarbeitungsschritte) gleich viel Zeit brauchen. Ohne Laufzeit-Ausgleich
+liefe z. B. ein Audio-Follow-Video-Pfad (§13.2, nur ein Hop) systematisch
+früher am Ausgang an als ein Bildpfad durch DVE+Keyer+Grafik-Kompositing
+(mehrere Hops) — genau das Problem, das AMPPs Latenz-Budget löst.
+
+### 16.1 Mechanik
+
+1. **Per-Node-Latenzdeklaration** (Descriptor-Erweiterung, additiv wie der
+   Katalog-Descriptor in §6.2 — **kein** Pflichtpunkt vor dem SDK-v1-Freeze,
+   siehe Empfehlung unten): jeder Node deklariert seine inhärente
+   Verarbeitungslatenz getrennt für Video/Audio/Daten als
+   `minLatencyFrames`/`maxLatencyFrames` (ggf. audio in Samples oder
+   audio-frame-äquivalenten Einheiten, Punkt 5) sowie, ob er zusätzliche
+   Verzögerung einstellen kann: `supportsDelayCompensation: bool` +
+   Methode `setOutputDelay(frames)`.
+2. **Workflow-Latenz-Budget:** Das Workflow-Objekt (§6.2) bekommt ein Feld
+   `targetLatencyFrames` (Operator-Vorgabe, AMPPs „5 Frames"-Beispiel).
+   Beim Start berechnet der Orchestrator — als **Teil der bestehenden
+   Ressourcen-Vorprüfung** (§6.2 Punkt 3, „vollständigen Platzierungsplan
+   erstellen, bevor irgendetwas provisioniert wird") — für jeden Pfad im
+   Verbindungs-Template die Summe der `minLatencyFrames` der beteiligten
+   Nodes. Das Maximum über alle Pfade ist die **Mindestlatenz** des
+   Workflows. Ist `targetLatencyFrames` kleiner, wird der Start abgelehnt
+   („Zielband zu knapp für Pfad X→Y→Z, Minimum N Frames") — dieselbe
+   ehrliche Ablehnung statt Teil-Start wie beim I/O-Karten-Fall in §6.1.
+3. **Delay-Ausgleich:** Für jeden Pfad, der kürzer als
+   `targetLatencyFrames` ist, weist der Orchestrator den delay-fähigen
+   Nodes entlang dieses Pfades die fehlende Differenz per
+   `setOutputDelay()` zu (bevorzugt möglichst spät im Pfad, um
+   Zwischenzustände wie Tally/Preview nicht unnötig zu verzögern). Ergebnis:
+   alle Pfade eines Workflows verlassen den Workflow nach exakt
+   `targetLatencyFrames` — die AMPP-Eigenschaft aus der Anforderung.
+4. **Referenzzeit — zwei Fälle sauber getrennt, nicht vermengt:** Auf
+   ST-2110-Pfaden (Host-übergreifend) sind Delay-Werte PTP-referenziert
+   auszudrücken (§2), damit der Ausgleich netzwerkweit konsistent bleibt.
+   Auf MXL-Zero-Copy-Pfaden (Single-Host, §6 „kein PTP nötig") übernimmt die
+   lokale monotone Grain-Sequenznummer dieselbe Rolle als Ersatztakt — exakt
+   die Unterscheidung, die C4 bereits für die MXL/GStreamer-Timestamp-Frage
+   offengelassen hat (`docs/decisions.md`, 2026-07-09): dort war die Frage
+   pro Node offen, hier wird sie zur Workflow-weiten Budget-Rechnung
+   hochskaliert.
+5. **Audio-/Daten-Pfade separat, nicht als Kopie des Video-Budgets:** Ein
+   Video-Frame-Budget ist kein automatisches Audio-Sample- oder
+   Ancillary-Daten-Budget — derselbe Mechanismus (Deklaration + Ausgleich)
+   läuft parallel, aber mit eigener Einheit, für Audio- und Daten-Pfade.
+   **Audio-Follow-Video (§13.2) ist ein verwandtes, aber anderes Problem:**
+   reine Latenzangleichung sorgt nur dafür, dass gleich alte Signale
+   gleichzeitig ankommen — Audio-Follow-Video braucht zusätzlich die
+   explizite Kopplung „Video-Tally-Ereignis löst Audio-Aktion aus" (§13.2).
+   Beide Mechanismen ergänzen sich (ein per Audio-Follow-Video geschalteter
+   Kanal profitiert trotzdem vom Latenz-Ausgleich, damit sein Signal nicht
+   vor- oder nacheilt), lösen aber nicht dasselbe Problem — nicht
+   verwechseln.
+6. **Re-Berechnung bei laufender Graph-Änderung:** Wird während der Sendung
+   eine Kante neu gezogen oder ein Node mit anderer deklarierter Latenz
+   eingewechselt, muss der betroffene Pfad neu berechnet und die
+   Delay-Zuweisung nachgezogen werden. Kein neuer Mechanismus — derselbe
+   `node.added`/Graph-Änderungs-Listener, der schon Workflow-Templates
+   (§6.2) und Failover-Reconnects (§6.3) auslöst, bekommt hier einen
+   dritten Zweck.
+
+### 16.2 Node-Contract-Empfehlung (nicht Pflicht vor SDK-Freeze)
+
+Anders als das State-Export/Readiness-Signal (§5 Punkt 6, dort **zwingend**
+vor dem SDK-v1-Freeze, weil Nachrüsten ein Breaking Change für alle
+Community-Nodes wäre) ist die Latenzdeklaration formal additiv nachrüstbar
+— ein Node ohne dieses Feld bräuchte nur einen konservativen
+„Latenz unbekannt, hoch annehmen"-Fallback im Budget-Rechner. Trotzdem
+**Empfehlung**, sie so früh wie praktikabel (Übergang Phase C→D, zusammen
+mit dem SDK-v1-Dokument) mit aufzunehmen: Latenzangaben sind faktisch
+genauso „teuer nachzurüsten" wie das Readiness-Signal, weil jeder
+existierende Community-Node sie sonst nachträglich ergänzen muss, um im
+Budget-Rechner nicht pauschal als „Bremse" behandelt zu werden. Bewusst
+**keine** Hochstufung zum Pflichtpunkt jetzt (P1 hat nur einen einzigen
+Node — die Budget-Rechnung wird erst ab Mehr-Node-Workflows überhaupt
+wirksam, siehe Phasenzuordnung).
+
+**Standards-Abdeckung:** PTP/ST 2059 liefert die Zeitbasis (§2); kein
+NMOS-Standard deckt „Latenzbudget-Ausgleich über eine Facility" ab — das ist
+durchgehend Eigenentwicklung (AMPPs Ansatz ist proprietär und dient nur als
+Vorbild, keine übernehmbare Spec).
+
+**Testbarkeit:** Einfache Fälle bereits auf der Single-Host-Dev-Maschine
+testbar — mehrere `omp-source`/`omp-switcher`-Instanzen mit künstlich
+unterschiedlich deklarierter Latenz, Delay-Ausgleich über die
+Grain-Sequenznummer verifizierbar (kein zweiter Host nötig). Volle
+PTP-Cross-Host-Verifikation erst mit echtem 2110-Netz — dieselbe
+Einschränkung wie bei §6.1 (§8).
+
+**Phase:** Deklarations-Feld als Empfehlung Richtung SDK v1 (Phase-C/D-
+Übergang); Budget-Rechner/Delay-Orchestrierung selbst als P2/D-Baustein
+zusammen mit §6.1/§6.2 (gleiche Placement-/Workflow-Infrastruktur, kein
+neues Subsystem). Keine A–C-Schritte in `UMSETZUNG.md` ändern dadurch ihren
+Scope — die SDK-v1-Empfehlung ist bei der D5-Doku (SDK-Doku/Tutorial)
+beziehungsweise beim C10/C11-Playout-Umbau zu berücksichtigen, wenn diese
+Schritte konkretisiert werden.
+
+## 17. Ressourcen-Kapazitätsplanung über die Zeit (Erweiterung von §6.2, geplant ab D7)
+
+**Anforderung (2026-07-11):** Zeitliche Planung der Ressourcen — wann will
+ich welchen Regieplatz/Workflow starten/stoppen, welche Ressourcen brauche
+ich, geht sich das überhaupt aus (Kapazitätsrechnung über mehrere geplante
+Regieplätze hinweg)?
+
+**Einordnung:** Erweiterung, kein neues Subsystem. §6.2 (Erweiterung
+2026-07-10) hat bereits die **Einzelstart-Ressourcen-Vorprüfung**: prüft
+beim tatsächlichen Start eines Workflows, ob **jetzt** alle Rollen
+platzierbar sind (harte Vorbedingung, kein Teil-Start). Was fehlt: eine
+**vorausschauende, mehrere Workflows gleichzeitig betrachtende** Sicht —
+„Regieplatz A ist von 9–12 Uhr geplant, Regieplatz B von 11–14 Uhr,
+überschneiden sich 11–12 Uhr die benötigten I/O-Karten/Host-Kapazität?",
+und zwar **beim Planen**, nicht erst beim Start um 11 Uhr.
+
+**Konzept:**
+
+1. Jeder zeitgeplante Workflow (`start_at`/`stop_at`, §6.2 Punkt 1) hat
+   bereits einen Ressourcen-Fußabdruck (Rollen→Platzierungs-Hinweise inkl.
+   exklusiver Karten-Claims, §6.1) — vorhanden für den Einzelstart-Check,
+   hier nur wiederverwendet, nicht neu gebaut.
+2. **Neue Vorschau-API** `GET /api/v1/capacity?from=…&to=…`: simuliert —
+   **ohne irgendetwas zu starten** — den Claim/Release-Zeitstrahl aller im
+   Zeitraum geplanten Workflows über dieselbe Placement-Engine (§6.1), rein
+   als Berechnung. Für jede exklusive Ressource (Host-Kapazität, I/O-
+   Karten-Port) entsteht eine Belegungs-Zeitleiste; Überschneidungen, die
+   die verfügbare Kapazität übersteigen, sind Konflikte mit Zeitfenster und
+   betroffener Ressource in der Antwort.
+3. **Kalender-UI** (neue Shell-Ansicht, kein neues Framework, gleiches
+   Muster wie Snapshot-/Katalog-Listen): Regieplätze als Balken auf einer
+   Zeitachse je Ressourcen-Pool, Konflikte rot markiert — Feedback beim
+   **Anlegen/Ändern** eines Zeitplans, nicht erst beim Start.
+4. **Bewusst keine Reservierungssperre.** Die Kalenderansicht ist
+   Vorschau/Frühwarnung, **keine** zusätzliche Garantie — der scharfe Check
+   bleibt ausschließlich der bestehende Start-Zeitpunkt-Mechanismus (§6.2
+   Punkt 3). Entsteht zwischen Planung und Start durch eine andere, später
+   geänderte Buchung ein neuer Konflikt, wird das trotzdem erst beim
+   tatsächlichen Start hart abgelehnt. Ehrlich benannt: das ist **kein**
+   Ressourcen-Reservierungssystem mit Buchungssperre (ein Nutzer könnte
+   zwei sich widersprechende Zeitpläne anlegen, ohne dass das Anlegen
+   selbst blockiert wird) — ein echtes Sperr-/Reservierungssystem wäre ein
+   eigenes, deutlich größeres Feature und bewusst **nicht** Teil dieses
+   Konzepts.
+
+**Standards-Abdeckung:** keine (Eigenentwicklung wie der Rest von
+§6.1/§6.2). **Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine
+simulierbar (fingierte Multi-Host-Inventare wie bei §6.1, mehrere
+Workflows mit überlappenden Zeitplänen, Konflikt-Erkennung ist reine
+Control-Plane-Logik ohne Medien-Hardware-Bedarf). **Phase:** nach D7 (baut
+direkt auf dessen Scheduler/Placement-Ergebnissen auf, kein neuer
+Foundational-Baustein) — keine A–C-Schritte ändern ihren Scope.
+
+## 18. Monitoring-Vertiefung: frame-genaue Erkennung, Operator- vs. Engineering-Sicht (geplant, ab P2 zusammen mit §6.1/§6.3)
+
+**Anforderung (2026-07-11):** Detaillierter Monitoring-Plan für die spätere
+Umsetzung. Deckt sich mit einer bereits früher (2026-07-09) geäußerten,
+für den Nutzer besonders wichtigen Anforderung: Node-/Host-Monitoring muss
+**frame-genau** sein, damit ein ausgefallener Node sofort ersetzt/migriert
+werden kann — kein „irgendwann später" Nice-to-have, sondern eine der
+Kernaufgaben des Orchestrators.
+
+**Einordnung:** Kein neues Subsystem — dieser Abschnitt bündelt bereits
+vorhandene Bausteine zu einer Monitoring-Antwort und ergänzt genau eine
+konkrete Lücke (Erkennungsgeschwindigkeit). Vorhandene Bausteine, hier nur
+referenziert statt neu erfunden: Health/Tally-NATS-Bus + Live-Overlay (§3,
+B4), „media-ready"/„media-flowing"-Signal (§5 Punkt 6), Host-Telemetrie +
+I/O-Karten-Inventar (§6.1), Crash-Erkennung/Degradation/Hot-Standby (§6.3),
+Kapazitäts-Vorschau (§17), Audit-Log (§12 Punkt 4).
+
+### 18.1 Erkennungsgeschwindigkeit als bewusst konfigurierbarer Parameter
+
+Der aktuelle Health-Staleness-Schwellwert (§6.3: „offline nach 10 s ohne
+Health-Event") ist ein für **alle** Rollen gleicher Kompromiss. Für
+On-Air-kritische Rollen (der aktuell sendende `VideoMixerME`/`AudioMixer`
+eines laufenden Regieplatzes, §13) ist 10 s Erkennungszeit für den
+Anspruch „frame-genau ersetzen" zu grob. Konkretisierung: der
+Health-Publish-Intervall (heute pauschal 5 s, A7/§6.3) und der
+Staleness-Schwellwert werden **pro Workflow-Rolle konfigurierbar** (Teil
+der Workflow-Definition, §6.2) statt global fest — kritische Rollen können
+ein engeres Intervall (z. B. 1 s Publish/2–3 s Schwelle) wählen, nicht-
+kritische bleiben beim heutigen Default. Kompromiss ehrlich benannt:
+engeres Intervall = mehr NATS-Traffic, keine kostenlose Verbesserung — pro
+Rolle abwägbar statt platformweit erzwungen. Das verschiebt die
+Erkennungszeit näher an „frame-genau", ohne den bereits als ehrlich
+dokumentierten Scope zu verlassen (§6.1/§6.3: „kein Ausfall des Workflows",
+nicht „unsichtbarer Schnitt" — dieser Abschnitt macht die Erkennung
+schneller, verspricht aber weiterhin keine unsichtbare Fortsetzung mitten
+in einer laufenden Bildmischer-Transition).
+
+### 18.2 Zwei Dashboard-Sichten, dieselbe Datenquelle
+
+- **Engineering-Dashboard** (Teil der Flow-Editor-Shell, §4.5a/§14):
+  Host-Telemetrie (§6.1), I/O-Karten-Belegung, Workflow-Lebenszyklen über
+  die ganze Facility, Kapazitäts-Kalender (§17), Audit-Log (§12) — die
+  volle Sicht für `configure`/`admin`-Rollen.
+- **Operator-Console-Statuszeile** (§14): eine schmale, auf den eigenen
+  Workflow/die eigene Node-Rolle **beschränkte** Status-Leiste (Health der
+  unmittelbar vor-/nachgelagerten Nodes im selben Workflow, eigene
+  Tally) — kein Zugriff auf Facility-weite Telemetrie, dieselbe
+  Scope-Regel wie überall in §12/§14 angewendet, nicht neu erfunden.
+
+**Standards-Abdeckung:** keine zusätzliche (nutzt NATS/§6.1/§6.3 wie
+vorhanden). **Testbarkeit:** Publish-Intervall/Schwellwert pro Rolle
+vollständig auf der Single-Host-Dev-Maschine testbar (`kill -9` eines
+Mock-Nodes mit engerer Konfiguration → messbar schnellere
+Offline-Erkennung als beim Default). **Phase:** P2, zusammen mit §6.1/§6.3
+(gleiche Telemetrie-Infrastruktur, keine separate Vorarbeit) — keine
+A–C-Schritte ändern ihren Scope.
+
+## 19. Remote-Host-Erkennung & Host-Agent (geplant, ab P2; Grundlage von §6.1/§6.2)
+
+**Anforderung (2026-07-11):** Was müssen wir bauen, damit unser Server
+(Orchestrator) eine entfernte Maschine (virtuell oder Bare-Metal) erkennt,
+um dort Nodes/Services zu starten? Detaillierter Plan gewünscht.
+
+**Einordnung:** Das ist die überfällige Detaillierung eines Bausteins, den
+§6.1 Punkt 1 und §6.2 Stufe 0 bereits als „ein Agent, zwei Verben"
+angekündigt, aber ausdrücklich als „noch nicht detailliert" offengelassen
+hatten. Heutiger Stand: der Instanz-Launcher (§6.2 Stufe 0, bereits gebaut,
+C8) startet Subprozesse ausschließlich **lokal** auf demselben Host wie der
+Orchestrator (`os/exec`). Dieser Abschnitt beschreibt, was dazukommt, damit
+das auch auf einem **entfernten** Host funktioniert.
+
+### 19.1 Was gebaut wird: `omp-host-agent`
+
+Ein eigenständiges, leichtgewichtiges Go-Binary (gleiche Sprachlinie wie
+der Orchestrator, §4.1 — keine neue Sprache im Stack), das auf **jedem**
+Host läuft, der Nodes hosten soll. Wichtige Abgrenzung: der Host-Agent ist
+**kein NMOS-Node** — er produziert/konsumiert keine Medien und hat keinen
+IS-12/14-Descriptor (§5). Er ist reine Infrastruktur-Ebene, vergleichbar
+mit einem kubelet, aber eigenständig (weil §4.3 auf der Bare-Metal/
+Quadlets-Stufe bewusst kein k3s will).
+
+### 19.2 Erkennung: Agent meldet sich selbst an („Phone Home"), nicht Server-Scan
+
+Zwei Muster wären denkbar — Server sucht aktiv im Netz (Scan/mDNS) versus
+Agent meldet sich beim Server. **Entschieden: Agent-initiiert.** Begründung:
+funktioniert identisch für Bare-Metal/LAN, VM und Cloud/WAN, ohne
+Netzwerk-Scan oder Multicast-Bedarf — dieselbe Überlegung, die §6 schon für
+das WAN/Cloud-Problem getroffen hat (kein Multicast-Bedarf über die
+Cloud-Gateway-Node). Ein Server-seitiger Scan bräuchte zusätzlich
+Netzwerktopologie-Wissen, das der Orchestrator sonst nirgends braucht.
+
+### 19.3 Sicherer Bootstrap (kein anonymes Anmelden)
+
+1. Ein Admin (`admin`-Rolle, §12) erzeugt im Orchestrator ein **einmaliges,
+   kurzlebiges Bootstrap-Token** pro neuem Host (z. B. 1 h gültig,
+   single-use) — `POST /api/v1/hosts/bootstrap-tokens`.
+2. Das Token wird in die Provisionierungs-Konfiguration des neuen Hosts
+   eingebettet (Cloud-Init, Kickstart, oder ein manuelles Setup-Skript —
+   Wahl je Deployment-Weg, kein Zwang zu einem bestimmten Provisioning-Tool).
+3. Der `omp-host-agent` startet, meldet sich **einmalig** mit dem Token
+   (`POST /api/v1/hosts/register` — Hostname, `uname`-Capabilities,
+   I/O-Karten-Inventar) und bekommt im Gegenzug ein **mTLS-Client-
+   Zertifikat von step-ca** (§4.6) ausgestellt — dasselbe
+   Zertifikats-Bootstrapping-Muster, das step-ca für Orchestrator↔Node
+   ohnehin schon vorsieht, hier nur auf den Host-Agent angewendet. Danach
+   ist das Bootstrap-Token verbraucht; alle weitere Kommunikation läuft
+   über mTLS wie der Rest des Stacks.
+4. Ohne gültiges Token keine Registrierung — „Erkennung" ist nie
+   ungesichert-anonym, anders als z. B. NMOS IS-04-Node-Discovery, die
+   bewusst offen für Medien-Nodes im vertrauten Facility-Netz ist. Der
+   Host-Agent braucht die striktere Regel, weil er beliebige Prozesse
+   starten kann (Sicherheitsgrenze wie schon in §6.2: „nur
+   Katalog-Einträge, keine freien Kommandos").
+
+### 19.4 Telemetrie/Inventar (Detaillierung von §6.1 Punkt 1)
+
+Nach der Registrierung publiziert der Agent periodisch auf demselben
+NATS-Bus, der auch Node-Health trägt (§3/§6.1): CPU/RAM/GPU/NIC-Auslastung
+plus das I/O-Karten-Inventar (Kartentyp, Port-Anzahl/-Richtung,
+Belegungszustand). **Wie** gemessen wird, ist zum Umsetzungszeitpunkt zu
+verifizieren, nicht zu raten: Standardmetriken über `/proc`/`/sys`,
+I/O-Karten herstellerspezifisch (z. B. Blackmagic DeckLink über dessen
+CLI/API) — das ist Eigenrecherche bei der D6/§6.1-Umsetzung, kein
+Standardformat.
+
+### 19.5 Kommandokanal: Instanz-Launcher wird Remote-fähig
+
+Der bestehende Instanz-Launcher (§6.2 Stufe 0, `internal/launcher`) schickt
+Start/Stop-Kommandos nicht mehr zwingend per lokalem `os/exec`, sondern —
+sobald ein Ziel-Host ausgewählt ist (manuell oder über die Placement-Engine,
+§6.1) — als Nachricht an den passenden Host-Agent, z. B. über ein
+NATS-Request/Reply-Muster auf einem host-spezifischen Subject
+(`omp.host.<hostId>.cmd`), über den bereits bestehenden mTLS-authentifizierten
+Kanal. Der Agent führt lokal aus und meldet PID/Erfolg zurück — dieselbe
+Sicherheitsgrenze wie heute schon lokal (§6.2: nur Katalog-Einträge). Für
+die Podman/Quadlet-Runner-Stufe (`runner`-Feld, §6.2) installiert/startet
+der Agent das Quadlet auf seinem Host statt eines rohen Subprozesses — nur
+die Ausführungsstelle wandert von „lokal beim Orchestrator" zu „auf dem
+Zielhost", das `runner`-Konzept selbst bleibt unverändert.
+
+### 19.6 Abgrenzung zu k3s
+
+Auf der Cloud/Multi-Host-k3s-Stufe (§4.3) übernimmt k3s dieselben Aufgaben
+bereits nativ (Node-Join-Token = dasselbe Bootstrap-Muster, kubelet =
+Telemetrie/Start-Stop) — der `omp-host-agent` ist **nur** für Bare-Metal/
+kleine On-Prem-Cluster nötig, wo §4.3 bewusst keinen k3s-Overhead will. Auf
+k3s-Hosts registriert sich der k3s-Agent, der Orchestrator spricht dort die
+k3s-API statt des eigenen Host-Agent-Protokolls — dieselbe
+Zwei-Stufen-Antwort wie schon in §6.2 („keine erzwungene Parität über alle
+Deployment-Stufen").
+
+### 19.7 Sichtbarkeit im UI
+
+Ein erfolgreich gebootstrapter Host erscheint in einer neuen Host-Liste im
+Engineering-Dashboard (§18.2): Name, Capabilities, aktuelle Auslastung,
+I/O-Karten-Inventar — und wird ab dann ein gültiges Platzierungsziel für
+die Placement-Engine (§6.1) und die Kapazitätsplanung (§17).
+
+**Node-Contract-Berührung:** keine — der Host-Agent ist kein Node (§19.1),
+also nicht von §5 betroffen.
+
+**Standards-Abdeckung:** keine (Host-Discovery/-Bootstrap ist reine
+Eigenentwicklung, außerhalb des NMOS-Scopes, der nur Medien-Nodes
+beschreibt, keine Compute-Hosts). mTLS/step-ca (§4.6) wird wiederverwendet,
+kein neuer Sicherheitsmechanismus.
+
+**Testbarkeit:** Auf der Single-Host-Dev-Maschine bereits **realistischer**
+als der bisherige §6.1-Testplan simulierbar — zwei Podman-„virtuelle Hosts"
+können jetzt mit einem echten `omp-host-agent`-Prozess pro virtuellem Host
+statt nur fingierten Metriken laufen (Bootstrap-Token-Fluss, mTLS-Ausgabe
+und Kommandokanal vollständig durchspielbar, nur ohne echte
+Host-Trennung). Echte Multi-Host-Verifikation (zweite physische/virtuelle
+Maschine), sobald verfügbar.
+
+**Phase:** Kern-Grundlage für D6 (§6.1)/D7 (§6.2) — angesichts der in §7.4
+gemessenen Geschwindigkeit und weil der Nutzer eine reale zweite Maschine
+unabhängig von Community-Fortschritt testen kann, realistisch **früher**
+ansetzbar als die ursprüngliche P2-Einordnung nahelegt (P2-Zeile in §7
+entsprechend ergänzt) — sobald der kleine Regieplatz (§7.4) steht, ist dies
+der nächste sinnvolle, weil unabhängig von Community-Beiträgen
+angehbare Baustein.
+
+## 20. Orchestrator-Redundanz / Control-Plane-HA (Konzept, gestaffelt — kein Umsetzungsschritt vor Bedarf)
+
+**Anforderung (2026-07-11):** Haben wir ein Redundanzkonzept für unseren
+Server (Orchestrator) — brauchen wir überhaupt eines?
+
+**Kurze Antwort: aktuell nicht, für das 24/7-Sendezentrum-Zielbild
+irgendwann ja — gestaffelt, nicht jetzt bauen.** §6.3 hatte
+Orchestrator-HA bereits explizit als „Bewusste Nicht-Ziele v1" benannt,
+aber ohne Begründung/Plan stehen lassen; dieser Abschnitt liefert beides.
+
+### 20.1 Warum aktuell nicht
+
+§4.1 hält bereits die entscheidende Eigenschaft fest: „stürzt der
+Orchestrator ab, laufen Nodes weiter (kein Frame-Drop), Reconnect beim
+Neustart" — Control-Plane (Go) und Media-Plane (Rust) sind getrennte
+Prozesse. Ein Orchestrator-Absturz bedeutet also: laufende Signale/
+Kompositionen bleiben im letzten Zustand eingefroren, aber es gibt **keinen
+Bildausfall**. Was in der Ausfallzeit fehlt, ist **Steuerung**
+(Schnitte, neue Verkabelung, Monitoring, neue Workflow-Starts) — für die
+aktuelle Phase (Single-Host-Dev, Demo, „temporäre Regieplätze" laut
+§1-Zielbild-Unterscheidung) ist **Restart-in-place** (systemd/Podman-
+Quadlet-Restart-Policy, bereits Teil des Stacks, §4.3) ausreichend: Sekunden
+Steuerungs-Ausfall, kein Medien-Ausfall. Das deckt sich mit der bereits in
+§1/§6.3 getroffenen Grundregel: Redundanz-Tiefe ist pro Workflow-Klasse
+verschieden, temporäre Regieplätze brauchen primär saubere Provisionierung,
+nicht Standby.
+
+### 20.2 Warum langfristig doch — und wann es fällig wird
+
+Das §1-Zielbild „Sendezentrum mit 24/7-Sendeabwicklungen" verträgt einen
+mehrsekündigen bis -minütigen Totalausfall der Steuerung schlechter als ein
+temporärer Regieplatz — ein Host-Ausfall (nicht nur Prozess-Crash) legt bei
+nur einem Orchestrator die Steuerung für die Dauer der Reparatur lahm.
+**Fällig wird das erst, wenn eine reale 24/7-Sendeabwicklung ansteht**
+(§1-Zielbild), nicht für die aktuellen Demo-Phasen — deshalb hier nur als
+Konzept, kein Schritt in `UMSETZUNG.md`.
+
+### 20.3 Konzept-Skizze für später: Active-Passive über die ohnehin vorhandene Postgres/NATS-Basis
+
+Wichtige Ausgangslage, die die Lösung deutlich vereinfacht: der
+Orchestrator ist bereits so gebaut, dass er kaum eigenen, nicht
+wiederherstellbaren Zustand hält — Config/Snapshots/Layouts liegen in
+PostgreSQL (§4.4), Health/Tally sind ephemer auf NATS, Discovery-Zustand
+liegt in der NMOS-Registry (§11: nmos-cpp). Orchestrator-HA muss also
+**keine eigene Konsens-Logik** für Orchestrator-Zustand erfinden — nur
+regeln, welche Instanz gerade „aktiv" ist.
+
+1. **Mehrere Orchestrator-Prozesse**, auf getrennten Hosts, alle gegen
+   dieselbe (später geclusterte) Postgres + denselben NATS-Cluster +
+   dieselbe(n) NMOS-Registry-Instanz(en) verbunden (NMOS IS-04 erlaubt
+   Nodes ohnehin die Registrierung bei mehreren Registries — auch dafür
+   also kein neuer Mechanismus nötig).
+2. **Leader-Wahl über eine Postgres-Advisory-Lock** statt eines
+   zusätzlichen Konsens-Tools (etcd/Raft-Bibliothek o. Ä.) — passt zur
+   Ein-Binary-Sparsamkeitslinie (§4.1/§4.3): die Datenbank ist ohnehin da,
+   ein zusätzlicher Fremd-Prozess nur für Leader-Wahl wäre unnötiges
+   Gewicht. Die passive Instanz hält den Lock nicht, beantwortet
+   Health-/Read-Endpunkte, lehnt Schreibkommandos ab (oder leitet sie an
+   die aktive Instanz weiter); verliert die aktive Instanz die
+   Datenbankverbindung/stirbt, läuft der Lock ab und die passive Instanz
+   übernimmt.
+3. **Einziger Teil, der nicht rein software-intern lösbar ist:** Clients/
+   Nodes müssen dieselbe Adresse ansprechen können, unabhängig davon,
+   welche Instanz gerade aktiv ist — entweder ein schlanker
+   VIP-Mechanismus (keepalived/VRRP) oder ein einfacher
+   Health-Check-basierter L4/L7-Proxy davor. Das ist der einzige neue
+   Fremd-Baustein in diesem Konzept — bewusst so knapp wie möglich
+   gehalten (kein volles Service-Mesh).
+4. **Bewusst nicht mitgelöst — eigene Baustellen, nicht Teil dieses
+   Konzepts:** Postgres selbst und NATS selbst sind in diesem Entwurf noch
+   nicht redundant. NATS-Clustering ist ein natives, einfaches Feature (3
+   Knoten) — Empfehlung: früh mitnehmen, geringer Zusatzaufwand.
+   Postgres-HA (Streaming-Replikation + Failover-Tooling wie Patroni) ist
+   dagegen ein eigenes, aufwändiges Thema mit hohem
+   Aufwand/Nutzen-Verhältnis, solange keine echte 24/7-Sendeabwicklung
+   ansteht — bewusst zurückgestellt, nicht jetzt bauen. Ehrlich benannt:
+   „Orchestrator-HA" im obigen Sinn beseitigt **nicht** automatisch jeden
+   Single-Point-of-Failure der Control-Plane, solange Postgres/NATS selbst
+   nicht redundant sind — nur den Orchestrator-Prozess selbst.
+
+**Standards-Abdeckung:** keine (Eigenentwicklung; NMOS-Multi-Registry-
+Registrierung wird nur als bestehendes Feature mitgenutzt, nicht neu
+gebaut). **Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine
+simulierbar, sobald gebaut (zwei Orchestrator-Prozesse gegen dieselbe
+lokale Postgres, `kill -9` der aktiven Instanz → passive übernimmt den
+Advisory-Lock messbar). **Phase:** kein Schritt vor Bedarf — wird bei
+Planung einer echten 24/7-Sendeabwicklung (§1-Zielbild) als P3-Baustein
+konkretisiert, siehe §7-Phasenplan-Anmerkung bei P3. Bis dahin ist
+Prozess-Restart via systemd/Quadlet-Restart-Policy (§4.3) die einzige und
+für den aktuellen Scope ausreichende Antwort.

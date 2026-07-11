@@ -2048,3 +2048,228 @@ verifizieren.**
   Templates erst Template-seitig fixen (meist Web-Standard-Cross-Browser-
   Aufwand), erst wenn das nicht reicht auf (a) zurückfallen — kein
   Blind-Commit ohne diesen Test.
+
+## 2026-07-11 — Architektur-Review: acht Nutzerfragen zum Regieplatz
+(Bildmischer, Audiomischer, Bedienoberflächen, Hardware-Panels, Latenz,
+Kapazitätsplanung) gegen ARCHITECTURE.md geprüft und eingeordnet
+
+**Kontext:** Der Nutzer stellte acht zusammenhängende Fragen/Anforderungen
+zum Bild eines fertigen Regieplatzes. Jede wurde gegen den aktuellen Stand
+von `ARCHITECTURE.md`/`UMSETZUNG.md`/diesem Log geprüft (Duplikat/
+Erweiterung/neu) und `ARCHITECTURE.md` entsprechend fortgeschrieben — reine
+Doku-Arbeit, kein Code, keine Änderung an den `UMSETZUNG.md`-A–C-Schritten
+(nur die §7-Phasenplan-Tabelle in ARCHITECTURE.md, wie schon bei
+§6.1–§6.4/§12/§11.2 praktiziert):
+
+1. **„Virtuelles Pult" für Bildmeister/Tonmeister, ohne Workflow editieren
+   zu dürfen: größtenteils bereits durch §12 abgedeckt (Rollen-Scope),
+   aber keine Antwort, WIE ein reiner Operator dort hinkommt** — neuer
+   Abschnitt **§14**: Console-Ansicht der bestehenden Shell, die bei
+   `operate`-only-Rollenbindungen direkt auf das/die UI-Bundle(s) der
+   zugewiesenen Node-Rolle(n) springt, kein Graph sichtbar, kiosk-fähige
+   Route pro Node-Rolle. Kein neuer Node-Contract-Punkt (Rollen bleiben
+   orchestrator-seitig durchgesetzt, wie in §12 Punkt 3 bereits
+   festgelegt).
+2. **Bildmischer: ein Node oder Switcher+DVE+Keyer+Freeze als separate
+   Nodes: neu, Grundsatzentscheidung** — neuer Abschnitt **§13.1**:
+   entschieden **ein Prozess pro M/E-Bank**, DVE/Keyer/Still als
+   `NcWorker` im selben `NcBlock` (§11.1-Methodik), nicht als separate
+   MXL-verkettete Nodes — Begründung: jeder MXL-Hop ist ein zusätzlicher
+   Latenz-/Ausfall-Posten für eine im Sendebetrieb atomar erlebte
+   Operation (Crosspoint+DVE+Keyer gleichzeitig in einer Transition).
+   Skalierung „mehrere Ebenen" = mehrere Node-**Instanzen**, nicht mehr
+   `NcWorker` pro Prozess.
+3. **Audiomischpult mit dynamischer Kanalzahl + Audio-Follow-Video: neu**
+   — neuer Abschnitt **§13.2**: ein Node pro Konsole (gleiche
+   Latenz-/Kopplungs-Begründung wie beim Bildmischer),
+   `addChannel()`/`removeChannel()` machen die Kanalzahl zur
+   Laufzeit-Eigenschaft, Audio-Follow-Video hängt sich an den
+   **bestehenden** Tally-NATS-Bus (B4) des gekoppelten Videomixer-Node —
+   kein neuer Sync-Mechanismus.
+4. **Musik-/Jingle-Player, Videoplayer: neu, aber Wiederverwendung von
+   C10/C11 statt drei neuer Node-Typen** — neuer Abschnitt **§13.3**:
+   ein gemeinsames Crate `omp-player` (Verallgemeinerung des geplanten
+   Playout-`PlaylistController`), Unterschied nur UI-Bundle-Variante +
+   Default-Konfigurationsprofil + Katalog-Rolle. Hinweis für die
+   spätere C10/C11-Detaillierung vermerkt, `UMSETZUNG.md` selbst nicht
+   geändert.
+5. **Live-Quellen: Duplikat, bereits abgedeckt** — kurzer Abschnitt
+   **§13.4** bestätigt nur die bestehende Antwort (NMOS-Fremdgeräte /
+   Ingest-Node über §6.1-I/O-Karten-Ressource), keine neue Idee.
+6. **Microservice-Katalog in Kategorien (Input/Output/Audio/Video/Daten):
+   additive Erweiterung von §6.2/§6.4** — neuer Abschnitt **§13.5**: Feld
+   `category` im Katalog-Descriptor, rein UI-Gruppierung, kein Pflichtfeld,
+   robust gegen ältere Einträge ohne das Feld.
+7. **Würde ein physisches Grass-Valley-„Connected Switcher"-Bedienpult
+   (Hardware) mit OMP funktionieren: neu, per Websuche recherchiert statt
+   geraten** — neuer Abschnitt **§15**: Signal-/Routing-Ebene (GV
+   K-Frame/AMPP Edge unterstützen laut Datenblättern NMOS IS-04/IS-05)
+   funktioniert bereits heute ohne Adapter; die Panel→Engine-Steuerebene
+   selbst ist proprietäres GV-Protokoll, nirgends offen dokumentiert
+   gefunden (Indiz: auch die Bitfocus-Companion-Community listet
+   GV-Switcher-Steuerung nur als offenen Wunsch, kein fertiger offener
+   Adapter) — direkte Panel-Steuerung eines OMP-Mixers also **nicht** ohne
+   GV-seitige SDK-Freigabe möglich. Konsequenz für §13.1: die
+   IS-12/14-Methoden des Videomixers bleiben generisch genug, dass jeder
+   künftige Adapter-Node (GV oder günstigere Alternativen) sie wie ein
+   UI-Bundle-Klick aufrufen kann — Anwendung des bereits in §9 genannten
+   Adapter-Node-Musters, keine neue Idee. Quellen in §15 verlinkt.
+8. **A/V/Daten-Synchronität unabhängig von der Node-Kette, AMPP-Vorbild
+   „5 Frames Zielband": komplett neu, größte fehlende Fähigkeit** — neuer
+   Abschnitt **§16**: Per-Node-Latenzdeklaration im Descriptor (additiv,
+   Empfehlung Richtung SDK v1, kein Zwang vor dem Freeze), Workflow-Feld
+   `targetLatencyFrames`, Budget-Rechnung als Teil der bestehenden
+   Ressourcen-Vorprüfung (§6.2 Punkt 3), Delay-Ausgleich per
+   `setOutputDelay()`, PTP- vs. Grain-Sequenznummer-Referenz sauber nach
+   Deployment-Stufe getrennt (gleiche Unterscheidung wie die C4-offene
+   Timestamp-Frage, hier auf Workflow-Ebene hochskaliert), Audio-/
+   Daten-Pfade separat vom Video-Budget gerechnet, Audio-Follow-Video
+   (§13.2) als verwandtes, aber anderes Problem klar abgegrenzt.
+
+Zusätzlich zwei vom Nutzer mitgenannte, aber bereits ganz oder größtenteils
+vorhandene Punkte als Erweiterungen statt neuer Abschnitte eingeordnet:
+
+9. **Zeitliche Ressourcenplanung „geht sich das aus" über mehrere geplante
+   Regieplätze hinweg: Erweiterung von §6.2** (der Einzelstart-Check dort
+   deckt nur „jetzt", nicht die vorausschauende Mehr-Workflow-Sicht) —
+   neuer Abschnitt **§17**: Vorschau-API `GET /api/v1/capacity`, simuliert
+   Claim/Release-Zeitstrahl mehrerer geplanter Workflows über die
+   bestehende Placement-Engine, Kalender-UI mit Konflikt-Markierung.
+   Bewusst **keine** Reservierungssperre — nur Frühwarnung, der scharfe
+   Check bleibt der bestehende Start-Zeitpunkt-Mechanismus.
+10. **Detaillierter Monitoring-Plan: Bündelung bestehender Bausteine +
+    eine konkrete neue Stellschraube** — neuer Abschnitt **§18**: knüpft an
+    die bereits am 2026-07-09 geäußerte Priorität „frame-genaues
+    Monitoring ist Kernaufgabe" an; macht den bisher globalen
+    Health-Staleness-Schwellwert (§6.3, 10 s) **pro Workflow-Rolle
+    konfigurierbar**, damit On-Air-kritische Rollen schneller erkannt
+    werden können (Kompromiss mit NATS-Traffic ehrlich benannt). Zwei
+    Dashboard-Sichten (Engineering vollständig, Operator-Console
+    scope-beschränkt) als reine Zusammensetzung vorhandener Bausteine.
+
+§7-P2-Zeile um §14/§16/§18 ergänzt, §7-P4-Zeile um §13/§17 ergänzt — sonst
+keine Änderung an bestehenden Abschnitten außer einem einzeiligen
+Cross-Reference-Hinweis in §6.2 (Katalog-`category`-Feld zeigt auf §13.5).
+
+## 2026-07-11 — Vier weitere Nutzerfragen: Resequenzierung, Zeitplan-
+Realitätscheck, Remote-Host-Erkennung, Orchestrator-Redundanz
+
+**Kontext:** Direkte Folgefrage zum selben Tag. Vier Punkte, dieses Mal mit
+echter Rückwirkung auf `UMSETZUNG.md` (nicht nur `ARCHITECTURE.md`), weil
+zwei der vier Punkte explizite Reihenfolge-Entscheidungen im Umsetzungsplan
+sind (gleiche Kategorie wie „MXL-Timing per Nutzer-Machtwort vorgezogen",
+2026-07-09).
+
+1. **Playout-Automation-Demo nach hinten, kleiner Regieplatz zuerst.**
+   Begründung des Nutzers („Automatisation wird ohnehin einen Teil davon
+   nutzen") deckt sich exakt mit der bereits in §13.1–§13.3 festgelegten
+   Regel „dieselben IS-12/14-Methoden, keine zweite API" — Playout vor den
+   eigentlichen Regieplatz-Nodes zu bauen hieße, den Aufrufer vor der
+   Sache zu bauen, die er aufruft. **`UMSETZUNG.md` Phase C umsortiert:**
+   `C10/C11 „Playout v1"` ersetzt durch `C10–C13` (Bildmischer-,
+   Audiomischer-, Player-Minimalausbau, Operator-Console — „Demo 3"),
+   Playout-Automation-Controller wird zu `C14/C15` („Demo 4"). Der
+   C1–C3-RTP-Referenz-Node bleibt unverändert im Repo. Neuer
+   `ARCHITECTURE.md`-Abschnitt **§7.4** dokumentiert die Begründung; §2-
+   und Status-Tabelle in `UMSETZUNG.md` angepasst.
+2. **Zeitplan an bisheriges Tempo anpassen: gemessen statt geschätzt.**
+   Git-Log-Zeitstempel zeigen Phase A+B+C(bis C9) in **vier
+   Arbeitssitzungen/≈20 Stunden über vier Kalendertage** (2026-07-07 bis
+   2026-07-10) statt der in §2 veranschlagten 11–20 Monate — Faktor
+   ~20–40×. **Bewusst nicht linear auf alle Restarbeit hochgerechnet**
+   (§7.4): Tempo-getriebene Solo-Software-Arbeit (weitere
+   Regieplatz-Nodes, Host-Agent-Grundbau, SDK-Doku) plausibel im selben
+   Tempo fortsetzbar; extern-getriebene Arbeit (Community-Nodes, echte
+   Multi-Host-/2110-Verifikation, echte Sendezentrum-Redundanz) bleibt
+   unverändert von Menschen/Hardware begrenzt, nicht von
+   Sitzungsgeschwindigkeit — §7.3s Community-Flaschenhals-Aussage gilt
+   dadurch stärker, nicht schwächer. §7.1/§7.2-Zeitschätzungen bewusst
+   **nicht** umgerechnet, gelten neu als Worst-Case statt Erwartungswert
+   — neuer Abschnitt **§7.4**.
+3. **Wie erkennt der Server eine entfernte Maschine, um dort
+   Nodes/Services zu starten: Detaillierung eines bereits als „noch
+   nicht detailliert" angekündigten Bausteins** (§6.1 Punkt 1/§6.2 „ein
+   Agent, zwei Verben") — neuer Abschnitt **§19**: eigenständiges Binary
+   `omp-host-agent`, Agent-initiiertes Bootstrap („Phone Home" statt
+   Server-Scan, funktioniert identisch LAN/VM/WAN), einmaliges
+   Bootstrap-Token + step-ca-mTLS-Zertifikatsausgabe als
+   Sicherheitsgrenze, Telemetrie/Inventar über den bestehenden
+   NATS-Bus, Instanz-Launcher (§6.2 Stufe 0) wird um einen
+   Remote-Kommandokanal erweitert statt neu gebaut, klare Abgrenzung zu
+   k3s (nur für Bare-Metal/kleine Cluster nötig). Wegen Punkt 2
+   (community-unabhängig, selbst testbar) als realistisch früherer
+   Baustein eingeordnet als die ursprüngliche P2-Zuordnung — P2-Zeile in
+   §7 ergänzt, `UMSETZUNG.md` D6-Bullet verweist jetzt auf §19.
+4. **Redundanzkonzept für den Orchestrator selbst: brauchen wir das?**
+   — bisher nur als „Bewusstes Nicht-Ziel v1" ohne Begründung/Plan in
+   §6.3 vermerkt. Neuer Abschnitt **§20**: **aktuell nein** (Prozess-
+   Restart via systemd/Quadlet reicht, weil Nodes bei Orchestrator-
+   Ausfall ohnehin weiterlaufen, §4.1 — nur Steuerung fehlt kurz, kein
+   Medien-Ausfall), **später ja** für das 24/7-Sendezentrum-Zielbild
+   (§1). Skizze für dann: Active-Passive über die ohnehin vorhandene
+   Postgres/NATS-Basis, Leader-Wahl per Postgres-Advisory-Lock statt
+   neuem Konsens-Tool, NATS-Clustering früh (nativ einfach),
+   Postgres-HA bewusst zurückgestellt (eigenes, teures Thema), einzige
+   echte neue Fremd-Komponente ist ein schlanker VIP/Proxy vor den
+   Instanzen. Kein Umsetzungsschritt jetzt — P3-Anmerkung in §7 ergänzt.
+
+**Keine Änderung an A1–C9 selbst** (bereits erledigt, unverändert gültig).
+`UMSETZUNG.md` Phase-C-Fortsetzung (vormals C10/C11) sowie die D6-Notiz
+sind die einzigen inhaltlichen Umsetzungsplan-Änderungen; alles andere ist
+`ARCHITECTURE.md`-Fortschreibung wie beim 2026-07-10- und ersten
+2026-07-11-Review.
+
+## 2026-07-11 — Einfacher Start/Stop für den Orchestrator + Handbuch
+
+**Kontext:** Bisher gab es keinen dokumentierten Weg, den Orchestrator mit
+einem Befehl zu starten (nur `go run ./orchestrator` von Hand, aus dem
+richtigen Arbeitsverzeichnis heraus, ohne Healthcheck/Log/PID-Verwaltung).
+Nutzeranforderung: einfaches Start-Script + ein erstes Handbuch.
+
+- **`deploy/dev/start-omp.sh`** (`make start`): `make up`
+  (NATS+Registry) → UI-Bundle bauen → Orchestrator-Binary bauen
+  (`bin/omp-orchestrator`) → im Hintergrund starten → auf `/healthz`
+  warten. **`deploy/dev/stop-omp.sh`** (`make stop`) stoppt ihn wieder
+  (SIGTERM, Fallback SIGKILL nach 5 s), `make status` zeigt den Zustand
+  von Orchestrator/NATS/Registry.
+- **Bug beim Bauen gefunden und gefixt:** Die erste Fassung startete den
+  Prozess über `( cd orchestrator && nohup BIN & echo $! )`, um die
+  relativen Config-Defaults (`OMP_UI_DIR=../ui` etc.) aufzulösen. Ein
+  backgroundetes `cd X && CMD &` backgroundet aber die **ganze**
+  `&&`-Kette in einer Subshell, wodurch `$!` auf deren Wrapper-PID zeigt,
+  nicht auf den tatsächlichen Prozess — `make stop` killte damit den
+  falschen Prozess, während der eigentliche Orchestrator weiterlief und
+  den Port belegt hielt. Gefixt durch **absolute Pfade als Env-Vars**
+  (`OMP_UI_DIR`/`OMP_DATA_DIR`/`OMP_CATALOG_PATH`) statt `cd` — kein
+  Subshell-Wrapper mehr nötig, `$!` ist jetzt korrekt. Zusätzliche
+  Absicherung in beiden Scripts: vor dem Start wird geprüft, ob Port 8000
+  bereits antwortet (verwaister Prozess aus einer früheren Sitzung würde
+  sonst den Healthcheck des NEUEN, eigentlich fehlgeschlagenen Starts
+  „erfolgreich" erscheinen lassen — genau das ist beim Testen passiert
+  und wurde erst durch `ss -ltnp` sichtbar).
+- **Zweiter, verwandter Bug in `orchestrator/main.go` gefunden und
+  gefixt:** `signal.NotifyContext` erzeugte zwar einen bei SIGTERM/
+  SIGINT abbrechbaren Context, aber `http.ListenAndServe` lief direkt
+  (blockierend) und reagierte nie auf `ctx.Done()` — der Server ließ
+  sich also grundsätzlich nur per SIGKILL beenden, nicht per SIGTERM,
+  unabhängig vom Start-Script. Gefixt: expliziter `http.Server` +
+  `srv.Shutdown(ctx)` in einem `select` auf `ctx.Done()`, 5 s
+  Shutdown-Timeout, Fallback `srv.Close()`. Verifiziert: `make stop`
+  beendet den Prozess jetzt sauber per SIGTERM in < 1 s (vorher: SIGTERM
+  wirkungslos, immer SIGKILL nötig).
+- **`docs/HANDBUCH.md`** (neu): Voraussetzungen, Schnellstart, erste
+  Schritte in der GUI (Instanz-Launcher-Katalog), Troubleshooting
+  (verwaister Prozess auf Port 8000, transiente „registry poll failed"-
+  Warnung, fehlendes `libmxl.so` bei `cargo test`). `README.md` bekommt
+  einen kurzen Quickstart-Verweis und einen aktualisierten Status-Absatz
+  (der alte Text „frisch initialisiert, Tech-Stack offen" war seit
+  Wochen falsch).
+- **Verifikation:** `make start`/`make status`/`make stop` mehrfach
+  end-to-end durchgespielt (inkl. der beiden oben beschriebenen
+  Fehlerfälle), PID-Datei stimmt jetzt mit dem tatsächlichen
+  Port-Owner überein, Port ist nach `make stop` zuverlässig frei.
+  `make check`: Go-/Deno-Teile grün; `cargo test -p omp-mediaio`
+  schlägt weiterhin (unverändert, nicht durch diese Änderung verursacht)
+  fehl, weil `libmxl.so` in dieser Umgebung nicht installiert ist
+  (`deploy/dev/install-mxl.sh` nicht gelaufen) — dokumentiert im
+  Handbuch-Troubleshooting statt stillschweigend übergangen.

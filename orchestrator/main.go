@@ -83,8 +83,29 @@ func main() {
 		"ui_dir", cfg.UIDir,
 	)
 
-	if err := http.ListenAndServe(cfg.Listen, handler); err != nil {
-		slog.Error("orchestrator stopped", "error", err)
-		os.Exit(1)
+	srv := &http.Server{Addr: cfg.Listen, Handler: handler}
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-serveErr:
+		if err != nil && err != http.ErrServerClosed {
+			slog.Error("orchestrator stopped", "error", err)
+			os.Exit(1)
+		}
+	case <-ctx.Done():
+		// SIGTERM/SIGINT (z. B. deploy/dev/stop-omp.sh): sauber
+		// herunterfahren statt nur auf das nächste SIGKILL zu warten —
+		// ctx wurde bisher nur an den Poller weitergereicht, ohne dass
+		// der HTTP-Server je darauf reagierte.
+		slog.Info("shutdown signal received, draining")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("graceful shutdown failed, forcing close", "error", err)
+			srv.Close()
+		}
 	}
 }
