@@ -25,6 +25,18 @@ use gstreamer_app as gst_app;
 
 use crate::Output;
 
+/// Referenz-Caps-Name für `GstReferenceTimestampMeta` (ARCHITECTURE.md
+/// §15 Punkt 4, nachgezogen 2026-07-12 per Fable-Konsultation): markiert
+/// eine an einem MXL-Lesepfad angehängte Ursprungs-Zeitangabe als
+/// "MXL-TAI", damit ein Schreibpfad sie eindeutig von anderen
+/// Referenz-Zeitstempeln unterscheiden kann, die dieselbe Pipeline aus
+/// anderen Gründen tragen könnte. Video und Audio teilen sich denselben
+/// Namen — die Meta selbst trägt keine Formatinformation, die ist über
+/// den jeweiligen Flow/Node ohnehin bekannt.
+fn tai_reference_caps() -> gst::Caps {
+    gst::Caps::new_empty_simple("timestamp/x-mxl-tai")
+}
+
 /// Geladene MXL-API + geöffnete Instanz für eine Domain (Shared-Memory-
 /// Verzeichnis). Ein `MxlContext` pro Prozess reicht — Reader und Writer
 /// für beliebig viele Flows teilen sich dieselbe Instanz (z. B.
@@ -241,7 +253,9 @@ fn write_loop(
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
 ) {
+    let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
+    let mut last_written: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
@@ -255,8 +269,21 @@ fn write_loop(
             continue;
         };
 
-        let this_index =
-            *index.get_or_insert_with(|| context.instance.get_current_index(grain_rate));
+        // Ursprungs-Index bevorzugen, falls ein durchgereichter Node
+        // (z. B. omp-switcher) die TAI-Herkunftszeit als Meta trägt
+        // (ARCHITECTURE.md §15 Punkt 4) — sonst wie bisher fortlaufend
+        // zählen (z. B. ein Mixer-Ausgang oder eine Test-Quelle ohne
+        // durchgereichten Ursprung, per Definition ein neuer Ursprung).
+        // `max(origin, letzter+1)` schützt vor Rückwärtssprüngen (z. B.
+        // durch von `videorate` duplizierte Buffer mit identischer Meta).
+        let origin_index = origin_index_from_buffer(context, buffer, &reference_caps, grain_rate);
+        let this_index = match origin_index {
+            Some(origin) => match last_written {
+                Some(last) => origin.max(last + 1),
+                None => origin,
+            },
+            None => *index.get_or_insert_with(|| context.instance.get_current_index(grain_rate)),
+        };
 
         match grain_writer.open_grain(this_index) {
             Ok(mut access) => {
@@ -273,8 +300,30 @@ fn write_loop(
             }
         }
 
+        last_written = Some(this_index);
         index = Some(this_index + 1);
     }
+}
+
+/// Liest die per [`ReferenceTimestampMeta`](gst::ReferenceTimestampMeta)
+/// mitgeführte TAI-Ursprungszeit (falls vorhanden, s.
+/// [`tai_reference_caps`]) und rechnet sie zurück in einen Grain-/Sample-
+/// Index — `None`, wenn keine solche Meta anliegt (z. B. Ausgang eines
+/// Mixers/einer Testquelle) oder die Umrechnung fehlschlägt.
+fn origin_index_from_buffer(
+    context: &Arc<MxlContext>,
+    buffer: &gst::BufferRef,
+    reference_caps: &gst::Caps,
+    rate: &mxl_sys::Rational,
+) -> Option<u64> {
+    let meta = buffer.meta::<gst::ReferenceTimestampMeta>()?;
+    if meta.reference() != reference_caps.as_ref() {
+        return None;
+    }
+    context
+        .instance
+        .timestamp_to_index(meta.timestamp().nseconds(), rate)
+        .ok()
 }
 
 impl Output for MxlVideoOutput {
@@ -482,7 +531,9 @@ fn write_audio_loop(
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
 ) {
+    let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
+    let mut last_written: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
@@ -498,8 +549,17 @@ fn write_audio_loop(
         let bytes = map.as_slice();
         let bytes_per_channel = bytes.len() / channels.max(1);
 
-        let this_index =
-            *index.get_or_insert_with(|| context.instance.get_current_index(sample_rate));
+        // Gleiches Ursprungs-Index-Prinzip wie im Video-Schreibpfad
+        // (`write_loop`) — s. Kommentar dort.
+        let origin_index =
+            origin_index_from_buffer(context, buffer, &reference_caps, sample_rate);
+        let this_index = match origin_index {
+            Some(origin) => match last_written {
+                Some(last) => origin.max(last + batch_size),
+                None => origin,
+            },
+            None => *index.get_or_insert_with(|| context.instance.get_current_index(sample_rate)),
+        };
 
         match samples_writer.open_samples(this_index, batch_size as usize) {
             Ok(mut access) => {
@@ -525,6 +585,7 @@ fn write_audio_loop(
             }
         }
 
+        last_written = Some(this_index);
         index = Some(this_index + batch_size);
     }
 }
@@ -659,11 +720,28 @@ fn read_loop(
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
 ) {
+    let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
     while running.load(Ordering::Relaxed) {
         match grain_reader.get_complete_grain(index, Duration::from_millis(500)) {
             Ok(grain) => {
-                let buffer = gst::Buffer::from_slice(grain.payload.to_vec());
+                let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
+                // Ursprungs-Zeitstempel als Referenz-Meta anhängen
+                // (ARCHITECTURE.md §15 Punkt 4) — `do-timestamp=true`
+                // oben bleibt unverändert (PTS/Pipeline-Verhalten
+                // unangetastet), die Meta reist zusätzlich mit, damit ein
+                // Schreibpfad weiter unten den echten Ursprung kennt statt
+                // ihn wie bisher zu verwerfen.
+                if let Ok(ts_ns) = context.instance.index_to_timestamp(index, grain_rate)
+                    && let Some(buffer_mut) = buffer.get_mut()
+                {
+                    gst::ReferenceTimestampMeta::add(
+                        buffer_mut,
+                        &reference_caps,
+                        gst::ClockTime::from_nseconds(ts_ns),
+                        gst::ClockTime::NONE,
+                    );
+                }
                 if app_src.push_buffer(buffer).is_err() {
                     break;
                 }
@@ -885,11 +963,24 @@ fn read_audio_loop(
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
 ) {
+    let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(sample_rate);
     while running.load(Ordering::Relaxed) {
         match samples_reader.get_samples(index, batch_size as usize, Duration::from_millis(500)) {
             Ok(data) => {
-                let buffer = gst::Buffer::from_slice(interleave_samples(&data));
+                let mut buffer = gst::Buffer::from_slice(interleave_samples(&data));
+                // Ursprungs-Zeitstempel des Batch-Starts als Referenz-Meta
+                // (gleiches Prinzip wie im Video-Lesepfad, `read_loop`).
+                if let Ok(ts_ns) = context.instance.index_to_timestamp(index, sample_rate)
+                    && let Some(buffer_mut) = buffer.get_mut()
+                {
+                    gst::ReferenceTimestampMeta::add(
+                        buffer_mut,
+                        &reference_caps,
+                        gst::ClockTime::from_nseconds(ts_ns),
+                        gst::ClockTime::NONE,
+                    );
+                }
                 if app_src.push_buffer(buffer).is_err() {
                     break;
                 }
@@ -1018,6 +1109,79 @@ mod tests {
         assert!(
             received.load(Ordering::Relaxed) > 0,
             "expected at least one buffer to arrive at the reader's fakesink via MXL"
+        );
+    }
+
+    /// Verifiziert den in `read_loop`/`write_loop` genutzten Mechanismus
+    /// (ARCHITECTURE.md §15 Punkt 4, nachgezogen 2026-07-12) direkt auf
+    /// Buffer-Ebene, ohne eine volle Zwei-Prozess-Pipeline: ein Index,
+    /// über `index_to_timestamp` in eine TAI-Zeit gewandelt und als
+    /// `ReferenceTimestampMeta` angehängt, muss über
+    /// `origin_index_from_buffer` unverändert zurückkommen.
+    #[test]
+    fn origin_timestamp_meta_round_trips_to_same_index() {
+        gst::init().expect("gst::init");
+
+        let domain = std::env::temp_dir().join("omp-mxl-test-domain-origin");
+        std::fs::create_dir_all(&domain).expect("create test domain dir");
+        let domain = domain.to_string_lossy().to_string();
+
+        let context = Arc::new(MxlContext::new(&domain).expect(
+            "MxlContext::new — libmxl.so im LD_LIBRARY_PATH? source deploy/dev/mxl.env",
+        ));
+        let rate = mxl_sys::Rational {
+            numerator: 25,
+            denominator: 1,
+        };
+        let origin_index = context.instance.get_current_index(&rate) + 1000;
+        let ts = context
+            .instance
+            .index_to_timestamp(origin_index, &rate)
+            .expect("index_to_timestamp");
+
+        let reference_caps = tai_reference_caps();
+        let mut buffer = gst::Buffer::from_slice(vec![0u8; 4]);
+        gst::ReferenceTimestampMeta::add(
+            buffer.get_mut().expect("exclusive buffer"),
+            &reference_caps,
+            gst::ClockTime::from_nseconds(ts),
+            gst::ClockTime::NONE,
+        );
+
+        let recovered = origin_index_from_buffer(&context, &buffer, &reference_caps, &rate);
+        assert_eq!(
+            recovered,
+            Some(origin_index),
+            "origin index should round-trip through the reference-timestamp meta unchanged"
+        );
+    }
+
+    /// Ein Buffer ohne die Meta (z. B. ein Mixer-/Testquellen-Ausgang,
+    /// der per Definition einen neuen Ursprung setzt) muss `None` liefern,
+    /// damit der Aufrufer sauber auf das bisherige Zähler-Verhalten
+    /// zurückfällt (`write_loop`/`write_audio_loop`).
+    #[test]
+    fn origin_index_from_buffer_returns_none_without_meta() {
+        gst::init().expect("gst::init");
+
+        let domain = std::env::temp_dir().join("omp-mxl-test-domain-origin-none");
+        std::fs::create_dir_all(&domain).expect("create test domain dir");
+        let domain = domain.to_string_lossy().to_string();
+
+        let context = Arc::new(
+            MxlContext::new(&domain).expect("MxlContext::new"),
+        );
+        let rate = mxl_sys::Rational {
+            numerator: 25,
+            denominator: 1,
+        };
+        let reference_caps = tai_reference_caps();
+        let buffer = gst::Buffer::from_slice(vec![0u8; 4]);
+
+        assert_eq!(
+            origin_index_from_buffer(&context, &buffer, &reference_caps, &rate),
+            None,
+            "a buffer without the meta must fall back to None (caller uses the counter-based index)"
         );
     }
 }

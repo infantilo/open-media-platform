@@ -795,6 +795,38 @@ Multiviewer: Discovery findet beide, Kachel-Grid zeigt genau die
 Multiviewer-Inline-Vorschau, `GET .../preview` liefert echte
 JPEG-Bytes), `tools/contract-check` PASS auf `omp-multiviewer`.
 
+### C13-Nachtrag 2 — MXL-Origin-Index-Erhalt (§15), vier UI-Bugfixes (2026-07-12)
+
+Details siehe `docs/decisions.md` 2026-07-12 (zweiter Eintrag desselben
+Tages):
+
+- **`omp-mediaio::mxl` reicht den Origin-Grain-Index jetzt durch**
+  (`GstReferenceTimestampMeta`, additiv, kein Breaking Change) — löst die
+  in `ARCHITECTURE.md` §15 Punkt 4 offen gelassene Voraussetzung für
+  A/V/Daten-Synchronität; für Redundanz (§20.1) notwendig, aber nicht
+  hinreichend. Zwei neue Tests in `omp-mediaio`.
+- Vier vom Nutzer per Live-Test gefundene UI-Bugs behoben: Kacheln nach
+  Reload außerhalb des Bildbereichs (Grundursache: unbegrenzt wachsende
+  verwaiste Positions-Einträge, jetzt per `#pruneStalePositions()`
+  bereinigt, plus Viewport-Persistenz), beide Ports einer Quelle
+  gleichfarbig (jetzt nach Format statt nur input/output eingefärbt),
+  Inline-Vorschau überragte den Kachel-Rahmen (Geometrie reserviert jetzt
+  Platz dafür), fehlendes Quell-Label in Viewer/Multiviewer (UMD-
+  `textoverlay`).
+- **Zwei Laufzeit-Abstürze per Live-Test gefunden**, die `cargo build`
+  nicht zeigt: `textoverlay`s `valignment`/`halignment` sind GEnums, kein
+  String-Property (`.property()` kompiliert, crasht aber beim ersten
+  echten Connect) — behoben mit `set_property_from_str`. Ein einmaliger
+  OOM-Kill von `omp-multiviewer` (5,75 GB RSS) trat auf, war aber trotz
+  gezielter Nachstellung nicht reproduzierbar — vermutlich
+  Ressourcenengpass durch einen parallel laufenden `cargo build` auf
+  einer 6,5-GB-RAM-Maschine, kein Code-Bug gefunden.
+
+**Verifiziert:** `cargo build/test/deny` (inkl. neuer mxl.rs-Tests),
+`deno check/test`, End-to-End per CDP-Session mit echten Instanzen (alle
+vier UI-Fixes und beide Absturz-Fixes am laufenden Node bestätigt),
+`tools/contract-check` PASS.
+
 ### C14/C15 — Playout-Automation-Controller (vormals C10/C11, jetzt danach)
 
 **Ziel:** Dünne Sequenzierungsschicht, die `playlist.rs`

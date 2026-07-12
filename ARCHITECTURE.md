@@ -1489,13 +1489,29 @@ früher am Ausgang an als ein Bildpfad durch DVE+Keyer+Grafik-Kompositing
    die zugewiesene `setOutputDelay()`-Latenz in Grains ist — Ursprungsbezug
    und Latenzbudget sind dieselbe Mechanik, kein Gegensatz. Voraussetzung
    dafür ist, dass Nodes den Origin-Index tatsächlich durchreichen statt ihn
-   zu verwerfen — das ist aktuell **nicht** der Fall (siehe
+   zu verwerfen — bis 2026-07-12 war das **nicht** der Fall (siehe
    `docs/decisions.md`, 2026-07-11 „MXL-Grain-Index ist TAI-Zeit, nicht
    Ersatztakt"): die C4-Vereinfachung (`do-timestamp=true` beim Lesen,
-   `get_current_index()`+1-Zähler beim Schreiben) verwirft die
-   Ursprungskorrelation an jedem Node-Hop. Für die A–C-Phasen unverändert
-   tragbar (dort geht es um Funktionsnachweis, keine Frame-Attribution);
-   muss vor echter §15-Umsetzung (P2/D) behoben sein.
+   `get_current_index()`+1-Zähler beim Schreiben) verwarf die
+   Ursprungskorrelation an jedem Node-Hop.
+
+   **Behoben 2026-07-12** (Fable-Konsultation zur Sinnhaftigkeit, dann
+   umgesetzt): `omp-mediaio::mxl`s Lesepfade (`MxlVideoInput`/
+   `MxlAudioInput`) hängen die TAI-Ursprungszeit jetzt zusätzlich als
+   `GstReferenceTimestampMeta` an (`do-timestamp=true` bleibt unverändert
+   für PTS/Pipeline-Verhalten, die Meta reist nur zusätzlich mit); die
+   Schreibpfade (`MxlVideoOutput`/`MxlAudioOutput`) lesen sie aus und
+   schreiben — falls vorhanden — am Ursprungs-Index (mit
+   Monotonie-Schutz `max(Ursprung, letzter+1)`), sonst unverändert per
+   Zähler-Fallback (z. B. Mixer-Ausgänge/Testquellen ohne durchgereichten
+   Ursprung — nach Definition ein neuer Ursprung). Rein additiv in der
+   SDK-Schicht, kein Breaking Change für bestehende Nodes. Der `D`-Term
+   selbst (`setOutputDelay()`) bleibt weiterhin P2/D-Scope — nur die
+   Voraussetzung dafür (Origin-Erhalt) ist jetzt vorhanden. Nebeneffekt:
+   dieselbe Origin-Erhaltung ist auch die notwendige (nicht hinreichende)
+   Grundlage für einen künftigen `omp-seamless-switch`-Redundanz-Node
+   (§6.3/§20.1) — Zustands-Synchronität und Rebind-Zeit bleiben davon
+   unberührt offene Probleme.
 5. **Audio-/Daten-Pfade separat, nicht als Kopie des Video-Budgets:** Ein
    Video-Frame-Budget ist kein automatisches Audio-Sample- oder
    Ancillary-Daten-Budget — derselbe Mechanismus (Deklaration + Ausgleich)
@@ -1939,7 +1955,10 @@ Wesentliche Bausteine, falls das Ziel langfristig verfolgt wird:
    `UMSETZUNG.md` §0 Punkt 7), aber MXLs TAI-Grain-Index
    (`third_party/mxl/docs/Timing.md`) ist bereits eine absolute
    Zeitbasis — ein struktureller Vorteil gegenüber einer Neuentwicklung
-   von Null.
+   von Null. **Teilerledigt 2026-07-12:** der Origin-Index wird jetzt
+   tatsächlich durch MXL-Lese-/Schreibpfade durchgereicht statt verworfen
+   (§15 Punkt 4) — notwendige, aber allein nicht hinreichende Grundlage
+   für Punkt 3 unten (Zustands-Synchronität/Rebind-Zeit bleiben offen).
 2. Deterministisches Command-Mirroring: jede Take/Cut/DVE-Bewegung als
    zeitgestempeltes Kommando „wirksam ab Grain-Index N" an beide
    Instanzen, plus Resync-Protokoll für neu startende Standby-Instanzen.

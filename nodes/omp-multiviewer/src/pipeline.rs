@@ -155,20 +155,37 @@ fn build(
                 )
                 .build()
                 .map_err(|e| format!("capsfilter (tile {i}): {e}"))?;
+            // UMD-artiges Textoverlay mit der IS-04-Sender-Bezeichnung
+            // dieser Kachel (Nutzeranforderung 2026-07-12) — nach der
+            // Kachelgröße statt vorher, damit Textgröße/-position pro
+            // Kachel konsistent bleiben, unabhängig von der jeweiligen
+            // Quellauflösung.
+            // `valignment`/`halignment` sind GEnums, keine Strings — s.
+            // Kommentar in omp-viewer/src/pipeline.rs (per Absturz
+            // gefunden).
+            let umd = gst::ElementFactory::make("textoverlay")
+                .property("text", input.label.as_str())
+                .property("shaded-background", true)
+                .property("font-desc", "Sans 8")
+                .build()
+                .map_err(|e| format!("textoverlay (tile {i}): {e}"))?;
+            umd.set_property_from_str("valignment", "bottom");
+            umd.set_property_from_str("halignment", "center");
 
             pipeline
                 .add(&videoconvert)
                 .and_then(|()| pipeline.add(&videoscale))
                 .and_then(|()| pipeline.add(&caps))
+                .and_then(|()| pipeline.add(&umd))
                 .map_err(|e| format!("add tile {i} elements: {e}"))?;
-            gst::Element::link_many([&mxl_input.tail, &videoconvert, &videoscale, &caps])
+            gst::Element::link_many([&mxl_input.tail, &videoconvert, &videoscale, &caps, &umd])
                 .map_err(|e| format!("link tile {i} chain: {e}"))?;
 
             let pad = comp
                 .request_pad_simple(&format!("sink_{i}"))
                 .ok_or_else(|| format!("compositor: request sink_{i} failed"))?;
-            caps.static_pad("src")
-                .ok_or("tile capsfilter: no src pad")?
+            umd.static_pad("src")
+                .ok_or("tile textoverlay: no src pad")?
                 .link(&pad)
                 .map_err(|e| format!("link tile {i} to compositor: {e}"))?;
 

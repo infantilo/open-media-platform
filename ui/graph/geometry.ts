@@ -59,11 +59,21 @@ export const NODE_WIDTH = 160;
 export const HEADER_HEIGHT = 24;
 export const PORT_SPACING = 20;
 export const MIN_BODY_HEIGHT = 40;
+// Größe der Kachel-Inline-Vorschau (16:9, s. flow-canvas.ts
+// #renderPreviewThumbnail) — hier definiert, damit nodeHeight() für
+// Nodes mit previewUrl genug Platz reserviert, statt das Bild über den
+// Kachel-Rahmen hinausragen zu lassen (Nutzerfund 2026-07-12).
+export const PREVIEW_WIDTH = NODE_WIDTH - 16;
+export const PREVIEW_HEIGHT = Math.round((PREVIEW_WIDTH * 9) / 16);
+const PREVIEW_MARGIN = 4;
 
-/** Höhe einer Kachel abhängig von der größeren Port-Anzahl (Input/Output). */
-export function nodeHeight(inputCount: number, outputCount: number): number {
+/** Höhe einer Kachel abhängig von der größeren Port-Anzahl (Input/Output)
+ * plus, falls `hasPreview`, reserviertem Platz für die Inline-Vorschau. */
+export function nodeHeight(inputCount: number, outputCount: number, hasPreview = false): number {
   const rows = Math.max(inputCount, outputCount, 1);
-  return HEADER_HEIGHT + Math.max(MIN_BODY_HEIGHT, rows * PORT_SPACING);
+  const bodyHeight = Math.max(MIN_BODY_HEIGHT, rows * PORT_SPACING);
+  const previewSpace = hasPreview ? PREVIEW_HEIGHT + PREVIEW_MARGIN * 2 : 0;
+  return HEADER_HEIGHT + bodyHeight + previewSpace;
 }
 
 export type PortSide = "input" | "output";

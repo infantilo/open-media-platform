@@ -41,7 +41,7 @@ pub enum Event {
 }
 
 enum Command {
-    Connect(String),
+    Connect(String, String),
     Disconnect,
 }
 
@@ -53,8 +53,12 @@ pub struct PipelineHandle {
 }
 
 impl PipelineHandle {
-    pub fn connect(&self, flow_id: String) {
-        let _ = self.commands.send(Command::Connect(flow_id));
+    /// `label` ist die IS-04-Sender-Bezeichnung der gewählten Quelle
+    /// (Nutzeranforderung 2026-07-12: als UMD-artiges Textoverlay
+    /// eingeblendet, s. `build()`) — kein Verbindungsparameter im
+    /// engeren Sinn, nur zur Anzeige.
+    pub fn connect(&self, flow_id: String, label: String) {
+        let _ = self.commands.send(Command::Connect(flow_id, label));
     }
 
     pub fn disconnect(&self) {
@@ -80,6 +84,7 @@ impl Drop for ActivePipeline {
 fn build(
     context: &Arc<MxlContext>,
     flow_id: &str,
+    label: &str,
     broadcaster: &Arc<Broadcaster>,
     sink_element: Option<&str>,
 ) -> Result<ActivePipeline, String> {
@@ -87,14 +92,31 @@ fn build(
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), flow_id)?;
 
+    // UMD-artiges Textoverlay mit der IS-04-Sender-Bezeichnung der
+    // gewählten Quelle (Nutzeranforderung 2026-07-12) — vor dem `tee`,
+    // damit sowohl der MJPEG- als auch ein optionaler Terminal-Sink-Zweig
+    // das Label sehen.
+    // `valignment`/`halignment` sind GEnums (`GstBaseTextOverlayV/HAlign`),
+    // keine Strings — `set_property_from_str` statt `.property()` (per
+    // Absturz gefunden: `.property("valignment", "bottom")` schlägt zur
+    // Laufzeit fehl, "expected GstBaseTextOverlayVAlign, got gchararray").
+    let umd = gst::ElementFactory::make("textoverlay")
+        .property("text", label)
+        .property("shaded-background", true)
+        .build()
+        .map_err(|e| format!("textoverlay: {e}"))?;
+    umd.set_property_from_str("valignment", "bottom");
+    umd.set_property_from_str("halignment", "center");
+
     let tee = gst::ElementFactory::make("tee")
         .name("preview_tee")
         .build()
         .map_err(|e| format!("tee: {e}"))?;
-    pipeline.add(&tee).map_err(|e| format!("add tee: {e}"))?;
-    input
-        .tail
-        .link(&tee)
+    pipeline
+        .add(&umd)
+        .and_then(|()| pipeline.add(&tee))
+        .map_err(|e| format!("add tee: {e}"))?;
+    gst::Element::link_many([&input.tail, &umd, &tee])
         .map_err(|e| format!("link input to tee: {e}"))?;
 
     preview::build_mjpeg_branch(
@@ -187,7 +209,7 @@ pub fn run(
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(Command::Connect(flow_id)) => {
+            Ok(Command::Connect(flow_id, label)) => {
                 // Alte Pipeline zuerst abbauen (Drop stoppt Reader-Thread
                 // + setzt State Null), bevor die neue denselben
                 // MxlContext für einen neuen Reader nutzt.
@@ -195,6 +217,7 @@ pub fn run(
                 match build(
                     &context,
                     &flow_id,
+                    &label,
                     &broadcaster,
                     config.sink_element.as_deref(),
                 ) {

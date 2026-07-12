@@ -2836,3 +2836,89 @@ Tests sichtbar), zusätzlich zum C13-Fund:**
 MJPEG-URL), `GET .../preview` liefert echte JPEG-Bytes (`ffd8 ffe0`
 JFIF-Magic-Bytes per Rohbyte-Prüfung), `tools/contract-check` PASS,
 `cargo build/test/deny`, `go vet/test`, `deno check/test` alle grün.
+
+## 2026-07-12 — MXL-Origin-Index-Erhalt (§15), vier UI-Bugfixes, zwei per Live-Test gefundene Laufzeit-Abstürze
+
+**MXL-Origin-Index-Erhalt (`omp-mediaio::mxl`):** Nutzerfrage — löst das
+Durchreichen des ursprünglichen Zeitstempels das A/V/Daten-
+Synchronitätsproblem (§15) UND das Redundanz-/Havarie-Problem? Dritte
+Fable-Konsultation, Ergebnis: **beides teilweise, ja, jetzt umgesetzt.**
+Für §15 zwingend nötig (die bisherige „get_current_index()+Zähler"-
+Variante hat weder kontrollierbaren Versatz noch Drift-Schutz und kodiert
+ohnehin die falsche Zeit — Emission statt Ursprung). Für Redundanz
+notwendig, aber nicht hinreichend (Zustands-Synchronität/Rebind-Zeit
+bleiben offen). Umgesetzt exakt nach Fables Skizze: Lesepfade
+(`read_loop`/`read_audio_loop`) hängen die TAI-Ursprungszeit als
+`GstReferenceTimestampMeta` an (`do-timestamp=true` bleibt unverändert),
+Schreibpfade (`write_loop`/`write_audio_loop`) lesen sie aus und schreiben
+am Ursprungs-Index (Monotonie-Schutz `max(Ursprung, letzter+1)`), sonst
+unverändert per Zähler-Fallback — rein additiv, kein Breaking Change.
+Zwei neue Unit-Tests (`origin_timestamp_meta_round_trips_to_same_index`,
+`origin_index_from_buffer_returns_none_without_meta`) verifizieren den
+Mechanismus direkt auf Buffer-Ebene. `ARCHITECTURE.md` §15 Punkt 4 und
+§20.1 entsprechend nachgezogen.
+
+**Vier UI-Bugfixes (Nutzerfund, Live-Test im Flow-Editor):**
+1. **Kacheln nach Reload außerhalb des sichtbaren Bereichs:** zwei
+   zusammenwirkende Ursachen. (a) Viewport (Pan/Zoom) wurde nie
+   persistiert — jetzt Teil des Layout-Blobs (`ui/api/v1/layouts/<name>`),
+   gespeichert bei Pan-Ende/debounced bei Zoom. (b) **Eigentliche
+   Grundursache:** `#assignMissingPositions()`s Index zählte alle
+   *jemals* gespeicherten Positions-Einträge, auch für längst gestoppte
+   Instanzen — über viele Sitzungen wuchs das unbegrenzt (im konkreten
+   Fall: 75 verwaiste Einträge), wodurch neue Kacheln immer weiter nach
+   unten/rechts platziert wurden und auch die neue Fit-to-Content-
+   Berechnung (Fallback ohne gespeicherten Viewport) durch die verwaisten
+   Einträge verzerrt wurde. Behoben durch `#pruneStalePositions()` (läuft
+   vor Default-Zuweisung/Fit, entfernt Einträge ohne zugehörigen Node/
+   Gruppe) plus sorgfältige Reihenfolge (Fit-Berechnung nutzt den bereits
+   bereinigten Bestand, ein einziger konsolidierter Save statt mehrerer
+   Zwischen-Saves mit noch unfertigem Viewport).
+2. **Beide Ports einer Quelle (Video-Sender, Audio-Sender) gleichfarbig:**
+   Port-Füllfarbe war nur nach input/output codiert, nicht nach Format —
+   nicht unterscheidbar, wenn ein Node zwei Ausgänge hat. Jetzt primär
+   nach IS-04-Format-URN eingefärbt (Video blau, Audio orange, Daten
+   violett, unbekannt grau), input/output weiterhin über die Randfarbe.
+3. **Inline-Vorschaubild überragte den Kachel-Rahmen:** `nodeHeight()`
+   (geometry.ts) reserviert jetzt zusätzlichen Platz (`PREVIEW_HEIGHT`),
+   wenn ein Node ein `previewUrl` hat, statt die Geometrie unverändert zu
+   lassen und das Bild überstehen zu lassen.
+4. **Kein Quell-Label im Viewer/Multiviewer sichtbar:** UMD-artiges
+   `textoverlay` (IS-04-Sender-Bezeichnung der Quelle) vor dem MJPEG-Zweig
+   in `omp-viewer` bzw. pro Kachel vor dem Compositor in
+   `omp-multiviewer`.
+
+**Zwei Laufzeit-Abstürze per Live-Test gefunden (nicht durch `cargo
+build`/`deno check` sichtbar):**
+- `textoverlay`s `valignment`/`halignment` sind GEnums
+  (`GstBaseTextOverlayV/HAlign`), keine Strings — `.property("valignment",
+  "bottom")` kompiliert, schlägt aber zur Laufzeit fehl
+  ("expected GstBaseTextOverlayVAlign, got gchararray"), sobald der Node
+  tatsächlich ein Signal verarbeitet. `omp-viewer`/`omp-multiviewer`
+  stürzten beim ersten echten Connect ab. Behoben durch
+  `set_property_from_str` statt `.property()` (gleiche Konvention wie
+  `videotestsrc`s `pattern`-Property an anderer Stelle im Code).
+- Einmaliger OOM-Kill von `omp-multiviewer` (5,75 GB RSS) beobachtet,
+  **nicht reproduzierbar** trotz gezielter Nachstellung (stabile Nutzung
+  über mehrere Sekunden/mehrere Rebuild-Zyklen, auch bei nahezu
+  gleichzeitigem Start mehrerer Quellen). Wahrscheinlichste Erklärung:
+  Ressourcen-Engpass durch einen frischen `cargo build --workspace`
+  unmittelbar zuvor auf einer Maschine mit nur 6,5 GB RAM, keine
+  reproduzierbare Code-Ursache gefunden — im Blick behalten, aber nicht
+  als Bug verbucht.
+
+**Nebenbefund:** `nodes/omp-mediaio/src/mxl.rs`s Loopback-Test nutzt einen
+**festen** Domain-Pfad (`/tmp/omp-mxl-test-domain`) statt eines pro Testlauf
+isolierten Verzeichnisses — wiederholte manuelle Testläufe/unterbrochene
+Läufe können ihn in einen inkonsistenten Zustand bringen (fehlende
+`data`-Datei einer Flow), was den Test dann fälschlich als Regression
+erscheinen lässt. Workaround: `rm -rf /tmp/omp-mxl-test-domain*` vor dem
+nächsten Lauf. Nicht behoben (kein Umsetzungsschritt, nur Testhygiene) —
+Kandidat für später (z. B. `tempfile`-Crate für einen echten Pro-Test-
+Domain).
+
+**Verifiziert:** `cargo build/test/deny` (inkl. der zwei neuen
+mxl.rs-Tests), `deno check/test`, `go vet/test`, End-to-End per Live-
+Browser-Test (Chromium CDP) mit echten Instanzen — alle vier UI-Bugfixes
+und beide Absturz-Fixes am tatsächlich laufenden Node bestätigt, nicht
+nur am kompilierten Code.

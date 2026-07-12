@@ -9,8 +9,11 @@ import {
   defaultPosition,
   HEADER_HEIGHT,
   IDENTITY_VIEWPORT,
+  MIN_BODY_HEIGHT,
   NODE_WIDTH,
   nodeHeight,
+  PREVIEW_HEIGHT,
+  PREVIEW_WIDTH,
   type Point,
   type PortSide,
   portPosition,
@@ -76,6 +79,12 @@ interface Graph {
 interface LayoutBlob {
   positions: Record<string, Point>;
   groups: GroupTree;
+  // Optional (ältere gespeicherte Layouts haben das Feld nicht):
+  // Pan/Zoom-Zustand, damit ein Reload die zuletzt sichtbare Ansicht
+  // wiederherstellt statt immer auf IDENTITY_VIEWPORT zurückzufallen —
+  // ohne das landeten gespeicherte Kachel-Positionen nach einem Reload
+  // ggf. außerhalb des sichtbaren Bereichs (Nutzerfund 2026-07-12).
+  viewport?: Viewport;
 }
 
 interface SnapshotSummary {
@@ -172,6 +181,11 @@ export class FlowCanvas extends HTMLElement {
   #renderQueue: Promise<void> = Promise.resolve();
   #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
   #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  #viewportSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Gesetzt von #loadLayout(), wenn kein gespeicherter Viewport vorliegt —
+  // #fetchAndRender() zentriert dann einmalig auf den (bereits bereinigten)
+  // Kachel-Bestand, s. #pruneStalePositions().
+  #viewportNeedsFit = false;
 
   #onKeyDown = (ev: KeyboardEvent) => {
     if (ev.key === "Delete" || ev.key === "Backspace") {
@@ -197,6 +211,7 @@ export class FlowCanvas extends HTMLElement {
   disconnectedCallback() {
     document.removeEventListener("keydown", this.#onKeyDown);
     clearTimeout(this.#reconnectTimer);
+    clearTimeout(this.#viewportSaveTimer);
     this.#eventSource?.close();
   }
 
@@ -214,6 +229,21 @@ export class FlowCanvas extends HTMLElement {
         const blob = (await response.json()) as Partial<LayoutBlob>;
         this.#positions = blob.positions ?? {};
         this.#groupTree = blob.groups ?? emptyTree();
+        // Gespeicherte Layouts von vor diesem Fix (2026-07-12) haben kein
+        // `viewport`-Feld — dann auf den Kachel-Bestand zentrieren statt
+        // stur auf IDENTITY_VIEWPORT zurückzufallen (Nutzerfund: nach
+        // einem Reload lagen gespeicherte Positionen außerhalb des
+        // sichtbaren Bereichs). Das Zentrieren selbst passiert erst in
+        // `#fetchAndRender()`, NACH `#pruneStalePositions()` — an dieser
+        // Stelle hier ist der Graph (und damit die Menge tatsächlich noch
+        // existierender Nodes) noch gar nicht bekannt, eine Bounding-Box
+        // über `#positions` wäre durch längst verwaiste Einträge verzerrt.
+        if (blob.viewport) {
+          this.#viewport = blob.viewport;
+          this.#applyViewportTransform();
+        } else {
+          this.#viewportNeedsFit = true;
+        }
         return;
       }
     } catch {
@@ -224,7 +254,11 @@ export class FlowCanvas extends HTMLElement {
   }
 
   async #saveLayout() {
-    const blob: LayoutBlob = { positions: this.#positions, groups: this.#groupTree };
+    const blob: LayoutBlob = {
+      positions: this.#positions,
+      groups: this.#groupTree,
+      viewport: this.#viewport,
+    };
     try {
       const response = await fetch(`/api/v1/layouts/${LAYOUT_NAME}`, {
         method: "PUT",
@@ -368,8 +402,45 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await fetch("/api/v1/graph");
     this.#graph = await response.json();
-    this.#assignMissingPositions();
+    // Beide geben nur zurück, *ob* sich #positions geändert hat, statt
+    // selbst zu speichern — sonst würde ein Zwischen-Save mit dem noch
+    // unangepassten Viewport (IDENTITY_VIEWPORT vor dem Fit unten)
+    // persistiert und ein späterer Reload fiele fälschlich nicht mehr auf
+    // #fitViewportToPositions() zurück, weil `blob.viewport` dann schon
+    // (falsch) gesetzt wäre.
+    let changed = this.#pruneStalePositions();
+    changed = this.#assignMissingPositions(false) || changed;
+    if (this.#viewportNeedsFit) {
+      this.#viewportNeedsFit = false;
+      this.#viewport = this.#fitViewportToPositions();
+      this.#applyViewportTransform();
+      changed = true;
+    }
+    if (changed) this.#saveLayout();
     this.#render();
+  }
+
+  // Entfernt Positions-Einträge für Nodes/Gruppen, die nicht mehr
+  // existieren (z. B. gestoppte Instanzen, UMSETZUNG.md C8) — ohne das
+  // wächst `#positions` über viele Sitzungen unbegrenzt: `#assignMissing
+  // Positions()`s Index zählt alle jemals gespeicherten Einträge, verwaiste
+  // Einträge schieben neue Kacheln immer weiter nach unten/rechts, und
+  // seit dem Viewport-Persistenz-Fix (2026-07-12) verzerren sie auch
+  // `#fitViewportToPositions()`s Bounding-Box (Nutzerfund: Kacheln lagen
+  // nach mehreren Sitzungen weit außerhalb des sichtbaren Bereichs).
+  #pruneStalePositions(): boolean {
+    const validIds = new Set<string>([
+      ...this.#graph.nodes.map((n) => n.id),
+      ...Object.keys(this.#groupTree.groups),
+    ]);
+    let changed = false;
+    for (const id of Object.keys(this.#positions)) {
+      if (!validIds.has(id)) {
+        delete this.#positions[id];
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   // Serialisiert #fetchAndRender()-Aufrufe über eine Promise-Kette.
@@ -386,7 +457,11 @@ export class FlowCanvas extends HTMLElement {
     return this.#renderQueue;
   }
 
-  #assignMissingPositions() {
+  // `save=false` lässt den Aufrufer selbst entscheiden, wann gespeichert
+  // wird (s. #fetchAndRender(): dort soll ein einziger, konsolidierter
+  // Save nach Pruning + Default-Zuweisung + ggf. Viewport-Fit passieren,
+  // nicht mehrere Zwischen-Saves mit noch unfertigem Zustand).
+  #assignMissingPositions(save = true): boolean {
     let changed = false;
     const items = this.#itemsAtScope();
     // Index für defaultPosition() startet bei der Anzahl bereits
@@ -407,7 +482,8 @@ export class FlowCanvas extends HTMLElement {
         changed = true;
       }
     }
-    if (changed) this.#saveLayout();
+    if (changed && save) this.#saveLayout();
+    return changed;
   }
 
   #itemsAtScope(): { nodeIds: string[]; groupIds: string[] } {
@@ -479,7 +555,8 @@ export class FlowCanvas extends HTMLElement {
     this.#portLocation.clear();
     this.#tileHeightById.clear();
     for (const tile of tiles) {
-      this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length));
+      const hasPreview = !!this.#previewUrlById.get(tile.id);
+      this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length, hasPreview));
       tile.inputs.forEach((p, i) =>
         this.#portLocation.set(p.id, { tileId: tile.id, side: "input", index: i, count: tile.inputs.length })
       );
@@ -580,6 +657,26 @@ export class FlowCanvas extends HTMLElement {
     this.#viewportGroup.setAttribute("transform", `translate(${x},${y}) scale(${scale})`);
   }
 
+  // Zentriert die Bounding-Box aller bekannten Kachel-Positionen im
+  // sichtbaren SVG-Bereich (scale=1, keine Zoom-Anpassung) — Fallback für
+  // Layouts ohne gespeicherten Viewport (s. #loadLayout).
+  #fitViewportToPositions(): Viewport {
+    const points = Object.values(this.#positions);
+    if (points.length === 0) return { ...IDENTITY_VIEWPORT };
+
+    const minX = Math.min(...points.map((p) => p.x));
+    const maxX = Math.max(...points.map((p) => p.x)) + NODE_WIDTH;
+    const minY = Math.min(...points.map((p) => p.y));
+    const maxY = Math.max(...points.map((p) => p.y)) + MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const rect = this.#svg.getBoundingClientRect();
+
+    return {
+      x: rect.width / 2 - (minX + maxX) / 2,
+      y: rect.height / 2 - (minY + maxY) / 2,
+      scale: 1,
+    };
+  }
+
   #renderTile(tile: TileSpec): SVGGElement {
     const pos = this.#positions[tile.id] ?? { x: 0, y: 0 };
     const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
@@ -671,33 +768,30 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Kachel-Inline-Vorschau ("Probe"): rendert das node-eigene
-  // `previewUrl` (bisher nur omp-viewer, C6) als <img> in einem
-  // `<foreignObject>` direkt unter dem Kachel-Header — dieselbe
-  // MJPEG-multipart/x-mixed-replace-URL, die das Parameter-Panel
+  // `previewUrl` (bisher `omp-viewer`/C6, jetzt auch `omp-multiviewer`)
+  // als <img> in einem `<foreignObject>` direkt unter dem Kachel-Header —
+  // dieselbe MJPEG-multipart/x-mixed-replace-URL, die das Parameter-Panel
   // (omp-viewer/ui/bundle.js) schon nutzt, hier aber ohne den Panel zu
-  // öffnen. Bewusst kein Geometrie-Umbau (`nodeHeight()` bleibt
-  // unverändert): das Vorschaubild überragt bei kleinen Kacheln (wenige
-  // Ports) sichtbar den Kachel-Rahmen, statt Port-Layout/gespeicherte
-  // Positionen von der (erst asynchron bekannten) previewUrl-Verfügbarkeit
-  // abhängig zu machen.
+  // öffnen. `nodeHeight()` reserviert für Nodes mit previewUrl genug
+  // Platz (PREVIEW_HEIGHT, geometry.ts) — das Bild bleibt dadurch
+  // innerhalb des Kachel-Rahmens (Nutzerfund 2026-07-12: überragte vorher
+  // sichtbar den Rahmen).
   #renderPreviewThumbnail(nodeId: string): SVGForeignObjectElement | null {
     this.#maybeFetchPreviewUrl(nodeId);
     const previewUrl = this.#previewUrlById.get(nodeId);
     if (!previewUrl) return null;
 
-    const width = NODE_WIDTH - 16;
-    const height = Math.round((width * 9) / 16);
     const fo = document.createElementNS(SVG_NS, "foreignObject");
     fo.setAttribute("x", "8");
     fo.setAttribute("y", String(HEADER_HEIGHT + 4));
-    fo.setAttribute("width", String(width));
-    fo.setAttribute("height", String(height));
+    fo.setAttribute("width", String(PREVIEW_WIDTH));
+    fo.setAttribute("height", String(PREVIEW_HEIGHT));
     fo.style.pointerEvents = "none"; // Ziehen/Auswählen der Kachel bleibt unverändert möglich.
 
     const img = document.createElement("img");
     img.src = previewUrl;
     img.alt = "Vorschau";
-    img.style.cssText = `display:block;width:${width}px;height:${height}px;object-fit:cover;background:#000;border:1px solid #444;border-radius:2px;`;
+    img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:#000;border:1px solid #444;border-radius:2px;`;
     fo.appendChild(img);
     return fo;
   }
@@ -733,7 +827,13 @@ export class FlowCanvas extends HTMLElement {
     circle.setAttribute("cx", String(world.x - nodePos.x));
     circle.setAttribute("cy", String(world.y - nodePos.y));
     circle.setAttribute("r", "5");
-    circle.setAttribute("fill", side === "input" ? "#5b9bd5" : "#70ad47");
+    // Farbe primär nach Format (Nutzerfund 2026-07-12: zwei Output-Ports
+    // desselben Nodes — z. B. omp-sources Video-/Audio-Sender — waren
+    // beide gleich eingefärbt, nur nach input/output unterscheidbar, nicht
+    // nach Format); input/output bleibt über die Randfarbe erkennbar.
+    circle.setAttribute("fill", portColor(port.format));
+    circle.setAttribute("stroke", side === "input" ? "#5b9bd5" : "#70ad47");
+    circle.setAttribute("stroke-width", "1.5");
     circle.setAttribute("data-role", "port");
     circle.setAttribute("data-port-id", port.id);
     circle.setAttribute("data-port-side", side);
@@ -913,8 +1013,15 @@ export class FlowCanvas extends HTMLElement {
       this.#finishConnect(ev);
     } else if (this.#drag?.kind === "select") {
       this.#finishSelection(ev);
-    } else if (this.#drag?.kind === "pan" && !this.#drag.moved) {
-      this.#closePanel();
+    } else if (this.#drag?.kind === "pan") {
+      if (this.#drag.moved) {
+        // Pan-Zustand mitpersistieren (Nutzerfund 2026-07-12): sonst
+        // zeigt ein Reload wieder IDENTITY_VIEWPORT, auch wenn die
+        // gespeicherten Kachel-Positionen längst außerhalb davon liegen.
+        this.#saveLayout();
+      } else {
+        this.#closePanel();
+      }
     }
     this.#drag = null;
   }
@@ -924,6 +1031,10 @@ export class FlowCanvas extends HTMLElement {
     const factor = ev.deltaY < 0 ? 1.1 : 1 / 1.1;
     this.#viewport = zoomAt(this.#viewport, this.#screenPoint(ev), factor);
     this.#applyViewportTransform();
+    // Debounced (Wheel-Events feuern viel zu oft für einen Save pro
+    // Event) — derselbe Persistenzgrund wie beim Pan-Ende oben.
+    clearTimeout(this.#viewportSaveTimer);
+    this.#viewportSaveTimer = setTimeout(() => this.#saveLayout(), 500);
   }
 
   #screenPoint(ev: MouseEvent): Point {
@@ -1487,6 +1598,23 @@ function healthColor(health: string): string {
       return "#888";
     default:
       return "#e0a030";
+  }
+}
+
+// Port-Füllfarbe nach IS-04-Format-URN (unverändert aus dem Graph-API,
+// gleiches Vokabular wie compatibility.ts) — unbekanntes/leeres Format
+// (z. B. Sender ohne aufgelösten Flow, A5) bekommt eine neutrale Farbe
+// statt fälschlich einer der bekannten Formatfarben.
+function portColor(format: string): string {
+  switch (format) {
+    case "urn:x-nmos:format:video":
+      return "#3fa7ff";
+    case "urn:x-nmos:format:audio":
+      return "#ffb300";
+    case "urn:x-nmos:format:data":
+      return "#b47cff";
+    default:
+      return "#999";
   }
 }
 

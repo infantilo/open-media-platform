@@ -39,7 +39,7 @@ impl ReceiverControl for ViewerControl {
                 Ok(sender) => match sender.flow_id {
                     Some(flow_id) => {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
-                        self.pipeline.connect(flow_id);
+                        self.pipeline.connect(flow_id, sender.label);
                     }
                     None => eprintln!("omp-viewer: sender {sender_id} has no flow_id"),
                 },
