@@ -10,4 +10,5 @@ members = [
     "omp-video-mixer-me",
     "omp-audio-mixer",
     "omp-player",
+    "omp-multiviewer",
 ]

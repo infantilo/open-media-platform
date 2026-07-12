@@ -1,12 +1,15 @@
-//! MJPEG-über-HTTP-Vorschau (`UMSETZUNG.md` C6) — PIPELINE CONTROLLERs
-//! bewährtes Preview-Muster (`lib/PreviewPipeline.js` + `server.js`s
-//! `/preview`-Route), hier als eigener, zweiter `tiny_http`-Listener auf
-//! einem eigenen Thread (`OMP_VIEWER_PREVIEW_PORT`), unabhängig vom
-//! Descriptor-Server (`omp_node_sdk::server`, `main.rs`). `GET /preview`
-//! liefert `multipart/x-mixed-replace; boundary=frame`; jedes vom
-//! Pipeline-Thread (`pipeline.rs`s appsink-Callback) über
-//! [`Broadcaster::publish`] eingespeiste JPEG-Frame geht an alle
-//! verbundenen Clients.
+//! MJPEG-über-HTTP-Vorschau (`UMSETZUNG.md` C6, nach `omp-mediaio`
+//! verschoben in C-Nachtrag 2026-07-12 für `omp-multiviewer`-
+//! Wiederverwendung) — PIPELINE CONTROLLERs bewährtes Preview-Muster
+//! (`lib/PreviewPipeline.js` + `server.js`s `/preview`-Route), hier als
+//! eigener, zweiter `tiny_http`-Listener auf einem eigenen Thread (z. B.
+//! `OMP_VIEWER_PREVIEW_PORT`), unabhängig vom Descriptor-Server
+//! (`omp_node_sdk::server`). `GET /preview` liefert
+//! `multipart/x-mixed-replace; boundary=frame`; jedes vom aufrufenden
+//! Node über [`Broadcaster::publish`] eingespeiste JPEG-Frame geht an
+//! alle verbundenen Clients. Node-agnostisch (kein Wissen über
+//! Pipeline-Interna) — genutzt von `omp-viewer` (ein Bild) und
+//! `omp-multiviewer` (das bereits zum Grid komponierte Gesamtbild).
 //!
 //! Ein Thread pro Verbindung, nicht `omp_node_sdk::server`s Single-
 //! Thread-Accept-Loop: eine MJPEG-Antwort bleibt dauerhaft offen (kein
@@ -17,6 +20,9 @@ use std::io::Write;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
+use gst::prelude::*;
+use gstreamer as gst;
+use gstreamer_app as gst_app;
 use tiny_http::{Request, Response, Server};
 
 type Frame = Arc<Vec<u8>>;
@@ -130,4 +136,85 @@ fn write_frame(writer: &mut dyn Write, jpeg: &[u8]) -> std::io::Result<()> {
     writer.write_all(jpeg)?;
     writer.write_all(b"\r\n")?;
     writer.flush()
+}
+
+/// Baut einen `videoscale ! videorate ! capsfilter ! jpegenc ! appsink`-
+/// Zweig ab `upstream` und speist jedes so encodierte Frame in
+/// `broadcaster` — ursprünglich `omp-viewer`s private `build_mjpeg_branch`
+/// (`UMSETZUNG.md` C6), hierher verschoben (2026-07-12), damit
+/// `omp-multiviewer` (C-Nachtrag) denselben Encode-Pfad auf dem
+/// komponierten Grid-Gesamtbild nutzen kann, statt ihn zu duplizieren.
+/// `upstream` muss bereits Teil von `pipeline` sein und eine `src`-Pad
+/// haben (z. B. ein `tee` oder — beim Multiviewer — ein `compositor`).
+pub fn build_mjpeg_branch(
+    pipeline: &gst::Pipeline,
+    upstream: &gst::Element,
+    broadcaster: &Arc<Broadcaster>,
+    width: u32,
+    height: u32,
+    fps: i32,
+    quality: i32,
+) -> Result<(), String> {
+    let queue = gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (mjpeg): {e}"))?;
+    let videoscale = gst::ElementFactory::make("videoscale")
+        .build()
+        .map_err(|e| format!("videoscale: {e}"))?;
+    let videorate = gst::ElementFactory::make("videorate")
+        .build()
+        .map_err(|e| format!("videorate: {e}"))?;
+    let caps = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("width", width as i32)
+                .field("height", height as i32)
+                .field("framerate", gst::Fraction::new(fps, 1))
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter (mjpeg): {e}"))?;
+    let jpegenc = gst::ElementFactory::make("jpegenc")
+        .property("quality", quality)
+        .build()
+        .map_err(|e| format!("jpegenc: {e}"))?;
+    let appsink = gst::ElementFactory::make("appsink")
+        .property("sync", false)
+        .property("max-buffers", 2u32)
+        .property("drop", true)
+        .build()
+        .map_err(|e| format!("appsink (mjpeg): {e}"))?;
+
+    pipeline
+        .add(&queue)
+        .and_then(|()| pipeline.add(&videoscale))
+        .and_then(|()| pipeline.add(&videorate))
+        .and_then(|()| pipeline.add(&caps))
+        .and_then(|()| pipeline.add(&jpegenc))
+        .and_then(|()| pipeline.add(&appsink))
+        .map_err(|e| format!("add mjpeg elements: {e}"))?;
+
+    gst::Element::link_many([upstream, &queue, &videoscale, &videorate, &caps, &jpegenc, &appsink])
+        .map_err(|e| format!("link mjpeg branch: {e}"))?;
+
+    let app_sink: gst_app::AppSink = appsink
+        .dynamic_cast()
+        .map_err(|_| "appsink: cast to AppSink failed".to_string())?;
+    let broadcaster = broadcaster.clone();
+    app_sink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                if let Some(buffer) = sample.buffer()
+                    && let Ok(map) = buffer.map_readable()
+                {
+                    broadcaster.publish(map.as_slice());
+                }
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+
+    Ok(())
 }

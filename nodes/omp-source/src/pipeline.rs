@@ -7,6 +7,14 @@
 //! schalten müsste, das nicht schon `omp-switcher`s Auswahl übernimmt.
 //! `pattern` ist live per GStreamer-Property änderbar (keine Topologie-
 //! Änderung, siehe `UMSETZUNG.md` C5).
+//!
+//! **Audio-Begleitton (nachgezogen, 2026-07-12):** ein zweiter, fester
+//! `audiotestsrc`-Zweig läuft immer mit (kein Pattern-Wechsel wie beim
+//! Video, ein Testton reicht als Software-Testmittel) und wird als
+//! eigener MXL-Audio-Sender registriert — gleiches `MxlAudioOutput`-
+//! Muster wie `omp-player`/`omp-audio-mixer` (C11/C12), damit z. B. der
+//! Audiomischer echte externe Testquellen statt nur des internen
+//! Testtons zur Auswahl hat.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,7 +23,7 @@ use std::time::Duration;
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlContext, MxlVideoOutput};
+use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -23,10 +31,17 @@ pub const WIDTH: u32 = 640;
 pub const HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
+pub const SAMPLE_RATE: u32 = 48000;
+pub const CHANNELS: u32 = 2;
+/// Fixer Begleitton — akustisch unterscheidbar von den 220 Hz-Vielfachen,
+/// die C11/C12s dynamisch angelegte Kanäle/Items verwenden, damit ein
+/// Source-Testton im Mix erkennbar bleibt.
+const TONE_FREQ_HZ: f64 = 330.0;
 
 pub struct Config {
     pub domain: String,
     pub flow_id: String,
+    pub audio_flow_id: String,
     pub label: String,
     pub initial_pattern: String,
 }
@@ -49,6 +64,7 @@ struct Pipeline {
     videotestsrc: gst::Element,
     video_buffers: Arc<AtomicU64>,
     _mxl_output: MxlVideoOutput,
+    _mxl_audio_output: MxlAudioOutput,
 }
 
 impl Pipeline {
@@ -122,7 +138,7 @@ impl Pipeline {
         let mxl_output = MxlVideoOutput::new(
             &pipeline,
             &mxl_queue,
-            mxl_context,
+            mxl_context.clone(),
             &config.flow_id,
             &config.label,
             WIDTH,
@@ -132,6 +148,35 @@ impl Pipeline {
         )
         .map_err(PipelineError)?;
         mxl_output.set_active(true);
+
+        let audiotestsrc = gst::ElementFactory::make("audiotestsrc")
+            .property("is-live", true)
+            .property("freq", TONE_FREQ_HZ)
+            .property("volume", 0.3f64)
+            .build()
+            .map_err(|e| PipelineError(format!("audiotestsrc: {e}")))?;
+        audiotestsrc.set_property_from_str("wave", "sine");
+        let audioconvert = gst::ElementFactory::make("audioconvert")
+            .build()
+            .map_err(|e| PipelineError(format!("audioconvert: {e}")))?;
+        pipeline
+            .add(&audiotestsrc)
+            .and_then(|()| pipeline.add(&audioconvert))
+            .map_err(|e| PipelineError(format!("add audio elements: {e}")))?;
+        gst::Element::link_many([&audiotestsrc, &audioconvert])
+            .map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
+
+        let mxl_audio_output = MxlAudioOutput::new(
+            &pipeline,
+            &audioconvert,
+            mxl_context,
+            &config.audio_flow_id,
+            &config.label,
+            SAMPLE_RATE,
+            CHANNELS,
+        )
+        .map_err(PipelineError)?;
+        mxl_audio_output.set_active(true);
 
         let video_buffers = Arc::new(AtomicU64::new(0));
         let counter = video_buffers.clone();
@@ -152,6 +197,7 @@ impl Pipeline {
             videotestsrc,
             video_buffers,
             _mxl_output: mxl_output,
+            _mxl_audio_output: mxl_audio_output,
         })
     }
 

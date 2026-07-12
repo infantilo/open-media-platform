@@ -152,6 +152,12 @@ export class FlowCanvas extends HTMLElement {
   #selectedEdgeId: string | null = null;
   #portLocation: Map<string, PortLocation> = new Map();
   #tileHeightById: Map<string, number> = new Map();
+  // Inline-Vorschau auf der Kachel selbst (nicht nur im geöffneten
+  // Parameter-Panel) für Nodes mit einem "previewUrl"-Parameter (bisher
+  // nur omp-viewer, C6) — `null` = geprüft, kein previewUrl vorhanden.
+  // Einmalig pro Node-ID abgefragt, nicht bei jedem Render-Tick erneut.
+  #previewUrlById: Map<string, string | null> = new Map();
+  #previewFetchInFlight: Set<string> = new Set();
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -648,6 +654,11 @@ export class FlowCanvas extends HTMLElement {
       g.appendChild(circle);
     });
 
+    if (!isGroup) {
+      const previewEl = this.#renderPreviewThumbnail(tile.id);
+      if (previewEl) g.appendChild(previewEl);
+    }
+
     g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, tile.id));
     if (isGroup) {
       g.addEventListener("dblclick", (ev) => {
@@ -657,6 +668,56 @@ export class FlowCanvas extends HTMLElement {
     }
 
     return g;
+  }
+
+  // Kachel-Inline-Vorschau ("Probe"): rendert das node-eigene
+  // `previewUrl` (bisher nur omp-viewer, C6) als <img> in einem
+  // `<foreignObject>` direkt unter dem Kachel-Header — dieselbe
+  // MJPEG-multipart/x-mixed-replace-URL, die das Parameter-Panel
+  // (omp-viewer/ui/bundle.js) schon nutzt, hier aber ohne den Panel zu
+  // öffnen. Bewusst kein Geometrie-Umbau (`nodeHeight()` bleibt
+  // unverändert): das Vorschaubild überragt bei kleinen Kacheln (wenige
+  // Ports) sichtbar den Kachel-Rahmen, statt Port-Layout/gespeicherte
+  // Positionen von der (erst asynchron bekannten) previewUrl-Verfügbarkeit
+  // abhängig zu machen.
+  #renderPreviewThumbnail(nodeId: string): SVGForeignObjectElement | null {
+    this.#maybeFetchPreviewUrl(nodeId);
+    const previewUrl = this.#previewUrlById.get(nodeId);
+    if (!previewUrl) return null;
+
+    const width = NODE_WIDTH - 16;
+    const height = Math.round((width * 9) / 16);
+    const fo = document.createElementNS(SVG_NS, "foreignObject");
+    fo.setAttribute("x", "8");
+    fo.setAttribute("y", String(HEADER_HEIGHT + 4));
+    fo.setAttribute("width", String(width));
+    fo.setAttribute("height", String(height));
+    fo.style.pointerEvents = "none"; // Ziehen/Auswählen der Kachel bleibt unverändert möglich.
+
+    const img = document.createElement("img");
+    img.src = previewUrl;
+    img.alt = "Vorschau";
+    img.style.cssText = `display:block;width:${width}px;height:${height}px;object-fit:cover;background:#000;border:1px solid #444;border-radius:2px;`;
+    fo.appendChild(img);
+    return fo;
+  }
+
+  #maybeFetchPreviewUrl(nodeId: string) {
+    if (this.#previewUrlById.has(nodeId) || this.#previewFetchInFlight.has(nodeId)) return;
+    this.#previewFetchInFlight.add(nodeId);
+    fetch(`/api/v1/nodes/${nodeId}/params/previewUrl`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        const url = body && typeof body.value === "string" && body.value ? body.value : null;
+        this.#previewUrlById.set(nodeId, url);
+        if (url) this.#render();
+      })
+      .catch(() => {
+        this.#previewUrlById.set(nodeId, null);
+      })
+      .finally(() => {
+        this.#previewFetchInFlight.delete(nodeId);
+      });
   }
 
   #renderPort(

@@ -2760,3 +2760,79 @@ Ein-Bindung-Nutzer landet direkt und ausschließlich auf dem zugewiesenen
 Panel (kein Graph sichtbar); Zwei-Bindungen-Nutzer zeigt die erwartete
 Tab-Leiste, sortiert nach Label; Kiosk-Route liefert dieselbe Konsole
 direkt. `go vet`/`go test`/`deno check`/`deno test` grün.
+
+## 2026-07-12 — Drei kurze Nachträge: omp-source-Audio, Kachel-Inline-Vorschau, omp-multiviewer; MJPEG-Preview-Extraktion nach omp-mediaio; zwei weitere Browser-Test-Bugs gefunden
+
+**Kontext:** Nutzeranforderung nach der C13-Sitzung, drei zuvor nur
+angesprochene Lücken sofort als kurze Schritte umzusetzen (nicht
+nummerierte C-Schritte, additive Ergänzungen zu bestehenden Nodes/UI).
+
+**1. `omp-source`-Audio-Begleitton:** zweiter, fester `audiotestsrc`-
+Zweig (330 Hz, akustisch unterscheidbar von C11/C12s 220-Hz-Vielfachen)
++ `MxlAudioOutput` + zweiter Sender in der `NodeConfig`, exakt gleiches
+Muster wie `omp-player` (C12). Damit haben Testquellen jetzt einen
+echten externen Audio-Testton statt nur den internen Tönen von
+Audiomischer/Player.
+
+**2. Kachel-Inline-Vorschau (`flow-canvas.ts`):** jeder Node mit einem
+`previewUrl`-Parameter (bisher nur `omp-viewer`, jetzt auch
+`omp-multiviewer`) zeigt sein Bild jetzt direkt auf der Graph-Kachel
+(`<foreignObject><img></foreignObject>`, `MJPEG multipart/x-mixed-
+replace` aktualisiert sich selbst, kein Polling nötig), nicht nur im
+geöffneten Parameter-Panel. Bewusst kein Eingriff in `nodeHeight()`/
+Port-Geometrie — das Vorschaubild überragt bei kleinen Kacheln sichtbar
+den Kachel-Rahmen, statt Layout von einer erst asynchron bekannten
+previewUrl-Verfügbarkeit abhängig zu machen. Einmalige Abfrage pro
+Node-ID (`#previewUrlById`-Cache), kein Re-Fetch bei jedem Render-Tick.
+
+**3. `omp-multiviewer` (neuer Node):** dynamische Eingangszahl wie
+`omp-switcher` (C7, IS-04-Discovery alle 2s, `inputs_changed`-Diffing
+gegen unnötige Rebuilds bei unverändertem Discovery-Tick), aber ein
+`compositor`-Grid statt `input-selector` — alle entdeckten MXL-Video-
+Sender gleichzeitig sichtbar (Rasterlayout `ceil(sqrt(n))` Spalten,
+gleiche `xpos`/`ypos`/`width`/`height`-Pad-Property-Technik wie C10s
+DVE-Kompositing). Reiner Monitor: kein MXL-Sende-Ausgang, nur MJPEG-
+über-HTTP wie `omp-viewer` — ein Multiviewer speist in der Praxis eine
+Bedienplatz-Anzeige, kein weiterverkettbares Programmsignal.
+
+**Refactor als Voraussetzung für 3:** `omp-viewer`s `preview.rs`
+(Broadcaster + `tiny_http`-Server + die `build_mjpeg_branch`-
+Encode-Kette) nach `omp-mediaio` verschoben (neues Feature `preview`),
+damit `omp-multiviewer` sie sich teilt statt zu duplizieren — komplett
+node-agnostisch (kein Wissen über Pipeline-Interna), `omp-viewer` selbst
+unverändert im Verhalten, nur der Aufrufpfad geändert.
+
+**Zwei weitere Bugs per Browser-Test gefunden (nicht durch `curl`/API-
+Tests sichtbar), zusätzlich zum C13-Fund:**
+- `ui/shell/shell.ts`s `consoles.length === 0`-Fallback-Check crashte mit
+  `TypeError: Cannot read properties of null (reading 'length')`, sobald
+  `GET /api/v1/me/consoles` tatsächlich `"consoles": null` lieferte (Gos
+  `encoding/json` serialisiert einen nie befüllten Slice als `null`, nicht
+  `[]`) — der Fall trat aber genau bei jedem Nutzer ohne jede
+  Rollenbindung auf, also dem De-facto-Standardfall vor dem ersten
+  Pflegen von `data/role-bindings.json`. Doppelt behoben: `shell.ts`
+  normalisiert `consoles` jetzt einmalig beim Fetch auf `[]`, UND
+  `orchestrator/internal/consoles/resolve.go` initialisiert `Result.
+  Consoles` von vornherein als leeren (nicht nil) Slice, damit die API
+  selbst nie wieder `null` statt `[]` liefert.
+- **Testmethodik-Erkenntnis:** `chromium --headless=old --dump-dom`
+  (mit und ohne `--virtual-time-budget`) erwies sich in dieser Sitzung
+  als unzuverlässig für Seiten mit mehreren sequenziellen
+  `fetch()`-Ketten (`/api/v1/me/consoles` vor der `<omp-flow-canvas>`-
+  Erzeugung, danach deren eigene `#init()`-Kette) — reproduzierbar leerer
+  Graph-Viewport selbst mit vollständig zurückgesetztem, bekannt
+  funktionierendem Dateistand (per `git stash` verifiziert, um einen
+  echten Produkt-Bug auszuschließen). Zuverlässige Alternative in dieser
+  Sandbox: `chromium --headless=new --remote-debugging-port=<port>` +
+  eine kleine Node.js-Skript-gesteuerte CDP-WebSocket-Session
+  (`Page.navigate` + echtes `setTimeout`-Warten + `Runtime.evaluate`)
+  statt `--dump-dom`/`--screenshot`. Für künftige Browser-Verifikationen
+  in dieser Umgebung diesen CDP-Weg bevorzugen.
+
+**End-to-End verifiziert** (CDP-Session, zwei `omp-source`- + eine
+`omp-multiviewer`-Instanz): Multiviewer entdeckt beide Quellen
+(`GET .../params/inputs`), Kachel-Grid zeigt genau eine Inline-Vorschau
+(die des Multiviewers, `imgSrc` zeigt korrekt auf dessen eigene
+MJPEG-URL), `GET .../preview` liefert echte JPEG-Bytes (`ffd8 ffe0`
+JFIF-Magic-Bytes per Rohbyte-Prüfung), `tools/contract-check` PASS,
+`cargo build/test/deny`, `go vet/test`, `deno check/test` alle grün.

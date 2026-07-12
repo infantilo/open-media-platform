@@ -7,12 +7,12 @@
 //! Flow-Editor (B3) sofort, ohne Orchestrator-Änderung.
 
 mod pipeline;
-mod preview;
 mod uibundle;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use omp_mediaio::preview;
 use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{

@@ -21,12 +21,10 @@ use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gstreamer_app as gst_app;
 use omp_mediaio::mxl::{MxlContext, MxlVideoInput};
+use omp_mediaio::preview::{self, Broadcaster};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
-
-use crate::preview::Broadcaster;
 
 const PREVIEW_WIDTH: u32 = 640;
 const PREVIEW_HEIGHT: u32 = 360;
@@ -99,7 +97,15 @@ fn build(
         .link(&tee)
         .map_err(|e| format!("link input to tee: {e}"))?;
 
-    build_mjpeg_branch(&pipeline, &tee, broadcaster)?;
+    preview::build_mjpeg_branch(
+        &pipeline,
+        &tee,
+        broadcaster,
+        PREVIEW_WIDTH,
+        PREVIEW_HEIGHT,
+        PREVIEW_FPS,
+        PREVIEW_JPEG_QUALITY,
+    )?;
     if let Some(sink_name) = sink_element {
         build_sink_branch(&pipeline, &tee, sink_name)?;
     }
@@ -112,83 +118,6 @@ fn build(
         pipeline,
         _input: input,
     })
-}
-
-fn build_mjpeg_branch(
-    pipeline: &gst::Pipeline,
-    tee: &gst::Element,
-    broadcaster: &Arc<Broadcaster>,
-) -> Result<(), String> {
-    let queue = gst::ElementFactory::make("queue")
-        .build()
-        .map_err(|e| format!("queue (mjpeg): {e}"))?;
-    let videoscale = gst::ElementFactory::make("videoscale")
-        .build()
-        .map_err(|e| format!("videoscale: {e}"))?;
-    let videorate = gst::ElementFactory::make("videorate")
-        .build()
-        .map_err(|e| format!("videorate: {e}"))?;
-    let caps = gst::ElementFactory::make("capsfilter")
-        .property(
-            "caps",
-            gst::Caps::builder("video/x-raw")
-                .field("width", PREVIEW_WIDTH as i32)
-                .field("height", PREVIEW_HEIGHT as i32)
-                .field("framerate", gst::Fraction::new(PREVIEW_FPS, 1))
-                .build(),
-        )
-        .build()
-        .map_err(|e| format!("capsfilter (mjpeg): {e}"))?;
-    let jpegenc = gst::ElementFactory::make("jpegenc")
-        .property("quality", PREVIEW_JPEG_QUALITY)
-        .build()
-        .map_err(|e| format!("jpegenc: {e}"))?;
-    let appsink = gst::ElementFactory::make("appsink")
-        .property("sync", false)
-        .property("max-buffers", 2u32)
-        .property("drop", true)
-        .build()
-        .map_err(|e| format!("appsink (mjpeg): {e}"))?;
-
-    pipeline
-        .add(&queue)
-        .and_then(|()| pipeline.add(&videoscale))
-        .and_then(|()| pipeline.add(&videorate))
-        .and_then(|()| pipeline.add(&caps))
-        .and_then(|()| pipeline.add(&jpegenc))
-        .and_then(|()| pipeline.add(&appsink))
-        .map_err(|e| format!("add mjpeg elements: {e}"))?;
-
-    gst::Element::link_many([
-        tee,
-        &queue,
-        &videoscale,
-        &videorate,
-        &caps,
-        &jpegenc,
-        &appsink,
-    ])
-    .map_err(|e| format!("link mjpeg branch: {e}"))?;
-
-    let app_sink: gst_app::AppSink = appsink
-        .dynamic_cast()
-        .map_err(|_| "appsink: cast to AppSink failed".to_string())?;
-    let broadcaster = broadcaster.clone();
-    app_sink.set_callbacks(
-        gst_app::AppSinkCallbacks::builder()
-            .new_sample(move |sink| {
-                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Some(buffer) = sample.buffer()
-                    && let Ok(map) = buffer.map_readable()
-                {
-                    broadcaster.publish(map.as_slice());
-                }
-                Ok(gst::FlowSuccess::Ok)
-            })
-            .build(),
-    );
-
-    Ok(())
 }
 
 fn build_sink_branch(

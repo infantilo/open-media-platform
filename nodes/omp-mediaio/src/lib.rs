@@ -17,6 +17,9 @@ pub mod rtp;
 #[cfg(feature = "mxl")]
 pub mod mxl;
 
+#[cfg(feature = "preview")]
+pub mod preview;
+
 /// Ein Media-Ausgang, den ein Node über IS-05 (Start/Stop) steuert.
 pub trait Output: Send + Sync {
     /// Schaltet den Ausgang scharf (`true`) oder stumm (`false`).

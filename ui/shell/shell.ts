@@ -56,7 +56,14 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   // Kein erreichbarer Orchestrator/Fehler: auf die vor C13 einzig
   // existierende Ansicht zurückfallen, statt eine leere Seite zu zeigen.
   if (!res.ok) return { hasEngineeringAccess: true, consoles: [] };
-  return await res.json();
+  const body = (await res.json()) as ConsolesResponse;
+  // Gos `[]ConsoleEntry` serialisiert als JSON `null`, wenn der Slice nie
+  // befüllt wurde (kein Treffer für den Nutzer, z. B. weil noch gar
+  // keine data/role-bindings.json existiert) — hier einmalig auf `[]`
+  // normalisiert, statt an jeder Verwendungsstelle unten gegen `null`
+  // absichern zu müssen (per Browser-Test gefunden:
+  // "Cannot read properties of null (reading 'length')").
+  return { hasEngineeringAccess: body.hasEngineeringAccess, consoles: body.consoles ?? [] };
 }
 
 // Kleines, rein für den Dev-/Browser-Test dieses Schritts gedachtes

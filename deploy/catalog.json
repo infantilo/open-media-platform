@@ -47,5 +47,12 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-player"],
     "env": { "OMP_PLAYER_PROFILE": "jingle" }
+  },
+  {
+    "type": "omp-multiviewer",
+    "label": "Multiviewer",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-multiviewer"],
+    "env": {}
   }
 ]

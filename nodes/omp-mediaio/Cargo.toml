@@ -12,10 +12,15 @@ gstreamer-app = { version = "0.25", optional = true }
 serde_json = { version = "1", optional = true }
 mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"], optional = true }
 mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"], optional = true }
+tiny_http = { version = "0.12.0", optional = true }
 
 # Feature `mxl`: MXL-Zero-Copy-Ein-/Ausgang (`UMSETZUNG.md` C4). Default aus,
 # damit Mock/Playout ohne geklontes/gebautes MXL-Repo bauen
 # (`deploy/dev/install-mxl.sh` muss vorher gelaufen sein, siehe
 # docs/decisions.md 2026-07-09 "MXL-GStreamer-Integration richtiggestellt").
+# Feature `preview`: MJPEG-über-HTTP-Vorschau (`UMSETZUNG.md` C6), nach
+# hier verschoben (2026-07-12), damit `omp-viewer` und `omp-multiviewer`
+# sie sich teilen statt zu duplizieren.
 [features]
 mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app", "dep:serde_json"]
+preview = ["dep:tiny_http", "dep:gstreamer-app"]

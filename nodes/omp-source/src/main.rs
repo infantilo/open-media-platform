@@ -16,6 +16,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, Range, SenderSpec,
     SetError,
 };
+use pipeline::{CHANNELS, SAMPLE_RATE};
 use serde_json::Value;
 
 /// Kuratierte Teilmenge von GStreamers `videotestsrc`-Pattern-Nicknames —
@@ -138,6 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // geht sowohl an `MxlVideoOutput` (tatsächlicher Flow in der Domain)
     // als auch an die IS-04-Flow-Registrierung (`SenderSpec::flow`).
     let flow_id = omp_node_sdk::idgen::new_v4();
+    let audio_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -146,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_config = pipeline::Config {
         domain,
         flow_id: flow_id.clone(),
+        audio_flow_id: audio_flow_id.clone(),
         label: label.clone(),
         initial_pattern,
     };
@@ -181,17 +184,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url,
-            senders: vec![SenderSpec {
-                transport: Some(TRANSPORT_MXL.to_string()),
-                flow: Some(FlowSpec::Video {
-                    id: Some(flow_id),
-                    frame_width: pipeline::WIDTH,
-                    frame_height: pipeline::HEIGHT,
-                    grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-                    grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
-                }),
-                ..Default::default()
-            }],
+            senders: vec![
+                SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Video {
+                        id: Some(flow_id),
+                        frame_width: pipeline::WIDTH,
+                        frame_height: pipeline::HEIGHT,
+                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                    }),
+                    ..Default::default()
+                },
+                SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Audio {
+                        id: Some(audio_flow_id),
+                        sample_rate_numerator: SAMPLE_RATE,
+                        channel_count: CHANNELS,
+                        media_type: "audio/float32".to_string(),
+                        bit_depth: 32,
+                    }),
+                    ..Default::default()
+                },
+            ],
             receivers: vec![],
             instance_id,
         },

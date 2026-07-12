@@ -1101,6 +1101,18 @@ dependencies = [
  "mxl",
  "mxl-sys",
  "serde_json",
+ "tiny_http",
+]
+
+[[package]]
+name = "omp-multiviewer"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1167,11 +1179,9 @@ name = "omp-viewer"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
- "gstreamer-app",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
- "tiny_http",
  "tokio",
 ]
 

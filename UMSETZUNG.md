@@ -756,6 +756,45 @@ Bildmischer, Audiomischer, Player, Live-Quellen, grafisch verschaltet und
 über ein rollen-gescoptes Bedienpult (Operator-Console) statt nur den
 Flow-Editor bedient. Mit C13 erreicht.
 
+### C13-Nachtrag — omp-source-Audio, Kachel-Inline-Vorschau, omp-multiviewer (2026-07-12)
+
+Drei kleine, additive Nutzeranforderungen direkt nach C13 umgesetzt
+(kein eigener nummerierter Schritt, Details siehe `docs/decisions.md`
+2026-07-12):
+
+1. **`omp-source` bekommt einen Audio-Begleitton** (zweiter MXL-Sender,
+   gleiches Muster wie `omp-player`, C12) — Testquellen liefern jetzt
+   auch echtes Audio, nicht nur Video.
+2. **Kachel-Inline-Vorschau im Flow-Editor:** jeder Node mit einem
+   `previewUrl`-Parameter zeigt sein Bild jetzt direkt auf der
+   Graph-Kachel (nicht nur im geöffneten Parameter-Panel).
+3. **Neuer Node `omp-multiviewer`:** dynamische Eingangszahl (IS-04-
+   Discovery wie `omp-switcher`, C7), zeigt aber alle entdeckten
+   MXL-Video-Quellen gleichzeitig als Grid (`compositor`, C10s DVE-
+   Technik) statt einer Auswahl; reiner MJPEG-Monitor, kein MXL-Ausgang.
+   `omp-viewer`s MJPEG-Preview-Baustein (`preview.rs`) dafür nach
+   `omp-mediaio` verschoben (neues Feature `preview`), damit sich beide
+   Nodes ihn teilen.
+
+**Zwei weitere Bugs per Browser-Test gefunden** (zusätzlich zum
+C13-Fund): `consoles: null` statt `[]` von `GET /api/v1/me/consoles`
+(Gos nie befüllter Slice serialisiert als `null`) crashte
+`ui/shell/shell.ts`s Fallback-Check — doppelt behoben (Client
+normalisiert, UND die API selbst liefert jetzt `[]`). Außerdem:
+`chromium --headless=old --dump-dom` erwies sich für Seiten mit
+mehreren sequenziellen `fetch()`-Ketten als unzuverlässig (leerer
+Graph-Viewport auch bei nachweislich funktionierendem Dateistand) —
+`chromium --headless=new --remote-debugging-port` + eine kleine
+Node.js-CDP-WebSocket-Session mit echtem Warten war die zuverlässige
+Alternative, für künftige Browser-Verifikationen in dieser Umgebung zu
+bevorzugen.
+
+**Verifiziert:** `cargo build/test/deny`, `go vet/test`,
+`deno check/test` grün; End-to-End per CDP-Session (zwei Quellen + ein
+Multiviewer: Discovery findet beide, Kachel-Grid zeigt genau die
+Multiviewer-Inline-Vorschau, `GET .../preview` liefert echte
+JPEG-Bytes), `tools/contract-check` PASS auf `omp-multiviewer`.
+
 ### C14/C15 — Playout-Automation-Controller (vormals C10/C11, jetzt danach)
 
 **Ziel:** Dünne Sequenzierungsschicht, die `playlist.rs`

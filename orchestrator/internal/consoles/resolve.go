@@ -80,7 +80,11 @@ func (r *Resolver) Resolve(userID string, nodes []NodeInfo) (Result, error) {
 	}
 
 	seen := make(map[string]bool, len(nodes))
-	var result Result
+	// `Consoles` explizit als leerer (nicht nil) Slice initialisiert:
+	// `encoding/json` serialisiert einen nil-Slice als `null`, nicht `[]`
+	// — ein per Browser-Test gefundener Bug in `ui/shell/shell.ts` zeigte,
+	// dass Client-Code das nicht verlässlich selbst abfängt.
+	result := Result{Consoles: []ConsoleEntry{}}
 	for _, b := range bindings {
 		if b.UserID != userID {
 			continue
