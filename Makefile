@@ -6,12 +6,14 @@ build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
 	cd nodes && cargo build --workspace --examples
 
-# Bundelt die Flow-Editor-Custom-Elements zu browserlauffähigem JS (ui/dist,
-# nicht versioniert). Browser können kein .ts ausführen; `deno bundle`
-# übernimmt das Stripping der Typen ohne Node/npm-Build-Toolchain.
+# Bundelt die Shell (Engineering-/Console-Ansicht, UMSETZUNG.md C13) zu
+# browserlauffähigem JS (ui/dist, nicht versioniert). ui/shell/shell.ts
+# ist seit C13 der einzige Einstiegspunkt (importiert flow-canvas.ts
+# selbst) — Browser können kein .ts ausführen; `deno bundle` übernimmt
+# das Stripping der Typen ohne Node/npm-Build-Toolchain.
 ui:
 	mkdir -p ui/dist
-	deno bundle ui/graph/flow-canvas.ts -o ui/dist/flow-canvas.js
+	deno bundle ui/shell/shell.ts -o ui/dist/shell.js
 
 # Baut die per deploy/catalog.json vom Instanz-Launcher startbaren Node-
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der

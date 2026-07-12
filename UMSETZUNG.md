@@ -718,10 +718,43 @@ auf deren UI-Bundle, ohne Graph.
 Browser-Test mit Test-Rollenbindung zeigt direkt das Panel von C10/C11/C12
 statt des Flow-Editors.
 
+**Ergebnis (2026-07-12):** Neues Orchestrator-Package `internal/consoles`
+löst eine vereinfachte Rollen-Stub-Bindung (`data/role-bindings.json`,
+handgepflegt wie `deploy/catalog.json`, echte Durchsetzung folgt mit D3)
+gegen den Node-Bestand zu Konsolen-Einträgen auf — als stabile "Rolle"
+dient die vom Instanz-Launcher vergebene `instance_id` (C8), nicht die
+pro Prozessstart neu erzeugte IS-04-Node-ID. `GET /api/v1/me/consoles`
+liefert `{hasEngineeringAccess, consoles: [...]}` (kleine, pragmatische
+Erweiterung der in `ARCHITECTURE.md` §14 beschriebenen reinen Array-
+Antwort um das Engineering/Console-Entscheidungssignal). Neue Shell
+(`ui/shell/shell.ts`, jetzt einziger Bundle-Einstiegspunkt statt
+`flow-canvas.ts` direkt) entscheidet danach zwischen `<omp-flow-canvas>`
+(Engineering) und `<omp-console-view>` (Console, kein Graph, Tab-Leiste
+nur bei mehreren Einträgen); Kiosk-Route `/console/<workflowId>/
+<nodeRoleId>` per Server-seitigem SPA-Fallback auf `index.html`. Die
+UI-Bundle-Lade-Logik wurde aus `flow-canvas.ts` in ein gemeinsames Modul
+(`ui/shell/ui-bundle.ts`) extrahiert, das beide Ansichten nutzen.
+„Aktueller Nutzer" ist mangels D3 ein reiner, trivial spoofbarer Stub
+(Header/Query-Param/`localStorage`, Default `admin` = heutiges
+Verhalten unverändert, solange keine Rollenbindungen gepflegt sind).
+
+Per Browser-Test (Chromium headless, `--dump-dom`) end-to-end verifiziert:
+Default-Nutzer sieht weiterhin den Flow-Editor; ein Stub-Operator mit
+einer Bindung landet direkt und ausschließlich auf dem zugewiesenen
+Node-Panel; zwei Bindungen zeigen die erwartete Tab-Leiste; die
+Kiosk-Route liefert dieselbe Konsole direkt. Der Browser-Test deckte
+dabei einen echten Bug auf (nicht durch `curl`/API-Tests sichtbar): ein
+gemischter Werte-/Typ-Import (`import { ConsoleView, type ConsoleEntry }`)
+wurde vom Bundler als reiner Typ-Import wegoptimiert, weil `ConsoleView`
+im Modul nur in Typposition vorkam — das entfernte auch
+`customElements.define(...)`, das Custom Element blieb unregistriert
+(„`view.setEntries is not a function`"). Behoben durch einen getrennten
+Seiteneffekt-Import.
+
 **→ Meilenstein „Demo 3":** Kleiner, manuell bedienter Regieplatz —
 Bildmischer, Audiomischer, Player, Live-Quellen, grafisch verschaltet und
 über ein rollen-gescoptes Bedienpult (Operator-Console) statt nur den
-Flow-Editor bedient.
+Flow-Editor bedient. Mit C13 erreicht.
 
 ### C14/C15 — Playout-Automation-Controller (vormals C10/C11, jetzt danach)
 
@@ -831,5 +864,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C10 | erledigt | [C10] omp-video-mixer-me: Crosspoint/DVE/Keyer + Tally-Bus im SDK | 2026-07-11 |
 | C11 | erledigt | [C11] omp-audio-mixer: dynamische Kanäle, Gain/EQ, Audio-Follow-Video + MXL-Audio-Fundament im SDK | 2026-07-11 |
 | C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
-| C13 | offen | | |
+| C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
 | C14/C15 | offen (später, nach C10–C13) | | |

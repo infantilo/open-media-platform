@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
@@ -77,11 +78,31 @@ type LauncherService interface {
 	Stop(id string) error
 }
 
+// ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
+// (implementiert von *consoles.Resolver, UMSETZUNG.md C13) — eine
+// vereinfachte Rollen-Stub-Prüfung, echte Durchsetzung folgt mit D3.
+type ConsoleResolver interface {
+	Resolve(userID string, nodes []consoles.NodeInfo) (consoles.Result, error)
+}
+
+// nodeInfosFrom projiziert den Node-Bestand auf die schmale Teilmenge,
+// die consoles.Resolver braucht — hält consoles von registry entkoppelt.
+func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
+	views := nodes.List()
+	infos := make([]consoles.NodeInfo, len(views))
+	for i, v := range views {
+		infos[i] = consoles.NodeInfo{ID: v.ID, Label: v.Label, InstanceID: v.InstanceID}
+	}
+	return infos
+}
+
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
 // /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph,
-// /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog, /api/v1/instances
-// und statisches Serving von cfg.UIDir unter /.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService) http.Handler {
+// /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog, /api/v1/instances,
+// /api/v1/me/consoles und statisches Serving von cfg.UIDir unter / (inkl.
+// SPA-Fallback für die Kiosk-Routen /console/<workflowId>/<nodeRoleId>,
+// ARCHITECTURE.md §14).
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
@@ -105,8 +126,24 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/instances", handleListInstances(launcherSvc))
 	mux.HandleFunc("POST /api/v1/instances", handlePostInstance(launcherSvc))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", handleDeleteInstance(launcherSvc))
-	mux.Handle("/", http.FileServer(http.Dir(cfg.UIDir)))
+	mux.HandleFunc("GET /api/v1/me/consoles", handleMeConsoles(nodes, consoleResolver))
+	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return noStoreForAPI(mux)
+}
+
+// spaFallback liefert für die Kiosk-Routen /console/... (ARCHITECTURE.md
+// §14: "direkt verlinkbar/bookmarkbar") index.html aus, statt eines
+// 404 vom generischen Datei-Server — die Shell selbst wertet
+// window.location.pathname client-seitig aus (ui/shell/shell.ts), der
+// Orchestrator kennt diese Routen sonst nicht.
+func spaFallback(uiDir string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/console/") {
+			http.ServeFile(w, r, uiDir+"/index.html")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // noStoreForAPI markiert alle /api/v1/*-Antworten als nicht cachebar.

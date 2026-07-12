@@ -39,6 +39,7 @@ import {
   numberRange,
   type ParamSpec,
 } from "./controls.ts";
+import { mountUIBundle } from "../shell/ui-bundle.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -1032,8 +1033,11 @@ export class FlowCanvas extends HTMLElement {
     loading.textContent = "Lädt…";
     this.#panelContainer.appendChild(loading);
 
-    const mounted = await this.#tryMountUIBundle(nodeId);
-    if (mounted) return;
+    const mounted = await mountUIBundle(this.#panelContainer, `/api/v1/nodes/${nodeId}`);
+    if (mounted) {
+      this.#panelContainer.insertBefore(this.#panelCloseButton(), this.#panelContainer.firstChild);
+      return;
+    }
 
     await this.#renderGenericPanel(nodeId);
   }
@@ -1051,31 +1055,6 @@ export class FlowCanvas extends HTMLElement {
     btn.style.cssText = "position:absolute;top:8px;right:8px;cursor:pointer;";
     btn.addEventListener("click", () => this.#closePanel());
     return btn;
-  }
-
-  // Versucht, das node-eigene UI-Bundle zu laden (ARCHITECTURE.md §4.5):
-  // liefert der Node /ui/manifest.json + /ui/bundle.js, wird dessen
-  // Custom Element per nativem import() geladen statt des generischen
-  // Panels. Liefert false, wenn der Node kein Bundle hat (404 o. ä.) —
-  // dann übernimmt #renderGenericPanel.
-  async #tryMountUIBundle(nodeId: string): Promise<boolean> {
-    try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/ui/manifest.json`);
-      if (!res.ok) return false;
-      const manifest = (await res.json()) as { tag?: string };
-      if (!manifest.tag) return false;
-
-      await import(/* webpackIgnore: true */ `/api/v1/nodes/${nodeId}/ui/bundle.js`);
-
-      this.#panelContainer.replaceChildren();
-      this.#panelContainer.appendChild(this.#panelCloseButton());
-      const el = document.createElement(manifest.tag);
-      el.setAttribute("node-id", nodeId);
-      this.#panelContainer.appendChild(el);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async #renderGenericPanel(nodeId: string) {

@@ -5,11 +5,11 @@
     <title>OpenMediaPlatform</title>
     <style>
       html, body { height: 100%; margin: 0; }
-      omp-flow-canvas { display: block; width: 100%; height: 100%; }
+      #shell-root, omp-flow-canvas, omp-console-view { display: block; width: 100%; height: 100%; }
     </style>
-    <script type="module" src="/dist/flow-canvas.js"></script>
+    <script type="module" src="/dist/shell.js"></script>
   </head>
   <body>
-    <omp-flow-canvas></omp-flow-canvas>
+    <div id="shell-root"></div>
   </body>
 </html>

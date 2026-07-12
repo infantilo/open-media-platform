@@ -2692,3 +2692,71 @@ Themen (Sendeprotokoll-Pflicht, Loudness-Konformität, NOC-Eskalation,
 Backup/Restore-Prozedur, Soak-Tests, Multi-Standort-Betrieb) sowie eine
 explizite Bestätigung, dass MAM/Traffic/Radio-Automation weiterhin per
 P3-Entscheidung "nach 2029" außerhalb des Zielbilds bleiben.
+
+## 2026-07-12 — C13 (Operator-Console): Rollen-Stub statt §12/D3, Instanz-ID als stabile "Rolle", Bundler-Bug per Browser-Test gefunden
+
+**Rollen-Stub-Design:** Da §12 (Nutzer-/Rollenmodell) und D3 (Auth) noch
+nicht existieren, löst ein neues Orchestrator-Package
+`internal/consoles` Bindungen aus einer handgepflegten
+`data/role-bindings.json` (Format: `{userId, nodeId, verb}`, `nodeId`
+kann `"*"` sein) gegen den aktuellen Node-Bestand auf — bewusst simpel,
+keine CRUD-UI (D3-Scope). **Wichtige Design-Entscheidung:** als
+`nodeRoleId` dient die vom Instanz-Launcher vergebene `instance_id`
+(`UMSETZUNG.md` C8), nicht die pro Prozessneustart neu erzeugte IS-04-
+Node-ID — sonst würde jede Rollenbindung nach einem Node-Neustart
+verwaisen. `GET /api/v1/me/consoles` liefert deshalb bewusst
+`{hasEngineeringAccess, consoles: [...]}` statt der in `ARCHITECTURE.md`
+§14 wörtlich beschriebenen reinen Array-Antwort — eine kleine,
+pragmatische Erweiterung, weil die Shell sonst kein Signal hätte, ob sie
+trotz vorhandener `operate`-Bindungen auf Engineering statt Console
+starten soll (§14: "Hat der Nutzer zusätzlich configure/admin
+irgendwo..."). `uiBundleUrl` ist bewusst die Proxy-Basis-Route
+(`/api/v1/nodes/<aktuelle-node-id>`, kein `/ui/manifest.json`-Suffix),
+damit die stabile `nodeRoleId` nicht mit der flüchtigen aktuellen
+Node-ID verwechselt wird.
+
+**Shell-Umbau:** `ui/shell/shell.ts` ist jetzt der einzige Bundle-
+Einstiegspunkt (`Makefile`s `ui`-Target bündelt `shell.ts` statt
+`flow-canvas.ts` direkt); dieser importiert `flow-canvas.ts` als
+Seiteneffekt und entscheidet zwischen Engineering- (`<omp-flow-canvas>`)
+und Console-Ansicht (`<omp-console-view>`, neu). Die node-eigene
+UI-Bundle-Lade-Logik (`fetch .../ui/manifest.json` +
+`import(".../ui/bundle.js")`) war bisher eine private Methode auf
+`FlowCanvas` — extrahiert nach `ui/shell/ui-bundle.ts`, von beiden
+Ansichten genutzt statt dupliziert. Kiosk-Route
+`/console/<workflowId>/<nodeRoleId>` (§14: "direkt verlinkbar/
+bookmarkbar") läuft server-seitig über einen SPA-Fallback
+(`spaFallback` in `httpapi/server.go`: `/console/...`-Pfade liefern
+`index.html` statt eines 404 vom generischen Datei-Server, die Shell
+wertet `location.pathname` client-seitig aus). "Aktueller Nutzer" ist
+ein trivial spoofbarer Stub (`X-OMP-Stub-User`-Header/`?user=`-Query-
+Param/`localStorage`, Default `"admin"` — bewahrt das vor C13 einzig
+existierende Verhalten, solange keine Rollenbindungen gepflegt sind:
+sowohl bei fehlender `role-bindings.json` als auch bei einem Nutzer ohne
+jede Bindung fällt die Shell auf Engineering zurück, nicht auf eine
+leere Console-Ansicht).
+
+**Bug per Browser-Test gefunden, den `curl`/API-Tests nicht sehen
+konnten:** `tools/contract-check`-artige HTTP-Prüfungen zeigten alles
+korrekt (Endpunkt liefert die richtige JSON-Struktur), aber Chromium
+headless (`--dump-dom`, mit Browser-Konsolen-Logging) zeigte
+`Uncaught (in promise) TypeError: view.setEntries is not a function` —
+`shell.ts` importierte `ConsoleView` gemischt mit einem `type`-Import
+(`import { ConsoleView, type ConsoleEntry } from "./console-view.ts"`),
+nutzte `ConsoleView` selbst aber nur in Typposition (`as ConsoleView`).
+Der Bundler (deno bundle) erkannte daraus "nur als Typ gebraucht" und
+eliminierte den gesamten Import — inklusive des Modul-Seiteneffekts
+`customElements.define("omp-console-view", ConsoleView)`. Das Custom
+Element blieb dadurch unregistriert, `document.createElement(...)`
+lieferte ein `HTMLUnknownElement` ohne `setEntries`. Behoben durch einen
+expliziten, getrennten Seiteneffekt-Import (`import "./console-view.ts"`)
+neben dem reinen Typ-Import. Lehre: ein rein `curl`-/API-basierter Test
+hätte diesen Fehler nie gefunden — Grund, bei UI-Änderungen tatsächlich
+einen Browser (auch headless) zu befragen, nicht nur die REST-Schicht.
+
+**End-to-End verifiziert** (Chromium headless, zwei echte Node-
+Instanzen, zwei Rollenbindungen): Default-Nutzer weiterhin Flow-Editor;
+Ein-Bindung-Nutzer landet direkt und ausschließlich auf dem zugewiesenen
+Panel (kein Graph sichtbar); Zwei-Bindungen-Nutzer zeigt die erwartete
+Tab-Leiste, sortiert nach Label; Kiosk-Route liefert dieselbe Konsole
+direkt. `go vet`/`go test`/`deno check`/`deno test` grün.
