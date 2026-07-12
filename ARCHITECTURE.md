@@ -1896,34 +1896,69 @@ hier nur verlinkt, nicht dupliziert.
 
 §6.3 Stufe 4 (Hot-Standby) ist bewusst **break-before-make** und nennt
 frame-genaue, unsichtbare Übernahme explizit als **Nicht-Ziel v1**. Der
-Nutzer möchte das jetzt als bewusstes Zielbild aufwerten (Option „echte
-Genlock-Äquivalenz" statt „schneller sichtbarer Cut"). **Noch nicht
-entschieden** — eine `fable`-Modell-Konsultation zur technischen
-Machbarkeit/zum Aufwand läuft parallel zu diesem Abschnitt (Grass-Valley-
-AMPP-Vorbild rein als interner Recherche-Maßstab, siehe §20.7 zur
-Namensfrage). Wesentliche Bausteine, falls entschieden wird, dieses Ziel
-langfristig zu verfolgen (Reihenfolge vorläufig, hängt von der
-Fable-Antwort ab):
+Nutzer möchte das als bewusstes Zielbild aufwerten (Option „echte
+Genlock-Äquivalenz" statt „schneller sichtbarer Cut").
 
-1. Gemeinsame Zeitbasis zwischen redundanten Instanzen (PTP oder
-   PTP-äquivalent) — heute nicht vorhanden (Single-Host-Dev-Maschine ohne
-   PTP-NIC, `UMSETZUNG.md` §0 Punkt 7).
-2. Deterministisches Command-Mirroring: jede Take/Cut/DVE-Bewegung wirkt
-   frame-genau auf beide Instanzen gleichzeitig, nicht nur „irgendwann
-   danach".
-3. Ein Downstream-Seamless-Switch-Baustein, der zwei vollständig
-   gerenderte MXL/2110-Ausgänge vergleicht/wählt (eine Ebene über dem, was
-   ST 2022-7 heute schon auf reiner Netzwerk-Paket-Ebene für **eine**
-   Quelle über zwei Pfade leistet — hier zwei potenziell verschiedene
-   Prozess-Instanzen mit eigenem Zustand).
+**`fable`-Modell-Konsultation (2026-07-12, Recherche, nicht verifizierter
+Fakt wo als Vermutung gekennzeichnet):** wichtige Klarstellung zuerst —
+ST 2022-7 ist **Netzwerkpfad**-Redundanz einer einzigen, bitidentischen
+Quelle (Empfänger rekonstruiert paketweise aus zwei Pfaden derselben
+Payload), kein Beleg-Mechanismus für das hier gewünschte Problem (zwei
+unabhängige, zustandsbehaftete Mixer-Prozesse). Was zu Grass Valley AMPP
+öffentlich auffindbar ist: ein Latenz-/Alignment-Timing-Modell (kein
+Genlock, Timestamp-basiertes Buffering — konzeptionell nahe an OMPs
+eigenem, bereits vendor-neutral beschriebenen Latenzbudget-Modell, §15)
+sowie als Resilienz-Story primär **schnelles Sekunden-Respawn** plus
+optionales **1+1-Hot-Backup pro Playout-Kanal** (GV selbst nennt volles
+Hot-Standby in der Cloud „wasteful"). **Kein öffentlicher Beleg gefunden**
+für echtes frame-unsichtbares Lockstep-Failover zwischen zwei
+Mixer-Instanzen — als Vermutung/Branchenwissen gekennzeichnet, nicht als
+verifizierter Fakt.
+
+Wesentliche Bausteine, falls das Ziel langfristig verfolgt wird:
+
+1. Gemeinsame Zeitbasis zwischen redundanten Instanzen (PTP/ST 2059) —
+   heute nicht vorhanden (Single-Host-Dev-Maschine ohne PTP-NIC,
+   `UMSETZUNG.md` §0 Punkt 7), aber MXLs TAI-Grain-Index
+   (`third_party/mxl/docs/Timing.md`) ist bereits eine absolute
+   Zeitbasis — ein struktureller Vorteil gegenüber einer Neuentwicklung
+   von Null.
+2. Deterministisches Command-Mirroring: jede Take/Cut/DVE-Bewegung als
+   zeitgestempeltes Kommando „wirksam ab Grain-Index N" an beide
+   Instanzen, plus Resync-Protokoll für neu startende Standby-Instanzen.
+3. Ein Downstream-Seamless-Switch-Referenzknoten (`omp-seamless-switch`),
+   der zwei MXL-Flows liest und pro Grain-Index den gesunden wählt — die
+   2022-7-Idee eine Ebene höher, auf ganzen gerenderten Frames statt
+   Netzwerkpaketen.
 4. Frame-genaue Ausfallerkennung (§17) statt der heutigen 10s-Health-
    Staleness, sonst dominiert die Erkennungszeit jede Umschaltung.
+5. Determinismus-Härtung der Render-Pipeline selbst (gleiche
+   GStreamer-Elementversionen, keine wallclock-abhängigen Effekte) +
+   Divergenz-Monitoring (Frame-Hash-Vergleich beider Ausgänge, §17), sonst
+   driften die Ausgaben trotz identischer Kommandos auseinander.
 
-**Realismus-Vorbehalt:** das ist mutmaßlich ein Mehrmonats- bis
-Mehrjahres-Fundament (PTP-Infrastruktur, Zweit-Host, neue
-Synchronisationsprotokolle), kein P1-Demo-Schritt. Endgültige Einordnung
-(P2 als Fundament vs. P3 als Vollausbau) erst nach der Fable-Konsultation
-und Nutzer-Entscheidung.
+**Realismus-Einschätzung (Fable, Größenordnungen, keine Garantie):**
+Command-Mirroring + Seamless-Switch-Node als Single-Host-Prototyp: Wochen
+bis wenige Monate. Produktionsreif über zwei Hosts mit echtem PTP, Resync,
+Divergenz-Monitoring: eher ein Jahr+ im aktuellen 5–10h/Woche-Tempo. Kein
+P1-Demo-Schritt.
+
+**Empfohlene Fundament-Reihenfolge, falls Option (b) als Zielbild gesetzt
+wird** (keine neuen Bausteine erfunden, nur sinnvoll sequenziert):
+1. Jetzt, günstig: Mixer-Kommandos intern bereits als „ab Grain-Index N
+   wirksam" strukturieren (ohnehin für §15 sinnvoll).
+2. P2 mit §6.3/§17: Failover-Erkennung + schneller sichtbarer Cut als
+   erste, tatsächlich demo-taugliche Redundanzstufe.
+3. P2/D-Phase mit §15/§18: echte PTP/ST-2059-Zeitbasis (zweiter Host,
+   Host-Agent).
+4. Danach: Command-Mirroring als Orchestrator-Baustein (Fan-out an
+   Active+Standby) + `omp-seamless-switch` als eigener Referenzknoten.
+5. Zuletzt: Determinismus-Härtung + Divergenz-Monitoring.
+
+**Noch nicht final priorisiert** — Nutzer-Entscheidung zwischen (a)
+schneller sichtbarer Cut behalten, (b) obige Reihenfolge als Zielbild
+festschreiben, (c) Zwischenlösung (paralleler, identisch bedienter
+Standby + Downstream-Freeze-Frame) steht noch aus.
 
 ### 20.2 Dynamischer, durchsuchbarer Microservice-Katalog
 
