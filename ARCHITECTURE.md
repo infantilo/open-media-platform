@@ -1061,6 +1061,23 @@ Alpha-Kanal, die Umsetzung muss das aber trotzdem gegen den dann
 aktuellen Spec-Stand bestätigen, nicht diesen einen Fund als
 abschließend behandeln.
 
+**Klarstellung Insert-Punkt vs. Downstream-Key (2026-07-12, Fable-
+Konsultation zu einer Nutzerfrage):** OGraf als eigenständiger Service
+mit MXL-Fill+Key-Ausgang deckt das klassische Downstream-Key-Szenario
+(CG → DSK) bereits vollständig ab — §13.1 listet den Keyer-Worker
+bewusst als „Chroma/Luma/**DSK**", ein DSK ist signalflusstechnisch
+nichts anderes als ein Keyer, der den Programmbus als Hintergrund nimmt
+und OGrafs Ausgang als Quelle wählt. **Kein zusätzlicher, bidirektionaler
+Insert-Modus** (Signal verlässt den Mixer-Prozess mitten in der
+Pipeline, geht zu OGraf, kommt zurück) ist vorgesehen — das würde genau
+die Synchronität untergraben, die §13.1 durch das Ein-Prozess-Modell für
+Crosspoint/DVE/Keyer bewusst schützt (ein zusätzlicher MXL-Hop mitten im
+Pipeline-Takt einer Transition). Eine Verkettung OGraf → separater
+Downstream-Node (PGM-Out → Keyer-/Compositing-Node → Ausgang) bleibt
+davon unberührt erlaubt — §13.1 verbietet nur das Aufsplitten
+**innerhalb** einer M/E-Bank, nicht die Verkettung eigenständiger Nodes
+mit eigenem, im Latenzbudget (§15) zu berücksichtigendem Zusatz-Hop.
+
 **Scope-Unschärfe zu Demo 3 (offen, 2026-07-11):** §7.4 zählt OGraf
 ausdrücklich zur Demo-3-Definition des kleinen Regieplatzes, die
 `UMSETZUNG.md`-Schrittliste (C10–C13) enthält aber keinen OGraf-Schritt
