@@ -2590,3 +2590,70 @@ deklariert entsprechend `layout=interleaved`. End-to-End verifiziert
 (zwei `omp-audio-mixer`-Instanzen, eine als Quelle für die andere,
 `mxl-info`: Head-Index des Konsumenten wächst kontinuierlich, keine
 neuen CRITICAL-Meldungen mehr), `tools/contract-check` PASS.
+
+## 2026-07-12 — C12 (`omp-player`): zwei feste Cue/Take-Slots statt N dynamischer Zweige, eine Codebasis für Video-/Jingle-Profil
+
+**Entschieden:** `ARCHITECTURE.md` §13.3 verallgemeinert den für Playout
+vorgesehenen `PlaylistController`-Baustein (§11.1) zu einer gemeinsamen
+Codebasis für Musik-/Jingle-Player und Videoplayer. Umsetzung als neues
+Crate `omp-player`, Profil-Umschaltung ausschließlich über
+`OMP_PLAYER_PROFILE=video|jingle` (steuert nur, ob ein Video-MXL-Sender
+registriert wird — Audio-Sender immer, auch beim Videoplayer, als
+Slate-Ton-Ersatz). Deskriptor/Methoden (`append`/`load`/`remove`/
+`cue`/`take`) sind für beide Profile identisch; nur die UI-Bundle-
+Variante unterscheidet sich (zwei kompilierte Paare Manifest/Bundle,
+`uibundle.rs` wählt zur Laufzeit anhand von `has_video`).
+
+**Pipeline-Architektur — bewusst zwei feste Slots (A/B), keine N
+dynamischen Zweige wie C7/C10/C11:** ein Cue/Take-Paar hat strukturell
+immer genau zwei Rollen (on air, cued), deshalb zwei feste
+`input-selector`-Sink-Pads pro Medienart, deren Pad-Objekte über die
+gesamte Prozesslaufzeit bestehen bleiben. `cue(itemId)` ersetzt nur den
+Elementzweig hinter dem jeweils NICHT-on-air-Pad (`replace_slot`, analog
+zu C11s `add_channel_branch`/`remove_channel_branch`, aber ohne
+Pad-Request/-Release, weil die Pads selbst fix bleiben). `take()`
+schaltet ausschließlich `active-pad` um (kein Rebuild, gleiche Technik
+wie C7s `apply_selection`) — danach ist der bisherige On-Air-Slot frei
+für den nächsten `cue()`. Reihenfolge von `cue()` (asynchrones
+`LoadSlot`-Kommando) und einem direkt danach aufgerufenen `take()`
+(`SetActive`-Kommando) ist durch denselben `std::sync::mpsc`-Kanal FIFO
+garantiert — gleiche Verlässlichkeit wie C11s `setSource`-gefolgt-von-
+`setGain`, kein Zusatzsynchronisationsmechanismus nötig. Das nutzt auch
+das Jingle-Cart-Wall-UI aus (Klick = `cue()` + `take()` sequentiell).
+
+**Clips sind bewusst reine Software-Testmittel** (`UMSETZUNG.md` §0
+Punkt 7): jedes Item ist ein `videotestsrc`-Pattern (nur Video-Profil)
+plus ein `audiotestsrc`-Ton (immer), beide ohne `num-buffers`-Limit
+dauerhaft laufend. `durationMs` ist bewusst nur Metadaten für die
+`playheadPositionMs`-Anzeige (Wanduhr-Differenz seit dem letzten
+`take()`, kein GStreamer-Query nötig), kein erzwungenes Clip-Ende —
+automatisches Vorrücken am Clip-Ende ist Automations-Scope (C14/C15).
+Ein EOS-Pfad für den on-air-Zweig hätte hier nur Fehlerrisiko ohne
+Gegenwert eingebaut.
+
+**Verifiziert:** `cargo build --workspace --bins`/`test --workspace`/
+`cargo deny check`/`cargo audit` grün (5 Crates + neues `omp-player`).
+Zwei Instanzen aus dem Katalog gestartet (`omp-player-video`,
+`omp-player-jingle`), `append`/`cue`/`take` über die generische
+Node-Proxy-API auf beiden durchgespielt (Playlist wächst, `cuedItemId`/
+`currentItemId`/`mode`/`playheadPositionMs` verhalten sich korrekt),
+`tools/contract-check` PASS auf beiden inkl. korrektem UI-Manifest-Tag
+pro Profil (`omp-player-video-panel`/`omp-player-jingle-panel`). MXL-
+Video-Flow (640×480@25, `video/v210`) korrekt im Domain-Verzeichnis
+angelegt, IS-05-Verbindung Player-Sender → `omp-viewer`-Receiver
+erfolgreich hergestellt (`active`/`staged` zeigen die richtige
+`sender_id`), CPU-Last des verbundenen Viewers steigt sichtbar
+gegenüber einer unverbundenen Vergleichsinstanz (89 % vs. 0,5 %) — starkes
+Indiz für tatsächlich fließende Frames.
+
+**Nicht abschließend visuell bestätigt (gefundenes, nicht selbst
+verursachtes Problem):** `omp-viewer`s separater MJPEG-Preview-HTTP-
+Server (`preview.rs`, seit C6 unverändert) beantwortet in dieser Sitzung
+keine einzige Anfrage (`curl`/Python-`http.client`/Rohsocket, alle mit
+TCP-Connect-Erfolg, aber 0 Bytes empfangen) — reproduzierbar auch an
+einer frisch gestarteten, nie zuvor kontaktierten, unverbundenen
+Viewer-Instanz (0,5 % CPU, kein Verbindungszustand), also unabhängig von
+`omp-player`. Laut `docs/decisions.md` (C6-Eintrag) funktionierte
+derselbe Mechanismus damals per `curl`. Ursache nicht ermittelt (out of
+scope für C12) — separater Diagnoseschritt empfohlen, bevor der nächste
+Schritt sich auf visuelle Viewer-Verifikation verlässt.

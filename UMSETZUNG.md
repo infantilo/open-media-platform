@@ -694,6 +694,18 @@ Manueller Cue/Take-Betrieb zuerst — Automation folgt in C14/C15.
 Videoplayer-UI-Modus) aus dem Katalog gestartet, beide manuell bedienbar,
 beide MXL-Output im Viewer sichtbar.
 
+**Ergebnis (2026-07-12):** Cue/Take-Bedienung auf beiden Instanzen über
+die generische Node-Proxy-API durchgespielt (siehe `docs/decisions.md`),
+`tools/contract-check` PASS auf beiden inkl. korrektem UI-Manifest-Tag
+pro Profil, MXL-Video-Flow korrekt angelegt, IS-05-Verbindung zum
+Viewer-Receiver erfolgreich. **Offener Rest:** die visuelle Bestätigung
+über `omp-viewer`s MJPEG-Preview-Endpoint war in dieser Sitzung nicht
+möglich — ein reproduzierbares, von `omp-player` unabhängiges Problem in
+`omp-viewer`s Preview-HTTP-Server (seit C6 unverändert, siehe
+`docs/decisions.md` 2026-07-12), nicht Teil dieses Schritts. Vor dem
+nächsten Schritt, der sich auf die visuelle Viewer-Prüfung verlässt,
+separat diagnostizieren.
+
 ### C13 — Operator-Console (`ARCHITECTURE.md` §14)
 
 **Ziel:** Zweite Shell-Ansicht neben dem Flow-Editor — ein Testnutzer mit
@@ -818,6 +830,6 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C9 | erledigt | [C9] Contract-Konformitätstest (tools/contract-check) | 2026-07-10 |
 | C10 | erledigt | [C10] omp-video-mixer-me: Crosspoint/DVE/Keyer + Tally-Bus im SDK | 2026-07-11 |
 | C11 | erledigt | [C11] omp-audio-mixer: dynamische Kanäle, Gain/EQ, Audio-Follow-Video + MXL-Audio-Fundament im SDK | 2026-07-11 |
-| C12 | offen | | |
+| C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
 | C13 | offen | | |
 | C14/C15 | offen (später, nach C10–C13) | | |

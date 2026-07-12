@@ -9,4 +9,5 @@ members = [
     "omp-switcher",
     "omp-video-mixer-me",
     "omp-audio-mixer",
+    "omp-player",
 ]

@@ -33,5 +33,19 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-audio-mixer"],
     "env": {}
+  },
+  {
+    "type": "omp-player-video",
+    "label": "Videoplayer",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-player"],
+    "env": { "OMP_PLAYER_PROFILE": "video" }
+  },
+  {
+    "type": "omp-player-jingle",
+    "label": "Jingle-Player",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-player"],
+    "env": { "OMP_PLAYER_PROFILE": "jingle" }
   }
 ]
