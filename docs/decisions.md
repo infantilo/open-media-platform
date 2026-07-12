@@ -2657,3 +2657,38 @@ Viewer-Instanz (0,5 % CPU, kein Verbindungszustand), also unabhängig von
 derselbe Mechanismus damals per `curl`. Ursache nicht ermittelt (out of
 scope für C12) — separater Diagnoseschritt empfohlen, bevor der nächste
 Schritt sich auf visuelle Viewer-Verifikation verlässt.
+
+## 2026-07-12 — §20 (24/7 Broadcast-Grade Hardening, Gap-Analyse) ergänzt; AMPP-Namensfrage geklärt
+
+**Kontext:** Nutzer möchte die Redundanz-Frage vom selben Tag (siehe C12-
+Nachtrag oben, `omp-video-mixer-me`-Failover) zu echter Genlock-
+Äquivalenz (Option b) aufwerten und das gesamte Projekt so professionell
+wie Grass Valley AMPP ausbauen, inkl. Look-and-Feel und einem
+dynamischen, installier-/importier-/versionier-/sortier-/durchsuchbaren
+Microservice-Katalog. Das kollidiert auf den ersten Blick mit der
+Nutzeranforderung vom 2026-07-11 (siehe Eintrag oben, "Grass-Valley-/
+AMPP-Referenzen aus ARCHITECTURE.md entfernt") — dem Nutzer vorgelegt,
+zwei Fragen geklärt:
+
+1. **AMPP-Namensnennung:** bleibt bei der 2026-07-11-Entscheidung —
+   AMPP/vergleichbare Plattformen dienen weiter nur als **interner**
+   Recherche-/Qualitätsmaßstab (z. B. für eine `fable`-Konsultation zur
+   Genlock-Frage), keine Vendor-Namen zurück in `ARCHITECTURE.md`.
+2. **Vorgehen beim großen 24/7-Professionalisierungs-Wunsch:** zuerst ein
+   neuer Gap-Analyse-/Fahrplan-Abschnitt (§20, keine Umsetzung, keine
+   Phasenplan-Änderung), der Nutzer priorisiert danach, erst priorisierte
+   Punkte werden zu regulären `UMSETZUNG.md`-Schritten.
+
+**§20 fasst zusammen:** Instanz-/Prozess-Redundanz jenseits von §6.3
+(Genlock-Äquivalent, Entscheidung hängt von einer parallel laufenden
+`fable`-Konsultation ab), dynamischer durchsuchbarer Katalog (größtenteils
+schon durch §6.4/§13.5 abgedeckt, echte Lücke nur die Such-/Filter-UX),
+Design-System/Look-and-Feel (neu, kompatibel mit der bestehenden
+Vanilla-TS/Custom-Elements-Linie, kein Framework-Wechsel nötig),
+Security/Auth-Hardening-Priorität (D3 nicht beliebig aufschieben, sobald
+Mehrpersonen-Betrieb ansteht), Verweis auf das bestehende
+Control-Plane-HA-Konzept (§19), neu identifizierte Betriebs-/Compliance-
+Themen (Sendeprotokoll-Pflicht, Loudness-Konformität, NOC-Eskalation,
+Backup/Restore-Prozedur, Soak-Tests, Multi-Standort-Betrieb) sowie eine
+explizite Bestätigung, dass MAM/Traffic/Radio-Automation weiterhin per
+P3-Entscheidung "nach 2029" außerhalb des Zielbilds bleiben.

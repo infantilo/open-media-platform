@@ -1877,3 +1877,141 @@ Planung einer echten 24/7-Sendeabwicklung (§1-Zielbild) als P3-Baustein
 konkretisiert, siehe §7-Phasenplan-Anmerkung bei P3. Bis dahin ist
 Prozess-Restart via systemd/Quadlet-Restart-Policy (§4.3) die einzige und
 für den aktuellen Scope ausreichende Antwort.
+
+## 20. 24/7 Broadcast-Grade Hardening — Gap-Analyse & Fahrplan (Zielbild, Priorisierung ausstehend)
+
+**Anforderung (2026-07-12):** Das Projekt so ausarbeiten, dass es
+professionell/vollständig genug für den 24/7-Betrieb einer ganzen
+Fernseh-/Radioanstalt werden kann — vergleichbarer Anspruch wie
+kommerzielle Cloud-Produktionsplattformen, auch beim Look-and-Feel.
+
+**Einordnung dieses Abschnitts:** reine Bestandsaufnahme + Lückenanalyse,
+**keine Umsetzungsentscheidung und keine Phasenplan-Änderung**. §7 bleibt
+bis auf Weiteres gültig; die Punkte unten sind Kandidaten, die der Nutzer
+noch priorisieren muss, bevor daraus `UMSETZUNG.md`-Schritte werden. Wo
+ein Thema bereits an anderer Stelle entschieden/gescoped ist, wird das
+hier nur verlinkt, nicht dupliziert.
+
+### 20.1 Instanz-/Prozess-Redundanz jenseits von §6.3 (Genlock-Äquivalent)
+
+§6.3 Stufe 4 (Hot-Standby) ist bewusst **break-before-make** und nennt
+frame-genaue, unsichtbare Übernahme explizit als **Nicht-Ziel v1**. Der
+Nutzer möchte das jetzt als bewusstes Zielbild aufwerten (Option „echte
+Genlock-Äquivalenz" statt „schneller sichtbarer Cut"). **Noch nicht
+entschieden** — eine `fable`-Modell-Konsultation zur technischen
+Machbarkeit/zum Aufwand läuft parallel zu diesem Abschnitt (Grass-Valley-
+AMPP-Vorbild rein als interner Recherche-Maßstab, siehe §20.7 zur
+Namensfrage). Wesentliche Bausteine, falls entschieden wird, dieses Ziel
+langfristig zu verfolgen (Reihenfolge vorläufig, hängt von der
+Fable-Antwort ab):
+
+1. Gemeinsame Zeitbasis zwischen redundanten Instanzen (PTP oder
+   PTP-äquivalent) — heute nicht vorhanden (Single-Host-Dev-Maschine ohne
+   PTP-NIC, `UMSETZUNG.md` §0 Punkt 7).
+2. Deterministisches Command-Mirroring: jede Take/Cut/DVE-Bewegung wirkt
+   frame-genau auf beide Instanzen gleichzeitig, nicht nur „irgendwann
+   danach".
+3. Ein Downstream-Seamless-Switch-Baustein, der zwei vollständig
+   gerenderte MXL/2110-Ausgänge vergleicht/wählt (eine Ebene über dem, was
+   ST 2022-7 heute schon auf reiner Netzwerk-Paket-Ebene für **eine**
+   Quelle über zwei Pfade leistet — hier zwei potenziell verschiedene
+   Prozess-Instanzen mit eigenem Zustand).
+4. Frame-genaue Ausfallerkennung (§17) statt der heutigen 10s-Health-
+   Staleness, sonst dominiert die Erkennungszeit jede Umschaltung.
+
+**Realismus-Vorbehalt:** das ist mutmaßlich ein Mehrmonats- bis
+Mehrjahres-Fundament (PTP-Infrastruktur, Zweit-Host, neue
+Synchronisationsprotokolle), kein P1-Demo-Schritt. Endgültige Einordnung
+(P2 als Fundament vs. P3 als Vollausbau) erst nach der Fable-Konsultation
+und Nutzer-Entscheidung.
+
+### 20.2 Dynamischer, durchsuchbarer Microservice-Katalog
+
+**Großteils bereits gescoped, kein neues System nötig:** §6.4
+(Installieren/Importieren/Entfernen/Versionieren über OCI-Images +
+Digest-Pinning + Signaturprüfung) und §13.5 (Kategorien-Feld) decken die
+Kern-Anforderung „installierbar/importierbar/versionierbar/sortierbar"
+bereits ab, sind aber `ab P2`, noch nicht umgesetzt.
+
+**Echte Lücke:** eine tatsächliche **Such-/Filter-UX** (Marketplace-
+artiges Browsen über Name/Tag/Hersteller/Kategorie/Kompatibilität) über
+§6.4s Katalog — bisher ist nur grobe Kategorien-Gruppierung (§13.5)
+gescoped, kein Volltext-/Facetten-Filter. Kleiner additiver Baustein auf
+§6.4, keine eigene Architektur-Entscheidung nötig — als Detail-Schritt
+mitplanen, sobald §6.4 an der Reihe ist (P2).
+
+### 20.3 Design-System / Look-and-Feel
+
+**Neu, noch nicht gescoped.** Bisherige UI-Linie: kein Framework, kein
+npm-Build, vanilla TS/ESM + Custom Elements (`UMSETZUNG.md` §0 Punkt 5,
+Minimal-Dependency-Regel §4.1a) — das bleibt bei einer professionellen
+Optik **kompatibel**, ist aber kein Ersatz für eines: ein konsistentes
+„Look and Feel" braucht ein **Design-System** (Farbpalette/Typografie/
+Spacing/Zustände als CSS-Custom-Properties-Tokens, gemeinsame
+Component-Bausteine für Buttons/Panels/Tally-Anzeigen/Fader über alle
+Node-UI-Bundles hinweg, ein Referenz-Stylesheet, das jedes UI-Bundle statt
+eigener Ad-hoc-Styles importiert), keine Framework-Frage. Bisher hat jedes
+Node-UI-Bundle (C7/C10/C11/C12) sein eigenes, unabhängiges `<style>`
+gebaut — funktioniert, sieht aber pro Node leicht anders aus. **Kandidat
+für einen eigenen Schritt** (vermutlich zusammen mit C13, weil die
+Operator-Console die erste UI-Fläche ist, die mehrere Node-Panels
+nebeneinander zeigt und dadurch Stil-Inkonsistenz zuerst sichtbar
+gemacht).
+
+### 20.4 Security/Auth-Hardening (D3) — Priorität prüfen
+
+Bereits geplant (`UMSETZUNG.md` D3: step-ca/mTLS, IS-10/OAuth2, §12-
+Rollenmodell), aber ohne festen Zeitpunkt („Phase D"). Für echten 24/7-
+Mehrpersonen-Betrieb (mehrere Bildmeister/Tonmeister/Admins, §14) ist D3
+kein Nice-to-have, sondern Voraussetzung — C13 (Operator-Console) baut
+heute bewusst noch mit einem **Rollen-Stub** statt echter Durchsetzung
+(`UMSETZUNG.md` C13: „echte Durchsetzung folgt mit D3"). Empfehlung: D3
+nicht beliebig weit nach hinten schieben, sobald mehr als eine Person
+gleichzeitig am System arbeitet.
+
+### 20.5 Control-Plane-HA — bereits abgedeckt
+
+Siehe §19 (bestehendes, gestaffeltes Konzept) — für das 24/7-Zielbild
+weiterhin relevant, keine Änderung durch diesen Abschnitt nötig.
+
+### 20.6 Bisher nirgends erfasste Betriebs-/Compliance-Themen einer echten Sendeanstalt
+
+Neu identifiziert, noch nicht diskutiert — reine Auflistung, keine
+Entscheidung:
+
+- **Compliance-Recording/Loggingpflicht:** in vielen Rechtsordnungen muss
+  aufgezeichnet werden, was wann on air war (Sendeprotokoll +
+  Referenzaufzeichnung, oft mehrere Wochen Aufbewahrung) — heute nirgends
+  im Projekt erfasst.
+- **Loudness-/Ausstrahlungs-Konformität** (z. B. EBU R128) und
+  Untertitel-/Ancillary-Data-Durchreichung — bisher nicht betrachtet.
+- **NOC-/Alarmierungs-Eskalation über die App hinaus** (Paging/SMS/On-
+  Call statt nur In-App-Tally/Alert, §6.3/§17).
+- **Backup/Restore-Prozedur** für Config/Snapshots (D1 bringt Persistenz
+  in Postgres, aber keine dokumentierte Sicherungs-/Wiederherstellungs-
+  Routine).
+- **Automatisierte Regressions-/Soak-Tests** über CI hinaus (Dauerlast,
+  Langzeit-Stabilität) — heute nur `make check` pro Commit.
+- **Multi-Anstalt-/Multi-Standort-Betrieb** (ein Orchestrator pro Standort
+  vs. zentrale Verwaltung mehrerer Standorte) — bisher nicht betrachtet,
+  falls „ganze Fernseh-/Radioanstalt" mehrere Standorte einschließen soll.
+
+### 20.7 Bewusst unverändert: AMPP/Grass Valley bleibt kein Referenzname in diesem Dokument
+
+Auf Nutzerwunsch (2026-07-12) dient AMPP/vergleichbare Plattformen
+weiterhin nur als **interner** Recherche-/Qualitätsmaßstab (z. B. für
+§20.1) — keine Rücknahme der Entscheidung vom 2026-07-11
+(`docs/decisions.md`), alle Vendor-Namen bleiben aus `ARCHITECTURE.md`
+draußen.
+
+### 20.8 Explizit weiterhin außerhalb des Zielbilds, sofern nicht erneut angefragt
+
+MAM/Traffic/Sendeplanungs-Systeme und Radio-Automation bleiben bewusst
+„nach 2029" verschoben (§7-Phasenplan, P3) — dieser Abschnitt ändert das
+nicht, auch wenn eine vollständige Sendeanstalt in der Praxis meist auch
+das braucht.
+
+**Nächster Schritt:** Nutzer priorisiert §20.1–§20.6, danach werden
+priorisierte Punkte als reguläre `UMSETZUNG.md`-Schritte konkretisiert —
+analog zu §11.2/§13/§19s bisherigem Vorgehen (erst hier als Konzept
+verankern, dann erst zum nummerierten Schritt machen).
