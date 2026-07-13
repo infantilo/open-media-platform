@@ -119,7 +119,11 @@ func nowVersion() string {
 }
 
 // NewNode baut ein minimales, gültiges Node-Resource für host:port.
-func NewNode(id, label, host string, port int) Node {
+// protocol ist "http" oder "https" (UMSETZUNG.md D3: "https", wenn der
+// Node mTLS-Server-TLS aktiviert hat — der Orchestrator-Proxy liest das
+// Schema aus diesem href, kein separates mTLS-Flag im Node-Resource
+// nötig).
+func NewNode(id, label, host string, port int, protocol string) Node {
 	mac := fmt.Sprintf("00-00-00-00-%02x-01", port&0xff)
 	return Node{
 		ID:          id,
@@ -127,11 +131,11 @@ func NewNode(id, label, host string, port int) Node {
 		Label:       label,
 		Description: "",
 		Tags:        map[string][]string{},
-		Href:        fmt.Sprintf("http://%s:%d/", host, port),
+		Href:        fmt.Sprintf("%s://%s:%d/", protocol, host, port),
 		Caps:        map[string]any{},
 		API: NodeAPI{
 			Versions:  []string{"v1.3"},
-			Endpoints: []NodeEndpoint{{Host: host, Port: port, Protocol: "http"}},
+			Endpoints: []NodeEndpoint{{Host: host, Port: port, Protocol: protocol}},
 		},
 		Services: []any{},
 		Clocks:   []any{},

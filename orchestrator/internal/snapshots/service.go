@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
@@ -42,9 +43,11 @@ type Service struct {
 }
 
 // NewService verbindet einen NodeLister, den Graph-Service und einen
-// Datei-Store zu einem Snapshot-Service.
-func NewService(nodes NodeLister, graphSvc GraphService, store *Store) *Service {
-	return &Service{nodes: nodes, graph: graphSvc, store: store, client: newHTTPNodeClient()}
+// Postgres-Store (UMSETZUNG.md D1) zu einem Snapshot-Service. httpClient
+// ist der (ggf. mTLS-fähige, UMSETZUNG.md D3) Client für Node-Aufrufe —
+// nil bedeutet http.DefaultClient.
+func NewService(nodes NodeLister, graphSvc GraphService, store *Store, httpClient *http.Client) *Service {
+	return &Service{nodes: nodes, graph: graphSvc, store: store, client: newHTTPNodeClient(httpClient)}
 }
 
 // Create erfasst den kompletten Ist-Zustand (Kanten + alle schreibbaren

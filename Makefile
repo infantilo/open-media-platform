@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract start stop status
+.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check
 
@@ -98,5 +98,47 @@ status:
 	@podman container exists omp-nats && echo "NATS: läuft" || echo "NATS: gestoppt"
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
+	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
+
+# step-ca (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) — bewusst NICHT Teil von
+# `make up`: mTLS ist opt-in (OMP_MTLS_ENABLED, s. orchestrator/internal/
+# config.go), der normale Dev-Workflow ohne mTLS soll unverändert ohne
+# CA-Container auskommen. `.run/step-ca` persistiert die CA über
+# Neustarts hinweg (wie bei Postgres/D1: ephemer über `make mtls-down`,
+# das ist für Dev ausreichend, s. docs/decisions.md D3).
+mtls-up:
+	@mkdir -p .run/step-ca
+	@[ -f .run/step-ca/password.txt ] || openssl rand -base64 32 > .run/step-ca/password.txt
+	@if podman container exists omp-step-ca; then \
+		podman start omp-step-ca; \
+	else \
+		podman run -d --name omp-step-ca --restart=always \
+			--userns=keep-id \
+			-p 9000:9000 \
+			-v $(CURDIR)/.run/step-ca:/home/step \
+			-e DOCKER_STEPCA_INIT_NAME="OpenMediaPlatform Dev CA" \
+			-e DOCKER_STEPCA_INIT_DNS_NAMES="localhost,127.0.0.1" \
+			-e DOCKER_STEPCA_INIT_PROVISIONER_NAME="omp-dev" \
+			-e DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/password.txt \
+			docker.io/smallstep/step-ca:latest; \
+	fi
+	@echo "Warte auf step-ca-Initialisierung..."
+	@for i in $$(seq 1 20); do \
+		[ -f .run/step-ca/certs/root_ca.crt ] && break; \
+		sleep 1; \
+	done
+	@[ -f .run/step-ca/certs/root_ca.crt ] || (echo "step-ca nicht rechtzeitig initialisiert, 'podman logs omp-step-ca' prüfen" >&2; exit 1)
+	@echo "step-ca bereit: https://localhost:9000, Root-CA .run/step-ca/certs/root_ca.crt"
+
+mtls-down:
+	-podman stop omp-step-ca
+	-podman rm omp-step-ca
+
+# Stellt Dev-Zertifikate für Orchestrator + Mock-Node aus (braucht
+# 'make mtls-up' zuerst). Danach: OMP_MTLS_ENABLED=true beim Start beider
+# Prozesse setzen (deploy/dev/mtls-issue-cert.sh dokumentiert die Pfade).
+mtls-issue-certs:
+	@./deploy/dev/mtls-issue-cert.sh orchestrator .run/mtls/orchestrator.crt .run/mtls/orchestrator.key
+	@./deploy/dev/mtls-issue-cert.sh mock-node .run/mtls/mock-node.crt .run/mtls/mock-node.key localhost 127.0.0.1
 
 ci: check

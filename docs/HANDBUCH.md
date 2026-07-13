@@ -50,6 +50,34 @@ Launcher-Zustand (C8) und `role-bindings.json` (C13) in Benutzung.
 
 Log des Orchestrators: `.run/orchestrator.log` (nicht versioniert).
 
+### 2.1 Optional: mTLS Orchestrator↔Nodes (D3)
+
+Standardmäßig **aus** — der Schnellstart oben braucht nichts davon, alle
+Flows funktionieren unverändert per Klartext-HTTP. Zum Ausprobieren von
+mTLS (`ARCHITECTURE.md` §4.6):
+
+```sh
+make mtls-up            # startet step-ca (eigene interne CA), separat von "make up"
+make mtls-issue-certs    # stellt Dev-Zertifikate für Orchestrator + Mock-Node aus
+OMP_MTLS_ENABLED=true ./deploy/dev/start-omp.sh
+OMP_MTLS_ENABLED=true OMP_MTLS_CERT_FILE=.run/mtls/mock-node.crt \
+  OMP_MTLS_KEY_FILE=.run/mtls/mock-node.key OMP_MTLS_CA_FILE=.run/mtls/root_ca.crt \
+  nodes/mock/mock --label "Mock (mTLS)" --port 9001
+```
+
+Ein Node mit aktiviertem mTLS registriert sich mit `https://`-href und
+verlangt ein gültiges Client-Zertifikat derselben CA für **jeden**
+Zugriff (auch `curl` ohne Zertifikat wird abgewiesen) — der generische
+Orchestrator-Proxy funktioniert unverändert, weil er automatisch den
+passenden (mTLS-fähigen oder Klartext-)Client für die jeweilige
+`http://`-/`https://`-Node-Adresse verwendet; ein gemischter Bestand aus
+mTLS- und Klartext-Nodes funktioniert gleichzeitig. Zertifikate sind
+23h gültig (step-ca-Default-Limit) — für eine längere Sitzung
+`make mtls-issue-certs` erneut ausführen. Nur `nodes/mock` (Go)
+unterstützt mTLS bisher — die Rust-`omp-node-sdk`-Nodes noch nicht
+(`docs/decisions.md` D3, verbleibender Scope). `make mtls-down` stoppt
+den CA-Container wieder (separat von `make down`).
+
 ## 3. Erste Schritte in der GUI
 
 - Der Flow-Editor zeigt zunächst einen leeren Graphen — noch keine Nodes

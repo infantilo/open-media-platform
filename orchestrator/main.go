@@ -21,6 +21,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -66,6 +67,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// mTLS Orchestrator↔Nodes (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) —
+	// opt-in über cfg.MTLSEnabled, Default aus. Ein nicht erreichbares
+	// Zertifikat bei aktiviertem mTLS ist ein harter Fehler (ähnlich
+	// Postgres oben): mit OMP_MTLS_ENABLED=true, aber kaputter Cert-
+	// Konfiguration still auf Klartext zurückzufallen wäre die
+	// gefährlichere Variante (sieht sicher aus, ist es nicht) — der
+	// Registry-Poller (unten) betrifft die NMOS-Registry, nicht "unsere"
+	// Nodes, bleibt bewusst außerhalb dieses Schritts (docs/decisions.md
+	// D3).
+	nodeTLSConfig, err := mtls.ClientTLSConfig(mtls.Config{
+		Enabled:  cfg.MTLSEnabled,
+		CertFile: cfg.MTLSCertFile,
+		KeyFile:  cfg.MTLSKeyFile,
+		CAFile:   cfg.MTLSCAFile,
+	})
+	if err != nil {
+		slog.Error("mtls config failed", "error", err)
+		os.Exit(1)
+	}
+	nodeHTTPClient := http.DefaultClient
+	if nodeTLSConfig != nil {
+		nodeHTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: nodeTLSConfig}}
+		slog.Info("mtls enabled for orchestrator-to-node requests")
+	}
+
 	store := registry.NewStore()
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
 	poller.HealthTracker = healthTracker
@@ -80,9 +106,9 @@ func main() {
 	}
 	go poller.Run(ctx)
 
-	graphSvc := graph.NewService(store, is05.NewClient(nil), hub)
+	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
 	layoutStore := layouts.NewStore(database)
-	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(database))
+	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(database), nodeHTTPClient)
 
 	catalog, err := launcher.LoadCatalog(cfg.CatalogPath)
 	if err != nil {
@@ -93,7 +119,7 @@ func main() {
 
 	consoleResolver := consoles.NewResolver(consoles.NewStore(filepath.Join(cfg.DataDir, "role-bindings.json")))
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

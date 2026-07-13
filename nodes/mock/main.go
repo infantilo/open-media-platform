@@ -16,6 +16,7 @@ import (
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/health"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/idgen"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/is04"
+	"github.com/infantilo/openmediaplatform/nodes/mock/internal/mtls"
 	"github.com/infantilo/openmediaplatform/nodes/mock/internal/uibundle"
 )
 
@@ -38,6 +39,26 @@ func main() {
 	natsURL := getEnv("OMP_NATS_URL", "nats://localhost:4222")
 	host := getEnv("OMP_MOCK_HOST", "127.0.0.1")
 
+	// mTLS (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) — opt-in, Default aus
+	// (siehe orchestrator/internal/config.go für dieselben Variablennamen
+	// auf der Orchestrator-Seite). tlsConfig ist nil, wenn deaktiviert —
+	// der Node startet dann unverändert per http.ListenAndServe wie vor D3.
+	mtlsEnabled := getEnv("OMP_MTLS_ENABLED", "false") == "true"
+	tlsConfig, err := mtls.ServerTLSConfig(mtls.Config{
+		Enabled:  mtlsEnabled,
+		CertFile: getEnv("OMP_MTLS_CERT_FILE", "../../.run/mtls/mock-node.crt"),
+		KeyFile:  getEnv("OMP_MTLS_KEY_FILE", "../../.run/mtls/mock-node.key"),
+		CAFile:   getEnv("OMP_MTLS_CA_FILE", "../../.run/mtls/root_ca.crt"),
+	})
+	if err != nil {
+		slog.Error("mtls config failed", "error", err)
+		os.Exit(1)
+	}
+	protocol := "http"
+	if tlsConfig != nil {
+		protocol = "https"
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -53,7 +74,7 @@ func main() {
 		receiverIDs[i] = idgen.NewV4()
 	}
 
-	node := is04.NewNode(nodeID, *label, host, *port)
+	node := is04.NewNode(nodeID, *label, host, *port, protocol)
 	device := is04.NewDevice(deviceID, *label+" Device", nodeID, senderIDs, receiverIDs)
 
 	senderResources := make([]is04.Sender, len(senderIDs))
@@ -99,9 +120,21 @@ func main() {
 
 	go func() {
 		addr := fmt.Sprintf(":%d", *port)
-		slog.Info("mock node http api listening", "addr", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			slog.Error("mock node http api stopped", "error", err)
+		var serveErr error
+		if tlsConfig != nil {
+			slog.Info("mock node https (mTLS) api listening", "addr", addr)
+			srv := &http.Server{Addr: addr, Handler: mux, TLSConfig: tlsConfig}
+			// Zertifikat/Key sind bereits in tlsConfig geladen
+			// (mtls.ServerTLSConfig) — leere Pfade weisen
+			// ListenAndServeTLS an, ausschließlich srv.TLSConfig zu
+			// verwenden statt selbst erneut von Datei zu laden.
+			serveErr = srv.ListenAndServeTLS("", "")
+		} else {
+			slog.Info("mock node http api listening", "addr", addr)
+			serveErr = http.ListenAndServe(addr, mux)
+		}
+		if serveErr != nil {
+			slog.Error("mock node http api stopped", "error", serveErr)
 		}
 	}()
 

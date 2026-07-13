@@ -13,7 +13,13 @@ import (
 // ersetzt wird. Der Orchestrator kennt dabei nur Standard-IS-04-Adressen
 // (NodeLister.Get liefert die API-Basis-URL aus dem Node-Resource) —
 // keine Node-Typ-Kenntnis (UMSETZUNG.md A8, ARCHITECTURE.md §2/§11.1).
-func handleNodeProxy(nodes NodeLister, pathTemplate string) http.HandlerFunc {
+// client ist der (ggf. mTLS-fähige, UMSETZUNG.md D3) HTTP-Client für
+// Node-Aufrufe — nil bedeutet http.DefaultClient (unverändertes
+// Verhalten ohne mTLS).
+func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string) http.HandlerFunc {
+	if client == nil {
+		client = http.DefaultClient
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		node, ok := nodes.Get(r.PathValue("id"))
 		if !ok {
@@ -39,7 +45,7 @@ func handleNodeProxy(nodes NodeLister, pathTemplate string) http.HandlerFunc {
 			req.Header.Set("Content-Type", ct)
 		}
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			http.Error(w, "node unreachable: "+err.Error(), http.StatusBadGateway)
 			return

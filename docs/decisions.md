@@ -3272,3 +3272,106 @@ Entrypoint-Override, Tool-Aufruf, Auswertung) sind aber exakt die zuvor
 lokal gegen Podman verifizierten Befehle, nur mit `docker` statt
 `podman` (auf GitHub-Actions-Ubuntu-Runnern vorinstalliert) — der erste
 tatsächliche Push/PR-Lauf ist die verbleibende Nagelprobe.
+
+## 2026-07-13 — D3 Teil 1 (mTLS Orchestrator↔Nodes): Scope-Split begründet, drei echte Bugs im Live-Test gefunden
+
+**Kontext:** Letzter offener Punkt der Status-Checkliste war D3 („step-ca
++ mTLS Orchestrator↔Nodes, IS-10/OAuth2 für die UI"). Vor Beginn geprüft:
+bündelt drei große, unabhängige Themen (mTLS-Transport, IS-10/OAuth2-
+Nutzer-Auth, §12-Rollenmodell). Arbeitsregel „genau ein Schritt pro
+Sitzung" plus die reale Größe jedes Einzelthemas (mTLS allein berührt
+zwei Sprachen × N Node-Typen) sprachen gegen einen Versuch, alles auf
+einmal zu bauen.
+
+**Scope-Split-Begründung:** `ARCHITECTURE.md` §18.3 (Host-Agent-
+Bootstrap, für D6/D7 vorgesehen) setzt step-ca bereits als gegeben
+voraus („bekommt … ein mTLS-Client-Zertifikat von step-ca ausgestellt —
+dasselbe … Muster, das step-ca für Orchestrator↔Node ohnehin schon
+vorsieht") — mTLS ist damit eine Voraussetzung für spätere Schritte.
+IS-10/OAuth2 und das §12-Rollenmodell blockieren dagegen nichts
+Bestehendes: die C13-Rollen-Stub-Prüfung funktioniert unverändert weiter.
+Deshalb: dieser Schritt deckt nur mTLS Orchestrator↔Nodes ab, IS-10/
+OAuth2 + §12 bleiben als D3 Teil 2 offen (`UMSETZUNG.md` aktualisiert).
+
+**Weitere, während der Umsetzung gezogene Scope-Grenze:** nur die
+Go-Seite (Orchestrator-Client, `nodes/mock`-Server). Der
+Rust-`omp-node-sdk`-Server nutzt `tiny_http`, das kein TLS eingebaut hat
+— eine echte Lösung bräuchte entweder eine TLS-Terminierungsschicht
+davor oder einen Bibliothekswechsel, und würde potenziell alle zehn
+Rust-Node-Typen gleichzeitig berühren (hohes Blast-Radius-Risiko für
+bereits verifizierte Demo-1–4-Flows). Bewusst nicht in dieser Sitzung
+riskiert, klar als Restscope dokumentiert statt still ausgelassen.
+
+**Design-Entscheidung „opt-in, Default aus":** `OMP_MTLS_ENABLED` schützt
+alle bisher verifizierten Flows — ohne die Variable verhält sich der
+Orchestrator exakt wie vor D3. Der Orchestrator-Client wählt automatisch
+zwischen mTLS und Klartext anhand des Schemas im Node-`href`
+(`http://`/`https://`), ein gemischter Bestand aus mTLS- und
+Klartext-Nodes (unvermeidlich, solange nur `nodes/mock` mTLS kann)
+funktioniert dadurch ohne Sonderfall-Code gleichzeitig.
+
+**Drei reale Probleme, alle erst durch echten Live-Test sichtbar
+geworden** (Muster wiederholt sich aus früheren Schritten — Mocks/
+Unit-Tests allein hätten keinen davon gefunden):
+
+1. **Rootless-Podman-Bind-Mount-Berechtigung:** step-ca lief als
+   nicht-root-Nutzer im Container, konnte aber nicht in das
+   host-bind-gemountete `.run/step-ca` schreiben
+   (`/entrypoint.sh: line 53: /home/step/password: Permission denied`,
+   in einer Endlosschleife). Ursache: UID-Mismatch zwischen Container-
+   internem Nutzer und Host-Nutzer bei rootless Podman ohne explizite
+   User-Namespace-Abbildung. Behoben mit `--userns=keep-id` (Standard-
+   Podman-Fix für genau diesen Fall) — sowohl beim step-ca-Container
+   selbst als auch beim separaten Wegwerf-Container in
+   `mtls-issue-cert.sh` (derselbe Fehler trat dort für das **Lesen**
+   der CA-Konfiguration erneut auf, bis auch dort gesetzt).
+2. **step-ca lehnt lange Zertifikatslaufzeiten ab:** ein Versuch mit
+   `--not-after 2160h` (90 Tage) wurde mit „more than the authorized
+   maximum certificate duration of 24h1m0s" abgelehnt —
+   `authority.claims.maxTLSCertDuration` in `ca.json` steht per Default
+   auf 24h. Skript auf `--not-after 23h` angepasst; eine echte
+   Erneuerungs-Automatik (`step ca renew --daemon` o. Ä.) oder eine
+   angehobene `maxTLSCertDuration` bleiben für einen Produktionsbetrieb
+   offener Scope, für eine Dev-/Verifikationssitzung reicht das
+   knapp-24h-Zertifikat.
+3. **Echter Bug, kein Test-Artefakt — SAN/Hostname-Mismatch:** das
+   erste ausgestellte Node-Zertifikat trug nur das Label
+   ("mock-node") als Subject/SAN. Ein `curl`-Test **vor** der
+   Erfolgsmeldung (nicht danach, um genau diese Art Fehler nicht zu
+   übersehen) deckte auf: „SSL: no alternative certificate subject
+   name matches target host name 'localhost'" — dasselbe Problem hätte
+   den echten Orchestrator-Proxy identisch getroffen, da Go's
+   `crypto/tls` genauso den `ServerName` gegen die Zertifikats-SANs
+   prüft. Behoben durch zusätzliche `--san localhost --san 127.0.0.1`-
+   Parameter im Ausstellungs-Skript (`mtls-issue-cert.sh` nimmt jetzt
+   optionale Extra-SAN-Argumente).
+
+**Verifiziert (echte Prozesse, nicht nur curl-Simulation):**
+1. Unautorisierter Zugriff: `curl -k` ohne Client-Zertifikat gegen
+   einen mTLS-aktivierten Mock-Node → TLS-Verbindungsabbruch
+   (`bad certificate` serverseitig geloggt).
+2. Autorisierter Zugriff **über den echten Orchestrator-Proxy-
+   Codepfad**, nicht nur curl-Emulation: `GET
+   /api/v1/nodes/<id>/descriptor` und `PATCH
+   /api/v1/nodes/<id>/params/gain` über den laufenden Orchestrator
+   (mit `OMP_MTLS_ENABLED=true`) gegen den mTLS-Node erfolgreich.
+3. Gemischter Bestand: derselbe mTLS-aktivierte Orchestrator sprach
+   gleichzeitig erfolgreich einen **Klartext**-Mock-Node an (kein
+   Sonderfall-Code nötig, `http.Transport` wählt TLS nur für
+   `https://`-Ziele).
+4. Default (mTLS aus): Orchestrator ohne `OMP_MTLS_ENABLED` verhält
+   sich exakt wie vor D3 (kein „mtls enabled"-Log, Klartext-Node
+   weiterhin erreichbar) — keine Regression für die bereits
+   verifizierten Demo-1–4-Flows.
+5. `go vet`/`go test` für `orchestrator` und `nodes/mock` grün,
+   inklusive neuer `internal/mtls`-Pakete (Zertifikate für Unit-Tests
+   zur Laufzeit selbst erzeugt, kein externer step-ca nötig, um die
+   Kernlogik zu testen).
+
+**Ergebnis:** `orchestrator/internal/mtls` (Client-TLS),
+`nodes/mock/internal/mtls` (Server-TLS, `ClientAuth:
+RequireAndVerifyClientCert`), `make mtls-up`/`mtls-down`/
+`mtls-issue-certs` (von `make up`/`down` bewusst getrennt, da opt-in),
+`deploy/dev/mtls-issue-cert.sh`, `deploy/quadlets/omp-step-ca.container`
+als Produktions-Referenz. D3 Teil 2 (IS-10/OAuth2, §12-Rollenmodell)
+bleibt offener, noch nicht terminierter Schritt.

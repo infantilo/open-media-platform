@@ -1047,9 +1047,64 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   einzeln benannt, kein stilles Ignorieren. CI-Job
   `amwa-nmos-testing` (`.github/workflows/ci.yml`) nicht mehr
   deaktiviert, lädt die Ergebnisdatei zusätzlich als Artefakt hoch.
-- **D3** step-ca + mTLS Orchestrator↔Nodes, IS-10/OAuth2 für die UI;
-  Verifikation: unautorisierter Zugriff wird abgewiesen, Flows
-  funktionieren mit Token.
+- **D3 (Teil 1: mTLS, erledigt, 2026-07-13)** step-ca + mTLS
+  Orchestrator↔Nodes. **Scope-Entscheidung:** D3 bündelte ursprünglich
+  drei Themen (mTLS, IS-10/OAuth2 für die UI, §12-Rollenmodell) — dieser
+  Schritt deckt nur mTLS ab, weil §18.3 (Host-Agent-Bootstrap) mTLS/
+  step-ca bereits als Voraussetzung voraussetzt, während IS-10/§12 nichts
+  Bestehendes blockieren (die C13-Rollen-Stub funktioniert weiter unver-
+  ändert). IS-10/OAuth2 + §12-Rollenmodell bleiben offener D3-Restscope
+  (Teil 2, noch nicht terminiert).
+
+  **Weitere Scope-Grenze innerhalb "mTLS":** nur die Go-Seite
+  (Orchestrator-Client + `nodes/mock`-Server) — der Rust-`omp-node-sdk`-
+  Server (`tiny_http`, kein eingebautes TLS) bräuchte eine eigene,
+  größere Ausbaustufe (TLS-Terminierung + neue Dependency), betrifft
+  potenziell alle 10 Rust-Node-Typen gleichzeitig; bewusst nicht in
+  diesem Schritt riskiert. mTLS ist durchgehend **opt-in**
+  (`OMP_MTLS_ENABLED`, Default aus) — alle bisher verifizierten Flows
+  laufen unverändert ohne Zertifikate weiter, ein gemischter Bestand aus
+  mTLS- und Klartext-Nodes funktioniert gleichzeitig (der Orchestrator-
+  Client wählt automatisch anhand des `http://`/`https://`-Schemas im
+  Node-`href`).
+
+  **Umsetzung:** step-ca (`smallstep/step-ca`) als eigener, von `make up`
+  getrennter Dev-Service (`make mtls-up`) — getrennt, weil mTLS opt-in
+  ist und der normale Dev-Workflow keinen CA-Container braucht.
+  `deploy/dev/mtls-issue-cert.sh` stellt Zertifikate über einen
+  Wegwerf-Container aus (`step`-CLI ist im offiziellen step-ca-Image
+  bereits enthalten, verifiziert — kein `step`-CLI auf dem Host nötig,
+  gleiches Muster wie das AMWA NMOS Testing Tool, D2). Neue Pakete
+  `orchestrator/internal/mtls` (Client-TLS-Config) und
+  `nodes/mock/internal/mtls` (Server-TLS-Config,
+  `ClientAuth: RequireAndVerifyClientCert`) — kein Cross-Modul-Import
+  (getrennte Go-Module), bewusste kleine Duplikation statt eines dritten
+  Moduls.
+
+  **Drei reale Probleme beim Live-Test gefunden, nicht vorhergesehen**
+  (Details siehe `docs/decisions.md` 2026-07-13): (1) Rootless-Podman-
+  Bind-Mount-Berechtigungsfehler beim Schreiben in `.run/step-ca` —
+  behoben mit `--userns=keep-id`. (2) step-ca lehnt Zertifikate länger
+  als 24h ab (`maxTLSCertDuration`-Default) — Skript auf 23h angepasst,
+  echte Erneuerungs-Automatik bleibt offener Scope. (3) **Echter Bug,
+  nicht nur Test-Artefakt:** ein mit dem bloßen Node-Label als Subject
+  ausgestelltes Server-Zertifikat hat keine zum tatsächlichen
+  Verbindungs-Hostnamen (`127.0.0.1`/`localhost`) passenden SANs — jeder
+  TLS-Client (auch der Orchestrator selbst) hätte die Server-Hostname-
+  Verifikation verweigert. Gefunden durch einen echten `curl`-Test
+  **vor** der Erfolgsmeldung, nicht danach — behoben durch `--san`-
+  Parameter im Ausstellungs-Skript.
+
+  **Verifiziert (echte Prozesse, nicht nur Unit-Tests):** unautorisierter
+  Zugriff abgewiesen (`curl` ohne Client-Zertifikat gegen einen mTLS-
+  Node → Verbindungsabbruch); autorisierter Zugriff über den **echten
+  Orchestrator-Proxy-Codepfad** (nicht nur curl-Emulation) erfolgreich
+  (GET descriptor, PATCH param); gemischter Bestand aus mTLS- und
+  Klartext-Node gleichzeitig funktionsfähig; Default (mTLS aus) exakt
+  wie vor D3 — kein Regressionsrisiko für die bereits verifizierten
+  Demo-1–4-Flows. `go vet`/`go test` für beide Module grün (neue
+  `mtls`-Pakete inkl. Zertifikats-Generierung in den Unit-Tests, kein
+  externer step-ca für reine Unit-Tests nötig).
 - **D4** `omp-mediaio`: 2110-Implementierung (Software, `st2110`-fähige
   GStreamer-Elemente) + SRT-Gateway-Node; Verifikation soweit ohne
   Spezial-Hardware möglich (Loopback, Interop mit ffmpeg/OBS). MXL selbst
@@ -1122,3 +1177,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |
+| D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |
+| D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | offen | | |

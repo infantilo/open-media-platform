@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenMediaPlatform interne CA für mTLS Orchestrator<->Nodes (UMSETZUNG.md D3)
+After=network-online.target
+
+[Container]
+Image=docker.io/smallstep/step-ca:latest
+ContainerName=omp-step-ca
+# DOCKER_STEPCA_INIT_PASSWORD_FILE zeigt in Produktion auf ein echtes
+# Secret (z. B. Podman-Secret/Vault), nicht auf die im Dev-Fallback per
+# `make mtls-up` erzeugte Klartext-Datei.
+Environment=DOCKER_STEPCA_INIT_NAME=OpenMediaPlatform CA
+Environment=DOCKER_STEPCA_INIT_DNS_NAMES=step-ca.internal
+Environment=DOCKER_STEPCA_INIT_PROVISIONER_NAME=omp
+Environment=DOCKER_STEPCA_INIT_PASSWORD_FILE=/home/step/password.txt
+Volume=omp-step-ca-data:/home/step
+PublishPort=9000:9000
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

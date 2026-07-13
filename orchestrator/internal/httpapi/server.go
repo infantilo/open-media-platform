@@ -101,19 +101,21 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog, /api/v1/instances,
 // /api/v1/me/consoles und statisches Serving von cfg.UIDir unter / (inkl.
 // SPA-Fallback für die Kiosk-Routen /console/<workflowId>/<nodeRoleId>,
-// ARCHITECTURE.md §14).
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver) http.Handler {
+// ARCHITECTURE.md §14). nodeClient ist der (ggf. mTLS-fähige,
+// UMSETZUNG.md D3) HTTP-Client für den generischen Node-Proxy — nil
+// bedeutet http.DefaultClient.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
 	mux.HandleFunc("GET /api/v1/nodes", handleNodes(nodes))
 	mux.HandleFunc("GET /api/v1/events", handleEvents(events))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", handleNodeProxy(nodes, "/descriptor.json"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
-	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, "/params/{name}"))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, "/methods/{name}"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", handleNodeProxy(nodes, "/ui/manifest.json"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", handleNodeProxy(nodes, "/ui/bundle.js"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", handleNodeProxy(nodes, nodeClient, "/descriptor.json"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, nodeClient, "/params/{name}"))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, nodeClient, "/params/{name}"))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, nodeClient, "/methods/{name}"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", handleNodeProxy(nodes, nodeClient, "/ui/manifest.json"))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", handleNodeProxy(nodes, nodeClient, "/ui/bundle.js"))
 	mux.HandleFunc("GET /api/v1/graph", handleGraph(graphSvc))
 	mux.HandleFunc("POST /api/v1/graph/edges", handlePostGraphEdge(graphSvc))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))

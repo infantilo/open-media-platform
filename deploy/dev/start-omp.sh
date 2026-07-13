@@ -55,6 +55,13 @@ echo "==> Orchestrator starten"
 export OMP_UI_DIR="$ROOT_DIR/ui"
 export OMP_DATA_DIR="$ROOT_DIR/data"
 export OMP_CATALOG_PATH="$ROOT_DIR/deploy/catalog.json"
+# mTLS (UMSETZUNG.md D3) ist per Default aus (OMP_MTLS_ENABLED unten nur
+# gesetzt, falls schon in der aufrufenden Shell exportiert) — die
+# Pfad-Variablen selbst müssen trotzdem immer absolut sein, aus demselben
+# Grund wie oben (relative Defaults gelten für orchestrator/ als cwd).
+export OMP_MTLS_CERT_FILE="${OMP_MTLS_CERT_FILE:-$ROOT_DIR/.run/mtls/orchestrator.crt}"
+export OMP_MTLS_KEY_FILE="${OMP_MTLS_KEY_FILE:-$ROOT_DIR/.run/mtls/orchestrator.key}"
+export OMP_MTLS_CA_FILE="${OMP_MTLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
 nohup "$BIN" > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 

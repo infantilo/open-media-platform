@@ -8,7 +8,7 @@ import (
 var macPattern = regexp.MustCompile(`^([0-9a-f]{2}-){5}([0-9a-f]{2})$`)
 
 func TestNewNodeHasValidInterface(t *testing.T) {
-	n := NewNode("node-1", "Mock", "127.0.0.1", 9001)
+	n := NewNode("node-1", "Mock", "127.0.0.1", 9001, "http")
 
 	if len(n.Interfaces) != 1 {
 		t.Fatalf("len(Interfaces) = %d, want 1", len(n.Interfaces))
@@ -22,6 +22,17 @@ func TestNewNodeHasValidInterface(t *testing.T) {
 	}
 	if len(n.API.Endpoints) != 1 || n.API.Endpoints[0].Port != 9001 {
 		t.Errorf("API.Endpoints = %+v, want one endpoint on port 9001", n.API.Endpoints)
+	}
+}
+
+func TestNewNodeUsesGivenProtocolInHrefAndEndpoint(t *testing.T) {
+	n := NewNode("node-1", "Mock", "127.0.0.1", 9001, "https")
+
+	if n.Href != "https://127.0.0.1:9001/" {
+		t.Errorf("Href = %q, want %q", n.Href, "https://127.0.0.1:9001/")
+	}
+	if len(n.API.Endpoints) != 1 || n.API.Endpoints[0].Protocol != "https" {
+		t.Errorf("API.Endpoints = %+v, want Protocol=https", n.API.Endpoints)
 	}
 }
 

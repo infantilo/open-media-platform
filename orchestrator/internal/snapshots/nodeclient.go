@@ -35,8 +35,16 @@ type httpNodeClient struct {
 	httpClient *http.Client
 }
 
-func newHTTPNodeClient() *httpNodeClient {
-	return &httpNodeClient{httpClient: http.DefaultClient}
+// newHTTPNodeClient erstellt einen Client für die Node-Aufrufe. httpClient
+// darf nil sein (http.DefaultClient wird dann verwendet) — Aufrufer
+// übergibt hier den ggf. mTLS-fähigen Client (UMSETZUNG.md D3), damit
+// Create/Apply dieselbe Client-Authentifizierung wie der generische
+// Node-Proxy verwenden.
+func newHTTPNodeClient(httpClient *http.Client) *httpNodeClient {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &httpNodeClient{httpClient: httpClient}
 }
 
 // GetWritableParams liefert die Namen aller nicht schreibgeschützten
