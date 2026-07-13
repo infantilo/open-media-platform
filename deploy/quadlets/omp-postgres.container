@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenMediaPlatform Persistenz (PostgreSQL, UMSETZUNG.md D1)
+After=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:16-alpine
+ContainerName=omp-postgres
+Environment=POSTGRES_USER=omp
+Environment=POSTGRES_PASSWORD=omp
+Environment=POSTGRES_DB=omp
+Volume=omp-postgres-data:/var/lib/postgresql/data
+PublishPort=5432:5432
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

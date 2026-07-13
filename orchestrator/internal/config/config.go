@@ -23,13 +23,22 @@ type Config struct {
 	// (UMSETZUNG.md C8) — Node-Typen, die sich aus der GUI heraus
 	// starten lassen.
 	CatalogPath string
+	// PostgresURL ist die Verbindungs-DSN für Layouts/Snapshots
+	// (UMSETZUNG.md D1, ARCHITECTURE.md §4.4) — ersetzt das bisherige
+	// Datei-Backend unterhalb von DataDir für genau diese zwei Stores.
+	// DataDir bleibt für den Instanz-Launcher-Zustand (C8, PID-gebundene
+	// Laufzeit-Bookkeeping, kein Metadaten-Persistenz-Fall) und
+	// role-bindings.json (handgepflegt wie deploy/catalog.json, C13)
+	// unverändert bestehen — Begründung siehe docs/decisions.md D1.
+	PostgresURL string
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
-// OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR, OMP_DATA_DIR und
-// OMP_CATALOG_PATH; fehlende Werte fallen auf Defaults für den lokalen
-// Dev-Betrieb zurück (Registry/NATS-Ports aus UMSETZUNG.md A2/A3, alle
-// Pfade relativ zum orchestrator/-Arbeitsverzeichnis).
+// OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR, OMP_DATA_DIR,
+// OMP_CATALOG_PATH und OMP_POSTGRES_URL; fehlende Werte fallen auf
+// Defaults für den lokalen Dev-Betrieb zurück (Registry/NATS-Ports aus
+// UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade relativ zum
+// orchestrator/-Arbeitsverzeichnis).
 func Load() Config {
 	return Config{
 		Listen:      getEnv("OMP_LISTEN", ":8000"),
@@ -38,6 +47,7 @@ func Load() Config {
 		UIDir:       getEnv("OMP_UI_DIR", "../ui"),
 		DataDir:     getEnv("OMP_DATA_DIR", "../data"),
 		CatalogPath: getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
+		PostgresURL: getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
 	}
 }
 

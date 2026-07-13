@@ -9,6 +9,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMP_UI_DIR", "")
 	t.Setenv("OMP_DATA_DIR", "")
 	t.Setenv("OMP_CATALOG_PATH", "")
+	t.Setenv("OMP_POSTGRES_URL", "")
 
 	cfg := Load()
 
@@ -30,6 +31,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CatalogPath != "../deploy/catalog.json" {
 		t.Errorf("CatalogPath = %q, want %q", cfg.CatalogPath, "../deploy/catalog.json")
 	}
+	if want := "postgres://omp:omp@localhost:5432/omp?sslmode=disable"; cfg.PostgresURL != want {
+		t.Errorf("PostgresURL = %q, want %q", cfg.PostgresURL, want)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -39,6 +43,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OMP_UI_DIR", "/srv/omp/ui")
 	t.Setenv("OMP_DATA_DIR", "/srv/omp/data")
 	t.Setenv("OMP_CATALOG_PATH", "/srv/omp/catalog.json")
+	t.Setenv("OMP_POSTGRES_URL", "postgres://user:pw@db.example:5432/omp")
 
 	cfg := Load()
 
@@ -59,5 +64,8 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.CatalogPath != "/srv/omp/catalog.json" {
 		t.Errorf("CatalogPath = %q, want %q", cfg.CatalogPath, "/srv/omp/catalog.json")
+	}
+	if want := "postgres://user:pw@db.example:5432/omp"; cfg.PostgresURL != want {
+		t.Errorf("PostgresURL = %q, want %q", cfg.PostgresURL, want)
 	}
 }

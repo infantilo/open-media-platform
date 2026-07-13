@@ -1,28 +1,28 @@
 package snapshots
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 )
 
 // ErrNotFound wird geliefert, wenn kein Snapshot mit dieser ID existiert.
 var ErrNotFound = errors.New("snapshots: not found")
 
-// Store liest/schreibt Snapshots als eine JSON-Datei pro Snapshot
-// unterhalb von dir. IDs werden serverseitig erzeugt (siehe service.go),
-// daher keine Path-Traversal-Prüfung nötig wie bei layouts.Store
-// (dortiger Name kommt vom Client).
+// Store liest/schreibt Snapshots in der `snapshots`-Tabelle
+// (internal/db/migrations/0001_init.sql, UMSETZUNG.md D1 — ersetzt das
+// ursprüngliche Datei-Backend, eine JSON-Datei pro Snapshot). `created_at`
+// ist eine echte Spalte (statt nur Teil des JSONB-Blobs), weil List()
+// danach sortiert — ein Index darauf ersetzt das frühere In-Memory-Sort
+// über alle gelesenen Dateien.
 type Store struct {
-	dir string
+	db *sql.DB
 }
 
-// NewStore erstellt einen Store, der Dateien unterhalb von dir ablegt.
-func NewStore(dir string) *Store {
-	return &Store{dir: dir}
+// NewStore erstellt einen Store auf der gegebenen, bereits migrierten
+// Datenbankverbindung (internal/db.Connect + db.Migrate, main.go).
+func NewStore(database *sql.DB) *Store {
+	return &Store{db: database}
 }
 
 // Put speichert (oder überschreibt) einen Snapshot.
@@ -31,16 +31,18 @@ func (s *Store) Put(snap Snapshot) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(s.path(snap.ID), data, 0o644)
+	_, err = s.db.Exec(`
+		INSERT INTO snapshots (id, created_at, data) VALUES ($1, $2, $3)
+		ON CONFLICT (id) DO UPDATE SET created_at = EXCLUDED.created_at, data = EXCLUDED.data
+	`, snap.ID, snap.CreatedAt, data)
+	return err
 }
 
 // Get liest einen einzelnen Snapshot.
 func (s *Store) Get(id string) (Snapshot, error) {
-	data, err := os.ReadFile(s.path(id))
-	if errors.Is(err, os.ErrNotExist) {
+	var data []byte
+	err := s.db.QueryRow(`SELECT data FROM snapshots WHERE id = $1`, id).Scan(&data)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Snapshot{}, ErrNotFound
 	}
 	if err != nil {
@@ -55,22 +57,17 @@ func (s *Store) Get(id string) (Snapshot, error) {
 
 // List liefert alle gespeicherten Snapshots, älteste zuerst.
 func (s *Store) List() ([]Snapshot, error) {
-	entries, err := os.ReadDir(s.dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return []Snapshot{}, nil
-	}
+	rows, err := s.db.Query(`SELECT data FROM snapshots ORDER BY created_at ASC`)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	snaps := []Snapshot{}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
-		if err != nil {
-			continue
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
 		}
 		var snap Snapshot
 		if err := json.Unmarshal(data, &snap); err != nil {
@@ -78,11 +75,8 @@ func (s *Store) List() ([]Snapshot, error) {
 		}
 		snaps = append(snaps, snap)
 	}
-
-	sort.Slice(snaps, func(i, j int) bool { return snaps[i].CreatedAt.Before(snaps[j].CreatedAt) })
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return snaps, nil
-}
-
-func (s *Store) path(id string) string {
-	return filepath.Join(s.dir, id+".json")
 }

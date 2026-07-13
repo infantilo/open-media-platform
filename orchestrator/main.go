@@ -13,6 +13,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
@@ -50,6 +51,21 @@ func main() {
 		defer nc.Close()
 	}
 
+	// Postgres ist ab hier hart erforderlich (anders als NATS oben, das
+	// best-effort degradiert) — Layouts/Snapshots (UMSETZUNG.md D1) haben
+	// ohne DB kein sinnvolles Fallback-Verhalten, ein halb funktionierender
+	// Orchestrator wäre irreführender als ein klarer Start-Abbruch.
+	database, err := db.Connect(cfg.PostgresURL)
+	if err != nil {
+		slog.Error("postgres connect failed", "error", err, "hint", "make up starten (startet u.a. Postgres)")
+		os.Exit(1)
+	}
+	defer database.Close()
+	if err := db.Migrate(database); err != nil {
+		slog.Error("postgres migration failed", "error", err)
+		os.Exit(1)
+	}
+
 	store := registry.NewStore()
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
 	poller.HealthTracker = healthTracker
@@ -65,8 +81,8 @@ func main() {
 	go poller.Run(ctx)
 
 	graphSvc := graph.NewService(store, is05.NewClient(nil), hub)
-	layoutStore := layouts.NewStore(filepath.Join(cfg.DataDir, "layouts"))
-	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(filepath.Join(cfg.DataDir, "snapshots")))
+	layoutStore := layouts.NewStore(database)
+	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(database))
 
 	catalog, err := launcher.LoadCatalog(cfg.CatalogPath)
 	if err != nil {

@@ -2,7 +2,10 @@ module github.com/infantilo/openmediaplatform/orchestrator
 
 go 1.26.4
 
-require github.com/nats-io/nats.go v1.52.0
+require (
+	github.com/lib/pq v1.12.3
+	github.com/nats-io/nats.go v1.52.0
+)
 
 require (
 	github.com/klauspost/compress v1.18.5 // indirect

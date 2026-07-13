@@ -988,8 +988,33 @@ MXL instance" — nicht behoben (Testhygiene, kein Code-Fix nötig).
 
 Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 
-- **D1** PostgreSQL (Quadlet) für Layouts/Snapshots/Config statt
-  Datei-Backend; Migrationen; Verifikation: Neustart-Persistenz.
+- **D1 (erledigt, 2026-07-13)** PostgreSQL (Quadlet-Referenz +
+  Podman-Dev-Fallback, gleiches Muster wie NATS/Registry) für Layouts
+  (B5) und Snapshots (B7) statt Datei-Backend; embedded SQL-Migrationen
+  (`orchestrator/internal/db`, kein Migrations-Framework — Minimal-
+  Dependency-Begründung siehe dortiger Docstring). **Scope-Entscheidung:**
+  „Config" aus der ursprünglichen Kurzfassung bezieht sich nicht auf
+  `role-bindings.json` (bleibt handgepflegt wie `deploy/catalog.json`,
+  echte D3-Rollenverwaltung folgt später) oder den Instanz-Launcher-
+  Zustand (`instances.json`, PID-gebundenes Laufzeit-Bookkeeping, kein
+  Metadaten-Persistenz-Fall) — beide bleiben bewusst datei-basiert, nur
+  Layouts/Snapshots wandern nach Postgres. `lib/pq` als einzige neue
+  Go-Dependency (reiner Wire-Protocol-Treiber, keine eigenen
+  Transitiv-Abhängigkeiten, gleiche Ausnahme-Kategorie wie `nats.go`).
+  Verifikation: `go test` grün gegen echtes Postgres (`make up`),
+  Neustart-Persistenz live geprüft (Layout + Snapshot über die API
+  angelegt, Orchestrator-Prozess neu gestartet, Postgres läuft durch —
+  beides exakt byte-/inhaltsgleich wieder da), Fail-Fast bei nicht
+  erreichbarem Postgres verifiziert (klare Fehlermeldung + Exit statt
+  stillem Weiterlaufen ohne Persistenz). Zwei echte Bugs beim Testen
+  gegen eine echte DB gefunden und behoben (Details siehe
+  `docs/decisions.md` 2026-07-13): ein `pg_advisory_lock` um
+  `Migrate()`, weil `CREATE TABLE IF NOT EXISTS` in Postgres nicht
+  race-frei gegen parallele Erstversuche ist (traf `go test ./...`, das
+  jedes Go-Paket als eigenen Prozess startet); `layouts.data` als
+  `JSON`-Spalte statt `JSONB`, weil JSONB Whitespace/Schlüsselreihenfolge
+  kanonisiert und damit die vom Datei-Backend gewohnte Byte-Treue
+  gebrochen hätte (für Snapshots unkritisch, dort JSONB belassen).
 - **D2** AMWA NMOS Testing Tool als CI-Container gegen Registry + Nodes;
   Verifikation: definierte Testliste grün, Abweichungen dokumentiert.
 - **D3** step-ca + mTLS Orchestrator↔Nodes, IS-10/OAuth2 für die UI;
@@ -1065,3 +1090,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
 | C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
+| D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |

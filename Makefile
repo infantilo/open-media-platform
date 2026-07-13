@@ -61,12 +61,22 @@ up:
 			-e RUN_NODE=FALSE \
 			docker.io/rhastie/nmos-cpp:latest; \
 	fi
+	@if podman container exists omp-postgres; then \
+		podman start omp-postgres; \
+	else \
+		podman run -d --name omp-postgres --restart=always \
+			-p 5432:5432 \
+			-e POSTGRES_USER=omp -e POSTGRES_PASSWORD=omp -e POSTGRES_DB=omp \
+			docker.io/library/postgres:16-alpine; \
+	fi
 
 down:
 	-podman stop omp-nats
 	-podman rm omp-nats
 	-podman stop omp-nmos-registry
 	-podman rm omp-nmos-registry
+	-podman stop omp-postgres
+	-podman rm omp-postgres
 
 # Einfacher Einstiegspunkt für die ganze Dev-Umgebung (docs/HANDBUCH.md):
 # NATS + NMOS-Registry (make up) + UI-Bundle + Orchestrator-Binary bauen,
@@ -87,5 +97,6 @@ status:
 	fi
 	@podman container exists omp-nats && echo "NATS: läuft" || echo "NATS: gestoppt"
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
+	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
 
 ci: check

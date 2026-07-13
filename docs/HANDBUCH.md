@@ -8,7 +8,7 @@ Hintergrund steht in `ARCHITECTURE.md`, der Implementierungsplan in
 
 - **Go** (aktuelle Version, siehe `docs/decisions.md` 2026-07-07)
 - **Deno** (für das UI-Bundle, kein Node/npm nötig)
-- **Podman** (rootless; startet NATS + NMOS-Registry als Container)
+- **Podman** (rootless; startet NATS + NMOS-Registry + PostgreSQL als Container)
 
 Nur für die Node-Contract-Demo-Services (`omp-source`/`-viewer`/
 `-switcher`, `nodes/`) zusätzlich nötig, **nicht** für den Orchestrator
@@ -26,7 +26,10 @@ make start
 ```
 
 Das macht in einem Schritt:
-1. NATS + NMOS-Registry als Podman-Container starten (`make up`, idempotent).
+1. NATS + NMOS-Registry + PostgreSQL als Podman-Container starten
+   (`make up`, idempotent). Der Orchestrator wendet seine SQL-
+   Migrationen (`orchestrator/internal/db`) beim Start automatisch an —
+   kein manueller Schema-Schritt nötig.
 2. UI-Bundle bauen (`make ui`).
 3. Orchestrator-Binary bauen (`orchestrator/` → `bin/omp-orchestrator`).
 4. Orchestrator im Hintergrund starten, auf `/healthz` warten.
@@ -35,11 +38,15 @@ Danach: **http://localhost:8000** im Browser öffnen — das ist die
 Flow-Editor-Shell.
 
 ```sh
-make status   # kurzer Überblick: Orchestrator/NATS/Registry laufen?
+make status   # kurzer Überblick: Orchestrator/NATS/Registry/Postgres laufen?
 make stop     # stoppt nur den Orchestrator-Prozess (Container bleiben an)
-make stop ARGS=--all   # stoppt zusätzlich NATS + NMOS-Registry
+make stop ARGS=--all   # stoppt zusätzlich NATS + NMOS-Registry + Postgres
 make down     # Alternative: nur die Container stoppen (make up macht das rückgängig)
 ```
+
+Layouts (B5) und Snapshots (B7) liegen seit D1 in Postgres statt als
+Dateien unter `data/` — `data/` bleibt nur noch für den Instanz-
+Launcher-Zustand (C8) und `role-bindings.json` (C13) in Benutzung.
 
 Log des Orchestrators: `.run/orchestrator.log` (nicht versioniert).
 

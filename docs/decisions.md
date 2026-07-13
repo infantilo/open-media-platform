@@ -3106,3 +3106,89 @@ Testhygiene, kein Code-Fix.
 **Ergebnis:** Meilenstein „Demo 4" (Regieplatz mit UND ohne
 Automatisation vorführbar) erreicht. Damit ist die
 `UMSETZUNG.md`-Status-Checkliste bis C15 vollständig abgehakt.
+
+## 2026-07-13 — D1 (PostgreSQL für Layouts/Snapshots): Scope-Entscheidung + zwei echte Bugs gegen eine echte DB gefunden
+
+**Kontext:** Phase C ist mit C15 vollständig abgeschlossen; `UMSETZUNG.md`
+§6 sah „Detail-Schritte werden am Ende von Phase C konkretisiert" vor —
+D1 war der einzige der sieben D-Bullets, der schon konkret genug
+beschrieben war, um ohne weitere Rückfrage direkt begonnen zu werden
+(„PostgreSQL für Layouts/Snapshots/Config statt Datei-Backend;
+Migrationen; Verifikation: Neustart-Persistenz").
+
+**Scope-Entscheidung („Config"):** Code gelesen, nicht geraten —
+`internal/consoles/store.go` dokumentiert `role-bindings.json`
+ausdrücklich als „handgepflegt, analog zu deploy/catalog.json … echte
+Durchsetzung folgt mit D3", der Instanz-Launcher-Zustand
+(`instances.json`) ist PID-Liveness-gebundenes Laufzeit-Bookkeeping,
+kein Metadaten-Persistenz-Fall. Beide bleiben datei-basiert; „Config"
+aus der D1-Kurzfassung hat aktuell keine konkrete Entsprechung jenseits
+von Layouts/Snapshots — nichts stillschweigend übersprungen, nur nichts
+erfunden, das es noch nicht gibt.
+
+**Umsetzung:** `lib/pq` (reiner Postgres-Wire-Treiber, keine
+Transitiv-Deps) als einzige neue Go-Dependency — dieselbe Ausnahme-
+Kategorie wie `nats.go` (Schritt A6). Migrationen als embedded
+`.sql`-Dateien + eigener, sehr kleiner Runner
+(`orchestrator/internal/db`) statt eines Frameworks (golang-migrate/
+goose) — für „ein paar sequenzielle Dateien, kein Down-Migrations-
+Bedarf" unverhältnismäßig. `layouts.Store`/`snapshots.Store` intern auf
+SQL umgestellt, öffentliche Methodensignaturen (`Get`/`Put`/`List`)
+unverändert — keine Anpassung an Aufrufern (`httpapi`,
+`snapshots.Service`) nötig, nur `NewStore(*sql.DB)` statt
+`NewStore(dir)`. Podman-Dev-Fallback (`make up`) + Quadlet-Referenzdatei
+nach demselben Muster wie NATS/Registry.
+
+**Zwei echte Bugs, nur durch Testen gegen eine echte Postgres-Instanz
+gefunden** (mit Mocks/Interfaces unsichtbar geblieben, wie schon bei
+mehreren Live-Test-Funden in Phase C):
+
+1. **Migrations-Race:** `go test ./...` startet jedes Go-Paket als
+   eigenen Prozess — `db`-, `layouts`- und `snapshots`-Tests riefen
+   `Migrate()` parallel gegen dieselbe Dev-Datenbank auf, was in ca.
+   30–40 % der Läufe mit „duplicate key value violates unique
+   constraint 'pg_type_typname_nsp_index'" fehlschlug: `CREATE TABLE IF
+   NOT EXISTS` ist in Postgres nicht race-frei gegen gleichzeitige
+   Erstversuche (der implizite Zeilentyp pro Tabelle kollidiert). Das
+   wäre potenziell auch ein Produktions-Risiko (z. B. zwei gleichzeitig
+   hochfahrende Orchestrator-Prozesse) gewesen, kein reines Test-Artefakt.
+   Behoben mit `pg_advisory_lock` um die gesamte `Migrate()`-Funktion,
+   auf einer einzelnen per `db.Conn()` gezogenen Verbindung (advisory
+   locks sind session-gebunden — über den `*sql.DB`-Pool direkt hätte
+   die Sperre nicht zuverlässig gewirkt). Dieselbe Technik ist bereits
+   für Orchestrator-HA vorgesehen (`ARCHITECTURE.md` §19.3:
+   Leader-Wahl über eine Postgres-Advisory-Lock) — hier schon einmal in
+   echtem Einsatz. Über fünf Wiederholungsläufe danach durchgehend
+   grün.
+2. **JSONB kanonisiert, bricht Byte-Treue:** `TestPutOverwritesExisting`
+   (layouts) schlug fehl — `Get()` lieferte `{"v": 2}` (mit Leerzeichen)
+   statt der gespeicherten `{"v":2}`. Postgres' `JSONB`-Typ formatiert
+   beim Speichern um (Whitespace, ggf. Schlüsselreihenfolge), anders als
+   das ursprüngliche Datei-Backend, das rohe Bytes exakt zurückgab —
+   für `layouts.Store`, dessen eigener Docstring „reines Opak-Speichern"
+   verspricht, ein unbeabsichtigter Verhaltensbruch. Behoben durch
+   Wechsel der Spalte auf `JSON` (bewahrt die Eingabe-Bytes exakt, keine
+   Kanonisierung) — bewusst nur für `layouts`, nicht für `snapshots`:
+   dort liest der Store den Inhalt ohnehin immer über Go-Structs
+   (`json.Unmarshal`), Byte-Treue ist irrelevant, JSONBs kompaktere
+   Binärspeicherung bleibt dort der bessere Default. Da diese Migration
+   noch nirgends produktiv gelaufen war (erster Commit dieses Schemas),
+   wurde `0001_init.sql` direkt korrigiert statt einer nachgeschobenen
+   Fixup-Migration — nach einem echten Release wäre das nicht mehr
+   zulässig.
+
+**Nebenbefund, nicht behoben (kein D1-Bug):**
+`TestLauncherStopSendsSigkillIfSigtermIgnored` (bereits aus C8, von
+diesem Schritt nicht berührt) flackert unabhängig von D1 — vermutlich
+zu knapp bemessene 500-ms-Warteschwelle unter Systemlast. Fünf
+Wiederholungsläufe isoliert vom Rest der Suite: 4/5 grün, 1/5 rot.
+Kandidat für später (Grace-Period erhöhen oder auf Polling statt
+Einzelcheck umstellen), nicht Teil dieses Schritts.
+
+**Verifiziert:** `go vet`/`go test` (gesamtes Orchestrator-Modul, gegen
+echtes Postgres via `make up`) grün, mehrfach wiederholt zur
+Race-Bestätigung. End-to-End: Layout + Snapshot über die laufende API
+angelegt, Orchestrator-Prozess neu gestartet (Postgres läuft durch),
+beide exakt wie gespeichert wieder abrufbar. Fail-Fast bei gestopptem
+Postgres bestätigt (klare Fehlermeldung + Prozessabbruch statt stillem
+Weiterlaufen ohne Persistenz).
