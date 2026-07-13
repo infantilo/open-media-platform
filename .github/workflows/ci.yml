@@ -37,12 +37,73 @@ jobs:
       - name: make ci
         run: make ci
 
-  # Platzhalter für Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen
-  # Registry + Nodes in CI. Noch deaktiviert — braucht laufende
-  # Registry-/Node-Container, die erst mit dem Compose-/Quadlet-Setup aus
-  # D2 automatisiert bereitgestellt werden.
+  # Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen unsere
+  # nmos-cpp-Registry (IS-04-02, Registration+Query API). NICHT gegen
+  # eigene Nodes (IS-04-01/IS-05-01) — verifiziert am echten Tool-Lauf
+  # (docs/decisions.md 2026-07-13): unsere Nodes implementieren
+  # bewusst kein eigenständiges IS-04-"Node API" (Registration-API-Push
+  # statt Peer-to-Peer-Discovery, ARCHITECTURE.md §3/§5) und noch nicht
+  # die IS-05-Basis-Discovery-Endpunkte (nur staged/active pro Receiver,
+  # Schritt B1) — beide Test-Suiten brechen deshalb sofort ab (0 Tests),
+  # kein sinnvolles CI-Gate. Kandidat für später, sobald diese
+  # Endpunkte existieren.
   amwa-nmos-testing:
     runs-on: ubuntu-latest
-    if: false
     steps:
-      - run: echo "AMWA NMOS Testing Tool folgt in Schritt D2 (UMSETZUNG.md)"
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # docker run --network host erreicht Container, die mit expliziten
+      # Port-Mappings gestartet wurden, über localhost — gleiches Muster
+      # wie der lokale Podman-Dev-Fallback in `make up`, hier mit docker
+      # (auf GitHub-Actions-Runnern vorinstalliert, kein Podman nötig).
+      - name: NMOS-Registry starten
+        run: |
+          docker run -d --name omp-nmos-registry \
+            -p 8010:8010 -p 8011:8011 \
+            -v "$PWD/deploy/nmos/registry.json":/home/registry.json:ro \
+            -e RUN_NODE=FALSE \
+            docker.io/rhastie/nmos-cpp:latest
+          for i in $(seq 1 20); do
+            curl -fs http://localhost:8010/x-nmos/query/v1.3/ > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fs http://localhost:8010/x-nmos/query/v1.3/ > /dev/null
+
+      # Entrypoint des offiziellen Images startet immer den interaktiven
+      # Web-Server (run_nmos_testing.sh ruft `python3 nmos-test.py` ohne
+      # Argumente, ignoriert jedes CMD) — für den nicht-interaktiven
+      # CLI-Modus muss der Entrypoint überschrieben werden (verifiziert
+      # am echten Image, docs/decisions.md 2026-07-13).
+      - name: AMWA NMOS Testing Tool — IS-04-02 (Registry APIs) ausführen
+        run: |
+          mkdir -p nmos-results
+          docker run --rm --network host \
+            -v "$PWD/nmos-results":/tmp/results \
+            --entrypoint python3 \
+            docker.io/amwa/nmos-testing:latest \
+            nmos-test.py suite IS-04-02 \
+              --host localhost localhost --port 8010 8010 --version v1.3 v1.3 \
+              --selection all --output /tmp/results/is0402.json
+
+      # Definierte Testliste (UMSETZUNG.md D2): alle IS-04-02-Tests außer
+      # den drei unten dokumentierten, bewusst akzeptierten Abweichungen
+      # müssen grün sein. Kein Ergebnis stillschweigend ignoriert — jede
+      # Ausnahme ist einzeln begründet und am echten Tool-Lauf verifiziert.
+      - name: Ergebnisse auswerten (definierte Testliste grün, Abweichungen dokumentiert)
+        run: |
+          cd tools/nmos-conformance-check
+          go run . --results ../../nmos-results/is0402.json \
+            --allow "test_01=mDNS-Advertisement bewusst nicht implementiert — OMP-Nodes/die Registry verbinden über eine feste OMP_REGISTRY_URL statt Zero-Config-Discovery (gleiche Design-Entscheidung wie ARCHITECTURE.md §18.2 für Host-Discovery)" \
+            --allow "test_02=mDNS-Advertisement bewusst nicht implementiert, s. test_01" \
+            --allow "test_27=registration_expiry_interval bewusst auf 60s statt der vom AMWA-Tool angenommenen 12s (GARBAGE_COLLECTION_TIMEOUT) gesetzt — deploy/nmos/registry.json, am echten Tool-Lauf mit 12s gegenverifiziert (docs/decisions.md 2026-07-13)"
+
+      - name: Ergebnisse als Artefakt sichern
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amwa-nmos-testing-results
+          path: nmos-results/

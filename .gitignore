@@ -9,12 +9,14 @@ build/
 # Go
 /orchestrator/orchestrator
 /tools/contract-check/contract-check
+/tools/nmos-conformance-check/nmos-conformance-check
 /nodes/**/target/
 
 # Deno
 /ui/.deno/
 
-# Orchestrator-Laufzeitdaten (Layouts, B5) — Datei-Backend, kein Quellcode
+# Orchestrator-Laufzeitdaten (Instanz-Launcher-Zustand C8, role-bindings.json
+# C13) — Layouts/Snapshots liegen seit D1 in Postgres, nicht mehr hier.
 /data/
 
 # Gebaute Binaries + Laufzeit-PID/Log von deploy/dev/start-omp.sh

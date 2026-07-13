@@ -1015,8 +1015,38 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   `JSON`-Spalte statt `JSONB`, weil JSONB Whitespace/Schlüsselreihenfolge
   kanonisiert und damit die vom Datei-Backend gewohnte Byte-Treue
   gebrochen hätte (für Snapshots unkritisch, dort JSONB belassen).
-- **D2** AMWA NMOS Testing Tool als CI-Container gegen Registry + Nodes;
-  Verifikation: definierte Testliste grün, Abweichungen dokumentiert.
+- **D2 (erledigt, 2026-07-13)** AMWA NMOS Testing Tool
+  (`docker.io/amwa/nmos-testing`) in CI gegen unsere nmos-cpp-Registry
+  (Suite IS-04-02, Registration+Query API) — **nicht** gegen eigene
+  Nodes: am echten Tool-Lauf verifiziert (nicht geraten), dass IS-04-01
+  (Node API) und IS-05-01 (Connection API) gegen unsere Nodes sofort mit
+  0 ausgeführten Tests abbrechen, weil (a) unsere Nodes bewusst kein
+  eigenständiges IS-04-„Node API" implementieren (Registration-API-Push
+  statt Peer-to-Peer-Discovery, `ARCHITECTURE.md` §3/§5) und (b) die
+  IS-05-Basis-Discovery-Endpunkte (`/x-nmos/connection/v1.1/`,
+  `/single/receivers/`) noch fehlen (nur `staged`/`active` pro Receiver,
+  Schritt B1) — kein sinnvolles CI-Gate für etwas, das architektonisch
+  noch gar nicht existiert. Kandidat für später, sobald diese Endpunkte
+  gebaut werden.
+
+  **Definierte Testliste (IS-04-02):** 70 von 73 auswertbaren Tests grün,
+  drei begründete, am Tool-Quellcode nachvollzogene Abweichungen (kein
+  Raten): `test_01`/`test_02` (mDNS-Advertisement — OMP verbindet über
+  eine feste `OMP_REGISTRY_URL`, kein Zero-Config-Discovery, dieselbe
+  Design-Entscheidung wie `ARCHITECTURE.md` §18.2 für Host-Discovery),
+  `test_27` (Registry-Ressourcen-Ablauf nach Heartbeat-Timeout — unsere
+  `registration_expiry_interval` steht bewusst auf 60 s,
+  `deploy/nmos/registry.json`, das AMWA-Tool nimmt intern 12 s an,
+  `nmostesting/Config.py::GARBAGE_COLLECTION_TIMEOUT`; mit testweise auf
+  12 s gesetztem Intervall lief `test_27` tatsächlich grün — die
+  Ursache ist damit belegt, nicht vermutet. 60 s bleibt der Produktions-
+  /Dev-Wert, kein Kompromiss für den Test). Neues Tool
+  `tools/nmos-conformance-check` (Go, eigenes Modul wie
+  `tools/contract-check`) wertet die AMWA-JSON-Ausgabe gegen eine
+  explizite `--allow "testname=Begründung"`-Liste aus — jede Ausnahme
+  einzeln benannt, kein stilles Ignorieren. CI-Job
+  `amwa-nmos-testing` (`.github/workflows/ci.yml`) nicht mehr
+  deaktiviert, lädt die Ergebnisdatei zusätzlich als Artefakt hoch.
 - **D3** step-ca + mTLS Orchestrator↔Nodes, IS-10/OAuth2 für die UI;
   Verifikation: unautorisierter Zugriff wird abgewiesen, Flows
   funktionieren mit Token.
@@ -1091,3 +1121,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
+| D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |

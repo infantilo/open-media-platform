@@ -3192,3 +3192,83 @@ angelegt, Orchestrator-Prozess neu gestartet (Postgres läuft durch),
 beide exakt wie gespeichert wieder abrufbar. Fail-Fast bei gestopptem
 Postgres bestätigt (klare Fehlermeldung + Prozessabbruch statt stillem
 Weiterlaufen ohne Persistenz).
+
+## 2026-07-13 — D2 (AMWA NMOS Testing Tool): echten Tool-Lauf statt Doku-Zitat verwendet, Scope auf Registry begrenzt
+
+**Kontext:** `UMSETZUNG.md` A9 hatte bereits einen deaktivierten
+CI-Platzhalter-Job (`amwa-nmos-testing`, `if: false`) explizit auf D2
+verschoben; C9 verschob den `tools/contract-check`-CI-Anschluss aus
+demselben Grund ebenfalls hierher ("laufende Registry-/Node-Container").
+Arbeitsregel §0.6/§0.9 verlangt, Tool-/Spezifikationsverhalten
+nachzuschlagen bzw. **live zu verifizieren**, nicht aus der
+Doku-Zusammenfassung zu übernehmen — deshalb das echte Image gezogen und
+gegen die echte, laufende Registry + einen echten Mock-Node
+durchgespielt, bevor irgendetwas in CI geschrieben wurde.
+
+**Drei am echten Tool-Lauf widerlegte/bestätigte Annahmen aus der
+Doku-Recherche:**
+
+1. **Docker-Image-Entrypoint ignoriert CLI-Argumente.** Die offizielle
+   Doku beschreibt `docker run … amwa/nmos-testing python3 nmos-test.py
+   suite …` als gültige Non-Interactive-Aufrufform. Tatsächlich
+   (`Dockerfile`/`run_nmos_testing.sh` von GitHub gelesen): der
+   `ENTRYPOINT` ist `run_nmos_testing.sh`, das intern hart `python3
+   nmos-test.py` **ohne** `"$@"` aufruft — jedes CMD-Argument wird
+   stillschweigend verworfen, der Container startet immer den
+   interaktiven Web-Server. Non-Interactive-Aufrufe brauchen
+   `--entrypoint python3 … nmos-test.py suite …` (Entrypoint
+   überschreiben), sonst hängt der Container als Server statt Tests
+   auszuführen und zu beenden.
+2. **IS-04-01/IS-05-01 gegen eigene Nodes: sofortiger Abbruch, nicht nur
+   Teilausfall.** Erwartung vor dem Test: „einige Tests werden wegen der
+   bekannten B1-Scope-Lücken fehlschlagen". Tatsächlich (IS-05-01 gegen
+   den echten `nodes/mock`-Prozess, Port 9001): `GET
+   /x-nmos/connection/v1.1/ → 404`, Testlauf endet sofort mit „No API
+   found", 0 von N Tests ausgeführt — der fehlende Basis-Discovery-
+   Endpunkt ist eine Voraussetzung für die gesamte Suite, kein einzelner
+   Testfall darunter. Ergebnis: IS-04-01/IS-05-01 (und IS-05-02, das
+   dieselbe Node-API-Voraussetzung teilt) aus dem CI-Scope genommen,
+   nicht mit einer erwartungsgemäß roten, aber wertlosen Testliste
+   „erledigt" markiert.
+3. **`test_27`-Fehlschlag: Ursache durch Gegenexperiment belegt, nicht
+   vermutet.** Erster Lauf gegen die reguläre `registry.json`
+   (`registration_expiry_interval: 60`) zeigte `test_27` („Registry
+   entfernt Ressourcen nicht nach Heartbeat-Timeout") als Fail.
+   Quellcode von `IS0402Test.py::test_27` gelesen: der Test wartet nur
+   `CONFIG.GARBAGE_COLLECTION_TIMEOUT + 1` Sekunden
+   (`nmostesting/Config.py`: 12) und prüft dann auf 404 — bei 60 s
+   Ablaufzeit prüft der Test zwangsläufig zu früh. **Gegenprobe:**
+   Registry testweise mit `registration_expiry_interval: 12` neu
+   gestartet, IS-04-02 erneut gelaufen — `test_27` war grün. Damit
+   bestätigt, nicht nur vermutet: die Ursache ist ausschließlich der
+   Config-Unterschied, kein Registry-Bug. Konsequenz bewusst gezogen:
+   **60 s bleibt der Produktions-/Dev-Wert** (Toleranz gegen
+   Heartbeat-Aussetzer wichtiger als AMWA-Tool-Kompatibilität), `test_27`
+   wird als dokumentierte, begründete Abweichung geführt statt die
+   Konfiguration für den Test zu verschlechtern. Nebenbefund aus
+   demselben Gegenexperiment: bei 12 s Ablaufzeit tauchten mehrere neue
+   „Could Not Test"-Ergebnisse auf (Fixtures liefen der restlichen Suite
+   mitten im Testlauf ab) — ein zusätzlicher Beleg, dass 12 s für den
+   **gesamten** Testlauf ungeeignet wäre, nicht nur eine für `test_27`
+   isoliert bessere Einstellung.
+
+**Ergebnis:** `tools/nmos-conformance-check` (neues Go-Modul, eigenes
+`go.mod` wie `tools/contract-check`) wertet die AMWA-JSON-Ausgabe
+gegen eine explizite Allow-Liste aus (`--allow
+"testname=Begründung"`), Exit-Code 1 bei jedem nicht gelisteten Fail.
+CI-Job `amwa-nmos-testing` nicht mehr `if: false`, startet Registry +
+Testing-Tool-Container, lädt IS-04-02, wertet mit den drei oben
+begründeten Ausnahmen aus, sichert die Rohdaten als Artefakt.
+
+**Verifiziert:** `go vet`/`go test` für `tools/nmos-conformance-check`
+(7 Tests, inkl. Fixture-Daten aus dem echten Tool-Lauf) grün; das Tool
+selbst gegen die beiden real erzeugten JSON-Ausgaben (60 s- und
+12 s-Lauf) durchgespielt — liefert ohne Allow-Liste Exit 1 mit den drei
+erwarteten Fails, mit der finalen Allow-Liste Exit 0. Die
+GitHub-Actions-YAML selbst konnte in dieser Umgebung nicht durch einen
+echten Workflow-Run verifiziert werden (kein GitHub-Actions-Runner
+lokal verfügbar) — alle darin verwendeten Einzelbefehle (Registry-Start,
+Entrypoint-Override, Tool-Aufruf, Auswertung) sind aber exakt die zuvor
+lokal gegen Podman verifizierten Befehle, nur mit `docker` statt
+`podman` (auf GitHub-Actions-Ubuntu-Runnern vorinstalliert) — der erste
+tatsächliche Push/PR-Lauf ist die verbleibende Nagelprobe.

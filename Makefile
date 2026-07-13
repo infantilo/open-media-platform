@@ -1,6 +1,6 @@
 .PHONY: build test check up down ci ui nodes contract start stop status
 
-GO_MODULES := orchestrator nodes/mock tools/contract-check
+GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
