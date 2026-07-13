@@ -2922,3 +2922,113 @@ mxl.rs-Tests), `deno check/test`, `go vet/test`, End-to-End per Live-
 Browser-Test (Chromium CDP) mit echten Instanzen — alle vier UI-Bugfixes
 und beide Absturz-Fixes am tatsächlich laufenden Node bestätigt, nicht
 nur am kompilierten Code.
+
+## 2026-07-13 — Großer Konzept-Ausbau (fable-Konsultation): Microservice-Distribution, Metrics/Auto-Migration, Ausfallsicherheit, professionelles UI, NDI/RTSP/RDMA, MXL/DMF-Metadatenebene
+
+**Kontext:** Nutzeranforderung, ein detailliertes Konzept (für spätere
+Umsetzung durch Sonnet) für mehrere, teils bereits als Lücke benannte
+(§20), teils komplett neue Themen zu erarbeiten: Microservice-/Container-
+Import/Versionierung/Verwaltung/Distribution auf gemischte Remote-Hosts
+(eigene und Drittanbieter), Metriken-Sammlung über lokale/remote/Cloud-
+Maschinen für automatisierte Migration bei Ausfällen/Engpässen,
+Ausfallsicherheits-Gesamtkonzept, professionelles UI (Menüs,
+UI-Verwaltung, Workflow-Katalog mit Definieren/Konfigurieren/Speichern/
+Laden/Starten/Stoppen, Screenshot-Thumbnail, Titel/Beschreibung,
+Suche), gemischter Betrieb Bare-Metal/VM (lokaler Cluster)/Cloud (z. B.
+AWS), NDI/RTSP/RDMA fertig definieren, MXL/DMF-Metadatenebene — mit der
+durchgehenden Leitlinie „so dynamisch wie möglich, so wenig hartkodiert
+wie möglich".
+
+**Vorgehen:** Kein neues Subsystem-Wildwuchs — jedes Thema wurde zuerst
+gegen bereits bestehende Bausteine (§6.1–§6.4, §11.1, §13.5, §17–§20)
+geprüft und nur die tatsächlich fehlende Konkretisierung ergänzt, nicht
+dupliziert. Kurze Web-Recherche (fable) zu zwei Fakten, die sonst geraten
+worden wären: `gst-plugin-ndi` ist Teil von `gst-plugins-rs`
+(MPL-2, aktiv gepflegt) — passt direkt in den Rust-Node-Stack, NDI selbst
+bleibt trotzdem eine bewusste, isolierte Lizenz-Ausnahme (proprietäre
+Laufzeit-SDK); die EBU-DMF-Referenzarchitektur v2.0 (April 2026)
+bestätigt das bereits gebaute Node-Contract-/Katalog-Modell und dass MXL
+bereits eine Grain-/Timing-/Metadaten-Struktur mitbringt, definiert aber
+keinen Asset-Metadaten-Standard.
+
+**Ergebnis in `ARCHITECTURE.md`:**
+- **§6.5/§6.6 (neu):** NDI/RTSP-Interop-Gateways als weitere
+  `omp-mediaio`-Transporte (gerichtete Gateway-Nodes, NDI-Lizenz-Ausnahme
+  explizit benannt); RDMA/RoCEv2-Aktivierungspfad konkretisiert
+  (`transportHint`, `rdmaFabricId`-Claim/Release, weicher Fallback statt
+  Start-Ablehnung).
+- **§6.1-Erweiterung:** Metrics-Föderation über Bare-Metal/VM/Cloud (ein
+  Schema, drei Quell-Adapter, kein AWS-SDK im Kern) + Eskalationsstufen
+  `advisory`/`auto-confirm-window`/`auto` für automatisierte Migration,
+  pro Workflow-Rolle konfigurierbar (gleiches Muster wie §17.1); Cloud-
+  Kostenfaktor als optionaler weicher Scoring-Faktor.
+- **§6.4-Erweiterung:** Registry-Föderation (mehrere Quellen, granulares
+  Publisher-Vertrauen pro Quelle), Lazy-Pull vs. explizites Pre-Pull für
+  Bare-Metal-Standorte mit schmaler Anbindung, Versions-/Rollback-
+  Historie, Air-Gap als Konsequenz statt Sonderfall.
+- **§18.8/§18.9 (neu):** Host-Klassen-Taxonomie Bare-Metal/VM/Cloud (Klasse
+  ergibt sich aus Inventar-Signalen, kein hartkodiertes Feld); AWS-
+  Ausbaustufen (Einzel-EC2 → k3s/EKS → ECR als Registry-Quelle), bewusst
+  kein AWS-SDK/Terraform-Modul im Projekt.
+- **§21 (neu):** Ausfallsicherheits-Gesamtkonzept — konsolidierende
+  Tabelle über alle bisherigen Redundanz-Ebenen (§6.3/§6.1/§19/§20.1),
+  neue Standort-/Regionsredundanz-Ebene (Config-Replikation günstig,
+  echte Zweitstandort-Sendefähigkeit bewusst Nicht-Ziel), Empfehlung zur
+  offenen §20.1-Frage (Option c, Zwischenlösung, als pragmatischer
+  Standardweg — weiterhin Nutzer-Entscheidung, keine Festlegung).
+- **§22 (neu):** Professionelles UI-Gesamtkonzept — Navigations-/Menü-
+  Struktur, Design-System (Tokens, `ui/kit/`, Theming inkl.
+  „Studio-Dark"), Workflow-Katalog als neue Kern-UI-Fläche (Rollen-
+  basierter Designer-Modus des bestehenden Graph-Editors,
+  Screenshot-Thumbnail per Wiederverwendung des MJPEG-Preview-
+  Mechanismus, Titel/Beschreibung/Tags, Kachel-Grid, Volltextsuche),
+  Node-Katalog-UI parallel dazu — durchgehend additive Felder, keine
+  neue Node-Contract-Pflicht.
+- **§23 (neu):** MXL/DMF-Metadatenebene — vier bisher vermischte
+  Metadaten-Bedeutungen sauber getrennt (Flow-technisch/MXL,
+  Node-Selbstbeschreibung/IS-12/14, Ancillary-Daten, neu: Asset-/
+  Content-Metadaten), DMF-Recherche-Einordnung, bewusste Grenze zu MAM
+  (bleibt §20.8-Nicht-Ziel).
+- §20.1/§20.2/§20.3 bekommen Verweise auf §21/§22 (kein Duplikat,
+  Priorisierungsfrage bleibt offen); §7-Phasenplan (P2-Zeile) um die
+  neuen Abschnitte ergänzt, keine Zeitplan-Zahl geändert.
+
+**Bewusst nicht getan:** keine neuen `UMSETZUNG.md`-C/D-Schritte (gleiches
+Vorgehen wie bei §13/§19/§20 — erst Konzept, dann bei tatsächlicher
+Priorisierung/Umsetzung als nummerierter Schritt konkretisieren); keine
+Umbenennung/Renummerierung bestehender Abschnitte (alle neuen Inhalte als
+neue §6.5/§6.6/§18.8/§18.9/§21–§23 bzw. datierte „Erweiterung"-Absätze in
+§6.1/§6.4, um die vielen bestehenden Querverweise nicht zu brechen); keine
+Entscheidung der offenen §20.1-Genlock-Frage, nur eine begründete
+Empfehlung.
+
+## 2026-07-13 — C13-Nachtrag 3: Instanz-Crash-Erkennung fertiggestellt (uncommitted Stand vorgefunden), C14/C15 als nächster Schritt aufgenommen
+
+**Kontext:** Nutzeranforderung „fahre mit der Umsetzung fort, arbeite
+eigenständig durch". Working Tree enthielt bereits einen vollständigen,
+aber nicht committeten Stand für Instanz-Crash-Erkennung
+(`internal/launcher`: `Crashed`/`CrashMessage` + `instance.crashed`-SSE-
+Broadcast, `ui/graph/flow-canvas.ts`: Toast + rote Instanz-Zeile in der
+Palette + „Entfernen", dazu unabhängig ein „Alle einpassen"-Button) —
+offenbar Ergebnis einer vorherigen, nicht abgeschlossenen Sitzung. Statt
+blind zu committen: zuerst regulär durch den Verifikationspfad aus
+`UMSETZUNG.md` §0 geschickt.
+
+**Verifikation:** `go vet/test` (orchestrator, inkl. neuem
+`TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts`) grün; `deno
+check/test` grün. Zusätzlich End-to-End im echten Dev-Setup
+(`make start`, Podman-NATS/-Registry): ein temporärer, nicht committeter
+Katalog-Eintrag (`exit 1` nach `sleep 1`) über die GUI gestartet, per
+Chromium-CDP-Session (headless, `--remote-debugging-port` + Node-
+WebSocket, wie in den C13-Nachträgen 1/2 etabliert — `--dump-dom` bleibt
+für Mehrfach-fetch-Seiten unzuverlässig) verifiziert: Toast erscheint,
+rote Instanz-Zeile mit `exit status 1: boom-from-test` erscheint,
+„Entfernen" löscht serverseitig UND clientseitig, „Alle einpassen"
+klickbar ohne Fehler. `deploy/catalog.json` danach auf den
+Ausgangsstand zurückgesetzt (Diff-Check: keiner). Dokumentiert als
+`UMSETZUNG.md` „C13-Nachtrag 3" (gleiches Format wie Nachtrag 1/2).
+
+**Nächster Schritt:** C14/C15 (Playout-Automation-Controller) ist der
+einzige noch offene Eintrag der Status-Checkliste — wird im Anschluss
+mit einem Detailplan begonnen (`UMSETZUNG.md` verlangt das explizit „zu
+Beginn von C14").

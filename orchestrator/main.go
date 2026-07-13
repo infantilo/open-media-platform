@@ -73,7 +73,7 @@ func main() {
 		slog.Warn("failed to load instance launcher catalog, GUI-Launch bleibt leer", "path", cfg.CatalogPath, "error", err)
 		catalog = nil
 	}
-	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir)
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub)
 
 	consoleResolver := consoles.NewResolver(consoles.NewStore(filepath.Join(cfg.DataDir, "role-bindings.json")))
 

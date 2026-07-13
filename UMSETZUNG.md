@@ -827,6 +827,56 @@ Tages):
 vier UI-Fixes und beide Absturz-Fixes am laufenden Node bestätigt),
 `tools/contract-check` PASS.
 
+### C13-Nachtrag 3 — Instanz-Crash-Erkennung & Palette-UI, „Alle einpassen" (2026-07-13)
+
+**Ziel (Nutzerfund):** Eine per Instanz-Launcher (C8) gestartete Instanz,
+die abstürzt, **bevor** sie sich bei der NMOS-Registry registriert (z. B.
+ein Pipeline-Init-Fehler), verschwand bisher spurlos — kein
+`node.added`/`node.removed`-Event, also keine Kachel, kein Hinweis in der
+UI. „Crash muss angezeigt werden."
+
+**Umsetzung (als uncommitted Stand vorgefunden, in dieser Sitzung
+verifiziert und fertiggestellt, kein Neubau):**
+
+- `internal/launcher`: `Instance` bekommt `Crashed`/`CrashMessage`;
+  `Launcher.Start()`s Wait()-Goroutine markiert einen Prozess, der ohne
+  vorheriges `Stop()` endet, als `Crashed` (persistiert, bleibt in
+  `List()` sichtbar statt zu verschwinden) und broadcastet
+  `instance.crashed` über ein neues, optionales `EventPublisher`-Interface
+  (von `*sse.Hub` erfüllt, `nil`-fähig für Tests — gleiches Muster wie
+  `graph.EventPublisher`). `CrashMessage` kombiniert den `Wait()`-Fehler
+  mit den letzten 5 stderr-Zeilen der Instanz (neuer `tailBuffer`,
+  nebenläufig sicher, kein `bufio.Scanner` nötig, da `cmd.Stderr` nur
+  einen `io.Writer` erwartet).
+- `ui/graph/flow-canvas.ts`: SSE-Handler für `instance.crashed` zeigt
+  einen Toast und rendert die Palette neu; jede laufende/abgestürzte
+  Instanz erscheint als eigene Zeile unter ihrem Katalog-Eintrag
+  (`data-role="instance-row"`) — rot mit Fehlertext + „Entfernen" bei
+  Crash, sonst grün mit „Stop". Start/Stop rendern die Palette jetzt
+  explizit neu (vorher verließ sich der Code allein auf den
+  `node.added`/`node.removed`-Registry-Pfad, der eine nie registrierte,
+  abgestürzte Instanz nie auslöst).
+- Zusätzlich (gleicher uncommitted Stand, unabhängiger Nutzerfund): Button
+  „Alle einpassen" in der Breadcrumb-Leiste fittet die im aktuellen Scope
+  sichtbaren Kacheln in den Viewport (`#fitAllToViewport`, teilt die
+  Bounding-Box-Logik mit dem bestehenden Auto-Fit-Fallback über eine neue
+  gemeinsame `#fitViewportToIds`-Methode) — Abhilfe für Kacheln, die nach
+  vielen Sitzungen mit verwaisten/neuen Positionen optisch außerhalb des
+  sichtbaren Bereichs lagen.
+
+**Verifiziert in dieser Sitzung:** `go vet/test` (inkl. neuem
+`TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts`), `deno
+check/test` — beides grün. End-to-End per CDP-Session (Chromium headless
++ Node-WebSocket, gleiche Methode wie C13-Nachtrag 1/2) gegen die echte
+laufende Dev-Umgebung (`make start`), mit einem temporären
+Katalog-Eintrag, der garantiert abstürzt (`exit 1` nach `sleep 1`, nicht
+committet): Toast „… abgestürzt: exit status 1: boom-from-test" erscheint,
+rote Instanz-Zeile mit derselben Fehlermeldung erscheint unter dem
+Katalog-Eintrag, „Entfernen" löscht die Instanz serverseitig
+(`GET /api/v1/instances` danach `[]`) und aus der UI; „Alle einpassen"
+klickbar ohne Fehler. `deploy/catalog.json` nach dem Test unverändert
+wiederhergestellt (Diff-Check gegen Backup: keiner).
+
 ### C14/C15 — Playout-Automation-Controller (vormals C10/C11, jetzt danach)
 
 **Ziel:** Dünne Sequenzierungsschicht, die `playlist.rs`

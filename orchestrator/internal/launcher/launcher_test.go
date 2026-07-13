@@ -3,9 +3,31 @@ package launcher
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// recordingPublisher sammelt Broadcast()-Aufrufe statt sie an echte SSE-
+// Clients zu senden — Stand-in für den *sse.Hub in Tests.
+type recordingPublisher struct {
+	mu     sync.Mutex
+	events []sse.Event
+}
+
+func (p *recordingPublisher) Broadcast(e sse.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, e)
+}
+
+func (p *recordingPublisher) snapshot() []sse.Event {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]sse.Event{}, p.events...)
+}
 
 // sleepyCatalog startet einen echten, kurzlebigen Subprozess, der lang
 // genug lebt, um in Tests beobachtet zu werden — os/exec lässt sich
@@ -39,7 +61,7 @@ func stubbornCatalog() []CatalogEntry {
 }
 
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir())
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
 
 	if _, err := l.Start("does-not-exist"); err != ErrUnknownType {
 		t.Fatalf("Start() error = %v, want ErrUnknownType", err)
@@ -48,7 +70,7 @@ func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 
 func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "podman", Command: []string{"true"}}}
-	l := New(catalog, "http://registry", "nats://nats", t.TempDir())
+	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), nil)
 
 	if _, err := l.Start("x"); err != ErrUnsupportedRunner {
 		t.Fatalf("Start() error = %v, want ErrUnsupportedRunner", err)
@@ -56,7 +78,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 }
 
 func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir())
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
 
 	inst, err := l.Start("sleepy")
 	if err != nil {
@@ -90,7 +112,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	stopGracePeriod = 500 * time.Millisecond
 	defer func() { stopGracePeriod = original }()
 
-	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir())
+	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
 	inst, err := l.Start("stubborn")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -105,7 +127,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 }
 
 func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir())
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
 	if err := l.Stop("does-not-exist"); err != ErrUnknownInstance {
 		t.Fatalf("Stop() error = %v, want ErrUnknownInstance", err)
 	}
@@ -113,14 +135,14 @@ func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
 
 func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
-	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir)
+	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil)
 	inst, err := l1.Start("sleepy")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer func() { _ = l1.Stop(inst.ID) }()
 
-	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir)
+	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil)
 	list := l2.List()
 	if len(list) != 1 || list[0].ID != inst.ID || list[0].PID != inst.PID {
 		t.Fatalf("List() after restart = %+v, want the still-running instance %+v", list, inst)
@@ -131,7 +153,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
-	l1 := New(quickExit, "http://registry", "nats://nats", dataDir)
+	l1 := New(quickExit, "http://registry", "nats://nats", dataDir, nil)
 	inst, err := l1.Start("quick")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -145,7 +167,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 		t.Fatal("quick-exit process did not terminate in time")
 	}
 
-	l2 := New(quickExit, "http://registry", "nats://nats", dataDir)
+	l2 := New(quickExit, "http://registry", "nats://nats", dataDir, nil)
 	if list := l2.List(); len(list) != 0 {
 		t.Errorf("List() after restart = %+v, want empty (dead instance dropped)", list)
 	}
@@ -163,7 +185,7 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 		},
 		Env: map[string]string{"OMP_CUSTOM": "from-catalog"},
 	}}
-	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir())
+	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil)
 
 	inst, err := l.Start("envdump")
 	if err != nil {
@@ -197,4 +219,52 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 			t.Errorf("subprocess env missing %s=%s;\nfull env:\n%s", key, want, env)
 		}
 	}
+}
+
+func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
+	crashing := []CatalogEntry{{
+		Type:    "crashy",
+		Label:   "Crashy",
+		Runner:  "process",
+		Command: []string{"/bin/sh", "-c", "echo boom >&2; exit 1"},
+	}}
+	pub := &recordingPublisher{}
+	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub)
+
+	inst, err := l.Start("crashy")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var list []Instance
+	for time.Now().Before(deadline) {
+		list = l.List()
+		if len(list) == 1 && list[0].Crashed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if len(list) != 1 || list[0].ID != inst.ID {
+		t.Fatalf("List() = %+v, want one entry for %s", list, inst.ID)
+	}
+	if !list[0].Crashed {
+		t.Fatalf("List()[0].Crashed = false, want true")
+	}
+	if !strings.Contains(list[0].CrashMessage, "boom") {
+		t.Errorf("CrashMessage = %q, want it to contain stderr tail %q", list[0].CrashMessage, "boom")
+	}
+
+	events := pub.snapshot()
+	if len(events) != 1 || events[0].Type != "instance.crashed" {
+		t.Fatalf("Broadcast events = %+v, want one instance.crashed event", events)
+	}
+	if !strings.Contains(string(events[0].Data), inst.ID) {
+		t.Errorf("event data = %s, want it to contain instance id %s", events[0].Data, inst.ID)
+	}
+
+	// Aufräumen ohne processAlive-Race: eine bereits tote Instanz per
+	// Stop() zu entfernen muss trotzdem funktionieren (kein Fehler nötig).
+	_ = l.Stop(inst.ID)
 }

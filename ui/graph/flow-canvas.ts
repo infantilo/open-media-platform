@@ -116,6 +116,20 @@ interface CatalogEntry {
   env: Record<string, string>;
 }
 
+// LauncherInstance — Wire-Format identisch zu
+// orchestrator/internal/launcher.Instance. crashed/crashMessage: Nutzer-
+// fund "crash müssen angezeigt werden" — ein Subprozess, der ohne Stop()
+// endet (z. B. MXL-Init-Fehler), verschwindet sonst spurlos aus der
+// Palette, sobald seine (evtl. nie erfolgte) NMOS-Registrierung ausläuft.
+interface LauncherInstance {
+  id: string;
+  type: string;
+  label: string;
+  pid: number;
+  crashed?: boolean;
+  crashMessage?: string;
+}
+
 interface PortLocation {
   tileId: string;
   side: PortSide;
@@ -316,6 +330,19 @@ export class FlowCanvas extends HTMLElement {
       const nodeId = parsed.type.slice(TALLY_EVENT_PREFIX.length);
       const on = (parsed.data as { on?: boolean } | null)?.on === true;
       this.#setTally(nodeId, on);
+      return;
+    }
+
+    // Nutzerfund "crash müssen angezeigt werden": launcher.Launcher
+    // meldet einen unerwarteten Prozess-Exit separat von den Registry-
+    // Inventar-Events oben, weil eine Instanz, deren MXL-Init-Fehler noch
+    // vor jeder NMOS-Registrierung auftritt, sonst nie ein "node.added"/
+    // "node.removed" auslöst und damit für JEDEN verbundenen Client
+    // spurlos bliebe — nicht nur den, der sie gestartet hat.
+    if (parsed.type === "instance.crashed") {
+      const inst = parsed.data as LauncherInstance;
+      this.#showToast(`${inst.label} abgestürzt: ${inst.crashMessage || "unbekannter Fehler"}`);
+      void this.#renderPalette();
     }
   }
 
@@ -586,13 +613,37 @@ export class FlowCanvas extends HTMLElement {
       this.#breadcrumbBar.appendChild(this.#breadcrumbLink(group.label, group.id));
     }
 
+    const fitBtn = document.createElement("button");
+    fitBtn.textContent = "Alle einpassen";
+    fitBtn.style.cssText = `margin-left:${this.#scope === null ? "auto" : "8px"};font-size:11px;cursor:pointer;`;
+    fitBtn.addEventListener("click", () => this.#fitAllToViewport());
+    this.#breadcrumbBar.appendChild(fitBtn);
+
     if (this.#scope !== null) {
       const dissolveBtn = document.createElement("button");
       dissolveBtn.textContent = "Gruppe auflösen";
-      dissolveBtn.style.cssText = "margin-left:auto;font-size:11px;cursor:pointer;";
+      dissolveBtn.style.cssText = "font-size:11px;cursor:pointer;";
       dissolveBtn.addEventListener("click", () => this.#dissolveCurrentGroup());
       this.#breadcrumbBar.appendChild(dissolveBtn);
     }
+  }
+
+  // Manuelles Gegenstück zum Auto-Fit in #loadLayout (nur beim allerersten
+  // Laden ohne gespeicherten Viewport): holt Kacheln zurück in den
+  // sichtbaren Bereich, wenn sie z. B. nach vielen Sitzungen mit
+  // verwaisten/neu hinzugekommenen Positionen (siehe #pruneStalePositions,
+  // #assignMissingPositions) optisch außerhalb liegen — Nutzerfund: neu
+  // per Instanz-Launcher gestartete Nodes waren im Graph vorhanden
+  // (`/api/v1/graph`), aber im aktuellen Scroll-/Zoom-Zustand nicht
+  // sichtbar. Fittet nur auf die im aktuellen Scope sichtbaren Kacheln,
+  // nicht auf `#positions` insgesamt — sonst würde bei verschachtelten
+  // Gruppen die Bounding-Box durch Kind-Positionen verzerrt, die auf
+  // dieser Ebene gar nicht gerendert werden.
+  #fitAllToViewport() {
+    const ids = this.#itemsAtScope();
+    this.#viewport = this.#fitViewportToIds([...ids.nodeIds, ...ids.groupIds]);
+    this.#applyViewportTransform();
+    this.#saveLayout();
   }
 
   #breadcrumbLink(label: string, scopeGroupId: string | null): HTMLAnchorElement {
@@ -661,7 +712,15 @@ export class FlowCanvas extends HTMLElement {
   // sichtbaren SVG-Bereich (scale=1, keine Zoom-Anpassung) — Fallback für
   // Layouts ohne gespeicherten Viewport (s. #loadLayout).
   #fitViewportToPositions(): Viewport {
-    const points = Object.values(this.#positions);
+    return this.#fitViewportToIds(Object.keys(this.#positions));
+  }
+
+  // Gemeinsame Bounding-Box-Logik für den Auto-Fit beim allerersten Laden
+  // (#fitViewportToPositions, alle bekannten Positionen) und den manuellen
+  // "Alle einpassen"-Button (#fitAllToViewport, nur die im aktuellen Scope
+  // sichtbaren Kacheln).
+  #fitViewportToIds(ids: string[]): Viewport {
+    const points = ids.map((id) => this.#positions[id]).filter((p): p is Point => !!p);
     if (points.length === 0) return { ...IDENTITY_VIEWPORT };
 
     const minX = Math.min(...points.map((p) => p.x));
@@ -1508,9 +1567,13 @@ export class FlowCanvas extends HTMLElement {
     this.#palette.appendChild(heading);
 
     try {
-      const res = await fetch("/api/v1/catalog");
-      if (!res.ok) return;
-      const catalog = (await res.json()) as CatalogEntry[];
+      const [catalogRes, instancesRes] = await Promise.all([
+        fetch("/api/v1/catalog"),
+        fetch("/api/v1/instances"),
+      ]);
+      if (!catalogRes.ok) return;
+      const catalog = (await catalogRes.json()) as CatalogEntry[];
+      const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
 
       if (catalog.length === 0) {
         const empty = document.createElement("p");
@@ -1525,14 +1588,53 @@ export class FlowCanvas extends HTMLElement {
         btn.textContent = `+ ${entry.label}`;
         btn.title = `${entry.label} starten`;
         btn.style.cssText =
-          "cursor:pointer;display:block;width:100%;margin-bottom:6px;" +
+          "cursor:pointer;display:block;width:100%;margin-bottom:4px;" +
           "text-align:left;padding:4px 6px;";
         btn.addEventListener("click", () => this.#startInstance(entry.type));
         this.#palette.appendChild(btn);
+
+        for (const inst of instances.filter((i) => i.type === entry.type)) {
+          this.#palette.appendChild(this.#renderInstanceRow(inst));
+        }
       }
     } catch {
       // Palette bleibt leer, wenn der Server (noch) nicht erreichbar ist.
     }
+  }
+
+  // Zeigt eine laufende oder abgestürzte Instanz unter ihrem Katalog-
+  // Eintrag — Nutzerfund "crash müssen angezeigt werden": eine per MXL-
+  // Init-Fehler abgestürzte Instanz hat oft nie eine NMOS-Registrierung
+  // (also nie eine Kachel im Graph) bekommen, verschwand also bis hierhin
+  // komplett spurlos. Bleibt sichtbar (rot markiert, mit Fehlertext), bis
+  // sie per "Entfernen" weggeklickt oder neu gestartet wird.
+  #renderInstanceRow(inst: LauncherInstance): HTMLDivElement {
+    const row = document.createElement("div");
+    row.setAttribute("data-role", "instance-row");
+    row.setAttribute("data-instance-id", inst.id);
+    row.style.cssText =
+      `margin:0 0 6px 4px;padding:3px 5px;border-radius:3px;font-size:10px;` +
+      `border-left:3px solid ${inst.crashed ? "#c0392b" : "#4caf50"};` +
+      `background:${inst.crashed ? "rgba(192,57,43,0.15)" : "rgba(255,255,255,0.04)"};`;
+
+    const label = document.createElement("div");
+    label.textContent = inst.label;
+    row.appendChild(label);
+
+    if (inst.crashed) {
+      const msg = document.createElement("div");
+      msg.textContent = inst.crashMessage || "Prozess abgestürzt";
+      msg.style.cssText = "color:#e57373;white-space:pre-wrap;word-break:break-word;margin-top:2px;";
+      row.appendChild(msg);
+    }
+
+    const stopBtn = document.createElement("button");
+    stopBtn.textContent = inst.crashed ? "Entfernen" : "Stop";
+    stopBtn.style.cssText = "font-size:10px;cursor:pointer;margin-top:3px;";
+    stopBtn.addEventListener("click", () => this.#stopInstance(inst.id));
+    row.appendChild(stopBtn);
+
+    return row;
   }
 
   async #startInstance(type: string) {
@@ -1550,8 +1652,12 @@ export class FlowCanvas extends HTMLElement {
       // Kein #fetchAndRender() nötig: die Instanz registriert sich
       // selbst bei der NMOS-Registry, was ein "node.added"-SSE-Event
       // auslöst (registry.Poller) — der Graph lädt sich dadurch von
-      // selbst neu, sobald die Instanz tatsächlich erschienen ist.
+      // selbst neu, sobald die Instanz tatsächlich erschienen ist. Die
+      // Palette dagegen zeigt die Instanz (laufend oder später
+      // abgestürzt) unabhängig von einer NMOS-Registrierung, deshalb
+      // hier explizit neu rendern.
       this.#showToast(`${type} wird gestartet …`);
+      await this.#renderPalette();
     } catch (err) {
       this.#showToast(`Start fehlgeschlagen: ${err}`);
     }
@@ -1571,7 +1677,11 @@ export class FlowCanvas extends HTMLElement {
       // ausläuft (registration_expiry_interval) und ein "node.removed"
       // die #fetchAndRender() auslöst — kein optimistisches Entfernen
       // hier, das wäre eine zweite, potenziell falsche Zustandsquelle.
+      // Die Palette-Zeile dagegen entfernt DELETE serverseitig sofort aus
+      // Launcher.instances (auch für eine bereits abgestürzte Instanz
+      // ohne jede NMOS-Registrierung), deshalb hier direkt neu rendern.
       this.#showToast("Instanz wird gestoppt …");
+      await this.#renderPalette();
     } catch (err) {
       this.#showToast(`Stop fehlgeschlagen: ${err}`);
     }

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -20,7 +21,17 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// crashStderrLines ist die Anzahl der zuletzt geschriebenen stderr-Zeilen
+// einer Instanz, die bei einem unerwarteten Prozessende in
+// Instance.CrashMessage aufgenommen werden (UI-Nutzerfund: "crash müssen
+// angezeigt werden" — ohne Kontext aus der Ausgabe selbst wäre der Toast/
+// die Kachel-Markierung nur "Prozess beendet", nicht hilfreich fürs
+// Debugging). Bewusst klein gehalten, keine vollständige Log-Aggregation.
+const crashStderrLines = 5
 
 var (
 	// ErrUnknownType wird geliefert, wenn Start() mit einem Typ
@@ -48,6 +59,22 @@ type Instance struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
 	PID   int    `json:"pid"`
+	// Crashed ist gesetzt, wenn der Subprozess beendet wurde, ohne dass
+	// Stop() ihn dazu gebracht hat (z. B. Pipeline-Init-Fehler). Anders
+	// als ein per Stop() beendeter Prozess bleibt die Instanz dafür in
+	// List() sichtbar, statt spurlos zu verschwinden, bis der Nutzer sie
+	// per DELETE /api/v1/instances/<id> wegklickt oder neu startet.
+	Crashed bool `json:"crashed,omitempty"`
+	// CrashMessage ist der Wait()-Fehler plus die letzten
+	// crashStderrLines Zeilen stderr der Instanz, nur gesetzt wenn Crashed.
+	CrashMessage string `json:"crashMessage,omitempty"`
+}
+
+// EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
+// Clients (implementiert von *sse.Hub) — optional, darf nil sein (z. B.
+// in Tests), gleiches Muster wie graph.EventPublisher.
+type EventPublisher interface {
+	Broadcast(sse.Event)
 }
 
 // Launcher startet/stoppt Node-Instanzen aus dem Katalog als lokale
@@ -59,6 +86,7 @@ type Launcher struct {
 	registryURL string
 	natsURL     string
 	statePath   string
+	events      EventPublisher
 
 	mu        sync.Mutex
 	instances map[string]Instance
@@ -68,13 +96,14 @@ type Launcher struct {
 // aus dataDir/instances.json — Einträge, deren PID keinem laufenden
 // Prozess mehr entspricht, werden verworfen (der Kind-Prozess kann
 // zwischen zwei Orchestrator-Läufen jederzeit beendet worden sein, das
-// ist kein Fehler).
-func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string) *Launcher {
+// ist kein Fehler). events darf nil sein (z. B. in Tests).
+func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string, events EventPublisher) *Launcher {
 	l := &Launcher{
 		catalog:     catalog,
 		registryURL: registryURL,
 		natsURL:     natsURL,
 		statePath:   filepath.Join(dataDir, "instances.json"),
+		events:      events,
 		instances:   map[string]Instance{},
 	}
 	l.loadState()
@@ -122,9 +151,12 @@ func (l *Launcher) Start(nodeType string) (Instance, error) {
 	cmd.Env = buildEnv(entry.Env, id, label, l.registryURL, l.natsURL)
 	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
 	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
-	// kein eigenes Log-Aggregations-System für diesen Schritt.
+	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail
+	// spiegelt zusätzlich die letzten Zeilen mit, als Kontext für eine
+	// eventuelle Crash-Meldung (s.u.), ohne den Log-Passthrough anzufassen.
+	stderrTail := newTailBuffer(crashStderrLines)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 
 	if err := cmd.Start(); err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
@@ -142,12 +174,61 @@ func (l *Launcher) Start(nodeType string) (Instance, error) {
 	// Der Orchestrator ist Elternprozess und muss auf das Prozessende
 	// warten, sonst bleibt ein Zombie zurück, auch wenn niemand DELETE
 	// /api/v1/instances/<id> aufruft (Kind stirbt z. B. durch einen
-	// Pipeline-Fehler von selbst).
+	// Pipeline-Fehler von selbst). Ein solches unerwartetes Ende wird als
+	// Crash markiert (Nutzerfund: vorher verschwand die Instanz einfach
+	// spurlos aus der Kachel-Ansicht, sobald die NMOS-Registrierung
+	// ablief, ohne jedes Signal in der UI).
 	go func() {
-		_ = cmd.Wait()
+		waitErr := cmd.Wait()
+
+		l.mu.Lock()
+		current, stillTracked := l.instances[id]
+		if !stillTracked {
+			// Stop() hat die Instanz bereits entfernt — erwartetes Ende.
+			l.mu.Unlock()
+			return
+		}
+		current.Crashed = true
+		current.CrashMessage = crashMessage(waitErr, stderrTail.String())
+		l.instances[id] = current
+		if err := l.saveState(); err != nil {
+			slog.Warn("launcher: failed to persist instance state", "error", err)
+		}
+		l.mu.Unlock()
+
+		slog.Warn("launcher: instance exited unexpectedly", "id", id, "type", nodeType, "error", waitErr)
+		l.publishCrash(current)
 	}()
 
 	return inst, nil
+}
+
+// publishCrash meldet ein "instance.crashed"-SSE-Event, falls ein
+// EventPublisher konfiguriert ist (main.go verdrahtet den sse.Hub, Tests
+// lassen es i. d. R. nil).
+func (l *Launcher) publishCrash(inst Instance) {
+	if l.events == nil {
+		return
+	}
+	data, err := json.Marshal(inst)
+	if err != nil {
+		return
+	}
+	l.events.Broadcast(sse.Event{Type: "instance.crashed", Data: data})
+}
+
+// crashMessage baut die für Toast/Kachel-Tooltip angezeigte Meldung aus
+// dem Wait()-Fehler (nil bei exit 0, z. B. ein Node, der sich selbst ohne
+// Fehler beendet) und dem stderr-Tail des Subprozesses.
+func crashMessage(waitErr error, stderrTail string) string {
+	msg := "Prozess unerwartet beendet"
+	if waitErr != nil {
+		msg = waitErr.Error()
+	}
+	if stderrTail != "" {
+		msg += ": " + stderrTail
+	}
+	return msg
 }
 
 // Stop trennt id — SIGTERM, Wartezeit stopGracePeriod, dann SIGKILL,
@@ -280,6 +361,55 @@ func buildEnv(entryEnv map[string]string, instanceID, label, registryURL, natsUR
 		env = append(env, k+"="+v)
 	}
 	return env
+}
+
+// tailBuffer ist ein io.Writer, der nebenläufig sicher die letzten
+// maxLines geschriebenen Zeilen vorhält — Grundlage für crashMessage().
+// Kein bufio.Scanner (der bräuchte einen io.Reader auf der Gegenseite);
+// stattdessen zeilenweises Zerlegen der geschriebenen Bytes selbst, weil
+// cmd.Stderr nur einen io.Writer erwartet.
+type tailBuffer struct {
+	mu       sync.Mutex
+	maxLines int
+	lines    []string
+	partial  strings.Builder
+}
+
+func newTailBuffer(maxLines int) *tailBuffer {
+	return &tailBuffer{maxLines: maxLines}
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range p {
+		if c == '\n' {
+			b.appendLine(b.partial.String())
+			b.partial.Reset()
+			continue
+		}
+		b.partial.WriteByte(c)
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) appendLine(line string) {
+	b.lines = append(b.lines, line)
+	if len(b.lines) > b.maxLines {
+		b.lines = b.lines[len(b.lines)-b.maxLines:]
+	}
+}
+
+// String liefert die zuletzt gepufferten Zeilen (inklusive einer noch
+// nicht mit '\n' abgeschlossenen letzten Zeile), Newline-getrennt.
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lines := b.lines
+	if b.partial.Len() > 0 {
+		lines = append(append([]string{}, lines...), b.partial.String())
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 // newInstanceID erzeugt eine zufällige ID (gleiches Muster wie
