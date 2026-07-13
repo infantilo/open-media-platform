@@ -347,6 +347,73 @@ früh festzulegen, die eigentliche Umsetzung/Verifikation aber erst ab P2
 (Platform-Hardening, parallel zu Community-Nodes) bzw. der Cloud/k3s-Stufe
 anzugehen. Keine A–C-Schritte in `UMSETZUNG.md` ändern dadurch ihren Scope.
 
+**Erweiterung (2026-07-13): Metrics-Föderation über Bare-Metal/VM/Cloud +
+automatisierte Migration.** Konkretisiert die bisher offene Frage „wie
+werden Metriken jeder Maschine — lokal, remote, Cloud — gesammelt und
+genutzt, um bei Ausfällen/Engpässen automatisiert umzuziehen".
+
+1. **Ein Metrik-Schema, drei Quellen, ein Bus.** Unabhängig von der
+   Host-Klasse (§18.8) ist das Ziel immer derselbe NATS-Subject
+   (`omp.host.<hostId>.metrics`, §18.4) — die Placement-Engine bleibt
+   dadurch vollständig host-klassen-unwissend (kein Sonderfall-Code pro
+   Klasse, „so wenig hartkodiert wie möglich"-Leitlinie). Drei
+   Quell-Adapter füttern dasselbe Schema:
+   - **Bare-Metal/VM (lokaler Cluster):** `omp-host-agent` liest
+     `/proc`/`/sys` direkt (§18.4) — der Normalfall, keine Cloud-API
+     beteiligt.
+   - **Cloud (z. B. AWS EC2, §18.9):** derselbe `omp-host-agent`-Binary
+     läuft innerhalb der Instanz (aus Sicht des Agents „ein Host wie
+     jeder andere", §18.6) — liest identisch `/proc`/`/sys`, plus ein
+     dünner, optionaler Adapter, der die lokale Instance-Metadata-Service
+     (IMDSv2) nach Instanztyp/Spot-Interruption-Hinweisen abfragt und als
+     zusätzliche Inventar-Felder mit ausliefert. Bewusst **kein**
+     AWS-SDK-Dependency im Orchestrator-Kern (§10 Punkt 4) — der Adapter
+     ist isoliert im Host-Agent, nicht im Kern. Ein parallel laufender
+     CloudWatch-Agent für AWS-eigene Dashboards bleibt optional/entkoppelt,
+     keine Abhängigkeit unsererseits.
+   - **Verwaltete Cloud-Dienste, in die kein `omp-host-agent` installierbar
+     ist:** bewusst außerhalb des Scopes — ein Platzierungsziel ist
+     immer „ein Host mit laufendem `omp-host-agent`" (§18.1), keine
+     Ausnahme dafür eingeführt.
+2. **Von advisory zu automatisiert — Eskalationsstufen statt
+   Ein/Aus-Schalter.** Die bisherige Stufe 1 oben („advisory, nicht
+   sofort automatisch") wird zur **pro Workflow-Rolle konfigurierbaren
+   Automatisierungsstufe** (gleiches Muster wie die pro-Rolle
+   konfigurierbare Erkennungsgeschwindigkeit in §17.1):
+   - `advisory` (Default, unverändert): Alarm + vorgeschlagener Zielhost
+     im UI, ein Mensch bestätigt.
+   - `auto-confirm-window`: wie advisory, aber automatische Ausführung
+     nach Ablauf eines konfigurierbaren Bestätigungsfensters (z. B. 30 s),
+     falls niemand eingreift — Mittelweg für unbeaufsichtigte
+     24/7-Kanäle ohne sofortiges Blindvertrauen in die Engine.
+   - `auto`: sofortige automatische Ausführung des
+     Make-before-break-Protokolls (Punkt 3 oben), sobald
+     Schwellwert/Trend anschlägt — sinnvoll nur für Rollen mit
+     zuverlässigem State-Export/Readiness (§5 Punkt 6); **bewusst nicht
+     Default**, muss pro Rolle aktiv gesetzt werden.
+   Bottleneck-Trigger (Ressourcen-Trend, dieser Abschnitt) und
+   Crash-Trigger (§6.3) bleiben unterschiedliche Auslöser mit eigener
+   Reihenfolge — teilen sich ab jetzt dieselbe
+   Eskalationsstufen-Konfiguration statt zweier getrennter Konzepte.
+3. **Cross-Host-Class-Migration ist nicht überall gleich teuer.**
+   Bare-Metal→Bare-Metal (evtl. gleiche I/O-Karten-Klasse) ist der
+   günstigste Fall; Bare-Metal→Cloud scheitert weiterhin an der
+   I/O-Karten-Migrationsgrenze oben (physische Karte nicht in die Cloud
+   migrierbar) — Cloud-Hosts durchlaufen denselben Claim/Release-Filter
+   wie jeder andere Host, keine Ausnahme.
+4. **Cloud-Kostenfaktor, ehrlich benannt.** Eine `auto`-Migration in die
+   Cloud kann laufende Kosten auslösen (neue Instanz), anders als
+   On-Prem-Migration. Platzierungs-Hinweise (Punkt 2 oben) bekommen ein
+   optionales Kosten-Tag pro Host-Pool, das die Placement-Engine als
+   weichen (nicht harten) Scoring-Faktor berücksichtigen **kann** —
+   Default: Kosten fließen nicht ins Scoring ein, bis explizit
+   aktiviert. Bewusst kein eigenes Cloud-Kosten-Optimierer-Subsystem.
+
+**Standards-Abdeckung:** unverändert (Eigenentwicklung). **Testbarkeit:**
+Eskalationsstufen vollständig auf der Single-Host-Dev-Maschine simulierbar
+(fingierte Metriken + Timer, wie der bestehende §6.1-Testplan).
+**Phase:** D6/§6.1 wie oben, Host-Klassen-Details siehe §18.8/§18.9.
+
 ### 6.2 Workflow-Bereitstellung & -Verteilung (geplant, ab Phase D)
 
 **Anforderung:** Vergleichbare Cloud-Produktionsplattformen erlauben
@@ -648,6 +715,163 @@ sobald die Node-Images existieren. Umsetzung: P2, als Ausbau von D7
 (gleiche Katalog-/Agent-Bausteine); keine A–C-Schritte ändern ihren
 Scope.
 
+**Erweiterung (2026-07-13): Registry-Föderation & Distribution auf
+gemischte Remote-Hosts (Bare-Metal/VM/Cloud).** Konkretisiert, **wie**
+eigene und Drittanbieter-Microservices importiert, versioniert, verwaltet
+und tatsächlich auf entfernte Hosts verteilt werden — §6.4 oben legt
+Angebotsform/Sicherheit fest, hier die fehlende Verteil-Mechanik.
+
+1. **Registry-Föderation statt einer zentralen Registry.** Der
+   Orchestrator verwaltet eine Liste von **Registry-Quellen**
+   (URL + Auth-Credential-Referenz, admin-verwaltet, §12 `admin`-Rolle) —
+   gleichzeitig eine lokale On-Prem-Registry (eigener Quadlet-Container,
+   §4.3), eine Cloud-gehostete OCI-Registry (z. B. AWS ECR, §18.9) und
+   öffentliche Drittanbieter-Registries. Ein Katalog-Eintrag (§6.4) ist
+   `{registryRef, imageDigest, descriptor}` — die Registry-Quelle selbst
+   ist Konfiguration, kein Code-Pfad pro Anbieter (gleiches
+   Adapter-Prinzip wie `omp-mediaio`, §10.1).
+2. **Verteilung ist ein sichtbarer Schritt, kein impliziter
+   Nebeneffekt.** Aufnahme in den Katalog macht ein Image lediglich
+   startfähig (vergleichbar einem veröffentlichten, aber nicht
+   installierten Paket). Tatsächlich auf einem Remote-Host vorgehalten
+   wird es entweder (a) per **Lazy-Pull** beim ersten Start dort durch
+   den Ziel-Host-Agent (§18.5, der Normalfall bei guter Anbindung) oder
+   (b) per explizitem **Pre-Pull**
+   (`POST /api/v1/hosts/<id>/prepull {catalogEntryId}`) — wichtig für
+   Bare-Metal-Standorte mit schmaler/unzuverlässiger Anbindung (z. B. ein
+   entferntes 2110-Gateway-Standort), wo ein Image-Pull mitten in einer
+   Live-Migration (§6.1) zu spät käme. Pre-Pull-Fortschritt erscheint als
+   zusätzliche Spalte in der Host-Liste (§18.7); die Placement-Engine
+   (§6.1) darf „Image bereits lokal vorhanden" künftig als weichen
+   Placement-Faktor werten (schnellere Migration), nie als harte
+   Vorbedingung.
+3. **Publisher-Vertrauen pro Registry-Quelle, nicht global.** Jede
+   Registry-Quelle bekommt einen eigenen Vertrauensanker-Eintrag (welche
+   Signing-Identity wird akzeptiert) — OMP-eigene Images signiert mit
+   einem Projekt-Key, Drittanbieter-Images mit deren eigenem
+   Publisher-Key, getrennt konfiguriert. Ein Image ohne gültige Signatur
+   einer für seine Registry-Quelle akzeptierten Identity erscheint gar
+   nicht erst im Import-Dialog — nicht erst nach Aufnahme geprüft.
+4. **Versions-/Rollback-Historie:** ein Katalog-Eintrag hält eine kurze
+   Historie der letzten N Digests je Tag; „Update" (§6.4) legt einen
+   neuen Historieneintrag an statt den alten zu überschreiben,
+   „Rollback" ist nur die Wahl eines älteren Eintrags als aktiven Digest
+   für künftige Starts — keine neue Mechanik. Laufende Instanzen wechseln
+   unverändert nicht automatisch (§6.4).
+5. **Air-Gap/eingeschränkte Standorte sind kein Sonderfall.** Ein
+   Standort mit eigener lokaler Registry-Quelle (Punkt 1) und Pre-Pull
+   (Punkt 2) ist bereits die Air-Gap-Antwort — Images werden einmal in
+   die lokale Registry gespiegelt, von dort verteilt, kein zusätzliches
+   Datenmodell nötig.
+
+**Standards-Abdeckung:** OCI Distribution Spec (unverändert §6.4).
+**Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine (mehrere
+lokale Registry-Container als „mehrere Quellen", Pre-Pull gegen einen
+zweiten lokalen `omp-host-agent`-Prozess wie in §18 Testbarkeit).
+**Phase:** P2, Ausbau von §6.4/D7 — keine A–C-Schritte ändern ihren
+Scope.
+
+### 6.5 NDI/RTSP-Interop-Gateways (Fremd-Ökosystem-Anbindung, geplant ab P2/P4)
+
+**Anforderung (2026-07-13):** NDI und RTSP „fertig definieren" — beides
+bisher nur implizit unter „Live-Quellen" (§13.4) mitgemeint, nie konkret
+als Transport in `omp-mediaio` (§10.1) benannt.
+
+**Einordnung:** NDI (weit verbreitet bei Prosumer-/Software-Quellen —
+OBS, vMix, PTZ-Kameras, Kirche/Corporate-AV) und RTSP (IETF RFC 2326/7826,
+Standard bei IP-Kameras/älteren Encodern/OTT-Ingest) sind beides
+**Fremdprotokolle außerhalb von NMOS/ST 2110** — architektonisch derselbe
+Fall wie das bereits bestehende SRT/RIST-Cloud-Gateway (§6): ein
+dedizierter Gateway-Node übersetzt an der Facility-Grenze, das
+Fremdprotokoll leckt nie in den Kern (2110/MXL-Reinheit bleibt gekapselt,
+gleiches Prinzip wie beim Cloud-Gateway).
+
+1. **`omp-mediaio`-Module** `ndi` und `rtsp`, Feature-gated wie `mxl`
+   (§6.4/C4-Korrektur), identische `Input`/`Output`-Trait-Form:
+   - **NDI:** `gst-plugin-ndi` (Teil von `gst-plugins-rs`, MPL-2,
+     aktiv gepflegt Stand 2026 — passt sprachlich direkt in unseren
+     Rust-Node-Stack, §4.1a) kapselt die GStreamer-Seite. **Lizenz-
+     Ausnahme bewusst benannt:** die zugrundeliegende NDI-Laufzeit-
+     Bibliothek selbst ist proprietär (Vizrt/NewTek-SDK) — eine gezielte,
+     isolierte Ausnahme von der Apache/MIT/BSD/LGPL-Linie aus §8,
+     beschränkt auf genau die optionalen NDI-Gateway-Nodes (Cargo-Feature
+     `ndi`, Default aus, kein Kern-Dependency — gleiches Muster wie `mxl`).
+   - **RTSP:** `gst-rtsp-server`/`rtspsrc` (LGPL, Teil von
+     `gst-plugins-good`/eigenständiges GStreamer-Projekt) — keine
+     Lizenz-Sonderfrage. `RtspInput` liest Fremdquellen (IP-Kameras,
+     Encoder); `RtspOutput` exponiert einen internen MXL-Flow als
+     RTSP-abrufbaren Stream für Legacy-Monitoring — dieselbe Idee wie
+     `omp-viewer`s MJPEG-Preview (§13-C6), aber standardbasiert.
+2. **Zwei neue Referenz-Nodes** `omp-ndi-gateway`/`omp-rtsp-gateway`,
+   jeweils gerichtet (Fremdprotokoll→MXL bzw. MXL→Fremdprotokoll als
+   getrennte Katalog-Rollen, gleiche Richtungs-Trennung wie das
+   Cloud-Gateway) — Kategorie `input`/`output` (§13.5).
+3. **Discovery bleibt einfach:** NDI hat eigene mDNS-Discovery — die
+   findet ausschließlich **innerhalb** des Gateway-Node statt, nach außen
+   erscheint eine gefundene NDI-Quelle als ganz normaler IS-04-Sender
+   (kein doppeltes Discovery-UX, kein NDI-Sonderwissen im Orchestrator —
+   gleiches Prinzip wie überall: der Orchestrator kennt nur IS-04/05).
+4. **Placement:** kein Sonderfall — ein Gateway-Node ist ein normaler,
+   migrierbarer Node (§6.1); einzige Einschränkung ist Erreichbarkeit des
+   Fremdprotokoll-Netzsegments, ausgedrückt als gewöhnlicher
+   Platzierungs-Hinweis-Tag (§6.1 Punkt 2), keine neue Mechanik.
+
+**Standards-Abdeckung:** RTSP = IETF RFC 2326/7826 (offen); NDI =
+proprietäres Protokoll (Vizrt), hier nur als Fremdformat gebrückt wie
+SRT/RIST. **Testbarkeit:** RTSP vollständig auf der Dev-Maschine
+(ffmpeg/`rtsp-server`-Loopback); NDI nur mit vorhandener NDI-Laufzeit
+testbar — CI-Build ohne NDI-SDK überspringt das Feature (gleiches Muster
+wie MXL: „Default aus, baut ohne geklontes Repo"). **Phase:** P2/P4, als
+weiterer Ingest-/Gateway-Node-Typ neben §13.4, unabhängig von
+Community-Fortschritt baubar.
+
+### 6.6 RDMA/RoCEv2 — konkretisierter Aktivierungspfad (geplant ab P2/D)
+
+**Anforderung (2026-07-13):** Der bisherige RDMA-Hinweis oben („Opt-in
+pro Node-Paar, nicht Netz-weiter Standard") „fertig definieren" —
+bisher nur als Grundsatz benannt, kein konkreter Mechanismus.
+
+1. **Auslöser:** ein explizites Feld am Verbindungs-Template-Eintrag
+   einer Workflow-Kante (§6.2), `transportHint: "rdma"` — wirkt nur, wenn
+   beide Endpunkt-Hosts in ihrem Host-Agent-Inventar (§18.4) RDMA-
+   Fähigkeit melden: eine neue Inventar-Erweiterung `rdmaFabricId`
+   (welchem lossless-konfigurierten Fabric-Segment gehört dieser Host an
+   — zwei Hosts sind nur dann RDMA-fähig zueinander, wenn dieselbe ID).
+2. **`omp-mediaio`-Modul `rdma`**, Feature-gated wie `mxl`/`ndi`, gleiche
+   Trait-Form. **Backend nicht jetzt festlegen (nicht raten):** zwei
+   Kandidaten für die Umsetzung — vendor-neutrales `libibverbs`/
+   `rdma-core` (offen, jede RoCEv2-NIC, keine Vendor-Bindung) versus
+   NVIDIA Rivermax/GPUDirect (proprietär, an das in §10 Punkt 4 bereits
+   benannte NVIDIA-Tiger-Team-Risiko gekoppelt). **Empfehlung:**
+   `libibverbs`/`rdma-core` als Standardpfad (hält das
+   Vendor-Neutralitäts-Versprechen aus §10.2/10.4), Rivermax/GPUDirect
+   nur als zusätzliche, noch optionalere Beschleunigung hinter demselben
+   Trait für konkret NVIDIA-bestückte Hosts — Entscheidung bei der
+   D-Phase-Umsetzung anhand des dann aktuellen Ökosystem-Stands treffen.
+3. **Claim/Release wie I/O-Karten, nicht wie CPU.** Eine RDMA-qualifizierte
+   Netzwerkverbindung zwischen zwei Hosts ist eine diskrete, exklusive
+   Ressource (endliche garantierte Bandbreite eines lossless-konfigurierten
+   Fabrics), keine kontinuierlich auslastbare Größe — Placement-Engine
+   behandelt eine `rdma`-Kante als harte Platzierungsbedingung
+   **zwischen den beiden verbundenen Nodes** (beide müssen im selben
+   `rdmaFabricId`-Segment landen).
+4. **Fallback ist weich, nicht hart.** Anders als der I/O-Karten-Fall
+   (§6.1: fehlende Karte → Start-Ablehnung) ist RDMA reine
+   Performance-Option: lässt sich `transportHint: rdma` zum
+   Platzierungszeitpunkt nicht erfüllen, fällt die Kante automatisch auf
+   MXL (gleicher Host) bzw. ST 2110 (sonst) zurück, mit Advisory-Log,
+   kein Start-Abbruch — Signal-Präsenz geht nie verloren.
+5. **Node-Contract:** keine neue Pflicht — rein additive
+   Platzierungshinweis-Deklaration, nachrüstbar.
+
+**Standards-Abdeckung:** keine (RoCEv2/RDMA-Konfiguration ist
+Netzwerk-Engineering, kein NMOS-Standard). **Testbarkeit:** Fallback-/
+Claim-Logik auf der Single-Host-Dev-Maschine mit fingierten
+`rdmaFabricId`-Tags simulierbar (gleiches Muster wie §6.1); echte
+RoCEv2-Verifikation braucht ein lossless-konfiguriertes Fabric (§8 nennt
+das bereits als Unwegbarkeit). **Phase:** P2/D, zusammen mit §6.1s
+I/O-Karten-Claim/Release (gleiche Mechanik, sinnvoll zusammen gebaut).
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als
@@ -661,7 +885,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Referenz-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle, C1–C3 **erledigt**) **+ Node-Contract/SDK inkl. Doku** (D5 offen) — Community-Onboarding startet ab hier. **Resequenziert (§7.4, 2026-07-11):** direkt danach zuerst der kleine manuell bedienbare Regieplatz (§13 Bildmischer/Audiomischer/Player-Minimalausbau + §14 Operator-Console + OGraf §11.2 = „Demo 3"), **erst danach** die Playout-Automation-Vertiefung (ehemals C10/C11) | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups) | Community + Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups), NDI/RTSP-Gateways (§6.5), RDMA-Aktivierungspfad (§6.6), Registry-Föderation & automatisierte Migrationsstufen (§6.1-/§6.4-Erweiterungen), Host-Klassen-Mix Bare-Metal/VM/AWS (§18.8/§18.9), Ausfallsicherheits-Konsolidierung inkl. Standortredundanz (§21), professionelles UI/Workflow-Katalog mit Thumbnails/Suche (§22), Asset-Metadatenebene (§23) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Bei Bedarf auch hier eingeordnet, nicht vorher:** Orchestrator-Redundanz/Control-Plane-HA (§19) — erst relevant, wenn eine echte 24/7-Sendeabwicklung ansteht (§1-Zielbild), nicht für die Demo-Phasen | Später |
 | **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal, DVE/Keyer/Kompressor/Limiter/Expander-**Vertiefung** der in Phase C bereits vorgezogenen §13-Minimalknoten (Grundgerüst siehe P1-Zeile/§7.4), **Ressourcen-Kapazitätsplanung/Kalender (§16)** nach D7, **Remote-Host-Erkennung (§18)** sobald eine zweite Maschine real verfügbar ist | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
@@ -1820,6 +2044,67 @@ entsprechend ergänzt) — sobald der kleine Regieplatz (§7.4) steht, ist dies
 der nächste sinnvolle, weil unabhängig von Community-Beiträgen
 angehbare Baustein.
 
+### 18.8 Host-Klassen gemischt betreiben: Bare-Metal / VM (lokaler Cluster) / Cloud (2026-07-13)
+
+**Anforderung:** Remote-Hosts gemischt aus Bare-Metal, VM (lokaler
+Cluster) und Cloud (z. B. AWS) betreiben — Bare-Metal insbesondere für
+2110-In/Out-Gateway-Karten.
+
+| Klasse | Typische Rolle | Besonderheit für Host-Agent/Placement |
+|---|---|---|
+| Bare-Metal (dediziert) | 2110/NDI/SDI-Gateway-Karten (I/O-Karten-Inventar, §6.1), PTP-Hardware-fähig, 24/7-Sendeabwicklungen (§1-Zielbild) | höchste Redundanz-Anforderung (§21) |
+| VM (lokaler Cluster) | Compute-lastige, nicht I/O-Karten-gebundene Nodes (Mixer/Player/Playout-Automation/OGraf-Rendering) | Host-Agent läuft identisch wie auf Bare-Metal — keine Sonderbehandlung; konkretes Virtualisierungsprodukt bewusst nicht vorgegeben (kein Vendor-Lock) |
+| Cloud (z. B. AWS EC2) | burst-fähige Zusatzkapazität | kein PTP/Multicast (§6/§8), Cloud-Gateway-Node als Brücke, Host-Agent identisch (§18.6) |
+
+**Zentrale Konsequenz:** Die Host-Klasse selbst ist **kein neues,
+hartkodiertes Feld** — sie ergibt sich vollständig aus bereits
+vorhandenen Host-Agent-Inventar-Signalen (I/O-Karten vorhanden? PTP-fähig?
+`rdmaFabricId` gesetzt, §6.6? Cloud-Instance-Metadata-Adapter aktiv,
+§6.1-Erweiterung Punkt 1?). Workflows deklarieren **Anforderungen**
+(braucht SDI-In, braucht PTP, toleriert Cloud), nie eine Host-Klasse als
+String — damit bleibt die Placement-Engine unverändert, egal wie viele
+Klassen tatsächlich im Einsatz sind.
+
+**Netzwerk-Erreichbarkeit zwischen Klassen:** Der Kommandokanal
+(Orchestrator↔Host-Agent, mTLS über NATS, §18.5) funktioniert
+unverändert über WAN — „Agent-initiiert" (§18.2) wurde genau dafür
+entschieden, keine eingehende Portöffnung am Cloud-Host nötig, läuft
+hinter Standard-VPC-Security-Groups ohne Sonderkonfiguration. Für den
+**Media**-Pfad zwischen Klassen gilt unverändert §6 (2110 nur im
+Multicast-fähigen LAN, WAN/Cloud über die Cloud-Gateway-Node/SRT-RIST).
+
+### 18.9 AWS als konkrete Cloud-Zielumgebung — Ausbaustufen (2026-07-13)
+
+1. **Stufe 1 (heute erreichbar, kein neuer Baustein):** eine einzelne
+   EC2-Instanz mit `omp-host-agent` + Podman, gebootstrapped wie jeder
+   andere Host (§18.3) — EC2 User-Data/Cloud-Init trägt das
+   Bootstrap-Token ein, identisches Muster wie „Kickstart" in §18.3
+   Punkt 2.
+2. **Stufe 2 (Multi-Host-Cloud, k3s — bereits in §4.3/§18.6
+   vorgesehen):** mehrere EC2-Instanzen als k3s-Cluster; entweder
+   self-managed k3s auf EC2 (volle Kontrolle, kein AWS-Vendor-API im
+   Kern) oder EKS (AWS-verwaltete Control-Plane) — austauschbare
+   Betriebswahl, keine Architektur-Entscheidung, beide sprechen dieselbe
+   k8s-API.
+3. **Registry:** ECR (oder jede andere OCI-Registry) als eine mögliche
+   Registry-Quelle unter mehreren (§6.4-Erweiterung Punkt 1) — reine
+   Konfiguration, keine Sonderintegration.
+4. **Metrics:** siehe §6.1-Erweiterung Punkt 1 (identischer Host-Agent,
+   optionaler IMDSv2-Adapter, kein CloudWatch-Zwang).
+5. **Bewusst nicht gebaut:** kein AWS-SDK-Dependency im
+   Orchestrator-Kern, kein Terraform/CloudFormation-Modul als Teil dieses
+   Projekts — Infrastruktur-Provisionierung ist Betreiber-Sache, das
+   Projekt beginnt erst beim laufenden `omp-host-agent`, konsistent mit
+   §10 Punkt 4 (kein Vendor-SDK-Lock-in) und §18.3 Punkt 2 (beliebiges
+   Provisioning-Tool).
+
+**Standards-Abdeckung:** keine (AWS-Spezifika sind Betreiber-Konfiguration,
+keine Architektur-Kernabhängigkeit). **Testbarkeit:** Stufe 1 vollständig
+mit einem echten AWS-Account verifizierbar, sobald gewünscht — kostet
+echtes Geld, kein Ersatz für die Single-Host-Simulation, nicht Teil der
+Standard-Dev-Verifikation. **Phase:** nach dem §18-Kernbau (D6), kein
+zusätzlicher Foundational-Schritt.
+
 ## 19. Orchestrator-Redundanz / Control-Plane-HA (Konzept, gestaffelt — kein Umsetzungsschritt vor Bedarf)
 
 **Anforderung (2026-07-11):** Haben wir ein Redundanzkonzept für unseren
@@ -1994,7 +2279,10 @@ wird** (keine neuen Bausteine erfunden, nur sinnvoll sequenziert):
 **Noch nicht final priorisiert** — Nutzer-Entscheidung zwischen (a)
 schneller sichtbarer Cut behalten, (b) obige Reihenfolge als Zielbild
 festschreiben, (c) Zwischenlösung (paralleler, identisch bedienter
-Standby + Downstream-Freeze-Frame) steht noch aus.
+Standby + Downstream-Freeze-Frame) steht noch aus. **Siehe §21.1 für die
+Einordnung in das konsolidierte Redundanz-Gesamtbild und §21.3 für eine
+Empfehlung (Option c als pragmatischer Standardweg) — weiterhin keine
+Entscheidung, nur eine Empfehlung.**
 
 ### 20.2 Dynamischer, durchsuchbarer Microservice-Katalog
 
@@ -2009,7 +2297,9 @@ artiges Browsen über Name/Tag/Hersteller/Kategorie/Kompatibilität) über
 §6.4s Katalog — bisher ist nur grobe Kategorien-Gruppierung (§13.5)
 gescoped, kein Volltext-/Facetten-Filter. Kleiner additiver Baustein auf
 §6.4, keine eigene Architektur-Entscheidung nötig — als Detail-Schritt
-mitplanen, sobald §6.4 an der Reihe ist (P2).
+mitplanen, sobald §6.4 an der Reihe ist (P2). **Konkretisiert in §22.3
+Punkt 8/§22.4 (Kachel-Grid + `<omp-catalog-search>` über Workflow- und
+Node-Katalog).**
 
 ### 20.3 Design-System / Look-and-Feel
 
@@ -2027,7 +2317,8 @@ gebaut — funktioniert, sieht aber pro Node leicht anders aus. **Kandidat
 für einen eigenen Schritt** (vermutlich zusammen mit C13, weil die
 Operator-Console die erste UI-Fläche ist, die mehrere Node-Panels
 nebeneinander zeigt und dadurch Stil-Inkonsistenz zuerst sichtbar
-gemacht).
+gemacht). **Konkretisiert in §22.2 (Token-Satz, `ui/kit/`-Bibliothek,
+Theming inkl. „Studio-Dark") und §22.1 (Navigations-/Menü-Struktur).**
 
 ### 20.4 Security/Auth-Hardening (D3) — Priorität prüfen
 
@@ -2085,4 +2376,337 @@ das braucht.
 **Nächster Schritt:** Nutzer priorisiert §20.1–§20.6, danach werden
 priorisierte Punkte als reguläre `UMSETZUNG.md`-Schritte konkretisiert —
 analog zu §11.2/§13/§19s bisherigem Vorgehen (erst hier als Konzept
-verankern, dann erst zum nummerierten Schritt machen).
+verankern, dann erst zum nummerierten Schritt machen). **Update
+2026-07-13:** §21–§23 unten lösen einen Teil dieser Punkte bereits zu
+vollständigeren Konzepten auf (§20.1 → §21, §20.2/§20.3 → §22) — die
+Priorisierungsfrage aus §20.1 (echte Genlock-Äquivalenz ja/nein) bleibt
+trotzdem offen, siehe §21.3 für eine Empfehlung statt einer Entscheidung.
+
+## 21. Ausfallsicherheits-Gesamtkonzept (konsolidiert, 2026-07-13)
+
+**Anforderung:** Das Redundanz-/Ausfallsicherheits-Konzept über das ganze
+Projekt hinweg erweitern und an einer Stelle zusammenführen — bisher über
+§6.3 (reaktives Failover), §19 (Control-Plane-HA) und §20.1
+(Genlock-Äquivalenz-Frage) verteilt, ohne Gesamtbild.
+
+**Einordnung:** Kein neues Redundanz-Konzept — dieser Abschnitt dupliziert
+keine der genannten Stellen, sondern ordnet sie in eine gemeinsame
+Schichtung ein, ergänzt die bisher fehlende Standort-/Regionsebene und
+macht eine konkrete Empfehlung zur offenen §20.1-Frage.
+
+### 21.1 Redundanz-Schichten im Überblick
+
+| Ebene | Mechanismus | Deckt ab | Deckt nicht ab | Referenz |
+|---|---|---|---|---|
+| Netzwerkpfad | ST 2022-7 | Paketverlust auf einem von zwei Pfaden derselben Quelle | Prozess-/Host-Ausfall | §2/§6 |
+| Prozess-Crash | Restart-in-place + Template-Reapply | Sekunden-Unterbrechung nach Crash | Host-Ausfall, Überlast-Trend | §6.3 Stufe 2 |
+| Degradation | Downstream toleriert fehlenden Upstream | Kettenausfälle | den eigentlichen Signalausfall selbst | §6.3 Stufe 3 |
+| Hot-Standby (N+1, Rolle) | parallele Instanz, break-before-make | kurzer sichtbarer Schnitt statt Totalausfall | unsichtbare Übernahme | §6.3 Stufe 4 |
+| Ressourcen-Migration | Placement-Engine, Make-before-break, jetzt mit Eskalationsstufen | drohende Überlast, bevor sie zum Ausfall wird | plötzlichen Host-Totalausfall ohne Vorwarnzeit | §6.1 (+ Erweiterung 2026-07-13) |
+| Host-Totalausfall | N+1-Reservekapazität je Host-Pool/Fabric + automatisierte Migration bei Staleness | unerwarteten Hardware-/VM-Ausfall | I/O-Karten-gebundene Rollen ohne Ersatz-Host | §6.1/§18 |
+| Seamless (Genlock-Äquivalent) | Command-Mirroring + `omp-seamless-switch` (Zielbild, priorisierungsoffen) | unsichtbare Übernahme mitten in einer Transition | — (genau das ist der Zweck) | §20.1, Empfehlung §21.3 |
+| Control-Plane | Active-Passive-Orchestrator (Postgres-Advisory-Lock) | Steuerungsausfall bei Host-Verlust | Postgres/NATS-eigene Redundanz | §19 |
+| Persistenz | Postgres-HA/NATS-Clustering (noch nicht gebaut) | Datenverlust bei DB-/Bus-Host-Ausfall | — | §19 Punkt 4 |
+| Standort/Region | neu, §21.2 | kompletten Standortausfall | echte Sendefähigkeit von einem Zweitstandort (eigenes, größeres Vorhaben) | §21.2 |
+
+**Leseanleitung:** keine Zeile ersetzt eine andere — ein 24/7-Kanal
+kombiniert typischerweise mehrere Zeilen gleichzeitig (ST 2022-7 für den
+Netzpfad, Hot-Standby für die kritische Mixer-Rolle, N+1-Host-Kapazität
+für den Rest). Welche Kombination ein Workflow tatsächlich braucht, ist
+weiterhin Workflow-Konfiguration (§6.2/§6.3), keine globale
+Plattform-Einstellung — dieser Abschnitt ändert daran nichts, er macht
+nur sichtbar, wie die Bausteine zusammenspielen.
+
+### 21.2 Standort-/Regionsredundanz (neu, bisher nirgends abgedeckt)
+
+**Lücke:** Für eine gemischte Bare-Metal/VM/Cloud-Facility (§18.8) fehlte
+bisher jede Aussage zu einem kompletten Standortausfall (Stromausfall,
+Brand, Bauschaden) — alle bisherigen Redundanz-Ebenen (§21.1) setzen
+einen einzelnen, weiterhin erreichbaren Standort voraus.
+
+**Zwei deutlich unterschiedlich teure Stufen, nicht vermischen:**
+
+1. **Config-/Steuerungs-Redundanz (günstig, direkte Erweiterung von
+   §19.3):** Da der Orchestrator kaum eigenen, nicht wiederherstellbaren
+   Zustand hält (Config/Snapshots/Workflows in Postgres, §4.4/§19.3), ist
+   ein zweiter Orchestrator-Standort mit Postgres-Streaming-Replikation
+   in ein zweites Rechenzentrum/eine zweite AWS-Region technisch dieselbe
+   Übung wie Postgres-HA selbst (§19 Punkt 4, dort bereits als „eigene,
+   aufwändige Baustelle" benannt) — **kein neuer Mechanismus**, nur eine
+   geografisch getrennte Instanz derselben Replikation. Deckt „Workflows/
+   Konfiguration sind nach einem Totalausfall des Hauptstandorts nicht
+   verloren" ab — nicht mehr.
+2. **Echte Sendefähigkeit von einem Zweitstandort (teuer, bewusst
+   Nicht-Ziel dieses Konzepts):** würde eigene 2110/PTP-Infrastruktur
+   oder eine deutlich schwerere Cloud-Präsenz am Zweitstandort brauchen,
+   plus eine Entscheidung, wie Signalquellen dorthin gelangen — das ist
+   ein eigenständiges, deutlich größeres Vorhaben (vergleichbar mit
+   „zweites Sendezentrum bauen"), nicht Teil dieses Konzepts und nicht
+   für die aktuellen Demo-Phasen (§7) relevant. Ehrlich als Nicht-Ziel
+   benannt, damit Punkt 1 nicht als „wir haben Geo-Redundanz" missverstanden
+   wird, obwohl nur die Steuerung repliziert ist.
+
+**Standards-Abdeckung:** keine (Eigenentwicklung, direkte Erweiterung von
+§19). **Testbarkeit:** Punkt 1 auf der Single-Host-Dev-Maschine nur als
+Konfigurationsprotokoll simulierbar (zwei Postgres-Instanzen lokal),
+echte Standorttrennung erst mit zwei realen Standorten. **Phase:** wie
+§19 — kein Schritt vor einer echten 24/7-Sendeabwicklung (§1-Zielbild).
+
+### 21.3 Empfehlung zur offenen §20.1-Frage (Genlock-Äquivalenz)
+
+§20.1 ließ die Wahl zwischen (a) schneller sichtbarer Cut behalten,
+(b) volle Genlock-Äquivalenz-Reihenfolge als Zielbild festschreiben,
+(c) Zwischenlösung (paralleler identisch bedienter Standby +
+Downstream-Freeze-Frame) ausdrücklich offen. Auf Basis der
+Aufwand/Nutzen-Größenordnungen aus §20.1 („Command-Mirroring +
+Seamless-Switch als Single-Host-Prototyp: Wochen bis wenige Monate;
+produktionsreif über zwei Hosts: eher ein Jahr+") und der Tabelle oben
+(21.1: Hot-Standby liefert bereits „kurzer sichtbarer Schnitt statt
+Totalausfall" zu einem Bruchteil des Aufwands):
+
+**Empfehlung: Option (c) als pragmatischer Standardweg**, mit offen
+gehaltener Tür zu (b) — nicht, weil (b) uninteressant wäre, sondern weil
+(c) den größten Teil des wahrgenommenen Werts (kein hartes Standbild/
+Schwarzbild bei Übernahme, sondern ein kurzes eingefrorenes Bild) zu
+einem Bruchteil des Risikos liefert, und die in §20.1 bereits skizzierte
+„Empfohlene Fundament-Reihenfolge" (Grain-Index-strukturierte Kommandos
+→ Failover-Erkennung/sichtbarer Cut → echte PTP-Zeitbasis →
+Command-Mirroring/`omp-seamless-switch` → Determinismus-Härtung) davon
+unberührt als spätere Ausbaustufe zu (b) nutzbar bleibt, falls der
+Nutzer sich später doch dafür entscheidet. **Das ist eine Empfehlung,
+keine Entscheidung** — bleibt wie in §20.1 benannt Nutzer-Entscheidung,
+bevor daraus ein `UMSETZUNG.md`-Schritt wird.
+
+**Standards-Abdeckung:** keine (Bewertung, keine neue Technik).
+**Phase:** Priorisierungsfrage, kein Schritt vor Entscheidung — siehe
+§20.1 für den vollständigen Fundament-Reihenfolge-Plan.
+
+## 22. Professionelles UI-Gesamtkonzept (2026-07-13)
+
+**Anforderung:** UI professioneller machen — hochwertiges Look-and-Feel,
+Menüs, UI-Verwaltung, Workflow-Katalog (Workflow definieren,
+konfigurieren, speichern, laden/starten/stoppen), Screenshot als
+Thumbnail, Beschreibung, Titel, durchsuchbar.
+
+**Einordnung:** Löst §20.3 (Design-System, bisher nur als Kandidat
+benannt) und §20.2 (Such-/Filter-UX-Lücke) vollständig auf und ergänzt
+die bisher fehlende **Präsentationsschicht** über dem bereits
+vollständig spezifizierten Workflow-Objekt (§6.2) und Microservice-
+Katalog (§6.4/§13.5). Kein neues Backend-Konzept — dieser Abschnitt ist
+UI/UX über bereits stehenden APIs, plus eine kleine Zahl additiver
+Felder.
+
+### 22.1 Navigations-/Menü-Struktur der Shell
+
+Erweitert die bisherige Zwei-Ansichten-Shell (§14: Engineering
+vs. Console) um eine echte App-Chrome-Navigation für alle Bereiche, die
+in den letzten Kapiteln entstanden sind:
+
+- **Flow-Editor** (Engineering, §4.5a) — live Graph.
+- **Workflow-Katalog** (neu, §22.3) — Regieplätze definieren/verwalten.
+- **Microservice-Katalog** (§6.4/§20.2) — Node-Images verwalten.
+- **Hosts** (§18.7) — Host-Liste, Auslastung, I/O-Karten-Inventar.
+- **Kapazitäts-Kalender** (§16).
+- **Rollen/Nutzer** (§12) — nur für `admin`.
+- **Console** (§14) — für `operate`-only-Nutzer automatisch die
+  **einzige** sichtbare Fläche, wie in §14 bereits festgelegt: diese
+  Navigation wird für sie gar nicht gerendert, kein Sonderfall hier.
+
+Bereich-Sichtbarkeit ist reine Funktion der §12-Rollenauflösung (kein
+neues Rechtekonzept) — Navigationspunkte ohne passende Rolle werden nicht
+gerendert, nicht nur deaktiviert (gleiche „Filterung ist Komfort,
+Durchsetzung bleibt beim Orchestrator"-Regel wie überall in §12/§14).
+
+### 22.2 UI-Verwaltung: Design-System (konkretisiert aus §20.3)
+
+- Ein zentraler CSS-Custom-Properties-Token-Satz (Farbe, Typografie,
+  Spacing, Zustände idle/active/warn/error/on-air) in
+  `ui/design-tokens.css`, von der Shell geladen. Jedes Node-UI-Bundle
+  (§4.5) importiert ihn statt eigener Ad-hoc-Styles — bricht die
+  Shadow-DOM-Isolation nicht: CSS-Custom-Properties durchdringen
+  Shadow-DOM-Grenzen by design, das ist genau der dafür vorgesehene
+  Mechanismus, kein neues Framework-Konzept.
+- Eine kleine, **optionale** Grundbaustein-Bibliothek `ui/kit/`
+  (`<omp-button>`, `<omp-fader>`, `<omp-tally-badge>`, `<omp-panel>`,
+  `<omp-catalog-search>` für 22.3/22.4) — ein Node-UI-Bundle darf sie
+  nutzen, muss aber nicht (bleibt kompatibel mit „kein Framework-Zwang
+  für Plugin-Autoren", §4.5).
+- **Theming:** Light/Dark plus eine „Studio-Dark"-Hochkontrast-
+  Voreinstellung (typischer dunkler Regie-Raum) über dieselben Tokens,
+  kein Zusatzsystem.
+- Persönliche Einstellungen (Theme-Wahl, Standard-Landing-Bereich) landen
+  wie Layouts/Snapshots in Postgres (§4.4/D1), pro Nutzer.
+
+### 22.3 Workflow-Katalog: definieren, konfigurieren, speichern, laden, starten, stoppen
+
+Die zentrale neue UI-Fläche — bisher existierte das Workflow-**Objekt**
+vollständig (§6.2: Name, Node-Rollen, Verbindungs-Template,
+Platzierungs-Hinweise, Zeitplan §6.2, Latenz-Budget §15,
+Automatisierungsstufe §6.1-Erweiterung), aber keine dedizierte
+Bedienoberfläche dafür.
+
+1. **Workflow-Designer:** technisch eine Variante des bestehenden
+   SVG-Graph-Editors (§4.5a/B2–B3), aber auf **Rollen statt konkreten
+   Node-Instanzen** — Kacheln sind „Rolle: Videomixer" statt „Node
+   xyz-123", Kanten sind Rolle→Rolle-Verbindungs-Templates statt echte
+   IS-05-Connections. Derselbe Zeichen-/Gruppierungs-Code (`ui/graph/*`),
+   andere Datenquelle (Workflow-Objekt statt Live-Registry) — keine
+   zweite Implementierung.
+2. **Speichern/Laden:** Workflow-Objekte sind bereits Postgres-Objekte
+   (D1) — „Speichern" ist ein `PUT /api/v1/workflows/<id>`, „Laden" ein
+   `GET`, „Duplizieren" (neue Sendung nach Vorlage) ein einfaches
+   Copy-on-Write. Kein neuer Persistenzmechanismus.
+3. **Start/Stop:** ruft die in §6.2 bereits definierten
+   Lifecycle-Endpunkte auf (inkl. Ressourcen-Vorprüfung §6.2 Punkt 3,
+   Stop-Sicherheitsabfrage §6.2 Punkt 2, Zeitplan §6.2 Punkt 1) — der
+   Designer ist Bedienoberfläche für bereits vollständig spezifiziertes
+   Backend-Verhalten, fügt selbst keine Lifecycle-Logik hinzu.
+4. **Titel/Beschreibung/Tags:** additive Textfelder am Workflow-Objekt
+   (`title`, `description`, `tags[]`) — sauber in der neuen
+   Metadatenebene (§23.3) verortet statt lose angehängt.
+5. **Screenshot-Thumbnail — Mechanik:** Bei „Speichern" (und optional
+   automatisch bei jedem `start`, sobald die Program-Bus-Rolle
+   „media-ready" meldet, §5 Punkt 6) fragt der Designer einen
+   Preview-Frame der Program-Bus-Rolle ab — **Wiederverwendung** des
+   bereits vorhandenen MJPEG-Preview-Mechanismus (`omp-viewer`, §13-C6,
+   seit dem C13-Nachtrag als gemeinsames `preview`-Feature in
+   `omp-mediaio`): `GET <previewUrl>` liefert ohnehin einzelne JPEGs,
+   kein neuer Node-Endpunkt nötig. Das Bild landet als Thumbnail-Blob am
+   Workflow-Objekt (Postgres `bytea`, D1-Scope — kein MinIO/S3 für so
+   kleine Bilder, bewusst kein neues Subsystem für ein Thumbnail). Für
+   einen gestoppten Workflow bleibt das zuletzt erfasste Thumbnail
+   stehen (ein Standbild reicht für einen Katalogeintrag); ohne je
+   erfasstes Bild zeigt der Designer einen generischen Platzhalter nach
+   Kategorie (Punkt 7 unten). Ereignisgetrieben über denselben
+   `node.added`/Status-Listener, der bereits §6.2/§6.3/§15 Punkt 6
+   bedient — kein Dauer-Polling.
+6. **Katalog-Übersicht (Kachel-Grid):** neue Landing-Ansicht zeigt
+   gespeicherte Workflows als Kacheln mit Thumbnail, Titel, gekürzter
+   Beschreibung, Status-Badge (läuft/gestoppt/geplant, aus dem
+   Lifecycle-Status §6.2), Kategorie-Icon.
+7. **Kategorie auf Workflow-Ebene:** Wiederverwendung des
+   §13.5-Kategorie-Enums, um eine zweite Taxonomie zu vermeiden — erweitert
+   um `regieplatz` als Workflow-typischen Wert (ein Workflow „ist"
+   typischerweise ein Regieplatz).
+8. **Suche/Filter (konkretisiert aus §20.2):** Volltext über
+   `title`/`description`/`tags[]` — Postgres-Volltextsuche/`ILIKE`
+   reicht für die erwartete Größenordnung (Dutzende bis wenige Hunderte
+   Workflow-Definitionen einer Sendeanstalt), bewusst kein
+   Such-Index-Subsystem wie Elasticsearch. Plus Facetten (Kategorie,
+   Status, „von mir zuletzt bearbeitet"). Dieselbe Such-UI-Komponente
+   (`<omp-catalog-search>`, §22.2) bedient auch den Node-Katalog (22.4) —
+   zwei Datenquellen, ein Such-Baustein.
+9. **Rollen-Scoping unverändert:** wer den Katalog sieht/durchsucht,
+   regelt §12 bereits (Filterung auf erlaubte Workflows) — dieser
+   Abschnitt fügt nur Präsentation hinzu, keine neue Zugriffslogik.
+
+### 22.4 Node-/Microservice-Katalog-UI (Ausbau von §6.4/§20.2)
+
+Gleiches Kachel-Grid-Muster wie 22.3, Quelle ist hier der §6.4-Katalog.
+Thumbnail ist hier kein Live-Screenshot (ein Node-**Typ** hat kein
+„Bild" vor dem ersten Start), sondern ein vom Publisher mitgeliefertes
+**statisches Icon** als weiteres, additives Descriptor-Feld (`iconUrl`,
+additiv wie `category` in §13.5) — fehlt es, generisches Kategorie-Icon
+als Fallback (fehlendes optionales Feld ist nie ein Fehler, gleiche
+Regel wie überall).
+
+### 22.5 Node-Contract-/Standards-Berührung: keine neue Pflicht
+
+Wie bei §14/§20.2/§20.3 bereits festgehalten: alle hier beschriebenen
+UI-Flächen sind Kompositionen bestehender Backend-Objekte (Workflow
+§6.2, Katalog §6.4, Rollen §12) plus rein additive Felder
+(`title`/`description`/`tags` am Workflow, `iconUrl` am
+Katalog-Descriptor) — kein neuer Pflichtpunkt in §5, kein Breaking
+Change für bestehende Nodes/Workflows.
+
+**Standards-Abdeckung:** keine (UI/UX ist Eigenentwicklung, nutzt
+ausschließlich bereits stehende Standards/APIs darunter). **Testbarkeit:**
+vollständig auf der Single-Host-Dev-Maschine (Workflow anlegen/speichern/
+Thumbnail von einer laufenden Mock-Pipeline holen/suchen/laden/starten/
+stoppen, ohne zweiten Host). **Phase:** P2/P4, zusammen mit §6.2/§6.4/D1
+(Postgres) — konkret nach D1 (Persistenz für Workflow-Objekte inkl.
+Thumbnail-Blob) und nach dem kleinen Regieplatz (§7.4, braucht eine
+echte Program-Bus-Rolle für sinnvolle Thumbnails). Keine A–C-Schritte
+ändern ihren Scope.
+
+## 23. MXL/DMF-Metadatenebene (2026-07-13)
+
+**Anforderung:** Die MXL/DMF-Metadatenebene mitbedenken — bisher wurde
+„Metadaten" an mehreren Stellen unterschiedlich verwendet (Flow-Timing,
+Node-Selbstbeschreibung, Ancillary-Daten, jetzt auch Katalog-Titel/
+-Beschreibung aus §22), ohne sie einmal auseinanderzuhalten.
+
+### 23.1 Drei bereits vorhandene Metadaten-Bedeutungen — Klarstellung
+
+Keine davon ist neu, nur bisher nicht gemeinsam benannt:
+
+1. **Flow-/Grain-technische Metadaten (MXL-Ebene):** Timing
+   (TAI-Grain-Index, §15 Punkt 4), Format/Caps, im MXL-Flow-Deskriptor
+   selbst (`third_party/mxl` Flow-JSON, §6.4/C4-Korrektur) — von der
+   MXL-Spec bereits vollständig definiert, wir übernehmen sie nur, kein
+   Eigenformat.
+2. **Node-Selbstbeschreibung (Control-Ebene, IS-12/14):** Parameter/
+   Methoden/Wertebereiche eines Node (§2/§11.1) — beschreibt
+   **Verhalten**, nicht Inhalt.
+3. **Zeitgebundene Begleitdaten im Signalpfad (Ancillary/Daten-Flows):**
+   Timecode, Captions, künftig Grafik-Steuerdaten, als eigener
+   MXL-Datenflow (`format: urn:x-nmos:format:data`, §15 Punkt 5) —
+   reist **mit** dem Signal, Grain-synchron.
+
+**Neu, bisher fehlend — Inhalts-/Asset-Metadaten:** Titel, Beschreibung,
+Schlagworte, Kategorie (genau das, was §22.3 für den Workflow-Katalog
+braucht, perspektivisch auch Rechte-/Sendeprotokoll-Angaben aus §20.6) —
+beschreibt **was etwas ist**, nicht wie es fließt oder wie man es steuert.
+Bisher nirgends im Datenmodell verankert.
+
+### 23.2 EBU-DMF-Einordnung (Recherche 2026-07-13, fable-Konsultation)
+
+Die DMF-Referenzarchitektur (EBU White Paper v2.0, April 2026)
+beschreibt Media-Functions als zustandslose, containerisierte
+Microservices, die on-prem, remote oder in der Public Cloud betrieben
+werden — das deckt sich exakt mit dem bereits gebauten Node-Contract-/
+Katalog-Modell (§5/§6.4), keine neue Anforderung daraus. Der
+MXL-Teil der DMF-Architektur definiert bereits eine gemeinsame
+Datenstruktur für Grains, Timing **und** Metadaten — bestätigt, dass
+Punkt 23.1.1 (Flow-technische Metadaten) korrekt bei MXL verortet ist
+und nicht dupliziert werden sollte. DMF selbst definiert **keinen**
+Asset-/Content-Metadaten-Standard (Titel/Beschreibung/Rechte) — das
+bleibt facility-eigene Ergänzung, kein Standard-Gap, den wir falsch
+schließen würden.
+
+### 23.3 Wo die neue Asset-Metadaten-Schicht lebt (minimal, kein MAM-Vorgriff)
+
+**Bewusst kein MAM-Subsystem** — §20.8 bleibt gültig (MAM ist P3/„nach
+2029") — stattdessen die kleinstmögliche Erweiterung, die §22.3
+(Workflow-Katalog) und §6.4 (Node-Katalog) tatsächlich brauchen:
+
+- Additive Felder direkt an bereits bestehenden Objekten
+  (`title`/`description`/`tags[]`/`iconUrl`/Thumbnail-Blob, §22.3/§22.4)
+  — kein neues „Asset"-Objekt, keine neue Tabelle über das hinaus, was
+  Workflow-/Katalog-Objekte ohnehin brauchen.
+- Für Medien-**Inhalte** selbst (Clips im `omp-player`, §13.3) ist die
+  Playlist-Item-Struktur (`PlaylistController`, §11.1) der natürliche
+  Ort für dieselben Felder (Titel/Beschreibung/Tags pro Clip) — additiv,
+  gleiche Begründung.
+- **Bewusste Grenze:** sobald „Rechte-Ablaufdatum", „Sendeprotokoll-
+  Pflichtfelder" (§20.6) oder eine durchsuchbare Asset-**Bibliothek**
+  unabhängig von Playlist-Einträgen gefordert wird, ist das der Punkt,
+  an dem tatsächlich ein MAM-Baustein beginnt — bewusst **nicht** hier
+  vorgezogen, nur die Grenze benannt, damit eine spätere Erweiterung
+  nicht mit dieser Schicht kollidiert.
+
+### 23.4 Frame-genaue Grafik-/Steuermetadaten — Verweis, keine Wiederholung
+
+Bereits vollständig in §15 Punkt 5 spezifiziert (`executeAtIndex`,
+Daten-Flow-Grain-Kopplung) — dieser Abschnitt fügt nichts hinzu, nur die
+Einordnung in die Gesamttaxonomie oben (23.1 Punkt 3).
+
+**Standards-Abdeckung:** MXL-Flow-Metadaten (MXL-Spec, unverändert
+§6.4/§15), IS-12/14 (unverändert §2/§11.1); Asset-/Content-Metadaten sind
+**keine** Standardebene (facility-eigene, additive Felder).
+**Testbarkeit:** additive Felder trivial testbar (Feld setzen/lesen).
+**Phase:** zusammen mit §22 (D1/P2/P4).
+
+Sources:
+- [The Dynamic Media Facility: Reference Architecture (v2.0, White Paper, April 2026) — EBU Technology & Innovation](https://tech.ebu.ch/publications/white-paper-2026-04-15)
+- [Ready for production: Media eXchange Layer v1.0.0 published — EBU Technology & Innovation](https://tech.ebu.ch/news/2026/ready-for-production-media-exchange-layer-v1-0-0-published)
