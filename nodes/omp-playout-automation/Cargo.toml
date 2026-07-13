@@ -1,0 +1,18 @@
+[package]
+name = "omp-playout-automation"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei omp-node-sdk/omp-player/omp-video-mixer-me.
+publish = false
+
+[dependencies]
+# Kein gstreamer/omp-mediaio: dieser Node hat bewusst keine eigene
+# Medienpipeline (UMSETZUNG.md C14/C15) — er ruft nur die IS-12/14-
+# Methoden von Ziel-Nodes (Player/Mixer) über deren eigene Descriptor-
+# HTTP-API auf (siehe src/remote.rs), analog zur Flow-Editor-UI (B6).
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }
+ureq = { version = "3.3.0", features = ["json"] }

@@ -3032,3 +3032,77 @@ Ausgangsstand zurückgesetzt (Diff-Check: keiner). Dokumentiert als
 einzige noch offene Eintrag der Status-Checkliste — wird im Anschluss
 mit einem Detailplan begonnen (`UMSETZUNG.md` verlangt das explizit „zu
 Beginn von C14").
+
+## 2026-07-13 — C14/C15 (`omp-playout-automation`): Playlist-Controller ohne eigene Pipeline, Detailplan + Umsetzung
+
+**Kontext:** Letzter offener Eintrag der Status-Checkliste. Die
+Kurzfassung in `UMSETZUNG.md` ließ bewusst einen Detailplan für den
+Beginn von C14 offen — vier echte Design-Entscheidungen mussten dafür
+zuerst am Code verifiziert werden (nicht geraten): Wie sind
+`omp-player`s (C12) eigene Methoden/Items tatsächlich geformt (Code
+gelesen: `append`/`load`/`remove`/`cue`/`take` bereits vollständig **im
+Player selbst** vorhanden, Items sind Testmuster mit `durationMs`, kein
+EOS-Konzept)? Wie löst `omp-video-mixer-me` (C10) Tally aus (Code
+gelesen: nur über `crosspoint.select`+`crosspoint.cut`, das
+`ProgramChanged`-Event, nicht über den Player)? Wie adressiert man einen
+anderen, bereits laufenden Node ohne Orchestrator-Umweg (Code gelesen:
+jeder Node hat seinen eigenen Descriptor-HTTP-Server, `href` aus IS-04)?
+Wie bekommt die Automation ihre Ziel-Instanzen, ohne den Instanz-Launcher
+zu ändern (Katalog kennt nur ein festes `env`, keine Start-Parameter)?
+
+**Entscheidungen** (Details siehe `UMSETZUNG.md` C14/C15-Detailplan):
+
+1. Ziel-Player/-Mixer über zwei neue **beschreibbare** Parameter
+   (`targetPlayerLabel`/`targetMixerLabel`, PATCH über den bestehenden
+   generischen Proxy) statt Launcher-/Katalog-Änderung — periodisch
+   (2 s) per IS-04-Label-Discovery zu `href` aufgelöst, selbstheilend.
+2. `playlist.rs` aus `c4-playlist-wip` wiederverwendet, aber
+   umgedeutet: Items sind jetzt die vom Ziel-Player selbst vergebenen
+   IDs (per `GET items`-Rückfrage gelernt, da die generische
+   Methoden-Antwort keinen Rückgabewert liefert), nicht mehr
+   Clip-URIs. Eine neue, additive `replace_all()`-Methode (mit Tests)
+   ergänzt das Original, dessen `load()` nur ein einzelnes Item kannte.
+3. `take()`/Auto-Advance treiben **beide** Ziele: Player-`cue`+`take`
+   fürs Bild/Ton-Umschalten am Player selbst, danach
+   Mixer-`crosspoint.select`+`crosspoint.cut`, weil Tally
+   ausschließlich vom Mixer kommt (Player hat keinen eigenen
+   Tally-Mechanismus) — sonst hätte `take()` den Player umgeschaltet,
+   aber nie ein Tally-Event ausgelöst.
+4. Auto-Advance über einen eigenen 200 ms-Dauer-Timer (`durationMs` pro
+   Item), da der Player selbst kein EOS/Auto-Ende kennt (Items laufen
+   endlos bis zum nächsten Cue/Take) — `playlist.rs`s `advance()`
+   unverändert wiederverwendet.
+5. Neuer, node-zu-node direkter HTTP-Client (`src/remote.rs`,
+   `PeerClient`) statt Orchestrator-Umweg — jeder Node bringt seinen
+   Descriptor-Server bereits mit; `RegistryClient::list_nodes()` neu in
+   `omp-node-sdk::is04` für die Label→href-Auflösung.
+
+**Verifiziert — mit echten Prozessen, nicht nur Mocks:**
+`cargo build/test/deny`, `cargo audit` grün (14 neue Playlist-Unit-Tests
++ bestehende Suite inkl. `omp-mediaio`-MXL-Tests). End-to-end:
+`omp-video-mixer-me` + `omp-player-video` + `omp-playout-automation` +
+`omp-viewer` aus der GUI gestartet, Ziel-Labels per PATCH gesetzt
+(`connected` → `true`), zwei Items per `append()` angelegt (IDs korrekt
+vom Player übernommen — per `GET items`-Diff bestätigt), `take()`
+geprüft: Mixer-`crosspoint.programInput` zeigt danach exakt die
+Sender-ID des Ziel-Players (Take hat den Mixer nachweisbar
+umgeschaltet, löst den bereits bestehenden Tally-Mechanismus aus).
+Auto-Advance im `auto`-Modus über beide Playlist-Einträge bestätigt
+(Player landet am Ende bei `currentItemId = item2`, `mode = onair`),
+Ende-der-Liste stoppt korrekt ohne Loop. UI-Bundle live gegen den
+echten Node gemountet (Chromium-CDP): zeigt „verbunden", Item-Liste,
+Cue/Gecued-Zustand, gesetztes Ziel-Player-Label korrekt.
+
+**Zwei Blocker beim Testaufbau gefunden, keine C14/C15-Bugs:** (a) der
+Instanz-Launcher (Nachtrag 3, selber Tag) zeigte live, dass MXL-nutzende
+Nodes ohne `deploy/dev/mxl.env` im selben Shell wie `make start`
+abstürzen (`libmxl.so` nicht im `LD_LIBRARY_PATH`) — bereits bekannter
+Dev-Gotcha, hier nur die Crash-Anzeige selbst erstmals live gesehen; (b)
+ein zuvor mit `rm -rf` gelöschtes `/dev/shm/omp-mxl` muss als leeres
+Verzeichnis existieren, bevor MXL eine Instanz erzeugen kann („Domain
+path is not a directory"), sonst „Failed to create MXL instance" — reine
+Testhygiene, kein Code-Fix.
+
+**Ergebnis:** Meilenstein „Demo 4" (Regieplatz mit UND ohne
+Automatisation vorführbar) erreicht. Damit ist die
+`UMSETZUNG.md`-Status-Checkliste bis C15 vollständig abgehakt.

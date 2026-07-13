@@ -54,5 +54,12 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-multiviewer"],
     "env": {}
+  },
+  {
+    "type": "omp-playout-automation",
+    "label": "Playout-Automation",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-playout-automation"],
+    "env": {}
   }
 ]

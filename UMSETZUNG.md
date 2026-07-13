@@ -902,7 +902,85 @@ nicht nur gefixt).
 
 **→ Meilenstein „Demo 4":** Regieplatz mit UND ohne Automatisation
 vorführbar — Playout steuert dieselben Nodes, die der Operator manuell
-bedient.
+bedient. Mit C14/C15 erreicht.
+
+**Detailplan (zu Beginn von C14, wie oben verlangt):** neuer Node
+`omp-playout-automation`, bewusst **ohne** `omp-mediaio`/GStreamer-
+Dependency (senders=[]/receivers=[] im `NodeConfig` — ein reiner
+Control-Plane-Node). Kernentscheidungen, die die Kurzfassung offen
+gelassen hatte:
+
+1. **Ziel-Auflösung dynamisch statt hartkodiert:** `targetPlayerLabel`/
+   `targetMixerLabel` sind zwei neue **beschreibbare** Parameter (PATCH
+   über den bestehenden generischen Proxy) statt eines Katalog-Env-Werts
+   — der Instanz-Launcher (§6.2 Stufe 0) kennt keine Start-Parameter
+   jenseits des festen Katalog-`env`, ein neuer Launcher-Mechanismus wäre
+   für diesen Schritt unverhältnismäßig gewesen. Ein neuer,
+   IS-04-registry-weiter Discovery-Loop (2 s-Takt, gleiches Muster wie
+   C7/C10) löst die Labels laufend zu `href`s auf — selbstheilend, falls
+   der Ziel-Node neu startet.
+2. **`playlist.rs` reicht Item-**IDs** durch, nicht mehr URIs:** der
+   Ziel-`omp-player` (C12) vergibt seine Item-IDs selbst beim
+   `append`/`load` — die generische Methoden-Antwort liefert keinen
+   Rückgabewert (nur `{"ok":true}`, A8), deshalb liest die Automation
+   nach jedem `append`/`load` einmal `GET items` zurück und übernimmt die
+   dort vergebenen IDs 1:1 als eigene Playlist-Einträge (Diff gegen den
+   vorher bekannten Bestand für `append`, komplette Übernahme für
+   `load`). Eine neue, additive `Playlist::replace_all()`-Methode
+   (mit Tests) ergänzt das wiederverwendete `playlist.rs`, weil dessen
+   ursprüngliches `load()` nur ein einzelnes Item kannte.
+3. **`take()` treibt zwei Ziele, nicht nur den Player:** `omp-player`
+   selbst hat keinen Tally-Mechanismus — Tally kommt ausschließlich vom
+   Ziel-Mixer (`omp-video-mixer-me`, C10), sobald dessen Programmbus
+   wechselt. `take()`/Auto-Advance rufen deshalb **beide** Ziele:
+   Player-`cue`+`take`, danach Mixer-`crosspoint.select`(Sender-ID des
+   Ziel-Players, aufgelöst über dessen `crosspoint.inputs` und den
+   `"{Label} Sender"`-Präfix, den `omp-node-sdk::node::start` immer
+   vergibt) + `crosspoint.cut` — löst automatisch das bereits bestehende
+   Tally-Event aus (`ProgramChanged` in `omp-video-mixer-me`), keine
+   eigene Tally-Logik nötig.
+4. **Auto-Advance ohne Pipeline-EOS:** `omp-player`s Items laufen
+   endlos (kein EOS-Konzept). Die Automation hält deshalb ihren eigenen
+   Dauer-Timer (200 ms-Tick, gegen die pro Item deklarierte `durationMs`)
+   und ruft bei Ablauf `playlist.rs`s `advance()` — reine
+   Fortsetzung des wiederverwendeten Musters, keine neue Sequenzierungs-
+   Idee.
+5. **Fernaufrufe direkt Node-zu-Node** (`src/remote.rs`, `PeerClient`):
+   spricht denselben Descriptor-HTTP-Server jedes Ziel-Nodes
+   (`GET/PATCH params/<name>`, `POST methods/<name>`) direkt an dessen
+   IS-04-`href` an — kein Umweg über den Orchestrator-Proxy nötig (der
+   ist nur die Browser-Fassade derselben API, A8). Neue
+   `RegistryClient::list_nodes()` in `omp-node-sdk::is04` für die
+   Label→href-Auflösung.
+
+**Verifiziert:** `cargo build/test/deny`, `cargo audit` (Workspace,
+inkl. der bereits vorhandenen `omp-mediaio`-MXL-Tests, `deploy/dev/
+mxl.env` gesourct) — grün. End-to-end **mit echten laufenden Prozessen**
+(nicht nur Mock): `omp-video-mixer-me` + `omp-player-video` +
+`omp-playout-automation` + `omp-viewer` aus der GUI gestartet,
+`targetPlayerLabel`/`targetMixerLabel` per PATCH gesetzt (`connected`
+wurde `true`), zwei Items per `append()` angelegt (IDs korrekt vom
+Player übernommen), `take()` geprüft: Player-`currentItemId` wechselt
+auf das genommene Item, Mixer-`crosspoint.programInput` zeigt danach
+exakt die Sender-ID des Ziel-Players — der Take hat den Mixer
+nachweisbar umgeschaltet. Auto-Advance im `auto`-Modus über beide
+Playlist-Einträge hinweg bestätigt (Player zeigt am Ende `currentItemId
+= item2`, `mode = onair`), Ende-der-Liste stoppt korrekt ohne Loop
+(automationseitig `on_air = false`, `cuedItemId` bleibt auf dem letzten
+Item stehen — deckungsgleich mit dem aus `playlist.rs` übernommenen,
+bereits unit-getesteten Verhalten). UI-Bundle live gegen den echten
+Node gemountet (Chromium-CDP, gleiche Methode wie C13-Nachtrag 1–3):
+zeigt korrekt „verbunden", Item-Liste mit Label/Pattern/Dauer,
+Cue/Gecued-Zustand und das gesetzte Ziel-Player-Label.
+
+**Bekannter, dokumentierter Nebenbefund (kein C14/C15-Bug):** ohne
+`deploy/dev/mxl.env` im selben Shell wie `make start` scheitern
+MXL-nutzende Nodes beim Start („libmxl.so … cannot open shared object
+file") — bereits als Dev-Environment-Gotcha bekannt, hier nur erneut
+bestätigt. Zusätzlich: ein zuvor mit `rm -rf` gelöschtes
+`/dev/shm/omp-mxl` muss vor dem nächsten Node-Start als (leeres)
+Verzeichnis wieder angelegt werden, sonst meldet MXL „Failed to create
+MXL instance" — nicht behoben (Testhygiene, kein Code-Fix nötig).
 
 ---
 
@@ -986,4 +1064,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | C11 | erledigt | [C11] omp-audio-mixer: dynamische Kanäle, Gain/EQ, Audio-Follow-Video + MXL-Audio-Fundament im SDK | 2026-07-11 |
 | C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
 | C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
-| C14/C15 | offen (später, nach C10–C13) | | |
+| C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |

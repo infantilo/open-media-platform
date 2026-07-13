@@ -1142,6 +1142,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-playout-automation"
+version = "0.1.0"
+dependencies = [
+ "omp-node-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+ "ureq",
+]
+
+[[package]]
 name = "omp-source"
 version = "0.1.0"
 dependencies = [

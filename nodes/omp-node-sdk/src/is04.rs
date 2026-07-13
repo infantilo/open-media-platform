@@ -678,6 +678,24 @@ impl RegistryClient {
         }
     }
 
+    /// Listet alle bei der Registry registrierten Nodes (`GET .../nodes`,
+    /// dieselbe Query-API wie `list_senders`) — Grundlage für die
+    /// Label-basierte Ziel-Node-Auflösung eines Controller-Nodes ohne
+    /// eigene Medien-I/O (`UMSETZUNG.md` C14/C15: `omp-playout-automation`
+    /// löst seine konfigurierten `targetPlayerLabel`/`targetMixerLabel`
+    /// damit zu einem `href` auf, statt Adressen hartzukodieren).
+    pub fn list_nodes(&self) -> Result<Vec<NodeResource>, QueryError> {
+        let url = format!("{}/x-nmos/query/v1.3/nodes", self.base_url);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<Vec<NodeResource>>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
     /// Hält eine registrierte Node am Leben (muss innerhalb von
     /// `registration_expiry_interval` wiederholt werden).
     pub fn heartbeat(&self, node_id: &str) -> Result<(), HeartbeatError> {

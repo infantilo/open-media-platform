@@ -11,4 +11,5 @@ members = [
     "omp-audio-mixer",
     "omp-player",
     "omp-multiviewer",
+    "omp-playout-automation",
 ]
