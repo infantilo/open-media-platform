@@ -1105,11 +1105,57 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Demo-1–4-Flows. `go vet`/`go test` für beide Module grün (neue
   `mtls`-Pakete inkl. Zertifikats-Generierung in den Unit-Tests, kein
   externer step-ca für reine Unit-Tests nötig).
-- **D4** `omp-mediaio`: 2110-Implementierung (Software, `st2110`-fähige
-  GStreamer-Elemente) + SRT-Gateway-Node; Verifikation soweit ohne
-  Spezial-Hardware möglich (Loopback, Interop mit ffmpeg/OBS). MXL selbst
-  ist **nicht** mehr Teil von D4 — bereits in Phase C (C4) gebaut, siehe
-  `docs/decisions.md` 2026-07-09.
+- **D4 (erledigt, 2026-07-13)** `omp-mediaio`: neues Modul
+  `st2110` (`St2110VideoOutput`/`St2110VideoInput`) — echtes
+  RFC-4175/SMPTE-ST-2110-20-Payload-Format über `rtpvrawpay`/
+  `rtpvrawdepay`, konfigurierbare Auflösung/Framerate (anders als das
+  unverändert bleibende `rtp.rs` aus C3, dort fest 640×480, nur
+  Sender). Neuer Referenz-Node `omp-srt-gateway`
+  (`ARCHITECTURE.md` §6: "Cloud-Gateway-Node bridged ST 2110 ⇄
+  SRT/RIST") — gerichtet je Instanz (`OMP_SRT_GATEWAY_DIRECTION=
+  uplink|downlink`, gleiches Profil-Muster wie `omp-player`), baut auf
+  `st2110` auf statt die RTP-Payload-Logik zu duplizieren.
+
+  **Scope-Entscheidung (dokumentiert, nicht stillschweigend
+  ausgelassen):** kein Audio (ST 2110-30 — eigene Payloader-Familie,
+  eigene Verifikation, separater Baustein), keine PTP-Zeitbasis
+  (GStreamer hat eingebaute PTP-Unterstützung, aber echte Synchronität
+  lässt sich auf der Single-Host-Dev-Maschine ohne zweiten PTP-Host
+  nicht sinnvoll verifizieren — läuft im Free-Run, `ARCHITECTURE.md`
+  §8 tolerierte das bereits), keine dynamische IS-05-Verbindungs-
+  verwaltung für die 2110-/SRT-Seite des Gateways (Endpunkte sind
+  Prozess-Start-Konfiguration, kein Drag&Drop — analog zur bewussten
+  Vereinfachung bei `omp-switcher`, C7). `omp-srt-gateway` registriert
+  sich deshalb ohne IS-04-Sender/-Receiver — bereits bestehendes,
+  dokumentiertes Verhalten von `tools/contract-check`
+  ("keine Sender/Receiver deklariert" ist ein Skip, kein Fail, gleiches
+  Muster wie bei `omp-switcher`).
+
+  **Verifiziert — durchgehend mit echten Prozessen/echtem Drittanbieter-
+  Tool, nicht nur Mocks:**
+  - `cargo test` (neuer `st2110`-UDP-Loopback-Test, GStreamer-only, kein
+    `libmxl.so` nötig) grün, mehrfach wiederholt.
+  - **Echter Interop-Test mit ffmpeg** (nicht nur GStreamer-intern):
+    unser `St2110VideoOutput` sendet einen echten SMPTE-Farbbalken-
+    Stream, ffmpeg empfängt ihn ausschließlich über die von
+    `St2110VideoOutput::sdp()` erzeugte SDP-Datei, erkennt Auflösung/
+    Format/Framerate korrekt und dekodiert reale PNG-Frames — visuell
+    als korrekter SMPTE-Balken bestätigt (nicht nur "Exit-Code 0").
+    Zeitkritischer Fallstrick gefunden: Empfänger muss vor dem Sender
+    binden, sonst gehen die ersten UDP-Pakete verloren (verlustfrei
+    korrigierbar durch Start-Reihenfolge, kein Protokoll-Bug).
+  - `omp-srt-gateway` **uplink** (2110→SRT) end-to-end: echter
+    2110-Strom eingespeist, ein unabhängiger GStreamer-SRT-Listener-
+    Prozess empfing über 20.000 echte SRT-Pakete.
+  - `omp-srt-gateway` **downlink** (SRT→2110) end-to-end, vollständiger
+    Rundweg: ein simulierter "Remote"-SRT-Sender → unser Gateway → ein
+    unabhängiger 2110-UDP-Empfänger, Caps korrekt bis zum `fakesink`
+    verhandelt (640×480 UYVY, exakt wie konfiguriert).
+  - `make contract NODE_URL=...` (`tools/contract-check`, C9): PASS
+    gegen eine echte laufende `omp-srt-gateway`-Instanz.
+  - `cargo deny check`/`cargo audit`: grün, keine neue Dependency nötig
+    (SRT/2110-Elemente sind bereits Teil der vorhandenen GStreamer-
+    Installation).
 - **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
   — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
 - **D6 (Host-Agent/Bootstrap jetzt detailliert, Rest noch nicht)**
@@ -1179,3 +1225,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |
 | D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |
 | D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | offen | | |
+| D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |

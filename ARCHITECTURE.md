@@ -260,7 +260,9 @@ kein Plattform-Fork.
   Cloud-SKUs verfügbar):** dedizierte **Cloud-Gateway-Node** bridged
   ST 2110 ⇄ SRT/RIST (Unicast, FEC, kein Multicast-Bedarf). 2110-Reinheit
   bleibt innerhalb der Facility gekapselt, niemand muss neue Protokolle
-  erfinden.
+  erfinden. **Implementiert (`UMSETZUNG.md` D4, 2026-07-13):**
+  `omp-srt-gateway` — ST 2110 ⇄ SRT, RIST folgt bei Bedarf als weiterer
+  `omp-mediaio`-Transport nach demselben Muster (nicht Teil von D4).
 
 ### 6.1 Resource-Aware Placement & Live-Migration (geplant, ab P2)
 

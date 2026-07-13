@@ -3375,3 +3375,73 @@ RequireAndVerifyClientCert`), `make mtls-up`/`mtls-down`/
 `deploy/dev/mtls-issue-cert.sh`, `deploy/quadlets/omp-step-ca.container`
 als Produktions-Referenz. D3 Teil 2 (IS-10/OAuth2, §12-Rollenmodell)
 bleibt offener, noch nicht terminierter Schritt.
+
+## 2026-07-13 — D4 (`omp-mediaio::st2110` + `omp-srt-gateway`): Payload-Format am echten gst-launch-Lauf verifiziert, dann erst Rust geschrieben; echter ffmpeg-Interop-Nachweis
+
+**Kontext:** Letzter offene Punkt vor D5. Anweisung: "2110-Implementierung
+(Software, st2110-fähige GStreamer-Elemente) + SRT-Gateway-Node;
+Verifikation soweit ohne Spezial-Hardware möglich (Loopback, Interop mit
+ffmpeg/OBS)". Vor dem Schreiben von Rust-Code erst geprüft, was
+tatsächlich schon da ist: `rtp.rs` (C3) nutzt bereits `rtpvrawpay` —
+GStreamers RFC-4175-Payloader, dieselbe Payload-Struktur, auf der SMPTE
+ST 2110-20 aufbaut — nur fest auf 640×480 verdrahtet und nur Sender,
+keine Empfänger-Seite. Statt das zu duplizieren: neues Modul
+`st2110` generalisiert (konfigurierbare Auflösung/Framerate) und
+ergänzt die fehlende Empfänger-Seite; `rtp.rs` bleibt für den
+Playout-Node (C1–C3) unverändert.
+
+**Arbeitsweise (Standards nicht raten, §0.6):** Vor jeder Zeile Rust-Code
+das exakte Payload-/Caps-Format per `gst-inspect-1.0`/echtem
+`gst-launch-1.0`-Lauf verifiziert statt aus dem Gedächtnis anzunehmen —
+u. a. dass `width`/`height`/`depth` in den RTP-Caps als **String**-Felder
+kodiert sind (nicht int), und dass `rtpvrawdepay` die Framerate NICHT
+zuverlässig aus dem RTP-Strom rekonstruiert (`framerate=(fraction)0/1`)
+— deshalb ein zusätzliches `videorate`+`capsfilter` auf der
+Empfänger-Seite, das die bekannte Ziel-Framerate erzwingt.
+
+**Scope-Entscheidungen** (dokumentiert, s. `UMSETZUNG.md` D4 für die
+volle Begründung): kein Audio (ST 2110-30), keine PTP-Zeitbasis (Free-
+Run, `ARCHITECTURE.md` §8 tolerierte das bereits explizit), keine
+dynamische IS-05-Verbindungsverwaltung für die 2110-/SRT-Seite des
+Gateways (Prozess-Start-Konfiguration statt Drag&Drop, analog zu
+`omp-switcher`s "0 Receiver in v0", C7) — `omp-srt-gateway` registriert
+sich deshalb ohne IS-04-Sender/-Receiver, was `tools/contract-check`
+bereits als dokumentierten Skip-Fall kennt (nicht neu erfunden).
+
+**`omp-srt-gateway`-Design:** gerichtet je Instanz
+(`OMP_SRT_GATEWAY_DIRECTION=uplink|downlink`, Profil-Muster wie
+`omp-player`s `OMP_PLAYER_PROFILE`). Uplink nutzt `St2110VideoInput`
+unverändert (liefert `tail` = rohes Videosignal) und hängt selbst
+`rtpvrawpay ! srtsink` an — RTP-über-SRT ist ein reales, in der
+Rundfunk-Branche übliches Contribution-Muster, keine Erfindung dieses
+Projekts. Downlink baut `srtsrc ! rtpjitterbuffer ! rtpvrawdepay` und
+übergibt das letzte Element als `upstream` an
+`St2110VideoOutput::new` — beide Richtungen maximieren Wiederverwendung
+von `st2110`, keine eigene RTP-Logik im Gateway-Node selbst.
+
+**Echter Interop-Nachweis mit ffmpeg (nicht nur GStreamer-intern):**
+`St2110VideoOutput::sdp()` erzeugt eine SDP-Datei; ffmpeg (mit
+`-protocol_whitelist file,rtp,udp`) las sie, erkannte Auflösung/Format/
+Framerate korrekt aus den `a=fmtp`-Parametern und dekodierte reale
+PNG-Frames aus einem laufenden GStreamer-Sender — der SMPTE-Farbbalken
+im Ergebnisbild visuell bestätigt, nicht nur am Exit-Code. Ein
+zeitkritischer Fallstrick dabei gefunden (kein Protokoll-Bug): startete
+ffmpeg NACH dem Sender, kamen 0 Frames an, weil die ersten UDP-Pakete
+vor dem Binden des Empfänger-Sockets verloren gingen — mit Empfänger
+zuerst (dieselbe Reihenfolge-Regel wie beim `st2110`-Unit-Test) liefen
+alle Frames sauber durch.
+
+**`omp-srt-gateway` end-to-end mit echten Prozessen verifiziert:**
+Uplink (2110→SRT) — ein unabhängiger GStreamer-SRT-Listener empfing über
+20.000 echte SRT-Pakete aus einem eingespeisten 2110-Strom. Downlink
+(SRT→2110), vollständiger Rundweg — ein simulierter „Remote"-SRT-Sender
+(GStreamer, `mode=listener`, unser Gateway ruft als `caller` an) →
+unser Gateway → ein unabhängiger 2110-UDP-Empfänger, Caps korrekt bis
+zum `fakesink` verhandelt. `make contract NODE_URL=...` PASS gegen eine
+echte laufende Instanz.
+
+**Verifiziert:** `cargo build/test` (Workspace, inkl. neuem
+`st2110`-UDP-Loopback-Test, mehrfach wiederholt — kein `libmxl.so`
+nötig, reines GStreamer), `cargo deny check`/`cargo audit` grün, keine
+neue Dependency (SRT-Elemente sind bereits Teil der vorhandenen
+GStreamer-Installation, `srtsink`/`srtsrc` mit Rank "primary").

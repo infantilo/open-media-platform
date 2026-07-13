@@ -12,4 +12,5 @@ members = [
     "omp-player",
     "omp-multiviewer",
     "omp-playout-automation",
+    "omp-srt-gateway",
 ]
