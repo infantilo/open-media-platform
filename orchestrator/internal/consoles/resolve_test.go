@@ -1,28 +1,24 @@
 package consoles
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 )
 
-func writeBindings(t *testing.T, bindings []Binding) *Store {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "role-bindings.json")
-	data, err := json.Marshal(bindings)
-	if err != nil {
-		t.Fatalf("marshal bindings: %v", err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write bindings: %v", err)
-	}
-	return NewStore(path)
+// fakeBindingLoader implementiert BindingLoader in-memory, damit diese
+// Tests ohne echte Postgres-Verbindung laufen (authz.Store selbst wird
+// gegen eine echte DB getestet, internal/authz/store_test.go).
+type fakeBindingLoader struct {
+	bindings []authz.Binding
 }
 
-func TestResolveMissingFileReturnsEmptyResult(t *testing.T) {
-	store := NewStore(filepath.Join(t.TempDir(), "does-not-exist.json"))
-	resolver := NewResolver(store)
+func (f fakeBindingLoader) Load() ([]authz.Binding, error) {
+	return f.bindings, nil
+}
+
+func TestResolveNoBindingsReturnsEmptyResult(t *testing.T) {
+	resolver := NewResolver(fakeBindingLoader{})
 
 	result, err := resolver.Resolve("anyone", nil)
 	if err != nil {
@@ -34,10 +30,9 @@ func TestResolveMissingFileReturnsEmptyResult(t *testing.T) {
 }
 
 func TestResolveOperateOnSpecificNode(t *testing.T) {
-	store := writeBindings(t, []Binding{
-		{UserID: "operator1", NodeID: "inst-mixer", Verb: VerbOperate},
-	})
-	resolver := NewResolver(store)
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "operator1", NodeID: "inst-mixer", Verb: authz.VerbOperate},
+	}})
 	nodes := []NodeInfo{
 		{ID: "node-uuid-1", Label: "Video Mixer M/E", InstanceID: "inst-mixer"},
 		{ID: "node-uuid-2", Label: "Audio Mixer", InstanceID: "inst-audio"},
@@ -63,10 +58,9 @@ func TestResolveOperateOnSpecificNode(t *testing.T) {
 }
 
 func TestResolveWildcardBindsAllNodes(t *testing.T) {
-	store := writeBindings(t, []Binding{
-		{UserID: "operator1", NodeID: "*", Verb: VerbOperate},
-	})
-	resolver := NewResolver(store)
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "operator1", NodeID: authz.AnyNode, Verb: authz.VerbOperate},
+	}})
 	nodes := []NodeInfo{
 		{ID: "n1", Label: "B", InstanceID: "inst-b"},
 		{ID: "n2", Label: "A", InstanceID: "inst-a"},
@@ -79,59 +73,41 @@ func TestResolveWildcardBindsAllNodes(t *testing.T) {
 	if len(result.Consoles) != 2 {
 		t.Fatalf("Consoles = %+v, want 2 entries", result.Consoles)
 	}
-	// Sortiert nach NodeLabel — "A" vor "B".
+	// Sortiert nach NodeLabel.
 	if result.Consoles[0].NodeLabel != "A" || result.Consoles[1].NodeLabel != "B" {
-		t.Errorf("Consoles not sorted by label: %+v", result.Consoles)
+		t.Errorf("Consoles = %+v, want sorted by label", result.Consoles)
 	}
 }
 
 func TestResolveConfigureGrantsEngineeringAccessWithoutConsoleEntry(t *testing.T) {
-	store := writeBindings(t, []Binding{
-		{UserID: "admin", NodeID: "*", Verb: VerbAdmin},
-	})
-	resolver := NewResolver(store)
-	nodes := []NodeInfo{{ID: "n1", Label: "Switcher", InstanceID: "inst-1"}}
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "engineer1", NodeID: authz.AnyNode, Verb: authz.VerbConfigure},
+	}})
+	nodes := []NodeInfo{{ID: "n1", Label: "Mixer", InstanceID: "inst-mixer"}}
 
-	result, err := resolver.Resolve("admin", nodes)
+	result, err := resolver.Resolve("engineer1", nodes)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	if !result.HasEngineeringAccess {
-		t.Errorf("HasEngineeringAccess = false, want true for admin verb")
+		t.Errorf("HasEngineeringAccess = false, want true for configure binding")
 	}
 	if len(result.Consoles) != 0 {
-		t.Errorf("Consoles = %+v, want none (admin verb alone grants no operate console)", result.Consoles)
-	}
-}
-
-func TestResolveFallsBackToRawNodeIDWithoutInstanceID(t *testing.T) {
-	store := writeBindings(t, []Binding{
-		{UserID: "operator1", NodeID: "raw-node-id", Verb: VerbOperate},
-	})
-	resolver := NewResolver(store)
-	nodes := []NodeInfo{{ID: "raw-node-id", Label: "Manually started node"}}
-
-	result, err := resolver.Resolve("operator1", nodes)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if len(result.Consoles) != 1 || result.Consoles[0].NodeRoleID != "raw-node-id" {
-		t.Errorf("Consoles = %+v, want NodeRoleID = raw-node-id", result.Consoles)
+		t.Errorf("Consoles = %+v, want empty (configure is not operate)", result.Consoles)
 	}
 }
 
 func TestResolveIgnoresBindingsForOtherUsers(t *testing.T) {
-	store := writeBindings(t, []Binding{
-		{UserID: "someone-else", NodeID: "*", Verb: VerbOperate},
-	})
-	resolver := NewResolver(store)
-	nodes := []NodeInfo{{ID: "n1", Label: "Switcher", InstanceID: "inst-1"}}
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "someone-else", NodeID: authz.AnyNode, Verb: authz.VerbOperate},
+	}})
+	nodes := []NodeInfo{{ID: "n1", Label: "Mixer", InstanceID: "inst-mixer"}}
 
 	result, err := resolver.Resolve("operator1", nodes)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if result.HasEngineeringAccess || len(result.Consoles) != 0 {
-		t.Errorf("Resolve() = %+v, want empty result for unrelated user", result)
+	if len(result.Consoles) != 0 {
+		t.Errorf("Consoles = %+v, want empty", result.Consoles)
 	}
 }

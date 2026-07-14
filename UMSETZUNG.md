@@ -1105,6 +1105,27 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Demo-1–4-Flows. `go vet`/`go test` für beide Module grün (neue
   `mtls`-Pakete inkl. Zertifikats-Generierung in den Unit-Tests, kein
   externer step-ca für reine Unit-Tests nötig).
+- **D3 (Teil 2: Nutzer-/Rollenmodell, erledigt, 2026-07-14)**
+  ARCHITECTURE.md §12 umgesetzt: lokale Nutzerkonten + Token-Ausstellung
+  (`internal/auth`, bcrypt + handgebautes HS256-JWT), Rollenbindungen von
+  `data/role-bindings.json` (C13-Stub) nach Postgres (`internal/authz`,
+  neue Admin-API `/api/v1/admin/role-bindings`), zentrale Durchsetzung
+  im Orchestrator (`internal/httpapi/auth_middleware.go`: node-gescopte
+  `operate`-Prüfung für den generischen Proxy, globale `configure`/
+  `admin`-Prüfung für Graph/Layouts/Snapshots/Launcher/Admin-Endpunkte),
+  Audit-Log (`internal/audit`, `GET /api/v1/admin/audit-log`). UI
+  (`ui/shell/auth.ts`): Login-Formular ersetzt den C13-Stub-Nutzer-Header,
+  globaler `fetch()`-Wrapper hängt den Bearer-Token an.
+  **Scope-Entscheidung:** AD/LDAP-Anbindung (§12 Punkt 1) nicht in dieser
+  Runde — kein testbarer Verzeichnisdienst auf der Dev-Maschine (§0
+  Punkt 7), Identität hinter einem Interface gekapselt, additiv
+  nachrüstbar. **Bootstrap-Muster aus PIPELINE CONTROLLER:** "Auth
+  deaktivierbar solange kein Nutzer angelegt ist" — solange niemand
+  einen Nutzer anlegt, bleibt der Orchestrator exakt wie vor diesem
+  Schritt offen, kein Regressionsrisiko für Demo 1–4. Details, Verb-
+  Zuordnung pro Endpunkt-Gruppe und vollständiges Live-Verifikations-
+  protokoll (curl + Browser-Test per CDP) siehe `docs/decisions.md`
+  2026-07-14.
 - **D4 (erledigt, 2026-07-13)** `omp-mediaio`: neues Modul
   `st2110` (`St2110VideoOutput`/`St2110VideoInput`) — echtes
   RFC-4175/SMPTE-ST-2110-20-Payload-Format über `rtpvrawpay`/
@@ -1224,5 +1245,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |
 | D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |
-| D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | offen | | |
+| D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | erledigt | [D3-2] Nutzer-/Rollenmodell: echte Anmeldung, Rollenbindungen in Postgres, Audit-Log | 2026-07-14 |
 | D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |

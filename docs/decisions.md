@@ -3445,3 +3445,141 @@ echte laufende Instanz.
 nötig, reines GStreamer), `cargo deny check`/`cargo audit` grün, keine
 neue Dependency (SRT-Elemente sind bereits Teil der vorhandenen
 GStreamer-Installation, `srtsink`/`srtsrc` mit Rank "primary").
+
+## 2026-07-14 — D3 Teil 2 (Nutzer-/Rollenmodell, ARCHITECTURE.md §12): echte Anmeldung statt Stub-Header, Rollenbindungen von Datei nach Postgres
+
+**Kontext:** Letzter offene D3-Restscope (mTLS war Teil 1, 2026-07-13).
+Löst den seit C13 bekannten, dokumentierten Zustand ab: der "aktuelle
+Nutzer" war ein per Header/Query-Param/localStorage trivial spoofbarer
+Stub, keine echte Zugriffskontrolle. Umgesetzt: lokale Nutzerkonten +
+Token-Ausstellung (§12 Punkt 1, ohne AD), Rollenbindungs-Tripel-
+Durchsetzung zentral im Orchestrator (§12 Punkt 2/3), Audit-Log (§12
+Punkt 4).
+
+**Scope-Entscheidung — AD/LDAP nicht in dieser Runde:** §12 Punkt 1
+nennt AD/LDAP(S) als zweite Identitätsquelle. Es gibt auf der
+Single-Host-Dev-Maschine keinen echten Verzeichnisdienst, gegen den sich
+ein LDAP-Bind sinnvoll verifizieren ließe — genau der in `UMSETZUNG.md`
+§0 Punkt 7 ausgeschlossene Fall ("nichts einbauen, das nur mit
+Infrastruktur testbar wäre, die hier nicht existiert"). `internal/auth`
+kapselt die Nutzerquelle hinter einem schmalen Store-Typ, den `httpapi`
+nur über ein Interface (`AuthService`) kennt — eine zweite,
+LDAP-bindende Implementierung ist additiv möglich, ohne Rest anzufassen.
+Bleibt offener D3-Restscope, dokumentiert statt stillschweigend
+ausgelassen.
+
+**Bootstrap-Muster aus PIPELINE CONTROLLER übernommen:** "Auth
+deaktivierbar solange kein Nutzer angelegt ist" — genau das dort
+bewährte Muster (`docs/decisions.md`/`ARCHITECTURE.md` §12 zitiert es
+bereits als Vorbild). Umgesetzt als automatischer Bypass in
+`internal/httpapi/auth_middleware.go:authGate.authenticate`:
+`UserCount()==0` lässt jede Anfrage ungeprüft durch. Ergebnis: alle
+bisher verifizierten Demo-1–4-Flows laufen unverändert weiter, solange
+niemand einen Nutzer anlegt — kein Regressionsrisiko für die bestehende
+Dev-Nutzung. `POST /api/v1/auth/users` ist deshalb im Bootstrap-Fall
+unauthentifiziert erreichbar (sonst Henne-Ei-Problem: niemand könnte
+sich je den ersten Zugang verschaffen); der Handler selbst vergibt dem
+allerersten angelegten Nutzer automatisch eine Wildcard-`admin`-Bindung.
+
+**Passwort-Hashing: bcrypt (`golang.org/x/crypto/bcrypt`), keine
+Eigenbau-KDF.** Ausnahme von der Minimal-Dependency-Regel (§0 Punkt 5),
+aber die richtige: Go hat keine Salting/Cost-Factor-KDF in der
+Standardbibliothek, ein eigenes PBKDF2/Scrypt-Äquivalent aus
+`crypto/sha256` zusammenzusetzen wäre genau das in §0 Punkt 6/9
+ausgeschlossene "an Standards raten". `golang.org/x/crypto` war zudem
+bereits transitive Abhängigkeit (`nats.go`) — nur direkt importiert,
+keine neue Abhängigkeitswurzel (`go.mod`-Diff: eine Zeile von
+`// indirect` zu direkt verschoben).
+
+**JWT: handgebautes minimales HS256 (`internal/auth/jwt.go`), keine
+Bibliothek.** Anders als bei bcrypt hier die umgekehrte Abwägung: der
+gebrauchte Umfang ist ein Algorithmus, ein festes Claim-Set, keine
+JWKS/Multi-Issuer-Rotation — HS256-Sign/Verify ist mit `crypto/hmac` +
+`encoding/json` + `encoding/base64` aus der Standardbibliothek in unter
+100 Zeilen korrekt umsetzbar (Lehrbuch-HMAC-Anwendung, kein
+KDF-Design wie bei Passwort-Hashing), eine externe Bibliothek
+(`golang-jwt/jwt` o. Ä.) wäre hier Overhead ohne Gegenwert. Token-TTL 12h
+(eine typische Sendeschicht), kein Refresh-Mechanismus (bräuchte
+Revocation-Zustand, der noch nicht existiert — bewusster Scope-Schnitt).
+
+**Rollenbindungen: `data/role-bindings.json` → Postgres
+(`role_bindings`-Tabelle, `db/migrations/0002_auth.sql`).** Gleiche
+Bindungs-Semantik wie der C13-Stub (Subject/NodeID/Verb), jetzt per
+Admin-API verwaltbar (`GET/POST /api/v1/admin/role-bindings`, `DELETE
+.../{id}`) statt Handbearbeitung einer Datei. `internal/consoles`
+bezieht Bindungen jetzt über ein `BindingLoader`-Interface von
+`internal/authz` statt über einen dateibasierten `Store` — reiner
+Quellwechsel, `Resolver.Resolve`s Logik unverändert.
+
+**Verb-Zuordnung pro Endpunkt-Gruppe** (§12 Punkt 2: view/operate/
+configure/admin), umgesetzt in `internal/httpapi/server.go`:
+- Node-gescoped (`params`/`methods`-PATCH/POST, A8): `operate` auf der
+  Node-Rolle (`consoles.NodeRoleID`, dieselbe stabile Instanz-ID wie
+  bei der Operator-Console, §14 — eine Bindung deckt beides ab).
+- Global auf einer `"*"`-Bindung (kein Node-Bezug, da es noch keine
+  echten Workflow-Objekte gibt, D7): Graph-Verkabelung, Layouts,
+  Snapshots erstellen/anwenden → `configure`; Instanz-Launcher
+  (Start/Stop), Nutzer-/Rollenbindungs-Verwaltung, Audit-Log-Lesen →
+  `admin` (deckungsgleich mit der bereits in ARCHITECTURE.md §6.4
+  getroffenen Aussage "Katalog-Verwaltung ist eine administrative
+  Rolle").
+- Alle sonstigen GETs (Node-Liste, Graph, Layouts, Snapshots, Katalog,
+  Instanzen, Konsolen) verlangen nur eine gültige Anmeldung, keinen
+  spezifischen Verb/Node-Scope — es gibt aktuell nur den einen
+  impliziten Workflow (`consoles.StubWorkflowID`), feingranulare
+  Sichtbarkeits-Filterung ist erst mit echten Workflow-Objekten (D7)
+  sinnvoll (§12 Punkt 3 erlaubt das ausdrücklich: "Filterung ist
+  Komfort, Durchsetzung bleibt beim Orchestrator").
+
+**SSE-Endpunkt (`/api/v1/events`) braucht eine zweite Token-Quelle:**
+die Browser-`EventSource`-API kann keine eigenen Header setzen (Web-
+Plattform-Einschränkung, kein Design-Fehler). `bearerToken()` akzeptiert
+deshalb zusätzlich `?access_token=` als Fallback — dieselbe, in der
+Praxis übliche Lösung für Streaming-/WebSocket-Endpunkte mit
+Token-Auth.
+
+**UI (`ui/shell/auth.ts`):** globaler `fetch()`-Wrapper statt Anpassung
+der >15 direkten `fetch(...)`-Aufrufe in `flow-canvas.ts`/
+`console-view.ts`/`ui-bundle.ts` — hängt den Bearer-Header für jede
+`/api/v1/`-Anfrage an, ein Einstiegspunkt statt vieler Änderungsstellen,
+im Kommentar ausdrücklich als bewusste Entscheidung markiert (sähe sonst
+wie ein Versehen aus). Login-Overlay ersetzt das C13-Stub-Nutzer-Widget;
+erscheint nur, wenn `GET /api/v1/auth/whoami` `authRequired: true`
+meldet — im Bootstrap-Zustand (kein Nutzer angelegt) bleibt die Shell
+optisch exakt wie vor diesem Schritt.
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/vet/
+test` (alle Pakete inkl. neuer `internal/auth`/`internal/authz`/
+`internal/audit`, Postgres-Tests bewusst gegen eine echte, per `make up`
+gestartete Instanz laufen lassen, nicht nur mit `t.Skip` durchgewunken —
+beim ersten Anlauf liefen sie tatsächlich in den Skip-Zweig, weil die
+Podman-Container seit der letzten Sitzung nur `Created`, nicht
+`Up` waren; nach `make up` erneut mit `-count=1` verifiziert, dass sie
+wirklich laufen, nicht nur cachen), `deno check`/`deno test` grün.
+End-to-end per `curl` gegen eine echte laufende Orchestrator-Instanz:
+Bootstrap-Zustand offen (`whoami` → `authRequired:false`, `GET
+/api/v1/nodes` ohne Token → 200); erster Nutzer per unauthentifiziertem
+`POST /api/v1/auth/users` angelegt → Durchsetzung schaltet sich
+automatisch scharf (`GET /api/v1/nodes` ohne Token jetzt → 401); Login
+liefert Token, damit wieder 200; zweiter Nutzer ohne Bindung bekommt 403
+auf einen Node-PATCH, nach `admin`-erteilter `operate`-Bindung auf
+dieselbe Node-Rolle 404 (Node existiert nicht, aber die Autorisierung
+lässt jetzt durch — der Unterschied zwischen 403 und 404 beweist die
+Durchsetzung), 403 auf `configure`-Endpunkte (nur `operate` gebunden)
+und auf Admin-Endpunkte; Audit-Log zeigt alle Schreibzugriffe korrekt
+mit Nutzername/Status/NodeID; SSE mit `?access_token=` verbindet, ohne
+Token 401; falsches Passwort 401, doppelter Nutzername 409. Browser-Test
+per CDP (Chromium headless + Node-WebSocket, gleiche Methode wie
+C13-Nachtrag 1–3): Zero-User-Zustand zeigt weiterhin direkt den
+Flow-Editor ohne Login-Formular; nach Bootstrap eines Nutzers zeigt ein
+Reload das Login-Formular statt des Editors; Formular ausfüllen +
+Absenden lädt den Flow-Editor, zeigt "Angemeldet als …" und legt das
+Token in `localStorage` ab; keine Konsolen-Fehler/Exceptions während des
+gesamten Ablaufs. Kein Bug gefunden (anders als bei den meisten
+vorherigen Schritten) — Testkonten nach der Verifikation wieder aus der
+DB entfernt, damit die Standard-Dev-Umgebung wie vor diesem Schritt ohne
+Login startet, bis jemand bewusst einen echten Nutzer anlegt.
+
+**Offener D3-Restscope:** AD/LDAP-Anbindung (s. o.), Token-Refresh/
+-Revocation, feingranulare Sichtbarkeits-Filterung pro Workflow (wartet
+auf D7).

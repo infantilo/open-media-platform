@@ -1,6 +1,10 @@
 package consoles
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+)
 
 // StubWorkflowID/-Label: das Projekt kennt noch kein eigenständiges
 // "Workflow"-Objekt (ARCHITECTURE.md §6.2, geplant erst ab D7) — es gibt
@@ -49,31 +53,44 @@ type Result struct {
 	Consoles             []ConsoleEntry `json:"consoles"`
 }
 
-// Resolver löst Rollenbindungen für einen Stub-Nutzer gegen die aktuell
-// bekannten Nodes auf.
+// BindingLoader liefert alle Rollenbindungen (implementiert von
+// *authz.Store, UMSETZUNG.md D3 Teil 2 — ersetzt die bisherige,
+// dateibasierte Bindungsquelle des C13-Stubs). Als schmales Interface
+// gehalten, damit Tests ohne echte Postgres-Verbindung auskommen.
+type BindingLoader interface {
+	Load() ([]authz.Binding, error)
+}
+
+// Resolver löst Rollenbindungen für den authentifizierten Nutzer
+// (username, s. internal/auth) gegen die aktuell bekannten Nodes auf.
 type Resolver struct {
-	store *Store
+	store BindingLoader
 }
 
 // NewResolver erstellt einen Resolver, der Bindungen aus store liest.
-func NewResolver(store *Store) *Resolver {
+func NewResolver(store BindingLoader) *Resolver {
 	return &Resolver{store: store}
 }
 
-// nodeRoleID ist die stabile "Rolle" eines Nodes: die vom Instanz-
+// NodeRoleID ist die stabile "Rolle" eines Nodes: die vom Instanz-
 // Launcher vergebene Instanz-ID (UMSETZUNG.md C8, überlebt Node-
 // Neustarts — anders als die pro Prozessstart neu erzeugte IS-04-
 // Node-ID), ersatzweise die rohe Node-ID für manuell (nicht über den
-// Launcher) gestartete Nodes.
-func nodeRoleID(n NodeInfo) string {
+// Launcher) gestartete Nodes. Exportiert, weil internal/httpapi
+// (UMSETZUNG.md D3 Teil 2) dieselbe Rollen-ID braucht, um Rollenbindungen
+// gegen einen konkreten Node-Proxy-Aufruf zu prüfen — genau dieselbe
+// "Rolle" wie die, die Resolve unten für die Konsolen-Liste auflöst,
+// keine zweite Definition.
+func NodeRoleID(n NodeInfo) string {
 	if n.InstanceID != "" {
 		return n.InstanceID
 	}
 	return n.ID
 }
 
-// Resolve wertet alle Bindungen für userID gegen nodes aus.
-func (r *Resolver) Resolve(userID string, nodes []NodeInfo) (Result, error) {
+// Resolve wertet alle Bindungen für username (aus dem verifizierten
+// Bearer-Token, internal/auth) gegen nodes aus.
+func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 	bindings, err := r.store.Load()
 	if err != nil {
 		return Result{}, err
@@ -86,18 +103,18 @@ func (r *Resolver) Resolve(userID string, nodes []NodeInfo) (Result, error) {
 	// dass Client-Code das nicht verlässlich selbst abfängt.
 	result := Result{Consoles: []ConsoleEntry{}}
 	for _, b := range bindings {
-		if b.UserID != userID {
+		if b.Subject != username {
 			continue
 		}
-		if b.Verb == VerbConfigure || b.Verb == VerbAdmin {
+		if b.Verb == authz.VerbConfigure || b.Verb == authz.VerbAdmin {
 			result.HasEngineeringAccess = true
 		}
-		if b.Verb != VerbOperate {
+		if b.Verb != authz.VerbOperate {
 			continue
 		}
 		for _, n := range nodes {
-			roleID := nodeRoleID(n)
-			if b.NodeID != "*" && b.NodeID != roleID {
+			roleID := NodeRoleID(n)
+			if b.NodeID != authz.AnyNode && b.NodeID != roleID {
 				continue
 			}
 			if seen[roleID] {

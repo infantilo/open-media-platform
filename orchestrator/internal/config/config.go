@@ -51,28 +51,42 @@ type Config struct {
 	MTLSCertFile string
 	MTLSKeyFile  string
 	MTLSCAFile   string
+	// JWTSecret ist ein direkt gesetztes HMAC-Secret für die
+	// Token-Signierung (UMSETZUNG.md D3 Teil 2) — für echte Deployments,
+	// die ein Secret aus einer eigenen Verwaltung (Vault, K8s-Secret, …)
+	// einspeisen wollen. Leer im Dev-Default: dann greift
+	// JWTSecretFile.
+	JWTSecret string
+	// JWTSecretFile ist der Pfad, unter dem der Orchestrator ein
+	// automatisch generiertes Token-Secret persistiert, falls JWTSecret
+	// leer ist (auth.LoadOrCreateSecret) — Zero-Config-Dev-Default,
+	// gleiches Muster wie CatalogPath.
+	JWTSecretFile string
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR, OMP_DATA_DIR,
-// OMP_CATALOG_PATH, OMP_POSTGRES_URL und OMP_MTLS_*; fehlende Werte
+// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_* und OMP_AUTH_JWT_*;
+// fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
 // NATS-Ports aus UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade
 // relativ zum orchestrator/-Arbeitsverzeichnis).
 func Load() Config {
 	mtlsEnabled, _ := strconv.ParseBool(getEnv("OMP_MTLS_ENABLED", "false"))
 	return Config{
-		Listen:       getEnv("OMP_LISTEN", ":8000"),
-		RegistryURL:  getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
-		NatsURL:      getEnv("OMP_NATS_URL", "nats://localhost:4222"),
-		UIDir:        getEnv("OMP_UI_DIR", "../ui"),
-		DataDir:      getEnv("OMP_DATA_DIR", "../data"),
-		CatalogPath:  getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
-		PostgresURL:  getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
-		MTLSEnabled:  mtlsEnabled,
-		MTLSCertFile: getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
-		MTLSKeyFile:  getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
-		MTLSCAFile:   getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		Listen:        getEnv("OMP_LISTEN", ":8000"),
+		RegistryURL:   getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
+		NatsURL:       getEnv("OMP_NATS_URL", "nats://localhost:4222"),
+		UIDir:         getEnv("OMP_UI_DIR", "../ui"),
+		DataDir:       getEnv("OMP_DATA_DIR", "../data"),
+		CatalogPath:   getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
+		PostgresURL:   getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
+		MTLSEnabled:   mtlsEnabled,
+		MTLSCertFile:  getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
+		MTLSKeyFile:   getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
+		MTLSCAFile:    getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		JWTSecret:     getEnv("OMP_AUTH_JWT_SECRET", ""),
+		JWTSecretFile: getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
 	}
 }
 

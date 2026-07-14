@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
@@ -97,38 +98,61 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 }
 
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
-// /healthz, /api/v1/info, /api/v1/nodes, /api/v1/events, /api/v1/graph,
-// /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog, /api/v1/instances,
-// /api/v1/me/consoles und statisches Serving von cfg.UIDir unter / (inkl.
-// SPA-Fallback für die Kiosk-Routen /console/<workflowId>/<nodeRoleId>,
-// ARCHITECTURE.md §14). nodeClient ist der (ggf. mTLS-fähige,
-// UMSETZUNG.md D3) HTTP-Client für den generischen Node-Proxy — nil
-// bedeutet http.DefaultClient.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client) http.Handler {
+// /healthz, /api/v1/info, /api/v1/auth, /api/v1/nodes, /api/v1/events,
+// /api/v1/graph, /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog,
+// /api/v1/instances, /api/v1/me/consoles, /api/v1/admin und statisches
+// Serving von cfg.UIDir unter / (inkl. SPA-Fallback für die Kiosk-Routen
+// /console/<workflowId>/<nodeRoleId>, ARCHITECTURE.md §14). nodeClient
+// ist der (ggf. mTLS-fähige, UMSETZUNG.md D3 Teil 1) HTTP-Client für den
+// generischen Node-Proxy — nil bedeutet http.DefaultClient.
+//
+// authSvc/authzStore/auditLogger setzen ARCHITECTURE.md §12 durch
+// (UMSETZUNG.md D3 Teil 2): lesende Endpunkte verlangen nur eine gültige
+// Anmeldung (authGate.requireAuth), schreibende verlangen zusätzlich das
+// passende Verb — node-gescoped (params/methods, requireVerbOnNode) oder
+// global auf einer "*"-Bindung (Graph/Layouts/Snapshots/Launcher/Admin,
+// requireVerbGlobal, s. §12 Punkt 2: "Katalog-Verwaltung ist eine
+// administrative Rolle"). Solange kein Nutzer existiert, bypassed
+// authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
+// gegenüber vor D3 Teil 2.
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader) http.Handler {
+	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
-	mux.HandleFunc("GET /api/v1/nodes", handleNodes(nodes))
-	mux.HandleFunc("GET /api/v1/events", handleEvents(events))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", handleNodeProxy(nodes, nodeClient, "/descriptor.json"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, nodeClient, "/params/{name}"))
-	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", handleNodeProxy(nodes, nodeClient, "/params/{name}"))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", handleNodeProxy(nodes, nodeClient, "/methods/{name}"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", handleNodeProxy(nodes, nodeClient, "/ui/manifest.json"))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", handleNodeProxy(nodes, nodeClient, "/ui/bundle.js"))
-	mux.HandleFunc("GET /api/v1/graph", handleGraph(graphSvc))
-	mux.HandleFunc("POST /api/v1/graph/edges", handlePostGraphEdge(graphSvc))
-	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", handleDeleteGraphEdge(graphSvc))
-	mux.HandleFunc("GET /api/v1/layouts/{name}", handleGetLayout(layoutStore))
-	mux.HandleFunc("PUT /api/v1/layouts/{name}", handlePutLayout(layoutStore))
-	mux.HandleFunc("GET /api/v1/snapshots", handleListSnapshots(snapshotSvc))
-	mux.HandleFunc("POST /api/v1/snapshots", handleCreateSnapshot(snapshotSvc))
-	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", handleApplySnapshot(snapshotSvc))
-	mux.HandleFunc("GET /api/v1/catalog", handleCatalog(launcherSvc))
-	mux.HandleFunc("GET /api/v1/instances", handleListInstances(launcherSvc))
-	mux.HandleFunc("POST /api/v1/instances", handlePostInstance(launcherSvc))
-	mux.HandleFunc("DELETE /api/v1/instances/{id}", handleDeleteInstance(launcherSvc))
-	mux.HandleFunc("GET /api/v1/me/consoles", handleMeConsoles(nodes, consoleResolver))
+
+	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc))
+	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc))
+	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
+
+	mux.HandleFunc("GET /api/v1/nodes", g.requireAuth(handleNodes(nodes)))
+	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}")))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}")))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
+	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
+	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
+	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteGraphEdge(graphSvc)))
+	mux.HandleFunc("GET /api/v1/layouts/{name}", g.requireAuth(handleGetLayout(layoutStore)))
+	mux.HandleFunc("PUT /api/v1/layouts/{name}", g.requireVerbGlobal(authz.VerbConfigure, handlePutLayout(layoutStore)))
+	mux.HandleFunc("GET /api/v1/snapshots", g.requireAuth(handleListSnapshots(snapshotSvc)))
+	mux.HandleFunc("POST /api/v1/snapshots", g.requireVerbGlobal(authz.VerbConfigure, handleCreateSnapshot(snapshotSvc)))
+	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", g.requireVerbGlobal(authz.VerbConfigure, handleApplySnapshot(snapshotSvc)))
+	mux.HandleFunc("GET /api/v1/catalog", g.requireAuth(handleCatalog(launcherSvc)))
+	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc)))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
+	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
+	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
+
+	mux.HandleFunc("GET /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleListRoleBindings(authzStore)))
+	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))
+	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore)))
+	mux.HandleFunc("GET /api/v1/admin/audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListAuditLog(auditReader)))
+
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return noStoreForAPI(mux)
 }

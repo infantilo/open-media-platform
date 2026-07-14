@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
@@ -117,9 +119,25 @@ func main() {
 	}
 	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub)
 
-	consoleResolver := consoles.NewResolver(consoles.NewStore(filepath.Join(cfg.DataDir, "role-bindings.json")))
+	// Nutzer-/Rollenmodell (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2)
+	// — ersetzt die bisherige data/role-bindings.json (C13-Stub) durch
+	// die authz-Tabelle; JWTSecret hat Vorrang vor JWTSecretFile (echte
+	// Deployments speisen ein eigenes Secret ein statt eines
+	// auto-generierten).
+	jwtSecret := []byte(cfg.JWTSecret)
+	if cfg.JWTSecret == "" {
+		jwtSecret, err = auth.LoadOrCreateSecret(cfg.JWTSecretFile)
+		if err != nil {
+			slog.Error("jwt secret setup failed", "error", err)
+			os.Exit(1)
+		}
+	}
+	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
+	authzStore := authz.NewStore(database)
+	auditStore := audit.NewStore(database)
+	consoleResolver := consoles.NewResolver(authzStore)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
