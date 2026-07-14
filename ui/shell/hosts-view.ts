@@ -4,6 +4,12 @@
 // eigenständiges, per Knopf ein-/ausblendbares Panel (s. shell.ts),
 // reiner Poll gegen GET /api/v1/hosts (kein SSE-Sonderfall nötig, die
 // paar Sekunden Verzögerung sind für eine Host-Übersicht unkritisch).
+//
+// Seit D6 Teil 3 (ARCHITECTURE.md §6.1, advisory-only Placement-Engine)
+// zusätzlich ein Poll gegen GET /api/v1/placement/advice — gleiches
+// Poll-Muster wie oben statt eines SSE-Sonderfalls nur für dieses eine
+// Panel. Die Engine selbst greift nicht ein, das Panel zeigt nur den
+// Alarm+Vorschlag an (Host, Grund, betroffene Instanzen, Ausweichhost).
 interface HostMetrics {
   cpuPercent: number;
   memUsedBytes: number;
@@ -19,7 +25,32 @@ interface HostEntry {
   metrics?: HostMetrics;
 }
 
+interface PlacementAdvice {
+  hostId: string;
+  hostLabel: string;
+  reason: string;
+  cpuPercent: number;
+  memPercent: number;
+  instanceIds: string[];
+  suggestedHostId?: string;
+  suggestedHostLabel?: string;
+  detectedAt: string;
+}
+
 const POLL_INTERVAL_MS = 4000;
+
+function reasonLabel(reason: string): string {
+  switch (reason) {
+    case "cpu":
+      return "CPU";
+    case "mem":
+      return "RAM";
+    case "cpu+mem":
+      return "CPU+RAM";
+    default:
+      return reason;
+  }
+}
 
 function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
@@ -32,7 +63,7 @@ class HostsView extends HTMLElement {
     this.style.cssText =
       "display:block;background:#1c1c1c;border:1px solid #333;border-radius:6px;" +
       "padding:10px;font-family:sans-serif;font-size:12px;color:#ddd;max-width:640px;";
-    this.#render([]);
+    this.#render([], []);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
   }
@@ -43,16 +74,20 @@ class HostsView extends HTMLElement {
 
   async #poll() {
     try {
-      const res = await fetch("/api/v1/hosts");
-      if (!res.ok) return;
-      const hosts = (await res.json()) as HostEntry[];
-      this.#render(hosts);
+      const [hostsRes, adviceRes] = await Promise.all([
+        fetch("/api/v1/hosts"),
+        fetch("/api/v1/placement/advice"),
+      ]);
+      if (!hostsRes.ok) return;
+      const hosts = (await hostsRes.json()) as HostEntry[];
+      const advice = adviceRes.ok ? ((await adviceRes.json()) as PlacementAdvice[]) : [];
+      this.#render(hosts, advice);
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
   }
 
-  #render(hosts: HostEntry[]) {
+  #render(hosts: HostEntry[], advice: PlacementAdvice[]) {
     const rows = hosts
       .map((h) => {
         const m = h.metrics;
@@ -69,8 +104,21 @@ class HostsView extends HTMLElement {
       })
       .join("");
 
+    const adviceBanner = advice
+      .map((a) => {
+        const target = a.suggestedHostId
+          ? `Vorschlag: <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
+          : `<span style="color:#e8a33d;">kein Ausweichhost frei</span>`;
+        return `<div style="padding:6px 8px;margin-bottom:4px;background:#3a2020;border:1px solid #7a3030;border-radius:4px;">
+          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%),
+          ${a.instanceIds.length} Instanz(en) betroffen — ${target}
+        </div>`;
+      })
+      .join("");
+
     this.innerHTML = `
       <div style="font-weight:600;margin-bottom:6px;">Hosts (${hosts.length})</div>
+      ${adviceBanner}
       ${
         hosts.length === 0
           ? `<div style="color:#999;">Noch kein Host registriert.</div>`

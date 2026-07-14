@@ -62,11 +62,23 @@ type Config struct {
 	// leer ist (auth.LoadOrCreateSecret) — Zero-Config-Dev-Default,
 	// gleiches Muster wie CatalogPath.
 	JWTSecretFile string
+	// PlacementCPUThreshold/PlacementMemThreshold (Prozent) markieren
+	// einen Host mit laufenden Instanzen als überlastet (ARCHITECTURE.md
+	// §6.1, UMSETZUNG.md D6 Teil 3 — erste, advisory-only Ausbaustufe).
+	// PlacementHealthyCPUThreshold/PlacementHealthyMemThreshold legen
+	// fest, ab wann ein anderer Host als Ausweichziel vorgeschlagen wird
+	// (bewusst mit Abstand unter den Alarm-Schwellwerten, s.
+	// placement.Thresholds-Doku).
+	PlacementCPUThreshold        float64
+	PlacementMemThreshold        float64
+	PlacementHealthyCPUThreshold float64
+	PlacementHealthyMemThreshold float64
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR, OMP_DATA_DIR,
-// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_* und OMP_AUTH_JWT_*;
+// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_* und
+// OMP_PLACEMENT_*;
 // fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
 // NATS-Ports aus UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade
@@ -87,6 +99,14 @@ func Load() Config {
 		MTLSCAFile:    getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
 		JWTSecret:     getEnv("OMP_AUTH_JWT_SECRET", ""),
 		JWTSecretFile: getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
+		// Defaults spiegeln placement.DefaultThresholds (bewusst hier
+		// dupliziert statt importiert, config bleibt frei von
+		// Business-Logik-Abhängigkeiten, gleiches Muster wie die
+		// remoteCommand-Duplikation zwischen launcher und host-agent).
+		PlacementCPUThreshold:        getEnvFloat("OMP_PLACEMENT_CPU_THRESHOLD", 85),
+		PlacementMemThreshold:        getEnvFloat("OMP_PLACEMENT_MEM_THRESHOLD", 90),
+		PlacementHealthyCPUThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_CPU_THRESHOLD", 60),
+		PlacementHealthyMemThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_MEM_THRESHOLD", 70),
 	}
 }
 
@@ -95,4 +115,16 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getEnvFloat(key string, fallback float64) float64 {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }

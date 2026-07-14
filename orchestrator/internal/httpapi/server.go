@@ -118,7 +118,9 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // /api/v1/instances, /api/v1/me/consoles, /api/v1/admin, /api/v1/hosts
 // (Remote-Host-Erkennung, ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1),
 // /api/v1/workflows (Workflow-Bereitstellung & -Verteilung,
-// ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1)
+// ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1), /api/v1/placement/advice
+// (Resource-Aware Placement, advisory-only, ARCHITECTURE.md §6.1,
+// UMSETZUNG.md D6 Teil 3)
 // und statisches
 // Serving von cfg.UIDir unter / (inkl. SPA-Fallback für die Kiosk-Routen
 // /console/<workflowId>/<nodeRoleId>, ARCHITECTURE.md §14). nodeClient
@@ -134,7 +136,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, workflowSvc WorkflowService) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes}
 
 	mux := http.NewServeMux()
@@ -177,6 +179,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry))
 	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics)))
+
+	// Resource-Aware Placement, advisory-only (ARCHITECTURE.md §6.1,
+	// UMSETZUNG.md D6 Teil 3) — view-artig wie /api/v1/hosts, kein
+	// eigener Verb-Scope, die Engine führt selbst nichts aus.
+	mux.HandleFunc("GET /api/v1/placement/advice", g.requireAuth(handleListPlacementAdvice(placementAdvisor)))
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1). Definieren ist "configure" (wie

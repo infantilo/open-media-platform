@@ -4198,3 +4198,151 @@ demselben Klick-Test erneut grün bestätigt. Test-Prozesse, -Workflow und
 zwei versehentlich geleakte Chromium-Tabs (falscher `Target.
 closeTarget`-Aufruf in einem Wegwerf-Testskript, nicht im Produktcode)
 danach aufgeräumt.
+
+## 2026-07-14 — D6 Teil 3 (Resource-Aware Placement, ARCHITECTURE.md §6.1): advisory-only Ausbaustufe, kein Make-before-break
+
+**Kontext:** Letzter offener D6-Baustein. `ARCHITECTURE.md` §6.1 nennt
+drei Bausteine (Telemetrie, Placement-Engine, Make-before-break-
+Protokoll) und ist explizit: „Erste Ausbaustufe bewusst advisory (Alarm
++ Vorschlag), nicht sofort automatisch migrierend." Telemetrie existiert
+bereits seit D6 Teil 1. Dieser Schritt liefert ausschließlich Baustein
+2 (Scoring/Alarm/Vorschlag) — Baustein 3 (tatsächliche Migration) ist
+bewusst zurückgestellt: eine automatische Ausführung ohne vorherige,
+gezielte Prüfung des Make-before-break-Zustandsautomaten wäre das
+riskantere Feature zuerst gebaut, nicht das sicherere zuerst („kleinste
+sicher lieferbare Scheibe zuerst", Haus-Stil). D7 Teil 2
+(Ressourcen-Vorprüfung) wartete explizit auf diesen Baustein
+(`UMSETZUNG.md` D7 Teil 1: „braucht die noch zurückgestellte
+Placement-Engine").
+
+**Kernentscheidung — advisory bleibt advisory, keine Eskalationsstufen
+in dieser Runde:** §6.1 Erweiterung 2026-07-13 beschreibt bereits
+pro-Rolle konfigurierbare Eskalationsstufen (`advisory` /
+`auto-confirm-window` / `auto`). Diese Konfiguration ergibt aber erst
+Sinn, sobald *irgendeine* automatische Ausführung existiert, gegen die
+sich die Stufen unterscheiden lassen — mit nur `advisory` implementiert
+wäre ein Eskalationsstufen-Feld reine Attrappe (ein Konfigurationsfeld,
+das nichts an tatsächlichem Verhalten ändern kann). Bewusst nicht
+gebaut, bis Baustein 3 existiert.
+
+**Implementierung:**
+- Neues Paket `orchestrator/internal/placement` (`Engine`, keine
+  Postgres-Anbindung — reiner In-Memory-Rechenschritt über bereits
+  vorhandene Daten aus `internal/hosts` und `internal/launcher`, kein
+  eigener Store nötig). `HostLister`/`MetricsReader`/`InstanceLister`/
+  `EventPublisher` als schmale Interfaces (gleiches Entkopplungsmuster
+  wie überall sonst im Orchestrator — `*hosts.Store`, `*hosts.Tracker`,
+  `*launcher.Launcher`, `*sse.Hub` erfüllen sie ohne Adapter).
+- `Engine.Run(ctx)` bewertet alle 5s (`EvaluateInterval`, bewusst
+  identisch zur Host-Agent-Telemetrie-Sendefrequenz aus
+  `host-agent/main.go`, kein Rätselraten über ein sinnvolles Intervall
+  nötig). Ein überlasteter, aber instanzloser Host löst **keinen**
+  Alarm aus („niemandes Problem"); ein lokal (ohne `hostId`) gestarteter
+  Node zählt nicht als migrierbare Instanz.
+- Scoring: `CPUPercent`/`MemPercent` (Alarm-Schwellwerte, Default 85%/
+  90%) vs. `HealthyCPUPercent`/`HealthyMemPercent` (Ausweichziel-
+  Eignung, Default 60%/70%, bewusst mit Abstand zu den Alarm-
+  Schwellwerten — ein Kandidat knapp unter der Alarmschwelle wäre kein
+  sinnvoller Vorschlag). Kein Ausweichhost unter den Healthy-
+  Schwellwerten gefunden → `SuggestedHostID` bleibt leer, ein
+  ehrlicher „nicht migrierbar"-Befund statt eines stillen Fallbacks auf
+  irgendeinen Host (gleiches Prinzip wie die I/O-Karten-Migrations-
+  grenze in §6.1, nur hier bereits für den reinen CPU/RAM-Fall
+  vorweggenommen).
+- **Kein SSE-Dauerfeuer bei stabiler Last:** `publishChanges`
+  vergleicht (`reflect.DeepEqual`, da `Advice.InstanceIDs` ein Slice
+  ist und `Advice` deshalb nicht `==`-vergleichbar ist) den neuen
+  gegen den vorherigen Alarm-Stand pro Host und broadcastet nur bei
+  tatsächlicher Änderung. Dafür musste `DetectedAt` explizit über
+  Bewertungsläufe hinweg stabil gehalten werden (aus dem vorherigen
+  Advice übernommen, falls der Alarm bereits bestand) — sonst hätte
+  jeder Tick einen neuen Zeitstempel und damit über den DeepEqual-
+  Vergleich ein neues Event erzeugt, obwohl sich am Zustand nichts
+  geändert hat. Ein bei einem Lauf verschwundener Alarm broadcastet
+  ein `{Reason: "cleared"}`-Event, damit UI-Clients ohne vollständigen
+  Re-Poll wissen, welcher Alarm weg ist.
+- API: `GET /api/v1/placement/advice` (`internal/httpapi/
+  placement_handlers.go`) — view-artig wie `GET /api/v1/hosts`, kein
+  eigener Verb-Scope (die Engine führt selbst nichts aus, es gibt
+  nichts zu autorisieren außer Lesezugriff).
+- Config: `OMP_PLACEMENT_CPU_THRESHOLD`/`_MEM_THRESHOLD`/
+  `_HEALTHY_CPU_THRESHOLD`/`_HEALTHY_MEM_THRESHOLD` — Defaults in
+  `internal/config` bewusst als Zahlen dupliziert statt
+  `placement.DefaultThresholds` zu importieren (config bleibt frei von
+  Business-Logik-Abhängigkeiten, gleiches Duplikations-Muster wie
+  `remoteCommand` zwischen `launcher` und `host-agent`, D6 Teil 2).
+- UI (`ui/shell/hosts-view.ts`): zusätzlicher Poll gegen
+  `/api/v1/placement/advice` im selben Intervall wie der bestehende
+  Hosts-Poll (kein SSE-Sonderfall nur für dieses eine Panel, gleiche
+  Begründung wie beim ursprünglichen Hosts-Poll selbst), Alarm-Banner
+  pro überlastetem Host oberhalb der Host-Tabelle.
+
+**Bewusst nicht in dieser Runde (dokumentierte Scope-Grenze, kein
+stiller Gap):**
+- Make-before-break-Protokoll (§6.1 Punkt 3) — Start einer
+  Ersatzinstanz, Betriebsbereitschaftsprüfung, IS-05-Umschaltung,
+  Drain, Teardown. Der größte verbleibende §6.1-Baustein, eigene
+  Zustandsautomatik, kein Nebenprodukt dieser Runde.
+- Eskalationsstufen advisory/auto-confirm-window/auto (§6.1 Erweiterung
+  2026-07-13 Punkt 2) — s. Kernentscheidung oben, wartet auf
+  Make-before-break.
+- I/O-Karten-Claim/Release (§6.1 Erweiterung 2026-07-10) — braucht ein
+  noch nicht existierendes Geräte-Inventar im Host-Agent.
+- GPU/NIC-Telemetrie (§18.4, herstellerspezifisch) und Cloud-
+  Kostenfaktor (§6.1 Punkt 4).
+- D7 Teil 2 (Ressourcen-Vorprüfung als harte Workflow-Start-
+  Vorbedingung) — kann jetzt auf `placement.Engine` aufsetzen, ist aber
+  ein eigener, noch nicht terminierter Schritt (Workflow-Start bleibt
+  bis dahin best-effort wie in D7 Teil 1).
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/vet/
+test -race` für `orchestrator` (neues `internal/placement`-Paket, acht
+Tabellen-artige Szenarien: kein Alarm unter Schwellwert, kein Alarm bei
+instanzlosem Host, Alarm mit Ausweichhost-Vorschlag, Alarm ohne
+verfügbaren Ausweichhost, stabiler Alarm republiziert nicht über
+mehrere Ticks, behobener Alarm broadcastet ein "cleared"-Event,
+RAM-Grund-Erkennung, lokale Instanzen ohne `hostId` werden ignoriert)
+grün, `go vet` sauber; `deno check/test/bundle` grün (Custom-Element-
+Registrierung im Bundle per `grep` auf `omp-hosts-view` bestätigt,
+gleiche Vorsicht wie bei jeder UI-Änderung seit dem D5-prep-Fund zur
+Deno-Bundle-Typ-Import-Elision).
+
+End-to-end mit echten Prozessen (kein Mock der Placement-Engine
+selbst): zwei echte `omp-host-agent`-Prozesse mit je einer echten
+`nodes/mock`-Instanz registriert (gleiches Zwei-Host-Muster wie D6 Teil
+1/2). Baseline ohne Alarm bestätigt (`GET /api/v1/placement/advice` →
+`[]`, beide Hosts real bei ~5% CPU). Einen Host-Agent-Prozess gestoppt
+(damit dessen reale Telemetrie keine fingierten Werte mehr
+überschreibt) und für dessen Host-ID direkt eine fingierte
+Überlast-Nachricht (97,5% CPU) auf `omp.host.<id>.metrics` publiziert
+— exakt die Simulationsart, die `ARCHITECTURE.md` §6.1 für die
+Single-Host-Dev-Maschine ohne zweiten echten Host vorschlägt ("zwei
+Podman-„virtuelle Hosts" mit fingierten Metriken"). Ergebnis: Alarm mit
+`reason: "cpu"` und korrektem `suggestedHostId` (dem gesunden zweiten
+Host) erschien binnen einer Bewertungsrunde. Per SSE (`curl -N
+/api/v1/events`) über ca. 14s (≈3 Bewertungsläufe) bei unverändert
+hoher Last mitgelesen: **genau ein** `placement.advice`-Event, keine
+Wiederholung — bestätigt, dass die Änderungserkennung tatsächlich
+greift, nicht nur im Unit-Test. Anschließend Entlastung simuliert (10%
+CPU publiziert): Alarm verschwand aus `GET .../advice`, ein
+zusätzliches `placement.advice`-Event mit `reason: "cleared"` per SSE
+beobachtet. Browser-Test per echtem CDP (Node-WebSocket gegen
+`chromium --headless --remote-debugging-port`, `/json/list` für das
+Page-Target statt des Browser-weiten `/json/version`-Sockets — letzterer
+kennt `Runtime.evaluate` nicht, nur Zielseiten-Sockets tun das): echter
+Klick auf den bestehenden "Hosts"-Button, danach das Alarm-Banner mit
+Host-Label, Grund, CPU-/RAM-Werten und Ausweichhost-Vorschlag im
+tatsächlichen DOM gelesen — dabei einen kleinen Textfehler gefunden
+("CPU: CPU 98%…", doppelte Grund-/Wert-Bezeichnung durch
+`reasonLabel()` + hartkodiertes "CPU" im Template) und auf "Grund:
+CPU, CPU 98% / RAM 7%" korrigiert, danach erneut per CDP bestätigt.
+
+Danach aufgeräumt: verwaisten `omp-mock`-Prozess des gestoppten
+Host-Agents manuell beendet (kein Elternprozess mehr, der ihn stoppen
+konnte), zweite Instanz reguläre über den noch laufenden Host-Agent per
+`DELETE /api/v1/instances/<id>` remote gestoppt, zweiten Host-Agent
+beendet, Chromium beendet, beide Test-Hosts + deren bereits verbrauchte
+Bootstrap-Tokens per SQL aus Postgres entfernt (kein `DELETE
+/api/v1/hosts/<id>`-Endpunkt vorhanden — Hosts sind seit D6 Teil 1
+bewusst nur lesend über die API exponiert, Löschen ist bisher kein
+UI-/API-Anwendungsfall).

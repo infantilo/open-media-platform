@@ -1327,6 +1327,57 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   bestätigt: ein Katalogtyp, der auf dem Ziel-Host nicht freigegeben
   war, wurde vom Host-Agent abgelehnt, nicht vom Orchestrator
   durchgewunken. Test-Prozesse/-Hosts danach entfernt.
+  **D6 Teil 3 (Placement-Engine, erledigt, 2026-07-14):** §6.1 —
+  erste, bewusst **advisory-only** Ausbaustufe ("Alarm + Vorschlag",
+  kein automatischer Eingriff). Neues Paket
+  `orchestrator/internal/placement`: `Engine.Run(ctx)` bewertet alle 5s
+  (gleicher Takt wie die Host-Agent-Telemetrie-Sendefrequenz) jeden
+  Host mit laufenden Instanzen gegen konfigurierbare CPU-/RAM-
+  Schwellwerte (`OMP_PLACEMENT_CPU_THRESHOLD` u. a., Default 85%/90%
+  Alarm, 60%/70% "gilt als Ausweichziel geeignet") und schlägt bei
+  Überlastung den am wenigsten ausgelasteten anderen Host vor, sofern
+  einer unter den Healthy-Schwellwerten liegt — sonst ehrlich „kein
+  Ausweichhost frei" statt eines stillen Fallbacks. API:
+  `GET /api/v1/placement/advice`; Änderungen (neuer Alarm, verändert,
+  behoben) gehen zusätzlich als SSE-Event `placement.advice` an alle
+  Flow-Editor-Clients — ein unveränderter, fortbestehender Alarm sendet
+  bewusst **kein** wiederholtes Event pro Tick (kein SSE-Dauerfeuer).
+  UI: bestehendes `hosts-view.ts`-Panel um ein Alarm-Banner pro
+  überlastetem Host erweitert (gleiches Poll-Muster wie der
+  restliche Panel-Inhalt, kein SSE-Sonderfall nur für dieses eine
+  Panel).
+  **Scope-Entscheidung:** kein Make-before-break-Protokoll (§6.1 Punkt
+  3 — Start/Verifikation/IS-05-Umschaltung/Teardown einer
+  Ersatzinstanz), keine pro-Rolle konfigurierbaren Eskalationsstufen
+  (advisory/auto-confirm-window/auto, §6.1 Erweiterung 2026-07-13 Punkt
+  2 — Eskalationsstufen jenseits von advisory ergeben erst Sinn, sobald
+  überhaupt eine automatische Ausführung existiert), keine
+  I/O-Karten-Claim/Release-Semantik (§6.1 Erweiterung 2026-07-10 —
+  braucht ein noch nicht existierendes Geräte-Inventar), keine
+  GPU/NIC-Telemetrie (§18.4, herstellerspezifisch), kein
+  Cloud-Kostenfaktor (§6.1 Punkt 4). D7 Teil 2 (Ressourcen-Vorprüfung
+  als harte Start-Vorbedingung) kann auf diesem Baustein aufsetzen,
+  bleibt aber ein eigener, noch nicht terminierter Schritt.
+  **Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/
+  vet/test -race` für `orchestrator` (neues `internal/placement`-Paket,
+  acht Szenarien inkl. "Alarm ohne Ausweichhost", "stabiler Alarm
+  republiziert nicht", "Alarm behoben löst Clear-Event aus") grün,
+  `deno check/test/bundle` grün. End-to-end: zwei echte
+  `omp-host-agent`-Prozesse (gleiches Zwei-Host-Muster wie D6 Teil 1/2)
+  mit je einer echten `nodes/mock`-Instanz registriert, Baseline ohne
+  Alarm bestätigt (`GET /api/v1/placement/advice` → `[]`); einen
+  Host-Agent gestoppt und für dessen Host-ID über NATS eine fingierte
+  Überlast-Telemetrie (97,5% CPU) publiziert (gleiche Simulationsart,
+  die `ARCHITECTURE.md` §6.1 für die Single-Host-Dev-Maschine
+  vorschlägt) — Alarm mit korrektem Ausweichhost-Vorschlag erschien;
+  über ~14s (≈3 Bewertungsläufe) währenddessen exakt ein SSE-Event
+  beobachtet, kein Wiederholungsfeuer; Entlastung simuliert → Alarm
+  verschwand, ein zusätzliches "cleared"-Event beobachtet. Browser-Test
+  per echtem CDP-Klick auf den bestehenden "Hosts"-Button bestätigte
+  das Banner mit Host, Grund, CPU/RAM-Werten und Ausweichhost-
+  Vorschlag im tatsächlichen DOM. Test-Prozesse, -Hosts (per SQL, kein
+  DELETE-Endpunkt für Hosts vorhanden) und -Tokens danach entfernt.
+
 - **D7** Workflow-Bereitstellung & -Verteilung: neues Objekt „Workflow"
   (Rollen + Verbindungs-Template + Platzierungs-Hinweise),
   Katalog-Descriptor (optional pro Node), Start/Stop ganzer Bundles
@@ -1428,6 +1479,6 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D5 | erledigt | [D5] SDK-Doku + Node-Tutorial (docs/NODE-TUTORIAL.md) | 2026-07-14 |
 | D6 Teil 1 (Bootstrap + Telemetrie) | erledigt | [D6-1] omp-host-agent: Bootstrap-Token, Registrierung, CPU/RAM-Telemetrie, Hosts-UI-Panel | 2026-07-14 |
 | D6 Teil 2 (Kommandokanal) | erledigt | [D6-2] host-agent + orchestrator: Remote-Start/Stop über NATS, agent-lokaler Katalog als Vertrauensgrenze, UI-Host-Selector | 2026-07-14 |
-| D6 Teil 3 (Placement-Engine, §6.1) | offen | | |
+| D6 Teil 3 (Placement-Engine, §6.1) | erledigt | [D6-3] internal/placement: advisory-only Resource-Aware Placement, CPU/RAM-Schwellwerte, Ausweichhost-Vorschlag, SSE-Event, Hosts-UI-Banner | 2026-07-14 |
 | D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop) | erledigt | [D7-1] internal/workflows: Workflow-Objekt, Rolle→Rolle-Verkabelung, Bundle-Start/-Stop, UI-Panel | 2026-07-14 |
 | D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |

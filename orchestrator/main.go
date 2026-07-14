@@ -27,6 +27,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -177,7 +178,19 @@ func main() {
 	// gemäß Verbindungs-Template, sobald sie in der Registry erscheinen.
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, workflowSvc)
+	// Resource-Aware Placement — advisory-only Ausbaustufe (ARCHITECTURE.md
+	// §6.1, UMSETZUNG.md D6 Teil 3): beobachtet die seit D6 Teil 1
+	// vorhandene Host-Telemetrie, warnt aber nur — kein automatischer
+	// Eingriff, s. Paketkommentar internal/placement.
+	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placement.Thresholds{
+		CPUPercent:        cfg.PlacementCPUThreshold,
+		MemPercent:        cfg.PlacementMemThreshold,
+		HealthyCPUPercent: cfg.PlacementHealthyCPUThreshold,
+		HealthyMemPercent: cfg.PlacementHealthyMemThreshold,
+	})
+	go placementEngine.Run(ctx)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, workflowSvc, placementEngine)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,
