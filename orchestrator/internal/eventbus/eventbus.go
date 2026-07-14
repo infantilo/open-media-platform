@@ -22,15 +22,26 @@ const Subject = "omp.>"
 // (UMSETZUNG.md A7: "omp.health.<id>").
 const healthSubjectPrefix = "omp.health."
 
+// hostMetricsPrefix/-Suffix identifizieren Host-Telemetrie-Events
+// (ARCHITECTURE.md §18.4/§6.1: "omp.host.<hostId>.metrics",
+// UMSETZUNG.md D6 Teil 1).
+const (
+	hostMetricsPrefix = "omp.host."
+	hostMetricsSuffix = ".metrics"
+)
+
 // Connect verbindet sich mit NATS und abonniert Subject; empfangene
 // Nachrichten werden als sse.Event an hub weitergereicht. Health-Events
 // (omp.health.<id>) lösen zusätzlich onHealth(id) aus — Grundlage für
 // die Offline-Erkennung in B4 (internal/health.Tracker); onHealth darf
-// nil sein. Ein initial nicht erreichbares NATS ist nicht fatal
-// (RetryOnFailedConnect): der Orchestrator läuft weiter und verbindet
-// sich, sobald NATS erreichbar ist — konsistent mit der Resilienz-Linie
-// aus internal/registry.Poller.
-func Connect(url string, hub *sse.Hub, onHealth func(nodeID string)) (*nats.Conn, error) {
+// nil sein. Host-Telemetrie-Events (omp.host.<hostId>.metrics) lösen
+// analog onHostMetrics(hostId, payload) aus (internal/hosts.Tracker,
+// UMSETZUNG.md D6 Teil 1); onHostMetrics darf ebenfalls nil sein. Ein
+// initial nicht erreichbares NATS ist nicht fatal (RetryOnFailedConnect):
+// der Orchestrator läuft weiter und verbindet sich, sobald NATS
+// erreichbar ist — konsistent mit der Resilienz-Linie aus
+// internal/registry.Poller.
+func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetrics func(hostID string, payload []byte)) (*nats.Conn, error) {
 	nc, err := nats.Connect(url,
 		nats.Name("openmediaplatform-orchestrator"),
 		nats.RetryOnFailedConnect(true),
@@ -51,12 +62,32 @@ func Connect(url string, hub *sse.Hub, onHealth func(nodeID string)) (*nats.Conn
 		if onHealth != nil && strings.HasPrefix(msg.Subject, healthSubjectPrefix) {
 			onHealth(strings.TrimPrefix(msg.Subject, healthSubjectPrefix))
 		}
+		if onHostMetrics != nil {
+			if hostID, ok := hostIDFromMetricsSubject(msg.Subject); ok {
+				onHostMetrics(hostID, msg.Data)
+			}
+		}
 	}); err != nil {
 		nc.Close()
 		return nil, err
 	}
 
 	return nc, nil
+}
+
+// hostIDFromMetricsSubject extrahiert <hostId> aus einem Subject der
+// Form "omp.host.<hostId>.metrics" (ok=false für alles andere, z. B.
+// künftige omp.host.<id>.<anderer-Suffix>-Subjects).
+func hostIDFromMetricsSubject(subject string) (string, bool) {
+	rest, ok := strings.CutPrefix(subject, hostMetricsPrefix)
+	if !ok {
+		return "", false
+	}
+	hostID, ok := strings.CutSuffix(rest, hostMetricsSuffix)
+	if !ok || hostID == "" {
+		return "", false
+	}
+	return hostID, true
 }
 
 // normalizePayload gibt gültiges JSON unverändert weiter; nicht-JSON-Payloads

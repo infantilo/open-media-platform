@@ -1216,8 +1216,8 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Placement-Engine (advisory zuerst), Make-before-break-Migrationsprotokoll
   — Konzept siehe `ARCHITECTURE.md` §6.1. Die Erkennung/das Bootstrapping
   entfernter Hosts selbst (`omp-host-agent`, Token-Bootstrap über step-ca,
-  Kommandokanal) ist jetzt konkret in `ARCHITECTURE.md` §18 beschrieben
-  (Abschnittsnummer seit dieser Notiz verschoben) —
+  Kommandokanal) ist konkret in `ARCHITECTURE.md` §18 beschrieben
+  (Abschnittsnummer seit einer früheren Notiz verschoben) —
   realistisch der nächste, weil community-unabhängige Baustein nach dem
   kleinen Regieplatz (C10–C13), siehe §7.4. Node-Contract-Grundlage
   (State-Export/Import + Readiness-Signal, §5 Punkt 6, s. D5-prep oben)
@@ -1225,6 +1225,48 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   hier detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
   nur das Protokoll simulierbar, nicht der Ausfallfreiheits-Anspruch
   selbst.
+
+  **D6 Teil 1 (Bootstrap + Telemetrie, erledigt, 2026-07-14):** analog
+  zum D3-Schnitt (mTLS zuerst, IS-10/§12 später) hier zuerst „Hosts
+  erkennen und sichtbar machen" (§18.1–§18.4/§18.7 wörtlich), nicht
+  „Hosts als Platzierungsziele nutzen" (§18.5/§6.1 Placement-Engine —
+  Teil 2, noch nicht terminiert). Neues Top-Level-Go-Modul `host-agent/`
+  (analog `nodes/mock`): registriert sich einmalig über ein Admin-
+  ausgestelltes, einmaliges Bootstrap-Token
+  (`POST /api/v1/admin/hosts/bootstrap-tokens`,
+  `POST /api/v1/hosts/register`), merkt sich die vergebene Host-ID
+  lokal (Neustart-Idempotenz, kein erneutes Registrieren), publiziert
+  danach periodisch CPU/RAM-Telemetrie über NATS
+  (`omp.host.<hostId>.metrics`, gemessen über `/proc/stat`/
+  `/proc/meminfo`). Orchestrator: `internal/hosts` (Token-Store,
+  Host-Store, In-Memory-Telemetrie-Tracker nach dem Muster von
+  `internal/health.Tracker`), `GET /api/v1/hosts`. UI: `<omp-hosts-view>`
+  (`ui/shell/hosts-view.ts`), per Knopf ein-/ausblendbares Panel in der
+  Engineering-Ansicht (§18.7 "Sichtbarkeit im UI", noch kein volles
+  Engineering-Dashboard, §17.2 existiert noch nicht).
+  **Scope-Entscheidung:** mTLS-Zertifikatsausstellung über step-ca für
+  den Host-Agent (§18.3 Punkt 3) bewusst nicht in dieser Runde — das
+  Bootstrap-Token selbst ist bereits eine echte, einmalige, zeitlich
+  begrenzte Zugriffskontrolle (§18.3 Punkt 4 "nie ungesichert-anonym"
+  wörtlich erfüllt), die Telemetrie danach läuft unverschlüsselt über
+  NATS wie der bestehende Node-Health-Kanal seit A7 — kein
+  Sicherheits-Rückschritt, nur (noch) keine zusätzliche Absicherung.
+  Ebenfalls nicht in dieser Runde: GPU/NIC-Telemetrie und
+  I/O-Karten-Inventar (§18.4: "Eigenrecherche bei der D6-Umsetzung",
+  herstellerspezifisch), Kommandokanal (§18.5) und Placement-Engine
+  (§6.1) — größter verbleibender D6-Teil, k3s/Cloud-Host-Klassen
+  (§18.6/§18.8/§18.9). Details/vollständiges Verifikationsprotokoll:
+  `docs/decisions.md` 2026-07-14.
+  **Verifiziert (echte Prozesse):** `go build/vet/test` für
+  `orchestrator` + neues `host-agent`-Modul (inkl. eines Telemetrie-Tests
+  gegen das echte `/proc` der Dev-Maschine), `deno check/test` grün.
+  End-to-end: Bootstrap-Token ausgestellt, zwei simulierte Host-Agent-
+  Prozesse registrierten sich, `GET /api/v1/hosts` zeigte beide mit
+  echter Live-Telemetrie; Token-Wiederverwendung scheiterte mit 401
+  (Single-Use bestätigt); Neustart mit vorhandener State-Datei
+  registrierte sich nicht erneut (Idempotenz bestätigt); Browser-Test
+  per CDP bestätigte das UI-Panel. Test-Hosts/-Tokens danach aus der DB
+  entfernt.
 - **D7 (geplant, noch nicht detailliert)** Workflow-Bereitstellung &
   -Verteilung: neues Objekt „Workflow" (Rollen + Verbindungs-Template +
   Platzierungs-Hinweise), Katalog-Descriptor (optional pro Node), Start/
@@ -1282,3 +1324,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |
 | D5-prep | erledigt | [D5-prep] Node-Contract §5 Punkt 6: media-ready-Signal im SDK | 2026-07-14 |
 | D5 | erledigt | [D5] SDK-Doku + Node-Tutorial (docs/NODE-TUTORIAL.md) | 2026-07-14 |
+| D6 Teil 1 (Bootstrap + Telemetrie) | erledigt | [D6-1] omp-host-agent: Bootstrap-Token, Registrierung, CPU/RAM-Telemetrie, Hosts-UI-Panel | 2026-07-14 |
+| D6 Teil 2 (Kommandokanal + Placement) | offen | | |

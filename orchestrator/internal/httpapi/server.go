@@ -100,7 +100,9 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // NewHandler baut den kompletten HTTP-Handler des Orchestrators:
 // /healthz, /api/v1/info, /api/v1/auth, /api/v1/nodes, /api/v1/events,
 // /api/v1/graph, /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog,
-// /api/v1/instances, /api/v1/me/consoles, /api/v1/admin und statisches
+// /api/v1/instances, /api/v1/me/consoles, /api/v1/admin, /api/v1/hosts
+// (Remote-Host-Erkennung, ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1)
+// und statisches
 // Serving von cfg.UIDir unter / (inkl. SPA-Fallback für die Kiosk-Routen
 // /console/<workflowId>/<nodeRoleId>, ARCHITECTURE.md §14). nodeClient
 // ist der (ggf. mTLS-fähige, UMSETZUNG.md D3 Teil 1) HTTP-Client für den
@@ -115,7 +117,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes}
 
 	mux := http.NewServeMux()
@@ -152,6 +154,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))
 	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore)))
 	mux.HandleFunc("GET /api/v1/admin/audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListAuditLog(auditReader)))
+
+	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
+	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
+	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
+	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry))
+	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return noStoreForAPI(mux)

@@ -19,6 +19,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
@@ -46,8 +47,13 @@ func main() {
 
 	hub := sse.NewHub()
 	healthTracker := health.NewTracker()
+	hostMetricsTracker := hosts.NewTracker()
 
-	nc, err := eventbus.Connect(cfg.NatsURL, hub, healthTracker.Touch)
+	nc, err := eventbus.Connect(cfg.NatsURL, hub, healthTracker.Touch, func(hostID string, payload []byte) {
+		if !hostMetricsTracker.Touch(hostID, payload) {
+			slog.Warn("host metrics payload not parsable, dropped", "host_id", hostID)
+		}
+	})
 	if err != nil {
 		slog.Error("nats connect failed, continuing without event bus", "error", err)
 	} else {
@@ -137,7 +143,10 @@ func main() {
 	auditStore := audit.NewStore(database)
 	consoleResolver := consoles.NewResolver(authzStore)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore)
+	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
+	hostStore := hosts.NewStore(database)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

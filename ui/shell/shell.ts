@@ -22,6 +22,10 @@ import "../graph/flow-canvas.ts";
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
+// Reiner Seiteneffekt-Import (registriert nur customElements.define) —
+// hier unproblematisch, da shell.ts keine benannten Bindings daraus
+// braucht (anders als beim console-view.ts-Fall oben).
+import "./hosts-view.ts";
 
 const KIOSK_ROUTE = /^\/console\/([^/]+)\/([^/]+)$/;
 
@@ -45,6 +49,29 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   return { hasEngineeringAccess: body.hasEngineeringAccess, consoles: body.consoles ?? [] };
 }
 
+// buildHostsToggle blendet ein <omp-hosts-view>-Panel (ARCHITECTURE.md
+// §18.7) per Knopf ein/aus — nur in der Engineering-Ansicht sichtbar,
+// Host-Verwaltung ist kein Operator-Konsolen-Anliegen (§14).
+function buildHostsToggle(): HTMLElement {
+  const button = document.createElement("button");
+  button.textContent = "Hosts";
+  button.style.cssText =
+    "position:fixed;bottom:6px;left:6px;z-index:1000;font-size:11px;padding:4px 8px;cursor:pointer;";
+
+  let panel: HTMLElement | null = null;
+  button.addEventListener("click", () => {
+    if (panel) {
+      panel.remove();
+      panel = null;
+      return;
+    }
+    panel = document.createElement("omp-hosts-view");
+    panel.style.cssText = "position:fixed;bottom:32px;left:6px;z-index:1000;";
+    document.body.appendChild(panel);
+  });
+  return button;
+}
+
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, consoles } = await fetchConsoles();
@@ -60,6 +87,7 @@ async function renderShell(root: HTMLElement, username: string | null) {
     // das vor C13 einzig existierende Verhalten bleibt der Default,
     // solange niemand Rollenbindungen konfiguriert hat.
     root.replaceChildren(document.createElement("omp-flow-canvas"));
+    document.body.appendChild(buildHostsToggle());
   } else {
     const view = document.createElement("omp-console-view") as ConsoleView;
     root.replaceChildren(view);

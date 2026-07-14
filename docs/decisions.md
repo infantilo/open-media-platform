@@ -3736,3 +3736,98 @@ erfundenen Beispiel-Outputs):
 jetzt auf `docs/NODE-TUTORIAL.md` — bewusst **nicht** in `README.md`
 verlinkt, weil dort ein nicht von dieser Sitzung stammender,
 uncommitteter Textentwurf liegt, den diese Sitzung nicht anfasst.
+
+## 2026-07-14 — D6 Teil 1 (Remote-Host-Erkennung, ARCHITECTURE.md §18): Bootstrap + Telemetrie, bewusst ohne Kommandokanal/Placement/mTLS
+
+**Kontext:** Nächster Schritt laut `UMSETZUNG.md`s eigener Einordnung
+("realistisch der nächste, weil community-unabhängige Baustein nach dem
+kleinen Regieplatz"). §18 beschreibt den vollen Umfang (Bootstrap,
+Telemetrie, Kommandokanal, Placement-Integration, I/O-Karten-Inventar,
+UI) — das ist mehrjährige Detailarbeit, kein Ein-Sitzungs-Schritt.
+Analog zum D3-Schnitt (mTLS zuerst, IS-10/§12 später) hier ein expliziter
+Teil-1-Schnitt: **Hosts erkennen und sichtbar machen**, nicht **Hosts als
+Platzierungsziele nutzen**. Das deckt sich mit der ursprünglichen
+Nutzeranforderung von §18 wörtlich ("was müssen wir bauen, damit unser
+Server eine entfernte Maschine **erkennt**") — Teil 1 löst genau das,
+nicht mehr.
+
+**In dieser Runde:**
+- `db/migrations/0003_hosts.sql`: `hosts` + `host_bootstrap_tokens`
+  (nur der SHA-256-Hash des Tokens wird gespeichert, gleiches Prinzip
+  wie `users.password_hash`).
+- `internal/hosts`: Token-Ausstellung/-Verbrauch (§18.3 Punkt 1/3,
+  atomarer `UPDATE … WHERE used_at IS NULL AND expires_at > now()`
+  gegen Race zwischen zwei gleichzeitigen Registrierungsversuchen mit
+  demselben Token), Host-Store, In-Memory-Telemetrie-Tracker (gleiches
+  Muster wie `internal/health.Tracker`, B4).
+- `internal/eventbus`: `Connect()` bekommt einen zweiten optionalen
+  Callback (`onHostMetrics`) neben dem bestehenden `onHealth` — ein
+  Subject-Präfix mehr im selben, bereits abonnierten `omp.>`-Strom,
+  keine zweite NATS-Verbindung nötig.
+- `internal/httpapi`: `POST /api/v1/admin/hosts/bootstrap-tokens`
+  (admin-only), `POST /api/v1/hosts/register` (bewusst **außerhalb**
+  von `authGate` — der registrierende Host-Agent ist kein angemeldeter
+  Nutzer, seine Zugriffskontrolle ist das Bootstrap-Token selbst, nicht
+  ein Bearer-Token aus D3 Teil 2), `GET /api/v1/hosts` (authentifiziert,
+  merged Host-Stammdaten mit der zuletzt gesehenen Telemetrie).
+- **Neues Top-Level-Go-Modul `host-agent/`** (analog `nodes/mock`,
+  `tools/contract-check` — kein neuer Sprachstack, §4.1): registriert
+  sich einmalig mit Bootstrap-Token, merkt sich die vom Orchestrator
+  vergebene Host-ID lokal (`internal/state`, JSON-Datei) — ein
+  Prozess-Neustart registriert sich **nicht** erneut (das Token wäre
+  ohnehin verbraucht), sondern nimmt die Telemetrie unter derselben
+  Host-ID wieder auf. `internal/telemetry` misst CPU/RAM über
+  `/proc/stat`/`/proc/meminfo` (Linux-Standardtechnik: zwei
+  `/proc/stat`-Samples mit kurzem Intervall, Differenzbildung für die
+  CPU-Auslastung; `MemTotal - MemAvailable` für RAM, genauer als
+  `MemTotal - MemFree`).
+- UI: `<omp-hosts-view>` (`ui/shell/hosts-view.ts`), per Knopf
+  ein-/ausblendbares Panel — bewusst **kein** Teil eines größeren
+  Engineering-Dashboards (§17.2 existiert noch nicht), nur die in §18.7
+  geforderte Grundsichtbarkeit (Label/Hostname/CPU/RAM/zuletzt gesehen).
+  Nur in der Engineering-Ansicht sichtbar, nicht in der
+  Operator-Console (§14) — Host-Verwaltung ist kein
+  Operator-Anliegen.
+
+**Bewusst nicht in dieser Runde (dokumentierte Scope-Grenze, kein
+stiller Gap):**
+- **mTLS-Zertifikatsausstellung über step-ca für den Host-Agent** (§18.3
+  Punkt 3). Das Bootstrap-Token selbst ist bereits eine echte
+  Zugriffskontrolle (einmalig, zeitlich begrenzt, nur von einem
+  angemeldeten Admin ausstellbar) — die Registrierung ist also nicht
+  "ungesichert-anonym" (§18.3 Punkt 4 wörtlich erfüllt), auch ohne
+  Zertifikat. Die Telemetrie danach läuft unverschlüsselt über NATS,
+  exakt wie der bestehende Node-Health-Kanal seit A7 — kein
+  Sicherheits-Rückschritt gegenüber dem Ist-Zustand, nur (noch) keine
+  zusätzliche Absicherung. Programmatische step-ca-Integration
+  (`orchestrator` müsste selbst Zertifikate ausstellen können, nicht
+  nur das manuelle `deploy/dev/mtls-issue-cert.sh`-Skript aus D3 Teil 1
+  nutzen) ist eigene Recherche wert, nicht nebenbei zu erledigen.
+- **GPU/NIC-Telemetrie, I/O-Karten-Inventar** (§18.4/§6.1 Punkt 1) —
+  herstellerspezifisch, §18.4 nennt das selbst explizit als
+  "Eigenrecherche bei der D6-Umsetzung", nicht zu raten.
+- **Kommandokanal** (§18.5: Instanz-Launcher wird remote-fähig) — Hosts
+  sind nach diesem Schritt sichtbar, aber noch keine nutzbaren
+  Platzierungsziele. Das ist der größte verbleibende Teil von D6.
+- **Placement-Engine** (§6.1 Punkt 2) — baut auf dem Kommandokanal auf.
+- k3s/Cloud-Host-Klassen (§18.6/§18.8/§18.9).
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/vet/
+test` für `orchestrator` und das neue `host-agent`-Modul grün (inkl.
+eines gegen das echte `/proc` dieser Maschine laufenden
+Telemetrie-Tests, kein Mock-Dateisystem — `/proc`s Format ist
+Kernel-ABI, keine Simulation nötig), `deno check/test` grün. End-to-end
+mit echten Prozessen: Bootstrap-Token ausgestellt, zwei simulierte
+"Hosts" (zwei `omp-host-agent`-Prozesse mit unterschiedlichem Label/
+State-Datei auf derselben Dev-Maschine, dokumentierte Simulation ohne
+echte zweite Maschine — exakt der in §18 "Testbarkeit" beschriebene,
+heute schon realistischere Testweg) registrierten sich erfolgreich,
+`GET /api/v1/hosts` zeigte beide mit echter, live aktualisierender
+CPU/RAM-Telemetrie; Wiederverwendung eines bereits eingelösten Tokens
+scheiterte mit 401 (Single-Use-Garantie bestätigt); ein neu gestarteter
+Host-Agent-Prozess mit vorhandener State-Datei registrierte sich nicht
+erneut, sondern nahm die Telemetrie unter derselben Host-ID wieder auf
+(Neustart-Idempotenz bestätigt). Browser-Test per CDP: „Hosts"-Knopf
+öffnet das Panel, zeigt beide Hosts mit denselben Live-Werten wie die
+API. Nach der Verifikation: Test-Hosts/-Tokens aus der DB entfernt
+(dieselbe Aufräum-Disziplin wie bei D3 Teil 2/D5).
