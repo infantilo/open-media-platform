@@ -25,7 +25,8 @@
 //!   (Free-Run) — derselbe Default wie `rtp.rs` heute schon.
 //! - **ST 2022-7 Pfad-Redundanz:** P2-Scope (`ARCHITECTURE.md` §2).
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -46,6 +47,7 @@ pub struct St2110VideoOutput {
     height: i32,
     framerate_numerator: i32,
     framerate_denominator: i32,
+    flowed: Arc<AtomicBool>,
 }
 
 impl St2110VideoOutput {
@@ -123,6 +125,18 @@ impl St2110VideoOutput {
         ])
         .map_err(|e| format!("link st2110 output chain: {e}"))?;
 
+        // Probe auf dem Src-Pad des Valve, nicht dem Sink-Pad — gleiche
+        // Begründung wie bei RtpVideoOutput (rtp.rs): ein `drop=true`
+        // geschalteter Valve lässt Buffer an seinem Sink-Pad ankommen,
+        // bevor sie intern verworfen werden.
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_probe = flowed.clone();
+        let valve_src_pad = valve.static_pad("src").expect("valve has a src pad");
+        valve_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+            flowed_probe.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+
         Ok(St2110VideoOutput {
             valve,
             udpsink,
@@ -131,6 +145,7 @@ impl St2110VideoOutput {
             height,
             framerate_numerator,
             framerate_denominator,
+            flowed,
         })
     }
 
@@ -177,6 +192,12 @@ impl Output for St2110VideoOutput {
     }
 }
 
+impl crate::MediaFlow for St2110VideoOutput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
+    }
+}
+
 /// Ein ST-2110-20-Empfänger: `udpsrc(caps) ! rtpjitterbuffer !
 /// rtpvrawdepay ! videoconvert`. `tail` ist das letzte Element (wie
 /// `MxlVideoInput::tail`, `mxl.rs`) — der Aufrufer verlinkt seine eigene
@@ -193,6 +214,7 @@ impl Output for St2110VideoOutput {
 /// live-sync-`sink`) eine sinnvolle Framerate sehen.
 pub struct St2110VideoInput {
     pub tail: gst::Element,
+    flowed: Arc<AtomicBool>,
 }
 
 impl St2110VideoInput {
@@ -266,7 +288,28 @@ impl St2110VideoInput {
         ])
         .map_err(|e| format!("link st2110 input chain: {e}"))?;
 
-        Ok(St2110VideoInput { tail: videoconvert })
+        // Probe hinter dem Depayloader (nicht auf `udpsrc` selbst): ein
+        // ankommendes UDP-Paket allein beweist noch keinen gültigen
+        // RTP-Payload — erst nach `rtpvrawdepay` ist sichergestellt, dass
+        // wirklich ein dekodiertes Videobild vorliegt.
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_probe = flowed.clone();
+        let depay_src_pad = depayloader.static_pad("src").expect("depayloader has a src pad");
+        depay_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+            flowed_probe.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+
+        Ok(St2110VideoInput {
+            tail: videoconvert,
+            flowed,
+        })
+    }
+}
+
+impl crate::MediaFlow for St2110VideoInput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
     }
 }
 

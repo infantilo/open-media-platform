@@ -12,9 +12,9 @@
 //! ein Multiviewer speist in der Praxis eine Bedienplatz-Anzeige, kein
 //! weiterverkettbares Programmsignal.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -54,11 +54,27 @@ enum Command {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    /// "media-ready"-Flags aller aktuell aktiven Eingänge (s.
+    /// `ActivePipeline::flowed`) — bei jeder Quellenmengen-Änderung neu
+    /// befüllt (analog `omp-switcher`, C7).
+    flowed: Arc<Mutex<Vec<Arc<AtomicBool>>>>,
 }
 
 impl PipelineHandle {
     pub fn set_inputs(&self, inputs: Vec<DiscoveredInput>) {
         let _ = self.commands.send(Command::SetInputs(inputs));
+    }
+
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): ein
+    /// reiner Monitor ohne deklarierte Quellen hat nichts abzuwarten
+    /// (vakuos "bereit", Schwarzbild-Fallback, s. `build()`); sind
+    /// Quellen deklariert, genügt mindestens eine tatsächlich fließende
+    /// Kachel — ein einzelner ausgefallener Zubringer soll den Monitor
+    /// nicht als "nicht bereit" erscheinen lassen, solange er noch
+    /// irgendetwas zeigt.
+    pub fn media_ready(&self) -> bool {
+        let flowed = self.flowed.lock().expect("lock poisoned");
+        flowed.is_empty() || flowed.iter().any(|f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -90,6 +106,7 @@ fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool 
 struct ActivePipeline {
     pipeline: gst::Pipeline,
     _inputs: Vec<MxlVideoInput>,
+    flowed: Vec<Arc<AtomicBool>>,
 }
 
 impl Drop for ActivePipeline {
@@ -117,6 +134,7 @@ fn build(
         .map_err(|e| format!("add compositor: {e}"))?;
 
     let mut mxl_inputs = Vec::with_capacity(inputs.len());
+    let mut flowed = Vec::with_capacity(inputs.len());
     if inputs.is_empty() {
         let black = gst::ElementFactory::make("videotestsrc")
             .property("is-live", true)
@@ -196,6 +214,7 @@ fn build(
             pad.set_property("width", TILE_WIDTH as i32);
             pad.set_property("height", TILE_HEIGHT as i32);
 
+            flowed.push(mxl_input.flowed_handle());
             mxl_inputs.push(mxl_input);
         }
     }
@@ -217,6 +236,7 @@ fn build(
     Ok(ActivePipeline {
         pipeline,
         _inputs: mxl_inputs,
+        flowed,
     })
 }
 
@@ -247,9 +267,14 @@ pub fn run(
         }
     };
 
+    let flowed_slot: Arc<Mutex<Vec<Arc<AtomicBool>>>> = Arc::new(Mutex::new(Vec::new()));
+
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut active = match build(&context, &broadcaster, &current_inputs) {
-        Ok(p) => Some(p),
+        Ok(p) => {
+            *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
+            Some(p)
+        }
         Err(e) => {
             let _ = tx.send(Event::Error(format!("initial build failed: {e}")));
             let _ = ready.send(Err(e));
@@ -261,6 +286,7 @@ pub fn run(
         std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        flowed: flowed_slot.clone(),
     }));
 
     loop {
@@ -277,7 +303,10 @@ pub fn run(
                     current_inputs = inputs;
                     active = None; // Reader-Threads/State-Null vor dem Neuaufbau stoppen.
                     match build(&context, &broadcaster, &current_inputs) {
-                        Ok(p) => active = Some(p),
+                        Ok(p) => {
+                            *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
+                            active = Some(p);
+                        }
                         Err(e) => {
                             let _ = tx.send(Event::Error(format!(
                                 "rebuild with {} inputs failed: {e}",

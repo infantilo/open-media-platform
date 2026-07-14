@@ -138,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let inputs = Arc::new(Mutex::new(Vec::<DiscoveredInput>::new()));
+    let media_ready_pipeline = pipeline_handle.clone();
 
     let store: Arc<dyn ParamStore> = Arc::new(MultiviewerStore {
         inputs: inputs.clone(),
@@ -154,11 +155,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![],
             receivers: vec![],
             instance_id,
-            // Hat echtes Medien-I/O, aber noch keine Bereitschafts-Probe
-            // verdrahtet (dokumentierte Folgearbeit, ARCHITECTURE.md §5
-            // Punkt 6, docs/decisions.md D5-prep) - meldet konservativ nie
-            // "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
-            media_ready: omp_node_sdk::MediaReadySource::Unknown,
+            // "media-ready" über PipelineHandle::media_ready()
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2).
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
+                media_ready_pipeline.media_ready()
+            })),
         },
         store,
     )

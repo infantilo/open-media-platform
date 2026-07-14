@@ -102,6 +102,8 @@ pub enum Event {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    video_flowed: Option<Arc<AtomicBool>>,
+    audio_flowed: Arc<AtomicBool>,
 }
 
 impl PipelineHandle {
@@ -111,6 +113,18 @@ impl PipelineHandle {
 
     pub fn set_active(&self, slot: Slot) {
         let _ = self.commands.send(Command::SetActive(slot));
+    }
+
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2):
+    /// Audio-Ausgang immer erforderlich, Video nur im Video-Profil
+    /// (`config.has_video` — im Jingle-Profil gibt es keinen
+    /// MxlVideoOutput, s. `build()`, dann zählt nur Audio).
+    pub fn media_ready(&self) -> bool {
+        self.audio_flowed.load(Ordering::Relaxed)
+            && self
+                .video_flowed
+                .as_ref()
+                .is_none_or(|f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -236,6 +250,8 @@ struct ActivePipeline {
     audio_branches: HashMap<Slot, Branch>,
     _mxl_video_output: Option<MxlVideoOutput>,
     _mxl_audio_output: MxlAudioOutput,
+    video_flowed: Option<Arc<AtomicBool>>,
+    audio_flowed: Arc<AtomicBool>,
 }
 
 impl Drop for ActivePipeline {
@@ -368,6 +384,9 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
     }
     audio_isel.set_property("active-pad", &audio_branches[&Slot::A].pad);
 
+    let video_flowed = mxl_video_output.as_ref().map(|o| o.flowed_handle());
+    let audio_flowed = mxl_audio_output.flowed_handle();
+
     Ok(ActivePipeline {
         pipeline,
         video_isel,
@@ -376,6 +395,8 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         audio_branches,
         _mxl_video_output: mxl_video_output,
         _mxl_audio_output: mxl_audio_output,
+        video_flowed,
+        audio_flowed,
     })
 }
 
@@ -417,6 +438,8 @@ pub fn run(
         std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        video_flowed: active.video_flowed.clone(),
+        audio_flowed: active.audio_flowed.clone(),
     }));
 
     loop {

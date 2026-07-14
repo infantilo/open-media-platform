@@ -25,9 +25,9 @@
 //! auf der laufenden Pipeline — kein Neuaufbau nötig.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -82,6 +82,14 @@ enum Command {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    /// Zeigt auf das "media-ready"-Flag (`omp_mediaio::MxlVideoOutput::
+    /// flowed_handle`) des jeweils **aktuellen** Ausgangs — der Ausgang
+    /// wird bei jeder Quellenmengen-Änderung neu aufgebaut (C7: "Ändert
+    /// sich die entdeckte Quellenmenge, wird die gesamte Pipeline neu
+    /// aufgebaut"), ein einzelnes fest verdrahtetes Flag würde nach dem
+    /// ersten Rebuild veraltet bleiben. `None` nur im (praktisch nicht
+    /// erreichbaren) Fenster vor dem allerersten erfolgreichen Build.
+    flowed: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 impl PipelineHandle {
@@ -91,6 +99,18 @@ impl PipelineHandle {
 
     pub fn select(&self, sender_id: Option<String>) {
         let _ = self.commands.send(Command::Select(sender_id));
+    }
+
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): der
+    /// Switcher-Ausgang produziert immer etwas (mindestens das
+    /// Schwarzbild, C7), wird also i. d. R. kurz nach jedem (Re-)Build
+    /// `true`.
+    pub fn media_ready(&self) -> bool {
+        self.flowed
+            .lock()
+            .expect("lock poisoned")
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
     }
 }
 
@@ -112,6 +132,7 @@ struct ActivePipeline {
     source_pads: HashMap<String, gst::Pad>,
     _inputs: Vec<MxlVideoInput>,
     _mxl_output: MxlVideoOutput,
+    flowed: Arc<AtomicBool>,
 }
 
 impl Drop for ActivePipeline {
@@ -239,6 +260,7 @@ fn build(
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     mxl_output.set_active(true);
+    let flowed = mxl_output.flowed_handle();
 
     pipeline
         .set_state(gst::State::Playing)
@@ -251,6 +273,7 @@ fn build(
         source_pads,
         _inputs: mxl_inputs,
         _mxl_output: mxl_output,
+        flowed,
     })
 }
 
@@ -291,9 +314,14 @@ pub fn run(
         }
     };
 
+    let flowed_slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
+
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut active = match build(&context, &config, &current_inputs) {
-        Ok(p) => Some(p),
+        Ok(p) => {
+            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
+            Some(p)
+        }
         Err(e) => {
             let _ = tx.send(Event::Error(format!("initial build failed: {e}")));
             let _ = ready.send(Err(e));
@@ -306,6 +334,7 @@ pub fn run(
         std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        flowed: flowed_slot.clone(),
     }));
 
     loop {
@@ -331,6 +360,7 @@ pub fn run(
                     match build(&context, &config, &current_inputs) {
                         Ok(p) => {
                             let applied = apply_selection(&p, &selected);
+                            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
                             active = Some(p);
                             let _ = tx.send(Event::ActiveChanged(applied));
                         }
@@ -350,6 +380,8 @@ pub fn run(
                             match build(&context, &config, &[]) {
                                 Ok(p) => {
                                     let applied = apply_selection(&p, &selected);
+                                    *flowed_slot.lock().expect("lock poisoned") =
+                                        Some(p.flowed.clone());
                                     active = Some(p);
                                     let _ = tx.send(Event::ActiveChanged(applied));
                                 }

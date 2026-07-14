@@ -17,6 +17,7 @@ mod pipeline;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::rtp::RtpVideoOutput;
 use omp_node_sdk::connection::{SenderConnection, SenderControl, SenderResource, SenderSdp};
@@ -169,14 +170,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // trotzdem nutzbar: registriert, Heartbeat/Alarm laufen weiter, nur
     // ohne Sender-Connection-Endpoint (siehe pipeline::Event::Error
     // weiter unten für den Alarm dazu).
-    let connection = match ready_rx.await {
-        Ok(Ok(output)) => Some(Arc::new(SenderConnection::new(
-            sender_id.clone(),
-            RtpControl {
-                output: output.clone(),
-            },
-            RtpSdp { output },
-        ))),
+    let rtp_output: Option<Arc<RtpVideoOutput>> = match ready_rx.await {
+        Ok(Ok(output)) => Some(output),
         Ok(Err(e)) => {
             eprintln!("playout: pipeline build failed, sender connection unavailable: {e}");
             None
@@ -186,6 +181,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None
         }
     };
+    let connection = rtp_output.clone().map(|output| {
+        Arc::new(SenderConnection::new(
+            sender_id.clone(),
+            RtpControl {
+                output: output.clone(),
+            },
+            RtpSdp { output },
+        ))
+    });
 
     let store: Arc<dyn ParamStore> = Arc::new(PlayoutStore {
         fps: fps.clone(),
@@ -206,11 +210,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             }],
             receivers: vec![],
             instance_id,
-            // Hat echtes Medien-I/O, aber noch keine Bereitschafts-Probe
-            // verdrahtet (dokumentierte Folgearbeit, ARCHITECTURE.md §5
-            // Punkt 6, docs/decisions.md D5-prep) - meldet konservativ nie
-            // "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
-            media_ready: omp_node_sdk::MediaReadySource::Unknown,
+            // "media-ready" über den echten RTP-Ausgang (ARCHITECTURE.md
+            // §5 Punkt 6, UMSETZUNG.md D5-prep-2): `RtpVideoOutput` trägt
+            // `has_flowed()` seit D5-prep-2 selbst (Probe auf dem Src-Pad
+            // seines internen Valve, s. omp-mediaio/src/rtp.rs) — ein
+            // gescheiterter Pipeline-Aufbau (kein `rtp_output`) bleibt
+            // ehrlich `Unknown` statt fälschlich `true`.
+            media_ready: match &rtp_output {
+                Some(output) => {
+                    let output = output.clone();
+                    omp_node_sdk::MediaReadySource::Probe(Arc::new(move || output.has_flowed()))
+                }
+                None => omp_node_sdk::MediaReadySource::Unknown,
+            },
         },
         store,
     )

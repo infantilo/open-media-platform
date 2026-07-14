@@ -3831,3 +3831,129 @@ erneut, sondern nahm die Telemetrie unter derselben Host-ID wieder auf
 öffnet das Panel, zeigt beide Hosts mit denselben Live-Werten wie die
 API. Nach der Verifikation: Test-Hosts/-Tokens aus der DB entfernt
 (dieselbe Aufräum-Disziplin wie bei D3 Teil 2/D5).
+
+## 2026-07-14 — D5-prep-2: die verbleibenden acht `MediaReadySource::Unknown`-Nodes real verdrahtet (Nachtrag zu D5-prep)
+
+**Kontext:** D5-prep (2026-07-14, frühere Sitzung) hatte das
+"media-ready"-Signal (§5 Punkt 6) nur für `omp-source` echt verdrahtet;
+die übrigen acht Medien-Node-Typen meldeten ehrlich `Unknown` statt einer
+geratenen Bereitschaft — als dokumentierte, bewusste Folgearbeit
+markiert. Diese Sitzung schließt das ab.
+
+**Zentrale Design-Entscheidung: `MediaFlow`-Trait in `omp-mediaio` statt
+Pad-Probes in jedem einzelnen Node.** Erste Durchsicht der acht
+verbleibenden `pipeline.rs`-Dateien zeigte: nur `playout` hatte (aus C2)
+bereits einen wiederverwendbaren Buffer-Zähler wie `omp-source`; die
+übrigen sieben hatten gar keine solche Infrastruktur. Statt in jedem
+Node einzeln eine Probe zu bauen, bekam `omp-mediaio` (das jeder Node
+ohnehin für seinen echten Medien-Pfad nutzt) einen neuen Trait
+`MediaFlow { fn has_flowed(&self) -> bool }`, implementiert für alle
+fünf Transport-Typen:
+- **MXL** (`mxl.rs`): `MxlVideoOutput`/`MxlAudioOutput`/`MxlVideoInput`/
+  `MxlAudioInput` bekommen je ein `flowed: Arc<AtomicBool>`, gesetzt auf
+  `true` beim ersten erfolgreichen Grain-/Samples-Commit bzw.
+  `push_buffer` in den bereits bestehenden Schreib-/Lese-Threads (kein
+  neuer Codepfad, nur eine zusätzliche Zeile in bestehenden `match`-Armen).
+- **RTP/ST 2110** (`rtp.rs`/`st2110.rs`): `RtpVideoOutput`/
+  `St2110VideoOutput`/`St2110VideoInput` haben keinen eigenen
+  Schreib-Thread (reine GStreamer-Elementketten) — hier ein
+  selbstentfernender Pad-Probe (`PadProbeType::BUFFER`,
+  `PadProbeReturn::Remove` nach dem ersten Treffer).
+
+**Gefundene, wichtige Detail-Falle: Probe auf dem Valve-**Src**-Pad,
+nicht dem Sink-Pad.** Ein `valve` mit `drop=true` (IS-05 noch nicht
+aktiviert) lässt Buffer trotzdem an seinem Sink-Pad ankommen — sie werden
+erst intern verworfen. Ein Sink-Pad-Probe hätte "media-ready" gemeldet,
+obwohl der Ausgang stumm geschaltet ist und nichts das Netz erreicht —
+genau die Art von geratener/falscher Bereitschaft, die dieses Signal
+verhindern soll. Live am `playout`-Node bestätigt (s. Verifikation
+unten): `media_ready` blieb `false`, bis die IS-05-Sender-Connection
+tatsächlich `master_enable: true` aktivierte.
+
+**Zweite Ergänzung: `flowed_handle()` — ein klonbarer Griff aufs
+Flag, nicht nur `has_flowed(&self)`.** Für Nodes, deren
+`MxlVideoOutput`/`MxlAudioOutput`/`MxlVideoInput` nur innerhalb einer
+internen, bei jedem Discovery-Update komplett neu gebauten
+`ActivePipeline`-Struktur lebt (nicht über die gesamte Prozesslaufzeit
+erreichbar, z. B. `omp-switcher`/`omp-video-mixer-me`/`omp-multiviewer`/
+`omp-player`), reicht `&self`-Zugriff nicht — der Aufrufer (`main.rs`)
+braucht das Flag, nachdem das Objekt selbst schon wieder verworfen sein
+kann. `flowed_handle() -> Arc<AtomicBool>` löst das: ein eigenständiger,
+klonbarer Griff, der unabhängig von der Objekt-Lebensdauer weiterlebt.
+
+**Pro-Node-Verdrahtung (unterschiedliche Muster je nach
+Pipeline-Architektur, keine Einheitslösung erzwungen):**
+- **`playout`**: hielt den `Arc<RtpVideoOutput>` bereits über den
+  gesamten Prozess (IS-05-`SenderConnection`) — direkte `has_flowed()`-
+  Abfrage, keine neue Infrastruktur nötig.
+- **`omp-viewer`**: rebuildet seine Pipeline bei jedem IS-05-Connect/
+  Disconnect (C6) — `PipelineHandle` bekommt ein eigenes, bei
+  `connect()`/`disconnect()` explizit zurückgesetztes `Arc<AtomicBool>`,
+  das `build()` per Pad-Probe auf `input.tail`s Src-Pad füllt. Verhindert,
+  dass nach einem Quellwechsel kurzzeitig noch die Bereitschaft der
+  *alten* Quelle gemeldet wird.
+- **`omp-srt-gateway`**: `PipelineHandle` hält jetzt ein `ActiveEndpoint`-
+  Enum (`Uplink(St2110VideoInput)`/`Downlink(St2110VideoOutput)`) statt
+  den Rückgabewert von `build_uplink`/`build_downlink` zu verwerfen —
+  vorher wären die Objekte (und damit ihre Pad-Probes/Flags) beim
+  Verlassen der Build-Funktion nutzlos geworden, obwohl die zugehörigen
+  Pipeline-Elemente weiterliefen.
+- **`omp-player`** (Video-**und**-Audio-Ausgang): `media_ready` = Audio
+  IMMER erforderlich UND Video nur, wenn das Profil einen Video-Sender
+  hat (`config.has_video` — Jingle-Profil hat keinen).
+- **`omp-audio-mixer`**: ein `MxlAudioOutput`, gebaut genau einmal
+  (`ActivePipeline` lebt über die gesamte Prozesslaufzeit, Kanäle werden
+  chirurgisch an-/abgebaut, kein Pipeline-Rebuild) — `flowed_handle()`
+  einmalig gezogen, reicht. Live bestätigt: `false`, solange 0 Kanäle
+  existieren (GStreamers `audiomixer` produziert ohne Sink-Pads keinen
+  Output), kippt auf `true` exakt beim ersten `addChannel()`.
+- **`omp-switcher`**/**`omp-video-mixer-me`**: rebuilden die **gesamte**
+  Pipeline bei jeder Änderung der entdeckten Quellenmenge (C7/C10) — ein
+  `Arc<Mutex<Option<Arc<AtomicBool>>>>` wird nach jedem erfolgreichen
+  (Re-)Build neu befüllt (`flowed_handle()` des jeweils neuen
+  `MxlVideoOutput`). Beide haben einen permanenten Schwarzbild-Fallback
+  im `input-selector`, der Ausgang produziert also so gut wie immer
+  etwas — `media_ready` wird kurz nach jedem Rebuild `true`, auch ganz
+  ohne externe Quellen (korrekt: §5 Punkt 6 verlangt "produziert
+  tatsächlich Medien", ein gültiges Schwarzbild ist Produktion, keine
+  Lücke).
+- **`omp-multiviewer`**: hat **keinen** MXL-Ausgang (reiner
+  MJPEG-Monitor, dokumentierte C13-Nachtrag-Entscheidung) — `media_ready`
+  bewertet stattdessen die Menge der `MxlVideoInput`s: leer (keine
+  Quellen deklariert) gilt vakuos als bereit (nichts abzuwarten,
+  Schwarzbild-Fallback), sonst genügt **mindestens eine** tatsächlich
+  fließende Kachel — ein einzelner ausgefallener Zubringer soll den
+  Monitor nicht als "nicht bereit" erscheinen lassen, solange er noch
+  irgendetwas zeigt.
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `cargo build/
+test/deny/audit` (Workspace, alle 12 `NodeConfig`-Konstruktionsorte)
+grün. Live-Verifikation gegen sieben gleichzeitig laufende, echte
+Node-Prozesse (`omp-source`, `omp-switcher`, `omp-video-mixer-me`,
+`omp-multiviewer`, `omp-player`, `omp-audio-mixer`, `playout`) plus
+separat `omp-viewer`, per NATS-Health-Subscription:
+- Alle sieben zeigten im eingeschwungenen Zustand `media_ready:true`
+  (jeder produziert im Normalbetrieb echte Medien).
+- **Drei gezielte Zustandswechsel-Beweise, dass das Signal reagiert,
+  nicht nur hartkodiert `true` ist:** `omp-audio-mixer` `false → true`
+  exakt beim ersten `addChannel()`-Aufruf; `playout` `false → true` exakt
+  bei echter IS-05-`master_enable: true`-Aktivierung (vorher trotz
+  laufender interner Pipeline `false`, weil der Netzausgang stumm
+  geschaltet war — bestätigt die Sink-Pad-vs-Src-Pad-Design-Entscheidung
+  oben); `omp-viewer` `false → true` bei IS-05-Connect **und** wieder
+  zurück auf `false` bei Disconnect.
+- `make contract` PASS gegen `omp-switcher` und `omp-player` (keine
+  Descriptor-/IS-04-Regression).
+- **Unabhängiger, vorbestehender Befund (kein D5-prep-2-Bug):** `omp-video-
+  mixer-me` zeigte während des Tests wiederholt `get_complete_grain …
+  Unknown error: 11` beim Lesen eines fg/bg-Eingangs (Discovery-Race
+  oder MXL-Read-Timing, vermutlich verwandt mit dem bereits
+  dokumentierten "C8 — MXL-Read-Livelock"-Befund); der **Ausgang** blieb
+  davon unberührt (Schwarzbild-Fallback), `media_ready` zeigte
+  durchgehend korrekt `true`. Nicht in dieser Sitzung untersucht/behoben
+  — orthogonal zum media-ready-Signal, betrifft die
+  Discovery-/Input-Robustheit.
+
+Test-Prozesse und -Registrierungen danach beendet (Registry-Einträge
+laufen über `registration_expiry_interval` selbständig aus, gleiche
+Praxis wie in vorherigen Sitzungen).

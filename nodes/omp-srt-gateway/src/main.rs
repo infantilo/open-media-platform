@@ -116,8 +116,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
-    let pipeline_handle = pipeline::build(&cfg, events_tx)
-        .map_err(|e| format!("omp-srt-gateway: pipeline build failed: {e}"))?;
+    let pipeline_handle = Arc::new(
+        pipeline::build(&cfg, events_tx)
+            .map_err(|e| format!("omp-srt-gateway: pipeline build failed: {e}"))?,
+    );
+    let media_ready_pipeline = pipeline_handle.clone();
 
     let store: Arc<dyn ParamStore> = Arc::new(GatewayStore {
         direction,
@@ -136,11 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![],
             receivers: vec![],
             instance_id,
-            // Hat echtes Medien-I/O, aber noch keine Bereitschafts-Probe
-            // verdrahtet (dokumentierte Folgearbeit, ARCHITECTURE.md §5
-            // Punkt 6, docs/decisions.md D5-prep) - meldet konservativ nie
-            // "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
-            media_ready: omp_node_sdk::MediaReadySource::Unknown,
+            // "media-ready" über PipelineHandle::media_ready()
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): fragt den
+            // jeweils aktiven 2110-Endpunkt (Uplink-Input oder
+            // Downlink-Output, je nach Richtung) ab.
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
+                media_ready_pipeline.media_ready()
+            })),
         },
         store,
     )

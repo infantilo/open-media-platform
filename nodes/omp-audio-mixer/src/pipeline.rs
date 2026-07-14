@@ -97,9 +97,18 @@ enum Command {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl PipelineHandle {
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): ob
+    /// der Misch-Ausgang bereits mindestens einen echten Buffer
+    /// geschrieben hat — unabhängig davon, ob/wie viele Kanäle aktuell
+    /// angeschlossen sind (der Mixer produziert auch ohne Kanäle Stille).
+    pub fn media_ready(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
+    }
+
     pub fn add_channel(&self, id: String, source: ChannelSource) {
         let _ = self.commands.send(Command::AddChannel { id, source });
     }
@@ -153,6 +162,7 @@ struct ActivePipeline {
     mixer: gst::Element,
     channels: HashMap<String, ChannelBranch>,
     _mxl_output: MxlAudioOutput,
+    flowed: Arc<AtomicBool>,
 }
 
 impl Drop for ActivePipeline {
@@ -285,6 +295,7 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
     )
     .map_err(|e| format!("MxlAudioOutput: {e}"))?;
     mxl_output.set_active(true);
+    let flowed = mxl_output.flowed_handle();
 
     pipeline
         .set_state(gst::State::Playing)
@@ -295,6 +306,7 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         mixer,
         channels: HashMap::new(),
         _mxl_output: mxl_output,
+        flowed,
     })
 }
 
@@ -338,6 +350,7 @@ pub fn run(
         std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        flowed: active.flowed.clone(),
     }));
 
     loop {

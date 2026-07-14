@@ -145,9 +145,24 @@ enum Command {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    /// S. `omp-switcher::pipeline::PipelineHandle::flowed` — gleiche
+    /// Begründung (Rebuild bei jeder Quellenmengen-Änderung, C10 folgt
+    /// demselben Discovery-Muster wie C7).
+    flowed: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 impl PipelineHandle {
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2): der
+    /// Programm-Ausgang produziert immer etwas (mindestens Schwarzbild),
+    /// wird also i. d. R. kurz nach jedem (Re-)Build `true`.
+    pub fn media_ready(&self) -> bool {
+        self.flowed
+            .lock()
+            .expect("lock poisoned")
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+    }
+
     pub fn set_inputs(&self, inputs: Vec<DiscoveredInput>) {
         let _ = self.commands.send(Command::SetInputs(inputs));
     }
@@ -248,6 +263,7 @@ struct ActivePipeline {
     _fg_inputs: Vec<MxlVideoInput>,
     _bg_inputs: Vec<MxlVideoInput>,
     _mxl_output: MxlVideoOutput,
+    flowed: Arc<AtomicBool>,
 }
 
 impl Drop for ActivePipeline {
@@ -469,6 +485,7 @@ fn build(
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     mxl_output.set_active(true);
+    let flowed = mxl_output.flowed_handle();
 
     pipeline
         .set_state(gst::State::Playing)
@@ -488,6 +505,7 @@ fn build(
         _fg_inputs: fg_inputs,
         _bg_inputs: bg_inputs,
         _mxl_output: mxl_output,
+        flowed,
     })
 }
 
@@ -564,9 +582,14 @@ pub fn run(
         }
     };
 
+    let flowed_slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
+
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut active = match build(&context, &config, &current_inputs) {
-        Ok(p) => Some(p),
+        Ok(p) => {
+            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
+            Some(p)
+        }
         Err(e) => {
             let _ = tx.send(Event::Error(format!("initial build failed: {e}")));
             let _ = ready.send(Err(e));
@@ -584,6 +607,7 @@ pub fn run(
         std::sync::mpsc::channel();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        flowed: flowed_slot.clone(),
     }));
 
     /// Wartet auf einen laufenden Transition-Thread, falls vorhanden —
@@ -622,6 +646,7 @@ pub fn run(
                                 .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
                             let previous = program.clone();
                             program = applied_program;
+                            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
                             active = Some(p);
                             let _ = tx.send(Event::ProgramChanged {
                                 previous,
@@ -642,6 +667,8 @@ pub fn run(
                                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                                     let previous = program.take();
                                     preset = None;
+                                    *flowed_slot.lock().expect("lock poisoned") =
+                                        Some(p.flowed.clone());
                                     active = Some(p);
                                     let _ = tx.send(Event::ProgramChanged {
                                         previous,

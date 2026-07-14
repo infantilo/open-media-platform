@@ -138,6 +138,7 @@ fn video_caps(
 pub struct MxlVideoOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl MxlVideoOutput {
@@ -227,6 +228,8 @@ impl MxlVideoOutput {
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_thread = flowed.clone();
         let app_sink: gst_app::AppSink = appsink
             .clone()
             .dynamic_cast::<gst_app::AppSink>()
@@ -239,10 +242,15 @@ impl MxlVideoOutput {
                 &grain_rate,
                 &app_sink,
                 &running_thread,
+                &flowed_thread,
             );
         });
 
-        Ok(MxlVideoOutput { valve, running })
+        Ok(MxlVideoOutput {
+            valve,
+            running,
+            flowed,
+        })
     }
 }
 
@@ -252,6 +260,7 @@ fn write_loop(
     grain_rate: &mxl_sys::Rational,
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
+    flowed: &Arc<AtomicBool>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
@@ -291,8 +300,9 @@ fn write_loop(
                 let n = payload.len().min(map.as_slice().len());
                 payload[..n].copy_from_slice(&map.as_slice()[..n]);
                 let total_slices = access.total_slices();
-                if let Err(e) = access.commit(total_slices) {
-                    eprintln!("omp-mediaio(mxl): commit grain {this_index} failed: {e}");
+                match access.commit(total_slices) {
+                    Ok(()) => flowed.store(true, Ordering::Relaxed),
+                    Err(e) => eprintln!("omp-mediaio(mxl): commit grain {this_index} failed: {e}"),
                 }
             }
             Err(e) => {
@@ -333,6 +343,24 @@ impl Output for MxlVideoOutput {
 
     fn is_active(&self) -> bool {
         !self.valve.property::<bool>("drop")
+    }
+}
+
+impl MxlVideoOutput {
+    /// Eigenständiger, klonbarer Griff auf das "media-ready"-Flag
+    /// (`ARCHITECTURE.md` §5 Punkt 6) — für Aufrufer, deren
+    /// `MxlVideoOutput`-Instanz nicht über die gesamte Prozesslaufzeit
+    /// erreichbar bleibt (z. B. `omp-player`s `ActivePipeline`, die nur
+    /// im Pipeline-Thread lebt), aber das Flag trotzdem von außen
+    /// (`NodeConfig::media_ready`) abfragen muss.
+    pub fn flowed_handle(&self) -> Arc<AtomicBool> {
+        self.flowed.clone()
+    }
+}
+
+impl crate::MediaFlow for MxlVideoOutput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
     }
 }
 
@@ -402,6 +430,7 @@ fn audio_caps(sample_rate: u32, channels: u32, layout: &str) -> gst::Caps {
 pub struct MxlAudioOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl MxlAudioOutput {
@@ -500,6 +529,8 @@ impl MxlAudioOutput {
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_thread = flowed.clone();
         let app_sink: gst_app::AppSink = appsink
             .clone()
             .dynamic_cast::<gst_app::AppSink>()
@@ -514,10 +545,15 @@ impl MxlAudioOutput {
                 channels as usize,
                 &app_sink,
                 &running_thread,
+                &flowed_thread,
             );
         });
 
-        Ok(MxlAudioOutput { valve, running })
+        Ok(MxlAudioOutput {
+            valve,
+            running,
+            flowed,
+        })
     }
 }
 
@@ -530,6 +566,7 @@ fn write_audio_loop(
     channels: usize,
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
+    flowed: &Arc<AtomicBool>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
@@ -576,8 +613,9 @@ fn write_audio_loop(
                     let n2 = dst_2.len().min(remaining.len());
                     dst_2[..n2].copy_from_slice(&remaining[..n2]);
                 }
-                if let Err(e) = access.commit() {
-                    eprintln!("omp-mediaio(mxl): commit samples at {this_index} failed: {e}");
+                match access.commit() {
+                    Ok(()) => flowed.store(true, Ordering::Relaxed),
+                    Err(e) => eprintln!("omp-mediaio(mxl): commit samples at {this_index} failed: {e}"),
                 }
             }
             Err(e) => {
@@ -600,6 +638,19 @@ impl Output for MxlAudioOutput {
     }
 }
 
+impl MxlAudioOutput {
+    /// S. `MxlVideoOutput::flowed_handle`.
+    pub fn flowed_handle(&self) -> Arc<AtomicBool> {
+        self.flowed.clone()
+    }
+}
+
+impl crate::MediaFlow for MxlAudioOutput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
+    }
+}
+
 impl Drop for MxlAudioOutput {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
@@ -616,6 +667,7 @@ impl Drop for MxlAudioOutput {
 pub struct MxlVideoInput {
     pub tail: gst::Element,
     running: Arc<AtomicBool>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl MxlVideoInput {
@@ -691,6 +743,8 @@ impl MxlVideoInput {
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_thread = flowed.clone();
         let app_src: gst_app::AppSrc = appsrc
             .clone()
             .dynamic_cast::<gst_app::AppSrc>()
@@ -703,12 +757,14 @@ impl MxlVideoInput {
                 &grain_rate,
                 &app_src,
                 &running_thread,
+                &flowed_thread,
             );
         });
 
         Ok(MxlVideoInput {
             tail: videorate,
             running,
+            flowed,
         })
     }
 }
@@ -719,6 +775,7 @@ fn read_loop(
     grain_rate: &mxl_sys::Rational,
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
+    flowed: &Arc<AtomicBool>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
@@ -745,6 +802,7 @@ fn read_loop(
                 if app_src.push_buffer(buffer).is_err() {
                     break;
                 }
+                flowed.store(true, Ordering::Relaxed);
                 index += 1;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
@@ -794,6 +852,19 @@ fn read_loop(
     }
 }
 
+impl MxlVideoInput {
+    /// S. `MxlVideoOutput::flowed_handle`.
+    pub fn flowed_handle(&self) -> Arc<AtomicBool> {
+        self.flowed.clone()
+    }
+}
+
+impl crate::MediaFlow for MxlVideoInput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
+    }
+}
+
 impl Drop for MxlVideoInput {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
@@ -828,6 +899,7 @@ pub struct MxlAudioInput {
     /// s. u., aber eben nicht die Pipeline-Aufräumarbeit).
     pub elements: Vec<gst::Element>,
     running: Arc<AtomicBool>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl MxlAudioInput {
@@ -893,6 +965,8 @@ impl MxlAudioInput {
 
         let running = Arc::new(AtomicBool::new(true));
         let running_thread = running.clone();
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_thread = flowed.clone();
         let app_src: gst_app::AppSrc = appsrc
             .clone()
             .dynamic_cast::<gst_app::AppSrc>()
@@ -906,6 +980,7 @@ impl MxlAudioInput {
                 batch_size,
                 &app_src,
                 &running_thread,
+                &flowed_thread,
             );
         });
 
@@ -913,6 +988,7 @@ impl MxlAudioInput {
             elements: vec![appsrc, convert.clone()],
             tail: convert,
             running,
+            flowed,
         })
     }
 }
@@ -962,6 +1038,7 @@ fn read_audio_loop(
     batch_size: u64,
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
+    flowed: &Arc<AtomicBool>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(sample_rate);
@@ -984,6 +1061,7 @@ fn read_audio_loop(
                 if app_src.push_buffer(buffer).is_err() {
                     break;
                 }
+                flowed.store(true, Ordering::Relaxed);
                 index += batch_size;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
@@ -1004,6 +1082,19 @@ fn read_audio_loop(
                 thread::sleep(Duration::from_millis(200));
             }
         }
+    }
+}
+
+impl MxlAudioInput {
+    /// S. `MxlVideoOutput::flowed_handle`.
+    pub fn flowed_handle(&self) -> Arc<AtomicBool> {
+        self.flowed.clone()
+    }
+}
+
+impl crate::MediaFlow for MxlAudioInput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
     }
 }
 

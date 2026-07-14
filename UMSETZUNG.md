@@ -1196,6 +1196,28 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   gleichzeitig laufende Prozesse bestätigt, dass alle drei Varianten das
   erwartete, unterschiedliche Ergebnis liefern; `make contract` weiterhin
   PASS (keine Regression im Descriptor/IS-04-Pfad).
+- **D5-prep-2 (erledigt, 2026-07-14)** Nachtrag zu D5-prep: die acht
+  damals als `MediaReadySource::Unknown` markierten Medien-Node-Typen
+  (`playout`, `omp-switcher`, `omp-player`, `omp-video-mixer-me`,
+  `omp-audio-mixer`, `omp-multiviewer`, `omp-viewer`, `omp-srt-gateway`)
+  real verdrahtet. Zentrale Entscheidung: ein neuer `MediaFlow`-Trait
+  (`has_flowed()`) direkt in `omp-mediaio` statt Einzellösungen pro
+  Node — implementiert für alle fünf Transport-Typen (MXL/RTP/ST 2110,
+  Sender **und** Empfänger). Wichtiger Fund dabei: die Probe muss auf
+  dem **Src**-Pad des internen `valve` sitzen, nicht dem Sink-Pad, sonst
+  meldet ein stumm geschalteter (IS-05-inaktiver) Ausgang fälschlich
+  Bereitschaft — live an `playout` bestätigt. Details, Pro-Node-Muster
+  und vollständiges Verifikationsprotokoll (drei gezielte
+  Zustandswechsel-Beweise: `omp-audio-mixer`, `playout`, `omp-viewer`):
+  `docs/decisions.md` 2026-07-14.
+  **Verifiziert:** `cargo build/test/deny/audit` (Workspace) grün; live
+  gegen sieben gleichzeitig laufende Node-Prozesse plus separat
+  `omp-viewer` per NATS-Health bestätigt (alle `media_ready:true` im
+  eingeschwungenen Zustand, drei Zustandswechsel gezielt provoziert und
+  bestätigt); `make contract` PASS gegen zwei der Nodes. Ein
+  unabhängiger, vorbestehender MXL-Read-Timing-Befund bei
+  `omp-video-mixer-me` notiert, nicht behoben (orthogonal zu diesem
+  Schritt).
 - **D5 (erledigt, 2026-07-14)** SDK-Doku + Beispiel-Node-Tutorial
   (`docs/NODE-TUTORIAL.md`) — Qualitätsmaßstab: eine dritte Person
   schafft es nur mit der Doku. Baut auf dem bereits vorhandenen
@@ -1323,6 +1345,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | erledigt | [D3-2] Nutzer-/Rollenmodell: echte Anmeldung, Rollenbindungen in Postgres, Audit-Log | 2026-07-14 |
 | D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |
 | D5-prep | erledigt | [D5-prep] Node-Contract §5 Punkt 6: media-ready-Signal im SDK | 2026-07-14 |
+| D5-prep-2 | erledigt | [D5-prep-2] MediaFlow-Trait + media-ready für alle acht verbleibenden Nodes | 2026-07-14 |
 | D5 | erledigt | [D5] SDK-Doku + Node-Tutorial (docs/NODE-TUTORIAL.md) | 2026-07-14 |
 | D6 Teil 1 (Bootstrap + Telemetrie) | erledigt | [D6-1] omp-host-agent: Bootstrap-Token, Registrierung, CPU/RAM-Telemetrie, Hosts-UI-Panel | 2026-07-14 |
 | D6 Teil 2 (Kommandokanal + Placement) | offen | | |

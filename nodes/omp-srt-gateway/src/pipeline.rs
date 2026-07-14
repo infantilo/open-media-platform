@@ -24,6 +24,7 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
+use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::st2110::{St2110VideoInput, St2110VideoOutput};
 
@@ -54,13 +55,41 @@ pub struct Config {
     pub srt_uri: String,
 }
 
+/// Der jeweils eine 2110-Endpunkt, den diese Richtung tatsächlich betreibt
+/// (Uplink liest 2110, Downlink schreibt 2110) — gehalten, damit sein
+/// `has_flowed()` (`omp_mediaio::MediaFlow`) nach Prozess-Start weiter
+/// abfragbar bleibt (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2);
+/// würde sonst mit dem Rückgabewert von `build_uplink`/`build_downlink`
+/// verworfen, obwohl die zugehörigen Pipeline-Elemente weiterlaufen.
+enum ActiveEndpoint {
+    Uplink(St2110VideoInput),
+    Downlink(St2110VideoOutput),
+}
+
+impl ActiveEndpoint {
+    fn has_flowed(&self) -> bool {
+        match self {
+            ActiveEndpoint::Uplink(input) => input.has_flowed(),
+            ActiveEndpoint::Downlink(output) => output.has_flowed(),
+        }
+    }
+}
+
 pub struct PipelineHandle {
     pipeline: gst::Pipeline,
+    endpoint: ActiveEndpoint,
 }
 
 impl PipelineHandle {
     pub fn shutdown(&self) {
         let _ = self.pipeline.set_state(gst::State::Null);
+    }
+
+    /// "media-ready" (ARCHITECTURE.md §5 Punkt 6): ob der 2110-Endpunkt
+    /// dieser Richtung bereits mindestens einen echten Buffer
+    /// gesendet/empfangen hat.
+    pub fn media_ready(&self) -> bool {
+        self.endpoint.has_flowed()
     }
 }
 
@@ -76,10 +105,10 @@ pub fn build(
     gst::init().map_err(|e| format!("gst::init: {e}"))?;
     let pipeline = gst::Pipeline::new();
 
-    match cfg.direction {
-        Direction::Uplink => build_uplink(&pipeline, cfg)?,
-        Direction::Downlink => build_downlink(&pipeline, cfg)?,
-    }
+    let endpoint = match cfg.direction {
+        Direction::Uplink => ActiveEndpoint::Uplink(build_uplink(&pipeline, cfg)?),
+        Direction::Downlink => ActiveEndpoint::Downlink(build_downlink(&pipeline, cfg)?),
+    };
 
     let bus = pipeline.bus().expect("pipeline always has a bus");
     let pipeline_weak = pipeline.downgrade();
@@ -107,10 +136,10 @@ pub fn build(
         .set_state(gst::State::Playing)
         .map_err(|e| format!("pipeline playing: {e}"))?;
 
-    Ok(PipelineHandle { pipeline })
+    Ok(PipelineHandle { pipeline, endpoint })
 }
 
-fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(), String> {
+fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoInput, String> {
     let input = St2110VideoInput::new(
         pipeline,
         cfg.st2110_port,
@@ -135,10 +164,10 @@ fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(), String> {
     gst::Element::link_many([&input.tail, &payloader, &srtsink])
         .map_err(|e| format!("link uplink chain: {e}"))?;
 
-    Ok(())
+    Ok(input)
 }
 
-fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(), String> {
+fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoOutput, String> {
     let srtsrc = gst::ElementFactory::make("srtsrc")
         .property("uri", &cfg.srt_uri)
         .build()
@@ -170,5 +199,5 @@ fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(), String> 
     )?;
     output.set_active(true);
 
-    Ok(())
+    Ok(output)
 }

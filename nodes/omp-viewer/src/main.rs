@@ -182,6 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let media_ready_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
     let connection = Arc::new(ReceiverConnection::new(
         receiver_id.clone(),
@@ -212,11 +213,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 media_types: Some(vec!["video/v210".to_string()]),
             }],
             instance_id,
-            // Hat echtes Medien-I/O, aber noch keine Bereitschafts-Probe
-            // verdrahtet (dokumentierte Folgearbeit, ARCHITECTURE.md §5
-            // Punkt 6, docs/decisions.md D5-prep) - meldet konservativ nie
-            // "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
-            media_ready: omp_node_sdk::MediaReadySource::Unknown,
+            // "media-ready" über PipelineHandle::media_ready()
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2) — false vor
+            // dem ersten Connect und direkt nach jedem Quellwechsel, bis
+            // der neu verbundene Input nachweislich einen Buffer liefert.
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
+                media_ready_pipeline.media_ready()
+            })),
         },
         store,
     )

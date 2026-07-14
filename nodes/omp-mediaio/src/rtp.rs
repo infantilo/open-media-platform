@@ -9,7 +9,8 @@
 //! Caps-Verhandlung vor `rtpvrawpay` würde fehlschlagen, sobald sie von
 //! 640×480 abweicht.
 
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -30,6 +31,7 @@ pub struct RtpVideoOutput {
     destination: Mutex<(String, u16)>,
     framerate_numerator: i32,
     framerate_denominator: i32,
+    flowed: Arc<AtomicBool>,
 }
 
 impl RtpVideoOutput {
@@ -100,12 +102,30 @@ impl RtpVideoOutput {
         ])
         .map_err(|e| format!("link rtp output chain: {e}"))?;
 
+        // Probe auf dem **Src**-Pad des Valve, nicht dem Sink-Pad: ein
+        // `valve` mit `drop=true` lässt Buffer trotzdem an seinem
+        // Sink-Pad ankommen (sie werden erst intern verworfen) — ein
+        // Sink-Pad-Probe würde "media-ready" fälschlich melden, obwohl
+        // der Ausgang stumm geschaltet ist und nichts wirklich das Netz
+        // erreicht (ARCHITECTURE.md §5 Punkt 6: "tatsächlich Medien
+        // produziert"). Selbstentfernend (`PadProbeReturn::Remove`) nach
+        // dem ersten Treffer — `has_flowed` ist ein Sticky-Flag, der
+        // Probe wird danach nicht mehr gebraucht.
+        let flowed = Arc::new(AtomicBool::new(false));
+        let flowed_probe = flowed.clone();
+        let valve_src_pad = valve.static_pad("src").expect("valve has a src pad");
+        valve_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+            flowed_probe.store(true, Ordering::Relaxed);
+            gst::PadProbeReturn::Remove
+        });
+
         Ok(RtpVideoOutput {
             valve,
             udpsink,
             destination: Mutex::new((initial_host.to_string(), initial_port)),
             framerate_numerator,
             framerate_denominator,
+            flowed,
         })
     }
 
@@ -149,5 +169,11 @@ impl Output for RtpVideoOutput {
 
     fn is_active(&self) -> bool {
         !self.valve.property::<bool>("drop")
+    }
+}
+
+impl crate::MediaFlow for RtpVideoOutput {
+    fn has_flowed(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
     }
 }

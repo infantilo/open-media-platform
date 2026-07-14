@@ -50,6 +50,7 @@ enum Command {
 #[derive(Clone)]
 pub struct PipelineHandle {
     commands: Sender<Command>,
+    flowed: Arc<AtomicBool>,
 }
 
 impl PipelineHandle {
@@ -58,11 +59,23 @@ impl PipelineHandle {
     /// eingeblendet, s. `build()`) — kein Verbindungsparameter im
     /// engeren Sinn, nur zur Anzeige.
     pub fn connect(&self, flow_id: String, label: String) {
+        self.flowed.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::Connect(flow_id, label));
     }
 
     pub fn disconnect(&self) {
+        self.flowed.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::Disconnect);
+    }
+
+    /// Ob die aktuell verbundene Quelle (falls vorhanden) bereits
+    /// mindestens einen echten Video-Buffer geliefert hat —
+    /// "media-ready"-Signal (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md
+    /// D5-prep-2). `false` sowohl vor dem ersten `connect()` als auch direkt
+    /// nach einem Quellwechsel, bis der neue Input nachweislich liefert
+    /// (s. `connect()`/`disconnect()` oben, die das Flag zurücksetzen).
+    pub fn media_ready(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
     }
 }
 
@@ -87,10 +100,22 @@ fn build(
     label: &str,
     broadcaster: &Arc<Broadcaster>,
     sink_element: Option<&str>,
+    flowed: Arc<AtomicBool>,
 ) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), flow_id)?;
+    // "media-ready" (ARCHITECTURE.md §5 Punkt 6): Probe hinter dem
+    // MXL-Eingang, unabhängig von `MxlVideoInput::has_flowed()` (dessen
+    // internes Flag stirbt mit der Instanz bei jedem Quellwechsel) — hier
+    // ein von außen (PipelineHandle) abfragbares, über Rebuilds hinweg
+    // bewusst zurückgesetztes Flag (s. PipelineHandle::connect).
+    let flowed_probe = flowed.clone();
+    let input_tail_src_pad = input.tail.static_pad("src").expect("tail has a src pad");
+    input_tail_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+        flowed_probe.store(true, Ordering::Relaxed);
+        gst::PadProbeReturn::Remove
+    });
 
     // UMD-artiges Textoverlay mit der IS-04-Sender-Bezeichnung der
     // gewählten Quelle (Nutzeranforderung 2026-07-12) — vor dem `tee`,
@@ -199,8 +224,10 @@ pub fn run(
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) =
         std::sync::mpsc::channel();
+    let flowed = Arc::new(AtomicBool::new(false));
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
+        flowed: flowed.clone(),
     }));
 
     let mut active: Option<ActivePipeline> = None;
@@ -220,6 +247,7 @@ pub fn run(
                     &label,
                     &broadcaster,
                     config.sink_element.as_deref(),
+                    flowed.clone(),
                 ) {
                     Ok(p) => active = Some(p),
                     Err(e) => {

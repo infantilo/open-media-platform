@@ -32,3 +32,17 @@ pub trait Output: Send + Sync {
     /// Ob der Ausgang aktuell aktiv ist.
     fn is_active(&self) -> bool;
 }
+
+/// Ob durch diesen Ein-/Ausgang bereits mindestens ein echtes
+/// Medien-Sample geflossen ist — Grundlage für das "media-ready"-Signal
+/// aus dem Node-Contract (`ARCHITECTURE.md` §5 Punkt 6, `UMSETZUNG.md`
+/// D5-prep/D5-prep-2). Getrennt von [`Output::is_active`]: `is_active` ist
+/// eine gewollte Schaltung (IS-05), `has_flowed` ist eine Beobachtung
+/// ("ist tatsächlich etwas angekommen") — beide können unabhängig
+/// auseinanderfallen (aktiv geschaltet, aber noch kein Buffer gesehen).
+/// Implementiert von jedem Ausgang/Eingang in diesem Crate, nicht nur
+/// von [`Output`]-Implementierungen (auch reine Eingänge wie
+/// `MxlVideoInput`/`St2110VideoInput`, die kein `Output` sind).
+pub trait MediaFlow: Send + Sync {
+    fn has_flowed(&self) -> bool;
+}
