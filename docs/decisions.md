@@ -4346,3 +4346,71 @@ Bootstrap-Tokens per SQL aus Postgres entfernt (kein `DELETE
 /api/v1/hosts/<id>`-Endpunkt vorhanden — Hosts sind seit D6 Teil 1
 bewusst nur lesend über die API exponiert, Löschen ist bisher kein
 UI-/API-Anwendungsfall).
+
+## 2026-07-14 — Entscheidungssitzung END-GOAL-FEATURES Kapitel 10: alle zehn offenen Fragen entschieden
+
+**Kontext:** `docs/END-GOAL-FEATURES.md` (Commit `665ba4a`) listet in
+Kapitel 10 zehn konsolidierte Entscheidungspunkte, die vor
+Implementierungsbeginn der neun Endziel-Kapitel (K1–K9) zu klären
+waren. Direkt im Anschluss an D6 Teil 3 durchgegangen, auf expliziten
+Wunsch des Projektinhabers ("bevor wir weitermachen, entscheidungen aus
+end-goal-features treffen"). Vollständiges Ergebnis steht jetzt in
+`docs/END-GOAL-FEATURES.md` Kapitel 10 selbst (als verbindliche
+Kurzfassung, die Kapitel-Unterabschnitte 1.5–9.6 wurden nicht
+nachträglich umgeschrieben) — hier nur die Punkte, die von der
+Dokument-Empfehlung **abweichen** oder zusätzlichen Kontext brauchen,
+den Kapitel 10 selbst knapp hält.
+
+**Abweichungen von der im Dokument vorgeschlagenen Empfehlung** (bewusst
+hervorgehoben, damit spätere Sitzungen nicht versehentlich zur
+Dokument-Empfehlung zurückfallen):
+- **K1 Sprache:** Englisch als Primärsprache mit DE-Umschaltung statt
+  "DE belassen" — mehr i18n-Aufwand, aber vom Projektinhaber
+  ausdrücklich gewählt (nicht die von der Doku empfohlene sparsamere
+  Variante).
+- **K1 Panels:** Vollansichten mit Tabs statt andockbare Panels —
+  größerer Umbau von `shell.ts` als die "kleinerer Umbau"-Empfehlung.
+- **K2 Medienverzeichnis:** pro Instanz konfigurierbar statt global
+  pro Host — mehr Parameter-Fläche akzeptiert.
+- **K4 Solo/PFL:** wird gebaut (Monitor-Summe + lokale Wiedergabe)
+  statt "Metering reicht".
+- **K8 Mehrgeräte-Fall:** jetzt mitdenken statt Ein-Geräte-Annahme für
+  v1 — WebHID-Mehrgeräte-Handling gehört von Anfang an ins Design,
+  nicht nachträglich reingeflickt.
+
+**Die (a)/(b)/(c)-Redundanz-Grundsatzfrage** ([[project_redundancy_
+failover_question]] in der Memory, offen seit 2026-07-12) ist damit
+entschieden: **(c) als nächste Stufe, (b) bleibt das Endziel** — keine
+Alternative, sondern eine Sequenz. Der bereits in `ARCHITECTURE.md`
+§20.1 dokumentierte fünfstufige (b)-Fahrplan (Grain-Index-Struktur →
+schneller sichtbarer Cut → PTP-Basis → Command-Mirroring/
+`omp-seamless-switch` → Determinismus-Härtung) bleibt unverändert die
+Zielrichtung; (c) (Standby läuft parallel, Downstream friert bei
+Umschaltung das letzte Bild ein) wird als eigene, frühere Stufe davor
+eingeschoben, wo bisher direkt zu Stufe 2 ("schneller sichtbarer Cut")
+gesprungen worden wäre. `ARCHITECTURE.md` §20.1 ist an dieser Stelle
+noch **nicht** nachgeführt — das ist Folgearbeit für die Sitzung, die
+K7-Teil-1/-2 tatsächlich umsetzt, nicht Teil dieser reinen
+Entscheidungssitzung.
+
+**K7-Teil-4 (Placement-Engine-Priorisierung) ist gegenstandslos
+geworden:** Kapitel 10 Punkt 8 fragte ursprünglich, ob D6 Teil 3
+(Placement-Engine) wegen K7-Teil-4 (Hot-Standby) gezielt vorgezogen
+werden soll — diese Frage stellte sich nicht mehr, weil D6 Teil 3 in
+genau dieser Sitzung direkt vorher bereits fertiggestellt wurde (s.
+Eintrag oben, "D6 Teil 3"). Keine Entscheidung nötig, nur zur Kenntnis
+genommen.
+
+**Nicht in dieser Sitzung geklärt (bewusst, kein stiller Gap):** welche
+Video-Essenz PIPELINE CONTROLLER konkret nutzt (K2-Codec-Entscheidung
+verweist darauf, die tatsächliche Identifikation ist Recherchearbeit
+der K2-Umsetzungssitzung, nicht dieser Entscheidungssitzung); die
+konkrete Werte-Wahl für "8–12" bei K3 (Bank-Größe) ist als Spanne
+entschieden, kein exakter Wert; der Render-Spike für K5 (wpesrc vs.
+Chromium/CDP) bleibt bewusst offen bis zum tatsächlichen Spike.
+
+**Nächster Schritt (nicht Teil dieser Sitzung):** die gewählte
+Reihenfolge (K1-Teil-1 zuerst) als regulären Schritt in `UMSETZUNG.md`
+aufnehmen, sobald die Umsetzung beginnt — `docs/END-GOAL-FEATURES.md`
+bleibt bis dahin reine Design-Referenz, keine Statuszeile in
+`UMSETZUNG.md` Abschnitt 7.

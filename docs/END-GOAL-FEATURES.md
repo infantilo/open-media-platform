@@ -1,9 +1,11 @@
 # END-GOAL-FEATURES — Design-Dokument für die Endziel-Anforderungen
 
 Stand: 2026-07-14 (erweitert um K7–K9 in derselben Sitzungsfolge, nach
-Review durch den Projektinhaber). Status: **Entwurf zur Review durch den
-Projektinhaber, noch nicht priorisiert, noch nicht Teil der
-`UMSETZUNG.md`-Schrittliste.**
+Review durch den Projektinhaber; Kapitel 10 am selben Tag vollständig
+entschieden, s. dort). Status: **Alle zehn Entscheidungen aus Kapitel
+10 getroffen. Noch nicht Teil der `UMSETZUNG.md`-Schrittliste** — die
+gewählten „Teil 1"-Scheiben werden als eigene Schritte dort aufgenommen,
+sobald die Umsetzung beginnt.
 
 Dieses Dokument ist das Ergebnis mehrerer Recherche-Sitzungen über beide
 Codebasen (OMP und `/home/infantilo/PIPELINE CONTROLLER`) zu den
@@ -1576,35 +1578,92 @@ die schon MJPEG von `omp-viewer` zu `omp-multiviewer` getragen hat
 
 ## 10. Konsolidierte Entscheidungsliste für den Projektinhaber
 
-Vor Implementierungsbeginn zu entscheiden (Kurzform, Details in den
-Kapiteln):
+**Status 2026-07-14: alle zehn Punkte entschieden** (Sitzung im
+Anschluss an D6 Teil 3). Entscheidungen unten, Begründungen/Kontext im
+Detail in `docs/decisions.md` (Eintrag „Entscheidungssitzung
+END-GOAL-FEATURES Kapitel 10"). Die einzelnen Kapitel-Unterabschnitte
+(1.5, 2.5, …) bleiben als Herleitung stehen und wurden nicht
+nachträglich umgeschrieben — diese Liste hier ist die verbindliche
+Kurzfassung.
 
-1. **Reihenfolge/Priorität** aller neun Kapitel bestätigen oder ändern
-   (Vorschlag in Kapitel 0; K7-Teil-1/K9-Teil-0 sind unabhängig
-   sofort startbar).
-2. **K1:** Studio-Dark-only zuerst? Sprache DE/EN? Panels vs.
-   Vollansichten? (1.5)
-3. **K2:** MXF-Essenz-/Codec-Umfang (bestimmt `gst-libav`-Pflicht);
-   Medienverzeichnis-Konvention. (2.5)
-4. **K3:** Hot-Cut auf PGM-Reihe? (3.5; Stream-Deck-Frage jetzt in K8)
-5. **K4:** Limiter-Qualität (`audiodynamic` vs. LV2-Dependency);
-   Solo/PFL ja/nein; Node-Stream-Proxy im Orchestrator. (4.5)
-6. **K5:** Demo-Scope-Entscheidung aus §11.2 (offen seit 2026-07-11!);
-   Render-Variante nach Spike; „Editor"-Bedeutung bestätigen;
-   Template-Lizenz. (5.5)
-7. **K6:** Playlist-Persistenz-Ort; Priorität der ausgelagerten
-   Subsysteme (Record/SCTE-35/…); Scheduler-Abgrenzung zu D7 Teil 2.
-   (6.6)
-8. **K7 (HA/Redundanz):** (a)/(b)/(c)-Genlock-Frage aus dem Memory
-   weiterhin offen, blockiert aber Teil 1–3 nicht; Crash-Loop-Bremse;
-   Priorisierung von D6 Teil 3 (Placement-Engine) wegen K7-Teil-4. (7.5)
-9. **K8 (Stream Deck):** vorhandenes Modell; Umfang jetzt (generisch
-   vs. handgetunt); udev-Automatisierung; Mehrgeräte-Fall. (8.5)
-10. **K9 (Multiviewer-Streaming):** Browser-Tab vs. dedizierter Monitor
-    (entscheidet WebRTC-Notwendigkeit); Betrachterzahl; JPEG-XS jetzt
-    oder streichen; konkretes Latenzziel. (9.6)
+1. **Reihenfolge:** empfohlene Reihenfolge aus Kapitel 0 übernommen
+   (K1-Teil-1 → K2-Teil-1 → K3/K4-Teil-1 → K5 → K6, K7-Teil-1 und
+   K9-Teil-0 unabhängig/parallel startbar).
+2. **K1:** Studio-Dark **only**. Sprache: **Englisch als
+   Primärsprache mit DE-Umschaltung** (Abweichung von der
+   Dokument-Empfehlung „DE belassen" — zweisprachig wie PIPELINE
+   CONTROLLER). Floating-Panels werden zu **Vollansichten mit Tabs**
+   ausgebaut (App-Bar „Flow-Editor · Workflows · Hosts", §1.3b) —
+   ebnet den Weg für den späteren Workflow-Katalog (§22.3).
+3. **K2:** Codec-Scope = **derselbe Codec, den PIPELINE CONTROLLER
+   bereits nachweislich abspielt** (dort erproben, nicht neu
+   herleiten, welcher genau das ist). Medienverzeichnis: **pro
+   Instanz konfigurierbar** (beschreibbarer Parameter, nicht global
+   über Katalog-`env`) — Abweichung von der Dokument-Empfehlung, mehr
+   Parameter-Fläche akzeptiert für die Flexibilität. EOS-Advance
+   bleibt **K6-Scope** (Dokument-Empfehlung bestätigt).
+4. **K3:** Hot-Cut auf PGM **nur mit Modifier-Taste** (Shift+Klick).
+   Bank-Größe: **überschaubare feste Anzahl (8–12)**, kein
+   Discovery-getriebenes Unbegrenzt-Layout in v1.
+5. **K4:** Generischer **Node-Stream-Proxy im Orchestrator wird
+   gebaut** (`/api/v1/nodes/<id>/stream/<name>`) — löst Audio-Pegel
+   **und** die bekannte MJPEG-Vorschau-Problematik (C12) in einem
+   Aufwasch. **2 Aux + 2 Gruppen** Default (Dokument-Vorschlag).
+   Limiter: **`audiodynamic`** (kein LV2/neue Systemdependency).
+   **Solo/PFL-Abhörweg wird gebaut** (Monitor-Summe + lokale
+   Wiedergabe) — Abweichung von der Dokument-Empfehlung „Metering
+   reicht".
+6. **K5:** OGraf **in den Regieplatz-Demo-Umfang aufgenommen**
+   (schließt die seit 2026-07-11 offene §11.2-Frage). Render-Variante:
+   **erst der Spike entscheidet** (keine Vorfestlegung wpesrc vs.
+   Chromium/CDP). Editor-Bedeutung: **nur PIPELINE-CONTROLLER-Umfang**
+   (Formulare/Hotkeys/Children, kein Authoring-Tool). Template-Lizenz:
+   **die ~45 Templates dürfen unverändert übernommen werden**
+   (Bestätigung durch den Projektinhaber).
+7. **K6:** Scheduler bleibt **getrennt** von D7 Teil 2 (Workflow-
+   Zeitplan vs. Playlist-Fixtime, zwei Zwecke). Playlist-Persistenz:
+   **Orchestrator/Postgres** (Dokument-Empfehlung, konsistent mit D1).
+   Ausgelagerte Subsysteme (Record/SCTE-35): **keins davon jetzt**,
+   kein neues Node-Konzept in `ARCHITECTURE.md` §13 nötig. Multi-Kanal:
+   **Workflow-Struktur reicht** als Antwort auf `supervisor.js`, kein
+   eigenes ChannelBus-Dashboard.
+8. **K7 (HA/Redundanz):** **(c) als Zwischenschritt — Standby läuft
+   parallel mit, Downstream hält bei Umschaltung das letzte Bild —
+   mit (b) (echte Genlock-äquivalente, unsichtbare Übernahme) als
+   späteres Endziel**, nicht als Alternative. Damit ist die seit
+   2026-07-12 offene Projekt-Memory-Frage entschieden — der zuvor
+   dokumentierte (b)-Fahrplan (`ARCHITECTURE.md` §20.1, fünf Stufen:
+   Grain-Index-Struktur → schneller sichtbarer Cut → echte PTP-Basis →
+   Command-Mirroring/`omp-seamless-switch` → Determinismus-Härtung)
+   bleibt die Zielrichtung, (c) wird als eigene, frühere Stufe davor
+   eingeschoben. K7-Teil-1 (Prozess-Auto-Restart) **startet sofort**,
+   unabhängig von dieser Grundsatzfrage. Crash-Loop-Bremse:
+   **5 Restarts / 60 Sekunden**, danach Alarm statt Endlosschleife.
+   ST 2022-7 als **pro Workflow-Rolle konfigurierbares Merkmal**
+   bestätigt (§21.1-Prinzip). K7-Teil-4-Priorisierungsfrage zur
+   Placement-Engine ist **gegenstandslos** — D6 Teil 3 wurde am
+   2026-07-14 fertiggestellt (`UMSETZUNG.md`), K7-Teil-4 kann jetzt
+   direkt darauf aufsetzen.
+9. **K8 (Stream Deck):** Modell = **Stream Deck MK.2**. Umfang jetzt:
+   **generische Fallback-Seite (Teil 1) reicht**, keine handgetunte
+   K3-Seite als Pflicht. udev-Regel: **automatisiert**
+   (`make streamdeck-udev`), keine reine Dokumentation wie im Vorbild.
+   Mehrgeräte-Fall: **jetzt mitdenken**, nicht erst später nachrüsten
+   — Abweichung von der impliziten Ein-Geräte-Annahme des Dokuments.
+10. **K9 (Multiviewer-Streaming):** Zielgerät = **beides** (dedizierter
+    Regieplatz-Monitor **und** entfernte/Laptop-Browser-Betrachtung) —
+    damit ist Pfad A (WebRTC) tatsächlich gebraucht, nicht nur für den
+    Monitor-Fall optional. Betrachterzahl: **mehrere gleichzeitige
+    Operator-Tabs** — WebRTCs Fan-out-Vorteil (SFU) lohnt sich damit.
+    JPEG-XS: **gestrichen** aus dem v1-Scope (Dokument-Empfehlung).
+    Latenzziel: **deutlich unter 300 ms**, nicht sub-100 ms — bewusst
+    kein Widerspruch zum WebRTC-Bedarf oben: WebRTC wird primär wegen
+    Fan-out/Remote-Zugriff gebraucht, nicht weil Pfad B (SRT + nativer
+    Player, bereits über Teil 0/1 auf <300ms) das Latenzziel allein
+    verfehlen würde.
 
-Nach diesen Entscheidungen sollten die gewählten „Teil 1"-Scheiben als
-reguläre Schritte in `UMSETZUNG.md` aufgenommen werden (eigene Sitzung,
-eigene Verifikation, Status-Checkliste) — dieses Dokument bleibt die
-Design-Referenz dahinter und wird bei Scope-Änderungen fortgeschrieben.
+Nächster Schritt: die gewählten „Teil 1"-Scheiben (K1-Teil-1 zuerst
+laut Reihenfolge-Entscheidung) als reguläre Schritte in
+`UMSETZUNG.md` aufnehmen (eigene Sitzung, eigene Verifikation,
+Status-Checkliste) — dieses Dokument bleibt die Design-Referenz
+dahinter und wird bei weiteren Scope-Änderungen fortgeschrieben.
