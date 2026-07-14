@@ -778,6 +778,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![],
             receivers: vec![],
             instance_id,
+            // Reiner Control-Plane-Node (kein omp-mediaio, senders/
+            // receivers leer) — hat kein Medien-I/O, das abzuwarten wäre
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep).
+            media_ready: omp_node_sdk::MediaReadySource::NotApplicable,
         },
         store.clone(),
     )

@@ -3583,3 +3583,98 @@ Login startet, bis jemand bewusst einen echten Nutzer anlegt.
 **Offener D3-Restscope:** AD/LDAP-Anbindung (s. o.), Token-Refresh/
 -Revocation, feingranulare Sichtbarkeits-Filterung pro Workflow (wartet
 auf D7).
+
+## 2026-07-14 — D5-prep: „media-ready"-Signal im Node-Contract (ARCHITECTURE.md §5 Punkt 6), bevor die SDK-Doku (D5) geschrieben wird
+
+**Kontext:** Vor D5 (SDK-Doku + Node-Tutorial) geprüft, ob der Node-
+Contract wirklich stabil genug ist, um dokumentiert zu werden.
+`UMSETZUNG.md`s D6-Übersicht flaggt explizit: „Node-Contract-Grundlage
+(State-Export/Import + Readiness-Signal, §5 Punkt 6) muss vor dem
+SDK-v1-Freeze (Ende Phase C) stehen … Nachrüsten nach SDK-Freeze wäre
+ein Breaking Change für alle Community-Nodes." Phase C ist fertig, das
+Signal fehlte noch — genau der in §5 beschriebene, noch nicht
+eingelöste Punkt. Da es noch keine echten Community-Nodes gibt (P2 noch
+nicht erreicht), ist das Risiko eines Breaking Change aktuell gleich
+null, aber genau deshalb der günstigste Zeitpunkt, es sauber
+nachzuholen, bevor D5 die Doku dazu schreibt.
+
+**Scope-Klärung:** §5 Punkt 6 nennt zwei Dinge — (a) „vollständigen
+Parameterzustand über den bestehenden Descriptor exportier- und
+reimportierbar machen" ist bereits erfüllt: der generische Descriptor +
+GET/PATCH-Params-Mechanismus (A8) macht das für jeden Node-Typ ohne
+Sondercode möglich, `internal/snapshots` (B7) ist der laufende Beweis
+(liest/schreibt exakt so den kompletten Parameterzustand). Kein
+Zusatzcode nötig. (b) das „media-ready"-Signal existierte dagegen
+nirgends (`grep` über Rust/Go/TS bestätigt) — das ist der tatsächlich
+neue Teil dieses Schritts.
+
+**Design: drei Zustände statt eines optionalen Flags mit Default
+„bereit".** `omp_node_sdk::MediaReadySource` (`nodes/omp-node-sdk/src/
+node.rs`):
+- `NotApplicable` — kein Medien-I/O (Control-Plane-Node, `senders`/
+  `receivers` leer, z. B. `omp-playout-automation`) → sofort `true`.
+- `Unknown` — hat Medien-I/O, aber noch keine Probe verdrahtet →
+  konservativ immer `false`, um keine ungeprüfte Bereitschaft
+  vorzutäuschen.
+- `Probe(Arc<dyn Fn() -> bool + Send + Sync>)` — echte Abfrage bei jedem
+  Health-Tick.
+
+Ein einzelnes `Option<Probe>` mit `None ⇒ true` (analog zu anderen
+optionalen SDK-Feldern) wäre hier die falsche Default-Richtung gewesen:
+für einen echten Medien-Node hieße "nicht verdrahtet" dann fälschlich
+"sofort bereit" — eine Lüge, die das ganze Signal wertlos machen würde.
+Die dritte Variante (`Unknown`) verhindert das, erzwingt aber, dass
+jeder der zwölf `NodeConfig`-Konstruktionsorte sich bewusst einordnet
+(Rust-Exhaustiveness macht das nicht optional).
+
+**Transportweg: NATS-Health (`omp.health.<id>`), nicht Descriptor.**
+`ARCHITECTURE.md` §6.1 Punkt 3 trennt "Health" und "tatsächlich
+fließende Medien" ohnehin als zwei verschiedene Prüfungen einer
+künftigen Make-before-break-Migration — das Signal passt inhaltlich zum
+bestehenden, periodisch gepushten Health-Herzschlag (`health::Status`,
+identisches Schema in Rust-SDK und Go-Mock-Node), nicht zum Descriptor
+(der ist Pull-basiert und für Parameter/Methoden gedacht, nicht für
+einen Liveness-artigen Zustand). Kein neues Transportmittel, kein
+Orchestrator-Code geändert (der abonniert `omp.>` bereits generisch).
+
+**Konkrete Probe: „mindestens ein Buffer ist geflossen", nicht
+byte-genaue Grain-Bestätigung.** Für `omp-source` (als erster, echt
+verdrahteter Nachweis) wiederverwendet: der bereits seit C2/C5
+existierende FPS-Mess-Buffer-Zähler an der internen `fakesink`-Abzweigung
+(`video_buffers: Arc<AtomicU64>`) bekommt ein zusätzliches, nicht
+zurückgesetztes Sticky-Flag (`video_flowed: Arc<AtomicBool>`), das beim
+ersten beobachteten Buffer einmalig auf `true` kippt — dieselbe
+`tee`-Abzweigung speist gleichzeitig den tatsächlichen MXL-Ausgang, der
+Video-Zweig ist also ein ehrlicher Indikator für "die Pipeline produziert
+wirklich Bild" (kein `pipeline.set_state()`-Rückgabewert, der nur
+"Übergang angestoßen" bedeutet, nicht "läuft tatsächlich"). Der
+Audio-Zweig wird nicht separat geprüft (dokumentierte Vereinfachung,
+gleicher Umfang wie die bestehende FPS-Messung).
+
+**Bewusst nicht in diesem Schritt:** Probes für die übrigen acht
+Medien-Node-Typen (`playout`, `omp-switcher`, `omp-player`,
+`omp-video-mixer-me`, `omp-audio-mixer`, `omp-multiviewer`, `omp-viewer`,
+`omp-srt-gateway`) — alle bekommen `MediaReadySource::Unknown` (meldet
+ehrlich „noch nicht geprüft", nicht „bereit"), Verdrahtung ist
+mechanische Folgearbeit nach demselben `omp-source`-Muster, mangels
+Zeit in dieser Sitzung nicht für alle acht einzeln durchgeführt (jede
+Pipeline hat leicht unterschiedliche interne Struktur, hätte
+oberflächliches Copy-Paste ohne echtes Lesen jeder Datei bedeutet).
+`tools/contract-check` (C9) bleibt unverändert — es ist ein reiner
+HTTP-/Registry-Checker, eine `media_ready`-Prüfung würde einen
+NATS-Client darin brauchen; ebenfalls dokumentierte Folgearbeit, kein
+stiller Gap.
+
+**Verifiziert (echte Prozesse):** `cargo build/test --workspace`
+(inkl. `omp-mediaio`-MXL-Tests, `deploy/dev/mxl.env` gesourct), `cargo
+deny check`/`cargo audit` grün; Go-Mock-Node `go build/vet/test` grün.
+Live gegen drei echte, gleichzeitig laufende Prozesse per NATS-
+Subscription auf `omp.health.>` bestätigt, dass alle drei
+`MediaReadySource`-Varianten das erwartete, unterschiedliche Ergebnis
+liefern (kein hartkodiertes `true`): `omp-source` (`Probe`, echter
+Buffer-Fluss) → `media_ready:true`; `omp-playout-automation`
+(`NotApplicable`, kein Medien-I/O) → `media_ready:true`; `omp-viewer`
+(`Unknown`, Medien-I/O aber unverdrahtet) → `media_ready:false`.
+`make contract NODE_URL=…` weiterhin PASS gegen eine echte
+`omp-source`-Instanz (Descriptor/IS-04/Param-Roundtrip unverändert,
+keine Regression durch die health-seitige Ergänzung).

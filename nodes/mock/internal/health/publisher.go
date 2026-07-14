@@ -21,6 +21,14 @@ type Status struct {
 	Status    string `json:"status"`
 	Senders   int    `json:"senders"`
 	Receivers int    `json:"receivers"`
+	// MediaReady ist das "media-ready"-Signal aus dem Node-Contract
+	// (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep) — identisches
+	// JSON-Schema wie health::Status im Rust-SDK (nodes/omp-node-sdk).
+	// Der Mock-Node hat keine echte Medien-Pipeline (UMSETZUNG.md A7: reines
+	// Testwerkzeug, Fake-Sender/-Receiver) — meldet deshalb immer true,
+	// analog zu omp-playout-automation (MediaReadySource::NotApplicable):
+	// es gibt kein echtes Medien-I/O, das abzuwarten wäre.
+	MediaReady bool `json:"media_ready"`
 }
 
 // Publisher verbindet sich mit NATS und veröffentlicht Status-Snapshots.

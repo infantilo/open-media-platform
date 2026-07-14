@@ -116,6 +116,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![SenderSpec::default()],
             receivers: vec![omp_node_sdk::ReceiverSpec::default()],
             instance_id: std::env::var("OMP_INSTANCE_ID").ok(),
+            // hello_node hat keine echte Pipeline, nur Beispiel-Parameter
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep).
+            media_ready: omp_node_sdk::MediaReadySource::NotApplicable,
         },
         store,
     )

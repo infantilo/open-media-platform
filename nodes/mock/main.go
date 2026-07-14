@@ -169,11 +169,12 @@ func main() {
 			}
 			if publisher != nil {
 				status := health.Status{
-					NodeID:    nodeID,
-					Label:     *label,
-					Status:    "ok",
-					Senders:   *senders,
-					Receivers: *receivers,
+					NodeID:     nodeID,
+					Label:      *label,
+					Status:     "ok",
+					Senders:    *senders,
+					Receivers:  *receivers,
+					MediaReady: true,
 				}
 				if err := publisher.Publish(status); err != nil {
 					slog.Warn("health publish failed", "error", err)

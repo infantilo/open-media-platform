@@ -170,6 +170,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    let media_ready_pipeline = pipeline_handle.clone();
+
     let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
         fps: fps.clone(),
         flow_id: flow_id.clone(),
@@ -210,6 +212,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             ],
             receivers: vec![],
             instance_id,
+            // Erster real verdrahteter Node für das "media-ready"-Signal
+            // (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep) — echter
+            // Nachweis, dass mindestens ein Video-Buffer geflossen ist
+            // (`PipelineHandle::media_ready`), kein hartkodiertes `true`.
+            media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new(move || {
+                media_ready_pipeline.media_ready()
+            })),
         },
         store,
     )

@@ -136,6 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             senders: vec![],
             receivers: vec![],
             instance_id,
+            // Hat echtes Medien-I/O, aber noch keine Bereitschafts-Probe
+            // verdrahtet (dokumentierte Folgearbeit, ARCHITECTURE.md §5
+            // Punkt 6, docs/decisions.md D5-prep) - meldet konservativ nie
+            // "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
+            media_ready: omp_node_sdk::MediaReadySource::Unknown,
         },
         store,
     )

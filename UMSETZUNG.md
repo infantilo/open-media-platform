@@ -1177,6 +1177,25 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   - `cargo deny check`/`cargo audit`: grün, keine neue Dependency nötig
     (SRT/2110-Elemente sind bereits Teil der vorhandenen GStreamer-
     Installation).
+- **D5-prep (erledigt, 2026-07-14)** Node-Contract-Grundlage aus §5 Punkt
+  6 nachgeholt, bevor D5 die SDK-Doku schreibt (sonst dokumentiert D5
+  einen Contract, der sich kurz danach ändert). „State-Export/Import über
+  den bestehenden Descriptor" war bereits erfüllt (B7-Snapshots sind der
+  laufende Beweis); neu: das „media-ready"-Signal
+  (`omp_node_sdk::MediaReadySource`, drei Zustände `NotApplicable`/
+  `Unknown`/`Probe(...)`, transportiert über den bestehenden
+  NATS-Health-Herzschlag, `media_ready`-Feld in `health::Status`
+  Rust+Go). Real verdrahtet für `omp-source` (wiederverwendet den
+  C2/C5-FPS-Buffer-Zähler als Sticky-Flag) und alle Control-Plane-Nodes
+  (`NotApplicable`); die übrigen acht Medien-Node-Typen bekommen ehrlich
+  `Unknown` (nie fälschlich „bereit") statt einer für alle kopierten,
+  ungeprüften Probe — Verdrahtung nach demselben Muster ist dokumentierte
+  Folgearbeit. Details/Scope-Begründung: `docs/decisions.md` 2026-07-14.
+  **Verifiziert:** `cargo build/test/deny/audit` (Workspace), Go-Mock
+  `build/vet/test` grün; live per NATS-Subscription gegen drei
+  gleichzeitig laufende Prozesse bestätigt, dass alle drei Varianten das
+  erwartete, unterschiedliche Ergebnis liefern; `make contract` weiterhin
+  PASS (keine Regression im Descriptor/IS-04-Pfad).
 - **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
   — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
 - **D6 (Host-Agent/Bootstrap jetzt detailliert, Rest noch nicht)**
@@ -1184,12 +1203,13 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Placement-Engine (advisory zuerst), Make-before-break-Migrationsprotokoll
   — Konzept siehe `ARCHITECTURE.md` §6.1. Die Erkennung/das Bootstrapping
   entfernter Hosts selbst (`omp-host-agent`, Token-Bootstrap über step-ca,
-  Kommandokanal) ist jetzt konkret in `ARCHITECTURE.md` §19 beschrieben —
+  Kommandokanal) ist jetzt konkret in `ARCHITECTURE.md` §18 beschrieben
+  (Abschnittsnummer seit dieser Notiz verschoben) —
   realistisch der nächste, weil community-unabhängige Baustein nach dem
   kleinen Regieplatz (C10–C13), siehe §7.4. Node-Contract-Grundlage
-  (State-Export/Import + Readiness-Signal, §5 Punkt 6) muss vor dem
-  SDK-v1-Freeze (Ende Phase C) stehen, auch wenn D6 selbst erst hier
-  detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
+  (State-Export/Import + Readiness-Signal, §5 Punkt 6, s. D5-prep oben)
+  stand vor dem SDK-v1-Freeze (Ende Phase C), auch wenn D6 selbst erst
+  hier detailliert und umgesetzt wird — auf dem Single-Host-Dev-Rechner ohnehin
   nur das Protokoll simulierbar, nicht der Ausfallfreiheits-Anspruch
   selbst.
 - **D7 (geplant, noch nicht detailliert)** Workflow-Bereitstellung &
@@ -1247,3 +1267,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |
 | D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | erledigt | [D3-2] Nutzer-/Rollenmodell: echte Anmeldung, Rollenbindungen in Postgres, Audit-Log | 2026-07-14 |
 | D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |
+| D5-prep | erledigt | [D5-prep] Node-Contract §5 Punkt 6: media-ready-Signal im SDK | 2026-07-14 |
+| D5 | offen | | |

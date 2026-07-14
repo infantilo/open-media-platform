@@ -23,6 +23,11 @@ pub struct Status {
     pub status: String,
     pub senders: usize,
     pub receivers: usize,
+    /// "media-ready"-Signal (`ARCHITECTURE.md` §5 Punkt 6, `UMSETZUNG.md`
+    /// D5-prep): ob der Node — zusätzlich zu "Prozess lebt/ist
+    /// registriert" (`status`) — tatsächlich Medien produziert/konsumiert.
+    /// Ausgewertet von [`crate::node::MediaReadySource`].
+    pub media_ready: bool,
 }
 
 /// Auf `omp.alert.<node_id>` veröffentlichter Payload — ein Node meldet

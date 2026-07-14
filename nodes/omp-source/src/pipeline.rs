@@ -63,6 +63,15 @@ struct Pipeline {
     pipeline: gst::Pipeline,
     videotestsrc: gst::Element,
     video_buffers: Arc<AtomicU64>,
+    /// Sticky-Flag, einmalig gesetzt beim ersten beobachteten Video-Buffer
+    /// — anders als `video_buffers` (bei jedem `take_video_fps()`-Aufruf
+    /// zurückgesetzt) bleibt dies wahr, sobald die Pipeline nachweislich
+    /// einmal Medien produziert hat. Grundlage des "media-ready"-Signals
+    /// (`ARCHITECTURE.md` §5 Punkt 6, `UMSETZUNG.md` D5-prep) — misst nur
+    /// den Video-Zweig (gleicher Umfang wie die bestehende FPS-Messung),
+    /// der `tee` verteilt an den MXL-Zweig gleichzeitig, der Audio-Zweig
+    /// wird nicht separat geprüft (dokumentierte Vereinfachung).
+    video_flowed: Arc<AtomicBool>,
     _mxl_output: MxlVideoOutput,
     _mxl_audio_output: MxlAudioOutput,
 }
@@ -179,12 +188,15 @@ impl Pipeline {
         mxl_audio_output.set_active(true);
 
         let video_buffers = Arc::new(AtomicU64::new(0));
+        let video_flowed = Arc::new(AtomicBool::new(false));
         let counter = video_buffers.clone();
+        let flowed = video_flowed.clone();
         let video_sink_pad = videosink
             .static_pad("sink")
             .expect("fakesink has a sink pad");
         video_sink_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
             counter.fetch_add(1, Ordering::Relaxed);
+            flowed.store(true, Ordering::Relaxed);
             gst::PadProbeReturn::Ok
         });
 
@@ -196,6 +208,7 @@ impl Pipeline {
             pipeline,
             videotestsrc,
             video_buffers,
+            video_flowed,
             _mxl_output: mxl_output,
             _mxl_audio_output: mxl_audio_output,
         })
@@ -227,15 +240,23 @@ impl Pipeline {
 }
 
 /// Griff auf die laufende Pipeline für den async Node-Lifecycle: erlaubt,
-/// `pattern` live zu ändern (Property-Set, kein Pipeline-Neuaufbau).
+/// `pattern` live zu ändern (Property-Set, kein Pipeline-Neuaufbau) und das
+/// "media-ready"-Signal abzufragen (`ARCHITECTURE.md` §5 Punkt 6).
 #[derive(Clone)]
 pub struct PipelineHandle {
     videotestsrc: gst::Element,
+    video_flowed: Arc<AtomicBool>,
 }
 
 impl PipelineHandle {
     pub fn set_pattern(&self, pattern: &str) {
         self.videotestsrc.set_property_from_str("pattern", pattern);
+    }
+
+    /// Ob mindestens ein echter Video-Buffer durch die Pipeline geflossen
+    /// ist — genutzt als `MediaReadySource::Probe`, s. `main.rs`.
+    pub fn media_ready(&self) -> bool {
+        self.video_flowed.load(Ordering::Relaxed)
     }
 }
 
@@ -256,6 +277,7 @@ pub fn run(
 
     let _ = ready.send(Ok(PipelineHandle {
         videotestsrc: pipeline.videotestsrc.clone(),
+        video_flowed: pipeline.video_flowed.clone(),
     }));
 
     loop {

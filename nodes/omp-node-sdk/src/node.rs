@@ -47,6 +47,11 @@ pub struct NodeConfig {
     /// Node korrelieren kann, ohne Ports zu kennen. `None` bei manuell
     /// (nicht über den Launcher) gestarteten Nodes.
     pub instance_id: Option<String>,
+    /// Bereitschafts-Quelle für das "media-ready"-Signal im Health-Status
+    /// (`ARCHITECTURE.md` §5 Punkt 6, `UMSETZUNG.md` D5-prep) — bewusst
+    /// ohne Default, jeder Node muss sich explizit einordnen (s.
+    /// [`MediaReadySource`]).
+    pub media_ready: MediaReadySource,
 }
 
 /// Beschreibt einen einzelnen Sender. `id`/`manifest_href` sind optional:
@@ -120,6 +125,43 @@ pub struct ReceiverSpec {
     pub id: Option<String>,
     pub transport: Option<String>,
     pub media_types: Option<Vec<String>>,
+}
+
+/// Bereitschafts-Quelle für das „media-ready"-Signal aus dem Node-Contract
+/// (`ARCHITECTURE.md` §5 Punkt 6, `UMSETZUNG.md` D5-prep): ergänzt den
+/// bestehenden Health-Status ("Prozess lebt und ist registriert") um
+/// "produziert/konsumiert tatsächlich Medien" — Grundlage für die
+/// Betriebsbereitschafts-Prüfung einer Make-before-break-Migration (§6.1
+/// Punkt 3), noch nicht Teil dieses Schritts.
+///
+/// Drei bewusst unterschiedene Fälle statt eines einzelnen `Option<Probe>`
+/// mit `None` als Default: ein still auf `true` fallender Default für
+/// Nodes ohne verdrahtete Erkennung würde eine Bereitschaft vortäuschen,
+/// die nicht geprüft wurde — genau das soll dieses Signal verhindern
+/// (`docs/decisions.md`, D5-prep).
+pub enum MediaReadySource {
+    /// Der Node hat kein Medien-I/O (z. B. ein reiner Control-Plane-Node
+    /// wie `omp-playout-automation` — `senders`/`receivers` leer) — gilt
+    /// per Definition sofort als bereit, es gibt nichts abzuwarten.
+    NotApplicable,
+    /// Der Node hat Medien-I/O, aber noch keine Bereitschafts-Probe
+    /// verdrahtet (dokumentierte Folgearbeit) — meldet konservativ nie
+    /// "bereit", statt eine ungeprüfte Bereitschaft vorzutäuschen.
+    Unknown,
+    /// Bereitschaft wird bei jedem Health-Tick über die gegebene Funktion
+    /// abgefragt (z. B. "mindestens ein echter Medien-Buffer ist durch die
+    /// Pipeline geflossen").
+    Probe(Arc<dyn Fn() -> bool + Send + Sync>),
+}
+
+impl MediaReadySource {
+    fn is_ready(&self) -> bool {
+        match self {
+            MediaReadySource::NotApplicable => true,
+            MediaReadySource::Unknown => false,
+            MediaReadySource::Probe(probe) => probe(),
+        }
+    }
 }
 
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
@@ -340,6 +382,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         config.label,
         sender_count,
         receiver_count,
+        config.media_ready,
     ));
 
     Ok(handle)
@@ -367,6 +410,7 @@ async fn heartbeat_loop(
     label: String,
     sender_count: usize,
     receiver_count: usize,
+    media_ready: MediaReadySource,
 ) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
@@ -401,6 +445,7 @@ async fn heartbeat_loop(
                 status: "ok".to_string(),
                 senders: sender_count,
                 receivers: receiver_count,
+                media_ready: media_ready.is_ready(),
             };
             if let Err(e) = publisher.publish(&status).await {
                 eprintln!("omp-node-sdk: health publish failed: {e}");
