@@ -3678,3 +3678,61 @@ Buffer-Fluss) → `media_ready:true`; `omp-playout-automation`
 `make contract NODE_URL=…` weiterhin PASS gegen eine echte
 `omp-source`-Instanz (Descriptor/IS-04/Param-Roundtrip unverändert,
 keine Regression durch die health-seitige Ergänzung).
+
+## 2026-07-14 — D5 (SDK-Doku + Node-Tutorial): Tutorial selbst durchgespielt statt nur beschrieben
+
+**Kontext:** Letzter Schritt vor Phase D bis zum aktuellen Stand
+(D6/D7 folgen als eigene, größere Bausteine). Ziel laut `UMSETZUNG.md`:
+„eine dritte Person schafft es nur mit der Doku" (in ~1 Stunde zum
+eigenen Node). Vorbedingung war D5-prep (2026-07-14, dieselbe Sitzung
+davor): der Node-Contract musste stabil sein, bevor er dokumentiert
+wird.
+
+**Kein Duplikat von `hello_node.rs`.** Das SDK hat mit
+`nodes/omp-node-sdk/examples/hello_node.rs` bereits ein vollständiges,
+funktionierendes Minimalbeispiel. Statt ein zweites, redundantes
+Beispiel zu schreiben, erklärt `docs/NODE-TUTORIAL.md` dessen Teile
+(`ParamStore`-Trait, `NodeConfig`) im Kontext des Node-Contracts (§5)
+und geht dann darüber hinaus zu dem, was `hello_node.rs` bewusst nicht
+zeigt: ein **eigenständiges** Crate (nicht nur ein `cargo example`
+innerhalb von `omp-node-sdk`) und **echtes Medien-I/O** (Verweis auf
+`omp-source` als Referenz, inkl. der `MediaReadySource`-Anleitung aus
+D5-prep).
+
+**Ehrliche Einschränkung dokumentiert, nicht verschwiegen:**
+`omp-node-sdk` ist nicht auf crates.io veröffentlicht — der heute
+tatsächlich funktionierende Weg für einen neuen Node ist ein
+Workspace-Member mit Pfad-Abhängigkeit (`{ path = "../omp-node-sdk" }`),
+kein `cargo add` von außerhalb des Repos. Das Tutorial sagt das explizit,
+statt einen nicht existierenden Publish-Workflow zu erfinden.
+
+**Verifikation: das Tutorial selbst nachgespielt, nicht nur
+geschrieben.** Vor dem Schreiben der finalen Doku-Version real
+durchgeführt, mit echten Kommando-Ausgaben in den Text übernommen (keine
+erfundenen Beispiel-Outputs):
+1. `cargo run --example hello_node` gegen die echte, per `make up`
+   laufende Registry — Registrierung, `GET /descriptor.json`,
+   `PATCH /params/gain`, `POST /methods/reset`, alles wie im Tutorial
+   beschrieben.
+2. Über den echten Orchestrator-Proxy (`make start`) bestätigt: Node
+   erscheint in `GET /api/v1/nodes` und — per Chromium-CDP-Browser-Test
+   (gleiche Methode wie C13-Nachtrag 1–4) — als Kachel im Flow-Editor.
+3. `make contract NODE_URL=…` → PASS.
+4. **Schritt 3 (eigenständiges Crate) komplett neu nachgebaut:**
+   `cd nodes && cargo new --bin tutorial-scratch-node` (fügt sich
+   automatisch als Workspace-Member ein, wie im Tutorial beschrieben),
+   `Cargo.toml` exakt wie im Tutorial-Snippet, ein neuer, vom Tutorial-
+   Autor nicht aus `hello_node.rs` kopierter `ParamStore` (andere
+   Parameternamen/Methode, um echtes Nachbauen statt Abtippen zu
+   simulieren) — kompilierte und registrierte sich **beim ersten
+   Versuch**, `make contract` PASS, Kachel im Flow-Editor per CDP
+   bestätigt. Kein Nacharbeiten am Tutorial-Text nötig, weil die
+   Anleitung schon beim ersten Durchlauf stimmte. Scratch-Crate danach
+   vollständig entfernt (`nodes/Cargo.toml`/`Cargo.lock` zurück auf den
+   committeten Stand, per `git diff` verifiziert) — reine
+   Verifikationsübung, kein dauerhafter Repo-Zusatz.
+
+**Verlinkung:** `docs/HANDBUCH.md` §5 und `nodes/README.md` verweisen
+jetzt auf `docs/NODE-TUTORIAL.md` — bewusst **nicht** in `README.md`
+verlinkt, weil dort ein nicht von dieser Sitzung stammender,
+uncommitteter Textentwurf liegt, den diese Sitzung nicht anfasst.

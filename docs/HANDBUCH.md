@@ -121,3 +121,4 @@ Dev-Maschine verifizierte Konfiguration.
   größeren Entscheidung fortgeschrieben)
 - Umsetzungsplan/Status: `UMSETZUNG.md` (Status-Checkliste am Ende)
 - Einzelentscheidungen/Blocker-Historie: `docs/decisions.md`
+- Eigenen Node-Typ bauen (SDK-Tutorial): `docs/NODE-TUTORIAL.md`

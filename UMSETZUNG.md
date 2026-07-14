@@ -1196,8 +1196,21 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   gleichzeitig laufende Prozesse bestätigt, dass alle drei Varianten das
   erwartete, unterschiedliche Ergebnis liefern; `make contract` weiterhin
   PASS (keine Regression im Descriptor/IS-04-Pfad).
-- **D5** SDK-Doku + Beispiel-Node-Tutorial („in 1 Stunde zum eigenen Node")
-  — Qualitätsmaßstab: eine dritte Person schafft es nur mit der Doku.
+- **D5 (erledigt, 2026-07-14)** SDK-Doku + Beispiel-Node-Tutorial
+  (`docs/NODE-TUTORIAL.md`) — Qualitätsmaßstab: eine dritte Person
+  schafft es nur mit der Doku. Baut auf dem bereits vorhandenen
+  `hello_node.rs`-Beispiel auf (erklärt statt dupliziert), geht darüber
+  hinaus zu einem eigenständigen Workspace-Crate (Pfad-Abhängigkeit auf
+  `omp-node-sdk`, da noch nicht auf crates.io) und echtem Medien-I/O
+  (Verweis auf `omp-source` + die `MediaReadySource`-Anleitung aus
+  D5-prep). **Verifikation:** das komplette Tutorial real durchgespielt
+  (nicht nur geschrieben) — `hello_node`-Lauf gegen die echte Registry,
+  Contract-Check PASS, Kachel im Flow-Editor per CDP-Browser-Test
+  bestätigt; Schritt 3 (eigenständiges Crate) zusätzlich als
+  eigenständige Scratch-Übung mit einem selbst geschriebenen, nicht aus
+  `hello_node.rs` kopierten `ParamStore` nachgebaut — registrierte sich
+  beim ersten Versuch, Contract-Check PASS, danach rückstandsfrei
+  entfernt. Details: `docs/decisions.md` 2026-07-14.
 - **D6 (Host-Agent/Bootstrap jetzt detailliert, Rest noch nicht)**
   Resource-Aware Placement & Live-Migration: Host-Telemetrie über NATS,
   Placement-Engine (advisory zuerst), Make-before-break-Migrationsprotokoll
@@ -1268,4 +1281,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D3 (Teil 2: IS-10/OAuth2 + §12-Rollen) | erledigt | [D3-2] Nutzer-/Rollenmodell: echte Anmeldung, Rollenbindungen in Postgres, Audit-Log | 2026-07-14 |
 | D4 | erledigt | [D4] omp-mediaio::st2110 + omp-srt-gateway (ST 2110 ⇄ SRT) | 2026-07-13 |
 | D5-prep | erledigt | [D5-prep] Node-Contract §5 Punkt 6: media-ready-Signal im SDK | 2026-07-14 |
-| D5 | offen | | |
+| D5 | erledigt | [D5] SDK-Doku + Node-Tutorial (docs/NODE-TUTORIAL.md) | 2026-07-14 |
