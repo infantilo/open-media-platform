@@ -1,0 +1,120 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+)
+
+// handleListWorkflows liefert GET /api/v1/workflows (ARCHITECTURE.md
+// §6.2, UMSETZUNG.md D7 Teil 1).
+func handleListWorkflows(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := svc.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}
+}
+
+// handleGetWorkflow liefert GET /api/v1/workflows/{id}.
+func handleGetWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		wf, err := svc.Get(r.PathValue("id"))
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+// handleCreateWorkflow liefert POST /api/v1/workflows:
+// {"name": "...", "definition": {"roles": [...], "connections": [...]}}.
+func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name       string               `json:"name"`
+			Definition workflows.Definition `json:"definition"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		wf, err := svc.Create(body.Name, body.Definition)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+// handleDeleteWorkflow liefert DELETE /api/v1/workflows/{id} — nur im
+// Zustand "stopped" (s. workflows.Service.Delete).
+func handleDeleteWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := svc.Delete(r.PathValue("id")); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handleStartWorkflow liefert POST /api/v1/workflows/{id}/start —
+// provisioniert alle Rollen im Hintergrund (s. workflows.Service.Start),
+// die Antwort trägt bereits den Zwischenzustand "starting", nicht das
+// Endergebnis; Fortschritt per GET /api/v1/workflows/{id} oder SSE
+// ("workflow.updated").
+func handleStartWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.Start(r.Context(), id); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		wf, err := svc.Get(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+// handleStopWorkflow liefert POST /api/v1/workflows/{id}/stop — analog
+// zu handleStartWorkflow asynchron, liefert den Zwischenzustand
+// "stopping".
+func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.Stop(r.Context(), id); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		wf, err := svc.Get(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+func writeWorkflowError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, workflows.ErrNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, workflows.ErrValidation):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, workflows.ErrNotStopped), errors.Is(err, workflows.ErrNotRunning):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}

@@ -26,6 +26,8 @@ import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 // hier unproblematisch, da shell.ts keine benannten Bindings daraus
 // braucht (anders als beim console-view.ts-Fall oben).
 import "./hosts-view.ts";
+// Reiner Seiteneffekt-Import, gleicher Grund wie bei hosts-view.ts oben.
+import "./workflows-view.ts";
 
 const KIOSK_ROUTE = /^\/console\/([^/]+)\/([^/]+)$/;
 
@@ -72,6 +74,33 @@ function buildHostsToggle(): HTMLElement {
   return button;
 }
 
+// buildWorkflowsToggle blendet ein <omp-workflows-view>-Panel
+// (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1) per Knopf ein/aus —
+// gleiches Muster wie buildHostsToggle, nur in der Engineering-Ansicht
+// sichtbar (Workflow-Verwaltung ist kein Operator-Konsolen-Anliegen,
+// §14 — ein laufender Workflow zeigt sich Operator:innen indirekt über
+// die dadurch erscheinenden Node-Kacheln/Konsolen, nicht über dieses
+// Panel selbst).
+function buildWorkflowsToggle(): HTMLElement {
+  const button = document.createElement("button");
+  button.textContent = "Workflows";
+  button.style.cssText =
+    "position:fixed;bottom:6px;left:70px;z-index:1000;font-size:11px;padding:4px 8px;cursor:pointer;";
+
+  let panel: HTMLElement | null = null;
+  button.addEventListener("click", () => {
+    if (panel) {
+      panel.remove();
+      panel = null;
+      return;
+    }
+    panel = document.createElement("omp-workflows-view");
+    panel.style.cssText = "position:fixed;bottom:32px;left:70px;z-index:1000;";
+    document.body.appendChild(panel);
+  });
+  return button;
+}
+
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, consoles } = await fetchConsoles();
@@ -88,6 +117,7 @@ async function renderShell(root: HTMLElement, username: string | null) {
     // solange niemand Rollenbindungen konfiguriert hat.
     root.replaceChildren(document.createElement("omp-flow-canvas"));
     document.body.appendChild(buildHostsToggle());
+    document.body.appendChild(buildWorkflowsToggle());
   } else {
     const view = document.createElement("omp-console-view") as ConsoleView;
     root.replaceChildren(view);

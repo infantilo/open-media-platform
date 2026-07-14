@@ -4072,3 +4072,129 @@ dass die Durchsetzung tatsächlich host-seitig greift und nicht nur
 dokumentiert ist. Nach der Verifikation: Test-Prozesse beendet,
 Test-Hosts aus der DB entfernt (gleiche Aufräum-Disziplin wie D6 Teil
 1).
+
+## 2026-07-14 — D7 Teil 1 (Workflow-Bereitstellung, ARCHITECTURE.md §6.2): das Workflow-Objekt selbst + Bundle-Start/-Stop mit Auto-Verkabelung, kein Scheduler/keine Placement-Vorprüfung; zwei echte UI-Race-Bugs per CDP gefunden
+
+**Kontext:** Nächster offener Schritt laut `UMSETZUNG.md`-Statustabelle
+nach D6 Teil 2. §6.2 beschreibt den vollen Umfang (Workflow-Katalog,
+Zeitsteuerung, Stop-Sicherheitsabfrage, Ressourcen-Vorprüfung gegen die
+Placement-Engine) — wieder ein expliziter Teil-Schnitt, analog zu D3/D6:
+**das Workflow-Objekt anlegen und als Bündel starten/stoppen**, nicht
+**automatisch planen, wo/wann**. §6.2 nennt selbst explizit, dass diese
+Stufe auf dem in C8/D6 Teil 2 bereits vorhandenen Instanz-Launcher
+aufbaut ("Stufe 0 … D7 baut darauf zum vollen Workflow-Objekt aus").
+
+**Einordnung:** Ein Workflow ist eine benannte Menge von Node-**Rollen**
+(Name + Katalog-Typ + optionale Host-ID) plus ein **Rolle→Rolle**-
+Verbindungs-Template (§6.2 wörtlich: nicht Port→Port) und ein
+Lifecycle-Status (stopped/starting/started/stopping/failed). Start
+provisioniert jede Rolle über den bestehenden Launcher (lokal oder
+remote, unverändert seit D6 Teil 2), wartet, bis die erwarteten
+Instanzen sich selbst in der NMOS-Registry registriert haben (Korrelation
+über den bestehenden `OMP_INSTANCE_ID`-Tag, C8), und löst danach das
+Verbindungs-Template automatisch in echte IS-05-Connections auf — auf
+den jeweils **ersten** Sender/Receiver jeder Rolle (dokumentierte
+Vereinfachung: kein Port-genaues Template in Teil 1).
+
+**In dieser Runde:**
+- `db/migrations/0004_workflows.sql` + `internal/workflows`: neues
+  Paket, ein Blob pro Workflow (`data JSONB`, gleiches Muster wie
+  `snapshots.data`, D1), `status`/`updated_at` zusätzlich als echte
+  Spalten. `Service.Start`/`Stop` laufen **asynchron im Hintergrund**
+  (eigene Goroutine): der HTTP-Handler liefert sofort den
+  Zwischenzustand ("starting"/"stopping"), der eigentliche Fortschritt
+  ist per `GET /api/v1/workflows/{id}`-Poll oder dem neuen
+  SSE-Event-Typ `workflow.updated` sichtbar — nötig, weil reale
+  GStreamer-Pipelines mehrere Sekunden zum Hochfahren brauchen und ein
+  synchroner Handler den Request-Timeout riskiert hätte.
+  Registrierungs-Wartezeit endlich begrenzt (`registrationTimeout`,
+  20s) statt unbegrenzt zu hängen, falls eine Rolle nie erscheint.
+  Fehler bei einzelnen Rollen werden gesammelt statt beim ersten Fehler
+  abzubrechen (gleiches Muster wie `snapshots.Service.Apply`) — ein
+  Teil-Start bleibt **absichtlich** laufen statt automatisch
+  zurückgerollt zu werden (volle Ressourcen-Vorprüfung, die das
+  verhindern würde, ist §6.2s "harte Vorbedingung", braucht die noch
+  zurückgestellte Placement-Engine, §6.1).
+- `internal/httpapi/workflow_handlers.go` + `server.go`:
+  `GET/POST /api/v1/workflows`, `GET/DELETE /api/v1/workflows/{id}`,
+  `POST /api/v1/workflows/{id}/start`, `POST .../stop`. Definieren ist
+  "configure" (wie Graph-Kanten/Layouts/Snapshots), Start/Stop ist
+  "admin" (wie der Instanz-Launcher selbst — ein Workflow-Start ist
+  nichts anderes als mehrere gebündelte Instanz-Starts).
+- UI: `ui/shell/workflows-view.ts` (`<omp-workflows-view>`, per Knopf
+  ein-/ausblendbares Panel, gleiches Muster wie `hosts-view.ts`) — Liste
+  mit Status-Farbe, Start/Stop/Löschen pro Workflow, sowie ein
+  Formular zum Anlegen (Rollen-Zeilen mit Katalog-Typ- und
+  Host-Auswahl, Verbindungs-Zeilen mit Rollen-Dropdowns aus den
+  aktuell eingetragenen Rollennamen).
+- **`nodes/mock`-Lücke gefunden und behoben:** der Go-Mock-Node (bisher
+  nur von Hand mit expliziten Flags gestartet, nie über den Launcher)
+  setzte den `urn:x-omp:instance`-Tag aus `OMP_INSTANCE_ID` nie —
+  `registry.NodeView.InstanceID` blieb dadurch für jede launcher-/
+  workflow-gestartete Mock-Instanz leer, die Start-Korrelation in
+  `awaitRegistration` konnte sie nie finden. Ohne den Fix hätte kein
+  Workflow mit Mock-Rollen je "started" erreicht — sauber als Timeout
+  mit Fehlermeldung sichtbar geworden (kein stiller Hänger), aber eben
+  nicht funktional. Ein-Zeilen-Fix in `nodes/mock/main.go`.
+
+**Zwei echte UI-Bugs per CDP-Klick-Test gefunden (nicht nur per
+API-curl, das hätte beide verdeckt):**
+1. `<omp-workflows-view>` rief `#render()` nie synchron in
+   `connectedCallback()` auf, sondern nur nach dem ersten aufgelösten
+   Poll — das Panel war beim Öffnen kurzzeitig komplett leer (auch der
+   "+ Neu"-Button fehlte), unauffällig bei einem menschlichen Klick mit
+   sichtbarer Verzögerung, aber ein handfester Bug. Fix: sofortiger
+   synchroner `#render()`-Aufruf vor dem ersten Poll (Muster aus
+   `hosts-view.ts` übernommen, das diesen Fehler nie hatte).
+2. **Subtiler:** der "+ Verbindung"-Button war `disabled`, solange
+   weniger als zwei Rollen benannt waren — aber Rollennamen werden über
+   ein Text-Input gepflegt, das bewusst **kein** Re-Render bei jedem
+   Tastendruck auslöst (sonst ginge der Cursor beim Tippen verloren).
+   Ohne einen anderen, zufälligen Re-Render-Auslöser (z. B. eine weitere
+   Rolle hinzufügen) blieb der Button für einen Nutzer, der einfach nur
+   zwei Rollen benennt und dann eine Verbindung ziehen will, **für immer
+   deaktiviert** — dieselbe Falle traf auch die zugehörigen
+   Verbindungs-Dropdowns (Rollenliste stammt ebenfalls nur aus dem
+   letzten Render). Fix: Rollennamen-Feld feuert zusätzlich ein
+   `"change"`-Event (nicht `"input"`, kein Cursor-Verlust während des
+   Tippens) und löst darüber gezielt ein Re-Render aus. Verwandter,
+   dritter Fund: `#loadStatic()` (Katalog/Hosts-Fetch) löste nach dem
+   Auflösen nie ein Re-Render aus — wenn das Anlegen-Formular schon
+   offen war, bevor der Fetch zurückkam, blieb die Node-Typ-Auswahl
+   dauerhaft leer. Fix: `#render()` zusätzlich nach `#loadStatic()`,
+   falls das Formular zu dem Zeitpunkt offen ist.
+
+**Bewusst nicht in dieser Runde (dokumentierte Scope-Grenze, kein
+stiller Gap):**
+- **Zeitsteuerung** (start_at/stop_at, §6.2 Erweiterung 2026-07-10) —
+  eigener Scheduler-Baustein, keine Abhängigkeit dieser Runde.
+- **Stop-Sicherheitsabfrage** (`confirm_stop`) — reine UI-/API-Ergänzung,
+  ohne funktionale Abhängigkeit nachrüstbar.
+- **Ressourcen-Vorprüfung als harte Start-Vorbedingung** — braucht die
+  noch zurückgestellte Placement-Engine (§6.1); Start in Teil 1 ist
+  best-effort mit gesammelten Fehlern statt Alles-oder-Nichts.
+- **Port-genaues Verbindungs-Template** (mehrere Sender/Receiver pro
+  Rolle) — Teil 1 verkabelt nur den jeweils ersten Sender/Receiver;
+  reicht für alle heutigen Katalog-Nodes im Regieplatz-Kontext.
+- **Cloud/k3s-Helm-Äquivalent, Quadlet-Bundle-Start** (§6.2 Zwei-Stufen-
+  Antwort) — diese Runde deckt nur den Dev-/Bare-Metal-Prozess-Pfad ab,
+  der bereits über den bestehenden Launcher läuft.
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/vet/
+test` für `orchestrator` (inkl. neuem `internal/workflows`-Paket, Store-
+Tests gegen echtes Postgres, Service-Tests mit Fakes inkl. simulierter
+Registrierungs-Timeouts) und `nodes/mock` grün, `deno check/test/
+bundle` grün. End-to-end mit echten Prozessen: zwei Katalog-Einträge auf
+denselben `nodes/mock`-Build mit unterschiedlichen Ports, ein Workflow
+mit zwei Rollen + einer Verbindung per **echtem API-Aufruf** gestartet
+— beide Prozesse liefen, registrierten sich, die Verbindung wurde
+automatisch als aktive IS-05-Connection sichtbar (`GET /api/v1/graph`
+zeigte die Kante), Stop beendete beide Prozesse sauber. Danach
+**derselbe Ablauf noch einmal komplett per echtem CDP-Klick-Test**
+(Formular ausfüllen, Rollen/Verbindung setzen, Anlegen/Start/Stop
+klicken, Status-Anzeige im Panel bis "started"/"stopped" verfolgt) —
+dabei die drei oben genannten UI-Bugs gefunden und behoben, danach mit
+demselben Klick-Test erneut grün bestätigt. Test-Prozesse, -Workflow und
+zwei versehentlich geleakte Chromium-Tabs (falscher `Target.
+closeTarget`-Aufruf in einem Wegwerf-Testskript, nicht im Produktcode)
+danach aufgeräumt.

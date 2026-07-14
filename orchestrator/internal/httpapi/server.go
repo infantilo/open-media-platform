@@ -17,6 +17,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 // AppName identifiziert den Orchestrator in /api/v1/info und Logs.
@@ -81,6 +82,18 @@ type LauncherService interface {
 	Stop(id string) error
 }
 
+// WorkflowService verwaltet Workflow-Definitionen und führt Bundle-
+// Start/-Stop aus (implementiert von *workflows.Service,
+// ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1).
+type WorkflowService interface {
+	Create(name string, def workflows.Definition) (workflows.Workflow, error)
+	List() ([]workflows.Workflow, error)
+	Get(id string) (workflows.Workflow, error)
+	Delete(id string) error
+	Start(ctx context.Context, id string) error
+	Stop(ctx context.Context, id string) error
+}
+
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
 // (implementiert von *consoles.Resolver, UMSETZUNG.md C13) — eine
 // vereinfachte Rollen-Stub-Prüfung, echte Durchsetzung folgt mit D3.
@@ -103,7 +116,9 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // /healthz, /api/v1/info, /api/v1/auth, /api/v1/nodes, /api/v1/events,
 // /api/v1/graph, /api/v1/layouts, /api/v1/snapshots, /api/v1/catalog,
 // /api/v1/instances, /api/v1/me/consoles, /api/v1/admin, /api/v1/hosts
-// (Remote-Host-Erkennung, ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1)
+// (Remote-Host-Erkennung, ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1),
+// /api/v1/workflows (Workflow-Bereitstellung & -Verteilung,
+// ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1)
 // und statisches
 // Serving von cfg.UIDir unter / (inkl. SPA-Fallback für die Kiosk-Routen
 // /console/<workflowId>/<nodeRoleId>, ARCHITECTURE.md §14). nodeClient
@@ -119,7 +134,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, workflowSvc WorkflowService) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes}
 
 	mux := http.NewServeMux()
@@ -162,6 +177,18 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
 	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry))
 	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics)))
+
+	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
+	// UMSETZUNG.md D7 Teil 1). Definieren ist "configure" (wie
+	// Graph-Kanten/Layouts/Snapshots), Start/Stop ist "admin" (wie der
+	// Instanz-Launcher — ein Workflow-Start ist nichts anderes als
+	// mehrere gebündelte Instanz-Starts).
+	mux.HandleFunc("GET /api/v1/workflows", g.requireAuth(handleListWorkflows(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/workflows/{id}", g.requireAuth(handleGetWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows", g.requireVerbGlobal(authz.VerbConfigure, handleCreateWorkflow(workflowSvc)))
+	mux.HandleFunc("DELETE /api/v1/workflows/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/start", g.requireVerbGlobal(authz.VerbAdmin, handleStartWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return noStoreForAPI(mux)

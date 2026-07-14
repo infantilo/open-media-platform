@@ -30,6 +30,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 // healthStaleAfter ist der Schwellwert für die NATS-Health-basierte
@@ -170,7 +171,13 @@ func main() {
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker)
+	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
+	// UMSETZUNG.md D7 Teil 1): bündelt mehrere launcherSvc.Start()-Aufrufe
+	// zu einem benannten Workflow und verkabelt die Rollen automatisch
+	// gemäß Verbindungs-Template, sobald sie in der Registry erscheinen.
+	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, workflowSvc)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -1327,18 +1327,59 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   bestätigt: ein Katalogtyp, der auf dem Ziel-Host nicht freigegeben
   war, wurde vom Host-Agent abgelehnt, nicht vom Orchestrator
   durchgewunken. Test-Prozesse/-Hosts danach entfernt.
-- **D7 (geplant, noch nicht detailliert)** Workflow-Bereitstellung &
-  -Verteilung: neues Objekt „Workflow" (Rollen + Verbindungs-Template +
-  Platzierungs-Hinweise), Katalog-Descriptor (optional pro Node), Start/
-  Stop ganzer Bundles (Quadlets bare-metal, Helm-Äquivalent cloud) —
-  Konzept siehe `ARCHITECTURE.md` §6.2. Teilt den Host-Telemetrie-/
-  Start-Agenten mit D6, deshalb zusammen mit D6 sequenziert, nach D4
-  (2110). Anders als D6 **kein** Node-Contract-Zusatz vor dem
-  SDK-Freeze nötig (Katalog-Descriptor ist rein additiv, nachrüstbar).
-  „Stufe 0" davon (einfacher Instanz-Launcher, ein Host, Prozesse statt
-  Bundles) ist bereits in Phase C (C8) vorgezogen, siehe
-  `ARCHITECTURE.md` §6.2 und `docs/decisions.md` 2026-07-09; D7 baut
-  darauf zum vollen Workflow-Objekt aus, ersetzt es nicht.
+- **D7** Workflow-Bereitstellung & -Verteilung: neues Objekt „Workflow"
+  (Rollen + Verbindungs-Template + Platzierungs-Hinweise),
+  Katalog-Descriptor (optional pro Node), Start/Stop ganzer Bundles
+  (Quadlets bare-metal, Helm-Äquivalent cloud) — Konzept siehe
+  `ARCHITECTURE.md` §6.2. Teilt den Host-Telemetrie-/Start-Agenten mit
+  D6, deshalb zusammen mit D6 sequenziert, nach D4 (2110). Anders als
+  D6 **kein** Node-Contract-Zusatz vor dem SDK-Freeze nötig
+  (Katalog-Descriptor ist rein additiv, nachrüstbar). „Stufe 0" davon
+  (einfacher Instanz-Launcher, ein Host, Prozesse statt Bundles) ist
+  bereits in Phase C (C8) vorgezogen, siehe `ARCHITECTURE.md` §6.2 und
+  `docs/decisions.md` 2026-07-09; D7 baut darauf zum vollen
+  Workflow-Objekt aus, ersetzt es nicht.
+
+  **D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop, erledigt,
+  2026-07-14):** analog zum D3/D6-Schnitt hier zuerst „Workflows
+  anlegen und als Bündel starten/stoppen" (§6.2s Kernwunsch), nicht
+  „automatisch planen, wo/wann" (Zeitsteuerung/Ressourcen-Vorprüfung —
+  Teil 2, noch nicht terminiert, hängt an der weiterhin
+  zurückgestellten Placement-Engine, §6.1). Neues Paket
+  `orchestrator/internal/workflows`: Workflow = Rollen (Name + Katalog-
+  Typ + optionale Host-ID) + Rolle→Rolle-Verbindungs-Template (§6.2
+  wörtlich, kein Port→Port) + Lifecycle-Status. `Start`/`Stop` laufen
+  asynchron im Hintergrund (Zwischenzustand "starting"/"stopping" sofort
+  in der HTTP-Antwort, Fortschritt per Poll oder SSE-Event
+  `workflow.updated`); provisioniert jede Rolle über den bestehenden
+  Launcher (C8/D6 Teil 2), wartet mit Timeout (20s) auf die
+  NMOS-Registrierung (Korrelation über `OMP_INSTANCE_ID`), löst dann das
+  Verbindungs-Template auf den jeweils ersten Sender/Receiver jeder
+  Rolle in echte IS-05-Connections auf. API: `GET/POST
+  /api/v1/workflows`, `GET/DELETE /api/v1/workflows/{id}`, `POST
+  .../start`, `POST .../stop`. UI: `<omp-workflows-view>`
+  (`ui/shell/workflows-view.ts`), Liste + Anlegen-Formular, gleiches
+  Toggle-Panel-Muster wie `hosts-view.ts`.
+  **Scope-Entscheidung:** Zeitsteuerung, Stop-Sicherheitsabfrage,
+  Ressourcen-Vorprüfung (§6.2-Erweiterung 2026-07-10) bewusst nicht in
+  dieser Runde — Start ist best-effort mit gesammelten Fehlern statt
+  Alles-oder-Nichts (echte Ressourcen-Vorprüfung bräuchte die
+  Placement-Engine als harte Vorbedingung, §6.1). Port-genaues
+  Verbindungs-Template ebenfalls zurückgestellt (reicht heute nicht als
+  Bedarf). **Nebenfund:** `nodes/mock` setzte den
+  `urn:x-omp:instance`-Tag nie (nur von Hand gestartet, nie über den
+  Launcher getestet) — Ein-Zeilen-Fix, sonst hätte kein Workflow mit
+  Mock-Rollen je "started" erreicht. Details/vollständiges
+  Verifikationsprotokoll inkl. zweier per CDP-Klicktest gefundener
+  UI-Race-Bugs: `docs/decisions.md` 2026-07-14 (D7 Teil 1).
+  **Verifiziert (echte Prozesse):** `go build/vet/test` für
+  `orchestrator` (neues `internal/workflows`, Store-Tests gegen echtes
+  Postgres) und `nodes/mock` grün, `deno check/test/bundle` grün.
+  End-to-end per echtem API-Aufruf UND per echtem CDP-Klicktest: ein
+  Workflow mit zwei Rollen + einer Verbindung gestartet, beide Prozesse
+  liefen und registrierten sich, die Verbindung erschien automatisch als
+  aktive IS-05-Connection im Graphen, Stop beendete beide Prozesse
+  sauber. Test-Prozesse/-Workflow danach entfernt.
 
 ---
 
@@ -1388,3 +1429,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D6 Teil 1 (Bootstrap + Telemetrie) | erledigt | [D6-1] omp-host-agent: Bootstrap-Token, Registrierung, CPU/RAM-Telemetrie, Hosts-UI-Panel | 2026-07-14 |
 | D6 Teil 2 (Kommandokanal) | erledigt | [D6-2] host-agent + orchestrator: Remote-Start/Stop über NATS, agent-lokaler Katalog als Vertrauensgrenze, UI-Host-Selector | 2026-07-14 |
 | D6 Teil 3 (Placement-Engine, §6.1) | offen | | |
+| D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop) | erledigt | [D7-1] internal/workflows: Workflow-Objekt, Rolle→Rolle-Verkabelung, Bundle-Start/-Stop, UI-Panel | 2026-07-14 |
+| D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |

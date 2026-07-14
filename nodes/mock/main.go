@@ -75,6 +75,19 @@ func main() {
 	}
 
 	node := is04.NewNode(nodeID, *label, host, *port, protocol)
+	// Instanz-Korrelation für den Launcher (UMSETZUNG.md C8/D6 Teil 2/D7
+	// Teil 1): omp-node-sdk-basierte Rust-Nodes setzen diesen Tag aus
+	// OMP_INSTANCE_ID automatisch (registry.instanceID() im
+	// Orchestrator liest ihn) — dem Go-Mock fehlte das bisher komplett,
+	// weil er bislang nur von Hand mit expliziten Flags gestartet wurde,
+	// nie über den Launcher. Ohne den Tag bleibt registry.NodeView.
+	// InstanceID leer und jede launcher-/workflow-gestartete Mock-Instanz
+	// ist für den Orchestrator nicht von einer manuell gestarteten zu
+	// unterscheiden (per Live-Test bei D7 Teil 1 gefunden: ein Workflow
+	// mit zwei Mock-Rollen lief nie aus "starting" heraus).
+	if instanceID := getEnv("OMP_INSTANCE_ID", ""); instanceID != "" {
+		node.Tags["urn:x-omp:instance"] = []string{instanceID}
+	}
 	device := is04.NewDevice(deviceID, *label+" Device", nodeID, senderIDs, receiverIDs)
 
 	senderResources := make([]is04.Sender, len(senderIDs))
