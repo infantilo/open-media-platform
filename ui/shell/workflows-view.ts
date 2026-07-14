@@ -2,10 +2,14 @@
 // (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1): benannte Bündel aus
 // Node-Rollen + Rolle→Rolle-Verbindungs-Template anlegen sowie als
 // Ganzes starten/stoppen. Bewusst kein eigenes Engineering-Dashboard
-// (§17.2 existiert noch nicht) — ein eigenständiges, per Knopf ein-/
-// ausblendbares Panel (gleiches Muster wie hosts-view.ts), reiner Poll
-// gegen GET /api/v1/workflows (kein SSE-Sonderfall nötig, s. dortiger
-// Kommentar).
+// (§17.2 existiert noch nicht) — seit K1-Teil-1 eine Vollansicht im
+// App-Bar-Tab "Workflows" (app-shell.ts), vormals ein per Knopf ein-/
+// ausblendbares Floating-Panel (gleiches Muster wie hosts-view.ts).
+// Reiner Poll gegen GET /api/v1/workflows über apiFetch() (connection.ts)
+// statt rohem fetch — ein Fehlschlag setzt den geteilten
+// ConnectionMonitor auf "degraded" statt still zu bleiben.
+import { apiFetch } from "./connection.ts";
+
 interface CatalogEntry {
   type: string;
   label: string;
@@ -58,9 +62,9 @@ class WorkflowsView extends HTMLElement {
 
   connectedCallback() {
     this.style.cssText =
-      "display:block;background:#1c1c1c;border:1px solid #333;border-radius:6px;" +
-      "padding:10px;font-family:sans-serif;font-size:12px;color:#ddd;max-width:520px;" +
-      "max-height:70vh;overflow-y:auto;";
+      "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
+      "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
+      "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     // Sofort synchron rendern (leere Liste, "+ Neu" bereits klickbar) —
     // sonst bliebe das Panel bis zum ersten aufgelösten Poll komplett
     // leer (per CDP-Test gefunden: kurzzeitig kein einziges Kind-Element,
@@ -77,7 +81,7 @@ class WorkflowsView extends HTMLElement {
 
   async #loadStatic() {
     try {
-      const [catalogRes, hostsRes] = await Promise.all([fetch("/api/v1/catalog"), fetch("/api/v1/hosts")]);
+      const [catalogRes, hostsRes] = await Promise.all([apiFetch("/api/v1/catalog"), apiFetch("/api/v1/hosts")]);
       if (catalogRes.ok) this.#catalog = await catalogRes.json();
       if (hostsRes.ok) this.#hosts = await hostsRes.json();
       // Neu rendern, falls das Anlegen-Formular schon offen ist, bevor
@@ -93,7 +97,7 @@ class WorkflowsView extends HTMLElement {
 
   async #poll() {
     try {
-      const res = await fetch("/api/v1/workflows");
+      const res = await apiFetch("/api/v1/workflows");
       if (!res.ok) return;
       this.#workflows = await res.json();
       this.#render();
@@ -112,7 +116,7 @@ class WorkflowsView extends HTMLElement {
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
       },
     };
-    const res = await fetch("/api/v1/workflows", {
+    const res = await apiFetch("/api/v1/workflows", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -129,17 +133,17 @@ class WorkflowsView extends HTMLElement {
   }
 
   async #startWorkflow(id: string) {
-    await fetch(`/api/v1/workflows/${id}/start`, { method: "POST" });
+    await apiFetch(`/api/v1/workflows/${id}/start`, { method: "POST" });
     await this.#poll();
   }
 
   async #stopWorkflow(id: string) {
-    await fetch(`/api/v1/workflows/${id}/stop`, { method: "POST" });
+    await apiFetch(`/api/v1/workflows/${id}/stop`, { method: "POST" });
     await this.#poll();
   }
 
   async #deleteWorkflow(id: string) {
-    const res = await fetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
+    const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
     if (!res.ok) {
       alert(`Löschen fehlgeschlagen: ${await res.text()}`);
       return;

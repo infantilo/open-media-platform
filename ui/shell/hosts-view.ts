@@ -1,15 +1,20 @@
 // <omp-hosts-view> — minimale Host-Liste (ARCHITECTURE.md §18.7:
 // "Sichtbarkeit im UI"; UMSETZUNG.md D6 Teil 1). Bewusst kein Teil des
-// größeren Engineering-Dashboards (§17.2, noch nicht gebaut) — ein
-// eigenständiges, per Knopf ein-/ausblendbares Panel (s. shell.ts),
-// reiner Poll gegen GET /api/v1/hosts (kein SSE-Sonderfall nötig, die
-// paar Sekunden Verzögerung sind für eine Host-Übersicht unkritisch).
+// größeren Engineering-Dashboards (§17.2, noch nicht gebaut) — seit
+// K1-Teil-1 eine Vollansicht im App-Bar-Tab "Hosts" (app-shell.ts),
+// vormals ein per Knopf ein-/ausblendbares Floating-Panel. Reiner Poll
+// gegen GET /api/v1/hosts (kein SSE-Sonderfall nötig, die paar Sekunden
+// Verzögerung sind für eine Host-Übersicht unkritisch) — jetzt über
+// apiFetch() (connection.ts), damit ein Fehlschlag den geteilten
+// ConnectionMonitor auf "degraded" setzt statt still zu bleiben.
 //
 // Seit D6 Teil 3 (ARCHITECTURE.md §6.1, advisory-only Placement-Engine)
 // zusätzlich ein Poll gegen GET /api/v1/placement/advice — gleiches
 // Poll-Muster wie oben statt eines SSE-Sonderfalls nur für dieses eine
 // Panel. Die Engine selbst greift nicht ein, das Panel zeigt nur den
 // Alarm+Vorschlag an (Host, Grund, betroffene Instanzen, Ausweichhost).
+import { apiFetch } from "./connection.ts";
+
 interface HostMetrics {
   cpuPercent: number;
   memUsedBytes: number;
@@ -61,8 +66,9 @@ class HostsView extends HTMLElement {
 
   connectedCallback() {
     this.style.cssText =
-      "display:block;background:#1c1c1c;border:1px solid #333;border-radius:6px;" +
-      "padding:10px;font-family:sans-serif;font-size:12px;color:#ddd;max-width:640px;";
+      "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
+      "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
+      "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     this.#render([], []);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
@@ -75,8 +81,8 @@ class HostsView extends HTMLElement {
   async #poll() {
     try {
       const [hostsRes, adviceRes] = await Promise.all([
-        fetch("/api/v1/hosts"),
-        fetch("/api/v1/placement/advice"),
+        apiFetch("/api/v1/hosts"),
+        apiFetch("/api/v1/placement/advice"),
       ]);
       if (!hostsRes.ok) return;
       const hosts = (await hostsRes.json()) as HostEntry[];
@@ -96,10 +102,10 @@ class HostsView extends HTMLElement {
         const seen = m ? new Date(m.receivedAt).toLocaleTimeString() : "nie";
         return `<tr>
           <td style="padding:2px 8px;">${escapeHtml(h.label)}</td>
-          <td style="padding:2px 8px;color:#999;">${escapeHtml(h.hostname)}</td>
+          <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>
           <td style="padding:2px 8px;">${mem}</td>
-          <td style="padding:2px 8px;color:#999;">${seen}</td>
+          <td style="padding:2px 8px;color:var(--omp-text-dim);">${seen}</td>
         </tr>`;
       })
       .join("");
@@ -108,8 +114,8 @@ class HostsView extends HTMLElement {
       .map((a) => {
         const target = a.suggestedHostId
           ? `Vorschlag: <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
-          : `<span style="color:#e8a33d;">kein Ausweichhost frei</span>`;
-        return `<div style="padding:6px 8px;margin-bottom:4px;background:#3a2020;border:1px solid #7a3030;border-radius:4px;">
+          : `<span style="color:var(--omp-cue);">kein Ausweichhost frei</span>`;
+        return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
           <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%),
           ${a.instanceIds.length} Instanz(en) betroffen — ${target}
         </div>`;
@@ -121,9 +127,9 @@ class HostsView extends HTMLElement {
       ${adviceBanner}
       ${
         hosts.length === 0
-          ? `<div style="color:#999;">Noch kein Host registriert.</div>`
+          ? `<div style="color:var(--omp-text-dim);">Noch kein Host registriert.</div>`
           : `<table style="border-collapse:collapse;width:100%;">
-              <thead><tr style="color:#999;text-align:left;">
+              <thead><tr style="color:var(--omp-text-dim);text-align:left;">
                 <th style="padding:2px 8px;">Label</th>
                 <th style="padding:2px 8px;">Hostname</th>
                 <th style="padding:2px 8px;">CPU</th>

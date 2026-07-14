@@ -4414,3 +4414,83 @@ Reihenfolge (K1-Teil-1 zuerst) als regulären Schritt in `UMSETZUNG.md`
 aufnehmen, sobald die Umsetzung beginnt — `docs/END-GOAL-FEATURES.md`
 bleibt bis dahin reine Design-Referenz, keine Statuszeile in
 `UMSETZUNG.md` Abschnitt 7.
+
+## 2026-07-14 — K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs, END-GOAL-FEATURES.md §1.3a/b/d): ein per Live-Test gefundener und behobener Degraded-Hänger
+
+Erste Umsetzungs-Scheibe aus Kapitel 10 (s. Eintrag oben), als
+regulärer Schritt `UMSETZUNG.md` §6a aufgenommen und in derselben
+Sitzung umgesetzt. Volle Beschreibung dort; hier nur der Teil, der über
+eine reine Statuszeile hinaus Kontext braucht.
+
+**Architektur-Entscheidung — ein geteilter ConnectionMonitor statt
+Verbindungslogik pro Komponente:** die bisherige SSE-Reconnect-Logik
+(exponentielles Backoff) steckte ausschließlich in `flow-canvas.ts`
+(`#connectEvents`/`#scheduleReconnect`, seit B4). Sie zieht komplett in
+ein neues Modul `ui/shell/connection.ts` um: ein einziges
+`EventTarget`-basiertes `ConnectionMonitor`-Singleton mit
+`connected|degraded|disconnected`, `start()` idempotent (sowohl die
+neue App-Bar als auch `flow-canvas.ts` rufen es in ihrem jeweiligen
+`connectedCallback()` auf, ohne eine zweite `EventSource` zu öffnen).
+Begründung: mit der App-Bar als eigenständigem, immer sichtbarem
+Custom Element (anders als vorher, wo nur `flow-canvas.ts` je existierte)
+hätte jede Komponente sonst ihre eigene Verbindung gebraucht, um den
+Zustand fürs Pill/Banner zu kennen — unnötige zweite SSE-Verbindung pro
+Tab-Wechsel.
+
+**Der eigentliche Fund — ein per CDP-Stop/Start-Zyklus entdeckter
+Bug, nicht nur eine Design-Vermutung:** die erste Implementierung
+verband „degraded" (Sekundärsignal, ein einzelner `apiFetch()`-
+Fehlschlag während die SSE noch lebt) nur einseitig mit Erholung:
+`reportApiSuccess()` heilt „degraded" zurück auf „connected", aber
+nichts löste je einen neuen, erfolgreichen `apiFetch()`-Aufruf aus,
+wenn gerade niemand eine Nutzeraktion auf dem Flow-Editor-Tab ausführte
+(der Tab hat anders als `hosts-view.ts`/`workflows-view.ts` kein
+periodisches Poll). Beim ersten echten Stop/Start-Testzyklus (Node-
+CDP-Client, echter `.run/orchestrator.log`-Prozess gestoppt/neu
+gestartet) blieb die Pill dauerhaft auf „degraded" hängen, obwohl der
+Orchestrator längst wieder lief und die SSE-Verbindung sich bereits
+sauber neu aufgebaut hatte. Per Chrome-DevTools-Protocol-`Network`-
+Domain-Trace (nicht Vermutung) belegt: ein `apiFetch()`-Aufruf, der
+schon **vor** dem Verbindungsabbruch losgeschickt worden war
+(`#maybeFetchPreviewUrl` in `flow-canvas.ts`, ausgelöst beim
+ursprünglichen Seitenaufbau, `t≈0.1s`), löste sich in einem
+beobachteten Lauf erst bei `t≈68.7s` mit einem 5xx auf — die SSE-
+Verbindung war zu dem Zeitpunkt bereits seit `t≈18.7s` wieder
+„connected". Dieser einzelne, längst veraltete Fehlschlag warf den
+Zustand zurück auf „degraded", ohne dass je wieder etwas ihn
+korrigierte.
+
+**Fix:** `reportApiFailure()` startet jetzt einen leisen Recovery-Probe
+gegen `/healthz` (unauthentifiziert, bereits von `deploy/dev/
+stop-omp.sh` als Liveness-Check genutzt) alle drei Sekunden, solange
+der Zustand „degraded" bleibt — der Probe läuft über denselben
+`apiFetch()`-Pfad wie jeder andere Aufrufer (kein Sonderfall, keine
+zweite Fehlerbehandlung). Erreicht `apiFetch()` dabei irgendwann
+`res.ok`, heilt `reportApiSuccess()` ganz normal zurück auf
+„connected", der Probe-Timer stoppt sich selbst (`#setState()` räumt
+ihn bei jedem Nicht-„degraded"-Übergang auf).
+
+**Verifikationsentscheidung:** die konkrete 68-Sekunden-Verzögerung war
+beim zweiten Testlauf (nach dem Fix) nicht reproduzierbar — der
+zugrunde liegende, sehr späte 5xx auf eine vor dem Abbruch gestartete
+Anfrage ist ein nichtdeterministisches Netzwerk-Timing-Artefakt, kein
+zuverlässig auslösbares Live-Szenario. Statt eines zweiten Zufallstreffers
+abhängig zu sein: ein deterministischer Unit-Test
+(`ui/shell/connection_test.ts`, `@std/testing`s `FakeTime` +
+gestubbtes `globalThis.fetch`, drei Fälle) deckt den exakten Mechanismus
+ab — Selbstheilung nach einem Fehlschlag, wiederholtes Retry über
+mehrere 3s-Zyklen bis zum tatsächlichen Erfolg, 4xx zählt nicht als
+Konnektivitätsproblem. Der Live-CDP-Test selbst deckte danach den
+architektonisch geforderten Kernfall sauber ab (Stop → Pill
+„disconnected" binnen ~12s, Banner mit Countdown, Content gesperrt →
+Start → SSE reconnected binnen ~18s, Pill „connected", Banner weg,
+aktiver Tab frisch neu gemountet).
+
+**Scope-Grenze (§1.4-Phasenplan, nicht in dieser Sitzung):**
+Settings-Menü (Teil 3, inkl. des in §1.3b erwähnten Zahnrads —
+Teil 1 liefert nur Pill + Tabs), `ui/kit`-Bausteine und Node-Bundle-
+Migration auf Tokens (Teil 2), Nutzer-Präferenzen in Postgres +
+Sprachumschaltung (Teil 4). SVG-Canvas/Breadcrumb/Snapshot-Bar/Palette
+in `flow-canvas.ts` bewusst nicht auf Design-Tokens umgezogen — §1.4
+nennt für Teil 1 nur App-Bar, Hosts-/Workflows-View, Toasts und das
+Parameter-Panel als „Shell-eigene Flächen".

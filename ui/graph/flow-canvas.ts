@@ -43,6 +43,7 @@ import {
   type ParamSpec,
 } from "./controls.ts";
 import { mountUIBundle } from "../shell/ui-bundle.ts";
+import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -152,8 +153,6 @@ type DragState =
   | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point }
   | { kind: "select"; startScreen: Point };
 
-const SSE_RECONNECT_INITIAL_DELAY_MS = 1000;
-const SSE_RECONNECT_MAX_DELAY_MS = 15000;
 // Event-Typen, die ein volles Neuladen des Graphen auslösen: Node-
 // Inventar-Änderungen (registry.Poller) sowie Kanten-Änderungen
 // (graph.Service.publish) — letztere fehlten bis zu einem Bugfix nach
@@ -199,12 +198,12 @@ export class FlowCanvas extends HTMLElement {
   #snapshotBar!: HTMLDivElement;
   #palette!: HTMLDivElement;
 
-  #eventSource: EventSource | null = null;
   // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
   #renderQueue: Promise<void> = Promise.resolve();
-  #reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
-  #reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   #viewportSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Bindung an den geteilten ConnectionMonitor (UMSETZUNG.md K1-Teil-1)
+  // statt einer eigenen EventSource — s. #onSseMessage/connectedCallback.
+  #onSseMessage = (ev: Event) => this.#handleServerEvent((ev as CustomEvent<string>).detail);
   // Gesetzt von #loadLayout(), wenn kein gespeicherter Viewport vorliegt —
   // #fetchAndRender() zentriert dann einmalig auf den (bereits bereinigten)
   // Kachel-Bestand, s. #pruneStalePositions().
@@ -228,14 +227,19 @@ export class FlowCanvas extends HTMLElement {
     this.#buildSkeleton();
     document.addEventListener("keydown", this.#onKeyDown);
     this.#init();
-    this.#connectEvents();
+    // Geteilte EventSource-Verbindung (UMSETZUNG.md K1-Teil-1):
+    // connectionMonitor.start() ist idempotent, die App-Bar
+    // (app-shell.ts) ruft sie unabhängig ebenfalls auf — hier wird nur
+    // noch auf rohe SSE-Payloads gehorcht, nicht mehr selbst verbunden/
+    // reconnectet (das übernimmt jetzt ausschließlich connection.ts).
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
+    connectionMonitor.start();
   }
 
   disconnectedCallback() {
     document.removeEventListener("keydown", this.#onKeyDown);
-    clearTimeout(this.#reconnectTimer);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     clearTimeout(this.#viewportSaveTimer);
-    this.#eventSource?.close();
   }
 
   async #init() {
@@ -247,7 +251,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #loadLayout() {
     try {
-      const response = await fetch(`/api/v1/layouts/${LAYOUT_NAME}`);
+      const response = await apiFetch(`/api/v1/layouts/${LAYOUT_NAME}`);
       if (response.ok) {
         const blob = (await response.json()) as Partial<LayoutBlob>;
         this.#positions = blob.positions ?? {};
@@ -283,7 +287,7 @@ export class FlowCanvas extends HTMLElement {
       viewport: this.#viewport,
     };
     try {
-      const response = await fetch(`/api/v1/layouts/${LAYOUT_NAME}`, {
+      const response = await apiFetch(`/api/v1/layouts/${LAYOUT_NAME}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(blob),
@@ -296,36 +300,17 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
-  // Verbindet den Live-Status-Overlay-Stream (UMSETZUNG.md B4): Node-
-  // Inventar-Änderungen (A6) und Kanten-Änderungen (graph.Service, auch
-  // von fremden Clients/Skripten) lösen ein Neuladen des Graphen aus,
-  // Tally-Events (omp.tally.<id>) färben die betroffene Kachel rot.
-  // Bei Verbindungsabbruch reconnectet mit exponentiellem Backoff statt
-  // sich auf EventSources festen Standard-Retry zu verlassen.
-  #connectEvents() {
-    const es = new EventSource("/api/v1/events");
-    this.#eventSource = es;
-
-    es.onopen = () => {
-      this.#reconnectDelayMs = SSE_RECONNECT_INITIAL_DELAY_MS;
-    };
-    es.onmessage = (ev) => this.#handleServerEvent(ev);
-    es.onerror = () => {
-      es.close();
-      this.#scheduleReconnect();
-    };
-  }
-
-  #scheduleReconnect() {
-    clearTimeout(this.#reconnectTimer);
-    this.#reconnectTimer = setTimeout(() => this.#connectEvents(), this.#reconnectDelayMs);
-    this.#reconnectDelayMs = Math.min(this.#reconnectDelayMs * 2, SSE_RECONNECT_MAX_DELAY_MS);
-  }
-
-  #handleServerEvent(ev: MessageEvent) {
+  // Reagiert auf Live-Status-Overlay-Events (UMSETZUNG.md B4), die der
+  // geteilte ConnectionMonitor (connection.ts, K1-Teil-1) roh
+  // weiterreicht: Node-Inventar-Änderungen (A6) und Kanten-Änderungen
+  // (graph.Service, auch von fremden Clients/Skripten) lösen ein
+  // Neuladen des Graphen aus, Tally-Events (omp.tally.<id>) färben die
+  // betroffene Kachel rot. Verbindungsaufbau/-abbruch/Reconnect-Backoff
+  // sind nicht mehr Sache dieser Klasse.
+  #handleServerEvent(data: string) {
     let parsed: { type: string; data: unknown };
     try {
-      parsed = JSON.parse(ev.data);
+      parsed = JSON.parse(data);
     } catch {
       return;
     }
@@ -403,9 +388,9 @@ export class FlowCanvas extends HTMLElement {
     panel.setAttribute("data-role", "parameter-panel");
     panel.style.cssText =
       "position:absolute;top:0;right:0;bottom:0;width:280px;" +
-      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
-      "padding:10px;padding-top:36px;overflow-y:auto;display:none;" +
-      "z-index:20;border-left:1px solid #444;box-sizing:border-box;";
+      "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);" +
+      "font-size:var(--omp-font-size-sm);padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
+      "display:none;z-index:20;border-left:1px solid var(--omp-border);box-sizing:border-box;";
 
     const snapshotBar = document.createElement("div");
     snapshotBar.setAttribute("data-role", "snapshot-bar");
@@ -436,7 +421,7 @@ export class FlowCanvas extends HTMLElement {
   }
 
   async #fetchAndRender() {
-    const response = await fetch("/api/v1/graph");
+    const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
     // Beide geben nur zurück, *ob* sich #positions geändert hat, statt
     // selbst zu speichern — sonst würde ein Zwischen-Save mit dem noch
@@ -867,7 +852,7 @@ export class FlowCanvas extends HTMLElement {
   #maybeFetchPreviewUrl(nodeId: string) {
     if (this.#previewUrlById.has(nodeId) || this.#previewFetchInFlight.has(nodeId)) return;
     this.#previewFetchInFlight.add(nodeId);
-    fetch(`/api/v1/nodes/${nodeId}/params/previewUrl`)
+    apiFetch(`/api/v1/nodes/${nodeId}/params/previewUrl`)
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => {
         const url = body && typeof body.value === "string" && body.value ? body.value : null;
@@ -1223,7 +1208,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #createEdge(fromSender: string, toReceiver: string) {
     try {
-      const response = await fetch("/api/v1/graph/edges", {
+      const response = await apiFetch("/api/v1/graph/edges", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ from: fromSender, to: toReceiver }),
@@ -1247,7 +1232,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #removeEdge(edgeId: string) {
     try {
-      const response = await fetch(`/api/v1/graph/edges/${encodeURIComponent(edgeId)}`, {
+      const response = await apiFetch(`/api/v1/graph/edges/${encodeURIComponent(edgeId)}`, {
         method: "DELETE",
       });
       if (!response.ok) {
@@ -1300,7 +1285,7 @@ export class FlowCanvas extends HTMLElement {
   async #renderGenericPanel(nodeId: string) {
     let descriptor: Descriptor;
     try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/descriptor`);
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/descriptor`);
       if (!res.ok) throw new Error(String(res.status));
       descriptor = await res.json();
     } catch (err) {
@@ -1342,7 +1327,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #fetchParamValue(nodeId: string, name: string): Promise<unknown> {
     try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${name}`);
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/params/${name}`);
       if (res.ok) return (await res.json()).value;
     } catch {
       // Steuerelement zeigt dann einen Platzhalter.
@@ -1447,7 +1432,7 @@ export class FlowCanvas extends HTMLElement {
   // versuchte Client-Wert.
   async #patchParam(nodeId: string, param: ParamSpec, newValue: unknown, wrapper: HTMLElement) {
     try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${param.name}`, {
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/params/${param.name}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: newValue }),
@@ -1475,7 +1460,7 @@ export class FlowCanvas extends HTMLElement {
     }
 
     try {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/methods/${method.name}`, {
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/methods/${method.name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
@@ -1507,7 +1492,7 @@ export class FlowCanvas extends HTMLElement {
     this.#snapshotBar.appendChild(list);
 
     try {
-      const res = await fetch("/api/v1/snapshots");
+      const res = await apiFetch("/api/v1/snapshots");
       if (res.ok) {
         const snaps = (await res.json()) as SnapshotSummary[];
         for (const snap of snaps) {
@@ -1530,7 +1515,7 @@ export class FlowCanvas extends HTMLElement {
     if (!label) return;
 
     try {
-      const res = await fetch("/api/v1/snapshots", {
+      const res = await apiFetch("/api/v1/snapshots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label }),
@@ -1547,7 +1532,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #applySnapshot(id: string) {
     try {
-      const res = await fetch(`/api/v1/snapshots/${id}/apply`, { method: "POST" });
+      const res = await apiFetch(`/api/v1/snapshots/${id}/apply`, { method: "POST" });
       if (!res.ok) {
         this.#showToast(`Snapshot anwenden fehlgeschlagen: ${res.status}`);
         return;
@@ -1577,9 +1562,9 @@ export class FlowCanvas extends HTMLElement {
 
     try {
       const [catalogRes, instancesRes, hostsRes] = await Promise.all([
-        fetch("/api/v1/catalog"),
-        fetch("/api/v1/instances"),
-        fetch("/api/v1/hosts"),
+        apiFetch("/api/v1/catalog"),
+        apiFetch("/api/v1/instances"),
+        apiFetch("/api/v1/hosts"),
       ]);
       if (!catalogRes.ok) return;
       const catalog = (await catalogRes.json()) as CatalogEntry[];
@@ -1685,7 +1670,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #startInstance(type: string, hostId?: string) {
     try {
-      const res = await fetch("/api/v1/instances", {
+      const res = await apiFetch("/api/v1/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(hostId ? { type, hostId } : { type }),
@@ -1711,7 +1696,7 @@ export class FlowCanvas extends HTMLElement {
 
   async #stopInstance(instanceId: string) {
     try {
-      const res = await fetch(`/api/v1/instances/${encodeURIComponent(instanceId)}`, {
+      const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -1739,8 +1724,9 @@ export class FlowCanvas extends HTMLElement {
     toast.setAttribute("data-role", "toast");
     toast.style.cssText =
       "position:fixed;bottom:16px;left:50%;transform:translateX(-50%);" +
-      "background:#c0392b;color:#fff;padding:8px 16px;border-radius:4px;" +
-      "font-family:sans-serif;font-size:13px;z-index:1000;opacity:0.95;";
+      "background:var(--omp-error);color:#fff;padding:var(--omp-space-2) var(--omp-space-4);" +
+      "border-radius:var(--omp-radius);font-family:var(--omp-font);font-size:var(--omp-font-size-md);" +
+      "z-index:1000;opacity:0.95;";
     this.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
   }

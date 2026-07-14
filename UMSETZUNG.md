@@ -1434,6 +1434,114 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 
 ---
 
+## 6a. Kapitel 10 — Endziel-Anforderungen (`docs/END-GOAL-FEATURES.md`)
+
+Alle zehn Entscheidungspunkte aus `docs/END-GOAL-FEATURES.md` Kapitel 10
+wurden am 2026-07-14 getroffen (Details dort und in `docs/decisions.md`
+2026-07-14 „Entscheidungssitzung END-GOAL-FEATURES Kapitel 10"). Diese
+Sektion nimmt die einzelnen „Teil 1"-Scheiben als reguläre Schritte auf,
+in der dort festgelegten Reihenfolge: K1-Teil-1 → K2-Teil-1 →
+K3/K4-Teil-1 → K5 → K6, K7-Teil-1 und K9-Teil-0 unabhängig/parallel
+startbar.
+
+**K1-Teil-1 (UI-Verbindungsschicht + App-Bar mit Tabs, erledigt,
+2026-07-14):** `docs/END-GOAL-FEATURES.md` §1.3a/b/d — kleinste,
+präsentationswirksamste Scheibe aus Kapitel 1 (Kapitel-10-Entscheidung
+2: Studio-Dark als einziges Theme, Englisch als Primärsprache mit
+DE-Umschaltung — Umschaltung selbst ist Teil 4 —, Floating-Panels werden
+zu Vollansichten mit Tabs). Drei neue Bausteine:
+
+- **`ui/design-tokens.css`** — der in §1.3d vorgeschlagene Token-Satz
+  (Flächen/Text/Signalfarben/Typo/Radius-Spacing/Glow-Zustände) plus
+  `@keyframes omp-pulse` für den Disconnected-Banner; per `<link>` aus
+  `ui/index.html` geladen (Custom Properties durchdringen Shadow-DOM,
+  §22.2 — kein zusätzlicher Import pro Bundle nötig, damit sie wirken).
+  `index.html` außerdem `lang="de"` → `lang="en"` (Kapitel-10-
+  Entscheidung 2).
+- **`ui/shell/connection.ts`** (neu) — `ConnectionMonitor`
+  (`connected|degraded|disconnected`, `EventTarget`-basiert) plus
+  `apiFetch()`. Die bisher in `flow-canvas.ts` verbaute SSE-Verbindung
+  (`#connectEvents`/`#scheduleReconnect`) zieht hierher um: genau eine
+  `EventSource` pro Shell statt einer pro Komponente (`start()` ist
+  idempotent). Primärsignal SSE (`onopen`→„connected", `onerror`→
+  „disconnected" + Backoff-Reconnect, unveränderte Konstanten aus der
+  alten `flow-canvas.ts`-Logik); Sekundärsignal `apiFetch()` statt
+  rohem `fetch` in `flow-canvas.ts`/`hosts-view.ts`/`workflows-view.ts`
+  (18 bzw. 6 Aufrufstellen) — ein 5xx/Netzwerkfehler dort setzt
+  „degraded" (nur während „connected", überschreibt kein bereits
+  sichtbares „disconnected"), ein 4xx bleibt bewusst folgenlos
+  (legitime Anwendungsantwort, kein Konnektivitätssymptom).
+- **`ui/shell/app-shell.ts`** (neu, `<omp-app-shell>`) — ersetzt die
+  zwei Floating-Toggle-Buttons (`shell.ts`: vormals
+  `buildHostsToggle`/`buildWorkflowsToggle`) durch eine 48px-App-Bar
+  (Produktname, Tabs „Flow Editor · Workflows · Hosts", Verbindungs-Pill)
+  über einer Content-Fläche, die den jeweils aktiven Tab als
+  vollwertige Ansicht rendert (Kapitel-10-Entscheidung: Vollansichten
+  statt andockbarer Panels). Bei „disconnected": rot pulsierender
+  Banner mit Live-Countdown bis zum nächsten Reconnect-Versuch und
+  „Reconnect now"-Knopf (`connectionMonitor.reconnectNow()`), die
+  Content-Fläche bekommt `aria-disabled` + reduzierte Deckkraft +
+  `pointer-events:none` („kein Klick ins Leere"). Reconnect
+  (disconnected → connected) remountet den aktiven Tab (frisches
+  `document.createElement(...)`), damit Graph/Panel-Daten einmal neu
+  geladen werden — nutzt die ohnehin vorhandenen
+  `connectedCallback()`-Ladepfade der Views, kein neuer Reload-
+  Mechanismus. `shell.ts` mountet in der Engineering-Ansicht jetzt
+  `<omp-app-shell>` statt `<omp-flow-canvas>` + zwei Buttons.
+- **Design-Token-Migration** auf den in §1.4 explizit benannten
+  „Shell-eigenen Flächen": App-Bar (neu, von Anfang an mit Tokens),
+  `hosts-view.ts`/`workflows-view.ts` (jetzt Vollansicht statt
+  Floating-Panel: `max-width`/`max-height` entfernt, `width/height:100%`),
+  Toast + Parameter-Panel in `flow-canvas.ts`. SVG-Canvas/Breadcrumb/
+  Snapshot-Bar/Palette bewusst **nicht** angefasst (nicht Teil der
+  Teil-1-Aufzählung — folgt mit der Node-Bundle-/Kit-Migration in
+  Teil 2). Gear-Icon/Settings-Panel selbst: **zurückgestellt auf
+  Teil 3** (eigene Datei `settings-view.ts`, dort spezifiziert), Teil 1
+  liefert nur Pill + Tabs, kein Zahnrad.
+
+  **Echter Bug per Live-Test gefunden und behoben:** beim CDP-
+  Stop/Start-Zyklus des Orchestrators blieb die Pill nach einem
+  Neustart dauerhaft auf „degraded" hängen statt zu „connected"
+  zurückzukehren. Ursache (per `Network`-Domain-Trace der echten
+  Requests belegt, nicht vermutet): ein einzelner `apiFetch()`-Aufruf,
+  der schon **vor** dem Abbruch lief (`#maybeFetchPreviewUrl` in
+  `flow-canvas.ts`, ausgelöst beim ursprünglichen Seitenaufbau), löste
+  sich in einem beobachteten Fall erst 68 Sekunden später mit einem
+  5xx auf — lange nachdem die SSE-Verbindung längst wieder „connected"
+  war. Da auf dem Flow-Editor-Tab sonst nichts periodisch `apiFetch()`
+  aufruft, gab es keine Selbstkorrektur. Fix: `reportApiFailure()`
+  startet einen leisen Recovery-Probe gegen `/healthz`
+  (unauthentifiziert, bereits von `stop-omp.sh` genutzt) alle 3s,
+  solange der Zustand „degraded" bleibt — der Probe ruft denselben
+  `apiFetch()`-Pfad auf wie jeder andere Aufrufer, kein Sonderfall.
+  Deterministisch abgesichert in `ui/shell/connection_test.ts` (drei
+  Fälle: Selbstheilung nach einem Fehlschlag, wiederholtes Retry über
+  mehrere Probe-Zyklen mit `@std/testing`s `FakeTime`, 4xx zählt nicht
+  als Konnektivitätsproblem) statt sich auf die live beobachtete,
+  nicht deterministisch reproduzierbare 68s-Verzögerung zu verlassen.
+
+  **Scope-Entscheidung:** Settings-Menü (c), `ui/kit`-Bausteine,
+  Node-Bundle-Migration auf Tokens, Nutzer-Präferenzen/i18n-Umschaltung
+  sind Teil 2–4, hier bewusst nicht enthalten (§1.4-Phasenplan).
+
+  **Verifiziert:** `deno check`/`deno test ui/`
+  (40 Tests grün, davon 3 neu für den Degraded-Recovery-Fix) /
+  `deno bundle` grün. Live per CDP (Node-WebSocket-Client, kein
+  `--dump-dom` — Projekt-Memory zu sequenziellen Fetch-Ketten): echter
+  Orchestrator-Stop/Start-Zyklus zweimal gefahren. Erster Lauf deckte
+  den Degraded-Hänger auf; nach dem Fix zeigte ein zweiter Lauf den
+  vollständigen Zyklus sauber: „Connected" → (Prozess gestoppt) →
+  Pill „Disconnected" binnen ~12s, Banner erscheint mit Countdown,
+  Content-Fläche `aria-disabled`/gesperrt → (Prozess neu gestartet) →
+  SSE reconnected binnen ~18s, Pill zurück auf „Connected", Banner
+  verschwindet, Content entsperrt, Flow-Editor-Tab frisch neu gemountet
+  (Graph/Layout/Snapshots/Katalog erneut geladen). Zusätzlich per
+  CDP-Klick durch alle drei Tabs (Flow Editor/Workflows/Hosts) ohne
+  Konsolenfehler. Keine Test-Ressourcen (Hosts/Instanzen) angelegt,
+  nichts aufzuräumen.
+
+---
+
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
 
 | Schritt | Status | Commit | Datum |
@@ -1482,3 +1590,4 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D6 Teil 3 (Placement-Engine, §6.1) | erledigt | [D6-3] internal/placement: advisory-only Resource-Aware Placement, CPU/RAM-Schwellwerte, Ausweichhost-Vorschlag, SSE-Event, Hosts-UI-Banner | 2026-07-14 |
 | D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop) | erledigt | [D7-1] internal/workflows: Workflow-Objekt, Rolle→Rolle-Verkabelung, Bundle-Start/-Stop, UI-Panel | 2026-07-14 |
 | D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |
+| K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |

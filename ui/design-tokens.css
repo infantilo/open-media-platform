@@ -1,0 +1,69 @@
+/* Design-Tokens (ARCHITECTURE.md §22.2, END-GOAL-FEATURES.md §1.3d,
+   UMSETZUNG.md K1-Teil-1). Studio-Dark ist per Kapitel-10-Entscheidung
+   das einzige initiale Theme (kein Light/Dark-Umschalter in Teil 1) —
+   Theme-Auswahl selbst ist Teil 3 (Settings-Panel).
+
+   Custom Properties auf :root, damit sie Shadow-DOM-Grenzen durchdringen
+   (das ist genau der dafür vorgesehene Mechanismus, §22.2) — jedes
+   ui/kit-Bauteil und jedes Node-UI-Bundle kann sie lesen, ohne diese
+   Datei selbst zu importieren, solange sie im Light-DOM-Head der Seite
+   verlinkt ist. */
+:root {
+  /* Flächen */
+  --omp-bg: #101214;
+  --omp-surface: #1a1d21;
+  --omp-surface-raised: #22262b;
+  --omp-border: #2e3338;
+
+  /* Text */
+  --omp-text: #e8eaed;
+  --omp-text-dim: #9aa0a6;
+  --omp-text-disabled: #5f6368;
+
+  /* Signalfarben (Broadcast-Semantik, überall identisch verwenden) */
+  --omp-onair: #e53935;
+  --omp-preset: #43a047;
+  --omp-cue: #fb8c00;
+  --omp-info: #4285f4;
+  --omp-error: #ef5350;
+
+  /* Typografie */
+  --omp-font: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --omp-font-mono: ui-monospace, "SF Mono", "Cascadia Code", monospace;
+  --omp-font-size-xs: 11px;
+  --omp-font-size-sm: 12px;
+  --omp-font-size-md: 13px;
+  --omp-font-size-lg: 15px;
+
+  /* Radius/Spacing (4er-Raster) */
+  --omp-radius: 6px;
+  --omp-space-1: 4px;
+  --omp-space-2: 8px;
+  --omp-space-3: 12px;
+  --omp-space-4: 16px;
+
+  /* Zustands-Schatten ("beleuchteter Knopf"-Effekt für K3/K4) */
+  --omp-glow-onair: 0 0 6px 1px rgba(229, 57, 53, 0.6);
+  --omp-glow-preset: 0 0 6px 1px rgba(67, 160, 71, 0.6);
+  --omp-glow-cue: 0 0 6px 1px rgba(251, 140, 0, 0.6);
+
+  /* App-Bar */
+  --omp-appbar-height: 48px;
+}
+
+html,
+body {
+  background: var(--omp-bg);
+  color: var(--omp-text);
+  font-family: var(--omp-font);
+}
+
+@keyframes omp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}

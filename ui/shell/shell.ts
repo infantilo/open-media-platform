@@ -12,7 +12,6 @@
 // Modus, s. authGate im Orchestrator), liefert whoami() authRequired
 // false — die Shell verhält sich dann exakt wie vor D3 Teil 2 (kein
 // Login-Screen, immer Engineering-Ansicht als Default).
-import "../graph/flow-canvas.ts";
 // Getrennter Seiteneffekt-Import nötig: `ConsoleView` wird unten nur in
 // Typposition (`as ConsoleView`) verwendet — ein reiner Werte+Typ-Import
 // würde vom Bundler als "nur Typ gebraucht" wegoptimiert und damit auch
@@ -23,11 +22,10 @@ import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
-// hier unproblematisch, da shell.ts keine benannten Bindings daraus
-// braucht (anders als beim console-view.ts-Fall oben).
-import "./hosts-view.ts";
-// Reiner Seiteneffekt-Import, gleicher Grund wie bei hosts-view.ts oben.
-import "./workflows-view.ts";
+// gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
+// importiert seinerseits flow-canvas.ts/hosts-view.ts/workflows-view.ts
+// (UMSETZUNG.md K1-Teil-1: App-Bar mit Tabs statt Floating-Panels).
+import "./app-shell.ts";
 
 const KIOSK_ROUTE = /^\/console\/([^/]+)\/([^/]+)$/;
 
@@ -51,56 +49,6 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   return { hasEngineeringAccess: body.hasEngineeringAccess, consoles: body.consoles ?? [] };
 }
 
-// buildHostsToggle blendet ein <omp-hosts-view>-Panel (ARCHITECTURE.md
-// §18.7) per Knopf ein/aus — nur in der Engineering-Ansicht sichtbar,
-// Host-Verwaltung ist kein Operator-Konsolen-Anliegen (§14).
-function buildHostsToggle(): HTMLElement {
-  const button = document.createElement("button");
-  button.textContent = "Hosts";
-  button.style.cssText =
-    "position:fixed;bottom:6px;left:6px;z-index:1000;font-size:11px;padding:4px 8px;cursor:pointer;";
-
-  let panel: HTMLElement | null = null;
-  button.addEventListener("click", () => {
-    if (panel) {
-      panel.remove();
-      panel = null;
-      return;
-    }
-    panel = document.createElement("omp-hosts-view");
-    panel.style.cssText = "position:fixed;bottom:32px;left:6px;z-index:1000;";
-    document.body.appendChild(panel);
-  });
-  return button;
-}
-
-// buildWorkflowsToggle blendet ein <omp-workflows-view>-Panel
-// (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1) per Knopf ein/aus —
-// gleiches Muster wie buildHostsToggle, nur in der Engineering-Ansicht
-// sichtbar (Workflow-Verwaltung ist kein Operator-Konsolen-Anliegen,
-// §14 — ein laufender Workflow zeigt sich Operator:innen indirekt über
-// die dadurch erscheinenden Node-Kacheln/Konsolen, nicht über dieses
-// Panel selbst).
-function buildWorkflowsToggle(): HTMLElement {
-  const button = document.createElement("button");
-  button.textContent = "Workflows";
-  button.style.cssText =
-    "position:fixed;bottom:6px;left:70px;z-index:1000;font-size:11px;padding:4px 8px;cursor:pointer;";
-
-  let panel: HTMLElement | null = null;
-  button.addEventListener("click", () => {
-    if (panel) {
-      panel.remove();
-      panel = null;
-      return;
-    }
-    panel = document.createElement("omp-workflows-view");
-    panel.style.cssText = "position:fixed;bottom:32px;left:70px;z-index:1000;";
-    document.body.appendChild(panel);
-  });
-  return button;
-}
-
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, consoles } = await fetchConsoles();
@@ -114,10 +62,11 @@ async function renderShell(root: HTMLElement, username: string | null) {
     // Kein Rollenbindungs-Treffer überhaupt (typischerweise: noch keine
     // Rollenbindungen angelegt) fällt bewusst auf Engineering zurück —
     // das vor C13 einzig existierende Verhalten bleibt der Default,
-    // solange niemand Rollenbindungen konfiguriert hat.
-    root.replaceChildren(document.createElement("omp-flow-canvas"));
-    document.body.appendChild(buildHostsToggle());
-    document.body.appendChild(buildWorkflowsToggle());
+    // solange niemand Rollenbindungen konfiguriert hat. Seit K1-Teil-1
+    // ist die Engineering-Ansicht die App-Bar-Shell (Tabs Flow-Editor/
+    // Workflows/Hosts) statt des nackten <omp-flow-canvas> + zwei
+    // Floating-Toggle-Buttons.
+    root.replaceChildren(document.createElement("omp-app-shell"));
   } else {
     const view = document.createElement("omp-console-view") as ConsoleView;
     root.replaceChildren(view);
