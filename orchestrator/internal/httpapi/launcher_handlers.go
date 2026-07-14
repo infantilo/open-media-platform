@@ -23,18 +23,22 @@ func handleListInstances(svc LauncherService) http.HandlerFunc {
 }
 
 // handlePostInstance liefert POST /api/v1/instances: {"type":
-// "<catalogType>"} startet eine neue Instanz.
+// "<catalogType>"} startet eine neue Instanz lokal; ein zusätzliches
+// {"hostId": "<hostId>"} (ARCHITECTURE.md §18.5, UMSETZUNG.md D6 Teil
+// 2) startet sie stattdessen auf dem entsprechend registrierten
+// Remote-Host. Fehlt hostId, unverändertes Verhalten seit C8.
 func handlePostInstance(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Type string `json:"type"`
+			Type   string `json:"type"`
+			HostID string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
 
-		inst, err := svc.Start(body.Type)
+		inst, err := svc.Start(body.Type, body.HostID)
 		if err != nil {
 			writeLauncherError(w, err)
 			return
@@ -60,6 +64,8 @@ func writeLauncherError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, launcher.ErrUnsupportedRunner):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, launcher.ErrRemoteUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -61,26 +62,26 @@ func stubbornCatalog() []CatalogEntry {
 }
 
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	if _, err := l.Start("does-not-exist"); err != ErrUnknownType {
+	if _, err := l.Start("does-not-exist", ""); err != ErrUnknownType {
 		t.Fatalf("Start() error = %v, want ErrUnknownType", err)
 	}
 }
 
 func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "podman", Command: []string{"true"}}}
-	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), nil)
+	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	if _, err := l.Start("x"); err != ErrUnsupportedRunner {
+	if _, err := l.Start("x", ""); err != ErrUnsupportedRunner {
 		t.Fatalf("Start() error = %v, want ErrUnsupportedRunner", err)
 	}
 }
 
 func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	inst, err := l.Start("sleepy")
+	inst, err := l.Start("sleepy", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -112,8 +113,8 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	stopGracePeriod = 500 * time.Millisecond
 	defer func() { stopGracePeriod = original }()
 
-	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
-	inst, err := l.Start("stubborn")
+	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	inst, err := l.Start("stubborn", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -127,7 +128,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 }
 
 func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil)
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 	if err := l.Stop("does-not-exist"); err != ErrUnknownInstance {
 		t.Fatalf("Stop() error = %v, want ErrUnknownInstance", err)
 	}
@@ -135,14 +136,14 @@ func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
 
 func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
-	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil)
-	inst, err := l1.Start("sleepy")
+	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil, nil)
+	inst, err := l1.Start("sleepy", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer func() { _ = l1.Stop(inst.ID) }()
 
-	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil)
+	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil, nil)
 	list := l2.List()
 	if len(list) != 1 || list[0].ID != inst.ID || list[0].PID != inst.PID {
 		t.Fatalf("List() after restart = %+v, want the still-running instance %+v", list, inst)
@@ -153,8 +154,8 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
-	l1 := New(quickExit, "http://registry", "nats://nats", dataDir, nil)
-	inst, err := l1.Start("quick")
+	l1 := New(quickExit, "http://registry", "nats://nats", dataDir, nil, nil)
+	inst, err := l1.Start("quick", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -167,7 +168,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 		t.Fatal("quick-exit process did not terminate in time")
 	}
 
-	l2 := New(quickExit, "http://registry", "nats://nats", dataDir, nil)
+	l2 := New(quickExit, "http://registry", "nats://nats", dataDir, nil, nil)
 	if list := l2.List(); len(list) != 0 {
 		t.Errorf("List() after restart = %+v, want empty (dead instance dropped)", list)
 	}
@@ -185,9 +186,9 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 		},
 		Env: map[string]string{"OMP_CUSTOM": "from-catalog"},
 	}}
-	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil)
+	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil, nil)
 
-	inst, err := l.Start("envdump")
+	inst, err := l.Start("envdump", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -229,9 +230,9 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 		Command: []string{"/bin/sh", "-c", "echo boom >&2; exit 1"},
 	}}
 	pub := &recordingPublisher{}
-	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub)
+	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
 
-	inst, err := l.Start("crashy")
+	inst, err := l.Start("crashy", "")
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -267,4 +268,100 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 	// Aufräumen ohne processAlive-Race: eine bereits tote Instanz per
 	// Stop() zu entfernen muss trotzdem funktionieren (kein Fehler nötig).
 	_ = l.Stop(inst.ID)
+}
+
+// fakeNATSRequester ist ein Test-Double für NATSRequester — zeichnet
+// die zuletzt gesendete Subject/Payload-Kombination auf und liefert
+// eine vorgegebene Antwort (oder einen Fehler), ohne echtes NATS.
+type fakeNATSRequester struct {
+	lastSubject string
+	lastPayload []byte
+	response    remoteResponse
+	err         error
+}
+
+func (f *fakeNATSRequester) RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	f.lastSubject = subject
+	f.lastPayload = data
+	if f.err != nil {
+		return nil, f.err
+	}
+	return json.Marshal(f.response)
+}
+
+func TestLauncherStartRemoteWithoutNATSReturnsError(t *testing.T) {
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+
+	if _, err := l.Start("sleepy", "host-1"); err != ErrRemoteUnavailable {
+		t.Fatalf("Start() error = %v, want ErrRemoteUnavailable", err)
+	}
+}
+
+func TestLauncherStartRemoteSendsCorrectSubjectAndSucceeds(t *testing.T) {
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	// Remote-Start prüft nicht gegen den eigenen (hier: lokalen)
+	// Katalog — der Host-Agent hat seinen eigenen, s. Paketkommentar —
+	// deshalb funktioniert ein beim Orchestrator unbekannter Typ hier
+	// bewusst trotzdem.
+	inst, err := l.Start("omp-source", "host-1")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if inst.HostID != "host-1" || inst.PID != 4242 || inst.Type != "omp-source" {
+		t.Fatalf("Start() = %+v, unexpected", inst)
+	}
+	if fake.lastSubject != "omp.host.host-1.cmd" {
+		t.Errorf("subject = %q, want omp.host.host-1.cmd", fake.lastSubject)
+	}
+	var sent remoteCommand
+	if err := json.Unmarshal(fake.lastPayload, &sent); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
+	if sent.Action != "start" || sent.Type != "omp-source" || sent.InstanceID != inst.ID {
+		t.Errorf("sent command = %+v, unexpected", sent)
+	}
+
+	list := l.List()
+	if len(list) != 1 || list[0].HostID != "host-1" {
+		t.Fatalf("List() = %+v, want one remote instance", list)
+	}
+}
+
+func TestLauncherStartRemoteFailureResponse(t *testing.T) {
+	fake := &fakeNATSRequester{response: remoteResponse{OK: false, Error: "unknown catalog type"}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	if _, err := l.Start("omp-source", "host-1"); err == nil {
+		t.Fatal("Start() error = nil, want an error for a failed remote response")
+	}
+	if len(l.List()) != 0 {
+		t.Errorf("List() = %+v, want empty after a failed remote start", l.List())
+	}
+}
+
+func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	inst, err := l.Start("omp-source", "host-1")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	fake.response = remoteResponse{OK: true}
+	if err := l.Stop(inst.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	var sent remoteCommand
+	if err := json.Unmarshal(fake.lastPayload, &sent); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
+	if sent.Action != "stop" || sent.InstanceID != inst.ID {
+		t.Errorf("sent command = %+v, unexpected", sent)
+	}
+	if len(l.List()) != 0 {
+		t.Errorf("List() = %+v, want empty after Stop()", l.List())
+	}
 }

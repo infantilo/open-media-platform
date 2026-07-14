@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nats-io/nats.go"
+
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -36,6 +38,19 @@ import (
 // eine tote Node schon als offline markiert wird, bevor die Registry sie
 // vollständig entfernt.
 const healthStaleAfter = 10 * time.Second
+
+// natsRequester adaptiert *nats.Conn auf launcher.NATSRequester —
+// launcher.go bleibt dadurch frei von einer direkten nats.go-
+// Abhängigkeit (s. dortiger Paketkommentar, UMSETZUNG.md D6 Teil 2).
+type natsRequester struct{ nc *nats.Conn }
+
+func (r natsRequester) RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	msg, err := r.nc.Request(subject, data, timeout)
+	if err != nil {
+		return nil, err
+	}
+	return msg.Data, nil
+}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
@@ -123,7 +138,16 @@ func main() {
 		slog.Warn("failed to load instance launcher catalog, GUI-Launch bleibt leer", "path", cfg.CatalogPath, "error", err)
 		catalog = nil
 	}
-	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub)
+	// launcherNATS bleibt nil, wenn die initiale NATS-Verbindung (oben)
+	// fehlschlug — Remote-Hosts sind dann nicht ansprechbar
+	// (ErrRemoteUnavailable), rein lokaler Betrieb (UMSETZUNG.md C8)
+	// funktioniert unverändert (gleiche Degradations-Linie wie der Rest
+	// des NATS-Einsatzes hier, s. Kommentar bei eventbus.Connect oben).
+	var launcherNATS launcher.NATSRequester
+	if nc != nil {
+		launcherNATS = natsRequester{nc: nc}
+	}
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub, launcherNATS)
 
 	// Nutzer-/Rollenmodell (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2)
 	// — ersetzt die bisherige data/role-bindings.json (C13-Stub) durch

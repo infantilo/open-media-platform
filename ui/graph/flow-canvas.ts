@@ -126,8 +126,17 @@ interface LauncherInstance {
   type: string;
   label: string;
   pid: number;
+  hostId?: string;
   crashed?: boolean;
   crashMessage?: string;
+}
+
+// HostEntry — Wire-Format identisch zu httpapi.hostResponse
+// (ARCHITECTURE.md §18, UMSETZUNG.md D6). Nur die für die Katalog-
+// Palette gebrauchten Felder.
+interface HostEntry {
+  id: string;
+  label: string;
 }
 
 interface PortLocation {
@@ -1567,13 +1576,18 @@ export class FlowCanvas extends HTMLElement {
     this.#palette.appendChild(heading);
 
     try {
-      const [catalogRes, instancesRes] = await Promise.all([
+      const [catalogRes, instancesRes, hostsRes] = await Promise.all([
         fetch("/api/v1/catalog"),
         fetch("/api/v1/instances"),
+        fetch("/api/v1/hosts"),
       ]);
       if (!catalogRes.ok) return;
       const catalog = (await catalogRes.json()) as CatalogEntry[];
       const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
+      // Remote-Hosts (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 2) sind
+      // optional — kein Fehler, wenn der Endpunkt (noch) nichts liefert
+      // oder der Nutzer keine Admin-Sicht hat (403 möglich, D3 Teil 2).
+      const hosts: HostEntry[] = hostsRes.ok ? await hostsRes.json() : [];
 
       if (catalog.length === 0) {
         const empty = document.createElement("p");
@@ -1584,17 +1598,41 @@ export class FlowCanvas extends HTMLElement {
       }
 
       for (const entry of catalog) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
+
         const btn = document.createElement("button");
         btn.textContent = `+ ${entry.label}`;
         btn.title = `${entry.label} starten`;
-        btn.style.cssText =
-          "cursor:pointer;display:block;width:100%;margin-bottom:4px;" +
-          "text-align:left;padding:4px 6px;";
-        btn.addEventListener("click", () => this.#startInstance(entry.type));
-        this.#palette.appendChild(btn);
+        btn.style.cssText = "cursor:pointer;flex:1;text-align:left;padding:4px 6px;";
+
+        // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
+        // gibt — im (heute üblichen) Fall ohne Host-Agents bleibt die
+        // Palette optisch unverändert gegenüber vor D6 Teil 2.
+        let hostSelect: HTMLSelectElement | null = null;
+        if (hosts.length > 0) {
+          hostSelect = document.createElement("select");
+          hostSelect.title = "Zielhost";
+          hostSelect.style.cssText = "font-size:10px;max-width:90px;";
+          const localOpt = document.createElement("option");
+          localOpt.value = "";
+          localOpt.textContent = "(lokal)";
+          hostSelect.appendChild(localOpt);
+          for (const host of hosts) {
+            const opt = document.createElement("option");
+            opt.value = host.id;
+            opt.textContent = host.label;
+            hostSelect.appendChild(opt);
+          }
+          row.appendChild(hostSelect);
+        }
+
+        btn.addEventListener("click", () => this.#startInstance(entry.type, hostSelect?.value || undefined));
+        row.appendChild(btn);
+        this.#palette.appendChild(row);
 
         for (const inst of instances.filter((i) => i.type === entry.type)) {
-          this.#palette.appendChild(this.#renderInstanceRow(inst));
+          this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
         }
       }
     } catch {
@@ -1608,7 +1646,7 @@ export class FlowCanvas extends HTMLElement {
   // (also nie eine Kachel im Graph) bekommen, verschwand also bis hierhin
   // komplett spurlos. Bleibt sichtbar (rot markiert, mit Fehlertext), bis
   // sie per "Entfernen" weggeklickt oder neu gestartet wird.
-  #renderInstanceRow(inst: LauncherInstance): HTMLDivElement {
+  #renderInstanceRow(inst: LauncherInstance, hosts: HostEntry[] = []): HTMLDivElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "instance-row");
     row.setAttribute("data-instance-id", inst.id);
@@ -1620,6 +1658,14 @@ export class FlowCanvas extends HTMLElement {
     const label = document.createElement("div");
     label.textContent = inst.label;
     row.appendChild(label);
+
+    if (inst.hostId) {
+      const hostLabel = hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId;
+      const hostTag = document.createElement("div");
+      hostTag.textContent = `Host: ${hostLabel}`;
+      hostTag.style.cssText = "color:#888;font-size:9px;";
+      row.appendChild(hostTag);
+    }
 
     if (inst.crashed) {
       const msg = document.createElement("div");
@@ -1637,12 +1683,12 @@ export class FlowCanvas extends HTMLElement {
     return row;
   }
 
-  async #startInstance(type: string) {
+  async #startInstance(type: string, hostId?: string) {
     try {
       const res = await fetch("/api/v1/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type }),
+        body: JSON.stringify(hostId ? { type, hostId } : { type }),
       });
       if (!res.ok) {
         const text = await res.text();

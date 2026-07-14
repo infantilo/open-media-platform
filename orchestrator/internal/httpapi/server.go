@@ -70,12 +70,14 @@ type SnapshotService interface {
 	Apply(ctx context.Context, id string) (snapshots.ApplyResult, error)
 }
 
-// LauncherService startet/stoppt Node-Instanzen aus dem Katalog
-// (implementiert von *launcher.Launcher, UMSETZUNG.md C8).
+// LauncherService startet/stoppt Node-Instanzen aus dem Katalog —
+// lokal (UMSETZUNG.md C8) oder, mit gesetztem hostID, auf einem
+// entfernten Host (ARCHITECTURE.md §18.5, UMSETZUNG.md D6 Teil 2)
+// (implementiert von *launcher.Launcher).
 type LauncherService interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
-	Start(nodeType string) (launcher.Instance, error)
+	Start(nodeType, hostID string) (launcher.Instance, error)
 	Stop(id string) error
 }
 

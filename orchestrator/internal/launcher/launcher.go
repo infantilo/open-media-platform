@@ -1,9 +1,20 @@
-// Package launcher startet/stoppt lokale Node-Instanzen aus einem festen
+// Package launcher startet/stoppt Node-Instanzen aus einem festen
 // Katalog heraus (UMSETZUNG.md C8, ARCHITECTURE.md §6.2 "Stufe 0" des
 // später geplanten vollen Workflow-Bereitstellungs-Konzepts): bewusst
 // nur "starte ein bekanntes, vorgebautes Binary als Subprozess, mehrfach
 // instanziierbar auf einem Host" — kein Rollen-Template, keine
 // Platzierung, kein Bundle-Start.
+//
+// Seit D6 Teil 2 (ARCHITECTURE.md §18.5) optional **remote-fähig**: mit
+// leerem hostID verhält sich Start()/Stop() exakt wie vor diesem
+// Schritt (lokaler os/exec-Subprozess); mit gesetztem hostID gehen
+// Start-/Stop-Kommandos stattdessen per NATS-Request/Reply an den
+// passenden omp-host-agent (omp.host.<hostId>.cmd). Die Sicherheits-
+// grenze "nur Katalog-Einträge, keine freien Kommandos" bleibt
+// bestehen, wandert für den Remote-Fall aber zum Host-Agent (der
+// prüft gegen seinen *eigenen* lokalen Katalog, s.
+// host-agent/internal/catalog) — der Orchestrator schickt nur einen
+// Typnamen, keinen Befehl (docs/decisions.md D6 Teil 2).
 package launcher
 
 import (
@@ -44,6 +55,10 @@ var (
 	// ErrUnknownInstance wird geliefert, wenn Stop() mit einer
 	// unbekannten Instanz-ID aufgerufen wird.
 	ErrUnknownInstance = errors.New("launcher: unknown instance")
+	// ErrRemoteUnavailable wird geliefert, wenn Start()/Stop() mit
+	// gesetztem hostID aufgerufen wird, der Launcher aber ohne
+	// NATSRequester konstruiert wurde (kein Kommandokanal verdrahtet).
+	ErrRemoteUnavailable = errors.New("launcher: remote hosts not available (no NATS connection configured)")
 )
 
 // stopGracePeriod ist die Wartezeit zwischen SIGTERM und SIGKILL beim
@@ -52,6 +67,25 @@ var (
 // verkürzen kann, ohne 3s pro Testlauf zu warten.
 var stopGracePeriod = 3 * time.Second
 
+// remoteCommandTimeout ist die Wartezeit auf die Antwort eines
+// Host-Agent-Kommandos (§18.5) — deutlich über der Größenordnung eines
+// Prozess-Starts (Registrierung selbst läuft asynchron danach), aber
+// endlich, damit ein nicht erreichbarer/abgestürzter Host-Agent
+// `POST /api/v1/instances` nicht unbegrenzt hängen lässt.
+const remoteCommandTimeout = 5 * time.Second
+
+// NATSRequester schickt eine Request/Reply-Anfrage über NATS
+// (implementiert von einem schmalen Adapter um *nats.Conn in main.go —
+// launcher.go bleibt dadurch frei von einer direkten nats.go-
+// Abhängigkeit, gleiches Entkopplungsmuster wie EventPublisher/
+// NodeLister in anderen Paketen). nil bedeutet "kein Kommandokanal
+// verdrahtet" — Start()/Stop() mit einem hostID scheitern dann mit
+// ErrRemoteUnavailable, rein lokaler Betrieb (hostID "") bleibt
+// unberührt.
+type NATSRequester interface {
+	RequestBytes(subject string, data []byte, timeout time.Duration) ([]byte, error)
+}
+
 // Instance ist eine laufende (oder nach einem Orchestrator-Neustart per
 // PID wiedererkannte) Node-Instanz.
 type Instance struct {
@@ -59,11 +93,19 @@ type Instance struct {
 	Type  string `json:"type"`
 	Label string `json:"label"`
 	PID   int    `json:"pid"`
+	// HostID ist die Host-Agent-ID, auf der diese Instanz läuft
+	// (ARCHITECTURE.md §18.5, UMSETZUNG.md D6 Teil 2) — leer für lokal
+	// (auf demselben Host wie der Orchestrator) gestartete Instanzen,
+	// das vor D6 Teil 2 einzig existierende Verhalten.
+	HostID string `json:"hostId,omitempty"`
 	// Crashed ist gesetzt, wenn der Subprozess beendet wurde, ohne dass
 	// Stop() ihn dazu gebracht hat (z. B. Pipeline-Init-Fehler). Anders
 	// als ein per Stop() beendeter Prozess bleibt die Instanz dafür in
 	// List() sichtbar, statt spurlos zu verschwinden, bis der Nutzer sie
 	// per DELETE /api/v1/instances/<id> wegklickt oder neu startet.
+	// Für entfernt gestartete Instanzen (HostID gesetzt) noch nicht
+	// unterstützt (dokumentierte Folgearbeit, docs/decisions.md D6 Teil
+	// 2 — der Host-Agent meldet einen Absturz noch nicht zurück).
 	Crashed bool `json:"crashed,omitempty"`
 	// CrashMessage ist der Wait()-Fehler plus die letzten
 	// crashStderrLines Zeilen stderr der Instanz, nur gesetzt wenn Crashed.
@@ -87,6 +129,7 @@ type Launcher struct {
 	natsURL     string
 	statePath   string
 	events      EventPublisher
+	nc          NATSRequester
 
 	mu        sync.Mutex
 	instances map[string]Instance
@@ -96,14 +139,18 @@ type Launcher struct {
 // aus dataDir/instances.json — Einträge, deren PID keinem laufenden
 // Prozess mehr entspricht, werden verworfen (der Kind-Prozess kann
 // zwischen zwei Orchestrator-Läufen jederzeit beendet worden sein, das
-// ist kein Fehler). events darf nil sein (z. B. in Tests).
-func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string, events EventPublisher) *Launcher {
+// ist kein Fehler). events/nc dürfen nil sein (z. B. in Tests) — nc nil
+// bedeutet "kein Kommandokanal", Start()/Stop() mit einem hostID
+// scheitern dann mit ErrRemoteUnavailable statt einer Nil-Pointer-
+// Panik; rein lokaler Betrieb funktioniert unverändert.
+func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string, events EventPublisher, nc NATSRequester) *Launcher {
 	l := &Launcher{
 		catalog:     catalog,
 		registryURL: registryURL,
 		natsURL:     natsURL,
 		statePath:   filepath.Join(dataDir, "instances.json"),
 		events:      events,
+		nc:          nc,
 		instances:   map[string]Instance{},
 	}
 	l.loadState()
@@ -126,13 +173,23 @@ func (l *Launcher) List() []Instance {
 	return list
 }
 
-// Start sucht nodeType im Katalog, startet ihn als Subprozess mit
-// OMP_INSTANCE_ID/OMP_LABEL/OMP_PORT=0 sowie den Registry-/NATS-URLs des
-// Orchestrators (UMSETZUNG.md C8) und persistiert die neue Instanz. Die
-// eigentliche Registry-Erscheinung läuft über die normale
-// Selbstregistrierung des gestarteten Nodes — Start() fasst den Graph
-// selbst nicht an.
-func (l *Launcher) Start(nodeType string) (Instance, error) {
+// Start sucht nodeType im Katalog und startet ihn — lokal als
+// Subprozess (hostID leer, UMSETZUNG.md C8) oder auf einem entfernten,
+// per omp-host-agent registrierten Host (hostID gesetzt, §18.5,
+// UMSETZUNG.md D6 Teil 2). Die eigentliche Registry-Erscheinung läuft
+// in beiden Fällen über die normale Selbstregistrierung des gestarteten
+// Nodes — Start() fasst den Graph selbst nicht an.
+func (l *Launcher) Start(nodeType, hostID string) (Instance, error) {
+	if hostID != "" {
+		return l.startRemote(nodeType, hostID)
+	}
+	return l.startLocal(nodeType)
+}
+
+// startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
+// OMP_LABEL/OMP_PORT=0 sowie die Registry-/NATS-URLs des Orchestrators
+// als Subprozess-Umgebung, Ergebnis persistiert).
+func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 	entry, ok := l.findEntry(nodeType)
 	if !ok {
 		return Instance{}, ErrUnknownType
@@ -203,6 +260,84 @@ func (l *Launcher) Start(nodeType string) (Instance, error) {
 	return inst, nil
 }
 
+// startRemote schickt ein Start-Kommando an den Host-Agent von hostID
+// (§18.5). Anders als startLocal prüft der Orchestrator hier **nicht**
+// gegen seinen eigenen Katalog — er schickt nur den Typnamen, der
+// Host-Agent löst ihn gegen seinen *eigenen* lokalen Katalog auf (die
+// Sicherheitsgrenze "nur Katalog-Einträge" liegt für den Remote-Fall
+// beim Agent, s. Paketkommentar). ErrUnknownType/ErrUnsupportedRunner
+// werden deshalb hier nicht geprüft; ein unbekannter Typ auf dem
+// Zielhost kommt als Fehler in der Kommando-Antwort zurück.
+func (l *Launcher) startRemote(nodeType, hostID string) (Instance, error) {
+	if l.nc == nil {
+		return Instance{}, ErrRemoteUnavailable
+	}
+
+	id, err := newInstanceID()
+	if err != nil {
+		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
+	}
+	label := fmt.Sprintf("%s (%s)", nodeType, id[:8])
+
+	resp, err := l.sendCommand(hostID, remoteCommand{
+		Action:     "start",
+		Type:       nodeType,
+		InstanceID: id,
+		Label:      label,
+	})
+	if err != nil {
+		return Instance{}, fmt.Errorf("launcher: remote start on host %s: %w", hostID, err)
+	}
+	if !resp.OK {
+		return Instance{}, fmt.Errorf("launcher: remote start on host %s failed: %s", hostID, resp.Error)
+	}
+
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID}
+	l.mu.Lock()
+	l.instances[id] = inst
+	if err := l.saveState(); err != nil {
+		slog.Warn("launcher: failed to persist instance state", "error", err)
+	}
+	l.mu.Unlock()
+
+	return inst, nil
+}
+
+// remoteCommand/remoteResponse spiegeln host-agent/internal/commands'
+// Request/Response-Wire-Format (JSON über NATS-Request/Reply) —
+// bewusst hier dupliziert statt importiert: host-agent ist ein
+// eigenständiges Go-Modul (analog nodes/mock), kein gemeinsames
+// drittes Paket für ein derart schmales Format.
+type remoteCommand struct {
+	Action     string `json:"action"`
+	Type       string `json:"type,omitempty"`
+	InstanceID string `json:"instanceId"`
+	Label      string `json:"label,omitempty"`
+}
+
+type remoteResponse struct {
+	OK    bool   `json:"ok"`
+	PID   int    `json:"pid,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+func (l *Launcher) sendCommand(hostID string, cmd remoteCommand) (remoteResponse, error) {
+	payload, err := json.Marshal(cmd)
+	if err != nil {
+		return remoteResponse{}, err
+	}
+	subject := fmt.Sprintf("omp.host.%s.cmd", hostID)
+	data, err := l.nc.RequestBytes(subject, payload, remoteCommandTimeout)
+	if err != nil {
+		return remoteResponse{}, err
+	}
+	var resp remoteResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return remoteResponse{}, fmt.Errorf("decode response: %w", err)
+	}
+	return resp, nil
+}
+
 // publishCrash meldet ein "instance.crashed"-SSE-Event, falls ein
 // EventPublisher konfiguriert ist (main.go verdrahtet den sse.Hub, Tests
 // lassen es i. d. R. nil).
@@ -235,6 +370,11 @@ func crashMessage(waitErr error, stderrTail string) string {
 // falls der Prozess danach noch lebt (UMSETZUNG.md C8). id wird sofort
 // aus dem persistierten Stand entfernt, unabhängig davon, wie lange das
 // eigentliche Beenden dauert.
+// Stop trennt id — lokal per SIGTERM/Wartezeit/SIGKILL (UMSETZUNG.md
+// C8) oder, für eine mit HostID gestartete Instanz, per Stop-Kommando
+// an den zuständigen Host-Agent (§18.5, UMSETZUNG.md D6 Teil 2). id
+// wird in beiden Fällen sofort aus dem persistierten Stand entfernt,
+// unabhängig davon, wie lange das eigentliche Beenden dauert.
 func (l *Launcher) Stop(id string) error {
 	l.mu.Lock()
 	inst, ok := l.instances[id]
@@ -250,6 +390,13 @@ func (l *Launcher) Stop(id string) error {
 		return ErrUnknownInstance
 	}
 
+	if inst.HostID != "" {
+		return l.stopRemote(inst)
+	}
+	return l.stopLocal(inst)
+}
+
+func (l *Launcher) stopLocal(inst Instance) error {
 	process, err := os.FindProcess(inst.PID)
 	if err != nil {
 		return nil // Prozess existiert nicht mehr
@@ -267,6 +414,20 @@ func (l *Launcher) Stop(id string) error {
 	}
 	if processAlive(inst.PID) {
 		_ = process.Kill()
+	}
+	return nil
+}
+
+func (l *Launcher) stopRemote(inst Instance) error {
+	if l.nc == nil {
+		return ErrRemoteUnavailable
+	}
+	resp, err := l.sendCommand(inst.HostID, remoteCommand{Action: "stop", InstanceID: inst.ID})
+	if err != nil {
+		return fmt.Errorf("launcher: remote stop on host %s: %w", inst.HostID, err)
+	}
+	if !resp.OK {
+		return fmt.Errorf("launcher: remote stop on host %s failed: %s", inst.HostID, resp.Error)
 	}
 	return nil
 }

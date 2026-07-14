@@ -3957,3 +3957,118 @@ separat `omp-viewer`, per NATS-Health-Subscription:
 Test-Prozesse und -Registrierungen danach beendet (Registry-Einträge
 laufen über `registration_expiry_interval` selbständig aus, gleiche
 Praxis wie in vorherigen Sitzungen).
+
+## 2026-07-14 — D6 Teil 2 (Kommandokanal, ARCHITECTURE.md §18.5): Instanz-Launcher wird Remote-fähig, Katalog als Vertrauensgrenze statt Signierung
+
+**Kontext:** Direkte Fortsetzung von D6 Teil 1 — Hosts sind seitdem
+sichtbar, aber noch keine nutzbaren Platzierungsziele. §18.5 verlangt
+genau das: der Instanz-Launcher (C8) soll Nodes nicht nur lokal, sondern
+auch auf einem registrierten Remote-Host starten/stoppen können. Analog
+zum bisherigen Teil-Schnitt (Teil 1: Hosts erkennen, nicht platzieren)
+hier wieder ein expliziter Teilschritt: **manuelle** Host-Auswahl über
+den Kommandokanal, **keine** automatische Placement-Engine (§6.1 Punkt
+2 bleibt zurückgestellt — baut logisch auf diesem Schritt auf, ist aber
+eigene Entscheidungslogik, kein Nebenprodukt).
+
+**Sicherheitsentwurf (zentrale Entscheidung dieser Runde):** Statt den
+Kommandokanal per NATS-Message-Signierung (HMAC + Schlüsselverteilung
+an jeden Host-Agent) abzusichern, verschiebt sich die Vertrauensgrenze
+auf den **Host-Agent selbst**: der Orchestrator schickt über
+`omp.host.<hostId>.cmd` nur einen `type`-Namen, nie einen ausführbaren
+Befehl. Der Host-Agent löst diesen Namen gegen seinen **eigenen,
+host-lokal konfigurierten** Katalog auf (`host-agent/internal/catalog`
+— strukturell identisch zu `orchestrator/internal/launcher/catalog.go`,
+aber bewusst dupliziert statt importiert: die Pfade im
+Orchestrator-Katalog sind orchestrator-dateisystem-relativ und auf
+einer anderen Maschine bedeutungslos, und die Duplizierung selbst ist,
+was die Grenze "nur freigegebene Katalogeinträge, nie freie Befehle" an
+der tatsächlichen Vertrauensgrenze durchsetzt). Eine kompromittierte
+oder unauthentifizierte NATS-Nachricht kann damit höchstens einen dort
+vorab freigegebenen Node-Typ auslösen, nie beliebigen Code — dieselbe
+Garantie wie beim bestehenden lokalen Launcher (C8), nur pro Host statt
+zentral. Das deckt sich mit dem bereits für Telemetrie (D6 Teil 1) und
+Node-Health (seit A7) akzeptierten Sicherheitsstand ("NATS ist ein
+vertrauenswürdiger Transport, kein zusätzlich abgesicherter Kanal")
+statt eine neue, inkonsistente Ausnahme einzuführen.
+
+**In dieser Runde:**
+- `host-agent/internal/catalog`: host-lokaler Katalog, JSON-Datei über
+  `OMP_HOST_AGENT_CATALOG_PATH` (leerer Pfad → leerer Katalog, kein
+  Fehler — ein frisch gebootstrapter Host ohne konfigurierten Katalog
+  kann dann zwar Kommandos empfangen, aber keinen einzigen Typ
+  ausführen, fail-closed statt fail-open).
+- `host-agent/internal/commands`: `Executor.Handle` verarbeitet
+  Start-/Stop-Requests; Start validiert Katalogeintrag + Runner +
+  `InstanceID`, setzt `OMP_INSTANCE_ID`/`OMP_LABEL`/`OMP_PORT=0`/
+  `OMP_REGISTRY_URL`/`OMP_NATS_URL` aus der **eigenen** Umgebung des
+  Host-Agents (nicht vom Orchestrator durchgereicht — sonst würde ein
+  vom Orchestrator gesetztes `localhost` auf einer anderen Maschine
+  falsch zeigen); Stop schickt SIGTERM, pollt bis zu 3s, SIGKILL-
+  Fallback, idempotent bei unbekannter Instanz-ID. Eine gestartete
+  Instanz wird per Hintergrund-Goroutine (`cmd.Wait()`) auf Absturz
+  überwacht, aber **nicht** an den Orchestrator zurückgemeldet
+  (dokumentierte Lücke, s. u.).
+- `orchestrator/internal/launcher`: `Start`/`Stop` bekommen ein neues
+  `hostID`-Argument bzw. lesen `Instance.HostID`; leer → unverändertes
+  lokales Verhalten seit C8, gesetzt → `startRemote`/`stopRemote`
+  schicken die Anfrage über ein neues `NATSRequester`-Interface
+  (Request/Reply, 5s Timeout) an `omp.host.<hostId>.cmd`.
+  `startRemote` validiert den Typ bewusst **nicht** gegen den
+  orchestrator-eigenen Katalog — die Prüfung passiert, wie oben
+  beschrieben, erst host-seitig; ein orchestrator-seitiger Vor-Check
+  wäre nur Komfort, keine zusätzliche Sicherheit, und könnte bei
+  unterschiedlichen Katalogen pro Host sogar falsch-negativ ablehnen.
+- `internal/httpapi`: `POST /api/v1/instances` akzeptiert optionales
+  `{"hostId": "..."}`; neuer Fehlerfall `ErrRemoteUnavailable` (503),
+  falls der Orchestrator selbst keine NATS-Verbindung hat.
+- UI (`ui/graph/flow-canvas.ts`): pro Katalogeintrag ein `<select>`
+  (nur sichtbar, wenn `GET /api/v1/hosts` mindestens einen Host liefert
+  — im heutigen Normalfall ohne Host-Agents bleibt die Palette optisch
+  unverändert), Default „(lokal)". Instanz-Zeilen zeigen bei gesetzter
+  `hostId` das Host-Label an.
+
+**Bewusst nicht in dieser Runde (dokumentierte Scope-Grenze, kein
+stiller Gap):**
+- **NATS-Nachrichtensignierung (HMAC)** — durch das Katalog-als-
+  Vertrauensgrenze-Design ersetzt, s. o. Kein Sicherheits-Rückschritt
+  gegenüber dem übrigen Stack, aber auch keine zusätzliche Härtung, die
+  über den bestehenden NATS-Vertrauensstand hinausgeht.
+- **Remote-Absturzerkennung** — ein auf einem Remote-Host abgestürzter
+  Prozess wird vom dortigen Host-Agent zwar per `cmd.Wait()` erkannt,
+  aber nicht an den Orchestrator zurückgemeldet; anders als bei lokalen
+  Instanzen (C13-Nachtrag 3) bleibt eine remote abgestürzte Instanz also
+  bis zum manuellen Entfernen als "laufend" gelistet. Braucht einen
+  Rückkanal (z. B. `omp.host.<hostId>.crashes`-Subscription im
+  Orchestrator) — eigene Recherche wert, kein Nebenprodukt.
+- **Placement-Engine** (§6.1 Punkt 2) — automatische Zielhost-Wahl nach
+  Ressourcenlage; dieser Schritt liefert nur die manuelle Grundlage
+  (Dropdown), auf der eine Engine später aufsetzen könnte.
+- **mTLS für den Kommandokanal** — wie Teil 1, bleibt am bestehenden
+  Gesamt-mTLS-Opt-in (D3 Teil 1) hängen, kein Alleingang für diesen
+  einen Kanal.
+
+**Verifiziert (echte Prozesse, nicht nur Unit-Tests):** `go build/vet/
+test` für `orchestrator` und `host-agent` grün (inkl. neuer Tests mit
+echtem `sleep`-Prozess für Start/Stop/Idempotenz in
+`commands_test.go` und einem Fake-`NATSRequester` in
+`launcher_test.go`), `deno check/test` und `deno bundle` grün.
+End-to-end mit echten Prozessen: zwei simulierte Remote-Hosts (zwei
+`omp-host-agent`-Prozesse mit eigenem Katalog/State auf derselben
+Dev-Maschine, wie schon in Teil 1) gegen den laufenden Orchestrator
+registriert; `POST /api/v1/instances` mit `hostId` startete einen
+echten `nodes/mock`-Prozess auf dem simulierten Remote-Host (PID auf
+dem Host-Agent-Prozess bestätigt, nicht auf dem Orchestrator), der sich
+korrekt bei der NMOS-Registry registrierte und im Orchestrator-Graph
+erschien; `DELETE /api/v1/instances/<id>` beendete ihn remote sauber
+(Prozess verifiziert beendet, Instanzliste leer). Browser-Test per CDP:
+Palette zeigt pro Katalogeintrag ein Host-`<select>` mit beiden echten
+Hosts; ein Klick mit ausgewähltem Remote-Host löste den POST mit
+korrekter `hostId` aus. **Sicherheitsgrenze live bestätigt statt nur
+gelesen:** derselbe Klick mit einem Katalogtyp, der auf dem Ziel-Host
+**nicht** freigegeben war (`omp-source` gegen einen Host mit
+`omp-mock`-only-Katalog), wurde vom Host-Agent mit `"unknown catalog
+type"` abgelehnt, nicht etwa vom Orchestrator durchgewunken — bestätigt,
+dass die Durchsetzung tatsächlich host-seitig greift und nicht nur
+dokumentiert ist. Nach der Verifikation: Test-Prozesse beendet,
+Test-Hosts aus der DB entfernt (gleiche Aufräum-Disziplin wie D6 Teil
+1).

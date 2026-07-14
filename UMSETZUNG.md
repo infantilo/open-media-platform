@@ -1289,6 +1289,44 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   registrierte sich nicht erneut (Idempotenz bestätigt); Browser-Test
   per CDP bestätigte das UI-Panel. Test-Hosts/-Tokens danach aus der DB
   entfernt.
+
+  **D6 Teil 2 (Kommandokanal, erledigt, 2026-07-14):** §18.5 — der
+  Instanz-Launcher (C8) wird remote-fähig, Hosts sind ab jetzt nutzbare
+  Platzierungsziele, aber nur per **manueller** Auswahl (kein
+  Placement-Engine-Automatismus, §6.1 Punkt 2 bleibt zurückgestellt).
+  `POST /api/v1/instances` akzeptiert optionales `{"hostId": "..."}` —
+  gesetzt, schickt `orchestrator/internal/launcher` die Start-/
+  Stop-Anfrage per NATS-Request/Reply an `omp.host.<hostId>.cmd`.
+  **Sicherheitsentwurf statt Nachrichtensignierung:** der Orchestrator
+  schickt nur einen Katalog-`type`-Namen, nie einen ausführbaren
+  Befehl; der Host-Agent löst ihn gegen seinen **eigenen, host-lokal
+  konfigurierten** Katalog auf (`host-agent/internal/catalog`,
+  strukturell wie `orchestrator/internal/launcher/catalog.go`, bewusst
+  dupliziert statt importiert). Eine kompromittierte NATS-Nachricht
+  kann damit höchstens einen dort freigegebenen Node-Typ auslösen, nie
+  beliebigen Code — dieselbe Grenze wie beim lokalen Launcher, nur pro
+  Host. UI (`ui/graph/flow-canvas.ts`): pro Katalogeintrag ein
+  Host-`<select>` (nur sichtbar, wenn `GET /api/v1/hosts` mindestens
+  einen Host liefert), Instanz-Zeilen zeigen das Host-Label.
+  **Scope-Entscheidung:** NATS-Nachrichtensignierung (HMAC) bewusst
+  nicht eingeführt (s. o., Katalog übernimmt die Rolle); Remote-
+  Absturzerkennung noch nicht zurückgemeldet (Host-Agent erkennt
+  Abstürze lokal per `cmd.Wait()`, aber kein Rückkanal zum
+  Orchestrator — anders als bei lokalen Instanzen, C13-Nachtrag 3);
+  Placement-Engine (§6.1) weiterhin zurückgestellt, dieser Schritt
+  liefert nur die manuelle Grundlage dafür. Details/vollständiges
+  Verifikationsprotokoll: `docs/decisions.md` 2026-07-14 (D6 Teil 2).
+  **Verifiziert (echte Prozesse):** `go build/vet/test` für
+  `orchestrator` + `host-agent` grün, `deno check/test/bundle` grün.
+  End-to-end: zwei simulierte Remote-Hosts registriert, `POST
+  /api/v1/instances` mit `hostId` startete einen echten
+  `nodes/mock`-Prozess remote (PID auf dem Host-Agent bestätigt),
+  NMOS-Registrierung + Erscheinen im Orchestrator-Graph bestätigt,
+  `DELETE` beendete ihn remote sauber. Browser-Test per CDP bestätigte
+  Host-`<select>` + korrekten `hostId` im POST. Sicherheitsgrenze live
+  bestätigt: ein Katalogtyp, der auf dem Ziel-Host nicht freigegeben
+  war, wurde vom Host-Agent abgelehnt, nicht vom Orchestrator
+  durchgewunken. Test-Prozesse/-Hosts danach entfernt.
 - **D7 (geplant, noch nicht detailliert)** Workflow-Bereitstellung &
   -Verteilung: neues Objekt „Workflow" (Rollen + Verbindungs-Template +
   Platzierungs-Hinweise), Katalog-Descriptor (optional pro Node), Start/
@@ -1348,4 +1386,5 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
 | D5-prep-2 | erledigt | [D5-prep-2] MediaFlow-Trait + media-ready für alle acht verbleibenden Nodes | 2026-07-14 |
 | D5 | erledigt | [D5] SDK-Doku + Node-Tutorial (docs/NODE-TUTORIAL.md) | 2026-07-14 |
 | D6 Teil 1 (Bootstrap + Telemetrie) | erledigt | [D6-1] omp-host-agent: Bootstrap-Token, Registrierung, CPU/RAM-Telemetrie, Hosts-UI-Panel | 2026-07-14 |
-| D6 Teil 2 (Kommandokanal + Placement) | offen | | |
+| D6 Teil 2 (Kommandokanal) | erledigt | [D6-2] host-agent + orchestrator: Remote-Start/Stop über NATS, agent-lokaler Katalog als Vertrauensgrenze, UI-Host-Selector | 2026-07-14 |
+| D6 Teil 3 (Placement-Engine, §6.1) | offen | | |
