@@ -4494,3 +4494,36 @@ Sprachumschaltung (Teil 4). SVG-Canvas/Breadcrumb/Snapshot-Bar/Palette
 in `flow-canvas.ts` bewusst nicht auf Design-Tokens umgezogen — §1.4
 nennt für Teil 1 nur App-Bar, Hosts-/Workflows-View, Toasts und das
 Parameter-Panel als „Shell-eigene Flächen".
+
+## 2026-07-14 — K2 Teil 2 (MXF) Vorrecherche: Codec-Essenz aus PIPELINE CONTROLLER identifiziert (reine Recherche, kein Code)
+
+Zeitlich knappe Sitzung (Nutzer-Vorgabe: 30 Minuten bis Feierabend,
+Kontextfenster schon bei 83%) — kein neuer Implementierungsschritt
+begonnen, stattdessen die in `docs/END-GOAL-FEATURES.md` §2.5 Punkt 1
+offen gebliebene Recherchefrage geklärt, damit die nächste K2-Sitzung
+direkt mit Teil 1 (MP4) starten kann, ohne diese Frage zwischendurch
+nachzuholen.
+
+**Befund:** `/home/infantilo/PIPELINE CONTROLLER/lib/PlayerPipeline.js`
+behandelt MXF mit **MPEG-2-Video (`mpeg2video`)** nicht nur beiläufig,
+sondern codec-spezifisch verzweigt — `PlayerPipeline.js:244–245`
+(`if (!/mpeg2video/.test(codec)) return null;`, im Kontext des
+NVDEC-Hardware-Decode-Pfads, Zeilen 133/139). Das README (`README.md`
+„⚠️ Note on Codecs") nennt H.264/MPEG-2/AC-3/DTS als die lizenzrelevanten,
+tatsächlich genutzten Codecs aus `gst-plugins-bad`/`-ugly`. Damit ist
+MPEG-2 die einzige durch einen erprobten Referenzpfad belegte
+MXF-Video-Essenz — AVC-Intra/DNxHD sind nicht abgedeckt.
+
+**Für K2 Teil 2:** MPEG-2 als Pflicht-Essenz behandeln,
+`gstreamer1.0-libav`/`-ugly` als Pflicht-Systemdependency in `deploy/`
+dokumentieren (inkl. desselben Lizenz-Hinweises wie im
+PIPELINE-CONTROLLER-README). Ohne Bedeutung für K2 Teil 1 selbst
+(MP4/H.264, testdatei-generiert, kein MXF-Sonderweg).
+`docs/END-GOAL-FEATURES.md` §2.5 entsprechend aktualisiert (Punkt 1
+beantwortet, Punkte 2/3 als bereits durch Kapitel 10 entschieden
+markiert statt weiter als offen zu stehen).
+
+**Nächster Schritt:** K2 Teil 1 (Datei-Playback MP4/MOV in
+`omp-player`) als eigene, vollständige Sitzung mit Live-Verifikation —
+nicht in dieser verkürzten Sitzung begonnen, um keinen unfertigen
+Zwischenstand zu hinterlassen.

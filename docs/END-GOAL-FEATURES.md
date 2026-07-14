@@ -379,17 +379,25 @@ separate, alle Nodes betreffende Entscheidung, hier nicht verstecken).
 
 ### 2.5 Offene Fragen
 
-1. **Codec-Umfang:** MXF ist nur Container — welche Essenzen müssen
-   sicher laufen (XDCAM/MPEG-2? AVC-Intra? DNxHD via `gst-libav`)?
-   Bestimmt, ob `gstreamer1.0-libav` als Pflicht-Systemdependency in
-   `deploy/` dokumentiert wird (Lizenz-Hinweis wie im PIPELINE-
-   CONTROLLER-README §Codecs übernehmen).
-2. Medienverzeichnis-Konvention: ein globales `OMP_MEDIA_DIR` pro Host
-   (Katalog-`env`) oder pro Instanz konfigurierbar (beschreibbarer
-   Parameter wie `targetPlayerLabel` in C14)?
-3. Soll `omp-player` bei EOS künftig optional selbst auf das gecuete Item
-   weiterschalten (Player-lokal, ohne Automation) — oder bleibt Advance
-   ausschließlich K6-Scope? (Empfehlung: K6-Scope, eine Wahrheit.)
+1. **Codec-Umfang — geklärt (2026-07-14, reine Recherche, kein Code):**
+   `PIPELINE CONTROLLER/lib/PlayerPipeline.js` behandelt **MXF mit
+   MPEG-2-Video (`mpeg2video`)** als den tatsächlich erprobten Fall —
+   nicht nur beiläufig erwähnt, sondern codec-spezifisch verzweigt
+   (`PlayerPipeline.js:244–245`: `if (!/mpeg2video/.test(codec)) return
+   null;`, Kontext: NVDEC-Hardware-Decode-Pfad, Zeile 133/139) und im
+   README (`README.md` „⚠️ Note on Codecs") als lizenzrelevant explizit
+   genannt (H.264/MPEG-2/AC-3/DTS aus `gst-plugins-bad`/`-ugly`). Für
+   K2 Teil 2 (MXF) heißt das: **MPEG-2 ist die Pflicht-Essenz**, AVC-
+   Intra/DNxHD sind nicht durch einen erprobten Referenzpfad gedeckt und
+   bleiben „falls später gebraucht". `gstreamer1.0-libav`/`-ugly` als
+   Pflicht-Systemdependency in `deploy/` dokumentieren, inkl. desselben
+   Lizenz-Hinweises wie im PIPELINE-CONTROLLER-README. (Für K2 Teil 1
+   selbst ohne Bedeutung — das ist MP4/H.264 testdatei-generiert, ohne
+   MXF-Sonderweg.)
+2. ~~Medienverzeichnis-Konvention~~ — entschieden (Kapitel 10, Punkt 3):
+   pro Instanz konfigurierbar.
+3. ~~Soll `omp-player` bei EOS selbst weiterschalten?~~ — entschieden
+   (Kapitel 10, Punkt 3): bleibt K6-Scope.
 
 ---
 
