@@ -1,17 +1,40 @@
-// Node-UI-Bundle des Bildmischers (UMSETZUNG.md C10, ARCHITECTURE.md §4.5):
-// Preset-Bus-Buttons (Klick = crosspoint.select), Cut/AutoTrans-Buttons,
-// Keyer- und DVE(PIP)-Toggle. Gleiche generische Node-Proxy-API wie
-// omp-switcher (C7): /api/v1/nodes/<id>/params/<name>,
-// /api/v1/nodes/<id>/methods/<name>. Pollt alle 2s wie das Switcher-Panel
-// (inputs/programInput/presetInput ändern sich außerhalb dieses Nodes).
+// Node-UI-Bundle des Bildmischers (UMSETZUNG.md C10/K3-Teil-1,
+// ARCHITECTURE.md §4.5, docs/END-GOAL-FEATURES.md §3.3/§3.4 Teil 1):
+// Hardware-Pult-Optik statt generischer Button-Liste — PGM/PST-
+// Doppelreihe, CUT/AUTO, Keyer/DVE als beleuchtete Tasten, alles auf
+// ui/design-tokens.css + ui/kit (<omp-button>, geladen von der Shell,
+// s. ui/kit/index.ts). Gleiche generische Node-Proxy-API wie zuvor
+// (/api/v1/nodes/<id>/params/<name>, /methods/<name>) — reines
+// UI-Bundle, KEINE Node-/Pipeline-Änderung in diesem Teil.
+//
+// Reaktionszeit: eigene `EventSource("/api/v1/events")` statt Wieder-
+// verwendung des Shell-internen ConnectionMonitor (der ist in
+// ui/shell/connection.ts gekapselt und für dynamisch nachgeladene
+// Node-Bundles wie dieses hier nicht adressierbar — jedes Bundle bleibt
+// bewusst eigenständig, §4.5 "kein Framework-Zwang"). Tally-Events
+// (`omp.tally.<nodeId>`, SSE-Payload-Schema `{type, data}` wie in
+// flow-canvas.ts#handleServerEvent) lösen ein sofortiges Refresh aus;
+// 2-s-Poll bleibt als Fallback (Verbindungsabbruch, verpasste Events).
+//
+// T-Bar (Teil 2: `crosspoint.transitionPosition`/`setTransitionPosition`
+// existieren noch nicht): rein kosmetisch, animiert nur während eines
+// Auto-Trans-Klicks über eine feste Heuristik-Dauer, kein echtes
+// Server-Feedback. Rate-Wahl/Wipe sind ausgegraut mit Tooltip (Teil 2 /
+// außerhalb des aktuellen Scopes) statt weggelassen — "gehört zur
+// 'echtes Pult'-Anmutung" (§3.3).
+//
+// PGM-Reihe bewusst nur Anzeige, kein Hot-Cut: §3.5 offene Frage 1 ist
+// nicht entschieden, und ein Hot-Cut wäre ohne Node-Änderung nur über
+// einen impliziten "select+cut"-Umweg lösbar, der nebenbei die
+// gestagte Preset-Auswahl verwirft — zu überraschendes Verhalten für
+// einen Live-Schnitt, um es ungefragt zu implementieren.
 const WIDTH = 640;
 const HEIGHT = 480;
-// Feste Picture-in-Picture-Box fürs DVE-Toggle (unten rechts, 1/3 Größe) —
-// "ein DVE-Kanal vorführbar" (C10) braucht keine freie Positionierung,
-// volle DVE-Tiefe ist Community-Scope (ARCHITECTURE.md §13.1).
 const PIP_BOX = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
 PIP_BOX.x = WIDTH - PIP_BOX.width - 16;
 PIP_BOX.y = HEIGHT - PIP_BOX.height - 16;
+
+const AUTO_TRANS_VISUAL_MS = 1000;
 
 class OmpVideoMixerMePanel extends HTMLElement {
   connectedCallback() {
@@ -20,42 +43,112 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; font-family: sans-serif; color: #eee; }
-      section { margin-bottom: 10px; }
-      h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; color: #999; }
-      .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
-      button {
-        cursor: pointer; padding: 6px 10px; border: 1px solid #555;
-        background: #222; color: #eee; border-radius: 4px;
+      :host {
+        display: block;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        color: var(--omp-text, #e8eaed);
+        font-size: var(--omp-font-size-sm, 12px);
       }
-      button.on-air { border-color: #ff3b3b; box-shadow: 0 0 0 2px #ff3b3b inset; }
-      button.preset-active { background: #2e7d32; border-color: #4caf50; }
-      button.toggle-on { background: #1565c0; border-color: #42a5f5; }
-      button.take { background: #444; font-weight: bold; }
-      p.empty { font-size: 12px; color: #888; margin: 4px 0 0; }
+      .console {
+        display: grid;
+        grid-template-columns: 1fr 140px;
+        gap: var(--omp-space-3, 12px);
+        background: var(--omp-surface, #1a1d21);
+        border: 1px solid var(--omp-border, #2e3338);
+        border-radius: var(--omp-radius, 6px);
+        padding: var(--omp-space-3, 12px);
+      }
+      .buses { display: flex; flex-direction: column; gap: 8px; }
+      .bus-row { display: flex; align-items: center; gap: 6px; }
+      .bus-label {
+        width: 34px; flex-shrink: 0; font-size: var(--omp-font-size-xs, 11px);
+        color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; font-weight: 700;
+      }
+      .bus-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+      .bus-buttons omp-button { width: 72px; height: 40px; }
+      .fx-row { display: flex; gap: 8px; margin-top: 4px; align-items: center; }
+      .fx-row omp-button { width: 130px; height: 34px; }
+      .rate-row { display: flex; gap: 4px; margin-top: 6px; }
+      .rate-row omp-button { width: 34px; height: 26px; font-size: 10px; }
+      .transition {
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-3, 12px);
+      }
+      .transition h4 {
+        margin: 0; font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6);
+        text-transform: uppercase;
+      }
+      .transition omp-button.cut { width: 100%; }
+      .transition omp-button.auto { width: 100%; }
+      .mix-wipe { display: flex; gap: 4px; width: 100%; }
+      .mix-wipe omp-button { flex: 1; height: 26px; font-size: 10px; }
+      p.empty { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); margin: 4px 0 0; }
+      [disabled] { opacity: 0.4; }
     `;
 
-    const presetRow = document.createElement("div");
-    presetRow.className = "buttons";
-    const takeRow = document.createElement("div");
-    takeRow.className = "buttons";
+    const console_ = document.createElement("div");
+    console_.className = "console";
+
+    const buses = document.createElement("div");
+    buses.className = "buses";
+    const pgmRow = document.createElement("div");
+    pgmRow.className = "bus-row";
+    const pgmLabel = document.createElement("span");
+    pgmLabel.className = "bus-label";
+    pgmLabel.textContent = "PGM";
+    const pgmButtons = document.createElement("div");
+    pgmButtons.className = "bus-buttons";
+    pgmRow.append(pgmLabel, pgmButtons);
+
+    const pstRow = document.createElement("div");
+    pstRow.className = "bus-row";
+    const pstLabel = document.createElement("span");
+    pstLabel.className = "bus-label";
+    pstLabel.textContent = "PST";
+    const pstButtons = document.createElement("div");
+    pstButtons.className = "bus-buttons";
+    pstRow.append(pstLabel, pstButtons);
+
     const fxRow = document.createElement("div");
-    fxRow.className = "buttons";
+    fxRow.className = "fx-row";
+    const rateRow = document.createElement("div");
+    rateRow.className = "rate-row";
 
-    const section = (title, row) => {
-      const s = document.createElement("section");
-      const h = document.createElement("h4");
-      h.textContent = title;
-      s.append(h, row);
-      return s;
-    };
+    buses.append(pgmRow, pstRow, fxRow, rateRow);
 
-    shadow.append(
-      style,
-      section("Preset (Auswahl)", presetRow),
-      section("Take", takeRow),
-      section("Keyer / DVE", fxRow),
-    );
+    const transition = document.createElement("div");
+    transition.className = "transition";
+    const transitionTitle = document.createElement("h4");
+    transitionTitle.textContent = "Transition";
+    const cutBtn = document.createElement("omp-button");
+    cutBtn.className = "cut";
+    cutBtn.setAttribute("variant", "take");
+    cutBtn.textContent = "Cut";
+    const autoBtn = document.createElement("omp-button");
+    autoBtn.className = "auto";
+    autoBtn.setAttribute("variant", "take");
+    autoBtn.textContent = "Auto";
+    const tBar = document.createElement("omp-fader");
+    tBar.setAttribute("min", "0");
+    tBar.setAttribute("max", "1");
+    tBar.setAttribute("value", "0");
+    tBar.setAttribute("disabled", "");
+    tBar.style.pointerEvents = "none";
+    const mixWipe = document.createElement("div");
+    mixWipe.className = "mix-wipe";
+    const mixBtn = document.createElement("omp-button");
+    mixBtn.textContent = "MIX";
+    mixBtn.active = true;
+    mixBtn.setAttribute("color", "cue");
+    const wipeBtn = document.createElement("omp-button");
+    wipeBtn.textContent = "WIPE";
+    wipeBtn.setAttribute("disabled", "");
+    wipeBtn.title = "Wipe-Muster: außerhalb des aktuellen Scopes (ARCHITECTURE.md §13.1)";
+    mixWipe.append(mixBtn, wipeBtn);
+    transition.append(transitionTitle, cutBtn, autoBtn, tBar, mixWipe);
+
+    console_.append(buses, transition);
+    shadow.append(style, console_);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -64,33 +157,60 @@ class OmpVideoMixerMePanel extends HTMLElement {
         body: JSON.stringify(body || {}),
       }).then(refresh);
 
-    const cutBtn = document.createElement("button");
-    cutBtn.textContent = "Cut";
-    cutBtn.className = "take";
     cutBtn.addEventListener("click", () => call("crosspoint.cut"));
+    autoBtn.addEventListener("click", () => {
+      call("crosspoint.autoTrans");
+      animateTBar();
+    });
 
-    const autoTransBtn = document.createElement("button");
-    autoTransBtn.textContent = "Auto Trans";
-    autoTransBtn.className = "take";
-    autoTransBtn.addEventListener("click", () => call("crosspoint.autoTrans"));
+    let tBarAnimation = null;
+    const animateTBar = () => {
+      if (tBarAnimation) cancelAnimationFrame(tBarAnimation);
+      const start = performance.now();
+      const tick = (now) => {
+        const pct = Math.min(1, (now - start) / AUTO_TRANS_VISUAL_MS);
+        tBar.value = pct;
+        if (pct < 1) {
+          tBarAnimation = requestAnimationFrame(tick);
+        } else {
+          tBarAnimation = null;
+          setTimeout(() => (tBar.value = 0), 200);
+        }
+      };
+      tBarAnimation = requestAnimationFrame(tick);
+    };
 
-    takeRow.append(cutBtn, autoTransBtn);
+    const RATES = [6, 12, 25, 50];
+    for (const frames of RATES) {
+      const btn = document.createElement("omp-button");
+      btn.textContent = `${frames}f`;
+      btn.setAttribute("disabled", "");
+      btn.title = "Rate-Wahl (crosspoint.transRate): K3-Teil-2";
+      rateRow.append(btn);
+    }
 
-    const keyerBtn = document.createElement("button");
-    keyerBtn.textContent = "Keyer (Farbfläche)";
+    const keyerBtn = document.createElement("omp-button");
+    keyerBtn.textContent = "DSK";
+    keyerBtn.setAttribute("color", "onair");
     let keyerEnabled = false;
-    keyerBtn.addEventListener("click", () =>
-      call("keyer.setEnabled", { enabled: !keyerEnabled }),
-    );
+    keyerBtn.addEventListener("click", () => call("keyer.setEnabled", { enabled: !keyerEnabled }));
 
-    const dveBtn = document.createElement("button");
-    dveBtn.textContent = "DVE PIP";
+    const dveBtn = document.createElement("omp-button");
+    dveBtn.textContent = "PIP";
+    dveBtn.setAttribute("color", "preset");
     let dvePipActive = false;
-    dveBtn.addEventListener("click", () =>
-      dvePipActive ? call("dve.reset") : call("dve.setBox", PIP_BOX),
-    );
+    dveBtn.addEventListener("click", () => (dvePipActive ? call("dve.reset") : call("dve.setBox", PIP_BOX)));
 
     fxRow.append(keyerBtn, dveBtn);
+
+    const makeBusButton = (label, senderId, isProgram) => {
+      const btn = document.createElement("omp-button");
+      btn.textContent = label;
+      if (!isProgram) {
+        btn.addEventListener("click", () => call("crosspoint.select", { senderId }));
+      }
+      return btn;
+    };
 
     const refresh = async () => {
       const [inputsRes, programRes, presetRes, keyerRes, dveRes] = await Promise.all([
@@ -108,46 +228,52 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const dveBox = dveRes.ok ? (await dveRes.json()).value : null;
       dvePipActive = !!dveBox && dveBox.width < WIDTH;
 
-      presetRow.innerHTML = "";
+      pgmButtons.innerHTML = "";
+      pstButtons.innerHTML = "";
 
-      const blackBtn = document.createElement("button");
-      blackBtn.textContent = "Schwarz";
-      blackBtn.className = [preset === "" ? "preset-active" : "", program === "" ? "on-air" : ""]
-        .filter(Boolean)
-        .join(" ");
-      blackBtn.addEventListener("click", () => call("crosspoint.select", { senderId: "" }));
-      presetRow.append(blackBtn);
-
-      for (const input of inputs) {
-        const btn = document.createElement("button");
-        btn.textContent = input.label;
-        btn.className = [
-          input.senderId === preset ? "preset-active" : "",
-          input.senderId === program ? "on-air" : "",
-        ]
-          .filter(Boolean)
-          .join(" ");
-        btn.addEventListener("click", () => call("crosspoint.select", { senderId: input.senderId }));
-        presetRow.append(btn);
-      }
-
+      const entries = [{ label: "BLK", senderId: "" }, ...inputs.map((i) => ({ label: i.label, senderId: i.senderId }))];
       if (inputs.length === 0) {
         const empty = document.createElement("p");
         empty.className = "empty";
         empty.textContent = "keine Quellen entdeckt";
-        presetRow.append(empty);
+        pstButtons.append(empty);
+      }
+      for (const entry of entries) {
+        const pgmBtn = makeBusButton(entry.label, entry.senderId, true);
+        pgmBtn.active = entry.senderId === program;
+        pgmBtn.setAttribute("color", "onair");
+        pgmButtons.append(pgmBtn);
+
+        const pstBtn = makeBusButton(entry.label, entry.senderId, false);
+        pstBtn.active = entry.senderId === preset;
+        pstBtn.setAttribute("color", "preset");
+        pstButtons.append(pstBtn);
       }
 
-      keyerBtn.className = keyerEnabled ? "toggle-on" : "";
-      dveBtn.className = dvePipActive ? "toggle-on" : "";
+      keyerBtn.active = keyerEnabled;
+      dveBtn.active = dvePipActive;
     };
 
     refresh();
     this._interval = setInterval(refresh, 2000);
+
+    this._es = new EventSource("/api/v1/events");
+    this._es.onmessage = (ev) => {
+      let parsed;
+      try {
+        parsed = JSON.parse(ev.data);
+      } catch {
+        return;
+      }
+      if (parsed.type === `omp.tally.${nodeId}`) refresh();
+    };
+
+    this._refresh = refresh;
   }
 
   disconnectedCallback() {
     clearInterval(this._interval);
+    if (this._es) this._es.close();
   }
 }
 

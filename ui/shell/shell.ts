@@ -26,6 +26,10 @@ import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 // importiert seinerseits flow-canvas.ts/hosts-view.ts/workflows-view.ts
 // (UMSETZUNG.md K1-Teil-1: App-Bar mit Tabs statt Floating-Panels).
 import "./app-shell.ts";
+// ui/kit-Bausteine (ARCHITECTURE.md §22.2) einmal global registrieren —
+// s. ui/kit/index.ts für die Begründung (Node-UI-Bundles nutzen sie
+// danach ohne eigenen Import).
+import "../kit/index.ts";
 
 const KIOSK_ROUTE = /^\/console\/([^/]+)\/([^/]+)$/;
 

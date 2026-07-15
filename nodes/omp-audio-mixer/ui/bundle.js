@@ -1,17 +1,21 @@
-// Node-UI-Bundle des Audiomischers (UMSETZUNG.md C11, ARCHITECTURE.md
-// §4.5): "+ Kanal"-Button (addChannel), pro Kanal Gain/Mute/EQ/Audio-
-// Follow-Video-Konfiguration. Gleiche generische Node-Proxy-API wie
-// omp-video-mixer-me (C10): /api/v1/nodes/<id>/params/<name>,
-// /api/v1/nodes/<id>/methods/<name>. Pollt alle 2s (Kanalliste ändert
-// sich per addChannel/removeChannel zur Laufzeit, ARCHITECTURE.md §13.2:
-// "B6 muss Descriptor-Änderungen ohnehin schon per Re-Fetch vertragen").
+// Node-UI-Bundle des Audiomischers (UMSETZUNG.md C11/K4-Teil-1,
+// ARCHITECTURE.md §13.2, docs/END-GOAL-FEATURES.md §4.3c/§4.4 Teil 1):
+// vertikale Kanalzüge auf ui/kit (<omp-fader> für Gain, <omp-knob> für
+// die 3 EQ-Bänder, <omp-button> für Mute/AFV/Override, <omp-meter> für
+// Pegel) statt Zahlenfeldern + "EQ setzen"-Button. Gleiche generische
+// Node-Proxy-API wie zuvor (/api/v1/nodes/<id>/params/<name>,
+// /methods/<name>) — reines UI-Bundle + der in `pipeline.rs`/`levels.rs`
+// neu hinzugekommene Metering-Pfad (`levelsUrl`-SSE), sonst KEIN neues
+// Routing (Aux/Gruppen/Kompressor/Limiter sind Teil 2/3).
 //
-// Wichtig: jeder Poll baut NICHT das komplette DOM neu (führte zu
-// sichtbarem Flackern, da Buttons/Inputs bei jedem Tick verworfen und
-// neu erzeugt wurden, inkl. Fokusverlust während der Eingabe) — pro
-// Kanal wird das Element genau einmal erzeugt und danach nur noch in
-// Werten aktualisiert (`updateChannelElement`); gerade fokussierte
-// Inputs werden beim Aktualisieren übersprungen.
+// Gleiches Flacker-Vermeidungsmuster wie vorher: pro Kanal wird das
+// Element genau einmal gebaut (`createChannelElement`), Polls schreiben
+// nur noch Werte (`updateChannelElement`) — Kit-Elemente reflektieren
+// Werte über Attribute (`value`), das passt direkt in dieses Muster.
+// Ein gerade gedraggtes Fader/Knob wird beim Poll nicht überschrieben
+// (analog zum bisherigen "fokussiertes Input nicht überschreiben",
+// `dragging`-Set statt `activeElement`-Vergleich, weil Kit-Elemente die
+// eigentliche Eingabe in ihrem eigenen Shadow-DOM kapseln).
 class OmpAudioMixerPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -19,40 +23,74 @@ class OmpAudioMixerPanel extends HTMLElement {
 
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; font-family: sans-serif; color: #eee; font-size: 12px; }
-      .add-row { margin-bottom: 8px; }
-      .add-row button {
-        cursor: pointer; padding: 6px 10px; border: 1px solid #4caf50;
-        background: #2e7d32; color: #eee; border-radius: 4px;
+      :host {
+        display: block;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        color: var(--omp-text, #e8eaed);
+        font-size: var(--omp-font-size-sm, 12px);
       }
-      .channel {
-        border: 1px solid #444; border-radius: 4px; padding: 6px 8px;
-        margin-bottom: 6px; display: grid; gap: 4px;
+      .console {
+        display: flex; gap: var(--omp-space-2, 8px); align-items: flex-start;
+        background: var(--omp-surface, #1a1d21);
+        border: 1px solid var(--omp-border, #2e3338);
+        border-radius: var(--omp-radius, 6px);
+        padding: var(--omp-space-3, 12px);
+        overflow-x: auto;
       }
-      .channel-head { display: flex; justify-content: space-between; align-items: center; }
-      .channel-head strong { font-size: 13px; }
-      .channel-head button { cursor: pointer; background: #5a1a1a; color: #eee; border: 1px solid #a33; border-radius: 3px; }
-      .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-      label { color: #999; }
-      input[type="number"] { width: 56px; }
-      input[type="text"] { width: 140px; }
-      button.mute-on { background: #a33; }
-      button.override-on { background: #b8860b; }
-      p.empty { font-size: 12px; color: #888; }
+      .master {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        padding-right: var(--omp-space-3, 12px);
+        border-right: 1px solid var(--omp-border, #2e3338);
+        flex-shrink: 0;
+      }
+      .master .label { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; }
+      .strip {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        width: 76px; flex-shrink: 0;
+        border-right: 1px solid var(--omp-border, #2e3338);
+        padding-right: var(--omp-space-2, 8px);
+      }
+      .strip:last-of-type { border-right: none; }
+      .strip .label {
+        font-size: 10px; font-weight: 600; text-align: center; max-width: 76px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .strip select { width: 100%; font-size: 10px; background: var(--omp-bg, #101214); color: var(--omp-text, #e8eaed); border: 1px solid var(--omp-border, #2e3338); }
+      .eq-row { display: flex; gap: 2px; }
+      .fader-row { display: flex; gap: 6px; align-items: flex-end; }
+      .strip omp-button { width: 100%; height: 24px; font-size: 10px; }
+      .remove-btn { font-size: 9px; color: var(--omp-text-dim, #9aa0a6); background: none; border: none; cursor: pointer; text-decoration: underline; }
+      details.afv { width: 100%; font-size: 10px; }
+      details.afv summary { cursor: pointer; color: var(--omp-text-dim, #9aa0a6); }
+      details.afv .row { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+      details.afv input, details.afv select { width: 100%; font-size: 10px; }
+      .add-btn { align-self: flex-start; margin-bottom: var(--omp-space-2, 8px); }
+      p.empty { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); }
     `;
 
-    const addRow = document.createElement("div");
-    addRow.className = "add-row";
-    const addBtn = document.createElement("button");
+    const addBtn = document.createElement("omp-button");
+    addBtn.className = "add-btn";
     addBtn.textContent = "+ Kanal";
     addBtn.addEventListener("click", () => call("addChannel", { label: "" }).then(poll));
-    addRow.append(addBtn);
 
-    const list = document.createElement("div");
+    const master = document.createElement("div");
+    master.className = "master";
+    const masterLabel = document.createElement("span");
+    masterLabel.className = "label";
+    masterLabel.textContent = "Master";
+    const masterMeter = document.createElement("omp-meter");
+    masterMeter.style.height = "160px";
+    master.append(masterLabel, masterMeter);
+
+    const console_ = document.createElement("div");
+    console_.className = "console";
+    console_.append(master);
+
     const empty = document.createElement("p");
     empty.className = "empty";
     empty.textContent = 'keine Kanäle — "+ Kanal" zum Hinzufügen';
-    shadow.append(style, addRow, list, empty);
+
+    shadow.append(style, addBtn, console_, empty);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -67,86 +105,81 @@ class OmpAudioMixerPanel extends HTMLElement {
       return (await res.json()).value;
     };
 
-    // channelId -> { el, gainInput, muteBtn, eqLow/Mid/HighInput,
-    //                followInput, modeSelect, overrideBtn }
+    // channelId -> refs + Set von Kit-Elementen, die gerade gedraggt
+    // werden (kein Poll-Überschreiben während der Eingabe).
     const channelEls = new Map();
+    const dragging = new Set();
+    const trackDrag = (el) => {
+      el.addEventListener("pointerdown", () => dragging.add(el), true);
+      el.addEventListener("change", () => dragging.delete(el));
+    };
 
-    // Element wird genau einmal pro Kanal gebaut (beim ersten Sichten);
-    // danach nur noch über `updateChannelElement` mit frischen Werten
-    // befüllt, nie neu erzeugt — das ist der eigentliche Flacker-Fix.
     const createChannelElement = (id, label) => {
       const el = document.createElement("div");
-      el.className = "channel";
+      el.className = "strip";
 
-      const head = document.createElement("div");
-      head.className = "channel-head";
-      const title = document.createElement("strong");
-      title.textContent = label;
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "Entfernen";
-      removeBtn.addEventListener("click", () =>
-        call("removeChannel", { channelId: id }).then(poll),
-      );
-      head.append(title, removeBtn);
+      const labelEl = document.createElement("span");
+      labelEl.className = "label";
+      labelEl.textContent = label;
 
-      const sourceRow = document.createElement("div");
-      sourceRow.className = "row";
-      const sourceLabel = document.createElement("label");
-      sourceLabel.textContent = "Quelle";
+      const meter = document.createElement("omp-meter");
+
       const sourceSelect = document.createElement("select");
       sourceSelect.addEventListener("change", () =>
         call(`channel.${id}.setSource`, { senderId: sourceSelect.value }).then(poll),
       );
-      sourceRow.append(sourceLabel, sourceSelect);
-
-      const gainRow = document.createElement("div");
-      gainRow.className = "row";
-      const gainLabel = document.createElement("label");
-      gainLabel.textContent = "Gain (dB)";
-      const gainInput = document.createElement("input");
-      gainInput.type = "number";
-      gainInput.step = "0.5";
-      gainInput.addEventListener("change", () =>
-        call(`channel.${id}.setGain`, { db: parseFloat(gainInput.value) || 0 }),
-      );
-      const muteBtn = document.createElement("button");
-      muteBtn.addEventListener("click", () => {
-        const nowMuted = muteBtn.dataset.muted === "true";
-        call(`channel.${id}.setMute`, { muted: !nowMuted }).then(poll);
-      });
-      gainRow.append(gainLabel, gainInput, muteBtn);
 
       const eqRow = document.createElement("div");
-      eqRow.className = "row";
-      const makeEqInput = (bandLabel) => {
-        const l = document.createElement("label");
-        l.textContent = bandLabel;
-        const i = document.createElement("input");
-        i.type = "number";
-        i.step = "1";
-        eqRow.append(l, i);
-        return i;
+      eqRow.className = "eq-row";
+      const makeKnob = (bandLabel) => {
+        const knob = document.createElement("omp-knob");
+        knob.setAttribute("min", "-24");
+        knob.setAttribute("max", "12");
+        knob.setAttribute("default-value", "0");
+        knob.setAttribute("center-detent", "");
+        knob.textContent = bandLabel;
+        trackDrag(knob);
+        eqRow.append(knob);
+        return knob;
       };
-      const eqLowInput = makeEqInput("Low");
-      const eqMidInput = makeEqInput("Mid");
-      const eqHighInput = makeEqInput("High");
-      const eqApply = document.createElement("button");
-      eqApply.textContent = "EQ setzen";
-      eqApply.addEventListener("click", () =>
+      const eqLowKnob = makeKnob("Lo");
+      const eqMidKnob = makeKnob("Mid");
+      const eqHighKnob = makeKnob("Hi");
+      const applyEq = () =>
         call(`channel.${id}.setEq`, {
-          low: parseFloat(eqLowInput.value) || 0,
-          mid: parseFloat(eqMidInput.value) || 0,
-          high: parseFloat(eqHighInput.value) || 0,
-        }),
-      );
-      eqRow.append(eqApply);
+          low: eqLowKnob.value,
+          mid: eqMidKnob.value,
+          high: eqHighKnob.value,
+        });
+      eqLowKnob.addEventListener("change", applyEq);
+      eqMidKnob.addEventListener("change", applyEq);
+      eqHighKnob.addEventListener("change", applyEq);
 
-      const followRow = document.createElement("div");
-      followRow.className = "row";
-      const followLabel = document.createElement("label");
-      followLabel.textContent = "Follow Node-ID";
+      const faderRow = document.createElement("div");
+      faderRow.className = "fader-row";
+      const fader = document.createElement("omp-fader");
+      fader.setAttribute("min", "-60");
+      fader.setAttribute("max", "12");
+      fader.setAttribute("default-value", "0");
+      trackDrag(fader);
+      fader.addEventListener("change", () => call(`channel.${id}.setGain`, { db: fader.value }));
+      faderRow.append(fader, meter);
+
+      const muteBtn = document.createElement("omp-button");
+      muteBtn.textContent = "Mute";
+      muteBtn.setAttribute("color", "onair");
+      let muted = false;
+      muteBtn.addEventListener("click", () => call(`channel.${id}.setMute`, { muted: !muted }).then(poll));
+
+      const afv = document.createElement("details");
+      afv.className = "afv";
+      const summary = document.createElement("summary");
+      summary.textContent = "AFV";
+      const afvRow = document.createElement("div");
+      afvRow.className = "row";
       const followInput = document.createElement("input");
       followInput.type = "text";
+      followInput.placeholder = "Follow Node-ID";
       const modeSelect = document.createElement("select");
       for (const m of ["off", "cut", "crossfade"]) {
         const opt = document.createElement("option");
@@ -154,41 +187,50 @@ class OmpAudioMixerPanel extends HTMLElement {
         opt.textContent = m;
         modeSelect.append(opt);
       }
-      const followApply = document.createElement("button");
-      followApply.textContent = "Follow setzen";
+      const followApply = document.createElement("omp-button");
+      followApply.textContent = "Setzen";
       followApply.addEventListener("click", () =>
-        call(`channel.${id}.setFollow`, {
-          targetNodeId: followInput.value.trim(),
-          mode: modeSelect.value,
-        }),
+        call(`channel.${id}.setFollow`, { targetNodeId: followInput.value.trim(), mode: modeSelect.value }),
       );
-      const overrideBtn = document.createElement("button");
-      overrideBtn.addEventListener("click", () => {
-        const nowOn = overrideBtn.dataset.on === "true";
-        call(`channel.${id}.setOverride`, { enabled: !nowOn }).then(poll);
-      });
-      followRow.append(followLabel, followInput, modeSelect, followApply, overrideBtn);
+      const overrideBtn = document.createElement("omp-button");
+      overrideBtn.textContent = "Override";
+      overrideBtn.setAttribute("color", "cue");
+      let overrideOn = false;
+      overrideBtn.addEventListener("click", () =>
+        call(`channel.${id}.setOverride`, { enabled: !overrideOn }).then(poll),
+      );
+      afvRow.append(followInput, modeSelect, followApply, overrideBtn);
+      afv.append(summary, afvRow);
 
-      el.append(head, sourceRow, gainRow, eqRow, followRow);
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "remove-btn";
+      removeBtn.textContent = "entfernen";
+      removeBtn.addEventListener("click", () => call("removeChannel", { channelId: id }).then(poll));
+
+      el.append(labelEl, sourceSelect, eqRow, faderRow, muteBtn, afv, removeBtn);
 
       return {
         el,
+        meter,
         sourceSelect,
-        gainInput,
+        eqLowKnob,
+        eqMidKnob,
+        eqHighKnob,
+        fader,
         muteBtn,
-        eqLowInput,
-        eqMidInput,
-        eqHighInput,
+        set muted(v) {
+          muted = v;
+        },
         followInput,
         modeSelect,
         overrideBtn,
+        set overrideOn(v) {
+          overrideOn = v;
+        },
       };
     };
 
-    // Baut die Options-Liste eines Quell-Auswahlfelds neu — nur
-    // aufgerufen, wenn sich `availableSources` tatsächlich geändert hat
-    // (s. `poll()`), nicht bei jedem Tick, sonst würde ein gerade
-    // geöffnetes Dropdown ständig zuklappen.
+    let lastSourcesKey = "";
     const rebuildSourceOptions = (sourceSelect, sources) => {
       const current = sourceSelect.value;
       sourceSelect.innerHTML = "";
@@ -205,24 +247,18 @@ class OmpAudioMixerPanel extends HTMLElement {
       sourceSelect.value = current;
     };
 
-    // Nur Werte setzen, keine Elemente neu bauen. Ein gerade fokussierter
-    // Input (Nutzer tippt) wird nicht überschrieben, sonst würde der
-    // nächste Poll mitten in der Eingabe den Wert zurücksetzen.
     const updateChannelElement = (refs, data) => {
-      const active = refs.el.getRootNode().activeElement;
-      if (refs.sourceSelect !== active) refs.sourceSelect.value = data.source || "";
-      if (refs.gainInput !== active) refs.gainInput.value = data.gain ?? 0;
-      refs.muteBtn.dataset.muted = String(!!data.mute);
-      refs.muteBtn.textContent = data.mute ? "Muted" : "Mute";
-      refs.muteBtn.className = data.mute ? "mute-on" : "";
-      if (refs.eqLowInput !== active) refs.eqLowInput.value = data.eqLow ?? 0;
-      if (refs.eqMidInput !== active) refs.eqMidInput.value = data.eqMid ?? 0;
-      if (refs.eqHighInput !== active) refs.eqHighInput.value = data.eqHigh ?? 0;
-      if (refs.followInput !== active) refs.followInput.value = data.followTarget || "";
-      if (refs.modeSelect !== active) refs.modeSelect.value = data.followMode || "off";
-      refs.overrideBtn.dataset.on = String(!!data.overrideEnabled);
-      refs.overrideBtn.textContent = data.overrideEnabled ? "Override an" : "Override aus";
-      refs.overrideBtn.className = data.overrideEnabled ? "override-on" : "";
+      if (!dragging.has(refs.sourceSelect)) refs.sourceSelect.value = data.source || "";
+      if (!dragging.has(refs.fader)) refs.fader.value = data.gain ?? 0;
+      refs.muteBtn.active = !!data.mute;
+      refs.muted = !!data.mute;
+      if (!dragging.has(refs.eqLowKnob)) refs.eqLowKnob.value = data.eqLow ?? 0;
+      if (!dragging.has(refs.eqMidKnob)) refs.eqMidKnob.value = data.eqMid ?? 0;
+      if (!dragging.has(refs.eqHighKnob)) refs.eqHighKnob.value = data.eqHigh ?? 0;
+      if (refs.followInput !== shadow.activeElement) refs.followInput.value = data.followTarget || "";
+      refs.modeSelect.value = data.followMode || "off";
+      refs.overrideBtn.active = !!data.overrideEnabled;
+      refs.overrideOn = !!data.overrideEnabled;
     };
 
     const fetchChannelData = async (id) => {
@@ -240,11 +276,6 @@ class OmpAudioMixerPanel extends HTMLElement {
         ]);
       return { source, gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled };
     };
-
-    // Nur neu aufgebaut, wenn sich availableSources tatsächlich ändert
-    // (s. rebuildSourceOptions) — vermeidet, ein offenes Dropdown bei
-    // jedem 2s-Tick zuzuklappen.
-    let lastSourcesKey = "";
 
     const poll = async () => {
       const [channelsValue, availableSourcesValue] = await Promise.all([
@@ -274,7 +305,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         if (!refs) {
           refs = createChannelElement(ch.id, ch.label);
           channelEls.set(ch.id, refs);
-          list.append(refs.el);
+          console_.append(refs.el);
           isNew = true;
         }
         if (isNew || sourcesChanged) {
@@ -287,10 +318,38 @@ class OmpAudioMixerPanel extends HTMLElement {
 
     poll();
     this._interval = setInterval(poll, 2000);
+
+    // K4-Teil-1 Metering: eigene EventSource auf den node-lokalen
+    // `/levels`-SSE-Port (levelsUrl), unabhängig vom Shell-SSE-Stream
+    // (`/api/v1/events`) — anderer Zweck (Pegel, nicht Tally/Graph) und
+    // anderer Server (levels.rs, eigener Port, s. dortige Moduldoku).
+    getParam("levelsUrl").then((url) => {
+      if (!url) return;
+      this._levelsSource = new EventSource(url);
+      this._levelsSource.onmessage = (ev) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        if (parsed.channelId == null) {
+          masterMeter.value = parsed.rms;
+          masterMeter.peak = parsed.peak;
+          return;
+        }
+        const refs = channelEls.get(parsed.channelId);
+        if (refs) {
+          refs.meter.value = parsed.rms;
+          refs.meter.peak = parsed.peak;
+        }
+      };
+    });
   }
 
   disconnectedCallback() {
     clearInterval(this._interval);
+    if (this._levelsSource) this._levelsSource.close();
   }
 }
 

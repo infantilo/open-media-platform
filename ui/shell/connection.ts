@@ -22,6 +22,16 @@
 // weitergereicht — #handleServerEvent() (Graph-Refresh/Tally/Crash-
 // Events) bleibt Sache von flow-canvas.ts, dieses Modul kennt die
 // Nutzlast-Struktur nicht.
+//
+// Bewusst kein `import { getToken } from "./auth.ts"`: dessen Modul-
+// Ladezeit-Seiteneffekt (der globale `window.fetch`-Patch, s. dortiger
+// Kommentar) bricht unter `deno test` ("window is not defined", Deno 2
+// kennt nur `globalThis`) — dieses Modul braucht ohnehin nur den
+// Token-Lesezugriff, kein Fetch-Patching. Gleicher Storage-Key wie
+// `auth.ts`s `TOKEN_KEY`, absichtlich dupliziert statt einer gemeinsamen
+// dritten Datei nur für eine Konstante.
+const TOKEN_KEY = "omp-auth-token";
+
 export type ConnectionState = "connected" | "degraded" | "disconnected";
 
 export interface ConnectionChangeDetail {
@@ -78,7 +88,17 @@ class ConnectionMonitor extends EventTarget {
   }
 
   #connect() {
-    const es = new EventSource("/api/v1/events");
+    // Browser-`EventSource` kann keine eigenen Header setzen (Web-
+    // Plattform-Einschränkung) — der Server akzeptiert deshalb seit D3-2
+    // (`docs/decisions.md`) `?access_token=` als Fallback zum
+    // `Authorization`-Header. Live-Test-Fund (K3/K4-Teil-1-Sitzung):
+    // dieser Fallback wurde beim Auslagern der SSE-Verbindung aus
+    // flow-canvas.ts nach hier nie tatsächlich verdrahtet — die Shell
+    // blieb dadurch dauerhaft "disconnected", sobald ein echter Nutzer
+    // (also außerhalb des Zero-User-Bootstrap-Zustands) angemeldet war.
+    const token = localStorage.getItem(TOKEN_KEY);
+    const url = token ? `/api/v1/events?access_token=${encodeURIComponent(token)}` : "/api/v1/events";
+    const es = new EventSource(url);
     this.#es = es;
 
     es.onopen = () => {

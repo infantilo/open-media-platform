@@ -65,6 +65,9 @@ use tokio::sync::oneshot;
 pub const SAMPLE_RATE: u32 = 48000;
 pub const CHANNELS: u32 = 2;
 
+/// `level`-Element-Meldeintervall (K4-Teil-1, §4.3a: "50 ms").
+const LEVEL_INTERVAL_NS: u64 = 50_000_000;
+
 pub struct Config {
     pub domain: String,
     pub flow_id: String,
@@ -73,6 +76,48 @@ pub struct Config {
 
 pub enum Event {
     Error(String),
+    /// Ein `level`-Bus-Message, bereits auf 0..1 (linear, wie
+    /// `omp-kit`s `<omp-meter>` es erwartet) umgerechnet — `channel_id
+    /// == None` ist der Master (K4-Teil-1, `docs/END-GOAL-FEATURES.md`
+    /// §4.3a). `main.rs` reicht das an `levels::Broadcaster` weiter.
+    Level {
+        channel_id: Option<String>,
+        rms: f64,
+        peak: f64,
+    },
+}
+
+/// dB → 0..1-Näherung fürs `<omp-meter>`-Kit-Element (0 dBFS = 1.0,
+/// alles darunter linear kleiner) — dieselbe Formel wie `db_to_linear`
+/// unten, hier separat benannt, weil sie fachlich etwas anderes
+/// ausdrückt (Anzeige-Pegel, nicht Fader-Gain).
+fn db_to_meter_level(db: f64) -> f64 {
+    10f64.powf(db / 20.0).clamp(0.0, 1.0)
+}
+
+/// Liest die `rms`/`peak`-Arrays aus einem `level`-Element-Bus-Message
+/// und mittelt sie zu einem einzelnen Wert — das Kit-Meter zeigt einen
+/// Balken pro Kanalzug, keine getrennte L/R-Anzeige (Teil 1). **Typ ist
+/// `glib::ValueArray` (`GValueArray`), nicht `gst::Array`
+/// (`GST_TYPE_ARRAY`)** — per Live-Test mit `gst-launch-1.0 -m`
+/// verifiziert (`rms=(GValueArray)< ... >` in der Bus-Message-Ausgabe),
+/// nicht angenommen: mit `gst::Array` schlug `structure.get()` still
+/// fehl (kein Panic, nur `Err` → `?` → `None`), sodass nie ein Level-
+/// Event verschickt wurde, obwohl die Bus-Messages selbst ankamen — ein
+/// per Live-Verifikation (`curl`/rohes TCP gegen `/levels`, 0 Bytes
+/// Body trotz erfolgreicher Verbindung) gefundener Bug.
+fn parse_level_message(structure: &gst::StructureRef) -> Option<(f64, f64)> {
+    let rms = structure.get::<gst::glib::ValueArray>("rms").ok()?;
+    let peak = structure.get::<gst::glib::ValueArray>("peak").ok()?;
+    let avg = |arr: &gst::glib::ValueArray| -> f64 {
+        let values: Vec<f64> = arr.iter().filter_map(|v| v.get::<f64>().ok()).collect();
+        if values.is_empty() {
+            f64::NEG_INFINITY
+        } else {
+            values.iter().sum::<f64>() / values.len() as f64
+        }
+    };
+    Some((db_to_meter_level(avg(&rms)), db_to_meter_level(avg(&peak))))
 }
 
 /// Woher ein Kanal sein Audio bezieht — `Internal` (Testton) oder
@@ -215,13 +260,29 @@ fn add_channel_branch(
         .name(format!("eq-{id}"))
         .build()
         .map_err(|e| format!("equalizer-3bands ({id}): {e}"))?;
+    // Metering (K4-Teil-1, `docs/END-GOAL-FEATURES.md` §4.3a): **vor**
+    // dem Fader, nicht danach — Gain/Mute sind hier
+    // `audiomixer`-Sink-Pad-Properties (s. Moduldoku "Gain/Mute als
+    // Pad-Property"), es gibt also keinen eigenen Element-Zwischenpunkt
+    // "nach dem Fader" ohne den bewusst vermiedenen zusätzlichen
+    // `volume`-Element pro Kanal wieder einzuführen. Ehrliche Grenze für
+    // Teil 1: das Meter zeigt den EQ'ten, aber noch nicht Fader-
+    // skalierten Pegel. Echtes Post-Fader-Metering wäre Teil 2, im
+    // selben Aufwasch wie der Kompressor (der ohnehin einen echten
+    // Kettenumbau braucht).
+    let level = gst::ElementFactory::make("level")
+        .name(format!("level-{id}"))
+        .property("interval", LEVEL_INTERVAL_NS)
+        .build()
+        .map_err(|e| format!("level ({id}): {e}"))?;
 
     active
         .pipeline
         .add(&convert)
         .and_then(|()| active.pipeline.add(&eq))
+        .and_then(|()| active.pipeline.add(&level))
         .map_err(|e| format!("add channel elements ({id}): {e}"))?;
-    gst::Element::link_many([&tail, &convert, &eq])
+    gst::Element::link_many([&tail, &convert, &eq, &level])
         .map_err(|e| format!("link channel chain ({id}): {e}"))?;
     elements.push(convert);
 
@@ -229,20 +290,22 @@ fn add_channel_branch(
         .mixer
         .request_pad_simple("sink_%u")
         .ok_or_else(|| format!("audiomixer: request sink pad failed ({id})"))?;
-    eq.static_pad("src")
-        .ok_or("equalizer: no src pad")?
+    level
+        .static_pad("src")
+        .ok_or("level: no src pad")?
         .link(&mixer_pad)
-        .map_err(|e| format!("link eq to mixer ({id}): {e}"))?;
+        .map_err(|e| format!("link level to mixer ({id}): {e}"))?;
 
     // Neue Elemente in einer bereits laufenden (PLAYING) Pipeline müssen
     // ihren Zustand explizit an den Elternzustand angleichen — sonst
     // bleiben sie in NULL/READY hängen und liefern nie Daten.
-    for el in elements.iter().chain(std::iter::once(&eq)) {
+    for el in elements.iter().chain([&eq, &level]) {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
     }
 
     elements.push(eq.clone());
+    elements.push(level.clone());
     active.channels.insert(
         id.to_string(),
         ChannelBranch {
@@ -280,13 +343,25 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         .name("mixer")
         .build()
         .map_err(|e| format!("audiomixer: {e}"))?;
+    // Master-Meter (K4-Teil-1, §4.3a) — hier echtes Post-Fader-Metering,
+    // anders als pro Kanal: der Master-Ausgang hat keinen separaten
+    // "Fader"-Mechanismus, der `level` müsste umgehen (Master-Fader ist
+    // erst Teil 2, `docs/END-GOAL-FEATURES.md` §4.3b).
+    let level_master = gst::ElementFactory::make("level")
+        .name("level-master")
+        .property("interval", LEVEL_INTERVAL_NS)
+        .build()
+        .map_err(|e| format!("level (master): {e}"))?;
     pipeline
         .add(&mixer)
-        .map_err(|e| format!("add audiomixer: {e}"))?;
+        .and_then(|()| pipeline.add(&level_master))
+        .map_err(|e| format!("add audiomixer/level: {e}"))?;
+    gst::Element::link(&mixer, &level_master)
+        .map_err(|e| format!("link mixer to level (master): {e}"))?;
 
     let mxl_output = MxlAudioOutput::new(
         &pipeline,
-        &mixer,
+        &level_master,
         context.clone(),
         &config.flow_id,
         &config.label,
@@ -353,11 +428,18 @@ pub fn run(
         flowed: active.flowed.clone(),
     }));
 
+    let bus = active.pipeline.bus().expect("pipeline always has a bus");
+
     loop {
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        // Kürzeres Timeout als bei `omp-player`/`omp-source` (dort
+        // 500 ms/1 s): das `level`-Meldeintervall ist 50 ms
+        // (`LEVEL_INTERVAL_NS`), ein Kommando-Wartezyklus drainiert die
+        // Bus-Queue gleich mit (unten) statt einen zweiten Loop/Thread
+        // dafür zu brauchen.
+        match commands_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Command::AddChannel { id, source }) => {
                 if let Err(e) = add_channel_branch(&mut active, &context, &id, &source) {
                     let _ = tx.send(Event::Error(format!("addChannel({id}) failed: {e}")));
@@ -397,6 +479,35 @@ pub fn run(
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        // Nicht-blockierend alle wartenden `level`-Bus-Messages
+        // abholen (K4-Teil-1) — `pop_filtered` statt `timed_pop_filtered`,
+        // damit dieser Schritt den nächsten Kommando-Wartezyklus nicht
+        // zusätzlich verzögert.
+        while let Some(msg) = bus.pop_filtered(&[gst::MessageType::Element]) {
+            let gst::MessageView::Element(el) = msg.view() else {
+                continue;
+            };
+            let Some(structure) = el.structure() else {
+                continue;
+            };
+            if structure.name() != "level" {
+                continue;
+            }
+            let Some((rms, peak)) = parse_level_message(structure) else {
+                continue;
+            };
+            let name = msg.src().map(|o| o.name().to_string()).unwrap_or_default();
+            let channel_id = if name == "level-master" {
+                None
+            } else {
+                match name.strip_prefix("level-") {
+                    Some(id) => Some(id.to_string()),
+                    None => continue,
+                }
+            };
+            let _ = tx.send(Event::Level { channel_id, rms, peak });
         }
     }
 

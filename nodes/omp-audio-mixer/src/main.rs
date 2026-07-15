@@ -14,6 +14,7 @@
 //! B6/das eigene UI-Bundle re-fetchen entsprechend (kein Push-Mechanismus
 //! nötig, `ARCHITECTURE.md` §13.2).
 
+mod levels;
 mod pipeline;
 mod uibundle;
 
@@ -98,6 +99,10 @@ struct AudioMixerStore {
     available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>>,
     next_seq: Arc<AtomicU64>,
     pipeline: PipelineHandle,
+    /// `http://<host>:<port>/levels` (K4-Teil-1) — gleiches Muster wie
+    /// `omp-viewer`s `previewUrl` (C6): der tatsächlich gebundene Port
+    /// steht erst nach `levels::spawn()` fest.
+    levels_url: String,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -144,6 +149,14 @@ impl ParamStore for AudioMixerStore {
             // `channel.<id>.setSource`.
             ParamSpec {
                 name: "availableSources".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            // K4-Teil-1: SSE-Endpunkt für Metering, s. `levels.rs`.
+            ParamSpec {
+                name: "levelsUrl".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -273,6 +286,9 @@ impl ParamStore for AudioMixerStore {
     }
 
     fn get(&self, name: &str) -> Option<Value> {
+        if name == "levelsUrl" {
+            return Some(serde_json::json!(self.levels_url));
+        }
         if name == "channels" {
             let channels = self.channels.lock().expect("lock poisoned");
             return Some(serde_json::json!(
@@ -515,11 +531,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let channels: Arc<Mutex<Vec<ChannelState>>> = Arc::new(Mutex::new(Vec::new()));
     let available_sources: Arc<Mutex<Vec<DiscoveredAudioSource>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // K4-Teil-1 Metering: eigener SSE-Port, Port 0 = vom OS zugewiesen
+    // (mehrere gleichzeitig gestartete Audiomischer-Instanzen dürfen sich
+    // sonst keinen festen Port teilen — gleiche Begründung wie
+    // `OMP_VIEWER_PREVIEW_PORT`, C6/C8).
+    let levels_port: u16 = env_or("OMP_AUDIO_MIXER_LEVELS_PORT", "0").parse()?;
+    let levels_broadcaster = Arc::new(levels::Broadcaster::new());
+    let actual_levels_port = levels::spawn(&format!("0.0.0.0:{levels_port}"), levels_broadcaster.clone())?;
+    let levels_url = format!("http://{host}:{actual_levels_port}/levels");
+
     let store: Arc<dyn ParamStore> = Arc::new(AudioMixerStore {
         channels: channels.clone(),
         available_sources: available_sources.clone(),
         next_seq: Arc::new(AtomicU64::new(1)),
         pipeline: pipeline_handle.clone(),
+        levels_url,
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
@@ -569,6 +596,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 pipeline::Event::Error(message) => {
                     eprintln!("omp-audio-mixer: pipeline error: {message}");
                     handle.publish_alert(message).await;
+                }
+                pipeline::Event::Level { channel_id, rms, peak } => {
+                    let json = serde_json::json!({
+                        "channelId": channel_id,
+                        "rms": rms,
+                        "peak": peak,
+                    })
+                    .to_string();
+                    levels_broadcaster.publish(&json);
                 }
             }
         }

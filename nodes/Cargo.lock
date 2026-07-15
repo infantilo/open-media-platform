@@ -1178,6 +1178,7 @@ dependencies = [
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
+ "tiny_http",
  "tokio",
 ]
 

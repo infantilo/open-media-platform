@@ -1630,6 +1630,108 @@ zweite Kapitel-10-Scheibe (`K1-Teil-1 → K2-Teil-1 → …`, s. o.).
   reproduzierbares Testmittel (per Skript neu erzeugbar, `/data/` ist
   gitignored).
 
+**K3/K4-Teil-1 (Konsolen-Optik + Metering, erledigt, 2026-07-15):**
+`docs/END-GOAL-FEATURES.md` §3.4/§4.4 Teil 1 — die dritte Kapitel-10-
+Scheibe (`K1-Teil-1 → K2-Teil-1 → K3/K4-Teil-1 → …`, s. o.), K3
+(`omp-video-mixer-me`) und K4 (`omp-audio-mixer`) zusammen umgesetzt, da
+beide auf demselben neuen `ui/kit` aufbauen (§10 Punkt 1: "kein neuer
+Bausatz nur für eine Node").
+
+- **`ui/kit/` (neu):** `<omp-fader>`, `<omp-knob>`, `<omp-meter>`,
+  `<omp-button>` als eigenständige Custom Elements mit eigenem Shadow-
+  DOM (Kapselung, ARCHITECTURE.md §22.2), auf `ui/design-tokens.css`
+  (K1-Teil-1) aufbauend. Einmal global aus `shell.ts` importiert
+  (`import "../kit/index.ts"`), Node-UI-Bundles nutzen sie danach ohne
+  eigenen Import (Custom-Element-Registry ist global).
+- **`omp-audio-mixer` (K4-Teil-1, §4.3a "post-fader Metering"):**
+  `levels.rs` (neu) — eigener `tiny_http`-SSE-Server (`GET /levels`,
+  Muster von `omp-mediaio::preview`s MJPEG-Port übernommen, node-lokal
+  statt in `omp-mediaio` verallgemeinert, da bisher nur ein Node das
+  braucht). `pipeline.rs`: ein `level`-Element pro Kanal (vor dem
+  Fader — ehrliche Teil-1-Grenze, echtes Post-Fader-Metering bräuchte
+  den in `docs/decisions.md` dokumentierten Verzicht auf ein
+  zusätzliches `volume`-Element rückgängig zu machen, folgt mit dem
+  Kompressor in Teil 2) sowie ein Master-`level` nach dem `audiomixer`
+  (dort echtes Post-Fader-Metering, kein Fader-Analogon am Master in
+  Teil 1). Bus-Loop pollt `level`-Bus-Messages nicht-blockierend
+  zwischen den 50-ms-Kommando-Wartezyklen. Neuer readonly-Param
+  `levelsUrl`. UI-Bundle (`ui/bundle.js`, komplett neu aufgebaut):
+  vertikale Kanalzüge (`<omp-fader>` für Gain, `<omp-knob>`×3 für EQ,
+  `<omp-button>` für Mute/AFV/Override, `<omp-meter>` für Pegel) statt
+  der bisherigen Zahlenfelder; eigene `EventSource` auf `levelsUrl`.
+- **`omp-video-mixer-me` (K3-Teil-1, §3.4):** reines UI-Bundle-Update
+  (`ui/bundle.js`), keine Node-/Pipeline-Änderung — PGM/PST-Doppelreihe,
+  CUT/AUTO, Keyer/DVE als beleuchtete `<omp-button>`-Tasten statt
+  generischer Button-Liste. T-Bar rein kosmetisch (Teil 2:
+  `transitionPosition` existiert noch nicht), Rate-Wahl/Wipe ausgegraut
+  mit Tooltip statt weggelassen ("gehört zur Pult-Anmutung", §3.3).
+  PGM-Reihe bewusst nur Anzeige, kein Hot-Cut (§3.5 offene Frage 1 nicht
+  entschieden).
+
+  **Zwei echte Bugs per Live-Test gefunden und behoben, beide
+  Auth-bedingt (D3-2) und beide NICHT Teil dieser Scheibe selbst, aber
+  ohne sie war kein Live-Test der eigentlichen K3/K4-Lieferung
+  möglich — der Bootstrap-Zustand (kein Nutzer angelegt) verdeckte sie
+  bislang in jeder früheren Sitzung, auch in K1-Teil-1s eigener
+  Verifikation:**
+
+  1. **`ui/shell/connection.ts`** öffnete die `EventSource` als
+     `new EventSource("/api/v1/events")` ohne den in `docs/decisions.md`
+     (D3-2) bereits vorgesehenen `?access_token=`-Fallback (Browser-
+     `EventSource` kann keine eigenen Header setzen). Sobald ein echter
+     Nutzer angelegt ist, quittiert der Server das mit 401 →
+     `onerror` → Zustand bleibt dauerhaft "disconnected", die gesamte
+     Content-Fläche bleibt per `aria-disabled`/`pointer-events:none`
+     gesperrt (K1-Teil-1s eigener Mechanismus). Fix: Token aus
+     `localStorage` (`"omp-auth-token"`) lesen, als `?access_token=`
+     anhängen — bewusst kein `import { getToken } from "./auth.ts"`,
+     da dessen Modul-Seiteneffekt (`window.fetch`-Patch) unter
+     `deno test` bricht (`window` vs. `globalThis` in Deno 2), Token-Key
+     stattdessen dupliziert.
+  2. **`ui/shell/ui-bundle.ts`** lud Node-UI-Bundles per nativem
+     `import(...)`, das (anders als `fetch()`) nicht über den in
+     `auth.ts` gepatchten globalen `fetch` läuft — der
+     `Authorization`-Header fehlte, jeder Bundle-Import schlug unter
+     echter Auth mit 401 fehl und fiel wegen des schluckenden `catch`
+     still auf das generische B6-Parameter-Panel zurück (betrifft ALLE
+     Nodes mit eigenem UI-Bundle, nicht nur die beiden aus dieser
+     Scheibe). Fix: gleiches `?access_token=`-Muster wie bei (1) auf die
+     `bundle.js`-Import-URL angewendet.
+
+  Beide Funde reproduzierbar demonstriert: Bootstrap-Nutzer angelegt,
+  eingeloggt (Node-CDP-WebSocket-Client, kein `--dump-dom`, Projekt-
+  Memory zu sequenziellen Fetch-Ketten) → vor dem Fix blieb die Pill rot
+  ("Disconnected"), die Content-Fläche gesperrt, Klicks auf Node-Kacheln
+  ohne Wirkung (`elementFromPoint` traf wegen `pointer-events:none` nur
+  noch `<omp-app-shell>` selbst, nie tiefer); nach beiden Fixes Pill
+  grün ("Connected"), Klick öffnet das Panel, `<omp-audio-mixer-panel>`/
+  `<omp-video-mixer-me-panel>` laden sichtbar ihr eigenes Shadow-DOM.
+
+  **Verifiziert (echte Prozesse, kein Mock):** `cargo build/test
+  --workspace` grün, `deno check`/`deno test ui/` grün (40 Tests, davon
+  0 neu — reine Bugfixes ohne neues Verhalten, das isoliert testbar
+  wäre; die eigentliche K3/K4-Funktionalität ist UI-Rendering + Live-
+  SSE, per CDP verifiziert statt per Unit-Test). End-to-end per echtem
+  `omp-audio-mixer`-Prozess: `addChannel` gegen einen echten Testton-
+  Kanal, `curl -sN .../levels` zeigt reale, alternierende
+  `{"channelId":"ch1",...}`/`{"channelId":null,...}`-SSE-Frames mit
+  plausiblen `rms`/`peak`-Werten (Master und Kanal getrennt). Browser-
+  Test per CDP (Chromium headless + Node-WebSocket, gleiche Methode wie
+  D3-2/K1-Teil-1): Login, Klick auf die Audiomischer-Kachel öffnet
+  `<omp-audio-mixer-panel>` mit 1 Fader/3 Knobs/4 Buttons/2 Metern im
+  Shadow-DOM; `<omp-meter value>` ändert sich zwischen drei
+  Screenshots im Sekundenabstand (Live-Update über SSE bestätigt, nicht
+  nur einmalig gerendert). Video-Mixer-M/E-Panel separat per CDP
+  geöffnet und screenshotet: PGM/PST-Reihen, CUT/AUTO, DSK/PIP,
+  ausgegraute Rate-Reihe — sieht wie ein Hardware-Pult aus, keine
+  Konsolen-Fehler. Bekanntes Gotcha erneut bestätigt (Projekt-Memory):
+  `/dev/shm/omp-mxl` ist tmpfs und war nach einem Neustart der
+  Entwicklungsmaschine leer — `mkdir -p /dev/shm/omp-mxl` vor jedem
+  MXL-Node-Start seit Reboot nötig, keine Code-Änderung. Test-
+  Instanzen/-Prozesse und der Bootstrap-Testnutzer (inkl. dessen
+  Rollenbindung) danach wieder entfernt, Bootstrap-Zustand
+  (`authRequired:false`) verifiziert wiederhergestellt.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -1682,3 +1784,4 @@ zweite Kapitel-10-Scheibe (`K1-Teil-1 → K2-Teil-1 → …`, s. o.).
 | D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |
 | K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |
 | K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
+| K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix | 2026-07-15 |

@@ -11,4 +11,10 @@ gstreamer = "0.25.3"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 serde_json = "1.0.150"
+# /levels-SSE-Server (K4-Teil-1, levels.rs) — dieselbe, bereits im
+# Workspace genutzte Version wie omp-mediaio/omp-node-sdk (Minimal-
+# Dependency-Regel: kein zweiter HTTP-Server-Kandidat, nur die schon
+# etablierte, bewusst schlanke Wahl aus omp-node-sdk/src/server.rs
+# wiederverwendet).
+tiny_http = "0.12.0"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

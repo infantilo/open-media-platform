@@ -110,7 +110,14 @@ fn serve_client(request: Request, broadcaster: &Broadcaster) {
                   Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\
                   Cache-Control: no-cache\r\n\
                   Connection: close\r\n\r\n";
-    if writer.write_all(header.as_bytes()).is_err() {
+    // Explizit flushen statt implizit auf das erste `write_frame()` zu
+    // warten: ist `last` (noch) `None` (frisch verbundener Client, bevor
+    // je ein Frame publiziert wurde), würde der Header sonst im
+    // Writer-Puffer hängen bleiben, bis `rx.recv()` unten das erste
+    // Frame liefert — bei einem Node, der noch keine Quelle bespielt,
+    // potenziell nie. Per Live-Test an `levels.rs` (K4-Teil-1, gleiches
+    // Muster) gefunden und hierher zurückübertragen.
+    if writer.write_all(header.as_bytes()).is_err() || writer.flush().is_err() {
         return;
     }
 
