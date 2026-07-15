@@ -1,0 +1,17 @@
+[package]
+name = "omp-ograf"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei omp-node-sdk/omp-switcher/omp-audio-mixer.
+publish = false
+
+[dependencies]
+gstreamer = "0.25.3"
+gstreamer-app = "0.25.2"
+# appsink/appsrc-Alpha-Key-Brücke (pipeline.rs) — dieselbe, bereits im
+# Workspace genutzte Version wie omp-mediaio/omp-viewer.
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }

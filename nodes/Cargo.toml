@@ -13,4 +13,5 @@ members = [
     "omp-multiviewer",
     "omp-playout-automation",
     "omp-srt-gateway",
+    "omp-ograf",
 ]

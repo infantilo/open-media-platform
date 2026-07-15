@@ -1220,6 +1220,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-ograf"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-app",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-player"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<!--
+  wpesrc-Host-Seite (K5-Teil-1, docs/END-GOAL-FEATURES.md §5.3
+  "lokale statische HTML-Seite ... die Templates per import() lädt und
+  die OGraf-Lifecycle-Methoden aufruft"). Vom Node per `wpesrc`s
+  `run-javascript`-Action gesteuert (pipeline.rs) — window.omp ist die
+  einzige Schnittstelle, absichtlich minimal (Teil 1: genau ein
+  Template-Slot gleichzeitig, mehrere gleichzeitige Instanzen sind
+  K5-Teil-3).
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* transparent, damit der Alpha-Kanal (K5-Teil-0, pixelgenau verifiziert
+     per wpesrc draw-background=false) tatsächlich leer statt schwarz ist. */
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+</style>
+</head>
+<body>
+<script type="module">
+  // K5-Teil-0-Formfund (docs/decisions.md 2026-07-15): `main` ist ein
+  // default-exportierter Klassen-Konstruktor (extends HTMLElement), noch
+  // NICHT als Custom Element registriert — das muss diese Host-Seite
+  // selbst tun (`new` auf einer unregistrierten HTMLElement-Unterklasse
+  // wirft sonst "Illegal constructor").
+  window.omp = {
+    el: null,
+    templateId: null,
+
+    async show(templateId, dir, main, data) {
+      try {
+        if (this.templateId !== templateId) {
+          await this.hide();
+          const mod = await import(`/ograf-templates/${dir}/${main}`);
+          const TemplateClass = mod.default;
+          const tag = "ograf-tpl-" + templateId.toLowerCase().replace(/[^a-z0-9-]/g, "-");
+          if (!customElements.get(tag)) {
+            customElements.define(tag, TemplateClass);
+          }
+          this.el = document.createElement(tag);
+          document.body.appendChild(this.el);
+          this.templateId = templateId;
+          await this.el.load({ renderType: "realtime", data });
+        } else if (this.el.updateAction) {
+          await this.el.updateAction({ data });
+        }
+        await this.el.playAction({});
+      } catch (e) {
+        console.error("omp.show failed:", e);
+      }
+    },
+
+    async hide() {
+      if (!this.el) return;
+      try {
+        await this.el.stopAction({});
+        if (this.el.dispose) await this.el.dispose();
+      } catch (e) {
+        console.error("omp.hide failed:", e);
+      } finally {
+        this.el.remove();
+        this.el = null;
+        this.templateId = null;
+      }
+    },
+  };
+
+  // Markiert für pipeline.rs' Bereitschafts-Sonde (page_ready), dass das
+  // Modul-Skript fertig ausgeführt ist — per Pad-Probe auf dem ersten
+  // wpesrc-Puffer beobachtet der Node ohnehin nur, dass IRGENDein Frame
+  // gerendert wurde, dieses Flag ist die zusätzliche, explizite
+  // Bestätigung "window.omp existiert" (rein informativ, aktuell von
+  // keinem Rust-Code gelesen — document.title als einfachster,
+  // per `run-javascript`-Rückfrage nicht nötiger Kanal für spätere
+  // manuelle Diagnose per CDP).
+  document.title = "omp-ograf-harness-ready";
+</script>
+</body>
+</html>

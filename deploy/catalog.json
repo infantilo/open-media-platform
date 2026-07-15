@@ -61,5 +61,12 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-playout-automation"],
     "env": {}
+  },
+  {
+    "type": "omp-ograf",
+    "label": "OGraf Grafik",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-ograf"],
+    "env": {}
   }
 ]

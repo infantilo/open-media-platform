@@ -170,8 +170,16 @@ impl MxlVideoOutput {
             )
             .build()
             .map_err(|e| format!("capsfilter(v210): {e}"))?;
+        // Kein fester `.name(...)` (anders als früher): `omp-ograf`
+        // (K5-Teil-1) instanziiert `MxlVideoOutput` zweimal in derselben
+        // Pipeline (Fill + Key) — ein fest verdrahteter Name hätte beim
+        // zweiten Aufruf mit "Failed to add element" kollidiert (per
+        // Live-Test gefunden, nicht angenommen). GStreamer vergibt ohne
+        // `.name(...)` automatisch eindeutige Namen, exakt wie die
+        // Geschwister-Elemente in dieser Funktion (`videoconvert` etc.)
+        // es ohnehin schon tun — kein Code sucht dieses Element je über
+        // seinen Namen (`self.valve` hält die Referenz direkt).
         let valve = gst::ElementFactory::make("valve")
-            .name("mxl_output_valve")
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
