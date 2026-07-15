@@ -2,7 +2,9 @@
 // ARCHITECTURE.md §13.2, docs/END-GOAL-FEATURES.md §4.3c/§4.4 Teil 1):
 // vertikale Kanalzüge auf ui/kit (<omp-fader> für Gain, <omp-knob> für
 // die 3 EQ-Bänder, <omp-button> für Mute/AFV/Override, <omp-meter> für
-// Pegel) statt Zahlenfeldern + "EQ setzen"-Button. Gleiche generische
+// Pegel), gruppiert unter <omp-panel-section label="Audio Mixer">
+// (K3/K4-Feinschliff, §12.3-Referenzvergleich) statt Zahlenfeldern +
+// "EQ setzen"-Button. Gleiche generische
 // Node-Proxy-API wie zuvor (/api/v1/nodes/<id>/params/<name>,
 // /methods/<name>) — reines UI-Bundle + der in `pipeline.rs`/`levels.rs`
 // neu hinzugekommene Metering-Pfad (`levelsUrl`-SSE), sonst KEIN neues
@@ -90,7 +92,14 @@ class OmpAudioMixerPanel extends HTMLElement {
     empty.className = "empty";
     empty.textContent = 'keine Kanäle — "+ Kanal" zum Hinzufügen';
 
-    shadow.append(style, addBtn, console_, empty);
+    // K3/K4-Feinschliff (§12.3-Referenzvergleich): eine gruppierte
+    // Sektion mit Kopfzeile statt loser Bausteine — "+ Kanal" gehört
+    // sichtbar zum Pult, nicht davor.
+    const section = document.createElement("omp-panel-section");
+    section.setAttribute("label", "Audio Mixer");
+    section.append(addBtn, console_, empty);
+
+    shadow.append(style, section);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {

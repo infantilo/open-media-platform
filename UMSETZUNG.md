@@ -1732,6 +1732,42 @@ Bausatz nur für eine Node").
   Rollenbindung) danach wieder entfernt, Bootstrap-Zustand
   (`authRequired:false`) verifiziert wiederhergestellt.
 
+  **Nachtrag (2026-07-15, visueller Feinschliff nach Referenzvergleich
+  §12.3):** der Projektinhaber zeigte ein Beispiel-Bedienpanel eines
+  kommerziellen PTZ-/Vision-Mixer-Systems ("Bildmeister"-Layout) als
+  Zielbild. `ui/kit` bekam dafür kräftigere Metall-Gradients (neue
+  Design-Tokens `--omp-metal-*`) statt der bisherigen dunkler-auf-
+  dunkel-Flächen: `<omp-button>` mit Glanzlicht-Sheen, `<omp-fader>`
+  mit dB-Skala-Ticks und Metall-Kappe, `<omp-knob>` mit Chrom-Bezel-Ring
+  und Mittenschraube, `<omp-meter>` mit LED-Segment-Fugen. Neuer
+  Baustein **`<omp-panel-section>`** (gruppierte Sektion mit betonter
+  Kopfzeile + Trennlinien, genau die im Referenzbild sichtbare
+  "AUDIO MIXER"/"TRANSITION"-Optik) — Audio- und Video-Mixer-Bundle
+  gruppieren ihre Konsole jetzt jeweils darunter.
+
+  **Ein Layout-Bug per Live-Test gefunden und behoben:** zwei
+  verschachtelte `<omp-panel-section>`-Boxen (Bus + Transition einzeln)
+  im Video-Mixer-Bundle sprengten zusammen mit ihrem doppelten Padding
+  die 280px-Breite des Parameter-Panels — die Transition-Spalte
+  (CUT/AUTO/T-Bar) fiel unsichtbar aus dem sichtbaren Bereich, die
+  Seite bekam einen ungewollten horizontalen Scrollbalken. Fix: eine
+  einzige äußere Sektion um das ganze Pult, `border-left` als leichte
+  interne Trennung (wie vor dem ersten Versuch), Bus-Button-/Spalten-
+  Maße leicht verkleinert. Zusätzlich denselben `?access_token=`-Bug
+  wie bei `ui/shell/connection.ts` (s. o.) auch im Video-Mixer-Bundles
+  eigener `/api/v1/events`-`EventSource` gefunden und behoben (war
+  bisher nur durch den 2-s-Poll-Fallback verdeckt, kein Absturz, aber
+  unnötig träge).
+
+  **Verifiziert:** `cargo build/test --workspace`, `deno check`/
+  `deno test ui/` (weiterhin 40/40) grün. Live per CDP: Audio- und
+  Video-Mixer-Panel neu gebaut/gestartet, Screenshots vor und nach dem
+  Layout-Fix verglichen (Transition-Spalte jetzt vollständig sichtbar,
+  kein Scrollbalken), Mute-Button-Klick-Test bestätigt Interaktion
+  bleibt über die neue Sektions-Verschachtelung hinweg funktionsfähig
+  (`active`-Attribut korrekt `false→true`). Test-Instanzen und
+  Bootstrap-Testnutzer danach wieder entfernt.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -1784,4 +1820,4 @@ Bausatz nur für eine Node").
 | D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |
 | K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |
 | K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
-| K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix | 2026-07-15 |
+| K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix; Nachtrag: visueller Feinschliff (Metall-Gradients, omp-panel-section) nach Bildmeister-Referenzvergleich | 2026-07-15 |

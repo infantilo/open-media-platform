@@ -23,7 +23,19 @@ TEMPLATE.innerHTML = `
       height: 100%;
       border-radius: 2px;
       overflow: hidden;
+      border: 1px solid var(--omp-border, #2e3338);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6) inset;
+      /* Zwei Ebenen: LED-Segment-Fugen oben drüber, Farbskala darunter —
+         macht aus dem Farbverlauf einen Block-Meter statt einer glatten
+         Fläche (Referenzvergleich §12.3, "Bildmeister"-Layout). */
       background:
+        repeating-linear-gradient(
+          to bottom,
+          transparent 0,
+          transparent 3px,
+          rgba(0, 0, 0, 0.55) 3px,
+          rgba(0, 0, 0, 0.55) 4px
+        ),
         linear-gradient(
           to top,
           var(--omp-preset, #43a047) 0%,

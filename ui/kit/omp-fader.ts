@@ -18,7 +18,7 @@ TEMPLATE.innerHTML = `
       display: inline-flex;
       flex-direction: column;
       align-items: center;
-      width: 40px;
+      width: 44px;
       height: 180px;
       touch-action: none;
       user-select: none;
@@ -30,7 +30,29 @@ TEMPLATE.innerHTML = `
       background: var(--omp-bg, #101214);
       border: 1px solid var(--omp-border, #2e3338);
       border-radius: 3px;
-      margin: 4px 0;
+      margin: 4px 0 4px 10px;
+      /* Eingelassene Bahn (recessed channel), wie bei einem echten
+         Fader-Schlitz — kein Bild-Asset, reiner inset-Schatten. */
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6) inset;
+    }
+    /* Skalen-Ticks links neben der Bahn (§4.3c "dB-Skala-Ticks") — rein
+       dekorativ in Teil 1 (keine dB-Beschriftung pro Tick), macht aus der
+       Bahn spürbar eine Pult-Skala statt eines nackten Sliders. */
+    .track::before {
+      content: "";
+      position: absolute;
+      left: -7px;
+      top: 0;
+      bottom: 0;
+      width: 4px;
+      background-image: repeating-linear-gradient(
+        to bottom,
+        var(--omp-text-dim, #9aa0a6) 0,
+        var(--omp-text-dim, #9aa0a6) 1px,
+        transparent 1px,
+        transparent 11px
+      );
+      opacity: 0.45;
     }
     .fill {
       position: absolute;
@@ -44,14 +66,25 @@ TEMPLATE.innerHTML = `
     .thumb {
       position: absolute;
       left: 50%;
-      width: 26px;
-      height: 14px;
-      background: linear-gradient(to bottom, var(--omp-surface-raised, #22262b), var(--omp-surface, #1a1d21) 50%, #000 50%, var(--omp-surface, #1a1d21));
-      border: 1px solid var(--omp-border, #2e3338);
+      width: 28px;
+      height: 15px;
+      /* Metall-Kappe mit Mittelnaht, wie ein echter Fader-Griff — hell
+         oben/dunkel unten, dünne dunkle Rille in der Mitte. */
+      background: linear-gradient(
+        to bottom,
+        var(--omp-metal-highlight, #565d66) 0%,
+        var(--omp-metal-light, #3d434b) 44%,
+        #050607 50%,
+        var(--omp-metal-mid, #2b2f34) 56%,
+        var(--omp-metal-dark, #1a1c1f) 100%
+      );
+      border: 1px solid var(--omp-metal-dark, #1a1c1f);
       border-radius: 2px;
       transform: translate(-50%, 50%);
       cursor: grab;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.15) inset,
+        0 2px 3px rgba(0, 0, 0, 0.5);
     }
     :host(:active) .thumb,
     .thumb:active {

@@ -21,6 +21,7 @@ TEMPLATE.innerHTML = `
     button {
       all: unset;
       box-sizing: border-box;
+      position: relative;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -30,21 +31,40 @@ TEMPLATE.innerHTML = `
       font-size: var(--omp-font-size-sm, 12px);
       font-weight: 600;
       color: var(--omp-text, #e8eaed);
+      /* Gegossene Metall-Taste statt dunkler-auf-dunkel: helle Kante oben,
+         Naht in der Mitte, dunkle Kante unten — "echtes Pult"-Anmutung
+         (§3.3), Referenzvergleich §12.3. */
       background: linear-gradient(
         to bottom,
-        var(--omp-surface-raised, #22262b),
-        var(--omp-surface, #1a1d21)
+        var(--omp-metal-highlight, #565d66) 0%,
+        var(--omp-metal-light, #3d434b) 46%,
+        var(--omp-metal-mid, #2b2f34) 54%,
+        var(--omp-metal-dark, #1a1c1f) 100%
       );
-      border: 1px solid var(--omp-border, #2e3338);
+      border: 1px solid var(--omp-metal-dark, #1a1c1f);
       border-radius: var(--omp-radius, 6px);
       padding: 8px 14px;
       box-shadow:
-        0 1px 0 rgba(255, 255, 255, 0.04) inset,
-        0 2px 3px rgba(0, 0, 0, 0.35);
+        0 1px 0 rgba(255, 255, 255, 0.18) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.35) inset,
+        0 2px 3px rgba(0, 0, 0, 0.45);
       transition: box-shadow 0.1s ease, transform 0.05s ease, background 0.1s ease;
       width: 100%;
       height: 100%;
       min-height: 32px;
+      overflow: hidden;
+    }
+    /* Glanzlicht-Sheen im oberen Drittel (rein CSS, kein Bild-Asset) —
+       macht aus dem Flächen-Gradient eine gewölbt wirkende Kappe. */
+    button::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 45%;
+      background: linear-gradient(to bottom, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0));
+      pointer-events: none;
     }
     button:hover {
       border-color: var(--omp-text-dim, #9aa0a6);
@@ -52,7 +72,7 @@ TEMPLATE.innerHTML = `
     button:active,
     :host([pressed]) button {
       transform: translateY(1px);
-      box-shadow: 0 1px 1px rgba(0, 0, 0, 0.4) inset;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5) inset;
     }
     button:disabled {
       cursor: default;

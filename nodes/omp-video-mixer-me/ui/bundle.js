@@ -51,32 +51,24 @@ class OmpVideoMixerMePanel extends HTMLElement {
       }
       .console {
         display: grid;
-        grid-template-columns: 1fr 140px;
-        gap: var(--omp-space-3, 12px);
-        background: var(--omp-surface, #1a1d21);
-        border: 1px solid var(--omp-border, #2e3338);
-        border-radius: var(--omp-radius, 6px);
-        padding: var(--omp-space-3, 12px);
+        grid-template-columns: 1fr 108px;
+        gap: var(--omp-space-2, 8px);
       }
-      .buses { display: flex; flex-direction: column; gap: 8px; }
+      .buses { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
       .bus-row { display: flex; align-items: center; gap: 6px; }
       .bus-label {
-        width: 34px; flex-shrink: 0; font-size: var(--omp-font-size-xs, 11px);
+        width: 28px; flex-shrink: 0; font-size: var(--omp-font-size-xs, 11px);
         color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; font-weight: 700;
       }
-      .bus-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
-      .bus-buttons omp-button { width: 72px; height: 40px; }
-      .fx-row { display: flex; gap: 8px; margin-top: 4px; align-items: center; }
-      .fx-row omp-button { width: 130px; height: 34px; }
+      .bus-buttons { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+      .bus-buttons omp-button { width: 58px; height: 36px; font-size: 10px; }
+      .fx-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+      .fx-row omp-button { flex: 1; height: 34px; }
       .rate-row { display: flex; gap: 4px; margin-top: 6px; }
       .rate-row omp-button { width: 34px; height: 26px; font-size: 10px; }
       .transition {
         display: flex; flex-direction: column; align-items: center; gap: 8px;
-        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-3, 12px);
-      }
-      .transition h4 {
-        margin: 0; font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6);
-        text-transform: uppercase;
+        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-2, 8px);
       }
       .transition omp-button.cut { width: 100%; }
       .transition omp-button.auto { width: 100%; }
@@ -118,8 +110,6 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
     const transition = document.createElement("div");
     transition.className = "transition";
-    const transitionTitle = document.createElement("h4");
-    transitionTitle.textContent = "Transition";
     const cutBtn = document.createElement("omp-button");
     cutBtn.className = "cut";
     cutBtn.setAttribute("variant", "take");
@@ -145,10 +135,23 @@ class OmpVideoMixerMePanel extends HTMLElement {
     wipeBtn.setAttribute("disabled", "");
     wipeBtn.title = "Wipe-Muster: außerhalb des aktuellen Scopes (ARCHITECTURE.md §13.1)";
     mixWipe.append(mixBtn, wipeBtn);
-    transition.append(transitionTitle, cutBtn, autoBtn, tBar, mixWipe);
+    transition.append(cutBtn, autoBtn, tBar, mixWipe);
 
     console_.append(buses, transition);
-    shadow.append(style, console_);
+
+    // K3/K4-Feinschliff (§12.3-Referenzvergleich, "Bildmeister"-Layout):
+    // eine gruppierte Sektion mit Kopfzeile um das ganze Pult — zwei
+    // verschachtelte Sektionen (Bus/Transition einzeln) sprengten im
+    // 280px-Parameter-Panel die verfügbare Breite (per Live-Test
+    // gefunden: Transition-Spalte fiel aus dem sichtbaren Bereich,
+    // Seite bekam einen ungewollten horizontalen Scrollbalken). Die
+    // bestehende `border-left` zwischen Bus und Transition bleibt als
+    // leichte interne Trennung.
+    const section = document.createElement("omp-panel-section");
+    section.setAttribute("label", "Video Mixer M/E");
+    section.append(console_);
+
+    shadow.append(style, section);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -257,7 +260,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
     refresh();
     this._interval = setInterval(refresh, 2000);
 
-    this._es = new EventSource("/api/v1/events");
+    // Live-Test-Fund (K3/K4-Feinschliff-Sitzung, gleicher Bug wie
+    // ui/shell/connection.ts, s. UMSETZUNG.md K3/K4-1): Browser-
+    // EventSource kann keine Header setzen, ohne ?access_token= liefert
+    // der Server unter echter Auth 401 und dieses Bundle bekommt nie
+    // ein Tally-Refresh (fällt nur auf den 2s-Poll zurück, kein Absturz,
+    // aber unnötig träge). Gleicher ?access_token=-Fallback wie dort.
+    const ssePath = (() => {
+      const token = localStorage.getItem("omp-auth-token");
+      return token ? `/api/v1/events?access_token=${encodeURIComponent(token)}` : "/api/v1/events";
+    })();
+    this._es = new EventSource(ssePath);
     this._es.onmessage = (ev) => {
       let parsed;
       try {

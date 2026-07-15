@@ -47,6 +47,18 @@
   --omp-glow-preset: 0 0 6px 1px rgba(67, 160, 71, 0.6);
   --omp-glow-cue: 0 0 6px 1px rgba(251, 140, 0, 0.6);
 
+  /* Metall-Gradient-Stufen (K3/K4-Feinschliff, Referenzvergleich
+     2026-07-15 "Bildmeister"-Layout, §12.3 "deckt sich mit dem in §3.3
+     bereits festgelegten Look"): heller/kontrastreicher als die
+     Flächen-Tokens oben — Tasten/Regler sollen als "Hardware" gegen den
+     dunklen Grund abgesetzt wirken, nicht nur dunkler-auf-dunkel. Reine
+     Zusatz-Tokens, ändern nichts an --omp-surface*/--omp-bg (Studio-Dark
+     bleibt unverändert das einzige Theme, Kapitel-10-Entscheidung 2). */
+  --omp-metal-highlight: #565d66;
+  --omp-metal-light: #3d434b;
+  --omp-metal-mid: #2b2f34;
+  --omp-metal-dark: #1a1c1f;
+
   /* App-Bar */
   --omp-appbar-height: 48px;
 }

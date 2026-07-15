@@ -22,26 +22,53 @@ TEMPLATE.innerHTML = `
     }
     .dial {
       position: relative;
-      width: 32px;
-      height: 32px;
+      width: 34px;
+      height: 34px;
       border-radius: 50%;
-      background: radial-gradient(circle at 35% 30%, var(--omp-surface-raised, #22262b), var(--omp-surface, #1a1d21) 70%);
-      border: 1px solid var(--omp-border, #2e3338);
-      box-shadow: 0 2px 3px rgba(0, 0, 0, 0.4);
+      /* Gewölbte Metallkugel statt flacher Kreis: Glanzpunkt oben-links,
+         dunkler Rand — dazu ein Chrom-Bezel-Ring per doppeltem
+         box-shadow (Hintergrundfarbe + Rahmenfarbe), kein Bild-Asset. */
+      background: radial-gradient(
+        circle at 32% 26%,
+        var(--omp-metal-highlight, #565d66) 0%,
+        var(--omp-metal-light, #3d434b) 40%,
+        var(--omp-metal-mid, #2b2f34) 72%,
+        var(--omp-metal-dark, #1a1c1f) 100%
+      );
+      border: 1px solid var(--omp-metal-dark, #1a1c1f);
+      box-shadow:
+        0 0 0 2px var(--omp-bg, #101214),
+        0 0 0 3px var(--omp-border, #2e3338),
+        0 2px 4px rgba(0, 0, 0, 0.5);
       cursor: grab;
     }
     .dial:active {
       cursor: grabbing;
+    }
+    /* Mittenschraube — kleiner dunkler Punkt, wie bei einem echten
+       Potiknopf mit Zeiger statt einer nackten Kugel. */
+    .dial::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--omp-metal-dark, #1a1c1f);
+      transform: translate(-50%, -50%);
+      box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1);
     }
     .indicator {
       position: absolute;
       top: 3px;
       left: 50%;
       width: 2px;
-      height: 11px;
-      background: var(--omp-info, #4285f4);
+      height: 12px;
+      background: linear-gradient(to bottom, #fff, var(--omp-text-dim, #9aa0a6));
       border-radius: 1px;
-      transform-origin: 50% 13px;
+      box-shadow: 0 0 2px rgba(255, 255, 255, 0.5);
+      transform-origin: 50% 14px;
     }
     .label {
       font-family: var(--omp-font, system-ui, sans-serif);

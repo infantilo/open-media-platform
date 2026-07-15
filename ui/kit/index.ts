@@ -9,3 +9,4 @@ import "./omp-button.ts";
 import "./omp-fader.ts";
 import "./omp-knob.ts";
 import "./omp-meter.ts";
+import "./omp-panel-section.ts";
