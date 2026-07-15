@@ -4527,3 +4527,96 @@ markiert statt weiter als offen zu stehen).
 `omp-player`) als eigene, vollständige Sitzung mit Live-Verifikation —
 nicht in dieser verkürzten Sitzung begonnen, um keinen unfertigen
 Zwischenstand zu hinterlassen.
+
+## 2026-07-15 — K2 Teil 1: `omp-player` Datei-Playback (MP4/MOV)
+
+Umsetzung von `docs/END-GOAL-FEATURES.md` §2.4 Teil 1 (Kapitel-10-
+Reihenfolge `K1-Teil-1 → K2-Teil-1 → …`, `UMSETZUNG.md` §6a). Volle
+Beschreibung der Änderungen dort; hier nur die Entscheidungen/der
+gefundene Bug, die über die reine Umsetzung hinausgehen.
+
+**Neue Abhängigkeit `gstreamer-pbutils` (0.25.2, nicht 0.25.3 —
+letztere existiert für dieses Crate auf crates.io noch nicht,
+`gstreamer` selbst schon):** für `Discoverer`-basierte Dauer-Probe.
+Minimal-Dependency-Regel erfüllt — Teil von gst-plugins-base wie
+`gstreamer` selbst, keine neue Systemdependency, kein sinnvoller
+Eigenbau (Dauer-Ermittlung braucht denselben Demux-Stack wie die
+Wiedergabe).
+
+**`gst::glib::filename_to_uri` statt manueller String-Konkatenation**
+für die `file://`-URI: löst Leerzeichen-/Umlaut-Kodierung in
+Dateinamen korrekt (per-Segment-Percent-Encoding). `PlayerPipeline.js`
+(`file://${abs}`) hat das Problem trotz der `UMSETZUNG.md` §0 Punkt
+9 zitierten Doku-Zeile tatsächlich nie gelöst (nachgeprüft: kein
+`encodeURIComponent` im referenzierten Code) — der Rust-/glib-Weg ist
+hier strukturell besser, nicht nur übernommen.
+
+**Path-Traversal-Schutz für `file`-Argument** (`resolve_media_path`,
+`main.rs`): `OMP_MEDIA_DIR.join(rel).canonicalize()` +
+`starts_with(OMP_MEDIA_DIR.canonicalize())`. Ohne diese Prüfung hätte
+`{"file":"../../../etc/passwd"}` (oder jede andere Datei außerhalb des
+Medienverzeichnisses) über die Descriptor-API dekodiert werden können —
+klassischer Path-Traversal/Arbitrary-File-Read, hier bewusst
+geschlossen statt "vertrauenswürdiger Operator" anzunehmen.
+
+### Gefundener Bug: `gst_mini_object_unref`-Crash beim EOS-Drop-Pad-Probe
+
+**Symptom:** `GStreamer-CRITICAL: gst_mini_object_unref: assertion
+'mini_object != NULL' failed`, reproduzierbar bei jedem `cue()` eines
+Datei-Items. In normalem Betrieb nicht fatal (Prozess lief über
+mehrere Cue/Take/EOS-Zyklen zuverlässig weiter, alle Funktionstests
+bestanden), aber ein echtes Refcounting-Symptom, das nicht einfach
+ignoriert werden sollte.
+
+**Diagnose:** `G_DEBUG=fatal-criticals` + `gdb -batch -ex run -ex bt`
+gegen einen manuell gestarteten `omp-player`-Prozess (Registry/NATS/
+MXL-Domain unverändert, eigener Port) — Backtrace zeigte den Crash tief
+in einer rekursiven `gst_pad_push_event`/`gst_pad_forward`-Kette auf
+Thread `multiqueue1:src`, ausgelöst exakt dann, wenn der ursprüngliche
+`EVENT_DOWNSTREAM`-Pad-Probe (auf dem Src-Pad des `capsfilter`s direkt
+hinter der Konform-Kette, ohne Thread-Grenze zu `uridecodebin`) ein
+EOS-Event per `PadProbeReturn::Drop` verwarf. Bestätigt per A/B-Test:
+Probe komplett deaktiviert → kein Crash über mehrere Zyklen; Probe
+aktiv → reproduzierbar bei jedem Cue.
+
+**Ursache (Hypothese, durch das Verhalten gestützt, nicht per
+GStreamer-Quellcode verifiziert):** `uridecodebin`s internes
+`multiqueue` verteilt EOS rekursiv an seine eigenen Ghost-/Proxy-Pads
+über `gst_pad_forward` — mein Probe lag ohne Thread-Grenze auf
+demselben Streaming-Thread wie dieser interne Mechanismus und geriet
+mit dessen eigenem Unref des Event-Objekts in einen Race.
+
+**Fix:** ein `queue`-Element zwischen Konform-Kette und isel-Pad
+eingefügt (pro Datei-Zweig, Video wie Audio), Probe auf dessen Src-Pad
+verschoben — Standardtechnik, um einen Zweig unabhängig von seiner
+Quelle EOS-behandeln zu können (echte Thread-Grenze statt geteilter
+Streaming-Thread). Nach dem Fix: unter `G_DEBUG=fatal-criticals`/gdb
+kein Crash mehr über mehrere Zyklen (inkl. Neu-Cuen nach EOS in
+denselben Slot, was die `uridecodebin`-Teardown-Ownership im
+Audio-Branch übt).
+
+**Bekannte Restwarnung (nicht weiter verfolgt):** eine einzelne
+GStreamer-CRITICAL-Zeile tritt weiterhin kurz nach `cue()` auf,
+zeitlich nicht mehr mit dem tatsächlichen EOS korreliert (eher
+`uridecodebin`/`decodebin3`-interne Multiqueue-Startlogik in
+GStreamer 1.22 als Ursache vermutet). Kein beobachtbarer Funktions-
+oder Stabilitätseffekt in allen Tests dieser Sitzung. Empfehlung:
+beobachten, nicht blockierend für K2-Teil-2/-3 — bei künftigen
+GStreamer-Versions-Updates erneut prüfen, ob sie verschwindet.
+
+**Verifikationsprotokoll:** `cargo build/test --workspace` grün.
+Testdatei per neuem `deploy/dev/make-test-media.sh` erzeugt (H.264/AAC-
+MP4, 640×480@25, SMPTE + 440 Hz, per `gst-launch-1.0`, kein Asset-
+Beschaffungs-Blocker). Echter `omp-player`-Prozess: `append`/`cue`/
+`take` per API, `durationMs=5000` korrekt von `Discoverer` geprobt.
+Über `POST /api/v1/graph/edges` mit einem echten `omp-viewer`
+verbunden — MJPEG-Preview zeigte visuell bestätigt die SMPTE-
+Farbbalken aus der Datei (Screenshot geprüft, nicht nur "Bytes
+empfangen"), nicht das alte Testmuster. `omp.player.<id>.itemEnded
+{"item_id":"item1"}` exakt ~5 s nach `take()` per `nats sub`
+beobachtet. Mehrere Cue/Take-Zyklen inkl. Neu-Cuen nach EOS in
+denselben Slot ohne Absturz (normaler Betrieb, ohne
+`G_DEBUG=fatal-criticals`). Test-Instanzen/-Prozesse danach entfernt.
+
+**Nächster Schritt:** K3/K4-Teil-1 (nach Kapitel-10-Reihenfolge) oder
+K2-Teil-2 (MXF) — beide unabhängig startbar, Nutzer entscheidet.

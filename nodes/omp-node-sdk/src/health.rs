@@ -53,6 +53,18 @@ pub struct Tally {
     pub on: bool,
 }
 
+/// Auf `omp.player.<node_id>.itemEnded` veröffentlicht (K2-Teil-1,
+/// `docs/END-GOAL-FEATURES.md` §2.3 "EOS wird erstklassig") — ein
+/// `omp-player`-Node meldet damit, dass die Essenz des zuletzt genommenen
+/// (on-air) Items das natürliche Ende erreicht hat. Automations-Scope
+/// (K6/C14-C15) konsumiert dieses Event später für automatisches
+/// Vorrücken; in K2-Teil-1 selbst hat es noch keinen Abonnenten außer der
+/// Verifikation.
+#[derive(Debug, Clone, Serialize)]
+pub struct ItemEnded {
+    pub item_id: String,
+}
+
 #[derive(Debug)]
 pub enum PublishError {
     Encode(serde_json::Error),
@@ -130,6 +142,23 @@ impl Publisher {
     pub async fn publish_tally(&self, node_id: &str, on: bool) -> Result<(), PublishError> {
         let subject = format!("omp.tally.{node_id}");
         let payload = serde_json::to_vec(&Tally { on }).map_err(PublishError::Encode)?;
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(PublishError::Nats)?;
+        self.client.flush().await.map_err(PublishError::Flush)
+    }
+
+    /// Veröffentlicht ein `ItemEnded`-Event auf
+    /// `omp.player.<node_id>.itemEnded` und wartet auf `flush()` — ein
+    /// EOS ist wie ein Tally-Wechsel ein diskretes, zeitkritisches
+    /// Ereignis (s. `publish_tally`), keine periodische Aktualisierung.
+    pub async fn publish_item_ended(&self, node_id: &str, item_id: &str) -> Result<(), PublishError> {
+        let subject = format!("omp.player.{node_id}.itemEnded");
+        let payload = serde_json::to_vec(&ItemEnded {
+            item_id: item_id.to_string(),
+        })
+        .map_err(PublishError::Encode)?;
         self.client
             .publish(subject, payload.into())
             .await

@@ -208,6 +208,20 @@ impl NodeHandle {
             eprintln!("omp-node-sdk: tally publish failed: {e}");
         }
     }
+
+    /// Veröffentlicht ein `ItemEnded`-Event auf
+    /// `omp.player.<node_id>.itemEnded` (K2-Teil-1) — gilt dem eigenen
+    /// Node (anders als `publish_tally`), gleiches No-Op-Verhalten ohne
+    /// NATS-Verbindung wie `publish_alert`.
+    pub async fn publish_item_ended(&self, item_id: &str) {
+        let Some(publisher) = &self.publisher else {
+            eprintln!("omp-node-sdk: itemEnded dropped (no nats connection): {item_id}");
+            return;
+        };
+        if let Err(e) = publisher.publish_item_ended(&self.node_id, item_id).await {
+            eprintln!("omp-node-sdk: itemEnded publish failed: {e}");
+        }
+    }
 }
 
 /// Baut IS-04-Resources, registriert sie, startet den Descriptor-Server und

@@ -8,6 +8,12 @@ publish = false
 
 [dependencies]
 gstreamer = "0.25.3"
+# gstreamer-pbutils::Discoverer für die Dauer-Probe echter Mediendateien
+# (K2-Teil-1, docs/decisions.md) — kein Neubau in eigenem Code sinnvoll
+# möglich (Dauer-Ermittlung braucht denselben Demux/Decoder-Stack wie die
+# Wiedergabe selbst), Teil von gst-plugins-base wie `gstreamer` selbst,
+# keine zusätzliche Systemdependency.
+gstreamer-pbutils = "0.25.2"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 serde = { version = "1.0.228", features = ["derive"] }

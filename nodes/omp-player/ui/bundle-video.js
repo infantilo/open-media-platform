@@ -72,20 +72,37 @@ class OmpPlayerVideoPanel extends HTMLElement {
     durationInput.type = "number";
     durationInput.placeholder = "Dauer (ms)";
     durationInput.value = "5000";
+    // K2-Teil-1: Datei relativ zu OMP_MEDIA_DIR statt Testpattern. Ein
+    // <datalist> aus dem "mediaLibrary"-Param spart Tipparbeit, ist aber
+    // kein Clip-Browser (Vorschau/Sortierung/Dauer-Anzeige folgt erst
+    // Teil 3, docs/END-GOAL-FEATURES.md §2.4).
+    const fileInput = document.createElement("input");
+    fileInput.type = "text";
+    fileInput.placeholder = "Datei (relativ zu OMP_MEDIA_DIR)";
+    fileInput.setAttribute("list", "media-library");
+    const mediaLibraryList = document.createElement("datalist");
+    mediaLibraryList.id = "media-library";
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Item";
     addBtn.addEventListener("click", () => {
-      call("append", {
+      const file = fileInput.value.trim();
+      const body = {
         label: labelInput.value.trim() || "Item",
-        pattern: patternSelect.value,
         toneFrequency: 0,
         durationMs: parseFloat(durationInput.value) || 5000,
-      }).then(() => {
+      };
+      if (file) {
+        body.file = file;
+      } else {
+        body.pattern = patternSelect.value;
+      }
+      call("append", body).then(() => {
         labelInput.value = "";
+        fileInput.value = "";
         poll();
       });
     });
-    addRow.append(labelInput, patternSelect, durationInput, addBtn);
+    addRow.append(labelInput, patternSelect, fileInput, mediaLibraryList, durationInput, addBtn);
 
     const list = document.createElement("div");
     const empty = document.createElement("p");
@@ -128,14 +145,23 @@ class OmpPlayerVideoPanel extends HTMLElement {
     };
 
     const poll = async () => {
-      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs] = await Promise.all([
+      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, mediaLibrary] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
         getParam("cuedItemId"),
         getParam("mode"),
         getParam("playheadPositionMs"),
+        getParam("mediaLibrary"),
       ]);
       const items = itemsValue || [];
+
+      mediaLibraryList.replaceChildren(
+        ...(mediaLibrary || []).map((file) => {
+          const opt = document.createElement("option");
+          opt.value = file;
+          return opt;
+        }),
+      );
       const currentIds = new Set(items.map((it) => it.id));
 
       for (const [id, refs] of itemEls) {
@@ -158,7 +184,9 @@ class OmpPlayerVideoPanel extends HTMLElement {
           itemEls.set(item.id, refs);
           list.append(refs.el);
         }
-        refs.labelEl.textContent = `${item.label} (${item.pattern})`;
+        refs.labelEl.textContent = item.file
+          ? `${item.label} (${item.file})`
+          : `${item.label} (${item.pattern})`;
         const isOnair = item.id === currentItemId;
         const isCued = item.id === cuedItemId;
         refs.el.className = isOnair ? "item onair" : isCued ? "item cued" : "item";

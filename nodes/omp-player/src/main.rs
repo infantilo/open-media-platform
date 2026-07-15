@@ -14,14 +14,23 @@
 //! `item.<id>.<name>`-Namespace nötig, weil einzelne Items (anders als
 //! Audiomischer-Kanäle) keine live-verstellbaren Parameter haben — nur
 //! Zugehörigkeit zur Playlist bzw. Cue/Take-Zustand.
+//!
+//! **K2-Teil-1** (`docs/END-GOAL-FEATURES.md` §2.3/§2.4, `UMSETZUNG.md`
+//! §6a): `append`/`load` akzeptieren zusätzlich zu `pattern` ein `file`
+//! (Pfad relativ zu `OMP_MEDIA_DIR`) — dann ist `durationMs` das
+//! per `gstreamer_pbutils::Discoverer` einmalig geprobte Ergebnis statt
+//! Handeingabe. MXF (K2-Teil-2) ist hier nicht enthalten.
 
 mod pipeline;
 mod uibundle;
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use gstreamer as gst;
+use gstreamer_pbutils as gst_pbutils;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     Range, RawResponse, SenderSpec, SetError,
@@ -30,18 +39,28 @@ use pipeline::{PipelineHandle, Slot};
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Playlist-Eintrag — reines Software-Testmittel (`UMSETZUNG.md` §0 Punkt
-/// 7): `pattern` ist ein `videotestsrc`-Patternname (nur relevant im
-/// Video-Profil), `tone_freq` der Begleitton (immer, auch beim
-/// Videoplayer als Slate-Ton-Ersatz). `duration_ms` ist reine Metadaten
-/// für `playheadPositionMs` — kein erzwungenes Clip-Ende (s.
-/// `pipeline.rs`-Moduldoku).
+/// Woher ein Playlist-Eintrag seine Essenz bezieht — `TestPattern` bleibt
+/// das ursprüngliche Software-Testmittel (`UMSETZUNG.md` §0 Punkt 7,
+/// `pattern` ein `videotestsrc`-Patternname, `tone_freq` der
+/// Begleitton), `File` ist neu (K2-Teil-1): `path` ist der roh vom
+/// Aufrufer übergebene, relative Pfad (nur für Anzeige/`items`), `uri`
+/// die daraus aufgelöste `file://`-URI, die `pipeline::ItemSource::File`
+/// tatsächlich verwendet.
+#[derive(Clone)]
+enum ItemMedia {
+    TestPattern { pattern: String, tone_freq: f64 },
+    File { path: String, uri: String },
+}
+
+/// Playlist-Eintrag. `duration_ms` ist bei `TestPattern` reine
+/// Handeingabe-Metadatik für `playheadPositionMs` (kein erzwungenes
+/// Clip-Ende, s. `pipeline.rs`-Moduldoku), bei `File` das Ergebnis der
+/// einmaligen Discoverer-Probe beim `append`/`load`.
 #[derive(Clone)]
 struct PlaylistItem {
     id: String,
     label: String,
-    pattern: String,
-    tone_freq: f64,
+    media: ItemMedia,
     duration_ms: u64,
 }
 
@@ -64,6 +83,7 @@ struct PlayerStore {
     next_seq: AtomicU64,
     pipeline: PipelineHandle,
     has_video: bool,
+    media_dir: PathBuf,
 }
 
 /// Testton-Frequenz-Formel wie C11s `channel_freq` — nur zur akustischen
@@ -75,11 +95,52 @@ fn default_tone_freq(seq: u64) -> f64 {
 const DEFAULT_PATTERN: &str = "smpte";
 const DEFAULT_DURATION_MS: u64 = 5000;
 
+/// Löst einen vom Aufrufer übergebenen, relativen Dateipfad gegen
+/// `media_dir` auf und lehnt jeden Fluchtversuch nach außerhalb ab
+/// (`../../etc/passwd` u. ä. — `canonicalize()` löst `..`/Symlinks aus
+/// beiden Seiten auf, `starts_with` prüft danach den echten Zielpfad,
+/// nicht nur die rohe Zeichenkette). Scheitert auch, wenn die Datei nicht
+/// existiert (canonicalize verlangt einen realen Pfad) — bewusst
+/// dieselbe Fehlermeldung wie ein Traversal-Versuch, kein Oracle für
+/// Dateiexistenz außerhalb von `media_dir`.
+fn resolve_media_path(media_dir: &Path, rel: &str) -> Result<PathBuf, InvokeError> {
+    let candidate = media_dir.join(rel);
+    let canonical = candidate.canonicalize().map_err(|_| InvokeError::Unknown)?;
+    let canonical_dir = media_dir.canonicalize().map_err(|_| InvokeError::Unknown)?;
+    if !canonical.starts_with(&canonical_dir) {
+        return Err(InvokeError::Unknown);
+    }
+    Ok(canonical)
+}
+
+fn file_uri(path: &Path) -> Result<String, InvokeError> {
+    gst::glib::filename_to_uri(path, None)
+        .map(|s| s.to_string())
+        .map_err(|_| InvokeError::Unknown)
+}
+
+/// Einmalige Dauer-Probe per `gst_pbutils::Discoverer` (K2-Teil-1,
+/// `docs/END-GOAL-FEATURES.md` §2.3) — blockierend, aber für lokale
+/// Testdateien im Millisekundenbereich, daher direkt im
+/// `invoke()`-Aufrufpfad (kein eigener Worker-Thread nötig für diesen
+/// Schritt; ein persistenter Metadaten-Cache ist explizit K2-Teil-3).
+/// `gst::init()` ist idempotent (interner `INITIALIZED`-Guard) — der
+/// defensive Aufruf hier deckt den Fall ab, dass `append`/`load` vor dem
+/// ersten `gst::init()` auf dem Pipeline-Thread aufgerufen würde.
+fn probe_duration_ms(uri: &str) -> Option<u64> {
+    let _ = gst::init();
+    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5)).ok()?;
+    let info = discoverer.discover_uri(uri).ok()?;
+    info.duration().map(|d| d.mseconds())
+}
+
 #[derive(Deserialize)]
 struct LoadItem {
     label: String,
     #[serde(default)]
     pattern: Option<String>,
+    #[serde(default)]
+    file: Option<String>,
     #[serde(rename = "toneFrequency", default)]
     tone_frequency: Option<f64>,
     #[serde(rename = "durationMs", default)]
@@ -89,8 +150,8 @@ struct LoadItem {
 impl ParamStore for PlayerStore {
     fn descriptor(&self) -> Descriptor {
         let parameters = vec![
-            // JSON-Array [{id,label,pattern,toneFrequency,durationMs}] —
-            // gleiche Array-Ausnahme wie "channels" bei omp-audio-mixer.
+            // JSON-Array [{id,label,pattern|file,toneFrequency?,durationMs}]
+            // — gleiche Array-Ausnahme wie "channels" bei omp-audio-mixer.
             ParamSpec {
                 name: "items".to_string(),
                 kind: ParamType::String,
@@ -128,6 +189,16 @@ impl ParamStore for PlayerStore {
                 range: None,
                 readonly: true,
             },
+            // JSON-Array [string] — Dateinamen direkt unter OMP_MEDIA_DIR
+            // (K2-Teil-1: flache Liste, kein rekursiver Scan/Cache — s.
+            // `get("mediaLibrary")`).
+            ParamSpec {
+                name: "mediaLibrary".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
 
         let methods = vec![
@@ -140,6 +211,10 @@ impl ParamStore for PlayerStore {
                     },
                     MethodArg {
                         name: "pattern".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "file".to_string(),
                         kind: ParamType::String,
                     },
                     MethodArg {
@@ -189,13 +264,21 @@ impl ParamStore for PlayerStore {
                 state
                     .items
                     .iter()
-                    .map(|it| serde_json::json!({
-                        "id": it.id,
-                        "label": it.label,
-                        "pattern": it.pattern,
-                        "toneFrequency": it.tone_freq,
-                        "durationMs": it.duration_ms,
-                    }))
+                    .map(|it| match &it.media {
+                        ItemMedia::TestPattern { pattern, tone_freq } => serde_json::json!({
+                            "id": it.id,
+                            "label": it.label,
+                            "pattern": pattern,
+                            "toneFrequency": tone_freq,
+                            "durationMs": it.duration_ms,
+                        }),
+                        ItemMedia::File { path, .. } => serde_json::json!({
+                            "id": it.id,
+                            "label": it.label,
+                            "file": path,
+                            "durationMs": it.duration_ms,
+                        }),
+                    })
                     .collect::<Vec<_>>()
             )),
             "currentItemId" => Some(serde_json::json!(state.onair_item.clone().unwrap_or_default())),
@@ -211,6 +294,17 @@ impl ParamStore for PlayerStore {
                     .map(|since| since.elapsed().as_millis() as f64)
                     .unwrap_or(0.0)
             )),
+            "mediaLibrary" => {
+                let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .collect();
+                files.sort();
+                Some(serde_json::json!(files))
+            }
             _ => None,
         }
     }
@@ -227,31 +321,48 @@ impl ParamStore for PlayerStore {
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
-                let pattern = args
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| DEFAULT_PATTERN.to_string());
                 let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-                let tone_freq = args
-                    .get("toneFrequency")
-                    .and_then(Value::as_f64)
-                    .filter(|f| *f > 0.0)
-                    .unwrap_or_else(|| default_tone_freq(seq));
-                let duration_ms = args
-                    .get("durationMs")
-                    .and_then(Value::as_f64)
-                    .filter(|d| *d > 0.0)
-                    .map(|d| d as u64)
-                    .unwrap_or(DEFAULT_DURATION_MS);
+                let file_arg = args
+                    .get("file")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
+                let (media, duration_ms) = if let Some(rel) = file_arg {
+                    let abs = resolve_media_path(&self.media_dir, rel)?;
+                    let uri = file_uri(&abs)?;
+                    let duration_ms = probe_duration_ms(&uri).unwrap_or(0);
+                    (
+                        ItemMedia::File {
+                            path: rel.to_string(),
+                            uri,
+                        },
+                        duration_ms,
+                    )
+                } else {
+                    let pattern = args
+                        .get("pattern")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| DEFAULT_PATTERN.to_string());
+                    let tone_freq = args
+                        .get("toneFrequency")
+                        .and_then(Value::as_f64)
+                        .filter(|f| *f > 0.0)
+                        .unwrap_or_else(|| default_tone_freq(seq));
+                    let duration_ms = args
+                        .get("durationMs")
+                        .and_then(Value::as_f64)
+                        .filter(|d| *d > 0.0)
+                        .map(|d| d as u64)
+                        .unwrap_or(DEFAULT_DURATION_MS);
+                    (ItemMedia::TestPattern { pattern, tone_freq }, duration_ms)
+                };
                 let label = label.unwrap_or_else(|| format!("Item {seq}"));
                 let id = format!("item{seq}");
                 self.state.lock().expect("lock poisoned").items.push(PlaylistItem {
                     id,
                     label,
-                    pattern,
-                    tone_freq,
+                    media,
                     duration_ms,
                 });
                 Ok(())
@@ -266,12 +377,25 @@ impl ParamStore for PlayerStore {
                 let mut items = Vec::with_capacity(load_items.len());
                 for li in load_items {
                     let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                    let (media, duration_ms) = if let Some(rel) = li.file.filter(|s| !s.is_empty()) {
+                        let abs = resolve_media_path(&self.media_dir, &rel)?;
+                        let uri = file_uri(&abs)?;
+                        let duration_ms = probe_duration_ms(&uri).unwrap_or(0);
+                        (ItemMedia::File { path: rel, uri }, duration_ms)
+                    } else {
+                        (
+                            ItemMedia::TestPattern {
+                                pattern: li.pattern.filter(|s| !s.is_empty()).unwrap_or_else(|| DEFAULT_PATTERN.to_string()),
+                                tone_freq: li.tone_frequency.filter(|f| *f > 0.0).unwrap_or_else(|| default_tone_freq(seq)),
+                            },
+                            li.duration_ms.filter(|d| *d > 0).unwrap_or(DEFAULT_DURATION_MS),
+                        )
+                    };
                     items.push(PlaylistItem {
                         id: format!("item{seq}"),
                         label: li.label,
-                        pattern: li.pattern.filter(|s| !s.is_empty()).unwrap_or_else(|| DEFAULT_PATTERN.to_string()),
-                        tone_freq: li.tone_frequency.filter(|f| *f > 0.0).unwrap_or_else(|| default_tone_freq(seq)),
-                        duration_ms: li.duration_ms.filter(|d| *d > 0).unwrap_or(DEFAULT_DURATION_MS),
+                        media,
+                        duration_ms,
                     });
                 }
                 let mut state = self.state.lock().expect("lock poisoned");
@@ -285,15 +409,21 @@ impl ParamStore for PlayerStore {
                 self.pipeline.load_slot(
                     Slot::A,
                     pipeline::Item {
-                        pattern: "black".to_string(),
-                        tone_freq: 0.0,
+                        id: String::new(),
+                        source: pipeline::ItemSource::TestPattern {
+                            pattern: "black".to_string(),
+                            tone_freq: 0.0,
+                        },
                     },
                 );
                 self.pipeline.load_slot(
                     Slot::B,
                     pipeline::Item {
-                        pattern: "black".to_string(),
-                        tone_freq: 0.0,
+                        id: String::new(),
+                        source: pipeline::ItemSource::TestPattern {
+                            pattern: "black".to_string(),
+                            tone_freq: 0.0,
+                        },
                     },
                 );
                 state.onair_slot = Slot::A;
@@ -334,11 +464,17 @@ impl ParamStore for PlayerStore {
                     .cloned()
                     .ok_or(InvokeError::Unknown)?;
                 let target_slot = state.onair_slot.other();
+                let source = match item.media {
+                    ItemMedia::TestPattern { pattern, tone_freq } => {
+                        pipeline::ItemSource::TestPattern { pattern, tone_freq }
+                    }
+                    ItemMedia::File { uri, .. } => pipeline::ItemSource::File { uri },
+                };
                 self.pipeline.load_slot(
                     target_slot,
                     pipeline::Item {
-                        pattern: item.pattern,
-                        tone_freq: item.tone_freq,
+                        id: item.id.clone(),
+                        source,
                     },
                 );
                 state.cued_item = Some(item_id.to_string());
@@ -378,6 +514,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
+
+    // K2-Teil-1: Wurzelverzeichnis für `file`-Items (relativ, löst gegen
+    // den cwd des Prozesses auf — passend zum lokalen/host-agent-
+    // Launcher, s. docs/decisions.md K2-Teil-1). Wird bei Bedarf angelegt
+    // statt einen Startfehler zu erzeugen, damit ein frischer Checkout
+    // ohne manuellen Zwischenschritt startfähig bleibt.
+    let media_dir = PathBuf::from(env_or("OMP_MEDIA_DIR", "data/media"));
+    if let Err(e) = std::fs::create_dir_all(&media_dir) {
+        eprintln!("omp-player: OMP_MEDIA_DIR ({media_dir:?}) konnte nicht angelegt werden: {e}");
+    }
 
     // "video" (Default) registriert Video- + Audio-MXL-Sender, "jingle"
     // nur Audio — einzige Verzweigung zwischen den beiden §13.3-Rollen
@@ -456,6 +602,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         next_seq: AtomicU64::new(1),
         pipeline: pipeline_handle,
         has_video,
+        media_dir,
     });
 
     let handle = omp_node_sdk::start(
@@ -485,6 +632,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 pipeline::Event::Error(message) => {
                     eprintln!("omp-player: pipeline error: {message}");
                     handle.publish_alert(message).await;
+                }
+                pipeline::Event::ItemEnded { item_id } => {
+                    handle.publish_item_ended(&item_id).await;
                 }
             }
         }

@@ -1540,6 +1540,96 @@ zu Vollansichten mit Tabs). Drei neue Bausteine:
   Konsolenfehler. Keine Test-Ressourcen (Hosts/Instanzen) angelegt,
   nichts aufzuräumen.
 
+**K2-Teil-1 (`omp-player`: Datei-Playback MP4/MOV, erledigt,
+2026-07-15):** `docs/END-GOAL-FEATURES.md` §2.3/§2.4 Teil 1 — die
+zweite Kapitel-10-Scheibe (`K1-Teil-1 → K2-Teil-1 → …`, s. o.).
+`nodes/omp-player` spielt jetzt neben den bisherigen
+`videotestsrc`/`audiotestsrc`-Testmustern auch echte Mediendateien:
+
+- **`pipeline.rs`:** `Item` bekommt eine `id` sowie ein neues
+  `ItemSource`-Enum (`TestPattern { pattern, tone_freq }` — unverändert
+  das CI-Testmittel — und neu `File { uri }`). Ein Datei-Slot-Zweig
+  (`build_file_branches`) baut pro `cue()` ein `uridecodebin`
+  (proven-Pattern-Referenz `PIPELINE CONTROLLER/lib/PlayerPipeline.js`,
+  `UMSETZUNG.md` §0 Punkt 9 — der dortige `mxfdemux`-Workaround ist
+  K2-Teil-2, hier nicht nachgebaut) plus je einer Video-
+  (`videoconvert!videoscale!videorate!capsfilter(640×480@25)`) und
+  Audio-Konform-Kette (`audioconvert!audioresample!capsfilter(F32/48k/
+  2ch)`) vor dem jeweiligen isel-Pad; dynamische Pads werden per
+  `pad-added` gebunden. Das `uridecodebin` gehört (Ownership) dem
+  Audio-Branch (immer vorhanden), der optionale Video-Branch bleibt bei
+  `has_video=false` (Jingle-Profil) unverlinkt.
+- **EOS als erstklassiges Ereignis:** ein `queue`-Element am Ende jedes
+  Datei-Zweigs (direkt vor dem isel-Pad) erzeugt eine echte
+  Thread-Grenze; ein `EVENT_DOWNSTREAM`-Pad-Probe auf dessen Src-Pad
+  verwirft jedes EOS-Event dort immer (die Pipeline bedient dauerhaft
+  beide Slots, ein durchschlagendes EOS am Bus/den MXL-Ausgängen würde
+  auch den jeweils anderen Slot beenden) und meldet — nur wenn der
+  betroffene Slot zum Zeitpunkt des EOS tatsächlich on-air war —
+  `Event::ItemEnded` nach außen. `main.rs` veröffentlicht daraus
+  `omp.player.<node_id>.itemEnded {itemId}` (neu:
+  `omp_node_sdk::health::Publisher::publish_item_ended`/
+  `NodeHandle::publish_item_ended`, analog zu `publish_tally`). Am
+  Clip-Ende hält der Zweig lokal auf dem letzten Bild/still — kein
+  Auto-Advance (Automations-Scope, K6/C14-C15).
+- **`main.rs`:** `append`/`load` akzeptieren zusätzlich zu `pattern`
+  ein `file` (Pfad relativ zu `OMP_MEDIA_DIR`, Default `data/media`,
+  wird bei Bedarf angelegt). `resolve_media_path` löst gegen
+  `OMP_MEDIA_DIR` auf und lehnt jeden Traversal-Versuch (`../..`) über
+  `canonicalize()` + `starts_with()`-Prüfung ab. Die `file://`-URI
+  entsteht über `gst::glib::filename_to_uri` (korrekte
+  Pfadsegment-Kodierung, löst den in `PlayerPipeline.js` nur
+  dokumentierten, dort aber nicht tatsächlich gelösten
+  Leerzeichen/Umlaute-Fallstrick strukturell). `durationMs` kommt bei
+  Datei-Items aus einer einmaligen `gstreamer_pbutils::Discoverer`-Probe
+  (neue Abhängigkeit `gstreamer-pbutils`, Teil von gst-plugins-base wie
+  `gstreamer` selbst — Minimal-Dependency-Regel erfüllt, kein
+  eigener Demux/Decoder-Nachbau sinnvoll möglich). Neuer readonly-Param
+  `mediaLibrary` (flache Dateiliste aus `OMP_MEDIA_DIR`, kein Cache/
+  Rekursion — Komfort-Ausbau ist K2-Teil-3).
+- **UI (`ui/bundle-video.js`):** Texteingabe "Datei" mit `<datalist>`
+  aus `mediaLibrary` neben dem bestehenden Pattern-Select — kein
+  Clip-Browser (Vorschau/Sortierung folgt Teil 3), `append` schickt
+  `file` statt `pattern`, wenn ausgefüllt.
+- **Testmittel:** `deploy/dev/make-test-media.sh [Sekunden]` erzeugt per
+  `gst-launch-1.0` eine kurze H.264/AAC-MP4 (SMPTE-Balken + 440-Hz-Ton,
+  640×480@25) unter `OMP_MEDIA_DIR` — kein Asset-Beschaffungs-Blocker
+  (§2.4-Empfehlung: "MP4 zuerst … selbst erzeugbar").
+
+  **Echter Bug per Live-Test gefunden und behoben:** ein
+  `EVENT_DOWNSTREAM`-Pad-Probe, der EOS direkt auf einem Pad der
+  Konform-Kette (unmittelbar hinter `uridecodebin`, ohne Thread-Grenze
+  dazwischen) verwirft, löste reproduzierbar `gst_mini_object_unref:
+  assertion 'mini_object != NULL' failed` aus (per gdb-Backtrace
+  bestätigt: Race mit `uridecodebin`s eigener, rekursiver
+  `gst_pad_forward`-EOS-Verteilung an seine internen Ghost-Pads, auf
+  demselben Streaming-Thread). Fix: `queue`-Element zwischen Konform-
+  Kette und isel-Pad eingefügt, Probe auf dessen Src-Pad verschoben
+  (Standard-GStreamer-Pattern zur Thread-Entkopplung). Unter
+  `G_DEBUG=fatal-criticals` + gdb reproduzierbar, in normalem Betrieb
+  nicht fatal — der Prozess lief in allen Tests zuverlässig über
+  mehrere Cue/Take/EOS-Zyklen weiter. **Bekannte Restwarnung:** eine
+  einzelne, nicht mehr mit dem EOS-Zeitpunkt korrelierte
+  GStreamer-CRITICAL-Zeile tritt weiterhin kurz nach dem `cue()` einer
+  Datei auf (vermutlich `uridecodebin`/`decodebin3`-interne
+  Multiqueue-Startlogik in GStreamer 1.22, nicht funktional
+  beobachtbar) — dokumentiert, nicht weiter verfolgt in dieser Sitzung,
+  s. `docs/decisions.md` 2026-07-15.
+
+  **Verifiziert (echte Prozesse, kein Mock):** `cargo build/test
+  --workspace` grün (inkl. `omp-node-sdk`). End-to-end per echtem API-
+  Aufruf: Testdatei erzeugt, `append`/`cue`/`take` gegen einen echten
+  `omp-player`-Prozess, Bild im per `POST /api/v1/graph/edges`
+  verbundenen `omp-viewer` (MJPEG-Preview) visuell bestätigt (SMPTE-
+  Farbbalken aus der Datei, nicht das Testmuster), `durationMs=5000`
+  korrekt von `Discoverer` geprobt, `omp.player.<id>.itemEnded
+  {"item_id":"item1"}` exakt zur erwarteten Zeit (~5 s nach `take`) per
+  `nats sub` auf NATS beobachtet. Mehrere Cue/Take-Zyklen inkl.
+  Neu-Cuen nach EOS in denselben Slot ohne Absturz. Test-Instanzen/
+  -Prozesse danach entfernt, `data/media/*.mp4` bleibt als
+  reproduzierbares Testmittel (per Skript neu erzeugbar, `/data/` ist
+  gitignored).
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -1591,3 +1681,4 @@ zu Vollansichten mit Tabs). Drei neue Bausteine:
 | D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop) | erledigt | [D7-1] internal/workflows: Workflow-Objekt, Rolle→Rolle-Verkabelung, Bundle-Start/-Stop, UI-Panel | 2026-07-14 |
 | D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |
 | K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |
+| K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
