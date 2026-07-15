@@ -1,17 +1,23 @@
 # END-GOAL-FEATURES — Design-Dokument für die Endziel-Anforderungen
 
-Stand: 2026-07-14 (erweitert um K7–K9 in derselben Sitzungsfolge, nach
-Review durch den Projektinhaber; Kapitel 10 am selben Tag vollständig
-entschieden, s. dort). Status: **Alle zehn Entscheidungen aus Kapitel
-10 getroffen. Noch nicht Teil der `UMSETZUNG.md`-Schrittliste** — die
-gewählten „Teil 1"-Scheiben werden als eigene Schritte dort aufgenommen,
-sobald die Umsetzung beginnt.
+Stand: 2026-07-15 (Erstfassung 2026-07-14, erweitert um K7–K9 in
+derselben Sitzungsfolge, nach Review durch den Projektinhaber; Kapitel
+10 am selben Tag vollständig entschieden, s. dort; **am 2026-07-15 um
+die Kapitel 11–14 erweitert** — UI-/Betriebs-Nachforderung des
+Projektinhabers: Settings-/User-/Rollenverwaltung, Workflow als
+Regieplatz, Multi-Host-Darstellung im Flow-Editor, Ressourcen-Historie).
+Status: **Alle zehn Entscheidungen aus Kapitel 10 getroffen. Noch nicht
+Teil der `UMSETZUNG.md`-Schrittliste** — die gewählten „Teil 1"-Scheiben
+werden als eigene Schritte dort aufgenommen, sobald die Umsetzung
+beginnt. Die offenen Fragen der neuen Kapitel (11.5/12.5/13.5/14.5)
+sind noch **nicht** entschieden.
 
 Dieses Dokument ist das Ergebnis mehrerer Recherche-Sitzungen über beide
 Codebasen (OMP und `/home/infantilo/PIPELINE CONTROLLER`) zu den
 Endziel-Anforderungen des Projektinhabers (Original-Wortlaut jeweils am
 Kapitelanfang, Kapitel 1–6 aus der ersten Runde, Kapitel 7–9 aus einer
-Review-Nachforderung). Es ist bewusst **kein** Phasenplan-Eintrag — die
+Review-Nachforderung, Kapitel 11–14 aus der UI-/Betriebs-Nachforderung
+vom 2026-07-15 — „im ui fehlt noch einiges … praxisnahe denken"). Es ist bewusst **kein** Phasenplan-Eintrag — die
 strukturierte Schritt-Verwaltung bleibt bei `UMSETZUNG.md` (§7
 Status-Checkliste). Zweck: eine spätere Implementierungs-Sitzung soll pro
 Kapitel einen klar geschnittenen „Teil 1" herausnehmen und nach den
@@ -85,6 +91,44 @@ die Methoden, die K3s Bildschirm-Pult bereits aufruft). **K9-Teil-0**
 ist ebenfalls unabhängig und sofort startbar; K9-Teil-2 (WebRTC) ist der
 mit Abstand größte Infrastruktur-Neuzugang des gesamten Dokuments (siehe
 9.4) und sollte erst nach einem eigenen Spike priorisiert werden.
+
+**Erweiterung 2026-07-15 — Einordnung der Kapitel 11–14
+(Control-Plane-Strang).** K11–K14 sind ein zweiter, zum
+K1–K9-Medien-Strang weitgehend paralleler Strang: sie leben fast
+vollständig in Orchestrator + Shell (Go/TS), nicht in den
+Rust-Nodes/Pipelines — die beiden Stränge teilen sich außer der Shell
+keine Dateien und blockieren einander nicht. Abhängigkeiten:
+
+```
+K1-Teil-1 App-Bar (erledigt) ────────► K11 Teil 1 (Admin-Tab hängt an der Tab-Struktur)
+                                  └──► K13 (Host-Zonen bauen im bestehenden Flow-Canvas)
+
+D7 Teil 1 Workflow-Objekt (erledigt) ─► K12 (jeder Teil erweitert dieses Objekt)
+D7 Teil 2 Zeitsteuerung + Ressourcen- ─► K12 ab Teil 3 („Start nach Vorprüfung" kommt
+Vorprüfung (offen, UMSETZUNG.md §7)      aus D7 Teil 2 und wird in K12 nicht dupliziert)
+                                    ◄──── K14 Teil 3 (Typ-Verbrauchsprofile machen die
+                                          Vorprüfung erst treffsicher — Momentwert reicht
+                                          als erste D7-Teil-2-Stufe, Profile verfeinern)
+
+K11 Teil 1 (Verwaltungs-UI) ─────────► K12 Teil 4 (Workflow-Scope erweitert genau das
+                                        Bindungsmodell, das K11s UI verwaltet)
+K12 Teil 4 (Workflow-Scope, §12 P. 2) ► K12 Teil 5 (Operator-Einstieg pro Workflow)
+
+K14 Teil 1 (Host-Historie) ──────────► K13 Zonen-Kopf-Sparkline (optionale Aufwertung)
+                            └────────► §16 Kapazitäts-Kalender (spätere Stufe)
+```
+
+Empfohlene Groblinie für den neuen Strang: **K12-Teil-1 zuerst**
+(port-genaues Verbindungs-Template — ohne das ist der wörtlich
+gewünschte 3-Kameras-Regieplatz gar nicht verkabelbar, siehe 12.1),
+**K14-Teil-1**, **K13-Teil-1** und **K11-Teil-1** sind unabhängig
+voneinander und jederzeit einschiebbar (jeweils eine Sitzung, hoher
+Präsentations-Hebel). Danach **D7 Teil 2 als regulärer
+UMSETZUNG.md-Schritt** (empfohlen vor K12-Teil-3, damit „Start" ab dann
+durchgängig die Vorprüfung hat), dann K12-Teil-2/3, dann
+K12-Teil-4/5 nach K11-Teil-1. Kein Konflikt mit der
+K1→K2→K3/K4→K5→K6-Reihenfolge aus Kapitel 10 Punkt 1 — beide Stränge
+können sitzungsweise verzahnt werden.
 
 ---
 
@@ -1675,3 +1719,679 @@ laut Reihenfolge-Entscheidung) als reguläre Schritte in
 `UMSETZUNG.md` aufnehmen (eigene Sitzung, eigene Verifikation,
 Status-Checkliste) — dieses Dokument bleibt die Design-Referenz
 dahinter und wird bei weiteren Scope-Änderungen fortgeschrieben.
+
+---
+
+## 11. Settings-, User- und Rollenverwaltung in der Shell (+ Export/Import)
+
+> „es gibt keine möglichkeit, die settings unseres projekts zu
+> bearbeiten (userverwaltung, rollen, latenz,...ein user kann mehrere
+> rollen haben). diese müssen auch exportiert/importiert werden können."
+
+### 11.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- **Das Backend existiert zu großen Teilen bereits** (D3 Teil 2,
+  2026-07-14): Nutzer und Rollenbindungen liegen in Postgres — `users`
+  (bcrypt-Hash, `0002_auth.sql:18`), `role_bindings`
+  (subject/node_id/verb, `0002_auth.sql:25`), `audit_log`
+  (`0002_auth.sql:38`). Bindungs-Semantik: Tripel (Subject, NodeID,
+  Verb) mit Verb-Rangfolge view < operate < configure < admin
+  (`orchestrator/internal/authz/authz.go:21–42`), `NodeID="*"` für
+  „alle Nodes" (`authz.go:55`).
+- **„Ein User kann mehrere Rollen haben" ist im Datenmodell bereits
+  erfüllt** — eine Bindung ist eine Zeile, ein Subject darf beliebig
+  viele haben (`authz.go:47–52`; `internal/consoles/resolve.go:105–132`
+  iteriert genau so über mehrere Bindungen pro Nutzer). Der Gap ist
+  nicht das Modell, sondern Verwaltbarkeit + Export.
+- **Endpunkte:** `POST /api/v1/auth/users` (admin-only,
+  `internal/httpapi/server.go:148`), `GET/POST/DELETE
+  /api/v1/admin/role-bindings` (`server.go:172–174`),
+  `GET /api/v1/admin/audit-log` (`server.go:175`). Es fehlen:
+  Nutzer-**Liste** (`GET`), Nutzer löschen, Passwort-Reset.
+- **Bewusste Scope-Grenze:** „kein Workflow-Scope in dieser Runde"
+  (`authz.go:9–15`) — `ARCHITECTURE.md` §12 Punkt 2 nennt als
+  Wirkungsbereich „ein Workflow (§6.2) **oder** eine einzelne
+  Node-Rolle darin"; umgesetzt ist nur der Node-Rollen-Teil. Die
+  Vervollständigung (Workflow-Scope) ist **K12-Teil-4-Scope** (dort,
+  nicht hier — ein Bindungsmodell, eine Erweiterung, keine zwei
+  Rechtesysteme).
+- **UI: nichts.** `ui/shell/auth.ts` ist ein reines Login-Widget; die
+  App-Bar (K1-Teil-1) hat rechts nur den Verbindungs-Pill
+  (`ui/shell/app-shell.ts:103–109`), Tabs sind Flow/Workflows/Hosts
+  (`app-shell.ts:23–27`). Rollenbindungen sind heute ausschließlich
+  per `curl` pflegbar. Das Kapitel-1-Settings-Panel (§1.3c, §1.4
+  Teil 3) ist **lokale UI-Präferenz** (Theme, localStorage) — bewusst
+  etwas anderes; §1.3c Punkt 4 sah dort bereits „Nutzerverwaltung: nur
+  Link/Einbettung … für `admin`" vor. Genau diese referenzierte
+  Verwaltung existiert nicht — dieses Kapitel baut sie.
+- **Export/Import: nirgends vorhanden** (kein Export-Endpunkt im
+  gesamten `internal/httpapi`). Projekt-interne
+  Serialisierungs-Vorbilder: Snapshots als vollständige JSON-Objekte
+  (`internal/snapshots/types.go:29–35`) und opake Layout-Blobs
+  (`internal/layouts/store.go`).
+- **„Settings" im weiteren Sinn:** alle globalen Werte sind heute
+  Umgebungsvariablen beim Prozessstart (`internal/config/config.go:
+  89–109` — u. a. die vier Placement-Schwellwerte `OMP_PLACEMENT_*`,
+  Zeilen 106–109), zur Laufzeit unveränderbar, ohne UI. Eine
+  „Latenz"-Einstellung existiert **nirgends** im Code (per
+  Volltextsuche verifiziert): §15 (Latenz-Budget pro Workflow) ist
+  reines Konzept; laufzeitnahe Kandidaten wären Preview-FPS (hart
+  kodiert, z. B. `omp-viewer/src/pipeline.rs:29–32`),
+  UI-Poll-Intervalle (`ui/shell/hosts-view.ts:45` u. a.) und
+  Registrierungs-/Health-Timeouts (`internal/workflows/service.go:27`).
+
+### 11.2 Referenz
+
+Kein tragfähiges Referenzmuster in PIPELINE CONTROLLER: dessen
+Nutzermodell (users.json, **globale** Rollen ohne Wirkungsbereich) ist
+in `ARCHITECTURE.md` §12 („Know-how-Transfer") bereits verarbeitet und
+als für Mehr-Regieplatz-Betrieb unzureichend eingeordnet; eine
+Verwaltungs-UI oder Export/Import existieren dort nicht. Referenz ist
+hier `ARCHITECTURE.md` selbst: §12 (Semantik inkl. der offenen
+AD/LDAP-Grundsatzfrage, `docs/decisions.md` 2026-07-10) und §22.1, das
+„**Rollen/Nutzer (§12) — nur für `admin`**" bereits als eigenen
+Navigationspunkt der Shell festlegt — die Verortung ist also
+entschieden, nicht neu zu erfinden.
+
+### 11.3 Ziel-Design
+
+**a) Verortung:** neuer App-Bar-Tab **„Administration"**, nur für
+Nutzer mit `admin`-Verb gerendert (exakt die §22.1-Regel
+„Navigationspunkte ohne passende Rolle werden nicht gerendert"). Das
+K1-Settings-Panel (Teil 3) bleibt persönliche Präferenzen und verlinkt
+von seiner Sektion 4 hierher — kein Vermischen von „meine Darstellung"
+(jeder Nutzer) und „System verwalten" (`admin`).
+
+**b) Nutzer-/Bindungs-Verwaltung:** Nutzerliste (neuer
+`GET /api/v1/auth/users`), pro Nutzer die Bindungen gruppiert
+dargestellt (mehrere Bindungen = mehrere Rollen, das bestehende
+Modell wird sichtbar statt umgebaut). Bindung anlegen: Node-Auswahl
+über Registry + Instanzen mit **Label** statt roher ID (die
+`NodeRoleID`-Konvention aus `consoles/resolve.go:84–89` — stabile
+Instanz-ID — bleibt unverändert die gespeicherte Referenz), Verb-
+Auswahl, „*" für alle Nodes. Neue kleine Endpunkte:
+`GET /api/v1/auth/users`, `DELETE /api/v1/auth/users/{name}`,
+Passwort-Reset — alle admin-only, alle auditiert (D3-Teil-2-Linie).
+**Selbstschutz:** der letzte verbleibende admin kann sich nicht selbst
+löschen/entrechten (Prüfung im Handler — sonst sperrt man sich aus).
+
+**c) Globale Settings-Registry:** neue Postgres-Tabelle `settings`
+(key → JSONB) + `GET/PUT /api/v1/admin/settings`. Vorrangregel beim
+Boot: env > DB > Default (env bleibt für deploy/dev funktionsfähig
+und gewinnt, wenn gesetzt — dokumentiert, kein stilles Überstimmen).
+Erste echte Einträge (nur Werte, die heute existieren und deren
+Laufzeit-Änderung sinnvoll ist): die Placement-Schwellwerte
+(`config.go:106–109`), später der `confirm_stop`-Default (D7 Teil 2)
+und Warnschwellen aus K14. **„Latenz" wird hier bewusst nicht als
+globaler Regler erfunden:** eine globale Latenz-Zahl gibt es im
+heutigen Code nicht, und der architektonisch richtige Ort ist das
+Latenz-Budget **pro Workflow** (§15 → K12-Workflow-Objekt) bzw.
+Preview-FPS **pro Node** (Descriptor-Parameter, K9-Nachbarschaft) —
+siehe offene Frage 2, bevor hier etwas gebaut wird.
+
+**d) Export/Import:** `GET /api/v1/admin/export` liefert ein
+JSON-Dokument `{version, exportedAt, users[], roleBindings[],
+settings{}}` (Download im Admin-Tab);
+`POST /api/v1/admin/import` mit `{mode: "merge"|"replace",
+dryRun: bool}` — der Dry-Run liefert einen Diff-Bericht
+(anzulegen/zu überschreiben/zu löschen), bevor irgendetwas
+geschrieben wird (dasselbe Bestätigungs-Denken wie `confirm_stop`,
+§6.2 Punkt 2). **Workflow-Definitionen sind bewusst nicht Teil dieses
+Exports** — sie haben in K12 Teil 3 einen eigenen Export pro Workflow
+(ein Regieplatz soll einzeln zwischen Systemen wandern, ohne
+Nutzerdaten mitzuschleppen); ein späterer „Alles"-Export kann beide
+kombinieren, ist aber kein v1-Ziel.
+
+### 11.4 Phasenplan
+
+- **Teil 1 (eine Sitzung):** Admin-Tab + Nutzerliste
+  (`GET /api/v1/auth/users` neu) + Rollenbindungs-CRUD-UI auf den
+  bestehenden Endpunkten + Audit-Log-Ansicht (Endpunkt existiert).
+  Verifikation per CDP-Klick-Test (Memory-Regel: UI-Formulare klicken,
+  nicht nur API testen): als admin eine `operate`-Bindung auf eine
+  laufende Mixer-Instanz für einen Testnutzer anlegen → Login als
+  Testnutzer landet in der Console-Ansicht genau dieses Nodes
+  (C13-Pfad), `PATCH` auf einen fremden Node liefert 403; das
+  Audit-Log zeigt die Anlage.
+- **Teil 2 — Export/Import:** Endpunkte + Dry-Run-Diff + UI-Buttons
+  (Datei-Download/-Upload). Verifikation: Export → Bindung löschen →
+  Import (merge) → Bindung wieder da und wirksam (403-Test);
+  Import (replace, dryRun) meldet den korrekten Diff, ohne zu
+  schreiben.
+- **Teil 3 — Settings-Registry:** Tabelle, API, UI-Sektion im
+  Admin-Tab; Placement-Schwellwerte als erste Migration von env.
+  Verifikation: Schwellwert per UI unter die aktuelle Last senken →
+  Placement-Advice-Banner (D6 Teil 3) erscheint ohne
+  Orchestrator-Neustart.
+- **Teil 4 (später, nach K12 Teil 4):** Bindungs-UI um die
+  Workflow-Scope-Spalte erweitern; Passwort-Selbstservice
+  (`PUT /api/v1/me/password`); AD/LDAP gemäß §12 Punkt 1 — die
+  Grundsatzentscheidung (`docs/decisions.md` 2026-07-10) bleibt offen
+  und wird hier nicht nebenbei getroffen.
+
+### 11.5 Offene Fragen an den Projektinhaber
+
+1. **Export inkl. bcrypt-Passwort-Hashes?** Mit Hashes ist ein
+   1:1-Systemumzug möglich, aber die Datei ist sensibel; ohne Hashes
+   müssen nach dem Import alle Passworte neu gesetzt werden. Welche
+   Variante (oder beide, per Checkbox beim Export)?
+2. **Was ist mit „latenz" konkret gemeint?** (a) Latenz-Budget pro
+   Workflow (§15 — würde als Feld am K12-Workflow-Objekt landen),
+   (b) Vorschau-/UI-Latenz (Preview-FPS, Poll-Intervalle),
+   (c) etwas anderes? Bestimmt, wo der Regler wohnt — im heutigen Code
+   existiert keiner.
+3. Reicht das Tripel-Modell (mehrere Bindungen = mehrere Rollen) oder
+   sind zusätzlich **benannte Rollen-Vorlagen** gewünscht
+   („Bildmeister" als wiederverwendbares Bündel, das man Nutzern
+   zuweist)? Empfehlung: Vorlagen erst bei realem Nutzermengen-Bedarf —
+   das Tripel bleibt darunter unverändert.
+4. AD/LDAP-Anbindung (§12 Punkt 1): weiterhin zurückgestellt, oder
+   bekommt sie durch die Präsentations-Perspektive jetzt Priorität?
+
+---
+
+## 12. Workflow = Regieplatz: Gruppieren im Flow-Editor, Lifecycle inkl. Pause, Export/Import, rollenbasierter Bedien-Zugriff
+
+> „die workflow definition ist noch nicht wie gewünscht. es muss möglich
+> sein, sich zum beispiel einen kleinen regieplatz bestehend aus 3
+> kameras (livequellen), einem bildmischer, einem audio mischer (audio
+> follow video vielleicht) und zwei video playern zu bauen (mit einem
+> flow editor, oder direkt im flow editor und dann ähnlich wie
+> gruppieren (oder eh gleich gruppieren) als einen workflow (eben
+> regieplatz 1) zu definieren. dem workflow können dann user zugewiesen
+> werden, die diesen bearbeiten oder eben nur bedienen können. dann muss
+> es möglich sein, dem bildmeister die rechte so zu geben, dass er in
+> seiner rolle als bildmeister nur den bildmischer sehen/bedienen kann.
+> praxisnahe denken. den workflow muss man speichern,
+> importieren/exportieren, starten (nach vorprüfung der ressourcen),
+> pausieren (läuft nicht, braucht keine ressourcen, ist aber im
+> floweditor zu sehen), starten und stoppen. wenn ein user (zum beispiel
+> der bildmeister) einsteigt darf er ja nichts bearbeiten sondern nur
+> bedienen, muss daher beim einsteigen nur die workflows zur auswahl
+> bekommen, denen er zugewiesen ist und nach auswahl nur sein UI aller
+> zu bedienenden elemente sehen. (eine lösung, wenn er mehrere ui's
+> bedienen kann (bildmischer, ograf,..) im floweditor würden dann im
+> endausbau mehrere gruppen/workflows gleichzeitig laufen/existieren
+> (regieplatz 1, regieplatz 2, remote regieplatz, control room, playout,
+> edit,..)"
+
+### 12.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- **Workflow-Objekt existiert** (D7 Teil 1, erledigt 2026-07-14,
+  `orchestrator/internal/workflows`):
+  - Zustände: nur `stopped/starting/started/stopping/failed`
+    (`types.go:21–27`) — **kein `paused`**.
+  - Definition = Rollen (`{name, nodeType, hostId?}`, `types.go:35–39`)
+    + Rolle→Rolle-Kanten (`types.go:49–52`).
+  - **Verkabelungs-Grenze, für den Regieplatz-Fall hart:** aufgelöst
+    wird immer auf den jeweils **ersten** Sender/Receiver einer Rolle
+    (`service.go:225`: `fromNode.Senders[0].ID,
+    toNode.Receivers[0].ID`; als „dokumentierte Folgearbeit" markiert,
+    `types.go:44–48`). Drei Kamera-Rollen auf einen Bildmischer würden
+    heute alle auf **denselben** Mixer-Receiver gepatcht — der wörtlich
+    gewünschte Regieplatz (3 Kameras + Bildmischer) ist mit dem
+    heutigen Template **nicht verkabelbar**. Das ist der erste zu
+    schließende Gap, noch vor jedem UI-Komfort.
+  - API: `POST/GET/DELETE /api/v1/workflows`,
+    `POST …/{id}/start|stop` (`server.go:193–198`) — **kein
+    PUT/Update** (obwohl `ARCHITECTURE.md` §22.3 Punkt 2
+    `PUT /api/v1/workflows/<id>` bereits als Soll nennt). Start/Stop
+    verlangen heute global `admin`, Anlegen `configure`.
+  - UI: `<omp-workflows-view>` ist ein Listen-+Formular-Panel
+    (Name + Rollen-Dropdowns + Verbindungs-Dropdowns,
+    `ui/shell/workflows-view.ts:109–121`) — kein grafisches Entwerfen.
+- **Gruppen (B5) sind ein rein visuelles Konzept:** Baum +
+  Port-Promotion in `ui/graph/groups.ts` (`GroupNode`, Zeilen 8–14;
+  `promotedPorts`, Zeilen 164–192), opak im Layout-Blob persistiert
+  (`ui/graph/flow-canvas.ts:80–89`; `internal/layouts/store.go:1–6`:
+  „Der Orchestrator kennt die Struktur des Blobs weiterhin nicht").
+  Eine Gruppe referenziert **laufende Node-IDs**, ein Workflow
+  **Rollen/Typen** — strukturell nah (beides „benannte Menge mit
+  Außenkanten"), aber heute zwei getrennte Welten ohne Brücke. Genau
+  diese Brücke ist der Kern der Anfrage („ähnlich wie gruppieren, oder
+  eh gleich gruppieren").
+- **Operator-Einstieg (C13/§14) ist zu ~2/3 gebaut:**
+  `GET /api/v1/me/consoles` löst `operate`-Bindungen zu
+  Konsolen-Einträgen auf — aber gegen einen **Stub-Workflow**
+  („default", `internal/consoles/resolve.go:14–17`; der Kommentar dort
+  verweist selbst auf „sobald §6.2 echte Workflows einführt").
+  `ConsoleEntry` trägt das `workflowId`-Feld bereits
+  (`resolve.go:37–43`), die Console-Ansicht kann mehrere Bundles als
+  Tab-Leiste (`ui/shell/console-view.ts:1–8`), die Kiosk-Route
+  `/console/<workflowId>/<nodeRoleId>` existiert (§14). Es fehlt die
+  echte Workflow-Dimension: Auswahl nur zugewiesener Workflows,
+  Konsolen-Liste pro gewähltem Workflow.
+- **AuthZ ohne Workflow-Scope** (`authz.go:9–15`, bewusste
+  D3-Teil-2-Grenze). `ARCHITECTURE.md` §12 Punkt 2 spezifiziert den
+  Zielzustand bereits wörtlich: „Wirkungsbereich ist ein Workflow
+  (§6.2) **oder eine einzelne Node-Rolle darin** … Beispiel: Gruppe
+  ‚Bildmischer Regie 1' → Verb `operate` auf Node-Rolle ‚Videomixer'
+  im Workflow ‚Regie 1'" — exakt der Bildmeister-Fall der Anfrage.
+  Dieses Kapitel erfindet also **kein neues Rechtemodell**, sondern
+  vervollständigt §12 Punkt 2.
+- **„starten (nach vorprüfung der ressourcen)" ist bereits als D7
+  Teil 2 spezifiziert und eingeplant** (§6.2 Erweiterung 2026-07-10,
+  Punkte 1–3: Zeitsteuerung, `confirm_stop`,
+  Ressourcen-Vorprüfung-als-Start-Vorbedingung) — der einzige noch
+  offene reguläre D-Schritt (`UMSETZUNG.md` §7). Wird hier
+  **vorausgesetzt und nicht dupliziert**; K14 liefert später die
+  bessere Datengrundlage dafür (Typ-Verbrauchsprofile statt
+  Momentwert, siehe 14.3d).
+- **§22.3 (Workflow-Katalog) hat die Bedien-Vision bereits
+  entschieden:** Designer als Rollen-Variante des bestehenden
+  Graph-Editors („Kacheln sind ‚Rolle: Videomixer' statt ‚Node
+  xyz-123'"), Speichern/Laden = `PUT`/`GET` auf Postgres-Objekten,
+  Katalog-Kachel-Grid mit Thumbnail/Suche. Dieses Kapitel ist die
+  Umsetzungskonkretisierung von §22.3 **plus** die vier dort nicht
+  abgedeckten Punkte: Pause-Zustand, Datei-Export/-Import,
+  Operator-Workflow-Einstieg, Mehrere-Workflows-gleichzeitig im
+  Editor.
+- **Export/Import: nicht vorhanden.** Snapshot (B7) ist das
+  Serialisierungs-Vorbild (`internal/snapshots/types.go:29–35`,
+  Edges + Params als ein JSON-Objekt) und zugleich der designierte
+  Träger des Parameterzustands — §6.2 wörtlich: „ein Snapshot kann
+  anschließend den initialen Parameterzustand darüberlegen".
+
+### 12.2 Referenz
+
+PIPELINE CONTROLLER ist hier keine Quelle: Single-Box-System mit genau
+einem impliziten „Workflow", ohne Multi-User-/Regieplatz-Dimension.
+Referenz sind die eigenen Architektur-Abschnitte §6.2, §12, §14 und
+§22.3 — der Beitrag dieses Kapitels ist deren Verzahnung zu einem
+durchgängigen Bedien-Fluss plus die in 12.1 benannten Lücken.
+
+### 12.3 Ziel-Design
+
+**a) Port-genaues Verbindungs-Template (Fundament-Fix).**
+`Connection` wird um optionale Endpunkt-Angaben erweitert:
+`{fromRole, fromSender?, toRole, toReceiver?}` — Referenz per
+stabilem Sender-/Receiver-**Label** (aus IS-04/Descriptor; Node-IDs
+sind pro Prozessstart neu und scheiden aus) oder Index. Ohne Angabe
+gilt das bisherige Verhalten (erster Port) als
+Kompatibilitäts-Fallback — kein Bruch bestehender Workflows. Die
+Auflösung in `runStart` ersetzt `Senders[0]/Receivers[0]` durch den
+Label-Lookup; das Anlege-Formular (`workflows-view.ts`) bekommt pro
+Verbindung eine Sender-/Receiver-Auswahl.
+
+**b) Gruppieren = Regieplatz definieren (die Brücke
+Editor ↔ Workflow).** Neue Flow-Editor-Aktion an einer Gruppe: **„Als
+Workflow speichern"** — leitet aus den Gruppenmitgliedern die Rollen
+ab (`graph.instanceId` → Instanz-Typ über `/api/v1/instances`; Nodes
+ohne Launcher-Instanz sind nicht ableitbar → verständliche
+Fehlermeldung statt stillem Auslassen) und aus den gruppeninternen
+Kanten das port-genaue Template (a). Umgekehrt rendert der Editor
+laufende Workflows als **benannten Rahmen** um die Kacheln ihrer
+Runtime-Nodes (Zuordnung über `wf.Runtime[role].NodeID`, liegt im
+Workflow-Objekt bereits vor). Damit existieren „Regieplatz 1",
+„Regieplatz 2", „Playout" … **gleichzeitig sichtbar auf einer
+Canvas** — der Endausbau-Wunsch aus der Anfrage. B5-Gruppen bleiben
+daneben als leichtgewichtiges, rein visuelles Werkzeug bestehen (zwei
+Konzepte, klar unterscheidbar beschriftet; ob sie langfristig
+verschmelzen: offene Frage 4).
+
+**c) Lifecycle inkl. Pause.** Neuer Status `paused` in der
+Zustandsmaschine. Semantik: wie `stopped` **keine Prozesse, keine
+Ressourcen** (Anfrage wörtlich) — aber der Editor rendert die Rollen
+als **Platzhalter-Kacheln** (Rollenname + Typ, gestrichelter Rahmen,
+Template-Kanten als gestrichelte Linien) im Workflow-Rahmen weiter.
+Ehrlich benannt: technisch stoppt `pause` dieselben Prozesse wie
+`stop` — der Unterschied ist Sichtbarkeit und Absicht („kommt
+wieder", bleibt im Editor-Layout verankert; `stopped` verschwindet
+von der Canvas und lebt nur in Workflows-Tab/Katalog). Resume =
+normaler Start (inkl. D7-Teil-2-Vorprüfung, sobald vorhanden).
+Parameterzustand über die Pause hinweg: optional automatischer
+Snapshot (B7) beim Pausieren, Wiederanwenden nach dem Resume — nutzt
+ausschließlich Bestehendes. Außerdem gehört hierher
+`PUT /api/v1/workflows/{id}` (Update, nur in `stopped`/`paused` —
+§22.3 Punkt 2 einlösen).
+
+**d) Export/Import pro Workflow.**
+`GET /api/v1/workflows/{id}/export` → `{version, name, definition
+(port-genau), layoutFragment (Positionen der Rollen-Platzhalter),
+parameterSnapshot?}`; `POST /api/v1/workflows/import` mit Validierung:
+unbekannter `nodeType` gegen den Katalog = verständliche Ablehnung
+(kein Import-Torso), Namenskollision → Suffix oder Fehler. Bewusst
+getrennt vom K11-Systemexport (Nutzer/Rollen): ein Regieplatz wandert
+als Datei zwischen Systemen, ohne Nutzerdaten mitzuschleppen.
+
+**e) Workflow-Scope-AuthZ (§12 Punkt 2 vervollständigen).**
+`Binding` wird um ein optionales `workflowId` erweitert: leer = wie
+heute (global bzw. Node-gescoped); gesetzt + `NodeID="*"` = „darf den
+ganzen Workflow bedienen"; gesetzt + konkrete Node-Rolle = exakt der
+Bildmeister-Fall („nur den Bildmischer in Regieplatz 1").
+Durchsetzung an den bestehenden zwei Stellen: `requireVerbOnNode`
+prüft zusätzlich, ob der Ziel-Node gerade eine Rolle im gebundenen
+Workflow erfüllt (Runtime-Lookup über das Workflow-Objekt);
+`consoles.Resolve` löst echte Workflow-IDs/-Labels statt des Stubs
+auf. Ob Workflow-`operate` auch Start/Stop erlaubt (heute global
+`admin`, `server.go:197–198`): offene Frage 3 — praxisnah gibt es
+beide Betriebsmodelle.
+
+**f) Operator-Einstieg.** Nutzer mit ausschließlich
+`operate`-Bindungen landen nach dem Login auf einer
+**Workflow-Auswahl** (nur gebundene Workflows, als Kachel-Liste — die
+schmale Vorstufe des §22.3-Katalog-Grids), nach Auswahl auf
+`/console/<workflowId>`: **alle** `operate`-Rollen dieses Nutzers in
+diesem Workflow als Tab-Leiste bzw. nebeneinander (die Console-Ansicht
+kann Tabs bereits — „mehrere UIs bedienen (bildmischer, ograf, ..)" =
+mehrere Einträge derselben Liste). Kein Graph, keine fremden Nodes —
+Filterung in der Shell, Durchsetzung wie immer im Orchestrator (§12
+Punkt 3). Die bestehende Kiosk-Route bleibt für
+Ein-Rollen-Arbeitsplätze unverändert.
+
+**g) Designer auf Rollen-Ebene (§22.3 Punkt 1) bleibt Endausbau:**
+Workflows ohne laufende Prozesse grafisch entwerfen (Rollen-Kacheln
+aus dem Katalog ziehen, Template-Kanten zeichnen — dieselbe Canvas,
+andere Datenquelle). Nach b) + c) ist der Abstand dorthin klein: das
+Platzhalter-Rendering pausierter Workflows ist bereits 80 % der
+Rollen-Kachel-Darstellung.
+
+### 12.4 Phasenplan
+
+- **Teil 1 — port-genaues Template + Update (Backend-Fundament):**
+  `Connection`-Erweiterung, Label-Auflösung in `runStart`,
+  `PUT /api/v1/workflows/{id}`, Sender-/Receiver-Auswahl im
+  bestehenden Formular. Verifikation: Workflow „Regieplatz 1" mit drei
+  `omp-source`-Rollen + einem Switcher/Mixer: Start → drei Kanten an
+  drei **verschiedenen** Receivern (per `GET /api/v1/graph`
+  nachgewiesen), Bildwechsel im Viewer sichtbar.
+- **Teil 2 — Editor-Brücke:** „Gruppe als Workflow speichern" +
+  Workflow-Rahmen um laufende Runtime-Nodes. Verifikation per CDP:
+  Trias im Editor gruppieren → speichern → Workflow stoppen → starten
+  → benannter Rahmen erscheint, Kanten wie im Template.
+- **Teil 3 — Pause + Export/Import:** `paused`-Zustand +
+  Platzhalter-Rendering + optionaler Pause-Snapshot; Datei-Export/
+  -Import. Verifikation: Pause → keine Prozesse mehr (`ps`),
+  Platzhalter sichtbar; Export → Delete → Import → Start → identisches
+  Verhalten.
+- **Teil 4 — Workflow-Scope:** `workflowId` am Binding, Durchsetzung
+  im Node-Proxy, echte Workflow-IDs in `consoles`, K11-Admin-UI um die
+  Scope-Spalte erweitert. Verifikation: Bildmeister-Testnutzer
+  (`operate` auf Rolle „Videomischer" in „Regieplatz 1") kann
+  Mixer-PATCHen, bekommt 403 auf dem Audio-Node **desselben**
+  Workflows und auf dem Mixer von „Regieplatz 2".
+- **Teil 5 — Operator-Einstieg:** Workflow-Auswahl nach Login +
+  `/console/<workflowId>`-Mehr-Rollen-Ansicht. Verifikation per CDP:
+  Login als Bildmeister → sieht genau seine Workflows → nach Auswahl
+  genau seine Bedien-UIs, nie einen Graph.
+- **Teil 6 (Endausbau, deckungsgleich mit §22.3):** Rollen-Designer +
+  Katalog-Kachel-Grid mit Thumbnail/Suche (Mechanik in §22.3
+  Punkte 5–8 bereits vollständig spezifiziert, hier nicht wiederholt).
+- **D7 Teil 2** (Zeitsteuerung + Ressourcen-Vorprüfung +
+  `confirm_stop`) läuft als eigener, bereits geplanter
+  `UMSETZUNG.md`-Schritt — empfohlen **zwischen Teil 2 und Teil 3**,
+  damit „Start" ab Teil 3 durchgängig die Vorprüfung hat.
+
+### 12.5 Offene Fragen an den Projektinhaber
+
+1. **Pause vs. Stop:** reicht die vorgeschlagene Unterscheidung
+   (identische Ressourcen-Wirkung, unterschiedliche
+   Editor-Sichtbarkeit + Snapshot-Komfort), oder soll `paused`
+   zusätzlich Zustand konservieren, der bei `stopped` verfallen darf
+   (z. B. Zeitpläne ausgesetzt statt gelöscht)?
+2. **Export-Umfang:** Definition + Layout + Parameter-Snapshot
+   (Vorschlag — ein importierter Regieplatz sieht sofort aus wie das
+   Original) oder Definition pur (portabler, Empfänger startet mit
+   Default-Parametern)?
+3. **Darf `operate`-auf-Workflow den Workflow starten/stoppen** (die
+   Regie fährt ihren Platz selbst hoch/runter), oder bleibt der
+   Lifecycle bei `configure`/`admin` und Operatoren bedienen nur, was
+   läuft? Heute verlangt Start/Stop global `admin`
+   (`server.go:197–198`).
+4. Sollen B5-Gruppen langfristig ganz im Workflow-Konzept aufgehen
+   (eine Mechanik weniger), oder behalten rein visuelle Ad-hoc-Gruppen
+   ohne Orchestrator-Objekt ihren eigenen Wert?
+5. Operator-Einstieg bei mehreren zugewiesenen Workflows:
+   Kachel-Auswahl nach jedem Login (Vorschlag) oder automatisch der
+   zuletzt benutzte Workflow mit Umschalter?
+
+---
+
+## 13. Multi-Host-Darstellung im Flow-Editor (Host-Kacheln/-Zonen auf einer Canvas)
+
+> „im flow editor müsste es kacheln/grid geben für die einzelnen hosts.
+> alles auf einer seite. denn es könnte ja sein, dass ein node eines
+> hosts mit dem node eines anderen hosts verbunden wird."
+> (Der im Original folgende Verweis auf eine vergleichbare
+> Cloud-Produktionsplattform wird nach `ARCHITECTURE.md`
+> §20.7-Konvention nicht namentlich zitiert.)
+
+### 13.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- Hosts sind heute eine **separate** Ansicht: App-Bar-Tab „Hosts"
+  (`ui/shell/hosts-view.ts` — Tabelle mit Label/Hostname/CPU/RAM-
+  Momentwert, Zeilen 96–141). Der Flow-Editor selbst weiß nichts von
+  Hosts: `GraphNode` hat `instanceId`, aber **kein** Host-Feld
+  (`ui/graph/flow-canvas.ts:57–66`); ein Host-Label erscheint nur in
+  den Instanz-Zeilen der Palette (`flow-canvas.ts:1647–1651`), nicht
+  an den Graph-Kacheln.
+- **Die Zuordnung existiert serverseitig vollständig:**
+  `Instance.HostID` (`internal/launcher/launcher.go:96–100`, leer =
+  lokal), und der Canvas lädt Katalog + Instanzen + Hosts bereits
+  parallel (`flow-canvas.ts:1564–1571`). Der Join
+  `graph.instanceId → instances.hostId → hosts.label` ist reine
+  Client-Arbeit — **für Teil 1 ist kein neuer Endpunkt nötig**.
+- **Hostübergreifendes Verbinden geht IS-05-seitig heute schon**
+  (Connections sind ortsunabhängig) — aber **medienseitig nicht
+  gleichwertig:** MXL ist host-lokal (Shared Memory
+  `/dev/shm/omp-mxl`, §2/§6; Kapitel 7.1 hat das für Redundanz bereits
+  explizit ausgesprochen). Eine MXL-Kante zwischen zwei Hosts würde
+  heute kommentarlos ins Leere laufen. Die Host-Darstellung ist also
+  nicht nur Optik: sie ist die Voraussetzung, diesen Fall überhaupt
+  sichtbar und warnbar zu machen — legitime Hostgrenzen-Transporte
+  sind ST 2110/SRT (D4, `omp-mediaio::st2110`/`omp-srt-gateway`).
+- Layout: freie Positionen + Gruppenbaum im opaken Layout-Blob
+  (`flow-canvas.ts:80–89`) — keinerlei Zonen-Semantik.
+
+### 13.2 Referenz
+
+Kein Referenzmuster im Projekt oder in PIPELINE CONTROLLER
+(Single-Host-System, dort stellt sich die Frage nicht). Vorbild ist
+die Gattung „Multi-Host-Fabric-Ansicht" vergleichbarer
+Cloud-Produktionsplattformen (§20.7-Konvention: kein Herstellername im
+Dokument).
+
+### 13.3 Ziel-Design
+
+- **Host-Zonen als Hintergrund-Ebene derselben Canvas** — kein
+  zweiter Editor, kein Frame-Grid: pro registriertem Host ein
+  Zonen-Rechteck mit Kopfzeile (Label, Online-Punkt, CPU/RAM live —
+  dieselbe Datenquelle wie `hosts-view`; nach K14 Teil 1 zusätzlich
+  eine kleine Verlaufs-Sparkline). Dazu eine Zone
+  „<Orchestrator-Host> (lokal)" für Instanzen ohne `hostId` und eine
+  Sammelzone „Unzugeordnet" für manuell (ohne Launcher) gestartete
+  Nodes ohne `instanceId` — jede Kachel liegt immer in genau einer
+  Zone, nichts verschwindet.
+- **Umschaltbar:** Toolbar-Toggle „Host-Ansicht". Default zunächst
+  aus, bestehende Layouts bleiben unverändert gültig (Positionen
+  werden beim Einschalten innerhalb der Zone des jeweiligen Hosts
+  angeordnet und separat gemerkt — Ausschalten stellt das freie
+  Layout wieder her). Ob die Host-Ansicht ab > 1 registriertem Host
+  Default wird: offene Frage 2.
+- **Kanten über Zonengrenzen** sind normal ziehbar — das ist der Kern
+  des Wunsches, und funktional geht es bereits; neu ist die
+  **Kanten-Klassifizierung:** eine Kante zwischen Kacheln
+  verschiedener Zonen, deren Ports MXL-Format tragen, wird im
+  Warn-Stil gerendert (gestrichelt, `--omp-error`, Tooltip: „MXL ist
+  host-lokal — für Hostgrenzen ST-2110/SRT-Gateway (D4) einsetzen");
+  ST-2110-/SRT-Kanten bleiben normal. Advisory, kein Blockieren
+  (harte Durchsetzung wäre Graph-API-Arbeit und bewusst spätere
+  Stufe).
+- **Zusammenspiel mit K12:** Workflow-Rahmen (12.3b) und Host-Zonen
+  sind orthogonale Ebenen — ein Regieplatz kann über zwei Hosts
+  liegen; der Rahmen zeichnet über Zonengrenzen hinweg. Visuelle
+  Schichtung: Zone = Hintergrund, Workflow-Rahmen = Overlay, Kacheln
+  zuoberst.
+- **Später (Teil 3):** Drag einer Kachel in eine andere Zone =
+  begleiteter Umzug (Stop + Start auf dem Ziel-Host über den
+  vorhandenen Remote-Launcher, mit Bestätigungsdialog;
+  Placement-Advice aus D6 Teil 3 als Vorschlagsquelle) — bewusst
+  nicht v1, ein versehentlicher Drag darf keinen laufenden Node
+  umziehen.
+
+### 13.4 Phasenplan
+
+- **Teil 1 — Zonen-Rendering (eine Sitzung, kein Backend):** Zonen +
+  Zuordnung + Kopfzeile mit Live-Metriken + Toolbar-Toggle.
+  Verifikation: zweiten Host-Agent als Dev-Prozess mit eigener
+  Host-ID registrieren (D6-Muster), Remote-Instanz starten → Kachel
+  liegt in dessen Zone, CPU/RAM im Zonen-Kopf; CDP-Klick-Test:
+  Toggle an/aus, freies Layout bleibt erhalten.
+- **Teil 2 — Kanten-Klassifizierung + Zonen-Kollaps:**
+  Transport-Erkennung aus Port-Format/IS-04-Transport, MXL-Warnstil
+  über Zonengrenzen; Zone einklappbar (analog B5-Gruppe).
+- **Teil 3 — Drag = begleiteter Umzug:** Bestätigungsdialog,
+  Advisory-Integration (K14/D6 Teil 3), Neu-Verkabelung über den
+  bestehenden Workflow-/Graph-Pfad.
+
+### 13.5 Offene Fragen an den Projektinhaber
+
+1. **Zonen-Anordnung:** feste vertikale Lanes nebeneinander
+   (übersichtlich, ordnet sich selbst) oder frei verschieb-/
+   skalierbare Rechtecke (flexibler, aber mehr Layout-Pflege)?
+2. Soll die Host-Ansicht automatisch Default werden, sobald mehr als
+   ein Host registriert ist?
+3. Ist der begleitete Umzug per Drag (Teil 3) Teil des Zielbilds, oder
+   reicht „Start auf Host X" über die Palette (existiert seit D6
+   Teil 2)?
+4. Bleibt der Hosts-Tab nach Teil 1 bestehen (Empfehlung: ja — als
+   Detail-/Verwaltungssicht, ab K14 mit Historie), oder soll er ganz
+   im Flow-Editor aufgehen?
+
+---
+
+## 14. Host- und Microservice-Ressourcen-Historie (Min/Ø/Max) + Start-Vorprüfung/Warnung
+
+> „man braucht die metrics der hosts (auch bei nur einem host) damit man
+> sieht ob es noch möglich ist, nodes/microservices zu starten. optimaler
+> weise merkt sich der orchestrator den minimal, durchschnitt und
+> maximal verbrauch laufender microservices (per host) und kann das
+> beim/vor dem starten neuer microservices
+> anzeigen/alarmieren/warnen/berücksichtigen."
+
+### 14.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- **Telemetrie ist ein Momentwert:** `Sample {cpuPercent,
+  memUsedBytes, memTotalBytes}`
+  (`host-agent/internal/telemetry/telemetry.go:19–23`), alle 5 s auf
+  `omp.host.<id>.metrics` (`host-agent/main.go:55,131`). Der
+  Orchestrator hält **nur den letzten** Wert (`hosts.Tracker` — „die
+  zuletzt über NATS empfangene Telemetrie",
+  `internal/hosts/tracker.go:13–16`, `Get`:41–46). **Keine Historie,
+  nirgends.**
+- **Pro-Instanz-Verbrauch wird nicht gemessen** — aber beide
+  Startpfade kennen die PID jeder verwalteten Instanz (lokal:
+  `internal/launcher/launcher.go:222`; remote:
+  `host-agent/internal/commands/commands.go:108`). Eine
+  `/proc/<pid>`-Messung ist damit ohne neue Infrastruktur
+  anschließbar.
+- **Placement-Engine (D6 Teil 3) rechnet mit Momentwerten:** bewertet
+  alle 5 s (`internal/placement/placement.go:43`) den letzten Sample
+  gegen statische Schwellwerte (`placement.go:77–94`) und schlägt
+  Ausweichhosts vor (`Advice`, `placement.go:102–112`). Sie
+  beantwortet „ist ein Host überlastet?", nicht die Frage der
+  Anfrage: „passt ein weiterer Mixer noch drauf?" — dafür braucht es
+  den erwarteten **Bedarf** des zu startenden Typs, den heute niemand
+  kennt.
+- UI: `hosts-view` zeigt den Momentwert als Tabellenzeile
+  (`hosts-view.ts:100–108`).
+- **D7 Teil 2** (Ressourcen-Vorprüfung vor dem Workflow-Start, §6.2
+  Punkt 3) ist offen und hätte heute nur den Momentwert als
+  Datengrundlage; §16 (Kapazitätsplanung über die Zeit) setzt noch
+  eine Stufe später auf. Dieses Kapitel ist die Datengrundlage für
+  beide — Erweiterung von D6, kein Neubau.
+
+### 14.2 Referenz
+
+Kein Vorbild in PIPELINE CONTROLLER (keine Host-/Prozess-Metriken im
+gesamten Projekt). Projekt-intern ist der D6-Telemetrie-Pfad
+(Agent → NATS → Tracker → Engine/UI) das Fundament, das hier in zwei
+Richtungen verfeinert wird: Zeitachse (Historie) und Auflösung
+(pro Instanz statt pro Host).
+
+### 14.3 Ziel-Design
+
+**a) Host-Historie im Orchestrator:** Ringpuffer pro Host neben dem
+bestehenden Tracker — Rohwerte ~1 h @ 5 s, dazu 1-Minuten-Aggregate
+(min/avg/max) für ~24 h. Bewusst **in-memory zuerst**: Verlust beim
+Orchestrator-Neustart ist für eine Auslastungs-Sicht akzeptabel und
+wird dokumentiert (Postgres-Persistenz als spätere Option, offene
+Frage 2). Neue API `GET /api/v1/hosts/{id}/metrics/history?window=…`.
+UI: Sparkline + Min/Ø/Max-Spalten in `hosts-view`; der
+K13-Zonen-Kopf abonniert später dieselbe Quelle.
+
+**b) Pro-Instanz-Messung (additiv im selben Payload):** Host-Agent —
+und der lokale Launcher für lokal gestartete Instanzen — misst pro
+verwalteter PID `/proc/<pid>/stat` (utime+stime-Delta → CPU %,
+normalisiert auf Kernzahl) und `/proc/<pid>/status` (VmRSS) und hängt
+`instances: [{instanceId, cpuPercent, rssBytes}]` an das bestehende
+Metrics-JSON an (rein additiv — `Tracker.Touch` parst per
+`json.Unmarshal`, unbekannte Felder stören heute schon nicht).
+Ehrliche Grenzen von Anfang an benennen: nur Launcher-/
+Agent-gestartete Prozesse (manuell gestartete Nodes haben keine
+bekannte PID → tauchen in der Instanz-Sicht nicht auf, kein stilles
+Raten); Kindprozesse werden nicht mitgezählt (heutige Nodes sind
+Ein-Prozess-GStreamer — falls sich das ändert, ist cgroup-Messung die
+saubere Folgearbeit, nicht jetzt).
+
+**c) Verbrauchsprofile pro Node-Typ — das „merkt sich der
+Orchestrator":** Aggregation der Pro-Instanz-Samples zu Profilen
+`(nodeType, hostId) → {cpu: min/avg/max/p95, rss: min/avg/max,
+sampleCount, updatedAt}`, persistiert in Postgres (klein — ein Upsert
+pro Aggregationsintervall), damit Profile Orchestrator-Neustarts
+überleben. Zusätzlich ein Typ-Fallback über alle Hosts: ein neuer
+Host ohne eigene Messhistorie erbt das Typ-Profil, im UI klar als
+Schätzung gekennzeichnet.
+
+**d) Start-Vorprüfung/Warnung (advisory):** beim Instanz-Start
+(Palette, `POST /api/v1/instances`) und beim Workflow-Start zeigt die
+UI **vor** der Aktion die Rechnung: freie Kapazität des Ziel-Hosts
+(Momentwert + Historien-Kontext, z. B. Peak der letzten Stunde) minus
+erwarteter Bedarf (Profil avg…max) → Ampel ok/knapp/überbucht mit
+konkreten Zahlen („omp-video-mixer-me braucht auf host-a typisch
+12–18 % CPU, frei: 34 %"). Existiert noch kein Profil: ehrlich
+„Bedarf unbekannt (erster Start dieses Typs)", **nie** ein stiller
+Block. **Hartes Ablehnen bleibt D7-Teil-2-Scope** (§6.2 Punkt 3) —
+dieses Kapitel liefert Warnstufe und Datengrundlage; sobald D7 Teil 2
+existiert, rechnet dessen Vorprüfung mit denselben Profilen statt nur
+mit Momentwerten (ein Rechenweg, zwei Härtegrade — dieselbe
+Advisory-zuerst-Staffelung wie §6.1).
+
+### 14.4 Phasenplan
+
+- **Teil 1 — Host-Gesamt-Historie (kleinste präsentationswirksame
+  Scheibe, eine Sitzung):** Ringpuffer + history-API +
+  Sparkline/Min-Ø-Max in `hosts-view`. Verifikation: künstliche Last
+  (Dev-Werkzeug oder fingierte Agent-Telemetrie wie in den D6-Tests)
+  → Verlauf und Min/Ø/Max ändern sich nachvollziehbar;
+  Orchestrator-Neustart leert die Kurve (dokumentiertes Verhalten,
+  kein Bug).
+- **Teil 2 — Pro-Instanz-Telemetrie:** PID-Messung in Agent +
+  lokalem Launcher, additives Payload-Feld, Anzeige pro Instanz
+  (hosts-view-Detail bzw. Palette-Instanzzeile).
+- **Teil 3 — Typ-Profile + Start-Warnung:** Postgres-Profile,
+  Ampel-Anzeige in Palette und am Workflow-Start-Knopf (advisory).
+  Verifikation: zwei Mixer nacheinander starten → der zweite Start
+  zeigt eine profilbasierte Schätzung statt „unbekannt", und die
+  Zahlen passen zur beobachteten Last des ersten.
+- **Teil 4 — Anbindung:** D7-Teil-2-Vorprüfung rechnet mit Profilen
+  (harte Stufe); §16-Kapazitäts-Zeitstrahl als spätere Erweiterung
+  auf derselben Datengrundlage.
+
+### 14.5 Offene Fragen an den Projektinhaber
+
+1. **Bestätigung der Teil-1-Schnittlinie:** Host-Gesamt-Historie
+   zuerst (einfach, sofort sichtbar), pro-Microservice ab Teil 2 —
+   oder ist der pro-Service-Verbrauch so zentral, dass Teil 1 + 2
+   zusammen eine (größere) erste Etappe sein sollen?
+2. **Historien-Tiefe/Persistenz:** reichen in-memory ~24 h
+   (Empfehlung für jetzt), oder sollen die Minuten-Aggregate von
+   Anfang an nach Postgres (7/30 Tage — dann braucht es eine
+   Aufbewahrungs-/Aufräumregel)?
+3. **Profile pro (Typ × Host) mit Typ-Fallback** (Vorschlag,
+   berücksichtigt heterogene Hosts) oder nur global pro Typ
+   (einfacher, ungenauer)?
+4. **Warnschwellen der Ampel:** feste Defaults (Vorschlag: „knapp" ab
+   erwarteter Auslastung über der Healthy-Schwelle aus D6 Teil 3,
+   „überbucht" ab über der Alarm-Schwelle) — einstellbar über die
+   K11-Settings-Registry?
