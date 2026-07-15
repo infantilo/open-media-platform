@@ -825,10 +825,14 @@ Katalog-Kategorie `graphics` (§13.5).
 1. **Demo-Scope-Frage aus §11.2 endlich entscheiden:** OGraf in den
    Regieplatz-Demo-Umfang aufnehmen (Empfehlung: ja — der Mixer-Keyer
    hat sonst weiter nur eine Testfarbfläche) oder als Demo 4 führen?
-2. Render-Variante: falls der Spike beide Varianten „grün" zeigt —
-   wpesrc (ein Prozess, §11.2-Entscheid) trotz Paketierungs-Risiko, oder
-   Chromium/CDP (robuster verfügbar, PIPELINE-CONTROLLER-erprobt, aber
-   Zusatzprozess)?
+2. ~~Render-Variante~~ **entschieden (K5-Teil-0, 2026-07-15, s.
+   `docs/decisions.md`): Variante A (`wpesrc`).** Paketierungsrisiko
+   bestand nicht (`apt install gstreamer1.0-wpe`), Chromium-Sandbox-
+   Crash aus B2 (2026-07-07) seither überholt. 5 echte Templates
+   (`digital-clock-top-left`, `breaking-news`, `flat-design-lower-third`,
+   `scorebug`, `ticker`) pixelidentisch zur Chromium-Kontrollprobe
+   gerendert, Alpha-Kanal pixelgenau verifiziert, MXL `video/v210a`
+   bereits in der installierten Bibliothek unterstützt.
 3. Bedeutet „Editor" ausschließlich den PIPELINE-CONTROLLER-Umfang
    (Schema-Formulare/Hotkeys/Children — so hier angesetzt), oder ist
    zusätzlich ein Template-**Authoring**-Werkzeug gewünscht (wäre ein

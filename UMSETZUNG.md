@@ -1768,6 +1768,53 @@ Bausatz nur für eine Node").
   (`active`-Attribut korrekt `false→true`). Test-Instanzen und
   Bootstrap-Testnutzer danach wieder entfernt.
 
+**K5-Teil-0 (OGraf-Render-Spike, erledigt, 2026-07-15):**
+`docs/END-GOAL-FEATURES.md` §5.4 Teil 0 verlangt vor jedem
+`omp-ograf`-Node-Code eine eigene Sitzung: Go/No-Go zwischen `wpesrc`
+(nativ) und Headless-Chromium/CDP (Fallback) gegen 5 echte Templates.
+Volles Ergebnis inkl. Test-Aufbau in `docs/decisions.md`
+2026-07-15 „K5-Teil-0" — Kurzfassung:
+
+- **Beide im Design-Dokument benannten Risiken empirisch widerlegt:**
+  `wpesrc` fehlte nur als installiertes Paket (`apt install
+  gstreamer1.0-wpe`), keine Paketierungslücke; der 2026-07-07
+  dokumentierte Chromium-Sandbox-Crash (B2) tritt seit mehreren späteren
+  Sitzungen mit `--headless=new` nicht mehr auf (K1/K2/K3/K4-Teil-1
+  nutzen das längst produktiv für Live-Verifikation).
+- **5 echte Templates aus `PIPELINE CONTROLLER`** (`digital-clock-
+  top-left`, `breaking-news`, `flat-design-lower-third`, `scorebug`,
+  `ticker`) über eine nachgebaute, generische Test-Harness gerendert,
+  die den EBU-OGraf-v1-Lifecycle fährt (Manifest laden → `main`-Modul
+  per `import()` → `default export`-Klasse selbst per
+  `customElements.define()` registrieren — **Formfund:** die Klasse ist
+  in der Datei *nicht* bereits registriert, das muss die Host-Seite
+  selbst tun, in §5.3 nicht explizit festgehalten).
+- **`wpesrc` vs. Chromium (Kontrollprobe) pixelidentisch**, inklusive
+  `clip-path`, `repeating-linear-gradient`, `backdrop-filter: blur`,
+  Live-`setInterval`-Update. Alpha-Kanal pixelgenau per `ffmpeg`-
+  Pixelsonde verifiziert (Hintergrund `rgba(0,0,0,0)`, Content-Pixel
+  `rgba(17,34,102,217)` bei CSS-Vorgabe `rgba(20,40,120,0.85)`).
+- **MXL `video/v210a`** ist in der installierten `third_party/mxl`-
+  Bibliothek bereits vollständig implementiert (`FlowParser.cpp`,
+  eigene Test-Flow-Definition) — kein Fallback auf getrennte
+  Fill+Key-Flows nötig.
+- **Entscheidung: Variante A (`wpesrc`)**, wie ursprünglich in
+  `ARCHITECTURE.md` §11.2 vorgesehen — ein Prozess statt
+  Node+Chromium-Kindprozess+CDP-Screencast. `docs/END-GOAL-FEATURES.md`
+  §5.5 Punkt 2 damit beantwortet.
+
+  **Verifiziert:** `gst-inspect-1.0 wpesrc` (Element registriert nach
+  Paket-Install), 5 reale Renderdurchläufe via `gst-launch-1.0`
+  (`wpesrc ! videoconvert ! video/x-raw,format=BGRA ! ... ! pngenc`,
+  PNG-Colortype 6 = RGBA bestätigt), Pixel-Stichproben per `ffmpeg`
+  gegen die tatsächlichen CSS-Vorgaben der Templates verglichen (keine
+  Annahme). Chromium-Kontrollprobe per CDP (gleiche Methode wie
+  K1–K4). Templates nur in `/tmp/.../ograf-spike/` kopiert, **nicht**
+  ins Repo übernommen (Lizenzfrage §5.5 Punkt 4 weiterhin offen, erst
+  vor der echten Übernahme in K5-Teil-1 zu klären). `gstreamer1.0-wpe`
+  ist aktuell nur auf dieser Dev-Maschine installiert — Deploy-Skript
+  (`deploy/dev/install-wpe.sh` o. Ä.) folgt mit K5-Teil-1.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -1821,3 +1868,4 @@ Bausatz nur für eine Node").
 | K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |
 | K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
 | K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix; Nachtrag: visueller Feinschliff (Metall-Gradients, omp-panel-section) nach Bildmeister-Referenzvergleich | 2026-07-15 |
+| K5-Teil-0 (OGraf-Render-Spike) | erledigt | [K5-0] Go für wpesrc (Variante A) — Paketierung/Sandbox-Crash-Risiken widerlegt, 5 echte Templates pixelidentisch gerendert, Alpha + MXL video/v210a verifiziert | 2026-07-15 |

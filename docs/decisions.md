@@ -4620,3 +4620,102 @@ denselben Slot ohne Absturz (normaler Betrieb, ohne
 
 **Nächster Schritt:** K3/K4-Teil-1 (nach Kapitel-10-Reihenfolge) oder
 K2-Teil-2 (MXF) — beide unabhängig startbar, Nutzer entscheidet.
+
+## 2026-07-15 — K5-Teil-0: OGraf-Render-Spike — klares Go für wpesrc, `docs/decisions.md` 2026-07-07 (B2) zu Chromium-Sandbox-Crash überholt
+
+`docs/END-GOAL-FEATURES.md` §5.4 Teil 0 verlangt vor jedem
+`omp-ograf`-Node-Code einen Render-Spike mit Go/No-Go-Entscheidung
+zwischen Variante A (`wpesrc`, nativ in der Pipeline) und Variante B
+(Headless-Chromium als Kindprozess, CDP-Screencast → `appsrc`) — Risiko
+laut §5.3 explizit benannt: „`wpesrc` ist auf Debian/Crostini oft nicht
+paketiert, und Chromium crasht in der Claude-Sandbox (decisions B2)".
+Beide Annahmen empirisch geprüft statt übernommen:
+
+**`wpesrc`-Paketierung:** `gst-inspect-1.0 wpesrc` meldete zunächst
+„No such element" — aber `apt-cache search wpe` zeigt das Paket
+`gstreamer1.0-wpe` (Version 1.22.0-4+deb12u7, exakt passend zur
+installierten `gstreamer1.0-plugins-bad`-Version) als verfügbar, nur
+nicht installiert. Nach `apt-get install gstreamer1.0-wpe
+libwpebackend-fdo-1.0-1` registriert `gst-inspect-1.0 wpesrc`
+erfolgreich (`GstWpeSrc`, `location`-Property für die URL,
+`draw-background`-Property für Alpha-Hintergrund) — die
+Paketierungs-Sorge war auf diesem Dev-System unbegründet.
+
+**Chromium-Sandbox-Crash (B2, 2026-07-07):** seit mehreren späteren
+Sitzungen (K1-Teil-1, K2-Teil-1, K3/K4-Teil-1, alle per
+`chromium --headless=new --no-sandbox --disable-gpu` + Node-CDP-
+WebSocket-Client) läuft Chromium in dieser Umgebung reproduzierbar
+stabil — der B2-Befund war entweder umgebungsspezifisch (andere
+Claude-Code-Ausführungsumgebung damals) oder durch seither geänderte
+Flags (`--headless=new` statt `--headless=old`, kein `--single-process`)
+gelöst. **B2 ist damit für den aktuellen Stand überholt** (dort selbst
+nicht mehr korrigieren — Sitzungsprotokoll bleibt unverändert, dieser
+Eintrag ist die Richtigstellung).
+
+**Test-Aufbau (5 echte Templates aus `PIPELINE CONTROLLER`, wie von
+§5.4 gefordert):** `digital-clock-top-left`, `breaking-news`,
+`flat-design-lower-third`, `scorebug`, `ticker` (Verzeichnisse 1:1
+kopiert nach `/tmp/.../ograf-spike/`, **nicht** ins Repo — Lizenzfrage
+§5.5 Punkt 4 weiterhin offen). Generische Test-Harness (`harness.html`)
+nachgebaut, die exakt den in §5.2 beschriebenen EBU-OGraf-v1-Lifecycle
+fährt: Manifest per `fetch()` laden, `main`-ES-Modul per `import()`
+laden, `default export`-Klasse (extends `HTMLElement`) per
+`customElements.define()` registrieren, Instanz anhängen,
+`load({renderType:"realtime", data: <Schema-Defaults>})` →
+`playAction({skipAnimation:true})` — **wichtiger Formfund:** `main` ist
+keine bereits registrierte Custom-Element-Datei, sondern ein
+**default-exportierter Klassen-Konstruktor**, den die Host-Seite selbst
+registrieren muss (ohne `customElements.define()` wirft der Browser
+„Illegal constructor" bei `new`) — in §5.3 nicht explizit so
+festgehalten, wichtig für den echten Node-Host-Seiten-Code (Teil 1).
+Über `python3 -m http.server` bereitgestellt (nicht `file://` — ES-
+Modul-`import()` scheitert dort an fehlenden CORS-Headern, dasselbe
+Muster wie die node-eigene HTTP-Auslieferung in Teil 1 ohnehin vorsieht).
+
+**Ergebnis:** alle 5 Templates rendern über `wpesrc` (WPE WebKit 2.38.6)
+pixelidentisch zur Chromium-Kontrollprobe (Chromium 150, per CDP-
+Screenshot) — inklusive anspruchsvoller CSS-Features, die eine ältere
+WebKit-Engine potenziell unterschiedlich behandeln könnte
+(`clip-path`-Polygone + `repeating-linear-gradient` bei
+„Breaking News", `backdrop-filter: blur` + `env(safe-area-inset-top)`
+bei der Uhr, live `setInterval`-Zeitaktualisierung). **Alpha-Kanal
+pixelgenau verifiziert, nicht nur angenommen:** `wpesrc
+draw-background=false ! videoconvert ! video/x-raw,format=BGRA !
+... ! pngenc` liefert PNG mit Colortype 6 (RGBA); `ffmpeg`-Pixelsonde
+zeigt Hintergrund `rgba(0,0,0,0)` (vollständig transparent) und einen
+Content-Pixel mit `rgba(17,34,102,217)` bei CSS-Vorgabe
+`rgba(20,40,120,0.85)` — Rundungsdifferenz im Bereich der 8-Bit-
+Quantisierung, keine strukturelle Abweichung.
+
+**MXL-`video/v210a`-Alpha-Flow (§11.2-Auflage, „gegen aktuellen
+MXL-Spec-Stand verifizieren"):** `third_party/mxl/lib/internal/src/
+FlowParser.cpp` behandelt `media_type == "video/v210a"` explizit
+(inkl. Validierung „Invalid video height for interlaced v210a. Must be
+even."), eigene Test-Flow-Definition
+(`lib/tests/data/v210a_flow.json`) — die installierte MXL-Bibliothek
+unterstützt den in §5.3 vorgesehenen nativen Alpha-Flow-Typ bereits,
+keine Fallback-Lösung (getrennte Fill+Key-Flows) nötig.
+
+**Go/No-Go-Entscheidung (§5.5 Punkt 2 hiermit beantwortet): Variante A
+(`wpesrc`)**, wie in `ARCHITECTURE.md` §11.2 ursprünglich vorgesehen —
+ein Prozess statt Node+Chromium-Kindprozess+CDP-Screencast-appsrc-Weg,
+kein Zusatzprozess, kein Screencast-Encoding-Umweg, und das
+Paketierungsrisiko hat sich als nicht bestehend herausgestellt. Variante
+B wurde bewusst nicht zusätzlich als Pipeline aufgebaut (nur als
+Chromium-Kontrollprobe für den visuellen Vergleich) — §5.5 Punkt 2 sieht
+den Zusatzaufwand nur vor, „falls der Spike beide Varianten grün zeigt"
+UND eine Abwägung nötig ist; hier ist A eindeutig vorzuziehen, B liefert
+keinen zusätzlichen Erkenntniswert.
+
+**Nicht Teil dieses Spikes (bewusst, gehört zu K5-Teil-1+):** Node-
+Prozess-Integration (`nodes/omp-ograf`), MXL-Ausgang, Descriptor,
+Mixer-DSK-Anschluss, Hotkeys/Children/Variablen-Auflösung, Lizenzklärung
+der Templates (§5.5 Punkt 4, weiterhin offen). `gstreamer1.0-wpe` ist
+nur auf dieser Dev-Maschine installiert — gehört für reproduzierbare
+Deploys in `deploy/dev/install-mxl.sh` oder ein neues
+`deploy/dev/install-wpe.sh` (Teil 1).
+
+**Nächster Schritt:** K5-Teil-1 (Kern-Node: Template-Scan, `show`/`hide`
+eines Templates, Alpha-MXL-Ausgang) — eigene Sitzung, wie im Phasenplan
+vorgesehen. Lizenzfrage (§5.5 Punkt 4) sollte vor der Template-Übernahme
+ins Repo (Teil 1) geklärt werden.
