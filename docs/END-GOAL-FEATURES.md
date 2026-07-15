@@ -2079,6 +2079,39 @@ Filterung in der Shell, Durchsetzung wie immer im Orchestrator (§12
 Punkt 3). Die bestehende Kiosk-Route bleibt für
 Ein-Rollen-Arbeitsplätze unverändert.
 
+**Visueller Maßstab (Referenz-Vergleich 2026-07-15):** der
+Projektinhaber hat ein Beispiel-Bedienpanel eines kommerziellen PTZ-/
+Vision-Mixer-Systems gezeigt ("Bildmeister"-Layout: Tab-Leiste oben je
+Gerät, gruppierte Sektionen mit betonter Kopfzeile + Trennlinie, z. B.
+"AUDIO MIXER"/"TRANSITION"/"POSITION", Flächen-Gradient + Glow auf den
+Tasten, PROGRAM/PREVIEW-Reihen rot/grün beleuchtet, Live-Vorschau direkt
+neben den Reglern) als Zielbild für den Bildmeister/Operator-Arbeitsplatz
+— **deckt sich mit dem in §3.3 bereits festgelegten Look** (Flächen-
+Gradient, `box-shadow`/`inset`, K1-Zustands-Glow; K3/K4-Teil-1 liefert
+das für Video-/Audiomischer bereits, s. `UMSETZUNG.md`), bestätigt also
+die Richtung statt sie zu ändern. Zwei bisher nicht explizit benannte
+Präzisierungen für (f), wenn mehrere Geräte-UIs auf einem Screen
+zusammenlaufen:
+
+1. **Gruppierte Sektionen statt loser Bausteine:** jedes eingebettete
+   Node-UI-Bundle bekommt in der Konsolen-Ansicht einen sichtbaren
+   Rahmen mit Kopfzeile (Node-Label), analog der Sektions-Optik im
+   Referenzbild — bereits teilweise vorhanden (Panel-Titel), hier nur
+   als bewusste Anforderung für den Mehr-Geräte-Fall festgehalten, nicht
+   nur den Ein-Geräte-Fall.
+2. **Zwei Tab-Ebenen sauber trennen:** die bestehende Konsolen-Tab-
+   Leiste wechselt zwischen **Geräten** (Bildmischer, Audiomischer,
+   OGraf, …); ein einzelnes Geräte-Bundle kann zusätzlich **eigene**
+   Unterseiten haben (im Referenzbild "AT Setup · Camera · PIP · Luma ·
+   Audio" für ein Gerät) — das ist Bundle-interne Navigation, keine
+   neue Orchestrator-/Konsolen-Funktion, nur eine Klarstellung, damit
+   künftige Bundles mit vielen Parametern (z. B. ein DVE-Detail-Flyout,
+   §3.3) nicht versuchen, dafür die Konsolen-Ebene zu missbrauchen.
+
+Kein neuer Scope-Punkt, keine offene Frage — Präzisierung von (f) für
+den wörtlichen Fall "der Bildmeister sieht alle seine Geräte/Nodes/
+Microservices gleichzeitig auf einem Screen".
+
 **g) Designer auf Rollen-Ebene (§22.3 Punkt 1) bleibt Endausbau:**
 Workflows ohne laufende Prozesse grafisch entwerfen (Rollen-Kacheln
 aus dem Katalog ziehen, Template-Kanten zeichnen — dieselbe Canvas,
