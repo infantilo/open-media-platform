@@ -5085,3 +5085,91 @@ Videoplayer ohne eigenes Label zeigt „A Sender 2"/„V Sender 1" — das
 Format ist jetzt direkt aus dem Text lesbar, nicht mehr nur aus der
 (ggf. schwer unterscheidbaren) Kreisfarbe. Test-Instanz danach
 entfernt.
+
+## 2026-07-16 (Nachtrag 5) — Registry-Geist-OOM: Root Cause gefunden + gefixt
+
+Fortsetzung von Nachtrag 2 (dort nur Symptom + Verdacht dokumentiert,
+„nicht abschließend rootursächlich geklärt"). Root Cause jetzt
+gefunden, während der Untersuchung sogar ein **frischer, echter
+OOM-Kill live in diesem Environment mitgeschnitten** (nicht künstlich
+provoziert): `dmesg` zeigte während der Recherche
+`oom-kill: ... task=omp-video-mixer,pid=29907, anon-rss:5772456kB` —
+harte Bestätigung, dass der in Nachtrag 2 vermutete Mechanismus real
+und akut ist, nicht nur ein einmaliger Testartefakt.
+
+**Root Cause:** `omp-mediaio::mxl::{MxlVideoInput, MxlVideoOutput,
+MxlAudioInput, MxlAudioOutput}::new()` fügen ihre GStreamer-Elemente
+(`appsrc`/`videoconvert`/… bzw. `.../appsink`) per `pipeline.add()`
+hinzu und verlinken sie, **bevor** die eigentlich MXL-spezifischen
+Schritte (`create_flow_reader`/`to_grain_reader` bzw.
+`create_flow_writer`/`to_grain_writer`, sowie der `dynamic_cast` auf
+`AppSrc`/`AppSink`) versucht werden. Schlägt einer dieser späteren
+Schritte fehl — exakt der Fall bei einem Registry-Geist-Sender: die
+Sender-Registrierung existiert in der NMOS-Registry noch (deren
+Lebensdauer hängt an `registration_expiry_interval`/Heartbeat), aber
+die zugehörige MXL-Shared-Memory-Flow wurde bereits unabhängig davon
+abgebaut (Prozess beendet/gecrasht) —, gibt die Funktion über `?`
+einen `Err` zurück, **ohne die bereits hinzugefügten Elemente wieder
+aus der Pipeline zu entfernen**. Der Rust-Drop der lokalen
+Element-Handles senkt nur den *Rust-seitigen* Referenzzähler; der
+`pipeline`-Bin hält selbst noch einen Owning-Ref (durch `.add()`), die
+Elemente bleiben also für die Lebensdauer der (bei `omp-video-mixer-me`/
+`omp-switcher` inzwischen oft langlebigen, weil nicht mehr komplett
+verworfenen) Pipeline im Speicher hängen. Jeder erneute Build-Versuch
+gegen denselben persistenten Geist-Sender (ausgelöst durch *irgendeine*
+andere, unabhängige Eingangsänderung, da der 2s-Discovery-Poll die
+komplette Eingangsliste neu bewertet) akkumuliert weitere verwaiste
+Elemente — daraus der beobachtete unbegrenzte Speicherwuchs bis zum
+OOM-Kill.
+
+**Fix, zwei Ebenen:**
+
+1. **`omp-mediaio::mxl`** (Ort des eigentlichen Lecks): alle vier
+   Konstruktoren bekommen einen `cleanup_partial`-Abschluss, der bei
+   jedem Fehlschlag NACH dem `pipeline.add()`/Link-Schritt die eigenen
+   Elemente per `set_state(Null)` + `pipeline.remove()` wieder entfernt,
+   bevor `Err` zurückgegeben wird — symmetrisch für alle vier
+   Konstruktoren (Video/Audio × Input/Output), nicht nur den
+   ursprünglich beobachteten Video-Input-Fall (Audio-Sender sind seit
+   `omp-audio-mixer`, C11, derselben Geist-Registrierungs-Gefahr
+   ausgesetzt).
+2. **`omp-video-mixer-me::pipeline` + `omp-switcher::pipeline`**
+   (identisches C7/C10-Baumuster, beide betroffen): `build()` riss
+   bisher komplett ab (`?`), sobald **ein einziger** Eingang fehlschlug
+   — Folge: der gesamte Mixer/Switcher fiel auf Schwarzbild zurück,
+   obwohl alle anderen Eingänge gesund waren, UND der Aufrufer danach
+   zwingend einen zweiten vollen Build-Versuch (`build(..., &[])`)
+   unternahm. Neue Funktion `build_one_input()` (bzw. dasselbe Muster
+   in `omp-switcher`) baut jeden Eingang einzeln und räumt bei einem
+   Fehlschlag alles, was sie selbst für DIESEN Eingang bereits angelegt
+   hat (Branch-Elemente, angeforderte `isel`-Pads), vollständig wieder
+   ab, statt es in der (durch die anderen Eingänge weiterhin
+   erfolgreichen) Pipeline verwaisen zu lassen. `build()` gibt jetzt
+   `(ActivePipeline, Vec<String>)` zurück — die Warnungen laufen als
+   `Event::Error` durch denselben Kanal wie andere Fehler. Ein kaputter
+   Eingang wird damit übersprungen und geloggt, statt den ganzen Mixer/
+   Switcher lahmzulegen; der schon vorhandene Schwarzbild-Fallback
+   bleibt als Sicherheitsnetz für strukturelle Fehler (z. B.
+   `input-selector`/`compositor` selbst lässt sich nicht anlegen), nicht
+   mehr für einzelne kaputte Quellen.
+
+**Verifiziert:** `cargo build --workspace` grün. Live-Reproduktion per
+absichtlich per NMOS-Registrierungs-API angelegtem Geist-Sender
+(`flow_id` ohne je geschriebene MXL-Flow, also garantiertes „Flow not
+found" bei `get_flow_def`): frischer `omp-video-mixer-me` fasste ihn in
+seine Eingangsliste, Log zeigte `pipeline error: input
+deadbeef-...-0002 (GHOST-TEST-SENDER) übersprungen: MxlVideoInput(fg,
+...): get_flow_def(...): Flow not found` — **kein**
+Fallback-auf-Schwarzbild, die zwei echten Eingänge (Source, Videoplayer)
+blieben live, RSS blieb über ~45s beobachtet flach (~90MB, keine
+Wachstumstendenz). Instanz + Test-Registrierung danach entfernt (Geist-
+Registrierung läuft ohnehin ohne Heartbeat in wenigen Sekunden ab).
+
+**Nicht Teil dieses Fixes (separat, während der Verifikation erneut
+live beobachtet):** die MXL-Read-Livelock (busy-loop im vendorten
+MXL-C++, s. 2026-07-10 "C8" und `read_loop`-Kommentar in
+`omp-mediaio::mxl`) trat während eines Testlaufs mit echten Eingängen
+erneut auf (ein Lese-Thread mit ~100% CPU über Minuten, RSS wuchs
+dabei auf mehrere GB) — bestätigt als eigenständiges, weiterhin
+ungelöstes Problem, nicht durch diesen Fix berührt. Dieser Testlauf
+wurde abgebrochen, bevor er erneut OOM auslöste.

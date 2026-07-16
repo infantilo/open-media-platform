@@ -226,6 +226,24 @@ impl MxlVideoOutput {
         ])
         .map_err(|e| format!("link mxl output chain: {e}"))?;
 
+        // Gleicher Verwaisungs-Schutz wie `MxlVideoInput::new` (s. dort):
+        // ab hier hängen sechs Elemente bereits im `pipeline`, ein
+        // Fehlschlag der folgenden MXL-Schritte darf sie nicht über `?`
+        // zurücklassen.
+        let cleanup_partial = || {
+            for el in [
+                &videoconvert,
+                &videoscale,
+                &videorate,
+                &caps,
+                &valve,
+                &appsink,
+            ] {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+        };
+
         let flow_def = video_flow_def(
             flow_id,
             label,
@@ -234,16 +252,23 @@ impl MxlVideoOutput {
             framerate_numerator,
             framerate_denominator,
         );
-        let (writer, _config, was_created) = context
-            .instance
-            .create_flow_writer(&flow_def, None)
-            .map_err(|e| format!("create_flow_writer: {e}"))?;
+        let (writer, _config, was_created) = match context.instance.create_flow_writer(&flow_def, None) {
+            Ok(w) => w,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("create_flow_writer: {e}"));
+            }
+        };
         if !was_created {
             eprintln!("omp-mediaio(mxl): reusing existing flow {flow_id}");
         }
-        let grain_writer = writer
-            .to_grain_writer()
-            .map_err(|e| format!("to_grain_writer: {e}"))?;
+        let grain_writer = match writer.to_grain_writer() {
+            Ok(gw) => gw,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("to_grain_writer: {e}"));
+            }
+        };
 
         let grain_rate = mxl_sys::Rational {
             numerator: framerate_numerator as i64,
@@ -254,10 +279,13 @@ impl MxlVideoOutput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
-        let app_sink: gst_app::AppSink = appsink
-            .clone()
-            .dynamic_cast::<gst_app::AppSink>()
-            .map_err(|_| "appsink: cast to AppSink failed".to_string())?;
+        let app_sink: gst_app::AppSink = match appsink.clone().dynamic_cast::<gst_app::AppSink>() {
+            Ok(a) => a,
+            Err(_) => {
+                cleanup_partial();
+                return Err("appsink: cast to AppSink failed".to_string());
+            }
+        };
 
         thread::spawn(move || {
             write_loop(
@@ -533,17 +561,41 @@ impl MxlAudioOutput {
         ])
         .map_err(|e| format!("link mxl audio output chain: {e}"))?;
 
+        // Gleicher Verwaisungs-Schutz wie `MxlVideoInput::new` (s. dort).
+        let cleanup_partial = || {
+            for el in [
+                &audioconvert,
+                &audioresample,
+                &caps,
+                &split,
+                &planar_convert,
+                &planar_caps,
+                &valve,
+                &appsink,
+            ] {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+        };
+
         let flow_def = audio_flow_def(flow_id, label, sample_rate, channels);
-        let (writer, _config, was_created) = context
-            .instance
-            .create_flow_writer(&flow_def, None)
-            .map_err(|e| format!("create_flow_writer(audio): {e}"))?;
+        let (writer, _config, was_created) = match context.instance.create_flow_writer(&flow_def, None) {
+            Ok(w) => w,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("create_flow_writer(audio): {e}"));
+            }
+        };
         if !was_created {
             eprintln!("omp-mediaio(mxl): reusing existing audio flow {flow_id}");
         }
-        let samples_writer = writer
-            .to_samples_writer()
-            .map_err(|e| format!("to_samples_writer: {e}"))?;
+        let samples_writer = match writer.to_samples_writer() {
+            Ok(sw) => sw,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("to_samples_writer: {e}"));
+            }
+        };
 
         let sample_rate_r = mxl_sys::Rational {
             numerator: sample_rate as i64,
@@ -555,10 +607,13 @@ impl MxlAudioOutput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
-        let app_sink: gst_app::AppSink = appsink
-            .clone()
-            .dynamic_cast::<gst_app::AppSink>()
-            .map_err(|_| "appsink: cast to AppSink failed".to_string())?;
+        let app_sink: gst_app::AppSink = match appsink.clone().dynamic_cast::<gst_app::AppSink>() {
+            Ok(a) => a,
+            Err(_) => {
+                cleanup_partial();
+                return Err("appsink: cast to AppSink failed".to_string());
+            }
+        };
 
         thread::spawn(move || {
             write_audio_loop(
@@ -753,13 +808,39 @@ impl MxlVideoInput {
         gst::Element::link_many([&appsrc, &videoconvert, &videoscale, &videorate])
             .map_err(|e| format!("link mxl input chain: {e}"))?;
 
-        let reader = context
-            .instance
-            .create_flow_reader(flow_id)
-            .map_err(|e| format!("create_flow_reader({flow_id}): {e}"))?;
-        let grain_reader = reader
-            .to_grain_reader()
-            .map_err(|e| format!("to_grain_reader: {e}"))?;
+        // Ab hier bereits vier Elemente im `pipeline` verankert (fremder,
+        // langlebiger Owner!) — ein Fehlschlag der beiden folgenden Schritte
+        // (z. B. ein Registry-GeisterEintrag: `get_flow_def` fand die
+        // Metadaten noch, aber die zugehörige MXL-Shared-Memory-Flow wurde
+        // per `mxl-info -g` bereits eingesammelt → "Flow not found") darf
+        // sie nicht einfach über `?` verwaisen lassen: der Aufrufer
+        // (`omp-video-mixer-me`/`omp-switcher` `build()`) baut bei jeder
+        // Eingangsänderung die GANZE Pipeline neu, verwirft sie bei einem
+        // Fehlschlag aber nicht zwingend sofort wieder — wiederholte
+        // Rebuild-Versuche gegen denselben Geist-Sender akkumulieren sonst
+        // unbegrenzt tote Elemente im `pipeline`-Objekt (beobachteter OOM,
+        // `docs/decisions.md` 2026-07-16 "Nachtrag 2").
+        let cleanup_partial = || {
+            for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+        };
+
+        let reader = match context.instance.create_flow_reader(flow_id) {
+            Ok(r) => r,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("create_flow_reader({flow_id}): {e}"));
+            }
+        };
+        let grain_reader = match reader.to_grain_reader() {
+            Ok(gr) => gr,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("to_grain_reader: {e}"));
+            }
+        };
         let grain_rate = mxl_sys::Rational {
             numerator: framerate_numerator,
             denominator: framerate_denominator,
@@ -769,10 +850,13 @@ impl MxlVideoInput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
-        let app_src: gst_app::AppSrc = appsrc
-            .clone()
-            .dynamic_cast::<gst_app::AppSrc>()
-            .map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
+        let app_src: gst_app::AppSrc = match appsrc.clone().dynamic_cast::<gst_app::AppSrc>() {
+            Ok(a) => a,
+            Err(_) => {
+                cleanup_partial();
+                return Err("appsrc: cast to AppSrc failed".to_string());
+            }
+        };
 
         thread::spawn(move || {
             read_loop(
@@ -974,13 +1058,32 @@ impl MxlAudioInput {
         gst::Element::link_many([&appsrc, &convert])
             .map_err(|e| format!("link mxl audio input chain: {e}"))?;
 
-        let reader = context
-            .instance
-            .create_flow_reader(flow_id)
-            .map_err(|e| format!("create_flow_reader({flow_id}): {e}"))?;
-        let samples_reader = reader
-            .to_samples_reader()
-            .map_err(|e| format!("to_samples_reader: {e}"))?;
+        // Gleicher Verwaisungs-Schutz wie `MxlVideoInput::new` (s. dort) —
+        // trifft hier ebenso zu, seit `omp-audio-mixer` (UMSETZUNG.md C11)
+        // Audio-Sender in der Registry anmeldet, die derselben Geist-
+        // Registrierung (Registry-Eintrag ohne lebende MXL-Flow) zum Opfer
+        // fallen können wie Video-Sender.
+        let cleanup_partial = || {
+            for el in [&appsrc, &convert] {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+        };
+
+        let reader = match context.instance.create_flow_reader(flow_id) {
+            Ok(r) => r,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("create_flow_reader({flow_id}): {e}"));
+            }
+        };
+        let samples_reader = match reader.to_samples_reader() {
+            Ok(sr) => sr,
+            Err(e) => {
+                cleanup_partial();
+                return Err(format!("to_samples_reader: {e}"));
+            }
+        };
         let sample_rate_r = mxl_sys::Rational {
             numerator: sample_rate as i64,
             denominator: 1,
@@ -991,10 +1094,13 @@ impl MxlAudioInput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
-        let app_src: gst_app::AppSrc = appsrc
-            .clone()
-            .dynamic_cast::<gst_app::AppSrc>()
-            .map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
+        let app_src: gst_app::AppSrc = match appsrc.clone().dynamic_cast::<gst_app::AppSrc>() {
+            Ok(a) => a,
+            Err(_) => {
+                cleanup_partial();
+                return Err("appsrc: cast to AppSrc failed".to_string());
+            }
+        };
 
         thread::spawn(move || {
             read_audio_loop(

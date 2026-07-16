@@ -161,11 +161,140 @@ fn apply_selection(active: &ActivePipeline, selected: &Option<String>) -> Option
     }
 }
 
+/// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
+/// (`Null`-Zustand + `remove`) — Aufräumen für einen einzelnen, verworfenen
+/// Eingang, s. `build_one_input`. Gleicher Verwaisungs-Schutz wie in
+/// `omp-mediaio::mxl` und `omp-video-mixer-me` (`docs/decisions.md`
+/// 2026-07-16 "Nachtrag 2", Registry-Geist-OOM).
+fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
+    for el in elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = pipeline.remove(el);
+    }
+}
+
+/// Baut den Zweig für genau einen Eingang. Schlägt irgendein Schritt fehl
+/// (z. B. `MxlVideoInput::new` gegen einen Registry-Geist-Sender, dessen
+/// Flow bereits per `mxl-info -g` eingesammelt wurde), räumt diese
+/// Funktion alles, was sie selbst für DIESEN Eingang bereits angelegt hat,
+/// vollständig wieder ab, statt es im (bei anderen Eingängen weiterhin
+/// erfolgreichen) `pipeline` verwaisen zu lassen — genau das war die
+/// beobachtete OOM-Ursache: ein einzelner kaputter Sender riss früher den
+/// GANZEN Build via `?` ab, was den Aufrufer zu wiederholten Voll-
+/// Rebuild-Versuchen zwang, von denen jeder erneut denselben Geist traf
+/// (gleicher Fix wie `omp-video-mixer-me::pipeline::build_one_input`).
+fn build_one_input(
+    pipeline: &gst::Pipeline,
+    context: &Arc<MxlContext>,
+    isel: &gst::Element,
+    input: &DiscoveredInput,
+    pad_index: usize,
+) -> Result<(gst::Pad, MxlVideoInput), String> {
+    let mxl_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
+        .map_err(|e| format!("MxlVideoInput({}): {e}", input.sender_id))?;
+
+    let videoconvert = match gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|e| format!("videoconvert (input {pad_index}): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            drop(mxl_input);
+            return Err(e);
+        }
+    };
+    let videoscale = match gst::ElementFactory::make("videoscale")
+        .build()
+        .map_err(|e| format!("videoscale (input {pad_index}): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            drop(mxl_input);
+            return Err(e);
+        }
+    };
+    let videorate = match gst::ElementFactory::make("videorate")
+        .build()
+        .map_err(|e| format!("videorate (input {pad_index}): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            drop(mxl_input);
+            return Err(e);
+        }
+    };
+    let caps = match gst::ElementFactory::make("capsfilter")
+        .property("caps", video_caps())
+        .build()
+        .map_err(|e| format!("capsfilter (input {pad_index}): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            drop(mxl_input);
+            return Err(e);
+        }
+    };
+    let branch_elements = [videoconvert.clone(), videoscale.clone(), videorate.clone(), caps.clone()];
+
+    if let Err(e) = pipeline
+        .add(&videoconvert)
+        .and_then(|()| pipeline.add(&videoscale))
+        .and_then(|()| pipeline.add(&videorate))
+        .and_then(|()| pipeline.add(&caps))
+        .map_err(|e| format!("add input {pad_index} elements: {e}"))
+    {
+        // Nur die tatsächlich erfolgreich hinzugefügten Elemente entfernen
+        // (`remove` auf ein nie hinzugefügtes Element ist ein harmloser
+        // No-Op-Fehlschlag, `remove_elements` ignoriert das ohnehin).
+        remove_elements(pipeline, &branch_elements);
+        drop(mxl_input);
+        return Err(e);
+    }
+    if let Err(e) = gst::Element::link_many([
+        &mxl_input.tail,
+        &videoconvert,
+        &videoscale,
+        &videorate,
+        &caps,
+    ])
+    .map_err(|e| format!("link input {pad_index} chain: {e}"))
+    {
+        remove_elements(pipeline, &branch_elements);
+        drop(mxl_input);
+        return Err(e);
+    }
+
+    let pad = match isel.request_pad_simple(&format!("sink_{pad_index}")) {
+        Some(p) => p,
+        None => {
+            remove_elements(pipeline, &branch_elements);
+            drop(mxl_input);
+            return Err(format!("isel: request sink_{pad_index} failed"));
+        }
+    };
+    if let Err(e) = caps
+        .static_pad("src")
+        .ok_or_else(|| "input capsfilter: no src pad".to_string())
+        .and_then(|p| p.link(&pad).map_err(|e| format!("link input {pad_index} to isel: {e}")))
+    {
+        isel.release_request_pad(&pad);
+        remove_elements(pipeline, &branch_elements);
+        drop(mxl_input);
+        return Err(e);
+    }
+
+    Ok((pad, mxl_input))
+}
+
+/// Ein einzelner kaputter Eingang (z. B. ein Registry-Geist-Sender, s.
+/// `build_one_input`) lässt den restlichen Build nicht scheitern — er wird
+/// übersprungen und als Eintrag im zweiten Rückgabewert gemeldet, den der
+/// Aufrufer (`run()`) als `Event::Error` weiterreicht.
 fn build(
     context: &Arc<MxlContext>,
     config: &Config,
     inputs: &[DiscoveredInput],
-) -> Result<ActivePipeline, String> {
+) -> Result<(ActivePipeline, Vec<String>), String> {
     let pipeline = gst::Pipeline::new();
 
     let isel = gst::ElementFactory::make("input-selector")
@@ -201,50 +330,21 @@ fn build(
 
     let mut source_pads = HashMap::with_capacity(inputs.len());
     let mut mxl_inputs = Vec::with_capacity(inputs.len());
+    let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        let mxl_input = MxlVideoInput::new(&pipeline, context.clone(), &input.flow_id)
-            .map_err(|e| format!("MxlVideoInput({}): {e}", input.sender_id))?;
-
-        let videoconvert = gst::ElementFactory::make("videoconvert")
-            .build()
-            .map_err(|e| format!("videoconvert (input {pad_index}): {e}"))?;
-        let videoscale = gst::ElementFactory::make("videoscale")
-            .build()
-            .map_err(|e| format!("videoscale (input {pad_index}): {e}"))?;
-        let videorate = gst::ElementFactory::make("videorate")
-            .build()
-            .map_err(|e| format!("videorate (input {pad_index}): {e}"))?;
-        let caps = gst::ElementFactory::make("capsfilter")
-            .property("caps", video_caps())
-            .build()
-            .map_err(|e| format!("capsfilter (input {pad_index}): {e}"))?;
-
-        pipeline
-            .add(&videoconvert)
-            .and_then(|()| pipeline.add(&videoscale))
-            .and_then(|()| pipeline.add(&videorate))
-            .and_then(|()| pipeline.add(&caps))
-            .map_err(|e| format!("add input {pad_index} elements: {e}"))?;
-        gst::Element::link_many([
-            &mxl_input.tail,
-            &videoconvert,
-            &videoscale,
-            &videorate,
-            &caps,
-        ])
-        .map_err(|e| format!("link input {pad_index} chain: {e}"))?;
-
-        let pad = isel
-            .request_pad_simple(&format!("sink_{pad_index}"))
-            .ok_or_else(|| format!("isel: request sink_{pad_index} failed"))?;
-        caps.static_pad("src")
-            .ok_or("input capsfilter: no src pad")?
-            .link(&pad)
-            .map_err(|e| format!("link input {pad_index} to isel: {e}"))?;
-
-        source_pads.insert(input.sender_id.clone(), pad);
-        mxl_inputs.push(mxl_input);
+        match build_one_input(&pipeline, context, &isel, input, pad_index) {
+            Ok((pad, mxl_input)) => {
+                source_pads.insert(input.sender_id.clone(), pad);
+                mxl_inputs.push(mxl_input);
+            }
+            Err(e) => {
+                warnings.push(format!(
+                    "input {} ({}) übersprungen: {e}",
+                    input.sender_id, input.label
+                ));
+            }
+        }
     }
 
     let mxl_output = MxlVideoOutput::new(
@@ -266,15 +366,18 @@ fn build(
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
-    Ok(ActivePipeline {
-        pipeline,
-        isel,
-        black_pad,
-        source_pads,
-        _inputs: mxl_inputs,
-        _mxl_output: mxl_output,
-        flowed,
-    })
+    Ok((
+        ActivePipeline {
+            pipeline,
+            isel,
+            black_pad,
+            source_pads,
+            _inputs: mxl_inputs,
+            _mxl_output: mxl_output,
+            flowed,
+        },
+        warnings,
+    ))
 }
 
 fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool {
@@ -318,7 +421,7 @@ pub fn run(
 
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut active = match build(&context, &config, &current_inputs) {
-        Ok(p) => {
+        Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
         }
@@ -358,7 +461,10 @@ pub fn run(
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
                     match build(&context, &config, &current_inputs) {
-                        Ok(p) => {
+                        Ok((p, warnings)) => {
+                            for w in warnings {
+                                let _ = tx.send(Event::Error(w));
+                            }
                             let applied = apply_selection(&p, &selected);
                             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
                             active = Some(p);
@@ -378,7 +484,7 @@ pub fn run(
                                 current_inputs.len()
                             )));
                             match build(&context, &config, &[]) {
-                                Ok(p) => {
+                                Ok((p, _warnings)) => {
                                     let applied = apply_selection(&p, &selected);
                                     *flowed_slot.lock().expect("lock poisoned") =
                                         Some(p.flowed.clone());

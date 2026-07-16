@@ -229,12 +229,16 @@ fn rgba_caps() -> gst::Caps {
 
 /// Ein normalisierter Zweig (`videoconvert ! videoscale ! videorate !
 /// capsfilter(rgba)`) vor einem `input-selector`-Sink-Pad — gemeinsame
-/// Bauvorschrift für Programm- und Preset-Zweig eines Eingangs.
+/// Bauvorschrift für Programm- und Preset-Zweig eines Eingangs. Gibt neben
+/// dem `capsfilter` (Anschlusspunkt für den Aufrufer) auch alle vier
+/// selbst hinzugefügten Elemente zurück, damit ein Aufrufer, der diesen
+/// einen Zweig später wieder verwerfen muss (s. `build_one_input`), sie
+/// gezielt aus der Pipeline entfernen kann statt sie verwaisen zu lassen.
 fn build_normalized_branch(
     pipeline: &gst::Pipeline,
     tail: &gst::Element,
     name_suffix: &str,
-) -> Result<gst::Element, String> {
+) -> Result<(gst::Element, Vec<gst::Element>), String> {
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| format!("videoconvert ({name_suffix}): {e}"))?;
@@ -258,7 +262,120 @@ fn build_normalized_branch(
     gst::Element::link_many([tail, &videoconvert, &videoscale, &videorate, &caps])
         .map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
 
-    Ok(caps)
+    Ok((caps.clone(), vec![videoconvert, videoscale, videorate, caps]))
+}
+
+/// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
+/// (`Null`-Zustand + `remove`) — Aufräumen für einen einzelnen, verworfenen
+/// Eingang, s. `build_one_input`. Gleicher Verwaisungs-Schutz wie in
+/// `omp-mediaio::mxl` (`docs/decisions.md` 2026-07-16 "Nachtrag 2",
+/// Registry-Geist-OOM).
+fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
+    for el in elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = pipeline.remove(el);
+    }
+}
+
+/// Baut fg+bg-Zweig für genau einen Eingang. Schlägt irgendein Schritt
+/// fehl (z. B. `MxlVideoInput::new` gegen einen Registry-Geist-Sender,
+/// dessen Flow bereits per `mxl-info -g` eingesammelt wurde), räumt diese
+/// Funktion alles, was sie selbst für DIESEN Eingang bereits angelegt hat,
+/// vollständig wieder ab, statt es im (bei anderen Eingängen weiterhin
+/// erfolgreichen) `pipeline` verwaisen zu lassen — genau das war die
+/// beobachtete OOM-Ursache: ein einzelner kaputter Sender riss früher den
+/// GANZEN Build via `?` ab, was den Aufrufer zu wiederholten Voll-
+/// Rebuild-Versuchen zwang, von denen jeder erneut denselben Geist traf.
+#[allow(clippy::too_many_arguments)]
+fn build_one_input(
+    pipeline: &gst::Pipeline,
+    context: &Arc<MxlContext>,
+    isel: &gst::Element,
+    isel_bg: &gst::Element,
+    input: &DiscoveredInput,
+    pad_index: usize,
+) -> Result<(gst::Pad, gst::Pad, MxlVideoInput, MxlVideoInput), String> {
+    let fg_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
+        .map_err(|e| format!("MxlVideoInput(fg, {}): {e}", input.sender_id))?;
+    let (fg_caps, fg_branch_elements) = match build_normalized_branch(
+        pipeline,
+        &fg_input.tail,
+        &format!("input-{pad_index}-fg"),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            drop(fg_input);
+            return Err(e);
+        }
+    };
+    let fg_pad = match isel.request_pad_simple(&format!("sink_{pad_index}")) {
+        Some(p) => p,
+        None => {
+            remove_elements(pipeline, &fg_branch_elements);
+            drop(fg_input);
+            return Err(format!("isel: request sink_{pad_index} failed"));
+        }
+    };
+    if let Err(e) = fg_caps
+        .static_pad("src")
+        .ok_or_else(|| "input-fg capsfilter: no src pad".to_string())
+        .and_then(|pad| pad.link(&fg_pad).map_err(|e| format!("link input-{pad_index}-fg to isel: {e}")))
+    {
+        isel.release_request_pad(&fg_pad);
+        remove_elements(pipeline, &fg_branch_elements);
+        drop(fg_input);
+        return Err(e);
+    }
+
+    let bg_input = match MxlVideoInput::new(pipeline, context.clone(), &input.flow_id) {
+        Ok(b) => b,
+        Err(e) => {
+            isel.release_request_pad(&fg_pad);
+            remove_elements(pipeline, &fg_branch_elements);
+            drop(fg_input);
+            return Err(format!("MxlVideoInput(bg, {}): {e}", input.sender_id));
+        }
+    };
+    let (bg_caps, bg_branch_elements) = match build_normalized_branch(
+        pipeline,
+        &bg_input.tail,
+        &format!("input-{pad_index}-bg"),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            isel.release_request_pad(&fg_pad);
+            remove_elements(pipeline, &fg_branch_elements);
+            drop(fg_input);
+            drop(bg_input);
+            return Err(e);
+        }
+    };
+    let bg_pad = match isel_bg.request_pad_simple(&format!("sink_{pad_index}")) {
+        Some(p) => p,
+        None => {
+            isel.release_request_pad(&fg_pad);
+            remove_elements(pipeline, &fg_branch_elements);
+            remove_elements(pipeline, &bg_branch_elements);
+            drop(fg_input);
+            drop(bg_input);
+            return Err(format!("isel_bg: request sink_{pad_index} failed"));
+        }
+    };
+    if let Err(e) = bg_caps
+        .static_pad("src")
+        .ok_or_else(|| "input-bg capsfilter: no src pad".to_string())
+        .and_then(|pad| pad.link(&bg_pad).map_err(|e| format!("link input-{pad_index}-bg to isel_bg: {e}")))
+    {
+        isel.release_request_pad(&fg_pad);
+        isel_bg.release_request_pad(&bg_pad);
+        remove_elements(pipeline, &fg_branch_elements);
+        remove_elements(pipeline, &bg_branch_elements);
+        drop(fg_input);
+        drop(bg_input);
+        return Err(e);
+    }
+
+    Ok((fg_pad, bg_pad, fg_input, bg_input))
 }
 
 struct ActivePipeline {
@@ -310,11 +427,16 @@ fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("height", box_.height);
 }
 
+/// Baut die Mixer-Pipeline. Ein einzelner kaputter Eingang (z. B. ein
+/// Registry-Geist-Sender, s. `build_one_input`) lässt den restlichen
+/// Build nicht scheitern — er wird übersprungen und als Eintrag im
+/// zweiten Rückgabewert gemeldet, den der Aufrufer (`run()`) als
+/// `Event::Error` weiterreicht.
 fn build(
     context: &Arc<MxlContext>,
     config: &Config,
     inputs: &[DiscoveredInput],
-) -> Result<ActivePipeline, String> {
+) -> Result<(ActivePipeline, Vec<String>), String> {
     let pipeline = gst::Pipeline::new();
 
     let isel = gst::ElementFactory::make("input-selector")
@@ -357,8 +479,8 @@ fn build(
         .add(&black_src_fg)
         .and_then(|()| pipeline.add(&black_src_bg))
         .map_err(|e| format!("add black sources: {e}"))?;
-    let black_caps_fg = build_normalized_branch(&pipeline, &black_src_fg, "black-fg")?;
-    let black_caps_bg = build_normalized_branch(&pipeline, &black_src_bg, "black-bg")?;
+    let (black_caps_fg, _) = build_normalized_branch(&pipeline, &black_src_fg, "black-fg")?;
+    let (black_caps_bg, _) = build_normalized_branch(&pipeline, &black_src_bg, "black-bg")?;
 
     let black_pad_fg = isel
         .request_pad_simple("sink_0")
@@ -378,49 +500,30 @@ fn build(
         .map_err(|e| format!("link black-bg to isel_bg: {e}"))?;
 
     // ── Ein Eingang = zwei unabhängige MXL-Reader (fg + bg), siehe
-    //    Modul-Dokumentation.
+    //    Modul-Dokumentation. Ein einzelner kaputter Eingang wird
+    //    übersprungen (`build_one_input` räumt seinen eigenen Teilbau
+    //    selbst ab) statt den ganzen Build abzureißen — s. Funktionsdoku.
     let mut source_pads_fg = HashMap::with_capacity(inputs.len());
     let mut source_pads_bg = HashMap::with_capacity(inputs.len());
     let mut fg_inputs = Vec::with_capacity(inputs.len());
     let mut bg_inputs = Vec::with_capacity(inputs.len());
+    let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-
-        let fg_input = MxlVideoInput::new(&pipeline, context.clone(), &input.flow_id)
-            .map_err(|e| format!("MxlVideoInput(fg, {}): {e}", input.sender_id))?;
-        let fg_caps = build_normalized_branch(
-            &pipeline,
-            &fg_input.tail,
-            &format!("input-{pad_index}-fg"),
-        )?;
-        let fg_pad = isel
-            .request_pad_simple(&format!("sink_{pad_index}"))
-            .ok_or_else(|| format!("isel: request sink_{pad_index} failed"))?;
-        fg_caps
-            .static_pad("src")
-            .ok_or("input-fg capsfilter: no src pad")?
-            .link(&fg_pad)
-            .map_err(|e| format!("link input-{pad_index}-fg to isel: {e}"))?;
-        source_pads_fg.insert(input.sender_id.clone(), fg_pad);
-        fg_inputs.push(fg_input);
-
-        let bg_input = MxlVideoInput::new(&pipeline, context.clone(), &input.flow_id)
-            .map_err(|e| format!("MxlVideoInput(bg, {}): {e}", input.sender_id))?;
-        let bg_caps = build_normalized_branch(
-            &pipeline,
-            &bg_input.tail,
-            &format!("input-{pad_index}-bg"),
-        )?;
-        let bg_pad = isel_bg
-            .request_pad_simple(&format!("sink_{pad_index}"))
-            .ok_or_else(|| format!("isel_bg: request sink_{pad_index} failed"))?;
-        bg_caps
-            .static_pad("src")
-            .ok_or("input-bg capsfilter: no src pad")?
-            .link(&bg_pad)
-            .map_err(|e| format!("link input-{pad_index}-bg to isel_bg: {e}"))?;
-        source_pads_bg.insert(input.sender_id.clone(), bg_pad);
-        bg_inputs.push(bg_input);
+        match build_one_input(&pipeline, context, &isel, &isel_bg, input, pad_index) {
+            Ok((fg_pad, bg_pad, fg_input, bg_input)) => {
+                source_pads_fg.insert(input.sender_id.clone(), fg_pad);
+                source_pads_bg.insert(input.sender_id.clone(), bg_pad);
+                fg_inputs.push(fg_input);
+                bg_inputs.push(bg_input);
+            }
+            Err(e) => {
+                warnings.push(format!(
+                    "input {} ({}) übersprungen: {e}",
+                    input.sender_id, input.label
+                ));
+            }
+        }
     }
 
     // ── comp.sink_0 = Programm (fg, zorder 2, DVE-fähig — Box wird nach
@@ -459,7 +562,7 @@ fn build(
     pipeline
         .add(&keyer_src)
         .map_err(|e| format!("add keyer source: {e}"))?;
-    let keyer_caps = build_normalized_branch(&pipeline, &keyer_src, "keyer")?;
+    let (keyer_caps, _) = build_normalized_branch(&pipeline, &keyer_src, "keyer")?;
     let comp_keyer_pad = comp
         .request_pad_simple("sink_2")
         .ok_or("comp: request sink_2 (keyer) failed")?;
@@ -503,22 +606,25 @@ fn build(
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
-    Ok(ActivePipeline {
-        pipeline,
-        isel,
-        isel_bg,
-        black_pad_fg,
-        black_pad_bg,
-        source_pads_fg,
-        source_pads_bg,
-        comp_fg_pad,
-        comp_bg_pad,
-        comp_keyer_pad,
-        _fg_inputs: fg_inputs,
-        _bg_inputs: bg_inputs,
-        _mxl_output: mxl_output,
-        flowed,
-    })
+    Ok((
+        ActivePipeline {
+            pipeline,
+            isel,
+            isel_bg,
+            black_pad_fg,
+            black_pad_bg,
+            source_pads_fg,
+            source_pads_bg,
+            comp_fg_pad,
+            comp_bg_pad,
+            comp_keyer_pad,
+            _fg_inputs: fg_inputs,
+            _bg_inputs: bg_inputs,
+            _mxl_output: mxl_output,
+            flowed,
+        },
+        warnings,
+    ))
 }
 
 fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool {
@@ -598,7 +704,7 @@ pub fn run(
 
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut active = match build(&context, &config, &current_inputs) {
-        Ok(p) => {
+        Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
         }
@@ -644,7 +750,10 @@ pub fn run(
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
                     match build(&context, &config, &current_inputs) {
-                        Ok(p) => {
+                        Ok((p, warnings)) => {
+                            for w in warnings {
+                                let _ = tx.send(Event::Error(w));
+                            }
                             let applied_program =
                                 switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &program);
                             // isel_bg spiegelt außerhalb einer laufenden
@@ -675,7 +784,7 @@ pub fn run(
                                 current_inputs.len()
                             )));
                             match build(&context, &config, &[]) {
-                                Ok(p) => {
+                                Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                                     let previous = program.take();
                                     preset = None;
