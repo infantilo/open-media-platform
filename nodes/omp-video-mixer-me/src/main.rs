@@ -336,6 +336,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url: registry_url.clone(),
             nats_url,
+            // Port-Label "PGM" (Nutzerfund 2026-07-16, §22 Flow-Editor-
+            // Lesbarkeit): der generische "<Label> Sender 1" verriet an
+            // der Kachel nicht, dass dieser einzelne Ausgang der
+            // Programm-Bus ist (relevant sobald ein zweiter, PST-
+            // benannter Ausgang hinzukommt, s. docs/decisions.md
+            // 2026-07-16 Nachtrag 2 — noch nicht umgesetzt).
             senders: vec![SenderSpec {
                 id: Some(sender_id.clone()),
                 transport: Some(TRANSPORT_MXL.to_string()),
@@ -346,6 +352,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                     grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                 }),
+                label: Some("PGM".to_string()),
                 ..Default::default()
             }],
             receivers: vec![],

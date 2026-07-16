@@ -255,6 +255,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline: pipeline_handle,
     });
 
+    // Port-Labels (Nutzerfund 2026-07-16, §22 Flow-Editor-Lesbarkeit):
+    // ohne eigenes Label sähe man an der Kachel nur zwei gleich benannte
+    // "OGraf Sender 1/2" — nicht erkennbar, welcher Port Fill (Bild) bzw.
+    // Key (Alpha) führt. Vor der `NodeConfig`-Konstruktion berechnet, weil
+    // `label` dort per Shorthand in ein eigenes Feld verschoben wird.
+    let fill_label = format!("{label} Fill");
+    let key_label = format!("{label} Key");
+
     let handle = omp_node_sdk::start(
         NodeConfig {
             label,
@@ -272,6 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
+                    label: Some(fill_label),
                     ..Default::default()
                 },
                 SenderSpec {
@@ -283,6 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
+                    label: Some(key_label),
                     ..Default::default()
                 },
             ],

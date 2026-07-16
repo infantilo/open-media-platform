@@ -211,6 +211,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 id: Some(receiver_id),
                 transport: Some(TRANSPORT_MXL.to_string()),
                 media_types: Some(vec!["video/v210".to_string()]),
+                ..Default::default()
             }],
             instance_id,
             // "media-ready" über PipelineHandle::media_ready()

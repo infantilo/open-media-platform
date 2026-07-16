@@ -71,6 +71,13 @@ pub struct SenderSpec {
     pub manifest_href: Option<String>,
     pub transport: Option<String>,
     pub flow: Option<FlowSpec>,
+    /// Überschreibt das generische `"<NodeLabel> Sender <n>"` (Nutzerfund
+    /// 2026-07-16: an einer Kachel mit mehreren gleichartigen Ports — z. B.
+    /// einem Bildmischer-Programm-/Vorschau-Ausgang oder `omp-ograf`s
+    /// Fill-/Key-Sendern — ließ sich von außen nicht erkennen, welcher
+    /// Port welches Signal führt). `None` verhält sich unverändert wie
+    /// bisher.
+    pub label: Option<String>,
 }
 
 /// Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`), Video **oder**
@@ -125,6 +132,9 @@ pub struct ReceiverSpec {
     pub id: Option<String>,
     pub transport: Option<String>,
     pub media_types: Option<Vec<String>>,
+    /// S. `SenderSpec::label` — gleiche Begründung, gleiches Verhalten bei
+    /// `None`.
+    pub label: Option<String>,
 }
 
 /// Bereitschafts-Quelle für das „media-ready"-Signal aus dem Node-Contract
@@ -256,7 +266,10 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .zip(&config.senders)
         .enumerate()
         .map(|(i, (id, spec))| {
-            let label = format!("{} Sender {}", config.label, i + 1);
+            let label = spec
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("{} Sender {}", config.label, i + 1));
             let mut sender = Sender::new(id, &label, &device_id);
             sender.manifest_href = spec.manifest_href.clone();
             if let Some(transport) = &spec.transport {
@@ -324,11 +337,11 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .zip(&config.receivers)
         .enumerate()
         .map(|(i, (id, spec))| {
-            let mut receiver = Receiver::new(
-                id,
-                &format!("{} Receiver {}", config.label, i + 1),
-                &device_id,
-            );
+            let label = spec
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("{} Receiver {}", config.label, i + 1));
+            let mut receiver = Receiver::new(id, &label, &device_id);
             if let Some(transport) = &spec.transport {
                 receiver.transport = transport.clone();
             }

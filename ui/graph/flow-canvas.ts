@@ -796,12 +796,11 @@ export class FlowCanvas extends HTMLElement {
     }
 
     tile.inputs.forEach((port, i) => {
-      g.appendChild(this.#renderPort(port, i, tile.inputs.length, "input", pos, height));
+      this.#renderPort(port, i, tile.inputs.length, "input", pos, height, g);
     });
     tile.outputs.forEach((port, i) => {
-      const circle = this.#renderPort(port, i, tile.outputs.length, "output", pos, height);
+      const circle = this.#renderPort(port, i, tile.outputs.length, "output", pos, height, g);
       circle.addEventListener("pointerdown", (ev) => this.#onOutputPortPointerDown(ev, port));
-      g.appendChild(circle);
     });
 
     if (!isGroup) {
@@ -874,17 +873,20 @@ export class FlowCanvas extends HTMLElement {
     side: PortSide,
     nodePos: Point,
     height: number,
+    parent: SVGGElement,
   ): SVGCircleElement {
     const world = portPosition(nodePos.x, nodePos.y, height, index, count, side);
+    const cx = world.x - nodePos.x;
+    const cy = world.y - nodePos.y;
     const circle = document.createElementNS(SVG_NS, "circle");
-    circle.setAttribute("cx", String(world.x - nodePos.x));
-    circle.setAttribute("cy", String(world.y - nodePos.y));
+    circle.setAttribute("cx", String(cx));
+    circle.setAttribute("cy", String(cy));
     circle.setAttribute("r", "5");
     // Farbe primär nach Format (Nutzerfund 2026-07-12: zwei Output-Ports
     // desselben Nodes — z. B. omp-sources Video-/Audio-Sender — waren
     // beide gleich eingefärbt, nur nach input/output unterscheidbar, nicht
     // nach Format); input/output bleibt über die Randfarbe erkennbar.
-    circle.setAttribute("fill", portColor(port.format));
+    circle.setAttribute("fill", portColor(port.format, port.label));
     circle.setAttribute("stroke", side === "input" ? "#5b9bd5" : "#70ad47");
     circle.setAttribute("stroke-width", "1.5");
     circle.setAttribute("data-role", "port");
@@ -894,6 +896,27 @@ export class FlowCanvas extends HTMLElement {
     const titleEl = document.createElementNS(SVG_NS, "title");
     titleEl.textContent = port.label;
     circle.appendChild(titleEl);
+
+    // Immer sichtbares Kurz-Label (Nutzerfund 2026-07-16): bisher stand
+    // der Port-Name nur im Hover-Tooltip — an einer Kachel mit mehreren
+    // Ports desselben Typs (PGM/PST, Fill/Key) war von außen nicht
+    // erkennbar, welcher Port welches Signal führt. `pointer-events:none`,
+    // damit der Text keine eigenen Drag/Click-Events abfängt (die bleiben
+    // exklusiv am `circle`, s. Aufrufer).
+    const text = document.createElementNS(SVG_NS, "text");
+    text.setAttribute("y", String(cy + 3));
+    text.setAttribute("font-size", "8");
+    text.setAttribute("fill", "#c8c8c8");
+    text.setAttribute("pointer-events", "none");
+    if (side === "input") {
+      text.setAttribute("x", String(cx + 8));
+    } else {
+      text.setAttribute("x", String(cx - 8));
+      text.setAttribute("text-anchor", "end");
+    }
+    text.textContent = portShortLabel(port.label);
+    parent.appendChild(text);
+    parent.appendChild(circle);
     return circle;
   }
 
@@ -1747,7 +1770,20 @@ function healthColor(health: string): string {
 // gleiches Vokabular wie compatibility.ts) — unbekanntes/leeres Format
 // (z. B. Sender ohne aufgelösten Flow, A5) bekommt eine neutrale Farbe
 // statt fälschlich einer der bekannten Formatfarben.
-function portColor(format: string): string {
+//
+// Key/Alpha (Nutzerfund 2026-07-16): IS-04 kennt kein eigenes Format
+// dafür — ein Key-Signal (z. B. omp-ografs Fill+Key, `UMSETZUNG.md`
+// K5-Teil-1) ist protokollseitig ein ganz normaler
+// `urn:x-nmos:format:video`-Sender, nur inhaltlich eine Alpha-Maske
+// statt eines Bilds. Statt einer Protokollerweiterung wird das über
+// das Port-Label erkannt (heuristisch, aber robust genug: die einzige
+// Quelle für "Key" im Label ist `SenderSpec::label`, das die Nodes
+// selbst setzen — kein geratener String-Match auf beliebigen
+// Fremdtext).
+function portColor(format: string, label: string): string {
+  if (format === "urn:x-nmos:format:video" && /\bkey\b/i.test(label)) {
+    return "#e05de0";
+  }
   switch (format) {
     case "urn:x-nmos:format:video":
       return "#3fa7ff";
@@ -1758,6 +1794,31 @@ function portColor(format: string): string {
     default:
       return "#999";
   }
+}
+
+// Kurzform eines Port-Labels für die immer sichtbare Beschriftung neben
+// dem Port (Nutzerfund 2026-07-16: bisher nur als Hover-Tooltip
+// vorhanden — an einer Kachel mit mehreren Ports desselben Typs, z. B.
+// PGM/PST oder Fill/Key, war von außen nicht erkennbar, welcher Port
+// welches Signal führt).
+//
+// Live-Test-Fund beim ersten Versuch (reines Kappen von vorne auf 10
+// Zeichen): zwei Ports derselben Kachel — z. B. "OGraf Grafik (id) Fill"
+// und "... Key" — teilen sich den langen Node-Namen als Präfix, eine
+// Kürzung von VORNE zeigte für beide identisch "OGraf Gra…" und verlor
+// genau das unterscheidende letzte Wort. Fix: das letzte Wort bevorzugen
+// (meist die eigentliche Rolle — "Fill"/"Key"/"PGM"), außer es ist eine
+// nackte Zahl (generische "<Label> Sender N"-Fallback-Namen ohne eigenes
+// Label, s. `omp_node_sdk::node::run`) — dann die letzten zwei Wörter
+// ("Sender 1"), damit wenigstens Video-/Audio-Sender-Nummer erkennbar
+// bleibt (Farbe unterscheidet Video/Audio ohnehin zusätzlich).
+function portShortLabel(label: string): string {
+  const words = label.trim().split(/\s+/);
+  const last = words[words.length - 1] ?? label;
+  const isBareNumber = /^\d+$/.test(last);
+  const candidate = isBareNumber && words.length >= 2 ? words.slice(-2).join(" ") : last;
+  const max = 10;
+  return candidate.length > max ? `${candidate.slice(0, max - 1)}…` : candidate;
 }
 
 // Re-export für Tests/andere Module, die die reinen Helfer direkt

@@ -4998,3 +4998,60 @@ Umgebung danach bereinigt: abgestürzte/verwaiste Instanzen entfernt,
 Mixer/Viewer) neu gestartet und per 26-Frame-Live-Test (`curl
 --max-time 5`, MD5-Vielfalt der MJPEG-Frames) als gesund bestätigt.
 Speicher wieder unauffällig (~700 MB von 6,5 GB).
+
+## 2026-07-16 (Nachtrag 3) — Flow-Editor: immer sichtbare Port-Labels + Key/Alpha-Farbe
+
+Nutzerfund: Ports (die Kreise an Node-Kacheln) trugen ihren Namen nur
+als SVG-`<title>`-Hover-Tooltip, nicht sichtbar ohne Maus-Hover — an
+einer Kachel mit mehreren gleichartigen Ports (Bildmischer-Programm-/
+Vorschau-Ausgang, `omp-ograf`s Fill/Key) war von außen nicht erkennbar,
+welcher Port welches Signal führt. Zusätzlich gewünscht: Farbcodierung
+nach Signalart (Video/Audio/Daten/Key-Alpha) — Video/Audio/Daten gab es
+bereits (`portColor()`, seit B2), Key/Alpha fehlte.
+
+**Zwei Teile:**
+
+1. **`omp-node-sdk::node::{SenderSpec, ReceiverSpec}`** bekommen ein
+   neues `label: Option<String>`-Feld — überschreibt das bisher einzig
+   mögliche generische `"<NodeLabel> Sender N"`/`"... Receiver N"`.
+   `None` verhält sich unverändert (rückwärtskompatibel, alle
+   bestehenden `..Default::default()`-Aufrufstellen brauchten keine
+   Änderung; eine einzige Stelle — `omp-viewer`s `ReceiverSpec`-Literal
+   — war exhaustiv und musste um `..Default::default()` ergänzt
+   werden). Angewendet: `omp-video-mixer-me`s einziger Sender heißt
+   jetzt `"PGM"` statt `"VideoMixerME Sender 1"`; `omp-ograf`s beide
+   Sender heißen `"<Label> Fill"`/`"<Label> Key"` statt `"... Sender
+   1"`/`"... Sender 2"`.
+2. **`ui/graph/flow-canvas.ts`:** `#renderPort()` rendert jetzt
+   zusätzlich zum Kreis ein immer sichtbares `<text>`-Kurzlabel
+   (`pointer-events:none`, damit Drag/Click weiter exklusiv am Kreis
+   hängen). `portColor()` bekommt Key/Alpha: `format=video` **und**
+   Label passt auf `/\bkey\b/i` → eigene Farbe (Pink/Magenta
+   `#e05de0`) statt der normalen Video-Farbe — IS-04 kennt kein
+   eigenes Key/Alpha-Format (Fill+Key sind beides ganz normale
+   `urn:x-nmos:format:video`-Sender, nur inhaltlich verschieden), daher
+   die Label-Heuristik statt einer Protokollerweiterung; robust genug,
+   weil die einzige Quelle für "Key" im Label `SenderSpec::label` ist,
+   das die Nodes selbst setzen, kein Match auf beliebigen Fremdtext.
+
+  **Live-Test-Fund während der Verifikation:** der erste Entwurf von
+  `portShortLabel()` kappte einfach von vorne auf 10 Zeichen — zeigte
+  für `"OGraf Grafik (id) Fill"` und `"... Key"` (gleicher langer
+  Node-Name als Präfix) für BEIDE Ports identisch `"OGraf Gra…"` und
+  verlor genau das unterscheidende letzte Wort. Fix: das letzte Wort
+  bevorzugen (meist die eigentliche Rolle), außer es ist eine nackte
+  Zahl (generischer `"... Sender N"`-Fallback ohne eigenes Label) —
+  dann die letzten zwei Wörter (`"Sender 1"`), damit wenigstens die
+  Nummer sichtbar bleibt (Farbe unterscheidet Video/Audio zusätzlich).
+
+  **Verifiziert:** `deno check`/`deno test ui/` (weiterhin 40/40),
+  `cargo build/test --workspace`, `cargo deny check` grün. Live per CDP
+  (Chromium headless, Node-WebSocket-Client, Screenshot statt
+  `--dump-dom`): `omp-ograf`-Kachel zeigt "Fill" (blauer Port) und
+  "Key" (pinker Port) sichtbar ohne Hover; `omp-video-mixer-me`-Kachel
+  zeigt "PGM" (blau); `omp-player`-Kachel ohne eigenes Label zeigt
+  weiterhin "Sender 1"/"Sender 2" (blau/orange) als sinnvollen
+  Fallback. Bestehende Kante (Mixer-PGM → Viewer) blieb nach einer
+  Kachel-Verschiebung per simuliertem Maus-Drag intakt (kein
+  Seiteneffekt auf die IS-05-Verbindung). Test-Instanz (`omp-ograf`)
+  danach entfernt, Demo-Dreiergespann läuft weiter gesund.
