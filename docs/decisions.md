@@ -5055,3 +5055,33 @@ bereits (`portColor()`, seit B2), Key/Alpha fehlte.
   Kachel-Verschiebung per simuliertem Maus-Drag intakt (kein
   Seiteneffekt auf die IS-05-Verbindung). Test-Instanz (`omp-ograf`)
   danach entfernt, Demo-Dreiergespann läuft weiter gesund.
+
+## 2026-07-16 (Nachtrag 4) — Flow-Editor: Format-Kürzel (V/A/D/K) explizit im Port-Label
+
+Direktes Nutzer-Feedback auf Nachtrag 3: „ich kann anhand des Labels
+noch nicht erkennen, ob es ein Video-, Audio- oder Daten-Ein-/Ausgang
+ist" — die Farbcodierung allein verlangt, eine Legende auswendig zu
+kennen, und war offenbar nicht selbsterklärend genug.
+
+**Fix:** `#renderPort()` stellt dem Rollen-Text jetzt ein fett
+gedrucktes, in der Port-Farbe eingefärbtes Format-Kürzel voran (neue
+Funktion `formatAbbrev()`, gleiche Erkennung wie `portColor()` — dafür
+`isKeyPort()` aus beiden Funktionen herausgezogen, damit sie nicht
+auseinanderlaufen):
+- `urn:x-nmos:format:video` → **V**
+- `urn:x-nmos:format:audio` → **A**
+- `urn:x-nmos:format:data` → **D**
+- Key/Alpha (Label passt auf `/key/i`, s. Nachtrag 3) → **K**
+- unbekannt → **?**
+
+Umgesetzt über zwei `<tspan>`s im selben `<text>` (Kürzel fett + in
+Portfarbe, Rollen-Text weiterhin grau) statt zwei getrennter
+Text-Elemente — einfachere Positionierung, ein Element pro Port.
+
+**Verifiziert:** `deno check`/`deno test ui/` (40/40) grün. Live per
+CDP-Screenshot (Chromium headless): Mixer-PGM-Port zeigt jetzt „V PGM"
+(blaues V), `omp-ograf`s Ports zeigen „V Fill" und „K Key" (pinkes K),
+Videoplayer ohne eigenes Label zeigt „A Sender 2"/„V Sender 1" — das
+Format ist jetzt direkt aus dem Text lesbar, nicht mehr nur aus der
+(ggf. schwer unterscheidbaren) Kreisfarbe. Test-Instanz danach
+entfernt.

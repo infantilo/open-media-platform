@@ -903,10 +903,15 @@ export class FlowCanvas extends HTMLElement {
     // erkennbar, welcher Port welches Signal führt. `pointer-events:none`,
     // damit der Text keine eigenen Drag/Click-Events abfängt (die bleiben
     // exklusiv am `circle`, s. Aufrufer).
+    //
+    // Format-Kürzel (V/A/D/K, Nutzerfund 2026-07-16 Nachtrag: Farbe
+    // allein verlangt, die Legende auswendig zu kennen) als eigenes,
+    // in der Port-Farbe eingefärbtes `<tspan>` vor dem Rollen-Text —
+    // steht so IM Text selbst, nicht nur an der (evtl. schwer zu
+    // unterscheidenden) Kreisfarbe.
     const text = document.createElementNS(SVG_NS, "text");
     text.setAttribute("y", String(cy + 3));
     text.setAttribute("font-size", "8");
-    text.setAttribute("fill", "#c8c8c8");
     text.setAttribute("pointer-events", "none");
     if (side === "input") {
       text.setAttribute("x", String(cx + 8));
@@ -914,7 +919,17 @@ export class FlowCanvas extends HTMLElement {
       text.setAttribute("x", String(cx - 8));
       text.setAttribute("text-anchor", "end");
     }
-    text.textContent = portShortLabel(port.label);
+    const formatTspan = document.createElementNS(SVG_NS, "tspan");
+    formatTspan.setAttribute("fill", portColor(port.format, port.label));
+    formatTspan.setAttribute("font-weight", "bold");
+    formatTspan.textContent = formatAbbrev(port.format, port.label);
+    const roleTspan = document.createElementNS(SVG_NS, "tspan");
+    roleTspan.setAttribute("fill", "#c8c8c8");
+    roleTspan.textContent = ` ${portShortLabel(port.label)}`;
+    // Reihenfolge im Markup bleibt Format-vor-Rolle unabhängig von der
+    // Seite — bei Ausgängen (rechte Kante) sorgt `text-anchor=end`
+    // allein für die optische Rechtsbündigkeit.
+    text.append(formatTspan, roleTspan);
     parent.appendChild(text);
     parent.appendChild(circle);
     return circle;
@@ -1779,11 +1794,14 @@ function healthColor(health: string): string {
 // das Port-Label erkannt (heuristisch, aber robust genug: die einzige
 // Quelle für "Key" im Label ist `SenderSpec::label`, das die Nodes
 // selbst setzen — kein geratener String-Match auf beliebigen
-// Fremdtext).
+// Fremdtext). Gemeinsame Erkennung für `portColor()` und
+// `formatAbbrev()`, damit beide konsistent bleiben.
+function isKeyPort(format: string, label: string): boolean {
+  return format === "urn:x-nmos:format:video" && /\bkey\b/i.test(label);
+}
+
 function portColor(format: string, label: string): string {
-  if (format === "urn:x-nmos:format:video" && /\bkey\b/i.test(label)) {
-    return "#e05de0";
-  }
+  if (isKeyPort(format, label)) return "#e05de0";
   switch (format) {
     case "urn:x-nmos:format:video":
       return "#3fa7ff";
@@ -1793,6 +1811,26 @@ function portColor(format: string, label: string): string {
       return "#b47cff";
     default:
       return "#999";
+  }
+}
+
+// Explizites Format-Kürzel fürs Port-Label (Nutzerfund 2026-07-16:
+// „ich kann anhand des Labels noch nicht erkennen, ob es ein Video-,
+// Audio- oder Daten-Ein-/Ausgang ist" — Farbe allein verlangt, die
+// Legende auswendig zu kennen; das Kürzel macht es aus dem Text selbst
+// lesbar, ohne dass der Rollen-Teil des Labels — "PGM"/"Fill"/
+// "Sender 2" — dafür Platz verlieren muss).
+function formatAbbrev(format: string, label: string): string {
+  if (isKeyPort(format, label)) return "K";
+  switch (format) {
+    case "urn:x-nmos:format:video":
+      return "V";
+    case "urn:x-nmos:format:audio":
+      return "A";
+    case "urn:x-nmos:format:data":
+      return "D";
+    default:
+      return "?";
   }
 }
 
