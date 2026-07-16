@@ -1815,6 +1815,88 @@ Volles Ergebnis inkl. Test-Aufbau in `docs/decisions.md`
   ist aktuell nur auf dieser Dev-Maschine installiert — Deploy-Skript
   (`deploy/dev/install-wpe.sh` o. Ä.) folgt mit K5-Teil-1.
 
+**K5-Teil-1 (Kern-Node: Template-Scan, `show`/`hide`, Fill+Key-MXL-
+Ausgang, erledigt, 2026-07-16):** `docs/END-GOAL-FEATURES.md` §5.4 Teil
+1 — neues Crate `nodes/omp-ograf`: Template-Scan (`templates.rs`, EBU-
+OGraf-v1-Manifeste über `*.ograf.json`-Glob, nicht rekursiv),
+Harness-Seite (`ui/harness.html`, von `wpesrc` per `run-javascript`
+gesteuertes `window.omp.show/hide`), Pipeline (`wpesrc → tee →` zwei
+`video/v210`-MXL-Flows Fill+Key — Fallback statt eines nativen
+`video/v210a`-Einzelflows, s. K5-Teil-0/§11.2: `FlowParser.cpp` kodiert
+`v210a` als zwei Rohbyte-Ebenen in einem Grain, kein GStreamer-Format
+erzeugt dieses Layout aus BGRA). Descriptor: readonly `templates[]`/
+`current`, Methoden `show(templateId, data)`/`hide()`.
+
+Diese Sitzung führte den in der vorherigen (WIP-)Sitzung offen
+gelassenen End-to-end-Live-Test zu Ende und fand dabei, dass die
+dortige Diagnose eine **Fehldiagnose** war — voller Befund in
+`docs/decisions.md` 2026-07-16, Kurzfassung:
+
+- **Echte Ursache des Dauerstillstands (drei Teile, nicht der zuvor
+  vermutete Thread/WPE-Konflikt):** (1) den drei `appsink`s der Pipeline
+  fehlte `async=false` — ohne dieses Flag muss ein Sink erst einen
+  Puffer empfangen, bevor sein Zustandswechsel als abgeschlossen gilt;
+  bei drei Sinks an einem `tee` reicht ein einziger, minimal
+  abweichender Zweig, um die gesamte Pipeline dauerhaft in
+  `gst_base_sink_wait_preroll()` hängen zu lassen (per `gdb`/
+  `GST_DEBUG=GST_STATES:5` hart nachgewiesen). Fund per Konsultation von
+  `PIPELINE CONTROLLER/lib/PlayerPipeline.js`/`MasterPipeline.js`
+  (`UMSETZUNG.md` §0 Punkt 9), wo jeder Tee-Zweig-Sink genau dieses
+  Muster (`sync=false async=false`) trägt. (2) Das Alpha-Brücken-
+  `appsrc` hatte `is-live=true` — falsch für ein `appsrc`, das manuell
+  per `push_buffer()` gefüttert wird (liefert laut GstBaseSrc-Vertrag
+  sonst keine Daten vor PLAYING). (3) Henne-Ei-Problem: `wpesrc` lädt
+  die Harness-Seite schon beim Pipeline-Aufbau, der reguläre
+  Descriptor-HTTP-Server startet aber erst danach (braucht den fertigen
+  `PipelineHandle`) — „Connection refused" beim allerersten Seitenaufruf.
+  Fix: eigener minimaler HTTP-Server nur für Harness+Templates, vor dem
+  Pipeline-Aufbau gestartet (OS-zugewiesener Port,
+  `omp_node_sdk::server::spawn` bindet synchron).
+- Zusätzlich: `Pipeline::build` wechselt den Zustand jetzt zweistufig
+  PAUSED→(`get_state`)→PLAYING→(`get_state`) statt eines einzelnen
+  `set_state(Playing)` — `wpevideosrc0` (Live-Quelle) meldet
+  `NO_PREROLL` statt `ASYNC`, was GStreamers interne
+  Zustands-Buchhaltung ohne begleitenden `get_state()`-Aufruf nicht
+  zuverlässig verarbeitet (`gst-launch-1.0` fährt intern denselben
+  zweistufigen Ablauf).
+- `spawn_alpha_key_bridge` blieb bei einem eigenen Thread +
+  blockierendem `try_pull_sample()` (das bewährte, von acht anderen
+  Nodes seit C4 genutzte Muster aus `tools/mxl-gst/testsrc.cpp`) — mit
+  `async=false` gelöst war kein Umbau auf `AppSinkCallbacks` nötig.
+
+  **Verifiziert (echte Prozesse, kein Mock):** `cargo build/test
+  --workspace` grün (inkl. 4 `omp-mediaio::mxl`-Tests), `cargo deny
+  check`/`cargo audit` grün. End-to-end per echtem, über den
+  Instanz-Launcher gestarteten `omp-ograf`-Prozess: `make contract`
+  grün gegen die reale `api_base_url`. `show("hello-lower-third",
+  {title, subtitle, accentColor})` → Fill-MXL-Flow zeigt die Bauchbinde
+  mit den übergebenen Werten (`omp-viewer`-MJPEG-Preview, JPEG-Frame aus
+  dem Multipart-Stream extrahiert, visuell bestätigt), Key-MXL-Flow
+  zeigt zeitgleich die passende Alpha-Maske (heller Kasten, transparent/
+  schwarz drumherum, weicher Kantenverlauf durch den halbtransparenten
+  Kasten-Hintergrund). `hide()` setzt den Key-Flow zurück auf
+  vollständig transparent. Beide Flows laufen nach dem Fix durchgehend
+  mit realer Framerate (`mxl-info -f <flow>`: `Head index`/`Last write
+  time` wachsen kontinuierlich) — vor dem Fix blieb `Head index` nach
+  exakt einem Frame stehen. Bekannte, nicht blockierende, vorbestehende
+  Einschränkung (nicht neu, `omp_mediaio::mxl` seit C4): ein Reader, der
+  sich erst sehr lange nach dem ersten Puffer anschließt, kann
+  „TOO EARLY" melden (kein Selbstkorrektur-Mechanismus für den
+  Grain-Index) — bei sofort verbundenem Reader (Normalfall) nicht
+  beobachtet. Test-Instanzen danach entfernt.
+
+  **Nebenbefund, nicht Teil dieser Scheibe:** hoher gleichzeitiger
+  `wpesrc`/`WPEWebProcess`-Ressourcenverbrauch bei vielen
+  Neustart-Iterationen auf der 6,5-GB-RAM-Dev-Maschine löste den
+  Linux-OOM-Killer aus, der den persistenten `omp-video-mixer-me`-
+  Instanzprozess des laufenden Regieplatz-Demo-Setups beendete
+  (ungewöhnlich hoher RSS-Wert, `docs/decisions.md` 2026-07-16) —
+  `omp-source`/`omp-player-video` verschwanden im selben Zeitraum
+  ebenfalls. Alle drei über den Launcher neu gestartet, Mixer→Viewer-
+  Kante neu verbunden; die vorherige Crosspoint-/Tally-Konfiguration ist
+  nicht wiederherstellbar (kein Snapshot vorhanden) — der Projektinhaber
+  sollte das beim nächsten UI-Besuch neu einrichten.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -1869,3 +1951,4 @@ Volles Ergebnis inkl. Test-Aufbau in `docs/decisions.md`
 | K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
 | K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix; Nachtrag: visueller Feinschliff (Metall-Gradients, omp-panel-section) nach Bildmeister-Referenzvergleich | 2026-07-15 |
 | K5-Teil-0 (OGraf-Render-Spike) | erledigt | [K5-0] Go für wpesrc (Variante A) — Paketierung/Sandbox-Crash-Risiken widerlegt, 5 echte Templates pixelidentisch gerendert, Alpha + MXL video/v210a verifiziert | 2026-07-15 |
+| K5-Teil-1 (omp-ograf Kern-Node) | erledigt | [K5-1] Template-Scan, show/hide, Fill+Key-MXL-Ausgang — Preroll-Deadlock (fehlendes async=false), is-live-Fehlkonfiguration + Harness-Server-Henne-Ei-Problem gefunden+gefixt (Fehldiagnose der WIP-Sitzung korrigiert) | 2026-07-16 |

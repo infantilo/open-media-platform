@@ -132,6 +132,56 @@ impl ParamStore for OgrafStore {
     }
 }
 
+/// Nur für die Harness-Seite (s. `spawn_harness_server` unten) — kein
+/// Descriptor/Params/Methods, davon ruft niemand darüber je etwas ab.
+struct HarnessOnlyStore {
+    templates_root: PathBuf,
+}
+
+impl ParamStore for HarnessOnlyStore {
+    fn descriptor(&self) -> Descriptor {
+        Descriptor {
+            parameters: vec![],
+            methods: vec![],
+        }
+    }
+
+    fn get(&self, _name: &str) -> Option<Value> {
+        None
+    }
+
+    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
+        Err(SetError::ReadOnly)
+    }
+
+    fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        Err(InvokeError::Unknown)
+    }
+
+    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+        templates::route(&self.templates_root, method, path)
+    }
+}
+
+/// Startet einen eigenen, minimalen HTTP-Server NUR für die Harness-Seite
+/// + Template-Dateien, auf einem OS-zugewiesenen Port — gebraucht, weil
+/// `wpesrc` die Harness-Seite schon beim Pipeline-Aufbau lädt (`Pipeline::
+/// build`, vor `omp_node_sdk::start()`s eigenem Descriptor-Server). Live-
+/// Test-Fund (K5-Teil-1, docs/decisions.md 2026-07-16): ohne diesen
+/// eigenen Server lief `wpesrc`s Seitenaufruf regelmäßig ins Leere
+/// ("Connection refused"), weil der normale Descriptor-Server zu diesem
+/// Zeitpunkt im Programmablauf noch gar nicht gebunden war (der braucht
+/// wiederum den fertigen `PipelineHandle` für `OgrafStore` — klassisches
+/// Henne-Ei-Problem). `server::spawn` bindet synchron (der Port ist also
+/// sofort verbindungsfähig, auch bevor die Accept-Loop im eigenen Thread
+/// tatsächlich läuft — Verbindungen warten im Kernel-Backlog) und liefert
+/// den zugewiesenen Port zurück.
+fn spawn_harness_server(templates_root: PathBuf) -> std::io::Result<u16> {
+    let store: Arc<dyn ParamStore> = Arc::new(HarnessOnlyStore { templates_root });
+    let (port, _join_handle) = omp_node_sdk::server::spawn("127.0.0.1:0", store)?;
+    Ok(port)
+}
+
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
@@ -162,11 +212,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-    // Die Harness-Seite liegt auf demselben Descriptor-Server-Port wie
-    // `/descriptor.json` etc. (`templates::route`, kein zweiter Server) —
-    // `wpesrc` lädt sie also vom eigenen Node zurück, node-lokal, ohne
-    // Auth (gleiche Begründung wie `omp-audio-mixer::levels`).
-    let harness_url = format!("http://{host}:{port}/ograf-harness.html");
+    // Eigener, früh gebundener Mini-Server nur für die Harness-Seite +
+    // Templates (s. `spawn_harness_server`-Doku) — der reguläre
+    // Descriptor-Server (unten, `omp_node_sdk::start`) bedient dieselben
+    // Pfade zusätzlich (`OgrafStore::extra_route`), node-lokal ohne Auth
+    // (gleiche Begründung wie `omp-audio-mixer::levels`), aber `wpesrc`
+    // braucht die Seite schon vor dessen Start.
+    let harness_port = spawn_harness_server(templates_root.clone())?;
+    let harness_url = format!("http://127.0.0.1:{harness_port}/ograf-harness.html");
 
     let pipeline_config = pipeline::Config {
         domain,

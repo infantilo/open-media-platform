@@ -183,8 +183,24 @@ impl MxlVideoOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
+        // `async=false` (Live-Test-Fund K5-Teil-1, docs/decisions.md
+        // 2026-07-16, bestätigtes Muster aus `PIPELINE CONTROLLER/lib/
+        // PlayerPipeline.js`/`MasterPipeline.js`, `UMSETZUNG.md` §0 Punkt
+        // 9): ohne dieses Flag muss der Sink erst einen Puffer empfangen
+        // (Preroll), bevor sein eigener PAUSED→PLAYING-Übergang als
+        // abgeschlossen gilt — bei `omp-ograf` (K5-Teil-1) mit `wpesrc`
+        // und drei Appsinks in einer `tee`-Topologie führte das
+        // reproduzierbar zu einem Dauer-Deadlock in
+        // `gst_base_sink_wait_preroll()` (per `gdb`/`GST_DEBUG=
+        // GST_STATES:5` hart nachgewiesen), sobald ein Zweig minimal
+        // langsamer lief als die anderen. `async=false` lässt den
+        // Zustandswechsel synchron/sofort durchlaufen, unabhängig davon,
+        // ob/wann der erste Puffer ankommt — exakt das dokumentierte
+        // Muster, das PIPELINE CONTROLLER für jeden Tee-Zweig-Sink
+        // (`intervideosink`/`interaudiosink`) verwendet.
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
+            .property("async", false)
             .property("max-buffers", 2u32)
             .property("drop", true)
             .build()

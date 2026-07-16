@@ -4719,3 +4719,121 @@ Deploys in `deploy/dev/install-mxl.sh` oder ein neues
 eines Templates, Alpha-MXL-Ausgang) — eigene Sitzung, wie im Phasenplan
 vorgesehen. Lizenzfrage (§5.5 Punkt 4) sollte vor der Template-Übernahme
 ins Repo (Teil 1) geklärt werden.
+
+## 2026-07-16 — K5-Teil-1: `omp-ograf`-Kern-Node fertig verifiziert — echter Wurzelursache-Fund zum Dauerstillstand aus der WIP-Sitzung (2026-07-15)
+
+Fortsetzung von Commit `d4a8597` ("[K5-1 WIP] ... noch NICHT end-to-end
+live verifiziert"). Der End-to-end-Live-Test aus dieser Sitzung deckte
+auf, dass die dortige Diagnose ("eigener Thread konkurriert mit WPEs
+GLib-Hauptschleife") eine **Fehldiagnose** war — der tatsächliche Bug lag
+woanders, in drei Teilen:
+
+1. **Preroll-Deadlock durch fehlendes `async=false`.** Mit `gdb -p <pid>
+   -batch -ex "thread apply all bt"` (ptrace erlaubt in dieser Sandbox,
+   `sudo -n gdb` reicht) blieben alle drei `appsink`s der Pipeline (Fill-
+   Ausgang, Key-Brücke, Key-Ausgang) dauerhaft in
+   `gst_base_sink_wait_preroll()` hängen — bestätigt durch
+   `GST_DEBUG=GST_STATES:5`: keiner der drei erreichte je "completed
+   state change to PLAYING", obwohl jedes Nicht-Sink-Element (inkl.
+   `wpesrc`) das längst gemeldet hatte. **Root cause, per Konsultation von
+   `PIPELINE CONTROLLER/lib/PlayerPipeline.js`/`MasterPipeline.js`
+   gefunden (`UMSETZUNG.md` §0 Punkt 9 — hätte zuerst passieren müssen,
+   nicht erst nach stundenlangem Trial-and-Error):** jeder Tee-Zweig-Sink
+   dort trägt explizit `sync=false async=false`; unsere drei Appsinks
+   hatten nur `sync=false`. Ohne `async=false` muss ein Sink erst einen
+   Puffer empfangen, bevor sein PAUSED→PLAYING-Übergang als
+   abgeschlossen gilt — bei drei Sinks an einem `tee` genügt ein einziger
+   Zweig mit minimal abweichendem Timing, um die gesamte Pipeline
+   dauerhaft in ASYNC hängen zu lassen. Fix: `async=false` auf alle drei
+   Appsinks (`omp_mediaio::mxl::MxlVideoOutput`, `spawn_alpha_key_bridge`).
+2. **`is-live=true` auf dem Alpha-Brücken-`appsrc` war falsch.** Ein
+   `appsrc`, der mitten in der Pipeline manuell per `push_buffer()`
+   gefüttert wird, ist keine echte Live-Quelle — mit `is-live=true`
+   liefert er laut GstBaseSrc-Vertrag aber keinerlei Daten, solange die
+   Pipeline nur PAUSED ist ("no preroll for live sources"), was den
+   dahinterliegenden Key-`MxlVideoOutput`-Sink nie prerollen ließ. Fix:
+   `is-live` auf dem GStreamer-Default `false` belassen (Property
+   entfernt).
+3. **Henne-Ei-Problem beim Node-Start.** `wpesrc` lädt die Harness-Seite
+   schon beim Pipeline-Aufbau (`Pipeline::build`) — der reguläre
+   Descriptor-HTTP-Server (`omp_node_sdk::start()`) startet aber erst
+   *danach* (er braucht den fertigen `PipelineHandle` für `OgrafStore`).
+   Per `GST_DEBUG=*:3` beobachtet: `wpeview ... error: Failed to load
+   http://127.0.0.1:9330/ograf-harness.html (Could not connect to
+   127.0.0.1: Connection refused)`. Fix: `main.rs` startet jetzt einen
+   eigenen, minimalen `HarnessOnlyStore`-HTTP-Server (nur
+   `templates::route`, sonst leere Descriptor/Params/Methods) auf einem
+   OS-zugewiesenen Port **vor** dem Pipeline-Aufbau
+   (`omp_node_sdk::server::spawn` bindet synchron, Verbindungen warten im
+   Kernel-Backlog bis die Accept-Loop läuft) — der reguläre
+   Descriptor-Server bedient dieselben Pfade zusätzlich, sobald er später
+   verfügbar ist.
+
+Zusätzlich (kleinere, aus (1) folgende Anpassung): `Pipeline::build`
+macht den State-Wechsel jetzt zweistufig PAUSED→(`get_state`)→
+PLAYING→(`get_state`), weil `wpevideosrc0` (Live-Quelle in `wpesrc`)
+`NO_PREROLL` statt `ASYNC`/`SUCCESS` meldet (GStreamers Vertrag für Live-
+Quellen), was sich bis zum Pipeline-Objekt selbst hochpflanzt
+(`gst_bin_change_state_func`: "we have NO_PREROLL elements SUCCESS ->
+NO_PREROLL") — ein einzelner `set_state(Playing)`-Aufruf ohne
+begleitendes `get_state()` verarbeitet GStreamers interne
+Zustands-Buchhaltung dafür nicht zuverlässig; `gst-launch-1.0` (als
+Kontrollprobe durchgehend funktionsfähig) fährt intern denselben
+zweistufigen Ablauf.
+
+**`spawn_alpha_key_bridge` blieb bei einem eigenen Thread + blockierendem
+`try_pull_sample()`** (statt der WIP-Sitzung eigenem `AppSinkCallbacks`-
+Versuch) — das ist das bewährte, von acht anderen Nodes seit C4
+verwendete Muster aus `tools/mxl-gst/testsrc.cpp`; mit `async=false`
+gelöst ist kein Callback-Umbau nötig.
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build/test
+--workspace` grün (inkl. der 4 `omp-mediaio::mxl`-Tests), `cargo deny
+check`/`cargo audit` grün. End-to-end per echtem `omp-ograf`-Prozess
+(über den Instanz-Launcher gestartet, `make contract` läuft grün gegen
+den echten `api_base_url`): `show("hello-lower-third", {title,
+subtitle, accentColor})` → Fill-MXL-Flow zeigt die Bauchbinde mit den
+übergebenen Werten (per `omp-viewer`-MJPEG-Preview, JPEG-Frame aus dem
+Multipart-Stream extrahiert und visuell bestätigt: korrekter Titel,
+Untertitel, roter/grüner Akzentbalken je nach Testlauf) — Key-MXL-Flow
+zeigt zeitgleich die passende Alpha-Maske (heller Kasten dort, wo das
+Fill-Bild deckend ist, transparent/schwarz drumherum, weicher
+Kantenverlauf durch den halbtransparenten Kasten-Hintergrund). `hide()`
+setzt den Key-Flow zurück auf vollständig transparent (per Preview
+bestätigt). Beide MXL-Flows laufen nach dem Fix durchgehend mit realer
+Framerate (`mxl-info -f <flow>` zeigt kontinuierlich wachsenden
+`Last write time`/`Head index`, nicht nur einen einzelnen Frame) — vor
+dem Fix blieb `Head index` nach exakt einem Frame stehen.
+
+**Bekannte, nicht blockierende Einschränkung (vorbestehend seit C4,
+nicht neu):** `omp_mediaio::mxl::write_loop`s Grain-Index wird beim
+ersten Puffer einmalig per `get_current_index()` gesetzt und danach nur
+noch lokal hochgezählt (Datei-Doku: "ohne Selbstkorrektur bei Drift").
+Ein Reader, der sich erst **deutlich** nach dem ersten Puffer an einen
+Flow anschließt (z. B. nach einer sehr langen interaktiven
+Debug-Sitzung), kann dadurch einen zu weit in der Zukunft liegenden
+Index erwarten und dauerhaft "TOO EARLY" melden — reproduziert an einem
+absichtlich sehr spät verbundenen `mxl-gst-sink`/`omp-viewer` gegen den
+Key-Flow dieser Sitzung. Ein frisch gestarteter Node mit sofort
+verbundenem Reader (normaler Betriebsfall) zeigt das Problem nicht (per
+zweitem, sauberem Testlauf bestätigt). Nicht in dieser Sitzung behoben
+(betrifft den gemeinsamen `omp-mediaio::mxl`-Code, nicht `omp-ograf`
+spezifisch, und ist kein K5-Teil-1-Blocker) — Kandidat für eine spätere
+PTS-basierte Selbstkorrektur, falls Drift in Produktion beobachtet wird.
+
+**Nebenbefund, nicht Teil dieser Scheibe:** während dieser Sitzung
+(hoher gleichzeitiger `wpesrc`/`WPEWebProcess`-Ressourcenverbrauch bei
+vielen Neustart-Iterationen auf der nur 6,5-GB-RAM-Dev-Maschine) hat der
+Linux-OOM-Killer den persistenten `omp-video-mixer-me`-Instanzprozess
+des laufenden Regieplatz-Demo-Setups beendet (`dmesg`: `Out of memory:
+Killed process ... (omp-video-mixer)`, `total-vm:8004248kB,
+anon-rss:5575152kB` — ein ungewöhnlich hoher RSS-Wert, der separat
+untersucht werden sollte). `omp-source`/`omp-player-video` verschwanden
+im selben Zeitraum ebenfalls aus dem Launcher (vermutlich derselbe
+Ressourcendruck). Alle drei wurden über den Instanz-Launcher neu
+gestartet, die Mixer→Viewer-Kante neu verbunden; die ursprüngliche
+Crosspoint-/Tally-Konfiguration des Mixers ist NICHT wiederherstellbar
+(kein Snapshot vorhanden, `GET /api/v1/snapshots` war leer) — der
+Projektinhaber sollte das beim nächsten UI-Besuch neu einrichten.
+
+**Status-Checkliste:** K5-Teil-1 erledigt.

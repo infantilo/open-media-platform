@@ -127,21 +127,43 @@ fn spawn_alpha_key_bridge(
     tee: &gst::Element,
     width: u32,
     height: u32,
+    running: Arc<AtomicBool>,
 ) -> Result<gst::Element, PipelineError> {
     let queue = gst::ElementFactory::make("queue")
         .build()
         .map_err(|e| PipelineError(format!("queue (key): {e}")))?;
+    // `async=false`: s. ausführliche Begründung in
+    // `omp_mediaio::mxl::MxlVideoOutput::new` (derselbe Fund, dieselbe
+    // Ursache — jeder Appsink an einem `tee`-Zweig dieser Pipeline
+    // braucht es, nicht nur die beiden MXL-Ausgänge).
     let appsink = gst::ElementFactory::make("appsink")
         .property("sync", false)
+        .property("async", false)
         .property("max-buffers", 2u32)
         .property("drop", true)
         .property("caps", bgra_caps(width, height))
         .build()
         .map_err(|e| PipelineError(format!("appsink (key): {e}")))?;
+    // Live-Test-Fund (K5-Teil-1, docs/decisions.md 2026-07-16): `is-live`
+    // gehört auf ein `appsrc`, das (wie hier) mitten in der Pipeline
+    // manuell per `push_buffer()` gefüttert wird, NICHT auf `true`. Ein
+    // "live" `appsrc` verhält sich wie jede andere Live-Quelle (z. B.
+    // `v4l2src`) und liefert per GstBaseSrc-Vertrag **keinen** Puffer,
+    // solange die Pipeline nur PAUSED ist ("no preroll for live
+    // sources") — der Sink dahinter (hier: das Key-`MxlVideoOutput`)
+    // kann dadurch nie prerollen, was wiederum den gesamten
+    // PAUSED→PLAYING-Übergang der Pipeline blockiert (per
+    // `GST_DEBUG=GST_STATES:5` hart nachgewiesen: alle drei Appsinks
+    // blieben dauerhaft in `gst_base_sink_wait_preroll`, der einzige
+    // fehlende Baustein war das Preroll-Bild dieses Zweigs). `is-live`
+    // bleibt daher auf dem GStreamer-Default `false` — unser eigener
+    // Thread liefert die Puffer ohnehin schon getaktet vom `tee`-Zweig,
+    // eine zweite Live-Semantik mittendrin ist unnötig und war die
+    // eigentliche Ursache des zuvor beobachteten Dauerstillstands (nicht
+    // `wpesrc`/GLib-Thread-Konkurrenz, wie in einer früheren, nie
+    // vollständig verifizierten Sitzung vermutet).
     let appsrc = gst::ElementFactory::make("appsrc")
         .property("format", gst::Format::Time)
-        .property("is-live", true)
-        .property("do-timestamp", true)
         .property("caps", gray8_caps(width, height))
         .build()
         .map_err(|e| PipelineError(format!("appsrc (key): {e}")))?;
@@ -162,50 +184,58 @@ fn spawn_alpha_key_bridge(
         .dynamic_cast()
         .map_err(|_| PipelineError("appsrc (key): cast to AppSrc failed".to_string()))?;
 
-    // Live-Test-Fund (K5-Teil-1, hart per CPU-Zeit-Vergleich + `GST_DEBUG`
-    // verifiziert): ein eigener `thread::spawn`, der per `pull_sample()`/
-    // `try_pull_sample()` blockierend von einem an den `tee` gehängten
-    // `appsink` liest, bringt `wpesrc`s WebKit-Unterprozess reproduzierbar
-    // dauerhaft zum Stillstand (WPEWebProcess-CPU-Zeit blieb über Sekunden
-    // exakt unverändert) — auch mit laufender `GMainLoop` + Bus-Watch
-    // (s. `run()`). Ein zweiter `tee`-Zweig ohne eigenen Thread (nur
-    // `queue`+`fakesink`) lief dagegen problemlos durch. Grund vermutlich:
-    // ein unkoordinierter OS-Thread, der `AppSink`-APIs aufruft, tritt in
-    // Konkurrenz zu WPEs eigener GLib-Hauptschleifen-Synchronisation.
-    // Fix: `AppSinkCallbacks`/`new_sample` statt eines eigenen Threads —
-    // die Callback läuft synchron auf dem GStreamer-Streaming-Thread
-    // selbst (derselbe Mechanismus, den `tee`/`queue`/jedes andere
-    // Pipeline-Element ohnehin nutzt), kein zusätzlicher, unkoordinierter
-    // Thread nötig.
+    // Live-Test-Fund (K5-Teil-1, docs/decisions.md 2026-07-16): ein erster
+    // Versuch, hier per `AppSinkCallbacks`/`new_sample` (synchron auf dem
+    // GStreamer-Streaming-Thread) statt eines eigenen Threads zu arbeiten,
+    // verursachte einen Preroll-Deadlock: alle drei Appsinks der Pipeline
+    // (dieser hier + beide `MxlVideoOutput`-Appsinks) blieben per
+    // `gdb`-Backtrace (`thread apply all bt`) und `GST_DEBUG=GST_STATES:5`
+    // hart nachgewiesen dauerhaft in `gst_base_sink_wait_preroll()`
+    // hängen — der Pipeline-Zustandswechsel PAUSED→PLAYING kam nie zum
+    // Abschluss, obwohl jeder einzelne Nicht-Sink-Bestandteil (inkl.
+    // `wpesrc`) seinen eigenen Übergang längst gemeldet hatte. Die
+    // ursprünglich vermutete Ursache ("eigener Thread konkurriert mit
+    // WPEs GLib-Hauptschleife") war eine Fehldiagnose aus einer früheren,
+    // nie vollständig durchverifizierten Sitzung (s. Commit-Historie) —
+    // der tatsächliche Reproduktionsfall (`gst-launch-1.0` mit `tee` +
+    // zwei `queue`+`identity`+`fakesink`-Zweigen gegen dieselbe
+    // `wpesrc`-URL) lief über 10s durchgehend mit ~25fps, ganz ohne
+    // Appsink/Thread. Zurück auf denselben eigenen Thread + blockierendes
+    // `try_pull_sample()` wie `omp_mediaio::mxl`s eigene `write_loop`
+    // (bewährtes Muster aus `tools/mxl-gst/testsrc.cpp`, von acht anderen
+    // Nodes seit C4 unverändert genutzt) — damit preroll(t) der Sink über
+    // den offiziellen Pull-Pfad korrekt, kein Deadlock mehr.
     let pixel_count = (width as usize) * (height as usize);
-    app_sink.set_callbacks(
-        gst_app::AppSinkCallbacks::builder()
-            .new_sample(move |sink| {
-                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
-                let map = buffer
-                    .map_readable()
-                    .map_err(|_| gst::FlowError::Error)?;
-                let bgra = map.as_slice();
-                if bgra.len() < pixel_count * 4 {
-                    return Ok(gst::FlowSuccess::Ok); // unerwartet kleiner Puffer, überspringen
-                }
-                let mut gray = vec![0u8; pixel_count];
-                for i in 0..pixel_count {
-                    gray[i] = bgra[i * 4 + 3]; // Alpha-Byte (BGR**A**)
-                }
-                let pts = buffer.pts();
-                drop(map);
+    thread::spawn(move || {
+        while running.load(Ordering::Relaxed) {
+            let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
+                Some(sample) => sample,
+                None => continue,
+            };
+            let Some(buffer) = sample.buffer() else {
+                continue;
+            };
+            let Ok(map) = buffer.map_readable() else {
+                continue;
+            };
+            let bgra = map.as_slice();
+            if bgra.len() < pixel_count * 4 {
+                continue; // unerwartet kleiner Puffer, überspringen
+            }
+            let mut gray = vec![0u8; pixel_count];
+            for i in 0..pixel_count {
+                gray[i] = bgra[i * 4 + 3]; // Alpha-Byte (BGR**A**)
+            }
+            let pts = buffer.pts();
+            drop(map);
 
-                let mut out_buffer = gst::Buffer::from_slice(gray);
-                if let (Some(pts), Some(out)) = (pts, out_buffer.get_mut()) {
-                    out.set_pts(pts);
-                }
-                let _ = app_src.push_buffer(out_buffer);
-                Ok(gst::FlowSuccess::Ok)
-            })
-            .build(),
-    );
+            let mut out_buffer = gst::Buffer::from_slice(gray);
+            if let (Some(pts), Some(out)) = (pts, out_buffer.get_mut()) {
+                out.set_pts(pts);
+            }
+            let _ = app_src.push_buffer(out_buffer);
+        }
+    });
 
     Ok(appsrc)
 }
@@ -214,6 +244,7 @@ struct Pipeline {
     pipeline: gst::Pipeline,
     wpesrc: gst::Element,
     page_ready: Arc<AtomicBool>,
+    key_bridge_running: Arc<AtomicBool>,
     _mxl_fill: MxlVideoOutput,
     _mxl_key: MxlVideoOutput,
 }
@@ -293,7 +324,14 @@ impl Pipeline {
         .map_err(PipelineError)?;
         mxl_fill.set_active(true);
 
-        let key_appsrc = spawn_alpha_key_bridge(&pipeline, &tee, config.width, config.height)?;
+        let key_bridge_running = Arc::new(AtomicBool::new(true));
+        let key_appsrc = spawn_alpha_key_bridge(
+            &pipeline,
+            &tee,
+            config.width,
+            config.height,
+            key_bridge_running.clone(),
+        )?;
         let key_convert = gst::ElementFactory::make("videoconvert")
             .build()
             .map_err(|e| PipelineError(format!("videoconvert (key): {e}")))?;
@@ -332,14 +370,46 @@ impl Pipeline {
             gst::PadProbeReturn::Ok
         });
 
+        // Live-Test-Fund (K5-Teil-1, docs/decisions.md 2026-07-16): ein
+        // einzelner `set_state(Playing)`-Aufruf ohne begleitendes
+        // `get_state()` blieb hier dauerhaft hängen — per
+        // `GST_DEBUG=GST_STATES:5` nachgewiesen: `wpevideosrc0` (die
+        // Live-Quelle in `wpesrc`) meldet ihren eigenen Zustandswechsel
+        // als `NO_PREROLL` statt `ASYNC`/`SUCCESS` (GStreamers Vertrag für
+        // Live-Quellen: "liefert im PAUSED-Zustand keine Daten, also auch
+        // kein echtes Preroll"), was sich bis zu `pipeline0` selbst
+        // hochpflanzt (`gst_bin_change_state_func`: "we have NO_PREROLL
+        // elements SUCCESS -> NO_PREROLL"). Ohne einen expliziten
+        // `get_state()`-Aufruf (der GStreamers interne Zustands-Buchhaltung
+        // tatsächlich abarbeitet) blieben die drei normalen, nicht-live
+        // `appsink`s der Pipeline (Fill/Key-Brücke/Key-Ausgang) trotz je
+        // eines erfolgreich zugestellten ersten Puffers dauerhaft in
+        // `gst_base_sink_wait_preroll()` hängen. Fix: derselbe
+        // zweistufige PAUSED→(`get_state`)→PLAYING→(`get_state`)-Ablauf,
+        // den `gst-launch-1.0` (per eigenem Kontroll-Testlauf gegen
+        // dieselbe `wpesrc`-URL bestätigt durchgehend funktionsfähig)
+        // intern selbst fährt — `NO_PREROLL` ist dabei der erwartete,
+        // nicht fehlerhafte Rückgabewert für den ersten Schritt.
+        pipeline
+            .set_state(gst::State::Paused)
+            .map_err(|e| PipelineError(format!("set state paused: {e}")))?;
+        let (paused_result, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));
+        if let Err(e) = paused_result {
+            return Err(PipelineError(format!("pipeline did not reach PAUSED: {e:?}")));
+        }
         pipeline
             .set_state(gst::State::Playing)
             .map_err(|e| PipelineError(format!("set state playing: {e}")))?;
+        let (playing_result, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));
+        if let Err(e) = playing_result {
+            return Err(PipelineError(format!("pipeline did not reach PLAYING: {e:?}")));
+        }
 
         Ok(Pipeline {
             pipeline,
             wpesrc,
             page_ready,
+            key_bridge_running,
             _mxl_fill: mxl_fill,
             _mxl_key: mxl_key,
         })
@@ -350,6 +420,7 @@ impl Pipeline {
     }
 
     fn shutdown(&self) {
+        self.key_bridge_running.store(false, Ordering::Relaxed);
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
