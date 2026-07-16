@@ -4925,3 +4925,76 @@ unauffällig (~700 MB von 6,5 GB).
 **Nächster Schritt (Vorschlag, nicht vom Projektinhaber priorisiert):**
 PST-Vorschau-Ausgang (zweiter `MxlVideoOutput` vom Preset-Zweig) als
 eigener Schritt, dann optional Per-Button-Thumbnails.
+
+## 2026-07-16 (Nachtrag 2) — PST-Vorschau-Ausgang versucht, wieder verworfen: zwei reale, schwerwiegende Befunde für die künftige Sitzung
+
+Direkte Fortsetzung nach "fahre fort" — Versuch, den oben vertagten
+PST-Vorschau-Ausgang (zweiter, zuschaltbarer MXL-Sender mit dem
+Preset-Bild) umzusetzen. Implementiert (`isel_pst` + eigener
+`MxlVideoOutput`, `preview.enabled`-Param/-Methode, UI-Toggle „PST
+OUT"), aber **wieder vollständig verworfen (`git checkout --`)**, weil
+die Live-Verifikation zwei ernste, echte Probleme aufdeckte statt einer
+bloßen Kleinigkeit:
+
+1. **Deutlich häufigeres Auftreten des bekannten MXL-Read-Livelocks
+   ([[feedback_mxl_read_livelock_restart_workaround]]).** Ein erster
+   Entwurf öffnete einen dritten, unabhängigen `MxlVideoInput` pro
+   Crosspoint-Eingang (fg+bg+pst statt fg+bg) — der PST-Zweig hing
+   danach bei 4 von 4 frischen Testläufen fest (Lesethread bei
+   70–96 % CPU, `Head index` des Ausgangs bewegte sich nicht), während
+   derselbe Prozess für PGM zuverlässig lief. Fix versucht: `bg` und
+   `pst` teilen sich über ein `tee` + zwei `queue`s einen einzigen
+   Reader statt einen dritten zu öffnen (senkt die MXL-Last pro
+   Eingang wieder auf das fg+bg-Niveau) — das TEE-Muster selbst
+   funktionierte, hat das Livelock-Symptom aber nicht sauber behoben
+   (weiterhin gelegentliches Einfrieren beobachtet).
+2. **Neuer, schwerwiegenderer Fund während der Verifikation: ein
+   OOM-Kill des Mixer-Prozesses** (`dmesg`: zweiter `Killed process ...
+   (omp-video-mixer)`-Eintrag dieser Sitzung, `anon-rss:5772456kB` —
+   für einen 640×480-Mixer grotesk hoch). Auslöser laut
+   `crashMessage` des Launchers: ein **Registry-Geist** — ein
+   IS-04-Sender-Eintrag einer bereits gelöschten Mixer-Instanz war noch
+   in der NMOS-Registry sichtbar (Registry-Ablauf ist unabhängig vom
+   MXL-`mxl-info -g`, das den zugehörigen Flow bereits entfernt hatte),
+   der Discovery-Loop nahm ihn als Crosspoint-Eingang auf,
+   `MxlVideoInput::new` scheiterte mit „Flow not found", die Pipeline
+   fiel auf Schwarzbild zurück — und **irgendwo in diesem
+   Fehlschlag-Zyklus wuchs der Speicherverbrauch auf über 5 GB**, bevor
+   der Kernel eingriff. Nicht abschließend rootursächlich geklärt
+   (vermutet: wiederholte, sich gegenseitig überlagernde
+   Rebuild-Versuche durch flackernde Registry-Sichtbarkeit desselben
+   Geist-Eintrags — jeder Fehlschlag baut laut Code-Pfad eine komplette
+   zweite Fallback-`ActivePipeline` zusätzlich zur bereits
+   fehlgeschlagenen auf, ohne dass ersichtlich wäre, wo genau dabei
+   Ressourcen nicht freigegeben werden).
+
+**Deshalb bewusst NICHT committet** — beide Befunde sind gravierender
+als „noch nicht ganz fertig" und hätten das ohnehin schon fragile
+Discovery/MXL-Zusammenspiel dieses Nodes weiter destabilisiert, statt
+es nur um ein Feature zu erweitern. Der Code-Stand vor diesem Versuch
+(`[K3-Nachtrag]`-Commit, PGM-Hot-Cut) ist unverändert gut und bleibt so.
+
+**Für die nächste Sitzung, falls der PST-Ausgang erneut versucht
+wird:**
+- Das Tee/Queue-Muster (bg+pst teilen sich einen Reader) beibehalten —
+  strukturell richtig, senkt die MXL-Last, auch wenn es das Livelock-
+  Symptom allein nicht gelöst hat.
+- Der Registry-Geist-Bug ist wahrscheinlich **unabhängig vom
+  PST-Feature selbst** (jeder Discovery-basierte Node mit
+  `inputs_changed`-Rebuild-Logik — `omp-switcher`, `omp-video-mixer-me`
+  — könnte ihn treffen, sobald eine Instanz gelöscht wird, deren
+  MXL-Flow schneller verschwindet als ihr Registry-Eintrag abläuft);
+  verdient eine eigene, gezielte Untersuchung mit Speicher-Profiling
+  (z. B. `heaptrack`/`valgrind --tool=massif` gegen einen absichtlich
+  herbeigeführten Geist-Eintrag), bevor irgendein neues Feature auf
+  demselben Discovery-Mechanismus aufbaut.
+- Diskussionswert: sollte die Discovery-Loop-Fehlerbehandlung einen
+  Sender, dessen Flow nicht auflösbar ist, für einige Zyklen aus der
+  Kandidatenliste ausschließen (Backoff), statt bei jedem Poll erneut
+  einen vollen Rebuild-Versuch zu riskieren?
+
+Umgebung danach bereinigt: abgestürzte/verwaiste Instanzen entfernt,
+`mxl-info -g` aufgeräumt, Demo-Vierergespann (Source/Videoplayer/
+Mixer/Viewer) neu gestartet und per 26-Frame-Live-Test (`curl
+--max-time 5`, MD5-Vielfalt der MJPEG-Frames) als gesund bestätigt.
+Speicher wieder unauffällig (~700 MB von 6,5 GB).
