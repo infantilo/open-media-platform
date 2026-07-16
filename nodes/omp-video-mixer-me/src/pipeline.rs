@@ -136,6 +136,7 @@ enum Command {
     SetInputs(Vec<DiscoveredInput>),
     SelectPreset(Option<String>),
     Cut,
+    Take(Option<String>),
     AutoTrans,
     SetDveBox(DveBox),
     ResetDve,
@@ -173,6 +174,17 @@ impl PipelineHandle {
 
     pub fn cut(&self) {
         let _ = self.commands.send(Command::Cut);
+    }
+
+    /// PGM-Hot-Cut (K3-Teil-2, `docs/END-GOAL-FEATURES.md` §3.5 offene
+    /// Frage 1, entschieden 2026-07-16: PGM-Bus-Buttons schalten direkt
+    /// um): schaltet das Programm-Bild sofort auf `sender_id`, **ohne**
+    /// den gestagten Preset-Wert zu berühren — anders als ein impliziter
+    /// `select_preset` + `cut()`-Umweg, der die Preset-Auswahl
+    /// überschreiben würde (genau das Risiko, das die ursprüngliche
+    /// PGM-„nur Anzeige"-Entscheidung vermeiden wollte).
+    pub fn take(&self, sender_id: Option<String>) {
+        let _ = self.commands.send(Command::Take(sender_id));
     }
 
     pub fn auto_trans(&self) {
@@ -710,6 +722,28 @@ pub fn run(
                     // isel_bg auf denselben Eingang mitziehen (nächste
                     // Transition findet dort ein laufendes Bild vor).
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &preset);
+                    program = applied;
+                    let _ = tx.send(Event::ProgramChanged {
+                        previous,
+                        current: program.clone(),
+                    });
+                }
+            }
+            Ok(Command::Take(sender_id)) => {
+                // PGM-Hot-Cut: identisch zu `Cut` (sofortiger fg/bg-
+                // Pad-Wechsel, kein Fade), aber gegen `sender_id` statt
+                // `preset` geschaltet — `preset`/`PresetChanged` bleiben
+                // unverändert, exakt die Zusicherung aus `take()`s Doku.
+                if fading.load(Ordering::Acquire) {
+                    continue;
+                }
+                if let Some(p) = &active {
+                    let previous = program.clone();
+                    let applied =
+                        switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &sender_id);
+                    p.comp_fg_pad.set_property("alpha", 1.0f64);
+                    p.comp_bg_pad.set_property("alpha", 0.0f64);
+                    switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &sender_id);
                     program = applied;
                     let _ = tx.send(Event::ProgramChanged {
                         previous,

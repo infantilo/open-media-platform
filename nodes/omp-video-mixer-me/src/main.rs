@@ -119,6 +119,13 @@ impl ParamStore for MixerStore {
                     args: vec![],
                 },
                 MethodSpec {
+                    name: "crosspoint.take".to_string(),
+                    args: vec![MethodArg {
+                        name: "senderId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
+                MethodSpec {
                     name: "crosspoint.autoTrans".to_string(),
                     args: vec![],
                 },
@@ -215,6 +222,19 @@ impl ParamStore for MixerStore {
             }
             "crosspoint.cut" => {
                 self.pipeline.cut();
+                Ok(())
+            }
+            "crosspoint.take" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let selected = if sender_id.is_empty() {
+                    None
+                } else {
+                    Some(sender_id.to_string())
+                };
+                self.pipeline.take(selected);
                 Ok(())
             }
             "crosspoint.autoTrans" => {

@@ -1768,6 +1768,44 @@ Bausatz nur für eine Node").
   (`active`-Attribut korrekt `false→true`). Test-Instanzen und
   Bootstrap-Testnutzer danach wieder entfernt.
 
+**K3-Nachtrag (PGM-Hot-Cut, erledigt, 2026-07-16):** `docs/END-GOAL-
+FEATURES.md` §3.5 offene Frage 1 beantwortet (Projektinhaber-Feedback
+nach dem K5-Teil-1-Livetest, s. `docs/decisions.md` 2026-07-16
+Nachtrag): PGM-Bus-Buttons waren bisher bewusst nur Anzeige (kein
+Hot-Cut), weil ein impliziter `select+cut`-Umweg die gestagte
+Preset-Auswahl überschrieben hätte. Neue Node-Methode
+`crosspoint.take(senderId)` (`pipeline.rs::Command::Take`) schaltet
+PGM (`isel`/`isel_bg`) sofort um, identischer fg/bg-Alpha-Mechanismus
+wie `Cut`, aber ohne `preset` anzurühren — PGM-Hot-Cut und
+PST-Preset-Stage bleiben dadurch strukturell unabhängig. UI-Bundle:
+PGM-Tasten rufen jetzt `crosspoint.take` statt keinen Handler zu haben,
+PST-Tasten unverändert `crosspoint.select`.
+
+  **Nebenbefund (kein neuer Bug, bereits dokumentiert seit C8):**
+  Source→Mixer→Viewer zeigte nach dem OOM-Vorfall (K5-Teil-1-Nachtrag)
+  Schwarzbild — der bekannte, seit 2026-07-09/2026-07-14 offene
+  „MXL-Read-Livelock" (TOCTOU in `third_party/mxl`s `Sync.cpp`) traf
+  erneut zu, ein Instanz-Neustart behob es (etabliertes Recovery-
+  Muster). Nicht in dieser Sitzung gefixt (weiterhin „eigene künftige
+  Sitzung").
+
+  **Verifiziert:** `cargo build/test --workspace` grün. Live per echtem,
+  über den Instanz-Launcher gestarteten Prozess: `crosspoint.take`
+  schaltet PGM sofort um (MJPEG-Preview-Frame bestätigt den
+  Quellwechsel ohne Take-Zwischenschritt); anschließendes
+  `crosspoint.select` auf eine andere Quelle ändert nachweisbar nur
+  `presetInput`, `programInput` bleibt unverändert (Parameter-Roundtrip
+  nach jedem Aufruf). Test-Instanzen danach bereinigt, Demo-Vierergespann
+  (Source/Videoplayer/Mixer/Viewer) läuft gesund weiter.
+
+  **Offen, nicht priorisiert:** PST-Vorschau-Ausgang (zweiter,
+  zuschaltbarer MXL-Sender mit dem Preset-Bild — braucht einen dritten
+  `input-selector`-Zweig + zweiten `MxlVideoOutput`, keine reine
+  UI-Änderung) und Per-Bus-Button-Thumbnails (eigene, größere Anfrage,
+  evtl. mit `omp-multiviewer`) — beide vom Projektinhaber explizit auf
+  eine künftige Sitzung verschoben. §3.5 offene Frage 2 (Button-Bank-
+  Verhalten bei vielen Quellen) bleibt ebenfalls offen.
+
 **K5-Teil-0 (OGraf-Render-Spike, erledigt, 2026-07-15):**
 `docs/END-GOAL-FEATURES.md` §5.4 Teil 0 verlangt vor jedem
 `omp-ograf`-Node-Code eine eigene Sitzung: Go/No-Go zwischen `wpesrc`

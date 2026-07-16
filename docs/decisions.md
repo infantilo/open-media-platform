@@ -4837,3 +4837,91 @@ Crosspoint-/Tally-Konfiguration des Mixers ist NICHT wiederherstellbar
 Projektinhaber sollte das beim nächsten UI-Besuch neu einrichten.
 
 **Status-Checkliste:** K5-Teil-1 erledigt.
+
+## 2026-07-16 (Nachtrag) — `omp-video-mixer-me`: Regieplatz-Nachwirkung des OOM-Vorfalls behoben, `crosspoint.take` (PGM-Hot-Cut) neu, §3.5 offene Frage 1 beantwortet
+
+Direkte Fortsetzung derselben Sitzung wie K5-Teil-1 oben — der
+Projektinhaber meldete nach dem OOM-Vorfall drei Punkte am
+wiederhergestellten Regieplatz-Demo.
+
+**1. Source→Mixer→Viewer zeigte Schwarzbild.** Kein neuer Bug — der
+Mixer-Ausgang selbst (`ActivePipeline`) war unauffällig, aber der
+FG/BG-Eingangs-Lesepfad hatte den bereits dokumentierten
+**„MXL-Read-Livelock"** getroffen (`docs/decisions.md` 2026-07-09/2026-
+07-14, TOCTOU-Fenster in `third_party/mxl/lib/internal/src/Sync.cpp`s
+`waitUntilChanged`, seit C8 offen, nicht in dieser Sitzung behoben —
+weiterhin „eigene künftige Sitzung" laut damaliger Einschätzung).
+Verifiziert per `gdb -p <pid> -batch -ex "thread apply all bt"` +
+Vergleich der `utime`-Werte aus `/proc/<pid>/task/*/stat` zwischen zwei
+Zeitpunkten (kein einzelner Thread bei durchgehend 100 %, aber
+`crosspoint.programInput` korrekt gesetzt und Ausgang trotzdem
+byte-identisch schwarz über mehrere Minuten — passt zu „Reader-Pad
+bekommt nie ein erstes Bild" statt zu einem generischen Pipeline-
+Fehler). Empirisch reproduziert: Neuwahl + `cut()` blieb wirkungslos,
+ein kompletter Neustart der Mixer-Instanz behob es sofort (etabliertes
+Recovery-Muster aus den C7-Sitzungen). Traf während der Verifikation
+**erneut** bei einer frischen Instanz auf (bestätigt „intermittierend,
+nicht bei jeder Quellwahl" aus der ursprünglichen Diagnose) — zweiter
+Neustart behob es wieder. Kein Fix in dieser Sitzung (bewusst, s. o.),
+nur Diagnose + Workaround angewendet.
+
+**2. Frage: wann kommt das Settings-Menü?** `docs/END-GOAL-FEATURES.md`
+§1.4 K1-Teil-3 (Settings-Panel, Theme-Umschaltung) — kommt planmäßig
+*nach* K1-Teil-2 (`ui/kit`-Migration aller fünf bestehenden Node-
+Bundles auf Tokens, bisher nur teilweise nebenbei in K3/K4-Teil-1
+passiert, nicht als eigener abgeschlossener Schritt). Kein Termin
+vergeben — beide Teile sind unpriorisiert offen, keine Kapitel-10-
+Reihenfolge-Entscheidung deckt sie ab (die deckte nur die Teil-1-Scheiben
+der Kapitel 1/2/3+4/5 ab).
+
+**3. PGM/PST-Bus-Feedback, per Rückfrage geklärt (§3.5 offene Frage 1
+hiermit beantwortet):**
+- **PGM-Hot-Cut gewünscht** (nicht „nur Anzeige" wie bisher, s. K3/K4-
+  Teil-1). Neue Node-Methode `crosspoint.take(senderId)`
+  (`nodes/omp-video-mixer-me/src/pipeline.rs::Command::Take`): schaltet
+  `isel`/`isel_bg` sofort auf `senderId`, identischer fg/bg-Alpha-
+  Mechanismus wie `Cut`, aber **ohne** `preset`/`PresetChanged`
+  anzurühren — der ursprüngliche Grund für „nur Anzeige" (ein
+  impliziter `select+cut`-Umweg hätte die gestagte Preset-Auswahl
+  überschrieben) ist damit strukturell vermieden, kein Kompromiss
+  nötig. UI (`ui/bundle.js::makeBusButton`): PGM-Tasten rufen jetzt
+  `crosspoint.take`, PST-Tasten weiterhin `crosspoint.select`.
+  **Verifiziert:** `crosspoint.take` schaltet PGM sofort um
+  (MJPEG-Preview zeigt den Ballwechsel ohne Take-Zwischenschritt);
+  anschließendes `crosspoint.select` auf eine andere Quelle ändert
+  nachweisbar nur `presetInput`, `programInput` bleibt unverändert
+  (curl-Roundtrip auf beide Parameter nach jedem Aufruf bestätigt).
+- **PST-Vorschau-Ausgang gewünscht** (zweiter, optional zuschaltbarer
+  MXL-Sender mit dem Preset-Bild, damit der Bildmeister vor dem Take
+  sieht, worauf er schneidet) — **explizit auf die nächste Sitzung
+  verschoben** (Projektinhaber-Entscheidung): `isel_bg` spiegelt außerhalb
+  einer Transition das *Programm*, nicht das Preset (Invarianten-
+  Kommentar in `pipeline.rs`) — ein echter PST-Tap braucht einen neuen,
+  dritten `input-selector`-Zweig plus einen zweiten `MxlVideoOutput`,
+  keine reine UI-Änderung.
+- **Per-Bus-Button-Thumbnails** (Low-Res-Vorschau direkt auf jedem
+  Crosspoint-Button) als eigene, größere Anfrage benannt, bewusst nicht
+  mitgeplant — bräuchte einen Preview-Mechanismus pro Eingang (N
+  Mini-Decodes oder Server-Thumbnails), keine Erweiterung des
+  PST-Ausgangs. Kandidat für eine eigene künftige Sitzung, evtl.
+  zusammen mit dem `omp-multiviewer`-Node.
+- §3.5 offene Frage 2 (Button-Bank-Verhalten bei vielen Quellen/Zeilen-
+  Umbruch) bleibt offen — hängt mit dem vom Projektinhaber beobachteten
+  „PST/PGM wirkt nicht horizontal"-Eindruck zusammen (`.bus-buttons`
+  hat `flex-wrap: wrap`; mit den während dieser Sitzung angesammelten
+  Registry-Leichen aus mehreren Neustarts sprangen die Reihen sichtbar
+  auf zwei Zeilen um — nach Bereinigung der Alt-Einträge wieder eine
+  Zeile). Nicht eigenständig behoben, da unklar ob echtes Layout-
+  Problem oder nur ein Nebeneffekt der Registry-Leichen dieser Sitzung.
+
+**Verifiziert:** `cargo build/test --workspace` grün (inkl. neuer
+`Command::Take`-Pfad). Live per echtem Prozess über den Instanz-
+Launcher, MJPEG-Preview-Frames extrahiert und visuell verglichen (nicht
+nur Parameter-Werte). Test-Instanzen (mehrere Mixer/Source/Player-
+Neustarts zur Livelock-Diagnose) am Ende bereinigt, Demo-Vierergespann
+(Source/Videoplayer/Mixer/Viewer) läuft wieder gesund, Speicher
+unauffällig (~700 MB von 6,5 GB).
+
+**Nächster Schritt (Vorschlag, nicht vom Projektinhaber priorisiert):**
+PST-Vorschau-Ausgang (zweiter `MxlVideoOutput` vom Preset-Zweig) als
+eigener Schritt, dann optional Per-Button-Thumbnails.

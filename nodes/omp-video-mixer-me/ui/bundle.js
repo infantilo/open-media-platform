@@ -23,11 +23,11 @@
 // außerhalb des aktuellen Scopes) statt weggelassen — "gehört zur
 // 'echtes Pult'-Anmutung" (§3.3).
 //
-// PGM-Reihe bewusst nur Anzeige, kein Hot-Cut: §3.5 offene Frage 1 ist
-// nicht entschieden, und ein Hot-Cut wäre ohne Node-Änderung nur über
-// einen impliziten "select+cut"-Umweg lösbar, der nebenbei die
-// gestagte Preset-Auswahl verwirft — zu überraschendes Verhalten für
-// einen Live-Schnitt, um es ungefragt zu implementieren.
+// PGM-Reihe: Hot-Cut (K3-Teil-2, §3.5 offene Frage 1 entschieden
+// 2026-07-16 — Projektinhaber-Feedback). Ruft `crosspoint.take`
+// (Node-seitig neu), NICHT `crosspoint.select` — schaltet das Programm
+// direkt um, ohne die gestagte Preset-Auswahl anzurühren (die PST-Reihe
+// bleibt unverändert, s. `pipeline.rs::Command::Take`-Doku).
 const WIDTH = 640;
 const HEIGHT = 480;
 const PIP_BOX = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
@@ -209,9 +209,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const makeBusButton = (label, senderId, isProgram) => {
       const btn = document.createElement("omp-button");
       btn.textContent = label;
-      if (!isProgram) {
-        btn.addEventListener("click", () => call("crosspoint.select", { senderId }));
-      }
+      const method = isProgram ? "crosspoint.take" : "crosspoint.select";
+      btn.addEventListener("click", () => call(method, { senderId }));
       return btn;
     };
 
