@@ -20,6 +20,7 @@
 // Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 
 interface UserEntry {
   id: string;
@@ -245,7 +246,7 @@ class AdminView extends HTMLElement {
   }
 
   async #deleteUser(username: string) {
-    if (!confirm(`Nutzer "${username}" wirklich löschen?`)) return;
+    if (!(await confirmDialog(`Nutzer "${username}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
     const res = await apiFetch(`/api/v1/auth/users/${encodeURIComponent(username)}`, { method: "DELETE" });
     if (!res.ok) {
       this.#error = `Löschen fehlgeschlagen: ${await res.text()}`;
@@ -293,8 +294,19 @@ class AdminView extends HTMLElement {
     await this.#loadBindings();
   }
 
-  async #deleteBinding(id: string) {
-    const res = await apiFetch(`/api/v1/admin/role-bindings/${encodeURIComponent(id)}`, { method: "DELETE" });
+  async #deleteBinding(binding: RoleBinding) {
+    // Bisher ohne jede Bestätigung (S10, docs/REVIEW-2026-07-17-
+    // SKALIERUNG-24-7.md) — ein Fehlklick entzog sofort ein Zugriffsrecht,
+    // ohne Rückfrage. Gleiches Confirm-Muster wie #deleteUser.
+    const label = binding.nodeId === "*" ? "alle Nodes" : this.#nodeLabel(binding.nodeId);
+    if (
+      !(await confirmDialog(`Rollenbindung "${binding.subject}" → ${label} (${VERB_LABEL[binding.verb] ?? binding.verb}) wirklich löschen?`, {
+        confirmLabel: "Löschen",
+      }))
+    ) {
+      return;
+    }
+    const res = await apiFetch(`/api/v1/admin/role-bindings/${encodeURIComponent(binding.id)}`, { method: "DELETE" });
     if (!res.ok) {
       this.#error = `Löschen fehlgeschlagen: ${await res.text()}`;
       this.#render();
@@ -632,7 +644,7 @@ class AdminView extends HTMLElement {
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
     delBtn.style.cssText = "font-size:11px;cursor:pointer;";
-    delBtn.addEventListener("click", () => this.#deleteBinding(b.id));
+    delBtn.addEventListener("click", () => this.#deleteBinding(b));
     actionsTd.appendChild(delBtn);
     tr.appendChild(actionsTd);
 

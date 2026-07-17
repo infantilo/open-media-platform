@@ -15,6 +15,7 @@
 // Fehlschlag setzt den geteilten ConnectionMonitor auf "degraded" statt
 // still zu bleiben.
 import { apiFetch, connectionMonitor } from "./connection.ts";
+import { showToast } from "../kit/omp-toast.ts";
 
 interface CatalogEntry {
   type: string;
@@ -162,13 +163,23 @@ class WorkflowsView extends HTMLElement {
         settings: Object.keys(settings).length > 0 ? settings : undefined,
       },
     };
-    const res = await apiFetch("/api/v1/workflows", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      alert(`Anlegen fehlgeschlagen: ${await res.text()}`);
+    // try/catch statt nur !res.ok: apiFetch() wirft bei einem
+    // Netzwerkfehler (z. B. Orchestrator gestoppt), nicht nur bei einer
+    // abgeschlossenen Antwort mit Fehlerstatus — beide Fälle sollen als
+    // Toast sichtbar werden, nicht als stiller Absturz (S10-
+    // Verifikationsfall "Orchestrator gestoppt → Toast statt alert").
+    try {
+      const res = await apiFetch("/api/v1/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        showToast(`Anlegen fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+    } catch (err) {
+      showToast(`Anlegen fehlgeschlagen: ${err}`);
       return;
     }
     this.#formName = "";
@@ -191,9 +202,14 @@ class WorkflowsView extends HTMLElement {
   }
 
   async #deleteWorkflow(id: string) {
-    const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      alert(`Löschen fehlgeschlagen: ${await res.text()}`);
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        showToast(`Löschen fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+    } catch (err) {
+      showToast(`Löschen fehlgeschlagen: ${err}`);
       return;
     }
     await this.#poll();

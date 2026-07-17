@@ -10,3 +10,5 @@ import "./omp-fader.ts";
 import "./omp-knob.ts";
 import "./omp-meter.ts";
 import "./omp-panel-section.ts";
+import "./omp-toast.ts";
+import "./omp-confirm.ts";

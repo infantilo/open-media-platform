@@ -6334,3 +6334,94 @@ erneut grün gelaufen (unverändert, wie erwartet).
 
 **Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S10
 (UI-Baustein-Konsolidierung), danach S4 (instances.json → Postgres).
+
+
+## 2026-07-17 (Nachtrag 15) — S10: UI-Baustein-Konsolidierung
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), sechster und letzter der
+drei "kleinen, hygienischen" Umsetzungsschritte aus dem
+Review-Arbeitsvorrat
+
+Sechster Schritt aus [[project_review_2026_07_17_s_steps]], letzter
+der als "klein, hygienisch" gruppierten drei (nach S5, S9).
+`workflows-view.ts` nutzte `alert()` für Fehlermeldungen,
+`admin-view.ts` `confirm()` fürs Nutzer-Löschen — beide blockieren den
+ganzen Tab (inkl. der SSE-Verbindung im Hintergrund) und sehen wie ein
+browser-eigener Fremdkörper statt Teil der Shell aus.
+Rollenbindungs-Löschen hatte gar keine Sicherheitsabfrage.
+
+**Neu in `ui/kit`:** `<omp-toast>` (`omp-toast.ts`) — Stil 1:1 aus dem
+bisherigen `#showToast()` in `ui/graph/flow-canvas.ts` extrahiert
+(fixed unten mittig, Fehlerfarbe, 4s Auto-Dismiss); `showToast(message,
+opts?)` erzeugt bei jedem Aufruf ein neues Element, hängt es an `host`
+(Default `document.body`) und entfernt es selbst wieder. `<omp-confirm>`
+(`omp-confirm.ts`) — modales, per `Promise<boolean>` auswertbares
+Overlay (Hintergrund-Klick/Escape/„Abbrechen" = false, „Bestätigen" =
+true) statt des blockierenden `window.confirm()`; `confirmDialog(message,
+opts?)` kapselt die Promise-Erzeugung, das Element entfernt sich nach
+der Antwort selbst. Beide registriert in `ui/kit/index.ts`, `flow-
+canvas.ts` selbst bleibt unverändert (kein Teil dieses Schritts).
+
+**`workflows-view.ts`:** beide `alert()`-Aufrufe (Anlegen-/Lösch-
+Fehlschlag) durch `showToast()` ersetzt — zusätzlich beide Aufrufstellen
+in `try/catch` gefasst, was vorher fehlte: `apiFetch()` wirft bei einem
+Netzwerkfehler (z. B. Orchestrator gestoppt), nicht nur bei einer
+abgeschlossenen Antwort mit Fehlerstatus (`!res.ok`) — ohne den
+try/catch wäre ein Netzwerkfehler eine stille unbehandelte Promise-
+Ablehnung gewesen, kein sichtbarer Toast (echte, beim Live-Test
+gefundene Lücke, nicht nur eine kosmetische alert()-Ersetzung).
+
+**`admin-view.ts`:** `confirm()` beim Nutzer-Löschen durch `await
+confirmDialog(...)` ersetzt. `#deleteBinding` bekommt eine neue
+Bestätigung (vorher keine) — Signatur auf die volle `RoleBinding`
+umgestellt (statt nur der ID), damit die Dialog-Nachricht Subjekt/Node/
+Verb nennen kann statt nur einer nichtssagenden ID.
+
+**`ui/index.html`:** `lang="en"` → `lang="de"`.
+
+**Sprachdurchsicht (S10: "eine Sprache, Deutsch"):** ein echter Fund in
+`app-shell.ts`s Disconnected-Banner — `retryBtn.textContent =
+"Reconnect now"` und das Countdown-Label `"Connection to orchestrator
+lost — retrying in ${secs}s"` waren komplett auf Englisch, obwohl
+`connection.ts`s eigener Kommentar bereits "Jetzt verbinden"-Knopf" als
+beabsichtigten deutschen Text dokumentierte — eine echte
+Diskrepanz zwischen Doku-Absicht und ausgeliefertem String, nicht nur
+eine kosmetische Übersetzung. Beide auf Deutsch korrigiert
+("Jetzt verbinden" / "Verbindung zum Orchestrator verloren — neuer
+Versuch in ${secs}s"). Restliche Durchsicht über alle
+`ui/shell/*.ts`/`ui/graph/*.ts`-Textstellen ergab keine weiteren
+Englisch-Reste (nur unauffällige, im gesamten Projekt übliche
+Fachbegriff-Leihwörter wie „Snapshot"/„Host"/„Descriptor").
+
+**Tests:** `deno check`/`deno test ui/` (40/40) grün, `deno bundle`
+erfolgreich (23 statt vorher 21 Module — die beiden neuen
+`ui/kit`-Bausteine sind mit im Bundle).
+
+**Live verifiziert per CDP** (echter Orchestrator, drei getrennte
+Testläufe plus ein gezielter Orchestrator-Stop-Testlauf):
+- Rollenbindung angelegt, gezielt (per Zeileninhalt, nicht der ersten
+  Fundstelle) auf „Löschen" geklickt → `<omp-confirm>` erschien mit der
+  korrekten Nachricht (Subjekt, Node, Verb genannt); „Abbrechen" ließ
+  die Bindung unangetastet, ein zweiter Löschen-Klick + „Löschen"-
+  Bestätigung entfernte sie tatsächlich.
+- Testnutzer angelegt, gezielt gelöscht (erster Versuch traf versehentlich
+  „admin" statt des Testnutzers — ein reiner Verifikationsskript-Fehler,
+  keine Anwendungs-Ursache; **die Selbstschutz-Logik aus K11-Teil-1
+  griff live und lehnte die versehentliche Selbstlöschung des letzten
+  Admins korrekt ab**, `admin` blieb unversehrt) — beim gezielten
+  zweiten Versuch zeigte der Dialog korrekt den Testnutzernamen,
+  Bestätigung löschte ihn, `admin` blieb unverändert bestehen.
+- **Kernverifikation des Reviews** ("Orchestrator gestoppt → Toast
+  statt alert"): Seite bei laufendem Orchestrator geladen, Orchestrator
+  per `make stop` beendet (Seite blieb offen, keine Neu-Navigation),
+  Workflow-Anlage-Formular ausgefüllt und „Anlegen" geklickt →
+  `<omp-toast data-role="toast">` erschien mit „Anlegen fehlgeschlagen:
+  TypeError: Failed to fetch" — der Netzwerkfehler-Pfad (nicht nur der
+  `!res.ok`-Pfad) funktioniert wie vorgesehen.
+- Nach der Verifikation: keine Test-Artefakte übrig (Nutzerliste nur
+  `admin`, Rollenbindungen nur die schon vor der Sitzung vorhandenen,
+  Workflow-Liste leer).
+
+**Damit sind alle drei "kleinen, hygienischen" Schritte (S5, S9, S10)
+abgeschlossen.** Nächster Schritt laut Reihenfolge-Empfehlung: **S4**
+(instances.json → Postgres), danach S6 (größter Brocken, Kapitel-12-
+Einstieg), S7/S8 nach Bedarf.

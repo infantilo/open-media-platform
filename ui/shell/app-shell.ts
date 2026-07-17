@@ -224,14 +224,14 @@ class AppShell extends HTMLElement {
     const label = document.createElement("span");
     const retryBtn = document.createElement("button");
     retryBtn.type = "button";
-    retryBtn.textContent = "Reconnect now";
+    retryBtn.textContent = "Jetzt verbinden";
     retryBtn.style.cssText = "cursor:pointer;font-size:var(--omp-font-size-xs);";
     retryBtn.addEventListener("click", () => connectionMonitor.reconnectNow());
     this.#bannerEl.replaceChildren(label, retryBtn);
 
     const tick = () => {
       const secs = nextRetryAt ? Math.max(0, Math.ceil((nextRetryAt - Date.now()) / 1000)) : 0;
-      label.textContent = `Connection to orchestrator lost — retrying in ${secs}s`;
+      label.textContent = `Verbindung zum Orchestrator verloren — neuer Versuch in ${secs}s`;
     };
     tick();
     this.#countdownHandle = setInterval(tick, 1000);
