@@ -603,3 +603,195 @@ func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
 		t.Errorf("List() = %+v, want empty after Stop()", l.List())
 	}
 }
+
+// --- S3: HandleRemoteExit (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+
+func exitEventJSON(t *testing.T, instanceID string, exitCode int, stderrTail string) []byte {
+	t.Helper()
+	data, err := json.Marshal(remoteExitEvent{InstanceID: instanceID, ExitCode: exitCode, StderrTail: stderrTail})
+	if err != nil {
+		t.Fatalf("marshal exit event: %v", err)
+	}
+	return data
+}
+
+// TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver ist das
+// Remote-Pendant zu TestLauncherAutoRestartsCrashedInstanceInPlace:
+// dieselbe Instanz-ID, hochgezähltes RestartCount, instance.restarted-
+// Event, RestartObserver benachrichtigt — nur über ein Remote-Start-
+// Kommando statt eines lokalen os/exec-Aufrufs.
+func TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver(t *testing.T) {
+	shortCrashRestartTiming(t, 10*time.Millisecond, time.Minute)
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
+	pub := &recordingPublisher{}
+	obs := &recordingRestartObserver{}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), pub, fake)
+	l.SetRestartObserver(obs)
+
+	inst, err := l.Start("omp-source", "host-1", map[string]string{"OMP_WIDTH": "1280"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	fake.response = remoteResponse{OK: true, PID: 9999}
+	l.HandleRemoteExit("host-1", exitEventJSON(t, inst.ID, 1, "boom"))
+
+	list := l.List()
+	if len(list) != 1 || list[0].ID != inst.ID {
+		t.Fatalf("List() = %+v, want one entry for %s (restart-in-place)", list, inst.ID)
+	}
+	if list[0].Crashed {
+		t.Errorf("List()[0].Crashed = true, want false after a successful auto-restart")
+	}
+	if list[0].RestartCount != 1 {
+		t.Errorf("List()[0].RestartCount = %d, want 1", list[0].RestartCount)
+	}
+	if list[0].PID != 9999 {
+		t.Errorf("List()[0].PID = %d, want 9999 (from the restart response)", list[0].PID)
+	}
+
+	var sent remoteCommand
+	if err := json.Unmarshal(fake.lastPayload, &sent); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
+	if sent.Action != "start" || sent.Type != "omp-source" || sent.InstanceID != inst.ID {
+		t.Errorf("sent restart command = %+v, unexpected", sent)
+	}
+	if sent.ExtraEnv["OMP_WIDTH"] != "1280" {
+		t.Errorf("sent restart command ExtraEnv = %+v, want OMP_WIDTH=1280 (replayed from the original start)", sent.ExtraEnv)
+	}
+
+	events := pub.snapshot()
+	foundRestarted := false
+	for _, e := range events {
+		if e.Type == "instance.restarted" && strings.Contains(string(e.Data), inst.ID) {
+			foundRestarted = true
+		}
+	}
+	if !foundRestarted {
+		t.Errorf("Broadcast events = %+v, want an instance.restarted event containing %s", events, inst.ID)
+	}
+
+	obsIDs := obs.snapshot()
+	if len(obsIDs) != 1 || obsIDs[0] != inst.ID {
+		t.Errorf("RestartObserver.InstanceRestarted calls = %v, want exactly [%s]", obsIDs, inst.ID)
+	}
+}
+
+// TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting ist das
+// Remote-Pendant zu TestLauncherCrashLoopBrakeStopsAutoRestarting.
+func TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
+	shortCrashRestartTiming(t, time.Millisecond, time.Minute)
+	origMax := maxCrashRestarts
+	maxCrashRestarts = 2
+	t.Cleanup(func() { maxCrashRestarts = origMax })
+
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1111}}
+	pub := &recordingPublisher{}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), pub, fake)
+
+	inst, err := l.Start("omp-source", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// maxCrashRestarts=2: die ersten beiden Exit-Events lösen noch einen
+	// Neustart aus, das dritte trifft auf die Bremse.
+	l.HandleRemoteExit("host-1", exitEventJSON(t, inst.ID, 1, "crash 1"))
+	l.HandleRemoteExit("host-1", exitEventJSON(t, inst.ID, 1, "crash 2"))
+	l.HandleRemoteExit("host-1", exitEventJSON(t, inst.ID, 1, "crash 3"))
+
+	list := l.List()
+	if len(list) != 1 || list[0].ID != inst.ID {
+		t.Fatalf("List() = %+v, want one entry for %s", list, inst.ID)
+	}
+	if !list[0].Crashed {
+		t.Errorf("List()[0].Crashed = false after exceeding maxCrashRestarts, want true")
+	}
+	if !strings.Contains(list[0].CrashMessage, "Crash-Loop erkannt") {
+		t.Errorf("CrashMessage = %q, want it to mention the crash-loop brake", list[0].CrashMessage)
+	}
+
+	events := pub.snapshot()
+	foundCrashed := false
+	for _, e := range events {
+		if e.Type == "instance.crashed" && strings.Contains(string(e.Data), inst.ID) {
+			foundCrashed = true
+		}
+	}
+	if !foundCrashed {
+		t.Errorf("Broadcast events = %+v, want an instance.crashed event containing %s", events, inst.ID)
+	}
+}
+
+// TestHandleRemoteExitIgnoresUnknownInstance — ein Exit-Event für eine
+// nicht (mehr) getrackte Instanz (z. B. bereits per Stop() entfernt,
+// Race zwischen Stop() und Prozessende) darf keinen Neustart auslösen.
+func TestHandleRemoteExitIgnoresUnknownInstance(t *testing.T) {
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	l.HandleRemoteExit("host-1", exitEventJSON(t, "does-not-exist", 1, ""))
+
+	if fake.lastSubject != "" {
+		t.Errorf("lastSubject = %q, want no command sent for an unknown instance", fake.lastSubject)
+	}
+	if len(l.List()) != 0 {
+		t.Errorf("List() = %+v, want empty", l.List())
+	}
+}
+
+// TestHandleRemoteExitIgnoresEventFromWrongHost — Vertrauensgrenze:
+// ein Exit-Event, dessen Subject-hostID nicht zum HostID der getrackten
+// Instanz passt, wird ignoriert (kein Host kann im Namen eines anderen
+// Hosts einen Neustart auslösen).
+func TestHandleRemoteExitIgnoresEventFromWrongHost(t *testing.T) {
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	inst, err := l.Start("omp-source", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	fake.lastSubject = "" // Start() selbst hat schon ein Kommando gesendet — zurücksetzen
+
+	l.HandleRemoteExit("host-2", exitEventJSON(t, inst.ID, 1, ""))
+
+	if fake.lastSubject != "" {
+		t.Errorf("lastSubject = %q, want no restart command sent for an event from the wrong host", fake.lastSubject)
+	}
+	list := l.List()
+	if len(list) != 1 || list[0].Crashed {
+		t.Errorf("List() = %+v, want the instance untouched (not marked crashed) by a foreign-host event", list)
+	}
+}
+
+// TestHandleRemoteExitStopDuringBackoffSkipsRestart — Stop() während
+// des crashRestartBackoff-Delays muss den Neustart verhindern (gleiche
+// Race-Absicherung wie supervise()'s lokaler Pfad).
+func TestHandleRemoteExitStopDuringBackoffSkipsRestart(t *testing.T) {
+	shortCrashRestartTiming(t, 200*time.Millisecond, time.Minute)
+	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
+	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+
+	inst, err := l.Start("omp-source", "host-1", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		l.HandleRemoteExit("host-1", exitEventJSON(t, inst.ID, 1, ""))
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond) // sicherstellen, dass HandleRemoteExit schon im Backoff-Sleep steckt
+	if err := l.Stop(inst.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	<-done
+
+	if len(l.List()) != 0 {
+		t.Errorf("List() = %+v, want empty (Stop() during backoff must win)", l.List())
+	}
+}

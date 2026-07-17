@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -52,6 +53,28 @@ func (r natsRequester) RequestBytes(subject string, data []byte, timeout time.Du
 		return nil, err
 	}
 	return msg.Data, nil
+}
+
+// hostEventsSubjectPrefix/-Suffix identifizieren die S3-Prozessende-
+// Events eines Host-Agent ("omp.host.<hostId>.events") — gleiches
+// Muster wie eventbus.go's hostIDFromMetricsSubject, hier lokal statt
+// dort, weil der Konsument (launcherSvc.HandleRemoteExit) erst nach
+// eventbus.Connect existiert (s. Kommentar bei der Subscription unten).
+const (
+	hostEventsSubjectPrefix = "omp.host."
+	hostEventsSubjectSuffix = ".events"
+)
+
+func hostIDFromEventsSubject(subject string) (string, bool) {
+	rest, ok := strings.CutPrefix(subject, hostEventsSubjectPrefix)
+	if !ok {
+		return "", false
+	}
+	hostID, ok := strings.CutSuffix(rest, hostEventsSubjectSuffix)
+	if !ok || hostID == "" {
+		return "", false
+	}
+	return hostID, true
 }
 
 func main() {
@@ -158,6 +181,34 @@ func main() {
 		launcherNATS = natsRequester{nc: nc}
 	}
 	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub, launcherNATS)
+
+	// S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Remote-Parität für
+	// Instanzen — der Host-Agent meldet ein unerwartetes Prozessende auf
+	// omp.host.<hostId>.events (host-agent/internal/commands.
+	// Executor.publishExit), der Launcher behandelt es wie das lokale
+	// cmd.Wait()-Ende (gleiche Crash-Loop-Bremse, gleiches
+	// instance.restarted-Event, s. Launcher.HandleRemoteExit). Eigene
+	// Subscription statt eventbus.Connect-Erweiterung (oben, vor
+	// launcherSvc' Konstruktion aufgerufen) — HandleRemoteExit existiert
+	// erst ab hier. Der generische "omp.>"-Passthrough oben leitet diese
+	// Nachrichten zusätzlich als rohes SSE-Event weiter (harmlos, die UI
+	// kennt den Typ nicht und ignoriert ihn) — keine doppelte
+	// Geschäftslogik, nur ein zweiter, unabhängiger Konsument derselben
+	// NATS-Nachricht.
+	if nc != nil {
+		hostEventsSub, err := nc.Subscribe("omp.host.*.events", func(msg *nats.Msg) {
+			hostID, ok := hostIDFromEventsSubject(msg.Subject)
+			if !ok {
+				return
+			}
+			launcherSvc.HandleRemoteExit(hostID, msg.Data)
+		})
+		if err != nil {
+			slog.Warn("host exit event subscribe failed", "error", err)
+		} else {
+			defer hostEventsSub.Unsubscribe()
+		}
+	}
 
 	// Nutzer-/Rollenmodell (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2)
 	// — ersetzt die bisherige data/role-bindings.json (C13-Stub) durch

@@ -142,6 +142,15 @@ type Instance struct {
 	// wie oft eine Instanz insgesamt schon neu gestartet ist (gleiches
 	// Prinzip wie PIPELINE CONTROLLERs `supervisor.js:412`-Zähler).
 	RestartCount int `json:"restartCount,omitempty"`
+	// ExtraEnv ist das beim ursprünglichen Start übergebene extraEnv
+	// (s. Start-Doku) — für lokale Instanzen nur zur Vollständigkeit
+	// mitgeführt (der eigentliche Neustart-Pfad liest es dort aus der
+	// supervise()-Goroutine-Closure, nicht aus diesem Feld); für
+	// entfernte Instanzen (S3) ist dieses Feld die **einzige** Quelle,
+	// aus der HandleRemoteExit ein extraEnv beim automatischen Neustart
+	// erneut mitschicken kann, weil es dort keine langlebige
+	// Supervisor-Goroutine gibt, die es sich sonst merken könnte.
+	ExtraEnv map[string]string `json:"extraEnv,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -254,14 +263,17 @@ func (l *Launcher) List() []Instance {
 // docs/END-GOAL-FEATURES.md §15.3c), die pro Workflow-Start variieren,
 // ohne den Katalog selbst zu ändern. Darf nil sein (z. B. ein direkter
 // Katalog-Start über die Palette, ohne Workflow-Kontext).
-// **Nur für lokale Starts wirksam** — der Remote-Pfad (§18.5) schickt
-// laut Sicherheitsgrenze (Paketkommentar) nur einen Typnamen an den
-// Host-Agent, keine freien Parameter; extraEnv wird dort derzeit
-// stillschweigend ignoriert (dokumentierte Folgearbeit, wie schon die
-// fehlende Remote-Crash-Erkennung aus D6 Teil 2/K7-Teil-1).
+// Seit S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) auch für Remote-
+// Starts wirksam — der Host-Agent prüft jeden extraEnv-Schlüssel gegen
+// seine eigene Allowlist (host-agent/internal/commands.
+// allowedExtraEnvKeys, zunächst nur OMP_WIDTH/OMP_HEIGHT) und lehnt die
+// gesamte Start-Anfrage ab, wenn ein nicht gelisteter Schlüssel dabei
+// ist — die Sicherheitsgrenze aus dem Paketkommentar ("nur
+// Katalog-Einträge, keine freien Kommandos") bleibt intakt, sie gilt
+// jetzt zusätzlich für Umgebungsvariablen statt nur für den Node-Typ.
 func (l *Launcher) Start(nodeType, hostID string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID)
+		return l.startRemote(nodeType, hostID, extraEnv)
 	}
 	return l.startLocal(nodeType, extraEnv)
 }
@@ -290,7 +302,7 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -461,8 +473,10 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 // Sicherheitsgrenze "nur Katalog-Einträge" liegt für den Remote-Fall
 // beim Agent, s. Paketkommentar). ErrUnknownType/ErrUnsupportedRunner
 // werden deshalb hier nicht geprüft; ein unbekannter Typ auf dem
-// Zielhost kommt als Fehler in der Kommando-Antwort zurück.
-func (l *Launcher) startRemote(nodeType, hostID string) (Instance, error) {
+// Zielhost kommt als Fehler in der Kommando-Antwort zurück. extraEnv
+// (S3) wird mitgeschickt — der Host-Agent prüft es gegen seine eigene
+// Allowlist, s. `Start`-Doku.
+func (l *Launcher) startRemote(nodeType, hostID string, extraEnv map[string]string) (Instance, error) {
 	if l.nc == nil {
 		return Instance{}, ErrRemoteUnavailable
 	}
@@ -478,6 +492,7 @@ func (l *Launcher) startRemote(nodeType, hostID string) (Instance, error) {
 		Type:       nodeType,
 		InstanceID: id,
 		Label:      label,
+		ExtraEnv:   extraEnv,
 	})
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s: %w", hostID, err)
@@ -486,7 +501,7 @@ func (l *Launcher) startRemote(nodeType, hostID string) (Instance, error) {
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s failed: %s", hostID, resp.Error)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv}
 	l.mu.Lock()
 	l.instances[id] = inst
 	if err := l.saveState(); err != nil {
@@ -503,10 +518,11 @@ func (l *Launcher) startRemote(nodeType, hostID string) (Instance, error) {
 // eigenständiges Go-Modul (analog nodes/mock), kein gemeinsames
 // drittes Paket für ein derart schmales Format.
 type remoteCommand struct {
-	Action     string `json:"action"`
-	Type       string `json:"type,omitempty"`
-	InstanceID string `json:"instanceId"`
-	Label      string `json:"label,omitempty"`
+	Action     string            `json:"action"`
+	Type       string            `json:"type,omitempty"`
+	InstanceID string            `json:"instanceId"`
+	Label      string            `json:"label,omitempty"`
+	ExtraEnv   map[string]string `json:"extraEnv,omitempty"`
 }
 
 type remoteResponse struct {
@@ -530,6 +546,144 @@ func (l *Launcher) sendCommand(hostID string, cmd remoteCommand) (remoteResponse
 		return remoteResponse{}, fmt.Errorf("decode response: %w", err)
 	}
 	return resp, nil
+}
+
+// remoteExitEvent spiegelt host-agent/internal/commands.ExitEvent
+// (bewusst dupliziert, s. remoteCommand-Kommentar oben).
+type remoteExitEvent struct {
+	InstanceID string `json:"instanceId"`
+	ExitCode   int    `json:"exitCode"`
+	StderrTail string `json:"stderrTail,omitempty"`
+}
+
+// HandleRemoteExit verarbeitet ein vom Host-Agent gemeldetes
+// unerwartetes Prozessende (S3, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md
+// — omp.host.<hostId>.events, main.go verdrahtet dies an eine eigene
+// NATS-Subscription). Remote-Pendant zu supervise()'s lokalem
+// cmd.Wait()-Ende: gleiche Crash-Loop-Bremse (recordRestartLocked),
+// gleiche instance.crashed/instance.restarted-Events, Neustart als
+// Remote-Start-Kommando statt eines lokalen os/exec-Aufrufs. hostID
+// kommt aus dem NATS-Subject, nicht aus dem Payload — der Host-Agent
+// kann laut NATS-Subject-Konvention nur für sich selbst Events
+// veröffentlichen, nie im Namen eines anderen Hosts (dieselbe
+// Vertrauensgrenze wie bei omp.host.<hostId>.metrics).
+func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
+	var ev remoteExitEvent
+	if err := json.Unmarshal(payload, &ev); err != nil {
+		slog.Warn("launcher: malformed remote exit event", "host_id", hostID, "error", err)
+		return
+	}
+	if ev.InstanceID == "" {
+		return
+	}
+
+	l.mu.Lock()
+	current, tracked := l.instances[ev.InstanceID]
+	l.mu.Unlock()
+	if !tracked || current.HostID != hostID {
+		// Unbekannte/fremde Instanz — z. B. ein bereits per Stop()
+		// entfernter Eintrag, dessen Exit-Event nach der lokalen
+		// Buchführung ankam (Race zwischen Stop() und Prozessende,
+		// gleiche Race-Klasse wie beim lokalen supervise(), s. dortige
+		// "noch in l.instances getrackt?"-Prüfung).
+		return
+	}
+
+	msg := ev.StderrTail
+	if msg == "" {
+		msg = "Prozess unerwartet beendet"
+	}
+	if ev.ExitCode != 0 {
+		msg = fmt.Sprintf("exit code %d: %s", ev.ExitCode, msg)
+	}
+
+	l.mu.Lock()
+	shouldRestart, restartCount := l.recordRestartLocked(ev.InstanceID)
+	if !shouldRestart {
+		current.Crashed = true
+		current.CrashMessage = fmt.Sprintf(
+			"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
+			msg, maxCrashRestarts, crashRestartWindow)
+		current.RestartCount = restartCount
+		l.instances[ev.InstanceID] = current
+		if err := l.saveState(); err != nil {
+			slog.Warn("launcher: failed to persist instance state", "error", err)
+		}
+		l.mu.Unlock()
+
+		slog.Warn("launcher: remote crash loop detected, giving up auto-restart",
+			"id", ev.InstanceID, "host_id", hostID, "restarts", restartCount)
+		l.publishCrash(current)
+		return
+	}
+	l.mu.Unlock()
+
+	slog.Warn("launcher: remote instance exited unexpectedly, restarting",
+		"id", ev.InstanceID, "host_id", hostID, "exit_code", ev.ExitCode, "attempt", restartCount)
+	time.Sleep(crashRestartBackoff)
+
+	l.mu.Lock()
+	current, tracked = l.instances[ev.InstanceID]
+	l.mu.Unlock()
+	if !tracked {
+		// Stop() während des Backoffs — nicht mehr neu starten.
+		return
+	}
+
+	resp, err := l.sendCommand(hostID, remoteCommand{
+		Action:     "start",
+		Type:       current.Type,
+		InstanceID: ev.InstanceID,
+		Label:      current.Label,
+		ExtraEnv:   current.ExtraEnv,
+	})
+	if err != nil || !resp.OK {
+		errMsg := resp.Error
+		if err != nil {
+			errMsg = err.Error()
+		}
+		l.mu.Lock()
+		current, tracked = l.instances[ev.InstanceID]
+		if tracked {
+			current.Crashed = true
+			current.CrashMessage = fmt.Sprintf("Neustart fehlgeschlagen: %s", errMsg)
+			current.RestartCount = restartCount
+			l.instances[ev.InstanceID] = current
+			if saveErr := l.saveState(); saveErr != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", saveErr)
+			}
+		}
+		l.mu.Unlock()
+		if tracked {
+			l.publishCrash(current)
+		}
+		return
+	}
+
+	l.mu.Lock()
+	current, tracked = l.instances[ev.InstanceID]
+	if !tracked {
+		// Stop() lief exakt während des Neustart-Kommandos — den frisch
+		// gestarteten Ersatzprozess wieder stoppen, nicht verwaisen
+		// lassen (gleiches Prinzip wie supervise()'s "newCmd.Process.Kill()").
+		l.mu.Unlock()
+		_, _ = l.sendCommand(hostID, remoteCommand{Action: "stop", InstanceID: ev.InstanceID})
+		return
+	}
+	current.PID = resp.PID
+	current.Crashed = false
+	current.CrashMessage = ""
+	current.RestartCount = restartCount
+	l.instances[ev.InstanceID] = current
+	if err := l.saveState(); err != nil {
+		slog.Warn("launcher: failed to persist instance state", "error", err)
+	}
+	l.mu.Unlock()
+
+	l.publishRestarted(current)
+	if l.restartObserver != nil {
+		l.restartObserver.InstanceRestarted(ev.InstanceID)
+	}
 }
 
 // publishCrash meldet ein "instance.crashed"-SSE-Event, falls ein

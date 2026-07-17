@@ -106,7 +106,7 @@ func main() {
 	}
 	defer nc.Close()
 
-	executor := commands.NewExecutor(cat, registryURL, natsURL)
+	executor := commands.NewExecutor(cat, registryURL, natsURL, st.HostID, nc)
 	cmdSubject := fmt.Sprintf("omp.host.%s.cmd", st.HostID)
 	cmdSub, err := nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		req, err := commands.DecodeRequest(msg.Data)

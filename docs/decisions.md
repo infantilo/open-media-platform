@@ -6066,3 +6066,124 @@ reagiert).
 **Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):** S3
 (Remote-Parität für Instanzen — Host-Agent-Crash-Events über NATS,
 Auto-Restart, `extraEnv`-Allowlist).
+
+
+## 2026-07-17 (Nachtrag 12) — S3: Remote-Parität für Instanzen
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), dritter Umsetzungsschritt
+aus dem Review-Arbeitsvorrat — größte einzelne 24/7-Lücke geschlossen
+
+Dritter Schritt aus [[project_review_2026_07_17_s_steps]], nach S1
+(Graph-Edge-Cache) und S2 (SSE-first UI). Bisher (D6 Teil 2,
+2026-07-14) galt dokumentiert: ein auf einem Remote-Host abgestürzter
+Prozess wurde vom dortigen Host-Agent per `cmd.Wait()` zwar erkannt,
+aber nie an den Orchestrator zurückgemeldet — anders als lokale
+Instanzen (K7-Teil-1) blieb eine remote abgestürzte Instanz bis zum
+manuellen Entfernen als "laufend" gelistet, keine Crash-Loop-Bremse,
+kein Auto-Restart, keine Workflow-Rewire. Dieser Schritt schließt genau
+diese Lücke, symmetrisch zum lokalen Pfad.
+
+**Host-Agent (`host-agent/internal/commands/commands.go`):**
+`Executor` bekommt `hostID`/`nc Publisher` (`Publisher` = schmales
+Interface `Publish(subject string, data []byte) error`, von `*nats.Conn`
+implizit erfüllt — Testbarkeit ohne echte NATS-Verbindung, gleiches
+Muster wie `launcher.NATSRequester`). Ein Prozess, der nicht über
+`stop()` beendet wurde (neue `stopping map[string]bool`-Buchführung
+unterscheidet erwartetes von unerwartetem Ende), löst `publishExit()`
+aus: `ExitEvent{instanceId, exitCode, stderrTail}` auf
+`omp.host.<hostId>.events`. `exitCode` ist -1 bei Signal-Beendigung
+(Go-Konvention `ProcessState.ExitCode()`). stderr wird jetzt zusätzlich
+in einen `tailBuffer` gespiegelt (identische Logik zu
+`orchestrator/internal/launcher.tailBuffer`, bewusste kleine
+Duplikation wie schon `buildEnv`) — Grundlage für `stderrTail`.
+`Request.ExtraEnv` (S3) wird gegen eine feste Allowlist
+(`allowedExtraEnvKeys`, zunächst `OMP_WIDTH`/`OMP_HEIGHT`) geprüft;
+jeder nicht gelistete Schlüssel lässt die gesamte Start-Anfrage
+scheitern — dieselbe Sicherheitsgrenze wie beim Node-Typ selbst ("der
+Agent-lokale Katalog entscheidet, was läuft"), nur für
+Umgebungsvariablen.
+
+**Orchestrator (`internal/launcher/launcher.go`):** neue
+`Instance.ExtraEnv`-Feld (bei lokalen Instanzen nur zur
+Vollständigkeit — der eigentliche lokale Neustart-Pfad liest extraEnv
+weiterhin aus der `supervise()`-Goroutine-Closure; bei entfernten
+Instanzen ist dieses Feld die **einzige** Quelle, aus der ein
+automatischer Neustart extraEnv erneut mitschicken kann, weil es dort
+keine langlebige Supervisor-Goroutine gibt). `startRemote` nimmt jetzt
+`extraEnv` entgegen und schickt es im `remoteCommand`-Payload mit
+(`workflows.Service.runStart` reichte extraEnv schon immer
+hostID-unabhängig durch — nur `startRemote` hat es bisher stillschweigend
+ignoriert, jetzt behoben). Neue `Launcher.HandleRemoteExit(hostID
+string, payload []byte)` — Remote-Pendant zu `supervise()`s lokalem
+`cmd.Wait()`-Ende: gleiche Crash-Loop-Bremse (`recordRestartLocked`),
+gleiche `instance.crashed`/`instance.restarted`-Events, Neustart als
+`remoteCommand{Action:"start"}` statt eines lokalen `os/exec`-Aufrufs,
+inkl. derselben Race-Absicherungen (Stop() während Backoff, Stop()
+exakt während des Neustart-Kommandos → frisch gestarteten Ersatzprozess
+wieder stoppen). `hostID` kommt aus dem NATS-Subject, nicht aus dem
+Payload — ein Host kann laut Subject-Konvention nur für sich selbst
+Events veröffentlichen (Vertrauensgrenze, s. neuer Test
+`TestHandleRemoteExitIgnoresEventFromWrongHost`).
+
+**`main.go`:** eigene `nc.Subscribe("omp.host.*.events", …)`-Registrierung
+nach `launcherSvc`s Konstruktion (nicht über `eventbus.Connect`s
+generischen `onHostMetrics`-Callback-Mechanismus erweitert — der wird
+weit vor `launcherSvc` aufgerufen, `HandleRemoteExit` existiert zu dem
+Zeitpunkt noch nicht; eine eigene, spätere Subscription vermeidet jede
+Ordnungs-Race und hält `eventbus.go` unverändert). Der bereits
+bestehende `omp.>`-Passthrough leitet dieselbe Nachricht zusätzlich als
+rohes, von der UI ignoriertes SSE-Event weiter — harmlose Doppelnutzung
+derselben NATS-Nachricht, keine doppelte Geschäftslogik.
+
+**Tests:** Host-Agent — sechs neue Tests in `commands_test.go`
+(`fakePublisher`-Test-Double, u. a. `TestUnexpectedExitPublishesExitEvent`,
+`TestExpectedStopDoesNotPublishExitEvent`,
+`TestStartRejectsNonAllowlistedExtraEnvKey`,
+`TestStartAllowsAllowlistedExtraEnvKeys`). Orchestrator — sechs neue
+Tests in `launcher_test.go`
+(`TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver`,
+`TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting`,
+`TestHandleRemoteExitIgnoresUnknownInstance`,
+`TestHandleRemoteExitIgnoresEventFromWrongHost`,
+`TestHandleRemoteExitStopDuringBackoffSkipsRestart`). `go build`/
+`go vet`/`go test ./...` für beide Module grün (`-p 1` zur Bestätigung,
+s. u.).
+
+**Live verifiziert** (echter Orchestrator, Postgres, NATS, NMOS-Registry,
+zweiter echter `omp-host-agent`-Prozess auf derselben Dev-Maschine als
+simulierter Remote-Host, gleiches Zwei-Host-Testmuster wie D6 Teil 1/2 —
+eigener Katalog/State/Label, registriert über ein echtes
+Admin-Bootstrap-Token):
+- Remote-`omp-source`-Instanz gestartet, echter PID auf dem
+  Host-Agent-Prozess bestätigt, NMOS-Selbstregistrierung bestätigt.
+- `kill -9` auf den echten Prozess → Host-Agent-Log zeigt
+  `instance exited unexpectedly` mit `exit_code:-1`, Orchestrator-Log
+  zeigt `remote instance exited unexpectedly, restarting` →
+  `GET /api/v1/instances` zeigt dieselbe Instanz-ID mit neuer PID und
+  `restartCount:1`, neuer Prozess läuft nachweislich (`ps`), neue
+  NMOS-Registrierung mit demselben `urn:x-omp:instance`-Tag — exakte
+  Parität zum lokalen K7-Teil-1-Verhalten.
+- Workflow mit `settings.programWidth/Height = 960×540` und einer Rolle
+  mit `hostId` auf den Remote-Host gestartet → NMOS-Registry zeigt den
+  Sender-Flow mit `frame_width:960, frame_height:540` — bestätigt, dass
+  die extraEnv-Allowlist (`OMP_WIDTH`/`OMP_HEIGHT`) end-to-end
+  durchgereicht wird, nicht nur im Unit-Test.
+- Die Allowlist-Ablehnung selbst (nicht gelisteter Schlüssel) ist
+  deterministisch in `commands_test.go` abgedeckt
+  (`TestStartRejectsNonAllowlistedExtraEnvKey`); ein zusätzlicher
+  Live-Test dafür wurde als redundant bewertet (identischer Codepfad,
+  kein zusätzlicher Erkenntnisgewinn).
+- Nach der Verifikation: Test-Instanzen/-Workflow gestoppt und
+  gelöscht, zweiter Host-Agent-Prozess beendet, Test-Host aus der DB
+  entfernt (gleiche Aufräum-Disziplin wie D6 Teil 1/2).
+
+**Beobachtet, nicht Teil dieser Änderung:** `TestLauncherStopSendsSig
+killIfSigtermIgnored` schlägt gelegentlich fehl, wenn `go test ./...`
+alle Pakete parallel laufen lässt (CPU-Kontention zwischen mehreren
+gleichzeitig echte Subprozesse startenden Testpaketen) — mit `-p 1`
+oder isoliert (`go test ./internal/launcher/...`, mehrfach wiederholt)
+durchweg grün. Der Diff dieser Sitzung fasst keine Zeile SIGTERM/
+SIGKILL-Logik an; vorbestehende Lastempfindlichkeit, keine Regression,
+nicht behoben (außerhalb des S3-Scopes).
+
+**Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):**
+S5/S9/S10 (klein, hygienisch), danach S4 (instances.json → Postgres).
