@@ -172,6 +172,10 @@ type fakeAuthSvc struct {
 	loginErr        error
 	createdUser     auth.User
 	createErr       error
+	listedUsers     []auth.User
+	listErr         error
+	deleteErr       error
+	setPasswordErr  error
 }
 
 func (f fakeAuthSvc) UserCount(ctx context.Context) (int, error) { return f.userCount, nil }
@@ -186,6 +190,18 @@ func (f fakeAuthSvc) Login(ctx context.Context, username, password string) (stri
 
 func (f fakeAuthSvc) CreateUser(ctx context.Context, username, password string) (auth.User, error) {
 	return f.createdUser, f.createErr
+}
+
+func (f fakeAuthSvc) ListUsers(ctx context.Context) ([]auth.User, error) {
+	return f.listedUsers, f.listErr
+}
+
+func (f fakeAuthSvc) DeleteUser(ctx context.Context, username string) error {
+	return f.deleteErr
+}
+
+func (f fakeAuthSvc) SetPassword(ctx context.Context, username, password string) error {
+	return f.setPasswordErr
 }
 
 // fakeAuthzSvc ist ein Test-Double für AuthzChecker.

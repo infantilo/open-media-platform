@@ -11,9 +11,11 @@ import "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./alarm-view.ts";
+import "./admin-view.ts";
 import { type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
+import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "hosts" | "alarms";
+type TabId = "flow" | "workflows" | "hosts" | "alarms" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -21,7 +23,7 @@ interface TabDef {
   element: string;
 }
 
-const TABS: TabDef[] = [
+const BASE_TABS: TabDef[] = [
   { id: "flow", label: "Flow Editor", element: "omp-flow-canvas" },
   { id: "workflows", label: "Workflows", element: "omp-workflows-view" },
   { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
@@ -29,6 +31,12 @@ const TABS: TabDef[] = [
   // Alarm-View, vierter Tab neben Flow-Editor/Workflows/Hosts.
   { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
 ];
+
+// Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): eigener Tab statt
+// Teil von BASE_TABS, weil er nur bei whoami().isAdmin nachträglich
+// angehängt wird (admin-Verb ODER Bootstrap-Modus, s. auth_handlers.go:
+// handleWhoami) — für alle anderen Nutzer bleibt die Bar unverändert.
+const ADMIN_TAB: TabDef = { id: "admin", label: "Administration", element: "omp-admin-view" };
 
 const PILL_LABEL: Record<ConnectionState, string> = {
   connected: "● Connected",
@@ -48,6 +56,7 @@ const TAB_BUTTON_BASE =
 
 class AppShell extends HTMLElement {
   #activeTab: TabId = "flow";
+  #tabs: TabDef[] = [...BASE_TABS];
   #lastState: ConnectionState = "connected";
   #tabsWrap!: HTMLElement;
   #pillEl!: HTMLElement;
@@ -62,11 +71,28 @@ class AppShell extends HTMLElement {
     this.style.cssText = "display:flex;flex-direction:column;height:100%;width:100%;box-sizing:border-box;";
     this.#buildSkeleton();
     this.#switchTab("flow");
+    this.#loadAdminTab();
 
     this.#lastState = connectionMonitor.state;
     connectionMonitor.addEventListener("statechange", this.#onStateChange);
     connectionMonitor.start();
     this.#applyConnectionState({ state: connectionMonitor.state, nextRetryAt: connectionMonitor.nextRetryAt });
+  }
+
+  // Kapitel 11 Teil 1: Administration-Tab erst nachträglich anhängen,
+  // sobald whoami() zurück ist — #buildSkeleton() läuft synchron, damit
+  // die restliche Bar sofort nutzbar ist (gleicher Grund wie
+  // workflows-view.ts' sofortiges #render() vor dem ersten Poll).
+  async #loadAdminTab() {
+    try {
+      const { isAdmin } = await whoami();
+      if (!isAdmin || this.#tabs.some((t) => t.id === "admin")) return;
+      this.#tabs.push(ADMIN_TAB);
+      this.#tabsWrap.appendChild(this.#buildTabButton(ADMIN_TAB));
+    } catch {
+      // Kein Administration-Tab ohne bestätigtes isAdmin — sicherer
+      // Default, kein Rätselraten bei einem unerreichbaren Orchestrator.
+    }
   }
 
   disconnectedCallback() {
@@ -93,15 +119,10 @@ class AppShell extends HTMLElement {
     const tabsWrap = document.createElement("div");
     tabsWrap.setAttribute("data-role", "app-tabs");
     tabsWrap.style.cssText = "display:flex;gap:var(--omp-space-1);";
-    for (const tab of TABS) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = tab.label;
-      btn.setAttribute("data-tab-id", tab.id);
-      btn.addEventListener("click", () => this.#switchTab(tab.id));
-      tabsWrap.appendChild(btn);
-    }
     this.#tabsWrap = tabsWrap;
+    for (const tab of this.#tabs) {
+      tabsWrap.appendChild(this.#buildTabButton(tab));
+    }
     left.append(brand, tabsWrap);
 
     const right = document.createElement("div");
@@ -127,6 +148,15 @@ class AppShell extends HTMLElement {
     this.#contentEl = content;
   }
 
+  #buildTabButton(tab: TabDef): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = tab.label;
+    btn.setAttribute("data-tab-id", tab.id);
+    btn.addEventListener("click", () => this.#switchTab(tab.id));
+    return btn;
+  }
+
   #switchTab(id: TabId) {
     this.#activeTab = id;
     for (const el of this.#tabsWrap.children) {
@@ -138,7 +168,7 @@ class AppShell extends HTMLElement {
           ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
           : "background:transparent;color:var(--omp-text-dim);");
     }
-    const tab = TABS.find((t) => t.id === id);
+    const tab = this.#tabs.find((t) => t.id === id);
     if (!tab) return;
     this.#contentEl.replaceChildren(document.createElement(tab.element));
   }

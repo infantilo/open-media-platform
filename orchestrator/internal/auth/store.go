@@ -14,6 +14,10 @@ import (
 // vergebenen Nutzernamen läuft.
 var ErrUserExists = errors.New("auth: username already exists")
 
+// ErrUserNotFound wird von Delete/SetPasswordHash geliefert, wenn der
+// Nutzername nicht existiert (Kapitel 11 Teil 1, docs/END-GOAL-FEATURES.md).
+var ErrUserNotFound = errors.New("auth: user not found")
+
 // Store persistiert Nutzerkonten in Postgres (users-Tabelle,
 // db/migrations/0002_auth.sql).
 type Store struct {
@@ -73,6 +77,63 @@ func (s *Store) byUsername(ctx context.Context, username string) (User, error) {
 		`SELECT id, username, password_hash, created_at FROM users WHERE username = $1`, username,
 	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
 	return u, err
+}
+
+// List liefert alle Nutzer, alphabetisch — genutzt vom Administration-Tab
+// (Kapitel 11 Teil 1, docs/END-GOAL-FEATURES.md §11.4).
+func (s *Store) List(ctx context.Context) ([]User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, created_at FROM users ORDER BY username`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// Delete entfernt einen Nutzer per Nutzername. ErrUserNotFound, wenn er
+// nicht existiert (im Unterschied zu authz.Store.Delete, das idempotent
+// per ID löscht: hier soll ein Tippfehler im Admin-UI sichtbar werden,
+// nicht still verpuffen).
+func (s *Store) Delete(ctx context.Context, username string) error {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM users WHERE username = $1`, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetPasswordHash überschreibt den Passwort-Hash eines bestehenden
+// Nutzers (Admin-Passwort-Reset, Kapitel 11 Teil 1).
+func (s *Store) SetPasswordHash(ctx context.Context, username, hash string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = $1 WHERE username = $2`, hash, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
 
 // isUniqueViolation erkennt einen Postgres-Unique-Constraint-Verstoß

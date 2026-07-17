@@ -38,6 +38,26 @@ func (s *Service) CreateUser(ctx context.Context, username, password string) (Us
 	return s.store.Create(ctx, username, hash)
 }
 
+// ListUsers liefert alle Nutzer (Administration-Tab, Kapitel 11 Teil 1).
+func (s *Service) ListUsers(ctx context.Context) ([]User, error) {
+	return s.store.List(ctx)
+}
+
+// DeleteUser entfernt einen Nutzer per Nutzername.
+func (s *Service) DeleteUser(ctx context.Context, username string) error {
+	return s.store.Delete(ctx, username)
+}
+
+// SetPassword hasht password und überschreibt den Hash des bestehenden
+// Nutzers (Admin-Passwort-Reset).
+func (s *Service) SetPassword(ctx context.Context, username, password string) error {
+	hash, err := HashPassword(password)
+	if err != nil {
+		return err
+	}
+	return s.store.SetPasswordHash(ctx, username, hash)
+}
+
 // Login prüft Nutzername/Passwort und stellt bei Erfolg ein Token aus.
 func (s *Service) Login(ctx context.Context, username, password string) (token string, expiresAt time.Time, err error) {
 	u, ok, err := s.store.ByUsername(ctx, username)

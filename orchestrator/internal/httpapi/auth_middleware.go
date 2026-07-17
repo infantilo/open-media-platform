@@ -18,6 +18,9 @@ type AuthService interface {
 	Authenticate(token string) (auth.Principal, error)
 	Login(ctx context.Context, username, password string) (token string, expiresAt time.Time, err error)
 	CreateUser(ctx context.Context, username, password string) (auth.User, error)
+	ListUsers(ctx context.Context) ([]auth.User, error)
+	DeleteUser(ctx context.Context, username string) error
+	SetPassword(ctx context.Context, username, password string) error
 }
 
 // AuthzChecker prüft Rollenbindungen (implementiert von *authz.Store).

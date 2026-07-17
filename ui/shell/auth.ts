@@ -46,6 +46,10 @@ export interface WhoamiResponse {
   authRequired: boolean;
   authenticated: boolean;
   username?: string;
+  // Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): true bei
+  // admin-Verb ODER im Bootstrap-Modus (noch kein Nutzer angelegt) —
+  // steuert, ob app-shell.ts den Administration-Tab zeigt.
+  isAdmin?: boolean;
 }
 
 export async function whoami(): Promise<WhoamiResponse> {

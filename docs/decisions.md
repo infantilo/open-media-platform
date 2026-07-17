@@ -5738,3 +5738,112 @@ kein Fehler), reicht sie an `pipeline::Config` und die
 15-Teile 2–4 (echter Lowres-MXL-Sender, Bildmischer/Multiviewer lesen
 bevorzugt Lowres) bleiben unverändert offen, wie im Kapitel selbst
 geplant.
+
+## 2026-07-17 (Nachtrag 8) — Kapitel 11 Teil 1 umgesetzt: Admin-Tab,
+Nutzer-/Rollenbindungs-Verwaltung, Audit-Log-Ansicht — Login damit
+erstmals über die UI erreichbar
+
+Ausgelöst durch direkte Nutzerfrage (nicht Teil der `frage an
+fabel.txt`-Priorisierung): „es gibt immer noch kein allgemeines
+Settings-Menü, Benutzerverwaltungs-Menü, Login…". Recherche bestätigte
+den Befund vollständig — das D3-Teil-2-Backend (Nutzer, Rollen-
+bindungen, Audit-Log, Bootstrap-Bypass) existierte bereits komplett,
+aber ohne jede UI: `ui/shell/auth.ts` konnte nur einloggen, nie den
+allerersten Nutzer anlegen. Da `authRequired` im Bootstrap-Fall
+(`UserCount()==0`) bewusst `false` liefert (ARCHITECTURE.md §12: „Auth
+deaktivierbar solange kein Nutzer angelegt ist"), gab es ohne diesen
+Schritt keinen UI-Weg, der je einen ersten Nutzer erzeugt hätte — Login
+war architektonisch vorhanden, aber praktisch unerreichbar. Nutzer
+wählte auf Nachfrage explizit „Kapitel 11 zuerst" (statt Settings-Menü
+oder Doku-only), weil das den Login-Zugang automatisch mit freischaltet.
+
+**Backend (`orchestrator/internal/auth`):** `Store.List`/`Delete`/
+`SetPasswordHash` + `ErrUserNotFound`, `Service.ListUsers`/`DeleteUser`/
+`SetPassword` — reine Ergänzungen neben dem bestehenden `Create`/
+`ByUsername`, keine Änderung an vorhandenem Verhalten.
+
+**Backend (`internal/httpapi`):** drei neue admin-only+auditierte
+Routen — `GET /api/v1/auth/users`, `DELETE /api/v1/auth/users/{name}`,
+`PUT /api/v1/auth/users/{name}/password`. `handleWhoami` bekommt ein
+zusätzliches `isAdmin`-Feld (true bei admin-Verb ODER Bootstrap-Modus)
+— das Signal, mit dem die Shell entscheidet, ob der Administration-Tab
+gerendert wird (§22.1-Regel „Navigationspunkte ohne passende Rolle
+werden nicht gerendert", hier zusätzlich um den Bootstrap-Sonderfall
+erweitert, sonst könnte niemand je den ersten Nutzer anlegen).
+**Selbstschutz** (§11.3b: „der letzte verbleibende admin kann sich
+nicht selbst löschen/entrechten") in `handleDeleteUser` UND
+`handleDeleteRoleBinding` über eine gemeinsame `globalAdminSubjects`-
+Hilfsfunktion — beide lesen `authzStore.Load()`, zählen Subjects mit
+einer `*`-admin-Bindung, und lehnen nur dann ab, wenn das betroffene
+Subject sich selbst betrifft (`principalFromContext`) UND das einzige
+verbleibende ist. Fremde Admins dürfen sich gegenseitig weiterhin
+löschen/entrechten — die Sperre schützt nur vor versehentlichem
+Selbst-Aussperren, kein generelles „Admins sind unlöschbar".
+
+**UI (`ui/shell/admin-view.ts`, neu):** drei Abschnitte — Nutzer
+(Liste, Anlegen, Passwort-Reset inline pro Zeile, Löschen), Rollen-
+bindungen (Liste, Anlegen mit Node-Datalist aus `GET /api/v1/nodes`,
+Löschen), Audit-Log (reine Anzeige, pollt alle 5s). Bewusst **kein**
+Poll-Timer für Nutzer/Bindungen (anders als `hosts-view.ts`/
+`workflows-view.ts`): ein offenes Formular hätte bei jedem Poll-
+Rerender Fokus/Cursor verloren — stattdessen einmaliges Laden + gezielt
+nach jeder Mutation neu geladen, nur das rein lesende Audit-Log pollt.
+`ui/shell/app-shell.ts`: `BASE_TABS` (vier bestehende Tabs) + separater
+`ADMIN_TAB`, der erst nach einem asynchronen `whoami()`-Aufruf bei
+`isAdmin===true` angehängt wird — Tab-Button-Erzeugung dafür in
+`#buildTabButton()` ausgelagert, `#switchTab` liest jetzt aus einer
+Instanzvariable `#tabs` statt der alten Modul-Konstante.
+
+**Ein reale Lücke beim Entwerfen gefunden, nicht erst im Live-Test:**
+ohne besondere Behandlung hätte das Anlegen des allerersten Nutzers
+über das Admin-Tab-Formular die eigene, noch token-lose Bootstrap-
+Sitzung ausgesperrt — `UserCount()` springt in diesem Moment von 0 auf
+1, der Bootstrap-Bypass greift ab der nächsten Anfrage nicht mehr, aber
+der Browser hatte nie ein Token bekommen (er lief die ganze Zeit ohne
+Anmeldung). `admin-view.ts#createUser()` prüft deshalb nach
+erfolgreichem Anlegen, ob `getToken()` leer ist (⇒ wir liefen im
+Bootstrap-Bypass) und loggt sich in diesem Fall automatisch mit den
+gerade eingegebenen Zugangsdaten ein, bevor die Seite neu lädt — der
+neu angelegte erste Nutzer hat durch `handleCreateUser`s bestehende
+Bootstrap-Logik ohnehin schon automatisch die Wildcard-admin-Bindung
+bekommen.
+
+**Verifiziert:**
+- `go build`/`go vet`/`go test ./...` (ganzer Orchestrator) grün,
+  9 neue Tests in `internal/httpapi/auth_handlers_test.go`
+  (Nutzerliste mit `isAdmin`-Markierung, Selbstschutz beim Löschen —
+  sowohl blockiert als letzter Admin als auch erlaubt mit einem
+  zweiten Admin oder beim Löschen eines fremden Nutzers, Selbstschutz
+  bei Rollenbindungen, Passwort-Reset, `whoami`s `isAdmin` in allen
+  drei Fällen Bootstrap/authentifiziert-mit-Bindung/authentifiziert-
+  ohne-Bindung).
+- `deno check`/`deno test ui/` (40/40) grün, `deno bundle` bestätigt
+  `omp-admin-view` im Bundle (kein Wiederholen des Nachtrag-Bugs aus
+  D3 Teil 2, s. `feedback_deno_bundle_type_only_import_elision`).
+- **Live, echter Orchestrator + echter Postgres, per CDP-Klicks (nicht
+  nur `curl`):** frischer Bootstrap-Zustand bestätigt
+  (`whoami` → `authRequired:false, isAdmin:true`), Administration-Tab
+  im DOM sichtbar. Ersten Nutzer „admin" über das UI-Formular angelegt
+  → automatischer Login bestätigt (`whoami` danach:
+  `authenticated:true, isAdmin:true, username:"admin"`). Als admin
+  einen zweiten Nutzer „operator1" angelegt, eine `operate`-Bindung auf
+  eine echte laufende `omp-audio-mixer`-Instanz für ihn erzeugt (Node-
+  ID über die Datalist aus der echten `/api/v1/nodes`-Antwort gewählt).
+  Audit-Log per direktem API-Check bestätigt: `POST
+  /api/v1/admin/role-bindings` von `admin`, Status 201. Login als
+  „operator1" landet direkt in der Console-Ansicht exakt dieser Mixer-
+  Instanz, ganz ohne App-Bar/Administration-Tab (C13-Pfad bestätigt,
+  Screenshot). `PATCH` auf eine zweite, nicht gebundene Instanz liefert
+  403; derselbe Aufruf gegen die eigene gebundene Instanz kommt bis zum
+  Node-Proxy durch (404 auf einen falsch geratenen Parameternamen,
+  nicht 401/403 — die Autorisierung selbst greift also korrekt).
+  Selbstschutz zusätzlich direkt gegen den echten Server verifiziert:
+  `DELETE /api/v1/auth/users/admin` als einziger Admin → 409 „cannot
+  delete the last remaining admin"; danach den Testnutzer „operator1"
+  regulär gelöscht (204). Test-Instanzen nach Abschluss gestoppt, `admin`
+  bleibt als echter Erstnutzer für künftige Sitzungen bestehen.
+
+**Offen, direkte Folgearbeit (kein stiller Gap):** Kapitel 11 Teil 2
+(Export/Import), Teil 3 (Settings-Registry, wartet auf Antwort zu
+offener Frage 2 „was ist mit Latenz gemeint"), Teil 4 (Workflow-Scope-
+Spalte, Passwort-Selbstservice, AD/LDAP) bleiben wie geplant offen.

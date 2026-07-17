@@ -2024,6 +2024,36 @@ kombinieren, ist aber kein v1-Ziel.
   Testnutzer landet in der Console-Ansicht genau dieses Nodes
   (C13-Pfad), `PATCH` auf einen fremden Node liefert 403; das
   Audit-Log zeigt die Anlage.
+  ✅ **Erledigt 2026-07-17** (`UMSETZUNG.md`, `docs/decisions.md`
+  Nachtrag 8). Neue Endpunkte `GET /api/v1/auth/users`,
+  `DELETE /api/v1/auth/users/{name}`,
+  `PUT /api/v1/auth/users/{name}/password` (Passwort-Reset), alle
+  admin-only + auditiert, plus `isAdmin` in `GET /api/v1/auth/whoami`
+  (true bei admin-Verb ODER Bootstrap-Modus) als Signal für die Shell.
+  Selbstschutz umgesetzt und live gegen den echten Server verifiziert
+  (409, „cannot delete the last remaining admin") — greift sowohl beim
+  Nutzer-Löschen als auch beim Entfernen der eigenen `*`-admin-Bindung
+  über `DELETE /api/v1/admin/role-bindings/{id}`. Neuer App-Bar-Tab
+  „Administration" (`ui/shell/admin-view.ts`), nachträglich per
+  `whoami().isAdmin` angehängt (`app-shell.ts`) statt Teil der
+  statischen Tab-Liste — genau der noch fehlende Weg, um überhaupt den
+  ersten Nutzer anzulegen: das Formular „+ Neuer Nutzer" ist im
+  Bootstrap-Fall zugleich das Bootstrap-Formular (derselbe Endpunkt,
+  derselbe Bootstrap-Bypass wie bisher). Dabei eine reale Lücke beim
+  Entwerfen gefunden und geschlossen, bevor sie im Live-Test aufgefallen
+  wäre: ohne automatischen Login direkt nach dem Anlegen des allerersten
+  Nutzers wäre die gerade noch token-lose Bootstrap-Sitzung nach der
+  Erstanlage bei jedem weiteren Admin-Aufruf mit 401 hängengeblieben
+  (`UserCount()` ist ab dann > 0, der Bypass greift nicht mehr) —
+  `admin-view.ts` loggt sich deshalb automatisch ein und lädt neu, wenn
+  nach dem Anlegen noch kein Token im Speicher lag. Vollständig per CDP
+  gegen den echten laufenden Stack verifiziert (nicht nur `curl`):
+  Bootstrap-Anlage → Auto-Login, `operate`-Bindung für einen Testnutzer
+  auf eine echte laufende `omp-audio-mixer`-Instanz angelegt, Login als
+  dieser Nutzer landet direkt in dessen Console-Ansicht ohne App-Bar
+  (C13-Pfad bestätigt), `PATCH` auf eine zweite, nicht gebundene Instanz
+  liefert 403, Audit-Log zeigt den `POST /api/v1/admin/role-bindings`
+  mit Status 201. Teil 2/3/4 bleiben wie geplant offen.
 - **Teil 2 — Export/Import:** Endpunkte + Dry-Run-Diff + UI-Buttons
   (Datei-Download/-Upload). Verifikation: Export → Bindung löschen →
   Import (merge) → Bindung wieder da und wirksam (403-Test);
