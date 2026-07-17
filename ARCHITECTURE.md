@@ -874,6 +874,27 @@ RoCEv2-Verifikation braucht ein lossless-konfiguriertes Fabric (§8 nennt
 das bereits als Unwegbarkeit). **Phase:** P2/D, zusammen mit §6.1s
 I/O-Karten-Claim/Release (gleiche Mechanik, sinnvoll zusammen gebaut).
 
+**Nachtrag (2026-07-17) — Alternative zu Punkt 2 gefunden, ändert die
+Backend-Frage:** `third_party/mxl/lib/fabrics/ofi/` ist eine bereits
+vendorte, vollständige (kein Stub) Bibliothek `mxl-fabrics` auf Basis
+von **libfabric** (OFI) mit echtem One-Sided-RDMA-Write zwischen Hosts
+(`tools/mxl-fabrics-demo/demo.cpp`) — und mit einem reinen
+Software-Provider (`MXL_SHARING_PROVIDER_TCP`,
+`mxl/fabrics.h:50–57`), der **ohne RDMA-Hardware testbar ist** (löst
+das oben unter „Testbarkeit" genannte Hardware-Problem für den
+Funktionsnachweis, nicht für die Hardware-Beschleunigung selbst).
+Aktuell nicht gebaut (`MXL_ENABLE_FABRICS_OFI` steht in
+`third_party/mxl/CMakeLists.txt` auf `OFF`). Damit steht neben
+`libibverbs`/`rdma-core` (Punkt 2 oben) und Rivermax/GPUDirect ein
+**dritter Kandidat** im Raum, der MXL-nativ ist (keine neue,
+eigenständige Transport-Abstraktion nötig, passt direkt auf die
+bestehende `MxlVideoInput`/`Output`-API) und sofort mit dem
+TCP-Provider verifizierbar wäre. Vollständige Gegenüberstellung +
+Empfehlung (MXL-Fabrics statt eigenem `rdma-core`-Modul) in
+`docs/END-GOAL-FEATURES.md` Kapitel 16 — Grundsatzentscheidung dort als
+offene Frage 16.5.1 markiert, hier nur die Cross-Referenz. Bei
+Zustimmung wird dieser §6.6-Abschnitt entsprechend umgeschrieben.
+
 ## 7. Phasenplan
 
 Ziel: **IBC 2029 (September, Amsterdam — passt zum "European" Branding) als

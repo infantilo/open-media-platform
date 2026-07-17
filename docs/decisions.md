@@ -5283,3 +5283,131 @@ sich einen Reader) ist mit diesem Fix wahrscheinlich nicht mehr nötig
 (die Livelock-Ursache lag nicht an der MXL-Last, sondern am
 blockierenden Lesepfad selbst), sollte aber trotzdem probiert werden,
 falls die non-blocking-Polling-Latenz (5ms) für PST spürbar wird.
+
+## 2026-07-17 (Nachtrag) — `frage an fabel.txt` ausgearbeitet: sieben
+Punkte in `docs/END-GOAL-FEATURES.md` als neue/erweiterte Kapitel
+
+Direkte Fortsetzung nach dem MXL-Livelock-Fix, auf Anweisung: die Datei
+`/home/infantilo/frage an fabel.txt` (sieben vom Projektinhaber
+notierte Fragen/Feature-Wünsche, Punkt 6 doppelt nummeriert) wurde
+recherchiert (vier parallele Recherche-Fork-Agenten: Property-Panel-UI,
+Audio-Mixer-Ist-Zustand, Katalog-UI + Multi-Res-Streams, MXL-Fabrics/
+RDMA) und in `docs/END-GOAL-FEATURES.md` ausgearbeitet, jeweils im
+bestehenden Kapitel-Format (Ist-Zustand/Referenz/Ziel-Design/
+Phasenplan/Offene Fragen) oder als Nachtrag zu bereits bestehenden,
+thematisch passenden Kapiteln, statt Dopplungen zu erzeugen:
+
+- **§1.6** (neu) — Property-Panel-Breite (280px hardcoded) ist der
+  Grund für den gemeldeten „Buttons vertikal statt horizontal"-Bug im
+  Bildmischer, **nicht** ein separater/unfertiger UI-Pfad (per
+  Code-Lesen bestätigt: Property-Panel und Operator-Konsole laden
+  dasselbe UI-Bundle über `mountUIBundle()`). Plus „Als Operator
+  ansehen"-Button-Design (Route existiert bereits:
+  `/console/<workflowId>/<nodeRoleId>`).
+- **§4.6** (neu, Nachtrag zu Kapitel 4) — vier konkrete Lücken über den
+  bestehenden Audio-Mixer-Plan hinaus: EQ-Upgrade auf
+  `equalizer-nbands` (parametrisch: Gain/Güte/Frequenz),
+  `audiodynamic`-Realitätscheck (kein Attack/Release/Makeup-Gain),
+  Audio-Follow-Video-Pegel statt nur Mute, Mixer-Presets (Empfehlung:
+  bestehenden Snapshot-Mechanismus node-skopiert wiederverwenden).
+- **§7.6** (neu, Nachtrag zu Kapitel 7) — „ein redundantes Service
+  definieren" ist bereits vollständig beantwortet (K7-Teil-1,
+  entschieden 2026-07-14, **noch nicht begonnen**); neuer Aspekt: die
+  Operator-Konsolen-Route muss über einen Prozess-Restart/Failover
+  hinweg stabil auf die aktuelle Instanz auflösen, sonst schaut der
+  Operator nach einem Failover auf ein totes UI — Kapitel 7 hatte
+  bisher nur die Medien- (IS-05), nicht die UI-Wiederverkabelung im
+  Blick.
+- **Kapitel 14, Einleitung** (Nachtrag) — ehrliche Antwort auf „ist das
+  System ressourcen-/stabilitäts-optimal": Placement-Engine (D6-3) ist
+  fertig aber nur advisory, Kapitel 14 selbst (Ressourcen-Historie/
+  Vorprüfung) ist die noch fehlende zweite Hälfte — kein neuer
+  Recherchebedarf, nur Umsetzung bereits entworfener Teile.
+- **Kapitel 15** (neu) — Multi-Resolution-Streams: heutige
+  "Lowres-Vorschau" ist Transcode-on-Demand von der Highres-Pipeline
+  (`omp-mediaio::preview`), **kein** eigener Lowres-MXL-Flow;
+  Bildmischer/Multiviewer öffnen für jede Kachel volle Highres-Reader
+  — kein Bandbreiten-/CPU-Vorteil auf der Empfangsseite. Ziel-Design:
+  zweiter, echter MXL-Sender in niedriger Auflösung je Quelle,
+  Kachel-/Vorschau-Reader bevorzugen ihn, PGM bleibt highres; neues
+  `Settings`-Feld am Workflow-Objekt für die Auflösungs-Konfiguration.
+- **Kapitel 16** (neu) — wichtigster Einzelfund der Sitzung: MXL bringt
+  bereits eine vollständige, vendorte, aber ungenutzte
+  libfabric-Bibliothek (`third_party/mxl/lib/fabrics/ofi/`,
+  `tools/mxl-fabrics-demo`) für echten One-Sided-RDMA-Remote-Memory-
+  Zugriff zwischen Hosts mit — inkl. eines reinen Software-
+  TCP-Providers (`MXL_SHARING_PROVIDER_TCP`), der **ohne RDMA-Hardware
+  testbar ist** (`mxl-fabrics-demo --provider tcp`, direkte Antwort auf
+  die im Nutzertext selbst gestellte Testbarkeits-Frage). Aktuell nicht
+  gebaut (`MXL_ENABLE_FABRICS_OFI=OFF`). Steht in Konkurrenz zu
+  `ARCHITECTURE.md` §6.6s bereits geplantem, eigenständigem
+  `rdma-core`-Modul — Empfehlung (dort + in Kapitel 16 als offene Frage
+  16.5.1 markiert): MXL-native Fabrics statt eigenem RDMA-Modul,
+  Entscheidung liegt beim Projektinhaber. `ARCHITECTURE.md` §6.6 hat
+  einen entsprechenden Cross-Referenz-Nachtrag bekommen.
+- **Kapitel 17** (neu) — Katalog-UI: Beschreibungen/vermutete
+  Ressourcen (klein), Laufende-Instanzen-Tab + Alarm-View (baut auf
+  Kapitel 14 bzw. bereits existierenden NATS-Events), Import/
+  Versionierung/Löschen fremder Microservices als eigene, deutlich
+  größere Ausbaustufe (braucht einen Podman-Runner jenseits des
+  heutigen reinen Prozess-Runners + eine Katalog-Schreib-API +
+  Vertrauensmodell) bewusst zurückgestellt.
+- **Kapitel 18** (neu) — konsolidierte Priorisierung aller sieben
+  Punkte mit Begründung (Kurzfassung: §1.6 zuerst — kleinster Aufwand,
+  vollständig geklärt, direkter UI-Qualitäts-Treffer; K7-Teil-1
+  danach — bereits entschieden, nur nicht begonnen; dann Katalog-UI/
+  Audio-Mixer; Multi-Res und Fabrics als größere, cross-cutting/
+  entscheidungsabhängige Punkte danach; Microservice-Import zuletzt).
+
+**Nicht in AMPP/Grassvalley-Terminologie geschrieben** (Vorgabe aus dem
+Nutzertext befolgt — beide Namen kommen in keinem der neuen Abschnitte
+vor, per Grep bestätigt).
+
+**Nächster Schritt, direkt im Anschluss:** §1.6 umsetzen (Property-
+Panel-Breite + Operator-Ansicht-Button) — kleinster, unabhängig
+verifizierbarer Schritt aus Kapitel 18s Priorisierung, passend zur
+Vorgabe „achte auf ein schönes UI bei der Umsetzung".
+
+## 2026-07-17 (Nachtrag 2) — §1.6 umgesetzt: Property-Panel resizable,
+„Als Operator ansehen"-Button
+
+Direkte Fortsetzung, `ui/graph/flow-canvas.ts`:
+
+- Fest verdrahtete Panel-Breite (280px) durch **resizable** Panel
+  ersetzt: neuer Drag-Handle am linken Rand (`#onPanelResizeStart`/
+  `#onPanelResizeMove`/`#onPanelResizeEnd`, `PointerEvent` +
+  `setPointerCapture`), Default jetzt 420px (Grenzen 240–900px),
+  Breite in `localStorage` (`omp.parameterPanelWidth`) persistiert und
+  beim nächsten Öffnen wiederhergestellt.
+- Damit `replaceChildren()`-Aufrufe beim Neu-Rendern des Panel-Inhalts
+  den Resize-Handle nicht mit wegwischen: neues, stabiles
+  `#panelContent`-Element als einziges Ziel dieser Aufrufe, `panel`
+  selbst (mit Handle) bleibt über die gesamte Panel-Lebensdauer intakt.
+- Neuer „Als Operator ansehen ↗"-Link neben dem Schließen-Button
+  (`#panelButtonBar`), verlinkt `/console/default/<nodeRoleId>`
+  (`nodeRoleId` = `node.instanceId || nodeId`, spiegelt
+  `orchestrator/internal/consoles/resolve.go`s `NodeRoleID`-Logik auf
+  der Frontend-Seite).
+
+**Verifiziert:** `deno check`/`deno test ui/` (40/40) grün. Live per
+CDP (Node-`WebSocket`-Client gegen `chromium --headless=new
+--remote-debugging-port`, da die Claude-in-Chrome-Erweiterung in dieser
+Sitzung nicht verfügbar war): `omp-video-mixer-me`-Instanz gestartet,
+Node-Kachel angeklickt — Panel öffnet jetzt bei 420px mit dem
+Bildmischer-Bundle in **horizontaler** PGM/PST/CUT/AUTO/MIX-WIPE-
+Anordnung (vorher bei 280px umgebrochen), „Als Operator ansehen"-Link
+sichtbar mit korrektem Href. Resize-Handle-Logik separat per
+direkt dispatchten `PointerEvent`s verifiziert (420→570px, inkl.
+`localStorage`-Persistenz und Wiederherstellung nach Reload) — der
+erste Versuch über CDPs `Input.dispatchMouseEvent` zeigte dabei eine
+bekannte Eigenheit synthetischer Headless-Maus-Eingaben (kein
+durchgängiges `setPointerCapture` über simulierte Events hinweg), kein
+Bug im UI-Code.
+
+**Nebenbefund, klein, gleich mitbehoben:** `/dev/shm/omp-mxl`
+(MXL-Domain-Verzeichnis) existierte zu Sitzungsbeginn nicht (tmpfs,
+überlebt einen Neustart/eine Bereinigung nicht) — jeder MXL-Node-Start
+schlug mit „Domain path is not a directory" fehl, bis das Verzeichnis
+manuell angelegt wurde. `deploy/dev/start-omp.sh` legt es jetzt selbst
+an (`mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"`), statt sich auf
+einen vorherigen Lauf zu verlassen.

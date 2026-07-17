@@ -48,6 +48,23 @@ import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
 
+// Parameter-Panel-Breite (§1.6, docs/END-GOAL-FEATURES.md, 2026-07-17):
+// die frühere feste 280px liess Operator-Konsolen-Bundles wie den
+// Bildmischer ihre eigentlich horizontale Crosspoint-Reihe umbrechen —
+// dasselbe Bundle wie in der Vollbild-Konsole (`ui/shell/console-view.ts`),
+// nur zu eng eingefasst. Breiterer Default + Resize-Handle statt einer
+// zweiten, festen Zahl.
+const PANEL_WIDTH_STORAGE_KEY = "omp.parameterPanelWidth";
+const PANEL_WIDTH_DEFAULT = 420;
+const PANEL_WIDTH_MIN = 240;
+const PANEL_WIDTH_MAX = 900;
+
+function loadPanelWidth(): number {
+  const raw = Number(localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
+  if (Number.isFinite(raw) && raw >= PANEL_WIDTH_MIN && raw <= PANEL_WIDTH_MAX) return raw;
+  return PANEL_WIDTH_DEFAULT;
+}
+
 interface GraphPort {
   id: string;
   label: string;
@@ -194,6 +211,10 @@ export class FlowCanvas extends HTMLElement {
   #viewportGroup!: SVGGElement;
   #breadcrumbBar!: HTMLDivElement;
   #panelContainer!: HTMLDivElement;
+  #panelResizeHandle!: HTMLDivElement;
+  #panelContent!: HTMLDivElement;
+  #panelResizeStartX = 0;
+  #panelResizeStartWidth = 0;
   #panelNodeId: string | null = null;
   #snapshotBar!: HTMLDivElement;
   #palette!: HTMLDivElement;
@@ -387,10 +408,24 @@ export class FlowCanvas extends HTMLElement {
     const panel = document.createElement("div");
     panel.setAttribute("data-role", "parameter-panel");
     panel.style.cssText =
-      "position:absolute;top:0;right:0;bottom:0;width:280px;" +
+      `position:absolute;top:0;right:0;bottom:0;width:${loadPanelWidth()}px;` +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
       "display:none;z-index:20;border-left:1px solid var(--omp-border);box-sizing:border-box;";
+
+    const panelResizeHandle = document.createElement("div");
+    panelResizeHandle.setAttribute("data-role", "parameter-panel-resize-handle");
+    panelResizeHandle.style.cssText =
+      "position:absolute;top:0;left:-4px;bottom:0;width:8px;cursor:ew-resize;z-index:21;";
+    panel.appendChild(panelResizeHandle);
+    panelResizeHandle.addEventListener("pointerdown", (ev) => this.#onPanelResizeStart(ev));
+
+    // Eigenständiges Content-Element: die Render-Methoden unten leeren/
+    // befüllen nur dieses (via replaceChildren) statt `panel` selbst —
+    // sonst würde jedes Neu-Rendern den Resize-Handle mit wegwischen.
+    const panelContent = document.createElement("div");
+    panelContent.setAttribute("data-role", "parameter-panel-content");
+    panel.appendChild(panelContent);
 
     const snapshotBar = document.createElement("div");
     snapshotBar.setAttribute("data-role", "snapshot-bar");
@@ -416,6 +451,8 @@ export class FlowCanvas extends HTMLElement {
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
     this.#panelContainer = panel;
+    this.#panelResizeHandle = panelResizeHandle;
+    this.#panelContent = panelContent;
     this.#snapshotBar = snapshotBar;
     this.#palette = palette;
   }
@@ -1287,18 +1324,53 @@ export class FlowCanvas extends HTMLElement {
 
   // --- Parameter-Panel (UMSETZUNG.md B6) ---
 
+  // Panel-Breite per Pointer-Drag am linken Rand, persistiert in
+  // localStorage (§1.6 — vor einer echten Nutzer-Präferenz-API,
+  // Kapitel 1 §1.3c/§1.4 Teil 4, ist das der pragmatische Zwischenstand).
+  #onPanelResizeStart(ev: PointerEvent) {
+    ev.preventDefault();
+    this.#panelResizeStartX = ev.clientX;
+    this.#panelResizeStartWidth = this.#panelContainer.getBoundingClientRect().width;
+    this.#panelResizeHandle.setPointerCapture(ev.pointerId);
+    this.#panelResizeHandle.addEventListener("pointermove", this.#onPanelResizeMove);
+    this.#panelResizeHandle.addEventListener("pointerup", this.#onPanelResizeEnd);
+    this.#panelResizeHandle.addEventListener("pointercancel", this.#onPanelResizeEnd);
+  }
+
+  #onPanelResizeMove = (ev: PointerEvent) => {
+    // Panel sitzt rechtsbündig — nach links ziehen (kleineres clientX)
+    // muss die Breite VERGRÖSSERN.
+    const delta = this.#panelResizeStartX - ev.clientX;
+    const width = Math.min(
+      PANEL_WIDTH_MAX,
+      Math.max(PANEL_WIDTH_MIN, this.#panelResizeStartWidth + delta),
+    );
+    this.#panelContainer.style.width = `${width}px`;
+  };
+
+  #onPanelResizeEnd = (ev: PointerEvent) => {
+    this.#panelResizeHandle.removeEventListener("pointermove", this.#onPanelResizeMove);
+    this.#panelResizeHandle.removeEventListener("pointerup", this.#onPanelResizeEnd);
+    this.#panelResizeHandle.removeEventListener("pointercancel", this.#onPanelResizeEnd);
+    this.#panelResizeHandle.releasePointerCapture(ev.pointerId);
+    localStorage.setItem(
+      PANEL_WIDTH_STORAGE_KEY,
+      String(Math.round(this.#panelContainer.getBoundingClientRect().width)),
+    );
+  };
+
   async #openParameterPanel(nodeId: string) {
     if (!this.#graph.nodes.some((n) => n.id === nodeId)) return; // Gruppen haben keinen Descriptor
     this.#panelNodeId = nodeId;
     this.#panelContainer.style.display = "block";
-    this.#panelContainer.replaceChildren();
+    this.#panelContent.replaceChildren();
     const loading = document.createElement("p");
     loading.textContent = "Lädt…";
-    this.#panelContainer.appendChild(loading);
+    this.#panelContent.appendChild(loading);
 
-    const mounted = await mountUIBundle(this.#panelContainer, `/api/v1/nodes/${nodeId}`);
+    const mounted = await mountUIBundle(this.#panelContent, `/api/v1/nodes/${nodeId}`);
     if (mounted) {
-      this.#panelContainer.insertBefore(this.#panelCloseButton(), this.#panelContainer.firstChild);
+      this.#panelContent.insertBefore(this.#panelButtonBar(nodeId), this.#panelContent.firstChild);
       return;
     }
 
@@ -1309,15 +1381,36 @@ export class FlowCanvas extends HTMLElement {
     if (this.#panelNodeId === null) return;
     this.#panelNodeId = null;
     this.#panelContainer.style.display = "none";
-    this.#panelContainer.replaceChildren();
+    this.#panelContent.replaceChildren();
   }
 
-  #panelCloseButton(): HTMLButtonElement {
-    const btn = document.createElement("button");
-    btn.textContent = "✕";
-    btn.style.cssText = "position:absolute;top:8px;right:8px;cursor:pointer;";
-    btn.addEventListener("click", () => this.#closePanel());
-    return btn;
+  // Schließen + „Als Operator ansehen" (§1.6, docs/END-GOAL-FEATURES.md,
+  // 2026-07-17): dieselbe Konsolen-Route (`ui/shell/shell.ts` KIOSK_ROUTE),
+  // die auch ein dedizierter Operator sieht — Admin muss dafür nicht
+  // raten/separat navigieren, sondern bekommt sie direkt am Node.
+  #panelButtonBar(nodeId: string): HTMLDivElement {
+    const bar = document.createElement("div");
+    bar.style.cssText = "position:absolute;top:8px;right:8px;display:flex;gap:6px;z-index:22;";
+
+    const node = this.#graph.nodes.find((n) => n.id === nodeId);
+    const roleId = node?.instanceId || nodeId; // s. orchestrator/internal/consoles/resolve.go NodeRoleID
+    const operatorLink = document.createElement("a");
+    operatorLink.textContent = "Als Operator ansehen ↗";
+    operatorLink.href = `/console/default/${encodeURIComponent(roleId)}`;
+    operatorLink.target = "_blank";
+    operatorLink.rel = "noopener";
+    operatorLink.style.cssText =
+      "font-size:11px;color:var(--omp-text-dim);text-decoration:none;" +
+      "border:1px solid var(--omp-border);border-radius:4px;padding:3px 6px;white-space:nowrap;";
+    bar.appendChild(operatorLink);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.style.cssText = "cursor:pointer;";
+    closeBtn.addEventListener("click", () => this.#closePanel());
+    bar.appendChild(closeBtn);
+
+    return bar;
   }
 
   async #renderGenericPanel(nodeId: string) {
@@ -1327,39 +1420,39 @@ export class FlowCanvas extends HTMLElement {
       if (!res.ok) throw new Error(String(res.status));
       descriptor = await res.json();
     } catch (err) {
-      this.#panelContainer.replaceChildren();
-      this.#panelContainer.appendChild(this.#panelCloseButton());
+      this.#panelContent.replaceChildren();
+      this.#panelContent.appendChild(this.#panelButtonBar(nodeId));
       const p = document.createElement("p");
       p.textContent = `Descriptor konnte nicht geladen werden: ${err}`;
-      this.#panelContainer.appendChild(p);
+      this.#panelContent.appendChild(p);
       return;
     }
 
-    this.#panelContainer.replaceChildren();
-    this.#panelContainer.appendChild(this.#panelCloseButton());
+    this.#panelContent.replaceChildren();
+    this.#panelContent.appendChild(this.#panelButtonBar(nodeId));
 
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
     const title = document.createElement("h3");
     title.textContent = node?.label ?? nodeId;
     title.style.cssText = "margin:0 0 8px 0;font-size:14px;";
-    this.#panelContainer.appendChild(title);
+    this.#panelContent.appendChild(title);
 
     for (const param of descriptor.parameters) {
       const value = await this.#fetchParamValue(nodeId, param.name);
-      this.#panelContainer.appendChild(this.#buildParamRow(nodeId, param, value));
+      this.#panelContent.appendChild(this.#buildParamRow(nodeId, param, value));
     }
 
     if (descriptor.methods.length > 0) {
       const hr = document.createElement("hr");
       hr.style.borderColor = "#444";
-      this.#panelContainer.appendChild(hr);
+      this.#panelContent.appendChild(hr);
     }
     for (const method of descriptor.methods) {
       const btn = document.createElement("button");
       btn.textContent = method.name;
       btn.style.cssText = "display:block;margin:6px 0;cursor:pointer;";
       btn.addEventListener("click", () => this.#invokeMethod(nodeId, method));
-      this.#panelContainer.appendChild(btn);
+      this.#panelContent.appendChild(btn);
     }
   }
 

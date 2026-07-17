@@ -309,6 +309,67 @@ Community-Nodes ohne Kit bleiben gültig; Fallback ist wie heute eigenes
 3. Sollen die Floating-Panels (Hosts/Workflows) wirklich Vollansichten
    werden, oder als andockbare Panels erhalten bleiben (Operator-Gewohnheit)?
 
+### 1.6 Nachtrag (2026-07-17) — Property-Panel ist die Operator-Konsole, nur zu schmal; Ein-Klick-Wechsel Admin→Operator-Ansicht fehlt
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 2): „im UI fehlen generell
+> immer noch die ganzen Settings [siehe 1.1–1.5, unverändert offen].
+> Für den Admin (Flow-Editor-Rechte) muss es die Möglichkeit geben, mit
+> einem Button in exakt die Operator-Ansicht zu wechseln — derzeit
+> sieht er nur das schmale Property-Panel, in dem z. B. der Bildmischer
+> die Buttons vertikal statt horizontal anordnet."
+
+**Ist-Zustand, per Code-Lesen verifiziert (nicht angenommen) — die
+Befürchtung „zwei unterschiedliche/inkonsistente UI-Pfade" trifft
+nicht zu:**
+
+- `ui/graph/flow-canvas.ts`s `#openParameterPanel()` und
+  `ui/shell/console-view.ts`s `#activate()` rufen **dieselbe**
+  `mountUIBundle()`-Funktion (`ui/shell/ui-bundle.ts:22`) mit demselben
+  Node — der Bildmischer lädt in beiden Fällen exakt dasselbe
+  `/ui/bundle.js`. `console-view.ts` kommentiert das selbst treffend:
+  „Technisch dieselbe Bundle-Lade-Logik wie das Engineering-Panel, nur
+  vollflächig statt im Parameter-Panel."
+- Der einzige Unterschied ist der **Container**: das Parameter-Panel in
+  `flow-canvas.ts` hat eine fest verdrahtete Breite von **280px**
+  (`data-role="parameter-panel"`), während `console-view.ts`s Panel
+  `flex:1` in einem `100%×100%`-Host ist. Bei 280px bricht das
+  Bildmischer-Bundle seine an sich horizontale Crosspoint-Button-Reihe
+  um — kein Bug im Bundle, ein zu enger Container.
+- `ui/graph/controls.ts` (generischer Deskriptor→Steuerelement-
+  Fallback) ist hier **nicht** beteiligt — der Bildmischer hat ein
+  eigenes UI-Bundle, erreicht diesen Fallback-Pfad also nie.
+- Die Konsolen-Route existiert bereits und ist direkt verlinkbar:
+  `ui/shell/shell.ts`s `KIOSK_ROUTE`
+  (`/console/<workflowId>/<nodeRoleId>`) mountet eine vollflächige
+  `<omp-console-view>`. `workflowId` ist heute immer der Stub
+  `"default"` (`orchestrator/internal/consoles/resolve.go`,
+  `StubWorkflowID` — echte Workflow-IDs erst mit D7/§6.2 durchgängig),
+  `nodeRoleId` ist die stabile Instanz-ID aus dem Launcher (oder die
+  rohe Node-ID, falls nicht über den Launcher gestartet).
+
+**Ziel-Design (klein, zwei unabhängige Teile):**
+
+a) **Property-Panel-Breite:** `flow-canvas.ts`s Panel-Container von
+   fest 280px auf eine größere, idealerweise **resizable** Breite
+   umstellen (Pointer-Drag am linken Rand, Breite in
+   `localStorage`/später `/api/v1/me/preferences`, §1.3c) — löst das
+   Symptom für jedes aktuelle und künftige Node-Bundle generisch,
+   nicht nur für den Bildmischer.
+b) **„Als Operator ansehen"-Button** im Parameter-Panel-Header (neben
+   dem bestehenden Schließen-Button): öffnet
+   `/console/default/<nodeRoleId>` in einem neuen Tab. Voraussetzung:
+   `flow-canvas.ts`s Graph-Knoten müssen die Instanz-ID mitführen, die
+   heute (Stand dieser Recherche) nicht sicher neben der reinen
+   `nodeId` im `/api/v1/graph`-Response mitgeführt wird — vor der
+   Umsetzung kurz prüfen, ob `nodeId` bereits die launcher-stabile ID
+   ist oder ob sie explizit mitgegeben werden muss.
+
+**Priorität:** hoch — klein, klar umrissen, kein Design-Rätsel mehr
+(beide Teile durch Code-Lesen vollständig geklärt), und direkt
+UI-Qualitäts-wirksam (Nutzer-Vorgabe „achte auf ein schönes UI").
+Empfehlung: **noch vor** den größeren §1.4-Teilen 2–4 einschieben, weil
+unabhängig von diesen und sofort umsetzbar.
+
 ---
 
 ## 2. `omp-player`: echte Videodateien (MXF) abspielen
@@ -686,6 +747,62 @@ Proxy — B6-Panel bleibt als Fallback automatisch bedienbar.
    Qualität, die gemeint war?
 4. Solo/PFL: braucht die Präsentation einen Abhörweg (impliziert
    Monitor-Summe + lokale Wiedergabe), oder reicht Metering?
+
+### 4.6 Nachtrag (2026-07-17) — vier konkrete Lücken, per Code-Lesen bestätigt
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 4): EQ braucht Gain/Güte/
+> Frequenz(/Typ), Compressor/Limiter fehlen (auch Master), Aux-Wege
+> fehlen (z. B. N-1 für den Sprecher), Audio-Follow-Video braucht einen
+> definierbaren An/Aus-Pegel, Mixer-Settings müssen speicher-/ladbar
+> sein (Presets).
+
+Deckt sich zum größten Teil mit dem bereits bestehenden Plan oben
+(Teil 2 „Dynamik", Teil 3 „Busse/Aux/Groups" — beide **noch nicht
+umgesetzt**, nur K3/K4-Teil-1 „Teil 1" ist fertig). Vier Punkte gehen
+über den bisherigen Text hinaus:
+
+1. **EQ-Parametrisierung.** Die heutige Kette nutzt fest
+   `equalizer-3bands` (`pipeline.rs`, drei feste Shelf/Peak-Bänder ohne
+   Frequenz-/Güte-Regler) — §4.3 hatte bisher nirgends den Wechsel auf
+   ein parametrisches EQ vorgesehen. `equalizer-nbands` ist bereits im
+   Dev-Environment installiert (`gst-inspect-1.0` verifiziert,
+   gst-plugins-good), erlaubt 1–64 Bänder mit je eigenem
+   `freq`/`bandwidth`/`gain`-Kindobjekt — der richtige Ersatz für
+   „Gain/Güte/Frequenz". Bandtyp (Peak/Shelf/Notch) hängt vom
+   GStreamer-Element ab, muss vor der Umsetzung an einem echten Signal
+   geprüft werden (nicht raten, s. `docs/decisions.md` 2026-07-09
+   Arbeitsregel).
+2. **`audiodynamic`-Realitätscheck, präziser als bisher.** §4.5 Frage 3
+   nannte bereits „kein Look-ahead" als Einschränkung — per
+   `gst-inspect-1.0` jetzt zusätzlich bestätigt: **keine Attack-/
+   Release-Zeitkonstanten, keine Makeup-Gain-Eigenschaft** (nur
+   `mode`/`characteristics`/`threshold`/`ratio`). Makeup-Gain lässt
+   sich mit einem nachgeschalteten `volume`-Element kompensieren
+   (Rust-seitig steuerbar), Attack/Release fehlen dagegen strukturell —
+   verschärft §4.5 Frage 3, sollte bei der Entscheidung „reicht
+   `audiodynamic`" explizit mitgewogen werden.
+3. **Audio-Follow-Video-Pegel.** Heute nur `mute`/`unmute`
+   (`main.rs`, `off`/`cut`/`crossfade` schalten ausschließlich den
+   Mute-Zustand) — kein definierbarer Pegel für den „Aus"-Zustand
+   (z. B. -20dB statt Vollstille, für einen hörbaren, aber leisen
+   Off-Air-Zustand). Deskriptor-Erweiterung `afv.offLevelDb` (Default
+   `-inf`/Mute, konfigurierbar), Crossfade interpoliert dann zwischen
+   `offLevelDb` und reguläremFader-Pegel statt zwischen Mute und Fader.
+4. **Mixer-Presets.** Nicht in §4.3 enthalten. OMP hat bereits einen
+   generischen, workflow-weiten Snapshot-Mechanismus
+   (`orchestrator/internal/snapshots/`, Postgres-gestützt, B7/D1), der
+   Parameter+Kanten aller Nodes über denselben generischen Parameter-
+   Proxy erfasst. Empfehlung: **denselben Erfassungs-/Anwendungs-Code
+   wiederverwenden**, nur auf einen einzelnen Node eingeschränkt
+   („Node-Preset" = Snapshot mit `nodeIds: [self]`), statt eine zweite,
+   mixer-eigene Persistenz-Schicht zu bauen — kleinerer Aufwand, ein
+   Speicherformat im ganzen System.
+
+**Priorität:** mittel-hoch — Teil 2 (Dynamik, jetzt inkl. EQ-Upgrade)
+ist der nächste sinnvolle Umsetzungsschritt für diesen Node; Presets
+(Punkt 4 oben) lassen sich klein und unabhängig direkt danach
+einschieben, sobald der Snapshot-Code als node-skopierte Variante
+geprüft ist.
 
 ---
 
@@ -1238,6 +1355,56 @@ zweite Konfigurationsebene einführen.
    priorisiert werden, **weil** K7 daran hängt, oder bleibt sie
    unabhängig eingeplant und K7-Teil-4 wartet einfach, bis sie an der
    Reihe ist?
+
+### 7.6 Nachtrag (2026-07-17) — Operator-UI muss der Übernahme unmerklich folgen
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 5): „wie definiere/
+> erstelle ich ein redundantes Service (z. B. für den Bildmischer)?
+> Falls es aktiv wird, muss das UI des Operators unmerklich dann
+> folgen."
+
+Erster Teil der Frage ist bereits vollständig beantwortet: „ein
+redundantes Service definieren" = eine Workflow-Rolle mit
+`restartPolicy` (§7.3a, Teil 1) bzw. später `standby: true` (§7.3d,
+Teil 4) versehen — **kein neues Konzept nötig**, K7-Teil-1 ist dafür
+bereits fertig entworfen und laut Entscheidungsliste (Kapitel 10,
+Punkt 8) „startet sofort", aber bis heute **nicht begonnen** (kein
+K7-Eintrag in `UMSETZUNG.md` §7-Checkliste). Das ist damit der
+konkrete nächste Schritt für dieses Kapitel.
+
+**Neuer Aspekt, den §7.3 bisher nicht behandelt:** §7.3a/b beschreiben
+die *Medien*-Wiederverkabelung (IS-05-Verbindungen, `node.added`-Glue)
+nach einem Neustart/Umschalten — nicht, was mit der **Operator-Browser-
+Sitzung** passiert, die auf dem alten Prozess/Node hing. Ein Operator,
+der die Konsolen-Route eines Bildmischers offen hat
+(`/console/<workflowId>/<nodeRoleId>`, §1.6), verliert bei einem
+Prozess-Restart schlimmstenfalls die WebSocket/SSE-Verbindung zum
+UI-Bundle, oder — bei einem künftigen Hot-Standby-Failover mit
+Rollen-Wechsel auf eine **andere** Instanz-ID — zeigt weiter die tote
+Instanz an, ohne automatisch auf die neue zu wechseln.
+
+**Ziel-Design-Ergänzung:** `nodeRoleId` in der Konsolen-Route bleibt
+über einen Restart/Failover hinweg **stabil**, sofern sie die
+Workflow-Rollen-ID ist (nicht die launcher-instanzspezifische ID) —
+das ist bereits die richtige Zielrichtung aus §7.3a/d
+(„dieselbe Rolle, anderswo/neu gestartet"). Die Konsole selbst braucht
+dafür serverseitig eine Rollen→aktuelle-Instanz-Auflösung (statt einer
+zum Start fest aufgelösten Instanz-ID), plus denselben
+`ConnectionMonitor`-Reconnect-Mechanismus aus §1.3a, aber mit einem
+zusätzlichen Zustand „Rolle neu aufgelöst, UI-Bundle neu laden" statt
+nur „Verbindung wiederhergestellt" — der Unterschied zu einem
+normalen Reconnect ist, dass sich die zugrundeliegende Instanz-ID
+geändert haben kann. Ohne diese Ergänzung würde ein Operator nach
+einem echten Failover auf ein leeres/totes UI schauen, obwohl der
+Redundanz-Mechanismus selbst korrekt funktioniert hat — genau das
+„unmerklich" aus der Nutzerfrage verlangt das Gegenteil.
+
+**Priorität:** K7-Teil-1 (Prozess-Auto-Restart) ist reif und
+unabhängig sofort umsetzbar — höchste Priorität unter den in diesem
+Kapitel noch offenen Teilen. Die Konsolen-Rollen-Auflösung oben ist
+klein genug, um **direkt mit K7-Teil-1** mitgenommen zu werden (beide
+brauchen dieselbe Grundlage: eine Rolle, die über einen Prozesswechsel
+hinweg stabil bleibt), statt auf Hot-Standby (Teil 4) zu warten.
 
 ---
 
@@ -2306,6 +2473,28 @@ Dokument).
 > beim/vor dem starten neuer microservices
 > anzeigen/alarmieren/warnen/berücksichtigen."
 
+> **Nachtrag (2026-07-17)**, direkte Antwort auf `frage an fabel.txt`
+> Punkt 6 („ist unser System auf optimale Ressourcen-Sharing,
+> Performance und Stabilität maximiert?"): **ehrlicher Zwischenstand,
+> keine neue Frage** — die Grundlage existiert teilweise, die
+> eigentliche Optimierung ist noch nicht gebaut. D6 Teil 3
+> (Placement-Engine, `UMSETZUNG.md`) ist fertig, aber bewusst nur
+> **advisory** (schlägt einen Ausweich-Host vor, greift nicht
+> automatisch ein) — noch keine automatische Ressourcen-Optimierung,
+> nur eine Empfehlung an den Menschen. Die in diesem Kapitel geplante
+> Verbrauchs-Historie/Vorprüfung (unten) ist die zweite fehlende
+> Hälfte: ohne sie weiß der Orchestrator vor dem Start eines neuen
+> Microservice gar nicht, wie viel es typischerweise braucht.
+> Stabilität hat mit dem MXL-Read-Livelock-Fix (`docs/decisions.md`,
+> 2026-07-17) und dem Registry-Geist-OOM-Fix (2026-07-16) gerade zwei
+> ihrer bis dahin größten bekannten Schwachstellen verloren — aber
+> ohne die hier und in Kapitel 7 (Redundanz) geplanten Bausteine ist
+> „maximiert" noch nicht erreicht. **Kurz: Fundament vorhanden
+> (Placement-Engine, Health-Checks, Discovery), die eigentlichen
+> Optimierungs-/Vorwarn-Bausteine aus diesem und dem Redundanz-Kapitel
+> sind die konkrete, noch offene Antwort** — kein neuer
+> Recherche-Bedarf, nur Umsetzung der bereits entworfenen Teile.
+
 ### 14.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
 
 - **Telemetrie ist ein Momentwert:** `Sample {cpuPercent,
@@ -2432,3 +2621,419 @@ Advisory-zuerst-Staffelung wie §6.1).
    erwarteter Auslastung über der Healthy-Schwelle aus D6 Teil 3,
    „überbucht" ab über der Alarm-Schwelle) — einstellbar über die
    K11-Settings-Registry?
+
+---
+
+## 15. Multi-Resolution-Streams (Highres + Lowres/Preview) + Workflow-Auflösungs-Settings
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 1): „MXL-Kameras (aber
+> auch andere Quellen/Nodes) erzeugen in der Regel mehrere Streams,
+> einen Highres, einen Lowres (als Preview) etc. Sollten das nicht auch
+> unsere Nodes machen (Bildmischer, OGraf, Testquelle, Multiviewer)?
+> Sollte der Bildmischer nicht für die Preview und die Vorschau auf den
+> einzelnen Quell-Buttons selbst nicht die Lowres-Streams der Quellen
+> nutzen (sofern verfügbar) und nur auf Programm die Highres schalten?
+> Generell müssen wir pro Workflow Settings haben, welche Auflösung
+> dieser haben soll."
+
+### 15.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- **Jeder Node registriert genau einen MXL-Flow pro logischem
+  Ausgang, in genau einer Auflösung.** `omp-mediaio::mxl::
+  MxlVideoOutput::new` (`nodes/omp-mediaio/src/mxl.rs`) nimmt ein
+  festes `width, height` entgegen und legt einen einzelnen
+  `video_flow_def`-Flow an — nichts im Code registriert heute mehrere
+  Auflösungen desselben Signals.
+- **„Lowres-Preview" existiert bereits — aber als Transcode-on-Demand,
+  nicht als eigener Lowres-Flow.** `omp-mediaio::preview::
+  build_mjpeg_branch` (`preview.rs:156–205`) zapft die **highres**-
+  GStreamer-Pipeline nach dem Decoder an
+  (`videoscale ! videorate ! capsfilter ! jpegenc ! appsink`) und
+  liefert MJPEG-über-HTTP. Das nutzen heute `omp-multiviewer`
+  (`pipeline.rs:222`) und implizit jede UI-Kachel-Vorschau.
+- **Kritisch: `omp-video-mixer-me` und `omp-multiviewer` öffnen für
+  jeden Crosspoint-Eingang bzw. jede Kachel einen vollen
+  Highres-`MxlVideoInput`** (`omp-video-mixer-me/src/pipeline.rs:298,
+  330`; `omp-multiviewer/src/pipeline.rs:157`) — das heutige
+  Downscaling passiert also **nach** vollem Empfang/Decode. Kein
+  Bandbreiten- oder CPU-Vorteil auf der Empfangsseite, genau die vom
+  Nutzer vermutete Lücke.
+- **Kein Per-Workflow-Settings-Feld existiert.** Das `Workflow`-Struct
+  (`orchestrator/internal/workflows/types.go:71–80`, D7 Teil 1) hat
+  `ID, Name, Definition, Status, Error, Runtime, CreatedAt, UpdatedAt`
+  — kein Konfigurations-/Settings-Feld für z. B. eine
+  Ziel-Auflösung.
+
+### 15.2 Referenz PIPELINE CONTROLLER
+
+PIPELINE CONTROLLER ist Single-Channel-Playout ohne Mehrfach-
+Auflösungs-Konzept — kein direkt übertragbares Muster hier. Das
+Broadcast-Standardmuster (nicht PIPELINE-CONTROLLER-spezifisch, aber
+branchenüblich und namensgebend für die Nutzerfrage) ist NMOS/IS-04
+„mehrere Flows pro Source" — eine Kamera meldet z. B. einen 1080p50-
+und einen 270p-Flow als zwei eigenständige, unabhängig abonnierbare
+IS-04-Flows derselben Source. `ARCHITECTURE.md` §5 (Node-Contract)
+kennt das Konzept „Sender" bereits als Liste — ein zweiter Sender pro
+Node für die Lowres-Variante ist strukturell kein Bruch, nur bisher
+nirgends genutzt.
+
+### 15.3 Ziel-Design
+
+**a) Zweiter, echter MXL-Flow statt Transcode-on-Demand.** Nodes, die
+Video ausgeben (`omp-source`, `omp-video-mixer-me`s PGM-Ausgang,
+`omp-ograf`s Fill+Key, `omp-player`), bekommen optional einen zweiten
+`MxlVideoOutput` in fester, kleiner Auflösung (Vorschlag: 320×180 oder
+konfigurierbar), gespeist vom selben GStreamer-Zweig wie der
+bestehende MJPEG-Preview-Branch (`preview.rs`s `videoscale`-Tap wird
+zur Quelle für einen zweiten MXL-Sender statt/zusätzlich zu MJPEG) —
+kein zweiter Encode-Pfad, nur ein zweiter Sender-Ausgang derselben
+bereits vorhandenen herunterskalierten Daten.
+**b) Bildmischer/Multiviewer lesen bevorzugt lowres.** Crosspoint-
+Button-Vorschauen und Multiviewer-Kacheln öffnen — falls der Quell-Node
+einen Lowres-Sender meldet (per IS-04-Flow-Discovery erkennbar,
+`urn:x-nmos:tag:grouphint` o. ä. als Kennzeichnung „gehört zu
+Highres-Flow X, ist die Lowres-Variante") — einen `MxlVideoInput` auf
+den Lowres-Flow statt auf Highres; nur der tatsächlich auf **Programm**
+geschaltete Eingang öffnet zusätzlich (oder nur dann) den Highres-Flow.
+Rückfall: Quelle ohne Lowres-Sender → wie heute Highres + Downscale.
+**c) Workflow-Auflösungs-Setting.** `Workflow`-Struct bekommt ein
+`Settings`-Feld (JSON/Postgres-`jsonb`, additiv, kein Node-Contract-
+Thema) mit mindestens `programResolution` (die „eingestellte"
+Auflösung aus der Nutzerfrage, heute implizit 640×480 fest in mehreren
+Nodes verdrahtet) und `previewResolution`. Node-Start-Parameter für
+Auflösung werden beim Workflow-Start aus diesem Setting befüllt statt
+wie heute pro Node-Typ hartkodiert.
+
+### 15.4 Phasenplan
+
+- **Teil 1 — Workflow-Auflösungs-Setting:** `Settings`-Feld am
+  Workflow-Objekt, UI-Eingabe beim Workflow-Anlegen, Node-Start
+  übernimmt `programResolution` statt fester Werte. Kleinster,
+  unabhängig verifizierbarer Schritt (heutige feste 640×480-Nodes
+  laufen unverändert weiter, nur jetzt aus Settings gespeist).
+- **Teil 2 — Zweiter MXL-Sender in `omp-mediaio::mxl`:** optionaler
+  Lowres-`MxlVideoOutput`, gespeist vom bestehenden Downscale-Zweig,
+  als IS-04-Flow der Highres-Quelle zugeordnet (Grouphint-Tag).
+  Verifikation: `mxl-info -g` zeigt zwei Flows pro Quelle, beide mit
+  Daten.
+- **Teil 3 — Bildmischer/Multiviewer lesen lowres.** Crosspoint-/
+  Kachel-Vorschau-Reader wählen bevorzugt den Lowres-Flow; PGM-Pfad
+  bleibt highres. Verifikation: RSS/CPU-Vergleich Vorher/Nachher bei
+  N gleichzeitigen Vorschau-Kacheln (erwartete, messbare Senkung).
+- **Teil 4 — `omp-ograf`/`omp-player` als weitere Lowres-Quellen**
+  (Analogie zu Teil 2, pro Node einzeln nachziehbar).
+
+### 15.5 Offene Fragen an den Projektinhaber
+
+1. Feste Lowres-Zielauflösung (Vorschlag: eine feste Größe wie 320×180
+   für alle Quellen, einfach) oder pro Workflow konfigurierbar wie die
+   Highres-Auflösung selbst (mehr Konsistenz, mehr Einstell-Fläche)?
+2. Soll der zweite MXL-Sender **immer** mitlaufen (einfacher, etwas
+   MXL-Zusatzlast auch wenn gerade niemand die Vorschau braucht) oder
+   nur bei aktivem Vorschau-Bedarf zugeschaltet werden (spart Last,
+   braucht eine Aktivierungs-/Referenzzählung — ähnliches Muster wie
+   der verworfene PST-Vorschau-Versuch, `docs/decisions.md`
+   2026-07-16, jetzt ohne dessen MXL-Read-Livelock-Blocker, s.
+   2026-07-17)?
+3. Reihenfolge relativ zu Kapitel 16 (Inter-Host-Fabrics): unabhängig,
+   kann parallel/davor laufen — Bestätigung, keine echte Abhängigkeit
+   gefunden.
+
+---
+
+## 16. Inter-Host-Medientransport jenseits ST 2110/SRT — MXL-native Fabrics (Remote Memory Access)
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 3): „wir haben derzeit
+> 2110 über SRT als Inter-Host-Connection. Das ist gut und soll als
+> Option erhalten bleiben. Aber Ziel muss es sein, Remote Memory Access
+> zwischen den Hosts zu nutzen — erstens wegen der Latency, und damit
+> wir alle Quellen/Senken/Nodes aller Hosts z. B. in einem Regieplatz/
+> Bildmischer nutzen können. Klar können wir das jetzt nicht am
+> Chromebook testen, aber es muss vollständig implementiert sein. (Oder
+> kann man es eventuell doch irgendwie testen?)"
+
+### 16.1 Ist-Zustand — zwei unreconciled Pläne, eine wichtige Neuigkeit
+
+**`ARCHITECTURE.md` §6.6 plant bereits ein RDMA/RoCEv2-Modul** — ein
+eigenes, von MXL unabhängiges `omp-mediaio`-Transportmodul auf Basis
+von `rdma-core`/`libibverbs`, mit eigenem `transportHint`/
+`rdmaFabricId`-Platzierungs-Claim. Dieser Plan setzt **echte
+RDMA-Hardware (RoCEv2-NICs) für jeden echten Test voraus** — exakt der
+Punkt, an dem die Nutzerfrage „kann man das am Chromebook testen"
+ansetzt, und den §6.6 bisher mit „nur simuliert über Tags" beantwortet.
+
+**Neue, bisher nirgends dokumentierte Erkenntnis: MXL selbst bringt
+bereits eine fertige, alternative Lösung mit — vendored, aber
+unbenutzt.** `third_party/mxl/lib/fabrics/ofi/` ist eine eigenständige
+Bibliothek `mxl-fabrics`, die **libfabric** (die OFI-Standard-
+Abstraktion für RDMA-fähige Transporte, kein MXL-Eigenbau) kapselt.
+`tools/mxl-fabrics-demo/demo.cpp` ist ein vollständiges (kein Stub!)
+Initiator/Target-Werkzeug: ein Initiator schreibt per **echtem
+One-Sided-RDMA-Write** die Shared-Memory-Regionen eines Flow-Readers
+(`mxlFabricsRegionsForFlowReader`/`mxlFabricsInitiatorSetup`) direkt in
+die passenden Regionen eines Targets auf einem **anderen Host** — also
+echter Zero-Copy-Remote-Memory-Zugriff über Hostgrenzen hinweg, genau
+das vom Nutzer gewünschte Ziel, nicht nur RDMA dem Namen nach.
+
+**Direkte Antwort auf „kann man es testen":** Ja. `mxl/fabrics.h:50–57`
+definiert `mxlFabricsProvider` mit `MXL_SHARING_PROVIDER_TCP` neben
+`VERBS`/`EFA`/`SHM` — libfabrics `tcp`-Provider ist eine reine
+Software-Implementierung, **keine RDMA-NIC nötig**. `mxl-fabrics-demo
+--provider tcp` läuft über normales Ethernet/Loopback, also auch auf
+dem Chromebook/in Crostini — funktional vollständig testbar, nur ohne
+die Hardware-DMA-Beschleunigung/niedrigste Latenz echter RDMA-NICs.
+
+**Aktueller Baustatus:** `CMakeLists.txt:17`:
+`option(MXL_ENABLE_FABRICS_OFI "..." OFF)` — standardmäßig **aus**,
+`deploy/dev/install-mxl.sh` überschreibt das nicht, also ist
+`mxl-fabrics`/`mxl-fabrics-demo` in diesem Repo aktuell **nicht**
+gebaut. Nötig: `-DMXL_ENABLE_FABRICS_OFI=ON` + `libfabric-dev`
+(`apt-cache policy` bestätigt: direkt aus dem bereits konfigurierten
+Debian-Bookworm-Repo verfügbar, Kandidat 1.17.0-3, keine
+Vcpkg-/Custom-Build-Hürde) — nicht installiert, aber ein einzeiliger
+`apt install`.
+
+### 16.2 Referenz PIPELINE CONTROLLER
+
+Nicht einschlägig — Single-Box, kein Mehr-Host-Konzept.
+
+### 16.3 Ziel-Design — Empfehlung: MXL-native Fabrics statt eigenem RDMA-Modul
+
+**Empfehlung (vom Projektinhaber zu bestätigen, s. 16.5):** §6.6s
+eigenständiges `rdma-core`-Modul **nicht** parallel weiterverfolgen,
+sondern **MXLs eigene Fabrics-Bibliothek als Inter-Host-Transport
+integrieren**. Begründung:
+
+- Weniger Code/Wartung: kein eigener RDMA-Stack, sondern eine bereits
+  vendorte, vom MXL-Projekt selbst gepflegte Bibliothek nutzen —
+  gleiche Begründung wie „MXL statt eigenem Zero-Copy-Transport" aus
+  C4 (`docs/decisions.md` 2026-07-09).
+- **Sofort testbar** ohne Sonder-Hardware (TCP-Provider) — löst genau
+  den vom Nutzer benannten Chromebook-Einwand, den §6.6 bisher offen
+  ließ.
+- Gleicher Ziel-Nutzen: „alle Quellen/Senken aller Hosts in einem
+  Regieplatz nutzen" — Fabrics arbeitet auf Flow-Ebene (dieselbe
+  Abstraktion wie die heutigen `MxlVideoInput`/`Output`), lässt sich
+  also als dritte `omp-mediaio`-Transport-Variante neben RTP/ST2110
+  einreihen, mit demselben `Output`-Trait.
+- Migrationspfad zu echter RDMA-Hardware bleibt erhalten: derselbe
+  Code, späterer Wechsel `--provider tcp` → `--provider verbs`
+  (RoCEv2) ist eine Konfigurationsfrage, kein Architektur-Wechsel —
+  §6.6s Hardware-Beschleunigungsziel bleibt damit erreichbar, nur über
+  einen anderen Unterbau.
+
+**Konkretes Design:** neues `omp-mediaio::fabrics`-Modul (Feature-Flag
+`fabrics`, analog zum bestehenden `mxl`-Feature), das pro Flow einen
+`FabricsInitiator`/`FabricsTarget` analog zu `MxlVideoInput`/`Output`
+anbietet. Placement-Claim: neues `transportHint: "fabrics"` +
+`fabricsProvider: tcp|verbs|efa` pro Workflow-Rolle (wiederverwendet
+§6.1s bestehendes Claim-Schema, keine neue Modellierung). ST-2110/SRT
+(D4) bleibt als Fallback/Standard-Option unverändert bestehen — die
+Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
+
+### 16.4 Phasenplan
+
+- **Teil 0 — Build aktivieren + Spike (eine Sitzung, wie K5-Teil-0):**
+  `libfabric-dev` installieren, `MXL_ENABLE_FABRICS_OFI=ON`,
+  `mxl-fabrics-demo` bauen und über `--provider tcp` zwischen zwei
+  Prozessen auf **demselben** Host (simuliert zwei Hosts über zwei
+  MXL-Domains) verifizieren — reines Werkzeug-Verifikationsziel, kein
+  OMP-Code.
+- **Teil 1 — `omp-mediaio::fabrics`-Grundmodul:** ein Flow, ein Host-
+  Paar, TCP-Provider, `Output`-Trait-Implementierung analog C4.
+  Verifikation: zwei `MxlContext`-Domains auf verschiedenen TCP-Ports/
+  Netzwerk-Namespaces (Software-Simulation von „zwei Hosts" auf einer
+  Maschine, wie in Teil 0) — Frame kommt über Fabrics an.
+- **Teil 2 — Placement-Integration:** `transportHint`/
+  `fabricsProvider`-Claim, Orchestrator wählt Fabrics vs. ST2110/SRT
+  pro Rolle.
+- **Teil 3 — echte Mehr-Host-Verifikation:** sobald zwei physische
+  Hosts verfügbar sind (auch ohne RDMA-NIC, TCP-Provider reicht für
+  Funktionsnachweis) — Latenzvergleich gegen den bestehenden SRT-Pfad.
+- **Teil 4 (später, Hardware-abhängig):** `verbs`/`efa`-Provider mit
+  echter RoCEv2-Hardware, sobald verfügbar — reine
+  Konfigurationsänderung laut 16.3.
+
+### 16.5 Offene Fragen an den Projektinhaber
+
+1. **Grundsatzentscheidung:** MXL-native Fabrics (Empfehlung oben)
+   statt des in `ARCHITECTURE.md` §6.6 skizzierten eigenständigen
+   `rdma-core`-Moduls — zustimmen, oder soll §6.6s ursprünglicher Plan
+   weiterverfolgt werden (z. B. weil dort bereits mehr Detail-Design
+   existiert)? `ARCHITECTURE.md` §6.6 sollte im Zustimmungsfall auf
+   diese Entscheidung aktualisiert werden.
+2. Priorität relativ zu Kapitel 15 (Multi-Res) und den übrigen
+   `frage an fabel.txt`-Punkten — s. Kapitel 18 (konsolidierte
+   Priorisierung), dort als niedrigere Priorität eingeordnet
+   (Begründung dort).
+3. Reicht der TCP-Software-Provider als **dauerhafte** Lösung für
+   Hosts ohne RDMA-NIC (dann ist „echtes RDMA" nur ein
+   Leistungsversprechen für später), oder ist eine spätere
+   Hardware-Beschaffung für Regelbetrieb ohnehin eingeplant?
+
+---
+
+## 17. Node-/Microservice-Katalog: Beschreibungen, Ressourcen-Sicht, Alarm-View, Import fremder Microservices
+
+> Nutzer-Feedback (`frage an fabel.txt`, Punkt 6, zweiter „6)"): „die
+> Microservice/Node-Katalog ist im UI noch nicht schön. Es fehlen noch
+> Beschreibungen, die vermuteten Ressourcen, unterschiedliche Tabs oder
+> so, wo man sieht was alles gerade läuft (und Metrics/Alarme),
+> generell ein Alarm-View, zum Launchen und das Importieren/
+> Versionieren/Löschen von Microservices (wenn ein Drittanbieter/die
+> Community — aber auch wir selbst — ein Microservice liefert, möchte
+> ich das importieren können)."
+
+### 17.1 Ist-Zustand in OMP (Code gelesen, nicht angenommen)
+
+- **Katalog heute minimal.** `ui/shell/workflows-view.ts:13–16`s
+  `CatalogEntry` kennt nur `type`/`label`. Backend
+  `orchestrator/internal/launcher/catalog.go:20–27` lädt eine statische
+  `deploy/catalog.json` mit `Type, Label, Runner, Command, Env` — kein
+  Beschreibungsfeld, kein Ressourcen-Feld.
+- **Kein „was läuft gerade + Metrics/Alarme"-Tab** getrennt vom
+  Workflow-Editor; kein genereller Alarm-View.
+- **Nur ein Runner: lokaler Prozess.** `catalog.go:14–16` kommentiert
+  das Runner-Feld bereits als „bewusst offen" für einen künftigen
+  `"podman"`-Runner — **nicht gebaut**. Jeder Node ist heute ein
+  Cargo-Workspace-Mitglied unter `nodes/`, `deploy/catalog.json`
+  verweist auf lokal vorgebaute Binärpfade.
+- **Ressourcen-Anzeige ist bereits vollständig als Kapitel 14 geplant**
+  (Ringpuffer-Historie, Pro-Instanz-Telemetrie, Typ-Profile,
+  Start-Ampel) — **nicht** neu zu entwerfen, siehe dort. Was Kapitel 14
+  **nicht** abdeckt: Beschreibungstext, ein eigener „laufende
+  Instanzen"-Tab mit Metrics/Alarmen zusammen, ein genereller
+  Alarm-View, Import/Versionierung/Löschen.
+- **Kein Beschreibungsfeld im Descriptor.** `omp-node-sdk/src/
+  descriptor.rs` (A8, Self-Describe) ist ein **Laufzeit**-Deskriptor
+  (nach dem Start abgefragt) ohne Beschreibungsfeld — ungeeignet für
+  eine Katalog-**Vorschau** vor dem Start; dafür braucht es ein
+  separates, statisches Katalog-Metadatenfeld (Beschreibung gehört
+  logisch zum Katalog-Eintrag, nicht zur Laufzeit-Instanz).
+
+### 17.2 Referenz
+
+Nicht direkt PIPELINE-CONTROLLER-Terrain (dort kein Microservice-
+Katalog, Single-Binary). Branchenübliches Vorbild für „Beschreibung +
+Ressourcenschätzung + Versionierung + Import" ist eher ein
+Paketmanager-/App-Store-Muster (z. B. Kubernetes-Helm-Charts, Docker-
+Hub-Images mit README+Tags) als ein Broadcast-spezifisches Vorbild —
+hier gibt es kein „nicht neu erfinden"-Vorbild im Projektumfeld, das
+Design muss eigenständig entworfen werden.
+
+### 17.3 Ziel-Design
+
+**a) Statische Katalog-Metadaten (klein, sofort machbar).**
+`deploy/catalog.json`-Einträge bekommen `description` (Freitext) und
+optional `expectedResources` (grober Vorab-Schätzwert, bevor Kapitel
+14s Typ-Profile genug Messwerte gesammelt haben — „vermutete
+Ressourcen" aus der Nutzerfrage wörtlich). UI: Katalog-Kacheln zeigen
+Beschreibung + Icon/Kategorie statt nur `label`.
+
+**b) „Laufende Instanzen"-Tab mit Metrics/Alarmen (baut auf Kapitel
+14).** Neue Ansicht (dritter Tab neben Flow-Editor/Workflows/Hosts aus
+§1.3b, oder Unterreiter von Hosts) — pro laufender Instanz: Status,
+Kapitel-14-Ressourcenwerte, Crash-/Restart-Zähler (Kapitel 7 §7.3a).
+**c) Genereller Alarm-View.** Sammelt alle bereits existierenden
+Fehler-/Warn-Signale an einer Stelle statt verteilt: `instance.crashed`
+(bereits vorhanden), Kapitel-14-Ressourcen-Ampel, künftig
+`instance.restarted`/Crash-Loop (Kapitel 7). Kein neuer
+Alarm-**Erzeuger** nötig — nur ein neuer, zentraler **Konsument** der
+bereits über NATS laufenden Events.
+**d) Import/Versionierung/Löschen fremder Microservices — bewusst als
+eigene, größere Ausbaustufe markiert.** Das ist architektonisch die
+größte der sechs Fragen: braucht (i) einen Runner jenseits `"process"`
+(Container-Image, `catalog.go`s bereits vorgesehener `"podman"`-Runner
+— am wenigsten neue Infrastruktur, da Podman/Quadlets bereits
+Kern-Baustein der Plattform sind, A2/A3), (ii) eine
+Katalog-**Schreib**-API (`POST /api/v1/catalog` statt der heutigen
+statischen Datei), (iii) eine Versions-/Vertrauensfrage (Signatur?
+Nur-lokal-Import ohne Signaturprüfung als v1-Kompromiss?), (iv) eine
+Löschen-Semantik (nur wenn keine laufende Instanz mehr referenziert).
+**Empfehlung:** v1 klein halten — Import = lokaler Podman-Image-Pfad/
+Tag in der Katalog-Schreib-API eintragen, keine Signaturprüfung, keine
+Remote-Registry-Anbindung; das deckt „ich möchte importieren können"
+bereits ab, ohne eine vollständige Trust-/Registry-Architektur vorweg
+zu bauen.
+
+### 17.4 Phasenplan
+
+- **Teil 1 — Beschreibung + vermutete Ressourcen im Katalog (klein,
+  sofort):** `catalog.json`-Schema erweitern, UI zeigt es an.
+- **Teil 2 — Laufende-Instanzen-Tab:** baut direkt auf Kapitel-14-
+  Datenmodell, keine neue Backend-Logik.
+- **Teil 3 — Alarm-View:** zentraler NATS-Event-Konsument + UI-Liste,
+  baut auf bereits existierenden Events.
+- **Teil 4 — Podman-Runner + Katalog-Schreib-API (Import/Löschen):**
+  größter Teil, eigene Sitzung(en), da neue Ausführungs-/
+  Sicherheits-Fläche.
+- **Teil 5 — Versionierung:** mehrere Versionen desselben Typs
+  parallel im Katalog, Instanz merkt sich ihre Version — nur relevant,
+  sobald Teil 4 existiert.
+
+### 17.5 Offene Fragen an den Projektinhaber
+
+1. Ist der Podman-Runner (Teil 4) tatsächlich gewünschter Umfang für
+   „importieren", oder reicht vorerst nur ein weiterer lokal gebauter
+   Binärpfad (kein Containerisierungs-Sprung, deutlich kleinerer
+   Aufwand, aber kein echter Fremd-Microservice-Import ohne
+   gemeinsame Build-Toolchain)?
+2. Vertrauensmodell für importierte Microservices: gar keine Prüfung
+   (v1-Vorschlag, Risiko liegt beim Bediener) oder von Anfang an eine
+   Mindestprüfung (z. B. Node-Contract-Konformitätstest aus C9 als
+   Aufnahme-Voraussetzung)?
+3. Reihenfolge relativ zu Kapitel 14 — Bestätigung: Teil 1–3 hier
+   können vor, während oder nach Kapitel 14 laufen (Datenmodell-
+   Abhängigkeit nur für Teil 2), keine harte Blockade in beide
+   Richtungen.
+
+---
+
+## 18. Konsolidierte Priorisierung — `frage an fabel.txt` (2026-07-17)
+
+Alle sechs (tatsächlich sieben, da Punkt 6 im Original doppelt
+nummeriert war) Punkte aus `frage an fabel.txt` sind jetzt in Kapitel
+1.6, 4.6, 7.6, 14 (Nachtrag), 15, 16, 17 ausgearbeitet. Diese Liste ist
+die vom Projektinhaber angeforderte Priorisierung („ordne nach deiner
+Priorität") mit kurzer Begründung — Details in den jeweiligen
+Kapiteln, nicht hier wiederholt.
+
+1. **§1.6 — Property-Panel-Breite + „Als Operator ansehen"-Button.**
+   Kleinster Aufwand, beide Design-Fragen bereits vollständig durch
+   Code-Lesen geklärt (kein offener Rechercheposten mehr), direkter
+   Treffer auf die Nutzer-Vorgabe „achte auf ein schönes UI" — sofort
+   umsetzbar, keine Abhängigkeiten.
+2. **§7.6/K7-Teil-1 — Prozess-Auto-Restart + stabile Konsolen-Rolle.**
+   Bereits vollständig entworfen und entschieden (Kapitel 10, Punkt
+   8), „startet sofort" seit 2026-07-14, aber bis heute nicht
+   begonnen. Schließt eine reale Stabilitäts-/Redundanz-Lücke, moderat
+   groß, keine externen Abhängigkeiten.
+3. **§17 Teil 1–3 — Katalog-Beschreibungen + Laufende-Instanzen-Tab +
+   Alarm-View.** Sichtbarer UI-Qualitätssprung, baut überwiegend auf
+   bereits vorhandenen Daten/Events, kein Architektur-Risiko. Teil 4/5
+   (Import) bewusst zurückgestellt (siehe dort).
+4. **§4.6 — Audio-Mixer EQ-Parametrisierung + Dynamik (Kapitel-4-
+   Teil-2, jetzt inkl. EQ-Upgrade).** Klar umrissene Node-
+   Vervollständigung auf bestehendem Plan, kein neues Konzept.
+5. **Kapitel 15 — Multi-Resolution-Streams.** Hoher Nutzwert (Bandbreite/
+   CPU bei realen Mehrquellen-Setups), aber cross-cutting (mehrere
+   Nodes + Workflow-Objekt) — nach den kleineren, unabhängigen Punkten
+   oben eingeordnet, nicht weil weniger wichtig, sondern weil größer.
+6. **Kapitel 16 — Inter-Host-Fabrics (RDMA/Remote-Memory).** Höchster
+   potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz), aber:
+   (a) braucht zuerst die Grundsatzentscheidung MXL-Fabrics vs.
+   `ARCHITECTURE.md` §6.6 (offene Frage 16.5.1), (b) ist am weitesten
+   von einer bestehenden Umsetzung entfernt (Teil 0 ist noch ein reiner
+   Werkzeug-Spike). Absichtlich als „wichtig, aber noch nicht
+   startbereit ohne Grundsatzentscheidung" eingeordnet — sobald die
+   Entscheidung fällt, ist Teil 0 (Build-Flag + Spike) klein und passt
+   in eine einzelne Sitzung.
+7. **§17 Teil 4/5 — Import/Versionierung fremder Microservices.**
+   Architektonisch am größten (Podman-Runner, Katalog-Schreib-API,
+   Vertrauensmodell), am wenigsten dringend für den aktuellen
+   Ein-Entwickler-/Demo-Stand des Projekts — bewusst ans Ende gestellt.
+
+**Empfohlener nächster konkreter Schritt** (nicht Teil dieser
+Priorisierung selbst, sondern die unmittelbare Konsequenz): Punkt 1
+oben (`§1.6`) als nächsten `UMSETZUNG.md`-Schritt aufnehmen und
+umsetzen — klein, unabhängig, sofort sichtbar.

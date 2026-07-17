@@ -16,6 +16,12 @@ BIN="$ROOT_DIR/bin/omp-orchestrator"
 
 mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
 
+# /dev/shm ist tmpfs und überlebt einen Neustart/eine Bereinigung nicht
+# (docs/decisions.md, 2026-07-17) — ohne dieses Verzeichnis schlägt jeder
+# MXL-Node-Start mit "Domain path is not a directory" fehl, bis jemand es
+# von Hand anlegt.
+mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"
+
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
   echo "Orchestrator läuft bereits (PID $(cat "$PID_FILE"))." >&2
   echo "Erst stoppen: make stop" >&2
