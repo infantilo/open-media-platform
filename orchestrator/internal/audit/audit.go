@@ -6,6 +6,7 @@
 package audit
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -13,6 +14,16 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// RetentionInterval ist der Abstand zwischen zwei Durchläufen des
+// Retention-Jobs (S5, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
+// "täglicher Job" laut Review, ein Löschlauf pro Tag reicht bei einer
+// Aufbewahrung von standardmäßig 90 Tagen bei weitem.
+const RetentionInterval = 24 * time.Hour
+
+// DefaultRetentionDays ist der Default für OMP_AUDIT_RETENTION_DAYS
+// (config.go), falls nicht gesetzt.
+const DefaultRetentionDays = 90
 
 // Entry ist eine protokollierte Aktion.
 type Entry struct {
@@ -69,11 +80,18 @@ func (s *Store) Log(username, method, path, nodeID string, status int) {
 	}
 }
 
-// List liefert die jüngsten Einträge (neueste zuerst), maximal limit.
-func (s *Store) List(limit int) ([]Entry, error) {
+// List liefert Einträge neueste zuerst, maximal limit, per Cursor
+// (S5): before == 0 liefert die erste Seite, before > 0 liefert nur
+// Einträge mit id < before — die ID (BIGSERIAL-PK, dicht/monoton,
+// bereits indiziert) ist der Cursor, nicht der Zeitstempel, weil
+// occurred_at bei schnell aufeinanderfolgenden Schreibzugriffen
+// Duplikate haben kann, die ID nie. Der Aufrufer erkennt das Ende der
+// Liste daran, dass weniger als limit Einträge zurückkommen (keine
+// zusätzliche COUNT(*)-Abfrage nötig).
+func (s *Store) List(before int64, limit int) ([]Entry, error) {
 	rows, err := s.db.Query(
 		`SELECT id, occurred_at, username, method, path, coalesce(node_id, ''), status
-		 FROM audit_log ORDER BY occurred_at DESC LIMIT $1`, limit)
+		 FROM audit_log WHERE $1 = 0 OR id < $1 ORDER BY id DESC LIMIT $2`, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -88,4 +106,53 @@ func (s *Store) List(limit int) ([]Entry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// PurgeOlderThan löscht Einträge, die älter als retentionDays sind,
+// und liefert die Anzahl der gelöschten Zeilen. retentionDays <= 0
+// deaktiviert die Löschung (kein Löschlauf statt eines möglicherweise
+// überraschenden "alles löschen").
+func (s *Store) PurgeOlderThan(retentionDays int) (int64, error) {
+	if retentionDays <= 0 {
+		return 0, nil
+	}
+	res, err := s.db.Exec(
+		`DELETE FROM audit_log WHERE occurred_at < now() - ($1 * interval '1 day')`, retentionDays)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RunRetention führt PurgeOlderThan einmal sofort aus (Startup-Lauf,
+// S5) und danach im RetentionInterval-Takt, bis ctx endet — gleiches
+// Run(ctx)-Muster wie graph.Service.Run/registry.Poller.Run. Ein
+// einzelner fehlgeschlagener Lauf wird geloggt, der nächste plangemäße
+// Lauf versucht es erneut (gleiche Robustheits-Linie wie der Rest des
+// Stacks, kein Retry-Backoff nötig bei einem täglichen Intervall).
+func (s *Store) RunRetention(ctx context.Context, retentionDays int) {
+	s.purgeOnce(retentionDays)
+
+	ticker := time.NewTicker(RetentionInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.purgeOnce(retentionDays)
+		}
+	}
+}
+
+func (s *Store) purgeOnce(retentionDays int) {
+	deleted, err := s.PurgeOlderThan(retentionDays)
+	if err != nil {
+		slog.Warn("audit retention purge failed", "error", err, "retention_days", retentionDays)
+		return
+	}
+	if deleted > 0 {
+		slog.Info("audit retention purge completed", "deleted", deleted, "retention_days", retentionDays)
+	}
 }

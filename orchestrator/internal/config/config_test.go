@@ -14,6 +14,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMP_MTLS_CERT_FILE", "")
 	t.Setenv("OMP_MTLS_KEY_FILE", "")
 	t.Setenv("OMP_MTLS_CA_FILE", "")
+	t.Setenv("OMP_AUDIT_RETENTION_DAYS", "")
 
 	cfg := Load()
 
@@ -50,6 +51,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.MTLSCAFile != "../.run/mtls/root_ca.crt" {
 		t.Errorf("MTLSCAFile = %q, want %q", cfg.MTLSCAFile, "../.run/mtls/root_ca.crt")
 	}
+	if cfg.AuditRetentionDays != 90 {
+		t.Errorf("AuditRetentionDays = %d, want 90", cfg.AuditRetentionDays)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -64,6 +68,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OMP_MTLS_CERT_FILE", "/srv/omp/mtls/o.crt")
 	t.Setenv("OMP_MTLS_KEY_FILE", "/srv/omp/mtls/o.key")
 	t.Setenv("OMP_MTLS_CA_FILE", "/srv/omp/mtls/ca.crt")
+	t.Setenv("OMP_AUDIT_RETENTION_DAYS", "30")
 
 	cfg := Load()
 
@@ -99,5 +104,8 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.MTLSCAFile != "/srv/omp/mtls/ca.crt" {
 		t.Errorf("MTLSCAFile = %q, want %q", cfg.MTLSCAFile, "/srv/omp/mtls/ca.crt")
+	}
+	if cfg.AuditRetentionDays != 30 {
+		t.Errorf("AuditRetentionDays = %d, want 30", cfg.AuditRetentionDays)
 	}
 }

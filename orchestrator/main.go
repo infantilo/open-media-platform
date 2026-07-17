@@ -226,6 +226,9 @@ func main() {
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
 	authzStore := authz.NewStore(database)
 	auditStore := audit.NewStore(database, hub)
+	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
+	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
+	go auditStore.RunRetention(ctx, cfg.AuditRetentionDays)
 	consoleResolver := consoles.NewResolver(authzStore)
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).

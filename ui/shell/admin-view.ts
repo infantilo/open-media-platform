@@ -53,6 +53,11 @@ interface NodeEntry {
 
 const AUDIT_POLL_FALLBACK_INTERVAL_MS = 30000;
 const AUDIT_REFRESH_EVENT_TYPES = new Set(["audit.appended", "lost-events"]);
+// AUDIT_PAGE_LIMIT (S5, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
+// muss <= server.go's maxAuditLogLimit (200) sein, sonst kappt der
+// Server ohnehin; als eigene Konstante statt einer Magic Number an
+// beiden Aufrufstellen unten (#loadAudit/#loadMoreAudit).
+const AUDIT_PAGE_LIMIT = 50;
 
 const VERBS = ["view", "operate", "configure", "admin"] as const;
 
@@ -67,6 +72,11 @@ class AdminView extends HTMLElement {
   #users: UserEntry[] = [];
   #bindings: RoleBinding[] = [];
   #audit: AuditEntry[] = [];
+  // S5: true, solange die letzte geladene Seite genau AUDIT_PAGE_LIMIT
+  // Einträge enthielt — dann könnte eine weitere Seite existieren
+  // (kein zusätzlicher COUNT(*) nötig, s. audit.Store.List-Doku).
+  #auditHasMore = false;
+  #auditLoadingMore = false;
   #nodes: NodeEntry[] = [];
   #error = "";
   #showUserForm = false;
@@ -133,15 +143,45 @@ class AdminView extends HTMLElement {
     }
   }
 
+  // S5: lädt immer die erste (neueste) Seite und ersetzt #audit
+  // komplett — der richtige Reflex bei "audit.appended"/"lost-events"
+  // (neue Zeile(n) seit dem letzten Stand) und beim Fallback-Poll,
+  // nicht bei "Mehr laden" (das hängt an, s. #loadMoreAudit).
   async #loadAudit() {
     try {
-      const res = await apiFetch("/api/v1/admin/audit-log");
+      const res = await apiFetch(`/api/v1/admin/audit-log?limit=${AUDIT_PAGE_LIMIT}`);
       if (res.ok) {
-        this.#audit = await res.json();
+        const page: AuditEntry[] = await res.json();
+        this.#audit = page;
+        this.#auditHasMore = page.length === AUDIT_PAGE_LIMIT;
         this.#render();
       }
     } catch {
       // s.o.
+    }
+  }
+
+  // S5: "Mehr laden" — hängt die nächste Seite an, per Cursor (kleinste
+  // bisher geladene ID) statt eines Offsets (robust gegen neue Zeilen,
+  // die zwischen zwei Klicks dazukommen — die verschieben einen
+  // Offset, nicht aber die Cursor-ID).
+  async #loadMoreAudit() {
+    if (this.#auditLoadingMore || this.#audit.length === 0) return;
+    this.#auditLoadingMore = true;
+    this.#render();
+    try {
+      const oldestID = this.#audit[this.#audit.length - 1].id;
+      const res = await apiFetch(`/api/v1/admin/audit-log?before=${oldestID}&limit=${AUDIT_PAGE_LIMIT}`);
+      if (res.ok) {
+        const page: AuditEntry[] = await res.json();
+        this.#audit = [...this.#audit, ...page];
+        this.#auditHasMore = page.length === AUDIT_PAGE_LIMIT;
+      }
+    } catch {
+      // Nächster Klick versucht es erneut — kein Retry-Automatismus nötig.
+    } finally {
+      this.#auditLoadingMore = false;
+      this.#render();
     }
   }
 
@@ -609,7 +649,11 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText = "font-weight:600;margin-bottom:6px;";
-    heading.textContent = `Audit-Log (${this.#audit.length})`;
+    // S5: die Zahl ist die Anzahl geladener, nicht aller je
+    // protokollierten Zeilen (Cursor-Pagination, "Mehr laden" lädt
+    // weitere nach) — deshalb "geladen" statt einer nackten Zahl, die
+    // wie ein Gesamtstand aussehen würde.
+    heading.textContent = `Audit-Log (${this.#audit.length} geladen)`;
     section.appendChild(heading);
 
     if (this.#audit.length === 0) {
@@ -642,6 +686,15 @@ class AdminView extends HTMLElement {
       <th style="padding:2px 8px;">Status</th>
     </tr></thead><tbody>${rows}</tbody>`;
     section.appendChild(table);
+
+    if (this.#auditHasMore) {
+      const moreBtn = document.createElement("button");
+      moreBtn.textContent = this.#auditLoadingMore ? "Lädt …" : "Mehr laden";
+      moreBtn.disabled = this.#auditLoadingMore;
+      moreBtn.style.cssText = "font-size:11px;cursor:pointer;margin-top:8px;";
+      moreBtn.addEventListener("click", () => this.#loadMoreAudit());
+      section.appendChild(moreBtn);
+    }
 
     return section;
   }

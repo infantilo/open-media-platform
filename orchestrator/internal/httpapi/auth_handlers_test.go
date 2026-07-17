@@ -228,3 +228,66 @@ func TestHandleWhoamiReportsIsAdminFalseWithoutBinding(t *testing.T) {
 		t.Errorf("body = %+v, want isAdmin=false", body)
 	}
 }
+
+// --- S5: handleListAuditLog Cursor-Pagination (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+
+func TestHandleListAuditLogDefaultsWithoutQueryParams(t *testing.T) {
+	reader := &fakeAuditSvc{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log", nil)
+	rec := httptest.NewRecorder()
+	handleListAuditLog(reader)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if reader.lastBefore != 0 || reader.lastLimit != defaultAuditLogLimit {
+		t.Errorf("List() called with before=%d limit=%d, want before=0 limit=%d", reader.lastBefore, reader.lastLimit, defaultAuditLogLimit)
+	}
+}
+
+func TestHandleListAuditLogParsesBeforeAndLimit(t *testing.T) {
+	reader := &fakeAuditSvc{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log?before=42&limit=10", nil)
+	rec := httptest.NewRecorder()
+	handleListAuditLog(reader)(rec, req)
+
+	if reader.lastBefore != 42 || reader.lastLimit != 10 {
+		t.Errorf("List() called with before=%d limit=%d, want before=42 limit=10", reader.lastBefore, reader.lastLimit)
+	}
+}
+
+func TestHandleListAuditLogCapsLimitAtMax(t *testing.T) {
+	reader := &fakeAuditSvc{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log?limit=999999", nil)
+	rec := httptest.NewRecorder()
+	handleListAuditLog(reader)(rec, req)
+
+	if reader.lastLimit != maxAuditLogLimit {
+		t.Errorf("List() called with limit=%d, want capped at %d", reader.lastLimit, maxAuditLogLimit)
+	}
+}
+
+func TestHandleListAuditLogIgnoresInvalidBeforeAndLimit(t *testing.T) {
+	reader := &fakeAuditSvc{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log?before=not-a-number&limit=not-a-number", nil)
+	rec := httptest.NewRecorder()
+	handleListAuditLog(reader)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (invalid params fall back to defaults, no 400)", rec.Code)
+	}
+	if reader.lastBefore != 0 || reader.lastLimit != defaultAuditLogLimit {
+		t.Errorf("List() called with before=%d limit=%d, want defaults before=0 limit=%d", reader.lastBefore, reader.lastLimit, defaultAuditLogLimit)
+	}
+}
+
+func TestHandleListAuditLogIgnoresNegativeBeforeAndLimit(t *testing.T) {
+	reader := &fakeAuditSvc{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/audit-log?before=-5&limit=-5", nil)
+	rec := httptest.NewRecorder()
+	handleListAuditLog(reader)(rec, req)
+
+	if reader.lastBefore != 0 || reader.lastLimit != defaultAuditLogLimit {
+		t.Errorf("List() called with before=%d limit=%d, want defaults before=0 limit=%d", reader.lastBefore, reader.lastLimit, defaultAuditLogLimit)
+	}
+}

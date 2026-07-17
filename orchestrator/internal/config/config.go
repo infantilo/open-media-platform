@@ -73,12 +73,17 @@ type Config struct {
 	PlacementMemThreshold        float64
 	PlacementHealthyCPUThreshold float64
 	PlacementHealthyMemThreshold float64
+	// AuditRetentionDays ist die Aufbewahrungsdauer des Audit-Logs (S5,
+	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — audit.Store.RunRetention
+	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
+	// Löschung (s. audit.Store.PurgeOlderThan).
+	AuditRetentionDays int
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR, OMP_DATA_DIR,
-// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_* und
-// OMP_PLACEMENT_*;
+// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
+// OMP_PLACEMENT_* und OMP_AUDIT_RETENTION_DAYS;
 // fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
 // NATS-Ports aus UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade
@@ -107,6 +112,11 @@ func Load() Config {
 		PlacementMemThreshold:        getEnvFloat("OMP_PLACEMENT_MEM_THRESHOLD", 90),
 		PlacementHealthyCPUThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_CPU_THRESHOLD", 60),
 		PlacementHealthyMemThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_MEM_THRESHOLD", 70),
+		// Default spiegelt audit.DefaultRetentionDays (bewusst hier
+		// dupliziert statt importiert, gleiches Muster wie die
+		// Placement-Defaults oben — config bleibt frei von
+		// Business-Logik-Abhängigkeiten).
+		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
 	}
 }
 
@@ -127,4 +137,16 @@ func getEnvFloat(key string, fallback float64) float64 {
 		return fallback
 	}
 	return f
+}
+
+func getEnvInt(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return i
 }

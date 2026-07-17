@@ -6187,3 +6187,82 @@ nicht behoben (außerhalb des S3-Scopes).
 
 **Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):**
 S5/S9/S10 (klein, hygienisch), danach S4 (instances.json → Postgres).
+
+
+## 2026-07-17 (Nachtrag 13) — S5: Audit-Retention + Cursor-Pagination
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), vierter Umsetzungsschritt
+aus dem Review-Arbeitsvorrat
+
+Vierter Schritt aus [[project_review_2026_07_17_s_steps]] — laut
+Reihenfolge-Empfehlung der erste der drei "kleinen, hygienischen"
+Schritte nach S1-S3. `GET /api/v1/admin/audit-log` lieferte bisher ein
+festes 200er-Fenster ohne Blättern und ohne jede Löschung — die Tabelle
+wächst unbegrenzt.
+
+**Backend (`internal/audit/audit.go`):** `Store.List` von `List(limit
+int)` auf `List(before int64, limit int)` umgestellt — Cursor über die
+BIGSERIAL-PK `id` (nicht `occurred_at`: Zeitstempel können bei schnell
+aufeinanderfolgenden Schreibzugriffen Duplikate haben, die ID nie).
+`before == 0` liefert die erste Seite, `before > 0` nur Zeilen mit
+`id < before`; das Ende der Liste erkennt der Aufrufer daran, dass
+weniger als `limit` Zeilen zurückkommen (kein zusätzliches
+`COUNT(*)`). Neue `Store.PurgeOlderThan(retentionDays int) (int64,
+error)` (parametrisierte `interval`-Multiplikation, keine
+String-Interpolation) und `Store.RunRetention(ctx, retentionDays)` —
+gleiches `Run(ctx)`-Muster wie `graph.Service.Run`/`registry.Poller.Run`:
+ein Lauf sofort beim Start, danach täglich
+(`RetentionInterval = 24h`). `retentionDays <= 0` deaktiviert die
+Löschung (kein überraschendes "alles löschen").
+
+**Config:** neues `Config.AuditRetentionDays`
+(`OMP_AUDIT_RETENTION_DAYS`, Default 90, `getEnvInt`-Helfer neu in
+`config.go`).
+
+**HTTP (`internal/httpapi/auth_handlers.go`):** `GET
+/api/v1/admin/audit-log?before=<id>&limit=` — `AuditReader`-Interface
+entsprechend erweitert. Ungültige/negative Query-Parameter fallen
+still auf die Defaults zurück (`defaultAuditLogLimit=50`,
+`maxAuditLogLimit=200`, letzteres das alte feste Fenster jetzt als
+Obergrenze statt einziger Option) statt eines 400 — dieselbe
+Nachsichtigkeit wie bei anderen lesenden List-Endpunkten.
+
+**`main.go`:** `go auditStore.RunRetention(ctx, cfg.AuditRetentionDays)`
+neben der bestehenden `auditStore`-Konstruktion.
+
+**UI (`ui/shell/admin-view.ts`):** `#loadAudit()` lädt jetzt immer nur
+die erste Seite (bei SSE-`audit.appended`/Fallback-Poll — neue Zeile(n)
+seit dem letzten Stand), neue `#loadMoreAudit()` hängt per Cursor
+(kleinste bisher geladene ID) die nächste Seite an, ausgelöst durch
+einen neuen "Mehr laden"-Button, der nur erscheint, solange die letzte
+Seite exakt `AUDIT_PAGE_LIMIT` (50) Zeilen enthielt. Überschrift zeigt
+bewusst "N geladen" statt einer nackten Zahl, um nicht wie ein
+Gesamtstand auszusehen.
+
+**Tests:** vier neue Postgres-Integrationstests in `audit_test.go`
+(`TestListCursorPaginatesThroughAllEntries` — 25 neue Zeilen über
+mehrere 10er-Seiten blättern, keine Duplikate/Lücken, strikt
+absteigende IDs; `TestPurgeOlderThanDeletesOnlyOldRows`,
+`TestPurgeOlderThanZeroOrNegativeIsNoOp`), fünf neue Handler-Tests in
+`auth_handlers_test.go` für die Query-Parameter-Randfälle
+(fehlend/negativ/ungültig/über der Obergrenze). `go build`/`go vet`/
+`go test ./...` grün, `deno check`/`deno test ui/` (40/40) grün.
+
+**Live verifiziert** (echter Orchestrator, Postgres, per CDP + direktem
+SQL):
+- 249 echte Audit-Zeilen erzeugt (80 Rollenbindungs-Anlage/Löschungs-
+  Zyklen über die echte API, je zwei auditierte Aufrufe) — deutlich über
+  der im Review verlangten 200er-Schwelle.
+- Administration-Tab zeigte initial "Audit-Log (50 geladen)" mit
+  sichtbarem "Mehr laden"-Button; ein Klick lud die nächste Seite nach
+  (Überschrift → "100 geladen", keine doppelten/fehlenden Zeilen, Cursor
+  korrekt aus der zuletzt geladenen ID abgeleitet).
+- Retention: eine Zeile per direktem SQL-`UPDATE` künstlich auf 100 Tage
+  gealtert, Orchestrator neu gestartet → Log zeigt `"audit retention
+  purge completed" deleted=1 retention_days=90`, die gealterte Zeile
+  danach nachweislich weg, alle frischen Zeilen unverändert vorhanden.
+- Nach der Verifikation: alle für diesen Test erzeugten Audit-Zeilen aus
+  der DB entfernt (Tabelle zurück auf den Vorher-Stand, 89 Zeilen).
+
+**Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S9
+(Backup/Restore), S10 (UI-Baustein-Konsolidierung), danach S4
+(instances.json → Postgres).

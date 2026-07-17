@@ -234,10 +234,17 @@ func (f fakeAuthzSvc) Delete(id string) error { return f.deleteErr }
 
 // fakeAuditSvc implementiert sowohl AuditLogger als auch AuditReader —
 // zeichnet Log()-Aufrufe auf, damit Tests sie nachprüfen können.
+// lastBefore/lastLimit zeichnen den zuletzt an List() übergebenen
+// Cursor auf (S5-Tests in auth_handlers_test.go: prüfen, dass
+// handleListAuditLog Query-Parameter korrekt parst/begrenzt und
+// durchreicht).
 type fakeAuditSvc struct {
 	entries []audit.Entry
 	listErr error
 	logged  []auditLogCall
+
+	lastBefore int64
+	lastLimit  int
 }
 
 type auditLogCall struct {
@@ -249,7 +256,10 @@ func (f *fakeAuditSvc) Log(username, method, path, nodeID string, status int) {
 	f.logged = append(f.logged, auditLogCall{username, method, path, nodeID, status})
 }
 
-func (f fakeAuditSvc) List(limit int) ([]audit.Entry, error) { return f.entries, f.listErr }
+func (f *fakeAuditSvc) List(before int64, limit int) ([]audit.Entry, error) {
+	f.lastBefore, f.lastLimit = before, limit
+	return f.entries, f.listErr
+}
 
 // fakeHostRegistry ist ein Test-Double für HostRegistry.
 type fakeHostRegistry struct {

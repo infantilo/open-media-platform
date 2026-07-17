@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
@@ -12,9 +13,10 @@ import (
 )
 
 // AuditReader liest protokollierte Zugriffe (implementiert von
-// *audit.Store).
+// *audit.Store). before/limit sind der S5-Cursor (docs/REVIEW-2026-07-17-
+// SKALIERUNG-24-7.md) — before == 0 liefert die erste Seite.
 type AuditReader interface {
-	List(limit int) ([]audit.Entry, error)
+	List(before int64, limit int) ([]audit.Entry, error)
 }
 
 type loginRequest struct {
@@ -326,11 +328,42 @@ func handleDeleteRoleBinding(store AuthzChecker) http.HandlerFunc {
 	}
 }
 
-// handleListAuditLog ist GET /api/v1/admin/audit-log — admin-only
-// (ARCHITECTURE.md §12 Punkt 4).
+// defaultAuditLogLimit/maxAuditLogLimit begrenzen ?limit= (S5,
+// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — maxAuditLogLimit
+// entspricht dem bisherigen festen Fenster, jetzt als Obergrenze statt
+// als einzige Option.
+const (
+	defaultAuditLogLimit = 50
+	maxAuditLogLimit     = 200
+)
+
+// handleListAuditLog ist GET /api/v1/admin/audit-log?before=<id>&limit=
+// — admin-only (ARCHITECTURE.md §12 Punkt 4). Cursor-Pagination (S5):
+// before fehlt/0 liefert die erste (neueste) Seite, ein späterer Aufruf
+// mit before = kleinste bisher gesehene ID liefert die nächste Seite
+// ("Mehr laden" in admin-view.ts). Ungültige/fehlende Query-Parameter
+// fallen still auf ihre Defaults zurück statt eines 400 — dieselbe
+// Nachsichtigkeit wie bei anderen rein lesenden List-Endpunkten in
+// diesem Paket.
 func handleListAuditLog(reader AuditReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		entries, err := reader.List(200)
+		var before int64
+		if v := r.URL.Query().Get("before"); v != "" {
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed > 0 {
+				before = parsed
+			}
+		}
+		limit := defaultAuditLogLimit
+		if v := r.URL.Query().Get("limit"); v != "" {
+			if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+				limit = parsed
+			}
+		}
+		if limit > maxAuditLogLimit {
+			limit = maxAuditLogLimit
+		}
+
+		entries, err := reader.List(before, limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
