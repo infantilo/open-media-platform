@@ -269,6 +269,118 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 	}
 }
 
+// TestInstanceRestartedRewiresAffectedRole ist die workflows-Seite von
+// K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a/§7.6, launcher.
+// RestartObserver): nachdem eine Rollen-Instanz vom Launcher automatisch
+// neu gestartet wurde (neue Registrierung unter derselben Instanz-ID,
+// aber neuer Node-/Sender-ID — ein Neustart bekommt i. d. R. eine neue
+// NMOS-Node-Identität), muss der Workflow die betroffene Connection neu
+// auflösen, ohne dass der Nutzer den Workflow manuell neu startet.
+func TestInstanceRestartedRewiresAffectedRole(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "view", NodeType: "omp-viewer"},
+		},
+		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
+	}
+	wf, err := svc.Create("regie", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	srcInstance, viewInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-viewer")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance, Senders: []registry.SenderView{{ID: "send-1"}}})
+	nodes.add(registry.NodeView{ID: "node-view", InstanceID: viewInstance, Receivers: []registry.ReceiverView{{ID: "recv-1"}}})
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	g.mu.Lock()
+	initialCalls := len(g.calls)
+	g.mu.Unlock()
+	if initialCalls != 1 {
+		t.Fatalf("connect calls after start = %d, want 1", initialCalls)
+	}
+
+	// Neustart simulieren: die alte Registrierung ist bewusst noch NICHT
+	// weg (per SIGKILL beendete Prozesse melden sich nicht selbst ab —
+	// die alte NMOS-Registrierung lebt bis zu ihrem Heartbeat-Timeout
+	// neben der neuen weiter). Live per kill -9 gefunden: ohne die
+	// excludeNodeID-Unterscheidung in awaitFreshRegistration matcht
+	// findByInstanceID sofort die alte, noch nicht abgelaufene
+	// Registrierung und die Connection bleibt auf deren (bald totem)
+	// Sender stehen, statt auf den neuen umzuschwenken.
+	nodes.add(registry.NodeView{ID: "node-src-2", InstanceID: srcInstance, Senders: []registry.SenderView{{ID: "send-2"}}})
+	svc.InstanceRestarted(srcInstance)
+
+	deadline = time.Now().Add(2 * time.Second)
+	var wfAfter Workflow
+	for time.Now().Before(deadline) {
+		wfAfter, err = svc.Get(wf.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if wfAfter.Runtime["src"].NodeID == "node-src-2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if wfAfter.Runtime["src"].NodeID != "node-src-2" {
+		t.Fatalf("Runtime[\"src\"].NodeID = %q, want it updated to node-src-2 after the restart", wfAfter.Runtime["src"].NodeID)
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 2 {
+		t.Fatalf("connect calls after restart = %+v, want a second call with the new sender", g.calls)
+	}
+	if g.calls[1].fromSender != "send-2" || g.calls[1].toReceiver != "recv-1" {
+		t.Errorf("second connect call = %+v, want send-2 -> recv-1", g.calls[1])
+	}
+}
+
+// TestInstanceRestartedIgnoresInstanceOutsideAnyWorkflow stellt sicher,
+// dass ein direkt über den Katalog gestarteter Node (kein Workflow)
+// keinen Effekt hat — InstanceRestarted muss dafür still bleiben, nicht
+// mit einem Fehler oder einem Registrierungs-Timeout enden.
+func TestInstanceRestartedIgnoresInstanceOutsideAnyWorkflow(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	svc.InstanceRestarted("some-standalone-instance")
+	// rewireAfterRestart läuft in einer eigenen Goroutine — kurz Zeit
+	// geben, damit ein eventueller (falscher) Zugriff überhaupt
+	// stattfinden könnte, dann prüfen, dass nichts angelegt wurde.
+	time.Sleep(50 * time.Millisecond)
+	wfs, err := svc.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(wfs) != 0 {
+		t.Errorf("List() = %+v, want no workflows created as a side effect", wfs)
+	}
+}
+
 func TestStartFailsWhenRegistrationTimesOut(t *testing.T) {
 	original, originalPoll := registrationTimeout, registrationPollInterval
 	registrationTimeout = 100 * time.Millisecond

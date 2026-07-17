@@ -61,6 +61,19 @@ func stubbornCatalog() []CatalogEntry {
 	}}
 }
 
+// disableAutoRestart schaltet K7-Teil-1s automatischen Neustart für die
+// Dauer eines Tests ab (maxCrashRestarts=0 löst die Crash-Loop-Bremse
+// bereits beim ersten unerwarteten Ende aus) — für Tests, die einen
+// Subprozess bewusst enden lassen und das bisherige "bleibt einfach
+// crashed"-Verhalten prüfen wollen, ohne dass im Hintergrund eine
+// Neustart-Goroutine über den Testlauf hinaus weiterläuft.
+func disableAutoRestart(t *testing.T) {
+	t.Helper()
+	originalMax := maxCrashRestarts
+	maxCrashRestarts = 0
+	t.Cleanup(func() { maxCrashRestarts = originalMax })
+}
+
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
@@ -151,6 +164,7 @@ func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
 }
 
 func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
+	disableAutoRestart(t)
 	dataDir := t.TempDir()
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
@@ -175,6 +189,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 }
 
 func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
+	disableAutoRestart(t)
 	envFile := t.TempDir() + "/env.txt"
 	catalog := []CatalogEntry{{
 		Type:   "envdump",
@@ -223,6 +238,7 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 }
 
 func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
+	disableAutoRestart(t)
 	crashing := []CatalogEntry{{
 		Type:    "crashy",
 		Label:   "Crashy",
@@ -267,6 +283,174 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 
 	// Aufräumen ohne processAlive-Race: eine bereits tote Instanz per
 	// Stop() zu entfernen muss trotzdem funktionieren (kein Fehler nötig).
+	_ = l.Stop(inst.ID)
+}
+
+// recordingRestartObserver zeichnet InstanceRestarted()-Aufrufe auf —
+// Stand-in für *workflows.Service in Tests.
+type recordingRestartObserver struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (o *recordingRestartObserver) InstanceRestarted(id string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.ids = append(o.ids, id)
+}
+
+func (o *recordingRestartObserver) snapshot() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string{}, o.ids...)
+}
+
+// shortCrashRestartTiming setzt Backoff/Fenster auf testtaugliche Werte
+// (Sekunden statt der Produktions-Voreinstellung 2s/60s) und stellt sie
+// nach dem Test wieder her — gleiches Muster wie stopGracePeriod.
+func shortCrashRestartTiming(t *testing.T, backoff, window time.Duration) {
+	t.Helper()
+	origBackoff, origWindow := crashRestartBackoff, crashRestartWindow
+	crashRestartBackoff, crashRestartWindow = backoff, window
+	t.Cleanup(func() { crashRestartBackoff, crashRestartWindow = origBackoff, origWindow })
+}
+
+// TestLauncherAutoRestartsCrashedInstanceInPlace ist die Kern-
+// Verifikation aus dem Phasenplan (docs/END-GOAL-FEATURES.md §7.4
+// K7-Teil-1): ein abgestürzter Prozess wird unter **derselben**
+// Instanz-ID neu gestartet (nicht als neue Instanz), mit hochgezähltem
+// RestartCount, Crashed wieder false, und der RestartObserver wird
+// benachrichtigt.
+func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
+	shortCrashRestartTiming(t, 50*time.Millisecond, time.Minute)
+
+	// Stirbt beim ersten Start (Marker-Datei fehlt noch), überlebt ab dem
+	// Neustart (Marker-Datei wurde beim ersten, gescheiterten Versuch
+	// angelegt) — simuliert einen einmaligen, sich selbst heilenden Fehler
+	// ohne einen externen Zähler-Mechanismus im Testskript zu brauchen.
+	marker := t.TempDir() + "/seen"
+	catalog := []CatalogEntry{{
+		Type:   "flaky",
+		Label:  "Flaky",
+		Runner: "process",
+		Command: []string{
+			"/bin/sh", "-c",
+			"if [ -e " + marker + " ]; then exec sleep 30; else touch " + marker + "; exit 1; fi",
+		},
+	}}
+	pub := &recordingPublisher{}
+	obs := &recordingRestartObserver{}
+	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), pub, nil)
+	l.SetRestartObserver(obs)
+
+	inst, err := l.Start("flaky", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var list []Instance
+	for time.Now().Before(deadline) {
+		list = l.List()
+		if len(list) == 1 && !list[0].Crashed && list[0].RestartCount > 0 && list[0].PID != inst.PID {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer func() { _ = l.Stop(inst.ID) }()
+
+	if len(list) != 1 || list[0].ID != inst.ID {
+		t.Fatalf("List() = %+v, want one entry for the same instance id %s (restart-in-place)", list, inst.ID)
+	}
+	if list[0].Crashed {
+		t.Errorf("List()[0].Crashed = true, want false after a successful auto-restart")
+	}
+	if list[0].RestartCount != 1 {
+		t.Errorf("List()[0].RestartCount = %d, want 1", list[0].RestartCount)
+	}
+	if list[0].PID == inst.PID {
+		t.Errorf("List()[0].PID = %d, want a different PID than the original %d (in-place restart replaces the process)", list[0].PID, inst.PID)
+	}
+	if !processAlive(list[0].PID) {
+		t.Errorf("restarted process (PID %d) is not alive", list[0].PID)
+	}
+
+	events := pub.snapshot()
+	foundRestarted := false
+	for _, e := range events {
+		if e.Type == "instance.restarted" && strings.Contains(string(e.Data), inst.ID) {
+			foundRestarted = true
+		}
+	}
+	if !foundRestarted {
+		t.Errorf("Broadcast events = %+v, want an instance.restarted event containing %s", events, inst.ID)
+	}
+
+	obsIDs := obs.snapshot()
+	if len(obsIDs) != 1 || obsIDs[0] != inst.ID {
+		t.Errorf("RestartObserver.InstanceRestarted calls = %v, want exactly [%s]", obsIDs, inst.ID)
+	}
+}
+
+// TestLauncherCrashLoopBrakeStopsAutoRestarting verifiziert die
+// Crash-Loop-Bremse (docs/decisions.md 2026-07-14 Kapitel-10-
+// Entscheidung Punkt 8): ein Prozess, der immer wieder sofort abstürzt,
+// darf nicht endlos neu gestartet werden — nach maxCrashRestarts
+// Versuchen innerhalb des Fensters bleibt die Instanz crashed stehen.
+func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
+	shortCrashRestartTiming(t, 10*time.Millisecond, time.Minute)
+	origMax := maxCrashRestarts
+	maxCrashRestarts = 2
+	t.Cleanup(func() { maxCrashRestarts = origMax })
+
+	crashing := []CatalogEntry{{
+		Type:    "loopy",
+		Label:   "Loopy",
+		Runner:  "process",
+		Command: []string{"/bin/sh", "-c", "exit 1"},
+	}}
+	pub := &recordingPublisher{}
+	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
+
+	inst, err := l.Start("loopy", "")
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	var list []Instance
+	for time.Now().Before(deadline) {
+		list = l.List()
+		if len(list) == 1 && list[0].Crashed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(list) != 1 || !list[0].Crashed {
+		t.Fatalf("List() = %+v, want the instance to end up crashed once the crash-loop brake trips", list)
+	}
+	// RestartCount zählt jedes unerwartete Prozessende, auch das letzte,
+	// das die Bremse auslöst (nicht nur die tatsächlich erfolgten
+	// Neustarts) — bei maxCrashRestarts=2 sind das 2 Neustarts plus der
+	// 3. Absturz, bei dem countInWindow die Grenze überschreitet und
+	// eskaliert wird.
+	wantRestartCount := maxCrashRestarts + 1
+	if list[0].RestartCount != wantRestartCount {
+		t.Errorf("List()[0].RestartCount = %d, want %d", list[0].RestartCount, wantRestartCount)
+	}
+	if !strings.Contains(list[0].CrashMessage, "Crash-Loop") {
+		t.Errorf("CrashMessage = %q, want it to mention the crash-loop brake", list[0].CrashMessage)
+	}
+
+	// Sicherstellen, dass wirklich nicht weiter neu gestartet wird: PID
+	// und RestartCount bleiben über eine weitere Backoff-Periode hinweg
+	// stabil.
+	time.Sleep(200 * time.Millisecond)
+	after := l.List()
+	if len(after) != 1 || after[0].RestartCount != list[0].RestartCount {
+		t.Errorf("instance kept changing after the crash-loop brake tripped: before=%+v after=%+v", list[0], after)
+	}
+
 	_ = l.Stop(inst.ID)
 }
 

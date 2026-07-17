@@ -178,6 +178,13 @@ func main() {
 	// gemäß Verbindungs-Template, sobald sie in der Registry erscheinen.
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub)
 
+	// K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a/§7.6): nach jedem
+	// automatischen Launcher-Neustart einer abgestürzten Instanz die
+	// betroffene Workflow-Rolle neu verkabeln, statt auf den nächsten
+	// manuellen Workflow-Start zu warten. Erst hier verdrahtbar, da
+	// workflowSvc launcherSvc als Konstruktor-Argument braucht.
+	launcherSvc.SetRestartObserver(workflowSvc)
+
 	// Resource-Aware Placement — advisory-only Ausbaustufe (ARCHITECTURE.md
 	// §6.1, UMSETZUNG.md D6 Teil 3): beobachtet die seit D6 Teil 1
 	// vorhandene Host-Telemetrie, warnt aber nur — kein automatischer

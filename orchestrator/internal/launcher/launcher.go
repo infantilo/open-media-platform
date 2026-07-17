@@ -44,6 +44,32 @@ import (
 // Debugging). Bewusst klein gehalten, keine vollständige Log-Aggregation.
 const crashStderrLines = 5
 
+// Crash-Loop-Bremse (ARCHITECTURE.md §6.3 Stufe 2, docs/END-GOAL-
+// FEATURES.md §7.3a/§7.4 K7-Teil-1, Entscheidung docs/decisions.md
+// 2026-07-14 "Entscheidungssitzung END-GOAL-FEATURES Kapitel 10" Punkt
+// 8): maxCrashRestarts Neustarts innerhalb crashRestartWindow, danach
+// wird eskaliert (Auto-Restart gestoppt, Instanz bleibt "crashed" statt
+// endlos weiterzuversuchen wie im PIPELINE-CONTROLLER-Vorbild).
+// crashRestartBackoff ist bewusst ein fester Delay (PIPELINE-
+// CONTROLLER-Muster `supervisor.js:183–192`), keine exponentielle
+// Backoff-Kurve — bei einem harten Obergrenzen-Cutoff ist die
+// Eskalation selbst schon der Schutz vor einem hämmernden Neustart-
+// Sturm, eine wachsende Verzögerung wäre zusätzliche Komplexität ohne
+// zusätzlichen Nutzen hier.
+// Bewusst (noch) kein Katalog-/Workflow-Rollen-Feld dafür (Ziel-Design
+// nennt `restartPolicy{maxRestarts,backoffMs,window}` als spätere
+// Ausbaustufe) — dieser erste Schritt deckt die im Phasenplan
+// verlangte Verifikation (kill -9 -> Neustart -> Wiederverkabelung)
+// mit einer für alle Instanzen einheitlichen Policy ab; pro-Typ/-Rolle
+// Konfigurierbarkeit ist dokumentierte Folgearbeit, kein stiller Gap.
+// var statt const: Tests verkürzen Fenster/Backoff, um nicht real 60s
+// warten zu müssen (gleiches Muster wie stopGracePeriod).
+var (
+	maxCrashRestarts    = 5
+	crashRestartWindow  = 60 * time.Second
+	crashRestartBackoff = 2 * time.Second
+)
+
 var (
 	// ErrUnknownType wird geliefert, wenn Start() mit einem Typ
 	// aufgerufen wird, der nicht im Katalog steht.
@@ -110,6 +136,12 @@ type Instance struct {
 	// CrashMessage ist der Wait()-Fehler plus die letzten
 	// crashStderrLines Zeilen stderr der Instanz, nur gesetzt wenn Crashed.
 	CrashMessage string `json:"crashMessage,omitempty"`
+	// RestartCount zählt automatische Neustarts nach einem unerwarteten
+	// Prozessende seit dem ursprünglichen Start (K7-Teil-1) — nicht auf
+	// das Crash-Loop-Fenster begrenzt, damit ein Operator im UI sieht,
+	// wie oft eine Instanz insgesamt schon neu gestartet ist (gleiches
+	// Prinzip wie PIPELINE CONTROLLERs `supervisor.js:412`-Zähler).
+	RestartCount int `json:"restartCount,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -119,20 +151,54 @@ type EventPublisher interface {
 	Broadcast(sse.Event)
 }
 
+// RestartObserver wird benachrichtigt, sobald der Launcher eine Instanz
+// nach einem unerwarteten Prozessende automatisch neu gestartet hat
+// (K7-Teil-1, docs/END-GOAL-FEATURES.md §7.3a) — implementiert von
+// *workflows.Service, das daraufhin die betroffene Workflow-Rolle neu
+// verkabelt (generalisiert den bisher nur an den Workflow-Start
+// gebundenen node.added-Glue aus D7 Teil 1 auf "dieselbe Rolle ist
+// nach einem Neustart wieder da"). Optional (darf unverdrahtet
+// bleiben, z. B. in Tests) — ein manuell über den Katalog gestarteter
+// Node ohne Workflow-Zugehörigkeit braucht keinen Beobachter.
+type RestartObserver interface {
+	InstanceRestarted(instanceID string)
+}
+
+// restartState hält die Crash-Loop-Buchführung einer Instanz (nicht
+// persistiert — ein Orchestrator-Neustart ist ein anderer, bereits
+// separat behandelter Fehlerfall, s. loadState).
+type restartState struct {
+	windowStart   time.Time
+	countInWindow int
+	total         int
+}
+
 // Launcher startet/stoppt Node-Instanzen aus dem Katalog als lokale
 // Subprozesse (os/exec) und hält deren {id, type, pid} persistent, damit
 // ein Orchestrator-Neustart noch laufende Kind-Prozesse per PID-Check
 // wiedererkennt statt sie zu verwaisen (UMSETZUNG.md C8).
 type Launcher struct {
-	catalog     []CatalogEntry
-	registryURL string
-	natsURL     string
-	statePath   string
-	events      EventPublisher
-	nc          NATSRequester
+	catalog         []CatalogEntry
+	registryURL     string
+	natsURL         string
+	statePath       string
+	events          EventPublisher
+	nc              NATSRequester
+	restartObserver RestartObserver
 
 	mu        sync.Mutex
 	instances map[string]Instance
+	restarts  map[string]*restartState
+}
+
+// SetRestartObserver verdrahtet einen Beobachter für automatische
+// Neustarts nach dem Konstruieren (main.go: workflows.Service braucht
+// den Launcher als Konstruktor-Argument, kann also nicht schon selbst
+// beim launcher.New()-Aufruf als Beobachter übergeben werden). Nicht
+// nebenläufigkeitsgeschützt — vor dem ersten Start()-Aufruf verdrahten,
+// wie die übrigen main.go-Service-Verkabelungen auch.
+func (l *Launcher) SetRestartObserver(o RestartObserver) {
+	l.restartObserver = o
 }
 
 // New erstellt einen Launcher und lädt einen zuvor persistierten Stand
@@ -152,6 +218,7 @@ func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string, events Ev
 		events:      events,
 		nc:          nc,
 		instances:   map[string]Instance{},
+		restarts:    map[string]*restartState{},
 	}
 	l.loadState()
 	return l
@@ -204,18 +271,8 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 	}
 	label := fmt.Sprintf("%s (%s)", entry.Label, id[:8])
 
-	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
-	cmd.Env = buildEnv(entry.Env, id, label, l.registryURL, l.natsURL)
-	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
-	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
-	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail
-	// spiegelt zusätzlich die letzten Zeilen mit, als Kontext für eine
-	// eventuelle Crash-Meldung (s.u.), ohne den Log-Passthrough anzufassen.
-	stderrTail := newTailBuffer(crashStderrLines)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
-
-	if err := cmd.Start(); err != nil {
+	cmd, stderrTail, err := l.execEntry(entry, id, label)
+	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
@@ -231,11 +288,46 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 	// Der Orchestrator ist Elternprozess und muss auf das Prozessende
 	// warten, sonst bleibt ein Zombie zurück, auch wenn niemand DELETE
 	// /api/v1/instances/<id> aufruft (Kind stirbt z. B. durch einen
-	// Pipeline-Fehler von selbst). Ein solches unerwartetes Ende wird als
-	// Crash markiert (Nutzerfund: vorher verschwand die Instanz einfach
-	// spurlos aus der Kachel-Ansicht, sobald die NMOS-Registrierung
-	// ablief, ohne jedes Signal in der UI).
-	go func() {
+	// Pipeline-Fehler von selbst). supervise behandelt ein solches
+	// unerwartetes Ende: automatischer Neustart in derselben Instanz-ID
+	// (K7-Teil-1), solange die Crash-Loop-Bremse nicht greift — vorher
+	// verschwand die Instanz einfach spurlos aus der Kachel-Ansicht,
+	// sobald die NMOS-Registrierung ablief, ohne jedes Signal in der UI.
+	go l.supervise(id, nodeType, entry, label, cmd, stderrTail)
+
+	return inst, nil
+}
+
+// execEntry startet den Subprozess für einen Katalog-Eintrag unter einer
+// gegebenen (bei einem Neustart: wiederverwendeten) Instanz-ID/-Label —
+// gemeinsamer Kern von startLocal und supervise's Neustart-Zweig.
+func (l *Launcher) execEntry(entry CatalogEntry, id, label string) (*exec.Cmd, *tailBuffer, error) {
+	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
+	cmd.Env = buildEnv(entry.Env, id, label, l.registryURL, l.natsURL)
+	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
+	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
+	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail
+	// spiegelt zusätzlich die letzten Zeilen mit, als Kontext für eine
+	// eventuelle Crash-Meldung, ohne den Log-Passthrough anzufassen.
+	stderrTail := newTailBuffer(crashStderrLines)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
+
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	return cmd, stderrTail, nil
+}
+
+// supervise wartet auf das Prozessende einer lokalen Instanz und
+// startet sie bei einem unerwarteten Ende automatisch neu, in derselben
+// Instanz-ID (K7-Teil-1, docs/END-GOAL-FEATURES.md §7.3a) — solange die
+// Crash-Loop-Bremse (maxCrashRestarts je crashRestartWindow) das
+// zulässt. Läuft als eigene Goroutine je Instanz, endet entweder wenn
+// Stop() die Instanz aus l.instances entfernt hat oder wenn die
+// Crash-Loop-Bremse greift.
+func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label string, cmd *exec.Cmd, stderrTail *tailBuffer) {
+	for {
 		waitErr := cmd.Wait()
 
 		l.mu.Lock()
@@ -245,19 +337,104 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 			l.mu.Unlock()
 			return
 		}
-		current.Crashed = true
-		current.CrashMessage = crashMessage(waitErr, stderrTail.String())
+		msg := crashMessage(waitErr, stderrTail.String())
+		shouldRestart, restartCount := l.recordRestartLocked(id)
+		if !shouldRestart {
+			current.Crashed = true
+			current.CrashMessage = fmt.Sprintf(
+				"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
+				msg, maxCrashRestarts, crashRestartWindow)
+			current.RestartCount = restartCount
+			l.instances[id] = current
+			if err := l.saveState(); err != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", err)
+			}
+			l.mu.Unlock()
+
+			slog.Warn("launcher: crash loop detected, giving up auto-restart",
+				"id", id, "type", nodeType, "restarts", restartCount)
+			l.publishCrash(current)
+			return
+		}
+		l.mu.Unlock()
+
+		slog.Warn("launcher: instance exited unexpectedly, restarting",
+			"id", id, "type", nodeType, "error", waitErr, "attempt", restartCount)
+		time.Sleep(crashRestartBackoff)
+
+		l.mu.Lock()
+		if _, stillTracked := l.instances[id]; !stillTracked {
+			// Stop() während des Backoffs — nicht mehr neu starten.
+			l.mu.Unlock()
+			return
+		}
+		l.mu.Unlock()
+
+		newCmd, newStderrTail, err := l.execEntry(entry, id, label)
+		if err != nil {
+			l.mu.Lock()
+			current, stillTracked := l.instances[id]
+			if stillTracked {
+				current.Crashed = true
+				current.CrashMessage = fmt.Sprintf("Neustart fehlgeschlagen: %v", err)
+				current.RestartCount = restartCount
+				l.instances[id] = current
+				if saveErr := l.saveState(); saveErr != nil {
+					slog.Warn("launcher: failed to persist instance state", "error", saveErr)
+				}
+			}
+			l.mu.Unlock()
+			if stillTracked {
+				l.publishCrash(current)
+			}
+			return
+		}
+
+		l.mu.Lock()
+		current, stillTracked = l.instances[id]
+		if !stillTracked {
+			// Stop() lief exakt während des Neustarts — den frisch
+			// gestarteten Ersatzprozess wieder beenden, nicht verwaisen
+			// lassen.
+			l.mu.Unlock()
+			_ = newCmd.Process.Kill()
+			return
+		}
+		current.PID = newCmd.Process.Pid
+		current.Crashed = false
+		current.CrashMessage = ""
+		current.RestartCount = restartCount
 		l.instances[id] = current
 		if err := l.saveState(); err != nil {
 			slog.Warn("launcher: failed to persist instance state", "error", err)
 		}
 		l.mu.Unlock()
 
-		slog.Warn("launcher: instance exited unexpectedly", "id", id, "type", nodeType, "error", waitErr)
-		l.publishCrash(current)
-	}()
+		l.publishRestarted(current)
+		if l.restartObserver != nil {
+			l.restartObserver.InstanceRestarted(id)
+		}
 
-	return inst, nil
+		cmd, stderrTail = newCmd, newStderrTail
+	}
+}
+
+// recordRestartLocked führt die Crash-Loop-Buchführung für id fort und
+// meldet, ob noch ein automatischer Neustart erlaubt ist. Aufrufer muss
+// l.mu bereits halten.
+func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRestarts int) {
+	st, ok := l.restarts[id]
+	now := time.Now()
+	if !ok || now.Sub(st.windowStart) > crashRestartWindow {
+		st = &restartState{windowStart: now}
+		l.restarts[id] = st
+	}
+	st.countInWindow++
+	st.total++
+	if st.countInWindow > maxCrashRestarts {
+		return false, st.total
+	}
+	return true, st.total
 }
 
 // startRemote schickt ein Start-Kommando an den Host-Agent von hostID
@@ -352,6 +529,22 @@ func (l *Launcher) publishCrash(inst Instance) {
 	l.events.Broadcast(sse.Event{Type: "instance.crashed", Data: data})
 }
 
+// publishRestarted meldet einen erfolgreichen automatischen Neustart
+// (K7-Teil-1) — eigener Event-Typ statt einer Variante von
+// "instance.crashed", damit die UI zwischen "hängt tot in crashed" und
+// "hat sich selbst erholt" unterscheiden kann, statt beides gleich rot
+// darzustellen.
+func (l *Launcher) publishRestarted(inst Instance) {
+	if l.events == nil {
+		return
+	}
+	data, err := json.Marshal(inst)
+	if err != nil {
+		return
+	}
+	l.events.Broadcast(sse.Event{Type: "instance.restarted", Data: data})
+}
+
 // crashMessage baut die für Toast/Kachel-Tooltip angezeigte Meldung aus
 // dem Wait()-Fehler (nil bei exit 0, z. B. ein Node, der sich selbst ohne
 // Fehler beendet) und dem stderr-Tail des Subprozesses.
@@ -380,6 +573,10 @@ func (l *Launcher) Stop(id string) error {
 	inst, ok := l.instances[id]
 	if ok {
 		delete(l.instances, id)
+		// Crash-Loop-Buchführung endet mit der Instanz — ein bewusst
+		// gestoppter, später erneut gestarteter Node (neue Instanz-ID)
+		// fängt bei der Bremse wieder bei null an.
+		delete(l.restarts, id)
 		if err := l.saveState(); err != nil {
 			slog.Warn("launcher: failed to persist instance state", "error", err)
 		}

@@ -268,6 +268,141 @@ func (s *Service) awaitRegistration(ctx context.Context, wf Workflow, pending ma
 	}
 }
 
+// awaitFreshRegistration wartet auf eine Registrierung von instanceID,
+// deren Node-ID sich von excludeNodeID unterscheidet — anders als
+// awaitRegistration (das für den Workflow-Start passt: dort existiert
+// vorher garantiert keine Registrierung) für den Neustart-Fall
+// (rewireAfterRestart), wo die alte Registrierung des per SIGKILL
+// beendeten Prozesses noch bis zu ihrem Heartbeat-Timeout sichtbar sein
+// kann, während der neu gestartete Prozess sich bereits unter einer
+// neuen Node-ID anmeldet. excludeNodeID darf leer sein (Rolle hatte
+// noch keine aufgelöste Node-ID) — dann zählt jede Registrierung.
+func (s *Service) awaitFreshRegistration(ctx context.Context, instanceID, excludeNodeID string) (registry.NodeView, error) {
+	ticker := time.NewTicker(registrationPollInterval)
+	defer ticker.Stop()
+
+	for {
+		// Bewusst nicht findByInstanceID (das liefert nur den *ersten*
+		// Treffer zurück): solange die alte Registrierung noch nicht
+		// abgelaufen ist, stünde die für immer an erster Stelle und
+		// awaitFreshRegistration würde nie über sie hinauskommen — hier
+		// muss über *alle* Knoten mit passender InstanceID gesucht
+		// werden, bis einer mit einer anderen ID als excludeNodeID dabei
+		// ist.
+		for _, n := range s.nodes.List() {
+			if n.InstanceID == instanceID && n.ID != excludeNodeID {
+				return n, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return registry.NodeView{}, fmt.Errorf("timed out waiting for fresh registration of instance %s", instanceID)
+		case <-ticker.C:
+		}
+	}
+}
+
+// InstanceRestarted implementiert launcher.RestartObserver (K7-Teil-1,
+// docs/END-GOAL-FEATURES.md §7.3a/§7.6): der Launcher ruft dies auf,
+// sobald er eine abgestürzte Instanz automatisch in derselben Instanz-ID
+// neu gestartet hat. Generalisiert den bisher nur an Start() gebundenen
+// node.added-Glue (runStart oben) auf "eine erwartete Rolle eines
+// laufenden Workflows ist nach einem Neustart wieder da": wartet erneut
+// auf ihre Registrierung und wendet alle Connections neu an, die diese
+// Rolle betreffen. Läuft im Hintergrund — der Launcher darf auf diesen
+// Aufruf nicht warten müssen.
+func (s *Service) InstanceRestarted(instanceID string) {
+	go s.rewireAfterRestart(instanceID)
+}
+
+func (s *Service) rewireAfterRestart(instanceID string) {
+	wfs, err := s.store.List()
+	if err != nil {
+		slog.Warn("workflows: rewireAfterRestart: list failed", "error", err)
+		return
+	}
+	var workflowID, role string
+	for _, wf := range wfs {
+		if wf.Status != StatusStarted {
+			continue
+		}
+		for r, rt := range wf.Runtime {
+			if rt.InstanceID == instanceID {
+				workflowID, role = wf.ID, r
+				break
+			}
+		}
+		if workflowID != "" {
+			break
+		}
+	}
+	if workflowID == "" {
+		// Instanz gehört zu keinem laufenden Workflow (z. B. ein direkt
+		// über den Katalog gestarteter Node) — nichts zu verkabeln, der
+		// Launcher-eigene Neustart genügt.
+		return
+	}
+
+	// Frisch laden statt der List()-Kopie weiterzuverwenden: zwischen dem
+	// Auffinden oben und hier könnte der Workflow bereits gestoppt worden
+	// sein.
+	wf, err := s.store.Get(workflowID)
+	if err != nil || wf.Status != StatusStarted {
+		return
+	}
+
+	// Nicht awaitRegistration (das nimmt jede Registrierung mit
+	// passender InstanceID, auch eine schon vor dem Absturz bestehende)
+	// — ein per SIGKILL beendeter Prozess bekommt keine Chance, sich
+	// selbst abzumelden, seine alte NMOS-Registrierung kann also noch
+	// eine ganze Weile (Heartbeat-Timeout) neben der neuen sichtbar
+	// bleiben. awaitFreshRegistration wartet gezielt auf eine Node-ID,
+	// die sich von der zuletzt bekannten unterscheidet — live per
+	// kill -9 verifiziert: ohne diese Unterscheidung blieb die
+	// Verbindung auf den (kurz danach verschwindenden) toten Sender der
+	// alten Registrierung stehen, statt auf den neuen umzuschwenken.
+	previousNodeID := wf.Runtime[role].NodeID
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	node, err := s.awaitFreshRegistration(ctx, instanceID, previousNodeID)
+	cancel()
+	if err != nil {
+		slog.Warn("workflows: rewireAfterRestart: registration timed out", "workflow", wf.ID, "role", role, "error", err)
+		return
+	}
+	rt := wf.Runtime[role]
+	rt.NodeID = node.ID
+	wf.Runtime[role] = rt
+
+	for _, conn := range wf.Definition.Connections {
+		if conn.FromRole != role && conn.ToRole != role {
+			continue
+		}
+		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
+		if !ok || len(fromNode.Senders) == 0 {
+			slog.Warn("workflows: rewireAfterRestart: sender not ready", "workflow", wf.ID, "connection", conn)
+			continue
+		}
+		toNode, ok := s.nodeForRole(wf, conn.ToRole)
+		if !ok || len(toNode.Receivers) == 0 {
+			slog.Warn("workflows: rewireAfterRestart: receiver not ready", "workflow", wf.ID, "connection", conn)
+			continue
+		}
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		err := s.graph.Connect(connectCtx, fromNode.Senders[0].ID, toNode.Receivers[0].ID)
+		connectCancel()
+		if err != nil {
+			slog.Warn("workflows: rewireAfterRestart: reconnect failed", "workflow", wf.ID, "connection", conn, "error", err)
+		}
+	}
+
+	wf.UpdatedAt = time.Now()
+	if err := s.store.Put(wf); err != nil {
+		slog.Warn("workflows: rewireAfterRestart: persist failed", "workflow", wf.ID, "error", err)
+	}
+	s.publish(wf)
+	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
+}
+
 func (s *Service) nodeForRole(wf Workflow, role string) (registry.NodeView, bool) {
 	rt, ok := wf.Runtime[role]
 	if !ok || rt.NodeID == "" {

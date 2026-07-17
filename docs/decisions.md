@@ -5411,3 +5411,97 @@ schlug mit „Domain path is not a directory" fehl, bis das Verzeichnis
 manuell angelegt wurde. `deploy/dev/start-omp.sh` legt es jetzt selbst
 an (`mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"`), statt sich auf
 einen vorherigen Lauf zu verlassen.
+
+## 2026-07-17 (Nachtrag 3) — K7-Teil-1 umgesetzt: Prozess-Auto-Restart,
+Crash-Loop-Bremse, automatische IS-05-Wiederverkabelung, Restart-Zähler
+im UI
+
+Direkte Fortsetzung, wie in Kapitel 18 der `frage an fabel.txt`-
+Priorisierung vorgesehen (zweiter Schritt nach §1.6): das seit
+2026-07-14 vollständig entworfene, aber nie begonnene K7-Teil-1
+(`docs/END-GOAL-FEATURES.md` §7.3a/§7.4) umgesetzt.
+
+**`orchestrator/internal/launcher`:**
+- `startLocal`s bisherige "einmal starten, bei Absturz nur markieren"-
+  Goroutine ersetzt durch `supervise()`: startet einen abgestürzten
+  lokalen Prozess automatisch in **derselben Instanz-ID** neu (nicht
+  als neue Instanz), solange die Crash-Loop-Bremse das erlaubt.
+  `execEntry()` kapselt den Subprozess-Start als wiederverwendbaren
+  Kern für Erst- und Neustart.
+- Crash-Loop-Bremse als Paket-Variablen (`maxCrashRestarts=5`,
+  `crashRestartWindow=60s`, `crashRestartBackoff=2s`, fester Delay
+  nach PIPELINE-CONTROLLER-Vorbild `supervisor.js:183–192`) — Werte
+  aus der Entscheidungssitzung 2026-07-14 (Kapitel 10, Punkt 8).
+  Bewusst **kein** `restartPolicy`-Feld pro Katalog-Eintrag/Rolle in
+  diesem Schritt (Ziel-Design nennt es als spätere Ausbaustufe) — eine
+  einheitliche Policy deckt die verlangte Verifikation ab, pro-Typ-
+  Konfigurierbarkeit ist dokumentierte Folgearbeit.
+- Neues `Instance.RestartCount`-Feld, neuer `instance.restarted`-SSE-
+  Event-Typ (`publishRestarted`, analog `publishCrash`).
+- Neues `RestartObserver`-Interface + `SetRestartObserver()` — vom
+  Launcher nach jedem erfolgreichen automatischen Neustart aufgerufen,
+  implementiert von `*workflows.Service`.
+
+**`orchestrator/internal/workflows`:**
+- `Service.InstanceRestarted()` (erfüllt `launcher.RestartObserver`)
+  generalisiert den bisher nur an `Start()` gebundenen `node.added`-
+  Glue: sucht die laufende Workflow-Rolle mit passender Instanz-ID,
+  wartet auf ihre Neu-Registrierung und wendet alle sie betreffenden
+  Connections neu an.
+- **Echter, live gefundener Bug unterwegs, nicht nur vermutet:** die
+  naheliegende erste Fassung nutzte `awaitRegistration` (dieselbe
+  Funktion wie beim Workflow-Start) — funktioniert dort, weil vor
+  einem Start garantiert keine Registrierung existiert, aber beim
+  Neustart-Fall kann die **alte** NMOS-Registrierung des per SIGKILL
+  beendeten Prozesses (keine Chance zur Selbstabmeldung) noch bis zu
+  ihrem Heartbeat-Timeout neben der neuen weiterleben.
+  `findByInstanceID` liefert dabei immer den *ersten* Treffer in der
+  Liste zurück — bei einem `kill -9`-Live-Test blieb die Connection
+  dadurch auf den (kurz danach als "offline" markierten, dann ganz
+  verschwindenden) Sender der alten Registrierung stehen, obwohl der
+  neue Prozess längst lief. Gefixt mit einer dedizierten
+  `awaitFreshRegistration(ctx, instanceID, excludeNodeID)`, die gezielt
+  über *alle* Knoten mit passender Instanz-ID iteriert (nicht nur den
+  ersten Treffer) und die zuvor bekannte Node-ID ausschließt. Ohne den
+  Live-Test (reine Unit-Tests mit Fakes hätten das mit einer zu
+  freundlichen Fake-Registry-Reihenfolge leicht übersehen können) wäre
+  dieser Bug vermutlich erst in einem echten Mehrfach-Restart-Szenario
+  aufgefallen.
+
+**UI (`ui/graph/flow-canvas.ts`):** `instance.restarted`-Event zeigt
+einen (unaufdringlicheren als "instance.crashed") Toast; Katalog-
+Paletten-Zeile zeigt bei `restartCount > 0` einen Restart-Zähler
+("↻ N× automatisch neu gestartet") — auch wenn die Instanz gerade
+läuft, damit eine flatternde (wiederholt abstürzende) Instanz erkennbar
+bleibt, nicht nur eine aktuell tote (§7.2-Prinzip, PIPELINE-CONTROLLER-
+Vorbild `supervisor.js:412`).
+
+**Verifiziert:**
+- `go build ./...`/`go test ./...` (ganzer Orchestrator) grün,
+  `go vet` sauber. Zwei neue Launcher-Tests
+  (`TestLauncherAutoRestartsCrashedInstanceInPlace`,
+  `TestLauncherCrashLoopBrakeStopsAutoRestarting`) und zwei neue
+  Workflow-Tests (`TestInstanceRestartedRewiresAffectedRole` — mit der
+  oben beschriebenen absichtlich harten Race-Bedingung als
+  Regressionswächter, `TestInstanceRestartedIgnoresInstanceOutsideAnyWorkflow`).
+  Drei bestehende Launcher-Tests, die einen Prozess bewusst enden
+  lassen und das alte "bleibt einfach crashed"-Verhalten prüfen,
+  bekamen `disableAutoRestart(t)` (maxCrashRestarts=0), damit sie ihre
+  ursprüngliche Bedeutung behalten statt inkorrekt zu werden.
+- **Live, echter Orchestrator, kein Mock:** Workflow mit zwei Rollen
+  (omp-source → omp-viewer) gestartet, `kill -9` auf den Source-
+  Prozess. Innerhalb der 2s-Backoff-Zeit neu gestartet (neue PID,
+  gleiche Instanz-ID, `restartCount:1`), IS-05-Verbindung automatisch
+  auf den neuen Sender umgehängt (per `/api/v1/graph` bestätigt: alte
+  Node-Registrierung als "offline" sichtbar, aktive Kante zeigt auf den
+  neuen Sender), Restart-Zähler live per CDP/Headless-Chromium im
+  Katalog-Panel sichtbar ("↻ 1× automatisch neu gestartet"). Genau die
+  im Phasenplan verlangte Verifikation.
+
+**Nicht Teil dieses Schritts (dokumentierte Folgearbeit, wie im
+Ziel-Design vorgesehen):** Degradation-Leitlinie in
+`docs/NODE-TUTORIAL.md` (Teil 2), ST-2022-7-Dual-Path (Teil 3),
+Hot-Standby (Teil 4, wartet auf D6 Teil 3 — bereits fertig, könnte
+also als nächstes angegangen werden), pro-Katalog-Eintrag/Rolle
+konfigurierbare `restartPolicy`, Remote-Instanzen (HostID gesetzt) —
+Crash-Erkennung dafür existiert laut §7.1 weiterhin nicht.

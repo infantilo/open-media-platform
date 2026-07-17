@@ -147,6 +147,11 @@ interface LauncherInstance {
   hostId?: string;
   crashed?: boolean;
   crashMessage?: string;
+  // Automatische Neustarts seit dem ursprünglichen Start (K7-Teil-1,
+  // docs/END-GOAL-FEATURES.md §7.3a) — auch sichtbar, wenn die Instanz
+  // gerade NICHT crashed ist (sie hat sich ja gerade erholt), damit ein
+  // Operator eine flatternde Instanz erkennt, nicht nur eine tote.
+  restartCount?: number;
 }
 
 // HostEntry — Wire-Format identisch zu httpapi.hostResponse
@@ -357,6 +362,18 @@ export class FlowCanvas extends HTMLElement {
     if (parsed.type === "instance.crashed") {
       const inst = parsed.data as LauncherInstance;
       this.#showToast(`${inst.label} abgestürzt: ${inst.crashMessage || "unbekannter Fehler"}`);
+      void this.#renderPalette();
+      return;
+    }
+
+    // K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a): der Launcher hat eine
+    // abgestürzte Instanz automatisch neu gestartet, ohne dass jemand
+    // eingegriffen hat — sichtbar, aber bewusst unauffälliger als
+    // "instance.crashed" (kein andauerndes Problem, sondern eine bereits
+    // behobene Störung).
+    if (parsed.type === "instance.restarted") {
+      const inst = parsed.data as LauncherInstance;
+      this.#showToast(`${inst.label} automatisch neu gestartet (${inst.restartCount ?? "?"}. Neustart)`);
       void this.#renderPalette();
     }
   }
@@ -1774,6 +1791,18 @@ export class FlowCanvas extends HTMLElement {
     const label = document.createElement("div");
     label.textContent = inst.label;
     row.appendChild(label);
+
+    // K7-Teil-1: ein Restart-Zähler > 0 ist auch dann sichtbar, wenn die
+    // Instanz gerade läuft — eine Instanz, die alle paar Sekunden neu
+    // startet, ist ein eigener Alarm-würdiger Zustand ("flatternd"), kein
+    // "ist ja wieder online" (docs/END-GOAL-FEATURES.md §7.2, PIPELINE-
+    // CONTROLLER-Vorbild `supervisor.js:412`).
+    if (inst.restartCount) {
+      const restartTag = document.createElement("div");
+      restartTag.textContent = `↻ ${inst.restartCount}× automatisch neu gestartet`;
+      restartTag.style.cssText = "color:#f0ad4e;font-size:9px;margin-top:1px;";
+      row.appendChild(restartTag);
+    }
 
     if (inst.hostId) {
       const hostLabel = hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId;

@@ -2999,15 +2999,22 @@ Priorität") mit kurzer Begründung — Details in den jeweiligen
 Kapiteln, nicht hier wiederholt.
 
 1. **§1.6 — Property-Panel-Breite + „Als Operator ansehen"-Button.**
-   Kleinster Aufwand, beide Design-Fragen bereits vollständig durch
-   Code-Lesen geklärt (kein offener Rechercheposten mehr), direkter
-   Treffer auf die Nutzer-Vorgabe „achte auf ein schönes UI" — sofort
-   umsetzbar, keine Abhängigkeiten.
+   ✅ Erledigt 2026-07-17 (`UMSETZUNG.md`). Kleinster Aufwand, beide
+   Design-Fragen bereits vollständig durch Code-Lesen geklärt (kein
+   offener Rechercheposten mehr), direkter Treffer auf die
+   Nutzer-Vorgabe „achte auf ein schönes UI" — sofort umsetzbar, keine
+   Abhängigkeiten.
 2. **§7.6/K7-Teil-1 — Prozess-Auto-Restart + stabile Konsolen-Rolle.**
-   Bereits vollständig entworfen und entschieden (Kapitel 10, Punkt
-   8), „startet sofort" seit 2026-07-14, aber bis heute nicht
-   begonnen. Schließt eine reale Stabilitäts-/Redundanz-Lücke, moderat
-   groß, keine externen Abhängigkeiten.
+   ✅ K7-Teil-1 (Prozess-Auto-Restart, Crash-Loop-Bremse, automatische
+   IS-05-Wiederverkabelung, Restart-Zähler im UI) erledigt 2026-07-17
+   (`UMSETZUNG.md`, `docs/decisions.md` Nachtrag 3) — live per
+   `kill -9` gegen einen echten Workflow verifiziert, dabei einen
+   echten Bug bei noch nicht abgelaufenen alten NMOS-Registrierungen
+   gefunden und gefixt. Die „stabile Konsolen-Rolle" aus §7.6 (die
+   Operator-Konsolen-Route selbst über einen Prozesswechsel hinweg
+   stabil auflösen) ist **noch offen** — §1.6s `/console/default/
+   <nodeRoleId>`-Link nutzt weiterhin die zum Zeitpunkt des Panel-
+   Öffnens aufgelöste ID, kein eigener Re-Resolve-Mechanismus.
 3. **§17 Teil 1–3 — Katalog-Beschreibungen + Laufende-Instanzen-Tab +
    Alarm-View.** Sichtbarer UI-Qualitätssprung, baut überwiegend auf
    bereits vorhandenen Daten/Events, kein Architektur-Risiko. Teil 4/5
