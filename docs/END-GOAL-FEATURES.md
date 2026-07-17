@@ -3019,6 +3019,17 @@ Kapiteln, nicht hier wiederholt.
    Alarm-View.** Sichtbarer UI-Qualitätssprung, baut überwiegend auf
    bereits vorhandenen Daten/Events, kein Architektur-Risiko. Teil 4/5
    (Import) bewusst zurückgestellt (siehe dort).
+   ✅ **Teil 1 (Beschreibungen + vermutete Ressourcen) erledigt
+   2026-07-17** (`UMSETZUNG.md`, `docs/decisions.md` Nachtrag 4) —
+   `CatalogEntry.Description`/`ExpectedResources` (Freitext, additiv,
+   optional), `deploy/catalog.json` für alle zehn Einträge befüllt,
+   Katalog-Palette zeigt beides sichtbar unter jedem Eintrag statt nur
+   im Tooltip. **Teil 2 hat eine bisher unerwähnte Abhängigkeit:** baut
+   laut Text auf „Kapitel-14-Datenmodell" auf — das existiert noch
+   nicht (Kapitel 14 selbst ist Ist-Zustand „noch nicht gebaut"),
+   Teil 2 ist also erst **nach** einem Kapitel-14-Schritt sinnvoll
+   startbar, nicht direkt im Anschluss an Teil 1. Teil 3 (Alarm-View)
+   bleibt unabhängig davon offen.
 4. **§4.6 — Audio-Mixer EQ-Parametrisierung + Dynamik (Kapitel-4-
    Teil-2, jetzt inkl. EQ-Upgrade).** Klar umrissene Node-
    Vervollständigung auf bestehendem Plan, kein neues Konzept.

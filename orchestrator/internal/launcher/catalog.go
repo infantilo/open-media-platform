@@ -25,6 +25,22 @@ type CatalogEntry struct {
 	Runner  string            `json:"runner"`
 	Command []string          `json:"command"`
 	Env     map[string]string `json:"env"`
+	// Description ist ein kurzer, für den Katalog-Nutzer verständlicher
+	// Fließtext, was dieser Node-Typ tut (docs/END-GOAL-FEATURES.md §17
+	// Teil 1: "es fehlen noch Beschreibungen"). Optional — ein Eintrag
+	// ohne Description bleibt gültig (Community-/Fremd-Microservices, die
+	// das Feld nicht setzen, sollen den Katalog nicht kaputt machen).
+	Description string `json:"description,omitempty"`
+	// ExpectedResources ist ein grober, von Hand gepflegter Freitext-
+	// Vorab-Schätzwert ("~5% CPU · ~40 MB RAM"), keine Messung — bis
+	// Kapitel 14 (Host-/Microservice-Ressourcen-Historie, noch nicht
+	// gebaut) echte Min/Ø/Max-Profile aus Laufzeitmessungen liefert, ist
+	// das die einzige verfügbare Ressourcen-Auskunft vor dem ersten
+	// Start eines Typs. Bewusst Freitext statt eines strukturierten
+	// Schemas: sobald Kapitel 14 landet, ersetzt die dort ohnehin echte
+	// Messwerte, keine handgepflegten Schätzungen — ein vorgezogenes
+	// striktes Schema wäre Wegwerf-Aufwand.
+	ExpectedResources string `json:"expectedResources,omitempty"`
 }
 
 // LoadCatalog liest und validiert die Katalog-Datei unter path. Ein

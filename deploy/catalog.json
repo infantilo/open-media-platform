@@ -4,69 +4,89 @@
     "label": "Source",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-source"],
-    "env": {}
+    "env": {},
+    "description": "Erzeugt ein wählbares GStreamer-Testbild (Farbbalken u. a.) inkl. Testton als MXL-Flow. Reine Testquelle, keine echte Kamera-/Dateianbindung.",
+    "expectedResources": "gering, konstant"
   },
   {
     "type": "omp-switcher",
     "label": "Switcher",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-switcher"],
-    "env": {}
+    "env": {},
+    "description": "Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf — kein Programm-/Preset-Bus, kein Mischeffekt (Vorläufer von Video Mixer M/E).",
+    "expectedResources": "gering, wächst mit Eingangszahl"
   },
   {
     "type": "omp-viewer",
     "label": "Viewer",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-viewer"],
-    "env": {}
+    "env": {},
+    "description": "Zeigt einen ausgewählten MXL-Videostream als MJPEG-Vorschau im Browser.",
+    "expectedResources": "gering"
   },
   {
     "type": "omp-video-mixer-me",
     "label": "Video Mixer M/E",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-video-mixer-me"],
-    "env": {}
+    "env": {},
+    "description": "Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus, Cut/Auto-Transition, DVE-Kanal, Keyer, Tally-Signalisierung.",
+    "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen"
   },
   {
     "type": "omp-audio-mixer",
     "label": "Audio Mixer",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-audio-mixer"],
-    "env": {}
+    "env": {},
+    "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal und automatischem Audio-Follow-Video.",
+    "expectedResources": "gering bis moderat, wächst mit Kanalzahl"
   },
   {
     "type": "omp-player-video",
     "label": "Videoplayer",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-player"],
-    "env": { "OMP_PLAYER_PROFILE": "video" }
+    "env": { "OMP_PLAYER_PROFILE": "video" },
+    "description": "Datei-/Playlist-Player für Videodateien inkl. Audio, manueller Cue/Take-Betrieb.",
+    "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
   {
     "type": "omp-player-jingle",
     "label": "Jingle-Player",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-player"],
-    "env": { "OMP_PLAYER_PROFILE": "jingle" }
+    "env": { "OMP_PLAYER_PROFILE": "jingle" },
+    "description": "Datei-/Playlist-Player für Jingles/Musik (nur Audio), manueller Cue/Take-Betrieb.",
+    "expectedResources": "gering"
   },
   {
     "type": "omp-multiviewer",
     "label": "Multiviewer",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-multiviewer"],
-    "env": {}
+    "env": {},
+    "description": "Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal.",
+    "expectedResources": "wächst mit der Zahl sichtbarer Kacheln"
   },
   {
     "type": "omp-playout-automation",
     "label": "Playout-Automation",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-playout-automation"],
-    "env": {}
+    "env": {},
+    "description": "Automatisierte Playlist-Sequenzierung: steuert einen bereits laufenden Player und Bildmischer fern. Keine eigene Medienpipeline.",
+    "expectedResources": "sehr gering (keine Medienverarbeitung)"
   },
   {
     "type": "omp-ograf",
     "label": "OGraf Grafik",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-ograf"],
-    "env": {}
+    "env": {},
+    "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK.",
+    "expectedResources": "moderat (Web-Rendering pro aktivem Template)"
   }
 ]

@@ -132,6 +132,12 @@ interface CatalogEntry {
   runner: string;
   command: string[];
   env: Record<string, string>;
+  // description/expectedResources (§17 Teil 1, docs/END-GOAL-
+  // FEATURES.md, 2026-07-17): optional, ein Community-/Fremd-
+  // Microservice-Eintrag ohne diese Felder muss weiterhin gültig
+  // bleiben.
+  description?: string;
+  expectedResources?: string;
 }
 
 // LauncherInstance — Wire-Format identisch zu
@@ -1736,7 +1742,12 @@ export class FlowCanvas extends HTMLElement {
 
         const btn = document.createElement("button");
         btn.textContent = `+ ${entry.label}`;
-        btn.title = `${entry.label} starten`;
+        // Beschreibung/Ressourcen-Schätzung stehen sichtbar als
+        // Untertitel (s. u.), zusätzlich hier im Tooltip für den
+        // schnellen Hover-Fall.
+        const tooltipParts = [`${entry.label} starten`, entry.description, entry.expectedResources]
+          .filter((p): p is string => !!p);
+        btn.title = tooltipParts.join(" — ");
         btn.style.cssText = "cursor:pointer;flex:1;text-align:left;padding:4px 6px;";
 
         // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
@@ -1763,6 +1774,28 @@ export class FlowCanvas extends HTMLElement {
         btn.addEventListener("click", () => this.#startInstance(entry.type, hostSelect?.value || undefined));
         row.appendChild(btn);
         this.#palette.appendChild(row);
+
+        // §17 Teil 1 (docs/END-GOAL-FEATURES.md, 2026-07-17): sichtbare
+        // Kurzbeschreibung + grobe Ressourcen-Schätzung statt nur eines
+        // Labels — vermutete Ressourcen sind bewusst als Freitext-Hinweis
+        // gekennzeichnet ("~"), keine Messung (die liefert erst Kapitel
+        // 14, noch nicht gebaut).
+        if (entry.description || entry.expectedResources) {
+          const meta = document.createElement("div");
+          meta.style.cssText = "margin:-2px 0 6px 2px;color:var(--omp-text-dim);font-size:9px;line-height:1.3;";
+          if (entry.description) {
+            const desc = document.createElement("div");
+            desc.textContent = entry.description;
+            meta.appendChild(desc);
+          }
+          if (entry.expectedResources) {
+            const res = document.createElement("div");
+            res.textContent = `~ ${entry.expectedResources}`;
+            res.style.cssText = "font-style:italic;";
+            meta.appendChild(res);
+          }
+          this.#palette.appendChild(meta);
+        }
 
         for (const inst of instances.filter((i) => i.type === entry.type)) {
           this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));

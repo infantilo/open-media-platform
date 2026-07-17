@@ -5505,3 +5505,34 @@ Hot-Standby (Teil 4, wartet auf D6 Teil 3 — bereits fertig, könnte
 also als nächstes angegangen werden), pro-Katalog-Eintrag/Rolle
 konfigurierbare `restartPolicy`, Remote-Instanzen (HostID gesetzt) —
 Crash-Erkennung dafür existiert laut §7.1 weiterhin nicht.
+
+## 2026-07-17 (Nachtrag 4) — §17 Teil 1 umgesetzt: Katalog-
+Beschreibungen + vermutete Ressourcen
+
+Dritter Schritt der Kapitel-18-Priorisierung. `orchestrator/internal/
+launcher.CatalogEntry` bekommt zwei neue, additive/optionale Felder:
+`Description` (kurzer Fließtext) und `ExpectedResources` (bewusst
+Freitext statt strukturiertem Schema — „~5% CPU · ~40 MB RAM"-Stil
+wäre eine vorgezogene, geratene Zahl; Kapitel 14 liefert später echte
+Messwerte, ein striktes Schema jetzt wäre Wegwerf-Aufwand). Beide
+Felder in `deploy/catalog.json` für alle zehn Node-Typen befüllt,
+Texte auf Basis der jeweiligen `main.rs`-Modulkommentare geschrieben
+(nicht geraten). `ui/graph/flow-canvas.ts`s Katalog-Palette zeigt
+beides jetzt sichtbar unter jedem „+ Typ"-Button (vorher nur der reine
+Label-Text), zusätzlich weiterhin im Tooltip.
+
+**Abhängigkeits-Fund beim Schreiben:** §17 Teil 2 (Laufende-Instanzen-
+Tab) sagt im Ziel-Design-Text selbst „baut direkt auf Kapitel-14-
+Datenmodell" — Kapitel 14 (Host-/Microservice-Ressourcen-Historie)
+existiert aber noch nicht (eigener Ist-Zustand dort: „noch nicht
+gebaut"). Teil 2 ist also nicht wie ursprünglich in Kapitel 18
+angenommen direkt im Anschluss an Teil 1 startbar, sondern braucht
+zuerst einen Kapitel-14-Schritt. Kapitel 18 entsprechend präzisiert.
+Teil 3 (Alarm-View, baut nur auf bereits existierenden Events) bleibt
+unabhängig davon offen und direkt startbar.
+
+**Verifiziert:** `go build`/`go test ./...` (Orchestrator) grün, `deno
+check`/`deno test ui/` (40/40) grün. Live: `/api/v1/catalog` liefert
+die neuen Felder korrekt, per Headless-Chromium/CDP-Screenshot
+bestätigt, dass die Palette Beschreibung + Ressourcen-Hinweis für alle
+zehn Einträge lesbar anzeigt.
