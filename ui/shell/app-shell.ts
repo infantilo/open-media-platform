@@ -10,9 +10,10 @@
 import "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
+import "./alarm-view.ts";
 import { type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 
-type TabId = "flow" | "workflows" | "hosts";
+type TabId = "flow" | "workflows" | "hosts" | "alarms";
 
 interface TabDef {
   id: TabId;
@@ -24,6 +25,9 @@ const TABS: TabDef[] = [
   { id: "flow", label: "Flow Editor", element: "omp-flow-canvas" },
   { id: "workflows", label: "Workflows", element: "omp-workflows-view" },
   { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
+  // §17 Teil 3 (docs/END-GOAL-FEATURES.md, 2026-07-17): genereller
+  // Alarm-View, vierter Tab neben Flow-Editor/Workflows/Hosts.
+  { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
 ];
 
 const PILL_LABEL: Record<ConnectionState, string> = {

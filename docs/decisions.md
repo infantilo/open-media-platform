@@ -5536,3 +5536,44 @@ check`/`deno test ui/` (40/40) grün. Live: `/api/v1/catalog` liefert
 die neuen Felder korrekt, per Headless-Chromium/CDP-Screenshot
 bestätigt, dass die Palette Beschreibung + Ressourcen-Hinweis für alle
 zehn Einträge lesbar anzeigt.
+
+## 2026-07-17 (Nachtrag 5) — §17 Teil 3 umgesetzt: genereller Alarm-View
+
+Vierter Schritt der Kapitel-18-Priorisierung, direkt nach Teil 1 (Teil
+2 übersprungen wegen der in Nachtrag 4 gefundenen Kapitel-14-
+Abhängigkeit). Neuer App-Bar-Tab „Alarme" (`ui/shell/alarm-view.ts`,
+`app-shell.ts`s `TABS`-Liste um `alarms`/`omp-alarm-view` erweitert) —
+exakt wie im Ziel-Design (§17.3c) gefordert **kein neuer Alarm-
+Erzeuger**, nur ein zentraler Konsument dreier bereits bestehenden
+Endpunkte:
+
+- `GET /api/v1/instances` — `crashed` (kritisch) und `restartCount > 0`
+  ohne `crashed` (Warnung, „flatternde" Instanz, K7-Teil-1).
+- `GET /api/v1/placement/advice` — Host-Ressourcen-Ampel (Warnung, D6
+  Teil 3).
+- `GET /api/v1/workflows` — `status === "failed"` (kritisch).
+
+Gleiches Poll-Muster (4s, `apiFetch`) wie `hosts-view.ts`, bewusst
+keine SSE-Sonderbehandlung (Verzögerung für eine Alarm-Übersicht
+unkritisch, Konsistenz mit dem bereits etablierten Muster wichtiger
+als Echtzeit-Anspruch für diesen speziellen Tab).
+
+**Abwägung, dokumentiert statt stillschweigend entschieden:** der
+Ziel-Design-Text sagt „an einer Stelle **statt verteilt**" — wörtlich
+genommen würde das verlangen, `hosts-view.ts`s bestehendes Placement-
+Advice-Banner zu entfernen. Bewusst **nicht getan**: das Banner ist
+kontextuell weiterhin nützlich, wenn man sich ohnehin die Host-Ansicht
+anschaut, und Entfernen ist ein unnötiges Risiko für bereits
+funktionierende, getestete UI. Der neue Tab ist als zusätzlicher,
+zentraler Gesamtüberblick zu verstehen, nicht als Ablösung der
+kontextuellen Einzelanzeige — leichte Redundanz akzeptiert.
+
+**Verifiziert:** `go build`/`go test ./...` grün, `deno check`/`deno
+test ui/` (40/40) grün. Live: leerer Zustand („✓ Keine aktiven
+Alarme.") per CDP-Screenshot bestätigt; anschließend zwei echte Alarme
+erzeugt — ein einmaliger `kill -9` auf eine laufende Instanz (Warnung,
+„1× automatisch neu gestartet") und ein **echter Crash-Loop**
+(`/dev/shm/omp-mxl` kurzzeitig entfernt, `omp-source` gestartet: 5
+automatische Neustarts in ~4s, dann Eskalation — bestätigt zugleich
+erneut die K7-Teil-1-Crash-Loop-Bremse) — beide erscheinen korrekt
+sortiert (kritisch vor Warnung) mit passender Farbe im Alarm-Tab.

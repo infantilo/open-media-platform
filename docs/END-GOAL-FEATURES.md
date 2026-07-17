@@ -3030,6 +3030,16 @@ Kapiteln, nicht hier wiederholt.
    Teil 2 ist also erst **nach** einem Kapitel-14-Schritt sinnvoll
    startbar, nicht direkt im Anschluss an Teil 1. Teil 3 (Alarm-View)
    bleibt unabhängig davon offen.
+   ✅ **Teil 3 (Alarm-View) erledigt 2026-07-17** (`UMSETZUNG.md`,
+   `docs/decisions.md` Nachtrag 5) — neuer vierter App-Bar-Tab
+   „Alarme" (`ui/shell/alarm-view.ts`), zentraler Konsument dreier
+   bereits bestehender Endpunkte (`/api/v1/instances`
+   crashed/restartCount, `/api/v1/placement/advice`,
+   `/api/v1/workflows` status „failed") — kein neuer Alarm-Erzeuger,
+   wie im Ziel-Design gefordert. Bewusst **additiv statt ersetzend**:
+   `hosts-view.ts`s Placement-Advice-Banner bleibt zusätzlich bestehen
+   (kontextuell sinnvoll dort), Abwägung dokumentiert. Teil 2 bleibt
+   der einzige noch offene Teil dieses Punkts (wartet auf Kapitel 14).
 4. **§4.6 — Audio-Mixer EQ-Parametrisierung + Dynamik (Kapitel-4-
    Teil-2, jetzt inkl. EQ-Upgrade).** Klar umrissene Node-
    Vervollständigung auf bestehendem Plan, kein neues Konzept.
