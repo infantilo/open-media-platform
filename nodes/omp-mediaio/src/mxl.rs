@@ -888,7 +888,7 @@ fn read_loop(
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
     while running.load(Ordering::Relaxed) {
-        match grain_reader.get_complete_grain(index, Duration::from_millis(500)) {
+        match grain_reader.get_grain_non_blocking(index) {
             Ok(grain) => {
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
                 // Ursprungs-Zeitstempel als Referenz-Meta anhängen
@@ -919,41 +919,32 @@ fn read_loop(
                 // endlos veraltete Indizes anzufragen.
                 index = context.instance.get_current_index(grain_rate);
             }
-            Err(mxl::Error::Timeout | mxl::Error::OutOfRangeTooEarly) => {
-                // Noch nicht geschrieben — gleichen Index erneut versuchen.
-                // Kurzer Backoff statt sofortigem Retry, als Teilschutz
-                // gegen ein bekanntes TOCTOU-Fenster in MXLs eigener
-                // `waitUntilChanged` (vendored C++, lib/internal/src/
-                // Sync.cpp): committet der Writer zwischen dem Lesen des
-                // Sync-Zählers und dem eigentlichen Futex-Wait erneut,
-                // kehrt der Aufruf sofort zurück, ohne tatsächlich zu
-                // warten.
+            Err(mxl::Error::OutOfRangeTooEarly) => {
+                // Noch nicht geschrieben — gleichen Index nach kurzem
+                // Rust-seitigem Backoff erneut versuchen.
                 //
-                // **Behebt NICHT den in der Praxis beobachteten
-                // Extremfall** (docs/decisions.md, 2026-07-10 "C8 —
-                // MXL-Read-Livelock"): dort steckt die Retry-Schleife
-                // bereits *innerhalb* des einzelnen `get_complete_grain`-
-                // FFI-Aufrufs (C++-eigenes `while(true)` in `getGrain`,
-                // das bei `OUT_OF_RANGE_TOO_EARLY` selbst erneut
-                // `getGrainImpl` aufruft) — die Kontrolle kommt in diesem
-                // Fall über Minuten hinweg gar nicht zu diesem Rust-Codepfad
-                // zurück, weshalb der Sleep hier nichts bewirkt (per
-                // `/proc/<pid>/task/*/stat` verifiziert: ein Thread bleibt
-                // bei ~100% CPU, "Last read time" des Flows friert dauerhaft
-                // ein). Bleibt trotzdem stehen, weil er den harmloseren
-                // Fall (Aufruf kehrt normal mit `Timeout`/
-                // `OutOfRangeTooEarly` zurück) korrekt entschärft — 5ms
-                // liegen deutlich unter einer Frame-Periode (40ms bei
-                // 25fps) und verzögern kein tatsächlich verfügbares Grain
-                // spürbar. Der Extremfall braucht entweder einen Patch im
-                // vendorten MXL-C++ oder eine Rust-seitige Umgehung (z. B.
-                // "neuestes verfügbares Grain" statt strikt sequenziellem
-                // Index pollen) — nicht in diesem Schritt behoben, siehe
-                // Decisions-Eintrag.
+                // Bewusst `get_grain_non_blocking` statt des blockierenden
+                // `get_complete_grain` (docs/decisions.md, 2026-07-17
+                // "MXL-Read-Livelock — root-caused, per Non-Blocking-Read
+                // umgangen"): der blockierende Pfad ruft im vendorten C++
+                // (`third_party/mxl/lib/internal/src/{Sync,
+                // PosixDiscreteFlowReader}.cpp`) intern `waitUntilChanged`
+                // → einen rohen `FUTEX_WAIT`-Syscall auf, der bei ≥3
+                // gleichzeitigen Lesern auf demselben Flow nachweislich
+                // (gdb-Backtrace aller Reader-Threads, per Diagnose-Test
+                // reproduziert) über sein eigenes `timeoutNs`-Argument
+                // hinaus hängen bleibt — nicht durch einen Fehler im
+                // Rust-Wrapper hier, sondern *innerhalb* des Syscalls
+                // selbst. Der nicht-blockierende Aufruf durchläuft diesen
+                // Codepfad gar nicht erst (reine Speicher-Prüfung, kein
+                // Futex/Wait), der Timeout/Poll-Rhythmus liegt komplett und
+                // korrekt hier in Rust. 5ms liegen deutlich unter einer
+                // Frame-Periode (40ms bei 25fps) und verzögern kein
+                // tatsächlich verfügbares Grain spürbar.
                 thread::sleep(Duration::from_millis(5));
             }
             Err(e) => {
-                eprintln!("omp-mediaio(mxl): get_complete_grain {index} failed: {e}");
+                eprintln!("omp-mediaio(mxl): get_grain_non_blocking {index} failed: {e}");
                 thread::sleep(Duration::from_millis(200));
             }
         }
@@ -983,10 +974,11 @@ impl Drop for MxlVideoInput {
 /// Flows (s. `audio_flow_def`/`MxlAudioOutput`) — gebraucht seit
 /// `omp-audio-mixer` echte externe Kanalquellen wählen kann
 /// (`UMSETZUNG.md` C11, `channel.<id>.setSource`), nicht nur den
-/// internen Testton. Liest per `SamplesReader::get_samples` (blockierend,
-/// 500ms-Timeout — gleicher Stil wie `MxlVideoInput`s
-/// `get_complete_grain`, inkl. derselben `OutOfRangeTooLate`/
-/// `OutOfRangeTooEarly`-Behandlung, siehe Kommentar dort) feste
+/// internen Testton. Liest per `SamplesReader::get_samples_non_blocking`
+/// (nicht blockierend, Rust-seitiger 5ms-Poll-Backoff — gleicher Stil wie
+/// `MxlVideoInput`s `get_grain_non_blocking`, inkl. derselben
+/// `OutOfRangeTooLate`/`OutOfRangeTooEarly`-Behandlung, siehe Kommentar
+/// dort) feste
 /// 10ms-Batches, verkettet die pro Kanal getrennten Byte-Slices
 /// (`SamplesData::channel_data`) zu einem planaren (non-interleaved)
 /// Puffer und schiebt ihn in ein `appsrc`. `tail` liefert bereits
@@ -1173,7 +1165,7 @@ fn read_audio_loop(
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(sample_rate);
     while running.load(Ordering::Relaxed) {
-        match samples_reader.get_samples(index, batch_size as usize, Duration::from_millis(500)) {
+        match samples_reader.get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
                 let mut buffer = gst::Buffer::from_slice(interleave_samples(&data));
                 // Ursprungs-Zeitstempel des Batch-Starts als Referenz-Meta
@@ -1200,15 +1192,18 @@ fn read_audio_loop(
                 // Indizes anzufragen.
                 index = context.instance.get_current_index(sample_rate);
             }
-            Err(mxl::Error::Timeout | mxl::Error::OutOfRangeTooEarly) => {
-                // Noch nicht geschrieben — gleichen Index erneut
-                // versuchen (gleicher Backoff/TOCTOU-Vorbehalt wie bei
-                // MxlVideoInputs read_loop, docs/decisions.md 2026-07-10
-                // "C8 — MXL-Read-Livelock").
+            Err(mxl::Error::OutOfRangeTooEarly) => {
+                // Noch nicht geschrieben — gleichen Index nach kurzem
+                // Rust-seitigem Backoff erneut versuchen. Gleicher Grund
+                // wie bei `MxlVideoInput`s `read_loop`: bewusst
+                // `get_samples_non_blocking` statt des blockierenden
+                // `get_samples` (docs/decisions.md, 2026-07-17), das den
+                // nachgewiesenen Futex-Hang im vendorten MXL-C++ bei ≥3
+                // gleichzeitigen Lesern umgeht.
                 thread::sleep(Duration::from_millis(5));
             }
             Err(e) => {
-                eprintln!("omp-mediaio(mxl): get_samples {index} failed: {e}");
+                eprintln!("omp-mediaio(mxl): get_samples_non_blocking {index} failed: {e}");
                 thread::sleep(Duration::from_millis(200));
             }
         }
@@ -1333,6 +1328,130 @@ mod tests {
         );
     }
 
+    /// Regressionstest für den echten Produktionspfad (`MxlVideoInput::new`
+    /// → `read_loop`, über GStreamer/`appsrc`, nicht die rohen `mxl`-Crate-
+    /// Aufrufe wie `three_readers_livelock_diagnostic`): drei unabhängige
+    /// `MxlVideoInput`s (eigener `MxlContext` je Instanz, wie
+    /// `omp-video-mixer-me`s fg/bg/pst-Zweige es real täten) lesen
+    /// gleichzeitig denselben Flow. Vor dem `get_grain_non_blocking`-Fix
+    /// (docs/decisions.md 2026-07-17) hing dieses Szenario zuverlässig
+    /// (siehe `three_readers_livelock_diagnostic`); dieser Test muss
+    /// innerhalb der festen Sleep-Dauer fertig werden (kein offenes
+    /// Polling, kein `#[ignore]` nötig) und alle drei Leser müssen Frames
+    /// bekommen haben.
+    #[test]
+    fn three_concurrent_readers_same_flow_do_not_hang() {
+        gst::init().expect("gst::init");
+
+        let domain = std::env::temp_dir().join("omp-mxl-test-domain-three-readers");
+        let _ = std::fs::remove_dir_all(&domain);
+        std::fs::create_dir_all(&domain).expect("create test domain dir");
+        let domain = domain.to_string_lossy().to_string();
+
+        const FLOW_ID: &str = "c2f66b0d-3333-4a3a-9c1e-6b7d4a3a9c1e";
+
+        let write_context = Arc::new(MxlContext::new(&domain).expect("MxlContext::new (writer)"));
+        let write_pipeline = gst::Pipeline::new();
+        let videotestsrc = gst::ElementFactory::make("videotestsrc")
+            .property("is-live", true)
+            .property("num-buffers", 250i32) // ~10s bei 25fps
+            .property_from_str("pattern", "smpte")
+            .build()
+            .expect("videotestsrc");
+        write_pipeline.add(&videotestsrc).expect("add videotestsrc");
+        let _output = MxlVideoOutput::new(
+            &write_pipeline,
+            &videotestsrc,
+            write_context,
+            FLOW_ID,
+            "omp-mediaio three-readers test",
+            640,
+            480,
+            25,
+            1,
+        )
+        .expect("MxlVideoOutput::new");
+        _output.set_active(true);
+        write_pipeline
+            .set_state(gst::State::Playing)
+            .expect("write pipeline playing");
+
+        thread::sleep(Duration::from_millis(500));
+
+        struct ReaderHandle {
+            _pipeline: gst::Pipeline,
+            // Muss am Leben bleiben: `MxlVideoInput::drop` setzt
+            // `running=false`, was den `read_loop`-Thread sofort beendet.
+            _input: MxlVideoInput,
+            received: Arc<AtomicU32>,
+        }
+
+        let readers: Vec<ReaderHandle> = (0..3)
+            .map(|i| {
+                let read_context =
+                    Arc::new(MxlContext::new(&domain).expect("MxlContext::new (reader)"));
+                let read_pipeline = gst::Pipeline::new();
+                let input = MxlVideoInput::new(&read_pipeline, read_context, FLOW_ID)
+                    .expect("MxlVideoInput::new");
+                let fakesink = gst::ElementFactory::make("fakesink")
+                    .property("sync", false)
+                    .build()
+                    .expect("fakesink");
+                read_pipeline.add(&fakesink).expect("add fakesink");
+                input.tail.link(&fakesink).expect("link tail to fakesink");
+
+                let received = Arc::new(AtomicU32::new(0));
+                let received_probe = received.clone();
+                fakesink
+                    .static_pad("sink")
+                    .expect("fakesink sink pad")
+                    .add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+                        received_probe.fetch_add(1, Ordering::Relaxed);
+                        gst::PadProbeReturn::Ok
+                    });
+
+                read_pipeline
+                    .set_state(gst::State::Playing)
+                    .unwrap_or_else(|e| panic!("read pipeline {i} playing: {e}"));
+
+                ReaderHandle {
+                    _pipeline: read_pipeline,
+                    _input: input,
+                    received,
+                }
+            })
+            .collect();
+
+        // Feste, bewusst kurze Wartezeit statt Polling: vor dem Fix wäre
+        // dieser Test nie an diesen Punkt gekommen (Prozess hängt in
+        // read_loop -> get_complete_grain, weit über jede sinnvolle
+        // Sleep-Dauer hinaus, s. `three_readers_livelock_diagnostic`).
+        thread::sleep(Duration::from_secs(5));
+
+        write_pipeline
+            .set_state(gst::State::Null)
+            .expect("write pipeline null");
+
+        for (i, r) in readers.iter().enumerate() {
+            r._pipeline
+                .set_state(gst::State::Null)
+                .unwrap_or_else(|e| panic!("read pipeline {i} null: {e}"));
+        }
+
+        let counts: Vec<u32> = readers
+            .iter()
+            .map(|r| r.received.load(Ordering::Relaxed))
+            .collect();
+        println!("received counts: {counts:?}");
+        for (i, count) in counts.iter().enumerate() {
+            assert!(
+                *count > 0,
+                "reader {i} received no frames — three concurrent readers on the same flow \
+                 must all flow independently (all counts: {counts:?})"
+            );
+        }
+    }
+
     /// Verifiziert den in `read_loop`/`write_loop` genutzten Mechanismus
     /// (ARCHITECTURE.md §15 Punkt 4, nachgezogen 2026-07-12) direkt auf
     /// Buffer-Ebene, ohne eine volle Zwei-Prozess-Pipeline: ein Index,
@@ -1404,5 +1523,177 @@ mod tests {
             None,
             "a buffer without the meta must fall back to None (caller uses the counter-based index)"
         );
+    }
+
+    /// Diagnose-Test für den in `docs/decisions.md` (2026-07-10 "C8",
+    /// 2026-07-16 "Nachtrag 2") dokumentierten MXL-Read-Livelock: schreibt
+    /// ~16s Frames auf einen Flow und liest ihn gleichzeitig mit drei
+    /// unabhängigen `MxlContext`s (simuliert drei getrennte Prozesse, wie
+    /// `omp-video-mixer-me`s fg/bg/pst-Zweige es real täten) — exakt der
+    /// Loop-Stil aus `read_loop` oben. Statt auf Erfolg/Fehlschlag zu
+    /// prüfen, misst er die Wanduhrzeit jedes einzelnen
+    /// `get_complete_grain`-Aufrufs: bleibt einer davon deutlich über dem
+    /// übergebenen 500ms-Timeout hängen, ist das der direkte Beweis für das
+    /// TOCTOU-Fenster in `waitUntilChanged`/`getGrain`
+    /// (vendored `third_party/mxl/lib/internal/src/{Sync,
+    /// PosixDiscreteFlowReader}.cpp`) — nicht nur eine Vermutung.
+    /// `#[ignore]`, weil er ~16s läuft; gezielt aufrufen mit
+    /// `cargo test --release -p omp-mediaio -- --ignored --nocapture
+    /// three_readers_livelock_diagnostic`.
+    #[test]
+    #[ignore]
+    fn three_readers_livelock_diagnostic() {
+        gst::init().expect("gst::init");
+
+        let domain = std::env::temp_dir().join("omp-mxl-test-domain-livelock");
+        let _ = std::fs::remove_dir_all(&domain);
+        std::fs::create_dir_all(&domain).expect("create test domain dir");
+        let domain = domain.to_string_lossy().to_string();
+
+        const FLOW_ID: &str = "b1e55a9c-1234-4d3e-9a1a-1234567890ab";
+        const FRAME_MS: u64 = 40; // 25fps
+        const WRITER_FRAMES: u64 = 400; // ~16s
+        const READER_COUNT: usize = 3;
+        const READ_TIMEOUT: Duration = Duration::from_millis(500);
+        // Deutlich über READ_TIMEOUT: jeder einzelne Aufruf, der länger
+        // braucht, kann nicht mehr durch legitimes Blockieren bis zum
+        // Timeout erklärt werden.
+        const HANG_THRESHOLD: Duration = Duration::from_millis(1500);
+
+        let write_context = Arc::new(MxlContext::new(&domain).expect("MxlContext::new (writer)"));
+        let rate = mxl_sys::Rational {
+            numerator: 25,
+            denominator: 1,
+        };
+        let flow_def = video_flow_def(FLOW_ID, "livelock-diagnostic", 640, 480, 25, 1);
+        let (writer, _config, _was_created) = write_context
+            .instance
+            .create_flow_writer(&flow_def, None)
+            .expect("create_flow_writer");
+        let grain_writer = writer.to_grain_writer().expect("to_grain_writer");
+
+        let writer_handle = thread::spawn(move || {
+            let mut index = write_context.instance.get_current_index(&rate);
+            for _ in 0..WRITER_FRAMES {
+                match grain_writer.open_grain(index) {
+                    Ok(mut access) => {
+                        let payload = access.payload_mut();
+                        payload.fill((index % 256) as u8);
+                        let total_slices = access.total_slices();
+                        if let Err(e) = access.commit(total_slices) {
+                            eprintln!("[writer] commit {index} failed: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("[writer] open_grain {index} failed: {e}"),
+                }
+                index += 1;
+                thread::sleep(Duration::from_millis(FRAME_MS));
+            }
+        });
+
+        // Schreiber etwas Vorlauf geben, wie im übrigen Test-Stil dieser
+        // Datei.
+        thread::sleep(Duration::from_millis(300));
+
+        struct ReaderStats {
+            id: usize,
+            calls: u64,
+            grains_received: u64,
+            max_call_elapsed: Duration,
+            hangs: Vec<(u64, Duration)>, // (call-index, elapsed) über HANG_THRESHOLD
+        }
+
+        let domain_for_readers = domain.clone();
+        let reader_handles: Vec<_> = (0..READER_COUNT)
+            .map(|id| {
+                let domain = domain_for_readers.clone();
+                thread::spawn(move || -> ReaderStats {
+                    let context = MxlContext::new(&domain).expect("MxlContext::new (reader)");
+                    let reader = context
+                        .instance
+                        .create_flow_reader(FLOW_ID)
+                        .expect("create_flow_reader");
+                    let grain_reader = reader.to_grain_reader().expect("to_grain_reader");
+
+                    let mut stats = ReaderStats {
+                        id,
+                        calls: 0,
+                        grains_received: 0,
+                        max_call_elapsed: Duration::ZERO,
+                        hangs: Vec::new(),
+                    };
+                    let mut index = context.instance.get_current_index(&rate);
+                    // Etwas mehr Versuche als der Writer Frames schreibt,
+                    // damit ein Reader, der ein paar Mal ins Leere pollt,
+                    // trotzdem fertig wird, aber klar begrenzt bleibt.
+                    let max_calls = WRITER_FRAMES * 3 + 200;
+
+                    while stats.calls < max_calls {
+                        let call_start = std::time::Instant::now();
+                        let result = grain_reader.get_complete_grain(index, READ_TIMEOUT);
+                        let elapsed = call_start.elapsed();
+                        stats.calls += 1;
+                        if elapsed > stats.max_call_elapsed {
+                            stats.max_call_elapsed = elapsed;
+                        }
+                        if elapsed > HANG_THRESHOLD {
+                            stats.hangs.push((stats.calls, elapsed));
+                        }
+
+                        match result {
+                            Ok(_grain) => {
+                                stats.grains_received += 1;
+                                index += 1;
+                            }
+                            Err(mxl::Error::OutOfRangeTooLate) => {
+                                index = context.instance.get_current_index(&rate);
+                            }
+                            Err(mxl::Error::Timeout | mxl::Error::OutOfRangeTooEarly) => {
+                                thread::sleep(Duration::from_millis(5));
+                            }
+                            Err(_e) => {
+                                thread::sleep(Duration::from_millis(200));
+                            }
+                        }
+                    }
+                    stats
+                })
+            })
+            .collect();
+
+        writer_handle.join().expect("writer thread panicked");
+
+        // Den Lesern nach Schreib-Ende noch kurz Zeit geben, ihre letzten
+        // Aufrufe regulär (per Timeout) zu beenden.
+        let all_stats: Vec<ReaderStats> = reader_handles
+            .into_iter()
+            .map(|h| h.join().expect("reader thread panicked"))
+            .collect();
+
+        let mut any_hang = false;
+        for s in &all_stats {
+            println!(
+                "[reader {}] calls={} grains_received={} max_call_elapsed={:?} hangs={:?}",
+                s.id, s.calls, s.grains_received, s.max_call_elapsed, s.hangs
+            );
+            if !s.hangs.is_empty() {
+                any_hang = true;
+            }
+        }
+
+        if any_hang {
+            println!(
+                "LIVELOCK REPRODUCED: at least one get_complete_grain() call exceeded {:?} \
+                 despite a requested timeout of {:?} — confirms the TOCTOU deadline-skip in \
+                 vendored MXL C++ (waitUntilChanged / PosixDiscreteFlowReader::getGrain).",
+                HANG_THRESHOLD, READ_TIMEOUT
+            );
+        } else {
+            println!(
+                "No call exceeded {:?} in this run ({} readers, {} writer frames) — livelock is \
+                 timing-dependent, did not trigger this time.",
+                HANG_THRESHOLD, READER_COUNT, WRITER_FRAMES
+            );
+        }
     }
 }

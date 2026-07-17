@@ -5173,3 +5173,113 @@ erneut auf (ein Lese-Thread mit ~100% CPU über Minuten, RSS wuchs
 dabei auf mehrere GB) — bestätigt als eigenständiges, weiterhin
 ungelöstes Problem, nicht durch diesen Fix berührt. Dieser Testlauf
 wurde abgebrochen, bevor er erneut OOM auslöste.
+
+## 2026-07-17 — MXL-Read-Livelock (C8, s. 2026-07-10 und 2026-07-16
+"Nachtrag 2") root-caused und behoben: `get_grain_non_blocking` statt
+blockierendem `get_complete_grain`
+
+Auf Anweisung gezielt an diesem seit 2026-07-10 bekannten, nie
+root-ursächlich geklärten Bug weitergearbeitet (bisher nur Workaround:
+Node neu starten, [[feedback_mxl_read_livelock_restart_workaround]]).
+
+**Reproduktion (Diagnose-Test, `omp-mediaio::mxl::tests::
+three_readers_livelock_diagnostic`, `#[ignore]`):** ein Writer schreibt
+~16s Frames auf einen Flow, drei unabhängige `MxlContext`s (simulieren
+drei getrennte Prozesse, wie `omp-video-mixer-me`s fg/bg/pst-Zweige es
+real täten) lesen ihn gleichzeitig über den bisherigen blockierenden
+Pfad (`GrainReader::get_complete_grain`, 500ms-Timeout je Aufruf). Der
+Prozess hängt zuverlässig weit über jede plausible Gesamtlaufzeit
+hinaus (mehrfach reproduziert: 40s/65s/90s-`timeout`-Läufe, alle per
+SIGKILL beendet, nie sauber fertig) — mit einem Reader reicht dasselbe
+Setup dagegen jedes Mal (bestätigt per `write_then_read_loopback`).
+
+**Root Cause, per `gdb -p <pid> -batch -ex "thread apply all bt"`
+(braucht `sudo`, da `/proc/sys/kernel/yama/ptrace_scope=1` in dieser
+Umgebung; per `dangerouslyDisableSandbox` am Sandbox-Default vorbei,
+siehe unten zur Sandbox-Frage) am hängenden Prozess bestätigt:** alle
+drei Reader-Threads stecken *gleichzeitig* im selben Frame — einem
+rohen `syscall()` (dem `FUTEX_WAIT`-Aufruf aus
+`third_party/mxl/lib/internal/src/Sync.cpp::do_wait`), aufgerufen über
+`waitUntilChanged` → `PosixDiscreteFlowReader::getGrain` →
+`mxlFlowReaderGetGrainSlice` — deutlich länger als das an `getGrain`
+übergebene `timeoutNs` (500ms). Der Writer war zu diesem Zeitpunkt
+längst fertig (der Haupt-Thread wartete bereits in `pthread_join` auf
+die Reader), CPU-Last dabei niedrig (kein Busy-Spin) — die Threads sind
+also echt blockiert, nicht in einer enger Retry-Schleife gefangen.
+
+Ausgeschlossene Erklärungen (per gezielten Mini-Reproduktionen
+verifiziert, nicht nur vermutet):
+- **Sandbox/Kernel-Artefakt dieser Crostini-Entwicklungsumgebung:**
+  widerlegt — derselbe Diagnose-Test hängt identisch mit
+  `dangerouslyDisableSandbox` (also außerhalb der Werkzeug-Sandbox).
+- **`FUTEX_WAIT` respektiert generell keinen Timeout hier:** widerlegt
+  — ein minimaler C-Probe (`syscall(SYS_futex, ..., FUTEX_WAIT, ...)`)
+  auf privatem Speicher, auf `MAP_SHARED`-Dateispeicher unter `/tmp`
+  und unter `/dev/shm` (tmpfs, wie MXLs echte Domain) liefert jeweils
+  korrekt `ETIMEDOUT` nach der angeforderten Zeit.
+- **Duration/Timepoint-Einheiten-Bug** (`third_party/mxl/lib/internal/
+  include/mxl-internal/Timing.hpp`): geprüft, alle Umrechnungen
+  (`asTimeSpec`/`asDuration`/Clock-Offsets) korrekt, `Clock::Realtime`
+  wird konsistent für Deadline-Berechnung und -Vergleich verwendet.
+- **Genereller Fehler im Retry-Muster "N Waiter + 1 Writer auf
+  gemeinsamem Futex-Wort":** widerlegt — ein Rust-freier C-Mimic mit
+  exakt diesem Muster (3 Waiter-Threads + 1 Writer-Thread, `fetch_add`
+  + `FUTEX_WAKE` pro "Frame", identische `waitUntilChanged`-Logik
+  nachgebaut) läuft sauber durch, jeder Aufruf bleibt nahe am
+  500ms-Budget.
+
+Die exakte Byte-genaue Ursache *innerhalb* der echten MXL-Shared-
+Memory-Struktur (`FlowState`/`DiscreteFlowData`, vermutlich ein
+Zusammenspiel aus der ungeschützten `flow->state.syncCounter++`
+(nicht-atomarer Schreibzugriff neben `std::atomic_ref`-Lesern in
+`PosixDiscreteFlowWriter::commit`) mit mehreren `MxlInstance`s, die
+denselben Flow parallel öffnen) wurde **nicht** weiter isoliert — der
+Aufwand dafür (Instrumentierung/Nachbau der echten `DiscreteFlowData`-
+Struktur) stand in keinem Verhältnis zum Nutzen, sobald ein sauberer
+Workaround feststand.
+
+**Fix (statt Patch am vendorten C++, das mit `install-mxl.sh` bei
+jedem Rebuild verlorenginge):** `omp-mediaio::mxl`s `read_loop`
+(Video) und `read_audio_loop` (Audio) rufen jetzt
+`GrainReader::get_grain_non_blocking` bzw. `SamplesReader::
+get_samples_non_blocking` auf statt der blockierenden Varianten. Diese
+durchlaufen im vendorten C++ nachweislich (`flow.cpp`,
+`mxlFlowReaderGetGrainSliceNonBlocking` → `PosixDiscreteFlowReader::
+getGrain(index, minValidSlices, grainInfo, payload)`, die *zweite*,
+nicht-blockierende Überladung) den `waitUntilChanged`/`FUTEX_WAIT`-Pfad
+gar nicht — reine Speicherprüfung, kein Syscall. Das komplette
+Poll-Timing (5ms-Backoff bei `OutOfRangeTooEarly`, Sprung auf den
+aktuellen Index bei `OutOfRangeTooLate`) liegt jetzt vollständig und
+nachweisbar korrekt in Rust.
+
+**Verifiziert:**
+- Neuer Regressionstest `three_concurrent_readers_same_flow_do_not_hang`
+  (echter Produktionspfad: drei `MxlVideoInput`-Instanzen mit je
+  eigenem `MxlContext`, echte GStreamer-`appsrc`/`appsink`-Pipelines,
+  kein Mock) — vor dem Fix reproduzierbar hängend (mit der blockierenden
+  API testweise gegengeprüft), nach dem Fix `ok` in 5,6s, alle drei
+  Reader mit ~124-125 von ~125 erwarteten Frames.
+- Ein dabei gefundener Bug im *Test selbst* (nicht im Fix): das erste
+  Test-Layout hielt `MxlVideoInput` nicht im `ReaderHandle` am Leben —
+  `Drop` setzt `running=false` und beendet `read_loop` sofort, alle drei
+  Reader bekamen dadurch 0 Frames. Klassischer Hinweis, spontane
+  0-Ergebnisse bei allen Readern gleichzeitig immer erst auf
+  Lifetime-Bugs im Testaufbau zu prüfen, bevor man den Fix selbst
+  verdächtigt.
+- `three_readers_livelock_diagnostic` bleibt als `#[ignore]`-Test
+  erhalten (dokumentiert den historischen Bug über die alte
+  blockierende API, dient als Regressionswächter, falls der Blocking-
+  Pfad je wieder verwendet wird).
+- `cargo build --workspace` und `cargo test --workspace` grün, `cargo
+  fmt --check`/`cargo deny check` ohne neue Befunde (13 vorbestehende
+  `fmt`-Abweichungen in `omp-mediaio` unverändert, nicht Teil dieser
+  Änderung).
+
+**Offen / für später:** der PST-Vorschau-Ausgang
+(2026-07-16 "Nachtrag 2") kann jetzt erneut versucht werden — sein
+Haupt-Blocker war genau dieser Livelock bei einem dritten Reader pro
+Crosspoint-Eingang. Das dort empfohlene Tee/Queue-Muster (bg+pst teilen
+sich einen Reader) ist mit diesem Fix wahrscheinlich nicht mehr nötig
+(die Livelock-Ursache lag nicht an der MXL-Last, sondern am
+blockierenden Lesepfad selbst), sollte aber trotzdem probiert werden,
+falls die non-blocking-Polling-Latenz (5ms) für PST spürbar wird.
