@@ -31,10 +31,19 @@ interface Connection {
   toRole: string;
 }
 
+// Settings (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17):
+// pro Workflow konfigurierbare, node-übergreifende Werte — aktuell nur
+// die Programm-Auflösung. 0/undefined = Node behält ihren eigenen
+// Default (heute meist 640×480 fest verdrahtet).
+interface Settings {
+  programWidth?: number;
+  programHeight?: number;
+}
+
 interface Workflow {
   id: string;
   name: string;
-  definition: { roles: Role[]; connections: Connection[] };
+  definition: { roles: Role[]; connections: Connection[]; settings?: Settings };
   status: string;
   error?: string;
   runtime?: Record<string, { instanceId: string; nodeId?: string }>;
@@ -58,6 +67,10 @@ class WorkflowsView extends HTMLElement {
   #formRoles: Role[] = [{ name: "", nodeType: "", hostId: "" }];
   #formConnections: Connection[] = [];
   #formName = "";
+  // Kapitel 15: leer gelassen = kein settings-Feld im Request, Nodes
+  // laufen mit ihrem eigenen Default (keine erzwungene Auflösung).
+  #formWidth = "";
+  #formHeight = "";
   #showForm = false;
 
   connectedCallback() {
@@ -109,11 +122,17 @@ class WorkflowsView extends HTMLElement {
   async #createWorkflow() {
     const roles = this.#formRoles.filter((r) => r.name && r.nodeType);
     if (!this.#formName || roles.length === 0) return;
+    const width = parseInt(this.#formWidth, 10);
+    const height = parseInt(this.#formHeight, 10);
+    const settings: Settings = {};
+    if (Number.isFinite(width) && width > 0) settings.programWidth = width;
+    if (Number.isFinite(height) && height > 0) settings.programHeight = height;
     const body = {
       name: this.#formName,
       definition: {
         roles: roles.map((r) => ({ name: r.name, nodeType: r.nodeType, hostId: r.hostId || undefined })),
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
+        settings: Object.keys(settings).length > 0 ? settings : undefined,
       },
     };
     const res = await apiFetch("/api/v1/workflows", {
@@ -128,6 +147,8 @@ class WorkflowsView extends HTMLElement {
     this.#formName = "";
     this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
     this.#formConnections = [];
+    this.#formWidth = "";
+    this.#formHeight = "";
     this.#showForm = false;
     await this.#poll();
   }
@@ -208,6 +229,16 @@ class WorkflowsView extends HTMLElement {
     roles.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
     roles.textContent = wf.definition.roles.map((r) => r.name).join(", ");
     row.appendChild(roles);
+
+    // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
+    // Workflows laufen weiterhin mit den Node-eigenen Defaults.
+    const settings = wf.definition.settings;
+    if (settings?.programWidth && settings?.programHeight) {
+      const res = document.createElement("div");
+      res.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
+      res.textContent = `${settings.programWidth}×${settings.programHeight}`;
+      row.appendChild(res);
+    }
 
     if (wf.error) {
       const err = document.createElement("div");
@@ -377,6 +408,38 @@ class WorkflowsView extends HTMLElement {
       this.#render();
     });
     form.appendChild(addConnBtn);
+
+    // Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): pro-Workflow
+    // Programm-Auflösung, optional — leer gelassen behalten die Nodes
+    // ihren eigenen Default.
+    const settingsHeading = document.createElement("div");
+    settingsHeading.textContent = "Auflösung (optional)";
+    settingsHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    form.appendChild(settingsHeading);
+
+    const settingsRow = document.createElement("div");
+    settingsRow.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:8px;";
+    const widthInput = document.createElement("input");
+    widthInput.type = "number";
+    widthInput.placeholder = "Breite (z. B. 1280)";
+    widthInput.value = this.#formWidth;
+    widthInput.style.cssText = "width:45%;";
+    widthInput.addEventListener("input", () => {
+      this.#formWidth = widthInput.value;
+    });
+    const xLabel = document.createElement("span");
+    xLabel.textContent = "×";
+    xLabel.style.cssText = "color:#999;";
+    const heightInput = document.createElement("input");
+    heightInput.type = "number";
+    heightInput.placeholder = "Höhe (z. B. 720)";
+    heightInput.value = this.#formHeight;
+    heightInput.style.cssText = "width:45%;";
+    heightInput.addEventListener("input", () => {
+      this.#formHeight = heightInput.value;
+    });
+    settingsRow.append(widthInput, xLabel, heightInput);
+    form.appendChild(settingsRow);
 
     const createBtn = document.createElement("button");
     createBtn.textContent = "Anlegen";

@@ -5651,3 +5651,90 @@ konfigurierbarer Off-Pegel) und Mixer-Presets (Wiederverwendung des
 Snapshot-Mechanismus, node-skopiert) — beide im Nachtrag vom Vortag
 bereits als eigenständig umsetzbar identifiziert, für eine künftige
 Sitzung.
+
+## 2026-07-17 (Nachtrag 7) — Kapitel 15 Teil 1 begonnen: Workflow-
+Auflösungs-Setting (Orchestrator/UI vollständig, `omp-source` als
+erster Node)
+
+Sechster Schritt der Kapitel-18-Priorisierung. Bei der Umsetzung
+gefunden: Teil 1 ist **größer als im Phasenplan als „kleinster Schritt"
+eingeschätzt** — `WIDTH`/`HEIGHT` sind in `omp-source`/`omp-switcher`/
+`omp-player`/`omp-video-mixer-me` je ein `pub const`, das direkt in
+GStreamer-Caps-Konstruktion und MXL-Flow-Registrierung einfließt (bei
+`omp-video-mixer-me` zusätzlich in `KEYER_WIDTH`/`KEYER_HEIGHT`-
+Folgekonstanten und zur Laufzeit gesetzten Pad-Properties, nicht nur
+beim Pipeline-Aufbau) — kein reiner Konfigurationswert, den man an
+einer Stelle ändert, sondern ein kleines Refactoring pro Node
+(Konstante → `Config`-Feld → alle Verwendungsstellen). Deshalb bewusst
+die Orchestrator-/UI-Infrastruktur **vollständig** umgesetzt, aber nur
+an **einem** Node (`omp-source`, vom Nutzer selbst in
+`frage an fabel.txt` als „Testquelle" genannt) bis zum Ende
+durchgezogen und live verifiziert — die übrigen drei Nodes sind
+dieselbe, jetzt etablierte Mechanik als direkte Folgearbeit, kein
+stiller Gap (gleiches Muster wie die Kapitel-14-Abhängigkeit bei §17
+Teil 2: Umfang beim Schreiben ehrlich neu bewertet statt stur am
+ursprünglichen Phasenplan festgehalten).
+
+**`orchestrator/internal/workflows`:** `Settings{ProgramWidth,
+ProgramHeight uint32}` (0 = Node-eigener Default) als Feld von
+`Definition` (nicht `Workflow` selbst — Settings sind Teil des vom
+Nutzer festgelegten, unveränderlichen Anteils, wie Roles/Connections).
+
+**`orchestrator/internal/launcher`:** `Start(nodeType, hostID string,
+extraEnv map[string]string)` — `extraEnv` überschreibt den
+Katalog-eigenen `env`-Block, gewinnt aber nie gegen die fünf
+Launcher-eigenen OMP_*-Variablen (Instanz-ID/Label/Port/Registry-/
+NATS-URL). **Nur lokal wirksam:** der Remote-Pfad (§18.5) schickt laut
+seiner eigenen Sicherheitsgrenze nur einen Typnamen an den Host-Agent,
+keine freien Parameter — `extraEnv` wird dort dokumentiert ignoriert,
+gleiche Einschränkungsklasse wie die fehlende Remote-Crash-Erkennung
+aus D6 Teil 2/K7-Teil-1. `supervise()`s automatischer Neustart nach
+einem Absturz (K7-Teil-1) reicht dasselbe `extraEnv` weiter, damit ein
+neu gestarteter Prozess dieselbe Workflow-Auflösung behält statt auf
+die Katalog-Defaults zurückzufallen.
+
+**`orchestrator/internal/workflows::runStart`:** baut `extraEnv` aus
+`wf.Definition.Settings` (`OMP_WIDTH`/`OMP_HEIGHT`, nur gesetzt wenn
+>0) und reicht es an jeden Rollen-`Start()`-Aufruf weiter.
+
+**UI (`ui/shell/workflows-view.ts`):** neues „Auflösung (optional)"-
+Feldpaar im Anlegen-Formular, `settings` im POST-Body nur gesetzt, wenn
+mindestens ein Wert eingetragen wurde; laufende Workflows mit
+gesetzter Auflösung zeigen sie in der Liste (`960×540`), Workflows
+ohne Settings zeigen nichts zusätzlich an.
+
+**`nodes/omp-source`:** `WIDTH`/`HEIGHT` → `DEFAULT_WIDTH`/
+`DEFAULT_HEIGHT` (Fallback) + neue `Config::width`/`height`-Felder,
+`main.rs` liest `OMP_WIDTH`/`OMP_HEIGHT` (ungültig/fehlend → Default,
+kein Fehler), reicht sie an `pipeline::Config` und die
+`FlowSpec::Video`-Deskriptor-Angabe weiter statt der alten Konstanten.
+
+**Verifiziert:**
+- `go build`/`go test ./...` (ganzer Orchestrator) grün, `go vet`
+  sauber, zwei neue Tests
+  (`TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars`,
+  `TestStartPassesResolutionSettingsAsExtraEnv` — Letzterer prüft
+  explizit auch den Negativfall: ein Workflow ohne Settings erzeugt
+  kein `OMP_WIDTH`/`OMP_HEIGHT`).
+- `cargo build --workspace`/`cargo test -p omp-source` grün, `deno
+  check`/`deno test ui/` (40/40) grün.
+- **Live, echter Orchestrator + echter Node, bis zur IS-04-Registry
+  durchverifiziert:** Workflow mit `settings:{programWidth:960,
+  programHeight:540}` angelegt und gestartet — Subprozess-Environment
+  bestätigt `OMP_WIDTH=960`/`OMP_HEIGHT=540`
+  (`/proc/<pid>/environ`), und (entscheidender als der reine
+  Env-Var-Nachweis) die tatsächlich in der NMOS-Registry sichtbare
+  Video-Flow-Registrierung zeigt `frame_width=960, frame_height=540`
+  statt der alten festen 640×480 — die Pipeline hat den Wert also
+  wirklich für Caps/MXL-Flow verwendet, nicht nur entgegengenommen.
+  Gegenprobe: ein zweiter Workflow ganz ohne `settings` registrierte
+  seinen Flow weiterhin mit den unveränderten 640×480 (keine
+  Regression für den Default-Fall). UI-Formular + Auflösungs-Anzeige
+  in der Workflow-Liste per CDP-Screenshot bestätigt.
+
+**Offen, direkte Folgearbeit (kein stiller Gap):** denselben Umbau
+(Konstante → `Config`-Feld → `OMP_WIDTH`/`OMP_HEIGHT` lesen) auf
+`omp-switcher`, `omp-player`, `omp-video-mixer-me` anwenden. Kapitel-
+15-Teile 2–4 (echter Lowres-MXL-Sender, Bildmischer/Multiviewer lesen
+bevorzugt Lowres) bleiben unverändert offen, wie im Kapitel selbst
+geplant.

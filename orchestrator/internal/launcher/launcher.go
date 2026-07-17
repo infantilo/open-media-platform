@@ -246,17 +246,31 @@ func (l *Launcher) List() []Instance {
 // UMSETZUNG.md D6 Teil 2). Die eigentliche Registry-Erscheinung läuft
 // in beiden Fällen über die normale Selbstregistrierung des gestarteten
 // Nodes — Start() fasst den Graph selbst nicht an.
-func (l *Launcher) Start(nodeType, hostID string) (Instance, error) {
+// Start startet nodeType — lokal (hostID leer) oder auf einem entfernten
+// Host (§18.5). extraEnv überschreibt den Katalog-eigenen `env`-Block
+// für passende Schlüssel, gewinnt aber nie gegen die fünf vom Launcher
+// selbst vorgegebenen OMP_*-Variablen (s. `buildEnv`) — gedacht für
+// Workflow-Settings wie die Programm-Auflösung (Kapitel 15,
+// docs/END-GOAL-FEATURES.md §15.3c), die pro Workflow-Start variieren,
+// ohne den Katalog selbst zu ändern. Darf nil sein (z. B. ein direkter
+// Katalog-Start über die Palette, ohne Workflow-Kontext).
+// **Nur für lokale Starts wirksam** — der Remote-Pfad (§18.5) schickt
+// laut Sicherheitsgrenze (Paketkommentar) nur einen Typnamen an den
+// Host-Agent, keine freien Parameter; extraEnv wird dort derzeit
+// stillschweigend ignoriert (dokumentierte Folgearbeit, wie schon die
+// fehlende Remote-Crash-Erkennung aus D6 Teil 2/K7-Teil-1).
+func (l *Launcher) Start(nodeType, hostID string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
 		return l.startRemote(nodeType, hostID)
 	}
-	return l.startLocal(nodeType)
+	return l.startLocal(nodeType, extraEnv)
 }
 
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
 // OMP_LABEL/OMP_PORT=0 sowie die Registry-/NATS-URLs des Orchestrators
-// als Subprozess-Umgebung, Ergebnis persistiert).
-func (l *Launcher) startLocal(nodeType string) (Instance, error) {
+// als Subprozess-Umgebung, Ergebnis persistiert) plus optionales
+// extraEnv (s. `Start`-Doku).
+func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Instance, error) {
 	entry, ok := l.findEntry(nodeType)
 	if !ok {
 		return Instance{}, ErrUnknownType
@@ -271,7 +285,7 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 	}
 	label := fmt.Sprintf("%s (%s)", entry.Label, id[:8])
 
-	cmd, stderrTail, err := l.execEntry(entry, id, label)
+	cmd, stderrTail, err := l.execEntry(entry, id, label, extraEnv)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
@@ -293,7 +307,10 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 	// (K7-Teil-1), solange die Crash-Loop-Bremse nicht greift — vorher
 	// verschwand die Instanz einfach spurlos aus der Kachel-Ansicht,
 	// sobald die NMOS-Registrierung ablief, ohne jedes Signal in der UI.
-	go l.supervise(id, nodeType, entry, label, cmd, stderrTail)
+	// extraEnv wandert mit, damit ein automatischer Neustart dieselben
+	// Workflow-Settings (z. B. Auflösung) wieder anwendet, nicht die
+	// Katalog-Defaults.
+	go l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail)
 
 	return inst, nil
 }
@@ -301,9 +318,9 @@ func (l *Launcher) startLocal(nodeType string) (Instance, error) {
 // execEntry startet den Subprozess für einen Katalog-Eintrag unter einer
 // gegebenen (bei einem Neustart: wiederverwendeten) Instanz-ID/-Label —
 // gemeinsamer Kern von startLocal und supervise's Neustart-Zweig.
-func (l *Launcher) execEntry(entry CatalogEntry, id, label string) (*exec.Cmd, *tailBuffer, error) {
+func (l *Launcher) execEntry(entry CatalogEntry, id, label string, extraEnv map[string]string) (*exec.Cmd, *tailBuffer, error) {
 	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
-	cmd.Env = buildEnv(entry.Env, id, label, l.registryURL, l.natsURL)
+	cmd.Env = buildEnv(entry.Env, extraEnv, id, label, l.registryURL, l.natsURL)
 	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
 	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
 	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail
@@ -326,7 +343,7 @@ func (l *Launcher) execEntry(entry CatalogEntry, id, label string) (*exec.Cmd, *
 // zulässt. Läuft als eigene Goroutine je Instanz, endet entweder wenn
 // Stop() die Instanz aus l.instances entfernt hat oder wenn die
 // Crash-Loop-Bremse greift.
-func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label string, cmd *exec.Cmd, stderrTail *tailBuffer) {
+func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label string, extraEnv map[string]string, cmd *exec.Cmd, stderrTail *tailBuffer) {
 	for {
 		waitErr := cmd.Wait()
 
@@ -370,7 +387,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 		}
 		l.mu.Unlock()
 
-		newCmd, newStderrTail, err := l.execEntry(entry, id, label)
+		newCmd, newStderrTail, err := l.execEntry(entry, id, label, extraEnv)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -698,7 +715,7 @@ func processAlive(pid int) bool {
 // UMSETZUNG.md C8) — als Map gemergt statt als Slice mit möglichen
 // Duplikaten, weil doppelte Keys in envp technisch nicht sauber
 // spezifiziert sind.
-func buildEnv(entryEnv map[string]string, instanceID, label, registryURL, natsURL string) []string {
+func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryURL, natsURL string) []string {
 	merged := map[string]string{}
 	for _, kv := range os.Environ() {
 		if i := strings.IndexByte(kv, '='); i >= 0 {
@@ -706,6 +723,12 @@ func buildEnv(entryEnv map[string]string, instanceID, label, registryURL, natsUR
 		}
 	}
 	for k, v := range entryEnv {
+		merged[k] = v
+	}
+	// extraEnv (z. B. Workflow-Settings wie die Auflösung, s. Start-Doku)
+	// überschreibt den Katalog-eigenen env-Block, aber nicht die fünf
+	// folgenden Launcher-eigenen Variablen.
+	for k, v := range extraEnv {
 		merged[k] = v
 	}
 	merged["OMP_INSTANCE_ID"] = instanceID

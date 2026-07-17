@@ -2711,6 +2711,29 @@ wie heute pro Node-Typ hartkodiert.
   übernimmt `programResolution` statt fester Werte. Kleinster,
   unabhängig verifizierbarer Schritt (heutige feste 640×480-Nodes
   laufen unverändert weiter, nur jetzt aus Settings gespeist).
+  ✅ **Orchestrator/UI-Infrastruktur + `omp-source` erledigt
+  2026-07-17** (`UMSETZUNG.md`, `docs/decisions.md` Nachtrag 7) —
+  `Definition.Settings{ProgramWidth,ProgramHeight}`,
+  `launcher.Launcher.Start` bekommt ein `extraEnv`-Argument (nur lokal
+  wirksam, s. dortige Doku zur Remote-Sicherheitsgrenze),
+  `workflows.Service.runStart` speist `OMP_WIDTH`/`OMP_HEIGHT` daraus,
+  Workflow-Anlegen-Formular hat neue Auflösungs-Felder. **Größer als
+  ursprünglich als „kleinster Schritt" eingeschätzt:** `WIDTH`/`HEIGHT`
+  sind in jedem betroffenen Node ein `pub const`, das direkt in
+  Caps-Konstruktion und MXL-Flow-Registrierung einfließt (bei
+  `omp-video-mixer-me` zusätzlich in laufzeit-gesetzten Pad-
+  Properties) — kein reiner Konfigurationswert, sondern ein
+  Refactoring pro Node. Deshalb bewusst **nur `omp-source`** (die vom
+  Nutzer selbst genannte „Testquelle") vollständig umgesetzt und
+  live bis zur tatsächlichen IS-04-Flow-Registrierung verifiziert
+  (960×540 statt 640×480 bestätigt); `omp-switcher`, `omp-player`,
+  `omp-video-mixer-me` brauchen denselben, jetzt etablierten
+  Handgriff (env lesen → `Config`-Feld → Konstante an den
+  entsprechenden Stellen ersetzen) als direkte Folgearbeit, kein
+  stiller Gap. `omp-ograf` bewusst ausgenommen: seine 1280×720 sind an
+  die OGraf-Template-Gestaltung gebunden, keine generische
+  Testauflösung — eine Workflow-Auflösung würde dort Templates verzerren,
+  nicht nur reskalieren.
 - **Teil 2 — Zweiter MXL-Sender in `omp-mediaio::mxl`:** optionaler
   Lowres-`MxlVideoOutput`, gespeist vom bestehenden Downscale-Zweig,
   als IS-04-Flow der Highres-Quelle zugeordnet (Grouphint-Tag).

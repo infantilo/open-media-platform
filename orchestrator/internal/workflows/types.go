@@ -51,12 +51,26 @@ type Connection struct {
 	ToRole   string `json:"toRole"`
 }
 
+// Settings sind pro Workflow konfigurierbare, aber node-übergreifende
+// Werte (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17
+// Nutzerfeedback "generell müssen wir pro Workflow Settings haben,
+// welche Auflösung dieser haben soll") — additiv, kein Node-Contract-
+// Thema. 0 = Node-eigener Default (heute 640×480 in den meisten
+// Katalog-Nodes fest verdrahtet, s. runStart) statt eines erzwungenen
+// Werts, damit ein Workflow ohne Settings sich exakt wie vor diesem
+// Feld verhält.
+type Settings struct {
+	ProgramWidth  uint32 `json:"programWidth,omitempty"`
+	ProgramHeight uint32 `json:"programHeight,omitempty"`
+}
+
 // Definition ist der vom Nutzer festgelegte, unveränderliche Teil eines
 // Workflows (im Gegensatz zu Status/Runtime, die sich beim Start/Stop
 // ändern).
 type Definition struct {
 	Roles       []Role       `json:"roles"`
 	Connections []Connection `json:"connections"`
+	Settings    Settings     `json:"settings,omitempty"`
 }
 
 // RoleRuntime hält fest, welche konkrete Instanz/Node gerade eine Rolle

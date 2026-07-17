@@ -38,7 +38,10 @@ func handlePostInstance(svc LauncherService) http.HandlerFunc {
 			return
 		}
 
-		inst, err := svc.Start(body.Type, body.HostID)
+		// Direkter Katalog-Start hat keinen Workflow-Kontext, also kein
+		// extraEnv (Kapitel 15, s. launcher.Launcher.Start-Doku) — Nodes
+		// laufen mit ihren Katalog-/Programm-Defaults.
+		inst, err := svc.Start(body.Type, body.HostID, nil)
 		if err != nil {
 			writeLauncherError(w, err)
 			return

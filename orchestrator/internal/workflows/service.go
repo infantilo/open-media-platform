@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
@@ -58,7 +59,7 @@ type GraphService interface {
 // Workflow-Start ist aus Launcher-Sicht nichts anderes als mehrere
 // gebündelte Start-Aufrufe.
 type Launcher interface {
-	Start(nodeType, hostID string) (launcher.Instance, error)
+	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 }
 
@@ -188,9 +189,22 @@ func (s *Service) runStart(wf Workflow) {
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	defer cancel()
 
+	// Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): Workflow-Settings
+	// wie die Programm-Auflösung wandern als extraEnv in jeden lokalen
+	// Rollen-Start (s. launcher.Launcher.Start-Doku zur Remote-
+	// Einschränkung). 0 = nicht gesetzt, Node behält ihren eigenen
+	// Default — kein OMP_WIDTH/OMP_HEIGHT für Workflows ohne Settings.
+	extraEnv := map[string]string{}
+	if wf.Definition.Settings.ProgramWidth > 0 {
+		extraEnv["OMP_WIDTH"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramWidth), 10)
+	}
+	if wf.Definition.Settings.ProgramHeight > 0 {
+		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
+	}
+
 	pending := map[string]string{} // roleName -> instanceID, noch nicht in der Registry gesehen
 	for _, role := range wf.Definition.Roles {
-		inst, err := s.launcher.Start(role.NodeType, role.HostID)
+		inst, err := s.launcher.Start(role.NodeType, role.HostID, extraEnv)
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return

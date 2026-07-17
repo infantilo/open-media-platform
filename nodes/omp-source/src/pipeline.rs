@@ -27,8 +27,13 @@ use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-pub const WIDTH: u32 = 640;
-pub const HEIGHT: u32 = 480;
+/// Fallback, falls `main.rs` keine `OMP_WIDTH`/`OMP_HEIGHT`-Umgebungs-
+/// variable findet (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c,
+/// 2026-07-17: Workflow-Auflösungs-Setting) — `Config::width`/`height`
+/// tragen den tatsächlich verwendeten Wert, diese Konstanten sind nur
+/// noch der Default dafür, keine feste Pipeline-Vorgabe mehr.
+pub const DEFAULT_WIDTH: u32 = 640;
+pub const DEFAULT_HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 pub const SAMPLE_RATE: u32 = 48000;
@@ -44,6 +49,8 @@ pub struct Config {
     pub audio_flow_id: String,
     pub label: String,
     pub initial_pattern: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 pub enum Event {
@@ -93,8 +100,8 @@ impl Pipeline {
             .property(
                 "caps",
                 gst::Caps::builder("video/x-raw")
-                    .field("width", WIDTH as i32)
-                    .field("height", HEIGHT as i32)
+                    .field("width", config.width as i32)
+                    .field("height", config.height as i32)
                     .field(
                         "framerate",
                         gst::Fraction::new(
@@ -150,8 +157,8 @@ impl Pipeline {
             mxl_context.clone(),
             &config.flow_id,
             &config.label,
-            WIDTH,
-            HEIGHT,
+            config.width,
+            config.height,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
         )

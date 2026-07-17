@@ -149,7 +149,7 @@ func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalo
 
 func (f fakeLauncherService) List() []launcher.Instance { return f.instances }
 
-func (f fakeLauncherService) Start(nodeType, hostID string) (launcher.Instance, error) {
+func (f fakeLauncherService) Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
 	return f.started, f.startErr
 }
 

@@ -77,7 +77,7 @@ func disableAutoRestart(t *testing.T) {
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	if _, err := l.Start("does-not-exist", ""); err != ErrUnknownType {
+	if _, err := l.Start("does-not-exist", "", nil); err != ErrUnknownType {
 		t.Fatalf("Start() error = %v, want ErrUnknownType", err)
 	}
 }
@@ -86,7 +86,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "podman", Command: []string{"true"}}}
 	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	if _, err := l.Start("x", ""); err != ErrUnsupportedRunner {
+	if _, err := l.Start("x", "", nil); err != ErrUnsupportedRunner {
 		t.Fatalf("Start() error = %v, want ErrUnsupportedRunner", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	inst, err := l.Start("sleepy", "")
+	inst, err := l.Start("sleepy", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -127,7 +127,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	defer func() { stopGracePeriod = original }()
 
 	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
-	inst, err := l.Start("stubborn", "")
+	inst, err := l.Start("stubborn", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -150,7 +150,7 @@ func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
 func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
 	dataDir := t.TempDir()
 	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil, nil)
-	inst, err := l1.Start("sleepy", "")
+	inst, err := l1.Start("sleepy", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -169,7 +169,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
 	l1 := New(quickExit, "http://registry", "nats://nats", dataDir, nil, nil)
-	inst, err := l1.Start("quick", "")
+	inst, err := l1.Start("quick", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -203,7 +203,7 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 	}}
 	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil, nil)
 
-	inst, err := l.Start("envdump", "")
+	inst, err := l.Start("envdump", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -237,6 +237,60 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 	}
 }
 
+// TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars ist die
+// Kern-Verifikation für Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c,
+// 2026-07-17): Start()s extraEnv-Parameter (z. B. eine Workflow-
+// Auflösungs-Einstellung) muss den Katalog-eigenen env-Block
+// überschreiben können, darf aber niemals gegen die fünf vom Launcher
+// selbst gesetzten OMP_*-Variablen gewinnen.
+func TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars(t *testing.T) {
+	disableAutoRestart(t)
+	envFile := t.TempDir() + "/env.txt"
+	catalog := []CatalogEntry{{
+		Type:   "envdump2",
+		Label:  "EnvDump2",
+		Runner: "process",
+		Command: []string{
+			"/bin/sh", "-c",
+			"env > " + envFile,
+		},
+		Env: map[string]string{"OMP_CUSTOM": "from-catalog", "OMP_WIDTH": "640"},
+	}}
+	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil, nil)
+
+	inst, err := l.Start("envdump2", "", map[string]string{
+		"OMP_WIDTH":       "1280",   // überschreibt den Katalog-Wert
+		"OMP_INSTANCE_ID": "hacked", // darf NICHT gegen die reservierte Variable gewinnen
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var data []byte
+	for time.Now().Before(deadline) {
+		data, err = os.ReadFile(envFile)
+		if err == nil && len(data) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("read env dump: %v", err)
+	}
+
+	env := string(data)
+	if !strings.Contains(env, "OMP_WIDTH=1280") {
+		t.Errorf("extraEnv did not override catalog env; full env:\n%s", env)
+	}
+	if !strings.Contains(env, "OMP_INSTANCE_ID="+inst.ID) {
+		t.Errorf("extraEnv illegally overrode the reserved OMP_INSTANCE_ID; full env:\n%s", env)
+	}
+	if strings.Contains(env, "OMP_INSTANCE_ID=hacked") {
+		t.Errorf("extraEnv illegally overrode the reserved OMP_INSTANCE_ID; full env:\n%s", env)
+	}
+}
+
 func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 	disableAutoRestart(t)
 	crashing := []CatalogEntry{{
@@ -248,7 +302,7 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 	pub := &recordingPublisher{}
 	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
 
-	inst, err := l.Start("crashy", "")
+	inst, err := l.Start("crashy", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -343,7 +397,7 @@ func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
 	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), pub, nil)
 	l.SetRestartObserver(obs)
 
-	inst, err := l.Start("flaky", "")
+	inst, err := l.Start("flaky", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -412,7 +466,7 @@ func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	pub := &recordingPublisher{}
 	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
 
-	inst, err := l.Start("loopy", "")
+	inst, err := l.Start("loopy", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -476,7 +530,7 @@ func (f *fakeNATSRequester) RequestBytes(subject string, data []byte, timeout ti
 func TestLauncherStartRemoteWithoutNATSReturnsError(t *testing.T) {
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
 
-	if _, err := l.Start("sleepy", "host-1"); err != ErrRemoteUnavailable {
+	if _, err := l.Start("sleepy", "host-1", nil); err != ErrRemoteUnavailable {
 		t.Fatalf("Start() error = %v, want ErrRemoteUnavailable", err)
 	}
 }
@@ -489,7 +543,7 @@ func TestLauncherStartRemoteSendsCorrectSubjectAndSucceeds(t *testing.T) {
 	// Katalog — der Host-Agent hat seinen eigenen, s. Paketkommentar —
 	// deshalb funktioniert ein beim Orchestrator unbekannter Typ hier
 	// bewusst trotzdem.
-	inst, err := l.Start("omp-source", "host-1")
+	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -517,7 +571,7 @@ func TestLauncherStartRemoteFailureResponse(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: false, Error: "unknown catalog type"}}
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
 
-	if _, err := l.Start("omp-source", "host-1"); err == nil {
+	if _, err := l.Start("omp-source", "host-1", nil); err == nil {
 		t.Fatal("Start() error = nil, want an error for a failed remote response")
 	}
 	if len(l.List()) != 0 {
@@ -529,7 +583,7 @@ func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
 	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
 
-	inst, err := l.Start("omp-source", "host-1")
+	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}

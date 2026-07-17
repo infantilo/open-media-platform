@@ -78,7 +78,7 @@ type SnapshotService interface {
 type LauncherService interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
-	Start(nodeType, hostID string) (launcher.Instance, error)
+	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 }
 

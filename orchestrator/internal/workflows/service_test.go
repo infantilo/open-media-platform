@@ -94,9 +94,12 @@ type fakeLauncher struct {
 	startErr  error
 	stopped   []string // instanceID per call
 	stopErrs  map[string]error
+	// lastExtraEnv (Kapitel 15, §15.3c) — das extraEnv der zuletzt
+	// beobachteten Start()-Aufrufe, ein Eintrag pro nodeType.
+	lastExtraEnv map[string]map[string]string
 }
 
-func (f *fakeLauncher) Start(nodeType, hostID string) (launcher.Instance, error) {
+func (f *fakeLauncher) Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
@@ -108,6 +111,10 @@ func (f *fakeLauncher) Start(nodeType, hostID string) (launcher.Instance, error)
 		f.instances = map[string]string{}
 	}
 	f.instances[nodeType] = id
+	if f.lastExtraEnv == nil {
+		f.lastExtraEnv = map[string]map[string]string{}
+	}
+	f.lastExtraEnv[nodeType] = extraEnv
 	return launcher.Instance{ID: id, Type: nodeType, HostID: hostID}, nil
 }
 
@@ -266,6 +273,82 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 	defer g.mu.Unlock()
 	if len(g.calls) != 1 || g.calls[0].fromSender != "send-1" || g.calls[0].toReceiver != "recv-1" {
 		t.Fatalf("connect calls = %+v, want one send-1 -> recv-1", g.calls)
+	}
+}
+
+// TestStartPassesResolutionSettingsAsExtraEnv ist die Kern-Verifikation
+// für Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17): eine
+// gesetzte Workflow-Auflösung landet als OMP_WIDTH/OMP_HEIGHT-extraEnv
+// bei jedem Rollen-Start. Ein Workflow OHNE Settings darf dagegen kein
+// extraEnv erzeugen (0 = Node behält ihren eigenen Default).
+func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 200 * time.Millisecond
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
+		Settings: Settings{ProgramWidth: 1280, ProgramHeight: 720},
+	}
+	wf, err := svc.Create("hires", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		_, ok := l.lastExtraEnv["omp-source"]
+		l.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	l.mu.Lock()
+	env := l.lastExtraEnv["omp-source"]
+	l.mu.Unlock()
+	if env["OMP_WIDTH"] != "1280" || env["OMP_HEIGHT"] != "720" {
+		t.Fatalf("extraEnv = %+v, want OMP_WIDTH=1280 OMP_HEIGHT=720", env)
+	}
+
+	// Zweiter Workflow ohne Settings: kein extraEnv-Eintrag für die Auflösung.
+	def2 := Definition{Roles: []Role{{Name: "src", NodeType: "omp-viewer"}}}
+	wf2, err := svc.Create("no-settings", def2)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf2.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		_, ok := l.lastExtraEnv["omp-viewer"]
+		l.mu.Unlock()
+		if ok {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	l.mu.Lock()
+	env2 := l.lastExtraEnv["omp-viewer"]
+	l.mu.Unlock()
+	if _, ok := env2["OMP_WIDTH"]; ok {
+		t.Errorf("extraEnv = %+v, want no OMP_WIDTH for a workflow without Settings", env2)
+	}
+	if _, ok := env2["OMP_HEIGHT"]; ok {
+		t.Errorf("extraEnv = %+v, want no OMP_HEIGHT for a workflow without Settings", env2)
 	}
 }
 

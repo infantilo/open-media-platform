@@ -126,6 +126,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let initial_pattern = env_or("OMP_SOURCE_PATTERN", DEFAULT_PATTERN);
+    // Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17):
+    // Workflow-Auflösungs-Setting landet hier als OMP_WIDTH/OMP_HEIGHT
+    // (orchestrator/internal/workflows/service.go runStart) — ungültige
+    // oder fehlende Werte fallen ohne Fehler auf den Node-eigenen
+    // Default zurück, ein Workflow ohne Settings verhält sich exakt wie
+    // vor diesem Feld.
+    let width: u32 = env_or("OMP_WIDTH", "")
+        .parse()
+        .unwrap_or(pipeline::DEFAULT_WIDTH);
+    let height: u32 = env_or("OMP_HEIGHT", "")
+        .parse()
+        .unwrap_or(pipeline::DEFAULT_HEIGHT);
     // Für GET /params/pattern nachgehalten (Contract-Check UMSETZUNG.md
     // C9 fand den Bug: `set()` änderte bisher nur die Pipeline-Property,
     // `get()` kannte "pattern" gar nicht — PATCH schien zu funktionieren,
@@ -151,6 +163,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         audio_flow_id: audio_flow_id.clone(),
         label: label.clone(),
         initial_pattern,
+        width,
+        height,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_thread =
@@ -191,8 +205,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     flow: Some(FlowSpec::Video {
                         id: Some(flow_id),
-                        frame_width: pipeline::WIDTH,
-                        frame_height: pipeline::HEIGHT,
+                        frame_width: width,
+                        frame_height: height,
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
