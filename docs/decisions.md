@@ -5885,3 +5885,92 @@ beantwortet markiert. Die eigentliche Implementierung (Kapitel 16.4
 Teil 0: Build aktivieren + Spike) ist damit **nicht** gestartet —
 bleibt eigene Sitzung, gated auf Priorität laut Kapitel 18.
 
+
+## 2026-07-17 (Nachtrag 10) — S1: Graph-Edge-Cache
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), erster Umsetzungsschritt
+aus dem Review-Arbeitsvorrat
+
+Erster tatsächlicher Implementierungsschritt aus dem zweiten aktiven
+Arbeitsvorrat ([[project_review_2026_07_17_s_steps]]), gewählt nach der
+dortigen Reihenfolge-Empfehlung „S1 → S2 → S3" — größte Einzelwirkung
+auf Skalierung: `GET /api/v1/graph` machte bisher pro Aufruf einen
+IS-05-`GetActive`-Roundtrip für jeden Receiver jeder Node (N×M),
+`graph.go:222-245` vor dieser Änderung.
+
+**Umsetzung (`orchestrator/internal/graph/graph.go`):**
+`graph.Service` hält jetzt einen Edge-Cache (`map[string]Edge`,
+Schlüssel = Receiver-ID, mutexgeschützt). `Graph()` liest nur noch den
+Cache (`snapshotEdges()`, sortiert nach ID für stabile UI-Reihenfolge)
+— keine IS-05-Aufrufe mehr pro Request. Der Cache wird gehalten durch:
+- **`Service.Run(ctx)`** (neu, analog `registry.Poller.Run`): initialer
+  Full-Rebuild (`reconcileOnce`, derselbe teure N×M-Durchlauf wie
+  früher, jetzt aber nur einmal beim Start), danach alle
+  `ReconcileInterval` (60s) erneut — Netz gegen extern (an OMP vorbei)
+  geschaltete Connections, mit Logging der erkannten Abweichungen
+  (`logEdgeDivergence`).
+- **`Connect`/`Disconnect`** mutieren den Cache direkt
+  (`setEdge`/`deleteEdge`) statt wie bisher für die Loop-Erkennung
+  (`Connect`) bzw. den vorherigen Sender (`Disconnect`) einen weiteren
+  Live-IS-05-Call zu machen — beide lesen jetzt ebenfalls aus dem
+  Cache, ein zusätzlicher Nebengewinn (weniger IS-05-Traffic insgesamt,
+  nicht nur bei `GET /api/v1/graph`).
+- **`Service.HandleNodeEvent(ctx, eventType, node)`** (neu, verdrahtet
+  in `main.go` an `registry.Poller.OnChange`, vor dem bestehenden
+  SSE-Broadcast): `node.removed` entfernt alle Kanten der
+  verschwundenen Node ohne jeden IS-05-Call; `node.added` gleicht
+  gezielt nur die Receiver der neuen Node ab (kein voller Rebuild).
+  `node.updated` bleibt unbehandelt — ein Receiver-Satz-Wechsel auf
+  einer bestehenden Node wird spätestens vom nächsten periodischen
+  Reconcile erfasst, bewusste Vereinfachung, keine stille Lücke.
+
+`main.go` musste umsortiert werden: `graphSvc` wird jetzt vor
+`poller.OnChange` konstruiert (statt danach), damit die Closure
+`graphSvc.HandleNodeEvent` aufrufen kann; `go graphSvc.Run(ctx)` läuft
+jetzt wie `go poller.Run(ctx)` als eigene Goroutine.
+
+**Tests:** sieben bestehende Tests in `graph_test.go` mussten auf das
+neue Modell umgestellt werden (Cache muss vor der Prüfung per
+`svc.reconcileOnce(ctx)` befüllt werden — vorher lasen `Graph`/`Connect`/
+`Disconnect` live von `client.active`). Sechs neue Tests decken das
+eigentliche S1-Verhalten ab: `TestGraphDoesNotCallIS05PerRequest`
+(5× `Graph()` nach einem `reconcileOnce` erhöht `getActiveCalls`
+nicht), `TestHandleNodeEventRemovedDeletesEdges`,
+`TestHandleNodeEventAddedPopulatesEdgesWithoutFullReconcile` (belegt
+gezielt genau 1 statt N×M `GetActive`-Aufrufe),
+`TestReconcileOnceCatchesExternallyMadeConnection`,
+`TestDisconnectReadsPreviousSenderFromCacheNotIS05`. `go build`/
+`go vet`/`go test ./...` (ganzer Orchestrator) grün.
+
+**Live verifiziert** (echter Orchestrator, Postgres, NATS, NMOS-Registry,
+drei echte Node-Instanzen `omp-source`/`omp-switcher`/`omp-viewer` via
+Launcher gestartet):
+- `GET /api/v1/graph`-Latenz durchweg <15ms (0.9–14.7ms über mehrere
+  Messungen vor und nach einer Connection) — cache-basiert, nicht mehr
+  proportional zur Node-/Receiver-Zahl.
+- `Connect` (Source-Video-Sender → Viewer-Receiver) erscheint sofort im
+  Graph, `Disconnect` entfernt sie sofort wieder — beide ohne
+  zusätzlichen Live-IS-05-Call für die Cache-Aktualisierung selbst.
+- **Externe Connection, an Connect() vorbei:** direkter IS-05-PATCH am
+  Viewer-Node selbst (`PATCH .../receivers/<id>/staged`) — Kante fehlt
+  im Graph bis zum nächsten periodischen Reconcile, taucht danach
+  automatisch auf; Log bestätigt `"graph reconcile: edge appeared
+  outside Connect/Disconnect"`.
+- **Node-Kill:** `kill -9` auf den Viewer-Prozess. Kollidierte
+  interessant mit K7-Teil-1s Auto-Restart (`docs/decisions.md`
+  Nachtrag 3): der Launcher startete die Instanz sofort mit neuer
+  NMOS-Node-Registrierung neu, die alte (jetzt verwaiste)
+  Node-Registrierung blieb bis zu ihrem regulären IS-04-Expiry
+  (`registration_expiry_interval: 60` in `deploy/nmos/registry.json`)
+  im Registry-Snapshot sichtbar — der Graph zeigte in diesem Fenster
+  konsequenterweise kurzzeitig zwei „Viewer"-Kacheln mit derselben
+  `instanceId` und die alte, jetzt tote Kante weiter (kein Bug: die
+  Kante gehörte einem Node, der laut Registry-Snapshot noch existierte,
+  der Cache spiegelte den damaligen Ist-Zustand korrekt). Nach Ablauf
+  der 60s verschwand die verwaiste Node-Registrierung aus dem
+  Registry-Snapshot, `HandleNodeEvent("node.removed", …)` entfernte
+  ihre Kante ohne weiteren IS-05-Call — Graph zeigte danach korrekt nur
+  noch die vier echten Nodes und keine verwaiste Kante mehr.
+
+**Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S2
+(SSE-first-UI + Lost-Events-Signal), danach S3 (Remote-Parität für
+Instanzen).

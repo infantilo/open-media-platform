@@ -118,10 +118,19 @@ func main() {
 	}
 
 	store := registry.NewStore()
+	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
+
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
 	poller.HealthTracker = healthTracker
 	poller.HealthStaleAfter = healthStaleAfter
 	poller.OnChange = func(eventType string, node registry.NodeView) {
+		// S1 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): hält den
+		// Graph-Edge-Cache bei Node-Zu-/Abgang aktuell, statt bis zum
+		// nächsten periodischen Reconcile (graph.ReconcileInterval) zu
+		// warten — node.added/node.removed sind die einzigen für den
+		// Cache relevanten Event-Typen (s. Service.HandleNodeEvent).
+		graphSvc.HandleNodeEvent(ctx, eventType, node)
+
 		data, err := json.Marshal(node)
 		if err != nil {
 			slog.Warn("failed to marshal node for event", "error", err)
@@ -130,8 +139,7 @@ func main() {
 		hub.Broadcast(sse.Event{Type: eventType, Data: data})
 	}
 	go poller.Run(ctx)
-
-	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
+	go graphSvc.Run(ctx)
 	layoutStore := layouts.NewStore(database)
 	snapshotSvc := snapshots.NewService(store, graphSvc, snapshots.NewStore(database), nodeHTTPClient)
 

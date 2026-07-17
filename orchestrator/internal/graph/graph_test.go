@@ -73,6 +73,10 @@ type fakeIS05Client struct {
 	// senderErr lässt PatchSenderStaged für die angegebene Sender-ID
 	// fehlschlagen — simuliert einen Node ohne Sender-Connection-API.
 	senderErr map[string]bool
+	// getActiveCalls zählt GetActive-Aufrufe — Grundlage für S1-Tests,
+	// die belegen, dass Graph() nach dem initialen Cache-Aufbau keine
+	// weiteren IS-05-Roundtrips mehr auslöst.
+	getActiveCalls int
 }
 
 func newFakeIS05Client() *fakeIS05Client {
@@ -88,6 +92,7 @@ func newFakeIS05Client() *fakeIS05Client {
 }
 
 func (f *fakeIS05Client) GetActive(ctx context.Context, baseURL, receiverID string) (is05.ActiveResource, error) {
+	f.getActiveCalls++
 	return f.active[receiverID], nil
 }
 
@@ -121,6 +126,7 @@ func TestServiceGraphIncludesActiveEdges(t *testing.T) {
 	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
 
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background()) // S1: Graph() liest den Cache, nicht mehr live
 	g := svc.Graph(context.Background())
 
 	if len(g.Edges) != 1 {
@@ -139,6 +145,7 @@ func TestServiceGraphOmitsInactiveReceivers(t *testing.T) {
 	client := newFakeIS05Client()
 
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
 	g := svc.Graph(context.Background())
 
 	if len(g.Edges) != 0 {
@@ -193,6 +200,7 @@ func TestServiceConnectRejectsTwoNodeLoop(t *testing.T) {
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // bestehend: A -> B
 
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background()) // A -> B muss im Cache stehen, damit die Schleifenprüfung sie sieht
 
 	// B -> A würde die Schleife A -> B -> A schließen.
 	if err := svc.Connect(context.Background(), "send-B", "recv-A"); err != ErrRoutingLoop {
@@ -210,6 +218,7 @@ func TestServiceConnectAllowsChainWithoutLoop(t *testing.T) {
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
 
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
 
 	if err := svc.Connect(context.Background(), "send-B", "recv-C"); err != nil { // B -> C, keine Schleife
 		t.Fatalf("Connect() error = %v, want nil", err)
@@ -227,6 +236,7 @@ func TestServiceConnectRejectsThreeNodeLoop(t *testing.T) {
 	client.active["recv-C"] = is05.ActiveResource{SenderID: strPtr("send-B"), MasterEnable: true} // B -> C
 
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
 
 	// C -> A würde A -> B -> C -> A schließen.
 	if err := svc.Connect(context.Background(), "send-C", "recv-A"); err != ErrRoutingLoop {
@@ -296,6 +306,7 @@ func TestServiceDisconnectAlsoDisablesPreviousSender(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
 	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background()) // Disconnect liest den vorherigen Sender jetzt aus dem Cache
 
 	if err := svc.Disconnect(context.Background(), "recv-B"); err != nil {
 		t.Fatalf("Disconnect() error = %v", err)
@@ -355,5 +366,127 @@ func TestServiceConnectErrorDoesNotPublish(t *testing.T) {
 	}
 	if len(pub.types) != 0 {
 		t.Errorf("published events = %v, want none", pub.types)
+	}
+}
+
+// --- S1: Edge-Cache-Verhalten (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) ---
+
+func TestGraphDoesNotCallIS05PerRequest(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}}
+	client := newFakeIS05Client()
+	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
+
+	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
+	callsAfterReconcile := client.getActiveCalls
+
+	for i := 0; i < 5; i++ {
+		svc.Graph(context.Background())
+	}
+
+	if client.getActiveCalls != callsAfterReconcile {
+		t.Errorf("getActiveCalls after 5x Graph() = %d, want unchanged at %d (Graph must read the cache, not IS-05)", client.getActiveCalls, callsAfterReconcile)
+	}
+}
+
+func TestHandleNodeEventRemovedDeletesEdges(t *testing.T) {
+	node := registry.NodeView{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}
+	views := []registry.NodeView{node}
+	client := newFakeIS05Client()
+	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
+
+	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
+
+	if g := svc.Graph(context.Background()); len(g.Edges) != 1 {
+		t.Fatalf("edges before removal = %+v, want one", g.Edges)
+	}
+
+	svc.HandleNodeEvent(context.Background(), "node.removed", node)
+
+	if g := svc.Graph(context.Background()); len(g.Edges) != 0 {
+		t.Errorf("edges after node.removed = %+v, want none", g.Edges)
+	}
+}
+
+func TestHandleNodeEventAddedPopulatesEdgesWithoutFullReconcile(t *testing.T) {
+	existingNode := registry.NodeView{
+		ID: "node-existing", APIBaseURL: "http://existing",
+		Receivers: []registry.ReceiverView{{ID: "recv-existing"}},
+	}
+	newNode := registry.NodeView{
+		ID: "node-new", APIBaseURL: "http://new",
+		Receivers: []registry.ReceiverView{{ID: "recv-new"}},
+	}
+	client := newFakeIS05Client()
+	client.active["recv-new"] = is05.ActiveResource{SenderID: strPtr("send-new"), MasterEnable: true}
+
+	// Cache noch nie befüllt (kein reconcileOnce) — HandleNodeEvent muss
+	// trotzdem nur den neuen Node abfragen, nicht existingNode.
+	svc := NewService(fakeNodeLister{[]registry.NodeView{existingNode, newNode}}, client, nil)
+	svc.HandleNodeEvent(context.Background(), "node.added", newNode)
+
+	g := svc.Graph(context.Background())
+	if len(g.Edges) != 1 || g.Edges[0].ToReceiver != "recv-new" {
+		t.Fatalf("edges = %+v, want exactly recv-new", g.Edges)
+	}
+	if client.getActiveCalls != 1 {
+		t.Errorf("getActiveCalls = %d, want 1 (only the new node's receiver)", client.getActiveCalls)
+	}
+}
+
+func TestReconcileOnceCatchesExternallyMadeConnection(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}}
+	client := newFakeIS05Client()
+
+	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc.reconcileOnce(context.Background())
+	if g := svc.Graph(context.Background()); len(g.Edges) != 0 {
+		t.Fatalf("edges before external change = %+v, want none", g.Edges)
+	}
+
+	// Simuliert eine Connection, die per curl direkt am Node geschaltet
+	// wurde — an Connect() vorbei, also nicht im Cache.
+	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-external"), MasterEnable: true}
+
+	svc.reconcileOnce(context.Background())
+
+	g := svc.Graph(context.Background())
+	if len(g.Edges) != 1 || g.Edges[0].FromSender != "send-external" {
+		t.Errorf("edges after reconcile = %+v, want one from send-external", g.Edges)
+	}
+}
+
+func TestDisconnectReadsPreviousSenderFromCacheNotIS05(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-A", APIBaseURL: "http://a", Senders: []registry.SenderView{{ID: "send-A"}}},
+		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
+	}
+	client := newFakeIS05Client()
+	svc := NewService(fakeNodeLister{views}, client, nil)
+
+	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	callsAfterConnect := client.getActiveCalls
+
+	if err := svc.Disconnect(context.Background(), "recv-B"); err != nil {
+		t.Fatalf("Disconnect() error = %v", err)
+	}
+
+	if client.getActiveCalls != callsAfterConnect {
+		t.Errorf("getActiveCalls changed during Disconnect (%d -> %d), want unchanged (previous sender must come from cache)", callsAfterConnect, client.getActiveCalls)
+	}
+	if enabled, ok := client.senderPatched["send-A"]; !ok || enabled {
+		t.Errorf("senderPatched[send-A] = %v, %v; want false, true (previous sender correctly identified via cache)", enabled, ok)
 	}
 }

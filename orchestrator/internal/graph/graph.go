@@ -9,11 +9,21 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
+	"sync"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// ReconcileInterval ist der Abstand zwischen zwei vollen Edge-Cache-
+// Neuaufbauten im Hintergrund (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md
+// S1) — fängt Abweichungen ab, die an Service.Connect/Disconnect und den
+// gezielten Node-Event-Abgleich (HandleNodeEvent) vorbei entstanden sind
+// (z. B. eine Connection, die direkt per curl am Node geschaltet wurde).
+const ReconcileInterval = 60 * time.Second
 
 // Port ist ein Ein- oder Ausgang einer Kachel (Receiver bzw. Sender).
 // Format kommt unverändert aus dem IS-04-Snapshot (registry.SenderView/
@@ -97,16 +107,150 @@ type EventPublisher interface {
 }
 
 // Service baut den Graphen und führt IS-05-Verbindungsänderungen aus.
+//
+// Edges werden in edges gecacht (S1): GET /api/v1/graph liest nur noch
+// den Cache statt pro Aufruf einen IS-05-GetActive-Roundtrip je Receiver
+// zu machen (vorher N×M — N Nodes × M Receiver — bei jedem einzelnen
+// GET). Der Cache wird gehalten durch: den initialen Full-Rebuild
+// (Run/reconcileOnce beim Start), eigene Connect/Disconnect-Aufrufe
+// (mutieren den Cache direkt), HandleNodeEvent (node.removed entfernt
+// Kanten, node.added gleicht nur die neue Node ab) und einen
+// periodischen Full-Rebuild alle ReconcileInterval als Netz gegen extern
+// (an OMP vorbei) geschaltete Connections.
 type Service struct {
 	nodes  NodeLister
 	is05   is05Client
 	events EventPublisher
+
+	mu    sync.RWMutex
+	edges map[string]Edge // Schlüssel: Receiver-ID == Edge-ID
 }
 
 // NewService verbindet einen NodeLister mit einem IS-05-Client und
 // (optional, darf nil sein) einem EventPublisher für Live-Updates.
 func NewService(nodes NodeLister, client is05Client, events EventPublisher) *Service {
-	return &Service{nodes: nodes, is05: client, events: events}
+	return &Service{nodes: nodes, is05: client, events: events, edges: map[string]Edge{}}
+}
+
+// Run füllt den Edge-Cache initial und hält ihn danach per periodischem
+// Full-Rebuild (ReconcileInterval) aktuell, bis ctx endet — analog zu
+// registry.Poller.Run. Bis zum ersten Durchlauf liefert Graph() einen
+// leeren Edge-Satz (gleiches Anlaufverhalten wie registry.Store vor dem
+// ersten Poll).
+func (s *Service) Run(ctx context.Context) {
+	s.reconcileOnce(ctx)
+
+	ticker := time.NewTicker(ReconcileInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.reconcileOnce(ctx)
+		}
+	}
+}
+
+// reconcileOnce baut den Edge-Cache komplett neu aus dem aktuellen
+// IS-05-Zustand (derselbe teure N×M-GetActive-Durchlauf wie früher pro
+// GET /api/v1/graph, jetzt nur noch alle ReconcileInterval) und
+// protokolliert Abweichungen vom bisherigen Cache-Stand.
+func (s *Service) reconcileOnce(ctx context.Context) {
+	views := s.nodes.List()
+	fresh := s.buildEdgesMap(ctx, views)
+
+	s.mu.Lock()
+	previous := s.edges
+	s.edges = fresh
+	s.mu.Unlock()
+
+	logEdgeDivergence(previous, fresh)
+}
+
+// logEdgeDivergence meldet Kanten, die sich zwischen zwei Cache-Ständen
+// unterscheiden — z. B. eine Connection, die extern (per curl direkt am
+// Node) an Connect/Disconnect vorbei geschaltet wurde.
+func logEdgeDivergence(previous, fresh map[string]Edge) {
+	for id, freshEdge := range fresh {
+		if prevEdge, ok := previous[id]; !ok {
+			slog.Info("graph reconcile: edge appeared outside Connect/Disconnect", "receiver", id, "sender", freshEdge.FromSender)
+		} else if prevEdge != freshEdge {
+			slog.Info("graph reconcile: edge changed outside Connect/Disconnect", "receiver", id, "was_sender", prevEdge.FromSender, "now_sender", freshEdge.FromSender)
+		}
+	}
+	for id := range previous {
+		if _, ok := fresh[id]; !ok {
+			slog.Info("graph reconcile: edge disappeared outside Connect/Disconnect", "receiver", id)
+		}
+	}
+}
+
+// HandleNodeEvent hält den Edge-Cache bei Node-Inventar-Änderungen
+// aktuell (angeschlossen an registry.Poller.OnChange, s. main.go):
+// "node.removed" entfernt sämtliche Kanten der verschwundenen Node ohne
+// jeden weiteren IS-05-Aufruf; "node.added" gleicht gezielt nur die
+// Receiver der neuen Node per GetActive ab (kein voller Rebuild).
+// "node.updated" bleibt unbehandelt — ein Receiver-Satz-Wechsel auf
+// einer bestehenden Node wird spätestens vom nächsten periodischen
+// reconcileOnce (Run) erfasst.
+func (s *Service) HandleNodeEvent(ctx context.Context, eventType string, node registry.NodeView) {
+	switch eventType {
+	case "node.removed":
+		s.mu.Lock()
+		for _, r := range node.Receivers {
+			delete(s.edges, r.ID)
+		}
+		s.mu.Unlock()
+	case "node.added":
+		if node.APIBaseURL == "" {
+			return
+		}
+		for _, r := range node.Receivers {
+			active, err := s.is05.GetActive(ctx, node.APIBaseURL, r.ID)
+			if err != nil {
+				slog.Warn("is05 GetActive failed for newly added node", "receiver", r.ID, "error", err)
+				continue
+			}
+			if active.SenderID != nil && active.MasterEnable {
+				s.setEdge(Edge{ID: r.ID, FromSender: *active.SenderID, ToReceiver: r.ID, State: "active"})
+			}
+		}
+	}
+}
+
+func (s *Service) setEdge(e Edge) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.edges[e.ID] = e
+}
+
+func (s *Service) deleteEdge(receiverID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.edges, receiverID)
+}
+
+func (s *Service) lookupEdge(receiverID string) (Edge, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	e, ok := s.edges[receiverID]
+	return e, ok
+}
+
+// snapshotEdges liefert eine sortierte Kopie des aktuellen Edge-Caches —
+// sortiert nach ID, damit GET /api/v1/graph eine stabile Reihenfolge
+// liefert (weniger UI-Re-Render-Churn) statt Map-Iterationsreihenfolge.
+func (s *Service) snapshotEdges() []Edge {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	edges := make([]Edge, 0, len(s.edges))
+	for _, e := range s.edges {
+		edges = append(edges, e)
+	}
+	sort.Slice(edges, func(i, j int) bool { return edges[i].ID < edges[j].ID })
+	return edges
 }
 
 // publish sendet ein "edge.added"/"edge.removed"-Event, falls ein
@@ -126,10 +270,11 @@ func (s *Service) publish(eventType, receiverID string) {
 }
 
 // Graph liefert den kompletten Ist-Zustand: Nodes aus dem Registry-
-// Snapshot, Edges aus den IS-05-Active-Endpoints der Receiver.
+// Snapshot, Edges aus dem Edge-Cache (S1 — kein IS-05-Roundtrip mehr pro
+// Aufruf, s. Service-Dokumentation oben).
 func (s *Service) Graph(ctx context.Context) Graph {
 	views := s.nodes.List()
-	return Graph{Nodes: buildNodes(views), Edges: s.buildEdges(ctx, views)}
+	return Graph{Nodes: buildNodes(views), Edges: s.snapshotEdges()}
 }
 
 // Connect PATCHt den Receiver toReceiver auf fromSender (sofortige
@@ -161,7 +306,7 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 		if senderNode.ID == receiverNode.ID {
 			return ErrRoutingLoop
 		}
-		signalGraph := buildNodeSignalGraph(views, s.buildEdges(ctx, views))
+		signalGraph := buildNodeSignalGraph(views, s.snapshotEdges())
 		if reachable(signalGraph, receiverNode.ID, senderNode.ID) {
 			return ErrRoutingLoop
 		}
@@ -179,6 +324,7 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 		}
 	}
 
+	s.setEdge(Edge{ID: toReceiver, FromSender: fromSender, ToReceiver: toReceiver, State: "active"})
 	s.publish("edge.added", toReceiver)
 	return nil
 }
@@ -198,8 +344,8 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 	}
 
 	previousSenderID := ""
-	if active, err := s.is05.GetActive(ctx, node.APIBaseURL, receiverID); err == nil && active.SenderID != nil {
-		previousSenderID = *active.SenderID
+	if edge, ok := s.lookupEdge(receiverID); ok {
+		previousSenderID = edge.FromSender
 	}
 
 	if err := s.is05.PatchStaged(ctx, node.APIBaseURL, receiverID, nil, false); err != nil {
@@ -215,12 +361,17 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 		}
 	}
 
+	s.deleteEdge(receiverID)
 	s.publish("edge.removed", receiverID)
 	return nil
 }
 
-func (s *Service) buildEdges(ctx context.Context, views []registry.NodeView) []Edge {
-	edges := []Edge{}
+// buildEdgesMap fragt für jeden Receiver jeder erreichbaren Node den
+// IS-05-Active-Endpoint ab — der teure N×M-Durchlauf, der früher bei
+// jedem GET /api/v1/graph lief. Läuft jetzt nur noch beim initialen
+// Cache-Aufbau und im periodischen Reconcile (s. reconcileOnce).
+func (s *Service) buildEdgesMap(ctx context.Context, views []registry.NodeView) map[string]Edge {
+	edges := map[string]Edge{}
 	for _, v := range views {
 		if v.APIBaseURL == "" {
 			continue
@@ -232,12 +383,12 @@ func (s *Service) buildEdges(ctx context.Context, views []registry.NodeView) []E
 				continue
 			}
 			if active.SenderID != nil && active.MasterEnable {
-				edges = append(edges, Edge{
+				edges[r.ID] = Edge{
 					ID:         r.ID,
 					FromSender: *active.SenderID,
 					ToReceiver: r.ID,
 					State:      "active",
-				})
+				}
 			}
 		}
 	}
