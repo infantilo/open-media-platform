@@ -78,7 +78,41 @@ unterstützt mTLS bisher — die Rust-`omp-node-sdk`-Nodes noch nicht
 (`docs/decisions.md` D3, verbleibender Scope). `make mtls-down` stoppt
 den CA-Container wieder (separat von `make down`).
 
-## 3. Erste Schritte in der GUI
+## 3. Anmeldung (Login)
+
+Solange kein Nutzer angelegt ist, läuft die GUI **ohne** Anmeldung
+(Auth ist deaktiviert, solange `UserCount()==0`,
+`ARCHITECTURE.md` §12) — praktisch relevant ist das nur auf einer
+komplett frischen Datenbank; auf dieser Dev-Maschine existiert bereits
+ein Nutzer (s. u.).
+
+**Aktueller Dev-Standardnutzer** (Bootstrap-Admin mit Wildcard-
+`admin`-Rolle, angelegt bei der Umsetzung von Kapitel 11 Teil 1,
+`docs/END-GOAL-FEATURES.md` §11, s. `UMSETZUNG.md`-Status-Checkliste):
+
+| Nutzername | Passwort |
+|---|---|
+| `admin` | `adminpass123` |
+
+Weitere Nutzer/Rollenbindungen verwaltet der **Administration**-Tab in
+der App-Bar (nur sichtbar für Nutzer mit `admin`-Verb, sowie im
+Bootstrap-Fall für die Erstanlage): Nutzer anlegen/löschen, Passwort
+zurücksetzen, Rollenbindungen (Nutzer × Node × Recht — `view` <
+`operate` < `configure` < `admin`, `"*"` = alle Nodes) anlegen/
+löschen, Audit-Log einsehen. Der letzte verbleibende Admin kann sich
+dort nicht selbst löschen oder entrechten (Selbstschutz gegen
+versehentliches Aussperren).
+
+**Passwort vergessen, kein zweiter Admin übrig?** Es gibt keine
+CLI-Passwort-Reset-Funktion — stattdessen den Nutzer aus der
+Datenbank entfernen, das versetzt das System zurück in den
+Bootstrap-Zustand (danach über die GUI einen neuen Admin anlegen):
+```sh
+podman exec -it omp-postgres psql -U omp -d omp \
+  -c "DELETE FROM role_bindings; DELETE FROM users;"
+```
+
+## 4. Erste Schritte in der GUI
 
 - Der Flow-Editor zeigt zunächst einen leeren Graphen — noch keine Nodes
   registriert.
@@ -91,7 +125,12 @@ den CA-Container wieder (separat von `make down`).
 - Gestartete Instanzen erscheinen automatisch als Kacheln (Selbstregistrierung
   über NMOS, kein manuelles Eintragen).
 
-## 4. Troubleshooting
+## 5. Troubleshooting
+
+**Login-Formular erscheint, aber keine Zugangsdaten bekannt** — s.
+Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
+Passwort-Reset-Verfahren, falls dieser Nutzer inzwischen geändert oder
+gelöscht wurde).
 
 **„Auf Port 8000 antwortet bereits ein Prozess, der nicht über
 start-omp.sh/PID-Datei bekannt ist"** — ein verwaister Prozess (z. B. aus
@@ -115,7 +154,7 @@ Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
 
-## 5. Mehr Kontext
+## 6. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)
