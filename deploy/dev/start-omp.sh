@@ -59,7 +59,6 @@ echo "==> Orchestrator starten"
 # der `make stop` vorher den falschen Prozess killen ließ (Log/PID-Datei
 # stimmten dann nicht mit dem tatsächlichen Port-Owner überein).
 export OMP_UI_DIR="$ROOT_DIR/ui"
-export OMP_DATA_DIR="$ROOT_DIR/data"
 export OMP_CATALOG_PATH="$ROOT_DIR/deploy/catalog.json"
 # mTLS (UMSETZUNG.md D3) ist per Default aus (OMP_MTLS_ENABLED unten nur
 # gesetzt, falls schon in der aufrufenden Shell exportiert) — die

@@ -6425,3 +6425,110 @@ Testläufe plus ein gezielter Orchestrator-Stop-Testlauf):
 abgeschlossen.** Nächster Schritt laut Reihenfolge-Empfehlung: **S4**
 (instances.json → Postgres), danach S6 (größter Brocken, Kapitel-12-
 Einstieg), S7/S8 nach Bedarf.
+
+
+## 2026-07-18 (Nachtrag 16) — S4: Launcher-Zustand + Instanz-Inventar
+nach Postgres (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), siebter
+Umsetzungsschritt aus dem Review-Arbeitsvorrat, nach den drei "kleinen,
+hygienischen" Schritten (S5/S9/S10)
+
+Siebter Schritt aus [[project_review_2026_07_17_s_steps]], laut
+Reihenfolge-Empfehlung direkt nach S5/S9/S10. `data/instances.json`
+(UMSETZUNG.md C8) war die letzte verbliebene datei-basierte Persistenz
+für Bestandsdaten des Orchestrators außerhalb von Postgres (Layouts/
+Snapshots/Workflows/Hosts/Audit-Log waren schon vorher migriert).
+
+**Migration `internal/db/migrations/0005_instances.sql`:** neue Tabelle
+`instances (id TEXT PRIMARY KEY, data JSONB NOT NULL)` — ein Blob pro
+Instanz, gleiches Muster wie `workflows` (0004): der Orchestrator
+interpretiert das JSON in Go, die DB kennt nur "irgendeine Instanz mit
+dieser ID". Kein Sortier-/Filterbedarf in SQL, `List()` liefert immer
+den kompletten Bestand.
+
+**Neu `internal/launcher/store.go`:** `Store` (Put/Delete/List) analog
+`workflows.Store`. **`internal/launcher/launcher.go`:** neues
+unexportiertes `instanceStore`-Interface (gleiches Muster wie
+`workflows.workflowStore`) — der Launcher hält intern die schmale
+Interface-Sicht, `New()` nimmt weiterhin den konkreten `*Store` als
+Parameter (Bequemlichkeit für `main.go`), ein neues unexportiertes
+`newWithStore` dahinter erlaubt Tests, einen In-Memory-Fake statt einer
+echten Datenbank einzusetzen, ohne dass Tests, denen es nicht um die
+Persistenz selbst geht, eine echte Postgres-Verbindung brauchen.
+`loadState()` liest jetzt `store.List()` statt einer Datei und löscht
+tote Einträge (PID nicht mehr lebendig) aktiv aus der DB
+(`store.Delete`) statt sie nur stillschweigend zu verwerfen. Das
+bisherige `saveState()` (dumpte bei **jeder** Änderung den kompletten
+Instanz-Bestand neu) ist durch ein gezieltes `persistInstanceLocked(id)`
+ersetzt — ein Upsert nur der einen geänderten Instanz, an allen neun
+bisherigen `saveState()`-Aufrufstellen (`startLocal`, `supervise`
+dreifach, `startRemote`, `HandleRemoteExit` dreifach, `Stop` — dort
+`store.Delete(id)` statt eines Puts, da die Instanz dort ja entfernt
+wird).
+
+**`main.go`:** `launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL,
+launcher.NewStore(database), hub, launcherNATS)` statt `cfg.DataDir`.
+**`internal/config/config.go`:** `Config.DataDir`/`OMP_DATA_DIR`
+komplett entfernt — nach dieser Änderung von nichts mehr referenziert
+(Rollenbindungen waren schon mit D3 Teil 2 durch die authz-Tabelle
+ersetzt, das war der letzte andere Nutzer des Datei-Backends unterhalb
+von DataDir). `deploy/dev/start-omp.sh`s `OMP_DATA_DIR`-Export
+entsprechend gestrichen. `data/instances.json` (leer, `[]`) lokal
+gelöscht — reines Aufräumen, war nie versioniert (`.gitignore: /data/`).
+
+**`docs/HANDBUCH.md`:** neuer Absatz in Abschnitt 3 (Anmeldung) — ohne
+gesetztes `OMP_AUTH_JWT_SECRET_FILE` landet das beim ersten Start
+auto-generierte Token-Secret auf einem ggf. vergänglichen Datenträger;
+für ein echtes Deployment muss der Pfad auf einen dauerhaften,
+gesicherten Speicherort zeigen, sonst werden alle Anmelde-Tokens nach
+jedem Neustart ungültig.
+
+**Tests:** neues `internal/launcher/store_test.go` (vier Tests gegen
+echtes Postgres, gleiches Muster wie `workflows/store_test.go`:
+Put/List-Rundlauf, Put überschreibt, leere Liste initial, Delete
+idempotent). `launcher_test.go`: neuer `fakeInstanceStore` (In-Memory,
+gleiches Muster wie `workflows_test.go`s `fakeStore`) für die 21 Tests,
+denen es nicht um die Persistenz selbst geht; die zwei tatsächlichen
+Neustart-Persistenz-Tests
+(`TestLauncherReloadsStillRunningInstanceAfterRestart`,
+`TestLauncherDropsDeadInstanceAfterRestart`) laufen jetzt wie vom
+Review verlangt ("auf DB umgestellt") gegen eine echte, migrierte
+Postgres-Datenbank statt gegen eine temporäre JSON-Datei. `go build`/
+`go vet`/`go test ./...` grün (`-p 1`, gleiche vorbestehende
+Lastempfindlichkeit von `TestLauncherStopSendsSigkillIfSigtermIgnored`
+wie schon bei S3 dokumentiert — reproduzierbar nur unter Systemlast
+während dieser Sitzung, in Isolation und bei wiederholten Einzelläufen
+durchweg grün, kein Zusammenhang mit dieser Änderung).
+
+**Live verifiziert, mit einem interessanten Befund unterwegs:** echter
+Orchestrator, echtes Postgres, echte `omp-source`-Instanz gestartet —
+Zeile in der `instances`-Tabelle bestätigt (PID, Typ korrekt). Beim
+Versuch, einen echten Prozess-Neustart des Orchestrators bei
+weiterlaufender Instanz zu simulieren (der ursprüngliche Verifikations-
+plan: "Instanz starten → Orchestrator neu starten → Instanz wird wieder
+adoptiert"), stellte sich heraus, dass die gestartete Kind-Instanz in
+dieser Sandbox-Umgebung beim Beenden des Orchestrator-Prozesses
+**immer mitstirbt** — auch nach `setsid`+`disown`-Entkopplung in eine
+eigene Session/Prozessgruppe, unabhängig vom Signalziel (nur die
+Orchestrator-PID, nicht die Gruppe). Wahrscheinlichste Erklärung: ein
+Prozessbaum-Aufräummechanismus der Sandbox selbst (nicht Teil dieses
+Orchestrators/dieser Änderung — `main.go` stoppt beim Shutdown
+nachweislich keine Instanzen aktiv, das Shutdown-Log zeigt nur
+"draining"/"nats disconnected", keine Launcher-Aktivität). Statt dessen
+live bestätigt: der **andere** Zweig derselben Logik — `loadState()`
+erkannte die jetzt tote PID beim nächsten echten Orchestrator-Prozess
+korrekt (Postgres-Zeile weiterhin vorhanden, Kind-Prozess tot) und
+löschte sie aktiv aus der `instances`-Tabelle (`SELECT count(*) FROM
+instances` fiel von 1 auf 0) — ein echter, funktionierender
+Cross-Prozess-Beweis, dass `loadState()` tatsächlich Postgres liest,
+nicht mehr die alte Datei. Der "noch lebende Instanz wird wieder
+adoptiert"-Zweig selbst ist durch
+`TestLauncherReloadsStillRunningInstanceAfterRestart` (echtes Postgres,
+zwei unabhängig konstruierte `*Launcher` auf derselben Verbindung,
+echter `sleep`-Prozess) bereits strukturell bewiesen — dort tritt das
+Sandbox-Artefakt nicht auf, weil kein zweiter echter Orchestrator-
+Prozess beteiligt ist. Nach der Verifikation: `instances`-Tabelle und
+laufende Test-Prozesse aufgeräumt (leer bestätigt).
+
+**Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):** S6
+(Workflow-Kontext in der Shell — Kapitel-12-Einstieg, größter
+verbleibender Brocken aus dem Review), S7/S8 nach Bedarf dazwischen.

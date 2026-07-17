@@ -112,6 +112,20 @@ podman exec -it omp-postgres psql -U omp -d omp \
   -c "DELETE FROM role_bindings; DELETE FROM users;"
 ```
 
+**JWT-Secret in Produktions-Deployments (S4, docs/REVIEW-2026-07-17-
+SKALIERUNG-24-7.md):** ohne gesetztes `OMP_AUTH_JWT_SECRET`
+generiert/persistiert der Orchestrator beim ersten Start selbst ein
+Secret unter `OMP_AUTH_JWT_SECRET_FILE` (Default
+`../data/auth-jwt-secret`, s. `internal/auth.LoadOrCreateSecret`) — für
+den lokalen Dev-Betrieb bequem (kein manueller Schritt nötig), für ein
+echtes Deployment aber **zwingend** `OMP_AUTH_JWT_SECRET_FILE` auf
+einen dauerhaften, gesicherten Pfad setzen (oder gleich
+`OMP_AUTH_JWT_SECRET` direkt aus einer eigenen Secret-Verwaltung
+einspeisen): landet das auto-generierte Secret stattdessen auf einem
+vergänglichen Datenträger (z. B. einem Container-Overlay ohne Volume),
+werden nach jedem Neustart alle ausgestellten Anmelde-Tokens ungültig —
+jeder angemeldete Nutzer wird ungefragt ausgeloggt.
+
 ## 4. Erste Schritte in der GUI
 
 - Der Flow-Editor zeigt zunächst einen leeren Graphen — noch keine Nodes

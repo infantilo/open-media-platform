@@ -180,7 +180,7 @@ func main() {
 	if nc != nil {
 		launcherNATS = natsRequester{nc: nc}
 	}
-	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, cfg.DataDir, hub, launcherNATS)
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS)
 
 	// S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Remote-Parität für
 	// Instanzen — der Host-Agent meldet ein unerwartetes Prozessende auf

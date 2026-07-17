@@ -27,7 +27,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -182,15 +181,28 @@ type restartState struct {
 	total         int
 }
 
+// instanceStore ist die von Launcher genutzte Teilmenge von *Store —
+// als Interface gehalten (gleiches Muster wie workflows.workflowStore),
+// damit Launcher-Tests einen In-Memory-Fake statt einer echten
+// Postgres-Verbindung einsetzen können, wo es nicht um die Persistenz
+// selbst geht.
+type instanceStore interface {
+	Put(Instance) error
+	Delete(id string) error
+	List() ([]Instance, error)
+}
+
 // Launcher startet/stoppt Node-Instanzen aus dem Katalog als lokale
-// Subprozesse (os/exec) und hält deren {id, type, pid} persistent, damit
-// ein Orchestrator-Neustart noch laufende Kind-Prozesse per PID-Check
-// wiedererkennt statt sie zu verwaisen (UMSETZUNG.md C8).
+// Subprozesse (os/exec) und hält deren {id, type, pid} persistent (seit
+// S4 in Postgres, `instances`-Tabelle, s. store.go — vorher
+// data/instances.json), damit ein Orchestrator-Neustart noch laufende
+// Kind-Prozesse per PID-Check wiedererkennt statt sie zu verwaisen
+// (UMSETZUNG.md C8).
 type Launcher struct {
 	catalog         []CatalogEntry
 	registryURL     string
 	natsURL         string
-	statePath       string
+	store           instanceStore
 	events          EventPublisher
 	nc              NATSRequester
 	restartObserver RestartObserver
@@ -210,20 +222,29 @@ func (l *Launcher) SetRestartObserver(o RestartObserver) {
 	l.restartObserver = o
 }
 
-// New erstellt einen Launcher und lädt einen zuvor persistierten Stand
-// aus dataDir/instances.json — Einträge, deren PID keinem laufenden
-// Prozess mehr entspricht, werden verworfen (der Kind-Prozess kann
-// zwischen zwei Orchestrator-Läufen jederzeit beendet worden sein, das
-// ist kein Fehler). events/nc dürfen nil sein (z. B. in Tests) — nc nil
-// bedeutet "kein Kommandokanal", Start()/Stop() mit einem hostID
-// scheitern dann mit ErrRemoteUnavailable statt einer Nil-Pointer-
-// Panik; rein lokaler Betrieb funktioniert unverändert.
-func New(catalog []CatalogEntry, registryURL, natsURL, dataDir string, events EventPublisher, nc NATSRequester) *Launcher {
+// New erstellt einen Launcher und lädt einen zuvor in store
+// persistierten Stand (S4: `instances`-Tabelle statt
+// data/instances.json) — Einträge, deren PID keinem laufenden Prozess
+// mehr entspricht, werden verworfen (der Kind-Prozess kann zwischen
+// zwei Orchestrator-Läufen jederzeit beendet worden sein, das ist kein
+// Fehler). events/nc dürfen nil sein (z. B. in Tests) — nc nil bedeutet
+// "kein Kommandokanal", Start()/Stop() mit einem hostID scheitern dann
+// mit ErrRemoteUnavailable statt einer Nil-Pointer-Panik; rein lokaler
+// Betrieb funktioniert unverändert. Konkreter *Store-Parameter (statt
+// des intern genutzten instanceStore-Interfaces) der Einfachheit halber
+// für main.go — Tests im Paket selbst rufen stattdessen das
+// unexportierte newWithStore mit einem In-Memory-Fake auf (gleiches
+// Muster wie workflows.NewService/workflowStore).
+func New(catalog []CatalogEntry, registryURL, natsURL string, store *Store, events EventPublisher, nc NATSRequester) *Launcher {
+	return newWithStore(catalog, registryURL, natsURL, store, events, nc)
+}
+
+func newWithStore(catalog []CatalogEntry, registryURL, natsURL string, store instanceStore, events EventPublisher, nc NATSRequester) *Launcher {
 	l := &Launcher{
 		catalog:     catalog,
 		registryURL: registryURL,
 		natsURL:     natsURL,
-		statePath:   filepath.Join(dataDir, "instances.json"),
+		store:       store,
 		events:      events,
 		nc:          nc,
 		instances:   map[string]Instance{},
@@ -306,7 +327,7 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 
 	l.mu.Lock()
 	l.instances[id] = inst
-	if err := l.saveState(); err != nil {
+	if err := l.persistInstanceLocked(id); err != nil {
 		slog.Warn("launcher: failed to persist instance state", "error", err)
 	}
 	l.mu.Unlock()
@@ -375,7 +396,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 				msg, maxCrashRestarts, crashRestartWindow)
 			current.RestartCount = restartCount
 			l.instances[id] = current
-			if err := l.saveState(); err != nil {
+			if err := l.persistInstanceLocked(id); err != nil {
 				slog.Warn("launcher: failed to persist instance state", "error", err)
 			}
 			l.mu.Unlock()
@@ -408,7 +429,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 				current.CrashMessage = fmt.Sprintf("Neustart fehlgeschlagen: %v", err)
 				current.RestartCount = restartCount
 				l.instances[id] = current
-				if saveErr := l.saveState(); saveErr != nil {
+				if saveErr := l.persistInstanceLocked(id); saveErr != nil {
 					slog.Warn("launcher: failed to persist instance state", "error", saveErr)
 				}
 			}
@@ -434,7 +455,7 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 		current.CrashMessage = ""
 		current.RestartCount = restartCount
 		l.instances[id] = current
-		if err := l.saveState(); err != nil {
+		if err := l.persistInstanceLocked(id); err != nil {
 			slog.Warn("launcher: failed to persist instance state", "error", err)
 		}
 		l.mu.Unlock()
@@ -504,7 +525,7 @@ func (l *Launcher) startRemote(nodeType, hostID string, extraEnv map[string]stri
 	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv}
 	l.mu.Lock()
 	l.instances[id] = inst
-	if err := l.saveState(); err != nil {
+	if err := l.persistInstanceLocked(id); err != nil {
 		slog.Warn("launcher: failed to persist instance state", "error", err)
 	}
 	l.mu.Unlock()
@@ -606,7 +627,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 			msg, maxCrashRestarts, crashRestartWindow)
 		current.RestartCount = restartCount
 		l.instances[ev.InstanceID] = current
-		if err := l.saveState(); err != nil {
+		if err := l.persistInstanceLocked(ev.InstanceID); err != nil {
 			slog.Warn("launcher: failed to persist instance state", "error", err)
 		}
 		l.mu.Unlock()
@@ -649,7 +670,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 			current.CrashMessage = fmt.Sprintf("Neustart fehlgeschlagen: %s", errMsg)
 			current.RestartCount = restartCount
 			l.instances[ev.InstanceID] = current
-			if saveErr := l.saveState(); saveErr != nil {
+			if saveErr := l.persistInstanceLocked(ev.InstanceID); saveErr != nil {
 				slog.Warn("launcher: failed to persist instance state", "error", saveErr)
 			}
 		}
@@ -675,7 +696,7 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 	current.CrashMessage = ""
 	current.RestartCount = restartCount
 	l.instances[ev.InstanceID] = current
-	if err := l.saveState(); err != nil {
+	if err := l.persistInstanceLocked(ev.InstanceID); err != nil {
 		slog.Warn("launcher: failed to persist instance state", "error", err)
 	}
 	l.mu.Unlock()
@@ -748,7 +769,7 @@ func (l *Launcher) Stop(id string) error {
 		// gestoppter, später erneut gestarteter Node (neue Instanz-ID)
 		// fängt bei der Bremse wieder bei null an.
 		delete(l.restarts, id)
-		if err := l.saveState(); err != nil {
+		if err := l.store.Delete(id); err != nil {
 			slog.Warn("launcher: failed to persist instance state", "error", err)
 		}
 	}
@@ -810,40 +831,27 @@ func (l *Launcher) findEntry(nodeType string) (CatalogEntry, bool) {
 }
 
 func (l *Launcher) loadState() {
-	data, err := os.ReadFile(l.statePath)
+	saved, err := l.store.List()
 	if err != nil {
-		return // keine Datei -> kein vorheriger Stand, kein Fehler
-	}
-	var saved []Instance
-	if err := json.Unmarshal(data, &saved); err != nil {
-		slog.Warn("launcher: failed to parse persisted instance state", "path", l.statePath, "error", err)
+		slog.Warn("launcher: failed to read persisted instance state", "error", err)
 		return
 	}
 	for _, inst := range saved {
 		if processAlive(inst.PID) {
 			l.instances[inst.ID] = inst
+		} else if err := l.store.Delete(inst.ID); err != nil {
+			slog.Warn("launcher: failed to drop dead instance from persisted state", "id", inst.ID, "error", err)
 		}
-	}
-	if err := l.saveState(); err != nil {
-		slog.Warn("launcher: failed to rewrite instance state", "error", err)
 	}
 }
 
-// saveState schreibt den aktuellen Instanzstand. Aufrufer müssen l.mu
-// bereits halten (Ausnahme: loadState, vor jeder gemeinsamen Nutzung).
-func (l *Launcher) saveState() error {
-	list := make([]Instance, 0, len(l.instances))
-	for _, inst := range l.instances {
-		list = append(list, inst)
-	}
-	data, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(l.statePath), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(l.statePath, data, 0o644)
+// persistInstanceLocked schreibt den aktuellen Stand von id (S4: in die
+// `instances`-Tabelle statt der früheren instances.json-Komplettdatei —
+// ein gezieltes Upsert der einen geänderten Instanz statt eines
+// Voll-Dumps aller Instanzen bei jeder Änderung). Aufrufer muss l.mu
+// bereits halten und id muss in l.instances existieren.
+func (l *Launcher) persistInstanceLocked(id string) error {
+	return l.store.Put(l.instances[id])
 }
 
 // processAlive prüft per Signal 0 (Standard-Unix-Idiom, sendet kein

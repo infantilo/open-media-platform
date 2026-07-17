@@ -30,6 +30,47 @@ func (p *recordingPublisher) snapshot() []sse.Event {
 	return append([]sse.Event{}, p.events...)
 }
 
+// fakeInstanceStore ist ein In-Memory-Test-Double für instanceStore
+// (S4, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — für Tests, denen es
+// nicht um die Postgres-Persistenz selbst geht (die hat store_test.go
+// gegen eine echte Datenbank), gleiches Muster wie workflows_test.go's
+// fakeStore. Eine Instanz kann über zwei Launcher hinweg geteilt werden
+// (newFakeInstanceStore() einmal aufrufen, an beide New()-Aufrufe
+// übergeben), um einen Orchestrator-Neustart zu simulieren, ohne eine
+// echte Datenbank zu brauchen.
+type fakeInstanceStore struct {
+	mu   sync.Mutex
+	data map[string]Instance
+}
+
+func newFakeInstanceStore() *fakeInstanceStore {
+	return &fakeInstanceStore{data: map[string]Instance{}}
+}
+
+func (s *fakeInstanceStore) Put(inst Instance) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[inst.ID] = inst
+	return nil
+}
+
+func (s *fakeInstanceStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, id)
+	return nil
+}
+
+func (s *fakeInstanceStore) List() ([]Instance, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Instance, 0, len(s.data))
+	for _, inst := range s.data {
+		out = append(out, inst)
+	}
+	return out, nil
+}
+
 // sleepyCatalog startet einen echten, kurzlebigen Subprozess, der lang
 // genug lebt, um in Tests beobachtet zu werden — os/exec lässt sich
 // nicht sinnvoll ohne echten Subprozess testen (kein Interface-Seam im
@@ -75,7 +116,7 @@ func disableAutoRestart(t *testing.T) {
 }
 
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
 	if _, err := l.Start("does-not-exist", "", nil); err != ErrUnknownType {
 		t.Fatalf("Start() error = %v, want ErrUnknownType", err)
@@ -84,7 +125,7 @@ func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 
 func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "podman", Command: []string{"true"}}}
-	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(catalog, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
 	if _, err := l.Start("x", "", nil); err != ErrUnsupportedRunner {
 		t.Fatalf("Start() error = %v, want ErrUnsupportedRunner", err)
@@ -92,7 +133,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 }
 
 func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
 	inst, err := l.Start("sleepy", "", nil)
 	if err != nil {
@@ -126,7 +167,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	stopGracePeriod = 500 * time.Millisecond
 	defer func() { stopGracePeriod = original }()
 
-	l := New(stubbornCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(stubbornCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 	inst, err := l.Start("stubborn", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -141,34 +182,41 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 }
 
 func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 	if err := l.Stop("does-not-exist"); err != ErrUnknownInstance {
 		t.Fatalf("Stop() error = %v, want ErrUnknownInstance", err)
 	}
 }
 
+// TestLauncherReloadsStillRunningInstanceAfterRestart läuft seit S4
+// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) gegen eine echte,
+// migrierte Postgres-Datenbank statt gegen data/instances.json — die
+// beiden Launcher (l1/l2, simulieren einen Orchestrator-Neustart) teilen
+// sich denselben *Store auf derselben Datenbankverbindung.
 func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
-	dataDir := t.TempDir()
-	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil, nil)
+	store := NewStore(testDB(t))
+	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", store, nil, nil)
 	inst, err := l1.Start("sleepy", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
 	defer func() { _ = l1.Stop(inst.ID) }()
 
-	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", dataDir, nil, nil)
+	l2 := New(sleepyCatalog(), "http://registry", "nats://nats", store, nil, nil)
 	list := l2.List()
 	if len(list) != 1 || list[0].ID != inst.ID || list[0].PID != inst.PID {
 		t.Fatalf("List() after restart = %+v, want the still-running instance %+v", list, inst)
 	}
 }
 
+// TestLauncherDropsDeadInstanceAfterRestart — gleicher Grund wie oben:
+// echte Datenbank statt Datei, S4.
 func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 	disableAutoRestart(t)
-	dataDir := t.TempDir()
+	store := NewStore(testDB(t))
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
-	l1 := New(quickExit, "http://registry", "nats://nats", dataDir, nil, nil)
+	l1 := New(quickExit, "http://registry", "nats://nats", store, nil, nil)
 	inst, err := l1.Start("quick", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -182,7 +230,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 		t.Fatal("quick-exit process did not terminate in time")
 	}
 
-	l2 := New(quickExit, "http://registry", "nats://nats", dataDir, nil, nil)
+	l2 := New(quickExit, "http://registry", "nats://nats", store, nil, nil)
 	if list := l2.List(); len(list) != 0 {
 		t.Errorf("List() after restart = %+v, want empty (dead instance dropped)", list)
 	}
@@ -201,7 +249,7 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 		},
 		Env: map[string]string{"OMP_CUSTOM": "from-catalog"},
 	}}
-	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil, nil)
+	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil)
 
 	inst, err := l.Start("envdump", "", nil)
 	if err != nil {
@@ -256,7 +304,7 @@ func TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars(t *testing.T) {
 		},
 		Env: map[string]string{"OMP_CUSTOM": "from-catalog", "OMP_WIDTH": "640"},
 	}}
-	l := New(catalog, "http://registry:8010", "nats://nats:4222", t.TempDir(), nil, nil)
+	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil)
 
 	inst, err := l.Start("envdump2", "", map[string]string{
 		"OMP_WIDTH":       "1280",   // überschreibt den Katalog-Wert
@@ -300,7 +348,7 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 		Command: []string{"/bin/sh", "-c", "echo boom >&2; exit 1"},
 	}}
 	pub := &recordingPublisher{}
-	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
+	l := newWithStore(crashing, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil)
 
 	inst, err := l.Start("crashy", "", nil)
 	if err != nil {
@@ -394,7 +442,7 @@ func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
 	}}
 	pub := &recordingPublisher{}
 	obs := &recordingRestartObserver{}
-	l := New(catalog, "http://registry", "nats://nats", t.TempDir(), pub, nil)
+	l := newWithStore(catalog, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil)
 	l.SetRestartObserver(obs)
 
 	inst, err := l.Start("flaky", "", nil)
@@ -464,7 +512,7 @@ func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 		Command: []string{"/bin/sh", "-c", "exit 1"},
 	}}
 	pub := &recordingPublisher{}
-	l := New(crashing, "http://registry", "nats://nats", t.TempDir(), pub, nil)
+	l := newWithStore(crashing, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil)
 
 	inst, err := l.Start("loopy", "", nil)
 	if err != nil {
@@ -528,7 +576,7 @@ func (f *fakeNATSRequester) RequestBytes(subject string, data []byte, timeout ti
 }
 
 func TestLauncherStartRemoteWithoutNATSReturnsError(t *testing.T) {
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, nil)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
 	if _, err := l.Start("sleepy", "host-1", nil); err != ErrRemoteUnavailable {
 		t.Fatalf("Start() error = %v, want ErrRemoteUnavailable", err)
@@ -537,7 +585,7 @@ func TestLauncherStartRemoteWithoutNATSReturnsError(t *testing.T) {
 
 func TestLauncherStartRemoteSendsCorrectSubjectAndSucceeds(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	// Remote-Start prüft nicht gegen den eigenen (hier: lokalen)
 	// Katalog — der Host-Agent hat seinen eigenen, s. Paketkommentar —
@@ -569,7 +617,7 @@ func TestLauncherStartRemoteSendsCorrectSubjectAndSucceeds(t *testing.T) {
 
 func TestLauncherStartRemoteFailureResponse(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: false, Error: "unknown catalog type"}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	if _, err := l.Start("omp-source", "host-1", nil); err == nil {
 		t.Fatal("Start() error = nil, want an error for a failed remote response")
@@ -581,7 +629,7 @@ func TestLauncherStartRemoteFailureResponse(t *testing.T) {
 
 func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
@@ -625,7 +673,7 @@ func TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
 	pub := &recordingPublisher{}
 	obs := &recordingRestartObserver{}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), pub, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), pub, fake)
 	l.SetRestartObserver(obs)
 
 	inst, err := l.Start("omp-source", "host-1", map[string]string{"OMP_WIDTH": "1280"})
@@ -688,7 +736,7 @@ func TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1111}}
 	pub := &recordingPublisher{}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), pub, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), pub, fake)
 
 	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
@@ -729,7 +777,7 @@ func TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 // Race zwischen Stop() und Prozessende) darf keinen Neustart auslösen.
 func TestHandleRemoteExitIgnoresUnknownInstance(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	l.HandleRemoteExit("host-1", exitEventJSON(t, "does-not-exist", 1, ""))
 
@@ -747,7 +795,7 @@ func TestHandleRemoteExitIgnoresUnknownInstance(t *testing.T) {
 // Hosts einen Neustart auslösen).
 func TestHandleRemoteExitIgnoresEventFromWrongHost(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
@@ -772,7 +820,7 @@ func TestHandleRemoteExitIgnoresEventFromWrongHost(t *testing.T) {
 func TestHandleRemoteExitStopDuringBackoffSkipsRestart(t *testing.T) {
 	shortCrashRestartTiming(t, 200*time.Millisecond, time.Minute)
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
-	l := New(sleepyCatalog(), "http://registry", "nats://nats", t.TempDir(), nil, fake)
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake)
 
 	inst, err := l.Start("omp-source", "host-1", nil)
 	if err != nil {
