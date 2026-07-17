@@ -5847,3 +5847,41 @@ bekommen.
 (Export/Import), Teil 3 (Settings-Registry, wartet auf Antwort zu
 offener Frage 2 „was ist mit Latenz gemeint"), Teil 4 (Workflow-Scope-
 Spalte, Passwort-Selbstservice, AD/LDAP) bleiben wie geplant offen.
+
+
+## 2026-07-17 (Nachtrag 9) — Grundsatzentscheidung Kapitel 16.5.1/16.5.3:
+Inter-Host-Fabrics (RDMA/Remote Memory) entschieden
+
+Zwei offene Fragen aus `docs/END-GOAL-FEATURES.md` §16.5, gestellt
+direkt durch den Nutzer (kein Teil einer laufenden Implementierungs-
+sitzung, reine Entscheidungsfrage):
+
+1. **16.5.1 (Grundsatzentscheidung):** MXL-native Fabrics (vendorte
+   libfabric-Bibliothek `third_party/mxl/lib/fabrics/ofi/`, echtes
+   One-Sided-RDMA-Write, TCP-Software-Provider sofort ohne
+   RDMA-Hardware testbar) statt eines eigenständigen, in
+   `ARCHITECTURE.md` §6.6 skizzierten `rdma-core`/`libibverbs`-Moduls.
+   **Entschieden: MXL-native Fabrics**, wie in §16.3 empfohlen —
+   weniger eigener Code/Wartung (gleiche Begründung wie C4s „MXL statt
+   eigenem Zero-Copy-Transport", 2026-07-09), sofort ohne
+   Sonder-Hardware verifizierbar, gleicher Migrationspfad zu echter
+   RoCEv2-Hardware bleibt über einen reinen Provider-Wechsel
+   (`--provider tcp` → `verbs`/`efa`) erhalten, keine Architekturschwenk
+   nötig.
+2. **16.5.3 (Hardware-Ausblick):** Nutzer bestätigt, dass echte
+   RoCEv2-Hardware für den Regelbetrieb **fest eingeplant** ist — der
+   TCP-Software-Provider ist damit ausdrücklich nur die Übergangslösung
+   für Demo-/Testphasen ohne verfügbare NICs, nicht die dauerhafte
+   Zielarchitektur. Das schärft §16.4 Teil 4 (`verbs`/`efa`-Provider)
+   von „später, falls Hardware verfügbar" zu einem festen, nicht
+   optionalen Phasenplan-Punkt.
+
+**Folgearbeit (dokumentiert, noch nicht umgesetzt):**
+`ARCHITECTURE.md` §6.6 auf diese Entscheidung umgeschrieben (eigenes
+`rdma-core`-Modul durch `omp-mediaio::fabrics` auf libfabric-Basis
+ersetzt, TCP-Provider jetzt / Hardware-Beschaffung für Regelbetrieb
+bereits fest vorgesehen), `docs/END-GOAL-FEATURES.md` §16.5 als
+beantwortet markiert. Die eigentliche Implementierung (Kapitel 16.4
+Teil 0: Build aktivieren + Spike) ist damit **nicht** gestartet —
+bleibt eigene Sitzung, gated auf Priorität laut Kapitel 18.
+

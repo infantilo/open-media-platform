@@ -2903,26 +2903,30 @@ Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
 - **Teil 3 — echte Mehr-Host-Verifikation:** sobald zwei physische
   Hosts verfügbar sind (auch ohne RDMA-NIC, TCP-Provider reicht für
   Funktionsnachweis) — Latenzvergleich gegen den bestehenden SRT-Pfad.
-- **Teil 4 (später, Hardware-abhängig):** `verbs`/`efa`-Provider mit
-  echter RoCEv2-Hardware, sobald verfügbar — reine
-  Konfigurationsänderung laut 16.3.
+- **Teil 4 (fest eingeplant, nicht optional — s. 16.5.3):**
+  `verbs`/`efa`-Provider mit echter RoCEv2-Hardware; Hardware-
+  Beschaffung für Regelbetrieb ist bereits entschieden, dieser Teil
+  folgt sobald sie verfügbar ist — reine Konfigurationsänderung laut
+  16.3, kein Architekturwechsel.
 
 ### 16.5 Offene Fragen an den Projektinhaber
 
-1. **Grundsatzentscheidung:** MXL-native Fabrics (Empfehlung oben)
-   statt des in `ARCHITECTURE.md` §6.6 skizzierten eigenständigen
-   `rdma-core`-Moduls — zustimmen, oder soll §6.6s ursprünglicher Plan
-   weiterverfolgt werden (z. B. weil dort bereits mehr Detail-Design
-   existiert)? `ARCHITECTURE.md` §6.6 sollte im Zustimmungsfall auf
-   diese Entscheidung aktualisiert werden.
+1. **Grundsatzentscheidung — ENTSCHIEDEN (2026-07-17, s.
+   `docs/decisions.md` Nachtrag 9):** MXL-native Fabrics (Empfehlung
+   oben) statt des in `ARCHITECTURE.md` §6.6 skizzierten
+   eigenständigen `rdma-core`-Moduls. `ARCHITECTURE.md` §6.6 wurde
+   entsprechend umgeschrieben. Umsetzung (Kapitel 16.4 Teil 0) noch
+   nicht gestartet.
 2. Priorität relativ zu Kapitel 15 (Multi-Res) und den übrigen
    `frage an fabel.txt`-Punkten — s. Kapitel 18 (konsolidierte
    Priorisierung), dort als niedrigere Priorität eingeordnet
    (Begründung dort).
-3. Reicht der TCP-Software-Provider als **dauerhafte** Lösung für
-   Hosts ohne RDMA-NIC (dann ist „echtes RDMA" nur ein
-   Leistungsversprechen für später), oder ist eine spätere
-   Hardware-Beschaffung für Regelbetrieb ohnehin eingeplant?
+3. **Hardware-Ausblick — ENTSCHIEDEN (2026-07-17):** echte
+   RoCEv2-Hardware ist für den Regelbetrieb fest eingeplant, der
+   TCP-Software-Provider ist ausdrücklich nur Übergangslösung für
+   Demo-/Testphasen. Kapitel 16.4 Teil 4 (`verbs`/`efa`-Provider) ist
+   damit fester, nicht optionaler Phasenplan-Punkt, kein „falls
+   Hardware verfügbar".
 
 ---
 

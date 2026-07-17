@@ -827,73 +827,83 @@ wie MXL: „Default aus, baut ohne geklontes Repo"). **Phase:** P2/P4, als
 weiterer Ingest-/Gateway-Node-Typ neben §13.4, unabhängig von
 Community-Fortschritt baubar.
 
-### 6.6 RDMA/RoCEv2 — konkretisierter Aktivierungspfad (geplant ab P2/D)
+### 6.6 Inter-Host-RDMA/Remote-Memory — MXL-native Fabrics (geplant ab P2/D)
 
-**Anforderung (2026-07-13):** Der bisherige RDMA-Hinweis oben („Opt-in
-pro Node-Paar, nicht Netz-weiter Standard") „fertig definieren" —
-bisher nur als Grundsatz benannt, kein konkreter Mechanismus.
+**Anforderung (2026-07-13, konkretisiert 2026-07-17):** Der bisherige
+RDMA-Hinweis oben („Opt-in pro Node-Paar, nicht Netz-weiter Standard")
+„fertig definieren" — bisher nur als Grundsatz benannt, kein konkreter
+Mechanismus.
+
+**Grundsatzentscheidung (2026-07-17, s. `docs/decisions.md` Nachtrag
+9, Details/Begründung in `docs/END-GOAL-FEATURES.md` Kapitel 16):**
+kein eigenständiges `rdma-core`/`libibverbs`-Modul (frühere Version
+dieses Abschnitts). Stattdessen **MXL-native Fabrics**:
+`third_party/mxl/lib/fabrics/ofi/` ist eine bereits vendorte,
+vollständige Bibliothek `mxl-fabrics` auf Basis von **libfabric**
+(OFI) mit echtem One-Sided-RDMA-Write zwischen Hosts
+(`tools/mxl-fabrics-demo/demo.cpp`), inkl. eines reinen
+Software-Providers (`MXL_SHARING_PROVIDER_TCP`, `mxl/fabrics.h:50–57`),
+der ohne RDMA-Hardware testbar ist. Begründung: weniger eigener Code
+(gleiches Prinzip wie C4 „MXL statt eigenem Zero-Copy-Transport"),
+sofort ohne Sonder-Hardware verifizierbar, Migrationspfad zu echter
+RoCEv2-Hardware bleibt ein reiner Provider-Wechsel
+(`--provider tcp` → `verbs`/`efa`), kein Architekturschwenk. Aktuell
+nicht gebaut (`MXL_ENABLE_FABRICS_OFI` steht in
+`third_party/mxl/CMakeLists.txt` auf `OFF`; nötig: dieses Flag `ON` +
+`libfabric-dev`, im Debian-Bookworm-Repo bereits verfügbar).
+
+**Hardware-Ausblick (2026-07-17 entschieden):** echte RoCEv2-Hardware
+für den Regelbetrieb ist **fest eingeplant**, nicht optional — der
+TCP-Provider ist ausdrücklich nur die Übergangslösung für Hosts/Phasen
+ohne verfügbare RDMA-NIC.
 
 1. **Auslöser:** ein explizites Feld am Verbindungs-Template-Eintrag
-   einer Workflow-Kante (§6.2), `transportHint: "rdma"` — wirkt nur, wenn
-   beide Endpunkt-Hosts in ihrem Host-Agent-Inventar (§18.4) RDMA-
-   Fähigkeit melden: eine neue Inventar-Erweiterung `rdmaFabricId`
-   (welchem lossless-konfigurierten Fabric-Segment gehört dieser Host an
-   — zwei Hosts sind nur dann RDMA-fähig zueinander, wenn dieselbe ID).
-2. **`omp-mediaio`-Modul `rdma`**, Feature-gated wie `mxl`/`ndi`, gleiche
-   Trait-Form. **Backend nicht jetzt festlegen (nicht raten):** zwei
-   Kandidaten für die Umsetzung — vendor-neutrales `libibverbs`/
-   `rdma-core` (offen, jede RoCEv2-NIC, keine Vendor-Bindung) versus
-   NVIDIA Rivermax/GPUDirect (proprietär, an das in §10 Punkt 4 bereits
-   benannte NVIDIA-Tiger-Team-Risiko gekoppelt). **Empfehlung:**
-   `libibverbs`/`rdma-core` als Standardpfad (hält das
-   Vendor-Neutralitäts-Versprechen aus §10.2/10.4), Rivermax/GPUDirect
-   nur als zusätzliche, noch optionalere Beschleunigung hinter demselben
-   Trait für konkret NVIDIA-bestückte Hosts — Entscheidung bei der
-   D-Phase-Umsetzung anhand des dann aktuellen Ökosystem-Stands treffen.
-3. **Claim/Release wie I/O-Karten, nicht wie CPU.** Eine RDMA-qualifizierte
-   Netzwerkverbindung zwischen zwei Hosts ist eine diskrete, exklusive
-   Ressource (endliche garantierte Bandbreite eines lossless-konfigurierten
-   Fabrics), keine kontinuierlich auslastbare Größe — Placement-Engine
-   behandelt eine `rdma`-Kante als harte Platzierungsbedingung
-   **zwischen den beiden verbundenen Nodes** (beide müssen im selben
-   `rdmaFabricId`-Segment landen).
+   einer Workflow-Kante (§6.2), `transportHint: "fabrics"` +
+   `fabricsProvider: tcp|verbs|efa` — wirkt nur, wenn beide
+   Endpunkt-Hosts in ihrem Host-Agent-Inventar (§18.4) die passende
+   Fabrics-Fähigkeit melden: eine Inventar-Erweiterung `rdmaFabricId`
+   (welchem lossless-konfigurierten Fabric-Segment gehört dieser Host
+   an — zwei Hosts sind nur dann RDMA-beschleunigt zueinander, wenn
+   dieselbe ID; für `tcp` genügt einfache Netzwerk-Erreichbarkeit).
+2. **`omp-mediaio::fabrics`-Modul**, Feature-gated wie `mxl`/`ndi`,
+   bietet pro Flow einen `FabricsInitiator`/`FabricsTarget` analog zu
+   `MxlVideoInput`/`Output` (gleiche Trait-Form, keine neue,
+   eigenständige Transport-Abstraktion). Provider-Wahl
+   (`tcp`/`verbs`/`efa`) ist reine Konfiguration desselben Moduls.
+3. **Claim/Release wie I/O-Karten, nicht wie CPU.** Eine
+   RDMA-beschleunigte Fabrics-Verbindung (`verbs`/`efa`) zwischen zwei
+   Hosts ist eine diskrete, exklusive Ressource (endliche garantierte
+   Bandbreite eines lossless-konfigurierten Fabrics), keine
+   kontinuierlich auslastbare Größe — Placement-Engine behandelt eine
+   `fabrics`-Kante mit `verbs`/`efa`-Provider als harte
+   Platzierungsbedingung **zwischen den beiden verbundenen Nodes**
+   (beide müssen im selben `rdmaFabricId`-Segment landen); der
+   `tcp`-Provider hat keine solche Bedingung.
 4. **Fallback ist weich, nicht hart.** Anders als der I/O-Karten-Fall
-   (§6.1: fehlende Karte → Start-Ablehnung) ist RDMA reine
-   Performance-Option: lässt sich `transportHint: rdma` zum
-   Platzierungszeitpunkt nicht erfüllen, fällt die Kante automatisch auf
-   MXL (gleicher Host) bzw. ST 2110 (sonst) zurück, mit Advisory-Log,
-   kein Start-Abbruch — Signal-Präsenz geht nie verloren.
+   (§6.1: fehlende Karte → Start-Ablehnung) ist die
+   RDMA-Beschleunigung (`verbs`/`efa`) reine Performance-Option: lässt
+   sich zum Platzierungszeitpunkt nicht erfüllen, fällt die Kante
+   automatisch auf den `tcp`-Provider bzw. ST 2110/SRT (§6.5) zurück,
+   mit Advisory-Log, kein Start-Abbruch — Signal-Präsenz geht nie
+   verloren. ST 2110/SRT bleibt in jedem Fall als Option erhalten.
 5. **Node-Contract:** keine neue Pflicht — rein additive
    Platzierungshinweis-Deklaration, nachrüstbar.
 
-**Standards-Abdeckung:** keine (RoCEv2/RDMA-Konfiguration ist
-Netzwerk-Engineering, kein NMOS-Standard). **Testbarkeit:** Fallback-/
-Claim-Logik auf der Single-Host-Dev-Maschine mit fingierten
-`rdmaFabricId`-Tags simulierbar (gleiches Muster wie §6.1); echte
-RoCEv2-Verifikation braucht ein lossless-konfiguriertes Fabric (§8 nennt
-das bereits als Unwegbarkeit). **Phase:** P2/D, zusammen mit §6.1s
-I/O-Karten-Claim/Release (gleiche Mechanik, sinnvoll zusammen gebaut).
-
-**Nachtrag (2026-07-17) — Alternative zu Punkt 2 gefunden, ändert die
-Backend-Frage:** `third_party/mxl/lib/fabrics/ofi/` ist eine bereits
-vendorte, vollständige (kein Stub) Bibliothek `mxl-fabrics` auf Basis
-von **libfabric** (OFI) mit echtem One-Sided-RDMA-Write zwischen Hosts
-(`tools/mxl-fabrics-demo/demo.cpp`) — und mit einem reinen
-Software-Provider (`MXL_SHARING_PROVIDER_TCP`,
-`mxl/fabrics.h:50–57`), der **ohne RDMA-Hardware testbar ist** (löst
-das oben unter „Testbarkeit" genannte Hardware-Problem für den
-Funktionsnachweis, nicht für die Hardware-Beschleunigung selbst).
-Aktuell nicht gebaut (`MXL_ENABLE_FABRICS_OFI` steht in
-`third_party/mxl/CMakeLists.txt` auf `OFF`). Damit steht neben
-`libibverbs`/`rdma-core` (Punkt 2 oben) und Rivermax/GPUDirect ein
-**dritter Kandidat** im Raum, der MXL-nativ ist (keine neue,
-eigenständige Transport-Abstraktion nötig, passt direkt auf die
-bestehende `MxlVideoInput`/`Output`-API) und sofort mit dem
-TCP-Provider verifizierbar wäre. Vollständige Gegenüberstellung +
-Empfehlung (MXL-Fabrics statt eigenem `rdma-core`-Modul) in
-`docs/END-GOAL-FEATURES.md` Kapitel 16 — Grundsatzentscheidung dort als
-offene Frage 16.5.1 markiert, hier nur die Cross-Referenz. Bei
-Zustimmung wird dieser §6.6-Abschnitt entsprechend umgeschrieben.
+**Standards-Abdeckung:** keine für RoCEv2/RDMA-Konfiguration
+(Netzwerk-Engineering, kein NMOS-Standard); OFI/libfabric selbst ist
+eine offene, vendor-neutrale Abstraktion (nicht MXL-Eigenbau).
+**Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine über den
+`tcp`-Provider (zwei `MxlContext`-Domains, zwei Prozesse/Netzwerk-
+Namespaces simulieren zwei Hosts) — löst das früher offene
+Hardware-Testproblem für den Funktionsnachweis; echte
+RoCEv2-Beschleunigungs-Verifikation (`verbs`/`efa`) braucht weiterhin
+ein lossless-konfiguriertes Fabric (§8 nennt das bereits als
+Unwegbarkeit), ist aber laut Hardware-Ausblick fest eingeplant.
+**Phase:** P2/D; Reihenfolge/Details s.
+`docs/END-GOAL-FEATURES.md` Kapitel 16.4 (Teil 0: Build+Spike, Teil 1:
+Grundmodul, Teil 2: Placement-Integration, Teil 3: echte
+Mehr-Host-Verifikation, Teil 4: `verbs`/`efa` mit echter Hardware,
+fest eingeplant).
 
 ## 7. Phasenplan
 
