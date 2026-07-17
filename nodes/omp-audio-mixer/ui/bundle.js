@@ -1,14 +1,18 @@
 // Node-UI-Bundle des Audiomischers (UMSETZUNG.md C11/K4-Teil-1,
-// ARCHITECTURE.md §13.2, docs/END-GOAL-FEATURES.md §4.3c/§4.4 Teil 1):
-// vertikale Kanalzüge auf ui/kit (<omp-fader> für Gain, <omp-knob> für
-// die 3 EQ-Bänder, <omp-button> für Mute/AFV/Override, <omp-meter> für
+// ARCHITECTURE.md §13.2, docs/END-GOAL-FEATURES.md §4.3c/§4.4 Teil 1,
+// §4.6 Teil 2 2026-07-17): vertikale Kanalzüge auf ui/kit (<omp-fader>
+// für Gain, <omp-knob> für die 3 EQ-Bänder + Kompressor + Freq/Q,
+// <omp-button> für Mute/AFV/Override/Comp-Enable, <omp-meter> für
 // Pegel), gruppiert unter <omp-panel-section label="Audio Mixer">
 // (K3/K4-Feinschliff, §12.3-Referenzvergleich) statt Zahlenfeldern +
 // "EQ setzen"-Button. Gleiche generische
 // Node-Proxy-API wie zuvor (/api/v1/nodes/<id>/params/<name>,
 // /methods/<name>) — reines UI-Bundle + der in `pipeline.rs`/`levels.rs`
-// neu hinzugekommene Metering-Pfad (`levelsUrl`-SSE), sonst KEIN neues
-// Routing (Aux/Gruppen/Kompressor/Limiter sind Teil 2/3).
+// neu hinzugekommene Metering-Pfad (`levelsUrl`-SSE). Kompressor pro
+// Kanal + Master-Limiter (§4.6 Teil 2) sind neu, in eigenen
+// aufklappbaren `<details>`-Abschnitten (gleiches Muster wie AFV) statt
+// dauerhaft sichtbarer Knopfreihen — Aux/Gruppen bleiben weiterhin
+// spätere Teile.
 //
 // Gleiches Flacker-Vermeidungsmuster wie vorher: pro Kanal wird das
 // Element genau einmal gebaut (`createChannelElement`), Polls schreiben
@@ -62,10 +66,19 @@ class OmpAudioMixerPanel extends HTMLElement {
       .fader-row { display: flex; gap: 6px; align-items: flex-end; }
       .strip omp-button { width: 100%; height: 24px; font-size: 10px; }
       .remove-btn { font-size: 9px; color: var(--omp-text-dim, #9aa0a6); background: none; border: none; cursor: pointer; text-decoration: underline; }
-      details.afv { width: 100%; font-size: 10px; }
-      details.afv summary { cursor: pointer; color: var(--omp-text-dim, #9aa0a6); }
+      details.afv, details.eq-detail, details.dynamics { width: 100%; font-size: 10px; }
+      details.afv summary, details.eq-detail summary, details.dynamics summary,
+      details.master-limiter summary {
+        cursor: pointer; color: var(--omp-text-dim, #9aa0a6);
+      }
       details.afv .row { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
       details.afv input, details.afv select { width: 100%; font-size: 10px; }
+      details.eq-detail .band-row, details.dynamics .knob-row, details.master-limiter .knob-row {
+        display: flex; gap: 4px; margin-top: 4px; justify-content: center;
+      }
+      details.eq-detail .band-label { font-size: 9px; color: var(--omp-text-dim, #9aa0a6); text-align: center; margin-top: 2px; }
+      details.dynamics omp-button, details.master-limiter omp-button { width: 100%; height: 20px; font-size: 9px; margin-top: 2px; }
+      details.master-limiter { width: 100%; font-size: 10px; margin-top: 6px; }
       .add-btn { align-self: flex-start; margin-bottom: var(--omp-space-2, 8px); }
       p.empty { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); }
     `;
@@ -82,7 +95,52 @@ class OmpAudioMixerPanel extends HTMLElement {
     masterLabel.textContent = "Master";
     const masterMeter = document.createElement("omp-meter");
     masterMeter.style.height = "160px";
-    master.append(masterLabel, masterMeter);
+
+    // §4.6 Teil 2: Master-Limiter — gleiches Muster wie der
+    // Kanal-Kompressor, aber nur einmal (kein `channel.<id>.`-Namensraum).
+    const masterLimiterDetail = document.createElement("details");
+    masterLimiterDetail.className = "master-limiter";
+    const masterLimiterSummary = document.createElement("summary");
+    masterLimiterSummary.textContent = "Limiter";
+    const masterLimiterEnableBtn = document.createElement("omp-button");
+    masterLimiterEnableBtn.textContent = "Limiter Ein";
+    masterLimiterEnableBtn.setAttribute("color", "preset");
+    let masterLimiterEnabled = false;
+    const masterLimiterRow = document.createElement("div");
+    masterLimiterRow.className = "knob-row";
+    const masterThresholdKnob = document.createElement("omp-knob");
+    masterThresholdKnob.setAttribute("min", "-60");
+    masterThresholdKnob.setAttribute("max", "0");
+    masterThresholdKnob.setAttribute("default-value", "-6");
+    masterThresholdKnob.textContent = "Thr";
+    const masterRatioKnob = document.createElement("omp-knob");
+    masterRatioKnob.setAttribute("min", "1");
+    masterRatioKnob.setAttribute("max", "20");
+    masterRatioKnob.setAttribute("default-value", "10");
+    masterRatioKnob.textContent = "Ratio";
+    const masterMakeupKnob = document.createElement("omp-knob");
+    masterMakeupKnob.setAttribute("min", "0");
+    masterMakeupKnob.setAttribute("max", "24");
+    masterMakeupKnob.setAttribute("default-value", "0");
+    masterMakeupKnob.textContent = "Makeup";
+    masterLimiterRow.append(masterThresholdKnob, masterRatioKnob, masterMakeupKnob);
+    const applyMasterLimiter = () =>
+      call("setMasterLimiter", {
+        enabled: masterLimiterEnabled,
+        thresholdDb: masterThresholdKnob.value,
+        ratio: masterRatioKnob.value,
+        makeupDb: masterMakeupKnob.value,
+      });
+    masterLimiterEnableBtn.addEventListener("click", () => {
+      masterLimiterEnabled = !masterLimiterEnabled;
+      applyMasterLimiter().then(pollMaster);
+    });
+    masterThresholdKnob.addEventListener("change", applyMasterLimiter);
+    masterRatioKnob.addEventListener("change", applyMasterLimiter);
+    masterMakeupKnob.addEventListener("change", applyMasterLimiter);
+    masterLimiterDetail.append(masterLimiterSummary, masterLimiterEnableBtn, masterLimiterRow);
+
+    master.append(masterLabel, masterMeter, masterLimiterDetail);
 
     const console_ = document.createElement("div");
     console_.className = "console";
@@ -164,6 +222,92 @@ class OmpAudioMixerPanel extends HTMLElement {
       eqMidKnob.addEventListener("change", applyEq);
       eqHighKnob.addEventListener("change", applyEq);
 
+      // §4.6: Frequenz+Bandbreite je Band, aufklappbar (nicht dauerhaft
+      // sichtbar wie die Gain-Knöpfe oben — drei zusätzliche Regler pro
+      // Band wären für den Normalfall "kurz am Gain drehen" zu viel).
+      const eqDetail = document.createElement("details");
+      eqDetail.className = "eq-detail";
+      const eqSummary = document.createElement("summary");
+      eqSummary.textContent = "EQ Freq/Q";
+      const makeBandFreqWidth = (bandLabel) => {
+        const row = document.createElement("div");
+        row.className = "band-row";
+        const freqKnob = document.createElement("omp-knob");
+        freqKnob.setAttribute("min", "20");
+        freqKnob.setAttribute("max", "20000");
+        freqKnob.textContent = "Freq";
+        const widthKnob = document.createElement("omp-knob");
+        widthKnob.setAttribute("min", "10");
+        widthKnob.setAttribute("max", "20000");
+        widthKnob.textContent = "Q";
+        trackDrag(freqKnob);
+        trackDrag(widthKnob);
+        row.append(freqKnob, widthKnob);
+        const label = document.createElement("div");
+        label.className = "band-label";
+        label.textContent = bandLabel;
+        const apply = () =>
+          call(`channel.${id}.setEqBand`, {
+            band: bandLabel === "Lo" ? "low" : bandLabel === "Mid" ? "mid" : "high",
+            freq: freqKnob.value,
+            width: widthKnob.value,
+          });
+        freqKnob.addEventListener("change", apply);
+        widthKnob.addEventListener("change", apply);
+        eqDetail.append(row, label);
+        return { freqKnob, widthKnob };
+      };
+      const eqLowBand = makeBandFreqWidth("Lo");
+      const eqMidBand = makeBandFreqWidth("Mid");
+      const eqHighBand = makeBandFreqWidth("High");
+      eqDetail.prepend(eqSummary);
+
+      // §4.6 Teil 2: Kompressor pro Kanal, ebenfalls aufklappbar.
+      const compDetail = document.createElement("details");
+      compDetail.className = "dynamics";
+      const compSummary = document.createElement("summary");
+      compSummary.textContent = "Comp";
+      const compEnableBtn = document.createElement("omp-button");
+      compEnableBtn.textContent = "Comp Ein";
+      compEnableBtn.setAttribute("color", "preset");
+      let compEnabled = false;
+      const compRow = document.createElement("div");
+      compRow.className = "knob-row";
+      const compThresholdKnob = document.createElement("omp-knob");
+      compThresholdKnob.setAttribute("min", "-60");
+      compThresholdKnob.setAttribute("max", "0");
+      compThresholdKnob.setAttribute("default-value", "-20");
+      compThresholdKnob.textContent = "Thr";
+      const compRatioKnob = document.createElement("omp-knob");
+      compRatioKnob.setAttribute("min", "1");
+      compRatioKnob.setAttribute("max", "20");
+      compRatioKnob.setAttribute("default-value", "2");
+      compRatioKnob.textContent = "Ratio";
+      const compMakeupKnob = document.createElement("omp-knob");
+      compMakeupKnob.setAttribute("min", "0");
+      compMakeupKnob.setAttribute("max", "24");
+      compMakeupKnob.setAttribute("default-value", "0");
+      compMakeupKnob.textContent = "Makeup";
+      trackDrag(compThresholdKnob);
+      trackDrag(compRatioKnob);
+      trackDrag(compMakeupKnob);
+      compRow.append(compThresholdKnob, compRatioKnob, compMakeupKnob);
+      const applyComp = () =>
+        call(`channel.${id}.setComp`, {
+          enabled: compEnabled,
+          thresholdDb: compThresholdKnob.value,
+          ratio: compRatioKnob.value,
+          makeupDb: compMakeupKnob.value,
+        });
+      compEnableBtn.addEventListener("click", () => {
+        compEnabled = !compEnabled;
+        applyComp().then(poll);
+      });
+      compThresholdKnob.addEventListener("change", applyComp);
+      compRatioKnob.addEventListener("change", applyComp);
+      compMakeupKnob.addEventListener("change", applyComp);
+      compDetail.append(compSummary, compEnableBtn, compRow);
+
       const faderRow = document.createElement("div");
       faderRow.className = "fader-row";
       const fader = document.createElement("omp-fader");
@@ -216,7 +360,7 @@ class OmpAudioMixerPanel extends HTMLElement {
       removeBtn.textContent = "entfernen";
       removeBtn.addEventListener("click", () => call("removeChannel", { channelId: id }).then(poll));
 
-      el.append(labelEl, sourceSelect, eqRow, faderRow, muteBtn, afv, removeBtn);
+      el.append(labelEl, sourceSelect, eqRow, eqDetail, compDetail, faderRow, muteBtn, afv, removeBtn);
 
       return {
         el,
@@ -225,6 +369,16 @@ class OmpAudioMixerPanel extends HTMLElement {
         eqLowKnob,
         eqMidKnob,
         eqHighKnob,
+        eqLowBand,
+        eqMidBand,
+        eqHighBand,
+        compEnableBtn,
+        compThresholdKnob,
+        compRatioKnob,
+        compMakeupKnob,
+        set compEnabled(v) {
+          compEnabled = v;
+        },
         fader,
         muteBtn,
         set muted(v) {
@@ -264,6 +418,17 @@ class OmpAudioMixerPanel extends HTMLElement {
       if (!dragging.has(refs.eqLowKnob)) refs.eqLowKnob.value = data.eqLow ?? 0;
       if (!dragging.has(refs.eqMidKnob)) refs.eqMidKnob.value = data.eqMid ?? 0;
       if (!dragging.has(refs.eqHighKnob)) refs.eqHighKnob.value = data.eqHigh ?? 0;
+      if (!dragging.has(refs.eqLowBand.freqKnob)) refs.eqLowBand.freqKnob.value = data.eqLowFreq ?? 100;
+      if (!dragging.has(refs.eqLowBand.widthKnob)) refs.eqLowBand.widthKnob.value = data.eqLowWidth ?? 200;
+      if (!dragging.has(refs.eqMidBand.freqKnob)) refs.eqMidBand.freqKnob.value = data.eqMidFreq ?? 1000;
+      if (!dragging.has(refs.eqMidBand.widthKnob)) refs.eqMidBand.widthKnob.value = data.eqMidWidth ?? 1000;
+      if (!dragging.has(refs.eqHighBand.freqKnob)) refs.eqHighBand.freqKnob.value = data.eqHighFreq ?? 8000;
+      if (!dragging.has(refs.eqHighBand.widthKnob)) refs.eqHighBand.widthKnob.value = data.eqHighWidth ?? 4000;
+      refs.compEnableBtn.active = !!data.compEnabled;
+      refs.compEnabled = !!data.compEnabled;
+      if (!dragging.has(refs.compThresholdKnob)) refs.compThresholdKnob.value = data.compThreshold ?? -20;
+      if (!dragging.has(refs.compRatioKnob)) refs.compRatioKnob.value = data.compRatio ?? 2;
+      if (!dragging.has(refs.compMakeupKnob)) refs.compMakeupKnob.value = data.compMakeup ?? 0;
       if (refs.followInput !== shadow.activeElement) refs.followInput.value = data.followTarget || "";
       refs.modeSelect.value = data.followMode || "off";
       refs.overrideBtn.active = !!data.overrideEnabled;
@@ -271,19 +436,68 @@ class OmpAudioMixerPanel extends HTMLElement {
     };
 
     const fetchChannelData = async (id) => {
-      const [source, gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled] =
-        await Promise.all([
-          getParam(`channel.${id}.source`),
-          getParam(`channel.${id}.gain`),
-          getParam(`channel.${id}.mute`),
-          getParam(`channel.${id}.eqLow`),
-          getParam(`channel.${id}.eqMid`),
-          getParam(`channel.${id}.eqHigh`),
-          getParam(`channel.${id}.followTarget`),
-          getParam(`channel.${id}.followMode`),
-          getParam(`channel.${id}.overrideEnabled`),
-        ]);
-      return { source, gain, mute, eqLow, eqMid, eqHigh, followTarget, followMode, overrideEnabled };
+      const [
+        source,
+        gain,
+        mute,
+        eqLow,
+        eqMid,
+        eqHigh,
+        eqLowFreq,
+        eqLowWidth,
+        eqMidFreq,
+        eqMidWidth,
+        eqHighFreq,
+        eqHighWidth,
+        compEnabled,
+        compThreshold,
+        compRatio,
+        compMakeup,
+        followTarget,
+        followMode,
+        overrideEnabled,
+      ] = await Promise.all([
+        getParam(`channel.${id}.source`),
+        getParam(`channel.${id}.gain`),
+        getParam(`channel.${id}.mute`),
+        getParam(`channel.${id}.eqLow`),
+        getParam(`channel.${id}.eqMid`),
+        getParam(`channel.${id}.eqHigh`),
+        getParam(`channel.${id}.eqLowFreq`),
+        getParam(`channel.${id}.eqLowWidth`),
+        getParam(`channel.${id}.eqMidFreq`),
+        getParam(`channel.${id}.eqMidWidth`),
+        getParam(`channel.${id}.eqHighFreq`),
+        getParam(`channel.${id}.eqHighWidth`),
+        getParam(`channel.${id}.compEnabled`),
+        getParam(`channel.${id}.compThreshold`),
+        getParam(`channel.${id}.compRatio`),
+        getParam(`channel.${id}.compMakeup`),
+        getParam(`channel.${id}.followTarget`),
+        getParam(`channel.${id}.followMode`),
+        getParam(`channel.${id}.overrideEnabled`),
+      ]);
+      return {
+        source,
+        gain,
+        mute,
+        eqLow,
+        eqMid,
+        eqHigh,
+        eqLowFreq,
+        eqLowWidth,
+        eqMidFreq,
+        eqMidWidth,
+        eqHighFreq,
+        eqHighWidth,
+        compEnabled,
+        compThreshold,
+        compRatio,
+        compMakeup,
+        followTarget,
+        followMode,
+        overrideEnabled,
+      };
     };
 
     const poll = async () => {
@@ -325,8 +539,29 @@ class OmpAudioMixerPanel extends HTMLElement {
       }
     };
 
+    // §4.6 Teil 2: Master-Limiter-Zustand separat gepollt (kein
+    // channel.<id>-Namensraum, passt nicht in fetchChannelData/poll).
+    const pollMaster = async () => {
+      const [enabled, threshold, ratio, makeup] = await Promise.all([
+        getParam("masterLimiterEnabled"),
+        getParam("masterLimiterThreshold"),
+        getParam("masterLimiterRatio"),
+        getParam("masterLimiterMakeup"),
+      ]);
+      masterLimiterEnableBtn.active = !!enabled;
+      masterLimiterEnabled = !!enabled;
+      if (!dragging.has(masterThresholdKnob)) masterThresholdKnob.value = threshold ?? -6;
+      if (!dragging.has(masterRatioKnob)) masterRatioKnob.value = ratio ?? 10;
+      if (!dragging.has(masterMakeupKnob)) masterMakeupKnob.value = makeup ?? 0;
+    };
+    trackDrag(masterThresholdKnob);
+    trackDrag(masterRatioKnob);
+    trackDrag(masterMakeupKnob);
+
     poll();
+    pollMaster();
     this._interval = setInterval(poll, 2000);
+    this._masterInterval = setInterval(pollMaster, 2000);
 
     // K4-Teil-1 Metering: eigene EventSource auf den node-lokalen
     // `/levels`-SSE-Port (levelsUrl), unabhängig vom Shell-SSE-Stream
@@ -358,6 +593,7 @@ class OmpAudioMixerPanel extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._interval);
+    clearInterval(this._masterInterval);
     if (this._levelsSource) this._levelsSource.close();
   }
 }

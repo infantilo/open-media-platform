@@ -3043,6 +3043,16 @@ Kapiteln, nicht hier wiederholt.
 4. **§4.6 — Audio-Mixer EQ-Parametrisierung + Dynamik (Kapitel-4-
    Teil-2, jetzt inkl. EQ-Upgrade).** Klar umrissene Node-
    Vervollständigung auf bestehendem Plan, kein neues Konzept.
+   ✅ **EQ-Parametrisierung + Kompressor (Kanal) + Limiter (Master)
+   erledigt 2026-07-17** (`UMSETZUNG.md`, `docs/decisions.md` Nachtrag
+   6) — `equalizer-3bands` → `equalizer-nbands` (Frequenz+Bandbreite
+   je Band, per Live-Introspektion verifiziert), `audiodynamic` pro
+   Kanal + auf dem Master-Bus, je mit eigenem Makeup-Gain-`volume`-
+   Element (kompensiert die fehlende Makeup-Eigenschaft von
+   `audiodynamic`, §4.6-Realitätscheck). **Noch offen aus §4.6:**
+   Audio-Follow-Video-Pegel (weiterhin nur Mute/Unmute) und
+   Mixer-Presets (Snapshot-Wiederverwendung) — beide nicht Teil dieses
+   Schritts, bewusst zurückgestellt, kein stiller Gap.
 5. **Kapitel 15 — Multi-Resolution-Streams.** Hoher Nutzwert (Bandbreite/
    CPU bei realen Mehrquellen-Setups), aber cross-cutting (mehrere
    Nodes + Workflow-Objekt) — nach den kleineren, unabhängigen Punkten

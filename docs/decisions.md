@@ -5577,3 +5577,77 @@ erzeugt — ein einmaliger `kill -9` auf eine laufende Instanz (Warnung,
 automatische Neustarts in ~4s, dann Eskalation — bestätigt zugleich
 erneut die K7-Teil-1-Crash-Loop-Bremse) — beide erscheinen korrekt
 sortiert (kritisch vor Warnung) mit passender Farbe im Alarm-Tab.
+
+## 2026-07-17 (Nachtrag 6) — §4.6 umgesetzt: Audio-Mixer EQ-
+Parametrisierung + Kompressor + Master-Limiter
+
+Fünfter Schritt der Kapitel-18-Priorisierung. `nodes/omp-audio-mixer`:
+
+**EQ-Parametrisierung.** `equalizer-3bands` → `equalizer-nbands`
+(`num-bands=3`). Per Live-Introspektion verifiziert, nicht geraten
+(`UMSETZUNG.md` §0 Punkt 6, Python/PyGObject-Probe gegen das echte
+Element): bei `num-bands=3` weisen sich die drei `GstIirEqualizerBand`-
+Kindobjekte automatisch Low-Shelf/Peak/High-Shelf zu (Index 0/1/2) —
+passt exakt auf die bestehende Low/Mid/High-Benennung, jetzt mit
+einstellbarer `freq`/`bandwidth` zusätzlich zum bisherigen `gain`.
+Zugriff über `GstChildProxy` (`gst::ChildProxy`, `dynamic_cast_ref`
+nötig — `gst::Element` erfüllt die Trait-Bounds nicht statisch, da
+`ChildProxy` ein dynamisches GObject-Interface ist). Defaults: Low
+100 Hz/200 Hz, Mid 1000 Hz/1000 Hz, High 8000 Hz/4000 Hz.
+
+**Kompressor (Kanal) + Limiter (Master).** `audiodynamic` pro Kanal
+(zwischen EQ und dem bisherigen Metering-`level`) sowie einmal auf dem
+Master-Bus (zwischen `audiomixer` und dem bisherigen `level-master`).
+Realitätscheck aus dem §4.6-Nachtrag vom 2026-07-17 (Vortag) bestätigt:
+`audiodynamic` hat **kein** Attack/Release, **keine** Makeup-Gain-
+Eigenschaft, `threshold` ist **linear** 0..1 (nicht dB, per
+`gst-inspect-1.0 audiodynamic` verifiziert) — Threshold-dB→linear-
+Umrechnung ergänzt, plus ein eigenes `volume`-Element direkt danach
+für Makeup-Gain. `enabled=false` erzwingt `ratio=1.0` (No-Op,
+unabhängig vom Threshold) statt eines Pipeline-Umbaus — Kompressor/
+Limiter bleiben dauerhaft in der Kette, kein dynamisches Ein-/
+Ausklinken nötig.
+
+**Deskriptor:** pro Kanal sechs neue `eq{Low,Mid,High}{Freq,Width}`-
+Parameter + `channel.<id>.setEqBand(band,freq,width)` (Gain bleibt im
+unveränderten `setEq(low,mid,high)`), vier neue `comp*`-Parameter +
+`channel.<id>.setComp(enabled,thresholdDb,ratio,makeupDb)`. Master:
+vier neue `masterLimiter*`-Parameter + `setMasterLimiter(...)` auf
+Node-Ebene (kein `channel.<id>.`-Namensraum, da einmalig).
+
+**UI-Bundle** (`nodes/omp-audio-mixer/ui/bundle.js`, Hand-JS ohne
+Build-Schritt, `include_str!` in `uibundle.rs`): neue aufklappbare
+`<details>`-Abschnitte "EQ Freq/Q" und "Comp" pro Kanalzug (gleiches
+Muster wie das bestehende AFV-`<details>`), "Limiter" beim Master —
+bewusst aufklappbar statt dauerhaft sichtbar, damit der Normalfall
+"kurz am Gain drehen" nicht mit zusätzlichen Reglern überladen wird.
+
+**Verifiziert:**
+- `cargo build --workspace`/`cargo test -p omp-audio-mixer` grün,
+  `cargo deny check` ohne neue Befunde.
+- Live gegen eine echte, über den Orchestrator gestartete Instanz:
+  `channel.ch1.setEqBand`/`setComp`/`setMasterLimiter` per curl
+  gesetzt, alle Werte per `GET .../params/<name>` korrekt
+  zurückgelesen, Instanz blieb dabei durchgehend am Leben (kein
+  Crash/Restart) — bestätigt, dass die `ChildProxy`-Zugriffe und die
+  neuen `audiodynamic`/`volume`-Elemente in einer bereits laufenden
+  PLAYING-Pipeline sauber funktionieren.
+- **Echte DSP-Wirkung bestätigt, nicht nur Wire-Format:** `/levels`-
+  SSE-Stream (roher `curl`) zeigte messbar veränderte RMS/Peak-Werte
+  nach Aktivieren von Kompressor (Threshold -18 dB, Ratio 4, Makeup
+  +6 dB) und Master-Limiter (Threshold -6 dB, Ratio 10, Makeup +2 dB)
+  — der Signalpfad reagiert hörbar/messbar, nicht nur die gespeicherten
+  Parameterwerte.
+- `tools/contract-check` (C9) gegen die laufende Instanz: PASS
+  (IS-04-Registrierung, Descriptor-Schema, UI-Manifest).
+- Live per CDP-Screenshot: alle drei neuen `<details>`-Abschnitte
+  aufgeklappt, zeigen exakt die per API gesetzten Werte (Mid-Band
+  2500 Hz/800 Hz, Comp -18/4/+6, Limiter -6/10/+2), Meter zeigen
+  Aktivität.
+
+**Offen aus §4.6, bewusst nicht Teil dieses Schritts:**
+Audio-Follow-Video-Pegel (weiterhin nur Mute/Unmute, kein
+konfigurierbarer Off-Pegel) und Mixer-Presets (Wiederverwendung des
+Snapshot-Mechanismus, node-skopiert) — beide im Nachtrag vom Vortag
+bereits als eigenständig umsetzbar identifiziert, für eine künftige
+Sitzung.

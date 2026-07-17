@@ -39,6 +39,47 @@ use serde_json::Value;
 const FOLLOW_CROSSFADE_MS: u64 = 500;
 const FOLLOW_CROSSFADE_STEPS: u64 = 12;
 
+/// Kompressor-Zustand (§4.6 Teil 2) — geteilt zwischen Kanal (pro
+/// `ChannelState`) und Master (`AudioMixerStore::master_limiter`), da
+/// beide dieselben vier Werte brauchen (`pipeline::CompParams` ist das
+/// Pipeline-seitige Gegenstück, gleiche Felder).
+#[derive(Clone, Copy)]
+struct CompState {
+    enabled: bool,
+    threshold_db: f64,
+    ratio: f64,
+    makeup_db: f64,
+}
+
+impl Default for CompState {
+    /// Deaktiviert, aber mit einem sinnvollen Ausgangspunkt für den
+    /// Fall, dass der Bediener nur den Enable-Schalter umlegt, ohne
+    /// vorher Werte gesetzt zu haben (Ratio 1.0 wäre wirkungslos).
+    fn default() -> Self {
+        CompState { enabled: false, threshold_db: -20.0, ratio: 2.0, makeup_db: 0.0 }
+    }
+}
+
+impl CompState {
+    fn to_pipeline_params(self) -> pipeline::CompParams {
+        pipeline::CompParams {
+            enabled: self.enabled,
+            threshold_db: self.threshold_db,
+            ratio: self.ratio,
+            makeup_db: self.makeup_db,
+        }
+    }
+}
+
+/// Ein EQ-Band-Zustand (Frequenz+Bandbreite; Gain bleibt bei `eq_low`
+/// u. a. unten, unverändert seit vor §4.6) — Defaults spiegeln die
+/// Pipeline-Defaults aus `pipeline.rs::add_channel_branch`.
+#[derive(Clone, Copy)]
+struct EqBandState {
+    freq: f64,
+    width: f64,
+}
+
 #[derive(Clone)]
 struct ChannelState {
     id: String,
@@ -48,6 +89,10 @@ struct ChannelState {
     eq_low: f64,
     eq_mid: f64,
     eq_high: f64,
+    eq_low_band: EqBandState,
+    eq_mid_band: EqBandState,
+    eq_high_band: EqBandState,
+    comp: CompState,
     /// Node-ID der zu verfolgenden Quelle (Tally-Bus-Subject,
     /// `omp.tally.<node_id>`) — leer = keine Kopplung.
     follow_target: String,
@@ -76,6 +121,10 @@ impl ChannelState {
             eq_low: 0.0,
             eq_mid: 0.0,
             eq_high: 0.0,
+            eq_low_band: EqBandState { freq: 100.0, width: 200.0 },
+            eq_mid_band: EqBandState { freq: 1000.0, width: 1000.0 },
+            eq_high_band: EqBandState { freq: 8000.0, width: 4000.0 },
+            comp: CompState::default(),
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
@@ -103,6 +152,10 @@ struct AudioMixerStore {
     /// `omp-viewer`s `previewUrl` (C6): der tatsächlich gebundene Port
     /// steht erst nach `levels::spawn()` fest.
     levels_url: String,
+    /// Master-Limiter-Zustand (§4.6 Teil 2) — im Gegensatz zu den
+    /// Kanal-Kompressoren nicht Teil einer Liste, deshalb ein eigenes
+    /// Feld statt eines `channel.<id>.*`-Eintrags.
+    master_limiter: Mutex<CompState>,
 }
 
 /// Testton-Frequenz pro Kanal — nur zur akustischen Unterscheidbarkeit im
@@ -162,6 +215,37 @@ impl ParamStore for AudioMixerStore {
                 range: None,
                 readonly: true,
             },
+            // §4.6 Teil 2: Master-Limiter, gleiche vier Werte wie ein
+            // Kanal-Kompressor (s. `master_param` unten), aber ohne
+            // `channel.<id>.`-Namensraum.
+            ParamSpec {
+                name: "masterLimiterEnabled".to_string(),
+                kind: ParamType::Boolean,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "masterLimiterThreshold".to_string(),
+                kind: ParamType::Number,
+                unit: Some("dB".to_string()),
+                range: Some(Range::Number { min: -60.0, max: 0.0 }),
+                readonly: true,
+            },
+            ParamSpec {
+                name: "masterLimiterRatio".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: Some(Range::Number { min: 1.0, max: 20.0 }),
+                readonly: true,
+            },
+            ParamSpec {
+                name: "masterLimiterMakeup".to_string(),
+                kind: ParamType::Number,
+                unit: Some("dB".to_string()),
+                range: Some(Range::Number { min: 0.0, max: 24.0 }),
+                readonly: true,
+            },
         ];
         let mut methods = vec![
             MethodSpec {
@@ -177,6 +261,15 @@ impl ParamStore for AudioMixerStore {
                     name: "channelId".to_string(),
                     kind: ParamType::String,
                 }],
+            },
+            MethodSpec {
+                name: "setMasterLimiter".to_string(),
+                args: vec![
+                    MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean },
+                    MethodArg { name: "thresholdDb".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "ratio".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "makeupDb".to_string(), kind: ParamType::Number },
+                ],
             },
         ];
 
@@ -204,6 +297,43 @@ impl ParamStore for AudioMixerStore {
                     Some(Range::Number { min: -24.0, max: 12.0 }),
                 ));
             }
+            // §4.6: Frequenz+Bandbreite je Band (`equalizer-nbands`
+            // statt `equalizer-3bands`) — Gain bleibt in `eqLow`/
+            // `eqMid`/`eqHigh` oben, unverändert seit vor diesem Schritt.
+            for band in ["eqLow", "eqMid", "eqHigh"] {
+                parameters.push(channel_param(
+                    id,
+                    &format!("{band}Freq"),
+                    ParamType::Number,
+                    Some(Range::Number { min: 20.0, max: 20000.0 }),
+                ));
+                parameters.push(channel_param(
+                    id,
+                    &format!("{band}Width"),
+                    ParamType::Number,
+                    Some(Range::Number { min: 10.0, max: 20000.0 }),
+                ));
+            }
+            // §4.6 Teil 2: Kompressor pro Kanal.
+            parameters.push(channel_param(id, "compEnabled", ParamType::Boolean, None));
+            parameters.push(channel_param(
+                id,
+                "compThreshold",
+                ParamType::Number,
+                Some(Range::Number { min: -60.0, max: 0.0 }),
+            ));
+            parameters.push(channel_param(
+                id,
+                "compRatio",
+                ParamType::Number,
+                Some(Range::Number { min: 1.0, max: 20.0 }),
+            ));
+            parameters.push(channel_param(
+                id,
+                "compMakeup",
+                ParamType::Number,
+                Some(Range::Number { min: 0.0, max: 24.0 }),
+            ));
             // `senderId` der externen Quelle, leer = interner Testton.
             parameters.push(channel_param(id, "source", ParamType::String, None));
             parameters.push(channel_param(id, "followTarget", ParamType::String, None));
@@ -251,6 +381,23 @@ impl ParamStore for AudioMixerStore {
                         name: "high".to_string(),
                         kind: ParamType::Number,
                     },
+                ],
+            });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setEqBand"),
+                args: vec![
+                    MethodArg { name: "band".to_string(), kind: ParamType::String },
+                    MethodArg { name: "freq".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "width".to_string(), kind: ParamType::Number },
+                ],
+            });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setComp"),
+                args: vec![
+                    MethodArg { name: "enabled".to_string(), kind: ParamType::Boolean },
+                    MethodArg { name: "thresholdDb".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "ratio".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "makeupDb".to_string(), kind: ParamType::Number },
                 ],
             });
             methods.push(MethodSpec {
@@ -307,6 +454,9 @@ impl ParamStore for AudioMixerStore {
                     .collect::<Vec<_>>()
             ));
         }
+        if let Some(v) = self.get_master_limiter(name) {
+            return Some(v);
+        }
 
         let (id, prop) = parse_channel_name(name)?;
         let channels = self.channels.lock().expect("lock poisoned");
@@ -318,6 +468,16 @@ impl ParamStore for AudioMixerStore {
             "eqLow" => Some(serde_json::json!(ch.eq_low)),
             "eqMid" => Some(serde_json::json!(ch.eq_mid)),
             "eqHigh" => Some(serde_json::json!(ch.eq_high)),
+            "eqLowFreq" => Some(serde_json::json!(ch.eq_low_band.freq)),
+            "eqLowWidth" => Some(serde_json::json!(ch.eq_low_band.width)),
+            "eqMidFreq" => Some(serde_json::json!(ch.eq_mid_band.freq)),
+            "eqMidWidth" => Some(serde_json::json!(ch.eq_mid_band.width)),
+            "eqHighFreq" => Some(serde_json::json!(ch.eq_high_band.freq)),
+            "eqHighWidth" => Some(serde_json::json!(ch.eq_high_band.width)),
+            "compEnabled" => Some(serde_json::json!(ch.comp.enabled)),
+            "compThreshold" => Some(serde_json::json!(ch.comp.threshold_db)),
+            "compRatio" => Some(serde_json::json!(ch.comp.ratio)),
+            "compMakeup" => Some(serde_json::json!(ch.comp.makeup_db)),
             "source" => Some(serde_json::json!(ch.source)),
             "followTarget" => Some(serde_json::json!(ch.follow_target)),
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
@@ -364,6 +524,19 @@ impl ParamStore for AudioMixerStore {
                 self.pipeline.remove_channel(channel_id.to_string());
                 Ok(())
             }
+            "setMasterLimiter" => {
+                let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                let threshold_db = args
+                    .get("thresholdDb")
+                    .and_then(Value::as_f64)
+                    .ok_or(InvokeError::Unknown)?;
+                let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let state = CompState { enabled, threshold_db, ratio, makeup_db };
+                *self.master_limiter.lock().expect("lock poisoned") = state;
+                self.pipeline.set_master_limiter(state.to_pipeline_params());
+                Ok(())
+            }
             _ => self.invoke_channel_method(name, args),
         }
     }
@@ -382,6 +555,17 @@ fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
 }
 
 impl AudioMixerStore {
+    fn get_master_limiter(&self, name: &str) -> Option<Value> {
+        let state = *self.master_limiter.lock().expect("lock poisoned");
+        match name {
+            "masterLimiterEnabled" => Some(serde_json::json!(state.enabled)),
+            "masterLimiterThreshold" => Some(serde_json::json!(state.threshold_db)),
+            "masterLimiterRatio" => Some(serde_json::json!(state.ratio)),
+            "masterLimiterMakeup" => Some(serde_json::json!(state.makeup_db)),
+            _ => None,
+        }
+    }
+
     fn invoke_channel_method(
         &self,
         name: &str,
@@ -422,6 +606,38 @@ impl AudioMixerStore {
                 self.pipeline.set_eq(id.to_string(), low, mid, high);
                 Ok(())
             }
+            "setEqBand" => {
+                let band_name = args.get("band").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let freq = args.get("freq").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let width = args.get("width").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let band = match band_name {
+                    "low" => pipeline::EqBand::Low,
+                    "mid" => pipeline::EqBand::Mid,
+                    "high" => pipeline::EqBand::High,
+                    _ => return Err(InvokeError::Unknown),
+                };
+                let band_state = EqBandState { freq, width };
+                match band_name {
+                    "low" => ch.eq_low_band = band_state,
+                    "mid" => ch.eq_mid_band = band_state,
+                    "high" => ch.eq_high_band = band_state,
+                    _ => unreachable!(),
+                }
+                self.pipeline.set_eq_band(id.to_string(), band, freq, width);
+                Ok(())
+            }
+            "setComp" => {
+                let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
+                let threshold_db = args
+                    .get("thresholdDb")
+                    .and_then(Value::as_f64)
+                    .ok_or(InvokeError::Unknown)?;
+                let ratio = args.get("ratio").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                let makeup_db = args.get("makeupDb").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                ch.comp = CompState { enabled, threshold_db, ratio, makeup_db };
+                self.pipeline.set_comp(id.to_string(), ch.comp.to_pipeline_params());
+                Ok(())
+            }
             "setSource" => {
                 let sender_id = args
                     .get("senderId")
@@ -447,15 +663,35 @@ impl AudioMixerStore {
                         .set_channel_source(id.to_string(), pipeline::ChannelSource::External { flow_id });
                 }
                 // Der neue Zweig startet mit Standardwerten (Gain 0dB,
-                // nicht stumm, EQ flach) — bereits konfigurierte Werte
-                // dieses Kanals erneut anwenden. Reihenfolge garantiert
-                // durch den einen mpsc-Kommandokanal der Pipeline (FIFO):
+                // nicht stumm, EQ flach, Kompressor per Default-Werten
+                // deaktiviert) — bereits konfigurierte Werte dieses
+                // Kanals erneut anwenden. Reihenfolge garantiert durch
+                // den einen mpsc-Kommandokanal der Pipeline (FIFO):
                 // `SetChannelSource` ist längst verarbeitet, bevor diese
-                // drei Kommandos ankommen.
+                // Kommandos ankommen.
                 self.pipeline.set_gain(id.to_string(), ch.gain_db);
                 self.pipeline.set_mute(id.to_string(), ch.mute);
                 self.pipeline
                     .set_eq(id.to_string(), ch.eq_low, ch.eq_mid, ch.eq_high);
+                self.pipeline.set_eq_band(
+                    id.to_string(),
+                    pipeline::EqBand::Low,
+                    ch.eq_low_band.freq,
+                    ch.eq_low_band.width,
+                );
+                self.pipeline.set_eq_band(
+                    id.to_string(),
+                    pipeline::EqBand::Mid,
+                    ch.eq_mid_band.freq,
+                    ch.eq_mid_band.width,
+                );
+                self.pipeline.set_eq_band(
+                    id.to_string(),
+                    pipeline::EqBand::High,
+                    ch.eq_high_band.freq,
+                    ch.eq_high_band.width,
+                );
+                self.pipeline.set_comp(id.to_string(), ch.comp.to_pipeline_params());
                 Ok(())
             }
             "setFollow" => {
@@ -547,6 +783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         next_seq: Arc::new(AtomicU64::new(1)),
         pipeline: pipeline_handle.clone(),
         levels_url,
+        master_limiter: Mutex::new(CompState::default()),
     });
 
     // Für die Discovery gebraucht (den eigenen Sender ausschließen) —
