@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs
+.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent
 
@@ -99,6 +99,16 @@ status:
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
+
+# Backup/Restore (S9, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
+# .backups/omp-<timestamp>.sql.gz, Rotation N=14. `make restore
+# ARGS=.backups/omp-<timestamp>.sql.gz` (verlangt gestoppten
+# Orchestrator + interaktive Bestätigung, s. restore-omp.sh).
+backup:
+	@./deploy/dev/backup-omp.sh
+
+restore:
+	@./deploy/dev/restore-omp.sh $(ARGS)
 
 # step-ca (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) — bewusst NICHT Teil von
 # `make up`: mTLS ist opt-in (OMP_MTLS_ENABLED, s. orchestrator/internal/

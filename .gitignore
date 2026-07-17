@@ -29,3 +29,7 @@ build/
 
 # Claude Code lokale Projekt-Settings/Lock-Dateien
 /.claude/
+
+# Postgres-Backups (S9, deploy/dev/backup-omp.sh) — enthalten Nutzer-
+# Passwort-Hashes/Rollenbindungen, gehören nicht ins Repo.
+/.backups/

@@ -125,7 +125,44 @@ podman exec -it omp-postgres psql -U omp -d omp \
 - Gestartete Instanzen erscheinen automatisch als Kacheln (Selbstregistrierung
   über NMOS, kein manuelles Eintragen).
 
-## 5. Troubleshooting
+## 5. Backup & Restore
+
+Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,
+Layouts, Snapshots, Workflows, Hosts) liegt in Postgres (`omp-postgres`-
+Container). Zwei Skripte, `deploy/dev/backup-omp.sh`/`restore-omp.sh`
+(bzw. `make backup`/`make restore`):
+
+**Backup:**
+```sh
+make backup
+# oder direkt:
+./deploy/dev/backup-omp.sh
+```
+Schreibt `.backups/omp-<UTC-Zeitstempel>.sql.gz` (`pg_dump --clean
+--if-exists` über `podman exec`, kein lokal installiertes
+`postgresql-client`-Paket nötig). Behält automatisch die letzten 14
+Sicherungen, ältere werden nach einem erfolgreichen neuen Dump
+gelöscht. `.backups/` ist bewusst nicht Teil des Git-Repos
+(`.gitignore`) — enthält Passwort-Hashes und andere sensible Daten,
+gehört auf ein separates, gesichertes Backup-Ziel (aus dieser
+Dev-Sitzung heraus nicht mit ausgerollt).
+
+**Restore:**
+```sh
+make stop                                    # Orchestrator muss gestoppt sein
+make restore ARGS=.backups/omp-<zeitstempel>.sql.gz
+```
+Verlangt eine interaktive Bestätigung (exakt `yes` eingeben) — das
+Skript **überschreibt den kompletten aktuellen Inhalt** der Datenbank
+`omp` mit dem Stand aus der angegebenen Datei. Ohne Argument listet
+`restore-omp.sh` die vorhandenen Sicherungen in `.backups/` auf.
+
+**Ein Restore, der nie ausgeführt wurde, ist keiner** — dieses
+Skriptpaar wurde bei seiner Einführung einmal echt durchgespielt
+(Backup → Testnutzer angelegt → Restore → Testnutzer wieder weg,
+dokumentiert in `docs/decisions.md`), nicht nur gelesen/geschrieben.
+
+## 6. Troubleshooting
 
 **Login-Formular erscheint, aber keine Zugangsdaten bekannt** — s.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
@@ -154,7 +191,7 @@ Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
 
-## 6. Mehr Kontext
+## 7. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)

@@ -6266,3 +6266,71 @@ SQL):
 **Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S9
 (Backup/Restore), S10 (UI-Baustein-Konsolidierung), danach S4
 (instances.json → Postgres).
+
+
+## 2026-07-17 (Nachtrag 14) — S9: Backup/Restore
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), fünfter Umsetzungsschritt
+aus dem Review-Arbeitsvorrat — ein Restore wurde einmal echt
+durchgeführt, nicht nur geschrieben
+
+Fünfter Schritt aus [[project_review_2026_07_17_s_steps]]. Bisher gab
+es kein Backup-Verfahren für den gesamten Orchestrator-Zustand
+(Postgres: Nutzer, Rollenbindungen, Audit-Log, Layouts, Snapshots,
+Workflows, Hosts) — ein Datenverlust wäre unwiederbringlich gewesen.
+
+**`deploy/dev/backup-omp.sh`:** `podman exec omp-postgres pg_dump -U
+omp --clean --if-exists omp` (kein lokal installiertes
+`postgresql-client`-Paket vorausgesetzt, gleiches "Tool-Container statt
+Host-Installation"-Muster wie `mtls-issue-cert.sh`), lokal mit `gzip`
+komprimiert nach `.backups/omp-<UTC-Zeitstempel>.sql.gz`. `--clean
+--if-exists` fügt DROP-Anweisungen vor jedem CREATE ein, damit
+`restore-omp.sh` den Dump gegen eine bereits befüllte Datenbank
+abspielen kann (vollständiger Ersatz statt Fehlschlag wegen
+existierender Tabellen) — keine separate `dropdb`/`createdb`-Runde
+nötig. Schreibt erst in eine `.tmp`-Datei und benennt danach um (ein
+abgebrochener Dump darf keine unvollständige Datei unter dem finalen
+Namen hinterlassen). Rotation: die letzten 14 Sicherungen bleiben,
+ältere werden nach einem erfolgreichen neuen Dump gelöscht (nicht
+vorher — ein fehlgeschlagener Dump darf nie die letzte funktionierende
+Sicherung kosten).
+
+**`deploy/dev/restore-omp.sh <datei>`:** verlangt (1) eine interaktive
+Bestätigung (exakt `yes` eingeben) und (2) dass der Orchestrator
+gestoppt ist (Port-8000-Check, gleiches Muster wie `start-omp.sh`) —
+offene Verbindungen während eines Restores mit DROP-Anweisungen wären
+undefiniertes Verhalten. Ohne Argument listet das Skript die
+vorhandenen Sicherungen in `.backups/` auf. `Makefile`:
+`make backup`/`make restore ARGS=<datei>` als Einstiegspunkte, gleiches
+Muster wie `make start`/`make stop`. `.backups/` neu in `.gitignore`
+(enthält Passwort-Hashes/Audit-Daten, gehört nicht ins Repo).
+
+**`docs/HANDBUCH.md`:** neuer Abschnitt 5 "Backup & Restore" (Abschnitte
+5/6 "Troubleshooting"/"Mehr Kontext" auf 6/7 verschoben).
+
+**Live durchgeführt, nicht nur gelesen/geschrieben** (echter
+`omp-postgres`-Container, echter Orchestrator) — genau der vom Review
+verlangte Rundlauf:
+1. `make backup` → `.backups/omp-20260717T203529Z.sql.gz` (8.0K)
+   geschrieben, Rotation meldete korrekt "nichts zu entfernen" (erste
+   Sicherung).
+2. Orchestrator gestartet, neuen Nutzer `s9-restore-test-user` über
+   `POST /api/v1/auth/users` angelegt, `GET /api/v1/auth/users`
+   bestätigte ihn neben `admin`.
+3. Orchestrator gestoppt, `make restore
+   ARGS=.backups/omp-20260717T203529Z.sql.gz` mit `yes` bestätigt —
+   `psql -v ON_ERROR_STOP=1` lief fehlerfrei durch (Standard-`pg_dump`-
+   Restore-Ausgabe: `set_config`/`setval`-Zeilen, keine Fehler).
+4. Orchestrator neu gestartet: `GET /api/v1/auth/users` zeigte nur noch
+   `admin` — `s9-restore-test-user` war weg, exakt wie vom Backup-
+   Zeitpunkt erwartet. `admin`-Login funktionierte weiterhin (Restore
+   hat den Nutzer selbst nicht mit gelöscht). `/healthz`,
+   `GET /api/v1/workflows`, `GET /api/v1/hosts` bestätigten den
+   Orchestrator insgesamt funktionsfähig nach dem Restore, nicht nur
+   die Auth-Tabelle isoliert getestet.
+
+**Kein Go-Code geändert** — reine Shell-/Doku-/Makefile-Änderung,
+`go build`/`go vet`/`go test ./...` trotzdem zur Regressions-Kontrolle
+erneut grün gelaufen (unverändert, wie erwartet).
+
+**Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S10
+(UI-Baustein-Konsolidierung), danach S4 (instances.json → Postgres).
