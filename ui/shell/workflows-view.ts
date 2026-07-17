@@ -5,10 +5,16 @@
 // (§17.2 existiert noch nicht) — seit K1-Teil-1 eine Vollansicht im
 // App-Bar-Tab "Workflows" (app-shell.ts), vormals ein per Knopf ein-/
 // ausblendbares Floating-Panel (gleiches Muster wie hosts-view.ts).
-// Reiner Poll gegen GET /api/v1/workflows über apiFetch() (connection.ts)
-// statt rohem fetch — ein Fehlschlag setzt den geteilten
-// ConnectionMonitor auf "degraded" statt still zu bleiben.
-import { apiFetch } from "./connection.ts";
+//
+// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// auf "workflow.updated" (workflows/service.go) statt alle paar Sekunden
+// zu pollen — Poll bleibt nur als deutlich langsamerer Reconnect-/
+// Fallback-Pfad (POLL_FALLBACK_INTERVAL_MS), falls die SSE-Verbindung
+// gerade unterbrochen ist oder ein Event verloren ging ("lost-events",
+// s. sse.Hub). Über apiFetch() (connection.ts) statt rohem fetch — ein
+// Fehlschlag setzt den geteilten ConnectionMonitor auf "degraded" statt
+// still zu bleiben.
+import { apiFetch, connectionMonitor } from "./connection.ts";
 
 interface CatalogEntry {
   type: string;
@@ -49,7 +55,16 @@ interface Workflow {
   runtime?: Record<string, { instanceId: string; nodeId?: string }>;
 }
 
-const POLL_INTERVAL_MS = 3000;
+// Fallback/Reconnect-Intervall (S2) — der Normalfall ist SSE-getrieben
+// (#onSseMessage), dieser Poll fängt nur eine unterbrochene SSE-
+// Verbindung oder ein verpasstes Event auf (lost-events triggert
+// ohnehin sofort ein gezieltes #poll(), dieses Intervall ist das
+// zusätzliche Sicherheitsnetz für den Fall, dass sogar das
+// lost-events-Signal selbst nicht ankam).
+const POLL_FALLBACK_INTERVAL_MS = 30000;
+
+// Event-Typen, bei denen die Workflow-Liste neu geladen wird.
+const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 
 const STATUS_COLORS: Record<string, string> = {
   stopped: "#999",
@@ -85,12 +100,24 @@ class WorkflowsView extends HTMLElement {
     this.#render();
     this.#loadStatic();
     this.#poll();
-    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
+    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_FALLBACK_INTERVAL_MS);
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
+
+  #onSseMessage = (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (REFRESH_EVENT_TYPES.has(parsed.type)) this.#poll();
+  };
 
   async #loadStatic() {
     try {

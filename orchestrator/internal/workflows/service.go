@@ -117,6 +117,12 @@ func (s *Service) Create(name string, def Definition) (Workflow, error) {
 	if err := s.store.Put(wf); err != nil {
 		return Workflow{}, err
 	}
+	// S2 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), live-verifiziert
+	// per CDP gefunden: Create() fehlte bisher als einziger Schreibpfad
+	// das publish() — ein extern (nicht über workflows-view.ts' eigenes
+	// #createWorkflow()) angelegter Workflow blieb in jedem anderen
+	// offenen Tab bis zum 30s-Fallback-Poll unsichtbar.
+	s.publish(wf)
 	return wf, nil
 }
 
@@ -140,7 +146,16 @@ func (s *Service) Delete(id string) error {
 	if wf.Status != StatusStopped {
 		return ErrNotStopped
 	}
-	return s.store.Delete(id)
+	if err := s.store.Delete(id); err != nil {
+		return err
+	}
+	// S2: gleicher Grund wie bei Create() — ein extern gelöschter
+	// Workflow soll auch in anderen offenen Tabs sofort verschwinden.
+	// Der Payload trägt den letzten bekannten Stand vor dem Löschen; die
+	// UI liest ihn ohnehin nicht, sondern lädt bei Empfang die komplette
+	// (jetzt schon aktualisierte) Liste neu.
+	s.publish(wf)
+	return nil
 }
 
 // Start provisioniert alle Rollen eines Workflows (lokal oder remote,

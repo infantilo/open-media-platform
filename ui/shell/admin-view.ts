@@ -7,12 +7,18 @@
 // dieser View selbst verlässt sich zusätzlich auf die serverseitige
 // admin-only-Gate der Endpunkte, kein rein clientseitiges Vertrauen.
 //
-// Bewusst kein Poll-Timer für Nutzer/Bindungen (anders als hosts-view.ts/
-// workflows-view.ts): ein offenes Formular würde bei jedem Poll-Rerender
-// Fokus/Cursor verlieren. Stattdessen einmaliges Laden + gezieltes
-// Neuladen nach jeder Mutation. Nur das rein lesende Audit-Log pollt
-// periodisch, das stört kein offenes Formular.
-import { apiFetch } from "./connection.ts";
+// Bewusst kein Poll-/SSE-Refresh für Nutzer/Bindungen (anders als
+// hosts-view.ts/workflows-view.ts): ein offenes Formular würde bei
+// jedem Rerender Fokus/Cursor verlieren. Stattdessen einmaliges Laden +
+// gezieltes Neuladen nach jeder Mutation. Nur das rein lesende
+// Audit-Log aktualisiert sich automatisch, das stört kein offenes
+// Formular.
+//
+// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): das
+// Audit-Log reagiert auf "audit.appended" (neu, audit.go) statt alle
+// paar Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
+// Reconnect-/Fallback-Pfad (AUDIT_POLL_FALLBACK_INTERVAL_MS).
+import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
 
 interface UserEntry {
@@ -45,7 +51,8 @@ interface NodeEntry {
   instanceId?: string;
 }
 
-const AUDIT_POLL_INTERVAL_MS = 5000;
+const AUDIT_POLL_FALLBACK_INTERVAL_MS = 30000;
+const AUDIT_REFRESH_EVENT_TYPES = new Set(["audit.appended", "lost-events"]);
 
 const VERBS = ["view", "operate", "configure", "admin"] as const;
 
@@ -83,12 +90,24 @@ class AdminView extends HTMLElement {
     this.#loadBindings();
     this.#loadAudit();
     this.#loadNodes();
-    this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_INTERVAL_MS);
+    this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
   disconnectedCallback() {
     if (this.#auditPollHandle !== undefined) window.clearInterval(this.#auditPollHandle);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
+
+  #onSseMessage = (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (AUDIT_REFRESH_EVENT_TYPES.has(parsed.type)) this.#loadAudit();
+  };
 
   async #loadUsers() {
     try {

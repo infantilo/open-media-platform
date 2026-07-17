@@ -42,9 +42,14 @@ type NodeLister interface {
 }
 
 // EventSubscriber liefert einen Event-Kanal für einen neuen SSE-Client
-// (implementiert von *sse.Hub).
+// und erlaubt zusätzlich das Verteilen synthetischer Events, die nicht
+// über NATS laufen (implementiert von *sse.Hub). Broadcast wird bisher
+// nur von handleRegisterHost genutzt ("host.registered", S2 —
+// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): eine neue Host-
+// Registrierung soll ohne Poll <1s im hosts-view sichtbar werden.
 type EventSubscriber interface {
 	Subscribe() (<-chan sse.Event, func())
+	Broadcast(sse.Event)
 }
 
 // GraphService baut den Flow-Editor-Graphen und führt IS-05-
@@ -180,7 +185,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
-	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry))
+	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, events))
 	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics)))
 
 	// Resource-Aware Placement, advisory-only (ARCHITECTURE.md §6.1,

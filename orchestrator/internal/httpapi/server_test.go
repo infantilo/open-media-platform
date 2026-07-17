@@ -66,6 +66,11 @@ func (f fakeEventSubscriber) Subscribe() (<-chan sse.Event, func()) {
 	return f.ch, func() {}
 }
 
+// Broadcast ist ein No-Op im Test-Double — s. fakeEventPublisher (in
+// host_handlers_test.go) für Tests, die tatsächlich prüfen, was
+// gebroadcastet wurde.
+func (f fakeEventSubscriber) Broadcast(sse.Event) {}
+
 // fakeLayoutStore ist ein einfacher In-Memory-Test-Double für LayoutStore.
 type fakeLayoutStore struct{ data map[string]json.RawMessage }
 

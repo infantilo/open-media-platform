@@ -2,18 +2,18 @@
 // "Sichtbarkeit im UI"; UMSETZUNG.md D6 Teil 1). Bewusst kein Teil des
 // größeren Engineering-Dashboards (§17.2, noch nicht gebaut) — seit
 // K1-Teil-1 eine Vollansicht im App-Bar-Tab "Hosts" (app-shell.ts),
-// vormals ein per Knopf ein-/ausblendbares Floating-Panel. Reiner Poll
-// gegen GET /api/v1/hosts (kein SSE-Sonderfall nötig, die paar Sekunden
-// Verzögerung sind für eine Host-Übersicht unkritisch) — jetzt über
-// apiFetch() (connection.ts), damit ein Fehlschlag den geteilten
-// ConnectionMonitor auf "degraded" setzt statt still zu bleiben.
+// vormals ein per Knopf ein-/ausblendbares Floating-Panel.
 //
-// Seit D6 Teil 3 (ARCHITECTURE.md §6.1, advisory-only Placement-Engine)
-// zusätzlich ein Poll gegen GET /api/v1/placement/advice — gleiches
-// Poll-Muster wie oben statt eines SSE-Sonderfalls nur für dieses eine
-// Panel. Die Engine selbst greift nicht ein, das Panel zeigt nur den
-// Alarm+Vorschlag an (Host, Grund, betroffene Instanzen, Ausweichhost).
-import { apiFetch } from "./connection.ts";
+// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// auf "host.registered" (neu, host_handlers.go), die per-Host-Telemetrie
+// "omp.host.<hostId>.metrics" (roher NATS-Subject-Passthrough, s.
+// eventbus.go — bereits vorhanden, kein neues Backend-Event nötig) und
+// "placement.advice" (D6 Teil 3) statt alle paar Sekunden zu pollen.
+// Poll bleibt nur als deutlich langsamerer Reconnect-/Fallback-Pfad
+// (POLL_FALLBACK_INTERVAL_MS). Über apiFetch() (connection.ts), damit
+// ein Fehlschlag den geteilten ConnectionMonitor auf "degraded" setzt
+// statt still zu bleiben.
+import { apiFetch, connectionMonitor } from "./connection.ts";
 
 interface HostMetrics {
   cpuPercent: number;
@@ -42,7 +42,15 @@ interface PlacementAdvice {
   detectedAt: string;
 }
 
-const POLL_INTERVAL_MS = 4000;
+const POLL_FALLBACK_INTERVAL_MS = 30000;
+
+const HOST_METRICS_SUBJECT_PREFIX = "omp.host.";
+const HOST_METRICS_SUBJECT_SUFFIX = ".metrics";
+
+function isRefreshEvent(type: string): boolean {
+  if (type === "host.registered" || type === "placement.advice" || type === "lost-events") return true;
+  return type.startsWith(HOST_METRICS_SUBJECT_PREFIX) && type.endsWith(HOST_METRICS_SUBJECT_SUFFIX);
+}
 
 function reasonLabel(reason: string): string {
   switch (reason) {
@@ -71,12 +79,24 @@ class HostsView extends HTMLElement {
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     this.#render([], []);
     this.#poll();
-    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
+    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_FALLBACK_INTERVAL_MS);
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
+
+  #onSseMessage = (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (isRefreshEvent(parsed.type)) this.#poll();
+  };
 
   async #poll() {
     try {

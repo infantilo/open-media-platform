@@ -9,7 +9,18 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// fakeEventPublisher ist ein Test-Double für EventSubscriber, das nur
+// die Typen der über Broadcast verteilten Events sammelt (Subscribe wird
+// von handleRegisterHost nicht genutzt, bleibt ein No-Op).
+type fakeEventPublisher struct{ types []string }
+
+func (f *fakeEventPublisher) Subscribe() (<-chan sse.Event, func()) {
+	return make(chan sse.Event), func() {}
+}
+func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
 
 func TestHandleCreateBootstrapToken(t *testing.T) {
 	expires := time.Now().Add(time.Hour)
@@ -33,7 +44,8 @@ func TestHandleCreateBootstrapToken(t *testing.T) {
 
 func TestHandleRegisterHostSuccess(t *testing.T) {
 	registry := fakeHostRegistry{createdHost: hosts.Host{ID: "host-1", Label: "Test Host"}}
-	h := handleRegisterHost(registry)
+	pub := &fakeEventPublisher{}
+	h := handleRegisterHost(registry, pub)
 
 	body := `{"token":"valid","label":"Test Host","hostname":"test.local","capabilities":{"cores":8}}`
 	rec := httptest.NewRecorder()
@@ -49,11 +61,27 @@ func TestHandleRegisterHostSuccess(t *testing.T) {
 	if resp.HostID != "host-1" || resp.Label != "Test Host" {
 		t.Errorf("response = %+v, unexpected", resp)
 	}
+	if len(pub.types) != 1 || pub.types[0] != "host.registered" {
+		t.Errorf("published events = %v, want [host.registered]", pub.types)
+	}
+}
+
+func TestHandleRegisterHostSucceedsWithoutEventPublisher(t *testing.T) {
+	registry := fakeHostRegistry{createdHost: hosts.Host{ID: "host-1", Label: "Test Host"}}
+	h := handleRegisterHost(registry, nil)
+
+	body := `{"token":"valid","label":"Test Host","hostname":"test.local"}`
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest(http.MethodPost, "/api/v1/hosts/register", strings.NewReader(body)))
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func TestHandleRegisterHostInvalidToken(t *testing.T) {
 	registry := fakeHostRegistry{consumeErr: hosts.ErrInvalidToken}
-	h := handleRegisterHost(registry)
+	h := handleRegisterHost(registry, nil)
 
 	body := `{"token":"bogus","label":"X","hostname":"x.local"}`
 	rec := httptest.NewRecorder()
@@ -65,7 +93,7 @@ func TestHandleRegisterHostInvalidToken(t *testing.T) {
 }
 
 func TestHandleRegisterHostMissingFields(t *testing.T) {
-	h := handleRegisterHost(fakeHostRegistry{})
+	h := handleRegisterHost(fakeHostRegistry{}, nil)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodPost, "/api/v1/hosts/register", strings.NewReader(`{"token":"x"}`)))

@@ -6,7 +6,15 @@ import (
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// fakeEventPublisher ist ein Test-Double für EventPublisher, das nur die
+// Typen der empfangenen Events sammelt (gleiches Muster wie
+// graph_test.go).
+type fakeEventPublisher struct{ types []string }
+
+func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
 
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -27,7 +35,7 @@ func testDB(t *testing.T) *sql.DB {
 
 func TestLogAndList(t *testing.T) {
 	database := testDB(t)
-	store := NewStore(database)
+	store := NewStore(database, nil)
 	username := "test-audit-user"
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM audit_log WHERE username = $1`, username) })
 
@@ -53,5 +61,19 @@ func TestLogAndList(t *testing.T) {
 	}
 	if found != 2 {
 		t.Fatalf("List() found %d entries for %s, want 2", found, username)
+	}
+}
+
+func TestLogBroadcastsAuditAppended(t *testing.T) {
+	database := testDB(t)
+	pub := &fakeEventPublisher{}
+	store := NewStore(database, pub)
+	username := "test-audit-broadcast-user"
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM audit_log WHERE username = $1`, username) })
+
+	store.Log(username, "POST", "/api/v1/workflows", "", 201)
+
+	if len(pub.types) != 1 || pub.types[0] != "audit.appended" {
+		t.Errorf("published events = %v, want [audit.appended]", pub.types)
 	}
 }

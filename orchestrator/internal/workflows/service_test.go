@@ -10,7 +10,15 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// fakeEventPublisher ist ein Test-Double für EventPublisher, das nur die
+// Typen der empfangenen Events sammelt (gleiches Muster wie
+// graph_test.go/audit_test.go).
+type fakeEventPublisher struct{ types []string }
+
+func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
 
 type fakeStore struct {
 	mu  sync.Mutex
@@ -213,6 +221,43 @@ func TestDeleteRequiresStopped(t *testing.T) {
 	store.Put(stopped)
 	if err := svc.Delete(wf.ID); err != nil {
 		t.Fatalf("Delete() error = %v, want nil", err)
+	}
+}
+
+// TestCreatePublishesWorkflowUpdated ist ein S2-Regressionstest
+// (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): per Live-CDP-Test
+// gefunden, dass Create() als einziger Schreibpfad kein "workflow.
+// updated" broadcastete — ein extern (nicht über workflows-view.ts'
+// eigenes #createWorkflow(), das nach dem POST selbst pollt) angelegter
+// Workflow blieb dadurch in jedem anderen offenen Tab bis zum
+// 30s-Fallback-Poll unsichtbar.
+func TestCreatePublishesWorkflowUpdated(t *testing.T) {
+	pub := &fakeEventPublisher{}
+	svc := &Service{store: newFakeStore(), events: pub}
+
+	if _, err := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if len(pub.types) != 1 || pub.types[0] != "workflow.updated" {
+		t.Errorf("published events = %v, want [workflow.updated]", pub.types)
+	}
+}
+
+// TestDeletePublishesWorkflowUpdated — gleicher Grund wie bei Create().
+func TestDeletePublishesWorkflowUpdated(t *testing.T) {
+	store := newFakeStore()
+	svc := &Service{store: store}
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+
+	pub := &fakeEventPublisher{}
+	svc.events = pub
+	if err := svc.Delete(wf.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	if len(pub.types) != 1 || pub.types[0] != "workflow.updated" {
+		t.Errorf("published events = %v, want [workflow.updated]", pub.types)
 	}
 }
 

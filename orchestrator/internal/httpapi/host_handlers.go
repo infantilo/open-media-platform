@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 // bootstrapTokenTTL ist die Gültigkeitsdauer eines ausgestellten
@@ -72,8 +73,13 @@ type registerHostResponse struct {
 // omp-host-agent ist kein angemeldeter Nutzer, seine Zugriffskontrolle
 // ist das Bootstrap-Token selbst (ARCHITECTURE.md §18.3 Punkt 3/4 —
 // "Erkennung ist nie ungesichert-anonym"), nicht ein Bearer-Token aus
-// internal/auth.
-func handleRegisterHost(registry HostRegistry) http.HandlerFunc {
+// internal/auth. Broadcastet nach erfolgreicher Registrierung
+// "host.registered" (S2 — docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
+// hosts-view.ts soll einen neuen Host ohne Poll <1s anzeigen, statt bis
+// zum nächsten Poll-Intervall zu warten. events darf nil sein (z. B. in
+// Tests) — dann bleibt das Verhalten unverändert (kein Broadcast, kein
+// Fehler).
+func handleRegisterHost(registry HostRegistry, events EventSubscriber) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req registerHostRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Token == "" || req.Label == "" || req.Hostname == "" {
@@ -92,6 +98,14 @@ func handleRegisterHost(registry HostRegistry) http.HandlerFunc {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if events != nil {
+			// Reiner Trigger (gleiches Muster wie audit.Store.Log):
+			// hosts-view.ts lädt bei Empfang einmal GET /api/v1/hosts neu.
+			data, err := json.Marshal(registerHostResponse{HostID: h.ID, Label: h.Label})
+			if err == nil {
+				events.Broadcast(sse.Event{Type: "host.registered", Data: data})
+			}
 		}
 		writeJSON(w, http.StatusCreated, registerHostResponse{HostID: h.ID, Label: h.Label})
 	}

@@ -174,7 +174,7 @@ func main() {
 	}
 	authSvc := auth.NewService(auth.NewStore(database), jwtSecret)
 	authzStore := authz.NewStore(database)
-	auditStore := audit.NewStore(database)
+	auditStore := audit.NewStore(database, hub)
 	consoleResolver := consoles.NewResolver(authzStore)
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).

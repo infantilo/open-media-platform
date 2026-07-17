@@ -6,11 +6,14 @@
 //   - GET /api/v1/instances (crashed/restartCount, K7-Teil-1)
 //   - GET /api/v1/placement/advice (Ressourcen-Ampel, D6 Teil 3)
 //   - GET /api/v1/workflows (status "failed")
-// Gleiches Poll-Muster wie hosts-view.ts (keine SSE-Sonderbehandlung
-// nötig, ein paar Sekunden Verzögerung sind für eine Alarm-Übersicht
-// unkritisch) — über apiFetch() (connection.ts), damit ein Fehlschlag
-// den geteilten ConnectionMonitor auf "degraded" setzt statt still zu
-// bleiben.
+// SSE-first (S2, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): reagiert
+// auf "instance.crashed"/"instance.restarted" (launcher.go),
+// "placement.advice" (D6 Teil 3) und "workflow.updated" — alle drei
+// existieren bereits, kein neues Backend-Event nötig — statt alle paar
+// Sekunden zu pollen. Poll bleibt nur als deutlich langsamerer
+// Reconnect-/Fallback-Pfad (POLL_FALLBACK_INTERVAL_MS). Über apiFetch()
+// (connection.ts), damit ein Fehlschlag den geteilten ConnectionMonitor
+// auf "degraded" setzt statt still zu bleiben.
 //
 // Bewusst additiv, nicht ersetzend: hosts-view.ts zeigt Placement-
 // Advice weiterhin zusätzlich inline (kontextuell dort sinnvoll, wenn
@@ -18,7 +21,7 @@
 // zusätzliche zentrale Überblick über alle Alarmarten zusammen, keine
 // Ablösung der bestehenden Einzelanzeigen (docs/decisions.md,
 // 2026-07-17 Nachtrag 5, Abwägung dokumentiert).
-import { apiFetch } from "./connection.ts";
+import { apiFetch, connectionMonitor } from "./connection.ts";
 
 interface LauncherInstance {
   id: string;
@@ -67,7 +70,15 @@ const SEVERITY_LABEL: Record<Severity, string> = {
   warning: "Warnung",
 };
 
-const POLL_INTERVAL_MS = 4000;
+const POLL_FALLBACK_INTERVAL_MS = 30000;
+
+const REFRESH_EVENT_TYPES = new Set([
+  "instance.crashed",
+  "instance.restarted",
+  "placement.advice",
+  "workflow.updated",
+  "lost-events",
+]);
 
 function reasonLabel(reason: string): string {
   switch (reason) {
@@ -146,12 +157,24 @@ class AlarmView extends HTMLElement {
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     this.#render([]);
     this.#poll();
-    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_INTERVAL_MS);
+    this.#pollHandle = window.setInterval(() => this.#poll(), POLL_FALLBACK_INTERVAL_MS);
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
 
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
+
+  #onSseMessage = (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (REFRESH_EVENT_TYPES.has(parsed.type)) this.#poll();
+  };
 
   async #poll() {
     try {

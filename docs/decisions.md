@@ -5974,3 +5974,95 @@ Launcher gestartet):
 **Nicht Teil dieser Sitzung (nächste Schritte laut Reihenfolge):** S2
 (SSE-first-UI + Lost-Events-Signal), danach S3 (Remote-Parität für
 Instanzen).
+
+
+## 2026-07-17 (Nachtrag 11) — S2: SSE-first-UI + Lost-Events-Signal
+(docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md), zweiter Umsetzungsschritt
+aus dem Review-Arbeitsvorrat
+
+Zweiter Schritt aus [[project_review_2026_07_17_s_steps]], nach S1
+(Graph-Edge-Cache). `workflows-view.ts`/`hosts-view.ts`/`alarm-view.ts`/
+`admin-view.ts` (Audit) pollten bisher alle 3–5s; jetzt reagieren sie
+auf SSE-Events, Poll bleibt nur als 30s-Fallback (Reconnect/verpasstes
+Event).
+
+**Backend (`orchestrator/internal/sse/hub.go`):** `Hub` merkt sich pro
+Client (`dropped map[chan Event]bool`), ob seit dem letzten
+erfolgreichen Empfang mindestens ein Event verloren ging (voller
+16er-Puffer). Sobald wieder Platz ist, bekommt der Client zuerst ein
+synthetisches `{"type":"lost-events"}` zugestellt (nicht blockierend,
+gleiches Best-effort-Muster wie der Rest von `Broadcast`), erst danach
+das eigentliche Event — Views laden bei Empfang einmal voll nach statt
+still auf veraltetem Stand zu bleiben. `Subscribe`s cancel-Closure in
+eine eigene `unsubscribe`-Methode ausgelagert (räumt jetzt auch
+`dropped` auf, verhindert einen Map-Leak; nebenbei nötig, damit
+Whitebox-Tests einen Client ohne den narrowenden `<-chan`-Rückgabetyp
+von `Subscribe` registrieren/abmelden können). Sechs neue Tests in
+`hub_test.go`.
+
+**Backend, fehlende Events ergänzt (geprüft, was schon publiziert
+wird, bevor etwas Neues erfunden wurde — `workflow.updated`,
+`instance.crashed`/`.restarted`, `placement.advice` und die per NATS-
+Subject-Passthrough bereits vorhandenen `omp.host.<id>.metrics`
+existierten alle schon):**
+- `audit.appended` (`internal/audit/audit.go`): `Store` bekommt einen
+  optionalen `EventPublisher` (`NewStore(db, events)`, gleiches Muster
+  wie `graph.Service`), broadcastet nach jedem erfolgreichen
+  `Log()`-Aufruf. Reiner Trigger ohne Nutzdaten — das Admin-Tab lädt
+  bei Empfang einmal `GET /api/v1/admin/audit-log` neu.
+- `host.registered` (`internal/httpapi/host_handlers.go`):
+  `EventSubscriber`-Interface um `Broadcast(sse.Event)` erweitert
+  (dieselbe Konkretion `*sse.Hub` implementiert ohnehin beides),
+  `handleRegisterHost` broadcastet nach erfolgreicher Registrierung.
+
+**Live-CDP-Test fand einen echten, vorbestehenden Lücken-Bug (nicht
+nur ein UI-Problem):** `workflows.Service.Create()` und `.Delete()`
+riefen `s.publish()` nie auf — nur `Start`/`Stop`/die Restart-Rewire
+taten es. Ein Workflow, der nicht über `workflows-view.ts`s eigenes
+`#createWorkflow()`/`#deleteWorkflow()` (die nach ihrem eigenen POST/
+DELETE ohnehin selbst `#poll()` aufrufen) sondern extern angelegt/
+gelöscht wurde, blieb dadurch in jedem anderen offenen Tab bis zum
+30s-Fallback unsichtbar — beim ersten Live-Test tatsächlich
+reproduziert (3s-Timeout ohne sichtbare Zeile), erst danach beide
+fehlenden `s.publish()`-Aufrufe ergänzt. Zwei neue Tests
+(`TestCreatePublishesWorkflowUpdated`, `TestDeletePublishesWorkflowUpdated`)
+in `internal/workflows/service_test.go`.
+
+**UI (`ui/shell/*.ts`):** vier Views bekommen je einen
+`#onSseMessage`-Listener auf `connectionMonitor` (gleiches Muster wie
+`flow-canvas.ts`), der bei einem passenden Event-Typ (oder
+`lost-events`) den bestehenden `#poll()`/`#loadAudit()` aufruft. Alle
+vier `POLL_INTERVAL_MS`-Konstanten (3–5s) auf
+`POLL_FALLBACK_INTERVAL_MS`/`AUDIT_POLL_FALLBACK_INTERVAL_MS` = 30s
+umbenannt/erhöht. `admin-view.ts`s Nutzer-/Rollenbindungs-Abschnitte
+bewusst unverändert (kein Poll/SSE-Refresh dort seit jeher, offenes
+Formular würde Fokus verlieren — nur das rein lesende Audit-Log
+reagiert).
+
+**Verifiziert:**
+- `go build`/`go vet`/`go test ./...` (ganzer Orchestrator, inkl. der
+  neuen Hub-/Audit-/Workflow-Tests) grün, `deno check`/`deno test ui/`
+  (40/40) grün, `deno bundle` erfolgreich.
+- **Live, echter Orchestrator, per CDP (Node, eingebauter WebSocket-
+  Client statt npm-Paket — kein `chromium --dump-dom`, s.
+  `feedback_browser_verification_cdp_over_dump_dom`):** Leerlauf-
+  Messung über 35s mit allen vier Views gleichzeitig gemountet (plus
+  dem ohnehin schon SSE-getriebenen Flow-Editor-Tab) ergab 1–4
+  `/api/v1/*`-Requests insgesamt — vorher wären es allein für diese
+  vier Views over 35s rechnerisch ~36+ gewesen (Workflows alle 3s,
+  Hosts/Alarme alle 4s, Audit alle 5s). Ein per direktem API-Aufruf
+  (nicht über die UI) angelegter Workflow erschien nach dem
+  `publish()`-Fix nach 68ms in der Workflow-Liste, eine per direktem
+  API-Aufruf registrierte Host nach 195ms in der Host-Liste — beide
+  ohne jeden Poll, weit unter der 1s-Vorgabe.
+- Das Lost-Events-Overflow-Verhalten selbst (Hub-Puffer voll → Drop →
+  `lost-events` beim nächsten freien Platz) ist deterministisch in
+  `hub_test.go` abgedeckt (`TestHubBroadcastSignalsLostEventsOnNextRoomAvailable`
+  u. a.); ein echter >16-Event-Burst wurde bewusst **nicht** zusätzlich
+  live im Browser erzwungen — das wäre eine Race-Bedingung ohne
+  zusätzlichen Erkenntnisgewinn gegenüber dem deterministischen
+  Unit-Test.
+
+**Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):** S3
+(Remote-Parität für Instanzen — Host-Agent-Crash-Events über NATS,
+Auto-Restart, `extraEnv`-Allowlist).

@@ -7,8 +7,11 @@ package audit
 
 import (
 	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
 // Entry ist eine protokollierte Aktion.
@@ -22,14 +25,23 @@ type Entry struct {
 	Status     int       `json:"status"`
 }
 
+// EventPublisher verteilt ein "audit.appended"-Event an alle verbundenen
+// Flow-Editor-/Admin-Tab-Clients (implementiert von *sse.Hub, S2 —
+// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md). Optional, darf nil sein
+// (z. B. in Tests) — gleiches Muster wie graph.EventPublisher.
+type EventPublisher interface {
+	Broadcast(sse.Event)
+}
+
 // Store schreibt/liest Audit-Einträge.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	events EventPublisher
 }
 
 // NewStore erstellt einen Store gegen die gegebene DB-Verbindung.
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+func NewStore(db *sql.DB, events EventPublisher) *Store {
+	return &Store{db: db, events: events}
 }
 
 // Log schreibt einen Eintrag. Best-effort: ein DB-Fehler beim Loggen
@@ -46,6 +58,14 @@ func (s *Store) Log(username, method, path, nodeID string, status int) {
 		username, method, path, nodeIDArg, status)
 	if err != nil {
 		slog.Warn("audit log write failed", "error", err, "username", username, "method", method, "path", path)
+		return
+	}
+	// Reiner Trigger, keine Nutzdaten (gleiches Muster wie
+	// graph.Service.publish): das Admin-Tab lädt bei Empfang einmal
+	// GET /api/v1/admin/audit-log neu statt den Eintrag aus dem
+	// Event-Payload zu rekonstruieren.
+	if s.events != nil {
+		s.events.Broadcast(sse.Event{Type: "audit.appended", Data: json.RawMessage("null")})
 	}
 }
 
