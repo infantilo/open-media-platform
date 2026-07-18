@@ -7,12 +7,11 @@
 // startet. Rein additiv zum bestehenden Instanz-Launcher (C8/D6 Teil 2):
 // Start eines Workflows ruft denselben Launcher pro Rolle auf.
 //
-// **Bewusst nicht in D7 Teil 1** (dokumentierte Scope-Grenze, §6.2 nennt
-// den vollen Umfang): Zeitsteuerung (start_at/stop_at), Stop-
-// Sicherheitsabfrage (confirm_stop), Ressourcen-Vorprüfung/Placement-
-// Integration (§6.1, selbst noch zurückgestellt) — dieser Schritt liefert
-// nur das Workflow-Objekt selbst plus manuelles Bundle-Start/Stop mit
-// automatischer Verkabelung, sobald die erwarteten Nodes erscheinen.
+// D7 Teil 2 (ARCHITECTURE.md §6.2-Erweiterung 2026-07-10) ergänzt die in
+// D7 Teil 1 bewusst zurückgestellten drei Punkte: Zeitsteuerung
+// (Schedule, s. u.), Stop-Sicherheitsabfrage (Settings.ConfirmStop) und
+// Ressourcen-Vorprüfung als harte Start-Vorbedingung (s. service.go
+// checkResources).
 package workflows
 
 import "time"
@@ -78,6 +77,70 @@ type Connection struct {
 type Settings struct {
 	ProgramWidth  uint32 `json:"programWidth,omitempty"`
 	ProgramHeight uint32 `json:"programHeight,omitempty"`
+	// ConfirmStop (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2): wenn gesetzt,
+	// verlangt Stop() ein explizites confirm=true (zweistufig — ein Stop
+	// ohne Bestätigung wird mit ErrConfirmationRequired abgelehnt, die UI
+	// zeigt dann einen Bestätigungsdialog). Ein zeitgesteuerter Stop
+	// (Schedule, s. u.) überspringt diese Abfrage bewusst — die
+	// Bestätigung ist beim Anlegen des Zeitplans bereits erfolgt, nicht
+	// erst um 03:00 nachts (ARCHITECTURE.md §6.2 Punkt 2, wörtlich).
+	ConfirmStop bool `json:"confirmStop,omitempty"`
+}
+
+// ScheduleKind unterscheidet einmalige von wiederkehrenden Zeitplänen
+// (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 1).
+type ScheduleKind string
+
+const (
+	ScheduleOnce   ScheduleKind = "once"
+	ScheduleDaily  ScheduleKind = "daily"
+	ScheduleWeekly ScheduleKind = "weekly"
+)
+
+// ScheduleAction ist die vom Zeitplan ausgelöste Lifecycle-Aktion.
+type ScheduleAction string
+
+const (
+	ScheduleActionStart ScheduleAction = "start"
+	ScheduleActionStop  ScheduleAction = "stop"
+)
+
+// Schedule ist ein einzelner Zeitplan-Eintrag eines Workflows (D7 Teil 2)
+// — ein Workflow kann mehrere haben (z. B. "täglich 08:00 starten,
+// 22:00 stoppen"). Zeitbasis ist die Systemzeit des Orchestrators (NTP),
+// bewusst nicht PTP (ARCHITECTURE.md §6.2-Erweiterung: "Kontroll-
+// Zeitbasis, hier bewusst nicht mit der Media-Zeitbasis vermengt").
+//
+// Nachhol-Regel bei verpassten Zeitpunkten (Orchestrator war zum
+// geplanten Zeitpunkt down): **verfallen lassen**, nicht nachholen —
+// Entscheidung dieser Sitzung (ARCHITECTURE.md nennt die Wahl explizit
+// offen, "Detail in D7"). Begründung: ein verspätet nachgeholter Start/
+// Stop Stunden nach dem geplanten Zeitpunkt kann mit zwischenzeitlicher
+// manueller Bedienung kollidieren — für einen Sendebetrieb ist ein
+// stiller Ausfall des Zeitplans (sichtbar im Audit-Log/Alarm-View)
+// sicherer als eine überraschende verspätete Aktion. Implementiert über
+// LastFiredAt: Scheduler.tick() feuert nur, wenn der berechnete
+// Ist-Zeitpunkt innerhalb eines kurzen, aktuellen Zeitfensters liegt
+// (scheduler.go fireWindow) UND von LastFiredAt abweicht — ein länger
+// zurückliegender, verpasster Zeitpunkt fällt aus diesem Fenster heraus
+// und feuert nie nachträglich.
+type Schedule struct {
+	ID     string         `json:"id"`
+	Kind   ScheduleKind   `json:"kind"`
+	Action ScheduleAction `json:"action"`
+	// At (nur "once"): fester Zeitpunkt, RFC3339.
+	At *time.Time `json:"at,omitempty"`
+	// TimeOfDay (nur "daily"/"weekly"): "HH:MM" in der Orchestrator-
+	// Ortszeit.
+	TimeOfDay string `json:"timeOfDay,omitempty"`
+	// Weekday (nur "weekly"): 0=Sonntag..6=Samstag (time.Weekday-
+	// kompatibel).
+	Weekday *int `json:"weekday,omitempty"`
+	// LastFiredAt wird ausschließlich vom Scheduler geschrieben (s. o.)
+	// — ein Client, der einen Workflow per PUT aktualisiert, sollte den
+	// zuletzt per GET gelesenen Wert unverändert zurückschicken, sonst
+	// kann ein bereits gefeuertes "once"-Schedule erneut feuern.
+	LastFiredAt *time.Time `json:"lastFiredAt,omitempty"`
 }
 
 // Definition ist der vom Nutzer festgelegte, unveränderliche Teil eines
@@ -87,6 +150,7 @@ type Definition struct {
 	Roles       []Role       `json:"roles"`
 	Connections []Connection `json:"connections"`
 	Settings    Settings     `json:"settings,omitempty"`
+	Schedules   []Schedule   `json:"schedules,omitempty"`
 }
 
 // RoleRuntime hält fest, welche konkrete Instanz/Node gerade eine Rolle

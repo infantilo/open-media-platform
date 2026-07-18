@@ -16,6 +16,7 @@
 // still zu bleiben.
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 
 interface CatalogEntry {
   type: string;
@@ -48,18 +49,37 @@ interface Connection {
 }
 
 // Settings (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17):
-// pro Workflow konfigurierbare, node-übergreifende Werte — aktuell nur
-// die Programm-Auflösung. 0/undefined = Node behält ihren eigenen
+// pro Workflow konfigurierbare, node-übergreifende Werte — aktuell die
+// Programm-Auflösung sowie (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2) die
+// Stop-Sicherheitsabfrage. 0/undefined = Node behält ihren eigenen
 // Default (heute meist 640×480 fest verdrahtet).
 interface Settings {
   programWidth?: number;
   programHeight?: number;
+  confirmStop?: boolean;
 }
+
+// Schedule (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 1, orchestrator/
+// internal/workflows/types.go) — lastFiredAt wird ausschließlich vom
+// Scheduler geschrieben; das Formular übernimmt ihn beim Bearbeiten
+// unverändert (s. #editWorkflow), sonst könnte ein bereits gefeuertes
+// "once"-Schedule beim Speichern erneut feuern.
+interface Schedule {
+  id: string;
+  kind: "once" | "daily" | "weekly";
+  action: "start" | "stop";
+  at?: string;
+  timeOfDay?: string;
+  weekday?: number;
+  lastFiredAt?: string;
+}
+
+const WEEKDAY_LABELS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
 interface Workflow {
   id: string;
   name: string;
-  definition: { roles: Role[]; connections: Connection[]; settings?: Settings };
+  definition: { roles: Role[]; connections: Connection[]; settings?: Settings; schedules?: Schedule[] };
   status: string;
   error?: string;
   runtime?: Record<string, { instanceId: string; nodeId?: string }>;
@@ -96,6 +116,9 @@ class WorkflowsView extends HTMLElement {
   // laufen mit ihrem eigenen Default (keine erzwungene Auflösung).
   #formWidth = "";
   #formHeight = "";
+  // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1/2).
+  #formSchedules: Schedule[] = [];
+  #formConfirmStop = false;
   #showForm = false;
   // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}, §22.3 Punkt 2): gesetzt
   // während "Bearbeiten" eines bestehenden (gestoppten) Workflows —
@@ -172,12 +195,23 @@ class WorkflowsView extends HTMLElement {
     const settings: Settings = {};
     if (Number.isFinite(width) && width > 0) settings.programWidth = width;
     if (Number.isFinite(height) && height > 0) settings.programHeight = height;
+    if (this.#formConfirmStop) settings.confirmStop = true;
+    // Nur vollständig ausgefüllte Zeilen mitschicken (gleiche Haltung
+    // wie roles/connections oben) — die Backend-Validierung (D7 Teil 2)
+    // lehnt eine unvollständige Zeile ohnehin mit einem verständlichen
+    // Fehler ab, hier nur ein Filter gegen offensichtlich leere Zeilen.
+    const schedules = this.#formSchedules.filter((s) => {
+      if (s.kind === "once") return !!s.at;
+      if (s.kind === "weekly") return !!s.timeOfDay && s.weekday !== undefined;
+      return !!s.timeOfDay;
+    });
     const body = {
       name: this.#formName,
       definition: {
         roles: roles.map((r) => ({ name: r.name, nodeType: r.nodeType, hostId: r.hostId || undefined })),
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
         settings: Object.keys(settings).length > 0 ? settings : undefined,
+        schedules: schedules.length > 0 ? schedules : undefined,
       },
     };
     const editingId = this.#editingId;
@@ -201,14 +235,20 @@ class WorkflowsView extends HTMLElement {
       showToast(`${verb} fehlgeschlagen: ${err}`);
       return;
     }
+    this.#resetForm();
+    this.#showForm = false;
+    this.#editingId = null;
+    await this.#poll();
+  }
+
+  #resetForm() {
     this.#formName = "";
     this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
     this.#formConnections = [];
     this.#formWidth = "";
     this.#formHeight = "";
-    this.#showForm = false;
-    this.#editingId = null;
-    await this.#poll();
+    this.#formSchedules = [];
+    this.#formConfirmStop = false;
   }
 
   // Öffnet das Formular vorbefüllt mit der bestehenden Definition eines
@@ -221,6 +261,11 @@ class WorkflowsView extends HTMLElement {
     this.#formConnections = wf.definition.connections.map((c) => ({ ...c }));
     this.#formWidth = wf.definition.settings?.programWidth ? String(wf.definition.settings.programWidth) : "";
     this.#formHeight = wf.definition.settings?.programHeight ? String(wf.definition.settings.programHeight) : "";
+    this.#formConfirmStop = wf.definition.settings?.confirmStop ?? false;
+    // lastFiredAt unverändert übernehmen (s. Schedule-Doku oben) — sonst
+    // könnte ein bereits gefeuertes "once"-Schedule beim Speichern erneut
+    // feuern.
+    this.#formSchedules = (wf.definition.schedules ?? []).map((s) => ({ ...s }));
     this.#showForm = true;
     this.#render();
   }
@@ -230,8 +275,28 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
-  async #stopWorkflow(id: string) {
-    await apiFetch(`/api/v1/workflows/${id}/stop`, { method: "POST" });
+  // confirm wird immer mitgeschickt — der Orchestrator wertet ihn nur
+  // aus, wenn der Workflow settings.confirmStop gesetzt hat (D7 Teil 2),
+  // sonst unverändertes Verhalten wie vor diesem Feld.
+  async #stopWorkflow(wf: Workflow) {
+    if (wf.definition.settings?.confirmStop) {
+      const ok = await confirmDialog(`Workflow „${wf.name}" wirklich stoppen?`, { confirmLabel: "Stoppen" });
+      if (!ok) return;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        showToast(`Stoppen fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+    } catch (err) {
+      showToast(`Stoppen fehlgeschlagen: ${err}`);
+      return;
+    }
     await this.#poll();
   }
 
@@ -265,11 +330,7 @@ class WorkflowsView extends HTMLElement {
         // sonst würde ein späteres "+ Neu" versehentlich wieder als PUT
         // auf die zuletzt bearbeitete ID gesendet.
         this.#editingId = null;
-        this.#formName = "";
-        this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
-        this.#formConnections = [];
-        this.#formWidth = "";
-        this.#formHeight = "";
+        this.#resetForm();
       }
       this.#render();
     });
@@ -328,6 +389,19 @@ class WorkflowsView extends HTMLElement {
       row.appendChild(res);
     }
 
+    // D7 Teil 2: kompakte Hinweise statt vollem Zeitplan-Text — Details
+    // stehen im Formular ("Bearbeiten").
+    const badges: string[] = [];
+    if (settings?.confirmStop) badges.push("Sicherheitsabfrage beim Stoppen");
+    const scheduleCount = wf.definition.schedules?.length ?? 0;
+    if (scheduleCount > 0) badges.push(`${scheduleCount} Zeitplan${scheduleCount === 1 ? "" : "e"}`);
+    if (badges.length > 0) {
+      const badgeRow = document.createElement("div");
+      badgeRow.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
+      badgeRow.textContent = badges.join(" · ");
+      row.appendChild(badgeRow);
+    }
+
     if (wf.error) {
       const err = document.createElement("div");
       err.style.cssText = "color:#e57373;font-size:11px;margin-top:2px;white-space:pre-wrap;";
@@ -351,7 +425,7 @@ class WorkflowsView extends HTMLElement {
     stopBtn.textContent = "Stop";
     stopBtn.style.cssText = "font-size:11px;cursor:pointer;";
     stopBtn.disabled = !canStop;
-    stopBtn.addEventListener("click", () => this.#stopWorkflow(wf.id));
+    stopBtn.addEventListener("click", () => this.#stopWorkflow(wf));
     actions.appendChild(stopBtn);
 
     // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): nur im Zustand
@@ -560,6 +634,39 @@ class WorkflowsView extends HTMLElement {
     settingsRow.append(widthInput, xLabel, heightInput);
     form.appendChild(settingsRow);
 
+    // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): Start/Stop-Zeitpläne.
+    const scheduleHeading = document.createElement("div");
+    scheduleHeading.textContent = "Zeitsteuerung (optional)";
+    scheduleHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    form.appendChild(scheduleHeading);
+
+    this.#formSchedules.forEach((sched, i) => {
+      form.appendChild(this.#renderScheduleRow(sched, i));
+    });
+
+    const addScheduleBtn = document.createElement("button");
+    addScheduleBtn.textContent = "+ Zeitplan";
+    addScheduleBtn.style.cssText = "font-size:11px;cursor:pointer;margin-bottom:8px;";
+    addScheduleBtn.addEventListener("click", () => {
+      this.#formSchedules.push({ id: crypto.randomUUID(), kind: "daily", action: "start" });
+      this.#render();
+    });
+    form.appendChild(addScheduleBtn);
+
+    // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 2): Stop-Sicherheitsabfrage.
+    const confirmStopRow = document.createElement("label");
+    confirmStopRow.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:8px;cursor:pointer;";
+    const confirmStopCheckbox = document.createElement("input");
+    confirmStopCheckbox.type = "checkbox";
+    confirmStopCheckbox.checked = this.#formConfirmStop;
+    confirmStopCheckbox.addEventListener("change", () => {
+      this.#formConfirmStop = confirmStopCheckbox.checked;
+    });
+    const confirmStopLabel = document.createElement("span");
+    confirmStopLabel.textContent = "Sicherheitsabfrage beim Stoppen verlangen";
+    confirmStopRow.append(confirmStopCheckbox, confirmStopLabel);
+    form.appendChild(confirmStopRow);
+
     const createBtn = document.createElement("button");
     createBtn.textContent = this.#editingId ? "Speichern" : "Anlegen";
     createBtn.style.cssText = "display:block;cursor:pointer;";
@@ -585,6 +692,98 @@ class WorkflowsView extends HTMLElement {
     select.addEventListener("change", () => onChange(select.value));
     return select;
   }
+
+  // D7 Teil 2: eine Zeitplan-Zeile — Kind+Aktion immer, dazu je nach Kind
+  // ein datetime-local-Feld ("once") oder ein Zeit- (+ bei "weekly"
+  // Wochentags-)Feld.
+  #renderScheduleRow(sched: Schedule, i: number): HTMLElement {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;align-items:center;flex-wrap:wrap;";
+
+    const kindSelect = document.createElement("select");
+    (["once", "daily", "weekly"] as const).forEach((value) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value === "once" ? "einmalig" : value === "daily" ? "täglich" : "wöchentlich";
+      if (value === sched.kind) opt.selected = true;
+      kindSelect.appendChild(opt);
+    });
+    kindSelect.addEventListener("change", () => {
+      sched.kind = kindSelect.value as Schedule["kind"];
+      this.#render();
+    });
+
+    const actionSelect = document.createElement("select");
+    (["start", "stop"] as const).forEach((value) => {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value === "start" ? "Start" : "Stop";
+      if (value === sched.action) opt.selected = true;
+      actionSelect.appendChild(opt);
+    });
+    actionSelect.addEventListener("change", () => {
+      sched.action = actionSelect.value as Schedule["action"];
+    });
+
+    row.append(kindSelect, actionSelect);
+
+    if (sched.kind === "once") {
+      const dtInput = document.createElement("input");
+      dtInput.type = "datetime-local";
+      dtInput.value = sched.at ? toDatetimeLocalValue(sched.at) : "";
+      dtInput.addEventListener("input", () => {
+        sched.at = dtInput.value ? new Date(dtInput.value).toISOString() : undefined;
+      });
+      row.appendChild(dtInput);
+    } else {
+      if (sched.kind === "weekly") {
+        // Sofort auf "So" (Index 0) festlegen statt nur visuell — sonst
+        // zeigt der Select eine Auswahl, die sched.weekday (undefined)
+        // nicht widerspiegelt, bis der Nutzer ihn tatsächlich ändert.
+        if (sched.weekday === undefined) sched.weekday = 0;
+        const weekdaySelect = document.createElement("select");
+        WEEKDAY_LABELS.forEach((label, idx) => {
+          const opt = document.createElement("option");
+          opt.value = String(idx);
+          opt.textContent = label;
+          if (sched.weekday === idx) opt.selected = true;
+          weekdaySelect.appendChild(opt);
+        });
+        weekdaySelect.addEventListener("change", () => {
+          sched.weekday = Number(weekdaySelect.value);
+        });
+        row.appendChild(weekdaySelect);
+      }
+      const timeInput = document.createElement("input");
+      timeInput.type = "time";
+      timeInput.value = sched.timeOfDay ?? "";
+      timeInput.addEventListener("input", () => {
+        sched.timeOfDay = timeInput.value || undefined;
+      });
+      row.appendChild(timeInput);
+    }
+
+    const removeBtn = document.createElement("button");
+    removeBtn.textContent = "×";
+    removeBtn.style.cssText = "cursor:pointer;";
+    removeBtn.addEventListener("click", () => {
+      this.#formSchedules.splice(i, 1);
+      this.#render();
+    });
+    row.appendChild(removeBtn);
+
+    return row;
+  }
+}
+
+// Wandelt einen gespeicherten ISO-Zeitstempel in den von
+// <input type="datetime-local"> erwarteten lokalen Wert
+// ("YYYY-MM-DDTHH:mm") um — bewusst über die lokalen Date-Getter, nicht
+// toISOString() (das liefert UTC, nicht die Ortszeit des Browsers).
+function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 customElements.define("omp-workflows-view", WorkflowsView);

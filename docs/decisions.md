@@ -6747,3 +6747,122 @@ Export/Import-Datei), Teil 4 (Workflow-Scope-AuthZ), Teil 5
 (Operator-Einstieg), Teil 6 (Rollen-Designer/Katalog-Grid);
 D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung), laut §12.4
 empfohlen zwischen Teil 2 und Teil 3.
+
+## 2026-07-18 (Nachtrag 19) — D7 Teil 2: Zeitsteuerung, Stop-
+Sicherheitsabfrage, Ressourcen-Vorprüfung — inkl. eines live gefundenen
+und behobenen Nebenläufigkeits-Bugs
+
+**Umsetzung wie in ARCHITECTURE.md §6.2-Erweiterung 2026-07-10
+spezifiziert, alle drei Punkte:**
+
+**1. Zeitsteuerung.** `workflows.Schedule` (types.go): `kind`
+(`once`/`daily`/`weekly`), `action` (`start`/`stop`), je nach `kind`
+`at` (RFC3339), `timeOfDay` ("HH:MM") und/oder `weekday` (0–6). Neuer
+`workflows.Scheduler` (scheduler.go, eigene Hintergrund-Schleife wie
+`registry.Poller`/`placement.Engine`, Tick alle 20 s) wertet pro
+Workflow jeden Schedule aus und ruft `Start()`/`Stop()` auf, sobald der
+berechnete Ist-Zeitpunkt innerhalb eines 90-s-Fensters liegt.
+**Nachhol-Regel bei verpassten Zeitpunkten — explizit entschieden
+(ARCHITECTURE.md nennt die Wahl offen, "Detail in D7"): verfallen
+lassen, nicht nachholen.** Begründung: ein Stunden später nachgeholter
+Start/Stop kann mit zwischenzeitlicher manueller Bedienung kollidieren;
+für Sendebetrieb ist ein sichtbar ausgefallener Zeitplan sicherer als
+eine überraschende verspätete Aktion. Implementiert über `LastFiredAt`
+pro Schedule-Eintrag plus das 90-s-Fenster — ein länger zurückliegender
+Zeitpunkt fällt aus dem Fenster heraus und feuert nie nachträglich.
+
+**2. Stop-Sicherheitsabfrage.** `Settings.ConfirmStop`; `Stop()` bekommt
+einen `confirm bool`-Parameter, lehnt ohne Bestätigung mit
+`ErrConfirmationRequired` (409) ab, wenn `ConfirmStop` gesetzt ist.
+`POST /api/v1/workflows/{id}/stop` akzeptiert jetzt optional
+`{"confirm": true}`. **Verhältnis zeitgesteuerter Stop ↔ confirm_stop —
+explizit entschieden (ARCHITECTURE.md nennt auch das offen):** der
+Scheduler ruft `Stop()` immer mit `confirm=true` auf, unabhängig von
+`ConfirmStop` — die Bestätigung ist beim Anlegen des Zeitplans bereits
+erfolgt, nicht erst um 03:00 nachts (ARCHITECTURE.md wörtlich).
+
+**3. Ressourcen-Vorprüfung.** `workflows.ResourcePrecheck`-Interface,
+implementiert von `*placement.Engine.CheckHost()` (neue Methode,
+wiederverwendet dieselben Alarm-Schwellwerte wie die advisory-only
+Placement-Engine aus D6 Teil 3 — bewusst kein drittes
+Schwellwert-Konzept). `Start()` prüft **vor** jeder Provisionierung für
+jede Rolle mit gesetzter `HostID` den Ziel-Host; schlägt eine Prüfung
+fehl, bricht `Start()` sofort mit `ErrResourcesUnavailable` (503) ab,
+ohne dass auch nur eine Rolle gestartet wurde (kein Teil-Start). Rollen
+mit leerer `HostID` (lokal) sind bewusst **nicht** Teil der Prüfung —
+der Orchestrator hat für "sich selbst" keine Telemetrie (nur
+registrierte Remote-Hosts senden welche); ein neu registrierter Host
+ohne Messwerte gilt als "ok" (fail-open, gleiche Haltung wie die
+advisory-Engine bei fehlenden Daten).
+
+**Live gefundener und behobener Nebenläufigkeits-Bug (der eigentliche
+Kern dieser Sitzung).** Erster Live-Test (echter Orchestrator, "once"-
+Schedule 35 s in der Zukunft): Log zeigte drei `"scheduled action
+fired"`-Einträge für **dieselbe** Occurrence, im exakten 20-s-
+Tick-Abstand — der Workflow wurde teilweise doppelt gestartet.
+Root Cause: `runStart()`/`runStop()`/`rewireAfterRestart()`/`fail()`
+laufen als Hintergrund-Goroutinen über mehrere Sekunden (echte
+GStreamer-Node-Startzeit + NMOS-Registrierung) und schreiben dabei
+wiederholt den *gesamten*, zu ihrem eigenen `Start()`-Aufruf erfassten
+`Workflow`-Stand per `Store.Put()` zurück — inklusive eines veralteten
+`Definition.Schedules` (vor jeder Scheduler-Änderung erfasst). Der
+Scheduler selbst schrieb `LastFiredAt` ursprünglich per Get()+Put()
+(`persistSchedule()`) — genau dieses spätere, blinde `Put()` einer
+Hintergrund-Goroutine hat die frisch gesetzte `LastFiredAt`-Markierung
+wieder verworfen, woraufhin der nächste Tick erneut feuerte. Fix in
+zwei Teilen, beide als Postgres-JSONB-Partial-Updates statt Get()+Put()
+(`internal/workflows/store.go`):
+- `Store.UpdateSchedules(id, schedules)` — `jsonb_set` nur auf
+  `{definition,schedules}`, vom Scheduler genutzt.
+- `Store.UpdateRuntime(wf)` — schreibt Status/Error/Runtime wie `Put()`,
+  bewahrt aber den *aktuell in der DB stehenden*
+  `definition.schedules`-Pfad statt ihn mit dem (potenziell veralteten)
+  `wf`-Stand des Aufrufers zu überschreiben; ersetzt `Put()` an allen
+  sieben Stellen in `service.go`, die nur Status/Runtime ändern wollen
+  (`Start()`, `runStart()` zweimal, `fail()`, `Stop()`, `runStop()`,
+  `rewireAfterRestart()`). `Create()`/`Update()` bleiben bei `Put()` —
+  dort *ist* eine neue `Definition` (inkl. `schedules`) die gewollte,
+  vom Nutzer stammende Änderung.
+
+**Tests:** `orchestrator/internal/workflows/scheduler.go` (neu) +
+`scheduler_test.go` (neu, 9 Tests: `parseTimeOfDay`/`occurrenceAt` pur,
+Fire-Window-Erfolgs-/Zu-früh-/Verfallen-Pfad, confirm=true bei
+zeitgesteuertem Stop, sowie `TestSchedulerLastFiredAtSurvives
+ConcurrentRunStart` — reproduziert den Live-Bug gegen den echten
+`*Service` mit einer absichtlich verzögerten Registrierung und beweist,
+dass ein zweiter Tick nach `runStart`-Abschluss nicht erneut feuert).
+`service_test.go`: 9 neue Tests (confirm_stop Erfolgs-/Ablehnungspfad,
+Ressourcen-Vorprüfung inkl. "lokale Rolle wird nicht geprüft",
+Schedule-Validierung). `store_test.go`: 4 neue Tests gegen echtes
+Postgres, darunter zwei, die exakt die Blind-Overwrite-Reihenfolge des
+Live-Bugs nachstellen. `placement_test.go`: 4 neue `CheckHost()`-Tests.
+`go build`/`go vet`/`go test ./...` grün (inkl. echter
+Postgres-Store-Tests). `deno check`/`deno test` grün.
+
+**UI** (`ui/shell/workflows-view.ts`): Zeitplan-Zeilen im
+Anlegen-/Bearbeiten-Formular (Kind-/Aktions-Select, je nach Kind
+datetime-local- bzw. Zeit-(+Wochentags-)Feld, "+ Zeitplan"), Checkbox
+"Sicherheitsabfrage beim Stoppen verlangen"; Stop-Knopf zeigt bei
+gesetztem `confirmStop` einen `omp-confirm`-Dialog (S10-Baustein) statt
+direkt zu stoppen. `#editWorkflow()` übernimmt `lastFiredAt`
+unverändert aus der API-Antwort — ein Bearbeiten-Speichern-Zyklus ohne
+Schedule-Änderung darf ein bereits gefeuertes "once"-Schedule nicht
+erneut scharfschalten.
+
+**Live verifiziert (echter Orchestrator, echte `omp-source`-Instanz):**
+"once"-Schedule 10 s in der Zukunft angelegt, **eine** Minute über drei
+Tick-Grenzen hinweg beobachtet — Log zeigt genau einen
+`"scheduled action fired"`-Eintrag, `GET` bestätigt `status: started`
+und ein stabil gesetztes `lastFiredAt` über alle folgenden Ticks
+hinweg (vor dem Fix: drei Fires, teilweiser Doppelstart). `confirm_stop`:
+Stop ohne `confirm` → 409 + Workflow bleibt `started`; Stop mit
+`confirm: true` → 200. UI-Pfad separat per CDP-Session: Zeitplan-Zeile
+(täglich 08:30) + Sicherheitsabfrage-Checkbox im Formular gesetzt,
+Workflow angelegt, per API gegengeprüft (`schedules`/`settings.
+confirmStop` runden korrekt), "Bearbeiten" zeigt exakt dieselben Werte
+vorbefüllt. Alle Test-Workflows/-Instanzen danach entfernt.
+
+**Nicht Teil dieser Sitzung:** Kapitel 12 Teil 3 (Pause-Zustand,
+Export/Import-Datei) — jetzt der nächste empfohlene Schritt laut
+§12.4, da D7 Teil 2 (dort als Zwischenschritt vor Teil 3 vorgesehen)
+abgeschlossen ist.

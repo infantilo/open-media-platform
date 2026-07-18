@@ -62,6 +62,32 @@ func (f *fakeStore) Delete(id string) error {
 	return nil
 }
 
+func (f *fakeStore) UpdateSchedules(id string, schedules []Schedule) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	wf, ok := f.wfs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	wf.Definition.Schedules = schedules
+	f.wfs[id] = wf
+	return nil
+}
+
+// UpdateRuntime spiegelt Store.UpdateRuntime: übernimmt alles außer
+// Definition.Schedules, die bleiben auf dem zuletzt in der Map
+// gespeicherten Stand (gleiche "DB gewinnt bei schedules"-Semantik wie
+// die echte jsonb_set-Variante).
+func (f *fakeStore) UpdateRuntime(wf Workflow) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if existing, ok := f.wfs[wf.ID]; ok {
+		wf.Definition.Schedules = existing.Definition.Schedules
+	}
+	f.wfs[wf.ID] = wf
+	return nil
+}
+
 type fakeNodeLister struct {
 	mu    sync.Mutex
 	nodes []registry.NodeView
@@ -868,7 +894,7 @@ func TestStopStopsAllRunningRoles(t *testing.T) {
 	}
 	store.Put(running)
 
-	if err := svc.Stop(context.Background(), wf.ID); err != nil {
+	if err := svc.Stop(context.Background(), wf.ID, false); err != nil {
 		t.Fatalf("Stop() error = %v", err)
 	}
 
@@ -889,7 +915,174 @@ func TestStopRequiresRunning(t *testing.T) {
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
 
-	if err := svc.Stop(context.Background(), wf.ID); !errors.Is(err, ErrNotRunning) {
+	if err := svc.Stop(context.Background(), wf.ID, false); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Stop() error = %v, want ErrNotRunning", err)
+	}
+}
+
+// --- D7 Teil 2: Stop-Sicherheitsabfrage (confirm_stop) ---
+
+func TestStopRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{
+		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
+		Settings: Settings{ConfirmStop: true},
+	}
+	wf, _ := svc.Create("wf", def)
+	started := wf
+	started.Status = StatusStarted
+	store.Put(started)
+
+	if err := svc.Stop(context.Background(), wf.ID, false); !errors.Is(err, ErrConfirmationRequired) {
+		t.Fatalf("Stop(confirm=false) error = %v, want ErrConfirmationRequired", err)
+	}
+
+	// Nach der abgelehnten Anfrage muss der Workflow weiterhin "started"
+	// sein (kein Teilfortschritt Richtung "stopping").
+	stillStarted, _ := svc.Get(wf.ID)
+	if stillStarted.Status != StatusStarted {
+		t.Fatalf("Status after rejected Stop() = %q, want unchanged %q", stillStarted.Status, StatusStarted)
+	}
+
+	if err := svc.Stop(context.Background(), wf.ID, true); err != nil {
+		t.Fatalf("Stop(confirm=true) error = %v, want nil", err)
+	}
+}
+
+func TestStopWithoutConfirmStopSettingIgnoresConfirmFlag(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	started := wf
+	started.Status = StatusStarted
+	store.Put(started)
+
+	// Kein confirm_stop gesetzt: confirm=false (unverändertes
+	// Vor-D7-Teil-2-Verhalten) darf nicht plötzlich abgelehnt werden.
+	if err := svc.Stop(context.Background(), wf.ID, false); err != nil {
+		t.Fatalf("Stop(confirm=false) error = %v, want nil (ConfirmStop not set)", err)
+	}
+}
+
+// --- D7 Teil 2: Ressourcen-Vorprüfung als Start-Vorbedingung ---
+
+type fakeResourcePrecheck struct {
+	deniedHosts map[string]string // hostID -> Ablehnungsgrund
+}
+
+func (f *fakeResourcePrecheck) CheckHost(hostID string) (string, bool) {
+	if reason, denied := f.deniedHosts[hostID]; denied {
+		return reason, false
+	}
+	return "", true
+}
+
+func TestStartRejectsWhenTargetHostResourcesUnavailable(t *testing.T) {
+	store := newFakeStore()
+	l := &fakeLauncher{}
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
+	svc.resources = &fakeResourcePrecheck{deniedHosts: map[string]string{"host-1": "CPU 95% über dem Schwellwert"}}
+
+	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source", HostID: "host-1"}}}
+	wf, _ := svc.Create("wf", def)
+
+	err := svc.Start(context.Background(), wf.ID)
+	if !errors.Is(err, ErrResourcesUnavailable) {
+		t.Fatalf("Start() error = %v, want ErrResourcesUnavailable", err)
+	}
+
+	// Kein Teil-Start: der Launcher darf gar nicht erst aufgerufen worden
+	// sein, und der Workflow muss "stopped" bleiben (nie "starting").
+	l.mu.Lock()
+	startedCount := len(l.started)
+	l.mu.Unlock()
+	if startedCount != 0 {
+		t.Fatalf("launcher.Start() calls = %d, want 0 (no partial start)", startedCount)
+	}
+	after, _ := svc.Get(wf.ID)
+	if after.Status != StatusStopped {
+		t.Fatalf("Status after rejected Start() = %q, want unchanged %q", after.Status, StatusStopped)
+	}
+}
+
+func TestStartIgnoresResourceCheckForLocalRoles(t *testing.T) {
+	store := newFakeStore()
+	l := &fakeLauncher{}
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
+	// Alle Hosts abgelehnt — betrifft aber nur Rollen mit gesetzter
+	// HostID; eine lokale Rolle (HostID leer) hat dafür heute keine
+	// Telemetrie-Grundlage (s. checkResources-Doku) und darf nicht
+	// blockiert werden.
+	svc.resources = &fakeResourcePrecheck{deniedHosts: map[string]string{"": "sollte nie geprüft werden"}}
+
+	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
+	wf, _ := svc.Create("wf", def)
+
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v, want nil (local role must not be resource-checked)", err)
+	}
+}
+
+// --- D7 Teil 2: Schedule-Validierung ---
+
+func TestCreateRejectsScheduleWithUnknownKind(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	def := Definition{
+		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+		Schedules: []Schedule{{ID: "s1", Kind: "monthly", Action: ScheduleActionStart}},
+	}
+	if _, err := svc.Create("wf", def); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateRejectsOnceScheduleWithoutAt(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	def := Definition{
+		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+		Schedules: []Schedule{{ID: "s1", Kind: ScheduleOnce, Action: ScheduleActionStart}},
+	}
+	if _, err := svc.Create("wf", def); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateRejectsDailyScheduleWithInvalidTimeOfDay(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	def := Definition{
+		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+		Schedules: []Schedule{{ID: "s1", Kind: ScheduleDaily, Action: ScheduleActionStart, TimeOfDay: "25:00"}},
+	}
+	if _, err := svc.Create("wf", def); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateRejectsWeeklyScheduleWithoutWeekday(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	def := Definition{
+		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+		Schedules: []Schedule{{ID: "s1", Kind: ScheduleWeekly, Action: ScheduleActionStart, TimeOfDay: "08:00"}},
+	}
+	if _, err := svc.Create("wf", def); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateAcceptsValidSchedules(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	at := time.Now().Add(time.Hour)
+	weekday := 3
+	def := Definition{
+		Roles: []Role{{Name: "src", NodeType: "omp-source"}},
+		Schedules: []Schedule{
+			{ID: "s1", Kind: ScheduleOnce, Action: ScheduleActionStart, At: &at},
+			{ID: "s2", Kind: ScheduleDaily, Action: ScheduleActionStop, TimeOfDay: "22:00"},
+			{ID: "s3", Kind: ScheduleWeekly, Action: ScheduleActionStart, TimeOfDay: "08:00", Weekday: &weekday},
+		},
+	}
+	if _, err := svc.Create("wf", def); err != nil {
+		t.Fatalf("Create() error = %v, want nil", err)
 	}
 }

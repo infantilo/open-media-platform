@@ -76,6 +76,15 @@ var (
 	// ErrNotRunning wird geliefert, wenn Stop() auf einen Workflow
 	// aufgerufen wird, der nicht gestartet/fehlgeschlagen ist.
 	ErrNotRunning = errors.New("workflows: workflow is not running")
+	// ErrConfirmationRequired wird von Stop() geliefert, wenn
+	// Definition.Settings.ConfirmStop gesetzt ist und der Aufruf ohne
+	// confirm=true erfolgte (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2).
+	ErrConfirmationRequired = errors.New("workflows: stop requires confirmation")
+	// ErrResourcesUnavailable wird von Start() geliefert, wenn die
+	// Ressourcen-Vorprüfung (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3)
+	// mindestens einen Ziel-Host als aktuell nicht platzierbar meldet —
+	// vor jedem Provisionieren geprüft, kein Teil-Start.
+	ErrResourcesUnavailable = errors.New("workflows: resources unavailable")
 )
 
 // NodeLister liefert den zuletzt bekannten Node-Snapshot (implementiert
@@ -111,17 +120,34 @@ type workflowStore interface {
 	Get(id string) (Workflow, error)
 	List() ([]Workflow, error)
 	Delete(id string) error
+	UpdateSchedules(id string, schedules []Schedule) error
+	UpdateRuntime(wf Workflow) error
+}
+
+// ResourcePrecheck prüft, ob ein Host aktuell neue Rollen aufnehmen darf
+// (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3: "harte Vorbedingung" statt
+// der advisory-only Placement-Engine aus §6.1/D6 Teil 3). Implementiert
+// von *placement.Engine (CheckHost), die dieselben Alarm-Schwellwerte
+// wiederverwendet, die bereits die Hosts-Ansicht/Alarm-View zeigen —
+// bewusst kein drittes Schwellwert-Konzept.
+type ResourcePrecheck interface {
+	// CheckHost liefert (Ablehnungsgrund, ok). ok=true bei freien
+	// Ressourcen ODER fehlender Telemetrie (fail-open — ein gerade erst
+	// registrierter Host ohne Messwerte ist kein Blocker, gleiche Haltung
+	// wie placement.Engine.evaluateOnce bei fehlenden Daten).
+	CheckHost(hostID string) (reason string, ok bool)
 }
 
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
-// aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1).
+// aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
-	store    workflowStore
-	nodes    NodeLister
-	graph    GraphService
-	launcher Launcher
-	events   EventPublisher
-	methods  methodInvoker
+	store     workflowStore
+	nodes     NodeLister
+	graph     GraphService
+	launcher  Launcher
+	events    EventPublisher
+	methods   methodInvoker
+	resources ResourcePrecheck
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -130,8 +156,11 @@ type Service struct {
 // sichtbar. httpClient ist der ggf. mTLS-fähige Client für
 // Crosspoint-Methodenaufrufe (s. crosspointByNodeType) — nil bedeutet
 // http.DefaultClient (gleiches Muster wie snapshots.NewService).
-func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client) *Service {
-	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient)}
+// resources darf nil sein (z. B. in Tests oder falls die Placement-
+// Engine nicht verdrahtet ist) — dann entfällt die Ressourcen-
+// Vorprüfung ersatzlos (kein neuer Blocker ohne Datengrundlage).
+func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client, resources ResourcePrecheck) *Service {
+	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources}
 }
 
 // Create legt einen neuen, gestoppten Workflow an.
@@ -239,17 +268,70 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if wf.Status != StatusStopped && wf.Status != StatusFailed {
 		return ErrNotStopped
 	}
+	if err := s.checkResources(wf); err != nil {
+		return err
+	}
 
 	wf.Status = StatusStarting
 	wf.Error = ""
 	wf.Runtime = map[string]RoleRuntime{}
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		return err
 	}
 	s.publish(wf)
 
 	go s.runStart(wf)
+	return nil
+}
+
+// persistSchedule schreibt die LastFiredAt-Markierungen des Schedulers
+// über Store.UpdateSchedules — bewusst **kein** Get()+Put() des ganzen
+// Workflows: runStart/runStop/rewireAfterRestart laufen als
+// Hintergrund-Goroutinen und schreiben über mehrere Sekunden hinweg
+// wiederholt den *gesamten*, zu ihrem eigenen Start erfassten wf-Stand
+// zurück — ein zwischenzeitliches Get()+Put() hier würde von einem
+// SPÄTEREN dieser Blind-Overwrite-Puts wieder verworfen (live gefunden
+// 2026-07-18, docs/decisions.md: ein "once"-Schedule feuerte dadurch
+// dreimal). UpdateSchedules ändert nur den definition.schedules-Pfad im
+// JSONB-Blob und kollidiert daher nie mit einem parallelen Put(), das
+// status/runtime/error schreibt.
+func (s *Service) persistSchedule(wf Workflow) error {
+	if err := s.store.UpdateSchedules(wf.ID, wf.Definition.Schedules); err != nil {
+		return err
+	}
+	current, err := s.store.Get(wf.ID)
+	if err != nil {
+		return err
+	}
+	s.publish(current)
+	return nil
+}
+
+// checkResources ist die Ressourcen-Vorprüfung als harte Start-
+// Vorbedingung (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3): bevor
+// irgendetwas provisioniert wird, muss für JEDE Rolle mit gesetzter
+// HostID (Remote-Platzierung, s. Role-Doku) feststehen, dass der
+// Ziel-Host aktuell nicht überlastet ist — kein Teil-Start, der mangels
+// Ressourcen auf halbem Weg hängen bleibt. Lokale Rollen (HostID leer)
+// sind nicht Teil der Prüfung: der Orchestrator hat für "den lokalen
+// Host" selbst keine Telemetrie (nur registrierte Remote-Hosts senden
+// welche, s. internal/hosts) — dokumentierte Folgearbeit, kein stiller
+// Blocker ohne Datengrundlage.
+func (s *Service) checkResources(wf Workflow) error {
+	if s.resources == nil {
+		return nil
+	}
+	checked := map[string]bool{}
+	for _, role := range wf.Definition.Roles {
+		if role.HostID == "" || checked[role.HostID] {
+			continue
+		}
+		checked[role.HostID] = true
+		if reason, ok := s.resources.CheckHost(role.HostID); !ok {
+			return fmt.Errorf("%w: host %s: %s", ErrResourcesUnavailable, role.HostID, reason)
+		}
+	}
 	return nil
 }
 
@@ -296,7 +378,7 @@ func (s *Service) runStart(wf Workflow) {
 	// während awaitRegistration unten noch läuft) — der Endzustand wird in
 	// jedem Fall weiter unten nochmal geschrieben, ein Fehler hier ist
 	// daher nicht fatal.
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: failed to persist intermediate state", "id", wf.ID, "error", err)
 	}
 
@@ -325,7 +407,7 @@ func (s *Service) runStart(wf Workflow) {
 	wf.Status = StatusStarted
 	wf.Error = ""
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: failed to persist started state", "id", wf.ID, "error", err)
 	}
 	s.publish(wf)
@@ -490,7 +572,7 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	}
 
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: rewireAfterRestart: persist failed", "workflow", wf.ID, "error", err)
 	}
 	s.publish(wf)
@@ -630,7 +712,7 @@ func (s *Service) fail(wf Workflow, reason string) {
 	wf.Status = StatusFailed
 	wf.Error = reason
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: failed to persist failed state", "id", wf.ID, "error", err)
 	}
 	slog.Warn("workflows: start failed", "id", wf.ID, "reason", reason)
@@ -642,7 +724,15 @@ func (s *Service) fail(wf Workflow, reason string) {
 // Workflow muss trotzdem gebündelt aufräumbar sein). Fehler beim Stoppen
 // einzelner Rollen werden gesammelt, nicht abgebrochen (best effort,
 // gleiches Muster wie beim Start).
-func (s *Service) Stop(ctx context.Context, id string) error {
+//
+// confirm ist die Stop-Sicherheitsabfrage (D7 Teil 2, ARCHITECTURE.md
+// §6.2 Punkt 2): ist Definition.Settings.ConfirmStop gesetzt, verlangt
+// Stop() confirm=true, sonst ErrConfirmationRequired (zweistufig — der
+// Aufrufer/die UI zeigt dann eine Rückfrage und ruft mit confirm=true
+// erneut auf). Ein zeitgesteuerter Stop (scheduler.go) ruft immer mit
+// confirm=true auf — die Bestätigung ist beim Anlegen des Zeitplans
+// bereits erfolgt.
+func (s *Service) Stop(ctx context.Context, id string, confirm bool) error {
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return err
@@ -650,10 +740,13 @@ func (s *Service) Stop(ctx context.Context, id string) error {
 	if wf.Status != StatusStarted && wf.Status != StatusFailed && wf.Status != StatusStarting {
 		return ErrNotRunning
 	}
+	if wf.Definition.Settings.ConfirmStop && !confirm {
+		return ErrConfirmationRequired
+	}
 
 	wf.Status = StatusStopping
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		return err
 	}
 	s.publish(wf)
@@ -682,7 +775,7 @@ func (s *Service) runStop(wf Workflow) {
 		wf.Error = ""
 	}
 	wf.UpdatedAt = time.Now()
-	if err := s.store.Put(wf); err != nil {
+	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: failed to persist stopped state", "id", wf.ID, "error", err)
 	}
 	s.publish(wf)
@@ -741,6 +834,42 @@ func validate(def Definition) error {
 			}
 			crosspointTargets[c.ToRole] = true
 		}
+	}
+	for _, sched := range def.Schedules {
+		if err := validateSchedule(sched); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateSchedule prüft einen einzelnen Zeitplan-Eintrag (D7 Teil 2) —
+// je nach Kind sind unterschiedliche Felder Pflicht (s. Schedule-Doku in
+// types.go).
+func validateSchedule(sched Schedule) error {
+	switch sched.Action {
+	case ScheduleActionStart, ScheduleActionStop:
+	default:
+		return fmt.Errorf("%w: schedule action must be %q or %q", ErrValidation, ScheduleActionStart, ScheduleActionStop)
+	}
+	switch sched.Kind {
+	case ScheduleOnce:
+		if sched.At == nil {
+			return fmt.Errorf("%w: schedule kind %q requires \"at\"", ErrValidation, ScheduleOnce)
+		}
+	case ScheduleDaily:
+		if _, _, ok := parseTimeOfDay(sched.TimeOfDay); !ok {
+			return fmt.Errorf("%w: schedule kind %q requires timeOfDay \"HH:MM\"", ErrValidation, ScheduleDaily)
+		}
+	case ScheduleWeekly:
+		if _, _, ok := parseTimeOfDay(sched.TimeOfDay); !ok {
+			return fmt.Errorf("%w: schedule kind %q requires timeOfDay \"HH:MM\"", ErrValidation, ScheduleWeekly)
+		}
+		if sched.Weekday == nil || *sched.Weekday < 0 || *sched.Weekday > 6 {
+			return fmt.Errorf("%w: schedule kind %q requires weekday 0-6", ErrValidation, ScheduleWeekly)
+		}
+	default:
+		return fmt.Errorf("%w: unknown schedule kind %q", ErrValidation, sched.Kind)
 	}
 	return nil
 }

@@ -325,7 +325,7 @@ func (f fakeWorkflowService) Delete(id string) error { return f.deleteErr }
 
 func (f fakeWorkflowService) Start(ctx context.Context, id string) error { return f.startErr }
 
-func (f fakeWorkflowService) Stop(ctx context.Context, id string) error { return f.stopErr }
+func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) error { return f.stopErr }
 
 type fakePlacementAdvisor struct {
 	advice []placement.Advice

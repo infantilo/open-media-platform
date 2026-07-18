@@ -1984,7 +1984,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D6 Teil 2 (Kommandokanal) | erledigt | [D6-2] host-agent + orchestrator: Remote-Start/Stop über NATS, agent-lokaler Katalog als Vertrauensgrenze, UI-Host-Selector | 2026-07-14 |
 | D6 Teil 3 (Placement-Engine, §6.1) | erledigt | [D6-3] internal/placement: advisory-only Resource-Aware Placement, CPU/RAM-Schwellwerte, Ausweichhost-Vorschlag, SSE-Event, Hosts-UI-Banner | 2026-07-14 |
 | D7 Teil 1 (Workflow-Objekt + Bundle-Start/-Stop) | erledigt | [D7-1] internal/workflows: Workflow-Objekt, Rolle→Rolle-Verkabelung, Bundle-Start/-Stop, UI-Panel | 2026-07-14 |
-| D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung) | offen | | |
+| D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung + Stop-Sicherheitsabfrage) | erledigt | [D7-2] Schedule (once/daily/weekly, "verfallen lassen"), confirm_stop, Ressourcen-Vorprüfung als harte Start-Vorbedingung (placement.Engine.CheckHost); live gefundener und behobener Blind-Overwrite-Race zwischen Scheduler und runStart/runStop (Store.UpdateSchedules/UpdateRuntime, JSONB-Partial-Updates statt Get+Put) | 2026-07-18 |
 | K1-Teil-1 (Verbindungsschicht + App-Bar mit Tabs) | erledigt | [K1-1] Verbindungsschicht (ConnectionMonitor/apiFetch) + App-Bar mit Tabs, Design-Tokens | 2026-07-14 |
 | K2-Teil-1 (omp-player: Datei-Playback MP4/MOV) | erledigt | [K2-1] Datei-Playback (uridecodebin, EOS-Event, Discoverer-Dauer, mediaLibrary) | 2026-07-15 |
 | K3/K4-Teil-1 (Konsolen-Optik + Metering) | erledigt | [K3/K4-1] ui/kit (Fader/Knob/Meter/Button) + Audio-Mixer-Metering (/levels-SSE) + Video-Mixer-M/E-Pult-Optik, SSE-/UI-Bundle-Auth-Bugfix; Nachtrag: visueller Feinschliff (Metall-Gradients, omp-panel-section) nach Bildmeister-Referenzvergleich | 2026-07-15 |

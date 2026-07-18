@@ -111,11 +111,24 @@ func handleStartWorkflow(svc WorkflowService) http.HandlerFunc {
 
 // handleStopWorkflow liefert POST /api/v1/workflows/{id}/stop — analog
 // zu handleStartWorkflow asynchron, liefert den Zwischenzustand
-// "stopping".
+// "stopping". Body optional: {"confirm": true} (D7 Teil 2,
+// ARCHITECTURE.md §6.2 Punkt 2) — nur nötig, wenn der Workflow
+// `settings.confirmStop` gesetzt hat; ein leerer Body entspricht
+// confirm=false (unverändertes Verhalten für alle Workflows ohne
+// confirm_stop).
 func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
-		if err := svc.Stop(r.Context(), id); err != nil {
+		var body struct {
+			Confirm bool `json:"confirm"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := svc.Stop(r.Context(), id, body.Confirm); err != nil {
 			writeWorkflowError(w, err)
 			return
 		}
@@ -134,8 +147,10 @@ func writeWorkflowError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, workflows.ErrValidation):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, workflows.ErrNotStopped), errors.Is(err, workflows.ErrNotRunning):
+	case errors.Is(err, workflows.ErrNotStopped), errors.Is(err, workflows.ErrNotRunning), errors.Is(err, workflows.ErrConfirmationRequired):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, workflows.ErrResourcesUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

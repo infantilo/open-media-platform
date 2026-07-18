@@ -24,6 +24,7 @@ package placement
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"sort"
@@ -168,6 +169,37 @@ func (e *Engine) List() []Advice {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].HostID < out[j].HostID })
 	return out
+}
+
+// CheckHost implementiert workflows.ResourcePrecheck (UMSETZUNG.md D7
+// Teil 2, ARCHITECTURE.md §6.2 Punkt 3: "harte Vorbedingung" statt
+// advisory) — wiederverwendet dieselben Alarm-Schwellwerte wie
+// evaluateOnce, unabhängig vom zyklisch berechneten Advice-Cache (liest
+// die Telemetrie live, damit ein Workflow-Start nicht auf den nächsten
+// EvaluateInterval-Tick warten muss). Fehlende Telemetrie gilt als "ok"
+// (fail-open) — dieselbe Haltung wie evaluateOnce bei nie gesehenen
+// Hosts.
+func (e *Engine) CheckHost(hostID string) (string, bool) {
+	m, ok := e.metrics.Get(hostID)
+	if !ok {
+		return "", true
+	}
+	memPercent := 0.0
+	if m.MemTotalBytes > 0 {
+		memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
+	}
+	overCPU := m.CPUPercent >= e.thresholds.CPUPercent
+	overMem := memPercent >= e.thresholds.MemPercent
+	switch {
+	case overCPU && overMem:
+		return fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert", m.CPUPercent, memPercent), false
+	case overCPU:
+		return fmt.Sprintf("CPU %.0f%% über dem Schwellwert", m.CPUPercent), false
+	case overMem:
+		return fmt.Sprintf("RAM %.0f%% über dem Schwellwert", memPercent), false
+	default:
+		return "", true
+	}
 }
 
 // scored bündelt einen Host mit seiner zuletzt gesehenen Telemetrie und

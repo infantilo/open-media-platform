@@ -205,3 +205,43 @@ func TestEvaluateOnceLocalInstancesIgnored(t *testing.T) {
 		t.Fatalf("List() = %+v, want empty (only local instance exists)", got)
 	}
 }
+
+// --- CheckHost (workflows.ResourcePrecheck, UMSETZUNG.md D7 Teil 2) ---
+
+func TestCheckHostOKBelowThreshold(t *testing.T) {
+	mr := fakeMetrics{"h1": {CPUPercent: 50, MemUsedBytes: 1000, MemTotalBytes: 4000}}
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds())
+
+	if reason, ok := e.CheckHost("h1"); !ok || reason != "" {
+		t.Fatalf("CheckHost() = (%q, %v), want (\"\", true)", reason, ok)
+	}
+}
+
+func TestCheckHostRejectsOverCPUThreshold(t *testing.T) {
+	mr := fakeMetrics{"h1": {CPUPercent: 95, MemUsedBytes: 1000, MemTotalBytes: 4000}}
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds())
+
+	reason, ok := e.CheckHost("h1")
+	if ok || reason == "" {
+		t.Fatalf("CheckHost() = (%q, %v), want a non-empty rejection reason", reason, ok)
+	}
+}
+
+func TestCheckHostRejectsOverMemThreshold(t *testing.T) {
+	mr := fakeMetrics{"h1": {CPUPercent: 10, MemUsedBytes: 3800, MemTotalBytes: 4000}} // 95% mem
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds())
+
+	if _, ok := e.CheckHost("h1"); ok {
+		t.Fatalf("CheckHost() ok = true, want false (mem over threshold)")
+	}
+}
+
+func TestCheckHostOKWhenNoTelemetrySeen(t *testing.T) {
+	e := NewEngine(fakeHosts{}, fakeMetrics{}, fakeInstances{}, nil, testThresholds())
+
+	// Fail-open: ein Host, von dem noch nie Telemetrie kam, darf einen
+	// Workflow-Start nicht blockieren (s. checkResources-Doku).
+	if reason, ok := e.CheckHost("never-seen"); !ok || reason != "" {
+		t.Fatalf("CheckHost() = (%q, %v), want (\"\", true) for unseen host", reason, ok)
+	}
+}

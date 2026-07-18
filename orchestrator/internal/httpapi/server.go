@@ -97,7 +97,7 @@ type WorkflowService interface {
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
-	Stop(ctx context.Context, id string) error
+	Stop(ctx context.Context, id string, confirm bool) error
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf

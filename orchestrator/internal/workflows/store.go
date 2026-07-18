@@ -84,3 +84,56 @@ func (s *Store) Delete(id string) error {
 	_, err := s.db.Exec(`DELETE FROM workflows WHERE id = $1`, id)
 	return err
 }
+
+// UpdateRuntime speichert wf wie Put(), bewahrt aber den aktuell in der
+// DB stehenden definition.schedules-Pfad (statt ihn mit wf's ggf.
+// veraltetem Stand zu überschreiben). Für alle Lifecycle-Schreibzugriffe
+// gedacht, die nur Status/Error/Runtime ändern wollen — Start(),
+// runStart(), fail(), Stop(), runStop(), rewireAfterRestart(): diese
+// laufen teils als Hintergrund-Goroutine über mehrere Sekunden und
+// halten dabei nur einen zu ihrem eigenen Start erfassten wf-Stand; ein
+// normales Put() würde eine zwischenzeitliche Scheduler-Änderung an
+// schedules (Store.UpdateSchedules) unbemerkt rückgängig machen (live
+// gefunden 2026-07-18, docs/decisions.md: ein "once"-Schedule feuerte
+// dadurch wiederholt). Create()/Update() bleiben bei Put() — dort *ist*
+// eine neue Definition (inkl. schedules) die gewollte, vom Nutzer
+// stammende Änderung.
+func (s *Store) UpdateRuntime(wf Workflow) error {
+	data, err := json.Marshal(wf)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		UPDATE workflows SET
+			status = $2,
+			updated_at = $3,
+			data = jsonb_set($4::jsonb, '{definition,schedules}', COALESCE(data #> '{definition,schedules}', '[]'::jsonb))
+		WHERE id = $1
+	`, wf.ID, wf.Status, wf.UpdatedAt, data)
+	return err
+}
+
+// UpdateSchedules schreibt ausschließlich den definition.schedules-Pfad
+// des JSONB-Blobs (D7 Teil 2, Scheduler.persistSchedule) — bewusst kein
+// Get()+Put() des ganzen Workflows: runStart/runStop/rewireAfterRestart
+// laufen als Hintergrund-Goroutinen und schreiben über mehrere Sekunden
+// hinweg wiederholt den *gesamten* zu ihrem eigenen Start erfassten
+// wf-Stand zurück (Status/Runtime) — ein zwischenzeitliches Get()+Put()
+// des Schedulers würde von einem SPÄTEREN dieser Blind-Overwrite-Puts
+// wieder verworfen (live gefunden 2026-07-18, docs/decisions.md: ein
+// "once"-Schedule feuerte dreimal, weil LastFiredAt exakt so verloren
+// ging). jsonb_set ändert nur den einen Unterpfad und kollidiert daher
+// nie mit einem parallelen Put(), das status/runtime/error schreibt.
+func (s *Store) UpdateSchedules(id string, schedules []Schedule) error {
+	if schedules == nil {
+		schedules = []Schedule{}
+	}
+	data, err := json.Marshal(schedules)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		UPDATE workflows SET data = jsonb_set(data, '{definition,schedules}', $2::jsonb) WHERE id = $1
+	`, id, data)
+	return err
+}
