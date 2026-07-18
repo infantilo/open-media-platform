@@ -17,6 +17,12 @@
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+// Reiner Seiteneffekt-Import (registriert nur customElements.define,
+// gleicher Grund wie bei den übrigen Custom-Element-Importen in
+// shell.ts) — Kapitel 12 Teil 6, §22.3 Punkt 1: grafischer
+// Rollen-Designer als Alternative zum Text-Formular unten.
+import "../graph/role-designer.ts";
+import type { RoleDesigner } from "../graph/role-designer.ts";
 
 interface CatalogEntry {
   type: string;
@@ -516,6 +522,34 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
+  // Kapitel 12 Teil 6 (§22.3 Punkt 1): Vollbild-Overlay mit dem
+  // grafischen Designer — gleiches Overlay-Muster wie
+  // ui/shell/auth.ts#showLoginOverlay (position:fixed;inset:0, hoher
+  // z-index), hier lokal statt als geteilte Hilfsfunktion, weil nur
+  // dieser eine Aufrufer ihn braucht. workflowId=null öffnet einen
+  // leeren Entwurf, sonst die bestehende (stopped/paused) Definition
+  // zum Bearbeiten.
+  #openRoleDesigner(workflowId: string | null) {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-role", "role-designer-overlay");
+    overlay.style.cssText = "position:fixed;inset:0;z-index:2000;background:#1e1e1e;";
+
+    const designer = document.createElement("omp-role-designer") as RoleDesigner;
+    overlay.appendChild(designer);
+    document.body.appendChild(overlay);
+
+    const close = () => {
+      overlay.remove();
+    };
+    designer.addEventListener("designer-closed", close);
+    designer.addEventListener("designer-saved", () => {
+      close();
+      void this.#poll();
+    });
+
+    void designer.open(workflowId);
+  }
+
   // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8) — Volltext über
   // Titel/Name (Fallback)/Beschreibung/Tags, plus die zwei Facetten
   // Kategorie und Status. Leerer Filter = alles (unverändertes
@@ -553,6 +587,15 @@ class WorkflowsView extends HTMLElement {
       this.#render();
     });
     heading.appendChild(newBtn);
+
+    // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafischer Entwurf statt des
+    // Text-Formulars — beide erzeugen denselben POST /api/v1/workflows,
+    // reine UX-Alternative, kein zweiter Datenpfad.
+    const designBtn = document.createElement("button");
+    designBtn.textContent = "Grafisch entwerfen";
+    designBtn.style.cssText = "font-size:11px;cursor:pointer;margin-left:6px;";
+    designBtn.addEventListener("click", () => this.#openRoleDesigner(null));
+    heading.appendChild(designBtn);
 
     // Kapitel 12 Teil 3 (§12.3d): <label> um ein verstecktes
     // <input type="file"> — Klick auf das Label öffnet nativ den
@@ -894,6 +937,17 @@ class WorkflowsView extends HTMLElement {
     editBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
     editBtn.addEventListener("click", () => this.#editWorkflow(wf));
     actions.appendChild(editBtn);
+
+    // Kapitel 12 Teil 6 (§22.3 Punkt 1): grafisches Bearbeiten derselben
+    // Definition — gleiche Zustands-Voraussetzung wie "Bearbeiten"
+    // (PUT nur in stopped/paused), reine UX-Alternative.
+    const designEditBtn = document.createElement("button");
+    designEditBtn.textContent = "Grafisch bearbeiten";
+    designEditBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    designEditBtn.disabled = !isIdle;
+    designEditBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
+    designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
+    actions.appendChild(designEditBtn);
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";

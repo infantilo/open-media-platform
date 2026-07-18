@@ -7446,3 +7446,132 @@ letzte verbleibende Unterteil von Kapitel 12 Teil 6 und damit von ganz
 Kapitel 12. Ebenfalls offen (dokumentierter Nebenfund, s. o.): die
 nicht-deterministische `findSender()`-Fallback-Auswahl bei Nodes mit
 mehreren Sendern unterschiedlichen Formats.
+
+## 2026-07-18 (Nachtrag 26) — Kapitel 12 Teil 6, Unterteil 4 (letzter):
+grafischer Rollen-Designer (§22.3 Punkt 1) — Kapitel 12 damit vollständig
+
+Vor Beginn per `AskUserQuestion` nachgefragt, da dieser Schritt sich
+qualitativ von den bisherigen Kapitel-12-Unterschritten unterscheidet
+(neues, eigenständiges interaktives Subsystem statt einer additiven
+Erweiterung, im Dokument selbst als "Endausbau" markiert): volle
+grafische Variante gewählt (nicht die klick-basierte Zwischenstufe oder
+"hier abschließen").
+
+**Architektur-Entscheidung — eigenes zweites Custom Element statt
+"Design-Modus"-Flag in `<omp-flow-canvas>`:** `flow-canvas.ts` trennt
+laut eigenem Kopfkommentar bereits reine, DOM-freie Koordinaten-/
+Kompatibilitäts-/Gruppenlogik (`geometry.ts`/`compatibility.ts`/
+`groups.ts`, per `deno test` geprüft) von einem DOM-/Fetch-/
+EventSource-bindenden Rest. §22.3 Punkt 1 verlangt "derselben
+Zeichen-/Gruppierungs-Code (`ui/graph/*`)" — genau diese reine
+Koordinatenlogik (Pan/Zoom, Kachel-/Port-Layout aus `geometry.ts`)
+wird vom neuen `<omp-role-designer>` (`ui/graph/role-designer.ts`)
+eins zu eins wiederverwendet. Ein zweiter Datenquellen-Pfad
+(Live-Registry vs. Workflow-Definition) *innerhalb* derselben,
+2400+-Zeilen-SSE-gekoppelten `flow-canvas.ts`-Klasse hätte ein
+erheblich größeres Regressionsrisiko für die produktiv genutzte
+Live-Ansicht bedeutet als der Nutzen einer einzigen gemeinsamen
+Klasse — dokumentierte, bewusste Abweichung von einer wörtlichen
+Lesart des Dokuments.
+
+**Scope-Abgrenzung:** der Designer deckt Rollen + Rolle→Rolle-
+Verbindungs-Template ab (die "Graph"-Substanz). Titel/Beschreibung/
+Tags/Kategorie/Auflösung/Zeitpläne/Sicherheitsabfrage bleiben beim
+bestehenden Text-Formular (`ui/shell/workflows-view.ts`, Kapitel 12
+Teil 1/6) — derselbe Workflow lässt sich abwechselnd grafisch
+(Topologie) und per Formular (Metadaten) bearbeiten, keine zweite
+Formular-UI für bereits vollständig vorhandene Felder. Ebenfalls
+bewusst vereinfacht: "aus dem Katalog ziehen" (§22.3 Punkt 1 wörtlich)
+wurde als Klick-zum-Hinzufügen-dann-Ziehen-zum-Positionieren umgesetzt,
+nicht als natives HTML5-Drag-and-Drop von einer Paletten-Liste auf die
+Canvas — das Ergebnis (eine platzierte, frei verschiebbare
+Rollen-Kachel) ist dasselbe, das Eingabemuster ein UX-Detail, kein
+funktionales Muss. Positionen der Rollen-Kacheln werden bewusst nicht
+serverseitig persistiert (gleiche Haltung wie beim Export/Import-Scope
+aus Kapitel 12 Teil 3: reines UI-Layout, nicht Teil der
+Definition) — ein neu geöffneter Designer positioniert per
+`defaultPosition()`-Raster neu.
+
+**Code-Struktur (neue Dateien, `ui/graph/`):**
+- `roles.ts` (+`roles_test.ts`): `uniqueRoleName()`, aus `flow-canvas.ts`
+  herausgelöst und dort durch einen Import ersetzt (Kapitel 12 Teil 2s
+  "Gruppe als Workflow speichern" und der neue Designer nutzen jetzt
+  exakt dieselbe Ableitungsregel statt einer Kopie).
+- `role-designer-logic.ts` (+`role-designer-logic_test.ts`): reine
+  Entwurfs-Logik (`removeRole`, `addConnection` — Selbstschleifen- und
+  Duplikat-Ablehnung), DOM-frei. Eigene Datei, nicht Teil von
+  `role-designer.ts` selbst: Letzteres definiert das Custom Element
+  (`extends HTMLElement`) und ist damit unter `deno test` nicht
+  importierbar (per Testlauf gefunden: "document is not defined" via
+  eines transitiv mitgezogenen `ui/kit/omp-toast.ts`) — dasselbe
+  Trennungsmuster, das `geometry.ts`/`compatibility.ts`/`groups.ts`
+  bereits für `flow-canvas.ts` etabliert haben.
+- `role-designer.ts`: das eigentliche `<omp-role-designer>`
+  Custom Element — Pan/Zoom/Tile-Drag/Verbindungs-Drag als eigene,
+  kleinere Kopie von `flow-canvas.ts`s Zustandsmaschine (kein
+  "select"/Gruppen-Fall, dafür `fromRole` statt `fromPortId`) statt
+  einer geteilten Basisklasse — bei nur zwei Nutzern dieser Logik wäre
+  eine Abstraktion mehr Aufwand als Ersparnis gewesen.
+
+**Wiring (`ui/shell/workflows-view.ts`):** neuer Button "Grafisch
+entwerfen" (leerer Entwurf) neben "+ Neu", neuer Button "Grafisch
+bearbeiten" pro Zeile (gleiche `isIdle`-Voraussetzung wie das
+bestehende "Bearbeiten" — PUT nur in stopped/paused). Beide öffnen ein
+Vollbild-Overlay (`position:fixed;inset:0`, gleiches Muster wie
+`ui/shell/auth.ts#showLoginOverlay`) mit dem Designer; "Speichern"
+ruft denselben `POST`/`PUT /api/v1/workflows`-Endpunkt wie das
+Text-Formular — keine Backend-Änderung in diesem Schritt nötig.
+
+**Live-Test-Fund, echter Bug — Rubber-Band-Linie blockierte den
+eigenen Ziel-Port:** beim ersten Live-Verifikationslauf scheiterte
+jede Verbindung lautlos (0 Kanten trotz korrektem Drag). Ursache: die
+Vorschau-Linie während des Verbindungs-Drags (`#renderRubberBand`) hat
+standardmäßig eine Hit-Test-Fläche entlang ihres Strichs; ihr Endpunkt
+folgt exakt dem Mauszeiger, liegt beim Loslassen also *exakt* über dem
+Ziel-Port — `document.elementFromPoint()` in `#finishConnect` trifft
+dadurch die Linie statt den darunterliegenden Eingangs-Anker. Fix:
+`pointer-events:none` auf der Vorschau-Linie. **Dieselbe, strukturell
+identische Rubber-Band-Logik existierte unverändert seit B3 in
+`flow-canvas.ts`s echtem Verbindungs-Drag** — dort denselben
+Ein-Zeilen-Fix zurückübertragen (docs/decisions.md-Konvention: ein bei
+Gelegenheit gefundener, trivial sicherer Bugfix wird nicht liegen
+gelassen). Vermutlich in der Praxis selten beobachtet, weil ein Nutzer
+selten die *exakte* Pixel-Mitte eines Ports als letzten Mausposition
+vor dem Loslassen trifft — bei den in dieser Sitzung genutzten
+CDP-Mausereignissen (`Input.dispatchMouseEvent`, präzise Koordinaten)
+reproduzierbar bei praktisch jedem Versuch.
+
+**Zweiter Fund (Test-Methodik, keine Code-Änderung nötig):**
+JS-seitig per `element.dispatchEvent(new PointerEvent(...))`
+synthetisierte Pointer-Events erzeugen keine für `setPointerCapture()`
+gültige aktive Pointer-Sitzung ("NotFoundError: No active pointer") —
+der Fehler wird von `addEventListener`-Handlern verschluckt (kein
+Reject bei `dispatchEvent()`), der Drag-Start bricht dadurch still ab,
+ohne dass der Testcode es bemerkt. Für Drag-Gesten braucht eine
+CDP-Verifikation echte Eingaben über `Input.dispatchMouseEvent`
+(mousePressed/mouseMoved/mouseReleased), nicht synthetische
+Seiten-Events — Erkenntnis für künftige Interaktions-Tests dieser Art.
+
+**Tests:** `role-designer-logic_test.ts` (7 Fälle: Rollen-Entfernung
+inkl. Kanten-Aufräumen, Verbindung hinzufügen inkl. Selbstschleifen-/
+Duplikat-Ablehnung) und `roles_test.ts` (3 Fälle) neu — beide grün.
+`deno check`/`deno test ui/` gesamt: 50 bestanden, 0 fehlgeschlagen
+(vorher 40). `go build`/`go vet`/`go test ./...` unverändert grün
+(reiner Frontend-Schritt, keine Backend-Änderung).
+
+**Live verifiziert per CDP** (echte Maus-Interaktion über
+`Input.dispatchMouseEvent`, nicht nur Klicks): "Grafisch entwerfen"
+geöffnet → Name gesetzt → zwei Rollen-Kacheln über die Werkzeugleiste
+hinzugefügt → eine Kachel per echtem Drag verschoben (Position
+`translate(40,40)` → `translate(100,80)` bestätigt) → Verbindung per
+echtem Drag vom Output-Anker der einen zum Input-Anker der anderen
+Kachel gezogen (1 Template-Kante im DOM bestätigt) → "Anlegen" →
+Overlay schließt, Backend-Objekt per API geprüft: exakt 2 Rollen, 1
+Verbindung in korrekter Richtung. Anschließend "Grafisch bearbeiten"
+auf demselben Workflow geöffnet: Name/Rollen/Kante korrekt
+vorbefüllt, per "Schließen" ohne Änderung verlassen. Separat: Rollen-
+Kachel-Entfernen-Button geprüft (Kachel verschwindet aus dem DOM).
+Test-Workflow über die API gelöscht, Chromium/Orchestrator beendet.
+
+**Damit ist Kapitel 12 (docs/END-GOAL-FEATURES.md §12, alle Teile 1–6
+inkl. aller Unterteile) vollständig umgesetzt.**

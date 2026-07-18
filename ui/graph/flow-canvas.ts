@@ -45,6 +45,7 @@ import {
 } from "./controls.ts";
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
+import { uniqueRoleName } from "./roles.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -1616,6 +1617,15 @@ export class FlowCanvas extends HTMLElement {
       path.setAttribute("stroke-width", "2");
       path.setAttribute("stroke-dasharray", "4 4");
       path.setAttribute("data-role", "rubber-band");
+      // Kapitel 12 Teil 6 (§22.3 Punkt 1, Rollen-Designer): beim Bau des
+      // dortigen, analogen Verbindungs-Drags per Live-Test gefunden und
+      // hierher zurückübertragen — ohne dies liegt die Linie beim Loslassen
+      // direkt über dem Ziel-Port (ihr Endpunkt IST der Mauszeiger), und
+      // document.elementFromPoint() in #finishConnect trifft dann die
+      // Linie statt den darunterliegenden Port, die Verbindung scheitert
+      // lautlos genau am Zielpunkt. pointer-events:none nimmt die rein
+      // dekorative Vorschau-Linie aus dem Hit-Test heraus.
+      path.style.pointerEvents = "none";
       this.#viewportGroup.appendChild(path);
       this.#rubberBand = path;
     }
@@ -2263,16 +2273,6 @@ export class FlowCanvas extends HTMLElement {
     this.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
   }
-}
-
-// Kapitel 12 Teil 2: Rollenname aus dem Node-Typ ableiten, eindeutig
-// gemacht bei mehreren Rollen desselben Typs in derselben Gruppe (z. B.
-// drei Kamera-Rollen "omp-source", "omp-source-2", "omp-source-3").
-function uniqueRoleName(nodeType: string, used: Set<string>): string {
-  if (!used.has(nodeType)) return nodeType;
-  let i = 2;
-  while (used.has(`${nodeType}-${i}`)) i++;
-  return `${nodeType}-${i}`;
 }
 
 // Kapitel 12 Teil 3 (§12.3c): synthetische Tile-ID für die Platzhalter-
