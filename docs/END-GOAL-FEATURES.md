@@ -2764,6 +2764,13 @@ wie heute pro Node-Typ hartkodiert.
   die OGraf-Template-Gestaltung gebunden, keine generische
   Testauflösung — eine Workflow-Auflösung würde dort Templates verzerren,
   nicht nur reskalieren.
+  ✅ **`omp-switcher`, `omp-player`, `omp-video-mixer-me` nachgezogen
+  2026-07-18** (`docs/decisions.md` Nachtrag 30) — derselbe Handgriff,
+  bei `omp-video-mixer-me` zusätzlich die dort laufzeit-abgeleiteten
+  Keyer-Pad-Properties (vorher `const KEYER_WIDTH`/`HEIGHT`) und
+  `DveBox::full_frame()` umgestellt; live per NMOS-Query (alle vier
+  Video-Flows bei `OMP_WIDTH=800`/`OMP_HEIGHT=600` korrekt registriert)
+  und `GET /params/dve.box` verifiziert. **Teil 1 damit vollständig.**
 - **Teil 2 — Zweiter MXL-Sender in `omp-mediaio::mxl`:** optionaler
   Lowres-`MxlVideoOutput`, gespeist vom bestehenden Downscale-Zweig,
   als IS-04-Flow der Highres-Quelle zugeordnet (Grouphint-Tag).

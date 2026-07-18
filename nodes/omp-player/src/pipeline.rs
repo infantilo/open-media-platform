@@ -50,8 +50,13 @@ use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-pub const WIDTH: u32 = 640;
-pub const HEIGHT: u32 = 480;
+/// Fallback, falls `main.rs` keine `OMP_WIDTH`/`OMP_HEIGHT`-Umgebungs-
+/// variable findet (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c,
+/// 2026-07-17: Workflow-Auflösungs-Setting) — `Config::width`/`height`
+/// tragen den tatsächlich verwendeten Wert, diese Konstanten sind nur
+/// noch der Default dafür, keine feste Pipeline-Vorgabe mehr.
+pub const DEFAULT_WIDTH: u32 = 640;
+pub const DEFAULT_HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 pub const SAMPLE_RATE: u32 = 48000;
@@ -70,6 +75,8 @@ pub struct Config {
     pub video_flow_id: String,
     pub audio_flow_id: String,
     pub label: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 /// Woher ein Item seine Essenz bezieht — additiv zum ursprünglichen
@@ -160,10 +167,10 @@ impl PipelineHandle {
     }
 }
 
-fn video_caps() -> gst::Caps {
+fn video_caps(width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
-        .field("width", WIDTH as i32)
-        .field("height", HEIGHT as i32)
+        .field("width", width as i32)
+        .field("height", height as i32)
         .field(
             "framerate",
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
@@ -206,6 +213,8 @@ fn build_video_branch(
     pipeline: &gst::Pipeline,
     pad: gst::Pad,
     pattern: &str,
+    width: u32,
+    height: u32,
 ) -> Result<Branch, String> {
     let src = gst::ElementFactory::make("videotestsrc")
         .property("is-live", true)
@@ -222,7 +231,7 @@ fn build_video_branch(
         .build()
         .map_err(|e| format!("videorate: {e}"))?;
     let caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", video_caps())
+        .property("caps", video_caps(width, height))
         .build()
         .map_err(|e| format!("capsfilter: {e}"))?;
 
@@ -333,6 +342,8 @@ fn build_file_branches(
     slot: Slot,
     onair_slot: Arc<AtomicU8>,
     tx: UnboundedSender<Event>,
+    width: u32,
+    height: u32,
 ) -> Result<(Option<Branch>, Branch), String> {
     let video_chain = if let Some(pad) = video_pad {
         let convert = gst::ElementFactory::make("videoconvert")
@@ -345,7 +356,7 @@ fn build_file_branches(
             .build()
             .map_err(|e| format!("videorate: {e}"))?;
         let caps = gst::ElementFactory::make("capsfilter")
-            .property("caps", video_caps())
+            .property("caps", video_caps(width, height))
             .build()
             .map_err(|e| format!("capsfilter(video): {e}"))?;
         // `queue` statt Direktverlinkung auf `pad` (K2-Teil-1 Nachtrag,
@@ -513,6 +524,8 @@ struct ActivePipeline {
     audio_isel: gst::Element,
     video_branches: HashMap<Slot, Branch>,
     audio_branches: HashMap<Slot, Branch>,
+    width: u32,
+    height: u32,
     _mxl_video_output: Option<MxlVideoOutput>,
     _mxl_audio_output: MxlAudioOutput,
     video_flowed: Option<Arc<AtomicBool>>,
@@ -550,7 +563,8 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
     match &item.source {
         ItemSource::TestPattern { pattern, tone_freq } => {
             if let Some(pad) = old_video_pad {
-                let branch = build_video_branch(&active.pipeline, pad, pattern)?;
+                let branch =
+                    build_video_branch(&active.pipeline, pad, pattern, active.width, active.height)?;
                 active.video_branches.insert(slot, branch);
             }
             let branch = build_audio_branch(&active.pipeline, audio_pad, *tone_freq)?;
@@ -566,6 +580,8 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
                 slot,
                 active.onair_slot.clone(),
                 active.event_tx.clone(),
+                active.width,
+                active.height,
             )?;
             if let Some(branch) = video_branch {
                 active.video_branches.insert(slot, branch);
@@ -642,7 +658,7 @@ fn build(
             let pad = isel
                 .request_pad_simple(&format!("sink_{}", slot.pad_index()))
                 .ok_or_else(|| format!("video isel: request sink_{} failed", slot.pad_index()))?;
-            let branch = build_video_branch(&pipeline, pad, empty_pattern)?;
+            let branch = build_video_branch(&pipeline, pad, empty_pattern, config.width, config.height)?;
             video_branches.insert(slot, branch);
         }
         let pad = audio_isel
@@ -659,8 +675,8 @@ fn build(
             context.clone(),
             &config.video_flow_id,
             &config.label,
-            WIDTH,
-            HEIGHT,
+            config.width,
+            config.height,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
         )
@@ -706,6 +722,8 @@ fn build(
         audio_isel,
         video_branches,
         audio_branches,
+        width: config.width,
+        height: config.height,
         _mxl_video_output: mxl_video_output,
         _mxl_audio_output: mxl_audio_output,
         video_flowed,

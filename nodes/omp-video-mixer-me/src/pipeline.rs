@@ -52,8 +52,13 @@ use omp_mediaio::mxl::{MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-pub const WIDTH: u32 = 640;
-pub const HEIGHT: u32 = 480;
+/// Fallback, falls `main.rs` keine `OMP_WIDTH`/`OMP_HEIGHT`-Umgebungs-
+/// variable findet (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c,
+/// 2026-07-17: Workflow-Auflösungs-Setting) — `Config::width`/`height`
+/// tragen den tatsächlich verwendeten Wert, diese Konstanten sind nur
+/// noch der Default dafür, keine feste Pipeline-Vorgabe mehr.
+pub const DEFAULT_WIDTH: u32 = 640;
+pub const DEFAULT_HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 
@@ -66,8 +71,6 @@ const TRANS_DURATION_MS: u64 = 1000;
 /// `videotestsrc::foreground-color`): kräftiges Magenta, im Viewer klar
 /// vom SMPTE-/Quellbild unterscheidbar.
 const KEYER_COLOR_ARGB: u32 = 0xFFFF00FF;
-const KEYER_WIDTH: i32 = (WIDTH / 3) as i32;
-const KEYER_HEIGHT: i32 = (HEIGHT / 3) as i32;
 
 /// Wie beim Switcher (C7): Reader-/Writer-Threads setzen bei `Drop` nur
 /// ein Stop-Flag, kein `JoinHandle`. Vor dem Öffnen eines neuen
@@ -79,6 +82,8 @@ pub struct Config {
     pub domain: String,
     pub flow_id: String,
     pub label: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -101,19 +106,19 @@ pub struct DveBox {
 }
 
 impl DveBox {
-    pub fn full_frame() -> Self {
+    pub fn full_frame(width: u32, height: u32) -> Self {
         DveBox {
             x: 0,
             y: 0,
-            width: WIDTH as i32,
-            height: HEIGHT as i32,
+            width: width as i32,
+            height: height as i32,
         }
     }
 }
 
 impl Default for DveBox {
     fn default() -> Self {
-        DveBox::full_frame()
+        DveBox::full_frame(DEFAULT_WIDTH, DEFAULT_HEIGHT)
     }
 }
 
@@ -204,10 +209,10 @@ impl PipelineHandle {
     }
 }
 
-fn video_caps() -> gst::Caps {
+fn video_caps(width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
-        .field("width", WIDTH as i32)
-        .field("height", HEIGHT as i32)
+        .field("width", width as i32)
+        .field("height", height as i32)
         .field(
             "framerate",
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
@@ -215,11 +220,11 @@ fn video_caps() -> gst::Caps {
         .build()
 }
 
-fn rgba_caps() -> gst::Caps {
+fn rgba_caps(width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
         .field("format", "RGBA")
-        .field("width", WIDTH as i32)
-        .field("height", HEIGHT as i32)
+        .field("width", width as i32)
+        .field("height", height as i32)
         .field(
             "framerate",
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
@@ -238,6 +243,8 @@ fn build_normalized_branch(
     pipeline: &gst::Pipeline,
     tail: &gst::Element,
     name_suffix: &str,
+    width: u32,
+    height: u32,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
@@ -249,7 +256,7 @@ fn build_normalized_branch(
         .build()
         .map_err(|e| format!("videorate ({name_suffix}): {e}"))?;
     let caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", rgba_caps())
+        .property("caps", rgba_caps(width, height))
         .build()
         .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
 
@@ -294,6 +301,8 @@ fn build_one_input(
     isel_bg: &gst::Element,
     input: &DiscoveredInput,
     pad_index: usize,
+    width: u32,
+    height: u32,
 ) -> Result<(gst::Pad, gst::Pad, MxlVideoInput, MxlVideoInput), String> {
     let fg_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
         .map_err(|e| format!("MxlVideoInput(fg, {}): {e}", input.sender_id))?;
@@ -301,6 +310,8 @@ fn build_one_input(
         pipeline,
         &fg_input.tail,
         &format!("input-{pad_index}-fg"),
+        width,
+        height,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -340,6 +351,8 @@ fn build_one_input(
         pipeline,
         &bg_input.tail,
         &format!("input-{pad_index}-bg"),
+        width,
+        height,
     ) {
         Ok(r) => r,
         Err(e) => {
@@ -479,8 +492,10 @@ fn build(
         .add(&black_src_fg)
         .and_then(|()| pipeline.add(&black_src_bg))
         .map_err(|e| format!("add black sources: {e}"))?;
-    let (black_caps_fg, _) = build_normalized_branch(&pipeline, &black_src_fg, "black-fg")?;
-    let (black_caps_bg, _) = build_normalized_branch(&pipeline, &black_src_bg, "black-bg")?;
+    let (black_caps_fg, _) =
+        build_normalized_branch(&pipeline, &black_src_fg, "black-fg", config.width, config.height)?;
+    let (black_caps_bg, _) =
+        build_normalized_branch(&pipeline, &black_src_bg, "black-bg", config.width, config.height)?;
 
     let black_pad_fg = isel
         .request_pad_simple("sink_0")
@@ -510,7 +525,16 @@ fn build(
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isel, &isel_bg, input, pad_index) {
+        match build_one_input(
+            &pipeline,
+            context,
+            &isel,
+            &isel_bg,
+            input,
+            pad_index,
+            config.width,
+            config.height,
+        ) {
             Ok((fg_pad, bg_pad, fg_input, bg_input)) => {
                 source_pads_fg.insert(input.sender_id.clone(), fg_pad);
                 source_pads_bg.insert(input.sender_id.clone(), bg_pad);
@@ -562,16 +586,19 @@ fn build(
     pipeline
         .add(&keyer_src)
         .map_err(|e| format!("add keyer source: {e}"))?;
-    let (keyer_caps, _) = build_normalized_branch(&pipeline, &keyer_src, "keyer")?;
+    let (keyer_caps, _) =
+        build_normalized_branch(&pipeline, &keyer_src, "keyer", config.width, config.height)?;
     let comp_keyer_pad = comp
         .request_pad_simple("sink_2")
         .ok_or("comp: request sink_2 (keyer) failed")?;
+    let keyer_width = (config.width / 3) as i32;
+    let keyer_height = (config.height / 3) as i32;
     comp_keyer_pad.set_property("zorder", 3u32);
     comp_keyer_pad.set_property("alpha", 0.0f64);
-    comp_keyer_pad.set_property("xpos", (WIDTH as i32 - KEYER_WIDTH) / 2);
-    comp_keyer_pad.set_property("ypos", (HEIGHT as i32 - KEYER_HEIGHT) / 2);
-    comp_keyer_pad.set_property("width", KEYER_WIDTH);
-    comp_keyer_pad.set_property("height", KEYER_HEIGHT);
+    comp_keyer_pad.set_property("xpos", (config.width as i32 - keyer_width) / 2);
+    comp_keyer_pad.set_property("ypos", (config.height as i32 - keyer_height) / 2);
+    comp_keyer_pad.set_property("width", keyer_width);
+    comp_keyer_pad.set_property("height", keyer_height);
     keyer_caps
         .static_pad("src")
         .ok_or("keyer capsfilter: no src pad")?
@@ -579,7 +606,7 @@ fn build(
         .map_err(|e| format!("link keyer to comp.sink_2: {e}"))?;
 
     let comp_out_caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", video_caps())
+        .property("caps", video_caps(config.width, config.height))
         .build()
         .map_err(|e| format!("capsfilter (comp out): {e}"))?;
     pipeline
@@ -593,8 +620,8 @@ fn build(
         context.clone(),
         &config.flow_id,
         &config.label,
-        WIDTH,
-        HEIGHT,
+        config.width,
+        config.height,
         FRAMERATE_NUMERATOR,
         FRAMERATE_DENOMINATOR,
     )
@@ -716,7 +743,7 @@ pub fn run(
     };
     let mut program: Option<String> = None;
     let mut preset: Option<String> = None;
-    let mut dve_box = DveBox::full_frame();
+    let mut dve_box = DveBox::full_frame(config.width, config.height);
     let mut keyer_enabled = false;
     let fading = Arc::new(AtomicBool::new(false));
     let fade_thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
@@ -911,7 +938,7 @@ pub fn run(
                 let _ = tx.send(Event::DveBoxChanged(dve_box));
             }
             Ok(Command::ResetDve) => {
-                dve_box = DveBox::full_frame();
+                dve_box = DveBox::full_frame(config.width, config.height);
                 if let Some(p) = &active {
                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                 }

@@ -514,6 +514,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
+    // Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): Workflow-Auflösungs-
+    // Setting landet hier als OMP_WIDTH/OMP_HEIGHT (orchestrator/internal/
+    // workflows/service.go runStart) — ungültige oder fehlende Werte
+    // fallen ohne Fehler auf den Node-eigenen Default zurück.
+    let width: u32 = env_or("OMP_WIDTH", "")
+        .parse()
+        .unwrap_or(pipeline::DEFAULT_WIDTH);
+    let height: u32 = env_or("OMP_HEIGHT", "")
+        .parse()
+        .unwrap_or(pipeline::DEFAULT_HEIGHT);
 
     // K2-Teil-1: Wurzelverzeichnis für `file`-Items (relativ, löst gegen
     // den cwd des Prozesses auf — passend zum lokalen/host-agent-
@@ -544,6 +554,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         video_flow_id: video_flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         label: label.clone(),
+        width,
+        height,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_thread =
@@ -568,8 +580,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Video {
                 id: Some(video_flow_id),
-                frame_width: pipeline::WIDTH,
-                frame_height: pipeline::HEIGHT,
+                frame_width: width,
+                frame_height: height,
                 grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                 grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
             }),

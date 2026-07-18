@@ -7860,3 +7860,57 @@ Verifikation selbst (s. o.) — Bau- und Format-Verifikation sind
 abgeschlossen, der lange Beobachtungslauf ist dokumentierte
 Folgearbeit. Mit diesem Schritt ist die komplette Fable-Review-
 Zehnerliste (S1–S10) bearbeitet.
+
+## 2026-07-18 (Nachtrag 30) — Kapitel 15 Teil 1, Rest: `OMP_WIDTH`/
+`OMP_HEIGHT` auch in `omp-switcher`, `omp-player`, `omp-video-mixer-me`
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §15.4 Teil 1 war am 2026-07-17
+bewusst nur für `omp-source` abgeschlossen worden — der etablierte
+Handgriff (env lesen → `Config`-Feld → `WIDTH`/`HEIGHT`-Konstante an
+jeder Stelle durch den Konfigurationswert ersetzen) fehlte noch bei
+den drei übrigen Video-Nodes. Alle drei nachgezogen, mechanisch nach
+demselben Muster:
+
+- `omp-switcher`: `Config::width/height`, `video_caps()` und
+  `MxlVideoOutput::new` parametrisiert.
+- `omp-player`: `Config::width/height`, `video_caps()` sowie beide
+  Aufrufstellen (`TestPattern`-Zweig `build_video_branch`,
+  `File`-Zweig `build_file_branches`); `ActivePipeline` trägt
+  `width`/`height` selbst, damit `replace_slot()` (kein `Config`-
+  Zugriff) sie kennt.
+- `omp-video-mixer-me` (der laut §15.4 als „größer als ursprünglich
+  eingeschätzt" markierte Fall): `KEYER_WIDTH`/`KEYER_HEIGHT` waren
+  `const`, aus `WIDTH`/`HEIGHT` abgeleitet — mussten zu
+  Laufzeitwerten werden (`(config.width / 3) as i32` in `build()`).
+  `DveBox::full_frame()` (Vollbild-Default für die DVE-Box) hing
+  ebenfalls an der festen Auflösung; jetzt `full_frame(width,
+  height)`, mit `impl Default for DveBox` als expliziter Fallback auf
+  `DEFAULT_WIDTH`/`DEFAULT_HEIGHT` für den einzigen Aufrufer ohne
+  Config-Kontext. `main.rs`s eigener `DveBox`-State (Anzeige, bevor
+  der erste `DveBoxChanged`-Event eintrifft) auf `full_frame(width,
+  height)` umgestellt statt `Default::default()` — vermeidet eine
+  sonst neu eingeführte kurze UI-Inkonsistenz zwischen Node-Default
+  und tatsächlicher Workflow-Auflösung.
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build --workspace`
+und `cargo clippy --workspace --all-targets` grün (keine neuen
+Warnungen, nur vorbestehende in unberührten Dateien). Alle vier
+betroffenen Nodes (`omp-source`, `omp-switcher`, `omp-player`,
+`omp-video-mixer-me`) mit `OMP_WIDTH=800 OMP_HEIGHT=600` gegen einen
+echten, per `make start` laufenden Orchestrator/Registry-Stack
+gestartet: `GET /x-nmos/query/v1.3/flows` zeigt alle vier
+Video-Flows mit `frame_width=800`/`frame_height=600` (PGM, TestSwitcher
+Sender 1, TestPlayer Sender 1, TestSrc Sender 1). `mxl-info -f
+<mixer-flow>` zeigt einen kontinuierlich wachsenden `Head index`
+(PGM-Ausgang läuft trotz Laufzeit-Keyer-Geometrie). `GET
+/params/dve.box` am Mixer liefert `{"width":800,"height":600,...}` —
+bestätigt, dass sowohl der Pipeline-interne als auch der
+`main.rs`-seitige Vollbild-Default die tatsächliche
+Workflow-Auflösung tragen, nicht mehr die alte 640×480-Konstante.
+Test-Instanzen danach beendet (`ps aux` bestätigt keine verbliebenen
+Prozesse), Orchestrator gestoppt.
+
+**Damit ist Kapitel 15 Teil 1 vollständig** (nur `omp-ograf` bleibt
+bewusst ausgenommen, s. §15.4-Begründung: Template-Auflösung statt
+generischer Testauflösung). Teil 2 (zweiter, echter Lowres-MXL-Sender
+in `omp-mediaio::mxl`) ist die nächste offene Kapitel-15-Arbeit.

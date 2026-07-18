@@ -12,10 +12,10 @@
 //!
 //! Jeder Zweig (Schwarzbild wie Quellen) läuft vor `isel` durch
 //! `videoconvert ! videoscale ! videorate ! capsfilter` auf dieselben
-//! festen Maße/Framerate (`WIDTH`/`HEIGHT`/`FRAMERATE_*`, identisch zu
-//! `omp-source`s Konstanten) — `input-selector` schaltet nur zwischen
-//! bereits kompatiblen Caps um, ohne dass der Ausgang bei jedem Wechsel
-//! neu verhandeln müsste.
+//! Maße/Framerate (`Config::width`/`height`, aus `OMP_WIDTH`/`OMP_HEIGHT`
+//! bzw. `DEFAULT_WIDTH`/`DEFAULT_HEIGHT`-Fallback, `FRAMERATE_*` weiterhin
+//! fest) — `input-selector` schaltet nur zwischen bereits kompatiblen Caps
+//! um, ohne dass der Ausgang bei jedem Wechsel neu verhandeln müsste.
 //!
 //! **Zwei getrennte Änderungsarten:** ändert sich die entdeckte
 //! Quellenmenge (`Command::SetInputs`), wird die **gesamte Pipeline neu
@@ -37,8 +37,13 @@ use omp_mediaio::mxl::{MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
-pub const WIDTH: u32 = 640;
-pub const HEIGHT: u32 = 480;
+/// Fallback, falls `main.rs` keine `OMP_WIDTH`/`OMP_HEIGHT`-Umgebungs-
+/// variable findet (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c,
+/// 2026-07-17: Workflow-Auflösungs-Setting) — `Config::width`/`height`
+/// tragen den tatsächlich verwendeten Wert, diese Konstanten sind nur
+/// noch der Default dafür, keine feste Pipeline-Vorgabe mehr.
+pub const DEFAULT_WIDTH: u32 = 640;
+pub const DEFAULT_HEIGHT: u32 = 480;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 
@@ -55,6 +60,8 @@ pub struct Config {
     pub domain: String,
     pub flow_id: String,
     pub label: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -114,10 +121,10 @@ impl PipelineHandle {
     }
 }
 
-fn video_caps() -> gst::Caps {
+fn video_caps(width: u32, height: u32) -> gst::Caps {
     gst::Caps::builder("video/x-raw")
-        .field("width", WIDTH as i32)
-        .field("height", HEIGHT as i32)
+        .field("width", width as i32)
+        .field("height", height as i32)
         .field(
             "framerate",
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
@@ -189,6 +196,8 @@ fn build_one_input(
     isel: &gst::Element,
     input: &DiscoveredInput,
     pad_index: usize,
+    width: u32,
+    height: u32,
 ) -> Result<(gst::Pad, MxlVideoInput), String> {
     let mxl_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
         .map_err(|e| format!("MxlVideoInput({}): {e}", input.sender_id))?;
@@ -224,7 +233,7 @@ fn build_one_input(
         }
     };
     let caps = match gst::ElementFactory::make("capsfilter")
-        .property("caps", video_caps())
+        .property("caps", video_caps(width, height))
         .build()
         .map_err(|e| format!("capsfilter (input {pad_index}): {e}"))
     {
@@ -310,7 +319,7 @@ fn build(
         .map_err(|e| format!("videotestsrc (black): {e}"))?;
     black_src.set_property_from_str("pattern", "black");
     let black_caps = gst::ElementFactory::make("capsfilter")
-        .property("caps", video_caps())
+        .property("caps", video_caps(config.width, config.height))
         .build()
         .map_err(|e| format!("capsfilter (black): {e}"))?;
     pipeline
@@ -333,7 +342,15 @@ fn build(
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isel, input, pad_index) {
+        match build_one_input(
+            &pipeline,
+            context,
+            &isel,
+            input,
+            pad_index,
+            config.width,
+            config.height,
+        ) {
             Ok((pad, mxl_input)) => {
                 source_pads.insert(input.sender_id.clone(), pad);
                 mxl_inputs.push(mxl_input);
@@ -353,8 +370,8 @@ fn build(
         context.clone(),
         &config.flow_id,
         &config.label,
-        WIDTH,
-        HEIGHT,
+        config.width,
+        config.height,
         FRAMERATE_NUMERATOR,
         FRAMERATE_DENOMINATOR,
     )
