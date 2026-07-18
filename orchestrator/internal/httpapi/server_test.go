@@ -43,7 +43,10 @@ func (f fakeConsoleResolver) Resolve(userID string, nodes []consoles.NodeInfo) (
 
 // fakeNodeLister ist ein einfacher Test-Double für NodeLister, damit
 // Handler-Tests ohne echten Poller/Registry-Client auskommen.
-type fakeNodeLister struct{ nodes []registry.NodeView }
+type fakeNodeLister struct {
+	nodes        []registry.NodeView
+	pollDuration time.Duration
+}
 
 func (f fakeNodeLister) List() []registry.NodeView { return f.nodes }
 
@@ -56,10 +59,14 @@ func (f fakeNodeLister) Get(id string) (registry.NodeView, bool) {
 	return registry.NodeView{}, false
 }
 
+func (f fakeNodeLister) PollDuration() time.Duration { return f.pollDuration }
+
 // fakeEventSubscriber ist ein Test-Double für EventSubscriber, das einen
 // vorgegebenen Kanal statt eines echten sse.Hub liefert.
 type fakeEventSubscriber struct {
-	ch chan sse.Event
+	ch          chan sse.Event
+	clientCount int
+	totalDrops  uint64
 }
 
 func (f fakeEventSubscriber) Subscribe() (<-chan sse.Event, func()) {
@@ -70,6 +77,9 @@ func (f fakeEventSubscriber) Subscribe() (<-chan sse.Event, func()) {
 // host_handlers_test.go) für Tests, die tatsächlich prüfen, was
 // gebroadcastet wurde.
 func (f fakeEventSubscriber) Broadcast(sse.Event) {}
+
+func (f fakeEventSubscriber) ClientCount() int   { return f.clientCount }
+func (f fakeEventSubscriber) TotalDrops() uint64 { return f.totalDrops }
 
 // fakeLayoutStore ist ein einfacher In-Memory-Test-Double für LayoutStore.
 type fakeLayoutStore struct{ data map[string]json.RawMessage }
@@ -143,11 +153,12 @@ func (f fakeSnapshotService) Apply(ctx context.Context, id string) (snapshots.Ap
 // fakeLauncherService ist ein Test-Double für LauncherService, damit
 // Handler-Tests ohne echte Subprozesse auskommen.
 type fakeLauncherService struct {
-	catalog   []launcher.CatalogEntry
-	instances []launcher.Instance
-	started   launcher.Instance
-	startErr  error
-	stopErr   error
+	catalog       []launcher.CatalogEntry
+	instances     []launcher.Instance
+	started       launcher.Instance
+	startErr      error
+	stopErr       error
+	totalRestarts uint64
 }
 
 func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalog }
@@ -161,6 +172,8 @@ func (f fakeLauncherService) Start(nodeType, hostID string, extraEnv map[string]
 func (f fakeLauncherService) Stop(id string) error {
 	return f.stopErr
 }
+
+func (f fakeLauncherService) TotalRestarts() uint64 { return f.totalRestarts }
 
 // fakeAuthSvc ist ein Test-Double für AuthService — UserCount 0 im
 // Zero-Value (Bootstrap-Bypass, s. authGate.authenticate), damit alle

@@ -1,6 +1,9 @@
 package registry
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // Store hält den zuletzt erfolgreich abgefragten Node-Snapshot im Speicher,
 // nebenläufig lesbar/schreibbar. Ein fehlgeschlagener Poll überschreibt den
@@ -9,6 +12,13 @@ import "sync"
 type Store struct {
 	mu    sync.RWMutex
 	nodes []NodeView
+	// pollDuration ist die Dauer des zuletzt abgeschlossenen Polls (S8,
+	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Registry- (Nodes
+	// online/gesamt, Poll-Dauer)" für /metrics) — hier statt auf *Poller
+	// gehalten, weil der Store (nicht der Poller selbst) bereits als
+	// NodeLister in httpapi.NewHandler injiziert wird; ein zusätzlicher
+	// Konstruktor-Parameter nur für diesen einen Wert wäre unnötig.
+	pollDuration time.Duration
 }
 
 // NewStore erstellt einen leeren Store.
@@ -42,4 +52,19 @@ func (s *Store) Get(id string) (NodeView, bool) {
 		}
 	}
 	return NodeView{}, false
+}
+
+// SetPollDuration wird vom Poller nach jedem abgeschlossenen (auch
+// fehlgeschlagenen) Poll aufgerufen (S8).
+func (s *Store) SetPollDuration(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pollDuration = d
+}
+
+// PollDuration liefert die Dauer des zuletzt abgeschlossenen Polls.
+func (s *Store) PollDuration() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pollDuration
 }

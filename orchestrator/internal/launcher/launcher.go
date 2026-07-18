@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -210,6 +211,17 @@ type Launcher struct {
 	mu        sync.Mutex
 	instances map[string]Instance
 	restarts  map[string]*restartState
+
+	// totalRestarts zählt jeden tatsächlichen automatischen Neustart
+	// (lokal wie remote, beide laufen durch recordRestartLocked) seit
+	// Prozessstart kumulativ (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md:
+	// "Launcher (Instanzen, Restarts)" für /metrics) — bewusst ein
+	// eigener, nie sinkender Zähler statt der Summe der aktuell in
+	// `instances` befindlichen `RestartCount`-Werte: Letztere sänke
+	// fälschlich, sobald eine Instanz gestoppt/entfernt wird, was einen
+	// Prometheus-Counter-Konsumenten (z. B. den S8-Soak-Test) in die
+	// Irre führen würde.
+	totalRestarts atomic.Uint64
 }
 
 // SetRestartObserver verdrahtet einen Beobachter für automatische
@@ -268,6 +280,12 @@ func (l *Launcher) List() []Instance {
 		list = append(list, inst)
 	}
 	return list
+}
+
+// TotalRestarts liefert die kumulative Anzahl automatischer Neustarts
+// (lokal + remote) seit Prozessstart (S8) — s. totalRestarts-Doku.
+func (l *Launcher) TotalRestarts() uint64 {
+	return l.totalRestarts.Load()
 }
 
 // Start sucht nodeType im Katalog und startet ihn — lokal als
@@ -481,6 +499,7 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 	}
 	st.countInWindow++
 	st.total++
+	l.totalRestarts.Add(1)
 	if st.countInWindow > maxCrashRestarts {
 		return false, st.total
 	}

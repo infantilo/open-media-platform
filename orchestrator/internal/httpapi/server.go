@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
@@ -39,6 +40,9 @@ type InfoResponse struct {
 type NodeLister interface {
 	List() []registry.NodeView
 	Get(id string) (registry.NodeView, bool)
+	// PollDuration (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
+	// handleMetrics in metrics.go.
+	PollDuration() time.Duration
 }
 
 // EventSubscriber liefert einen Event-Kanal für einen neuen SSE-Client
@@ -50,6 +54,10 @@ type NodeLister interface {
 type EventSubscriber interface {
 	Subscribe() (<-chan sse.Event, func())
 	Broadcast(sse.Event)
+	// ClientCount/TotalDrops (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
+	// — s. handleMetrics in metrics.go.
+	ClientCount() int
+	TotalDrops() uint64
 }
 
 // GraphService baut den Flow-Editor-Graphen und führt IS-05-
@@ -85,6 +93,9 @@ type LauncherService interface {
 	List() []launcher.Instance
 	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
+	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
+	// handleMetrics in metrics.go.
+	TotalRestarts() uint64
 }
 
 // WorkflowService verwaltet Workflow-Definitionen und führt Bundle-
@@ -155,9 +166,18 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
+	// S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
+	// Prozess, geteilt zwischen der zählenden Middleware (unten,
+	// umschließt den ganzen Mux) und /metrics selbst.
+	reqCounters := &requestCounters{}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
+	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
+	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
+	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
+	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters))
 
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc))
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
@@ -222,7 +242,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
-	return noStoreForAPI(mux)
+	return countRequests(reqCounters, noStoreForAPI(mux))
 }
 
 // spaFallback liefert für die Kiosk-Routen /console/... (ARCHITECTURE.md

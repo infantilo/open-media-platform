@@ -21,6 +21,8 @@ func (f *fakeEventPublisher) Subscribe() (<-chan sse.Event, func()) {
 	return make(chan sse.Event), func() {}
 }
 func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, e.Type) }
+func (f *fakeEventPublisher) ClientCount() int      { return 0 }
+func (f *fakeEventPublisher) TotalDrops() uint64    { return 0 }
 
 func TestHandleCreateBootstrapToken(t *testing.T) {
 	expires := time.Now().Add(time.Hour)

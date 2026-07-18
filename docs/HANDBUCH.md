@@ -228,7 +228,48 @@ unabhängig vom verwendeten Schema/Host gültig bleibt. Ein Reverse-Proxy
 davor ändert daher am Orchestrator-Verhalten nichts, unabhängig davon,
 ob/wie er `X-Forwarded-*`-Header setzt.
 
-## 7. Troubleshooting
+## 7. Metrics & Soak-Test (S8)
+
+`GET /metrics` liefert Kennzahlen im Prometheus-Textformat — Go-Runtime
+(Goroutinen, Heap, GC), Registry (Nodes online/gesamt, Poll-Dauer),
+SSE (Clients, verlorene Events), Launcher (Instanzen, automatische
+Neustarts) und HTTP-Requests nach Status-Klasse. Handgeschrieben, kein
+`prometheus/client_golang` (Minimal-Dependency-Regel) — unauthentifiziert
+wie `/healthz` (ein echter Scraper trägt üblicherweise kein
+Bearer-Token; Netzwerk-Isolation ist hier die erwartete Absicherung,
+nicht Anwendungs-Auth).
+
+```sh
+curl http://localhost:8000/metrics
+```
+
+**Soak-Test:**
+
+```sh
+make soak                        # 1h, alle 60s ein Sample (S8-Default)
+make soak ARGS="1800 30"         # 30min, alle 30s (Sekunden: Dauer Intervall)
+```
+
+Startet den Stack (falls nicht bereits gestartet) + 2 Test-Nodes
+(`omp-source`, reine Grundlast, keine Verkabelung nötig) und schreibt
+`/metrics` alle N Sekunden als Zeile in
+`.run/soak/soak-<UTC-Zeitstempel>.csv` (nicht Teil des Git-Repos,
+`.gitignore`). Strg+C bricht früher ab, die bis dahin gesammelte CSV
+bleibt gültig; Test-Nodes werden beim Beenden (auch nach Strg+C)
+automatisch wieder gestoppt.
+
+**Soak-Analyse (Abbruchkriterium, S8):** kein automatischer Trend-Test
+im Skript — ein Mensch bewertet die entstandene CSV. Steigen
+`heap_alloc_bytes` oder `goroutines` über die **gesamte** Laufzeit
+ohne erkennbares Plateau/Sägezahnmuster (normale GC-Zyklen sorgen für
+regelmäßiges Auf und Ab) monoton an, ist das ein Leck-Befund. Ein
+einzelner kurzer Smoke-Lauf (2,5 min, 5 Samples,
+`docs/decisions.md` 2026-07-18) zeigte das erwartete gesunde Muster
+(Goroutinen/Heap schwankend, kein Trend) — die eigentliche, im Review
+verlangte 1-Stunden-Verifikation ohne monotonen Anstieg ist noch
+offen (dokumentierte Folgearbeit, sprengt eine einzelne Sitzung).
+
+## 8. Troubleshooting
 
 **Login-Formular erscheint, aber keine Zugangsdaten bekannt** — s.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
@@ -257,7 +298,7 @@ Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
 
-## 8. Mehr Kontext
+## 9. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)

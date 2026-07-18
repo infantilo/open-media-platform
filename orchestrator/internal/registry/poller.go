@@ -75,7 +75,9 @@ func (p *Poller) Run(ctx context.Context) {
 }
 
 func (p *Poller) pollOnce(ctx context.Context) {
+	start := time.Now()
 	nodes, err := p.client.FetchSnapshot(ctx)
+	p.store.SetPollDuration(time.Since(start))
 	if err != nil {
 		slog.Warn("registry poll failed", "error", err)
 		return

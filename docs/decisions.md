@@ -7728,3 +7728,135 @@ Test-Node gestoppt, Caddy-Container/Orchestrator beendet.
 Endpunkt + Soak-Grundlage) offen — dessen eigene Verifikation
 ("1-h-Soak lokal ohne monotonen Anstieg") sprengt den Rahmen einer
 einzelnen Sitzung und wird als eigener Schritt behandelt.
+
+## 2026-07-18 (Nachtrag 29) — S8: Metrics-Endpunkt + Soak-Grundlage
+
+Letzter Punkt der Fable-Review-Zehnerliste (docs/REVIEW-2026-07-17-
+SKALIERUNG-24-7.md). Bauen + Format-Verifikation + ein kurzer Smoke-Lauf
+sind in dieser Sitzung erledigt; die eigentliche, im Review verlangte
+**1-Stunden-Verifikation** ("ohne monotonen Anstieg") ist bewusst nicht
+Teil dieser Sitzung — das würde eine einzelne Sitzung sprengen, s.
+docs/HANDBUCH.md Abschnitt 7 für die dokumentierte Folgearbeit.
+
+**Handgeschrieben, kein `prometheus/client_golang`**
+(`orchestrator/internal/httpapi/metrics.go`) — konsequent zur
+Minimal-Dependency-Regel, die S8 selbst zitiert: `writeMetric()`
+schreibt `# HELP`/`# TYPE`/Sample-Zeilen direkt als Text, keine
+Registry-Abstraktion. Bewusst `strconv.FormatFloat(value, 'f', -1, 64)`
+statt Gos `%v`-Default für float64 — **live gefunden**: `%v` wechselt
+ab einer gewissen Größenordnung (Heap-Bytes im niedrigen
+Megabyte-Bereich) stillschweigend in wissenschaftliche Notation
+(`8.02816e+06`), technisch gültiges Prometheus-Format, aber unnötig
+schwer lesbar und ließ die eigene Formatprüfung im Test zunächst
+fehlschlagen.
+
+**Kennzahlen-Quellen — überall vorhandene Objekte erweitert statt
+neuer Infrastruktur:**
+- Go-Runtime: `runtime.NumGoroutine()`/`runtime.ReadMemStats()` direkt,
+  keine Sammlung nötig.
+- Registry: `registry.Store` bekam `SetPollDuration()`/`PollDuration()`
+  (vom `Poller` nach jedem Poll gesetzt) — bewusst auf dem Store selbst
+  statt auf `*Poller`, weil der Store (nicht der Poller) bereits als
+  `NodeLister` in `httpapi.NewHandler` injiziert wird; ein zusätzlicher
+  Konstruktor-Parameter nur für diesen einen Wert wäre unnötig gewesen.
+  Nodes online/gesamt direkt aus `Store.List()` gezählt.
+- SSE: `sse.Hub` bekam `ClientCount()` und einen neuen kumulativen
+  `totalDrops`-Zähler (jeder fehlgeschlagene Zustellversuch, nicht nur
+  der aktuelle Pro-Client-"dropped"-Zustand, der zurückgesetzt wird,
+  sobald der Client wieder aufholt).
+- Launcher: **bewusst kein** simpler Summen-Wert über die aktuell
+  bekannten `Instance.RestartCount`-Felder für "Neustarts gesamt" —
+  das sänke fälschlich, sobald eine Instanz gestoppt/entfernt wird
+  (kein gültiger Prometheus-Counter mehr). Stattdessen ein neuer,
+  eigener `Launcher.totalRestarts`-Zähler (atomic), einmal in
+  `recordRestartLocked()` inkrementiert — dem einzigen Ort, durch den
+  sowohl lokale (`supervise`) als auch Remote-Neustarts
+  (`HandleRemoteExit`) laufen, also ein einziger, garantiert
+  vollständiger Erfassungspunkt.
+- HTTP: neuer `requestCounters` (atomic, nach Status-Klasse 2xx/3xx/
+  4xx/5xx), gefüllt von einer neuen `countRequests`-Middleware, die den
+  gesamten Mux umschließt (zählt auch 404s und von `authGate`
+  abgelehnte Requests).
+
+**Live-Regression gefunden und behoben — SSE brach unter der neuen
+Zähl-Middleware:** `countRequests` wickelt jeden Request in den
+bereits bestehenden `statusRecorder` (bisher nur von
+`requireVerbOnNode`/`-Global` fürs Audit-Log genutzt, `GET
+/api/v1/events` lief bisher nie durch einen solchen Wrapper). Ein per
+Interface-Embedding eingebetteter `http.ResponseWriter` bringt dessen
+zusätzliche Fähigkeiten (hier: `http.Flusher`) **nicht** automatisch
+mit — Go promotet nur Methoden des statischen Feld-Typs
+(`http.ResponseWriter` kennt nur Header/Write/WriteHeader). Der
+bestehende Test `TestHandleEventsStreamsBroadcastEvents` schlug
+prompt mit "streaming unsupported" fehl, bevor das je live getestet
+wurde — genau der Fall, für den dieser Test ursprünglich geschrieben
+wurde. Fix: `statusRecorder.Flush()` ergänzt, leitet an den
+zugrundeliegenden Writer weiter, sofern der `http.Flusher`
+unterstützt — behebt beide Nutzer des Wrappers einheitlich, kein
+Sonderfall für die SSE-Route nötig.
+
+**`make soak` / `deploy/dev/soak-omp.sh`:** kein `jq`/`python3` (S8
+zitiert die Minimal-Dependency-Regel explizit, kein bestehendes
+`deploy/dev/*.sh`-Skript verwendet eines von beiden für
+JSON-Verarbeitung) — reines `grep`/`awk` sowohl für die schlanke
+Login-/Instanz-Start-Antwort (`grep -o '"token":"[^"]*"' | cut -d'"'
+-f4`) als auch für die Extraktion aus dem eigenen, bereits
+handgeschriebenen `/metrics`-Textformat. Startet den Stack (falls
+nötig) + 2 `omp-source`-Instanzen als Grundlast, schreibt alle
+`SOAK_INTERVAL`-Sekunden (Default 60, S8 wörtlich) eine CSV-Zeile nach
+`.run/soak/soak-<UTC-Zeitstempel>.csv`; `trap cleanup EXIT` räumt die
+Test-Nodes auch bei Strg+C zuverlässig weg.
+
+**Abbruchkriterium dokumentiert, nicht automatisiert** (§S8: "…
+monoton steigend über N Stunden = Befund"): bewusst kein
+Trend-Erkennungscode im Skript — eine robuste "monoton wachsend trotz
+GC-Sägezahn-Rauschen"-Heuristik über wenige Messpunkte wäre selbst
+fehleranfällig (falsch-positiv bei einem einzelnen ungünstig getakteten
+Sample). Die Bewertung macht ein Mensch anhand der CSV, Kriterium in
+docs/HANDBUCH.md Abschnitt 7 festgehalten.
+
+**Tests:** neue `metrics_test.go` — `TestHandleMetricsWellFormed`
+prüft sowohl die Prometheus-Text-Grundform (Regex je Zeile, jede
+Sample-Zeile hat eine vorangehende HELP/TYPE-Zeile und umgekehrt) als
+auch echte Werte einiger Kennzahlen gegen Test-Doubles mit bekannten
+Eingaben (kein promtool auf dieser Maschine installiert, s. Review-Text
+"sonst Formatprüfung im Test"). `TestCountRequestsRecordsStatusClass`
+und `TestCountRequestsDoesNotBreakFlushing` (Regressionswächter für den
+oben beschriebenen Fund) neu. Alle bestehenden `EventSubscriber`/
+`NodeLister`/`LauncherService`-Test-Doubles (`fakeNodeLister`,
+`fakeEventSubscriber`, `fakeEventPublisher`, `fakeLauncherService`) um
+die neuen Interface-Methoden erweitert. `go build`/`go vet`/`go test
+./...` grün.
+
+**Live verifiziert, echter Orchestrator, kein Mock:**
+- `curl /metrics` gegen den echten, laufenden Orchestrator: alle neun
+  Kennzahlengruppen mit plausiblen Werten (u. a. `omp_registry_nodes 1`
+  im Leerlauf — die NMOS-Registry selbst zählt als Node).
+- `make soak 150 30` (kurzer Smoke-Lauf statt der vollen Stunde, s. o.):
+  Stack lief bereits, 2 `omp-source`-Instanzen automatisch gestartet,
+  5 CSV-Zeilen über 150s gesammelt, jede mit den erwarteten 17 Spalten
+  — Goroutinen (23→36→36→34→34) und Heap
+  (1,59 MB→2,16 MB→3,17 MB→1,80 MB→3,11 MB) zeigen das erwartete
+  Sägezahnmuster (GC-Zyklen), kein monotoner Anstieg über den kurzen
+  Beobachtungszeitraum. Test-Nodes automatisch aufgeräumt (`ps aux`
+  bestätigt keine verbliebenen Prozesse), keine verbliebenen
+  Instanzen laut `GET /api/v1/instances`.
+- Ein während dieses Smoke-Laufs beobachteter, stetig wachsender
+  `omp_http_requests_total{status="4xx"}`-Zähler (11→43→72→101→131 in
+  150s) wurde **nicht abschließend geklärt** — mehrere gezielte
+  Nachtests (Einzelinstanz-Start, `ss -tnp`-Verbindungsprüfung) deuten
+  eher auf einen Artefakt der eigenen, sehr umfangreichen manuellen
+  `curl`-Testtätigkeit dieser Sitzung auf demselben lang laufenden
+  Orchestrator-Prozess hin als auf ein echtes Anwendungsproblem (kein
+  einziger WARN/ERROR-Log-Eintrag im Orchestrator-Log während der
+  gesamten Sitzung) — der Zähler selbst arbeitet nachweislich korrekt
+  (s. Tests), die *Quelle* der 4xx-Antworten blieb aber ungeklärt.
+  Dokumentierter Beobachtungspunkt für den echten 1-Stunden-Lauf: dort
+  mit einem frisch gestarteten, sonst unberührten Orchestrator
+  gegenprüfen, ob der Trend sich wiederholt.
+
+**Nicht Teil dieser Sitzung:** die eigentliche 1-Stunden-Soak-
+Verifikation selbst (s. o.) — Bau- und Format-Verifikation sind
+abgeschlossen, der lange Beobachtungslauf ist dokumentierte
+Folgearbeit. Mit diesem Schritt ist die komplette Fable-Review-
+Zehnerliste (S1–S10) bearbeitet.

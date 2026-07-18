@@ -33,6 +33,12 @@ type Hub struct {
 	// diese Clients bekommen bei der nächsten Gelegenheit lostEventsEvent
 	// zugestellt, statt still auf veraltetem Stand zu bleiben.
 	dropped map[chan Event]bool
+	// totalDrops zählt jeden fehlgeschlagenen Zustellversuch kumulativ
+	// (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "SSE-Clients+Drops"
+	// für /metrics) — anders als `dropped` (aktueller Zustand pro Client)
+	// wird dieser Zähler nie zurückgesetzt, ein monoton wachsender
+	// Prometheus-Counter.
+	totalDrops uint64
 }
 
 // NewHub erstellt einen leeren Hub.
@@ -80,6 +86,7 @@ func (h *Hub) Broadcast(e Event) {
 			case ch <- lostEventsEvent:
 				delete(h.dropped, ch)
 			default:
+				h.totalDrops++
 				continue // Puffer immer noch voll — e ist für diesen Client ebenfalls verloren, dropped bleibt gesetzt
 			}
 		}
@@ -87,6 +94,22 @@ func (h *Hub) Broadcast(e Event) {
 		case ch <- e:
 		default:
 			h.dropped[ch] = true
+			h.totalDrops++
 		}
 	}
+}
+
+// ClientCount liefert die Anzahl aktuell verbundener SSE-Clients (S8).
+func (h *Hub) ClientCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.clients)
+}
+
+// TotalDrops liefert die kumulative Anzahl fehlgeschlagener
+// Event-Zustellversuche seit Prozessstart (S8) — s. totalDrops-Doku.
+func (h *Hub) TotalDrops() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.totalDrops
 }

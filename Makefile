@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down
+.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent
 
@@ -179,5 +179,13 @@ proxy-up:
 proxy-down:
 	-podman stop omp-caddy
 	-podman rm omp-caddy
+
+# S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — startet den Stack
+# (falls nicht bereits gestartet) + 2 Test-Nodes, sammelt /metrics alle
+# 60s über 1h in eine CSV (.run/soak/). `make soak ARGS="1800 30"` für
+# abweichende Dauer/Intervall (Sekunden). Strg+C bricht früher ab, die
+# CSV bis dahin bleibt gültig.
+soak:
+	@./deploy/dev/soak-omp.sh $(ARGS)
 
 ci: check
