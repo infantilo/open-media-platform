@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore
+.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent
 
@@ -99,6 +99,7 @@ status:
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
+	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
 
 # Backup/Restore (S9, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
 # .backups/omp-<timestamp>.sql.gz, Rotation N=14. `make restore
@@ -150,5 +151,33 @@ mtls-down:
 mtls-issue-certs:
 	@./deploy/dev/mtls-issue-cert.sh orchestrator .run/mtls/orchestrator.crt .run/mtls/orchestrator.key
 	@./deploy/dev/mtls-issue-cert.sh mock-node .run/mtls/mock-node.crt .run/mtls/mock-node.key localhost 127.0.0.1
+
+# Caddy-Reverse-Proxy mit TLS-Terminierung (S7, docs/REVIEW-2026-07-17-
+# SKALIERUNG-24-7.md) — bewusst NICHT Teil von `make up`: Remote-Zugriff
+# ist opt-in, der normale lokale Dev-Workflow (Bearer-Token übers
+# Klartext-http://localhost:8000) bleibt unverändert. `--network=host`
+# statt einer Podman-Bridge, damit der Container 127.0.0.1:8000 (den
+# bare-Prozess-Orchestrator auf dem Host, kein eigener Container)
+# direkt erreicht, ohne einen Host-Gateway-Alias zu brauchen — für den
+# reinen Dev-Anwendungsfall ausreichend. `.run/caddy` persistiert
+# Caddys lokale CA über Neustarts hinweg (gleiches Muster wie
+# `.run/step-ca` bei mtls-up), sonst müsste der Browser das
+# selbstsignierte Zertifikat bei jedem `make proxy-up` neu akzeptieren.
+proxy-up:
+	@mkdir -p .run/caddy
+	@if podman container exists omp-caddy; then \
+		podman start omp-caddy; \
+	else \
+		podman run -d --name omp-caddy --restart=always \
+			--network=host \
+			-v $(CURDIR)/deploy/dev/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
+			-v $(CURDIR)/.run/caddy:/data \
+			docker.io/library/caddy:latest; \
+	fi
+	@echo "Reverse-Proxy bereit: https://localhost:8443 (selbstsigniertes Caddy-Zertifikat, s. docs/HANDBUCH.md)"
+
+proxy-down:
+	-podman stop omp-caddy
+	-podman rm omp-caddy
 
 ci: check

@@ -7647,3 +7647,84 @@ alle Kacheln. Tab-Wechsel weg vom Flow-Editor und zurück: Filter-
 Auswahl bleibt erhalten (App-Bar-State, nicht Kachel-State,
 bestätigt). Workflows über die API gestoppt/gelöscht, Chromium/
 Orchestrator beendet.
+
+## 2026-07-18 (Nachtrag 28) — S7: Remote-Zugriff dokumentiert absichern
+(TLS-Reverse-Proxy)
+
+Reines Deployment/Doku-Thema (kein neuer Orchestrator-Code außer der
+geprüften `X-Forwarded-*`-Frage, s. u.) — `deploy/dev/Caddyfile` +
+`make proxy-up`/`proxy-down` + `docs/HANDBUCH.md` Abschnitt 6.
+
+**`X-Forwarded-*`-Verträglichkeit geprüft statt geraten:** der
+Orchestrator-Code wurde nach `r.Host`/`r.TLS`/`SetCookie`/CORS-Headern
+durchsucht — keine Treffer außerhalb von Tests. Die gesamte Auth läuft
+über ein selbsttragendes Bearer-Token (Header oder
+`?access_token=`-Query-Param für `<img>`/`EventSource`), das
+unabhängig von Schema/Host gültig bleibt — ein Reverse-Proxy davor
+ändert am Verhalten nichts. Kein Code-Beitrag nötig (die Review selbst
+nennt diesen Punkt "optional").
+
+**Caddy statt nginx:** automatisches TLS (`tls internal` für lokale
+Zertifikate, ein späterer Domain-Wechsel auf `example.org:8443`
+bekäme automatisch echtes Let's-Encrypt-TLS ohne weitere Config) —
+kein manueller `openssl`-Zertifikats-Schritt für den Dev-Fall, im
+Gegensatz zu einer nginx-Variante. Als Podman-Container gestartet
+(`make proxy-up`), gleiches Grundmuster wie `make up`/`make mtls-up` —
+bewusst **nicht** Teil von `make up` selbst (Remote-Zugriff ist
+opt-in, der normale lokale Workflow bleibt Klartext-http unverändert).
+`--network=host`, damit der Container den bare-Prozess-Orchestrator
+auf `127.0.0.1:8000` direkt erreicht, ohne einen Podman-Bridge-
+Host-Gateway-Alias zu brauchen.
+
+**Zwei echte Live-Fehlschläge beim ersten Versuch, kein reines
+Copy-Paste-Rezept:**
+1. Caddys automatisches HTTP→HTTPS-Redirect versucht **zusätzlich**
+   Port 80 zu binden (auch wenn nur `:8443` im Caddyfile steht) —
+   scheiterte im rootless-Podman-Container ohne
+   `CAP_NET_BIND_SERVICE` mit "permission denied", der ganze
+   Caddy-Prozess kam nicht hoch. Fix: globale Option `auto_https
+   disable_redirects` (nur der Redirect-Listener entfällt, das
+   automatische Zertifikat-Management für `:8443` bleibt aktiv).
+2. Ein hostloser Site-Block (`:8443` ohne Domain) lässt Caddy nicht
+   wissen, für welchen Hostnamen es ein `tls internal`-Zertifikat
+   ausstellen soll — TLS-Handshakes scheiterten mit "TLS alert:
+   internal error" (Curl: `SSL routines::tlsv1 alert internal error`).
+   Fix: `localhost:8443` als expliziter Site-Host im Caddyfile (für
+   echten Fernzugriff ohnehin durch die eigene Domain zu ersetzen, s.
+   HANDBUCH.md).
+
+**`flush_interval -1`** (kein Antwort-Puffern) im `reverse_proxy`-Block
+— ohne das hätte SSE (`GET /api/v1/events`) im ungünstigsten Fall
+spürbar verzögerte Updates gezeigt; live per Verbindungs-Pill
+bestätigt, dass sie trotzdem sofort "Connected" zeigt (kein
+Nachweis-Bedarf einer *ohne* das Flag verzögerten Variante, das Flag
+folgt der Caddy-eigenen SSE-Empfehlung direkt).
+
+**Tests:** kein neuer `deno test`/Go-Test (reines Deployment-Artefakt).
+`go build`/`go vet` unverändert grün (kein Go-Code geändert).
+
+**Live verifiziert, echter Caddy-Container vor dem echten
+Orchestrator** — alle drei von S7 verlangten Pfade über
+`https://localhost:8443` (selbstsigniertes Zertifikat,
+`--ignore-certificate-errors` im Test-Chromium):
+- **Login:** `POST /api/v1/auth/login` liefert ein gültiges Token
+  (per `curl -k` bestätigt — Node.js' eigenes `fetch()` vertraut dem
+  selbstsignierten Zertifikat nicht, anders als der über CDP
+  gesteuerte, entsprechend konfigurierte Chromium; kein Widerspruch
+  zur eigentlichen Verifikation, nur eine Werkzeug-Einschränkung des
+  Testskripts selbst).
+- **SSE:** die App-Bar-Verbindungs-Pill zeigt nach dem Laden über HTTPS
+  "● Connected" — bestätigt, dass `EventSource`/SSE-Streaming durch
+  den Proxy durchgereicht wird, nicht nur einzelne Requests.
+- **Node-UI-Bundle:** ein echter `omp-viewer`-Node gestartet,
+  `GET /api/v1/nodes/{id}/ui/bundle.js` über den Proxy abgerufen — `200
+  text/javascript` (derselbe generische `handleNodeProxy`-Pfad wie im
+  Klartext-Betrieb, zusätzlich getestet, weil er als einziger der drei
+  Pfade einen ausgehenden Orchestrator→Node-Request beinhaltet, den
+  reine API-Handler nicht haben).
+Test-Node gestoppt, Caddy-Container/Orchestrator beendet.
+
+**Von der Fable-Review-Zehnerliste bleibt nur noch S8** (Metrics-
+Endpunkt + Soak-Grundlage) offen — dessen eigene Verifikation
+("1-h-Soak lokal ohne monotonen Anstieg") sprengt den Rahmen einer
+einzelnen Sitzung und wird als eigener Schritt behandelt.

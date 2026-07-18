@@ -1,0 +1,37 @@
+# Lokaler Reverse-Proxy mit TLS-Terminierung für OMP (S7,
+# docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Remote-Zugriff dokumentiert
+# absichern" — Bearer-Token + ?access_token= setzen HTTPS voraus, s.
+# docs/HANDBUCH.md Abschnitt 6). Der Orchestrator selbst bleibt dahinter
+# Klartext-HTTP — kein TLS-Handling/keine Zertifikatsverwaltung im
+# Go-Code, das ist bewusst Aufgabe des Proxys, nicht des Orchestrators
+# (ARCHITECTURE.md §4.6 trifft dieselbe Trennung schon für mTLS
+# Orchestrator↔Nodes).
+#
+# "tls internal" lässt Caddy sein eigenes lokales CA-Zertifikat
+# erzeugen/verwalten — kein manueller Zertifikats-Schritt für den
+# Dev-Betrieb (für echten Fernzugriff über das Internet stattdessen
+# eine öffentliche Domain + Caddys automatisches Let's-Encrypt-TLS
+# nutzen, s. docs/HANDBUCH.md).
+#
+# "auto_https disable_redirects": Caddy versucht sonst zusätzlich zu
+# :8443 automatisch einen HTTP→HTTPS-Redirect-Listener auf Port 80 zu
+# öffnen — im rootless-Podman-Container ohne CAP_NET_BIND_SERVICE
+# schlägt das mit "permission denied" fehl und der ganze Prozess
+# startet nicht (per Live-Test gefunden). Nur der Redirect-Listener
+# entfällt, automatisches TLS-Zertifikat-Management für :8443 bleibt
+# unverändert aktiv.
+{
+	auto_https disable_redirects
+}
+
+localhost:8443 {
+	tls internal
+
+	# SSE (GET /api/v1/events, sse.Hub) darf nicht gepuffert werden —
+	# ohne flush_interval -1 hält Caddy einzelne Chunks ggf. zurück, bis
+	# ein interner Puffer voll ist, was Live-Updates (Status-Änderungen,
+	# Tally, Alarme, …) im Browser spürbar verzögert.
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1
+	}
+}

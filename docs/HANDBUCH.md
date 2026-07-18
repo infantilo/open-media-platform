@@ -176,7 +176,59 @@ Skriptpaar wurde bei seiner Einführung einmal echt durchgespielt
 (Backup → Testnutzer angelegt → Restore → Testnutzer wieder weg,
 dokumentiert in `docs/decisions.md`), nicht nur gelesen/geschrieben.
 
-## 6. Troubleshooting
+## 6. Remote-Zugriff / Reverse-Proxy (S7)
+
+Der Orchestrator selbst spricht nur Klartext-HTTP (`http://localhost:8000`)
+— das ist für den lokalen Dev-Betrieb korrekt, aber **nicht** sicher
+genug für einen Zugriff von außerhalb dieser Maschine: Anmeldung läuft
+über ein Bearer-Token (`Authorization: Bearer …`), das Node-UI-Bundle
+und SSE-Reconnects akzeptieren das Token zusätzlich als
+`?access_token=`-Query-Parameter (praktisch für `<img src>`/
+`EventSource`, die keinen eigenen Header setzen können) — **beides
+ergibt nur mit HTTPS Sinn**, sonst liegt das Token im Klartext auf der
+Leitung bzw. sichtbar in jedem Proxy-/Server-Log, das die URL
+mitschreibt.
+
+**Lösung: TLS-Terminierung durch einen vorgeschalteten Reverse-Proxy**
+(`deploy/dev/Caddyfile`), der Orchestrator bleibt dahinter unverändert
+Klartext — dieselbe Trennung wie beim optionalen mTLS
+Orchestrator↔Nodes (Abschnitt 2.1): TLS-Handling ist Aufgabe der
+Infrastruktur, nicht des Go-Codes.
+
+```sh
+make proxy-up     # startet Caddy (Podman-Container) auf https://localhost:8443
+make proxy-down   # stoppt ihn wieder
+```
+
+`tls internal` lässt Caddy beim ersten Start automatisch eine eigene,
+lokale CA erzeugen und ein Zertifikat dafür ausstellen — kein
+manueller Zertifikats-Schritt nötig. Der Browser zeigt trotzdem eine
+Sicherheitswarnung, weil er Caddys lokale CA nicht kennt (für einen
+Dev-Test ignorierbar/akzeptierbar; Caddy kann die CA auch exportieren
+und ins System-Vertrauensspeicher importiert werden, s.
+[Caddy-Doku](https://caddyserver.com/docs/automatic-https#local-https)
+— hier bewusst nicht automatisiert, das ist Betriebssystem-spezifisch).
+`.run/caddy` persistiert diese CA über `make proxy-down`/`proxy-up`
+hinweg, damit der Browser sie nicht bei jedem Neustart neu akzeptieren
+muss.
+
+**Echter Fernzugriff über das Internet** (nicht nur `localhost`):
+`:8443` im Caddyfile durch die eigene Domain ersetzen (z. B.
+`omp.example.org`) — Caddy stellt dafür automatisch ein echtes
+Let's-Encrypt-Zertifikat aus, kein `tls internal` mehr nötig, keine
+weitere Konfiguration. Der Host muss dafür von außen auf Port 443
+erreichbar sein (Firewall/Router-Weiterleitung), was außerhalb des
+Scopes dieses Handbuchs liegt.
+
+**`X-Forwarded-*`-Verträglichkeit geprüft, kein Code-Beitrag nötig:**
+der Orchestrator liest an keiner Stelle `r.Host`/`r.TLS` oder setzt
+Cookies/CORS-Header (Code durchsucht, `docs/decisions.md` 2026-07-18)
+— die gesamte Auth läuft über das selbsttragende Bearer-Token, das
+unabhängig vom verwendeten Schema/Host gültig bleibt. Ein Reverse-Proxy
+davor ändert daher am Orchestrator-Verhalten nichts, unabhängig davon,
+ob/wie er `X-Forwarded-*`-Header setzt.
+
+## 7. Troubleshooting
 
 **Login-Formular erscheint, aber keine Zugangsdaten bekannt** — s.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.
@@ -205,7 +257,7 @@ Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
 
-## 7. Mehr Kontext
+## 8. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)
