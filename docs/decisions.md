@@ -7155,3 +7155,86 @@ Alle Test-Nutzer/-Bindungen/-Workflows/-Layout-Einträge danach entfernt.
 Designer + Katalog-Kachel-Grid mit Thumbnail/Suche, deckungsgleich mit
 §22.3) — laut §12.4 der letzte Teil der Kapitel-12-Reihe, explizit als
 "Endausbau" eingestuft, kein dringender nächster Schritt.
+
+## 2026-07-18 (Nachtrag 23) — Kapitel 12 Teil 6, Unterteil 1:
+Katalog-Metadaten (Titel/Beschreibung/Tags/Kategorie) + Kachel-Grid
+
+Teil 6 ("Endausbau, deckungsgleich mit §22.3") ist laut §22.3 selbst
+mehrteilig (Punkte 1–9: Designer, Speichern/Laden, Start/Stop,
+Metadaten-Felder, Thumbnail-Mechanik, Katalog-Kachel-Grid, Kategorie,
+Suche/Filter, Scoping) — Punkte 2/3/9 sind bereits vollständig durch
+bestehenden Code abgedeckt (PUT/GET/Lifecycle-Endpunkte, §12 Teil 4).
+Dieser erste Unterteil deckt Punkte 4+6+7 ab (additive
+Metadaten-Felder + einfaches Kachel-Grid); Punkt 5 (Thumbnail-Capture
+über den MJPEG-Preview-Mechanismus), Punkt 8 (Volltextsuche/Facetten)
+und Punkt 1 (echter Rollen-Designer als Graph-Editor-Variante) bleiben
+eigene Folgeschritte — zu unterschiedlich in Aufwand/Risiko, um sie in
+einem Schritt zu bündeln (Thumbnail braucht einen neuen
+Ereignis-Listener + `bytea`-Spalte im Orchestrator, Suche eine eigene
+UI-Komponente, der Designer denselben Graph-Editor-Code mit einer
+zweiten Datenquelle).
+
+**Design-Entscheidung — Metadaten leben in `Definition`, nicht in
+einem neuen Objekt/einer neuen Service-Signatur:** `Title`,
+`Description`, `Tags`, `Category` wurden als zusätzliche Felder auf
+`workflows.Definition` ergänzt (orchestrator/internal/workflows/
+types.go) statt als eigenes `Metadata`-Objekt mit geänderter
+`Create()`/`Update()`-Signatur. Begründung: wie `Roles`/`Connections`
+sind sie nutzerseitig gesetzt und nur per `Update()` änderbar (§22.3
+Punkt 2 gilt bereits) — eine geänderte Funktionssignatur hätte alle
+~40 bestehenden `svc.Create(name, def)`-Testaufrufe berühren müssen,
+ohne einen Mehrwert zu bieten. Als Nebeneffekt wandern die Metadaten
+jetzt automatisch durch `GET .../export`/`POST .../import` (Kapitel 12
+Teil 3) mit, ohne das Export-Wire-Format anzufassen — live per API
+verifiziert (Export eines Workflows mit gesetzten Metadaten liefert
+sie unverändert im JSON zurück). `Category` erweitert den
+§13.5-Node-Kategorien-Enum um `regieplatz` (§22.3 Punkt 7 wörtlich),
+serverseitig bewusst nicht validiert (gleiche Robustheits-Haltung wie
+§13.5: unbekannter/leerer Wert ist kein Fehler, nur ein Darstellungs-
+Unterschied in der UI).
+
+**Zusätzlich (kleiner Bonus, direkt aus dem neuen Feld ableitbar):**
+`Service.FindRoleForNode` (Kapitel 12 Teil 4) liefert jetzt
+`Definition.Title` statt `Name` als `workflowName`, sofern gesetzt —
+die Operator-Konsolen-Auswahl (Kapitel 12 Teil 5, `renderWorkflowPicker`)
+zeigt dadurch automatisch den Katalog-Titel statt des internen
+Workflow-Namens, ohne dass `consoles.Resolve` oder `shell.ts`
+angefasst werden mussten.
+
+**Umsetzung UI (`ui/shell/workflows-view.ts`):** Anlegen-/Bearbeiten-
+Formular um Titel-/Beschreibungs-/Tags-/Kategorie-Felder erweitert
+(Tags als kommagetrennter Freitext, keine eigene Chip-UI für die
+erwartete Größenordnung); `#editWorkflow()` befüllt sie beim
+Bearbeiten vor. Die bisherige Zeilen-Liste (`#render()`) ist einem
+CSS-Grid gewichen (`repeat(auto-fill,minmax(240px,1fr))`) — jede Kachel
+zeigt jetzt Titel (Fallback: Name), Status-Badge, Kategorie-Badge
+(Text statt Icon — kein Icon-Katalog vorhanden, gleiche Zurückhaltung
+wie beim Thumbnail-Platzhalter in §22.3 Punkt 5), Beschreibung
+(2-zeilig abgeschnitten), Tag-Pills, dieselben Rollen-/Auflösungs-/
+Zeitplan-Zeilen und Aktions-Buttons wie zuvor (keine Funktions-
+Regression, reines Layout-/Darstellungs-Update).
+
+**Tests:** keine neuen `deno test`-Unit-Tests (reiner DOM-Rendering-
+Code, gleiches Muster wie bei Kapitel 12 Teil 5 — Verifikation live per
+CDP). `go build`/`go vet`/`go test ./...` (orchestrator) und
+`deno check`/`deno test ui/` (40 bestanden, 0 fehlgeschlagen) beide
+grün, keine bestehenden Tests mussten wegen der additiven Felder
+angepasst werden.
+
+**Live verifiziert:**
+- Per CDP: Workflow über das Formular mit Titel „Regieplatz
+  Katalog-Test", Beschreibung, zwei Tags und Kategorie „regieplatz"
+  angelegt → die entstandene Kachel zeigt exakt diesen Titel (nicht
+  den internen Namen „CDP Katalog Test"), das Kategorie-Badge
+  „Regieplatz", beide Tag-Pills und die Beschreibung; Eltern-Container
+  bestätigt per `getComputedStyle` als `display:grid`.
+- Per API: ein Workflow mit allen vier Metadaten-Feldern angelegt,
+  exportiert — `GET .../export` liefert `title`/`description`/`tags`/
+  `category` unverändert im `definition`-Objekt zurück (Export-Mitnahme
+  ohne Zusatzcode bestätigt).
+Test-Workflows danach über die API gelöscht, `make stop` ausgeführt.
+
+**Nicht Teil dieser Sitzung:** §22.3 Punkt 5 (Thumbnail-Capture),
+Punkt 8 (Volltextsuche/Facetten) und Punkt 1 (Rollen-Designer als
+eigene Graph-Editor-Datenquelle) — die noch offenen Unterteile von
+Kapitel 12 Teil 6, s. o.

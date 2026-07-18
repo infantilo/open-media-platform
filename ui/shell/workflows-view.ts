@@ -76,14 +76,42 @@ interface Schedule {
 
 const WEEKDAY_LABELS = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 
+// Kapitel 12 Teil 6 (docs/END-GOAL-FEATURES.md §12.3g, ARCHITECTURE.md
+// §22.3 Punkte 4/7): additive, rein darstellungsbezogene Metadaten für
+// den Workflow-Katalog — Teil der Definition (nicht des Workflow-
+// Objekts selbst), s. orchestrator/internal/workflows/types.go.
 interface Workflow {
   id: string;
   name: string;
-  definition: { roles: Role[]; connections: Connection[]; settings?: Settings; schedules?: Schedule[] };
+  definition: {
+    roles: Role[];
+    connections: Connection[];
+    settings?: Settings;
+    schedules?: Schedule[];
+    title?: string;
+    description?: string;
+    tags?: string[];
+    category?: string;
+  };
   status: string;
   error?: string;
   runtime?: Record<string, { instanceId: string; nodeId?: string }>;
 }
+
+// Erweitert den §13.5-Node-Kategorien-Enum um "regieplatz" (§22.3
+// Punkt 7) — gleiche Werte wie im Backend, dort bewusst nicht
+// serverseitig validiert (freies Textfeld, robust gegen ältere/fremde
+// Einträge); die Auswahl hier ist reiner UI-Komfort.
+const CATEGORY_LABELS: Record<string, string> = {
+  regieplatz: "Regieplatz",
+  input: "Input",
+  output: "Output",
+  audio: "Audio",
+  video: "Video",
+  graphics: "Grafik",
+  data: "Daten",
+  control: "Steuerung",
+};
 
 // Fallback/Reconnect-Intervall (S2) — der Normalfall ist SSE-getrieben
 // (#onSseMessage), dieser Poll fängt nur eine unterbrochene SSE-
@@ -126,6 +154,14 @@ class WorkflowsView extends HTMLElement {
   #formRoles: Role[] = [{ name: "", nodeType: "", hostId: "" }];
   #formConnections: Connection[] = [];
   #formName = "";
+  // Kapitel 12 Teil 6 (§22.3 Punkte 4/7): rein darstellungsbezogen,
+  // s. Definition-Doku im Backend. #formTags als Komma-getrennter
+  // Freitext (einfachste Eingabe, keine eigene Tag-Chip-UI nötig für
+  // die erwartete Größenordnung von ein paar Schlagworten).
+  #formTitle = "";
+  #formDescription = "";
+  #formTags = "";
+  #formCategory = "";
   // Kapitel 15: leer gelassen = kein settings-Feld im Request, Nodes
   // laufen mit ihrem eigenen Default (keine erzwungene Auflösung).
   #formWidth = "";
@@ -219,6 +255,10 @@ class WorkflowsView extends HTMLElement {
       if (s.kind === "weekly") return !!s.timeOfDay && s.weekday !== undefined;
       return !!s.timeOfDay;
     });
+    const tags = this.#formTags
+      .split(",")
+      .map((t) => t.trim())
+      .filter(Boolean);
     const body = {
       name: this.#formName,
       definition: {
@@ -226,6 +266,10 @@ class WorkflowsView extends HTMLElement {
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
         settings: Object.keys(settings).length > 0 ? settings : undefined,
         schedules: schedules.length > 0 ? schedules : undefined,
+        title: this.#formTitle || undefined,
+        description: this.#formDescription || undefined,
+        tags: tags.length > 0 ? tags : undefined,
+        category: this.#formCategory || undefined,
       },
     };
     const editingId = this.#editingId;
@@ -263,6 +307,10 @@ class WorkflowsView extends HTMLElement {
     this.#formHeight = "";
     this.#formSchedules = [];
     this.#formConfirmStop = false;
+    this.#formTitle = "";
+    this.#formDescription = "";
+    this.#formTags = "";
+    this.#formCategory = "";
   }
 
   // Öffnet das Formular vorbefüllt mit der bestehenden Definition eines
@@ -280,6 +328,10 @@ class WorkflowsView extends HTMLElement {
     // könnte ein bereits gefeuertes "once"-Schedule beim Speichern erneut
     // feuern.
     this.#formSchedules = (wf.definition.schedules ?? []).map((s) => ({ ...s }));
+    this.#formTitle = wf.definition.title ?? "";
+    this.#formDescription = wf.definition.description ?? "";
+    this.#formTags = (wf.definition.tags ?? []).join(", ");
+    this.#formCategory = wf.definition.category ?? "";
     this.#showForm = true;
     this.#render();
   }
@@ -462,9 +514,18 @@ class WorkflowsView extends HTMLElement {
       return;
     }
 
+    // Kapitel 12 Teil 6 (§22.3 Punkt 6: "Katalog-Übersicht (Kachel-Grid)
+    // ... zeigt gespeicherte Workflows als Kacheln mit Thumbnail, Titel,
+    // gekürzter Beschreibung, Status-Badge, Kategorie-Icon"). Thumbnail
+    // (Punkt 5, MJPEG-Preview-Capture) und Volltextsuche (Punkt 8) sind
+    // bewusst nicht Teil dieses Schritts — dokumentierte Folgearbeit,
+    // s. docs/decisions.md.
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;";
     for (const wf of this.#workflows) {
-      this.appendChild(this.#renderWorkflowRow(wf));
+      grid.appendChild(this.#renderWorkflowRow(wf));
     }
+    this.appendChild(grid);
   }
 
   #renderWorkflowRow(wf: Workflow): HTMLElement {
@@ -472,20 +533,57 @@ class WorkflowsView extends HTMLElement {
     row.setAttribute("data-role", "workflow-row");
     row.setAttribute("data-workflow-id", wf.id);
     row.style.cssText =
-      `margin:0 0 6px 0;padding:6px 8px;border-radius:3px;background:rgba(255,255,255,0.04);` +
-      `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};`;
+      `padding:6px 8px;border-radius:3px;background:rgba(255,255,255,0.04);` +
+      `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};display:flex;flex-direction:column;`;
 
     const header = document.createElement("div");
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:4px;";
     const title = document.createElement("span");
-    title.textContent = wf.name;
+    // Kachel-Titel: Definition.title (Katalog-Metadaten), leer =
+    // Workflow-Name als Fallback (kein Bruch bestehender Workflows ohne
+    // Metadaten).
+    title.textContent = wf.definition.title || wf.name;
     title.style.fontWeight = "600";
     const status = document.createElement("span");
     status.setAttribute("data-role", "workflow-status");
     status.textContent = wf.status;
-    status.style.cssText = `color:${STATUS_COLORS[wf.status] ?? "#999"};font-size:11px;`;
+    status.style.cssText = `color:${STATUS_COLORS[wf.status] ?? "#999"};font-size:11px;flex-shrink:0;`;
     header.append(title, status);
     row.appendChild(header);
+
+    // Kategorie-Icon-Platzhalter (Punkt 6/7): eine Text-Badge statt
+    // eines echten Icons — bis auf Weiteres kein Icon-Katalog vorhanden,
+    // gleiche Zurückhaltung wie beim generischen Kategorie-Platzhalter
+    // ohne Thumbnail (§22.3 Punkt 5).
+    if (wf.definition.category) {
+      const categoryBadge = document.createElement("span");
+      categoryBadge.style.cssText =
+        "display:inline-block;font-size:10px;color:#bbb;border:1px solid #555;border-radius:3px;" +
+        "padding:0 4px;margin-top:2px;align-self:flex-start;";
+      categoryBadge.textContent = CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category;
+      row.appendChild(categoryBadge);
+    }
+
+    if (wf.definition.description) {
+      const desc = document.createElement("div");
+      desc.style.cssText =
+        "color:#ccc;font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;" +
+        "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;";
+      desc.textContent = wf.definition.description;
+      row.appendChild(desc);
+    }
+
+    if (wf.definition.tags && wf.definition.tags.length > 0) {
+      const tagsRow = document.createElement("div");
+      tagsRow.style.cssText = "display:flex;gap:3px;flex-wrap:wrap;margin-top:2px;";
+      for (const tag of wf.definition.tags) {
+        const pill = document.createElement("span");
+        pill.style.cssText = "font-size:10px;color:#999;background:rgba(255,255,255,0.06);border-radius:8px;padding:0 6px;";
+        pill.textContent = tag;
+        tagsRow.appendChild(pill);
+      }
+      row.appendChild(tagsRow);
+    }
 
     const roles = document.createElement("div");
     roles.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
@@ -600,6 +698,64 @@ class WorkflowsView extends HTMLElement {
       this.#formName = nameInput.value;
     });
     form.appendChild(nameInput);
+
+    // Kapitel 12 Teil 6 (§22.3 Punkte 4/7): rein darstellungsbezogene
+    // Katalog-Metadaten, alle optional — leer gelassen zeigt der
+    // Katalog den Namen als Titel-Fallback und keine Beschreibung/Tags.
+    const metaHeading = document.createElement("div");
+    metaHeading.textContent = "Katalog-Metadaten (optional)";
+    metaHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    form.appendChild(metaHeading);
+
+    const titleInput = document.createElement("input");
+    titleInput.placeholder = "Titel (Fallback: Workflow-Name)";
+    titleInput.value = this.#formTitle;
+    titleInput.style.cssText = "width:100%;margin-bottom:4px;box-sizing:border-box;";
+    titleInput.addEventListener("input", () => {
+      this.#formTitle = titleInput.value;
+    });
+    form.appendChild(titleInput);
+
+    const descInput = document.createElement("textarea");
+    descInput.placeholder = "Beschreibung";
+    descInput.value = this.#formDescription;
+    descInput.rows = 2;
+    descInput.style.cssText = "width:100%;margin-bottom:4px;box-sizing:border-box;resize:vertical;font-family:inherit;";
+    descInput.addEventListener("input", () => {
+      this.#formDescription = descInput.value;
+    });
+    form.appendChild(descInput);
+
+    const metaRow = document.createElement("div");
+    metaRow.style.cssText = "display:flex;gap:4px;margin-bottom:8px;";
+
+    const tagsInput = document.createElement("input");
+    tagsInput.placeholder = "Tags (kommagetrennt)";
+    tagsInput.value = this.#formTags;
+    tagsInput.style.cssText = "width:65%;";
+    tagsInput.addEventListener("input", () => {
+      this.#formTags = tagsInput.value;
+    });
+
+    const categorySelect = document.createElement("select");
+    categorySelect.style.cssText = "width:35%;";
+    const emptyCategoryOpt = document.createElement("option");
+    emptyCategoryOpt.value = "";
+    emptyCategoryOpt.textContent = "Kategorie …";
+    categorySelect.appendChild(emptyCategoryOpt);
+    for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      if (value === this.#formCategory) opt.selected = true;
+      categorySelect.appendChild(opt);
+    }
+    categorySelect.addEventListener("change", () => {
+      this.#formCategory = categorySelect.value;
+    });
+
+    metaRow.append(tagsInput, categorySelect);
+    form.appendChild(metaRow);
 
     const rolesHeading = document.createElement("div");
     rolesHeading.textContent = "Rollen";

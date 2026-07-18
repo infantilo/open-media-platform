@@ -160,6 +160,29 @@ type Definition struct {
 	Connections []Connection `json:"connections"`
 	Settings    Settings     `json:"settings,omitempty"`
 	Schedules   []Schedule   `json:"schedules,omitempty"`
+	// Title/Description/Tags/Category (Kapitel 12 Teil 6,
+	// docs/END-GOAL-FEATURES.md §12.3g, ARCHITECTURE.md §22.3 Punkte
+	// 4+7): additive, rein darstellungsbezogene Felder für den
+	// Workflow-Katalog (Kachel-Grid) — bewusst Teil der Definition statt
+	// eines eigenen Objekts/einer eigenen Create/Update-Signatur: wie
+	// Roles/Connections sind sie nutzerseitig gesetzt und nur per
+	// Update() (§22.3 Punkt 2) änderbar, und wandern damit automatisch
+	// mit durch Export/Import (Kapitel 12 Teil 3) statt eines separaten
+	// Wire-Format-Felds. Title leer = Name als Anzeige-Titel-Fallback in
+	// der UI (kein Bruch bestehender Workflows ohne Metadaten).
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	// Tags: Freitext-Schlagworte für die künftige Volltextsuche
+	// (§22.3 Punkt 8, noch nicht Teil dieser Sitzung).
+	Tags []string `json:"tags,omitempty"`
+	// Category erweitert den §13.5-Node-Kategorien-Enum
+	// (input/output/audio/video/graphics/data/control) um "regieplatz"
+	// (§22.3 Punkt 7: "ein Workflow 'ist' typischerweise ein
+	// Regieplatz") — nicht serverseitig validiert (§13.5: "fehlt
+	// category, erscheint in einer 'Sonstige'-Gruppe statt einen Fehler
+	// zu werfen", dieselbe Robustheit gilt hier: freies Textfeld, die UI
+	// zeigt einen generischen Platzhalter für unbekannte/leere Werte).
+	Category string `json:"category,omitempty"`
 }
 
 // RoleRuntime hält fest, welche konkrete Instanz/Node gerade eine Rolle

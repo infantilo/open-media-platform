@@ -214,7 +214,11 @@ func (s *Service) Get(id string) (Workflow, error) {
 // (Workflow, Rolle)-Wirkungsbereich abzubilden, statt sich auf die pro
 // Prozessstart neue Node-ID selbst zu verlassen. ok=false, wenn der
 // Node zu keinem (noch bekannten) Workflow gehört — z. B. eine manuell
-// über den Katalog gestartete Instanz.
+// über den Katalog gestartete Instanz. workflowName ist der
+// Definition.Title (Kapitel 12 Teil 6), sofern gesetzt — sonst der
+// Name als Fallback (unverändertes Verhalten für Workflows ohne
+// Metadaten); die Operator-Konsolen-Auswahl (Kapitel 12 Teil 5) zeigt
+// diesen Wert als Kachel-Beschriftung.
 func (s *Service) FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool) {
 	wfs, err := s.store.List()
 	if err != nil {
@@ -223,7 +227,11 @@ func (s *Service) FindRoleForNode(nodeID string) (workflowID, workflowName, role
 	for _, wf := range wfs {
 		for r, rt := range wf.Runtime {
 			if rt.NodeID == nodeID {
-				return wf.ID, wf.Name, r, true
+				label := wf.Definition.Title
+				if label == "" {
+					label = wf.Name
+				}
+				return wf.ID, label, r, true
 			}
 		}
 	}
