@@ -137,3 +137,31 @@ func (s *Store) UpdateSchedules(id string, schedules []Schedule) error {
 	`, id, data)
 	return err
 }
+
+// SetThumbnail speichert (überschreibt) das zuletzt erfasste
+// Vorschau-Bild eines Workflows (Kapitel 12 Teil 6, §22.3 Punkt 5,
+// Migration 0007) — eigene bytea-Spalte statt Teil des JSONB-data-
+// Blobs, damit ein Capture nicht in denselben Put()/UpdateRuntime()-
+// Wettlauf mit gleichzeitigen Lifecycle-Schreibzugriffen gerät wie der
+// Rest des Workflow-Objekts (gleicher Grund wie UpdateSchedules oben).
+func (s *Store) SetThumbnail(id string, jpeg []byte) error {
+	_, err := s.db.Exec(`UPDATE workflows SET thumbnail = $2 WHERE id = $1`, id, jpeg)
+	return err
+}
+
+// GetThumbnail liefert das zuletzt erfasste Vorschau-Bild.
+// ok=false, wenn noch nie eines erfasst wurde (NULL-Spalte) oder der
+// Workflow nicht existiert — beide Fälle sind für den Aufrufer
+// gleichwertig: die UI zeigt dann den generischen Kategorie-Platzhalter
+// (§22.3 Punkt 5), kein Unterscheidungsbedarf.
+func (s *Store) GetThumbnail(id string) ([]byte, bool, error) {
+	var jpeg []byte
+	err := s.db.QueryRow(`SELECT thumbnail FROM workflows WHERE id = $1`, id).Scan(&jpeg)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return jpeg, jpeg != nil, nil
+}

@@ -318,6 +318,9 @@ type fakeWorkflowService struct {
 	exportErr error
 	imported  workflows.Workflow
 	importErr error
+	thumbnail []byte
+	thumbOk   bool
+	thumbErr  error
 }
 
 func (f fakeWorkflowService) Create(name string, def workflows.Definition) (workflows.Workflow, error) {
@@ -327,6 +330,10 @@ func (f fakeWorkflowService) Create(name string, def workflows.Definition) (work
 func (f fakeWorkflowService) List() ([]workflows.Workflow, error) { return f.list, f.listErr }
 
 func (f fakeWorkflowService) Get(id string) (workflows.Workflow, error) { return f.get, f.getErr }
+
+func (f fakeWorkflowService) GetThumbnail(id string) ([]byte, bool, error) {
+	return f.thumbnail, f.thumbOk, f.thumbErr
+}
 
 func (f fakeWorkflowService) Update(id, name string, def workflows.Definition) (workflows.Workflow, error) {
 	return f.updated, f.updateErr

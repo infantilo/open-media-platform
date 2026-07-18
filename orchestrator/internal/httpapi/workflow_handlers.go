@@ -33,6 +33,33 @@ func handleGetWorkflow(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleWorkflowThumbnail liefert GET /api/v1/workflows/{id}/thumbnail
+// (Kapitel 12 Teil 6, docs/END-GOAL-FEATURES.md §12.3g,
+// ARCHITECTURE.md §22.3 Punkt 5) — das rohe JPEG-Bild, kein JSON
+// (anders als der Rest der Workflow-API), damit die UI es direkt als
+// <img>-Quelle laden kann (über einen per apiFetch() authentifizierten
+// Blob-Umweg, s. ui/shell/workflows-view.ts — ein <img src> selbst
+// kann keinen Authorization-Header mitschicken). 404, solange noch nie
+// eines erfasst wurde — kein Fehler, die UI zeigt dann den generischen
+// Kategorie-Platzhalter.
+func handleWorkflowThumbnail(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jpeg, ok, err := svc.GetThumbnail(r.PathValue("id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			http.Error(w, "no thumbnail captured yet", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(jpeg)
+	}
+}
+
 // handleCreateWorkflow liefert POST /api/v1/workflows:
 // {"name": "...", "definition": {"roles": [...], "connections": [...]}}.
 func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {

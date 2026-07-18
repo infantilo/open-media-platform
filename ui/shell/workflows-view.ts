@@ -186,6 +186,23 @@ class WorkflowsView extends HTMLElement {
   #searchQuery = "";
   #filterCategory = "";
   #filterStatus = "";
+  // Kapitel 12 Teil 6, Unterteil 3 (§22.3 Punkt 5: Thumbnail-Capture).
+  // Object-URLs (Blob) statt eines direkten <img src="/api/v1/
+  // workflows/{id}/thumbnail">: der Endpunkt sitzt hinter
+  // requireAuth() (Live-Vorschaubilder sind kein öffentlicher Inhalt),
+  // ein <img>-Tag kann aber keinen Authorization-Header mitschicken —
+  // gleiches Muster wie #exportWorkflow() (Blob + URL.createObjectURL).
+  // null = geprüft, kein Thumbnail vorhanden (404) — Unterscheidung zu
+  // "noch nicht geprüft" (kein Eintrag), gleiches Muster wie
+  // ui/graph/flow-canvas.ts #previewUrlById.
+  #thumbnailUrlById: Map<string, string | null> = new Map();
+  #thumbnailFetchInFlight: Set<string> = new Set();
+  // Vorheriger Status je Workflow-ID — #poll() invalidiert einen
+  // gecachten Thumbnail-Eintrag, sobald ein Workflow frisch in
+  // "started" wechselt (dann hat runStart() ggf. gerade ein neues Bild
+  // erfasst, s. orchestrator/internal/workflows/service.go
+  // captureWorkflowThumbnail).
+  #lastStatusById: Map<string, string> = new Map();
 
   connectedCallback() {
     this.style.cssText =
@@ -206,6 +223,15 @@ class WorkflowsView extends HTMLElement {
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
+    // Object-URLs sind Browser-weite Blob-Referenzen, kein
+    // DOM-gebundener Speicher — ohne explizites Revoke blieben sie über
+    // das Verlassen des Workflows-Tabs hinaus (app-shell.ts ersetzt die
+    // Tab-Inhalte per replaceChildren, das ruft disconnectedCallback)
+    // im Speicher.
+    for (const url of this.#thumbnailUrlById.values()) {
+      if (url) URL.revokeObjectURL(url);
+    }
+    this.#thumbnailUrlById.clear();
   }
 
   #onSseMessage = (ev: Event) => {
@@ -239,9 +265,28 @@ class WorkflowsView extends HTMLElement {
       const res = await apiFetch("/api/v1/workflows");
       if (!res.ok) return;
       this.#workflows = await res.json();
+      this.#invalidateThumbnailsOnFreshStart();
       this.#render();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
+    }
+  }
+
+  // Kapitel 12 Teil 6, Unterteil 3: ein frischer Übergang in "started"
+  // bedeutet, dass runStart() soeben versucht hat, ein neues Thumbnail
+  // zu erfassen (captureWorkflowThumbnail) — der clientseitige Cache
+  // (s. #thumbnailUrlById-Doku) muss diesen einen Eintrag verwerfen,
+  // sonst bliebe ein früher gecachtes "kein Thumbnail" (null) oder ein
+  // veraltetes Bild bis zum nächsten vollen Seiten-Reload stehen.
+  #invalidateThumbnailsOnFreshStart() {
+    for (const wf of this.#workflows) {
+      const prev = this.#lastStatusById.get(wf.id);
+      if (prev !== "started" && wf.status === "started") {
+        const cached = this.#thumbnailUrlById.get(wf.id);
+        if (cached) URL.revokeObjectURL(cached);
+        this.#thumbnailUrlById.delete(wf.id);
+      }
+      this.#lastStatusById.set(wf.id, wf.status);
     }
   }
 
@@ -647,6 +692,68 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
+  // Kapitel 12 Teil 6, Unterteil 3 (§22.3 Punkt 5: "Für einen
+  // gestoppten Workflow bleibt das zuletzt erfasste Thumbnail stehen
+  // ... ohne je erfasstes Bild zeigt der Designer einen generischen
+  // Platzhalter nach Kategorie"). Drei Zustände im Cache
+  // (#thumbnailUrlById): kein Eintrag = noch nicht geprüft (löst
+  // #maybeFetchThumbnail aus), `null` = geprüft, keins vorhanden
+  // (Platzhalter, kein erneuter Versuch), String = Object-URL des
+  // zuletzt geladenen Bilds.
+  #renderThumbnail(wf: Workflow): HTMLElement {
+    const box = document.createElement("div");
+    box.style.cssText =
+      "width:100%;height:100px;border-radius:2px;margin-bottom:4px;overflow:hidden;" +
+      "background:#111;display:flex;align-items:center;justify-content:center;";
+
+    const cached = this.#thumbnailUrlById.get(wf.id);
+    if (cached) {
+      const img = document.createElement("img");
+      img.src = cached;
+      img.alt = "Vorschau";
+      img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+      box.appendChild(img);
+    } else {
+      // Generischer Platzhalter nach Kategorie (§22.3 Punkt 5) — Text
+      // statt Icon, gleiche Zurückhaltung wie beim Kategorie-Badge
+      // oben (kein Icon-Katalog vorhanden).
+      const placeholder = document.createElement("span");
+      placeholder.style.cssText = "color:#555;font-size:11px;";
+      placeholder.textContent = wf.definition.category
+        ? (CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category)
+        : "Keine Vorschau";
+      box.appendChild(placeholder);
+      if (cached === undefined) this.#maybeFetchThumbnail(wf.id);
+    }
+    return box;
+  }
+
+  // Lädt das Thumbnail authentifiziert per apiFetch() als Blob (s.
+  // Cache-Doku oben zur Begründung gegenüber einem direkten <img src>)
+  // und rendert bei Erfolg neu — #refreshGrid() statt #render(), damit
+  // ein gerade laufender Such-Tastendruck den Fokus behält (gleicher
+  // Grund wie beim Suchfeld selbst).
+  #maybeFetchThumbnail(id: string) {
+    if (this.#thumbnailUrlById.has(id) || this.#thumbnailFetchInFlight.has(id)) return;
+    this.#thumbnailFetchInFlight.add(id);
+    apiFetch(`/api/v1/workflows/${id}/thumbnail`)
+      .then(async (res) => {
+        if (!res.ok) {
+          this.#thumbnailUrlById.set(id, null);
+          return;
+        }
+        const blob = await res.blob();
+        this.#thumbnailUrlById.set(id, URL.createObjectURL(blob));
+      })
+      .catch(() => {
+        this.#thumbnailUrlById.set(id, null);
+      })
+      .finally(() => {
+        this.#thumbnailFetchInFlight.delete(id);
+        this.#refreshGrid();
+      });
+  }
+
   #renderWorkflowRow(wf: Workflow): HTMLElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "workflow-row");
@@ -655,9 +762,12 @@ class WorkflowsView extends HTMLElement {
       `padding:6px 8px;border-radius:3px;background:rgba(255,255,255,0.04);` +
       `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};display:flex;flex-direction:column;`;
 
+    row.appendChild(this.#renderThumbnail(wf));
+
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:4px;";
     const title = document.createElement("span");
+    title.setAttribute("data-role", "workflow-title");
     // Kachel-Titel: Definition.title (Katalog-Metadaten), leer =
     // Workflow-Name als Fallback (kein Bruch bestehender Workflows ohne
     // Metadaten).

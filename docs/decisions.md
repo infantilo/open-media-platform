@@ -7308,3 +7308,141 @@ ausgeführt.
 Punkt 1 (Rollen-Designer als eigene Graph-Editor-Datenquelle) — die
 verbleibenden Unterteile von Kapitel 12 Teil 6. Ebenfalls offen:
 „von mir zuletzt bearbeitet"-Facette (fehlendes Autoren-Feld, s. o.).
+
+## 2026-07-18 (Nachtrag 25) — Kapitel 12 Teil 6, Unterteil 3:
+Thumbnail-Capture (§22.3 Punkt 5)
+
+Letzter inhaltlicher Unterteil von Teil 6 vor dem eigentlichen
+Rollen-Designer (§22.3 Punkt 1, weiterhin offen — der größte
+verbleibende Brocken, eigene Graph-Editor-Datenquelle statt neuer
+Persistenz/API).
+
+**Migration 0007** (`ALTER TABLE workflows ADD COLUMN thumbnail
+BYTEA`) — eigene Spalte statt Teil des JSONB-`data`-Blobs: ein
+JPEG-Frame als Base64 im JSON hätte jeden `Put()`/`UpdateRuntime()`
+unnötig aufgebläht (+33 %) und wäre in denselben Lifecycle-
+Schreib-Wettlauf geraten, den `UpdateSchedules()`/`UpdateRuntime()`
+(D7 Teil 2) gerade erst vermeiden gelernt haben — `Store.SetThumbnail`/
+`GetThumbnail` sind bewusst eigene, schmale Methoden auf derselben
+Zeile.
+
+**previewUrl-Wiederverwendung wörtlich nach §22.3 Punkt 5:** neuer
+`captureThumbnail()` (orchestrator/internal/workflows/thumbnail.go)
+verbindet sich mit dem bestehenden MJPEG-Endpunkt eines Nodes
+(`omp-mediaio::preview`, `previewUrl`-Parameter — dieselbe URL, die
+`ui/graph/flow-canvas.ts` seit C6 für Node-Vorschaubilder im
+Flow-Editor nutzt), liest per `mime/multipart` **ein** Teilbild und
+schließt die Verbindung sofort wieder (kein Dauerabo). Klarstellung
+gegenüber dem Dokumenttext: der Endpunkt liefert tatsächlich
+`multipart/x-mixed-replace`, nicht "ohnehin einzelne JPEGs" — für den
+Zweck (ein Standbild) macht das keinen Unterschied, nur die
+Leseimplementierung ist entsprechend ein Multipart-Reader statt eines
+rohen Bytes-Reads.
+
+**Offene Design-Lücke im Dokument selbst gefüllt — "Program-Bus-Rolle"
+existiert im Workflow-Objekt nicht:** §22.3 Punkt 5 setzt "die
+Program-Bus-Rolle" voraus, §22.4 nennt genau das selbst als fehlende
+Voraussetzung ("braucht eine echte Program-Bus-Rolle für sinnvolle
+Thumbnails"). Es gibt aber keinen Rollentyp-Marker "das ist der
+Ausgang" im `Role`-Typ. Pragmatischer Ersatz statt eines geratenen
+neuen Schemafelds: `captureWorkflowThumbnail()` versucht die Rollen in
+Definitionsreihenfolge und nimmt die erste, deren laufender Node
+tatsächlich einen `previewUrl` liefert — kein neues Konzept, kein
+Schema-Wachstum, funktioniert mit dem heute einzigen
+previewUrl-fähigen Konsumenten-Node (`omp-viewer`, plus
+`omp-multiviewer`).
+
+**Auslöser: nach erfolgreichem Start, nicht bei "Speichern".** Das
+Dokument nennt zwei Auslöser ("bei Speichern ... und optional
+automatisch bei jedem start, sobald ... 'media-ready'"). "Bei
+Speichern" wurde bewusst weggelassen: `Create()`/`Update()` laufen
+immer an einem noch nicht gestarteten Workflow, ein Capture-Versuch
+dort wäre in jedem Fall ein No-op (kein laufender Node in keiner
+Rolle) — kein Mehrwert für zusätzlichen Code. Ein dediziertes
+"media-ready"-Event existiert im System nicht; pragmatischer Ersatz:
+`runStart()` startet `go s.captureWorkflowThumbnail(wf)` unmittelbar
+nach erfolgreicher Verkabelung — der Preview-Broadcaster
+(`omp-mediaio::preview::serve_client`) blockiert einen frisch
+verbundenen Client ohnehin bis zum ersten tatsächlich publizierten
+Frame, es gibt also kein Rennen gegen eine noch nicht produzierende
+Pipeline, nur einen (mit `thumbnailCaptureTimeout` = 5 s begrenzten)
+Wartepunkt. Eigene Goroutine, damit ein langsamer/hängender
+Preview-Endpunkt `runStart()` selbst nicht verzögert.
+
+**Neuer Endpunkt `GET /api/v1/workflows/{id}/thumbnail`** liefert das
+rohe JPEG (kein JSON), 404 ohne Capture — hinter `requireAuth()` wie
+der Rest der Workflow-API (Live-Vorschaubilder sind kein öffentlicher
+Inhalt). Das bedeutet: ein einfaches `<img src="...">` kann nicht
+authentifizieren (kein Authorization-Header bei einem `<img>`-Tag).
+`ui/shell/workflows-view.ts` löst das identisch zu `#exportWorkflow()`
+(bereits bestehendes Muster in derselben Datei): `apiFetch()` als
+Blob, `URL.createObjectURL()`, `<img src>` auf die Object-URL — mit
+Cache (`#thumbnailUrlById`, dieselbe Drei-Zustände-Logik wie
+`ui/graph/flow-canvas.ts` `#previewUrlById`: kein Eintrag = ungeprüft,
+`null` = geprüft/keins vorhanden, String = Object-URL) und Revoke
+sowohl beim Verlassen des Tabs (`disconnectedCallback`) als auch beim
+gezielten Invalidieren pro Workflow-ID, sobald `#poll()` einen frischen
+Übergang in `"started"` sieht (dann hat `runStart()` ggf. gerade neu
+erfasst).
+
+**Nebenfund, nicht behoben (außerhalb des Scopes dieser Sitzung, aber
+real und dokumentiert):** `findSender()`/`applyConnection()`
+(orchestrator/internal/workflows/service.go) wählen ohne explizites
+`fromSender`-Label `node.Senders[0]` — bei `omp-source` (registriert
+sowohl einen Video- als auch einen Audio-Sender) ist diese Reihenfolge
+**nicht deterministisch stabil** (live beobachtet: mal Video, mal
+Audio zuerst). Betrifft sowohl die IS-05-Verkabelung
+(`quelle → omp-viewer`) als auch Crosspoint-Ziele
+(`quelle → omp-video-mixer-me`) gleichermaßen — die Crosspoint-
+Discovery-Loops filtern zwar bereits korrekt auf `format==video`
+(Fix von C11/C-Nachtrag, s. Nachtrag zu den zwei Discovery-Bugs weiter
+oben in dieser Datei), aber `applyConnection()` wählt den (ggf.
+falschen) Sender bereits **vor** diesem Filter. Bei der Live-
+Verifikation dieses Schritts reproduzierbar aufgetreten
+("`flow_def: frame_width fehlt`" bzw. Timeout beim Warten auf den
+Sender im Crosspoint-`inputs`-Param) — umgangen durch manuelles
+Verkabeln über `POST /api/v1/graph/edges` mit der live aus der
+Registry gelesenen Sender-ID, um den eigentlichen Thumbnail-Pfad
+isoliert zu testen. Korrekter Fix wäre, `findSender()` bei fehlendem
+Label auf den ersten **video**-formatigen Sender einzuschränken
+(analog dem bereits vorhandenen Discovery-Loop-Filter) — nicht in
+dieser Sitzung behoben, da es kein Kapitel-12-Teil-6-Thema ist,
+sondern das ältere, allgemeinere Connection-Template-Fundament aus
+Kapitel 12 Teil 1 betrifft.
+
+**Tests:** zwei neue Store-Regressions-Interface-Methoden
+(`SetThumbnail`/`GetThumbnail`) auf `fakeStore` gespiegelt (gleiches
+Muster wie bei D7 Teil 2); keine dedizierte Unit-Test-Datei für
+`thumbnail.go` (reiner HTTP-/Multipart-Client-Code, echte
+Verifikation ergibt nur gegen einen echten Preview-Endpunkt Sinn — s.
+Live-Verifikation). `go build`/`go vet`/`go test ./...` grün (ein
+`TestLauncherStopSendsSigkillIfSigtermIgnored`-Flake unter Last isoliert
+reproduziert und als unabhängig vom `launcher`-Paket bestätigt, in
+Einzelausführung grün). `deno check`/`deno test ui/` weiterhin grün
+(40 bestanden, 0 fehlgeschlagen).
+
+**Live verifiziert, echte Pipeline, kein Mock:** `omp-source` +
+`omp-viewer` gestartet (Debug-Binaries, bereits gebaut), Verkabelung
+wegen des oben beschriebenen Nebenfunds manuell per
+`POST /api/v1/graph/edges` mit der live aus der NMOS-Registry gelesenen
+Video-Sender-ID hergestellt (Python-Skript löste Instanz-IDs → Sender-/
+Receiver-IDs innerhalb von ~0,3 s auf, drei Verbindungsversuche nötig,
+bis die Connection-API des frisch gestarteten Viewer-Nodes bereit war).
+Ergebnis: `GET /api/v1/workflows/{id}/thumbnail` lieferte nach ca. 2 s
+ein echtes 640×360-JPEG (SOI/EOI-Marker geprüft, 21 KB) — bestätigt den
+kompletten Pfad `runStart` → `captureWorkflowThumbnail` →
+`captureThumbnail` (Multipart-Read) → `Store.SetThumbnail` →
+HTTP-Endpunkt. Per CDP zusätzlich bestätigt: die Katalog-Kachel zeigt
+das Bild als `<img>` mit `blob:`-Quelle (authentifizierter Fetch,
+`naturalWidth=640`); ein nie gestarteter Workflow zeigt stattdessen den
+Kategorie-Text-Platzhalter ("Video"), kein `<img>`-Element. Alle
+Test-Workflows über die API gestoppt/gelöscht, verbliebene Node-
+Prozesse manuell beendet (kein sauberer `make stop`-Durchlauf wegen der
+Test-Choreografie mit mehreren manuellen Start/Stop-Zyklen),
+Orchestrator beendet.
+
+**Nicht Teil dieser Sitzung:** §22.3 Punkt 1 (Rollen-Designer) — der
+letzte verbleibende Unterteil von Kapitel 12 Teil 6 und damit von ganz
+Kapitel 12. Ebenfalls offen (dokumentierter Nebenfund, s. o.): die
+nicht-deterministische `findSender()`-Fallback-Auswahl bei Nodes mit
+mehreren Sendern unterschiedlichen Formats.

@@ -126,6 +126,9 @@ type workflowStore interface {
 	Delete(id string) error
 	UpdateSchedules(id string, schedules []Schedule) error
 	UpdateRuntime(wf Workflow) error
+	// SetThumbnail/GetThumbnail (Kapitel 12 Teil 6, §22.3 Punkt 5).
+	SetThumbnail(id string, jpeg []byte) error
+	GetThumbnail(id string) ([]byte, bool, error)
 }
 
 // ResourcePrecheck prüft, ob ein Host aktuell neue Rollen aufnehmen darf
@@ -152,6 +155,11 @@ type Service struct {
 	events    EventPublisher
 	methods   methodInvoker
 	resources ResourcePrecheck
+	// httpClient (Kapitel 12 Teil 6, §22.3 Punkt 5): derselbe ggf.
+	// mTLS-fähige Client wie methods, hier zusätzlich direkt gehalten,
+	// weil captureThumbnail() den rohen MJPEG-Multipart-Body liest
+	// (methodInvoker kennt nur das {"value": ...}-Parameter-Format).
+	httpClient *http.Client
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -164,7 +172,10 @@ type Service struct {
 // Engine nicht verdrahtet ist) — dann entfällt die Ressourcen-
 // Vorprüfung ersatzlos (kein neuer Blocker ohne Datengrundlage).
 func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client, resources ResourcePrecheck) *Service {
-	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient}
 }
 
 // Create legt einen neuen, gestoppten Workflow an.
@@ -205,6 +216,13 @@ func (s *Service) List() ([]Workflow, error) {
 // Get liefert einen einzelnen Workflow.
 func (s *Service) Get(id string) (Workflow, error) {
 	return s.store.Get(id)
+}
+
+// GetThumbnail liefert das zuletzt erfasste Vorschau-Bild eines
+// Workflows (Kapitel 12 Teil 6, §22.3 Punkt 5) — ok=false, wenn noch
+// nie eines erfasst wurde (s. Store.GetThumbnail-Doku).
+func (s *Service) GetThumbnail(id string) ([]byte, bool, error) {
+	return s.store.GetThumbnail(id)
 }
 
 // FindRoleForNode löst auf, ob nodeID aktuell eine Rolle in einem
@@ -515,6 +533,20 @@ func (s *Service) runStart(wf Workflow) {
 		slog.Warn("workflows: failed to persist started state", "id", wf.ID, "error", err)
 	}
 	s.publish(wf)
+
+	// Kapitel 12 Teil 6 (§22.3 Punkt 5: "optional automatisch bei jedem
+	// start, sobald die Program-Bus-Rolle 'media-ready' meldet") — ein
+	// eigener dediziertes Bereitschafts-Event existiert dafür nicht (kein
+	// Node meldet "media-ready" heute), pragmatischer Ersatz: sofort nach
+	// erfolgreicher Verkabelung versuchen, mit kurzem, in
+	// captureWorkflowThumbnail gebundenem Timeout (der Preview-Broadcaster
+	// liefert ohnehin erst das erste tatsächlich produzierte Frame, s.
+	// omp-mediaio::preview::serve_client — kein Rennen gegen eine noch
+	// nicht laufende Pipeline). Eigene Goroutine: runStart() selbst läuft
+	// bereits im Hintergrund, soll aber nicht durch einen langsamen/
+	// hängenden Preview-Endpunkt zusätzlich verzögert bleiben, bevor der
+	// nächste Start-Aufruf dieselbe Rolle erneut provisionieren könnte.
+	go s.captureWorkflowThumbnail(wf)
 }
 
 // awaitRegistration pollt den Node-Bestand, bis für jede Rolle ein Node
