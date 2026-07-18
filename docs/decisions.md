@@ -6978,3 +6978,112 @@ Alle Test-Workflows/-Instanzen/-Layout-Einträge danach entfernt.
 **Nicht Teil dieser Sitzung:** rollenbewusstes Parameter-Snapshot-Remapping
 für Export/Import (s. o., Folgearbeit für B7); Kapitel 12 Teil 4
 (Workflow-Scope-AuthZ) — nächster empfohlener Schritt laut §12.4.
+
+## 2026-07-18 (Nachtrag 21) — Kapitel 12 Teil 4: Workflow-Scope-AuthZ
+(§12 Punkt 2 vervollständigt)
+
+**Warum das mehr als "nice to have" ist, live entdeckt:** beim
+Entwerfen fiel auf, dass die bisherige, instanz-ID-basierte
+Rollenbindung (`consoles.NodeRoleID`, D3 Teil 2) für Workflow-Rollen
+bereits heute strukturell fragil ist — `Launcher.Start()` vergibt bei
+jedem Workflow-Start/-Resume (Stop→Start, Pause→Resume) eine **neue**
+Instanz-ID (live in dieser wie in früheren Sitzungen beobachtet: nach
+Pause→Resume in Kapitel 12 Teil 3 hatte dieselbe Rolle "src" zwei
+unterschiedliche `instanceId`-Werte). Eine an die alte Instanz-ID
+gebundene Bedienrechte-Zusage würde also nach jedem Neustart der Rolle
+still ins Leere laufen. Dieses Kapitel behebt also nicht nur den in
+§12.5 offen benannten Bildmeister-Fall, sondern eine bereits
+existierende Robustheits-Lücke.
+
+**Umsetzung wie in §12.3e spezifiziert:**
+
+`authz.Binding` bekommt ein optionales `WorkflowID`-Feld (Migration
+`0006`, `role_bindings.workflow_id`, Default `''` = unverändertes
+Vor-Kapitel-12-Teil-4-Verhalten). Ist `WorkflowID` gesetzt, ist
+`NodeID` **kein** Instanz-/Node-ID-Wert mehr, sondern ein Rollenname
+aus `workflows.Definition.Roles` (stabil über beliebig viele
+Rollen-Neustarts) — oder `"*"` für den ganzen Workflow (der
+Bildmeister-Fall: "nur den Bildmischer in Regieplatz 1" =
+`{workflowId: "regie-1", nodeId: "mixer", verb: "operate"}`).
+
+Zwei getrennte Store-Methoden statt eines dritten `Check()`-Parameters
+(`authz.Store.Check`/`CheckWorkflow`): die beiden Wirkungsbereiche
+haben unterschiedliche Identitäts-Räume für "nodeID" (Instanz-ID vs.
+Rollenname) — eine gemeinsame Methode hätte das Risiko geschaffen,
+dass ein zufällig gleichlautender Rollenname mit einer Instanz-ID
+kollidiert. `Check()` filtert deshalb explizit `workflow_id = ''`.
+
+Neue `workflows.Service.FindRoleForNode(nodeID)`-Methode (Runtime-
+Lookup über alle Workflows) verbindet eine konkrete, aktuell laufende
+Node-ID mit ihrem (Workflow, Rolle)-Wirkungsbereich — genutzt an
+**beiden** in §12.3e genannten Durchsetzungsstellen:
+
+1. `httpapi.requireVerbOnNode` (PATCH params/POST methods, der
+   generische Node-Proxy): erst die bestehende globale/Node-gescopte
+   Prüfung (unverändert); schlägt die fehl, zusätzlich prüfen, ob der
+   Ziel-Node gerade eine Rolle in einem Workflow erfüllt, für die
+   subject eine passende `CheckWorkflow`-Bindung hat. `g.workflows`
+   (neues `WorkflowRoleFinder`-Interface) darf `nil` sein
+   (Rückwärtskompatibilität für bestehende Tests, die `authGate` ohne
+   dieses Feld konstruieren) — dann entfällt die Zusatzprüfung
+   ersatzlos.
+2. `consoles.Resolve` (Operator-Console-Auflösung, `GET
+   /api/v1/me/consoles`): löst pro Node jetzt die echte Workflow-ID/
+   -Label auf (`FindRoleForNode`) statt immer `consoles.StubWorkflowID`
+   zurückzugeben — der Stub bleibt nur noch der begründete
+   Ausweichwert für Nodes, die zu keinem bekannten Workflow gehören
+   (z. B. manuell über den Katalog gestartete Instanzen).
+
+**Offene Frage 3 aus §12.5 (Start/Stop bei Workflow-`operate`) bewusst
+nicht in dieser Sitzung entschieden:** Lifecycle-Endpunkte
+(`POST .../start`/`.../stop`/`.../pause`) bleiben bei
+`requireVerbGlobal(VerbAdmin)` — Workflow-`operate` erlaubt weiterhin
+nur das Bedienen laufender Rollen, nicht das Hoch-/Runterfahren des
+ganzen Regieplatzes. Echte, im Dokument selbst als "praxisnah gibt es
+beide Betriebsmodelle" benannte Ermessensfrage, keine mit vertretbarem
+Aufwand recherchierbare — für den Projektinhaber offengelassen statt
+geraten.
+
+**UI** (`ui/shell/admin-view.ts`): neuer Workflow-Select im
+Bindungs-Formular ("(Global)" = unverändert, ein gewählter Workflow
+schaltet das Node-ID-Feld von "Instanz-ID" auf "Rollenname" um, mit
+einer aus `workflow.definition.roles` gespeisten Datalist). Tabellen-
+Spalte "Node" → "Bereich" umbenannt, zeigt für Workflow-gescopte
+Bindungen `"<Workflow> → <Rolle>"` bzw. `"<Workflow> (ganzer
+Workflow)"`.
+
+**Tests:** `authz/store_test.go` — 3 neue Tests gegen echtes Postgres
+(`CheckWorkflow` Erfolg/Rollen-Isolation/Workflow-Isolation,
+Wildcard-Deckung, sowie ein expliziter Test, dass `Check()` nie in den
+Workflow-Scope hineinleckt). `httpapi/auth_middleware_test.go` — 4 neue
+Tests (Workflow-Scope greift, wenn die globale Prüfung fehlschlägt;
+403, wenn keiner der beiden Bereiche passt; `CheckWorkflow` wird gar
+nicht erst aufgerufen, wenn der Node zu keinem Workflow gehört; `nil`
+`workflows`-Feld führt zu keinem Panic). `consoles/resolve_test.go` —
+5 neue Tests (Rollen-Isolation, Workflow-Isolation, Wildcard,
+Stub-Fallback). `workflows/service_test.go` — 2 neue Tests für
+`FindRoleForNode`. `go build`/`go vet`/`go test ./...` grün (inkl.
+echter Postgres-Migrations-/Store-Tests). `deno check` grün.
+
+**Live verifiziert, exakt das in §12.4 Teil 4 geforderte Szenario**
+(echter Orchestrator, zwei echte laufende Workflows "Regieplatz 1"
+[Rollen `mixer`/`audio`] und "Regieplatz 2" [Rolle `mixer`], Test-Nutzer
+"bildmeister" mit `operate` auf Rolle `mixer` in Regieplatz 1):
+- `PATCH .../nodes/<mixer-node-von-Regieplatz-1>/params/test` → 404
+  (Node lehnt den unbekannten Parameter ab — **nicht** 403, die
+  Autorisierung war also erfolgreich).
+- `POST .../nodes/<mixer-node-von-Regieplatz-1>/methods/crosspoint.cut`
+  → 200 (echte erfolgreiche autorisierte Aktion).
+- `PATCH .../nodes/<audio-node-von-Regieplatz-1>/params/test` → 403
+  (falsche Rolle, gleicher Workflow).
+- `PATCH .../nodes/<mixer-node-von-Regieplatz-2>/params/test` → 403
+  (gleicher Rollenname "mixer", aber anderer Workflow — beweist die
+  Rollen-Isolation, nicht nur Node-Isolation).
+UI-Pfad separat per CDP-Session: Bindung mit Workflow-Scope über das
+Formular angelegt, Tabellenzeile zeigt korrekt "CDP Scope Test → mixer"
+in der Bereich-Spalte. Alle Test-Nutzer/-Bindungen/-Workflows danach
+entfernt.
+
+**Nicht Teil dieser Sitzung:** Kapitel 12 Teil 5 (Operator-Einstieg:
+Workflow-Auswahl nach Login + Mehr-Rollen-Konsolen-Ansicht) — nächster
+empfohlener Schritt laut §12.4.

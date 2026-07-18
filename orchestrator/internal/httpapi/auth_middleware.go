@@ -26,9 +26,21 @@ type AuthService interface {
 // AuthzChecker prüft Rollenbindungen (implementiert von *authz.Store).
 type AuthzChecker interface {
 	Check(subject, nodeID string, minVerb authz.Verb) (bool, error)
+	// CheckWorkflow (Kapitel 12 Teil 4, §12.3e) prüft eine Workflow-
+	// gescopte Bindung — role ist ein Rollenname aus
+	// workflows.Definition.Roles, keine Instanz-ID.
+	CheckWorkflow(subject, workflowID, role string, minVerb authz.Verb) (bool, error)
 	Load() ([]authz.Binding, error)
-	Create(subject, nodeID string, verb authz.Verb) (authz.Binding, error)
+	Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
 	Delete(id string) error
+}
+
+// WorkflowRoleFinder löst auf, ob ein Node aktuell eine Rolle in einem
+// Workflow erfüllt (implementiert von *workflows.Service, Kapitel 12
+// Teil 4) — für requireVerbOnNode, um eine konkrete Node-ID auf einen
+// stabilen (Workflow, Rolle)-Wirkungsbereich abzubilden.
+type WorkflowRoleFinder interface {
+	FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool)
 }
 
 // AuditLogger protokolliert schreibende Zugriffe (implementiert von
@@ -53,10 +65,11 @@ func principalFromContext(r *http.Request) (auth.Principal, bool) {
 // authGate bündelt Authentifizierung, Rollenprüfung und Audit-Logging
 // für die HTTP-Handler dieses Pakets.
 type authGate struct {
-	auth  AuthService
-	authz AuthzChecker
-	audit AuditLogger
-	nodes NodeLister
+	auth      AuthService
+	authz     AuthzChecker
+	audit     AuditLogger
+	nodes     NodeLister
+	workflows WorkflowRoleFinder // Kapitel 12 Teil 4 — darf nil sein (Tests)
 }
 
 // bearerToken liest das Token aus dem Authorization-Header oder,
@@ -125,6 +138,13 @@ func (g *authGate) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 // POST methods. Node-Rolle wird exakt wie in internal/consoles aufgelöst
 // (Instanz-ID, ersatzweise rohe Node-ID), damit dieselbe Bindung gilt,
 // die auch die Operator-Console (§14) nutzt.
+//
+// Kapitel 12 Teil 4 (§12.3e): eine global/Node-gescopte Bindung (wie
+// bisher) genügt weiterhin; fehlt die, wird zusätzlich geprüft, ob der
+// Node gerade eine Rolle in einem Workflow erfüllt, für die subject eine
+// Workflow-gescopte Bindung hat (der Bildmeister-Fall: "nur den
+// Bildmischer in Regieplatz 1", stabil über Rollen-Neustarts hinweg,
+// anders als eine Instanz-ID-Bindung).
 func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, bypass, ok := g.authenticate(r)
@@ -133,9 +153,12 @@ func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) 
 			return
 		}
 
-		nodeRoleID := r.PathValue("id")
-		if node, found := g.nodes.Get(nodeRoleID); found {
+		pathID := r.PathValue("id")
+		nodeRoleID := pathID
+		rawNodeID := pathID
+		if node, found := g.nodes.Get(pathID); found {
 			nodeRoleID = consoles.NodeRoleID(consoles.NodeInfo{ID: node.ID, InstanceID: node.InstanceID})
+			rawNodeID = node.ID
 		}
 
 		if !bypass {
@@ -143,6 +166,15 @@ func (g *authGate) requireVerbOnNode(minVerb authz.Verb, next http.HandlerFunc) 
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
+			}
+			if !allowed && g.workflows != nil {
+				if workflowID, _, role, found := g.workflows.FindRoleForNode(rawNodeID); found {
+					allowed, err = g.authz.CheckWorkflow(p.Username, workflowID, role, minVerb)
+					if err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+				}
 			}
 			if !allowed {
 				g.audit.Log(p.Username, r.Method, r.URL.Path, nodeRoleID, http.StatusForbidden)

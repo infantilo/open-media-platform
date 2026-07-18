@@ -101,6 +101,10 @@ type WorkflowService interface {
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
+	// FindRoleForNode (Kapitel 12 Teil 4) — s. WorkflowRoleFinder in
+	// auth_middleware.go, dieselbe Methode, hier Teil der ohnehin
+	// injizierten WorkflowService-Implementierung.
+	FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool)
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -146,7 +150,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
 func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor) http.Handler {
-	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes}
+	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)

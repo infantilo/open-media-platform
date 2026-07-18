@@ -229,7 +229,6 @@ func main() {
 	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
 	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
 	go auditStore.RunRetention(ctx, cfg.AuditRetentionDays)
-	consoleResolver := consoles.NewResolver(authzStore)
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
@@ -255,6 +254,13 @@ func main() {
 	// und prüft vor jedem Start die Ressourcenlage der Ziel-Hosts
 	// (placementEngine.CheckHost).
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine)
+
+	// Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): löst
+	// Rollenbindungen für die Operator-Console auf, jetzt inkl. echter
+	// Workflow-ID/-Label statt consoles.StubWorkflowID — braucht
+	// workflowSvc als WorkflowRoleFinder, daher erst hier konstruierbar
+	// (nicht mehr direkt nach authzStore wie vor diesem Kapitel).
+	consoleResolver := consoles.NewResolver(authzStore, workflowSvc)
 
 	// K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a/§7.6): nach jedem
 	// automatischen Launcher-Neustart einer abgestürzten Instanz die

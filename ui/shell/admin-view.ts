@@ -32,8 +32,19 @@ interface UserEntry {
 interface RoleBinding {
   id: string;
   subject: string;
+  // Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): leer = global/
+  // Node-gescoped (unverändert); gesetzt = Workflow-Scope, nodeId ist
+  // dann ein Rollenname statt einer Instanz-ID.
+  workflowId?: string;
   nodeId: string;
   verb: string;
+}
+
+// WorkflowSummary — nur die für den Scope-Selector nötigen Felder.
+interface WorkflowSummary {
+  id: string;
+  name: string;
+  definition: { roles: { name: string; nodeType: string }[] };
 }
 
 interface AuditEntry {
@@ -79,6 +90,7 @@ class AdminView extends HTMLElement {
   #auditHasMore = false;
   #auditLoadingMore = false;
   #nodes: NodeEntry[] = [];
+  #workflows: WorkflowSummary[] = [];
   #error = "";
   #showUserForm = false;
   #newUsername = "";
@@ -89,6 +101,10 @@ class AdminView extends HTMLElement {
   #newSubject = "";
   #newNodeId = "*";
   #newVerb = "operate";
+  // Kapitel 12 Teil 4: "" = global/Node-gescoped (unverändertes
+  // Verhalten), sonst die Workflow-ID — schaltet das Node-ID-Feld unten
+  // von "Instanz-ID" auf "Rollenname" um.
+  #newWorkflowId = "";
   #auditPollHandle: number | undefined;
 
   connectedCallback() {
@@ -101,6 +117,7 @@ class AdminView extends HTMLElement {
     this.#loadBindings();
     this.#loadAudit();
     this.#loadNodes();
+    this.#loadWorkflows();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
@@ -202,6 +219,21 @@ class AdminView extends HTMLElement {
     }
   }
 
+  // Kapitel 12 Teil 4: Workflow-Liste für den Scope-Selector im
+  // Bindungs-Formular — reine Eingabehilfe wie #loadNodes, kein
+  // Hard-Requirement.
+  async #loadWorkflows() {
+    try {
+      const res = await apiFetch("/api/v1/workflows");
+      if (res.ok) {
+        this.#workflows = await res.json();
+        if (this.#showBindingForm) this.#render();
+      }
+    } catch {
+      // s. o.
+    }
+  }
+
   async #createUser() {
     if (!this.#newUsername || !this.#newPassword) return;
     const username = this.#newUsername;
@@ -280,7 +312,12 @@ class AdminView extends HTMLElement {
     const res = await apiFetch("/api/v1/admin/role-bindings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subject: this.#newSubject, nodeId: this.#newNodeId, verb: this.#newVerb }),
+      body: JSON.stringify({
+        subject: this.#newSubject,
+        workflowId: this.#newWorkflowId || undefined,
+        nodeId: this.#newNodeId,
+        verb: this.#newVerb,
+      }),
     });
     if (!res.ok) {
       this.#error = `Rollenbindung anlegen fehlgeschlagen: ${await res.text()}`;
@@ -289,6 +326,7 @@ class AdminView extends HTMLElement {
     }
     this.#error = "";
     this.#newSubject = "";
+    this.#newWorkflowId = "";
     this.#newNodeId = "*";
     this.#showBindingForm = false;
     await this.#loadBindings();
@@ -298,7 +336,7 @@ class AdminView extends HTMLElement {
     // Bisher ohne jede Bestätigung (S10, docs/REVIEW-2026-07-17-
     // SKALIERUNG-24-7.md) — ein Fehlklick entzog sofort ein Zugriffsrecht,
     // ohne Rückfrage. Gleiches Confirm-Muster wie #deleteUser.
-    const label = binding.nodeId === "*" ? "alle Nodes" : this.#nodeLabel(binding.nodeId);
+    const label = this.#scopeLabel(binding);
     if (
       !(await confirmDialog(`Rollenbindung "${binding.subject}" → ${label} (${VERB_LABEL[binding.verb] ?? binding.verb}) wirklich löschen?`, {
         confirmLabel: "Löschen",
@@ -547,7 +585,7 @@ class AdminView extends HTMLElement {
       const thead = document.createElement("thead");
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
         <th style="padding:2px 8px;">Nutzer</th>
-        <th style="padding:2px 8px;">Node</th>
+        <th style="padding:2px 8px;">Bereich</th>
         <th style="padding:2px 8px;">Recht</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
@@ -577,9 +615,37 @@ class AdminView extends HTMLElement {
       this.#newSubject = subjectInput.value;
     });
 
+    // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — "(Global)" ist das
+    // unveränderte Vor-Kapitel-12-Teil-4-Verhalten (Node-ID/Instanz-ID
+    // unten), ein gewählter Workflow schaltet das Feld darunter auf
+    // Rollennamen um (stabil über Rollen-Neustarts, anders als eine
+    // Instanz-ID).
+    const workflowSelect = document.createElement("select");
+    workflowSelect.style.cssText = "min-width:140px;";
+    const globalOpt = document.createElement("option");
+    globalOpt.value = "";
+    globalOpt.textContent = "(Global)";
+    workflowSelect.appendChild(globalOpt);
+    for (const wf of this.#workflows) {
+      const opt = document.createElement("option");
+      opt.value = wf.id;
+      opt.textContent = wf.name;
+      if (wf.id === this.#newWorkflowId) opt.selected = true;
+      workflowSelect.appendChild(opt);
+    }
+    workflowSelect.addEventListener("change", () => {
+      this.#newWorkflowId = workflowSelect.value;
+      // Ein Rollenname aus dem alten Scope ergibt im neuen keinen Sinn
+      // (oder umgekehrt) — auf den jeweiligen "alle"-Default zurücksetzen
+      // statt einen ungültigen Wert stehen zu lassen.
+      this.#newNodeId = "*";
+      this.#render();
+    });
+
     const datalistId = "omp-admin-node-datalist";
+    const selectedWorkflow = this.#workflows.find((wf) => wf.id === this.#newWorkflowId);
     const nodeInput = document.createElement("input");
-    nodeInput.placeholder = "Node-ID (* = alle Nodes)";
+    nodeInput.placeholder = selectedWorkflow ? "Rollenname (* = ganzer Workflow)" : "Node-ID (* = alle Nodes)";
     nodeInput.value = this.#newNodeId;
     nodeInput.setAttribute("list", datalistId);
     nodeInput.style.cssText = "flex:1;min-width:160px;";
@@ -591,13 +657,22 @@ class AdminView extends HTMLElement {
     datalist.id = datalistId;
     const anyOpt = document.createElement("option");
     anyOpt.value = "*";
-    anyOpt.label = "Alle Nodes";
+    anyOpt.label = selectedWorkflow ? "Ganzer Workflow" : "Alle Nodes";
     datalist.appendChild(anyOpt);
-    for (const n of this.#nodes) {
-      const opt = document.createElement("option");
-      opt.value = n.instanceId || n.id;
-      opt.label = n.label;
-      datalist.appendChild(opt);
+    if (selectedWorkflow) {
+      for (const role of selectedWorkflow.definition.roles) {
+        const opt = document.createElement("option");
+        opt.value = role.name;
+        opt.label = `${role.name} (${role.nodeType})`;
+        datalist.appendChild(opt);
+      }
+    } else {
+      for (const n of this.#nodes) {
+        const opt = document.createElement("option");
+        opt.value = n.instanceId || n.id;
+        opt.label = n.label;
+        datalist.appendChild(opt);
+      }
     }
 
     const verbSelect = document.createElement("select");
@@ -617,7 +692,7 @@ class AdminView extends HTMLElement {
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => this.#createBinding());
 
-    form.append(subjectInput, nodeInput, datalist, verbSelect, createBtn);
+    form.append(subjectInput, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
     return form;
   }
 
@@ -629,10 +704,10 @@ class AdminView extends HTMLElement {
     subjectTd.textContent = b.subject;
     tr.appendChild(subjectTd);
 
-    const nodeTd = document.createElement("td");
-    nodeTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
-    nodeTd.textContent = b.nodeId === "*" ? "Alle Nodes" : this.#nodeLabel(b.nodeId);
-    tr.appendChild(nodeTd);
+    const scopeTd = document.createElement("td");
+    scopeTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
+    scopeTd.textContent = this.#scopeLabel(b);
+    tr.appendChild(scopeTd);
 
     const verbTd = document.createElement("td");
     verbTd.style.cssText = "padding:2px 8px;";
@@ -654,6 +729,17 @@ class AdminView extends HTMLElement {
   #nodeLabel(nodeId: string): string {
     const n = this.#nodes.find((n) => n.instanceId === nodeId || n.id === nodeId);
     return n ? `${n.label} (${nodeId})` : nodeId;
+  }
+
+  // Kapitel 12 Teil 4 (§12.3e): "Bereich"-Spaltentext für eine Bindung —
+  // global/Node-gescoped wie bisher, oder "<Workflow> → <Rolle>" bzw.
+  // "<Workflow> (ganzer Workflow)" für eine Workflow-gescopte Bindung.
+  #scopeLabel(b: RoleBinding): string {
+    if (!b.workflowId) {
+      return b.nodeId === "*" ? "Alle Nodes" : this.#nodeLabel(b.nodeId);
+    }
+    const wfName = this.#workflows.find((wf) => wf.id === b.workflowId)?.name ?? b.workflowId;
+    return b.nodeId === "*" ? `${wfName} (ganzer Workflow)` : `${wfName} → ${b.nodeId}`;
   }
 
   #renderAuditSection(): HTMLElement {

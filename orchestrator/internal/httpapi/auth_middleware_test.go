@@ -214,3 +214,104 @@ func (r recordingAuthz) Check(subject, nodeID string, minVerb authz.Verb) (bool,
 	*r.got = nodeID
 	return r.fakeAuthzSvc.allowed, nil
 }
+
+// --- Kapitel 12 Teil 4: Workflow-Scope-AuthZ ---
+
+// fakeWorkflowRoleFinder ist ein Test-Double für WorkflowRoleFinder.
+type fakeWorkflowRoleFinder struct {
+	workflowID, workflowName, role string
+	found                          bool
+	calls                          int
+}
+
+func (f *fakeWorkflowRoleFinder) FindRoleForNode(nodeID string) (string, string, string, bool) {
+	f.calls++
+	return f.workflowID, f.workflowName, f.role, f.found
+}
+
+func TestRequireVerbOnNodeAllowsViaWorkflowScopeWhenGlobalCheckFails(t *testing.T) {
+	auditLog := &fakeAuditSvc{}
+	g := &authGate{
+		auth:      fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "bildmeister"}},
+		authz:     fakeAuthzSvc{allowed: false, workflowAllowed: true},
+		audit:     auditLog,
+		nodes:     fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", InstanceID: "inst-mixer"}}},
+		workflows: &fakeWorkflowRoleFinder{workflowID: "wf-1", role: "mixer", found: true},
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", nil)
+	req.SetPathValue("id", "node-1")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	g.requireVerbOnNode(authz.VerbOperate, okHandler)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (workflow-scoped binding must grant access even though the global check failed)", rec.Code)
+	}
+}
+
+func TestRequireVerbOnNodeForbidsWhenNeitherScopeMatches(t *testing.T) {
+	g := &authGate{
+		auth:      fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "bildmeister"}},
+		authz:     fakeAuthzSvc{allowed: false, workflowAllowed: false},
+		audit:     &fakeAuditSvc{},
+		nodes:     fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", InstanceID: "inst-mixer"}}},
+		workflows: &fakeWorkflowRoleFinder{workflowID: "wf-1", role: "mixer", found: true},
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", nil)
+	req.SetPathValue("id", "node-1")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	g.requireVerbOnNode(authz.VerbOperate, okHandler)(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (neither global nor workflow-scoped binding matches)", rec.Code)
+	}
+}
+
+func TestRequireVerbOnNodeSkipsWorkflowCheckWhenNodeBelongsToNoWorkflow(t *testing.T) {
+	finder := &fakeWorkflowRoleFinder{found: false}
+	g := &authGate{
+		auth:      fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "operator1"}},
+		authz:     fakeAuthzSvc{allowed: false, workflowAllowed: true}, // würde fälschlich erlauben, falls doch aufgerufen
+		audit:     &fakeAuditSvc{},
+		nodes:     fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", InstanceID: "inst-mixer"}}},
+		workflows: finder,
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", nil)
+	req.SetPathValue("id", "node-1")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	g.requireVerbOnNode(authz.VerbOperate, okHandler)(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (node belongs to no workflow, must not fall back to CheckWorkflow's stray true)", rec.Code)
+	}
+	if finder.calls != 1 {
+		t.Fatalf("FindRoleForNode calls = %d, want exactly 1", finder.calls)
+	}
+}
+
+func TestRequireVerbOnNodeNilWorkflowsFieldSkipsWorkflowCheck(t *testing.T) {
+	// g.workflows bleibt nil (Zero-Value) — muss nicht panicen und darf
+	// nur die globale Prüfung anwenden (Rückwärtskompatibilität für
+	// Aufrufer, die authGate ohne WorkflowRoleFinder konstruieren).
+	g := &authGate{
+		auth:  fakeAuthSvc{userCount: 1, principal: auth.Principal{UserID: "u1", Username: "operator1"}},
+		authz: fakeAuthzSvc{allowed: false},
+		audit: &fakeAuditSvc{},
+		nodes: fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", InstanceID: "inst-mixer"}}},
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", nil)
+	req.SetPathValue("id", "node-1")
+	req.Header.Set("Authorization", "Bearer valid-token")
+	rec := httptest.NewRecorder()
+	g.requireVerbOnNode(authz.VerbOperate, okHandler)(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (nil workflows field must not panic, no workflow-scope match possible)", rec.Code)
+	}
+}

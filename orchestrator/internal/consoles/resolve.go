@@ -6,15 +6,25 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 )
 
-// StubWorkflowID/-Label: das Projekt kennt noch kein eigenständiges
-// "Workflow"-Objekt (ARCHITECTURE.md §6.2, geplant erst ab D7) — es gibt
-// aktuell genau einen impliziten Workflow (den einen Graphen/Canvas).
-// Sobald §6.2 echte Workflows einführt, wird hier die tatsächliche
-// Workflow-ID/-Label pro Node aufgelöst statt einer Konstanten.
+// StubWorkflowID/-Label: Fallback für Nodes, die zu keinem bekannten
+// Workflow gehören (z. B. manuell über den Katalog gestartete Instanzen,
+// oder falls kein WorkflowRoleFinder verdrahtet ist) — Kapitel 12
+// Teil 4 löst für alle anderen Fälle die echte Workflow-ID/-Label
+// jetzt pro Node auf (s. Resolve unten), diese Konstanten sind kein
+// Stub mehr im Regelfall, nur noch der begründete Ausweichwert.
 const (
 	StubWorkflowID    = "default"
 	StubWorkflowLabel = "Regieplatz"
 )
+
+// WorkflowRoleFinder löst auf, ob ein Node aktuell eine Rolle in einem
+// Workflow erfüllt (implementiert von *workflows.Service, Kapitel 12
+// Teil 4) — als schmales Interface gehalten, damit dieses Package nicht
+// von internal/workflows abhängen muss (gleiches Prinzip wie NodeInfo
+// unten für internal/registry).
+type WorkflowRoleFinder interface {
+	FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool)
+}
 
 // NodeInfo ist die für die Auflösung nötige Teilmenge von
 // registry.NodeView — als eigenes, schmales Interface gehalten, damit
@@ -64,12 +74,16 @@ type BindingLoader interface {
 // Resolver löst Rollenbindungen für den authentifizierten Nutzer
 // (username, s. internal/auth) gegen die aktuell bekannten Nodes auf.
 type Resolver struct {
-	store BindingLoader
+	store     BindingLoader
+	workflows WorkflowRoleFinder
 }
 
 // NewResolver erstellt einen Resolver, der Bindungen aus store liest.
-func NewResolver(store BindingLoader) *Resolver {
-	return &Resolver{store: store}
+// workflows darf nil sein (z. B. in Tests) — dann werden alle Nodes wie
+// vor Kapitel 12 Teil 4 behandelt (StubWorkflowID/-Label, nur global/
+// Node-gescopte Bindungen wirksam).
+func NewResolver(store BindingLoader, workflows WorkflowRoleFinder) *Resolver {
+	return &Resolver{store: store, workflows: workflows}
 }
 
 // NodeRoleID ist die stabile "Rolle" eines Nodes: die vom Instanz-
@@ -114,16 +128,33 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 		}
 		for _, n := range nodes {
 			roleID := NodeRoleID(n)
-			if b.NodeID != authz.AnyNode && b.NodeID != roleID {
-				continue
+
+			workflowID, workflowName, role, hasWorkflow := "", "", "", false
+			if r.workflows != nil {
+				workflowID, workflowName, role, hasWorkflow = r.workflows.FindRoleForNode(n.ID)
 			}
-			if seen[roleID] {
+
+			var matches bool
+			if b.WorkflowID != "" {
+				// Workflow-gescopte Bindung (Kapitel 12 Teil 4): nur
+				// relevant, wenn n gerade diese Workflow-Rolle erfüllt —
+				// b.NodeID ist hier ein Rollenname, keine Instanz-ID.
+				matches = hasWorkflow && workflowID == b.WorkflowID && (b.NodeID == authz.AnyNode || b.NodeID == role)
+			} else {
+				matches = b.NodeID == authz.AnyNode || b.NodeID == roleID
+			}
+			if !matches || seen[roleID] {
 				continue
 			}
 			seen[roleID] = true
+
+			wfID, wfLabel := StubWorkflowID, StubWorkflowLabel
+			if hasWorkflow {
+				wfID, wfLabel = workflowID, workflowName
+			}
 			result.Consoles = append(result.Consoles, ConsoleEntry{
-				WorkflowID:    StubWorkflowID,
-				WorkflowLabel: StubWorkflowLabel,
+				WorkflowID:    wfID,
+				WorkflowLabel: wfLabel,
 				NodeRoleID:    roleID,
 				NodeLabel:     n.Label,
 				UIBundleURL:   "/api/v1/nodes/" + n.ID,

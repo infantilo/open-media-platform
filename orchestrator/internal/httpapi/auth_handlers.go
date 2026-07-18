@@ -128,7 +128,7 @@ func handleCreateUser(authSvc AuthService, bindings AuthzChecker) http.HandlerFu
 		}
 
 		if isFirstUser {
-			if _, err := bindings.Create(u.Username, authz.AnyNode, authz.VerbAdmin); err != nil {
+			if _, err := bindings.Create(u.Username, "", authz.AnyNode, authz.VerbAdmin); err != nil {
 				http.Error(w, "user created but bootstrap admin binding failed: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -242,15 +242,21 @@ func handleResetPassword(authSvc AuthService) http.HandlerFunc {
 
 type roleBindingRequest struct {
 	Subject string `json:"subject"`
-	NodeID  string `json:"nodeId"`
-	Verb    string `json:"verb"`
+	// WorkflowID (Kapitel 12 Teil 4, §12.3e) — leer = globale/Node-
+	// gescopte Bindung (unverändert), gesetzt = Workflow-Scope; NodeID
+	// ist dann ein Rollenname statt einer Instanz-ID (s. authz.Binding-
+	// Doku).
+	WorkflowID string `json:"workflowId"`
+	NodeID     string `json:"nodeId"`
+	Verb       string `json:"verb"`
 }
 
 type roleBindingResponse struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-	NodeID  string `json:"nodeId"`
-	Verb    string `json:"verb"`
+	ID         string `json:"id"`
+	Subject    string `json:"subject"`
+	WorkflowID string `json:"workflowId,omitempty"`
+	NodeID     string `json:"nodeId"`
+	Verb       string `json:"verb"`
 }
 
 var validVerbs = map[string]authz.Verb{
@@ -272,7 +278,7 @@ func handleListRoleBindings(store AuthzChecker) http.HandlerFunc {
 		}
 		out := make([]roleBindingResponse, len(bindings))
 		for i, b := range bindings {
-			out[i] = roleBindingResponse{ID: b.ID, Subject: b.Subject, NodeID: b.NodeID, Verb: string(b.Verb)}
+			out[i] = roleBindingResponse{ID: b.ID, Subject: b.Subject, WorkflowID: b.WorkflowID, NodeID: b.NodeID, Verb: string(b.Verb)}
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -290,12 +296,12 @@ func handleCreateRoleBinding(store AuthzChecker) http.HandlerFunc {
 			http.Error(w, "invalid verb (want view|operate|configure|admin)", http.StatusBadRequest)
 			return
 		}
-		b, err := store.Create(req.Subject, req.NodeID, verb)
+		b, err := store.Create(req.Subject, req.WorkflowID, req.NodeID, verb)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, roleBindingResponse{ID: b.ID, Subject: b.Subject, NodeID: b.NodeID, Verb: string(b.Verb)})
+		writeJSON(w, http.StatusCreated, roleBindingResponse{ID: b.ID, Subject: b.Subject, WorkflowID: b.WorkflowID, NodeID: b.NodeID, Verb: string(b.Verb)})
 	}
 }
 

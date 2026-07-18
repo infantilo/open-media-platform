@@ -31,7 +31,7 @@ func TestStoreCreateLoadDelete(t *testing.T) {
 	subject := "test-authz-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
 
-	created, err := store.Create(subject, "inst-mixer", VerbOperate)
+	created, err := store.Create(subject, "", "inst-mixer", VerbOperate)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -76,7 +76,7 @@ func TestStoreCheck(t *testing.T) {
 	subject := "test-authz-check-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
 
-	if _, err := store.Create(subject, "inst-mixer", VerbOperate); err != nil {
+	if _, err := store.Create(subject, "", "inst-mixer", VerbOperate); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -111,7 +111,7 @@ func TestStoreCheckWildcard(t *testing.T) {
 	subject := "test-authz-wildcard-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
 
-	if _, err := store.Create(subject, AnyNode, VerbAdmin); err != nil {
+	if _, err := store.Create(subject, "", AnyNode, VerbAdmin); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -121,6 +121,72 @@ func TestStoreCheckWildcard(t *testing.T) {
 	}
 	if !ok {
 		t.Errorf("Check(wildcard binding) = false, want true")
+	}
+}
+
+// --- Kapitel 12 Teil 4: Workflow-Scope-AuthZ ---
+
+func TestStoreCheckWorkflow(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	subject := "test-authz-workflow-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
+
+	if _, err := store.Create(subject, "wf-1", "mixer", VerbOperate); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if ok, err := store.CheckWorkflow(subject, "wf-1", "mixer", VerbOperate); err != nil || !ok {
+		t.Fatalf("CheckWorkflow(bound role, operate) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, _ := store.CheckWorkflow(subject, "wf-1", "mixer", VerbConfigure); ok {
+		t.Errorf("CheckWorkflow(bound role, configure) = true, want false (only operate granted)")
+	}
+	if ok, _ := store.CheckWorkflow(subject, "wf-1", "audio", VerbOperate); ok {
+		t.Errorf("CheckWorkflow(different role, same workflow) = true, want false")
+	}
+	if ok, _ := store.CheckWorkflow(subject, "wf-2", "mixer", VerbOperate); ok {
+		t.Errorf("CheckWorkflow(same role name, different workflow) = true, want false")
+	}
+}
+
+func TestStoreCheckWorkflowWildcardCoversWholeWorkflow(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	subject := "test-authz-workflow-wildcard-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
+
+	if _, err := store.Create(subject, "wf-1", AnyNode, VerbOperate); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if ok, _ := store.CheckWorkflow(subject, "wf-1", "mixer", VerbOperate); !ok {
+		t.Errorf("CheckWorkflow(workflow wildcard, mixer) = false, want true")
+	}
+	if ok, _ := store.CheckWorkflow(subject, "wf-1", "audio", VerbOperate); !ok {
+		t.Errorf("CheckWorkflow(workflow wildcard, audio) = false, want true")
+	}
+	if ok, _ := store.CheckWorkflow(subject, "wf-2", "mixer", VerbOperate); ok {
+		t.Errorf("CheckWorkflow(different workflow) = true, want false")
+	}
+}
+
+func TestStoreCheckDoesNotLeakIntoWorkflowScope(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	subject := "test-authz-scope-isolation-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
+
+	// Eine Workflow-gescopte Bindung auf die Rolle "mixer" darf Check()
+	// (die globale/Node-gescopte Prüfung) nicht bestehen lassen, obwohl
+	// zufällig ein Node dieselbe ID "mixer" trüge — die beiden
+	// Identitäts-Räume (Instanz-ID vs. Rollenname) dürfen sich nie
+	// kreuzen (s. Store.Check-Doku).
+	if _, err := store.Create(subject, "wf-1", "mixer", VerbAdmin); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if ok, _ := store.Check(subject, "mixer", VerbView); ok {
+		t.Errorf("Check() = true, want false (workflow-scoped binding must not leak into the global/node check)")
 	}
 }
 

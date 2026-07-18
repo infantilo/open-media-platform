@@ -211,22 +211,28 @@ func (f fakeAuthSvc) SetPassword(ctx context.Context, username, password string)
 
 // fakeAuthzSvc ist ein Test-Double für AuthzChecker.
 type fakeAuthzSvc struct {
-	allowed   bool
-	checkErr  error
-	bindings  []authz.Binding
-	loadErr   error
-	created   authz.Binding
-	createErr error
-	deleteErr error
+	allowed          bool
+	checkErr         error
+	workflowAllowed  bool
+	checkWorkflowErr error
+	bindings         []authz.Binding
+	loadErr          error
+	created          authz.Binding
+	createErr        error
+	deleteErr        error
 }
 
 func (f fakeAuthzSvc) Check(subject, nodeID string, minVerb authz.Verb) (bool, error) {
 	return f.allowed, f.checkErr
 }
 
+func (f fakeAuthzSvc) CheckWorkflow(subject, workflowID, role string, minVerb authz.Verb) (bool, error) {
+	return f.workflowAllowed, f.checkWorkflowErr
+}
+
 func (f fakeAuthzSvc) Load() ([]authz.Binding, error) { return f.bindings, f.loadErr }
 
-func (f fakeAuthzSvc) Create(subject, nodeID string, verb authz.Verb) (authz.Binding, error) {
+func (f fakeAuthzSvc) Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error) {
 	return f.created, f.createErr
 }
 
@@ -330,9 +336,13 @@ func (f fakeWorkflowService) Delete(id string) error { return f.deleteErr }
 
 func (f fakeWorkflowService) Start(ctx context.Context, id string) error { return f.startErr }
 
-func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) error { return f.stopErr }
+func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) error {
+	return f.stopErr
+}
 
-func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool) error { return f.pauseErr }
+func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool) error {
+	return f.pauseErr
+}
 
 func (f fakeWorkflowService) Export(id string) (workflows.ExportedWorkflow, error) {
 	return f.exported, f.exportErr
@@ -340,6 +350,10 @@ func (f fakeWorkflowService) Export(id string) (workflows.ExportedWorkflow, erro
 
 func (f fakeWorkflowService) Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error) {
 	return f.imported, f.importErr
+}
+
+func (f fakeWorkflowService) FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool) {
+	return "", "", "", false
 }
 
 type fakePlacementAdvisor struct {

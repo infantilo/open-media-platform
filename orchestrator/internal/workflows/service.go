@@ -207,6 +207,29 @@ func (s *Service) Get(id string) (Workflow, error) {
 	return s.store.Get(id)
 }
 
+// FindRoleForNode löst auf, ob nodeID aktuell eine Rolle in einem
+// Workflow erfüllt (Kapitel 12 Teil 4, docs/END-GOAL-FEATURES.md
+// §12.3e: Workflow-Scope-AuthZ) — genutzt von httpapi.requireVerbOnNode
+// und consoles.Resolve, um eine Node-ID auf einen stabilen
+// (Workflow, Rolle)-Wirkungsbereich abzubilden, statt sich auf die pro
+// Prozessstart neue Node-ID selbst zu verlassen. ok=false, wenn der
+// Node zu keinem (noch bekannten) Workflow gehört — z. B. eine manuell
+// über den Katalog gestartete Instanz.
+func (s *Service) FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool) {
+	wfs, err := s.store.List()
+	if err != nil {
+		return "", "", "", false
+	}
+	for _, wf := range wfs {
+		for r, rt := range wf.Runtime {
+			if rt.NodeID == nodeID {
+				return wf.ID, wf.Name, r, true
+			}
+		}
+	}
+	return "", "", "", false
+}
+
 // Delete entfernt einen Workflow — nur im Zustand "stopped" (kein
 // stilles Verwaisen laufender Prozesse: erst stoppen, dann löschen).
 func (s *Service) Delete(id string) error {

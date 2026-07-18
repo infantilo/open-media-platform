@@ -1301,3 +1301,42 @@ func TestImportDedupesNameCollisionWithSuffix(t *testing.T) {
 		t.Fatalf("Import().Name = %q, want a disambiguated suffix (name collision), not the original", imported.Name)
 	}
 }
+
+// --- Kapitel 12 Teil 4: Workflow-Scope-AuthZ (FindRoleForNode) ---
+
+func TestFindRoleForNodeReturnsWorkflowAndRole(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+
+	wf, _ := svc.Create("Regieplatz 1", Definition{Roles: []Role{
+		{Name: "mixer", NodeType: "omp-video-mixer-me"},
+		{Name: "audio", NodeType: "omp-audio-mixer"},
+	}})
+	started := wf
+	started.Status = StatusStarted
+	started.Runtime = map[string]RoleRuntime{
+		"mixer": {InstanceID: "inst-mixer", NodeID: "node-mixer"},
+		"audio": {InstanceID: "inst-audio", NodeID: "node-audio"},
+	}
+	store.Put(started)
+
+	workflowID, workflowName, role, ok := svc.FindRoleForNode("node-mixer")
+	if !ok || workflowID != wf.ID || workflowName != "Regieplatz 1" || role != "mixer" {
+		t.Fatalf("FindRoleForNode(node-mixer) = (%q, %q, %q, %v), want (%q, %q, %q, true)", workflowID, workflowName, role, ok, wf.ID, "Regieplatz 1", "mixer")
+	}
+}
+
+func TestFindRoleForNodeNotFoundForUnknownNode(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	started := wf
+	started.Status = StatusStarted
+	started.Runtime = map[string]RoleRuntime{"src": {InstanceID: "inst-src", NodeID: "node-src"}}
+	store.Put(started)
+
+	if _, _, _, ok := svc.FindRoleForNode("node-manually-started"); ok {
+		t.Fatalf("FindRoleForNode(unrelated node) ok = true, want false")
+	}
+}
