@@ -32,6 +32,13 @@ import "./app-shell.ts";
 import "../kit/index.ts";
 
 const KIOSK_ROUTE = /^\/console\/([^/]+)\/([^/]+)$/;
+// Kapitel 12 Teil 5 (docs/END-GOAL-FEATURES.md §12.3f): die
+// Mehr-Rollen-Konsolen-Route eines Workflows, ohne feste Rolle (anders
+// als KIOSK_ROUTE) — "alle operate-Rollen dieses Nutzers in diesem
+// Workflow als Tab-Leiste". Muss NACH KIOSK_ROUTE geprüft werden (s.
+// renderShell), sonst würde .../<workflowId>/<nodeRoleId> hier schon
+// (falsch) matchen.
+const WORKFLOW_CONSOLE_ROUTE = /^\/console\/([^/]+)$/;
 
 interface ConsolesResponse {
   hasEngineeringAccess: boolean;
@@ -55,6 +62,7 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
 
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
+  const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, consoles } = await fetchConsoles();
 
   if (kioskMatch) {
@@ -72,14 +80,86 @@ async function renderShell(root: HTMLElement, username: string | null) {
     // Floating-Toggle-Buttons.
     root.replaceChildren(document.createElement("omp-app-shell"));
   } else {
-    const view = document.createElement("omp-console-view") as ConsoleView;
-    root.replaceChildren(view);
-    await view.setEntries(consoles);
+    // Kapitel 12 Teil 5 (docs/END-GOAL-FEATURES.md §12.3f): reiner
+    // Operator (kein configure/admin) — "landet nach dem Login auf
+    // einer Workflow-Auswahl … nach Auswahl auf /console/<workflowId>:
+    // alle operate-Rollen dieses Nutzers in diesem Workflow als
+    // Tab-Leiste". Filterung rein clientseitig (§12 Punkt 3: die
+    // Durchsetzung selbst ist längst im Orchestrator passiert —
+    // `consoles` enthält ohnehin nur bereits autorisierte Einträge).
+    const workflowIds = [...new Set(consoles.map((c) => c.workflowId))];
+    const scoped = workflowMatch ? consoles.filter((c) => c.workflowId === workflowMatch[1]) : [];
+
+    if (workflowMatch && scoped.length > 0) {
+      const view = document.createElement("omp-console-view") as ConsoleView;
+      root.replaceChildren(view);
+      await view.setEntries(scoped);
+    } else if (workflowIds.length <= 1) {
+      // Genau ein (oder gar kein) Workflow unter den zugewiesenen
+      // Rollen — die Auswahl-Kachel wäre ein unnötiger Umweg zu genau
+      // einem Ziel, direkt hinein (Bookmark-fähige
+      // /console/<workflowId>-Route bleibt trotzdem gültig, falls sich
+      // das später ändert).
+      const view = document.createElement("omp-console-view") as ConsoleView;
+      root.replaceChildren(view);
+      await view.setEntries(consoles);
+    } else {
+      // §12.5 offene Frage 5 ("Kachel-Auswahl nach jedem Login (Vorschlag)
+      // oder automatisch der zuletzt benutzte Workflow mit Umschalter?"):
+      // Vorschlag umgesetzt — Kachel-Auswahl bei jedem Einstieg mit
+      // mehreren zugewiesenen Workflows, kein Persistieren einer
+      // zuletzt genutzten Wahl.
+      renderWorkflowPicker(root, consoles, workflowIds);
+    }
   }
 
   if (username) {
     document.body.appendChild(buildUserWidget(username));
   }
+}
+
+// Kapitel 12 Teil 5: "Workflow-Auswahl (nur gebundene Workflows, als
+// Kachel-Liste — die schmale Vorstufe des §22.3-Katalog-Grids)". Reine
+// <a href>-Navigation (kein Client-Router nötig): der Orchestrator
+// liefert index.html für jede /console/*-Route bereits per SPA-Fallback
+// (httpapi.spaFallback), ein normaler Seitenwechsel reicht.
+function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workflowIds: string[]) {
+  const container = document.createElement("div");
+  container.style.cssText =
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+    "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:20px;box-sizing:border-box;padding:24px;";
+
+  const heading = document.createElement("h1");
+  heading.textContent = "Regieplatz wählen";
+  heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
+  container.appendChild(heading);
+
+  const grid = document.createElement("div");
+  grid.style.cssText = "display:flex;gap:12px;flex-wrap:wrap;justify-content:center;max-width:900px;";
+
+  for (const workflowId of workflowIds) {
+    const entriesForWorkflow = consoles.filter((c) => c.workflowId === workflowId);
+    const label = entriesForWorkflow[0]?.workflowLabel ?? workflowId;
+
+    const tile = document.createElement("a");
+    tile.href = `/console/${encodeURIComponent(workflowId)}`;
+    tile.style.cssText =
+      "display:block;padding:20px 28px;border:1px solid #444;border-radius:8px;background:#232323;" +
+      "color:#eee;text-decoration:none;min-width:180px;text-align:center;cursor:pointer;";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:16px;font-weight:600;margin-bottom:4px;";
+    title.textContent = label;
+
+    const sub = document.createElement("div");
+    sub.style.cssText = "font-size:12px;color:#999;";
+    sub.textContent = `${entriesForWorkflow.length} Rolle${entriesForWorkflow.length === 1 ? "" : "n"}`;
+
+    tile.append(title, sub);
+    grid.appendChild(tile);
+  }
+  container.appendChild(grid);
+  root.replaceChildren(container);
 }
 
 async function boot() {

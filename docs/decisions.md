@@ -7087,3 +7087,71 @@ entfernt.
 **Nicht Teil dieser Sitzung:** Kapitel 12 Teil 5 (Operator-Einstieg:
 Workflow-Auswahl nach Login + Mehr-Rollen-Konsolen-Ansicht) — nächster
 empfohlener Schritt laut §12.4.
+
+## 2026-07-18 (Nachtrag 22) — Kapitel 12 Teil 5: Operator-Einstieg
+(Workflow-Auswahl nach Login)
+
+**Kleinster Schritt der bisherigen Kapitel-12-Reihe** — die eigentliche
+Rechte-Durchsetzung und die Mehr-Rollen-Tab-Leiste existierten schon
+(`consoles.Resolve` seit Teil 4, `ConsoleView`s Tab-Mechanismus seit
+C13); es fehlte nur die Gruppierung nach Workflow **vor** der
+Konsolen-Ansicht, wenn ein Nutzer Rollen in mehreren Workflows bedienen
+darf.
+
+**§12.5 offene Frage 5 mit dem im Dokument vorgeschlagenen Verhalten
+beantwortet** ("Kachel-Auswahl nach jedem Login (Vorschlag) oder
+automatisch der zuletzt benutzte Workflow mit Umschalter?"): Kachel-
+Auswahl bei jedem Einstieg, kein Persistieren einer zuletzt genutzten
+Wahl — einfachste Variante, keine neue Client- oder Server-seitige
+Zustandshaltung nötig.
+
+**Umsetzung** (`ui/shell/shell.ts`, rein clientseitig — "Filterung ist
+Komfort in der Shell, Durchsetzung bleibt beim Orchestrator" gilt
+unverändert, `consoles` enthält ohnehin nur bereits autorisierte
+Einträge aus Kapitel 12 Teil 4):
+
+- Neue Route `WORKFLOW_CONSOLE_ROUTE` (`/console/<workflowId>`, ohne
+  feste Rolle) neben der bestehenden Ein-Rollen-Kiosk-Route
+  `/console/<workflowId>/<nodeRoleId>` — beide werden vom
+  Orchestrator-seitigen `spaFallback` (unverändert, reiner
+  Pfad-Präfix-Check `/console/`) bereits korrekt mit `index.html`
+  bedient, keine Backend-Änderung nötig.
+- `renderShell()`s bisheriger "operate-only, kein Kiosk"-Zweig gruppiert
+  `consoles` jetzt nach `workflowId`: genau ein (oder gar kein)
+  Workflow → direkt hinein wie bisher (kein unnötiger Auswahl-Umweg für
+  den heute noch häufigsten Fall); mehrere Workflows → neue
+  `renderWorkflowPicker()`-Kachel-Ansicht ("die schmale Vorstufe des
+  §22.3-Katalog-Grids", wörtlich aus §12.3f); Klick auf eine Kachel ist
+  eine normale `<a href="/console/<id>">`-Navigation (kein
+  Client-Router nötig, echter Seitenwechsel + Re-Boot von `shell.ts`
+  reicht).
+- Punkte 1+2 aus §12.3f ("Gruppierte Sektionen", "Zwei Tab-Ebenen
+  sauber trennen") sind laut Dokument selbst "kein neuer Scope-Punkt,
+  keine offene Frage" — reine Präzisierung des bereits bestehenden
+  `ConsoleView`-Tab-Mechanismus für künftige Bundle-Autoren, kein
+  Code-Änderungsbedarf in dieser Sitzung.
+
+**Tests:** keine neuen `deno test`-Unit-Tests (DOM-lastiger
+Navigations-/Rendering-Code, gleiches Muster wie `flow-canvas.ts` —
+Verifikation live per CDP, s. u.). `deno check`/`deno test ui/` grün
+(unverändert, nichts an bestehender Logik angefasst).
+
+**Live verifiziert per CDP-Session** (echter Orchestrator, zwei echte
+laufende Workflows "Regieplatz A"/"Regieplatz B", Test-Nutzer
+"regieop" mit `operate` auf die `mixer`-Rolle in beiden):
+- Nach Login: Kachel-Auswahl "Regieplatz wählen" mit genau 2 Kacheln
+  ("Regieplatz A · 1 Rolle", "Regieplatz B · 1 Rolle"), kein
+  Engineering-App-Shell sichtbar.
+- Klick auf "Regieplatz A" → echte Navigation zu
+  `/console/<Regieplatz-A-ID>`, `<omp-console-view>` zeigt exakt eine
+  Tab-Kachel ("Video Mixer M/E") — Regieplatz Bs Mixer taucht nicht
+  auf (Workflow-Scope-Filterung korrekt).
+- Regressionscheck: derselbe Nutzer mit nur noch einer verbliebenen
+  Bindung (zweite testweise entfernt) landet beim nächsten Login direkt
+  in der Konsolen-Ansicht, keine Kachel-Auswahl mehr sichtbar.
+Alle Test-Nutzer/-Bindungen/-Workflows/-Layout-Einträge danach entfernt.
+
+**Nicht Teil dieser Sitzung:** Kapitel 12 Teil 6 (Endausbau: Rollen-
+Designer + Katalog-Kachel-Grid mit Thumbnail/Suche, deckungsgleich mit
+§22.3) — laut §12.4 der letzte Teil der Kapitel-12-Reihe, explizit als
+"Endausbau" eingestuft, kein dringender nächster Schritt.
