@@ -41,14 +41,30 @@ type Role struct {
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht
 // Port→Port (ARCHITECTURE.md §6.2 wörtlich: "Rolle→Rolle, wird beim
 // Erscheinen konkreter Node-IDs zu echten IS-05-Connections aufgelöst").
-// Aufgelöst wird auf den jeweils ersten Sender/Receiver der Rolle — eine
-// bewusste Vereinfachung für Teil 1: alle heutigen Katalog-Nodes haben
-// höchstens einen relevanten Sender bzw. Receiver pro Rolle im
-// Regieplatz-Kontext. Mehrere Sender/Receiver pro Rolle (Port-genaues
-// Template) ist dokumentierte Folgearbeit, kein stiller Gap.
+// FromSender/ToReceiver sind optionale IS-04-Port-**Labels** (Kapitel 12
+// Teil 1, docs/END-GOAL-FEATURES.md §12.3a) — leer = Kompatibilitäts-
+// Fallback auf den jeweils ersten Sender/Receiver der Rolle (bisheriges
+// Verhalten, kein Bruch bestehender Workflows). Node-IDs scheiden als
+// Referenz aus (pro Prozessstart neu), Labels sind pro Node-Typ stabil
+// (z. B. omp-source: unbenannt=Video/Audio-Index, omp-ograf: "Fill"/
+// "Key").
+//
+// **Crosspoint-Ziele (docs/decisions.md 2026-07-18):** die meisten
+// Node-Typen mit Eingängen (omp-switcher, omp-video-mixer-me, …)
+// registrieren gar keinen IS-04-Receiver — sie entdecken alle
+// MXL-Sender im Netz automatisch (discovery_loop) und wählen den
+// aktiven Eingang über eine eigene Crosspoint-Methode statt IS-05
+// Connect. Zeigt ToRole auf einen solchen Node-Typ (s.
+// crosspointByNodeType), wird die Connection stattdessen als "setze
+// diesen Sender beim Start als aktiven Eingang" aufgelöst (Methodenruf,
+// kein Connect) — der Operator kann danach frei umschalten, das ist nur
+// der Start-Default. Pro Crosspoint-Zielrolle ist daher höchstens eine
+// eingehende Connection sinnvoll (validate() erzwingt das).
 type Connection struct {
-	FromRole string `json:"fromRole"`
-	ToRole   string `json:"toRole"`
+	FromRole   string `json:"fromRole"`
+	FromSender string `json:"fromSender,omitempty"`
+	ToRole     string `json:"toRole"`
+	ToReceiver string `json:"toReceiver,omitempty"`
 }
 
 // Settings sind pro Workflow konfigurierbare, aber node-übergreifende

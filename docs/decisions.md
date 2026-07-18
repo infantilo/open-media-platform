@@ -6532,3 +6532,129 @@ laufende Test-Prozesse aufgeräumt (leer bestätigt).
 **Nicht Teil dieser Sitzung (nächster Schritt laut Reihenfolge):** S6
 (Workflow-Kontext in der Shell — Kapitel-12-Einstieg, größter
 verbleibender Brocken aus dem Review), S7/S8 nach Bedarf dazwischen.
+
+## 2026-07-18 (Nachtrag 17) — S6 / Kapitel 12 Teil 1: port-genaues
+Verbindungs-Template + Crosspoint-Verkabelung für Mischer/Switcher
+
+**Befund vor der Umsetzung (Blocker, dem Nutzer vorgelegt):** Kapitel
+12 Teil 1s eigene Verifikation ("Workflow ‚Regieplatz 1' mit drei
+`omp-source`-Rollen + einem Switcher/Mixer") ist mit dem heutigen
+Node-Code nicht durchführbar. Code gelesen (nicht angenommen): nur
+`omp-viewer` registriert einen statischen IS-04-Receiver
+(`nodes/omp-viewer/src/main.rs:210`). `omp-switcher`,
+`omp-video-mixer-me`, `omp-audio-mixer`, `omp-player`,
+`omp-multiviewer`, `omp-srt-gateway`, `omp-ograf` haben alle
+`receivers: vec![]` — sie entdecken jeden MXL-Sender im Netz über
+einen eigenen `discovery_loop` (Poll alle 2 s,
+`nodes/omp-video-mixer-me/src/main.rs:378`) und wählen den aktiven
+Eingang über eine Node-eigene Crosspoint-Methode
+(`crosspoint.take`/`select`), nicht über IS-05 Connect. Das
+`graph.Connect(fromSender, toReceiver)`-Template aus D7 Teil 1 scheitert
+also schon heute mit "role has no receiver" für genau den im Kapitel
+wörtlich beschriebenen Fall. Dem Nutzer drei Optionen vorgelegt (A:
+Teil 1 wie geplant + Lücke dokumentiert / B: Scope um
+Crosspoint-Verkabelung erweitern / C: nur dokumentieren, kein Code) —
+Entscheidung: **B**.
+
+**Umsetzung Teil 1 (wie ursprünglich geplant):**
+`workflows.Connection` um optionale `fromSender`/`toReceiver`-Labels
+erweitert (`types.go`) — leer = bisheriges Verhalten (erster
+Sender/Receiver, Kompatibilitäts-Fallback). Auflösung in
+`findSender`/`findReceiver` (`service.go`) nach Label statt Index.
+`PUT /api/v1/workflows/{id}` (`workflows.Service.Update`, nur im
+Zustand `stopped`, §22.3 Punkt 2) ergänzt. `ui/shell/workflows-view.ts`:
+Sender-/Receiver-Label-Freitextfelder pro Connection-Zeile (kein
+Dropdown — verfügbare Port-Labels sind heute nirgends als
+Katalog-Metadaten abgelegt, nur im jeweiligen Rust-Quelltext; ein
+Label-Katalog ist dokumentierte Folgearbeit), "Bearbeiten"-Knopf pro
+gestopptem Workflow (öffnet dasselbe Formular vorbefüllt, sendet PUT
+statt POST).
+
+**Umsetzung Erweiterung (Crosspoint, Option B):** neue
+`crosspointByNodeType`-Tabelle (`service.go`, Node-Typ →
+Methodenname + Sender-ID-Argumentname + Name des
+Eingangs-Listen-Parameters), direkt aus dem jeweiligen Rust-Quelltext
+übernommen, nicht geraten (§0 Punkt 6): `omp-switcher` → `select`,
+`omp-video-mixer-me` → `crosspoint.take` (setzt PGM sofort, ohne den
+gestagten Preset-Wert zu berühren — bewusst gewählt statt
+`select`+`cut`). `applyConnection()` entscheidet pro Connection: hat
+die Zielrolle einen Receiver → IS-05 Connect (Teil-1-Pfad); sonst,
+falls der Zielrollen-Typ in `crosspointByNodeType` bekannt ist → ein
+Methodenaufruf mit dem aufgelösten Sender als aktivem Eingang; sonst
+ein verständlicher Fehler statt eines stillen No-Op.
+`omp-audio-mixer` bewusst **nicht** in der Tabelle: dessen Eingänge
+hängen an dynamisch angelegten Kanälen (`addChannel` +
+`channel.<id>.setSource`), das bräuchte zusätzlich Kanal-Anlage im
+Workflow-Template — dokumentierte Folgearbeit, nicht Teil dieser
+Sitzung. `validate()` lehnt mehr als eine eingehende Connection auf
+dieselbe Crosspoint-Zielrolle ab (unauflösbare Mehrdeutigkeit, welcher
+Sender beim Start gewinnt).
+
+**Live-Fund unterwegs, live behoben:** der erste Live-Test (echter
+`omp-source` + echter `omp-video-mixer-me`, Workflow gestartet) landete
+in `started`, aber `crosspoint.programInput` blieb leer — der
+Node-eigene `discovery_loop` (2 s Poll) hatte den frisch gestarteten
+Sender zum Zeitpunkt des `crosspoint.take`-Aufrufs noch nicht selbst
+entdeckt; `switch_isel()` (`pipeline.rs:407`) findet dann keinen Pad
+und **verwirft die Auswahl endgültig** (setzt `program` auf `None`,
+kein Selbstheilungs-Mechanismus für später erscheinende Pads,
+bestätigt durch Quelltext-Lesen). Fix: `waitForCrosspointInput()`
+pollt vor dem eigentlichen Methodenaufruf den Node-eigenen
+Eingangs-Listen-Parameter (`crosspoint.inputs`/`inputs`, je nach
+Node-Typ, gleiches `[{senderId, label}, …]`-Format bei beiden), bis
+der gewählte Sender darin erscheint — Timeout gebunden an denselben
+`registrationTimeout`, den auch die NMOS-Registrierung nutzt. Zweiter
+Live-Test (frische Instanzen, `omp-video-mixer-me` "PGM"-Sender →
+`omp-switcher`, stabiles statisches Label statt eines der
+instabil-benannten `omp-source`-Sender, s. u.) endete in `started`,
+`GET .../params/activeInput` am Switcher bestätigte exakt die
+PGM-Sender-ID des Mixers.
+
+**Zweiter, dokumentierter Live-Fund (nicht behoben, Folgearbeit):**
+`omp-source`s zwei Sender (Video/Audio) setzen kein `SenderSpec.label`
+— der SDK-Fallback (`omp-node-sdk/src/node.rs:272`) generiert dann
+`"<config.label> Sender <n>"`, und `config.label` ist bei
+`omp-source` das `OMP_LABEL`, das der Launcher **pro Instanz
+individuell** setzt (zur UI-Unterscheidbarkeit mehrerer gleichzeitig
+laufender Instanzen desselben Typs). Ergebnis: der Sender-Label-Wert
+ist über einen Neustart der Rolle hinweg **nicht stabil** — im
+Gegensatz zur types.go-Doku-Annahme "Labels sind pro Node-Typ stabil",
+die für Nodes mit explizitem statischem Label (`omp-video-mixer-me`
+"PGM", `omp-ograf` "Fill"/"Key") zutrifft, aber nicht für Nodes mit
+Default-Label. Live reproduziert: ein `fromSender`-Wert, der beim
+Anlegen des Workflows vom Label einer bereits laufenden Instanz
+übernommen wurde, passte nicht mehr, nachdem die Rolle über den
+Workflow neu gestartet wurde (neue Instanz, neues `OMP_LABEL`) —
+`waitForCrosspointInput()` griff korrekt (Timeout + verständlicher
+Fehler statt stiller Fehlverkabelung), aber das ist trotzdem eine
+Lücke: für `omp-source`-artige Mehrfach-Sender-Nodes ohne explizites
+Label ist die Kapitel-12-Label-Auflösung heute praktisch nicht
+nutzbar. Sauberster Fix (nicht Teil dieser Sitzung): `SenderSpec.label`
+bei allen Mehrfach-Sender/-Receiver-Nodes explizit statisch setzen
+(z. B. `omp-source`: "Video"/"Audio", mechanischer Rollout analog
+D5-prep-2s MediaFlow-Ausrollung über acht Nodes) — dann verhält sich
+jeder Node-Typ wie `omp-video-mixer-me`/`omp-ograf` heute schon.
+
+**Tests:** `orchestrator/internal/workflows/service_test.go` — sechs
+neue Tests (Label-Auflösung, Crosspoint-Methodenaufruf inkl.
+Wait-Mechanismus Erfolgs- und Timeout-Pfad, fehlende
+Receiver/Crosspoint-Zuordnung, Validierungsregel für mehrfache
+Crosspoint-Ziel-Connections). `internal/httpapi`: `fakeWorkflowService`
+um `Update` ergänzt. `go build`/`go vet`/`go test ./...` grün
+(orchestrator, inkl. echter Postgres-Store-Tests). `deno check
+ui/**/*.ts` grün.
+
+**Live verifiziert:** zwei Szenarien gegen echten Orchestrator + echte
+Rust-Nodes (s. o., PGM→Switcher-Crosspoint mit
+`activeInput`-API-Nachweis). UI-Pfad separat per CDP-Session (Node
+`fetch`+`WebSocket`, kein `chromium --dump-dom` — Login-Token direkt in
+`localStorage` gesetzt, dann Formular-Interaktion): Workflow über das
+Formular inkl. Sender-Label-Feld angelegt, per API gegengeprüft
+(`fromSender` rundet korrekt), "Bearbeiten" vorbefüllt exakt die
+zuvor gesetzten Werte, Umbenennen + Speichern löst tatsächlich ein PUT
+aus und persistiert. Alle Test-Workflows/-Instanzen danach entfernt.
+
+**Nicht Teil dieser Sitzung:** `omp-audio-mixer`-Crosspoint (Kanal-
+Anlage nötig), stabile statische Sender-Labels für `omp-source`
+(s. o.), Kapitel 12 Teil 2 (Editor-Brücke "Gruppe als Workflow
+speichern") und die weiteren Teile 3–6.

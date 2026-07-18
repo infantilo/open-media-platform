@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"sync"
@@ -93,6 +94,42 @@ func (f *fakeGraph) Connect(ctx context.Context, fromSender, toReceiver string) 
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, connectCall{fromSender, toReceiver})
 	return f.err
+}
+
+type methodCall struct {
+	baseURL, method string
+	args            map[string]any
+}
+
+// fakeMethodInvoker ist ein Test-Double für methodInvoker (nodeclient.go)
+// — sammelt Crosspoint-Methodenaufrufe statt echter HTTP-Requests
+// (docs/decisions.md 2026-07-18: Crosspoint-Zielrollen ohne
+// IS-04-Receiver).
+type fakeMethodInvoker struct {
+	mu     sync.Mutex
+	calls  []methodCall
+	err    error
+	inputs []string // von GetParam als [{"senderId": ...}, ...] gemeldete Sender-IDs
+}
+
+func (f *fakeMethodInvoker) Invoke(ctx context.Context, baseURL, method string, args map[string]any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, methodCall{baseURL, method, args})
+	return f.err
+}
+
+func (f *fakeMethodInvoker) GetParam(ctx context.Context, baseURL, name string) (json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	type input struct {
+		SenderID string `json:"senderId"`
+	}
+	inputs := make([]input, 0, len(f.inputs))
+	for _, id := range f.inputs {
+		inputs = append(inputs, input{SenderID: id})
+	}
+	return json.Marshal(inputs)
 }
 
 type fakeLauncher struct {
@@ -318,6 +355,279 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 	defer g.mu.Unlock()
 	if len(g.calls) != 1 || g.calls[0].fromSender != "send-1" || g.calls[0].toReceiver != "recv-1" {
 		t.Fatalf("connect calls = %+v, want one send-1 -> recv-1", g.calls)
+	}
+}
+
+// TestStartResolvesConnectionByLabel deckt Kapitel 12 Teil 1
+// (docs/END-GOAL-FEATURES.md §12.3a) ab: omp-source registriert zwei
+// unbenannte Sender (Video, Audio) in dieser Reihenfolge — ohne
+// FromSender-Label würde immer der erste (Video) gewählt.
+func TestStartResolvesConnectionByLabel(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "view", NodeType: "omp-viewer"},
+		},
+		Connections: []Connection{{FromRole: "src", FromSender: "Audio", ToRole: "view"}},
+	}
+	wf, err := svc.Create("regie", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	srcInstance, viewInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-viewer")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance, Senders: []registry.SenderView{
+		{ID: "send-video", Label: "Video"},
+		{ID: "send-audio", Label: "Audio"},
+	}})
+	nodes.add(registry.NodeView{ID: "node-view", InstanceID: viewInstance, Receivers: []registry.ReceiverView{{ID: "recv-1"}}})
+
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 1 || g.calls[0].fromSender != "send-audio" {
+		t.Fatalf("connect calls = %+v, want one send-audio -> recv-1", g.calls)
+	}
+}
+
+// TestStartResolvesCrosspointConnectionViaMethodInvoke deckt die
+// Kapitel-12-Erweiterung ab (docs/decisions.md 2026-07-18): eine
+// Zielrolle ohne IS-04-Receiver, aber mit bekanntem Crosspoint-Node-Typ
+// (omp-video-mixer-me), wird über einen Methodenaufruf statt IS-05
+// Connect verkabelt — kein graph.Connect-Aufruf.
+func TestStartResolvesCrosspointConnectionViaMethodInvoke(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	methods := &fakeMethodInvoker{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+	svc.methods = methods
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "cam1", NodeType: "omp-source"},
+			{Name: "mix", NodeType: "omp-video-mixer-me"},
+		},
+		Connections: []Connection{{FromRole: "cam1", ToRole: "mix"}},
+	}
+	wf, err := svc.Create("regie", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	camInstance, mixInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-video-mixer-me")
+	nodes.add(registry.NodeView{ID: "node-cam1", InstanceID: camInstance, Senders: []registry.SenderView{{ID: "send-cam1"}}})
+	nodes.add(registry.NodeView{ID: "node-mix", InstanceID: mixInstance, APIBaseURL: "http://node-mix:9360"})
+	// Simuliert den (in Wirklichkeit asynchronen) discovery_loop des
+	// Zielnodes, der "send-cam1" irgendwann selbst entdeckt — ohne das
+	// würde waitForCrosspointInput bis registrationTimeout warten und
+	// der Workflow in "failed" statt "started" enden (s. Live-Fund
+	// 2026-07-18, docs/decisions.md).
+	methods.mu.Lock()
+	methods.inputs = []string{"send-cam1"}
+	methods.mu.Unlock()
+
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	g.mu.Lock()
+	graphCalls := len(g.calls)
+	g.mu.Unlock()
+	if graphCalls != 0 {
+		t.Fatalf("graph.Connect calls = %d, want 0 (crosspoint target must not use IS-05)", graphCalls)
+	}
+
+	methods.mu.Lock()
+	defer methods.mu.Unlock()
+	if len(methods.calls) != 1 {
+		t.Fatalf("method invoke calls = %+v, want exactly one", methods.calls)
+	}
+	call := methods.calls[0]
+	if call.baseURL != "http://node-mix:9360" || call.method != "crosspoint.take" || call.args["senderId"] != "send-cam1" {
+		t.Fatalf("method call = %+v, want crosspoint.take(senderId=send-cam1) on node-mix", call)
+	}
+}
+
+// TestStartFailsWhenCrosspointInputNeverAppears deckt den Live-Fund vom
+// 2026-07-18 ab (docs/decisions.md): eine Crosspoint-Zielrolle, die den
+// gewünschten Sender nie unter ihren entdeckten Eingängen meldet
+// (discovery_loop lief nicht/anders), darf den Take()-Aufruf nicht
+// einfach verlieren — der Workflow muss "failed" mit erklärender
+// Fehlermeldung enden, statt "started" ohne wirksame Verkabelung.
+func TestStartFailsWhenCrosspointInputNeverAppears(t *testing.T) {
+	// 300ms statt der sonst üblichen 100ms (s. TestStartFailsWhen-
+	// RegistrationTimesOut): derselbe ctx budgetiert hier sowohl die
+	// Node-Registrierung (muss zuerst erfolgreich durchlaufen, sonst
+	// testet dieser Fall nur den bereits anderswo abgedeckten
+	// Registrierungs-Timeout) als auch den anschließenden Crosspoint-Wait.
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 300 * time.Millisecond
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	methods := &fakeMethodInvoker{} // inputs bleibt leer: "send-cam1" erscheint nie
+	svc := newTestService(newFakeStore(), nodes, g, l)
+	svc.methods = methods
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "cam1", NodeType: "omp-source"},
+			{Name: "mix", NodeType: "omp-video-mixer-me"},
+		},
+		Connections: []Connection{{FromRole: "cam1", ToRole: "mix"}},
+	}
+	wf, err := svc.Create("regie", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	camInstance, mixInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-video-mixer-me")
+	nodes.add(registry.NodeView{ID: "node-cam1", InstanceID: camInstance, Senders: []registry.SenderView{{ID: "send-cam1"}}})
+	nodes.add(registry.NodeView{ID: "node-mix", InstanceID: mixInstance, APIBaseURL: "http://node-mix:9360"})
+
+	failed := waitForStatus(t, svc, wf.ID, StatusFailed)
+	if failed.Error == "" {
+		t.Fatalf("Error = %q, want a non-empty explanation", failed.Error)
+	}
+
+	methods.mu.Lock()
+	defer methods.mu.Unlock()
+	if len(methods.calls) != 0 {
+		t.Fatalf("method invoke calls = %+v, want 0 (must not take() before the input is confirmed discovered)", methods.calls)
+	}
+}
+
+// TestStartFailsWhenTargetHasNoReceiverAndNoCrosspointMapping deckt den
+// Fehlerfall ab: eine Zielrolle ohne Receiver und ohne bekannte
+// Crosspoint-Methode (z. B. omp-multiviewer) darf nicht still
+// übersprungen werden.
+func TestStartFailsWhenTargetHasNoReceiverAndNoCrosspointMapping(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "mv", NodeType: "omp-multiviewer"},
+		},
+		Connections: []Connection{{FromRole: "src", ToRole: "mv"}},
+	}
+	wf, err := svc.Create("regie", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	srcInstance, mvInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-multiviewer")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance, Senders: []registry.SenderView{{ID: "send-1"}}})
+	nodes.add(registry.NodeView{ID: "node-mv", InstanceID: mvInstance})
+
+	failed := waitForStatus(t, svc, wf.ID, StatusFailed)
+	if failed.Error == "" {
+		t.Fatalf("Error = %q, want a non-empty explanation", failed.Error)
+	}
+}
+
+// TestCreateRejectsMultipleConnectionsToSameCrosspointTarget: zwei
+// Kameras, die beide direkt auf denselben Bildmischer verkabelt werden
+// sollen, sind zum Startzeitpunkt unauflösbar (welcher Sender gewinnt?)
+// — muss schon bei Create() abgelehnt werden, nicht erst beim Start.
+func TestCreateRejectsMultipleConnectionsToSameCrosspointTarget(t *testing.T) {
+	svc := &Service{store: newFakeStore()}
+	def := Definition{
+		Roles: []Role{
+			{Name: "cam1", NodeType: "omp-source"},
+			{Name: "cam2", NodeType: "omp-source"},
+			{Name: "mix", NodeType: "omp-video-mixer-me"},
+		},
+		Connections: []Connection{
+			{FromRole: "cam1", ToRole: "mix"},
+			{FromRole: "cam2", ToRole: "mix"},
+		},
+	}
+	_, err := svc.Create("regie", def)
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
 

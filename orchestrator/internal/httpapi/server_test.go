@@ -305,6 +305,8 @@ type fakeWorkflowService struct {
 	deleteErr error
 	startErr  error
 	stopErr   error
+	updated   workflows.Workflow
+	updateErr error
 }
 
 func (f fakeWorkflowService) Create(name string, def workflows.Definition) (workflows.Workflow, error) {
@@ -314,6 +316,10 @@ func (f fakeWorkflowService) Create(name string, def workflows.Definition) (work
 func (f fakeWorkflowService) List() ([]workflows.Workflow, error) { return f.list, f.listErr }
 
 func (f fakeWorkflowService) Get(id string) (workflows.Workflow, error) { return f.get, f.getErr }
+
+func (f fakeWorkflowService) Update(id, name string, def workflows.Definition) (workflows.Workflow, error) {
+	return f.updated, f.updateErr
+}
 
 func (f fakeWorkflowService) Delete(id string) error { return f.deleteErr }
 

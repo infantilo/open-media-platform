@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -15,6 +16,40 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
+
+// crosspointMethod beschreibt, wie eine Zielrolle ohne IS-04-Receiver
+// (s. Connection-Doku in types.go) einen Quell-Sender als aktiven
+// Eingang übernimmt: Node-Typ → Methodenname + Name des
+// Sender-ID-Arguments, direkt aus dem jeweiligen Node-Quelltext
+// übernommen (nicht geraten, UMSETZUNG.md §0 Punkt 6):
+// nodes/omp-switcher/src/main.rs ("select"), nodes/omp-video-mixer-me/
+// src/main.rs ("crosspoint.take" — setzt PGM sofort, ohne den
+// gestagten Preset-Wert zu berühren).
+//
+// omp-audio-mixer bewusst nicht enthalten: dessen Eingänge sind an
+// dynamisch angelegte Kanäle gebunden (channel.<id>.setSource), das
+// bräuchte zusätzlich Kanal-Anlage/-Zuordnung im Workflow-Template —
+// dokumentierte Folgearbeit, nicht Teil dieses Schritts.
+// InputsParam ist der Name des Nodes-eigenen (readonly) Parameters, der
+// die automatisch entdeckten Eingänge als [{senderId, label}, …] listet
+// (beide Node-Typen liefern dasselbe Shape, nur unter verschiedenem
+// Namen) — gebraucht von waitForCrosspointInput unten: der Zielnode baut
+// seine GStreamer-Eingangs-Pads erst auf, sobald sein eigener
+// discovery_loop (Poll-Intervall z. B. 2 s) den Sender selbst gesehen
+// hat. Ein Take()/select() davor träfe auf keinen Pad — live gefunden
+// 2026-07-18 (docs/decisions.md): der Node verwirft eine solche Auswahl
+// kommentarlos (switch_isel() fällt auf "kein Programm" zurück und hat
+// keinen Selbstheilungs-Mechanismus für später erscheinende Pads).
+type crosspointMethod struct {
+	Method      string
+	Arg         string
+	InputsParam string
+}
+
+var crosspointByNodeType = map[string]crosspointMethod{
+	"omp-switcher":       {Method: "select", Arg: "senderId", InputsParam: "inputs"},
+	"omp-video-mixer-me": {Method: "crosspoint.take", Arg: "senderId", InputsParam: "crosspoint.inputs"},
+}
 
 // registrationTimeout ist die Höchstdauer, die Start() auf das
 // Erscheinen aller provisionierten Rollen in der NMOS-Registry wartet,
@@ -86,14 +121,17 @@ type Service struct {
 	graph    GraphService
 	launcher Launcher
 	events   EventPublisher
+	methods  methodInvoker
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
 // und Instanz-Launcher zu einem Workflow-Service. events darf nil sein
 // (z. B. in Tests) — dann bleiben Statuswechsel SSE-still, nur per Poll
-// sichtbar.
-func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher) *Service {
-	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events}
+// sichtbar. httpClient ist der ggf. mTLS-fähige Client für
+// Crosspoint-Methodenaufrufe (s. crosspointByNodeType) — nil bedeutet
+// http.DefaultClient (gleiches Muster wie snapshots.NewService).
+func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client) *Service {
+	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient)}
 }
 
 // Create legt einen neuen, gestoppten Workflow an.
@@ -156,6 +194,33 @@ func (s *Service) Delete(id string) error {
 	// (jetzt schon aktualisierte) Liste neu.
 	s.publish(wf)
 	return nil
+}
+
+// Update überschreibt Name und Definition eines Workflows — nur im
+// Zustand "stopped" (§22.3 Punkt 2 / Kapitel 12 Teil 1,
+// docs/END-GOAL-FEATURES.md §12.3c: "PUT /api/v1/workflows/{id} …
+// §22.3 Punkt 2 einlösen"). Gleiche Begründung wie bei Delete: kein
+// Umschreiben der Definition unter noch laufenden Prozessen, die die
+// alte Definition ausführen.
+func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
+	if err := validate(def); err != nil {
+		return Workflow{}, err
+	}
+	wf, err := s.store.Get(id)
+	if err != nil {
+		return Workflow{}, err
+	}
+	if wf.Status != StatusStopped {
+		return Workflow{}, ErrNotStopped
+	}
+	wf.Name = name
+	wf.Definition = def
+	wf.UpdatedAt = time.Now()
+	if err := s.store.Put(wf); err != nil {
+		return Workflow{}, err
+	}
+	s.publish(wf)
+	return wf, nil
 }
 
 // Start provisioniert alle Rollen eines Workflows (lokal oder remote,
@@ -242,17 +307,17 @@ func (s *Service) runStart(wf Workflow) {
 
 	for _, conn := range wf.Definition.Connections {
 		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
-		if !ok || len(fromNode.Senders) == 0 {
-			s.fail(wf, fmt.Sprintf("connection %s -> %s: role %s has no sender", conn.FromRole, conn.ToRole, conn.FromRole))
+		if !ok {
+			s.fail(wf, fmt.Sprintf("connection %s -> %s: role %s not registered", conn.FromRole, conn.ToRole, conn.FromRole))
 			return
 		}
 		toNode, ok := s.nodeForRole(wf, conn.ToRole)
-		if !ok || len(toNode.Receivers) == 0 {
-			s.fail(wf, fmt.Sprintf("connection %s -> %s: role %s has no receiver", conn.FromRole, conn.ToRole, conn.ToRole))
+		if !ok {
+			s.fail(wf, fmt.Sprintf("connection %s -> %s: role %s not registered", conn.FromRole, conn.ToRole, conn.ToRole))
 			return
 		}
-		if err := s.graph.Connect(ctx, fromNode.Senders[0].ID, toNode.Receivers[0].ID); err != nil {
-			s.fail(wf, fmt.Sprintf("connection %s -> %s: %v", conn.FromRole, conn.ToRole, err))
+		if err := s.applyConnection(ctx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole)); err != nil {
+			s.fail(wf, err.Error())
 			return
 		}
 	}
@@ -407,17 +472,17 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 			continue
 		}
 		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
-		if !ok || len(fromNode.Senders) == 0 {
-			slog.Warn("workflows: rewireAfterRestart: sender not ready", "workflow", wf.ID, "connection", conn)
+		if !ok {
+			slog.Warn("workflows: rewireAfterRestart: sender role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
 		toNode, ok := s.nodeForRole(wf, conn.ToRole)
-		if !ok || len(toNode.Receivers) == 0 {
-			slog.Warn("workflows: rewireAfterRestart: receiver not ready", "workflow", wf.ID, "connection", conn)
+		if !ok {
+			slog.Warn("workflows: rewireAfterRestart: receiver role not ready", "workflow", wf.ID, "connection", conn)
 			continue
 		}
 		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
-		err := s.graph.Connect(connectCtx, fromNode.Senders[0].ID, toNode.Receivers[0].ID)
+		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
 		connectCancel()
 		if err != nil {
 			slog.Warn("workflows: rewireAfterRestart: reconnect failed", "workflow", wf.ID, "connection", conn, "error", err)
@@ -430,6 +495,122 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	}
 	s.publish(wf)
 	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
+}
+
+// waitForCrosspointInput pollt param auf dem Zielnode, bis senderID
+// unter dessen automatisch entdeckten Eingängen erscheint — s.
+// crosspointMethod-Doku oben zum Grund. Gleiches Poll-Muster wie
+// awaitRegistration (registrationPollInterval), gebunden an den vom
+// Aufrufer übergebenen ctx (in runStart/rewireAfterRestart bereits mit
+// registrationTimeout budgetiert).
+func (s *Service) waitForCrosspointInput(ctx context.Context, baseURL, param, senderID string) error {
+	ticker := time.NewTicker(registrationPollInterval)
+	defer ticker.Stop()
+
+	for {
+		if raw, err := s.methods.GetParam(ctx, baseURL, param); err == nil {
+			var inputs []struct {
+				SenderID string `json:"senderId"`
+			}
+			if json.Unmarshal(raw, &inputs) == nil {
+				for _, in := range inputs {
+					if in.SenderID == senderID {
+						return nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for sender %s to appear in %s/params/%s", senderID, baseURL, param)
+		case <-ticker.C:
+		}
+	}
+}
+
+// applyConnection löst eine einzelne Workflow-Connection auf: ein echter
+// IS-05 Connect, falls die Zielrolle einen IS-04-Receiver hat (Standard-
+// fall, z. B. omp-viewer); sonst ein Crosspoint-Methodenaufruf, falls der
+// Zielrollen-Node-Typ in crosspointByNodeType bekannt ist (s.
+// Connection-Doku in types.go); sonst ein verständlicher Fehler statt
+// eines stillen No-Op.
+func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode, toNode registry.NodeView, toRoleNodeType string) error {
+	sender, ok := findSender(fromNode, conn.FromSender)
+	if !ok {
+		return fmt.Errorf("connection %s -> %s: role %s has no sender%s", conn.FromRole, conn.ToRole, conn.FromRole, labelSuffix(conn.FromSender))
+	}
+
+	if len(toNode.Receivers) > 0 {
+		receiver, ok := findReceiver(toNode, conn.ToReceiver)
+		if !ok {
+			return fmt.Errorf("connection %s -> %s: role %s has no receiver%s", conn.FromRole, conn.ToRole, conn.ToRole, labelSuffix(conn.ToReceiver))
+		}
+		return s.graph.Connect(ctx, sender.ID, receiver.ID)
+	}
+
+	if cp, ok := crosspointByNodeType[toRoleNodeType]; ok {
+		if toNode.APIBaseURL == "" {
+			return fmt.Errorf("connection %s -> %s: role %s has no reachable api endpoint", conn.FromRole, conn.ToRole, conn.ToRole)
+		}
+		if err := s.waitForCrosspointInput(ctx, toNode.APIBaseURL, cp.InputsParam, sender.ID); err != nil {
+			return fmt.Errorf("connection %s -> %s: %w", conn.FromRole, conn.ToRole, err)
+		}
+		return s.methods.Invoke(ctx, toNode.APIBaseURL, cp.Method, map[string]any{cp.Arg: sender.ID})
+	}
+
+	return fmt.Errorf("connection %s -> %s: role %s (%s) has neither a receiver nor a known crosspoint method", conn.FromRole, conn.ToRole, conn.ToRole, toRoleNodeType)
+}
+
+// findSender wählt den Sender eines Nodes nach Label — leeres label
+// bedeutet den bisherigen Kompatibilitäts-Fallback (erster Sender).
+func findSender(node registry.NodeView, label string) (registry.SenderView, bool) {
+	if label == "" {
+		if len(node.Senders) == 0 {
+			return registry.SenderView{}, false
+		}
+		return node.Senders[0], true
+	}
+	for _, sndr := range node.Senders {
+		if sndr.Label == label {
+			return sndr, true
+		}
+	}
+	return registry.SenderView{}, false
+}
+
+// findReceiver wählt den Receiver eines Nodes nach Label — analog
+// findSender.
+func findReceiver(node registry.NodeView, label string) (registry.ReceiverView, bool) {
+	if label == "" {
+		if len(node.Receivers) == 0 {
+			return registry.ReceiverView{}, false
+		}
+		return node.Receivers[0], true
+	}
+	for _, r := range node.Receivers {
+		if r.Label == label {
+			return r, true
+		}
+	}
+	return registry.ReceiverView{}, false
+}
+
+func labelSuffix(label string) string {
+	if label == "" {
+		return ""
+	}
+	return fmt.Sprintf(" labeled %q", label)
+}
+
+// roleNodeType liefert den Node-Typ einer Rolle aus der Workflow-
+// Definition (statisch bekannt, unabhängig vom Laufzeitzustand).
+func roleNodeType(wf Workflow, roleName string) string {
+	for _, r := range wf.Definition.Roles {
+		if r.Name == roleName {
+			return r.NodeType
+		}
+	}
+	return ""
 }
 
 func (s *Service) nodeForRole(wf Workflow, role string) (registry.NodeView, bool) {
@@ -531,22 +712,34 @@ func validate(def Definition) error {
 	if len(def.Roles) == 0 {
 		return fmt.Errorf("%w: at least one role required", ErrValidation)
 	}
-	seen := map[string]bool{}
+	nodeTypeByRole := map[string]string{}
 	for _, r := range def.Roles {
 		if r.Name == "" || r.NodeType == "" {
 			return fmt.Errorf("%w: role name and nodeType required", ErrValidation)
 		}
-		if seen[r.Name] {
+		if _, ok := nodeTypeByRole[r.Name]; ok {
 			return fmt.Errorf("%w: duplicate role name %q", ErrValidation, r.Name)
 		}
-		seen[r.Name] = true
+		nodeTypeByRole[r.Name] = r.NodeType
 	}
+	// Crosspoint-Zielrollen (s. Connection-Doku in types.go) haben genau
+	// einen aktiven Eingang — mehr als eine eingehende Connection wäre
+	// eine unauflösbare Mehrdeutigkeit ("welcher Sender gewinnt beim
+	// Start?"), anders als bei Receiver-Zielen, wo mehrere Connections
+	// auf verschiedene Receiver-Labels durchaus gültig sind.
+	crosspointTargets := map[string]bool{}
 	for _, c := range def.Connections {
-		if !seen[c.FromRole] {
+		if _, ok := nodeTypeByRole[c.FromRole]; !ok {
 			return fmt.Errorf("%w: connection references unknown role %q", ErrValidation, c.FromRole)
 		}
-		if !seen[c.ToRole] {
+		if _, ok := nodeTypeByRole[c.ToRole]; !ok {
 			return fmt.Errorf("%w: connection references unknown role %q", ErrValidation, c.ToRole)
+		}
+		if _, ok := crosspointByNodeType[nodeTypeByRole[c.ToRole]]; ok {
+			if crosspointTargets[c.ToRole] {
+				return fmt.Errorf("%w: role %q accepts at most one incoming connection (crosspoint target)", ErrValidation, c.ToRole)
+			}
+			crosspointTargets[c.ToRole] = true
 		}
 	}
 	return nil

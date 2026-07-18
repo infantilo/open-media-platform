@@ -33,9 +33,18 @@ interface Role {
   hostId?: string;
 }
 
+// Kapitel 12 Teil 1 (docs/END-GOAL-FEATURES.md §12.3a): fromSender/
+// toReceiver sind optionale IS-04-Port-Labels — leer = Kompatibilitäts-
+// Fallback auf den jeweils ersten Sender/Receiver der Rolle (Backend-
+// Verhalten unverändert). Freitext statt Dropdown: die verfügbaren
+// Labels eines Node-Typs sind heute nirgends als Katalog-Metadaten
+// abgelegt (nur im jeweiligen Rust-Quelltext, z. B. omp-ograf "Fill"/
+// "Key") — ein Label-Katalog ist dokumentierte Folgearbeit.
 interface Connection {
   fromRole: string;
+  fromSender?: string;
   toRole: string;
+  toReceiver?: string;
 }
 
 // Settings (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17):
@@ -88,6 +97,11 @@ class WorkflowsView extends HTMLElement {
   #formWidth = "";
   #formHeight = "";
   #showForm = false;
+  // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}, §22.3 Punkt 2): gesetzt
+  // während "Bearbeiten" eines bestehenden (gestoppten) Workflows —
+  // #submitForm() unterscheidet daran POST (Anlegen) von PUT (Update),
+  // das Formular selbst ist identisch.
+  #editingId: string | null = null;
 
   connectedCallback() {
     this.style.cssText =
@@ -147,7 +161,10 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
-  async #createWorkflow() {
+  // Anlegen (POST) und Bearbeiten (PUT, Kapitel 12 Teil 1) teilen sich
+  // Formular und Validierung — nur Methode/URL/Fehlertext unterscheiden
+  // sich, je nachdem ob #editingId gesetzt ist.
+  async #submitForm() {
     const roles = this.#formRoles.filter((r) => r.name && r.nodeType);
     if (!this.#formName || roles.length === 0) return;
     const width = parseInt(this.#formWidth, 10);
@@ -163,23 +180,25 @@ class WorkflowsView extends HTMLElement {
         settings: Object.keys(settings).length > 0 ? settings : undefined,
       },
     };
+    const editingId = this.#editingId;
+    const verb = editingId ? "Speichern" : "Anlegen";
     // try/catch statt nur !res.ok: apiFetch() wirft bei einem
     // Netzwerkfehler (z. B. Orchestrator gestoppt), nicht nur bei einer
     // abgeschlossenen Antwort mit Fehlerstatus — beide Fälle sollen als
     // Toast sichtbar werden, nicht als stiller Absturz (S10-
     // Verifikationsfall "Orchestrator gestoppt → Toast statt alert").
     try {
-      const res = await apiFetch("/api/v1/workflows", {
-        method: "POST",
+      const res = await apiFetch(editingId ? `/api/v1/workflows/${editingId}` : "/api/v1/workflows", {
+        method: editingId ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        showToast(`Anlegen fehlgeschlagen: ${await res.text()}`);
+        showToast(`${verb} fehlgeschlagen: ${await res.text()}`);
         return;
       }
     } catch (err) {
-      showToast(`Anlegen fehlgeschlagen: ${err}`);
+      showToast(`${verb} fehlgeschlagen: ${err}`);
       return;
     }
     this.#formName = "";
@@ -188,7 +207,22 @@ class WorkflowsView extends HTMLElement {
     this.#formWidth = "";
     this.#formHeight = "";
     this.#showForm = false;
+    this.#editingId = null;
     await this.#poll();
+  }
+
+  // Öffnet das Formular vorbefüllt mit der bestehenden Definition eines
+  // gestoppten Workflows (Kapitel 12 Teil 1) — #submitForm() sendet dann
+  // ein PUT statt eines POST.
+  #editWorkflow(wf: Workflow) {
+    this.#editingId = wf.id;
+    this.#formName = wf.name;
+    this.#formRoles = wf.definition.roles.map((r) => ({ ...r, hostId: r.hostId ?? "" }));
+    this.#formConnections = wf.definition.connections.map((c) => ({ ...c }));
+    this.#formWidth = wf.definition.settings?.programWidth ? String(wf.definition.settings.programWidth) : "";
+    this.#formHeight = wf.definition.settings?.programHeight ? String(wf.definition.settings.programHeight) : "";
+    this.#showForm = true;
+    this.#render();
   }
 
   async #startWorkflow(id: string) {
@@ -226,6 +260,17 @@ class WorkflowsView extends HTMLElement {
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
     newBtn.addEventListener("click", () => {
       this.#showForm = !this.#showForm;
+      if (!this.#showForm) {
+        // Abbrechen räumt auch einen laufenden Bearbeiten-Vorgang auf —
+        // sonst würde ein späteres "+ Neu" versehentlich wieder als PUT
+        // auf die zuletzt bearbeitete ID gesendet.
+        this.#editingId = null;
+        this.#formName = "";
+        this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
+        this.#formConnections = [];
+        this.#formWidth = "";
+        this.#formHeight = "";
+      }
       this.#render();
     });
     heading.appendChild(newBtn);
@@ -308,6 +353,18 @@ class WorkflowsView extends HTMLElement {
     stopBtn.disabled = !canStop;
     stopBtn.addEventListener("click", () => this.#stopWorkflow(wf.id));
     actions.appendChild(stopBtn);
+
+    // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): nur im Zustand
+    // "stopped" möglich (s. workflows.Service.Update) — gleiche
+    // Begründung wie beim Löschen, kein Umschreiben unter laufenden
+    // Prozessen.
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "Bearbeiten";
+    editBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    editBtn.disabled = wf.status !== "stopped";
+    editBtn.title = wf.status !== "stopped" ? "Erst stoppen, dann bearbeiten" : "";
+    editBtn.addEventListener("click", () => this.#editWorkflow(wf));
+    actions.appendChild(editBtn);
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
@@ -426,9 +483,28 @@ class WorkflowsView extends HTMLElement {
       connRow.style.cssText = "display:flex;gap:4px;margin-bottom:4px;align-items:center;";
 
       const fromSelect = this.#roleSelect(roleNames, conn.fromRole, (v) => (conn.fromRole = v));
+      // Kapitel 12 Teil 1: optionales Sender-Label — leer = erster Sender
+      // der Rolle (unverändertes Verhalten). Freitext statt Dropdown, s.
+      // Connection-Doku oben.
+      const fromSenderInput = document.createElement("input");
+      fromSenderInput.placeholder = "Sender-Label (optional)";
+      fromSenderInput.value = conn.fromSender ?? "";
+      fromSenderInput.style.cssText = "width:26%;";
+      fromSenderInput.addEventListener("input", () => {
+        conn.fromSender = fromSenderInput.value || undefined;
+      });
+
       const arrow = document.createElement("span");
       arrow.textContent = "→";
       const toSelect = this.#roleSelect(roleNames, conn.toRole, (v) => (conn.toRole = v));
+
+      const toReceiverInput = document.createElement("input");
+      toReceiverInput.placeholder = "Receiver-Label (optional)";
+      toReceiverInput.value = conn.toReceiver ?? "";
+      toReceiverInput.style.cssText = "width:26%;";
+      toReceiverInput.addEventListener("input", () => {
+        conn.toReceiver = toReceiverInput.value || undefined;
+      });
 
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "×";
@@ -438,7 +514,7 @@ class WorkflowsView extends HTMLElement {
         this.#render();
       });
 
-      connRow.append(fromSelect, arrow, toSelect, removeBtn);
+      connRow.append(fromSelect, fromSenderInput, arrow, toSelect, toReceiverInput, removeBtn);
       form.appendChild(connRow);
     });
 
@@ -485,9 +561,9 @@ class WorkflowsView extends HTMLElement {
     form.appendChild(settingsRow);
 
     const createBtn = document.createElement("button");
-    createBtn.textContent = "Anlegen";
+    createBtn.textContent = this.#editingId ? "Speichern" : "Anlegen";
     createBtn.style.cssText = "display:block;cursor:pointer;";
-    createBtn.addEventListener("click", () => this.#createWorkflow());
+    createBtn.addEventListener("click", () => this.#submitForm());
     form.appendChild(createBtn);
 
     return form;

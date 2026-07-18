@@ -238,7 +238,7 @@ func main() {
 	// UMSETZUNG.md D7 Teil 1): bündelt mehrere launcherSvc.Start()-Aufrufe
 	// zu einem benannten Workflow und verkabelt die Rollen automatisch
 	// gemäß Verbindungs-Template, sobald sie in der Registry erscheinen.
-	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub)
+	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient)
 
 	// K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a/§7.6): nach jedem
 	// automatischen Launcher-Neustart einer abgestürzten Instanz die

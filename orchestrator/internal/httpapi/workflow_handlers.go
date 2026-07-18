@@ -54,6 +54,28 @@ func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleUpdateWorkflow liefert PUT /api/v1/workflows/{id} — nur im
+// Zustand "stopped" (s. workflows.Service.Update, Kapitel 12 Teil 1).
+// Gleicher Body wie POST /api/v1/workflows.
+func handleUpdateWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name       string               `json:"name"`
+			Definition workflows.Definition `json:"definition"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		wf, err := svc.Update(r.PathValue("id"), body.Name, body.Definition)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
 // handleDeleteWorkflow liefert DELETE /api/v1/workflows/{id} — nur im
 // Zustand "stopped" (s. workflows.Service.Delete).
 func handleDeleteWorkflow(svc WorkflowService) http.HandlerFunc {
