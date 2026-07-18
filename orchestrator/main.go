@@ -88,10 +88,18 @@ func main() {
 	hub := sse.NewHub()
 	healthTracker := health.NewTracker()
 	hostMetricsTracker := hosts.NewTracker()
+	hostHistory := hosts.NewHistory()
 
 	nc, err := eventbus.Connect(cfg.NatsURL, hub, healthTracker.Touch, func(hostID string, payload []byte) {
 		if !hostMetricsTracker.Touch(hostID, payload) {
 			slog.Warn("host metrics payload not parsable, dropped", "host_id", hostID)
+			return
+		}
+		// Kapitel 14 Teil 1: dieselbe geparste Metrics erneut aus dem
+		// Tracker lesen statt den Payload ein zweites Mal zu parsen —
+		// Touch() hat ihn gerade validiert und mit ReceivedAt versehen.
+		if m, ok := hostMetricsTracker.Get(hostID); ok {
+			hostHistory.Record(hostID, m)
 		}
 	})
 	if err != nil {
@@ -274,7 +282,7 @@ func main() {
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
 	go workflowScheduler.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, workflowSvc, placementEngine)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -136,3 +136,66 @@ func TestHandleListHostsMergesMetrics(t *testing.T) {
 		t.Errorf("host-2 metrics = %+v, want nil (no telemetry seen yet)", body[1].Metrics)
 	}
 }
+
+func TestHandleHostMetricsHistoryReturnsWindow(t *testing.T) {
+	want := hosts.HistoryWindow{
+		Resolution: "raw",
+		Samples:    []hosts.Sample{{CPUPercent: 12.5, MemPercent: 40}},
+		Summary:    hosts.Summary{CPUMin: 12.5, CPUAvg: 12.5, CPUMax: 12.5, SampleCount: 1},
+	}
+	history := fakeHostHistory{byHost: map[string]hosts.HistoryWindow{"host-1": want}}
+	h := handleHostMetricsHistory(history)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/hosts/host-1/metrics/history?window=1h", nil)
+	req.SetPathValue("id", "host-1")
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var got hosts.HistoryWindow
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got.Resolution != "raw" || len(got.Samples) != 1 || got.Samples[0].CPUPercent != 12.5 {
+		t.Errorf("history = %+v, unexpected", got)
+	}
+}
+
+func TestHandleHostMetricsHistoryUnknownHostReturnsEmptyWindow(t *testing.T) {
+	history := fakeHostHistory{byHost: map[string]hosts.HistoryWindow{}}
+	h := handleHostMetricsHistory(history)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/hosts/ghost/metrics/history", nil)
+	req.SetPathValue("id", "ghost")
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (no error for a host with no telemetry yet)", rec.Code)
+	}
+	var got hosts.HistoryWindow
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(got.Samples) != 0 || len(got.Aggregates) != 0 {
+		t.Errorf("history = %+v, want empty window", got)
+	}
+}
+
+func TestHandleHostMetricsHistoryInvalidWindowFallsBackToDefault(t *testing.T) {
+	history := fakeHostHistory{byHost: map[string]hosts.HistoryWindow{
+		"host-1": {Resolution: "raw"},
+	}}
+	h := handleHostMetricsHistory(history)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/hosts/host-1/metrics/history?window=not-a-duration", nil)
+	req.SetPathValue("id", "host-1")
+	h(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (invalid window silently falls back)", rec.Code)
+	}
+}

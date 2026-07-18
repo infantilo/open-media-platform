@@ -2622,6 +2622,15 @@ Advisory-zuerst-Staffelung wie §6.1).
   → Verlauf und Min/Ø/Max ändern sich nachvollziehbar;
   Orchestrator-Neustart leert die Kurve (dokumentiertes Verhalten,
   kein Bug).
+  ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 31) —
+  zweistufiger Ringpuffer (`hosts.History`: Rohsamples ~1h, 1-Minuten-
+  Aggregate ~24h), `GET /api/v1/hosts/{id}/metrics/history?window=…`,
+  Sparkline + Min/Ø/Max-Spalte in `hosts-view.ts`. Live gegen einen
+  echten `omp-host-agent`-Prozess verifiziert (Roh-Fenster nach ~45s,
+  ein abgeschlossener Aggregat-Bucket nach realem Warten über die
+  Minutengrenze hinaus) plus CDP-Browser-Check der gerenderten
+  Sparkline. Teile 2–4 (Pro-Instanz-Telemetrie, Typ-Profile,
+  Anbindung) bleiben offen.
 - **Teil 2 — Pro-Instanz-Telemetrie:** PID-Messung in Agent +
   lokalem Launcher, additives Payload-Feld, Anzeige pro Instanz
   (hosts-view-Detail bzw. Palette-Instanzzeile).

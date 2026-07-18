@@ -7914,3 +7914,89 @@ Prozesse), Orchestrator gestoppt.
 bewusst ausgenommen, s. §15.4-Begründung: Template-Auflösung statt
 generischer Testauflösung). Teil 2 (zweiter, echter Lowres-MXL-Sender
 in `omp-mediaio::mxl`) ist die nächste offene Kapitel-15-Arbeit.
+
+## 2026-07-19 (Nachtrag 31) — Kapitel 14 Teil 1: Host-Gesamt-Historie
+(Sparkline + Min/Ø/Max)
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §14.4 Teil 1 — kleinste
+präsentationswirksame Scheibe von Kapitel 14 (Ressourcen-Historie):
+der Orchestrator hielt bisher nur den zuletzt empfangenen
+Host-Telemetrie-Wert (`hosts.Tracker`), keine Historie. Grundlage für
+§17 Teil 2 (Ressourcen-Sicht im Katalog) und spätere D7-Teil-2-
+Verfeinerung (Vorprüfung mit echten Profilen statt nur Momentwerten).
+
+**Umsetzung** (Go-Backend + UI, ein Rechenweg, kein neues Framework):
+- `orchestrator/internal/hosts/history.go`: neuer Typ `History` —
+  zweistufiger Ringpuffer pro Host, genau wie in §14.3a entworfen:
+  Roh-Samples (`rawCapacity` = 720 bei angenommenen 5s-Intervall ≈ 1h)
+  plus abgeschlossene 1-Minuten-Aggregate (`aggregateCapacity` = 1440
+  ≈ 24h, Min/Ø/Max pro Bucket). `Window(hostID, window)` liefert
+  Rohpunkte für `window <= 1h`, sonst abgeschlossene Aggregate (der
+  gerade offene Eimer ist bewusst nicht enthalten — noch nicht
+  min/avg/max-stabil). Bewusst in-memory (§14.5 offene Frage 2,
+  Empfehlung "für jetzt" übernommen) — Orchestrator-Neustart leert die
+  Kurve, dokumentiertes Verhalten, keine Postgres-Persistenz in dieser
+  Teilscheibe.
+- `main.go`: `hostHistory := hosts.NewHistory()`, im selben
+  NATS-Callback wie `hostMetricsTracker.Touch` befüllt (nach Touch()
+  einmal `Get()` statt den Payload ein zweites Mal zu parsen).
+- `GET /api/v1/hosts/{id}/metrics/history?window=<Go-Duration>` (neuer
+  Handler + `HostHistoryReader`-Interface in `host_handlers.go`),
+  nachsichtig wie `handleListAuditLog` (ungültiges/fehlendes `window`
+  fällt auf 1h zurück, kein 400; unbekannte Host-ID liefert ein leeres
+  Fenster statt 404 — der Aufrufer kennt gültige IDs bereits über
+  `GET /api/v1/hosts`).
+- `hosts-view.ts`: zwei neue Spalten ("Verlauf (1h)", "Min/Ø/Max CPU")
+  — Sparkline als einzelnes Inline-SVG-`<path>` (keine feste
+  0–100%-Skala-Normalisierung auf den beobachteten Min/Max, damit
+  Zeilen verschiedener Hosts optisch vergleichbar bleiben; kein
+  Chart-Framework, Minimal-Dependency-Regel). Ein `GET
+  .../metrics/history?window=1h` pro Host und Poll-Zyklus (parallel via
+  `Promise.all`, gleiches Muster wie der bestehende
+  hosts+advice-Fetch) — bei der Ziel-Größenordnung "etliche Hosts"
+  bewusst kein gebündelter Endpunkt, §14.3a spezifiziert ohnehin genau
+  diese Pro-Host-Route.
+- `NewHandler(...)` bekam einen zusätzlichen `hostHistory
+  HostHistoryReader`-Parameter — alle 33 Testaufrufstellen in
+  `server_test.go` mechanisch per `sed` um `fakeHostHistory{}`
+  ergänzt (gleiches Muster wie der Parameter selbst: einfache
+  Positions-DI, keine Builder-Refaktorierung).
+
+**Verifiziert (echte Prozesse, kein Mock):** `go build ./...`, `go vet
+./...`, `go test ./...` grün (neue Tests: `history_test.go` mit
+eingespeisten Zeitstempeln für Bucket-Schluss/Trimmen/Clamping,
+`host_handlers_test.go` für den neuen Handler); `deno check ui/**/*.ts`
++ `deno test ui/` grün; `cargo test --workspace` grün (mit
+`deploy/dev/mxl.env` — die vier `omp-mediaio`-Testfehler bei einem
+bloßen `make check` ohne gesourctes Env sind der bekannte
+`LD_LIBRARY_PATH`-Umgebungs-Gotcha, keine Regression).
+
+Live-Ende-zu-Ende gegen einen echten, per `make start` laufenden
+Orchestrator: ein echter `omp-host-agent`-Prozess (Bootstrap-Token
+direkt über `hosts.Store.CreateBootstrapToken` gemintet, temporäres
+`orchestrator/cmd/devtool` — nicht Teil des Repos, nach Gebrauch
+gelöscht) lief real gegen NATS/Registry. `GET
+.../metrics/history?window=1h` zeigte nach ~45s sieben echte
+Roh-Samples mit korrektem Min/Ø/Max; nach realem Warten über eine
+volle Minute hinaus zeigte `?window=2h` genau einen abgeschlossenen
+1-Minuten-Aggregat-Bucket (`resolution: "aggregate"`) mit demselben
+Min/Ø/Max wie zuvor über die Rohdaten — Aggregat-Schluss-Logik damit
+nicht nur unit-getestet, sondern auch mit echter Wanduhrzeit bestätigt.
+UI per Node-CDP-WebSocket (`feedback_browser_verification_cdp_over_dump_dom`-
+Muster) gegen einen echten headless Chromium verifiziert: Hosts-Tab
+zeigt die neue Sparkline (SVG-`<path>` mit sichtbaren, plausiblen
+Punkten) und die Min/Ø/Max-Spalte ("3 / 8 / 14%") für den echten
+Host-Agent-Prozess. Alle Testartefakte danach entfernt: Prozesse
+(host-agent, Chromium) gekillt, temporärer Test-Admin-Nutzer und
+Test-Host aus Postgres gelöscht, `orchestrator/cmd/devtool` gelöscht,
+Orchestrator gestoppt. Anmerkung: die im DB verbliebene, aus einer
+früheren Sitzung stammende synthetische "admin"-Testzeile war bereits
+vor dieser Sitzung ohne bekanntes Passwort verwaist — für den
+Auth-Pfad dieses Tests entfernt und durch einen eigenen Test-Nutzer
+ersetzt (ebenfalls aufgeräumt); die Postgres-Nutzertabelle ist jetzt
+leer (Bootstrap-Modus), kein Datenverlust realer Nutzerdaten.
+
+**Nicht Teil dieser Scheibe** (laut Phasenplan direkte Folgearbeit):
+Teil 2 (Pro-Instanz-Telemetrie per `/proc/<pid>`), Teil 3
+(Typ-Profile + Start-Warnung), Teil 4 (Anbindung an D7-Teil-2 und
+§16-Kapazitäts-Zeitstrahl).

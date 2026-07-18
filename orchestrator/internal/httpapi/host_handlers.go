@@ -10,6 +10,17 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
+// defaultHistoryWindow/maxHistoryWindow (Kapitel 14 Teil 1,
+// docs/END-GOAL-FEATURES.md §14.3a/§14.4): 1h Default (Sparkline in
+// Roh-Auflösung), 24h Obergrenze (deckungsgleich mit
+// hosts.History-Aggregatfenster — größere Anfragen liefern einfach die
+// vollen 24h statt eines Fehlers, gleiche Nachsichtigkeit wie bei
+// handleListAuditLog).
+const (
+	defaultHistoryWindow = time.Hour
+	maxHistoryWindow     = 24 * time.Hour
+)
+
 // bootstrapTokenTTL ist die Gültigkeitsdauer eines ausgestellten
 // Host-Bootstrap-Tokens (ARCHITECTURE.md §18.3 Punkt 1: "z. B. 1 h
 // gültig, single-use").
@@ -28,6 +39,12 @@ type HostRegistry interface {
 // eines Hosts (implementiert von *hosts.Tracker).
 type HostMetricsReader interface {
 	Get(hostID string) (hosts.Metrics, bool)
+}
+
+// HostHistoryReader liefert die Zeitreihe eines Hosts über ein Fenster
+// (implementiert von *hosts.History, Kapitel 14 Teil 1).
+type HostHistoryReader interface {
+	Window(hostID string, window time.Duration) (hosts.HistoryWindow, bool)
 }
 
 type bootstrapTokenResponse struct {
@@ -144,5 +161,34 @@ func handleListHosts(registry HostRegistry, metrics HostMetricsReader) http.Hand
 			}
 		}
 		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// handleHostMetricsHistory ist GET /api/v1/hosts/{id}/metrics/history?
+// window=<Go-Duration, z. B. "1h"/"24h"> (Kapitel 14 Teil 1,
+// docs/END-GOAL-FEATURES.md §14.4 Teil 1) — Sparkline- und
+// Min/Ø/Max-Datengrundlage für hosts-view.ts. Kein 404 bei unbekannter
+// Host-ID (view-artiger Endpunkt wie handleListHosts: der Aufrufer weiß
+// bereits, welche IDs existieren, per GET /api/v1/hosts) — stattdessen
+// ein leeres Fenster, damit ein Host ohne jemals empfangene Telemetrie
+// (z. B. gerade erst registriert) keinen Fehler auslöst.
+func handleHostMetricsHistory(history HostHistoryReader) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		hostID := r.PathValue("id")
+		window := defaultHistoryWindow
+		if v := r.URL.Query().Get("window"); v != "" {
+			if parsed, err := time.ParseDuration(v); err == nil && parsed > 0 {
+				window = parsed
+			}
+		}
+		if window > maxHistoryWindow {
+			window = maxHistoryWindow
+		}
+
+		win, ok := history.Window(hostID, window)
+		if !ok {
+			win = hosts.HistoryWindow{Resolution: "raw"}
+		}
+		writeJSON(w, http.StatusOK, win)
 	}
 }
