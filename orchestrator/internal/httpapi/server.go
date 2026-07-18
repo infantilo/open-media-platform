@@ -98,6 +98,9 @@ type WorkflowService interface {
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
+	Pause(ctx context.Context, id string, confirm bool) error
+	Export(id string) (workflows.ExportedWorkflow, error)
+	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -206,6 +209,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("DELETE /api/v1/workflows/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/start", g.requireVerbGlobal(authz.VerbAdmin, handleStartWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
+	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireAuth(handleExportWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return noStoreForAPI(mux)

@@ -141,6 +141,68 @@ func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handlePauseWorkflow liefert POST /api/v1/workflows/{id}/pause
+// (Kapitel 12 Teil 3, §12.3c) — analog zu handleStopWorkflow, gleiches
+// optionales {"confirm": true} für confirm_stop (gilt identisch für
+// Pause, s. workflows.Service.Pause).
+func handlePauseWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var body struct {
+			Confirm bool `json:"confirm"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := svc.Pause(r.Context(), id, body.Confirm); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		wf, err := svc.Get(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
+// handleExportWorkflow liefert GET /api/v1/workflows/{id}/export
+// (Kapitel 12 Teil 3, §12.3d) — in jedem Zustand abrufbar.
+func handleExportWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		exported, err := svc.Export(r.PathValue("id"))
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, exported)
+	}
+}
+
+// handleImportWorkflow liefert POST /api/v1/workflows/import — Body ist
+// exakt das von handleExportWorkflow gelieferte Format. Legt immer
+// einen neuen, gestoppten Workflow an (kein Überschreiben eines
+// bestehenden).
+func handleImportWorkflow(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body workflows.ExportedWorkflow
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		wf, err := svc.Import(body)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
 func writeWorkflowError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, workflows.ErrNotFound):

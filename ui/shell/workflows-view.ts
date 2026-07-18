@@ -102,7 +102,21 @@ const STATUS_COLORS: Record<string, string> = {
   started: "#4caf50",
   stopping: "#e0a020",
   failed: "#e57373",
+  // Kapitel 12 Teil 3: eigene Farbe statt "stopped" grau — visuell klar
+  // unterscheidbar, dass hier bewusst pausiert statt (endgültig)
+  // gestoppt wurde.
+  paused: "#5b9bd5",
+  pausing: "#e0a020",
 };
+
+// ExportedWorkflow (Kapitel 12 Teil 3, §12.3d) — Wire-Format identisch
+// zu workflows.ExportedWorkflow. Bewusst nur Definition, s. Backend-Doku
+// (orchestrator/internal/workflows/types.go).
+interface ExportedWorkflow {
+  version: number;
+  name: string;
+  definition: Workflow["definition"];
+}
 
 class WorkflowsView extends HTMLElement {
   #pollHandle: number | undefined;
@@ -300,6 +314,86 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
+  // Kapitel 12 Teil 3 (§12.3c): technisch identisch zu #stopWorkflow
+  // (gleiche Ressourcen-Wirkung, gleiche confirm_stop-Regel), landet nur
+  // in "paused" statt "stopped".
+  async #pauseWorkflow(wf: Workflow) {
+    if (wf.definition.settings?.confirmStop) {
+      const ok = await confirmDialog(`Workflow „${wf.name}" wirklich pausieren?`, { confirmLabel: "Pausieren" });
+      if (!ok) return;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/pause`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        showToast(`Pausieren fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+    } catch (err) {
+      showToast(`Pausieren fehlgeschlagen: ${err}`);
+      return;
+    }
+    await this.#poll();
+  }
+
+  // Kapitel 12 Teil 3 (§12.3d): lädt die Datei über den normalen
+  // Browser-Download-Mechanismus herunter (Blob + <a download>), keine
+  // eigene Dialog-UI nötig.
+  async #exportWorkflow(wf: Workflow) {
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
+      if (!res.ok) {
+        showToast(`Export fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+      const exported = (await res.json()) as ExportedWorkflow;
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const safeName = wf.name.replace(/[^\w\-]+/g, "_") || "workflow";
+      link.download = `${safeName}.omp-workflow.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showToast(`Export fehlgeschlagen: ${err}`);
+    }
+  }
+
+  // Kapitel 12 Teil 3 (§12.3d): liest die vom Nutzer gewählte Datei,
+  // schickt sie unverändert an POST /api/v1/workflows/import — die
+  // eigentliche Validierung (Katalog-Abgleich, Namenskollision) macht
+  // der Orchestrator (workflows.Service.Import).
+  async #importWorkflowFile(file: File) {
+    let exported: ExportedWorkflow;
+    try {
+      exported = JSON.parse(await file.text());
+    } catch (err) {
+      showToast(`Import fehlgeschlagen: Datei ist kein gültiges JSON (${err})`);
+      return;
+    }
+    try {
+      const res = await apiFetch("/api/v1/workflows/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exported),
+      });
+      if (!res.ok) {
+        showToast(`Import fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+      const created = (await res.json()) as Workflow;
+      showToast(`Workflow „${created.name}" importiert.`);
+    } catch (err) {
+      showToast(`Import fehlgeschlagen: ${err}`);
+      return;
+    }
+    await this.#poll();
+  }
+
   async #deleteWorkflow(id: string) {
     try {
       const res = await apiFetch(`/api/v1/workflows/${id}`, { method: "DELETE" });
@@ -335,6 +429,25 @@ class WorkflowsView extends HTMLElement {
       this.#render();
     });
     heading.appendChild(newBtn);
+
+    // Kapitel 12 Teil 3 (§12.3d): <label> um ein verstecktes
+    // <input type="file"> — Klick auf das Label öffnet nativ den
+    // Datei-Dialog, kein eigener Klick-Handler nötig.
+    const importLabel = document.createElement("label");
+    importLabel.textContent = "Importieren";
+    importLabel.style.cssText =
+      "font-size:11px;cursor:pointer;border:1px solid #555;border-radius:3px;padding:2px 6px;margin-left:6px;";
+    const importInput = document.createElement("input");
+    importInput.type = "file";
+    importInput.accept = "application/json";
+    importInput.style.display = "none";
+    importInput.addEventListener("change", () => {
+      const file = importInput.files?.[0];
+      if (file) void this.#importWorkflowFile(file);
+      importInput.value = ""; // dieselbe Datei später erneut wählbar machen
+    });
+    importLabel.appendChild(importInput);
+    heading.appendChild(importLabel);
     this.appendChild(heading);
 
     if (this.#showForm) {
@@ -410,12 +523,20 @@ class WorkflowsView extends HTMLElement {
     }
 
     const actions = document.createElement("div");
-    actions.style.cssText = "margin-top:4px;display:flex;gap:6px;";
-    const canStart = wf.status === "stopped" || wf.status === "failed";
+    actions.style.cssText = "margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;";
+    // "paused" startet identisch zu "stopped"/"failed" (Kapitel 12
+    // Teil 3: "Resume = normaler Start").
+    const canStart = wf.status === "stopped" || wf.status === "failed" || wf.status === "paused";
     const canStop = wf.status === "started" || wf.status === "failed" || wf.status === "starting";
+    // Nur ein laufender Workflow lässt sich pausieren (paus­ieren eines
+    // bereits gestoppten/pausierten Workflows ist bedeutungslos).
+    const canPause = wf.status === "started" || wf.status === "failed" || wf.status === "starting";
+    // Bearbeiten/Löschen: "stopped" und "paused" (Kapitel 12 Teil 3
+    // erweitert §12.3c das ausdrücklich).
+    const isIdle = wf.status === "stopped" || wf.status === "paused";
 
     const startBtn = document.createElement("button");
-    startBtn.textContent = "Start";
+    startBtn.textContent = wf.status === "paused" ? "Fortsetzen" : "Start";
     startBtn.style.cssText = "font-size:11px;cursor:pointer;";
     startBtn.disabled = !canStart;
     startBtn.addEventListener("click", () => this.#startWorkflow(wf.id));
@@ -428,25 +549,40 @@ class WorkflowsView extends HTMLElement {
     stopBtn.addEventListener("click", () => this.#stopWorkflow(wf));
     actions.appendChild(stopBtn);
 
-    // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): nur im Zustand
-    // "stopped" möglich (s. workflows.Service.Update) — gleiche
-    // Begründung wie beim Löschen, kein Umschreiben unter laufenden
-    // Prozessen.
+    // Kapitel 12 Teil 3 (§12.3c).
+    const pauseBtn = document.createElement("button");
+    pauseBtn.textContent = "Pausieren";
+    pauseBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    pauseBtn.disabled = !canPause;
+    pauseBtn.addEventListener("click", () => this.#pauseWorkflow(wf));
+    actions.appendChild(pauseBtn);
+
+    // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}): "stopped"/"paused"
+    // (s. workflows.Service.Update) — gleiche Begründung wie beim
+    // Löschen, kein Umschreiben unter laufenden Prozessen.
     const editBtn = document.createElement("button");
     editBtn.textContent = "Bearbeiten";
     editBtn.style.cssText = "font-size:11px;cursor:pointer;";
-    editBtn.disabled = wf.status !== "stopped";
-    editBtn.title = wf.status !== "stopped" ? "Erst stoppen, dann bearbeiten" : "";
+    editBtn.disabled = !isIdle;
+    editBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
     editBtn.addEventListener("click", () => this.#editWorkflow(wf));
     actions.appendChild(editBtn);
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
     delBtn.style.cssText = "font-size:11px;cursor:pointer;";
-    delBtn.disabled = wf.status !== "stopped";
-    delBtn.title = wf.status !== "stopped" ? "Erst stoppen, dann löschen" : "";
+    delBtn.disabled = !isIdle;
+    delBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann löschen";
     delBtn.addEventListener("click", () => this.#deleteWorkflow(wf.id));
     actions.appendChild(delBtn);
+
+    // Kapitel 12 Teil 3 (§12.3d): in jedem Zustand exportierbar (der
+    // Export beschreibt die Definition, nicht den Laufzeitzustand).
+    const exportBtn = document.createElement("button");
+    exportBtn.textContent = "Exportieren";
+    exportBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    exportBtn.addEventListener("click", () => this.#exportWorkflow(wf));
+    actions.appendChild(exportBtn);
 
     row.appendChild(actions);
     return row;

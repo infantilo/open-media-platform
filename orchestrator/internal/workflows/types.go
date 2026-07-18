@@ -16,13 +16,22 @@ package workflows
 
 import "time"
 
-// Status-Werte eines Workflows (Lifecycle, §6.2).
+// Status-Werte eines Workflows (Lifecycle, §6.2; paused/pausing:
+// Kapitel 12 Teil 3, docs/END-GOAL-FEATURES.md §12.3c). "paused" hat
+// dieselbe Ressourcen-Wirkung wie "stopped" (keine Prozesse) — der
+// Unterschied ist ausschließlich Editor-Sichtbarkeit/Absicht ("kommt
+// wieder"): der Flow-Editor rendert einen pausierten Workflow
+// weiterhin als benannten Rahmen mit Platzhalter-Kacheln, ein
+// gestoppter verschwindet von der Canvas. Resume = normaler Start()
+// (kein eigener Zustandsübergang).
 const (
 	StatusStopped  = "stopped"
 	StatusStarting = "starting"
 	StatusStarted  = "started"
 	StatusStopping = "stopping"
 	StatusFailed   = "failed"
+	StatusPaused   = "paused"
+	StatusPausing  = "pausing"
 )
 
 // Role ist eine benötigte Node-Rolle innerhalb eines Workflows — „Rolle"
@@ -158,6 +167,21 @@ type Definition struct {
 type RoleRuntime struct {
 	InstanceID string `json:"instanceId"`
 	NodeID     string `json:"nodeId,omitempty"`
+}
+
+// ExportedWorkflow ist das Datei-Format für Kapitel 12 Teil 3
+// (docs/END-GOAL-FEATURES.md §12.3d: "ein Regieplatz wandert als Datei
+// zwischen Systemen, ohne Nutzerdaten mitzuschleppen" — bewusst
+// getrennt vom K11-Systemexport). Bewusst nur die Definition —
+// `layoutFragment`/`parameterSnapshot` aus der vollen Spezifikation
+// sind hier nicht Teil (docs/decisions.md 2026-07-18): reine Positions-
+// /Parameter-Mitnahme ist UI-/Snapshot-Komfort, nicht Teil der
+// Kernverifikation "Export → Delete → Import → Start → identisches
+// Verhalten" — dokumentierte Folgearbeit.
+type ExportedWorkflow struct {
+	Version    int        `json:"version"`
+	Name       string     `json:"name"`
+	Definition Definition `json:"definition"`
 }
 
 // Workflow ist der Body von GET /api/v1/workflows (Liste/Einzelabruf)

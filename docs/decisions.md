@@ -6866,3 +6866,115 @@ vorbefüllt. Alle Test-Workflows/-Instanzen danach entfernt.
 Export/Import-Datei) — jetzt der nächste empfohlene Schritt laut
 §12.4, da D7 Teil 2 (dort als Zwischenschritt vor Teil 3 vorgesehen)
 abgeschlossen ist.
+
+## 2026-07-18 (Nachtrag 20) — Kapitel 12 Teil 3: Pause-Zustand +
+Export/Import
+
+**Zwei offene Fragen aus §12.5 bewusst mit den im Dokument bereits
+genannten Vorschlägen beantwortet, ohne Rückfrage** (beide sind als
+"reicht die vorgeschlagene X, oder..." formuliert, keine echte
+Weggabelung — die Sitzung ist damit nicht blockiert):
+- **Frage 1 (Pause vs. Stop):** die vorgeschlagene Unterscheidung
+  (identische Ressourcen-Wirkung, nur Editor-Sichtbarkeit/Absicht
+  unterschiedlich) umgesetzt. Der zusätzlich gestellte Unterfall
+  ("soll paused zusätzlich Zustand konservieren, z. B. Zeitpläne
+  ausgesetzt statt gelöscht?") ist durch die D7-Teil-2-Umsetzung
+  bereits beantwortet, ohne dass diese Sitzung dafür etwas Neues bauen
+  musste: `Definition.Schedules` wird von `Stop()`/`Pause()` nie
+  angefasst (nur `Status`/`Runtime`/`Error`) — ein Zeitplan überlebt
+  sowohl Stop als auch Pause unverändert, es gibt also keinen
+  Unterschied zu konservieren.
+- **Frage 2 (Export-Umfang):** bewusst **nicht** die volle
+  Spezifikation (Definition + Layout + Parameter-Snapshot), sondern
+  nur die Definition — Begründung unten (Positions-/Snapshot-Mitnahme
+  hat einen echten technischen Haken, kein bloßes Zeitsparen).
+
+**Umsetzung:**
+
+a) **`paused`-Zustand.** Neue Status `paused`/`pausing`;
+`Service.Pause(ctx, id, confirm)` — technisch identisch zu `Stop()`
+(gleiche `runStop()`-Routine, jetzt um einen `targetStatus`-Parameter
+erweitert), landet aber in `paused`; `confirm_stop` (D7 Teil 2) gilt
+für Pause genauso wie für Stop. `Start()` akzeptiert `paused` als
+Vorzustand — "Resume = normaler Start" braucht dafür keinen eigenen
+Codepfad, da `Pause()` dieselben Prozesse wie `Stop()` beendet und
+`Start()` bei jedem Aufruf ohnehin frisch provisioniert.
+`Update()`/`Delete()` akzeptieren `paused` zusätzlich zu `stopped`
+(§12.3c wörtlich).
+
+b) **Platzhalter-Rendering** (`ui/graph/flow-canvas.ts`). Bewusste
+Design-Entscheidung, ohne die im Dokument angedeutete
+Positions-Vererbung über `wf.Runtime[role].NodeID`: ein pausierter
+Workflow hat **keine** Runtime-Node-IDs mehr (Pause leert `Runtime`
+genau wie Stop, s. o.) — es gibt also keine natürliche ID, an die sich
+eine Position hängen ließe, ohne `Runtime` beim Pausieren absichtlich
+NICHT zu leeren (hätte `#pruneStalePositions()` unterlaufen müssen,
+mehr Sonderfall-Code). Stattdessen: synthetische Tile-IDs
+(`paused:<workflowId>:<role>`, `pausedPlaceholderId()`), die am
+*bestehenden* Positions-Zuweisungs-/Pruning-Mechanismus
+(`#assignMissingPositions`/`#pruneStalePositions`) teilnehmen wie jede
+echte Node-/Gruppen-ID — Platzhalter-Positionen sind damit über
+Reloads stabil, ohne eine zweite Positions-Infrastruktur zu erfinden.
+Kachel: Rollenname + Node-Typ, gestrichelter Rahmen, keine Ports (ein
+pausierter Workflow hat keinen laufenden Node, der welche liefern
+könnte). Verbindungen: gestrichelte Linien Kachelmitte-zu-Kachelmitte
+(ohne Port-Geometrie, die gibt es ohne laufenden Node nicht) für jeden
+`definition.connections`-Eintrag. Der bereits in Kapitel 12 Teil 2
+gebaute Workflow-Rahmen wurde erweitert, um auch um diese
+Platzhalter-Kacheln zu zeichnen (Status "paused" umgeht dabei die
+Teil-2-Bedingung "Node muss gerade eine sichtbare Kachel sein", die
+für echte Runtime-Nodes gilt, aber auf Platzhalter nicht zutrifft).
+
+c) **Export/Import** (`GET /api/v1/workflows/{id}/export`,
+`POST /api/v1/workflows/import`). **Bewusst nur `{version, name,
+definition}`** — kein `layoutFragment`, kein `parameterSnapshot` aus
+der vollen §12.3d-Spezifikation. Grund, nicht nur Zeitersparnis: ein
+`parameterSnapshot` würde die bestehende Snapshot/Apply-Maschinerie
+(B7) wiederverwenden müssen, die node-ID-gescopt ist — nach einem
+Import (oder auch nur einem Neustart) hat jede Rolle zwangsläufig
+**neue** Node-IDs, ein Snapshot müsste also erst rollenbewusst
+umgemappt werden, eine Fähigkeit, die es heute nicht gibt (dokumentierte
+Folgearbeit). `layoutFragment` ist mit der Platzhalter-Lösung aus b)
+ohnehin überholt: die Platzhalter-Position ist rein client-seitiges
+Zustand (im Layout-Blob, nicht im Workflow-Objekt) — ein
+`layoutFragment` im Export wäre eine dritte Positions-Quelle, die mit
+dem bestehenden Positions-Zuweisungs-Mechanismus konkurrieren würde,
+ohne einen zusätzlichen Nutzen zu bieten (die Kernverifikation
+"Export → Delete → Import → Start → identisches Verhalten" prüft
+Funktion, nicht Pixel-Position). Import validiert jede Rolle gegen den
+Launcher-Katalog (`Launcher.Catalog()`, neue Interface-Methode) —
+unbekannter `nodeType` → `ErrValidation` statt Import-Torso;
+Namenskollision → automatischer Suffix `" (2)"`, `" (3)"`, … (Vorschlag
+aus §12.3d gewählt: "Suffix oder Fehler").
+
+**Tests:** `service_test.go` — 11 neue Tests (Pause-Erfolgs-/Ablehnungs-/
+Bestätigungs-Pfad, Resume aus "paused", Delete/Update erlauben
+"paused", Export-Rundlauf + unbekannte ID, Import lehnt unbekannten
+Katalog-Typ ab, Import legt gestoppten Workflow an, Import
+dedupliziert Namenskollision). `go build`/`go vet`/`go test ./...`
+grün. `deno check`/`deno test` grün (keine neuen `.ts`-Unit-Tests —
+Platzhalter-Rendering ist DOM-lastig, Verifikation live per CDP, s. u.).
+
+**Live verifiziert (echter Orchestrator, echte `omp-source`/
+`omp-viewer`-Instanzen), exakt die in §12.4 Teil 3 geforderte
+Verifikation:**
+- Workflow mit zwei Rollen + einer Connection gestartet (zwei echte
+  Prozesse, `ps` bestätigt), pausiert → `GET` zeigt `status: paused`,
+  `runtime` leer, **`ps` bestätigt keine Prozesse mehr**. CDP-Session:
+  genau zwei Platzhalter-Kacheln ("src"/"omp-source",
+  "view"/"omp-viewer"), eine gestrichelte Verbindungslinie, ein
+  Workflow-Rahmen mit Label "▭ Pause Test (paused)".
+- Resume (`POST .../start` aus "paused"): frische Instanzen, `status:
+  started`, echte Prozesse laufen.
+- **Export → Delete → Import → Start → identisches Verhalten:**
+  Export-JSON abgerufen, Workflow gelöscht (`GET` bestätigt 404),
+  Import aus der Export-Datei erzeugt einen neuen `stopped`-Workflow
+  mit identischer Definition, Start liefert zwei frische, korrekt
+  verkabelte Instanzen (`GET /api/v1/graph` bestätigt die reale
+  IS-05-Kante).
+
+Alle Test-Workflows/-Instanzen/-Layout-Einträge danach entfernt.
+
+**Nicht Teil dieser Sitzung:** rollenbewusstes Parameter-Snapshot-Remapping
+für Export/Import (s. o., Folgearbeit für B7); Kapitel 12 Teil 4
+(Workflow-Scope-AuthZ) — nächster empfohlener Schritt laut §12.4.

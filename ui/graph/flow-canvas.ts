@@ -124,12 +124,22 @@ interface WorkflowSummary {
   name: string;
   status: string;
   runtime?: Record<string, { instanceId: string; nodeId?: string }>;
+  // Kapitel 12 Teil 3 (§12.3c): für die Platzhalter-Kacheln eines
+  // pausierten Workflows — der hat keine Runtime-Nodes mehr (gleiche
+  // Ressourcen-Wirkung wie "stopped"), daher Rollenname+Typ+Template-
+  // Kanten direkt aus der Definition statt aus Runtime-Node-IDs.
+  definition: {
+    roles: { name: string; nodeType: string }[];
+    connections: { fromRole: string; toRole: string }[];
+  };
 }
 
 const WORKFLOW_FRAME_COLORS: Record<string, string> = {
   stopped: "#999",
   starting: "#e0a020",
   started: "#4caf50",
+  paused: "#5b9bd5",
+  pausing: "#e0a020",
   stopping: "#e0a020",
   failed: "#e57373",
 };
@@ -552,6 +562,7 @@ export class FlowCanvas extends HTMLElement {
     const validIds = new Set<string>([
       ...this.#graph.nodes.map((n) => n.id),
       ...Object.keys(this.#groupTree.groups),
+      ...this.#pausedPlaceholderIds(),
     ]);
     let changed = false;
     for (const id of Object.keys(this.#positions)) {
@@ -595,7 +606,7 @@ export class FlowCanvas extends HTMLElement {
     // alle stapeln sich auf derselben Default-Position — beobachtet mit
     // vier gestarteten Instanzen, die alle auf (40,40) landeten.
     let nextIndex = Object.keys(this.#positions).length;
-    for (const id of [...items.nodeIds, ...items.groupIds]) {
+    for (const id of [...items.nodeIds, ...items.groupIds, ...this.#pausedPlaceholderIds()]) {
       if (!this.#positions[id]) {
         this.#positions[id] = defaultPosition(nextIndex);
         nextIndex++;
@@ -604,6 +615,17 @@ export class FlowCanvas extends HTMLElement {
     }
     if (changed && save) this.#saveLayout();
     return changed;
+  }
+
+  #pausedPlaceholderIds(): string[] {
+    const ids: string[] = [];
+    for (const wf of this.#workflows) {
+      if (wf.status !== "paused") continue;
+      for (const role of wf.definition.roles) {
+        ids.push(pausedPlaceholderId(wf.id, role.name));
+      }
+    }
+    return ids;
   }
 
   #itemsAtScope(): { nodeIds: string[]; groupIds: string[] } {
@@ -688,6 +710,12 @@ export class FlowCanvas extends HTMLElement {
     for (const frame of this.#buildWorkflowFrames(tiles)) {
       this.#viewportGroup.appendChild(frame);
     }
+    for (const line of this.#buildPausedPlaceholderEdges()) {
+      this.#viewportGroup.appendChild(line);
+    }
+    for (const placeholder of this.#buildPausedPlaceholderTiles()) {
+      this.#viewportGroup.appendChild(placeholder);
+    }
     for (const tile of tiles) {
       this.#viewportGroup.appendChild(this.#renderTile(tile));
     }
@@ -711,15 +739,24 @@ export class FlowCanvas extends HTMLElement {
     const frames: SVGGElement[] = [];
 
     for (const wf of this.#workflows) {
-      const nodeIds = Object.values(wf.runtime ?? {})
-        .map((rt) => rt.nodeId)
-        .filter((id): id is string => !!id);
-      if (nodeIds.length === 0) continue;
-      if (!nodeIds.every((id) => visibleIds.has(id) && this.#positions[id])) continue;
+      // Kapitel 12 Teil 3: ein pausierter Workflow hat keine Runtime-
+      // Node-IDs mehr (Runtime wird beim Pausieren geleert, s. Backend-
+      // Doku workflows.Service.stopOrPause) — der Rahmen umschließt dann
+      // die Platzhalter-Kacheln (synthetische IDs, s.
+      // pausedPlaceholderId) statt echter Runtime-Nodes.
+      const isPaused = wf.status === "paused";
+      const ids = isPaused
+        ? wf.definition.roles.map((r) => pausedPlaceholderId(wf.id, r.name))
+        : Object.values(wf.runtime ?? {})
+            .map((rt) => rt.nodeId)
+            .filter((id): id is string => !!id);
+      if (ids.length === 0) continue;
+      if (!isPaused && !ids.every((id) => visibleIds.has(id))) continue;
+      if (!ids.every((id) => this.#positions[id])) continue;
 
-      const boxes = nodeIds.map((id) => {
+      const boxes = ids.map((id) => {
         const pos = this.#positions[id];
-        const height = this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        const height = isPaused ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
         return { minX: pos.x, minY: pos.y, maxX: pos.x + NODE_WIDTH, maxY: pos.y + height };
       });
 
@@ -759,6 +796,90 @@ export class FlowCanvas extends HTMLElement {
       frames.push(g);
     }
     return frames;
+  }
+
+  // Kapitel 12 Teil 3 (§12.3c wörtlich: "der Editor rendert die Rollen
+  // als Platzhalter-Kacheln (Rollenname + Typ, gestrichelter Rahmen …)
+  // im Workflow-Rahmen weiter"). Eine Kachel pro Rolle eines pausierten
+  // Workflows, an der synthetischen Position aus pausedPlaceholderId —
+  // keine Ports (ein pausierter Workflow hat keinen laufenden Node, der
+  // welche liefern könnte).
+  #buildPausedPlaceholderTiles(): SVGGElement[] {
+    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const tiles: SVGGElement[] = [];
+
+    for (const wf of this.#workflows) {
+      if (wf.status !== "paused") continue;
+      for (const role of wf.definition.roles) {
+        const id = pausedPlaceholderId(wf.id, role.name);
+        const pos = this.#positions[id];
+        if (!pos) continue;
+
+        const g = document.createElementNS(SVG_NS, "g");
+        g.setAttribute("data-role", "paused-placeholder");
+        g.setAttribute("data-id", id);
+        g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
+
+        const body = document.createElementNS(SVG_NS, "rect");
+        body.setAttribute("width", String(NODE_WIDTH));
+        body.setAttribute("height", String(height));
+        body.setAttribute("rx", "4");
+        body.setAttribute("fill", "none");
+        body.setAttribute("stroke", "#5b9bd5");
+        body.setAttribute("stroke-width", "2");
+        body.setAttribute("stroke-dasharray", "6 3");
+        g.appendChild(body);
+
+        const nameText = document.createElementNS(SVG_NS, "text");
+        nameText.setAttribute("x", "8");
+        nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+        nameText.setAttribute("fill", "#f0f0f0");
+        nameText.setAttribute("font-size", "12");
+        nameText.textContent = role.name;
+        g.appendChild(nameText);
+
+        const typeText = document.createElementNS(SVG_NS, "text");
+        typeText.setAttribute("x", "8");
+        typeText.setAttribute("y", String(HEADER_HEIGHT + 16));
+        typeText.setAttribute("fill", "#999");
+        typeText.setAttribute("font-size", "11");
+        typeText.textContent = role.nodeType;
+        g.appendChild(typeText);
+
+        tiles.push(g);
+      }
+    }
+    return tiles;
+  }
+
+  // Template-Kanten eines pausierten Workflows als gestrichelte Linien
+  // (§12.3c) — ohne Port-Geometrie (die gibt es ohne laufenden Node
+  // nicht), daher schlicht Kachelmitte zu Kachelmitte statt der
+  // bezier-basierten #renderEdge()-Kanten für echte Ports.
+  #buildPausedPlaceholderEdges(): SVGLineElement[] {
+    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const lines: SVGLineElement[] = [];
+
+    for (const wf of this.#workflows) {
+      if (wf.status !== "paused") continue;
+      for (const conn of wf.definition.connections) {
+        const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];
+        const toPos = this.#positions[pausedPlaceholderId(wf.id, conn.toRole)];
+        if (!fromPos || !toPos) continue;
+
+        const line = document.createElementNS(SVG_NS, "line");
+        line.setAttribute("data-role", "paused-placeholder-edge");
+        line.setAttribute("x1", String(fromPos.x + NODE_WIDTH / 2));
+        line.setAttribute("y1", String(fromPos.y + height / 2));
+        line.setAttribute("x2", String(toPos.x + NODE_WIDTH / 2));
+        line.setAttribute("y2", String(toPos.y + height / 2));
+        line.setAttribute("stroke", "#5b9bd5");
+        line.setAttribute("stroke-width", "2");
+        line.setAttribute("stroke-dasharray", "4 4");
+        lines.push(line);
+      }
+    }
+    return lines;
   }
 
   #renderBreadcrumb() {
@@ -2152,6 +2273,19 @@ function uniqueRoleName(nodeType: string, used: Set<string>): string {
   let i = 2;
   while (used.has(`${nodeType}-${i}`)) i++;
   return `${nodeType}-${i}`;
+}
+
+// Kapitel 12 Teil 3 (§12.3c): synthetische Tile-ID für die Platzhalter-
+// Kachel einer Rolle in einem pausierten Workflow — ein pausierter
+// Workflow hat keine Runtime-Node-IDs mehr (Runtime wird beim Pausieren
+// geleert, gleiche Ressourcen-Wirkung wie "stopped"), also keine
+// natürliche ID, an die sich eine Position hängen ließe. Diese
+// synthetische ID nimmt exakt am selben Positions-Zuweisungs-/Pruning-
+// Mechanismus wie echte Node-/Gruppen-IDs teil (#assignMissingPositions/
+// #pruneStalePositions) — die Platzhalter-Position ist damit über
+// Reloads hinweg stabil, genau wie bei jeder anderen Kachel.
+function pausedPlaceholderId(workflowId: string, role: string): string {
+  return `paused:${workflowId}:${role}`;
 }
 
 function healthColor(health: string): string {

@@ -105,6 +105,10 @@ type GraphService interface {
 type Launcher interface {
 	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
+	// Catalog liefert die bekannten Node-Typen (Kapitel 12 Teil 3,
+	// §12.3d: Import validiert unbekannte nodeType-Werte dagegen, statt
+	// einen Import-Torso anzulegen).
+	Catalog() []launcher.CatalogEntry
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -210,7 +214,7 @@ func (s *Service) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	if wf.Status != StatusStopped {
+	if wf.Status != StatusStopped && wf.Status != StatusPaused {
 		return ErrNotStopped
 	}
 	if err := s.store.Delete(id); err != nil {
@@ -225,12 +229,75 @@ func (s *Service) Delete(id string) error {
 	return nil
 }
 
-// Update überschreibt Name und Definition eines Workflows — nur im
-// Zustand "stopped" (§22.3 Punkt 2 / Kapitel 12 Teil 1,
+// exportVersion ist das Versionsfeld von ExportedWorkflow — bei einer
+// künftigen inkompatiblen Formatänderung hochzuzählen, damit Import()
+// eine verständliche Ablehnung statt eines stillen Fehlinterpretierens
+// liefern kann (heute noch keine Versionsprüfung nötig, es gibt nur
+// Version 1).
+const exportVersion = 1
+
+// Export liefert den Datei-Inhalt für GET /api/v1/workflows/{id}/export
+// (Kapitel 12 Teil 3, §12.3d) — in jedem Zustand abrufbar (auch
+// laufend: der Export beschreibt die Definition, nicht den
+// Laufzeitzustand).
+func (s *Service) Export(id string) (ExportedWorkflow, error) {
+	wf, err := s.store.Get(id)
+	if err != nil {
+		return ExportedWorkflow{}, err
+	}
+	return ExportedWorkflow{Version: exportVersion, Name: wf.Name, Definition: wf.Definition}, nil
+}
+
+// Import legt aus einer zuvor per Export() erzeugten Datei einen neuen,
+// gestoppten Workflow an (§12.3d). Validiert jede Rolle gegen den
+// Katalog — ein unbekannter nodeType ergibt eine verständliche
+// Ablehnung statt eines Import-Torsos (Definition wörtlich). Eine
+// Namenskollision bekommt einen Suffix statt den Import abzulehnen
+// ("Suffix oder Fehler" — Suffix gewählt: ein Import soll nicht daran
+// scheitern, dass zufällig schon ein gleichnamiger Workflow existiert).
+func (s *Service) Import(exported ExportedWorkflow) (Workflow, error) {
+	known := map[string]bool{}
+	for _, entry := range s.launcher.Catalog() {
+		known[entry.Type] = true
+	}
+	for _, role := range exported.Definition.Roles {
+		if !known[role.NodeType] {
+			return Workflow{}, fmt.Errorf("%w: role %q references unknown node type %q (not in catalog)", ErrValidation, role.Name, role.NodeType)
+		}
+	}
+
+	existing, err := s.store.List()
+	if err != nil {
+		return Workflow{}, err
+	}
+	name := uniqueWorkflowName(exported.Name, existing)
+
+	return s.Create(name, exported.Definition)
+}
+
+func uniqueWorkflowName(name string, existing []Workflow) string {
+	used := map[string]bool{}
+	for _, wf := range existing {
+		used[wf.Name] = true
+	}
+	if !used[name] {
+		return name
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s (%d)", name, i)
+		if !used[candidate] {
+			return candidate
+		}
+	}
+}
+
+// Update überschreibt Name und Definition eines Workflows — nur in
+// "stopped"/"paused" (§22.3 Punkt 2 / Kapitel 12 Teil 1,
 // docs/END-GOAL-FEATURES.md §12.3c: "PUT /api/v1/workflows/{id} …
-// §22.3 Punkt 2 einlösen"). Gleiche Begründung wie bei Delete: kein
-// Umschreiben der Definition unter noch laufenden Prozessen, die die
-// alte Definition ausführen.
+// §22.3 Punkt 2 einlösen"; Teil 3 §12.3c erweitert das ausdrücklich um
+// "paused"). Gleiche Begründung wie bei Delete: kein Umschreiben der
+// Definition unter noch laufenden Prozessen, die die alte Definition
+// ausführen.
 func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if err := validate(def); err != nil {
 		return Workflow{}, err
@@ -239,7 +306,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if err != nil {
 		return Workflow{}, err
 	}
-	if wf.Status != StatusStopped {
+	if wf.Status != StatusStopped && wf.Status != StatusPaused {
 		return Workflow{}, ErrNotStopped
 	}
 	wf.Name = name
@@ -260,12 +327,18 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 // weiteren Fortschritt beobachten. Das hält den HTTP-Handler kurz, auch
 // wenn reale GStreamer-Pipelines mehrere Sekunden zum Hochfahren
 // brauchen.
+//
+// Aus "paused" aufgerufen ist das gleichbedeutend mit "Resume" (Kapitel
+// 12 Teil 3, §12.3c: "Resume = normaler Start, inkl. D7-Teil-2-
+// Vorprüfung") — kein eigener Resume()-Pfad nötig, da Pause() dieselben
+// Prozesse wie Stop() beendet (s. Pause-Doku) und ein Neustart daher
+// ohnehin identisch zu einem regulären Start abläuft.
 func (s *Service) Start(ctx context.Context, id string) error {
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return err
 	}
-	if wf.Status != StatusStopped && wf.Status != StatusFailed {
+	if wf.Status != StatusStopped && wf.Status != StatusFailed && wf.Status != StatusPaused {
 		return ErrNotStopped
 	}
 	if err := s.checkResources(wf); err != nil {
@@ -733,6 +806,22 @@ func (s *Service) fail(wf Workflow, reason string) {
 // confirm=true auf — die Bestätigung ist beim Anlegen des Zeitplans
 // bereits erfolgt.
 func (s *Service) Stop(ctx context.Context, id string, confirm bool) error {
+	return s.stopOrPause(ctx, id, confirm, StatusStopped)
+}
+
+// Pause beendet alle laufenden Rollen-Instanzen eines Workflows — exakt
+// wie Stop() (Kapitel 12 Teil 3, §12.3c, wörtlich: "technisch stoppt
+// pause dieselben Prozesse wie stop — der Unterschied ist Sichtbarkeit
+// und Absicht"), landet aber in "paused" statt "stopped". Der Editor
+// rendert einen pausierten Workflow weiterhin als benannten Rahmen mit
+// Platzhalter-Kacheln (ui/graph/flow-canvas.ts), ein gestoppter
+// verschwindet von der Canvas. confirm_stop gilt identisch (gleiche
+// Ressourcen-Wirkung wie Stop, gleiche Rückfrage-Notwendigkeit).
+func (s *Service) Pause(ctx context.Context, id string, confirm bool) error {
+	return s.stopOrPause(ctx, id, confirm, StatusPaused)
+}
+
+func (s *Service) stopOrPause(ctx context.Context, id string, confirm bool, targetStatus string) error {
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return err
@@ -745,17 +834,20 @@ func (s *Service) Stop(ctx context.Context, id string, confirm bool) error {
 	}
 
 	wf.Status = StatusStopping
+	if targetStatus == StatusPaused {
+		wf.Status = StatusPausing
+	}
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		return err
 	}
 	s.publish(wf)
 
-	go s.runStop(wf)
+	go s.runStop(wf, targetStatus)
 	return nil
 }
 
-func (s *Service) runStop(wf Workflow) {
+func (s *Service) runStop(wf Workflow, targetStatus string) {
 	var errs []string
 	for role, rt := range wf.Runtime {
 		if rt.InstanceID == "" {
@@ -771,7 +863,7 @@ func (s *Service) runStop(wf Workflow) {
 		wf.Status = StatusFailed
 		wf.Error = fmt.Sprintf("stop finished with errors: %v", errs)
 	} else {
-		wf.Status = StatusStopped
+		wf.Status = targetStatus
 		wf.Error = ""
 	}
 	wf.UpdatedAt = time.Now()

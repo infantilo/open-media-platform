@@ -307,6 +307,11 @@ type fakeWorkflowService struct {
 	stopErr   error
 	updated   workflows.Workflow
 	updateErr error
+	pauseErr  error
+	exported  workflows.ExportedWorkflow
+	exportErr error
+	imported  workflows.Workflow
+	importErr error
 }
 
 func (f fakeWorkflowService) Create(name string, def workflows.Definition) (workflows.Workflow, error) {
@@ -326,6 +331,16 @@ func (f fakeWorkflowService) Delete(id string) error { return f.deleteErr }
 func (f fakeWorkflowService) Start(ctx context.Context, id string) error { return f.startErr }
 
 func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) error { return f.stopErr }
+
+func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool) error { return f.pauseErr }
+
+func (f fakeWorkflowService) Export(id string) (workflows.ExportedWorkflow, error) {
+	return f.exported, f.exportErr
+}
+
+func (f fakeWorkflowService) Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error) {
+	return f.imported, f.importErr
+}
 
 type fakePlacementAdvisor struct {
 	advice []placement.Advice

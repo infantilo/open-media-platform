@@ -168,6 +168,15 @@ type fakeLauncher struct {
 	// lastExtraEnv (Kapitel 15, §15.3c) — das extraEnv der zuletzt
 	// beobachteten Start()-Aufrufe, ein Eintrag pro nodeType.
 	lastExtraEnv map[string]map[string]string
+	// catalog (Kapitel 12 Teil 3, §12.3d) — von Import() gegen
+	// Rollen-nodeType-Werte geprüft.
+	catalog []launcher.CatalogEntry
+}
+
+func (f *fakeLauncher) Catalog() []launcher.CatalogEntry {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.catalog
 }
 
 func (f *fakeLauncher) Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
@@ -1084,5 +1093,211 @@ func TestCreateAcceptsValidSchedules(t *testing.T) {
 	}
 	if _, err := svc.Create("wf", def); err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
+	}
+}
+
+// --- Kapitel 12 Teil 3: Pause/Resume ---
+
+func TestPauseStopsRunningRolesAndLandsInPaused(t *testing.T) {
+	store := newFakeStore()
+	l := &fakeLauncher{}
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
+
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	running := wf
+	running.Status = StatusStarted
+	running.Runtime = map[string]RoleRuntime{"src": {InstanceID: "inst-src", NodeID: "node-src"}}
+	store.Put(running)
+
+	if err := svc.Pause(context.Background(), wf.ID, false); err != nil {
+		t.Fatalf("Pause() error = %v", err)
+	}
+
+	paused := waitForStatus(t, svc, wf.ID, StatusPaused)
+	if len(paused.Runtime) != 0 {
+		t.Errorf("Runtime = %+v, want empty after pause (same resource effect as stop)", paused.Runtime)
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.stopped) != 1 || l.stopped[0] != "inst-src" {
+		t.Errorf("launcher.Stop() calls = %+v, want exactly one for inst-src", l.stopped)
+	}
+}
+
+func TestPauseRequiresRunning(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+
+	if err := svc.Pause(context.Background(), wf.ID, false); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Pause() error = %v, want ErrNotRunning", err)
+	}
+}
+
+func TestPauseRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{
+		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
+		Settings: Settings{ConfirmStop: true},
+	}
+	wf, _ := svc.Create("wf", def)
+	started := wf
+	started.Status = StatusStarted
+	store.Put(started)
+
+	if err := svc.Pause(context.Background(), wf.ID, false); !errors.Is(err, ErrConfirmationRequired) {
+		t.Fatalf("Pause(confirm=false) error = %v, want ErrConfirmationRequired", err)
+	}
+	if err := svc.Pause(context.Background(), wf.ID, true); err != nil {
+		t.Fatalf("Pause(confirm=true) error = %v, want nil", err)
+	}
+}
+
+func TestStartResumesFromPaused(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	store := newFakeStore()
+	nodes := &fakeNodeLister{}
+	l := &fakeLauncher{}
+	svc := newTestService(store, nodes, &fakeGraph{}, l)
+
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	paused := wf
+	paused.Status = StatusPaused
+	store.Put(paused)
+
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() from paused error = %v, want nil (Resume = normaler Start)", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		started := len(l.started) > 0
+		l.mu.Unlock()
+		if started {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	l.mu.Lock()
+	startCount := len(l.started)
+	l.mu.Unlock()
+	if startCount != 1 {
+		t.Fatalf("launcher.Start() calls = %d, want exactly 1 (fresh provisioning on resume)", startCount)
+	}
+}
+
+func TestDeleteAllowsPaused(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	paused := wf
+	paused.Status = StatusPaused
+	store.Put(paused)
+
+	if err := svc.Delete(wf.ID); err != nil {
+		t.Fatalf("Delete() from paused error = %v, want nil", err)
+	}
+}
+
+func TestUpdateAllowsPaused(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}})
+	paused := wf
+	paused.Status = StatusPaused
+	store.Put(paused)
+
+	if _, err := svc.Update(wf.ID, "renamed", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}); err != nil {
+		t.Fatalf("Update() from paused error = %v, want nil", err)
+	}
+}
+
+// --- Kapitel 12 Teil 3: Export/Import ---
+
+func TestExportRoundTripsDefinition(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{
+		Roles:       []Role{{Name: "src", NodeType: "omp-source"}, {Name: "view", NodeType: "omp-viewer"}},
+		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
+	}
+	wf, err := svc.Create("Regieplatz 1", def)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	exported, err := svc.Export(wf.ID)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if exported.Name != "Regieplatz 1" || len(exported.Definition.Roles) != 2 || len(exported.Definition.Connections) != 1 {
+		t.Fatalf("Export() = %+v, want roundtripped definition", exported)
+	}
+	if exported.Version != exportVersion {
+		t.Fatalf("Export().Version = %d, want %d", exported.Version, exportVersion)
+	}
+}
+
+func TestExportUnknownWorkflowReturnsNotFound(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	if _, err := svc.Export("does-not-exist"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Export() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestImportRejectsUnknownNodeType(t *testing.T) {
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-source"}}}
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, l)
+
+	exported := ExportedWorkflow{
+		Version: 1,
+		Name:    "Imported",
+		Definition: Definition{
+			Roles: []Role{{Name: "gone", NodeType: "omp-does-not-exist"}},
+		},
+	}
+	if _, err := svc.Import(exported); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Import() error = %v, want ErrValidation (unknown catalog type must not create an import torso)", err)
+	}
+}
+
+func TestImportCreatesStoppedWorkflow(t *testing.T) {
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-source"}}}
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, l)
+
+	exported := ExportedWorkflow{
+		Version:    1,
+		Name:       "Imported Regieplatz",
+		Definition: Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}},
+	}
+	wf, err := svc.Import(exported)
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if wf.Name != "Imported Regieplatz" || wf.Status != StatusStopped || len(wf.Definition.Roles) != 1 {
+		t.Fatalf("Import() = %+v, want a new stopped workflow with the imported definition", wf)
+	}
+}
+
+func TestImportDedupesNameCollisionWithSuffix(t *testing.T) {
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-source"}}}
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, l)
+
+	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
+	if _, err := svc.Create("Regieplatz 1", def); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	imported, err := svc.Import(ExportedWorkflow{Version: 1, Name: "Regieplatz 1", Definition: def})
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if imported.Name == "Regieplatz 1" {
+		t.Fatalf("Import().Name = %q, want a disambiguated suffix (name collision), not the original", imported.Name)
 	}
 }
