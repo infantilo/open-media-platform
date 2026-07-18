@@ -244,6 +244,16 @@ export class FlowCanvas extends HTMLElement {
   // vom Gruppenbaum (#groupTree bleibt B5s rein visuelles Konzept, s.
   // Abgrenzung in docs/END-GOAL-FEATURES.md §12.1).
   #workflows: WorkflowSummary[] = [];
+  // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
+  // auf die Nodes des gewählten Workflows, globale Sicht bleibt als
+  // 'Alle' wählbar") — gesetzt von außen über setWorkflowFilter()
+  // (ui/shell/app-shell.ts, dort die eigentliche Auswahl-UI in der
+  // App-Bar). null = "Alle", unverändertes Verhalten. Bewusst orthogonal
+  // zu #scope (B5-Gruppen-Zoom, s. Abgrenzung oben) — ein aktiver
+  // Workflow-Filter umgeht den Gruppenbaum komplett und zeigt flache
+  // Node-Kacheln (s. #buildTilesForWorkflowFilter), statt Gruppen-
+  // Zugehörigkeit und Workflow-Zugehörigkeit gleichzeitig aufzulösen.
+  #workflowFilter: string | null = null;
   #tally: Record<string, boolean> = {};
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
@@ -650,7 +660,45 @@ export class FlowCanvas extends HTMLElement {
     return refs;
   }
 
+  // S6: von ui/shell/app-shell.ts aufgerufen, wenn die Workflow-Auswahl
+  // in der App-Bar wechselt (auch beim (Wieder-)Mounten des Flow-Editor-
+  // Tabs, damit eine zuvor getroffene Auswahl erhalten bleibt — die
+  // App-Bar hält den Filter, nicht die Kachel selbst, die bei jedem
+  // Tab-Wechsel neu erzeugt wird).
+  setWorkflowFilter(workflowId: string | null) {
+    this.#workflowFilter = workflowId;
+    this.#render();
+  }
+
+  // Flache Node-Kacheln nur der Runtime-Rollen eines einzelnen
+  // Workflows — bewusst ohne Gruppen-/Scope-Auflösung (s. #workflowFilter
+  // -Doku oben): ein gefilterter Workflow zeigt immer seine tatsächlichen
+  // Instanzen, unabhängig davon, ob eine davon zufällig Mitglied einer
+  // B5-Gruppe ist.
+  #buildTilesForWorkflowFilter(workflowId: string): TileSpec[] {
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) return [];
+    const nodeIds = new Set(
+      Object.values(wf.runtime ?? {})
+        .map((rt) => rt.nodeId)
+        .filter((id): id is string => !!id),
+    );
+    return this.#graph.nodes
+      .filter((n) => nodeIds.has(n.id))
+      .map((n) => ({
+        id: n.id,
+        label: n.label,
+        inputs: n.inputs,
+        outputs: n.outputs,
+        kind: "node" as const,
+        health: n.health,
+        instanceId: n.instanceId,
+      }));
+  }
+
   #buildTilesAtScope(): TileSpec[] {
+    if (this.#workflowFilter) return this.#buildTilesForWorkflowFilter(this.#workflowFilter);
+
     const items = this.#itemsAtScope();
     const tiles: TileSpec[] = [];
 
@@ -735,11 +783,21 @@ export class FlowCanvas extends HTMLElement {
   // aktuellen Scope sichtbar sind (z. B. keine davon in einer fremden
   // B5-Gruppe versteckt) — sonst still übersprungen statt eine
   // unvollständige Box zu zeichnen.
+  // S6: bei aktivem Workflow-Filter zeigen Rahmen/Platzhalter-Kacheln/
+  // -Kanten nur noch den einen ausgewählten Workflow — sonst blieben
+  // fremde Workflow-Rahmen/-Platzhalter im gefilterten Bild sichtbar,
+  // obwohl #buildTilesForWorkflowFilter() bereits nur dessen eigene
+  // Node-Kacheln zeigt (widersprüchliches Bild sonst).
+  #workflowsInScope(): WorkflowSummary[] {
+    if (!this.#workflowFilter) return this.#workflows;
+    return this.#workflows.filter((wf) => wf.id === this.#workflowFilter);
+  }
+
   #buildWorkflowFrames(tiles: TileSpec[]): SVGGElement[] {
     const visibleIds = new Set(tiles.map((t) => t.id));
     const frames: SVGGElement[] = [];
 
-    for (const wf of this.#workflows) {
+    for (const wf of this.#workflowsInScope()) {
       // Kapitel 12 Teil 3: ein pausierter Workflow hat keine Runtime-
       // Node-IDs mehr (Runtime wird beim Pausieren geleert, s. Backend-
       // Doku workflows.Service.stopOrPause) — der Rahmen umschließt dann
@@ -809,7 +867,7 @@ export class FlowCanvas extends HTMLElement {
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const tiles: SVGGElement[] = [];
 
-    for (const wf of this.#workflows) {
+    for (const wf of this.#workflowsInScope()) {
       if (wf.status !== "paused") continue;
       for (const role of wf.definition.roles) {
         const id = pausedPlaceholderId(wf.id, role.name);
@@ -861,7 +919,7 @@ export class FlowCanvas extends HTMLElement {
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const lines: SVGLineElement[] = [];
 
-    for (const wf of this.#workflows) {
+    for (const wf of this.#workflowsInScope()) {
       if (wf.status !== "paused") continue;
       for (const conn of wf.definition.connections) {
         const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];

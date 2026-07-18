@@ -7575,3 +7575,75 @@ Test-Workflow über die API gelöscht, Chromium/Orchestrator beendet.
 
 **Damit ist Kapitel 12 (docs/END-GOAL-FEATURES.md §12, alle Teile 1–6
 inkl. aller Unterteile) vollständig umgesetzt.**
+
+## 2026-07-18 (Nachtrag 27) — S6: Workflow-Auswahl in der App-Bar +
+Flow-Editor-Filter (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
+
+Mit Kapitel 12 vollständig abgeschlossen war der letzte inhaltliche
+Rest von S6 ("Workflow-Kontext in Shell + Rechte") noch offen: die
+Review nennt drei Teilstücke — Konsolen-Route real (Kapitel 12 Teil 5,
+bereits erledigt), Workflow-Scope im Rollenmodell (Kapitel 12 Teil 4,
+bereits erledigt) und **Flow-Editor-Filter auf die Nodes des gewählten
+Workflows, globale Sicht als "Alle" wählbar** — dieser dritte Teil war
+bisher nicht gebaut (Kapitel 12 Teil 2 zeichnet Workflow-**Rahmen** um
+alle gleichzeitig sichtbaren Workflows, filtert aber nicht auf einen
+einzelnen). Mit diesem Schritt ist S6 vollständig; von der
+Fable-Review-Zehnerliste (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md)
+bleiben nur noch S7 (Remote-Zugriff/Reverse-Proxy-Doku) und S8
+(Metrics-Endpunkt) offen.
+
+**Umsetzung:**
+- `ui/shell/app-shell.ts`: neues `<select data-role="workflow-filter-
+  select">` in der App-Bar (rechts, vor dem Verbindungs-Pill),
+  befüllt aus `GET /api/v1/workflows` (Label: `definition.title ||
+  name`, gleicher Fallback wie überall seit Kapitel 12 Teil 6),
+  aktualisiert bei `workflow.updated`/`lost-events` (SSE, gleiches
+  Muster wie `ui/shell/workflows-view.ts`). Die Auswahl selbst lebt in
+  der App-Bar, nicht in `<omp-flow-canvas>` — die Kachel wird bei jedem
+  Tab-Wechsel per `replaceChildren` neu erzeugt (`#switchTab`), eine
+  dort gehaltene Auswahl ginge sonst bei jedem Verlassen des
+  Flow-Editor-Tabs verloren. `#switchTab("flow")` wendet die zuletzt
+  gewählte Filter-ID nach dem (Wieder-)Mounten erneut an.
+- `ui/graph/flow-canvas.ts`: neue öffentliche Methode
+  `setWorkflowFilter(workflowId: string | null)`. Bei aktivem Filter
+  umgeht `#buildTilesAtScope()` den B5-Gruppenbaum komplett und zeigt
+  ausschließlich die flachen Node-Kacheln der tatsächlichen
+  Runtime-Instanzen des gewählten Workflows (`wf.runtime[...].nodeId`)
+  — bewusst orthogonal zu `#scope` (Gruppen-Zoom bleibt B5s eigenes,
+  workflow-unabhängiges Konzept, s. Abgrenzung in Kapitel 12 Teil 2).
+  `#buildWorkflowFrames`/`#buildPausedPlaceholderTiles`/
+  `#buildPausedPlaceholderEdges` laufen jetzt über eine neue
+  `#workflowsInScope()`-Hilfsfunktion, die bei aktivem Filter nur den
+  einen ausgewählten Workflow liefert — sonst blieben fremde
+  Workflow-Rahmen/Pause-Platzhalter im gefilterten Bild sichtbar,
+  obwohl die Node-Kacheln selbst schon gefiltert wären (widersprüchliches
+  Bild sonst). `#pausedPlaceholderIds()` (Positions-Bookkeeping für
+  `#assignMissingPositions`/`#pruneStalePositions`) bleibt bewusst
+  ungefiltert — Positionszuweisung ist ein Persistenz-, kein
+  Render-Zeit-Anliegen.
+
+**Kleiner Begleit-Fund/-Fix:** `uniqueRoleName()` war bereits in
+`flow-canvas.ts` privat definiert (Kapitel 12 Teil 2); für den
+Rollen-Designer (Nachtrag 26) wurde sie in ein eigenes `roles.ts`
+ausgelagert. Keine Wirkung auf diesen Schritt, nur zur Einordnung: kein
+Duplikat mehr zwischen beiden Dateien.
+
+**Tests:** keine neuen `deno test`-Unit-Tests (reiner DOM-/Fetch-Code,
+gleiches Muster wie die übrigen App-Bar-/Canvas-Schritte). `deno
+check`/`deno test ui/` weiterhin grün (50 bestanden). `go build`/`go
+vet`/`go test ./...` unverändert grün (reiner Frontend-Schritt).
+
+**Live verifiziert per CDP — exakt das von S6 verlangte
+Zwei-Workflows-Szenario:** zwei echte, laufende Workflows angelegt
+("Regie A" mit 2 `omp-source`-Rollen, "Regie B" mit 1) — bewusst ohne
+Verbindungen, um den bereits dokumentierten, unabhängigen
+`findSender()`-Nebenfund (Nachtrag 25) nicht erneut zu berühren.
+Ungefiltert: alle Node-Kacheln beider Workflows sichtbar (plus die
+registrierte NMOS-Registry selbst als vierter, workflow-loser Node —
+korrekt in keinem Filter enthalten). Filter auf "Regie A": exakt deren
+2 Kacheln, keine aus "Regie B". Filter auf "Regie B": exakt deren 1
+Kachel, kein Überlapp mit "Regie A" geprüft. Zurück auf "Alle": wieder
+alle Kacheln. Tab-Wechsel weg vom Flow-Editor und zurück: Filter-
+Auswahl bleibt erhalten (App-Bar-State, nicht Kachel-State,
+bestätigt). Workflows über die API gestoppt/gelöscht, Chromium/
+Orchestrator beendet.

@@ -8,11 +8,12 @@
 // Ansicht gemountet (shell.ts) — Console-Ansicht (§14) bleibt unverändert
 // Vollfläche ohne jede Chrome, wie schon vor diesem Schritt.
 import "../graph/flow-canvas.ts";
+import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./alarm-view.ts";
 import "./admin-view.ts";
-import { type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
+import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
 type TabId = "flow" | "workflows" | "hosts" | "alarms" | "admin";
@@ -54,6 +55,21 @@ const TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
   "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
 
+// S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Workflow-Auswahl in
+// der App-Bar, Flow-Editor-Filter auf die Nodes des gewählten
+// Workflows — globale Sicht bleibt als 'Alle' wählbar"). Nur die für
+// die Auswahl-Beschriftung gebrauchten Felder — Wire-Format identisch
+// zu workflows.Workflow (orchestrator/internal/workflows/types.go).
+interface WorkflowOption {
+  id: string;
+  name: string;
+  definition: { title?: string };
+}
+
+// SSE-Ereignisse, bei denen die Workflow-Auswahl neu geladen wird
+// (gleiches Muster wie ui/shell/workflows-view.ts REFRESH_EVENT_TYPES).
+const WORKFLOW_REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
+
 class AppShell extends HTMLElement {
   #activeTab: TabId = "flow";
   #tabs: TabDef[] = [...BASE_TABS];
@@ -66,15 +82,32 @@ class AppShell extends HTMLElement {
   #onStateChange = (ev: Event) => {
     this.#applyConnectionState((ev as CustomEvent<ConnectionChangeDetail>).detail);
   };
+  // S6: Auswahl lebt in der App-Bar (nicht in <omp-flow-canvas> selbst)
+  // — die Kachel wird bei jedem Tab-Wechsel neu erzeugt (#switchTab
+  // ersetzt sie per replaceChildren), eine dort gehaltene Auswahl ginge
+  // sonst bei jedem Verlassen des Flow-Editor-Tabs verloren.
+  #workflowFilter: string | null = null;
+  #workflowSelect!: HTMLSelectElement;
+  #onSseMessage = (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (WORKFLOW_REFRESH_EVENT_TYPES.has(parsed.type)) void this.#loadWorkflowOptions();
+  };
 
   connectedCallback() {
     this.style.cssText = "display:flex;flex-direction:column;height:100%;width:100%;box-sizing:border-box;";
     this.#buildSkeleton();
     this.#switchTab("flow");
     this.#loadAdminTab();
+    void this.#loadWorkflowOptions();
 
     this.#lastState = connectionMonitor.state;
     connectionMonitor.addEventListener("statechange", this.#onStateChange);
+    connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
     connectionMonitor.start();
     this.#applyConnectionState({ state: connectionMonitor.state, nextRetryAt: connectionMonitor.nextRetryAt });
   }
@@ -97,7 +130,47 @@ class AppShell extends HTMLElement {
 
   disconnectedCallback() {
     connectionMonitor.removeEventListener("statechange", this.#onStateChange);
+    connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     clearInterval(this.#countdownHandle);
+  }
+
+  async #loadWorkflowOptions() {
+    try {
+      const res = await apiFetch("/api/v1/workflows");
+      const list: WorkflowOption[] = res.ok ? await res.json() : [];
+      this.#renderWorkflowOptions(list);
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — die Auswahl bleibt auf
+      // ihrem letzten Stand, kein harter Fehler für die restliche Bar.
+    }
+  }
+
+  #renderWorkflowOptions(list: WorkflowOption[]) {
+    const select = this.#workflowSelect;
+    const previousValue = select.value;
+    select.replaceChildren();
+
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "Workflow: Alle";
+    select.appendChild(allOpt);
+
+    for (const wf of list) {
+      const opt = document.createElement("option");
+      opt.value = wf.id;
+      opt.textContent = wf.definition.title || wf.name;
+      select.appendChild(opt);
+    }
+
+    // Auswahl erhalten, solange der Workflow noch existiert — verschwindet
+    // er (gestoppt+gelöscht), fällt die Auswahl auf "Alle" zurück statt
+    // einen toten Filter stillschweigend weiter anzuwenden.
+    if (list.some((wf) => wf.id === previousValue)) {
+      select.value = previousValue;
+    } else if (this.#workflowFilter !== null) {
+      this.#workflowFilter = null;
+      this.#applyWorkflowFilter();
+    }
   }
 
   #buildSkeleton() {
@@ -127,6 +200,20 @@ class AppShell extends HTMLElement {
 
     const right = document.createElement("div");
     right.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-3);";
+
+    // S6: Workflow-Auswahl in der App-Bar — wirkt nur auf den Flow-
+    // Editor-Tab (s. #switchTab/FlowCanvas.setWorkflowFilter), bleibt
+    // aber über Tab-Wechsel hinweg erhalten (s. #workflowFilter-Doku).
+    const workflowSelect = document.createElement("select");
+    workflowSelect.setAttribute("data-role", "workflow-filter-select");
+    workflowSelect.style.cssText = "font-size:var(--omp-font-size-xs);";
+    workflowSelect.addEventListener("change", () => {
+      this.#workflowFilter = workflowSelect.value || null;
+      this.#applyWorkflowFilter();
+    });
+    this.#workflowSelect = workflowSelect;
+    right.appendChild(workflowSelect);
+
     const pill = document.createElement("span");
     pill.setAttribute("data-role", "connection-pill");
     pill.style.cssText = "font-size:var(--omp-font-size-xs);";
@@ -171,6 +258,15 @@ class AppShell extends HTMLElement {
     const tab = this.#tabs.find((t) => t.id === id);
     if (!tab) return;
     this.#contentEl.replaceChildren(document.createElement(tab.element));
+    // S6: eine zuvor getroffene Workflow-Auswahl auf den frisch
+    // gemounteten Flow-Editor-Tab anwenden — die Kachel selbst hält
+    // dazwischen keinen Zustand (s. #workflowFilter-Doku oben).
+    if (id === "flow") this.#applyWorkflowFilter();
+  }
+
+  #applyWorkflowFilter() {
+    const canvas = this.#contentEl.querySelector("omp-flow-canvas") as FlowCanvas | null;
+    canvas?.setWorkflowFilter(this.#workflowFilter);
   }
 
   // Primärsignal (SSE) + Sekundärsignal (apiFetch) laufen hier zusammen
