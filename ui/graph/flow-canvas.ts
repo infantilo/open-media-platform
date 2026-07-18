@@ -28,6 +28,7 @@ import {
   createGroup,
   dissolveGroup,
   emptyTree,
+  flattenMembers,
   type GroupTree,
   type PortRef,
   promotedPorts,
@@ -114,6 +115,25 @@ interface ApplyResult {
   errors: string[];
 }
 
+// WorkflowSummary (Kapitel 12 Teil 2, docs/END-GOAL-FEATURES.md §12.3b):
+// nur die Felder, die der Editor für den "benannten Rahmen um die
+// Kacheln ihrer Runtime-Nodes" braucht — Wire-Format identisch zu
+// workflows.Workflow (orchestrator/internal/workflows/types.go).
+interface WorkflowSummary {
+  id: string;
+  name: string;
+  status: string;
+  runtime?: Record<string, { instanceId: string; nodeId?: string }>;
+}
+
+const WORKFLOW_FRAME_COLORS: Record<string, string> = {
+  stopped: "#999",
+  starting: "#e0a020",
+  started: "#4caf50",
+  stopping: "#e0a020",
+  failed: "#e57373",
+};
+
 interface TileSpec {
   id: string;
   label: string;
@@ -193,6 +213,10 @@ const GRAPH_REFRESH_EVENT_TYPES = new Set([
   "node.removed",
   "edge.added",
   "edge.removed",
+  // Kapitel 12 Teil 2: ein Workflow-Start/-Stop ändert, welche Nodes
+  // gerade zu welchem Workflow-Rahmen gehören — ohne dieses Event bliebe
+  // der Rahmen bis zum nächsten Node-Event (oder nie) veraltet.
+  "workflow.updated",
 ]);
 const TALLY_EVENT_PREFIX = "omp.tally.";
 const DRAG_THRESHOLD_PX = 3;
@@ -204,6 +228,11 @@ export class FlowCanvas extends HTMLElement {
   #scope: string | null = null;
   #selectedIds: Set<string> = new Set();
   #graph: Graph = { nodes: [], edges: [] };
+  // Kapitel 12 Teil 2: laufende Workflows, um ihre Runtime-Nodes als
+  // benannten Rahmen zu zeichnen (s. #buildWorkflowFrames) — unabhängig
+  // vom Gruppenbaum (#groupTree bleibt B5s rein visuelles Konzept, s.
+  // Abgrenzung in docs/END-GOAL-FEATURES.md §12.1).
+  #workflows: WorkflowSummary[] = [];
   #tally: Record<string, boolean> = {};
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
@@ -483,6 +512,16 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
+    // Kapitel 12 Teil 2: best effort — ein fehlgeschlagener Workflow-
+    // Abruf (z. B. fehlende Rechte) lässt den Graphen selbst unberührt,
+    // nur die Rahmen bleiben dann leer statt den ganzen Refresh
+    // abzubrechen.
+    try {
+      const workflowsRes = await apiFetch("/api/v1/workflows");
+      this.#workflows = workflowsRes.ok ? await workflowsRes.json() : [];
+    } catch {
+      this.#workflows = [];
+    }
     // Beide geben nur zurück, *ob* sich #positions geändert hat, statt
     // selbst zu speichern — sonst würde ein Zwischen-Save mit dem noch
     // unangepassten Viewport (IDENTITY_VIEWPORT vor dem Fit unten)
@@ -646,6 +685,9 @@ export class FlowCanvas extends HTMLElement {
       );
     }
 
+    for (const frame of this.#buildWorkflowFrames(tiles)) {
+      this.#viewportGroup.appendChild(frame);
+    }
     for (const tile of tiles) {
       this.#viewportGroup.appendChild(this.#renderTile(tile));
     }
@@ -653,6 +695,70 @@ export class FlowCanvas extends HTMLElement {
       const edgeEl = this.#renderEdge(edge);
       if (edgeEl) this.#viewportGroup.insertBefore(edgeEl, this.#viewportGroup.firstChild);
     }
+  }
+
+  // Kapitel 12 Teil 2 (docs/END-GOAL-FEATURES.md §12.3b): "der Editor
+  // rendert laufende Workflows als benannten Rahmen um die Kacheln ihrer
+  // Runtime-Nodes (Zuordnung über wf.Runtime[role].NodeID, liegt im
+  // Workflow-Objekt bereits vor)". Rein additiv/lesend — kennt weder
+  // #groupTree noch verändert es Positionen; ein Rahmen erscheint nur,
+  // wenn ALLE Runtime-Nodes des Workflows gerade als eigene Kachel im
+  // aktuellen Scope sichtbar sind (z. B. keine davon in einer fremden
+  // B5-Gruppe versteckt) — sonst still übersprungen statt eine
+  // unvollständige Box zu zeichnen.
+  #buildWorkflowFrames(tiles: TileSpec[]): SVGGElement[] {
+    const visibleIds = new Set(tiles.map((t) => t.id));
+    const frames: SVGGElement[] = [];
+
+    for (const wf of this.#workflows) {
+      const nodeIds = Object.values(wf.runtime ?? {})
+        .map((rt) => rt.nodeId)
+        .filter((id): id is string => !!id);
+      if (nodeIds.length === 0) continue;
+      if (!nodeIds.every((id) => visibleIds.has(id) && this.#positions[id])) continue;
+
+      const boxes = nodeIds.map((id) => {
+        const pos = this.#positions[id];
+        const height = this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        return { minX: pos.x, minY: pos.y, maxX: pos.x + NODE_WIDTH, maxY: pos.y + height };
+      });
+
+      const PAD = 16;
+      const LABEL_HEIGHT = 18;
+      const minX = Math.min(...boxes.map((b) => b.minX)) - PAD;
+      const minY = Math.min(...boxes.map((b) => b.minY)) - PAD - LABEL_HEIGHT;
+      const maxX = Math.max(...boxes.map((b) => b.maxX)) + PAD;
+      const maxY = Math.max(...boxes.map((b) => b.maxY)) + PAD;
+      const color = WORKFLOW_FRAME_COLORS[wf.status] ?? "#5b9bd5";
+
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("data-role", "workflow-frame");
+      g.setAttribute("data-workflow-id", wf.id);
+
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", String(minX));
+      rect.setAttribute("y", String(minY + LABEL_HEIGHT));
+      rect.setAttribute("width", String(maxX - minX));
+      rect.setAttribute("height", String(maxY - minY - LABEL_HEIGHT));
+      rect.setAttribute("rx", "8");
+      rect.setAttribute("fill", "none");
+      rect.setAttribute("stroke", color);
+      rect.setAttribute("stroke-width", "2");
+      rect.setAttribute("stroke-dasharray", "8 4");
+      g.appendChild(rect);
+
+      const label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("data-role", "workflow-frame-label");
+      label.setAttribute("x", String(minX + 4));
+      label.setAttribute("y", String(minY + LABEL_HEIGHT - 4));
+      label.setAttribute("fill", color);
+      label.setAttribute("font-size", "11");
+      label.textContent = `▭ ${wf.name} (${wf.status})`;
+      g.appendChild(label);
+
+      frames.push(g);
+    }
+    return frames;
   }
 
   #renderBreadcrumb() {
@@ -679,6 +785,14 @@ export class FlowCanvas extends HTMLElement {
       dissolveBtn.style.cssText = "font-size:11px;cursor:pointer;";
       dissolveBtn.addEventListener("click", () => this.#dissolveCurrentGroup());
       this.#breadcrumbBar.appendChild(dissolveBtn);
+
+      // Kapitel 12 Teil 2 (§12.3b): "die Brücke Editor ↔ Workflow" — eine
+      // Gruppe (Regieplatz-Kandidat) als startbaren Workflow speichern.
+      const saveAsWorkflowBtn = document.createElement("button");
+      saveAsWorkflowBtn.textContent = "Als Workflow speichern";
+      saveAsWorkflowBtn.style.cssText = "font-size:11px;cursor:pointer;";
+      saveAsWorkflowBtn.addEventListener("click", () => this.#saveGroupAsWorkflow());
+      this.#breadcrumbBar.appendChild(saveAsWorkflowBtn);
     }
   }
 
@@ -755,6 +869,111 @@ export class FlowCanvas extends HTMLElement {
     this.#selectedIds = new Set();
     this.#saveLayout();
     this.#render();
+  }
+
+  // Kapitel 12 Teil 2 (§12.3b): "leitet aus den Gruppenmitgliedern die
+  // Rollen ab (graph.instanceId → Instanz-Typ über /api/v1/instances;
+  // Nodes ohne Launcher-Instanz sind nicht ableitbar → verständliche
+  // Fehlermeldung statt stillem Auslassen) und aus den gruppeninternen
+  // Kanten das port-genaue Template". Rollenname = Node-Typ
+  // (+ laufender Suffix bei mehreren Rollen desselben Typs) — der
+  // Nutzer kann ihn danach im Workflows-Tab per "Bearbeiten" (Kapitel 12
+  // Teil 1, PUT) umbenennen, dieser Schritt braucht keinen eigenen
+  // Namens-Dialog.
+  async #saveGroupAsWorkflow() {
+    if (this.#scope === null) return;
+    const group = this.#groupTree.groups[this.#scope];
+    if (!group) return;
+
+    const memberNodeIds = flattenMembers(this.#groupTree, this.#scope);
+    if (memberNodeIds.length === 0) {
+      this.#showToast("Gruppe enthält keine Nodes.");
+      return;
+    }
+
+    let instances: LauncherInstance[];
+    try {
+      const res = await apiFetch("/api/v1/instances");
+      instances = res.ok ? ((await res.json()) as LauncherInstance[]) : [];
+    } catch {
+      instances = [];
+    }
+    const instanceById = new Map(instances.map((i) => [i.id, i]));
+
+    const roleNameByNodeId = new Map<string, string>();
+    const roles: { name: string; nodeType: string; hostId?: string }[] = [];
+    const missing: string[] = [];
+    const usedNames = new Set<string>();
+
+    for (const nodeId of memberNodeIds) {
+      const node = this.#graph.nodes.find((n) => n.id === nodeId);
+      const inst = node?.instanceId ? instanceById.get(node.instanceId) : undefined;
+      if (!node || !inst) {
+        missing.push(node?.label ?? nodeId);
+        continue;
+      }
+      const roleName = uniqueRoleName(inst.type, usedNames);
+      usedNames.add(roleName);
+      roleNameByNodeId.set(nodeId, roleName);
+      roles.push({ name: roleName, nodeType: inst.type, hostId: inst.hostId });
+    }
+
+    if (missing.length > 0) {
+      this.#showToast(
+        `Als Workflow speichern nicht möglich — ohne Launcher-Instanz (nicht über den Katalog gestartet): ${
+          missing.join(", ")
+        }`,
+      );
+      return;
+    }
+
+    // Nur Kanten, deren BEIDE Enden Gruppenmitglieder sind, werden Teil
+    // des Templates (die gruppenexternen sind Sache der jeweils anderen
+    // Rolle/eines anderen Workflows). fromSender/toReceiver werden nur
+    // gesetzt, wenn die jeweilige Node mehr als einen Port auf dieser
+    // Seite hat — bei genau einem Port ist der Kompatibilitäts-Fallback
+    // (erster Sender/Receiver) robuster als ein eingefrorenes Label: bei
+    // Node-Typen ohne explizites `SenderSpec.label` (z. B. omp-source)
+    // hängt das Auto-Label vom Launcher-vergebenen `OMP_LABEL` ab, das
+    // sich mit jedem Neustart der Rolle ändert (live gefunden
+    // 2026-07-18, docs/decisions.md Nachtrag 17) — ein Label nur dann
+    // einzufrieren, wenn es zur Auflösung wirklich gebraucht wird, hält
+    // das Template robuster gegen genau diese Instabilität.
+    const memberSet = new Set(memberNodeIds);
+    const portOwner = new Map<string, { nodeId: string; label: string; siblingCount: number }>();
+    for (const node of this.#graph.nodes) {
+      for (const p of node.outputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.outputs.length });
+      for (const p of node.inputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.inputs.length });
+    }
+
+    const connections: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }[] = [];
+    for (const edge of this.#graph.edges) {
+      const from = portOwner.get(edge.fromSender);
+      const to = portOwner.get(edge.toReceiver);
+      if (!from || !to) continue;
+      if (!memberSet.has(from.nodeId) || !memberSet.has(to.nodeId)) continue;
+      connections.push({
+        fromRole: roleNameByNodeId.get(from.nodeId)!,
+        fromSender: from.siblingCount > 1 ? from.label : undefined,
+        toRole: roleNameByNodeId.get(to.nodeId)!,
+        toReceiver: to.siblingCount > 1 ? to.label : undefined,
+      });
+    }
+
+    try {
+      const res = await apiFetch("/api/v1/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: group.label, definition: { roles, connections } }),
+      });
+      if (!res.ok) {
+        this.#showToast(`Als Workflow speichern fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+      this.#showToast(`Workflow „${group.label}" angelegt — im Workflows-Tab startbar.`);
+    } catch (err) {
+      this.#showToast(`Als Workflow speichern fehlgeschlagen: ${err}`);
+    }
   }
 
   #applyViewportTransform() {
@@ -1923,6 +2142,16 @@ export class FlowCanvas extends HTMLElement {
     this.appendChild(toast);
     setTimeout(() => toast.remove(), 4000);
   }
+}
+
+// Kapitel 12 Teil 2: Rollenname aus dem Node-Typ ableiten, eindeutig
+// gemacht bei mehreren Rollen desselben Typs in derselben Gruppe (z. B.
+// drei Kamera-Rollen "omp-source", "omp-source-2", "omp-source-3").
+function uniqueRoleName(nodeType: string, used: Set<string>): string {
+  if (!used.has(nodeType)) return nodeType;
+  let i = 2;
+  while (used.has(`${nodeType}-${i}`)) i++;
+  return `${nodeType}-${i}`;
 }
 
 function healthColor(health: string): string {

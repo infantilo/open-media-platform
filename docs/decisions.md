@@ -6658,3 +6658,92 @@ aus und persistiert. Alle Test-Workflows/-Instanzen danach entfernt.
 Anlage nötig), stabile statische Sender-Labels für `omp-source`
 (s. o.), Kapitel 12 Teil 2 (Editor-Brücke "Gruppe als Workflow
 speichern") und die weiteren Teile 3–6.
+
+## 2026-07-18 (Nachtrag 18) — Kapitel 12 Teil 2: Editor-Brücke
+"Gruppe als Workflow speichern" + Workflow-Rahmen im Flow-Editor
+
+**Umsetzung, wie in §12.3b/§12.4 Teil 2 spezifiziert:**
+
+a) **"Als Workflow speichern"** (`ui/graph/flow-canvas.ts`, neuer
+Knopf in der Breadcrumb-Leiste neben "Gruppe auflösen", nur sichtbar
+innerhalb einer Gruppe): leitet aus den (rekursiven) Gruppenmitgliedern
+über `node.instanceId` → `GET /api/v1/instances` die Rollen ab
+(Rollenname = Node-Typ, bei Mehrfachvorkommen mit Suffix
+disambiguiert); Nodes ohne Launcher-Instanz brechen mit einer
+verständlichen Toast-Fehlermeldung ab, statt still ausgelassen zu
+werden (`missing`-Liste). Aus den gruppeninternen Kanten (beide
+Endpunkte Gruppenmitglieder) wird das Connection-Template abgeleitet
+und per `POST /api/v1/workflows` gespeichert.
+
+**Bewusste Verfeinerung ggü. der wörtlichen Spezifikation:**
+`fromSender`/`toReceiver` werden nur gesetzt, wenn der jeweilige Node
+zum Exportzeitpunkt **mehr als einen** Port auf dieser Seite hat — bei
+genau einem Port bleibt der Kompatibilitäts-Fallback (erster
+Sender/Receiver) unangetastet. Grund: das in Nachtrag 17 dokumentierte
+Label-Instabilitätsproblem (nicht-explizite `SenderSpec.label`s hängen
+vom Launcher-vergebenen `OMP_LABEL` ab, das sich mit jedem
+Rollen-Neustart ändert) würde sonst bei JEDEM Export ein Label
+einfrieren, das nach dem ersten Workflow-Start (frische Instanzen)
+nicht mehr passt — auch bei eigentlich unbenutzten Einzel-Port-Nodes.
+Mit der Verfeinerung betrifft die Instabilität nur noch echte
+Mehrfach-Port-Fälle (z. B. `omp-source` Video/Audio), nicht mehr den
+Normalfall.
+
+**Bekannte, bewusste Grenze:** Kanten werden ausschließlich aus
+`/api/v1/graph`s IS-05-Kanten abgeleitet — eine Crosspoint-Zuordnung
+zwischen zwei manuell (nicht über einen Workflow) laufenden Instanzen
+(z. B. ein Bildmischer, dessen `crosspoint.take` bereits manuell auf
+eine bestimmte Kamera zeigt) ist für den Orchestrator nirgends als
+"Kante" sichtbar und kann von "Als Workflow speichern" daher nicht
+erfasst werden — exakt dieselbe strukturelle Lücke, die Nachtrag 17
+schon für den umgekehrten Weg (Workflow-Start → Crosspoint) beschreibt.
+Für den Export bedeutet das: eine Zielrolle ohne IS-04-Receiver (also
+ein Crosspoint-Ziel) taucht im exportierten Template nur dann mit einer
+Connection auf, wenn zufällig eine andere, unabhängige IS-05-Kante
+denselben Node betrifft — praktisch meist gar nicht. Kein Bug, sondern
+dieselbe Grenze wie beim manuellen Verkabeln vor diesem Kapitel.
+
+b) **Workflow-Rahmen** (`#buildWorkflowFrames()`,
+`#render()`/`#fetchAndRender()`): `/api/v1/workflows` wird zusätzlich
+zu `/api/v1/graph` abgerufen (bei jedem Refresh, zusätzlich ausgelöst
+durch das neu zu `GRAPH_REFRESH_EVENT_TYPES` hinzugefügte
+`workflow.updated`-SSE-Event — sonst bliebe ein Rahmen nach
+Start/Stop bis zum nächsten Node-Event veraltet). Für jeden Workflow
+mit mindestens einem aufgelösten `runtime[role].nodeId` wird ein
+gestrichelter Rahmen um die Bounding-Box seiner Runtime-Kacheln
+gezeichnet (Statusfarbe wie im Workflows-Tab), aber **nur**, wenn
+ALLE seine Runtime-Nodes gerade als eigene Kachel im aktuellen Scope
+sichtbar sind — sonst still übersprungen (kein Teil-Rahmen). Rein
+additiv/lesend, kennt `#groupTree` nicht (bewusste Trennung der zwei
+Konzepte, §12.1).
+
+**Tests:** `deno check ui/**/*.ts` und `deno test ui/` grün (keine
+neuen `.ts`-Unit-Tests — die neue Logik ist DOM-/Fetch-lastig, nicht
+in reiner Datenmodell-Form wie `groups.ts`; Verifikation stattdessen
+live, s. u.).
+
+**Live verifiziert, Trias-Szenario genau wie in §12.4 Teil 2
+gefordert** (CDP-Session, Node `fetch`+`WebSocket`, echter
+Orchestrator + drei echte Rust-Nodes): `omp-video-mixer-me`
+("PGM") → `omp-viewer` real per Drag&Drop-Äquivalent
+(`POST /api/v1/graph/edges`) verkabelt, `omp-switcher` unverbunden
+dazugenommen — bewusst diese drei statt "3 Kameras" gewählt, weil
+jede hier nur einen relevanten Port hat und die Verifikation damit
+nicht in die bekannte `omp-source`-Label-Instabilität läuft (s. o.).
+Drei Kacheln per synthetischem Shift-Pointerdown ausgewählt, „g"
+gruppiert (`window.prompt` überschrieben, da Headless-Chrome Prompts
+sonst auto-dismisst), Gruppe per Doppelklick betreten, „Als Workflow
+speichern" geklickt → API bestätigt genau die erwarteten drei Rollen
++ eine Connection (mixer→viewer, ohne eingefrorenes Label, wie von der
+Verfeinerung vorgesehen). Workflow gestartet (frische Instanzen,
+neue Node-IDs) → nach Reload: grüner gestrichelter Rahmen
+„▭ Regieplatz Live-Test (started)" exakt um die drei neuen Kacheln,
+`GET /api/v1/graph` bestätigt die reale IS-05-Kante zwischen den
+frischen Instanzen. Alle Test-Workflows/-Instanzen/-Layout-Einträge
+danach entfernt (Layout auf leer zurückgesetzt).
+
+**Nicht Teil dieser Sitzung:** Kapitel 12 Teil 3 (Pause-Zustand,
+Export/Import-Datei), Teil 4 (Workflow-Scope-AuthZ), Teil 5
+(Operator-Einstieg), Teil 6 (Rollen-Designer/Katalog-Grid);
+D7 Teil 2 (Zeitsteuerung + Ressourcen-Vorprüfung), laut §12.4
+empfohlen zwischen Teil 2 und Teil 3.
