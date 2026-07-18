@@ -175,6 +175,17 @@ class WorkflowsView extends HTMLElement {
   // #submitForm() unterscheidet daran POST (Anlegen) von PUT (Update),
   // das Formular selbst ist identisch.
   #editingId: string | null = null;
+  // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8: "Volltext über
+  // title/description/tags[] ... Postgres-Volltextsuche/ILIKE reicht
+  // für die erwartete Größenordnung ... plus Facetten (Kategorie,
+  // Status)"). Bewusst clientseitig statt eines neuen Backend-Such-
+  // Endpunkts: die Liste ist ohnehin schon vollständig geladen (SSE-
+  // getrieben, kein Pagination-Konzept für Workflows), ein serverseitiger
+  // ILIKE-Query wäre für "Dutzende bis wenige Hunderte" Workflows
+  // (Dokument wörtlich) reiner Zusatzaufwand ohne Mehrwert.
+  #searchQuery = "";
+  #filterCategory = "";
+  #filterStatus = "";
 
   connectedCallback() {
     this.style.cssText =
@@ -460,6 +471,22 @@ class WorkflowsView extends HTMLElement {
     await this.#poll();
   }
 
+  // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8) — Volltext über
+  // Titel/Name (Fallback)/Beschreibung/Tags, plus die zwei Facetten
+  // Kategorie und Status. Leerer Filter = alles (unverändertes
+  // Verhalten für den bisherigen Anwendungsfall ohne aktiven Filter).
+  #matchesFilter(wf: Workflow): boolean {
+    if (this.#filterCategory && wf.definition.category !== this.#filterCategory) return false;
+    if (this.#filterStatus && wf.status !== this.#filterStatus) return false;
+    const q = this.#searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [wf.definition.title, wf.name, wf.definition.description, ...(wf.definition.tags ?? [])]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(q);
+  }
+
   #render() {
     this.replaceChildren();
 
@@ -514,18 +541,110 @@ class WorkflowsView extends HTMLElement {
       return;
     }
 
+    // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8) — Such-/Filterleiste
+    // nur anzeigen, wenn es überhaupt etwas zu filtern gibt (bei einem
+    // einzelnen Workflow wäre sie reiner Leerraum).
+    if (this.#workflows.length > 1) {
+      this.appendChild(this.#renderFilterBar());
+    }
+
+    const filtered = this.#workflows.filter((wf) => this.#matchesFilter(wf));
+
+    // Leer-Hinweis und Grid immer beide (auch leer) rendern, mit
+    // data-role markiert — #refreshGrid() (Such-Eingabe, s. o.)
+    // aktualisiert danach nur noch ihren Inhalt statt eines vollen
+    // #render(), sonst würde das Suchfeld bei jedem Tastendruck den
+    // Fokus verlieren.
+    const empty = document.createElement("div");
+    empty.setAttribute("data-role", "workflow-filter-empty");
+    empty.style.cssText = "color:#999;";
+    empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
+    this.appendChild(empty);
+
     // Kapitel 12 Teil 6 (§22.3 Punkt 6: "Katalog-Übersicht (Kachel-Grid)
     // ... zeigt gespeicherte Workflows als Kacheln mit Thumbnail, Titel,
     // gekürzter Beschreibung, Status-Badge, Kategorie-Icon"). Thumbnail
-    // (Punkt 5, MJPEG-Preview-Capture) und Volltextsuche (Punkt 8) sind
-    // bewusst nicht Teil dieses Schritts — dokumentierte Folgearbeit,
-    // s. docs/decisions.md.
+    // (Punkt 5, MJPEG-Preview-Capture) bleibt bewusst nicht Teil dieses
+    // Schritts — dokumentierte Folgearbeit, s. docs/decisions.md.
     const grid = document.createElement("div");
+    grid.setAttribute("data-role", "workflow-grid");
     grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;";
-    for (const wf of this.#workflows) {
+    for (const wf of filtered) {
       grid.appendChild(this.#renderWorkflowRow(wf));
     }
     this.appendChild(grid);
+  }
+
+  // Kapitel 12 Teil 6, Unterteil 2 (§22.3 Punkt 8). "input"-Events lösen
+  // hier bewusst nur eine gezielte Grid-Neuberechnung aus (nicht das
+  // volle #render()), damit das Suchfeld beim Tippen den Fokus behält —
+  // gleicher Grund wie bei den Rollennamen-Feldern im Formular
+  // ("change" statt "input" für ein Voll-Rerender, s. #renderForm).
+  #renderFilterBar(): HTMLElement {
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;";
+
+    const searchInput = document.createElement("input");
+    searchInput.placeholder = "Suche (Titel, Beschreibung, Tags) …";
+    searchInput.value = this.#searchQuery;
+    searchInput.style.cssText = "flex:1;min-width:160px;";
+    searchInput.addEventListener("input", () => {
+      this.#searchQuery = searchInput.value;
+      this.#refreshGrid();
+    });
+    bar.appendChild(searchInput);
+
+    const categorySelect = document.createElement("select");
+    const anyCategoryOpt = document.createElement("option");
+    anyCategoryOpt.value = "";
+    anyCategoryOpt.textContent = "Alle Kategorien";
+    categorySelect.appendChild(anyCategoryOpt);
+    for (const [value, label] of Object.entries(CATEGORY_LABELS)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      if (value === this.#filterCategory) opt.selected = true;
+      categorySelect.appendChild(opt);
+    }
+    categorySelect.addEventListener("change", () => {
+      this.#filterCategory = categorySelect.value;
+      this.#render();
+    });
+    bar.appendChild(categorySelect);
+
+    const statusSelect = document.createElement("select");
+    const anyStatusOpt = document.createElement("option");
+    anyStatusOpt.value = "";
+    anyStatusOpt.textContent = "Alle Status";
+    statusSelect.appendChild(anyStatusOpt);
+    for (const value of Object.keys(STATUS_COLORS)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value;
+      if (value === this.#filterStatus) opt.selected = true;
+      statusSelect.appendChild(opt);
+    }
+    statusSelect.addEventListener("change", () => {
+      this.#filterStatus = statusSelect.value;
+      this.#render();
+    });
+    bar.appendChild(statusSelect);
+
+    return bar;
+  }
+
+  // Neuberechnet nur das Grid (nicht Suchfeld/Filterleiste selbst) —
+  // s. #renderFilterBar-Kommentar zum Fokus-Verlust bei vollem Rerender.
+  #refreshGrid() {
+    const grid = this.querySelector('[data-role="workflow-grid"]');
+    const empty = this.querySelector('[data-role="workflow-filter-empty"]');
+    const filtered = this.#workflows.filter((wf) => this.#matchesFilter(wf));
+    if (grid) {
+      grid.replaceChildren(...filtered.map((wf) => this.#renderWorkflowRow(wf)));
+    }
+    if (empty) {
+      empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
+    }
   }
 
   #renderWorkflowRow(wf: Workflow): HTMLElement {

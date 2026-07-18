@@ -7238,3 +7238,73 @@ Test-Workflows danach über die API gelöscht, `make stop` ausgeführt.
 Punkt 8 (Volltextsuche/Facetten) und Punkt 1 (Rollen-Designer als
 eigene Graph-Editor-Datenquelle) — die noch offenen Unterteile von
 Kapitel 12 Teil 6, s. o.
+
+## 2026-07-18 (Nachtrag 24) — Kapitel 12 Teil 6, Unterteil 2:
+Volltextsuche + Kategorie-/Status-Facetten im Workflow-Katalog
+
+Deckt §22.3 Punkt 8 ab ("Volltext über title/description/tags[] ...
+Postgres-Volltextsuche/ILIKE reicht für die erwartete Größenordnung
+... plus Facetten"). Verbleibende Unterteile von Teil 6: Punkt 5
+(Thumbnail-Capture) und Punkt 1 (Rollen-Designer).
+
+**Design-Entscheidung — clientseitig statt neuem Backend-Such-
+Endpunkt:** die Workflow-Liste wird bereits vollständig geladen (SSE-
+getrieben, `#workflows` hält immer den kompletten Bestand, kein
+Pagination-Konzept existiert für `GET /api/v1/workflows`) — ein
+serverseitiger `ILIKE`-Query hätte für "Dutzende bis wenige Hunderte"
+Workflows (§22.3 Punkt 8 wörtlich) einen neuen Query-Parameter, eine
+neue Store-Methode und einen zweiten Filterpfad (Backend zusätzlich
+zum ohnehin nötigen clientseitigen Re-Rendering) bedeutet, ohne einen
+beobachtbaren Vorteil bei dieser Größenordnung. „Von mir zuletzt
+bearbeitet" (in Punkt 8 als dritte Facette genannt) ist bewusst nicht
+umgesetzt: dafür fehlt ein `updatedBy`/Autoren-Feld am Workflow-Objekt
+komplett — kein bestehender Code liefert diese Information (anders als
+bei Kategorie/Status, die bereits existieren) — dokumentierte
+Folgearbeit, kein Bestandteil dieses Schritts.
+
+**Umsetzung (`ui/shell/workflows-view.ts`):** `#matchesFilter(wf)`
+prüft Kategorie-Facette, Status-Facette und einen Volltext-Substring
+über Titel (Fallback: Name)/Beschreibung/Tags — alle drei Filter leer
+= unverändertes Verhalten (kein Bruch für den bisherigen Anwendungsfall
+ohne aktiven Filter). Die neue Filterleiste (`#renderFilterBar()`)
+erscheint nur ab zwei oder mehr Workflows (bei einem einzelnen wäre sie
+reiner Leerraum). Eine Besonderheit gegenüber dem sonstigen
+Formular-Muster: das Sucheingabefeld löst bei jedem Tastendruck
+(„input") bewusst **nicht** das volle `#render()` aus (das würde den
+Fokus mitten im Tippen verlieren, gleiches Problem wie bei den
+Rollennamen-Feldern im Anlege-Formular, dort mit „change" statt
+„input" gelöst — hier geht das nicht, Live-Suche soll ja bei jedem
+Zeichen filtern). Stattdessen aktualisiert `#refreshGrid()` gezielt nur
+den Inhalt zweier mit `data-role` markierter, dauerhaft im DOM
+vorhandener Container (`workflow-grid`, `workflow-filter-empty`) — die
+Facetten-`<select>`-Elemente lösen dagegen weiterhin ein volles
+`#render()` über „change" aus (kein Fokus-Problem bei Selects).
+
+**Tests:** keine neuen `deno test`-Unit-Tests (reiner DOM-Rendering-/
+Filter-Code, gleiches Muster wie die übrigen Kapitel-12-Teile —
+Verifikation live per CDP). `deno check`/`deno test ui/` weiterhin grün
+(40 bestanden, 0 fehlgeschlagen); `go build`/`go vet`/`go test ./...`
+unverändert grün (dieser Schritt ist rein clientseitig, keine
+Backend-Änderung).
+
+**Live verifiziert per CDP** (drei echte Workflows über die API
+angelegt: „Alpha Regie"/Kategorie `regieplatz`/Tag `news`, „Beta
+Grafik"/Kategorie `graphics`/Tag `sport`, „Gamma Regie"/Kategorie
+`regieplatz`/Tags `news,live`):
+- Ausgangszustand: alle 3 Kacheln sichtbar.
+- Textsuche „regie" → genau „Alpha Regie" + „Gamma Regie" (nicht „Beta
+  Grafik" — Titel-Substring-Treffer).
+- Textsuche „sport" → genau „Beta Grafik" (Tag-Substring-Treffer, nicht
+  im Titel enthalten — bestätigt, dass Tags tatsächlich durchsucht
+  werden).
+- Kategorie-Facette „regieplatz" (Suchfeld zurückgesetzt) → genau
+  „Alpha Regie" + „Gamma Regie".
+- Sinnloser Suchbegriff → 0 Kacheln, Leer-Hinweis „Kein Workflow
+  entspricht dem aktuellen Filter." sichtbar statt eines leeren Grids.
+Alle drei Test-Workflows danach über die API gelöscht, `make stop`
+ausgeführt.
+
+**Nicht Teil dieser Sitzung:** §22.3 Punkt 5 (Thumbnail-Capture) und
+Punkt 1 (Rollen-Designer als eigene Graph-Editor-Datenquelle) — die
+verbleibenden Unterteile von Kapitel 12 Teil 6. Ebenfalls offen:
+„von mir zuletzt bearbeitet"-Facette (fehlendes Autoren-Feld, s. o.).
