@@ -232,6 +232,13 @@ pub struct St2110VideoInput {
 }
 
 impl St2110VideoInput {
+    /// `multicast_group`: `Some("239.x.x.x")` bindet `udpsrc` an eine
+    /// Multicast-Gruppe statt an alle Interfaces (Kapitel 19 Teil 1,
+    /// `docs/END-GOAL-FEATURES.md` §19.3a Punkt 2) — reine
+    /// Konfigurationsfrage, kein neues Element: `udpsrc`s `address`-
+    /// Property + das standardmäßig aktive `auto-multicast` übernehmen
+    /// den Gruppen-Beitritt (am echten `gst-inspect-1.0`-Lauf bestätigt,
+    /// nicht geraten). `None` = unverändertes Unicast-Verhalten (D4).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pipeline: &gst::Pipeline,
@@ -240,6 +247,7 @@ impl St2110VideoInput {
         height: i32,
         framerate_numerator: i32,
         framerate_denominator: i32,
+        multicast_group: Option<&str>,
     ) -> Result<Self, String> {
         let rtp_caps = gst::Caps::builder("application/x-rtp")
             .field("media", "video")
@@ -252,12 +260,15 @@ impl St2110VideoInput {
             .field("payload", 96)
             .build();
 
-        let udpsrc = gst::ElementFactory::make("udpsrc")
+        let udpsrc_builder = gst::ElementFactory::make("udpsrc")
             .name("st2110_video_src")
             .property("port", listen_port as i32)
-            .property("caps", rtp_caps)
-            .build()
-            .map_err(|e| format!("udpsrc: {e}"))?;
+            .property("caps", rtp_caps);
+        let udpsrc_builder = match multicast_group {
+            Some(group) => udpsrc_builder.property("address", group),
+            None => udpsrc_builder,
+        };
+        let udpsrc = udpsrc_builder.build().map_err(|e| format!("udpsrc: {e}"))?;
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
@@ -488,11 +499,14 @@ pub struct St2110AudioInput {
 }
 
 impl St2110AudioInput {
+    /// `multicast_group`: s. `St2110VideoInput::new`-Doku, identisches
+    /// Muster.
     pub fn new(
         pipeline: &gst::Pipeline,
         listen_port: u16,
         sample_rate: i32,
         channels: i32,
+        multicast_group: Option<&str>,
     ) -> Result<Self, String> {
         let rtp_caps = gst::Caps::builder("application/x-rtp")
             .field("media", "audio")
@@ -502,12 +516,15 @@ impl St2110AudioInput {
             .field("payload", 96)
             .build();
 
-        let udpsrc = gst::ElementFactory::make("udpsrc")
+        let udpsrc_builder = gst::ElementFactory::make("udpsrc")
             .name("st2110_audio_src")
             .property("port", listen_port as i32)
-            .property("caps", rtp_caps)
-            .build()
-            .map_err(|e| format!("udpsrc: {e}"))?;
+            .property("caps", rtp_caps);
+        let udpsrc_builder = match multicast_group {
+            Some(group) => udpsrc_builder.property("address", group),
+            None => udpsrc_builder,
+        };
+        let udpsrc = udpsrc_builder.build().map_err(|e| format!("udpsrc: {e}"))?;
         let jitterbuffer = gst::ElementFactory::make("rtpjitterbuffer")
             .build()
             .map_err(|e| format!("rtpjitterbuffer: {e}"))?;
@@ -599,7 +616,7 @@ mod tests {
         assert!(output.is_active());
 
         let read_pipeline = gst::Pipeline::new();
-        let input = St2110VideoInput::new(&read_pipeline, TEST_PORT, WIDTH, HEIGHT, FPS_NUM, FPS_DEN)
+        let input = St2110VideoInput::new(&read_pipeline, TEST_PORT, WIDTH, HEIGHT, FPS_NUM, FPS_DEN, None)
             .expect("St2110VideoInput::new");
         let fakesink = gst::ElementFactory::make("fakesink")
             .property("sync", false)
@@ -643,6 +660,98 @@ mod tests {
         );
     }
 
+    /// Multicast-Variante (Kapitel 19 Teil 1, `docs/END-GOAL-FEATURES.md`
+    /// §19.3a Punkt 2): echte reale 2110-Fremdgeräte senden praktisch
+    /// immer Multicast, nicht Unicast — dieser Test bestätigt, dass
+    /// `udpsink`s `auto-multicast` (Sender) und `St2110VideoInput`s neuer
+    /// `multicast_group`-Parameter (Empfänger) tatsächlich zusammen
+    /// funktionieren, nicht nur einzeln kompilieren. Multicast-Loopback
+    /// auf `127.0.0.1`/`lo` funktioniert unter Linux normalerweise nur,
+    /// wenn die Route explizit über `lo` geht — hier stattdessen eine
+    /// echte (nicht geroutete) Multicast-Adresse verwendet, die der
+    /// Kernel für lokale Multicast-Gruppenmitgliedschaft trotzdem über
+    /// alle Interfaces inkl. Loopback zustellt (Standardverhalten für
+    /// Link-lokale Multicast-Scopes).
+    #[test]
+    fn write_then_read_multicast_loopback() {
+        gst::init().expect("gst::init");
+
+        const MULTICAST_GROUP: &str = "239.192.19.1";
+        const MULTICAST_PORT: u16 = 52111;
+
+        let write_pipeline = gst::Pipeline::new();
+        let videotestsrc = gst::ElementFactory::make("videotestsrc")
+            .property("is-live", true)
+            .property("num-buffers", 50i32)
+            .property_from_str("pattern", "smpte")
+            .build()
+            .expect("videotestsrc");
+        write_pipeline.add(&videotestsrc).expect("add videotestsrc");
+
+        let output = St2110VideoOutput::new(
+            &write_pipeline,
+            &videotestsrc,
+            MULTICAST_GROUP,
+            MULTICAST_PORT,
+            WIDTH,
+            HEIGHT,
+            FPS_NUM,
+            FPS_DEN,
+        )
+        .expect("St2110VideoOutput::new");
+        output.set_active(true);
+
+        let read_pipeline = gst::Pipeline::new();
+        let input = St2110VideoInput::new(
+            &read_pipeline,
+            MULTICAST_PORT,
+            WIDTH,
+            HEIGHT,
+            FPS_NUM,
+            FPS_DEN,
+            Some(MULTICAST_GROUP),
+        )
+        .expect("St2110VideoInput::new");
+        let fakesink = gst::ElementFactory::make("fakesink")
+            .property("sync", false)
+            .build()
+            .expect("fakesink");
+        read_pipeline.add(&fakesink).expect("add fakesink");
+        input.tail.link(&fakesink).expect("link tail to fakesink");
+
+        let received = Arc::new(AtomicU32::new(0));
+        let received_probe = received.clone();
+        fakesink
+            .static_pad("sink")
+            .expect("fakesink sink pad")
+            .add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+                received_probe.fetch_add(1, Ordering::Relaxed);
+                gst::PadProbeReturn::Ok
+            });
+
+        read_pipeline
+            .set_state(gst::State::Playing)
+            .expect("read pipeline playing");
+        std::thread::sleep(Duration::from_millis(300));
+        write_pipeline
+            .set_state(gst::State::Playing)
+            .expect("write pipeline playing");
+
+        std::thread::sleep(Duration::from_secs(3));
+
+        write_pipeline
+            .set_state(gst::State::Null)
+            .expect("write pipeline null");
+        read_pipeline
+            .set_state(gst::State::Null)
+            .expect("read pipeline null");
+
+        assert!(
+            received.load(Ordering::Relaxed) > 0,
+            "expected at least one buffer to arrive via real ST2110 multicast loopback ({MULTICAST_GROUP}:{MULTICAST_PORT})"
+        );
+    }
+
     /// Analoger Loopback-Test für den Audio-Pfad (Kapitel 19 Teil 0) —
     /// gleiches Muster wie `write_then_read_loopback` oben, nur
     /// `audiotestsrc` statt `videotestsrc` und die L24/AES67-Kette.
@@ -675,7 +784,7 @@ mod tests {
         assert!(output.is_active());
 
         let read_pipeline = gst::Pipeline::new();
-        let input = St2110AudioInput::new(&read_pipeline, AUDIO_TEST_PORT, SAMPLE_RATE, CHANNELS)
+        let input = St2110AudioInput::new(&read_pipeline, AUDIO_TEST_PORT, SAMPLE_RATE, CHANNELS, None)
             .expect("St2110AudioInput::new");
         let fakesink = gst::ElementFactory::make("fakesink")
             .property("sync", false)
@@ -761,7 +870,7 @@ mod tests {
 
         let read_pipeline = gst::Pipeline::new();
         let input =
-            St2110AudioInput::new(&read_pipeline, PORT, SAMPLE_RATE, CHANNELS).expect("St2110AudioInput::new");
+            St2110AudioInput::new(&read_pipeline, PORT, SAMPLE_RATE, CHANNELS, None).expect("St2110AudioInput::new");
         let fakesink = gst::ElementFactory::make("fakesink")
             .property("sync", false)
             .build()

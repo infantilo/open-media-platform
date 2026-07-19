@@ -147,6 +147,7 @@ fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoInp
         HEIGHT,
         FRAMERATE_NUMERATOR,
         FRAMERATE_DENOMINATOR,
+        None,
     )?;
 
     let payloader = gst::ElementFactory::make("rtpvrawpay")

@@ -9079,3 +9079,75 @@ Sample-Rate, anders als bei Video (fester 90000Hz-Takt).
 **Nicht Teil dieser Scheibe** (§19.4 Folge-Teile): `omp-2110-gateway`-
 Node-Paar (Teil 1), PTP-Zeitbasis (Teil 2), `omp-aes67-gateway`/SAP
 (Teil 3), NDI-Gateway (Teil 4).
+
+## 2026-07-19 (Nachtrag 46) — Kapitel 19 Teil 1: `omp-2110-gateway`-
+Node-Paar
+
+Neuer Node `nodes/omp-2110-gateway` (Cargo-Workspace-Mitglied), zwei
+Richtungen per `OMP_2110_GATEWAY_DIRECTION=ingest|output` — **anders
+als `omp-srt-gateway`** (reines Protokoll-zu-Protokoll-Gateway, kein
+MXL-Bezug) berührt hier genau eine Seite den OMP-internen MXL-Fabric
+(§19.3a Punkt 4): Ingest fix per Env-Var(s)/SDP konfiguriert
+(`St2110VideoInput ! MxlVideoOutput`, IS-04-Sender-Registrierung,
+gleiche "einmal konfiguriert"-Philosophie wie `omp-srt-gateway`);
+Output wählt die MXL-Quelle dynamisch per echtem IS-05-Receiver-PATCH
+(`MxlVideoInput ! St2110VideoOutput`, gleiches Rebuild-bei-Connect-
+Muster wie `omp-viewer::pipeline`), der 2110-Zielendpunkt bleibt fix.
+Video-only in dieser Scheibe (dokumentierte Einschränkung, Audio-
+Ingest/-Output folgt bei konkretem Bedarf).
+
+**Vorarbeit in `st2110.rs` (vor dem eigentlichen Gateway nötig, live
+entdeckt):** `St2110VideoInput`/`St2110AudioInput` waren bislang
+Unicast-only (dokumentierter D4-Restscope) — echte 2110-Fremdgeräte
+senden praktisch immer Multicast (§19.3a Punkt 2). Neuer
+`multicast_group: Option<&str>`-Parameter setzt `udpsrc`s `address`-
+Property; `auto-multicast` (Default `true`) übernimmt den
+Gruppen-Beitritt automatisch — reine Konfigurationsfrage, kein neues
+Element, am echten `gst-inspect-1.0`-Lauf bestätigt. Ein neuer
+`write_then_read_multicast_loopback`-Test (`239.192.19.1`, echte
+Multicast-Loopback-Zustellung über `lo`, kein Unicast-Workaround)
+bestätigt das live, zusätzlich zum bestehenden Unicast-Test. Sende-
+seitig (`udpsink`) war Multicast bereits ohne Änderung nutzbar
+(`auto-multicast` genauso im Default aktiv).
+
+**`sdp.rs` (neu):** minimaler, handgeschriebener SDP-Parser (§19.3a
+Punkt 4: "SDP-Annahme... statt Einzel-Env-Vars") — bewusst kein
+RFC-4566-Vollparser/keine neue Dependency, nur die vier Felder, die
+`St2110VideoInput` tatsächlich braucht (`c=`-Zieladresse, `m=video`-
+Port, `a=fmtp`-Breite/Höhe/Framerate). Drei Unit-Tests, u. a. eine
+Rundreise mit einem von `St2110VideoOutput::sdp` selbst erzeugten SDP
+und ein Multicast-TTL-Suffix-Fall (`239.1.1.1/32` → `239.1.1.1`, echte
+SDP-Multicast-Konvention).
+
+**Ein echter Bug live gefunden und behoben:** die erste `SenderSpec`
+setzte `id: Some(flow_id.clone())` **zusätzlich** zum bereits gesetzten
+`flow.id`, wodurch dieselbe UUID doppelt (als Sender- **und** als
+Flow-Ressourcen-ID) an die NMOS-Registry ging — Registrierung schlug
+mit HTTP 400 fehl. Behoben durch Entfernen des überflüssigen `id`-Felds
+(`omp-source`s eigenes, bereits funktionierendes Muster setzt dort
+ebenfalls nichts, nur `flow.id`) — nicht geraten, sondern am
+tatsächlich fehlschlagenden Registrierungsversuch diagnostiziert.
+
+**Live verifiziert, vollständige Kette, kein Mock:** ein echter
+`gst-launch-1.0`-Prozess sendet SMPTE-Testbild als RFC-4175/RTP an
+`239.5.5.5:6100` → eine echte Ingest-Instanz empfängt es und schreibt
+einen echten MXL-Flow (`mxl-info` bestätigte einen über die reale Zeit
+wachsenden Head-Index) → echte IS-04-Sender-Registrierung sichtbar über
+`/api/v1/nodes` → eine echte Output-Instanz per echtem
+`POST /api/v1/graph/edges` (IS-05-PATCH) an genau diesen Sender verbunden
+(`connectedFlowId` bestätigte dieselbe Flow-UUID) → sendet echtes
+2110-Multicast auf `239.6.6.6:6200` → ein unabhängiger, dritter
+`gst-launch-1.0`-Empfänger-Prozess dekodierte den kompletten Pfad bis
+`fakesink` erfolgreich (`rtpjitterbuffer`→`rtpvrawdepay`→
+`videoconvert`, alle Caps-Verhandlungen protokolliert). Reale Quelle →
+Ingest-Gateway → MXL → Output-Gateway → reale Senke, keine einzelne
+Stelle gemockt. `cargo clippy`/`cargo test --workspace` grün, keine
+neuen Warnungen. Alle Testartefakte (drei Prozesse, zwei MXL-Flows,
+Orchestrator) danach entfernt.
+
+**Nicht Teil dieser Scheibe:** kein Katalog-Eintrag (`deploy/
+catalog.json`) — `omp-srt-gateway` ist dort aus demselben Grund auch
+nicht gelistet (Richtungs-Env-Vars passen nicht gut zur generischen
+Launcher-UI), Start bleibt direkt/manuell wie beim SRT-Gateway. Audio-
+Ingest/-Output, PTP-Zeitbasis (Teil 2), `omp-aes67-gateway`/SAP
+(Teil 3), NDI-Gateway (Teil 4) bleiben offen.

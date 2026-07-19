@@ -14,4 +14,5 @@ members = [
     "omp-playout-automation",
     "omp-srt-gateway",
     "omp-ograf",
+    "omp-2110-gateway",
 ]

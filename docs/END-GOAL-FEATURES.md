@@ -3289,9 +3289,12 @@ Kapiteln, nicht hier wiederholt.
    Kernel-Bypass-Ausblick** (nachgereicht 2026-07-19, nicht Teil der
    ursprünglichen `frage an fabel.txt`). ✅ **Teil 0 (2110-30/AES67-
    Audio) erledigt, gleicher Tag** (`docs/decisions.md` Nachtrag 45) —
-   live per echter FFmpeg-Gegenprobe verifiziert. Zweigeteilt
-   einzuordnen: die **restlichen Software-Teile** (`omp-2110-gateway`,
-   AES67-Gateway als Dante-Interop, NDI-Gateway nach §6.5) sind auf der
+   live per echter FFmpeg-Gegenprobe verifiziert. ✅ **Teil 1
+   (`omp-2110-gateway`-Node-Paar) ebenfalls erledigt, gleicher Tag**
+   (`docs/decisions.md` Nachtrag 46) — live per echter Drei-Prozess-
+   Kette (Quelle → Ingest → MXL → Output → Senke) verifiziert.
+   Zweigeteilt einzuordnen: die **restlichen Software-Teile**
+   (AES67-Gateway als Dante-Interop, NDI-Gateway nach §6.5) sind auf der
    Dev-Maschine vollständig testbar und der erste Punkt der Liste, der
    OMP an **echtes Fremd-Equipment** anschließt (Kameras, Mischpulte,
    OBS/vMix) — Nutzwert vergleichbar mit Kapitel 15, Aufwand pro Teil
@@ -3560,12 +3563,15 @@ Recherchierte Faktenlage (Stand 2026-07):
   FFmpeg-Gegenprobe (ein unabhängiger `ffmpeg`-Prozess sendet einen
   echten Sinuston als L24/RTP, `St2110AudioInput` empfängt/dekodiert
   ihn korrekt — der eigentliche Interop-Nachweis).
-- **Teil 1 — `omp-2110-gateway`-Node-Paar:** gerichtete Rollen
-  analog `omp-srt-gateway`, Multicast, SDP-Annahme auf der
-  Empfangsseite, IS-04/05-Registrierung. Verifikation: Workflow
-  MXL-Quelle → Gateway-out → (Multicast-Loopback) → Gateway-in →
-  Viewer auf der Dev-Maschine, plus FFmpeg als eine der beiden
-  Gegenstellen.
+- **Teil 1 — `omp-2110-gateway`-Node-Paar.** ✅ **Erledigt 2026-07-19**
+  (`docs/decisions.md` Nachtrag 46): gerichtete Rollen (`ingest`/
+  `output`) analog `omp-srt-gateway`, echte Multicast-Unterstützung
+  (neu in `St2110VideoInput`/`St2110AudioInput`, vorher Unicast-only),
+  SDP-Annahme auf der Empfangsseite (`sdp.rs`, minimaler Parser),
+  IS-04/05-Registrierung. Live verifiziert mit einer echten
+  Drei-Prozess-Kette (`gst-launch-1.0`-Quelle → Ingest-Gateway → MXL →
+  Output-Gateway → unabhängiger `gst-launch-1.0`-Empfänger), kein Mock.
+  Video-only (Audio-Gateway-Betrieb offener Folgeschritt).
 - **Teil 2 — PTP-Zeitbasis (Opt-in):** `gstreamer-net::PtpClock` als
   Pipeline-Clock in den 2110-/AES67-Pfaden. Verifikation: `ptp4l`
   als Software-Master in einem Netzwerk-Namespace (kein
