@@ -827,12 +827,13 @@ umgesetzt**, nur K3/K4-Teil-1 „Teil 1" ist fertig). Vier Punkte gehen
    nötig) — der Snapshot-Service versucht sie zuerst, fällt bei 404 auf
    die bisherige Parameter-Enumeration zurück. `omp-audio-mixer` hat
    dazu ein UI-Presets-Panel bekommen (Speichern/Anwenden-Chips);
-   `omp-video-mixer-me` hat die Backend-Seite, UI-Anschluss ist ein
-   kleiner offener Folgeschritt.
+   `omp-video-mixer-me` hat inzwischen (gleicher Tag, Nachtrag)
+   dasselbe UI-Panel bekommen — beide §13-Referenzknoten damit
+   vollständig, live per Chromium/CDP-Klick verifiziert (Keyer + DVE-Box
+   korrekt gespeichert/wiederhergestellt).
 
-**Priorität:** Teil 2 (Dynamik/EQ) und Presets (Punkt 4) sind erledigt
-(s. o.). Offener kleiner Folgeschritt: Presets-UI-Panel auch für
-`omp-video-mixer-me` (Backend-Seite bereits vorhanden, s. Punkt 4).
+**Priorität:** Teil 2 (Dynamik/EQ) und Presets (Punkt 4, inkl.
+`omp-video-mixer-me`-UI) sind erledigt (s. o.).
 
 ---
 

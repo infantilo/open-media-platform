@@ -8734,3 +8734,15 @@ noch keine Presets-Sektion (Backend-Infrastruktur ist fertig, UI-Klick-
 Pfad wäre ein kleiner, unabhängiger Folgeschritt). Kein DELETE-Endpunkt
 für Snapshots — bislang nie gebraucht, in dieser Scheibe erstmals als
 Lücke sichtbar geworden (Cleanup ging nur per direktem SQL).
+
+**Nachtrag, gleicher Tag:** `omp-video-mixer-me`-Presets-UI nachgezogen
+— identisches Muster wie `omp-audio-mixer/ui/bundle.js` (neue
+"Presets"-Sektion, `nodeIds:[nodeId]`-Scoping, Chip pro gespeichertem
+Preset). Live verifiziert: echten Keyer aktiviert + DVE-Box gesetzt
+(`x:10,y:20,w:200,h:150`), per echtem Chromium/CDP-Klick auf "Preset
+speichern" gespeichert, beides über die reale API zurückgesetzt
+(Keyer aus, DVE-Reset), per Klick auf den Preset-Chip wiederhergestellt
+— `keyer.enabled` und `dve.box` beide exakt wie gespeichert bestätigt.
+Testartefakte (Snapshot-Zeile per SQL, Instanz, `/dev/shm/omp-mxl`-Flow,
+Chromium-Prozess) danach entfernt. Damit ist §4.6 Punkt 4 für beide
+§13-Referenzknoten vollständig (UI-Seite).
