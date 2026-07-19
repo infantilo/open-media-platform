@@ -63,6 +63,8 @@ type fakeNodeClient struct {
 	values         map[string]json.RawMessage // baseURL+"/"+name -> value
 	patched        map[string]json.RawMessage
 	patchErrors    map[string]error
+	states         map[string]json.RawMessage // baseURL -> state (absent = /state not supported)
+	appliedStates  map[string]json.RawMessage
 }
 
 func newFakeNodeClient() *fakeNodeClient {
@@ -71,7 +73,25 @@ func newFakeNodeClient() *fakeNodeClient {
 		values:         map[string]json.RawMessage{},
 		patched:        map[string]json.RawMessage{},
 		patchErrors:    map[string]error{},
+		states:         map[string]json.RawMessage{},
+		appliedStates:  map[string]json.RawMessage{},
 	}
+}
+
+// GetState/ApplyState: fehlt baseURL in f.states, verhält sich der Fake
+// wie ein Node ohne /state-Route (ok==false, kein Fehler) — deckt sich
+// mit dem echten httpNodeClient-Verhalten bei 404.
+func (f *fakeNodeClient) GetState(ctx context.Context, baseURL string) (json.RawMessage, bool, error) {
+	state, ok := f.states[baseURL]
+	return state, ok, nil
+}
+
+func (f *fakeNodeClient) ApplyState(ctx context.Context, baseURL string, state json.RawMessage) (bool, error) {
+	if _, ok := f.states[baseURL]; !ok {
+		return false, nil
+	}
+	f.appliedStates[baseURL] = state
+	return true, nil
 }
 
 func (f *fakeNodeClient) GetWritableParams(ctx context.Context, baseURL string) ([]string, error) {
@@ -112,7 +132,7 @@ func TestCreateCapturesEdgesAndWritableParams(t *testing.T) {
 
 	svc, _ := newTestService(nodes, g, newFakeStore(), client)
 
-	snap, err := svc.Create(context.Background(), "Szene 1")
+	snap, err := svc.Create(context.Background(), "Szene 1", nil)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -127,11 +147,101 @@ func TestCreateCapturesEdgesAndWritableParams(t *testing.T) {
 	}
 }
 
+// TestCreateWithNodeIDsScopesToThoseNodesAndOmitsEdges (§4.6 Punkt 4,
+// docs/END-GOAL-FEATURES.md "Mixer-Presets"): ein Node-Preset erfasst
+// nur die Parameter der genannten Node(s), lässt Kanten bewusst weg,
+// auch wenn welche im Graph existieren.
+func TestCreateWithNodeIDsScopesToThoseNodesAndOmitsEdges(t *testing.T) {
+	nodes := []registry.NodeView{
+		{ID: "node-1", APIBaseURL: "http://node-1"},
+		{ID: "node-2", APIBaseURL: "http://node-2"},
+	}
+	g := graph.Graph{Edges: []graph.Edge{{ID: "recv-1", FromSender: "send-1", ToReceiver: "recv-1"}}}
+
+	client := newFakeNodeClient()
+	client.writableParams["http://node-1"] = []string{"gain"}
+	client.values["http://node-1/gain"] = json.RawMessage(`-6`)
+	client.writableParams["http://node-2"] = []string{"gain"}
+	client.values["http://node-2/gain"] = json.RawMessage(`3`)
+
+	svc, _ := newTestService(nodes, g, newFakeStore(), client)
+
+	snap, err := svc.Create(context.Background(), "Mixer-Preset A", []string{"node-1"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(snap.Edges) != 0 {
+		t.Errorf("Edges = %+v, want none (node-scoped preset)", snap.Edges)
+	}
+	if len(snap.Params) != 1 || snap.Params[0].NodeID != "node-1" {
+		t.Fatalf("Params = %+v, want exactly one param for node-1", snap.Params)
+	}
+	if len(snap.NodeIDs) != 1 || snap.NodeIDs[0] != "node-1" {
+		t.Errorf("NodeIDs = %+v, want [node-1]", snap.NodeIDs)
+	}
+}
+
+// TestCreatePrefersNodeStateOverWritableParams (docs/decisions.md
+// Nachtrag 40, "Mixer-Presets"-Blocker): ein Node, der GetState
+// unterstützt, wird darüber erfasst statt über die (für ihn ggf. leere,
+// da alles readonly) Parameter-Enumeration — und beide Wege schließen
+// sich für denselben Node gegenseitig aus.
+func TestCreatePrefersNodeStateOverWritableParams(t *testing.T) {
+	nodes := []registry.NodeView{{ID: "node-1", APIBaseURL: "http://node-1"}}
+
+	client := newFakeNodeClient()
+	client.states["http://node-1"] = json.RawMessage(`{"channels":[{"id":"ch1","gainDb":-12}]}`)
+	// Sollte ignoriert werden, weil GetState bereits greift.
+	client.writableParams["http://node-1"] = []string{"gain"}
+	client.values["http://node-1/gain"] = json.RawMessage(`0`)
+
+	svc, _ := newTestService(nodes, graph.Graph{}, newFakeStore(), client)
+
+	snap, err := svc.Create(context.Background(), "Mixer-Preset A", []string{"node-1"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(snap.Params) != 0 {
+		t.Errorf("Params = %+v, want none (node captured via /state)", snap.Params)
+	}
+	if len(snap.States) != 1 || snap.States[0].NodeID != "node-1" {
+		t.Fatalf("States = %+v, want exactly one state for node-1", snap.States)
+	}
+	if string(snap.States[0].State) != `{"channels":[{"id":"ch1","gainDb":-12}]}` {
+		t.Errorf("States[0].State = %s, want the captured JSON unchanged", snap.States[0].State)
+	}
+}
+
+func TestApplyRestoresNodeStateBeforeParams(t *testing.T) {
+	nodes := []registry.NodeView{{ID: "node-1", APIBaseURL: "http://node-1"}}
+	store := newFakeStore()
+	client := newFakeNodeClient()
+	client.states["http://node-1"] = json.RawMessage(`{}`)
+	svc, _ := newTestService(nodes, graph.Graph{}, store, client)
+
+	snap := Snapshot{
+		ID:     "s1",
+		States: []NodeState{{NodeID: "node-1", State: json.RawMessage(`{"channels":[]}`)}},
+	}
+	_ = store.Put(snap)
+
+	result, err := svc.Apply(context.Background(), "s1")
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if len(result.Errors) != 0 {
+		t.Fatalf("Errors = %v, want none", result.Errors)
+	}
+	if string(client.appliedStates["http://node-1"]) != `{"channels":[]}` {
+		t.Errorf("appliedStates = %s, want the snapshot's state unchanged", client.appliedStates["http://node-1"])
+	}
+}
+
 func TestCreatePersistsSnapshotForLaterRetrieval(t *testing.T) {
 	store := newFakeStore()
 	svc, _ := newTestService(nil, graph.Graph{}, store, newFakeNodeClient())
 
-	snap, err := svc.Create(context.Background(), "Szene 1")
+	snap, err := svc.Create(context.Background(), "Szene 1", nil)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

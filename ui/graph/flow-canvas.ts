@@ -110,6 +110,12 @@ interface LayoutBlob {
 interface SnapshotSummary {
   id: string;
   label: string;
+  // §4.6 Punkt 4 (docs/END-GOAL-FEATURES.md, "Mixer-Presets"): nicht
+  // leer = ein Node-Preset, kein globaler Szenen-Snapshot — die
+  // Snapshot-Leiste hier zeigt nur echte Szenen (s. #renderSnapshotBar),
+  // Node-Presets erscheinen stattdessen im UI-Bundle des jeweiligen
+  // Nodes selbst (z. B. `omp-audio-mixer/ui/bundle.js`).
+  nodeIds?: string[];
 }
 
 interface ApplyResult {
@@ -2065,7 +2071,9 @@ export class FlowCanvas extends HTMLElement {
       const res = await apiFetch("/api/v1/snapshots");
       if (res.ok) {
         const snaps = (await res.json()) as SnapshotSummary[];
-        for (const snap of snaps) {
+        // Node-Presets (§4.6 Punkt 4) gehören ins UI-Bundle ihres Nodes,
+        // nicht in diese workflow-weite Szenen-Leiste.
+        for (const snap of snaps.filter((s) => !s.nodeIds || s.nodeIds.length === 0)) {
           const chip = document.createElement("button");
           chip.textContent = snap.label || snap.id.slice(0, 8);
           chip.title = "Szene anwenden";

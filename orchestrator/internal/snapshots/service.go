@@ -50,21 +50,54 @@ func NewService(nodes NodeLister, graphSvc GraphService, store *Store, httpClien
 	return &Service{nodes: nodes, graph: graphSvc, store: store, client: newHTTPNodeClient(httpClient)}
 }
 
-// Create erfasst den kompletten Ist-Zustand (Kanten + alle schreibbaren
-// Parameterwerte aller erreichbaren Nodes) und speichert ihn als neuen
-// Snapshot.
-func (s *Service) Create(ctx context.Context, label string) (Snapshot, error) {
-	g := s.graph.Graph(ctx)
-	edges := make([]Edge, len(g.Edges))
-	for i, e := range g.Edges {
-		edges[i] = Edge{FromSender: e.FromSender, ToReceiver: e.ToReceiver}
+// Create erfasst den Ist-Zustand und speichert ihn als neuen Snapshot.
+// `nodeIDs` leer: klassische, workflow-weite Szene (Kanten + alle
+// schreibbaren Parameterwerte aller erreichbaren Nodes, unverändertes
+// B7-Verhalten). `nodeIDs` nicht leer: ein "Node-Preset" (§4.6 Punkt 4)
+// — nur die Parameter der genannten Nodes, keine Kanten (ein Preset ist
+// Node-interner Zustand).
+func (s *Service) Create(ctx context.Context, label string, nodeIDs []string) (Snapshot, error) {
+	scoped := len(nodeIDs) > 0
+	scope := make(map[string]bool, len(nodeIDs))
+	for _, id := range nodeIDs {
+		scope[id] = true
+	}
+
+	edges := []Edge{}
+	if !scoped {
+		g := s.graph.Graph(ctx)
+		edges = make([]Edge, len(g.Edges))
+		for i, e := range g.Edges {
+			edges[i] = Edge{FromSender: e.FromSender, ToReceiver: e.ToReceiver}
+		}
 	}
 
 	var params []ParamValue
+	var states []NodeState
 	for _, node := range s.nodes.List() {
 		if node.APIBaseURL == "" {
 			continue
 		}
+		if scoped && !scope[node.ID] {
+			continue
+		}
+
+		// Node-eigener Vollzustand (docs/decisions.md Nachtrag 40) hat
+		// Vorrang: Nodes wie omp-audio-mixer/omp-video-mixer-me erklären
+		// ausnahmslos alle Parameter readonly:true, die Schleife unten
+		// würde für sie nichts erfassen. `ok==false` (404, kein Fehler)
+		// heißt "Node kennt /state nicht" — dann normal weiter mit der
+		// generischen Parametererfassung.
+		state, ok, err := s.client.GetState(ctx, node.APIBaseURL)
+		if err != nil {
+			slog.Warn("snapshot: failed to fetch node state", "node", node.ID, "error", err)
+			continue
+		}
+		if ok {
+			states = append(states, NodeState{NodeID: node.ID, State: state})
+			continue
+		}
+
 		names, err := s.client.GetWritableParams(ctx, node.APIBaseURL)
 		if err != nil {
 			slog.Warn("snapshot: failed to fetch descriptor", "node", node.ID, "error", err)
@@ -91,6 +124,8 @@ func (s *Service) Create(ctx context.Context, label string) (Snapshot, error) {
 		CreatedAt: time.Now(),
 		Edges:     edges,
 		Params:    params,
+		States:    states,
+		NodeIDs:   nodeIDs,
 	}
 	if err := s.store.Put(snap); err != nil {
 		return Snapshot{}, err
@@ -113,6 +148,22 @@ func (s *Service) Apply(ctx context.Context, id string) (ApplyResult, error) {
 	}
 
 	errs := []string{}
+
+	for _, s_ := range snap.States {
+		node, ok := s.findNode(s_.NodeID)
+		if !ok || node.APIBaseURL == "" {
+			errs = append(errs, fmt.Sprintf("state on node %s: node unreachable", s_.NodeID))
+			continue
+		}
+		applied, err := s.client.ApplyState(ctx, node.APIBaseURL, s_.State)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("state on node %s: %v", s_.NodeID, err))
+			continue
+		}
+		if !applied {
+			errs = append(errs, fmt.Sprintf("state on node %s: node no longer supports /state", s_.NodeID))
+		}
+	}
 
 	for _, p := range snap.Params {
 		node, ok := s.findNode(p.NodeID)

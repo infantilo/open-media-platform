@@ -267,8 +267,71 @@ impl ParamStore for MixerStore {
         }
     }
 
-    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if method == "GET" && path == "/state" {
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": self.capture_state() }))
+                .unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            let parsed: Result<Value, _> = serde_json::from_slice(body);
+            let state = match parsed {
+                Ok(v) => v.get("state").cloned().unwrap_or(Value::Null),
+                Err(_) => {
+                    return Some(RawResponse {
+                        status: 400,
+                        content_type: "application/json",
+                        body: br#"{"error":"invalid JSON body"}"#.to_vec(),
+                    });
+                }
+            };
+            self.restore_state(&state);
+            return Some(RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() });
+        }
         uibundle::route(method, path)
+    }
+}
+
+impl MixerStore {
+    /// Node-eigener Vollzustand (§4.6 Punkt 4, `docs/END-GOAL-FEATURES.md`
+    /// "Mixer-Presets", `docs/decisions.md` Nachtrag 40) hinter `GET
+    /// /state` — dasselbe Node-Contract-Muster wie `omp-audio-mixer`
+    /// (gleicher Grund: alle Parameter hier sind `readonly:true`, s.
+    /// Modul-Doku oben zu MS-05-02/eigenen Klassen, Mutation läuft nur
+    /// über `crosspoint.*`/`dve.*`/`keyer.*`-Methoden).
+    fn capture_state(&self) -> Value {
+        let box_ = *self.dve_box.lock().expect("lock poisoned");
+        serde_json::json!({
+            "programSenderId": self.program.lock().expect("lock poisoned").clone(),
+            "presetSenderId": self.preset.lock().expect("lock poisoned").clone(),
+            "dveBox": {"x": box_.x, "y": box_.y, "width": box_.width, "height": box_.height},
+            "keyerEnabled": *self.keyer_enabled.lock().expect("lock poisoned"),
+        })
+    }
+
+    /// Kehrseite von `capture_state`: Preset-Bus zuerst gesetzt
+    /// (`select_preset`), Programm-Bus danach direkt per PGM-Hot-Cut
+    /// (`take`, s. `pipeline.rs`-Doku dort — berührt den Preset-Wert
+    /// bewusst nicht), damit beide Busse unabhängig auf den gespeicherten
+    /// Stand zurückkehren, genau wie sie unabhängig erfasst wurden.
+    fn restore_state(&self, doc: &Value) {
+        let program = doc.get("programSenderId").and_then(Value::as_str).map(str::to_string);
+        let preset = doc.get("presetSenderId").and_then(Value::as_str).map(str::to_string);
+        self.pipeline.select_preset(preset);
+        self.pipeline.take(program);
+
+        if let Some(b) = doc.get("dveBox") {
+            let box_ = DveBox {
+                x: b.get("x").and_then(Value::as_i64).unwrap_or(0) as i32,
+                y: b.get("y").and_then(Value::as_i64).unwrap_or(0) as i32,
+                width: b.get("width").and_then(Value::as_i64).unwrap_or(0) as i32,
+                height: b.get("height").and_then(Value::as_i64).unwrap_or(0) as i32,
+            };
+            self.pipeline.set_dve_box(box_);
+        }
+        if let Some(enabled) = doc.get("keyerEnabled").and_then(Value::as_bool) {
+            self.pipeline.set_keyer_enabled(enabled);
+        }
     }
 }
 

@@ -8637,3 +8637,100 @@ nicht weiterverfolgt). Alle Testartefakte danach entfernt.
 
 **Nicht Teil dieser Scheibe:** `omp-ograf` (Design-Frage Fill/Key
 offen, s. o.) bleibt der letzte Kapitel-15-Baustein.
+
+## 2026-07-19 (Nachtrag 40) — §4.6 Punkt 4: Mixer-Presets, Blocker
+gefunden + behoben (Node-Contract-Erweiterung `GET`/`POST /state`)
+
+**Blocker (live entdeckt, nicht vorher erkennbar):** Die in Nachtrag
+30/§4.6 Punkt 4 vorgeschlagene Umsetzung — Snapshot-Service (B7) per
+`nodeIds:[self]` auf einen Node einschränken, denselben Erfassungscode
+wiederverwenden — baut technisch (Go: `orchestrator/internal/
+snapshots/{types,service,nodeclient}.go`, `httpapi/snapshot_handlers.go`;
+TS: `ui/graph/flow-canvas.ts`; alle Unit-Tests grün) und wurde erst beim
+echten Live-Test als funktional wirkungslos erkannt: ein soeben
+angelegtes Node-Preset für einen echten `omp-audio-mixer` (Kanal-Gain
+auf -12dB gesetzt) lieferte `"params": null` — nichts erfasst. Ursache:
+`GetWritableParams` (der Erfassungscode) filtert ausschließlich auf
+`readonly==false` — `omp-audio-mixer` **und** `omp-video-mixer-me`
+erklären aber (C10/C11-Konvention, s. `channel_param`-Doku in
+`omp-audio-mixer/src/main.rs`) ausnahmslos **alle** Parameter
+`readonly:true`; Mutation läuft nur über eigene `invoke()`-Methoden
+(`setGain`, `setComp`, `crosspoint.select`, `dve.setBox`, …). Für diese
+beiden Nodes erfasst der generische Parameter-Proxy strukturell nichts
+— "Mixer-Presets" hätte leere, wirkungslose Presets erzeugt.
+
+**Nutzer entschieden (AskUserQuestion, drei Optionen vorgelegt):**
+Node-Contract um eine optionale, generische `GET`/`POST /state`-Route
+erweitern (Empfehlung, gewählt) statt B) `set()` je Einzelfeld
+PATCH-fähig nachzurüsten (hätte die C11-Readonly-Entscheidung teilweise
+zurückgedreht, pro Feld separate Rekonstruktionslogik in zwei Nodes)
+oder C) Scope zurückstellen.
+
+**Umsetzung** — Node-Contract-Erweiterung (`ARCHITECTURE.md` §5-Sinne):
+`GET /state` liefert `{"state": <opak, node-eigen>}`, `POST /state`
+mit `{"state": ...}` stellt ihn wieder her. Kein Descriptor-Feld nötig
+— reines HTTP-Existenz-Discovery (404 = Node unterstützt es nicht).
+Implementiert über den bereits vorhandenen `ParamStore::extra_route`-
+Erweiterungspunkt (bislang nur für IS-05/SDP genutzt), **keine**
+Änderung an der `ParamStore`-Trait-Signatur (hätte jeden Node im
+Workspace berührt, wegen `invoke()`s fehlendem Rückgabewert für
+Zustandsdaten).
+
+- `omp-audio-mixer/src/main.rs`: `capture_state`/`restore_state` —
+  alle Kanäle (Gain/EQ/3-Band-Freq+Width/Kompressor/Quelle/AFV-Felder)
+  + Master-Limiter als ein JSON-Objekt (manuell über `serde_json::Value`
+  gebaut, kein neuer `serde`-Derive-Dependency — konsistent mit dem
+  Rest der Datei). `restore_state` ersetzt die komplette Kanalliste
+  (nicht additiv: "genau diese Kanäle mit genau diesen Werten"), baut
+  jeden Kanal über dieselben Pipeline-Aufrufe wie die bestehenden
+  `channel.<id>.set*`-Methoden neu auf. Eine beim Erfassen vorhandene,
+  inzwischen verschwundene externe Quelle fällt still auf den internen
+  Testton zurück statt das ganze Preset scheitern zu lassen.
+- `omp-video-mixer-me/src/main.rs`: `capture_state`/`restore_state` —
+  Program-/Preset-Sender-ID, DVE-Box, Keyer-Enabled. Restore nutzt
+  `select_preset` (Preset-Bus) + `take` (PGM-Hot-Cut, berührt Preset
+  bewusst nicht, s. Nachtrag zu K3-Teil-2) für unabhängige Wiederher-
+  stellung beider Busse — kein UI-Bundle-Anschluss in dieser Scheibe
+  (nur Backend-Infrastruktur, analog zum Audiomixer als natürlicher
+  Folgeschritt).
+- `orchestrator/internal/snapshots/nodeclient.go`: `GetState`/
+  `ApplyState` (404 = kein Fehler, "Node kennt /state nicht").
+  `service.go::Create` versucht `GetState` je Node zuerst, überspringt
+  bei Erfolg die Parameter-Enumeration für diesen Node komplett (auch
+  bei workflow-weiten, nicht nur node-skopierten Szenen — kommt allen
+  künftigen Voll-Szenen-Snapshots zugute, die einen solchen Node
+  enthalten). `Apply` stellt States vor Params/Edges wieder her.
+- `nodes/omp-audio-mixer/ui/bundle.js`: "Presets"-Sektion (zuvor kurz
+  eingebaut, nach dem Blocker-Fund als nicht-funktional wieder entfernt,
+  nach dem Fix erneut hinzugefügt) — "Preset speichern" + Preset-Chips
+  zum Anwenden, `nodeIds:[nodeId]`-Scoping wie geplant.
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build --workspace`
++ `cargo clippy --all-targets` für beide Nodes sauber (keine neuen
+Warnings ggü. Baseline, per `git stash`-Vergleich geprüft). Go:
+`go build ./...`, `go vet ./...`, `go test ./...` grün, neue Tests
+(`TestCreatePrefersNodeStateOverWritableParams`,
+`TestApplyRestoresNodeStateBeforeParams`) decken den `/state`-Vorrang-
+Pfad ab. `deno check`/`deno test` (56 grün)/`make ui` sauber. Live
+gegen einen echten Orchestrator + echten `omp-audio-mixer`: Kanal
+angelegt, Gain auf -12dB, Node-Preset erstellt → `GET /state` direkt am
+Node bestätigte die reale -12dB im JSON; Gain auf +3dB geändert, Preset
+per API angewendet → Gain wieder exakt -12dB, keine Kanal-Duplikate.
+Zusätzlich per echtem Chromium/CDP (Bundle live geladen, Custom
+Element im DOM instanziiert, echte Klicks auf "Preset speichern" +
+einen Preset-Chip statt nur API-Aufrufe): Presets-Sektion rendert,
+Speichern-Klick legt real ein Preset mit dem tatsächlichen Node-Zustand
+an, Anwenden-Klick stellt einen zuvor geänderten Gain-Wert korrekt
+wieder her (ein erster CDP-Durchlauf zeigte scheinbar 0dB statt -7dB —
+Ursache war ein Label-Kollisions-Fehler im eigenen Testskript, zwei
+Presets mit identischem Anzeigetext aus einem fehlgeschlagenen
+Retry-Versuch, per direktem Preset-ID-Vergleich als Testartefakt
+bestätigt, kein Produktfehler). Alle Testartefakte (Snapshots direkt in
+Postgres gelöscht, da kein DELETE-Endpunkt für Snapshots existiert;
+Instanzen, `/dev/shm/omp-mxl`-Flows, Chromium-Prozesse) danach entfernt.
+
+**Nicht Teil dieser Scheibe:** `omp-video-mixer-me`-UI-Bundle bekommt
+noch keine Presets-Sektion (Backend-Infrastruktur ist fertig, UI-Klick-
+Pfad wäre ein kleiner, unabhängiger Folgeschritt). Kein DELETE-Endpunkt
+für Snapshots — bislang nie gebraucht, in dieser Scheibe erstmals als
+Lücke sichtbar geworden (Cleanup ging nur per direktem SQL).

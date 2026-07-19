@@ -79,7 +79,9 @@ type LayoutStore interface {
 // SnapshotService erfasst und stellt Szenen wieder her (implementiert
 // von *snapshots.Service, UMSETZUNG.md B7).
 type SnapshotService interface {
-	Create(ctx context.Context, label string) (snapshots.Snapshot, error)
+	// nodeIDs leer = klassische, workflow-weite Szene (B7); nicht leer =
+	// Node-Preset (§4.6 Punkt 4), s. snapshots.Service.Create-Doku.
+	Create(ctx context.Context, label string, nodeIDs []string) (snapshots.Snapshot, error)
 	List() ([]snapshots.Snapshot, error)
 	Apply(ctx context.Context, id string) (snapshots.ApplyResult, error)
 }

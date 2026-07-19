@@ -26,6 +26,16 @@ type nodeClient interface {
 	GetWritableParams(ctx context.Context, baseURL string) ([]string, error)
 	GetParam(ctx context.Context, baseURL, name string) (json.RawMessage, error)
 	PatchParam(ctx context.Context, baseURL, name string, value json.RawMessage) error
+	// GetState/ApplyState sprechen die optionale Node-Contract-
+	// Erweiterung `GET`/`POST /state` an (docs/decisions.md Nachtrag 40,
+	// ARCHITECTURE.md §5): manche Nodes (omp-audio-mixer,
+	// omp-video-mixer-me) erklären ausnahmslos alle Parameter
+	// `readonly:true` (Mutation nur über eigene invoke()-Methoden) —
+	// für sie liefert die Parameter-Enumeration unten nichts. `ok==false`
+	// (kein Fehler, reines 404) bedeutet "Node unterstützt das nicht",
+	// Aufrufer fällt dann auf die generische Parametererfassung zurück.
+	GetState(ctx context.Context, baseURL string) (state json.RawMessage, ok bool, err error)
+	ApplyState(ctx context.Context, baseURL string, state json.RawMessage) (ok bool, err error)
 }
 
 // httpNodeClient spricht direkt mit dem Self-Describe-HTTP-API eines
@@ -99,6 +109,69 @@ func (c *httpNodeClient) PatchParam(ctx context.Context, baseURL, name string, v
 		return fmt.Errorf("snapshots: unexpected status %d from PATCH %s/params/%s", resp.StatusCode, baseURL, name)
 	}
 	return nil
+}
+
+// GetState ruft `GET <baseURL>/state` ab. Ein 404 ist kein Fehler — der
+// Node bietet die Zusatzroute schlicht nicht an (Standardfall für alle
+// Nodes mit ausschließlich schreibbaren Parametern).
+func (c *httpNodeClient) GetState(ctx context.Context, baseURL string) (json.RawMessage, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/state", nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("snapshots: unexpected status %d from GET %s/state", resp.StatusCode, baseURL)
+	}
+
+	var body struct {
+		State json.RawMessage `json:"state"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, false, err
+	}
+	return body.State, true, nil
+}
+
+// ApplyState ruft `POST <baseURL>/state` mit `{"state": ...}` auf. Wie
+// GetState: ein 404 ist kein Fehler, sondern "Node unterstützt das
+// nicht" — der Aufrufer entscheidet dann, ob Params stattdessen
+// gepatcht werden.
+func (c *httpNodeClient) ApplyState(ctx context.Context, baseURL string, state json.RawMessage) (bool, error) {
+	payload, err := json.Marshal(struct {
+		State json.RawMessage `json:"state"`
+	}{State: state})
+	if err != nil {
+		return false, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/state", bytes.NewReader(payload))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("snapshots: unexpected status %d from POST %s/state", resp.StatusCode, baseURL)
+	}
+	return true, nil
 }
 
 func (c *httpNodeClient) getJSON(ctx context.Context, url string, dst any) error {

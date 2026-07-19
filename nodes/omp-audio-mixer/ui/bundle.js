@@ -157,7 +157,66 @@ class OmpAudioMixerPanel extends HTMLElement {
     section.setAttribute("label", "Audio Mixer");
     section.append(addBtn, console_, empty);
 
-    shadow.append(style, section);
+    // §4.6 Punkt 4 (docs/END-GOAL-FEATURES.md, "Mixer-Presets",
+    // docs/decisions.md Nachtrag 40): derselbe generische Snapshot-
+    // Mechanismus wie die Flow-Editor-Szenenleiste (UMSETZUNG.md B7,
+    // ui/graph/flow-canvas.ts), per `nodeIds:[nodeId]` auf genau diesen
+    // Node eingeschränkt. Erfasst hier über `GET/POST /state`
+    // (main.rs::capture_state/restore_state), nicht über PATCH — alle
+    // Kanalparameter sind bewusst readonly:true (s. main.rs), der
+    // generische Parameter-Proxy allein hätte nichts erfasst.
+    const presetSaveBtn = document.createElement("omp-button");
+    presetSaveBtn.textContent = "Preset speichern";
+    const presetList = document.createElement("div");
+    presetList.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-top:var(--omp-space-2, 8px);";
+
+    const renderPresets = async () => {
+      presetList.replaceChildren();
+      const res = await fetch("/api/v1/snapshots");
+      if (!res.ok) return;
+      const snaps = await res.json();
+      const mine = snaps.filter(
+        (s) => Array.isArray(s.nodeIds) && s.nodeIds.length === 1 && s.nodeIds[0] === nodeId,
+      );
+      if (mine.length === 0) {
+        const empty_ = document.createElement("span");
+        empty_.textContent = "keine Presets gespeichert";
+        empty_.style.cssText = "color:var(--omp-text-dim, #9aa0a6);font-size:11px;";
+        presetList.appendChild(empty_);
+        return;
+      }
+      for (const snap of mine) {
+        const chip = document.createElement("omp-button");
+        chip.textContent = snap.label || snap.id.slice(0, 8);
+        chip.title = "Preset anwenden";
+        chip.addEventListener("click", async () => {
+          await fetch(`/api/v1/snapshots/${snap.id}/apply`, { method: "POST" });
+          // Sofort sichtbar statt bis zum nächsten Poll zu warten
+          // (`poll`/`pollMaster` unten deklariert, aber zum Zeitpunkt
+          // eines tatsächlichen Klicks längst verfügbar).
+          await Promise.all([poll(), pollMaster()]);
+        });
+        presetList.appendChild(chip);
+      }
+    };
+
+    presetSaveBtn.addEventListener("click", async () => {
+      const label = prompt("Name des Presets:", "Neues Preset");
+      if (!label) return;
+      await fetch("/api/v1/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, nodeIds: [nodeId] }),
+      });
+      await renderPresets();
+    });
+
+    const presetSection = document.createElement("omp-panel-section");
+    presetSection.setAttribute("label", "Presets");
+    presetSection.append(presetSaveBtn, presetList);
+
+    shadow.append(style, section, presetSection);
+    renderPresets();
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {

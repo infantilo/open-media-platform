@@ -814,21 +814,25 @@ umgesetzt**, nur K3/K4-Teil-1 „Teil 1" ist fertig). Vier Punkte gehen
    gegen echte `/levels`-Messwerte verifiziert (exakte dB-Mathematik in
    beide Richtungen bestätigt), UI-Bundle um „An-Pegel"/„Transition
    ms"-Felder erweitert, per Chromium-Klick verifiziert.
-4. **Mixer-Presets.** Nicht in §4.3 enthalten. OMP hat bereits einen
-   generischen, workflow-weiten Snapshot-Mechanismus
-   (`orchestrator/internal/snapshots/`, Postgres-gestützt, B7/D1), der
-   Parameter+Kanten aller Nodes über denselben generischen Parameter-
-   Proxy erfasst. Empfehlung: **denselben Erfassungs-/Anwendungs-Code
-   wiederverwenden**, nur auf einen einzelnen Node eingeschränkt
-   („Node-Preset" = Snapshot mit `nodeIds: [self]`), statt eine zweite,
-   mixer-eigene Persistenz-Schicht zu bauen — kleinerer Aufwand, ein
-   Speicherformat im ganzen System.
+4. **Mixer-Presets.** ✅ **Erledigt 2026-07-19** (`docs/decisions.md`
+   Nachtrag 40). Der ursprüngliche Plan hier („denselben Erfassungs-/
+   Anwendungs-Code wiederverwenden", Snapshot mit `nodeIds: [self]`)
+   ging von PATCH-fähigen Parametern aus — live entdeckter Blocker:
+   `omp-audio-mixer`/`omp-video-mixer-me` erklären ausnahmslos alle
+   Parameter `readonly:true` (Mutation nur über eigene `invoke()`-
+   Methoden), der generische Parameter-Proxy hätte nichts erfasst.
+   Gelöst durch eine Node-Contract-Erweiterung: optionale `GET`/`POST
+   /state`-Route (opakes, node-eigenes JSON, über den vorhandenen
+   `extra_route`-Erweiterungspunkt, kein Descriptor-Schema-Update
+   nötig) — der Snapshot-Service versucht sie zuerst, fällt bei 404 auf
+   die bisherige Parameter-Enumeration zurück. `omp-audio-mixer` hat
+   dazu ein UI-Presets-Panel bekommen (Speichern/Anwenden-Chips);
+   `omp-video-mixer-me` hat die Backend-Seite, UI-Anschluss ist ein
+   kleiner offener Folgeschritt.
 
-**Priorität:** mittel-hoch — Teil 2 (Dynamik, jetzt inkl. EQ-Upgrade)
-ist der nächste sinnvolle Umsetzungsschritt für diesen Node; Presets
-(Punkt 4 oben) lassen sich klein und unabhängig direkt danach
-einschieben, sobald der Snapshot-Code als node-skopierte Variante
-geprüft ist.
+**Priorität:** Teil 2 (Dynamik/EQ) und Presets (Punkt 4) sind erledigt
+(s. o.). Offener kleiner Folgeschritt: Presets-UI-Panel auch für
+`omp-video-mixer-me` (Backend-Seite bereits vorhanden, s. Punkt 4).
 
 ---
 

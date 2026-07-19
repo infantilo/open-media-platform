@@ -138,7 +138,7 @@ type fakeSnapshotService struct {
 	applyErr    error
 }
 
-func (f fakeSnapshotService) Create(ctx context.Context, label string) (snapshots.Snapshot, error) {
+func (f fakeSnapshotService) Create(ctx context.Context, label string, nodeIDs []string) (snapshots.Snapshot, error) {
 	return f.created, f.createErr
 }
 

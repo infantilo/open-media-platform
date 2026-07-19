@@ -610,7 +610,35 @@ impl ParamStore for AudioMixerStore {
         }
     }
 
-    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if method == "GET" && path == "/state" {
+            let state = self.capture_state();
+            let payload = serde_json::to_vec(&serde_json::json!({ "state": state })).unwrap_or_default();
+            return Some(RawResponse { status: 200, content_type: "application/json", body: payload });
+        }
+        if method == "POST" && path == "/state" {
+            let parsed: Result<Value, _> = serde_json::from_slice(body);
+            let state = match parsed {
+                Ok(v) => v.get("state").cloned().unwrap_or(Value::Null),
+                Err(_) => {
+                    return Some(RawResponse {
+                        status: 400,
+                        content_type: "application/json",
+                        body: br#"{"error":"invalid JSON body"}"#.to_vec(),
+                    });
+                }
+            };
+            return Some(match self.restore_state(&state) {
+                Ok(()) => {
+                    RawResponse { status: 200, content_type: "application/json", body: br#"{"ok":true}"#.to_vec() }
+                }
+                Err(()) => RawResponse {
+                    status: 400,
+                    content_type: "application/json",
+                    body: br#"{"error":"invalid state document"}"#.to_vec(),
+                },
+            });
+        }
         uibundle::route(method, path)
     }
 }
@@ -624,6 +652,167 @@ fn parse_channel_name(name: &str) -> Option<(&str, &str)> {
 }
 
 impl AudioMixerStore {
+    /// Node-eigener Vollzustand (§4.6 Punkt 4, `docs/END-GOAL-FEATURES.md`
+    /// "Mixer-Presets", `docs/decisions.md` Nachtrag 40): alle Kanäle
+    /// inkl. Gain/EQ/Kompressor/AFV + Master-Limiter als ein opakes
+    /// JSON-Objekt hinter `GET /state` (Node-Contract-Erweiterung,
+    /// `ARCHITECTURE.md` §5) — genau der Zustand, der wegen
+    /// `readonly:true` (s. `channel_param`-Doku) nicht über den
+    /// generischen Parameter-Proxy erfassbar ist. Kein Descriptor-Feld
+    /// nötig: der Snapshot-Service probiert `GET <baseURL>/state` einfach
+    /// aus, ein 404 (Nodes ohne diese Zusatzroute) fällt automatisch auf
+    /// die bisherige Parameter-Enumeration zurück.
+    fn capture_state(&self) -> Value {
+        let channel_docs: Vec<Value> = {
+            let channels = self.channels.lock().expect("lock poisoned");
+            channels
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "id": c.id, "label": c.label, "internalFreq": c.internal_freq,
+                        "gainDb": c.gain_db, "mute": c.mute,
+                        "eqLow": c.eq_low, "eqMid": c.eq_mid, "eqHigh": c.eq_high,
+                        "eqLowFreq": c.eq_low_band.freq, "eqLowWidth": c.eq_low_band.width,
+                        "eqMidFreq": c.eq_mid_band.freq, "eqMidWidth": c.eq_mid_band.width,
+                        "eqHighFreq": c.eq_high_band.freq, "eqHighWidth": c.eq_high_band.width,
+                        "compEnabled": c.comp.enabled, "compThreshold": c.comp.threshold_db,
+                        "compRatio": c.comp.ratio, "compMakeup": c.comp.makeup_db,
+                        "source": c.source,
+                        "followTarget": c.follow_target, "followMode": c.follow_mode,
+                        "overrideEnabled": c.override_enabled,
+                        "followUseMute": c.follow_use_mute,
+                        "followOnLevelDb": c.follow_on_level_db,
+                        "followOffLevelDb": c.follow_off_level_db,
+                        "followTransitionMs": c.follow_transition_ms,
+                    })
+                })
+                .collect()
+        };
+        let ml = *self.master_limiter.lock().expect("lock poisoned");
+        serde_json::json!({
+            "channels": channel_docs,
+            "masterLimiter": {
+                "enabled": ml.enabled, "thresholdDb": ml.threshold_db,
+                "ratio": ml.ratio, "makeupDb": ml.makeup_db,
+            },
+        })
+    }
+
+    /// Kehrseite von `capture_state`: ersetzt die komplette Kanalliste
+    /// durch die im State-Dokument beschriebene — nicht additiv/mergend,
+    /// ein Mixer-Preset meint "genau diese Kanäle mit genau diesen
+    /// Werten" (analog zu `addChannel`, nur alle Felder auf einmal statt
+    /// einzeln über die üblichen `channel.<id>.set*`-Methoden). Eine beim
+    /// Erfassungszeitpunkt vorhandene, inzwischen aber verschwundene
+    /// externe Quelle fällt bewusst still auf den internen Testton
+    /// zurück statt das gesamte Preset scheitern zu lassen — eine
+    /// einzelne offline Quelle soll kein Preset-Apply blockieren.
+    fn restore_state(&self, doc: &Value) -> Result<(), ()> {
+        let channel_docs = doc.get("channels").and_then(Value::as_array).ok_or(())?;
+
+        let existing_ids: Vec<String> = {
+            let channels = self.channels.lock().expect("lock poisoned");
+            channels.iter().map(|c| c.id.clone()).collect()
+        };
+        for id in existing_ids {
+            self.pipeline.remove_channel(id);
+        }
+        self.channels.lock().expect("lock poisoned").clear();
+
+        let sources = self.available_sources.lock().expect("lock poisoned").clone();
+
+        for cd in channel_docs {
+            let id = cd.get("id").and_then(Value::as_str).ok_or(())?.to_string();
+            let label = cd.get("label").and_then(Value::as_str).unwrap_or(&id).to_string();
+            let internal_freq = cd.get("internalFreq").and_then(Value::as_f64).unwrap_or(220.0);
+
+            let mut ch = ChannelState::new(id.clone(), label, internal_freq);
+            self.pipeline
+                .add_channel(id.clone(), pipeline::ChannelSource::Internal { freq: internal_freq });
+
+            ch.gain_db = cd.get("gainDb").and_then(Value::as_f64).unwrap_or(0.0);
+            ch.mute = cd.get("mute").and_then(Value::as_bool).unwrap_or(false);
+            ch.eq_low = cd.get("eqLow").and_then(Value::as_f64).unwrap_or(0.0);
+            ch.eq_mid = cd.get("eqMid").and_then(Value::as_f64).unwrap_or(0.0);
+            ch.eq_high = cd.get("eqHigh").and_then(Value::as_f64).unwrap_or(0.0);
+            ch.eq_low_band = EqBandState {
+                freq: cd.get("eqLowFreq").and_then(Value::as_f64).unwrap_or(ch.eq_low_band.freq),
+                width: cd.get("eqLowWidth").and_then(Value::as_f64).unwrap_or(ch.eq_low_band.width),
+            };
+            ch.eq_mid_band = EqBandState {
+                freq: cd.get("eqMidFreq").and_then(Value::as_f64).unwrap_or(ch.eq_mid_band.freq),
+                width: cd.get("eqMidWidth").and_then(Value::as_f64).unwrap_or(ch.eq_mid_band.width),
+            };
+            ch.eq_high_band = EqBandState {
+                freq: cd.get("eqHighFreq").and_then(Value::as_f64).unwrap_or(ch.eq_high_band.freq),
+                width: cd.get("eqHighWidth").and_then(Value::as_f64).unwrap_or(ch.eq_high_band.width),
+            };
+            ch.comp = CompState {
+                enabled: cd.get("compEnabled").and_then(Value::as_bool).unwrap_or(false),
+                threshold_db: cd.get("compThreshold").and_then(Value::as_f64).unwrap_or(-20.0),
+                ratio: cd.get("compRatio").and_then(Value::as_f64).unwrap_or(2.0),
+                makeup_db: cd.get("compMakeup").and_then(Value::as_f64).unwrap_or(0.0),
+            };
+            ch.follow_target = cd.get("followTarget").and_then(Value::as_str).unwrap_or("").to_string();
+            ch.follow_mode = cd.get("followMode").and_then(Value::as_str).unwrap_or("off").to_string();
+            ch.override_enabled = cd.get("overrideEnabled").and_then(Value::as_bool).unwrap_or(false);
+            ch.follow_use_mute = cd.get("followUseMute").and_then(Value::as_bool).unwrap_or(true);
+            ch.follow_on_level_db = cd.get("followOnLevelDb").and_then(Value::as_f64).unwrap_or(0.0);
+            ch.follow_off_level_db = cd.get("followOffLevelDb").and_then(Value::as_f64).unwrap_or(-20.0);
+            ch.follow_transition_ms =
+                cd.get("followTransitionMs").and_then(Value::as_u64).unwrap_or(FOLLOW_CROSSFADE_MS);
+
+            let source = cd.get("source").and_then(Value::as_str).unwrap_or("");
+            if !source.is_empty()
+                && let Some(src) = sources.iter().find(|s| s.sender_id == source)
+            {
+                ch.source = source.to_string();
+                self.pipeline.set_channel_source(
+                    id.clone(),
+                    pipeline::ChannelSource::External { flow_id: src.flow_id.clone() },
+                );
+            }
+
+            self.pipeline.set_gain(id.clone(), ch.gain_db);
+            self.pipeline.set_mute(id.clone(), ch.mute);
+            self.pipeline.set_eq(id.clone(), ch.eq_low, ch.eq_mid, ch.eq_high);
+            self.pipeline.set_eq_band(
+                id.clone(),
+                pipeline::EqBand::Low,
+                ch.eq_low_band.freq,
+                ch.eq_low_band.width,
+            );
+            self.pipeline.set_eq_band(
+                id.clone(),
+                pipeline::EqBand::Mid,
+                ch.eq_mid_band.freq,
+                ch.eq_mid_band.width,
+            );
+            self.pipeline.set_eq_band(
+                id.clone(),
+                pipeline::EqBand::High,
+                ch.eq_high_band.freq,
+                ch.eq_high_band.width,
+            );
+            self.pipeline.set_comp(id.clone(), ch.comp.to_pipeline_params());
+
+            self.channels.lock().expect("lock poisoned").push(ch);
+        }
+
+        if let Some(ml) = doc.get("masterLimiter") {
+            let state = CompState {
+                enabled: ml.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+                threshold_db: ml.get("thresholdDb").and_then(Value::as_f64).unwrap_or(-20.0),
+                ratio: ml.get("ratio").and_then(Value::as_f64).unwrap_or(2.0),
+                makeup_db: ml.get("makeupDb").and_then(Value::as_f64).unwrap_or(0.0),
+            };
+            *self.master_limiter.lock().expect("lock poisoned") = state;
+            self.pipeline.set_master_limiter(state.to_pipeline_params());
+        }
+
+        Ok(())
+    }
+
     fn get_master_limiter(&self, name: &str) -> Option<Value> {
         let state = *self.master_limiter.lock().expect("lock poisoned");
         match name {
