@@ -9031,3 +9031,51 @@ vier Feature-Kombinationen.
 **Nicht Teil dieser Scheibe:** `Output`-Trait-Implementierung mit
 echter `appsink`/`appsrc`-GStreamer-Anbindung (Teil 2, eigener
 Schritt).
+
+## 2026-07-19 (Nachtrag 45) — Kapitel 19 Teil 0: ST 2110-30/AES67-Audio
+in `omp-mediaio::st2110`
+
+`St2110AudioOutput`/`St2110AudioInput` (`nodes/omp-mediaio/src/
+st2110.rs`), gleiche Struktur wie die bestehenden Video-Typen —
+`rtpL24pay`/`rtpL24depay` (RFC 3190, L24/PCM über RTP), Payload-Familie
+am echten `gst-inspect-1.0`-Lauf verifiziert statt geraten: Sink-Caps
+`audio/x-raw,format=S24BE,layout=interleaved`, Src-Caps
+`application/x-rtp,encoding-name=L24`. `min-ptime`/`max-ptime` explizit
+auf 1ms (1.000.000ns) gesetzt — GStreamers Default ist unbegrenzt bis
+MTU, AES67-Konformitätsstufe A **und** ST-2110-30-Standardprofil
+verlangen aber exakt 1ms-Pakete (`docs/END-GOAL-FEATURES.md` §19.3a
+Punkt 1/§19.3c). SDP nach RFC 3190 (`a=rtpmap:96 L24/<rate>/<channels>`,
+`a=ptime:1`) — RTP-`clock-rate` ist bei linearem PCM identisch mit der
+Sample-Rate, anders als bei Video (fester 90000Hz-Takt).
+
+**Verifiziert (drei Ebenen, echte Prozesse, kein Mock):**
+1. Eigener UDP-Loopback-Test (`write_then_read_audio_loopback`, gleiches
+   Muster wie der bestehende Video-Test): `audiotestsrc` → `St2110AudioOutput`
+   → echtes UDP → `St2110AudioInput` → `fakesink`, `has_flowed()`
+   bestätigt.
+2. SDP-Regressionstest (`audio_sdp_matches_aes67_profile_a`):
+   `a=rtpmap:96 L24/48000/2` + `a=ptime:1` exakt in der erzeugten SDP.
+3. **Echte Fremd-Gegenprobe** (`real_ffmpeg_sends_aes67_audio`,
+   `#[ignore]`d wegen ffmpeg-Abhängigkeit, per `--ignored` gezielt
+   gelaufen) — das im Phasenplan (§19.4) explizit geforderte
+   Verifikationskriterium: ein echter, unabhängiger `ffmpeg`-Prozess
+   sendet einen echten 1kHz-Sinuston als `pcm_s24be`/L24-RTP (`ffmpeg
+   -f lavfi -i sine=... -acodec pcm_s24be -payload_type 96 -f rtp
+   rtp://127.0.0.1:<port>`) — `St2110AudioInput` empfängt und dekodiert
+   ihn erfolgreich (`has_flowed()`), der eigentliche Interop-Nachweis
+   (ein Format-/Caps-Mismatch hätte die Pakete stillschweigend
+   verworfen). ffmpegs eigenes, unabhängig generiertes SDP
+   (`a=rtpmap:96 L24/48000/2`) deckte sich dabei exakt mit dem selbst
+   erzeugten. Ein erster Versuch, den Pegel zusätzlich per
+   `level`-Element + Bus-Watch zu messen, schlug fehl (kein laufender
+   GLib-Mainloop, der die Watch-Callback pumpt) — als unnötige
+   Zusatzstrenge verworfen statt einer Debugging-Sackgasse
+   nachzujagen: `has_flowed()` auf einem erfolgreich durch
+   `rtpL24depay` gelaufenen echten Fremd-Payload ist bereits der
+   entscheidende Beweis.
+
+`cargo clippy` sauber, `cargo build`/`cargo test --workspace` grün.
+
+**Nicht Teil dieser Scheibe** (§19.4 Folge-Teile): `omp-2110-gateway`-
+Node-Paar (Teil 1), PTP-Zeitbasis (Teil 2), `omp-aes67-gateway`/SAP
+(Teil 3), NDI-Gateway (Teil 4).

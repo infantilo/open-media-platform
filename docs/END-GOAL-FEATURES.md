@@ -3287,8 +3287,10 @@ Kapiteln, nicht hier wiederholt.
    Ein-Entwickler-/Demo-Stand des Projekts — bewusst ans Ende gestellt.
 8. **Kapitel 19 — ST-2110-/NDI-/Dante-Source/Sink-Nodes +
    Kernel-Bypass-Ausblick** (nachgereicht 2026-07-19, nicht Teil der
-   ursprünglichen `frage an fabel.txt`). Zweigeteilt einzuordnen:
-   die **Software-Teile** (2110-30-Audio, `omp-2110-gateway`,
+   ursprünglichen `frage an fabel.txt`). ✅ **Teil 0 (2110-30/AES67-
+   Audio) erledigt, gleicher Tag** (`docs/decisions.md` Nachtrag 45) —
+   live per echter FFmpeg-Gegenprobe verifiziert. Zweigeteilt
+   einzuordnen: die **restlichen Software-Teile** (`omp-2110-gateway`,
    AES67-Gateway als Dante-Interop, NDI-Gateway nach §6.5) sind auf der
    Dev-Maschine vollständig testbar und der erste Punkt der Liste, der
    OMP an **echtes Fremd-Equipment** anschließt (Kameras, Mischpulte,
@@ -3550,11 +3552,14 @@ Recherchierte Faktenlage (Stand 2026-07):
 
 ### 19.4 Phasenplan
 
-- **Teil 0 — ST 2110-30/AES67-Audio in `omp-mediaio::st2110`:**
-  `St2110AudioOutput`/`-Input` (rtpL24, 48 kHz, 1 ms) + SDP.
-  Verifikation: UDP-Loopback-Test analog `write_then_read_loopback`
-  (`st2110.rs`), zusätzlich Gegenprobe mit FFmpeg als
-  Fremd-Empfänger/-Sender derselben SDP. Eine Sitzung.
+- **Teil 0 — ST 2110-30/AES67-Audio in `omp-mediaio::st2110`.**
+  ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 45):
+  `St2110AudioOutput`/`-Input` (rtpL24, 48 kHz, 1ms Pakete) + SDP nach
+  RFC 3190. Live verifiziert auf drei Ebenen: eigener UDP-Loopback-Test,
+  SDP-Regressionstest, und die im Phasenplan geforderte echte
+  FFmpeg-Gegenprobe (ein unabhängiger `ffmpeg`-Prozess sendet einen
+  echten Sinuston als L24/RTP, `St2110AudioInput` empfängt/dekodiert
+  ihn korrekt — der eigentliche Interop-Nachweis).
 - **Teil 1 — `omp-2110-gateway`-Node-Paar:** gerichtete Rollen
   analog `omp-srt-gateway`, Multicast, SDP-Annahme auf der
   Empfangsseite, IS-04/05-Registrierung. Verifikation: Workflow
