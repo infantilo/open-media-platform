@@ -149,6 +149,27 @@ func NewExecutor(cat []catalog.Entry, registryURL, natsURL, hostID string, nc Pu
 	}
 }
 
+// InstanceInfo ist eine minimale Momentaufnahme einer laufenden
+// Instanz (nur ID+PID) — für die Pro-Instanz-Telemetrie in main.go
+// (Kapitel 14 Teil 2, docs/END-GOAL-FEATURES.md §14.3b), kein
+// vollständiger State-Export.
+type InstanceInfo struct {
+	InstanceID string
+	PID        int
+}
+
+// Instances liefert eine Momentaufnahme aller aktuell laufenden
+// Instanzen (nur ID+PID).
+func (e *Executor) Instances() []InstanceInfo {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]InstanceInfo, 0, len(e.instances))
+	for id, ri := range e.instances {
+		out = append(out, InstanceInfo{InstanceID: id, PID: ri.cmd.Process.Pid})
+	}
+	return out
+}
+
 // Handle verarbeitet eine eingehende Anfrage und liefert die Antwort.
 func (e *Executor) Handle(req Request) Response {
 	switch req.Action {

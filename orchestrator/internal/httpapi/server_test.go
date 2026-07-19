@@ -889,6 +889,57 @@ func TestHandleListInstances(t *testing.T) {
 	}
 }
 
+// TestHandleListInstancesMergesRemoteInstanceMetrics (Kapitel 14 Teil
+// 2): eine entfernte Instanz (HostID gesetzt) bekommt CPU%/RSS aus der
+// zuletzt vom Host-Agent gemeldeten Telemetrie ihres Hosts nachgetragen
+// — eine lokale Instanz (ohne HostID) oder eine bereits von svc.List()
+// selbst befüllte (launcher.Launcher.sampleLocalResources()) bleibt
+// unverändert.
+func TestHandleListInstancesMergesRemoteInstanceMetrics(t *testing.T) {
+	svc := fakeLauncherService{instances: []launcher.Instance{
+		{ID: "inst-remote", Type: "omp-source", PID: 111, HostID: "host-1"},
+		{ID: "inst-local", Type: "omp-source", PID: 222},
+	}}
+	metrics := fakeHostMetrics{byHost: map[string]hosts.Metrics{
+		"host-1": {
+			CPUPercent: 40,
+			Instances: []hosts.InstanceMetrics{
+				{InstanceID: "inst-remote", CPUPercent: 12.5, RSSBytes: 340 * 1024 * 1024},
+				{InstanceID: "some-other-instance-on-the-same-host", CPUPercent: 99},
+			},
+		},
+	}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, metrics, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body []launcher.Instance
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	byID := map[string]launcher.Instance{}
+	for _, inst := range body {
+		byID[inst.ID] = inst
+	}
+
+	remote := byID["inst-remote"]
+	if remote.CPUPercent == nil || *remote.CPUPercent != 12.5 {
+		t.Errorf("inst-remote.CPUPercent = %v, want 12.5", remote.CPUPercent)
+	}
+	if remote.RSSBytes == nil || *remote.RSSBytes != 340*1024*1024 {
+		t.Errorf("inst-remote.RSSBytes = %v, want 340 MiB", remote.RSSBytes)
+	}
+
+	local := byID["inst-local"]
+	if local.CPUPercent != nil || local.RSSBytes != nil {
+		t.Errorf("inst-local (kein HostID) = %+v, want nil CPUPercent/RSSBytes (nur lokales Sampling befüllt das)", local)
+	}
+}
+
 func TestHandlePostInstance(t *testing.T) {
 	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-1", Type: "omp-source", Label: "Source (inst-1)", PID: 4242}}
 	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{})

@@ -90,6 +90,38 @@ func TestStartAndStopRealProcess(t *testing.T) {
 	}
 }
 
+// TestInstancesSnapshot prüft Instances() (Kapitel 14 Teil 2): leer vor
+// dem Start, enthält ID+PID während der Prozess läuft, wieder leer nach
+// dem Stop.
+func TestInstancesSnapshot(t *testing.T) {
+	e := NewExecutor([]catalog.Entry{
+		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "30"}},
+	}, "http://localhost:8010", "nats://localhost:4222", "host-1", nil)
+
+	if got := e.Instances(); len(got) != 0 {
+		t.Fatalf("Instances() vor dem Start = %+v, want empty", got)
+	}
+
+	startResp := e.Handle(Request{Action: "start", Type: "sleeper", InstanceID: "test-instances", Label: "Sleeper"})
+	if !startResp.OK {
+		t.Fatalf("start Handle() = %+v, want OK", startResp)
+	}
+
+	got := e.Instances()
+	if len(got) != 1 || got[0].InstanceID != "test-instances" || got[0].PID != startResp.PID {
+		t.Fatalf("Instances() = %+v, want [{test-instances %d}]", got, startResp.PID)
+	}
+
+	stopResp := e.Handle(Request{Action: "stop", InstanceID: "test-instances"})
+	if !stopResp.OK {
+		t.Fatalf("stop Handle() = %+v, want OK", stopResp)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if got := e.Instances(); len(got) != 0 {
+		t.Fatalf("Instances() nach dem Stop = %+v, want empty", got)
+	}
+}
+
 func TestStopUnknownInstanceIsIdempotent(t *testing.T) {
 	e := NewExecutor(nil, "", "", "host-1", nil)
 	resp := e.Handle(Request{Action: "stop", InstanceID: "does-not-exist"})

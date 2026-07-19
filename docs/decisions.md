@@ -8000,3 +8000,103 @@ leer (Bootstrap-Modus), kein Datenverlust realer Nutzerdaten.
 Teil 2 (Pro-Instanz-Telemetrie per `/proc/<pid>`), Teil 3
 (Typ-Profile + Start-Warnung), Teil 4 (Anbindung an D7-Teil-2 und
 §16-Kapazitäts-Zeitstrahl).
+
+## 2026-07-19 (Nachtrag 32) — Kapitel 14 Teil 2: Pro-Instanz-Telemetrie
+(CPU%/RSS per `/proc/<pid>`)
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §14.4 Teil 2 — additive
+Pro-Instanz-Messung neben der Host-Gesamt-Historie aus Teil 1: für jede
+verwaltete Instanz CPU%/RSS aus `/proc/<pid>` messen und anzeigen.
+Direkte Voraussetzung für §17 Teil 2 (Laufende-Instanzen-Tab), das laut
+§17.3b explizit "Kapitel-14-Ressourcenwerte" **pro Instanz** braucht —
+Teil 1 (nur Host-Gesamtwert) reicht dafür nicht, dieser Schritt liefert
+die fehlende Auflösung.
+
+**Umsetzung** (zwei unabhängige Messpfade, ein Anzeigeort):
+- **Host-Agent** (`host-agent/internal/telemetry`): neuer
+  `ProcessSampler` — misst utime+stime-Delta aus `/proc/<pid>/stat`
+  (comm-Feld robust hinter der letzten `)` weiterparsen, USER_HZ=100 per
+  `getconf CLK_TCK` auf der Dev-Maschine verifiziert, nicht geraten) und
+  VmRSS aus `/proc/<pid>/status`. Bewusst **kein** blockierendes
+  `time.Sleep` pro PID (anders als der Host-Gesamtwert in `Take()`) —
+  nutzt stattdessen den ohnehin vorhandenen 5s-Telemetrie-Tick als
+  Delta-Fenster; der erste Sample einer PID liefert deshalb noch kein
+  CPU%, `Prune()` entfernt den Zustand einer nicht mehr laufenden PID
+  (verhindert unbegrenztes Wachstum, verhindert ein falsches Delta bei
+  PID-Wiederverwendung). `commands.Executor.Instances()` liefert die
+  dafür nötige {InstanceID, PID}-Momentaufnahme. `Sample.Instances`
+  (additiv, `omitempty`) hängt am bestehenden NATS-Metrik-Payload.
+- **Orchestrator** (`orchestrator/internal/launcher`): identische
+  `/proc`-Parsing-Logik noch einmal implementiert (`procstat.go`, gleiche
+  bewusste kleine Duplikation zwischen den beiden eigenständigen
+  Go-Modulen wie bei `buildEnv`/`tailBuffer`) — für lokal laufende
+  Instanzen (`HostID==""`), da der Launcher hier selbst der "Agent" ist.
+  `Launcher.Run(ctx)` (neuer 5s-Ticker, `go launcherSvc.Run(ctx)` in
+  `main.go`, gleiches Muster wie `placement.Engine.Run`) ruft
+  `sampleLocalResources()`. Wichtige Entscheidung: das Ergebnis landet
+  **nicht** direkt in `l.instances[id]`, sondern in einer separaten
+  `resourceSamples`-Map, die `List()` erst beim Lesen einmischt — sonst
+  würde jeder `store.Put()` (Neustart, Stop) eine flüchtige
+  Telemetrie-Momentaufnahme in Postgres einfrieren (`instances`-Tabelle
+  ist für Wiederanlauf-Zustand gedacht, nicht für Zeitreihen).
+  `Instance.CPUPercent`/`RSSBytes` sind `*float64`/`*uint64` (Pointer,
+  nicht Wert) — ein echter 0%-Idle-Wert muss von "noch kein Sample"
+  unterscheidbar bleiben, sonst zeigt die UI direkt nach dem Start
+  fälschlich "0%" statt "noch unbekannt".
+- **Entfernte Instanzen** bekommen ihren Wert nicht vom Launcher (der
+  kennt das `hosts`-Paket bewusst nicht, keine neue Paketabhängigkeit
+  nur für eine Anzeige-Ergänzung), sondern werden in
+  `httpapi.handleListInstances` nachträglich mit der zuletzt vom
+  Host-Agent gemeldeten `hosts.Metrics.Instances` gemischt
+  (`mergeInstanceMetrics`) — der Handler kennt ohnehin schon beide
+  Services (`LauncherService` und `HostMetricsReader`).
+- **UI:** eine einzige Anzeigestelle statt zwei (§14.3b nennt
+  "hosts-view-Detail **bzw.** Palette-Instanzzeile" als Alternativen,
+  nicht als Pflicht-Duplikat) — `ui/graph/flow-canvas.ts`s
+  Katalog-Palette (`#renderInstanceRow`) zeigt "CPU x% · RAM y MB" als
+  zusätzliche Zeile, sobald `cpuPercent` vorhanden ist (lokale wie
+  entfernte Instanzen landen im selben `GET /api/v1/instances`-Response,
+  kein UI-Unterschied nötig). `hosts-view.ts` bewusst unangetastet
+  gelassen — eine Instanz-Detailansicht pro Host ist inhaltlich Teil des
+  in §17.4 separat geplanten "Laufende-Instanzen-Tab" (Teil 2 dort), kein
+  Vorgriff hier.
+
+**Verifiziert (echte Prozesse, kein Mock):** `go build`/`go vet`/`go
+test` grün in beiden Go-Modulen (neue Tests: `ProcessSampler` gegen den
+eigenen Testprozess inkl. Prune-Verhalten, `Executor.Instances()`-
+Snapshot, `Launcher.sampleLocalResources()`/`List()`-Mischung inkl.
+Prune-nach-Stop, `httpapi`-Merge-Test mit einer entfernten und einer
+lokalen Instanz); `deno check`/`deno test` grün (neues
+`cpuPercent`/`rssBytes`-Feld typgeprüft). Live-Ende-zu-Ende gegen einen
+echten, per manuell gestartetem Binary laufenden
+Orchestrator/Registry/NATS/Postgres-Stack (Katalog-Override auf einen
+harmlosen `sleep 600`-Testeintrag, damit kein MXL/GStreamer-Aufbau
+nötig ist): eine lokal gestartete Instanz zeigte nach zwei
+5s-Sample-Ticks `cpuPercent:0, rssBytes:~1.9MB` in `GET
+/api/v1/instances` (vorher, direkt nach dem Start, fehlten beide Felder
+korrekt statt fälschlich 0 zu zeigen); ein echter, separat gestarteter
+`omp-host-agent`-Prozess mit einer entfernten Instanz zeigte dieselben
+Werte sowohl unter `GET /api/v1/hosts` (`metrics.instances[]`) als auch
+gemischt unter `GET /api/v1/instances`. UI per Node-CDP-WebSocket
+gegen einen echten headless Chromium bestätigt (`feedback_browser_verification_cdp_over_dump_dom`-Muster; `/json/new`
+brauchte inzwischen `PUT` statt `GET`, neuere Chromium-Version) — beide
+Palette-Zeilen (lokal und entfernt) zeigten "CPU 0% · RAM 2 MB". Alle
+Testartefakte danach entfernt: Instanzen gestoppt, Host-Agent/
+Chromium/Test-Orchestrator-Prozesse gekillt, Test-Host-Zeile aus
+Postgres gelöscht, der bereits vorhandene dokumentierte `admin`-Nutzer
+(HANDBUCH.md §3) unangetastet gelassen.
+
+**Beiläufig beobachtet, nicht Teil dieser Änderung:** `cargo test
+--workspace -p omp-mediaio` zeigte während der Verifikation einmal einen
+SIGSEGV in den MXL-Tests (`three_concurrent_readers_same_flow_do_not_hang`
+lief davor noch "ok"), auf einem Wiederholungslauf ohne jede Änderung
+lief derselbe Test wieder grün durch — eine bereits vorbestehende
+Flakiness im nativen MXL-Test-Binary, unabhängig von diesem Schritt
+(keine Rust-Datei wurde in dieser Sitzung angefasst). Nicht
+weiterverfolgt (außerhalb des Schritt-Scopes), aber hier vermerkt statt
+stillschweigend übergangen.
+
+**Nicht Teil dieser Scheibe:** Teil 3 (Typ-Profile in Postgres +
+Start-Warn-Ampel) und Teil 4 (Anbindung an D7-Teil-2/§16) bleiben offen,
+ebenso §17 Teil 2 selbst (der jetzt auf dieser Datengrundlage aufsetzen
+kann).

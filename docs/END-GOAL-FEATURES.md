@@ -2634,6 +2634,17 @@ Advisory-zuerst-Staffelung wie §6.1).
 - **Teil 2 — Pro-Instanz-Telemetrie:** PID-Messung in Agent +
   lokalem Launcher, additives Payload-Feld, Anzeige pro Instanz
   (hosts-view-Detail bzw. Palette-Instanzzeile).
+  ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 32) —
+  `host-agent/internal/telemetry.ProcessSampler` (utime+stime-Delta aus
+  `/proc/<pid>/stat`, VmRSS aus `/proc/<pid>/status`) für entfernte
+  Instanzen, `launcher.Launcher.sampleLocalResources()` (identische
+  Logik, eigenständiges Go-Modul) für lokale; Anzeige einheitlich in der
+  Katalog-Palette (`flow-canvas.ts`, "CPU x% · RAM y MB"), nicht separat
+  in `hosts-view.ts` (bewusst nur eine der beiden in §14.3b genannten
+  Alternativ-Stellen). Live gegen einen echten Host-Agent-Prozess plus
+  eine lokale Instanz verifiziert (CDP-Browser-Check beider
+  Palette-Zeilen). Teil 3 (Typ-Profile + Start-Warnung) und Teil 4
+  (Anbindung) bleiben offen.
 - **Teil 3 — Typ-Profile + Start-Warnung:** Postgres-Profile,
   Ampel-Anzeige in Palette und am Workflow-Start-Knopf (advisory).
   Verifikation: zwei Mixer nacheinander starten → der zweite Start
@@ -3097,12 +3108,12 @@ Kapiteln, nicht hier wiederholt.
    `CatalogEntry.Description`/`ExpectedResources` (Freitext, additiv,
    optional), `deploy/catalog.json` für alle zehn Einträge befüllt,
    Katalog-Palette zeigt beides sichtbar unter jedem Eintrag statt nur
-   im Tooltip. **Teil 2 hat eine bisher unerwähnte Abhängigkeit:** baut
-   laut Text auf „Kapitel-14-Datenmodell" auf — das existiert noch
-   nicht (Kapitel 14 selbst ist Ist-Zustand „noch nicht gebaut"),
-   Teil 2 ist also erst **nach** einem Kapitel-14-Schritt sinnvoll
-   startbar, nicht direkt im Anschluss an Teil 1. Teil 3 (Alarm-View)
-   bleibt unabhängig davon offen.
+   im Tooltip. **Teil 2 hat eine Abhängigkeit auf das Kapitel-14-
+   Datenmodell** — mit Kapitel 14 Teil 1 (Host-Historie, 2026-07-19) und
+   Teil 2 (Pro-Instanz-Telemetrie, 2026-07-19, `docs/decisions.md`
+   Nachtrag 32) jetzt vorhanden: §17 Teil 2 ist ab sofort ohne weitere
+   Kapitel-14-Vorarbeit startbar. Teil 3 (Alarm-View) war unabhängig
+   davon bereits erledigt (s. u.).
    ✅ **Teil 3 (Alarm-View) erledigt 2026-07-17** (`UMSETZUNG.md`,
    `docs/decisions.md` Nachtrag 5) — neuer vierter App-Bar-Tab
    „Alarme" (`ui/shell/alarm-view.ts`), zentraler Konsument dreier

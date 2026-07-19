@@ -131,6 +131,12 @@ func main() {
 	subject := fmt.Sprintf("omp.host.%s.metrics", st.HostID)
 	slog.Info("publishing telemetry", "subject", subject, "interval", telemetryInterval)
 
+	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): additive
+	// Pro-Instanz-Messung im selben Tick-Takt wie die Host-Telemetrie —
+	// ein eigener ProcessSampler statt Momentwerten, weil CPU% ein Delta
+	// über zwei Ticks braucht (s. telemetry.ProcessSampler-Doku).
+	procSampler := telemetry.NewProcessSampler()
+
 	ticker := time.NewTicker(telemetryInterval)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -142,6 +148,23 @@ func main() {
 			slog.Warn("telemetry sample failed", "error", err)
 			continue
 		}
+
+		running := executor.Instances()
+		keepPIDs := make(map[int]bool, len(running))
+		for _, inst := range running {
+			keepPIDs[inst.PID] = true
+			cpu, rss, ok := procSampler.Sample(inst.PID)
+			if !ok {
+				continue
+			}
+			sample.Instances = append(sample.Instances, telemetry.InstanceSample{
+				InstanceID: inst.InstanceID,
+				CPUPercent: cpu,
+				RSSBytes:   rss,
+			})
+		}
+		procSampler.Prune(keepPIDs)
+
 		payload, err := json.Marshal(sample)
 		if err != nil {
 			slog.Warn("telemetry marshal failed", "error", err)

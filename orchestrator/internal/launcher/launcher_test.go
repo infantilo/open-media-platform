@@ -162,6 +162,73 @@ func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
 	}
 }
 
+// TestLauncherSampleLocalResourcesPopulatesListEntry (Kapitel 14 Teil
+// 2): List() bleibt ohne CPU/RSS-Werte, solange sampleLocalResources()
+// noch nicht (mindestens zweimal, für ein CPU%-Delta) gelaufen ist;
+// danach liefert List() CPUPercent/RSSBytes für die lokale Instanz.
+func TestLauncherSampleLocalResourcesPopulatesListEntry(t *testing.T) {
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
+	inst, err := l.Start("sleepy", "", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = l.Stop(inst.ID) })
+
+	if list := l.List(); list[0].CPUPercent != nil || list[0].RSSBytes != nil {
+		t.Fatalf("List() vor jedem Sample = %+v, want nil CPUPercent/RSSBytes", list[0])
+	}
+
+	l.sampleLocalResources() // erster Sample: legt den Ticks-Zustand an, noch kein Delta
+	time.Sleep(20 * time.Millisecond)
+	l.sampleLocalResources() // zweiter Sample: jetzt existiert ein Delta
+
+	list := l.List()
+	if len(list) != 1 {
+		t.Fatalf("List() = %+v, want one entry", list)
+	}
+	if list[0].CPUPercent == nil {
+		t.Fatalf("List()[0].CPUPercent = nil, want a value after two samples")
+	}
+	if list[0].RSSBytes == nil || *list[0].RSSBytes == 0 {
+		t.Fatalf("List()[0].RSSBytes = %v, want > 0", list[0].RSSBytes)
+	}
+}
+
+// TestLauncherSampleLocalResourcesPrunesStoppedInstance (Kapitel 14
+// Teil 2): nach dem Stop verschwindet der gemerkte Ressourcen-Zustand,
+// damit er nicht unbegrenzt wächst und eine wiederverwendete PID nicht
+// fälschlich ein Delta gegen einen veralteten Wert bildet.
+func TestLauncherSampleLocalResourcesPrunesStoppedInstance(t *testing.T) {
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
+	inst, err := l.Start("sleepy", "", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	l.sampleLocalResources()
+	time.Sleep(20 * time.Millisecond)
+	l.sampleLocalResources()
+
+	l.mu.Lock()
+	_, hadState := l.procState[inst.ID]
+	l.mu.Unlock()
+	if !hadState {
+		t.Fatalf("procState[%s] fehlt vor dem Stop, want present", inst.ID)
+	}
+
+	if err := l.Stop(inst.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	l.sampleLocalResources()
+
+	l.mu.Lock()
+	_, stillThere := l.procState[inst.ID]
+	_, stillSampled := l.resourceSamples[inst.ID]
+	l.mu.Unlock()
+	if stillThere || stillSampled {
+		t.Errorf("procState/resourceSamples für %s noch vorhanden nach Stop()+sampleLocalResources()", inst.ID)
+	}
+}
+
 func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	original := stopGracePeriod
 	stopGracePeriod = 500 * time.Millisecond

@@ -189,6 +189,14 @@ interface LauncherInstance {
   // gerade NICHT crashed ist (sie hat sich ja gerade erholt), damit ein
   // Operator eine flatternde Instanz erkennt, nicht nur eine tote.
   restartCount?: number;
+  // Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): CPU%/RSS der
+  // Instanz — für lokale Instanzen von launcher.Launcher.List() selbst
+  // gemessen, für entfernte aus der Host-Agent-Telemetrie des Hosts
+  // gemischt (orchestrator/internal/httpapi.mergeInstanceMetrics).
+  // Fehlt, solange noch kein Sample vorliegt (z. B. direkt nach dem
+  // Start) — kein impliziter 0%-Wert.
+  cpuPercent?: number;
+  rssBytes?: number;
 }
 
 // HostEntry — Wire-Format identisch zu httpapi.hostResponse
@@ -2251,6 +2259,16 @@ export class FlowCanvas extends HTMLElement {
       hostTag.textContent = `Host: ${hostLabel}`;
       hostTag.style.cssText = "color:#888;font-size:9px;";
       row.appendChild(hostTag);
+    }
+
+    // Kapitel 14 Teil 2: nur anzeigen, wenn bereits ein Sample vorliegt
+    // (cpuPercent undefined heißt "noch nicht gemessen", nicht "0%").
+    if (inst.cpuPercent !== undefined) {
+      const resourceTag = document.createElement("div");
+      const rss = inst.rssBytes !== undefined ? `${(inst.rssBytes / 1024 / 1024).toFixed(0)} MB` : "?";
+      resourceTag.textContent = `CPU ${inst.cpuPercent.toFixed(0)}% · RAM ${rss}`;
+      resourceTag.style.cssText = "color:#888;font-size:9px;";
+      row.appendChild(resourceTag);
     }
 
     if (inst.crashed) {

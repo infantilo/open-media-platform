@@ -8,6 +8,36 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 )
 
+// mergeInstanceMetrics reichert list um die zuletzt vom Host-Agent
+// gemeldeten CPU%/RSS-Werte entfernter Instanzen an (Kapitel 14 Teil 2,
+// docs/END-GOAL-FEATURES.md §14.3b) — lokale Instanzen tragen ihren
+// Sample-Stand bereits über launcher.Launcher.List() (dortiges
+// sampleLocalResources()), diese Funktion ergänzt nur, was dort noch
+// fehlt (HostID gesetzt, CPUPercent noch nil). Launcher kennt das
+// hosts-Paket bewusst nicht (s. Launcher.Run-Doku) — das Mischen der
+// beiden Telemetrie-Quellen passiert deshalb hier, wo ohnehin beide
+// Services verdrahtet sind.
+func mergeInstanceMetrics(list []launcher.Instance, hostMetrics HostMetricsReader) {
+	for i := range list {
+		if list[i].HostID == "" || list[i].CPUPercent != nil {
+			continue
+		}
+		m, ok := hostMetrics.Get(list[i].HostID)
+		if !ok {
+			continue
+		}
+		for _, im := range m.Instances {
+			if im.InstanceID != list[i].ID {
+				continue
+			}
+			cpu, rss := im.CPUPercent, im.RSSBytes
+			list[i].CPUPercent = &cpu
+			list[i].RSSBytes = &rss
+			break
+		}
+	}
+}
+
 // handleCatalog liefert GET /api/v1/catalog (UMSETZUNG.md C8).
 func handleCatalog(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -15,10 +45,16 @@ func handleCatalog(svc LauncherService) http.HandlerFunc {
 	}
 }
 
-// handleListInstances liefert GET /api/v1/instances.
-func handleListInstances(svc LauncherService) http.HandlerFunc {
+// handleListInstances liefert GET /api/v1/instances. Seit Kapitel 14
+// Teil 2 mit CPU%/RSS pro Instanz: lokal von svc.List() selbst
+// mitgeliefert, für entfernte (HostID gesetzt) Instanzen hier per
+// mergeInstanceMetrics aus der zuletzt empfangenen Host-Agent-Telemetrie
+// nachgetragen.
+func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, svc.List())
+		list := svc.List()
+		mergeInstanceMetrics(list, hostMetrics)
+		writeJSON(w, http.StatusOK, list)
 	}
 }
 

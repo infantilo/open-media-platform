@@ -36,4 +36,21 @@ type Metrics struct {
 	MemUsedBytes  uint64    `json:"memUsedBytes"`
 	MemTotalBytes uint64    `json:"memTotalBytes"`
 	ReceivedAt    time.Time `json:"receivedAt"`
+	// Instances ist die additive Pro-Instanz-Ergänzung des Host-Agent-
+	// Payloads (Kapitel 14 Teil 2, docs/END-GOAL-FEATURES.md §14.3b) —
+	// Tracker.Touch braucht dafür keine Änderung (json.Unmarshal befüllt
+	// das Feld automatisch, sofern der Payload es enthält; ein älterer
+	// Host-Agent ohne dieses Feld liefert einfach nil, kein Fehler).
+	Instances []InstanceMetrics `json:"instances,omitempty"`
+}
+
+// InstanceMetrics ist die zuletzt gemessene CPU/RSS-Auslastung einer
+// vom Host-Agent verwalteten Instanz — Spiegelbild von
+// host-agent/internal/telemetry.InstanceSample (eigenständige Go-
+// Module, gleiche bewusste kleine Duplikation wie beim übrigen
+// Wire-Format dieses Projekts).
+type InstanceMetrics struct {
+	InstanceID string  `json:"instanceId"`
+	CPUPercent float64 `json:"cpuPercent"`
+	RSSBytes   uint64  `json:"rssBytes"`
 }

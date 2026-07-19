@@ -203,7 +203,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/snapshots", g.requireVerbGlobal(authz.VerbConfigure, handleCreateSnapshot(snapshotSvc)))
 	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", g.requireVerbGlobal(authz.VerbConfigure, handleApplySnapshot(snapshotSvc)))
 	mux.HandleFunc("GET /api/v1/catalog", g.requireAuth(handleCatalog(launcherSvc)))
-	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc)))
+	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))

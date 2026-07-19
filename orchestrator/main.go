@@ -189,6 +189,11 @@ func main() {
 		launcherNATS = natsRequester{nc: nc}
 	}
 	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS)
+	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): periodisches
+	// Pro-Instanz-Sampling (CPU%/RSS aus /proc) für lokal laufende
+	// Instanzen — das Orchestrator-seitige Gegenstück zum Host-Agent-
+	// ProcessSampler.
+	go launcherSvc.Run(ctx)
 
 	// S3 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Remote-Parität für
 	// Instanzen — der Host-Agent meldet ein unerwartetes Prozessende auf

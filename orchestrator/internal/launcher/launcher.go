@@ -18,6 +18,7 @@
 package launcher
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -151,6 +152,20 @@ type Instance struct {
 	// erneut mitschicken kann, weil es dort keine langlebige
 	// Supervisor-Goroutine gibt, die es sich sonst merken könnte.
 	ExtraEnv map[string]string `json:"extraEnv,omitempty"`
+	// CPUPercent/RSSBytes (Kapitel 14 Teil 2, docs/END-GOAL-
+	// FEATURES.md §14.3b): nur für lokal laufende Instanzen (HostID=="")
+	// von Launcher.sampleLocalResources() befüllt, für entfernte
+	// Instanzen von httpapi.handleListInstances anhand
+	// hosts.Metrics.Instances gemischt (Launcher kennt das hosts-Paket
+	// bewusst nicht, s. Run()-Doku). Pointer statt Wert: nil heißt "noch
+	// kein Sample" (z. B. direkt nach dem Start), nicht "0%" — ein
+	// legitimer Idle-Wert von echten 0% muss vom UI unterscheidbar
+	// bleiben. Absichtlich NICHT in l.instances[id] selbst gesetzt,
+	// sondern erst beim Lesen in List() gemischt (s. dort) — sonst würde
+	// jeder Store.Put()-Aufruf (Neustart, Stop) eine flüchtige
+	// Telemetrie-Momentaufnahme in Postgres einfrieren.
+	CPUPercent *float64 `json:"cpuPercent,omitempty"`
+	RSSBytes   *uint64  `json:"rssBytes,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -212,6 +227,16 @@ type Launcher struct {
 	instances map[string]Instance
 	restarts  map[string]*restartState
 
+	// procState/resourceSamples (Kapitel 14 Teil 2) — Zustand für
+	// sampleLocalResources(), keyed by Instanz-ID (nicht PID: ein
+	// Neustart bekommt eine neue PID, das alte Ticks-Delta wäre falsch;
+	// die Instanz-ID bleibt über einen Neustart hinweg gleich, s.
+	// supervise()). resourceSamples ist bewusst getrennt von l.instances
+	// gehalten (s. Instance.CPUPercent-Doku) — List() mischt erst beim
+	// Lesen.
+	procState       map[string]procCPUState
+	resourceSamples map[string]instanceResourceSample
+
 	// totalRestarts zählt jeden tatsächlichen automatischen Neustart
 	// (lokal wie remote, beide laufen durch recordRestartLocked) seit
 	// Prozessstart kumulativ (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md:
@@ -259,8 +284,10 @@ func newWithStore(catalog []CatalogEntry, registryURL, natsURL string, store ins
 		store:       store,
 		events:      events,
 		nc:          nc,
-		instances:   map[string]Instance{},
-		restarts:    map[string]*restartState{},
+		instances:       map[string]Instance{},
+		restarts:        map[string]*restartState{},
+		procState:       map[string]procCPUState{},
+		resourceSamples: map[string]instanceResourceSample{},
 	}
 	l.loadState()
 	return l
@@ -272,11 +299,20 @@ func (l *Launcher) Catalog() []CatalogEntry {
 }
 
 // List liefert alle aktuell bekannten Instanzen (GET /api/v1/instances).
+// Mischt für lokale Instanzen den zuletzt von sampleLocalResources()
+// gemessenen CPU%/RSS-Stand ein (Kapitel 14 Teil 2) — eine reine
+// Lesekopie, l.instances selbst bleibt unverändert (s.
+// Instance.CPUPercent-Doku).
 func (l *Launcher) List() []Instance {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	list := make([]Instance, 0, len(l.instances))
 	for _, inst := range l.instances {
+		if rs, ok := l.resourceSamples[inst.ID]; ok {
+			cpu, rss := rs.cpuPercent, rs.rssBytes
+			inst.CPUPercent = &cpu
+			inst.RSSBytes = &rss
+		}
 		list = append(list, inst)
 	}
 	return list
@@ -286,6 +322,84 @@ func (l *Launcher) List() []Instance {
 // (lokal + remote) seit Prozessstart (S8) — s. totalRestarts-Doku.
 func (l *Launcher) TotalRestarts() uint64 {
 	return l.totalRestarts.Load()
+}
+
+// resourceSampleInterval — gleicher Takt wie der Host-Agent (Kapitel 14
+// Teil 1/2 einheitlich 5s), damit lokale und entfernte Instanzen
+// vergleichbar aktuelle Werte zeigen (s. host-agent/main.go
+// telemetryInterval).
+const resourceSampleInterval = 5 * time.Second
+
+// Run sampelt periodisch CPU%/RSS aller lokal laufenden Instanzen aus
+// /proc/<pid> (Kapitel 14 Teil 2, docs/END-GOAL-FEATURES.md §14.3b) —
+// das lokale Gegenstück zu host-agent/internal/telemetry.ProcessSampler.
+// Entfernte Instanzen (HostID gesetzt) liefern ihre Werte stattdessen
+// über den Host-Agent-Metrik-Payload (hosts.Metrics.Instances) —
+// httpapi.handleListInstances mischt beide Quellen beim Response-Bau
+// zusammen. Launcher kennt das hosts-Paket bewusst nicht (keine neue
+// Paketabhängigkeit nur für eine Anzeige-Ergänzung). Läuft bis ctx
+// endet, wie registry.Poller.Run/placement.Engine.Run.
+func (l *Launcher) Run(ctx context.Context) {
+	ticker := time.NewTicker(resourceSampleInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			l.sampleLocalResources()
+		}
+	}
+}
+
+// sampleLocalResources misst utime+stime-Delta und VmRSS jeder lokal
+// laufenden Instanz (HostID=="") — Kern von Run(). Ein Fehlschlag bei
+// einer einzelnen PID (z. B. Prozess zwischen List-Aufbau und Messung
+// beendet) überspringt nur diese Instanz, bricht den gesamten Tick
+// nicht ab (gleiche Nachsicht wie der übrige Telemetrie-Code).
+func (l *Launcher) sampleLocalResources() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	active := make(map[string]bool, len(l.instances))
+	for id, inst := range l.instances {
+		if inst.HostID != "" {
+			continue
+		}
+		active[id] = true
+
+		ticks, err := processTimes(inst.PID)
+		if err != nil {
+			continue
+		}
+		rss, err := processRSSBytes(inst.PID)
+		if err != nil {
+			continue
+		}
+		now := time.Now()
+		prev, hadPrev := l.procState[id]
+		l.procState[id] = procCPUState{ticks: ticks, at: now}
+		if !hadPrev {
+			continue
+		}
+		elapsed := now.Sub(prev.at).Seconds()
+		if elapsed <= 0 || ticks < prev.ticks {
+			continue
+		}
+		cpuPercent := (float64(ticks-prev.ticks) / clockTicksPerSecond / elapsed) * 100
+		l.resourceSamples[id] = instanceResourceSample{cpuPercent: cpuPercent, rssBytes: rss}
+	}
+
+	// Zustand nicht mehr lokal aktiver Instanzen entfernen (gestoppt,
+	// abgestürzt, oder gerade auf einen Host verlagert) — verhindert
+	// unbegrenztes Wachstum über die Prozesslaufzeit des Orchestrators
+	// hinweg.
+	for id := range l.procState {
+		if !active[id] {
+			delete(l.procState, id)
+			delete(l.resourceSamples, id)
+		}
+	}
 }
 
 // Start sucht nodeType im Katalog und startet ihn — lokal als
