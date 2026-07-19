@@ -22,12 +22,17 @@ Several microservices are currently available as demonstrators:
 
 - Test sources
 - Video switcher
-- Video mixer (1 M/E with cut, crossfade, and picture-in-picture)
-- Simple audio mixer with audio-follow-video
+- Video mixer (1 M/E with cut, crossfade, picture-in-picture, keyer)
+- Digital audio mixer with parametric EQ, per-channel compressor, master
+  limiter, and audio-follow-video
 - Video player and jingle player (cued playback)
 - Playout automation (playlist-driven, no pipeline of its own)
-- Viewer and multiviewer
-- ST 2110 ⇄ SRT gateway for inter-site contribution
+- Viewer and multiviewer (with automatic low-res preview fan-out)
+- Graphics overlay node (Fill+Key)
+- ST 2110 ⇄ SRT gateway and a native ST 2110 video/AES67 audio gateway
+  for inter-site contribution
+- MXL-native RDMA/Fabrics transport (software `tcp` provider verified;
+  RDMA hardware planned)
 
 All components run as independent services and can be started, stopped, or extended independently — either locally via the built-in instance launcher, or on a separate machine via a lightweight host agent that registers itself with the orchestrator and executes only pre-approved node types (agent-local catalog as the trust boundary, not a wide-open remote-exec channel).
 
@@ -46,21 +51,37 @@ make start   # NATS + NMOS-Registry + Orchestrator, siehe docs/HANDBUCH.md
 ```
 
 Danach http://localhost:8000 öffnen. Details/Troubleshooting:
-[`docs/HANDBUCH.md`](docs/HANDBUCH.md).
+[`docs/HANDBUCH.md`](docs/HANDBUCH.md). Bedienungsanleitung für die
+Oberfläche (mit Screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+
+![Flow Editor mit laufenden Node-Instanzen](docs/screenshots/flow-editor.png)
 
 ## Status
 
 Architektur/Tech-Stack entschieden (siehe `ARCHITECTURE.md`), Umsetzung
-läuft nach `UMSETZUNG.md` (Status-Checkliste dort). Fundament,
-Flow-Editor und der kleine Regieplatz (Source/Switcher/Video-Mixer/
-Audio-Mixer/Player/Multiviewer/Playout-Automation, alle GUI-startbar)
-stehen; dazu ST 2110 + SRT-Gateway, PostgreSQL-Backend, mTLS
-Orchestrator↔Nodes, ein lokales Nutzer-/Rollenmodell mit Login, ein
-Node-SDK-Tutorial sowie Remote-Host-Erkennung samt Kommandokanal
-(Instanzen auch auf einer entfernten Maschine starten/stoppen, über
-einen Host-Agent mit host-lokalem Katalog als Sicherheitsgrenze).
-Offen: automatische Placement-Engine (Ressourcen-bewusste Zielhost-Wahl)
-sowie Workflow-Objekte/-Bundles (D7).
+läuft nach `UMSETZUNG.md` (Status-Checkliste dort, laufend
+fortgeschrieben — dort steht der jeweils aktuelle Stand, nicht hier).
+
+Stehen bereits: Fundament, Flow-Editor mit Drag&Drop-Routing,
+Workflow-Objekte/-Presets, der kleine Regieplatz (Source/Switcher/
+Video-Mixer/Audio-Mixer/Player/Multiviewer/Playout-Automation/
+OGraf-Grafik, alle GUI-startbar), Mixer-Presets (Snapshot/Recall),
+ST 2110-Video/AES67-Audio + ein natives ST-2110-Gateway zusätzlich zum
+SRT-Gateway, ein MXL-natives RDMA/Fabrics-Transportfundament
+(Software-`tcp`-Provider live verifiziert), PostgreSQL-Backend, mTLS
+Orchestrator↔Nodes, ein lokales Nutzer-/Rollenmodell mit Login und
+Audit-Log, ein Node-SDK-Tutorial, Remote-Host-Erkennung samt
+Kommandokanal (Instanzen auch auf einer entfernten Maschine starten/
+stoppen, über einen Host-Agent mit host-lokalem Katalog als
+Sicherheitsgrenze), automatischer Prozess-Neustart mit
+Crash-Loop-Bremse, ein Metrics-Endpunkt, sowie eine Betriebsansicht mit
+laufenden Instanzen (CPU/RAM je Prozess), Host-Ressourcenverlauf und
+gesammelten Alarmen.
+
+Offen: automatische Placement-Engine (Ressourcen-bewusste Zielhost-
+Wahl), RDMA-Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
+Hardware-Beschaffung), NDI-/Dante-Gateways, PTP-Zeitbasis für die
+2110-Pfade.
 
 ## Verwandtes Projekt
 
