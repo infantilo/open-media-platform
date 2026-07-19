@@ -8568,3 +8568,72 @@ weitere Lowres-Quellen, analoger Handgriff wie Teil 2 in `omp-source`)
 `omp-switcher`** (PGM-Pfad bleibt highres, nur Vorschau/Crosspoint-
 Buttons lowres — komplexer als der hier gebaute reine Monitor-Fall)
 vollständig.
+
+## 2026-07-19 (Nachtrag 39) — Kapitel 15 Teil 4 (teilweise): Lowres-
+Sender auch in `omp-player`
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §15.4 Teil 4 — derselbe Handgriff
+wie Teil 2 (`omp-source`) für einen weiteren Video-produzierenden
+Node. `omp-player` gewählt (nicht `omp-ograf`) — architektonisch näher
+an `omp-source` (ein einzelner MXL-Video-Ausgang), während `omp-ograf`s
+Fill+Key-Doppelausgang eine bisher ungeklärte Design-Frage aufwirft
+(bräuchte der Konsument einen Lowres-Fill **und** Lowres-Key, oder
+reicht Lowres-Fill allein für eine reine Vorschau? Nicht im Dokument
+beantwortet, bewusst zurückgestellt statt geraten).
+
+**Struktur-Unterschied zu `omp-source`, der die Umsetzung geprägt
+hat:** `omp-player`s PGM-Ausgang wird bisher direkt vom
+`input-selector` (`video_isel`) gespeist — anders als `omp-source`s
+bereits vorhandener `tee` gibt es hier noch keinen Verzweigungspunkt.
+Ein `input-selector`-Src-Pad ist ein normaler Always-Pad (1:1-Link,
+kein Fan-out) — ein neuer `tee` direkt hinter `video_isel` war
+notwendig, bevor überhaupt ein zweiter (Lowres-)Zweig möglich war.
+`ActivePipeline`/`PipelineHandle` werden pro Prozesslebenszeit genau
+einmal gebaut (`replace_slot` rebuilt nur die Input-Zweige VOR dem
+isel, nie dessen Ausgangsseite) — der Lowres-Ausgang + Referenzzähler
+konnten deshalb genauso einmalig wie bei `omp-source` angelegt werden,
+unabhängig von Cue/Take-Rebuilds.
+
+**Umsetzung** (`nodes/omp-player/src/pipeline.rs`,
+`nodes/omp-player/src/main.rs`): `Config` bekommt
+`lowres_video_flow_id`; `build()`s Video-Ausgang-Abschnitt fügt einen
+`tee` zwischen `video_isel` und dem bisherigen `MxlVideoOutput` ein,
+zwei `queue`-Zweige (Highres unverändert aktiv, Lowres bewusst nicht
+`set_active(true)` — Valve-Default bleibt zu). `PipelineHandle`
+bekommt `activate_lowres_preview`/`release_lowres_preview`/
+`lowres_preview_active` (identische Referenzzählungs-Logik wie
+`omp-source`), alle drei No-Ops im Jingle-Profil (`has_video==false`,
+kein Video-Ausgang existiert). `main.rs`: zweiter `SenderSpec` +
+Grouphint-Tag-Paar (nur wenn `has_video`), neue Deskriptor-Parameter
+`lowresFlowId`/`lowresActive` + Methoden `activateLowresPreview`/
+`releaseLowresPreview` (nur in `descriptor()` deklariert, wenn
+`has_video` — der generische Proxy prüft Aufrufe aber nicht gegen den
+Descriptor, harmlos dank der No-Op-Absicherung in `PipelineHandle`).
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build`/`cargo
+clippy --all-targets -p omp-player` sauber, `cargo build --workspace`
+grün. Live gegen einen echten Orchestrator/Registry-Stack:
+`omp-player-video` zeigte exakt drei Sender (Highres/Lowres-Video +
+Audio) mit korrektem Grouphint-Paar; `omp-player-jingle` zeigte
+korrekt **nur** den Audio-Sender, kein Lowres-Video (Profil-Gate
+funktioniert). `mxl-info` bestätigte den Lowres-Flow bei `Head index:
+0` (dormant) über 2,5s Wartezeit, nach `activateLowresPreview` sofort
+wachsend. **Generalisierungs-Bonus:** eine echte `omp-multiviewer`-
+Instanz (Kapitel 15 Teil 3, unverändert seit Nachtrag 38) entdeckte
+und aktivierte den Player-Lowres-Sender automatisch, **ohne jede
+player-spezifische Änderung in `omp-multiviewer`** — `mxl-info` zeigte
+"Last read time" erneut im Millisekunden-Abstand zur "Last write
+time", identisch zum `omp-source`-Fall — bestätigt, dass die
+Grouphint-basierte Discovery aus Teil 3 tatsächlich generisch über
+Producer-Typen hinweg funktioniert, nicht nur für den ursprünglichen
+Pilot-Node. Cue/Take eines `smpte`-Testbilds bestätigte zusätzlich den
+korrekten `mode`/`currentItemId`-Übergang am Player selbst; die
+zugehörige Multiviewer-Vorschau-Frame-Extraktion im Ad-hoc-Testskript
+zeigte beim zweiten Versuch ein unerwartetes Bild (mutmaßlich ein
+Mehrfach-Frame-Grenzen-Fehler im Testskript selbst, nicht im Node-Code
+— die entscheidende Kette Aktivierung→aktives Lesen war zu diesem
+Zeitpunkt bereits per `mxl-info`-Zeitstempeln zweifelsfrei belegt,
+nicht weiterverfolgt). Alle Testartefakte danach entfernt.
+
+**Nicht Teil dieser Scheibe:** `omp-ograf` (Design-Frage Fill/Key
+offen, s. o.) bleibt der letzte Kapitel-15-Baustein.

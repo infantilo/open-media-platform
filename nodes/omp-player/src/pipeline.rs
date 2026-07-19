@@ -39,7 +39,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -61,6 +61,11 @@ pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 pub const SAMPLE_RATE: u32 = 48000;
 pub const CHANNELS: u32 = 2;
+/// Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4, analog zu Teil 2
+/// in `omp-source`): feste Lowres-Vorschau-Zielauflösung, nur im
+/// Video-Profil wirksam (`config.has_video`).
+pub const LOWRES_WIDTH: u32 = 320;
+pub const LOWRES_HEIGHT: u32 = 180;
 
 /// Default-Pattern/-Ton für einen frisch aufgebauten, noch nicht
 /// gecuten Slot ("schwarz/still" statt eines dritten isel-Fallback-Zweigs
@@ -74,6 +79,10 @@ pub struct Config {
     pub has_video: bool,
     pub video_flow_id: String,
     pub audio_flow_id: String,
+    /// Kapitel 15 Teil 4: nur ausgewertet, wenn `has_video` — bei
+    /// `false` (Jingle-Profil) bleibt der Wert ungenutzt, analog zu
+    /// `video_flow_id`.
+    pub lowres_video_flow_id: String,
     pub label: String,
     pub width: u32,
     pub height: u32,
@@ -143,6 +152,13 @@ pub struct PipelineHandle {
     commands: Sender<Command>,
     video_flowed: Option<Arc<AtomicBool>>,
     audio_flowed: Arc<AtomicBool>,
+    /// Kapitel 15 Teil 4 — `None` im Jingle-Profil (kein Video-Ausgang
+    /// überhaupt, `config.has_video == false`), sonst der dormant/
+    /// aktivierbare Lowres-Ausgang + sein Referenzzähler (identisches
+    /// Muster wie `omp-source::pipeline::PipelineHandle`, Kapitel 15
+    /// Teil 2).
+    lowres_video_output: Option<Arc<MxlVideoOutput>>,
+    lowres_active_count: Arc<AtomicUsize>,
 }
 
 impl PipelineHandle {
@@ -164,6 +180,33 @@ impl PipelineHandle {
                 .video_flowed
                 .as_ref()
                 .is_none_or(|f| f.load(Ordering::Relaxed))
+    }
+
+    /// Kapitel 15 Teil 4 — referenzgezählt, identische Semantik wie
+    /// `omp-source::pipeline::PipelineHandle::activate_lowres_preview`.
+    /// No-Op im Jingle-Profil (kein Lowres-Ausgang vorhanden).
+    pub fn activate_lowres_preview(&self) {
+        let Some(output) = &self.lowres_video_output else { return };
+        if self.lowres_active_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            output.set_active(true);
+        }
+    }
+
+    pub fn release_lowres_preview(&self) {
+        let Some(output) = &self.lowres_video_output else { return };
+        let prev = self
+            .lowres_active_count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
+                Some(c.saturating_sub(1))
+            })
+            .unwrap_or(0);
+        if prev == 1 {
+            output.set_active(false);
+        }
+    }
+
+    pub fn lowres_preview_active(&self) -> bool {
+        self.lowres_active_count.load(Ordering::SeqCst) > 0
     }
 }
 
@@ -528,6 +571,10 @@ struct ActivePipeline {
     height: u32,
     _mxl_video_output: Option<MxlVideoOutput>,
     _mxl_audio_output: MxlAudioOutput,
+    /// Kapitel 15 Teil 4 — `Arc`, weil `PipelineHandle` (anderer Thread)
+    /// darauf `set_active` aufrufen muss; `ActivePipeline` hält die
+    /// zweite Referenz nur für `Drop`/Lebensdauer, analog `omp-source`.
+    lowres_video_output: Option<Arc<MxlVideoOutput>>,
     video_flowed: Option<Arc<AtomicBool>>,
     audio_flowed: Arc<AtomicBool>,
     /// Spiegelt, welcher Slot gerade on-air ist — von `apply_active()`
@@ -668,10 +715,32 @@ fn build(
         audio_branches.insert(slot, branch);
     }
 
-    let mxl_video_output = if let Some(isel) = &video_isel {
+    // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4, analog Teil 2
+    // in `omp-source`): der isel-Ausgang hat nur einen einzigen Src-Pad
+    // (1:1-Link, kein Fan-out) — ein `tee` davor macht ihn für zwei
+    // unabhängige `MxlVideoOutput`-Zweige (Highres + Lowres) verfügbar.
+    let (mxl_video_output, lowres_video_output) = if let Some(isel) = &video_isel {
+        let out_tee = gst::ElementFactory::make("tee")
+            .name("video_out_tee")
+            .build()
+            .map_err(|e| format!("video_out_tee: {e}"))?;
+        pipeline
+            .add(&out_tee)
+            .map_err(|e| format!("add video_out_tee: {e}"))?;
+        gst::Element::link(isel, &out_tee).map_err(|e| format!("link isel to video_out_tee: {e}"))?;
+
+        let highres_queue = gst::ElementFactory::make("queue")
+            .build()
+            .map_err(|e| format!("queue (highres out): {e}"))?;
+        pipeline
+            .add(&highres_queue)
+            .map_err(|e| format!("add highres_queue: {e}"))?;
+        gst::Element::link(&out_tee, &highres_queue)
+            .map_err(|e| format!("link video_out_tee to highres_queue: {e}"))?;
+
         let output = MxlVideoOutput::new(
             &pipeline,
-            isel,
+            &highres_queue,
             context.clone(),
             &config.video_flow_id,
             &config.label,
@@ -682,9 +751,35 @@ fn build(
         )
         .map_err(|e| format!("MxlVideoOutput: {e}"))?;
         output.set_active(true);
-        Some(output)
+
+        let lowres_queue = gst::ElementFactory::make("queue")
+            .build()
+            .map_err(|e| format!("queue (lowres out): {e}"))?;
+        pipeline
+            .add(&lowres_queue)
+            .map_err(|e| format!("add lowres_queue: {e}"))?;
+        gst::Element::link(&out_tee, &lowres_queue)
+            .map_err(|e| format!("link video_out_tee to lowres_queue: {e}"))?;
+
+        // Bewusst NICHT `set_active(true)` — bleibt im Valve-Default
+        // (inaktiv) bis `PipelineHandle::activate_lowres_preview()`
+        // (referenzgezählt) ihn öffnet.
+        let lowres_output = MxlVideoOutput::new(
+            &pipeline,
+            &lowres_queue,
+            context.clone(),
+            &config.lowres_video_flow_id,
+            &format!("{} Lowres", config.label),
+            LOWRES_WIDTH,
+            LOWRES_HEIGHT,
+            FRAMERATE_NUMERATOR,
+            FRAMERATE_DENOMINATOR,
+        )
+        .map_err(|e| format!("MxlVideoOutput (lowres): {e}"))?;
+
+        (Some(output), Some(Arc::new(lowres_output)))
     } else {
-        None
+        (None, None)
     };
 
     let mxl_audio_output = MxlAudioOutput::new(
@@ -726,6 +821,7 @@ fn build(
         height: config.height,
         _mxl_video_output: mxl_video_output,
         _mxl_audio_output: mxl_audio_output,
+        lowres_video_output,
         video_flowed,
         audio_flowed,
         onair_slot: Arc::new(AtomicU8::new(Slot::A.code())),
@@ -773,6 +869,8 @@ pub fn run(
         commands: commands_tx,
         video_flowed: active.video_flowed.clone(),
         audio_flowed: active.audio_flowed.clone(),
+        lowres_video_output: active.lowres_video_output.clone(),
+        lowres_active_count: Arc::new(AtomicUsize::new(0)),
     }));
 
     loop {

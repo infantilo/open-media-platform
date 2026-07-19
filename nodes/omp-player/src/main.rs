@@ -24,6 +24,7 @@
 mod pipeline;
 mod uibundle;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -84,6 +85,8 @@ struct PlayerStore {
     pipeline: PipelineHandle,
     has_video: bool,
     media_dir: PathBuf,
+    /// Kapitel 15 Teil 4 — nur bedeutungsvoll bei `has_video == true`.
+    lowres_flow_id: String,
 }
 
 /// Testton-Frequenz-Formel wie C11s `channel_freq` — nur zur akustischen
@@ -201,7 +204,26 @@ impl ParamStore for PlayerStore {
             },
         ];
 
-        let methods = vec![
+        let mut parameters = parameters;
+        if self.has_video {
+            // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4).
+            parameters.push(ParamSpec {
+                name: "lowresFlowId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            });
+            parameters.push(ParamSpec {
+                name: "lowresActive".to_string(),
+                kind: ParamType::Boolean,
+                unit: None,
+                range: None,
+                readonly: true,
+            });
+        }
+
+        let mut methods = vec![
             MethodSpec {
                 name: "append".to_string(),
                 args: vec![
@@ -253,6 +275,16 @@ impl ParamStore for PlayerStore {
                 args: vec![],
             },
         ];
+        if self.has_video {
+            methods.push(MethodSpec {
+                name: "activateLowresPreview".to_string(),
+                args: vec![],
+            });
+            methods.push(MethodSpec {
+                name: "releaseLowresPreview".to_string(),
+                args: vec![],
+            });
+        }
 
         Descriptor { parameters, methods }
     }
@@ -305,6 +337,17 @@ impl ParamStore for PlayerStore {
                 files.sort();
                 Some(serde_json::json!(files))
             }
+            // Kapitel 15 Teil 4 — nur in `descriptor()` deklariert, wenn
+            // `has_video` (Jingle-Profil hat keinen Video-Ausgang). Der
+            // generische Proxy (`omp_node_sdk::server::route`) prüft
+            // Aufrufe nicht gegen den Descriptor, ruft `get`/`invoke`
+            // immer direkt auf — harmlos hier, weil
+            // `PipelineHandle::activate_lowres_preview`/
+            // `release_lowres_preview` bei `None` (Jingle-Profil) selbst
+            // schon zu No-Ops werden (s. dort), kein zusätzliches Gate
+            // in dieser Methode nötig.
+            "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
+            "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
             _ => None,
         }
     }
@@ -492,6 +535,14 @@ impl ParamStore for PlayerStore {
                 state.onair_since = Some(Instant::now());
                 Ok(())
             }
+            "activateLowresPreview" => {
+                self.pipeline.activate_lowres_preview();
+                Ok(())
+            }
+            "releaseLowresPreview" => {
+                self.pipeline.release_lowres_preview();
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -543,6 +594,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
     let audio_flow_id = omp_node_sdk::idgen::new_v4();
+    // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4, analog Teil 2
+    // in `omp-source`) — nur im Video-Profil tatsächlich verwendet.
+    let lowres_video_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -553,6 +607,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         has_video,
         video_flow_id: video_flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
+        lowres_video_flow_id: lowres_video_flow_id.clone(),
         label: label.clone(),
         width,
         height,
@@ -573,7 +628,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let mut senders = Vec::with_capacity(2);
+    // Kapitel 15 Teil 4: `urn:x-nmos:tag:grouphint/v1.0` gegen die echte
+    // AMWA-NMOS-Parameter-Registry verifiziert (Kapitel 15 Teil 2,
+    // docs/decisions.md Nachtrag 37) — Format "<group>:<role>", Gruppe =
+    // Highres-Flow-UUID.
+    let grouphint_group = video_flow_id.clone();
+    let mut senders = Vec::with_capacity(3);
     if has_video {
         senders.push(SenderSpec {
             id: Some(omp_node_sdk::idgen::new_v4()),
@@ -585,6 +645,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                 grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
             }),
+            tags: HashMap::from([(
+                "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                vec![format!("{grouphint_group}:high")],
+            )]),
+            ..Default::default()
+        });
+        senders.push(SenderSpec {
+            id: Some(omp_node_sdk::idgen::new_v4()),
+            transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+            flow: Some(omp_node_sdk::node::FlowSpec::Video {
+                id: Some(lowres_video_flow_id.clone()),
+                frame_width: pipeline::LOWRES_WIDTH,
+                frame_height: pipeline::LOWRES_HEIGHT,
+                grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+            }),
+            label: Some(format!("{label} Lowres")),
+            tags: HashMap::from([(
+                "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                vec![format!("{grouphint_group}:low")],
+            )]),
             ..Default::default()
         });
     }
@@ -615,6 +696,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pipeline: pipeline_handle,
         has_video,
         media_dir,
+        lowres_flow_id: lowres_video_flow_id,
     });
 
     let handle = omp_node_sdk::start(

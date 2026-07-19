@@ -2874,6 +2874,18 @@ wie heute pro Node-Typ hartkodiert.
   (dokumentierte, bewusste Lücke).
 - **Teil 4 — `omp-ograf`/`omp-player` als weitere Lowres-Quellen**
   (Analogie zu Teil 2, pro Node einzeln nachziehbar).
+  ✅ **`omp-player` erledigt 2026-07-19** (`docs/decisions.md`
+  Nachtrag 39) — neuer `tee` zwischen `video_isel` und dem bisherigen
+  `MxlVideoOutput` (anders als `omp-source`, das schon einen `tee`
+  hatte), sonst identisches Muster; im Jingle-Profil (kein
+  Video-Ausgang) bleibt der Lowres-Sender korrekt ganz weg. Live
+  verifiziert, inkl. eines Generalisierungs-Bonus: eine echte
+  `omp-multiviewer`-Instanz (Teil 3) entdeckte und nutzte den neuen
+  Player-Lowres-Sender automatisch, ganz ohne player-spezifischen Code
+  in `omp-multiviewer` — bestätigt, dass die Grouphint-Discovery aus
+  Teil 3 tatsächlich producer-agnostisch ist. `omp-ograf` bleibt offen
+  (Design-Frage: Lowres-Fill allein oder auch Lowres-Key? nicht im
+  Dokument entschieden, nicht geraten).
 
 ### 15.5 Offene Fragen an den Projektinhaber
 
@@ -3231,8 +3243,10 @@ Kapiteln, nicht hier wiederholt.
    MXL-Sender in `omp-source`, live verifiziert. Teil 3 ✅ teilweise
    2026-07-19 (Nachtrag 38) — `omp-multiviewer` liest bevorzugt
    lowres, live verifiziert; `omp-video-mixer-me`/`omp-switcher` noch
-   offen. Teil 4 (weitere
-   Lowres-Quellen) bleiben offen.
+   offen. Teil 4 ✅ teilweise 2026-07-19 (Nachtrag 39) — `omp-player`
+   erledigt (inkl. Generalisierungs-Bonus: `omp-multiviewer` nutzte den
+   neuen Lowres-Sender ohne jede Anpassung); `omp-ograf` offen
+   (Fill/Key-Design-Frage).
 6. **Kapitel 16 — Inter-Host-Fabrics (RDMA/Remote-Memory).** Höchster
    potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz), aber:
    (a) braucht zuerst die Grundsatzentscheidung MXL-Fabrics vs.
