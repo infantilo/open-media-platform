@@ -22,6 +22,9 @@ pub mod st2110;
 #[cfg(feature = "mxl")]
 pub mod mxl;
 
+#[cfg(feature = "fabrics")]
+pub mod fabrics;
+
 #[cfg(feature = "preview")]
 pub mod preview;
 

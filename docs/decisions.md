@@ -8971,3 +8971,63 @@ C-Kern, gehört nicht ins Repo).
 (`omp-mediaio::fabrics`-Grundmodul, `Output`-Trait-Implementierung
 analog C4) ist der nächste, jetzt entsperrte Schritt — eigene Scheibe,
 nicht Teil dieses Nachtrags.
+
+## 2026-07-19 (Nachtrag 44) — Kapitel 16 Teil 1: `omp-mediaio::fabrics`-
+Grundmodul, live über zwei Domains verifiziert
+
+Fundament-Ebene (Teil 1, s. Nachtrag 43): FFI-Bindings + sicherer
+Rust-Wrapper um MXLs `lib/fabrics/ofi`-Bibliothek — bewusst noch **ohne**
+`Output`-Trait/GStreamer-Anbindung (das ist der nächste, eigene
+Folgeschritt, gleiches Verhältnis wie C4 zu C5), aber vollständig live
+über zwei unabhängige MXL-Domains verifiziert.
+
+**Zwei live entdeckte Überraschungen, beide zunächst falsch
+angenommen:**
+
+1. `mxlFabrics*`-Symbole liegen in einer **eigenen** `libmxl-fabrics.so`
+   (CMake-Target `mxl-fabrics`, `lib/fabrics/ofi/CMakeLists.txt`), nicht
+   in `libmxl.so` — und `libmxl-fabrics.so` linkt laut `ldd` nicht
+   einmal gegen `libmxl.so` (die Fabrics-API nimmt bereits offene
+   `mxlInstance`/`mxlFlowWriter`/`mxlFlowReader`-Handles als Parameter
+   entgegen, statt sie selbst zu erzeugen). Erster Build-Versuch scheiterte
+   entsprechend mit `undefined symbol: mxlFabricsCreateInstance` beim
+   Laden von `libmxl.so`. Gelöst durch **zwei getrennte bindgen-
+   Durchläufe** (`build.rs`, je mit `.allowlist_function` auf die
+   jeweilige Bibliothek beschränkt) + zwei separate `dlopen`s, mit
+   Zeiger-Casts zwischen den beiden unabhängig generierten (nominell
+   verschiedenen, layoutgleichen) Opak-Zeigertypen an den
+   FFI-Grenzstellen. `deploy/dev/install-mxl.sh`/`mxl.env` um den
+   zweiten `LD_LIBRARY_PATH`-Eintrag (`lib/fabrics/ofi`) ergänzt.
+2. **Verbindungsaufbau läuft nur, wenn beide Seiten aktiv pollen.** Ein
+   erster Testlauf mit nur Initiator-seitigen `make_progress*`-Aufrufen
+   in einer Schleife kam nie über den Verbindungsaufbau hinaus (Ziel-
+   Endpunkt blieb untätig); `mxl-fabrics-demo`s eigener Target-Loop
+   nutzt ausschließlich die **blockierende** `mxlFabricsTargetReadGrain`
+   (nie die nicht-blockierende Variante) — das treibt offenbar auch den
+   Verbindungsaufbau auf der Zielseite voran. Gelöst durch zwei
+   Threads im Test (Initiator- und Ziel-Seite unabhängig pollend,
+   näher am echten Zwei-Prozess-Modell von `mxl-fabrics-demo` als ein
+   geratener Single-Thread-Interleave).
+3. **Dritter, kleinerer Fund:** `build.rs` referenzierte `bindgen`
+   zunächst unbedingt (nur ein Laufzeit-`env::var`-Check in `main()`),
+   was den Standard-Build **und** den `mxl`-only-Build brach, da
+   `bindgen` ein optionales Build-Dependency ist (nur unter Feature
+   `fabrics` im Baum) — Cargo kompiliert `build.rs` immer, unabhängig
+   von Features. Behoben durch echte `#[cfg(feature = "fabrics")]`-
+   Gates auf den bindgen-nutzenden Funktionen/Typen statt eines reinen
+   Laufzeit-Checks; alle vier Kombinationen (kein Feature, nur `mxl`,
+   nur `fabrics`, beide) live nachgebaut.
+
+**Live verifiziert (echter Test, `cargo test -p omp-mediaio --features
+fabrics`, 5× wiederholt ohne Flakiness):** zwei temporäre MXL-Domains,
+ein per Fabrics-Target geöffneter `data`-Flow (Struktur nach
+`lib/tests/data/data_flow.json`), ein Initiator liest einen echten,
+separat geschriebenen Source-Flow und überträgt Grain 0 per echtem
+One-Sided-RDMA-Write über den `tcp`-Provider — Zieldomain bestätigt den
+Empfang über `FabricsTarget::read_grain`. `cargo clippy` sauber (keine
+neuen Warnungen), `cargo build`/`cargo test --workspace` grün in allen
+vier Feature-Kombinationen.
+
+**Nicht Teil dieser Scheibe:** `Output`-Trait-Implementierung mit
+echter `appsink`/`appsrc`-GStreamer-Anbindung (Teil 2, eigener
+Schritt).

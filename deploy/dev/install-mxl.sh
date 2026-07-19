@@ -75,8 +75,13 @@ cat > "$ROOT_DIR/deploy/dev/mxl.env" <<EOF
 # Auto-generiert von deploy/dev/install-mxl.sh.
 # Vor jedem MXL-nutzenden Node/Tool sourcen (setzt LD_LIBRARY_PATH für
 # libmxl.so, das omp-mediaios mxl-Modul zur Laufzeit per libloading lädt).
+# lib/fabrics/ofi zusätzlich (Kapitel 16 Teil 1, docs/decisions.md
+# Nachtrag 44): libmxl-fabrics.so ist ein eigenes CMake-Target
+# (lib/fabrics/ofi/CMakeLists.txt), nicht Teil von libmxl.so, und liegt
+# in einem eigenen Unterverzeichnis — live entdeckt, als omp-mediaios
+# fabrics-Feature das Symbol sonst nicht fand.
 export OMP_MXL_DOMAIN="$MXL_DOMAIN"
-export LD_LIBRARY_PATH="$MXL_BUILD_DIR/lib:\${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$MXL_BUILD_DIR/lib:$MXL_BUILD_DIR/lib/fabrics/ofi:\${LD_LIBRARY_PATH:-}"
 export MXL_INFO_BIN="$MXL_BUILD_DIR/tools/mxl-info/mxl-info"
 export MXL_GST_TESTSRC_BIN="$MXL_BUILD_DIR/tools/mxl-gst/mxl-gst-testsrc"
 export MXL_GST_SINK_BIN="$MXL_BUILD_DIR/tools/mxl-gst/mxl-gst-sink"

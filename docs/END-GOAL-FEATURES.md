@@ -3012,11 +3012,17 @@ Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
   Prozessen auf demselben Host (zwei MXL-Domains) verifiziert: echter
   One-Sided-RDMA-Transfer eines SMPTE-Testbild-Flows, Head-Index in der
   Zieldomain kontinuierlich wachsend, keine RDMA-Hardware nötig.
-- **Teil 1 — `omp-mediaio::fabrics`-Grundmodul:** ein Flow, ein Host-
-  Paar, TCP-Provider, `Output`-Trait-Implementierung analog C4.
-  Verifikation: zwei `MxlContext`-Domains auf verschiedenen TCP-Ports/
-  Netzwerk-Namespaces (Software-Simulation von „zwei Hosts" auf einer
-  Maschine, wie in Teil 0) — Frame kommt über Fabrics an.
+- **Teil 1 — `omp-mediaio::fabrics`-Grundmodul.** ✅ **Fundament-Ebene
+  erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 44): eigene,
+  schlanke bindgen-Anbindung an `mxl/fabrics.h` (zwei getrennte `.so`s
+  live entdeckt — `libmxl-fabrics.so` ist eine eigene Bibliothek, linkt
+  nicht gegen `libmxl.so`), sicherer Rust-Wrapper
+  (`FabricsRuntime`/`FabricsTarget`/`FabricsInitiator`). Live über zwei
+  unabhängige MXL-Domains verifiziert (echter Grain-Transfer per
+  One-Sided-RDMA über den `tcp`-Provider, 5× ohne Flakiness wiederholt).
+  **Noch nicht Teil dieser Scheibe:** die `Output`-Trait-Implementierung
+  mit echter `appsink`/`appsrc`-GStreamer-Anbindung (analog C5 auf C4)
+  — eigener, nächster Schritt.
 - **Teil 2 — Placement-Integration:** `transportHint`/
   `fabricsProvider`-Claim, Orchestrator wählt Fabrics vs. ST2110/SRT
   pro Rolle.
@@ -3269,15 +3275,344 @@ Kapiteln, nicht hier wiederholt.
    angehoben werden (die gepinnte `v1.0.1` hatte eine reine
    Stub-Fabrics-API), beides live mit vollem Regressionstest gegen die
    bestehenden MXL-Pfade verifiziert, danach ein echter Zwei-Domain-
-   RDMA-Transfer über den TCP-Provider nachgewiesen. Teil 1
-   (`omp-mediaio::fabrics`-Grundmodul) ist der nächste, jetzt
-   entsperrte Schritt.
+   RDMA-Transfer über den TCP-Provider nachgewiesen.
+   ✅ **Teil 1 (Fundament-Ebene) erledigt, gleicher Tag** — eigener
+   FFI-Layer für `mxl/fabrics.h` (live entdeckt: eigene `.so`, eigene
+   bindgen-Anbindung nötig), live über zwei Domains verifiziert
+   (echter Grain-Transfer per RDMA). Offen bleibt die `Output`-Trait-
+   /GStreamer-Anbindung (eigener nächster Schritt, analog C5 auf C4).
 7. **§17 Teil 4/5 — Import/Versionierung fremder Microservices.**
    Architektonisch am größten (Podman-Runner, Katalog-Schreib-API,
    Vertrauensmodell), am wenigsten dringend für den aktuellen
    Ein-Entwickler-/Demo-Stand des Projekts — bewusst ans Ende gestellt.
+8. **Kapitel 19 — ST-2110-/NDI-/Dante-Source/Sink-Nodes +
+   Kernel-Bypass-Ausblick** (nachgereicht 2026-07-19, nicht Teil der
+   ursprünglichen `frage an fabel.txt`). Zweigeteilt einzuordnen:
+   die **Software-Teile** (2110-30-Audio, `omp-2110-gateway`,
+   AES67-Gateway als Dante-Interop, NDI-Gateway nach §6.5) sind auf der
+   Dev-Maschine vollständig testbar und der erste Punkt der Liste, der
+   OMP an **echtes Fremd-Equipment** anschließt (Kameras, Mischpulte,
+   OBS/vMix) — Nutzwert vergleichbar mit Kapitel 15, Aufwand pro Teil
+   klein; empfohlen **nach** Kapitel 16 Teil 1 (das entsperrt gerade
+   den Fabrics-Pfad), aber vor §17 Teil 4/5. Der **Kernel-Bypass-Teil**
+   (19.3d/19.4 Teil 5) ist wie Kapitel 16.4 Teil 4 explizit
+   Hardware-gebundene Zukunftsarbeit („später am großen") und hängt an
+   derselben NIC-Beschaffungsentscheidung (19.5 Frage 1) — nicht vor
+   dieser Entscheidung beginnen, dann aber mit dem dev-testbaren
+   MTL-Kernel-Socket-Backend vorziehbar.
 
 **Empfohlener nächster konkreter Schritt** (nicht Teil dieser
 Priorisierung selbst, sondern die unmittelbare Konsequenz): Punkt 1
 oben (`§1.6`) als nächsten `UMSETZUNG.md`-Schritt aufnehmen und
 umsetzen — klein, unabhängig, sofort sichtbar.
+
+---
+
+## 19. Broadcast-Interop an der Facility-Grenze: ST-2110-, NDI- und Dante-Source/Sink-Nodes + Kernel-Bypass für 2110
+
+> Nutzer-Feedback (2026-07-19): „wir brauchen SMPTE 2110, NDI und
+> dante source und sinks. geht 2110 mit kernel bypass? (natürlich
+> nicht auf diesem rechner, aber später am großen. DPDK oder
+> River-API,..)"
+
+„River-API" wird hier als NVIDIA **Rivermax** gelesen — die
+proprietäre Kernel-Bypass-SDK, die in der Broadcast-Industrie der
+De-facto-Standard für professionelle 2110-Software-Endpunkte ist
+(s. 19.3d).
+
+### 19.1 Ist-Zustand in OMP (Code/Doku gelesen, nicht angenommen)
+
+- **ST 2110-20 (Video) existiert bereits als Software-Implementierung
+  in beide Richtungen.** `nodes/omp-mediaio/src/st2110.rs` (D4):
+  `St2110VideoOutput` (`rtpvrawpay ! udpsink`, RFC-4175-Payload am
+  echten `gst-launch`-Testlauf verifiziert) und `St2110VideoInput`
+  (`udpsrc ! rtpjitterbuffer ! rtpvrawdepay`), inklusive
+  SDP-Erzeugung für das IS-05-`transportfile`. **Dokumentierter
+  Restscope dort:** kein Audio (ST 2110-30), keine PTP-Zeitbasis
+  (Free-Run-Systemtakt), kein ST 2022-7 — und nur Unicast-UDP, kein
+  Multicast. Das ist die Basis, auf der Kapitel 19a aufbaut, kein
+  Neuanfang.
+- **Gerichtete Gateway-Node-Architektur ist etabliert.**
+  `nodes/omp-srt-gateway` (Brücke ST 2110 LAN ⇄ SRT WAN) ist je
+  Instanz gerichtet (`OMP_SRT_GATEWAY_DIRECTION=uplink|downlink`),
+  registriert sich als normaler IS-04/05-Node und nutzt genau die
+  `st2110.rs`-Bausteine — das Strukturvorbild für alle neuen
+  Gateway-Nodes dieses Kapitels.
+- **NDI ist bereits geplant, in beide Richtungen.** `ARCHITECTURE.md`
+  §6.5 legt `omp-ndi-gateway` fest: `omp-mediaio`-Modul `ndi`
+  (Feature-gated wie `mxl`), zwei gerichtete Katalog-Rollen
+  (NDI→MXL und MXL→NDI, §6.5 Punkt 2) — „Source und Sink" sind dort
+  also schon abgedeckt, der Plan ist aktuell und wird hier nur
+  konkretisiert, nicht ersetzt (s. 19.3b, inkl. einer kleinen
+  Korrektur zur CI-Testbarkeit).
+- **Dante ist nirgends dokumentiert** — kein Treffer in
+  `ARCHITECTURE.md`, `docs/END-GOAL-FEATURES.md`, `docs/decisions.md`.
+  19.3c ist echte Neurecherche.
+- **Abgrenzung zu Kapitel 16 (MXL-native Fabrics) — bewusst getrennte
+  Baustellen.** Kapitel 16/`ARCHITECTURE.md` §6.6 beschleunigt den
+  **internen** Inter-Node-/Inter-Host-Transport zwischen MXL-Domains
+  (libfabric/RDMA auf Flow-Ebene, One-Sided-Write in die
+  Shared-Memory-Region der Ziel-Domain). Kernel-Bypass für ST 2110
+  (19.3d) beschleunigt dagegen **echtes RTP/UDP-Multicast auf einem
+  physischen NIC an der Facility-Grenze** — Traffic zu/von
+  Fremd-Equipment, das MXL nicht kennt. DPDK/Rivermax ersetzen dort
+  den Kernel-Socket-Pfad (`udpsrc`/`udpsink`), nicht MXLs
+  Shared-Memory. Berührungspunkt (nicht Vermischung): beide landen
+  perspektivisch als weitere `omp-mediaio`-Transportvarianten hinter
+  demselben `Output`-Trait, und die Intel Media Transport Library
+  (s. 19.3d) enthält mit `ecosystem/MTL_with_MXL` sogar bereits eine
+  Referenz-Brücke ST 2110→MXL-Fabrics (E810 + `irdma` + libfabric
+  `verbs` — dieselben Bausteine wie Kapitel 16 Teil 4).
+
+### 19.2 Referenz PIPELINE CONTROLLER
+
+Überwiegend nicht einschlägig: kein NDI, kein Dante, keine
+2110-Essenz-Streams (I/O dort ist DeckLink-SDI/HDMI plus
+RTMP/SRT/UDP-TS, `lib/OutputEngine.js`). **Ein Punkt ist aber direkt
+relevant — PTP:** `lib/ClockStrategy.js` hat echte
+PTP-Betriebserfahrung. `ptp-decklink` (implementiert) nutzt die
+PTP-gelockte Karten-Clock der DeckLink als Pipeline-Clock;
+`ptp-generic` (ptp4l + phc2sys + `GstPtpClock`) blieb dort **nur
+deshalb** ein Stub, weil gst-kit keine Clock-API bietet
+(„gst-kit hat KEINE Clock-API — externe GstPtpClock [kann] nicht
+[gesetzt werden]", Kommentar Z. 22/37). Diese Blockade existiert in
+OMP nicht: `gstreamer-rs` exponiert `Pipeline::use_clock()` und
+`gstreamer-net`s `PtpClock` vollständig — der in PIPELINE CONTROLLER
+dokumentierte, nie gangbare `ptp-generic`-Pfad ist hier normal
+umsetzbar (19.4 Teil 2).
+
+### 19.3 Ziel-Design
+
+**a) ST 2110 Source/Sink: `st2110.rs` vervollständigen + ein
+`omp-2110-gateway`-Node-Paar analog `omp-srt-gateway`.**
+Empfehlung: kein neues Transportmodul, sondern drei gezielte
+Erweiterungen des bestehenden Codes plus ein dünner Gateway-Node:
+
+1. **ST 2110-30 (Audio)**: neue `St2110AudioOutput`/`-Input` in
+   `st2110.rs` auf Basis `rtpL24pay`/`rtpL24depay` — L24/48 kHz,
+   1-ms-Pakete (ST-2110-30-Konformitätsstufe A, identisch mit dem
+   AES67-Pflichtprofil, s. c). Der im Modul-Header dokumentierte
+   D4-Restscope wird damit geschlossen.
+2. **Multicast**: `udpsrc`/`udpsink` können Multicast bereits
+   (`multicast-group`/`auto-multicast` — Konfigurationsfrage, kein
+   neues Element); echte 2110-Fremdgeräte senden praktisch immer
+   Multicast, Unicast bleibt als Dev-/Test-Pfad erhalten.
+3. **PTP-Zeitbasis (Opt-in)**: `gstreamer-net::PtpClock` als
+   Pipeline-Clock statt Free-Run, konfigurierbar pro Node
+   (`OMP_PTP_DOMAIN`); ohne PTP-Master im Netz weiter Free-Run wie
+   heute (`ARCHITECTURE.md` §8 „Free-Run-Modus tolerieren").
+4. **`omp-2110-gateway`** (zwei Katalog-Rollen wie beim SRT-Gateway):
+   `ingest` = 2110-Multicast → MXL-Flow, `output` = MXL-Flow →
+   2110-Multicast. Für Fremdgeräte-Kompatibilität zusätzlich
+   SDP-Annahme (Empfangsseite parametrisiert sich aus einem
+   gereichten SDP statt aus Einzel-Env-Vars).
+
+   Bewusst **nicht** in diesem Schritt: ST 2110-40 (Ancillary/
+   Untertitel) und ST 2022-7 (Pfad-Redundanz) — beides echte
+   Standards-Bausteine, aber ohne konkreten Bedarfsträger im
+   aktuellen Projektstand (19.5 Frage 5).
+
+   **Ehrliche Grenze der Software-Implementierung:** ST 2110-21
+   (Traffic-Shaping) verlangt vom Sender ein gleichmäßiges
+   Paket-Pacing („narrow"/„wide" Sender-Typen); ein `udpsink` über
+   Kernel-Sockets erreicht bestenfalls „wide", mit Bursts, die
+   strenge Empfänger (Hardware-Gateways, Compliance-Analyzer wie
+   EBU LIST) bemängeln können. Für Labor, Software-Gegenstellen
+   (FFmpeg, VLC, andere OMP-Hosts) und moderate Kanalzahlen ist das
+   ausreichend — die Grenze ist genau der Einstiegspunkt von d).
+
+**b) NDI Source/Sink: `ARCHITECTURE.md` §6.5 bestätigt, mit einer
+Korrektur.** Recherche-Stand 2026: das `ndi`-Plugin in
+`gst-plugins-rs` (MPL-2.0) liefert `ndisrc`, `ndisink` **und** einen
+Device-Provider für die NDI-mDNS-Discovery, kompatibel mit NDI SDK
+5.x/6.x — §6.5s Plan (beide Richtungen, Feature-gated, Discovery nur
+im Gateway) ist damit unverändert tragfähig. **Korrektur zu §6.5
+Testbarkeit:** das Plugin lädt die NDI-Laufzeitbibliothek **zur
+Laufzeit dynamisch** (Standard-Bibliothekspfad oder
+`NDI_RUNTIME_DIR_V6`/`_V5`) — der **Build** braucht das NDI-SDK gar
+nicht. „CI-Build ohne NDI-SDK überspringt das Feature" (§6.5) kann
+also entschärft werden: das Cargo-Feature `ndi` kann in CI immer
+mitgebaut werden, nur Laufzeit-Tests brauchen die (frei
+herunterladbare, aber proprietäre) NDI-Runtime. Die in §6.5 benannte
+Lizenz-Ausnahme bleibt unverändert gültig und auf die optionalen
+Gateway-Nodes beschränkt. Offen bleibt einzig NDI HX
+(H.264/HEVC-Varianten, brauchen die Advanced-SDK-Runtime) — 19.5
+Frage 4.
+
+**c) Dante Source/Sink: Empfehlung AES67-Interop-Gateway, kein
+natives Dante.** Rechercheergebnis (Audinate-Primärquellen):
+
+- **Natives Dante ist ohne Audinate-Vertrag nicht implementierbar.**
+  Das Protokoll ist proprietär, es existiert keine
+  Open-Source-Implementierung. Audinates Software-SDK „Dante
+  Application Library" (DAL) gibt es nur für **Windows und macOS**
+  (Stand der Recherche 2026-07, bis 64×64 Kanäle, kommerzielle
+  Lizenz) — für OMPs Linux-Nodes unbrauchbar. Die Linux-fähigen
+  Angebote (Dante Embedded Platform, Dante IP Core) sind
+  OEM-Produkt-Lizenzierungen pro Gerät, d. h. eine Geschäfts-, keine
+  Entwicklungsentscheidung. Damit ist die Lizenzlage **härter als
+  bei NDI**: dort genügt eine frei ladbare Runtime, hier ein
+  kommerzieller OEM-Vertrag.
+- **AES67 ist der offizielle, von Audinate selbst vorgesehene
+  Interop-Pfad.** Dante-Geräte mit Brooklyn-/Broadway-/HC-Chipsatz
+  und Firmware ≥ 4.2 können pro Gerät einen AES67-Modus aktivieren.
+  Randbedingungen (Audinate-Doku): nur 48 kHz, nur Multicast-Flows,
+  fester PTPv2-Domain 0, **SAP-Announcements erforderlich**, damit
+  Dante Controller den Fremd-Stream findet; keine Redundanz, nur
+  das Primärnetz. Ältere Ultimo-/UltimoX-Geräte können kein AES67.
+- **AES67 ist technisch fast deckungsgleich mit ST 2110-30** — beide
+  sind L16/L24-RTP mit PTP-Medienclock; ein Sender mit L24/48 kHz/
+  1-ms-Paketen erfüllt beide Profile gleichzeitig. Die
+  Audio-Bausteine aus a) Punkt 1+3 (rtpL24 + PtpClock) **sind** also
+  bereits 90 % eines AES67-Endpunkts.
+
+  **Konkretes Design:** `omp-aes67-gateway` (zwei Rollen wie beim
+  SRT-Gateway) = a)s Audio-Sender/-Empfänger + eine kleine
+  SAP-Komponente (RFC 2974: periodische SDP-Announcements auf
+  `239.255.255.255:9875`; Senden für die Sink-Rolle, Mithören für
+  Source-Discovery — wenige hundert Zeilen, kein GStreamer-Element
+  nötig). Damit spricht OMP nicht nur Dante-im-AES67-Modus, sondern
+  auch Ravenna, Lawo, Merging u. a. AES67-Geräte — ein Gateway für
+  das gesamte AoIP-Ökosystem statt eines Audinate-gebundenen.
+  Als Linux-Gegenstelle für Tests ohne Dante-Hardware existiert
+  `bondagit/aes67-linux-daemon` (GPL, SAP + mDNS/Ravenna,
+  Merging-ALSA-Treiber) — Verifikationswerkzeug, keine Dependency.
+
+**d) Kernel-Bypass für 2110: Software heute, Intel MTL als
+Planungs-Default für „den großen Rechner", Rivermax als dokumentierte
+Alternative, falls die NIC-Wahl auf NVIDIA fällt.**
+
+Recherchierte Faktenlage (Stand 2026-07):
+
+- **Wann Software nicht mehr reicht:** unkomprimiertes 1080p50
+  (10 bit 4:2:2) sind ≈ 2,1 Gbit/s und ≈ 190k Pakete/s pro Strom —
+  das schafft ein Kernel-Socket-Pfad pro Core noch; UHDp50 sind
+  ≈ 8–10 Gbit/s und > 700k Pakete/s pro Strom, mehrere davon plus
+  ST-2110-21-konformes Pacing sind mit `udpsink` nicht mehr
+  erreichbar. Kernel-Bypass ist also für **hohe Kanalzahlen /
+  Multi-UHD / Compliance-strenges Pacing** nötig — exakt die vom
+  Nutzer benannte „später am großen Rechner"-Situation, kein
+  heutiger Engpass.
+- **NVIDIA Rivermax:** proprietäre SDK, **kostenpflichtige
+  Laufzeitlizenz** (über NVIDIA-Reseller), läuft **nur** auf
+  ConnectX-5+/BlueField-NICs. Dafür: ST 2110-20/-30/-31/-40/-22 +
+  2022-7 in der SDK, Hardware-Pacing (2110-21 „narrow"),
+  PTP-Hardware-Timestamps, GPUDirect. GStreamer-Anbindung existiert
+  (`nvdsudpsrc`/`nvdsudpsink` aus DeepStream, an Rivermax + ConnectX
+  gebunden). De-facto-Standard der kommerziellen Broadcast-Anbieter
+  (u. a. AMPP nutzt diesen Stack).
+- **Intel Media Transport Library (MTL,
+  `OpenVisualCloud/Media-Transport-Library`):** Open Source
+  (BSD-3-Clause), implementiert ST 2110-10/-20/-21/-30/-40 +
+  2022-7 inklusive Software/Hardware-Pacing und eingebautem PTP mit
+  Hardware-Timestamps. **Drei Datenpfad-Backends:** DPDK-PMD
+  (voller Bypass, primär validiert auf Intel E810/E830, prinzipiell
+  jede DPDK-PMD-NIC), **AF_XDP** (teilweiser Bypass, Standard-NICs,
+  NIC bleibt fürs System nutzbar) und **Kernel-Socket** (jede NIC,
+  keine Privilegien — auf der Dev-Maschine testbar). Es gibt
+  FFmpeg-, OBS- **und GStreamer-Plugins** im Repo
+  (`ecosystem/gstreamer_plugin`) sowie die o. g. MXL-Brücke
+  (`ecosystem/MTL_with_MXL`).
+- **AF_XDP pur / OpenOnload:** AF_XDP als Eigenbau lohnt nicht —
+  MTL liefert es fertig als Backend. Solarflare/AMD OpenOnload ist
+  Socket-Beschleunigung ohne 2110-21-Pacing und an
+  Solarflare-NICs gebunden — falsches Werkzeug, verworfen.
+
+**Empfehlung (klar, nicht nur Optionen):**
+
+1. **Jetzt: Software bleiben.** `st2110.rs` + a) decken Labor,
+   Software-Gegenstellen und HD-Kanalzahlen ab; kein
+   Kernel-Bypass-Code vor der Hardware-Beschaffung schreiben.
+2. **Für den „großen Rechner": MTL als Planungs-Default.**
+   Begründung: Open Source ohne Laufzeitlizenz (passt zur
+   §8-Lizenzlinie, anders als Rivermax **und** die dortige
+   NIC-Bindung), vollständige 2110-Suite inkl. Pacing/PTP,
+   GStreamer-Plugin vorhanden, und — entscheidend fürs Projekt —
+   ein dev-testbarer Migrationspfad: dieselbe MTL-API läuft über
+   Kernel-Socket (Chromebook), AF_XDP (jeder Linux-Host) und DPDK
+   (E810 am großen Rechner) — dieselbe Staffel wie Kapitel 16s
+   `tcp`→`verbs`-Provider-Wechsel, kein Architekturwechsel bei
+   Hardware-Ankunft. Integration als vierte
+   `omp-mediaio`-Transportvariante (Feature `mtl`) hinter dem
+   bestehenden `Output`-Trait.
+3. **Rivermax nur, falls die NIC-Beschaffung ohnehin auf
+   ConnectX/NVIDIA-GPUs fällt** (z. B. wegen GPUDirect für
+   GPU-Compositing) — dann ist die Lizenz der Preis für den
+   Industrie-Referenz-Stack. Das ist eine Beschaffungs-, keine
+   Architekturfrage: hinter dem `Output`-Trait wäre auch das eine
+   austauschbare Variante.
+4. **Synergie mit Kapitel 16 explizit nutzen:** Intel E810/E830
+   können RoCEv2 (`irdma`) — **eine** NIC-Beschaffung bedient dann
+   sowohl Kapitel 16 Teil 4 (libfabric `verbs`) als auch Kapitel 19
+   Teil 5 (MTL/DPDK); dasselbe gilt für ConnectX (RoCEv2 +
+   Rivermax). Die NIC-Entscheidung (19.5 Frage 1) sollte deshalb
+   für beide Kapitel gemeinsam getroffen werden.
+
+### 19.4 Phasenplan
+
+- **Teil 0 — ST 2110-30/AES67-Audio in `omp-mediaio::st2110`:**
+  `St2110AudioOutput`/`-Input` (rtpL24, 48 kHz, 1 ms) + SDP.
+  Verifikation: UDP-Loopback-Test analog `write_then_read_loopback`
+  (`st2110.rs`), zusätzlich Gegenprobe mit FFmpeg als
+  Fremd-Empfänger/-Sender derselben SDP. Eine Sitzung.
+- **Teil 1 — `omp-2110-gateway`-Node-Paar:** gerichtete Rollen
+  analog `omp-srt-gateway`, Multicast, SDP-Annahme auf der
+  Empfangsseite, IS-04/05-Registrierung. Verifikation: Workflow
+  MXL-Quelle → Gateway-out → (Multicast-Loopback) → Gateway-in →
+  Viewer auf der Dev-Maschine, plus FFmpeg als eine der beiden
+  Gegenstellen.
+- **Teil 2 — PTP-Zeitbasis (Opt-in):** `gstreamer-net::PtpClock` als
+  Pipeline-Clock in den 2110-/AES67-Pfaden. Verifikation: `ptp4l`
+  als Software-Master in einem Netzwerk-Namespace (kein
+  PTP-Hardware-Bedarf, gleiche Netns-Technik wie Kapitel 16 Teil 1),
+  Clock erreicht Synced-Zustand, Pipeline läuft auf ihr.
+- **Teil 3 — `omp-aes67-gateway` (Dante-Interop):** Teil-0-Audio +
+  SAP-Announce/-Listen (RFC 2974), Katalog-Rollen Source/Sink.
+  Verifikation: `aes67-linux-daemon` als Gegenstelle auf der
+  Dev-Maschine (Stream in beide Richtungen, SAP-Discovery beidseitig
+  sichtbar); Test gegen echte Dante-Hardware im AES67-Modus, sobald
+  ein Gerät verfügbar ist (19.5 Frage 3).
+- **Teil 4 — `omp-ndi-gateway` nach §6.5:** `omp-mediaio`-Modul
+  `ndi` (Feature, baut ohne SDK — s. 19.3b-Korrektur), Gateway-Node
+  in beiden Richtungen. Verifikation: NDI-Runtime auf der
+  Dev-Maschine installieren, `ndisink`→`ndisrc`-Loopback durch zwei
+  OMP-Gateway-Instanzen, Discovery über den Device-Provider.
+- **Teil 5 — MTL-Transportvariante (Hardware-gebunden, wie Kapitel
+  16.4 Teil 4):** erst nach der NIC-Entscheidung (19.5 Frage 1).
+  Vorziehbarer Software-Anteil: MTL mit **Kernel-Socket-Backend**
+  als `omp-mediaio`-Feature `mtl` integrieren und auf der
+  Dev-Maschine gegen Teil 1 verifizieren; der Wechsel auf
+  AF_XDP/DPDK am großen Rechner ist danach Konfiguration, kein
+  Umbau. Fällt die Entscheidung auf ConnectX/Rivermax, ersetzt
+  dieser Teil MTL durch die Rivermax-Variante (gleicher
+  Trait-Schnitt, dann inkl. Lizenzbeschaffung).
+- **Teil 6 (optional, nach Bedarf):** ST 2110-40
+  (Ancillary/Untertitel) und ST 2022-7 (Pfad-Redundanz) — nur bei
+  bestätigtem Bedarfsträger (19.5 Frage 5).
+
+### 19.5 Offene Fragen an den Projektinhaber
+
+1. **NIC-Beschaffung für den „großen Rechner" — die eine Entscheidung,
+   die 19.3d und Kapitel 16 Teil 4 gemeinsam bestimmt:** Intel
+   E810/E830 (→ MTL/DPDK ohne Lizenzkosten + RoCEv2 via `irdma` für
+   Kapitel 16) oder NVIDIA ConnectX (→ Rivermax mit Lizenz +
+   RoCEv2 + GPUDirect-Option)? Empfehlung 19.3d nimmt E810/MTL an,
+   solange kein GPUDirect-Bedarf besteht.
+2. **Rivermax-Lizenzbereitschaft**, falls Frage 1 auf ConnectX
+   fällt (kostenpflichtig, über NVIDIA-Reseller; Höhe im Rahmen
+   dieser Recherche nicht öffentlich bezifferbar).
+3. **Dante: genügt AES67-Interop?** Die Empfehlung 19.3c deckt
+   Dante-Geräte mit Brooklyn/Broadway/HC-Chipsatz + Firmware ≥ 4.2
+   im AES67-Modus ab (48 kHz, Multicast, kein Redundanznetz).
+   Welche konkreten Dante-Geräte sind/werden vorhanden — und ist
+   darunter Ultimo-basiertes Gerät ohne AES67-Fähigkeit, das
+   natives Dante (= Audinate-OEM-Vertrag, kein Linux-DAL) erzwingen
+   würde?
+4. **NDI-Umfang:** §6.5/19.3b planen Source **und** Sink — bestätigt?
+   Und: wird NDI HX (H.264/HEVC, braucht die Advanced-SDK-Runtime
+   statt der Standard-Runtime) gebraucht, z. B. für
+   PTZ-Kameras/Mobile-Apps?
+5. **ST 2110-40 (Untertitel/Ancillary) und ST 2022-7
+   (Pfad-Redundanz):** gibt es einen konkreten Bedarfsträger
+   (z. B. gesetzliche Untertitelpflicht eines Ziel-Playouts), der
+   Teil 6 aus „optional" zu „geplant" macht?

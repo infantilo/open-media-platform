@@ -1187,8 +1187,10 @@ dependencies = [
 name = "omp-mediaio"
 version = "0.1.0"
 dependencies = [
+ "bindgen",
  "gstreamer",
  "gstreamer-app",
+ "libloading",
  "mxl",
  "mxl-sys",
  "serde_json",
