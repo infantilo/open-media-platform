@@ -9367,3 +9367,119 @@ Sandbox-Befund für künftige PTP-/Zeitsynchronisationsarbeit hier.
 grün, keine neuen Warnungen. Kapitel 19 Teil 2 damit abgeschlossen; nur
 noch NDI-Gateway (Teil 4, blockiert auf proprietäre NDI-Runtime/-SDK,
 keine Testmöglichkeit in dieser Umgebung) bleibt offen.
+
+## 2026-07-20 (Nachtrag 50) — Kapitel 15 Teil 3 (Rest): `omp-switcher`
+liest nicht-selektierte Eingänge in Lowres, drei echte Bugs behoben,
+ein viertes Problem (Speicherleck) bleibt offen
+
+Anders als beim ursprünglichen Kapitel-15-Teil-3-Piloten
+(`omp-multiviewer`, Nachtrag 38 — dort ist **jeder** Eingang dauerhaft
+reine Vorschau, ein einmaliger statischer Lowres-Wechsel genügt) liest
+`omp-switcher` **jeden** entdeckten Eingang kontinuierlich in dieselbe
+`isel`-Pipeline ein, die auch PGM speist — der aktuell selektierte
+Eingang kann jederzeit ohne Neuaufbau live werden (`isel.active-pad`,
+0 Verzögerung). Ein statischer "alle nicht-PGM lesen Lowres"-Ansatz
+reicht hier nicht: welcher Eingang gerade "nicht-PGM" ist, ändert sich
+mit jedem Cut. Umgesetzt: pro Eingang ein **Live-Hot-Swap** der
+MXL-Quelle bei jeder Auswahländerung (`swap_input_resolution`) — der
+neu gewählte Eingang wird **vor** dem eigentlichen Umschalten auf
+Highres hochgestuft (PGM zeigt nie Lowres, auch nicht für einen
+Frame), der vorherige danach (best effort) auf Lowres heruntergestuft.
+Technik: ein blockierender Pad-Probe
+(`PadProbeType::BLOCK_DOWNSTREAM`) auf dem betroffenen `isel`-Sink-Pad
+löst nur die Verlinkung, der eigentliche Elementauf-/-abbau passiert
+danach auf dem Kontroll-Thread — alle anderen Eingänge/der PGM-Ausgang
+bleiben während eines Swaps komplett unberührt.
+
+**Drei echte, live gefundene Bugs, in dieser Reihenfolge behoben:**
+
+1. **Absturz (Segfault) beim zweiten Umschalten.** Ein erster Versuch
+   baute den alten Zweig (`set_state(Null)` + `remove`) noch
+   **innerhalb** des Pad-Probe-Callbacks ab — der Callback läuft aber
+   auf dem Streaming-Thread, den dieser Zweig selbst antreibt (der
+   `MxlVideoInput`-Push-Thread läuft ungepuffert bis zum
+   `isel`-Sink-Pad durch). `set_state(Null)` wartet synchron auf das
+   Ende genau dieses Threads — von ihm selbst aus aufgerufen ein
+   garantierter Deadlock, hier live als Segfault beobachtet. Behoben:
+   der Callback löst nur noch die Verlinkung, jeder Element-Auf-/Abbau
+   passiert strikt auf dem Kontroll-Thread.
+2. **`MxlVideoInput` (omp-mediaio) selbst hatte nie gebrauchte
+   Cleanup-Lücke.** `MxlVideoInput::new` legt intern vier Elemente an
+   (`appsrc`/`videoconvert`/`videoscale`/`videorate`), exponiert aber
+   nur `tail` (`videorate`) — `Drop` setzte bislang nur das
+   Lese-Thread-Stop-Flag, entfernte aber keines der vier aus der
+   Pipeline. Unschädlich, solange jeder bisherige Aufrufer
+   `MxlVideoInput` ausschließlich beim Abbau der **ganzen** Pipeline
+   fallen ließ (Bin-Dispose reißt dann alles mit) — brach aber
+   nachweislich (per RSS-Messung: aktives Weiterwachsen 20s nach nur
+   einem einzigen Swap, ganz ohne Folgekommandos) an der ersten Stelle,
+   die einen einzelnen Eingang chirurgisch aus einer weiterlaufenden
+   Pipeline entfernt. Exakt dasselbe Bedürfnis hatte `MxlAudioInput`
+   bereits früher (`omp-audio-mixer`, C11) — dessen Doku benennt es
+   sogar explizit, nur `MxlVideoInput` hatte es bislang nicht gebraucht.
+   Behoben mit demselben Muster: neues `pub elements: Vec<gst::Element>`
+   auf `MxlVideoInput`, Aufrufer (hier `omp-switcher`) räumt bei
+   chirurgischer Entfernung jetzt alle vier statt nur eines auf.
+3. **Fehlgeschlagener Swap ließ den Eingang für immer "unsichtbar"
+   für künftige Swaps werden.** Schlug der allererste Schritt fehl
+   (Timeout beim Warten auf die Pad-Block-Bestätigung — unter
+   künstlich schneller Wiederholauswahl reproduziert, s. u.), wurde
+   `old_branch` als Funktionsparameter einfach verworfen: **weder**
+   wieder in die Aufrufer-Buchführung (`p.branches`) eingetragen (der
+   Eingang blieb ab dann dauerhaft als "keine Auflösungsänderung
+   nötig" markiert, selbst wenn er tatsächlich nie wechselte) **noch**
+   ordentlich abgebaut (seine acht Elemente blieben für immer in der
+   Pipeline registriert). Behoben: der Rückgabetyp trägt den
+   unangetasteten `old_branch` im Fehlerfall jetzt explizit zurück
+   (`Err(Box<(String, Option<InputBranch>)>)`), der Aufrufer schreibt
+   ihn unverändert zurück — exakt der Zustand vor dem Versuch.
+
+**Viertes, ungelöstes Problem — echtes Speicherleck, dokumentiert statt
+verschwiegen:** unter Dauerlast mit sehr schneller, wiederholter
+Auswahl (100 Umschaltungen in ~30s, weit jenseits menschlicher
+Klick-Geschwindigkeit) wächst der Speicherverbrauch linear mit der
+**Anzahl** der Swaps (nicht mit deren Tempo) auf mehrere Hundert MB bis
+über 1GB, in einem Fall bis zum OOM-Kill des Prozesses (sauberer
+Auto-Neustart durch den Launcher, kein Datenverlust). Drei gezielte
+Gegenmaßnahmen — (a) `MxlVideoInput`s Cleanup-Lücke oben behoben, (b)
+Zusammenfassen mehrerer schnell aufeinanderfolgender `Select`-Kommandos
+im Kanal auf nur das letzte tatsächlich verarbeitete Ziel (fachlich
+korrekt: ein Hart-Umschalter kennt keine Zwischenzustände), (c)
+dieselbe `OLD_WRITER_DRAIN`-Wartezeit wie beim vollständigen Rebuild
+vor dem Öffnen des neuen Lesers — reduzierten das Leck **nicht**
+messbar. Da es mit der Swap-**Zahl**, nicht der Swap-**Rate** skaliert,
+scheiden die ursprünglichen Verdächtigen (überlappende Leser auf
+demselben Flow, gestauter Kommando-Kanal) als Haupterklärung aus. Ohne
+Heap-Profiling-Werkzeuge (kein `valgrind`/`heaptrack` in dieser
+Sandbox verfügbar) nicht weiter bis auf die verursachende Zeile
+eingrenzbar — vermutlich GStreamers eigene Pad-Relink-/
+Caps-Neuverhandlungs-Verwaltung oder die vendorte MXL-C++-Schicht bei
+wiederholtem Öffnen/Schließen von Flow-Readern auf derselben Domain,
+beides außerhalb dessen, was von hier aus ohne bessere Werkzeuge
+weiter eingegrenzt werden kann.
+
+**Nutzerentscheidung (drei Optionen vorgelegt):** vorerst so
+committen, Leck dokumentiert, für normalen Sendebetrieb (Wechsel im
+Sekunden-/Minutentakt, keine Dauerlast über viele Stunden) nutzbar —
+nicht empfohlen für automatisiertes Hochfrequenz-Umschalten oder
+24/7-Dauerbetrieb ohne Neustart, bis das Leck mit besseren Werkzeugen
+gefunden ist.
+
+**Live verifiziert:**
+- Korrekte Auflösungswahl gegen die echte NMOS-Registry
+  gegengeprüft: neu selektierter Eingang öffnet nachweislich seinen
+  echten Highres-Flow, der vorherige seinen echten Lowres-Flow — in
+  exakt dieser Reihenfolge (Highres-Aufbau vor dem Cut, Lowres-Abbau
+  danach), über mehrere aufeinanderfolgende Umschaltungen hinweg
+  reproduziert.
+- Kein PGM-Glitch möglich per Konstruktion (Swaps berühren nur
+  nicht-aktive `isel`-Sink-Pads).
+- Kein Absturz bei realistischem Bedienertempo (0.5-1.5s zwischen
+  Umschaltungen), auch nicht über 100+ Umschaltungen hinweg.
+- `cargo test --workspace`/`cargo clippy --workspace --all-targets`
+  grün, keine neuen Warnungen.
+
+Kapitel 15 Teil 3 damit teilweise erweitert (`omp-switcher` neu dabei,
+`omp-multiviewer` weiterhin fertig); `omp-video-mixer-me` (fg/bg/DVE,
+noch komplexer) bewusst nicht angegangen, ebenso das offene
+Speicherleck — beides dokumentierte, bewusste Lücken, kein stiller Gap.

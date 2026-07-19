@@ -2877,6 +2877,33 @@ wie heute pro Node-Typ hartkodiert.
   `omp-switcher` (PGM-Pfad muss highres bleiben, komplexer) bleiben
   offen, ebenso ein Graceful-Release beim Multiviewer-Shutdown
   (dokumentierte, bewusste Lücke).
+  ✅ **`omp-switcher` teilweise erledigt 2026-07-20**
+  (`docs/decisions.md` Nachtrag 50) — anders als beim Multiviewer-Piloten
+  (jeder Eingang dauerhaft reine Vorschau) kann bei `omp-switcher`
+  jeder Eingang jederzeit ohne Neuaufbau live werden; ein statisches
+  "alle nicht-PGM lesen Lowres" reicht deshalb nicht. Gelöst per
+  Live-Hot-Swap der MXL-Quelle bei jeder Auswahländerung (Pad-Block auf
+  dem betroffenen `isel`-Sink-Pad, neues Ziel vor dem Cut auf Highres
+  hochgestuft, vorheriges danach auf Lowres heruntergestuft — PGM zeigt
+  nie Lowres, auch nicht für einen Frame). Drei echte Bugs live
+  gefunden und behoben (Segfault durch Element-Abbau vom eigenen
+  Streaming-Thread aus; eine bislang nie gebrauchte Cleanup-Lücke in
+  `MxlVideoInput` selbst, das intern vier Elemente anlegt aber nur
+  `tail` exponiert — behoben mit demselben `elements`-Muster, das
+  `MxlAudioInput` bereits nutzt; ein fehlgeschlagener Swap ließ den
+  Eingang zuvor dauerhaft aus der Buchführung verschwinden statt den
+  unangetasteten alten Zweig zurückzugeben). **Ein viertes Problem
+  bleibt offen und ist bewusst dokumentiert, nicht verschwiegen:** ein
+  echtes, mit der Swap-Zahl (nicht der Rate) skalierendes
+  Speicherleck, in einem Stresstest bis zum OOM-Kill (sauberer
+  Auto-Neustart, kein Datenverlust) — drei gezielte Gegenmaßnahmen
+  reduzierten es nicht messbar, ohne Heap-Profiling (kein
+  `valgrind`/`heaptrack` in der Dev-Sandbox) nicht weiter eingrenzbar.
+  Nutzerentscheidung: für normalen Sendebetrieb (Sekunden-/
+  Minutentakt) vorerst nutzbar, nicht empfohlen für 24/7-Dauerbetrieb
+  oder automatisiertes Hochfrequenz-Umschalten ohne Neustart, bis das
+  Leck gefunden ist. `omp-video-mixer-me` (fg/bg/DVE, noch komplexer)
+  weiterhin offen.
 - **Teil 4 — `omp-ograf`/`omp-player` als weitere Lowres-Quellen**
   (Analogie zu Teil 2, pro Node einzeln nachziehbar).
   ✅ **`omp-player` erledigt 2026-07-19** (`docs/decisions.md`

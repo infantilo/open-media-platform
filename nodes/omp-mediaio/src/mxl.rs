@@ -745,6 +745,27 @@ impl Drop for MxlAudioOutput {
 /// videorate` zur weiteren Verarbeitung durch den Aufrufer.
 pub struct MxlVideoInput {
     pub tail: gst::Element,
+    /// Alle von diesem Eingang selbst zur Pipeline hinzugefügten Elemente
+    /// (`appsrc`/`videoconvert`/`videoscale`/`videorate` = `tail`, in
+    /// Verkettungsreihenfolge) — live gefunden (Kapitel 15 Teil 3
+    /// Ergänzung, `docs/decisions.md`): `Drop` setzt bislang nur das
+    /// Lese-Thread-Stop-Flag, entfernt aber keines dieser vier Elemente
+    /// aus der Pipeline. Unschädlich, solange jeder Aufrufer
+    /// `MxlVideoInput` ausschließlich beim Abbau der **ganzen** Pipeline
+    /// fallen lässt (der Bin-Dispose reißt dann alles mit) — brach aber
+    /// nachweislich (unbegrenzt wachsender Speicherverbrauch, per RSS-
+    /// Messung bestätigt, sogar nach nur einem einzigen Vorgang noch
+    /// weiterwachsend) an der ersten Stelle, die einen einzelnen Eingang
+    /// **innerhalb** einer weiterlaufenden Pipeline chirurgisch ersetzt
+    /// (`omp-switcher`s Kapitel-15-Teil-3-Auflösungs-Hot-Swap). Exakt
+    /// dasselbe Feld/Muster wie [`MxlAudioInput::elements`] (dortige Doku
+    /// nannte dieses Bedürfnis für `omp-audio-mixer` bereits explizit,
+    /// nur `MxlVideoInput` hatte es bis jetzt nicht gebraucht) — der
+    /// Aufrufer ist dafür verantwortlich, bei einer chirurgischen
+    /// Entfernung jedes Element hier selbst auf `Null` zu setzen und aus
+    /// der Pipeline zu entfernen, nicht nur `MxlVideoInput` fallen zu
+    /// lassen.
+    pub elements: Vec<gst::Element>,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
 }
@@ -870,6 +891,7 @@ impl MxlVideoInput {
         });
 
         Ok(MxlVideoInput {
+            elements: vec![appsrc, videoconvert, videoscale, videorate.clone()],
             tail: videorate,
             running,
             flowed,
