@@ -11,12 +11,13 @@ import "../graph/flow-canvas.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
+import "./instances-view.ts";
 import "./alarm-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "hosts" | "alarms" | "admin";
+type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -28,8 +29,12 @@ const BASE_TABS: TabDef[] = [
   { id: "flow", label: "Flow Editor", element: "omp-flow-canvas" },
   { id: "workflows", label: "Workflows", element: "omp-workflows-view" },
   { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
+  // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
+  // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer
+  // Backend-Konsument.
+  { id: "instances", label: "Instanzen", element: "omp-instances-view" },
   // §17 Teil 3 (docs/END-GOAL-FEATURES.md, 2026-07-17): genereller
-  // Alarm-View, vierter Tab neben Flow-Editor/Workflows/Hosts.
+  // Alarm-View, fünfter Tab neben Flow-Editor/Workflows/Hosts/Instanzen.
   { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
 ];
 

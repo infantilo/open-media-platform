@@ -8100,3 +8100,57 @@ stillschweigend übergangen.
 Start-Warn-Ampel) und Teil 4 (Anbindung an D7-Teil-2/§16) bleiben offen,
 ebenso §17 Teil 2 selbst (der jetzt auf dieser Datengrundlage aufsetzen
 kann).
+
+## 2026-07-19 (Nachtrag 33) — §17 Teil 2: „Laufende Instanzen"-Tab
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §17.3b/§17.4 Teil 2 — zentrale
+Übersicht aller laufenden Node-Instanzen mit Status, Kapitel-14-
+Ressourcenwerten (CPU%/RSS) und Crash-/Restart-Zähler. Laut Phasenplan
+bewusst **keine neue Backend-Logik** ("baut direkt auf
+Kapitel-14-Datenmodell") — reiner UI-Schritt, `GET /api/v1/instances`
+liefert seit Kapitel 14 Teil 2 (Nachtrag 32, selbe Sitzung) bereits
+alle nötigen Felder (`crashed`/`crashMessage`/`restartCount` seit
+K7-Teil-1, `cpuPercent`/`rssBytes` seit Teil 2).
+
+**Umsetzung:** neuer fünfter App-Bar-Tab „Instanzen"
+(`ui/shell/instances-view.ts`, `<omp-instances-view>`) nach demselben
+Baukasten wie `alarm-view.ts` (SSE-first, `apiFetch`, `escapeHtml`,
+Custom-Element-Skeleton) — Tabelle mit Instanz/Typ, Status, Host
+(hostId→Label-Auflösung wie `flow-canvas.ts#renderInstanceRow`), CPU,
+RAM, PID, Neustarts. Zwei bewusste Abweichungen vom Alarm-View-Muster:
+(a) Poll-Intervall 5s statt der sonst üblichen 30s-SSE-Fallback-Kadenz
+— es gibt kein SSE-Event für "CPU%/RSS haben sich geändert" (die Werte
+ändern sich mit jedem 5s-Sample-Tick, s. Nachtrag 32), eine als "live"
+beworbene Ressourcenansicht muss deshalb selbst im Sample-Takt pollen;
+SSE (`instance.crashed`/`instance.restarted`) deckt nur den
+zusätzlichen Sofort-Refresh bei einem Status-Sprung ab. (b) explizite
+Sortierung nach Label+ID im Client — `launcher.Launcher.List()`
+iteriert eine Go-Map ohne Reihenfolge-Garantie, ohne eigene Sortierung
+würden Zeilen bei jedem Poll scheinbar zufällig die Plätze tauschen.
+`app-shell.ts`: `TabId`-Union + `BASE_TABS`-Eintrag ergänzt (mechanisch,
+gleiche drei Stellen wie beim Alarm-View-Tab zuvor).
+
+**Verifiziert (echte Prozesse, kein Mock):** `deno check`/`deno test`
+grün, `make ui` bündelt das neue Modul (27 statt 26 Module). Live gegen
+einen echten, per manuell gestartetem Binary laufenden Orchestrator
+(gleicher `sleep 600`-Katalog-Override wie in Nachtrag 32, kein
+MXL/GStreamer nötig): CDP-Browser-Check (Login → Tab-Klick auf
+`[data-tab-id="instances"]` → gerenderte Tabelle) zeigte die echte
+Instanz mit CPU/RAM/PID. Danach die Instanz per `kill -9` (nicht über
+die Stop-API — ein echter unerwarteter Abbruch) beendet: der Launcher
+startete sie automatisch neu (K7-Teil-1), die bereits offene Browser-
+Session zeigte binnen des nächsten 5s-Polls ohne Reload die neue PID
+und „↻ 1×" im Neustarts-Feld — bestätigt den vollen Kreis
+Crash→Auto-Restart→SSE/Poll→UI-Update für eine bislang ungetestete
+Kombination (frühere K7-Teil-1-Verifikation prüfte nur die
+Palette-Zeile in `flow-canvas.ts`, nicht diesen neuen Tab). `make
+check` grün (inkl. `cargo test --workspace`, kein Wiederauftreten der
+in Nachtrag 32 vermerkten MXL-Test-Flakiness in diesem Lauf). Alle
+Testartefakte danach entfernt: Instanz gestoppt, Chromium/Test-
+Orchestrator-Prozesse gekillt, Postgres unverändert (nur der
+dokumentierte `admin`-Nutzer, keine Test-Instanzen übrig).
+
+**Nicht Teil dieser Scheibe:** §17 Teil 4/5 (Podman-Runner + Katalog-
+Schreib-API für Import/Versionierung fremder Microservices) bleiben
+bewusst zurückgestellt, wie in der Priorisierung (Kapitel 18)
+festgehalten.

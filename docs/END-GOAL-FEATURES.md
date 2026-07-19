@@ -3046,6 +3046,14 @@ zu bauen.
   sofort):** `catalog.json`-Schema erweitern, UI zeigt es an.
 - **Teil 2 — Laufende-Instanzen-Tab:** baut direkt auf Kapitel-14-
   Datenmodell, keine neue Backend-Logik.
+  ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 33) — fünfter
+  App-Bar-Tab „Instanzen" (`ui/shell/instances-view.ts`), reiner
+  Konsument von `GET /api/v1/instances` (inkl. Kapitel-14-Teil-2-Feldern)
+  + `GET /api/v1/hosts` (Host-Label-Auflösung); 5s-Poll statt der
+  sonstigen 30s-SSE-Fallback-Kadenz, da CPU%/RSS keinen eigenen
+  SSE-Event-Trigger haben. Live per CDP verifiziert, inkl. eines echten
+  Crash→Auto-Restart-Zyklus (`kill -9`), der ohne Reload in der Tabelle
+  ankam.
 - **Teil 3 — Alarm-View:** zentraler NATS-Event-Konsument + UI-Liste,
   baut auf bereits existierenden Events.
 - **Teil 4 — Podman-Runner + Katalog-Schreib-API (Import/Löschen):**
@@ -3108,12 +3116,13 @@ Kapiteln, nicht hier wiederholt.
    `CatalogEntry.Description`/`ExpectedResources` (Freitext, additiv,
    optional), `deploy/catalog.json` für alle zehn Einträge befüllt,
    Katalog-Palette zeigt beides sichtbar unter jedem Eintrag statt nur
-   im Tooltip. **Teil 2 hat eine Abhängigkeit auf das Kapitel-14-
-   Datenmodell** — mit Kapitel 14 Teil 1 (Host-Historie, 2026-07-19) und
-   Teil 2 (Pro-Instanz-Telemetrie, 2026-07-19, `docs/decisions.md`
-   Nachtrag 32) jetzt vorhanden: §17 Teil 2 ist ab sofort ohne weitere
-   Kapitel-14-Vorarbeit startbar. Teil 3 (Alarm-View) war unabhängig
-   davon bereits erledigt (s. u.).
+   im Tooltip.
+   ✅ **Teil 2 (Laufende-Instanzen-Tab) erledigt 2026-07-19**
+   (`docs/decisions.md` Nachtrag 33, direkt im Anschluss an Kapitel 14
+   Teil 1+2 in derselben Sitzung) — fünfter App-Bar-Tab „Instanzen",
+   reiner Konsument von `GET /api/v1/instances`/`GET /api/v1/hosts`,
+   kein neuer Backend-Code. Live per CDP inkl. eines echten
+   `kill -9`-Crash/Auto-Restart-Zyklus verifiziert.
    ✅ **Teil 3 (Alarm-View) erledigt 2026-07-17** (`UMSETZUNG.md`,
    `docs/decisions.md` Nachtrag 5) — neuer vierter App-Bar-Tab
    „Alarme" (`ui/shell/alarm-view.ts`), zentraler Konsument dreier
@@ -3122,8 +3131,9 @@ Kapiteln, nicht hier wiederholt.
    `/api/v1/workflows` status „failed") — kein neuer Alarm-Erzeuger,
    wie im Ziel-Design gefordert. Bewusst **additiv statt ersetzend**:
    `hosts-view.ts`s Placement-Advice-Banner bleibt zusätzlich bestehen
-   (kontextuell sinnvoll dort), Abwägung dokumentiert. Teil 2 bleibt
-   der einzige noch offene Teil dieses Punkts (wartet auf Kapitel 14).
+   (kontextuell sinnvoll dort), Abwägung dokumentiert. Mit Teil 1-3 jetzt
+   alle drei kleinen Teile dieses Punkts erledigt, nur Teil 4/5 (Import)
+   bleiben wie geplant zurückgestellt.
 4. **§4.6 — Audio-Mixer EQ-Parametrisierung + Dynamik (Kapitel-4-
    Teil-2, jetzt inkl. EQ-Upgrade).** Klar umrissene Node-
    Vervollständigung auf bestehendem Plan, kein neues Konzept.
