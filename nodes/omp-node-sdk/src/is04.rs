@@ -634,6 +634,28 @@ impl RegistryClient {
         }
     }
 
+    /// Löst eine Node per Standard-IS-04-Query-API auf (`GET
+    /// .../nodes/<id>`) — Ergänzung zu `get_sender`/`get_device` für die
+    /// vollständige Sender→Device→Node-Kette (Kapitel 15 Teil 3,
+    /// docs/END-GOAL-FEATURES.md §15.4: ein Konsument muss den `href`
+    /// des Node auflösen können, der einen entdeckten Sender besitzt, um
+    /// dessen Descriptor-API direkt anzusprechen — `peer::PeerClient`).
+    /// Vorher gab es nur `list_nodes()` + clientseitiges Filtern; dieses
+    /// Einzel-Lookup spart bei vielen registrierten Nodes unnötige
+    /// Übertragung, analog `get_sender`/`get_device` gegenüber einem
+    /// hypothetischen `list_senders()`-Filter für denselben Zweck.
+    pub fn get_node(&self, node_id: &str) -> Result<NodeResource, QueryError> {
+        let url = format!("{}/x-nmos/query/v1.3/nodes/{}", self.base_url, node_id);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => resp
+                .body_mut()
+                .read_json::<NodeResource>()
+                .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
     /// Löst nur das `format`-Feld eines Flows auf (`GET .../flows/<id>`,
     /// z. B. `"urn:x-nmos:format:video"`/`"urn:x-nmos:format:audio"`) —
     /// seit `omp-audio-mixer` (`UMSETZUNG.md` C11) gibt es MXL-Sender

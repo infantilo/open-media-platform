@@ -11,15 +11,27 @@
 
 mod pipeline;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use omp_mediaio::preview;
-use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
-use omp_node_sdk::{Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, SetError};
+use omp_node_sdk::is04::{self, RegistryClient, Sender, TRANSPORT_MXL};
+use omp_node_sdk::{
+    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, PeerClient, SetError,
+    resolve_owning_node_href,
+};
 use pipeline::DiscoveredInput;
 use serde_json::Value;
+
+/// Kapitel 15 Teil 3 (docs/END-GOAL-FEATURES.md §15.3b/§15.4): gegen die
+/// echte AMWA-NMOS-Parameter-Registry verifiziertes Tag (nicht geraten,
+/// s. `docs/decisions.md` Nachtrag 37/38) — Format
+/// `"<group-name>:<role-in-group>[:<group-scope>]"`, hier auf Sendern
+/// gesetzt von `omp-source` (bisher einziger Node mit Lowres-Begleit-
+/// Sender).
+const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
 
 struct MultiviewerStore {
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
@@ -196,11 +208,104 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+/// Splittet einen Grouphint-Tag-Wert (`"<group>:<role>[:<scope>]"`, s.
+/// `GROUPHINT_TAG`-Doku) in `(group, role)` — Scope (dritter Teil) wird
+/// hier nicht gebraucht (nur ein Multiviewer-Prozess pro Domain-Poll,
+/// kein Geräte-/Node-Scope-Konflikt).
+fn parse_grouphint(value: &str) -> Option<(&str, &str)> {
+    let mut parts = value.splitn(3, ':');
+    let group = parts.next()?;
+    let role = parts.next()?;
+    Some((group, role))
+}
+
+/// Baut `group-name -> (lowres sender_id, lowres flow_id)` aus dem vollen
+/// Sender-Satz (Kapitel 15 Teil 3) — ein Durchlauf, kein zusätzlicher
+/// Registry-Umlauf gegenüber der bisherigen Discovery.
+fn lowres_by_group(senders: &[Sender]) -> HashMap<String, (String, String)> {
+    let mut map = HashMap::new();
+    for s in senders {
+        let Some(flow_id) = &s.flow_id else { continue };
+        let Some(values) = s.tags.get(GROUPHINT_TAG) else { continue };
+        for v in values {
+            if let Some((group, "low")) = parse_grouphint(v) {
+                map.insert(group.to_string(), (s.id.clone(), flow_id.clone()));
+            }
+        }
+    }
+    map
+}
+
+/// Ob `s` selbst ein Lowres-Begleit-Sender ist (Rolle `low`) — solche
+/// Sender bekommen keine eigene Kachel, sie werden nur über
+/// `DiscoveredInput::lowres_flow_id` ihres Highres-Geschwisters gelesen.
+fn is_lowres_companion(s: &Sender) -> bool {
+    s.tags
+        .get(GROUPHINT_TAG)
+        .map(|values| {
+            values
+                .iter()
+                .any(|v| matches!(parse_grouphint(v), Some((_, "low"))))
+        })
+        .unwrap_or(false)
+}
+
+/// Ein Discovery-Durchlauf (blockierend, s. `spawn_blocking`-Aufrufer) —
+/// gleicher Filter-Stil wie zuvor (`transport==MXL`, `format==video`),
+/// zusätzlich Kapitel 15 Teil 3: pro Kachel den Lowres-Begleit-Sender
+/// (falls vorhanden) verlinken, Lowres-Sender selbst nicht als eigene
+/// Kachel führen.
+fn discover(registry: &RegistryClient) -> Result<Vec<DiscoveredInput>, String> {
+    let senders = registry.list_senders().map_err(|e| e.to_string())?;
+    let lowres_map = lowres_by_group(&senders);
+
+    let mut discovered = Vec::new();
+    for s in &senders {
+        if s.transport != TRANSPORT_MXL || is_lowres_companion(s) {
+            continue;
+        }
+        let Some(flow_id) = &s.flow_id else { continue };
+        if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {
+            continue;
+        }
+
+        let group = s
+            .tags
+            .get(GROUPHINT_TAG)
+            .and_then(|values| values.first())
+            .and_then(|v| parse_grouphint(v))
+            .map(|(group, _)| group.to_string());
+        let lowres = group.and_then(|g| lowres_map.get(&g).cloned());
+
+        discovered.push(DiscoveredInput {
+            sender_id: s.id.clone(),
+            label: s.label.clone(),
+            flow_id: flow_id.clone(),
+            lowres_sender_id: lowres.as_ref().map(|(id, _)| id.clone()),
+            lowres_flow_id: lowres.as_ref().map(|(_, fid)| fid.clone()),
+        });
+    }
+    Ok(discovered)
+}
+
 /// Pollt alle 2s die IS-04-Query-API nach MXL-Video-Sendern (gleicher
 /// Poll-/Filter-Stil wie `omp-switcher`, C7/C11: `get_flow_format`-Filter
 /// auf `format==video`, sonst würden Audio-Sender als Grid-Kacheln
 /// auftauchen) — kein Selbstausschluss nötig, der Multiviewer registriert
 /// selbst keinen MXL-Sender.
+///
+/// Kapitel 15 Teil 3 (docs/END-GOAL-FEATURES.md §15.4, docs/decisions.md
+/// Nachtrag 38): gleicht zusätzlich bei jedem Poll die beim jeweiligen
+/// Quell-Node aktivierten Lowres-Sender an die aktuelle Kachel-Menge an
+/// (`activateLowresPreview`/`releaseLowresPreview`, Kapitel 15 Teil 2) —
+/// `activated_lowres` merkt sich dafür den Aktivierungsstand über Polls
+/// hinweg, damit nicht bei jedem 2s-Tick erneut aktiviert/freigegeben
+/// wird. Schlägt eine Aktivierung fehl (Quell-Node gerade nicht
+/// erreichbar/auflösbar), fällt genau diese Kachel auf Highres+Downscale
+/// zurück (`input.lowres_*` wird auf `None` zurückgesetzt) statt
+/// dauerhaft schwarz zu bleiben. Kein Graceful-Release beim Multiviewer-
+/// Shutdown (dokumentierte Lücke, nicht Teil dieser Scheibe) — der
+/// Quell-Node bleibt in dem Fall bis zu seinem eigenen Neustart aktiv.
 async fn discovery_loop(
     registry_url: String,
     pipeline: pipeline::PipelineHandle,
@@ -208,28 +313,14 @@ async fn discovery_loop(
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
+    let mut activated_lowres: HashMap<String, String> = HashMap::new();
+
     loop {
         interval.tick().await;
-        let registry = registry.clone();
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<DiscoveredInput>, String> {
-            let senders = registry.list_senders().map_err(|e| e.to_string())?;
-            Ok(senders
-                .into_iter()
-                .filter(|s| s.transport == TRANSPORT_MXL)
-                .filter_map(|s| s.flow_id.map(|flow_id| (s.id, s.label, flow_id)))
-                .filter(|(_, _, flow_id)| {
-                    matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO)
-                })
-                .map(|(sender_id, label, flow_id)| DiscoveredInput {
-                    sender_id,
-                    label,
-                    flow_id,
-                })
-                .collect())
-        })
-        .await;
+        let registry_for_poll = registry.clone();
+        let result = tokio::task::spawn_blocking(move || discover(&registry_for_poll)).await;
 
-        let discovered = match result {
+        let mut discovered = match result {
             Ok(Ok(discovered)) => discovered,
             Ok(Err(e)) => {
                 eprintln!("omp-multiviewer: discovery poll failed: {e}");
@@ -240,6 +331,67 @@ async fn discovery_loop(
                 continue;
             }
         };
+
+        // Nicht mehr gewünschte Aktivierungen freigeben.
+        let wanted_ids: std::collections::HashSet<&str> = discovered
+            .iter()
+            .filter_map(|i| i.lowres_sender_id.as_deref())
+            .collect();
+        let stale: Vec<(String, String)> = activated_lowres
+            .iter()
+            .filter(|(id, _)| !wanted_ids.contains(id.as_str()))
+            .map(|(id, href)| (id.clone(), href.clone()))
+            .collect();
+        for (lowres_sender_id, href) in stale {
+            let result = tokio::task::spawn_blocking(move || PeerClient::new(href).invoke("releaseLowresPreview")).await;
+            if let Ok(Err(e)) = result {
+                eprintln!("omp-multiviewer: releaseLowresPreview({lowres_sender_id}) failed: {e}");
+            }
+            activated_lowres.remove(&lowres_sender_id);
+        }
+
+        // Neue Lowres-Kacheln aktivieren; bei Fehlschlag Rückfall auf
+        // Highres für genau diese Kachel (s. Funktionsdoku oben).
+        for input in discovered.iter_mut() {
+            let Some(lowres_sender_id) = input.lowres_sender_id.clone() else { continue };
+            if activated_lowres.contains_key(&lowres_sender_id) {
+                continue;
+            }
+            let registry_for_resolve = registry.clone();
+            let sender_id_for_resolve = lowres_sender_id.clone();
+            let href = tokio::task::spawn_blocking(move || {
+                resolve_owning_node_href(&registry_for_resolve, &sender_id_for_resolve)
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(href) = href else {
+                eprintln!(
+                    "omp-multiviewer: owning node for lowres sender {lowres_sender_id} not resolvable, falling back to highres"
+                );
+                input.lowres_sender_id = None;
+                input.lowres_flow_id = None;
+                continue;
+            };
+            let href_for_call = href.clone();
+            let activate_result =
+                tokio::task::spawn_blocking(move || PeerClient::new(href_for_call).invoke("activateLowresPreview")).await;
+            match activate_result {
+                Ok(Ok(())) => {
+                    activated_lowres.insert(lowres_sender_id, href);
+                }
+                Ok(Err(e)) => {
+                    eprintln!("omp-multiviewer: activateLowresPreview({lowres_sender_id}) failed: {e}, falling back to highres");
+                    input.lowres_sender_id = None;
+                    input.lowres_flow_id = None;
+                }
+                Err(e) => {
+                    eprintln!("omp-multiviewer: activateLowresPreview({lowres_sender_id}) task panicked: {e}, falling back to highres");
+                    input.lowres_sender_id = None;
+                    input.lowres_flow_id = None;
+                }
+            }
+        }
 
         *inputs.lock().expect("lock poisoned") = discovered.clone();
         pipeline.set_inputs(discovered);

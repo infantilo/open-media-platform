@@ -8472,3 +8472,99 @@ bevorzugt lowres — die eigentlichen Konsumenten der hier gebauten
 Infrastruktur) und Teil 4 (`omp-ograf`/`omp-player` als weitere
 Lowres-Quellen, analoger Handgriff) bleiben offen, wie im Phasenplan
 vorgesehen.
+
+## 2026-07-19 (Nachtrag 38) — Kapitel 15 Teil 3: `omp-multiviewer` liest
+bevorzugt lowres
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §15.4 Teil 3 — die eigentliche
+Nutzlast der in Teil 2 gebauten Infrastruktur: Vorschau-Kacheln öffnen
+bevorzugt den Lowres-MXL-Flow einer Quelle statt Highres+Downscale.
+`omp-multiviewer` als Pilot-Node gewählt (nicht `omp-video-mixer-me`/
+`omp-switcher`) — kein PGM-/Preview-Unterschied nötig, jede Kachel ist
+reines Monitoring, kein dynamisches Hoch-/Runterschalten je nach
+Crosspoint-Auswahl wie beim Mischer.
+
+**Architektur-Entscheidung mit größter Tragweite:** referenzgezählte
+Aktivierung (Kapitel 15 Teil 2) bedeutet, `omp-multiviewer` muss vor
+dem Lesen `activateLowresPreview` **auf dem jeweiligen Quell-Node
+selbst** aufrufen — ein Node-zu-Node-HTTP-Aufruf, kein Umweg über den
+Orchestrator. Recherche vor der Umsetzung fand echten Präzedenzfall:
+`omp-playout-automation/src/remote.rs::PeerClient` (C14/C15) macht
+exakt das bereits, mit explizit dokumentierter Begründung
+(„kein neuer Mechanismus, nur ein zweiter Client für dieselbe, längst
+bestehende API", `ARCHITECTURE.md` §13.1/§13.2/§13.3). Diesen zweiten
+Verwender zum Anlass genommen, den Client (`PeerClient::invoke`) plus
+eine neue Sender→Device→Node-Auflösung (`resolve_owning_node_href`,
+nutzt den neuen `RegistryClient::get_node`, symmetrisch zu
+`get_sender`/`get_device`) nach `omp-node-sdk` zu heben (bereits
+`ureq`-Abhängigkeit vorhanden, keine neue Abhängigkeit in
+`omp-multiviewer`, Minimal-Dependency-Regel) — `omp-playout-
+automation`s eigene Kopie bewusst **nicht** angefasst (kein
+Regressionsrisiko für einen in dieser Sitzung sonst unberührten,
+bereits ausgelieferten Node; die kleine Duplikation bleibt vorerst
+bestehen, spätere Aufräumarbeit).
+
+**Umsetzung:**
+- `omp-node-sdk`: `RegistryClient::get_node(id)` (neu, mirror von
+  `get_sender`/`get_device`), neues Modul `peer.rs`
+  (`PeerClient::invoke`, `resolve_owning_node_href`), beide öffentlich
+  re-exportiert.
+- `nodes/omp-multiviewer/src/pipeline.rs`: `DiscoveredInput` bekommt
+  `lowres_sender_id`/`lowres_flow_id` (`Option<String>`, `None` =
+  Rückfall auf Highres+Downscale, unverändertes Verhalten). `build()`
+  öffnet `MxlVideoInput` auf `lowres_flow_id.unwrap_or(flow_id)` — kein
+  weiterer Anpassungsbedarf, `MxlVideoInput` liest die tatsächliche
+  Flow-Auflösung ohnehin zur Laufzeit aus dem MXL-Flow-Def (nicht vom
+  Konstruktor vorgegeben), jede Kachel skaliert schon heute auf
+  `TILE_WIDTH`×`TILE_HEIGHT` herunter.
+- `nodes/omp-multiviewer/src/main.rs`: `discovery_loop` baut aus dem
+  ohnehin schon geholten vollen Sender-Satz (`list_senders()`, kein
+  zusätzlicher Registry-Umlauf) eine `group-name → (Lowres-Sender-ID,
+  Lowres-Flow-ID)`-Map aus `urn:x-nmos:tag:grouphint/v1.0`-Tags
+  (Format-Parsing wie Nachtrag 37, Sender mit Rolle `low` bekommen
+  keine eigene Kachel). Pro Poll: Diff der gewünschten gegen die
+  zuletzt aktivierten Lowres-Sender-IDs (`activated_lowres`-State über
+  Polls hinweg) — verschwundene werden freigegeben
+  (`releaseLowresPreview`), neue aktiviert (`activateLowresPreview`
+  nach `resolve_owning_node_href`). Schlägt Auflösung/Aktivierung fehl,
+  wird `lowres_*` für genau diese Kachel wieder auf `None` gesetzt
+  (Rückfall auf Highres statt einer dauerhaft schwarzen Kachel).
+  **Dokumentierte Lücke:** kein Graceful-Release beim Multiviewer-
+  Shutdown (der `tokio::select!` in `main.rs` lässt `discovery_loop`
+  beim Beenden fallen, kein Cleanup-Pfad) — der Quell-Node bleibt in
+  dem Fall bis zu seinem eigenen Neustart aktiviert. Bewusst nicht
+  gelöst (kleinerer, klar abgegrenzter nächster Schritt, falls
+  relevant), kein stiller Gap.
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build`/`cargo
+clippy --all-targets` sauber für `omp-node-sdk`/`omp-multiviewer`
+(einzige verbleibende Clippy-Warnung war bereits vorher in
+unberührtem `omp-mediaio`-Code vorhanden), `cargo build --workspace`
+grün. Live gegen einen echten Orchestrator/Registry/NATS-Stack: echte
+`omp-source`- + `omp-multiviewer`-Instanzen gestartet — `GET
+/x-nmos/query/v1.3/nodes` lieferte den `href` beider Nodes, der
+Multiviewer aktivierte den Lowres-Sender der Quelle nachweislich über
+einen echten HTTP-Aufruf an **genau diesen** `href` (`lowresActive`
+wechselte auf `true`, ohne dass irgendein Test-Skript die Quelle
+direkt ansprach). `mxl-info -f <lowres-flow>` zeigte "Last read time"
+im Millisekunden-Abstand zur "Last write time" (aktiv gelesen), der
+Highres-Flow blieb mit einem ~29s alten "Last read time" unberührt —
+der Multiviewer liest nachweislich lowres, nicht highres. Der reale
+MJPEG-Vorschau-Stream (`GET .../preview`) lieferte echte, valide
+JPEG-Frames (11 Frames in 2s, ~5fps wie konfiguriert) — ein
+extrahiertes Frame zeigte visuell die korrekten SMPTE-Farbbalken samt
+Sender-Label-Overlay, kein Schwarzbild/Artefakt. Entfernungspfad
+geprüft: Quelle per `DELETE /api/v1/instances/<id>` gestoppt, Prozess
+bestätigt tot (`ps aux`) — die Registry-Einträge blieben erwartungs-
+gemäß bis zum `registration_expiry_interval` (60s, `deploy/nmos/
+registry.json`, per Datei nachgeschlagen statt aus einer alten
+12s-Erinnerung geraten) bestehen — bekanntes, vorbestehendes
+Registry-Geist-Verhalten dieses Systems, keine Regression durch diesen
+Schritt. Alle Testartefakte danach entfernt.
+
+**Damit ist Kapitel 15 bis auf Teil 4** (`omp-ograf`/`omp-player` als
+weitere Lowres-Quellen, analoger Handgriff wie Teil 2 in `omp-source`)
+**und die Übertragung von Teil 3 auf `omp-video-mixer-me`/
+`omp-switcher`** (PGM-Pfad bleibt highres, nur Vorschau/Crosspoint-
+Buttons lowres — komplexer als der hier gebaute reine Monitor-Fall)
+vollständig.

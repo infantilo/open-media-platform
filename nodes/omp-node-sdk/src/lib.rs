@@ -13,8 +13,10 @@ pub mod health;
 pub mod idgen;
 pub mod is04;
 pub mod node;
+pub mod peer;
 pub mod server;
 
 pub use descriptor::{Descriptor, MethodArg, MethodSpec, ParamSpec, ParamType, Range};
 pub use node::{MediaReadySource, NodeConfig, NodeHandle, ReceiverSpec, SenderSpec, run, start};
+pub use peer::{PeerClient, resolve_owning_node_href};
 pub use server::{InvokeError, ParamStore, RawResponse, SetError};

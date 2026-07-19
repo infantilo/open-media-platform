@@ -41,6 +41,15 @@ pub struct DiscoveredInput {
     pub sender_id: String,
     pub label: String,
     pub flow_id: String,
+    /// Kapitel 15 Teil 3 (docs/END-GOAL-FEATURES.md §15.4): per
+    /// `urn:x-nmos:tag:grouphint/v1.0` gefundener Lowres-Begleit-Sender
+    /// dieser Quelle — `None`, wenn die Quelle keinen meldet (Rückfall
+    /// auf `flow_id`/Highres+Downscale, unverändertes Verhalten vor
+    /// diesem Schritt) oder wenn die Aktivierung beim Quell-Node
+    /// fehlschlug (`main.rs::discovery_loop`, dort auf `None`
+    /// zurückgesetzt statt eine dauerhaft schwarze Kachel zu riskieren).
+    pub lowres_sender_id: Option<String>,
+    pub lowres_flow_id: Option<String>,
 }
 
 pub enum Event {
@@ -154,7 +163,14 @@ fn build(
             .map_err(|e| format!("link black source to compositor: {e}"))?;
     } else {
         for (i, input) in inputs.iter().enumerate() {
-            let mxl_input = MxlVideoInput::new(&pipeline, context.clone(), &input.flow_id)
+            // Kapitel 15 Teil 3: bevorzugt den Lowres-Flow lesen, sofern
+            // vorhanden und aktiviert (`main.rs::discovery_loop`) — jede
+            // Kachel skaliert ohnehin auf `TILE_WIDTH`×`TILE_HEIGHT`
+            // herunter (s. `videoscale`/`capsfilter` unten), `MxlVideoInput`
+            // selbst braucht keine Anpassung (liest die tatsächliche
+            // Flow-Auflösung aus dem MXL-Flow-Def, s. `omp-mediaio::mxl`).
+            let read_flow_id = input.lowres_flow_id.as_deref().unwrap_or(&input.flow_id);
+            let mxl_input = MxlVideoInput::new(&pipeline, context.clone(), read_flow_id)
                 .map_err(|e| format!("MxlVideoInput({}): {e}", input.sender_id))?;
 
             let videoconvert = gst::ElementFactory::make("videoconvert")

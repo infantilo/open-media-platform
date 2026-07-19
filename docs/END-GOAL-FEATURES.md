@@ -2858,6 +2858,20 @@ wie heute pro Node-Typ hartkodiert.
   Kachel-Vorschau-Reader wählen bevorzugt den Lowres-Flow; PGM-Pfad
   bleibt highres. Verifikation: RSS/CPU-Vergleich Vorher/Nachher bei
   N gleichzeitigen Vorschau-Kacheln (erwartete, messbare Senkung).
+  ✅ **Teilweise erledigt 2026-07-19** (`docs/decisions.md` Nachtrag
+  38) — `omp-multiviewer` als Pilot (reiner Monitor, kein PGM-/
+  Preview-Unterschied wie beim Mischer, daher einfacherer erster
+  Fall): Discovery baut eine Grouphint-Gruppen-Map, aktiviert/gibt den
+  Lowres-Sender der jeweiligen Quelle über einen direkten Node-zu-
+  Node-HTTP-Aufruf frei (`omp-node-sdk::peer::PeerClient`, neu ins SDK
+  gehoben — Präzedenzfall bereits in `omp-playout-automation`
+  gefunden, nicht erfunden), `MxlVideoInput` öffnet den Lowres- statt
+  Highres-Flow. Live verifiziert: `mxl-info` zeigte aktives Lesen des
+  Lowres- statt des Highres-Flows, der MJPEG-Vorschau-Stream lieferte
+  echte, visuell bestätigte Frames. `omp-video-mixer-me`/
+  `omp-switcher` (PGM-Pfad muss highres bleiben, komplexer) bleiben
+  offen, ebenso ein Graceful-Release beim Multiviewer-Shutdown
+  (dokumentierte, bewusste Lücke).
 - **Teil 4 — `omp-ograf`/`omp-player` als weitere Lowres-Quellen**
   (Analogie zu Teil 2, pro Node einzeln nachziehbar).
 
@@ -3214,8 +3228,10 @@ Kapiteln, nicht hier wiederholt.
    oben eingeordnet, nicht weil weniger wichtig, sondern weil größer.
    Teil 1 ✅ 2026-07-17/18, Teil 2 ✅ 2026-07-19
    (`docs/decisions.md` Nachtrag 37) — referenzgezählter Lowres-
-   MXL-Sender in `omp-source`, live verifiziert. Teil 3 (Bildmischer/
-   Multiviewer lesen bevorzugt lowres) und Teil 4 (weitere
+   MXL-Sender in `omp-source`, live verifiziert. Teil 3 ✅ teilweise
+   2026-07-19 (Nachtrag 38) — `omp-multiviewer` liest bevorzugt
+   lowres, live verifiziert; `omp-video-mixer-me`/`omp-switcher` noch
+   offen. Teil 4 (weitere
    Lowres-Quellen) bleiben offen.
 6. **Kapitel 16 — Inter-Host-Fabrics (RDMA/Remote-Memory).** Höchster
    potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz), aber:
