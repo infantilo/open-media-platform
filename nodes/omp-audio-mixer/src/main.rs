@@ -102,21 +102,35 @@ struct ChannelState {
     /// Kanal, ohne den Automatismus anderer Kanäle zu beeinflussen.
     override_enabled: bool,
     /// Audio-Follow-Video-Pegel (§4.6 Nachtrag Punkt 3): `true` (Default)
-    /// = bisheriges Verhalten unverändert, der "Aus"-Zustand ist echte
-    /// Stille (`pipeline::set_mute`). `false` = der "Aus"-Zustand
-    /// benutzt stattdessen `follow_off_level_db` als Gain-Ziel (hörbar,
-    /// aber leise) — `mute` bleibt dabei durchgehend `false`, die
-    /// "Stille" entsteht rein über den Gain-Pegel, nicht über den
-    /// GStreamer-`mute`-Pad. Kein `Option<f64>`/`-inf`-Sentinel: JSON
-    /// kennt keine Unendlichkeit (`serde_json` würde das stillschweigend
-    /// zu `null` machen), zwei einfache, immer JSON-taugliche Felder
-    /// sind hier klarer als ein nullbarer Sonderfall.
+    /// = bisheriges Verhalten unverändert — der "Aus"-Zustand ist echte
+    /// Stille (`pipeline::set_mute`), der "An"-Zustand der reguläre
+    /// Kanal-Fader (`gain_db`); `follow_on_level_db`/
+    /// `follow_off_level_db`/`follow_transition_ms` bleiben dabei
+    /// wirkungslos. `false` = AFV übernimmt Gain komplett eigenständig
+    /// (der Fader wird währenddessen ignoriert): "An"/"Aus" rampen
+    /// zwischen `follow_on_level_db`/`follow_off_level_db`, `mute`
+    /// bleibt durchgehend `false` — die "Stille" entsteht rein über den
+    /// Gain-Pegel. Kein `Option<f64>`/`-inf`-Sentinel: JSON kennt keine
+    /// Unendlichkeit (`serde_json` würde das stillschweigend zu `null`
+    /// machen), einfache, immer JSON-taugliche Felder sind hier klarer
+    /// als ein nullbarer Sonderfall.
     follow_use_mute: bool,
+    /// Ziel-Pegel des "An"-Zustands in dB, nur wirksam wenn
+    /// `follow_use_mute == false`. Default 0dB (Unity, wie ein frischer
+    /// Kanal ohne Follow-Konfiguration auch klingen würde).
+    follow_on_level_db: f64,
     /// Ziel-Pegel des "Aus"-Zustands in dB, nur wirksam wenn
     /// `follow_use_mute == false` (s. dort). Default -20dB (Beispielwert
     /// aus `docs/END-GOAL-FEATURES.md` §4.6: "z. B. -20dB statt
     /// Vollstille").
     follow_off_level_db: f64,
+    /// Crossfade-Dauer in ms, nur wirksam wenn `follow_use_mute ==
+    /// false` und `follow_mode == "crossfade"` — ersetzt für diesen Pfad
+    /// die feste `FOLLOW_CROSSFADE_MS`; der Mute-basierte Pfad
+    /// (`follow_use_mute == true`) behält seine feste Dauer bei
+    /// (bewusst unverändert, s. `follow_use_mute`-Doku). Default 500ms
+    /// = derselbe Wert wie `FOLLOW_CROSSFADE_MS`.
+    follow_transition_ms: u64,
     /// Testton-Frequenz, die dieser Kanal bei `addChannel` bekam — bleibt
     /// über einen Quellwechsel hin und her erhalten, damit `setSource("")`
     /// (zurück auf intern) immer denselben, wiedererkennbaren Ton liefert
@@ -145,7 +159,9 @@ impl ChannelState {
             follow_mode: "off".to_string(),
             override_enabled: false,
             follow_use_mute: true,
+            follow_on_level_db: 0.0,
             follow_off_level_db: -20.0,
+            follow_transition_ms: FOLLOW_CROSSFADE_MS,
             internal_freq,
             source: String::new(),
         }
@@ -369,13 +385,27 @@ impl ParamStore for AudioMixerStore {
                 ParamType::Boolean,
                 None,
             ));
-            // §4.6 Nachtrag Punkt 3 (Audio-Follow-Video-Pegel).
+            // §4.6 Nachtrag Punkt 3 (Audio-Follow-Video-Pegel: An-/Aus-
+            // Pegel + Transition-Zeit, alle nur wirksam bei
+            // `followUseMute == false`, s. ChannelState-Doku).
             parameters.push(channel_param(id, "followUseMute", ParamType::Boolean, None));
+            parameters.push(channel_param(
+                id,
+                "followOnLevelDb",
+                ParamType::Number,
+                Some(Range::Number { min: -60.0, max: 12.0 }),
+            ));
             parameters.push(channel_param(
                 id,
                 "followOffLevelDb",
                 ParamType::Number,
-                Some(Range::Number { min: -60.0, max: 0.0 }),
+                Some(Range::Number { min: -60.0, max: 12.0 }),
+            ));
+            parameters.push(channel_param(
+                id,
+                "followTransitionMs",
+                ParamType::Number,
+                Some(Range::Number { min: 0.0, max: 10000.0 }),
             ));
 
             methods.push(MethodSpec {
@@ -454,10 +484,12 @@ impl ParamStore for AudioMixerStore {
                 }],
             });
             methods.push(MethodSpec {
-                name: format!("channel.{id}.setFollowOffLevel"),
+                name: format!("channel.{id}.setFollowLevels"),
                 args: vec![
                     MethodArg { name: "useMute".to_string(), kind: ParamType::Boolean },
+                    MethodArg { name: "onLevelDb".to_string(), kind: ParamType::Number },
                     MethodArg { name: "offLevelDb".to_string(), kind: ParamType::Number },
+                    MethodArg { name: "transitionMs".to_string(), kind: ParamType::Number },
                 ],
             });
         }
@@ -516,7 +548,9 @@ impl ParamStore for AudioMixerStore {
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
             "overrideEnabled" => Some(serde_json::json!(ch.override_enabled)),
             "followUseMute" => Some(serde_json::json!(ch.follow_use_mute)),
+            "followOnLevelDb" => Some(serde_json::json!(ch.follow_on_level_db)),
             "followOffLevelDb" => Some(serde_json::json!(ch.follow_off_level_db)),
+            "followTransitionMs" => Some(serde_json::json!(ch.follow_transition_ms)),
             _ => None,
         }
     }
@@ -753,17 +787,30 @@ impl AudioMixerStore {
                 ch.override_enabled = enabled;
                 Ok(())
             }
-            "setFollowOffLevel" => {
+            "setFollowLevels" => {
                 let use_mute = args
                     .get("useMute")
                     .and_then(Value::as_bool)
+                    .ok_or(InvokeError::Unknown)?;
+                let on_level_db = args
+                    .get("onLevelDb")
+                    .and_then(Value::as_f64)
                     .ok_or(InvokeError::Unknown)?;
                 let off_level_db = args
                     .get("offLevelDb")
                     .and_then(Value::as_f64)
                     .ok_or(InvokeError::Unknown)?;
+                let transition_ms = args
+                    .get("transitionMs")
+                    .and_then(Value::as_f64)
+                    .ok_or(InvokeError::Unknown)?;
+                if transition_ms < 0.0 {
+                    return Err(InvokeError::Unknown);
+                }
                 ch.follow_use_mute = use_mute;
+                ch.follow_on_level_db = on_level_db;
                 ch.follow_off_level_db = off_level_db;
+                ch.follow_transition_ms = transition_ms as u64;
                 Ok(())
             }
             _ => Err(InvokeError::Unknown),
@@ -941,22 +988,32 @@ async fn audio_follow_video_loop(
     let ramp_generation: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some((node_id, on)) = subscription.next().await {
-        let matches: Vec<(String, String, bool, f64)> = {
+        let matches: Vec<(String, String, bool, f64, f64, u64)> = {
             let channels = channels.lock().expect("lock poisoned");
             channels
                 .iter()
                 .filter(|c| {
                     !c.override_enabled && c.follow_mode != "off" && c.follow_target == node_id
                 })
-                .map(|c| (c.id.clone(), c.follow_mode.clone(), c.follow_use_mute, c.follow_off_level_db))
+                .map(|c| {
+                    (
+                        c.id.clone(),
+                        c.follow_mode.clone(),
+                        c.follow_use_mute,
+                        c.follow_on_level_db,
+                        c.follow_off_level_db,
+                        c.follow_transition_ms,
+                    )
+                })
                 .collect()
         };
 
-        for (channel_id, follow_mode, follow_use_mute, follow_off_level_db) in matches {
+        for (channel_id, follow_mode, follow_use_mute, follow_on_level_db, follow_off_level_db, follow_transition_ms) in matches {
             if follow_mode == "cut" {
                 if follow_use_mute {
                     // Unverändertes Verhalten vor §4.6 Punkt 3: echte
-                    // Stille über den GStreamer-`mute`-Pad.
+                    // Stille über den GStreamer-`mute`-Pad, Gain bleibt
+                    // unangetastet (der reguläre Fader bleibt maßgeblich).
                     let target_mute = !on;
                     {
                         let mut channels = channels.lock().expect("lock poisoned");
@@ -966,23 +1023,20 @@ async fn audio_follow_video_loop(
                     }
                     pipeline.set_mute(channel_id.clone(), target_mute);
                 } else {
-                    // Hörbarer "Aus"-Zustand: nie stummschalten, Gain
-                    // direkt auf den Basis- bzw. Off-Pegel setzen.
-                    let base_db = {
-                        let channels = channels.lock().expect("lock poisoned");
-                        channels
-                            .iter()
-                            .find(|c| c.id == channel_id)
-                            .map(|c| c.gain_db)
-                            .unwrap_or(0.0)
-                    };
+                    // Hörbarer "Aus"-Zustand: AFV übernimmt den Gain
+                    // eigenständig (der reguläre Fader wird ignoriert,
+                    // s. ChannelState::follow_use_mute-Doku), nie
+                    // stummschalten.
                     pipeline.set_mute(channel_id.clone(), false);
-                    pipeline.set_gain(channel_id.clone(), if on { base_db } else { follow_off_level_db });
+                    pipeline.set_gain(
+                        channel_id.clone(),
+                        if on { follow_on_level_db } else { follow_off_level_db },
+                    );
                 }
                 continue;
             }
 
-            // "crossfade": Gain über FOLLOW_CROSSFADE_MS rampen statt hart
+            // "crossfade": Gain über die Transition-Zeit rampen statt hart
             // stummschalten — sanfteres Auf-/Abblenden beim Kamera-
             // /Quellwechsel. Läuft als eigener Tokio-Task (nur
             // Command-Sends, kein direkter GStreamer-Objektzugriff nötig
@@ -999,23 +1053,31 @@ async fn audio_follow_video_loop(
             let ramp_generation = ramp_generation.clone();
             let channel_id_task = channel_id.clone();
             tokio::spawn(async move {
-                let base_db = {
-                    let ch = channels.lock().expect("lock poisoned");
-                    ch.iter()
-                        .find(|c| c.id == channel_id_task)
-                        .map(|c| c.gain_db)
-                        .unwrap_or(0.0)
-                };
-                // §4.6 Nachtrag Punkt 3: die Rampe zielt bei
-                // `follow_use_mute == false` auf `follow_off_level_db`
-                // (hörbar, aber leise) statt auf -60dB+Mute — `mute`
-                // bleibt in dem Fall durchgehend `false`, unverändert
-                // vor/nach der Rampe (anders als im Mute-Zweig unten).
-                let off_db = if follow_use_mute { -60.0 } else { follow_off_level_db };
-                if follow_use_mute {
+                // §4.6 Nachtrag Punkt 3: bei `follow_use_mute == false`
+                // rampt die Rampe zwischen den eigenständigen AFV-Pegeln
+                // (`follow_on_level_db`/`follow_off_level_db`) statt
+                // zwischen Mute und dem regulären Kanal-Fader — `mute`
+                // bleibt in dem Fall durchgehend `false`. Bei
+                // `follow_use_mute == true` unverändertes Verhalten vor
+                // diesem Schritt: Rampe zwischen -60dB und dem aktuellen
+                // Fader (`gain_db`), feste `FOLLOW_CROSSFADE_MS`-Dauer.
+                let (from, to, duration_ms) = if follow_use_mute {
+                    let base_db = {
+                        let ch = channels.lock().expect("lock poisoned");
+                        ch.iter()
+                            .find(|c| c.id == channel_id_task)
+                            .map(|c| c.gain_db)
+                            .unwrap_or(0.0)
+                    };
                     pipeline.set_mute(channel_id_task.clone(), false);
-                }
-                let (from, to) = if on { (off_db, base_db) } else { (base_db, off_db) };
+                    (if on { -60.0 } else { base_db }, if on { base_db } else { -60.0 }, FOLLOW_CROSSFADE_MS)
+                } else {
+                    (
+                        if on { follow_off_level_db } else { follow_on_level_db },
+                        if on { follow_on_level_db } else { follow_off_level_db },
+                        follow_transition_ms,
+                    )
+                };
                 for step in 1..=FOLLOW_CROSSFADE_STEPS {
                     if *ramp_generation
                         .lock()
@@ -1029,7 +1091,7 @@ async fn audio_follow_video_loop(
                     let t = step as f64 / FOLLOW_CROSSFADE_STEPS as f64;
                     pipeline.set_gain(channel_id_task.clone(), from + (to - from) * t);
                     tokio::time::sleep(tokio::time::Duration::from_millis(
-                        FOLLOW_CROSSFADE_MS / FOLLOW_CROSSFADE_STEPS,
+                        duration_ms / FOLLOW_CROSSFADE_STEPS,
                     ))
                     .await;
                 }

@@ -802,6 +802,18 @@ umgesetzt**, nur K3/K4-Teil-1 „Teil 1" ist fertig). Vier Punkte gehen
    `followUseMute:true` bitgenau rückwärtskompatibel geprüft (Pegel →
    praktisch Null, `mute:true`), UI-Bundle-Steuerung per echtem
    Chromium-Klick bestätigt.
+   ✅ **Erweitert 2026-07-19** (`docs/decisions.md` Nachtrag 36, gleicher
+   Tag) — Nutzer-Feedback: „An"-Pegel soll ebenfalls eigenständig
+   einstellbar sein (nicht länger implizit der Kanal-Fader), dazu eine
+   konfigurierbare Transition-Zeit statt der festen 500ms. Aus
+   `setFollowOffLevel` wurde `setFollowLevels(useMute, onLevelDb,
+   offLevelDb, transitionMs)` — bei `followUseMute == false` übernimmt
+   AFV Gain jetzt vollständig eigenständig (Fader wird ignoriert), bei
+   `true` bleibt der alte Mute+Fader-Pfad bitgenau unverändert. Live
+   beide Rampenrichtungen + `cut`-Sofortsprung mit `transitionMs=1000`
+   gegen echte `/levels`-Messwerte verifiziert (exakte dB-Mathematik in
+   beide Richtungen bestätigt), UI-Bundle um „An-Pegel"/„Transition
+   ms"-Felder erweitert, per Chromium-Klick verifiziert.
 4. **Mixer-Presets.** Nicht in §4.3 enthalten. OMP hat bereits einen
    generischen, workflow-weiten Snapshot-Mechanismus
    (`orchestrator/internal/snapshots/`, Postgres-gestützt, B7/D1), der

@@ -8312,3 +8312,65 @@ Kreis UI-Klick→Methode→Descriptor. Alle Testartefakte danach entfernt.
 **Nicht Teil dieser Scheibe:** Mixer-Presets (§4.6 Punkt 4, Snapshot-
 Mechanismus node-skopiert wiederverwenden) sind der nächste
 unabhängige, kleine Kapitel-4.6-Rest laut Dokument.
+
+## 2026-07-19 (Nachtrag 36) — Audio-Follow-Video: eigenständiger An-
+Pegel + konfigurierbare Transition-Zeit
+
+**Ziel:** Nutzer-Feedback direkt im Anschluss an Nachtrag 35: der
+Off-Pegel allein reicht nicht — sowohl An- als auch Aus-Pegel sollen
+einstellbar sein (nicht länger "An" = impliziter Kanal-Fader), dazu
+eine konfigurierbare Transition-Zeit statt der festen 500ms.
+
+**Design-Entscheidung:** `channel.<id>.setFollowOffLevel` (Nachtrag 35,
+gleiche Sitzung, noch kein externer Verwender) direkt zu
+`setFollowLevels(useMute, onLevelDb, offLevelDb, transitionMs)`
+erweitert statt eine dritte Methode danebenzustellen — bei
+`followUseMute == false` übernimmt AFV den Gain jetzt vollständig
+eigenständig (der reguläre Kanal-Fader wird währenddessen ignoriert,
+beide Pegel sind fest konfiguriert statt einer relativ zum Fader).
+`followUseMute == true` bleibt bewusst bitgenau der alte Pfad (Rampe
+zwischen Mute und dem aktuellen Fader, feste `FOLLOW_CROSSFADE_MS`) —
+die drei neuen Felder sind in dem Fall wirkungslos, kein Rückschritt
+für alle, die nur den einfachen Mute-Schalter wollen. Descriptor:
+`followOnLevelDb` (Range wie `gain`: -60..12dB), `followTransitionMs`
+(0..10000ms) neu, `followOffLevelDb` von 0..-60 auf -60..12 erweitert
+(Konsistenz mit `followOnLevelDb`/`gain`).
+
+**Umsetzung** (`nodes/omp-audio-mixer/src/main.rs`,
+`nodes/omp-audio-mixer/ui/bundle.js`): `ChannelState` um
+`follow_on_level_db`/`follow_transition_ms` ergänzt (Defaults 0dB/500ms
+— 500ms deckungsgleich mit der bisherigen festen `FOLLOW_CROSSFADE_MS`,
+damit ein frisch angelegter Kanal ohne AFV-Konfiguration exakt wie
+vorher klingt, sobald `followUseMute` auf `false` gestellt wird).
+`audio_follow_video_loop`: `cut` setzt bei `!follow_use_mute` jetzt
+direkt auf `follow_on_level_db`/`follow_off_level_db` (statt vorher auf
+den gelesenen `gain_db`); die Crossfade-Rampe im Tokio-Task rampt
+zwischen denselben zwei Werten über `follow_transition_ms`/
+`FOLLOW_CROSSFADE_STEPS`. UI: dritte Zeile im AFV-Abschnitt um ein
+zweites Zahlenfeld ("An-Pegel dB") und ein drittes ("Transition ms")
+erweitert, ein gemeinsamer "AFV-Pegel setzen"-Button für alle vier
+Werte (mehr im Sinne "eine zusammengehörige Konfiguration" als vier
+Einzel-Häkchen).
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build`/`cargo
+clippy --all-targets -p omp-audio-mixer` sauber, `cargo clippy
+--workspace --all-targets` zeigt nur bereits vorbestehende Warnungen in
+unberührten Dateien (`omp-video-mixer-me`, `omp-ograf`). `node --check`
+für `ui/bundle.js` grün. Live gegen einen echten `omp-audio-mixer`
+(echter `nats pub omp.tally.<id>`, derselbe Subject/Payload wie im
+Produktivbetrieb): `cut` mit `onLevelDb=-6`/`offLevelDb=-24` zeigte via
+`/levels` einen sofortigen exakten Sprung auf `0.3×10^(-24/20) =
+0.01893`; `crossfade` mit `transitionMs=1000` zeigte eine glatte
+12-Schritt-Rampe **in beide Richtungen** (`0.01893→0.15036` bei „an",
+`0.15036→0.01893` bei „aus", jeweils exakt `0.3×10^(±6..24/20)`),
+`mute` blieb durchgehend `false`. Ein erster Testlauf zeigte
+scheinbar keinerlei Gainänderung — Ursache war ein Timing-Fehler im
+Testskript (die `/levels`-SSE-Verbindung stand beim allerersten
+Verbindungsaufbau dieser Sitzung noch nicht rechtzeitig, bevor das
+Tally-Event schon durchgelaufen war), kein Implementierungsfehler:
+ein direkter `setGain`-Test parallel dazu bestätigte den
+Pipeline-Pfad selbst als unauffällig, ein Wiederholungslauf mit
+etwas Vorlauf zeigte die Rampe sauber. UI-Bundle-Steuerung aller drei
+neuen Felder (An-Pegel/Off-Pegel/Transition) per echtem Chromium-Klick
+verifiziert, Backend zeigte exakt die gesetzten Werte. Alle
+Testartefakte danach entfernt.
