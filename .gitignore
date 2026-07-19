@@ -27,6 +27,12 @@ build/
 /third_party/mxl/
 /deploy/dev/mxl.env
 
+# libfabric: geklonter/gebauter C-Kern für Kapitel 16 Teil 0 (MXL-native
+# Fabrics-Spike, docs/decisions.md Nachtrag 41/42) — Debians libfabric-dev
+# (1.17) ist zu alt für MXLs vendorten Fabrics-Code (braucht 2.x), lokal
+# aus Quellcode vendort wie MXL selbst.
+/third_party/libfabric/
+
 # Claude Code lokale Projekt-Settings/Lock-Dateien
 /.claude/
 

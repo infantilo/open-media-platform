@@ -3,7 +3,7 @@
 # offiziellen Quellen: https://github.com/dmf-mxl/mxl
 #
 # WICHTIG (Korrektur ggü. einer früheren Annahme, siehe docs/decisions.md
-# 2026-07-09 "MXL-GStreamer-Integration richtiggestellt"): MXL v1.0.1 bietet
+# 2026-07-09 "MXL-GStreamer-Integration richtiggestellt"): MXL bietet
 # **kein** installierbares GStreamer-Plugin mit mxlsrc/mxlsink-Elementen.
 # `tools/mxl-gst/` enthält stattdessen drei eigenständige Kommandozeilen-
 # programme (mxl-gst-testsrc, mxl-gst-sink, mxl-gst-looping-filesrc), die
@@ -14,10 +14,21 @@
 # GrainWriter/GrainReader) — Details: omp-mediaio/src/mxl.rs.
 #
 # Angelehnt an /home/infantilo/PIPELINE CONTROLLER/scripts/install-mxl.sh,
-# aber auf Tag v1.0.1 gepinnt statt einem bewegten Branch zu folgen.
+# auf einen festen Tag gepinnt statt einem bewegten Branch zu folgen.
+#
+# Version-Historie: v1.0.1 → v1.1.0-beta-1 (docs/decisions.md Nachtrag
+# 42, 2026-07-19) — Kapitel 16 Teil 0 (MXL-native Fabrics/RDMA-Spike)
+# fand heraus, dass v1.0.1s `lib/fabrics/ofi/src/fabrics.cpp` eine reine
+# Stub-Implementierung ist (jede öffentliche C-API-Funktion liefert
+# bedingungslos MXL_ERR_INTERNAL); v1.1.0-beta-1 ist der nächste Tag
+# und hat eine echte Implementierung. Kein isolierter Fabrics-Fix,
+# sondern ein projektweiter Kern-Upgrade — vor der Übernahme per echtem
+# Rust-Workspace-Rebuild + Live-Regressionstest (omp-source schreibt
+# einen echten Flow, mxl-info bestätigt) gegen die bestehenden
+# MXL-Pfade abgesichert, nicht nur den neuen Fabrics-Pfad.
 set -euo pipefail
 
-MXL_VERSION="v1.0.1"
+MXL_VERSION="v1.1.0-beta-1"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MXL_SRC_DIR="${MXL_SRC_DIR:-$ROOT_DIR/third_party/mxl}"

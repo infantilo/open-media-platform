@@ -8746,3 +8746,228 @@ speichern" gespeichert, beides über die reale API zurückgesetzt
 Testartefakte (Snapshot-Zeile per SQL, Instanz, `/dev/shm/omp-mxl`-Flow,
 Chromium-Prozess) danach entfernt. Damit ist §4.6 Punkt 4 für beide
 §13-Referenzknoten vollständig (UI-Seite).
+
+## 2026-07-19 (Nachtrag 41) — Kapitel 16 Teil 0: Blocker — libfabric-Paket
+ist zu alt für MXLs vendorten Fabrics-Code
+
+**Zwei Kapitel-15-Kandidaten geprüft, beide nicht ohne Nutzer-
+Entscheidung fortsetzbar:**
+
+1. Kapitel 15 Teil 3 Rest (`omp-video-mixer-me`/`omp-switcher` lesen
+   bevorzugt lowres): beim Code-Lesen (`pipeline.rs::build_one_input`)
+   festgestellt, dass dieser Node **jeden** entdeckten Input dauerhaft
+   als `MxlVideoInput` in Fg- **und** Bg-Zweig offen hält (nicht nur
+   den gerade aktiven), damit Cut/Take/AutoTrans latenzfrei sind — ganz
+   anders als `omp-multiviewer`s Muster (on-demand aktivieren/
+   freigeben). Lowres hier einzusetzen hieße entweder (a) trotzdem
+   immer alles in Highres offenhalten (kein Bandbreitengewinn, macht
+   den Punkt hinfällig) oder (b) beim Cut dynamisch von Lowres auf
+   Highres umschalten (reintroduziert genau die Umschalt-Latenz, die
+   das aktuelle eager-Open-Design vermeiden sollte) — ein echter
+   Architektur-Tradeoff, den `docs/END-GOAL-FEATURES.md` §15 selbst nur
+   mit "komplexer" andeutet, nicht auflöst. Nicht geraten, zurückgestellt.
+2. **Kapitel 16 Teil 0** (nächster Punkt in der Prioritätsliste, §18) —
+   dieser Nachtrag.
+
+**Befund:** `docs/END-GOAL-FEATURES.md` §16.1 beschreibt Teil 0 als
+"ein einzeiliger `apt install`" (`libfabric-dev`, Debian-Bookworm-Repo,
+Kandidat 1.17.0-3) + `-DMXL_ENABLE_FABRICS_OFI=ON` + Build. Das war zum
+Zeitpunkt der Doku-Recherche nicht durch einen echten Build verifiziert
+— jetzt live versucht:
+
+- `libfabric-dev 1.17.0-3` installiert (einzige in Debian Bookworm
+  verfügbare Version, `apt-cache madison` bestätigt, keine neuere in
+  Backports).
+- `cmake --preset Linux-GCC-Release -DMXL_ENABLE_FABRICS_OFI=ON` lief
+  durch ("Building fabrics library with libfabric/ofi", Version 1.17.0
+  gefunden).
+- **Build schlägt fehl:** `lib/fabrics/ofi/src/internal/Fabric.cpp`
+  ruft `::fi_fabric2` auf (existiert in 1.17 nicht, nur `fi_fabric`),
+  `MemoryRegion.cpp` nutzt `fi_mr_attr`-Felder (`hmem_data`,
+  `page_size`, `base_mr`, `sub_mr_cnt`), die `/usr/include/rdma/
+  fabric.h` (Version 1.17, `FI_MAJOR_VERSION`/`FI_MINOR_VERSION`
+  bestätigt) ebenfalls nicht kennt. Recherche (Arch-Manpage-Quelle für
+  `fi_fabric2`, dort explizit "Libfabric v2.6.0" beschriftet) legt nahe:
+  MXLs vendorter Fabrics-Code braucht die **libfabric-2.x-API**, nicht
+  nur eine neuere 1.x-Minor-Version — ein Major-Versionssprung, den
+  Debian Bookworms Repos (stable, kein Backports-Kandidat gefunden)
+  nicht abdecken. Kern-MXL (libmxl.so, mxl-info, bereits vorher gebaut)
+  bleibt unangetastet und funktionsfähig — nur der neue Fabrics-
+  Teilbaum ist betroffen, live per `mxl-info` erneut bestätigt.
+
+**Warum das eine echte Nutzer-Entscheidung ist statt eines
+Trial-and-Error-Fixes:** ein Fix erfordert entweder libfabric 2.x aus
+Quellcode zu bauen (eigener Vendoring-Aufwand analog zu MXL/vcpkg selbst,
+aber ein zusätzliches Werkzeug mit eigenen Build-Abhängigkeiten,
+deutlich über den in §16.4 veranschlagten "einer Sitzung, wie
+K5-Teil-0") oder System-Pakete jenseits des bereits konfigurierten
+Bookworm-Repos zu ziehen (Backports/Testing/Sid mischen — ein
+System-weiter, schwer rückgängig zu machender Eingriff auf einer
+gemeinsam genutzten Dev-Maschine, nicht ohne Rückfrage). Beides
+sprengt den ursprünglich veranschlagten Umfang von Teil 0.
+
+**Optionen für den Nutzer:**
+1. **libfabric 2.x aus Quellcode vendoren** (Empfehlung, passt zum
+   bestehenden Projektmuster: MXL selbst, vcpkg, rustup sind alle schon
+   Source-Builds) — eigener Build-Schritt, eigener Install-Prefix,
+   MXLs CMake auf diesen statt den System-`libfabric-dev` zeigen lassen
+   (`PKG_CONFIG_PATH`/`CMAKE_PREFIX_PATH`). Realistischer Aufwand: eine
+   abgegrenzte, aber spürbar größere Scheibe als der ursprüngliche
+   Teil-0-Zuschnitt.
+2. **Ein neueres Debian-Repo (Testing/Sid) gezielt nur für
+   `libfabric-dev` anpinnen** (APT-Pinning) — kleinerer Aufwand als
+   Option 1, aber ein System-Paketquellen-Eingriff auf der Dev-Maschine,
+   den ich nicht ohne Zustimmung vornehme.
+3. **Teil 0 zurückstellen**, mit einem anderen, ungeblockten
+   Priorisierungspunkt weitermachen (§17 Teil 4/5 oder die Kapitel-15-
+   Design-Frage von oben klären) — Kapitel 16 bleibt wie in §18 selbst
+   eingeordnet ("wichtig, aber noch nicht startbereit") liegen, nur aus
+   einem anderen Grund als der dort genannten Grundsatzentscheidung
+   (die ist ja bereits getroffen).
+
+Keine Entscheidung getroffen, Nutzer gefragt (`AskUserQuestion`).
+`MXL_ENABLE_FABRICS_OFI=ON` bleibt im CMake-Cache stehen (wirkungslos
+ohne funktionierenden Fabrics-Build, kein Rebuild-Trigger für
+unveränderte Kern-MXL-Targets) — keine Testartefakte, da nichts
+Laufendes gestartet wurde.
+
+## 2026-07-19 (Nachtrag 42) — Kapitel 16 Teil 0: libfabric-Version
+gefixt, zweiter, tieferer Blocker gefunden — MXLs `fabrics.cpp` (v1.0.1)
+ist eine reine Stub-Implementierung
+
+**Nutzerentscheidung:** Option 1 aus Nachtrag 41 (libfabric 2.x aus
+Quellcode vendoren) — umgesetzt:
+
+- `apt-get install autoconf automake libtool` (Build-Abhängigkeiten für
+  libfabrics eigenes `autogen.sh`/Autotools, `pkg-config`/`m4` waren
+  schon vorhanden).
+- `third_party/libfabric` (neu, geklont wie `third_party/mxl`): Tag
+  `v2.6.0` (aktuellster Release-Tag laut `git ls-remote --tags`, deckt
+  sich mit der Versionsangabe der beim Recherchieren gefundenen
+  Arch-Manpage für `fi_fabric2`). `./autogen.sh && ./configure
+  --prefix=third_party/libfabric/install --enable-tcp=yes && make &&
+  make install` — sauberer Build, `tcp`-Provider bestätigt eingebaut
+  (Build-Log: "Built-in providers: ... tcp ...").
+- `third_party/mxl`: `PKG_CONFIG_PATH` auf den neuen lokalen Prefix
+  gesetzt, `cmake --fresh --preset Linux-GCC-Release
+  -DMXL_ENABLE_FABRICS_OFI=ON` (erzwingt Neu-Discovery statt der im
+  Cache hängengebliebenen alten System-`libfabric`-Pfade — ein reines
+  `cmake --preset` ohne `--fresh` reicht nicht, `pkg_check_modules`
+  cacht das Ergebnis). `CMakeCache.txt` bestätigte danach
+  `libfabric_VERSION:INTERNAL=2.6.0` und den Pfad unter
+  `third_party/libfabric/install`. **`cmake --build` lief jetzt
+  vollständig durch** — `lib/fabrics/ofi` + `tools/mxl-fabrics-demo`
+  bauen sauber, `fi_fabric2`/`fi_mr_attr`-Fehler behoben. Kern-MXL
+  weiterhin unangetastet/funktionsfähig.
+
+**Zweiter, tieferer Befund beim Live-Verifikationsversuch:** ein
+echter Zwei-Prozess-Test (Quelle über `mxl-gst-testsrc` in eine erste
+Domain geschrieben, `mxl-fabrics-demo` als Target gegen eine zweite
+Domain gestartet) scheiterte an
+`mxlFabricsProviderFromString("tcp")` → `MXL_ERR_INTERNAL`. Code-Lesen
+von `lib/fabrics/ofi/src/fabrics.cpp` (Tag `v1.0.1`, aktuell
+gepinnte MXL-Version) zeigt: **jede einzelne öffentliche C-API-Funktion
+der Fabrics-Bibliothek ist eine Stub-Implementierung, die
+bedingungslos `MXL_ERR_INTERNAL` zurückgibt** — `mxlFabricsCreateTarget`,
+`mxlFabricsInitiatorSetup`, `mxlFabricsProviderFromString`, alle 20
+Funktionen. Die darunterliegenden C++-Klassen (`Fabric`, `Domain`,
+`MemoryRegion`, …, die mit der neuen libfabric-Version jetzt sauber
+kompilieren) sind also real implementiert, aber **nicht an die
+öffentliche C-API angeschlossen** — exakt die im ursprünglichen
+Kapitel-16-Text vermerkte Formulierung "vendored, aber unbenutzt"
+trifft wörtlicher zu als angenommen: nicht nur ungenutzt im OMP-Code,
+sondern beim Vendoring-Tag selbst nicht fertig verdrahtet.
+
+`git fetch --depth 1 origin tag v1.1.0-beta-1` (nur als lokale Tag-Ref
+geholt, **nicht** ausgecheckt, `git describe --tags` bestätigt
+weiterhin `v1.0.1`) zeigt: dort ist `fabrics.cpp` eine echte, vollständige
+Implementierung (nutzt `FabricInstance`/`Initiator`/`Target`/
+`TargetInfo`-Klassen statt Stubs) — der nächste MXL-Tag nach `v1.0.1`
+behebt das. Kein Zwischen-Tag zwischen `v1.0.1` und `v1.1.0-beta-1`
+existiert laut `git ls-remote --tags`.
+
+**Warum wieder eine Nutzer-Entscheidung statt eines Fixes:** die
+Behebung erfordert, die **projektweit gepinnte MXL-Kernversion**
+(`deploy/dev/install-mxl.sh MXL_VERSION`, genutzt von jedem einzelnen
+Node über `omp-mediaio::mxl`/die vendorten Rust-Crates `mxl-sys`/`mxl`)
+von `v1.0.1` auf ein **Beta-Tag** (`v1.1.0-beta-1`) zu heben — kein
+isolierter Fabrics-spezifischer Fix, sondern ein projektweiter
+Kernabhängigkeits-Wechsel auf eine Vorabversion, mit potenziellem
+(ungeprüftem) Auswirkungsradius auf jeden bestehenden MXL-Nutzungspfad,
+nicht nur die neue Fabrics-Ecke. Das übersteigt den Rahmen einer
+eigenständigen Entscheidung noch klarer als der ursprüngliche
+libfabric-Fund.
+
+**Testartefakte entfernt:** `mxl-gst-testsrc`-Prozess beendet,
+`/dev/shm/omp-mxl-fabrics-{a,b}`-Testdomains gelöscht. `third_party/
+libfabric` (Quelle + lokaler Install-Prefix) bleibt im Baum stehen —
+funktionsfähig, unabhängig von der MXL-Versionsfrage wiederverwendbar,
+kein Cleanup-Grund.
+
+## 2026-07-19 (Nachtrag 43) — Kapitel 16 Teil 0: MXL auf v1.1.0-beta-1
+angehoben + Fabrics-Spike erfolgreich verifiziert
+
+**Nutzerentscheidung (Nachtrag 42):** MXL projektweit auf `v1.1.0-beta-1`
+anheben (einzige Version mit funktionierendem Fabrics-Code), mit voller
+Regression statt nur dem isolierten Fabrics-Pfad.
+
+**Umsetzung:**
+- `third_party/mxl`: `git checkout v1.1.0-beta-1` (bereits als Tag-Ref
+  vorgeholt, s. Nachtrag 42). `deploy/dev/install-mxl.sh`:
+  `MXL_VERSION` aktualisiert + Versions-Historie im Kopfkommentar
+  dokumentiert; `deploy/dev/mxl.env` brauchte keine Änderung (Pfade
+  unverändert, nur der Tag im selben Verzeichnis gewechselt).
+- Voller sauberer Rebuild (`cmake --fresh` nötig gewesen, alter Cache
+  hätte sonst weiter die alten libfabric-Pfade genutzt, s. Nachtrag 42)
+  — Kern-MXL + Fabrics bauen beide sauber, `libmxl.so.1.1` (Minor-
+  Versionssprung ggü. vorher `.so.1.0`).
+- **Rust-Workspace-Rebuild fand einen dritten, kleineren Stolperstein:**
+  `cargo build --features mxl` schlug zunächst mit `cannot find value
+  MXL_DATA_FORMAT_GRAIN_SIZE in crate mxl_sys` fehl — nicht der
+  vermutete Upstream-Bug (der C-Header `mxl/dataformat.h` definiert die
+  Konstante unverändert als `4096`), sondern eine reine
+  Cargo-Build-Cache-Verstaubung: `mxl-sys/build.rs` setzt
+  `cargo:rerun-if-changed` für die MXL-Header nur im
+  **nicht**-`mxl-not-built`-Feature-Zweig (dem hier ungenutzten
+  Pfad, der MXL selbst per `cmake`-Crate baut) — im tatsächlich
+  genutzten `mxl-not-built`-Zweig (externe MXL-Installation per
+  `LD_LIBRARY_PATH`, s. `omp-mediaio/Cargo.toml`) fehlt dieser Trigger,
+  Cargo hatte also keinen Grund, das alte `bindings.rs` aus dem
+  `v1.0.1`-Build zu verwerfen. `cargo clean -p mxl-sys -p mxl` behob es
+  sofort, kein Quelltext-Fix nötig — eine kleine, dokumentierte
+  Bau-Falle für künftige MXL-Versionswechsel, kein funktionaler Bug.
+- **Regressionstest (echter Prozess, kein Mock):** ein echter
+  `omp-source` gestartet, `mxl-info` bestätigte drei reale Flows
+  (Video/Audio/Lowres-Video) mit wachsendem Head-Index über eine
+  echte Sekunde hinweg — Kern-MXL-Pfad nach dem Upgrade unverändert
+  funktionsfähig, bevor überhaupt der Fabrics-Teil angefasst wurde.
+
+**Kapitel-16-Teil-0-Zielverifikation (der eigentliche Spike):** zwei
+unabhängige MXL-Domains (`/dev/shm/omp-mxl-fabrics-{a,b}`, simulieren
+zwei Hosts auf einer Maschine, exakt wie in §16.4 vorgesehen).
+`mxl-gst-testsrc` schreibt einen echten SMPTE-Testbild-Flow in Domain A.
+`mxl-fabrics-demo` als Target gegen Domain B gestartet (`--provider
+tcp`), druckt eine echte Base64-Target-Info (RDMA-Regionsdeskriptoren).
+`mxl-fabrics-demo` als Initiator gegen Domain A gestartet, liest den
+echten Flow, verbindet sich per `--target-info` mit dem Target
+("Endpoint is now connected", echtes Log). **`mxl-info` gegen Domain B
+zeigte danach denselben Flow (gleiche ID) mit über zwei echte Sekunden
+kontinuierlich wachsendem Head-Index (53480678856 → 53480678916, Rate
+30000/1001 — exakt die Quellrate)** — echter, funktionierender
+One-Sided-RDMA-Transfer über den TCP-Provider zwischen zwei getrennten
+Domains, genau das in §16.1 beschriebene Ziel, ohne RDMA-Hardware
+nachgewiesen (Chromebook-tauglich, wie vom Nutzer ursprünglich
+gefragt).
+
+**Testartefakte entfernt:** beide `mxl-fabrics-demo`-Prozesse (`kill
+-9`, `pkill -f` griff nicht zuverlässig — vermutlich ein Timing-
+Artefakt des Sandbox-Hintergrundprozess-Handlings, keine Auffälligkeit
+in den Prozessen selbst), `mxl-gst-testsrc`, beide Test-Domains,
+Log-Dateien unter `/tmp`. `third_party/libfabric` neu ins `.gitignore`
+aufgenommen (analog zu `third_party/mxl` — geklonter/gebauter
+C-Kern, gehört nicht ins Repo).
+
+**Status Kapitel 16:** Teil 0 vollständig erledigt. Teil 1
+(`omp-mediaio::fabrics`-Grundmodul, `Output`-Trait-Implementierung
+analog C4) ist der nächste, jetzt entsperrte Schritt — eigene Scheibe,
+nicht Teil dieses Nachtrags.

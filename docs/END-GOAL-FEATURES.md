@@ -2998,12 +2998,20 @@ Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
 
 ### 16.4 Phasenplan
 
-- **Teil 0 — Build aktivieren + Spike (eine Sitzung, wie K5-Teil-0):**
-  `libfabric-dev` installieren, `MXL_ENABLE_FABRICS_OFI=ON`,
-  `mxl-fabrics-demo` bauen und über `--provider tcp` zwischen zwei
-  Prozessen auf **demselben** Host (simuliert zwei Hosts über zwei
-  MXL-Domains) verifizieren — reines Werkzeug-Verifikationsziel, kein
-  OMP-Code.
+- **Teil 0 — Build aktivieren + Spike.** ✅ **Erledigt 2026-07-19**
+  (`docs/decisions.md` Nachtrag 41-43). Größer als der ursprünglich
+  veranschlagte „eine Sitzung, wie K5-Teil-0": Debian Bookworms
+  `libfabric-dev` (1.17.0) ist zu alt für MXLs vendorten Fabrics-Code
+  (braucht die libfabric-2.x-API) — libfabric 2.6.0 aus Quellcode
+  vendort (`third_party/libfabric`, analog zu MXL selbst). Zweiter,
+  tieferer Fund: MXLs eigene Fabrics-C-API war im gepinnten Tag
+  `v1.0.1` eine reine Stub-Implementierung; MXL projektweit auf
+  `v1.1.0-beta-1` angehoben (Nutzerentscheidung, mit vollem
+  Regressionstest gegen bestehende MXL-Pfade, nicht nur den
+  Fabrics-Teil). `mxl-fabrics-demo` über `--provider tcp` zwischen zwei
+  Prozessen auf demselben Host (zwei MXL-Domains) verifiziert: echter
+  One-Sided-RDMA-Transfer eines SMPTE-Testbild-Flows, Head-Index in der
+  Zieldomain kontinuierlich wachsend, keine RDMA-Hardware nötig.
 - **Teil 1 — `omp-mediaio::fabrics`-Grundmodul:** ein Flow, ein Host-
   Paar, TCP-Provider, `Output`-Trait-Implementierung analog C4.
   Verifikation: zwei `MxlContext`-Domains auf verschiedenen TCP-Ports/
@@ -3027,8 +3035,8 @@ Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
    `docs/decisions.md` Nachtrag 9):** MXL-native Fabrics (Empfehlung
    oben) statt des in `ARCHITECTURE.md` §6.6 skizzierten
    eigenständigen `rdma-core`-Moduls. `ARCHITECTURE.md` §6.6 wurde
-   entsprechend umgeschrieben. Umsetzung (Kapitel 16.4 Teil 0) noch
-   nicht gestartet.
+   entsprechend umgeschrieben. Umsetzung: Teil 0 ✅ erledigt
+   2026-07-19 (s. 16.4), Teil 1 ist der nächste Schritt.
 2. Priorität relativ zu Kapitel 15 (Multi-Res) und den übrigen
    `frage an fabel.txt`-Punkten — s. Kapitel 18 (konsolidierte
    Priorisierung), dort als niedrigere Priorität eingeordnet
@@ -3253,14 +3261,17 @@ Kapiteln, nicht hier wiederholt.
    neuen Lowres-Sender ohne jede Anpassung); `omp-ograf` offen
    (Fill/Key-Design-Frage).
 6. **Kapitel 16 — Inter-Host-Fabrics (RDMA/Remote-Memory).** Höchster
-   potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz), aber:
-   (a) braucht zuerst die Grundsatzentscheidung MXL-Fabrics vs.
-   `ARCHITECTURE.md` §6.6 (offene Frage 16.5.1), (b) ist am weitesten
-   von einer bestehenden Umsetzung entfernt (Teil 0 ist noch ein reiner
-   Werkzeug-Spike). Absichtlich als „wichtig, aber noch nicht
-   startbereit ohne Grundsatzentscheidung" eingeordnet — sobald die
-   Entscheidung fällt, ist Teil 0 (Build-Flag + Spike) klein und passt
-   in eine einzelne Sitzung.
+   potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz).
+   ✅ **Teil 0 erledigt 2026-07-19** (`docs/decisions.md` Nachtrag
+   41-43) — deutlich größer als der ursprünglich veranschlagte
+   „eine Sitzung": libfabric musste aus Quellcode vendort werden
+   (Debian-Paket zu alt), MXL musste projektweit auf `v1.1.0-beta-1`
+   angehoben werden (die gepinnte `v1.0.1` hatte eine reine
+   Stub-Fabrics-API), beides live mit vollem Regressionstest gegen die
+   bestehenden MXL-Pfade verifiziert, danach ein echter Zwei-Domain-
+   RDMA-Transfer über den TCP-Provider nachgewiesen. Teil 1
+   (`omp-mediaio::fabrics`-Grundmodul) ist der nächste, jetzt
+   entsperrte Schritt.
 7. **§17 Teil 4/5 — Import/Versionierung fremder Microservices.**
    Architektonisch am größten (Podman-Runner, Katalog-Schreib-API,
    Vertrauensmodell), am wenigsten dringend für den aktuellen
