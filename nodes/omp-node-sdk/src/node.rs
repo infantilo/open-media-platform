@@ -358,6 +358,23 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
             }
             if let Some(media_types) = &spec.media_types {
                 receiver.caps.media_types = media_types.clone();
+                // Live gefunden (Kapitel 19 Teil 3, `docs/decisions.md`):
+                // `Receiver::new` setzt `format` fest auf
+                // `FORMAT_VIDEO`, unabhängig von `media_types` — für
+                // jeden bisherigen Aufrufer zufällig unschädlich (kein
+                // Node deklarierte bislang einen Audio-Receiver mit
+                // eigenen `media_types`), aber inkonsistent zu
+                // `caps.media_types` und von der Registry mit HTTP 400
+                // abgelehnt, sobald doch (hier: `omp-aes67-gateway`s
+                // Sink-Rolle). `format` muss zum tatsächlichen Medientyp
+                // passen, nicht am Video-Default kleben bleiben.
+                if let Some(first) = media_types.first() {
+                    if first.starts_with("audio/") {
+                        receiver.format = is04::FORMAT_AUDIO.to_string();
+                    } else if first.starts_with("video/") {
+                        receiver.format = is04::FORMAT_VIDEO.to_string();
+                    }
+                }
             }
             receiver
         })

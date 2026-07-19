@@ -9207,3 +9207,87 @@ Kapitel 16 Teil 2 (`docs/END-GOAL-FEATURES.md` §16.4) damit
 abgeschlossen. Offen bleibt nur noch die Anbindung an einen echten
 Node (welcher Node Fabrics als Transport nutzt, ist eine spätere
 Design-Entscheidung — bisher reines FFI-Fundament + Relay-Bibliothek).
+
+## 2026-07-19 (Nachtrag 48) — Kapitel 19 Teil 3: `omp-aes67-gateway`
+(Dante-Interop über AES67 + echte SAP-Implementierung)
+
+Neuer Node `nodes/omp-aes67-gateway` (`docs/END-GOAL-FEATURES.md`
+§19.3c/§19.4), Audio-Pendant zu `omp-2110-gateway` (Nachtrag 46) mit
+zwei Rollen (`OMP_AES67_GATEWAY_DIRECTION=sink|source`, "Sink"/"Source"
+laut Phasenplan-Wortwahl statt `omp-2110-gateway`s "ingest"/"output" —
+gleiche Richtungen, andere Begriffe). Zusätzlich zum reinen
+Audio-Gateway eine vollständige, von Hand gebaute SAP-Implementierung
+(RFC 2974, `sap.rs`, kein GStreamer-Element, keine neue Dependency):
+`Announcer` sendet periodisch das eigene SDP inkl. Delete-Paket bei
+Shutdown, `Listener` sammelt entdeckte Sessions mit
+Timeout-Verfall-Schutz für Geräte, die ohne Delete-Paket vom Netz
+gehen. Sink-Rolle unterstützt drei Konfigurationswege (SDP direkt >
+SAP-Discovery per Namens-Teilstring > Einzel-Env-Vars).
+
+**Ein echter Bug in `omp-node-sdk` live gefunden und behoben, nicht nur
+in diesem Node umschifft:** `Receiver::new` (`is04.rs`) setzt `format`
+fest auf `FORMAT_VIDEO`, unabhängig von den tatsächlich übergebenen
+`caps.media_types` — bei jedem bisherigen Aufrufer zufällig unschädlich
+(kein Node deklarierte vorher einen Audio-Receiver mit eigenen
+`media_types`), aber inkonsistent, sobald doch: die Registry lehnte die
+Registrierung mit HTTP 400 ab. Behoben in `node.rs`, dort wo
+`ReceiverSpec::media_types` in die `Receiver`-Ressource übernommen
+wird: `format` wird jetzt aus dem ersten `media_types`-Eintrag
+abgeleitet (`audio/...` → `FORMAT_AUDIO`, `video/...` → `FORMAT_VIDEO`).
+Betrifft potenziell auch künftige Audio-Receiver anderer Nodes, nicht
+nur diesen Gateway.
+
+**Ein zweiter, echter Bug live gefunden — SAP-Pakete verschwanden
+lautlos:** der `Announcer` band seinen sendenden Socket ursprünglich an
+`origin` (die eigene, im SAP-Paket zu meldende Adresse). Auf der
+Dev-Maschine (`origin=127.0.0.1`) führte das dazu, dass **kein
+einziges** Paket ankam — durch gezielte Python-Vergleichstests
+(bind-los vs. an `127.0.0.1` gebunden vs. explizites
+`IP_MULTICAST_IF=127.0.0.1`) isoliert: `ip addr` zeigt `lo` hier ohne
+`MULTICAST`-Interface-Flag (nur `eth0` hat es), ein Socket-Bind oder
+`IP_MULTICAST_IF` auf `127.0.0.1` lässt den Kernel die
+Multicast-Zielschnittstelle nach dieser Adresse wählen (→ `lo`, kein
+Multicast-Support, Pakete verschwinden), während ein Bind auf
+`UNSPECIFIED` (0.0.0.0) die Schnittstellenwahl der Routing-Tabelle
+überlässt (→ `eth0`, funktionierendes Kernel-Multicast-Loopback).
+Behoben: `origin` fließt nur noch als Dateninhalt ins SAP-Paket
+(RFC-2974-"originating source"-Feld), der Socket selbst bindet auf
+`UNSPECIFIED` — technisch auch die für reale Mehrere-Interfaces-Hosts
+richtigere Grundeinstellung (System-Routing statt eine geratene feste
+Schnittstelle; ein Deployment mit dediziertem Media-Interface würde
+dafür eine System-Route setzen, nicht den Code ändern).
+
+**Live verifiziert, mehrstufig, kein Mock:**
+1. SAP-Pakete unabhängig gegengeprüft: ein von Hand geschriebenes
+   Python-Skript (bewusst **nicht** der eigene Rust-Code, eigenständig
+   nach RFC 2974 geparst) empfing echte Pakete auf
+   `239.255.255.255:9875`, bestätigte Header-Bits (`V=1`), Origin-Feld,
+   `application/sdp`-Payload-Typ und den vollständigen SDP-Inhalt.
+2. Voller End-to-End-Pfad, drei echte Node-Instanzen, kein Mock: ein
+   echter `omp-source` liefert einen realen MXL-Audio-Flow → ein
+   `omp-aes67-gateway` (Source-Rolle) per echtem IS-05-`graph/edges`-
+   PATCH verbunden, sendet echtes AES67/RTP-Multicast + SAP-
+   Announcements → ein zweiter `omp-aes67-gateway` (Sink-Rolle, **ganz
+   ohne** vorgegebenen Host/Port) findet die Session ausschließlich per
+   echtem SAP-Announcement-Empfang (`discoveredViaSap: true` im
+   Node-Contract-Parameter bestätigt) und schreibt einen eigenen realen
+   MXL-Flow. `mxl-info` bestätigte einen über zwei Sekunden real
+   wachsenden Head-Index (Delta passend zur konfigurierten
+   48-kHz-Rate) — durchgängiger Audiofluss vom Quell-Flow bis zum
+   Sink-Flow, jede Verbindung real, keine Stelle simuliert.
+
+`cargo test --workspace`/`cargo clippy --workspace --all-targets`
+grün, keine neuen Warnungen. Kein `deploy/catalog.json`-Eintrag,
+gleiche Begründung wie bei `omp-2110-gateway`/`omp-srt-gateway`
+(Richtungs-Env-Vars passen nicht zur generischen Launcher-UI).
+
+**Nicht Teil dieser Scheibe:** eine echte Gegenprobe gegen
+`bondagit/aes67-linux-daemon` (im Phasenplan als Verifikationswerkzeug
+genannt, ausdrücklich "keine Dependency") — der interne SAP-/Audio-Pfad
+ist bereits doppelt real verifiziert (eigenständiger Python-Parser +
+voller Node-Paar-Durchlauf), das externe Werkzeug wäre zusätzliche,
+nicht zwingend nötige Absicherung; Nachholen bleibt möglich, ist aber
+kein stiller Gap. Test gegen echte Dante-Hardware bleibt wie im
+Phasenplan vorgesehen zurückgestellt, bis ein Gerät verfügbar ist
+(§19.5 Frage 3). PTP-Zeitbasis (Teil 2) und NDI-Gateway (Teil 4)
+bleiben ebenfalls offen.

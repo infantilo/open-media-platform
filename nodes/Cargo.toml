@@ -15,4 +15,5 @@ members = [
     "omp-srt-gateway",
     "omp-ograf",
     "omp-2110-gateway",
+    "omp-aes67-gateway",
 ]

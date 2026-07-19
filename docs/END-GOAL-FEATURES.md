@@ -3594,12 +3594,32 @@ Recherchierte Faktenlage (Stand 2026-07):
   als Software-Master in einem Netzwerk-Namespace (kein
   PTP-Hardware-Bedarf, gleiche Netns-Technik wie Kapitel 16 Teil 1),
   Clock erreicht Synced-Zustand, Pipeline läuft auf ihr.
-- **Teil 3 — `omp-aes67-gateway` (Dante-Interop):** Teil-0-Audio +
-  SAP-Announce/-Listen (RFC 2974), Katalog-Rollen Source/Sink.
-  Verifikation: `aes67-linux-daemon` als Gegenstelle auf der
-  Dev-Maschine (Stream in beide Richtungen, SAP-Discovery beidseitig
-  sichtbar); Test gegen echte Dante-Hardware im AES67-Modus, sobald
-  ein Gerät verfügbar ist (19.5 Frage 3).
+- **Teil 3 — `omp-aes67-gateway` (Dante-Interop).** ✅ **Erledigt
+  2026-07-19** (`docs/decisions.md` Nachtrag 48): Teil-0-Audio +
+  vollständige, von Hand gebaute SAP-Announce/-Listen-Implementierung
+  (RFC 2974, kein GStreamer-Element/keine neue Dependency), Rollen
+  `sink`/`source`. Sink-Rolle konfiguriert sich wahlweise per direkt
+  gereichtem SDP, per SAP-Discovery (Namens-Filter) oder per
+  Einzel-Env-Vars. Dabei zwei echte Bugs live gefunden und behoben:
+  (1) `omp-node-sdk::Receiver::new` setzte `format` unabhängig von
+  `caps.media_types` fest auf Video — Registry lehnte jeden
+  Audio-Receiver mit gesetzten `media_types` mit HTTP 400 ab, jetzt aus
+  `media_types` abgeleitet (betrifft auch künftige Audio-Receiver
+  anderer Nodes); (2) der SAP-`Announcer` band seinen Socket auf die
+  eigene Origin-Adresse — auf der Dev-Maschine wählte der Kernel dadurch
+  `lo` als Multicast-Interface (kein `MULTICAST`-Flag dort), Pakete
+  verschwanden lautlos; behoben durch `UNSPECIFIED`-Bind (Routing-Tabelle
+  entscheidet), technisch auch für reale Mehr-Interface-Hosts korrekter.
+  Live verifiziert: ein unabhängiger, von Hand geschriebener
+  Python-SAP-Parser bestätigte echte Pakete; ein voller
+  Drei-Instanzen-Durchlauf (`omp-source` → Source-Gateway → echtes
+  AES67/RTP-Multicast + SAP → Sink-Gateway, **rein per SAP entdeckt,
+  kein vorgegebener Port**) zeigte per `mxl-info` einen real über die
+  Zeit wachsenden Ziel-Flow. Gegenprobe gegen `aes67-linux-daemon`
+  bewusst nicht Teil dieser Scheibe (im Text unten als
+  Verifikationswerkzeug genannt, ausdrücklich keine Dependency) — der
+  interne Pfad ist bereits doppelt real verifiziert; Test gegen echte
+  Dante-Hardware bleibt zurückgestellt (19.5 Frage 3).
 - **Teil 4 — `omp-ndi-gateway` nach §6.5:** `omp-mediaio`-Modul
   `ndi` (Feature, baut ohne SDK — s. 19.3b-Korrektur), Gateway-Node
   in beiden Richtungen. Verifikation: NDI-Runtime auf der
