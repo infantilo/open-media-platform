@@ -8154,3 +8154,88 @@ dokumentierte `admin`-Nutzer, keine Test-Instanzen übrig).
 Schreib-API für Import/Versionierung fremder Microservices) bleiben
 bewusst zurückgestellt, wie in der Priorisierung (Kapitel 18)
 festgehalten.
+
+## 2026-07-19 (Nachtrag 34) — §7.6: stabile Konsolen-Rolle über einen
+Prozess-Restart hinweg
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §7.6-Nachtrag — der zweite,
+bisher offen gebliebene Teil der Priorität #2 (K7-Teil-1 selbst war
+bereits am 2026-07-17 erledigt). Lücke laut Doku: ein Operator mit
+offener Kiosk-Konsole (`/console/<workflowId>/<nodeRoleId>`) verliert
+nach einem Prozess-Restart (K7-Teil-1: gleiche Launcher-Instanz-ID,
+aber neue NMOS-Node-ID) unbemerkt die Verbindung zum jetzt toten alten
+Node — „das Operator-UI muss der Übernahme unmerklich folgen", tut es
+aber bislang nicht.
+
+**Root Cause (Code gelesen, nicht vermutet):** `consoles.NodeRoleID`
+ist bereits korrekt die stabile Launcher-Instanz-ID
+(`orchestrator/internal/consoles/resolve.go:98-103`), und
+`GET /api/v1/me/consoles` löst bei jedem Aufruf frisch auf — das
+Backend war nie das Problem. Der Bruch lag rein im Client:
+`ui/shell/shell.ts`s `renderShell()` rief `fetchConsoles()` genau
+einmal beim Seitenaufbau auf, danach nie wieder; `console-view.ts`s
+`setEntries()` prüfte nur, ob die aktive `nodeRoleId` noch in der
+(neuen) Liste vorkommt (`stillValid`) — nicht, ob sich deren
+`uiBundleUrl` (trägt die aktuelle Node-ID) geändert hat. Nach einem
+Restart blieb die Rolle also "gültig", die längst tote alte
+`uiBundleUrl` aber unverändert gemountet.
+
+**Umsetzung:**
+- `ui/shell/console-logic.ts` (neu, reine Logik + `console-logic_test.ts`,
+  6 Fälle): `pickActiveEntry(entries, activeNodeRoleId, previousUrl,
+  preselectNodeRoleId)` — entscheidet, ob/welche Rolle (neu) aktiviert
+  werden muss. Aus `console-view.ts#setEntries` herausgezogen, damit
+  die eigentliche Entscheidung `deno test`-prüfbar ist (DOM/Netzwerk
+  bleiben in der Komponente selbst, gleiches Trennungsmuster wie
+  `ui/graph/groups.ts`).
+- `console-view.ts#setEntries`: vergleicht jetzt `uiBundleUrl` der
+  aktiven Rolle vor/nach dem Aufruf; bei Änderung remountet
+  `#activate()` das Bundle. Kurzer „Lädt …"-Platzhalter während des
+  `mountUIBundle()`-Awaits, statt einer leeren Fläche.
+- `shell.ts`: neue `watchConsoleEntries()` — SSE-first
+  (`node.added`/`node.removed`/`lost-events`, Registry-Poller feuert
+  diese bereits) mit 30s-Poll-Fallback (gleiches Muster wie
+  `hosts-view.ts`/`alarm-view.ts`), ruft bei jedem Trigger erneut
+  `fetchConsoles()` + `view.setEntries(...)` auf. An allen drei
+  Stellen verdrahtet, die eine `<omp-console-view>` mounten (Kiosk-
+  Route mit festem `nodeRoleId`, Workflow-gescopte Route, "alle
+  Konsolen"-Route) — jede mit ihrer eigenen `selectEntries`-
+  Filterfunktion, damit ein Refresh dieselbe Teilmenge wie beim
+  ursprünglichen Mount neu auflöst. Bewusst **kein** Wechsel des
+  gesamten Ansicht-Modus bei einem Refresh (Engineering↔Console,
+  Ein-↔Mehr-Workflow-Auswahl) — das behandelt §7.6 nicht, nur "dieselbe
+  schon offene Rolle folgt einem Prozesswechsel".
+
+**Verifiziert (echte Prozesse, kein Mock):** `deno check`/`deno test`
+grün (56 Tests, davon 6 neu für `pickActiveEntry`), `make ui` bündelt
+28 statt 27 Module. Live-Ende-zu-Ende gegen einen echten Orchestrator/
+Registry/NATS/Postgres-Stack — bewusst mit `nodes/mock` (nicht dem
+`sleep`-Platzhalter aus den vorigen zwei Sitzungen), weil ein echter
+IS-04-Registrierungszyklus mit `-ui-bundle` gebraucht wird: Mock-
+Instanz über den Launcher gestartet, Test-Operator-Nutzer + `operate`-
+Rollenbindung auf die Instanz-ID angelegt, Kiosk-Route in einem echten
+headless Chromium geöffnet (eingeloggt als Test-Operator) — Mocks
+eigenes Beispiel-UI-Bundle mountete real (`node-id`-Attribut =
+ursprüngliche NMOS-Node-ID, per CDP-Netzwerk-Trace bestätigt: echte
+`ui/manifest.json` + `ui/bundle.js`-Requests). Dann den Mock-Prozess
+per `kill -9` beendet (echter unerwarteter Abbruch, K7-Teil-1 startete
+ihn automatisch mit derselben Instanz-ID, aber neuer NMOS-Node-ID neu —
+per Registry-Query bestätigt). Ohne jede manuelle Aktion in der bereits
+offenen Browser-Session: `node-id`-Attribut wechselte auf die neue
+Node-ID, ein zweites Paar `ui/manifest.json`/`ui/bundle.js`-Requests
+gegen die neue Node-ID lief auf, und `Page.getNavigationHistory` zeigte
+weiterhin genau einen Navigationseintrag — der Wechsel geschah beweisbar
+ohne Seiten-Reload, exakt das „unmerklich" aus der Nutzerfrage. Alle
+Testartefakte danach entfernt: Instanz gestoppt, Test-Operator-Nutzer +
+Rollenbindung gelöscht, Chromium/Mock/Test-Orchestrator-Prozesse
+gekillt, Postgres unverändert (nur der dokumentierte `admin`-Nutzer
+sowie bereits vorbestehende Bindungen aus früheren Sitzungen, keine
+Testartefakte übrig).
+
+**Damit ist §7.6 (Priorität #2 der Kapitel-18-Liste) vollständig** —
+K7-Teil-1 (2026-07-17) plus diese Ergänzung. Nicht Teil dieser Scheibe:
+ein zukünftiges echtes Hot-Standby-Failover (§7.3d, Teil 4, andere
+Instanz-ID) bräuchte eine eigene Auflösung serverseitig
+(Rollenbindung → aktuell aktive Instanz einer Redundanzgruppe) — dieser
+Schritt deckt nur den bereits existierenden K7-Teil-1-Neustart-Fall
+ab, wie in §7.6 selbst abgegrenzt.

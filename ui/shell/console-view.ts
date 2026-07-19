@@ -7,6 +7,7 @@
 // Bei genau einem Eintrag wird direkt dessen Bundle gezeigt; bei mehreren
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
 import { mountUIBundle } from "./ui-bundle.ts";
+import { pickActiveEntry } from "./console-logic.ts";
 
 export interface ConsoleEntry {
   workflowId: string;
@@ -36,14 +37,16 @@ export class ConsoleView extends HTMLElement {
 
   // Setzt die Konsolen-Liste dieses Nutzers (aus /api/v1/me/consoles) und
   // wählt — falls noch keine Auswahl besteht oder die bisherige Auswahl
-  // weggefallen ist — einen Eintrag zum Anzeigen.
+  // weggefallen ist — einen Eintrag zum Anzeigen. Aufrufbar auch
+  // wiederholt mit einer frisch aufgelösten Liste (§7.6, Kapitel-10-
+  // Ergänzung 2026-07-17: "Operator-UI muss der Übernahme unmerklich
+  // folgen") — shell.ts pollt/lauscht dafür live, s. dort.
   async setEntries(entries: ConsoleEntry[], preselectNodeRoleId?: string) {
-    this.#entries = entries;
-    const stillValid = this.#entries.some((e) => e.nodeRoleId === this.#activeNodeRoleId);
-    const preselected = preselectNodeRoleId
-      ? this.#entries.find((e) => e.nodeRoleId === preselectNodeRoleId)
+    const previousUrl = this.#activeNodeRoleId
+      ? this.#entries.find((e) => e.nodeRoleId === this.#activeNodeRoleId)?.uiBundleUrl
       : undefined;
 
+    this.#entries = entries;
     this.#renderTabs();
 
     if (entries.length === 0) {
@@ -55,11 +58,8 @@ export class ConsoleView extends HTMLElement {
       return;
     }
 
-    if (preselected) {
-      await this.#activate(preselected.nodeRoleId);
-    } else if (!stillValid) {
-      await this.#activate(entries[0].nodeRoleId);
-    }
+    const toActivate = pickActiveEntry(entries, this.#activeNodeRoleId, previousUrl, preselectNodeRoleId);
+    if (toActivate) await this.#activate(toActivate);
   }
 
   #renderTabs() {
@@ -82,6 +82,16 @@ export class ConsoleView extends HTMLElement {
     const entry = this.#entries.find((e) => e.nodeRoleId === nodeRoleId);
     this.#panel.replaceChildren();
     if (!entry) return;
+
+    // Kurzer Platzhalter statt einer leeren Fläche während des
+    // await mountUIBundle() unten — v. a. bei einem durch §7.6 neu
+    // ausgelösten Remount (Rolle jetzt auf anderer Node-ID) macht das
+    // sichtbar, dass gerade übernommen wird, statt kommentarlos zu
+    // flackern.
+    const loading = document.createElement("p");
+    loading.textContent = "Lädt …";
+    loading.style.cssText = "color:#999;";
+    this.#panel.appendChild(loading);
 
     const mounted = await mountUIBundle(this.#panel, entry.uiBundleUrl);
     if (!mounted) {

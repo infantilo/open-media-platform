@@ -21,6 +21,7 @@
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
+import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
 // gleicher Grund wie beim console-view.ts-Fall oben. app-shell.ts
 // importiert seinerseits flow-canvas.ts/hosts-view.ts/workflows-view.ts
@@ -60,6 +61,54 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   return { hasEngineeringAccess: body.hasEngineeringAccess, consoles: body.consoles ?? [] };
 }
 
+// §7.6-Ergänzung (docs/END-GOAL-FEATURES.md, 2026-07-17: "Operator-UI
+// muss der Übernahme unmerklich folgen"): eine bereits offene Kiosk-
+// Konsole hielt vor diesem Schritt für immer die beim Seitenaufbau
+// aufgelöste `uiBundleUrl` — nach einem Prozess-Neustart (K7-Teil-1,
+// gleiche Rollen-/Instanz-ID, aber neue NMOS-Node-ID) zeigte sie
+// unbemerkt weiter auf den toten alten Node, bis jemand von Hand neu
+// lud. watchConsoleEntries() löst `/api/v1/me/consoles` deshalb erneut
+// auf, sobald sich das Node-Inventar ändert (SSE) bzw. spätestens alle
+// 30s (Poll-Fallback, falls SSE gerade "degraded"/"disconnected" ist) —
+// dieselbe SSE-first-mit-Poll-Fallback-Kadenz wie hosts-view.ts/
+// alarm-view.ts. `console-view.ts#setEntries` selbst erkennt eine
+// geänderte `uiBundleUrl` für die aktive Rolle und remountet nur dann
+// (kein sichtbarer Effekt bei einem Refresh ohne echte Änderung).
+// Bewusst NICHT Teil dieses Schritts: ein Wechsel des ganzen
+// Ansicht-Modus (Engineering↔Console, Ein-↔Mehr-Workflow-Auswahl) durch
+// geänderte Rollenbindungen selbst — das behandelt §7.6 nicht, hier
+// geht es nur um "dieselbe schon offene Konsolen-Rolle folgt einem
+// Prozesswechsel", nicht um Autorisierungsänderungen mitten in der
+// Sitzung.
+const CONSOLE_REFRESH_EVENT_TYPES = new Set(["node.added", "node.removed", "lost-events"]);
+const CONSOLE_POLL_FALLBACK_INTERVAL_MS = 30000;
+
+function watchConsoleEntries(
+  view: ConsoleView,
+  selectEntries: (consoles: ConsoleEntry[]) => ConsoleEntry[],
+  preselectNodeRoleId?: string,
+) {
+  const refresh = async () => {
+    const { consoles } = await fetchConsoles();
+    await view.setEntries(selectEntries(consoles), preselectNodeRoleId);
+  };
+
+  connectionMonitor.addEventListener("sse-message", (ev: Event) => {
+    let parsed: { type: string };
+    try {
+      parsed = JSON.parse((ev as CustomEvent<string>).detail);
+    } catch {
+      return;
+    }
+    if (CONSOLE_REFRESH_EVENT_TYPES.has(parsed.type)) void refresh();
+  });
+  // Kein disconnectedCallback-Äquivalent nötig: die Kiosk-Route ist kein
+  // SPA-Router-Ziel (jeder Routenwechsel ist ein echter Seitenwechsel,
+  // s. Datei-Kommentar oben zu spaFallback) — Listener/Intervall leben
+  // ohnehin nur so lange wie die Seite selbst.
+  window.setInterval(() => void refresh(), CONSOLE_POLL_FALLBACK_INTERVAL_MS);
+}
+
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
@@ -67,9 +116,11 @@ async function renderShell(root: HTMLElement, username: string | null) {
 
   if (kioskMatch) {
     const [, , nodeRoleId] = kioskMatch;
+    const selectEntries = (cs: ConsoleEntry[]) => cs.filter((c) => c.nodeRoleId === nodeRoleId);
     const view = document.createElement("omp-console-view") as ConsoleView;
     root.replaceChildren(view);
-    await view.setEntries(consoles.filter((c) => c.nodeRoleId === nodeRoleId), nodeRoleId);
+    await view.setEntries(selectEntries(consoles), nodeRoleId);
+    watchConsoleEntries(view, selectEntries, nodeRoleId);
   } else if (hasEngineeringAccess || consoles.length === 0) {
     // Kein Rollenbindungs-Treffer überhaupt (typischerweise: noch keine
     // Rollenbindungen angelegt) fällt bewusst auf Engineering zurück —
@@ -91,9 +142,11 @@ async function renderShell(root: HTMLElement, username: string | null) {
     const scoped = workflowMatch ? consoles.filter((c) => c.workflowId === workflowMatch[1]) : [];
 
     if (workflowMatch && scoped.length > 0) {
+      const selectEntries = (cs: ConsoleEntry[]) => cs.filter((c) => c.workflowId === workflowMatch[1]);
       const view = document.createElement("omp-console-view") as ConsoleView;
       root.replaceChildren(view);
-      await view.setEntries(scoped);
+      await view.setEntries(selectEntries(consoles));
+      watchConsoleEntries(view, selectEntries);
     } else if (workflowIds.length <= 1) {
       // Genau ein (oder gar kein) Workflow unter den zugewiesenen
       // Rollen — die Auswahl-Kachel wäre ein unnötiger Umweg zu genau
@@ -103,6 +156,7 @@ async function renderShell(root: HTMLElement, username: string | null) {
       const view = document.createElement("omp-console-view") as ConsoleView;
       root.replaceChildren(view);
       await view.setEntries(consoles);
+      watchConsoleEntries(view, (cs) => cs);
     } else {
       // §12.5 offene Frage 5 ("Kachel-Auswahl nach jedem Login (Vorschlag)
       // oder automatisch der zuletzt benutzte Workflow mit Umschalter?"):

@@ -1406,6 +1406,24 @@ klein genug, um **direkt mit K7-Teil-1** mitgenommen zu werden (beide
 brauchen dieselbe Grundlage: eine Rolle, die über einen Prozesswechsel
 hinweg stabil bleibt), statt auf Hot-Standby (Teil 4) zu warten.
 
+✅ **Konsolen-Rollen-Auflösung erledigt 2026-07-19** (`docs/decisions.md`
+Nachtrag 34) — Backend war bereits korrekt (`consoles.NodeRoleID` ist
+die stabile Instanz-ID, `GET /api/v1/me/consoles` löst live auf); die
+Lücke lag rein im Client (`shell.ts` fetchte Konsolen nur einmal beim
+Seitenaufbau, `console-view.ts` remountete bei unveränderter
+`nodeRoleId` nie neu, selbst wenn deren `uiBundleUrl` auf eine neue
+Node-ID zeigte). Fix: `shell.ts` löst `/api/v1/me/consoles` jetzt
+SSE-first mit 30s-Poll-Fallback erneut auf, `console-view.ts` erkennt
+eine geänderte `uiBundleUrl` für die aktive Rolle und remountet gezielt
+(reine Entscheidungslogik in `console-logic.ts`, `deno test`-geprüft).
+Live per CDP mit einem echten `nodes/mock`-Prozess verifiziert:
+`kill -9` → K7-Teil-1-Neustart mit neuer NMOS-Node-ID → die bereits
+offene Kiosk-Konsole zeigte per Netzwerk-Trace beweisbar das neue
+Bundle, ganz ohne Seiten-Reload (`Page.getNavigationHistory` blieb bei
+einem Eintrag). Damit ist §7.6 vollständig; ein echtes Hot-Standby-
+Failover auf eine **andere** Instanz-ID (§7.3d Teil 4) bräuchte
+weiterhin eine eigene, noch nicht gebaute serverseitige Auflösung.
+
 ---
 
 ## 8. Elgato Stream Deck ohne Hersteller-Treiber (Hardware-Bedienoberfläche)
@@ -3104,9 +3122,13 @@ Kapiteln, nicht hier wiederholt.
    echten Bug bei noch nicht abgelaufenen alten NMOS-Registrierungen
    gefunden und gefixt. Die „stabile Konsolen-Rolle" aus §7.6 (die
    Operator-Konsolen-Route selbst über einen Prozesswechsel hinweg
-   stabil auflösen) ist **noch offen** — §1.6s `/console/default/
-   <nodeRoleId>`-Link nutzt weiterhin die zum Zeitpunkt des Panel-
-   Öffnens aufgelöste ID, kein eigener Re-Resolve-Mechanismus.
+   stabil auflösen) ✅ **erledigt 2026-07-19** (`docs/decisions.md`
+   Nachtrag 34) — Client löst `/api/v1/me/consoles` jetzt SSE-first mit
+   Poll-Fallback live neu auf und remountet eine bereits offene Konsole
+   automatisch, wenn sich die dahinterliegende Node-ID ändert (Restart);
+   live mit `kill -9` gegen einen echten `nodes/mock`-Prozess per
+   CDP-Netzwerk-Trace ohne Seiten-Reload bestätigt. §7.6 damit
+   vollständig.
 3. **§17 Teil 1–3 — Katalog-Beschreibungen + Laufende-Instanzen-Tab +
    Alarm-View.** Sichtbarer UI-Qualitätssprung, baut überwiegend auf
    bereits vorhandenen Daten/Events, kein Architektur-Risiko. Teil 4/5
