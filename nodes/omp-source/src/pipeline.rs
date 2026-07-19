@@ -17,7 +17,7 @@
 //! Testtons zur Auswahl hat.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -38,6 +38,12 @@ pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 pub const SAMPLE_RATE: u32 = 48000;
 pub const CHANNELS: u32 = 2;
+/// Feste Lowres-Vorschau-Zielauflösung (Kapitel 15 Teil 2,
+/// docs/END-GOAL-FEATURES.md §15.4, Entscheidung 2026-07-19: fest statt
+/// pro Workflow konfigurierbar — kleinster Schritt, s.
+/// `docs/decisions.md` Nachtrag 37).
+pub const LOWRES_WIDTH: u32 = 320;
+pub const LOWRES_HEIGHT: u32 = 180;
 /// Fixer Begleitton — akustisch unterscheidbar von den 220 Hz-Vielfachen,
 /// die C11/C12s dynamisch angelegte Kanäle/Items verwenden, damit ein
 /// Source-Testton im Mix erkennbar bleibt.
@@ -47,6 +53,10 @@ pub struct Config {
     pub domain: String,
     pub flow_id: String,
     pub audio_flow_id: String,
+    /// Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4): zweiter,
+    /// eigenständiger MXL-Flow in `LOWRES_WIDTH`×`LOWRES_HEIGHT` —
+    /// dieselbe Flow-UUID-== MXL-flow-id-Konvention wie `flow_id`.
+    pub lowres_flow_id: String,
     pub label: String,
     pub initial_pattern: String,
     pub width: u32,
@@ -81,6 +91,12 @@ struct Pipeline {
     video_flowed: Arc<AtomicBool>,
     _mxl_output: MxlVideoOutput,
     _mxl_audio_output: MxlAudioOutput,
+    /// `Arc`, weil `PipelineHandle` (anderer Thread) darauf `set_active`
+    /// aufrufen muss (Kapitel 15 Teil 2) — `Pipeline` selbst hält die
+    /// zweite Referenz nur, damit der Writer-Thread/die MXL-Flow-
+    /// Ressource am Leben bleibt (`Drop`), s. `_mxl_output` oben.
+    lowres_output: Arc<MxlVideoOutput>,
+    lowres_active_count: Arc<AtomicUsize>,
 }
 
 impl Pipeline {
@@ -130,6 +146,9 @@ impl Pipeline {
         let mxl_queue = gst::ElementFactory::make("queue")
             .build()
             .map_err(|e| PipelineError(format!("queue (mxl): {e}")))?;
+        let lowres_queue = gst::ElementFactory::make("queue")
+            .build()
+            .map_err(|e| PipelineError(format!("queue (lowres): {e}")))?;
 
         pipeline
             .add(&videotestsrc)
@@ -138,6 +157,7 @@ impl Pipeline {
             .and_then(|()| pipeline.add(&fps_queue))
             .and_then(|()| pipeline.add(&videosink))
             .and_then(|()| pipeline.add(&mxl_queue))
+            .and_then(|()| pipeline.add(&lowres_queue))
             .map_err(|e| PipelineError(format!("add elements: {e}")))?;
 
         gst::Element::link_many([&videotestsrc, &caps, &tee])
@@ -146,6 +166,12 @@ impl Pipeline {
             .map_err(|e| PipelineError(format!("link fps branch: {e}")))?;
         gst::Element::link_many([&tee, &mxl_queue])
             .map_err(|e| PipelineError(format!("link mxl branch: {e}")))?;
+        // Kapitel 15 Teil 2: dritter `tee`-Zweig für die Lowres-Vorschau —
+        // `MxlVideoOutput::new` unten baut selbst `videoscale`/`videorate`/
+        // `capsfilter` auf `LOWRES_WIDTH`×`LOWRES_HEIGHT` ein (s. dessen
+        // Doku in `omp-mediaio::mxl`), hier reicht ein reiner `queue`-Tap.
+        gst::Element::link_many([&tee, &lowres_queue])
+            .map_err(|e| PipelineError(format!("link lowres branch: {e}")))?;
 
         let mxl_context = Arc::new(
             MxlContext::new(&config.domain)
@@ -164,6 +190,30 @@ impl Pipeline {
         )
         .map_err(PipelineError)?;
         mxl_output.set_active(true);
+
+        // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4,
+        // docs/decisions.md Nachtrag 37): der Lowres-Sender wird bewusst
+        // NICHT `set_active(true)` — der Valve bleibt in seinem
+        // `MxlVideoOutput::new`-Default (`drop=true`) zu, bis
+        // `PipelineHandle::activate_lowres_preview()` (referenzgezählt)
+        // ihn öffnet ("nur bei aktivem Vorschau-Bedarf zugeschaltet",
+        // Nutzerentscheidung). Der MXL-Flow selbst existiert/ist
+        // registriert ab hier (SDK-Grenze, s. docs/decisions.md) — nur
+        // das tatsächliche Schreiben von Grains ist gated.
+        let lowres_output = Arc::new(
+            MxlVideoOutput::new(
+                &pipeline,
+                &lowres_queue,
+                mxl_context.clone(),
+                &config.lowres_flow_id,
+                &format!("{} Lowres", config.label),
+                LOWRES_WIDTH,
+                LOWRES_HEIGHT,
+                FRAMERATE_NUMERATOR,
+                FRAMERATE_DENOMINATOR,
+            )
+            .map_err(PipelineError)?,
+        );
 
         let audiotestsrc = gst::ElementFactory::make("audiotestsrc")
             .property("is-live", true)
@@ -218,6 +268,8 @@ impl Pipeline {
             video_flowed,
             _mxl_output: mxl_output,
             _mxl_audio_output: mxl_audio_output,
+            lowres_output,
+            lowres_active_count: Arc::new(AtomicUsize::new(0)),
         })
     }
 
@@ -253,6 +305,8 @@ impl Pipeline {
 pub struct PipelineHandle {
     videotestsrc: gst::Element,
     video_flowed: Arc<AtomicBool>,
+    lowres_output: Arc<MxlVideoOutput>,
+    lowres_active_count: Arc<AtomicUsize>,
 }
 
 impl PipelineHandle {
@@ -264,6 +318,38 @@ impl PipelineHandle {
     /// ist — genutzt als `MediaReadySource::Probe`, s. `main.rs`.
     pub fn media_ready(&self) -> bool {
         self.video_flowed.load(Ordering::Relaxed)
+    }
+
+    /// Aktiviert die Lowres-Vorschau referenzgezählt (Kapitel 15 Teil 2)
+    /// — erst der Übergang 0→1 öffnet den Valve tatsächlich, jeder
+    /// weitere Aufruf erhöht nur den Zähler. Mehrere gleichzeitige
+    /// Vorschau-Konsumenten (z. B. künftig Bildmischer + Multiviewer,
+    /// Teil 3) schließen den Valve dadurch erst, wenn wirklich niemand
+    /// mehr zusieht.
+    pub fn activate_lowres_preview(&self) {
+        if self.lowres_active_count.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.lowres_output.set_active(true);
+        }
+    }
+
+    /// Gibt eine Aktivierung wieder frei; schließt den Valve erst, wenn
+    /// der Zähler auf 0 zurückfällt. Sättigt bei 0 statt zu unterlaufen
+    /// (ein unbalancierter zusätzlicher `release`-Aufruf bleibt folgenlos
+    /// statt den Zähler negativ/riesig zu wickeln).
+    pub fn release_lowres_preview(&self) {
+        let prev = self
+            .lowres_active_count
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
+                Some(c.saturating_sub(1))
+            })
+            .unwrap_or(0);
+        if prev == 1 {
+            self.lowres_output.set_active(false);
+        }
+    }
+
+    pub fn lowres_preview_active(&self) -> bool {
+        self.lowres_active_count.load(Ordering::SeqCst) > 0
     }
 }
 
@@ -285,6 +371,8 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         videotestsrc: pipeline.videotestsrc.clone(),
         video_flowed: pipeline.video_flowed.clone(),
+        lowres_output: pipeline.lowres_output.clone(),
+        lowres_active_count: pipeline.lowres_active_count.clone(),
     }));
 
     loop {

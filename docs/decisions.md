@@ -8374,3 +8374,101 @@ etwas Vorlauf zeigte die Rampe sauber. UI-Bundle-Steuerung aller drei
 neuen Felder (An-Pegel/Off-Pegel/Transition) per echtem Chromium-Klick
 verifiziert, Backend zeigte exakt die gesetzten Werte. Alle
 Testartefakte danach entfernt.
+
+## 2026-07-19 (Nachtrag 37) — Kapitel 15 Teil 2: zweiter,
+referenzgezählter Lowres-MXL-Sender in `omp-source`
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §15.4 Teil 2 — ein zweiter, echter
+MXL-Video-Sender in fester Lowres-Auflösung, als IS-04-Flow der
+Highres-Quelle zugeordnet, statt des heutigen Transcode-on-Demand-
+MJPEG-Pfads. Zwei offene Fragen (§15.5) vom Nutzer vorab entschieden:
+(1) feste Lowres-Auflösung statt pro Workflow konfigurierbar (Vorschlag
+übernommen), (2) Lowres-Sender **nur bei aktivem Vorschau-Bedarf
+zugeschaltet** statt immer mitlaufend (Nutzer wählte die aufwendigere,
+nicht die empfohlene Option — Referenzzählung nötig, s. u.).
+
+**Recherche vor der Umsetzung** (Work-Rule §0 Punkt 9, IS-04-Spec-
+Detail nicht geraten): `urn:x-nmos:tag:grouphint/v1.0` gegen die echte
+AMWA-NMOS-Parameter-Registry verifiziert
+(`nmos-parameter-registers/tags/grouphint.md`) — Format
+`"<group-name>:<role-in-group>[:<group-scope>]"`, laut Spec-Text
+("Natural groups applies only to NMOS senders and receivers") ein
+**Sender/Receiver**-Tag, **nicht** Flow/Source, obwohl §15.3b/§15.4 des
+eigenen Dokuments "IS-04-Flow-Discovery"/"Grouphint-Tag" ohne
+Ressourcentyp-Angabe formulieren — hier die Spec befolgt, nicht die
+ungenaue Doku-Formulierung, beide betroffenen Sender (Highres +
+Lowres) tragen das Tag mit derselben Gruppen-ID (Highres-Flow-UUID)
+und den Rollen `high`/`low`.
+
+**Architektur-Erkenntnis, die die Umsetzung geprägt hat:** IS-04-
+Ressourcen (Sender+Flow+Source) werden in `omp-node-sdk::node::start()`
+einmalig beim Node-Start aus `NodeConfig.senders` gebaut — es gibt
+keine SDK-API, Sender/Flows nachträglich zur Laufzeit zu (de-)
+registrieren (kein `DELETE`-Aufruf existiert überhaupt im
+`RegistryClient`). „Nur bei Bedarf zugeschaltet" kann sich deshalb
+nur auf das tatsächliche **Schreiben von MXL-Grains** beziehen, nicht
+auf die IS-04-Sichtbarkeit selbst — der Lowres-Sender ist ab Node-Start
+immer discoverbar, aber inaktiv. Das trifft sich mit einem bereits
+vorhandenen Mechanismus: `MxlVideoOutput`s `valve`-Element startet
+bereits mit `drop=true` (inaktiv) per Konstruktor-Default (unabhängig
+von diesem Schritt schon so), `Output::set_active`/`is_active` schalten
+ihn um (`valve.drop = !active`) — exakt der Aktivierungs-Hebel, der
+gebraucht wurde, ohne dass `MxlVideoOutput` selbst geändert werden
+musste.
+
+**Umsetzung:**
+- `omp-node-sdk/src/node.rs`: `SenderSpec` bekommt ein additives
+  `tags: HashMap<String, Vec<String>>`-Feld (Default leer, kein
+  Verhaltensunterschied für bestehende Aufrufer), in `start()`s
+  Sender-Aufbau nach `is04::Sender::tags` durchgereicht (das Feld
+  existierte auf `Sender` selbst bereits, nur `SenderSpec` konnte es
+  bisher nicht setzen).
+- `nodes/omp-mediaio` unverändert — `MxlVideoOutput` unterstützte
+  Mehrfachinstanzen pro Pipeline bereits (Präzedenzfall: `omp-ograf`s
+  Fill+Key), kein Singleton-Problem.
+- `nodes/omp-source/src/pipeline.rs`: dritter `tee`-Zweig
+  (`video_tee → lowres_queue → MxlVideoOutput(320×180)`, `videoscale`/
+  `videorate`/`capsfilter` baut `MxlVideoOutput::new` selbst intern
+  auf, kein eigener Downscale-Code nötig) — bewusst **nicht**
+  `set_active(true)` nach dem Bau, bleibt im Valve-Default (inaktiv).
+  `PipelineHandle` bekommt `activate_lowres_preview()`/
+  `release_lowres_preview()` (Referenzzählung über `AtomicUsize`,
+  `fetch_add`/`fetch_update` mit `saturating_sub`, kein Unterlauf bei
+  unbalanciertem Extra-`release`) + `lowres_preview_active()`.
+- `nodes/omp-source/src/main.rs`: zweiter `SenderSpec` (Lowres-Flow,
+  320×180, `label: "<Label> Lowres"`), beide Video-Sender bekommen das
+  `grouphint`-Tag-Paar. Neue readonly Deskriptor-Parameter
+  `lowresFlowId`/`lowresActive`, neue Methoden
+  `activateLowresPreview`/`releaseLowresPreview` (keine Argumente) —
+  erster Methoden-Eintrag überhaupt für `omp-source` (`methods: vec![]`
+  vorher).
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build`/`cargo
+clippy --all-targets` sauber für `omp-node-sdk`/`omp-source`,
+`cargo build --workspace` bestätigt: die additive `SenderSpec.tags`
+bricht keinen der neun anderen Node-Typen (`..Default::default()`
+überall unverändert gültig). Live gegen einen echten, per `make
+start`-Äquivalent laufenden Orchestrator/Registry/NATS-Stack: `GET
+/x-nmos/query/v1.3/senders` zeigte drei Sender (Highres/Lowres-Video +
+Audio), Highres- und Lowres-Sender mit exakt demselben
+Gruppen-Präfix (`<flow-id>:high`/`<flow-id>:low`); `mxl-info -l`
+zeigte zwei eigenständige Video-Flows. `mxl-info -f <lowres-flow>`
+zeigte `Head index: 0`, über 2s Wartezeit unverändert (kein einziges
+Grain geschrieben) — der Highres-Flow-Index wuchs im selben Zeitraum
+sichtbar weiter, keine Kopplung. Nach `POST .../methods/
+activateLowresPreview`: `lowresActive` wechselte auf `true`, der
+Lowres-Flow-Index begann sofort zu wachsen. Referenzzählung bestätigt:
+zweimal aktiviert, einmal freigegeben → weiterhin aktiv (Index wuchs
+weiter); zweites `release` → sofort inaktiv, Index blieb über 1,5s
+exakt stehen; ein zusätzlicher, unbalancierter `release`-Aufruf blieb
+folgenlos (kein Unterlauf, `lowresActive` weiterhin `false`). Der
+Highres-Flow lief währenddessen ununterbrochen weiter (25fps
+durchgehend im Log). Alle Testartefakte danach entfernt (Instanz
+gestoppt, Orchestrator-Prozess gekillt, `/dev/shm/omp-mxl` geleert —
+tmpfs, dokumentiert flüchtig).
+
+**Nicht Teil dieser Scheibe:** Teil 3 (Bildmischer/Multiviewer lesen
+bevorzugt lowres — die eigentlichen Konsumenten der hier gebauten
+Infrastruktur) und Teil 4 (`omp-ograf`/`omp-player` als weitere
+Lowres-Quellen, analoger Handgriff) bleiben offen, wie im Phasenplan
+vorgesehen.

@@ -2840,6 +2840,20 @@ wie heute pro Node-Typ hartkodiert.
   als IS-04-Flow der Highres-Quelle zugeordnet (Grouphint-Tag).
   Verifikation: `mxl-info -g` zeigt zwei Flows pro Quelle, beide mit
   Daten.
+  ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 37, in
+  `omp-source` als Pilot-Node wie schon Teil 1) — Nutzerentscheidung:
+  feste 320×180 statt konfigurierbar, **nur bei aktivem Vorschau-Bedarf
+  zugeschaltet** statt immer mitlaufend (aufwendigere der beiden §15.5-
+  Optionen). `urn:x-nmos:tag:grouphint/v1.0` gegen die echte AMWA-
+  Registry verifiziert (Sender-Tag, nicht Flow/Source, abweichend von
+  der ungenauen Doku-Formulierung hier). Referenzgezählte
+  `activateLowresPreview`/`releaseLowresPreview`-Methoden schalten den
+  bereits vorhandenen `MxlVideoOutput`-Valve — der Sender ist ab
+  Node-Start immer IS-04-sichtbar (SDK kennt keine nachträgliche
+  Registrierung), aber ohne Aktivierung werden nachweislich keine
+  Grains geschrieben (`Head index` blieb über 2s bei 0). Live
+  verifiziert: Aktivierung/Freigabe/Referenzzählung/Unterlauf-Schutz,
+  Highres-Flow lief währenddessen ununterbrochen weiter.
 - **Teil 3 — Bildmischer/Multiviewer lesen lowres.** Crosspoint-/
   Kachel-Vorschau-Reader wählen bevorzugt den Lowres-Flow; PGM-Pfad
   bleibt highres. Verifikation: RSS/CPU-Vergleich Vorher/Nachher bei
@@ -2849,16 +2863,12 @@ wie heute pro Node-Typ hartkodiert.
 
 ### 15.5 Offene Fragen an den Projektinhaber
 
-1. Feste Lowres-Zielauflösung (Vorschlag: eine feste Größe wie 320×180
-   für alle Quellen, einfach) oder pro Workflow konfigurierbar wie die
-   Highres-Auflösung selbst (mehr Konsistenz, mehr Einstell-Fläche)?
-2. Soll der zweite MXL-Sender **immer** mitlaufen (einfacher, etwas
-   MXL-Zusatzlast auch wenn gerade niemand die Vorschau braucht) oder
-   nur bei aktivem Vorschau-Bedarf zugeschaltet werden (spart Last,
-   braucht eine Aktivierungs-/Referenzzählung — ähnliches Muster wie
-   der verworfene PST-Vorschau-Versuch, `docs/decisions.md`
-   2026-07-16, jetzt ohne dessen MXL-Read-Livelock-Blocker, s.
-   2026-07-17)?
+1. ✅ **Entschieden 2026-07-19:** feste Lowres-Zielauflösung, 320×180
+   (Empfehlung übernommen) — s. `docs/decisions.md` Nachtrag 37.
+2. ✅ **Entschieden 2026-07-19:** nur bei aktivem Vorschau-Bedarf
+   zugeschaltet (nicht die empfohlene "immer mitlaufen"-Option) —
+   referenzgezählte `activate`/`release`-Methoden umgesetzt und live
+   verifiziert, s. `docs/decisions.md` Nachtrag 37.
 3. Reihenfolge relativ zu Kapitel 16 (Inter-Host-Fabrics): unabhängig,
    kann parallel/davor laufen — Bestätigung, keine echte Abhängigkeit
    gefunden.
@@ -3202,6 +3212,11 @@ Kapiteln, nicht hier wiederholt.
    CPU bei realen Mehrquellen-Setups), aber cross-cutting (mehrere
    Nodes + Workflow-Objekt) — nach den kleineren, unabhängigen Punkten
    oben eingeordnet, nicht weil weniger wichtig, sondern weil größer.
+   Teil 1 ✅ 2026-07-17/18, Teil 2 ✅ 2026-07-19
+   (`docs/decisions.md` Nachtrag 37) — referenzgezählter Lowres-
+   MXL-Sender in `omp-source`, live verifiziert. Teil 3 (Bildmischer/
+   Multiviewer lesen bevorzugt lowres) und Teil 4 (weitere
+   Lowres-Quellen) bleiben offen.
 6. **Kapitel 16 — Inter-Host-Fabrics (RDMA/Remote-Memory).** Höchster
    potenzieller Zukunftswert (Latenz, Multi-Host-Regieplatz), aber:
    (a) braucht zuerst die Grundsatzentscheidung MXL-Fabrics vs.

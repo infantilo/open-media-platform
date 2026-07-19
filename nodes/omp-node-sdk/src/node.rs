@@ -12,6 +12,7 @@
 //! veröffentlichen können. `run()` bleibt als einfacher Wrapper für Nodes
 //! ohne eigene Nutzlast (z. B. `examples/hello_node.rs`).
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,6 +79,15 @@ pub struct SenderSpec {
     /// Port welches Signal führt). `None` verhält sich unverändert wie
     /// bisher.
     pub label: Option<String>,
+    /// IS-04-Tags für diesen Sender (`is04::Sender::tags` direkt
+    /// durchgereicht) — z. B. `urn:x-nmos:tag:grouphint/v1.0` (Kapitel 15
+    /// Teil 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4): gegen die echte
+    /// AMWA-NMOS-Parameter-Registry verifiziertes Format
+    /// `"<group-name>:<role-in-group>[:<group-scope>]"`, laut Spec nur
+    /// für Sender/Receiver definiert (nicht Flow/Source, trotz
+    /// abweichender Doku-Formulierung — s. `docs/decisions.md`). Leer
+    /// (Default) verhält sich unverändert wie bisher.
+    pub tags: HashMap<String, Vec<String>>,
 }
 
 /// Flow-Angaben für einen MXL-Sender (`SenderSpec::flow`), Video **oder**
@@ -272,6 +282,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
                 .unwrap_or_else(|| format!("{} Sender {}", config.label, i + 1));
             let mut sender = Sender::new(id, &label, &device_id);
             sender.manifest_href = spec.manifest_href.clone();
+            sender.tags = spec.tags.clone();
             if let Some(transport) = &spec.transport {
                 sender.transport = transport.clone();
             }

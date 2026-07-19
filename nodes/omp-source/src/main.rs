@@ -6,6 +6,7 @@
 
 mod pipeline;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use omp_node_sdk::is04::TRANSPORT_MXL;
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, Range, SenderSpec,
-    SetError,
+    Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range,
+    SenderSpec, SetError,
 };
 use pipeline::{CHANNELS, SAMPLE_RATE};
 use serde_json::Value;
@@ -42,6 +43,7 @@ const DEFAULT_PATTERN: &str = "smpte";
 struct SourceStore {
     fps: Arc<Mutex<f64>>,
     flow_id: String,
+    lowres_flow_id: String,
     pattern: Arc<Mutex<String>>,
     pipeline: pipeline::PipelineHandle,
 }
@@ -73,8 +75,32 @@ impl ParamStore for SourceStore {
                     range: None,
                     readonly: true,
                 },
+                // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4).
+                ParamSpec {
+                    name: "lowresFlowId".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "lowresActive".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
-            methods: vec![],
+            methods: vec![
+                MethodSpec {
+                    name: "activateLowresPreview".to_string(),
+                    args: vec![],
+                },
+                MethodSpec {
+                    name: "releaseLowresPreview".to_string(),
+                    args: vec![],
+                },
+            ],
         }
     }
 
@@ -82,6 +108,8 @@ impl ParamStore for SourceStore {
         match name {
             "fps" => Some(serde_json::json!(*self.fps.lock().expect("lock poisoned"))),
             "flowId" => Some(serde_json::json!(self.flow_id)),
+            "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
+            "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
             "pattern" => Some(serde_json::json!(
                 *self.pattern.lock().expect("lock poisoned")
             )),
@@ -106,10 +134,20 @@ impl ParamStore for SourceStore {
 
     fn invoke(
         &self,
-        _name: &str,
+        name: &str,
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        match name {
+            "activateLowresPreview" => {
+                self.pipeline.activate_lowres_preview();
+                Ok(())
+            }
+            "releaseLowresPreview" => {
+                self.pipeline.release_lowres_preview();
+                Ok(())
+            }
+            _ => Err(InvokeError::Unknown),
+        }
     }
 }
 
@@ -152,6 +190,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // als auch an die IS-04-Flow-Registrierung (`SenderSpec::flow`).
     let flow_id = omp_node_sdk::idgen::new_v4();
     let audio_flow_id = omp_node_sdk::idgen::new_v4();
+    // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.4): zweiter,
+    // eigenständiger Lowres-MXL-Flow, referenzgezählt zu-/abschaltbar
+    // (docs/decisions.md Nachtrag 37).
+    let lowres_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -161,6 +203,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
+        lowres_flow_id: lowres_flow_id.clone(),
         label: label.clone(),
         initial_pattern,
         width,
@@ -189,9 +232,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
         fps: fps.clone(),
         flow_id: flow_id.clone(),
+        lowres_flow_id: lowres_flow_id.clone(),
         pattern,
         pipeline: pipeline_handle,
     });
+
+    // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.3b, docs/decisions.md
+    // Nachtrag 37): `urn:x-nmos:tag:grouphint/v1.0` gegen die echte
+    // AMWA-NMOS-Parameter-Registry verifiziertes Format
+    // "<group-name>:<role-in-group>" — laut Spec ein Sender-/Receiver-Tag
+    // (nicht Flow/Source). `flow_id` (Highres-Flow-UUID) als Gruppenname:
+    // stabil, pro Instanz eindeutig, kein zusätzlicher Bezeichner nötig.
+    let lowres_group_name = flow_id.clone();
+    let highres_group_name = flow_id.clone();
+    let lowres_sender_label = format!("{label} Lowres");
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -210,6 +264,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
+                    tags: HashMap::from([(
+                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                        vec![format!("{highres_group_name}:high")],
+                    )]),
+                    ..Default::default()
+                },
+                SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Video {
+                        id: Some(lowres_flow_id),
+                        frame_width: pipeline::LOWRES_WIDTH,
+                        frame_height: pipeline::LOWRES_HEIGHT,
+                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                    }),
+                    label: Some(lowres_sender_label),
+                    tags: HashMap::from([(
+                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                        vec![format!("{lowres_group_name}:low")],
+                    )]),
                     ..Default::default()
                 },
                 SenderSpec {
