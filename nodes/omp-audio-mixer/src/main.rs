@@ -101,6 +101,22 @@ struct ChannelState {
     /// Manueller Override (§13.2): unterbricht die Kopplung für diesen
     /// Kanal, ohne den Automatismus anderer Kanäle zu beeinflussen.
     override_enabled: bool,
+    /// Audio-Follow-Video-Pegel (§4.6 Nachtrag Punkt 3): `true` (Default)
+    /// = bisheriges Verhalten unverändert, der "Aus"-Zustand ist echte
+    /// Stille (`pipeline::set_mute`). `false` = der "Aus"-Zustand
+    /// benutzt stattdessen `follow_off_level_db` als Gain-Ziel (hörbar,
+    /// aber leise) — `mute` bleibt dabei durchgehend `false`, die
+    /// "Stille" entsteht rein über den Gain-Pegel, nicht über den
+    /// GStreamer-`mute`-Pad. Kein `Option<f64>`/`-inf`-Sentinel: JSON
+    /// kennt keine Unendlichkeit (`serde_json` würde das stillschweigend
+    /// zu `null` machen), zwei einfache, immer JSON-taugliche Felder
+    /// sind hier klarer als ein nullbarer Sonderfall.
+    follow_use_mute: bool,
+    /// Ziel-Pegel des "Aus"-Zustands in dB, nur wirksam wenn
+    /// `follow_use_mute == false` (s. dort). Default -20dB (Beispielwert
+    /// aus `docs/END-GOAL-FEATURES.md` §4.6: "z. B. -20dB statt
+    /// Vollstille").
+    follow_off_level_db: f64,
     /// Testton-Frequenz, die dieser Kanal bei `addChannel` bekam — bleibt
     /// über einen Quellwechsel hin und her erhalten, damit `setSource("")`
     /// (zurück auf intern) immer denselben, wiedererkennbaren Ton liefert
@@ -128,6 +144,8 @@ impl ChannelState {
             follow_target: String::new(),
             follow_mode: "off".to_string(),
             override_enabled: false,
+            follow_use_mute: true,
+            follow_off_level_db: -20.0,
             internal_freq,
             source: String::new(),
         }
@@ -351,6 +369,14 @@ impl ParamStore for AudioMixerStore {
                 ParamType::Boolean,
                 None,
             ));
+            // §4.6 Nachtrag Punkt 3 (Audio-Follow-Video-Pegel).
+            parameters.push(channel_param(id, "followUseMute", ParamType::Boolean, None));
+            parameters.push(channel_param(
+                id,
+                "followOffLevelDb",
+                ParamType::Number,
+                Some(Range::Number { min: -60.0, max: 0.0 }),
+            ));
 
             methods.push(MethodSpec {
                 name: format!("channel.{id}.setGain"),
@@ -427,6 +453,13 @@ impl ParamStore for AudioMixerStore {
                     kind: ParamType::Boolean,
                 }],
             });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setFollowOffLevel"),
+                args: vec![
+                    MethodArg { name: "useMute".to_string(), kind: ParamType::Boolean },
+                    MethodArg { name: "offLevelDb".to_string(), kind: ParamType::Number },
+                ],
+            });
         }
 
         Descriptor { parameters, methods }
@@ -482,6 +515,8 @@ impl ParamStore for AudioMixerStore {
             "followTarget" => Some(serde_json::json!(ch.follow_target)),
             "followMode" => Some(serde_json::json!(ch.follow_mode)),
             "overrideEnabled" => Some(serde_json::json!(ch.override_enabled)),
+            "followUseMute" => Some(serde_json::json!(ch.follow_use_mute)),
+            "followOffLevelDb" => Some(serde_json::json!(ch.follow_off_level_db)),
             _ => None,
         }
     }
@@ -718,6 +753,19 @@ impl AudioMixerStore {
                 ch.override_enabled = enabled;
                 Ok(())
             }
+            "setFollowOffLevel" => {
+                let use_mute = args
+                    .get("useMute")
+                    .and_then(Value::as_bool)
+                    .ok_or(InvokeError::Unknown)?;
+                let off_level_db = args
+                    .get("offLevelDb")
+                    .and_then(Value::as_f64)
+                    .ok_or(InvokeError::Unknown)?;
+                ch.follow_use_mute = use_mute;
+                ch.follow_off_level_db = off_level_db;
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -893,27 +941,44 @@ async fn audio_follow_video_loop(
     let ramp_generation: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some((node_id, on)) = subscription.next().await {
-        let matches: Vec<(String, String, bool)> = {
+        let matches: Vec<(String, String, bool, f64)> = {
             let channels = channels.lock().expect("lock poisoned");
             channels
                 .iter()
                 .filter(|c| {
                     !c.override_enabled && c.follow_mode != "off" && c.follow_target == node_id
                 })
-                .map(|c| (c.id.clone(), c.follow_mode.clone(), c.mute))
+                .map(|c| (c.id.clone(), c.follow_mode.clone(), c.follow_use_mute, c.follow_off_level_db))
                 .collect()
         };
 
-        for (channel_id, follow_mode, _current_mute) in matches {
-            let target_mute = !on;
+        for (channel_id, follow_mode, follow_use_mute, follow_off_level_db) in matches {
             if follow_mode == "cut" {
-                {
-                    let mut channels = channels.lock().expect("lock poisoned");
-                    if let Some(ch) = channels.iter_mut().find(|c| c.id == channel_id) {
-                        ch.mute = target_mute;
+                if follow_use_mute {
+                    // Unverändertes Verhalten vor §4.6 Punkt 3: echte
+                    // Stille über den GStreamer-`mute`-Pad.
+                    let target_mute = !on;
+                    {
+                        let mut channels = channels.lock().expect("lock poisoned");
+                        if let Some(ch) = channels.iter_mut().find(|c| c.id == channel_id) {
+                            ch.mute = target_mute;
+                        }
                     }
+                    pipeline.set_mute(channel_id.clone(), target_mute);
+                } else {
+                    // Hörbarer "Aus"-Zustand: nie stummschalten, Gain
+                    // direkt auf den Basis- bzw. Off-Pegel setzen.
+                    let base_db = {
+                        let channels = channels.lock().expect("lock poisoned");
+                        channels
+                            .iter()
+                            .find(|c| c.id == channel_id)
+                            .map(|c| c.gain_db)
+                            .unwrap_or(0.0)
+                    };
+                    pipeline.set_mute(channel_id.clone(), false);
+                    pipeline.set_gain(channel_id.clone(), if on { base_db } else { follow_off_level_db });
                 }
-                pipeline.set_mute(channel_id.clone(), target_mute);
                 continue;
             }
 
@@ -941,8 +1006,16 @@ async fn audio_follow_video_loop(
                         .map(|c| c.gain_db)
                         .unwrap_or(0.0)
                 };
-                pipeline.set_mute(channel_id_task.clone(), false);
-                let (from, to) = if on { (-60.0, base_db) } else { (base_db, -60.0) };
+                // §4.6 Nachtrag Punkt 3: die Rampe zielt bei
+                // `follow_use_mute == false` auf `follow_off_level_db`
+                // (hörbar, aber leise) statt auf -60dB+Mute — `mute`
+                // bleibt in dem Fall durchgehend `false`, unverändert
+                // vor/nach der Rampe (anders als im Mute-Zweig unten).
+                let off_db = if follow_use_mute { -60.0 } else { follow_off_level_db };
+                if follow_use_mute {
+                    pipeline.set_mute(channel_id_task.clone(), false);
+                }
+                let (from, to) = if on { (off_db, base_db) } else { (base_db, off_db) };
                 for step in 1..=FOLLOW_CROSSFADE_STEPS {
                     if *ramp_generation
                         .lock()
@@ -960,7 +1033,7 @@ async fn audio_follow_video_loop(
                     ))
                     .await;
                 }
-                if !on {
+                if follow_use_mute && !on {
                     pipeline.set_mute(channel_id_task, true);
                 }
             });

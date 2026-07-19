@@ -352,8 +352,37 @@ class OmpAudioMixerPanel extends HTMLElement {
       overrideBtn.addEventListener("click", () =>
         call(`channel.${id}.setOverride`, { enabled: !overrideOn }).then(poll),
       );
+
+      // §4.6 Nachtrag Punkt 3 (Audio-Follow-Video-Pegel): "Stumm"
+      // (Default, unverändertes Verhalten) oder ein definierbarer,
+      // hörbarer Off-Pegel statt Vollstille.
+      const followOffLevelRow = document.createElement("div");
+      followOffLevelRow.className = "row";
+      const followMuteLabel = document.createElement("label");
+      const followMuteCheckbox = document.createElement("input");
+      followMuteCheckbox.type = "checkbox";
+      followMuteCheckbox.checked = true;
+      followMuteLabel.append(followMuteCheckbox, " Stumm");
+      const followOffLevelInput = document.createElement("input");
+      followOffLevelInput.type = "number";
+      followOffLevelInput.step = "1";
+      followOffLevelInput.placeholder = "Off-Pegel dB";
+      followOffLevelInput.disabled = true;
+      followMuteCheckbox.addEventListener("change", () => {
+        followOffLevelInput.disabled = followMuteCheckbox.checked;
+      });
+      const followOffLevelApply = document.createElement("omp-button");
+      followOffLevelApply.textContent = "Off-Pegel setzen";
+      followOffLevelApply.addEventListener("click", () =>
+        call(`channel.${id}.setFollowOffLevel`, {
+          useMute: followMuteCheckbox.checked,
+          offLevelDb: followOffLevelInput.value === "" ? -20 : Number(followOffLevelInput.value),
+        }),
+      );
+      followOffLevelRow.append(followMuteLabel, followOffLevelInput, followOffLevelApply);
+
       afvRow.append(followInput, modeSelect, followApply, overrideBtn);
-      afv.append(summary, afvRow);
+      afv.append(summary, afvRow, followOffLevelRow);
 
       const removeBtn = document.createElement("button");
       removeBtn.className = "remove-btn";
@@ -390,6 +419,8 @@ class OmpAudioMixerPanel extends HTMLElement {
         set overrideOn(v) {
           overrideOn = v;
         },
+        followMuteCheckbox,
+        followOffLevelInput,
       };
     };
 
@@ -433,6 +464,13 @@ class OmpAudioMixerPanel extends HTMLElement {
       refs.modeSelect.value = data.followMode || "off";
       refs.overrideBtn.active = !!data.overrideEnabled;
       refs.overrideOn = !!data.overrideEnabled;
+      if (refs.followMuteCheckbox !== shadow.activeElement) {
+        refs.followMuteCheckbox.checked = data.followUseMute ?? true;
+        refs.followOffLevelInput.disabled = refs.followMuteCheckbox.checked;
+      }
+      if (refs.followOffLevelInput !== shadow.activeElement) {
+        refs.followOffLevelInput.value = data.followOffLevelDb ?? -20;
+      }
     };
 
     const fetchChannelData = async (id) => {
@@ -456,6 +494,8 @@ class OmpAudioMixerPanel extends HTMLElement {
         followTarget,
         followMode,
         overrideEnabled,
+        followUseMute,
+        followOffLevelDb,
       ] = await Promise.all([
         getParam(`channel.${id}.source`),
         getParam(`channel.${id}.gain`),
@@ -476,6 +516,8 @@ class OmpAudioMixerPanel extends HTMLElement {
         getParam(`channel.${id}.followTarget`),
         getParam(`channel.${id}.followMode`),
         getParam(`channel.${id}.overrideEnabled`),
+        getParam(`channel.${id}.followUseMute`),
+        getParam(`channel.${id}.followOffLevelDb`),
       ]);
       return {
         source,
@@ -497,6 +539,8 @@ class OmpAudioMixerPanel extends HTMLElement {
         followTarget,
         followMode,
         overrideEnabled,
+        followUseMute,
+        followOffLevelDb,
       };
     };
 

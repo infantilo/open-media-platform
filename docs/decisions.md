@@ -8239,3 +8239,76 @@ Instanz-ID) bräuchte eine eigene Auflösung serverseitig
 (Rollenbindung → aktuell aktive Instanz einer Redundanzgruppe) — dieser
 Schritt deckt nur den bereits existierenden K7-Teil-1-Neustart-Fall
 ab, wie in §7.6 selbst abgegrenzt.
+
+## 2026-07-19 (Nachtrag 35) — §4.6 Nachtrag Punkt 3: Audio-Follow-
+Video-Pegel
+
+**Ziel:** `docs/END-GOAL-FEATURES.md` §4.6 Nachtrag Punkt 3 — Audio-
+Follow-Video kannte bisher nur `mute`/`unmute` (`off`/`cut`/`crossfade`
+schalteten ausschließlich den Mute-Zustand); kein definierbarer Pegel
+für den „Aus"-Zustand (z. B. -20dB statt Vollstille, für einen
+hörbaren, aber leisen Off-Air-Zustand). Priorität #4 der Kapitel-18-
+Liste, nächster gut abgegrenzter Teilschritt nach §17/§7.6 (beide
+diese Sitzung abgeschlossen) und vor dem größeren Kapitel 15 Teil 2.
+
+**Design-Entscheidung, abweichend vom Doc-Wortlaut:** die Doku schlägt
+`afv.offLevelDb` mit Default `-inf`/Mute vor. `serde_json` kann
+`-inf`/`NaN` nicht als JSON-Zahl serialisieren (wird sonst
+stillschweigend zu `null`) — statt eines nullbaren Sonderfalls zwei
+immer JSON-taugliche Felder pro Kanal: `followUseMute: bool` (Default
+`true`, unverändertes Verhalten) und `followOffLevelDb: f64` (Default
+-20dB, nur wirksam wenn `followUseMute == false`). Klarer als ein
+`-inf`-Sentinel, keine Sonderfallbehandlung an der JSON-Grenze nötig.
+
+**Umsetzung** (`nodes/omp-audio-mixer/src/main.rs`, ~150 Zeilen,
+`nodes/omp-audio-mixer/ui/bundle.js`):
+- `ChannelState` um `follow_use_mute`/`follow_off_level_db` ergänzt,
+  zwei neue readonly Deskriptor-Parameter (`followUseMute`,
+  `followOffLevelDb`) und ein neuer Setter
+  `channel.<id>.setFollowOffLevel(useMute, offLevelDb)` — bewusst
+  eigene Methode statt `setFollow` um die zwei neuen Argumente
+  erweitert, damit dessen bestehende 2-Argument-Signatur (targetNodeId,
+  mode) unverändert bleibt.
+- `audio_follow_video_loop`: bei `follow_use_mute == true` (Default)
+  **byte-identisches** Verhalten wie vorher (echte Stille über
+  `pipeline::set_mute`, sowohl in `cut` als auch `crossfade`). Bei
+  `false`: `cut` setzt den Gain direkt auf `follow_off_level_db` bzw.
+  den Basis-Pegel, `mute` bleibt durchgehend `false`; `crossfade` rampt
+  zwischen `follow_off_level_db` und dem Basis-Pegel statt zwischen
+  dem bisherigen hartkodierten `-60.0` und Mute — `mute` wird in dem
+  Fall nie angefasst, die "Stille" entsteht rein über den Gain-Pegel.
+- `ui/bundle.js`: neue Zeile im AFV-Abschnitt — "Stumm"-Checkbox
+  (Default an) + Zahlenfeld (deaktiviert solange "Stumm" aktiv) +
+  "Off-Pegel setzen"-Button, gleiches Poll-/Fokus-Guard-Muster wie die
+  übrigen Felder (`shadow.activeElement`-Vergleich statt Überschreiben
+  während der Eingabe).
+
+**Verifiziert (echte Prozesse, kein Mock):** `cargo build`/`cargo
+clippy --all-targets -p omp-audio-mixer` sauber (keine neuen
+Warnungen), `node --check ui/bundle.js` syntaktisch gültig. Live gegen
+einen echten, per `make start`-Äquivalent laufenden Orchestrator/
+Registry/NATS-Stack: `omp-audio-mixer`-Instanz gestartet, ein Kanal
+angelegt, `setFollow(target, "crossfade")` + `setFollowOffLevel(false,
+-18)` gesetzt, dann ein **echtes** `nats pub omp.tally.<target>
+'{"on":false}'` (kein synthetischer Test, derselbe NATS-Subject/Payload
+wie `omp-video-mixer-me` ihn im echten Betrieb sendet) — der reale
+`/levels`-SSE-Endpunkt (Master-Level, post-Mix) zeigte eine glatte
+12-Schritt-Rampe von Peak 0.3 auf exakt 0.0378 (= 0.3 × 10^(-18/20),
+rechnerisch exakt der konfigurierte -18dB-Zielpegel, nicht Stille);
+`mute` blieb während der gesamten Rampe `false`. `cut`-Modus mit
+gleichem Off-Pegel: sofortiger Sprung auf denselben exakten Wert, auch
+hier `mute` durchgehend `false`. Rückprobe mit `followUseMute:true`:
+exakt der alte Pfad, Peak fällt auf ~3×10⁻¹⁸ (praktisch Null,
+Gleitkomma-Rauschen) und `mute` wird wieder `true` — bestätigt
+Rückwärtskompatibilität bitgenau. UI-Bundle zusätzlich per echtem
+Chromium-Klick verifiziert (Kachel im Flow-Editor angeklickt, echtes
+`PointerEvent`-Down/Up-Paar — Selektion läuft über
+`setPointerCapture`/einen globalen `pointerup`-Handler auf dem
+`&lt;svg&gt;`, kein reines `click`-Event; Checkbox+Zahlenfeld+Button
+real bedient): Backend zeigte exakt die per Klick gesetzten Werte
+(`followUseMute:false`, `followOffLevelDb:-9`) — bestätigt den vollen
+Kreis UI-Klick→Methode→Descriptor. Alle Testartefakte danach entfernt.
+
+**Nicht Teil dieser Scheibe:** Mixer-Presets (§4.6 Punkt 4, Snapshot-
+Mechanismus node-skopiert wiederverwenden) sind der nächste
+unabhängige, kleine Kapitel-4.6-Rest laut Dokument.

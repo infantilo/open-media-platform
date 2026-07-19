@@ -788,6 +788,20 @@ umgesetzt**, nur K3/K4-Teil-1 „Teil 1" ist fertig). Vier Punkte gehen
    Off-Air-Zustand). Deskriptor-Erweiterung `afv.offLevelDb` (Default
    `-inf`/Mute, konfigurierbar), Crossfade interpoliert dann zwischen
    `offLevelDb` und reguläremFader-Pegel statt zwischen Mute und Fader.
+   ✅ **Erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 35) — statt
+   eines `-inf`-Sentinels (JSON kennt keine Unendlichkeit, `serde_json`
+   würde sie stillschweigend zu `null` machen) zwei immer JSON-taugliche
+   Felder: `followUseMute` (Default `true`, bitgenau unverändertes
+   Verhalten) + `followOffLevelDb`. Bei `false` rampt/springt `cut`/
+   `crossfade` auf den konfigurierten Pegel statt auf Mute/-60dB, `mute`
+   bleibt dabei durchgehend `false`. Live gegen einen echten
+   `omp-audio-mixer`-Prozess mit einem echten `nats pub
+   omp.tally.<id> '{"on":false}'` verifiziert: der reale
+   `/levels`-SSE-Master-Pegel zeigte eine glatte Rampe auf exakt
+   `0.3 × 10^(-18/20)` (rechnerisch der konfigurierte -18dB-Zielpegel),
+   `followUseMute:true` bitgenau rückwärtskompatibel geprüft (Pegel →
+   praktisch Null, `mute:true`), UI-Bundle-Steuerung per echtem
+   Chromium-Klick bestätigt.
 4. **Mixer-Presets.** Nicht in §4.3 enthalten. OMP hat bereits einen
    generischen, workflow-weiten Snapshot-Mechanismus
    (`orchestrator/internal/snapshots/`, Postgres-gestützt, B7/D1), der
@@ -3165,10 +3179,13 @@ Kapiteln, nicht hier wiederholt.
    je Band, per Live-Introspektion verifiziert), `audiodynamic` pro
    Kanal + auf dem Master-Bus, je mit eigenem Makeup-Gain-`volume`-
    Element (kompensiert die fehlende Makeup-Eigenschaft von
-   `audiodynamic`, §4.6-Realitätscheck). **Noch offen aus §4.6:**
-   Audio-Follow-Video-Pegel (weiterhin nur Mute/Unmute) und
-   Mixer-Presets (Snapshot-Wiederverwendung) — beide nicht Teil dieses
-   Schritts, bewusst zurückgestellt, kein stiller Gap.
+   `audiodynamic`, §4.6-Realitätscheck).
+   ✅ **Audio-Follow-Video-Pegel erledigt 2026-07-19**
+   (`docs/decisions.md` Nachtrag 35) — konfigurierbarer, hörbarer
+   „Aus"-Pegel statt nur Mute/Unmute, live mit einem echten NATS-
+   Tally-Event + realer `/levels`-Messung verifiziert. **Noch offen aus
+   §4.6:** Mixer-Presets (Snapshot-Wiederverwendung) — nicht Teil
+   dieses Schritts, bewusst zurückgestellt, kein stiller Gap.
 5. **Kapitel 15 — Multi-Resolution-Streams.** Hoher Nutzwert (Bandbreite/
    CPU bei realen Mehrquellen-Setups), aber cross-cutting (mehrere
    Nodes + Workflow-Objekt) — nach den kleineren, unabhängigen Punkten
