@@ -23,9 +23,9 @@
 //! Schritt, sobald ein konkreter Bedarf für synchronisierten
 //! Video+Audio-Gateway-Betrieb besteht.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -54,6 +54,9 @@ pub struct IngestConfig {
     pub height: i32,
     pub framerate_numerator: i32,
     pub framerate_denominator: i32,
+    /// Kapitel 19 Teil 2 (opt-in, `OMP_PTP_DOMAIN`) — `None` heißt
+    /// unverändertes Free-Run-Verhalten wie bisher.
+    pub ptp_domain: Option<u32>,
 }
 
 /// Griff auf die laufende Ingest-Pipeline — hält `pipeline`/`_input`/
@@ -66,11 +69,19 @@ pub struct IngestHandle {
     _input: St2110VideoInput,
     _output: MxlVideoOutput,
     flowed: Arc<AtomicBool>,
+    ptp_clock: Option<gstreamer_net::PtpClock>,
 }
 
 impl IngestHandle {
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// `None`, wenn keine PTP-Domain konfiguriert ist (Free-Run) —
+    /// sonst der echte, abfragbare Sync-Zustand statt einer
+    /// stillschweigenden Annahme (gleiches Prinzip wie `media_ready`).
+    pub fn ptp_synced(&self) -> Option<bool> {
+        self.ptp_clock.as_ref().map(|c| c.is_synced())
     }
 }
 
@@ -154,6 +165,25 @@ pub fn run_ingest(
         gst::PadProbeReturn::Remove
     });
 
+    // Kapitel 19 Teil 2 (opt-in): Clock vor dem Playing-Übergang setzen,
+    // sonst müsste die Pipeline für den Wechsel kurz erneut pausiert
+    // werden. `wait_for_sync` blockiert bewusst (fester, kurzer
+    // Timeout) statt die Pipeline unsynchronisiert sofort laufen zu
+    // lassen — GStreamer schaltet danach ohnehin automatisch um, sobald
+    // ein Master gefunden wird (s. `omp_mediaio::ptp`-Moduldoku), ein
+    // etwas späterer Playing-Übergang beim ersten Start ist dafür ein
+    // akzeptabler Kompromiss.
+    let ptp_clock = match config.ptp_domain {
+        Some(domain) => match omp_mediaio::ptp::apply_ptp_clock(&pipeline, domain, gst::ClockTime::from_seconds(5)) {
+            Ok(clock) => Some(clock),
+            Err(e) => {
+                let _ = tx.send(Event::Error(format!("PTP-Domain {domain}: {e}")));
+                None
+            }
+        },
+        None => None,
+    };
+
     if let Err(e) = pipeline.set_state(gst::State::Playing) {
         let msg = format!("set state playing: {e}");
         let _ = tx.send(Event::Error(msg.clone()));
@@ -166,6 +196,7 @@ pub fn run_ingest(
         _input: input,
         _output: output,
         flowed,
+        ptp_clock,
     }));
 
     // Kein Reconnect-Kommandokanal nötig (fix konfiguriert) — reine
@@ -188,6 +219,8 @@ pub struct OutputConfig {
     pub height: i32,
     pub framerate_numerator: i32,
     pub framerate_denominator: i32,
+    /// S. `IngestConfig::ptp_domain`-Doku.
+    pub ptp_domain: Option<u32>,
 }
 
 enum Command {
@@ -203,6 +236,13 @@ enum Command {
 pub struct OutputPipelineHandle {
     commands: Sender<Command>,
     flowed: Arc<AtomicBool>,
+    /// S. `IngestHandle::ptp_synced`-Doku — hier über eine geteilte
+    /// Zelle statt eines direkten Feldzugriffs, weil die Pipeline (und
+    /// damit die Clock) bei jedem Connect/Disconnect komplett neu
+    /// aufgebaut wird (anders als bei `IngestHandle`, die einmalig
+    /// lebt), der Handle selbst aber über alle Rebuilds hinweg bestehen
+    /// bleibt.
+    ptp_synced: Arc<Mutex<Option<bool>>>,
 }
 
 impl OutputPipelineHandle {
@@ -219,12 +259,17 @@ impl OutputPipelineHandle {
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
     }
+
+    pub fn ptp_synced(&self) -> Option<bool> {
+        *self.ptp_synced.lock().expect("lock poisoned")
+    }
 }
 
 struct ActiveOutputPipeline {
     pipeline: gst::Pipeline,
     _input: MxlVideoInput,
     _output: St2110VideoOutput,
+    _ptp_clock: Option<gstreamer_net::PtpClock>,
 }
 
 impl Drop for ActiveOutputPipeline {
@@ -244,6 +289,8 @@ fn build_output(
     framerate_numerator: i32,
     framerate_denominator: i32,
     flowed: Arc<AtomicBool>,
+    ptp_domain: Option<u32>,
+    ptp_synced_cell: &Arc<Mutex<Option<bool>>>,
 ) -> Result<ActiveOutputPipeline, String> {
     let pipeline = gst::Pipeline::new();
 
@@ -254,6 +301,21 @@ fn build_output(
         flowed_probe.store(true, Ordering::Relaxed);
         gst::PadProbeReturn::Remove
     });
+
+    let ptp_clock = match ptp_domain {
+        Some(domain) => match omp_mediaio::ptp::apply_ptp_clock(&pipeline, domain, gst::ClockTime::from_seconds(5)) {
+            Ok(clock) => {
+                *ptp_synced_cell.lock().expect("lock poisoned") = Some(clock.is_synced());
+                Some(clock)
+            }
+            Err(e) => {
+                eprintln!("omp-2110-gateway: PTP-Domain {domain}: {e}");
+                *ptp_synced_cell.lock().expect("lock poisoned") = None;
+                None
+            }
+        },
+        None => None,
+    };
 
     let output = St2110VideoOutput::new(
         &pipeline,
@@ -275,6 +337,7 @@ fn build_output(
         pipeline,
         _input: input,
         _output: output,
+        _ptp_clock: ptp_clock,
     })
 }
 
@@ -305,9 +368,11 @@ pub fn run_output(
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) = std::sync::mpsc::channel();
     let flowed = Arc::new(AtomicBool::new(false));
+    let ptp_synced = Arc::new(Mutex::new(None));
     let _ = ready.send(Ok(OutputPipelineHandle {
         commands: commands_tx,
         flowed: flowed.clone(),
+        ptp_synced: ptp_synced.clone(),
     }));
 
     let mut active: Option<ActiveOutputPipeline> = None;
@@ -331,6 +396,8 @@ pub fn run_output(
                     config.framerate_numerator,
                     config.framerate_denominator,
                     flowed.clone(),
+                    config.ptp_domain,
+                    &ptp_synced,
                 ) {
                     Ok(p) => active = Some(p),
                     Err(e) => {

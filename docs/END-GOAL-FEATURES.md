@@ -3589,11 +3589,22 @@ Recherchierte Faktenlage (Stand 2026-07):
   Drei-Prozess-Kette (`gst-launch-1.0`-Quelle → Ingest-Gateway → MXL →
   Output-Gateway → unabhängiger `gst-launch-1.0`-Empfänger), kein Mock.
   Video-only (Audio-Gateway-Betrieb offener Folgeschritt).
-- **Teil 2 — PTP-Zeitbasis (Opt-in):** `gstreamer-net::PtpClock` als
-  Pipeline-Clock in den 2110-/AES67-Pfaden. Verifikation: `ptp4l`
-  als Software-Master in einem Netzwerk-Namespace (kein
-  PTP-Hardware-Bedarf, gleiche Netns-Technik wie Kapitel 16 Teil 1),
-  Clock erreicht Synced-Zustand, Pipeline läuft auf ihr.
+- **Teil 2 — PTP-Zeitbasis (Opt-in).** ✅ **Erledigt 2026-07-19**
+  (`docs/decisions.md` Nachtrag 49): `gstreamer-net::PtpClock` als
+  Pipeline-Clock, verdrahtet als Laufzeit-Opt-in (`OMP_PTP_DOMAIN`) in
+  `omp-2110-gateway`/`omp-aes67-gateway`, neuer `ptpSynced`-Parameter
+  (`null`/echter Zustand statt stillschweigender Annahme). Free-Run
+  ohne die Variable bleibt unverändert (`ARCHITECTURE.md` §8). Live
+  verifiziert mit `ptp4l` als Software-Master — **korrigiert ggü. der
+  ursprünglichen Annahme:** Kapitel 16 Teil 1 nutzte tatsächlich **keine**
+  Netzwerk-Namespaces (getrennte MXL-Domain-Verzeichnisse stattdessen,
+  `docs/decisions.md` Nachtrag 44), die hier zunächst versuchte
+  Ein-Host-Verifikation (`ptp4l` + `GstPtpClock` im selben Netzwerk-
+  Stack) blieb trotz korrekter Konfiguration strukturell unsynchronisiert
+  (per unabhängigem Python-Multicast-Probe bestätigt: 0 empfangene
+  Pakete trotz nachweislich sendendem Master) — erst zwei echte,
+  per `veth` verbundene `ip netns` (näher an einem echten
+  Mehr-Host-Aufbau) brachten `is_synced()==true` innerhalb von 9s.
 - **Teil 3 — `omp-aes67-gateway` (Dante-Interop).** ✅ **Erledigt
   2026-07-19** (`docs/decisions.md` Nachtrag 48): Teil-0-Audio +
   vollständige, von Hand gebaute SAP-Announce/-Listen-Implementierung

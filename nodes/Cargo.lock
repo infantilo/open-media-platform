@@ -494,6 +494,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-io"
+version = "0.3.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4577ecaa3c4f96589d473f679a71b596316f6641bc350038b962a5daf0085d7a"
+
+[[package]]
 name = "futures-macro"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,6 +567,23 @@ dependencies = [
  "libc",
  "r-efi",
  "rand_core 0.10.1",
+]
+
+[[package]]
+name = "gio"
+version = "0.22.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b3e1f669909c326b9413bde5a742097b8c90a7d78f45326db13668984769ded"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "futures-io",
+ "futures-util",
+ "gio-sys",
+ "glib",
+ "libc",
+ "pin-project-lite",
+ "smallvec",
 ]
 
 [[package]]
@@ -740,6 +763,31 @@ checksum = "709fbbc623dc066908ba10c43d629c21096508dea04796592a206c4edd864e37"
 dependencies = [
  "glib-sys",
  "gobject-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
+name = "gstreamer-net"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abcad04d471a4f2c859ef1287f22581b07064e357cc89dfa415ffc99b2a3193d"
+dependencies = [
+ "gio",
+ "glib",
+ "gstreamer",
+ "gstreamer-net-sys",
+]
+
+[[package]]
+name = "gstreamer-net-sys"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bcefb342a98ffca0b106bc9fea13d5df15879e1613b4dc652a6ec1960c32584c"
+dependencies = [
+ "gio-sys",
+ "glib-sys",
  "gstreamer-sys",
  "libc",
  "system-deps",
@@ -1176,6 +1224,7 @@ name = "omp-2110-gateway"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-net",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
@@ -1187,6 +1236,7 @@ name = "omp-aes67-gateway"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-net",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
@@ -1212,6 +1262,7 @@ dependencies = [
  "bindgen",
  "gstreamer",
  "gstreamer-app",
+ "gstreamer-net",
  "libloading",
  "mxl",
  "mxl-sys",

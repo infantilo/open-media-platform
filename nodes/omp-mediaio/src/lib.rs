@@ -28,6 +28,9 @@ pub mod fabrics;
 #[cfg(feature = "preview")]
 pub mod preview;
 
+#[cfg(feature = "ptp")]
+pub mod ptp;
+
 /// Ein Media-Ausgang, den ein Node über IS-05 (Start/Stop) steuert.
 pub trait Output: Send + Sync {
     /// Schaltet den Ausgang scharf (`true`) oder stumm (`false`).

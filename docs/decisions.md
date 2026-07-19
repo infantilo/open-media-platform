@@ -9291,3 +9291,79 @@ kein stiller Gap. Test gegen echte Dante-Hardware bleibt wie im
 Phasenplan vorgesehen zurückgestellt, bis ein Gerät verfügbar ist
 (§19.5 Frage 3). PTP-Zeitbasis (Teil 2) und NDI-Gateway (Teil 4)
 bleiben ebenfalls offen.
+
+## 2026-07-19 (Nachtrag 49) — Kapitel 19 Teil 2: PTP-Zeitbasis (opt-in),
+echte Netzwerk-Namespace-Verifikation nach zwei Sackgassen
+
+`omp_mediaio::ptp` (Feature `ptp`, neue Dependency `gstreamer-net` —
+`gst_net::PtpClock` lebt in `libgstnet-1.0`, nicht in `gstreamer`
+selbst): `apply_ptp_clock(pipeline, domain, timeout)` ersetzt die
+Pipeline-Clock durch eine echte IEEE-1588-PTPv2-Uhr
+(`Pipeline::use_clock`) statt des GStreamer-Standard-Systemtakts.
+Bewusst kein erzwungener Sync-Zwang: `wait_for_sync` blockiert nur kurz
+mit festem Timeout, die Clock wird danach so oder so gesetzt — `gst_net`
+schaltet intern automatisch von Free-Run auf echten Sync um, sobald ein
+Master gefunden wird, kein Extra-Code hier nötig
+(`ARCHITECTURE.md` §8 "Free-Run-Modus tolerieren" bleibt damit intakt).
+Anders als in PIPELINE CONTROLLER (`lib/ClockStrategy.js`s `ptp-generic`
+blieb dort Stub, weil gst-kit keine Clock-API bietet) ist dieser Pfad in
+`gstreamer-rs` vollständig nutzbar, keine Blockade.
+
+Verdrahtet als Laufzeit-Opt-in (`OMP_PTP_DOMAIN`, unverändertes
+Free-Run ohne die Variable) in `omp-2110-gateway` und
+`omp-aes67-gateway` — beide bekommen einen neuen `ptpSynced`-Parameter
+(`null` = nicht konfiguriert, sonst der echte, live abfragbare
+Sync-Zustand statt einer stillschweigenden Annahme, gleiches Prinzip
+wie `media_ready`).
+
+**Drei echte, live gefundene Probleme beim Verifizieren, kein Bug im
+Produktivcode:**
+
+1. `Stdio::piped()` für einen extern gestarteten `ptp4l`-Testprozess
+   ohne lesenden Verbraucher blockiert `ptp4l`, sobald der (64-KiB-)
+   Pipe-Puffer voll läuft — bereits die normale Zustandsübergangs-
+   Protokollierung reichte dafür. Behoben: `ptp4l` erbt im Test direkt
+   stdout/stderr.
+2. Ohne expliziten `PtpClock::init` mit fester `clock_id` leitet
+   GStreamer eine EUI-64-Kennung aus der MAC-Adresse des Interfaces ab
+   — beim ersten Ein-Host-Testaufbau (`ptp4l` und `GstPtpClock` auf
+   demselben Host/Interface) exakt dieselbe Adresse, aus der `ptp4l`
+   auch seine eigene Grandmaster-`clockIdentity` ableitet. Beide
+   Identitäten kollidierten (per `GST_DEBUG=ptp*:7` bestätigt), PTP
+   verweigert laut Spec das Synchronisieren auf die eigene Identität.
+3. **Der eigentliche Blocker:** selbst mit fester `clock_id` blieb der
+   Ein-Host-Testaufbau (`ptp4l` und `GstPtpClock` im selben Netzwerk-
+   Namespace auf demselben `eth0`) endlos unsynchronisiert. Ein
+   unabhängiger, von Hand geschriebener Python-Multicast-Probe auf
+   `224.0.1.129:319` (PTPs Standardgruppe) zeigte **0 empfangene
+   Pakete**, obwohl `ptp4l` nachweislich die Master-Rolle übernahm und
+   laut eigenem Log regelmäßig Sync-Pakete sendete — ohne
+   `tcpdump`/`strace` (beide in dieser Sandbox nicht verfügbar) nicht
+   abschließend auf eine Ursache eingrenzbar, vermutlich eine
+   `SO_BINDTODEVICE`+Multicast-Loopback-Eigenheit dieses
+   virtualisierten Netzwerkstacks bei Sender und Empfänger auf
+   demselben Interface im selben Namespace. **Gelöst nach dem im
+   Phasenplan selbst vorgeschlagenen Weg** ("`ptp4l` als Software-
+   Master in einem Netzwerk-Namespace"): zwei echte `ip netns` (je ein
+   `veth`-Ende, in der jeweiligen Namespace zu `eth0` umbenannt,
+   eigene IP + Default-Route) — mit `ptp4l` in Namespace A und dem
+   Testprozess in Namespace B erreichte `GstPtpClock` echten
+   `is_synced()==true` **innerhalb von 9 Sekunden**, sauber und
+   reproduzierbar. Der Ein-Host-Testpfad bleibt als dokumentierter,
+   sandboxspezifischer Verifikationsgrenzfall im Testcode erhalten
+   (kein Produktionsproblem — reale PTP-Aufbauten haben ohnehin immer
+   ≥2 echte Hosts).
+
+Zusätzlich bestätigt: `gst-ptp-helper` (bereits mit
+`cap_net_bind_service,cap_net_admin` vorinstalliert, kein manuelles
+`setcap` nötig) funktioniert unverändert; `CAP_SYS_TIME` fehlt dieser
+Sandbox jedoch vollständig (`ptp4l`: "failed to adjust the clock:
+Operation not permitted", auch als root) — irrelevant für `GstPtpClock`
+selbst (rein userspace-seitige Uhr-Schätzung, keine
+Systemuhr-Disziplinierung), aber ein weiterer bestätigter
+Sandbox-Befund für künftige PTP-/Zeitsynchronisationsarbeit hier.
+
+`cargo test --workspace`/`cargo clippy --workspace --all-targets`
+grün, keine neuen Warnungen. Kapitel 19 Teil 2 damit abgeschlossen; nur
+noch NDI-Gateway (Teil 4, blockiert auf proprietäre NDI-Runtime/-SDK,
+keine Testmöglichkeit in dieser Umgebung) bleibt offen.

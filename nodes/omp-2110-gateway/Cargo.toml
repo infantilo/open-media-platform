@@ -8,12 +8,16 @@ publish = false
 
 [dependencies]
 gstreamer = "0.25.3"
+gstreamer-net = "0.25"
 # Feature `mxl`: anders als omp-srt-gateway (reines Protokoll-zu-
 # Protokoll-Gateway, kein OMP-interner Fabric-Bezug) braucht dieser
 # Gateway echten MXL-Flow-Zugriff auf einer Seite (Kapitel 19 Teil 1,
 # docs/END-GOAL-FEATURES.md §19.3a Punkt 4: "ingest = 2110-Multicast →
-# MXL-Flow, output = MXL-Flow → 2110-Multicast").
-omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
+# MXL-Flow, output = MXL-Flow → 2110-Multicast"). Feature `ptp`: opt-in
+# PTP-Zeitbasis (Kapitel 19 Teil 2, §19.3a Punkt 3) — Laufzeit-Opt-in
+# per `OMP_PTP_DOMAIN`, kein eigenes Cargo-Feature auf dieser Ebene
+# nötig (leichtgewichtig, kein Vendor-Build wie `mxl`/`fabrics`).
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl", "ptp"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }

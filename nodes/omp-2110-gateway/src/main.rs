@@ -59,6 +59,8 @@ struct IngestStore {
     flow_id: String,
     listen_port: u16,
     multicast_group: Option<String>,
+    ptp_domain: Option<u32>,
+    pipeline: Arc<pipeline::IngestHandle>,
 }
 
 impl ParamStore for IngestStore {
@@ -86,6 +88,13 @@ impl ParamStore for IngestStore {
                     range: None,
                     readonly: true,
                 },
+                ParamSpec {
+                    name: "ptpSynced".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![],
         }
@@ -99,6 +108,14 @@ impl ParamStore for IngestStore {
                 let group = self.multicast_group.as_deref().unwrap_or("0.0.0.0");
                 Some(serde_json::json!(format!("{group}:{}", self.listen_port)))
             }
+            // `null`, wenn keine PTP-Domain konfiguriert ist (kein
+            // stillschweigendes `false` — "nicht aktiviert" und "aktiv,
+            // aber noch nicht synchronisiert" sind unterschiedliche
+            // Zustände).
+            "ptpSynced" => match self.ptp_domain {
+                Some(_) => Some(serde_json::json!(self.pipeline.ptp_synced().unwrap_or(false))),
+                None => Some(Value::Null),
+            },
             _ => None,
         }
     }
@@ -147,6 +164,8 @@ struct OutputStore {
     destination_port: u16,
     connected_flow_id: Arc<Mutex<String>>,
     connection: Arc<ReceiverConnection<OutputControl>>,
+    ptp_domain: Option<u32>,
+    pipeline: pipeline::OutputPipelineHandle,
 }
 
 impl ParamStore for OutputStore {
@@ -174,6 +193,13 @@ impl ParamStore for OutputStore {
                     range: None,
                     readonly: true,
                 },
+                ParamSpec {
+                    name: "ptpSynced".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![],
         }
@@ -189,6 +215,10 @@ impl ParamStore for OutputStore {
                 "{}:{}",
                 self.destination_host, self.destination_port
             ))),
+            "ptpSynced" => match self.ptp_domain {
+                Some(_) => Some(serde_json::json!(self.pipeline.ptp_synced().unwrap_or(false))),
+                None => Some(Value::Null),
+            },
             _ => None,
         }
     }
@@ -269,6 +299,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let domain = env_or("OMP_MXL_DOMAIN", "/dev/shm/omp-mxl");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
+    // Kapitel 19 Teil 2 (opt-in, `docs/END-GOAL-FEATURES.md` §19.3a
+    // Punkt 3): ohne die Variable unverändertes Free-Run-Verhalten.
+    let ptp_domain: Option<u32> = match std::env::var("OMP_PTP_DOMAIN") {
+        Ok(v) => Some(v.parse().map_err(|e| format!("OMP_PTP_DOMAIN: {e}"))?),
+        Err(_) => None,
+    };
 
     let direction = match env_or("OMP_2110_GATEWAY_DIRECTION", "ingest").as_str() {
         "output" => Direction::Output,
@@ -294,6 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 height,
                 framerate_numerator: fps_num,
                 framerate_denominator: fps_den,
+                ptp_domain,
             };
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -313,12 +350,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             };
 
-            let media_ready_pipeline = Arc::new(pipeline_handle);
+            let pipeline_handle = Arc::new(pipeline_handle);
+            let media_ready_pipeline = pipeline_handle.clone();
 
             let store: Arc<dyn ParamStore> = Arc::new(IngestStore {
                 flow_id: flow_id.clone(),
                 listen_port,
                 multicast_group,
+                ptp_domain,
+                pipeline: pipeline_handle,
             });
 
             let handle = omp_node_sdk::start(
@@ -367,6 +407,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 height,
                 framerate_numerator: fps_num,
                 framerate_denominator: fps_den,
+                ptp_domain,
             };
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -387,6 +428,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             };
 
             let media_ready_pipeline = pipeline_handle.clone();
+            let ptp_pipeline = pipeline_handle.clone();
             let receiver_id = omp_node_sdk::idgen::new_v4();
             let connected_flow_id = Arc::new(Mutex::new(String::new()));
             let connection = Arc::new(ReceiverConnection::new(
@@ -403,6 +445,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 destination_port,
                 connected_flow_id,
                 connection,
+                ptp_domain,
+                pipeline: ptp_pipeline,
             });
 
             let handle = omp_node_sdk::start(

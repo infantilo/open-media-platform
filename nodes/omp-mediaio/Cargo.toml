@@ -9,6 +9,10 @@ publish = false
 [dependencies]
 gstreamer = "0.25.3"
 gstreamer-app = { version = "0.25", optional = true }
+# Feature `ptp`: PTP-Zeitbasis (Kapitel 19 Teil 2, opt-in) — `PtpClock`
+# lebt in `libgstnet-1.0`/dem `gstreamer-net`-Crate, nicht in `gstreamer`
+# selbst.
+gstreamer-net = { version = "0.25", optional = true }
 serde_json = { version = "1", optional = true }
 mxl = { path = "../../third_party/mxl/rust/mxl", features = ["mxl-not-built"], optional = true }
 mxl-sys = { path = "../../third_party/mxl/rust/mxl-sys", features = ["mxl-not-built"], optional = true }
@@ -38,3 +42,4 @@ bindgen = { version = "0.72", features = ["experimental"], optional = true }
 mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app", "dep:serde_json"]
 preview = ["dep:tiny_http", "dep:gstreamer-app"]
 fabrics = ["dep:libloading", "dep:bindgen"]
+ptp = ["dep:gstreamer-net"]

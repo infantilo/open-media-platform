@@ -17,9 +17,9 @@
 //!   Dante-Geräte im AES67-Modus finden Fremdströme ausschließlich über
 //!   SAP, nicht durch aktives Scannen von Adressbereichen.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
@@ -46,6 +46,9 @@ pub struct SinkConfig {
     pub multicast_group: Option<String>,
     pub sample_rate: i32,
     pub channels: i32,
+    /// Kapitel 19 Teil 2 (opt-in, `OMP_PTP_DOMAIN`) — `None` heißt
+    /// unverändertes Free-Run-Verhalten wie bisher.
+    pub ptp_domain: Option<u32>,
 }
 
 pub struct SinkHandle {
@@ -53,11 +56,17 @@ pub struct SinkHandle {
     _input: St2110AudioInput,
     _output: MxlAudioOutput,
     flowed: Arc<AtomicBool>,
+    ptp_clock: Option<gstreamer_net::PtpClock>,
 }
 
 impl SinkHandle {
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// S. `omp-2110-gateway::pipeline::IngestHandle::ptp_synced`-Doku.
+    pub fn ptp_synced(&self) -> Option<bool> {
+        self.ptp_clock.as_ref().map(|c| c.is_synced())
     }
 }
 
@@ -132,6 +141,18 @@ pub fn run_sink(
         gst::PadProbeReturn::Remove
     });
 
+    // S. omp-2110-gateway::pipeline::run_ingest-Kommentar zur selben Stelle.
+    let ptp_clock = match config.ptp_domain {
+        Some(domain) => match omp_mediaio::ptp::apply_ptp_clock(&pipeline, domain, gst::ClockTime::from_seconds(5)) {
+            Ok(clock) => Some(clock),
+            Err(e) => {
+                let _ = tx.send(Event::Error(format!("PTP-Domain {domain}: {e}")));
+                None
+            }
+        },
+        None => None,
+    };
+
     if let Err(e) = pipeline.set_state(gst::State::Playing) {
         let msg = format!("set state playing: {e}");
         let _ = tx.send(Event::Error(msg.clone()));
@@ -139,7 +160,13 @@ pub fn run_sink(
         return;
     }
 
-    let _ = ready.send(Ok(SinkHandle { pipeline: pipeline.clone(), _input: input, _output: output, flowed }));
+    let _ = ready.send(Ok(SinkHandle {
+        pipeline: pipeline.clone(),
+        _input: input,
+        _output: output,
+        flowed,
+        ptp_clock,
+    }));
 
     while !shutdown.load(Ordering::Relaxed) {
         std::thread::sleep(Duration::from_millis(500));
@@ -156,6 +183,8 @@ pub struct SourceConfig {
     pub destination_port: u16,
     pub sample_rate: i32,
     pub channels: i32,
+    /// S. `SinkConfig::ptp_domain`-Doku.
+    pub ptp_domain: Option<u32>,
 }
 
 enum Command {
@@ -172,6 +201,10 @@ pub struct SourcePipelineHandle {
     /// verbundenen MXL-Quelle. `main.rs` reicht das an den
     /// SAP-`Announcer` weiter.
     sdp: String,
+    /// S. `omp-2110-gateway::pipeline::OutputPipelineHandle::ptp_synced`-
+    /// Doku (gleiche geteilte Zelle wegen Pipeline-Rebuild bei jedem
+    /// Connect/Disconnect).
+    ptp_synced: Arc<Mutex<Option<bool>>>,
 }
 
 impl SourcePipelineHandle {
@@ -192,12 +225,17 @@ impl SourcePipelineHandle {
     pub fn sdp(&self) -> &str {
         &self.sdp
     }
+
+    pub fn ptp_synced(&self) -> Option<bool> {
+        *self.ptp_synced.lock().expect("lock poisoned")
+    }
 }
 
 struct ActiveSourcePipeline {
     pipeline: gst::Pipeline,
     _input: MxlAudioInput,
     _output: St2110AudioOutput,
+    _ptp_clock: Option<gstreamer_net::PtpClock>,
 }
 
 impl Drop for ActiveSourcePipeline {
@@ -206,6 +244,7 @@ impl Drop for ActiveSourcePipeline {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_source(
     context: &Arc<MxlContext>,
     flow_id: &str,
@@ -214,6 +253,8 @@ fn build_source(
     sample_rate: i32,
     channels: i32,
     flowed: Arc<AtomicBool>,
+    ptp_domain: Option<u32>,
+    ptp_synced_cell: &Arc<Mutex<Option<bool>>>,
 ) -> Result<ActiveSourcePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
@@ -225,13 +266,28 @@ fn build_source(
         gst::PadProbeReturn::Remove
     });
 
+    let ptp_clock = match ptp_domain {
+        Some(domain) => match omp_mediaio::ptp::apply_ptp_clock(&pipeline, domain, gst::ClockTime::from_seconds(5)) {
+            Ok(clock) => {
+                *ptp_synced_cell.lock().expect("lock poisoned") = Some(clock.is_synced());
+                Some(clock)
+            }
+            Err(e) => {
+                eprintln!("omp-aes67-gateway: PTP-Domain {domain}: {e}");
+                *ptp_synced_cell.lock().expect("lock poisoned") = None;
+                None
+            }
+        },
+        None => None,
+    };
+
     let output =
         St2110AudioOutput::new(&pipeline, &input.tail, destination_host, destination_port, sample_rate, channels)?;
     output.set_active(true);
 
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
 
-    Ok(ActiveSourcePipeline { pipeline, _input: input, _output: output })
+    Ok(ActiveSourcePipeline { pipeline, _input: input, _output: output, _ptp_clock: ptp_clock })
 }
 
 /// Baut initial nur den festen Ausgang (2110-Ziel + SDP stehen ab
@@ -277,7 +333,13 @@ pub fn run_source(
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) = std::sync::mpsc::channel();
     let flowed = Arc::new(AtomicBool::new(false));
-    let _ = ready.send(Ok(SourcePipelineHandle { commands: commands_tx, flowed: flowed.clone(), sdp }));
+    let ptp_synced = Arc::new(Mutex::new(None));
+    let _ = ready.send(Ok(SourcePipelineHandle {
+        commands: commands_tx,
+        flowed: flowed.clone(),
+        sdp,
+        ptp_synced: ptp_synced.clone(),
+    }));
 
     let mut active: Option<ActiveSourcePipeline> = None;
     loop {
@@ -295,6 +357,8 @@ pub fn run_source(
                     config.sample_rate,
                     config.channels,
                     flowed.clone(),
+                    config.ptp_domain,
+                    &ptp_synced,
                 ) {
                     Ok(p) => active = Some(p),
                     Err(e) => {
