@@ -9151,3 +9151,59 @@ nicht gelistet (Richtungs-Env-Vars passen nicht gut zur generischen
 Launcher-UI), Start bleibt direkt/manuell wie beim SRT-Gateway. Audio-
 Ingest/-Output, PTP-Zeitbasis (Teil 2), `omp-aes67-gateway`/SAP
 (Teil 3), NDI-Gateway (Teil 4) bleiben offen.
+
+## 2026-07-19 (Nachtrag 47) — Kapitel 16 Teil 2: Grain-Relay fertig,
+echter Timing-Bug live gefunden und behoben
+
+Aufbauend auf Nachtrag 44 (Fundament-Ebene): `FabricsTarget::
+relay_incoming_grains`/`FabricsInitiator::relay_outgoing_grains`
+(`nodes/omp-mediaio/src/fabrics.rs`) — die dauerhaft laufende
+Relay-Schleife, die einen kompletten MXL-Flow kontinuierlich per
+Fabrics/RDMA in eine andere Domain spiegelt, nicht mehr nur einen
+einzelnen manuell übertragenen Grain wie in Teil 1. Struktur folgt eng
+`mxl-fabrics-demo/demo.cpp`s `runDiscrete()`: TOO_EARLY/TIMEOUT →
+gleicher Index erneut versuchen, TOO_LATE → per `mxlGetCurrentIndex`
+resynchronisieren, FLOW_INVALID → dokumentiertes (`flow.h`), erwartetes
+"Quelle ist weg"-Ereignis, sauber statt fatal behandelt.
+
+**Ein echter, live gefundener Bug, kein Schreibfehler:** der erste
+Testaufbau ließ einen synthetischen Rust-Thread als Produzenten laufen
+(`get_current_index` + `OpenGrain`/`CommitGrain` + `sleep(40ms)` in
+einer Schleife). Der Relay traf dabei **ausnahmslos** `MXL_ERR_
+OUT_OF_RANGE_TOO_LATE`, nie einen erfolgreichen Read — auch nach
+Reduzieren des Blockier-Timeouts pro Leseversuch von 200ms auf 20ms
+(ursprüngliche Vermutung: der Timeout allein spannt bereits den
+kompletten 5-Grain-Ringpuffer auf, ≈200ms bei 25fps). Per gezieltem
+Debug-Logging bestätigt: der Produzent committete zuverlässig (~25
+Grains/s, keine einzige fehlgeschlagene `OpenGrain`/`CommitGrain`-
+Runde), aber der Leser lag **immer** hinter dem Ringpuffer zurück.
+Ursache: reiner FFI-Aufrufaufwand (`OpenGrain`+`CommitGrain`) oben auf
+`sleep(40ms)` gestapelt drifted spürbar gegen den wall-clock-
+abgeleiteten Index, den Produzent und Leser unabhängig voneinander aus
+`mxlGetCurrentIndex` berechnen — bei nur 5 Grains Puffer genug, um den
+schmalen Erfolgsmoment zwischen TOO_EARLY und TOO_LATE nie zu treffen.
+Kein Bug in `relay_outgoing_grains` selbst, sondern ein zu
+unpräziser Test-Produzent.
+
+**Behoben durch Ersetzen des synthetischen Produzenten durch das
+bereits für Kapitel 16 Teil 0 manuell bewährte externe Werkzeug**
+`mxl-gst-testsrc` (echtes, GStreamer-getaktetes Timing, kein
+Rust-Sleep-Jitter) mit dem mitgelieferten `v210_flow.json`-
+Beispiel-Flow. Test läuft jetzt zuverlässig und `#[ignore]`d (externe
+Binärabhängigkeit über `$MXL_GST_TESTSRC_BIN`, gleiches Muster wie
+`st2110::tests::real_ffmpeg_sends_aes67_audio`).
+
+**Live verifiziert:** `cargo test -p omp-mediaio --features fabrics
+fabrics::tests::relays_multiple_grains_continuously_between_two_domains
+-- --ignored --nocapture` — echter `mxl-gst-testsrc`-Prozess schreibt in
+Domain A, Relay überträgt kontinuierlich per Fabrics/TCP-Provider nach
+Domain B, ein unabhängiger dritter `FlowReader` (kein Fabrics-Bezug,
+ganz normale MXL-API) liest einen kürzlich relayten Grain erfolgreich.
+`cargo test -p omp-mediaio --features fabrics` (ohne `--ignored`) grün,
+5 bestanden/2 ignoriert; `cargo clippy --workspace --all-targets`
+sauber, keine neuen Warnungen.
+
+Kapitel 16 Teil 2 (`docs/END-GOAL-FEATURES.md` §16.4) damit
+abgeschlossen. Offen bleibt nur noch die Anbindung an einen echten
+Node (welcher Node Fabrics als Transport nutzt, ist eine spätere
+Design-Entscheidung — bisher reines FFI-Fundament + Relay-Bibliothek).

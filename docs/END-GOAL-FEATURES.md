@@ -3012,20 +3012,37 @@ Nutzerfrage sagt explizit „soll als Option erhalten bleiben."
   Prozessen auf demselben Host (zwei MXL-Domains) verifiziert: echter
   One-Sided-RDMA-Transfer eines SMPTE-Testbild-Flows, Head-Index in der
   Zieldomain kontinuierlich wachsend, keine RDMA-Hardware nötig.
-- **Teil 1 — `omp-mediaio::fabrics`-Grundmodul.** ✅ **Fundament-Ebene
-  erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 44): eigene,
+- **Teil 1 — `omp-mediaio::fabrics`-Grundmodul.** ✅ **Vollständig
+  erledigt 2026-07-19** (`docs/decisions.md` Nachtrag 44 + 47): eigene,
   schlanke bindgen-Anbindung an `mxl/fabrics.h` (zwei getrennte `.so`s
   live entdeckt — `libmxl-fabrics.so` ist eine eigene Bibliothek, linkt
   nicht gegen `libmxl.so`), sicherer Rust-Wrapper
-  (`FabricsRuntime`/`FabricsTarget`/`FabricsInitiator`). Live über zwei
-  unabhängige MXL-Domains verifiziert (echter Grain-Transfer per
-  One-Sided-RDMA über den `tcp`-Provider, 5× ohne Flakiness wiederholt).
-  **Noch nicht Teil dieser Scheibe:** die `Output`-Trait-Implementierung
-  mit echter `appsink`/`appsrc`-GStreamer-Anbindung (analog C5 auf C4)
-  — eigener, nächster Schritt.
+  (`FabricsRuntime`/`FabricsTarget`/`FabricsInitiator`) samt der
+  dauerhaft laufenden Relay-Schleife
+  (`relay_incoming_grains`/`relay_outgoing_grains`), die einen
+  kompletten MXL-Flow kontinuierlich per Fabrics/RDMA in eine andere
+  Domain spiegelt. **Korrektur ggü. der ursprünglichen Annahme:** dafür
+  ist **keine** `Output`-Trait-/`appsink`/`appsrc`-GStreamer-Anbindung
+  nötig (anders als zunächst vermutet, analog C5 auf C4) — Fabrics
+  operiert unterhalb der GStreamer-Ebene direkt auf offenen
+  `mxlFlowWriter`/`mxlFlowReader`-Handles; ein per Fabrics beschriebener
+  Flow ist für jeden anderen MXL-Konsumenten (z. B. eine echte
+  GStreamer-Pipeline auf demselben Host) von einem lokal geschriebenen
+  nicht unterscheidbar. Live über zwei unabhängige MXL-Domains
+  verifiziert: ein echter `mxl-gst-testsrc`-Prozess speist Domain A mit
+  echtem, GStreamer-getaktetem Timing, der Relay überträgt fortlaufend
+  per `tcp`-Provider nach Domain B, ein unabhängiger dritter
+  `FlowReader` (kein Fabrics-Bezug) bestätigt den Empfang. Ein
+  synthetischer Rust-Produzent-Thread wurde dabei live verworfen: sein
+  Timing-Jitter (FFI-Aufrufaufwand oben auf `sleep()` gestapelt) drifted
+  gegen den schmalen 5-Grain-Ringpuffer des Test-Flows spürbar genug,
+  dass kein einziger Read je gelang — erst das reale, GStreamer-
+  getaktete Werkzeug lief zuverlässig.
 - **Teil 2 — Placement-Integration:** `transportHint`/
   `fabricsProvider`-Claim, Orchestrator wählt Fabrics vs. ST2110/SRT
-  pro Rolle.
+  pro Rolle. Noch offen — erste konkrete Node-Anbindung (welcher Node
+  Fabrics tatsächlich als Transport nutzt) ist Teil dieser
+  Design-Entscheidung, nicht vorweggenommen.
 - **Teil 3 — echte Mehr-Host-Verifikation:** sobald zwei physische
   Hosts verfügbar sind (auch ohne RDMA-NIC, TCP-Provider reicht für
   Funktionsnachweis) — Latenzvergleich gegen den bestehenden SRT-Pfad.

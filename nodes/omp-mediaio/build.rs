@@ -68,12 +68,23 @@ fn main() {
     ];
     let out_path = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR fehlt"));
 
-    // Instanz-/Flow-Verwaltung (mxl.h/flow.h) — lebt in libmxl.so.
+    // Instanz-/Flow-Verwaltung (mxl.h/flow.h/time.h) — lebt in libmxl.so.
+    // Kapitel 16 Teil 2 (docs/END-GOAL-FEATURES.md §16.4, docs/
+    // decisions.md): Grain-Ebene (`OpenGrain`/`CommitGrain`/`GetGrain`)
+    // + `GetCurrentIndex`/`GetConfigInfo` zusätzlich zur bereits
+    // vorhandenen Instanz-/Flow-Verwaltung aus Teil 1 — nötig, um einen
+    // per Fabrics übertragenen Grain im lokalen Flow sichtbar zu machen
+    // (Target-Seite) bzw. neue Grains in einem lokalen Flow zu erkennen
+    // (Initiator-Seite), exakt das Muster aus `mxl-fabrics-demo`s
+    // `runDiscrete()`.
     let core_bindings = bindgen::Builder::default()
         .clang_args(&clang_args)
-        .header_contents("mxl_core_wrapper.h", "#include <mxl/mxl.h>\n#include <mxl/flow.h>\n")
+        .header_contents(
+            "mxl_core_wrapper.h",
+            "#include <mxl/mxl.h>\n#include <mxl/flow.h>\n#include <mxl/time.h>\n",
+        )
         .allowlist_function(
-            "mxlCreateInstance|mxlDestroyInstance|mxlCreateFlowWriter|mxlReleaseFlowWriter|mxlCreateFlowReader|mxlReleaseFlowReader",
+            "mxlCreateInstance|mxlDestroyInstance|mxlCreateFlowWriter|mxlReleaseFlowWriter|mxlCreateFlowReader|mxlReleaseFlowReader|mxlFlowWriterOpenGrain|mxlFlowWriterCommitGrain|mxlFlowReaderGetGrain|mxlFlowReaderGetConfigInfo|mxlGetCurrentIndex",
         )
         .derive_default(true)
         .derive_debug(true)
