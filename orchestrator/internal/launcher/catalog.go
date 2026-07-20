@@ -58,6 +58,16 @@ type CatalogEntry struct {
 	// Messwerte, keine handgepflegten Schätzungen — ein vorgezogenes
 	// striktes Schema wäre Wegwerf-Aufwand.
 	ExpectedResources string `json:"expectedResources,omitempty"`
+	// Version identifiziert diese Variante eines importierten Typs
+	// (§17 Teil 5, docs/END-GOAL-FEATURES.md §17.4) — leer für alle
+	// statischen `deploy/catalog.json`-Einträge (das Projekt versioniert
+	// seine eigenen Nodes nicht über dieses Feld) und für einfache,
+	// einzeln importierte Typen ohne explizite Version (unverändertes
+	// Verhalten seit §17 Teil 4: leer heißt "die eine Version"). Mehrere
+	// importierte Einträge desselben Type mit unterschiedlicher Version
+	// dürfen parallel im Katalog stehen — Identität ist das Paar
+	// (Type, Version), s. Launcher.ImportCatalogEntry/findEntry.
+	Version string `json:"version,omitempty"`
 }
 
 // LoadCatalog liest und validiert die Katalog-Datei unter path. Ein

@@ -202,7 +202,7 @@ func (f *fakeLauncher) Catalog() []launcher.CatalogEntry {
 	return f.catalog
 }
 
-func (f *fakeLauncher) Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
+func (f *fakeLauncher) Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {

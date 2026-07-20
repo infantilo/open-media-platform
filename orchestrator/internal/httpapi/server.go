@@ -94,7 +94,7 @@ type SnapshotService interface {
 type LauncherService interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
-	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
+	Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
@@ -103,7 +103,7 @@ type LauncherService interface {
 	// FEATURES.md §17.3d/§17.4) — s. handlePostCatalogEntry/
 	// handleDeleteCatalogEntry in launcher_handlers.go.
 	ImportCatalogEntry(entry launcher.CatalogEntry) error
-	RemoveCatalogEntry(nodeType string) error
+	RemoveCatalogEntry(nodeType, version string) error
 }
 
 // WorkflowService verwaltet Workflow-Definitionen und führt Bundle-

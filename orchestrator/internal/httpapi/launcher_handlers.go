@@ -72,12 +72,15 @@ func handlePostCatalogEntry(svc LauncherService) http.HandlerFunc {
 }
 
 // handleDeleteCatalogEntry liefert DELETE /api/v1/catalog/<type> (§17
-// Teil 4) — entfernt einen zuvor importierten Eintrag; statische
+// Teil 4/5) — entfernt einen zuvor importierten Eintrag; statische
 // Einträge aus deploy/catalog.json sind darüber nie löschbar (s.
-// launcher.ErrCatalogTypeNotImported).
+// launcher.ErrCatalogTypeNotImported). Optionaler `?version=`-Query-
+// Parameter (§17 Teil 5: mehrere Versionen desselben Typs) — fehlt er,
+// wird "" angenommen (unverändertes Verhalten für unversionierte
+// Importe aus §17 Teil 4).
 func handleDeleteCatalogEntry(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.RemoveCatalogEntry(r.PathValue("type")); err != nil {
+		if err := svc.RemoveCatalogEntry(r.PathValue("type"), r.URL.Query().Get("version")); err != nil {
 			writeCatalogImportError(w, err)
 			return
 		}
@@ -131,12 +134,18 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // "<catalogType>"} startet eine neue Instanz lokal; ein zusätzliches
 // {"hostId": "<hostId>"} (ARCHITECTURE.md §18.5, UMSETZUNG.md D6 Teil
 // 2) startet sie stattdessen auf dem entsprechend registrierten
-// Remote-Host. Fehlt hostId, unverändertes Verhalten seit C8.
+// Remote-Host. Fehlt hostId, unverändertes Verhalten seit C8. Ein
+// optionales {"version": "..."} (§17 Teil 5) wählt zwischen mehreren
+// importierten Versionen desselben Typs — fehlt es und ist der Typ
+// eindeutig (statisch oder nur einmal importiert), unverändertes
+// Verhalten; ist er mehrdeutig, liefert svc.Start
+// ErrCatalogVersionAmbiguous (HTTP 409, s. writeLauncherError).
 func handlePostInstance(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Type   string `json:"type"`
-			HostID string `json:"hostId"`
+			Type    string `json:"type"`
+			Version string `json:"version"`
+			HostID  string `json:"hostId"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -146,7 +155,7 @@ func handlePostInstance(svc LauncherService) http.HandlerFunc {
 		// Direkter Katalog-Start hat keinen Workflow-Kontext, also kein
 		// extraEnv (Kapitel 15, s. launcher.Launcher.Start-Doku) — Nodes
 		// laufen mit ihren Katalog-/Programm-Defaults.
-		inst, err := svc.Start(body.Type, body.HostID, nil)
+		inst, err := svc.Start(body.Type, body.Version, body.HostID, nil)
 		if err != nil {
 			writeLauncherError(w, err)
 			return
@@ -167,6 +176,7 @@ func handleDeleteInstance(svc LauncherService) http.HandlerFunc {
 }
 
 func writeLauncherError(w http.ResponseWriter, err error) {
+	var versionErr *launcher.ErrCatalogVersionAmbiguous
 	switch {
 	case errors.Is(err, launcher.ErrUnknownType), errors.Is(err, launcher.ErrUnknownInstance):
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -174,6 +184,15 @@ func writeLauncherError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, launcher.ErrRemoteUnavailable):
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	case errors.As(err, &versionErr):
+		// §17 Teil 5: Typ existiert, aber mehrdeutig ohne Version — 409
+		// (wie ErrCatalogTypeExists/ErrCatalogTypeInUse: ein Konflikt mit
+		// dem aktuellen Katalog-Zustand, kein "nicht gefunden").
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":    versionErr.Error(),
+			"type":     versionErr.Type,
+			"versions": versionErr.Versions,
+		})
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

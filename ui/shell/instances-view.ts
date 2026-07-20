@@ -33,6 +33,9 @@ interface LauncherInstance {
   restartCount?: number;
   cpuPercent?: number;
   rssBytes?: number;
+  // version (§17 Teil 5, docs/END-GOAL-FEATURES.md §17.4 Teil 5) — leer
+  // für statische/unversionierte Typen.
+  version?: string;
 }
 
 interface HostEntry {
@@ -118,7 +121,7 @@ class InstancesView extends HTMLElement {
           ? `<div style="color:var(--omp-error);font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-word;">${escapeHtml(inst.crashMessage || "Prozess abgestürzt")}</div>`
           : "";
         return `<tr>
-          <td style="padding:2px 8px;">${escapeHtml(inst.label)}<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}</div>${crashLine}</td>
+          <td style="padding:2px 8px;">${escapeHtml(inst.label)}<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(inst.type)}${inst.version ? ` (${escapeHtml(inst.version)})` : ""}</div>${crashLine}</td>
           <td style="padding:2px 8px;">${status}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(hostLabel)}</td>
           <td style="padding:2px 8px;">${formatCpu(inst.cpuPercent)}</td>

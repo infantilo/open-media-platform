@@ -34,7 +34,7 @@ func TestCatalogStorePutThenListRoundTrips(t *testing.T) {
 		t.Fatalf("List() = %+v, want [%+v]", list, entry)
 	}
 
-	if err := s.Delete(entry.Type); err != nil {
+	if err := s.Delete(entry.Type, entry.Version); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
 	list, err = s.List()
@@ -48,7 +48,7 @@ func TestCatalogStorePutThenListRoundTrips(t *testing.T) {
 
 func TestCatalogStoreDeleteUnknownIsNotAnError(t *testing.T) {
 	s := testCatalogStore(t)
-	if err := s.Delete("does-not-exist"); err != nil {
+	if err := s.Delete("does-not-exist", ""); err != nil {
 		t.Fatalf("Delete() of unknown type error = %v, want nil", err)
 	}
 }

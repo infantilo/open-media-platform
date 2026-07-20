@@ -103,7 +103,14 @@ type GraphService interface {
 // Workflow-Start ist aus Launcher-Sicht nichts anderes als mehrere
 // gebündelte Start-Aufrufe.
 type Launcher interface {
-	Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error)
+	// Start-Signatur seit §17 Teil 5 um `version` erweitert
+	// (docs/END-GOAL-FEATURES.md §17.4 Teil 5: mehrere Versionen
+	// desselben importierten Typs) — Workflows referenzieren Rollen
+	// bislang nur über NodeType, nie über eine Version, deshalb ruft
+	// service.go Start hier immer mit version="" auf (unverändertes
+	// Verhalten: löst sich wie vor §17 Teil 5 auf, solange der Typ nicht
+	// mehrdeutig mehrfach importiert wurde).
+	Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 	// Catalog liefert die bekannten Node-Typen (Kapitel 12 Teil 3,
 	// §12.3d: Import validiert unbekannte nodeType-Werte dagegen, statt
@@ -500,7 +507,7 @@ func (s *Service) runStart(wf Workflow) {
 
 	pending := map[string]string{} // roleName -> instanceID, noch nicht in der Registry gesehen
 	for _, role := range wf.Definition.Roles {
-		inst, err := s.launcher.Start(role.NodeType, role.HostID, extraEnv)
+		inst, err := s.launcher.Start(role.NodeType, "", role.HostID, extraEnv)
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return

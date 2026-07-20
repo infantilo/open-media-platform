@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"strings"
@@ -148,7 +149,7 @@ func requirePodman(t *testing.T) {
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
 
-	if _, err := l.Start("does-not-exist", "", nil); err != ErrUnknownType {
+	if _, err := l.Start("does-not-exist", "", "", nil); err != ErrUnknownType {
 		t.Fatalf("Start() error = %v, want ErrUnknownType", err)
 	}
 }
@@ -161,7 +162,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "quadlet", Command: []string{"true"}}}
 	l := newWithStore(catalog, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
 
-	if _, err := l.Start("x", "", nil); err != ErrUnsupportedRunner {
+	if _, err := l.Start("x", "", "", nil); err != ErrUnsupportedRunner {
 		t.Fatalf("Start() error = %v, want ErrUnsupportedRunner", err)
 	}
 }
@@ -169,7 +170,7 @@ func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
 func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
 
-	inst, err := l.Start("sleepy", "", nil)
+	inst, err := l.Start("sleepy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -208,7 +209,7 @@ func TestLauncherStartStopPodmanReal(t *testing.T) {
 	requirePodman(t)
 	l := newWithStore(podmanCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
 
-	inst, err := l.Start("podman-sleepy", "", nil)
+	inst, err := l.Start("podman-sleepy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -254,7 +255,7 @@ func TestImportCatalogEntryUnavailableWithoutCatalogStore(t *testing.T) {
 	if err := l.ImportCatalogEntry(entry); err != ErrCatalogImportUnavailable {
 		t.Fatalf("ImportCatalogEntry() error = %v, want ErrCatalogImportUnavailable", err)
 	}
-	if err := l.RemoveCatalogEntry("x"); err != ErrCatalogImportUnavailable {
+	if err := l.RemoveCatalogEntry("x", ""); err != ErrCatalogImportUnavailable {
 		t.Fatalf("RemoveCatalogEntry() error = %v, want ErrCatalogImportUnavailable", err)
 	}
 }
@@ -330,7 +331,7 @@ func TestImportCatalogEntryRealAdmissionCheck(t *testing.T) {
 		t.Fatalf("Catalog() after import = %+v, want an entry with type %q", l.Catalog(), entry.Type)
 	}
 
-	if err := l.RemoveCatalogEntry(entry.Type); err != nil {
+	if err := l.RemoveCatalogEntry(entry.Type, entry.Version); err != nil {
 		t.Fatalf("RemoveCatalogEntry() error = %v", err)
 	}
 	for _, e := range l.Catalog() {
@@ -370,13 +371,175 @@ func TestImportCatalogEntryRealAdmissionCheckRejectsNonConformingImage(t *testin
 	}
 }
 
+// TestResolveCatalogEntryVersioning (§17 Teil 5): weißbox-artiger Test
+// der reinen Auflösungslogik (resolveCatalogEntry/findEntry) — seedet
+// l.importedCatalog direkt statt über ImportCatalogEntry (das würde
+// einen echten Admission-Check pro Fall verlangen, hier geht es nur um
+// die Auflösung selbst, nicht um den Import-Weg). Deckt genau die drei
+// im Dokument (§17.4 Teil 5) verlangten Fälle ab: mehrere Versionen
+// desselben Typs koexistieren, eine eindeutige Version wird ohne
+// explizite Angabe gefunden, eine mehrdeutige verlangt eine Angabe.
+func TestResolveCatalogEntryVersioning(t *testing.T) {
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
+	v1 := CatalogEntry{Type: "acme-widget", Label: "Acme v1", Runner: runnerPodman, Image: "acme:1.0", Version: "1.0.0"}
+	v2 := CatalogEntry{Type: "acme-widget", Label: "Acme v2", Runner: runnerPodman, Image: "acme:2.0", Version: "2.0.0"}
+	l.importedCatalog[catalogKey(v1.Type, v1.Version)] = v1
+	l.importedCatalog[catalogKey(v2.Type, v2.Version)] = v2
+
+	// Beide Versionen erscheinen als getrennte Katalog-Einträge.
+	var seenVersions []string
+	for _, e := range l.Catalog() {
+		if e.Type == "acme-widget" {
+			seenVersions = append(seenVersions, e.Version)
+		}
+	}
+	if len(seenVersions) != 2 {
+		t.Fatalf("Catalog() acme-widget entries = %v, want 2 (1.0.0 and 2.0.0)", seenVersions)
+	}
+
+	// Exakte Version aufgelöst.
+	got, err := l.resolveCatalogEntry("acme-widget", "2.0.0")
+	if err != nil || got.Label != "Acme v2" {
+		t.Fatalf("resolveCatalogEntry(acme-widget, 2.0.0) = %+v, %v, want Acme v2, nil", got, err)
+	}
+
+	// Unbekannte Version → ErrUnknownType, nicht ambigious.
+	if _, err := l.resolveCatalogEntry("acme-widget", "9.9.9"); err != ErrUnknownType {
+		t.Fatalf("resolveCatalogEntry(acme-widget, 9.9.9) error = %v, want ErrUnknownType", err)
+	}
+
+	// Keine Version angegeben, aber zwei importierte Versionen vorhanden
+	// → ErrCatalogVersionAmbiguous mit beiden Versionen in der Meldung.
+	_, err = l.resolveCatalogEntry("acme-widget", "")
+	var ambiguous *ErrCatalogVersionAmbiguous
+	if !errors.As(err, &ambiguous) {
+		t.Fatalf("resolveCatalogEntry(acme-widget, \"\") error = %v, want *ErrCatalogVersionAmbiguous", err)
+	}
+	if ambiguous.Type != "acme-widget" || len(ambiguous.Versions) != 2 {
+		t.Fatalf("ambiguous = %+v, want Type=acme-widget with 2 versions", ambiguous)
+	}
+
+	// Ein Typ mit genau einer importierten Version bleibt ohne
+	// explizite Angabe eindeutig auflösbar (unverändertes Verhalten seit
+	// §17 Teil 4 für den Ein-Versionen-Fall).
+	single := CatalogEntry{Type: "solo-widget", Label: "Solo", Runner: runnerPodman, Image: "solo:1.0", Version: "1.0.0"}
+	l.importedCatalog[catalogKey(single.Type, single.Version)] = single
+	got, err = l.resolveCatalogEntry("solo-widget", "")
+	if err != nil || got.Label != "Solo" {
+		t.Fatalf("resolveCatalogEntry(solo-widget, \"\") = %+v, %v, want Solo, nil", got, err)
+	}
+
+	// Statische Einträge bleiben unverändert ohne Version auflösbar,
+	// auch wenn irgendein importierter Typ mehrdeutig ist.
+	got, err = l.resolveCatalogEntry("sleepy", "")
+	if err != nil || got.Label != "Sleepy" {
+		t.Fatalf("resolveCatalogEntry(sleepy, \"\") = %+v, %v, want Sleepy, nil", got, err)
+	}
+}
+
+// TestRemoveCatalogEntryVersionScoped (§17 Teil 5): RemoveCatalogEntry
+// muss exakt das angegebene (Type, Version)-Paar treffen — eine
+// laufende Instanz einer ANDEREN Version desselben Typs darf das
+// Entfernen nicht blockieren, und ein falsches Versions-Argument gilt
+// als "nicht importiert", nicht als Fund.
+func TestRemoveCatalogEntryVersionScoped(t *testing.T) {
+	l := newWithStore(nil, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, testCatalogStore(t))
+	v1 := CatalogEntry{Type: "acme-widget", Label: "Acme v1", Runner: runnerPodman, Image: "acme:1.0", Version: "1.0.0"}
+	v2 := CatalogEntry{Type: "acme-widget", Label: "Acme v2", Runner: runnerPodman, Image: "acme:2.0", Version: "2.0.0"}
+	l.importedCatalog[catalogKey(v1.Type, v1.Version)] = v1
+	l.importedCatalog[catalogKey(v2.Type, v2.Version)] = v2
+	l.instances["running-1"] = Instance{ID: "running-1", Type: "acme-widget", Version: "1.0.0"}
+
+	if err := l.RemoveCatalogEntry("acme-widget", "2.0.0"); err != nil {
+		t.Fatalf("RemoveCatalogEntry(acme-widget, 2.0.0) error = %v, want nil (only v1 is in use)", err)
+	}
+	if _, ok := l.importedCatalog[catalogKey("acme-widget", "1.0.0")]; !ok {
+		t.Fatal("v1 entry should still be present")
+	}
+
+	if err := l.RemoveCatalogEntry("acme-widget", "1.0.0"); err != ErrCatalogTypeInUse {
+		t.Fatalf("RemoveCatalogEntry(acme-widget, 1.0.0) error = %v, want ErrCatalogTypeInUse", err)
+	}
+
+	if err := l.RemoveCatalogEntry("acme-widget", "9.9.9"); err != ErrCatalogTypeNotImported {
+		t.Fatalf("RemoveCatalogEntry(acme-widget, 9.9.9) error = %v, want ErrCatalogTypeNotImported", err)
+	}
+}
+
+// TestImportCatalogEntryRealMultiVersion (§17 Teil 5): echter
+// End-to-End-Test mit ZWEI Versionen desselben Typs, jede mit ihrem
+// eigenen echten Admission-Check (dasselbe omp-mock-Testimage zweimal
+// importiert, unterschiedlich versioniert — Import prüft nicht das
+// Image selbst auf "schon mal gesehen", jede Version durchläuft ihren
+// eigenen vollen Check). Bestätigt live: beide koexistieren im Katalog,
+// ein dritter Import derselben (Type, Version)-Kombination wird als
+// Duplikat abgelehnt, Start ohne Version bei zwei vorhandenen Versionen
+// scheitert mit einer Mehrdeutigkeits-Meldung, Start MIT Version trifft
+// die richtige.
+func TestImportCatalogEntryRealMultiVersion(t *testing.T) {
+	requirePodman(t)
+	const image = "localhost/omp-mock-test:latest"
+	requireImage(t, image)
+
+	l := newWithStore(nil, "http://localhost:8010", "nats://localhost:4222", newFakeInstanceStore(), nil, nil, testCatalogStore(t))
+	base := CatalogEntry{Type: "imported-mock-mv", Label: "Imported Mock MV", Runner: runnerPodman, Image: image}
+	v1 := base
+	v1.Version = "1.0.0"
+	v2 := base
+	v2.Version = "2.0.0"
+
+	if err := l.ImportCatalogEntry(v1); err != nil {
+		t.Fatalf("ImportCatalogEntry(v1) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = l.RemoveCatalogEntry(v1.Type, v1.Version) })
+	if err := l.ImportCatalogEntry(v2); err != nil {
+		t.Fatalf("ImportCatalogEntry(v2) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { _ = l.RemoveCatalogEntry(v2.Type, v2.Version) })
+
+	if err := l.ImportCatalogEntry(v1); err != ErrCatalogTypeExists {
+		t.Fatalf("re-importing v1 error = %v, want ErrCatalogTypeExists", err)
+	}
+
+	var versions []string
+	for _, e := range l.Catalog() {
+		if e.Type == base.Type {
+			versions = append(versions, e.Version)
+		}
+	}
+	if len(versions) != 2 {
+		t.Fatalf("Catalog() imported-mock-mv entries = %v, want 2", versions)
+	}
+
+	var ambiguous *ErrCatalogVersionAmbiguous
+	if _, err := l.startLocal(base.Type, "", nil); !errors.As(err, &ambiguous) {
+		t.Fatalf("startLocal(imported-mock-mv, \"\") error = %v, want *ErrCatalogVersionAmbiguous", err)
+	}
+
+	inst, err := l.startLocal(base.Type, "2.0.0", nil)
+	if err != nil {
+		t.Fatalf("startLocal(imported-mock-mv, 2.0.0) error = %v", err)
+	}
+	t.Cleanup(func() { _ = l.Stop(inst.ID) })
+	if inst.Version != "2.0.0" {
+		t.Fatalf("started instance version = %q, want 2.0.0", inst.Version)
+	}
+
+	if err := l.RemoveCatalogEntry(v2.Type, v2.Version); err != ErrCatalogTypeInUse {
+		t.Fatalf("RemoveCatalogEntry(v2) while running error = %v, want ErrCatalogTypeInUse", err)
+	}
+	if err := l.Stop(inst.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+}
+
 // TestLauncherSampleLocalResourcesPopulatesListEntry (Kapitel 14 Teil
 // 2): List() bleibt ohne CPU/RSS-Werte, solange sampleLocalResources()
 // noch nicht (mindestens zweimal, für ein CPU%-Delta) gelaufen ist;
 // danach liefert List() CPUPercent/RSSBytes für die lokale Instanz.
 func TestLauncherSampleLocalResourcesPopulatesListEntry(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
-	inst, err := l.Start("sleepy", "", nil)
+	inst, err := l.Start("sleepy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -408,7 +571,7 @@ func TestLauncherSampleLocalResourcesPopulatesListEntry(t *testing.T) {
 // fälschlich ein Delta gegen einen veralteten Wert bildet.
 func TestLauncherSampleLocalResourcesPrunesStoppedInstance(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
-	inst, err := l.Start("sleepy", "", nil)
+	inst, err := l.Start("sleepy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -443,7 +606,7 @@ func TestLauncherStopSendsSigkillIfSigtermIgnored(t *testing.T) {
 	defer func() { stopGracePeriod = original }()
 
 	l := newWithStore(stubbornCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
-	inst, err := l.Start("stubborn", "", nil)
+	inst, err := l.Start("stubborn", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -471,7 +634,7 @@ func TestLauncherStopUnknownInstanceReturnsError(t *testing.T) {
 func TestLauncherReloadsStillRunningInstanceAfterRestart(t *testing.T) {
 	store := NewStore(testDB(t))
 	l1 := New(sleepyCatalog(), "http://registry", "nats://nats", store, nil, nil, nil)
-	inst, err := l1.Start("sleepy", "", nil)
+	inst, err := l1.Start("sleepy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -492,7 +655,7 @@ func TestLauncherDropsDeadInstanceAfterRestart(t *testing.T) {
 	quickExit := []CatalogEntry{{Type: "quick", Label: "Quick", Runner: "process", Command: []string{"/bin/sh", "-c", "exit 0"}}}
 
 	l1 := New(quickExit, "http://registry", "nats://nats", store, nil, nil, nil)
-	inst, err := l1.Start("quick", "", nil)
+	inst, err := l1.Start("quick", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -526,7 +689,7 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 	}}
 	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil, nil)
 
-	inst, err := l.Start("envdump", "", nil)
+	inst, err := l.Start("envdump", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -581,7 +744,7 @@ func TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars(t *testing.T) {
 	}}
 	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil, nil)
 
-	inst, err := l.Start("envdump2", "", map[string]string{
+	inst, err := l.Start("envdump2", "", "", map[string]string{
 		"OMP_WIDTH":       "1280",   // überschreibt den Katalog-Wert
 		"OMP_INSTANCE_ID": "hacked", // darf NICHT gegen die reservierte Variable gewinnen
 	})
@@ -625,7 +788,7 @@ func TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts(t *testing.T) {
 	pub := &recordingPublisher{}
 	l := newWithStore(crashing, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil, nil)
 
-	inst, err := l.Start("crashy", "", nil)
+	inst, err := l.Start("crashy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -720,7 +883,7 @@ func TestLauncherAutoRestartsCrashedInstanceInPlace(t *testing.T) {
 	l := newWithStore(catalog, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil, nil)
 	l.SetRestartObserver(obs)
 
-	inst, err := l.Start("flaky", "", nil)
+	inst, err := l.Start("flaky", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -789,7 +952,7 @@ func TestLauncherCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	pub := &recordingPublisher{}
 	l := newWithStore(crashing, "http://registry", "nats://nats", newFakeInstanceStore(), pub, nil, nil)
 
-	inst, err := l.Start("loopy", "", nil)
+	inst, err := l.Start("loopy", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -853,7 +1016,7 @@ func (f *fakeNATSRequester) RequestBytes(subject string, data []byte, timeout ti
 func TestLauncherStartRemoteWithoutNATSReturnsError(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
 
-	if _, err := l.Start("sleepy", "host-1", nil); err != ErrRemoteUnavailable {
+	if _, err := l.Start("sleepy", "", "host-1", nil); err != ErrRemoteUnavailable {
 		t.Fatalf("Start() error = %v, want ErrRemoteUnavailable", err)
 	}
 }
@@ -866,7 +1029,7 @@ func TestLauncherStartRemoteSendsCorrectSubjectAndSucceeds(t *testing.T) {
 	// Katalog — der Host-Agent hat seinen eigenen, s. Paketkommentar —
 	// deshalb funktioniert ein beim Orchestrator unbekannter Typ hier
 	// bewusst trotzdem.
-	inst, err := l.Start("omp-source", "host-1", nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -894,7 +1057,7 @@ func TestLauncherStartRemoteFailureResponse(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: false, Error: "unknown catalog type"}}
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake, nil)
 
-	if _, err := l.Start("omp-source", "host-1", nil); err == nil {
+	if _, err := l.Start("omp-source", "", "host-1", nil); err == nil {
 		t.Fatal("Start() error = nil, want an error for a failed remote response")
 	}
 	if len(l.List()) != 0 {
@@ -906,7 +1069,7 @@ func TestLauncherStopRemoteSendsStopCommand(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 4242}}
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake, nil)
 
-	inst, err := l.Start("omp-source", "host-1", nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -951,7 +1114,7 @@ func TestHandleRemoteExitRestartsInPlaceAndNotifiesObserver(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), pub, fake, nil)
 	l.SetRestartObserver(obs)
 
-	inst, err := l.Start("omp-source", "host-1", map[string]string{"OMP_WIDTH": "1280"})
+	inst, err := l.Start("omp-source", "", "host-1", map[string]string{"OMP_WIDTH": "1280"})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1013,7 +1176,7 @@ func TestHandleRemoteExitCrashLoopBrakeStopsAutoRestarting(t *testing.T) {
 	pub := &recordingPublisher{}
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), pub, fake, nil)
 
-	inst, err := l.Start("omp-source", "host-1", nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1072,7 +1235,7 @@ func TestHandleRemoteExitIgnoresEventFromWrongHost(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake, nil)
 
-	inst, err := l.Start("omp-source", "host-1", nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
@@ -1097,7 +1260,7 @@ func TestHandleRemoteExitStopDuringBackoffSkipsRestart(t *testing.T) {
 	fake := &fakeNATSRequester{response: remoteResponse{OK: true, PID: 1}}
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, fake, nil)
 
-	inst, err := l.Start("omp-source", "host-1", nil)
+	inst, err := l.Start("omp-source", "", "host-1", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}

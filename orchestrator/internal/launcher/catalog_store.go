@@ -7,11 +7,13 @@ import (
 
 // CatalogStore liest/schreibt importierte Katalog-Einträge in der
 // `catalog_entries`-Tabelle (internal/db/migrations/0009_catalog_
-// entries.sql, §17 Teil 4) — gleiches Blob-pro-Zeile-Muster wie
-// launcher.Store (Instanzen). Nur importierte (per `POST /api/v1/
-// catalog` hinzugefügte) Einträge landen hier — die statischen
-// Einträge aus deploy/catalog.json bleiben unverändert eine Datei,
-// s. Launcher.Catalog()-Doku.
+// entries.sql + 0010_catalog_entries_version.sql, §17 Teil 4/5) —
+// gleiches Blob-pro-Zeile-Muster wie launcher.Store (Instanzen), mit
+// (type, version) als zusammengesetztem Schlüssel statt nur type (§17
+// Teil 5: mehrere Versionen desselben Typs parallel im Katalog). Nur
+// importierte (per `POST /api/v1/catalog` hinzugefügte) Einträge landen
+// hier — die statischen Einträge aus deploy/catalog.json bleiben
+// unverändert eine Datei, s. Launcher.Catalog()-Doku.
 type CatalogStore struct {
 	db *sql.DB
 }
@@ -22,23 +24,25 @@ func NewCatalogStore(database *sql.DB) *CatalogStore {
 	return &CatalogStore{db: database}
 }
 
-// Put speichert (oder überschreibt) einen importierten Katalog-Eintrag.
+// Put speichert (oder überschreibt) einen importierten Katalog-Eintrag,
+// identifiziert durch (entry.Type, entry.Version).
 func (s *CatalogStore) Put(entry CatalogEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.Exec(`
-		INSERT INTO catalog_entries (type, data) VALUES ($1, $2)
-		ON CONFLICT (type) DO UPDATE SET data = EXCLUDED.data
-	`, entry.Type, data)
+		INSERT INTO catalog_entries (type, version, data) VALUES ($1, $2, $3)
+		ON CONFLICT (type, version) DO UPDATE SET data = EXCLUDED.data
+	`, entry.Type, entry.Version, data)
 	return err
 }
 
-// Delete entfernt einen importierten Katalog-Eintrag. Kein Fehler, wenn
-// er nicht existiert (idempotent, gleiches Muster wie Store.Delete).
-func (s *CatalogStore) Delete(entryType string) error {
-	_, err := s.db.Exec(`DELETE FROM catalog_entries WHERE type = $1`, entryType)
+// Delete entfernt den importierten Katalog-Eintrag mit dem angegebenen
+// (entryType, version)-Paar. Kein Fehler, wenn er nicht existiert
+// (idempotent, gleiches Muster wie Store.Delete).
+func (s *CatalogStore) Delete(entryType, version string) error {
+	_, err := s.db.Exec(`DELETE FROM catalog_entries WHERE type = $1 AND version = $2`, entryType, version)
 	return err
 }
 

@@ -175,6 +175,11 @@ interface CatalogEntry {
   // bleiben.
   description?: string;
   expectedResources?: string;
+  // version (§17 Teil 5, docs/END-GOAL-FEATURES.md §17.4 Teil 5): leer
+  // für statische Einträge und einfache, unversionierte Importe
+  // (unverändertes Verhalten seit §17 Teil 4) — gesetzt, wenn mehrere
+  // Versionen desselben Typs parallel importiert wurden.
+  version?: string;
 }
 
 // LauncherInstance — Wire-Format identisch zu
@@ -203,6 +208,9 @@ interface LauncherInstance {
   // Start) — kein impliziter 0%-Wert.
   cpuPercent?: number;
   rssBytes?: number;
+  // version (§17 Teil 5) — die CatalogEntry.Version, mit der diese
+  // Instanz gestartet wurde; leer für statische/unversionierte Typen.
+  version?: string;
 }
 
 // HostEntry — Wire-Format identisch zu httpapi.hostResponse
@@ -2190,7 +2198,11 @@ export class FlowCanvas extends HTMLElement {
         row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
 
         const btn = document.createElement("button");
-        btn.textContent = `+ ${entry.label}`;
+        // version (§17 Teil 5): mehrere importierte Versionen desselben
+        // Typs erscheinen als getrennte Katalog-Einträge/Karten — ohne
+        // die Version im Label wären zwei Karten mit identischem
+        // "+ Label" ununterscheidbar.
+        btn.textContent = entry.version ? `+ ${entry.label} (${entry.version})` : `+ ${entry.label}`;
         // Beschreibung/Ressourcen-Schätzung stehen sichtbar als
         // Untertitel (s. u.), zusätzlich hier im Tooltip für den
         // schnellen Hover-Fall.
@@ -2220,7 +2232,7 @@ export class FlowCanvas extends HTMLElement {
           row.appendChild(hostSelect);
         }
 
-        btn.addEventListener("click", () => this.#startInstance(entry.type, hostSelect?.value || undefined));
+        btn.addEventListener("click", () => this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined));
         row.appendChild(btn);
         this.#palette.appendChild(row);
 
@@ -2263,7 +2275,11 @@ export class FlowCanvas extends HTMLElement {
           void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
         });
 
-        for (const inst of instances.filter((i) => i.type === entry.type)) {
+        // §17 Teil 5: nach (Type, Version) filtern, nicht nur Type —
+        // sonst würde jede laufende Instanz eines Typs unter JEDER
+        // seiner Versions-Karten doppelt auftauchen, sobald mehrere
+        // Versionen desselben Typs importiert sind.
+        for (const inst of instances.filter((i) => i.type === entry.type && (i.version || "") === (entry.version || ""))) {
           this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
         }
       }
@@ -2386,12 +2402,12 @@ export class FlowCanvas extends HTMLElement {
     return row;
   }
 
-  async #startInstance(type: string, hostId?: string) {
+  async #startInstance(type: string, version?: string, hostId?: string) {
     try {
       const res = await apiFetch("/api/v1/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(hostId ? { type, hostId } : { type }),
+        body: JSON.stringify({ type, ...(version ? { version } : {}), ...(hostId ? { hostId } : {}) }),
       });
       if (!res.ok) {
         const text = await res.text();

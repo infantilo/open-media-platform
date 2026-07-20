@@ -169,7 +169,7 @@ func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalo
 
 func (f fakeLauncherService) List() []launcher.Instance { return f.instances }
 
-func (f fakeLauncherService) Start(nodeType, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
+func (f fakeLauncherService) Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
 	return f.started, f.startErr
 }
 
@@ -181,7 +181,7 @@ func (f fakeLauncherService) TotalRestarts() uint64 { return f.totalRestarts }
 
 func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) error { return f.importErr }
 
-func (f fakeLauncherService) RemoveCatalogEntry(nodeType string) error { return f.removeErr }
+func (f fakeLauncherService) RemoveCatalogEntry(nodeType, version string) error { return f.removeErr }
 
 // fakeAuthSvc ist ein Test-Double für AuthService — UserCount 0 im
 // Zero-Value (Bootstrap-Bypass, s. authGate.authenticate), damit alle

@@ -10096,3 +10096,104 @@ denselben vorbestehenden, unberührten `internal/hosts`-Flake.
 
 §17 ist damit bis auf Teil 5 (Versionierung importierter Katalog-
 Einträge) vollständig.
+
+## 2026-07-20 (Nachtrag 58) — §17 Teil 5: Versionierung importierter
+Katalog-Einträge, §17 vollständig abgeschlossen
+
+Baut auf Nachtrag 57 auf. Nachtrag 56 hatte Teil 5 explizit auf
+"nur relevant, sobald Teil 4 existiert" zurückgestellt — mit Nachtrag 57
+existiert Teil 4 vollständig, Teil 5 war damit der direkte nächste
+Schritt in derselben, bereits gewählten Ausbaustufe (§17 Teil 4/5
+Import).
+
+**Datenmodell:** `CatalogEntry.Version string` — leer für alle
+statischen `deploy/catalog.json`-Einträge (das Projekt versioniert seine
+eigenen Nodes nicht über dieses Feld) und für einfache, unversionierte
+Importe (unverändertes Verhalten seit Teil 4). Neue Migration
+`0010_catalog_entries_version.sql` (ALTER statt Neufassung von 0009 —
+0009 lief bereits real, s. `schema_migrations`-Tabelle in `internal/db`,
+eine bereits angewendete Migration wird nie nachträglich verändert):
+neue Spalte `version` (`DEFAULT ''` für bestehende Zeilen), Primärschlüssel
+erweitert auf `(type, version)`.
+
+**Zwei getrennte Kollisionsregeln:** gegen **statische** Einträge zählt
+weiterhin nur `Type` (der Projekt-eigene Namensraum bleibt komplett
+reserviert, unabhängig von jeder Version — ein Import kann `omp-source`
+unter keiner Version bekommen). Unter **importierten** Einträgen zählt
+das Paar `(Type, Version)` — zwei Importe desselben Typs mit
+unterschiedlicher Version dürfen nebeneinander bestehen, derselbe Typ
+mit identischer Version ist weiterhin ein Duplikat (`ErrCatalogTypeExists`,
+unverändertes Verhalten für den Ein-Versionen-Fall aus Teil 4).
+`Launcher.importedCatalog` ist intern jetzt nach einem kombinierten
+Schlüssel (`catalogKey(type, version)`, NUL-Byte-getrennt) statt reinem
+`Type` indiziert.
+
+**Start-Auflösung ohne Bruch für bestehende Aufrufer:**
+`resolveCatalogEntry(nodeType, version)` behandelt einen leeren
+`version`-Wert nicht als Sonderfall, sondern als Normalfall: ein
+statischer Typ oder ein Typ mit genau einer importierten Version löst
+sich unverändert ohne explizite Angabe auf (kein bestehender Aufrufer —
+Workflows, direkter Katalog-Start ohne Versionsfeld — muss sich ändern).
+Erst wenn ein Typ **mehrere** importierte Versionen hat und keine Version
+mitgegeben wurde, liefert `resolveCatalogEntry` den neuen
+`*ErrCatalogVersionAmbiguous{Type, Versions}` statt eine davon zu raten.
+`workflows.Service` ruft `Launcher.Start` deshalb weiterhin mit
+`version=""` auf — Rollen kennen im Workflow-Definitionsmodell keine
+Version, das war nie Teil dieser Runde und bleibt es (nur relevant, falls
+jemand eine Workflow-Rolle auf einen mehrdeutig importierten Typ legt,
+was heute ohnehin fehlschlagen würde, nur eben erst beim Start statt beim
+Anlegen des Workflows — kein neues Verhalten, das über diese Runde hinaus
+motiviert werden müsste).
+
+**"Instanz merkt sich ihre Version" kam praktisch geschenkt:** ein neues
+`Instance.Version`-Feld wird einmal beim Start gesetzt; ein automatischer
+K7-Teil-1-Neustart derselben Instanz-ID verwendet unverändert dieselbe,
+über die `supervise`/`supervisePodman`-Goroutine-Closure bereits
+festgehaltene `CatalogEntry` — kein Neustart-Pfad musste geändert werden,
+um sicherzustellen, dass ein späterer Import einer neueren Version
+bereits laufende Instanzen der alten Version nicht beeinflusst.
+
+**API:** `POST /api/v1/catalog`- und `POST /api/v1/instances`-Bodies
+bekommen ein optionales `version`-Feld; `DELETE /api/v1/catalog/{type}`
+einen optionalen `?version=`-Query-Parameter (kein Pfad-Segment, um
+Sonderzeichen in Versionsstrings nicht URL-kodieren zu müssen) — beide
+mit Default `""`, komplett rückwärtskompatibel zum Ein-Versionen-Fall aus
+Teil 4. `ErrCatalogVersionAmbiguous` liefert HTTP 409 mit Typ und
+verfügbaren Versionen im JSON-Body, nicht nur einer Textmeldung, damit
+ein UI-Client gezielt eine Auswahl anbieten könnte.
+
+**UI bewusst minimal gehalten** (kein vollständiges Versions-Auswahl-UX
+— §17 Teil 4/5 ist laut Dokument selbst "am wenigsten dringend...
+bewusst ans Ende gestellt", ein Vollausbau wäre hier unverhältnismäßig):
+Katalog-Palette zeigt die Version im Karten-Label (`+ Label (Version)`),
+sofern gesetzt, und filtert laufende Instanzen jetzt nach `(Type,
+Version)` statt nur `Type` — sonst wäre jede laufende Instanz eines
+mehrfach versionierten Typs unter jeder ihrer Versions-Karten doppelt
+erschienen. Instanzen-Tab zeigt die Version als Zusatzzeile unter dem
+Typnamen.
+
+**Vollständig live über die echte HTTP-API verifiziert** (nach `make
+start`, nicht nur Unit-Tests): zwei echte Versionen (`1.0.0`/`2.0.0`)
+desselben `omp-mock`-Testimages importiert, jede mit ihrem eigenen echten
+Admission-Check — beide erscheinen getrennt in `GET /api/v1/catalog`;
+`POST /api/v1/instances` ohne `version` bei zwei vorhandenen Versionen
+lieferte korrekt HTTP 409 mit `{"type":"imported-mock-v","versions":
+["1.0.0","2.0.0"]}`; mit explizitem `version:"2.0.0"` startete die
+richtige Version (`instance.version` im Response bestätigt); `DELETE
+.../catalog/imported-mock-v?version=2.0.0` wurde bei laufender Instanz
+mit 409 abgelehnt, `?version=1.0.0` (nicht laufend) gelang sofort; nach
+dem Stoppen der laufenden Instanz löste ein erneuter Start ganz ohne
+`version` (jetzt nur noch eine Version im Katalog) korrekt eindeutig auf.
+Kein Podman-Container-Rest, `catalog_entries` nach vollständigem Aufräumen
+per `psql` bestätigt leer. Zusätzlich neue Go-Unit-Tests: weißbox-artige
+Auflösungslogik-Tests (`l.importedCatalog` direkt geseedet statt über
+`ImportCatalogEntry`, um nicht jeden Randfall über einen echten,
+mehrere-Sekunden-langen Admission-Check laufen lassen zu müssen) plus ein
+zweiter voller End-to-End-Test mit echtem Doppel-Import
+(`TestImportCatalogEntryRealMultiVersion`). `go build`/`go vet`/`go test
+./...` grün bis auf denselben vorbestehenden `internal/hosts`-Flake;
+`deno check ui/**/*.ts`/`deno test ui/` ebenfalls grün.
+
+§17 (Node-/Microservice-Katalog: Beschreibungen, Ressourcen-Sicht,
+Alarm-View, Import fremder Microservices) ist damit als Ganzes
+vollständig abgeschlossen.

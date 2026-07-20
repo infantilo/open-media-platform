@@ -174,6 +174,18 @@ type Instance struct {
 	// aussagekräftig (eine Instanz ist entweder ein lokaler Subprozess
 	// oder ein Container, nie beides).
 	ContainerID string `json:"containerId,omitempty"`
+	// Version ist die CatalogEntry.Version, mit der diese Instanz
+	// gestartet wurde (§17 Teil 5) — leer für statische Einträge und für
+	// unversionierte Importe (unverändertes Verhalten). Wird einmal bei
+	// der Erstellung gesetzt und danach nie mehr verändert (auch nicht
+	// durch einen automatischen Neustart, s. supervise/supervisePodman:
+	// die dort verwendete CatalogEntry ist über die Goroutine-Closure
+	// bereits auf die zum Start-Zeitpunkt aufgelöste Version festgelegt)
+	// — genau das meint "Instanz merkt sich ihre Version" im
+	// Dokument: ein späterer Import einer neueren Version desselben Typs
+	// ändert nichts an bereits laufenden/neu gestarteten Instanzen der
+	// alten Version.
+	Version string `json:"version,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -224,8 +236,17 @@ type instanceStore interface {
 // ErrCatalogImportUnavailable statt einer Nil-Pointer-Panik.
 type catalogStore interface {
 	Put(CatalogEntry) error
-	Delete(entryType string) error
+	Delete(entryType, version string) error
 	List() ([]CatalogEntry, error)
+}
+
+// catalogKey kombiniert Type+Version zum internen Schlüssel von
+// Launcher.importedCatalog (§17 Teil 5) — \x00 als Trenner, da es in
+// keinem gültigen Typnamen/Versionsstring vorkommen kann (beide sind
+// von Importeuren gesetzter Freitext, aber ein NUL-Byte ist in JSON-
+// Strings ohnehin nicht darstellbar).
+func catalogKey(nodeType, version string) string {
+	return nodeType + "\x00" + version
 }
 
 // Launcher startet/stoppt Node-Instanzen aus dem Katalog als lokale
@@ -356,15 +377,16 @@ func (l *Launcher) loadImportedCatalog() {
 		return
 	}
 	for _, e := range entries {
-		l.importedCatalog[e.Type] = e
+		l.importedCatalog[catalogKey(e.Type, e.Version)] = e
 	}
 }
 
 // Catalog liefert die geladenen Katalog-Einträge (GET /api/v1/catalog)
 // — statische deploy/catalog.json-Einträge zuerst, danach importierte
-// (§17 Teil 4), stabil sortiert nach Typ für eine reihenfolgestabile
-// API-Antwort (Go-Map-Iteration wäre sonst jitterig, gleicher Grund wie
-// List()).
+// (§17 Teil 4/5, mehrere Versionen desselben Typs erscheinen als
+// getrennte Einträge), stabil sortiert nach (Typ, Version) für eine
+// reihenfolgestabile API-Antwort (Go-Map-Iteration wäre sonst jitterig,
+// gleicher Grund wie List()).
 func (l *Launcher) Catalog() []CatalogEntry {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -374,7 +396,12 @@ func (l *Launcher) Catalog() []CatalogEntry {
 	for _, e := range l.importedCatalog {
 		imported = append(imported, e)
 	}
-	sort.Slice(imported, func(i, j int) bool { return imported[i].Type < imported[j].Type })
+	sort.Slice(imported, func(i, j int) bool {
+		if imported[i].Type != imported[j].Type {
+			return imported[i].Type < imported[j].Type
+		}
+		return imported[i].Version < imported[j].Version
+	})
 	return append(out, imported...)
 }
 
@@ -383,22 +410,43 @@ func (l *Launcher) Catalog() []CatalogEntry {
 // verdrahtet ist (§17 Teil 4 nicht konfiguriert).
 var ErrCatalogImportUnavailable = errors.New("launcher: catalog import not available (no catalog store configured)")
 
-// ErrCatalogTypeExists wird von ImportCatalogEntry geliefert, wenn
-// bereits ein statischer ODER importierter Eintrag denselben Typnamen
-// trägt — Import darf einen bestehenden Node-Typ nie stillschweigend
-// überschreiben (weder einen Projekt-eigenen noch einen bereits
-// importierten).
-var ErrCatalogTypeExists = errors.New("launcher: catalog type already exists")
+// ErrCatalogTypeExists wird von ImportCatalogEntry geliefert, wenn der
+// Typname bereits statisch vergeben ist (jede Version wäre eine
+// Kollision mit dem reservierten Projekt-Namensraum) ODER bereits ein
+// importierter Eintrag mit demselben (Type, Version)-Paar existiert —
+// Import darf weder einen Projekt-eigenen Node-Typ noch eine bereits
+// importierte Version stillschweigend überschreiben. Zwei importierte
+// Einträge desselben Typs mit **unterschiedlicher** Version sind
+// dagegen ausdrücklich erlaubt (§17 Teil 5).
+var ErrCatalogTypeExists = errors.New("launcher: catalog type/version already exists")
 
 // ErrCatalogTypeNotImported wird von RemoveCatalogEntry geliefert, wenn
-// der Typ kein importierter Eintrag ist (unbekannt oder ein statischer
-// Projekt-Eintrag — letzterer ist über diese API nie entfernbar).
-var ErrCatalogTypeNotImported = errors.New("launcher: catalog type is not an imported entry")
+// das (Type, Version)-Paar kein importierter Eintrag ist (unbekannt
+// oder ein statischer Projekt-Eintrag — letzterer ist über diese API
+// nie entfernbar).
+var ErrCatalogTypeNotImported = errors.New("launcher: catalog type/version is not an imported entry")
 
 // ErrCatalogTypeInUse wird von RemoveCatalogEntry geliefert, wenn noch
-// mindestens eine Instanz dieses Typs läuft (§17.3d Punkt iv:
-// "Löschen-Semantik: nur wenn keine laufende Instanz mehr referenziert").
-var ErrCatalogTypeInUse = errors.New("launcher: catalog type is still referenced by a running instance")
+// mindestens eine Instanz mit genau diesem (Type, Version)-Paar läuft
+// (§17.3d Punkt iv: "Löschen-Semantik: nur wenn keine laufende Instanz
+// mehr referenziert").
+var ErrCatalogTypeInUse = errors.New("launcher: catalog type/version is still referenced by a running instance")
+
+// ErrCatalogVersionAmbiguous wird von Start()/resolveCatalogEntry
+// geliefert (§17 Teil 5), wenn kein Version-Wert angegeben wurde, aber
+// mehr als eine importierte Version desselben Typs existiert — anders
+// als bei einer einzigen (oder gar keiner) importierten Version reicht
+// "type" allein dann nicht mehr, um eindeutig zu bestimmen, welche
+// gestartet werden soll. Versions trägt die verfügbaren Werte, damit
+// der Aufrufer (UI/API-Client) gezielt nachfragen kann.
+type ErrCatalogVersionAmbiguous struct {
+	Type     string
+	Versions []string
+}
+
+func (e *ErrCatalogVersionAmbiguous) Error() string {
+	return fmt.Sprintf("launcher: catalog type %q has multiple versions (%s), version must be specified", e.Type, strings.Join(e.Versions, ", "))
+}
 
 // ErrCatalogInvalidEntry wird von ImportCatalogEntry geliefert, wenn
 // entry schon formal nicht importierbar ist (kein Typname, kein
@@ -427,7 +475,7 @@ func (l *Launcher) ImportCatalogEntry(entry CatalogEntry) error {
 
 	l.mu.Lock()
 	_, staticExists := findStatic(l.staticCatalog, entry.Type)
-	_, importedExists := l.importedCatalog[entry.Type]
+	_, importedExists := l.importedCatalog[catalogKey(entry.Type, entry.Version)]
 	if staticExists || importedExists {
 		l.mu.Unlock()
 		return ErrCatalogTypeExists
@@ -449,39 +497,41 @@ func (l *Launcher) ImportCatalogEntry(entry CatalogEntry) error {
 	}
 
 	l.mu.Lock()
-	l.importedCatalog[entry.Type] = entry
+	l.importedCatalog[catalogKey(entry.Type, entry.Version)] = entry
 	l.mu.Unlock()
 	return nil
 }
 
 // RemoveCatalogEntry entfernt einen zuvor importierten Katalog-Eintrag
-// — abgelehnt, wenn er gar nicht importiert wurde (unbekannt oder ein
-// statischer Eintrag) oder noch mindestens eine Instanz dieses Typs
-// läuft.
-func (l *Launcher) RemoveCatalogEntry(nodeType string) error {
+// (§17 Teil 5: identifiziert durch das Paar nodeType/version, nicht nur
+// nodeType — mehrere Versionen desselben Typs können parallel
+// existieren) — abgelehnt, wenn er gar nicht importiert wurde (unbekannt
+// oder ein statischer Eintrag) oder noch mindestens eine Instanz mit
+// genau diesem (Typ, Version) läuft.
+func (l *Launcher) RemoveCatalogEntry(nodeType, version string) error {
 	if l.catalog == nil {
 		return ErrCatalogImportUnavailable
 	}
 
 	l.mu.Lock()
-	if _, ok := l.importedCatalog[nodeType]; !ok {
+	if _, ok := l.importedCatalog[catalogKey(nodeType, version)]; !ok {
 		l.mu.Unlock()
 		return ErrCatalogTypeNotImported
 	}
 	for _, inst := range l.instances {
-		if inst.Type == nodeType {
+		if inst.Type == nodeType && inst.Version == version {
 			l.mu.Unlock()
 			return ErrCatalogTypeInUse
 		}
 	}
 	l.mu.Unlock()
 
-	if err := l.catalog.Delete(nodeType); err != nil {
-		return fmt.Errorf("launcher: delete imported catalog entry %q: %w", nodeType, err)
+	if err := l.catalog.Delete(nodeType, version); err != nil {
+		return fmt.Errorf("launcher: delete imported catalog entry %q (version %q): %w", nodeType, version, err)
 	}
 
 	l.mu.Lock()
-	delete(l.importedCatalog, nodeType)
+	delete(l.importedCatalog, catalogKey(nodeType, version))
 	l.mu.Unlock()
 	return nil
 }
@@ -493,6 +543,62 @@ func findStatic(entries []CatalogEntry, nodeType string) (CatalogEntry, bool) {
 		}
 	}
 	return CatalogEntry{}, false
+}
+
+// importedVersionsOfType liefert alle importierten Versionen von
+// nodeType (unsortiert) — gebraucht für die Mehrdeutigkeits-Auflösung
+// in resolveCatalogEntry sowie für die Fehlermeldung in
+// ErrCatalogVersionAmbiguous. Aufrufer muss l.mu bereits halten.
+func (l *Launcher) importedVersionsOfTypeLocked(nodeType string) []CatalogEntry {
+	var matches []CatalogEntry
+	for _, e := range l.importedCatalog {
+		if e.Type == nodeType {
+			matches = append(matches, e)
+		}
+	}
+	return matches
+}
+
+// resolveCatalogEntry löst (nodeType, version) auf einen konkreten
+// CatalogEntry auf (§17 Teil 5) — Start()s eigentliche Katalog-Suche.
+// Ein leerer version-Wert ist kein Sonderfall, sondern der Normalfall
+// für alle statischen Einträge (die haben keine Version) und für
+// importierte Typen mit genau einer Version: nur wenn ein Typ mehrere
+// importierte Versionen hat UND version leer gelassen wurde, ist eine
+// explizite Auswahl nötig (ErrCatalogVersionAmbiguous) — unverändertes
+// Verhalten für jeden Aufrufer, der (wie vor §17 Teil 5) nie eine
+// Version übergibt und auch nie mehrere Versionen desselben Typs
+// importiert hat.
+func (l *Launcher) resolveCatalogEntry(nodeType, version string) (CatalogEntry, error) {
+	if version != "" {
+		entry, ok := l.findEntry(nodeType, version)
+		if !ok {
+			return CatalogEntry{}, ErrUnknownType
+		}
+		return entry, nil
+	}
+
+	if entry, ok := findStatic(l.staticCatalog, nodeType); ok {
+		return entry, nil
+	}
+
+	l.mu.Lock()
+	matches := l.importedVersionsOfTypeLocked(nodeType)
+	l.mu.Unlock()
+
+	switch len(matches) {
+	case 0:
+		return CatalogEntry{}, ErrUnknownType
+	case 1:
+		return matches[0], nil
+	default:
+		versions := make([]string, len(matches))
+		for i, m := range matches {
+			versions[i] = m.Version
+		}
+		sort.Strings(versions)
+		return CatalogEntry{}, &ErrCatalogVersionAmbiguous{Type: nodeType, Versions: versions}
+	}
 }
 
 // List liefert alle aktuell bekannten Instanzen (GET /api/v1/instances).
@@ -621,21 +727,23 @@ func (l *Launcher) sampleLocalResources() {
 // ist — die Sicherheitsgrenze aus dem Paketkommentar ("nur
 // Katalog-Einträge, keine freien Kommandos") bleibt intakt, sie gilt
 // jetzt zusätzlich für Umgebungsvariablen statt nur für den Node-Typ.
-func (l *Launcher) Start(nodeType, hostID string, extraEnv map[string]string) (Instance, error) {
+func (l *Launcher) Start(nodeType, version, hostID string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
 		return l.startRemote(nodeType, hostID, extraEnv)
 	}
-	return l.startLocal(nodeType, extraEnv)
+	return l.startLocal(nodeType, version, extraEnv)
 }
 
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
 // OMP_LABEL/OMP_PORT=0 sowie die Registry-/NATS-URLs des Orchestrators
 // als Subprozess-Umgebung, Ergebnis persistiert) plus optionales
-// extraEnv (s. `Start`-Doku).
-func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Instance, error) {
-	entry, ok := l.findEntry(nodeType)
-	if !ok {
-		return Instance{}, ErrUnknownType
+// extraEnv (s. `Start`-Doku). version (§17 Teil 5) wählt zwischen
+// mehreren importierten Versionen desselben Typs — leer heißt "die
+// einzige/statische Version", s. resolveCatalogEntry.
+func (l *Launcher) startLocal(nodeType, version string, extraEnv map[string]string) (Instance, error) {
+	entry, err := l.resolveCatalogEntry(nodeType, version)
+	if err != nil {
+		return Instance{}, err
 	}
 
 	id, err := newInstanceID()
@@ -656,7 +764,7 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -691,7 +799,7 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv}
+	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -1299,13 +1407,19 @@ func (l *Launcher) stopRemote(inst Instance) error {
 	return nil
 }
 
-func (l *Launcher) findEntry(nodeType string) (CatalogEntry, bool) {
-	if e, ok := findStatic(l.staticCatalog, nodeType); ok {
-		return e, true
+// findEntry ist eine exakte (Type, Version)-Suche — statische Einträge
+// haben immer Version=="" (kein Match, wenn version davon abweicht).
+// Für die im Normalfall gewünschte, mehrdeutigkeitstolerante Suche s.
+// resolveCatalogEntry.
+func (l *Launcher) findEntry(nodeType, version string) (CatalogEntry, bool) {
+	if version == "" {
+		if e, ok := findStatic(l.staticCatalog, nodeType); ok {
+			return e, true
+		}
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e, ok := l.importedCatalog[nodeType]
+	e, ok := l.importedCatalog[catalogKey(nodeType, version)]
 	return e, ok
 }
 
