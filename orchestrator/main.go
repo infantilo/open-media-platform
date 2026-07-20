@@ -247,6 +247,20 @@ func main() {
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
 
+	// Verbrauchsprofile pro Node-Typ (Kapitel 14 Teil 3, docs/END-GOAL-
+	// FEATURES.md §14.3c) — tastet dieselben Instanz-/Host-Telemetrie-
+	// Quellen ab wie placementEngine (unten), aggregiert sie aber pro
+	// (Typ,Host) statt pro Host zu warnen. Eigenständiges Paket statt
+	// Erweiterung von placement (andere Zuständigkeit: Datengrundlage/
+	// Schätzung, nicht Alarm/Vorschlag). Vor placementEngine konstruiert
+	// (Kapitel 14 Teil 4): dessen CheckHost braucht profileStore als
+	// ProfileReader, um den Bedarf des zu startenden Node-Typs auf die
+	// Host-Momentwerte zu projizieren, statt nur mit ihnen allein zu
+	// rechnen.
+	profileStore := profiles.NewStore(database)
+	profileCollector := profiles.NewCollector(launcherSvc, hostMetricsTracker, profileStore)
+	go profileCollector.Run(ctx)
+
 	// Resource-Aware Placement — advisory-only Ausbaustufe (ARCHITECTURE.md
 	// §6.1, UMSETZUNG.md D6 Teil 3): beobachtet die seit D6 Teil 1
 	// vorhandene Host-Telemetrie, warnt aber nur — kein automatischer
@@ -259,18 +273,8 @@ func main() {
 		HealthyCPUPercent: cfg.PlacementHealthyCPUThreshold,
 		HealthyMemPercent: cfg.PlacementHealthyMemThreshold,
 	}
-	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds)
+	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds, profileStore)
 	go placementEngine.Run(ctx)
-
-	// Verbrauchsprofile pro Node-Typ (Kapitel 14 Teil 3, docs/END-GOAL-
-	// FEATURES.md §14.3c) — tastet dieselben Instanz-/Host-Telemetrie-
-	// Quellen ab wie placementEngine, aggregiert sie aber pro (Typ,Host)
-	// statt pro Host zu warnen. Eigenständiges Paket statt Erweiterung
-	// von placement (andere Zuständigkeit: Datengrundlage/Schätzung,
-	// nicht Alarm/Vorschlag).
-	profileStore := profiles.NewStore(database)
-	profileCollector := profiles.NewCollector(launcherSvc, hostMetricsTracker, profileStore)
-	go profileCollector.Run(ctx)
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1/Teil 2): bündelt mehrere launcherSvc.Start()-

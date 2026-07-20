@@ -9663,3 +9663,62 @@ nicht verfolgt). `deno check`/`deno bundle` sauber.
 Kapitel 14 damit bis auf Teil 4 (Anbindung an D7-Teil-2s harte
 Ressourcen-Vorprüfung, §16-Kapazitäts-Zeitstrahl als spätere Folge auf
 derselben Datengrundlage) abgeschlossen.
+
+## 2026-07-20 (Nachtrag 53) — Kapitel 14 Teil 4: `CheckHost` rechnet mit
+Profilen, echter End-to-End-Live-Test über die reale Workflow-Start-API
+
+Direkte Fortsetzung von Nachtrag 52: `D7-Teil-2`s Ressourcen-
+Vorprüfung (`placement.Engine.CheckHost`, bislang reiner Momentwert-
+Vergleich gegen `placement.Thresholds`) sollte laut Plan "mit Profilen
+rechnen" statt nur mit dem aktuellen Host-Zustand — ein Host, der
+gerade z. B. bei 60% CPU liegt, sieht für den Momentwert-Check "frei"
+aus, auch wenn der NEU zu startende Node-Typ typischerweise weitere
+30% braucht und der Host danach überlastet wäre.
+
+**Umsetzung:** `CheckHost(hostID, nodeType string)` — Signatur
+erweitert (vorher nur `hostID`), Aufrufer `workflows.Service.
+checkResources` gibt jetzt `role.NodeType` mit durch. Rechnung:
+`hostMetrics.Get(hostID)`s Momentwert plus `profileReader.Get(ctx,
+nodeType, hostID)`s CPU-/RSS-Ø, mit Fallback auf `profiles.
+GlobalHostID`, wenn kein host-spezifisches Profil existiert — 1:1
+dieselbe Projektions-/Fallback-Logik wie `httpapi.handleGetProfile`s
+Ampel (Nachtrag 52), hier aber als harte Ablehnung statt nur einer
+Anzeige. Kein Profil überhaupt bekannt (oder `profileReader` nil):
+fail-open, unverändertes Vor-Teil-4-Verhalten — dieselbe "nie ein
+stiller Block mangels Daten"-Linie wie überall in Kapitel 14.
+
+**Ein echter Nebeneffekt-Fund beim Umbau:** `checkResources` prüfte
+bisher jeden Host nur **einmal** (`checked[role.HostID]`-Dedup) — vor
+Teil 4 korrekt, weil nur der host-weite Momentwert zählte, unabhängig
+davon, wie viele Rollen dorthin zielten. Mit Typ-Profilen wäre das
+falsch geworden: zwei verschiedene Rollen (unterschiedlicher
+Node-Typ) auf demselben Host hätten nur den Bedarf der ERSTEN
+geprüften Rolle gesehen. Dedup entfernt, jede Rolle wird jetzt einzeln
+geprüft — bewusst weiterhin **ohne** kumulative Simulation ("was, wenn
+alle Rollen zusammen dazukommen"), das bleibt advisory-artig wie der
+Rest dieser Vorprüfung, nicht Teil dieser Scheibe.
+
+**Live verifiziert über die echte HTTP-API, nicht nur per Unit-Test:**
+ein per `nats pub omp.host.test-host-teil4.metrics '{"cpuPercent":50,
+...}'` simuliertes Host-Signal (kein echter Host-Agent-Prozess nötig —
+`CheckHost` liest ausschließlich `hosts.Tracker`, unabhängig von einer
+Host-Registrierung) kombiniert mit `omp-source`s echtem, aus Nachtrag
+52 noch in Postgres stehendem Typ-Fallback-Profil (Ø ≈ 41,36% CPU aus
+52 realen Samples) — `POST /api/v1/workflows/{id}/start` für eine
+Rolle mit `nodeType:"omp-source"` auf diesem Host scheiterte mit HTTP
+503: "CPU 91% über dem Schwellwert (inkl. erwartetem Bedarf von
+omp-source)", exakt 50+41,36 gerundet. Gegenprobe: derselbe Host mit
+einem noch nie profilierten Node-Typ (`omp-brand-new-type`) ließ den
+Start durch (HTTP 200, Status `starting`) — scheiterte danach
+erwartungsgemäß asynchron am fehlenden echten Host-Agent
+("remote start ... nats: timeout"), nicht an der Ressourcen-Vorprüfung,
+die exakt dort ansetzen sollte und auch tat. Zusätzlich fünf neue
+Unit-Tests in `internal/placement` (Momentwert-OK-aber-Projektion-
+über-Schwelle, Projektion-bleibt-unter-Schwelle, Typ-Fallback,
+Fail-Open-ohne-ProfileReader, Fail-Open-ohne-bekanntes-Profil).
+`go build`/`go vet`/`go test ./...` grün bis auf denselben
+vorbestehenden, unabhängigen `internal/hosts`-Flake wie in Nachtrag 52.
+
+Kapitel 14 damit bis auf den optionalen §16-Kapazitäts-Zeitstrahl
+(eigenständige spätere Erweiterung auf derselben Datengrundlage)
+vollständig abgeschlossen.

@@ -1003,7 +1003,7 @@ type fakeResourcePrecheck struct {
 	deniedHosts map[string]string // hostID -> Ablehnungsgrund
 }
 
-func (f *fakeResourcePrecheck) CheckHost(hostID string) (string, bool) {
+func (f *fakeResourcePrecheck) CheckHost(hostID, nodeType string) (string, bool) {
 	if reason, denied := f.deniedHosts[hostID]; denied {
 		return reason, false
 	}

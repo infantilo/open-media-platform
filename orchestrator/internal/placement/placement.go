@@ -33,6 +33,7 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -61,6 +62,18 @@ type MetricsReader interface {
 // überlasteter, aber leerer Host ist niemandes Problem.
 type InstanceLister interface {
 	List() []launcher.Instance
+}
+
+// ProfileReader liefert das aggregierte Verbrauchsprofil eines Node-Typs
+// (implementiert von *profiles.Store, Kapitel 14 Teil 3/4) — CheckHost
+// nutzt es, um den erwarteten Bedarf des NEU zu startenden Node-Typs auf
+// die aktuelle Host-Auslastung zu projizieren, statt nur mit dem
+// Momentwert zu rechnen (§14.3d/§14.4 Teil 4: "D7-Teil-2-Vorprüfung
+// rechnet mit Profilen"). Darf nil sein (dann rein Momentwert-basiert,
+// unverändertes Vor-Teil-4-Verhalten — z. B. in Tests ohne eigene
+// Profil-Fixture).
+type ProfileReader interface {
+	Get(ctx context.Context, nodeType, hostID string) (profiles.Snapshot, bool, error)
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -120,20 +133,23 @@ type Engine struct {
 	instances  InstanceLister
 	events     EventPublisher
 	thresholds Thresholds
+	profiles   ProfileReader
 
 	mu     sync.RWMutex
 	advice map[string]Advice // hostID -> aktueller Alarm
 }
 
 // NewEngine erstellt eine Engine. events darf nil sein (kein SSE-Fanout,
-// z. B. in Tests).
-func NewEngine(hostLister HostLister, metrics MetricsReader, instances InstanceLister, events EventPublisher, thresholds Thresholds) *Engine {
+// z. B. in Tests). profileReader darf ebenfalls nil sein (CheckHost
+// rechnet dann rein mit Momentwerten, s. ProfileReader-Doku).
+func NewEngine(hostLister HostLister, metrics MetricsReader, instances InstanceLister, events EventPublisher, thresholds Thresholds, profileReader ProfileReader) *Engine {
 	return &Engine{
 		hostLister: hostLister,
 		metrics:    metrics,
 		instances:  instances,
 		events:     events,
 		thresholds: thresholds,
+		profiles:   profileReader,
 		advice:     map[string]Advice{},
 	}
 }
@@ -179,7 +195,19 @@ func (e *Engine) List() []Advice {
 // EvaluateInterval-Tick warten muss). Fehlende Telemetrie gilt als "ok"
 // (fail-open) — dieselbe Haltung wie evaluateOnce bei nie gesehenen
 // Hosts.
-func (e *Engine) CheckHost(hostID string) (string, bool) {
+//
+// Kapitel 14 Teil 4 (docs/END-GOAL-FEATURES.md §14.4 Teil 4): rechnet
+// zusätzlich mit dem Verbrauchsprofil von nodeType — der aktuelle
+// Momentwert allein sähe einen Host, der gerade z. B. bei 70% CPU
+// liegt, fälschlich als "frei" an, obwohl der NEUE Node-Typ typisch
+// weitere 20% braucht. Kein eigenes Profil für (nodeType, hostID)?
+// Fällt auf das Typ-Fallback über alle Hosts zurück (profiles.
+// GlobalHostID), genau wie httpapi.handleGetProfile. Kein Profil
+// überhaupt bekannt (erster Start dieses Typs) oder e.profiles nil:
+// fail-open wie bei fehlender Host-Telemetrie oben — ein unbekannter
+// Bedarf ist kein Blocker, nur eine fehlende Datengrundlage (§14.3d:
+// "nie ein stiller Block").
+func (e *Engine) CheckHost(hostID, nodeType string) (string, bool) {
 	m, ok := e.metrics.Get(hostID)
 	if !ok {
 		return "", true
@@ -188,18 +216,44 @@ func (e *Engine) CheckHost(hostID string) (string, bool) {
 	if m.MemTotalBytes > 0 {
 		memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 	}
-	overCPU := m.CPUPercent >= e.thresholds.CPUPercent
+	cpuPercent := m.CPUPercent
+
+	if snap, ok := e.lookupProfile(nodeType, hostID); ok {
+		cpuPercent += snap.CPUAvg
+		if m.MemTotalBytes > 0 {
+			memPercent += float64(snap.RSSAvg) / float64(m.MemTotalBytes) * 100
+		}
+	}
+
+	overCPU := cpuPercent >= e.thresholds.CPUPercent
 	overMem := memPercent >= e.thresholds.MemPercent
 	switch {
 	case overCPU && overMem:
-		return fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert", m.CPUPercent, memPercent), false
+		return fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, memPercent, nodeType), false
 	case overCPU:
-		return fmt.Sprintf("CPU %.0f%% über dem Schwellwert", m.CPUPercent), false
+		return fmt.Sprintf("CPU %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, nodeType), false
 	case overMem:
-		return fmt.Sprintf("RAM %.0f%% über dem Schwellwert", memPercent), false
+		return fmt.Sprintf("RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", memPercent, nodeType), false
 	default:
 		return "", true
 	}
+}
+
+// lookupProfile holt das Profil für (nodeType, hostID), fällt auf das
+// Typ-Fallback zurück, wenn keins host-spezifisches existiert — s.
+// CheckHost-Doku. ok=false, wenn e.profiles nil ist oder überhaupt kein
+// Profil (auch nicht das Fallback) existiert.
+func (e *Engine) lookupProfile(nodeType, hostID string) (profiles.Snapshot, bool) {
+	if e.profiles == nil {
+		return profiles.Snapshot{}, false
+	}
+	if snap, ok, err := e.profiles.Get(context.Background(), nodeType, hostID); err == nil && ok {
+		return snap, true
+	}
+	if snap, ok, err := e.profiles.Get(context.Background(), nodeType, profiles.GlobalHostID); err == nil && ok {
+		return snap, true
+	}
+	return profiles.Snapshot{}, false
 }
 
 // scored bündelt einen Host mit seiner zuletzt gesehenen Telemetrie und

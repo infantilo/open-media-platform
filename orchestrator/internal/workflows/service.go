@@ -138,11 +138,15 @@ type workflowStore interface {
 // wiederverwendet, die bereits die Hosts-Ansicht/Alarm-View zeigen —
 // bewusst kein drittes Schwellwert-Konzept.
 type ResourcePrecheck interface {
-	// CheckHost liefert (Ablehnungsgrund, ok). ok=true bei freien
-	// Ressourcen ODER fehlender Telemetrie (fail-open — ein gerade erst
-	// registrierter Host ohne Messwerte ist kein Blocker, gleiche Haltung
-	// wie placement.Engine.evaluateOnce bei fehlenden Daten).
-	CheckHost(hostID string) (reason string, ok bool)
+	// CheckHost liefert (Ablehnungsgrund, ok) für den Start von nodeType
+	// auf hostID. ok=true bei freien Ressourcen ODER fehlender Telemetrie
+	// (fail-open — ein gerade erst registrierter Host ohne Messwerte ist
+	// kein Blocker, gleiche Haltung wie placement.Engine.evaluateOnce bei
+	// fehlenden Daten). Seit Kapitel 14 Teil 4 rechnet die Prüfung mit dem
+	// Verbrauchsprofil von nodeType (falls bekannt), nicht mehr nur mit
+	// dem aktuellen Momentwert des Hosts (docs/END-GOAL-FEATURES.md
+	// §14.4 Teil 4).
+	CheckHost(hostID, nodeType string) (reason string, ok bool)
 }
 
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
@@ -440,17 +444,25 @@ func (s *Service) persistSchedule(wf Workflow) error {
 // Host" selbst keine Telemetrie (nur registrierte Remote-Hosts senden
 // welche, s. internal/hosts) — dokumentierte Folgearbeit, kein stiller
 // Blocker ohne Datengrundlage.
+//
+// Seit Kapitel 14 Teil 4 wird **jede** Rolle einzeln geprüft (vor Teil 4
+// genügte ein Check pro HostID, weil nur der host-weite Momentwert
+// zählte) — CheckHost projiziert jetzt zusätzlich das Verbrauchsprofil
+// von role.NodeType, zwei Rollen desselben Typs auf demselben Host
+// hätten sonst nur einmal gezählt. Bewusst vereinfacht: mehrere
+// verschiedene Rollen auf demselben Host werden gegen dieselbe,
+// unveränderte Host-Momentmessung geprüft (kein kumulatives
+// "alle Rollen zusammen simulieren") — konsistent mit dem advisory-
+// artigen, best-effort Charakter dieser gesamten Vorprüfung.
 func (s *Service) checkResources(wf Workflow) error {
 	if s.resources == nil {
 		return nil
 	}
-	checked := map[string]bool{}
 	for _, role := range wf.Definition.Roles {
-		if role.HostID == "" || checked[role.HostID] {
+		if role.HostID == "" {
 			continue
 		}
-		checked[role.HostID] = true
-		if reason, ok := s.resources.CheckHost(role.HostID); !ok {
+		if reason, ok := s.resources.CheckHost(role.HostID, role.NodeType); !ok {
 			return fmt.Errorf("%w: host %s: %s", ErrResourcesUnavailable, role.HostID, reason)
 		}
 	}
