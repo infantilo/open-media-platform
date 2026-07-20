@@ -3,6 +3,7 @@ package launcher
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -115,6 +116,35 @@ func disableAutoRestart(t *testing.T) {
 	t.Cleanup(func() { maxCrashRestarts = originalMax })
 }
 
+// podmanCatalog (Kapitel 17 Teil 4): startet ein echtes, kurzlebiges
+// `busybox`-Image über den Podman-Runner — kein Node-Contract-HTTP
+// nötig für diesen Test, nur der Start-/Stop-/Supervise-Mechanismus
+// selbst (der eigentliche Node-Contract-/IS-04-Nachweis lief bereits
+// live gegen ein echtes `omp-mock`-Image, s. docs/decisions.md).
+// `sleep 3600` hält den Container künstlich am Leben, `-p` bewusst
+// nicht Teil des Katalog-Eintrags — runPodmanEntry wählt den Port
+// selbst (s. podman.go).
+func podmanCatalog() []CatalogEntry {
+	return []CatalogEntry{{
+		Type:    "podman-sleepy",
+		Label:   "Podman Sleepy",
+		Runner:  runnerPodman,
+		Image:   "docker.io/library/busybox:latest",
+		Command: []string{"sleep", "3600"},
+	}}
+}
+
+// requirePodman überspringt den Test, wenn kein `podman`-Binary im PATH
+// gefunden wird — gleiche Nachsicht wie `testDB` in anderen Paketen
+// (Postgres nicht erreichbar) statt eines harten Fehlschlags in
+// Umgebungen ohne Podman.
+func requirePodman(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("podman"); err != nil {
+		t.Skip("podman nicht im PATH — Podman-Runner-Test übersprungen")
+	}
+}
+
 func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
@@ -124,7 +154,11 @@ func TestLauncherStartUnknownTypeReturnsError(t *testing.T) {
 }
 
 func TestLauncherStartUnsupportedRunnerReturnsError(t *testing.T) {
-	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "podman", Command: []string{"true"}}}
+	// "quadlet" statt "podman": seit Kapitel 17 Teil 4 ist "podman" ein
+	// echter, unterstützter Runner (s. TestLauncherStartPodman* weiter
+	// unten) — dieser Test prüft weiterhin, dass ein drittes, noch
+	// nicht implementiertes Runner-Ziel sauber abgelehnt wird.
+	catalog := []CatalogEntry{{Type: "x", Label: "X", Runner: "quadlet", Command: []string{"true"}}}
 	l := newWithStore(catalog, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
 
 	if _, err := l.Start("x", "", nil); err != ErrUnsupportedRunner {
@@ -156,6 +190,45 @@ func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
 	}
 	if processAlive(inst.PID) {
 		t.Error("process still alive after Stop()")
+	}
+	if len(l.List()) != 0 {
+		t.Errorf("List() after Stop() = %+v, want empty", l.List())
+	}
+}
+
+// TestLauncherStartStopPodmanReal (Kapitel 17 Teil 4): echter
+// Podman-Runner-Test gegen einen echten Container (kein Mock/Fake
+// möglich — `os/exec`-Aufrufe an das `podman`-Binary haben keinen
+// Interface-Seam im Standardpaket, gleiche Begründung wie
+// sleepyCatalog für den Prozess-Runner). Prüft nur den Start-/Stop-
+// Mechanismus des Launchers selbst; der vollständige Node-Contract-/
+// IS-04-Registrierungsnachweis lief live gegen ein echtes
+// `omp-mock`-Image (docs/decisions.md).
+func TestLauncherStartStopPodmanReal(t *testing.T) {
+	requirePodman(t)
+	l := newWithStore(podmanCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil)
+
+	inst, err := l.Start("podman-sleepy", "", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if inst.ContainerID == "" {
+		t.Fatalf("Start() = %+v, want a non-empty ContainerID", inst)
+	}
+	if !podmanContainerRunning(inst.ContainerID) {
+		t.Fatal("started container is not running")
+	}
+
+	list := l.List()
+	if len(list) != 1 || list[0].ID != inst.ID {
+		t.Fatalf("List() = %+v, want one entry with id %s", list, inst.ID)
+	}
+
+	if err := l.Stop(inst.ID); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	if podmanContainerRunning(inst.ContainerID) {
+		t.Error("container still running after Stop()")
 	}
 	if len(l.List()) != 0 {
 		t.Errorf("List() after Stop() = %+v, want empty", l.List())

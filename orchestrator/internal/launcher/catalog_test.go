@@ -31,14 +31,28 @@ func TestLoadCatalogDefaultsRunnerToProcess(t *testing.T) {
 }
 
 func TestLoadCatalogPreservesExplicitRunner(t *testing.T) {
-	path := writeCatalog(t, `[{"type":"x","label":"X","runner":"podman","command":["true"]}]`)
+	// "quadlet" statt "podman": seit Kapitel 17 Teil 4 ist "podman" ein
+	// echter, validierter Runner (braucht ein Image, s.
+	// TestLoadCatalogRejectsPodmanWithoutImage) — dieser Test prüft
+	// weiterhin die generische "ein noch unbekannter Runner-String wird
+	// unverändert durchgereicht"-Eigenschaft, ARCHITECTURE.md §6.2 nennt
+	// Quadlets als mögliches künftiges Runner-Ziel.
+	path := writeCatalog(t, `[{"type":"x","label":"X","runner":"quadlet","command":["true"]}]`)
 
 	entries, err := LoadCatalog(path)
 	if err != nil {
 		t.Fatalf("LoadCatalog() error = %v", err)
 	}
-	if entries[0].Runner != "podman" {
-		t.Errorf("Runner = %q, want %q", entries[0].Runner, "podman")
+	if entries[0].Runner != "quadlet" {
+		t.Errorf("Runner = %q, want %q", entries[0].Runner, "quadlet")
+	}
+}
+
+func TestLoadCatalogRejectsPodmanWithoutImage(t *testing.T) {
+	path := writeCatalog(t, `[{"type":"x","label":"X","runner":"podman"}]`)
+
+	if _, err := LoadCatalog(path); err == nil {
+		t.Fatal("LoadCatalog() error = nil, want error for podman entry without image")
 	}
 }
 

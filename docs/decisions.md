@@ -9892,3 +9892,96 @@ Placement-Automatisierung selbst. Kapitel 16 damit: Teil 0/1/2
 abgeschlossen, Teil 3 (echte Mehr-Host-Verifikation) wartet weiter auf
 Hardware, die Placement-Integration ein möglicher, noch nicht
 begonnener Folgeschritt.
+
+## 2026-07-20 (Nachtrag 56) — §17 Teil 4: Podman-Runner-Unterbau (erste
+Scheibe), zwei Design-Entscheidungen vorab geklärt
+
+Nach Kapitel 14/15/16 war jedes klar umrissene, nicht blockierte Item
+der Prioritätsliste (`docs/END-GOAL-FEATURES.md` §16.1) abgearbeitet.
+Verbleibende Optionen dem Nutzer vorgelegt: Kapitel-16-Placement-
+Automatisierung (braucht selbst noch eine Design-Entscheidung),
+§17 Teil 4/5 (Import, explizit niedrigste Priorität, aber der letzte
+noch offene, nicht-blockierte Punkt), oder die zurückgestellte
+Mixer-OOM-Debugging-Sitzung. **Nutzerentscheidung:** §17 Teil 4/5.
+
+§17.5 nennt zwei offene Design-Fragen für Teil 4, beide dem Nutzer
+vorgelegt, bevor irgendein Code entstand (echte Sicherheits-relevante
+Entscheidungen, nicht einfach übernommen):
+
+1. **Runner-Umfang:** echtes Podman-Container-Image oder nur ein
+   weiterer lokal gebauter Binärpfad? **Nutzerentscheidung: Podman**
+   (Dokument-Empfehlung) — nur das deckt "einen fremden Microservice
+   mit einer anderen Build-Toolchain importieren" tatsächlich ab.
+2. **Vertrauensmodell:** gar keine Prüfung (Dokument-v1-Vorschlag) oder
+   eine Mindestprüfung (C9-Konformitätstest als Aufnahme-Voraussetzung)?
+   **Nutzerentscheidung: Mindestprüfung** — bewusst strenger als die
+   Dokument-Empfehlung, weil Teil 4 laut eigener Beschreibung "eine
+   neue Ausführungs-/Sicherheitsfläche" öffnet.
+
+**Scoping dieser Runde:** §17.4 selbst sizes Teil 4 als "größter Teil,
+eigene Sitzung(en)" (Plural) — diese Runde liefert deshalb bewusst nur
+den **Runner-Unterbau** (Podman-Container starten/stoppen/überwachen),
+nicht die Katalog-Schreib-API oder die C9-Prüfung selbst (beide
+brauchen den Unterbau als Voraussetzung, folgen als eigene
+Folgeschritte). Ohne Schreib-API wird ein `runner:"podman"`-Eintrag für
+diese Runde nur über eine separate Scratch-Katalog-Datei erreicht, kein
+Eintrag landet in `deploy/catalog.json`.
+
+**Umsetzung:** `CatalogEntry.Image` (Pflicht bei `runner:"podman"`,
+`LoadCatalog` validiert das), `Command` bleibt für diesen Runner
+optional (Podman-Konvention: überschreibt das Image-eigene CMD, falls
+gesetzt). `Instance.ContainerID` — leer für Prozess-Instanzen, gesetzt
+für Container. Neues `internal/launcher/podman.go`:
+
+- `findFreePort()`: `:0`-Listen-Trick, weil der Launcher den Port
+  **vorher** kennen muss, um ihn per `-p port:port` zu veröffentlichen
+  — anders als beim Prozess-Runner (`OMP_PORT=0`, der Node wählt selbst
+  und meldet sich erst danach per IS-04) kann ein Container nicht
+  nachträglich gefragt werden, welchen Port sein Prozess intern gewählt
+  hat. Kleines, hingenommenes TOCTOU-Fenster zwischen Freigabe und
+  `podman run`.
+- **Netzwerk bewusst kein `--network=host`:** das würde die
+  Netzwerk-Namensraum-Isolation für nur schwach geprüften Fremdcode
+  (Mindestprüfung heißt nicht "vertrauenswürdig") komplett aufheben.
+  Stattdessen Standard-Bridge-Netzwerk, `OMP_REGISTRY_URL`/
+  `OMP_NATS_URL` werden für den Container auf `host.containers.internal`
+  umgeschrieben (`rewriteForContainer`) — **live geprüft, nicht
+  angenommen:** ein manuell gestarteter Test-Container erreichte
+  darüber echte Host-Registry/-NATS-Container und registrierte sich
+  real, bevor überhaupt Go-Code dafür geschrieben wurde.
+- `supervisePodman`: bewusst eine eigenständige Funktion statt einer
+  gemeinsamen Abstraktion mit `supervise()` — unterschiedliche
+  Lebenszyklus-Modelle (Container-Exit-Code vs. `*exec.ExitError`,
+  `podman wait` vs. `cmd.Wait()`), gleiches Duplikations-Prinzip wie
+  host-agent/launcher (beide mit eigener Ressourcen-Sample-Logik).
+  Crash-Loop-Bremse/Neustart-Buchführung selbst (`recordRestartLocked`)
+  wird unverändert **geteilt**, keine Dopplung dieses Teils.
+- `stopLocal`/`loadState`: verzweigen jetzt auf `ContainerID != ""`
+  (`podman stop --time`/`podman inspect` statt SIGTERM-Poll/Signal 0).
+
+**Live verifiziert über die echte Orchestrator-API, kein Mock:** ein
+eigens für diesen Test containerisiertes `omp-mock` (Go, keine
+GStreamer-/MXL-Laufzeitabhängigkeiten — bewusst gewählt, um den
+Runner-Mechanismus selbst zu prüfen, unabhängig von der separaten,
+späteren Frage "containerisieren sich echte OMP-Playout-Nodes sauber").
+`POST /api/v1/instances` startete einen echten Container; IS-04-Query
+zeigte die korrekte, von außen erreichbare `href`
+(`http://127.0.0.1:<port>/`); `GET /descriptor.json` über den
+veröffentlichten Port lieferte den echten Node-Contract-Deskriptor.
+Ein echtes `podman kill` löste den bereits bestehenden K7-Teil-1-
+Neustart-Mechanismus unverändert aus: neue Container-ID, `restartCount`
+korrekt auf 1 bzw. 2 hochgezählt (zweiter Testlauf), erneute reale
+IS-04-Registrierung. `DELETE /api/v1/instances/<id>` entfernte den
+Container sauber (`--rm`, `podman ps` bestätigt leer). Zusätzlich ein
+dauerhafter Go-Test (`TestLauncherStartStopPodmanReal`, echtes
+`busybox`-Image, überspringt sich selbst ohne `podman` im PATH — gleiche
+Nachsicht wie `testDB` bei fehlendem Postgres). `go build`/`go vet`/
+`go test ./...` grün bis auf denselben vorbestehenden, unabhängigen
+`internal/hosts`-Flake wie in den Nachträgen zuvor.
+
+**Bewusst nicht Teil dieser Runde:** Katalog-Schreib-API (`POST`/
+`DELETE /api/v1/catalog`, der eigentliche "Import"-Nutzerfluss) und die
+C9-Konformitätsprüfung als Aufnahme-Voraussetzung — beide eigene, noch
+nicht begonnene Folgeschritte, exakt wie von §17.4 selbst als
+Mehrfach-Sitzungs-Umfang vorgezeichnet. Teil 5 (Versionierung) bleibt
+entsprechend ebenfalls offen.

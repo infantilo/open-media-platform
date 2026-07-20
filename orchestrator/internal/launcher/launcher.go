@@ -166,6 +166,12 @@ type Instance struct {
 	// Telemetrie-Momentaufnahme in Postgres einfrieren.
 	CPUPercent *float64 `json:"cpuPercent,omitempty"`
 	RSSBytes   *uint64  `json:"rssBytes,omitempty"`
+	// ContainerID ist gesetzt für `runner:"podman"`-Instanzen (Kapitel
+	// 17 Teil 4) — leer für Prozess-Instanzen (dort ist PID die
+	// Lebenszyklus-Kennung). Beide Felder sind bewusst nie gleichzeitig
+	// aussagekräftig (eine Instanz ist entweder ein lokaler Subprozess
+	// oder ein Container, nie beides).
+	ContainerID string `json:"containerId,omitempty"`
 }
 
 // EventPublisher verteilt ein SSE-Event an alle verbundenen Flow-Editor-
@@ -440,15 +446,19 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 	if !ok {
 		return Instance{}, ErrUnknownType
 	}
-	if entry.Runner != runnerProcess {
-		return Instance{}, ErrUnsupportedRunner
-	}
 
 	id, err := newInstanceID()
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
 	}
 	label := fmt.Sprintf("%s (%s)", entry.Label, id[:8])
+
+	if entry.Runner == runnerPodman {
+		return l.startPodmanLocal(nodeType, entry, id, label, extraEnv)
+	}
+	if entry.Runner != runnerProcess {
+		return Instance{}, ErrUnsupportedRunner
+	}
 
 	cmd, stderrTail, err := l.execEntry(entry, id, label, extraEnv)
 	if err != nil {
@@ -476,6 +486,30 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 	// Workflow-Settings (z. B. Auflösung) wieder anwendet, nicht die
 	// Katalog-Defaults.
 	go l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail)
+
+	return inst, nil
+}
+
+// startPodmanLocal — Podman-Pendant zu startLocal (Kapitel 17 Teil 4):
+// gleiche Instanz-ID-/Label-/Persistenz-/Supervise-Struktur, aber ein
+// Container statt eines Subprozesses. Wird von startLocal aufgerufen,
+// nachdem id/label bereits vergeben sind (gemeinsamer erster Teil).
+func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label string, extraEnv map[string]string) (Instance, error) {
+	containerID, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+	if err != nil {
+		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
+	}
+
+	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv}
+
+	l.mu.Lock()
+	l.instances[id] = inst
+	if err := l.persistInstanceLocked(id); err != nil {
+		slog.Warn("launcher: failed to persist instance state", "error", err)
+	}
+	l.mu.Unlock()
+
+	go l.supervisePodman(id, nodeType, entry, label, extraEnv, containerID)
 
 	return inst, nil
 }
@@ -599,6 +633,119 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 
 		cmd, stderrTail = newCmd, newStderrTail
 	}
+}
+
+// supervisePodman — Podman-Pendant zu supervise() (Kapitel 17 Teil 4):
+// identische Crash-Loop-Brems-/Neustart-/Buchführungslogik, aber
+// `waitPodmanContainer`/`runPodmanEntry` statt `cmd.Wait()`/`execEntry`.
+// Bewusst eine eigene, parallele Funktion statt einer gemeinsamen
+// Abstraktion über beide Runner hinweg — die beiden Lebenszyklus-
+// Modelle (Kind-Prozess-PID vs. Container-ID) unterscheiden sich genug
+// (Exit-Code-Herkunft, Neustart-Mechanik), dass eine erzwungene
+// gemeinsame Schnittstelle mehr Komplexität einführen würde, als sie
+// spart — gleiches Duplikations-Prinzip wie an anderen Stellen dieses
+// Projekts (z. B. host-agent/launcher, beide mit eigener, unabhängiger
+// Ressourcen-Sample-Logik).
+func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, label string, extraEnv map[string]string, containerID string) {
+	for {
+		exitCode, waitErr := waitPodmanContainer(containerID)
+
+		l.mu.Lock()
+		current, stillTracked := l.instances[id]
+		if !stillTracked {
+			// Stop() hat die Instanz bereits entfernt — erwartetes Ende.
+			l.mu.Unlock()
+			return
+		}
+		msg := podmanCrashMessage(exitCode, waitErr)
+		shouldRestart, restartCount := l.recordRestartLocked(id)
+		if !shouldRestart {
+			current.Crashed = true
+			current.CrashMessage = fmt.Sprintf(
+				"%s (Crash-Loop erkannt: %d Neustarts in %s — Auto-Restart gestoppt)",
+				msg, maxCrashRestarts, crashRestartWindow)
+			current.RestartCount = restartCount
+			l.instances[id] = current
+			if err := l.persistInstanceLocked(id); err != nil {
+				slog.Warn("launcher: failed to persist instance state", "error", err)
+			}
+			l.mu.Unlock()
+
+			slog.Warn("launcher: container crash loop detected, giving up auto-restart",
+				"id", id, "type", nodeType, "restarts", restartCount)
+			l.publishCrash(current)
+			return
+		}
+		l.mu.Unlock()
+
+		slog.Warn("launcher: container exited unexpectedly, restarting",
+			"id", id, "type", nodeType, "exitCode", exitCode, "attempt", restartCount)
+		time.Sleep(crashRestartBackoff)
+
+		l.mu.Lock()
+		if _, stillTracked := l.instances[id]; !stillTracked {
+			l.mu.Unlock()
+			return
+		}
+		l.mu.Unlock()
+
+		newContainerID, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+		if err != nil {
+			l.mu.Lock()
+			current, stillTracked := l.instances[id]
+			if stillTracked {
+				current.Crashed = true
+				current.CrashMessage = fmt.Sprintf("Neustart fehlgeschlagen: %v", err)
+				current.RestartCount = restartCount
+				l.instances[id] = current
+				if saveErr := l.persistInstanceLocked(id); saveErr != nil {
+					slog.Warn("launcher: failed to persist instance state", "error", saveErr)
+				}
+			}
+			l.mu.Unlock()
+			if stillTracked {
+				l.publishCrash(current)
+			}
+			return
+		}
+
+		l.mu.Lock()
+		current, stillTracked = l.instances[id]
+		if !stillTracked {
+			// Stop() lief exakt während des Neustarts — den frisch
+			// gestarteten Ersatz-Container wieder beenden, nicht
+			// verwaisen lassen.
+			l.mu.Unlock()
+			_ = stopPodmanContainer(newContainerID, stopGracePeriod)
+			return
+		}
+		current.ContainerID = newContainerID
+		current.Crashed = false
+		current.CrashMessage = ""
+		current.RestartCount = restartCount
+		l.instances[id] = current
+		if err := l.persistInstanceLocked(id); err != nil {
+			slog.Warn("launcher: failed to persist instance state", "error", err)
+		}
+		l.mu.Unlock()
+
+		l.publishRestarted(current)
+		if l.restartObserver != nil {
+			l.restartObserver.InstanceRestarted(id)
+		}
+
+		containerID = newContainerID
+	}
+}
+
+// podmanCrashMessage baut dieselbe Art Kurzbeschreibung wie
+// crashMessage (s. dort), hier aus einem Podman-Exit-Code statt einem
+// Go-`*exec.ExitError`.
+func podmanCrashMessage(exitCode int, waitErr error) string {
+	if waitErr != nil {
+		return fmt.Sprintf("Container-Überwachung fehlgeschlagen: %v", waitErr)
+	}
+	return fmt.Sprintf("Container beendet mit Exit-Code %d", exitCode)
 }
 
 // recordRestartLocked führt die Crash-Loop-Buchführung für id fort und
@@ -919,6 +1066,13 @@ func (l *Launcher) Stop(id string) error {
 }
 
 func (l *Launcher) stopLocal(inst Instance) error {
+	if inst.ContainerID != "" {
+		// `podman stop --time` erledigt SIGTERM/Wartezeit/SIGKILL bereits
+		// selbst (s. podman.go-Doku) — kein eigenes Poll-Intervall wie
+		// beim Prozess-Zweig unten nötig.
+		return stopPodmanContainer(inst.ContainerID, stopGracePeriod)
+	}
+
 	process, err := os.FindProcess(inst.PID)
 	if err != nil {
 		return nil // Prozess existiert nicht mehr
@@ -970,7 +1124,15 @@ func (l *Launcher) loadState() {
 		return
 	}
 	for _, inst := range saved {
-		if processAlive(inst.PID) {
+		// Kapitel 17 Teil 4: ContainerID gesetzt heißt Podman-Instanz,
+		// podmanContainerRunning statt processAlive prüfen — gleiche
+		// Nachsicht/Wiedererkennungslogik wie beim Prozess-Runner, nur
+		// mit `podman inspect` statt Signal 0.
+		alive := processAlive(inst.PID)
+		if inst.ContainerID != "" {
+			alive = podmanContainerRunning(inst.ContainerID)
+		}
+		if alive {
 			l.instances[inst.ID] = inst
 		} else if err := l.store.Delete(inst.ID); err != nil {
 			slog.Warn("launcher: failed to drop dead instance from persisted state", "id", inst.ID, "error", err)

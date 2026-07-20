@@ -8,22 +8,39 @@ import (
 	"strings"
 )
 
-// runnerProcess ist der einzige aktuell unterstützte Runner: der
-// Orchestrator startet den Katalog-Eintrag als lokalen Subprozess
-// (os/exec). ARCHITECTURE.md §6.2 hält das Feld bewusst offen für
-// spätere Runner ("podman"/Quadlet), ohne sie hier zu bauen.
-const runnerProcess = "process"
+// runnerProcess startet den Katalog-Eintrag als lokalen Subprozess
+// (os/exec) — das einzige bis Kapitel 17 Teil 4 unterstützte Verfahren.
+// runnerPodman (docs/END-GOAL-FEATURES.md §17.3d/§17.4 Teil 4,
+// Nutzerentscheidung 2026-07-20: Podman-Container statt eines weiteren
+// lokal gebauten Binärpfads — "importieren" heißt damit ein echtes
+// Container-Image, nicht dieselbe Build-Toolchain wie dieses Projekt)
+// startet stattdessen ein Container-Image. Diese Runge liefert nur den
+// Runner-Unterbau (Start/Stop/Supervise eines Containers, s. podman.go)
+// — die Katalog-Schreib-API (Import über `POST /api/v1/catalog`) und
+// die C9-Konformitätsprüfung als Aufnahme-Voraussetzung sind bewusst
+// zurückgestellte Folgeschritte (§17.4 selbst: "größter Teil, eigene
+// Sitzung(en)"), bis dahin werden `runner:"podman"`-Einträge nur über
+// die statische Katalog-Datei erreicht (Live-Verifikation dieser
+// Runge: ein Test-Eintrag in einer separaten Scratch-Katalog-Datei,
+// nicht in `deploy/catalog.json`).
+const (
+	runnerProcess = "process"
+	runnerPodman  = "podman"
+)
 
 // CatalogEntry ist ein startbarer Node-Typ aus deploy/catalog.json
 // (UMSETZUNG.md C8). Command zeigt auf ein vorgebautes Binary
 // (`make nodes`) — der Launcher startet ausschließlich Katalog-
 // Einträge, keine freien Kommandos (Sicherheitsgrenze, ARCHITECTURE.md
-// §6.2).
+// §6.2). Image ist das Container-Image-Pendant für `runner:"podman"`
+// (Kapitel 17 Teil 4) — genau eines von Command/Image ist je nach
+// Runner Pflicht, s. LoadCatalog-Validierung.
 type CatalogEntry struct {
 	Type    string            `json:"type"`
 	Label   string            `json:"label"`
 	Runner  string            `json:"runner"`
 	Command []string          `json:"command"`
+	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env"`
 	// Description ist ein kurzer, für den Katalog-Nutzer verständlicher
 	// Fließtext, was dieser Node-Typ tut (docs/END-GOAL-FEATURES.md §17
@@ -78,12 +95,19 @@ func LoadCatalog(path string) ([]CatalogEntry, error) {
 		if entries[i].Type == "" {
 			return nil, fmt.Errorf("launcher: catalog entry %d has no type", i)
 		}
-		if len(entries[i].Command) == 0 {
-			return nil, fmt.Errorf("launcher: catalog entry %q has an empty command", entries[i].Type)
-		}
-		cmdPath := entries[i].Command[0]
-		if strings.ContainsRune(cmdPath, '/') && !filepath.IsAbs(cmdPath) {
-			entries[i].Command[0] = filepath.Join(catalogDir, cmdPath)
+		switch entries[i].Runner {
+		case runnerPodman:
+			if entries[i].Image == "" {
+				return nil, fmt.Errorf("launcher: catalog entry %q (runner podman) has no image", entries[i].Type)
+			}
+		default:
+			if len(entries[i].Command) == 0 {
+				return nil, fmt.Errorf("launcher: catalog entry %q has an empty command", entries[i].Type)
+			}
+			cmdPath := entries[i].Command[0]
+			if strings.ContainsRune(cmdPath, '/') && !filepath.IsAbs(cmdPath) {
+				entries[i].Command[0] = filepath.Join(catalogDir, cmdPath)
+			}
 		}
 	}
 
