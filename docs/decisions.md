@@ -10347,3 +10347,30 @@ realen Select+AutoTrans-Zyklen bestätigt (RSS-Zuwachs ~5.5 MB über alle
 15 Zyklen, keine Abstürze) — ein weiterer Beleg dafür, dass ein
 "fertiger" Fix immer gegen die volle Testsuite laufen muss, nicht nur
 gegen das ursprüngliche Reproduktionsszenario.
+
+## 2026-07-20 (Nachtrag 60) — Kapitel 15 Teil 3 (Rest): omp-switchers
+altes, nicht root-gecaustes Leck ebenfalls behoben
+
+Direkte Folge von Nachtrag 59: `omp-switcher`s eigener, damals bewusst
+ungelöst dokumentierter Speicherleck ("skaliert mit der Swap-Anzahl,
+~100 Umschaltungen bis OOM, drei gezielte Gegenmaßnahmen ohne messbare
+Wirkung") nutzt exakt denselben `swap_input_resolution`-Mechanismus und
+dieselbe `omp-mediaio::mxl::MxlVideoInput` wie der Mixer — also
+höchstwahrscheinlich derselbe Bug, nur seltener ausgelöst (nur ein
+Selektor-Pool statt zweier). Live re-verifiziert mit exakt der
+Methode, mit der der ursprüngliche Fund gemacht wurde (echte
+Umschaltungen im realistischen Bedienertempo, 0.3-0.4s Abstand, echte
+`omp-source`-Instanzen mit aktivierter Lowres-Vorschau, echter
+laufender `omp-switcher`-Prozess über die reale HTTP-API): 250
+aufeinanderfolgende Umschaltungen (2.5× die ursprüngliche "100+ bis
+OOM"-Schwelle) — RSS-Verlauf klar konvergierend statt unbegrenzt
+wachsend (+3.2 MB in den ersten 20 Umschaltungen, danach fallend auf
++100 KB/+20 KB/+8 KB/+4 KB je weitere 20 Umschaltungen, insgesamt nur
++64 KB über die letzten 150 Umschaltungen), Prozess durchgehend am
+Leben, kein Neustart. Bestätigt damit: die frühere Nutzerentscheidung
+("vorerst so committen, nicht für 24/7-Dauerbetrieb/Hochfrequenz-
+Automatisierung empfohlen") ist gegenstandslos geworden — der Leck ist
+tatsächlich behoben, nicht nur reduziert. Kein Code-Änderung an
+`omp-switcher` selbst nötig, der Fix lebt komplett in `omp-mediaio`
+(bereits committet, `be1dbc7`). Kapitel 15 Teil 3 damit für beide
+betroffenen Nodes (Switcher und Mixer) vollständig abgeschlossen.
