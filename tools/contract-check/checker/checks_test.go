@@ -1,4 +1,4 @@
-package main
+package checker
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ import (
 func compileTestSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
 	c := jsonschema.NewCompiler()
-	sch, err := c.Compile(defaultSchemaPath())
+	sch, err := c.Compile(DefaultSchemaPath())
 	if err != nil {
 		t.Fatalf("failed to compile docs/descriptor-v0.schema.json: %v", err)
 	}

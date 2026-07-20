@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -35,6 +36,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
 )
 
 // crashStderrLines ist die Anzahl der zuletzt geschriebenen stderr-Zeilen
@@ -214,24 +216,48 @@ type instanceStore interface {
 	List() ([]Instance, error)
 }
 
+// catalogStore ist die von Launcher genutzte Teilmenge von
+// *CatalogStore (§17 Teil 4) — gleiches Interface-Muster wie
+// instanceStore, gleicher Test-Grund. Nil ist ein gültiger Wert (kein
+// Import-Feature verdrahtet, z. B. in den meisten bestehenden Tests) —
+// ImportCatalogEntry/RemoveCatalogEntry scheitern dann mit
+// ErrCatalogImportUnavailable statt einer Nil-Pointer-Panik.
+type catalogStore interface {
+	Put(CatalogEntry) error
+	Delete(entryType string) error
+	List() ([]CatalogEntry, error)
+}
+
 // Launcher startet/stoppt Node-Instanzen aus dem Katalog als lokale
 // Subprozesse (os/exec) und hält deren {id, type, pid} persistent (seit
 // S4 in Postgres, `instances`-Tabelle, s. store.go — vorher
 // data/instances.json), damit ein Orchestrator-Neustart noch laufende
 // Kind-Prozesse per PID-Check wiedererkennt statt sie zu verwaisen
 // (UMSETZUNG.md C8).
+//
+// Seit §17 Teil 4 zweigeteilter Katalog: staticCatalog kommt
+// unverändert aus deploy/catalog.json (versionierte, vom Projekt selbst
+// gepflegte Node-Typen), importedCatalog sind zur Laufzeit per
+// `POST /api/v1/catalog` hinzugefügte Fremd-Einträge (Postgres-
+// persistiert, s. catalog_store.go) — bewusst zwei getrennte Quellen
+// statt einer Migration von catalog.json nach Postgres: die statischen
+// Einträge bleiben eine reguläre, per Code-Review versionierte Datei,
+// nur importierte Fremd-Einträge bekommen die neue, andere
+// Vertrauensstufe.
 type Launcher struct {
-	catalog         []CatalogEntry
+	staticCatalog   []CatalogEntry
 	registryURL     string
 	natsURL         string
 	store           instanceStore
+	catalog         catalogStore
 	events          EventPublisher
 	nc              NATSRequester
 	restartObserver RestartObserver
 
-	mu        sync.Mutex
-	instances map[string]Instance
-	restarts  map[string]*restartState
+	mu              sync.Mutex
+	instances       map[string]Instance
+	importedCatalog map[string]CatalogEntry
+	restarts        map[string]*restartState
 
 	// procState/resourceSamples (Kapitel 14 Teil 2) — Zustand für
 	// sampleLocalResources(), keyed by Instanz-ID (nicht PID: ein
@@ -273,35 +299,200 @@ func (l *Launcher) SetRestartObserver(o RestartObserver) {
 // Fehler). events/nc dürfen nil sein (z. B. in Tests) — nc nil bedeutet
 // "kein Kommandokanal", Start()/Stop() mit einem hostID scheitern dann
 // mit ErrRemoteUnavailable statt einer Nil-Pointer-Panik; rein lokaler
-// Betrieb funktioniert unverändert. Konkreter *Store-Parameter (statt
-// des intern genutzten instanceStore-Interfaces) der Einfachheit halber
-// für main.go — Tests im Paket selbst rufen stattdessen das
-// unexportierte newWithStore mit einem In-Memory-Fake auf (gleiches
-// Muster wie workflows.NewService/workflowStore).
-func New(catalog []CatalogEntry, registryURL, natsURL string, store *Store, events EventPublisher, nc NATSRequester) *Launcher {
-	return newWithStore(catalog, registryURL, natsURL, store, events, nc)
+// Betrieb funktioniert unverändert. catalogStore darf ebenfalls nil
+// sein (§17 Teil 4: kein Import-Feature verdrahtet) — Import-
+// Katalog-Einträge sind dann leer, ImportCatalogEntry/
+// RemoveCatalogEntry scheitern mit ErrCatalogImportUnavailable.
+// Konkrete *Store-/*CatalogStore-Parameter (statt der intern genutzten
+// Interfaces) der Einfachheit halber für main.go — Tests im Paket
+// selbst rufen stattdessen das unexportierte newWithStore mit
+// In-Memory-Fakes auf (gleiches Muster wie workflows.NewService/
+// workflowStore).
+func New(catalog []CatalogEntry, registryURL, natsURL string, store *Store, events EventPublisher, nc NATSRequester, catalogDB *CatalogStore) *Launcher {
+	// catalogDB explizit in ein catalogStore-Interface umwandeln statt
+	// den *CatalogStore direkt durchzureichen: ein nil *CatalogStore, das
+	// in eine Interface-Variable gesteckt wird, ergibt sonst ein
+	// nicht-nil-Interface, das einen nil-Pointer umschließt (klassische
+	// Go-Falle) — l.catalog == nil in loadImportedCatalog() würde dann
+	// fälschlich false liefern und mit einer Nil-Pointer-Panik in
+	// (*CatalogStore).List() abstürzen.
+	var cs catalogStore
+	if catalogDB != nil {
+		cs = catalogDB
+	}
+	return newWithStore(catalog, registryURL, natsURL, store, events, nc, cs)
 }
 
-func newWithStore(catalog []CatalogEntry, registryURL, natsURL string, store instanceStore, events EventPublisher, nc NATSRequester) *Launcher {
+func newWithStore(staticCatalog []CatalogEntry, registryURL, natsURL string, store instanceStore, events EventPublisher, nc NATSRequester, catalog catalogStore) *Launcher {
 	l := &Launcher{
-		catalog:     catalog,
-		registryURL: registryURL,
-		natsURL:     natsURL,
-		store:       store,
-		events:      events,
-		nc:          nc,
+		staticCatalog:   staticCatalog,
+		registryURL:     registryURL,
+		natsURL:         natsURL,
+		store:           store,
+		catalog:         catalog,
+		events:          events,
+		nc:              nc,
 		instances:       map[string]Instance{},
+		importedCatalog: map[string]CatalogEntry{},
 		restarts:        map[string]*restartState{},
 		procState:       map[string]procCPUState{},
 		resourceSamples: map[string]instanceResourceSample{},
 	}
 	l.loadState()
+	l.loadImportedCatalog()
 	return l
 }
 
-// Catalog liefert die geladenen Katalog-Einträge (GET /api/v1/catalog).
+// loadImportedCatalog liest zuvor importierte Katalog-Einträge aus
+// Postgres (§17 Teil 4) — Gegenstück zu loadState() für Instanzen. Kein
+// Fehler, wenn l.catalog nil ist (Import-Feature nicht verdrahtet).
+func (l *Launcher) loadImportedCatalog() {
+	if l.catalog == nil {
+		return
+	}
+	entries, err := l.catalog.List()
+	if err != nil {
+		slog.Warn("launcher: failed to read persisted catalog imports", "error", err)
+		return
+	}
+	for _, e := range entries {
+		l.importedCatalog[e.Type] = e
+	}
+}
+
+// Catalog liefert die geladenen Katalog-Einträge (GET /api/v1/catalog)
+// — statische deploy/catalog.json-Einträge zuerst, danach importierte
+// (§17 Teil 4), stabil sortiert nach Typ für eine reihenfolgestabile
+// API-Antwort (Go-Map-Iteration wäre sonst jitterig, gleicher Grund wie
+// List()).
 func (l *Launcher) Catalog() []CatalogEntry {
-	return l.catalog
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]CatalogEntry, 0, len(l.staticCatalog)+len(l.importedCatalog))
+	out = append(out, l.staticCatalog...)
+	imported := make([]CatalogEntry, 0, len(l.importedCatalog))
+	for _, e := range l.importedCatalog {
+		imported = append(imported, e)
+	}
+	sort.Slice(imported, func(i, j int) bool { return imported[i].Type < imported[j].Type })
+	return append(out, imported...)
+}
+
+// ErrCatalogImportUnavailable wird geliefert, wenn ImportCatalogEntry/
+// RemoveCatalogEntry aufgerufen werden, aber kein CatalogStore
+// verdrahtet ist (§17 Teil 4 nicht konfiguriert).
+var ErrCatalogImportUnavailable = errors.New("launcher: catalog import not available (no catalog store configured)")
+
+// ErrCatalogTypeExists wird von ImportCatalogEntry geliefert, wenn
+// bereits ein statischer ODER importierter Eintrag denselben Typnamen
+// trägt — Import darf einen bestehenden Node-Typ nie stillschweigend
+// überschreiben (weder einen Projekt-eigenen noch einen bereits
+// importierten).
+var ErrCatalogTypeExists = errors.New("launcher: catalog type already exists")
+
+// ErrCatalogTypeNotImported wird von RemoveCatalogEntry geliefert, wenn
+// der Typ kein importierter Eintrag ist (unbekannt oder ein statischer
+// Projekt-Eintrag — letzterer ist über diese API nie entfernbar).
+var ErrCatalogTypeNotImported = errors.New("launcher: catalog type is not an imported entry")
+
+// ErrCatalogTypeInUse wird von RemoveCatalogEntry geliefert, wenn noch
+// mindestens eine Instanz dieses Typs läuft (§17.3d Punkt iv:
+// "Löschen-Semantik: nur wenn keine laufende Instanz mehr referenziert").
+var ErrCatalogTypeInUse = errors.New("launcher: catalog type is still referenced by a running instance")
+
+// ErrCatalogInvalidEntry wird von ImportCatalogEntry geliefert, wenn
+// entry schon formal nicht importierbar ist (kein Typname, kein
+// runnerPodman, kein Image) — Import ist per Nutzerentscheidung
+// (2026-07-20) ausschließlich für Container-Images vorgesehen, ein
+// Prozess-Kommando-Import würde bedeuten, ein Fremd-Binary direkt auf
+// dem Host laufen zu lassen (die Namensraum-Isolation aus podman.go
+// gäbe es dafür nicht).
+var ErrCatalogInvalidEntry = errors.New("launcher: catalog entry is not a valid podman-runner entry (type/image required)")
+
+// ImportCatalogEntry fügt entry als neuen, importierten Katalog-Eintrag
+// hinzu (§17 Teil 4). Vor der Persistenz läuft immer die
+// C9-Mindestprüfung (Nutzerentscheidung 2026-07-20, s. admission.go):
+// entry wird als eigener Wegwerf-Container gestartet und muss den
+// vollständigen Node-Contract-Check bestehen (kein FAIL), sonst wird
+// der Import abgelehnt — dieser Weg ist der einzige Weg, Einträge in
+// importedCatalog zu bekommen, es gibt also keinen Aufrufer, der die
+// Prüfung umgehen könnte.
+func (l *Launcher) ImportCatalogEntry(entry CatalogEntry) error {
+	if l.catalog == nil {
+		return ErrCatalogImportUnavailable
+	}
+	if entry.Type == "" || entry.Runner != runnerPodman || entry.Image == "" {
+		return ErrCatalogInvalidEntry
+	}
+
+	l.mu.Lock()
+	_, staticExists := findStatic(l.staticCatalog, entry.Type)
+	_, importedExists := l.importedCatalog[entry.Type]
+	if staticExists || importedExists {
+		l.mu.Unlock()
+		return ErrCatalogTypeExists
+	}
+	l.mu.Unlock()
+
+	results, err := runAdmissionCheck(entry, l.registryURL, l.natsURL)
+	if err != nil {
+		return fmt.Errorf("launcher: admission check for %q: %w", entry.Type, err)
+	}
+	for _, r := range results {
+		if r.Status == checker.StatusFail {
+			return &ErrAdmissionCheckFailed{Results: results}
+		}
+	}
+
+	if err := l.catalog.Put(entry); err != nil {
+		return fmt.Errorf("launcher: persist imported catalog entry %q: %w", entry.Type, err)
+	}
+
+	l.mu.Lock()
+	l.importedCatalog[entry.Type] = entry
+	l.mu.Unlock()
+	return nil
+}
+
+// RemoveCatalogEntry entfernt einen zuvor importierten Katalog-Eintrag
+// — abgelehnt, wenn er gar nicht importiert wurde (unbekannt oder ein
+// statischer Eintrag) oder noch mindestens eine Instanz dieses Typs
+// läuft.
+func (l *Launcher) RemoveCatalogEntry(nodeType string) error {
+	if l.catalog == nil {
+		return ErrCatalogImportUnavailable
+	}
+
+	l.mu.Lock()
+	if _, ok := l.importedCatalog[nodeType]; !ok {
+		l.mu.Unlock()
+		return ErrCatalogTypeNotImported
+	}
+	for _, inst := range l.instances {
+		if inst.Type == nodeType {
+			l.mu.Unlock()
+			return ErrCatalogTypeInUse
+		}
+	}
+	l.mu.Unlock()
+
+	if err := l.catalog.Delete(nodeType); err != nil {
+		return fmt.Errorf("launcher: delete imported catalog entry %q: %w", nodeType, err)
+	}
+
+	l.mu.Lock()
+	delete(l.importedCatalog, nodeType)
+	l.mu.Unlock()
+	return nil
+}
+
+func findStatic(entries []CatalogEntry, nodeType string) (CatalogEntry, bool) {
+	for _, e := range entries {
+		if e.Type == nodeType {
+			return e, true
+		}
+	}
+	return CatalogEntry{}, false
 }
 
 // List liefert alle aktuell bekannten Instanzen (GET /api/v1/instances).
@@ -495,7 +686,7 @@ func (l *Launcher) startLocal(nodeType string, extraEnv map[string]string) (Inst
 // Container statt eines Subprozesses. Wird von startLocal aufgerufen,
 // nachdem id/label bereits vergeben sind (gemeinsamer erster Teil).
 func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label string, extraEnv map[string]string) (Instance, error) {
-	containerID, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+	containerID, _, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
@@ -689,7 +880,7 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 		}
 		l.mu.Unlock()
 
-		newContainerID, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+		newContainerID, _, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -1109,12 +1300,13 @@ func (l *Launcher) stopRemote(inst Instance) error {
 }
 
 func (l *Launcher) findEntry(nodeType string) (CatalogEntry, bool) {
-	for _, e := range l.catalog {
-		if e.Type == nodeType {
-			return e, true
-		}
+	if e, ok := findStatic(l.staticCatalog, nodeType); ok {
+		return e, true
 	}
-	return CatalogEntry{}, false
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.importedCatalog[nodeType]
+	return e, ok
 }
 
 func (l *Launcher) loadState() {

@@ -28,6 +28,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
+	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
 )
 
 // fakeConsoleResolver ist ein einfacher Test-Double für ConsoleResolver
@@ -160,6 +161,8 @@ type fakeLauncherService struct {
 	startErr      error
 	stopErr       error
 	totalRestarts uint64
+	importErr     error
+	removeErr     error
 }
 
 func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalog }
@@ -175,6 +178,10 @@ func (f fakeLauncherService) Stop(id string) error {
 }
 
 func (f fakeLauncherService) TotalRestarts() uint64 { return f.totalRestarts }
+
+func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) error { return f.importErr }
+
+func (f fakeLauncherService) RemoveCatalogEntry(nodeType string) error { return f.removeErr }
 
 // fakeAuthSvc ist ein Test-Double für AuthService — UserCount 0 im
 // Zero-Value (Bootstrap-Bypass, s. authGate.authenticate), damit alle
@@ -875,6 +882,88 @@ func TestHandleCatalog(t *testing.T) {
 	}
 	if len(body) != 1 || body[0].Type != "omp-source" {
 		t.Fatalf("catalog = %+v, want one omp-source entry", body)
+	}
+}
+
+func TestHandlePostCatalogEntry(t *testing.T) {
+	svc := fakeLauncherService{}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"acme-widget","runner":"podman","image":"example.com/acme/widget:1.0"}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	var body launcher.CatalogEntry
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if body.Type != "acme-widget" {
+		t.Fatalf("entry = %+v, want type acme-widget", body)
+	}
+}
+
+// TestHandlePostCatalogEntryAdmissionFailureReturns422 prüft, dass ein
+// abgelehnter Admission-Check (§17 Teil 4) den vollständigen
+// checker.Result-Report im Response-Body mitliefert, nicht nur "422" —
+// der Import-Nutzer muss sehen können, woran es lag (s.
+// writeCatalogImportError-Doku).
+func TestHandlePostCatalogEntryAdmissionFailureReturns422(t *testing.T) {
+	svc := fakeLauncherService{importErr: &launcher.ErrAdmissionCheckFailed{Results: []checker.Result{
+		{Name: "IS-04-Registrierung", Status: checker.StatusFail, Detail: "nicht gefunden"},
+	}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"acme-widget","runner":"podman","image":"example.com/acme/widget:1.0"}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "IS-04-Registrierung") {
+		t.Fatalf("body = %s, want it to contain the failed check name", rec.Body.String())
+	}
+}
+
+func TestHandlePostCatalogEntryDuplicateTypeReturns409(t *testing.T) {
+	svc := fakeLauncherService{importErr: launcher.ErrCatalogTypeExists}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"omp-source","runner":"podman","image":"x"}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestHandleDeleteCatalogEntry(t *testing.T) {
+	svc := fakeLauncherService{}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/catalog/acme-widget", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleDeleteCatalogEntryNotImportedReturns404(t *testing.T) {
+	svc := fakeLauncherService{removeErr: launcher.ErrCatalogTypeNotImported}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/catalog/omp-source", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 

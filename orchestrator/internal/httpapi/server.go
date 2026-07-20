@@ -99,6 +99,11 @@ type LauncherService interface {
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.
 	TotalRestarts() uint64
+	// ImportCatalogEntry/RemoveCatalogEntry (§17 Teil 4, docs/END-GOAL-
+	// FEATURES.md §17.3d/§17.4) — s. handlePostCatalogEntry/
+	// handleDeleteCatalogEntry in launcher_handlers.go.
+	ImportCatalogEntry(entry launcher.CatalogEntry) error
+	RemoveCatalogEntry(nodeType string) error
 }
 
 // WorkflowService verwaltet Workflow-Definitionen und führt Bundle-
@@ -206,6 +211,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/snapshots", g.requireVerbGlobal(authz.VerbConfigure, handleCreateSnapshot(snapshotSvc)))
 	mux.HandleFunc("POST /api/v1/snapshots/{id}/apply", g.requireVerbGlobal(authz.VerbConfigure, handleApplySnapshot(snapshotSvc)))
 	mux.HandleFunc("GET /api/v1/catalog", g.requireAuth(handleCatalog(launcherSvc)))
+	mux.HandleFunc("POST /api/v1/catalog", g.requireVerbGlobal(authz.VerbAdmin, handlePostCatalogEntry(launcherSvc)))
+	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))

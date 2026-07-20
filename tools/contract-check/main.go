@@ -3,30 +3,24 @@
 // Community-Nodes (UMSETZUNG.md C9). Kein Node-Typ-Sonderwissen: nur
 // Standard-IS-04/IS-05-REST und das generische Descriptor-Self-Describe
 // (A8) werden angefragt.
+//
+// Die eigentliche Prüflogik lebt seit §17 Teil 4 (docs/END-GOAL-
+// FEATURES.md §17.3d/§17.4) in ./checker (eigenes, importierbares
+// Unterpaket statt package main) — der Orchestrator bindet sie dort
+// direkt als Bibliothek ein (Katalog-Import-Mindestprüfung), dieses
+// main.go bleibt die eigenständige CLI für `make contract`.
 package main
 
 import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
-	"runtime"
 	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
-)
 
-// defaultSchemaPath findet docs/descriptor-v0.schema.json relativ zu
-// dieser Datei, unabhängig vom Arbeitsverzeichnis, aus dem `go run`
-// gestartet wird (gleiches Verfahren wie
-// nodes/mock/internal/descriptor/schema_test.go).
-func defaultSchemaPath() string {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "docs/descriptor-v0.schema.json"
-	}
-	return filepath.Join(filepath.Dir(thisFile), "..", "..", "docs", "descriptor-v0.schema.json")
-}
+	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
+)
 
 func getEnv(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
@@ -45,19 +39,19 @@ func main() {
 	registryURL := getEnv("OMP_REGISTRY_URL", "http://localhost:8010")
 
 	compiler := jsonschema.NewCompiler()
-	schema, err := compiler.Compile(defaultSchemaPath())
+	schema, err := compiler.Compile(checker.DefaultSchemaPath())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "contract-check: Schema docs/descriptor-v0.schema.json nicht kompilierbar: %v\n", err)
 		os.Exit(2)
 	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	results := Run(client, nodeURL, registryURL, schema)
+	results := checker.Run(client, nodeURL, registryURL, schema)
 
 	failed := false
 	for _, r := range results {
 		fmt.Printf("[%s] %-22s %s\n", r.Status, r.Name, r.Detail)
-		if r.Status == StatusFail {
+		if r.Status == checker.StatusFail {
 			failed = true
 		}
 	}

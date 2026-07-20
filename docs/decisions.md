@@ -9985,3 +9985,114 @@ C9-Konformitätsprüfung als Aufnahme-Voraussetzung — beide eigene, noch
 nicht begonnene Folgeschritte, exakt wie von §17.4 selbst als
 Mehrfach-Sitzungs-Umfang vorgezeichnet. Teil 5 (Versionierung) bleibt
 entsprechend ebenfalls offen.
+
+## 2026-07-20 (Nachtrag 57) — §17 Teil 4: Katalog-Schreib-API +
+C9-Mindestprüfung, Abschluss
+
+Baut auf Nachtrag 56 auf und schließt §17 Teil 4 ab: die beiden dort
+zurückgestellten Folgeschritte (Katalog-Schreib-API, C9-Mindestprüfung
+als Aufnahme-Voraussetzung) sind jetzt umgesetzt.
+
+**`tools/contract-check` in ein importierbares Unterpaket verschoben:**
+`checks.go`/`is04.go`/`checks_test.go` von `package main` in ein neues
+`tools/contract-check/checker`-Unterpaket (`package checker`), neues
+`schema.go` mit `DefaultSchemaPath()` (per `runtime.Caller(0)` relativ
+zum eigenen Quelldatei-Pfad aufgelöst, nicht hartcodiert). `main.go`
+bleibt die eigenständige CLI für `make contract`, ruft jetzt nur noch
+`checker.Run`/`checker.DefaultSchemaPath()` auf. Der Orchestrator bindet
+das Unterpaket per lokaler `replace`-Direktive in `orchestrator/go.mod`
+ein (`go mod tidy` zog dabei `github.com/santhosh-tekuri/jsonschema/v6`
+als transitive Dependency nach) — **kein zweites, dupliziertes
+Prüfprogramm**, derselbe Check-Code läuft sowohl in `make contract` als
+auch im Admission-Check unten.
+
+**Zweigeteilter Katalog:** `Launcher` hält jetzt `staticCatalog`
+(unverändert aus `deploy/catalog.json`) und `importedCatalog` (zur
+Laufzeit importiert, in der neuen Postgres-Tabelle `catalog_entries`,
+Migration 0009, persistiert — gleiches Ein-Blob-pro-Zeile-Muster wie
+`instances`). `Catalog()` mischt beide (statische Einträge zuerst,
+importierte stabil nach Typ sortiert — Go-Map-Iterationsreihenfolge
+wäre sonst jitterig). `New`/`newWithStore` bekommen einen zusätzlichen
+`*CatalogStore`-Parameter; **ein echter Go-Nil-Interface-Fallstrick
+dabei live gefunden**: ein nil `*CatalogStore` direkt einer
+`catalogStore`-Interface-Variable zugewiesen ergibt ein *nicht-nil*
+Interface, das einen nil-Pointer umschließt — `l.catalog == nil` wäre
+dann fälschlich `false`, `loadImportedCatalog()` wäre mit einer
+Nil-Pointer-Panik in `(*CatalogStore).List()` abgestürzt (im Test
+`TestLauncherReloadsStillRunningInstanceAfterRestart` sofort
+reproduziert). Fix: `New` konvertiert `catalogDB *CatalogStore`
+explizit selbst in die Interface-Variable, mit einer expliziten
+nil-Prüfung davor, statt die automatische (und hier falsche)
+Pointer→Interface-Konvertierung Go überlassen.
+
+**Admission-Check (neues `internal/launcher/admission.go`):**
+`ImportCatalogEntry` ist der **einzige** Weg, einen Eintrag in
+`importedCatalog` zu bekommen — es gibt daher keinen Aufrufer, der die
+Prüfung umgehen könnte (die Nutzerentscheidung "Mindestprüfung" ist
+damit strukturell erzwungen, nicht nur an einer Stelle empfohlen).
+Ablauf: Validierung (Typname gesetzt, `runner:"podman"`, `image`
+gesetzt — Import ist ausschließlich für Container-Images vorgesehen,
+kein Prozess-Import), Typ-Kollisionsprüfung (gegen statische UND
+bereits importierte Einträge) — beides **vor** dem eigentlichen
+Admission-Check, damit ein von vornherein unzulässiger oder
+kollidierender Import nicht erst einen echten Container startet.
+Danach `runAdmissionCheck`: startet `entry` als eigenen,
+komplett von jeder späteren `Start()`-Instanz getrennten
+Wegwerf-Container (eigene Instanz-ID/Port über den bestehenden
+`runPodmanEntry`-Mechanismus aus Nachtrag 56), lässt `checker.Run`
+laufen, stoppt den Container **in jedem Fall** (Erfolg wie Fehlschlag,
+`defer`). Nur bei durchweg PASS/SKIP (kein FAIL) wird `l.catalog.Put`
+aufgerufen; ein FAIL liefert `*ErrAdmissionCheckFailed` mit dem
+vollständigen `[]checker.Result`-Report.
+
+**Ein echter, nur live gegen die tatsächlich laufende Orchestrator-
+Instanz gefundener Zeit-Wettlauf-Bug:** der erste End-to-End-Test über
+die reale HTTP-API (nach `make start`, nicht nur `go test`) scheiterte
+reproduzierbar mit einem falschen `IS-04-Registrierung: FAIL`, obwohl
+derselbe Import im In-Prozess-Unit-Test kurz zuvor sauber durchgelaufen
+war. Ursache: der Kandidaten-Node öffnet seinen HTTP-Port, **bevor** er
+sich bei der Registry registriert (zwei getrennte Schritte im
+Node-Boot, ARCHITECTURE.md §5) — die bisherige
+`waitForAdmissionCandidateReady` wartete nur auf "HTTP antwortet
+überhaupt", ein `checker.Run` direkt danach kam fast immer zu früh für
+die Registrierung. Der Unit-Test hatte dieses enge Zeitfenster zufällig
+getroffen (vermutlich durch mehr Overhead im Testprozess selbst mehr
+Wartezeit gewonnen) und wäre ohne den zusätzlichen echten API-Test
+unentdeckt geblieben — ein weiterer Beleg für die Projektregel
+"live-verifizieren, nicht nur Unit-Tests" (s. `feedback_ui_click_test_
+not_just_api` im Auto-Memory). Behoben durch `runContractCheckUntil-
+Registered`: statt eines einzelnen `checker.Run`-Aufrufs wird er
+innerhalb desselben Zeitbudgets (`admissionStartupTimeout`, 15s)
+wiederholt aufgerufen, bis `IS-04-Registrierung` nicht mehr `FAIL` ist
+— sobald die Registrierung erfolgreich ist, zählt genau dieser
+Durchlauf final (auch wenn andere Checks darin scheitern — das sind
+dann echte Contract-Verstöße, keine Zeitartefakte mehr). Mehrfaches
+`checker.Run` auf demselben Wegwerf-Container ist unproblematisch (u. a.
+ein wiederholter Param-Roundtrip hat außerhalb des Containers keine
+Nebenwirkungen).
+
+**Neue Endpunkte:** `POST /api/v1/catalog` (Body = `CatalogEntry`,
+FAIL → HTTP 422 mit dem vollen Check-Report im Body, Kollision → 409,
+ungültiger Eintrag → 400), `DELETE /api/v1/catalog/{type}` (nicht
+importiert/statisch → 404, noch laufende Instanz dieses Typs → 409) —
+beide `authz.VerbAdmin`, dieselbe Schwelle wie `POST`/`DELETE
+/api/v1/instances`.
+
+**Vollständig live über die echte HTTP-API verifiziert** (Login via
+`admin`/`adminpass123`, nicht nur Unit-Tests): `POST /api/v1/catalog`
+mit dem realen, containerisierten `omp-mock`-Testimage aus Nachtrag 56
+→ echter Admission-Check lief, PASS, Eintrag erscheint in `GET
+/api/v1/catalog` → `POST /api/v1/instances` startete davon einen
+echten, laufenden Container (per `GET /api/v1/instances` bestätigt) →
+`DELETE /api/v1/instances/<id>` + `DELETE /api/v1/catalog/imported-
+mock-e2e` räumten sauber auf (`podman ps -a` danach ohne Reste,
+`catalog_entries`-Tabelle per direktem `psql` bestätigt leer). Negative
+Pfade ebenfalls live bestätigt: Duplikat-Import (409), Import eines
+realen `busybox`-Images ohne Node-Contract-Server (422, kein FAIL-Typ
+vorgeschrieben — je nachdem ob der Kandidat nie erreichbar wird oder
+erreichbar ist aber den Check nicht besteht), Entfernen bei noch
+laufender Instanz (409). `go build ./...`/`go test ./...` grün bis auf
+denselben vorbestehenden, unberührten `internal/hosts`-Flake.
+
+§17 ist damit bis auf Teil 5 (Versionierung importierter Katalog-
+Einträge) vollständig.

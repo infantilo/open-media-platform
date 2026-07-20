@@ -45,6 +45,75 @@ func handleCatalog(svc LauncherService) http.HandlerFunc {
 	}
 }
 
+// handlePostCatalogEntry liefert POST /api/v1/catalog (§17 Teil 4,
+// docs/END-GOAL-FEATURES.md §17.3d/§17.4, Nutzerentscheidung
+// 2026-07-20: Podman-Container-Import mit C9-Mindestprüfung). Der
+// eigentliche Admission-Check (Kandidat testweise als Wegwerf-Container
+// starten, tools/contract-check/checker.Run laufen lassen) passiert
+// vollständig innerhalb von svc.ImportCatalogEntry — dieser Handler
+// reicht den Request-Body nur durch und übersetzt das Ergebnis in
+// HTTP-Statuscodes. requireVerbGlobal(authz.VerbAdmin, ...) (server.go)
+// bewusst so streng wie POST /api/v1/instances: ein Import startet
+// mindestens kurzzeitig einen Fremd-Container.
+func handlePostCatalogEntry(svc LauncherService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var entry launcher.CatalogEntry
+		if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+
+		if err := svc.ImportCatalogEntry(entry); err != nil {
+			writeCatalogImportError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+	}
+}
+
+// handleDeleteCatalogEntry liefert DELETE /api/v1/catalog/<type> (§17
+// Teil 4) — entfernt einen zuvor importierten Eintrag; statische
+// Einträge aus deploy/catalog.json sind darüber nie löschbar (s.
+// launcher.ErrCatalogTypeNotImported).
+func handleDeleteCatalogEntry(svc LauncherService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := svc.RemoveCatalogEntry(r.PathValue("type")); err != nil {
+			writeCatalogImportError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// writeCatalogImportError übersetzt die launcher-Fehler rund um Import/
+// Entfernen eines Katalog-Eintrags in passende HTTP-Statuscodes —
+// eigene Funktion statt writeLauncherError-Erweiterung, da diese
+// Fehlerfamilie (inkl. *ErrAdmissionCheckFailed mit vollem
+// Contract-Check-Report) komplett anders aussieht als die
+// Start/Stop-Fehler dort.
+func writeCatalogImportError(w http.ResponseWriter, err error) {
+	var admissionErr *launcher.ErrAdmissionCheckFailed
+	switch {
+	case errors.As(err, &admissionErr):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error":   "admission check failed",
+			"results": admissionErr.Results,
+		})
+	case errors.Is(err, launcher.ErrCatalogInvalidEntry):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, launcher.ErrCatalogTypeExists):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, launcher.ErrCatalogTypeNotImported):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, launcher.ErrCatalogTypeInUse):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, launcher.ErrCatalogImportUnavailable):
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
 // handleListInstances liefert GET /api/v1/instances. Seit Kapitel 14
 // Teil 2 mit CPU%/RSS pro Instanz: lokal von svc.List() selbst
 // mitgeliefert, für entfernte (HostID gesetzt) Instanzen hier per

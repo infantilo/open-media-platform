@@ -189,7 +189,7 @@ func main() {
 	if nc != nil {
 		launcherNATS = natsRequester{nc: nc}
 	}
-	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS)
+	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS, launcher.NewCatalogStore(database))
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): periodisches
 	// Pro-Instanz-Sampling (CPU%/RSS aus /proc) für lokal laufende
 	// Instanzen — das Orchestrator-seitige Gegenstück zum Host-Agent-

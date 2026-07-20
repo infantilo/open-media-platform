@@ -79,10 +79,10 @@ func findFreePort() (int, error) {
 // Bind-Adresse). `--rm`: Podman entfernt den Container beim Beenden
 // selbst, kein zusätzlicher Aufräumschritt nötig (gleiche Idempotenz-
 // Erwartung wie bei den Infra-Containern aus `make up`).
-func runPodmanEntry(entry CatalogEntry, id, label string, extraEnv map[string]string, registryURL, natsURL string) (containerID string, err error) {
+func runPodmanEntry(entry CatalogEntry, id, label string, extraEnv map[string]string, registryURL, natsURL string) (containerID string, hostPort int, err error) {
 	port, err := findFreePort()
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	merged := map[string]string{}
@@ -117,9 +117,9 @@ func runPodmanEntry(entry CatalogEntry, id, label string, extraEnv map[string]st
 
 	out, err := exec.Command("podman", args...).Output()
 	if err != nil {
-		return "", fmt.Errorf("podman run %s: %w", entry.Image, describeExitError(err))
+		return "", 0, fmt.Errorf("podman run %s: %w", entry.Image, describeExitError(err))
 	}
-	return strings.TrimSpace(string(out)), nil
+	return strings.TrimSpace(string(out)), port, nil
 }
 
 // stopPodmanContainer beendet einen Container graceful (SIGTERM, dann
