@@ -66,6 +66,29 @@ impl PeerClient {
             Err(e) => Err(RemoteError::Request(e.to_string())),
         }
     }
+
+    /// Liest einen einzelnen Parameterwert (`GET /params/<name>`,
+    /// zweiter Konsument nach `invoke` — Kapitel 16 Teil 2,
+    /// `omp-fabrics-gateway`: die Initiator-Rolle muss den per HTTP
+    /// exportierten `fabricsTargetInfo`-String der Target-Rolle auf dem
+    /// jeweils anderen Host abholen, ein reiner Werte-Abruf ohne
+    /// Methodenaufruf-Semantik). Antwortformat identisch zu
+    /// `server::route`s `{"value": ...}`-Hülle.
+    pub fn get_param(&self, name: &str) -> Result<serde_json::Value, RemoteError> {
+        let url = format!("{}/params/{}", self.base_url, name);
+        let mut response = match ureq::get(&url).call() {
+            Ok(r) => r,
+            Err(ureq::Error::StatusCode(code)) => return Err(RemoteError::Status(code)),
+            Err(e) => return Err(RemoteError::Request(e.to_string())),
+        };
+        let body: serde_json::Value = response
+            .body_mut()
+            .read_json()
+            .map_err(|e| RemoteError::Request(e.to_string()))?;
+        body.get("value")
+            .cloned()
+            .ok_or_else(|| RemoteError::Request("response missing 'value' field".to_string()))
+    }
 }
 
 /// Löst den `href` des Node auf, der den gegebenen Sender besitzt

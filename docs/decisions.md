@@ -9783,3 +9783,112 @@ komplett unangetastet, kein Tag, kein Lowres-Begleiter.
 
 Kapitel 15 damit bis auf `omp-video-mixer-me` (Teil 3, blockiert durch
 das ungelöste OOM-Problem, s. Nachtrag 51) vollständig abgeschlossen.
+
+## 2026-07-20 (Nachtrag 55) — Kapitel 16 Teil 2: `omp-fabrics-gateway`,
+erster echter Node-Konsument der Fabrics-Bibliothek
+
+Nach Kapitel 14/15 nächster Punkt in der Prioritätsreihenfolge
+(`docs/END-GOAL-FEATURES.md` §16.1). Bei näherer Prüfung stellte sich
+heraus, dass Kapitel 16 Teil 2 wie im Dokument beschrieben ("`transport
+Hint`/`fabricsProvider`-Claim, Orchestrator wählt Fabrics vs. ST2110/SRT
+pro Rolle") auf einer offenen Design-Entscheidung aufsetzt, die nie
+getroffen wurde: "erste konkrete Node-Anbindung (welcher Node Fabrics
+tatsächlich als Transport nutzt) ist Teil dieser Design-Entscheidung,
+nicht vorweggenommen." Ohne einen echten Fabrics-nutzenden Node ergibt
+eine Orchestrator-Auswahllogik "Fabrics vs. ST2110" keinen Sinn — es
+gäbe nichts, wohin sie routen könnte.
+
+**Dem Nutzer vorgelegt, mit Empfehlung:** neuer, eigenständiger
+`omp-fabrics-gateway`-Node nach dem Vorbild von `omp-2110-gateway`
+(zwei Rollen, eine relayt einen lokalen MXL-Flow zu einem entfernten
+Host, die andere empfängt ihn dort) — nutzt direkt die bereits gebaute
+und bereits verifizierte Relay-Bibliothek aus Kapitel 16 Teil 1, daher
+eine kleine, live-testbare Scheibe. Alternative (Kapitel 16 komplett
+zurückstellen, bis echte Mehr-Host-Hardware für Teil 3 verfügbar ist)
+zur Wahl gestellt. **Nutzerentscheidung:** Empfehlung angenommen.
+
+**Umsetzung:** neuer Node, zweigeteilt wie die übrigen Gateways
+(`OMP_FABRICS_GATEWAY_ROLE=target|initiator`), aber **ohne jede
+GStreamer-Pipeline** — einziger Node im Projekt ohne `pipeline.rs`.
+Grund: Fabrics operiert laut Kapitel-16-Teil-1-Moduldoku unterhalb der
+GStreamer-Ebene direkt auf `mxlFlowWriter`/`mxlFlowReader`-Handles, der
+Node orchestriert nur `omp_mediaio::fabrics`-Objekte + Relay-Threads
+(`relay.rs`). `Cargo.toml` hängt deshalb bewusst nur von Feature
+`fabrics` ab, nicht von Feature `mxl`.
+
+- **Target-Rolle** (Empfänger-Host): legt einen neuen lokalen
+  MXL-Video-Flow an (feste Konfiguration wie `omp-2110-gateway`s
+  Ingest-Rolle — `OMP_FABRICS_WIDTH`/`_HEIGHT`/`_FPS_NUM`/`_FPS_DEN`),
+  bindet einen Fabrics-Endpunkt, exponiert die daraus resultierende
+  opake `TargetInfo`-Zeichenkette als neuen Node-Contract-Parameter
+  `fabricsTargetInfo`. Flow-Definitions-JSON von Hand gebaut (`relay.rs
+  ::video_flow_def`), 1:1 dasselbe Schema wie `omp_mediaio::mxl::
+  video_flow_def` (dort modul-privat) — bewusst dupliziert statt
+  importiert, exakt dieselbe Begründung wie im Kapitel-16-Teil-1-Test:
+  Feature `fabrics` bleibt unabhängig von Feature `mxl`.
+- **Initiator-Rolle** (Sender-Host): wählt die zu relayende lokale
+  MXL-Quelle dynamisch per echtem IS-05-Receiver-PATCH — identisches
+  Rebuild-bei-Connect-Muster wie `omp-2110-gateway`s Output-Rolle/
+  `omp-viewer`, hier aber ein `FabricsInitiator`-Objekt + Relay-Thread
+  statt einer GStreamer-Pipeline. Holt sich `fabricsTargetInfo` der
+  konfigurierten Ziel-Instanz (`OMP_FABRICS_TARGET_URL`) per HTTP —
+  Fabrics kennt kein IS-04/05-Analogon für diesen Adressaustausch,
+  deshalb Node-zu-Node-HTTP statt eines neuen Standard-Konzepts.
+  Braucht dafür `PeerClient::get_param` (`GET /params/<name>`), neu ins
+  SDK gehoben — zweiter Konsument nach `PeerClient::invoke`
+  (`POST /methods/<name>`), gleiches Wiederverwendungs-Prinzip wie bei
+  dessen eigener Einführung in Kapitel 15 Teil 3.
+
+**Bewusste, dokumentierte Vereinfachung (Target-Rolle, `media_ready`):**
+um ein ehrliches "mindestens ein Grain ist wirklich angekommen" statt
+eines hartkodierten `true` zu melden, wartet die Target-Rolle vor dem
+Start der dauerhaften `relay_incoming_grains`-Schleife auf genau ein
+per `read_grain` eingetroffenes Grain. Dieses erste Grain wird dabei
+**nicht** committet — die dafür nötige `commit_relayed_grain`-Funktion
+ist modul-privat, außerhalb von `omp_mediaio::fabrics` nicht sichtbar,
+absichtlich nicht für dieses eine Signal erweitert. Ein einzelnes, am
+Verbindungsanfang übersprungenes Bild bei kontinuierlichem Video, kein
+fortlaufender Datenverlust danach — analoge, bereits akzeptierte
+Vereinfachung wie `FabricsInitiator::relay_outgoing_grains`s eigene
+"kein Slice-Batching"-Notiz aus Kapitel 16 Teil 1.
+
+**Live verifiziert, zwei echte MXL-Domains auf einer Maschine (gleiche
+Technik wie Kapitel 16 Teil 0/1: zwei Domains simulieren zwei Hosts,
+echte Mehr-Host-Verifikation bleibt Kapitel 16 Teil 3 vorbehalten),
+kein Mock:**
+- Ein echter `omp-source`-Prozess schreibt kontinuierlich in Domain A.
+- `omp-fabrics-gateway --role target` (Domain B) registrierte sich
+  real per IS-04, band einen echten Fabrics-Endpunkt
+  (`RCTarget.cpp: setting up target`), `GET /params/fabricsTargetInfo`
+  lieferte eine echte, mit RDMA-Speicherregionen befüllte JSON-Struktur.
+- `omp-fabrics-gateway --role initiator` (Domain A) registrierte einen
+  echten IS-04-Receiver; ein echter IS-05-PATCH
+  (`PATCH .../receivers/<id>/staged`, `sender_id` + `master_enable:
+  true`) über die reguläre Node-Contract-HTTP-API (keine Sonderroute)
+  löste den Verbindungsaufbau aus.
+- Beide Seiten loggten eine echte, erfolgreiche RDMA-Verbindung
+  (`RCInitiator.cpp: Endpoint is now connected` /
+  `RCTarget.cpp: Received connected event notification, now
+  connected`).
+- `mxl-info` zeigte in Domain B **denselben** Head-Index wie die echte
+  Quelle in Domain A, zwei Messungen im Abstand von 2s bestätigten
+  identisches, kontinuierliches Wachstum auf beiden Seiten — ein
+  unabhängiger dritter Leser (`mxl-info` selbst, kein Fabrics-Bezug),
+  exakt dasselbe Beweisprinzip wie in Kapitel 16 Teil 1.
+- Sauberer Disconnect-Test: `PATCH master_enable:false` beendete die
+  RDMA-Verbindung auf beiden Seiten fehlerfrei
+  ("Remote endpoint has shutdown the connection, transitioning to
+  listening").
+- `cargo build`/`cargo clippy --workspace --all-targets`/`cargo test
+  --workspace` grün, 18 Testbinaries, keine neuen Warnungen (die
+  wenigen vorbestehenden Hinweise in unveränderten Dateien geprüft und
+  ausgeschlossen, `git status` bestätigt keine Änderung dort).
+
+**Bewusst nicht Teil dieser Scheibe:** die volle Orchestrator-Placement-
+Integration (`transportHint`/`fabricsProvider`-Claim, automatische
+Fabrics-vs.-ST2110/SRT-Wahl pro Rolle) — dieser Schritt liefert den
+bislang fehlenden Baustein "es gibt einen echten Node dafür", nicht die
+Placement-Automatisierung selbst. Kapitel 16 damit: Teil 0/1/2
+abgeschlossen, Teil 3 (echte Mehr-Host-Verifikation) wartet weiter auf
+Hardware, die Placement-Integration ein möglicher, noch nicht
+begonnener Folgeschritt.

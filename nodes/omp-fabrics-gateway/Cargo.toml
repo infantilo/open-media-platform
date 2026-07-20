@@ -1,0 +1,18 @@
+[package]
+name = "omp-fabrics-gateway"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei den übrigen Gateway-Nodes.
+publish = false
+
+[dependencies]
+# Nur `fabrics`, bewusst OHNE `mxl` — dieser Node baut/liest keine
+# GStreamer-Pipeline (Kapitel 16 Teil 1, omp-mediaio::fabrics-Moduldoku:
+# "Fabrics operiert unterhalb der GStreamer-Ebene direkt auf offenen
+# mxlFlowWriter/mxlFlowReader-Handles"), Ziel-/Quell-Flows entstehen rein
+# über die Fabrics-eigene FFI (core_sys innerhalb des fabrics-Moduls).
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["fabrics"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync"] }

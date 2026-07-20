@@ -1256,6 +1256,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-fabrics-gateway"
+version = "0.1.0"
+dependencies = [
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-mediaio"
 version = "0.1.0"
 dependencies = [
