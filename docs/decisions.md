@@ -10478,3 +10478,85 @@ nahe 0%, identisches Bild beim direkten Node-Zugriff ohne jeden Proxy)
 nicht weiter verfolgt (außerhalb des K4-Scopes). `go build`/`go vet`/
 `go test ./...` grün bis auf den vorbestehenden `internal/hosts`-Flake;
 `cargo build --workspace` grün; `deno check`/`deno test ui/` grün.
+
+## 2026-07-20 (Nachtrag 62) — Regression aus Nachtrag 59 gefunden und
+behoben: leaky `appsrc` killt den MXL-Reader-Thread dauerhaft
+
+Direkter Anschluss an den in Nachtrag 61 offen gelassenen Befund
+("`omp-viewer` liefert trotz erfolgreichem IS-05-Connect keine JPEG-
+Frames") — der Nutzer meldete nach einem eigenen Test explizit ein
+"broken image"-Symbol im Viewer und bat um Neustart + erneute Vorführung.
+Diesmal gezielt nachverfolgt statt erneut als Rand-Befund verbucht.
+
+**Root Cause: die eigene OOM-Fix-Änderung aus Nachtrag 59.** Dort wurde
+`MxlVideoInput`/`MxlAudioInput`s `appsrc` (nodes/omp-mediaio/src/mxl.rs)
+mit `leaky-type=upstream` + `max-buffers=5` versehen, um das unbegrenzte
+Anwachsen der internen Queue bei langsamem Downstream zu verhindern —
+verifiziert nur über RSS-Grenzen, nicht über tatsächlich weiterfließende
+Frames. Unbegründete Annahme dabei: ein leaky `appsrc` verwirft neue
+Buffer bei voller Queue still und liefert weiter `Ok`. Per isoliertem
+Minimal-Repro (`nodes/omp-mediaio/examples/leaky_appsrc_test.rs`, zwei
+Fassungen — erste versehentlich mit Pipeline in `READY` statt `PLAYING`,
+zweite korrigiert mit echtem `PLAYING`-Zustand + dauerhaft blockierender
+Pad-Probe am Sink, um echten Rückstau nachzubilden ohne den
+Störfaktor der ersten Fassung) empirisch widerlegt: `push_buffer()`
+liefert nach dem fünften Push (bei `max-buffers=5`) `Err(Eos)`, nicht
+`Ok`. `read_loop`/`read_audio_loop` behandelten JEDEN `push_buffer`-
+Fehler als fatal (`break`) — der Reader-Thread stirbt damit dauerhaft
+beim ersten kurzen Rückstau, z. B. schon während der Caps-Verhandlung
+direkt nach Pipeline-Start (im Log sichtbar: `do-timestamp=TRUE but
+buffers are provided before reaching the PLAYING state`-Warnungen genau
+in diesem Fenster). Per `mxl-info` doppelt verifiziert: "Last read time"
+blieb über zwei Messungen 2s auseinander eingefroren, während "Last
+write time" weiterlief — der Reader liest nicht langsam, er ist tot.
+
+**Fix:** `read_loop`/`read_audio_loop` brechen bei einem `push_buffer`-
+Fehler nicht mehr ab, sondern werten ihn als den gewollten Leaky-Drop-
+Fall — der Grain gilt als konsumiert (Index rückt weiter), nur bei
+tatsächlichem Erfolg wird `flowed` gesetzt. Das eigentliche
+Shutdown-Signal war ohnehin nie an den `push_buffer`-Rückgabewert
+gekoppelt, sondern an das separate `running: Arc<AtomicBool>`, das am
+Schleifenkopf geprüft wird — der jetzt entfernte Fatal-Break war also
+nie für den regulären Shutdown-Pfad nötig, nur ein Über-Vorsichts-Rest
+aus der ursprünglichen (vor-leaky) Fassung.
+
+**Live verifiziert, End-to-End, mehrfach:** `cargo test -p omp-mediaio
+--features mxl` grün (8 passed; die 4 zunächst fehlgeschlagenen Tests
+waren ein reines Umgebungsproblem — `LD_LIBRARY_PATH` fehlte, weil
+`deploy/dev/mxl.env` aus dem falschen Arbeitsverzeichnis gesourced
+wurde, kein Zusammenhang mit dem eigentlichen Fix). Danach zwei echte
+Prozesse frisch gestartet (`omp-source` "viewerdemosrc", `omp-viewer`
+"viewerdemo"), per echtem IS-05-Connect (`POST /api/v1/graph/edges`)
+verbunden, `mxl-info` dreimal im 3s-Abstand abgefragt: "Last read time"
+und "Last write time" laufen jetzt beide kontinuierlich weiter (vorher:
+Read eingefroren). `curl` gegen den echten K4-Stream-Proxy-Pfad (`GET
+/api/v1/nodes/<id>/stream/previewUrl`) lieferte über 3s hinweg 332 KB
+echte Multipart-MJPEG-Daten; ein extrahiertes JPEG-Frame ist ein
+gültiges 640×360-Bild (Farbbalken + eingebranntes UMD-Label), zwei
+Frames im Abstand von mehreren Sekunden bestätigen kontinuierlichen
+Fluss, nicht nur ein einmaliges Bild. Abschließend per echtem CDP-
+Headless-Chromium-Lauf gegen den echten laufenden Orchestrator (Login,
+Klick auf den ViewerDemo-Node im Flow-Editor, Screenshot): das `<img>`
+im echten DOM zeigt `naturalWidth: 640, naturalHeight: 360,
+complete: true` (ein kaputtes Bild hätte `naturalWidth: 0`) und der
+Screenshot zeigt sichtbar das echte Farbbalkenbild — das genau vom
+Nutzer gemeldete Broken-Image-Symbol ist behoben, nicht nur
+API-seitig, sondern im tatsächlichen Browser-Rendering.
+
+**Nicht erneut geprüft, aber wahrscheinlich mitbetroffen:** `omp-switcher`
+und `omp-video-mixer-me` nutzen dieselben `MxlVideoInput`/
+`MxlAudioInput`-Typen und damit denselben nun behobenen Lesepfad — ihre
+frühere Verifikation (Nachtrag 59/60) prüfte nur RSS-Grenzen und
+API-Erfolg, nie durchgehenden Frame-Fluss über `mxl-info`, könnte also
+denselben Bug unbemerkt gehabt haben (vermutlich nur durch günstiges
+Timing nicht aufgefallen). Nicht in dieser Runde erneut verifiziert —
+falls dort erneut ein Vorschau-/Bildproblem auftaucht, hier zuerst
+nachsehen.
+
+Diagnostisches Repro (`nodes/omp-mediaio/examples/
+leaky_appsrc_test.rs`) bewusst behalten, nicht gelöscht — dokumentiert
+eine überraschende, nicht aus der GStreamer-Doku ersichtliche
+`appsrc`-Eigenheit (leaky + `max-buffers` liefert bei voller Queue
+einen Fehler statt still zu verwerfen) als eigenständiges, jederzeit
+wiederholbares Beispiel, analog zu den bereits bestehenden Repro-Mustern
+in diesem Projekt (`three_readers_livelock_diagnostic` u. a.).

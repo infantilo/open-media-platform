@@ -1013,10 +1013,21 @@ fn read_loop(
                         gst::ClockTime::NONE,
                     );
                 }
-                if app_src.push_buffer(buffer).is_err() {
-                    break;
+                // Bei vollem Leaky-`appsrc` (leaky-type=upstream,
+                // max-buffers gesetzt, s. u.) liefert `push_buffer()` bei
+                // kurzem Downstream-Rueckstau einen Fehler (Eos) statt wie
+                // angenommen still zu verwerfen — empirisch verifiziert
+                // via `examples/leaky_appsrc_test.rs`, nicht geraten. Das
+                // ist der gewollte Leaky-Drop-Fall, kein fataler Fehler:
+                // frueher brach der Loop hier dauerhaft ab (toter Reader-
+                // Thread nach dem ersten kurzen Rueckstau, z. B. direkt
+                // beim Pipeline-Start waehrend Caps-Verhandlung — genau
+                // das Symptom des vom Nutzer gemeldeten "broken image" im
+                // omp-viewer). Grain gilt als konsumiert, egal ob der Push
+                // ankam; nur bei Erfolg zaehlt er als "flowed".
+                if app_src.push_buffer(buffer).is_ok() {
+                    flowed.store(true, Ordering::Relaxed);
                 }
-                flowed.store(true, Ordering::Relaxed);
                 index += 1;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
@@ -1325,10 +1336,13 @@ fn read_audio_loop(
                         gst::ClockTime::NONE,
                     );
                 }
-                if app_src.push_buffer(buffer).is_err() {
-                    break;
+                // Gleiches Prinzip wie in `read_loop` oben: ein Leaky-
+                // `push_buffer()`-Fehlschlag bei kurzem Rueckstau ist der
+                // gewollte Drop-Fall, kein fataler Fehler, und darf den
+                // Reader-Thread nicht dauerhaft beenden.
+                if app_src.push_buffer(buffer).is_ok() {
+                    flowed.store(true, Ordering::Relaxed);
                 }
-                flowed.store(true, Ordering::Relaxed);
                 index += batch_size;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
