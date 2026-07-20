@@ -808,6 +808,31 @@ impl MxlVideoInput {
                     framerate_denominator as u32,
                 ),
             )
+            // Live gefundener OOM-Bug (Kapitel 15 Teil 3 Rest 2, `docs/
+            // decisions.md` Nachtrag 58): ohne `leaky-type`/`max-buffers`
+            // ist `appsrc`s interne Warteschlange trotz `max-bytes`
+            // (Default 200000) NICHT wirklich begrenzt — `block=false`
+            // (Default) bedeutet, `push_buffer` akzeptiert immer weiter,
+            // `max-bytes` löst nur ein `need-data`/`enough-data`-Signal
+            // aus, das `read_loop` unten nicht auswertet. Live per
+            // GStreamer-eigenem Debug-Log bestätigt (`GST_DEBUG=appsrc:5`):
+            // die interne Queue wuchs in einem beobachteten Fehlerfall
+            // unbegrenzt weiter ("queue filled", weit über 200000 Bytes
+            // hinaus), während stromabwärts kein einziger Puffer mehr
+            // ankam — Ursache dafür (warum der interne Weiterleitungs-Task
+            // in diesem Fall nicht lief) bleibt eine offene Frage für eine
+            // künftige Sitzung, aber `leaky-type=upstream` (ältere,
+            // bereits gepufferte Bilder verwerfen, nicht neue ablehnen —
+            // für eine Live-Quelle ist das aktuellste Bild immer
+            // interessanter als ein Bild-Rückstand) + ein kleines
+            // `max-buffers` (5, identisch zur MXL-Ringpuffergröße dieses
+            // Projekts) verhindern unabhängig von dieser noch offenen
+            // Frage jedes unbegrenzte Wachstum: der Speicherverbrauch
+            // dieser Warteschlange ist damit hart nach oben gedeckelt,
+            // ein hängender Weiterleitungs-Task verliert im schlimmsten
+            // Fall nur Bilder, nie mehr unbegrenzt Speicher.
+            .property_from_str("leaky-type", "upstream")
+            .property("max-buffers", 5u64)
             .build()
             .map_err(|e| format!("appsrc: {e}"))?;
         let videoconvert = gst::ElementFactory::make("videoconvert")
@@ -847,6 +872,58 @@ impl MxlVideoInput {
                 let _ = pipeline.remove(el);
             }
         };
+
+        // Live gefundener OOM-Bug (Kapitel 15 Teil 3 Rest 2, `docs/
+        // decisions.md` Nachtrag 51+58): `pipeline.add()` allein bringt
+        // ein neu hinzugefügtes Element NICHT automatisch auf den
+        // Zustand der bereits laufenden Pipeline — beim allerersten
+        // Aufbau (Pipeline noch nicht `PLAYING`) unschädlich, weil der
+        // anschließende `pipeline.set_state(Playing)` des Aufrufers
+        // ohnehin auf ALLE Kinder kaskadiert; bei jedem chirurgischen
+        // Hot-Swap **innerhalb** einer bereits `PLAYING`-Pipeline
+        // (`omp-switcher`/`omp-video-mixer-me`s Auflösungs-Hot-Swap)
+        // blieben diese vier Elemente dagegen für immer in `NULL`
+        // hängen — der `appsrc` startete seine interne Streaming-Aufgabe
+        // nie, `read_loop` unten pushte trotzdem unbeirrt weiter (jedes
+        // `push_buffer` landet nur in `appsrc`s eigener, standardmäßig
+        // unbegrenzter interner Warteschlange, `max-bytes`/`block`/
+        // `leaky-type` sind hier bewusst nicht gesetzt, s. Moduldoku
+        // unten) — ein stiller, downstream nie geleerter Puffer, der pro
+        // betroffenem Hot-Swap unbegrenzt weiterwuchs, bis der Prozess
+        // per OOM-Killer beendet wurde.
+        //
+        // `sync_state_with_parent()` ALLEIN reicht dabei nicht — live per
+        // minimalem, GStreamer-only Reproduktionsversuch außerhalb des
+        // vollen Mixer-Nodes bestätigt (`nodes/omp-video-mixer-me/
+        // examples/oom_repro.rs`): der Aufruf STÖSST die Zustandsänderung
+        // nur an, GStreamer darf sie aber `ASYNC` beantworten (Übergang
+        // noch nicht abgeschlossen, wenn die Funktion zurückkehrt) — ohne
+        // explizit auf den tatsächlichen Abschluss zu warten, blieb
+        // `appsrc` beim allernächsten Hot-Swap (Sekundenbruchteile
+        // später) empirisch noch in `Null` hängen. Deshalb hier zusätzlich
+        // `Element::state()` mit Timeout aufgerufen — das blockiert
+        // (Standard-GStreamer-Idiom für "warte auf echten Zustands-
+        // Abschluss") bis der Übergang wirklich fertig ist oder das
+        // Timeout abläuft; ein Timeout/Fehlschlag wird wie jeder andere
+        // Aufbaufehler behandelt (aufräumen, Fehler zurückgeben), nicht
+        // stillschweigend ignoriert.
+        const STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(2);
+        for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
+            if let Err(e) = el.sync_state_with_parent() {
+                cleanup_partial();
+                return Err(format!("sync_state_with_parent (MxlVideoInput): {e}"));
+            }
+        }
+        for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
+            let (result, state, _pending) = el.state(STATE_CHANGE_TIMEOUT);
+            if result.is_err() {
+                cleanup_partial();
+                return Err(format!(
+                    "MxlVideoInput: {} did not reach a settled state within {STATE_CHANGE_TIMEOUT}: {state:?}",
+                    el.name()
+                ));
+            }
+        }
 
         let reader = match context.instance.create_flow_reader(flow_id) {
             Ok(r) => r,
@@ -1059,6 +1136,11 @@ impl MxlAudioInput {
             .property("is-live", true)
             .property("do-timestamp", true)
             .property("caps", audio_caps(sample_rate, channel_count, "interleaved"))
+            // Gleicher live gefundener OOM-Bug wie `MxlVideoInput::new` —
+            // s. dortige ausführliche Doku, `docs/decisions.md` Nachtrag
+            // 58.
+            .property_from_str("leaky-type", "upstream")
+            .property("max-buffers", 5u64)
             .build()
             .map_err(|e| format!("appsrc: {e}"))?;
         let convert = gst::ElementFactory::make("audioconvert")
@@ -1083,6 +1165,39 @@ impl MxlAudioInput {
                 let _ = pipeline.remove(el);
             }
         };
+
+        // Gleicher live gefundener OOM-Bug wie `MxlVideoInput::new` (s.
+        // dortige ausführliche Doku, `docs/decisions.md` Nachtrag 58) —
+        // trifft hier sogar noch direkter zu, da `omp-audio-mixer`
+        // Kanal-Zweige laut Struct-Doku oben ohnehin **chirurgisch** aus
+        // einer bereits laufenden Pipeline entfernt/hinzufügt (C11), nie
+        // nur beim Erstaufbau. Ohne `sync_state_with_parent` bliebe jeder
+        // zur Laufzeit hinzugefügte Audio-Kanal-Zweig in `NULL` hängen —
+        // sein `appsrc` würde nie tatsächlich Daten fließen lassen,
+        // `read_audio_loop` unten aber trotzdem unbeirrt weiter in dessen
+        // unbegrenzte interne Warteschlange schreiben.
+        // `sync_state_with_parent()` allein reicht nicht — s. die
+        // ausführliche Doku bei `MxlVideoInput::new` (identischer Bug,
+        // gleicher Fix: die Zustandsänderung muss zusätzlich per
+        // `Element::state()` abgewartet werden, sonst kann `appsrc` noch
+        // in `Null` hängen, wenn diese Funktion bereits zurückkehrt).
+        const AUDIO_STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(2);
+        for el in [&appsrc, &convert] {
+            if let Err(e) = el.sync_state_with_parent() {
+                cleanup_partial();
+                return Err(format!("sync_state_with_parent (MxlAudioInput): {e}"));
+            }
+        }
+        for el in [&appsrc, &convert] {
+            let (result, state, _pending) = el.state(AUDIO_STATE_CHANGE_TIMEOUT);
+            if result.is_err() {
+                cleanup_partial();
+                return Err(format!(
+                    "MxlAudioInput: {} did not reach a settled state within {AUDIO_STATE_CHANGE_TIMEOUT}: {state:?}",
+                    el.name()
+                ));
+            }
+        }
 
         let reader = match context.instance.create_flow_reader(flow_id) {
             Ok(r) => r,

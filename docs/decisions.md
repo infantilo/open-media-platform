@@ -10197,3 +10197,126 @@ zweiter voller End-to-End-Test mit echtem Doppel-Import
 §17 (Node-/Microservice-Katalog: Beschreibungen, Ressourcen-Sicht,
 Alarm-View, Import fremder Microservices) ist damit als Ganzes
 vollständig abgeschlossen.
+
+## 2026-07-20 (Nachtrag 59) — Kapitel 15 Teil 3 (Rest 2): OOM-Root-Cause
+in omp-mediaio gefunden + behoben, Mixer-Feature weiterhin offen
+
+Dedizierte Debug-Sitzung für den in Nachtrag 51 dokumentierten,
+uncommitteten `omp-video-mixer-me`-OOM-Bug — Nutzerentscheidung
+2026-07-20 verlangte ausdrücklich eine NEUE Herangehensweise
+(GST_DEBUG-Tracing oder ein Minimal-Reproduktionsprogramm außerhalb des
+vollen Nodes), keinen erneuten blinden Live-Test gegen den vollen Node.
+
+**Reine MXL-Hypothesen zuerst ausgeschlossen** (drei eigenständige,
+GStreamer-freie Reproduktionsprogramme, `nodes/omp-mediaio/examples/
+mxl_reopen_repro.rs`/`mxl_concurrent_reader_repro.rs`/
+`mxl_multithread_repro.rs`): weder sequentielles Reopen desselben Flows
+im selben Prozess noch echte gleichzeitig offene Reader auf demselben
+Flow noch echte Multi-Thread-Nebenläufigkeit gegen dieselbe
+`MxlInstance` lösen einen Fehler aus — alle drei liefen sauber durch.
+Damit ist die MXL-Instanz-/Reader-Ebene selbst (`third_party/mxl`)
+als Fehlerquelle ausgeschlossen; der Fehler sitzt auf der
+GStreamer-Seite.
+
+**Fund 1 (`nodes/omp-video-mixer-me/examples/oom_repro.rs`, isolierter
+`input-selector` + Pad-Block-Hot-Swap außerhalb des vollen Mixer-Nodes):**
+`MxlVideoInput`/`MxlAudioInput` (`omp-mediaio::mxl::{MxlVideoInput,
+MxlAudioInput}::new`) riefen `sync_state_with_parent()` nie für ihre
+eigenen vier intern angelegten Elemente (`appsrc`/`videoconvert`/
+`videoscale`/`videorate` bzw. `appsrc`/`audioconvert`) auf — nur der
+jeweilige Aufrufer (`build_input_branch` in `omp-switcher`/
+`omp-video-mixer-me`) synct seine EIGENE zusätzliche Konvertierungskette.
+Beim allerersten Pipeline-Aufbau (Pipeline noch nicht `PLAYING`)
+unschädlich, weil das anschließende `pipeline.set_state(Playing)` des
+Aufrufers auf ALLE Kinder kaskadiert. Bei jedem Hot-Swap **innerhalb**
+einer bereits laufenden Pipeline (exakt der Fall in `swap_input_
+resolution`) blieben diese vier Elemente dagegen beobachtbar dauerhaft
+in `Null` hängen — live per direkter `Element::state(timeout)`-Abfrage
+bestätigt: nach einem Swap zeigte `appsrc`/`videoconvert`/`videoscale`/
+`videorate` (die eigenen Elemente von `MxlVideoInput`) `Null`, während
+die vom Aufrufer selbst gebaute Zusatzkette (`videoconvert`/
+`videoscale`/`videorate`/`capsfilter`, korrekt gesynct) `Playing`
+erreichte — derselbe Prozess, dieselbe Pipeline, zwei benachbarte
+Elementketten mit unterschiedlichem tatsächlichem Zustand. Behoben durch
+`sync_state_with_parent()` PLUS eine anschließende `Element::state()`-
+Wartephase (2s Timeout) für alle vier Elemente in beiden Konstruktoren —
+`sync_state_with_parent()` allein reicht nicht, weil GStreamer die
+Zustandsänderung `ASYNC` beantworten darf (noch nicht abgeschlossen, wenn
+die Funktion zurückkehrt); ohne explizites Warten auf den tatsächlichen
+Abschluss blieb das Element beim nächsten Hot-Swap (Sekundenbruchteile
+später) empirisch noch in `Null` hängen.
+
+**Fund 2 (unabhängig von Fund 1, per `GST_DEBUG=appsrc:5` gegen den
+isolierten Reproduktionsversuch bestätigt):** `appsrc` hatte in beiden
+Konstruktoren kein `leaky-type`/`max-buffers` gesetzt (per `gst-inspect-1.0
+appsrc` verifiziert: `max-bytes` Default 200000, aber `block=false` +
+`leaky-type=none` bedeuten, dass diese Grenze NUR ein `enough-data`-Signal
+auslöst, das `read_loop`/`read_audio_loop` nie auswerten — keine echte
+Begrenzung). Das GStreamer-eigene Debug-Log zeigte in einem beobachteten
+Fehlerfall (ein `appsrc`, dessen interner Weiterleitungs-Task aus noch
+ungeklärtem Grund nicht lief, s. Restfehler unten) die interne Queue
+buchstäblich unbegrenzt weiterwachsen ("queue filled (queued 2741760
+bytes, max 200000 bytes...)" und immer weiter), während stromabwärts kein
+einziger Puffer mehr ankam — jedes von `read_loop` gelesene Grain landete
+als frischer Heap-`Vec<u8>` (`gst::Buffer::from_slice`) unwiderruflich in
+dieser nie geleerten Warteschlange. Behoben durch `leaky-type="upstream"`
+(ältere, bereits gepufferte Bilder verwerfen statt neue abzulehnen — für
+eine Live-Quelle ist das aktuellste Bild immer interessanter als ein
+Rückstand) + `max-buffers=5` (identisch zur MXL-Ringpuffergröße dieses
+Projekts) auf dem `appsrc` in beiden Konstruktoren.
+
+**Beide Funde beheben (nicht nur den Mixer, sondern) `omp-mediaio::mxl`
+selbst** — gilt automatisch auch für `omp-switcher` (dieselbe geteilte
+Funktion), dessen bereits bekannter, langsamerer Leck-Verdacht (Nachtrag
+50: "~100 Umschaltungen bis OOM") mit hoher Wahrscheinlichkeit derselbe
+Mechanismus war, nur seltener ausgelöst (nur ein Selektor-Pool statt
+zweier beim Mixer) — nicht gesondert nachgetestet diese Runde, aber
+plausibel mitbehoben.
+
+**Live verifiziert auf beiden Ebenen:**
+- Isolierter Reproduktionsversuch: 40 aufeinanderfolgende Swaps zwischen
+  zwei echten, aktiv laufenden `omp-source`-Flows (Highres/Lowres) —
+  RSS blieb exakt konstant (keine einzige Byte-Veränderung nach dem
+  ersten Swap), verglichen mit vorher unbegrenztem, kontinuierlichem
+  Wachstum (~2.6-2.8 MB pro Swap-Versuch, auch ohne jeden Fix schon bei
+  reinem Leerlauf zwischen Swaps weiterwachsend).
+- Echter, voller `omp-video-mixer-me`-Node (uncommitteter Hot-Swap-Code
+  aus Nachtrag 51 unverändert obenauf, zwei echte `omp-source`-Instanzen
+  als Eingänge, echte HTTP-API `crosspoint.select`/`crosspoint.
+  autoTrans`): 20 reale, aufeinanderfolgende Select+AutoTrans-Zyklen
+  (fast 7× die ursprünglichen drei Bedienschritte, die zum OOM-Kill
+  führten) — RSS-Gesamtzuwachs nur 80 KB über alle 20 Zyklen (vorher
+  dokumentiert: +522 MB in einem EINZIGEN `autoTrans()`-Aufruf), Prozess
+  blieb durchgehend am Leben, keine Abstürze, keine Crash-Loop.
+
+**Weiterhin offen, aber deutlich entschärft:** ein vom OOM unabhängiger,
+noch nicht root-gecauster Folgefehler — der Pad-Block-Mechanismus in
+`swap_input_resolution` läuft bei wiederholten Swaps auf demselben
+`isel`-Sink-Pad ab einem gewissen (nicht deterministischen, per
+Wiederholung 0-14 von 15 Versuchen schwankend beobachteten) Punkt
+zuverlässig in einen Timeout — im echten Mixer-Log als "Auflösungs-Swap
+... fehlgeschlagen: Timeout beim Warten auf den blockierten Pad-Unlink"
+sichtbar, auch während der oben beschriebenen 20-Zyklen-Live-
+Verifikation reproduziert. Funktional bedeutet das: eine Auflösung
+wechselt nach dem ersten erfolgreichen Swap auf einem gegebenen Pad u. U.
+nicht mehr zuverlässig (der alte Zweig bleibt dann einfach unverändert
+bestehen, `swap_input_resolution` gibt ihn unangetastet zurück) — aber
+dank Fund 2 entsteht dabei **kein** Speicherverlust und **kein**
+Absturz mehr, unabhängig davon, ob dieser Restfehler je auftritt.
+Root-Cause-Kandidaten (nicht verifiziert): ein Scheduling-Zusammenhang
+zwischen `appsrc`s internem Weiterleitungs-Task und dem eigenen
+`read_loop`-Thread, oder eine GStreamer-/`input-selector`-interne
+Zustandsakkumulation über viele Unlink-ohne-Flush-Zyklen auf demselben,
+nie freigegebenen Sink-Pad hinweg (der Pad wird über die gesamte
+Prozesslaufzeit hinweg wiederverwendet, nie per `release_request_pad`
+freigegeben und neu angefordert) — beides für eine künftige Sitzung.
+
+**Entscheidung noch ausstehend:** wie mit dem Mixer-eigenen, weiterhin
+uncommitteten Hot-Swap-Code (`nodes/omp-video-mixer-me/src/{main.rs,
+pipeline.rs}`) umzugehen ist, da der OOM zwar behoben, der
+Restfehler aber nicht ist — beim Projektinhaber erfragt, nicht
+einseitig entschieden (§0-Konvention: Commit nur nach bestandener
+Verifikation, und die Frage "genügt eine bloße Funktionslücke ohne
+Datenverlust/Absturz als Verifikations-Bestehen" ist eine echte,
+diesmal neuartige Entscheidung, kein Wiederholungsfall der Nachtrag-51-
+Situation).
