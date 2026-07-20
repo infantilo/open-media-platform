@@ -28,6 +28,7 @@ struct OgrafStore {
     templates: Vec<TemplateInfo>,
     current: Mutex<Option<String>>,
     templates_root: PathBuf,
+    lowres_flow_id: String,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -45,6 +46,23 @@ impl ParamStore for OgrafStore {
                 ParamSpec {
                     name: "current".to_string(),
                     kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4):
+                // nur Fill bekommt einen Lowres-Begleiter, s. pipeline.rs
+                // `LOWRES_WIDTH`-Doku.
+                ParamSpec {
+                    name: "lowresFlowId".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "lowresActive".to_string(),
+                    kind: ParamType::Boolean,
                     unit: None,
                     range: None,
                     readonly: true,
@@ -68,6 +86,14 @@ impl ParamStore for OgrafStore {
                     name: "hide".to_string(),
                     args: vec![],
                 },
+                MethodSpec {
+                    name: "activateLowresPreview".to_string(),
+                    args: vec![],
+                },
+                MethodSpec {
+                    name: "releaseLowresPreview".to_string(),
+                    args: vec![],
+                },
             ],
         }
     }
@@ -83,6 +109,8 @@ impl ParamStore for OgrafStore {
             "current" => Some(serde_json::json!(
                 *self.current.lock().expect("lock poisoned")
             )),
+            "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
+            "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
             _ => None,
         }
     }
@@ -93,6 +121,14 @@ impl ParamStore for OgrafStore {
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
         match name {
+            "activateLowresPreview" => {
+                self.pipeline.activate_lowres_preview();
+                Ok(())
+            }
+            "releaseLowresPreview" => {
+                self.pipeline.release_lowres_preview();
+                Ok(())
+            }
             "show" => {
                 let template_id = args
                     .get("templateId")
@@ -207,6 +243,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let fill_flow_id = omp_node_sdk::idgen::new_v4();
     let key_flow_id = omp_node_sdk::idgen::new_v4();
+    // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.4): Fill-Lowres-
+    // Begleit-Flow, referenzgezählt zu-/abschaltbar (identisch zu
+    // omp-source/omp-player, Nutzerentscheidung 2026-07-20: nur Fill,
+    // nicht Key).
+    let lowres_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -225,6 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         fill_flow_id: fill_flow_id.clone(),
         key_flow_id: key_flow_id.clone(),
+        lowres_flow_id: lowres_flow_id.clone(),
         label: label.clone(),
         harness_url,
         width: pipeline::WIDTH,
@@ -252,6 +294,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         templates,
         current: Mutex::new(None),
         templates_root,
+        lowres_flow_id: lowres_flow_id.clone(),
         pipeline: pipeline_handle,
     });
 
@@ -262,6 +305,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // `label` dort per Shorthand in ein eigenes Feld verschoben wird.
     let fill_label = format!("{label} Fill");
     let key_label = format!("{label} Key");
+    let lowres_label = format!("{label} Fill Lowres");
+
+    // Kapitel 15 Teil 4 (docs/END-GOAL-FEATURES.md §15.3b, gleiches
+    // Format wie omp-source/omp-player): `urn:x-nmos:tag:grouphint/v1.0`
+    // "<group>:<role>" — `fill_flow_id` als Gruppenname (stabil, pro
+    // Instanz eindeutig). Nur Fill bekommt das Tag, Key bleibt
+    // unangetastet (kein Lowres-Begleiter für Key, s. pipeline.rs).
+    let fill_group_name = fill_flow_id.clone();
+    let lowres_group_name = fill_flow_id.clone();
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -281,6 +333,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
                     label: Some(fill_label),
+                    tags: std::collections::HashMap::from([(
+                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                        vec![format!("{fill_group_name}:high")],
+                    )]),
                     ..Default::default()
                 },
                 SenderSpec {
@@ -293,6 +349,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
                     }),
                     label: Some(key_label),
+                    ..Default::default()
+                },
+                SenderSpec {
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    flow: Some(FlowSpec::Video {
+                        id: Some(lowres_flow_id),
+                        frame_width: pipeline::LOWRES_WIDTH,
+                        frame_height: pipeline::LOWRES_HEIGHT,
+                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
+                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                    }),
+                    label: Some(lowres_label),
+                    tags: std::collections::HashMap::from([(
+                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                        vec![format!("{lowres_group_name}:low")],
+                    )]),
                     ..Default::default()
                 },
             ],

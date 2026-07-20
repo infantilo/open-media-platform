@@ -9722,3 +9722,64 @@ vorbestehenden, unabhängigen `internal/hosts`-Flake wie in Nachtrag 52.
 Kapitel 14 damit bis auf den optionalen §16-Kapazitäts-Zeitstrahl
 (eigenständige spätere Erweiterung auf derselben Datengrundlage)
 vollständig abgeschlossen.
+
+## 2026-07-20 (Nachtrag 54) — Kapitel 15 Teil 4: `omp-ograf` bekommt
+einen Fill-Lowres-Sender, Nutzerentscheidung "nur Fill" bestätigt per
+drittem Generalisierungs-Beleg
+
+Letzter offener Punkt aus Kapitel 15 Teil 4 (`omp-player` bereits
+2026-07-19 erledigt): `omp-ograf` bekommt einen Lowres-Begleiter für
+Multiviewer/Vorschau. Offene Design-Frage laut Dokument: Lowres nur
+für Fill, oder auch für Key (`omp-ograf` liefert zwei getrennte
+`video/v210`-MXL-Flows, Fill + Key, s. `pipeline.rs`-Moduldoku).
+
+**Dem Nutzer vorgelegt, mit Empfehlung "nur Fill":** Multiviewer-/
+Vorschau-Kacheln zeigen immer ein fertiges Bild, nie eine
+Echtzeit-Komposition — eine Key-Ebene allein (reines Alpha-Matte) ist
+als Vorschau-Kachel nicht aussagekräftig. Kein Node compositiert
+Fill+Key heute tatsächlich in auflösungssensitiver Weise (der
+Mixer-Keyer, `omp-video-mixer-me`, ist weiterhin eine synthetische
+DSK-Farbfläche, kein echter Fill+Key-Verbraucher) — ein Lowres-Key
+hätte aktuell keinen einzigen Konsumenten. **Nutzerentscheidung:**
+Empfehlung angenommen, nur Fill.
+
+**Umsetzung:** identisches Muster zu `omp-source` (Kapitel 15 Teil 2)
+— kein dynamisches Pad-Relinking wie beim `omp-switcher`/
+`omp-video-mixer-me`-Fall nötig, weil hier kein Umschalten zwischen
+mehreren Quellen stattfindet, nur ein referenzgezählter `MxlVideoOutput
+::set_active(bool)`-Schalter. Vierter `tee`-Zweig am bereits
+bestehenden BGRA-`tee` (der schon Fill und die Alpha-Key-Brücke
+speist) — ein reiner `queue`-Tap reicht, `MxlVideoOutput::new` baut
+selbst videoconvert/videoscale/videorate/capsfilter auf 320×180 ein.
+Neue Methoden `activateLowresPreview`/`releaseLowresPreview` +
+Parameter `lowresFlowId`/`lowresActive`, 1:1 aus `omp-source`
+übernommen. `urn:x-nmos:tag:grouphint/v1.0` nur auf dem Fill-Sender
+(`fill_flow_id` als Gruppenname, `:high`/`:low`-Rollen) — Key bleibt
+komplett unangetastet, kein Tag, kein Lowres-Begleiter.
+
+**Live verifiziert, echte Prozesse, kein Mock:**
+- Registry zeigte nach Node-Start drei Sender: Fill (`:high`-Tag),
+  Fill Lowres (`:low`-Tag, derselbe Gruppenname), Key (kein Tag) — per
+  echter IS-04-Query-API-Abfrage bestätigt, nicht angenommen.
+- `mxl-info` zeigte den Lowres-Flow direkt nach dem Start mit
+  Head-Index 0 (registriert, aber kein einziges Grain geschrieben) —
+  `lowresActive`-Parameter bestätigte `false`.
+- Eine echte `omp-multiviewer`-Instanz entdeckte und aktivierte den
+  neuen Fill-Lowres-Sender vollautomatisch beim nächsten
+  2s-Discovery-Poll (`lowresActive` wechselte ohne jeden
+  multiviewer-spezifischen Code auf `true`) — **dritter** Beleg
+  (nach `omp-source`/`omp-player`) dafür, dass die
+  Grouphint-Discovery aus Teil 3 tatsächlich producer-agnostisch ist.
+- `mxl-info` bestätigte danach: Fill-Lowres-Flow aktiv geschrieben UND
+  gelesen (frische, nah beieinanderliegende Write-/Read-Zeitstempel),
+  Fill-Highres-Flow blieb weiter aktiv **geschrieben** (der Node
+  selbst produziert unverändert weiter), aber sein `Last read time`
+  blieb auf dem Stand von vor dem Multiviewer-Start stehen — der
+  Multiviewer liest jetzt nachweislich nur noch die Lowres-Kopie.
+- `cargo build`/`cargo clippy --workspace --all-targets`/`cargo test
+  --workspace` grün, 17 Testbinaries, keine neuen Warnungen
+  (die bekannten vorbestehenden `omp-video-mixer-me`-Clippy-Hinweise
+  unverändert, s. Nachtrag 50/51).
+
+Kapitel 15 damit bis auf `omp-video-mixer-me` (Teil 3, blockiert durch
+das ungelöste OOM-Problem, s. Nachtrag 51) vollständig abgeschlossen.
