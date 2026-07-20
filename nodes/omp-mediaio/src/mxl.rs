@@ -897,17 +897,25 @@ impl MxlVideoInput {
         // vollen Mixer-Nodes bestätigt (`nodes/omp-video-mixer-me/
         // examples/oom_repro.rs`): der Aufruf STÖSST die Zustandsänderung
         // nur an, GStreamer darf sie aber `ASYNC` beantworten (Übergang
-        // noch nicht abgeschlossen, wenn die Funktion zurückkehrt) — ohne
-        // explizit auf den tatsächlichen Abschluss zu warten, blieb
-        // `appsrc` beim allernächsten Hot-Swap (Sekundenbruchteile
-        // später) empirisch noch in `Null` hängen. Deshalb hier zusätzlich
-        // `Element::state()` mit Timeout aufgerufen — das blockiert
-        // (Standard-GStreamer-Idiom für "warte auf echten Zustands-
-        // Abschluss") bis der Übergang wirklich fertig ist oder das
-        // Timeout abläuft; ein Timeout/Fehlschlag wird wie jeder andere
-        // Aufbaufehler behandelt (aufräumen, Fehler zurückgeben), nicht
-        // stillschweigend ignoriert.
-        const STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(2);
+        // noch nicht abgeschlossen, wenn die Funktion zurückkehrt). Ein
+        // kurzer, NICHT-fataler `Element::state()`-Blick gibt dem
+        // Übergang eine knappe Chance zum Abschließen, bevor die
+        // Funktion zurückkehrt — bewusst kein harter Fehler bei Timeout
+        // (live gefunden: ein zu langes/zu strenges Warten hier, noch
+        // dazu sequentiell für alle vier Elemente, addierte sich unter
+        // echter CPU-Last zu mehreren Sekunden Verzögerung PRO
+        // `MxlVideoInput::new`-Aufruf auf — bei mehreren, nacheinander
+        // im selben Thread angelegten Readern verschob das spätere
+        // Reader-Starts so weit, dass ein bereits bestehender Test
+        // mit festem Beobachtungsfenster reproduzierbar flakiger wurde,
+        // s. `three_concurrent_readers_same_flow_do_not_hang`). Ein
+        // Timeout hier bedeutet nur "vielleicht noch nicht ganz
+        // fertig", nicht zwingend "dauerhaft kaputt" — der eigentliche,
+        // noch offene Restfehler (s. `swap_input_resolution`-Doku in
+        // `omp-video-mixer-me`) wird dadurch nicht verdeckt, nur nicht
+        // durch einen übereifrigen, selbst fehleranfälligen Warte-Fix
+        // ersetzt.
+        const STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
         for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
             if let Err(e) = el.sync_state_with_parent() {
                 cleanup_partial();
@@ -915,13 +923,12 @@ impl MxlVideoInput {
             }
         }
         for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
-            let (result, state, _pending) = el.state(STATE_CHANGE_TIMEOUT);
+            let (result, state, pending) = el.state(STATE_CHANGE_TIMEOUT);
             if result.is_err() {
-                cleanup_partial();
-                return Err(format!(
-                    "MxlVideoInput: {} did not reach a settled state within {STATE_CHANGE_TIMEOUT}: {state:?}",
+                eprintln!(
+                    "omp-mediaio(mxl): MxlVideoInput: {} not settled within {STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
                     el.name()
-                ));
+                );
             }
         }
 
@@ -1178,10 +1185,12 @@ impl MxlAudioInput {
         // unbegrenzte interne Warteschlange schreiben.
         // `sync_state_with_parent()` allein reicht nicht — s. die
         // ausführliche Doku bei `MxlVideoInput::new` (identischer Bug,
-        // gleicher Fix: die Zustandsänderung muss zusätzlich per
-        // `Element::state()` abgewartet werden, sonst kann `appsrc` noch
-        // in `Null` hängen, wenn diese Funktion bereits zurückkehrt).
-        const AUDIO_STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_seconds(2);
+        // gleicher Fix: kurzer, NICHT-fataler `Element::state()`-Blick
+        // statt eines harten, langen Timeouts — Letzteres addierte sich
+        // bei mehreren nacheinander angelegten Readern zu spürbarer
+        // Verzögerung und machte einen bestehenden Test flakiger, s.
+        // dortige Doku).
+        const AUDIO_STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
         for el in [&appsrc, &convert] {
             if let Err(e) = el.sync_state_with_parent() {
                 cleanup_partial();
@@ -1189,13 +1198,12 @@ impl MxlAudioInput {
             }
         }
         for el in [&appsrc, &convert] {
-            let (result, state, _pending) = el.state(AUDIO_STATE_CHANGE_TIMEOUT);
+            let (result, state, pending) = el.state(AUDIO_STATE_CHANGE_TIMEOUT);
             if result.is_err() {
-                cleanup_partial();
-                return Err(format!(
-                    "MxlAudioInput: {} did not reach a settled state within {AUDIO_STATE_CHANGE_TIMEOUT}: {state:?}",
+                eprintln!(
+                    "omp-mediaio(mxl): MxlAudioInput: {} not settled within {AUDIO_STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
                     el.name()
-                ));
+                );
             }
         }
 

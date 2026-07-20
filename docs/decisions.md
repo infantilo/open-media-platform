@@ -10311,12 +10311,39 @@ nie freigegebenen Sink-Pad hinweg (der Pad wird über die gesamte
 Prozesslaufzeit hinweg wiederverwendet, nie per `release_request_pad`
 freigegeben und neu angefordert) — beides für eine künftige Sitzung.
 
-**Entscheidung noch ausstehend:** wie mit dem Mixer-eigenen, weiterhin
-uncommitteten Hot-Swap-Code (`nodes/omp-video-mixer-me/src/{main.rs,
-pipeline.rs}`) umzugehen ist, da der OOM zwar behoben, der
-Restfehler aber nicht ist — beim Projektinhaber erfragt, nicht
-einseitig entschieden (§0-Konvention: Commit nur nach bestandener
-Verifikation, und die Frage "genügt eine bloße Funktionslücke ohne
-Datenverlust/Absturz als Verifikations-Bestehen" ist eine echte,
-diesmal neuartige Entscheidung, kein Wiederholungsfall der Nachtrag-51-
-Situation).
+**Entscheidung (2026-07-20):** dem Projektinhaber vorgelegt, ob der
+Mixer-eigene Hot-Swap-Code trotz der offenen, aber deutlich
+entschärften Restschwäche jetzt committet werden soll — Antwort: **jetzt
+committen, Restschwäche dokumentiert statt verschwiegen** (nicht
+"weiter uncommitted lassen" und nicht "erst den Restfehler jagen"). Der
+Fund-2-Fix deckelt jede weitere Wachstumsmöglichkeit unabhängig davon,
+ob der Restfehler auftritt — das war ausschlaggebend dafür, dass ein
+verbleibender Funktionsmangel (Auflösung wechselt manchmal nicht mehr)
+kein Grund mehr ist, ein andernfalls fertiges, live-verifiziertes
+Feature zurückzuhalten. `nodes/omp-video-mixer-me/src/{main.rs,
+pipeline.rs}` sind damit ab jetzt Teil des Repos; die Restschwäche ist
+in `UMSETZUNG.md` explizit als bekannte, offene Einschränkung
+festgehalten, nicht stillschweigend verborgen. Kapitel 15 (Multi-
+Resolution-Streams) ist damit als Ganzes abgeschlossen.
+
+**Nachtrag zur Verifikation:** die erste Fassung von Fund 1s Fix
+verwendete ein hartes, fehlerauslösendes `Element::state()`-Timeout von
+2 Sekunden pro Element. Ein vollständiger `go test`-Äquivalent-Lauf
+(`cargo test --workspace`) deckte dabei live einen echten, durch diese
+Fassung selbst verursachten Flake auf: `omp-mediaio::mxl::tests::
+three_concurrent_readers_same_flow_do_not_hang` (baut drei Reader
+nacheinander im selben Thread auf) schlug unter echter Systemlast
+(parallel laufende Workspace-Tests) in 2 von 10 Läufen fehl (0 von 10
+in der Fassung ganz ohne diesen Fix) — Ursache: das harte Warten
+addierte sich bei mehreren nacheinander im selben Thread angelegten
+Readern zu spürbarer Verzögerung, die spätere Reader das feste
+Beobachtungsfenster des Tests verpassen ließ. Behoben durch Verkürzen
+auf 100ms UND Entschärfen zu einem nicht-fatalen Log statt eines
+Fehlschlags (ein Timeout hier heißt nur "vielleicht noch nicht ganz
+fertig", nicht zwingend dauerhaft kaputt) — 10 von 10 Workspace-
+Testläufen grün danach, isolierter Reproduktionsversuch weiterhin mit
+exakt konstantem RSS über 30 Swaps, echter Mixer-Node erneut mit 15
+realen Select+AutoTrans-Zyklen bestätigt (RSS-Zuwachs ~5.5 MB über alle
+15 Zyklen, keine Abstürze) — ein weiterer Beleg dafür, dass ein
+"fertiger" Fix immer gegen die volle Testsuite laufen muss, nicht nur
+gegen das ursprüngliche Reproduktionsszenario.

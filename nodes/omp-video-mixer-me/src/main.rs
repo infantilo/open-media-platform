@@ -35,14 +35,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use omp_node_sdk::is04;
-use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
+use omp_node_sdk::is04::{RegistryClient, Sender, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
-    RawResponse, SenderSpec, SetError,
+    PeerClient, RawResponse, SenderSpec, SetError, resolve_owning_node_href,
 };
 use pipeline::{DiscoveredInput, DveBox};
 use serde_json::Value;
+
+/// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
+/// identisch zu `omp-switcher::GROUPHINT_TAG`/`omp-multiviewer`, bewusst
+/// dupliziert (jeder Node ein eigenständiges Binary, s. dortige Doku).
+const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
 
 struct MixerStore {
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
@@ -585,9 +590,98 @@ async fn handle_events(
     }
 }
 
+/// Splittet einen Grouphint-Tag-Wert (`"<group>:<role>[:<scope>]"`) in
+/// `(group, role)` — identisch zu `omp-switcher`/`omp-multiviewer`s
+/// gleichnamiger Funktion, bewusst dupliziert statt geteilt.
+fn parse_grouphint(value: &str) -> Option<(&str, &str)> {
+    let mut parts = value.splitn(3, ':');
+    let group = parts.next()?;
+    let role = parts.next()?;
+    Some((group, role))
+}
+
+/// Baut `group-name -> (lowres sender_id, lowres flow_id)` aus dem vollen
+/// Sender-Satz — ein Durchlauf, kein zusätzlicher Registry-Umlauf.
+fn lowres_by_group(senders: &[Sender]) -> HashMap<String, (String, String)> {
+    let mut map = HashMap::new();
+    for s in senders {
+        let Some(flow_id) = &s.flow_id else { continue };
+        let Some(values) = s.tags.get(GROUPHINT_TAG) else { continue };
+        for v in values {
+            if let Some((group, "low")) = parse_grouphint(v) {
+                map.insert(group.to_string(), (s.id.clone(), flow_id.clone()));
+            }
+        }
+    }
+    map
+}
+
+/// Ob `s` selbst ein Lowres-Begleit-Sender ist (Rolle `low`) — solche
+/// Sender bekommen keinen eigenen Eingangs-Button, sie werden nur über
+/// `DiscoveredInput::lowres_flow_id` ihres Highres-Geschwisters gelesen.
+fn is_lowres_companion(s: &Sender) -> bool {
+    s.tags
+        .get(GROUPHINT_TAG)
+        .map(|values| values.iter().any(|v| matches!(parse_grouphint(v), Some((_, "low")))))
+        .unwrap_or(false)
+}
+
+/// Ein Discovery-Durchlauf (blockierend, s. `spawn_blocking`-Aufrufer):
+/// gleicher Filter-Stil wie zuvor (`transport==MXL`, `format==video`,
+/// eigener Sender ausgeschlossen — seit `omp-audio-mixer`, `UMSETZUNG.md`
+/// C11, melden auch Audio-Nodes MXL-Sender an, nur `transport==MXL`
+/// filtern würde versuchen, deren Flow als Video-Eingang zu öffnen),
+/// zusätzlich Kapitel 15 Teil 3 (Rest 2): pro Eingang den Lowres-
+/// Begleit-Sender (falls vorhanden) verlinken, Lowres-Sender selbst
+/// nicht als eigenen Eingang führen.
+fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<DiscoveredInput>, String> {
+    let senders = registry.list_senders().map_err(|e| e.to_string())?;
+    let lowres_map = lowres_by_group(&senders);
+
+    let mut discovered = Vec::new();
+    for s in &senders {
+        if s.transport != TRANSPORT_MXL || s.id == own_sender_id || is_lowres_companion(s) {
+            continue;
+        }
+        let Some(flow_id) = &s.flow_id else { continue };
+        if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {
+            continue;
+        }
+
+        let group = s
+            .tags
+            .get(GROUPHINT_TAG)
+            .and_then(|values| values.first())
+            .and_then(|v| parse_grouphint(v))
+            .map(|(group, _)| group.to_string());
+        let lowres = group.and_then(|g| lowres_map.get(&g).cloned());
+
+        discovered.push(DiscoveredInput {
+            sender_id: s.id.clone(),
+            label: s.label.clone(),
+            flow_id: flow_id.clone(),
+            device_id: s.device_id.clone(),
+            lowres_sender_id: lowres.as_ref().map(|(id, _)| id.clone()),
+            lowres_flow_id: lowres.map(|(_, fid)| fid),
+        });
+    }
+    Ok(discovered)
+}
+
 /// Wie bei `omp-switcher` (C7): pollt alle 2s die IS-04-Query-API nach
 /// MXL-Sendern, filtert den eigenen Sender heraus. Zusätzlich zu C7:
 /// nimmt `device_id` mit (für die Tally-Node-Auflösung, s. o.).
+///
+/// Kapitel 15 Teil 3 (Rest 2): gleicht zusätzlich bei jedem Poll die beim
+/// jeweiligen Quell-Node aktivierten Lowres-Sender an die aktuelle
+/// Eingangs-Menge an (`activateLowresPreview`/`releaseLowresPreview`,
+/// exakt dasselbe Muster wie `omp-switcher::main::discovery_loop`) —
+/// `activated_lowres` merkt den Aktivierungsstand über Polls hinweg. Wie
+/// beim Switcher entscheidet **nicht** diese Schleife, welcher Eingang
+/// gerade Lowres liest (das macht `pipeline::run`s Cut/Take/AutoTrans-
+/// Behandlung anhand des Programm-Status) — die Aktivierung läuft für
+/// jeden entdeckten Eingang mit Lowres-Begleiter, unabhängig davon, ob er
+/// gerade Programm ist.
 async fn discovery_loop(
     registry_url: String,
     own_sender_id: String,
@@ -596,35 +690,14 @@ async fn discovery_loop(
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
+    let mut activated_lowres: HashMap<String, String> = HashMap::new();
+
     loop {
         interval.tick().await;
-        let registry = registry.clone();
-        let own_sender_id = own_sender_id.clone();
-        // Filter + `get_flow_format`-Nachschlag laufen in derselben
-        // `spawn_blocking`-Aufgabe wie `list_senders()` (mehrere
-        // synchrone `ureq`-Aufrufe hintereinander, sonst würde jeder
-        // einzeln den async-Executor-Thread blockieren). Seit
-        // `omp-audio-mixer` (`UMSETZUNG.md` C11) melden auch Audio-Nodes
-        // MXL-Sender an — nur `transport==MXL` filtern würde versuchen,
-        // deren Flow als Video-Eingang zu öffnen.
-        let result = tokio::task::spawn_blocking(move || -> Result<Vec<DiscoveredInput>, String> {
-            let senders = registry.list_senders().map_err(|e| e.to_string())?;
-            Ok(senders
-                .into_iter()
-                .filter(|s| s.transport == TRANSPORT_MXL && s.id != own_sender_id)
-                .filter_map(|s| s.flow_id.map(|flow_id| (s.id, s.label, flow_id, s.device_id)))
-                .filter(|(_, _, flow_id, _)| {
-                    matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO)
-                })
-                .map(|(sender_id, label, flow_id, device_id)| DiscoveredInput {
-                    sender_id,
-                    label,
-                    flow_id,
-                    device_id,
-                })
-                .collect())
-        })
-        .await;
+        let registry_for_poll = registry.clone();
+        let own_sender_id_for_poll = own_sender_id.clone();
+        let result =
+            tokio::task::spawn_blocking(move || discover(&registry_for_poll, &own_sender_id_for_poll)).await;
 
         let discovered = match result {
             Ok(Ok(discovered)) => discovered,
@@ -637,6 +710,63 @@ async fn discovery_loop(
                 continue;
             }
         };
+
+        let mut discovered = discovered;
+        let wanted_ids: std::collections::HashSet<&str> =
+            discovered.iter().filter_map(|i| i.lowres_sender_id.as_deref()).collect();
+        let stale: Vec<(String, String)> = activated_lowres
+            .iter()
+            .filter(|(id, _)| !wanted_ids.contains(id.as_str()))
+            .map(|(id, href)| (id.clone(), href.clone()))
+            .collect();
+        for (lowres_sender_id, href) in stale {
+            let result = tokio::task::spawn_blocking(move || PeerClient::new(href).invoke("releaseLowresPreview")).await;
+            if let Ok(Err(e)) = result {
+                eprintln!("omp-video-mixer-me: releaseLowresPreview({lowres_sender_id}) failed: {e}");
+            }
+            activated_lowres.remove(&lowres_sender_id);
+        }
+
+        for input in discovered.iter_mut() {
+            let Some(lowres_sender_id) = input.lowres_sender_id.clone() else { continue };
+            if activated_lowres.contains_key(&lowres_sender_id) {
+                continue;
+            }
+            let registry_for_resolve = registry.clone();
+            let sender_id_for_resolve = lowres_sender_id.clone();
+            let href = tokio::task::spawn_blocking(move || {
+                resolve_owning_node_href(&registry_for_resolve, &sender_id_for_resolve)
+            })
+            .await
+            .ok()
+            .flatten();
+            let Some(href) = href else {
+                eprintln!(
+                    "omp-video-mixer-me: owning node for lowres sender {lowres_sender_id} not resolvable, falling back to highres"
+                );
+                input.lowres_sender_id = None;
+                input.lowres_flow_id = None;
+                continue;
+            };
+            let href_for_call = href.clone();
+            let activate_result =
+                tokio::task::spawn_blocking(move || PeerClient::new(href_for_call).invoke("activateLowresPreview")).await;
+            match activate_result {
+                Ok(Ok(())) => {
+                    activated_lowres.insert(lowres_sender_id, href);
+                }
+                Ok(Err(e)) => {
+                    eprintln!("omp-video-mixer-me: activateLowresPreview({lowres_sender_id}) failed: {e}, falling back to highres");
+                    input.lowres_sender_id = None;
+                    input.lowres_flow_id = None;
+                }
+                Err(e) => {
+                    eprintln!("omp-video-mixer-me: activateLowresPreview({lowres_sender_id}) task panicked: {e}, falling back to highres");
+                    input.lowres_sender_id = None;
+                    input.lowres_flow_id = None;
+                }
+            }
+        }
 
         *inputs.lock().expect("lock poisoned") = discovered.clone();
         pipeline.set_inputs(discovered);
