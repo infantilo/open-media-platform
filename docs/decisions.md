@@ -10374,3 +10374,107 @@ tatsächlich behoben, nicht nur reduziert. Kein Code-Änderung an
 `omp-switcher` selbst nötig, der Fix lebt komplett in `omp-mediaio`
 (bereits committet, `be1dbc7`). Kapitel 15 Teil 3 damit für beide
 betroffenen Nodes (Switcher und Mixer) vollständig abgeschlossen.
+
+## 2026-07-20 (Nachtrag 61) — K4: Generischer Node-Stream-Proxy im
+Orchestrator
+
+Nächster offener, hardware-unabhängiger Punkt aus der Kapitel-10-
+Entscheidungssitzung (`docs/END-GOAL-FEATURES.md`, Punkt 5): "Generischer
+Node-Stream-Proxy im Orchestrator wird gebaut (`/api/v1/nodes/<id>/
+stream/<name>`) — löst Audio-Pegel und die bekannte MJPEG-Vorschau-
+Problematik (C12) in einem Aufwasch."
+
+**Ausgangslage (Code gelesen, nicht angenommen):** `omp-viewer`/
+`omp-multiviewer`s MJPEG-Vorschau (`preview.rs`) und `omp-audio-mixer`s
+SSE-Metering (`levels.rs`) laufen beide auf einem eigenen, zweiten
+`tiny_http`-Port pro Node, getrennt vom regulären Node-Contract-Server
+(`omp_node_sdk::server`) — dessen Accept-Loop ist bewusst
+single-threaded (ein Request nach dem anderen), eine dauerhaft offene
+MJPEG-/SSE-Antwort darin würde jeden anderen Endpunkt (Descriptor,
+Params, Methods) für die gesamte Verbindungsdauer blockieren, s. beider
+Module eigene Doku. Die tatsächliche Adresse dieses zweiten Ports ist
+nur über einen Parameter bekannt (`previewUrl`/`levelsUrl`) — die UI
+griff danach bislang **direkt** darauf zu (`img.src = <aufgelöste URL>`
+bzw. `new EventSource(<aufgelöste URL>)`). Zwei reale, unabhängig vom
+K4-Vorschlag bereits vorhandene Probleme dabei: (1) das umgeht die
+Orchestrator-eigene Auth (JWT/Rollenbindungen, D3 Teil 2) komplett —
+jeder mit Netzwerksicht auf den zweiten Node-Port sieht Vorschau/Pegel
+ohne jede Anmeldung; (2) der Browser braucht direkte Netzwerk-
+Erreichbarkeit zu JEDEM Node-Host, nicht nur zum Orchestrator — bricht
+in jedem Mehr-Host-Aufbau (§18), in dem der Operator nur den
+Orchestrator direkt erreicht.
+
+**Umsetzung:** neuer Handler `handleNodeStreamProxy` (`orchestrator/
+internal/httpapi/proxy.go`), Route `GET /api/v1/nodes/<id>/stream/
+<name>`. Zwei-Hop-Design: (1) `name` wird zuerst als Node-Parameter
+aufgelöst (zweiter, kurzlebiger Request auf den regulären API-Port,
+identisch zum bestehenden `handleNodeProxy`s Params-Pfad), (2) der
+zurückgelieferte Wert wird als URL behandelt, ein zweiter, diesmal
+dauerhafter Request geht dorthin, dessen Antwort Byte für Byte
+durchgereicht wird. `name` ist bewusst generisch (nicht hart auf
+"previewUrl"/"levelsUrl" verdrahtet) — jeder künftige Node-Typ mit
+einem eigenen dauerhaften Stream kann denselben Pfad nutzen, solange er
+seine URL unter irgendeinem Parameter exportiert.
+
+**Zwei reale Bugs live gefunden, keiner davon in der ursprünglichen
+Unit-Test-Abdeckung sichtbar:**
+
+1. **Header-Flush-Reihenfolge.** Der Response-Header wurde nur
+   geflusht, wenn der Kopier-Loop bereits den ersten Body-Byte gelesen
+   hatte — ein frisch verbundener Stream ohne bereits fließende Daten
+   (z. B. `omp-viewer` direkt nach dem Start, bevor je ein Frame
+   publiziert wurde) blockiert im ersten `Read()` unbegrenzt, wodurch
+   der Aufrufer nicht einmal einen `200`-Status sah (`curl` hing bis
+   zum Timeout, komplett ohne sichtbare Antwort). Live per `curl -D -`
+   gegen den direkten Node-Port (sofortige Header) vs. denselben Aufruf
+   über den Proxy (kein Header nach 5s) isoliert, dann per temporärem
+   `println`-Tracing im Handler auf die exakte Zeile eingegrenzt.
+   Behoben durch sofortiges `Flush()` direkt nach `WriteHeader`, vor
+   dem eigentlichen Kopier-Loop — identisches Muster/identische
+   Begründung wie `preview.rs::serve_client`s eigener expliziter Flush
+   (dortige Doku: "sonst bliebe der Header im Puffer hängen, bis
+   `rx.recv()` das erste Frame liefert").
+2. **`<img src>`/`EventSource` können keinen `Authorization`-Header
+   setzen** (Web-Plattform-Einschränkung) — erst per echtem CDP-
+   Browser-Test entdeckt: das `<img>`-Element zeigte im echten DOM
+   bereits korrekt auf die neue Proxy-URL, das Netzwerk-Panel zeigte
+   aber `401` statt `200`, weil der Browser bei einem simplen
+   `img.src`-Zuweisung keinerlei Custom-Header mitschickt. Der
+   Orchestrator unterstützt genau für diesen Fall bereits einen
+   `?access_token=`-Query-Fallback (`bearerToken()`, ursprünglich für
+   `ui/shell/connection.ts`s Shell-SSE-Verbindung eingeführt, D3 Teil 2)
+   — er war an dieser neuen Stelle nur noch nicht verdrahtet. Behoben
+   in allen drei betroffenen Stellen (`ui/graph/flow-canvas.ts`,
+   `nodes/omp-viewer/ui/bundle.js`, `nodes/omp-audio-mixer/ui/
+   bundle.js`) durch Anhängen desselben Query-Parameters, exakt wie
+   `connection.ts` es für die Shell-SSE bereits vormacht. Ein reiner
+   API-/`curl`-Test hätte diesen Bug nie gefunden (`curl` schickt den
+   mitgegebenen `Authorization`-Header anstandslos mit) — nur der
+   echte Browser-Kontext (kein manuell gesetzter Header möglich für
+   `<img>`/`EventSource`) deckt ihn auf, ein weiterer Beleg für "UI
+   click-test, nicht nur API" (Auto-Memory-Eintrag).
+
+**UI-Änderungen:** `ui/graph/flow-canvas.ts`s `#hasPreviewById` (vorher
+`#previewUrlById`) hält jetzt nur noch, OB ein Node eine Vorschau hat,
+nicht mehr die aufgelöste Node-URL selbst — das `<img>` zeigt
+stattdessen fest auf `streamProxyUrl(nodeId, "previewUrl")`.
+`nodes/omp-viewer/ui/bundle.js` und `nodes/omp-audio-mixer/ui/
+bundle.js` entsprechend angepasst (Parameter-Fetch dient dort nur noch
+als Existenz-Check, nicht mehr als URL-Quelle).
+
+**Live verifiziert:** Go-Unit-Tests mit echten `httptest`-Servern
+(`TestHandleNodeStreamProxy` + drei Fehlerfälle: unbekannter Node,
+unbekannter Parameter, leerer Wert — je 404) bestätigen den Zwei-Hop-
+Relay von Content-Type und Body-Bytes korrekt. Echter CDP-Browser-Lauf
+gegen den echten laufenden Orchestrator (Login, Navigation, DOM-
+Inspektion, Netzwerk-Mitschnitt) zeigt nach dem Auth-Fix: `<img>`-Quelle
+korrekt auf die neue, tokenisierte Proxy-URL, Netzwerk-Antwort `200 OK`
+mit `Content-Type: multipart/x-mixed-replace; boundary=frame` (vorher
+`401`). **Bewusst nicht Teil dieser Runde, unabhängiger Befund:**
+`omp-viewer`s Pipeline lieferte in diesem Testlauf trotz erfolgreichem
+IS-05-Connect keine tatsächlichen JPEG-Frames (CPU-Auslastung blieb
+nahe 0%, identisches Bild beim direkten Node-Zugriff ohne jeden Proxy)
+— ein vom Stream-Proxy komplett unabhängiges Pipeline-/Rebuild-Problem,
+nicht weiter verfolgt (außerhalb des K4-Scopes). `go build`/`go vet`/
+`go test ./...` grün bis auf den vorbestehenden `internal/hosts`-Flake;
+`cargo build --workspace` grün; `deno check`/`deno test ui/` grün.

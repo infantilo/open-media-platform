@@ -705,13 +705,29 @@ class OmpAudioMixerPanel extends HTMLElement {
     this._interval = setInterval(poll, 2000);
     this._masterInterval = setInterval(pollMaster, 2000);
 
-    // K4-Teil-1 Metering: eigene EventSource auf den node-lokalen
-    // `/levels`-SSE-Port (levelsUrl), unabhängig vom Shell-SSE-Stream
-    // (`/api/v1/events`) — anderer Zweck (Pegel, nicht Tally/Graph) und
-    // anderer Server (levels.rs, eigener Port, s. dortige Moduldoku).
+    // K4-Teil-1 Metering: eigene EventSource, unabhängig vom Shell-SSE-
+    // Stream (`/api/v1/events`) — anderer Zweck (Pegel, nicht
+    // Tally/Graph) und anderer Server (levels.rs, eigener Port, s.
+    // dortige Moduldoku). Seit K4 (docs/END-GOAL-FEATURES.md Kapitel 10
+    // Entscheidungssitzung Punkt 5) über den generischen Orchestrator-
+    // Stream-Proxy statt direkt gegen den node-eigenen levelsUrl-Port —
+    // derselbe Auth-Schutz wie jeder andere `/api/v1`-Endpunkt, kein
+    // direkter Browser-Zugriff auf den Node-Host mehr nötig. `getParam`
+    // dient hier nur noch als Existenz-Check (Node ohne Metering-Pfad
+    // liefert kein/leeres `levelsUrl`), der tatsächliche Wert wird nicht
+    // mehr als URL verwendet. `EventSource` kann wie `<img src>` keinen
+    // `Authorization`-Header setzen (Web-Plattform-Einschränkung) —
+    // derselbe `?access_token=`-Fallback wie bei der Shell-eigenen
+    // SSE-Verbindung (ui/shell/connection.ts), sonst bricht die
+    // Verbindung mit einem stillen 401 ab, sobald ein echter Nutzer
+    // angemeldet ist (live per CDP gefunden).
     getParam("levelsUrl").then((url) => {
       if (!url) return;
-      this._levelsSource = new EventSource(url);
+      const token = localStorage.getItem("omp-auth-token");
+      const streamUrl = token
+        ? `/api/v1/nodes/${nodeId}/stream/levelsUrl?access_token=${encodeURIComponent(token)}`
+        : `/api/v1/nodes/${nodeId}/stream/levelsUrl`;
+      this._levelsSource = new EventSource(streamUrl);
       this._levelsSource.onmessage = (ev) => {
         let parsed;
         try {

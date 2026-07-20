@@ -1,11 +1,14 @@
 // Node-UI-Bundle des Viewers (UMSETZUNG.md C6, ARCHITECTURE.md §4.5):
-// zeigt den MJPEG-Preview-Stream direkt als <img>, dessen Quelle der
-// eigene, node-eigene Preview-HTTP-Listener ist (OMP_VIEWER_PREVIEW_PORT,
-// preview.rs) — nicht über den Orchestrator-Proxy, der nur kurzlebige
-// JSON-Antworten weiterreicht, keine dauerhaft offenen Streams. Die
-// previewUrl selbst kommt aus dem generischen Parameter-Proxy
-// (/api/v1/nodes/<id>/params/previewUrl), damit dieses Bundle kein
-// Sonderwissen über Host/Port des Nodes braucht.
+// zeigt den MJPEG-Preview-Stream als <img>. Bis K4 (docs/END-GOAL-
+// FEATURES.md Kapitel 10 Entscheidungssitzung Punkt 5) zeigte die Quelle
+// direkt auf den node-eigenen, zweiten Preview-HTTP-Listener
+// (OMP_VIEWER_PREVIEW_PORT, preview.rs) — das umging die Orchestrator-
+// Auth komplett und verlangte, dass der Browser jeden Node-Host direkt
+// erreicht. Jetzt läuft der Stream durch den generischen
+// Orchestrator-Proxy (`GET /api/v1/nodes/<id>/stream/previewUrl`, löst
+// intern denselben previewUrl-Parameter auf und reicht die Antwort
+// durch) — derselbe Auth-Schutz wie jeder andere `/api/v1`-Endpunkt,
+// der Browser kennt nie Host/Port des zweiten Node-Ports.
 class OmpViewerPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -30,19 +33,19 @@ class OmpViewerPanel extends HTMLElement {
 
     shadow.append(style, img, status);
 
-    fetch(`/api/v1/nodes/${nodeId}/params/previewUrl`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body) => {
-        if (body && body.value) {
-          img.src = body.value;
-          status.remove();
-        } else {
-          status.textContent = "keine Vorschau-URL verfügbar";
-        }
-      })
-      .catch(() => {
-        status.textContent = "Vorschau-URL konnte nicht geladen werden";
-      });
+    img.addEventListener("load", () => status.remove());
+    img.addEventListener("error", () => {
+      status.textContent = "keine Vorschau verfügbar";
+    });
+    // `<img src>` kann keinen `Authorization`-Header setzen (Web-
+    // Plattform-Einschränkung) — derselbe `?access_token=`-Fallback wie
+    // bei der Shell-eigenen SSE-Verbindung (ui/shell/connection.ts),
+    // ohne den bekäme jede Vorschau ein stilles 401 statt eines Bildes,
+    // sobald ein echter Nutzer angemeldet ist (live per CDP gefunden).
+    const token = localStorage.getItem("omp-auth-token");
+    img.src = token
+      ? `/api/v1/nodes/${nodeId}/stream/previewUrl?access_token=${encodeURIComponent(token)}`
+      : `/api/v1/nodes/${nodeId}/stream/previewUrl`;
   }
 }
 

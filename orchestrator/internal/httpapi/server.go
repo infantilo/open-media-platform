@@ -202,6 +202,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteGraphEdge(graphSvc)))

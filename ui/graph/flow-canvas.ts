@@ -50,6 +50,25 @@ import { uniqueRoleName } from "./roles.ts";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
 
+// Gleicher Storage-Key wie `auth.ts`s `TOKEN_KEY`/`connection.ts`s eigene
+// Kopie davon, absichtlich dupliziert statt eines gemeinsamen Imports
+// (s. `connection.ts`s Begründung: `auth.ts`s Modul-Ladezeit-Seiteneffekt
+// bricht unter `deno test`). Gebraucht für den Stream-Proxy (K4,
+// docs/END-GOAL-FEATURES.md Kapitel 10 Entscheidungssitzung Punkt 5):
+// `<img src>` kann anders als `apiFetch()` keinen `Authorization`-Header
+// setzen (Web-Plattform-Einschränkung, identischer Befund wie
+// `connection.ts`s eigener `?access_token=`-Fallback für die
+// SSE-Verbindung) — ohne den Query-Parameter hier bekäme jede
+// Kachel-Vorschau ein stilles 401 statt eines Bildes, sobald ein echter
+// Nutzer (außerhalb des Zero-User-Bootstrap-Zustands) angemeldet ist.
+const STREAM_TOKEN_KEY = "omp-auth-token";
+
+function streamProxyUrl(nodeId: string, paramName: string): string {
+  const token = localStorage.getItem(STREAM_TOKEN_KEY);
+  const base = `/api/v1/nodes/${nodeId}/stream/${paramName}`;
+  return token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
+}
+
 // Parameter-Panel-Breite (§1.6, docs/END-GOAL-FEATURES.md, 2026-07-17):
 // die frühere feste 280px liess Operator-Konsolen-Bundles wie den
 // Bildmischer ihre eigentlich horizontale Crosspoint-Reihe umbrechen —
@@ -310,9 +329,15 @@ export class FlowCanvas extends HTMLElement {
   #tileHeightById: Map<string, number> = new Map();
   // Inline-Vorschau auf der Kachel selbst (nicht nur im geöffneten
   // Parameter-Panel) für Nodes mit einem "previewUrl"-Parameter (bisher
-  // nur omp-viewer, C6) — `null` = geprüft, kein previewUrl vorhanden.
+  // nur omp-viewer, C6) — hält seit K4 (docs/END-GOAL-FEATURES.md
+  // Kapitel 10 Entscheidungssitzung Punkt 5) nur noch, OB ein Node eine
+  // Vorschau hat (`false` = geprüft, keine vorhanden), nicht mehr die
+  // aufgelöste Node-URL selbst — das <img> zeigt stattdessen auf den
+  // generischen Orchestrator-Stream-Proxy, der previewUrl intern selbst
+  // auflöst (kein direkter Browser-Zugriff auf den Node-Host mehr
+  // nötig, gleicher Auth-Schutz wie jeder andere `/api/v1`-Endpunkt).
   // Einmalig pro Node-ID abgefragt, nicht bei jedem Render-Tick erneut.
-  #previewUrlById: Map<string, string | null> = new Map();
+  #hasPreviewById: Map<string, boolean> = new Map();
   #previewFetchInFlight: Set<string> = new Set();
 
   #svg!: SVGSVGElement;
@@ -793,7 +818,7 @@ export class FlowCanvas extends HTMLElement {
     this.#portLocation.clear();
     this.#tileHeightById.clear();
     for (const tile of tiles) {
-      const hasPreview = !!this.#previewUrlById.get(tile.id);
+      const hasPreview = !!this.#hasPreviewById.get(tile.id);
       this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length, hasPreview));
       tile.inputs.forEach((p, i) =>
         this.#portLocation.set(p.id, { tileId: tile.id, side: "input", index: i, count: tile.inputs.length })
@@ -1336,8 +1361,7 @@ export class FlowCanvas extends HTMLElement {
   // sichtbar den Rahmen).
   #renderPreviewThumbnail(nodeId: string): SVGForeignObjectElement | null {
     this.#maybeFetchPreviewUrl(nodeId);
-    const previewUrl = this.#previewUrlById.get(nodeId);
-    if (!previewUrl) return null;
+    if (!this.#hasPreviewById.get(nodeId)) return null;
 
     const fo = document.createElementNS(SVG_NS, "foreignObject");
     fo.setAttribute("x", "8");
@@ -1347,7 +1371,7 @@ export class FlowCanvas extends HTMLElement {
     fo.style.pointerEvents = "none"; // Ziehen/Auswählen der Kachel bleibt unverändert möglich.
 
     const img = document.createElement("img");
-    img.src = previewUrl;
+    img.src = streamProxyUrl(nodeId, "previewUrl");
     img.alt = "Vorschau";
     img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:#000;border:1px solid #444;border-radius:2px;`;
     fo.appendChild(img);
@@ -1355,17 +1379,17 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #maybeFetchPreviewUrl(nodeId: string) {
-    if (this.#previewUrlById.has(nodeId) || this.#previewFetchInFlight.has(nodeId)) return;
+    if (this.#hasPreviewById.has(nodeId) || this.#previewFetchInFlight.has(nodeId)) return;
     this.#previewFetchInFlight.add(nodeId);
     apiFetch(`/api/v1/nodes/${nodeId}/params/previewUrl`)
       .then((res) => (res.ok ? res.json() : null))
       .then((body) => {
-        const url = body && typeof body.value === "string" && body.value ? body.value : null;
-        this.#previewUrlById.set(nodeId, url);
-        if (url) this.#render();
+        const has = !!(body && typeof body.value === "string" && body.value);
+        this.#hasPreviewById.set(nodeId, has);
+        if (has) this.#render();
       })
       .catch(() => {
-        this.#previewUrlById.set(nodeId, null);
+        this.#hasPreviewById.set(nodeId, false);
       })
       .finally(() => {
         this.#previewFetchInFlight.delete(nodeId);

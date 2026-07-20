@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -631,6 +632,95 @@ func TestHandleNodeProxyUnknownNodeReturns404(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/does-not-exist/descriptor", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// TestHandleNodeStreamProxy (K4, docs/END-GOAL-FEATURES.md Kapitel 10
+// Entscheidungssitzung Punkt 5): der generische Stream-Proxy löst
+// zuerst "name" als Node-Parameter auf (zweiter Test-Server, simuliert
+// den regulären Node-API-Port), behandelt den Wert als URL und
+// streamt DANACH von einem zweiten, unabhängigen Server (simuliert
+// z. B. `preview.rs`s eigenen zweiten Port) durch — der Aufrufer sieht
+// nur die Orchestrator-URL, nie die tatsächliche Stream-Server-Adresse.
+func TestHandleNodeStreamProxy(t *testing.T) {
+	streamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/preview" {
+			t.Errorf("stream path = %q, want /preview", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+		w.Write([]byte("--frame\r\nfake jpeg bytes\r\n"))
+	}))
+	defer streamServer.Close()
+
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/params/previewUrl" {
+			t.Errorf("param path = %q, want /params/previewUrl", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"value":%q}`, streamServer.URL+"/preview")
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "multipart/x-mixed-replace; boundary=frame" {
+		t.Fatalf("Content-Type = %q, want the stream server's own type", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "fake jpeg bytes") {
+		t.Fatalf("body = %q, want it to contain the streamed bytes", rec.Body.String())
+	}
+}
+
+func TestHandleNodeStreamProxyUnknownParamReturns404(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unknown parameter", http.StatusNotFound)
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/levelsUrl", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleNodeStreamProxyEmptyValueReturns404(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"value":""}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (node has no preview configured)", rec.Code)
+	}
+}
+
+func TestHandleNodeStreamProxyUnknownNodeReturns404(t *testing.T) {
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/does-not-exist/stream/previewUrl", nil))
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
