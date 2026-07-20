@@ -9483,3 +9483,183 @@ Kapitel 15 Teil 3 damit teilweise erweitert (`omp-switcher` neu dabei,
 `omp-multiviewer` weiterhin fertig); `omp-video-mixer-me` (fg/bg/DVE,
 noch komplexer) bewusst nicht angegangen, ebenso das offene
 Speicherleck — beides dokumentierte, bewusste Lücken, kein stiller Gap.
+
+## 2026-07-20 (Nachtrag 51) — Kapitel 15 Teil 3 (Rest 2), Versuch an
+`omp-video-mixer-me`: BLOCKIERT, akutes Speicherproblem, nicht
+committet
+
+**Versuch:** dieselbe Technik wie bei Nachtrag 50 (`omp-switcher`),
+aber verdoppelt auf `omp-video-mixer-me`s zwei unabhängige
+Branch-Pools (fg/`isel`, bg/`isel_bg` — jeder Eingang hat hier zwei
+separate `MxlVideoInput`-Leser statt einem). Regel für beide Pools:
+Highres nur für den aktuellen Programm-Sender, sonst Lowres. Eine
+Zusatz-Komplexität ggü. dem Switcher: während einer laufenden
+`autoTrans()` zeigt `comp_bg_pad` das ausgehende Bild noch bis zu
+`TRANS_DURATION_MS` sichtbar (Alpha rampt erst am Fade-Ende auf 0,
+`isel_bg`s aktiver Pad wechselt ebenfalls erst dort) — der bg-Zweig des
+zuvor aktiven Programms darf deshalb nicht sofort herunterstufen
+(sichtbarer Auflösungs-Einbruch mitten in der Überblendung), sondern
+erst, sobald der Fade nachweislich fertig ist (`pending_bg_demote` in
+`run()`, im Kontroll-Thread-Loop nachgeholt statt im Fade-Thread selbst
+— Element-Auf-/Abbau darf laut Nachtrag 50 strikt nur dort passieren).
+
+Implementierung (Code steht, **nicht committet**): `InputBranch`,
+`retarget_branch`, `promote_to_highres`/`demote_fg_to_lowres`/
+`demote_bg_to_lowres` als generische Helfer über beide Pools,
+`swap_input_resolution` 1:1 aus `omp-switcher` übernommen (identische
+Pad-Block-Technik). Kompiliert sauber, `cargo clippy` ohne neue
+Warnungen (die 5 vorhandenen Warnungen in `handle_events` sind
+unverändert vorbestehend).
+
+**Live-Verifikation deckte einen deutlich schwereren, akuten Fehler
+auf, nicht nur das aus Nachtrag 50 bekannte langsame Leck:**
+- Ein einzelner `crosspoint.take()` (2 Swaps: fg+bg eines Eingangs auf
+  Highres) verhielt sich unauffällig (+19 MB RSS, per `mxl-info`
+  bestätigt korrekt: neuer Highres-Flow aktiv gelesen, Lowres-Flow
+  wird ab dann nicht mehr gelesen).
+- Der darauffolgende `crosspoint.autoTrans()` (2 weitere Swaps für den
+  neuen Zielsender + ein fehlschlagender Demote-Versuch für den
+  vorherigen) ließ den Prozess-RSS in **einem einzigen Kommando** von
+  ~96 MB auf ~618 MB springen (+522 MB). Ein zweiter, direkt
+  anschließender `crosspoint.take()` führte zum vollständigen
+  **OOM-Kill des Prozesses** (bestätigt per `dmesg`: `anon-rss:
+  5980000kB` zum Kill-Zeitpunkt) — ganze **drei** manuelle
+  Bedienschritte genügten, kein Stresstest wie bei Nachtrag 50 (dort
+  100 Umschaltungen in ~30s nötig).
+- Der Demote-Versuch (Highres → Lowres des zuvor aktiven Programms)
+  schlägt **reproduzierbar** mit "Timeout beim Warten auf den
+  blockierten Pad-Unlink" fehl — der Pad-Block-Probe feuert nie,
+  obwohl der Quell-Node ununterbrochen weiter schreibt. Diagnose-Ausgabe
+  (`old_branch`s `appsrc`-Element-Zustand direkt vor dem Warten
+  abgefragt) zeigte den `appsrc` bereits im Zustand `Null`, obwohl der
+  eigene Code an dieser Stelle noch keinerlei Teardown ausgelöst hatte
+  — irgendetwas außerhalb der hier sichtbaren Aufrufkette bringt dieses
+  Element in einen inaktiven Zustand, sobald `isel`/`isel_bg` von
+  seinem Pad wegschaltet. Ein echter, eigenständiger Zweitfund dabei:
+  der Timeout-Pfad in `swap_input_resolution` gab bislang **nicht** die
+  `add_probe`-Registrierung frei (`remove_probe` fehlte) — behoben,
+  ändert aber nichts an der eigentlichen Ursache.
+
+**Root Cause nicht gefunden.** Kandidaten, keiner bestätigt:
+1. Etwas an `input-selector`s `active-pad`-Wechsel bringt das
+   deselektierte Pads vorgeschaltete `appsrc` sehr schnell in Zustand
+   `Null`, ohne dass eigener Code das auslöst.
+2. `MxlVideoInput::read_loop` kopiert pro Grain (`grain.payload.to_vec()`,
+   `omp-mediaio/src/mxl.rs`) — kombiniert mit einer über `appsrc`s
+   Default-Eigenschaften (`block=false`, kein `leaky-type`) potenziell
+   unbegrenzt wachsenden internen Queue, falls Downstream aufhört zu
+   konsumieren, wäre das ein Mechanismus für echtes, schnelles
+   Anon-RSS-Wachstum — nicht verifiziert.
+3. Mehrere gleichzeitig offene `MxlVideoInput`-Leser über **mehrere
+   Sender hinweg** (hier: 4 gleichzeitig, da der fehlgeschlagene Demote
+   die alten Leser nicht abbaut, während gleichzeitig zwei neue für den
+   nächsten Sender aufgebaut werden) könnten in eine ähnliche
+   MXL-Mehrfach-Leser-Gefahrenzone laufen wie das bereits bekannte
+   "MXL-Read-Livelock"-Problem (`docs/decisions.md`, 2026-07-17) — dort
+   war die Schwelle "≥3 gleichzeitige Leser pro Flow", hier sind es
+   mehrere Leser über mehrere Flows gleichzeitig, evtl. verwandt, evtl.
+   nicht.
+
+Ohne `valgrind`/`heaptrack`/`gdb`-Heap-Diagnose (in dieser Sandbox
+nicht verfügbar, s. bereits Nachtrag 50) nicht weiter eingrenzbar in
+angemessener Zeit — eine echte Root-Cause-Analyse bräuchte
+`GST_DEBUG`-Tracing über eine dedizierte Sitzung oder ein Minimal-
+Reproduktionsprogramm außerhalb des vollen Node-Kontexts.
+
+**Entscheidung:** Änderungen **nicht committet** (Verifikation nicht
+bestanden, `UMSETZUNG.md` §0 Punkt 3). `omp-video-mixer-me` bleibt beim
+bisherigen Verhalten (alle Eingänge dauerhaft Highres). Der fertige,
+aber nicht verifizierte Code liegt uncommitted im Arbeitsverzeichnis;
+dem Nutzer wurden drei Optionen vorgelegt (verwerfen / für eine
+dedizierte Debugging-Sitzung aufheben / stark reduzierter Ansatz ohne
+Demote-Richtung testen).
+
+**Nutzerentscheidung:** Code bleibt uncommitted im Arbeitsverzeichnis
+liegen, Root-Cause-Suche vertagt auf eine eigene, dedizierte Sitzung
+(keine Scope-Reduktion, kein Verwerfen).
+
+## 2026-07-20 (Nachtrag 52) — Kapitel 14 Teil 3: Typ-Profile +
+Start-Warnung (advisory), Live-Test bewusst mit `omp-source` statt
+`omp-video-mixer-me`
+
+Nach dem blockierten Mixer-Versuch (Nachtrag 51) nächster Schritt laut
+Prioritätsreihenfolge (`docs/END-GOAL-FEATURES.md` §16.1 Nr. 5-6):
+Kapitel 15 hat noch zwei offene, aber jeweils blockierte/entscheidungs-
+bedürftige Teile (Mixer-OOM oben, `omp-ograf`s offene Fill/Key-Frage),
+Kapitel 16 Teil 2 (Placement-Integration für Fabrics) stellte sich bei
+näherem Hinsehen als größer heraus als im Dokument angenommen — die
+dort vorausgesetzte Wiederverwendung von "§6.1s bestehendem
+Claim-Schema" existiert nicht (nur die advisory CPU/RAM-Placement-
+Engine aus D6 Teil 3 wurde je gebaut, nie ein Claim/Release-Mechanismus
+für exklusive Ressourcen) — das wäre also kein "kleiner Anschluss",
+sondern eine neue Modellierungsentscheidung, die vor der Umsetzung
+selbst gefällt werden müsste. Kapitel 14 Teil 3 (Typ-Profile +
+Start-Warnung) ist dagegen exakt so scharf umrissen wie im Dokument
+beschrieben und baut sauber auf Teil 1/2 auf — als nächstes angegangen.
+
+**Umsetzung:** neues `orchestrator/internal/profiles`-Paket:
+`Collector.sample()` tastet alle 5s dieselben Instanz-/Host-Quellen ab
+wie `placement.Engine` (dupliziert `httpapi.mergeInstanceMetrics`
+bewusst klein statt eines Cross-Package-Imports, gleiche Begründung
+wie überall sonst in diesem Projekt), hält pro `(nodeType, hostID)` ein
+gleitendes 15-Minuten-Fenster, `Collector.flush()` schreibt daraus alle
+60s (identisch zu Kapitel 14 Teil 1s Aggregat-Bucket-Rhythmus) ein
+Snapshot (CPU min/avg/max/p95, RSS min/avg/max, `sampleCount`) per
+Upsert nach Postgres (`node_type_profiles`, Migration 0008) — plus ein
+zweites Snapshot pro `nodeType` unter dem reservierten Sentinel
+`profiles.GlobalHostID = "*"` (Typ-Fallback über alle Hosts hinweg,
+§14.3c: "ein neuer Host ohne eigene Messhistorie erbt das Typ-Profil").
+`""` konnte für diesen Sentinel nicht wiederverwendet werden — das ist
+bereits durch `launcher.Instance.HostID`s bestehende Konvention "lokal
+gestartete Instanz" belegt, ein echter, eigener Eintrag.
+
+Neuer Endpoint `GET /api/v1/profiles?nodeType=X&hostId=Y` (§14.3d):
+liefert `known:false`/"unbekannt", solange weder ein host-spezifisches
+noch das Typ-Fallback-Profil existiert — nie ein stiller Block, nie
+erfundene Zahlen. Mit Profil: Ampel-Status (ok/knapp/ueberbucht) aus
+`hostMetrics.Get(hostId)`s Momentwert plus Profil-Ø, verglichen gegen
+`placement.DefaultThresholds` (Healthy-Schwelle → "knapp", Alarm-
+Schwelle → "ueberbucht") — **identisch zur im Dokument selbst
+vorgeschlagenen Antwort auf §14.5 Frage 4** ("feste Defaults ... aus
+D6 Teil 3"), deshalb direkt so umgesetzt statt einer weiteren
+Rückfrage. Für `hostId==""` (lokaler Host) bewusst **kein**
+Kapazitätsvergleich (`status:"lokal"`, nur die reinen Profilzahlen) —
+der Orchestrator misst sich selbst nicht über einen Host-Agent (es gibt
+schlicht keine lokale Entsprechung zu `hosts.Tracker`), eine ehrliche,
+dokumentierte Grenze statt geratener Zahlen für den eigenen Host.
+
+UI (`ui/graph/flow-canvas.ts`): pro Katalog-Eintrag eine neue
+`profile-tag`-Zeile unter dem bisherigen Freitext-Hinweis (§17 Teil 1),
+holt das Profil für den aktuell in der Host-Auswahl gewählten Host
+nach, aktualisiert sich bei einem Wechsel dieser Auswahl neu.
+
+**Live verifiziert — bewusst mit `omp-source` statt
+`omp-video-mixer-me`:** der Mixer hat gerade einen unverifizierten,
+uncommitteten Auflösungs-Hot-Swap-Versuch mit akutem OOM-Risiko im
+Arbeitsverzeichnis liegen (Nachtrag 51) — ihn für diesen Test zu
+starten hätte genau das Risiko erneut heraufbeschworen, das dort schon
+einmal einen Prozess getötet hat. Das im Dokument geforderte
+Verifikationskriterium ("zwei Mixer nacheinander starten → der zweite
+Start zeigt eine profilbasierte Schätzung statt 'unbekannt'") ist
+node-typ-unabhängig; `omp-source` erfüllt es identisch, ohne dieses
+Risiko. Ablauf: `GET /api/v1/profiles?nodeType=omp-source&hostId=`
+lieferte vor jedem Start `known:false`; eine gestartete Instanz +
+Warten über das 60s-Flush-Intervall hinaus lieferte danach echte Zahlen
+(CPU 32-38 %, RSS ~35 MB), die zur tatsächlich über `GET
+/api/v1/instances` beobachteten Last passten — noch **bevor** eine
+zweite Instanz überhaupt gestartet wurde (die Palette hätte die
+Schätzung also schon beim zweiten Start-Klick gezeigt, exakt das
+verlangte Verhalten). Zusätzlich per echtem CDP-Headless-Chromium-
+Check (Login, Navigation, `[data-role="profile-tag"]`-Textinhalt
+ausgelesen) bestätigt, dass die Palette-Zeile tatsächlich rendert:
+„● typisch 41–51% CPU · 34 MB RAM". Ampel-Statusrechnung separat per
+Go-Unit-Test an den exakten Schwellwert-Grenzen abgedeckt (idle/knapp/
+überbucht), nicht nur am Code abgelesen. `go build`/`go vet`/`go test
+./...` grün bis auf einen bereits vorbestehenden, unabhängigen Flake in
+`internal/hosts` (`TestHistoryRawWindowReturnsSamplesWithinCutoff`,
+`git status` bestätigt: diese Datei in dieser Sitzung nicht angefasst,
+nicht verfolgt). `deno check`/`deno bundle` sauber.
+
+Kapitel 14 damit bis auf Teil 4 (Anbindung an D7-Teil-2s harte
+Ressourcen-Vorprüfung, §16-Kapazitäts-Zeitstrahl als spätere Folge auf
+derselben Datengrundlage) abgeschlossen.

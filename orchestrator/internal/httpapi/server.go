@@ -15,6 +15,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -165,7 +166,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
@@ -226,6 +227,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// UMSETZUNG.md D6 Teil 3) — view-artig wie /api/v1/hosts, kein
 	// eigener Verb-Scope, die Engine führt selbst nichts aus.
 	mux.HandleFunc("GET /api/v1/placement/advice", g.requireAuth(handleListPlacementAdvice(placementAdvisor)))
+
+	// Verbrauchsprofile pro Node-Typ, advisory (Kapitel 14 Teil 3,
+	// docs/END-GOAL-FEATURES.md §14.3d) — view-artig wie /api/v1/hosts.
+	mux.HandleFunc("GET /api/v1/profiles", g.requireAuth(handleGetProfile(profileStore, hostMetrics, placementThresholds)))
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1). Definieren ist "configure" (wie

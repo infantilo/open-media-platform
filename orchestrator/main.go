@@ -29,6 +29,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -252,13 +253,24 @@ func main() {
 	// Eingriff, s. Paketkommentar internal/placement. Vor workflowSvc
 	// konstruiert (D7 Teil 2): dessen Ressourcen-Vorprüfung nutzt dieselbe
 	// Engine (CheckHost) als harte Start-Vorbedingung.
-	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placement.Thresholds{
+	placementThresholds := placement.Thresholds{
 		CPUPercent:        cfg.PlacementCPUThreshold,
 		MemPercent:        cfg.PlacementMemThreshold,
 		HealthyCPUPercent: cfg.PlacementHealthyCPUThreshold,
 		HealthyMemPercent: cfg.PlacementHealthyMemThreshold,
-	})
+	}
+	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds)
 	go placementEngine.Run(ctx)
+
+	// Verbrauchsprofile pro Node-Typ (Kapitel 14 Teil 3, docs/END-GOAL-
+	// FEATURES.md §14.3c) — tastet dieselben Instanz-/Host-Telemetrie-
+	// Quellen ab wie placementEngine, aggregiert sie aber pro (Typ,Host)
+	// statt pro Host zu warnen. Eigenständiges Paket statt Erweiterung
+	// von placement (andere Zuständigkeit: Datengrundlage/Schätzung,
+	// nicht Alarm/Vorschlag).
+	profileStore := profiles.NewStore(database)
+	profileCollector := profiles.NewCollector(launcherSvc, hostMetricsTracker, profileStore)
+	go profileCollector.Run(ctx)
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1/Teil 2): bündelt mehrere launcherSvc.Start()-
@@ -287,7 +299,7 @@ func main() {
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
 	go workflowScheduler.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

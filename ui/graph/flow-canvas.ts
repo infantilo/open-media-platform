@@ -213,6 +213,31 @@ interface HostEntry {
   label: string;
 }
 
+// ProfileResponse — Wire-Format identisch zu httpapi.profileResponse
+// (Kapitel 14 Teil 3, docs/END-GOAL-FEATURES.md §14.3d). known=false
+// heißt "erster Start dieses Typs" (weder host-spezifisches noch
+// Typ-Fallback-Profil vorhanden) — nie ein stiller Block, nur eine
+// Anzeige-Entscheidung ("Bedarf unbekannt" statt Zahlen).
+interface ProfileResponse {
+  nodeType: string;
+  hostId: string;
+  known: boolean;
+  fallback?: boolean;
+  cpuMin?: number;
+  cpuAvg?: number;
+  cpuMax?: number;
+  cpuP95?: number;
+  rssMin?: number;
+  rssAvg?: number;
+  rssMax?: number;
+  sampleCount?: number;
+  status: "ok" | "knapp" | "ueberbucht" | "lokal" | "unbekannt";
+  hostCpuPercent?: number;
+  hostMemPercent?: number;
+  projectedCpuPercent?: number;
+  projectedMemPercent?: number;
+}
+
 interface PortLocation {
   tileId: string;
   side: PortSide;
@@ -2202,8 +2227,10 @@ export class FlowCanvas extends HTMLElement {
         // §17 Teil 1 (docs/END-GOAL-FEATURES.md, 2026-07-17): sichtbare
         // Kurzbeschreibung + grobe Ressourcen-Schätzung statt nur eines
         // Labels — vermutete Ressourcen sind bewusst als Freitext-Hinweis
-        // gekennzeichnet ("~"), keine Messung (die liefert erst Kapitel
-        // 14, noch nicht gebaut).
+        // gekennzeichnet ("~"), keine Messung (bewusst weiterhin
+        // Freitext statt der echten Kapitel-14-Teil-3-Messung unten:
+        // dieser Hinweis kommt vom Katalog-Eintrag selbst, unabhängig
+        // davon, ob der Node-Typ je gemessen wurde).
         if (entry.description || entry.expectedResources) {
           const meta = document.createElement("div");
           meta.style.cssText = "margin:-2px 0 6px 2px;color:var(--omp-text-dim);font-size:9px;line-height:1.3;";
@@ -2221,12 +2248,76 @@ export class FlowCanvas extends HTMLElement {
           this.#palette.appendChild(meta);
         }
 
+        // Kapitel 14 Teil 3 (docs/END-GOAL-FEATURES.md §14.3d):
+        // profilbasierte Start-Vorprüfung/Warnung — echte gemessene
+        // Werte statt des Freitext-Hinweises oben, sobald der Node-Typ
+        // mindestens einmal gelaufen ist. Aktualisiert sich beim
+        // Wechsel der Host-Auswahl neu (anderer Host = andere freie
+        // Kapazität).
+        const profileTag = document.createElement("div");
+        profileTag.setAttribute("data-role", "profile-tag");
+        profileTag.style.cssText = "margin:-2px 0 6px 2px;font-size:9px;line-height:1.3;";
+        this.#palette.appendChild(profileTag);
+        void this.#applyProfileTag(profileTag, entry.type, hostSelect?.value || "");
+        hostSelect?.addEventListener("change", () => {
+          void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
+        });
+
         for (const inst of instances.filter((i) => i.type === entry.type)) {
           this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
         }
       }
     } catch {
       // Palette bleibt leer, wenn der Server (noch) nicht erreichbar ist.
+    }
+  }
+
+  // Kapitel 14 Teil 3 (docs/END-GOAL-FEATURES.md §14.3d): holt das
+  // Verbrauchsprofil für (nodeType, hostId) und befüllt tag damit — "~"
+  // Freitext-Vorahnung (oben) wird hier durch echte Zahlen ergänzt,
+  // sobald mindestens ein Sample existiert. known=false zeigt ehrlich
+  // "Bedarf unbekannt (erster Start dieses Typs)", nie einen stillen
+  // Fehlschlag oder ein erratenes Ergebnis.
+  async #applyProfileTag(tag: HTMLDivElement, nodeType: string, hostId: string) {
+    tag.textContent = "";
+    try {
+      const res = await apiFetch(`/api/v1/profiles?nodeType=${encodeURIComponent(nodeType)}&hostId=${encodeURIComponent(hostId)}`);
+      if (!res.ok) return;
+      const profile = (await res.json()) as ProfileResponse;
+      if (!profile.known) {
+        tag.textContent = "Bedarf unbekannt (erster Start dieses Typs)";
+        tag.style.color = "var(--omp-text-dim)";
+        return;
+      }
+
+      const cpu = `${(profile.cpuAvg ?? 0).toFixed(0)}–${(profile.cpuMax ?? 0).toFixed(0)}% CPU`;
+      const rss = `${((profile.rssAvg ?? 0) / 1024 / 1024).toFixed(0)} MB RAM`;
+      const fallbackNote = profile.fallback ? " (Typ-Schätzung, kein Wert für diesen Host)" : "";
+
+      const dotColor: Record<ProfileResponse["status"], string> = {
+        ok: "#4caf50",
+        knapp: "#f0ad4e",
+        ueberbucht: "#c0392b",
+        lokal: "#888",
+        unbekannt: "#888",
+      };
+      const dot = document.createElement("span");
+      dot.textContent = "●";
+      dot.style.cssText = `color:${dotColor[profile.status]};margin-right:3px;`;
+      tag.appendChild(dot);
+
+      const text = document.createElement("span");
+      text.style.cssText = "color:var(--omp-text-dim);";
+      let label = `typisch ${cpu} · ${rss}${fallbackNote}`;
+      if (profile.status === "ok" || profile.status === "knapp" || profile.status === "ueberbucht") {
+        const free = 100 - (profile.hostCpuPercent ?? 0);
+        label += ` — frei: ${free.toFixed(0)}% CPU`;
+      }
+      text.textContent = label;
+      tag.appendChild(text);
+    } catch {
+      // Ampel bleibt leer, wenn der Server (noch) nicht erreichbar ist —
+      // gleiche Degradations-Linie wie #renderPalette selbst.
     }
   }
 
