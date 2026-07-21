@@ -293,6 +293,28 @@ fn build_normalized_branch(
     width: u32,
     height: u32,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
+    // `queue` zwischen `tail` und der Konvertierungskette: ohne ein
+    // pufferndes Element hier beantwortet keins der nachgelagerten
+    // Elemente (videoconvert/-scale/-rate sind reine GstBaseTransforms,
+    // reichen Latenz-Queries unveraendert durch) die Latenz-Query des
+    // `compositor`s (`GstAggregator`) mit einer endlichen Max-Latenz —
+    // live gefunden per `GST_DEBUG=3`: "input-selector: minimum latency
+    // bigger than maximum latency" / "aggregator: Impossible to configure
+    // latency: max 0:00:00.000000000 < min 0:00:00.080000000. Add queues
+    // or other buffering elements." (genau das von GStreamer selbst
+    // vorgeschlagene Mittel). Ohne gueltige Latenzkonfiguration verwirft
+    // der `compositor` jeden ankommenden Puffer als verspaetet — PGM
+    // bleibt dauerhaft schwarz, obwohl `appsrc`/`MxlVideoInput` nachweislich
+    // (per `mxl-info`) durchgehend echte Frames liefert. `leaky=downstream`
+    // + kleines `max-size-buffers` haelt die Latenz trotzdem niedrig, kein
+    // Live-Rueckstau.
+    let queue = gst::ElementFactory::make("queue")
+        .property_from_str("leaky", "downstream")
+        .property("max-size-buffers", 3u32)
+        .property("max-size-bytes", 0u32)
+        .property("max-size-time", 0u64)
+        .build()
+        .map_err(|e| format!("queue ({name_suffix}): {e}"))?;
     let videoconvert = gst::ElementFactory::make("videoconvert")
         .build()
         .map_err(|e| format!("videoconvert ({name_suffix}): {e}"))?;
@@ -308,15 +330,16 @@ fn build_normalized_branch(
         .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
 
     pipeline
-        .add(&videoconvert)
+        .add(&queue)
+        .and_then(|()| pipeline.add(&videoconvert))
         .and_then(|()| pipeline.add(&videoscale))
         .and_then(|()| pipeline.add(&videorate))
         .and_then(|()| pipeline.add(&caps))
         .map_err(|e| format!("add branch elements ({name_suffix}): {e}"))?;
-    gst::Element::link_many([tail, &videoconvert, &videoscale, &videorate, &caps])
+    gst::Element::link_many([tail, &queue, &videoconvert, &videoscale, &videorate, &caps])
         .map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
 
-    Ok((caps.clone(), vec![videoconvert, videoscale, videorate, caps]))
+    Ok((caps.clone(), vec![queue, videoconvert, videoscale, videorate, caps]))
 }
 
 /// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
@@ -355,6 +378,7 @@ fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
 /// aber pro Eingang zweimal instanziiert (fg-Pool, bg-Pool, s. Moduldoku).
 struct InputBranch {
     mxl_input: MxlVideoInput,
+    queue: gst::Element,
     videoconvert: gst::Element,
     videoscale: gst::Element,
     videorate: gst::Element,
@@ -393,10 +417,11 @@ fn build_input_branch(
             return Err(format!("sync_state_with_parent ({name_suffix}): {e}"));
         }
     }
-    let [videoconvert, videoscale, videorate, caps]: [gst::Element; 4] =
-        elements.try_into().expect("build_normalized_branch always returns exactly 4 elements");
+    let [queue, videoconvert, videoscale, videorate, caps]: [gst::Element; 5] =
+        elements.try_into().expect("build_normalized_branch always returns exactly 5 elements");
     Ok(InputBranch {
         mxl_input,
+        queue,
         videoconvert,
         videoscale,
         videorate,
@@ -409,6 +434,7 @@ fn build_input_branch(
 /// zu `build_input_branch`).
 fn teardown_branch(pipeline: &gst::Pipeline, branch: InputBranch) {
     let elements = [
+        branch.queue.clone(),
         branch.videoconvert.clone(),
         branch.videoscale.clone(),
         branch.videorate.clone(),

@@ -10560,3 +10560,56 @@ eine überraschende, nicht aus der GStreamer-Doku ersichtliche
 einen Fehler statt still zu verwerfen) als eigenständiges, jederzeit
 wiederholbares Beispiel, analog zu den bereits bestehenden Repro-Mustern
 in diesem Projekt (`three_readers_livelock_diagnostic` u. a.).
+
+## 2026-07-21 (Nachtrag 63) — `omp-video-mixer-me`: PGM dauerhaft
+schwarz, fehlende `queue` vor dem `compositor`
+
+Nutzer meldete nach eigenem Test: Viewer hinter Source→Mixer→Viewer
+zeigt nur Schwarzbild, Umschalten am Mixer fühlt sich spürbar
+langsamer an als vor zwei Tagen.
+
+**Root Cause (Schwarzbild):** `build_normalized_branch` (`omp-video-
+mixer-me/src/pipeline.rs`) verlinkt jeden fg-/bg-Zweig direkt über
+`videoconvert`/`videoscale`/`videorate`/`capsfilter` in den
+`compositor` — alles reine `GstBaseTransform`-Elemente, die eine
+Latenz-Query unverändert durchreichen, kein Element davon puffert.
+Per `GST_DEBUG=3` bestätigt: der `compositor` (ein `GstAggregator`)
+konnte deshalb keine gültige Live-Latenz aushandeln
+("`input-selector`: minimum latency bigger than maximum latency",
+"`aggregator`: Impossible to configure latency: max
+0:00:00.000000000 < min 0:00:00.080000000. Add queues or other
+buffering elements.") und verwarf jeden ankommenden Puffer als
+verspätet — PGM blieb dauerhaft schwarz, obwohl `mxl-info` und ein
+direkter Grain-Payload-Checksum-Log durchgehend echte, sich
+ändernde Frames auf dem gelesenen Flow zeigten. Fix: ein `queue`
+(`leaky=downstream`, `max-size-buffers=3`) je Zweig, direkt hinter
+`tail` — genau das von GStreamer selbst vorgeschlagene Mittel.
+`InputBranch`/`teardown_branch`/`build_input_branch` entsprechend um
+das fünfte Element erweitert.
+
+**Umschalten "langsamer als vor zwei Tagen":** kein neuer Bug,
+sondern die bereits in Nachtrag 59 dokumentierte Restschwäche
+(`swap_input_resolution`s Pad-Block-Timeout beim Lowres/Highres-Hot-
+Swap) — durch das seither gealterte Mixer-Feature erstmals im
+Alltagsbetrieb spürbar geworden. `isel`/`isel_bg`s `active-pad`-
+Umschaltung selbst funktioniert dabei nachweislich korrekt (per
+Debug-Log verifiziert), nur der Auflösungs-Downgrade des alten
+Zweigs braucht dann u. U. den vollen `SWAP_BLOCK_TIMEOUT`. Root
+Cause dieses Restfehlers weiterhin offen für eine künftige Sitzung.
+
+Separat gefunden: ein Viewer, dessen Verbindung vor dem Neustart der
+Umgebung entstanden war, blieb mit eingefrorenem `read_loop` hängen
+(`mxl-info` zeigte "Last read time" eingefroren, "Last write time"
+weiterlaufend) — Ursache nicht neu untersucht, passt zum bekannten,
+in Nachtrag 62 offen gelassenen Rest ("bei künftigen Vorschau-
+/Bildproblemen dort zuerst nachsehen"); ein neu verbundener Viewer
+war sofort gesund. Kein Code-Fix dafür in dieser Runde.
+
+**Live verifiziert:** in einer bereinigten Umgebung (frischer
+`/dev/shm/omp-mxl`, genau ein Source/Mixer/Viewer-Trio, keine
+Prozess-Leichen aus vorherigen Testläufen) zeigt der Viewer nach
+Select+Cut ein echtes Farbbalkenbild statt Schwarzbild, `mxl-info`
+zeigt Read-/Write-Zeit im Gleichschritt, Cut-API antwortet in
+~20-50ms. `cargo test -p omp-mediaio --features mxl` (8/8) und
+`cargo build --workspace --bins` grün, `cargo clippy` sauber in den
+geänderten Dateien.
