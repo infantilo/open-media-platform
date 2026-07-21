@@ -9,6 +9,7 @@
 
 mod pipeline;
 mod templates;
+mod uibundle;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -164,7 +165,7 @@ impl ParamStore for OgrafStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
-        templates::route(&self.templates_root, method, path)
+        uibundle::route(method, path).or_else(|| templates::route(&self.templates_root, method, path))
     }
 }
 

@@ -10870,3 +10870,71 @@ geänderten Dateien (`nodes/omp-video-mixer-me/src/{main,pipeline}.rs`,
 — DSK nutzt bewusst keinen Hot-Swap-Pfad, Fill/Key-Eingänge werden
 komplett neu aufgebaut wie jeder andere `SetInputs`/`SetKeyFillInputs`-
 Rebuild.
+
+## 2026-07-21 (Nachtrag 67) — `omp-ograf`: Template-Picker/-Editor statt
+"[object Object]"
+
+Nutzer meldete: im OGraf-Panel kein Template wählbar, nur
+"[object Object]" sichtbar, kein Editor — mit Verweis auf PIPELINE
+CONTROLLER als Look&Feel-/Funktionsreferenz (`CLAUDE.md`: bei Bedarf
+dort nachlesen statt zu raten, nicht automatisch übernehmen).
+
+**Root Cause:** `omp-ograf` hatte als einziger Node mit strukturiertem
+(Array-/Objekt-)Parameter nie ein eigenes `ui/bundle.js` bekommen —
+anders als `omp-video-mixer-me`/`omp-switcher`, deren `uibundle.rs` exakt
+denselben Kommentar tragen ("das generische, aus dem Descriptor
+erzeugte Panel könnte diesen Array-Parameter ohnehin nicht sinnvoll
+darstellen — v0-Descriptor-Schema kennt keinen Array-Typ"). `templates`
+ist genau so ein Fall: als `ParamType::String` deklariert (kein Array-/
+Objekt-Typ im Descriptor-Schema vorhanden, projektweite Konvention),
+tatsächlicher Wert aber ein JSON-Array von `{id,label,stepCount,schema}`
+— das generische Panel rendert jeden readonly-Parameter via
+`String(value)` (`ui/graph/flow-canvas.ts:2055`), was für ein
+Objekt-Array exakt `"[object Object]"` ergibt. Kein Bug im engeren
+Sinn, sondern eine fehlende Anwendung der bereits etablierten
+Konvention.
+
+**Referenz PIPELINE CONTROLLER** (`ui.html`, `grafikTplChange`/
+`_renderGrafikFields`/`_buildFieldInput`/`grafikShow`): Template-Suche,
+Dropdown, ein aus dem Schema live generiertes Formular (ein Feld pro
+`schema.properties`-Eintrag, Typ-Dispatch auf `gddType`/`type`: Enum →
+Select, `color-rrggbb` → Color-Picker, boolean → Checkbox, array/object
+→ JSON-Textarea, sonst Text), Ein/Aus-Knöpfe. Bestätigt: das reale
+EBU-OGraf-Manifest (`data/ograf-templates/hello-lower-third/*.ograf.json`)
+nutzt exakt dasselbe Schema-Format inkl. `gddType` — PIPELINE
+CONTROLLERs Formular-Generator arbeitet direkt auf dem echten
+OGraf-JSON-Schema, keine eigene Zwischenform.
+
+**Fix:** `nodes/omp-ograf/src/uibundle.rs` (neu, wortgleiches Muster wie
+Mixer/Switcher) + `nodes/omp-ograf/ui/manifest.json` + `nodes/omp-ograf/
+ui/bundle.js` (neu) mit Template-Suche, Dropdown, schema-generiertem
+Formular (Enum/`color-rrggbb`/boolean/number/array/object/string) und
+Ein-/Aus-Knöpfen — DOM-API statt PIPELINE CONTROLLERs HTML-String-
+Interpolation (keine Attribut-Escaping-Fummelei nötig), ohne dessen
+playlist-spezifische `{{…}}`-Variablen-Einfügung (kein Playlist-Konzept
+in OMP). `main.rs::OgrafStore::extra_route` liefert das Bundle jetzt vor
+den Template-Dateien aus.
+
+**Bewusst nicht übernommen:** PIPELINE CONTROLLERs "Continue"/"Update"-
+Knöpfe (mehrstufige Templates live weiterschalten bzw. Daten
+nachträglich aktualisieren) — `omp-ograf` hat serverseitig nur
+`show`/`hide` (`main.rs`), kein `continue`/`update`; das wäre eine
+eigenständige Backend-Erweiterung, kein reiner UI-Fix, und vom
+gemeldeten Bug nicht verlangt. Aktuell ohnehin nur für mehrstufige
+Templates relevant (`stepCount>1`) — das einzige vorhandene Testtemplate
+hat `stepCount:1`.
+
+Live verifiziert (CDP-Browser, `omp-ograf` neu gestartet für den frischen
+Build): Dropdown zeigt "Hello Lower Third" statt "[object Object]",
+Formular zeigt die drei echten Schema-Felder (Accent Color als
+Color-Swatch, Subtitle/Title als Textfelder mit den echten Schema-
+Defaults), Klick auf "▶ Ein" setzt den Status-Punkt auf grün und zeigt
+"On Air: Hello Lower Third" (echter `show`-Aufruf, keine Attrappe),
+Klick auf "■ Aus" setzt zurück. Nebenbefund: zu viele parallel offene
+CDP-Tabs (mehrere Testläufe ohne Aufräumen) ließen die
+Orchestrator-Verbindungsanzeige kurzzeitig auf "Degraded" springen —
+kein Node-Bug, durch Schließen der Alt-Tabs behoben, Status danach
+wieder "Connected"; künftig nach jedem CDP-Testlauf `/json/close`
+aufrufen statt Tabs anzusammeln. `cargo build -p omp-ograf`/`cargo
+clippy -p omp-ograf` sauber (Warnungen nur vorbestehende Doc-Comment-
+Stil-Lints in unveränderten Zeilen).
