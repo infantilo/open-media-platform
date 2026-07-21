@@ -10938,3 +10938,138 @@ wieder "Connected"; künftig nach jedem CDP-Testlauf `/json/close`
 aufrufen statt Tabs anzusammeln. `cargo build -p omp-ograf`/`cargo
 clippy -p omp-ograf` sauber (Warnungen nur vorbestehende Doc-Comment-
 Stil-Lints in unveränderten Zeilen).
+
+## 2026-07-21 (Nachtrag 68) — 46 echte OGraf-Templates aus PIPELINE
+CONTROLLER importiert, Lizenzfrage §5.5 Punkt 4 damit (für jetzt)
+beantwortet
+
+Nutzer bat: "alle ograf template aus dem pipeline controller projekt
+übernehmen". Dieselbe Lizenzfrage wie beim K5-Teil-0-Spike
+(2026-07-15, damals bewusst nur nach `/tmp/` kopiert, nicht ins Repo)
+war noch offen — vor dem Import per Grep der `author`-Felder aller 46
+Manifeste geprüft statt anzunehmen: die meisten sind `"PipelineController"`
+(eigenes Projekt) / `"OGraf Templates"` / `"Grok"` (KI-generiert,
+Provenienz unklar), **ein** Template (`weather-forecast`) trägt aber
+einen echten Drittfirmen-Autor (`"Loopic"`, `info@loopic.io`,
+`www.loopic.io`). Nutzer per Rückfrage entscheiden lassen statt
+anzunehmen — Ergebnis: **alle 46** (inkl. `weather-forecast`) nach
+`data/ograf-templates/` kopiert, aber **nicht committet** — `/data/`
+ist bereits vollständig `.gitignore`t (dieselbe Methode wie beim
+originalen Spike, nur diesmal als expliziter Lösungsweg statt
+Zwischenstand). Damit ist die Lizenzfrage für den aktuellen Bedarf
+gelöst, ohne eine echte rechtliche Entscheidung treffen zu müssen: die
+Dateien existieren lokal zum Nutzen/Testen, landen aber nie im
+Git-Repo.
+
+Zielverzeichnisnamen = das jeweilige Manifest-`id`-Feld (nicht der
+PIPELINE-CONTROLLER-Ordnername) — vermeidet Kollisionen durch dortige
+Varianten-Ordner wie `billboard`/`billboard (1)` (Material-Design- vs.
+Glassmorphism-Variante, unterschiedliche `id`s, gleicher Basisname).
+Alle 46 IDs vorab auf Eindeutigkeit gegen das bereits vorhandene
+`hello-lower-third`-Testtemplate geprüft (keine Kollision).
+
+**Verifiziert (nicht nur API-`{"ok":true}` angenommen):** `omp-ograf`
+scannt jetzt 47 Templates ohne einen einzigen übersprungenen/defekten
+Manifest-Eintrag (`GET .../params/templates` liefert alle 47 mit
+korrekten Labels). Fünf strukturell unterschiedliche Templates live
+gezeigt (Breaking-News-Banner, Analog-Uhr, Wetter-3-Tage, Ticker,
+Glitch-Lower-Third) — alle akzeptiert, `current` korrekt aktualisiert,
+Node blieb über alle fünf Wechsel hinweg stabil (keine Crashes/Restarts
+über die Basis-Restart-Zähler hinaus). **Zwei davon zusätzlich per
+echtem Pixel-Frame verifiziert** (nicht nur API-Erfolg): Mixer-Keyer auf
+OGrafs Fill-Sender umgeschaltet, DSK aktiviert, echtes MJPEG-Frame über
+den K4-Node-Stream-Proxy vom PGM-verbundenen Viewer gezogen (`GET
+.../nodes/<id>/stream/previewUrl`, Formfund: `name` im Pfad ist der
+**Parametername** `previewUrl`, nicht ein fester Stream-Name wie
+"preview") — "Breaking News"-Banner zeigt den echten Text
+pixelgenau lesbar über den PGM-Farbbalken, die Analog-Uhr zeigt ein
+echtes rundes Zifferblatt mit Zeigern oben links. Nebenbefund beim
+Verifizieren: nach dem `omp-ograf`-Neustart (für den frischen
+Template-Scan) und einem zusätzlichen Viewer-Neustart blieb dessen
+MJPEG-Vorschau zunächst schwarz (keine Zustands-Persistenz für die
+IS-05-Verbindung selbst, anders als beim Mixer-Keyer — ein frisch
+gestarteter `omp-viewer` startet grundsätzlich unverbunden) — kein
+Bug, durch einen expliziten `POST /api/v1/graph/edges`-Reconnect
+behoben (gleicher Mechanismus wie ein manueller Kanten-Klick im UI).
+
+Nicht Teil dieser Änderung: eine echte rechtliche Klärung der
+Template-Lizenzen (weiterhin offen, falls die Templates je öffentlich
+verteilt/committet werden sollen — die gitignored-`data/`-Lösung ist
+ein pragmatischer Aufschub, keine Antwort auf die eigentliche Frage).
+
+## 2026-07-21 (Nachtrag 69) — Textmarkierung beim Node-Drag&Drop deaktiviert
+
+Zweiter Punkt aus der ursprünglichen 6-Punkte-Liste: "im ui führt das
+text markieren beim drag und drop der nodes zu unschönen problemen
+(sollte man disablen)". `ui/graph/flow-canvas.ts` (`FlowCanvas`) ist ein
+Light-DOM-Custom-Element ohne eigenes Stylesheet — alle SVG-Stile
+werden inline über `element.style.*` gesetzt (kein `:host`/CSS-Datei-
+Pfad vorhanden, anders zunächst vermutet). Fix dementsprechend als
+einzeiliges `svg.style.userSelect = "none"` direkt neben dem bereits
+vorhandenen `svg.style.touchAction = "none"` in `#buildSkeleton()` —
+konsistent mit dem bestehenden Inline-Style-Muster, keine neue
+Stylesheet-Struktur eingeführt. Deckt genau den gemeldeten Fall ab
+(Drag über eine Kachel-Beschriftung hinweg) ohne die Katalog-
+Palette/Formularfelder außerhalb der SVG zu berühren (dort bleibt Text
+markierbar, z. B. um eine Instanz-ID zu kopieren).
+
+Live per CDP verifiziert: `getComputedStyle(svg).userSelect` liefert
+`"none"`; eine simulierte Drag-Geste (mousedown auf einem Kachel-Text,
+zehn Zwischenbewegungen über weitere Beschriftungen, mouseup) liefert
+danach `window.getSelection().toString() === ""` — vorher hätte
+dieselbe Geste sichtbar Text markiert. `deno check ui/graph/flow-
+canvas.ts` sauber, `make ui` (Bundle-Rebuild) + `deno test ui/` (56/56)
+grün.
+
+## 2026-07-21 (Nachtrag 70) — Node/Microservice-Import/Export-UI (§17
+Teil 4/5 UI-Anbindung)
+
+Dritter Punkt der ursprünglichen Liste: "es fehlt immer noch im ui die
+option nodes/microservices zu importieren/exportieren". Vor der
+Umsetzung per Rückfrage geklärt, welche der beiden im Projekt
+existierenden Bedeutungen gemeint ist: (a) Workflow/Graph als Datei
+exportieren/importieren, oder (b) `ARCHITECTURE.md` §6.4: neue
+Node-Typen/Microservices per OCI-Image in den Plattform-Katalog
+aufnehmen. Nutzer wählte (b) — **wichtiger Fund dabei:** das Backend
+dafür existiert bereits vollständig und getestet (§17 Teil 4/5,
+2026-07-20: `POST`/`DELETE /api/v1/catalog/{type}`, echter C9-
+Admission-Check per Wegwerf-Container, Versionierung) — es fehlte
+tatsächlich nur die UI-Anbindung, kein Backend-Neubau nötig.
+
+**Umsetzung:** neue Sektion "Node-Katalog: Import/Export" in
+`ui/shell/admin-view.ts` (Administration-Tab, bereits admin-only
+gegatet, deckt sich mit §6.4s "Katalog-Verwaltung ist eine
+administrative Rolle"): Formular (Typ/Label/Image/Version/
+Beschreibung/ErwarteteRessourcen/Command-Override/Env-als-JSON) +
+optionaler Datei-Upload zum Vorbefüllen aus einer zuvor exportierten
+Datei; Tabelle aller Katalog-Einträge (statisch UND importiert) mit
+Herkunfts-Spalte. **Export = kein neuer Backend-Weg** — derselbe
+`CatalogEntry`, den `GET /api/v1/catalog` ohnehin liefert, als
+`Blob`+`<a download>` heruntergeladen (Dateiname inkl. Version).
+"Entfernen" nur für importierte Einträge sichtbar — Unterscheidung
+über `entry.runner === "podman"`, keine geraten: serverseitig ist das
+hart erzwungen (`ImportCatalogEntry` lehnt jeden anderen Runner-Wert
+ab), alle statischen `deploy/catalog.json`-Einträge sind `"process"`.
+Ein 422-Import-Fehlschlag (Contract-Check nicht bestanden) rendert die
+volle Ergebnistabelle (Name/Status/Detail je Check) statt nur eines
+Fließtexts — das ist der eigentliche Zweck des Admission-Checks.
+
+**Live verifiziert (echter Podman-Container-Roundtrip, nicht nur
+API-Mock):** echtes `localhost/omp-mock-test:latest`-Image (aus der
+§17-Teil-4-Sitzung noch vorhanden) über das Formular importiert —
+echter Contract-Check lief, Eintrag erschien mit "importiert ·
+localhost/omp-mock-test:latest"-Kennzeichnung; "Export" lud eine echte
+JSON-Datei mit korrektem `CatalogEntry`-Inhalt herunter (per
+`Page.setDownloadBehavior`); "Entfernen" + Bestätigungsdialog entfernte
+den Eintrag wieder (Katalogzahl 11→10). **Zweiter, echter Negativ-Pfad**
+mit einem frisch gepullten `busybox:latest` (kein Node, kein HTTP-
+Server): schlug wie erwartet fehl, allerdings über den anderen
+Fehlerzweig als angenommen — nicht "Contract-Check lief, FAIL-Ergebnis"
+(422 mit `results`), sondern "Kandidat wurde nie erreichbar" (harter
+Fehler vor jedem Einzel-Check, da busybox ohne Kommando-Override
+keinen Port öffnet) — beide Zweige im UI-Code bereits vorgesehen
+(422-Ergebnistabelle vs. Fließtext-Fehler), beide jetzt live bestätigt.
+
+`deno check ui/shell/admin-view.ts` sauber, `make ui` (Bundle-Rebuild)
++ `deno test ui/` (56/56) grün. Kein Go-/Rust-Code geändert (reine
+UI-Anbindung eines bereits vorhandenen, bereits getesteten Backends).

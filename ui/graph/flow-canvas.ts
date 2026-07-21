@@ -521,6 +521,7 @@ export class FlowCanvas extends HTMLElement {
 
     const svg = document.createElementNS(SVG_NS, "svg");
     svg.style.touchAction = "none";
+    svg.style.userSelect = "none";
     svg.style.background = "#1e1e1e";
     // Links Platz für die Katalog-Palette lassen (UMSETZUNG.md C8) —
     // sonst landen frisch platzierte Kacheln (defaultPosition startet
