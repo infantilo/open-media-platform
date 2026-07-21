@@ -363,6 +363,20 @@ fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
 /// Auflösungs-Hot-Swap, `swap_input_resolution`). Identisch zu
 /// `omp-switcher::pipeline::remove_mxl_video_input`.
 fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
+    // Live gefundener Bug (Nutzerreport "Viewer schwarz, hohe Latenz bei
+    // PGM-Umschaltung"): `stop()` MUSS vor `remove_elements` laufen, nicht
+    // erst über das `drop(mxl_input)` danach — sonst rennt der
+    // `read_loop`-Thread noch `push_buffer()` gegen ein `appsrc`, das der
+    // Kontroll-Thread hier gerade auf `Null` setzt/aus der Pipeline
+    // entfernt (per `GST_DEBUG=3` bestätigt: `<appsrcN>: streaming
+    // stopped, reason not-linked`, gefolgt von einem GStreamer-eigenen
+    // "Unexpected item dequeued ... refcounting problem?" in einer
+    // völlig anderen Queue). Der kurze Schlaf gibt dem Thread eine
+    // realistische Chance, seine laufende Schleifen-Iteration noch vor
+    // `remove_elements` zu beenden (s. `MxlVideoInput::stop`-Doku für
+    // Details, warum das kein reines Zeit-Raten ist).
+    mxl_input.stop();
+    std::thread::sleep(Duration::from_millis(20));
     remove_elements(pipeline, &mxl_input.elements);
     drop(mxl_input);
 }
@@ -583,6 +597,73 @@ fn swap_input_resolution(
     height: u32,
     old_branch: InputBranch,
 ) -> Result<InputBranch, Box<(String, Option<InputBranch>)>> {
+    // Nutzerreport "Viewer schwarz, hohe Latenz bei PGM-Umschaltung" — per
+    // Debug-Tap direkt auf `comp`s eigenem Ausgang reproduziert (ganz ohne
+    // MXL/Viewer dazwischen) und per `GST_DEBUG=3` teilweise root-gecaust.
+    // Zwei davon **bestätigt behoben**, ein drittes Restproblem bleibt
+    // **offen** — Details und Repro unten und in `docs/decisions.md`
+    // Nachtrag 65.
+    //
+    // **Fund 1, behoben:** `build_input_branch` (unten) synchronisiert
+    // seine Elemente INTERN bereits auf `PLAYING` — das startet `appsrc`s
+    // eigene GStreamer-Streaming-Task sofort. Stand der Aufruf (wie
+    // vorher) VOR dem Block+Entlink+Drain-Ablauf für den alten Zweig,
+    // lief diese Task waehrend der gesamten Wartezeit (Block-Timeout +
+    // `OLD_WRITER_DRAIN`, mehrere hundert ms) gegen ein `capsfilter` ohne
+    // jeden Downstream-Peer (erst `link_branch_to_pad` ganz unten verlinkt
+    // es auf `isel_sink_pad`). `appsrc`s eigener Push kaskadiert dabei als
+    // `GST_FLOW_NOT_LINKED` bis zum `basesrc`-Loop zurück, der das als
+    // fatalen Fehler behandelt und seine Streaming-Task PERMANENT beendet
+    // (bestätigt: `<appsrcN>: streaming stopped, reason not-linked`,
+    // danach nie wieder ein Puffer, auch nicht nach einem spaeteren
+    // erfolgreichen Relink). Fix: `build_input_branch` erst unmittelbar
+    // vor `link_branch_to_pad` aufrufen, nicht am Funktionsanfang — das
+    // unvermeidliche Fenster ohne Downstream-Peer schrumpft dadurch von
+    // "mehrere hundert ms" auf eine Handvoll Rust-Anweisungen.
+    //
+    // **Fund 2, behoben:** dieselbe Fehlerklasse, umgekehrt, beim ALTEN
+    // Zweig — `remove_mxl_video_input` (in `teardown_branch`) setzte die
+    // GStreamer-Elemente bisher IMMER erst auf `Null`/entfernte sie und
+    // stoppte den `read_loop`-Thread (via `running`-Flag) erst danach,
+    // beim finalen `drop()`. Der Thread rief also `push_buffer()` weiter
+    // gegen ein Element auf, das der Kontroll-Thread parallel demontierte
+    // — dasselbe `not-linked`/Refcounting-Muster wie Fund 1. Fix:
+    // `MxlVideoInput::stop()` (neu, `omp-mediaio`) muss vor
+    // `remove_elements` laufen.
+    //
+    // **Restproblem, NICHT behoben:** selbst mit beiden Fixen und ohne
+    // jede Warnung/Fehlermeldung in `GST_DEBUG=3` bleibt `comp`s Ausgang
+    // bei einem Teil der ALLERERSTEN Highres-Promotions eines Zweigs
+    // dauerhaft schwarz (kein Einzelbild-Ruckler, ALLE Frames ab dem
+    // Zeitpunkt der Umschaltung). Bestätigt per Vier-Wege-Vergleich: (a)
+    // Debug-Tap direkt auf `comp` UND ein echter `omp-viewer` zeigen
+    // beide dasselbe Schwarzbild (kein Debug-Tap-Artefakt); (b) `mxl-info`
+    // zeigt auf allen beteiligten Flows (Quelle Highres, Mixer-Ausgang)
+    // durchgehend gesunden, synchronen Read/Write — die Daten sind also
+    // nachweislich echt und fließen; (c) ein NACHFOLGENDER, durch einen
+    // neuen Sender ausgelöster `SetInputs`-Rebuild (baut `comp` mit dem
+    // Ziel bereits als `program` — also OHNE jeden Hot-Swap — komplett
+    // neu auf) zeigt sofort echtes Bild, bestätigt also, dass das Problem
+    // spezifisch am Hot-Swap-in-eine-laufende-Pipeline-Mechanismus hängt,
+    // nicht an Quelle/Daten/Alpha/Zorder/isel-Auswahl (per temporärem
+    // Debug-Log in `Cut`/`Take` einzeln alle als korrekt bestätigt, s.
+    // `docs/decisions.md` Nachtrag 65 für die genauen Werte);
+    // (d) probiert und verworfen, weil wirkungslos oder die Fehlerquote
+    // nur senkend statt beseitigend: `compositor.min-upstream-latency`
+    // bei 200ms/1s/2s, ein Buffer-Probe-Wait auf `isel_sink_pad` vor dem
+    // Aktivschalten, ein FLUSH_START/FLUSH_STOP direkt auf `isel_sink_pad`
+    // nach dem Relink. Root Cause nicht gefunden (Kandidaten: `compositor`
+    // /`GstAggregator`-interne Segment-/Timestamp-Buchführung für einen
+    // Sink-Pad, der zur Aktivierungszeit erstmals "wirklich" Daten liefert
+    // — passend zu keiner Fehlermeldung, da ein `GstAggregator` verspätete
+    // Puffer im Live-Betrieb standardmäßig lautlos verwirft). Ohne
+    // `gdb`/Kenntnis der `compositor`-internen Segment-Verwaltung in
+    // dieser Sandbox nicht weiter eingrenzbar — künftige Sitzung.
+    // Reproduktion (exakter Tap-Code in `docs/decisions.md` Nachtrag 65):
+    // ein `tee` zwischen `comp` und `comp_out_caps` mit `videoconvert !
+    // jpegenc ! filesink`-Zweig, auf zwei frischen `omp-source`-Instanzen,
+    // `select`+`cut` auf eine davon; tritt nicht-deterministisch bei ca.
+    // jedem zweiten erstmaligen Highres-Swap eines Zweigs auf.
     let (unblocked_tx, unblocked_rx) = std::sync::mpsc::sync_channel::<()>(1);
     let task = Mutex::new(Some(unblocked_tx));
 
@@ -615,6 +696,8 @@ fn swap_input_resolution(
     teardown_branch(pipeline, old_branch);
     std::thread::sleep(OLD_WRITER_DRAIN);
 
+    // `build_input_branch` (startet die Streaming-Task, Fund 1 oben)
+    // bewusst erst HIER, unmittelbar vor `link_branch_to_pad`.
     let branch = build_input_branch(pipeline, &context, &target_flow_id, &input.sender_id, name_suffix, width, height)
         .map_err(|e| Box::new((e, None)))?;
     match link_branch_to_pad(&branch, isel_sink_pad) {
@@ -764,6 +847,21 @@ fn build(
     let comp = gst::ElementFactory::make("compositor")
         .name("comp")
         .property_from_str("background", "black")
+        // `min-upstream-latency` (GstAggregator-Property, laut eigener
+        // GStreamer-Doku fuer genau diesen Fall gedacht: "sources with a
+        // higher latency are expected to be plugged in dynamically after
+        // the aggregator has started playing", exakt was
+        // `swap_input_resolution` bei jedem Highres/Lowres-Hot-Swap tut).
+        // Defensive Zusatz-Toleranz — behebt NICHT alleine das in
+        // `swap_input_resolution` dokumentierte, noch offene Restproblem
+        // (dort ausführlich beschrieben, inkl. Repro-Anleitung); bei
+        // Tests mit dieser Property allein (200ms bis 2s) blieb die
+        // Fehlerquote nicht bei null. Trotzdem beibehalten als reines
+        // Sicherheitsnetz gegen die zwei tatsaechlich behobenen,
+        // verwandten Race-Conditions, ohne im Bild sichtbar zu verzögern
+        // (reine Aggregator-Toleranz, kein zusätzlicher Puffer
+        // in der eigentlichen Pipeline).
+        .property("min-upstream-latency", 200_000_000u64)
         .build()
         .map_err(|e| format!("compositor: {e}"))?;
     pipeline

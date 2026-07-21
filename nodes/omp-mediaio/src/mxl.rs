@@ -1112,6 +1112,31 @@ impl MxlVideoInput {
     pub fn flowed_handle(&self) -> Arc<AtomicBool> {
         self.flowed.clone()
     }
+
+    /// Signalisiert dem `read_loop`-Thread das Ende, OHNE die eigenen
+    /// GStreamer-Elemente anzufassen — für Aufrufer, die (anders als ein
+    /// simples `drop()`) diese Elemente selbst chirurgisch aus der
+    /// Pipeline entfernen (`omp-video-mixer-me`/`omp-switcher`s
+    /// `remove_mxl_video_input`). Live gefundener Bug (Nutzerreport
+    /// "Viewer schwarz, hohe Latenz bei PGM-Umschaltung"): bisher rief
+    /// so ein Aufrufer immer erst `remove_elements` (setzt `appsrc` u. a.
+    /// auf `Null`, entfernt sie aus der Pipeline) und ERST DANACH
+    /// `drop(mxl_input)` (setzt dieses Flag) — der `read_loop`-Thread lief
+    /// also weiter unbeirrt `push_buffer()` gegen ein bereits auf `Null`
+    /// gesetztes/aus der Pipeline entferntes `appsrc`, waehrend der
+    /// Kontroll-Thread gleichzeitig an genau diesem Element herumbaute.
+    /// Per `GST_DEBUG=3` bestätigt: `<appsrcN>: streaming stopped, reason
+    /// not-linked`, gefolgt von einem GStreamer-eigenen `WARNING
+    /// **: Unexpected item ... dequeued from queue (refcounting
+    /// problem?)` und einem harten `ERROR queue_dataflow: exit because we
+    /// have no item in the queue` in einer voellig ANDEREN, unbeteiligten
+    /// Queue — ein klassisches Speicher-/Refcounting-Rennen zwischen zwei
+    /// Threads auf demselben GStreamer-Element. Aufrufer müssen dies vor
+    /// jedem `remove_elements`-Aufruf auf demselben `MxlVideoInput`
+    /// aufrufen, nicht erst beim finalen `drop()`.
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::Relaxed);
+    }
 }
 
 impl crate::MediaFlow for MxlVideoInput {
@@ -1440,6 +1465,14 @@ impl MxlAudioInput {
     /// S. `MxlVideoOutput::flowed_handle`.
     pub fn flowed_handle(&self) -> Arc<AtomicBool> {
         self.flowed.clone()
+    }
+
+    /// S. `MxlVideoInput::stop` — identisches Muster/identische
+    /// Begründung, Aufrufer, die diesen Eingang chirurgisch aus einer
+    /// laufenden Pipeline entfernen, müssen dies vor `remove_elements`
+    /// aufrufen statt sich auf das finale `drop()` zu verlassen.
+    pub fn stop(&self) {
+        self.running.store(false, Ordering::Relaxed);
     }
 }
 

@@ -10671,3 +10671,116 @@ test -p omp-mediaio --features mxl` (8/8), `cargo build --workspace
 in `read_audio_loop` durch das neue `flow_id`-Argument mit
 `#[allow(...)]` quittiert, gleiches Muster wie andernorts in der
 Datei).
+
+## 2026-07-21 (Nachtrag 65) — `swap_input_resolution`: zwei reale
+Races behoben, ein drittes Restproblem bleibt offen
+
+Direkter Anschluss an Nachtrag 63/64 — Nutzer meldete erneut denselben
+Fehler ("selber Fehler. Problem nicht gelöst! Viewer schwarz, hohe
+Latenz bei Mixer-PGM-Umschaltung") und forderte explizit eine Lösung
+"ohne raten". Diese Runde: systematische, reproduzierbare
+Diagnose statt Theorien — ein Debug-Tap direkt auf `comp`s eigenem
+Ausgang (Tee zwischen `comp` und `comp_out_caps`, `videoconvert !
+jpegenc ! filesink` mit PID-eindeutigem Dateinamen, um den in
+Nachtrag 63 gefundenen Debug-Datei-Race nicht zu wiederholen) plus ein
+Wiederholungs-Skript (frisches `make start`, zwei `omp-source`, ein
+Mixer, `select`+`cut`, Frame-Check) für kontrollierte
+Mehrfach-Reproduktion.
+
+**Fund 1, behoben:** `build_input_branch` (Aufbau eines neuen fg-/
+bg-Zweigs bei `swap_input_resolution`) synchronisiert seine Elemente
+intern bereits auf `PLAYING` — das startet `appsrc`s eigene
+GStreamer-Streaming-Task sofort. Der Aufruf stand bisher VOR dem
+Block+Entlink-Ablauf für den alten Zweig, lief also während der
+gesamten Wartezeit (Block-Timeout + `OLD_WRITER_DRAIN`, mehrere
+hundert ms) gegen ein `capsfilter` ganz ohne Downstream-Peer (erst
+`link_branch_to_pad` verlinkt es auf `isel_sink_pad`). Per
+`GST_DEBUG=3` bestätigt: `<appsrcN>: streaming stopped, reason
+not-linked`, gefolgt von einem GStreamer-eigenen `WARNING **:
+Unexpected item dequeued ... (refcounting problem?)` in einer völlig
+anderen Queue — ein `basesrc` mit einem `not-linked`-Fehler beendet
+seine Streaming-Task PERMANENT, auch nach einem später erfolgreichen
+Relink kommt von dort nie wieder ein Puffer. Fix: `build_input_branch`
+erst unmittelbar vor `link_branch_to_pad` aufrufen, nicht am
+Funktionsanfang.
+
+**Fund 2, behoben (Zweitfund, dieselbe Fehlerklasse verkehrt herum):**
+`remove_mxl_video_input` (Abbau eines Zweigs, in `teardown_branch`)
+setzte die GStreamer-Elemente (`appsrc` u. a.) bisher immer erst auf
+`Null`/entfernte sie aus der Pipeline und stoppte den
+`read_loop`-Thread (über sein `running`-Flag) erst danach, beim
+finalen `drop()`. Der Thread rief `push_buffer()` also weiter gegen
+ein Element auf, das der Kontroll-Thread parallel demontierte —
+dasselbe `not-linked`/Refcounting-Muster wie Fund 1, nur beim alten
+statt beim neuen Zweig. Fix: neue `MxlVideoInput::stop()`/
+`MxlAudioInput::stop()`-Methoden (`omp-mediaio`), die NUR das
+`running`-Flag setzen, ohne die Elemente anzufassen — müssen vor
+`remove_elements` aufgerufen werden, nicht erst über das finale
+`drop()`. Betrifft `omp-video-mixer-me` UND `omp-switcher`
+(identische Funktion, identischer Fix).
+
+**Zwei Sackgassen auf dem Weg dorthin, beide verworfen:** (1) den
+neuen Zweig vor dem eigentlichen Hot-Swap an einen `fakesink`
+"vorwärmen" (auf `MediaFlow::has_flowed()` warten) und danach wieder
+entlinken, um mit bereits fließenden Daten in den Hot-Swap zu gehen —
+erzeugte dabei selbst ein kurzes Entlinken-Fenster mit demselben
+Effekt wie der eigentliche Bug (durch reines Zufallstiming vor Fund 1
+zeitweise als "funktioniert" fehlinterpretiert). (2) ein Buffer-Probe
+direkt auf `isel_sink_pad` vor dem Verlinken abzuwarten — senkte die
+Fehlerquote nur graduell, beseitigte sie nicht.
+
+**Restproblem, NICHT behoben:** selbst mit beiden bestätigten Fixes
+und ganz ohne jede Warnung in `GST_DEBUG=3` bleibt `comp`s Ausgang bei
+einem Teil (grob geschätzt jeder zweite) der allerersten
+Highres-Promotions eines Zweigs dauerhaft schwarz — nicht ein
+Einzelbild-Ruckler, sondern jeder folgende Frame bis zum nächsten
+vollständigen Rebuild. Vier-Wege-Bestätigung, dass es echt und
+spezifisch am Hot-Swap-Mechanismus hängt: (a) Debug-Tap direkt auf
+`comp` UND ein echter `omp-viewer` zeigen dasselbe Schwarzbild (kein
+Debug-Tap-Artefakt); (b) `mxl-info` zeigt auf allen beteiligten Flows
+(Quelle Highres, Mixer-Ausgang) durchgehend gesunden, synchronen
+Read/Write — die Daten sind nachweislich echt und fließen; (c) ein
+durch einen neu hinzugefügten Sender ausgelöster `SetInputs`-Rebuild
+(baut die Pipeline mit dem Ziel bereits als `program` komplett neu
+auf, also OHNE jeden Hot-Swap) zeigt sofort echtes Bild — bestätigt,
+dass Quelle/Daten/Alpha/Zorder/isel-Auswahl nicht die Ursache sind
+(einzeln per temporärem Debug-Log in `Cut`/`Take` verifiziert: `fg
+open_flow_id` zeigte korrekt die Highres-Flow-ID, `alpha=1.0`,
+`zorder=2`, `isel`s `active-pad` zeigte nachweislich auf exakt den
+erwarteten, frisch geswappten Zweig); (d) `compositor.min-upstream-
+latency` bei 200ms/1s/2s probiert — senkt die Fehlerquote spürbar
+(2s zeigte 3/3 erfolgreiche Wiederholungen in einer Testreihe), aber
+nicht zuverlässig auf null (bei jedem probierten Wert traten in einer
+längeren Testreihe weiterhin vereinzelte Fehlschläge auf); ein
+explizites FLUSH_START/FLUSH_STOP direkt auf `isel_sink_pad` nach dem
+Relink (Versuch, mögliche verwaiste Sticky-Event-Buchführung von
+`input-selector` für diesen Sink-Pad zurückzusetzen) zeigte keine
+messbare Verbesserung.
+
+Root Cause nicht gefunden. Plausibelster Kandidat: `compositor`s
+eigene `GstAggregator`-interne Segment-/Timestamp-Buchführung für
+einen Sink-Pad, der zum Aktivierungszeitpunkt gerade zum ersten Mal
+wirklich Daten liefert — passend dazu, dass keine Fehlermeldung
+auftritt, da ein `GstAggregator` im Live-Betrieb zu spät angekommene
+Puffer standardmäßig lautlos verwirft, ohne das zu loggen. Ohne
+`gdb`/tieferes Wissen über `compositor`s interne Segment-Verwaltung in
+dieser Sandbox nicht weiter eingrenzbar. `min-upstream-latency=200ms`
+als defensives Sicherheitsnetz beibehalten (senkt nachweislich,
+beseitigt aber nicht).
+
+**Nutzerentscheidung nötig für nächste Sitzung:** entweder (a) mit
+besserem GStreamer-Tooling (`gdb`, ggf. `GST_DEBUG=6`+Kernanalyse)
+weitersuchen, oder (b) architektonisch ausweichen — z. B. alle
+Eingänge initial in Highres statt Lowres aufbauen (kein Hot-Swap mehr
+beim allerersten Umschalten auf einen Eingang nötig, Demote auf
+Lowres erst NACH einem erfolgreichen Wechsel weg von diesem Eingang,
+wenn er nicht mehr sichtbar ist — verändert den Speicher-/
+Bandbreiten-Kompromiss aus Kapitel 15 Teil 2/3, senkt aber die
+Häufigkeit des riskanten Pfads drastisch, da die meisten
+Bedienabläufe nicht sofort wieder zu einem gerade erst
+heruntergestuften Eingang zurückschalten).
+
+`cargo test -p omp-mediaio --features mxl` (8/8), `cargo build
+--workspace --bins` grün, `cargo clippy` sauber in den geänderten
+Dateien (`nodes/omp-video-mixer-me/src/pipeline.rs`,
+`nodes/omp-switcher/src/pipeline.rs`, `nodes/omp-mediaio/src/mxl.rs`).

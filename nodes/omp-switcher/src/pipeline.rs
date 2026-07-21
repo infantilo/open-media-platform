@@ -247,6 +247,13 @@ fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
 /// chirurgischen Einzel-Entfernung (Registry-Geist-Fehlschlag hier oder
 /// Auflösungs-Hot-Swap, `swap_input_resolution`).
 fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
+    // S. omp-video-mixer-me::pipeline::remove_mxl_video_input (identische
+    // Funktion) — `stop()` muss vor `remove_elements` laufen, sonst rennt
+    // der `read_loop`-Thread noch `push_buffer()` gegen ein Element, das
+    // hier gerade auf `Null` gesetzt/entfernt wird (live per `GST_DEBUG=3`
+    // im Mixer bestätigt, gleicher Codepfad/gleiche Funktion hier).
+    mxl_input.stop();
+    std::thread::sleep(std::time::Duration::from_millis(20));
     remove_elements(pipeline, &mxl_input.elements);
     drop(mxl_input);
 }
