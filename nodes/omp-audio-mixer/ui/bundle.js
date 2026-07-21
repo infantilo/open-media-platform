@@ -52,31 +52,37 @@ class OmpAudioMixerPanel extends HTMLElement {
       .master .label { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; }
       .strip {
         display: flex; flex-direction: column; align-items: center; gap: 6px;
-        width: 76px; flex-shrink: 0;
+        width: 152px; flex-shrink: 0;
         border-right: 1px solid var(--omp-border, #2e3338);
         padding-right: var(--omp-space-2, 8px);
       }
       .strip:last-of-type { border-right: none; }
       .strip .label {
-        font-size: 10px; font-weight: 600; text-align: center; max-width: 76px;
+        font-size: 10px; font-weight: 600; text-align: center; max-width: 152px;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
       .strip select { width: 100%; font-size: 10px; background: var(--omp-bg, #101214); color: var(--omp-text, #e8eaed); border: 1px solid var(--omp-border, #2e3338); }
-      .eq-row { display: flex; gap: 2px; }
+      /* Nutzerfund (Verfeinerung): pro Band Gain/Freq/Q nebeneinander
+         (nicht untereinander), darunter jeweils das nächste Band. Unter
+         dem letzten Band der Kompressor: die drei Regler nebeneinander,
+         der Ein/Aus-Knopf darunter (s. compDetail-Reihenfolge unten). */
+      .eq-section { display: flex; flex-direction: column; gap: 6px; }
+      .eq-band-row { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+      .eq-band-label { font-size: 9px; font-weight: 600; color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; }
+      .eq-band-knobs { display: flex; flex-direction: row; gap: 4px; justify-content: center; }
       .fader-row { display: flex; gap: 6px; align-items: flex-end; }
       .strip omp-button { width: 100%; height: 24px; font-size: 10px; }
       .remove-btn { font-size: 9px; color: var(--omp-text-dim, #9aa0a6); background: none; border: none; cursor: pointer; text-decoration: underline; }
-      details.afv, details.eq-detail, details.dynamics { width: 100%; font-size: 10px; }
-      details.afv summary, details.eq-detail summary, details.dynamics summary,
+      details.afv, details.dynamics { width: 100%; font-size: 10px; }
+      details.afv summary, details.dynamics summary,
       details.master-limiter summary {
         cursor: pointer; color: var(--omp-text-dim, #9aa0a6);
       }
       details.afv .row { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
       details.afv input, details.afv select { width: 100%; font-size: 10px; }
-      details.eq-detail .band-row, details.dynamics .knob-row, details.master-limiter .knob-row {
+      details.dynamics .knob-row, details.master-limiter .knob-row {
         display: flex; gap: 4px; margin-top: 4px; justify-content: center;
       }
-      details.eq-detail .band-label { font-size: 9px; color: var(--omp-text-dim, #9aa0a6); text-align: center; margin-top: 2px; }
       details.dynamics omp-button, details.master-limiter omp-button { width: 100%; height: 20px; font-size: 9px; margin-top: 2px; }
       details.master-limiter { width: 100%; font-size: 10px; margin-top: 6px; }
       .add-btn { align-self: flex-start; margin-bottom: var(--omp-space-2, 8px); }
@@ -240,6 +246,36 @@ class OmpAudioMixerPanel extends HTMLElement {
       el.addEventListener("change", () => dragging.delete(el));
     };
 
+    // Nutzerfund: Felder, die über einen SEPARATEN "Setzen"-Knopf
+    // angewendet werden (AFV-Ziel+Modus, AFV-Pegel), statt bei jeder
+    // eigenen Änderung sofort selbst zu übernehmen (anders als
+    // sourceSelect/Fader/Knob oben), wurden vom 2s-Poll zurückgesetzt,
+    // sobald der Fokus auch nur kurz woanders hinwechselte (z. B. beim
+    // Wechsel vom Ziel- ins Modus-Dropdown, oder beim Klick auf den
+    // Setzen-Knopf selbst) — die Auswahl "sprang" sichtbar auf den alten
+    // Server-Wert zurück, bevor überhaupt abgeschickt wurde. `trackDrag`s
+    // "change löscht sofort"-Verhalten passt hier nicht (ein Dropdown
+    // feuert `change` schon bei der Auswahl, nicht erst beim Anwenden).
+    // Stattdessen: eine ganze Feldgruppe gilt als "dirty" ab der ersten
+    // Änderung irgendeines ihrer Felder, bis der zugehörige Setzen-Knopf
+    // tatsächlich geklickt wurde — erst dann darf der Poll sie wieder
+    // überschreiben.
+    const makeDirtyGroup = (els) => {
+      let dirty = false;
+      for (const el of els) {
+        el.addEventListener("input", () => (dirty = true));
+        el.addEventListener("change", () => (dirty = true));
+      }
+      return {
+        get isDirty() {
+          return dirty;
+        },
+        clear() {
+          dirty = false;
+        },
+      };
+    };
+
     const createChannelElement = (id, label) => {
       const el = document.createElement("div");
       el.className = "strip";
@@ -255,42 +291,28 @@ class OmpAudioMixerPanel extends HTMLElement {
         call(`channel.${id}.setSource`, { senderId: sourceSelect.value }).then(poll),
       );
 
-      const eqRow = document.createElement("div");
-      eqRow.className = "eq-row";
-      const makeKnob = (bandLabel) => {
-        const knob = document.createElement("omp-knob");
-        knob.setAttribute("min", "-24");
-        knob.setAttribute("max", "12");
-        knob.setAttribute("default-value", "0");
-        knob.setAttribute("center-detent", "");
-        knob.textContent = bandLabel;
-        trackDrag(knob);
-        eqRow.append(knob);
-        return knob;
-      };
-      const eqLowKnob = makeKnob("Lo");
-      const eqMidKnob = makeKnob("Mid");
-      const eqHighKnob = makeKnob("Hi");
+      // Nutzerfund: Freq/Q/Gain gehören pro Band zusammen (nicht Gain
+      // in einer immer sichtbaren Reihe, Freq/Q separat in einer
+      // aufklappbaren Detail-Sektion) — jetzt eine Zeile pro Band
+      // (Lo/Mid/High), je Band die drei Regler (Freq, Q, Gain)
+      // untereinander gestapelt.
+      const eqSection = document.createElement("div");
+      eqSection.className = "eq-section";
+
+      let eqLowKnob, eqMidKnob, eqHighKnob;
       const applyEq = () =>
         call(`channel.${id}.setEq`, {
           low: eqLowKnob.value,
           mid: eqMidKnob.value,
           high: eqHighKnob.value,
         });
-      eqLowKnob.addEventListener("change", applyEq);
-      eqMidKnob.addEventListener("change", applyEq);
-      eqHighKnob.addEventListener("change", applyEq);
 
-      // §4.6: Frequenz+Bandbreite je Band, aufklappbar (nicht dauerhaft
-      // sichtbar wie die Gain-Knöpfe oben — drei zusätzliche Regler pro
-      // Band wären für den Normalfall "kurz am Gain drehen" zu viel).
-      const eqDetail = document.createElement("details");
-      eqDetail.className = "eq-detail";
-      const eqSummary = document.createElement("summary");
-      eqSummary.textContent = "EQ Freq/Q";
-      const makeBandFreqWidth = (bandLabel) => {
+      const makeEqBandRow = (bandLabel, bandKey) => {
         const row = document.createElement("div");
-        row.className = "band-row";
+        row.className = "eq-band-row";
+        const label = document.createElement("div");
+        label.className = "eq-band-label";
+        label.textContent = bandLabel;
         const freqKnob = document.createElement("omp-knob");
         freqKnob.setAttribute("min", "20");
         freqKnob.setAttribute("max", "20000");
@@ -299,27 +321,35 @@ class OmpAudioMixerPanel extends HTMLElement {
         widthKnob.setAttribute("min", "10");
         widthKnob.setAttribute("max", "20000");
         widthKnob.textContent = "Q";
+        const gainKnob = document.createElement("omp-knob");
+        gainKnob.setAttribute("min", "-24");
+        gainKnob.setAttribute("max", "12");
+        gainKnob.setAttribute("default-value", "0");
+        gainKnob.setAttribute("center-detent", "");
+        gainKnob.textContent = "Gain";
         trackDrag(freqKnob);
         trackDrag(widthKnob);
-        row.append(freqKnob, widthKnob);
-        const label = document.createElement("div");
-        label.className = "band-label";
-        label.textContent = bandLabel;
-        const apply = () =>
-          call(`channel.${id}.setEqBand`, {
-            band: bandLabel === "Lo" ? "low" : bandLabel === "Mid" ? "mid" : "high",
-            freq: freqKnob.value,
-            width: widthKnob.value,
-          });
-        freqKnob.addEventListener("change", apply);
-        widthKnob.addEventListener("change", apply);
-        eqDetail.append(row, label);
-        return { freqKnob, widthKnob };
+        trackDrag(gainKnob);
+        const applyBand = () => call(`channel.${id}.setEqBand`, { band: bandKey, freq: freqKnob.value, width: widthKnob.value });
+        freqKnob.addEventListener("change", applyBand);
+        widthKnob.addEventListener("change", applyBand);
+        gainKnob.addEventListener("change", applyEq);
+        const knobsRow = document.createElement("div");
+        knobsRow.className = "eq-band-knobs";
+        knobsRow.append(gainKnob, freqKnob, widthKnob);
+        row.append(label, knobsRow);
+        return { row, freqKnob, widthKnob, gainKnob };
       };
-      const eqLowBand = makeBandFreqWidth("Lo");
-      const eqMidBand = makeBandFreqWidth("Mid");
-      const eqHighBand = makeBandFreqWidth("High");
-      eqDetail.prepend(eqSummary);
+      const lowBandRow = makeEqBandRow("Lo", "low");
+      const midBandRow = makeEqBandRow("Mid", "mid");
+      const highBandRow = makeEqBandRow("High", "high");
+      eqLowKnob = lowBandRow.gainKnob;
+      eqMidKnob = midBandRow.gainKnob;
+      eqHighKnob = highBandRow.gainKnob;
+      eqSection.append(lowBandRow.row, midBandRow.row, highBandRow.row);
+      const eqLowBand = { freqKnob: lowBandRow.freqKnob, widthKnob: lowBandRow.widthKnob };
+      const eqMidBand = { freqKnob: midBandRow.freqKnob, widthKnob: midBandRow.widthKnob };
+      const eqHighBand = { freqKnob: highBandRow.freqKnob, widthKnob: highBandRow.widthKnob };
 
       // §4.6 Teil 2: Kompressor pro Kanal, ebenfalls aufklappbar.
       const compDetail = document.createElement("details");
@@ -365,7 +395,9 @@ class OmpAudioMixerPanel extends HTMLElement {
       compThresholdKnob.addEventListener("change", applyComp);
       compRatioKnob.addEventListener("change", applyComp);
       compMakeupKnob.addEventListener("change", applyComp);
-      compDetail.append(compSummary, compEnableBtn, compRow);
+      // Nutzerfund: die drei Regler zuerst, der Ein/Aus-Knopf darunter
+      // (vorher umgekehrt).
+      compDetail.append(compSummary, compRow, compEnableBtn);
 
       const faderRow = document.createElement("div");
       faderRow.className = "fader-row";
@@ -389,9 +421,12 @@ class OmpAudioMixerPanel extends HTMLElement {
       summary.textContent = "AFV";
       const afvRow = document.createElement("div");
       afvRow.className = "row";
-      const followInput = document.createElement("input");
-      followInput.type = "text";
-      followInput.placeholder = "Follow Node-ID";
+      // Nutzerfund: eine Node-ID von Hand eintippen/kopieren war die
+      // einzige Möglichkeit, ein Follow-Ziel zu setzen. Jetzt ein
+      // Dropdown aus tatsächlich entdeckten Nodes (s. rebuildFollowOptions
+      // unten) — nach Workflow-Zugehörigkeit gruppiert, damit Signale aus
+      // demselben Workflow wie dieser Mixer zusammengehörig oben stehen.
+      const followSelect = document.createElement("select");
       const modeSelect = document.createElement("select");
       for (const m of ["off", "cut", "crossfade"]) {
         const opt = document.createElement("option");
@@ -399,10 +434,14 @@ class OmpAudioMixerPanel extends HTMLElement {
         opt.textContent = m;
         modeSelect.append(opt);
       }
+      const followDirty = makeDirtyGroup([followSelect, modeSelect]);
       const followApply = document.createElement("omp-button");
       followApply.textContent = "Setzen";
       followApply.addEventListener("click", () =>
-        call(`channel.${id}.setFollow`, { targetNodeId: followInput.value.trim(), mode: modeSelect.value }),
+        call(`channel.${id}.setFollow`, { targetNodeId: followSelect.value, mode: modeSelect.value }).then(() => {
+          followDirty.clear();
+          poll();
+        }),
       );
       const overrideBtn = document.createElement("omp-button");
       overrideBtn.textContent = "Override";
@@ -444,6 +483,7 @@ class OmpAudioMixerPanel extends HTMLElement {
       };
       setLevelInputsDisabled(true);
       followMuteCheckbox.addEventListener("change", () => setLevelInputsDisabled(followMuteCheckbox.checked));
+      const levelsDirty = makeDirtyGroup([followMuteCheckbox, followOnLevelInput, followOffLevelInput, followTransitionInput]);
       const followLevelsApply = document.createElement("omp-button");
       followLevelsApply.textContent = "AFV-Pegel setzen";
       followLevelsApply.addEventListener("click", () =>
@@ -452,6 +492,9 @@ class OmpAudioMixerPanel extends HTMLElement {
           onLevelDb: followOnLevelInput.value === "" ? 0 : Number(followOnLevelInput.value),
           offLevelDb: followOffLevelInput.value === "" ? -20 : Number(followOffLevelInput.value),
           transitionMs: followTransitionInput.value === "" ? 500 : Number(followTransitionInput.value),
+        }).then(() => {
+          levelsDirty.clear();
+          poll();
         }),
       );
       followLevelsRow.append(
@@ -462,7 +505,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         followLevelsApply,
       );
 
-      afvRow.append(followInput, modeSelect, followApply, overrideBtn);
+      afvRow.append(followSelect, modeSelect, followApply, overrideBtn);
       afv.append(summary, afvRow, followLevelsRow);
 
       const removeBtn = document.createElement("button");
@@ -470,7 +513,7 @@ class OmpAudioMixerPanel extends HTMLElement {
       removeBtn.textContent = "entfernen";
       removeBtn.addEventListener("click", () => call("removeChannel", { channelId: id }).then(poll));
 
-      el.append(labelEl, sourceSelect, eqRow, eqDetail, compDetail, faderRow, muteBtn, afv, removeBtn);
+      el.append(labelEl, sourceSelect, eqSection, compDetail, faderRow, muteBtn, afv, removeBtn);
 
       return {
         el,
@@ -494,8 +537,9 @@ class OmpAudioMixerPanel extends HTMLElement {
         set muted(v) {
           muted = v;
         },
-        followInput,
+        followSelect,
         modeSelect,
+        followDirty,
         overrideBtn,
         set overrideOn(v) {
           overrideOn = v;
@@ -504,6 +548,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         followOnLevelInput,
         followOffLevelInput,
         followTransitionInput,
+        levelsDirty,
       };
     };
 
@@ -522,6 +567,77 @@ class OmpAudioMixerPanel extends HTMLElement {
         sourceSelect.append(opt);
       }
       sourceSelect.value = current;
+    };
+
+    // Nutzerfund: "Follow Node-ID" musste von Hand eingetippt werden.
+    // Jetzt ein Dropdown aus GET /api/v1/nodes, gruppiert nach
+    // Workflow-Zugehörigkeit (GET /api/v1/workflows, Runtime-Map
+    // Rolle->{instanceId,nodeId}) — Nodes aus demselben Workflow wie
+    // dieser Mixer stehen zusammengehörig oben, alle anderen darunter.
+    // Eigener Node wird ausgeschlossen (Selbst-Follow ergibt keinen Sinn).
+    let discoveredNodes = [];
+    let nodeWorkflowId = new Map();
+    let ownWorkflowId = null;
+    let followOptionsKey = "";
+
+    const rebuildFollowOptions = (selectEl) => {
+      const current = selectEl.value;
+      selectEl.innerHTML = "";
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "";
+      noneOpt.textContent = "(kein Follow-Ziel)";
+      selectEl.append(noneOpt);
+
+      const sameWorkflow = [];
+      const others = [];
+      for (const n of discoveredNodes) {
+        if (ownWorkflowId && nodeWorkflowId.get(n.id) === ownWorkflowId) sameWorkflow.push(n);
+        else others.push(n);
+      }
+      const byLabel = (a, b) => a.label.localeCompare(b.label);
+      sameWorkflow.sort(byLabel);
+      others.sort(byLabel);
+
+      const appendGroup = (label, list) => {
+        if (list.length === 0) return;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const n of list) {
+          const opt = document.createElement("option");
+          opt.value = n.id;
+          opt.textContent = n.label;
+          group.append(opt);
+        }
+        selectEl.append(group);
+      };
+      if (ownWorkflowId) appendGroup("Dieser Workflow", sameWorkflow);
+      appendGroup(ownWorkflowId ? "Andere Nodes" : "Alle Nodes", others);
+      selectEl.value = current;
+    };
+
+    const loadFollowTargets = async () => {
+      const [nodesRes, workflowsRes] = await Promise.all([fetch("/api/v1/nodes"), fetch("/api/v1/workflows")]);
+      if (!nodesRes.ok) return;
+      const nodes = await nodesRes.json();
+      discoveredNodes = nodes.filter((n) => n.id !== nodeId).map((n) => ({ id: n.id, label: n.label }));
+      nodeWorkflowId = new Map();
+      ownWorkflowId = null;
+      if (workflowsRes.ok) {
+        const workflowList = await workflowsRes.json();
+        for (const wf of workflowList) {
+          for (const role of Object.values(wf.runtime || {})) {
+            if (!role.nodeId) continue;
+            nodeWorkflowId.set(role.nodeId, wf.id);
+            if (role.nodeId === nodeId) ownWorkflowId = wf.id;
+          }
+        }
+      }
+      const newKey = JSON.stringify({ own: ownWorkflowId, nodes: discoveredNodes, map: [...nodeWorkflowId] });
+      if (newKey === followOptionsKey) return;
+      followOptionsKey = newKey;
+      for (const refs of channelEls.values()) {
+        if (!refs.followDirty.isDirty) rebuildFollowOptions(refs.followSelect);
+      }
     };
 
     const updateChannelElement = (refs, data) => {
@@ -543,24 +659,43 @@ class OmpAudioMixerPanel extends HTMLElement {
       if (!dragging.has(refs.compThresholdKnob)) refs.compThresholdKnob.value = data.compThreshold ?? -20;
       if (!dragging.has(refs.compRatioKnob)) refs.compRatioKnob.value = data.compRatio ?? 2;
       if (!dragging.has(refs.compMakeupKnob)) refs.compMakeupKnob.value = data.compMakeup ?? 0;
-      if (refs.followInput !== shadow.activeElement) refs.followInput.value = data.followTarget || "";
-      refs.modeSelect.value = data.followMode || "off";
+      // Nutzerfund: Follow-Ziel- und Modus-Dropdown wurden nach 1-2s
+      // (nächster Poll) wieder auf den alten Server-Wert zurückgesetzt,
+      // sobald der Fokus woanders hinwechselte (z. B. beim Wechsel vom
+      // Ziel- ins Modus-Feld, oder beim Klick auf "Setzen" selbst) — ein
+      // reiner `!== shadow.activeElement`-Schutz reicht hier nicht, weil
+      // "Setzen" ein separater Knopf ist, nicht das Feld selbst. Jetzt:
+      // solange irgendein Feld der Gruppe seit dem letzten "Setzen"
+      // verändert wurde (`followDirty`), überschreibt der Poll gar
+      // nichts in dieser Gruppe.
+      if (!refs.followDirty.isDirty) {
+        // Falls das aktuelle Follow-Ziel gerade nicht (mehr) unter den
+        // entdeckten Nodes ist (z. B. Ziel-Node kurzzeitig offline) —
+        // synthetische Option ergänzen statt den Select still auf "kein
+        // Follow-Ziel" zurückfallen zu lassen (der Parameter selbst
+        // bleibt unverändert, nur die Anzeige würde sonst lügen).
+        const target = data.followTarget || "";
+        if (target && ![...refs.followSelect.options].some((o) => o.value === target)) {
+          const opt = document.createElement("option");
+          opt.value = target;
+          opt.textContent = `${target} (nicht mehr entdeckt)`;
+          refs.followSelect.append(opt);
+        }
+        refs.followSelect.value = target;
+        refs.modeSelect.value = data.followMode || "off";
+      }
       refs.overrideBtn.active = !!data.overrideEnabled;
       refs.overrideOn = !!data.overrideEnabled;
-      if (refs.followMuteCheckbox !== shadow.activeElement) {
+      // Gleiches Prinzip für die AFV-Pegel-Gruppe (eigener "AFV-Pegel
+      // setzen"-Knopf statt Sofort-Anwenden je Feld).
+      if (!refs.levelsDirty.isDirty) {
         const useMute = data.followUseMute ?? true;
         refs.followMuteCheckbox.checked = useMute;
         refs.followOnLevelInput.disabled = useMute;
         refs.followOffLevelInput.disabled = useMute;
         refs.followTransitionInput.disabled = useMute;
-      }
-      if (refs.followOnLevelInput !== shadow.activeElement) {
         refs.followOnLevelInput.value = data.followOnLevelDb ?? 0;
-      }
-      if (refs.followOffLevelInput !== shadow.activeElement) {
         refs.followOffLevelInput.value = data.followOffLevelDb ?? -20;
-      }
-      if (refs.followTransitionInput !== shadow.activeElement) {
         refs.followTransitionInput.value = data.followTransitionMs ?? 500;
       }
     };
@@ -676,9 +811,13 @@ class OmpAudioMixerPanel extends HTMLElement {
         if (isNew || sourcesChanged) {
           rebuildSourceOptions(refs.sourceSelect, availableSources);
         }
+        if (isNew) {
+          rebuildFollowOptions(refs.followSelect);
+        }
         const data = await fetchChannelData(ch.id);
         updateChannelElement(refs, data);
       }
+      await loadFollowTargets();
     };
 
     // §4.6 Teil 2: Master-Limiter-Zustand separat gepollt (kein

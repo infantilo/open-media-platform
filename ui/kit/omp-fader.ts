@@ -178,6 +178,13 @@ export class OmpFader extends HTMLElement {
       const deltaPx = startY - moveEv.clientY;
       const deltaValue = (deltaPx / (sensitivity * fine)) * range;
       this.value = startValue + deltaValue;
+      // #render() selbst aufrufen, nicht auf attributeChangedCallback
+      // verlassen — dessen #dragging-Guard blockiert absichtlich externe
+      // Updates (Server-Poll) während des Drags, würde aber ohne diesen
+      // direkten Aufruf auch die eigene, drag-getriebene Anzeige
+      // einfrieren (gemeldeter Bug: Wert ändert sich visuell nicht
+      // während des Drags, springt erst bei Loslassen auf den Endwert).
+      this.#render();
       this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     };
     const onUp = (upEv: PointerEvent) => {

@@ -189,10 +189,38 @@ func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launche
 	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient}
 }
 
-// Create legt einen neuen, gestoppten Workflow an.
-func (s *Service) Create(name string, def Definition) (Workflow, error) {
+// Create legt einen neuen Workflow an — gestoppt, es sei denn adopt ist
+// gesetzt. adopt (Nutzerwunsch, Kapitel 12 Teil 2 Ergänzung: "Als
+// Workflow speichern" aus einer bereits laufenden Gruppe soll den
+// Workflow nicht als "stopped" anzeigen, wenn seine Rollen tatsächlich
+// schon laufen) ordnet Rollennamen bereits laufenden, registrierten
+// Instanzen zu — deckt es ALLE Rollen der Definition ab, startet der
+// Workflow direkt im Status "started" mit genau dieser Runtime-Zuordnung,
+// ohne den normalen Launcher-Start-Pfad (runStart) zu durchlaufen (die
+// Instanzen laufen ja bereits). Eine nur TEILWEISE abgedeckte oder eine
+// unbekannte Rollen referenzierende Zuordnung wird abgelehnt
+// (ErrValidation) statt einen Workflow in einem widersprüchlichen
+// Zwischenzustand anzulegen — leer/nil bedeutet unverändertes
+// Alt-Verhalten (immer "stopped", keine Runtime).
+func (s *Service) Create(name string, def Definition, adopt map[string]RoleRuntime) (Workflow, error) {
 	if err := validate(def); err != nil {
 		return Workflow{}, err
+	}
+	if len(adopt) > 0 {
+		roleNames := make(map[string]bool, len(def.Roles))
+		for _, role := range def.Roles {
+			roleNames[role.Name] = true
+		}
+		for roleName := range adopt {
+			if !roleNames[roleName] {
+				return Workflow{}, fmt.Errorf("%w: adoptRuntime references unknown role %q", ErrValidation, roleName)
+			}
+		}
+		for _, role := range def.Roles {
+			if _, ok := adopt[role.Name]; !ok {
+				return Workflow{}, fmt.Errorf("%w: adoptRuntime missing role %q", ErrValidation, role.Name)
+			}
+		}
 	}
 	id, err := newID()
 	if err != nil {
@@ -206,6 +234,10 @@ func (s *Service) Create(name string, def Definition) (Workflow, error) {
 		Status:     StatusStopped,
 		CreatedAt:  now,
 		UpdatedAt:  now,
+	}
+	if len(adopt) > 0 {
+		wf.Runtime = adopt
+		wf.Status = StatusStarted
 	}
 	if err := s.store.Put(wf); err != nil {
 		return Workflow{}, err
@@ -332,7 +364,7 @@ func (s *Service) Import(exported ExportedWorkflow) (Workflow, error) {
 	}
 	name := uniqueWorkflowName(exported.Name, existing)
 
-	return s.Create(name, exported.Definition)
+	return s.Create(name, exported.Definition, nil)
 }
 
 func uniqueWorkflowName(name string, existing []Workflow) string {

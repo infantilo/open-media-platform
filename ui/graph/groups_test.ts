@@ -7,6 +7,7 @@ import {
   flattenMembers,
   type GroupTree,
   promotedPorts,
+  setGroupWorkflowId,
   topLevelItems,
 } from "./groups.ts";
 
@@ -31,6 +32,22 @@ Deno.test("createGroup removes members from top-level and creates the group", ()
 
   const inside = topLevelItems(grouped, "g1", ["a", "b", "c"]);
   assertEquals(sorted(inside.nodeIds), ["a", "b"]);
+});
+
+Deno.test("setGroupWorkflowId attaches the workflow id, leaving other groups untouched", () => {
+  let tree = emptyTree();
+  tree = createGroup(tree, "g1", "Regie 1", null, ["a", "b"], []);
+  tree = createGroup(tree, "g2", "Regie 2", null, ["c"], []);
+
+  const withWorkflow = setGroupWorkflowId(tree, "g1", "wf-123");
+  assertEquals(withWorkflow.groups["g1"].workflowId, "wf-123");
+  assertEquals(withWorkflow.groups["g2"].workflowId, undefined);
+});
+
+Deno.test("setGroupWorkflowId is a no-op for an unknown group", () => {
+  const tree = emptyTree();
+  const result = setGroupWorkflowId(tree, "does-not-exist", "wf-123");
+  assertEquals(result, tree);
 });
 
 Deno.test("createGroup can nest an existing group inside a new one", () => {

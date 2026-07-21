@@ -32,6 +32,7 @@ import {
   type GroupTree,
   type PortRef,
   promotedPorts,
+  setGroupWorkflowId,
   topLevelItems,
 } from "./groups.ts";
 import {
@@ -46,6 +47,7 @@ import {
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 import { uniqueRoleName } from "./roles.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -544,10 +546,19 @@ export class FlowCanvas extends HTMLElement {
     svg.addEventListener("pointercancel", (ev) => this.#onPointerUp(ev));
     svg.addEventListener("wheel", (ev) => this.#onWheel(ev), { passive: false });
 
+    // Nutzerfund: `left:0` reichte bis unter die Katalog-Palette (auch
+    // `left:0`, 160px breit, gleicher z-index, aber später im DOM
+    // angehängt — deckt die Breadcrumb-Leiste in diesem Bereich optisch
+    // UND für Klicks ab). Live per `elementFromPoint` bestätigt: sowohl
+    // der komplette Breadcrumb-Pfad ("Root"/Gruppenname, wenn kurz genug)
+    // als auch — bei kurzem Gruppennamen — der "Alle einpassen"-Button
+    // direkt danach lagen unklickbar in dieser Zone. Gleiche Lösung wie
+    // beim SVG-Kanvas selbst (das hat `left:160px` schon immer): die
+    // Breadcrumb-Leiste beginnt jetzt ebenfalls erst nach der Palette.
     const breadcrumb = document.createElement("div");
     breadcrumb.setAttribute("data-role", "breadcrumb");
     breadcrumb.style.cssText =
-      "position:absolute;top:0;left:0;right:0;padding:6px 10px;" +
+      "position:absolute;top:0;left:160px;right:0;padding:6px 10px;" +
       "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
       "display:flex;gap:6px;align-items:center;z-index:10;";
 
@@ -1026,9 +1037,17 @@ export class FlowCanvas extends HTMLElement {
       this.#breadcrumbBar.appendChild(this.#breadcrumbLink(group.label, group.id));
     }
 
+    // Nutzerfund: `margin-left:8px` statt `auto` innerhalb einer Gruppe
+    // ließ den Button bei kurzen Gruppen-/Workflow-Namen im Bereich der
+    // Katalog-Palette (`left:0`, 160px breit) landen — Breadcrumb-Leiste
+    // und Palette liegen beide bei `left:0`/`z-index:10`, die Palette
+    // (später im DOM) deckt den Button dann optisch UND für Klicks ab.
+    // Immer `auto`, unabhängig vom Scope — schiebt den Button (und die
+    // beiden folgenden, nur innerhalb einer Gruppe sichtbaren Knöpfe)
+    // zuverlässig an den rechten Rand, außerhalb der Palette-Spalte.
     const fitBtn = document.createElement("button");
     fitBtn.textContent = "Alle einpassen";
-    fitBtn.style.cssText = `margin-left:${this.#scope === null ? "auto" : "8px"};font-size:11px;cursor:pointer;`;
+    fitBtn.style.cssText = "margin-left:auto;font-size:11px;cursor:pointer;";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
 
@@ -1157,6 +1176,14 @@ export class FlowCanvas extends HTMLElement {
     const roles: { name: string; nodeType: string; hostId?: string }[] = [];
     const missing: string[] = [];
     const usedNames = new Set<string>();
+    // Nutzerwunsch (2026-07-21): die Gruppenmitglieder laufen zum
+    // Speicherzeitpunkt bereits — der neue Workflow soll das
+    // widerspiegeln (Status "started", nicht "stopped") statt so
+    // auszusehen, als wäre er nie gestartet worden. Jede Rolle kennt
+    // hier bereits ihre echte, gerade laufende Instanz/Node-ID (woher
+    // sonst käme roleName?), also direkt mitschicken statt separat neu
+    // aufzulösen.
+    const adoptRuntime: Record<string, { instanceId: string; nodeId: string }> = {};
 
     for (const nodeId of memberNodeIds) {
       const node = this.#graph.nodes.find((n) => n.id === nodeId);
@@ -1169,6 +1196,7 @@ export class FlowCanvas extends HTMLElement {
       usedNames.add(roleName);
       roleNameByNodeId.set(nodeId, roleName);
       roles.push({ name: roleName, nodeType: inst.type, hostId: inst.hostId });
+      adoptRuntime[roleName] = { instanceId: inst.id, nodeId: node.id };
     }
 
     if (missing.length > 0) {
@@ -1217,13 +1245,20 @@ export class FlowCanvas extends HTMLElement {
       const res = await apiFetch("/api/v1/workflows", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: group.label, definition: { roles, connections } }),
+        body: JSON.stringify({ name: group.label, definition: { roles, connections }, adoptRuntime }),
       });
       if (!res.ok) {
         this.#showToast(`Als Workflow speichern fehlgeschlagen: ${await res.text()}`);
         return;
       }
-      this.#showToast(`Workflow „${group.label}" angelegt — im Workflows-Tab startbar.`);
+      const wf = (await res.json()) as { id: string };
+      // Verknüpfung merken (s. GroupNode.workflowId-Doku) — damit die
+      // Kachel dieser Gruppe im Root-Editor einen Stop-Button bekommt,
+      // ohne raten zu müssen, welcher Workflow zu welcher Gruppe gehört.
+      this.#groupTree = setGroupWorkflowId(this.#groupTree, this.#scope, wf.id);
+      this.#saveLayout();
+      this.#render();
+      this.#showToast(`Workflow „${group.label}" angelegt und läuft bereits (aus der laufenden Gruppe übernommen).`);
     } catch (err) {
       this.#showToast(`Als Workflow speichern fehlgeschlagen: ${err}`);
     }
@@ -1294,12 +1329,29 @@ export class FlowCanvas extends HTMLElement {
     header.setAttribute("fill", isGroup ? "#3a4a5d" : "#3a3a3a");
     g.appendChild(header);
 
+    // Nutzerfund: bei längeren Labels überlappte der Titel den
+    // Stop-Button (⏹, vorhanden bei tile.instanceId ODER — Nutzerfund
+    // 2026-07-21 — einer Gruppe mit verknüpftem Workflow) — SVG-Text
+    // bricht/kürzt nicht von selbst. Fester Zeichen-Budget-Ansatz statt
+    // Live-Messung (`getComputedTextLength()` bräuchte das Element
+    // bereits im Dokument, `g` wird aber erst vom Aufrufer angehängt) —
+    // gleiches Prinzip wie `portShortLabel` unten, nur mit größerem
+    // Budget (volle Kachelbreite statt Port-Label-Platz). Der volle
+    // Titel bleibt über das `<title>`-Tooltip (Hover) erreichbar.
+    const fullLabel = isGroup ? `▣ ${tile.label}` : tile.label;
+    const hasStopButton = isGroup ? !!this.#groupTree.groups[tile.id]?.workflowId : !!tile.instanceId;
+    const titleMaxChars = hasStopButton ? 17 : 20;
     const title = document.createElementNS(SVG_NS, "text");
     title.setAttribute("x", "8");
     title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
     title.setAttribute("fill", "#f0f0f0");
     title.setAttribute("font-size", "12");
-    title.textContent = isGroup ? `▣ ${tile.label}` : tile.label;
+    title.textContent = truncateTileTitle(fullLabel, titleMaxChars);
+    if (fullLabel.length > titleMaxChars) {
+      const titleTooltip = document.createElementNS(SVG_NS, "title");
+      titleTooltip.textContent = fullLabel;
+      title.appendChild(titleTooltip);
+    }
     g.appendChild(title);
 
     // Stop-Control (UMSETZUNG.md C8): nur an Kacheln, deren Node einen
@@ -1323,6 +1375,31 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
         this.#stopInstance(instanceId);
+      });
+      g.appendChild(stopBtn);
+    } else if (isGroup && this.#groupTree.groups[tile.id]?.workflowId) {
+      // Nutzerfund (2026-07-21): eine Gruppe, die per "Als Workflow
+      // speichern" einen Workflow angelegt hat, hatte keinen Stop-Weg im
+      // Root-Editor — nur über den separaten Workflows-Tab stoppbar.
+      // Gleiche Optik wie der Instanz-Stop-Button oben, ruft aber den
+      // Workflow-Stop auf (stoppt alle Rollen gebündelt).
+      const workflowId = this.#groupTree.groups[tile.id]!.workflowId!;
+      const stopBtn = document.createElementNS(SVG_NS, "text");
+      stopBtn.setAttribute("x", String(NODE_WIDTH - 8));
+      stopBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      stopBtn.setAttribute("text-anchor", "end");
+      stopBtn.setAttribute("fill", "#e05050");
+      stopBtn.setAttribute("font-size", "12");
+      stopBtn.style.cursor = "pointer";
+      stopBtn.setAttribute("data-role", "stop-workflow");
+      stopBtn.textContent = "⏹";
+      const stopTitle = document.createElementNS(SVG_NS, "title");
+      stopTitle.textContent = "Workflow stoppen";
+      stopBtn.appendChild(stopTitle);
+      stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      stopBtn.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.#stopWorkflow(workflowId, tile.label);
       });
       g.appendChild(stopBtn);
     }
@@ -2477,6 +2554,31 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
+  // Stop-Button am Gruppen-Tile (Nutzerfund 2026-07-21, s. GroupNode.
+  // workflowId-Doku) — stoppt alle Rollen des Workflows gebündelt über
+  // dessen eigenen Lifecycle, statt jede Mitglieds-Instanz einzeln zu
+  // suchen/stoppen. `confirm:true` immer mitgeschickt, gleiches Muster
+  // wie workflows-view.ts#stopWorkflow (der Orchestrator wertet es nur
+  // aus, wenn der Workflow selbst `settings.confirmStop` gesetzt hat).
+  async #stopWorkflow(workflowId: string, label: string) {
+    if (!(await confirmDialog(`Workflow „${label}" wirklich stoppen?`, { confirmLabel: "Stoppen" }))) return;
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Workflow-Stop fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      this.#showToast(`Workflow „${label}" wird gestoppt …`);
+    } catch (err) {
+      this.#showToast(`Workflow-Stop fehlgeschlagen: ${err}`);
+    }
+  }
+
   #showToast(message: string) {
     const toast = document.createElement("div");
     toast.textContent = message;
@@ -2584,6 +2686,27 @@ function formatAbbrev(format: string, label: string): string {
 // Label, s. `omp_node_sdk::node::run`) — dann die letzten zwei Wörter
 // ("Sender 1"), damit wenigstens Video-/Audio-Sender-Nummer erkennbar
 // bleibt (Farbe unterscheidet Video/Audio ohnehin zusätzlich).
+// s. #renderTile-Aufrufstelle: fester Zeichen-Budget-Kürzung statt
+// Live-Textmessung (gleiches Prinzip wie portShortLabel unten). Labels
+// folgen überwiegend dem Muster "<Beschreibung> (<Instanz-ID-Präfix>)"
+// (main.rs-Konvention aller Nodes) — die ID-Klammer ist gerade bei
+// mehreren Instanzen desselben Typs das eigentlich unterscheidende
+// Merkmal (s. DSK-Fill/Key-Diskussion), deshalb wird sie bevorzugt
+// erhalten und nur der Beschreibungsteil gekürzt, statt blind vom Ende
+// abzuschneiden.
+function truncateTileTitle(label: string, maxLen: number): string {
+  if (label.length <= maxLen) return label;
+  const match = label.match(/^(.*) (\([0-9a-fA-F]{4,}\))$/);
+  if (match) {
+    const [, prefix, suffix] = match;
+    const prefixBudget = maxLen - 1 - suffix.length;
+    if (prefixBudget >= 3) {
+      return `${prefix.slice(0, prefixBudget)}…${suffix}`;
+    }
+  }
+  return `${label.slice(0, maxLen - 1)}…`;
+}
+
 function portShortLabel(label: string): string {
   const words = label.trim().split(/\s+/);
   const last = words[words.length - 1] ?? label;

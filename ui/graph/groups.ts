@@ -11,6 +11,13 @@ export interface GroupNode {
   parentId: string | null;
   nodeIds: string[];
   groupIds: string[];
+  // Gesetzt, sobald diese Gruppe per "Als Workflow speichern" einen
+  // Workflow angelegt hat (Nutzerwunsch 2026-07-21: Stop-Button am
+  // Gruppen-Tile im Root-Editor, ohne über Mitgliederabgleich raten zu
+  // müssen, welcher Workflow zu welcher Gruppe gehört). Rein informativ
+  // für die UI — der Workflow selbst bleibt die alleinige Quelle der
+  // Wahrheit für seinen eigenen Lifecycle-Status.
+  workflowId?: string;
 }
 
 /** Der komplette Gruppenbaum, flach als Map über alle Gruppen-IDs. */
@@ -109,6 +116,15 @@ export function createGroup(
   };
 
   return { groups };
+}
+
+/** Verknüpft eine Gruppe mit dem Workflow, der per "Als Workflow
+ * speichern" aus ihr angelegt wurde (s. GroupNode.workflowId-Doku). Kein
+ * Effekt, wenn die Gruppe nicht (mehr) existiert. */
+export function setGroupWorkflowId(tree: GroupTree, groupId: string, workflowId: string): GroupTree {
+  const group = tree.groups[groupId];
+  if (!group) return tree;
+  return { groups: { ...tree.groups, [groupId]: { ...group, workflowId } } };
 }
 
 /** Löst groupId auf: die direkten Kinder werden wieder in der

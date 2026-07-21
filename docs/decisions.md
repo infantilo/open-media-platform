@@ -11073,3 +11073,319 @@ keinen Port öffnet) — beide Zweige im UI-Code bereits vorgesehen
 `deno check ui/shell/admin-view.ts` sauber, `make ui` (Bundle-Rebuild)
 + `deno test ui/` (56/56) grün. Kein Go-/Rust-Code geändert (reine
 UI-Anbindung eines bereits vorhandenen, bereits getesteten Backends).
+
+## 2026-07-21 (Nachtrag 71) — Vier UI-Bugs: Live-Drag-Anzeige, Titel-
+Überlappung, AFV-Node-Picker, EQ-Layout
+
+Vier vom Nutzer gemeldete Bugs in einer Sitzung behoben, alle live per
+CDP verifiziert.
+
+**1) Fader/Knob zeigten Wertänderungen während des Drags nicht live an.**
+Root Cause: `ui/kit/omp-fader.ts`/`omp-knob.ts`s `attributeChangedCallback`
+hat einen `#dragging`-Guard ("if (!this.#dragging) this.#render()"),
+der externe Updates (Server-Poll) während eines laufenden Drags nicht
+mit der eigenen Nutzereingabe kollidieren lassen soll — blockierte
+dabei aber auch das `#render()` der EIGENEN drag-getriebenen
+Wertänderung selbst, da `set value()` nur `setAttribute()` aufruft und
+damit genau durch denselben Callback läuft. Ergebnis: Zeiger/Anzeige
+blieben während des gesamten Drags eingefroren, sprangen erst beim
+Loslassen auf den Endwert (das "change"-Event löst extern ein
+Refresh aus, das den Sprung erklärt). Fix: `onMove` ruft jetzt direkt
+nach `this.value = ...` selbst `this.#render()` auf, der Guard in
+`attributeChangedCallback` bleibt für externe Updates unverändert
+bestehen. Betrifft beide Kit-Elemente identisch (copy-pasted
+Struktur), an beiden behoben. Live per CDP verifiziert: simulierter
+Drag (mousedown, mousemove ohne mouseup) zeigt den aktualisierten Wert
+sofort in `.value` UND im internen `value`-Property, nicht erst nach
+Loslassen.
+
+**2) Node-Titel überlappte den Stop-Button (⏹) bei längeren Labels.**
+`ui/graph/flow-canvas.ts#renderTile`: SVG-`<text>` bricht/kürzt nicht
+von selbst, `NODE_WIDTH` ist nur 160px. Live tatsächlich reproduziert
+in eigenen Screenshots dieser Sitzung ("Video Mixer M/E (c05ef4ea)"
+überlappte sichtbar mit dem roten Stop-Icon). Fix: neue
+`truncateTileTitle()` kürzt mit festem Zeichen-Budget (17 mit
+Stop-Button, 20 ohne — Live-Textmessung wie `getComputedTextLength()`
+bräuchte das Element bereits im Dokument, `#renderTile` liefert `g`
+aber erst unangehängt an den Aufrufer zurück). **Wichtige Verfeinerung
+nach erstem Test:** naive End-Kürzung hätte das Muster
+"<Beschreibung> (<Instanz-ID>)" (main.rs-Konvention aller Nodes) genau
+an der ID-Klammer abgeschnitten — der bei mehreren Instanzen
+desselben Typs eigentlich unterscheidende Teil (s. DSK-Fill/Key-
+Diskussion, Nachtrag 66). `truncateTileTitle` erkennt das Suffix-Muster
+(Regex `^(.*) (\([0-9a-fA-F]{4,}\))$`) und kürzt nur den
+Beschreibungsteil, die ID-Klammer bleibt erhalten (z. B. "Video
+…(20380971)" statt "Video Mixer M/E …"). Der volle Titel bleibt per
+`<title>`-Tooltip (Hover) erreichbar. Live verifiziert: Titel und
+Stop-Button überlappen sich in keinem der Testfälle mehr, ID-Suffix
+sichtbar erhalten.
+
+**3) Audio-Follow-Video-Ziel musste als Node-ID von Hand eingetippt
+werden.** `nodes/omp-audio-mixer/ui/bundle.js`: `followInput` war ein
+reines Text-Feld. Ersetzt durch ein `<select>` (`followSelect`),
+befüllt aus `GET /api/v1/nodes` (eigener Node ausgeschlossen — Selbst-
+Follow ergibt keinen Sinn) und nach Workflow-Zugehörigkeit gruppiert
+(`GET /api/v1/workflows`, `runtime`-Map Rolle→{instanceId,nodeId}) —
+Nodes aus demselben Workflow wie dieser Mixer stehen in einer eigenen
+`<optgroup>` "Dieser Workflow" oben, alle anderen darunter unter
+"Andere Nodes"/"Alle Nodes" (kein Workflow-Kontext vorhanden). Ist das
+aktuell gesetzte Ziel gerade nicht unter den entdeckten Nodes (z. B.
+kurzzeitig offline), wird eine synthetische Option ergänzt statt den
+Select still auf "kein Follow-Ziel" zurückfallen zu lassen. Rebuild-
+Caching (`followOptionsKey`, gleiches Muster wie `keyerSourceSelect`
+in `omp-video-mixer-me/ui/bundle.js`) verhindert, dass ein offenes
+Dropdown beim 2s-Poll unter dem Cursor zuklappt. Live verifiziert:
+Dropdown zeigt reale entdeckte Nodes alphabetisch sortiert (keine
+Workflows zum Testzeitpunkt vorhanden, daher eine einzelne "Alle
+Nodes"-Gruppe); Auswahl + "Setzen" persistiert real (per API
+gegengeprüft: `channel.ch1.followTarget` zeigte danach exakt die
+UUID des ausgewählten Video-Mixer-Nodes).
+
+**4) EQ-Layout: Freq/Q/Gain sollten pro Band zusammengehören.** Bisher
+waren die drei Gain-Knöpfe (Lo/Mid/Hi) immer sichtbar in einer
+gemeinsamen Reihe, Freq+Q dagegen in einer separaten, aufklappbaren
+"EQ Freq/Q"-Sektion mit eigenen Lo/Mid/High-Zeilen — Regler zum
+selben Band waren also räumlich getrennt. Neue `eq-section` mit drei
+Zeilen (Lo/Mid/High), je Zeile Freq-, Q- und Gain-Knopf senkrecht
+untereinander gestapelt — genau die vom Nutzer verlangte Anordnung.
+Backend-Aufrufe unverändert: Gain-Knöpfe lösen weiterhin
+`channel.<id>.setEq({low,mid,high})` aus (alle drei Werte in einem
+Aufruf, wie zuvor), Freq/Q weiterhin `channel.<id>.setEqBand({band,
+freq,width})` — nur die visuelle Gruppierung hat sich geändert, keine
+API-Änderung. Live per Screenshot verifiziert (Kanal hinzugefügt,
+Panel geöffnet): drei Bandzeilen mit je drei senkrecht gestapelten
+Reglern sichtbar.
+
+`node --check` (bundle.js, kein Build-Schritt für node-eigene
+UI-Bundles), `deno check`/`make ui`/`deno test ui/` (56/56) für die
+TypeScript-Änderungen grün. `cargo build -p omp-audio-mixer` (bundle.js
+wird per `include_str!` zur Compile-Zeit eingebunden, Node-Neustart
+für die Verifikation nötig).
+
+**Nachtrag 71 (Ergänzung, gleicher Tag) — EQ-Layout verfeinert:**
+Nutzer-Feedback direkt im Anschluss: Gain/Freq/Q sollten pro Band
+**nebeneinander** stehen (nicht untereinander wie in der ersten
+Fassung oben), darunter das nächste Band; unter dem letzten Band der
+Kompressor mit denselben drei Reglern nebeneinander und dem Ein/Aus-
+Knopf darunter (vorher umgekehrt: Knopf vor den Reglern). Umsetzung:
+`.eq-band-row` bleibt eine Spalte (Label über den Reglern), neue
+`.eq-band-knobs`-Zeile darunter mit `flex-direction: row` für
+Gain/Freq/Q (in dieser Reihenfolge, nach dem letzten Nutzer-Wortlaut);
+`.strip`-Breite von 76px auf 152px erhöht (drei 44px-Knobs
+nebeneinander passen nicht in die ursprüngliche schmale Kanalspalte).
+`compDetail.append(...)`-Reihenfolge getauscht (Regler-Reihe vor dem
+Ein/Aus-Knopf). Backend-Aufrufe unverändert. Live per CDP re-verifiziert
+(Kanal hinzugefügt, Comp-Sektion aufgeklappt): Screenshot zeigt LO/MID/
+HIGH je mit Gain/Freq/Q nebeneinander untereinander gestapelt, Comp
+mit Thr/Ratio/Makeup nebeneinander und "Comp Ein" darunter — exakt die
+verlangte Anordnung. `node --check` sauber, `cargo build
+-p omp-audio-mixer` grün.
+
+## 2026-07-21 (Nachtrag 72) — Property-Panel-Poll setzte per Knopf
+angewendete Dropdowns/Felder nach 1-2s wieder zurück
+
+Nutzer meldete: AFV-Ziel-Dropdown und das Transition-Dropdown darunter
+springen 1-2s nach der Auswahl wieder auf "kein Ziel"/"off" zurück —
+"dasselbe Verhalten in allen Property-Panels", verhindert auch Tippen
+in Eingabefelder.
+
+**Root Cause, nach Durchsicht aller vier Node-UI-Bundles (nicht nur
+`omp-audio-mixer`):** zwei unterschiedliche Bugs derselben Fehlerklasse.
+
+1. `channel.<id>.followMode` (`modeSelect`) hatte **überhaupt keinen**
+   Schutz — `refs.modeSelect.value = data.followMode || "off";` lief
+   bedingungslos bei jedem 2s-Poll. Da eine Auswahl im Dropdown allein
+   noch nichts an den Server schickt (das macht erst der separate
+   "Setzen"-Knopf), wurde jede Auswahl garantiert innerhalb von
+   höchstens 2s wieder überschrieben — exakt das gemeldete Symptom.
+2. `followSelect` hatte einen `!== shadow.activeElement`-Schutz, der
+   aber nur wirkt, solange das Feld selbst fokussiert bleibt. Sobald
+   der Fokus wechselt (z. B. zum Modus-Dropdown, oder beim Klick auf
+   "Setzen" selbst), greift der Schutz nicht mehr — der nächste Poll
+   (0-2s später) überschreibt die Auswahl, bevor sie überhaupt
+   abgeschickt wurde.
+
+Gleicher Bug-Typ auch in `omp-video-mixer-me/ui/bundle.js` gefunden
+(`keyerSourceSelect.value = keyerSource;`, komplett ungeschützt,
+Zeile analog zu Fund 1) — bestätigt die Nutzerbeobachtung "in allen
+Panels". `omp-switcher` hat keine Select-/Input-Felder (nichts zu
+fixen). `omp-ograf`s Template-Formularfelder werden nie vom Poll
+angefasst (nur beim expliziten Auswahlwechsel neu gerendert) — dort
+bestand das Problem nicht.
+
+**Fix `omp-video-mixer-me`:** einfacher `!== shadow.activeElement`-
+Guard ergänzt (gleiches Muster wie an anderer Stelle in derselben
+Datei bereits verwendet).
+
+**Fix `omp-audio-mixer` (grundlegender, da "Setzen" ein separater
+Knopf ist, nicht das Feld selbst):** neue `makeDirtyGroup(els)` —
+markiert eine ganze Feldgruppe als "dirty" ab der ersten Änderung
+irgendeines ihrer Felder (`input`/`change`), bis der zugehörige
+Anwenden-Knopf tatsächlich geklickt wurde (`.clear()` im
+`.then()`-Handler des jeweiligen `call(...)`). Der Poll überschreibt
+eine Gruppe nur, solange sie nicht dirty ist. Zwei Gruppen: `followDirty`
+(`followSelect`+`modeSelect`, angewendet über "Setzen") und
+`levelsDirty` (`followMuteCheckbox`+die drei Pegel-/Transition-Felder,
+angewendet über "AFV-Pegel setzen") — ersetzt die bisherigen
+Einzelfeld-`!== shadow.activeElement`-Checks für diese Felder komplett
+(unzureichend, da "Setzen" ein separater Knopf ist, nicht das Feld
+selbst). Trifft dasselbe Muster wie der bereits bestehende `dragging`-
+Set für Fader/Knob, aber mit anderer Räum-Bedingung (Knopf-Klick statt
+Drag-Ende), da Selects/Zahlenfelder nicht per Drag bedient werden.
+
+**Live per CDP verifiziert (beide Fälle):** (a) Follow-Ziel + Modus
+ausgewählt, **ohne** "Setzen" zu klicken, 4.5s gewartet (mehr als zwei
+Poll-Zyklen) — Auswahl blieb unverändert stehen (vorher: garantierter
+Reset). (b) "Setzen" geklickt — per direkter API-Abfrage bestätigt,
+dass `followTarget`/`followMode` korrekt persistiert wurden, Anzeige
+blieb auch 3s später stabil (kein Zurückspringen, kein erneutes
+Umschalten). `omp-video-mixer-me`s KEY-Panel öffnet weiterhin
+fehlerfrei. `node --check` (beide Bundles) sauber, `cargo build
+-p omp-audio-mixer -p omp-video-mixer-me` grün.
+
+## 2026-07-21 (Nachtrag 73) — Breadcrumb-Leiste lag unter der
+Katalog-Palette, nicht nur der "Alle einpassen"-Button
+
+Nutzer meldete: "node katalog panel überlappt button 'alle einpassen'
+wenn man in einer gruppe/workflow ist".
+
+**Root Cause, Fund 1 (der gemeldete Fall):** `#renderBreadcrumb()`
+setzte den "Alle einpassen"-Button per `margin-left:${scope === null ?
+"auto" : "8px"}` — außerhalb einer Gruppe (`scope === null`) schob
+`auto` den Button zuverlässig ganz nach rechts, weit weg von der
+160px breiten Katalog-Palette (`left:0`, gleicher `z-index:10`, aber
+später im DOM angehängt — deckt alles in dieser Zone optisch UND für
+Klicks ab, s. bereits Nachtrag 71 Fund 2 für dasselbe Palette-Detail).
+Innerhalb einer Gruppe (`scope !== null`) aber nur `8px` — bei kurzen
+Gruppen-/Workflow-Namen (z. B. "Livebox 1", live reproduziert mit einer
+bereits bestehenden Test-Gruppe) landete der Button dann direkt hinter
+"Root › <Name>" innerhalb der ersten 160px, exakt unter der Palette.
+
+**Fund 2, beim Live-Verifizieren zusätzlich aufgedeckt (vom Nutzer
+nicht explizit genannt, aber derselbe Bug):** die komplette Breadcrumb-
+Leiste selbst (`left:0;right:0`) lag die ganze Zeit unter der Palette,
+nicht nur der Button. Per `document.elementFromPoint()` bestätigt:
+sowohl der "Root"- als auch der Gruppennamen-Link waren
+`clickable:false` — der komplette Navigationspfad war unbedienbar,
+sobald er (wie meistens) innerhalb der ersten 160px lag. Betraf auch
+den Root-Scope (der "Root"-Link selbst, zwar dort meist funktionslos,
+aber in verschachtelten Gruppen ein echter, ebenfalls kaputter
+Rücksprung-Weg).
+
+**Fix (beide Funde in einem Aufwasch):** `fitBtn`s Margin immer `auto`
+(Bedingung entfernt) statt nur außerhalb einer Gruppe — schiebt den
+Button (und die beiden nur innerhalb einer Gruppe sichtbaren Knöpfe
+"Gruppe auflösen"/"Als Workflow speichern") zuverlässig als
+zusammengehörigen Cluster nach rechts, unabhängig von der
+Pfadlänge. Zusätzlich die Breadcrumb-Leiste selbst auf `left:160px`
+gesetzt (exakt wie beim SVG-Kanvas, das dieses Palette-Ausweich-Muster
+schon immer hat) statt `left:0` — sie beginnt jetzt grundsätzlich erst
+nach der Palette, das eigentliche Überlappungsproblem an der Wurzel
+behoben statt nur das Symptom (Button-Position) zu kaschieren.
+
+Live per CDP verifiziert (echte, bereits bestehende Test-Gruppe
+"Livebox 1" betreten, echter Doppelklick-Event statt nur simulierter
+Koordinaten): `elementFromPoint` bestätigt jetzt "Root"-Link,
+Gruppennamen-Link UND "Alle einpassen"-Button alle drei als
+`clickable:true`; Screenshot zeigt "Root › Livebox 1" vollständig
+sichtbar links, die drei Aktions-Knöpfe sauber rechtsbündig geclustert,
+keine Überlappung mit der Palette. `deno check`/`make ui`/`deno test
+ui/` (56/56) grün.
+
+## 2026-07-21 (Nachtrag 74) — Kapitel 12 Teil 2 Ergänzung: "Als Workflow
+speichern" übernimmt bereits laufende Instanzen ins Runtime
+
+Nutzer meldete zwei Bugs beim Gruppieren + "Als Workflow speichern":
+(1) eine Gruppe/ein daraus gespeicherter Workflow hat keinen Stop-Button
+im (Root-)Flow-Editor; (2) der neu angelegte Workflow wird im
+Workflows-Tab als "stopped" angezeigt, obwohl er (aus bereits laufenden
+Nodes) eigentlich läuft.
+
+**Root Cause (beide Symptome derselbe Ursache):** "Als Workflow
+speichern" (Nachtrag 18, 2026-07-18) legt bewusst nur eine Workflow-
+**Vorlage** an — `POST /api/v1/workflows` bekam nie Kenntnis davon, dass
+die Gruppenmitglieder bereits als konkrete, laufende Instanzen
+existieren. `workflows.Service.Create` setzte `Status: StatusStopped`
+und ließ `Runtime` leer, exakt wie bei jedem "von Null" angelegten
+Workflow — technisch korrekt (der Workflow selbst wurde nie über seinen
+eigenen Lifecycle gestartet), aber dem Nutzer-Mentalmodell
+widersprechend ("ich habe den Workflow doch gerade aus einer laufenden
+Gruppe gemacht"). Ohne eine erkannte Laufzeit gibt es auch keinen
+sinnvollen Stop-Anker für einen Gruppen-Tile.
+
+**Nutzerentscheidung (drei Optionen vorgelegt):** laufende Instanzen ins
+neue Workflow-Runtime übernehmen (gewählt) statt nur die UI klarer zu
+beschriften oder nur einen instanz-iterierenden Stop-Button ohne
+Workflow-Runtime-Fix zu bauen.
+
+**Backend (`orchestrator/internal/workflows/service.go`):**
+`Service.Create(name, def, adopt map[string]RoleRuntime)` — neuer
+dritter Parameter, `nil`/leer = unverändertes Alt-Verhalten (immer
+"stopped", keine Runtime). Deckt `adopt` **alle** Rollen der Definition
+ab, wird der Workflow direkt mit `Status: StatusStarted` und genau
+dieser Runtime-Zuordnung angelegt — ohne den normalen Launcher-Start-
+Pfad (`runStart`) zu durchlaufen, die Instanzen laufen ja bereits. Eine
+nur teilweise abgedeckte oder eine unbekannte Rolle referenzierende
+Zuordnung wird mit `ErrValidation` abgelehnt (kein widersprüchlicher
+Zwischenzustand). `httpapi.WorkflowService`-Interface und
+`handleCreateWorkflow` entsprechend erweitert (`adoptRuntime` im
+JSON-Body, optional). Zwei bestehende interne Aufrufer (`Import()`,
+`handleCreateWorkflow`) sowie **39** Testaufrufe in `service_test.go`/
+`scheduler_test.go` auf die neue Signatur angepasst (`nil` = Alt-
+Verhalten) — Python-Skript mit echtem Klammer-Tiefenzähler statt eines
+naiven Zeilen-Regex, da mehrere Aufrufe mehrzeilige `Definition{...}`-
+Literale enthalten. Drei neue Tests: volle Abdeckung startet sofort +
+Runtime übersteht `Get()` (Store.Put persistiert den kompletten Blob
+inkl. Runtime, kein zusätzliches `UpdateRuntime()` nötig); unvollständige
+Abdeckung abgelehnt; unbekannte Rollenreferenz abgelehnt.
+
+**Frontend (`ui/graph/flow-canvas.ts#saveGroupAsWorkflow`):** baut beim
+Auflösen der Rollen (`node.instanceId`/`node.id` bereits vorhanden)
+zusätzlich `adoptRuntime` mit und schickt es im `POST`-Body mit. Neues
+`GroupNode.workflowId?` (`ui/graph/groups.ts`, + `setGroupWorkflowId()`
+mit zwei neuen Tests) verknüpft die Gruppe mit dem gerade angelegten
+Workflow, damit die Kachel im Root-Editor weiß, dass/welcher Workflow zu
+ihr gehört — Persistenz über den ohnehin schon `groups`-Feld
+speichernden `#saveLayout()`. `#renderTile` bekommt einen zweiten
+Stop-Button-Zweig (`isGroup && workflowId gesetzt`) mit identischer
+Optik wie der Instanz-Stop-Button, ruft aber `POST /api/v1/workflows/
+<id>/stop` statt `DELETE /api/v1/instances/<id>` — inkl. Bestätigungs-
+Dialog (`confirmDialog`, gleiches Muster wie `workflows-view.ts`). Die
+Titel-Kürzung aus Nachtrag 73 berücksichtigt jetzt auch diesen zweiten
+Stop-Button-Fall (sonst hätte genau dieselbe Überlappung für
+Workflow-Gruppen-Tiles zurückkommen können).
+
+**Live per CDP verifiziert, echter Roundtrip (kein Mock):** zwei echte
+laufende Instanzen (`omp-source`, `omp-audio-mixer`) gruppiert, "Als
+Workflow speichern" geklickt — Toast bestätigt "läuft bereits (aus der
+laufenden Gruppe übernommen)" statt der alten "im Workflows-Tab
+startbar"-Formulierung; der bereits bestehende Workflow-Rahmen-
+Mechanismus (`#buildWorkflowFrames`, Nachtrag 18) zeigt sofort "Test
+Regie (started)" ohne jede Änderung an diesem Code nötig gewesen zu
+sein; `GET /api/v1/workflows` bestätigt `status:"started"` mit
+korrekter `runtime`-Zuordnung (echte Instanz-/Node-IDs, nicht leer).
+Zurück auf Root: Gruppen-Tile zeigt jetzt den Stop-Button; Klick öffnet
+den Bestätigungsdialog ("Workflow „Test Regie" wirklich stoppen?"),
+"Stoppen" bestätigt — Workflow-Status wechselt zu "stopped" UND beide
+Instanzen sind tatsächlich beendet (`GET /api/v1/instances` danach
+leer) — kein rein kosmetischer Fix, echtes gebündeltes Stoppen über den
+Workflow-Lifecycle.
+
+**Nebenbefunde beim Verifizieren, nicht Teil dieses Fixes:** (a) eine
+alte Testgruppe ("Livebox 1") hatte ein verwaistes Mitglied (ein
+`omp-source`, das seit einer früheren Sitzung nicht mehr lief) —
+bestätigt eine bereits bestehende, hier nicht behobene Lücke (Gruppen-
+Mitgliederlisten werden nicht automatisch bereinigt, wenn ihr Node
+verschwindet); (b) `/api/v1/instances` zeigte einen Prozess mit
+plausiblen CPU/RAM-Werten, obwohl `/proc/<pid>` bereits "No such
+file" war — eine reale, hier nicht verfolgte Stale-Metrik-Lücke,
+vermutlich Kapitel-14-Teil-2-Sampling, das den Prozessverlust nicht
+sauber erkennt; (c) die Sitzung war zwischenzeitlich ohne `mxl.env`
+neu gestartet worden (`make start` in einer neuen Shell ohne
+`source deploy/dev/mxl.env`) — neu gestartete Instanzen liefen sofort
+in den bekannten Crash-Loop ("OMP dev environment gotchas"-
+Erinnerung, keine neue Erkenntnis, nur erneut bestätigt).
+
+`go build`/`go vet`/`go test ./...` (orchestrator, nur der bereits
+bekannte unabhängige `internal/hosts`-Flake), `deno check`/`make ui`/
+`deno test ui/` (58/58) grün.

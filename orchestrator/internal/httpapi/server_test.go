@@ -354,7 +354,7 @@ type fakeWorkflowService struct {
 	thumbErr  error
 }
 
-func (f fakeWorkflowService) Create(name string, def workflows.Definition) (workflows.Workflow, error) {
+func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error) {
 	return f.created, f.createErr
 }
 

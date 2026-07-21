@@ -164,6 +164,11 @@ export class OmpKnob extends HTMLElement {
       const deltaPx = startY - moveEv.clientY;
       const deltaValue = (deltaPx / (120 * fine)) * range;
       this.value = startValue + deltaValue;
+      // s. omp-fader.ts#onPointerDown-Doku: attributeChangedCallbacks
+      // #dragging-Guard blockiert externe Updates während des Drags,
+      // muss aber die eigene drag-getriebene Anzeige nicht mit
+      // aufhalten — sonst friert der Zeiger während des Drags ein.
+      this.#render();
       this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     };
     const onUp = (upEv: PointerEvent) => {

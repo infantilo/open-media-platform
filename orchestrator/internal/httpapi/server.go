@@ -110,7 +110,7 @@ type LauncherService interface {
 // Start/-Stop aus (implementiert von *workflows.Service,
 // ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1).
 type WorkflowService interface {
-	Create(name string, def workflows.Definition) (workflows.Workflow, error)
+	Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error)
 	List() ([]workflows.Workflow, error)
 	Get(id string) (workflows.Workflow, error)
 	// GetThumbnail (Kapitel 12 Teil 6, §22.3 Punkt 5) — s.

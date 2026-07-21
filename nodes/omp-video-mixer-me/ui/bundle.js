@@ -329,7 +329,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
           keyerSourceSelect.append(opt);
         }
       }
-      keyerSourceSelect.value = keyerSource;
+      // Nutzerfund: dieser Wert wurde bisher bei jedem 2s-Poll
+      // bedingungslos überschrieben — eine gerade getroffene Auswahl
+      // wurde sichtbar wieder zurückgesetzt, sobald der Select den Fokus
+      // verliert (z. B. weil `change` zwar sofort serverseitig anwendet,
+      // aber ein zeitgleich schon laufender Poll noch den alten Wert
+      // zurückliefert). Gleicher Schutz wie bei den übrigen Feldern:
+      // während der Select fokussiert ist, nicht überschreiben.
+      if (keyerSourceSelect !== shadow.activeElement) keyerSourceSelect.value = keyerSource;
 
       pgmButtons.innerHTML = "";
       pstButtons.innerHTML = "";

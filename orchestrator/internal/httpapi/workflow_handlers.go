@@ -61,18 +61,24 @@ func handleWorkflowThumbnail(svc WorkflowService) http.HandlerFunc {
 }
 
 // handleCreateWorkflow liefert POST /api/v1/workflows:
-// {"name": "...", "definition": {"roles": [...], "connections": [...]}}.
+// {"name": "...", "definition": {"roles": [...], "connections": [...]},
+// "adoptRuntime": {"<roleName>": {"instanceId": "...", "nodeId": "..."}}}.
+// adoptRuntime ist optional (Nutzerwunsch: "Als Workflow speichern" aus
+// einer bereits laufenden Gruppe soll den Workflow nicht fälschlich als
+// "stopped" anzeigen) — s. workflows.Service.Create-Doku zur Validierung
+// (muss, wenn gesetzt, exakt alle Rollen abdecken).
 func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Name       string               `json:"name"`
-			Definition workflows.Definition `json:"definition"`
+			Name         string                          `json:"name"`
+			Definition   workflows.Definition             `json:"definition"`
+			AdoptRuntime map[string]workflows.RoleRuntime `json:"adoptRuntime,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		wf, err := svc.Create(body.Name, body.Definition)
+		wf, err := svc.Create(body.Name, body.Definition, body.AdoptRuntime)
 		if err != nil {
 			writeWorkflowError(w, err)
 			return
