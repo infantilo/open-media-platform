@@ -10613,3 +10613,61 @@ zeigt Read-/Write-Zeit im Gleichschritt, Cut-API antwortet in
 ~20-50ms. `cargo test -p omp-mediaio --features mxl` (8/8) und
 `cargo build --workspace --bins` grün, `cargo clippy` sauber in den
 geänderten Dateien.
+
+## 2026-07-21 (Nachtrag 64) — `read_loop`/`read_audio_loop`: Reader
+erholt sich jetzt von `MXL_ERR_FLOW_INVALID` statt für immer zu hängen
+
+Direkter Anschluss an Nachtrag 63 — Nutzer meldete danach weiterhin:
+Viewer am Video Mixer M/E zeigt nur kurz Bild, nach einem Umschnitt
+(Source1→Source2) dauerhaft Schwarz/Stillstand.
+
+**Root Cause:** `omp-video-mixer-me`s periodische Eingangs-Neuentdeckung
+(`Command::SetInputs`, feuert bei jeder Änderung der über NMOS
+sichtbaren Sender-Liste — auch durch fremde, nicht selbst verursachte
+Ereignisse wie ablaufende Registry-Einträge anderer Nodes) baut bei
+jeder Änderung die **komplette** Pipeline neu auf, inklusive eines
+neuen `MxlVideoOutput` mit derselben Flow-ID. Aus Sicht eines bereits
+verbundenen Readers (z. B. `omp-viewer`) bedeutet das exakt den in
+`third_party/mxl/lib/include/mxl/mxl.h` dokumentierten Fall von
+`MXL_ERR_FLOW_INVALID` ("Datei wurde vom Schreiber ersetzt"). Der
+`mxl`-Rust-Crate (`third_party/mxl`, gitignored/vendored, s.
+`install-mxl.sh` — nicht committebar) kennt diesen Statuscode (11)
+noch nicht als eigene `Error`-Variante und bildet ihn auf das
+generische `Unknown` ab; `read_loop`/`read_audio_loop`
+(`omp-mediaio::mxl`) behandelten das bislang im Catch-all-Zweig:
+loggen + 200ms schlafen + denselben (jetzt für immer ungültigen)
+Index erneut versuchen — der Reader-Thread erholt sich nie mehr,
+exakt wie per `mxl-info` bestätigt ("Last read time" fror ein, "Last
+write time" lief unverändert weiter, Log zeigte denselben Index
+hunderte Male in Folge mit `Unknown error: 11`).
+
+**Fix:** neuer, spezifischer Zweig `Err(mxl::Error::Unknown(status)) if
+status == mxl_sys::MXL_ERR_FLOW_INVALID` in beiden Loops — öffnet den
+Reader über `context.instance.create_flow_reader(flow_id)` (Flow-ID
+jetzt durchgereicht, vorher fehlte sie im Loop) gegen dieselbe Flow-ID
+neu und springt auf den aktuellen Head, statt für immer zu spinnen.
+Bewusst über den rohen Statuscode (`mxl_sys::MXL_ERR_FLOW_INVALID`)
+abgefangen statt einer neuen `mxl`-Crate-Variante, weil
+`third_party/mxl` nicht Teil des Repos ist und jede Änderung dort beim
+nächsten `install-mxl.sh`-Lauf verlorenginge.
+
+**Live verifiziert:** ein künstlich über ~25s eingefrorener Reader
+(durch wiederholte `SetInputs`-Rebuilds provoziert) erholte sich
+nachweislich von selbst (`mxl-info` zeigt Read-/Write-Zeit danach
+wieder im Gleichschritt) — vorher blieb derselbe Zustand über Minuten
+bestehen (Nachtrag 63s Session). Realistischerer Test (beide Quellen
+existieren bereits vor dem Verbinden des Viewers, kein artifizieller
+Rebuild-Sturm): vier aufeinanderfolgende `select`+`cut`-Wechsel
+zwischen zwei echten Quellen zeigen jedes Mal ein reales
+Farbbalkenbild, kein Schwarzbild, Cut-API ~20ms. **Bekannter,
+verbleibender Rest:** nach einem sehr langen (>~25s) Totalausfall kann
+`omp-viewer`s eigene MJPEG-Vorschaukette (`videorate` nach einer sehr
+langen Puffer-Lücke) trotz wieder gesunder MXL-Ebene ein einzelnes
+statisches Bild weiterservieren, statt neue Frames zu zeigen — nicht
+weiter verfolgt, da im realistischen Testfall (normale Umschnitte,
+kein künstlich erzeugter Rebuild-Sturm) nicht reproduzierbar. `cargo
+test -p omp-mediaio --features mxl` (8/8), `cargo build --workspace
+--bins` grün, `cargo clippy` sauber (ein `too_many_arguments`-Warnung
+in `read_audio_loop` durch das neue `flow_id`-Argument mit
+`#[allow(...)]` quittiert, gleiches Muster wie andernorts in der
+Datei).

@@ -963,10 +963,12 @@ impl MxlVideoInput {
             }
         };
 
+        let flow_id_owned = flow_id.to_string();
         thread::spawn(move || {
             read_loop(
                 &context,
                 grain_reader,
+                &flow_id_owned,
                 &grain_rate,
                 &app_src,
                 &running_thread,
@@ -985,7 +987,8 @@ impl MxlVideoInput {
 
 fn read_loop(
     context: &Arc<MxlContext>,
-    grain_reader: mxl::GrainReader,
+    mut grain_reader: mxl::GrainReader,
+    flow_id: &str,
     grain_rate: &mxl_sys::Rational,
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
@@ -1059,6 +1062,42 @@ fn read_loop(
                 // Frame-Periode (40ms bei 25fps) und verzögern kein
                 // tatsächlich verfügbares Grain spürbar.
                 thread::sleep(Duration::from_millis(5));
+            }
+            // `MXL_ERR_FLOW_INVALID` (Statuscode 11) — der `mxl`-Crate
+            // kennt dieses Statuswort noch nicht als eigene Variante
+            // (third_party/mxl ist gitignored/vendored, s. install-mxl.sh,
+            // deshalb hier über den rohen Statuscode statt einer neuen
+            // `Error`-Variante abgefangen) und bildet es auf das generische
+            // `Unknown` ab. Live gefunden (mixer→viewer, Nutzerreport
+            // "Viewer schwarz nach Umschnitt"): sobald der schreibende Node
+            // seine Flow-Datei neu anlegt (z. B. `omp-video-mixer-me`s
+            // `SetInputs`-Rebuild, das bei jeder Eingangsänderung die ganze
+            // Pipeline inkl. `MxlVideoOutput` neu aufbaut, selbe Flow-ID),
+            // wird ein bereits offener Reader hier permanent ungültig —
+            // ohne diesen Zweig fiel das vorher in den generischen
+            // Catch-all-Zweig unten, der nie neu öffnet: derselbe Index
+            // wurde für immer wiederholt (per `mxl-info` bestätigt: "Last
+            // read time" fror ein, "Last write time" lief weiter). Fix:
+            // den Reader gegen dieselbe Flow-ID neu öffnen und den Index
+            // auf den aktuellen Head springen lassen, statt für immer zu
+            // spinnen.
+            Err(mxl::Error::Unknown(status)) if status == mxl_sys::MXL_ERR_FLOW_INVALID => {
+                match context
+                    .instance
+                    .create_flow_reader(flow_id)
+                    .and_then(|r| r.to_grain_reader())
+                {
+                    Ok(new_reader) => {
+                        grain_reader = new_reader;
+                        index = context.instance.get_current_index(grain_rate);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
+                        );
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("omp-mediaio(mxl): get_grain_non_blocking {index} failed: {e}");
@@ -1250,10 +1289,12 @@ impl MxlAudioInput {
             }
         };
 
+        let flow_id_owned = flow_id.to_string();
         thread::spawn(move || {
             read_audio_loop(
                 &context,
                 samples_reader,
+                &flow_id_owned,
                 &sample_rate_r,
                 batch_size,
                 &app_src,
@@ -1309,9 +1350,11 @@ fn interleave_samples(data: &mxl::SamplesData<'_>) -> Vec<u8> {
     buf
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_audio_loop(
     context: &Arc<MxlContext>,
-    samples_reader: mxl::SamplesReader,
+    mut samples_reader: mxl::SamplesReader,
+    flow_id: &str,
     sample_rate: &mxl_sys::Rational,
     batch_size: u64,
     app_src: &gst_app::AppSrc,
@@ -1360,6 +1403,30 @@ fn read_audio_loop(
                 // nachgewiesenen Futex-Hang im vendorten MXL-C++ bei ≥3
                 // gleichzeitigen Lesern umgeht.
                 thread::sleep(Duration::from_millis(5));
+            }
+            // Gleiches Prinzip wie in `read_loop` oben: `MXL_ERR_FLOW_INVALID`
+            // (Statuscode 11) faellt beim jetzigen `mxl`-Crate noch unter das
+            // generische `Unknown`, deshalb hier per rohem Statuscode
+            // abgefangen statt einer eigenen `Error`-Variante. Reader gegen
+            // dieselbe Flow-ID neu oeffnen statt fuer immer denselben,
+            // ungueltig gewordenen Index zu wiederholen.
+            Err(mxl::Error::Unknown(status)) if status == mxl_sys::MXL_ERR_FLOW_INVALID => {
+                match context
+                    .instance
+                    .create_flow_reader(flow_id)
+                    .and_then(|r| r.to_samples_reader())
+                {
+                    Ok(new_reader) => {
+                        samples_reader = new_reader;
+                        index = context.instance.get_current_index(sample_rate);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
+                        );
+                        thread::sleep(Duration::from_millis(200));
+                    }
+                }
             }
             Err(e) => {
                 eprintln!("omp-mediaio(mxl): get_samples_non_blocking {index} failed: {e}");
