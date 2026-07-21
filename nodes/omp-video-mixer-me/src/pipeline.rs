@@ -131,6 +131,28 @@ pub struct DiscoveredInput {
     pub lowres_flow_id: Option<String>,
 }
 
+/// Ein per NMOS-Device gefundenes Fill+Key-Senderpaar (`main.rs::
+/// discover_keyfill`) — Kandidat für den Keyer-DSK-Eingang (§13.1 „Keyer:
+/// Chroma/Luma/DSK"). Klarstellung ARCHITECTURE.md 2026-07-12: „ein DSK
+/// ist signalflusstechnisch nichts anderes als ein Keyer, der den
+/// Programmbus als Hintergrund nimmt und OGrafs Ausgang als Quelle
+/// wählt" — `omp-ograf` (Kapitel 5) veröffentlicht genau ein solches Paar
+/// (`<Label> Fill` + `<Label> Key`, beide `video/v210`, s. dortige
+/// Moduldoku „Teil 2 (Mixer-DSK-Anschluss) compositiert beide
+/// zusammen") pro Grafik-Instanz; jede künftige CG-Quelle mit derselben
+/// Sender-Namenskonvention wird automatisch mit erkannt.
+#[derive(Debug, Clone)]
+pub struct DiscoveredKeyFill {
+    pub device_id: String,
+    /// Basis-Label ohne " Fill"-Suffix (z. B. "OGraf Grafik (27396541)"),
+    /// fürs UI-Dropdown.
+    pub label: String,
+    pub fill_sender_id: String,
+    pub fill_flow_id: String,
+    pub key_sender_id: String,
+    pub key_flow_id: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DveBox {
     pub x: i32,
@@ -180,6 +202,8 @@ enum Command {
     SetDveBox(DveBox),
     ResetDve,
     SetKeyerEnabled(bool),
+    SetKeyFillInputs(Vec<DiscoveredKeyFill>),
+    SetKeyerSource(Option<String>),
 }
 
 #[derive(Clone)]
@@ -241,6 +265,17 @@ impl PipelineHandle {
     pub fn set_keyer_enabled(&self, enabled: bool) {
         let _ = self.commands.send(Command::SetKeyerEnabled(enabled));
     }
+
+    pub fn set_keyfill_inputs(&self, inputs: Vec<DiscoveredKeyFill>) {
+        let _ = self.commands.send(Command::SetKeyFillInputs(inputs));
+    }
+
+    /// `fill_sender_id` wählt das Fill+Key-Paar (identifiziert über den
+    /// Fill-Sender, s. `DiscoveredKeyFill`), `None` schaltet zurück auf
+    /// die synthetische Test-Farbfläche (Default, s. `build`).
+    pub fn set_keyer_source(&self, fill_sender_id: Option<String>) {
+        let _ = self.commands.send(Command::SetKeyerSource(fill_sender_id));
+    }
 }
 
 fn video_caps(width: u32, height: u32) -> gst::Caps {
@@ -264,6 +299,90 @@ fn rgba_caps(width: u32, height: u32) -> gst::Caps {
             gst::Fraction::new(FRAMERATE_NUMERATOR as i32, FRAMERATE_DENOMINATOR as i32),
         )
         .build()
+}
+
+/// Caps für den Fill-Zweig einer `alphacombine`-Kombination — `format`/
+/// `colorimetry` bewusst fest verdrahtet (nicht Breite/Höhe: die kommen
+/// unverändert vom Quell-Node, z. B. `omp-ograf`s 1280×720, `videoscale`
+/// in `build_normalized_branch` skaliert danach auf `config.width`/
+/// `config.height`). `colorimetry=bt601` MUSS mit `keyfill_key_caps`
+/// übereinstimmen — live gefunden (`gst-launch-1.0`-Minimaltest):
+/// `alphacombine` verweigert sonst mit "Color range miss-match" die
+/// Verhandlung, selbst wenn Format/Auflösung sonst passen.
+fn keyfill_fill_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("format", "I420")
+        .field("colorimetry", "bt601")
+        .build()
+}
+
+/// S. `keyfill_fill_caps` — `GRAY8` trägt die Key-Ebene (Luma als Alpha-
+/// Maske, s. `omp-ograf::pipeline::spawn_alpha_key_bridge`, das dieselbe
+/// Kodierung umgekehrt erzeugt).
+fn keyfill_key_caps() -> gst::Caps {
+    gst::Caps::builder("video/x-raw")
+        .field("format", "GRAY8")
+        .field("colorimetry", "bt601")
+        .build()
+}
+
+/// Baut Fill+Key-MXL-Eingänge plus `alphacombine` zu einem einzigen,
+/// alpha-tragenden `tail`-Element zusammen — Gegenstück zum synthetischen
+/// `videotestsrc pattern=solid-color` (Default ohne gewählte Quelle, s.
+/// `build`). Live per `gst-launch-1.0` verifiziert (nicht angenommen):
+/// `alphacombine` (Element `codecalpha`-Plugin, GStreamer-Bad,
+/// eigentlich für VP8/VP9-Alpha-Codecs gedacht, aber generisch nutzbar)
+/// kombiniert eine Fill- mit einer Key-Ebene zu `A420`/`AV12`, das
+/// `videoconvert` danach anstandslos nach RGBA mit echtem Pro-Pixel-Alpha
+/// wandelt — reines Broadcast-DSK-Verfahren, keine Neuerfindung.
+/// Rückgabe: das `alphacombine`-Element selbst (dient `build_normalized_
+/// branch` als `tail`, dessen `queue`-Erstglied den nötigen Puffer vor
+/// `comp` liefert — dieselbe Begründung wie bei jedem anderen Zweig,
+/// `docs/decisions.md` Nachtrag 63) sowie beide `MxlVideoInput`s (müssen
+/// über die Lebensdauer der Pipeline am Leben gehalten werden, sonst
+/// stirbt ihr `read_loop`-Thread beim `Drop`).
+fn build_keyfill_tail(
+    pipeline: &gst::Pipeline,
+    context: &Arc<MxlContext>,
+    keyfill: &DiscoveredKeyFill,
+) -> Result<(gst::Element, MxlVideoInput, MxlVideoInput), String> {
+    let fill_input = MxlVideoInput::new(pipeline, context.clone(), &keyfill.fill_flow_id)
+        .map_err(|e| format!("MxlVideoInput(keyer-fill, {}): {e}", keyfill.fill_sender_id))?;
+    let fill_caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", keyfill_fill_caps())
+        .build()
+        .map_err(|e| format!("capsfilter (keyer-fill): {e}"))?;
+    pipeline.add(&fill_caps).map_err(|e| format!("add keyer-fill caps: {e}"))?;
+    gst::Element::link(&fill_input.tail, &fill_caps).map_err(|e| format!("link keyer-fill caps: {e}"))?;
+
+    let key_input = MxlVideoInput::new(pipeline, context.clone(), &keyfill.key_flow_id)
+        .map_err(|e| format!("MxlVideoInput(keyer-key, {}): {e}", keyfill.key_sender_id))?;
+    let key_caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", keyfill_key_caps())
+        .build()
+        .map_err(|e| format!("capsfilter (keyer-key): {e}"))?;
+    pipeline.add(&key_caps).map_err(|e| format!("add keyer-key caps: {e}"))?;
+    gst::Element::link(&key_input.tail, &key_caps).map_err(|e| format!("link keyer-key caps: {e}"))?;
+
+    let alphacombine = gst::ElementFactory::make("alphacombine")
+        .build()
+        .map_err(|e| format!("alphacombine: {e}"))?;
+    pipeline.add(&alphacombine).map_err(|e| format!("add alphacombine: {e}"))?;
+
+    let alpha_sink_pad = alphacombine.static_pad("sink").ok_or("alphacombine: no sink pad")?;
+    let alpha_alpha_pad = alphacombine.static_pad("alpha").ok_or("alphacombine: no alpha pad")?;
+    fill_caps
+        .static_pad("src")
+        .ok_or("keyer-fill caps: no src pad")?
+        .link(&alpha_sink_pad)
+        .map_err(|e| format!("link fill to alphacombine: {e}"))?;
+    key_caps
+        .static_pad("src")
+        .ok_or("keyer-key caps: no src pad")?
+        .link(&alpha_alpha_pad)
+        .map_err(|e| format!("link key to alphacombine: {e}"))?;
+
+    Ok((alphacombine, fill_input, key_input))
 }
 
 /// Welcher Flow für `input` gerade gelesen werden soll: Highres, wenn er
@@ -781,6 +900,11 @@ struct ActivePipeline {
     fg_branches: HashMap<String, InputBranch>,
     bg_branches: HashMap<String, InputBranch>,
     _mxl_output: MxlVideoOutput,
+    /// `Some` nur, wenn der Keyer gerade eine echte Fill+Key-Quelle liest
+    /// (statt der synthetischen Test-Farbfläche) — hält deren
+    /// `MxlVideoInput`s am Leben, sonst stirbt ihr `read_loop`-Thread
+    /// beim `Drop` (s. `build_keyfill_tail`).
+    _keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
     flowed: Arc<AtomicBool>,
 }
 
@@ -826,6 +950,8 @@ fn build(
     config: &Config,
     inputs: &[DiscoveredInput],
     program: &Option<String>,
+    keyfill_inputs: &[DiscoveredKeyFill],
+    keyer_source: &Option<String>,
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let pipeline = gst::Pipeline::new();
 
@@ -968,30 +1094,57 @@ fn build(
         .link(&comp_bg_pad)
         .map_err(|e| format!("link isel_bg to comp.sink_1: {e}"))?;
 
-    // ── comp.sink_2 = Keyer-DSK-Farbfläche (zorder 3, obenauf, alpha vom
-    //    Aufrufer nach dem Build per `keyer.enabled`-Zustand gesetzt).
-    let keyer_src = gst::ElementFactory::make("videotestsrc")
-        .property("is-live", true)
-        .property("foreground-color", KEYER_COLOR_ARGB)
-        .build()
-        .map_err(|e| format!("videotestsrc (keyer): {e}"))?;
-    keyer_src.set_property_from_str("pattern", "solid-color");
-    pipeline
-        .add(&keyer_src)
-        .map_err(|e| format!("add keyer source: {e}"))?;
+    // ── comp.sink_2 = Keyer/DSK (zorder 3, obenauf, alpha vom Aufrufer
+    //    nach dem Build per `keyer.enabled`-Zustand gesetzt). Zwei
+    //    Varianten: ohne gewählte Fill+Key-Quelle die bisherige
+    //    synthetische Test-Farbfläche (kleine, zentrierte Box — reine
+    //    Demo-Anzeige, keine echte Keying-Semantik); mit gewählter Quelle
+    //    ein echtes Downstream-Key aus Fill+Key-MXL-Flows (`omp-ograf`
+    //    o. Ä., s. `build_keyfill_tail`) — vollflächig wie der
+    //    Programm-Bus, weil eine reale Grafik/CG-Quelle ihre eigene
+    //    Transparenz über die Key-Ebene selbst mitbringt, nicht über eine
+    //    vom Mixer vorgegebene Box.
+    let keyer_source_input = keyer_source
+        .as_ref()
+        .and_then(|id| keyfill_inputs.iter().find(|k| &k.fill_sender_id == id));
+    let (keyer_tail, keyer_keyfill) = match keyer_source_input {
+        Some(kf) => {
+            let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
+            (tail, Some((fill_input, key_input)))
+        }
+        None => {
+            let keyer_src = gst::ElementFactory::make("videotestsrc")
+                .property("is-live", true)
+                .property("foreground-color", KEYER_COLOR_ARGB)
+                .build()
+                .map_err(|e| format!("videotestsrc (keyer): {e}"))?;
+            keyer_src.set_property_from_str("pattern", "solid-color");
+            pipeline
+                .add(&keyer_src)
+                .map_err(|e| format!("add keyer source: {e}"))?;
+            (keyer_src, None)
+        }
+    };
     let (keyer_caps, _) =
-        build_normalized_branch(&pipeline, &keyer_src, "keyer", config.width, config.height)?;
+        build_normalized_branch(&pipeline, &keyer_tail, "keyer", config.width, config.height)?;
     let comp_keyer_pad = comp
         .request_pad_simple("sink_2")
         .ok_or("comp: request sink_2 (keyer) failed")?;
-    let keyer_width = (config.width / 3) as i32;
-    let keyer_height = (config.height / 3) as i32;
     comp_keyer_pad.set_property("zorder", 3u32);
     comp_keyer_pad.set_property("alpha", 0.0f64);
-    comp_keyer_pad.set_property("xpos", (config.width as i32 - keyer_width) / 2);
-    comp_keyer_pad.set_property("ypos", (config.height as i32 - keyer_height) / 2);
-    comp_keyer_pad.set_property("width", keyer_width);
-    comp_keyer_pad.set_property("height", keyer_height);
+    if keyer_keyfill.is_some() {
+        comp_keyer_pad.set_property("xpos", 0i32);
+        comp_keyer_pad.set_property("ypos", 0i32);
+        comp_keyer_pad.set_property("width", config.width as i32);
+        comp_keyer_pad.set_property("height", config.height as i32);
+    } else {
+        let keyer_width = (config.width / 3) as i32;
+        let keyer_height = (config.height / 3) as i32;
+        comp_keyer_pad.set_property("xpos", (config.width as i32 - keyer_width) / 2);
+        comp_keyer_pad.set_property("ypos", (config.height as i32 - keyer_height) / 2);
+        comp_keyer_pad.set_property("width", keyer_width);
+        comp_keyer_pad.set_property("height", keyer_height);
+    }
     keyer_caps
         .static_pad("src")
         .ok_or("keyer capsfilter: no src pad")?
@@ -1041,6 +1194,7 @@ fn build(
             fg_branches,
             bg_branches,
             _mxl_output: mxl_output,
+            _keyer_keyfill: keyer_keyfill,
             flowed,
         },
         warnings,
@@ -1276,7 +1430,9 @@ pub fn run(
     let flowed_slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
 
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
-    let mut active = match build(&context, &config, &current_inputs, &None) {
+    let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
+    let mut keyer_source: Option<String> = None;
+    let mut active = match build(&context, &config, &current_inputs, &None, &keyfill_inputs, &keyer_source) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
@@ -1342,7 +1498,7 @@ pub fn run(
                     pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &program) {
+                    match build(&context, &config, &current_inputs, &program, &keyfill_inputs, &keyer_source) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1376,7 +1532,75 @@ pub fn run(
                                 "rebuild with {} inputs failed: {e} — falling back to black",
                                 current_inputs.len()
                             )));
-                            match build(&context, &config, &[], &program) {
+                            match build(&context, &config, &[], &program, &keyfill_inputs, &keyer_source) {
+                                Ok((p, _warnings)) => {
+                                    apply_dve_box(&p.comp_fg_pad, &dve_box);
+                                    let previous = program.take();
+                                    preset = None;
+                                    *flowed_slot.lock().expect("lock poisoned") =
+                                        Some(p.flowed.clone());
+                                    active = Some(p);
+                                    let _ = tx.send(Event::ProgramChanged {
+                                        previous,
+                                        current: None,
+                                    });
+                                }
+                                Err(e2) => {
+                                    let _ = tx.send(Event::Error(format!(
+                                        "fallback black-only build also failed: {e2}"
+                                    )));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Command::SetKeyFillInputs(inputs)) => {
+                // Reine Buchführung, kein Rebuild — anders als
+                // `SetInputs`s Crosspoint-Kandidaten wird eine gerade
+                // NICHT als Keyer-Quelle gewählte Fill+Key-Quelle im
+                // laufenden Pipeline-Zustand gar nicht berührt (kein
+                // `MxlVideoInput` dafür existiert). Ändert sich die
+                // Menge, während eine Quelle AKTIV gewählt ist, greift der
+                // neue Stand erst beim nächsten `keyer.setSource`
+                // (bewusst einfach gehalten für den ersten Ausbau, s.
+                // `docs/decisions.md`).
+                keyfill_inputs = inputs;
+            }
+            Ok(Command::SetKeyerSource(source)) => {
+                if keyer_source != source {
+                    keyer_source = source;
+                    join_fade(&fade_thread);
+                    fading.store(false, Ordering::Release);
+                    pending_bg_demote = None;
+                    active = None;
+                    std::thread::sleep(OLD_WRITER_DRAIN);
+                    match build(&context, &config, &current_inputs, &program, &keyfill_inputs, &keyer_source) {
+                        Ok((p, warnings)) => {
+                            for w in warnings {
+                                let _ = tx.send(Event::Error(w));
+                            }
+                            let applied_program =
+                                switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &program);
+                            switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &program);
+                            apply_dve_box(&p.comp_fg_pad, &dve_box);
+                            p.comp_keyer_pad
+                                .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
+                            let previous = program.clone();
+                            program = applied_program;
+                            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
+                            active = Some(p);
+                            let _ = tx.send(Event::ProgramChanged {
+                                previous,
+                                current: program.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(format!(
+                                "keyer source rebuild failed: {e} — falling back to black"
+                            )));
+                            match build(&context, &config, &[], &program, &keyfill_inputs, &keyer_source) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                                     let previous = program.take();

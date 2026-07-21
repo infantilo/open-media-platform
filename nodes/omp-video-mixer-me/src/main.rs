@@ -41,7 +41,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     PeerClient, RawResponse, SenderSpec, SetError, resolve_owning_node_href,
 };
-use pipeline::{DiscoveredInput, DveBox};
+use pipeline::{DiscoveredInput, DiscoveredKeyFill, DveBox};
 use serde_json::Value;
 
 /// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
@@ -55,6 +55,8 @@ struct MixerStore {
     preset: Arc<Mutex<Option<String>>>,
     dve_box: Arc<Mutex<DveBox>>,
     keyer_enabled: Arc<Mutex<bool>>,
+    keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
+    keyer_source: Arc<Mutex<Option<String>>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -106,6 +108,23 @@ impl ParamStore for MixerStore {
                 ParamSpec {
                     name: "keyer.enabled".to_string(),
                     kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                // Fill+Key-Senderpaare (`omp-ograf` o. Ä., s.
+                // `pipeline::DiscoveredKeyFill`-Doku) — JSON-Array, gleiche
+                // Array-Ausnahme wie "crosspoint.inputs".
+                ParamSpec {
+                    name: "keyer.inputs".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "keyer.source".to_string(),
+                    kind: ParamType::String,
                     unit: None,
                     range: None,
                     readonly: true,
@@ -166,6 +185,16 @@ impl ParamStore for MixerStore {
                         kind: ParamType::Boolean,
                     }],
                 },
+                // Leerer String wählt die synthetische Test-Farbfläche
+                // (Default) ab statt einer echten Fill+Key-Quelle, gleiche
+                // Konvention wie "crosspoint.select"/"crosspoint.take".
+                MethodSpec {
+                    name: "keyer.setSource".to_string(),
+                    args: vec![MethodArg {
+                        name: "senderId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
             ],
         }
     }
@@ -201,6 +230,22 @@ impl ParamStore for MixerStore {
             }
             "keyer.enabled" => Some(serde_json::json!(
                 *self.keyer_enabled.lock().expect("lock poisoned")
+            )),
+            "keyer.inputs" => {
+                let inputs = self.keyfill_inputs.lock().expect("lock poisoned");
+                Some(serde_json::json!(
+                    inputs
+                        .iter()
+                        .map(|k| serde_json::json!({
+                            "senderId": k.fill_sender_id,
+                            "label": k.label,
+                            "deviceId": k.device_id,
+                        }))
+                        .collect::<Vec<_>>()
+                ))
+            }
+            "keyer.source" => Some(serde_json::json!(
+                self.keyer_source.lock().expect("lock poisoned").clone().unwrap_or_default()
             )),
             _ => None,
         }
@@ -268,6 +313,20 @@ impl ParamStore for MixerStore {
                 self.pipeline.set_keyer_enabled(enabled);
                 Ok(())
             }
+            "keyer.setSource" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let selected = if sender_id.is_empty() {
+                    None
+                } else {
+                    Some(sender_id.to_string())
+                };
+                *self.keyer_source.lock().expect("lock poisoned") = selected.clone();
+                self.pipeline.set_keyer_source(selected);
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -311,6 +370,7 @@ impl MixerStore {
             "presetSenderId": self.preset.lock().expect("lock poisoned").clone(),
             "dveBox": {"x": box_.x, "y": box_.y, "width": box_.width, "height": box_.height},
             "keyerEnabled": *self.keyer_enabled.lock().expect("lock poisoned"),
+            "keyerSourceSenderId": self.keyer_source.lock().expect("lock poisoned").clone(),
         })
     }
 
@@ -336,6 +396,10 @@ impl MixerStore {
         }
         if let Some(enabled) = doc.get("keyerEnabled").and_then(Value::as_bool) {
             self.pipeline.set_keyer_enabled(enabled);
+        }
+        if let Some(source) = doc.get("keyerSourceSenderId").and_then(Value::as_str).map(str::to_string) {
+            *self.keyer_source.lock().expect("lock poisoned") = Some(source.clone());
+            self.pipeline.set_keyer_source(Some(source));
         }
     }
 }
@@ -399,6 +463,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let preset = Arc::new(Mutex::new(None::<String>));
     let dve_box = Arc::new(Mutex::new(DveBox::full_frame(width, height)));
     let keyer_enabled = Arc::new(Mutex::new(false));
+    let keyfill_inputs = Arc::new(Mutex::new(Vec::<DiscoveredKeyFill>::new()));
+    let keyer_source = Arc::new(Mutex::new(None::<String>));
 
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
         inputs: inputs.clone(),
@@ -406,6 +472,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         preset: preset.clone(),
         dve_box: dve_box.clone(),
         keyer_enabled: keyer_enabled.clone(),
+        keyfill_inputs: keyfill_inputs.clone(),
+        keyer_source: keyer_source.clone(),
         pipeline: pipeline_handle.clone(),
     });
 
@@ -460,6 +528,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         sender_id,
         pipeline_handle,
         inputs.clone(),
+        keyfill_inputs,
     );
 
     let events = handle_events(
@@ -634,7 +703,10 @@ fn is_lowres_companion(s: &Sender) -> bool {
 /// zusätzlich Kapitel 15 Teil 3 (Rest 2): pro Eingang den Lowres-
 /// Begleit-Sender (falls vorhanden) verlinken, Lowres-Sender selbst
 /// nicht als eigenen Eingang führen.
-fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<DiscoveredInput>, String> {
+fn discover(
+    registry: &RegistryClient,
+    own_sender_id: &str,
+) -> Result<(Vec<DiscoveredInput>, Vec<DiscoveredKeyFill>), String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
     let lowres_map = lowres_by_group(&senders);
 
@@ -665,7 +737,44 @@ fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<Discov
             lowres_flow_id: lowres.map(|(_, fid)| fid),
         });
     }
-    Ok(discovered)
+    Ok((discovered, discover_keyfill(&senders, own_sender_id)))
+}
+
+/// Findet Fill+Key-Senderpaare je NMOS-Device (Keyer-DSK-Kandidaten, s.
+/// `pipeline::DiscoveredKeyFill`-Doku) in einer bereits abgerufenen
+/// Sender-Liste — arbeitet bewusst auf demselben `senders`-Schnappschuss
+/// wie die Crosspoint-Eingangs-Erkennung oben (ein `list_senders()`-Ruf
+/// pro Poll reicht). Namenskonvention exakt wie von `omp-ograf`
+/// veröffentlicht: `"<Label> Fill"` + `"<Label> Key"` auf demselben
+/// `device_id` (die dritte, `"<Label> Fill Lowres"`, ist bewusst
+/// ausgeschlossen — nur eine reine Vorschau, s. `omp-ograf`s Kapitel-15-
+/// Teil-4-Moduldoku).
+fn discover_keyfill(senders: &[Sender], own_sender_id: &str) -> Vec<DiscoveredKeyFill> {
+    let mut by_device: HashMap<&str, Vec<&Sender>> = HashMap::new();
+    for s in senders {
+        if s.transport != TRANSPORT_MXL || s.id == own_sender_id {
+            continue;
+        }
+        by_device.entry(s.device_id.as_str()).or_default().push(s);
+    }
+
+    let mut result = Vec::new();
+    for (device_id, group) in by_device {
+        let fill = group.iter().find(|s| s.label.ends_with(" Fill"));
+        let key = group.iter().find(|s| s.label.ends_with(" Key"));
+        let (Some(fill), Some(key)) = (fill, key) else { continue };
+        let (Some(fill_flow_id), Some(key_flow_id)) = (&fill.flow_id, &key.flow_id) else { continue };
+        let label = fill.label.strip_suffix(" Fill").unwrap_or(&fill.label).to_string();
+        result.push(DiscoveredKeyFill {
+            device_id: device_id.to_string(),
+            label,
+            fill_sender_id: fill.id.clone(),
+            fill_flow_id: fill_flow_id.clone(),
+            key_sender_id: key.id.clone(),
+            key_flow_id: key_flow_id.clone(),
+        });
+    }
+    result
 }
 
 /// Wie bei `omp-switcher` (C7): pollt alle 2s die IS-04-Query-API nach
@@ -687,6 +796,7 @@ async fn discovery_loop(
     own_sender_id: String,
     pipeline: pipeline::PipelineHandle,
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
+    keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
 ) {
     let registry = RegistryClient::new(registry_url);
     let mut interval = tokio::time::interval(Duration::from_secs(2));
@@ -699,7 +809,7 @@ async fn discovery_loop(
         let result =
             tokio::task::spawn_blocking(move || discover(&registry_for_poll, &own_sender_id_for_poll)).await;
 
-        let discovered = match result {
+        let (discovered, discovered_keyfill) = match result {
             Ok(Ok(discovered)) => discovered,
             Ok(Err(e)) => {
                 eprintln!("omp-video-mixer-me: discovery poll failed: {e}");
@@ -710,6 +820,8 @@ async fn discovery_loop(
                 continue;
             }
         };
+        *keyfill_inputs.lock().expect("lock poisoned") = discovered_keyfill.clone();
+        pipeline.set_keyfill_inputs(discovered_keyfill);
 
         let mut discovered = discovered;
         let wanted_ids: std::collections::HashSet<&str> =

@@ -64,6 +64,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .bus-buttons omp-button { width: 58px; height: 36px; font-size: 10px; }
       .fx-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
       .fx-row omp-button { flex: 1; height: 34px; }
+      .keyer-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
+      .keyer-row select {
+        flex: 1; height: 26px; font-size: 10px; border-radius: 4px;
+        background: var(--omp-bg-2, #1c1f22); color: var(--omp-text, #e8eaed);
+        border: 1px solid var(--omp-border, #2e3338);
+      }
       .rate-row { display: flex; gap: 4px; margin-top: 6px; }
       .rate-row omp-button { width: 34px; height: 26px; font-size: 10px; }
       .transition {
@@ -103,10 +109,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
     const fxRow = document.createElement("div");
     fxRow.className = "fx-row";
+    const keyerRow = document.createElement("div");
+    keyerRow.className = "keyer-row";
+    const keyerSourceLabel = document.createElement("span");
+    keyerSourceLabel.className = "bus-label";
+    keyerSourceLabel.textContent = "KEY";
+    const keyerSourceSelect = document.createElement("select");
+    keyerRow.append(keyerSourceLabel, keyerSourceSelect);
     const rateRow = document.createElement("div");
     rateRow.className = "rate-row";
 
-    buses.append(pgmRow, pstRow, fxRow, rateRow);
+    buses.append(pgmRow, pstRow, fxRow, keyerRow, rateRow);
 
     const transition = document.createElement("div");
     transition.className = "transition";
@@ -256,6 +269,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
     let keyerEnabled = false;
     keyerBtn.addEventListener("click", () => call("keyer.setEnabled", { enabled: !keyerEnabled }));
 
+    // Fill+Key-Quelle für den Keyer (z. B. `omp-ograf`, s. `pipeline.rs::
+    // DiscoveredKeyFill`-Doku) — leerer Wert = synthetische Test-
+    // Farbfläche (Default, kein echtes Downstream-Key).
+    keyerSourceSelect.addEventListener("change", () => call("keyer.setSource", { senderId: keyerSourceSelect.value }));
+
     const dveBtn = document.createElement("omp-button");
     dveBtn.textContent = "PIP";
     dveBtn.setAttribute("color", "preset");
@@ -273,12 +291,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
     };
 
     const refresh = async () => {
-      const [inputsRes, programRes, presetRes, keyerRes, dveRes] = await Promise.all([
+      const [inputsRes, programRes, presetRes, keyerRes, dveRes, keyerInputsRes, keyerSourceRes] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.programInput`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.presetInput`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.enabled`),
         fetch(`/api/v1/nodes/${nodeId}/params/dve.box`),
+        fetch(`/api/v1/nodes/${nodeId}/params/keyer.inputs`),
+        fetch(`/api/v1/nodes/${nodeId}/params/keyer.source`),
       ]);
       if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
       const inputs = (await inputsRes.json()).value || [];
@@ -287,6 +307,29 @@ class OmpVideoMixerMePanel extends HTMLElement {
       keyerEnabled = keyerRes.ok ? (await keyerRes.json()).value === true : false;
       const dveBox = dveRes.ok ? (await dveRes.json()).value : null;
       dvePipActive = !!dveBox && dveBox.width < WIDTH;
+      const keyerInputs = keyerInputsRes.ok ? (await keyerInputsRes.json()).value || [] : [];
+      const keyerSource = keyerSourceRes.ok ? (await keyerSourceRes.json()).value || "" : "";
+
+      // Dropdown nur neu bauen, wenn sich die Optionen tatsächlich
+      // geändert haben (sonst würde ein offenes Dropdown bei jedem
+      // 2s-Poll unter dem Cursor zuklappen) — Vergleich per JSON-String
+      // reicht hier, die Liste ist klein und ändert sich selten.
+      const keyerOptionsKey = JSON.stringify(keyerInputs.map((k) => k.senderId));
+      if (keyerSourceSelect.dataset.optionsKey !== keyerOptionsKey) {
+        keyerSourceSelect.dataset.optionsKey = keyerOptionsKey;
+        keyerSourceSelect.innerHTML = "";
+        const testOpt = document.createElement("option");
+        testOpt.value = "";
+        testOpt.textContent = "Testfarbe";
+        keyerSourceSelect.append(testOpt);
+        for (const k of keyerInputs) {
+          const opt = document.createElement("option");
+          opt.value = k.senderId;
+          opt.textContent = k.label;
+          keyerSourceSelect.append(opt);
+        }
+      }
+      keyerSourceSelect.value = keyerSource;
 
       pgmButtons.innerHTML = "";
       pstButtons.innerHTML = "";

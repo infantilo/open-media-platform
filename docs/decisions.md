@@ -10784,3 +10784,89 @@ heruntergestuften Eingang zurückschalten).
 --workspace --bins` grün, `cargo clippy` sauber in den geänderten
 Dateien (`nodes/omp-video-mixer-me/src/pipeline.rs`,
 `nodes/omp-switcher/src/pipeline.rs`, `nodes/omp-mediaio/src/mxl.rs`).
+
+## 2026-07-21 (Nachtrag 66) — `omp-video-mixer-me`: Keyer bekommt einen
+echten Fill/Key-Eingang (DSK)
+
+Direkter Anschluss an die Nutzer-Vorgabe „danach weiter mit mixer DSK
+(key/fill) eingang" / „zuerst dsk". Bisher war `keyer` (comp.sink_2,
+zorder=3, über dem PGM) fest eine synthetische `videotestsrc
+pattern=solid-color`-Testfläche — nützlich, um Alpha/Zorder/Enable zu
+verifizieren, aber kein echter DSK. Ziel: eine echte
+`omp-ograf`-Grafik (Fill+Key-Sender-Paar, s. Kapitel 15 Teil 4) als
+Keyer-Quelle wählbar machen, mit echtem Pro-Pixel-Alpha statt fester
+Box.
+
+**Discovery:** `omp-ograf` benennt seine beiden Sender nach Konvention
+`"<Label> Fill"` / `"<Label> Key"` auf derselben `device_id` (kein
+neues NMOS-Schema nötig). Neue `discover_keyfill()`-Funktion in
+`main.rs` gruppiert alle sichtbaren Sender nach `device_id`, akzeptiert
+ein Gerät nur, wenn beide Label-Suffixe vorhanden sind, und liefert
+`DiscoveredKeyFill { fill_sender_id, key_sender_id, label }`. Bestehende
+`discover()` liefert jetzt ein Tupel `(Vec<DiscoveredInput>,
+Vec<DiscoveredKeyFill>)`, `discovery_loop()` entsprechend erweitert.
+
+**Compositing:** `alphacombine` (Element aus dem `codecalpha`-Plugin,
+GStreamer-Bad) kombiniert Fill (I420/NV12) und Key/Alpha
+(GRAY8/I420/NV12) zu A420/AV12 mit echtem Pro-Pixel-Alpha — genau das
+Gegenstück zu `omp-ograf`s `spawn_alpha_key_bridge`. Neue
+`build_keyfill_tail()` öffnet beide MXL-Eingänge (Fill, Key), legt je
+einen `capsfilter` mit fest verdrahtetem `format`+`colorimetry` an und
+verlinkt beide auf `alphacombine`s `sink`-/`alpha`-Pad. **Stolperstein:**
+`alphacombine` verweigert mit "Color range miss-match", wenn Fill- und
+Key-Zweig unterschiedliche `colorimetry` melden (auch wenn beide
+technisch gültig sind) — Fix: beide Caps-Filter erzwingen explizit
+`colorimetry=bt601`, nicht nur `format`.
+
+**Umschaltung Test-Keyer ↔ echter Fill/Key:** neue
+`Command::SetKeyFillInputs`/`SetKeyerSource` +
+`PipelineHandle::set_keyfill_inputs()`/`set_keyer_source()`. `build()`
+bekommt `keyfill_inputs`/`keyer_source` als zusätzliche Parameter;
+`keyer_source: &Option<String>` referenziert eine Fill-Sender-ID.
+Gefunden in `keyfill_inputs` → `alphacombine`-Zweig gebaut, `comp`s
+Keyer-Pad läuft dann vollflächig (`xpos/ypos=0`, `width/height` =
+volle Zielauflösung, keine feste Box mehr); sonst (oder Sender
+verschwindet aus der Registry) fällt der Aufbau auf die alte
+`videotestsrc`-Testfläche zurück (feste Box, ein Drittel der Fläche,
+mittig) — kein Sonderfall im UI/State nötig, derselbe
+`comp_keyer_pad`/`keyer_enabled`-Alpha-Ein-/Ausschalter wirkt in
+beiden Fällen identisch. Persistenz: `keyerSourceSenderId` in
+`capture_state()`/`restore_state()`, überlebt also einen Neustart wie
+alle anderen Mixer-Parameter.
+
+**API/UI:** neue Descriptor-Parameter `keyer.inputs` (read-only Liste
+der entdeckten Fill/Key-Paare) und Methode `keyer.setSource`
+(`fill_sender_id` oder `null` für zurück auf Testfläche). UI-Bundle
+bekommt ein `keyerSourceSelect`-Dropdown (`.keyer-row`), das `refresh()`
+aus `keyer.inputs`/`keyer.source` befüllt/synchronisiert.
+
+**Verifikation:** live gegen eine echte laufende `omp-ograf`-Instanz
+(Lower-Third-Template) getestet — direkter Frame-Vergleich
+(`dsk_enabled_frame.jpg` vs. `dsk_disabled_frame.jpg`) zeigt bei
+aktivem Keyer die Grafik korrekt mit echtem Pro-Pixel-Alpha über dem
+PGM-Hintergrund, bei deaktiviertem Keyer denselben Hintergrund
+unverändert. Zusätzlich per echtem Chromium/CDP-Klick (Doppelklick auf
+die Mixer-Kachel öffnet das Parameter-Panel, `flow-canvas.ts`-typisch)
+verifiziert: das neue KEY-Dropdown rendert, zeigt die entdeckte
+Fill/Key-Quelle korrekt zur Auswahl an (Screenshot
+`mixer_panel5.png`).
+
+**Nebenbefund, kein Regressions-Zusammenhang:** `cargo test -p
+omp-mediaio --features mxl` läuft alle 8 Tests grün durch, der
+Testbinary crasht danach beim Prozessende mit SIGSEGV (Signal 11).
+Reproduzierbar (zweimal identisch). Per `git stash` gezielt gegen den
+letzten committeten Stand (ohne jede DSK-Änderung) gegengetestet:
+**derselbe Crash tritt identisch auf** — vorbestehend, nicht durch
+diese Änderung eingeführt. Nicht weiter verfolgt (Testergebnis selbst
+bleibt 8/8 grün, der Crash passiert erst nach Testende beim
+Prozess-Teardown); bei Gelegenheit mit `gdb` node-übergreifend
+eingrenzen, sobald die Sandbox das erlaubt oder außerhalb davon
+getestet wird.
+
+`cargo build --workspace --bins`/`cargo clippy` sauber in den
+geänderten Dateien (`nodes/omp-video-mixer-me/src/{main,pipeline}.rs`,
+`nodes/omp-video-mixer-me/ui/bundle.js`). Nicht angetastet: Kapitel
+15 Teil 3 Rest 2 (Mixer-Hot-Swap, weiterhin blockiert, s. Nachtrag 51)
+— DSK nutzt bewusst keinen Hot-Swap-Pfad, Fill/Key-Eingänge werden
+komplett neu aufgebaut wie jeder andere `SetInputs`/`SetKeyFillInputs`-
+Rebuild.
