@@ -39,20 +39,49 @@
 //! pattern=solid-color`), per/via `keyer.setEnabled` ein-/ausblendbar —
 //! deckt exakt die C10-Verifikation „Farbfläche über Hintergrund" ab.
 //!
-//! **Kapitel 15 Teil 3 (Rest 2): nicht-selektierte Eingänge in Lowres.**
-//! Gleiche Technik wie `omp-switcher` (Pad-Block-Hot-Swap,
-//! `swap_input_resolution`, dort ausführlich dokumentierte Bug-Historie
-//! — hier nicht wiederholt), aber auf **zwei** unabhängige Branch-Pools
-//! angewendet (fg/`isel` und bg/`isel_bg`), weil jeder Eingang hier zwei
-//! separate `MxlVideoInput`-Leser hat (Moduldoku oben). Regel für beide
-//! Pools identisch: Highres nur für den aktuellen `program`-Sender,
-//! sonst Lowres (sofern ein Lowres-Begleiter existiert). Eine
-//! Besonderheit ggü. dem Switcher: während einer laufenden `autoTrans()`
-//! zeigt `comp_bg_pad` das **ausgehende** Bild noch sichtbar (Alpha
-//! rampt erst über `TRANS_DURATION_MS` von 1 auf 0), `isel_bg`s
-//! aktiver Pad wechselt erst am Ende des Fades (`spawn_autotrans`) auf
-//! den neuen Eingang. Der bg-Zweig des zuvor aktiven Programms darf
-//! deshalb **nicht** sofort auf Lowres heruntergestuft werden (sichtbarer
+//! **Kapitel 15 Teil 3 (Rest 2): nicht-selektierte Eingänge in Lowres,
+//! aber nur reaktiv per Demote — nie am Build.** Gleiche Hot-Swap-Technik
+//! wie `omp-switcher` (Pad-Block, `swap_input_resolution`, dort
+//! ausführlich dokumentierte Bug-Historie — hier nicht wiederholt), aber
+//! auf **zwei** unabhängige Branch-Pools angewendet (fg/`isel` und
+//! bg/`isel_bg`), weil jeder Eingang hier zwei separate
+//! `MxlVideoInput`-Leser hat (Moduldoku oben).
+//!
+//! **Architekturentscheidung 2026-07-22** (`docs/decisions.md` Nachtrag
+//! 65/76, Nutzerentscheidung nach unbehobenem Restproblem in
+//! `swap_input_resolution`): anders als beim Switcher startet hier
+//! **jeder** Zweig beim (Neu-)Aufbau (`build`/`build_one_input`) direkt
+//! in Highres, unabhängig vom aktuellen `program` — kein
+//! `desired_flow_id` mehr, das am Build selbst schon zwischen Highres/
+//! Lowres unterscheidet. Grund: das nicht root-gecauste Restproblem
+//! (`comp`s Ausgang bleibt bei einem Teil der ALLERERSTEN
+//! Highres-Promotions eines Zweigs dauerhaft schwarz, Details in
+//! `swap_input_resolution`s Doku) trifft genau den Moment, in dem ein
+//! bislang nie promoteter Zweig zum ersten Mal per Hot-Swap auf Highres
+//! gehoben wird — mit Highres-Start entfällt dieser Moment für jeden neu
+//! entdeckten/gerade erst aufgebauten Eingang vollständig. Die
+//! Herunterstufung auf Lowres bleibt unverändert **rein reaktiv**: sie
+//! passiert ausschließlich nach einem bestätigten Wechsel WEG von einem
+//! Eingang (`demote_to_lowres`/`demote_fg_to_lowres`/
+//! `demote_bg_to_lowres`, aus Cut/Take/AutoTrans aufgerufen), nie am
+//! Build. Der verbleibende Risiko-Pfad (`promote_to_highres`, Hot-Swap
+//! zurück auf Highres) tritt dadurch nur noch auf, wenn ein Operator zu
+//! einem bereits zuvor heruntergestuften Eingang zurückschaltet —
+//! deutlich seltener als „jeder neue Eingang beim ersten Mal", aber
+//! bewusst nicht eliminiert (kein weiterer bekannter Workaround ohne
+//! Root Cause). **Bewusst in Kauf genommene Nebenwirkung:** ein
+//! `SetInputs`-Rebuild (Quellenmenge ändert sich) baut ALLE Zweige neu
+//! auf, also wieder in Highres — auch bereits zuvor herabgestufte,
+//! gerade nicht sichtbare Eingänge. Verändert den Speicher-/
+//! Bandbreiten-Kompromiss aus Kapitel 15 Teil 2/3 zugunsten von
+//! PGM-Sicherheit, s. Nachtrag 76.
+//!
+//! Unverändert: während einer laufenden `autoTrans()` zeigt
+//! `comp_bg_pad` das **ausgehende** Bild noch sichtbar (Alpha rampt erst
+//! über `TRANS_DURATION_MS` von 1 auf 0), `isel_bg`s aktiver Pad
+//! wechselt erst am Ende des Fades (`spawn_autotrans`) auf den neuen
+//! Eingang. Der bg-Zweig des zuvor aktiven Programms darf deshalb
+//! **nicht** sofort auf Lowres heruntergestuft werden (sichtbarer
 //! Auflösungs-Einbruch mitten in der Überblendung) — er wird erst
 //! heruntergestuft, sobald `fading` wieder `false` ist
 //! (`pending_bg_demote` in `run()`). Der fg-Zweig dagegen kann sofort
@@ -127,7 +156,8 @@ pub struct DiscoveredInput {
     pub lowres_sender_id: Option<String>,
     /// Flow-ID des Lowres-Begleit-Senders derselben Quelle, sofern per
     /// Grouphint-Tag gefunden. `None` heißt "keiner entdeckt/aktivierbar",
-    /// dieser Eingang bleibt dauerhaft Highres (`desired_flow_id`).
+    /// dieser Eingang bleibt dauerhaft Highres (`demote_fg_to_lowres`/
+    /// `demote_bg_to_lowres` sind dann No-Ops).
     pub lowres_flow_id: Option<String>,
 }
 
@@ -385,19 +415,6 @@ fn build_keyfill_tail(
     Ok((alphacombine, fill_input, key_input))
 }
 
-/// Welcher Flow für `input` gerade gelesen werden soll: Highres, wenn er
-/// der aktuell aktive Programm-Eingang ist oder keinen Lowres-Begleiter
-/// hat — sonst Lowres. Identisch zu `omp-switcher::pipeline::
-/// desired_flow_id`, hier für **beide** Branch-Pools (fg und bg)
-/// gleichermaßen verwendet, s. Moduldoku.
-fn desired_flow_id<'a>(input: &'a DiscoveredInput, program: &Option<String>) -> &'a str {
-    if program.as_deref() == Some(input.sender_id.as_str()) {
-        &input.flow_id
-    } else {
-        input.lowres_flow_id.as_deref().unwrap_or(&input.flow_id)
-    }
-}
-
 /// Ein normalisierter Zweig (`videoconvert ! videoscale ! videorate !
 /// capsfilter(rgba)`) vor einem `input-selector`-Sink-Pad — gemeinsame
 /// Bauvorschrift für Programm- und Preset-Zweig eines Eingangs. Gibt neben
@@ -597,10 +614,9 @@ fn link_branch_to_pad(branch: &InputBranch, pad: &gst::Pad) -> Result<(), String
 /// GANZEN Build via `?` ab, was den Aufrufer zu wiederholten Voll-
 /// Rebuild-Versuchen zwang, von denen jeder erneut denselben Geist traf.
 ///
-/// `program` bestimmt (via `desired_flow_id`) die **Start**-Auflösung
-/// beider Zweige: Highres nur, wenn `input` bereits der aktuelle
-/// Programm-Eingang ist (z. B. nach einem `SetInputs`-Rebuild bei
-/// unverändertem `program`), sonst Lowres.
+/// Beide Zweige (fg + bg) starten immer in Highres — s. Moduldoku
+/// "Architekturentscheidung 2026-07-22": Lowres wird ausschließlich
+/// reaktiv per Hot-Swap-Demote erreicht, nie am Build.
 #[allow(clippy::too_many_arguments)]
 fn build_one_input(
     pipeline: &gst::Pipeline,
@@ -611,9 +627,8 @@ fn build_one_input(
     pad_index: usize,
     width: u32,
     height: u32,
-    program: &Option<String>,
 ) -> Result<(gst::Pad, gst::Pad, InputBranch, InputBranch), String> {
-    let read_flow_id = desired_flow_id(input, program).to_string();
+    let read_flow_id = input.flow_id.clone();
 
     let fg_branch = build_input_branch(
         pipeline,
@@ -949,7 +964,6 @@ fn build(
     context: &Arc<MxlContext>,
     config: &Config,
     inputs: &[DiscoveredInput],
-    program: &Option<String>,
     keyfill_inputs: &[DiscoveredKeyFill],
     keyer_source: &Option<String>,
 ) -> Result<(ActivePipeline, Vec<String>), String> {
@@ -1052,7 +1066,6 @@ fn build(
             pad_index,
             config.width,
             config.height,
-            program,
         ) {
             Ok((fg_pad, bg_pad, fg_branch, bg_branch)) => {
                 source_pads_fg.insert(input.sender_id.clone(), fg_pad);
@@ -1432,7 +1445,7 @@ pub fn run(
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_source: Option<String> = None;
-    let mut active = match build(&context, &config, &current_inputs, &None, &keyfill_inputs, &keyer_source) {
+    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
@@ -1498,7 +1511,7 @@ pub fn run(
                     pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &program, &keyfill_inputs, &keyer_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1532,7 +1545,7 @@ pub fn run(
                                 "rebuild with {} inputs failed: {e} — falling back to black",
                                 current_inputs.len()
                             )));
-                            match build(&context, &config, &[], &program, &keyfill_inputs, &keyer_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                                     let previous = program.take();
@@ -1576,7 +1589,7 @@ pub fn run(
                     pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &program, &keyfill_inputs, &keyer_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1600,7 +1613,7 @@ pub fn run(
                             let _ = tx.send(Event::Error(format!(
                                 "keyer source rebuild failed: {e} — falling back to black"
                             )));
-                            match build(&context, &config, &[], &program, &keyfill_inputs, &keyer_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_fg_pad, &dve_box);
                                     let previous = program.take();

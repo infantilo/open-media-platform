@@ -11389,3 +11389,72 @@ Erinnerung, keine neue Erkenntnis, nur erneut bestätigt).
 `go build`/`go vet`/`go test ./...` (orchestrator, nur der bereits
 bekannte unabhängige `internal/hosts`-Flake), `deno check`/`make ui`/
 `deno test ui/` (58/58) grün.
+
+## 2026-07-22 (Nachtrag 75) — `omp-video-mixer-me`: architektonisch
+ausgewichen — alle Eingänge starten in Highres
+
+Direkter Anschluss an Nachtrag 65. Nutzerentscheidung auf die dort
+gestellte Frage ("(a) weiter debuggen, oder (b) architektonisch
+ausweichen"): **(b)**, konkret die dort skizzierte Option — alle
+Eingänge initial in Highres statt Lowres aufbauen, Demote auf Lowres
+bleibt rein reaktiv nach einem bestätigten Wechsel weg von einem
+Eingang.
+
+**Umsetzung** (`nodes/omp-video-mixer-me/src/pipeline.rs`): die
+Funktion `desired_flow_id` (entschied bisher am Build selbst zwischen
+Highres/Lowres anhand von `program`) ist ersatzlos entfernt.
+`build_one_input`/`build` bauen jeden Zweig (fg **und** bg) jetzt
+direkt mit `input.flow_id` (Highres) auf, unabhängig vom aktuellen
+Programm-Sender — der zuvor genutzte `program`-Parameter beider
+Funktionen ist dadurch vollständig entfallen (kein Aufrufer braucht ihn
+mehr, `cargo clippy` bestätigt keine toten Parameter). `promote_to_
+highres` (vor jedem Cut/Take/AutoTrans) bleibt unverändert bestehen —
+für frisch gebaute Zweige ist es jetzt strukturell ein No-Op
+(`retarget_branch`s `needs_swap`-Check findet `open_flow_id` bereits
+gleich `target_flow_id`, da beide Highres sind), greift also nur noch,
+wenn ein Operator zu einem **bereits zuvor heruntergestuften**
+Eingang zurückschaltet — genau der in Nachtrag 65 als "deutlich
+seltener" beschriebene Restpfad, bewusst nicht eliminiert. Die
+Demote-Seite (`demote_fg_to_lowres`/`demote_bg_to_lowres`/
+`pending_bg_demote`-Verzögerung während einer laufenden `autoTrans()`)
+ist unverändert, da diese Hot-Swaps stets auf einem gerade
+unsichtbaren Zweig laufen (nicht auf dem `comp`-Ausgang sichtbar) und
+vom Restproblem aus Nachtrag 65 nie betroffen waren.
+
+**Bewusst in Kauf genommene Nebenwirkung:** ein `SetInputs`-Rebuild
+(ändert sich die entdeckte Quellenmenge) baut jetzt **alle** Zweige neu
+in Highres auf — auch bereits zuvor auf Lowres heruntergestufte,
+gerade nicht sichtbare Eingänge fallen dabei auf Highres zurück, bis
+sie erneut aktiv weggeschaltet werden. Verändert den Speicher-/
+Bandbreiten-Kompromiss aus Kapitel 15 Teil 2/3 zugunsten von
+PGM-Sicherheit — exakt der in Nachtrag 65 benannte Kompromiss, hier
+umgesetzt statt nur skizziert.
+
+**Live verifiziert per echtem Roundtrip** (kein Mock, frischer
+`make start` mit `mxl.env` gesourct): zwei echte `omp-source`-
+Instanzen + ein `omp-video-mixer-me` gestartet, ein `omp-viewer` per
+echter IS-05-`POST /api/v1/graph/edges`-Verbindung an den Mixer-PGM-
+Sender gehängt, MJPEG-Frames aus dessen `previewUrl` extrahiert (JPEG-
+SOI/EOI-Parsing über den rohen MJPEG-Byte-Stream, kein GStreamer-Tap
+nötig). `crosspoint.take` auf Sender 1 (dessen allererste Highres-
+Promotion, exakt der in Nachtrag 65 dokumentierte Bug-Trigger) zeigte
+sofort echtes Bild (SMPTE-Farbbalken), kein Schwarzbild. `crosspoint.
+select`+`autoTrans()` auf Sender 2 (dessen allererste Promotion)
+ebenso — echtes Bild. `mxl-info` bestätigte danach für Sender 1: sein
+Highres-Flow zeigt eine `read time` klar hinter der `write time`
+zurück (nicht mehr aktiv gelesen), sein Lowres-Flow zeigt `read time`
+≈ `write time` (aktiv gelesen) — Demote auf Lowres funktioniert
+unverändert. Zusätzlich fünf schnelle `take()`-Wechsel zwischen beiden
+Sendern in Folge (stresst den verbliebenen Re-Promote-Pfad) — weiterhin
+durchgehend echtes Bild, RSS blieb mit ~113 MB im erwarteten Bereich
+(keine erneute OOM-Regression). `cargo build --workspace --bins`,
+`cargo clippy --workspace --all-targets` (keine neuen Warnungen ggü.
+vorbestehenden, unveränderten `main.rs`-`collapsible_if`-Hinweisen),
+`cargo test -p omp-mediaio --features mxl` (8/8) grün.
+
+**Nicht Teil dieser Sitzung:** ein Langzeit-/Stresstest über
+deutlich mehr als 5 Wechsel (analog dem 250-Switches-Test des
+Switchers) sowie eine Verifikation des `SetInputs`-Rebuild-Nebeneffekts
+selbst (zusätzlicher Sender live hinzufügen, prüfen, dass alle
+Bestandszweige dabei wirklich auf Highres zurückfallen) — beides
+mögliche Folgearbeit, falls der Restpfad künftig doch noch auffällt.
