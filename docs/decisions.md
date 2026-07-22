@@ -11828,3 +11828,84 @@ grün.
 
 Damit ist der in Nachtrag 78 als "künftige Sitzung" vertagte Fall jetzt
 tatsächlich behoben — kein Workaround (Viewer-Neustart) mehr nötig.
+
+## 2026-07-22 (Nachtrag 80) — `omp-video-mixer-me`: drei Bugs — DSK-
+Quellauswahl gruppiert, kuratierte PGM/PST-Kreuzschiene, PIP als
+eigenständiger Layer
+
+Nutzer meldete drei zusammenhängende Bugs am Bildmischer in einer
+Nachricht: (1) DSK-Quellauswahl (KEY-Dropdown) sollte wie die AFV-Ziel-
+Auswahl des Audio-Mixers nach Workflow gruppiert sein; (2) PGM/PST legen
+jede entdeckte Quelle automatisch als Taste auf, statt wie beim
+Audio-Mixers "+ Kanal" kuratiert per "+"-Button auswählbar zu sein; (3)
+PIP soll wie DSK eine echte, frei wählbare Quelle bekommen.
+
+**Fund 1 (DSK-Gruppierung):** `keyerSourceSelect` war der letzte
+ungruppierte Rest, nachdem Nachtrag 76 PGM/PST/Palette bereits umgestellt
+hatte — reiner Nachzieh-Fix nach demselben Muster (`ownSenderIds` via
+`senderWorkflowLabel()`, Optgroups "Dieser Workflow"/"Andere Quellen").
+
+**Fund 2 (kuratierte Kreuzschiene):** per `AskUserQuestion` zwischen
+"Kuratierte Kreuzschiene" (gewählt) und Alternativen entschieden — ein
+"+"-Button öffnet ein workflow-gruppiertes Auswahl-Dropdown an Ort und
+Stelle, die Auswahl ruft `crosspoint.pin` und wird ein dauerhafter,
+entfernbarer PGM/PST-Baustein. Backend: neues `pinned: Arc<Mutex<Vec
+<String>>>` in `MixerStore` (main.rs) — rein buchhalterisch, verändert
+`crosspoint.select`/`take`/`cut`/`autoTrans` nicht (die funktionieren
+weiterhin mit jeder entdeckten `senderId`, unabhängig vom Pin-Status,
+damit z. B. Presets/gespeicherte Zustände mit inzwischen entpinnten
+Quellen nicht kaputtgehen). Neue Methoden `crosspoint.pin`/`unpin`, neuer
+Parameter `crosspoint.pinnedSenderIds`, in `capture_state`/`restore_state`
+persistiert (überlebt Neustart/Gerätewechsel wie die übrigen
+Mixer-Presets, §4.6 Punkt 4). UI: PGM/PST zeigen nur noch BLK + gepinnte
+Quellen — als Sicherheitsnetz zusätzlich immer das aktuell aufgeschaltete
+Programm/Preset, auch wenn es (z. B. nach einem Unpin) nicht mehr gepinnt
+ist, damit der Operator nie eine "namenlose" Taste vor sich hat. Der
+Add-Picker rendert sich während er offen ist nicht über den 2s-Poll weg
+(`addPickerOpen`-Guard, gleiches Prinzip wie der bestehende
+Fokus-Guard bei KEY/PIP).
+
+**Fund 3 (PIP als eigenständiger Layer):** per `AskUserQuestion`
+entschieden — PIP wird ein echter vierter Compositor-Sink (`comp.sink_3`,
+`pipeline.rs`) mit eigener frei wählbarer Quelle, keine reine
+PGM-Verkleinerung mehr wie zuvor. Substanzielle `pipeline.rs`-Änderung,
+architektonisch identisch zum bestehenden DSK/Keyer-Layer: neue
+`build_pip_tail()` (echte Quelle über `MxlVideoInput`, ohne Quelle ein
+`videotestsrc pattern=black`-Fallback, analog zum Keyer-Fallback auf
+Testfarbe), `Event::PipChanged`/`Command::SetPipEnabled`/
+`Command::SetPipSource` nach demselben Muster wie beim Keyer. Wichtige
+Nebenänderung: `comp_fg_pad` (PGM) wird beim Build jetzt explizit fest
+auf volles Bild gesetzt (`xpos`/`ypos`=0, `width`/`height`=Config) statt
+weiterhin über `dve.setBox` verkleinerbar zu sein — `apply_dve_box`
+zielt jetzt in allen sechs Aufrufstellen auf `comp_pip_pad` statt
+`comp_fg_pad`. `dve.setBox`/`dve.reset` positionieren also weiterhin ein
+Rechteck, aber jetzt den PIP-Layer statt PGM selbst. Backend-Methoden
+`pip.setEnabled`/`pip.setSource` + Parameter `pip.enabled`/`pip.source`
+in `main.rs` exakt nach dem Keyer-Vorbild (inkl. `capture_state`/
+`restore_state`-Persistenz). Quelle kommt aus dem vollen
+`crosspoint.inputs`-Katalog (nicht der kuratierten Pin-Liste, nicht
+`keyer.inputs`) — "wie bei DSK" bezog sich laut Nutzer auf die
+Gruppierung, nicht auf Fill+Key-Paare.
+
+**Live verifiziert (curl + echter Chromium/CDP-Klicktest):** Pin/Unpin
+per API bestätigt (Pin macht Quelle auf PGM/PST wählbar, Unpin entfernt
+sie aus der Liste, aktuelles Programm bleibt trotzdem sichtbar — das
+Sicherheitsnetz greift). `pip.setSource`+`pip.setEnabled`+`dve.setBox`
+zusammen zeigten den PIP-Layer tatsächlich an der konfigurierten
+Position/Größe im MJPEG-Vorschaubild (per direktem Frame-Abruf über
+`GET /api/v1/nodes/<id>/stream/previewUrl` extrahiert), PGM blieb dabei
+vollbildig (nicht mehr wie vorher verkleinert). Nebenfund beim
+Live-Test: der Viewer war noch über eine verwaiste NMOS-Verbindung an
+den PGM-Sender einer längst toten, aus einer früheren Testrunde
+liegengebliebenen Mixer-Ghost-Instanz gebunden (eingefrorenes letztes
+Bild, per `mxl-info`-Head-Index-Vergleich zweier gleichnamiger Flows
+aufgedeckt) — kein Bug der hier beschriebenen Änderung, per echtem
+`POST /api/v1/graph/edges` auf den tatsächlich laufenden Mixer
+umgehängt. Kompletter Klicktest im echten Browser (Login, Node-Panel
+öffnen, "+" öffnet den Add-Picker mit den richtigen, bereits gepinnten
+Quellen ausgeschlossenen Optionen, Auswahl pinnt sofort sichtbar mit
+"×"-Entfernen-Taste, PIP-Dropdown zeigt die aktuell gewählte Quelle)
+bestätigt alle drei Fixes UI-seitig, nicht nur über die API.
+`cargo build --workspace --bins`, `cargo clippy -p omp-video-mixer-me`
+(nur vorbestehende, unveränderte Zeilen betreffende Hinweise),
+`node --check ui/bundle.js` grün.

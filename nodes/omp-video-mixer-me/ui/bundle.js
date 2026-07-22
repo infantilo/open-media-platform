@@ -112,6 +112,23 @@ class OmpVideoMixerMePanel extends HTMLElement {
     pstButtons.className = "bus-buttons";
     pstRow.append(pstLabel, pstButtons);
 
+    // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22, Feinschliff zur
+    // Skalierungs-Review): PGM/PST legen nicht mehr automatisch jede
+    // entdeckte Quelle als Taste auf — stattdessen wählt der Operator per
+    // "+"-Button (gleiches Grundprinzip wie omp-audio-mixers "+ Kanal")
+    // dauerhafte, entfernbare Quellen aus. Backend-Zustand ist rein
+    // buchhalterisch (main.rs::pinned, s. dortige Moduldoku) — welche
+    // `senderId`s der Operator sich angelegt hat, unabhängig davon, ob sie
+    // gerade auf PGM/PST liegen.
+    const srcRow = document.createElement("div");
+    srcRow.className = "bus-row";
+    const srcLabel = document.createElement("span");
+    srcLabel.className = "bus-label";
+    srcLabel.textContent = "SRC";
+    const srcButtons = document.createElement("div");
+    srcButtons.className = "bus-buttons";
+    srcRow.append(srcLabel, srcButtons);
+
     const fxRow = document.createElement("div");
     fxRow.className = "fx-row";
     const keyerRow = document.createElement("div");
@@ -121,10 +138,25 @@ class OmpVideoMixerMePanel extends HTMLElement {
     keyerSourceLabel.textContent = "KEY";
     const keyerSourceSelect = document.createElement("select");
     keyerRow.append(keyerSourceLabel, keyerSourceSelect);
+
+    // PIP-Quellauswahl (Nutzerwunsch 2026-07-22): PIP ist jetzt ein
+    // eigenständiger Compositor-Layer mit frei wählbarer Quelle, genau wie
+    // der DSK/KEY-Eingang oben — gleiches Dropdown-Muster, aber gespeist
+    // aus dem vollen `crosspoint.inputs`-Katalog (nicht der kuratierten
+    // SRC-Liste), da Kap. „wie bei DSK" ausdrücklich die ungefilterte,
+    // workflow-gruppierte Liste meint.
+    const pipRow = document.createElement("div");
+    pipRow.className = "keyer-row";
+    const pipSourceLabel = document.createElement("span");
+    pipSourceLabel.className = "bus-label";
+    pipSourceLabel.textContent = "PIP";
+    const pipSourceSelect = document.createElement("select");
+    pipRow.append(pipSourceLabel, pipSourceSelect);
+
     const rateRow = document.createElement("div");
     rateRow.className = "rate-row";
 
-    buses.append(pgmRow, pstRow, fxRow, keyerRow, rateRow);
+    buses.append(pgmRow, pstRow, srcRow, fxRow, keyerRow, pipRow, rateRow);
 
     const transition = document.createElement("div");
     transition.className = "transition";
@@ -279,13 +311,98 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Farbfläche (Default, kein echtes Downstream-Key).
     keyerSourceSelect.addEventListener("change", () => call("keyer.setSource", { senderId: keyerSourceSelect.value }));
 
-    const dveBtn = document.createElement("omp-button");
-    dveBtn.textContent = "PIP";
-    dveBtn.setAttribute("color", "preset");
-    let dvePipActive = false;
-    dveBtn.addEventListener("click", () => (dvePipActive ? call("dve.reset") : call("dve.setBox", PIP_BOX)));
+    // PIP ist jetzt ein eigenständiger Compositor-Layer (main.rs::
+    // pip.setEnabled/pip.setSource, pipeline.rs `comp_pip_pad`/§Nachtrag
+    // "PIP als eigenständiger Layer") statt einer PGM-Verkleinerung übers
+    // DVE-Feld — `dve.setBox`/`dve.reset` positionieren nur noch diesen
+    // Layer innerhalb des Frames (feste Ecke, s. PIP_BOX oben), die
+    // Sichtbarkeit selbst hängt an `pipEnabled`.
+    const pipBtn = document.createElement("omp-button");
+    pipBtn.textContent = "PIP";
+    pipBtn.setAttribute("color", "preset");
+    let pipEnabled = false;
+    pipBtn.addEventListener("click", async () => {
+      if (pipEnabled) {
+        await call("pip.setEnabled", { enabled: false });
+      } else {
+        await call("dve.setBox", PIP_BOX);
+        await call("pip.setEnabled", { enabled: true });
+      }
+    });
 
-    fxRow.append(keyerBtn, dveBtn);
+    fxRow.append(keyerBtn, pipBtn);
+
+    // Gemeinsame Aufbau-Logik für workflow-gruppierte Dropdowns (KEY, PIP)
+    // — identisches Gruppierungsprinzip wie `renderBusRow` für PGM/PST,
+    // hier als Options-Builder statt Button-Liste.
+    const buildGroupedOptions = (selectEl, entries, ownSenderIds, placeholderLabel) => {
+      selectEl.innerHTML = "";
+      const placeholderOpt = document.createElement("option");
+      placeholderOpt.value = "";
+      placeholderOpt.textContent = placeholderLabel;
+      selectEl.append(placeholderOpt);
+
+      const appendOption = (parent, e) => {
+        const opt = document.createElement("option");
+        opt.value = e.senderId;
+        opt.textContent = e.label;
+        parent.append(opt);
+      };
+      const own = entries.filter((e) => ownSenderIds.has(e.senderId));
+      const others = entries.filter((e) => !ownSenderIds.has(e.senderId));
+      if (own.length > 0 && others.length > 0) {
+        const ownGroup = document.createElement("optgroup");
+        ownGroup.label = "Dieser Workflow";
+        for (const e of own) appendOption(ownGroup, e);
+        selectEl.append(ownGroup);
+
+        const otherGroup = document.createElement("optgroup");
+        otherGroup.label = "Andere Quellen";
+        for (const e of others) appendOption(otherGroup, e);
+        selectEl.append(otherGroup);
+      } else {
+        for (const e of entries) appendOption(selectEl, e);
+      }
+    };
+
+    pipSourceSelect.addEventListener("change", () => call("pip.setSource", { senderId: pipSourceSelect.value }));
+
+    // Kuratierte Kreuzschiene: "+"-Button öffnet an Ort und Stelle ein
+    // workflow-gruppiertes Auswahl-Dropdown (gleiches Prinzip wie KEY/PIP),
+    // das nach Auswahl sofort `crosspoint.pin` aufruft und wieder zur
+    // "+"-Taste zurückkehrt. `addPickerOpen` verhindert, dass der laufende
+    // 2s-Poll das offene Dropdown währenddessen wegrendert (gleicher Schutz
+    // wie beim fokussierten KEY-/PIP-Select).
+    const addSourceBtn = document.createElement("omp-button");
+    addSourceBtn.textContent = "+";
+    addSourceBtn.title = "Quelle zur Kreuzschiene hinzufügen";
+    addSourceBtn.style.cssText = "width:28px !important; height:26px !important; font-size:14px; padding:0;";
+    let addPickerOpen = false;
+    let latestInputs = [];
+    let latestPinned = [];
+    let latestOwnSenderIds = new Set();
+
+    const closeAddPicker = () => {
+      addPickerOpen = false;
+      refresh();
+    };
+
+    addSourceBtn.addEventListener("click", () => {
+      addPickerOpen = true;
+      const available = latestInputs
+        .filter((i) => !latestPinned.includes(i.senderId))
+        .map((i) => ({ label: i.label, senderId: i.senderId }));
+      const picker = document.createElement("select");
+      picker.style.cssText = "height:26px; font-size:10px; border-radius:4px; background:var(--omp-bg-2, #1c1f22); color:var(--omp-text, #e8eaed); border:1px solid var(--omp-border, #2e3338);";
+      buildGroupedOptions(picker, available, latestOwnSenderIds, "Quelle wählen…");
+      picker.addEventListener("change", async () => {
+        if (picker.value) await call("crosspoint.pin", { senderId: picker.value });
+        closeAddPicker();
+      });
+      picker.addEventListener("blur", closeAddPicker);
+      srcButtons.replaceChild(picker, addSourceBtn);
+      picker.focus();
+    });
 
     const makeBusButton = (label, senderId, isProgram) => {
       const btn = document.createElement("omp-button");
@@ -366,14 +483,19 @@ class OmpVideoMixerMePanel extends HTMLElement {
     };
 
     const refresh = async () => {
-      const [inputsRes, programRes, presetRes, keyerRes, dveRes, keyerInputsRes, keyerSourceRes, ownSenderIds] = await Promise.all([
+      const [
+        inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
+        pipEnabledRes, pipSourceRes, pinnedRes, ownSenderIds,
+      ] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.programInput`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.presetInput`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.enabled`),
-        fetch(`/api/v1/nodes/${nodeId}/params/dve.box`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.source`),
+        fetch(`/api/v1/nodes/${nodeId}/params/pip.enabled`),
+        fetch(`/api/v1/nodes/${nodeId}/params/pip.source`),
+        fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.pinnedSenderIds`),
         senderWorkflowLabel(),
       ]);
       if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
@@ -381,29 +503,23 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const program = (await programRes.json()).value || "";
       const preset = (await presetRes.json()).value || "";
       keyerEnabled = keyerRes.ok ? (await keyerRes.json()).value === true : false;
-      const dveBox = dveRes.ok ? (await dveRes.json()).value : null;
-      dvePipActive = !!dveBox && dveBox.width < WIDTH;
       const keyerInputs = keyerInputsRes.ok ? (await keyerInputsRes.json()).value || [] : [];
       const keyerSource = keyerSourceRes.ok ? (await keyerSourceRes.json()).value || "" : "";
+      pipEnabled = pipEnabledRes.ok ? (await pipEnabledRes.json()).value === true : false;
+      const pipSource = pipSourceRes.ok ? (await pipSourceRes.json()).value || "" : "";
+      const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
+      latestInputs = inputs;
+      latestPinned = pinned;
+      latestOwnSenderIds = ownSenderIds;
 
       // Dropdown nur neu bauen, wenn sich die Optionen tatsächlich
       // geändert haben (sonst würde ein offenes Dropdown bei jedem
       // 2s-Poll unter dem Cursor zuklappen) — Vergleich per JSON-String
       // reicht hier, die Liste ist klein und ändert sich selten.
-      const keyerOptionsKey = JSON.stringify(keyerInputs.map((k) => k.senderId));
+      const keyerOptionsKey = JSON.stringify([...keyerInputs.map((k) => k.senderId), ...ownSenderIds]);
       if (keyerSourceSelect.dataset.optionsKey !== keyerOptionsKey) {
         keyerSourceSelect.dataset.optionsKey = keyerOptionsKey;
-        keyerSourceSelect.innerHTML = "";
-        const testOpt = document.createElement("option");
-        testOpt.value = "";
-        testOpt.textContent = "Testfarbe";
-        keyerSourceSelect.append(testOpt);
-        for (const k of keyerInputs) {
-          const opt = document.createElement("option");
-          opt.value = k.senderId;
-          opt.textContent = k.label;
-          keyerSourceSelect.append(opt);
-        }
+        buildGroupedOptions(keyerSourceSelect, keyerInputs, ownSenderIds, "Testfarbe");
       }
       // Nutzerfund: dieser Wert wurde bisher bei jedem 2s-Poll
       // bedingungslos überschrieben — eine gerade getroffene Auswahl
@@ -414,21 +530,73 @@ class OmpVideoMixerMePanel extends HTMLElement {
       // während der Select fokussiert ist, nicht überschreiben.
       if (keyerSourceSelect !== shadow.activeElement) keyerSourceSelect.value = keyerSource;
 
+      // PIP-Quelle: gleiches Muster wie KEY, aber gespeist aus dem vollen
+      // Quellkatalog (`inputs`), nicht `keyerInputs` — "wie bei DSK"
+      // bezieht sich auf die Gruppierung, nicht auf die Fill+Key-Liste.
+      const pipInputEntries = inputs.map((i) => ({ label: i.label, senderId: i.senderId }));
+      const pipOptionsKey = JSON.stringify([...pipInputEntries.map((e) => e.senderId), ...ownSenderIds]);
+      if (pipSourceSelect.dataset.optionsKey !== pipOptionsKey) {
+        pipSourceSelect.dataset.optionsKey = pipOptionsKey;
+        buildGroupedOptions(pipSourceSelect, pipInputEntries, ownSenderIds, "Schwarz");
+      }
+      if (pipSourceSelect !== shadow.activeElement) pipSourceSelect.value = pipSource;
+
+      // Kuratierte Kreuzschiene: SRC-Reihe zeigt die angepinnten Quellen
+      // (+ Entfernen-Taste) plus die "+"-Taste — außer der Add-Picker ist
+      // gerade offen (sonst würde der laufende Poll ihn wegrendern, bevor
+      // der Operator eine Auswahl treffen konnte).
+      if (!addPickerOpen) {
+        srcButtons.innerHTML = "";
+        if (pinned.length === 0) {
+          const hint = document.createElement("span");
+          hint.textContent = "keine Quellen angeheftet";
+          hint.style.cssText = "color:var(--omp-text-dim, #9aa0a6);font-size:10px;align-self:center;";
+          srcButtons.append(hint);
+        }
+        for (const senderId of pinned) {
+          const input = inputs.find((i) => i.senderId === senderId);
+          const label = input ? input.label : senderId.slice(0, 8);
+          const wrap = document.createElement("span");
+          wrap.style.cssText = "display:inline-flex; align-items:center; gap:2px;";
+          const tag = document.createElement("span");
+          tag.textContent = label;
+          tag.title = senderId;
+          tag.style.cssText = "font-size:10px; padding:2px 4px; border:1px solid var(--omp-border, #2e3338); border-radius:4px;";
+          const removeBtn = document.createElement("omp-button");
+          removeBtn.textContent = "×";
+          removeBtn.title = "Quelle entfernen";
+          removeBtn.style.cssText = "width:18px !important; height:18px !important; font-size:10px; padding:0;";
+          removeBtn.addEventListener("click", () => call("crosspoint.unpin", { senderId }));
+          wrap.append(tag, removeBtn);
+          srcButtons.append(wrap);
+        }
+        srcButtons.append(addSourceBtn);
+      }
+
       pgmButtons.innerHTML = "";
       pstButtons.innerHTML = "";
 
-      const entries = [{ label: "BLK", senderId: "" }, ...inputs.map((i) => ({ label: i.label, senderId: i.senderId }))];
-      if (inputs.length === 0) {
+      // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): PGM/PST zeigen
+      // nur noch BLK + angepinnte Quellen — plus, als Sicherheitsnetz, das
+      // jeweils aktuell aufgeschaltete Programm/Preset auch dann, wenn es
+      // (z. B. nach einem Unpin) nicht mehr in der Pin-Liste steht, damit
+      // der Operator nie "blind" auf eine unbenannte Taste schaut.
+      const alwaysVisible = new Set(pinned);
+      if (program) alwaysVisible.add(program);
+      if (preset) alwaysVisible.add(preset);
+      const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId));
+      const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId }))];
+      if (visibleInputs.length === 0) {
         const empty = document.createElement("p");
         empty.className = "empty";
-        empty.textContent = "keine Quellen entdeckt";
+        empty.textContent = "keine Quellen angeheftet — über SRC „+“ hinzufügen";
         pstButtons.append(empty);
       }
       renderBusRow(pgmButtons, entries, ownSenderIds, true, program, "onair");
       renderBusRow(pstButtons, entries, ownSenderIds, false, preset, "preset");
 
       keyerBtn.active = keyerEnabled;
-      dveBtn.active = dvePipActive;
+      pipBtn.active = pipEnabled;
     };
 
     refresh();

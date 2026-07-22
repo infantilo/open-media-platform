@@ -57,6 +57,19 @@ struct MixerStore {
     keyer_enabled: Arc<Mutex<bool>>,
     keyfill_inputs: Arc<Mutex<Vec<DiscoveredKeyFill>>>,
     keyer_source: Arc<Mutex<Option<String>>>,
+    /// PIP-Layer (Nutzerwunsch 2026-07-22, s. `pipeline.rs`-Moduldoku
+    /// "PIP als eigenständiger Layer") — gleiches Muster wie
+    /// `keyer_enabled`/`keyer_source`.
+    pip_enabled: Arc<Mutex<bool>>,
+    pip_source: Arc<Mutex<Option<String>>>,
+    /// Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): welche
+    /// entdeckten Quellen der Operator sich per "+" als dauerhafte PGM/
+    /// PST-Tasten angelegt hat — bewusst getrennt von `inputs` (dem
+    /// vollen Discovery-Satz, weiterhin die Grundlage für "+"s
+    /// Auswahlliste). Reine Buchführung, keine Pipeline-Wirkung:
+    /// `crosspoint.select`/`take` funktionieren unverändert mit jeder
+    /// entdeckten `senderId`, unabhängig vom Pin-Status.
+    pinned: Arc<Mutex<Vec<String>>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -129,6 +142,30 @@ impl ParamStore for MixerStore {
                     range: None,
                     readonly: true,
                 },
+                ParamSpec {
+                    name: "pip.enabled".to_string(),
+                    kind: ParamType::Boolean,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "pip.source".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): vom
+                // Operator per "+" angepinnte `senderId`s — JSON-Array,
+                // gleiche Array-Ausnahme wie "crosspoint.inputs".
+                ParamSpec {
+                    name: "crosspoint.pinnedSenderIds".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![
                 MethodSpec {
@@ -195,6 +232,36 @@ impl ParamStore for MixerStore {
                         kind: ParamType::String,
                     }],
                 },
+                MethodSpec {
+                    name: "pip.setEnabled".to_string(),
+                    args: vec![MethodArg {
+                        name: "enabled".to_string(),
+                        kind: ParamType::Boolean,
+                    }],
+                },
+                // Leerer String wählt Schwarz ab (kein PIP-Bild), gleiche
+                // Konvention wie "keyer.setSource".
+                MethodSpec {
+                    name: "pip.setSource".to_string(),
+                    args: vec![MethodArg {
+                        name: "senderId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
+                MethodSpec {
+                    name: "crosspoint.pin".to_string(),
+                    args: vec![MethodArg {
+                        name: "senderId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
+                MethodSpec {
+                    name: "crosspoint.unpin".to_string(),
+                    args: vec![MethodArg {
+                        name: "senderId".to_string(),
+                        kind: ParamType::String,
+                    }],
+                },
             ],
         }
     }
@@ -246,6 +313,15 @@ impl ParamStore for MixerStore {
             }
             "keyer.source" => Some(serde_json::json!(
                 self.keyer_source.lock().expect("lock poisoned").clone().unwrap_or_default()
+            )),
+            "pip.enabled" => Some(serde_json::json!(
+                *self.pip_enabled.lock().expect("lock poisoned")
+            )),
+            "pip.source" => Some(serde_json::json!(
+                self.pip_source.lock().expect("lock poisoned").clone().unwrap_or_default()
+            )),
+            "crosspoint.pinnedSenderIds" => Some(serde_json::json!(
+                self.pinned.lock().expect("lock poisoned").clone()
             )),
             _ => None,
         }
@@ -327,6 +403,47 @@ impl ParamStore for MixerStore {
                 self.pipeline.set_keyer_source(selected);
                 Ok(())
             }
+            "pip.setEnabled" => {
+                let enabled = args
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_pip_enabled(enabled);
+                Ok(())
+            }
+            "pip.setSource" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let selected = if sender_id.is_empty() {
+                    None
+                } else {
+                    Some(sender_id.to_string())
+                };
+                *self.pip_source.lock().expect("lock poisoned") = selected.clone();
+                self.pipeline.set_pip_source(selected);
+                Ok(())
+            }
+            "crosspoint.pin" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                let mut pinned = self.pinned.lock().expect("lock poisoned");
+                if !pinned.iter().any(|s| s == sender_id) {
+                    pinned.push(sender_id.to_string());
+                }
+                Ok(())
+            }
+            "crosspoint.unpin" => {
+                let sender_id = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .ok_or(InvokeError::Unknown)?;
+                self.pinned.lock().expect("lock poisoned").retain(|s| s != sender_id);
+                Ok(())
+            }
             _ => Err(InvokeError::Unknown),
         }
     }
@@ -371,6 +488,9 @@ impl MixerStore {
             "dveBox": {"x": box_.x, "y": box_.y, "width": box_.width, "height": box_.height},
             "keyerEnabled": *self.keyer_enabled.lock().expect("lock poisoned"),
             "keyerSourceSenderId": self.keyer_source.lock().expect("lock poisoned").clone(),
+            "pipEnabled": *self.pip_enabled.lock().expect("lock poisoned"),
+            "pipSourceSenderId": self.pip_source.lock().expect("lock poisoned").clone(),
+            "pinnedSenderIds": self.pinned.lock().expect("lock poisoned").clone(),
         })
     }
 
@@ -400,6 +520,20 @@ impl MixerStore {
         if let Some(source) = doc.get("keyerSourceSenderId").and_then(Value::as_str).map(str::to_string) {
             *self.keyer_source.lock().expect("lock poisoned") = Some(source.clone());
             self.pipeline.set_keyer_source(Some(source));
+        }
+        if let Some(enabled) = doc.get("pipEnabled").and_then(Value::as_bool) {
+            self.pipeline.set_pip_enabled(enabled);
+        }
+        if let Some(source) = doc.get("pipSourceSenderId").and_then(Value::as_str).map(str::to_string) {
+            *self.pip_source.lock().expect("lock poisoned") = Some(source.clone());
+            self.pipeline.set_pip_source(Some(source));
+        }
+        if let Some(pinned) = doc.get("pinnedSenderIds").and_then(Value::as_array) {
+            *self.pinned.lock().expect("lock poisoned") = pinned
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
         }
     }
 }
@@ -465,6 +599,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let keyer_enabled = Arc::new(Mutex::new(false));
     let keyfill_inputs = Arc::new(Mutex::new(Vec::<DiscoveredKeyFill>::new()));
     let keyer_source = Arc::new(Mutex::new(None::<String>));
+    let pip_enabled = Arc::new(Mutex::new(false));
+    let pip_source = Arc::new(Mutex::new(None::<String>));
+    let pinned = Arc::new(Mutex::new(Vec::<String>::new()));
 
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
         inputs: inputs.clone(),
@@ -474,6 +611,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         keyer_enabled: keyer_enabled.clone(),
         keyfill_inputs: keyfill_inputs.clone(),
         keyer_source: keyer_source.clone(),
+        pip_enabled: pip_enabled.clone(),
+        pip_source: pip_source.clone(),
+        pinned: pinned.clone(),
         pipeline: pipeline_handle.clone(),
     });
 
@@ -541,6 +681,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         preset,
         dve_box,
         keyer_enabled,
+        pip_enabled,
     );
 
     tokio::select! {
@@ -608,6 +749,7 @@ async fn handle_events(
     preset: Arc<Mutex<Option<String>>>,
     dve_box: Arc<Mutex<DveBox>>,
     keyer_enabled: Arc<Mutex<bool>>,
+    pip_enabled: Arc<Mutex<bool>>,
 ) {
     while let Some(event) = rx.recv().await {
         match event {
@@ -654,6 +796,9 @@ async fn handle_events(
             }
             pipeline::Event::KeyerChanged(enabled) => {
                 *keyer_enabled.lock().expect("lock poisoned") = enabled;
+            }
+            pipeline::Event::PipChanged(enabled) => {
+                *pip_enabled.lock().expect("lock poisoned") = enabled;
             }
         }
     }

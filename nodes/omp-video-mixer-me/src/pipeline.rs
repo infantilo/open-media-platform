@@ -221,6 +221,9 @@ pub enum Event {
     PresetChanged(Option<String>),
     DveBoxChanged(DveBox),
     KeyerChanged(bool),
+    /// PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
+    /// eigenständiger Layer") — gleiches Muster wie `KeyerChanged`.
+    PipChanged(bool),
 }
 
 enum Command {
@@ -234,6 +237,8 @@ enum Command {
     SetKeyerEnabled(bool),
     SetKeyFillInputs(Vec<DiscoveredKeyFill>),
     SetKeyerSource(Option<String>),
+    SetPipEnabled(bool),
+    SetPipSource(Option<String>),
 }
 
 #[derive(Clone)]
@@ -305,6 +310,22 @@ impl PipelineHandle {
     /// die synthetische Test-Farbfläche (Default, s. `build`).
     pub fn set_keyer_source(&self, fill_sender_id: Option<String>) {
         let _ = self.commands.send(Command::SetKeyerSource(fill_sender_id));
+    }
+
+    /// PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
+    /// eigenständiger Layer") — Sichtbarkeit, gleiches Muster wie
+    /// `set_keyer_enabled`. `dve.setBox`/`dve.reset` (s. `set_dve_box`/
+    /// `reset_dve` oben, unverändert) steuern seither die Box-Geometrie
+    /// dieses Layers statt des PGM-Bilds selbst.
+    pub fn set_pip_enabled(&self, enabled: bool) {
+        let _ = self.commands.send(Command::SetPipEnabled(enabled));
+    }
+
+    /// `sender_id` wählt eine beliebige Crosspoint-Quelle (`crosspoint.
+    /// inputs`, kein Fill+Key-Paar nötig — PIP zeigt ein normales Bild),
+    /// `None` schaltet auf den Schwarzbild-Fallback zurück.
+    pub fn set_pip_source(&self, sender_id: Option<String>) {
+        let _ = self.commands.send(Command::SetPipSource(sender_id));
     }
 }
 
@@ -912,6 +933,11 @@ struct ActivePipeline {
     comp_fg_pad: gst::Pad,
     comp_bg_pad: gst::Pad,
     comp_keyer_pad: gst::Pad,
+    /// PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
+    /// eigenständiger Layer"): Box-Geometrie (`apply_dve_box`) trifft
+    /// jetzt diesen Pad, nicht mehr `comp_fg_pad` (der bleibt seither
+    /// dauerhaft vollflächig).
+    comp_pip_pad: gst::Pad,
     fg_branches: HashMap<String, InputBranch>,
     bg_branches: HashMap<String, InputBranch>,
     _mxl_output: MxlVideoOutput,
@@ -920,6 +946,10 @@ struct ActivePipeline {
     /// `MxlVideoInput`s am Leben, sonst stirbt ihr `read_loop`-Thread
     /// beim `Drop` (s. `build_keyfill_tail`).
     _keyer_keyfill: Option<(MxlVideoInput, MxlVideoInput)>,
+    /// `Some` nur, wenn PIP gerade eine echte Quelle liest (statt des
+    /// Schwarzbild-Fallbacks) — hält deren `MxlVideoInput` am Leben,
+    /// gleicher Grund wie `_keyer_keyfill`.
+    _pip_input: Option<MxlVideoInput>,
     flowed: Arc<AtomicBool>,
 }
 
@@ -955,6 +985,44 @@ fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("height", box_.height);
 }
 
+/// Baut den Zuspieler für den PIP-Layer (comp.sink_3, s. Moduldoku "PIP
+/// als eigenständiger Layer") — ein einzelner normalisierter Video-Zweig
+/// wie fg/bg, **kein** Fill+Key-Paar wie beim Keyer: PIP zeigt ein
+/// normales, undurchsichtiges Bild aus einer frei wählbaren Crosspoint-
+/// Quelle (`crosspoint.inputs`, nicht `keyer.inputs` — jede entdeckte
+/// Quelle ist als PIP-Bild geeignet, nicht nur Fill+Key-Paare). Ohne
+/// gewählte Quelle ein Schwarzbild-Fallback, damit ein aktiviertes PIP
+/// ohne Quelle eine leere schwarze Box zeigt statt den Build scheitern
+/// zu lassen — gleiches Prinzip wie der Keyer ohne gewählte Fill+Key-
+/// Quelle (dort Testfarbe statt Schwarz, da dort schon vor dieser
+/// Änderung eine synthetische Quelle existierte).
+fn build_pip_tail(
+    pipeline: &gst::Pipeline,
+    context: &Arc<MxlContext>,
+    pip_source_input: Option<&DiscoveredInput>,
+    width: u32,
+    height: u32,
+) -> Result<(gst::Element, Option<MxlVideoInput>), String> {
+    match pip_source_input {
+        Some(input) => {
+            let mxl_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
+                .map_err(|e| format!("MxlVideoInput(pip, {}): {e}", input.sender_id))?;
+            let (caps, _elements) = build_normalized_branch(pipeline, &mxl_input.tail, "pip", width, height)?;
+            Ok((caps, Some(mxl_input)))
+        }
+        None => {
+            let black_src = gst::ElementFactory::make("videotestsrc")
+                .property("is-live", true)
+                .build()
+                .map_err(|e| format!("videotestsrc (pip black): {e}"))?;
+            black_src.set_property_from_str("pattern", "black");
+            pipeline.add(&black_src).map_err(|e| format!("add pip black source: {e}"))?;
+            let (caps, _elements) = build_normalized_branch(pipeline, &black_src, "pip-black", width, height)?;
+            Ok((caps, None))
+        }
+    }
+}
+
 /// Baut die Mixer-Pipeline. Ein einzelner kaputter Eingang (z. B. ein
 /// Registry-Geist-Sender, s. `build_one_input`) lässt den restlichen
 /// Build nicht scheitern — er wird übersprungen und als Eintrag im
@@ -966,6 +1034,7 @@ fn build(
     inputs: &[DiscoveredInput],
     keyfill_inputs: &[DiscoveredKeyFill],
     keyer_source: &Option<String>,
+    pip_source: &Option<String>,
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let pipeline = gst::Pipeline::new();
 
@@ -1082,13 +1151,21 @@ fn build(
         }
     }
 
-    // ── comp.sink_0 = Programm (fg, zorder 2, DVE-fähig — Box wird nach
-    //    dem Build vom Aufrufer via `apply_dve_box` gesetzt).
+    // ── comp.sink_0 = Programm (fg, zorder 2). Dauerhaft vollflächig
+    //    (Architekturentscheidung 2026-07-22, s. Moduldoku "PIP als
+    //    eigenständiger Layer"): PIP verkleinert nicht mehr das PGM-Bild
+    //    selbst, sondern ist ein eigener Layer mit eigener Quelle
+    //    (comp.sink_3 unten) — `apply_dve_box` trifft seither
+    //    `comp_pip_pad`, nie mehr diesen Pad.
     let comp_fg_pad = comp
         .request_pad_simple("sink_0")
         .ok_or("comp: request sink_0 (fg) failed")?;
     comp_fg_pad.set_property("zorder", 2u32);
     comp_fg_pad.set_property("alpha", 1.0f64);
+    comp_fg_pad.set_property("xpos", 0i32);
+    comp_fg_pad.set_property("ypos", 0i32);
+    comp_fg_pad.set_property("width", config.width as i32);
+    comp_fg_pad.set_property("height", config.height as i32);
     isel.static_pad("src")
         .ok_or("isel: no src pad")?
         .link(&comp_fg_pad)
@@ -1164,6 +1241,25 @@ fn build(
         .link(&comp_keyer_pad)
         .map_err(|e| format!("link keyer to comp.sink_2: {e}"))?;
 
+    // ── comp.sink_3 = PIP (Bild-im-Bild, zorder 4, ganz oben —
+    //    Architekturentscheidung 2026-07-22, s. Moduldoku "PIP als
+    //    eigenständiger Layer"): unabhängig vom PGM-/PST-Bus wählbare
+    //    Quelle aus `crosspoint.inputs` (nicht `keyer.inputs` — jede
+    //    entdeckte Quelle taugt als PIP-Bild, kein Fill+Key-Paar nötig).
+    //    Box-Geometrie kommt vom Aufrufer nach dem Build via
+    //    `apply_dve_box` (dieselbe Funktion, die vorher `comp_fg_pad`
+    //    traf).
+    let pip_source_input = pip_source.as_ref().and_then(|id| inputs.iter().find(|i| &i.sender_id == id));
+    let (pip_caps, pip_input) = build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height)?;
+    let comp_pip_pad = comp.request_pad_simple("sink_3").ok_or("comp: request sink_3 (pip) failed")?;
+    comp_pip_pad.set_property("zorder", 4u32);
+    comp_pip_pad.set_property("alpha", 0.0f64);
+    pip_caps
+        .static_pad("src")
+        .ok_or("pip capsfilter: no src pad")?
+        .link(&comp_pip_pad)
+        .map_err(|e| format!("link pip to comp.sink_3: {e}"))?;
+
     let comp_out_caps = gst::ElementFactory::make("capsfilter")
         .property("caps", video_caps(config.width, config.height))
         .build()
@@ -1204,10 +1300,12 @@ fn build(
             comp_fg_pad,
             comp_bg_pad,
             comp_keyer_pad,
+            comp_pip_pad,
             fg_branches,
             bg_branches,
             _mxl_output: mxl_output,
             _keyer_keyfill: keyer_keyfill,
+            _pip_input: pip_input,
             flowed,
         },
         warnings,
@@ -1445,7 +1543,8 @@ pub fn run(
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_source: Option<String> = None;
-    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
+    let mut pip_source: Option<String> = None;
+    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
@@ -1460,6 +1559,7 @@ pub fn run(
     let mut preset: Option<String> = None;
     let mut dve_box = DveBox::full_frame(config.width, config.height);
     let mut keyer_enabled = false;
+    let mut pip_enabled = false;
     let fading = Arc::new(AtomicBool::new(false));
     let fade_thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
     // Kapitel 15 Teil 3 (Rest 2, s. Moduldoku): der bg-Zweig des vor einer
@@ -1511,7 +1611,7 @@ pub fn run(
                     pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1524,9 +1624,11 @@ pub fn run(
                             // die Preset-Auswahl — sonst zeigt die nächste
                             // `autoTrans()` das falsche „Outgoing"-Bild.
                             switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &program);
-                            apply_dve_box(&p.comp_fg_pad, &dve_box);
+                            apply_dve_box(&p.comp_pip_pad, &dve_box);
                             p.comp_keyer_pad
                                 .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
+                            p.comp_pip_pad
+                                .set_property("alpha", if pip_enabled { 1.0f64 } else { 0.0f64 });
                             let previous = program.clone();
                             program = applied_program;
                             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
@@ -1545,9 +1647,9 @@ pub fn run(
                                 "rebuild with {} inputs failed: {e} — falling back to black",
                                 current_inputs.len()
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
                                 Ok((p, _warnings)) => {
-                                    apply_dve_box(&p.comp_fg_pad, &dve_box);
+                                    apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();
                                     preset = None;
                                     *flowed_slot.lock().expect("lock poisoned") =
@@ -1589,7 +1691,7 @@ pub fn run(
                     pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1597,9 +1699,11 @@ pub fn run(
                             let applied_program =
                                 switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &program);
                             switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &program);
-                            apply_dve_box(&p.comp_fg_pad, &dve_box);
+                            apply_dve_box(&p.comp_pip_pad, &dve_box);
                             p.comp_keyer_pad
                                 .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
+                            p.comp_pip_pad
+                                .set_property("alpha", if pip_enabled { 1.0f64 } else { 0.0f64 });
                             let previous = program.clone();
                             program = applied_program;
                             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
@@ -1613,9 +1717,71 @@ pub fn run(
                             let _ = tx.send(Event::Error(format!(
                                 "keyer source rebuild failed: {e} — falling back to black"
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
                                 Ok((p, _warnings)) => {
-                                    apply_dve_box(&p.comp_fg_pad, &dve_box);
+                                    apply_dve_box(&p.comp_pip_pad, &dve_box);
+                                    let previous = program.take();
+                                    preset = None;
+                                    *flowed_slot.lock().expect("lock poisoned") =
+                                        Some(p.flowed.clone());
+                                    active = Some(p);
+                                    let _ = tx.send(Event::ProgramChanged {
+                                        previous,
+                                        current: None,
+                                    });
+                                }
+                                Err(e2) => {
+                                    let _ = tx.send(Event::Error(format!(
+                                        "fallback black-only build also failed: {e2}"
+                                    )));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // PIP-Layer (Nutzerwunsch 2026-07-22, s. Moduldoku "PIP als
+            // eigenständiger Layer") — Quellwechsel, exakt gespiegelt von
+            // `SetKeyerSource` oben (voller Rebuild, da eine neue
+            // `MxlVideoInput`-Verbindung entsteht), nur ohne Fill+Key-Paar.
+            Ok(Command::SetPipSource(source)) => {
+                if pip_source != source {
+                    pip_source = source;
+                    join_fade(&fade_thread);
+                    fading.store(false, Ordering::Release);
+                    pending_bg_demote = None;
+                    active = None;
+                    std::thread::sleep(OLD_WRITER_DRAIN);
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                        Ok((p, warnings)) => {
+                            for w in warnings {
+                                let _ = tx.send(Event::Error(w));
+                            }
+                            let applied_program =
+                                switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &program);
+                            switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &program);
+                            apply_dve_box(&p.comp_pip_pad, &dve_box);
+                            p.comp_keyer_pad
+                                .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
+                            p.comp_pip_pad
+                                .set_property("alpha", if pip_enabled { 1.0f64 } else { 0.0f64 });
+                            let previous = program.clone();
+                            program = applied_program;
+                            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
+                            active = Some(p);
+                            let _ = tx.send(Event::ProgramChanged {
+                                previous,
+                                current: program.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(format!(
+                                "pip source rebuild failed: {e} — falling back to black"
+                            )));
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                                Ok((p, _warnings)) => {
+                                    apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();
                                     preset = None;
                                     *flowed_slot.lock().expect("lock poisoned") =
@@ -1764,14 +1930,14 @@ pub fn run(
             Ok(Command::SetDveBox(box_)) => {
                 dve_box = box_;
                 if let Some(p) = &active {
-                    apply_dve_box(&p.comp_fg_pad, &dve_box);
+                    apply_dve_box(&p.comp_pip_pad, &dve_box);
                 }
                 let _ = tx.send(Event::DveBoxChanged(dve_box));
             }
             Ok(Command::ResetDve) => {
                 dve_box = DveBox::full_frame(config.width, config.height);
                 if let Some(p) = &active {
-                    apply_dve_box(&p.comp_fg_pad, &dve_box);
+                    apply_dve_box(&p.comp_pip_pad, &dve_box);
                 }
                 let _ = tx.send(Event::DveBoxChanged(dve_box));
             }
@@ -1782,6 +1948,14 @@ pub fn run(
                         .set_property("alpha", if enabled { 1.0f64 } else { 0.0f64 });
                 }
                 let _ = tx.send(Event::KeyerChanged(enabled));
+            }
+            Ok(Command::SetPipEnabled(enabled)) => {
+                pip_enabled = enabled;
+                if let Some(p) = &active {
+                    p.comp_pip_pad
+                        .set_property("alpha", if enabled { 1.0f64 } else { 0.0f64 });
+                }
+                let _ = tx.send(Event::PipChanged(enabled));
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
