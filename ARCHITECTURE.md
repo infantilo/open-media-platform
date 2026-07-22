@@ -2741,3 +2741,290 @@ Einordnung in die Gesamttaxonomie oben (23.1 Punkt 3).
 Sources:
 - [The Dynamic Media Facility: Reference Architecture (v2.0, White Paper, April 2026) — EBU Technology & Innovation](https://tech.ebu.ch/publications/white-paper-2026-04-15)
 - [Ready for production: Media eXchange Layer v1.0.0 published — EBU Technology & Innovation](https://tech.ebu.ch/news/2026/ready-for-production-media-exchange-layer-v1-0-0-published)
+
+## 24. Playlist-Suite-Erweiterung: Media-Library, Cart-Assets, Plugin-Host,
+Timeline, Control-Enforcement-Fix (geplant, Fortsetzung Phase C)
+
+**Anlass:** `docs/decisions.md` Nachtrag 81. Die eigentliche
+Playlist-Sequenzierung ist mit `omp-player`/`omp-playout-automation`
+(§13.3, C12/C14/C15) bereits portiert und strukturell dem
+PIPELINE-CONTROLLER-Vorbild überlegen (reine Sequenzierungsschicht ohne
+eigene Pipeline). Dieser Abschnitt deckt den Rest ab, den PIPELINE
+CONTROLLER zusätzlich bietet, plus eine dabei aufgefallene
+Kontroll-Lücke.
+
+### 24.1 Control-Enforcement-Fix: Automatisation über den Orchestrator-Proxy
+
+**Korrektur (nach Code-Prüfung, war in der ersten Fassung dieses
+Abschnitts falsch angenommen):** §12/D3 ist **nicht** mehr offen — D3
+Teil 2 (`UMSETZUNG.md`, 2026-07-14) plus Kapitel-12-Teil-4
+(Workflow-Scope-AuthZ) sind bereits gebaut und scharf: der
+Orchestrator-Proxy verlangt auf `PATCH /api/v1/nodes/{id}/params/{name}`
+und `POST /api/v1/nodes/{id}/methods/{name}` bereits
+`requireVerbOnNode(authz.VerbOperate, …)`
+(`orchestrator/internal/httpapi/server.go`), durchgesetzt via
+`authz.Store.CheckWorkflow(subject, workflowId, nodeRole, verb)`
+(`orchestrator/internal/authz/store.go`) — Workflow-gescopte
+Rollenbindungen funktionieren exakt wie in §12 Punkt 2/3 beschrieben,
+für menschliche Nutzer bereits produktiv (Operator-Console, C13/D7).
+
+**Die tatsächliche, engere Lücke:** zwei Dinge, nicht eines.
+
+1. `orchestrator/internal/auth` kennt nur **menschliche** Konten
+   (`User`, Passwort-Login, `auth.go`: "dieses Paket kennt nur 'wer ist
+   der Nutzer'"). Es gibt kein Prinzipal-Konzept für einen **Service**
+   wie eine `omp-playout-automation`-Instanz — sie kann sich also gar
+   nicht am bestehenden, longst funktionierenden Proxy anmelden.
+2. Deshalb umgeht C14/C15 (`nodes/omp-playout-automation/src/remote.rs`,
+   `PeerClient`) den Proxy komplett und spricht Ziel-Nodes direkt über
+   deren IS-04-`href` an (bewusste Entscheidung, C14/C15-Detailplan
+   Punkt 5) — die einzige node-zu-node-Verbindung im System, die an der
+   längst bestehenden Durchsetzungsstelle vorbeiläuft. Jeder Prozess,
+   der einen Node-`href` kennt (IS-04-Registry ist facility-weit
+   sichtbar), kann einen Node heute ungeprüft fernsteuern, unabhängig
+   von dessen Workflow-Zugehörigkeit — nicht nur die eigene
+   Automatisation, jeder beliebige Microservice.
+
+**Entschieden (Empfehlung aus `AskUserQuestion`, 2026-07-22):** kein
+neues Autorisierungsmodell nötig — nur der fehlende Baustein 1 plus das
+Umbiegen von `PeerClient` auf den bestehenden Proxy (Baustein 2):
+
+1. **Service-Prinzipal** (additiv zu `auth.User`, kein Ersatz): ein
+   Workflow-Start (`POST /api/v1/workflows/{id}/start`, §6.2/D7)
+   provisioniert für jede Control-Plane-Instanz des Workflows
+   (Katalog-`category: control`, §13.5 — z. B. `omp-playout-
+   automation`) automatisch ein kurzlebiges Service-Token plus eine
+   Rollenbindung `(subject=instanceId, workflowId, nodeId=AnyNode,
+   VerbOperate)` über den bereits vorhandenen `authz.Store`/
+   Rollenbindungs-Mechanismus — keine neue Tabelle, kein neues
+   Verb, nur ein neuer Ausstellungsweg neben dem Passwort-Login.
+   Token wird der Instanz beim Start wie andere dynamische
+   Katalog-Parameter mitgegeben (bestehender Launcher-Env-Mechanismus,
+   §6.2 Stufe 0).
+2. `omp-playout-automation` verliert `PeerClient`s direkte
+   `href`-Ansprache. Stattdessen ruft es denselben generischen
+   Parameter-/Methoden-Proxy, den auch die UI nutzt
+   (`GET/PATCH /api/v1/nodes/<id>/params/<name>`,
+   `POST /api/v1/nodes/<id>/methods/<name>` am Orchestrator) mit
+   `Authorization: Bearer <Service-Token>` — die bestehende
+   `requireVerbOnNode`-Prüfung greift dann automatisch, ohne
+   Sonderfall im Proxy-Code.
+3. Labels bleiben dynamisch auflösbar (`targetPlayerLabel`/
+   `targetMixerLabel`, C14/C15 Punkt 1) — die Auflösung liefert jetzt
+   die **NMOS-IS-04-Node-ID** für den Proxy-Pfad statt des `href`s
+   (nicht die OMP-Launcher-`OMP_INSTANCE_ID` — der Orchestrator-Proxy
+   löst `{id}` in `/api/v1/nodes/{id}/…` gegen `registry.NodeView.ID`
+   auf, s. `handleNodeProxy`/`registry.Store.Get`; die IS-04-Node-
+   Ressource führt diese ID bereits selbst, `RegistryClient::
+   list_nodes()` liefert sie ohne neuen Discovery-Mechanismus), sonst
+   unverändert (2 s-Discovery-Takt, selbstheilend).
+4. `RegistryClient::list_nodes()` (`omp-node-sdk::is04`) bleibt nur zur
+   Label→Node-ID-Auflösung, nicht mehr für den Steuer-Call selbst.
+
+**Ergebnis:** eine Automatisation-Instanz kann nach diesem Fix
+technisch — nicht nur per Konvention — ausschließlich Nodes ihres
+eigenen Workflows ansprechen, über dieselbe, bereits gehärtete
+Durchsetzungsstelle wie ein menschlicher Operator. Ein fremder,
+unbeteiligter Microservice ohne gültiges Token kommt gar nicht mehr
+durch den Proxy (schon heute für UI-Zugriffe scharf, gilt dann auch für
+diesen letzten verbliebenen Direktpfad).
+
+**Standards-Abdeckung:** keine (facility-interne Governance-Regel).
+**Testbarkeit:** zwei Workflows mit je Mixer + Automatisation-Instanz;
+Automatisation von Workflow A mit ihrem Token gegen Mixer von Workflow B
+→ `403` (bestehende `CheckWorkflow`-Logik, kein neuer Test dafür nötig,
+nur der neue Aufrufpfad); gegen eigenen Mixer → `200`. Zusätzlich:
+Aufruf ganz ohne/mit ungültigem Token gegen einen Node-Proxy-Endpunkt →
+`401`, wie für UI-Zugriffe bereits getestet. **Phase:** C16
+(`UMSETZUNG.md`). **Live verifiziert** (2026-07-22, drei echte
+Workflows gegen die laufende Dev-Umgebung, nicht nur Unit-Tests):
+`take()` auf einer echten `omp-playout-automation`-Instanz hat über
+deren eigenes Service-Token per Proxy tatsächlich `omp-player`
+(cue+take) und `omp-video-mixer-me` (crosspoint.select+cut) umgeschaltet
+(`crosspoint.programInput` änderte sich nachweisbar); ein aus dem
+Prozess-Environment der Workflow-A-Automation extrahiertes
+Service-Token gegen den Mixer eines fremden Workflows (C) lieferte
+`403`, gegen den eigenen Mixer (A) `200`, ganz ohne Token `401`, ein
+falsches `launchSecret` am Token-Endpunkt selbst `403`.
+
+### 24.2 Media-Library: facility-weiter Datei-Katalog
+
+**Vorbild:** PIPELINE CONTROLLER `lib/` (Datei-Scan + `ffprobe`-Analyse,
+`library.json`), Routen `server.js` `/api/library*` — technische
+Metadaten (Video/Audio-Codec, Auflösung, fps, Kanäle), Mark-In/Out-
+Segmente pro Datei, Rescan/Cleanup. Portiert wird das **Muster**
+(Scan-Loop, `ffprobe`-Wrapper, Segment-Datenmodell), nicht der Code
+(andere Sprache/Kontext, §0 Punkt 9).
+
+**Einordnung ggü. §23:** §23.3 hat bewusst additive Metadatenfelder
+direkt an Playlist-Items vorgesehen und eine "durchsuchbare
+Asset-Bibliothek unabhängig von Playlist-Einträgen" explizit als
+MAM-Grenze benannt, die noch nicht überschritten werden sollte. Die
+Media-Library überschreitet diese Grenze jetzt bewusst — Begründung:
+Nutzeranforderung, gleicher Funktionsumfang wie PIPELINE CONTROLLER.
+Bleibt trotzdem **kein** MAM (§20.8 weiterhin P3): keine Rechte-
+Verwaltung, kein Workflow-Approval, keine externe MAM-Anbindung — nur
+Scan + technische Metadaten + Segmente, wie im PC-Vorbild.
+
+**Umsetzung (Detailplan zu Beginn von C17):** neuer Node
+`omp-media-library`, wie `omp-playout-automation` ein reiner
+Control-Plane-Node (kein `omp-mediaio`, `senders=[]/receivers=[]`).
+Methoden `scan()`, `rescan(file)`, `cleanup()`, `setSegments(file,
+segments)`; Parameter `entries` (Katalog). `omp-player`/
+`omp-playout-automation` fragen bei `append`/`load` optional die
+Library nach Dauer/Segmenten statt nur die rohe Datei zu nehmen (analog
+PCs "Playlist-Array mit Library-Dauer anreichern",
+`server.js:359`) — additiv, bricht den heutigen Direkt-Datei-Pfad nicht.
+
+**Standards-Abdeckung:** keine. **Testbarkeit:** Scan über
+`OMP_MEDIA_DIR` mit 2–3 Testdateien, `ffprobe`-Werte stimmen,
+`setSegments`/Rescan/Cleanup live geprüft. **Phase:** C17.
+
+### 24.3 Cart-/Interrupt-Assets
+
+**Vorbild:** PIPELINE CONTROLLER `assets.json` — benannte,
+unterbrechbare Mini-Playlists (`events[]`, `icon`, `color`) mit
+`returnMode` (z. B. `interrupt`: nach Ablauf zurück zum vorherigen
+On-Air-Zustand) und optionaler `liveSource`. Praktisch: Blackclip,
+Standby-Grafik, Störungshinweis — Dinge, die kurzfristig über die
+laufende Playlist gelegt werden, ohne sie zu ersetzen.
+
+**Umsetzung (Detailplan zu Beginn von C18):** Erweiterung von
+`omp-playout-automation` (nicht neuer Node — Cart-Assets sind
+konzeptionell ein zweiter, priorisierter Playlist-Kanal auf demselben
+Ziel-Player/-Mixer, kein eigenständiges Steuerungsziel). Neue Methode
+`cart.fire(assetId)`: merkt sich `cuedItemId` des Hauptkanals, spielt
+das Asset ab, ruft bei dessen Ende (bzw. bei `cart.return()`) den
+gemerkten Zustand über dieselben `cue`/`take`-Methoden wieder auf —
+kein neuer Mechanismus, Wiederverwendung von C14/C15 Punkt 4
+(Dauer-Timer) für den Return-Trigger.
+
+**Standards-Abdeckung:** keine. **Testbarkeit:** laufende Playlist auf
+Item 2, `cart.fire(black)` schaltet um, nach Ablauf automatisch zurück
+auf Item 2 an der Stelle, an der es unterbrochen wurde (nicht neu von
+vorn). **Phase:** C18.
+
+### 24.4 Plugin-Host (generischer Mechanismus)
+
+**Vorbild:** PIPELINE CONTROLLER `plugins/*.js` + `plugins.json`
+(dynamisches Laden, `enabled`-Flag, pro-Plugin-Config). **Entschieden:**
+nur der generische Host jetzt, keines der fünf PC-Plugins
+(`file-transfer-manager`, `broadcast-controller`, `marina-sync`,
+`scte35`, `snmp-monitor`) — die sind eigenständige spätere
+Katalog-Einträge (`category: control` oder passend, §13.5), keine
+Voraussetzung für Playlist/Timeline/Library/Cart-Assets.
+
+**Umsetzung (Detailplan zu Beginn von C19):** kein neuer Node-Typ,
+sondern eine Erweiterung des bestehenden Node-Contracts (§5) um ein
+**optionales** Capability-Feld `plugins: bool` — ein Node, der es
+setzt, exponiert zusätzlich `GET/PATCH /api/v1/nodes/<id>/plugins`
+(Liste + Enable/Disable + Config je Plugin-Instanz), rein additiv, kein
+Pflichtpunkt (analog zur Begründung bei `category`, §13.5). Erster
+Konsument: keiner zwingend in C19 selbst (reiner Mechanismus, wie
+gewünscht) — spätere Plugins registrieren sich hier, wenn gebraucht.
+
+**Standards-Abdeckung:** keine (kein NMOS-Konzept). **Testbarkeit:**
+Mock-Plugin (no-op) laden/enable/disable/config über die neue Route,
+Zustand übersteht Node-Neustart (persistiert wie andere Node-Zustände,
+§4.6 Punkt 4-Muster). **Phase:** C19.
+
+### 24.5 Timeline: gefenstert statt Full-Recompute
+
+**Vorbild:** PIPELINE CONTROLLER `calcTimeline()`
+(`lib/PlaylistEngine.js:485`, dupliziert in `ui.html:4453`) — berechnet
+Start/Ende/Gaps/Xfade-Overlap pro Playlist-Eintrag. **Bekanntes
+Antipattern, nicht mitportiert:** unbounded Full-Recompute über die
+gesamte Playlist bei praktisch jeder UI-Interaktion (~25 Call-Sites),
+kein Fenster, kein Memoization — bei langen Playlists spürbar langsam
+(das ist der vom Nutzer erinnerte "rendert zu weit in die Zukunft"-Bug).
+
+**Umsetzung (Detailplan zu Beginn von C20):** Berechnungslogik
+(Start/Ende/Gap/Xfade-Overlap je Item) wird als Muster übernommen, aber:
+(a) **inkrementell** — eine Änderung an Item _i_ invalidiert nur den ab
+_i_ akkumulierten Zeitversatz, nicht die ganze Liste; (b) **gefenstert**
+— UI fragt nur den sichtbaren Zeitbereich an (`GET
+methods/timeline.window?fromIndex&count`), nicht die komplette
+Playlist. Lebt in `omp-playout-automation` (dort liegt bereits
+`playlist.rs`/die Item-Liste, §11.1/C14-C15) als neue Methode, kein
+neuer Node. UI-Bundle bekommt eine Timeline-Leiste analog PCs
+Playlist-Spalten-Darstellung.
+
+**Standards-Abdeckung:** keine. **Testbarkeit:** Playlist mit 500
+Items, Änderung an Item 3 triggert messbar keinen Full-Scan (Zeitmessung
+vor/nach über die Item-Anzahl hinweg, muss deutlich sub-linear zur
+Gesamtlänge bleiben), Timeline-Fenster liefert nur angefragten
+Ausschnitt. **Phase:** C20.
+
+**Reihenfolge C16→C20:** C16 zuerst (Sicherheitslücke, unabhängig von
+den anderen), C17 vor C18 (Cart-Assets nutzen ggf. Library-Einträge),
+C19 unabhängig einschiebbar, C20 zuletzt (baut auf der in C14/C15
+bereits vorhandenen Item-Liste auf, keine Abhängigkeit zu C17/C18, aber
+inhaltlich am sinnvollsten nach den anderen Playlist-Erweiterungen).
+
+### 24.6 Live-MXL-Quelle als Playlist-Item (Nutzer-Nachtrag 2026-07-22)
+
+**Lücke:** `omp-player`s `ItemSource` (`nodes/omp-player/src/pipeline.rs`)
+kennt heute nur `TestPattern` und `File { uri }` — kein Playlist-Item
+kann eine **live** MXL-Quelle (einen bereits laufenden Sender eines
+anderen Nodes) abspielen. Nutzeranforderung: die Quell-Auswahl dafür
+soll **dasselbe Muster** nutzen wie die bereits dreifach etablierte
+Eingangs-Discovery — `omp-switcher` (C7), `omp-video-mixer-me`s
+`crosspoint.inputs` (C10), `omp-audio-mixer`s AFV-Quellauswahl (C11):
+alle 2s `RegistryClient::list_senders()` pollen, auf `transport==MXL`
+filtern, eigenen Sender + Lowres-Begleiter ausschließen.
+
+**Entschieden:** kein Blackmagic-/DeckLink-/Capture-Karten-Pfad als
+Quelle (bestätigt bestehende Linie — physische I/O-Karten bleiben
+§6.1/§18-Zukunftsscope, PIPELINE CONTROLLERs DeckLink-Ingest wird
+**nicht** portiert). Live-Quellen kommen ausschließlich über MXL, wie
+bereits in §13.4 festgelegt.
+
+**Umsetzung (Detailplan zu Beginn von C21):** neue `ItemSource::Live {
+sender_id: String }` in `omp-player`; eigene `discover()`/
+`discovery_loop()` nach exakt dem C7/C10/C11-Muster (kein neuer
+Discovery-Mechanismus erfunden), Ergebnis als neuer Parameter
+`playlist.availableSources` (Pendant zu `crosspoint.inputs`). Pipeline-
+seitig: `Live`-Items bauen einen `MxlVideoInput`/`MxlAudioInput`-Zweig
+statt `videotestsrc`/`uridecodebin` (Wiederverwendung der bestehenden
+MXL-Input-Bausteine aus `omp-mediaio`, kein neuer Empfangspfad). Cart-
+Assets (§24.3, C18) profitieren automatisch mit, da sie über dieselbe
+Item-Struktur laufen.
+
+**Bewusst nicht jetzt:** Extraktion der 4-fach ähnlichen Discovery-
+Schleife in einen gemeinsamen `omp-node-sdk`-Helfer — die vier
+Ausprägungen unterscheiden sich in Detailfiltern (Keyfill-Paare,
+Lowres-Verlinkung, Format-Check) genug, dass eine verfrühte
+Abstraktion mehr Kopplung als Nutzen brächte; bleibt eine spätere
+Vereinfachungsoption, kein jetzt zu lösendes Problem.
+
+**Standards-Abdeckung:** keine neue (IS-04/MXL wie überall). **Testbarkeit:**
+laufender `omp-source`, `omp-player`-Playlist mit einem `Live`-Item auf
+dessen Sender → Take zeigt den Live-Feed im Viewer, identisch zum
+File-Item-Verhalten (`itemEnded` bleibt für `Live` bedeutungslos wie
+bei `TestPattern`, kein EOS). **Phase:** C21.
+
+### 24.7 omp-recorder: dedizierter Recording-Node
+
+**Anforderung:** ein eigener Node, der eine MXL-Quelle (Video+Audio)
+in eine Datei schreibt — heute existiert kein Recording-Pfad in OMP.
+PIPELINE CONTROLLER nimmt über `lib/OutputEngine.js`/DeckLink-Karten
+auf; hier **ausschließlich MXL als Eingang**, keine Capture-Karte
+(gleiche Entscheidung wie §24.6).
+
+**Umsetzung (Detailplan zu Beginn von C22):** neuer Node
+`omp-recorder` (mit `omp-mediaio`, `senders=[]`, ein MXL-Receiver-Paar
+Video+Audio als `receivers`, analog `omp-viewer`s Empfangsseite, C6).
+Methoden `record.start(fileName)`/`record.stop()`, Parameter
+`record.status` (idle/recording/error), `record.durationMs`. Pipeline:
+MXL-Input → Encoder (Minimal-Dependency-Regel beachten: erst prüfen, ob
+ein bereits vorhandener GStreamer-Encoder-Plugin-Satz reicht, z. B.
+x264enc/voaacenc, bevor etwas Neues eingebunden wird) → Muxer → Filesink
+nach `OMP_MEDIA_DIR` (dieselbe Variable wie beim Media-Library-Scan,
+§24.2 — eine Aufnahme ist danach ohne manuellen Schritt in der Library
+sichtbar, nächster `scan()`/Watch-Zyklus holt sie ab). Katalog-
+`category: output` (§13.5).
+
+**Standards-Abdeckung:** keine neue. **Testbarkeit:** `omp-source` →
+`omp-recorder` verkabelt, `record.start`/`stop`, resultierende Datei
+mit `ffprobe` auf Dauer/Codec geprüft, taucht nach `omp-media-library`-
+Scan im Katalog auf. **Phase:** C22.

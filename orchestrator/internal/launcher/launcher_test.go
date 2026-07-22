@@ -90,7 +90,7 @@ func sleepyCatalog() []CatalogEntry {
 }
 
 // stubbornCatalog ignoriert SIGTERM, damit der SIGKILL-Fallback in
-// Stop() getestet werden kann. `trap '' TERM` setzt die Disposition auf
+// Stop() getestet werden kann. `trap ” TERM` setzt die Disposition auf
 // SIG_IGN, die laut POSIX über `exec` hinweg erhalten bleibt — `exec
 // sleep 30` ersetzt den Shell-Prozess durch `sleep` selbst (gleiche PID,
 // kein separater Hintergrund-Kindprozess).
@@ -194,6 +194,36 @@ func TestLauncherStartAppearsInListAndStopRemovesIt(t *testing.T) {
 	}
 	if len(l.List()) != 0 {
 		t.Errorf("List() after Stop() = %+v, want empty", l.List())
+	}
+}
+
+// TestLauncherGetReturnsInstanceWithLaunchSecret (ARCHITECTURE.md
+// §24.1, UMSETZUNG.md C16): Get() ist der Lookup-Pfad, den
+// handleIssueServiceToken nutzt, um das instanzeigene LaunchSecret zu
+// prüfen — muss dasselbe LaunchSecret liefern wie Start().
+func TestLauncherGetReturnsInstanceWithLaunchSecret(t *testing.T) {
+	l := newWithStore(sleepyCatalog(), "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
+
+	inst, err := l.Start("sleepy", "", "", nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	defer func() { _ = l.Stop(inst.ID) }()
+
+	if inst.LaunchSecret == "" {
+		t.Fatal("Start() returned an empty LaunchSecret")
+	}
+
+	got, ok := l.Get(inst.ID)
+	if !ok {
+		t.Fatalf("Get(%s) = not found, want the just-started instance", inst.ID)
+	}
+	if got.LaunchSecret != inst.LaunchSecret {
+		t.Errorf("Get().LaunchSecret = %q, want %q", got.LaunchSecret, inst.LaunchSecret)
+	}
+
+	if _, ok := l.Get("does-not-exist"); ok {
+		t.Error("Get() for an unknown ID returned ok=true, want false")
 	}
 }
 
@@ -688,10 +718,15 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 		Env: map[string]string{"OMP_CUSTOM": "from-catalog"},
 	}}
 	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil, nil)
+	// ARCHITECTURE.md §24.1, UMSETZUNG.md C16.
+	l.SetOrchestratorURL("http://orchestrator:8000")
 
 	inst, err := l.Start("envdump", "", "", nil)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
+	}
+	if inst.LaunchSecret == "" {
+		t.Fatal("Start() returned an empty LaunchSecret")
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -709,12 +744,14 @@ func TestLauncherStartSetsRequiredEnvVars(t *testing.T) {
 
 	env := string(data)
 	checks := map[string]string{
-		"OMP_INSTANCE_ID":  inst.ID,
-		"OMP_LABEL":        inst.Label,
-		"OMP_PORT":         "0",
-		"OMP_REGISTRY_URL": "http://registry:8010",
-		"OMP_NATS_URL":     "nats://nats:4222",
-		"OMP_CUSTOM":       "from-catalog",
+		"OMP_INSTANCE_ID":      inst.ID,
+		"OMP_LABEL":            inst.Label,
+		"OMP_PORT":             "0",
+		"OMP_REGISTRY_URL":     "http://registry:8010",
+		"OMP_NATS_URL":         "nats://nats:4222",
+		"OMP_CUSTOM":           "from-catalog",
+		"OMP_ORCHESTRATOR_URL": "http://orchestrator:8000",
+		"OMP_LAUNCH_SECRET":    inst.LaunchSecret,
 	}
 	for key, want := range checks {
 		if !strings.Contains(env, key+"="+want) {
@@ -745,8 +782,9 @@ func TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars(t *testing.T) {
 	l := newWithStore(catalog, "http://registry:8010", "nats://nats:4222", newFakeInstanceStore(), nil, nil, nil)
 
 	inst, err := l.Start("envdump2", "", "", map[string]string{
-		"OMP_WIDTH":       "1280",   // überschreibt den Katalog-Wert
-		"OMP_INSTANCE_ID": "hacked", // darf NICHT gegen die reservierte Variable gewinnen
+		"OMP_WIDTH":         "1280",          // überschreibt den Katalog-Wert
+		"OMP_INSTANCE_ID":   "hacked",        // darf NICHT gegen die reservierte Variable gewinnen
+		"OMP_LAUNCH_SECRET": "hacked-secret", // ARCHITECTURE.md §24.1 — ebenso reserviert
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -774,6 +812,12 @@ func TestLauncherStartExtraEnvOverridesCatalogButNotReservedVars(t *testing.T) {
 	}
 	if strings.Contains(env, "OMP_INSTANCE_ID=hacked") {
 		t.Errorf("extraEnv illegally overrode the reserved OMP_INSTANCE_ID; full env:\n%s", env)
+	}
+	if !strings.Contains(env, "OMP_LAUNCH_SECRET="+inst.LaunchSecret) {
+		t.Errorf("extraEnv illegally overrode the reserved OMP_LAUNCH_SECRET; full env:\n%s", env)
+	}
+	if strings.Contains(env, "OMP_LAUNCH_SECRET=hacked-secret") {
+		t.Errorf("extraEnv illegally overrode the reserved OMP_LAUNCH_SECRET; full env:\n%s", env)
 	}
 }
 

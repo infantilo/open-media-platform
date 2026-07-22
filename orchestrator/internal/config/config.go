@@ -14,6 +14,14 @@ type Config struct {
 	Listen string
 	// RegistryURL zeigt auf die NMOS-Registry (IS-04 Query/Registration API).
 	RegistryURL string
+	// OrchestratorURL ist die von gestarteten Instanzen erreichbare
+	// Basis-URL des Orchestrators selbst (ARCHITECTURE.md §24.1,
+	// UMSETZUNG.md C16) — genutzt von Control-Plane-Nodes
+	// (z. B. omp-playout-automation), die den generischen Node-Proxy
+	// (A8) statt eines direkten Node-zu-Node-Zugriffs ansprechen sollen.
+	// Gleiches Muster wie RegistryURL: vom Launcher an jede gestartete
+	// Instanz als OMP_ORCHESTRATOR_URL durchgereicht.
+	OrchestratorURL string
 	// NatsURL zeigt auf den NATS-Event-Bus.
 	NatsURL string
 	// UIDir ist das Verzeichnis, aus dem die UI-Shell statisch ausgeliefert wird.
@@ -77,7 +85,7 @@ type Config struct {
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
-// OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
+// OMP_ORCHESTRATOR_URL, OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
 // OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
 // OMP_PLACEMENT_* und OMP_AUDIT_RETENTION_DAYS;
 // fehlende Werte
@@ -87,18 +95,19 @@ type Config struct {
 func Load() Config {
 	mtlsEnabled, _ := strconv.ParseBool(getEnv("OMP_MTLS_ENABLED", "false"))
 	return Config{
-		Listen:        getEnv("OMP_LISTEN", ":8000"),
-		RegistryURL:   getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
-		NatsURL:       getEnv("OMP_NATS_URL", "nats://localhost:4222"),
-		UIDir:         getEnv("OMP_UI_DIR", "../ui"),
-		CatalogPath:   getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
-		PostgresURL:   getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
-		MTLSEnabled:   mtlsEnabled,
-		MTLSCertFile:  getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
-		MTLSKeyFile:   getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
-		MTLSCAFile:    getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
-		JWTSecret:     getEnv("OMP_AUTH_JWT_SECRET", ""),
-		JWTSecretFile: getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
+		Listen:          getEnv("OMP_LISTEN", ":8000"),
+		OrchestratorURL: getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
+		RegistryURL:     getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
+		NatsURL:         getEnv("OMP_NATS_URL", "nats://localhost:4222"),
+		UIDir:           getEnv("OMP_UI_DIR", "../ui"),
+		CatalogPath:     getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
+		PostgresURL:     getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
+		MTLSEnabled:     mtlsEnabled,
+		MTLSCertFile:    getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
+		MTLSKeyFile:     getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
+		MTLSCAFile:      getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		JWTSecret:       getEnv("OMP_AUTH_JWT_SECRET", ""),
+		JWTSecretFile:   getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
 		// Defaults spiegeln placement.DefaultThresholds (bewusst hier
 		// dupliziert statt importiert, config bleibt frei von
 		// Business-Logik-Abhängigkeiten, gleiches Muster wie die

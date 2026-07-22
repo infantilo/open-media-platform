@@ -154,6 +154,23 @@ type Instance struct {
 	// erneut mitschicken kann, weil es dort keine langlebige
 	// Supervisor-Goroutine gibt, die es sich sonst merken könnte.
 	ExtraEnv map[string]string `json:"extraEnv,omitempty"`
+	// LaunchSecret (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) beweist
+	// gegenüber `POST /api/v1/instances/<id>/service-token`, dass der
+	// Aufrufer tatsächlich der vom Orchestrator gestartete Prozess ist
+	// (per OMP_LAUNCH_SECRET-Env-Variable an genau diese Instanz
+	// übergeben). `json:"-"` hält es aus jeder API-Antwort heraus
+	// (List() etc. serialisieren Instance direkt) — kein UI-sichtbares
+	// Feld. Bewusste Konsequenz, da persistInstanceLocked() dieselbe
+	// Marshal-Instanz nutzt: das Secret überlebt einen
+	// Orchestrator-Neustart NICHT — sicherer Default (lieber gar nicht
+	// persistiert als versehentlich über die Instanzen-API exponiert),
+	// eine zu diesem Zeitpunkt schon laufende Instanz kann ihr Token
+	// dann erst mit ihrem eigenen nächsten Neustart wieder auffrischen.
+	// Nur für lokal gestartete Instanzen gesetzt (Prozess/Podman); der
+	// Remote-Host-Agent-Pfad (S3) bekommt das noch nicht mit, s.
+	// docs/decisions.md Nachtrag 81/C16 — dokumentierte Lücke, kein
+	// stillschweigend fehlender Fall.
+	LaunchSecret string `json:"-"`
 	// CPUPercent/RSSBytes (Kapitel 14 Teil 2, docs/END-GOAL-
 	// FEATURES.md §14.3b): nur für lokal laufende Instanzen (HostID=="")
 	// von Launcher.sampleLocalResources() befüllt, für entfernte
@@ -266,9 +283,16 @@ func catalogKey(nodeType, version string) string {
 // nur importierte Fremd-Einträge bekommen die neue, andere
 // Vertrauensstufe.
 type Launcher struct {
-	staticCatalog   []CatalogEntry
-	registryURL     string
-	natsURL         string
+	staticCatalog []CatalogEntry
+	registryURL   string
+	natsURL       string
+	// orchestratorURL (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — per
+	// SetOrchestratorURL statt Konstruktor-Parameter gesetzt, um die
+	// zahlreichen bestehenden New/newWithStore-Aufrufstellen (Tests)
+	// nicht anfassen zu müssen; wie registryURL/natsURL nur einmal beim
+	// Start gesetzt, vor dem ersten bedienten Request, deshalb ohne
+	// Mutex gelesen.
+	orchestratorURL string
 	store           instanceStore
 	catalog         catalogStore
 	events          EventPublisher
@@ -329,6 +353,14 @@ func (l *Launcher) SetRestartObserver(o RestartObserver) {
 // selbst rufen stattdessen das unexportierte newWithStore mit
 // In-Memory-Fakes auf (gleiches Muster wie workflows.NewService/
 // workflowStore).
+// SetOrchestratorURL setzt die vom Launcher an jede neu gestartete
+// lokale Instanz durchgereichte OMP_ORCHESTRATOR_URL (ARCHITECTURE.md
+// §24.1) — von main.go direkt nach New() aufgerufen, bevor der
+// HTTP-Server Anfragen bedient.
+func (l *Launcher) SetOrchestratorURL(url string) {
+	l.orchestratorURL = url
+}
+
 func New(catalog []CatalogEntry, registryURL, natsURL string, store *Store, events EventPublisher, nc NATSRequester, catalogDB *CatalogStore) *Launcher {
 	// catalogDB explizit in ein catalogStore-Interface umwandeln statt
 	// den *CatalogStore direkt durchzureichen: ein nil *CatalogStore, das
@@ -627,6 +659,19 @@ func (l *Launcher) TotalRestarts() uint64 {
 	return l.totalRestarts.Load()
 }
 
+// Get liefert eine einzelne Instanz per ID (ARCHITECTURE.md §24.1,
+// UMSETZUNG.md C16) — u. a. für die Service-Token-Ausgabe, die
+// LaunchSecret braucht, das List() zwar mitliefert (kein json:"-" bei
+// direktem Feldzugriff, das Tag betrifft nur die JSON-Serialisierung),
+// aber ein einzelner Lookup ist hier klarer als ein Full-Scan über
+// List() im Aufrufer.
+func (l *Launcher) Get(id string) (Instance, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	inst, ok := l.instances[id]
+	return inst, ok
+}
+
 // resourceSampleInterval — gleicher Takt wie der Host-Agent (Kapitel 14
 // Teil 1/2 einheitlich 5s), damit lokale und entfernte Instanzen
 // vergleichbar aktuelle Werte zeigen (s. host-agent/main.go
@@ -751,20 +796,24 @@ func (l *Launcher) startLocal(nodeType, version string, extraEnv map[string]stri
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
 	}
 	label := fmt.Sprintf("%s (%s)", entry.Label, id[:8])
+	launchSecret, err := newInstanceID()
+	if err != nil {
+		return Instance{}, fmt.Errorf("launcher: generate launch secret: %w", err)
+	}
 
 	if entry.Runner == runnerPodman {
-		return l.startPodmanLocal(nodeType, entry, id, label, extraEnv)
+		return l.startPodmanLocal(nodeType, entry, id, label, launchSecret, extraEnv)
 	}
 	if entry.Runner != runnerProcess {
 		return Instance{}, ErrUnsupportedRunner
 	}
 
-	cmd, stderrTail, err := l.execEntry(entry, id, label, extraEnv)
+	cmd, stderrTail, err := l.execEntry(entry, id, label, launchSecret, extraEnv)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: cmd.Process.Pid, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -793,13 +842,13 @@ func (l *Launcher) startLocal(nodeType, version string, extraEnv map[string]stri
 // gleiche Instanz-ID-/Label-/Persistenz-/Supervise-Struktur, aber ein
 // Container statt eines Subprozesses. Wird von startLocal aufgerufen,
 // nachdem id/label bereits vergeben sind (gemeinsamer erster Teil).
-func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label string, extraEnv map[string]string) (Instance, error) {
-	containerID, _, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string) (Instance, error) {
+	containerID, _, err := runPodmanEntry(entry, id, label, launchSecret, extraEnv, l.registryURL, l.orchestratorURL, l.natsURL)
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: start %s: %w", nodeType, err)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version}
+	inst := Instance{ID: id, Type: nodeType, Label: label, ContainerID: containerID, ExtraEnv: extraEnv, Version: entry.Version, LaunchSecret: launchSecret}
 
 	l.mu.Lock()
 	l.instances[id] = inst
@@ -816,9 +865,9 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 // execEntry startet den Subprozess für einen Katalog-Eintrag unter einer
 // gegebenen (bei einem Neustart: wiederverwendeten) Instanz-ID/-Label —
 // gemeinsamer Kern von startLocal und supervise's Neustart-Zweig.
-func (l *Launcher) execEntry(entry CatalogEntry, id, label string, extraEnv map[string]string) (*exec.Cmd, *tailBuffer, error) {
+func (l *Launcher) execEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string) (*exec.Cmd, *tailBuffer, error) {
 	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
-	cmd.Env = buildEnv(entry.Env, extraEnv, id, label, l.registryURL, l.natsURL)
+	cmd.Env = buildEnv(entry.Env, extraEnv, id, label, launchSecret, l.registryURL, l.orchestratorURL, l.natsURL)
 	// Node-Ausgaben (Pipeline-Fehler etc.) an den Orchestrator-Log
 	// weiterreichen statt sie im Subprozess verschwinden zu lassen —
 	// kein eigenes Log-Aggregations-System für diesen Schritt. stderrTail
@@ -878,14 +927,19 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 		time.Sleep(crashRestartBackoff)
 
 		l.mu.Lock()
-		if _, stillTracked := l.instances[id]; !stillTracked {
+		beforeRestart, stillTracked := l.instances[id]
+		if !stillTracked {
 			// Stop() während des Backoffs — nicht mehr neu starten.
 			l.mu.Unlock()
 			return
 		}
 		l.mu.Unlock()
 
-		newCmd, newStderrTail, err := l.execEntry(entry, id, label, extraEnv)
+		// LaunchSecret aus dem getrackten Zustand statt als eigener
+		// Parameter (ARCHITECTURE.md §24.1) — dieselbe Instanz-ID
+		// behält über einen Crash-Neustart hinweg auch dasselbe Secret,
+		// kein neues Provisioning nötig.
+		newCmd, newStderrTail, err := l.execEntry(entry, id, label, beforeRestart.LaunchSecret, extraEnv)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -982,13 +1036,14 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 		time.Sleep(crashRestartBackoff)
 
 		l.mu.Lock()
-		if _, stillTracked := l.instances[id]; !stillTracked {
+		beforeRestart, stillTracked := l.instances[id]
+		if !stillTracked {
 			l.mu.Unlock()
 			return
 		}
 		l.mu.Unlock()
 
-		newContainerID, _, err := runPodmanEntry(entry, id, label, extraEnv, l.registryURL, l.natsURL)
+		newContainerID, _, err := runPodmanEntry(entry, id, label, beforeRestart.LaunchSecret, extraEnv, l.registryURL, l.orchestratorURL, l.natsURL)
 		if err != nil {
 			l.mu.Lock()
 			current, stillTracked := l.instances[id]
@@ -1478,7 +1533,7 @@ func processAlive(pid int) bool {
 // UMSETZUNG.md C8) — als Map gemergt statt als Slice mit möglichen
 // Duplikaten, weil doppelte Keys in envp technisch nicht sauber
 // spezifiziert sind.
-func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryURL, natsURL string) []string {
+func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, launchSecret, registryURL, orchestratorURL, natsURL string) []string {
 	merged := map[string]string{}
 	for _, kv := range os.Environ() {
 		if i := strings.IndexByte(kv, '='); i >= 0 {
@@ -1489,7 +1544,7 @@ func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryU
 		merged[k] = v
 	}
 	// extraEnv (z. B. Workflow-Settings wie die Auflösung, s. Start-Doku)
-	// überschreibt den Katalog-eigenen env-Block, aber nicht die fünf
+	// überschreibt den Katalog-eigenen env-Block, aber nicht die sieben
 	// folgenden Launcher-eigenen Variablen.
 	for k, v := range extraEnv {
 		merged[k] = v
@@ -1499,6 +1554,17 @@ func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryU
 	merged["OMP_PORT"] = "0"
 	merged["OMP_REGISTRY_URL"] = registryURL
 	merged["OMP_NATS_URL"] = natsURL
+	// OMP_ORCHESTRATOR_URL/OMP_LAUNCH_SECRET (ARCHITECTURE.md §24.1,
+	// UMSETZUNG.md C16) — Control-Plane-Nodes (z. B.
+	// omp-playout-automation) nutzen sie, um sich ein Workflow-gescoptes
+	// Service-Token zu holen (POST /api/v1/instances/<id>/service-token)
+	// statt Ziel-Nodes direkt anzusprechen. Leer für Katalog-Einträge,
+	// die das nicht brauchen (Medien-Pipeline-Nodes) — harmlos, kein
+	// Node liest eine ungenutzte Env-Variable.
+	merged["OMP_ORCHESTRATOR_URL"] = orchestratorURL
+	if launchSecret != "" {
+		merged["OMP_LAUNCH_SECRET"] = launchSecret
+	}
 
 	env := make([]string, 0, len(merged))
 	for k, v := range merged {

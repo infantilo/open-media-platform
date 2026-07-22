@@ -79,7 +79,7 @@ func findFreePort() (int, error) {
 // Bind-Adresse). `--rm`: Podman entfernt den Container beim Beenden
 // selbst, kein zusätzlicher Aufräumschritt nötig (gleiche Idempotenz-
 // Erwartung wie bei den Infra-Containern aus `make up`).
-func runPodmanEntry(entry CatalogEntry, id, label string, extraEnv map[string]string, registryURL, natsURL string) (containerID string, hostPort int, err error) {
+func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv map[string]string, registryURL, orchestratorURL, natsURL string) (containerID string, hostPort int, err error) {
 	port, err := findFreePort()
 	if err != nil {
 		return "", 0, err
@@ -98,6 +98,14 @@ func runPodmanEntry(entry CatalogEntry, id, label string, extraEnv map[string]st
 	merged["OMP_PORT"] = strconv.Itoa(port)
 	merged["OMP_REGISTRY_URL"] = rewriteForContainer(registryURL)
 	merged["OMP_NATS_URL"] = rewriteForContainer(natsURL)
+	// OMP_ORCHESTRATOR_URL/OMP_LAUNCH_SECRET (ARCHITECTURE.md §24.1,
+	// UMSETZUNG.md C16) — gleiches Rewrite wie Registry/NATS, der
+	// Container erreicht den Orchestrator sonst nicht unter dessen
+	// eigener Localhost-Adresse.
+	merged["OMP_ORCHESTRATOR_URL"] = rewriteForContainer(orchestratorURL)
+	if launchSecret != "" {
+		merged["OMP_LAUNCH_SECRET"] = launchSecret
+	}
 
 	args := []string{
 		"run", "-d", "--rm",

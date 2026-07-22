@@ -11909,3 +11909,203 @@ bestätigt alle drei Fixes UI-seitig, nicht nur über die API.
 `cargo build --workspace --bins`, `cargo clippy -p omp-video-mixer-me`
 (nur vorbestehende, unveränderte Zeilen betreffende Hinweise),
 `node --check ui/bundle.js` grün.
+
+---
+
+## 2026-07-22 (Nachtrag 81) — Playlist-Suite-Erweiterung: Scope-Entscheidung
+für Media-Library, Cart-Assets, Plugin-Host, Timeline, Control-Enforcement
+
+**Anlass:** Nutzer bat um Portierung "aller existierenden Funktionen" von
+PIPELINE CONTROLLERs Playlist/Timeline/Assets/Pluginhost nach OMP, "exakt
+dasselbe können, nur stabiler". Bestandsaufnahme zeigte: Playlist selbst
+ist über `omp-playout-automation`+`omp-player` (C12/C14/C15) bereits
+strukturell sauberer portiert als PC. Echt neu: Timeline-Berechnung,
+Media-Library, Cart-/Interrupt-Assets, Plugin-Host — plus eine dabei
+gefundene, bisher unadressierte Sicherheitslücke.
+
+**Gefundene Lücke (Ersteinschätzung war zu pessimistisch — korrigiert
+nach Code-Prüfung, s. u.):** `ARCHITECTURE.md` §13.1–§13.3 legt fest,
+dass manuelle Bedienung und Automatisation dieselben IS-12/14-Methoden
+rufen ("keine zweite API"). §12 sieht dafür **eine** zentrale
+Durchsetzungsstelle im Orchestrator-Proxy vor. Zunächst fälschlich als
+"noch nicht gebaut, P2/D3" eingeordnet — tatsächlich ist §12 inkl.
+Workflow-Scope (Kapitel 12 Teil 4) bereits produktiv (D3 Teil 2,
+2026-07-14; `requireVerbOnNode`/`authz.Store.CheckWorkflow` sitzen
+bereits vor PATCH/POST auf dem Node-Proxy). Die reale Lücke ist enger:
+(a) es gibt kein Service-Prinzipal-Konzept für Nodes selbst, nur
+menschliche `auth.User`-Konten, und (b) `omp-playout-automation` hat
+deshalb C14/C15 bewusst **direkt node-zu-node** gebaut (`PeerClient`,
+kein Umweg über den längst gehärteten Proxy) — der einzige Pfad im
+System, der an der bestehenden Durchsetzungsstelle vorbeiläuft. Bei
+mehreren parallelen Channels (Zielbild §1) verhindert das heute nichts,
+dass die Automatisation von Kanal A den Mixer von Kanal B anspricht,
+oder ein beliebiger anderer Microservice überhaupt einen Node
+fernsteuert — reine Netzwerk-Erreichbarkeit genügt, für diesen einen
+Pfad. Details/korrigierte Fassung: `ARCHITECTURE.md` §24.1.
+
+**Per `AskUserQuestion` entschieden (drei Fragen, alle mit Empfehlung
+bestätigt):**
+
+1. **Control-Enforcement:** Automatisation-Calls künftig über den
+   Orchestrator-Proxy statt direkt node-zu-node (statt eines
+   eigenen neuen Tokens/ACL-Mechanismus). Begründung für die
+   Empfehlung: die Durchsetzungsstelle (Workflow-gescopte
+   `VerbOperate`-Prüfung) existiert bereits produktiv für menschliche
+   Nutzer — der Fix braucht nur einen zusätzlichen Ausstellungsweg für
+   ein Service-Token (kein neues Autorisierungsmodell, kein neues
+   Node-Contract-Pflichtfeature), plus das Umbiegen von `PeerClient`
+   auf den bestehenden Proxy. Kleinster Schritt, größte Wiederverwendung.
+2. **Plugin-Host:** nur der generische Lade-/Enable-Disable-/Config-
+   Mechanismus jetzt (wie PCs `plugins.json`-Muster), die 5 konkreten
+   PC-Plugins (`file-transfer-manager`, `broadcast-controller`,
+   `marina-sync`, `scte35`, `snmp-monitor`) bewusst NICHT jetzt —
+   kommen einzeln bei Bedarf später.
+3. **Assets:** beide PC-Konzepte gewünscht — Media-Library
+   (ffprobe-Katalog + Segmente, PCs `library.json`) UND Cart-/
+   Interrupt-Assets (unterbrechbare Mini-Playlist + Return-Mode, PCs
+   `assets.json`). Media-Library zuerst, weil Timeline/Playlist sie
+   ohnehin brauchen.
+
+**Timeline-Bug, den der Nutzer meinte:** kein Rendering-Bug im
+GStreamer-Sinn — PCs `calcTimeline()`/`_recalcTimeline()`
+(`lib/PlaylistEngine.js:485`, `ui.html:4453`) läuft unbounded über die
+**gesamte** Playlist (O(n), kein Fenster, kein Memoization) und wird bei
+praktisch jeder UI-Interaktion neu aufgerufen (~25 Call-Sites in
+`ui.html`) — bei langen Playlists spürbar langsam. Portierung übernimmt
+die Berechnungslogik als Muster, **nicht** dieses Antipattern: gefenstert
+(nur sichtbarer Zeitbereich) + inkrementell (nur betroffene Einträge ab
+der Änderung neu rechnen), nicht Full-Recompute pro Tastendruck.
+
+**ARCHITECTURE.md ergänzt um §24** (Media-Library, Cart-Assets,
+Plugin-Host, Timeline, Control-Enforcement-Fix). `UMSETZUNG.md` ergänzt
+um Schrittstubs C16–C20 nach demselben Detailplan-Muster wie C14/C15
+(Kurzfassung jetzt, Detailplan zu Beginn des jeweiligen Schritts).
+
+**Nicht Teil dieser Entscheidung:** AD/LDAP-Anbindung (§12 Punkt 1) ist
+weiterhin bewusst nicht umgesetzt (unverändert, `auth.go`-Begründung:
+keine testbare Verzeichnisdienst-Infrastruktur vorhanden) — davon
+unabhängig, betrifft nur menschliche Konten, nicht den hier neuen
+Service-Prinzipal-Weg.
+
+---
+
+## 2026-07-22 (Nachtrag 82) — Zwei weitere Lücken aus Nutzer-Feedback:
+Live-MXL-Playlist-Item, omp-recorder
+
+**Anlass:** Direktes Follow-up des Nutzers nach Nachtrag 81, drei
+Punkte:
+
+1. "Falls im Mediaplayer oder anderen Nodes noch etwas fehlt, bitte
+   implementieren" — Prüfung von `omp-player`s `ItemSource`
+   (`pipeline.rs`) zeigte: nur `TestPattern`/`File`, keine Möglichkeit,
+   eine **laufende MXL-Quelle** als Playlist-Item zu nehmen.
+2. "Anstelle Blackmagic als Hauptquelle nur MXL nutzen" — kein
+   Blackmagic/DeckLink-Code existiert im Projekt (nur als
+   Zukunfts-Erwähnung in §6.1/§18, I/O-Karten-Inventar); bestätigt
+   nur die bestehende Linie, kein Rückbau nötig. Wird aber als
+   explizite Entscheidung für `omp-recorder` (neu, Punkt 3) und
+   §24.6 festgehalten, damit es nicht versehentlich später als
+   Feature (Capture-Karten-Ingest) vorgezogen wird.
+3. "Dezidierter Recorder-Node" — fehlte komplett, kein
+   Aufnahme-Pfad in OMP bisher.
+
+**Entschieden:** beide als neue `ARCHITECTURE.md`-Abschnitte §24.6
+(Live-MXL-Quelle als Playlist-Item, Discovery nach dem bereits
+dreifach etablierten C7/C10/C11-Muster — `list_senders()` + MXL-Filter,
+kein neuer Mechanismus) und §24.7 (`omp-recorder`, MXL-Receiver →
+Encoder/Muxer → Datei in `OMP_MEDIA_DIR`, landet automatisch in der
+Media-Library aus §24.2/C17). `UMSETZUNG.md` C21/C22 ergänzt.
+Bewusst nicht extrahiert: die jetzt vierfach ähnliche
+Sender-Discovery-Schleife (Switcher/Mixer/Audiomixer/Player) bleibt
+unabstrahiert — Detailfilter unterscheiden sich pro Node genug, dass
+eine SDK-Extraktion jetzt mehr Kopplung als Nutzen brächte.
+
+**Nächste Schritte (diese Sitzung):** C16 (Control-Enforcement-Fix)
+wird direkt umgesetzt; C17 (Media-Library) parallel an einen
+kleineren Agenten (Haiku) delegiert, da unabhängig und mechanisch
+genug spezifiziert. C18–C22 folgen in späteren Sitzungen (§0 Punkt 2:
+ein Schritt pro Sitzung).
+
+---
+
+## 2026-07-22 (Nachtrag 83) — C16 (Control-Enforcement-Fix) umgesetzt
+und live verifiziert
+
+**Umsetzung** (Details: `ARCHITECTURE.md` §24.1):
+
+- **Go/Orchestrator:** `launcher.Instance` bekommt ein neues, nie über
+  JSON exponiertes `LaunchSecret`-Feld (`json:"-"`), erzeugt bei jedem
+  lokalen Start (Prozess **und** Podman), übersteht Crash-Auto-Restarts
+  in derselben Instanz-ID unverändert (Remote-Host-Agent-Pfad, S3,
+  bekommt bewusst noch keins — dokumentierte Lücke, kein stiller
+  Fall). Neuer Endpunkt `POST /api/v1/instances/{id}/service-token`
+  (bewusst außerhalb `authGate`, gleiches Prinzip wie
+  `POST /api/v1/hosts/register`): tauscht `launchSecret` gegen ein
+  Bearer-Token (`auth.Signer.issueService`, neue `ServiceTokenTTL` =
+  24h — bewusst länger als die 12h-Nutzer-`TokenTTL`, weil
+  Service-Instanzen typischerweise länger laufen als eine einzelne
+  Bedienschicht). `workflows.Service.runStart` provisioniert bei jedem
+  Workflow-Start automatisch eine Workflow-gescopte
+  `(instanceId, workflowId, "*", VerbOperate)`-Bindung für jede Rolle
+  mit `NodeType` in der neuen `controlPlaneNodeTypes`-Map (aktuell nur
+  `omp-playout-automation` — gleiches Von-Hand-Pflege-Konventions-
+  Muster wie das bereits bestehende `crosspointByNodeType`, weil
+  `launcher.CatalogEntry` das in §13.5 geplante `category`-Feld noch
+  nicht hat).
+- **Rust/`omp-playout-automation`:** `remote.rs`s `PeerClient` (direkter
+  `href`-Zugriff) ersetzt durch `ProxyClient` (spricht
+  `{OMP_ORCHESTRATOR_URL}/api/v1/nodes/<node-id>/…` mit
+  `Authorization: Bearer` an) + `OrchestratorAuth` (geteiltes,
+  periodisch erneuertes Token, `token_refresh_loop` alle 12h, deutlich
+  vor der 24h-TTL). `resolve_href_by_label` → `resolve_node_id_by_label`
+  (liefert jetzt die NMOS-Node-ID, nicht mehr den `href` — wichtige
+  Nebenerkenntnis: der Orchestrator-Proxy adressiert Nodes über
+  `registry.NodeView.ID`, nicht über `OMP_INSTANCE_ID`; beide Werte
+  liegen im System vor, aber der Proxy-Pfad braucht die NMOS-ID, die
+  `RegistryClient::list_nodes()` ohnehin schon mitliefert). Initialer
+  Token-Abruf beim Start ist non-fatal (Node bleibt erreichbar, holt
+  sich das Token beim nächsten Refresh-Tick nach) — gleiche
+  Selbstheilungs-Philosophie wie die bestehende Label-Discovery.
+
+**Getestet:**
+
+- Go: neue Unit-Tests in `internal/launcher` (LaunchSecret-Generierung,
+  Env-Var-Reservierung nicht überschreibbar, `Get()`), `internal/
+  httpapi` (5 Fälle für `handleIssueServiceToken`: gültig, falsches
+  Secret, unbekannte Instanz, leerer Body, Remote-Instanz ohne Secret),
+  `internal/workflows` (Bindung wird nur für die Control-Plane-Rolle
+  angelegt, nicht für eine reine Medien-Rolle im selben Workflow) —
+  alle grün, `go build/vet/test ./...` sauber (ein einziger
+  vorbestehender, unabhängiger Flake in `internal/hosts` bestätigt:
+  läuft auch auf dem unveränderten `main`-Stand fehl, s. `git stash`-
+  Gegenprobe).
+- Rust: `cargo build/clippy/test -p omp-playout-automation` sauber,
+  `cargo build --workspace --bins` + `cargo deny check`
+  (advisories/bans/licenses/sources ok) für den ganzen Workspace grün.
+- **Live gegen die echte Dev-Umgebung** (`make start`, drei echte
+  Workflows, nicht nur Mocks): Workflow C (Mixer+Player+Automation)
+  `take()` hat nachweisbar über den Proxy-Pfad `crosspoint.programInput`
+  des echten Mixers verändert — der Kernmechanismus funktioniert
+  end-to-end, nicht nur in Unit-Tests. Cross-Workflow-Sicherheitstest:
+  `LaunchSecret` der Workflow-A-Automation aus deren eigenem
+  `/proc/<pid>/environ` extrahiert (einzig praktikabler Weg, ein
+  Service-Token von außerhalb des Node-Prozesses zu erzeugen, da das
+  Secret bewusst nirgends über die API sichtbar ist), damit gegen den
+  Mixer von Workflow C zugegriffen: `403`. Gegen den eigenen
+  Workflow-A-Mixer: `200`. Ganz ohne Token: `401`. Falsches
+  `launchSecret` am Token-Endpunkt selbst: `403`. Alle vier Fälle
+  bestätigen exakt das in §24.1 spezifizierte Verhalten. Test-Workflows
+  danach sauber gestoppt/gelöscht, verwaiste Rollenbindungen entfernt,
+  keine Restinstanzen (`GET /api/v1/instances` → `[]`), Orchestrator
+  regulär gestoppt (`make stop`, Infra-Container bewusst weiterlaufen
+  gelassen, gleiches Verhalten wie `make stop` es standardmäßig vorsieht).
+
+**Bewusst nicht in diesem Schritt:** Remote-Host-Agent-Instanzen (S3)
+bekommen noch kein `LaunchSecret`/Service-Token — dokumentierte, nicht
+stillschweigende Lücke (s. o.); Schutz gegen einen tatsächlich
+böswilligen/kompromittierten Node, der eine falsche Absender-Identität
+vorgibt, bleibt weiterhin explizit auf §12/D3-artige echte
+Kryptographie verwiesen (hier: Besitz des `LaunchSecret`s ist der
+Nachweis, kein Zertifikat) — ausreichend für das behobene Szenario
+(versehentliche/fehlkonfigurierte Cross-Channel-Ansteuerung), nicht für
+einen Angreifer mit Shell-Zugriff auf denselben Host.

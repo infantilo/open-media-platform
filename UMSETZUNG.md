@@ -2093,7 +2093,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
 | C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
-| C16 | offen | [C16] Control-Enforcement-Fix: Automatisation über Orchestrator-Proxy (Service-Prinzipal) | — |
+| C16 | erledigt | [C16] Control-Enforcement-Fix: Automatisation über Orchestrator-Proxy (Service-Prinzipal) | 2026-07-22 |
 | C17 | erledigt | [C17] omp-media-library: Datei-Katalog + ffprobe-Metadaten + Segmente | 2026-07-22 |
 | C18 | offen | [C18] Cart-/Interrupt-Assets in omp-playout-automation | — |
 | C19 | offen | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | — |

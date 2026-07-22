@@ -170,6 +170,15 @@ func (f fakeLauncherService) Catalog() []launcher.CatalogEntry { return f.catalo
 
 func (f fakeLauncherService) List() []launcher.Instance { return f.instances }
 
+func (f fakeLauncherService) Get(id string) (launcher.Instance, bool) {
+	for _, inst := range f.instances {
+		if inst.ID == id {
+			return inst, true
+		}
+	}
+	return launcher.Instance{}, false
+}
+
 func (f fakeLauncherService) Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
 	return f.started, f.startErr
 }
@@ -180,7 +189,9 @@ func (f fakeLauncherService) Stop(id string) error {
 
 func (f fakeLauncherService) TotalRestarts() uint64 { return f.totalRestarts }
 
-func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) error { return f.importErr }
+func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) error {
+	return f.importErr
+}
 
 func (f fakeLauncherService) RemoveCatalogEntry(nodeType, version string) error { return f.removeErr }
 
@@ -203,6 +214,9 @@ type fakeAuthSvc struct {
 	listErr         error
 	deleteErr       error
 	setPasswordErr  error
+	serviceToken    string
+	serviceExpires  time.Time
+	serviceTokenErr error
 }
 
 func (f fakeAuthSvc) UserCount(ctx context.Context) (int, error) { return f.userCount, nil }
@@ -229,6 +243,10 @@ func (f fakeAuthSvc) DeleteUser(ctx context.Context, username string) error {
 
 func (f fakeAuthSvc) SetPassword(ctx context.Context, username, password string) error {
 	return f.setPasswordErr
+}
+
+func (f fakeAuthSvc) IssueServiceToken(instanceID string) (string, time.Time, error) {
+	return f.serviceToken, f.serviceExpires, f.serviceTokenErr
 }
 
 // fakeAuthzSvc ist ein Test-Double für AuthzChecker.

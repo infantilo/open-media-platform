@@ -190,6 +190,11 @@ func main() {
 		launcherNATS = natsRequester{nc: nc}
 	}
 	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS, launcher.NewCatalogStore(database))
+	// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: OMP_ORCHESTRATOR_URL für
+	// jede lokal gestartete Instanz — Control-Plane-Nodes nutzen sie,
+	// um sich ein Service-Token zu holen und den generischen Proxy
+	// statt eines direkten Node-zu-Node-Zugriffs anzusprechen.
+	launcherSvc.SetOrchestratorURL(cfg.OrchestratorURL)
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): periodisches
 	// Pro-Instanz-Sampling (CPU%/RSS aus /proc) für lokal laufende
 	// Instanzen — das Orchestrator-seitige Gegenstück zum Host-Agent-
@@ -282,7 +287,7 @@ func main() {
 	// gemäß Verbindungs-Template, sobald sie in der Registry erscheinen,
 	// und prüft vor jedem Start die Ressourcenlage der Ziel-Hosts
 	// (placementEngine.CheckHost).
-	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine)
+	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine, authzStore)
 
 	// Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): löst
 	// Rollenbindungen für die Operator-Console auf, jetzt inkl. echter

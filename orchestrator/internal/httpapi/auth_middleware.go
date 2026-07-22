@@ -21,6 +21,9 @@ type AuthService interface {
 	ListUsers(ctx context.Context) ([]auth.User, error)
 	DeleteUser(ctx context.Context, username string) error
 	SetPassword(ctx context.Context, username, password string) error
+	// IssueServiceToken (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s.
+	// handleIssueServiceToken.
+	IssueServiceToken(instanceID string) (token string, expiresAt time.Time, err error)
 }
 
 // AuthzChecker prüft Rollenbindungen (implementiert von *authz.Store).

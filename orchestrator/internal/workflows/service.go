@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -49,6 +50,25 @@ type crosspointMethod struct {
 var crosspointByNodeType = map[string]crosspointMethod{
 	"omp-switcher":       {Method: "select", Arg: "senderId", InputsParam: "inputs"},
 	"omp-video-mixer-me": {Method: "crosspoint.take", Arg: "senderId", InputsParam: "crosspoint.inputs"},
+}
+
+// controlPlaneNodeTypes sind Node-Typen, die als Automatisations-/
+// Control-Plane-Instanz eines Workflows gelten und deshalb bei
+// Workflow-Start automatisch eine Workflow-gescopte VerbOperate-
+// Rollenbindung bekommen (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) —
+// diese Instanz kann sich damit anschließend über
+// `POST /api/v1/instances/<id>/service-token` (ihr eigenes
+// OMP_LAUNCH_SECRET als Nachweis) ein Bearer-Token holen und den
+// generischen Proxy statt eines direkten Node-zu-Node-Zugriffs
+// ansprechen. Eine von Hand gepflegte Liste statt eines Katalog-
+// `category`-Felds (§13.5 ist bisher nur ARCHITECTURE.md-Beschreibung,
+// `launcher.CatalogEntry` hat dieses Feld noch nicht) — gleiches
+// Konventions-Muster wie `crosspointByNodeType` oben, direkt aus dem
+// tatsächlichen Node-Quelltext übernommen (nicht geraten, UMSETZUNG.md
+// §0 Punkt 6): `nodes/omp-playout-automation` ist heute der einzige
+// reine Control-Plane-Node, der andere Nodes fernsteuert.
+var controlPlaneNodeTypes = map[string]bool{
+	"omp-playout-automation": true,
 }
 
 // registrationTimeout ist die Höchstdauer, die Start() auf das
@@ -126,6 +146,17 @@ type EventPublisher interface {
 	Broadcast(sse.Event)
 }
 
+// AuthzBinder legt Rollenbindungen an (implementiert von *authz.Store,
+// ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — Workflow-Start nutzt dies,
+// um jeder Control-Plane-Instanz (s. controlPlaneNodeTypes) automatisch
+// eine Workflow-gescopte VerbOperate-Bindung zu geben. Darf nil sein
+// (z. B. bestehende Tests, die AuthZ nicht prüfen) — dann bleibt das
+// Provisionieren ersatzlos aus, gleiches Muster wie
+// `resources ResourcePrecheck`.
+type AuthzBinder interface {
+	Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
+}
+
 type workflowStore interface {
 	Put(wf Workflow) error
 	Get(id string) (Workflow, error)
@@ -171,6 +202,8 @@ type Service struct {
 	// weil captureThumbnail() den rohen MJPEG-Multipart-Body liest
 	// (methodInvoker kennt nur das {"value": ...}-Parameter-Format).
 	httpClient *http.Client
+	// authz (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s. AuthzBinder.
+	authz AuthzBinder
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -182,11 +215,14 @@ type Service struct {
 // resources darf nil sein (z. B. in Tests oder falls die Placement-
 // Engine nicht verdrahtet ist) — dann entfällt die Ressourcen-
 // Vorprüfung ersatzlos (kein neuer Blocker ohne Datengrundlage).
-func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client, resources ResourcePrecheck) *Service {
+// authzBinder darf ebenso nil sein (gleiches Nil-Safety-Muster) — dann
+// bekommen Control-Plane-Instanzen keine automatische Rollenbindung
+// (ARCHITECTURE.md §24.1).
+func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launcher, events EventPublisher, httpClient *http.Client, resources ResourcePrecheck, authzBinder AuthzBinder) *Service {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient}
+	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient, authz: authzBinder}
 }
 
 // Create legt einen neuen Workflow an — gestoppt, es sei denn adopt ist
@@ -546,6 +582,21 @@ func (s *Service) runStart(wf Workflow) {
 		}
 		wf.Runtime[role.Name] = RoleRuntime{InstanceID: inst.ID}
 		pending[role.Name] = inst.ID
+
+		// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: Control-Plane-Rollen
+		// (s. controlPlaneNodeTypes) bekommen sofort eine Workflow-
+		// gescopte VerbOperate-Bindung auf ihre eigene Instanz-ID —
+		// best effort wie der Zwischenstand unten: ein Fehler hier
+		// bricht den Workflow-Start nicht ab (die Instanz läuft bereits
+		// und ist über den bisherigen Direktpfad weiter erreichbar,
+		// s. docs/decisions.md Nachtrag 81/C16 zur Migration), sie kann
+		// sich nur ohne Bindung kein Service-Token holen.
+		if s.authz != nil && controlPlaneNodeTypes[role.NodeType] {
+			if _, err := s.authz.Create(inst.ID, wf.ID, authz.AnyNode, authz.VerbOperate); err != nil {
+				slog.Warn("workflows: failed to provision service-token role binding",
+					"workflow", wf.ID, "role", role.Name, "instance", inst.ID, "error", err)
+			}
+		}
 	}
 	// Zwischenstand best effort persistieren (Runtime-Instanz-IDs sichtbar,
 	// während awaitRegistration unten noch läuft) — der Endzustand wird in

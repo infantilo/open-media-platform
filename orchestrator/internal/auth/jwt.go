@@ -22,6 +22,17 @@ import (
 // docs/decisions.md D3 Teil 2.
 const TokenTTL = 12 * time.Hour
 
+// ServiceTokenTTL ist die Gültigkeitsdauer eines Service-Tokens
+// (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — ein Workflow-(Neu-)Start
+// stellt jeder Control-Plane-Instanz bei jedem Start() ein frisches
+// Token aus (workflows.Service.runStart), ein länger laufender
+// Workflow braucht deshalb noch keinen eigenen Refresh-Mechanismus.
+// Bekannte, dokumentierte Lücke: ein Workflow, der länger als
+// ServiceTokenTTL ohne Neustart durchläuft, verliert danach die
+// Fähigkeit seiner Automatisation, den Proxy anzusprechen — bewusst
+// nicht in dieser Runde gelöst (s. docs/decisions.md Nachtrag 81/C16).
+const ServiceTokenTTL = 24 * time.Hour
+
 var (
 	// ErrTokenInvalid deckt jede strukturelle/Signatur-Verletzung ab.
 	ErrTokenInvalid = errors.New("auth: token invalid")
@@ -72,9 +83,26 @@ func (s *Signer) sign(unsigned string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
-// issue erstellt ein signiertes Token für den gegebenen Principal.
+// issue erstellt ein signiertes Token für den gegebenen Principal mit
+// der Standard-Nutzer-TTL.
 func (s *Signer) issue(p Principal, now time.Time) (string, time.Time, error) {
-	exp := now.Add(TokenTTL)
+	return s.issueWithTTL(p, now, TokenTTL)
+}
+
+// issueService erstellt ein Service-Token (ARCHITECTURE.md §24.1,
+// UMSETZUNG.md C16): Subject UND Username werden auf instanceID
+// gesetzt, weil die bestehende Autorisierungsprüfung
+// (httpapi.requireVerbOnNode → authz.Store.Check/CheckWorkflow) den
+// Principal ausschließlich über sein Username-Feld als "subject"
+// gegen Rollenbindungen matcht (s. auth_middleware.go) — eine mit
+// Subject=instanceID angelegte Bindung (workflows.Service.runStart)
+// greift damit ohne Sonderfall in der Prüfung selbst.
+func (s *Signer) issueService(instanceID string, now time.Time) (string, time.Time, error) {
+	return s.issueWithTTL(Principal{UserID: instanceID, Username: instanceID}, now, ServiceTokenTTL)
+}
+
+func (s *Signer) issueWithTTL(p Principal, now time.Time, ttl time.Duration) (string, time.Time, error) {
+	exp := now.Add(ttl)
 	c := claims{Subject: p.UserID, Username: p.Username, IssuedAt: now.Unix(), ExpireAt: exp.Unix()}
 	payload, err := json.Marshal(c)
 	if err != nil {

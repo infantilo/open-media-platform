@@ -12,8 +12,12 @@
 //! Operator-UI (C10/C12-Node-UI-Bundles) über den generischen
 //! Parameter-/Methoden-Proxy aufruft (`ARCHITECTURE.md` §13.1/§13.3:
 //! "dieselben Methoden … keine zweite API"). `remote.rs` spricht dafür
-//! direkt den Descriptor-HTTP-Server der Ziel-Nodes an (kein Umweg über
-//! den Orchestrator nötig).
+//! **seit `ARCHITECTURE.md` §24.1 (`UMSETZUNG.md` C16) denselben
+//! Orchestrator-Proxy an, den auch das Operator-UI nutzt** — ein per
+//! `OMP_LAUNCH_SECRET` geholtes Service-Token statt eines direkten
+//! Node-zu-Node-Zugriffs, s. `remote.rs`-Moduldoku für die Begründung
+//! (frühere Fassung ging direkt über den `href` des Ziel-Nodes, das
+//! umging die einzige Durchsetzungsstelle des Systems).
 //!
 //! **Ziel-Auflösung ist dynamisch, nicht hartkodiert:** welcher
 //! `omp-player`/`omp-video-mixer-me` gesteuert wird, ist ein Paar
@@ -46,7 +50,7 @@ use omp_node_sdk::{
     Range, SetError,
 };
 use playlist::{Mode, Playlist};
-use remote::PeerClient;
+use remote::{OrchestratorAuth, ProxyClient};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
@@ -54,6 +58,11 @@ const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 const ADVANCE_TICK: Duration = Duration::from_millis(200);
 const DEFAULT_PATTERN: &str = "smpte";
 const DEFAULT_DURATION_MS: u64 = 5000;
+/// Deutlich unter `auth.ServiceTokenTTL` (24h, Orchestrator) — ein
+/// Refresh auf halber Laufzeit lässt reichlich Spielraum, falls der
+/// Orchestrator beim ersten Versuch kurz nicht erreichbar ist (nächster
+/// Tick holt es einfach nach, s. `token_refresh_loop`).
+const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
 #[derive(Debug, Clone)]
 struct ItemMeta {
@@ -69,8 +78,10 @@ struct AutomationState {
     onair_since: Option<Instant>,
     target_player_label: String,
     target_mixer_label: String,
-    player_href: Option<String>,
-    mixer_href: Option<String>,
+    /// NMOS-IS-04-Node-ID des Ziel-Players (nicht der `href` wie vor
+    /// C16) — s. `remote::resolve_node_id_by_label`-Doku.
+    player_node_id: Option<String>,
+    mixer_node_id: Option<String>,
 }
 
 enum Event {
@@ -81,6 +92,19 @@ struct AutomationStore {
     state: Mutex<AutomationState>,
     registry: RegistryClient,
     events: mpsc::UnboundedSender<Event>,
+    /// ARCHITECTURE.md §24.1 — Basis-URL des Orchestrators (für den
+    /// Proxy-Pfad) plus das geteilte, periodisch erneuerte Service-Token.
+    orchestrator_url: String,
+    auth: OrchestratorAuth,
+}
+
+impl AutomationStore {
+    /// Baut einen `ProxyClient` für eine gegebene Ziel-Node-ID —
+    /// gemeinsamer Kern für Player- und Mixer-Zugriffe (beide sprechen
+    /// denselben Orchestrator-Proxy an, nur unter unterschiedlicher ID).
+    fn proxy_client(&self, node_id: String) -> ProxyClient {
+        ProxyClient::new(self.orchestrator_url.clone(), node_id, self.auth.clone())
+    }
 }
 
 impl AutomationStore {
@@ -99,17 +123,17 @@ impl AutomationStore {
             .ok_or("nichts gecued".to_string())?;
         let item_id = state.playlist.items()[index].clone();
 
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst (targetPlayerLabel unbekannt/noch nicht gestartet)")?;
-        let mixer_href = state
-            .mixer_href
+        let mixer_node_id = state
+            .mixer_node_id
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let player_label = state.target_player_label.clone();
 
-        take_on_targets(&player_href, &mixer_href, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
 
         state.playlist.take().map_err(|e| e.to_string())?;
         state.onair_since = Some(Instant::now());
@@ -131,17 +155,17 @@ impl AutomationStore {
             return Ok(());
         };
 
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst")?;
-        let mixer_href = state
-            .mixer_href
+        let mixer_node_id = state
+            .mixer_node_id
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst")?;
         let player_label = state.target_player_label.clone();
 
-        take_on_targets(&player_href, &mixer_href, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
         state.onair_since = Some(Instant::now());
         Ok(())
     }
@@ -154,11 +178,11 @@ impl AutomationStore {
         duration_ms: u64,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst")?;
-        let player = PeerClient::new(player_href);
+        let player = self.proxy_client(player_node_id);
 
         let known_before: std::collections::HashSet<String> =
             state.metadata.keys().cloned().collect();
@@ -213,11 +237,11 @@ impl AutomationStore {
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
 
         let mut state = self.state.lock().expect("lock poisoned");
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst")?;
-        let player = PeerClient::new(player_href);
+        let player = self.proxy_client(player_node_id);
 
         player
             .invoke("load", serde_json::json!({"itemsJson": items_json}))
@@ -275,11 +299,11 @@ impl AutomationStore {
             .playlist
             .index_of(item_id)
             .ok_or("unbekannte itemId".to_string())?;
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst")?;
-        let player = PeerClient::new(player_href);
+        let player = self.proxy_client(player_node_id);
 
         player
             .invoke("remove", serde_json::json!({"itemId": item_id}))
@@ -296,11 +320,11 @@ impl AutomationStore {
             .playlist
             .index_of(item_id)
             .ok_or("unbekannte itemId".to_string())?;
-        let player_href = state
-            .player_href
+        let player_node_id = state
+            .player_node_id
             .clone()
             .ok_or("Ziel-Player nicht aufgelöst")?;
-        let player = PeerClient::new(player_href);
+        let player = self.proxy_client(player_node_id);
 
         player
             .invoke("cue", serde_json::json!({"itemId": item_id}))
@@ -324,13 +348,14 @@ impl AutomationStore {
 /// `omp-video-mixer-me`) das Tally-Event für die Kachel des Players aus —
 /// keine eigene Tally-Logik hier nötig.
 fn take_on_targets(
-    player_href: &str,
-    mixer_href: &str,
+    store: &AutomationStore,
+    player_node_id: &str,
+    mixer_node_id: &str,
     player_label: &str,
     item_id: &str,
 ) -> Result<(), String> {
-    let player = PeerClient::new(player_href);
-    let mixer = PeerClient::new(mixer_href);
+    let player = store.proxy_client(player_node_id.to_string());
+    let mixer = store.proxy_client(mixer_node_id.to_string());
 
     player
         .invoke("cue", serde_json::json!({"itemId": item_id}))
@@ -360,7 +385,7 @@ fn take_on_targets(
 /// Ziel-Players über dessen Label-Präfix (`omp-node-sdk::node::start`
 /// benennt Sender immer `"{Node-Label} Sender {n}"`) — keine eigene
 /// Sender-Discovery nötig, der Mixer hat sie schon.
-fn resolve_mixer_sender_id(mixer: &PeerClient, player_label: &str) -> Option<String> {
+fn resolve_mixer_sender_id(mixer: &ProxyClient, player_label: &str) -> Option<String> {
     let inputs = mixer.get_param("crosspoint.inputs").ok()?;
     let prefix = format!("{player_label} Sender");
     inputs.as_array()?.iter().find_map(|entry| {
@@ -379,7 +404,7 @@ fn resolve_mixer_sender_id(mixer: &PeerClient, player_label: &str) -> Option<Str
 /// manuelles Bedienen desselben Players, s. Moduldoku "Bekannte Grenze")
 /// wird pragmatisch als "die letzte in der Antwort" aufgelöst.
 fn fetch_new_item_id(
-    player: &PeerClient,
+    player: &ProxyClient,
     known_before: &std::collections::HashSet<String>,
 ) -> Result<String, remote::RemoteError> {
     let items = player.get_param("items")?;
@@ -542,7 +567,7 @@ impl ParamStore for AutomationStore {
             "targetPlayerLabel" => Some(serde_json::json!(state.target_player_label)),
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
             "connected" => Some(serde_json::json!(
-                state.player_href.is_some() && state.mixer_href.is_some()
+                state.player_node_id.is_some() && state.mixer_node_id.is_some()
             )),
             "playheadPositionMs" => Some(serde_json::json!(
                 state
@@ -577,12 +602,12 @@ impl ParamStore for AutomationStore {
                 // Sofort invalidieren statt bis zum nächsten 2s-Discovery-
                 // Tick zu warten — ein `take()` unmittelbar nach dem
                 // Umkonfigurieren soll nicht den alten Player treffen.
-                state.player_href = None;
+                state.player_node_id = None;
                 Ok(())
             }
             "targetMixerLabel" => {
                 state.target_mixer_label = value.as_str().unwrap_or_default().to_string();
-                state.mixer_href = None;
+                state.mixer_node_id = None;
                 Ok(())
             }
             _ => Err(SetError::ReadOnly),
@@ -668,15 +693,41 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
         let registry = store.registry.clone();
         let resolved = tokio::task::spawn_blocking(move || {
             (
-                remote::resolve_href_by_label(&registry, &player_label),
-                remote::resolve_href_by_label(&registry, &mixer_label),
+                remote::resolve_node_id_by_label(&registry, &player_label),
+                remote::resolve_node_id_by_label(&registry, &mixer_label),
             )
         })
         .await;
-        if let Ok((player_href, mixer_href)) = resolved {
+        if let Ok((player_node_id, mixer_node_id)) = resolved {
             let mut state = store.state.lock().expect("lock poisoned");
-            state.player_href = player_href;
-            state.mixer_href = mixer_href;
+            state.player_node_id = player_node_id;
+            state.mixer_node_id = mixer_node_id;
+        }
+    }
+}
+
+/// Erneuert das Service-Token lange vor Ablauf (`TOKEN_REFRESH_INTERVAL`
+/// ≪ `auth.ServiceTokenTTL` im Orchestrator) — best effort: schlägt der
+/// Refresh fehl (Orchestrator kurz nicht erreichbar), bleibt das alte
+/// Token bis zum nächsten Tick gültig, keine Sonderbehandlung nötig.
+async fn token_refresh_loop(
+    orchestrator_url: String,
+    instance_id: String,
+    launch_secret: String,
+    auth: OrchestratorAuth,
+) {
+    let mut interval = tokio::time::interval(TOKEN_REFRESH_INTERVAL);
+    interval.tick().await; // erster Tick feuert sofort — Startwert wird vorher separat geholt
+    loop {
+        interval.tick().await;
+        let url = orchestrator_url.clone();
+        let id = instance_id.clone();
+        let secret = launch_secret.clone();
+        let result = tokio::task::spawn_blocking(move || remote::fetch_service_token(&url, &id, &secret)).await;
+        match result {
+            Ok(Ok(token)) => auth.set(token),
+            Ok(Err(e)) => eprintln!("omp-playout-automation: Service-Token-Refresh fehlgeschlagen: {e}"),
+            Err(e) => eprintln!("omp-playout-automation: Service-Token-Refresh-Task abgestürzt: {e}"),
         }
     }
 }
@@ -743,6 +794,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");
     let nats_url = env_or("OMP_NATS_URL", "nats://localhost:4222");
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
+    // ARCHITECTURE.md §24.1, UMSETZUNG.md C16: Basis-URL des
+    // Orchestrators (für den Proxy-Pfad) + das eigene, nur dieser
+    // Instanz bekannte Launch-Secret (Nachweis gegenüber
+    // `POST /api/v1/instances/<id>/service-token`). Dev-Fallback für den
+    // Orchestrator-URL-Default deckungsgleich mit `config.Load()`s
+    // eigenem `OMP_LISTEN`-Default (`:8000`); Launch-Secret hat bewusst
+    // KEINEN Fallback — ohne echtes, vom Launcher vergebenes Secret kann
+    // (und soll) sich dieser Node kein Service-Token holen.
+    let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
+    let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
     // Bequeme Startwerte für die beiden beschreibbaren Ziel-Parameter —
     // rein optional, Operator kann sie jederzeit per PATCH überschreiben
     // (s. Moduldoku: kein Launcher-/Katalog-Änderung für dynamische Ziele
@@ -753,20 +814,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let registry = RegistryClient::new(registry_url.clone());
     let (events_tx, mut events_rx) = mpsc::unbounded_channel::<Event>();
 
+    let auth = OrchestratorAuth::new();
+    if let (Some(id), false) = (instance_id.as_deref(), launch_secret.is_empty()) {
+        match remote::fetch_service_token(&orchestrator_url, id, &launch_secret) {
+            Ok(token) => auth.set(token),
+            // Nicht fatal: der Node startet trotzdem (Descriptor bleibt
+            // erreichbar, UI zeigt "nicht verbunden"), holt sich das
+            // Token einfach beim nächsten `token_refresh_loop`-Tick nach
+            // — gleiche Selbstheilungs-Philosophie wie die
+            // Label-Discovery unten.
+            Err(e) => eprintln!("omp-playout-automation: initialer Service-Token-Abruf fehlgeschlagen: {e}"),
+        }
+    } else {
+        eprintln!(
+            "omp-playout-automation: OMP_INSTANCE_ID/OMP_LAUNCH_SECRET fehlen — kein Service-Token, \
+             Fernsteuerung von Player/Mixer bleibt bis dahin wirkungslos (ARCHITECTURE.md §24.1)"
+        );
+    }
+
     let state = Mutex::new(AutomationState {
         playlist: Playlist::new(),
         metadata: HashMap::new(),
         onair_since: None,
         target_player_label: initial_player_label,
         target_mixer_label: initial_mixer_label,
-        player_href: None,
-        mixer_href: None,
+        player_node_id: None,
+        mixer_node_id: None,
     });
     let store = Arc::new(AutomationStore {
         state,
         registry: registry.clone(),
         events: events_tx.clone(),
+        orchestrator_url: orchestrator_url.clone(),
+        auth: auth.clone(),
     });
+
+    // instance_id vor dem Move in NodeConfig sichern — wird unten für
+    // den Token-Refresh-Loop nochmal gebraucht (ARCHITECTURE.md §24.1).
+    let instance_id_for_refresh = instance_id.clone();
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -791,6 +876,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let advance_events = events_tx.clone();
     tokio::spawn(auto_advance_loop(store.clone(), advance_events));
+
+    // ARCHITECTURE.md §24.1: nur spawnen, wenn überhaupt ein Refresh
+    // Sinn ergibt (Instanz-ID + Launch-Secret vorhanden) — ohne die
+    // beiden kann ohnehin kein Token geholt werden, ein Loop, der nur
+    // wiederholt denselben Fehler loggt, wäre reiner Lärm.
+    if let Some(id) = instance_id_for_refresh.filter(|_| !launch_secret.is_empty()) {
+        tokio::spawn(token_refresh_loop(orchestrator_url.clone(), id, launch_secret.clone(), auth.clone()));
+    }
 
     let alerts = async {
         while let Some(event) = events_rx.recv().await {

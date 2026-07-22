@@ -96,7 +96,10 @@ func runAdmissionCheck(entry CatalogEntry, registryURL, natsURL string) ([]check
 	}
 	label := "admission-check-" + id[:8]
 
-	containerID, port, err := runPodmanEntry(entry, id, label, nil, registryURL, natsURL)
+	// Kein LaunchSecret/OrchestratorURL: der Admission-Check-Container
+	// wird sofort wieder gestoppt (s. defer unten), braucht keine
+	// Service-Token-Fähigkeit (ARCHITECTURE.md §24.1).
+	containerID, port, err := runPodmanEntry(entry, id, label, "", nil, registryURL, "", natsURL)
 	if err != nil {
 		return nil, fmt.Errorf("launcher: admission check: start candidate container: %w", err)
 	}

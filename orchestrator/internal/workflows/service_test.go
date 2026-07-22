@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -235,6 +236,33 @@ func (f *fakeLauncher) instanceIDFor(nodeType string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.instances[nodeType]
+}
+
+// fakeAuthzBinder ist ein Test-Double für AuthzBinder (ARCHITECTURE.md
+// §24.1, UMSETZUNG.md C16).
+type fakeAuthzBinder struct {
+	mu      sync.Mutex
+	created []authz.Binding
+	err     error
+}
+
+func (f *fakeAuthzBinder) Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return authz.Binding{}, f.err
+	}
+	b := authz.Binding{Subject: subject, WorkflowID: workflowID, NodeID: nodeID, Verb: verb}
+	f.created = append(f.created, b)
+	return b, nil
+}
+
+func (f *fakeAuthzBinder) snapshot() []authz.Binding {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]authz.Binding, len(f.created))
+	copy(out, f.created)
+	return out
 }
 
 // newTestService baut einen Service direkt per Struct-Literal statt über
@@ -472,6 +500,57 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 	defer g.mu.Unlock()
 	if len(g.calls) != 1 || g.calls[0].fromSender != "send-1" || g.calls[0].toReceiver != "recv-1" {
 		t.Fatalf("connect calls = %+v, want one send-1 -> recv-1", g.calls)
+	}
+}
+
+// TestStartProvisionsServiceBindingForControlPlaneRole deckt
+// ARCHITECTURE.md §24.1 / UMSETZUNG.md C16 ab: eine Rolle mit
+// NodeType "omp-playout-automation" bekommt bei Start() automatisch
+// eine Workflow-gescopte VerbOperate-Bindung auf ihre eigene
+// Instanz-ID — eine reine Medien-Rolle (omp-source) dagegen nicht.
+func TestStartProvisionsServiceBindingForControlPlaneRole(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	az := &fakeAuthzBinder{}
+	svc := &Service{store: newFakeStore(), nodes: nodes, graph: g, launcher: l, authz: az}
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "automation", NodeType: "omp-playout-automation"},
+		},
+	}
+	wf, err := svc.Create("regie", def, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if len(az.snapshot()) >= 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	bindings := az.snapshot()
+	if len(bindings) != 1 {
+		t.Fatalf("bindings created = %+v, want exactly 1 (only the control-plane role)", bindings)
+	}
+	automationInstanceID := l.instanceIDFor("omp-playout-automation")
+	b := bindings[0]
+	if b.Subject != automationInstanceID || b.WorkflowID != wf.ID || b.NodeID != authz.AnyNode || b.Verb != authz.VerbOperate {
+		t.Fatalf("binding = %+v, want {Subject:%s WorkflowID:%s NodeID:%s Verb:%s}",
+			b, automationInstanceID, wf.ID, authz.AnyNode, authz.VerbOperate)
 	}
 }
 

@@ -74,3 +74,13 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 func (s *Service) Authenticate(token string) (Principal, error) {
 	return s.signer.verify(token, time.Now())
 }
+
+// IssueServiceToken stellt ein Bearer-Token für einen Service-Prinzipal
+// aus (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — instanceID wird als
+// authz-Subject verwendet, s. Signer.issueService-Doku. Aufrufer
+// (httpapi.handleIssueServiceToken) verifiziert vorher das
+// instanzeigene LaunchSecret; dieser Service selbst prüft keine
+// Berechtigung, er signiert nur.
+func (s *Service) IssueServiceToken(instanceID string) (token string, expiresAt time.Time, err error) {
+	return s.signer.issueService(instanceID, time.Now())
+}

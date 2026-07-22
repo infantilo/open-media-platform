@@ -94,6 +94,11 @@ type SnapshotService interface {
 type LauncherService interface {
 	Catalog() []launcher.CatalogEntry
 	List() []launcher.Instance
+	// Get (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s.
+	// handleIssueServiceToken, das über das nur intern (json:"-")
+	// gehaltene launcher.Instance.LaunchSecret prüft, ob der Aufrufer
+	// tatsächlich die vom Orchestrator gestartete Instanz ist.
+	Get(id string) (launcher.Instance, bool)
 	Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
@@ -218,6 +223,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
+
+	// Service-Token-Ausgabe für Control-Plane-Instanzen (ARCHITECTURE.md
+	// §24.1, UMSETZUNG.md C16) — bewusst außerhalb von authGate, s.
+	// handleIssueServiceToken-Doku (gleiches Prinzip wie
+	// POST /api/v1/hosts/register).
+	mux.HandleFunc("POST /api/v1/instances/{id}/service-token", handleIssueServiceToken(launcherSvc, authSvc))
 
 	mux.HandleFunc("GET /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleListRoleBindings(authzStore)))
 	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))

@@ -1266,6 +1266,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-media-library"
+version = "0.1.0"
+dependencies = [
+ "omp-node-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-mediaio"
 version = "0.1.0"
 dependencies = [
