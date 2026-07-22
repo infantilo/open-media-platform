@@ -20,6 +20,10 @@
 // function`, weil das Custom Element nie registriert wurde).
 import "./console-view.ts";
 import type { ConsoleView, ConsoleEntry } from "./console-view.ts";
+// Gleicher Grund wie beim console-view.ts-Import oben (sonst optimiert der
+// Bundler das customElements.define(...) in console-board.ts weg).
+import "./console-board.ts";
+import type { ConsoleBoard } from "./console-board.ts";
 import { whoami, showLoginOverlay, buildUserWidget } from "./auth.ts";
 import { connectionMonitor } from "./connection.ts";
 // Reiner Seiteneffekt-Import (registriert nur customElements.define) —
@@ -83,8 +87,32 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
 const CONSOLE_REFRESH_EVENT_TYPES = new Set(["node.added", "node.removed", "lost-events"]);
 const CONSOLE_POLL_FALLBACK_INTERVAL_MS = 30000;
 
+// Gemeinsames Interface für <omp-console-view> (Tab-Leiste, ein aktiver
+// Eintrag) und <omp-console-board> (Kachel-Board, Kapitel 12 Teil 5
+// Ergänzung 2026-07-22: alle Einträge gleichzeitig sichtbar) — beide werden
+// von watchConsoleEntries() identisch aktualisiert. `preselectNodeRoleId`
+// ergibt für das Board keinen Sinn (nichts ist dort "aktiv"), wird von
+// dessen setEntries() einfach ignoriert.
+interface ConsoleHost {
+  setEntries(entries: ConsoleEntry[], preselectNodeRoleId?: string): void | Promise<void>;
+}
+
+// Wählt die passende Konsolen-Darstellung: bei genau einem Eintrag die
+// bisherige Vollbild-Ansicht (kein unnötiges Kachel-Chrome für ein
+// einzelnes Panel), bei mehreren das Kachel-Board — echter Live-Betrieb
+// braucht mehrere Instrumente gleichzeitig im Blick, nicht nacheinander
+// weggetabbt (Nutzerwunsch 2026-07-22, docs/decisions.md Nachtrag 77).
+function createConsoleHost(entries: ConsoleEntry[], workflowId: string): ConsoleView | ConsoleBoard {
+  if (entries.length > 1) {
+    const board = document.createElement("omp-console-board") as ConsoleBoard;
+    board.setWorkflowId(workflowId);
+    return board;
+  }
+  return document.createElement("omp-console-view") as ConsoleView;
+}
+
 function watchConsoleEntries(
-  view: ConsoleView,
+  view: ConsoleHost,
   selectEntries: (consoles: ConsoleEntry[]) => ConsoleEntry[],
   preselectNodeRoleId?: string,
 ) {
@@ -143,20 +171,20 @@ async function renderShell(root: HTMLElement, username: string | null) {
 
     if (workflowMatch && scoped.length > 0) {
       const selectEntries = (cs: ConsoleEntry[]) => cs.filter((c) => c.workflowId === workflowMatch[1]);
-      const view = document.createElement("omp-console-view") as ConsoleView;
-      root.replaceChildren(view);
-      await view.setEntries(selectEntries(consoles));
-      watchConsoleEntries(view, selectEntries);
+      const host = createConsoleHost(scoped, workflowMatch[1]);
+      root.replaceChildren(host);
+      await host.setEntries(selectEntries(consoles));
+      watchConsoleEntries(host, selectEntries);
     } else if (workflowIds.length <= 1) {
       // Genau ein (oder gar kein) Workflow unter den zugewiesenen
       // Rollen — die Auswahl-Kachel wäre ein unnötiger Umweg zu genau
       // einem Ziel, direkt hinein (Bookmark-fähige
       // /console/<workflowId>-Route bleibt trotzdem gültig, falls sich
       // das später ändert).
-      const view = document.createElement("omp-console-view") as ConsoleView;
-      root.replaceChildren(view);
-      await view.setEntries(consoles);
-      watchConsoleEntries(view, (cs) => cs);
+      const host = createConsoleHost(consoles, workflowIds[0]);
+      root.replaceChildren(host);
+      await host.setEntries(consoles);
+      watchConsoleEntries(host, (cs) => cs);
     } else {
       // §12.5 offene Frage 5 ("Kachel-Auswahl nach jedem Login (Vorschlag)
       // oder automatisch der zuletzt benutzte Workflow mit Umschalter?"):

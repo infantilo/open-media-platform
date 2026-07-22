@@ -11556,3 +11556,82 @@ diesen Test durch einen sauberen Neuaufbau umgangen statt untersucht.
 `deno check ui/`/`deno test ui/` (58/58), `node --check` auf beiden
 Bundles grün. Damit ist die ursprüngliche 6-Punkte-Liste
 ("source-katalog UI modernisieren") vollständig abgeschlossen.
+
+## 2026-07-22 (Nachtrag 77) — Kachel-Board für Mehrfach-Konsolen (Kapitel 12
+Teil 5 Ergänzung)
+
+Nutzerwunsch: "wenn ein operator in einem workflow mehrere node/microservice
+ui's bedienen darf, muss er eine gemeinsame ansicht ermöglicht bekommen in
+der er verschieb- und skalierbare Kacheln mit den einzelnen ui's auf einer
+Seite haben kann" — Beispiel Video Mixer M/E + OGraf + Viewer. Trifft genau
+den bisher nur als Tab-Leiste gelösten Mehrfach-Rollen-Fall der Konsole
+(`ui/shell/console-view.ts`, Kapitel 12 Teil 5) — für echten Live-Betrieb
+unzureichend (Bildmischer umschalten UND Vorschau im Blick behalten braucht
+gleichzeitige Sichtbarkeit, kein Wegtabben).
+
+Vorab per Plan-Modus + `AskUserQuestion` zwei Design-Entscheidungen geklärt:
+(1) Kacheln **ersetzen** die Tab-Leiste vollständig ab zwei Rollen (kein
+Umschalt-Modus, Empfehlung angenommen) — bei genau einer Rolle bleibt
+`omp-console-view` unverändert zuständig (kein unnötiges Kachel-Chrome), die
+Kiosk-Route (`/console/<workflowId>/<nodeRoleId>`, immer genau eine feste
+Rolle) ebenfalls unverändert. (2) Kachel-Layout wird **im Browser
+(localStorage)** gespeichert, nicht über den bestehenden
+`/api/v1/layouts`-Endpunkt — der verlangt `configure`, das reine Operatoren
+nicht haben; passt außerdem zum Kiosk-Charakter eines Regieplatzes (festes
+Gerät), gleiches Muster wie die bereits bestehende lokal gespeicherte
+Parameter-Panel-Breite (`PANEL_WIDTH_STORAGE_KEY`, `flow-canvas.ts`).
+
+**Neu `ui/shell/console-board-logic.ts`** (+ `_test.ts`, 12 Tests): reine,
+DOM-freie Logik, gleiches Trennungsprinzip wie `console-logic.ts`.
+`diffEntries()` ersetzt `pickActiveEntry`s Ein-Auswahl-Prinzip durch eine
+Mehrfach-Diff (`toMount`/`toRemount`/`toUnmount`) — erkennt weiterhin einen
+Neustart/Failover (gleiche Rolle, geänderte `uiBundleUrl`) als Remount, nicht
+als "unverändert", exakt derselbe Grund wie in `pickActiveEntry`s Doku.
+`reconcileLayouts()`/`computeDefaultLayout()`: gespeicherte Positionen
+bleiben für weiterhin vorhandene Rollen erhalten, neue Rollen bekommen ein
+Auto-Flow-Default (fortlaufender Index NACH den bereits platzierten, sonst
+stapeln sich mehrere gleichzeitig neu erscheinende Kacheln — gleiches
+Prinzip wie `flow-canvas.ts#assignMissingPositions`), verwaiste Einträge
+fallen weg (wie `#pruneStalePositions`).
+
+**Neu `ui/shell/console-board.ts`** (`<omp-console-board>`): pro Kachel ein
+`position:absolute`-Wrapper mit Titelleiste (Drag zum Verschieben),
+Resize-Griff unten rechts (geklemmt auf `MIN_TILE_WIDTH`/`_HEIGHT` =
+260×180, angelehnt an das bestehende ~280px-Parameter-Panel-Maß) und
+Inhaltsbereich, in den das bereits bestehende, unveränderte
+`mountUIBundle()` (`ui-bundle.ts`) das Node-UI-Bundle mountet. Drag/Resize
+per `setPointerCapture` direkt auf der Titelleiste/dem Griff (kein
+zentraler Drag-Zustand wie in `flow-canvas.ts` nötig — hier kann ohnehin nur
+eine Kachel gleichzeitig gezogen werden), Position/Größe werden erst bei
+`pointerup` persistiert (synchrones `localStorage.setItem`, kein Debounce
+nötig, kein Netzwerk-Call).
+
+**`ui/shell/shell.ts`:** neue `createConsoleHost(entries, workflowId)` —
+liefert `omp-console-board` bei mehr als einem Eintrag, sonst unverändert
+`omp-console-view`; ersetzt die bisher hart codierten `omp-console-view`-
+Erzeugungen in den beiden Mehrfach-Rollen-Zweigen
+(`workflowMatch && scoped.length > 0` und `workflowIds.length <= 1`). Neues
+`ConsoleHost`-Interface (`setEntries(entries, preselect?)`) lässt
+`watchConsoleEntries()` unverändert gegen beide Konsolen-Typen arbeiten.
+
+**Live verifiziert, echter Roundtrip (kein Mock):** neuer Operator-Nutzer
+(`POST /api/v1/auth/users`) + echter Workflow mit drei adoptierten Instanzen
+(`omp-video-mixer-me`, `omp-ograf`, `omp-viewer` — exakt das Nutzerbeispiel)
++ drei workflow-gescopte `operate`-Bindungen (`POST
+/api/v1/admin/role-bindings`). Login als dieser Operator, Navigation auf
+`/console/<workflowId>`: alle drei echten UI-Bundles erscheinen gleichzeitig
+als Kacheln (Screenshot bestätigt: OGraf-Template-Formular, Mixer-Crosspoint
+mit PGM/PST, Viewer-Vorschau), Auto-Flow-Layout ohne Überlappung. Per
+simulierten Pointer-Events verifiziert: Titelleisten-Drag verschiebt eine
+Kachel exakt um das Drag-Delta, Resize-Griff-Drag ändert Breite/Höhe exakt
+um das Delta (geklemmt auf die Mindestgröße), `localStorage` enthält danach
+die korrekte Layout-Map. Seiten-Reload (gleiches Chromium-Profil): Position/
+Größe bleiben exakt erhalten. Eine Rollenbindung per `DELETE
+/api/v1/admin/role-bindings/{id}` entzogen: entsprechende Kachel verschwindet
+beim nächsten Laden, übrige beiden Kacheln bleiben unverändert an ihrer
+Position stehen. Regressionschecks bestanden: bei nur noch einer Rolle
+zeigt `/console/<workflowId>` wieder `omp-console-view` (kein Board,
+Tab-Leiste `display:none` wie zuvor bei einem Eintrag); die Kiosk-Route
+bleibt in jedem Fall bei `omp-console-view`.
+
+`deno check ui/`/`deno test ui/` (70/70, 12 neue Tests) grün.
