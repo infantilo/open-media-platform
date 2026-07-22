@@ -11452,9 +11452,31 @@ durchgehend echtes Bild, RSS blieb mit ~113 MB im erwarteten Bereich
 vorbestehenden, unveränderten `main.rs`-`collapsible_if`-Hinweisen),
 `cargo test -p omp-mediaio --features mxl` (8/8) grün.
 
-**Nicht Teil dieser Sitzung:** ein Langzeit-/Stresstest über
-deutlich mehr als 5 Wechsel (analog dem 250-Switches-Test des
-Switchers) sowie eine Verifikation des `SetInputs`-Rebuild-Nebeneffekts
-selbst (zusätzlicher Sender live hinzufügen, prüfen, dass alle
-Bestandszweige dabei wirklich auf Highres zurückfallen) — beides
-mögliche Folgearbeit, falls der Restpfad künftig doch noch auffällt.
+**Nicht Teil dieser Sitzung:** eine Verifikation des `SetInputs`-
+Rebuild-Nebeneffekts selbst (zusätzlicher Sender live hinzufügen,
+prüfen, dass alle Bestandszweige dabei wirklich auf Highres
+zurückfallen) — mögliche Folgearbeit, falls der Restpfad künftig doch
+noch auffällt.
+
+**Ergänzung (gleiche Sitzung) — 30-Switches-Stresstest, Prüfung der in
+Zeile "Kapitel 15 Teil 3 (Rest 2): OOM-Root-Cause gefunden + behoben"
+(`UMSETZUNG.md`, 2026-07-20) dokumentierten Restschwäche:** dort war
+neben dem behobenen OOM ein **separater**, nicht root-gecauster Fehler
+notiert — der Pad-Block-Mechanismus in `swap_input_resolution` lief bei
+wiederholten Swaps auf demselben Sink-Pad ab einem gewissen,
+nicht-deterministischen Punkt in einen Timeout (Eingang bleibt danach
+bei der alten Auflösung stehen, kein Crash/Leck). Frischer Stack, zwei
+`omp-source` + ein `omp-video-mixer-me`, 30 `crosspoint.take()`-Aufrufe
+im dokumentierten Bedienertempo (0.35s Abstand, wie beim
+250-Switches-Switcher-Test) abwechselnd zwischen beiden Sendern: alle
+30 Aufrufe `{"ok":true}`, kein einziger Timeout/Fehler, RSS blieb bei
+~114 MB (kein Wachstum ggü. dem Stand nach den ersten Tests). PGM
+zeigte per MJPEG-Frame-Extraktion danach weiterhin echtes Bild. Die in
+`UMSETZUNG.md` dokumentierte Restschwäche trat in diesem Lauf nicht
+auf — plausibel, da die heutige Änderung die Zahl der tatsächlich
+ausgeführten Hot-Swaps drastisch reduziert (nur noch Demote pro
+Wechsel, kein Promote mehr bei neuen Zweigen), der zugrunde liegende
+Timeout-Mechanismus selbst aber unverändert ist und bei entsprechend
+längerer Nutzung theoretisch weiterhin auftreten könnte. Kein
+Vollbeweis über 100+ Wechsel (wie beim Switcher) in dieser Sitzung —
+falls die Restschwäche künftig doch auffällt, dort ansetzen.
