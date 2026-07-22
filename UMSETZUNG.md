@@ -984,6 +984,127 @@ MXL instance" — nicht behoben (Testhygiene, kein Code-Fix nötig).
 
 ---
 
+### C16 — Control-Enforcement-Fix: Automatisation über den Orchestrator-Proxy
+
+**Ziel:** `ARCHITECTURE.md` §24.1. `omp-playout-automation` verliert die
+direkte node-zu-node-Ansprache (`PeerClient`/`href`) und ruft stattdessen
+denselben, bereits gehärteten Orchestrator-Proxy (`requireVerbOnNode`,
+`authz.Store.CheckWorkflow`) wie die UI — dafür braucht der
+Orchestrator einen neuen Ausstellungsweg für ein Service-Token je
+Control-Plane-Instanz, gebunden an deren Workflow. Kein neues
+Autorisierungsmodell, kein neues Node-Contract-Pflichtfeld.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C16):** neuer
+Service-Prinzipal-Typ additiv zu `auth.User` in
+`orchestrator/internal/auth`; Workflow-Start (D7,
+`handleStartWorkflow`) mintet für jede Instanz mit Katalog-`category:
+control` ein Token + Rollenbindung `(instanceId, workflowId, AnyNode,
+VerbOperate)` über den bestehenden `authz.Store`; Token wird der
+Instanz wie andere dynamische Startparameter mitgegeben. Rust-seitig:
+`nodes/omp-playout-automation/src/remote.rs` ruft
+`/api/v1/nodes/<id>/params|methods/...` am Orchestrator mit
+`Authorization: Bearer` statt `href` direkt.
+
+**Verifikation:** zwei Workflows mit je Mixer+Automatisation; Token von
+Workflow A gegen Mixer von Workflow B → `403`; gegen eigenen Mixer →
+`200`, Funktionsumfang aus C14/C15 (Take/Auto-Advance) unverändert
+grün; Aufruf ohne/mit ungültigem Token → `401`. `cargo build/test/deny`
++ Go-Tests (`go test ./...`) grün.
+
+### C17 — omp-media-library
+
+**Ziel:** `ARCHITECTURE.md` §24.2. Neuer reiner Control-Plane-Node
+`omp-media-library` (kein `omp-mediaio`), Scan/`ffprobe`-Analyse/
+Segmente nach PIPELINE-CONTROLLER-Vorbild (Muster übernehmen, §0 Punkt
+9), additiv nutzbar von `omp-player`/`omp-playout-automation`.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C17):** Methoden
+`scan()`/`rescan(file)`/`cleanup()`/`setSegments(file, segments)`,
+Parameter `entries`. `ffprobe`-Aufruf als Subprozess (kein neues Crate
+ohne Begründung, Minimal-Dependency-Regel §0 Punkt 5).
+
+**Verifikation:** Scan über `OMP_MEDIA_DIR` mit 2–3 Testdateien liefert
+korrekte technische Metadaten, Rescan/Cleanup/Segmente live geprüft.
+
+### C18 — Cart-/Interrupt-Assets
+
+**Ziel:** `ARCHITECTURE.md` §24.3. Erweiterung von
+`omp-playout-automation` (kein neuer Node) um `cart.fire(assetId)`/
+`cart.return()` — merkt Hauptkanal-Zustand, spielt Asset, kehrt danach
+zurück, Wiederverwendung des C14/C15-Dauer-Timers.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C18):** neue
+Parameter-Struktur `assets` (Cart-Definitionen), Methode `cart.fire`
+merkt `cuedItemId`/`onAirItemId` vor Umschalten.
+
+**Verifikation:** laufende Playlist auf Item 2, `cart.fire(black)`
+schaltet um, nach Ablauf automatisch zurück auf Item 2 an der
+unterbrochenen Stelle (nicht neu von vorn).
+
+### C19 — Plugin-Host (generischer Mechanismus)
+
+**Ziel:** `ARCHITECTURE.md` §24.4. Optionales Node-Contract-Capability-
+Feld `plugins: bool`; Node mit gesetztem Feld exponiert `GET/PATCH
+/api/v1/nodes/<id>/plugins` (Liste/Enable/Disable/Config je
+Plugin-Instanz). Keines der PC-Plugins wird jetzt mitportiert.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C19):** Erweiterung
+in `omp-node-sdk::server` (generische Route, analog zu `params`/
+`methods`), Persistenz wie andere Node-Zustände (§4.6 Punkt 4-Muster).
+
+**Verifikation:** Mock-Plugin (no-op) laden/enable/disable/config über
+die neue Route, Zustand übersteht Node-Neustart.
+
+### C20 — Timeline (gefenstert, inkrementell)
+
+**Ziel:** `ARCHITECTURE.md` §24.5. Neue Methode `timeline.window
+(fromIndex, count)` in `omp-playout-automation`, inkrementelle
+Neuberechnung (nur ab der geänderten Item-Position), UI-Bundle zeigt
+eine Timeline-Leiste über das angefragte Fenster statt der ganzen
+Playlist.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C20):**
+Berechnungslogik (Start/Ende/Gap/Xfade-Overlap) als Muster aus PCs
+`calcTimeline()` übernehmen (§0 Punkt 9), aber mit Cache pro Item statt
+Full-Recompute.
+
+**Verifikation:** Playlist mit 500 Items, Änderung an Item 3 triggert
+messbar keinen Full-Scan (Timing-Vergleich), Fenster-Anfrage liefert
+nur den angefragten Ausschnitt.
+
+### C21 — omp-player: Live-MXL-Quelle als Playlist-Item
+
+**Ziel:** `ARCHITECTURE.md` §24.6. Neue `ItemSource::Live { sender_id }`
+neben `TestPattern`/`File`; Discovery nach dem C7/C10/C11-Muster
+(`list_senders()`, MXL-Filter, eigener Sender/Lowres-Begleiter
+ausgeschlossen), neuer Parameter `playlist.availableSources`.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C21):** Pipeline-
+Zweig für `Live`-Items nutzt bestehende `MxlVideoInput`/`MxlAudioInput`
+aus `omp-mediaio` (kein neuer Empfangspfad), analog zu deren Nutzung in
+`omp-switcher`/`omp-video-mixer-me`.
+
+**Verifikation:** `omp-source` läuft, Playlist-Item mit dessen
+Sender-ID → Take zeigt den Live-Feed im Viewer; File-/TestPattern-Items
+weiterhin unverändert funktionsfähig.
+
+### C22 — omp-recorder
+
+**Ziel:** `ARCHITECTURE.md` §24.7. Neuer Node, MXL-Video+Audio-Receiver
+→ Encoder/Muxer → Datei in `OMP_MEDIA_DIR`. Ausschließlich MXL als
+Eingang, keine Capture-Karte/Blackmagic-Abhängigkeit.
+
+**Anweisung (Kurzfassung, Detailplan zu Beginn von C22):** Methoden
+`record.start(fileName)`/`record.stop()`, Parameter `record.status`/
+`record.durationMs`. Encoder-Wahl gegen Minimal-Dependency-Regel prüfen
+(§0 Punkt 5) — Standard-GStreamer-Plugins bevorzugen.
+
+**Verifikation:** `omp-source` → `omp-recorder`, Start/Stop, Datei per
+`ffprobe` verifiziert, erscheint nach `omp-media-library`-Scan (C17) im
+Katalog.
+
+---
+
 ## 6. Phase D — Hardening & SDK-Release (Überblick)
 
 Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
@@ -1972,6 +2093,13 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C12 | erledigt | [C12] omp-player: PlaylistController als gemeinsames Crate (Video-/Jingle-Profil) | 2026-07-12 |
 | C13 | erledigt | [C13] Operator-Console: Rollen-Stub, /api/v1/me/consoles, Console-Ansicht + Kiosk-Routen | 2026-07-12 |
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
+| C16 | offen | [C16] Control-Enforcement-Fix: Automatisation über Orchestrator-Proxy (Service-Prinzipal) | — |
+| C17 | erledigt | [C17] omp-media-library: Datei-Katalog + ffprobe-Metadaten + Segmente | 2026-07-22 |
+| C18 | offen | [C18] Cart-/Interrupt-Assets in omp-playout-automation | — |
+| C19 | offen | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | — |
+| C20 | offen | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | — |
+| C21 | offen | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | — |
+| C22 | offen | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad | — |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |
 | D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |

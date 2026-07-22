@@ -88,5 +88,14 @@
     "env": {},
     "description": "Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK.",
     "expectedResources": "moderat (Web-Rendering pro aktivem Template)"
+  },
+  {
+    "type": "omp-media-library",
+    "label": "Media Library",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-media-library"],
+    "env": {},
+    "description": "Datei-Katalog mit technischen Metadaten (ffprobe) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline.",
+    "expectedResources": "sehr gering (keine Medienverarbeitung)"
   }
 ]

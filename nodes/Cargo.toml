@@ -17,4 +17,5 @@ members = [
     "omp-2110-gateway",
     "omp-aes67-gateway",
     "omp-fabrics-gateway",
+    "omp-media-library",
 ]
