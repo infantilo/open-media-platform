@@ -291,7 +291,7 @@ sichtbar, verschiebbar, Pan/Zoom flüssig, Reload behält Positionen.
 
 ### B3 — Drag & Drop-Verbindungen (2)
 
-**Ziel:** Routing per Maus — das AMPP-Kern-Erlebnis.
+**Ziel:** Routing per Maus — das zentrale Bedien-Erlebnis.
 
 **Anweisung:** Drag von Output-Port zieht eine Gummiband-Linie; Drop auf
 kompatiblen Input-Port → `POST /api/v1/graph/edges`; inkompatible Ports
@@ -317,7 +317,7 @@ markiert; neu starten → wieder ok. Tally-Event per `nats pub` → Kachel rot.
 
 ### B5 — Gruppen / Verschachtelung (2–3)
 
-**Ziel:** AMPP-artiges Verschachteln: Teilgraphen zu Makro-Blöcken falten.
+**Ziel:** Verschachteln in Makro-Blöcke: Teilgraphen kollapsen und expandieren.
 
 **Anweisung:** Mehrfachauswahl (Rahmen ziehen / Shift-Klick) → „Gruppieren":
 gewählte Kacheln kollabieren zu einem Block, der nur die nach außen

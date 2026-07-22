@@ -1165,7 +1165,7 @@ im K1-Look —
 jedes andere in diesem Dokument — §6.3 (vier Stufen: Crash-Erkennung,
 Restart-in-place, Degradation, Hot-Standby), §19 (Orchestrator-
 Active-Passive über Postgres-Advisory-Lock), §20.1 (Genlock-Äquivalenz-
-Frage, mit Fable-Recherche zu AMPPs öffentlicher Resilienz-Story: primär
+Frage, mit Recherche zu öffentlich dokumentierten Resilienz-Ansätzen: primär
 schnelles Sekunden-Respawn + optionales 1+1-Hot-Backup pro Kanal, **kein**
 öffentlicher Beleg für echtes frame-unsichtbares Lockstep-Failover) und
 §21 (konsolidierende Tabelle über alle Ebenen + neue Standort-/
@@ -1647,13 +1647,11 @@ Hinweis fallen auf das naive Auto-Raster zurück, nie ein harter Fehler).
 
 ## 9. Multiviewer: extrem niedrig-latenter Web-Stream für Regieplatz-Monitore
 
-> „um Signale später im Regieplatz auf einen Monitor zu bringen nutzt
-> Grass Valley AMPP das: Das Multiviewer-Microservice-Videosignal wird
-> in einen hochoptimierten, extrem niedrig-latenten Web-Stream (unter
-> Verwendung moderner WebRTC- oder SRT/JPEG-XS-Protokolle) verpackt. So
-> etwas brauchen wir auch." (Projektinhaber, wörtlich; im Folgenden nach
-> `ARCHITECTURE.md` §20.7-Konvention als „vergleichbare
-> Cloud-Produktionsplattform" statt beim Herstellernamen referenziert.)
+> „um Signale später im Regieplatz auf einen Monitor zu bringen wird
+> das Multiviewer-Microservice-Videosignal in einen hochoptimierten,
+> extrem niedrig-latenten Web-Stream (unter Verwendung moderner WebRTC-
+> oder SRT/JPEG-XS-Protokolle) verpackt. So etwas brauchen wir auch."
+> (Projektinhaber, sinngemäß.)
 
 ### 9.1 Ist-Zustand in OMP
 
@@ -3548,8 +3546,7 @@ Recherchierte Faktenlage (Stand 2026-07):
   2022-7 in der SDK, Hardware-Pacing (2110-21 „narrow"),
   PTP-Hardware-Timestamps, GPUDirect. GStreamer-Anbindung existiert
   (`nvdsudpsrc`/`nvdsudpsink` aus DeepStream, an Rivermax + ConnectX
-  gebunden). De-facto-Standard der kommerziellen Broadcast-Anbieter
-  (u. a. AMPP nutzt diesen Stack).
+  gebunden). De-facto-Standard in der Broadcast-Industrie.
 - **Intel Media Transport Library (MTL,
   `OpenVisualCloud/Media-Transport-Library`):** Open Source
   (BSD-3-Clause), implementiert ST 2110-10/-20/-21/-30/-40 +

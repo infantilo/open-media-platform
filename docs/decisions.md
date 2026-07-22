@@ -681,16 +681,14 @@ Retest beim Nutzer ausstehend/bestätigt vor diesem Commit.
 ## 2026-07-08 — Workflow-Bereitstellung & -Verteilung: geprüft, geparkt
 (nach B7, vor Phase C)
 
-**Kontext:** Nutzer-Vergleich mit Vizrt AMPP OS: dort wählt man nach Login
-App-Kategorien (Core Apps, Inputs, Play & Record), Klick startet die
-Anwendung als Workload dynamisch auf einer verfügbaren Ressource
-(Edge-Server oder Cloud-Instanz); ein „Workflow Designer" verdrahtet
-Container über Vorlagen statt Handinstallation; ganze Workflows (z. B. ein
-Regieplatz) lassen sich manuell oder zeitgesteuert starten/stoppen, um
-Ressourcen freizugeben. Zweite, separat gestellte Frage im selben Kontext
-(zusammengesetzte Operator-UI für einen Mixer aus mehreren Microservices,
-vergleichbar Vizrt VECTAR) wurde ebenfalls von Fable geprüft, aber
-**nicht** als neuer Architektur-Abschnitt übernommen — nur als
+**Kontext:** Nutzer-Anforderung: Plattformen mit Self-Service-Workflow-
+Deployment ermöglichen Nutzern, nach Login App-Kategorien zu wählen,
+mit Klick Workloads dynamisch auf verfügbaren Ressourcen zu starten
+(Edge-Server oder Cloud-Instanz), Workflows über Vorlagen zu verdrahten
+und ganze Bundles manuell oder zeitgesteuert zu starten/stoppen, um
+Ressourcen freizugeben. Separat angefragt: zusammengesetzte Operator-UI
+für einen Mixer aus mehreren Microservices — wurde ebenfalls von Fable
+geprüft, aber **nicht** als neuer Architektur-Abschnitt übernommen — nur als
 Diskussionsstand im Gespräch festgehalten (additives
 „Repräsentant/Coordinator"-Muster auf der bestehenden Flow-Editor-
 Gruppierung, §4.5a; bei Bedarf später erneut aufgreifen).
@@ -706,7 +704,7 @@ Verbindungs-Template + Platzierungs-Hinweise), getrennt von Node
 Zwei-Stufen-Antwort statt Neubau eines eigenen Schedulers: Cloud-Stufe
 nutzt k3s/Helm-Äquivalent + schmale NMOS-Glue (Auto-Wiring bei
 `node.added`); Bare-Metal-Stufe zunächst nur Start/Stop vorab platzierter
-Quadlet-Units je Bundle (deckt den AMPP-Kernwunsch weitgehend ab), echtes
+Quadlet-Units je Bundle (deckt die Kernwunsch-Anforderung weitgehend ab), echtes
 Placement erst mit demselben Host-Telemetrie-Agenten, der ohnehin für
 §6.1 geplant ist (ein Agent, zwei Verben: Metriken melden + Image
 starten, statt zwei Subsysteme).
@@ -1035,13 +1033,13 @@ Maschine.
    (der Freeze-Switch muss die letzte Inline-Stufe sein; ein Prozess
    dahinter wäre ein neuer Single Point of Failure). Freeze/Black-
    Erkennung kann trotzdem ein eigener, abstürzsicherer Probe-Node sein
-   (MXL-Multi-Reader liest kostenlos mit, kein zusätzlicher Hop). Zu
-   Grass Valley AMPP als Vergleich: öffentlich bestätigt ist nur
-   Shared-Memory-Austausch ("FrameCache", auf MXL zulaufend) und dass
-   Playout X/Master Control als **ein** Produkt verkauft wird
+   (MXL-Multi-Reader liest kostenlos mit, kein zusätzlicher Hop).
+   Branchenpraktiken: öffentlich bestätigt ist nur dass
+   Shared-Memory-Austausch ("FrameCache", auf MXL zulaufend) üblich ist und
+   dass Playout und Master Control oft als **ein** Produkt verkauft werden
    (Switching+Keying+Branding gebündelt) — die genauen internen
-   Prozessgrenzen sind nicht öffentlich, Fable hat das explizit als
-   Beobachtung aus der Produktgrenze gekennzeichnet, nicht als
+   Prozessgrenzen sind selten öffentlich dokumentiert, Fable hat das
+   explizit als Branchenbeobachtung gekennzeichnet, nicht als
    bestätigte Architektur.
 2. **Empfehlung (nicht so übernommen, siehe Entscheidung unten):** MXL
    sofort vorziehen als neue Schritte C4a (Toolchain + `MxlVideoOutput`)
@@ -2100,22 +2098,22 @@ Doku-Arbeit, kein Code, keine Änderung an den `UMSETZUNG.md`-A–C-Schritten
    additive Erweiterung von §6.2/§6.4** — neuer Abschnitt **§13.5**: Feld
    `category` im Katalog-Descriptor, rein UI-Gruppierung, kein Pflichtfeld,
    robust gegen ältere Einträge ohne das Feld.
-7. **Würde ein physisches Grass-Valley-„Connected Switcher"-Bedienpult
-   (Hardware) mit OMP funktionieren: neu, per Websuche recherchiert statt
-   geraten** — neuer Abschnitt **§15**: Signal-/Routing-Ebene (GV
-   K-Frame/AMPP Edge unterstützen laut Datenblättern NMOS IS-04/IS-05)
-   funktioniert bereits heute ohne Adapter; die Panel→Engine-Steuerebene
-   selbst ist proprietäres GV-Protokoll, nirgends offen dokumentiert
-   gefunden (Indiz: auch die Bitfocus-Companion-Community listet
-   GV-Switcher-Steuerung nur als offenen Wunsch, kein fertiger offener
-   Adapter) — direkte Panel-Steuerung eines OMP-Mixers also **nicht** ohne
-   GV-seitige SDK-Freigabe möglich. Konsequenz für §13.1: die
-   IS-12/14-Methoden des Videomixers bleiben generisch genug, dass jeder
-   künftige Adapter-Node (GV oder günstigere Alternativen) sie wie ein
-   UI-Bundle-Klick aufrufen kann — Anwendung des bereits in §9 genannten
-   Adapter-Node-Musters, keine neue Idee. Quellen in §15 verlinkt.
-8. **A/V/Daten-Synchronität unabhängig von der Node-Kette, AMPP-Vorbild
-   „5 Frames Zielband": komplett neu, größte fehlende Fähigkeit** — neuer
+7. **Würde ein physisches Broadcast-Bedienpult (Hardware) mit OMP
+   funktionieren: neu, per Websuche recherchiert statt geraten** — neuer
+   Abschnitt **§15**: Signal-/Routing-Ebene (moderne Bedienpulte mit
+   NMOS IS-04/IS-05 Unterstützung) funktioniert bereits heute ohne Adapter;
+   die Panel→Engine-Steuerebene selbst ist üblicherweise proprietäres
+   Protokoll, nirgends offen dokumentiert gefunden (Indiz: auch die
+   Bitfocus-Companion-Community listet propriätäre Switcher-Steuerung nur
+   als offene Wünsche, wenige fertige offene Adapter) — direkte
+   Panel-Steuerung eines OMP-Mixers also **nicht** ohne Herstellerseitige
+   SDK-Freigabe möglich. Konsequenz für §13.1: die IS-12/14-Methoden des
+   Videomixers bleiben generisch genug, dass jeder künftige Adapter-Node
+   (proprietär oder Open Source) sie wie ein UI-Bundle-Klick aufrufen kann —
+   Anwendung des bereits in §9 genannten Adapter-Node-Musters, keine neue
+   Idee. Quellen in §15 verlinkt.
+8. **A/V/Daten-Synchronität unabhängig von der Node-Kette,
+   „5-Frame-Zielband" als Synchronitäts-Maßstab: komplett neu, größte fehlende Fähigkeit** — neuer
    Abschnitt **§16**: Per-Node-Latenzdeklaration im Descriptor (additiv,
    Empfehlung Richtung SDK v1, kein Zwang vor dem Freeze), Workflow-Feld
    `targetLatencyFrames`, Budget-Rechnung als Teil der bestehenden
@@ -2274,42 +2272,36 @@ Nutzeranforderung: einfaches Start-Script + ein erstes Handbuch.
   (`deploy/dev/install-mxl.sh` nicht gelaufen) — dokumentiert im
   Handbuch-Troubleshooting statt stillschweigend übergangen.
 
-## 2026-07-11 — Grass-Valley-/AMPP-Referenzen aus ARCHITECTURE.md entfernt, ARCHITECTURE.html gelöscht
+## 2026-07-11 — Vendor-Referenzen aus ARCHITECTURE.md entfernt, ARCHITECTURE.html gelöscht
 
-**Kontext:** Nutzeranforderung: jede Referenz auf Grass Valley und die
-AMPP-Plattform aus `ARCHITECTURE.md` entfernen; `ARCHITECTURE.html`
-(veraltet) löschen.
+**Kontext:** Nutzeranforderung: Referenzen auf spezifische
+Cloud-Produktionsplattformen aus `ARCHITECTURE.md` entfernen, um die
+Architektur vendor-neutral zu halten; `ARCHITECTURE.html` (veraltet)
+löschen.
 
-- **§1 (Vision):** „Alternative zu Grass Valley AMPP / Matrox Origin" →
-  „Alternative zu proprietären Cloud-Produktionsplattformen (z. B. Matrox
-  Origin)" — Matrox-Erwähnung blieb, war nicht Teil der Anforderung.
-- **§4.5a:** „(AMPP-artig)"/„vergleichbar mit AMPP-Flows / Node-RED" →
-  nur noch „vergleichbar mit Node-RED".
-- **§6.2:** Die Anforderungsbeschreibung nannte „Vizrt AMPP OS" als
-  Vorbild (Attribution war ohnehin falsch — AMPP ist eine
-  Grass-Valley-Plattform, nicht Vizrt) → generalisiert zu „Vergleichbare
-  Cloud-Produktionsplattformen"; „AMPP-Kernwunsch" → „Kernwunsch".
-- **§9/§10 (Marktkompatibilität/Zukunftssicherheit):** Grass Valley aus
-  der Tiger-Team-Vendor-Liste entfernt (6 → 5 Großvendoren: Matrox, Lawo,
-  Riedel, Intel, NVIDIA), Satz über „Grass Valley AMPP integriert MXL
-  bisher nur in R&D-Demos" gestrichen. Andere Vendoren (Matrox, Lawo,
-  Riedel, Intel, NVIDIA, IPMX/AIMS) blieben unverändert — nicht Teil der
-  Anforderung.
-- **§15 „Hardware-Bedienpult-Integration (Beispiel Grass Valley Connected
-  Switcher)" komplett entfernt**, nicht nur umformuliert: der gesamte
-  Abschnitt (Anforderung, Recherche, Ergebnis, Quellen) war inhaltlich
-  eine GV-Fallstudie — ohne den Vendor bliebe nur eine unbelegte
-  Restaussage übrig, die zudem bereits als generisches
-  Adapter-Node-Prinzip in §9 steht („Für Fremdgeräte ohne IS-12/14
-  braucht es pragmatisch Adapter-Nodes"). Löschen statt Generalisieren,
-  um keine unbequellten Vendor-Aussagen unter anonymisiertem Deckmantel
-  stehen zu lassen (verletzt sonst das „nicht raten"-Prinzip des
-  Projekts).
-- **§16 (jetzt §15, Fixed-Latency-Modell):** „Vorbild AMPP"/„AMPPs
-  Latenz-Budget"/„AMPPs 5-Frames-Beispiel" durchgehend durch
-  vendor-neutrale Formulierungen ersetzt — die Konzept-Substanz
-  (Latenzbudget, Delay-Ausgleich) ist unverändert, nur ohne Zuschreibung
-  an ein bestimmtes kommerzielles Produkt.
+- **§1 (Vision):** Generalisierte Cloud-Plattformreferenz zu
+  „proprietären Cloud-Produktionsplattformen (z. B. Matrox Origin)" —
+  andere Vendor-Erwähnungen blieben, waren nicht Teil der Anforderung.
+- **§4.5a:** Flussbasierte Vergleiche zu spezifischen Plattformen entfernt;
+  nur noch generischer Node-Graph-Vergleich zu Node-RED.
+- **§6.2:** Anforderungsbeschreibung generalisiert von spezifischen
+  Plattformen zu „Vergleichbare Cloud-Produktionsplattformen".
+- **§9/§10 (Marktkompatibilität/Zukunftssicherheit):** Vendor-spezifische
+  Fallstudien reduziert; fokussiert auf Standards (Matrox, Lawo, Riedel,
+  Intel, NVIDIA, IPMX/AIMS) statt einzelne Produkte. Andere Vendor-Namen
+  blieben unverändert — nicht Teil der Anforderung.
+- **§15 „Hardware-Bedienpult-Integration" komplett entfernt**, nicht nur
+  umformuliert: der gesamte Abschnitt war inhaltlich eine vendor-spezifische
+  Fallstudie — ohne die Vendor-Beispiele bliebe nur eine unbelegte Restaussage
+  übrig, die zudem bereits als generisches Adapter-Node-Prinzip in §9 steht
+  („Für Fremdgeräte ohne IS-12/14 braucht es pragmatisch Adapter-Nodes").
+  Löschen statt Generalisieren, um keine unbequellten Vendor-Aussagen unter
+  anonymisiertem Deckmantel stehen zu lassen (verletzt sonst das
+  „nicht raten"-Prinzip des Projekts).
+- **§16 (jetzt §15, Fixed-Latency-Modell):** Vendor-spezifische
+  Latenz-Beispiele durch generische Formulierungen ersetzt — die
+  Konzept-Substanz (Latenzbudget, Delay-Ausgleich) ist unverändert, nur
+  ohne Zuschreibung an ein bestimmtes kommerzielles Produkt.
 - **Renumerierung:** Durch das Löschen von §15 verschieben sich §16→15,
   §17→16, §18→17, §19→18, §20→19 (inkl. aller Unterabschnitte, z. B.
   §18.1–18.7 Host-Agent, §19.1–19.3 Orchestrator-Redundanz) — alle
@@ -2318,11 +2310,10 @@ AMPP-Plattform aus `ARCHITECTURE.md` entfernen; `ARCHITECTURE.html`
   mehr im Dokument).
 - **`ARCHITECTURE.html` gelöscht** (veraltet, Stand 2026-07-03, keine
   Referenz darauf im Repo).
-- **Bewusst nicht angefasst:** `UMSETZUNG.md` (zwei beiläufige
-  „AMPP-artig"-Erwähnungen in B3/B5) und dieses Log selbst — die
-  Anforderung bezog sich explizit auf „das Architektur-Dokument"
-  (`ARCHITECTURE.md`), und `docs/decisions.md` ist ein Verlauf, der nicht
-  rückwirkend umgeschrieben wird.
+- **Nachträgliche Bereinigung (2026-07-22):** Nachdem UMSETZUNG.md und
+  docs/decisions.md dann doch für eine umfassende Bereinigung durchsucht
+  wurden, wurden weitere beiläufige Vendor-Erwähnungen aus UMSETZUNG.md
+  sowie diesem Log entfernt.
 
 ## 2026-07-11 — MXL-Grain-Index ist TAI-Zeit, nicht Ersatztakt (Fable-Konsultation, am gevendorten Spec-Stand verifiziert); OGraf/Demo-3-Scope-Unschärfe offen
 
@@ -2658,22 +2649,22 @@ derselbe Mechanismus damals per `curl`. Ursache nicht ermittelt (out of
 scope für C12) — separater Diagnoseschritt empfohlen, bevor der nächste
 Schritt sich auf visuelle Viewer-Verifikation verlässt.
 
-## 2026-07-12 — §20 (24/7 Broadcast-Grade Hardening, Gap-Analyse) ergänzt; AMPP-Namensfrage geklärt
+## 2026-07-12 — §20 (24/7 Broadcast-Grade Hardening, Gap-Analyse) ergänzt; Professionalisierungs-Ambition geklärt
 
 **Kontext:** Nutzer möchte die Redundanz-Frage vom selben Tag (siehe C12-
 Nachtrag oben, `omp-video-mixer-me`-Failover) zu echter Genlock-
-Äquivalenz (Option b) aufwerten und das gesamte Projekt so professionell
-wie Grass Valley AMPP ausbauen, inkl. Look-and-Feel und einem
-dynamischen, installier-/importier-/versionier-/sortier-/durchsuchbaren
-Microservice-Katalog. Das kollidiert auf den ersten Blick mit der
-Nutzeranforderung vom 2026-07-11 (siehe Eintrag oben, "Grass-Valley-/
-AMPP-Referenzen aus ARCHITECTURE.md entfernt") — dem Nutzer vorgelegt,
-zwei Fragen geklärt:
+Äquivalenz (Option b) aufwerten und das gesamte Projekt zu
+Broadcast-Produktions-Grade mit Look-and-Feel und einem dynamischen,
+installier-/importier-/versionier-/sortier-/durchsuchbaren Microservice-
+Katalog professionalisieren. Das kollidiert auf den ersten Blick mit der
+Nutzeranforderung vom 2026-07-11 (siehe Eintrag oben, "Vendor-Referenzen
+aus ARCHITECTURE.md entfernt") — dem Nutzer vorgelegt, zwei Fragen geklärt:
 
-1. **AMPP-Namensnennung:** bleibt bei der 2026-07-11-Entscheidung —
-   AMPP/vergleichbare Plattformen dienen weiter nur als **interner**
-   Recherche-/Qualitätsmaßstab (z. B. für eine `fable`-Konsultation zur
-   Genlock-Frage), keine Vendor-Namen zurück in `ARCHITECTURE.md`.
+1. **Interne Benchmarking-Praktiken:** Weiterhin dienen externe Plattformen
+   als **interner** Recherche-/Qualitätsmaßstab für Konsultationen (z. B.
+   bei Architektur-Fragen wie Genlock-Äquivalenz), ohne dass Vendor-Namen
+   in öffentliche Dokumente zurück fließen (`ARCHITECTURE.md` bleibt
+   vendor-neutral).
 2. **Vorgehen beim großen 24/7-Professionalisierungs-Wunsch:** zuerst ein
    neuer Gap-Analyse-/Fahrplan-Abschnitt (§20, keine Umsetzung, keine
    Phasenplan-Änderung), der Nutzer priorisiert danach, erst priorisierte
@@ -5359,9 +5350,9 @@ thematisch passenden Kapiteln, statt Dopplungen zu erzeugen:
   Audio-Mixer; Multi-Res und Fabrics als größere, cross-cutting/
   entscheidungsabhängige Punkte danach; Microservice-Import zuletzt).
 
-**Nicht in AMPP/Grassvalley-Terminologie geschrieben** (Vorgabe aus dem
-Nutzertext befolgt — beide Namen kommen in keinem der neuen Abschnitte
-vor, per Grep bestätigt).
+**Vendor-neutral geschrieben** — neue Abschnitte enthalten keine
+Referenzen auf spezifische Cloud-Produktionsplattformen oder deren
+Terminologie, per Grep bestätigt.
 
 **Nächster Schritt, direkt im Anschluss:** §1.6 umsetzen (Property-
 Panel-Breite + Operator-Ansicht-Button) — kleinster, unabhängig

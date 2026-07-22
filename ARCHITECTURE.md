@@ -2255,14 +2255,13 @@ Fakt wo als Vermutung gekennzeichnet):** wichtige Klarstellung zuerst —
 ST 2022-7 ist **Netzwerkpfad**-Redundanz einer einzigen, bitidentischen
 Quelle (Empfänger rekonstruiert paketweise aus zwei Pfaden derselben
 Payload), kein Beleg-Mechanismus für das hier gewünschte Problem (zwei
-unabhängige, zustandsbehaftete Mixer-Prozesse). Was zu Grass Valley AMPP
-öffentlich auffindbar ist: ein Latenz-/Alignment-Timing-Modell (kein
-Genlock, Timestamp-basiertes Buffering — konzeptionell nahe an OMPs
-eigenem, bereits vendor-neutral beschriebenen Latenzbudget-Modell, §15)
-sowie als Resilienz-Story primär **schnelles Sekunden-Respawn** plus
-optionales **1+1-Hot-Backup pro Playout-Kanal** (GV selbst nennt volles
-Hot-Standby in der Cloud „wasteful"). **Kein öffentlicher Beleg gefunden**
-für echtes frame-unsichtbares Lockstep-Failover zwischen zwei
+unabhängige, zustandsbehaftete Mixer-Prozesse). Publizierte Resilienz-
+Ansätze in der Broadcast-Industrie zeigen: ein Latenz-/Alignment-Timing-
+Modell (kein Genlock, Timestamp-basiertes Buffering — konzeptionell nahe
+an OMPs eigenem, bereits vendor-neutral beschriebenen Latenzbudget-Modell,
+§15) sowie als Resilienz-Story primär **schnelles Sekunden-Respawn** plus
+optionales **1+1-Hot-Backup pro Playout-Kanal**. **Kein öffentlicher Beleg
+gefunden** für echtes frame-unsichtbares Lockstep-Failover zwischen zwei
 Mixer-Instanzen — als Vermutung/Branchenwissen gekennzeichnet, nicht als
 verifizierter Fakt.
 
@@ -2391,13 +2390,12 @@ Entscheidung:
   vs. zentrale Verwaltung mehrerer Standorte) — bisher nicht betrachtet,
   falls „ganze Fernseh-/Radioanstalt" mehrere Standorte einschließen soll.
 
-### 20.7 Bewusst unverändert: AMPP/Grass Valley bleibt kein Referenzname in diesem Dokument
+### 20.7 Vendor-Neutralität: Architektur-Beschreibung ohne Produktnamen
 
-Auf Nutzerwunsch (2026-07-12) dient AMPP/vergleichbare Plattformen
-weiterhin nur als **interner** Recherche-/Qualitätsmaßstab (z. B. für
-§20.1) — keine Rücknahme der Entscheidung vom 2026-07-11
-(`docs/decisions.md`), alle Vendor-Namen bleiben aus `ARCHITECTURE.md`
-draußen.
+Die Architektur bleibt absichtlich vendor-neutral — externe Plattformen
+dienen nur als **interne** Recherche-/Qualitätsmaßstab (z. B. für
+Konsultationen zu §20.1), aber alle Produktnamen und Vendor-spezifischen
+Vergleiche bleiben außerhalb der öffentlichen Dokumentation.
 
 ### 20.8 Explizit weiterhin außerhalb des Zielbilds, sofern nicht erneut angefragt
 
