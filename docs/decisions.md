@@ -11763,3 +11763,77 @@ statt sie neu anzulegen (näher an der Ursache, aber ohne Kenntnis, warum
 umsetzbar ohne weitere Untersuchung). Workaround für den Nutzer bis
 dahin: nach einem `keyer.setSource`-Wechsel den betroffenen
 `omp-viewer` neu starten (frischer `MxlContext`), nicht nur neu laden.
+
+## 2026-07-22 (Nachtrag 79) — Echter Root Cause des `keyer.setSource`-
+Freezes gefunden und behoben: Instance-interner, referenzgezählter
+Reader-Cache im vendorten MXL-C++
+
+Direkte Fortsetzung von Nachtrag 78. Nutzerwunsch, `gdb` in dieser
+Sandbox lauffähig zu machen (`echo 0 | sudo tee /proc/sys/kernel/yama/
+ptrace_scope`) — der sysctl-Schreibversuch selbst schlug fehl
+(`Permission denied`, auch als root; die Datei gehört `nobody:nogroup`,
+vermutlich vom Container-Runtime virtualisiert/blockiert), **aber**
+`sudo gdb -p <pid>` funktioniert direkt (root umgeht die Yama-Beschränkung
+über `CAP_SYS_PTRACE`, unabhängig vom sysctl-Wert) — erfolgreich an PID 1
+getestet.
+
+Wichtiger, für die eigentliche Diagnose entscheidender Nebenfund dabei:
+der vendorte MXL-Quellcode liegt tatsächlich lokal vor
+(`third_party/mxl/rust/mxl/src/*.rs` für den Rust-Wrapper,
+`third_party/mxl/lib/internal/src/*.cpp` für die C++-Implementierung) —
+nur `.gitignore`'t, nicht fehlend. Damit ließ sich der echte Root Cause
+per Quellcode-Lektüre finden, **ohne** dass `gdb` überhaupt noch nötig
+war:
+
+`third_party/mxl/lib/internal/src/Instance.cpp`,
+`Instance::getFlowReader(flowId)` (Zeile ~121-140): die `Instance` hält
+eine nach `flowId` schlüsselnde, **referenzgezählte** Reader-Map
+(`_readers`). Existiert für eine `flowId` bereits ein Eintrag, liefert
+`getFlowReader` genau **diesen** zurück (`v.addReference()`) — der
+`else`-Zweig mit einem echten `_flowManager.openFlow(...)` (tatsächliches
+Neuöffnen der Dateien) läuft **nur**, wenn für diese `flowId` aktuell kein
+Eintrag existiert (Referenzzähler zuvor auf null gefallen,
+`Instance::releaseReader`, ausgelöst durch `GrainReader::drop()` →
+`release_flow_reader`).
+
+Der `FLOW_INVALID`-Wiedereröffnungs-Code in `read_loop`/`read_audio_loop`
+rief `context.instance.create_flow_reader(flow_id)` bisher auf, **während
+der alte, längst ungültige Reader noch lebte** (Rust wertet bei
+`grain_reader = new_reader` erst die rechte Seite aus und droppt die
+alte erst danach) — der Referenzzähler für diese `flowId` stand also nie
+bei null, `create_flow_reader` lieferte deshalb **garantiert immer** den
+identischen, längst auf gelöschte Dateien zeigenden alten Reader zurück,
+egal wie oft aufgerufen — ein sich selbst nie auflösender Zirkelbezug.
+Erklärt rückwirkend vollständig auch, warum die `SetInputs`-Rebuilds
+(Nachtrag 64) davon nicht betroffen waren: dort werden die Flow-Dateien
+selbst offenbar wiederverwendet (kein `unlink`+`create`), sodass der
+alte, gecachte Reader-Deskriptor zufällig weiterhin auf gültige Daten
+zeigte — reines Glück, keine echte Wiedereröffnung.
+
+**Fix:** `grain_reader`/`samples_reader` in `read_loop`/`read_audio_loop`
+von einem nackten Wert auf `Option<GrainReader>`/`Option<SamplesReader>`
+umgestellt. Im `FLOW_INVALID`-Zweig wird der alte Reader jetzt **zuerst**
+per `drop(grain_reader.take())` explizit fallengelassen (löst
+`GrainReader::drop()` → `release_flow_reader()` → `Instance::
+releaseReader()` aus, Referenzzähler fällt auf null, Cache-Eintrag wird
+entfernt) — **danach erst** wird `create_flow_reader` in einer kleinen
+Retry-Schleife (200ms Backoff bei Fehlschlag, wie schon zuvor) erneut
+aufgerufen, jetzt garantiert im `else`-Zweig von `getFlowReader`, also
+mit einem echten frischen Datei-Handle.
+
+**Live verifiziert, exakter Nutzer-Repro:** frischer Mixer+OGraf+Viewer-
+Aufbau, `keyer.setSource` (OGraf Fill) gefolgt von `keyer.setEnabled`
+(genau die vom Nutzer gemeldete Schrittfolge) — 45 Sekunden durchgehend
+synchron laufende Read-/Write-Zeiten in `mxl-info` (vorher: sofortiger,
+dauerhafter Freeze), ein echter MJPEG-Frame-Abruf lieferte 39 Frames in
+8 Sekunden (~5fps wie erwartet). Zusätzlicher Stresstest: 6× hintereinander
+`setEnabled`+`setSource("")`+`setSource(OGraf)` (18 Rebuild-Auslöser in
+Folge, je 1s Abstand) — Read-/Write-Zeiten blieben synchron, keine
+Regression. `cargo build --workspace --bins`, `cargo test -p omp-mediaio
+--features mxl` (8/8), `cargo clippy -p omp-mediaio --all-targets
+--features mxl` (eine vorbestehende, unabhängige Testcode-Lint-Warnung
+außerhalb der geänderten Zeilen, bestätigt per `git stash`-Gegenprobe)
+grün.
+
+Damit ist der in Nachtrag 78 als "künftige Sitzung" vertagte Fall jetzt
+tatsächlich behoben — kein Workaround (Viewer-Neustart) mehr nötig.

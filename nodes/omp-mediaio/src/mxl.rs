@@ -987,7 +987,7 @@ impl MxlVideoInput {
 
 fn read_loop(
     context: &Arc<MxlContext>,
-    mut grain_reader: mxl::GrainReader,
+    grain_reader: mxl::GrainReader,
     flow_id: &str,
     grain_rate: &mxl_sys::Rational,
     app_src: &gst_app::AppSrc,
@@ -996,8 +996,11 @@ fn read_loop(
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
+    // `Option`, nicht der nackte `GrainReader` (s. `FLOW_INVALID`-Zweig
+    // unten für den Grund) — außerhalb dieses einen Zweigs immer `Some`.
+    let mut grain_reader = Some(grain_reader);
     while running.load(Ordering::Relaxed) {
-        match grain_reader.get_grain_non_blocking(index) {
+        match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
                 // Ursprungs-Zeitstempel als Referenz-Meta anhängen
@@ -1106,60 +1109,54 @@ fn read_loop(
             // auf den aktuellen Head springen lassen, statt für immer zu
             // spinnen.
             Err(mxl::Error::Unknown(status)) if status == mxl_sys::MXL_ERR_FLOW_INVALID => {
-                match context
-                    .instance
-                    .create_flow_reader(flow_id)
-                    .and_then(|r| r.to_grain_reader())
-                {
-                    Ok(new_reader) => {
-                        // Live gefundener zweiter Busy-Loop derselben
-                        // Fehlerklasse wie der `OutOfRangeTooLate`-Fix oben
-                        // (Nutzerreport "Viewer freezt nach OGraf als
-                        // DSK-Quelle wählen + DSK aktivieren" —
-                        // `keyer.setSource` löst einen vollen Mixer-
-                        // Pipeline-Rebuild aus, exakt der oben beschriebene
-                        // FLOW_INVALID-Auslöser). Backoff verhindert hier
-                        // nachweislich den 100%-CPU-Spin (per `mxl-info`+
-                        // `/proc/<pid>/task/*/stat`+`wchan`, identische
-                        // Diagnosemethode wie beim TooLate-Fund) —
-                        // **behebt aber NICHT das Einfrieren selbst** in
-                        // diesem konkreten Fall: per
-                        // `/proc/<pid>/fd` bestätigt hält der Reader nach
-                        // dem Reopen ausschließlich Deskriptoren auf
-                        // `(deleted)`-Dateien (`.../grains/data.N`,
-                        // `.../access`) — der Schreiber legt beim
-                        // `keyer.setSource`-Rebuild die Flow-Dateien
-                        // offenbar komplett neu an (unlink+create), statt
-                        // sie wiederzuverwenden (anders als die
-                        // `SetInputs`-Rebuilds, für die dieser
-                        // Wiedereröffnungsmechanismus ursprünglich gebaut
-                        // wurde und dort auch nachweislich funktioniert,
-                        // Nachtrag 64). `create_flow_reader()` liefert
-                        // danach dauerhaft wieder `FLOW_INVALID`, beliebig
-                        // oft wiederholt (>18000 Versuche über >90s in
-                        // dieser Sitzung beobachtet) — vermutlich, weil er
-                        // intern über eine bereits im `MxlContext`
-                        // gecachte, jetzt verwaiste Referenz auflöst statt
-                        // eines echten Neu-`open()` über den Pfad; nicht
-                        // bis in die vendorte MXL-C++-Bibliothek
-                        // zurückverfolgt (kein Quellzugriff/`gdb` in dieser
-                        // Sandbox, `ptrace: Operation not permitted`).
-                        // Dieser Backoff bleibt trotzdem sinnvoll (echte,
-                        // unabhängig verifizierte CPU-Entlastung), löst das
-                        // zugrundeliegende Problem aber nicht — künftige
-                        // Sitzung: entweder den ganzen `MxlContext` statt
-                        // nur den Reader neu aufbauen, oder den Mixer so
-                        // ändern, dass ein Rebuild die Flow-Dateien
-                        // wiederverwendet statt neu anzulegen.
-                        grain_reader = new_reader;
-                        index = context.instance.get_current_index(grain_rate);
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
-                        );
-                        thread::sleep(Duration::from_millis(200));
+                // Echter Root Cause gefunden (Nutzerreport "Viewer freezt
+                // nach OGraf als DSK-Quelle wählen + DSK aktivieren" —
+                // `keyer.setSource` löst einen vollen Mixer-Pipeline-
+                // Rebuild aus, der die Flow-Dateien komplett neu anlegt,
+                // unlink+create, statt sie wiederzuverwenden wie beim
+                // `SetInputs`-Fall aus Nachtrag 64). Im vendorten C++
+                // (`third_party/mxl/lib/internal/src/Instance.cpp`,
+                // `Instance::getFlowReader`) hält die `Instance` einen
+                // nach `flowId` schlüsselten, referenzgezählten Reader-
+                // Cache: existiert für diese `flowId` bereits ein Eintrag,
+                // liefert `getFlowReader` genau DIESEN (nur `addReference`)
+                // zurück, statt echt neu zu öffnen — der `else`-Zweig mit
+                // `_flowManager.openFlow(...)` läuft nur, wenn der Zähler
+                // für diese Flow-ID bei null steht. Rief dieser Zweig
+                // vorher `create_flow_reader` auf, WÄHREND der alte
+                // `grain_reader` noch lebte (Rust droppt den alten Wert
+                // einer Zuweisung erst NACH Auswertung der rechten Seite),
+                // bekam er unweigerlich denselben, längst auf gelöschte
+                // Dateien zeigenden Reader zurück (per `/proc/<pid>/fd`
+                // bestätigt: ausschließlich `(deleted)`-Deskriptoren,
+                // >18.000 Versuche über >90s ohne eine einzige erfolgreiche
+                // Lesung) — ein sich selbst nie auflösender Zirkelbezug,
+                // da die Referenzzahl für diese Flow-ID nie auf null fiel.
+                // Fix: den alten Reader (`GrainReader::drop` ruft im
+                // vendorten C++ `release_flow_reader`/`Instance::
+                // releaseReader` auf, das den Zähler erst bei diesem
+                // Aufruf dekrementiert) explizit VOR dem nächsten
+                // `create_flow_reader`-Aufruf fallenlassen, nicht erst bei
+                // der Zuweisung danach — dafür ist `grain_reader` jetzt
+                // `Option<GrainReader>`, `None` genau in diesem Fenster.
+                drop(grain_reader.take());
+                loop {
+                    match context
+                        .instance
+                        .create_flow_reader(flow_id)
+                        .and_then(|r| r.to_grain_reader())
+                    {
+                        Ok(new_reader) => {
+                            grain_reader = Some(new_reader);
+                            index = context.instance.get_current_index(grain_rate);
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
+                            );
+                            thread::sleep(Duration::from_millis(200));
+                        }
                     }
                 }
             }
@@ -1442,7 +1439,7 @@ fn interleave_samples(data: &mxl::SamplesData<'_>) -> Vec<u8> {
 #[allow(clippy::too_many_arguments)]
 fn read_audio_loop(
     context: &Arc<MxlContext>,
-    mut samples_reader: mxl::SamplesReader,
+    samples_reader: mxl::SamplesReader,
     flow_id: &str,
     sample_rate: &mxl_sys::Rational,
     batch_size: u64,
@@ -1452,8 +1449,11 @@ fn read_audio_loop(
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(sample_rate);
+    // `Option`, gleicher Grund wie in `read_loop` (s. dortiger
+    // `FLOW_INVALID`-Zweig) — außerhalb dieses einen Zweigs immer `Some`.
+    let mut samples_reader = Some(samples_reader);
     while running.load(Ordering::Relaxed) {
-        match samples_reader.get_samples_non_blocking(index, batch_size as usize) {
+        match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
                 let mut buffer = gst::Buffer::from_slice(interleave_samples(&data));
                 // Ursprungs-Zeitstempel des Batch-Starts als Referenz-Meta
@@ -1503,23 +1503,31 @@ fn read_audio_loop(
             // dieselbe Flow-ID neu oeffnen statt fuer immer denselben,
             // ungueltig gewordenen Index zu wiederholen.
             Err(mxl::Error::Unknown(status)) if status == mxl_sys::MXL_ERR_FLOW_INVALID => {
-                match context
-                    .instance
-                    .create_flow_reader(flow_id)
-                    .and_then(|r| r.to_samples_reader())
-                {
-                    Ok(new_reader) => {
-                        // Backoff wie beim video-seitigen FLOW_INVALID-Fund
-                        // in read_loop oben (gleicher Bug, gleicher Fix).
-                        samples_reader = new_reader;
-                        index = context.instance.get_current_index(sample_rate);
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
-                        );
-                        thread::sleep(Duration::from_millis(200));
+                // Echter Root Cause: s. `read_loop`s ausführliche Doku am
+                // gleichnamigen Zweig — der alte Reader muss VOR dem
+                // nächsten `create_flow_reader`-Aufruf fallengelassen
+                // werden, sonst liefert der Instance-interne, nach
+                // `flowId` referenzgezählte Reader-Cache im vendorten C++
+                // (`Instance::getFlowReader`) auf ewig denselben, längst
+                // auf gelöschte Dateien zeigenden Reader zurück.
+                drop(samples_reader.take());
+                loop {
+                    match context
+                        .instance
+                        .create_flow_reader(flow_id)
+                        .and_then(|r| r.to_samples_reader())
+                    {
+                        Ok(new_reader) => {
+                            samples_reader = Some(new_reader);
+                            index = context.instance.get_current_index(sample_rate);
+                            break;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "omp-mediaio(mxl): reopen after FLOW_INVALID failed: {e} — retrying"
+                            );
+                            thread::sleep(Duration::from_millis(200));
+                        }
                     }
                 }
             }
