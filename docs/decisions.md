@@ -11709,3 +11709,57 @@ verwechselt werden konnte, bis ein sauberer Neustart ihn auflöste.
 `cargo test -p omp-mediaio --features mxl` (8/8), `cargo build --workspace
 --bins`, `cargo clippy -p omp-mediaio --all-targets --features mxl`
 (sauber) grün.
+
+**Ergänzung (gleiche Sitzung) — zweiter, tieferer Fund: derselbe
+Busy-Loop-Fehlerklasse im `FLOW_INVALID`-Wiedereröffnungs-Zweig, UND ein
+Fall, den der Backoff allein nicht heilt.** Nutzer meldete den Freeze
+erneut, präzisiert: "ich habe nur ograf am dsk ausgewählt und dsk ein
+gemacht" — also `keyer.setSource` (löst einen vollen Mixer-Pipeline-
+Rebuild aus) statt nur `keyer.setEnabled`. Gleiche Diagnosemethode
+(`mxl-info`, `/proc/<pid>/task/*/stat`+`wchan`) zeigte erneut einen
+100%-CPU-Spin, diesmal im `Ok(new_reader)`-Zweig der `FLOW_INVALID`-
+Behandlung (ebenfalls ohne Backoff) — behoben mit demselben 5ms-Sleep,
+in `read_loop` UND `read_audio_loop`.
+
+**Aber:** nach diesem zweiten Fix blieb der Freeze bestehen, nur ohne
+CPU-Sättigung (Reader-Thread jetzt in `hrtimer_nanosleep`, nicht mehr
+spinnend). Temporäre, rate-limitierte `eprintln!`-Instrumentierung
+(`TEMPDEBUG2`, wieder entfernt) in `read_loop`s zentraler `match`
+zeigte: der Reader hängt nach dem `keyer.setSource`-Rebuild dauerhaft in
+`Err(Unknown(11))` (= `MXL_ERR_FLOW_INVALID`) fest — über 18.000
+Wiedereröffnungsversuche (>90s bei 5ms Backoff) ohne eine einzige
+erfolgreiche Grain-Lesung. `index` wanderte dabei korrekt mit der realen
+Zeit mit (`get_current_index()` funktioniert), nur `get_grain_non_
+blocking(index)` scheiterte danach immer wieder sofort erneut.
+
+Smoking Gun per `/proc/<pid>/fd` (kein `gdb` nötig): der hängende Reader
+hielt ausschließlich Deskriptoren auf **`(deleted)`**-Dateien
+(`.../grains/data.0`-`.4`, `.../access`) — der Schreiber (Mixer) legt die
+Flow-Dateien beim `keyer.setSource`-Rebuild komplett neu an (unlink +
+create), statt sie wiederzuverwenden, trotz des dokumentierten
+Verhaltens "MXL erkennt einen bereits existierenden Flow und öffnet ihn
+erneut" (das für den `SetInputs`-Fall, Nachtrag 64, nachweislich
+zutrifft). Ein unabhängiger, frischer Reader (`mxl-info` selbst) las
+denselben Flow zur selben Zeit ohne Probleme (`Active: true`, gesunde
+Struktur) — das Problem sitzt also nicht im Flow selbst, sondern
+vermutlich darin, dass `create_flow_reader()` innerhalb desselben,
+bereits einmal initialisierten `MxlContext` intern über eine gecachte,
+jetzt verwaiste Referenz auflöst statt eines echten pfadbasierten
+Neu-`open()` — nicht bis in die vendorte MXL-C++-Bibliothek
+zurückverfolgt (kein Quellzugriff/`gdb` in dieser Sandbox möglich,
+`ptrace: Operation not permitted`).
+
+**Ehrlicher Stand:** der zweite Backoff-Fix ist trotzdem korrekt und
+bleibt (verhindert echte, unabhängig verifizierte CPU-Sättigung/
+Ressourcen-Erschöpfung), löst aber **nicht** das eigentliche Einfrieren
+bei einem `keyer.setSource`-Rebuild — das bleibt ein offener Bug.
+Mögliche Ansätze für eine künftige Sitzung: (a) bei `FLOW_INVALID` den
+ganzen `MxlContext` statt nur den `GrainReader`/`SamplesReader` neu
+aufbauen (deutlich teurer, aber ggf. der einzige Weg, die vermutete
+gecachte Referenz loszuwerden), oder (b) den Mixer so ändern, dass ein
+`keyer.setSource`-Rebuild die bestehenden Flow-Dateien wiederverwendet
+statt sie neu anzulegen (näher an der Ursache, aber ohne Kenntnis, warum
+`SetInputs` das schon richtig macht und dieser Pfad nicht, aktuell nicht
+umsetzbar ohne weitere Untersuchung). Workaround für den Nutzer bis
+dahin: nach einem `keyer.setSource`-Wechsel den betroffenen
+`omp-viewer` neu starten (frischer `MxlContext`), nicht nur neu laden.

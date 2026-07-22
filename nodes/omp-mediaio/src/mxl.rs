@@ -1112,8 +1112,48 @@ fn read_loop(
                     .and_then(|r| r.to_grain_reader())
                 {
                     Ok(new_reader) => {
+                        // Live gefundener zweiter Busy-Loop derselben
+                        // Fehlerklasse wie der `OutOfRangeTooLate`-Fix oben
+                        // (Nutzerreport "Viewer freezt nach OGraf als
+                        // DSK-Quelle wählen + DSK aktivieren" —
+                        // `keyer.setSource` löst einen vollen Mixer-
+                        // Pipeline-Rebuild aus, exakt der oben beschriebene
+                        // FLOW_INVALID-Auslöser). Backoff verhindert hier
+                        // nachweislich den 100%-CPU-Spin (per `mxl-info`+
+                        // `/proc/<pid>/task/*/stat`+`wchan`, identische
+                        // Diagnosemethode wie beim TooLate-Fund) —
+                        // **behebt aber NICHT das Einfrieren selbst** in
+                        // diesem konkreten Fall: per
+                        // `/proc/<pid>/fd` bestätigt hält der Reader nach
+                        // dem Reopen ausschließlich Deskriptoren auf
+                        // `(deleted)`-Dateien (`.../grains/data.N`,
+                        // `.../access`) — der Schreiber legt beim
+                        // `keyer.setSource`-Rebuild die Flow-Dateien
+                        // offenbar komplett neu an (unlink+create), statt
+                        // sie wiederzuverwenden (anders als die
+                        // `SetInputs`-Rebuilds, für die dieser
+                        // Wiedereröffnungsmechanismus ursprünglich gebaut
+                        // wurde und dort auch nachweislich funktioniert,
+                        // Nachtrag 64). `create_flow_reader()` liefert
+                        // danach dauerhaft wieder `FLOW_INVALID`, beliebig
+                        // oft wiederholt (>18000 Versuche über >90s in
+                        // dieser Sitzung beobachtet) — vermutlich, weil er
+                        // intern über eine bereits im `MxlContext`
+                        // gecachte, jetzt verwaiste Referenz auflöst statt
+                        // eines echten Neu-`open()` über den Pfad; nicht
+                        // bis in die vendorte MXL-C++-Bibliothek
+                        // zurückverfolgt (kein Quellzugriff/`gdb` in dieser
+                        // Sandbox, `ptrace: Operation not permitted`).
+                        // Dieser Backoff bleibt trotzdem sinnvoll (echte,
+                        // unabhängig verifizierte CPU-Entlastung), löst das
+                        // zugrundeliegende Problem aber nicht — künftige
+                        // Sitzung: entweder den ganzen `MxlContext` statt
+                        // nur den Reader neu aufbauen, oder den Mixer so
+                        // ändern, dass ein Rebuild die Flow-Dateien
+                        // wiederverwendet statt neu anzulegen.
                         grain_reader = new_reader;
                         index = context.instance.get_current_index(grain_rate);
+                        thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
                         eprintln!(
@@ -1469,8 +1509,11 @@ fn read_audio_loop(
                     .and_then(|r| r.to_samples_reader())
                 {
                     Ok(new_reader) => {
+                        // Backoff wie beim video-seitigen FLOW_INVALID-Fund
+                        // in read_loop oben (gleicher Bug, gleicher Fix).
                         samples_reader = new_reader;
                         index = context.instance.get_current_index(sample_rate);
+                        thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
                         eprintln!(
