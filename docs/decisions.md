@@ -12377,3 +12377,86 @@ omp-node-sdk --all-targets`, `cargo test -p omp-player`, `cargo deny
 check` — alle grün. `node --check` für beide UI-Bundle-Varianten
 (Video/Jingle) grün. Test-Workflows/-Instanzen danach sauber
 gestoppt/gelöscht, keine Restinstanzen.
+
+## 2026-07-22 (Nachtrag 88) — Realer Bug gefunden+behoben: UI-Bundle
+404 für jeden echt authentifizierten Operator; ein zweiter,
+dokumentierter (nicht behobener) Launcher-Neustart-Race
+
+**Anlass:** Nutzeranfrage "zeig mir zum test ein vollstäbdiges playout
+mit ui für operator1" — ein reiner Verifikationsschritt (kein neuer
+UMSETZUNG.md-Punkt), bei dem ein durchgängiges Playout live über die
+echte Browser-UI als `operator1` (nicht `admin`) gezeigt werden sollte.
+
+**Bug 1 (real, betraf alle 8 Nodes mit eigenem UI-Bundle):** Jede
+einzelne Konsolen-Kachel von `operator1` zeigte
+`UI-Bundle für "<Label>" konnte nicht geladen werden.` — trotz
+korrektem Login und funktionierendem Backend (direkt per curl mit
+demselben Bearer-Token verifiziert: `GET .../ui/manifest.json` und
+`.../ui/bundle.js` beide 200). Root Cause: `ui-bundle.ts` lädt das
+Node-Bundle per nativem `import()` (der Browser-Modul-Lader trägt
+keinen `Authorization`-Header, ein bereits in `ui-bundle.ts` selbst
+dokumentierter, älterer Fund) und hängt das Token deshalb als
+`?access_token=<jwt>` an die URL an; der Orchestrator-Proxy
+(`proxy.go::handleNodeProxy`) reicht den kompletten Query-String
+unverändert an den Node durch. Jeder der 8 `uibundle.rs`-Dateien
+(`omp-audio-mixer`, `omp-playout-automation`, `omp-switcher`,
+`omp-media-library`, `omp-ograf`, `omp-player`, `omp-viewer`,
+`omp-video-mixer-me`) matcht den Pfad aber mit einem exakten
+`match path { "/ui/bundle.js" => ... }` — mit angehängter Query
+matcht das nie, der Node selbst liefert 404 (`"not found"`), der
+Orchestrator reicht das transparent durch. Das erklärt vermutlich auch
+den nicht reproduzierten C21-Live-Verifikationsschritt aus Nachtrag 87
+teilweise nicht (der lief über curl/API, nicht über den Browser) —
+dieser Bug trifft ausschließlich den echten Browser-Importpfad und war
+bisher nie mit einem echten, nicht-Bootstrap-Nutzer im Browser getestet
+worden. Jeder Operator, der sich nach der Einführung von § D3 Teil 2
+(echte Auth) einloggt, war betroffen — nur der Bootstrap-Zustand (kein
+Nutzer angelegt) oder der Engineering-Flow-Editor mit `fetch()` statt
+`import()` blieben unbemerkt funktionsfähig.
+
+**Fix:** in jeder der 8 `uibundle.rs`-Dateien ein Query-String-Schnitt
+vor dem `match` (`path.split('?').next().unwrap_or(path)`) — bewusst
+lokal in jeder Datei statt zentral in `omp-node-sdk::server::route()`,
+weil dort der volle `url`-String samt Query unverändert an
+`extra_route` weitergereicht werden muss (C20s
+`GET /timeline/window?fromIndex=&count=` braucht die Query selbst).
+Regressionstest in `omp-video-mixer-me/src/uibundle.rs` (stellvertretend
+für alle acht identischen Stellen). `cargo test --workspace` (mit
+`mxl.env` für `omp-mediaio`) grün.
+
+**Bug 2 (real, gefunden, NICHT behoben — nur dokumentiert):** um den
+obigen Fix in einer laufenden Demo-Umgebung zu verteilen, wurden 5
+Node-Prozesse gleichzeitig per `SIGTERM` beendet (Launcher-Auto-Restart
+sollte sie mit dem neu gebauten Binary neu starten). Alle 5 kamen mit
+neuer PID + neuer NMOS-Node-ID sauber wieder hoch (`restartCount: 1`),
+aber `workflows.Service.rewireAfterRestart` (K7-Teil-1,
+`InstanceRestarted`-Callback) aktualisierte `wf.Runtime[role].NodeID`
+danach nur für **eine** der fünf Rollen (`audio`) — die übrigen vier
+(`automation`, `mixer`, `player`, `viewer`) blieben dauerhaft auf der
+alten, nach Heartbeat-Timeout verschwundenen Node-ID stehen (sichtbar
+u. a. daran, dass `GET /api/v1/me/consoles` für diese vier Rollen
+komplett verschwand — `consoles.Resolver.Resolve` verwirft eine Rolle
+klanglos, wenn `WorkflowRoleFinder.FindRoleForNode` für die aktuelle
+Node-ID nichts mehr findet). `registrationTimeout` ist mit 20s
+großzügig bemessen, das Verhalten deutet eher auf eine Nebenläufigkeits-
+Eigenheit hin, wenn mehrere `rewireAfterRestart`-Goroutinen gleichzeitig
+laufen (z. B. gemeinsam genutzter, nicht ausreichend oft aktualisierter
+`s.nodes`-Snapshot), als auf ein einfaches Timing-Problem. Nicht
+root-caused — Werkzeug für einen künftigen Repro: mehrere Instanzen
+eines laufenden Workflows in einem engen Zeitfenster per `SIGTERM`
+gleichzeitig beenden und danach `GET /api/v1/workflows/<id>` sowie
+`GET /api/v1/me/consoles` beobachten. Umgangen (nicht behoben) durch
+einen sauberen Stop()+Start() des betroffenen Workflows, dessen
+`awaitRegistration` alle Rollen in einer einzigen, nicht-nebenläufigen
+Schleife auflöst.
+
+**Ergebnis live verifiziert:** frischer Workflow-Start, Playlist neu
+geladen (`Opener SMPTE`/`Ball Loop`), Crosspoint PGM/Viewer neu
+verkabelt, per echtem CDP-Browser-Login als `operator1` bestätigt: alle
+6 Konsolen-Kacheln laden (die von `omp-source` erwartet mit dem
+generischen "kein Bundle"-Hinweis, da dieser Node nie eines hatte),
+Audiomixer-/Automations-/Mixer-Panels vollständig interaktiv, Playout-
+Automation advancet die Playlist selbstständig über die Zeit, und der
+Viewer zeigt den echten, laufenden PGM-Frame (`videotestsrc
+pattern=ball`, per `naturalWidth`/`naturalHeight` UND visuell
+bestätigt) — kein API-Mock, echter Bild-Fluss durch die volle Kette.

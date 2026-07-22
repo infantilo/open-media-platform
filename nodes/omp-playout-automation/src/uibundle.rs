@@ -11,6 +11,10 @@ pub fn route(method: &str, path: &str) -> Option<RawResponse> {
     if method != "GET" {
         return None;
     }
+    // s. omp-audio-mixer/src/uibundle.rs für die Herleitung: der Orchestrator
+    // hängt `?access_token=` an, dieser Schnitt macht den exakten Pfad-
+    // vergleich unten davon unabhängig.
+    let path = path.split('?').next().unwrap_or(path);
     match path {
         "/ui/manifest.json" => Some(RawResponse {
             status: 200,

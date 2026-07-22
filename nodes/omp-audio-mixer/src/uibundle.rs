@@ -13,6 +13,13 @@ pub fn route(method: &str, path: &str) -> Option<RawResponse> {
     if method != "GET" {
         return None;
     }
+    // Der Orchestrator hängt bei UI-Bundle-Aufrufen aus dem Browser
+    // `?access_token=` an (`ui-bundle.ts`, natives `import()` kann keinen
+    // Authorization-Header setzen) und reicht die Query unverändert an
+    // den Node durch (`proxy.go::handleNodeProxy`) — ohne diesen Schnitt
+    // matcht der exakte Pfadvergleich unten nie, jeder authentifizierte
+    // Bundle-Import bekam bisher fälschlich 404 vom Node selbst.
+    let path = path.split('?').next().unwrap_or(path);
     match path {
         "/ui/manifest.json" => Some(RawResponse {
             status: 200,
