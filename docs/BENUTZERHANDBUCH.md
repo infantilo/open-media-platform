@@ -137,7 +137,46 @@ lokal konfigurierten Katalog aus — der Orchestrator kann keinen
 beliebigen Befehl auf einem entfernten Host ausführen, das ist eine
 bewusste Sicherheitsgrenze.
 
-## 8. Weiterführende Dokumente
+## 8. Operator-Konsole (Regieplatz)
+
+Ein Nutzer ohne Konfigurationsrecht, aber mit `Bedienen`-Rechten auf
+mehrere Node-Rollen innerhalb eines Workflows (Abschnitt 6:
+Rollenbindungen), landet nach dem Anmelden nicht im Flow Editor, sondern
+direkt auf einer **Operator-Konsole** — einer reinen Bedienoberfläche
+ohne Graph, Katalog oder Verkabelungsmöglichkeit. Sind einem Nutzer
+mehrere Workflows zugewiesen, wählt er zunächst aus einer Kachel-Liste
+den gewünschten Regieplatz.
+
+Sobald einem Operator **mehr als eine** Rolle in einem Workflow zusteht,
+zeigt die Konsole alle zugewiesenen Node-Oberflächen gleichzeitig als
+frei verschieb- und skalierbare Kacheln (bei genau einer Rolle erscheint
+stattdessen deren Oberfläche vollflächig, ohne Kachel-Rahmen):
+
+![Operator-Konsole mit OGraf, Video Mixer M/E und Viewer](screenshots/operator-konsole.png)
+
+In diesem Beispiel sind einem Operator drei Rollen desselben Workflows
+zugewiesen:
+
+- **OGraf Grafik** (links) — Grafik-Vorlage auswählen, Formularfelder
+  befüllen, „▶ Ein"/„■ Aus" schaltet die Grafik auf Sendung (im
+  Screenshot bereits aktiv: „On Air: Hello Lower Third").
+- **Video Mixer M/E** (Mitte) — echtes Bildmischer-Bedienpult:
+  PGM-/PST-Kreuzschienen-Tasten (nach Workflow-Zugehörigkeit gruppiert,
+  sobald mehrere Workflows gemeinsam Quellen anbieten), CUT/AUTO für
+  harte bzw. weiche Umschaltung, DSK (Downstream-Keyer, hier aktiv/rot,
+  mit wählbarer Fill+Key-Quelle über das KEY-Dropdown) und PIP
+  (Bild-im-Bild).
+- **Viewer** (rechts) — zeigt das tatsächliche PGM-Ausgangsbild des
+  Mixers als Live-Vorschau; im Screenshot ist die soeben aufgeschaltete
+  OGraf-Grafik über dem Programmbild sichtbar.
+
+Jede Kachel besitzt eine Titelleiste zum Verschieben (Ziehen) und einen
+Anfasser unten rechts zum Skalieren. Position und Größe werden pro
+Regieplatz im Browser gespeichert und bleiben über einen Seiten-Reload
+hinweg erhalten — passend zu einem fest installierten Regieplatz-
+Bildschirm, an dem stets derselbe Browser läuft.
+
+## 9. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
   Troubleshooting, mTLS/Backup/Soak-Betrieb.
