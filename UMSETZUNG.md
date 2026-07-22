@@ -2097,7 +2097,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C17 | erledigt | [C17] omp-media-library: Datei-Katalog + ffprobe-Metadaten + Segmente | 2026-07-22 |
 | C18 | erledigt | [C18] Cart-/Interrupt-Assets in omp-playout-automation (inkl. last_live_item_id-Fix) | 2026-07-22 |
 | C19 | erledigt | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | 2026-07-22 |
-| C20 | offen | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | — |
+| C20 | erledigt | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | 2026-07-22 |
 | C21 | offen | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | — |
 | C22 | offen | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad | — |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |

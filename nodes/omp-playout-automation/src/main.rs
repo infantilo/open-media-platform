@@ -59,6 +59,7 @@
 
 mod playlist;
 mod remote;
+mod timeline;
 mod uibundle;
 
 use std::collections::HashMap;
@@ -73,6 +74,7 @@ use omp_node_sdk::{
 use playlist::{Mode, Playlist};
 use remote::{OrchestratorAuth, ProxyClient};
 use serde_json::Value;
+use timeline::TimelineCache;
 use tokio::sync::mpsc;
 
 const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
@@ -127,6 +129,11 @@ struct AutomationState {
     carts: Vec<(String, ItemMeta)>,
     next_cart_seq: u64,
     active_cart: Option<ActiveCart>,
+    /// C20 (`ARCHITECTURE.md` §24.5, `timeline.rs`): gefensterter,
+    /// inkrementeller Zeitplan-Cache für die Hauptplaylist — bewusst
+    /// nicht für Carts geführt (die laufen neben der Hauptplaylist,
+    /// haben keinen Platz in deren Zeitplan, s. `ActiveCart`-Doku).
+    timeline: TimelineCache,
 }
 
 /// Zustand eines gerade laufenden Cart-Interrupts (`ARCHITECTURE.md`
@@ -295,6 +302,9 @@ impl AutomationStore {
                 duration_ms,
             },
         );
+        // C20: kein state.timeline.invalidate_from() nötig — append()
+        // hängt immer ans Ende (Playlist::append-Doku), der Zeitplan-
+        // Cache bleibt für alle bestehenden Indizes gültig.
         Ok(())
     }
 
@@ -377,6 +387,9 @@ impl AutomationStore {
         // vorher gemerkte last_live_item_id könnte danach gar nicht mehr
         // existieren, s. Doku dort.
         state.last_live_item_id = None;
+        // C20: komplette Playlist ersetzt, Zeitplan-Cache ab Index 0
+        // ungültig.
+        state.timeline.invalidate_from(0);
         Ok(())
     }
 
@@ -398,6 +411,9 @@ impl AutomationStore {
 
         state.playlist.remove(index).map_err(|e| e.to_string())?;
         state.metadata.remove(item_id);
+        // C20: alles ab dem entfernten Index rückt eine Position vor,
+        // Zeitplan-Cache dort ungültig.
+        state.timeline.invalidate_from(index);
         Ok(())
     }
 
@@ -1021,7 +1037,69 @@ impl ParamStore for AutomationStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
+        if method == "GET"
+            && let Some(query) = path.strip_prefix("/timeline/window")
+        {
+            return Some(self.handle_timeline_window(query));
+        }
         uibundle::route(method, path)
+    }
+}
+
+impl AutomationStore {
+    /// `GET /timeline/window?fromIndex=<n>&count=<n>` (C20,
+    /// `ARCHITECTURE.md` §24.5) — bewusst als `extra_route` statt als
+    /// Methode/Parameter: eine generische Methode
+    /// (`POST /methods/<name>`) liefert im Node-Contract nur
+    /// `{"ok":true}` zurück, kein Datenergebnis (s.
+    /// `fetch_new_item_id`-Doku); ein Parameter (`GET /params/<name>`)
+    /// kennt keine Query-Argumente. Beide passen für "gefensterte
+    /// Anfrage mit zwei Zahlen-Argumenten, die Daten zurückliefert"
+    /// nicht — `extra_route` ist hier der etablierte Fallback
+    /// (`omp_node_sdk::ParamStore::extra_route`-Doku), gleiches Prinzip
+    /// wie `/state` bei `omp-video-mixer-me`. Korrigiert gegenüber der
+    /// ursprünglichen `ARCHITECTURE.md`-§24.5-Formulierung ("GET
+    /// methods/timeline.window"), die diesen Konflikt vor der
+    /// Umsetzung noch nicht berücksichtigt hatte, s.
+    /// `docs/decisions.md`.
+    fn handle_timeline_window(&self, query: &str) -> omp_node_sdk::RawResponse {
+        let query = query.strip_prefix('?').unwrap_or(query);
+        let mut from_index = 0usize;
+        let mut count = 50usize; // vernünftiger Default, falls die UI count weglässt
+        for pair in query.split('&') {
+            let Some((key, value)) = pair.split_once('=') else { continue };
+            match key {
+                "fromIndex" => from_index = value.parse().unwrap_or(0),
+                "count" => count = value.parse().unwrap_or(count),
+                _ => {}
+            }
+        }
+
+        let mut state = self.state.lock().expect("lock poisoned");
+        let item_ids: Vec<String> = state.playlist.items().to_vec();
+        let durations: Vec<u64> = item_ids
+            .iter()
+            .map(|id| state.metadata.get(id).map(|m| m.duration_ms).unwrap_or(0))
+            .collect();
+        let entries = state.timeline.window(&durations, from_index, count);
+
+        let body = serde_json::to_vec(
+            &entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "index": e.index,
+                        "itemId": item_ids[e.index],
+                        "startMs": e.start_ms,
+                        "durationMs": e.duration_ms,
+                        "endMs": e.end_ms,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default();
+
+        omp_node_sdk::RawResponse { status: 200, content_type: "application/json", body }
     }
 }
 
@@ -1231,6 +1309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         carts: Vec::new(),
         next_cart_seq: 0,
         active_cart: None,
+        timeline: TimelineCache::new(),
     });
     let store = Arc::new(AutomationStore {
         state,

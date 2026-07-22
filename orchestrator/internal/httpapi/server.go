@@ -211,6 +211,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// (lesen = requireAuth, schreiben = requireVerbOnNode VerbOperate).
 	mux.HandleFunc("GET /api/v1/nodes/{id}/plugins", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/plugins")))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/plugins/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/plugins/{name}")))
+	// Gefensterte Timeline-Anfrage (C20, ARCHITECTURE.md §24.5) — view-
+	// artig wie params/plugins GET, reine Registrierung, keine neue
+	// Proxy-Logik (Query-String-Weiterleitung in proxy.go ergänzt).
+	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))

@@ -12238,3 +12238,62 @@ dieselbe Kategorie Lücke. Nicht in dieser Sitzung angefasst (anderes
 Thema als C19), aber hier festgehalten, damit es nicht in Vergessenheit
 gerät, falls C16s Control-Enforcement-Prinzip irgendwann konsequent auf
 alle `PeerClient`-Konsumenten ausgedehnt werden soll.
+
+---
+
+## 2026-07-22 (Nachtrag 86) — C20 (Timeline) umgesetzt, Mechanismus- und
+Testbarkeits-Korrektur gegenüber der ursprünglichen §24.5-Formulierung
+
+**Umsetzung** (Details: `ARCHITECTURE.md` §24.5): neues Modul
+`timeline.rs` in `omp-playout-automation` — reine Logik wie
+`playlist.rs` (kennt weder HTTP noch `ItemMeta`, nimmt Dauern als
+`&[u64]` entgegen). `TimelineCache` hält einen Präfixsummen-Cache
+kumulierter Item-Startzeiten, der bei einer strukturellen Änderung nur
+ab dem betroffenen Index invalidiert wird; jede Anfrage ist gefenstert
+und berechnet höchstens bis zum Fensterende nach.
+
+**Zwei Korrekturen während der Umsetzung** (beide bewusst, nicht
+stillschweigend):
+
+1. **Mechanismus.** Die ursprüngliche §24.5-Formulierung ("GET
+   methods/timeline.window") hatte den Konflikt mit dem bestehenden
+   Node-Contract-Wire-Format nicht berücksichtigt: eine Methode
+   (`POST /methods/<name>`) liefert nur `{"ok":true}`, kein
+   Datenergebnis (s. `fetch_new_item_id`-Doku aus C14/C15); ein
+   Parameter kennt keine Query-Argumente. Umgesetzt stattdessen über
+   den bereits etablierten `extra_route`-Fallback
+   (`GET /timeline/window?fromIndex=&count=`, gleiches Prinzip wie
+   `/state` bei `omp-video-mixer-me`). Der Orchestrator-Proxy
+   (`handleNodeProxy`, `proxy.go`) reichte bislang keinen Query-String
+   durch — dafür minimal erweitert (Query-String anhängen, falls
+   vorhanden), rückwirkungsfrei für alle bestehenden Routen.
+2. **Testbarkeitszeile.** "Deutlich sub-linear zur Gesamtlänge" für
+   "Änderung an Item 3" war in der ursprünglichen Fassung zu
+   pauschal formuliert — wörtlich genommen bräuchte das einen
+   Fenwick-Tree/eine Order-Statistics-Struktur (Punkt-Update +
+   Präfixsumme in O(log n), auch für eine Anfrage weit hinten in der
+   Liste nach einer frühen Änderung). Bewusst nicht gebaut: unsere
+   Playlist ist rein sequenziell (keine Fixtimes/Gaps/Xfades wie
+   PIPELINE CONTROLLERs Original, s. `playlist.rs`-Moduldoku C14/C15),
+   die erwartete Größenordnung ist ein Rundown, keine Millionen-Item-
+   Skala. Die tatsächlich gebaute, präzisere Eigenschaft: die Kosten
+   nach einer Änderung sind an die Größe des **als Nächstes
+   angefragten Fensters** gebunden, nicht an die Gesamtlänge — exakt
+   nachgewiesen in `timeline::tests::
+   edit_near_start_of_500_items_does_not_trigger_full_recompute`.
+
+**Live verifiziert** (echte Dev-Umgebung, `omp-playout-automation` +
+`omp-player` über einen echten Workflow): 5 Items mit unterschiedlichen
+Dauern angehängt, volles und Teil-Fenster liefern korrekte kumulierte
+Start-/Endzeiten; `remove()` in der Mitte + anschließende Fenster-
+Anfrage liefert korrekt nachgerechnete Zeiten für die verschobenen
+Folge-Items; `append()` danach hängt korrekt ans Ende an (keine
+Invalidierung nötig, bestätigt live); Anfrage jenseits des Listenendes
+liefert `[]`; ohne Token `401`. `cargo test -p omp-playout-automation`
+(22 Tests, 8 neue reine Timeline-Tests), `cargo clippy`, `cargo deny
+check`, `go test ./...`, zwei neue Go-Proxy-Tests (Query-String-
+Weiterleitung + Route-Erreichbarkeit) — alle grün. UI-Bundle zeigt
+Start–Ende (mm:ss) pro Rundown-Zeile, fragt dafür ein Fenster in Größe
+der tatsächlich gerenderten Items an, kein "alles"-Full-Fetch — schließt
+damit den vom Nutzer erinnerten PIPELINE-CONTROLLER-Bug ("rendert zu
+weit in die Zukunft, wird langsam") strukturell, nicht nur punktuell.

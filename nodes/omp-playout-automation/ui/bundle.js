@@ -43,6 +43,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       .item.onair { border-color: #4caf50; background: #16281a; }
       .item.cued { border-color: #b8860b; background: #2a2210; }
       .item .label { flex: 1; }
+      .item .timeline-time { color: #888; font-variant-numeric: tabular-nums; min-width: 84px; }
       .item button { cursor: pointer; padding: 4px 8px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee; }
       .item button.cue-active { background: #b8860b; border-color: #d4a017; }
       p.empty { font-size: 12px; color: #888; }
@@ -241,6 +242,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const labelEl = document.createElement("span");
       labelEl.className = "label";
 
+      // C20 (ARCHITECTURE.md §24.5): Start-/Endzeit aus dem gefensterten
+      // Timeline-Endpunkt, separat vom Label-Text, damit ein Fetch-
+      // Fehlschlag (z. B. während eines Node-Neustarts) nur diese
+      // Anzeige leer lässt, nicht den ganzen Zeileninhalt ersetzt.
+      const timeEl = document.createElement("span");
+      timeEl.className = "timeline-time";
+
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
 
@@ -248,8 +256,31 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       removeBtn.textContent = "Entfernen";
       removeBtn.addEventListener("click", () => call("remove", { itemId: item.id }).then(poll));
 
-      el.append(labelEl, cueBtn, removeBtn);
-      return { el, labelEl, cueBtn, removeBtn };
+      el.append(timeEl, labelEl, cueBtn, removeBtn);
+      return { el, labelEl, timeEl, cueBtn, removeBtn };
+    };
+
+    // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
+    // rundown-lang, nicht tagelang — Stunden wären hier unnötiger Ballast).
+    const formatMs = (ms) => {
+      const totalSec = Math.floor(ms / 1000);
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    };
+
+    // Gefensterte Timeline-Anfrage (C20): nur so viele Einträge wie
+    // tatsächlich gerade gerendert werden (count = Item-Anzahl), nicht
+    // "alles" oder ein fest verdrahtetes Maximum — bei einer langen
+    // Playlist entspricht das genau dem PC-Antipattern-Fix aus §24.5
+    // (kein Full-Recompute für Items, die die UI gar nicht zeigt).
+    const getTimelineWindow = async (fromIndex, count) => {
+      if (count <= 0) return [];
+      const res = await fetch(
+        `/api/v1/nodes/${nodeId}/timeline/window?fromIndex=${fromIndex}&count=${count}`
+      );
+      if (!res.ok) return [];
+      return await res.json();
     };
 
     // assetId -> { el, labelEl, fireBtn, removeBtn }
@@ -326,7 +357,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (mode) modeSelect.value = mode;
       progressBar.style.width = durationMs > 0 ? `${Math.min(100, (100 * (playheadMs || 0)) / durationMs)}%` : "0%";
 
-      for (const item of items) {
+      // C20: nur so viele Einträge anfragen wie tatsächlich gerendert
+      // werden — das eigentliche Fenster.
+      const timeline = await getTimelineWindow(0, items.length);
+      const timeByIndex = new Map(timeline.map((e) => [e.index, e]));
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
         let refs = itemEls.get(item.id);
         if (!refs) {
           refs = createItemElement(item);
@@ -334,6 +371,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           list.append(refs.el);
         }
         refs.labelEl.textContent = `${item.label} (${item.pattern}, ${item.durationMs}ms)`;
+        const t = timeByIndex.get(i);
+        refs.timeEl.textContent = t ? `${formatMs(t.startMs)}–${formatMs(t.endMs)}` : "";
         const isOnair = item.id === currentItemId;
         const isCued = item.id === cuedItemId;
         refs.el.className = isOnair ? "item onair" : isCued ? "item cued" : "item";

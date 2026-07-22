@@ -702,6 +702,61 @@ func TestHandleNodeProxyPatchPlugin(t *testing.T) {
 	}
 }
 
+// C20 (ARCHITECTURE.md §24.5, UMSETZUNG.md C20): die Timeline-Window-
+// Route ist der erste Konsument, der einen Query-String an den Node
+// weiterreicht braucht — dieser Test belegt, dass handleNodeProxy ihn
+// tatsächlich durchreicht (proxy.go-Änderung), nicht nur die Route
+// selbst erreichbar ist.
+func TestHandleNodeProxyGetTimelineWindowForwardsQueryString(t *testing.T) {
+	var gotQuery string
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/timeline/window" {
+			t.Errorf("proxied request = %s %q, want GET /timeline/window", r.Method, r.URL.Path)
+		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"index":3,"itemId":"item4","startMs":3000,"durationMs":1000,"endMs":4000}]`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/timeline/window?fromIndex=3&count=10", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotQuery != "fromIndex=3&count=10" {
+		t.Fatalf("proxied query = %q, want %q", gotQuery, "fromIndex=3&count=10")
+	}
+	if !strings.Contains(rec.Body.String(), "item4") {
+		t.Fatalf("body = %q, want to contain proxied timeline entry", rec.Body.String())
+	}
+}
+
+func TestHandleNodeProxyWithoutQueryStringUnaffected(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			t.Errorf("proxied query = %q, want empty (no query on the incoming request)", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"value":1}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/params/gain", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
 func TestHandleNodeProxyUnknownNodeReturns404(t *testing.T) {
 	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
 

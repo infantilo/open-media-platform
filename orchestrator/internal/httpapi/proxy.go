@@ -37,7 +37,19 @@ func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string)
 			path = strings.ReplaceAll(path, "{name}", name)
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), r.Method, node.APIBaseURL+path, r.Body)
+		target := node.APIBaseURL + path
+		// Query-String durchreichen (C20, ARCHITECTURE.md §24.5): der
+		// erste Konsument ist omp-playout-automations gefensterte
+		// Timeline-Anfrage (`GET .../timeline/window?fromIndex=&count=`,
+		// ein extra_route mit Zahlen-Argumenten — weder ein Parameter
+		// noch eine Methode passt dafür, s. dortige Doku). Bisherige
+		// Routen (params/methods/plugins/ui/descriptor) schicken nie
+		// eine Query, dieses Anhängen ändert für sie nichts.
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
 		if err != nil {
 			http.Error(w, "failed to build proxy request", http.StatusInternalServerError)
 			return
