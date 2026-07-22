@@ -2095,7 +2095,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C14/C15 | erledigt | [C14/C15] omp-playout-automation: Playlist-Controller ohne eigene Pipeline, steuert Player+Mixer fern | 2026-07-13 |
 | C16 | erledigt | [C16] Control-Enforcement-Fix: Automatisation über Orchestrator-Proxy (Service-Prinzipal) | 2026-07-22 |
 | C17 | erledigt | [C17] omp-media-library: Datei-Katalog + ffprobe-Metadaten + Segmente | 2026-07-22 |
-| C18 | offen | [C18] Cart-/Interrupt-Assets in omp-playout-automation | — |
+| C18 | erledigt | [C18] Cart-/Interrupt-Assets in omp-playout-automation (inkl. last_live_item_id-Fix) | 2026-07-22 |
 | C19 | offen | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | — |
 | C20 | offen | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | — |
 | C21 | offen | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | — |

@@ -12109,3 +12109,72 @@ Kryptographie verwiesen (hier: Besitz des `LaunchSecret`s ist der
 Nachweis, kein Zertifikat) — ausreichend für das behobene Szenario
 (versehentliche/fehlkonfigurierte Cross-Channel-Ansteuerung), nicht für
 einen Angreifer mit Shell-Zugriff auf denselben Host.
+
+---
+
+## 2026-07-22 (Nachtrag 84) — C18 (Cart-/Interrupt-Assets) umgesetzt,
+ein echter Live-Bug gefunden und behoben
+
+**Umsetzung** (Details: `ARCHITECTURE.md` §24.3): `omp-playout-
+automation` bekommt `cart.define`/`cart.remove`/`cart.fire`/
+`cart.return` — Cart-Assets laufen als zweiter, priorisierter Kanal
+NEBEN der Hauptplaylist (`playlist.rs` bleibt während eines Interrupts
+unangetastet), `auto_advance_loop` bekommt einen Cart-Vorrang-Zweig
+(`AdvanceAction`-Enum: `CartReturn` vor `PlaylistAdvance`). UI-Bundle
+um einen Carts-Abschnitt ergänzt (Definieren, Fire-Knöpfe, Return-
+Banner bei aktivem Cart).
+
+**Live gefundener und behobener Bug** (nicht beim Schreiben, sondern
+beim End-to-End-Test gegen einen echten Workflow entdeckt): die erste
+Fassung entschied "voll wiederherstellen (`take_on_targets`) vs. nur
+`cue()`" anhand von `playlist.on_air()`. Das Flag ist aber nicht
+verlässlich — `Playlist::advance()` setzt es beim Erreichen des
+Listenendes lokal auf `false`, OHNE den Ziel-Player anzufassen (kein
+EOS-Konzept, das Item läuft dort unverändert weiter, exakt wie in
+C14/C15 spezifiziert: "Ende-der-Liste stoppt korrekt ohne Loop").
+Reproduktion: Item mit kurzer Dauer nehmen, warten bis die lokale
+Auto-Advance-Logik (fälschlicherweise aus Sicht des Casts) "Ende
+erreicht, `on_air=false`" setzt, dann einen Cart feuern — der Player
+zeigt das Item zu diesem Zeitpunkt nachweisbar weiter live
+(`player.currentItemId` unverändert). Die alte Return-Logik nahm in
+diesem Zustand den "nur `cue()`"-Pfad, ohne `take()` — der Cart-Clip
+blieb dadurch dauerhaft on-air (der anschließende Aufräum-`remove()`
+scheiterte mit `404`, weil `omp-player`s eigenes `remove()` das
+Entfernen eines noch on-air befindlichen Items ablehnt, ein bereits
+bestehender, korrekter Schutzmechanismus dort).
+
+**Fix:** neues `AutomationState::last_live_item_id`, gesetzt
+ausschließlich direkt nach einem tatsächlich erfolgreichen
+`take_on_targets`-Aufruf (`do_take`, `do_advance`s Erfolgszweig, sowie
+am Ende von `do_cart_return` selbst) — die einzige verlässliche Quelle
+für "was der Player gerade wirklich zeigt", unabhängig von der lokalen
+Sequenzierungs-Buchführung. `do_cart_fire` liest dieses Feld statt
+`playlist.on_air()`; `do_cart_return` fährt jetzt immer die volle
+`take_on_targets`-Sequenz, wenn ein Wert gesetzt ist (die frühere
+Fallunterscheidung `interrupted_was_onair` entfällt komplett), und
+zieht danach die lokale `playlist`-Buchführung über die gemerkte
+Item-**ID** nach (nicht den Index, falls sich die Liste zwischenzeitlich
+geändert hat).
+
+**Live verifiziert** (echter Workflow: Mixer+Player+Automation, nicht
+nur Unit-Tests — dieser Node hat wie schon C14/C15 keine automatisierte
+HTTP-Test-Suite, Verifikation folgt demselben Live-Muster):
+1. Der exakte Fehlerzustand gezielt reproduziert (kurze Item-Dauer,
+   warten bis lokal `on_air=false` aber Player weiterhin live zeigt),
+   Cart-Fire+Auto-Return darin bestätigt jetzt korrekt: Cart-Clip
+   sauber entfernt (kein 404 mehr), Hauptitem echt wiederhergestellt
+   (`player.currentItemId` zeigt wieder das Hauptitem, nicht nur
+   `cuedItemId`).
+2. Sauberer Normalfall (Item durchgehend echt on-air): Cart-Fire+Return
+   funktioniert, `playheadPositionMs` nach Return > 0 (Fortsetzung an
+   der unterbrochenen Stelle, nicht Neustart bei 0).
+3. Manueller Cart (`durationMs=0`): kehrt über 8 s hinweg NICHT von
+   selbst zurück, `cart.return()` beendet ihn explizit korrekt.
+4. Zweites `cart.fire` während eines aktiven Carts: abgelehnt
+   ("bereits ein Cart aktiv"), im Log bestätigt.
+
+`cargo build --workspace --bins`, `cargo clippy -p
+omp-playout-automation --all-targets`, `cargo test -p
+omp-playout-automation`, `cargo deny check` — alle grün. `node --check
+ui/bundle.js` grün. Test-Workflows danach sauber gestoppt/gelöscht,
+keine Restinstanzen.

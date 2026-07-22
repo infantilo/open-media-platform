@@ -46,6 +46,25 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       .item button { cursor: pointer; padding: 4px 8px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee; }
       .item button.cue-active { background: #b8860b; border-color: #d4a017; }
       p.empty { font-size: 12px; color: #888; }
+      .carts-section { margin-top: 14px; border-top: 1px solid #333; padding-top: 10px; }
+      .carts-section h4 { margin: 0 0 6px; font-size: 12px; color: #999; font-weight: normal; }
+      .cart-active-banner {
+        display: none; align-items: center; justify-content: space-between; gap: 8px;
+        padding: 6px 10px; border-radius: 4px; background: #7a1f1f; margin-bottom: 8px;
+      }
+      .cart-active-banner.shown { display: flex; }
+      .cart-active-banner button {
+        cursor: pointer; padding: 4px 10px; border-radius: 3px; border: 1px solid #eee;
+        background: #eee; color: #7a1f1f; font-weight: bold;
+      }
+      .cart {
+        border: 1px solid #444; border-radius: 4px; padding: 6px 8px;
+        margin-bottom: 4px; display: flex; align-items: center; gap: 8px;
+      }
+      .cart .label { flex: 1; }
+      .cart button { cursor: pointer; padding: 4px 8px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee; }
+      .cart button.fire { border-color: #d4a017; }
+      .cart button.fire:disabled, .cart button.remove:disabled { opacity: 0.4; cursor: default; }
     `;
 
     const targetsRow = document.createElement("div");
@@ -124,7 +143,60 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const empty = document.createElement("p");
     empty.className = "empty";
     empty.textContent = '"+ Item" zum Anlegen des Rundowns';
-    shadow.append(style, targetsRow, statusRow, progress, addRow, list, empty);
+
+    // C18 (ARCHITECTURE.md §24.3): Cart-/Interrupt-Assets — eigener
+    // Abschnitt unterhalb des Rundowns, gleiches Add-Row-Muster wie
+    // oben, plus ein "aktiv"-Banner mit Return-Knopf.
+    const cartsSection = document.createElement("div");
+    cartsSection.className = "carts-section";
+    const cartsHeading = document.createElement("h4");
+    cartsHeading.textContent = "Carts / Interrupts";
+    const activeCartBanner = document.createElement("div");
+    activeCartBanner.className = "cart-active-banner";
+    const activeCartLabel = document.createElement("span");
+    const returnBtn = document.createElement("button");
+    returnBtn.textContent = "RETURN";
+    returnBtn.addEventListener("click", () => call("cart.return", {}).then(poll));
+    activeCartBanner.append(activeCartLabel, returnBtn);
+
+    const cartAddRow = document.createElement("div");
+    cartAddRow.className = "add-row";
+    const cartLabelInput = document.createElement("input");
+    cartLabelInput.type = "text";
+    cartLabelInput.placeholder = "Titel";
+    const cartPatternSelect = document.createElement("select");
+    for (const p of ["smpte", "ball", "snow", "circular", "checkers-1", "solid-color"]) {
+      const opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      cartPatternSelect.append(opt);
+    }
+    const cartDurationInput = document.createElement("input");
+    cartDurationInput.type = "number";
+    cartDurationInput.placeholder = "Dauer (ms), 0 = manuell";
+    cartDurationInput.value = "0";
+    const cartAddBtn = document.createElement("button");
+    cartAddBtn.textContent = "+ Cart";
+    cartAddBtn.addEventListener("click", () => {
+      call("cart.define", {
+        label: cartLabelInput.value.trim() || "Cart",
+        pattern: cartPatternSelect.value,
+        toneFrequency: 0,
+        durationMs: parseFloat(cartDurationInput.value) || 0,
+      }).then(() => {
+        cartLabelInput.value = "";
+        poll();
+      });
+    });
+    cartAddRow.append(cartLabelInput, cartPatternSelect, cartDurationInput, cartAddBtn);
+
+    const cartList = document.createElement("div");
+    const cartsEmpty = document.createElement("p");
+    cartsEmpty.className = "empty";
+    cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
+    cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
+
+    shadow.append(style, targetsRow, statusRow, progress, addRow, list, empty, cartsSection);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -180,6 +252,30 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       return { el, labelEl, cueBtn, removeBtn };
     };
 
+    // assetId -> { el, labelEl, fireBtn, removeBtn }
+    const cartEls = new Map();
+
+    const createCartElement = (asset) => {
+      const el = document.createElement("div");
+      el.className = "cart";
+
+      const labelEl = document.createElement("span");
+      labelEl.className = "label";
+
+      const fireBtn = document.createElement("button");
+      fireBtn.className = "fire";
+      fireBtn.textContent = "Fire";
+      fireBtn.addEventListener("click", () => call("cart.fire", { assetId: asset.id }).then(poll));
+
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "remove";
+      removeBtn.textContent = "Entfernen";
+      removeBtn.addEventListener("click", () => call("cart.remove", { assetId: asset.id }).then(poll));
+
+      el.append(labelEl, fireBtn, removeBtn);
+      return { el, labelEl, fireBtn, removeBtn };
+    };
+
     const poll = async () => {
       const [
         itemsValue,
@@ -189,6 +285,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         connected,
         playheadMs,
         durationMs,
+        assetsValue,
+        activeCartId,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -197,6 +295,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("connected"),
         getParam("playheadPositionMs"),
         getParam("currentDurationMs"),
+        getParam("assets"),
+        getParam("activeCartId"),
       ]);
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
@@ -241,6 +341,37 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.cueBtn.className = isCued ? "cue-active" : "";
         refs.cueBtn.disabled = isOnair;
         refs.removeBtn.disabled = isOnair || isCued;
+      }
+
+      // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.
+      const assets = assetsValue || [];
+      const assetIds = new Set(assets.map((a) => a.id));
+      for (const [id, refs] of cartEls) {
+        if (!assetIds.has(id)) {
+          refs.el.remove();
+          cartEls.delete(id);
+        }
+      }
+      cartsEmpty.style.display = assets.length === 0 ? "" : "none";
+      const cartActive = !!activeCartId;
+      activeCartBanner.classList.toggle("shown", cartActive);
+      if (cartActive) {
+        const activeAsset = assets.find((a) => a.id === activeCartId);
+        activeCartLabel.textContent = `CART ON AIR: ${activeAsset ? activeAsset.label : activeCartId}`;
+      }
+      for (const asset of assets) {
+        let refs = cartEls.get(asset.id);
+        if (!refs) {
+          refs = createCartElement(asset);
+          cartEls.set(asset.id, refs);
+          cartList.append(refs.el);
+        }
+        const durationLabel = asset.durationMs > 0 ? `${asset.durationMs}ms` : "manuell";
+        refs.labelEl.textContent = `${asset.label} (${asset.pattern}, ${durationLabel})`;
+        const isFiring = asset.id === activeCartId;
+        refs.fireBtn.disabled = cartActive;
+        refs.fireBtn.textContent = isFiring ? "On Air" : "Fire";
+        refs.removeBtn.disabled = cartActive;
       }
     };
 

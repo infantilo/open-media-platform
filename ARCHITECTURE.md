@@ -2904,6 +2904,40 @@ Item 2, `cart.fire(black)` schaltet um, nach Ablauf automatisch zurück
 auf Item 2 an der Stelle, an der es unterbrochen wurde (nicht neu von
 vorn). **Phase:** C18.
 
+**Umgesetzt und live verifiziert** (2026-07-22): `cart.define`/
+`cart.remove`/`cart.fire`/`cart.return` in `omp-playout-automation`
+(`AutomationState::carts`/`active_cart`), `auto_advance_loop` um einen
+Cart-Vorrang-Zweig erweitert (`AdvanceAction::CartReturn`), UI-Bundle um
+einen Carts-Abschnitt (Anlegen/Fire/Return-Banner) ergänzt. **Live
+gefundener und behobener Bug:** die ursprüngliche Wiederherstellung
+verließ sich auf `playlist.on_air()`, um zwischen "voll wiederherstellen"
+(`take_on_targets`) und "nur cuen" zu unterscheiden — erreicht
+`Playlist::advance()` das Listenende (kein nächstes Item), setzt es
+dieses Flag lokal auf `false`, **ohne** den Player anzufassen (kein
+EOS-Konzept, `omp-player`-Items laufen remote unverändert weiter). Ein
+Cart-Fire in genau diesem — gar nicht seltenen — Zustand nahm
+fälschlich den "nur cuen"-Rückweg; da `omp-player`s eigenes `remove()`
+das Entfernen eines noch tatsächlich on-air befindlichen Items ablehnt,
+blieb der Cart-Clip nach dem Return dauerhaft live hängen (404 beim
+Aufräum-Versuch). Behoben durch ein neues `AutomationState::
+last_live_item_id`, gesetzt ausschließlich bei einem tatsächlichen
+`take_on_targets`-Erfolg (`do_take`/`do_advance`/Cart-Return selbst),
+zurückgesetzt bei `load()` — die Wiederherstellung fährt jetzt IMMER
+die volle `take_on_targets`-Sequenz, wenn dieses Feld gesetzt ist,
+unabhängig vom lokalen `on_air`-Flag; zusätzlich zieht sie die lokale
+Playlist-Buchführung (`cue`+`take` über die Item-ID, nicht den Index)
+nach, falls sie durch das Ende-der-Liste-Verhalten hinter die Realität
+zurückgefallen war. Verifiziert gegen einen echten Workflow (Mixer +
+Player + Automation): Reproduktion des exakten Fehlerzustands (Item
+läuft remote weiter, lokal `on_air=false`), Cart-Fire+Auto-Return in
+genau diesem Zustand endet jetzt korrekt (Cart-Clip sauber entfernt,
+Hauptitem echt wiederhergestellt statt nur gecued); zusätzlich
+verifiziert: sauberer Normalfall (Item durchgehend on-air) inkl.
+Fortsetzung an der unterbrochenen Stelle (`playheadPositionMs` > 0
+statt Neustart), manuelle Carts (`durationMs=0`) kehren nicht von
+selbst zurück, ein zweites `cart.fire` während eines aktiven Carts wird
+abgelehnt.
+
 ### 24.4 Plugin-Host (generischer Mechanismus)
 
 **Vorbild:** PIPELINE CONTROLLER `plugins/*.js` + `plugins.json`

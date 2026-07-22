@@ -35,6 +35,27 @@
 //! desselben Player-Items *und* Automation auf demselben Player ist nicht
 //! vorgesehen (§7.4/C14-Zielbild: Regieplatz **mit oder ohne**
 //! Automatisation, nicht beides gleichzeitig auf demselben Player).
+//!
+//! **Cart-/Interrupt-Assets (`ARCHITECTURE.md` §24.3, `UMSETZUNG.md`
+//! C18):** `cart.define`/`cart.remove` verwalten wiederverwendbare,
+//! benannte Interrupt-Clips (Blackclip, Standby, …); `cart.fire`
+//! unterbricht den Hauptkanal damit (neues Item beim Ziel-Player,
+//! dieselbe `take_on_targets`-Sequenz wie `take()`), `cart.return`
+//! (explizit oder automatisch nach `durationMs`, 0 = nur manuell) stellt
+//! ihn wieder her. `playlist.rs` selbst bleibt während eines Interrupts
+//! unangetastet — Carts laufen bewusst NEBEN der Hauptplaylist, nicht
+//! als Teil ihrer Sequenz. Live-debuggter Fund beim Bau: die
+//! Wiederherstellung darf sich NICHT auf `playlist.on_air()` verlassen,
+//! um zu entscheiden, ob voll (`take_on_targets`) oder nur `cue()`
+//! wiederhergestellt wird — erreicht `advance()` das Listenende, setzt
+//! es dieses Flag lokal auf `false`, OHNE den Player anzufassen (kein
+//! EOS-Konzept, das Item läuft remote unverändert weiter). Ein
+//! `cue()`-only-Restore in diesem Zustand ließ den Cart-Clip
+//! dauerhaft live hängen (`omp-player`s `remove()` lehnt das Entfernen
+//! eines noch on-air befindlichen Items ab). Fix: ein separates
+//! `AutomationState::last_live_item_id`, das nur bei einem
+//! tatsächlichen `take_on_targets`-Erfolg gesetzt wird — die einzige
+//! verlässliche Quelle für "was zeigt der Player gerade wirklich".
 
 mod playlist;
 mod remote;
@@ -82,6 +103,62 @@ struct AutomationState {
     /// C16) — s. `remote::resolve_node_id_by_label`-Doku.
     player_node_id: Option<String>,
     mixer_node_id: Option<String>,
+    /// Item-ID, die zuletzt tatsächlich per `take_on_targets` remote live
+    /// geschaltet wurde (C18-Fund, `ARCHITECTURE.md` §24.3) — bewusst
+    /// **nicht** aus `playlist.on_air()` abgeleitet: erreicht `advance()`
+    /// das Listenende, setzt es lokal `on_air=false`, OHNE den Player/
+    /// Mixer anzufassen (kein EOS-Konzept, `omp-player`s Item läuft remote
+    /// unverändert weiter). Ein Cart-Fire, das sich in diesem Zustand auf
+    /// `playlist.on_air()` verlassen hätte, nähme fälschlich den
+    /// "nur cuen, nicht nehmen"-Rückweg und der Cart-Clip bliebe nach dem
+    /// Return dauerhaft live hängen (live reproduziert, s.
+    /// docs/decisions.md Nachtrag zu C18). Dieses Feld ist die einzige
+    /// Quelle der Wahrheit für "was zeigt der Player/Mixer über den
+    /// Hauptkanal gerade wirklich" — gesetzt von `do_take`/`do_advance`
+    /// direkt nach einem erfolgreichen `take_on_targets`, von `do_load`
+    /// beim Playlist-Ersatz zurückgesetzt (danach existiert die alte
+    /// Item-ID beim Player evtl. gar nicht mehr).
+    last_live_item_id: Option<String>,
+    /// C18 (`ARCHITECTURE.md` §24.3): definierte Cart-/Interrupt-Assets,
+    /// insertion-geordnet (`Vec` statt `HashMap`, damit `assets` stabil
+    /// in Anlage-Reihenfolge angezeigt wird — bei der erwarteten kleinen
+    /// Cart-Anzahl ist die O(n)-Suche unproblematisch, gleiche Abwägung
+    /// wie beim Rest dieses Nodes).
+    carts: Vec<(String, ItemMeta)>,
+    next_cart_seq: u64,
+    active_cart: Option<ActiveCart>,
+}
+
+/// Zustand eines gerade laufenden Cart-Interrupts (`ARCHITECTURE.md`
+/// §24.3) — hält fest, was nach Ablauf/`cart.return()` wiederherzustellen
+/// ist. `playlist` selbst bleibt während des gesamten Interrupts
+/// unverändert (Carts laufen bewusst NEBEN der Hauptplaylist, nicht als
+/// Teil ihrer Sequenz, s. Moduldoku C18) — die Wiederherstellung braucht
+/// deshalb keine lokale Zustandsmutation, nur einen erneuten Fernaufruf
+/// mit der hier gemerkten Item-ID.
+struct ActiveCart {
+    asset_id: String,
+    /// Die vom Ziel-Player beim Cart-`append` vergebene Item-ID — wird
+    /// bei `cart.return()` wieder entfernt, damit Cart-Clips den Player
+    /// nicht dauerhaft aufblähen.
+    player_item_id: String,
+    fired_at: Instant,
+    /// 0 = kein automatischer Return (nur explizites `cart.return()`),
+    /// gleiche Konvention wie `ItemMeta::duration_ms` beim
+    /// Haupt-Auto-Advance (dort per `duration_ms > 0`-Guard geprüft).
+    duration_ms: u64,
+    /// = `AutomationState::last_live_item_id` zum Fire-Zeitpunkt — `None`,
+    /// wenn der Hauptkanal noch nie tatsächlich live geschaltet war.
+    interrupted_item_id: Option<String>,
+    /// Bereits vor dem Interrupt vergangene On-Air-Zeit des
+    /// Hauptkanal-Items — beim Return wird `onair_since` um genau diesen
+    /// Betrag zurückdatiert, damit die Interrupt-Dauer nicht gegen die
+    /// verbleibende Item-Laufzeit zählt ("an der Stelle, an der es
+    /// unterbrochen wurde", nicht "von vorn"). 0, wenn `onair_since` beim
+    /// Fire bereits `None` war (z. B. Listenende, s.
+    /// `last_live_item_id`-Doku) — der Return startet die Item-Laufzeit
+    /// dann bewusst frisch, statt eine Pseudo-Restdauer zu erfinden.
+    elapsed_before_interrupt_ms: u128,
 }
 
 enum Event {
@@ -137,6 +214,7 @@ impl AutomationStore {
 
         state.playlist.take().map_err(|e| e.to_string())?;
         state.onair_since = Some(Instant::now());
+        state.last_live_item_id = Some(item_id);
         Ok(())
     }
 
@@ -152,6 +230,10 @@ impl AutomationStore {
         let mut state = self.state.lock().expect("lock poisoned");
         let Some(item_id) = state.playlist.advance() else {
             state.onair_since = None;
+            // last_live_item_id bleibt bewusst unangetastet: der Player
+            // zeigt das letzte Item remote unverändert weiter (kein
+            // EOS-Konzept) — nur die lokale Sequenzierung endet hier, s.
+            // `last_live_item_id`-Doku.
             return Ok(());
         };
 
@@ -167,6 +249,7 @@ impl AutomationStore {
 
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
         state.onair_since = Some(Instant::now());
+        state.last_live_item_id = Some(item_id);
         Ok(())
     }
 
@@ -290,6 +373,10 @@ impl AutomationStore {
         state.playlist.replace_all(ids);
         state.metadata = metadata;
         state.onair_since = None;
+        // load() ersetzt die komplette Player-Playlist remote — eine
+        // vorher gemerkte last_live_item_id könnte danach gar nicht mehr
+        // existieren, s. Doku dort.
+        state.last_live_item_id = None;
         Ok(())
     }
 
@@ -331,6 +418,159 @@ impl AutomationStore {
             .map_err(|e| format!("Player-cue fehlgeschlagen: {e}"))?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    /// Legt ein neues, wiederverwendbares Cart-/Interrupt-Asset an (rein
+    /// lokal, kein Fernaufruf nötig — anders als `do_append` gibt es hier
+    /// keinen Ziel-Player, dessen Item-IDs übernommen werden müssten, das
+    /// tatsächliche `append` passiert erst bei `cart.fire`).
+    fn do_cart_define(&self, label: String, pattern: String, tone_frequency: f64, duration_ms: u64) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        state.next_cart_seq += 1;
+        let id = format!("cart{}", state.next_cart_seq);
+        state.carts.push((id, ItemMeta { label, pattern, tone_frequency, duration_ms }));
+        Ok(())
+    }
+
+    fn do_cart_remove(&self, asset_id: &str) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let before = state.carts.len();
+        state.carts.retain(|(id, _)| id != asset_id);
+        if state.carts.len() == before {
+            return Err("unbekannte Cart-Asset-ID".to_string());
+        }
+        Ok(())
+    }
+
+    /// Unterbricht den Hauptkanal mit einem definierten Cart-Asset
+    /// (`ARCHITECTURE.md` §24.3): merkt sich, was gerade läuft/gecued
+    /// ist, hängt das Cart-Asset als neues Item beim Ziel-Player an und
+    /// schaltet Player+Mixer wie bei `take()` darauf um — dieselbe
+    /// `take_on_targets`-Sequenz, kein eigener Mechanismus. `playlist`
+    /// selbst bleibt unangetastet (s. `ActiveCart`-Doku).
+    fn do_cart_fire(&self, asset_id: &str) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        if state.active_cart.is_some() {
+            return Err("bereits ein Cart aktiv, zuerst cart.return() aufrufen".to_string());
+        }
+        let meta = state
+            .carts
+            .iter()
+            .find(|(id, _)| id == asset_id)
+            .map(|(_, m)| m.clone())
+            .ok_or("unbekannte Cart-Asset-ID")?;
+        let player_node_id = state
+            .player_node_id
+            .clone()
+            .ok_or("Ziel-Player nicht aufgelöst (targetPlayerLabel unbekannt/noch nicht gestartet)")?;
+        let mixer_node_id = state
+            .mixer_node_id
+            .clone()
+            .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
+        let player_label = state.target_player_label.clone();
+
+        // `last_live_item_id` statt `playlist.on_air()` — s. dessen Doku
+        // (AutomationState): das lokale on_air-Flag kann durch ein
+        // Ende-der-Liste-`advance()` bereits `false` sein, obwohl der
+        // Player/Mixer den Hauptkanal remote unverändert weiter zeigt.
+        let interrupted_item_id = state.last_live_item_id.clone();
+        let elapsed_before_interrupt_ms = state
+            .onair_since
+            .map(|since| since.elapsed().as_millis())
+            .unwrap_or(0);
+
+        let player = self.proxy_client(player_node_id.clone());
+        let known_before: std::collections::HashSet<String> = player
+            .get_param("items")
+            .map_err(|e| format!("Player-Items vor Cart-Fire nicht lesbar: {e}"))?
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|it| it.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+
+        player
+            .invoke(
+                "append",
+                serde_json::json!({
+                    "label": meta.label,
+                    "pattern": meta.pattern,
+                    "toneFrequency": meta.tone_frequency,
+                    "durationMs": meta.duration_ms,
+                }),
+            )
+            .map_err(|e| format!("Cart-append fehlgeschlagen: {e}"))?;
+
+        let cart_item_id = fetch_new_item_id(&player, &known_before)
+            .map_err(|e| format!("Neue Cart-Item-ID nicht lesbar: {e}"))?;
+
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &cart_item_id)?;
+
+        state.active_cart = Some(ActiveCart {
+            asset_id: asset_id.to_string(),
+            player_item_id: cart_item_id,
+            fired_at: Instant::now(),
+            duration_ms: meta.duration_ms,
+            interrupted_item_id,
+            elapsed_before_interrupt_ms,
+        });
+        Ok(())
+    }
+
+    /// Beendet einen laufenden Cart-Interrupt: stellt den gemerkten
+    /// Hauptkanal-Zustand IMMER über die volle `take_on_targets`-Sequenz
+    /// wieder her (nicht bloß `cue()`) — s. `last_live_item_id`-Doku,
+    /// warum ein bloßes Re-Cuen hier falsch wäre (der Cart-Clip bliebe
+    /// sonst dauerhaft live hängen, weil `omp-player`s eigenes `remove()`
+    /// das Entfernen eines noch on-air befindlichen Items ablehnt).
+    /// Nichts zu tun, wenn der Hauptkanal beim Fire noch nie live war.
+    /// Der Cart-Clip wird anschließend best-effort vom Ziel-Player
+    /// entfernt — ein Fehler dabei lässt die Wiederherstellung selbst
+    /// nicht scheitern, nur eine Alarm-Meldung (gleiche Best-Effort-
+    /// Philosophie wie der Auto-Advance-Hintergrundpfad).
+    fn do_cart_return(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        let Some(active) = state.active_cart.take() else {
+            return Ok(());
+        };
+        let player_label = state.target_player_label.clone();
+
+        if let Some(restore_id) = active.interrupted_item_id.clone() {
+            let player_node_id = state
+                .player_node_id
+                .clone()
+                .ok_or("Ziel-Player nicht aufgelöst (Cart-Return)")?;
+            let mixer_node_id = state
+                .mixer_node_id
+                .clone()
+                .ok_or("Ziel-Mixer nicht aufgelöst (Cart-Return)")?;
+            take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &restore_id)?;
+            state.onair_since =
+                Some(Instant::now() - Duration::from_millis(active.elapsed_before_interrupt_ms as u64));
+            state.last_live_item_id = Some(restore_id.clone());
+            // Lokale Playlist-Buchführung nachziehen, falls sie durch ein
+            // zwischenzeitliches Ende-der-Liste-`advance()` hinter die
+            // Realität zurückgefallen war (s. `last_live_item_id`-Doku) —
+            // robust über die Item-ID statt eines evtl. inzwischen
+            // verschobenen Index; kein Fehler, falls das Item inzwischen
+            // entfernt wurde (dann bleibt lokal einfach "nichts gecued").
+            if let Some(idx) = state.playlist.index_of(&restore_id) {
+                let _ = state.playlist.cue(idx);
+                let _ = state.playlist.take();
+            }
+        }
+
+        if let Some(player_node_id) = state.player_node_id.clone() {
+            let player = self.proxy_client(player_node_id);
+            if let Err(e) = player.invoke("remove", serde_json::json!({"itemId": active.player_item_id})) {
+                self.report(format!(
+                    "Cart-Clip \"{}\" konnte nach Return nicht vom Player entfernt werden: {e}",
+                    active.asset_id
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -487,6 +727,23 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // C18 (ARCHITECTURE.md §24.3): definierte Cart-/Interrupt-Assets
+            // + welches davon (falls eines) gerade den Hauptkanal
+            // unterbricht.
+            ParamSpec {
+                name: "assets".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "activeCartId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
 
         let methods = vec![
@@ -536,6 +793,46 @@ impl ParamStore for AutomationStore {
                 name: "take".to_string(),
                 args: vec![],
             },
+            // C18 (ARCHITECTURE.md §24.3).
+            MethodSpec {
+                name: "cart.define".to_string(),
+                args: vec![
+                    MethodArg {
+                        name: "label".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "pattern".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "toneFrequency".to_string(),
+                        kind: ParamType::Number,
+                    },
+                    MethodArg {
+                        name: "durationMs".to_string(),
+                        kind: ParamType::Number,
+                    },
+                ],
+            },
+            MethodSpec {
+                name: "cart.remove".to_string(),
+                args: vec![MethodArg {
+                    name: "assetId".to_string(),
+                    kind: ParamType::String,
+                }],
+            },
+            MethodSpec {
+                name: "cart.fire".to_string(),
+                args: vec![MethodArg {
+                    name: "assetId".to_string(),
+                    kind: ParamType::String,
+                }],
+            },
+            MethodSpec {
+                name: "cart.return".to_string(),
+                args: vec![],
+            },
         ];
 
         Descriptor { parameters, methods }
@@ -569,18 +866,45 @@ impl ParamStore for AutomationStore {
             "connected" => Some(serde_json::json!(
                 state.player_node_id.is_some() && state.mixer_node_id.is_some()
             )),
+            // Zeigt bevorzugt den Fortschritt eines aktiven Carts (C18) —
+            // sonst wie bisher das Hauptkanal-Item. Ein aktiver Cart
+            // "friert" den Hauptkanal-Fortschritt bewusst nicht sichtbar
+            // ein, sondern zeigt den tatsächlich relevanten Vorgang.
             "playheadPositionMs" => Some(serde_json::json!(
                 state
-                    .onair_since
-                    .map(|since| since.elapsed().as_millis() as f64)
+                    .active_cart
+                    .as_ref()
+                    .map(|active| active.fired_at.elapsed().as_millis() as f64)
+                    .or_else(|| state.onair_since.map(|since| since.elapsed().as_millis() as f64))
                     .unwrap_or(0.0)
             )),
             "currentDurationMs" => {
-                let id = current_or_cued_id(&state, true);
-                Some(serde_json::json!(
-                    state.metadata.get(&id).map(|m| m.duration_ms).unwrap_or(0)
-                ))
+                if let Some(active) = &state.active_cart {
+                    Some(serde_json::json!(active.duration_ms))
+                } else {
+                    let id = current_or_cued_id(&state, true);
+                    Some(serde_json::json!(
+                        state.metadata.get(&id).map(|m| m.duration_ms).unwrap_or(0)
+                    ))
+                }
             }
+            // C18 (ARCHITECTURE.md §24.3).
+            "assets" => Some(serde_json::json!(
+                state
+                    .carts
+                    .iter()
+                    .map(|(id, m)| serde_json::json!({
+                        "id": id,
+                        "label": m.label,
+                        "pattern": m.pattern,
+                        "toneFrequency": m.tone_frequency,
+                        "durationMs": m.duration_ms,
+                    }))
+                    .collect::<Vec<_>>()
+            )),
+            "activeCartId" => Some(serde_json::json!(
+                state.active_cart.as_ref().map(|a| a.asset_id.clone()).unwrap_or_default()
+            )),
             _ => None,
         }
     }
@@ -651,6 +975,42 @@ impl ParamStore for AutomationStore {
                 None => Err("itemId fehlt".to_string()),
             },
             "take" => self.do_take(),
+            // C18 (ARCHITECTURE.md §24.3).
+            "cart.define" => {
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("Cart")
+                    .to_string();
+                let pattern = args
+                    .get("pattern")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(DEFAULT_PATTERN)
+                    .to_string();
+                let tone_frequency = args.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0);
+                // Anders als beim Haupt-`append`: 0 ist hier ein gültiger,
+                // bewusster Wert ("kein automatischer Return", s.
+                // `ActiveCart::duration_ms`-Doku) statt auf
+                // DEFAULT_DURATION_MS zu fallen.
+                let duration_ms = args
+                    .get("durationMs")
+                    .and_then(Value::as_f64)
+                    .filter(|d| *d >= 0.0)
+                    .map(|d| d as u64)
+                    .unwrap_or(0);
+                self.do_cart_define(label, pattern, tone_frequency, duration_ms)
+            }
+            "cart.remove" => match args.get("assetId").and_then(Value::as_str) {
+                Some(id) => self.do_cart_remove(id),
+                None => Err("assetId fehlt".to_string()),
+            },
+            "cart.fire" => match args.get("assetId").and_then(Value::as_str) {
+                Some(id) => self.do_cart_fire(id),
+                None => Err("assetId fehlt".to_string()),
+            },
+            "cart.return" => self.do_cart_return(),
             _ => return Err(InvokeError::Unknown),
         };
 
@@ -732,6 +1092,17 @@ async fn token_refresh_loop(
     }
 }
 
+/// Was der nächste `ADVANCE_TICK` (falls überhaupt) auslösen soll — ein
+/// aktiver Cart (C18, `ARCHITECTURE.md` §24.3) hat immer Vorrang vor der
+/// normalen Playlist-Auto-Advance-Prüfung: solange er läuft, bleibt der
+/// Hauptkanal-Timer (`onair_since`) unangetastet ("pausiert"), erst
+/// `CartReturn` datiert ihn beim Wiederherstellen zurück.
+enum AdvanceAction {
+    None,
+    CartReturn,
+    PlaylistAdvance,
+}
+
 async fn auto_advance_loop(
     store: Arc<AutomationStore>,
     events: mpsc::UnboundedSender<Event>,
@@ -740,10 +1111,16 @@ async fn auto_advance_loop(
     loop {
         interval.tick().await;
 
-        let due = {
+        let action = {
             let state = store.state.lock().expect("lock poisoned");
-            if !state.playlist.on_air() || state.playlist.mode() != Mode::Auto {
-                false
+            if let Some(active) = &state.active_cart {
+                if active.duration_ms > 0 && active.fired_at.elapsed().as_millis() as u64 >= active.duration_ms {
+                    AdvanceAction::CartReturn
+                } else {
+                    AdvanceAction::None
+                }
+            } else if !state.playlist.on_air() || state.playlist.mode() != Mode::Auto {
+                AdvanceAction::None
             } else {
                 match (state.onair_since, state.playlist.current_index()) {
                     (Some(since), Some(idx)) => {
@@ -754,27 +1131,37 @@ async fn auto_advance_loop(
                             .and_then(|id| state.metadata.get(id))
                             .map(|m| m.duration_ms)
                             .unwrap_or(0);
-                        duration_ms > 0 && since.elapsed().as_millis() as u64 >= duration_ms
+                        if duration_ms > 0 && since.elapsed().as_millis() as u64 >= duration_ms {
+                            AdvanceAction::PlaylistAdvance
+                        } else {
+                            AdvanceAction::None
+                        }
                     }
-                    _ => false,
+                    _ => AdvanceAction::None,
                 }
             }
         };
-        if !due {
-            continue;
-        }
 
-        let store2 = store.clone();
-        let result = tokio::task::spawn_blocking(move || store2.do_advance()).await;
+        let (label, result) = match action {
+            AdvanceAction::None => continue,
+            AdvanceAction::CartReturn => {
+                let store2 = store.clone();
+                ("Cart-Return", tokio::task::spawn_blocking(move || store2.do_cart_return()).await)
+            }
+            AdvanceAction::PlaylistAdvance => {
+                let store2 = store.clone();
+                ("Auto-Advance", tokio::task::spawn_blocking(move || store2.do_advance()).await)
+            }
+        };
         match result {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
-                let message = format!("Auto-Advance fehlgeschlagen: {e}");
+                let message = format!("{label} fehlgeschlagen: {e}");
                 eprintln!("omp-playout-automation: {message}");
                 let _ = events.send(Event::Error(message));
             }
             Err(e) => {
-                let message = format!("Auto-Advance-Task abgestürzt: {e}");
+                let message = format!("{label}-Task abgestürzt: {e}");
                 eprintln!("omp-playout-automation: {message}");
                 let _ = events.send(Event::Error(message));
             }
@@ -840,6 +1227,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         target_mixer_label: initial_mixer_label,
         player_node_id: None,
         mixer_node_id: None,
+        last_live_item_id: None,
+        carts: Vec::new(),
+        next_cart_seq: 0,
+        active_cart: None,
     });
     let store = Arc::new(AutomationStore {
         state,
