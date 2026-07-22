@@ -62,6 +62,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
       }
       .bus-buttons { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
       .bus-buttons omp-button { width: 58px; height: 36px; font-size: 10px; }
+      .bus-buttons .group-label {
+        flex-basis: 100%; font-size: 9px; text-transform: uppercase;
+        color: var(--omp-text-dim, #9aa0a6); margin: 2px 0 -2px;
+      }
+      .bus-buttons .group-label:first-child { margin-top: 0; }
       .fx-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
       .fx-row omp-button { flex: 1; height: 34px; }
       .keyer-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
@@ -290,8 +295,78 @@ class OmpVideoMixerMePanel extends HTMLElement {
       return btn;
     };
 
+    // Skalierungs-Review D5/Nutzerwunsch (docs/REVIEW-2026-07-17-
+    // SKALIERUNG-24-7.md, präzisiert 2026-07-22): PGM/PST-Quellen nach
+    // Workflow-Zugehörigkeit gruppieren, gleiches Muster wie
+    // omp-switcher/ui/bundle.js (dort ausführlicher kommentiert) und wie
+    // omp-audio-mixer/ui/bundle.js#loadFollowTargets (AFV-Ziel-Dropdown).
+    const senderWorkflowLabel = async () => {
+      const [graphRes, workflowsRes] = await Promise.all([
+        fetch("/api/v1/graph"),
+        fetch("/api/v1/workflows"),
+      ]);
+      const senderNodeId = new Map();
+      if (graphRes.ok) {
+        const graph = await graphRes.json();
+        for (const n of graph.nodes || []) {
+          for (const out of n.outputs || []) senderNodeId.set(out.id, n.id);
+        }
+      }
+      const nodeWorkflow = new Map();
+      let ownWorkflowId = null;
+      if (workflowsRes.ok) {
+        const workflows = await workflowsRes.json();
+        for (const wf of workflows) {
+          for (const role of Object.values(wf.runtime || {})) {
+            if (!role.nodeId) continue;
+            nodeWorkflow.set(role.nodeId, wf.id);
+            if (role.nodeId === nodeId) ownWorkflowId = wf.id;
+          }
+        }
+      }
+      const own = new Set();
+      for (const [senderId, nId] of senderNodeId) {
+        if (nodeWorkflow.get(nId) === ownWorkflowId && ownWorkflowId) own.add(senderId);
+      }
+      return own;
+    };
+
+    // Baut eine Bus-Reihe (PGM oder PST) gruppiert nach `ownSenderIds`
+    // auf — nur, wenn tatsächlich beide Gruppen (eigener Workflow + Rest)
+    // nicht leer sind, sonst bleibt es bei der bisherigen flachen Liste
+    // (BLK zählt nie zu "eigener Workflow", bleibt also immer ungruppiert
+    // vorangestellt).
+    const renderBusRow = (container, entries, ownSenderIds, isProgram, activeId, color) => {
+      const [blk, ...rest] = entries;
+      const appendEntry = (entry) => {
+        const btn = makeBusButton(entry.label, entry.senderId, isProgram);
+        btn.active = entry.senderId === activeId;
+        btn.setAttribute("color", color);
+        container.append(btn);
+      };
+      appendEntry(blk);
+
+      const own = rest.filter((e) => ownSenderIds.has(e.senderId));
+      const others = rest.filter((e) => !ownSenderIds.has(e.senderId));
+      if (own.length > 0 && others.length > 0) {
+        const ownLabel = document.createElement("div");
+        ownLabel.className = "group-label";
+        ownLabel.textContent = "Dieser Workflow";
+        container.append(ownLabel);
+        for (const entry of own) appendEntry(entry);
+
+        const otherLabel = document.createElement("div");
+        otherLabel.className = "group-label";
+        otherLabel.textContent = "Andere Quellen";
+        container.append(otherLabel);
+        for (const entry of others) appendEntry(entry);
+      } else {
+        for (const entry of rest) appendEntry(entry);
+      }
+    };
+
     const refresh = async () => {
-      const [inputsRes, programRes, presetRes, keyerRes, dveRes, keyerInputsRes, keyerSourceRes] = await Promise.all([
+      const [inputsRes, programRes, presetRes, keyerRes, dveRes, keyerInputsRes, keyerSourceRes, ownSenderIds] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.programInput`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.presetInput`),
@@ -299,6 +374,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         fetch(`/api/v1/nodes/${nodeId}/params/dve.box`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/keyer.source`),
+        senderWorkflowLabel(),
       ]);
       if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
       const inputs = (await inputsRes.json()).value || [];
@@ -348,17 +424,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
         empty.textContent = "keine Quellen entdeckt";
         pstButtons.append(empty);
       }
-      for (const entry of entries) {
-        const pgmBtn = makeBusButton(entry.label, entry.senderId, true);
-        pgmBtn.active = entry.senderId === program;
-        pgmBtn.setAttribute("color", "onair");
-        pgmButtons.append(pgmBtn);
-
-        const pstBtn = makeBusButton(entry.label, entry.senderId, false);
-        pstBtn.active = entry.senderId === preset;
-        pstBtn.setAttribute("color", "preset");
-        pstButtons.append(pstBtn);
-      }
+      renderBusRow(pgmButtons, entries, ownSenderIds, true, program, "onair");
+      renderBusRow(pstButtons, entries, ownSenderIds, false, preset, "preset");
 
       keyerBtn.active = keyerEnabled;
       dveBtn.active = dvePipActive;

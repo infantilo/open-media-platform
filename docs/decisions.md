@@ -11480,3 +11480,79 @@ Timeout-Mechanismus selbst aber unverändert ist und bei entsprechend
 längerer Nutzung theoretisch weiterhin auftreten könnte. Kein
 Vollbeweis über 100+ Wechsel (wie beim Switcher) in dieser Sitzung —
 falls die Restschwäche künftig doch auffällt, dort ansetzen.
+
+## 2026-07-22 (Nachtrag 76) — Source-Katalog-UI-Modernisierung: Palette-
+Suchfeld + Workflow-Gruppierung in Switcher/Mixer
+
+Direkter Anschluss an das ursprüngliche 6-Punkte-Liste-Item "source-
+katalog UI modernisieren" (nie präzisiert, s. Memory `project-six-item-
+list-fully-closed`) — per `AskUserQuestion` konkretisiert: zwei
+Teilstücke gewünscht (1) Node-Katalog-Palette (Skalierungs-Review D5:
+"Katalog ohne Suchfeld") und (3) Quellen-Auswahl in Switcher/Mixer,
+explizit als Analogie zur bereits verbesserten AFV-Ziel-Auswahl im
+Audio-Mixer benannt ("beim audio mixer afv haben wir schon eine
+bessere auswahl"). Teilstück (2) Admin-Katalog-Tabelle nicht gewünscht.
+
+**Teil A — Suchfeld in der Node-Katalog-Palette
+(`ui/graph/flow-canvas.ts`):** `#renderPalette()` in zwei Funktionen
+gesplittet — `#renderPalette()` holt weiterhin Katalog/Instanzen/Hosts
+vom Server und cached sie in neuen Feldern (`#paletteCatalog`/
+`#paletteInstances`/`#paletteHosts`), `#renderPaletteList()` baut die
+DOM rein aus dem Cache + `#paletteFilterQuery` auf, ohne Netzwerk-
+Zugriff. Neues `<input type="search">` filtert per Tastendruck
+(Label/Type-Substring, case-insensitive) — jeder Tastendruck ruft nur
+`#renderPaletteList()` auf, kein Re-Fetch. Fokus/Cursor-Position des
+Suchfelds werden über den (seltenen) Fall hinweg erhalten, dass
+`#renderPalette()` zwischendurch durch ein Instanz-Crash/-Neustart-
+Event erneut triggert (gleiche Fokus-Erhalt-Linie wie Nachtrag 72,
+hier aber kein fester Poll-Timer wie beim AFV-Dropdown).
+
+**Teil B — Workflow-Gruppierung in `omp-switcher`/`omp-video-mixer-me`
+(`nodes/*/ui/bundle.js`):** neue `senderWorkflowLabel()`/
+`senderWorkflowLabel()`-Hilfsfunktion (pro Bundle eigenständig, Prinzip
+"jedes Node-UI-Bundle bleibt eigenständig", §4.5) — löst `senderId` über
+`GET /api/v1/graph` (`node.outputs[].id`) auf `nodeId` auf, dann über
+`GET /api/v1/workflows` (`wf.runtime[role].nodeId`) auf die
+Workflow-Zugehörigkeit, exakt dasselbe zweistufige Muster wie
+`omp-audio-mixer/ui/bundle.js#loadFollowTargets` (dort nodeId→Workflow
+direkt, hier zusätzlich senderId→nodeId vorgeschaltet, weil Crosspoint-
+Einträge Sender sind, keine Nodes). Eingänge werden nur gruppiert
+("Dieser Workflow" / "Andere Quellen"), wenn tatsächlich beide Gruppen
+nicht-leer sind — ohne Workflow-Nutzung bleibt die Liste unverändert
+flach (kein Verhaltensbruch für den heutigen Vorführ-/Testbetrieb ohne
+Workflows). `omp-switcher`: eine flache `.buttons`-Liste mit
+eingestreuten `.group-label`-Trennern. `omp-video-mixer-me`: neue
+`renderBusRow()`-Hilfsfunktion, von PGM- **und** PST-Reihe
+gleichermaßen genutzt (beide Busse zeigen dieselben Eingänge, dieselbe
+Gruppierung).
+
+**Live verifiziert (kein Mock):** vier echte Instanzen (2×
+`omp-source`, `omp-switcher`, `omp-video-mixer-me`) per
+`POST /api/v1/workflows` mit `adoptRuntime` in einen echten Workflow
+"Regie A" aufgenommen, eine fünfte `omp-source`-Instanz bewusst
+außerhalb gelassen. Node-UI-Bundles direkt gemountet (`ui/shell/
+ui-bundle.ts`-Logik nachgebildet, ohne Flow-Editor-Klick-Koordinaten —
+robuster als SVG-Kachel-Doppelklicks, die sich in dieser Sitzung als
+fragil erwiesen, s. u.) und deren Shadow-DOM per CDP inspiziert:
+Switcher zeigt "Schwarz" ungruppiert, dann "Dieser Workflow" (PGM vom
+Mixer + die zweite Quelle desselben Workflows) und "Andere Quellen"
+(die außenstehende Quelle) — exakt wie erwartet. Mixer zeigt dieselbe
+Gruppierung identisch auf PGM- und PST-Reihe. Palette-Suchfeld separat
+per echtem Chromium/CDP-Tastatur-Input verifiziert: Eingabe "mixer"
+filtert 10 Katalog-Einträge auf 2 (Video Mixer M/E, Audio Mixer),
+Fokus bleibt nach dem Rebuild auf dem Suchfeld (`document.activeElement
+=== search`), Eingabe eines Nonsens-Strings zeigt "Keine Treffer.".
+Zusätzlicher Fund beim Verifizieren, nicht Teil dieses Fixes: Bundle-
+Änderungen an `nodes/*/ui/bundle.js` werden per `include_str!` zur
+Compile-Zeit eingebettet (`uibundle.rs`) — ein reiner `.js`-Edit ohne
+`cargo build` + Prozess-Neustart hat keine Wirkung (in dieser Sitzung
+zunächst übersehen, per Vergleich altes/neues Panel-HTML entdeckt);
+ebenfalls beobachtet, aber nicht verfolgt: nach einem `kill -9`-
+Neustart wurde die `nodeId` einer Rolle im Workflow-`runtime` nicht
+zuverlässig neu aufgelöst (beim Mixer korrekt, beim Switcher stehen
+geblieben) — separates mögliches `rewireAfterRestart`-Detail, für
+diesen Test durch einen sauberen Neuaufbau umgangen statt untersucht.
+
+`deno check ui/`/`deno test ui/` (58/58), `node --check` auf beiden
+Bundles grün. Damit ist die ursprüngliche 6-Punkte-Liste
+("source-katalog UI modernisieren") vollständig abgeschlossen.

@@ -353,6 +353,15 @@ export class FlowCanvas extends HTMLElement {
   #panelNodeId: string | null = null;
   #snapshotBar!: HTMLDivElement;
   #palette!: HTMLDivElement;
+  // Skalierungs-Review D5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
+  // Suchfeld für den Node-Katalog — Query + zuletzt geholte Daten getrennt
+  // von #renderPalette() gehalten, damit ein Tastendruck nur neu filtert
+  // (#renderPaletteList()), statt Katalog/Instanzen/Hosts erneut vom
+  // Server zu holen.
+  #paletteFilterQuery = "";
+  #paletteCatalog: CatalogEntry[] | null = null;
+  #paletteInstances: LauncherInstance[] = [];
+  #paletteHosts: HostEntry[] = [];
 
   // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
   #renderQueue: Promise<void> = Promise.resolve();
@@ -2266,6 +2275,43 @@ export class FlowCanvas extends HTMLElement {
   // --- Instanz-Launcher (UMSETZUNG.md C8) ---
 
   async #renderPalette() {
+    try {
+      const [catalogRes, instancesRes, hostsRes] = await Promise.all([
+        apiFetch("/api/v1/catalog"),
+        apiFetch("/api/v1/instances"),
+        apiFetch("/api/v1/hosts"),
+      ]);
+      if (!catalogRes.ok) {
+        this.#paletteCatalog = null;
+        this.#renderPaletteList();
+        return;
+      }
+      this.#paletteCatalog = (await catalogRes.json()) as CatalogEntry[];
+      this.#paletteInstances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
+      // Remote-Hosts (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 2) sind
+      // optional — kein Fehler, wenn der Endpunkt (noch) nichts liefert
+      // oder der Nutzer keine Admin-Sicht hat (403 möglich, D3 Teil 2).
+      this.#paletteHosts = hostsRes.ok ? await hostsRes.json() : [];
+    } catch {
+      this.#paletteCatalog = null;
+    }
+    this.#renderPaletteList();
+  }
+
+  // Reiner DOM-Aufbau aus den zuletzt per #renderPalette() geholten Daten
+  // (kein Netzwerk-Zugriff) — wird sowohl nach einem frischen Fetch als
+  // auch bei jedem Tastendruck im Suchfeld aufgerufen. Erhält Fokus +
+  // Cursor-Position des Suchfelds über den Rebuild hinweg (gleiche
+  // Fokus-Erhalt-Linie wie Nachtrag 72, hier seltener nötig, da
+  // #renderPalette() nur bei Instanz-Crash/-Neustart/-Start/-Stop
+  // erneut aufgerufen wird, nicht auf einem festen Poll-Timer).
+  #renderPaletteList() {
+    const searchWasFocused = this.#palette.querySelector<HTMLInputElement>('[data-role="palette-search"]') ===
+      document.activeElement;
+    const searchSelectionStart = searchWasFocused
+      ? (document.activeElement as HTMLInputElement).selectionStart
+      : null;
+
     this.#palette.replaceChildren();
 
     const heading = document.createElement("div");
@@ -2273,120 +2319,139 @@ export class FlowCanvas extends HTMLElement {
     heading.style.cssText = "font-weight:bold;margin-bottom:8px;";
     this.#palette.appendChild(heading);
 
-    try {
-      const [catalogRes, instancesRes, hostsRes] = await Promise.all([
-        apiFetch("/api/v1/catalog"),
-        apiFetch("/api/v1/instances"),
-        apiFetch("/api/v1/hosts"),
-      ]);
-      if (!catalogRes.ok) return;
-      const catalog = (await catalogRes.json()) as CatalogEntry[];
-      const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
-      // Remote-Hosts (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 2) sind
-      // optional — kein Fehler, wenn der Endpunkt (noch) nichts liefert
-      // oder der Nutzer keine Admin-Sicht hat (403 möglich, D3 Teil 2).
-      const hosts: HostEntry[] = hostsRes.ok ? await hostsRes.json() : [];
+    const catalog = this.#paletteCatalog;
+    if (catalog === null) return;
 
-      if (catalog.length === 0) {
-        const empty = document.createElement("p");
-        empty.textContent = "Katalog leer.";
-        empty.style.cssText = "color:#888;";
-        this.#palette.appendChild(empty);
-        return;
+    if (catalog.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "Katalog leer.";
+      empty.style.cssText = "color:#888;";
+      this.#palette.appendChild(empty);
+      return;
+    }
+
+    const searchInput = document.createElement("input");
+    searchInput.setAttribute("data-role", "palette-search");
+    searchInput.type = "search";
+    searchInput.placeholder = "Suchen…";
+    searchInput.value = this.#paletteFilterQuery;
+    searchInput.style.cssText =
+      "width:100%;box-sizing:border-box;margin-bottom:8px;padding:4px 6px;" +
+      "background:#1b1b1b;color:#ddd;border:1px solid #444;border-radius:4px;font-size:12px;";
+    searchInput.addEventListener("input", () => {
+      this.#paletteFilterQuery = searchInput.value;
+      this.#renderPaletteList();
+    });
+    this.#palette.appendChild(searchInput);
+    if (searchWasFocused) {
+      searchInput.focus();
+      if (searchSelectionStart !== null) searchInput.setSelectionRange(searchSelectionStart, searchSelectionStart);
+    }
+
+    const query = this.#paletteFilterQuery.trim().toLowerCase();
+    const filtered = query === ""
+      ? catalog
+      : catalog.filter((entry) => entry.label.toLowerCase().includes(query) || entry.type.toLowerCase().includes(query));
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "Keine Treffer.";
+      empty.style.cssText = "color:#888;";
+      this.#palette.appendChild(empty);
+      return;
+    }
+
+    const instances = this.#paletteInstances;
+    const hosts = this.#paletteHosts;
+    for (const entry of filtered) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
+
+      const btn = document.createElement("button");
+      // version (§17 Teil 5): mehrere importierte Versionen desselben
+      // Typs erscheinen als getrennte Katalog-Einträge/Karten — ohne
+      // die Version im Label wären zwei Karten mit identischem
+      // "+ Label" ununterscheidbar.
+      btn.textContent = entry.version ? `+ ${entry.label} (${entry.version})` : `+ ${entry.label}`;
+      // Beschreibung/Ressourcen-Schätzung stehen sichtbar als
+      // Untertitel (s. u.), zusätzlich hier im Tooltip für den
+      // schnellen Hover-Fall.
+      const tooltipParts = [`${entry.label} starten`, entry.description, entry.expectedResources]
+        .filter((p): p is string => !!p);
+      btn.title = tooltipParts.join(" — ");
+      btn.style.cssText = "cursor:pointer;flex:1;text-align:left;padding:4px 6px;";
+
+      // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
+      // gibt — im (heute üblichen) Fall ohne Host-Agents bleibt die
+      // Palette optisch unverändert gegenüber vor D6 Teil 2.
+      let hostSelect: HTMLSelectElement | null = null;
+      if (hosts.length > 0) {
+        hostSelect = document.createElement("select");
+        hostSelect.title = "Zielhost";
+        hostSelect.style.cssText = "font-size:10px;max-width:90px;";
+        const localOpt = document.createElement("option");
+        localOpt.value = "";
+        localOpt.textContent = "(lokal)";
+        hostSelect.appendChild(localOpt);
+        for (const host of hosts) {
+          const opt = document.createElement("option");
+          opt.value = host.id;
+          opt.textContent = host.label;
+          hostSelect.appendChild(opt);
+        }
+        row.appendChild(hostSelect);
       }
 
-      for (const entry of catalog) {
-        const row = document.createElement("div");
-        row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
+      btn.addEventListener("click", () => this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined));
+      row.appendChild(btn);
+      this.#palette.appendChild(row);
 
-        const btn = document.createElement("button");
-        // version (§17 Teil 5): mehrere importierte Versionen desselben
-        // Typs erscheinen als getrennte Katalog-Einträge/Karten — ohne
-        // die Version im Label wären zwei Karten mit identischem
-        // "+ Label" ununterscheidbar.
-        btn.textContent = entry.version ? `+ ${entry.label} (${entry.version})` : `+ ${entry.label}`;
-        // Beschreibung/Ressourcen-Schätzung stehen sichtbar als
-        // Untertitel (s. u.), zusätzlich hier im Tooltip für den
-        // schnellen Hover-Fall.
-        const tooltipParts = [`${entry.label} starten`, entry.description, entry.expectedResources]
-          .filter((p): p is string => !!p);
-        btn.title = tooltipParts.join(" — ");
-        btn.style.cssText = "cursor:pointer;flex:1;text-align:left;padding:4px 6px;";
-
-        // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
-        // gibt — im (heute üblichen) Fall ohne Host-Agents bleibt die
-        // Palette optisch unverändert gegenüber vor D6 Teil 2.
-        let hostSelect: HTMLSelectElement | null = null;
-        if (hosts.length > 0) {
-          hostSelect = document.createElement("select");
-          hostSelect.title = "Zielhost";
-          hostSelect.style.cssText = "font-size:10px;max-width:90px;";
-          const localOpt = document.createElement("option");
-          localOpt.value = "";
-          localOpt.textContent = "(lokal)";
-          hostSelect.appendChild(localOpt);
-          for (const host of hosts) {
-            const opt = document.createElement("option");
-            opt.value = host.id;
-            opt.textContent = host.label;
-            hostSelect.appendChild(opt);
-          }
-          row.appendChild(hostSelect);
+      // §17 Teil 1 (docs/END-GOAL-FEATURES.md, 2026-07-17): sichtbare
+      // Kurzbeschreibung + grobe Ressourcen-Schätzung statt nur eines
+      // Labels — vermutete Ressourcen sind bewusst als Freitext-Hinweis
+      // gekennzeichnet ("~"), keine Messung (bewusst weiterhin
+      // Freitext statt der echten Kapitel-14-Teil-3-Messung unten:
+      // dieser Hinweis kommt vom Katalog-Eintrag selbst, unabhängig
+      // davon, ob der Node-Typ je gemessen wurde).
+      if (entry.description || entry.expectedResources) {
+        const meta = document.createElement("div");
+        meta.style.cssText = "margin:-2px 0 6px 2px;color:var(--omp-text-dim);font-size:9px;line-height:1.3;";
+        if (entry.description) {
+          const desc = document.createElement("div");
+          desc.textContent = entry.description;
+          meta.appendChild(desc);
         }
-
-        btn.addEventListener("click", () => this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined));
-        row.appendChild(btn);
-        this.#palette.appendChild(row);
-
-        // §17 Teil 1 (docs/END-GOAL-FEATURES.md, 2026-07-17): sichtbare
-        // Kurzbeschreibung + grobe Ressourcen-Schätzung statt nur eines
-        // Labels — vermutete Ressourcen sind bewusst als Freitext-Hinweis
-        // gekennzeichnet ("~"), keine Messung (bewusst weiterhin
-        // Freitext statt der echten Kapitel-14-Teil-3-Messung unten:
-        // dieser Hinweis kommt vom Katalog-Eintrag selbst, unabhängig
-        // davon, ob der Node-Typ je gemessen wurde).
-        if (entry.description || entry.expectedResources) {
-          const meta = document.createElement("div");
-          meta.style.cssText = "margin:-2px 0 6px 2px;color:var(--omp-text-dim);font-size:9px;line-height:1.3;";
-          if (entry.description) {
-            const desc = document.createElement("div");
-            desc.textContent = entry.description;
-            meta.appendChild(desc);
-          }
-          if (entry.expectedResources) {
-            const res = document.createElement("div");
-            res.textContent = `~ ${entry.expectedResources}`;
-            res.style.cssText = "font-style:italic;";
-            meta.appendChild(res);
-          }
-          this.#palette.appendChild(meta);
+        if (entry.expectedResources) {
+          const res = document.createElement("div");
+          res.textContent = `~ ${entry.expectedResources}`;
+          res.style.cssText = "font-style:italic;";
+          meta.appendChild(res);
         }
-
-        // Kapitel 14 Teil 3 (docs/END-GOAL-FEATURES.md §14.3d):
-        // profilbasierte Start-Vorprüfung/Warnung — echte gemessene
-        // Werte statt des Freitext-Hinweises oben, sobald der Node-Typ
-        // mindestens einmal gelaufen ist. Aktualisiert sich beim
-        // Wechsel der Host-Auswahl neu (anderer Host = andere freie
-        // Kapazität).
-        const profileTag = document.createElement("div");
-        profileTag.setAttribute("data-role", "profile-tag");
-        profileTag.style.cssText = "margin:-2px 0 6px 2px;font-size:9px;line-height:1.3;";
-        this.#palette.appendChild(profileTag);
-        void this.#applyProfileTag(profileTag, entry.type, hostSelect?.value || "");
-        hostSelect?.addEventListener("change", () => {
-          void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
-        });
-
-        // §17 Teil 5: nach (Type, Version) filtern, nicht nur Type —
-        // sonst würde jede laufende Instanz eines Typs unter JEDER
-        // seiner Versions-Karten doppelt auftauchen, sobald mehrere
-        // Versionen desselben Typs importiert sind.
-        for (const inst of instances.filter((i) => i.type === entry.type && (i.version || "") === (entry.version || ""))) {
-          this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
-        }
+        this.#palette.appendChild(meta);
       }
-    } catch {
-      // Palette bleibt leer, wenn der Server (noch) nicht erreichbar ist.
+
+      // Kapitel 14 Teil 3 (docs/END-GOAL-FEATURES.md §14.3d):
+      // profilbasierte Start-Vorprüfung/Warnung — echte gemessene
+      // Werte statt des Freitext-Hinweises oben, sobald der Node-Typ
+      // mindestens einmal gelaufen ist. Aktualisiert sich beim
+      // Wechsel der Host-Auswahl neu (anderer Host = andere freie
+      // Kapazität).
+      const profileTag = document.createElement("div");
+      profileTag.setAttribute("data-role", "profile-tag");
+      profileTag.style.cssText = "margin:-2px 0 6px 2px;font-size:9px;line-height:1.3;";
+      this.#palette.appendChild(profileTag);
+      void this.#applyProfileTag(profileTag, entry.type, hostSelect?.value || "");
+      hostSelect?.addEventListener("change", () => {
+        void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
+      });
+
+      // §17 Teil 5: nach (Type, Version) filtern, nicht nur Type —
+      // sonst würde jede laufende Instanz eines Typs unter JEDER
+      // seiner Versions-Karten doppelt auftauchen, sobald mehrere
+      // Versionen desselben Typs importiert sind.
+      for (const inst of instances.filter((i) => i.type === entry.type && (i.version || "") === (entry.version || ""))) {
+        this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
+      }
     }
   }
 

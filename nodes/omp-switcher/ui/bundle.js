@@ -7,6 +7,15 @@
 // dieses Nodes ändert (neue omp-source-Instanzen erscheinen/verschwinden)
 // und es dafür (anders als bei einzelnen Parametern) keinen SSE-Kanal
 // gibt.
+//
+// Skalierungs-Review D5/Nutzerwunsch (docs/REVIEW-2026-07-17-SKALIERUNG-
+// 24-7.md, "Source-Katalog-UI modernisieren", präzisiert 2026-07-22:
+// analog zur bereits verbesserten AFV-Ziel-Auswahl im Audio-Mixer,
+// s. dortiges `rebuildFollowOptions`/`loadFollowTargets`): Quellen
+// werden nach Workflow-Zugehörigkeit gruppiert (eigener Workflow zuerst,
+// sichtbare Zwischenüberschrift), sobald mehr als eine Gruppe existiert
+// — bei fehlender Workflow-Nutzung (kein Workflow oder alle Quellen im
+// selben) bleibt die Liste unverändert flach, wie zuvor.
 class OmpSwitcherPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -15,7 +24,12 @@ class OmpSwitcherPanel extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
-      .buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+      .buttons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      .group-label {
+        flex-basis: 100%; font-size: 10px; text-transform: uppercase;
+        color: #888; margin: 6px 0 -2px;
+      }
+      .group-label:first-child { margin-top: 0; }
       button {
         cursor: pointer; padding: 6px 10px; border: 1px solid #555;
         background: #222; color: #eee; border-radius: 4px;
@@ -36,10 +50,49 @@ class OmpSwitcherPanel extends HTMLElement {
       }).then(refresh);
     };
 
+    // Sender->Workflow-Auflösung, gleiches Muster wie omp-audio-mixer/
+    // ui/bundle.js#loadFollowTargets: GET /api/v1/graph liefert
+    // senderId->nodeId (node.outputs[].id), GET /api/v1/workflows liefert
+    // nodeId->workflowId (wf.runtime[role].nodeId) + workflowId->Label.
+    const senderWorkflowLabel = async () => {
+      const [graphRes, workflowsRes] = await Promise.all([
+        fetch("/api/v1/graph"),
+        fetch("/api/v1/workflows"),
+      ]);
+      const senderNodeId = new Map();
+      if (graphRes.ok) {
+        const graph = await graphRes.json();
+        for (const n of graph.nodes || []) {
+          for (const out of n.outputs || []) senderNodeId.set(out.id, n.id);
+        }
+      }
+      const nodeWorkflow = new Map();
+      let ownWorkflowId = null;
+      let workflowLabel = new Map();
+      if (workflowsRes.ok) {
+        const workflows = await workflowsRes.json();
+        for (const wf of workflows) {
+          workflowLabel.set(wf.id, wf.definition?.title || wf.name);
+          for (const role of Object.values(wf.runtime || {})) {
+            if (!role.nodeId) continue;
+            nodeWorkflow.set(role.nodeId, wf.id);
+            if (role.nodeId === nodeId) ownWorkflowId = wf.id;
+          }
+        }
+      }
+      const result = new Map();
+      for (const [senderId, nId] of senderNodeId) {
+        const wfId = nodeWorkflow.get(nId);
+        if (wfId) result.set(senderId, { id: wfId, label: workflowLabel.get(wfId) || wfId, own: wfId === ownWorkflowId });
+      }
+      return result;
+    };
+
     const refresh = async () => {
-      const [inputsRes, activeRes] = await Promise.all([
+      const [inputsRes, activeRes, senderWorkflow] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/activeInput`),
+        senderWorkflowLabel(),
       ]);
       if (!inputsRes.ok || !activeRes.ok) return;
       const inputs = (await inputsRes.json()).value || [];
@@ -53,12 +106,34 @@ class OmpSwitcherPanel extends HTMLElement {
       blackBtn.addEventListener("click", () => select(""));
       buttons.append(blackBtn);
 
-      for (const input of inputs) {
+      const makeInputButton = (input) => {
         const btn = document.createElement("button");
         btn.textContent = input.label;
         btn.className = input.senderId === active ? "active" : "";
         btn.addEventListener("click", () => select(input.senderId));
-        buttons.append(btn);
+        return btn;
+      };
+
+      // Gruppieren nur, wenn es tatsächlich mehr als eine Gruppe gibt
+      // (eigener Workflow + mindestens ein Rest) — sonst bliebe die
+      // Liste bei "kein Workflow genutzt" unverändert flach, wie vor
+      // diesem Feature.
+      const own = inputs.filter((i) => senderWorkflow.get(i.senderId)?.own);
+      const rest = inputs.filter((i) => !senderWorkflow.get(i.senderId)?.own);
+      if (own.length > 0 && rest.length > 0) {
+        const ownLabel = document.createElement("div");
+        ownLabel.className = "group-label";
+        ownLabel.textContent = "Dieser Workflow";
+        buttons.append(ownLabel);
+        for (const input of own) buttons.append(makeInputButton(input));
+
+        const restLabel = document.createElement("div");
+        restLabel.className = "group-label";
+        restLabel.textContent = "Andere Quellen";
+        buttons.append(restLabel);
+        for (const input of rest) buttons.append(makeInputButton(input));
+      } else {
+        for (const input of inputs) buttons.append(makeInputButton(input));
       }
 
       if (inputs.length === 0) {
