@@ -15,7 +15,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       :host { display: block; font-family: sans-serif; color: #eee; font-size: 12px; }
       .targets { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
       .targets label { color: #999; display: flex; gap: 4px; align-items: center; }
-      .targets input[type="text"] { width: 120px; }
+      .targets select.target-select {
+        width: 180px; background: #222; color: #eee; border: 1px solid #555; border-radius: 3px;
+      }
       .connected { padding: 2px 7px; border-radius: 3px; background: #7a1f1f; }
       .connected.ok { background: #2e7d32; }
       .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
@@ -70,19 +72,21 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
     const targetsRow = document.createElement("div");
     targetsRow.className = "targets";
-    const playerLabelInput = document.createElement("input");
-    playerLabelInput.type = "text";
-    playerLabelInput.placeholder = "Player-Label";
-    const mixerLabelInput = document.createElement("input");
-    mixerLabelInput.type = "text";
-    mixerLabelInput.placeholder = "Mixer-Label";
+    // Nutzerwunsch 2026-07-22: Player-/Mixer-Ziel wie beim Video-Mixer-
+    // DSK aus einer Discovery-Liste wählen statt den exakten Node-Label-
+    // Text selbst eintippen zu müssen (main.rs::AutomationState::
+    // discovered_labels/availableNodes-Param, remote::list_node_labels).
+    const playerLabelSelect = document.createElement("select");
+    playerLabelSelect.className = "target-select";
+    const mixerLabelSelect = document.createElement("select");
+    mixerLabelSelect.className = "target-select";
     const connectedEl = document.createElement("span");
     connectedEl.className = "connected";
     connectedEl.textContent = "nicht verbunden";
     const playerLabelWrap = document.createElement("label");
-    playerLabelWrap.append("Player: ", playerLabelInput);
+    playerLabelWrap.append("Player: ", playerLabelSelect);
     const mixerLabelWrap = document.createElement("label");
-    mixerLabelWrap.append("Mixer: ", mixerLabelInput);
+    mixerLabelWrap.append("Mixer: ", mixerLabelSelect);
     targetsRow.append(playerLabelWrap, mixerLabelWrap, connectedEl);
 
     const statusRow = document.createElement("div");
@@ -219,18 +223,38 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       return (await res.json()).value;
     };
 
-    let editingTargets = false;
-    playerLabelInput.addEventListener("focus", () => (editingTargets = true));
-    mixerLabelInput.addEventListener("focus", () => (editingTargets = true));
-    playerLabelInput.addEventListener("blur", () => {
-      editingTargets = false;
-      setParam("targetPlayerLabel", playerLabelInput.value.trim());
-    });
-    mixerLabelInput.addEventListener("blur", () => {
-      editingTargets = false;
-      setParam("targetMixerLabel", mixerLabelInput.value.trim());
-    });
+    // Sofort-Anwenden bei Auswahl, gleiches Muster wie
+    // `omp-video-mixer-me`s DSK-Quellauswahl (`keyerSourceSelect`) —
+    // kein separater Übernehmen-Schritt nötig.
+    playerLabelSelect.addEventListener("change", () => setParam("targetPlayerLabel", playerLabelSelect.value));
+    mixerLabelSelect.addEventListener("change", () => setParam("targetMixerLabel", mixerLabelSelect.value));
     modeSelect.addEventListener("change", () => setParam("mode", modeSelect.value));
+
+    // Baut die Optionsliste eines Ziel-Selects neu auf, nur wenn sich die
+    // Discovery-Liste tatsächlich geändert hat (Options-Key-Vergleich,
+    // gleiches Muster wie `omp-video-mixer-me::buildGroupedOptions`s
+    // Aufrufer) — verhindert, dass ein offener Dropdown unter dem Cursor
+    // bei jedem 1s-Poll zuklappt. `currentValue` bleibt auch dann als
+    // Option erhalten, wenn der konfigurierte Node gerade nicht (mehr)
+    // discovered ist (z. B. kurz offline) — sonst ginge die Konfiguration
+    // beim nächsten Poll sichtbar verloren.
+    const buildTargetOptions = (selectEl, labels, currentValue) => {
+      const allLabels = currentValue && !labels.includes(currentValue) ? [currentValue, ...labels] : labels;
+      const optionsKey = JSON.stringify(allLabels);
+      if (selectEl.dataset.optionsKey === optionsKey) return;
+      selectEl.dataset.optionsKey = optionsKey;
+      selectEl.replaceChildren();
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "— wählen —";
+      selectEl.append(placeholder);
+      for (const label of allLabels) {
+        const opt = document.createElement("option");
+        opt.value = label;
+        opt.textContent = label;
+        selectEl.append(opt);
+      }
+    };
 
     // itemId -> { el, labelEl, cueBtn, removeBtn }
     const itemEls = new Map();
@@ -318,6 +342,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         durationMs,
         assetsValue,
         activeCartId,
+        availableNodesValue,
+        targetPlayerLabel,
+        targetMixerLabel,
       ] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
@@ -328,6 +355,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("currentDurationMs"),
         getParam("assets"),
         getParam("activeCartId"),
+        getParam("availableNodes"),
+        getParam("targetPlayerLabel"),
+        getParam("targetMixerLabel"),
       ]);
       const items = itemsValue || [];
       const currentIds = new Set(items.map((it) => it.id));
@@ -346,14 +376,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       takeBtn.disabled = !cuedItemId;
       connectedEl.textContent = connected ? "verbunden" : "nicht verbunden";
       connectedEl.className = connected ? "connected ok" : "connected";
-      if (!editingTargets && document.activeElement !== modeSelect) {
-        if (document.activeElement !== playerLabelInput) {
-          playerLabelInput.value = (await getParam("targetPlayerLabel")) || "";
-        }
-        if (document.activeElement !== mixerLabelInput) {
-          mixerLabelInput.value = (await getParam("targetMixerLabel")) || "";
-        }
-      }
+
+      const availableLabels = availableNodesValue || [];
+      buildTargetOptions(playerLabelSelect, availableLabels, targetPlayerLabel);
+      buildTargetOptions(mixerLabelSelect, availableLabels, targetMixerLabel);
+      if (shadow.activeElement !== playerLabelSelect) playerLabelSelect.value = targetPlayerLabel || "";
+      if (shadow.activeElement !== mixerLabelSelect) mixerLabelSelect.value = targetMixerLabel || "";
+
       if (mode) modeSelect.value = mode;
       progressBar.style.width = durationMs > 0 ? `${Math.min(100, (100 * (playheadMs || 0)) / durationMs)}%` : "0%";
 

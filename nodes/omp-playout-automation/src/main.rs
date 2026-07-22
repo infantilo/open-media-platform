@@ -105,6 +105,13 @@ struct AutomationState {
     /// C16) — s. `remote::resolve_node_id_by_label`-Doku.
     player_node_id: Option<String>,
     mixer_node_id: Option<String>,
+    /// Alle aktuell bekannten Node-Labels außer dem eigenen (`remote::
+    /// list_node_labels`) — Grundlage für `availableNodes`, das
+    /// `targetPlayerLabel`/`targetMixerLabel` im UI-Bundle von
+    /// Freitext-Feldern auf eine Auswahl umstellt (Nutzerwunsch
+    /// 2026-07-22: "wie beim Video-Mixer DSK"). Im selben `discovery_loop`-
+    /// Tick wie `player_node_id`/`mixer_node_id` aktualisiert.
+    discovered_labels: Vec<String>,
     /// Item-ID, die zuletzt tatsächlich per `take_on_targets` remote live
     /// geschaltet wurde (C18-Fund, `ARCHITECTURE.md` §24.3) — bewusst
     /// **nicht** aus `playlist.on_air()` abgeleitet: erreicht `advance()`
@@ -180,6 +187,10 @@ struct AutomationStore {
     /// Proxy-Pfad) plus das geteilte, periodisch erneuerte Service-Token.
     orchestrator_url: String,
     auth: OrchestratorAuth,
+    /// Das eigene, bei der NMOS-Registrierung verwendete Label —
+    /// `remote::list_node_labels` schließt es aus (dieser Node ist nie
+    /// ein sinnvolles Player-/Mixer-Ziel).
+    own_label: String,
 }
 
 impl AutomationStore {
@@ -760,6 +771,16 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // Nutzerwunsch 2026-07-22: Player-/Mixer-Auswahl "wie beim
+            // Video-Mixer DSK" — eine Discovery-Liste statt Freitext, s.
+            // `remote::list_node_labels`-Doku.
+            ParamSpec {
+                name: "availableNodes".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
 
         let methods = vec![
@@ -921,6 +942,7 @@ impl ParamStore for AutomationStore {
             "activeCartId" => Some(serde_json::json!(
                 state.active_cart.as_ref().map(|a| a.asset_id.clone()).unwrap_or_default()
             )),
+            "availableNodes" => Some(serde_json::json!(state.discovered_labels)),
             _ => None,
         }
     }
@@ -1129,17 +1151,20 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             (state.target_player_label.clone(), state.target_mixer_label.clone())
         };
         let registry = store.registry.clone();
+        let own_label = store.own_label.clone();
         let resolved = tokio::task::spawn_blocking(move || {
             (
                 remote::resolve_node_id_by_label(&registry, &player_label),
                 remote::resolve_node_id_by_label(&registry, &mixer_label),
+                remote::list_node_labels(&registry, &own_label),
             )
         })
         .await;
-        if let Ok((player_node_id, mixer_node_id)) = resolved {
+        if let Ok((player_node_id, mixer_node_id, discovered_labels)) = resolved {
             let mut state = store.state.lock().expect("lock poisoned");
             state.player_node_id = player_node_id;
             state.mixer_node_id = mixer_node_id;
+            state.discovered_labels = discovered_labels;
         }
     }
 }
@@ -1305,6 +1330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         target_mixer_label: initial_mixer_label,
         player_node_id: None,
         mixer_node_id: None,
+        discovered_labels: Vec::new(),
         last_live_item_id: None,
         carts: Vec::new(),
         next_cart_seq: 0,
@@ -1317,6 +1343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         events: events_tx.clone(),
         orchestrator_url: orchestrator_url.clone(),
         auth: auth.clone(),
+        own_label: label.clone(),
     });
 
     // instance_id vor dem Move in NodeConfig sichern — wird unten für

@@ -207,3 +207,28 @@ pub fn resolve_node_id_by_label(registry: &RegistryClient, label: &str) -> Optio
     let nodes = registry.list_nodes().ok()?;
     nodes.into_iter().find(|n| n.label == label).map(|n| n.id)
 }
+
+/// Alle aktuell in der Registry bekannten Node-Labels, `own_label`
+/// ausgeschlossen (dieser Node selbst ist nie ein sinnvolles Player-/
+/// Mixer-Ziel) und sortiert — Grundlage für `availableNodes` (`main.rs`),
+/// das `targetPlayerLabel`/`targetMixerLabel` von Freitext-Feldern auf
+/// eine Auswahl aus tatsächlich vorhandenen Nodes umstellt (Nutzerwunsch
+/// 2026-07-22: "wie beim Video-Mixer DSK", dessen Quellauswahl ebenfalls
+/// aus Discovery statt manueller Eingabe kommt). Kennt selbst keine
+/// Node-Typen (die NMOS-Registrierung führt dafür keine — s.
+/// `resolve_node_id_by_label`-Doku, dieselbe Einschränkung): zeigt jeden
+/// erreichbaren Node, der Operator wählt anhand des Labels selbst den
+/// richtigen aus, genau wie bei jeder anderen Discovery-Liste in diesem
+/// Projekt (z. B. `omp-video-mixer-me::discover_keyfill`).
+pub fn list_node_labels(registry: &RegistryClient, own_label: &str) -> Vec<String> {
+    let mut labels: Vec<String> = registry
+        .list_nodes()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|n| n.label)
+        .filter(|label| label != own_label)
+        .collect();
+    labels.sort();
+    labels.dedup();
+    labels
+}
