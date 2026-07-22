@@ -61,6 +61,15 @@ pub trait ParamStore: Send + Sync + 'static {
     fn extra_route(&self, _method: &str, _path: &str, _body: &[u8]) -> Option<RawResponse> {
         None
     }
+
+    /// Optionale Plugin-Host-Erweiterung des Node-Contracts
+    /// (`ARCHITECTURE.md` §24.4, `UMSETZUNG.md` C19, `crate::plugins`) —
+    /// `Some(&registry)` exponiert automatisch `GET /plugins`/`PATCH
+    /// /plugins/<id>` (s. `route` unten). Default `None`: kein
+    /// Pflichtpunkt, bestehende Nodes brauchen keine Änderung.
+    fn plugins(&self) -> Option<&crate::plugins::PluginRegistry> {
+        None
+    }
 }
 
 /// Startet den Descriptor-HTTP-Server auf addr und blockiert den
@@ -152,6 +161,47 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
         };
     }
 
+    // C19 (ARCHITECTURE.md §24.4): generischer Plugin-Host, nur aktiv
+    // für Nodes, deren ParamStore::plugins() Some liefert — vor
+    // extra_route geprüft, damit ein Node nicht zusätzlich selbst
+    // /plugins in seinem eigenen extra_route behandeln muss.
+    if *method == Method::Get && url == "/plugins" {
+        return match store.plugins() {
+            Some(registry) => json_response(200, &registry.list()),
+            None => error_response(404, "plugins not supported"),
+        };
+    }
+    if *method == Method::Patch
+        && let Some(id) = url.strip_prefix("/plugins/")
+    {
+        let Some(registry) = store.plugins() else {
+            return error_response(404, "plugins not supported");
+        };
+        if registry.get(id).is_none() {
+            return error_response(404, "unknown plugin");
+        }
+        #[derive(serde::Deserialize, Default)]
+        struct PluginPatch {
+            enabled: Option<bool>,
+            config: Option<Value>,
+        }
+        let patch: PluginPatch = if body.is_empty() {
+            PluginPatch::default()
+        } else {
+            match serde_json::from_slice(body) {
+                Ok(p) => p,
+                Err(_) => return error_response(400, "invalid JSON body"),
+            }
+        };
+        if let Some(enabled) = patch.enabled {
+            registry.set_enabled(id, enabled);
+        }
+        if let Some(config) = patch.config {
+            registry.set_config(id, config);
+        }
+        return json_response(200, &registry.get(id).expect("checked above"));
+    }
+
     if let Some(extra) = store.extra_route(method.as_str(), url, body) {
         return Response::from_data(extra.body)
             .with_status_code(extra.status)
@@ -180,4 +230,118 @@ fn error_response(status: u16, message: &str) -> ResponseBox {
     Response::from_string(message)
         .with_status_code(status)
         .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use crate::descriptor::Descriptor;
+    use crate::plugins::PluginRegistry;
+
+    use super::*;
+
+    /// Minimaler `ParamStore` nur für die Plugin-Host-Routen (C19,
+    /// `ARCHITECTURE.md` §24.4) — kein echter Node nötig, `route()`
+    /// braucht nur den Trait, keinen echten `tiny_http::Server`.
+    struct FakeStore {
+        registry: Option<PluginRegistry>,
+    }
+
+    impl ParamStore for FakeStore {
+        fn descriptor(&self) -> Descriptor {
+            Descriptor { parameters: vec![], methods: vec![] }
+        }
+        fn get(&self, _name: &str) -> Option<Value> {
+            None
+        }
+        fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
+            Err(SetError::Unknown)
+        }
+        fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+            Err(InvokeError::Unknown)
+        }
+        fn plugins(&self) -> Option<&PluginRegistry> {
+            self.registry.as_ref()
+        }
+    }
+
+    /// Liefert Status + Body als JSON, wo vorhanden — `error_response`
+    /// (404/400) liefert bewusst Klartext statt JSON (gleiche
+    /// Konvention wie die bestehenden Params-/Methods-Fehlerantworten),
+    /// dafür fällt dies auf `Value::Null` zurück statt zu paniken.
+    fn body_of(resp: ResponseBox) -> (u16, Value) {
+        let status = resp.status_code().0;
+        let mut buf = Vec::new();
+        resp.into_reader().read_to_end(&mut buf).expect("read response body");
+        let value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
+        (status, value)
+    }
+
+    fn store_without_plugins() -> Arc<dyn ParamStore> {
+        Arc::new(FakeStore { registry: None })
+    }
+
+    fn store_with_plugins() -> Arc<dyn ParamStore> {
+        let registry = PluginRegistry::new();
+        registry.register("scte35", "SCTE-35", serde_json::json!({"pid": 500}));
+        Arc::new(FakeStore { registry: Some(registry) })
+    }
+
+    #[test]
+    fn get_plugins_without_support_is_404() {
+        let store = store_without_plugins();
+        let (status, _) = body_of(route(&Method::Get, "/plugins", &[], &store));
+        assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn get_plugins_lists_registered_plugins() {
+        let store = store_with_plugins();
+        let (status, body) = body_of(route(&Method::Get, "/plugins", &[], &store));
+        assert_eq!(status, 200);
+        let list = body.as_array().expect("array body");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0]["id"], "scte35");
+        assert_eq!(list[0]["enabled"], false);
+    }
+
+    #[test]
+    fn patch_plugin_enables_and_updates_config() {
+        let store = store_with_plugins();
+        let body = br#"{"enabled":true,"config":{"pid":700}}"#;
+        let (status, resp) = body_of(route(&Method::Patch, "/plugins/scte35", body, &store));
+        assert_eq!(status, 200);
+        assert_eq!(resp["enabled"], true);
+        assert_eq!(resp["config"]["pid"], 700);
+    }
+
+    #[test]
+    fn patch_plugin_partial_body_only_touches_given_fields() {
+        let store = store_with_plugins();
+        let (_, first) = body_of(route(&Method::Patch, "/plugins/scte35", br#"{"enabled":true}"#, &store));
+        assert_eq!(first["enabled"], true);
+        assert_eq!(first["config"]["pid"], 500, "config untouched by an enabled-only PATCH");
+    }
+
+    #[test]
+    fn patch_unknown_plugin_is_404() {
+        let store = store_with_plugins();
+        let (status, _) = body_of(route(&Method::Patch, "/plugins/does-not-exist", b"{}", &store));
+        assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn patch_plugins_without_support_is_404() {
+        let store = store_without_plugins();
+        let (status, _) = body_of(route(&Method::Patch, "/plugins/anything", b"{}", &store));
+        assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn patch_plugin_invalid_json_is_400() {
+        let store = store_with_plugins();
+        let (status, _) = body_of(route(&Method::Patch, "/plugins/scte35", b"not json", &store));
+        assert_eq!(status, 400);
+    }
 }

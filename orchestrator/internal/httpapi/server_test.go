@@ -645,6 +645,63 @@ func TestHandleNodeProxyMethod(t *testing.T) {
 	}
 }
 
+// C19 (ARCHITECTURE.md §24.4, UMSETZUNG.md C19): die Plugin-Host-Routen
+// sind reine Registrierungen desselben generischen handleNodeProxy wie
+// params/methods — diese beiden Tests belegen, dass die Registrierung
+// (Pfad-Templates, {name}-Substitution) korrekt verdrahtet ist, gleiches
+// Muster wie TestHandleNodeProxyPatchParam/TestHandleNodeProxyMethod oben.
+func TestHandleNodeProxyGetPlugins(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/plugins" {
+			t.Errorf("proxied request = %s %q, want GET /plugins", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`[{"id":"scte35","label":"SCTE-35","enabled":false,"config":{}}]`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/plugins", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "scte35") {
+		t.Fatalf("body = %q, want to contain proxied plugin list", rec.Body.String())
+	}
+}
+
+func TestHandleNodeProxyPatchPlugin(t *testing.T) {
+	var gotBody string
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.Path != "/plugins/scte35" {
+			t.Errorf("proxied request = %s %q, want PATCH /plugins/scte35", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"id":"scte35","label":"SCTE-35","enabled":true,"config":{}}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/plugins/scte35", strings.NewReader(`{"enabled":true}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotBody != `{"enabled":true}` {
+		t.Fatalf("proxied body = %q, want forwarded request body", gotBody)
+	}
+}
+
 func TestHandleNodeProxyUnknownNodeReturns404(t *testing.T) {
 	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{})
 

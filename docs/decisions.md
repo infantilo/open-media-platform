@@ -12178,3 +12178,63 @@ omp-playout-automation --all-targets`, `cargo test -p
 omp-playout-automation`, `cargo deny check` — alle grün. `node --check
 ui/bundle.js` grün. Test-Workflows danach sauber gestoppt/gelöscht,
 keine Restinstanzen.
+
+---
+
+## 2026-07-22 (Nachtrag 85) — C19 (Plugin-Host) umgesetzt, ein
+verwandter, nicht behobener Nebenfund dokumentiert
+
+**Umsetzung** (Details: `ARCHITECTURE.md` §24.4): `omp-node-sdk`
+bekommt ein neues Modul `plugins` (`PluginInfo`/`PluginRegistry`,
+insertion-geordnet wie C18s Cart-Liste) und eine neue Default-Methode
+`ParamStore::plugins() -> Option<&PluginRegistry>` (`None` = kein
+Verhaltensunterschied für bestehende Nodes). `server::route()` exponiert
+bei `Some(...)` automatisch `GET /plugins`/`PATCH /plugins/<id>`.
+Orchestrator: zwei neue Routen, reine Registrierung des längst
+bestehenden generischen `handleNodeProxy` (keine neue Go-Logik, gleiche
+Auth-Abstufung wie bei Params).
+
+**Scope-Entscheidung während der Umsetzung:** die ARCHITECTURE.md-
+Testbarkeitszeile "Zustand übersteht Node-Neustart" wurde bewusst NICHT
+als voller Live-Test (Prozess killen, Snapshot restaurieren) umgesetzt
+— das hätte den gewählten Demo-Knoten (`omp-media-library`) zu einem
+eigenen `/state`-Handler gezwungen, den er sonst nicht braucht, nur für
+diese eine Demo. Stattdessen: `PluginRegistry::capture()`/`restore()`
+als reine, unit-getestete Werte-Snapshot-Funktionen — ein Node, der
+Plugins produktiv nutzt UND bereits `/state` hat (wie der Mixer seit
+§4.6 Punkt 4), faltet sie dort einfach ein und bekommt den bereits
+live bewiesenen B7-Snapshot-Mechanismus automatisch mit.
+
+**"Erster Konsument: keiner zwingend in C19 selbst" als "nicht
+verpflichtend" statt "verboten" gelesen:** für einen echten
+End-to-End-Beweis (Client → Orchestrator-Proxy → laufender Node) bekam
+`omp-media-library` (C17) ein einzelnes, ausdrücklich als Demo
+gekennzeichnetes No-op-Plugin (`demo-noop`) — bewusst NICHT nach dem
+Test wieder entfernt, sondern als Referenzbeispiel für künftige
+Plugin-Autoren im Code belassen.
+
+**Live verifiziert** (echte Dev-Umgebung, echter `omp-media-library`-
+Node über den Launcher gestartet): `GET .../plugins` listet das
+Demo-Plugin; `PATCH .../plugins/demo-noop` mit
+`{"enabled":true,"config":{...}}` setzt beides, Antwort echot den neuen
+Zustand; zweites `GET` bestätigt In-Prozess-Persistenz; PATCH auf
+unbekannte ID → `404`; GET/PATCH ganz ohne Bearer-Token → `401` (bereits
+gehärtete `authGate`-Kette, keine neue Sicherheitslogik). `cargo test -p
+omp-node-sdk` (16 Tests, u. a. `server::route()`-Integrationstests
+gegen einen Fake-`ParamStore` ohne echten TCP-Server), `cargo clippy`,
+`cargo deny check`, `go test ./...`, zwei neue Go-`httptest`-Proxy-Tests
+— alle grün.
+
+**Nebenfund, bewusst nicht behoben (thematisch C19, kein C16-Nachtrag):**
+beim Lesen von `omp-node-sdk` fiel auf, dass `peer::PeerClient` (älter
+als C16, Kapitel 15 Teil 3 für `omp-multiviewer`, Kapitel 16 Teil 2 für
+`omp-fabrics-gateway`) strukturell **derselbe** Musterfall ist, den C16
+bei `omp-playout-automation` behoben hat — ein direkter, unauthentifiz-
+ierter Node-zu-Node-Zugriff über den `href`, am Orchestrator-Proxy
+vorbei. Blast-Radius hier deutlich kleiner (Lowres-Preview-Toggle bzw.
+ein reiner lesender Werte-Abruf für RDMA-Zieladressen, kein volles
+Playout-Take/Crosspoint-Control wie bei der Automatisation) — trotzdem
+dieselbe Kategorie Lücke. Nicht in dieser Sitzung angefasst (anderes
+Thema als C19), aber hier festgehalten, damit es nicht in Vergessenheit
+gerät, falls C16s Control-Enforcement-Prinzip irgendwann konsequent auf
+alle `PeerClient`-Konsumenten ausgedehnt werden soll.

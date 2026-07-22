@@ -205,6 +205,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}")))
 	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}")))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}")))
+	// Plugin-Host (ARCHITECTURE.md §24.4, UMSETZUNG.md C19) — reine
+	// Routenregistrierung, keine neue Proxy-Logik: derselbe generische
+	// handleNodeProxy wie bei params/methods, gleiche Auth-Abstufung
+	// (lesen = requireAuth, schreiben = requireVerbOnNode VerbOperate).
+	mux.HandleFunc("GET /api/v1/nodes/{id}/plugins", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/plugins")))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/plugins/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/plugins/{name}")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))

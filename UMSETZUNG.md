@@ -2096,7 +2096,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C16 | erledigt | [C16] Control-Enforcement-Fix: Automatisation über Orchestrator-Proxy (Service-Prinzipal) | 2026-07-22 |
 | C17 | erledigt | [C17] omp-media-library: Datei-Katalog + ffprobe-Metadaten + Segmente | 2026-07-22 |
 | C18 | erledigt | [C18] Cart-/Interrupt-Assets in omp-playout-automation (inkl. last_live_item_id-Fix) | 2026-07-22 |
-| C19 | offen | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | — |
+| C19 | erledigt | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | 2026-07-22 |
 | C20 | offen | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | — |
 | C21 | offen | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | — |
 | C22 | offen | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad | — |

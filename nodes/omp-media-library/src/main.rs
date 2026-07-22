@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamType,
-    SetError, ParamStore, RawResponse,
+    PluginRegistry, SetError, ParamStore, RawResponse,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -66,16 +66,29 @@ struct LibraryState {
 
 struct LibraryStore {
     state: Mutex<LibraryState>,
+    /// Erster (bewusst funktionsloser) Konsument des generischen
+    /// Plugin-Hosts (`ARCHITECTURE.md` §24.4, `UMSETZUNG.md` C19) — ein
+    /// einzelnes Demo-Plugin belegt live über den echten Orchestrator-
+    /// Proxy, dass `GET/PATCH /api/v1/nodes/<id>/plugins[/​<id>]`
+    /// tatsächlich bis zu einem laufenden Node durchgereicht wird. Kein
+    /// echtes Feature (keines der fünf PC-Plugins ist hier vorgezogen,
+    /// §24.4 hält das bewusst offen) — absichtlich als Beispiel/Beleg
+    /// für künftige Plugin-Autoren stehen gelassen, nicht nur zum
+    /// Testen wieder entfernt.
+    plugins: PluginRegistry,
 }
 
 impl LibraryStore {
     fn new(media_dir: PathBuf, file_extensions: Vec<String>) -> Self {
+        let plugins = PluginRegistry::new();
+        plugins.register("demo-noop", "Demo Plugin (no-op)", json!({}));
         LibraryStore {
             state: Mutex::new(LibraryState {
                 entries: Vec::new(),
                 media_dir,
                 file_extensions,
             }),
+            plugins,
         }
     }
 
@@ -364,6 +377,10 @@ impl ParamStore for LibraryStore {
 
     fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
         uibundle::route(method, path)
+    }
+
+    fn plugins(&self) -> Option<&PluginRegistry> {
+        Some(&self.plugins)
     }
 }
 

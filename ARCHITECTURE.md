@@ -2962,6 +2962,62 @@ Mock-Plugin (no-op) laden/enable/disable/config über die neue Route,
 Zustand übersteht Node-Neustart (persistiert wie andere Node-Zustände,
 §4.6 Punkt 4-Muster). **Phase:** C19.
 
+**Umgesetzt und live verifiziert** (2026-07-22): `omp-node-sdk::plugins`
+liefert `PluginInfo`/`PluginRegistry` (insertion-geordnet, gleiches
+Muster wie `omp-playout-automation`s Cart-Liste, C18) als die einzige
+mitgelieferte Implementierung — kein separater Trait, da `ParamStore`
+selbst um eine neue Default-Methode `plugins() -> Option<&PluginRegistry>`
+erweitert wurde (`None` = unverändertes Verhalten, kein bestehender Node
+musste angepasst werden). `server::route()` exponiert bei `Some(...)`
+automatisch `GET /plugins`/`PATCH /plugins/<id>`. Orchestrator: zwei neue
+Routen (`GET/PATCH /api/v1/nodes/<id>/plugins[/​<id>]`), reine
+Registrierung des bereits bestehenden generischen `handleNodeProxy` —
+keine neue Proxy-Logik, gleiche Auth-Abstufung wie bei Params (lesen
+`requireAuth`, schreiben `requireVerbOnNode(VerbOperate)`).
+`PluginRegistry::capture()`/`restore()` decken die
+Neustart-Persistenz-Anforderung als reine, unit-getestete Werte-Snapshot-
+Funktionen ab (Einbindung in das `/state`-Snapshot-Muster eines Nodes
+bleibt dessen eigene Entscheidung — bewusst nicht in einen Testknoten
+erzwungen, s. u.).
+
+**Live-Demo statt production-node-Zwang:** `omp-media-library` (C17)
+bekam ein einzelnes, ausdrücklich als Demo gekennzeichnetes No-op-Plugin
+(`demo-noop`), um den vollen Pfad Client→Orchestrator-Proxy→echter Node
+über eine reale, laufende Instanz zu beweisen — "Erster Konsument:
+keiner zwingend in C19 selbst" wurde als "nicht verpflichtend", nicht
+als "verboten" gelesen; ein kleines, folgenloses Beispiel bleibt bewusst
+im Code stehen, als Referenz für künftige Plugin-Autoren. Live gegen die
+echte Dev-Umgebung bestätigt: `GET .../plugins` listet das Demo-Plugin
+(`enabled:false`), `PATCH .../plugins/demo-noop` mit
+`{"enabled":true,"config":{...}}` setzt beides und gibt den
+aktualisierten Zustand zurück, ein zweites `GET` bestätigt die
+In-Prozess-Persistenz, ein PATCH auf eine unbekannte ID liefert `404`,
+GET/PATCH ohne Bearer-Token `401` (dieselbe, bereits gehärtete
+`authGate`-Kette wie überall sonst — keine neue Sicherheitslogik nötig).
+`cargo test -p omp-node-sdk` (16 Tests: `PluginRegistry`-Logik +
+`server::route()`-Integrationstests mit einem Fake-`ParamStore`, keine
+echte TCP-Verbindung nötig), `cargo clippy`/`cargo deny check` sauber;
+Go-seitig zwei neue `httptest`-basierte Proxy-Tests (gleiches Muster wie
+die bestehenden Params-/Methods-Tests).
+
+**Bewusst nicht in diesem Schritt:** ein Live-Test von "Zustand übersteht
+einen echten Prozess-Neustart via Snapshot" — das würde `omp-media-
+library` zusätzlich zu einem `/state`-Handler zwingen, den es sonst
+nicht bräuchte, nur für diese Demo. `capture()`/`restore()` sind
+unit-getestet (Round-Trip); ein Node, der Plugins produktiv nutzt und
+bereits `/state` hat (wie der Mixer), faltet sie dort ein — das ist dann
+derselbe, bereits live bewiesene Snapshot-Mechanismus (B7).
+
+**Nebenfund, nicht behoben:** `omp-node-sdk::peer::PeerClient` (älter
+als C16, Kapitel 15 Teil 3/Kapitel 16 Teil 2) spricht `omp-multiviewer`/
+`omp-fabrics-gateway`s Ziel-Nodes weiterhin direkt über deren `href` an
+— derselbe Musterfall wie die vor C16 behobene Lücke bei
+`omp-playout-automation`, hier aber mit deutlich kleinerem Blast-Radius
+(ein Lowres-Preview-Toggle bzw. ein reiner Werte-Abruf, kein volles
+Playout-Take/Crosspoint). Nicht Teil dieses Schritts (thematisch C19,
+nicht C16-Nachtrag) — dokumentiert, damit es nicht in Vergessenheit
+gerät, s. `docs/decisions.md`.
+
 ### 24.5 Timeline: gefenstert statt Full-Recompute
 
 **Vorbild:** PIPELINE CONTROLLER `calcTimeline()`
