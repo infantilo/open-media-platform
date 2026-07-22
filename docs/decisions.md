@@ -12297,3 +12297,83 @@ Start–Ende (mm:ss) pro Rundown-Zeile, fragt dafür ein Fenster in Größe
 der tatsächlich gerenderten Items an, kein "alles"-Full-Fetch — schließt
 damit den vom Nutzer erinnerten PIPELINE-CONTROLLER-Bug ("rendert zu
 weit in die Zukunft, wird langsam") strukturell, nicht nur punktuell.
+
+---
+
+## 2026-07-22 (Nachtrag 87) — C21 (Live-MXL-Quelle als Playlist-Item)
+umgesetzt und quantitativ live verifiziert
+
+**Umsetzung** (Details: `ARCHITECTURE.md` §24.6): vor der Umsetzung eine
+Recherche-Fork (nicht der Hauptthread) durch die bestehenden MXL-Input-
+Bausteine (`omp-mediaio::mxl::MxlVideoInput`/`MxlAudioInput`) und alle
+drei etablierten Discovery-Loops (Switcher/Mixer/Audiomixer) geschickt,
+um beim tatsächlich korrektheitskritischen GStreamer-Code nicht zu
+raten (`UMSETZUNG.md` §0 Punkt 9). Ergebnis: `nodes/omp-player/src/
+discovery.rs` (vierte Kopie des Discovery-Musters, bewusst nicht
+geteilt, s. §24.6), `pipeline::ItemSource::Live { video_flow_id,
+audio_flow_id }` (beide `Option`, main.rs löst `sender_id` erst bei
+`cue()` frisch auf, nicht beim Anlegen — eine Quelle kann zwischen
+`append()` und dem tatsächlichen Cuen neu gestartet worden sein).
+
+**Zwei kleine Korrekturen ggü. der ursprünglichen §24.6-Formulierung:**
+1. `playlist.availableSources` (mit Punkt-Namespace) existiert in
+   diesem Node nicht — `omp-player` nutzt nirgends dotted
+   Parameternamen (anders als `omp-playout-automation`/
+   `omp-video-mixer-me`). Umgesetzt als flaches `availableSources`.
+2. Der Audio-Begleiter einer Live-Quelle (falls die Quelle eigenen Ton
+   hat) wird über `device_id`-Pairing gefunden — dieselbe allgemeine
+   NMOS-Node→Device→Sender-Idee, die `omp-video-mixer-me::
+   discover_keyfill` bereits für Fill+Key nutzt, hier zum ersten Mal für
+   Video+Audio angewandt. Das stand nicht explizit in der ursprünglichen
+   Spec-Kurzfassung, war aber implizit nötig, um eine Live-Quelle mit
+   Ton überhaupt sinnvoll nutzbar zu machen (sonst müsste der Operator
+   zwei separate Live-Items für Video und Audio derselben Kamera
+   anlegen) — direkt aus `omp_node_sdk::node::start`s bestehendem
+   "ein Device pro Node-Instanz"-Verhalten hergeleitet, keine Neuerfindung.
+
+**GStreamer-Korrektheit (höchstes Risiko dieses Schritts):** `Branch`
+(`pipeline.rs`) trägt jetzt optional `MxlVideoInput`/`MxlAudioInput`;
+`teardown_branch` nimmt `Branch` seit C21 by value statt per Referenz
+und hält exakt die bei `omp-switcher`/`omp-video-mixer-me` bereits live
+gefundene Reihenfolge ein (`.stop()` vor `remove_elements`, 20ms Sleep
+dazwischen — sonst rennt der interne `read_loop`-Thread noch
+`push_buffer()` gegen ein bereits entferntes Element). Jeder
+Fehlschlagspfad beim Bauen einer Live-Branch räumt alles bereits
+Angelegte vollständig ab (identisches Cleanup-Idiom wie
+`omp-switcher::pipeline::build_branch`, dort ursprünglich gegen die
+"Registry-Geist-OOM" gefunden).
+
+**Live verifiziert, quantitativ statt nur "kein Fehler"** (echter
+`omp-source` + `omp-player-video`/`omp-player-jingle`, `mxl-info` gegen
+die tatsächlichen MXL-Flows des Players):
+- `availableSources` korrekt gefiltert (Lowres-Begleiter/eigener Sender
+  ausgeschlossen, Video- vs. Audio-Format je nach Profil).
+- Nach `cue`+`take` eines `Live`-Items wächst der Head-Index des
+  Players eigenen Video-Ausgangs-Flows mit ~25 Grains/s — echter
+  Frame-Fluss durch die volle Kette, nicht nur ein erfolgreicher
+  API-Aufruf.
+- Audio-Begleiter-Pairing über `device_id` in der echten Registry
+  bestätigt, Audio-Head-Index wächst korrekt mit ~48000 Samples/s.
+- Mehrfacher Wechsel Live→TestPattern→Live ohne Absturz/Hänger
+  (Teardown-Stresstest).
+- `cue()` mit unbekannter `senderId` → sauber `404`, Player bleibt
+  danach unverändert funktionsfähig.
+- `omp-player-jingle` (Audio-Profil): korrekte Audio-only-Discovery,
+  Live-Audio-Cart funktioniert ohne Video-Begleiter-Suche.
+- Keine GStreamer-`CRITICAL`/Panics im gesamten Testlauf.
+
+**Nicht reproduzierbare Einzelbeobachtung, dokumentiert statt
+ignoriert:** im allerersten Testlauf blieb der Audio-Head-Index nach dem
+allerersten Take eines Live-Items für ~2s unverändert, bevor er normal
+zu wachsen begann. Ein gezielter, sofortiger Reproduktionsversuch in
+einer frischen, isolierten Umgebung (Live-Item als allererste Aktion,
+Messung ab Sekunde 1) zeigte durchgehend korrektes Wachstum ohne jede
+Verzögerung. Nicht reproduzierbar, kein ersichtlicher Racequelle im
+Code — festgehalten für den Fall, dass es später erneut auftritt,
+nicht als offener Bug geführt.
+
+`cargo build --workspace --bins`, `cargo clippy -p omp-player -p
+omp-node-sdk --all-targets`, `cargo test -p omp-player`, `cargo deny
+check` — alle grün. `node --check` für beide UI-Bundle-Varianten
+(Video/Jingle) grün. Test-Workflows/-Instanzen danach sauber
+gestoppt/gelöscht, keine Restinstanzen.

@@ -2098,7 +2098,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C18 | erledigt | [C18] Cart-/Interrupt-Assets in omp-playout-automation (inkl. last_live_item_id-Fix) | 2026-07-22 |
 | C19 | erledigt | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | 2026-07-22 |
 | C20 | erledigt | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | 2026-07-22 |
-| C21 | offen | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | — |
+| C21 | erledigt | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | 2026-07-22 |
 | C22 | offen | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad | — |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |

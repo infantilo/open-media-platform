@@ -39,17 +39,30 @@ class OmpPlayerJinglePanel extends HTMLElement {
     const labelInput = document.createElement("input");
     labelInput.type = "text";
     labelInput.placeholder = "Titel";
+    // C21 (ARCHITECTURE.md §24.6): Live-MXL-Audioquelle als Cart —
+    // gleiches Auswahl-Prinzip wie im Videoplayer-Panel, hier auf
+    // Audio-Sender beschränkt (Jingle-Profil discovert nur Audio, s.
+    // main.rs).
+    const liveSourceSelect = document.createElement("select");
+    const liveSourcePlaceholder = document.createElement("option");
+    liveSourcePlaceholder.value = "";
+    liveSourcePlaceholder.textContent = "Live-Quelle …";
+    liveSourceSelect.append(liveSourcePlaceholder);
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Jingle";
     addBtn.addEventListener("click", () => {
-      call("append", { label: labelInput.value.trim() || "Jingle", toneFrequency: 0, durationMs: 3000 }).then(
-        () => {
-          labelInput.value = "";
-          poll();
-        },
-      );
+      const senderId = liveSourceSelect.value;
+      const body = { label: labelInput.value.trim() || "Jingle", toneFrequency: 0, durationMs: 3000 };
+      if (senderId) {
+        body.senderId = senderId;
+      }
+      call("append", body).then(() => {
+        labelInput.value = "";
+        liveSourceSelect.value = "";
+        poll();
+      });
     });
-    addRow.append(labelInput, addBtn);
+    addRow.append(labelInput, liveSourceSelect, addBtn);
 
     const grid = document.createElement("div");
     grid.className = "grid";
@@ -94,11 +107,26 @@ class OmpPlayerJinglePanel extends HTMLElement {
     };
 
     const poll = async () => {
-      const [itemsValue, currentItemId] = await Promise.all([
+      const [itemsValue, currentItemId, availableSources] = await Promise.all([
         getParam("items"),
         getParam("currentItemId"),
+        getParam("availableSources"),
       ]);
       const items = itemsValue || [];
+      const sources = availableSources || [];
+
+      const previousSelection = liveSourceSelect.value;
+      liveSourceSelect.replaceChildren(liveSourcePlaceholder);
+      for (const s of sources) {
+        const opt = document.createElement("option");
+        opt.value = s.senderId;
+        opt.textContent = s.label;
+        liveSourceSelect.append(opt);
+      }
+      if (sources.some((s) => s.senderId === previousSelection)) {
+        liveSourceSelect.value = previousSelection;
+      }
+
       const currentIds = new Set(items.map((it) => it.id));
 
       for (const [id, refs] of cartEls) {

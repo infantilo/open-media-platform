@@ -3145,6 +3145,79 @@ dessen Sender → Take zeigt den Live-Feed im Viewer, identisch zum
 File-Item-Verhalten (`itemEnded` bleibt für `Live` bedeutungslos wie
 bei `TestPattern`, kein EOS). **Phase:** C21.
 
+**Umgesetzt und live verifiziert** (2026-07-22): neues Modul
+`nodes/omp-player/src/discovery.rs` (vierte Kopie des C7/C10/C11-
+Discovery-Musters, wie oben entschieden) liefert `discover()` (für den
+neuen, flach benannten Parameter `availableSources` — nicht
+`playlist.availableSources` mit Punkt-Namespace, den dieser Node
+nirgends sonst verwendet) und `resolve()` (frische Registry-Anfrage zum
+Cue-Zeitpunkt statt des gepollten Caches, s. dortige Doku). `sender_id`
+im gespeicherten Item bleibt stabil über Neustarts der Quelle hinweg,
+die Auflösung zu MXL-Flow-IDs passiert erst bei `cue()`.
+`pipeline::ItemSource::Live { video_flow_id, audio_flow_id }` — beide
+`Option`, fehlender Video-/Audio-Anteil fällt auf denselben
+schwarz/stumm-Default zurück wie ein frisch aufgebauter Slot.
+
+**Audio-Begleiter über `device_id`, keine neue Idee:** eine Live-Quelle
+mit eigenem Ton bekommt ihre Audiospur automatisch dazu, indem
+`resolve()` nach einem zweiten MXL-Sender ANDEREN Formats auf demselben
+`device_id` sucht — dasselbe allgemeine NMOS-Node→Device→Sender-Konzept,
+das `omp-video-mixer-me::discover_keyfill` bereits für Fill+Key nutzt,
+hier zum ersten Mal für Video+Audio angewandt (jede Node-Instanz teilt
+sich einen `device_id` über alle ihre Sender, `omp_node_sdk::node::
+start`) — keine neue Kopplung zwischen Nodes, nur eine zweite
+Verwendung eines bereits etablierten Musters.
+
+**GStreamer-Korrektheit (höchstes Risiko dieses Schritts):**
+`pipeline.rs`s `Branch`-Struct trägt jetzt optional `MxlVideoInput`/
+`MxlAudioInput`-Handles; `teardown_branch` nimmt `Branch` seit C21 **by
+value** (vorher `&Branch`) und hält exakt die bereits an zwei Stellen
+(`omp-switcher`, `omp-video-mixer-me`) live gefundene/dokumentierte
+Reihenfolge ein: `.stop()` **vor** dem Entfernen der Pipeline-Elemente
+(sonst rennt der interne `read_loop`-Thread noch `push_buffer()` gegen
+ein bereits auf `Null` gesetztes Element), mit demselben 20ms-Sleep
+danach. `build_live_video_branch`/`build_live_audio_branch` räumen bei
+jedem Fehlschlag alles bereits Angelegte vollständig ab (identisches
+Cleanup-Idiom wie `omp-switcher::pipeline::build_branch`, dort
+ursprünglich gegen die "Registry-Geist-OOM" gefunden) — kein
+verwaistes Element bei einem fehlgeschlagenen Cue.
+
+**Live verifiziert** (echter `omp-source` + `omp-player-video`/
+`omp-player-jingle` über einen echten Workflow, Verifikation über
+`mxl-info` statt nur "kein Fehler" — quantitativer Nachweis echten
+Frame-/Sample-Flusses, nicht nur eines erfolgreichen API-Aufrufs):
+1. `availableSources` zeigt korrekt nur den Video-Sender von
+   `omp-source` (Lowres-Begleiter und eigener Sender ausgeschlossen).
+2. Nach `append`+`cue`+`take` eines `Live`-Items wächst der Head-Index
+   des Players eigenen Video-Ausgangs-Flows mit ~25 Grains/s (exakt die
+   konfigurierte Framerate) — der volle Empfangs-/Weiterleitungspfad
+   funktioniert nachweisbar, nicht nur fehlerfrei.
+3. Der Audio-Begleiter (`device_id`-Pairing) wurde über die echte
+   NMOS-Registry bestätigt (gleicher `device_id` für Video- und
+   Audio-Sender von `omp-source`) und der Audio-Head-Index des Players
+   wächst korrekt mit ~48000 Samples/s.
+4. Mehrfacher Wechsel Live→TestPattern→Live ohne Absturz/Hänger
+   (Teardown-Stresstest der `.stop()`-vor-`remove()`-Reihenfolge).
+5. `cue()` mit unbekannter `senderId` liefert sauber `404`, der Player
+   bleibt danach unverändert funktionsfähig (kein korrupter Zustand).
+6. `omp-player-jingle` (Audio-Profil) discovert korrekt nur
+   Audio-Sender, ein `Live`-Audio-Cart funktioniert ohne Video-
+   Begleiter-Suche (kein Video-isel vorhanden, der eine bräuchte).
+7. Keine GStreamer-`CRITICAL`/Panics im gesamten Testlauf.
+
+**Nicht abschließend geklärte, nicht reproduzierbare Beobachtung:** beim
+allerersten Take eines `Live`-Items im allerersten Testlauf (direkt nach
+Workflow-Start, mit einem zuvor bereits einmal manuell aufgebauten
+Graph) blieb der Audio-Head-Index für ~2s unverändert, bevor er (nach
+einem zwischenzeitlichen TestPattern-Wechsel) wieder normal wuchs. Ein
+gezielter, sofortiger Reproduktionsversuch in einer frischen, isolierten
+Umgebung (Live-Item als allererste Aktion, Messung ab der ersten
+Sekunde) zeigte durchgehend korrektes Wachstum ohne jede Verzögerung —
+das Verhalten ließ sich nicht reproduzieren. Dokumentiert statt
+ignoriert (`docs/decisions.md`), aber nicht als offener Bug geführt, da
+nicht reproduzierbar und der Code-Pfad keine ersichtliche Racequelle
+hat.
+
 ### 24.7 omp-recorder: dedizierter Recording-Node
 
 **Anforderung:** ein eigener Node, der eine MXL-Quelle (Video+Audio)

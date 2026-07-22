@@ -82,16 +82,28 @@ class OmpPlayerVideoPanel extends HTMLElement {
     fileInput.setAttribute("list", "media-library");
     const mediaLibraryList = document.createElement("datalist");
     mediaLibraryList.id = "media-library";
+    // C21 (ARCHITECTURE.md §24.6): Live-MXL-Quelle als dritte Option
+    // neben Testpattern/Datei — Auswahl aus den vom Node selbst per
+    // 2s-Discovery entdeckten Sendern (gleiches Auswahl-Prinzip wie
+    // omp-video-mixer-me's Crosspoint-Eingänge).
+    const liveSourceSelect = document.createElement("select");
+    const liveSourcePlaceholder = document.createElement("option");
+    liveSourcePlaceholder.value = "";
+    liveSourcePlaceholder.textContent = "Live-Quelle …";
+    liveSourceSelect.append(liveSourcePlaceholder);
     const addBtn = document.createElement("button");
     addBtn.textContent = "+ Item";
     addBtn.addEventListener("click", () => {
+      const senderId = liveSourceSelect.value;
       const file = fileInput.value.trim();
       const body = {
         label: labelInput.value.trim() || "Item",
         toneFrequency: 0,
         durationMs: parseFloat(durationInput.value) || 5000,
       };
-      if (file) {
+      if (senderId) {
+        body.senderId = senderId;
+      } else if (file) {
         body.file = file;
       } else {
         body.pattern = patternSelect.value;
@@ -99,10 +111,11 @@ class OmpPlayerVideoPanel extends HTMLElement {
       call("append", body).then(() => {
         labelInput.value = "";
         fileInput.value = "";
+        liveSourceSelect.value = "";
         poll();
       });
     });
-    addRow.append(labelInput, patternSelect, fileInput, mediaLibraryList, durationInput, addBtn);
+    addRow.append(labelInput, patternSelect, fileInput, mediaLibraryList, liveSourceSelect, durationInput, addBtn);
 
     const list = document.createElement("div");
     const empty = document.createElement("p");
@@ -145,15 +158,18 @@ class OmpPlayerVideoPanel extends HTMLElement {
     };
 
     const poll = async () => {
-      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, mediaLibrary] = await Promise.all([
-        getParam("items"),
-        getParam("currentItemId"),
-        getParam("cuedItemId"),
-        getParam("mode"),
-        getParam("playheadPositionMs"),
-        getParam("mediaLibrary"),
-      ]);
+      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, mediaLibrary, availableSources] =
+        await Promise.all([
+          getParam("items"),
+          getParam("currentItemId"),
+          getParam("cuedItemId"),
+          getParam("mode"),
+          getParam("playheadPositionMs"),
+          getParam("mediaLibrary"),
+          getParam("availableSources"),
+        ]);
       const items = itemsValue || [];
+      const sources = availableSources || [];
 
       mediaLibraryList.replaceChildren(
         ...(mediaLibrary || []).map((file) => {
@@ -162,6 +178,22 @@ class OmpPlayerVideoPanel extends HTMLElement {
           return opt;
         }),
       );
+
+      // Auswahl über einen Poll hinweg erhalten (anders als das
+      // <datalist> oben braucht ein <select> das explizit, sonst
+      // verliert der Operator seine gerade getroffene Wahl alle 2s).
+      const previousSelection = liveSourceSelect.value;
+      liveSourceSelect.replaceChildren(liveSourcePlaceholder);
+      for (const s of sources) {
+        const opt = document.createElement("option");
+        opt.value = s.senderId;
+        opt.textContent = s.label;
+        liveSourceSelect.append(opt);
+      }
+      if (sources.some((s) => s.senderId === previousSelection)) {
+        liveSourceSelect.value = previousSelection;
+      }
+
       const currentIds = new Set(items.map((it) => it.id));
 
       for (const [id, refs] of itemEls) {
@@ -184,9 +216,14 @@ class OmpPlayerVideoPanel extends HTMLElement {
           itemEls.set(item.id, refs);
           list.append(refs.el);
         }
-        refs.labelEl.textContent = item.file
-          ? `${item.label} (${item.file})`
-          : `${item.label} (${item.pattern})`;
+        if (item.senderId) {
+          const source = sources.find((s) => s.senderId === item.senderId);
+          refs.labelEl.textContent = `${item.label} (Live: ${source ? source.label : item.senderId})`;
+        } else if (item.file) {
+          refs.labelEl.textContent = `${item.label} (${item.file})`;
+        } else {
+          refs.labelEl.textContent = `${item.label} (${item.pattern})`;
+        }
         const isOnair = item.id === currentItemId;
         const isCued = item.id === cuedItemId;
         refs.el.className = isOnair ? "item onair" : isCued ? "item cued" : "item";

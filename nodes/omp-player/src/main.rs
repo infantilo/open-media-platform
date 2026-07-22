@@ -21,6 +21,7 @@
 //! per `gstreamer_pbutils::Discoverer` einmalig geprobte Ergebnis statt
 //! Handeingabe. MXF (K2-Teil-2) ist hier nicht enthalten.
 
+mod discovery;
 mod pipeline;
 mod uibundle;
 
@@ -32,6 +33,7 @@ use std::time::Instant;
 
 use gstreamer as gst;
 use gstreamer_pbutils as gst_pbutils;
+use omp_node_sdk::is04::RegistryClient;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
     Range, RawResponse, SenderSpec, SetError,
@@ -51,6 +53,14 @@ use serde_json::Value;
 enum ItemMedia {
     TestPattern { pattern: String, tone_freq: f64 },
     File { path: String, uri: String },
+    /// C21 (`ARCHITECTURE.md` §24.6) — `sender_id` ist die stabile,
+    /// operator-sichtbare Identität (aus `discovery::discover`, s.
+    /// `availableSources`-Parameter); die tatsächliche Auflösung zu
+    /// MXL-Flow-IDs passiert erst bei `cue()` (`discovery::resolve`),
+    /// bewusst nicht schon hier — ein `flow_id` könnte sich zwischen
+    /// `append()`/`load()` und dem tatsächlichen Cuen ändern (Quelle neu
+    /// gestartet), `sender_id` bleibt stabil.
+    Live { sender_id: String },
 }
 
 /// Playlist-Eintrag. `duration_ms` ist bei `TestPattern` reine
@@ -87,6 +97,13 @@ struct PlayerStore {
     media_dir: PathBuf,
     /// Kapitel 15 Teil 4 — nur bedeutungsvoll bei `has_video == true`.
     lowres_flow_id: String,
+    /// C21 (`ARCHITECTURE.md` §24.6): für `cue()`s Live-Quellen-Auflösung
+    /// (`discovery::resolve`) — bewusst eine frische Anfrage pro Cue statt
+    /// des gepollten `available_sources`-Caches, s. dortige Doku.
+    registry: RegistryClient,
+    /// Vom `discovery_loop` alle 2s aktualisierte Auswahlliste für den
+    /// `availableSources`-Parameter.
+    available_sources: Arc<Mutex<Vec<discovery::DiscoveredSource>>>,
 }
 
 /// Testton-Frequenz-Formel wie C11s `channel_freq` — nur zur akustischen
@@ -144,6 +161,9 @@ struct LoadItem {
     pattern: Option<String>,
     #[serde(default)]
     file: Option<String>,
+    /// C21 (`ARCHITECTURE.md` §24.6) — s. `ItemMedia::Live`-Doku.
+    #[serde(rename = "senderId", default)]
+    sender_id: Option<String>,
     #[serde(rename = "toneFrequency", default)]
     tone_frequency: Option<f64>,
     #[serde(rename = "durationMs", default)]
@@ -202,6 +222,20 @@ impl ParamStore for PlayerStore {
                 range: None,
                 readonly: true,
             },
+            // C21 (ARCHITECTURE.md §24.6): JSON-Array [{senderId,label}]
+            // entdeckter Live-MXL-Quellen — gleiches Shape wie
+            // omp-switcher/omp-video-mixer-me's "inputs"/
+            // "crosspoint.inputs" (bewusst flach benannt, nicht
+            // "playlist.availableSources" mit Punkt-Namespace: dieser
+            // Node nutzt nirgends dotted Parameternamen, anders als
+            // omp-playout-automation/omp-video-mixer-me).
+            ParamSpec {
+                name: "availableSources".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
 
         let mut parameters = parameters;
@@ -237,6 +271,11 @@ impl ParamStore for PlayerStore {
                     },
                     MethodArg {
                         name: "file".to_string(),
+                        kind: ParamType::String,
+                    },
+                    // C21 (ARCHITECTURE.md §24.6).
+                    MethodArg {
+                        name: "senderId".to_string(),
                         kind: ParamType::String,
                     },
                     MethodArg {
@@ -310,6 +349,12 @@ impl ParamStore for PlayerStore {
                             "file": path,
                             "durationMs": it.duration_ms,
                         }),
+                        ItemMedia::Live { sender_id } => serde_json::json!({
+                            "id": it.id,
+                            "label": it.label,
+                            "senderId": sender_id,
+                            "durationMs": it.duration_ms,
+                        }),
                     })
                     .collect::<Vec<_>>()
             )),
@@ -337,6 +382,15 @@ impl ParamStore for PlayerStore {
                 files.sort();
                 Some(serde_json::json!(files))
             }
+            // C21 (ARCHITECTURE.md §24.6).
+            "availableSources" => Some(serde_json::json!(
+                self.available_sources
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .map(|s| serde_json::json!({"senderId": s.sender_id, "label": s.label}))
+                    .collect::<Vec<_>>()
+            )),
             // Kapitel 15 Teil 4 — nur in `descriptor()` deklariert, wenn
             // `has_video` (Jingle-Profil hat keinen Video-Ausgang). Der
             // generische Proxy (`omp_node_sdk::server::route`) prüft
@@ -365,11 +419,25 @@ impl ParamStore for PlayerStore {
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
                 let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
+                // C21 (ARCHITECTURE.md §24.6): senderId hat Vorrang vor
+                // file/pattern — explizitester Operator-Wunsch zuerst.
+                let sender_id_arg = args
+                    .get("senderId")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty());
                 let file_arg = args
                     .get("file")
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty());
-                let (media, duration_ms) = if let Some(rel) = file_arg {
+                let (media, duration_ms) = if let Some(sender_id) = sender_id_arg {
+                    let duration_ms = args
+                        .get("durationMs")
+                        .and_then(Value::as_f64)
+                        .filter(|d| *d > 0.0)
+                        .map(|d| d as u64)
+                        .unwrap_or(DEFAULT_DURATION_MS);
+                    (ItemMedia::Live { sender_id: sender_id.to_string() }, duration_ms)
+                } else if let Some(rel) = file_arg {
                     let abs = resolve_media_path(&self.media_dir, rel)?;
                     let uri = file_uri(&abs)?;
                     let duration_ms = probe_duration_ms(&uri).unwrap_or(0);
@@ -420,7 +488,14 @@ impl ParamStore for PlayerStore {
                 let mut items = Vec::with_capacity(load_items.len());
                 for li in load_items {
                     let seq = self.next_seq.fetch_add(1, Ordering::Relaxed);
-                    let (media, duration_ms) = if let Some(rel) = li.file.filter(|s| !s.is_empty()) {
+                    let (media, duration_ms) = if let Some(sender_id) = li.sender_id.filter(|s| !s.is_empty()) {
+                        // C21 (ARCHITECTURE.md §24.6) — gleiche Priorität
+                        // wie bei "append".
+                        (
+                            ItemMedia::Live { sender_id },
+                            li.duration_ms.filter(|d| *d > 0).unwrap_or(DEFAULT_DURATION_MS),
+                        )
+                    } else if let Some(rel) = li.file.filter(|s| !s.is_empty()) {
                         let abs = resolve_media_path(&self.media_dir, &rel)?;
                         let uri = file_uri(&abs)?;
                         let duration_ms = probe_duration_ms(&uri).unwrap_or(0);
@@ -499,7 +574,7 @@ impl ParamStore for PlayerStore {
                     .get("itemId")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                let mut state = self.state.lock().expect("lock poisoned");
+                let state = self.state.lock().expect("lock poisoned");
                 let item = state
                     .items
                     .iter()
@@ -507,11 +582,22 @@ impl ParamStore for PlayerStore {
                     .cloned()
                     .ok_or(InvokeError::Unknown)?;
                 let target_slot = state.onair_slot.other();
+                // Lock VOR einer evtl. blockierenden Registry-Anfrage
+                // freigeben (C21-Live-Fall) — `cue()` ist kein Hot-Path,
+                // aber ein `get()` (z. B. "items" fürs Polling der UI)
+                // soll währenddessen nicht warten müssen.
+                drop(state);
                 let source = match item.media {
                     ItemMedia::TestPattern { pattern, tone_freq } => {
                         pipeline::ItemSource::TestPattern { pattern, tone_freq }
                     }
                     ItemMedia::File { uri, .. } => pipeline::ItemSource::File { uri },
+                    ItemMedia::Live { sender_id } => {
+                        let (video_flow_id, audio_flow_id) =
+                            discovery::resolve(&self.registry, &sender_id, self.has_video)
+                                .ok_or(InvokeError::Unknown)?;
+                        pipeline::ItemSource::Live { video_flow_id, audio_flow_id }
+                    }
                 };
                 self.pipeline.load_slot(
                     target_slot,
@@ -520,7 +606,7 @@ impl ParamStore for PlayerStore {
                         source,
                     },
                 );
-                state.cued_item = Some(item_id.to_string());
+                self.state.lock().expect("lock poisoned").cued_item = Some(item_id.to_string());
                 Ok(())
             }
             "take" => {
@@ -633,10 +719,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // docs/decisions.md Nachtrag 37) — Format "<group>:<role>", Gruppe =
     // Highres-Flow-UUID.
     let grouphint_group = video_flow_id.clone();
+    // C21 (ARCHITECTURE.md §24.6): eigene Sender-ID vorab benennen statt
+    // wie bisher inline generieren — der Discovery-Loop muss sie kennen,
+    // um sich selbst aus der Live-Quellen-Auswahl auszuschließen (gleiches
+    // Muster wie omp-switcher/omp-video-mixer-me's `own_sender_id`). Nur
+    // der Sender des eigenen Profil-Formats zählt (Video-Sender im
+    // Video-Profil, Audio-Sender im Jingle-Profil) — s. `own_sender_id`
+    // unten.
+    let own_video_sender_id = omp_node_sdk::idgen::new_v4();
+    let own_audio_sender_id = omp_node_sdk::idgen::new_v4();
     let mut senders = Vec::with_capacity(3);
     if has_video {
         senders.push(SenderSpec {
-            id: Some(omp_node_sdk::idgen::new_v4()),
+            id: Some(own_video_sender_id.clone()),
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Video {
                 id: Some(video_flow_id),
@@ -670,7 +765,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
     }
     senders.push(SenderSpec {
-        id: Some(omp_node_sdk::idgen::new_v4()),
+        id: Some(own_audio_sender_id.clone()),
         transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
         flow: Some(omp_node_sdk::node::FlowSpec::Audio {
             id: Some(audio_flow_id),
@@ -689,6 +784,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         cued_item: None,
         onair_since: None,
     });
+
+    // C21 (ARCHITECTURE.md §24.6): Live-Quellen-Discovery, gleiches
+    // 2s-Poll-Muster wie C7/C10/C11. Nur der Sender des eigenen
+    // Profil-Formats zählt als "eigener" auszuschließender Sender —
+    // Video-Profil discovert Video-Sender (own_video_sender_id), Jingle-
+    // Profil Audio-Sender (own_audio_sender_id).
+    let registry = RegistryClient::new(registry_url.clone());
+    let available_sources: Arc<Mutex<Vec<discovery::DiscoveredSource>>> = Arc::new(Mutex::new(Vec::new()));
+    let (own_sender_id, want_format) = if has_video {
+        (own_video_sender_id, omp_node_sdk::is04::FORMAT_VIDEO)
+    } else {
+        (own_audio_sender_id, omp_node_sdk::is04::FORMAT_AUDIO)
+    };
+    tokio::spawn(discovery::discovery_loop(
+        registry_url.clone(),
+        own_sender_id,
+        want_format,
+        available_sources.clone(),
+    ));
+
     let media_ready_pipeline = pipeline_handle.clone();
     let store: Arc<dyn ParamStore> = Arc::new(PlayerStore {
         state,
@@ -697,6 +812,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         has_video,
         media_dir,
         lowres_flow_id: lowres_video_flow_id,
+        registry,
+        available_sources,
     });
 
     let handle = omp_node_sdk::start(

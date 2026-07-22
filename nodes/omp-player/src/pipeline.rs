@@ -46,7 +46,7 @@ use std::time::Duration;
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
+use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -89,11 +89,20 @@ pub struct Config {
 }
 
 /// Woher ein Item seine Essenz bezieht — additiv zum ursprünglichen
-/// `TestPattern`-Feldpaar (K2-Teil-1, `docs/END-GOAL-FEATURES.md` §2.3).
+/// `TestPattern`-Feldpaar (K2-Teil-1, `docs/END-GOAL-FEATURES.md` §2.3),
+/// C21 (`ARCHITECTURE.md` §24.6) ergänzt `Live`.
 #[derive(Clone, Debug)]
 pub enum ItemSource {
     TestPattern { pattern: String, tone_freq: f64 },
     File { uri: String },
+    /// Bereits von `main.rs` (`discovery::resolve`) zu MXL-Flow-IDs
+    /// aufgelöste Live-Quelle — `pipeline.rs` selbst bleibt registry-
+    /// agnostisch (gleiche Trennung wie `omp-switcher`: Discovery
+    /// liefert fertige Flow-IDs, die Pipeline konsumiert sie nur).
+    /// `None` bei `video_flow_id` (Jingle-Profil oder keine Video-
+    /// Begleitquelle) bzw. `audio_flow_id` (kein Audio-Begleiter
+    /// gefunden) fällt auf schwarz/stumm zurück, kein harter Fehler.
+    Live { video_flow_id: Option<String>, audio_flow_id: Option<String> },
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +259,15 @@ fn audio_caps() -> gst::Caps {
 struct Branch {
     elements: Vec<gst::Element>,
     pad: gst::Pad,
+    /// Nur bei `Live`-Zweigen gesetzt (C21) — MUSS vor dem Entfernen der
+    /// `elements` aus der Pipeline per `.stop()` beendet werden
+    /// (`teardown_branch`), sonst rennt der interne `read_loop`-Thread
+    /// noch `push_buffer()` gegen ein bereits auf `Null` gesetztes/
+    /// entferntes Element (live per `GST_DEBUG=3` in `omp-video-mixer-me`
+    /// gefundener, in `omp-switcher` identisch dokumentierter Fund —
+    /// hier derselbe Fix, s. `teardown_branch`).
+    mxl_video: Option<MxlVideoInput>,
+    mxl_audio: Option<MxlAudioInput>,
 }
 
 fn build_video_branch(
@@ -297,7 +315,7 @@ fn build_video_branch(
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (video): {e}"))?;
     }
-    Ok(Branch { elements, pad })
+    Ok(Branch { elements, pad, mxl_video: None, mxl_audio: None })
 }
 
 fn build_audio_branch(
@@ -332,7 +350,268 @@ fn build_audio_branch(
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (audio): {e}"))?;
     }
-    Ok(Branch { elements, pad })
+    Ok(Branch { elements, pad, mxl_video: None, mxl_audio: None })
+}
+
+/// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
+/// (`Null`-Zustand + `remove`) — Aufräumen für einen verworfenen,
+/// halbfertigen `Live`-Zweigaufbau, s. `build_live_video_branch`/
+/// `build_live_audio_branch`. Identische Funktion/identischer Name wie
+/// `omp-switcher::pipeline::remove_elements` (bewusste Duplikation,
+/// gleiche Begründung wie bei `discovery.rs`).
+fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
+    for el in elements {
+        let _ = el.set_state(gst::State::Null);
+        let _ = pipeline.remove(el);
+    }
+}
+
+/// Baut `mxl_input` vollständig ab statt es nur fallen zu lassen — ein
+/// bloßes `drop()` entfernt seine intern angelegten Elemente NICHT aus
+/// der Pipeline (nachgewiesener, unbegrenzt wachsender Speicherverbrauch
+/// bei chirurgischer Einzel-Entfernung, "Registry-Geist-OOM",
+/// `docs/decisions.md`). Reihenfolge kritisch: `.stop()` muss vor
+/// `remove_elements` laufen, sonst rennt der `read_loop`-Thread noch
+/// `push_buffer()` gegen ein bereits entferntes Element (live per
+/// `GST_DEBUG=3` in `omp-video-mixer-me` gefunden, identischer Fix in
+/// `omp-switcher::pipeline::remove_mxl_video_input`).
+fn cleanup_live_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
+    mxl_input.stop();
+    std::thread::sleep(Duration::from_millis(20));
+    remove_elements(pipeline, &mxl_input.elements);
+    drop(mxl_input);
+}
+
+/// Audio-Pendant zu `cleanup_live_video_input`, identische Begründung.
+fn cleanup_live_audio_input(pipeline: &gst::Pipeline, mxl_input: MxlAudioInput) {
+    mxl_input.stop();
+    std::thread::sleep(Duration::from_millis(20));
+    remove_elements(pipeline, &mxl_input.elements);
+    drop(mxl_input);
+}
+
+/// Baut den Video-Zweig einer `Live`-Quelle (C21, `ARCHITECTURE.md`
+/// §24.6): `MxlVideoInput` (liest den per `flow_id` referenzierten
+/// externen MXL-Flow) + dieselbe Konvertierungskette wie bei
+/// `TestPattern`/`File`, mit einem zusätzlichen `queue` als Thread-
+/// Grenze zum internen `read_loop` (gleiche Begründung wie die
+/// `queue` im `File`-Video-Zweig, s. dortigen Kommentar — ein externer
+/// Lieferthread braucht dieselbe Entkopplung, unabhängig davon, ob es
+/// `uridecodebin` oder `MxlVideoInput` ist). Schlägt irgendein Schritt
+/// fehl, räumt diese Funktion alles bereits Angelegte vollständig
+/// wieder ab (identisches Muster wie `omp-switcher::pipeline::
+/// build_branch`, dort ausführlich dokumentiert/live gefunden — hier
+/// derselbe Fix gegen dieselbe Fehlerklasse).
+fn build_live_video_branch(
+    pipeline: &gst::Pipeline,
+    context: Arc<MxlContext>,
+    pad: gst::Pad,
+    flow_id: &str,
+    width: u32,
+    height: u32,
+) -> Result<Branch, String> {
+    let mxl_input = MxlVideoInput::new(pipeline, context, flow_id)
+        .map_err(|e| format!("MxlVideoInput({flow_id}): {e}"))?;
+
+    let convert = match gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|e| format!("videoconvert (live video): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let scale = match gst::ElementFactory::make("videoscale")
+        .build()
+        .map_err(|e| format!("videoscale (live video): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let rate = match gst::ElementFactory::make("videorate")
+        .build()
+        .map_err(|e| format!("videorate (live video): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let caps = match gst::ElementFactory::make("capsfilter")
+        .property("caps", video_caps(width, height))
+        .build()
+        .map_err(|e| format!("capsfilter (live video): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let queue = match gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (live video): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+
+    let branch_elements = [convert.clone(), scale.clone(), rate.clone(), caps.clone(), queue.clone()];
+
+    if let Err(e) = pipeline
+        .add(&convert)
+        .and_then(|()| pipeline.add(&scale))
+        .and_then(|()| pipeline.add(&rate))
+        .and_then(|()| pipeline.add(&caps))
+        .and_then(|()| pipeline.add(&queue))
+        .map_err(|e| format!("add live video branch: {e}"))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_video_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    if let Err(e) = gst::Element::link_many([&mxl_input.tail, &convert, &scale, &rate, &caps, &queue])
+        .map_err(|e| format!("link live video branch: {e}"))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_video_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    if let Err(e) = queue
+        .static_pad("src")
+        .ok_or_else(|| "live video branch: no src pad".to_string())
+        .and_then(|src_pad| src_pad.link(&pad).map_err(|e| format!("link live video branch to isel: {e}")))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_video_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    for el in &branch_elements {
+        if let Err(e) = el.sync_state_with_parent() {
+            remove_elements(pipeline, &branch_elements);
+            cleanup_live_video_input(pipeline, mxl_input);
+            return Err(format!("sync_state_with_parent (live video): {e}"));
+        }
+    }
+
+    let mut elements = mxl_input.elements.clone();
+    elements.extend(branch_elements);
+    Ok(Branch { elements, pad, mxl_video: Some(mxl_input), mxl_audio: None })
+}
+
+/// Audio-Pendant zu `build_live_video_branch` — `MxlAudioInput` +
+/// dieselbe vollständigere Konvertierungskette wie beim `File`-Audio-
+/// Zweig (`audioconvert`/`audioresample`/`capsfilter`/`queue`, nicht nur
+/// das schlanke `audioconvert` von `TestPattern`): eine externe Quelle
+/// mit unbekanntem/nicht garantiertem Format braucht dieselbe
+/// Absicherung wie eine beliebige Mediendatei, unabhängig davon, ob sie
+/// über `uridecodebin` oder `MxlAudioInput` hereinkommt.
+fn build_live_audio_branch(
+    pipeline: &gst::Pipeline,
+    context: Arc<MxlContext>,
+    pad: gst::Pad,
+    flow_id: &str,
+) -> Result<Branch, String> {
+    let mxl_input = MxlAudioInput::new(pipeline, context, flow_id)
+        .map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
+
+    let convert = match gst::ElementFactory::make("audioconvert")
+        .build()
+        .map_err(|e| format!("audioconvert (live audio): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_audio_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let resample = match gst::ElementFactory::make("audioresample")
+        .build()
+        .map_err(|e| format!("audioresample (live audio): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_audio_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let caps = match gst::ElementFactory::make("capsfilter")
+        .property("caps", audio_caps())
+        .build()
+        .map_err(|e| format!("capsfilter (live audio): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_audio_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+    let queue = match gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (live audio): {e}"))
+    {
+        Ok(e) => e,
+        Err(e) => {
+            cleanup_live_audio_input(pipeline, mxl_input);
+            return Err(e);
+        }
+    };
+
+    let branch_elements = [convert.clone(), resample.clone(), caps.clone(), queue.clone()];
+
+    if let Err(e) = pipeline
+        .add(&convert)
+        .and_then(|()| pipeline.add(&resample))
+        .and_then(|()| pipeline.add(&caps))
+        .and_then(|()| pipeline.add(&queue))
+        .map_err(|e| format!("add live audio branch: {e}"))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_audio_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    if let Err(e) = gst::Element::link_many([&mxl_input.tail, &convert, &resample, &caps, &queue])
+        .map_err(|e| format!("link live audio branch: {e}"))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_audio_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    if let Err(e) = queue
+        .static_pad("src")
+        .ok_or_else(|| "live audio branch: no src pad".to_string())
+        .and_then(|src_pad| src_pad.link(&pad).map_err(|e| format!("link live audio branch to isel: {e}")))
+    {
+        remove_elements(pipeline, &branch_elements);
+        cleanup_live_audio_input(pipeline, mxl_input);
+        return Err(e);
+    }
+
+    for el in &branch_elements {
+        if let Err(e) = el.sync_state_with_parent() {
+            remove_elements(pipeline, &branch_elements);
+            cleanup_live_audio_input(pipeline, mxl_input);
+            return Err(format!("sync_state_with_parent (live audio): {e}"));
+        }
+    }
+
+    let mut elements = mxl_input.elements.clone();
+    elements.extend(branch_elements);
+    Ok(Branch { elements, pad, mxl_video: None, mxl_audio: Some(mxl_input) })
 }
 
 /// Hängt einen Pad-Probe ans `EVENT_DOWNSTREAM`-Signal von `pad` (der
@@ -527,7 +806,8 @@ fn build_file_branches(
     src.sync_state_with_parent()
         .map_err(|e| format!("sync_state_with_parent (uridecodebin): {e}"))?;
 
-    let video_branch = video_chain.map(|(elements, _, pad)| Branch { elements, pad });
+    let video_branch =
+        video_chain.map(|(elements, _, pad)| Branch { elements, pad, mxl_video: None, mxl_audio: None });
     for el in video_branch.iter().flat_map(|b| &b.elements) {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (file video): {e}"))?;
@@ -542,6 +822,8 @@ fn build_file_branches(
     let audio_branch = Branch {
         elements: audio_elements,
         pad: audio_pad,
+        mxl_video: None,
+        mxl_audio: None,
     };
 
     Ok((video_branch, audio_branch))
@@ -551,14 +833,37 @@ fn build_file_branches(
 /// entfernen) — das dazugehörige isel-Sink-Pad bleibt bestehen (anders als
 /// C11s `remove_channel_branch`, das den Pad selbst freigibt), damit
 /// `replace_slot` denselben Pad-Referenzwert wiederverwenden kann.
-fn teardown_branch(pipeline: &gst::Pipeline, branch: &Branch) {
+///
+/// Nimmt `branch` **by value** (C21, statt vorher `&Branch`): ein
+/// `Live`-Zweig trägt ggf. `mxl_video`/`mxl_audio`, deren interner
+/// `read_loop`-Thread VOR dem Entfernen der Pipeline-Elemente per
+/// `.stop()` beendet werden muss (`omp-switcher::pipeline::
+/// remove_mxl_video_input`, identische Begründung/identischer Fix: sonst
+/// rennt der Thread noch `push_buffer()` gegen ein bereits auf `Null`
+/// gesetztes Element — live per `GST_DEBUG=3` in `omp-video-mixer-me`
+/// gefunden). Ein kurzes Sleep danach lässt den Thread den Stop-Flag
+/// tatsächlich beobachten, bevor die Elemente verschwinden.
+fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     if let Some(src_pad) = branch.elements.last().and_then(|el| el.static_pad("src")) {
         let _ = src_pad.unlink(&branch.pad);
+    }
+    if let Some(mxl) = &branch.mxl_video {
+        mxl.stop();
+    }
+    if let Some(mxl) = &branch.mxl_audio {
+        mxl.stop();
+    }
+    if branch.mxl_video.is_some() || branch.mxl_audio.is_some() {
+        std::thread::sleep(Duration::from_millis(20));
     }
     for el in &branch.elements {
         let _ = el.set_state(gst::State::Null);
         let _ = pipeline.remove(el);
     }
+    // branch (inkl. mxl_video/mxl_audio) wird hier am Funktionsende
+    // fallengelassen — ihre eigenen vier bzw. drei internen Elemente
+    // stehen bereits in `branch.elements` und wurden gerade oben entfernt,
+    // ein zusätzliches `drop()` wäre redundant, kein zweiter Cleanup-Pfad.
 }
 
 struct ActivePipeline {
@@ -571,6 +876,11 @@ struct ActivePipeline {
     height: u32,
     _mxl_video_output: Option<MxlVideoOutput>,
     _mxl_audio_output: MxlAudioOutput,
+    /// C21 (`ARCHITECTURE.md` §24.6) — für `Live`-Zweige beim `cue()`
+    /// gebraucht (`MxlVideoInput`/`MxlAudioInput::new`); dieselbe
+    /// Instanz, die auch die eigenen `MxlVideoOutput`/`MxlAudioOutput`
+    /// oben speist, kein zweiter Domain-Kontext.
+    context: Arc<MxlContext>,
     /// Kapitel 15 Teil 4 — `Arc`, weil `PipelineHandle` (anderer Thread)
     /// darauf `set_active` aufrufen muss; `ActivePipeline` hält die
     /// zweite Referenz nur für `Drop`/Lebensdauer, analog `omp-source`.
@@ -594,7 +904,7 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
     let old_video_pad = if active.video_isel.is_some() {
         active.video_branches.remove(&slot).map(|old| {
             let pad = old.pad.clone();
-            teardown_branch(&active.pipeline, &old);
+            teardown_branch(&active.pipeline, old);
             pad
         })
     } else {
@@ -605,7 +915,7 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
         .remove(&slot)
         .ok_or("replace_slot: audio branch missing")?;
     let audio_pad = old_audio.pad.clone();
-    teardown_branch(&active.pipeline, &old_audio);
+    teardown_branch(&active.pipeline, old_audio);
 
     match &item.source {
         ItemSource::TestPattern { pattern, tone_freq } => {
@@ -634,6 +944,32 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
                 active.video_branches.insert(slot, branch);
             }
             active.audio_branches.insert(slot, audio_branch);
+        }
+        ItemSource::Live { video_flow_id, audio_flow_id } => {
+            if let Some(pad) = old_video_pad {
+                let branch = match video_flow_id {
+                    Some(flow_id) => build_live_video_branch(
+                        &active.pipeline,
+                        active.context.clone(),
+                        pad,
+                        flow_id,
+                        active.width,
+                        active.height,
+                    )?,
+                    // Kein Video-Flow gefunden (Begleiter fehlt) —
+                    // Fallback auf denselben "schwarz"-Default wie ein
+                    // frisch aufgebauter, noch nicht gecuter Slot.
+                    None => build_video_branch(&active.pipeline, pad, EMPTY_PATTERN, active.width, active.height)?,
+                };
+                active.video_branches.insert(slot, branch);
+            }
+            let branch = match audio_flow_id {
+                Some(flow_id) => build_live_audio_branch(&active.pipeline, active.context.clone(), audio_pad, flow_id)?,
+                // Kein Audio-Flow gefunden — stumm, gleiche Nachsicht wie
+                // ein `TestPattern`-Item mit `toneFrequency: 0`.
+                None => build_audio_branch(&active.pipeline, audio_pad, EMPTY_TONE_FREQ)?,
+            };
+            active.audio_branches.insert(slot, branch);
         }
     }
     Ok(())
@@ -821,6 +1157,7 @@ fn build(
         height: config.height,
         _mxl_video_output: mxl_video_output,
         _mxl_audio_output: mxl_audio_output,
+        context: context.clone(),
         lowres_video_output,
         video_flowed,
         audio_flowed,
