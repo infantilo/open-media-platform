@@ -1034,10 +1034,34 @@ fn read_loop(
                 index += 1;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
-                // Wir sind zu weit zurück (Writer hat den Ringpuffer
-                // überholt) — auf den aktuellen Head springen statt
-                // endlos veraltete Indizes anzufragen.
+                // Live gefundener Busy-Loop (Nutzerreport "Viewer freezt
+                // nach DSK aktivieren", tatsächlich unabhängig von DSK
+                // reproduziert — reines Timing-Race, nicht deterministisch
+                // an einen Aufruf gebunden): dieser Zweig hatte, anders als
+                // `OutOfRangeTooEarly` direkt darunter, KEINEN Backoff — bei
+                // einem Treffer, bei dem `get_current_index()` sofort wieder
+                // einen ebenfalls-TooLate-Index liefert (per `gdb`/`/proc`
+                // bestätigt: ein Reader-Thread lief mit 100 % CPU, `wchan=0`
+                // — reiner Userspace-Spin, keinerlei Syscall-Wartezeit —,
+                // "Last read time" in `mxl-info` blieb dabei für immer
+                // eingefroren, da nie ein Ok(grain) mehr zustande kam),
+                // dreht die Schleife dann mit voller CPU-Geschwindigkeit
+                // ohne jede Wartezeit. `gdb`-Backtrace des spinnenden
+                // Threads war in dieser Sandbox nicht möglich (`ptrace:
+                // Operation not permitted`) — Diagnose stattdessen über
+                // `/proc/<pid>/task/<tid>/stat`+`wchan` (aktiv steigende
+                // `utime` ohne jeden Wait-Channel) und eine temporäre,
+                // zähler-basierte `eprintln!`-Instrumentierung in beiden
+                // Zweigen dieser Sitzung (wieder entfernt). Fix: derselbe
+                // 5ms-Backoff wie bei `OutOfRangeTooEarly` — verhindert die
+                // CPU-Sättigung in jedem Fall, unabhängig davon, ob die
+                // zugrundeliegende Ursache (vermutlich ein Batch-Commit-
+                // Sichtbarkeits-Timing zwischen `get_current_index()` und
+                // dem tatsächlich lesbaren Head in der vendorten MXL-C++-
+                // Bibliothek) je genauer eingegrenzt wird. Gleicher Fix in
+                // `read_audio_loop` unten.
                 index = context.instance.get_current_index(grain_rate);
+                thread::sleep(Duration::from_millis(5));
             }
             Err(mxl::Error::OutOfRangeTooEarly) => {
                 // Noch nicht geschrieben — gleichen Index nach kurzem
@@ -1416,8 +1440,11 @@ fn read_audio_loop(
             Err(mxl::Error::OutOfRangeTooLate) => {
                 // Wie bei MxlVideoInputs read_loop: zu weit zurück, auf
                 // den aktuellen Head springen statt endlos veraltete
-                // Indizes anzufragen.
+                // Indizes anzufragen. Backoff wie bei OutOfRangeTooEarly
+                // (s. dortiger read_loop-Fix, gleicher live gefundener
+                // CPU-Spin-Bug — dieser Zweig hatte bislang keinen).
                 index = context.instance.get_current_index(sample_rate);
+                thread::sleep(Duration::from_millis(5));
             }
             Err(mxl::Error::OutOfRangeTooEarly) => {
                 // Noch nicht geschrieben — gleichen Index nach kurzem

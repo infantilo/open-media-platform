@@ -11635,3 +11635,77 @@ Tab-Leiste `display:none` wie zuvor bei einem Eintrag); die Kiosk-Route
 bleibt in jedem Fall bei `omp-console-view`.
 
 `deno check ui/`/`deno test ui/` (70/70, 12 neue Tests) grün.
+
+## 2026-07-22 (Nachtrag 78) — `omp-mediaio::mxl`: fehlender Backoff bei
+`OutOfRangeTooLate` verursachte 100%-CPU-Busy-Loop + eingefrorenen Reader
+
+Nutzerreport beim Ausprobieren des neuen Kachel-Boards: "video source pgm
+ist blk. sobald ich sdk ein mache, freezt der viewer. gerade wieder" — ein
+`omp-viewer`, an das PGM eines `omp-video-mixer-me` angeschlossen, zeigte
+nach dem Aktivieren des Keyers (DSK) ein eingefrorenes Bild.
+
+**Diagnose, ohne zu raten:** `mxl-info -f <flow>` zeigte "Last read time"
+komplett eingefroren, während "Last write time" (der Mixer selbst)
+kontinuierlich weiterlief — der Fehler lag also eindeutig auf der Lese-,
+nicht der Schreibseite. Ein erster Reproduktionsversuch mit `GST_DEBUG=3`
+(per `export GST_DEBUG=3` vor `make start` — der Launcher übernimmt
+`os.Environ()` als Basis für jeden gestarteten Node-Prozess, `buildEnv()`
+in `launcher.go`, node-stderr landet über `io.MultiWriter` mit im
+Orchestrator-Log) zeigte: der Reader fror bereits **vor** jedem DSK-Klick
+ein — DSK selbst war also nicht die Ursache, nur zeitlich korreliert.
+`gdb -p <pid>` scheiterte an `ptrace: Operation not permitted` (Sandbox-
+Beschränkung); stattdessen `/proc/<pid>/task/*/stat`+`wchan` durchsucht:
+genau ein Thread lief mit `state=R`, `wchan=0` (reiner Userspace-Spin,
+keine Syscall-Wartezeit) und stetig wachsender `utime` — 100 % CPU auf
+einem Kern, ohne jede Log-Ausgabe. Eine temporäre, zähler-basierte
+`eprintln!`-Instrumentierung in `read_loop`s `OutOfRangeTooLate`/
+`OutOfRangeTooEarly`-Zweigen (wieder entfernt) bestätigte: kein einziger
+Log-Treffer während des Freezes — der Loop hing also in einem Zweig, der
+weder `eprintln!` noch `thread::sleep` aufruft.
+
+**Root Cause gefunden:** `Err(mxl::Error::OutOfRangeTooLate) =>
+{ index = context.instance.get_current_index(grain_rate); }` — im
+Unterschied zum direkt darunterstehenden `OutOfRangeTooEarly`-Zweig
+(bereits mit 5ms-`thread::sleep`) hatte dieser Zweig **keinerlei
+Backoff**. Trifft ein Reader-Thread auf eine Konstellation, bei der
+`get_current_index()` sofort wieder einen ebenfalls-zu-späten Index
+liefert (vermutlich ein Sichtbarkeits-Timing zwischen dem intern
+batch-committeten Head der vendorten MXL-C++-Bibliothek — "Commit batch
+size: 480" laut `mxl-info` — und dem, was `get_current_index()` bereits
+als aktuell meldet; nicht bis auf die C++-Quelle zurückverfolgt), dreht
+die Schleife mit voller CPU-Geschwindigkeit ohne jede Wartezeit — exakt
+das beobachtete Bild. Reproduzierte sich nicht zuverlässig (weder durch
+gezieltes DSK-Toggeln noch durch bloßes Warten deterministisch auslösbar,
+über zwei Minuten Beobachtung inkl. 20 schneller DSK-Wechsel blieb ein
+frischer Reader stabil) — eine seltene Race, kein deterministischer Bug,
+aber die fehlende Bremse selbst ist unabhängig von der genauen Trefferrate
+ein echter, klar belegter Fehler.
+
+**Fix:** derselbe 5ms-Backoff wie bei `OutOfRangeTooEarly`, ergänzt in
+beiden betroffenen Stellen — `read_loop` (Video, `MxlVideoInput`) und
+`read_audio_loop` (Audio, `MxlAudioInput`), identischer Code, identischer
+bisheriger Mangel. Eine dritte `OutOfRangeTooLate`-Stelle
+(`mxl.rs`-Testcode, `three_concurrent_readers_same_flow_do_not_hang`)
+bewusst unverändert gelassen — durch `max_calls` selbst begrenzt, kein
+Produktionsrisiko, und der Test misst gezielt Aufruf-Latenzen, ein
+zusätzlicher Sleep würde das verfälschen.
+
+**Live verifiziert:** frischer Mixer+Viewer-Aufbau mit dem gefixten
+Binary, 20 DSK-Toggles im 3-Sekunden-Takt über eine Minute, danach 60s
+Ruhebeobachtung — `mxl-info` zeigte durchgehend synchron laufende
+Read-/Write-Zeiten, CPU blieb im erwarteten Bereich (Mixer ~50 %, Viewer
+~10 %), kein einziger erneuter Freeze. Kein Vollbeweis, da die Ursache
+selten/nicht-deterministisch auftritt — aber die strukturelle Schwäche
+(Busy-Loop ohne Backoff) ist beseitigt, unabhängig von der genauen
+Trefferwahrscheinlichkeit.
+
+Nebenbefund derselben Sitzung, dokumentiert als eigene Erinnerung (nicht
+hier wiederholt): `make stop` beendet nur den Orchestrator, nicht die von
+ihm gestarteten Node-Prozesse — angesammelte Waisen-Prozesse aus einer
+langen Sitzung hatten zuvor bereits einmal einen ganz anderen, rein
+ressourcenbedingten Freeze verursacht, der zunächst mit diesem hier
+verwechselt werden konnte, bis ein sauberer Neustart ihn auflöste.
+
+`cargo test -p omp-mediaio --features mxl` (8/8), `cargo build --workspace
+--bins`, `cargo clippy -p omp-mediaio --all-targets --features mxl`
+(sauber) grün.
