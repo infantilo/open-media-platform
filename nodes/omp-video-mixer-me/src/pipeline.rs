@@ -39,55 +39,54 @@
 //! pattern=solid-color`), per/via `keyer.setEnabled` ein-/ausblendbar —
 //! deckt exakt die C10-Verifikation „Farbfläche über Hintergrund" ab.
 //!
-//! **Kapitel 15 Teil 3 (Rest 2): nicht-selektierte Eingänge in Lowres,
-//! aber nur reaktiv per Demote — nie am Build.** Gleiche Hot-Swap-Technik
-//! wie `omp-switcher` (Pad-Block, `swap_input_resolution`, dort
-//! ausführlich dokumentierte Bug-Historie — hier nicht wiederholt), aber
-//! auf **zwei** unabhängige Branch-Pools angewendet (fg/`isel` und
-//! bg/`isel_bg`), weil jeder Eingang hier zwei separate
-//! `MxlVideoInput`-Leser hat (Moduldoku oben).
+//! **Kapitel 15 Teil 3 (Rest 2) rückgebaut (2026-07-23, Viewer-Freeze-
+//! Untersuchung):** dieses Modul hatte bis 2026-07-23 einen reaktiven
+//! Highres/Lowres-Hot-Swap für nicht-selektierte Eingänge (Pad-Block-
+//! Relink zur Laufzeit, analog `omp-switcher::swap_input_resolution`).
+//! Nutzerreport "friert nach mehrmaligem Umschnitt zwischen zwei Quellen
+//! und Schwarz irgendwann ein" live reproduziert (zwei `omp-source`,
+//! Mixer, Viewer, wiederholtes `crosspoint.take` zwischen beiden Quellen
+//! und Schwarz — bereits bei realistischem Bedien-Tempo, nicht nur unter
+//! künstlichem Dauerfeuer): `comp`s Ausgang blieb nach einer Highres-
+//! Promotion permanent auf dem letzten Bildinhalt eingefroren (per
+//! `mxl-info` bestätigt — die MXL-Ausgangs-Flow lief mit gesundem,
+//! kontinuierlich wachsendem Head-Index weiter, nur der tatsächliche
+//! Pixelinhalt änderte sich nie mehr), exakt das seit 2026-07-22 als
+//! „Restproblem, NICHT behoben" dokumentierte, nie root-gecauste
+//! Verhalten dieses Hot-Swaps (mehrere GStreamer-interne Hypothesen
+//! bereits damals geprüft und verworfen, s. `docs/decisions.md`
+//! Nachtrag 65). Ein zweiter, unabhängiger Bug im selben Mechanismus
+//! (Pad-Wiederverwendung über beliebig viele Swaps ohne
+//! `release_request_pad`) wurde in derselben Untersuchung gefunden und
+//! wäre für sich genommen behebbar gewesen (Fix kurz im Einsatz: pro
+//! Swap einen frischen Pad anfordern) — angesichts des UNGELÖSTEN
+//! ersten Bugs im selben Mechanismus aber witzlos, PGM darf niemals
+//! einfrieren.
 //!
-//! **Architekturentscheidung 2026-07-22** (`docs/decisions.md` Nachtrag
-//! 65/76, Nutzerentscheidung nach unbehobenem Restproblem in
-//! `swap_input_resolution`): anders als beim Switcher startet hier
-//! **jeder** Zweig beim (Neu-)Aufbau (`build`/`build_one_input`) direkt
-//! in Highres, unabhängig vom aktuellen `program` — kein
-//! `desired_flow_id` mehr, das am Build selbst schon zwischen Highres/
-//! Lowres unterscheidet. Grund: das nicht root-gecauste Restproblem
-//! (`comp`s Ausgang bleibt bei einem Teil der ALLERERSTEN
-//! Highres-Promotions eines Zweigs dauerhaft schwarz, Details in
-//! `swap_input_resolution`s Doku) trifft genau den Moment, in dem ein
-//! bislang nie promoteter Zweig zum ersten Mal per Hot-Swap auf Highres
-//! gehoben wird — mit Highres-Start entfällt dieser Moment für jeden neu
-//! entdeckten/gerade erst aufgebauten Eingang vollständig. Die
-//! Herunterstufung auf Lowres bleibt unverändert **rein reaktiv**: sie
-//! passiert ausschließlich nach einem bestätigten Wechsel WEG von einem
-//! Eingang (`demote_to_lowres`/`demote_fg_to_lowres`/
-//! `demote_bg_to_lowres`, aus Cut/Take/AutoTrans aufgerufen), nie am
-//! Build. Der verbleibende Risiko-Pfad (`promote_to_highres`, Hot-Swap
-//! zurück auf Highres) tritt dadurch nur noch auf, wenn ein Operator zu
-//! einem bereits zuvor heruntergestuften Eingang zurückschaltet —
-//! deutlich seltener als „jeder neue Eingang beim ersten Mal", aber
-//! bewusst nicht eliminiert (kein weiterer bekannter Workaround ohne
-//! Root Cause). **Bewusst in Kauf genommene Nebenwirkung:** ein
-//! `SetInputs`-Rebuild (Quellenmenge ändert sich) baut ALLE Zweige neu
-//! auf, also wieder in Highres — auch bereits zuvor herabgestufte,
-//! gerade nicht sichtbare Eingänge. Verändert den Speicher-/
-//! Bandbreiten-Kompromiss aus Kapitel 15 Teil 2/3 zugunsten von
-//! PGM-Sicherheit, s. Nachtrag 76.
+//! **Entscheidung:** die gesamte reaktive Demote/Promote-Maschinerie
+//! (`swap_input_resolution`, `retarget_branch`, `promote_to_highres`,
+//! `demote_fg_to_lowres`, `demote_bg_to_lowres`, `demote_to_lowres`,
+//! `InputBranch::open_flow_id`) ist ersatzlos entfernt. Jeder Zweig
+//! bleibt ab jetzt für seine gesamte Lebensdauer in Highres — exakt das
+//! bereits seit der „Highres-Start"-Entscheidung vom 2026-07-22 für den
+//! initialen Aufbau geltende Verhalten, jetzt einfach dauerhaft statt nur
+//! am Build. Ein `SetInputs`-Rebuild (Quellenmenge ändert sich) baut
+//! ohnehin schon immer alle Zweige komplett neu auf (nachweislich
+//! zuverlässig, s. damalige Doku) — dieser Pfad bleibt der EINZIGE Weg,
+//! wie sich der von einem Zweig gelesene Flow noch ändert. Bewusst
+//! aufgegeben: die Bandbreiten-/CPU-Einsparung aus Kapitel 15 Teil 2/3
+//! für nicht-selektierte Mixer-Eingänge (PGM-Zuverlässigkeit hat
+//! Vorrang) — `main.rs`s `activateLowresPreview`/`releaseLowresPreview`-
+//! Aktivierung und `DiscoveredInput::lowres_sender_id`/`lowres_flow_id`
+//! sind im selben Zug entfernt, da dieses Modul die Lowres-Flows nun nie
+//! mehr liest. `omp-switcher`/`omp-multiviewer` sind NICHT betroffen
+//! (jeweils eigener, unabhängiger Mechanismus, s. dortige Moduldoku).
 //!
 //! Unverändert: während einer laufenden `autoTrans()` zeigt
 //! `comp_bg_pad` das **ausgehende** Bild noch sichtbar (Alpha rampt erst
 //! über `TRANS_DURATION_MS` von 1 auf 0), `isel_bg`s aktiver Pad
 //! wechselt erst am Ende des Fades (`spawn_autotrans`) auf den neuen
-//! Eingang. Der bg-Zweig des zuvor aktiven Programms darf deshalb
-//! **nicht** sofort auf Lowres heruntergestuft werden (sichtbarer
-//! Auflösungs-Einbruch mitten in der Überblendung) — er wird erst
-//! heruntergestuft, sobald `fading` wieder `false` ist
-//! (`pending_bg_demote` in `run()`). Der fg-Zweig dagegen kann sofort
-//! heruntergestuft werden, weil `isel` bereits zu Transitionsbeginn auf
-//! den neuen Eingang umschaltet (der alte fg-Zweig ist ab dann
-//! unreferenziert).
+//! Eingang.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -128,11 +127,6 @@ const KEYER_COLOR_ARGB: u32 = 0xFFFF00FF;
 /// damit nicht zwei Writer-Threads überlappend schreiben.
 const OLD_WRITER_DRAIN: Duration = Duration::from_millis(300);
 
-/// Timeout für den Pad-Block beim Auflösungs-Hot-Swap
-/// (`swap_input_resolution`) — identischer Wert/Begründung wie
-/// `omp-switcher::pipeline::SWAP_BLOCK_TIMEOUT`.
-const SWAP_BLOCK_TIMEOUT: Duration = Duration::from_millis(500);
-
 pub struct Config {
     pub domain: String,
     pub flow_id: String,
@@ -150,15 +144,6 @@ pub struct DiscoveredInput {
     /// Node-Auflösung, die `main.rs` fürs Tally-Event braucht (Tally
     /// zielt auf die Node-Kachel, Discovery liefert nur `device_id`).
     pub device_id: String,
-    /// Kapitel 15 Teil 3 (s. `main.rs::discover`): Sender-ID des
-    /// Lowres-Begleiters, nur von `main.rs` für `activateLowresPreview`/
-    /// `releaseLowresPreview` gebraucht, hier selbst ungenutzt.
-    pub lowres_sender_id: Option<String>,
-    /// Flow-ID des Lowres-Begleit-Senders derselben Quelle, sofern per
-    /// Grouphint-Tag gefunden. `None` heißt "keiner entdeckt/aktivierbar",
-    /// dieser Eingang bleibt dauerhaft Highres (`demote_fg_to_lowres`/
-    /// `demote_bg_to_lowres` sind dann No-Ops).
-    pub lowres_flow_id: Option<String>,
 }
 
 /// Ein per NMOS-Device gefundenes Fill+Key-Senderpaar (`main.rs::
@@ -541,12 +526,10 @@ fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
 /// Ein einzelner Zweig (fg **oder** bg) genau eines Eingangs: `MxlVideoInput`
 /// plus die normalisierende Konvertierungskette (`build_normalized_branch`),
 /// **nicht** an `isel`/`isel_bg` verlinkt — das entscheidet der jeweilige
-/// Aufrufer (`build_one_input` beim Erstaufbau, `swap_input_resolution`
-/// beim Hot-Swap auf einen bereits existierenden Pad). `open_flow_id`
-/// merkt, welcher Flow (Highres/Lowres) gerade tatsächlich offen ist —
-/// Vergleichsbasis für den jeweiligen Aufrufer, um unnötige Swaps zu
-/// vermeiden. Identisch zu `omp-switcher::pipeline::InputBranch`, hier
-/// aber pro Eingang zweimal instanziiert (fg-Pool, bg-Pool, s. Moduldoku).
+/// Aufrufer (`build_one_input`). Bleibt für seine gesamte Lebensdauer in
+/// Highres (s. Moduldoku "Kapitel 15 Teil 3 (Rest 2) rückgebaut") — kein
+/// Hot-Swap-Ziel mehr, deshalb anders als `omp-switcher::pipeline::
+/// InputBranch` ohne `open_flow_id`-Feld.
 struct InputBranch {
     mxl_input: MxlVideoInput,
     queue: gst::Element,
@@ -554,15 +537,13 @@ struct InputBranch {
     videoscale: gst::Element,
     videorate: gst::Element,
     caps: gst::Element,
-    open_flow_id: String,
 }
 
 /// Baut einen `InputBranch` (`MxlVideoInput` + Konvertierungskette),
 /// räumt bei jedem Fehlschlag vollständig auf, was diese Funktion selbst
 /// bereits angelegt hat — gleicher Verwaisungs-Schutz wie überall sonst
 /// in diesem Modul. `sync_state_with_parent` ist beim Erstaufbau (Pipeline
-/// wechselt erst danach auf `PLAYING`) ein No-Op, beim Hot-Swap
-/// (`swap_input_resolution`, Pipeline läuft bereits) zwingend nötig.
+/// wechselt erst danach auf `PLAYING`) ein No-Op.
 fn build_input_branch(
     pipeline: &gst::Pipeline,
     context: &Arc<MxlContext>,
@@ -597,7 +578,6 @@ fn build_input_branch(
         videoscale,
         videorate,
         caps,
-        open_flow_id: read_flow_id.to_string(),
     })
 }
 
@@ -709,219 +689,6 @@ fn build_one_input(
     Ok((fg_pad, bg_pad, fg_branch, bg_branch))
 }
 
-/// Tauscht die Auflösung eines einzelnen, bereits laufenden Zweigs
-/// (fg **oder** bg-Pool) aus, während die Pipeline `PLAYING` bleibt.
-/// Identische Pad-Block-Hot-Swap-Technik wie
-/// `omp-switcher::pipeline::swap_input_resolution` (dort ausführlich
-/// dokumentierte Bug-Historie: Segfault durch `set_state(Null)` vom
-/// eigenen Streaming-Thread, unbegrenzter Speicherverbrauch durch
-/// Element-Auf-/Abbau innerhalb des blockierten Pad-Probe-Callbacks,
-/// verlorene Buchführung bei einem im ersten Schritt fehlschlagenden
-/// Swap) — hier nicht wiederholt, gilt unverändert: der Callback tut
-/// ausschließlich das Entlinken, jeder Element-Auf-/Abbau passiert
-/// strikt auf dem Kontroll-Thread danach.
-///
-/// Der akute OOM (Kapitel 15 Teil 3 Rest 2, `docs/decisions.md`
-/// Nachtrag 51+59) ist behoben — Root Cause saß in `omp-mediaio::mxl`
-/// (fehlendes `sync_state_with_parent` + unbegrenzte `appsrc`-Queue),
-/// nicht hier. **Bekannte, dokumentierte Restschwäche** (Nutzer-
-/// entscheidung 2026-07-20: trotzdem committen, nicht verschweigen):
-/// nach genügend wiederholten Swaps auf demselben `isel_sink_pad` läuft
-/// der Pad-Block-Callback nicht-deterministisch in den
-/// `SWAP_BLOCK_TIMEOUT` — es kommt schlicht kein Puffer mehr an diesem
-/// Pad an, der Callback feuert also nie. Diese Funktion behandelt das
-/// bereits korrekt (loggt, gibt `old_branch` unangetastet zurück, kein
-/// Crash/Leck dank des OOM-Fixes) — funktional bedeutet es aber, dass
-/// eine Auflösung ab diesem Punkt nicht mehr wechselt, bis der
-/// betroffene Zweig aus einem anderen Grund (z. B. `SetInputs`-Rebuild)
-/// neu aufgebaut wird. Root Cause nicht gefunden (Kandidaten: `appsrc`-
-/// interner Weiterleitungs-Task-Scheduling-Zusammenhang mit dem eigenen
-/// `read_loop`-Thread, oder GStreamer-/`input-selector`-interne
-/// Zustandsakkumulation über viele Unlink-ohne-Flush-Zyklen auf
-/// demselben, nie per `release_request_pad` freigegebenen Sink-Pad) —
-/// künftige Sitzung.
-#[allow(clippy::too_many_arguments)]
-fn swap_input_resolution(
-    pipeline: &gst::Pipeline,
-    context: Arc<MxlContext>,
-    isel_sink_pad: &gst::Pad,
-    input: DiscoveredInput,
-    target_flow_id: String,
-    name_suffix: &str,
-    width: u32,
-    height: u32,
-    old_branch: InputBranch,
-) -> Result<InputBranch, Box<(String, Option<InputBranch>)>> {
-    // Nutzerreport "Viewer schwarz, hohe Latenz bei PGM-Umschaltung" — per
-    // Debug-Tap direkt auf `comp`s eigenem Ausgang reproduziert (ganz ohne
-    // MXL/Viewer dazwischen) und per `GST_DEBUG=3` teilweise root-gecaust.
-    // Zwei davon **bestätigt behoben**, ein drittes Restproblem bleibt
-    // **offen** — Details und Repro unten und in `docs/decisions.md`
-    // Nachtrag 65.
-    //
-    // **Fund 1, behoben:** `build_input_branch` (unten) synchronisiert
-    // seine Elemente INTERN bereits auf `PLAYING` — das startet `appsrc`s
-    // eigene GStreamer-Streaming-Task sofort. Stand der Aufruf (wie
-    // vorher) VOR dem Block+Entlink+Drain-Ablauf für den alten Zweig,
-    // lief diese Task waehrend der gesamten Wartezeit (Block-Timeout +
-    // `OLD_WRITER_DRAIN`, mehrere hundert ms) gegen ein `capsfilter` ohne
-    // jeden Downstream-Peer (erst `link_branch_to_pad` ganz unten verlinkt
-    // es auf `isel_sink_pad`). `appsrc`s eigener Push kaskadiert dabei als
-    // `GST_FLOW_NOT_LINKED` bis zum `basesrc`-Loop zurück, der das als
-    // fatalen Fehler behandelt und seine Streaming-Task PERMANENT beendet
-    // (bestätigt: `<appsrcN>: streaming stopped, reason not-linked`,
-    // danach nie wieder ein Puffer, auch nicht nach einem spaeteren
-    // erfolgreichen Relink). Fix: `build_input_branch` erst unmittelbar
-    // vor `link_branch_to_pad` aufrufen, nicht am Funktionsanfang — das
-    // unvermeidliche Fenster ohne Downstream-Peer schrumpft dadurch von
-    // "mehrere hundert ms" auf eine Handvoll Rust-Anweisungen.
-    //
-    // **Fund 2, behoben:** dieselbe Fehlerklasse, umgekehrt, beim ALTEN
-    // Zweig — `remove_mxl_video_input` (in `teardown_branch`) setzte die
-    // GStreamer-Elemente bisher IMMER erst auf `Null`/entfernte sie und
-    // stoppte den `read_loop`-Thread (via `running`-Flag) erst danach,
-    // beim finalen `drop()`. Der Thread rief also `push_buffer()` weiter
-    // gegen ein Element auf, das der Kontroll-Thread parallel demontierte
-    // — dasselbe `not-linked`/Refcounting-Muster wie Fund 1. Fix:
-    // `MxlVideoInput::stop()` (neu, `omp-mediaio`) muss vor
-    // `remove_elements` laufen.
-    //
-    // **Restproblem, NICHT behoben:** selbst mit beiden Fixen und ohne
-    // jede Warnung/Fehlermeldung in `GST_DEBUG=3` bleibt `comp`s Ausgang
-    // bei einem Teil der ALLERERSTEN Highres-Promotions eines Zweigs
-    // dauerhaft schwarz (kein Einzelbild-Ruckler, ALLE Frames ab dem
-    // Zeitpunkt der Umschaltung). Bestätigt per Vier-Wege-Vergleich: (a)
-    // Debug-Tap direkt auf `comp` UND ein echter `omp-viewer` zeigen
-    // beide dasselbe Schwarzbild (kein Debug-Tap-Artefakt); (b) `mxl-info`
-    // zeigt auf allen beteiligten Flows (Quelle Highres, Mixer-Ausgang)
-    // durchgehend gesunden, synchronen Read/Write — die Daten sind also
-    // nachweislich echt und fließen; (c) ein NACHFOLGENDER, durch einen
-    // neuen Sender ausgelöster `SetInputs`-Rebuild (baut `comp` mit dem
-    // Ziel bereits als `program` — also OHNE jeden Hot-Swap — komplett
-    // neu auf) zeigt sofort echtes Bild, bestätigt also, dass das Problem
-    // spezifisch am Hot-Swap-in-eine-laufende-Pipeline-Mechanismus hängt,
-    // nicht an Quelle/Daten/Alpha/Zorder/isel-Auswahl (per temporärem
-    // Debug-Log in `Cut`/`Take` einzeln alle als korrekt bestätigt, s.
-    // `docs/decisions.md` Nachtrag 65 für die genauen Werte);
-    // (d) probiert und verworfen, weil wirkungslos oder die Fehlerquote
-    // nur senkend statt beseitigend: `compositor.min-upstream-latency`
-    // bei 200ms/1s/2s, ein Buffer-Probe-Wait auf `isel_sink_pad` vor dem
-    // Aktivschalten, ein FLUSH_START/FLUSH_STOP direkt auf `isel_sink_pad`
-    // nach dem Relink. Root Cause nicht gefunden (Kandidaten: `compositor`
-    // /`GstAggregator`-interne Segment-/Timestamp-Buchführung für einen
-    // Sink-Pad, der zur Aktivierungszeit erstmals "wirklich" Daten liefert
-    // — passend zu keiner Fehlermeldung, da ein `GstAggregator` verspätete
-    // Puffer im Live-Betrieb standardmäßig lautlos verwirft). Ohne
-    // `gdb`/Kenntnis der `compositor`-internen Segment-Verwaltung in
-    // dieser Sandbox nicht weiter eingrenzbar — künftige Sitzung.
-    // Reproduktion (exakter Tap-Code in `docs/decisions.md` Nachtrag 65):
-    // ein `tee` zwischen `comp` und `comp_out_caps` mit `videoconvert !
-    // jpegenc ! filesink`-Zweig, auf zwei frischen `omp-source`-Instanzen,
-    // `select`+`cut` auf eine davon; tritt nicht-deterministisch bei ca.
-    // jedem zweiten erstmaligen Highres-Swap eines Zweigs auf.
-    let (unblocked_tx, unblocked_rx) = std::sync::mpsc::sync_channel::<()>(1);
-    let task = Mutex::new(Some(unblocked_tx));
-
-    let probe_id = isel_sink_pad.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |pad, _info| {
-        let Some(unblocked_tx) = task.lock().expect("lock poisoned").take() else {
-            return gst::PadProbeReturn::Remove;
-        };
-        if let Some(peer) = pad.peer() {
-            let _ = peer.unlink(pad);
-        }
-        let _ = unblocked_tx.send(());
-        gst::PadProbeReturn::Remove
-    });
-
-    let Some(probe_id) = probe_id else {
-        return Err(Box::new(("add_probe (BLOCK_DOWNSTREAM) fehlgeschlagen".to_string(), Some(old_branch))));
-    };
-
-    if unblocked_rx.recv_timeout(SWAP_BLOCK_TIMEOUT).is_err() {
-        // Live gefundener Bug (ggü. omp-switcher zusätzlich, dort schlägt
-        // dieser Zweig nie fehl): ohne `remove_probe` bliebe der Block-
-        // Probe dauerhaft auf dem Pad hängen und würde beim nächsten
-        // vorbeikommenden Puffer irgendwann unkontrolliert entlinken.
-        isel_sink_pad.remove_probe(probe_id);
-        return Err(Box::new(("Timeout beim Warten auf den blockierten Pad-Unlink".to_string(), Some(old_branch))));
-    }
-
-    // Ab hier: Pad entlinkt (und per `PadProbeReturn::Remove` bereits
-    // wieder freigegeben) — kein Zurück mehr zu `old_branch`.
-    teardown_branch(pipeline, old_branch);
-    std::thread::sleep(OLD_WRITER_DRAIN);
-
-    // `build_input_branch` (startet die Streaming-Task, Fund 1 oben)
-    // bewusst erst HIER, unmittelbar vor `link_branch_to_pad`.
-    let branch = build_input_branch(pipeline, &context, &target_flow_id, &input.sender_id, name_suffix, width, height)
-        .map_err(|e| Box::new((e, None)))?;
-    match link_branch_to_pad(&branch, isel_sink_pad) {
-        Ok(()) => Ok(branch),
-        Err(e) => {
-            teardown_branch(pipeline, branch);
-            Err(Box::new((e, None)))
-        }
-    }
-}
-
-/// Tauscht `sender_id`s Zweig in `branches`/`pads` (fg **oder** bg-Pool,
-/// generisch — beide werden an denselben Stellen im selben Rhythmus
-/// umgeschaltet, s. Moduldoku) auf `target_flow_id` um, sofern er nicht
-/// bereits offen ist. Kapselt `swap_input_resolution`s Bad-Path-
-/// Buchführung (unangetasteten `old_branch` bei Fehlschlag zurückgeben)
-/// für die drei Aufrufer unten (`promote_to_highres`/`demote_*_to_lowres`).
-#[allow(clippy::too_many_arguments)]
-fn retarget_branch(
-    pipeline: &gst::Pipeline,
-    context: &Arc<MxlContext>,
-    branches: &mut HashMap<String, InputBranch>,
-    pads: &HashMap<String, gst::Pad>,
-    inputs: &[DiscoveredInput],
-    sender_id: &str,
-    name_suffix: &str,
-    target_flow_id: &str,
-    width: u32,
-    height: u32,
-) -> Result<(), String> {
-    let needs_swap = branches.get(sender_id).is_some_and(|b| b.open_flow_id != target_flow_id);
-    if !needs_swap {
-        return Ok(());
-    }
-    let (Some(pad), Some(old_branch)) = (pads.get(sender_id).cloned(), branches.remove(sender_id)) else {
-        return Ok(());
-    };
-    let Some(input) = inputs.iter().find(|i| i.sender_id == sender_id) else {
-        // Eingang aus der Buchführung verschwunden (Rennen mit einem
-        // parallelen SetInputs, das ohnehin gleich die ganze Pipeline
-        // ersetzt) — alten Zweig unangetastet zurückgeben.
-        branches.insert(sender_id.to_string(), old_branch);
-        return Ok(());
-    };
-    match swap_input_resolution(
-        pipeline,
-        context.clone(),
-        &pad,
-        input.clone(),
-        target_flow_id.to_string(),
-        name_suffix,
-        width,
-        height,
-        old_branch,
-    ) {
-        Ok(new_branch) => {
-            branches.insert(sender_id.to_string(), new_branch);
-            Ok(())
-        }
-        Err(err) => {
-            let (e, restored) = *err;
-            if let Some(restored) = restored {
-                branches.insert(sender_id.to_string(), restored);
-            }
-            Err(e)
-        }
-    }
-}
-
 struct ActivePipeline {
     pipeline: gst::Pipeline,
     isel: gst::Element,
@@ -938,8 +705,13 @@ struct ActivePipeline {
     /// jetzt diesen Pad, nicht mehr `comp_fg_pad` (der bleibt seither
     /// dauerhaft vollflächig).
     comp_pip_pad: gst::Pad,
-    fg_branches: HashMap<String, InputBranch>,
-    bg_branches: HashMap<String, InputBranch>,
+    /// Nie mehr gelesen seit dem Rückbau des Highres/Lowres-Hot-Swaps
+    /// (s. Moduldoku "Kapitel 15 Teil 3 (Rest 2) rückgebaut") — hält die
+    /// `InputBranch`en (und damit deren `MxlVideoInput`-Reader-Threads)
+    /// für die Lebensdauer der Pipeline am Leben, gleicher Grund wie
+    /// `_keyer_keyfill`/`_pip_input` unten.
+    _fg_branches: HashMap<String, InputBranch>,
+    _bg_branches: HashMap<String, InputBranch>,
     _mxl_output: MxlVideoOutput,
     /// `Some` nur, wenn der Keyer gerade eine echte Fill+Key-Quelle liest
     /// (statt der synthetischen Test-Farbfläche) — hält deren
@@ -1301,8 +1073,8 @@ fn build(
             comp_bg_pad,
             comp_keyer_pad,
             comp_pip_pad,
-            fg_branches,
-            bg_branches,
+            _fg_branches: fg_branches,
+            _bg_branches: bg_branches,
             _mxl_output: mxl_output,
             _keyer_keyfill: keyer_keyfill,
             _pip_input: pip_input,
@@ -1310,159 +1082,6 @@ fn build(
         },
         warnings,
     ))
-}
-
-/// Stuft `target_id`s fg- **und** bg-Zweig auf Highres hoch, falls nötig
-/// — vor jedem tatsächlichen Programm-Wechsel (Cut/Take/AutoTrans)
-/// aufgerufen, damit PGM nie, auch nicht für einen Frame, Lowres zeigt
-/// (s. Moduldoku). Für den bg-Zweig eines Eingangs, der noch nie
-/// Programm war, ist das eine Vorab-Investition auf den Moment, in dem
-/// `isel_bg`s aktiver Pad am Ende der nächsten Überblendung dorthin
-/// mitzieht (`spawn_autotrans`) — unschädlich, weil der bg-Zweig bis
-/// dahin ohnehin nicht sichtbar ist.
-fn promote_to_highres(
-    p: &mut ActivePipeline,
-    context: &Arc<MxlContext>,
-    current_inputs: &[DiscoveredInput],
-    config: &Config,
-    target_id: &str,
-    tx: &UnboundedSender<Event>,
-) {
-    let Some(input) = current_inputs.iter().find(|i| i.sender_id == target_id) else {
-        return;
-    };
-    let highres = input.flow_id.clone();
-    if let Err(e) = retarget_branch(
-        &p.pipeline,
-        context,
-        &mut p.fg_branches,
-        &p.source_pads_fg,
-        current_inputs,
-        target_id,
-        &format!("swap-{target_id}-fg"),
-        &highres,
-        config.width,
-        config.height,
-    ) {
-        let _ = tx.send(Event::Error(format!(
-            "Auflösungs-Swap (Highres, fg) für {target_id} fehlgeschlagen: {e}"
-        )));
-    }
-    if let Err(e) = retarget_branch(
-        &p.pipeline,
-        context,
-        &mut p.bg_branches,
-        &p.source_pads_bg,
-        current_inputs,
-        target_id,
-        &format!("swap-{target_id}-bg"),
-        &highres,
-        config.width,
-        config.height,
-    ) {
-        let _ = tx.send(Event::Error(format!(
-            "Auflösungs-Swap (Highres, bg) für {target_id} fehlgeschlagen: {e}"
-        )));
-    }
-}
-
-/// Stuft `old_id`s fg-Zweig (nur fg-Pool) auf Lowres herunter, sofern er
-/// einen Lowres-Begleiter hat und nicht (mehr) das aktuelle Programm ist
-/// — sicher sofort nach einem Cut/Take/AutoTrans aufrufbar, weil `isel`
-/// zu diesem Zeitpunkt bereits auf den neuen Eingang umgeschaltet hat
-/// (der alte fg-Zweig ist ab dann unreferenziert, s. Moduldoku).
-fn demote_fg_to_lowres(
-    p: &mut ActivePipeline,
-    context: &Arc<MxlContext>,
-    current_inputs: &[DiscoveredInput],
-    config: &Config,
-    old_id: &str,
-    new_id: &Option<String>,
-    tx: &UnboundedSender<Event>,
-) {
-    if new_id.as_deref() == Some(old_id) {
-        return;
-    }
-    let Some(input) = current_inputs.iter().find(|i| i.sender_id == old_id) else {
-        return;
-    };
-    let Some(lowres_flow_id) = input.lowres_flow_id.clone() else {
-        return;
-    };
-    if let Err(e) = retarget_branch(
-        &p.pipeline,
-        context,
-        &mut p.fg_branches,
-        &p.source_pads_fg,
-        current_inputs,
-        old_id,
-        &format!("swap-{old_id}-fg"),
-        &lowres_flow_id,
-        config.width,
-        config.height,
-    ) {
-        let _ = tx.send(Event::Error(format!(
-            "Auflösungs-Swap (Lowres, fg) für {old_id} fehlgeschlagen: {e}"
-        )));
-    }
-}
-
-/// Bg-Pendant zu `demote_fg_to_lowres`. **Nur** sicher aufrufbar, wenn
-/// `isel_bg`s aktiver Pad tatsächlich nicht mehr auf `old_id` zeigt —
-/// bei Cut/Take ist das sofort der Fall (beide Selektoren schalten
-/// synchron um), bei `autoTrans()` **nicht** (s. Moduldoku:
-/// `isel_bg` bleibt während des gesamten Fades auf `old_id` stehen,
-/// deshalb dort über `pending_bg_demote` in `run()` verzögert).
-fn demote_bg_to_lowres(
-    p: &mut ActivePipeline,
-    context: &Arc<MxlContext>,
-    current_inputs: &[DiscoveredInput],
-    config: &Config,
-    old_id: &str,
-    new_id: &Option<String>,
-    tx: &UnboundedSender<Event>,
-) {
-    if new_id.as_deref() == Some(old_id) {
-        return;
-    }
-    let Some(input) = current_inputs.iter().find(|i| i.sender_id == old_id) else {
-        return;
-    };
-    let Some(lowres_flow_id) = input.lowres_flow_id.clone() else {
-        return;
-    };
-    if let Err(e) = retarget_branch(
-        &p.pipeline,
-        context,
-        &mut p.bg_branches,
-        &p.source_pads_bg,
-        current_inputs,
-        old_id,
-        &format!("swap-{old_id}-bg"),
-        &lowres_flow_id,
-        config.width,
-        config.height,
-    ) {
-        let _ = tx.send(Event::Error(format!(
-            "Auflösungs-Swap (Lowres, bg) für {old_id} fehlgeschlagen: {e}"
-        )));
-    }
-}
-
-/// Kombiniert `demote_fg_to_lowres` + `demote_bg_to_lowres` — für
-/// Cut/Take, wo beide Pools gleichzeitig sicher herunterstufbar sind
-/// (kein Fade, s. `demote_bg_to_lowres`-Doku).
-fn demote_to_lowres(
-    p: &mut ActivePipeline,
-    context: &Arc<MxlContext>,
-    current_inputs: &[DiscoveredInput],
-    config: &Config,
-    old_id: &str,
-    new_id: &Option<String>,
-    tx: &UnboundedSender<Event>,
-) {
-    demote_fg_to_lowres(p, context, current_inputs, config, old_id, new_id, tx);
-    demote_bg_to_lowres(p, context, current_inputs, config, old_id, new_id, tx);
 }
 
 fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool {
@@ -1562,11 +1181,6 @@ pub fn run(
     let mut pip_enabled = false;
     let fading = Arc::new(AtomicBool::new(false));
     let fade_thread: Arc<Mutex<Option<std::thread::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
-    // Kapitel 15 Teil 3 (Rest 2, s. Moduldoku): der bg-Zweig des vor einer
-    // `autoTrans()` aktiven Programms darf erst nach Fade-Ende auf Lowres
-    // herunterstuft werden (`isel_bg` zeigt bis dahin noch darauf) — hier
-    // gemerkt, im Loop unten angewendet, sobald `fading` wieder `false` ist.
-    let mut pending_bg_demote: Option<String> = None;
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) =
         std::sync::mpsc::channel();
@@ -1589,26 +1203,12 @@ pub fn run(
             break;
         }
 
-        // Verzögerte bg-Herunterstufung nach einer abgeschlossenen
-        // `autoTrans()` (s. Moduldoku + `pending_bg_demote`-Deklaration
-        // oben) — hier statt im Fade-Thread selbst, weil jeder Element-
-        // Auf-/Abbau strikt auf diesem Kontroll-Thread passieren muss
-        // (`swap_input_resolution`-Doku).
-        if let Some(old_id) = pending_bg_demote.take() {
-            if fading.load(Ordering::Acquire) {
-                pending_bg_demote = Some(old_id);
-            } else if let Some(p) = &mut active {
-                demote_bg_to_lowres(p, &context, &current_inputs, &config, &old_id, &program, &tx);
-            }
-        }
-
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Command::SetInputs(inputs)) => {
                 if inputs_changed(&current_inputs, &inputs) {
                     current_inputs = inputs;
                     join_fade(&fade_thread);
                     fading.store(false, Ordering::Release);
-                    pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
                     match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
@@ -1688,7 +1288,6 @@ pub fn run(
                     keyer_source = source;
                     join_fade(&fade_thread);
                     fading.store(false, Ordering::Release);
-                    pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
                     match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
@@ -1750,7 +1349,6 @@ pub fn run(
                     pip_source = source;
                     join_fade(&fade_thread);
                     fading.store(false, Ordering::Release);
-                    pending_bg_demote = None;
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
                     match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
@@ -1821,9 +1419,6 @@ pub fn run(
                 }
                 if let Some(p) = &mut active {
                     let previous = program.clone();
-                    if let Some(target_id) = &preset {
-                        promote_to_highres(p, &context, &current_inputs, &config, target_id, &tx);
-                    }
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &preset);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
@@ -1831,13 +1426,6 @@ pub fn run(
                     // Transition findet dort ein laufendes Bild vor).
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &preset);
                     program = applied;
-                    // Kein Fade bei Cut: beide Selektoren sind bereits auf
-                    // den neuen Eingang umgeschaltet, der alte ist ab hier
-                    // in keinem Pool mehr referenziert — sofortiges
-                    // Herunterstufen (fg + bg) ist sicher.
-                    if let Some(prev_id) = &previous {
-                        demote_to_lowres(p, &context, &current_inputs, &config, prev_id, &program, &tx);
-                    }
                     let _ = tx.send(Event::ProgramChanged {
                         previous,
                         current: program.clone(),
@@ -1854,18 +1442,12 @@ pub fn run(
                 }
                 if let Some(p) = &mut active {
                     let previous = program.clone();
-                    if let Some(target_id) = &sender_id {
-                        promote_to_highres(p, &context, &current_inputs, &config, target_id, &tx);
-                    }
                     let applied =
                         switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &sender_id);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &sender_id);
                     program = applied;
-                    if let Some(prev_id) = &previous {
-                        demote_to_lowres(p, &context, &current_inputs, &config, prev_id, &program, &tx);
-                    }
                     let _ = tx.send(Event::ProgramChanged {
                         previous,
                         current: program.clone(),
@@ -1882,9 +1464,6 @@ pub fn run(
                         continue;
                     }
                     let previous = program.clone();
-                    if let Some(target_id) = &preset {
-                        promote_to_highres(p, &context, &current_inputs, &config, target_id, &tx);
-                    }
                     // Programm-Zustand gilt sofort als gewechselt (Tally
                     // reagiert im Moment des Auslösens, Moduldoku) — die
                     // sichtbare Überblendung läuft danach asynchron.
@@ -1903,15 +1482,6 @@ pub fn run(
                     p.comp_fg_pad.set_property("alpha", 0.0f64);
                     switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &preset);
                     program = preset.clone();
-                    // fg ist ab hier sicher herunterstufbar (isel zeigt
-                    // bereits auf das neue Ziel) — bg dagegen erst nach
-                    // Fade-Ende (`pending_bg_demote`, Moduldoku).
-                    if let Some(prev_id) = &previous {
-                        demote_fg_to_lowres(p, &context, &current_inputs, &config, prev_id, &program, &tx);
-                        if Some(prev_id) != program.as_ref() {
-                            pending_bg_demote = Some(prev_id.clone());
-                        }
-                    }
                     fading.store(true, Ordering::Release);
                     let handle = spawn_autotrans(
                         p.comp_fg_pad.clone(),
