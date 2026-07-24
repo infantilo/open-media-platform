@@ -105,7 +105,19 @@ export class RoleDesigner extends HTMLElement {
 
     const svg = document.createElementNS(SVG_NS, "svg") as SVGSVGElement;
     svg.setAttribute("data-role", "role-designer-canvas");
-    svg.style.cssText = "position:absolute;top:40px;left:0;right:0;bottom:0;width:100%;background:#1e1e1e;touch-action:none;";
+    // `height:100%` explizit setzen, nicht nur `top`/`bottom`: SVG ist ein
+    // "replaced element" — dessen `auto`-Höhe wird bei `position:absolute`
+    // NICHT aus `top`+`bottom` berechnet (das gilt nur für Nicht-Replaced-
+    // Elemente, CSS2.1 §10.6.4 vs. §10.6.5), sondern fällt ohne explizite
+    // Höhe auf die UA-Standardgröße für Replaced-Elemente zurück (300×150,
+    // live per CDP gemessen: exakt 150px unabhängig von der Fenstergröße).
+    // Rollen-Kacheln in einer zweiten/weiteren Zeile (ab `translate(x,200)`)
+    // lagen dadurch zwar sichtbar (SVG `overflow:visible`), aber außerhalb
+    // der eigentlichen Hit-Test-Box des Canvas — `document.elementFromPoint`
+    // (in `#finishConnect`) traf dort nie den Anker, jede Verbindung zu/von
+    // einer zweiten Zeile ging beim Speichern verloren (Bug-Report: Viewer
+    // ohne Vorschau, weil PGM→Viewer nie tatsächlich gezogen werden konnte).
+    svg.style.cssText = "position:absolute;top:40px;left:0;right:0;width:100%;height:calc(100% - 40px);background:#1e1e1e;touch-action:none;";
     const viewportGroup = document.createElementNS(SVG_NS, "g");
     svg.appendChild(viewportGroup);
     this.#svg = svg;
