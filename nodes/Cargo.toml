@@ -18,4 +18,5 @@ members = [
     "omp-aes67-gateway",
     "omp-fabrics-gateway",
     "omp-media-library",
+    "omp-recorder",
 ]

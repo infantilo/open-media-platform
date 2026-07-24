@@ -12525,3 +12525,77 @@ oder die `auto`-Eskalationsstufe (§6.1) braucht.
 §7.4, §7.5, neuer §7.7 „Nachtrag 2026-07-24"), `ARCHITECTURE.md` §21.3.
 Kein Code, keine neuen `UMSETZUNG.md`-Schrittstubs — reine
 Konzept-/Dokumentationsarbeit wie vom Nutzer verlangt.
+
+---
+
+## 2026-07-24 (Nachtrag 90) — C22 (omp-recorder) umgesetzt, Phase C damit
+vollständig abgeschlossen
+
+**Anlass:** Nutzerfrage, womit die verbleibende Sitzung sinnvoll gefüllt
+werden soll (nur noch 3% Wochenbudget übrig) — C22 war der einzige noch
+„offene" Eintrag in der `UMSETZUNG.md`-Statusliste, alle anderen C-, D-
+und K-Schritte waren bereits erledigt.
+
+**Umsetzung** (`ARCHITECTURE.md` §24.7, `UMSETZUNG.md` C22): neuer Node
+`nodes/omp-recorder` — zwei unabhängige IS-05-Receiver (Video/Audio,
+gleiches Muster wie `omp-viewer`s Empfangsseite, C6), aber bewusst
+**ohne** Lese-Pipeline im Leerlauf: `ConnectVideo`/`ConnectAudio` merken
+sich nur den gewählten `flow_id`, erst `record.start(fileName)` baut die
+tatsächliche MXL-Lese-/Encode-/Mux-Pipeline auf ("warm, unabonniert" —
+dasselbe Muster, das für Hot-Standby vorgesehen ist, s. Nachtrag 89/
+§7.4 Teil 4). `record.stop()` schickt ein echtes EOS und wartet bis zu
+3s darauf (gleiche Frist wie PIPELINE CONTROLLERs `pipeline.stop(3000)`),
+bevor die Pipeline hart auf `Null` gesetzt wird.
+
+**Encoder/Muxer-Wahl spiegelt PIPELINE CONTROLLERs `lib/OutputEngine.js`
+`file`-Sink 1:1** (Muster übernommen, nicht geraten, `UMSETZUNG.md` §0
+Punkt 9): `x264enc tune=zerolatency speed-preset=veryfast bitrate=4000
+key-int-max=50 ! h264parse config-interval=1` für Video, `avenc_aac
+bitrate=192000 ! aacparse` für Audio, `matroskamux streamable=true` als
+Muxer — `streamable=true` bewusst: anders als `mp4mux` braucht Matroska
+keinen abschließenden Header-Rewrite mit bekannter Gesamtdauer, bleibt
+also auch bei einem harten Prozess-Abbruch (kein vorheriges
+`record.stop()`) abspielbar. GEnum/GFlags-Properties (`x264enc`s `tune`/
+`speed-preset`) per `set_property_from_str` gesetzt, nicht `.property()`
+— bekannter, bereits dokumentierter Fund (Projekt-Memory "GStreamer enum
+properties are runtime-only"). Alle Encoder-/Muxer-Property-Typen vorab
+per `gst-inspect-1.0` empirisch geprüft, nicht angenommen.
+
+**Sicherheitsrelevant, bewusst behandelt:** `record.start`s
+`fileName`-Argument kommt unauthentifiziert bis auf die normale
+Node-Rechteprüfung vom Operator per HTTP — `safe_target_path()`
+verwirft jede Pfadangabe (`Path::components()` auf `ParentDir`/
+`RootDir`/`Prefix` geprüft, nicht nur `..`-String-Suche) und nimmt nur
+die letzte Pfadkomponente, hängt `.mkv` an falls keine Endung angegeben
+wurde. Fünf Unit-Tests dafür (Normalfall, vorhandene Endung, Parent-
+Traversal, absoluter Pfad, leerer Name).
+
+**Bewusste, dokumentierte SDK-Grenze (nicht in diesem Schritt behoben):**
+`omp-node-sdk::InvokeError` kennt nur `Unknown` — ein Geschäftslogik-
+Fehler wie "keine Quelle verbunden" kann `record.start` also nicht mit
+einer eigenen Meldung durchreichen, nur als generisches HTTP 404
+"unknown method" (irreführend, da die Methode ja bekannt ist). Umgangen
+über den bereits etablierten Weg (`record.status`-Param + Server-Log +
+`handle.publish_alert`/Alarme-Tab), keine SDK-Änderung — das wäre ein
+eigener, größerer, cross-cutting Schritt.
+
+**Live verifiziert, kein Mock:** `omp-source` → `omp-recorder` (Video-
+und Audio-Sender einzeln per `POST /api/v1/graph/edges` auf die beiden
+Receiver verkabelt), `record.start`/`record.durationMs` (live wachsend)/
+`record.stop` über die echte HTTP-API, resultierende Datei per `ffprobe`
+bestätigt: H.264 640×480 25fps + AAC 48kHz Stereo, `probe_score=100`
+(strukturell einwandfreies Matroska trotz `streamable=true`s fehlendem
+Duration-Header). Erscheint nach einem `omp-media-library`-Scan
+(`entries`-Param) korrekt im Katalog. Keine verwaisten Prozesse/
+Instanzen danach (`/api/v1/instances` leer, `ps aux` geprüft).
+
+**`cargo test --workspace` grün** — dabei ein unabhängiger, bereits
+vorbestehender Flake beobachtet: `omp-mediaio`s Test-Binary
+(`fabrics`/`mxl`-Tests) endete einmal mit SIGSEGV **nach** „9 passed; 0
+failed" (Crash beim Prozess-Exit, nicht während eines Tests) — auf
+Wiederholung nicht reproduzierbar, betrifft Code, der in dieser Sitzung
+nicht angefasst wurde. Nicht root-caused (out of scope für C22),
+dokumentiert für eine künftige Sitzung.
+
+**Phase C (`UMSETZUNG.md` §2) ist mit C22 vollständig abgeschlossen** —
+kein einziger C-Schritt in der Statusliste ist mehr offen.

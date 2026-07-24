@@ -41,6 +41,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
 - **omp-media-library** — file catalog with technical metadata
   (ffprobe) and mark-in/out segments
+- **omp-recorder** — records an MXL source (video/audio) to a Matroska
+  file; MXL-only input, no capture-card dependency
 - **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
   AES67 audio gateways for inter-site contribution with foreign
   equipment

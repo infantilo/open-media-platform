@@ -2099,7 +2099,7 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | C19 | erledigt | [C19] Plugin-Host (generischer Mechanismus, Node-Contract-Capability) | 2026-07-22 |
 | C20 | erledigt | [C20] Timeline: gefenstert + inkrementell statt Full-Recompute | 2026-07-22 |
 | C21 | erledigt | [C21] omp-player: Live-MXL-Quelle als Playlist-Item (Discovery wie DSK/AFV) | 2026-07-22 |
-| C22 | offen | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad | — |
+| C22 | erledigt | [C22] omp-recorder: MXL → Datei, kein Capture-Karten-Pfad. Zwei unabhängige IS-05-Receiver (Video/Audio, wie `omp-viewer`), aber "warm, unabonniert" bis `record.start` — keine Lese-Pipeline im Leerlauf. Encoder/Muxer nach PIPELINE-CONTROLLER-Muster (`x264enc`+`avenc_aac`+`matroskamux streamable=true`, Muster übernommen nicht geraten). `record.stop` schickt EOS, wartet bis 3s darauf. Live verifiziert: `omp-source` → `omp-recorder` verkabelt, `record.start`/`stop`, resultierende Datei per `ffprobe` bestätigt (H.264/AAC, `probe_score=100`), erscheint nach `omp-media-library`-Scan im Katalog. `cargo test --workspace` grün (unabhängiger, bereits vorbestehender SIGSEGV-Flake in `omp-mediaio`s Test-Binary beim Prozess-Exit beobachtet, nicht reproduzierbar, nicht durch diesen Schritt verursacht). | 2026-07-24 |
 | D1 | erledigt | [D1] PostgreSQL für Layouts/Snapshots statt Datei-Backend | 2026-07-13 |
 | D2 | erledigt | [D2] AMWA NMOS Testing Tool in CI gegen die Registry (IS-04-02) | 2026-07-13 |
 | D3 (Teil 1: mTLS) | erledigt | [D3-1] step-ca + mTLS Orchestrator↔Nodes (Go-Seite) | 2026-07-13 |

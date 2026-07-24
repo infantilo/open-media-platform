@@ -97,5 +97,14 @@
     "env": {},
     "description": "Datei-Katalog mit technischen Metadaten (ffprobe) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline.",
     "expectedResources": "sehr gering (keine Medienverarbeitung)"
+  },
+  {
+    "type": "omp-recorder",
+    "label": "Recorder",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-recorder"],
+    "env": {},
+    "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf. Ausschließlich MXL als Eingang, keine Capture-Karte.",
+    "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
   }
 ]
