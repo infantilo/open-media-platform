@@ -1177,19 +1177,19 @@ Absätze: „kein Schritt vor Bedarf").
 **Was am Code tatsächlich schon existiert, per Lesen verifiziert (nicht
 im Konzept-Text sichtbar):**
 
-- **Crash-Erkennung existiert, Auto-Restart nicht.**
-  `orchestrator/internal/launcher/launcher.go:101–112` markiert eine
-  Instanz nach unerwartetem Prozessende als `Crashed` (inkl.
-  `CrashMessage` aus den letzten 5 stderr-Zeilen, `crashStderrLines`,
-  Zeile 45) und broadcastet ein `instance.crashed`-NATS-Event
-  (verifiziert per `launcher_test.go:225–262`,
-  `TestLauncherMarksUnexpectedExitAsCrashedAndBroadcasts`). Die
-  gecrashte Instanz bleibt danach aber einfach als „crashed" stehen —
-  **kein** Restart-Timer, **keine** erneute Anwendung des
-  Workflow-Verbindungs-Templates. §6.3 Stufe 2 („Restart-in-place …
-  Orchestrator muss den Neustart nur beobachten … und das
-  Verbindungs-Template automatisch wieder anwenden") ist damit zur
-  Hälfte gebaut: die Beobachtung (Erkennung) ja, die Reaktion nein.
+- **✅ Crash-Erkennung UND Auto-Restart existieren bereits (K7-Teil-1,
+  erledigt 2026-07-17, `UMSETZUNG.md`-Statusliste) — dieser Absatz war
+  veraltet, s. Nachtrag 7.7.** `orchestrator/internal/launcher/
+  launcher.go` markiert eine Instanz nach unerwartetem Prozessende als
+  `Crashed` (inkl. `CrashMessage` aus den letzten 5 stderr-Zeilen,
+  `crashStderrLines`) und broadcastet ein `instance.crashed`-NATS-Event
+  — **und** startet sie automatisch in derselben Instanz-ID neu, solange
+  die Crash-Loop-Bremse das zulässt (`maxCrashRestarts = 5`,
+  `crashRestartWindow = 60 * time.Second`, `launcher.go:71–72`), inkl.
+  `instance.restarted`-Event, Restart-Zähler im Katalog-UI und
+  automatischer Wiederverkabelung der betroffenen Workflow-Rolle
+  (`workflows.Service`). §6.3 Stufe 2 ist damit vollständig gebaut, nicht
+  nur zur Hälfte.
 - **Der `node.added`-Wiederverkabelungs-Mechanismus existiert bereits**
   (D7 Teil 1, `docs/decisions.md` 2026-07-14): beim Workflow-Start löst
   der Orchestrator das Rolle→Rolle-Verbindungs-Template auf echte
@@ -1217,20 +1217,24 @@ im Konzept-Text sichtbar):**
   gestartet" zu definieren — Hot-Standby (§6.3 Stufe 4) braucht davon
   im Kern nur eine zusätzliche `standby: bool`/`replicas`-Angabe pro
   Rolle, keine neue Modellierung.
-- **MXL ist strukturell lokal, das begrenzt Cross-Host-Redundanz
-  fundamental** (`ARCHITECTURE.md` §2/§6): MXLs Zero-Copy-Shared-Memory
-  existiert nur innerhalb eines Hosts (`/dev/shm/omp-mxl`,
-  `docs/decisions.md`/Memory „OMP dev environment gotchas"). Ein Node,
-  der über MXL an andere Nodes angebunden ist, kann bei einem
-  Host-Ausfall **nicht** einfach als identische Instanz auf einem
-  anderen Host weiterlaufen und automatisch wieder verkabelt werden —
+- **MXL ist strukturell lokal — aber seit Kapitel 16 gibt es zwei,
+  nicht mehr nur einen, Cross-Host-Übergang (s. Nachtrag 7.7).** MXLs
+  Zero-Copy-Shared-Memory existiert nur innerhalb eines Hosts
+  (`/dev/shm/omp-mxl`, `ARCHITECTURE.md` §2/§6). Ein Node, der über MXL
+  an andere Nodes angebunden ist, kann bei einem Host-Ausfall **nicht**
+  einfach als identische Instanz auf einem anderen Host weiterlaufen —
   seine MXL-Eingänge/-Ausgänge existieren auf dem toten Host nicht
-  mehr. Cross-Host-Redundanz für MXL-gebundene Rollen braucht also
-  zwingend einen **ST-2110/SRT-Übergang** als Redundanz-Grenze (§6, D4
-  `omp-mediaio::st2110` + `omp-srt-gateway` bereits vorhanden) — nicht
-  MXL selbst. Das ist keine neue Erkenntnis (§6.1 „Migrations-Grenze"
-  sagt strukturell dasselbe für I/O-Karten), aber bisher nicht explizit
-  für MXL-Redundanz ausgesprochen.
+  mehr. Cross-Host-Redundanz für MXL-gebundene Rollen braucht also einen
+  Übergang: entweder den **ST-2110/SRT-Übergang** (§6, D4
+  `omp-mediaio::st2110` + `omp-srt-gateway`, längst vorhanden) oder,
+  seit Kapitel 16 Teil 0–2 (`docs/HANDBUCH.md` §9.3), **echten Remote
+  Memory Access über `omp-fabrics-gateway`** (MXL-native Fabrics/
+  libfabric, Zero-Copy-One-Sided-RDMA-Write, `tcp`-Software-Provider
+  live verifiziert ohne RDMA-Hardware, `verbs`/`efa` für echte
+  RoCEv2-Hardware vorbereitet). Beide sind heute eigenständige Gateway-
+  Nodes, kein automatisches Redundanz-Feature — aber Fabrics schließt
+  die zum Zeitpunkt der Ursprungsfassung dieses Kapitels noch offene
+  Lücke „MXL-Cross-Host nur über einen Encode/Decode-Umweg".
 
 ### 7.2 Referenz PIPELINE CONTROLLER
 
@@ -1291,20 +1295,28 @@ Schicht — §6.3 Stufen 1–3):**
 **b) Medientransport-Ebene (unterscheidet sich fundamental nach
 Transport, wie in 7.1 hergeleitet):**
 
-- **MXL (lokal):** keine Cross-Host-Redundanz möglich — die einzige
-  „Redundanz" auf dieser Ebene ist Prozess-Restart auf **demselben**
-  Host (Schicht a). Ehrlich als Grenze kommunizieren, nicht als Lücke
-  kaschieren.
+- **MXL (lokal):** keine Cross-Host-Redundanz **über MXL selbst**
+  möglich — die einzige „Redundanz" auf reiner MXL-Ebene ist
+  Prozess-Restart auf **demselben** Host (Schicht a). Ehrlich als Grenze
+  kommunizieren, nicht als Lücke kaschieren.
 - **Netzwerktransport (ST 2110/SRT, D4 bereits vorhanden):** ST 2022-7
   (Dual-Path-Redundanz **einer** bitidentischen Quelle) ist die
   günstigste „echte" Netzwerk-HA-Stufe und bisher **nicht** als
   `omp-mediaio::st2110`-Fähigkeit umgesetzt (D4 hat den Grundtransport
   gebaut, nicht die 2022-7-Redundanz) — konkreter, sauber
   abgegrenzter Ausbauschritt auf bereits vorhandenem Code.
+- **Fabrics/RDMA (`omp-fabrics-gateway`, seit Kapitel 16, s. Nachtrag
+  7.7):** zweiter, seit dieser Kapitelfassung neuer Cross-Host-Übergang
+  für MXL-gespeiste Rollen — Zero-Copy statt ST-2110-Encode/Decode,
+  damit näher an MXLs eigener Flow-Semantik als der Netzwerktransport-
+  Weg. Beide Übergänge sind heute eigenständige Gateway-Nodes ohne
+  Redundanz-Automatik; welcher für Hot-Standby (Teil 4) der bevorzugte
+  Standardweg wird, ist eine Design-Frage für Teil 4 selbst, keine
+  Vorentscheidung dieses Kapitels.
   Cross-Host-Node-Redundanz für MXL-gespeiste Rollen bedeutet also in
-  der Praxis: die redundante zweite Instanz sitzt hinter einem
-  ST-2110/SRT-Übergang, nicht als zweiter MXL-Teilnehmer im selben
-  Domain (der laut Definition auf demselben Host läge).
+  der Praxis: die redundante zweite Instanz sitzt hinter einem der
+  beiden Übergänge, nicht als zweiter MXL-Teilnehmer im selben Domain
+  (der laut Definition auf demselben Host läge).
 
 **c) Orchestrator selbst (§19, Konzept bereits vollständig — hier keine
 neue Design-Arbeit nötig):** Active-Passive über Postgres-Advisory-Lock
@@ -1332,10 +1344,12 @@ zweite Konfigurationsebene einführen.
 
 ### 7.4 Phasenplan
 
-- **Teil 1 — Prozess-Auto-Restart (unabhängig von allem anderen in
-  diesem Dokument, sofort startbar):** `restartPolicy` im Launcher,
+- **✅ Teil 1 — Prozess-Auto-Restart, erledigt 2026-07-17 (K7-Teil-1,
+  s. Nachtrag 7.7 — dieser Absatz beschrieb ihn ursprünglich noch als
+  offen):** `restartPolicy` im Launcher,
   `instance.restarted`-Event, generalisierte Wiederverkabelung nach
-  Neustart, Crash-Loop-Bremse (harte Obergrenze). Sichtbarkeit im K1-
+  Neustart, Crash-Loop-Bremse (harte Obergrenze, `maxCrashRestarts = 5`
+  je `crashRestartWindow = 60s`). Sichtbarkeit im K1-
   Hosts-/Workflows-Panel (Restart-Zähler analog `supervisor.js:412`).
   Verifikation: `kill -9` eines Workflow-Rollen-Prozesses → Neustart
   innerhalb der Backoff-Zeit, IS-05-Verbindung automatisch wieder
@@ -1366,26 +1380,29 @@ zweite Konfigurationsebene einführen.
 
 ### 7.5 Offene Fragen
 
-1. **Die (a)/(b)/(c)-Entscheidung aus dem Projekt-Memory ist weiterhin
-   offen** (Empfehlung dort: (c) als pragmatischer Standardweg, §21.3).
-   Wichtig für die Priorisierung hier: **Teil 1–3 dieses Kapitels sind
-   unter jeder der drei Optionen sinnvoll** — sie sind keine
-   Vorentscheidung für (b), sondern die ohnehin fällige Grundlage.
-   Muss die (a)/(b)/(c)-Frage vor Teil 1 geklärt werden, oder kann
-   Teil 1 unabhängig davon sofort starten (Empfehlung: sofort starten)?
-2. Crash-Loop-Bremse: nach wie vielen Restarts innerhalb welchen
-   Zeitfensters soll der Launcher aufgeben und eskalieren statt weiter
-   automatisch neu zu starten (PIPELINE CONTROLLER retryt unbegrenzt —
-   für einen 24/7-Sendekontext ist das vermutlich nicht das gewünschte
-   Verhalten)?
+1. ✅ **Entschieden 2026-07-24** (s. Nachtrag 7.7): Option **(c)** —
+   paralleler, identisch bedienter Standby + Downstream-Freeze-Frame —
+   ist der bestätigte Standardweg, nicht mehr nur Empfehlung. (b) bleibt
+   als aspirationale Tür offen (§7.4 Teil 6), keine Vorentscheidung
+   gegen sie. Teil 1–3 dieses Kapitels waren ohnehin unter jeder der
+   drei Optionen sinnvoll — Teil 1 ist inzwischen erledigt (s. o.).
+2. ✅ **Entschieden 2026-07-24** (s. Nachtrag 7.7): Crash-Loop-Bremse für
+   Hot-Standby (Teil 4) **wiederverwendet** die bereits für K7-Teil-1
+   implementierten Werte (`maxCrashRestarts = 5` je
+   `crashRestartWindow = 60s`, `orchestrator/internal/launcher/
+   launcher.go:71–72`) statt einer eigenen Schwelle — konsistent mit
+   §7.3e („Eskalationsstufen wiederverwenden statt neu erfinden").
 3. Soll ST 2022-7 (Teil 3) als generisches, pro Workflow-Rolle
    konfigurierbares Merkmal modelliert werden (§21.1-Prinzip „keine
    globale Plattform-Einstellung") — Bestätigung, keine neue Frage.
-4. Reihenfolge-Präferenz zwischen K7-Teil-4 (Hot-Standby) und D6 Teil 3
-   (Placement-Engine) selbst: soll die Placement-Engine jetzt gezielt
-   priorisiert werden, **weil** K7 daran hängt, oder bleibt sie
-   unabhängig eingeplant und K7-Teil-4 wartet einfach, bis sie an der
-   Reihe ist?
+4. **Aktualisiert 2026-07-24 (Prämisse war veraltet):** D6 Teil 3
+   (Placement-Engine) ist bereits seit 2026-07-14 erledigt, aber nur
+   **advisory** (Vorschlag, keine automatische Host-Wahl,
+   `internal/placement`). Die eigentlich noch offene Frage ist daher
+   nicht mehr „wann bauen", sondern: reicht advisory-only für
+   Hot-Standbys automatische Zielhost-Wahl, oder braucht Teil 4 die
+   Placement-Engine zunächst auf die `auto`-Eskalationsstufe (§6.1)
+   angehoben? Weiterhin offen, keine neue Frage entschieden.
 
 ### 7.6 Nachtrag (2026-07-17) — Operator-UI muss der Übernahme unmerklich folgen
 
@@ -1454,6 +1471,82 @@ Bundle, ganz ohne Seiten-Reload (`Page.getNavigationHistory` blieb bei
 einem Eintrag). Damit ist §7.6 vollständig; ein echtes Hot-Standby-
 Failover auf eine **andere** Instanz-ID (§7.3d Teil 4) bräuchte
 weiterhin eine eigene, noch nicht gebaute serverseitige Auflösung.
+
+### 7.7 Nachtrag (2026-07-24) — Konkrete Nutzerfrage „redundanter Video
+Mixer M/E, ggf. auf anderem Host": (c) bestätigt, Crash-Loop-Bremse
+wiederverwendet, Remote-Memory-Access-Lücke geschlossen
+
+> Nutzerfrage (sinngemäß): wie definiert man einen redundanten
+> `omp-video-mixer-me` (gilt analog für andere redundante Services wie
+> `omp-audio-mixer`), eventuell auf einem anderen Host, der dem aktiven
+> nachläuft; muss er wirklich alles nachmachen; reicht es, wenn er erst
+> bei Übernahme die Streams abonniert; das Operator-Panel muss dabei
+> unmerklich die UI des neuen Mixers zeigen. Reine Planungs-Session
+> („nicht umsetzen, nur planen") — die Antworten unten sind Klärung
+> bestehender Konzeptteile plus drei neue Entscheidungen, kein Code.
+
+**Antwort auf die Kernfragen, aus §7.1–§7.6 abgeleitet, nicht neu
+erfunden:**
+
+- **„Wie definieren" braucht kein neues Modell:** eine Workflow-Rolle
+  mit `restartPolicy` (gleicher Host, K7-Teil-1, bereits fertig) bzw.
+  später `standby: bool`/`replicas` (anderer Host, Teil 4, noch nicht
+  gebaut) — das Workflow-Rollenmodell (D7) reicht dafür bereits aus.
+- **„Muss er alles nachmachen" — nein:** kein Command-Mirroring/
+  Lockstep (Option b). Der bestätigte Standardweg (s. u.) importiert nur
+  den **Bedienzustand** (Programm-/Preset-Bus, DSK, PIP, Crosspoint) —
+  genau das, was `GET`/`POST /state` beim Mixer heute schon für Presets
+  liefert/wiederherstellt (`nodes/omp-video-mixer-me/src/main.rs`,
+  `capture_state()`/`restore_state()`), kein Frame-für-Frame-Sync.
+- **„Reicht warm-unabonniert" — ja**, das ist bereits in §7.4 Teil 4 der
+  vorgesehene günstigste Startpunkt: Standby-Prozess läuft und ist
+  discovery-fähig, aber ohne aktiven MXL-Reader/Render-Load bis zur
+  Übernahme. Das bedeutet zwangsläufig **break-before-make** — kein
+  garantiert unsichtbarer Schnitt „im nächsten Frame" (das wäre wieder
+  Option b), sondern ein kurzer sichtbarer Cut/Freeze-Frame, dafür ohne
+  doppelte Rendering-/Netzlast im Normalbetrieb.
+- **Operator-UI folgt bereits unmerklich** — für Restart-in-place
+  vollständig gelöst (§7.6, s. o.); Hot-Standby (Teil 4) muss dieselbe
+  Runtime-Rollen→Instanz-Zuordnung beim Takeover selbst aktualisieren
+  (Kernbestandteil von Teil 4, kein Extraaufwand obendrauf) — danach
+  „erbt" die Konsole den bereits fertigen Reconnect-Mechanismus kostenlos.
+
+**Drei Entscheidungen aus dieser Session:**
+
+1. **(a)/(b)/(c)-Grundsatzfrage entschieden: (c).** Der bisher nur als
+   Empfehlung markierte Standardweg (§21.3 `ARCHITECTURE.md`: paralleler,
+   identisch bedienter Standby + Downstream-Freeze-Frame) ist jetzt
+   bestätigte Entscheidung, nicht mehr offen — s. §7.5 Punkt 1. (b)
+   bleibt als aspirationale, spätere Ausbaustufe offen (§7.4 Teil 6),
+   keine Absage.
+2. **Crash-Loop-Bremse für Hot-Standby: bestehende Werte
+   wiederverwenden, nicht neu festlegen.** K7-Teil-1 hat dafür bereits
+   `maxCrashRestarts = 5` je `crashRestartWindow = 60s`
+   (`orchestrator/internal/launcher/launcher.go:71–72`) implementiert —
+   §7.3e verlangt ohnehin „Eskalationsstufen wiederverwenden statt neu
+   erfinden". Vorschlag (von Claude, auf Nutzerwunsch „selbst
+   vorschlagen"): diese Werte auch als Failover-Trigger-Schwelle für
+   Hot-Standby übernehmen — s. §7.5 Punkt 2.
+3. **MXL-Cross-Host-Lücke aus §7.1/§7.3b ist geschlossen:**
+   `omp-fabrics-gateway` (Kapitel 16 Teil 0–2, live verifiziert,
+   `docs/HANDBUCH.md` §9.3) bietet seit letzter Session echten,
+   Zero-Copy-Remote-Memory-Access zwischen zwei MXL-Domains auf
+   unterschiedlichen Hosts — der `tcp`-Software-Provider läuft ohne
+   RDMA-Hardware, `verbs`/`efa` für echte RoCEv2-Hardware sind
+   vorbereitet, aber noch nicht mit echter Hardware getestet (Kapitel 16
+   Teil 4, wartet auf Hardware-Beschaffung). Für Hot-Standby (Teil 4)
+   heißt das: MXL-gespeiste redundante Rollen müssen nicht zwingend über
+   einen ST-2110/SRT-Encode/Decode-Umweg laufen, Fabrics ist eine
+   zweite, näher an MXLs eigener Flow-Semantik liegende Option. Welcher
+   der beiden Übergänge (ST-2110/SRT oder Fabrics) für Teil 4 der
+   Standardweg wird, ist eine eigene Design-Frage **von** Teil 4, hier
+   nur als verfügbare Option festgehalten, nicht vorentschieden.
+
+**Ausdrücklich nicht Teil dieser Session:** kein Code, keine
+`UMSETZUNG.md`-Schrittstubs für K7-Teil-4 — reine Konzept-Klärung und
+-Korrektur (§7.1/§7.3b/§7.4/§7.5 enthielten veraltete „noch nicht
+begonnen"-Aussagen zu K7-Teil-1, das bereits seit 2026-07-17 fertig
+ist — oben korrigiert).
 
 ---
 

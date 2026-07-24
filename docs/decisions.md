@@ -12460,3 +12460,68 @@ Automation advancet die Playlist selbstständig über die Zeit, und der
 Viewer zeigt den echten, laufenden PGM-Frame (`videotestsrc
 pattern=ball`, per `naturalWidth`/`naturalHeight` UND visuell
 bestätigt) — kein API-Mock, echter Bild-Fluss durch die volle Kette.
+
+---
+
+## 2026-07-24 (Nachtrag 89) — Redundanz-/Failover-Konzept: (c) bestätigt,
+Crash-Loop-Bremse für Hot-Standby wiederverwendet, Fabrics schließt
+MXL-Cross-Host-Lücke; zwei veraltete „noch offen"-Stellen korrigiert
+
+**Anlass:** Konkrete Nutzerfrage, wie ein redundanter `omp-video-mixer-me`
+(analog: `omp-audio-mixer` u. a.) definiert wird — ggf. auf einem
+anderen Host, ob er den aktiven per Command-Mirroring nachbilden muss,
+ob ein erst bei Übernahme abonnierender „warmer" Standby reicht, und
+wie das Operator-Panel unmerklich der Übernahme folgt. Reine
+Planungs-Session, ausdrücklich „nicht umsetzen, nur planen". Antwort
+baut vollständig auf bereits bestehendem Konzept auf
+(`ARCHITECTURE.md` §6.3/§19/§20.1/§21, `docs/END-GOAL-FEATURES.md`
+Kapitel 7) — keine der vier Kernfragen brauchte eine neue Modellierung,
+nur eine zusammenfassende Bestätigung plus zwei echte
+Dokumentations-Korrekturen.
+
+**Zwei veraltete Stellen in `docs/END-GOAL-FEATURES.md` Kapitel 7
+gefunden und korrigiert:** §7.1/§7.4/§7.5 beschrieben K7-Teil-1
+(Prozess-Auto-Restart) noch als „nicht begonnen" — tatsächlich laut
+`UMSETZUNG.md`-Statusliste bereits am 2026-07-17 erledigt
+(`orchestrator/internal/launcher/launcher.go`: Crash-Erkennung +
+Auto-Restart in derselben Instanz-ID, `maxCrashRestarts = 5` je
+`crashRestartWindow = 60s`, automatische Wiederverkabelung). §7.5 Punkt
+4 ging zudem noch davon aus, die Placement-Engine (D6 Teil 3) müsse
+erst priorisiert werden — sie ist seit 2026-07-14 ebenfalls erledigt,
+allerdings nur advisory (keine automatische Host-Wahl); die eigentlich
+offene Frage ist jetzt, ob Hot-Standby (K7-Teil-4) advisory-only reicht
+oder die `auto`-Eskalationsstufe (§6.1) braucht.
+
+**Drei Entscheidungen:**
+
+1. **(a)/(b)/(c)-Grundsatzfrage (§20.1/§21.3) entschieden: (c)** —
+   paralleler, identisch bedienter Standby (Bedienzustand-Import über
+   das bereits vorhandene `GET`/`POST /state` der Mixer, kein
+   Command-Mirroring) + Downstream-Freeze-Frame bei Übernahme. Kein
+   garantiert frame-unsichtbarer Schnitt („nächster Frame" im strengen
+   Sinn) — das bliebe Option (b), bewusst als spätere, nicht
+   ausgeschlossene Ausbaustufe offengehalten. `ARCHITECTURE.md` §21.3
+   von Empfehlung auf Entscheidung umgeschrieben.
+2. **Crash-Loop-Bremse für Hot-Standby (K7-Teil-4): bestehende Werte
+   wiederverwenden statt neu festlegen** — dieselben `5 Restarts /
+   60s` aus K7-Teil-1 (Vorschlag von Claude auf Nutzerwunsch „schlag du
+   selbst etwas vor"; Begründung: §7.3e verlangt ohnehin
+   Eskalationsstufen-Wiederverwendung statt einer zweiten
+   Konfigurationsebene). `docs/END-GOAL-FEATURES.md` §7.5 Punkt 2 als
+   entschieden markiert.
+3. **MXL-Cross-Host-Lücke aktualisiert:** §7.1/§7.3b beschrieben bisher
+   nur den ST-2110/SRT-Übergang als Weg, MXL-gespeiste Rollen über
+   Hostgrenzen zu redundieren. Seit Kapitel 16 Teil 0–2
+   (`omp-fabrics-gateway`, live verifiziert, `docs/HANDBUCH.md` §9.3)
+   gibt es mit echtem Remote Memory Access (Zero-Copy-RDMA über
+   libfabric) einen zweiten, näher an MXLs eigener Flow-Semantik
+   liegenden Übergang — Nutzer-Nachfrage, ob RDMA über die MXL-Fabric
+   nicht längst implementiert sei, war zutreffend und deckte auf, dass
+   Kapitel 7 diese Verbindung noch nicht zog. Welcher der beiden
+   Übergänge für Hot-Standby (Teil 4) Standard wird, bleibt Design-Frage
+   von Teil 4 selbst, hier nur als verfügbare Option festgehalten.
+
+**Umgesetzt in:** `docs/END-GOAL-FEATURES.md` Kapitel 7 (§7.1, §7.3b,
+§7.4, §7.5, neuer §7.7 „Nachtrag 2026-07-24"), `ARCHITECTURE.md` §21.3.
+Kein Code, keine neuen `UMSETZUNG.md`-Schrittstubs — reine
+Konzept-/Dokumentationsarbeit wie vom Nutzer verlangt.

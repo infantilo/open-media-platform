@@ -2483,7 +2483,7 @@ Konfigurationsprotokoll simulierbar (zwei Postgres-Instanzen lokal),
 echte Standorttrennung erst mit zwei realen Standorten. **Phase:** wie
 §19 — kein Schritt vor einer echten 24/7-Sendeabwicklung (§1-Zielbild).
 
-### 21.3 Empfehlung zur offenen §20.1-Frage (Genlock-Äquivalenz)
+### 21.3 Entscheidung zur §20.1-Frage (Genlock-Äquivalenz) — bestätigt 2026-07-24
 
 §20.1 ließ die Wahl zwischen (a) schneller sichtbarer Cut behalten,
 (b) volle Genlock-Äquivalenz-Reihenfolge als Zielbild festschreiben,
@@ -2495,22 +2495,23 @@ produktionsreif über zwei Hosts: eher ein Jahr+") und der Tabelle oben
 (21.1: Hot-Standby liefert bereits „kurzer sichtbarer Schnitt statt
 Totalausfall" zu einem Bruchteil des Aufwands):
 
-**Empfehlung: Option (c) als pragmatischer Standardweg**, mit offen
-gehaltener Tür zu (b) — nicht, weil (b) uninteressant wäre, sondern weil
-(c) den größten Teil des wahrgenommenen Werts (kein hartes Standbild/
-Schwarzbild bei Übernahme, sondern ein kurzes eingefrorenes Bild) zu
-einem Bruchteil des Risikos liefert, und die in §20.1 bereits skizzierte
-„Empfohlene Fundament-Reihenfolge" (Grain-Index-strukturierte Kommandos
-→ Failover-Erkennung/sichtbarer Cut → echte PTP-Zeitbasis →
+**Entschieden: Option (c) als Standardweg**, mit offen gehaltener Tür zu
+(b) — nicht, weil (b) uninteressant wäre, sondern weil (c) den größten
+Teil des wahrgenommenen Werts (kein hartes Standbild/Schwarzbild bei
+Übernahme, sondern ein kurzes eingefrorenes Bild) zu einem Bruchteil des
+Risikos liefert, und die in §20.1 bereits skizzierte „Empfohlene
+Fundament-Reihenfolge" (Grain-Index-strukturierte Kommandos →
+Failover-Erkennung/sichtbarer Cut → echte PTP-Zeitbasis →
 Command-Mirroring/`omp-seamless-switch` → Determinismus-Härtung) davon
 unberührt als spätere Ausbaustufe zu (b) nutzbar bleibt, falls der
-Nutzer sich später doch dafür entscheidet. **Das ist eine Empfehlung,
-keine Entscheidung** — bleibt wie in §20.1 benannt Nutzer-Entscheidung,
-bevor daraus ein `UMSETZUNG.md`-Schritt wird.
+Nutzer sich später doch dafür entscheidet (`docs/END-GOAL-FEATURES.md`
+§7.7, `docs/decisions.md` Nachtrag 89).
 
 **Standards-Abdeckung:** keine (Bewertung, keine neue Technik).
-**Phase:** Priorisierungsfrage, kein Schritt vor Entscheidung — siehe
-§20.1 für den vollständigen Fundament-Reihenfolge-Plan.
+**Phase:** Konzept entschieden, Umsetzung (Hot-Standby, §6.3 Stufe 4)
+bleibt wie in §20.1/Kapitel 7 sequenziert — kein `UMSETZUNG.md`-Schritt
+aus dieser Entscheidung allein, nur Prozess-Auto-Restart (K7-Teil-1) ist
+bereits umgesetzt.
 
 ## 22. Professionelles UI-Gesamtkonzept (2026-07-13)
 
