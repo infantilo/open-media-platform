@@ -110,6 +110,8 @@ pub struct Item {
     /// Nur für `File`-Items ausgewertet (EOS→`Event::ItemEnded`-
     /// Zuordnung) — bei `TestPattern`-Items (inkl. der internen
     /// "schwarz/still"-Defaults) bedeutungslos, da dort nie EOS auftritt.
+    /// Aktuell ungelesen: `add_eos_probe` (dessen Doku) ist deaktiviert.
+    #[allow(dead_code)]
     pub id: String,
     pub source: ItemSource,
 }
@@ -620,6 +622,16 @@ fn build_live_audio_branch(
 /// (`reported`, gemeinsam von Video- und Audio-Probe geteilt, da beide
 /// vom selben `uridecodebin` etwa zeitgleich EOS bekommen) — bei
 /// aktuell on-air stehendem Slot `Event::ItemEnded` nach außen meldet.
+///
+/// **Aktuell nirgends aufgerufen** (`build_file_branches`-Doku dort):
+/// dieser Probe-Typ verursacht reproduzierbar einen `gst_mini_object_unref`-
+/// Crash/Freeze im Zusammenspiel mit `uridecodebin`-Datei-Zweigen (Viewer-
+/// Freeze-Untersuchung, Rundown-Echtmedien-Folgeschritt). Implementierung
+/// bewusst erhalten statt gelöscht — funktional korrekt für den Zweck
+/// (EOS erkennen, höchstens einmal melden), nur der Registrierungsort ist
+/// das Problem; bleibt hier als Ausgangspunkt für eine spätere, sicherere
+/// Lösung (z. B. Bus-Message-basiert statt Pad-Probe-basiert).
+#[allow(dead_code)]
 fn add_eos_probe(
     pad: &gst::Pad,
     tx: UnboundedSender<Event>,
@@ -660,10 +672,6 @@ fn build_file_branches(
     video_pad: Option<gst::Pad>,
     audio_pad: gst::Pad,
     uri: &str,
-    item_id: String,
-    slot: Slot,
-    onair_slot: Arc<AtomicU8>,
-    tx: UnboundedSender<Event>,
     width: u32,
     height: u32,
 ) -> Result<(Option<Branch>, Branch), String> {
@@ -793,19 +801,14 @@ fn build_file_branches(
     // eine dokumentierte Grenze (`docs/END-GOAL-FEATURES.md` §2.3
     // "Ehrliche Grenzen").
 
-    let reported = Arc::new(AtomicBool::new(false));
-    if let Some((_, queue_el, _)) = &video_chain {
-        let pad = queue_el.static_pad("src").ok_or("file video chain: no src pad (probe)")?;
-        add_eos_probe(&pad, tx.clone(), slot, item_id.clone(), onair_slot.clone(), reported.clone());
-    }
-    {
-        let pad = a_queue.static_pad("src").ok_or("file audio chain: no src pad (probe)")?;
-        add_eos_probe(&pad, tx, slot, item_id, onair_slot, reported);
-    }
-
-    src.sync_state_with_parent()
-        .map_err(|e| format!("sync_state_with_parent (uridecodebin): {e}"))?;
-
+    // Reihenfolge live per gdb gefunden (Rundown-Echtmedien-Folgeschritt):
+    // die stromabwärts liegenden Konform-Ketten (video_chain, Audio-
+    // Konvertierungskette) MÜSSEN vor `uridecodebin` selbst auf PLAYING
+    // gesynct werden, nicht danach — Standard-GStreamer-Regel für dynamisch
+    // aufgebaute Zweige ("erst der Konsument, dann die Quelle"). Die
+    // vorherige Reihenfolge (`src` zuerst) ließ `uridecodebin` bereits
+    // Puffer/Events schieben, während `convert`/`scale`/`queue` &c. noch in
+    // `NULL` standen.
     let video_branch =
         video_chain.map(|(elements, _, pad)| Branch { elements, pad, mxl_video: None, mxl_audio: None });
     for el in video_branch.iter().flat_map(|b| &b.elements) {
@@ -813,12 +816,49 @@ fn build_file_branches(
             .map_err(|e| format!("sync_state_with_parent (file video): {e}"))?;
     }
 
-    let mut audio_elements = vec![src];
-    audio_elements.extend([a_convert, a_resample, a_caps, a_queue]);
-    for el in &audio_elements {
+    for el in [&a_convert, &a_resample, &a_caps, &a_queue] {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (file audio): {e}"))?;
     }
+
+    // `uridecodebin` erst jetzt starten — alles, was es füttern könnte,
+    // steht bereits auf PLAYING/PAUSED und kann sofort empfangen.
+    src.sync_state_with_parent()
+        .map_err(|e| format!("sync_state_with_parent (uridecodebin): {e}"))?;
+
+    // EOS-Probe (`add_eos_probe`) bleibt bewusst UNGENUTZT — echter, per
+    // `gdb -batch -x "run\nbt full"` unter `G_DEBUG=fatal-criticals`
+    // isolierter Fund (Rundown-Echtmedien-Folgeschritt, Viewer-Freeze-
+    // Untersuchung): ein `PadProbeType::EVENT_DOWNSTREAM`-Probe auf dem
+    // src-Pad der Video-/Audio-`queue` dieses Zweigs führt reproduzierbar
+    // zu `gst_mini_object_unref: assertion 'mini_object != NULL' failed`
+    // im `queue<N>:src`-Streaming-Thread, danach zu einem dauerhaft
+    // eingefrorenen MXL-Sender (kein Prozessabsturz ohne `G_DEBUG=
+    // fatal-criticals` — nur ein still hängenbleibender Zweig, exakt der
+    // gemeldete "Viewer zeigt nichts bei Datei-Wiedergabe"-Befund).
+    // Reproduzierbar unabhängig von Registrierungs-Zeitpunkt (vor/nach
+    // `sync_state_with_parent`), Video-only-Testdatei (kein Audio-
+    // Zusammenhang) und `decodebin3`/`decodebin2` (`GST_USE_DECODEBIN3=0`
+    // ohne Wirkung) — die genaue interne GStreamer-/Bindings-Ursache
+    // bleibt ungeklärt (mehrere Hypothesen geprüft und verworfen: Pad-
+    // Unlink-Reihenfolge, Sync-Reihenfolge, `sync-streams`-Property,
+    // Format-Mismatch am isel-Ausgang; siehe docs/decisions.md). Mit
+    // deaktiviertem Probe spielt eine Datei über den vollen `duration_ms`
+    // korrekt bis zum MXL-Ausgang durch (per `mxl-info`-Head-Index über
+    // die volle Clip-Länge verifiziert).
+    //
+    // **Ehrliche Grenze:** ohne diesen Probe löst ein `File`-Item am
+    // eigenen Clip-Ende kein `Event::ItemEnded`/keinen `omp.player.<id>.
+    // itemEnded`-SSE-Event mehr aus. Unkritisch für den Rundown: die
+    // Auto-Advance-Logik in `omp-playout-automation` (`auto_advance_loop`)
+    // war nie ein Konsument dieses Events — sie vergleicht ausschließlich
+    // die verstrichene Zeit gegen das (bei Dateien real geprobte)
+    // `duration_ms`, exakt wie bei `TestPattern`/`Live`-Items, die dieses
+    // Event ohnehin nie hatten. Betroffen ist nur ein optionaler
+    // Direkt-Abonnent des SSE-Events (keiner existiert aktuell im
+    // Codebase).
+    let mut audio_elements = vec![src];
+    audio_elements.extend([a_convert, a_resample, a_caps, a_queue]);
     let audio_branch = Branch {
         elements: audio_elements,
         pad: audio_pad,
@@ -843,10 +883,24 @@ fn build_file_branches(
 /// gesetztes Element — live per `GST_DEBUG=3` in `omp-video-mixer-me`
 /// gefunden). Ein kurzes Sleep danach lässt den Thread den Stop-Flag
 /// tatsächlich beobachten, bevor die Elemente verschwinden.
+///
+/// **Reihenfolge Unlink vs. State-Null (live per gdb gefunden, Rundown-
+/// Echtmedien-Folgeschritt):** `set_state(Null)` MUSS vor dem `unlink()`
+/// des src-Pads passieren, nicht danach. Bei einem `File`-Zweig endet die
+/// Kette in einer `queue` mit eigenem, von GStreamer geplantem
+/// Streaming-Thread (`queue<N>:src`, anders als die MXL-Zweige oben, deren
+/// Push-Thread reines Rust ist und nicht auf Pad-Verlinkung angewiesen
+/// ist) — wird deren Ziel-Pad unverlinkt, WÄHREND dieser Thread noch aktiv
+/// über `gst_pad_push_event` schiebt (z. B. eines der vielen
+/// `reconfigure`-Events, die die parallel aufgebaute neue Branch auslöst),
+/// entsteht ein Use-after-free/NULL-Zugriff (`gst_mini_object_unref:
+/// assertion 'mini_object != NULL' failed`, per `gdb -batch -x "run\nbt
+/// full"` unter `G_DEBUG=fatal-criticals` reproduziert — Absturz exakt im
+/// `queue<N>:src`-Thread in `gst_pad_push_event`). `set_state(Null)`
+/// blockiert garantiert, bis GStreamers eigener Streaming-Thread für das
+/// Element tatsächlich gestoppt hat (dokumentierte Eigenschaft) — danach
+/// ist ein Unlink sicher, weil niemand mehr durch den Pad schiebt.
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
-    if let Some(src_pad) = branch.elements.last().and_then(|el| el.static_pad("src")) {
-        let _ = src_pad.unlink(&branch.pad);
-    }
     if let Some(mxl) = &branch.mxl_video {
         mxl.stop();
     }
@@ -858,6 +912,11 @@ fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     }
     for el in &branch.elements {
         let _ = el.set_state(gst::State::Null);
+    }
+    if let Some(src_pad) = branch.elements.last().and_then(|el| el.static_pad("src")) {
+        let _ = src_pad.unlink(&branch.pad);
+    }
+    for el in &branch.elements {
         let _ = pipeline.remove(el);
     }
     // branch (inkl. mxl_video/mxl_audio) wird hier am Funktionsende
@@ -891,6 +950,9 @@ struct ActivePipeline {
     /// gepflegt, von den EOS-Probes aus `build_file_branches` gelesen
     /// (s. Moduldoku). Kein Mutex nötig, ein einzelnes Byte reicht.
     onair_slot: Arc<AtomicU8>,
+    /// Aktuell ungelesen: einziger Konsument war `build_file_branches`s
+    /// (deaktivierter) EOS-Probe, s. `add_eos_probe`-Doku.
+    #[allow(dead_code)]
     event_tx: UnboundedSender<Event>,
 }
 
@@ -933,10 +995,6 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
                 old_video_pad,
                 audio_pad,
                 uri,
-                item.id.clone(),
-                slot,
-                active.onair_slot.clone(),
-                active.event_tx.clone(),
                 active.width,
                 active.height,
             )?;
