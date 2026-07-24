@@ -76,7 +76,7 @@ Oberfläche (mit Screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUC
 
 ![Flow Editor mit laufenden Node-Instanzen](docs/screenshots/flow-editor.png)
 
-![Regieplatz "Regie 1": mehrere Microservice-UIs (Audio Mixer, Playout-Automation, Video Mixer M/E, Videoplayer, Viewer) in einer Operator-Konsole](docs/screenshots/regieplatz-1.png)
+![Regieplatz "Regie 1": mehrere Microservice-UIs (Audio Mixer, OGraf Grafik, zwei Sources, Video Mixer M/E, Viewer) in einer Operator-Konsole](docs/screenshots/regieplatz-1.png)
 
 ## Status
 

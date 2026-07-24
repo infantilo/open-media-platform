@@ -205,23 +205,32 @@ Bildschirm, an dem stets derselbe Browser läuft.
 
 ### 8.1 Beispiel: Regieplatz „Regie 1"
 
-Ein zweites, vollständiges Beispiel — der Workflow „Regie 1" (Source,
-Videoplayer, Playout-Automation, Video Mixer M/E, Audio Mixer, Viewer)
-mit einem Operator, der auf alle sechs Rollen `Bedienen`-Rechte hat:
+Ein zweites, vollständiges Beispiel — der Workflow „Regie 1" ohne
+Playout-Automation, dafür mit zwei parallelen Testquellen (zwei
+`omp-source`-Instanzen, unterschiedliches Testmuster: SMPTE-Farbbalken
+und der bewegte „Ball") plus OGraf-Grafik, Video Mixer M/E, Audio Mixer
+und Viewer, mit einem Operator, der auf alle sechs Rollen
+`Bedienen`-Rechte hat:
 
-![Regieplatz „Regie 1": Audio Mixer, Playout-Automation, Source, Video Mixer M/E, Videoplayer, Viewer](screenshots/regieplatz-1.png)
+![Regieplatz „Regie 1": Audio Mixer, OGraf Grafik, zwei Sources (SMPTE/Ball), Video Mixer M/E, Viewer](screenshots/regieplatz-1.png)
 
-- **Audio Mixer**, **Playout-Automation**, **Video Mixer M/E**,
-  **Videoplayer**, **Viewer** — je die eigene Node-Oberfläche, identisch
-  zu der, die auch im Flow-Editor-Parameter-Panel erscheint.
-- **Source** — zeigt hier bewusst „UI-Bundle … konnte nicht geladen
-  werden": nicht jeder Node-Typ bringt eine eigene Bedienoberfläche mit
-  (`omp-source` hat keine, außer den generischen Parametern nichts zu
-  bedienen) — die Konsole meldet das ehrlich statt eine leere Kachel
-  ohne Erklärung zu zeigen.
-- Im Screenshot wurde über den Video-Mixer-M/E-Bedienpult bereits eine
-  Quelle an die Kreuzschiene angeheftet (SRC „+") und auf PGM
-  geschnitten — der Viewer zeigt das reale, laufende Farbbalkenbild.
+- **Audio Mixer**, **OGraf Grafik**, **Video Mixer M/E**, **Viewer** —
+  je die eigene Node-Oberfläche, identisch zu der, die auch im
+  Flow-Editor-Parameter-Panel erscheint.
+- **Zwei Source-Kacheln** — beide zeigen hier bewusst „UI-Bundle …
+  konnte nicht geladen werden": nicht jeder Node-Typ bringt eine eigene
+  Bedienoberfläche mit (`omp-source` hat keine, außer den generischen
+  Parametern nichts zu bedienen) — die Konsole meldet das ehrlich statt
+  eine leere Kachel ohne Erklärung zu zeigen. Welche Quelle welches
+  Testmuster zeigt, stellt man über deren `pattern`-Parameter im
+  Flow-Editor ein (Parameter-Panel bei Doppelklick auf die Kachel).
+- Im Screenshot wurde über den Video-Mixer-M/E-Bedienpult die
+  „Ball"-Quelle an die Kreuzschiene angeheftet (SRC „+") und auf PGM
+  geschnitten — der Viewer zeigt das reale, laufende Bild (der Ball
+  bewegt sich auf schwarzem Grund).
+- Ohne Playout-Automation-Rolle steuert der Operator hier rein manuell
+  (Cut/Auto, Kreuzschiene, DSK/PIP) statt über eine Playlist — passend
+  für einen reinen Live-Schaltplatz ohne Bandmaterial.
 
 ## 9. Weiterführende Dokumente
 
