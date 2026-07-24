@@ -178,6 +178,25 @@ impl Playlist {
         self.on_air = true;
         self.items.get(next).cloned()
     }
+
+    /// Manuelles Gegenstück zu `advance()` für den "Next"-Bedienknopf
+    /// (Rundown-Listenansicht-Folgeschritt, PIPELINE-CONTROLLER-Parität):
+    /// wie `advance()`, aber **ohne** den `Mode::Hold`-Guard — im
+    /// PC-Original ist der Next-Knopf gerade der Weg, im Hold-Modus
+    /// manuell weiterzuschalten ("Enable Next immediately for HOLD
+    /// events — operator decides when to advance"). Im `Auto`-Modus
+    /// wirkt es wie ein vorgezogenes `advance()` (überspringt die
+    /// Restlaufzeit des aktuellen Items).
+    pub fn force_advance(&mut self) -> TakeAction {
+        let next = self.current_index.map(|i| i + 1).unwrap_or(0);
+        if next >= self.items.len() {
+            self.on_air = false;
+            return None;
+        }
+        self.current_index = Some(next);
+        self.on_air = true;
+        self.items.get(next).cloned()
+    }
 }
 
 #[cfg(test)]
@@ -258,6 +277,29 @@ mod tests {
         assert_eq!(next, None);
         assert!(!p.on_air());
         assert_eq!(p.current_index(), Some(0));
+    }
+
+    #[test]
+    fn force_advance_transitions_even_in_hold_mode() {
+        let mut p = Playlist::new();
+        p.append("item1".to_string());
+        p.append("item2".to_string());
+        p.set_mode(Mode::Hold);
+        p.take().unwrap();
+        let next = p.force_advance();
+        assert_eq!(next.as_deref(), Some("item2"));
+        assert_eq!(p.current_index(), Some(1));
+        assert!(p.on_air());
+    }
+
+    #[test]
+    fn force_advance_past_last_item_ends_on_air_without_looping() {
+        let mut p = Playlist::new();
+        p.append("item1".to_string());
+        p.take().unwrap();
+        let next = p.force_advance();
+        assert_eq!(next, None);
+        assert!(!p.on_air());
     }
 
     #[test]

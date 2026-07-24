@@ -87,12 +87,67 @@ const DEFAULT_DURATION_MS: u64 = 5000;
 /// Tick holt es einfach nach, s. `token_refresh_loop`).
 const TOKEN_REFRESH_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 
+/// Woher ein Rundown-/Cart-Item seine Essenz bezieht — spiegelt
+/// `omp-player`s eigenes `ItemMedia` (dessen `main.rs`), weil dieser Node
+/// keine eigene Medienentscheidung trifft, sondern nur weiterreicht, was
+/// der Ziel-Player tatsächlich zugewiesen hat (s. `item_meta_from_player_json`).
+#[derive(Debug, Clone)]
+enum ItemMedia {
+    TestPattern { pattern: String, tone_frequency: f64 },
+    File { path: String },
+    Live { sender_id: String },
+}
+
 #[derive(Debug, Clone)]
 struct ItemMeta {
     label: String,
-    pattern: String,
-    tone_frequency: f64,
+    media: ItemMedia,
     duration_ms: u64,
+}
+
+/// Rekonstruiert ein `ItemMeta` aus einem Item, wie es `omp-player`s
+/// `items`-Parameter zurückgibt (`{"id","label","pattern"|"file"|
+/// "senderId",...,"durationMs"}`, s. dessen `main.rs::get("items")`) —
+/// der Player trifft die Medienentscheidung (inkl. Datei-Duration-Probe),
+/// dieser Node übernimmt sie nur, statt sie aus den eigenen Aufrufargumenten
+/// zu erraten (gleiche Quelle-der-Wahrheit-Überlegung wie in `do_load`s
+/// Moduldoku). `senderId` hat Vorrang vor `file` vor `pattern` — deckungs-
+/// gleich mit der Precedence in `omp-player/src/main.rs`s `append`/`load`.
+fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
+    let label = v.get("label")?.as_str()?.to_string();
+    let duration_ms = v.get("durationMs").and_then(Value::as_u64).unwrap_or(DEFAULT_DURATION_MS);
+    let media = if let Some(sender_id) = v.get("senderId").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        ItemMedia::Live { sender_id: sender_id.to_string() }
+    } else if let Some(file) = v.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+        ItemMedia::File { path: file.to_string() }
+    } else {
+        let pattern = v
+            .get("pattern")
+            .and_then(Value::as_str)
+            .unwrap_or(DEFAULT_PATTERN)
+            .to_string();
+        let tone_frequency = v.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0);
+        ItemMedia::TestPattern { pattern, tone_frequency }
+    };
+    Some(ItemMeta { label, media, duration_ms })
+}
+
+/// Gegenstück zu `item_meta_from_player_json` für `get("items")`/
+/// `get("assets")` — dieselbe Feld-Shape wie `omp-player`s `items`
+/// (jeweils genau eines von `pattern`+`toneFrequency` / `file` / `senderId`).
+fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
+    let mut v = match &m.media {
+        ItemMedia::TestPattern { pattern, tone_frequency } => serde_json::json!({
+            "pattern": pattern,
+            "toneFrequency": tone_frequency,
+        }),
+        ItemMedia::File { path } => serde_json::json!({ "file": path }),
+        ItemMedia::Live { sender_id } => serde_json::json!({ "senderId": sender_id }),
+    };
+    v["id"] = serde_json::json!(id);
+    v["label"] = serde_json::json!(m.label);
+    v["durationMs"] = serde_json::json!(m.duration_ms);
+    v
 }
 
 struct AutomationState {
@@ -112,6 +167,17 @@ struct AutomationState {
     /// 2026-07-22: "wie beim Video-Mixer DSK"). Im selben `discovery_loop`-
     /// Tick wie `player_node_id`/`mixer_node_id` aktualisiert.
     discovered_labels: Vec<String>,
+    /// Rundown-Echtmedien (`ARCHITECTURE.md` §24.6-Folgeschritt): Spiegel
+    /// von `omp-player`s `mediaLibrary`/`availableSources`-Parametern des
+    /// aktuell aufgelösten Ziel-Players — im selben `discovery_loop`-Tick
+    /// wie `player_node_id` aktualisiert, damit das Rundown-UI Datei-/
+    /// Live-Quellen anbieten kann, ohne den Player-Node selbst über einen
+    /// zweiten Kanal abzufragen (gleicher Proxy-Weg wie jeder andere
+    /// Fernzugriff dieses Nodes). Leert sich, sobald `player_node_id`
+    /// `None` wird (Ziel nicht aufgelöst/offline) — sonst böte das UI
+    /// Quellen eines gar nicht mehr angesprochenen Players an.
+    media_library: Vec<String>,
+    available_sources: Vec<Value>,
     /// Item-ID, die zuletzt tatsächlich per `take_on_targets` remote live
     /// geschaltet wurde (C18-Fund, `ARCHITECTURE.md` §24.3) — bewusst
     /// **nicht** aus `playlist.on_air()` abgeleitet: erreicht `advance()`
@@ -136,6 +202,17 @@ struct AutomationState {
     carts: Vec<(String, ItemMeta)>,
     next_cart_seq: u64,
     active_cart: Option<ActiveCart>,
+    /// Listenansicht-Folgeschritt ("Stop"-Bedienknopf, PIPELINE-
+    /// CONTROLLER-Parität): Item-ID eines beim Ziel-Player synthetisch
+    /// angehängten Schwarzbilds, auf das `do_stop()` zuletzt geschaltet
+    /// hat — best-effort vor dem nächsten `do_stop()` wieder entfernt
+    /// (gleiches Aufräum-Prinzip wie `ActiveCart::player_item_id` bei
+    /// `cart.return`), damit wiederholtes Stoppen den Player nicht mit
+    /// Schwarzbild-Leichen zumüllt. Bewusst **kein** Cart/keine Playlist-
+    /// Item-ID: `state.playlist`/`state.metadata` bleiben unangetastet,
+    /// damit der Rundown nach einem Stop unverändert erhalten bleibt
+    /// (PC-Semantik: Stop beendet nur die Wiedergabe, nicht die Liste).
+    stop_item_id: Option<String>,
     /// C20 (`ARCHITECTURE.md` §24.5, `timeline.rs`): gefensterter,
     /// inkrementeller Zeitplan-Cache für die Hauptplaylist — bewusst
     /// nicht für Carts geführt (die laufen neben der Hauptplaylist,
@@ -271,12 +348,179 @@ impl AutomationStore {
         Ok(())
     }
 
+    /// Listenansicht-Folgeschritt, "Next"-Bedienknopf (PIPELINE-CONTROLLER-
+    /// Parität, `ui.html::playNext()`): manuelles Gegenstück zu
+    /// `do_advance()` — nutzt `Playlist::force_advance()` statt `advance()`,
+    /// wirkt also unabhängig vom `mode` (im PC-Original ausdrücklich der
+    /// Weg, im Hold-Modus manuell weiterzuschalten). Ein aktiver Cart hat
+    /// Vorrang (gleicher Guard wie `do_stop`/`do_next_live`) — "Next"
+    /// bezieht sich auf die Hauptplaylist, nicht auf den Interrupt-Kanal.
+    fn do_next(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        if state.active_cart.is_some() {
+            return Err("Cart aktiv — zuerst cart.return() aufrufen".to_string());
+        }
+        let Some(item_id) = state.playlist.force_advance() else {
+            state.onair_since = None;
+            return Ok(());
+        };
+
+        let player_node_id = state
+            .player_node_id
+            .clone()
+            .ok_or("Ziel-Player nicht aufgelöst")?;
+        let mixer_node_id = state
+            .mixer_node_id
+            .clone()
+            .ok_or("Ziel-Mixer nicht aufgelöst")?;
+        let player_label = state.target_player_label.clone();
+
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+        state.onair_since = Some(Instant::now());
+        state.last_live_item_id = Some(item_id);
+        Ok(())
+    }
+
+    /// Listenansicht-Folgeschritt, "Next Live"-Bedienknopf (PIPELINE-
+    /// CONTROLLER-Parität, `ui.html::playNextLive()`): springt direkt zum
+    /// nächsten Rundown-Item NACH der aktuellen Position, dessen Medium
+    /// `ItemMedia::Live` ist — überspringt alles dazwischen in einem
+    /// Schritt, ohne dass der Operator jedes Item einzeln cuen muss.
+    /// Bewusst **ohne** PCs Fix-Zeit-Blockade (`ui.html::
+    /// updateNextLiveBtn`s `startType==='fixtime'`-Check): OMP-Rundown-
+    /// Items kennen bislang kein Fixzeit-/Zeitplan-Konzept (nur den
+    /// reinen Zeitplan-Cache aus C20), es gibt hier nichts zu blockieren.
+    fn do_next_live(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        if state.active_cart.is_some() {
+            return Err("Cart aktiv — zuerst cart.return() aufrufen".to_string());
+        }
+        let start_from = state.playlist.current_index().map(|i| i + 1).unwrap_or(0);
+        let items = state.playlist.items().to_vec();
+        let target = items
+            .iter()
+            .enumerate()
+            .skip(start_from)
+            .find(|(_, id)| matches!(state.metadata.get(*id).map(|m| &m.media), Some(ItemMedia::Live { .. })))
+            .map(|(i, id)| (i, id.clone()));
+        let Some((target_index, item_id)) = target else {
+            return Err("kein Live-Item nach der aktuellen Position im Rundown".to_string());
+        };
+
+        let player_node_id = state
+            .player_node_id
+            .clone()
+            .ok_or("Ziel-Player nicht aufgelöst (targetPlayerLabel unbekannt/noch nicht gestartet)")?;
+        let mixer_node_id = state
+            .mixer_node_id
+            .clone()
+            .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
+        let player_label = state.target_player_label.clone();
+
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+
+        state.playlist.cue(target_index).map_err(|e| e.to_string())?;
+        state.playlist.take().map_err(|e| e.to_string())?;
+        state.onair_since = Some(Instant::now());
+        state.last_live_item_id = Some(item_id);
+        Ok(())
+    }
+
+    /// Listenansicht-Folgeschritt, "Stop"-Bedienknopf (PIPELINE-CONTROLLER-
+    /// Parität, `ui.html::stopPlaylist()`): schaltet den Hauptkanal sofort
+    /// auf ein synthetisches Schwarzbild — non-destruktiv wie im
+    /// PC-Original ("Stop beendet nur die Wiedergabe, die Liste bleibt
+    /// erhalten"), deshalb bewusst kein `state.playlist.replace_all(..)`
+    /// oder Ähnliches. Gleicher Mechanismus wie `cart.fire` (synthetisches
+    /// Item beim Ziel-Player anhängen + `take_on_targets`), aber ohne
+    /// Rückweg/Restore — stattdessen wird das vorherige Schwarzbild-Item
+    /// (falls eines von einem früheren Stop übrig ist) zuerst best-effort
+    /// entfernt, damit wiederholtes Stoppen den Player nicht mit
+    /// Schwarzbild-Leichen zumüllt (s. `stop_item_id`-Doku). Ein aktiver
+    /// Cart hat Vorrang — Stop beträfe sonst den falschen Kanal-Zustand.
+    fn do_stop(&self) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        if state.active_cart.is_some() {
+            return Err("Cart aktiv — zuerst cart.return() aufrufen".to_string());
+        }
+        let player_node_id = state
+            .player_node_id
+            .clone()
+            .ok_or("Ziel-Player nicht aufgelöst (targetPlayerLabel unbekannt/noch nicht gestartet)")?;
+        let mixer_node_id = state
+            .mixer_node_id
+            .clone()
+            .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
+        let player_label = state.target_player_label.clone();
+        let player = self.proxy_client(player_node_id.clone());
+        let prev_stop_item_id = state.stop_item_id.take();
+
+        let known_before: std::collections::HashSet<String> = player
+            .get_param("items")
+            .map_err(|e| format!("Player-Items vor Stop nicht lesbar: {e}"))?
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|it| it.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+
+        player
+            .invoke(
+                "append",
+                serde_json::json!({ "label": "STOP", "pattern": "black", "toneFrequency": 0, "durationMs": 0 }),
+            )
+            .map_err(|e| format!("Stop-append fehlgeschlagen: {e}"))?;
+
+        let stop_item_id = fetch_new_item_id(&player, &known_before)
+            .map_err(|e| format!("Neue Stop-Item-ID nicht lesbar: {e}"))?;
+
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &stop_item_id)?;
+
+        // Erst NACH dem Umschalten auf das neue Schwarzbild aufräumen: das
+        // vorherige Stop-Item ist bis zu diesem Punkt noch on-air —
+        // `omp-player`s `remove()` lehnt das Entfernen eines noch on-air
+        // befindlichen Items ab (gleicher Fund wie beim C18-Cart-Return,
+        // s. `AutomationState::last_live_item_id`-Doku). Best-effort:
+        // schlägt es trotzdem fehl, sammelt sich höchstens ein Schwarzbild-
+        // Item mehr an, kein Abbruch der eigentlichen Stop-Aktion.
+        if let Some(prev_id) = prev_stop_item_id {
+            if let Err(e) = player.invoke("remove", serde_json::json!({ "itemId": prev_id })) {
+                self.report(format!("Vorheriges Stop-/Black-Item konnte nicht entfernt werden: {e}"));
+            }
+        }
+
+        state.stop_item_id = Some(stop_item_id);
+        // Nur das lokale on_air-Flag geht aus (s. cue()-Doku: erneutes
+        // Cuen desselben Index setzt on_air=false ohne current_index zu
+        // verschieben) — der Rundown selbst bleibt unangetastet.
+        if let Some(idx) = state.playlist.current_index() {
+            let _ = state.playlist.cue(idx);
+        }
+        state.onair_since = None;
+        state.last_live_item_id = None;
+        Ok(())
+    }
+
+    /// Rundown-Echtmedien-Folgeschritt: `pattern`/`file`/`senderId` werden
+    /// unverändert an den Ziel-Player durchgereicht (dessen `append()`
+    /// entscheidet die Precedence, s. dessen Moduldoku) — dieser Node rät
+    /// nicht selbst, welche Quelle gemeint ist. Das lokale `ItemMeta` wird
+    /// danach komplett aus der Player-Antwort rekonstruiert
+    /// (`item_meta_from_player_json`), NICHT aus den hier übergebenen
+    /// Rohargumenten: bei `file` probt der Player die echte Clip-Dauer und
+    /// ignoriert ein evtl. mitgeschicktes `duration_ms` dafür vollständig
+    /// (`omp-player/src/main.rs::invoke("append")`) — ein Übernehmen des
+    /// Roharguments würde den Auto-Advance-Timer (`auto_advance_loop`) auf
+    /// eine falsche Dauer laufen lassen.
     fn do_append(
         &self,
         label: String,
-        pattern: String,
-        tone_frequency: f64,
-        duration_ms: u64,
+        pattern: Option<String>,
+        file: Option<String>,
+        sender_id: Option<String>,
+        tone_frequency: Option<f64>,
+        duration_ms: Option<u64>,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         let player_node_id = state
@@ -288,31 +532,38 @@ impl AutomationStore {
         let known_before: std::collections::HashSet<String> =
             state.metadata.keys().cloned().collect();
 
+        let mut body = serde_json::json!({ "label": label });
+        if let Some(v) = &pattern {
+            body["pattern"] = serde_json::json!(v);
+        }
+        if let Some(v) = &file {
+            body["file"] = serde_json::json!(v);
+        }
+        if let Some(v) = &sender_id {
+            body["senderId"] = serde_json::json!(v);
+        }
+        if let Some(v) = tone_frequency {
+            body["toneFrequency"] = serde_json::json!(v);
+        }
+        if let Some(v) = duration_ms {
+            body["durationMs"] = serde_json::json!(v);
+        }
+
         player
-            .invoke(
-                "append",
-                serde_json::json!({
-                    "label": label,
-                    "pattern": pattern,
-                    "toneFrequency": tone_frequency,
-                    "durationMs": duration_ms,
-                }),
-            )
+            .invoke("append", body)
             .map_err(|e| format!("Player-append fehlgeschlagen: {e}"))?;
 
-        let new_id = fetch_new_item_id(&player, &known_before)
+        let new_item = fetch_new_item(&player, &known_before)
             .map_err(|e| format!("Player-Items nach append nicht lesbar: {e}"))?;
+        let new_id = new_item
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("Neues Player-Item ohne id")?
+            .to_string();
+        let meta = item_meta_from_player_json(&new_item).ok_or("Neues Player-Item unlesbar")?;
 
         state.playlist.append(new_id.clone());
-        state.metadata.insert(
-            new_id,
-            ItemMeta {
-                label,
-                pattern,
-                tone_frequency,
-                duration_ms,
-            },
-        );
+        state.metadata.insert(new_id, meta);
         // C20: kein state.timeline.invalidate_from() nötig — append()
         // hängt immer ans Ende (Playlist::append-Doku), der Zeitplan-
         // Cache bleibt für alle bestehenden Indizes gültig.
@@ -332,6 +583,10 @@ impl AutomationStore {
             label: String,
             #[serde(default)]
             pattern: Option<String>,
+            #[serde(default)]
+            file: Option<String>,
+            #[serde(rename = "senderId", default)]
+            sender_id: Option<String>,
             #[serde(rename = "toneFrequency", default)]
             tone_frequency: Option<f64>,
             #[serde(rename = "durationMs", default)]
@@ -368,26 +623,8 @@ impl AutomationStore {
                 .and_then(Value::as_str)
                 .ok_or("Player-Item ohne id")?
                 .to_string();
-            metadata.insert(
-                id.clone(),
-                ItemMeta {
-                    label: it
-                        .get("label")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    pattern: it
-                        .get("pattern")
-                        .and_then(Value::as_str)
-                        .unwrap_or(DEFAULT_PATTERN)
-                        .to_string(),
-                    tone_frequency: it.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0),
-                    duration_ms: it
-                        .get("durationMs")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(DEFAULT_DURATION_MS),
-                },
-            );
+            let meta = item_meta_from_player_json(&it).ok_or("Player-Item unlesbar")?;
+            metadata.insert(id.clone(), meta);
             ids.push(id);
         }
 
@@ -452,11 +689,24 @@ impl AutomationStore {
     /// lokal, kein Fernaufruf nötig — anders als `do_append` gibt es hier
     /// keinen Ziel-Player, dessen Item-IDs übernommen werden müssten, das
     /// tatsächliche `append` passiert erst bei `cart.fire`).
+    /// Carts bleiben in diesem Schritt bewusst pattern-only (der Rundown-
+    /// Echtmedien-Folgeschritt betrifft nur die Hauptplaylist, s.
+    /// gap-analysis-Kandidatenliste "Assets"-Bereich für Datei-/Live-Carts
+    /// als eigenen späteren Schritt) — `ItemMeta::media` ist trotzdem
+    /// bereits der geteilte Typ, damit `do_cart_fire` unverändert bleibt,
+    /// sobald das nachgeholt wird.
     fn do_cart_define(&self, label: String, pattern: String, tone_frequency: f64, duration_ms: u64) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         state.next_cart_seq += 1;
         let id = format!("cart{}", state.next_cart_seq);
-        state.carts.push((id, ItemMeta { label, pattern, tone_frequency, duration_ms }));
+        state.carts.push((
+            id,
+            ItemMeta {
+                label,
+                media: ItemMedia::TestPattern { pattern, tone_frequency },
+                duration_ms,
+            },
+        ));
         Ok(())
     }
 
@@ -518,16 +768,17 @@ impl AutomationStore {
             .filter_map(|it| it.get("id").and_then(Value::as_str).map(str::to_string))
             .collect();
 
+        let mut cart_body = serde_json::json!({ "label": meta.label, "durationMs": meta.duration_ms });
+        match &meta.media {
+            ItemMedia::TestPattern { pattern, tone_frequency } => {
+                cart_body["pattern"] = serde_json::json!(pattern);
+                cart_body["toneFrequency"] = serde_json::json!(tone_frequency);
+            }
+            ItemMedia::File { path } => cart_body["file"] = serde_json::json!(path),
+            ItemMedia::Live { sender_id } => cart_body["senderId"] = serde_json::json!(sender_id),
+        }
         player
-            .invoke(
-                "append",
-                serde_json::json!({
-                    "label": meta.label,
-                    "pattern": meta.pattern,
-                    "toneFrequency": meta.tone_frequency,
-                    "durationMs": meta.duration_ms,
-                }),
-            )
+            .invoke("append", cart_body)
             .map_err(|e| format!("Cart-append fehlgeschlagen: {e}"))?;
 
         let cart_item_id = fetch_new_item_id(&player, &known_before)
@@ -670,19 +921,37 @@ fn resolve_mixer_sender_id(mixer: &ProxyClient, player_label: &str) -> Option<St
 /// nur `{"ok":true}`). Mehr als eine neue ID (z. B. gleichzeitiges
 /// manuelles Bedienen desselben Players, s. Moduldoku "Bekannte Grenze")
 /// wird pragmatisch als "die letzte in der Antwort" aufgelöst.
+/// Nach einem `append()` beim Ziel-Player: findet das komplette neue
+/// Item-JSON durch Differenzbildung gegen die vorher bekannten IDs (die
+/// generische Methoden-Antwort liefert keinen Rückgabewert, §4.5a/A8 —
+/// nur `{"ok":true}`). Mehr als eine neue ID (s. Moduldoku "Bekannte
+/// Grenze") wird pragmatisch als "die letzte in der Antwort" aufgelöst.
+fn fetch_new_item(
+    player: &ProxyClient,
+    known_before: &std::collections::HashSet<String>,
+) -> Result<Value, remote::RemoteError> {
+    let items = player.get_param("items")?;
+    let items = items.as_array().cloned().unwrap_or_default();
+    let mut new_items: Vec<Value> = items
+        .into_iter()
+        .filter(|it| {
+            it.get("id")
+                .and_then(Value::as_str)
+                .map(|id| !known_before.contains(id))
+                .unwrap_or(false)
+        })
+        .collect();
+    new_items.pop().ok_or(remote::RemoteError::UnexpectedBody)
+}
+
 fn fetch_new_item_id(
     player: &ProxyClient,
     known_before: &std::collections::HashSet<String>,
 ) -> Result<String, remote::RemoteError> {
-    let items = player.get_param("items")?;
-    let items = items.as_array().cloned().unwrap_or_default();
-    let mut new_ids: Vec<String> = items
-        .iter()
-        .filter_map(|it| it.get("id").and_then(Value::as_str).map(str::to_string))
-        .filter(|id| !known_before.contains(id))
-        .collect();
-    new_ids
-        .pop()
+    let item = fetch_new_item(player, known_before)?;
+    item.get("id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
         .ok_or(remote::RemoteError::UnexpectedBody)
 }
 
@@ -781,6 +1050,24 @@ impl ParamStore for AutomationStore {
                 range: None,
                 readonly: true,
             },
+            // Rundown-Echtmedien-Folgeschritt: Spiegel von `omp-player`s
+            // gleichnamigen Parametern des aktuell aufgelösten Ziel-Players
+            // (`discovery_loop`) — Grundlage für die Datei-/Live-Auswahl im
+            // Rundown-Add-Formular, gleiches Prinzip wie `availableNodes`.
+            ParamSpec {
+                name: "mediaLibrary".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "availableSources".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
         ];
 
         let methods = vec![
@@ -793,6 +1080,16 @@ impl ParamStore for AutomationStore {
                     },
                     MethodArg {
                         name: "pattern".to_string(),
+                        kind: ParamType::String,
+                    },
+                    // Rundown-Echtmedien-Folgeschritt — deckungsgleich mit
+                    // `omp-player`s eigenem `append`-MethodSpec (C21).
+                    MethodArg {
+                        name: "file".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "senderId".to_string(),
                         kind: ParamType::String,
                     },
                     MethodArg {
@@ -828,6 +1125,20 @@ impl ParamStore for AutomationStore {
             },
             MethodSpec {
                 name: "take".to_string(),
+                args: vec![],
+            },
+            // Listenansicht-Folgeschritt, PIPELINE-CONTROLLER-Parität
+            // (`ui.html`: Next/Next-Live/Stop-Bedienknöpfe).
+            MethodSpec {
+                name: "next".to_string(),
+                args: vec![],
+            },
+            MethodSpec {
+                name: "nextLive".to_string(),
+                args: vec![],
+            },
+            MethodSpec {
+                name: "stop".to_string(),
                 args: vec![],
             },
             // C18 (ARCHITECTURE.md §24.3).
@@ -883,13 +1194,7 @@ impl ParamStore for AutomationStore {
                     .playlist
                     .items()
                     .iter()
-                    .filter_map(|id| state.metadata.get(id).map(|m| serde_json::json!({
-                        "id": id,
-                        "label": m.label,
-                        "pattern": m.pattern,
-                        "toneFrequency": m.tone_frequency,
-                        "durationMs": m.duration_ms,
-                    })))
+                    .filter_map(|id| state.metadata.get(id).map(|m| item_meta_to_json(id, m)))
                     .collect::<Vec<_>>()
             )),
             "currentItemId" => Some(serde_json::json!(current_or_cued_id(&state, true))),
@@ -930,19 +1235,15 @@ impl ParamStore for AutomationStore {
                 state
                     .carts
                     .iter()
-                    .map(|(id, m)| serde_json::json!({
-                        "id": id,
-                        "label": m.label,
-                        "pattern": m.pattern,
-                        "toneFrequency": m.tone_frequency,
-                        "durationMs": m.duration_ms,
-                    }))
+                    .map(|(id, m)| item_meta_to_json(id, m))
                     .collect::<Vec<_>>()
             )),
             "activeCartId" => Some(serde_json::json!(
                 state.active_cart.as_ref().map(|a| a.asset_id.clone()).unwrap_or_default()
             )),
             "availableNodes" => Some(serde_json::json!(state.discovered_labels)),
+            "mediaLibrary" => Some(serde_json::json!(state.media_library)),
+            "availableSources" => Some(serde_json::json!(state.available_sources)),
             _ => None,
         }
     }
@@ -985,20 +1286,21 @@ impl ParamStore for AutomationStore {
                     .filter(|s| !s.is_empty())
                     .unwrap_or("Item")
                     .to_string();
-                let pattern = args
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(DEFAULT_PATTERN)
-                    .to_string();
-                let tone_frequency = args.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0);
+                // Rundown-Echtmedien-Folgeschritt: `pattern`/`file`/
+                // `senderId` unverändert (als `Option`, kein lokaler
+                // Default) an `do_append` weiterreichen — die Precedence-
+                // Entscheidung trifft ausschließlich der Ziel-Player, s.
+                // `do_append`-Doku.
+                let pattern = args.get("pattern").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let file = args.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let sender_id = args.get("senderId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+                let tone_frequency = args.get("toneFrequency").and_then(Value::as_f64).filter(|f| *f > 0.0);
                 let duration_ms = args
                     .get("durationMs")
                     .and_then(Value::as_f64)
                     .filter(|d| *d > 0.0)
-                    .map(|d| d as u64)
-                    .unwrap_or(DEFAULT_DURATION_MS);
-                self.do_append(label, pattern, tone_frequency, duration_ms)
+                    .map(|d| d as u64);
+                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms)
             }
             "load" => {
                 let items_json = args.get("itemsJson").and_then(Value::as_str).unwrap_or("[]");
@@ -1013,6 +1315,9 @@ impl ParamStore for AutomationStore {
                 None => Err("itemId fehlt".to_string()),
             },
             "take" => self.do_take(),
+            "next" => self.do_next(),
+            "nextLive" => self.do_next_live(),
+            "stop" => self.do_stop(),
             // C18 (ARCHITECTURE.md §24.3).
             "cart.define" => {
                 let label = args
@@ -1165,6 +1470,50 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             state.player_node_id = player_node_id;
             state.mixer_node_id = mixer_node_id;
             state.discovered_labels = discovered_labels;
+        }
+
+        // Rundown-Echtmedien-Folgeschritt: `mediaLibrary`/`availableSources`
+        // des jetzt (evtl. neu) aufgelösten Ziel-Players spiegeln — im
+        // selben Tick statt in einem eigenen Intervall, gleiche Kadenz wie
+        // die übrige Ziel-Discovery. Best effort: schlägt der Fernaufruf
+        // fehl (Player kurz nicht erreichbar), bleibt der zuletzt bekannte
+        // Stand einfach bis zum nächsten Tick stehen.
+        let player_node_id_for_media = {
+            store.state.lock().expect("lock poisoned").player_node_id.clone()
+        };
+        match player_node_id_for_media {
+            Some(player_node_id) => {
+                let store2 = store.clone();
+                let fetched = tokio::task::spawn_blocking(move || {
+                    let player = store2.proxy_client(player_node_id);
+                    (player.get_param("mediaLibrary"), player.get_param("availableSources"))
+                })
+                .await;
+                if let Ok((media_library, available_sources)) = fetched {
+                    let mut state = store.state.lock().expect("lock poisoned");
+                    if let Ok(v) = media_library {
+                        state.media_library = v
+                            .as_array()
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter_map(|x| x.as_str().map(str::to_string))
+                            .collect();
+                    }
+                    if let Ok(v) = available_sources {
+                        state.available_sources = v.as_array().cloned().unwrap_or_default();
+                    }
+                }
+            }
+            None => {
+                // Kein Ziel-Player aufgelöst (z. B. `targetPlayerLabel`
+                // gerade umkonfiguriert/offline) — Angebote leeren, sonst
+                // böte das UI Quellen eines gar nicht mehr angesprochenen
+                // Players an.
+                let mut state = store.state.lock().expect("lock poisoned");
+                state.media_library.clear();
+                state.available_sources.clear();
+            }
         }
     }
 }
@@ -1331,10 +1680,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         player_node_id: None,
         mixer_node_id: None,
         discovered_labels: Vec::new(),
+        media_library: Vec::new(),
+        available_sources: Vec::new(),
         last_live_item_id: None,
         carts: Vec::new(),
         next_cart_seq: 0,
         active_cart: None,
+        stop_item_id: None,
         timeline: TimelineCache::new(),
     });
     let store = Arc::new(AutomationStore {
