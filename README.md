@@ -18,21 +18,41 @@ The core of the system is an orchestrator developed in Go. It handles discovery,
 
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
-Several microservices are currently available as demonstrators:
+Several microservices are currently available as demonstrators — each
+one an independent process that self-registers via NMOS, with its own
+UI and its own set of self-described parameters (full list with
+functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
-- Test sources
-- Video switcher
-- Video mixer (1 M/E with cut, crossfade, picture-in-picture, keyer)
-- Digital audio mixer with parametric EQ, per-channel compressor, master
-  limiter, and audio-follow-video
-- Video player and jingle player (cued playback)
-- Playout automation (playlist-driven, no pipeline of its own)
-- Viewer and multiviewer (with automatic low-res preview fan-out)
-- Graphics overlay node (Fill+Key)
-- ST 2110 ⇄ SRT gateway and a native ST 2110 video/AES67 audio gateway
-  for inter-site contribution
-- MXL-native RDMA/Fabrics transport (software `tcp` provider verified;
-  RDMA hardware planned)
+- **omp-source** — test sources (color bars etc. plus test tone)
+- **omp-switcher** — simple video switcher between auto-discovered
+  sources (no program/preset bus)
+- **omp-video-mixer-me** — video mixer (1 M/E with cut, crossfade,
+  picture-in-picture, downstream keyer)
+- **omp-audio-mixer** — digital audio mixer with parametric EQ,
+  per-channel compressor, master limiter, and audio-follow-video
+- **omp-player** — video player and jingle player (cued playback, plus
+  live-MXL-source and real-file playlist items)
+- **omp-playout-automation** — playout automation (playlist-driven,
+  Auto/Hold, Next/Next-Live/Stop, cart/interrupt assets; no pipeline of
+  its own)
+- **omp-viewer** / **omp-multiviewer** — single-stream preview and
+  auto-discovered multi-tile monitoring (with automatic low-res preview
+  fan-out)
+- **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
+- **omp-media-library** — file catalog with technical metadata
+  (ffprobe) and mark-in/out segments
+- **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
+  AES67 audio gateways for inter-site contribution with foreign
+  equipment
+- **omp-srt-gateway** — ST 2110 ⇄ SRT gateway for contribution over
+  lossy WANs
+- **omp-fabrics-gateway** — **remote memory access between hosts**:
+  MXL-native Fabrics (libfabric/RDMA) instead of a network-stack hop —
+  zero-copy, one-sided RDMA writes of a full MXL flow into another
+  host's domain. Implemented and live-verified over the software `tcp`
+  provider (no RDMA hardware required to test); `verbs`/`efa` providers
+  for real RoCEv2 hardware are a drop-in config change, hardware
+  procurement pending.
 
 All components run as independent services and can be started, stopped, or extended independently — either locally via the built-in instance launcher, or on a separate machine via a lightweight host agent that registers itself with the orchestrator and executes only pre-approved node types (agent-local catalog as the trust boundary, not a wide-open remote-exec channel).
 
@@ -56,6 +76,8 @@ Oberfläche (mit Screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUC
 
 ![Flow Editor mit laufenden Node-Instanzen](docs/screenshots/flow-editor.png)
 
+![Regieplatz "Regie 1": mehrere Microservice-UIs (Audio Mixer, Playout-Automation, Video Mixer M/E, Videoplayer, Viewer) in einer Operator-Konsole](docs/screenshots/regieplatz-1.png)
+
 ## Status
 
 Architektur/Tech-Stack entschieden (siehe `ARCHITECTURE.md`), Umsetzung
@@ -67,8 +89,10 @@ Workflow-Objekte/-Presets, der kleine Regieplatz (Source/Switcher/
 Video-Mixer/Audio-Mixer/Player/Multiviewer/Playout-Automation/
 OGraf-Grafik, alle GUI-startbar), Mixer-Presets (Snapshot/Recall),
 ST 2110-Video/AES67-Audio + ein natives ST-2110-Gateway zusätzlich zum
-SRT-Gateway, ein MXL-natives RDMA/Fabrics-Transportfundament
-(Software-`tcp`-Provider live verifiziert), PostgreSQL-Backend, mTLS
+SRT-Gateway, echter **Remote Memory Access** zwischen zwei OMP-Hosts
+über MXL-native Fabrics (`omp-fabrics-gateway`, Software-`tcp`-Provider
+live verifiziert — RDMA-Zero-Copy ohne RDMA-Hardware testbar, s.
+`docs/HANDBUCH.md` §9.3), PostgreSQL-Backend, mTLS
 Orchestrator↔Nodes, ein lokales Nutzer-/Rollenmodell mit Login und
 Audit-Log, ein Node-SDK-Tutorial, Remote-Host-Erkennung samt
 Kommandokanal (Instanzen auch auf einer entfernten Maschine starten/

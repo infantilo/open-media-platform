@@ -67,6 +67,29 @@ alle vorhandenen Kacheln. Kachel-Positionen werden pro Nutzer
 gespeichert („Snapshot speichern" unten links sichert zusätzlich den
 kompletten Verbindungszustand als benanntes Preset, wiederherstellbar).
 
+### 2.4 Gruppieren
+
+Mehrere Kacheln lassen sich zu einem einklappbaren Makro-Block
+zusammenfassen — praktisch für einen ganzen Regieplatz („Regie 1" =
+Source + Player + Automation + Mixer + Audio + Viewer), der im Root-
+Graphen dann nur noch als **eine** Kachel erscheint:
+
+1. Erste Kachel anklicken, weitere mit **Umschalt+Klick** dazu wählen
+   (mindestens zwei).
+2. Taste **G** drücken, Namen der Gruppe eingeben.
+
+![Gruppierte Kacheln als ein Makro-Block](screenshots/gruppen.png)
+
+Im Beispiel wurden „Videoplayer" und „Audio Mixer" zur Gruppe „Regie 1"
+zusammengefasst — deren Ein-/Ausgänge werden an der Gruppen-Kachel nach
+außen durchgereicht (hier vier Ports: zwei Sender, ein Lowres-Sender, ein
+weiterer Audio-Sender), die übrigen, nicht gruppierten Kacheln bleiben
+unverändert sichtbar.
+Doppelklick auf eine Gruppen-Kachel „betritt" sie (Breadcrumb-Pfad oben
+links); „Gruppe auflösen" dort macht die Gruppierung wieder rückgängig.
+„Als Workflow speichern" innerhalb einer Gruppe legt aus ihr direkt ein
+startbares Workflow-Objekt an (Abschnitt 4).
+
 ## 3. Instanzen-Übersicht
 
 Der Reiter **Instanzen** zeigt alle laufenden Node-Prozesse tabellarisch
@@ -179,6 +202,26 @@ Anfasser unten rechts zum Skalieren. Position und Größe werden pro
 Regieplatz im Browser gespeichert und bleiben über einen Seiten-Reload
 hinweg erhalten — passend zu einem fest installierten Regieplatz-
 Bildschirm, an dem stets derselbe Browser läuft.
+
+### 8.1 Beispiel: Regieplatz „Regie 1"
+
+Ein zweites, vollständiges Beispiel — der Workflow „Regie 1" (Source,
+Videoplayer, Playout-Automation, Video Mixer M/E, Audio Mixer, Viewer)
+mit einem Operator, der auf alle sechs Rollen `Bedienen`-Rechte hat:
+
+![Regieplatz „Regie 1": Audio Mixer, Playout-Automation, Source, Video Mixer M/E, Videoplayer, Viewer](screenshots/regieplatz-1.png)
+
+- **Audio Mixer**, **Playout-Automation**, **Video Mixer M/E**,
+  **Videoplayer**, **Viewer** — je die eigene Node-Oberfläche, identisch
+  zu der, die auch im Flow-Editor-Parameter-Panel erscheint.
+- **Source** — zeigt hier bewusst „UI-Bundle … konnte nicht geladen
+  werden": nicht jeder Node-Typ bringt eine eigene Bedienoberfläche mit
+  (`omp-source` hat keine, außer den generischen Parametern nichts zu
+  bedienen) — die Konsole meldet das ehrlich statt eine leere Kachel
+  ohne Erklärung zu zeigen.
+- Im Screenshot wurde über den Video-Mixer-M/E-Bedienpult bereits eine
+  Quelle an die Kreuzschiene angeheftet (SRC „+") und auf PGM
+  geschnitten — der Viewer zeigt das reale, laufende Farbbalkenbild.
 
 ## 9. Weiterführende Dokumente
 

@@ -298,7 +298,83 @@ Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
 
-## 9. Mehr Kontext
+## 9. Microservices im Überblick
+
+Jeder Microservice ist ein eigenständiger Prozess (`nodes/`-Workspace-
+Mitglied), der sich selbst per NMOS IS-04 beim Orchestrator anmeldet und
+seine Parameter/Methoden per Node-Contract (§5, `ARCHITECTURE.md`)
+selbst beschreibt — der Orchestrator kennt keinen der folgenden Typen
+fest verdrahtet, die Liste unten beschreibt nur, was aktuell tatsächlich
+existiert und über den Instanz-Launcher (`deploy/catalog.json`)
+startbar ist.
+
+### 9.1 Medien-erzeugende/-verarbeitende Nodes
+
+| Node | Funktion |
+|---|---|
+| **omp-source** | Erzeugt ein wählbares GStreamer-Testbild (Farbbalken u. a.) inkl. Testton als MXL-Flow. Reine Testquelle, keine echte Kamera-/Dateianbindung. |
+| **omp-switcher** | Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf — kein Programm-/Preset-Bus, kein Mischeffekt (funktionaler Vorläufer des Video Mixer M/E). |
+| **omp-video-mixer-me** | Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus (Kreuzschiene), Cut/Auto-Transition, DVE-Kanal (PIP), Downstream-Keyer (DSK, Fill+Key), Tally-Signalisierung. |
+| **omp-audio-mixer** | Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ (LO/MID/HIGH) und Kompressor pro Kanal, Master-Limiter, automatischem Audio-Follow-Video. |
+| **omp-player** | Datei-/Playlist-Player, cue/take-bedient. Zwei Katalog-Profile desselben Binaries: `omp-player-video` (Video inkl. Audio) und `omp-player-jingle` (nur Audio, für Jingles/Musik). Kann seit [C21] zusätzlich eine entdeckte Live-MXL-Quelle als Playlist-Item abspielen. |
+| **omp-multiviewer** | Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal. |
+| **omp-viewer** | Zeigt einen ausgewählten MXL-Videostream als MJPEG-Vorschau im Browser. |
+| **omp-playout-automation** | Automatisierte Playlist-Sequenzierung: steuert einen bereits laufenden Player und Bildmischer fern (Auto/Hold-Modus, Next/Next-Live/Stop, Cart-/Interrupt-Assets). Keine eigene Medienpipeline. |
+| **omp-ograf** | Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. |
+| **omp-media-library** | Datei-Katalog mit technischen Metadaten (`ffprobe`) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline. |
+
+### 9.2 Gateway-Nodes (Standort-/Fremdgeräte-Anbindung)
+
+| Node | Funktion |
+|---|---|
+| **omp-2110-gateway** | Bidirektionale Brücke SMPTE-ST-2110-Multicast (LAN, Fremdgeräte) ⇄ OMP-internes MXL-Fabric. Gerichtet je Instanz (Ingest/Output), SDP- oder Einzel-Env-Var-Konfiguration. |
+| **omp-aes67-gateway** | Audio-Pendant zu `omp-2110-gateway`: AES67/RTP-Multicast (Dante im AES67-Modus, Ravenna, Lawo/Merging u. a.) ⇄ MXL, inkl. SAP-Discovery (RFC 2974) für Fremdströme, die nur darüber auffindbar sind. |
+| **omp-srt-gateway** | Bidirektionale Brücke ST 2110 (LAN) ⇄ SRT (WAN) für Beitrag/Distribution über verlustbehaftete Netze. Gerichtet je Instanz (Uplink/Downlink). |
+| **omp-fabrics-gateway** | Siehe Abschnitt 9.3 — **Remote Memory Access** zwischen zwei OMP-Hosts. |
+
+### 9.3 Remote Memory Access (MXL-native Fabrics)
+
+Für den Medientransport **zwischen** Hosts stehen zwei Wege zur Wahl:
+klassisch **ST 2110 ⇄ SRT** (`omp-srt-gateway`, WAN-tauglich, verlustbehandelt)
+oder **MXL-native Fabrics** (`omp-fabrics-gateway`) — echter,
+Zero-Copy-**Remote-Memory-Zugriff** über Hostgrenzen hinweg auf Basis von
+libfabric (der OFI-Standard-Abstraktion für RDMA-fähige Transporte),
+vendort in MXL selbst (`third_party/mxl/lib/fabrics/ofi/`).
+
+- **Implementiert und live verifiziert** (Kapitel 16 Teil 0/1/2,
+  `docs/END-GOAL-FEATURES.md` §16, `docs/decisions.md` Nachträge 41–55):
+  ein eigener `omp-fabrics-gateway`-Node (zweigeteilt wie die übrigen
+  Gateways, `OMP_FABRICS_GATEWAY_ROLE=target|initiator`) relayt einen
+  kompletten MXL-Flow per echtem One-Sided-RDMA-Write kontinuierlich in
+  eine Domain auf einem anderen Host — **kein Mock, keine GStreamer-
+  Pipeline nötig**, da Fabrics unterhalb der GStreamer-Ebene direkt auf
+  `mxlFlowWriter`/`mxlFlowReader`-Handles arbeitet.
+- **Software-Provider (`tcp`) läuft ohne RDMA-Hardware** — reines
+  Ethernet/Loopback genügt, echte RDMA-Verbindung samt kontinuierlich
+  wachsendem, auf beiden Seiten identischem MXL-Head-Index bereits
+  verifiziert (zwei MXL-Domains auf einer Maschine, echte
+  Mehr-Host-Verifikation ist Kapitel-16-Teil-3, wartet auf einen zweiten
+  physischen Host).
+- **Noch offen:** `verbs`/`efa`-Provider mit echter RoCEv2-Hardware
+  (Kapitel 16 Teil 4 — Hardware-Beschaffung entschieden, aber noch nicht
+  verfügbar) sowie eine automatische Placement-Auswahl Fabrics vs.
+  ST2110/SRT durch den Orchestrator (bisher manuelle Node-Wahl).
+- Provider werden per `OMP_FABRICS_PROVIDER=tcp|verbs|efa|shm`
+  konfiguriert — derselbe Code, der Wechsel zu echter RoCEv2-Hardware ist
+  damit eine Konfigurationsfrage, kein Architekturwechsel.
+- **Noch nicht im GUI-Instanz-Katalog** (`deploy/catalog.json`) —
+  `omp-fabrics-gateway` wird bisher von Hand gestartet
+  (`OMP_FABRICS_GATEWAY_ROLE`/`OMP_FABRICS_TARGET_URL` u. a., s.
+  `nodes/omp-fabrics-gateway/src/main.rs`), nicht per Katalog-Kachel wie
+  die übrigen Nodes.
+
+### 9.4 Referenz-/Tutorial-Node
+
+**`nodes/mock`** (Go) — Referenz-Node ohne echte Medientechnik, Begleiter
+zu `docs/NODE-TUTORIAL.md` für eigene Node-Implementierungen; einziger
+mTLS-fähiger Node bisher (Abschnitt 2.1).
+
+## 10. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
   größeren Entscheidung fortgeschrieben)
