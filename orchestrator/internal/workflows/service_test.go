@@ -1414,6 +1414,23 @@ func TestUpdateAllowsPaused(t *testing.T) {
 	}
 }
 
+// Bugfix 2026-07-26 (Nutzerwunsch: einen laufenden Workflow "wie eine
+// Gruppe" betreten und den aktuellen Live-Stand als neue Definition
+// speichern) — Update() akzeptiert jetzt auch "started", s. dortige
+// Doku für die Sicherheitsbegründung.
+func TestUpdateAllowsStarted(t *testing.T) {
+	store := newFakeStore()
+	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	started := wf
+	started.Status = StatusStarted
+	store.Put(started)
+
+	if _, err := svc.Update(wf.ID, "renamed", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}); err != nil {
+		t.Fatalf("Update() from started error = %v, want nil", err)
+	}
+}
+
 // --- Kapitel 12 Teil 3: Export/Import ---
 
 func TestExportRoundTripsDefinition(t *testing.T) {

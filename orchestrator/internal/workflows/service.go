@@ -425,13 +425,24 @@ func uniqueWorkflowName(name string, existing []Workflow) string {
 	}
 }
 
-// Update überschreibt Name und Definition eines Workflows — nur in
+// Update überschreibt Name und Definition eines Workflows — in
 // "stopped"/"paused" (§22.3 Punkt 2 / Kapitel 12 Teil 1,
 // docs/END-GOAL-FEATURES.md §12.3c: "PUT /api/v1/workflows/{id} …
 // §22.3 Punkt 2 einlösen"; Teil 3 §12.3c erweitert das ausdrücklich um
-// "paused"). Gleiche Begründung wie bei Delete: kein Umschreiben der
-// Definition unter noch laufenden Prozessen, die die alte Definition
-// ausführen.
+// "paused") UND jetzt auch "started" (Nutzerwunsch 2026-07-26: im
+// Flow-Editor einen LAUFENDEN Workflow "wie eine Gruppe" betreten,
+// Nodes hinzufügen/verschieben/verbinden, dann "im Workflow
+// speichern"). Das ursprüngliche Sicherheitsargument ("kein
+// Umschreiben der Definition unter noch laufenden Prozessen, die die
+// alte Definition ausführen") gilt für eine BELIEBIGE neue Definition
+// — hier ist der Aufrufer (ui/graph/flow-canvas.ts
+// #saveRunningWorkflowFromLiveTopology) aber bewusst auf "erfasse den
+// AKTUELL laufenden Stand als neue Definition" beschränkt: die neue
+// Definition kann per Konstruktion nie von dem abweichen, was gerade
+// läuft, es gibt also keinen Inkonsistenz-Fall. Sie wirkt erst beim
+// NÄCHSTEN Start/Neustart — die laufenden Prozesse selbst bleiben
+// unberührt. "starting"/"failed" bleiben weiterhin gesperrt (zu
+// transiente/unklare Zustände für diese Garantie).
 func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if err := validate(def); err != nil {
 		return Workflow{}, err
@@ -440,7 +451,7 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	if err != nil {
 		return Workflow{}, err
 	}
-	if wf.Status != StatusStopped && wf.Status != StatusPaused {
+	if wf.Status != StatusStopped && wf.Status != StatusPaused && wf.Status != StatusStarted {
 		return Workflow{}, ErrNotStopped
 	}
 	wf.Name = name

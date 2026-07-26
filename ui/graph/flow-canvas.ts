@@ -317,10 +317,10 @@ export class FlowCanvas extends HTMLElement {
   #scope: string | null = null;
   #selectedIds: Set<string> = new Set();
   #graph: Graph = { nodes: [], edges: [] };
-  // Kapitel 12 Teil 2: laufende Workflows, um ihre Runtime-Nodes als
-  // benannten Rahmen zu zeichnen (s. #buildWorkflowFrames) — unabhängig
-  // vom Gruppenbaum (#groupTree bleibt B5s rein visuelles Konzept, s.
-  // Abgrenzung in docs/END-GOAL-FEATURES.md §12.1).
+  // Kapitel 12 Teil 2: alle Workflows, für ihre kollabierte
+  // Root-Kachel (s. #renderWorkflowTiles) — unabhängig vom Gruppenbaum
+  // (#groupTree bleibt B5s rein visuelles Konzept, s. Abgrenzung in
+  // docs/END-GOAL-FEATURES.md §12.1).
   #workflows: WorkflowSummary[] = [];
   // S6 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md: "Flow-Editor-Filter
   // auf die Nodes des gewählten Workflows, globale Sicht bleibt als
@@ -354,6 +354,22 @@ export class FlowCanvas extends HTMLElement {
   // #renderWorkflowEditScope liest ausschließlich daraus — erst
   // #saveWorkflowEditDraft() sendet den PUT.
   #workflowEditDraft: WorkflowDefinition | null = null;
+  // Nutzerwunsch (2026-07-26, zweite Präzisierung): ein LAUFENDER
+  // Workflow lässt sich genauso betreten wie ein gestoppter/pausierter
+  // (s. #renderRunningWorkflowScope) — echte Nodes, echte Ports, normales
+  // Ziehen/Verbinden/Parameter-Panel, kein Entwurf nötig (jede Änderung
+  // wirkt sofort, wie überall sonst im Editor). Diese beiden Felder
+  // verfolgen nur, welche Nodes NEU in dieser Sitzung zur Workflow-
+  // Ansicht hinzukamen (per Katalog gestartet, während dieser Scope
+  // offen war) — #buildTilesForWorkflowFilter() allein kennt nur
+  // wf.Runtime (den Stand beim letzten Start), ein frisch hinzugefügter
+  // Node gehört noch zu keiner Rolle. #workflowScopePendingInstanceIds
+  // hält Instanz-IDs, deren Node-ID noch unbekannt ist (Start-Response
+  // kommt vor der NMOS-Registrierung zurück, s. #startInstance) — sobald
+  // ein #graph.nodes-Eintrag mit passender instanceId auftaucht, wandert
+  // die ID nach #workflowScopeExtraNodeIds (s. #reconcileWorkflowScopePendingInstances).
+  #workflowScopeExtraNodeIds: Set<string> = new Set();
+  #workflowScopePendingInstanceIds: Set<string> = new Set();
   // Klick-zu-Verbinden-Zustand (kein Drag möglich — Platzhalter-Kacheln
   // haben keine echten Ports, da ihr Node nicht läuft): erster Klick
   // markiert die Quellrolle, zweiter Klick auf eine andere Rolle legt
@@ -704,7 +720,7 @@ export class FlowCanvas extends HTMLElement {
       ...this.#graph.nodes.map((n) => n.id),
       ...Object.keys(this.#groupTree.groups),
       ...this.#workflowEditRolePlaceholderIds(),
-      ...this.#idleWorkflowTileIds(),
+      ...this.#allWorkflowTileIds(),
     ]);
     let changed = false;
     for (const id of Object.keys(this.#positions)) {
@@ -753,7 +769,7 @@ export class FlowCanvas extends HTMLElement {
         ...items.nodeIds,
         ...items.groupIds,
         ...this.#workflowEditRolePlaceholderIds(),
-        ...this.#idleWorkflowTileIds(),
+        ...this.#allWorkflowTileIds(),
       ]
     ) {
       if (!this.#positions[id]) {
@@ -777,12 +793,29 @@ export class FlowCanvas extends HTMLElement {
     return this.#workflowEditDraft.roles.map((role) => pausedPlaceholderId(workflowId, role.name));
   }
 
-  // Eine einzige, kollabierte Kachel-Position pro gestopptem/pausiertem
-  // Workflow (s. #renderIdleWorkflowTiles) — Nutzerwunsch 2026-07-26:
-  // "im Root soll ein Workflow aussehen wie eine Gruppe", also eine
-  // Position pro Workflow statt (wie vorher) eine pro Rolle.
-  #idleWorkflowTileIds(): string[] {
-    return this.#workflows.filter((wf) => this.#isIdleWorkflow(wf)).map((wf) => workflowTileId(wf.id));
+  // Eine einzige, kollabierte Kachel-Position pro Workflow — JEDER
+  // Status, nicht nur gestoppt/pausiert (s. #renderWorkflowTiles):
+  // Nutzerwunsch 2026-07-26: "im Root soll ein Workflow aussehen wie
+  // eine Gruppe", auch während er läuft — also eine Position pro
+  // Workflow statt (wie vorher, nur für laufende) einer pro Runtime-Node.
+  #allWorkflowTileIds(): string[] {
+    return this.#workflows.map((wf) => workflowTileId(wf.id));
+  }
+
+  // Alle Node-IDs, die zur Runtime IRGENDEINES Workflows gehören — am
+  // Root-Scope ausgeschlossen aus der normalen Kachel-Liste
+  // (#buildTilesAtScope), weil sie stattdessen als Teil ihrer
+  // kollabierten Workflow-Kachel gezählt werden (s. dortige Doku, sonst
+  // erschiene ein laufender Workflow doppelt: als Kachel UND als seine
+  // einzelnen Mitglieder).
+  #allWorkflowMemberNodeIds(): Set<string> {
+    const ids = new Set<string>();
+    for (const wf of this.#workflows) {
+      for (const rt of Object.values(wf.runtime ?? {})) {
+        if (rt.nodeId) ids.add(rt.nodeId);
+      }
+    }
+    return ids;
   }
 
   #itemsAtScope(): { nodeIds: string[]; groupIds: string[] } {
@@ -839,14 +872,28 @@ export class FlowCanvas extends HTMLElement {
       this.#showToast("Workflow nicht gefunden.");
       return;
     }
-    if (wf.status !== "stopped" && wf.status !== "paused") {
-      this.#showToast(`Workflow „${wf.name}" läuft — erst stoppen/pausieren, dann bearbeiten.`);
+    // Kapitel 12 Teil 1/orchestrator workflows.Service.Update(): erlaubt
+    // "stopped"/"paused"/"started" (2026-07-26 erweitert, s. dortige
+    // Doku) — die übrigen Status sind transiente Zwischenzustände, in
+    // denen weder eine Vorlagen- noch eine Live-Ansicht sinnvoll wäre.
+    const editable = wf.status === "stopped" || wf.status === "paused" || wf.status === "started";
+    if (!editable) {
+      this.#showToast(`Workflow „${wf.name}" ist gerade „${wf.status}" — kurz warten und erneut versuchen.`);
       return;
     }
     this.#workflowEditId = workflowId;
-    this.#workflowEditDraft = structuredClone(wf.definition);
     this.#connectFromRole = null;
     this.#selectedIds = new Set();
+    if (this.#isIdleWorkflow(wf)) {
+      this.#workflowEditDraft = structuredClone(wf.definition);
+    } else {
+      // Laufender Workflow: keine Vorlage nötig, s.
+      // #renderRunningWorkflowScope — jede Sitzung startet mit einer
+      // leeren Extra-Node-Menge.
+      this.#workflowEditDraft = null;
+      this.#workflowScopeExtraNodeIds = new Set();
+      this.#workflowScopePendingInstanceIds = new Set();
+    }
     this.#assignMissingPositions();
     this.#render();
   }
@@ -855,6 +902,8 @@ export class FlowCanvas extends HTMLElement {
     if (!this.#confirmDiscardDraft()) return;
     this.#workflowEditId = null;
     this.#workflowEditDraft = null;
+    this.#workflowScopeExtraNodeIds = new Set();
+    this.#workflowScopePendingInstanceIds = new Set();
     this.#connectFromRole = null;
     this.#render();
   }
@@ -867,7 +916,14 @@ export class FlowCanvas extends HTMLElement {
   // Rückfrage, kein Datenverlust — anders herum (fälschlich "clean")
   // wäre ein stilles Verwerfen echter Änderungen, deshalb im Zweifel
   // eher zu oft nachfragen als zu selten.
+  //
+  // Für einen LAUFENDEN Workflow gibt es keinen Entwurf (Positions-/
+  // Verbindungsänderungen wirken dort sofort, wie überall sonst) —
+  // "dirty" bedeutet hier: seit dem Betreten wurden neue Nodes
+  // hinzugefügt, die noch nicht per "Im Workflow speichern" in der
+  // Definition verankert sind.
   #isDraftDirty(): boolean {
+    if (this.#workflowScopeExtraNodeIds.size > 0) return true;
     const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
     if (!wf || !this.#workflowEditDraft) return false;
     return JSON.stringify(this.#workflowEditDraft) !== JSON.stringify(wf.definition);
@@ -879,6 +935,85 @@ export class FlowCanvas extends HTMLElement {
   #confirmDiscardDraft(): boolean {
     if (!this.#isDraftDirty()) return true;
     return confirm("Ungespeicherte Änderungen verwerfen?");
+  }
+
+  // Löst #workflowScopePendingInstanceIds gegen den aktuellen
+  // #graph.nodes-Stand auf (s. #startInstance/#workflowScopeExtraNodeIds-
+  // Doku) — am Anfang jedes #renderRunningWorkflowScope()-Laufs, da
+  // dieser nach jedem SSE-getriebenen Refetch neu läuft.
+  #reconcileWorkflowScopePendingInstances() {
+    if (this.#workflowScopePendingInstanceIds.size === 0) return;
+    for (const node of this.#graph.nodes) {
+      if (node.instanceId && this.#workflowScopePendingInstanceIds.has(node.instanceId)) {
+        this.#workflowScopePendingInstanceIds.delete(node.instanceId);
+        this.#workflowScopeExtraNodeIds.add(node.id);
+      }
+    }
+  }
+
+  // Nutzerwunsch (2026-07-26, zweite Präzisierung): "wenn der Workflow
+  // gestartet ist... doppelklicke... darin bin und Änderungen vornehme
+  // (Position, neues Node)... muss ich das im Workflow speichern
+  // können." Zeigt die ECHTEN Runtime-Nodes dieses Workflows (+ diese
+  // Sitzung neu hinzugekommene, s. #workflowScopeExtraNodeIds) über die
+  // GANZ NORMALE Kachel-/Kanten-Pipeline (#renderTile/#renderEdge) —
+  // echte Ports, Ziehen, Verbinden per Port-Ziehen, Parameter-Panel,
+  // nichts davon ist neu, nur die Knotenmenge ist gefiltert (exakt das
+  // Muster von #buildTilesForWorkflowFilter, dessen #portLocation-
+  // Aufbau #renderEdge() implizit auf sichtbare Kanten begrenzt, s.
+  // dort). Positions-/Verbindungsänderungen wirken sofort wie überall
+  // im Editor; "Im Workflow speichern"
+  // (#saveRunningWorkflowFromLiveTopology) erfasst diesen Stand
+  // zusätzlich als neue Definition fürs nächste Mal.
+  #renderRunningWorkflowScope() {
+    const workflowId = this.#workflowEditId;
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) {
+      this.#workflowEditId = null;
+      this.#render();
+      return;
+    }
+    this.#reconcileWorkflowScopePendingInstances();
+
+    const memberIds = new Set(
+      Object.values(wf.runtime ?? {})
+        .map((rt) => rt.nodeId)
+        .filter((id): id is string => !!id),
+    );
+    for (const id of this.#workflowScopeExtraNodeIds) memberIds.add(id);
+
+    const tiles: TileSpec[] = this.#graph.nodes
+      .filter((n) => memberIds.has(n.id))
+      .map((n) => ({
+        id: n.id,
+        label: n.label,
+        inputs: n.inputs,
+        outputs: n.outputs,
+        kind: "node" as const,
+        health: n.health,
+        instanceId: n.instanceId,
+      }));
+
+    this.#portLocation.clear();
+    this.#tileHeightById.clear();
+    for (const tile of tiles) {
+      const hasPreview = !!this.#hasPreviewById.get(tile.id);
+      this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length, hasPreview));
+      tile.inputs.forEach((p, i) =>
+        this.#portLocation.set(p.id, { tileId: tile.id, side: "input", index: i, count: tile.inputs.length })
+      );
+      tile.outputs.forEach((p, i) =>
+        this.#portLocation.set(p.id, { tileId: tile.id, side: "output", index: i, count: tile.outputs.length })
+      );
+    }
+
+    for (const tile of tiles) {
+      this.#viewportGroup.appendChild(this.#renderTile(tile));
+    }
+    for (const edge of this.#graph.edges) {
+      const edgeEl = this.#renderEdge(edge);
+      if (edgeEl) this.#viewportGroup.insertBefore(edgeEl, this.#viewportGroup.firstChild);
+    }
   }
 
   // Bug 2: Bearbeiten-Modus-Renderpfad — eine Kachel pro Rolle
@@ -1128,6 +1263,115 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
+  // Nutzerwunsch (2026-07-26, zweite Präzisierung, wörtlich): "wenn ich
+  // dann doppelklicke und darin bin und Änderungen vornehme (Position,
+  // neues Node) muss ich die Möglichkeit haben, das im Workflow zu
+  // speichern." Leitet Rollen+Verbindungen aus dem AKTUELLEN Live-Stand
+  // ab — Runtime-Mitglieder plus diese Sitzung neu hinzugekommene Extra-
+  // Nodes (#workflowScopeExtraNodeIds) — exakt nach demselben Muster wie
+  // #saveGroupAsWorkflow(), aber: (a) PUT auf den EXISTIERENDEN Workflow
+  // statt POST eines neuen, (b) bereits bekannte Rollen behalten ihren
+  // Namen (aus wf.runtime aufgelöst) statt neu vergeben zu werden. Setzt
+  // voraus, dass workflows.Service.Update() jetzt auch "started"
+  // akzeptiert (2026-07-26 gelockert, s. dortige Doku) — sicher, weil
+  // die neue Definition per Konstruktion exakt dem entspricht, was
+  // gerade läuft; sie wirkt erst beim NÄCHSTEN Start, nicht rückwirkend
+  // auf die laufenden Prozesse.
+  async #saveRunningWorkflowFromLiveTopology() {
+    const workflowId = this.#workflowEditId;
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!workflowId || !wf) return;
+
+    const existingRoleNameByNodeId = new Map<string, string>();
+    for (const [roleName, rt] of Object.entries(wf.runtime ?? {})) {
+      if (rt.nodeId) existingRoleNameByNodeId.set(rt.nodeId, roleName);
+    }
+    const memberIds = new Set(existingRoleNameByNodeId.keys());
+    for (const id of this.#workflowScopeExtraNodeIds) memberIds.add(id);
+
+    let instances: LauncherInstance[];
+    try {
+      const res = await apiFetch("/api/v1/instances");
+      instances = res.ok ? ((await res.json()) as LauncherInstance[]) : [];
+    } catch {
+      instances = [];
+    }
+    const instanceById = new Map(instances.map((i) => [i.id, i]));
+
+    const roleNameByNodeId = new Map<string, string>();
+    const roles: { name: string; nodeType: string; hostId?: string }[] = [];
+    const missing: string[] = [];
+    const usedNames = new Set<string>(existingRoleNameByNodeId.values());
+
+    for (const nodeId of memberIds) {
+      const node = this.#graph.nodes.find((n) => n.id === nodeId);
+      const inst = node?.instanceId ? instanceById.get(node.instanceId) : undefined;
+      if (!node || !inst) {
+        missing.push(node?.label ?? nodeId);
+        continue;
+      }
+      const roleName = existingRoleNameByNodeId.get(nodeId) ?? uniqueRoleName(inst.type, usedNames);
+      usedNames.add(roleName);
+      roleNameByNodeId.set(nodeId, roleName);
+      roles.push({ name: roleName, nodeType: inst.type, hostId: inst.hostId });
+    }
+
+    if (missing.length > 0) {
+      this.#showToast(
+        `Im Workflow speichern nicht möglich — ohne Launcher-Instanz (nicht über den Katalog gestartet): ${
+          missing.join(", ")
+        }`,
+      );
+      return;
+    }
+    if (roles.length === 0) {
+      this.#showToast("Keine speicherbaren Nodes in diesem Workflow.");
+      return;
+    }
+
+    // Gleiche fromSender/toReceiver-Logik wie #saveGroupAsWorkflow: nur
+    // gesetzt, wenn die jeweilige Node mehr als einen Port auf dieser
+    // Seite hat (s. dortige ausführliche Begründung).
+    const portOwner = new Map<string, { nodeId: string; label: string; siblingCount: number }>();
+    for (const node of this.#graph.nodes) {
+      for (const p of node.outputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.outputs.length });
+      for (const p of node.inputs) portOwner.set(p.id, { nodeId: node.id, label: p.label, siblingCount: node.inputs.length });
+    }
+
+    const connections: { fromRole: string; fromSender?: string; toRole: string; toReceiver?: string }[] = [];
+    for (const edge of this.#graph.edges) {
+      const from = portOwner.get(edge.fromSender);
+      const to = portOwner.get(edge.toReceiver);
+      if (!from || !to) continue;
+      if (!memberIds.has(from.nodeId) || !memberIds.has(to.nodeId)) continue;
+      connections.push({
+        fromRole: roleNameByNodeId.get(from.nodeId)!,
+        fromSender: from.siblingCount > 1 ? from.label : undefined,
+        toRole: roleNameByNodeId.get(to.nodeId)!,
+        toReceiver: to.siblingCount > 1 ? to.label : undefined,
+      });
+    }
+
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wf.name, definition: { ...wf.definition, roles, connections } }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Im Workflow speichern fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      this.#workflowScopeExtraNodeIds = new Set();
+      this.#workflowScopePendingInstanceIds = new Set();
+      this.#showToast("Workflow gespeichert (wirkt beim nächsten Start).");
+      await this.#queueFetchAndRender();
+    } catch (err) {
+      this.#showToast(`Im Workflow speichern fehlgeschlagen: ${err}`);
+    }
+  }
+
   // Flache Node-Kacheln nur der Runtime-Rollen eines einzelnen
   // Workflows — bewusst ohne Gruppen-/Scope-Auflösung (s. #workflowFilter
   // -Doku oben): ein gefilterter Workflow zeigt immer seine tatsächlichen
@@ -1160,7 +1404,17 @@ export class FlowCanvas extends HTMLElement {
     const items = this.#itemsAtScope();
     const tiles: TileSpec[] = [];
 
+    // Nutzerwunsch (2026-07-26): jeder Workflow erscheint im Root als
+    // EINE kollabierte Kachel (s. #renderWorkflowTiles), nicht mehr
+    // zusätzlich als seine einzelnen Runtime-Nodes — sonst erschiene ein
+    // laufender Workflow doppelt. Nur am Root relevant: innerhalb einer
+    // B5-Gruppe (#scope !== null) bleiben ihre Mitglieder normal
+    // sichtbar, auch wenn die Gruppe zugleich über "Als Workflow
+    // speichern" einen Workflow repräsentiert (Kapitel 12 Teil 2).
+    const workflowMemberIds = this.#scope === null ? this.#allWorkflowMemberNodeIds() : new Set<string>();
+
     for (const nodeId of items.nodeIds) {
+      if (workflowMemberIds.has(nodeId)) continue;
       const node = this.#graph.nodes.find((n) => n.id === nodeId);
       if (!node) continue;
       tiles.push({
@@ -1199,14 +1453,21 @@ export class FlowCanvas extends HTMLElement {
     this.#applyViewportTransform();
     this.#renderBreadcrumb();
 
-    // Bug 2 (2026-07-24): Bearbeiten-Modus ist ein eigener Renderpfad,
-    // kein weiterer Scope innerhalb #buildTilesAtScope() — der bearbeitete
-    // Workflow hat i. d. R. keine laufenden Runtime-Nodes mehr (gestoppt/
-    // pausiert), es gibt also nichts, worüber #buildTilesAtScope() anhand
-    // von #graph navigieren könnte. Skippt Rahmen/Platzhalter/normale
-    // Kacheln komplett.
+    // Bug 2 (2026-07-24, erweitert 2026-07-26): Bearbeiten-Modus ist ein
+    // eigener Renderpfad, kein weiterer Scope innerhalb
+    // #buildTilesAtScope(). Zwei Varianten je nach Status: ein gestoppter/
+    // pausierter Workflow hat keine laufenden Runtime-Nodes (Vorlagen-
+    // Rollen als Platzhalter, s. #renderWorkflowEditScope); ein
+    // LAUFENDER Workflow zeigt dagegen seine echten Nodes mit echten
+    // Ports (s. #renderRunningWorkflowScope) — beide skippen die normale
+    // Root-Kachel-Liste komplett.
     if (this.#workflowEditId) {
-      this.#renderWorkflowEditScope();
+      const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+      if (wf && !this.#isIdleWorkflow(wf)) {
+        this.#renderRunningWorkflowScope();
+      } else {
+        this.#renderWorkflowEditScope();
+      }
       return;
     }
 
@@ -1225,10 +1486,7 @@ export class FlowCanvas extends HTMLElement {
       );
     }
 
-    for (const frame of this.#buildWorkflowFrames(tiles)) {
-      this.#viewportGroup.appendChild(frame);
-    }
-    for (const workflowTile of this.#renderIdleWorkflowTiles()) {
+    for (const workflowTile of this.#renderWorkflowTiles()) {
       this.#viewportGroup.appendChild(workflowTile);
     }
     for (const tile of tiles) {
@@ -1270,95 +1528,38 @@ export class FlowCanvas extends HTMLElement {
     return wf.status === "stopped" || wf.status === "paused";
   }
 
-  // Nur noch für LAUFENDE Workflows (Nutzerwunsch 2026-07-26: gestoppte/
-  // pausierte Workflows bekommen stattdessen eine kollabierte Kachel wie
-  // eine Gruppe, s. #renderIdleWorkflowTiles, statt eines Rahmens um
-  // ausgebreitete Platzhalter-Kacheln).
-  #buildWorkflowFrames(tiles: TileSpec[]): SVGGElement[] {
-    const visibleIds = new Set(tiles.map((t) => t.id));
-    const frames: SVGGElement[] = [];
-
-    for (const wf of this.#workflowsInScope()) {
-      if (this.#isIdleWorkflow(wf)) continue;
-      const ids = Object.values(wf.runtime ?? {})
-        .map((rt) => rt.nodeId)
-        .filter((id): id is string => !!id);
-      if (ids.length === 0) continue;
-      if (!ids.every((id) => visibleIds.has(id))) continue;
-      if (!ids.every((id) => this.#positions[id])) continue;
-
-      const boxes = ids.map((id) => {
-        const pos = this.#positions[id];
-        const height = this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
-        return { minX: pos.x, minY: pos.y, maxX: pos.x + NODE_WIDTH, maxY: pos.y + height };
-      });
-
-      const PAD = 16;
-      const LABEL_HEIGHT = 18;
-      const minX = Math.min(...boxes.map((b) => b.minX)) - PAD;
-      const minY = Math.min(...boxes.map((b) => b.minY)) - PAD - LABEL_HEIGHT;
-      const maxX = Math.max(...boxes.map((b) => b.maxX)) + PAD;
-      const maxY = Math.max(...boxes.map((b) => b.maxY)) + PAD;
-      const color = WORKFLOW_FRAME_COLORS[wf.status] ?? "#5b9bd5";
-
-      const g = document.createElementNS(SVG_NS, "g");
-      g.setAttribute("data-role", "workflow-frame");
-      g.setAttribute("data-workflow-id", wf.id);
-
-      const rect = document.createElementNS(SVG_NS, "rect");
-      rect.setAttribute("x", String(minX));
-      rect.setAttribute("y", String(minY + LABEL_HEIGHT));
-      rect.setAttribute("width", String(maxX - minX));
-      rect.setAttribute("height", String(maxY - minY - LABEL_HEIGHT));
-      rect.setAttribute("rx", "8");
-      rect.setAttribute("fill", "none");
-      rect.setAttribute("stroke", color);
-      rect.setAttribute("stroke-width", "2");
-      rect.setAttribute("stroke-dasharray", "8 4");
-      g.appendChild(rect);
-
-      const label = document.createElementNS(SVG_NS, "text");
-      label.setAttribute("data-role", "workflow-frame-label");
-      label.setAttribute("x", String(minX + 4));
-      label.setAttribute("y", String(minY + LABEL_HEIGHT - 4));
-      label.setAttribute("fill", color);
-      label.setAttribute("font-size", "11");
-      label.textContent = `▭ ${wf.name} (${wf.status})`;
-      g.appendChild(label);
-
-      frames.push(g);
-    }
-    return frames;
-  }
-
-  // Nutzerwunsch (2026-07-26, wörtlich): "ein Workflow soll im Root (oder
-  // Parent) aussehen wie eine Gruppe. Mit Doppelklick in die Gruppe/
-  // Workflow. Dann kann man ihn wie eine Gruppe bearbeiten. Diesen
-  // Status kann man speichern/updaten." Ersetzt die vorherige "Rahmen +
-  // einzelne Platzhalter-Kacheln"-Darstellung für gestoppte/pausierte
-  // Workflows durch EINE kollabierte Kachel pro Workflow, optisch wie
-  // eine echte Gruppen-Kachel (gleiche Farben wie der isGroup-Zweig in
-  // #renderTile). Doppelklick öffnet aber enterWorkflowEditScope() statt
-  // #enterScope() — ein Workflow ist keine echte B5-Gruppe (viele haben
-  // gar keine, s. #workflowEditId-Doku), daher ein eigener, aber optisch
-  // identischer Renderpfad statt Wiederverwendung der TileSpec/
-  // #renderTile-Pipeline (deren dblclick fest auf #enterScope zeigt und
-  // eine echte groupTree-ID erwartet). Nur im Root-Scope — ein Workflow
-  // ist nicht innerhalb einer Gruppe verschachtelbar.
-  #renderIdleWorkflowTiles(): SVGGElement[] {
+  // Nutzerwunsch (2026-07-26, wörtlich, zweite Präzisierung): "ein
+  // Workflow soll im Root (oder Parent) aussehen wie eine Gruppe...
+  // aber wenn er läuft, ist er im Floweditor maximiert und sieht nicht
+  // aus wie eine geschlossene Gruppe. Soll aber so aussehen (andere
+  // Farbe)." Jeder Workflow — unabhängig vom Status — erscheint im
+  // Root als EINE kollabierte Kachel, optisch wie eine echte
+  // Gruppen-Kachel (gleiche Form/Farben wie der isGroup-Zweig in
+  // #renderTile), nur der Rahmen wechselt die Farbe je Status
+  // (WORKFLOW_FRAME_COLORS, bisher nur für den jetzt entfernten
+  // laufenden-Rahmen genutzt). Doppelklick öffnet aber
+  // enterWorkflowEditScope() statt #enterScope() — ein Workflow ist
+  // keine echte B5-Gruppe (viele haben gar keine, s.
+  // #workflowEditId-Doku), daher ein eigener, aber optisch identischer
+  // Renderpfad statt Wiederverwendung der TileSpec/#renderTile-Pipeline
+  // (deren dblclick fest auf #enterScope zeigt und eine echte
+  // groupTree-ID erwartet). Nur im Root-Scope — ein Workflow ist nicht
+  // innerhalb einer Gruppe verschachtelbar.
+  #renderWorkflowTiles(): SVGGElement[] {
     if (this.#scope !== null) return [];
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const tiles: SVGGElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
-      if (!this.#isIdleWorkflow(wf)) continue;
       const id = workflowTileId(wf.id);
       const pos = this.#positions[id];
       if (!pos) continue;
+      const color = WORKFLOW_FRAME_COLORS[wf.status] ?? "#5b9bd5";
 
       const g = document.createElementNS(SVG_NS, "g");
       g.setAttribute("data-role", "workflow-tile");
       g.setAttribute("data-workflow-id", wf.id);
+      g.setAttribute("data-workflow-status", wf.status);
       g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
 
       const body = document.createElementNS(SVG_NS, "rect");
@@ -1366,7 +1567,7 @@ export class FlowCanvas extends HTMLElement {
       body.setAttribute("height", String(height));
       body.setAttribute("rx", "4");
       body.setAttribute("fill", "#2d3a4d");
-      body.setAttribute("stroke", "#5b9bd5");
+      body.setAttribute("stroke", color);
       body.setAttribute("stroke-width", "2");
       g.appendChild(body);
 
@@ -1395,7 +1596,7 @@ export class FlowCanvas extends HTMLElement {
       const subtitle = document.createElementNS(SVG_NS, "text");
       subtitle.setAttribute("x", "8");
       subtitle.setAttribute("y", String(HEADER_HEIGHT + 16));
-      subtitle.setAttribute("fill", "#999");
+      subtitle.setAttribute("fill", color);
       subtitle.setAttribute("font-size", "11");
       subtitle.setAttribute("pointer-events", "none");
       subtitle.textContent = `${wf.status} — Doppelklick zum Bearbeiten`;
@@ -1439,21 +1640,33 @@ export class FlowCanvas extends HTMLElement {
       const sep = document.createElement("span");
       sep.textContent = "›";
       this.#breadcrumbBar.appendChild(sep);
+      const isLive = !!wf && !this.#isIdleWorkflow(wf);
       const label = document.createElement("span");
-      label.textContent = `Bearbeiten: ${wf?.name ?? this.#workflowEditId}`;
+      label.textContent = isLive
+        ? `Bearbeiten (live): ${wf?.name ?? this.#workflowEditId}`
+        : `Bearbeiten: ${wf?.name ?? this.#workflowEditId}`;
       this.#breadcrumbBar.appendChild(label);
 
       // Nutzerwunsch (2026-07-26): expliziter Speichern-Button statt
       // PUT bei jeder einzelnen Mutation (s. #saveWorkflowEditDraft-
-      // Doku) — nur aktiv, wenn der Entwurf tatsächlich vom gespeicherten
-      // Stand abweicht.
+      // Doku) — nur aktiv, wenn etwas ungespeichert ist
+      // (#isDraftDirty() deckt beide Fälle ab: Entwurf-Abweichung beim
+      // gestoppten/pausierten Workflow, neue Extra-Nodes beim
+      // laufenden). Bei einem laufenden Workflow speichert der Button
+      // den aktuellen LIVE-Stand (#saveRunningWorkflowFromLiveTopology)
+      // statt eines Entwurfs — Positions-/Verbindungsänderungen
+      // wirken dort ohnehin schon sofort, nur neue Nodes müssen noch
+      // in der Definition verankert werden.
       const dirty = this.#isDraftDirty();
       const saveBtn = document.createElement("button");
-      saveBtn.textContent = "Speichern";
+      saveBtn.textContent = isLive ? "Im Workflow speichern" : "Speichern";
       saveBtn.style.cssText = `margin-left:auto;font-size:11px;cursor:pointer;${dirty ? "font-weight:bold;" : ""}`;
       saveBtn.disabled = !dirty;
       saveBtn.title = dirty ? "" : "Keine ungespeicherten Änderungen";
-      saveBtn.addEventListener("click", () => this.#saveWorkflowEditDraft());
+      saveBtn.addEventListener("click", () => {
+        if (isLive) this.#saveRunningWorkflowFromLiveTopology();
+        else this.#saveWorkflowEditDraft();
+      });
       this.#breadcrumbBar.appendChild(saveBtn);
 
       const exitBtn = document.createElement("button");
@@ -2841,15 +3054,22 @@ export class FlowCanvas extends HTMLElement {
         row.appendChild(hostSelect);
       }
 
-      // Bug 2: im Bearbeiten-Modus fügt der Katalog-Button eine Rolle zur
-      // Workflow-Definition hinzu statt eine neue Instanz zu starten —
-      // der Host-Selector greift hier nicht (Rollen bekommen ihren Host
-      // erst beim nächsten Workflow-Start über den Launcher, s.
-      // orchestrator/internal/workflows/service.go runStart).
+      // Bug 2: im Bearbeiten-Modus eines GESTOPPTEN/PAUSIERTEN Workflows
+      // fügt der Katalog-Button eine Rolle zur Definition hinzu statt
+      // eine Instanz zu starten — der Host-Selector greift hier nicht
+      // (Rollen bekommen ihren Host erst beim nächsten Workflow-Start
+      // über den Launcher, s. orchestrator/internal/workflows/
+      // service.go runStart). Bei einem LAUFENDEN Workflow (s.
+      // #renderRunningWorkflowScope) ist es dagegen ein ganz normaler
+      // Instanz-Start — #startInstance() selbst erkennt den offenen
+      // Live-Scope und ordnet die neue Instanz dort zu.
       btn.addEventListener("click", () => {
         if (this.#workflowEditId) {
-          this.#addWorkflowRole(entry.type);
-          return;
+          const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+          if (wf && this.#isIdleWorkflow(wf)) {
+            this.#addWorkflowRole(entry.type);
+            return;
+          }
         }
         this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined);
       });
@@ -3038,6 +3258,19 @@ export class FlowCanvas extends HTMLElement {
       // Palette dagegen zeigt die Instanz (laufend oder später
       // abgestürzt) unabhängig von einer NMOS-Registrierung, deshalb
       // hier explizit neu rendern.
+      //
+      // Läuft gerade der Live-Scope eines laufenden Workflows (s.
+      // #renderRunningWorkflowScope), soll die neue Instanz dort
+      // erscheinen, sobald sie sich registriert — die Antwort liefert
+      // die Instanz-ID sofort (vor der NMOS-Registrierung), die
+      // zugehörige Node-ID kennen wir erst, sobald sie in #graph.nodes
+      // auftaucht (s. #reconcileWorkflowScopePendingInstances, am
+      // Anfang jedes #renderRunningWorkflowScope()-Laufs aufgerufen).
+      const scopedWf = this.#workflowEditId ? this.#workflows.find((w) => w.id === this.#workflowEditId) : undefined;
+      if (scopedWf && !this.#isIdleWorkflow(scopedWf)) {
+        const inst = (await res.json()) as { id: string };
+        this.#workflowScopePendingInstanceIds.add(inst.id);
+      }
       this.#showToast(`${type} wird gestartet …`);
       await this.#renderPalette();
     } catch (err) {
@@ -3131,11 +3364,11 @@ function workflowEditRoleName(workflowId: string, id: string): string | null {
   return id.startsWith(prefix) ? id.slice(prefix.length) : null;
 }
 
-// Position der EINEN kollabierten Wurzel-Kachel eines gestoppten/
-// pausierten Workflows (s. #renderIdleWorkflowTiles) — eigener
-// Namensraum ("workflow-tile:"), damit er nicht mit einer
-// Rollen-Platzhalter-ID (pausedPlaceholderId) kollidieren kann, falls
-// ein Workflow zufällig eine Rolle namens z. B. dem eigenen Namen hätte.
+// Position der EINEN kollabierten Wurzel-Kachel eines Workflows, jeder
+// Status (s. #renderWorkflowTiles) — eigener Namensraum
+// ("workflow-tile:"), damit er nicht mit einer Rollen-Platzhalter-ID
+// (pausedPlaceholderId) kollidieren kann, falls ein Workflow zufällig
+// eine Rolle namens z. B. dem eigenen Namen hätte.
 function workflowTileId(workflowId: string): string {
   return `workflow-tile:${workflowId}`;
 }

@@ -12979,3 +12979,109 @@ danach). `deno check` über alle drei Dateien grün.
 
 **Umgesetzt in:** `ui/graph/flow-canvas.ts`. Lokal committet, **nicht
 gepusht** (User muss erneut um Push bitten).
+
+## 2026-07-26 (Nachtrag 96) — Bug-2-Nachmeldung 3: laufende Workflows
+ebenfalls als kollabierte Kachel, live betretbar mit echten Nodes/Ports
+
+Nutzer, wörtlich: "warum nutzt du im Workflow (Floweditor) nicht das
+Verhalten des normalen Floweditors? Es sind blau strichlierte
+Verbindungslinien, die Nodes sehen anders aus (keine Sourcen/Sink-
+Ports), kein Property-Panel... warum???" — Antwort recherchiert und per
+Fork bestätigt (`nodes/omp-node-sdk/src/node.rs`,
+`orchestrator/internal/graph/graph.go buildNodes`): es gibt **keine**
+statische Port-Beschreibung pro Node-**Typ** irgendwo im Projekt — ein
+Node registriert seine Sender/Receiver ausschließlich zur Laufzeit bei
+NMOS, ein gestoppter Workflow hat also keine Ports, die man zeigen
+könnte. Sogar ein LAUFENDER Video-Mixer/Switcher hat keine echten IS-04-
+Receiver-Ports (Crosspoint-Eingänge laufen über eine Params-RPC, nicht
+IS-05) — synthetische Ports wären aktiv irreführend gewesen. Per
+AskUserQuestion bestätigt: bei einem GESTOPPTEN/PAUSIERTEN Workflow
+bleibt die vereinfachte Kachel-zu-Kachel-Darstellung (Nachtrag 95)
+unverändert.
+
+**Zweite Präzisierung, direkt im Anschluss:** "wenn der Workflow
+gestartet ist, ist er im Floweditor maximiert und sieht nicht aus wie
+eine geschlossene Gruppe. Soll aber so aussehen (andere Farbe). Aber
+wenn ich dann doppelklicke und darin bin und Änderungen vornehme (Position
+der Nodes verändere, neues Node hinzufüge) muss ich die Möglichkeit
+haben, das im Workflow zu speichern." Für einen LAUFENDEN Workflow gibt
+es (anders als beim gestoppten) echte Nodes mit echten Ports — hier war
+die richtige Antwort also nicht "synthetisch nachbilden", sondern "die
+bereits vorhandene, echte Editor-Pipeline direkt wiederverwenden".
+
+**Per AskUserQuestion entschieden:** "Speichern" bei einem laufenden
+Workflow erfasst den aktuellen Live-Stand als neue Definition (wie das
+bestehende "Als Workflow speichern" für Gruppen), wirkt aber nur als
+Vorlage für den nächsten Start — laufende Prozesse bleiben unberührt.
+Dafür musste `workflows.Service.Update()`s Statussperre gezielt gelockert
+werden.
+
+**Backend (`orchestrator/internal/workflows/service.go`):** `Update()`
+akzeptiert jetzt zusätzlich zu stopped/paused auch `started`.
+Ursprüngliches Sicherheitsargument ("kein Umschreiben der Definition
+unter noch laufenden Prozessen") gilt nicht mehr, weil die neue
+Definition hier per Konstruktion exakt dem entspricht, was gerade läuft
+— kein Inkonsistenz-Fall möglich. Neuer Test `TestUpdateAllowsStarted`.
+
+**Frontend (`ui/graph/flow-canvas.ts`), vollständige Vereinheitlichung:**
+- `#buildWorkflowFrames()` (Rahmen um laufende Runtime-Kacheln)
+  komplett entfernt. `#renderIdleWorkflowTiles()` → `#renderWorkflowTiles()`
+  umbenannt und auf ALLE Status erweitert — jeder Workflow ist jetzt
+  immer EINE kollabierte Kachel im Root, Rahmenfarbe aus
+  `WORKFLOW_FRAME_COLORS[wf.status]` (grün=started, grau=stopped,
+  blau=paused, orange=starting/pausing/stopping, rot=failed).
+- `#buildTilesAtScope()` schließt jetzt am Root-Scope alle Node-IDs aus,
+  die zur Runtime irgendeines Workflows gehören (`#allWorkflowMemberNodeIds()`)
+  — sonst erschiene ein laufender Workflow doppelt (als Kachel UND als
+  seine einzelnen Nodes). Nur am Root, nicht innerhalb einer B5-Gruppe
+  (Kapitel 12 Teil 2: eine Gruppe kann weiterhin zugleich einen
+  Workflow repräsentieren, ihre Mitglieder bleiben beim Betreten normal
+  sichtbar).
+- `enterWorkflowEditScope()` akzeptiert jetzt auch "started". Neuer
+  Renderpfad `#renderRunningWorkflowScope()`: baut die Kachel-Liste aus
+  `wf.Runtime`-Mitgliedern + `#workflowScopeExtraNodeIds` (diese Sitzung
+  neu hinzugekommene Nodes) und rendert sie über die GANZ NORMALE
+  `#renderTile()`/`#renderEdge()`-Pipeline — identisch zum Rest des
+  Editors (echte Ports, Ziehen, Verbinden per Port-Ziehen, Parameter-
+  Panel-Klick). Katalog-"+"-Button startet bei einem laufenden Workflow
+  wieder eine normale Instanz (vorher fälschlich auf den Entwurfs-Pfad
+  umgeleitet) — `#startInstance()` merkt sich die zurückgelieferte
+  Instanz-ID in `#workflowScopePendingInstanceIds`, sobald der
+  zugehörige Node in `#graph.nodes` auftaucht (`instanceId`-Abgleich,
+  `#reconcileWorkflowScopePendingInstances()`, am Anfang jedes
+  Live-Scope-Renders), wandert er nach `#workflowScopeExtraNodeIds`.
+- Neue `#saveRunningWorkflowFromLiveTopology()`: leitet Rollen +
+  Verbindungen aus dem aktuellen Live-Stand ab — exakt dasselbe Muster
+  wie das bestehende `#saveGroupAsWorkflow()` (Instanz-Auflösung über
+  `/api/v1/instances`, `fromSender`/`toReceiver` nur bei >1 Port),
+  behält aber bestehende Rollennamen bei (aus `wf.Runtime` aufgelöst)
+  statt sie neu zu vergeben, und PUTet auf den bestehenden Workflow
+  statt einen neuen anzulegen.
+- `#isDraftDirty()`/Speichern-Button decken jetzt beide Fälle ab: beim
+  Entwurf (gestoppt/pausiert) Objekt-Vergleich, beim laufenden Workflow
+  einfach `#workflowScopeExtraNodeIds.size > 0` (Positions-/
+  Verbindungsänderungen wirken dort ohnehin sofort, nur neue Nodes
+  müssen noch verankert werden). Breadcrumb zeigt "Bearbeiten (live):
+  <name>", Button-Text "Im Workflow speichern".
+
+**Live per CDP verifiziert — echte, tatsächlich laufende "Regie 1"
+(gestartet, 6 Rollen, danach wieder gestoppt und zurückgesetzt):** Root
+zeigt die Kachel grün umrandet (`#4caf50`, Status "started"), daneben
+bleibt der unabhängige `omp-registry`-Node normal als eigene Kachel
+sichtbar (Ausschluss wirkt selektiv). Doppelklick öffnet 6 echte
+Node-Kacheln mit 11 echten Ports und der echten Bezier-Kante
+Mixer→Viewer; Klick auf den Mixer öffnet sein reales Parameter-Panel
+(PGM/PST/CUT/AUTO). Ein per Katalog gestarteter zusätzlicher Viewer
+erscheint automatisch in der Ansicht (7 Kacheln), Speichern-Button wird
+aktiv, Server-Rollenzahl bleibt vor dem Klick bei 6. Nach "Im Workflow
+speichern": Server hat 7 Rollen (bestehende Namen unverändert,
+`omp-viewer` neu), Workflow-Status bleibt `started` (unberührt von der
+Definitionsänderung, wie zugesagt). Aufräumen: Test-Instanz gestoppt,
+Workflow gestoppt, Definition auf den ursprünglichen 6-Rollen-Stand
+zurückgesetzt. `go build`/`go vet`/`go test` grün (einziger
+Fehlschlag weiterhin der vorbestehende, unabhängige
+`TestHistoryRawWindowReturnsSamplesWithinCutoff`); `deno check` grün.
+
+**Umgesetzt in:** `orchestrator/internal/workflows/{service.go,
+service_test.go}`, `ui/graph/flow-canvas.ts`. Lokal committet, **nicht
+gepusht** (User muss erneut um Push bitten).
