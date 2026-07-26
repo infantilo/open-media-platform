@@ -12599,3 +12599,87 @@ dokumentiert für eine künftige Sitzung.
 
 **Phase C (`UMSETZUNG.md` §2) ist mit C22 vollständig abgeschlossen** —
 kein einziger C-Schritt in der Statusliste ist mehr offen.
+
+---
+
+## 2026-07-26 (Nachtrag 91) — Fünf Nutzer-Bugreports: zwei behoben (Tab-
+Styling, Geister-Kacheln), drei root-caused/eingeordnet
+
+**Anlass:** Nutzer meldete fünf Beobachtungen aus dem Live-Betrieb.
+
+1. **Admin-Tab nach Reload fälschlich hervorgehoben — behoben.**
+   `ui/shell/app-shell.ts`: der Administration-Tab wird erst asynchron
+   nach `whoami()` angehängt, nach dem bereits gelaufenen synchronen
+   `#switchTab("flow")` — sein Button bekam nie `TAB_BUTTON_BASE`/den
+   aktiv-inaktiv-Zustand zugewiesen, zeigte also die native (hellgraue)
+   Browser-Button-Optik statt der bewusst dunkel gestylten Inaktiv-Tabs
+   und sah dadurch aus wie "ausgewählt". Fix: gemeinsamer
+   `#styleTabButton()`-Helper, auch beim nachträglichen Anhängen
+   aufgerufen.
+2. **Workflow im Flow-Editor nicht wie eine Gruppe frei bearbeitbar
+   (Elemente hinzufügen/entfernen/verbinden) — eingeordnet, nicht
+   behoben.** `#buildWorkflowFrames()` (`ui/graph/flow-canvas.ts`) ist
+   laut eigener Doku "rein additiv/lesend" — der gestrichelte Rahmen um
+   die Rollen-Kacheln eines Workflows ist reine Dekoration, kein
+   navigierbarer Scope wie eine B5-Gruppe. Ein Workflow, der über eine
+   gruppierte Kachel + "Als Workflow speichern" entstand, bleibt über
+   die zugrunde liegende Gruppe tatsächlich frei editierbar (Gruppen-
+   Scope betreten, Mitglieder ändern) — ein Workflow, der über
+   "Grafisch entwerfen"/das Textformular entsteht, hat dagegen gar
+   keine zugehörige Gruppe und lässt sich nur über die (nur im
+   gestoppten Zustand nutzbare) Rollen-/Verbindungs-Definition ändern,
+   nicht live wie eine Gruppe. Echtes "Workflow-Rahmen = editierbarer
+   Scope" wäre ein größerer Feature-Umbau, keine kleine Korrektur —
+   Scope-Frage an den Nutzer zurückgegeben statt spekulativ gebaut.
+3. **Workflow-Vorschaubild zeigt kein sinnvolles Bild — root-caused,
+   nicht behoben.** `captureWorkflowThumbnail()`
+   (`orchestrator/internal/workflows/thumbnail.go`) fängt korrekt einen
+   echten MJPEG-Frame der ersten Rolle mit `previewUrl` ab (verifiziert:
+   der gespeicherte JPEG für "Regie 1" ist strukturell einwandfrei,
+   640×360) — der Frame ist aber fast immer schwarz, weil die Erfassung
+   exakt beim Workflow-Start passiert, bevor ein Operator irgendetwas
+   auf PGM geschnitten hat (Mixer-PGM steht beim Start immer auf `BLK`).
+   Hängt an Punkt 4 (Zustands-Wiederherstellung) — falls die zuletzt
+   aktive Quelle beim Start automatisch wiederhergestellt würde, zeigte
+   der erste erfasste Frame vermutlich schon echten Inhalt.
+4. **Beim Workflow-Start fehlt gespeicherter Mixer-Zustand (PST/PGM,
+   DSK/PIP-Quelle) — root-caused, nicht behoben.** `workflows.Service`
+   kennt keinerlei Zustands-Wiederherstellung beim Start — der
+   bestehende Mixer-`GET`/`POST /state`-Mechanismus (heute für manuelle
+   Presets genutzt) wird beim Workflow-Start nirgends aufgerufen. Echte
+   Zustands-Persistenz über einen Workflow-Neustart hinweg (welcher
+   Stand? automatisch letzter Stand vor Stop, oder ein explizit
+   gespeicherter "Startzustand" pro Rolle?) ist ein neues, nicht
+   triviales Feature — Scope-Frage an den Nutzer zurückgegeben statt
+   spekulativ gebaut.
+5. **Geister-Kacheln nach Stop/Pause — behoben, größerer Fund als
+   erwartet.** Root-Ursache lag nicht im Frontend, sondern strukturell
+   im SDK: der Instanz-Launcher stoppt lokale Nodes ausschließlich per
+   SIGTERM, aber `tokio::signal::ctrl_c()` (von jedem Node in seiner
+   eigenen `main()` für die eigene Pipeline-Abschaltung genutzt)
+   reagiert auf Unix ausschließlich auf SIGINT — SIGTERM lief bisher
+   komplett unbehandelt, die Standard-Betriebssystem-Aktion beendete
+   den Prozess sofort, ohne dass irgendein Rust-Code (auch kein `Drop`)
+   noch lief. Die Registry erfuhr vom Verschwinden dadurch erst nach
+   Ablauf von `registration_expiry_interval` (bis zu 60s) statt sofort
+   — sichtbar im Flow-Editor als tote Kachel neben dem längst
+   verschwundenen Workflow-Rahmen. Fix: neuer, zentraler
+   SIGTERM-Handler in `omp-node-sdk::node::start()` (ein Task pro Node,
+   automatisch für alle 18 Nodes, keine Änderung an einzelnen `main()`s
+   nötig — bewusst kein Eingriff in den bestehenden, funktionierenden
+   `ctrl_c()`/SIGINT-Pfad, keine Konkurrenz zu dessen Pipeline-eigener
+   Abschaltlogik) meldet die Node per neuem
+   `RegistryClient::deregister_node()` explizit ab (`DELETE
+   .../resource/nodes/<id>`, IS-04-Registration-API v1.3 — Pfad/
+   Statuscode gegen `specs.amwa.tv`s `RegistrationAPI.html` verifiziert,
+   nicht geraten, UMSETZUNG.md §0 Punkt 6) und beendet den Prozess
+   danach sauber. Live gemessen (echter Workflow-Stop, nicht simuliert):
+   Geister-Kachel-Dauer von bis zu 60s auf **~3s** gesenkt (nächster
+   Poll-Zyklus der Registry statt Heartbeat-Ablauf). `cargo build/test
+   --workspace` grün (alle 18 Nodes neu kompiliert), `deno check` grün.
+
+**Umgesetzt in:** `ui/shell/app-shell.ts` (Punkt 1),
+`nodes/omp-node-sdk/src/{node.rs,is04.rs}` + `Cargo.toml` (Punkt 5),
+gepusht als `c96107b`. Punkte 2–4 bewusst nicht implementiert, da sie
+Produktentscheidungen brauchen (s. o.), nicht nur Code — dem Nutzer
+zur Klärung vorgelegt statt spekulativ gebaut.
