@@ -167,6 +167,9 @@ type workflowStore interface {
 	// SetThumbnail/GetThumbnail (Kapitel 12 Teil 6, §22.3 Punkt 5).
 	SetThumbnail(id string, jpeg []byte) error
 	GetThumbnail(id string) ([]byte, bool, error)
+	// SetRoleState/GetRoleState (Bugfix 2026-07-26, Migration 0011).
+	SetRoleState(id, role string, state json.RawMessage) error
+	GetRoleState(id string) (map[string]json.RawMessage, error)
 }
 
 // ResourcePrecheck prüft, ob ein Host aktuell neue Rollen aufnehmen darf
@@ -636,6 +639,14 @@ func (s *Service) runStart(wf Workflow) {
 	}
 	s.publish(wf)
 
+	// Bugfix 2026-07-26 (Nachtrag 91 Punkt 4): den beim letzten Stop/
+	// Pause erfassten Bedienzustand (PGM/PST, DSK/PIP-Quelle o. Ä.)
+	// wiederherstellen, bevor das Thumbnail erfasst wird (s. u.) — sonst
+	// zeigt der erste Frame wieder Schwarzbild, obwohl der Crosspoint
+	// direkt danach ohnehin auf den wiederhergestellten Stand springt
+	// (Nachtrag 91 Punkt 3).
+	s.restoreRoleState(wf)
+
 	// Kapitel 12 Teil 6 (§22.3 Punkt 5: "optional automatisch bei jedem
 	// start, sobald die Program-Bus-Rolle 'media-ready' meldet") — ein
 	// eigener dediziertes Bereitschafts-Event existiert dafür nicht (kein
@@ -1013,6 +1024,11 @@ func (s *Service) stopOrPause(ctx context.Context, id string, confirm bool, targ
 }
 
 func (s *Service) runStop(wf Workflow, targetStatus string) {
+	// Bugfix 2026-07-26 (Nachtrag 91 Punkt 4): Bedienzustand jeder Rolle
+	// erfassen, bevor ihr Prozess gestoppt wird — danach ist der Node
+	// weg und hat nichts mehr zu befragen.
+	s.captureRoleState(wf)
+
 	var errs []string
 	for role, rt := range wf.Runtime {
 		if rt.InstanceID == "" {

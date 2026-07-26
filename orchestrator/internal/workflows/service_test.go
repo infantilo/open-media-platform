@@ -26,6 +26,7 @@ type fakeStore struct {
 	mu         sync.Mutex
 	wfs        map[string]Workflow
 	thumbnails fakeThumbnailStore
+	roleStates fakeRoleStateStore
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{wfs: map[string]Workflow{}} }
@@ -110,6 +111,33 @@ func (f *fakeStore) GetThumbnail(id string) ([]byte, bool, error) {
 	defer f.mu.Unlock()
 	jpeg, ok := f.thumbnails[id]
 	return jpeg, ok, nil
+}
+
+// roleStates spiegelt die separate role_state-JSONB-Spalte (Migration
+// 0011), gleicher Grund wie thumbnails oben.
+type fakeRoleStateStore = map[string]map[string]json.RawMessage
+
+func (f *fakeStore) SetRoleState(id, role string, state json.RawMessage) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.roleStates == nil {
+		f.roleStates = fakeRoleStateStore{}
+	}
+	if f.roleStates[id] == nil {
+		f.roleStates[id] = map[string]json.RawMessage{}
+	}
+	f.roleStates[id][role] = state
+	return nil
+}
+
+func (f *fakeStore) GetRoleState(id string) (map[string]json.RawMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := map[string]json.RawMessage{}
+	for role, state := range f.roleStates[id] {
+		out[role] = state
+	}
+	return out, nil
 }
 
 type fakeNodeLister struct {

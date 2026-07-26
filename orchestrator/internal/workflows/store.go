@@ -165,3 +165,38 @@ func (s *Store) GetThumbnail(id string) ([]byte, bool, error) {
 	}
 	return jpeg, jpeg != nil, nil
 }
+
+// SetRoleState speichert (überschreibt) den zuletzt erfassten
+// Bedienzustand genau einer Rolle (Migration 0011) — gezielter
+// jsonb_set auf den einen Rollen-Schlüssel statt Get()+Put() des ganzen
+// Workflows, gleicher Rennlauf-Grund wie UpdateSchedules (s. dort):
+// runStop() erfasst den Zustand mehrerer Rollen nacheinander, während
+// parallel eine andere Lifecycle-Operation den Rest des Objekts
+// schreiben könnte.
+func (s *Store) SetRoleState(id, role string, state json.RawMessage) error {
+	_, err := s.db.Exec(`
+		UPDATE workflows SET role_state = jsonb_set(role_state, ARRAY[$2], $3::jsonb) WHERE id = $1
+	`, id, role, []byte(state))
+	return err
+}
+
+// GetRoleState liefert die zuletzt erfassten Bedienzustände aller
+// Rollen (roleName -> opaker Zustands-Blob). Leere Map, kein Fehler,
+// wenn noch nie einer erfasst wurde oder der Workflow nicht existiert
+// — Start() versucht dann für keine Rolle eine Wiederherstellung,
+// identisches Verhalten zu "vor diesem Feature".
+func (s *Store) GetRoleState(id string) (map[string]json.RawMessage, error) {
+	var raw []byte
+	err := s.db.QueryRow(`SELECT role_state FROM workflows WHERE id = $1`, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || raw == nil {
+		return map[string]json.RawMessage{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}

@@ -1,0 +1,12 @@
+-- Zuletzt erfasster Bedienzustand je Workflow-Rolle (Bugfix 2026-07-26,
+-- docs/decisions.md Nachtrag 91 Punkt 4: "beim Workflow-Start fehlt
+-- gespeicherter Mixer-Zustand"). JSONB-Map roleName -> opaker, node-
+-- eigener Zustands-Blob (dasselbe Format, das der Node selbst über
+-- GET/POST /state liefert/annimmt, z. B. omp-video-mixer-mes
+-- capture_state()/restore_state()) — der Orchestrator kennt den Inhalt
+-- nicht, reicht ihn nur durch. Eigene Spalte statt Teil des JSONB-
+-- data-Blobs: gleicher Grund wie die thumbnail-Spalte (Migration 0007)
+-- bzw. UpdateSchedules' gezielter jsonb_set — Erfassung beim Stop und
+-- Wiederherstellung beim Start dürfen nicht in denselben Put()/
+-- UpdateRuntime()-Wettlauf geraten wie der Rest des Workflow-Objekts.
+ALTER TABLE workflows ADD COLUMN IF NOT EXISTS role_state JSONB NOT NULL DEFAULT '{}'::jsonb;
