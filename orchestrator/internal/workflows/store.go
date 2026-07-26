@@ -180,6 +180,20 @@ func (s *Store) SetRoleState(id, role string, state json.RawMessage) error {
 	return err
 }
 
+// ClearRoleState verwirft alle erfassten Bedienzustände eines Workflows
+// (Bugfix 2026-07-26: "Mixer merkt sich nach Stop/Start immer noch die
+// Sources" — bei jedem Update() aufgerufen). Ein gespeicherter Zustand
+// referenziert Rollen/Positionen der Topologie, für die er erfasst
+// wurde (role:<name>:sender:<index>-Aliase, s. state.go); ändert sich
+// diese Topologie (Rolle entfernt/umbenannt, Verkabelung geändert), ist
+// der alte Zustand nicht mehr gültig — ein blindes Weiter-Restaurieren
+// hätte sonst z. B. den Mixer nach dem nächsten Start wieder auf eine
+// inzwischen entfernte oder anders verkabelte Quelle gesetzt.
+func (s *Store) ClearRoleState(id string) error {
+	_, err := s.db.Exec(`UPDATE workflows SET role_state = '{}'::jsonb WHERE id = $1`, id)
+	return err
+}
+
 // GetRoleState liefert die zuletzt erfassten Bedienzustände aller
 // Rollen (roleName -> opaker Zustands-Blob). Leere Map, kein Fehler,
 // wenn noch nie einer erfasst wurde oder der Workflow nicht existiert

@@ -12829,3 +12829,88 @@ wieder; "Verlassen" kehrt zur normalen Root-Ansicht zurück. `deno check`
 **Umgesetzt in:** `ui/graph/flow-canvas.ts`, `ui/shell/app-shell.ts`,
 `ui/shell/workflows-view.ts`. Lokal committet, **nicht gepusht** (User
 bittet erneut um Push-Erlaubnis).
+
+## 2026-07-26 (Nachtrag 94) — Bug-2-Nachmeldung: drei konkrete Lücken
+gefunden und behoben (Doppelklick, Speichern-Button, stale role_state)
+
+Nutzer-Bugreport nach dem ersten Ausprobieren von Nachtrag 93:
+"nach stop und wieder start workflow merkt sich video mixer immer noch
+die sources. editieren des workflows im floweditor geht immer noch
+nicht. wenn ich doppeklick in den workflow mache müsste es wie im
+groups eine eben tiefer gehen. dann müsste es einen save/update button
+geben." Drei getrennte, konkrete Ursachen gefunden — keine davon ein
+Rückbau von Nachtrag 93, sondern echte Lücken darin:
+
+**1. Gestoppte Workflows waren im Root-Scope unsichtbar.**
+`#buildWorkflowFrames`/`#buildPausedPlaceholderTiles`/
+`#buildPausedPlaceholderEdges` prüften bisher `wf.status === "paused"`
+wörtlich — ein "stopped" Workflow (der Regelfall für einen zu
+bearbeitenden Workflow, "Regie 1" z. B. war nie pausiert, nur gestoppt)
+zeigte dadurch **weder Rahmen noch Kacheln**, war also gar nicht per
+Doppelklick erreichbar. Das erklärt "editieren geht immer noch nicht"
+direkt — der bereits gebaute Button in der Workflows-Ansicht
+funktionierte zwar (s. Nachtrag 93), aber der vom Nutzer erwartete Weg
+(Doppelklick im Flow-Editor selbst, "wie bei Gruppen") lief ins Leere.
+Neue `#isIdleWorkflow(wf)`-Hilfsmethode (`stopped`||`paused`) ersetzt
+den bisherigen `isPaused`-Check überall.
+
+**2. Kein Doppelklick-Einstieg.** Weder der Workflow-Rahmen noch die
+Platzhalter-Kacheln hatten einen `dblclick`-Listener — anders als bei
+Gruppen-Kacheln (`#renderTile` `isGroup` → `#enterScope`). Jetzt an
+beiden Stellen ergänzt (`this.enterWorkflowEditScope(wf.id)`), nur bei
+`isIdle` aktiv, mit Cursor-Hinweis und Label-Zusatz "— Doppelklick zum
+Bearbeiten".
+
+**3. Kein Speichern-Button — jede Mutation PUTete sofort.** Erster
+Anlauf (Nachtrag 93) schrieb bei jedem Rolle-hinzufügen/-entfernen und
+jeder Verbindung sofort zurück zum Server, ohne Bestätigung — fühlte
+sich laut Nutzer nicht wie ein Editor an ("dann müsste es einen
+save/update button geben"). Umgebaut auf einen lokalen Entwurf
+(`#workflowEditDraft`, Klon der Definition beim Betreten): alle
+Mutationsmethoden (`#addWorkflowRole`/`#removeWorkflowRole`/
+`#addWorkflowConnection`/`#removeWorkflowConnection`, jetzt über
+gemeinsamen `#mutateWorkflowDraft()`-Helfer) ändern nur noch den
+Entwurf, kein Netzwerk. Neuer "Speichern"-Button in der Breadcrumb-
+Leiste (nur aktiv, wenn `#isDraftDirty()` — reiner JSON-Vergleich
+Entwurf vs. zuletzt geladener Stand) PUTet erst dann. "Verlassen"
+(sowohl der Button als auch der "Root"-Breadcrumb-Link) fragt bei
+ungespeicherten Änderungen per `confirm()` nach, statt sie stillschweigend
+zu verwerfen.
+
+**Zusätzlich, root-ursächlich für "Mixer merkt sich immer noch die
+Sources":** `workflows.Service.Update()` (orchestrator, PUT-Handler)
+ließ die per Bug 4 (Nachtrag 92) gespeicherten `role_state`-Einträge
+bisher unangetastet. Ein gespeicherter Zustand referenziert aber Rollen/
+Positionen der ALTEN Topologie (`role:<name>:sender:<index>`-Aliase,
+s. state.go) — nach einer Bearbeitung (Rolle entfernt/umbenannt,
+Verkabelung geändert) war der alte Zustand nicht mehr gültig, wurde
+beim nächsten Start aber trotzdem blind restauriert (z. B. Mixer-PGM
+auf eine inzwischen entfernte oder anders verkabelte Quelle gesetzt,
+oder — bei entfernten Rollen — 8×2s nutzlose Retries pro Start
+verschwendet). Neue `Store.ClearRoleState(id)` (`role_state = '{}'`),
+von `Update()` nach jedem erfolgreichen Put() aufgerufen (best effort,
+kein Abbruch bei Fehlschlag). Live per Postgres-Injektion verifiziert:
+künstlich gesetzter `role_state`-Eintrag wurde nach einem PUT
+zuverlässig auf `{}` zurückgesetzt.
+
+**Live per CDP verifiziert** (echte "Regie 1", danach zurückgesetzt):
+gestoppter Workflow zeigt jetzt Rahmen+6 Platzhalter-Kacheln im
+Root-Scope; Doppelklick auf den Rahmen öffnet den Bearbeiten-Modus,
+Speichern-Button startet deaktiviert; Rolle per Katalog hinzufügen
+ändert nur die lokale Ansicht (Server-Rollenzahl bleibt unverändert bei
+6); Klick auf "Speichern" persistiert (Server-Rollenzahl → 7),
+Speichern-Button danach wieder deaktiviert; eine weitere unsaved
+Änderung + "Verlassen" löst `confirm("Ungespeicherte Änderungen
+verwerfen?")` aus — Ablehnen bleibt im Bearbeiten-Modus, Bestätigen
+verwirft die letzte (ungespeicherte) Änderung und kehrt zurück, ohne
+den Server zu berühren. `go build`/`go vet`/`go test` (workflows-Paket,
+`OMP_POSTGRES_URL` auf ungültigen DSN gesetzt) grün; ein einzelner,
+vorbestehender und unabhängiger Testfehler
+(`TestHistoryRawWindowReturnsSamplesWithinCutoff`, `internal/hosts`)
+existierte bereits auf `main` vor dieser Änderung (per `git stash`
+gegengeprüft) — nicht Gegenstand dieser Änderung. `deno check` über
+alle geänderten Dateien grün.
+
+**Umgesetzt in:** `orchestrator/internal/workflows/{service.go,
+service_test.go, store.go}`, `ui/graph/flow-canvas.ts`. Lokal committet,
+**nicht gepusht** (User muss erneut um Push bitten).

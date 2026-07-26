@@ -170,6 +170,9 @@ type workflowStore interface {
 	// SetRoleState/GetRoleState (Bugfix 2026-07-26, Migration 0011).
 	SetRoleState(id, role string, state json.RawMessage) error
 	GetRoleState(id string) (map[string]json.RawMessage, error)
+	// ClearRoleState (Bugfix 2026-07-26, s. Update()): ein Definitions-
+	// Wechsel invalidiert zuvor erfasste Rollen-Zustände.
+	ClearRoleState(id string) error
 }
 
 // ResourcePrecheck prüft, ob ein Host aktuell neue Rollen aufnehmen darf
@@ -445,6 +448,14 @@ func (s *Service) Update(id, name string, def Definition) (Workflow, error) {
 	wf.UpdatedAt = time.Now()
 	if err := s.store.Put(wf); err != nil {
 		return Workflow{}, err
+	}
+	// Bugfix 2026-07-26 (Nutzer-Fund: "Mixer merkt sich nach Stop/Start
+	// immer noch die Sources"): ein gespeicherter Rollen-Zustand gehört
+	// zur ALTEN Topologie (Rollen-Positionen/Verkabelung, s. state.go
+	// senderAliasPrefix-Doku) — best effort, kein Abbruch des im Kern
+	// bereits erfolgreichen Updates, falls das Leeren selbst fehlschlägt.
+	if err := s.store.ClearRoleState(id); err != nil {
+		slog.Warn("workflows: failed to clear role state after update", "workflow", id, "error", err)
 	}
 	s.publish(wf)
 	return wf, nil

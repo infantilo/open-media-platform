@@ -140,6 +140,13 @@ func (f *fakeStore) GetRoleState(id string) (map[string]json.RawMessage, error) 
 	return out, nil
 }
 
+func (f *fakeStore) ClearRoleState(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.roleStates, id)
+	return nil
+}
+
 type fakeNodeLister struct {
 	mu    sync.Mutex
 	nodes []registry.NodeView

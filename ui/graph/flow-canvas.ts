@@ -161,11 +161,16 @@ interface WorkflowSummary {
   // category, ...). Der Bearbeiten-Modus liest/schreibt nur roles/
   // connections, muss die übrigen Felder aber beim PUT unangetastet
   // durchreichen (Object-Spread) statt ein neues Objekt zu bauen.
-  definition: {
-    roles: { name: string; nodeType: string }[];
-    connections: { fromRole: string; toRole: string }[];
-  } & Record<string, unknown>;
+  definition: WorkflowDefinition;
 }
+
+// s. WorkflowSummary.definition-Doku — auch der Typ des lokalen
+// Bearbeiten-Entwurfs (#workflowEditDraft), da beide dieselbe Form
+// haben (ein Entwurf IST eine Definition, nur (noch) nicht gespeichert).
+type WorkflowDefinition = {
+  roles: { name: string; nodeType: string }[];
+  connections: { fromRole: string; toRole: string }[];
+} & Record<string, unknown>;
 
 const WORKFLOW_FRAME_COLORS: Record<string, string> = {
   stopped: "#999",
@@ -340,6 +345,16 @@ export class FlowCanvas extends HTMLElement {
   // gesetzt über enterWorkflowEditScope() (ui/shell/app-shell.ts, nach
   // einem Tab-Wechsel aus der Workflows-Ansicht).
   #workflowEditId: string | null = null;
+  // Nutzerfund (2026-07-26): PUT bei jeder einzelnen Mutation (erster
+  // Anlauf dieses Features) fühlte sich nicht wie ein Editor an — jede
+  // Rolle/Verbindung sollte sich wie in einem Formular erst lokal
+  // ändern, ein expliziter "Speichern"-Button committet den ganzen
+  // Entwurf auf einmal. Geklont beim Betreten (enterWorkflowEditScope),
+  // alle #addWorkflowRole/#removeWorkflowRole/#addWorkflowConnection/
+  // #removeWorkflowConnection ändern NUR dieses Objekt (kein Netzwerk),
+  // #renderWorkflowEditScope liest ausschließlich daraus — erst
+  // #saveWorkflowEditDraft() sendet den PUT.
+  #workflowEditDraft: WorkflowDefinition | null = null;
   // Klick-zu-Verbinden-Zustand (kein Drag möglich — Platzhalter-Kacheln
   // haben keine echten Ports, da ihr Node nicht läuft): erster Klick
   // markiert die Quellrolle, zweiter Klick auf eine andere Rolle legt
@@ -747,13 +762,15 @@ export class FlowCanvas extends HTMLElement {
   #pausedPlaceholderIds(): string[] {
     const ids: string[] = [];
     for (const wf of this.#workflows) {
-      // Der gerade im Bearbeitungs-Scope offene Workflow braucht
-      // dieselben Platzhalter-Positionen auch dann, wenn er "stopped"
-      // statt "paused" ist (s. #workflowEditId-Doku) — einmal
-      // eingesammelt statt doppelt, falls er zufällig ohnehin pausiert
-      // ist.
-      if (wf.status !== "paused" && wf.id !== this.#workflowEditId) continue;
-      for (const role of wf.definition.roles) {
+      if (!this.#isIdleWorkflow(wf) && wf.id !== this.#workflowEditId) continue;
+      // Der gerade bearbeitete Workflow braucht Positionen für die
+      // Rollen des LOKALEN ENTWURFS, nicht die zuletzt gespeicherten —
+      // sonst bekäme eine gerade erst im Entwurf hinzugefügte, noch
+      // ungespeicherte Rolle nie eine Position zugewiesen.
+      const roles = wf.id === this.#workflowEditId && this.#workflowEditDraft
+        ? this.#workflowEditDraft.roles
+        : wf.definition.roles;
+      for (const role of roles) {
         ids.push(pausedPlaceholderId(wf.id, role.name));
       }
     }
@@ -806,6 +823,8 @@ export class FlowCanvas extends HTMLElement {
   // loszuschicken — dieser Await liefert deshalb garantiert frische Daten,
   // ganz gleich ob #workflows schon gefüllt war oder nicht.
   async enterWorkflowEditScope(workflowId: string) {
+    if (this.#workflowEditId === workflowId) return; // bereits offen
+    if (this.#workflowEditId !== null && !this.#confirmDiscardDraft()) return;
     await this.#queueFetchAndRender();
     const wf = this.#workflows.find((w) => w.id === workflowId);
     if (!wf) {
@@ -817,6 +836,7 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
     this.#workflowEditId = workflowId;
+    this.#workflowEditDraft = structuredClone(wf.definition);
     this.#connectFromRole = null;
     this.#selectedIds = new Set();
     this.#assignMissingPositions();
@@ -824,26 +844,55 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #exitWorkflowEditScope() {
+    if (!this.#confirmDiscardDraft()) return;
     this.#workflowEditId = null;
+    this.#workflowEditDraft = null;
     this.#connectFromRole = null;
     this.#render();
   }
 
+  // Reiner JSON-Vergleich Entwurf vs. zuletzt vom Server geladener
+  // Stand — beide entstehen aus derselben Struktur (Klon bei
+  // enterWorkflowEditScope), Feldreihenfolge bleibt beim Mutieren über
+  // Object-Spread stabil genug für diesen Zweck. Ein falsches "dirty"
+  // bei zufälliger Schlüsselreihenfolge wäre nur eine unnötige
+  // Rückfrage, kein Datenverlust — anders herum (fälschlich "clean")
+  // wäre ein stilles Verwerfen echter Änderungen, deshalb im Zweifel
+  // eher zu oft nachfragen als zu selten.
+  #isDraftDirty(): boolean {
+    const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+    if (!wf || !this.#workflowEditDraft) return false;
+    return JSON.stringify(this.#workflowEditDraft) !== JSON.stringify(wf.definition);
+  }
+
+  // Nutzerwunsch (2026-07-26): kein stilles Verwerfen ungespeicherter
+  // Änderungen beim Verlassen des Bearbeiten-Modus — nur nachfragen,
+  // wenn der Entwurf tatsächlich vom gespeicherten Stand abweicht.
+  #confirmDiscardDraft(): boolean {
+    if (!this.#isDraftDirty()) return true;
+    return confirm("Ungespeicherte Änderungen verwerfen?");
+  }
+
   // Bug 2: Bearbeiten-Modus-Renderpfad — eine Kachel pro Rolle
   // (editierbar, s. #renderEditableRoleTile), eine klickbare gestrichelte
-  // Linie pro Verbindung (Klick = trennen). Nutzt dieselben synthetischen
-  // Positionen wie die Pause-Platzhalter (pausedPlaceholderId), damit ein
-  // Wechsel pausiert-Ansicht ↔ Bearbeiten-Modus das Layout nicht springen
-  // lässt.
+  // Linie pro Verbindung (Klick = trennen). Liest ausschließlich aus dem
+  // lokalen Entwurf (#workflowEditDraft), NICHT aus wf.definition — erst
+  // #saveWorkflowEditDraft() schreibt zurück. Nutzt dieselben
+  // synthetischen Positionen wie die Pause-Platzhalter
+  // (pausedPlaceholderId), damit ein Wechsel pausiert-Ansicht ↔
+  // Bearbeiten-Modus das Layout nicht springen lässt.
   #renderWorkflowEditScope() {
     const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
-    if (!wf) {
-      this.#exitWorkflowEditScope();
+    const draft = this.#workflowEditDraft;
+    if (!wf || !draft) {
+      this.#workflowEditId = null;
+      this.#workflowEditDraft = null;
+      this.#render();
       return;
     }
 
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
-    for (const conn of wf.definition.connections) {
+    for (const conn of draft.connections) {
       const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];
       const toPos = this.#positions[pausedPlaceholderId(wf.id, conn.toRole)];
       if (!fromPos || !toPos) continue;
@@ -863,7 +912,7 @@ export class FlowCanvas extends HTMLElement {
       line.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       line.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        this.#removeWorkflowConnection(wf.id, conn.fromRole, conn.toRole);
+        this.#removeWorkflowConnection(conn.fromRole, conn.toRole);
       });
       const title = document.createElementNS(SVG_NS, "title");
       title.textContent = "Verbindung trennen";
@@ -871,7 +920,7 @@ export class FlowCanvas extends HTMLElement {
       this.#viewportGroup.appendChild(line);
     }
 
-    for (const role of wf.definition.roles) {
+    for (const role of draft.roles) {
       this.#viewportGroup.appendChild(this.#renderEditableRoleTile(wf.id, role));
     }
   }
@@ -909,7 +958,7 @@ export class FlowCanvas extends HTMLElement {
     body.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     body.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      this.#onWorkflowEditRoleClick(workflowId, role.name);
+      this.#onWorkflowEditRoleClick(role.name);
     });
     g.appendChild(body);
 
@@ -946,7 +995,7 @@ export class FlowCanvas extends HTMLElement {
     closeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     closeBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      this.#removeWorkflowRole(workflowId, role.name);
+      this.#removeWorkflowRole(role.name);
     });
     g.appendChild(closeBtn);
 
@@ -956,9 +1005,8 @@ export class FlowCanvas extends HTMLElement {
   // Erster Klick auf eine Rolle merkt sie als Verbindungs-Quelle
   // (#connectFromRole, optisch hervorgehoben). Zweiter Klick auf
   // dieselbe Rolle bricht ab, auf eine andere Rolle legt die Verbindung
-  // an. Sofortiges #render() vor dem asynchronen PUT, damit die
-  // Hervorhebung nicht bis zur Serverantwort "hängen" bleibt.
-  #onWorkflowEditRoleClick(workflowId: string, roleName: string) {
+  // im Entwurf an (rein lokal, kein Netzwerk — s. #mutateWorkflowDraft).
+  #onWorkflowEditRoleClick(roleName: string) {
     if (this.#connectFromRole === null) {
       this.#connectFromRole = roleName;
       this.#render();
@@ -971,90 +1019,100 @@ export class FlowCanvas extends HTMLElement {
     }
     const fromRole = this.#connectFromRole;
     this.#connectFromRole = null;
+    this.#addWorkflowConnection(fromRole, roleName);
+  }
+
+  // Gemeinsamer Mutations-Helfer für alle Bearbeiten-Modus-Aktionen:
+  // ändert NUR den lokalen Entwurf (#workflowEditDraft), sendet nichts —
+  // erst #saveWorkflowEditDraft() PUTet. `mutate` bekommt eine flache
+  // Kopie des aktuellen Entwurfs (Object-Spread) — unbekannte Felder
+  // (settings, schedules, title, ...) bleiben dadurch erhalten, ohne
+  // dass diese Datei ihre volle Struktur kennen muss (s.
+  // WorkflowSummary.definition-Doku). `null` bricht klientenseitig ab
+  // (z. B. doppelte Verbindung).
+  #mutateWorkflowDraft(mutate: (draft: WorkflowDefinition) => WorkflowDefinition | null) {
+    if (!this.#workflowEditDraft) return;
+    const next = mutate({ ...this.#workflowEditDraft });
+    if (next === null) return;
+    this.#workflowEditDraft = next;
+    this.#assignMissingPositions();
     this.#render();
-    this.#addWorkflowConnection(workflowId, fromRole, roleName);
   }
 
-  // Gemeinsamer PUT-Helfer für alle Bearbeiten-Modus-Mutationen (Update()
-  // im Backend akzeptiert stopped/paused, s. orchestrator workflows
-  // service.go). `mutate` bekommt eine flache Kopie der aktuellen
-  // Definition (Object-Spread) — unbekannte Felder (settings, schedules,
-  // title, ...) bleiben dadurch erhalten, ohne dass diese Datei ihre
-  // volle Struktur kennen muss (s. WorkflowSummary.definition-Doku).
-  // `null` bricht clientseitig ab, ohne einen Request zu senden.
-  async #updateWorkflowDefinition(
-    workflowId: string,
-    mutate: (def: Record<string, unknown>) => Record<string, unknown> | null,
-  ): Promise<boolean> {
-    const wf = this.#workflows.find((w) => w.id === workflowId);
-    if (!wf) return false;
-    const nextDef = mutate({ ...wf.definition });
-    if (nextDef === null) return false;
-    try {
-      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: wf.name, definition: nextDef }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        this.#showToast(`Workflow-Änderung fehlgeschlagen: ${text || res.status}`);
-        return false;
-      }
-      await this.#queueFetchAndRender();
-      return true;
-    } catch (err) {
-      this.#showToast(`Workflow-Änderung fehlgeschlagen: ${err}`);
-      return false;
-    }
-  }
-
-  #addWorkflowRole(workflowId: string, nodeType: string) {
-    const wf = this.#workflows.find((w) => w.id === workflowId);
-    if (!wf) return;
-    const usedNames = new Set(wf.definition.roles.map((r) => r.name));
+  #addWorkflowRole(nodeType: string) {
+    if (!this.#workflowEditDraft) return;
+    const usedNames = new Set(this.#workflowEditDraft.roles.map((r) => r.name));
     const roleName = uniqueRoleName(nodeType, usedNames);
-    this.#updateWorkflowDefinition(workflowId, (def) => ({
-      ...def,
-      roles: [...(def.roles as { name: string; nodeType: string }[]), { name: roleName, nodeType }],
+    this.#mutateWorkflowDraft((draft) => ({
+      ...draft,
+      roles: [...draft.roles, { name: roleName, nodeType }],
     }));
   }
 
-  #removeWorkflowRole(workflowId: string, roleName: string) {
-    const wf = this.#workflows.find((w) => w.id === workflowId);
-    if (!wf) return;
-    if (wf.definition.roles.length <= 1) {
+  #removeWorkflowRole(roleName: string) {
+    if (!this.#workflowEditDraft) return;
+    if (this.#workflowEditDraft.roles.length <= 1) {
       this.#showToast("Ein Workflow braucht mindestens eine Rolle.");
       return;
     }
     if (this.#connectFromRole === roleName) this.#connectFromRole = null;
-    this.#updateWorkflowDefinition(workflowId, (def) => ({
-      ...def,
-      roles: (def.roles as { name: string; nodeType: string }[]).filter((r) => r.name !== roleName),
-      connections: (def.connections as { fromRole: string; toRole: string }[]).filter(
-        (c) => c.fromRole !== roleName && c.toRole !== roleName,
-      ),
+    this.#mutateWorkflowDraft((draft) => ({
+      ...draft,
+      roles: draft.roles.filter((r) => r.name !== roleName),
+      connections: draft.connections.filter((c) => c.fromRole !== roleName && c.toRole !== roleName),
     }));
   }
 
-  #addWorkflowConnection(workflowId: string, fromRole: string, toRole: string) {
-    this.#updateWorkflowDefinition(workflowId, (def) => {
-      const connections = def.connections as { fromRole: string; toRole: string }[];
-      if (connections.some((c) => c.fromRole === fromRole && c.toRole === toRole)) {
+  #addWorkflowConnection(fromRole: string, toRole: string) {
+    this.#mutateWorkflowDraft((draft) => {
+      if (draft.connections.some((c) => c.fromRole === fromRole && c.toRole === toRole)) {
         this.#showToast("Verbindung besteht bereits.");
         return null;
       }
-      return { ...def, connections: [...connections, { fromRole, toRole }] };
+      return { ...draft, connections: [...draft.connections, { fromRole, toRole }] };
     });
   }
 
-  #removeWorkflowConnection(workflowId: string, fromRole: string, toRole: string) {
-    this.#updateWorkflowDefinition(workflowId, (def) => ({
-      ...def,
-      connections: (def.connections as { fromRole: string; toRole: string }[]).filter(
-        (c) => !(c.fromRole === fromRole && c.toRole === toRole),
-      ),
+  #removeWorkflowConnection(fromRole: string, toRole: string) {
+    this.#mutateWorkflowDraft((draft) => ({
+      ...draft,
+      connections: draft.connections.filter((c) => !(c.fromRole === fromRole && c.toRole === toRole)),
     }));
+  }
+
+  // Einziger PUT-Aufruf des Bearbeiten-Modus, ausgelöst durch den
+  // "Speichern"-Button (Nutzerwunsch 2026-07-26: explizites Speichern
+  // statt PUT bei jeder einzelnen Mutation). Bleibt nach Erfolg im
+  // Bearbeiten-Modus (der Entwurf entspricht jetzt dem gespeicherten
+  // Stand, kein erneutes Klonen nötig) — #queueFetchAndRender aktualisiert
+  // wf.status/updatedAt u. Ä. für den Rest der Ansicht.
+  async #saveWorkflowEditDraft() {
+    const workflowId = this.#workflowEditId;
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!workflowId || !wf || !this.#workflowEditDraft) return;
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wf.name, definition: this.#workflowEditDraft }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Speichern fehlgeschlagen: ${text || res.status}`);
+        return;
+      }
+      this.#showToast("Workflow gespeichert.");
+      await this.#queueFetchAndRender();
+      // Entwurf gegen den frisch vom Server bestätigten Stand neu klonen
+      // (statt einfach unverändert zu lassen) — sonst könnte #isDraftDirty
+      // durch bloße JSON-Schlüsselreihenfolge-Unterschiede (Go-Encoding
+      // vs. Browser-Klon) fälschlich "dirty" melden, obwohl gerade erst
+      // erfolgreich gespeichert wurde.
+      const refreshed = this.#workflows.find((w) => w.id === workflowId);
+      if (refreshed) this.#workflowEditDraft = structuredClone(refreshed.definition);
+    } catch (err) {
+      this.#showToast(`Speichern fehlgeschlagen: ${err}`);
+    }
   }
 
   // Flache Node-Kacheln nur der Runtime-Rollen eines einzelnen
@@ -1191,29 +1249,40 @@ export class FlowCanvas extends HTMLElement {
     return this.#workflows.filter((wf) => wf.id === this.#workflowFilter);
   }
 
+  // Bug 2 Nachfund (2026-07-26): "stopped" und "paused" haben beide keine
+  // Runtime-Nodes mehr (Kapitel 12 Teil 3), sind also für die Rahmen-/
+  // Platzhalter-Darstellung ununterscheidbar — vorher war das hier auf
+  // "paused" verengt, wodurch ein gestoppter Workflow im Root-Scope
+  // komplett unsichtbar war (kein Rahmen, keine Kacheln) und sich damit
+  // gar nicht per Doppelklick erreichen ließ, obwohl "stopped" der
+  // Regelfall für einen zu bearbeitenden Workflow ist.
+  #isIdleWorkflow(wf: WorkflowSummary): boolean {
+    return wf.status === "stopped" || wf.status === "paused";
+  }
+
   #buildWorkflowFrames(tiles: TileSpec[]): SVGGElement[] {
     const visibleIds = new Set(tiles.map((t) => t.id));
     const frames: SVGGElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
-      // Kapitel 12 Teil 3: ein pausierter Workflow hat keine Runtime-
-      // Node-IDs mehr (Runtime wird beim Pausieren geleert, s. Backend-
-      // Doku workflows.Service.stopOrPause) — der Rahmen umschließt dann
-      // die Platzhalter-Kacheln (synthetische IDs, s.
-      // pausedPlaceholderId) statt echter Runtime-Nodes.
-      const isPaused = wf.status === "paused";
-      const ids = isPaused
+      // Ein stopped/paused Workflow hat keine Runtime-Node-IDs mehr
+      // (Runtime wird beim Pausieren/Stoppen geleert, s.
+      // #isIdleWorkflow-Doku) — der Rahmen umschließt dann die
+      // Platzhalter-Kacheln (synthetische IDs, s. pausedPlaceholderId)
+      // statt echter Runtime-Nodes.
+      const isIdle = this.#isIdleWorkflow(wf);
+      const ids = isIdle
         ? wf.definition.roles.map((r) => pausedPlaceholderId(wf.id, r.name))
         : Object.values(wf.runtime ?? {})
             .map((rt) => rt.nodeId)
             .filter((id): id is string => !!id);
       if (ids.length === 0) continue;
-      if (!isPaused && !ids.every((id) => visibleIds.has(id))) continue;
+      if (!isIdle && !ids.every((id) => visibleIds.has(id))) continue;
       if (!ids.every((id) => this.#positions[id])) continue;
 
       const boxes = ids.map((id) => {
         const pos = this.#positions[id];
-        const height = isPaused ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        const height = isIdle ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
         return { minX: pos.x, minY: pos.y, maxX: pos.x + NODE_WIDTH, maxY: pos.y + height };
       });
 
@@ -1247,8 +1316,23 @@ export class FlowCanvas extends HTMLElement {
       label.setAttribute("y", String(minY + LABEL_HEIGHT - 4));
       label.setAttribute("fill", color);
       label.setAttribute("font-size", "11");
-      label.textContent = `▭ ${wf.name} (${wf.status})`;
+      label.textContent = isIdle ? `▭ ${wf.name} (${wf.status}) — Doppelklick zum Bearbeiten` : `▭ ${wf.name} (${wf.status})`;
       g.appendChild(label);
+
+      // Bug 2: Doppelklick auf den Rahmen (nicht nur auf eine einzelne
+      // Platzhalter-Kachel, s. #buildPausedPlaceholderTiles) öffnet den
+      // Bearbeiten-Modus — analog zum bestehenden Doppelklick auf eine
+      // Gruppen-Kachel (#renderTile). Nur sinnvoll, solange der Workflow
+      // überhaupt bearbeitbar ist (enterWorkflowEditScope() lehnt einen
+      // laufenden Workflow ohnehin ab, hier zusätzlich schon keinen
+      // Cursor/Hinweis dafür anzubieten).
+      if (isIdle) {
+        rect.style.cursor = "pointer";
+        g.addEventListener("dblclick", (ev) => {
+          ev.stopPropagation();
+          this.enterWorkflowEditScope(wf.id);
+        });
+      }
 
       frames.push(g);
     }
@@ -1266,7 +1350,7 @@ export class FlowCanvas extends HTMLElement {
     const tiles: SVGGElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
-      if (wf.status !== "paused") continue;
+      if (!this.#isIdleWorkflow(wf)) continue;
       for (const role of wf.definition.roles) {
         const id = pausedPlaceholderId(wf.id, role.name);
         const pos = this.#positions[id];
@@ -1285,7 +1369,16 @@ export class FlowCanvas extends HTMLElement {
         body.setAttribute("stroke", "#5b9bd5");
         body.setAttribute("stroke-width", "2");
         body.setAttribute("stroke-dasharray", "6 3");
+        body.style.cursor = "pointer";
         g.appendChild(body);
+
+        // Bug 2: Doppelklick auf eine einzelne Platzhalter-Kachel öffnet
+        // ebenfalls den Bearbeiten-Modus (falls der Klick den Rahmen
+        // selbst verfehlt, z. B. bei stark überlappenden Kacheln).
+        g.addEventListener("dblclick", (ev) => {
+          ev.stopPropagation();
+          this.enterWorkflowEditScope(wf.id);
+        });
 
         const nameText = document.createElementNS(SVG_NS, "text");
         nameText.setAttribute("x", "8");
@@ -1318,7 +1411,7 @@ export class FlowCanvas extends HTMLElement {
     const lines: SVGLineElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
-      if (wf.status !== "paused") continue;
+      if (!this.#isIdleWorkflow(wf)) continue;
       for (const conn of wf.definition.connections) {
         const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];
         const toPos = this.#positions[pausedPlaceholderId(wf.id, conn.toRole)];
@@ -1364,9 +1457,22 @@ export class FlowCanvas extends HTMLElement {
       label.textContent = `Bearbeiten: ${wf?.name ?? this.#workflowEditId}`;
       this.#breadcrumbBar.appendChild(label);
 
+      // Nutzerwunsch (2026-07-26): expliziter Speichern-Button statt
+      // PUT bei jeder einzelnen Mutation (s. #saveWorkflowEditDraft-
+      // Doku) — nur aktiv, wenn der Entwurf tatsächlich vom gespeicherten
+      // Stand abweicht.
+      const dirty = this.#isDraftDirty();
+      const saveBtn = document.createElement("button");
+      saveBtn.textContent = "Speichern";
+      saveBtn.style.cssText = `margin-left:auto;font-size:11px;cursor:pointer;${dirty ? "font-weight:bold;" : ""}`;
+      saveBtn.disabled = !dirty;
+      saveBtn.title = dirty ? "" : "Keine ungespeicherten Änderungen";
+      saveBtn.addEventListener("click", () => this.#saveWorkflowEditDraft());
+      this.#breadcrumbBar.appendChild(saveBtn);
+
       const exitBtn = document.createElement("button");
       exitBtn.textContent = "Verlassen";
-      exitBtn.style.cssText = "margin-left:auto;font-size:11px;cursor:pointer;";
+      exitBtn.style.cssText = "font-size:11px;cursor:pointer;";
       exitBtn.addEventListener("click", () => this.#exitWorkflowEditScope());
       this.#breadcrumbBar.appendChild(exitBtn);
       return;
@@ -2744,7 +2850,7 @@ export class FlowCanvas extends HTMLElement {
       // orchestrator/internal/workflows/service.go runStart).
       btn.addEventListener("click", () => {
         if (this.#workflowEditId) {
-          this.#addWorkflowRole(this.#workflowEditId, entry.type);
+          this.#addWorkflowRole(entry.type);
           return;
         }
         this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined);
