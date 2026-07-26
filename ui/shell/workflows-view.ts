@@ -949,6 +949,25 @@ class WorkflowsView extends HTMLElement {
     designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
     actions.appendChild(designEditBtn);
 
+    // Bug 2 (2026-07-24): "im Floweditor weiterbearbeiten können (...) so
+    // wie in einer Gruppe" — dritte, eigenständige Alternative neben dem
+    // Text-Formular ("Bearbeiten") und dem separaten Vollbild-Designer
+    // ("Grafisch bearbeiten", s. #openRoleDesigner oben): navigiert
+    // stattdessen direkt in den Flow-Editor-Tab und öffnet dort den
+    // Workflow als eigenen, editierbaren Scope (ui/graph/flow-canvas.ts
+    // enterWorkflowEditScope) — bubbling CustomEvent statt direktem
+    // Import, damit workflows-view.ts nichts über den Flow-Editor wissen
+    // muss (gleiche lose Kopplung wie sonst zwischen den Tab-Views).
+    const editInFlowBtn = document.createElement("button");
+    editInFlowBtn.textContent = "Im Flow-Editor bearbeiten";
+    editInFlowBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    editInFlowBtn.disabled = !isIdle;
+    editInFlowBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
+    editInFlowBtn.addEventListener("click", () => {
+      this.dispatchEvent(new CustomEvent("open-workflow-in-editor", { detail: wf.id, bubbles: true }));
+    });
+    actions.appendChild(editInFlowBtn);
+
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
     delBtn.style.cssText = "font-size:11px;cursor:pointer;";

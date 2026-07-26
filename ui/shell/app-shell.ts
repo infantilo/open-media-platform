@@ -93,6 +93,17 @@ class AppShell extends HTMLElement {
   // sonst bei jedem Verlassen des Flow-Editor-Tabs verloren.
   #workflowFilter: string | null = null;
   #workflowSelect!: HTMLSelectElement;
+  // Bug 2: workflows-view.ts feuert dieses Event (bubbles:true) mit der
+  // Workflow-ID als detail, wenn der Nutzer dort "Im Flow-Editor
+  // bearbeiten" klickt. #switchTab("flow") ersetzt die Tab-Kachel
+  // synchron (s. dortige Doku) — enterWorkflowEditScope() ist async und
+  // wartet selbst auf frische Daten, hier reicht "fire and forget".
+  #onOpenWorkflowInEditor = (ev: Event) => {
+    const workflowId = (ev as CustomEvent<string>).detail;
+    this.#switchTab("flow");
+    const canvas = this.#contentEl.querySelector("omp-flow-canvas") as FlowCanvas | null;
+    void canvas?.enterWorkflowEditScope(workflowId);
+  };
   #onSseMessage = (ev: Event) => {
     let parsed: { type: string };
     try {
@@ -109,6 +120,12 @@ class AppShell extends HTMLElement {
     this.#switchTab("flow");
     this.#loadAdminTab();
     void this.#loadWorkflowOptions();
+    // Bug 2 (2026-07-24): Einstiegspunkt vom Workflows-Tab in den
+    // Flow-Editor-Bearbeiten-Modus (ui/graph/flow-canvas.ts
+    // enterWorkflowEditScope) — normale bubbling CustomEvent-Zustellung
+    // reicht, da keine Shadow-DOM-Grenze zwischen workflows-view.ts und
+    // hier liegt (kein composed:true nötig).
+    this.#contentEl.addEventListener("open-workflow-in-editor", this.#onOpenWorkflowInEditor);
 
     this.#lastState = connectionMonitor.state;
     connectionMonitor.addEventListener("statechange", this.#onStateChange);
@@ -138,6 +155,7 @@ class AppShell extends HTMLElement {
   disconnectedCallback() {
     connectionMonitor.removeEventListener("statechange", this.#onStateChange);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
+    this.#contentEl.removeEventListener("open-workflow-in-editor", this.#onOpenWorkflowInEditor);
     clearInterval(this.#countdownHandle);
   }
 

@@ -12764,3 +12764,68 @@ Cache des Orchestrators noch nicht vollständig).
 service.go, store.go}`, `internal/db/migrations/0011_workflow_role_state.sql`,
 gepusht als `51cf6ee`. `go build`/`go vet`/`go test` (workflows-Paket)
 grün.
+
+## 2026-07-26 (Nachtrag 93) — Bug 2 (Workflow im Flow-Editor weiter
+bearbeiten) umgesetzt: Nutzerentscheidung "echter Scope wie eine Gruppe"
+
+**Nutzerentscheidung (Nachtrag 91 Punkt 2):** jeder Workflow-Rahmen wird
+ein echter, navigierbarer Scope — reinklicken, Rollen per Katalog-"+"
+hinzufügen, per "×" entfernen, per Klick-Klick verbinden/trennen, jede
+Änderung synchronisiert sofort per `PUT /api/v1/workflows/{id}` zurück
+(kein separater "Speichern"-Schritt). Gilt für alle Workflows, auch
+textuell/grafisch entworfene ohne zugehörige B5-Gruppe. Backend brauchte
+keine Änderung — `workflows.Service.Update()` akzeptierte `stopped`/
+`paused` bereits (Kapitel 12 Teil 1).
+
+**Umsetzung, `ui/graph/flow-canvas.ts`:**
+- Neuer Renderpfad `#renderWorkflowEditScope()`, orthogonal zu `#scope`
+  (B5-Gruppen) und `#workflowFilter` (reiner Lesefilter) — eigenes Feld
+  `#workflowEditId`, gesetzt über die neue öffentliche Methode
+  `enterWorkflowEditScope(workflowId)`. Diese ist bewusst `async` und
+  wartet selbst auf `#queueFetchAndRender()`, weil `app-shell.ts`
+  `#switchTab()` die Flow-Editor-Kachel bei jedem Tab-Wechsel per
+  `replaceChildren()` neu erzeugt — ohne den Await hätte ein sofortiger
+  Aufruf direkt nach dem Mounten oft auf ein noch leeres `#workflows`
+  getroffen und fälschlich "Workflow nicht gefunden" gemeldet.
+- Rollen-Kacheln (`#renderEditableRoleTile`) wiederverwenden dieselben
+  synthetischen Positionen wie die Pause-Platzhalter
+  (`pausedPlaceholderId`) — kein Layout-Sprung beim Wechsel
+  pausiert-Ansicht ↔ Bearbeiten-Modus. Klick auf eine Kachel armiert sie
+  als Verbindungs-Quelle (gelber Rahmen), zweiter Klick auf eine andere
+  Rolle legt die Verbindung an; Klick auf eine gestrichelte
+  Verbindungslinie trennt sie.
+- Gemeinsamer Mutations-Helfer `#updateWorkflowDefinition()`: kopiert die
+  aktuelle Definition per Object-Spread (`{...wf.definition}`) statt sie
+  aus roles/connections neu zusammenzusetzen — nur so bleiben zur
+  Laufzeit vorhandene, hier nicht typisierte Felder (`settings`,
+  potenziell `schedules`/`title`/...) über einen PUT hinweg erhalten.
+  `WorkflowSummary.definition` dafür auf
+  `{roles,connections} & Record<string, unknown>` erweitert. Live an der
+  echten "Regie 1" bestätigt: `settings:{}` blieb über mehrere
+  Rollen-/Verbindungs-Mutationen hinweg unverändert im persistierten
+  Zustand erhalten.
+- Katalog-"+"-Buttons (`#renderPaletteList`) rufen im Bearbeiten-Modus
+  `#addWorkflowRole()` statt `#startInstance()` — Host-Auswahl greift
+  dabei nicht (Rollen bekommen ihren Host erst beim nächsten
+  Workflow-Start).
+- Neuer Einstiegspunkt in `ui/shell/workflows-view.ts`: dritter Button
+  "Im Flow-Editor bearbeiten" neben dem bestehenden Text-Formular
+  ("Bearbeiten") und dem separaten Vollbild-Designer ("Grafisch
+  bearbeiten", Kapitel 12 Teil 6) — feuert ein bubblendes
+  `open-workflow-in-editor`-CustomEvent (lose Kopplung, kein direkter
+  Import des Flow-Editors), `app-shell.ts` fängt es am `#contentEl` ab,
+  wechselt auf den Flow-Editor-Tab und ruft `enterWorkflowEditScope()`.
+
+**Live per CDP verifiziert** (echte "Regie 1", danach auf den
+Ursprungszustand zurückgesetzt): Einstieg über den neuen Button zeigt
+Breadcrumb "Root › Bearbeiten: Regie 1" mit allen 6 Rollen-Kacheln;
+Rolle entfernen (`source-ball`) und per Katalog hinzufügen funktionieren
+und persistieren sofort (`GET /api/v1/workflows` bestätigt); Klick-Klick-
+Verbinden armiert sichtbar (gelber Rahmen, `#ffcc00`) und legt die
+Verbindung serverseitig an; Klick auf eine Verbindungslinie trennt sie
+wieder; "Verlassen" kehrt zur normalen Root-Ansicht zurück. `deno check`
+über alle drei geänderten Dateien grün.
+
+**Umgesetzt in:** `ui/graph/flow-canvas.ts`, `ui/shell/app-shell.ts`,
+`ui/shell/workflows-view.ts`. Lokal committet, **nicht gepusht** (User
+bittet erneut um Push-Erlaubnis).

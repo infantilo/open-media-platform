@@ -156,10 +156,15 @@ interface WorkflowSummary {
   // pausierten Workflows — der hat keine Runtime-Nodes mehr (gleiche
   // Ressourcen-Wirkung wie "stopped"), daher Rollenname+Typ+Template-
   // Kanten direkt aus der Definition statt aus Runtime-Node-IDs.
+  // Bug 2 (2026-07-24): definition trägt zur Laufzeit weitere, hier nicht
+  // typisierte Felder (settings, schedules, title, description, tags,
+  // category, ...). Der Bearbeiten-Modus liest/schreibt nur roles/
+  // connections, muss die übrigen Felder aber beim PUT unangetastet
+  // durchreichen (Object-Spread) statt ein neues Objekt zu bauen.
   definition: {
     roles: { name: string; nodeType: string }[];
     connections: { fromRole: string; toRole: string }[];
-  };
+  } & Record<string, unknown>;
 }
 
 const WORKFLOW_FRAME_COLORS: Record<string, string> = {
@@ -322,6 +327,24 @@ export class FlowCanvas extends HTMLElement {
   // Node-Kacheln (s. #buildTilesForWorkflowFilter), statt Gruppen-
   // Zugehörigkeit und Workflow-Zugehörigkeit gleichzeitig aufzulösen.
   #workflowFilter: string | null = null;
+  // Bugfix 2026-07-26 (Nutzerwunsch: "einen Workflow im Flow-Editor
+  // weiter bearbeiten können — Elemente hinzufügen/löschen/verbinden,
+  // so wie in einer Gruppe"): Bearbeitungs-Scope für genau einen
+  // gestoppten/pausierten Workflow (workflows.Service.Update() erlaubt
+  // nur diese beiden Status, s. dortige Doku) — orthogonal zu #scope
+  // (B5-Gruppen) und #workflowFilter (reine Lesefilter-Ansicht laufender
+  // Workflows): hier werden keine echten Nodes gezeigt, sondern die
+  // Rollen der Workflow-**Definition** als editierbare Platzhalter-
+  // Kacheln (gleiche Optik wie ein pausierter Workflow, s.
+  // #buildPausedPlaceholderTiles, hier aber interaktiv). Von außen
+  // gesetzt über enterWorkflowEditScope() (ui/shell/app-shell.ts, nach
+  // einem Tab-Wechsel aus der Workflows-Ansicht).
+  #workflowEditId: string | null = null;
+  // Klick-zu-Verbinden-Zustand (kein Drag möglich — Platzhalter-Kacheln
+  // haben keine echten Ports, da ihr Node nicht läuft): erster Klick
+  // markiert die Quellrolle, zweiter Klick auf eine andere Rolle legt
+  // die Verbindung an, erneuter Klick auf dieselbe Rolle bricht ab.
+  #connectFromRole: string | null = null;
   #tally: Record<string, boolean> = {};
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
@@ -724,7 +747,12 @@ export class FlowCanvas extends HTMLElement {
   #pausedPlaceholderIds(): string[] {
     const ids: string[] = [];
     for (const wf of this.#workflows) {
-      if (wf.status !== "paused") continue;
+      // Der gerade im Bearbeitungs-Scope offene Workflow braucht
+      // dieselben Platzhalter-Positionen auch dann, wenn er "stopped"
+      // statt "paused" ist (s. #workflowEditId-Doku) — einmal
+      // eingesammelt statt doppelt, falls er zufällig ohnehin pausiert
+      // ist.
+      if (wf.status !== "paused" && wf.id !== this.#workflowEditId) continue;
       for (const role of wf.definition.roles) {
         ids.push(pausedPlaceholderId(wf.id, role.name));
       }
@@ -761,6 +789,272 @@ export class FlowCanvas extends HTMLElement {
   setWorkflowFilter(workflowId: string | null) {
     this.#workflowFilter = workflowId;
     this.#render();
+  }
+
+  // Von außen aufgerufen (ui/shell/app-shell.ts, nach Tab-Wechsel aus
+  // der Workflows-Ansicht heraus) — s. #workflowEditId-Doku oben. Ein
+  // laufender Workflow lässt sich nicht bearbeiten (Backend lehnt
+  // Update() dafür ab, s. dort) — hier schon vorab abgefangen, damit
+  // der Nutzer nicht erst nach einem fehlgeschlagenen Schreibversuch
+  // erfährt, dass der Workflow läuft.
+  // Async statt eines synchronen Lookups gegen #workflows: wird von
+  // app-shell.ts direkt nach dem Tab-Wechsel auf "flow" aufgerufen
+  // (s. #switchTab), also potenziell BEVOR die frisch gemountete Kachel
+  // ihre eigene #init()-Ladephase abgeschlossen hat. #queueFetchAndRender
+  // reiht sich hinter einen bereits laufenden Fetch ein (eigene
+  // Promise-Kette, s. dortige Doku) statt einen zweiten parallel
+  // loszuschicken — dieser Await liefert deshalb garantiert frische Daten,
+  // ganz gleich ob #workflows schon gefüllt war oder nicht.
+  async enterWorkflowEditScope(workflowId: string) {
+    await this.#queueFetchAndRender();
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) {
+      this.#showToast("Workflow nicht gefunden.");
+      return;
+    }
+    if (wf.status !== "stopped" && wf.status !== "paused") {
+      this.#showToast(`Workflow „${wf.name}" läuft — erst stoppen/pausieren, dann bearbeiten.`);
+      return;
+    }
+    this.#workflowEditId = workflowId;
+    this.#connectFromRole = null;
+    this.#selectedIds = new Set();
+    this.#assignMissingPositions();
+    this.#render();
+  }
+
+  #exitWorkflowEditScope() {
+    this.#workflowEditId = null;
+    this.#connectFromRole = null;
+    this.#render();
+  }
+
+  // Bug 2: Bearbeiten-Modus-Renderpfad — eine Kachel pro Rolle
+  // (editierbar, s. #renderEditableRoleTile), eine klickbare gestrichelte
+  // Linie pro Verbindung (Klick = trennen). Nutzt dieselben synthetischen
+  // Positionen wie die Pause-Platzhalter (pausedPlaceholderId), damit ein
+  // Wechsel pausiert-Ansicht ↔ Bearbeiten-Modus das Layout nicht springen
+  // lässt.
+  #renderWorkflowEditScope() {
+    const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+    if (!wf) {
+      this.#exitWorkflowEditScope();
+      return;
+    }
+
+    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    for (const conn of wf.definition.connections) {
+      const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];
+      const toPos = this.#positions[pausedPlaceholderId(wf.id, conn.toRole)];
+      if (!fromPos || !toPos) continue;
+
+      const line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("data-role", "workflow-edit-connection");
+      line.setAttribute("data-from-role", conn.fromRole);
+      line.setAttribute("data-to-role", conn.toRole);
+      line.setAttribute("x1", String(fromPos.x + NODE_WIDTH / 2));
+      line.setAttribute("y1", String(fromPos.y + height / 2));
+      line.setAttribute("x2", String(toPos.x + NODE_WIDTH / 2));
+      line.setAttribute("y2", String(toPos.y + height / 2));
+      line.setAttribute("stroke", "#5b9bd5");
+      line.setAttribute("stroke-width", "3");
+      line.setAttribute("stroke-dasharray", "4 4");
+      line.style.cursor = "pointer";
+      line.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      line.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.#removeWorkflowConnection(wf.id, conn.fromRole, conn.toRole);
+      });
+      const title = document.createElementNS(SVG_NS, "title");
+      title.textContent = "Verbindung trennen";
+      line.appendChild(title);
+      this.#viewportGroup.appendChild(line);
+    }
+
+    for (const role of wf.definition.roles) {
+      this.#viewportGroup.appendChild(this.#renderEditableRoleTile(wf.id, role));
+    }
+  }
+
+  // Klickbare Rollen-Kachel im Bearbeiten-Modus: Klick auf den Körper
+  // startet/beendet den Verbindungs-Modus (s. #onWorkflowEditRoleClick,
+  // analog zum Drag-basierten Verbinden echter Nodes, aber ohne Ports —
+  // eine Rollen-Verbindung im Template kennt keine Port-Geometrie, s.
+  // #buildPausedPlaceholderEdges). "×"-Knopf entfernt die Rolle.
+  #renderEditableRoleTile(workflowId: string, role: { name: string; nodeType: string }): SVGGElement {
+    const id = pausedPlaceholderId(workflowId, role.name);
+    const pos = this.#positions[id] ?? { x: 0, y: 0 };
+    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const armed = this.#connectFromRole === role.name;
+
+    const g = document.createElementNS(SVG_NS, "g");
+    g.setAttribute("data-role", "workflow-edit-role");
+    g.setAttribute("data-role-name", role.name);
+    g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
+
+    const body = document.createElementNS(SVG_NS, "rect");
+    body.setAttribute("width", String(NODE_WIDTH));
+    body.setAttribute("height", String(height));
+    body.setAttribute("rx", "4");
+    body.setAttribute("fill", armed ? "#2d3a4d" : "#2d2d2d");
+    body.setAttribute("stroke", armed ? "#ffcc00" : "#5b9bd5");
+    body.setAttribute("stroke-width", armed ? "3" : "2");
+    body.setAttribute("stroke-dasharray", "6 3");
+    body.style.cursor = "pointer";
+    const bodyTitle = document.createElementNS(SVG_NS, "title");
+    bodyTitle.textContent = armed
+      ? "Zielrolle anklicken, um zu verbinden (oder hier klicken zum Abbrechen)"
+      : "Klicken, dann Zielrolle anklicken, um zu verbinden";
+    body.appendChild(bodyTitle);
+    body.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    body.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this.#onWorkflowEditRoleClick(workflowId, role.name);
+    });
+    g.appendChild(body);
+
+    const nameText = document.createElementNS(SVG_NS, "text");
+    nameText.setAttribute("x", "8");
+    nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+    nameText.setAttribute("fill", "#f0f0f0");
+    nameText.setAttribute("font-size", "12");
+    nameText.setAttribute("pointer-events", "none");
+    nameText.textContent = role.name;
+    g.appendChild(nameText);
+
+    const typeText = document.createElementNS(SVG_NS, "text");
+    typeText.setAttribute("x", "8");
+    typeText.setAttribute("y", String(HEADER_HEIGHT + 16));
+    typeText.setAttribute("fill", "#999");
+    typeText.setAttribute("font-size", "11");
+    typeText.setAttribute("pointer-events", "none");
+    typeText.textContent = role.nodeType;
+    g.appendChild(typeText);
+
+    const closeBtn = document.createElementNS(SVG_NS, "text");
+    closeBtn.setAttribute("x", String(NODE_WIDTH - 8));
+    closeBtn.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+    closeBtn.setAttribute("text-anchor", "end");
+    closeBtn.setAttribute("fill", "#e05050");
+    closeBtn.setAttribute("font-size", "12");
+    closeBtn.style.cursor = "pointer";
+    closeBtn.setAttribute("data-role", "remove-workflow-role");
+    closeBtn.textContent = "×";
+    const closeTitle = document.createElementNS(SVG_NS, "title");
+    closeTitle.textContent = "Rolle entfernen";
+    closeBtn.appendChild(closeTitle);
+    closeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    closeBtn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      this.#removeWorkflowRole(workflowId, role.name);
+    });
+    g.appendChild(closeBtn);
+
+    return g;
+  }
+
+  // Erster Klick auf eine Rolle merkt sie als Verbindungs-Quelle
+  // (#connectFromRole, optisch hervorgehoben). Zweiter Klick auf
+  // dieselbe Rolle bricht ab, auf eine andere Rolle legt die Verbindung
+  // an. Sofortiges #render() vor dem asynchronen PUT, damit die
+  // Hervorhebung nicht bis zur Serverantwort "hängen" bleibt.
+  #onWorkflowEditRoleClick(workflowId: string, roleName: string) {
+    if (this.#connectFromRole === null) {
+      this.#connectFromRole = roleName;
+      this.#render();
+      return;
+    }
+    if (this.#connectFromRole === roleName) {
+      this.#connectFromRole = null;
+      this.#render();
+      return;
+    }
+    const fromRole = this.#connectFromRole;
+    this.#connectFromRole = null;
+    this.#render();
+    this.#addWorkflowConnection(workflowId, fromRole, roleName);
+  }
+
+  // Gemeinsamer PUT-Helfer für alle Bearbeiten-Modus-Mutationen (Update()
+  // im Backend akzeptiert stopped/paused, s. orchestrator workflows
+  // service.go). `mutate` bekommt eine flache Kopie der aktuellen
+  // Definition (Object-Spread) — unbekannte Felder (settings, schedules,
+  // title, ...) bleiben dadurch erhalten, ohne dass diese Datei ihre
+  // volle Struktur kennen muss (s. WorkflowSummary.definition-Doku).
+  // `null` bricht clientseitig ab, ohne einen Request zu senden.
+  async #updateWorkflowDefinition(
+    workflowId: string,
+    mutate: (def: Record<string, unknown>) => Record<string, unknown> | null,
+  ): Promise<boolean> {
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) return false;
+    const nextDef = mutate({ ...wf.definition });
+    if (nextDef === null) return false;
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${encodeURIComponent(workflowId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: wf.name, definition: nextDef }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Workflow-Änderung fehlgeschlagen: ${text || res.status}`);
+        return false;
+      }
+      await this.#queueFetchAndRender();
+      return true;
+    } catch (err) {
+      this.#showToast(`Workflow-Änderung fehlgeschlagen: ${err}`);
+      return false;
+    }
+  }
+
+  #addWorkflowRole(workflowId: string, nodeType: string) {
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) return;
+    const usedNames = new Set(wf.definition.roles.map((r) => r.name));
+    const roleName = uniqueRoleName(nodeType, usedNames);
+    this.#updateWorkflowDefinition(workflowId, (def) => ({
+      ...def,
+      roles: [...(def.roles as { name: string; nodeType: string }[]), { name: roleName, nodeType }],
+    }));
+  }
+
+  #removeWorkflowRole(workflowId: string, roleName: string) {
+    const wf = this.#workflows.find((w) => w.id === workflowId);
+    if (!wf) return;
+    if (wf.definition.roles.length <= 1) {
+      this.#showToast("Ein Workflow braucht mindestens eine Rolle.");
+      return;
+    }
+    if (this.#connectFromRole === roleName) this.#connectFromRole = null;
+    this.#updateWorkflowDefinition(workflowId, (def) => ({
+      ...def,
+      roles: (def.roles as { name: string; nodeType: string }[]).filter((r) => r.name !== roleName),
+      connections: (def.connections as { fromRole: string; toRole: string }[]).filter(
+        (c) => c.fromRole !== roleName && c.toRole !== roleName,
+      ),
+    }));
+  }
+
+  #addWorkflowConnection(workflowId: string, fromRole: string, toRole: string) {
+    this.#updateWorkflowDefinition(workflowId, (def) => {
+      const connections = def.connections as { fromRole: string; toRole: string }[];
+      if (connections.some((c) => c.fromRole === fromRole && c.toRole === toRole)) {
+        this.#showToast("Verbindung besteht bereits.");
+        return null;
+      }
+      return { ...def, connections: [...connections, { fromRole, toRole }] };
+    });
+  }
+
+  #removeWorkflowConnection(workflowId: string, fromRole: string, toRole: string) {
+    this.#updateWorkflowDefinition(workflowId, (def) => ({
+      ...def,
+      connections: (def.connections as { fromRole: string; toRole: string }[]).filter(
+        (c) => !(c.fromRole === fromRole && c.toRole === toRole),
+      ),
+    }));
   }
 
   // Flache Node-Kacheln nur der Runtime-Rollen eines einzelnen
@@ -833,6 +1127,17 @@ export class FlowCanvas extends HTMLElement {
     this.#viewportGroup.replaceChildren();
     this.#applyViewportTransform();
     this.#renderBreadcrumb();
+
+    // Bug 2 (2026-07-24): Bearbeiten-Modus ist ein eigener Renderpfad,
+    // kein weiterer Scope innerhalb #buildTilesAtScope() — der bearbeitete
+    // Workflow hat i. d. R. keine laufenden Runtime-Nodes mehr (gestoppt/
+    // pausiert), es gibt also nichts, worüber #buildTilesAtScope() anhand
+    // von #graph navigieren könnte. Skippt Rahmen/Platzhalter/normale
+    // Kacheln komplett.
+    if (this.#workflowEditId) {
+      this.#renderWorkflowEditScope();
+      return;
+    }
 
     const tiles = this.#buildTilesAtScope();
 
@@ -1035,9 +1340,39 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #renderBreadcrumb() {
-    const path = breadcrumbPath(this.#groupTree, this.#scope);
     this.#breadcrumbBar.replaceChildren();
 
+    // Bug 2: eigener Breadcrumb statt Gruppen-Pfad — der bearbeitete
+    // Workflow ist keine B5-Gruppe (viele haben gar keine, s.
+    // #workflowEditId-Doku), #scope bleibt dabei unverändert im
+    // Hintergrund stehen, damit "Verlassen" exakt dorthin zurückkehrt.
+    if (this.#workflowEditId) {
+      const wf = this.#workflows.find((w) => w.id === this.#workflowEditId);
+      const rootLink = document.createElement("a");
+      rootLink.textContent = "Root";
+      rootLink.href = "#";
+      rootLink.style.color = "#5b9bd5";
+      rootLink.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        this.#exitWorkflowEditScope();
+      });
+      this.#breadcrumbBar.appendChild(rootLink);
+      const sep = document.createElement("span");
+      sep.textContent = "›";
+      this.#breadcrumbBar.appendChild(sep);
+      const label = document.createElement("span");
+      label.textContent = `Bearbeiten: ${wf?.name ?? this.#workflowEditId}`;
+      this.#breadcrumbBar.appendChild(label);
+
+      const exitBtn = document.createElement("button");
+      exitBtn.textContent = "Verlassen";
+      exitBtn.style.cssText = "margin-left:auto;font-size:11px;cursor:pointer;";
+      exitBtn.addEventListener("click", () => this.#exitWorkflowEditScope());
+      this.#breadcrumbBar.appendChild(exitBtn);
+      return;
+    }
+
+    const path = breadcrumbPath(this.#groupTree, this.#scope);
     this.#breadcrumbBar.appendChild(this.#breadcrumbLink("Root", null));
     for (const group of path) {
       const sep = document.createElement("span");
@@ -2402,7 +2737,18 @@ export class FlowCanvas extends HTMLElement {
         row.appendChild(hostSelect);
       }
 
-      btn.addEventListener("click", () => this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined));
+      // Bug 2: im Bearbeiten-Modus fügt der Katalog-Button eine Rolle zur
+      // Workflow-Definition hinzu statt eine neue Instanz zu starten —
+      // der Host-Selector greift hier nicht (Rollen bekommen ihren Host
+      // erst beim nächsten Workflow-Start über den Launcher, s.
+      // orchestrator/internal/workflows/service.go runStart).
+      btn.addEventListener("click", () => {
+        if (this.#workflowEditId) {
+          this.#addWorkflowRole(this.#workflowEditId, entry.type);
+          return;
+        }
+        this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined);
+      });
       row.appendChild(btn);
       this.#palette.appendChild(row);
 
