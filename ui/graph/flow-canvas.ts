@@ -340,8 +340,7 @@ export class FlowCanvas extends HTMLElement {
   // (B5-Gruppen) und #workflowFilter (reine Lesefilter-Ansicht laufender
   // Workflows): hier werden keine echten Nodes gezeigt, sondern die
   // Rollen der Workflow-**Definition** als editierbare Platzhalter-
-  // Kacheln (gleiche Optik wie ein pausierter Workflow, s.
-  // #buildPausedPlaceholderTiles, hier aber interaktiv). Von außen
+  // Kacheln (s. #renderEditableRoleTile). Von außen
   // gesetzt über enterWorkflowEditScope() (ui/shell/app-shell.ts, nach
   // einem Tab-Wechsel aus der Workflows-Ansicht).
   #workflowEditId: string | null = null;
@@ -704,7 +703,8 @@ export class FlowCanvas extends HTMLElement {
     const validIds = new Set<string>([
       ...this.#graph.nodes.map((n) => n.id),
       ...Object.keys(this.#groupTree.groups),
-      ...this.#pausedPlaceholderIds(),
+      ...this.#workflowEditRolePlaceholderIds(),
+      ...this.#idleWorkflowTileIds(),
     ]);
     let changed = false;
     for (const id of Object.keys(this.#positions)) {
@@ -748,7 +748,14 @@ export class FlowCanvas extends HTMLElement {
     // alle stapeln sich auf derselben Default-Position — beobachtet mit
     // vier gestarteten Instanzen, die alle auf (40,40) landeten.
     let nextIndex = Object.keys(this.#positions).length;
-    for (const id of [...items.nodeIds, ...items.groupIds, ...this.#pausedPlaceholderIds()]) {
+    for (
+      const id of [
+        ...items.nodeIds,
+        ...items.groupIds,
+        ...this.#workflowEditRolePlaceholderIds(),
+        ...this.#idleWorkflowTileIds(),
+      ]
+    ) {
       if (!this.#positions[id]) {
         this.#positions[id] = defaultPosition(nextIndex);
         nextIndex++;
@@ -759,22 +766,23 @@ export class FlowCanvas extends HTMLElement {
     return changed;
   }
 
-  #pausedPlaceholderIds(): string[] {
-    const ids: string[] = [];
-    for (const wf of this.#workflows) {
-      if (!this.#isIdleWorkflow(wf) && wf.id !== this.#workflowEditId) continue;
-      // Der gerade bearbeitete Workflow braucht Positionen für die
-      // Rollen des LOKALEN ENTWURFS, nicht die zuletzt gespeicherten —
-      // sonst bekäme eine gerade erst im Entwurf hinzugefügte, noch
-      // ungespeicherte Rolle nie eine Position zugewiesen.
-      const roles = wf.id === this.#workflowEditId && this.#workflowEditDraft
-        ? this.#workflowEditDraft.roles
-        : wf.definition.roles;
-      for (const role of roles) {
-        ids.push(pausedPlaceholderId(wf.id, role.name));
-      }
-    }
-    return ids;
+  // Positionen der Rollen-Kacheln INNERHALB des gerade bearbeiteten
+  // Workflows (s. #renderWorkflowEditScope) — aus dem lokalen Entwurf,
+  // nicht aus dem zuletzt gespeicherten Stand, sonst bekäme eine gerade
+  // erst im Entwurf hinzugefügte, noch ungespeicherte Rolle nie eine
+  // Position zugewiesen.
+  #workflowEditRolePlaceholderIds(): string[] {
+    if (!this.#workflowEditId || !this.#workflowEditDraft) return [];
+    const workflowId = this.#workflowEditId;
+    return this.#workflowEditDraft.roles.map((role) => pausedPlaceholderId(workflowId, role.name));
+  }
+
+  // Eine einzige, kollabierte Kachel-Position pro gestopptem/pausiertem
+  // Workflow (s. #renderIdleWorkflowTiles) — Nutzerwunsch 2026-07-26:
+  // "im Root soll ein Workflow aussehen wie eine Gruppe", also eine
+  // Position pro Workflow statt (wie vorher) eine pro Rolle.
+  #idleWorkflowTileIds(): string[] {
+    return this.#workflows.filter((wf) => this.#isIdleWorkflow(wf)).map((wf) => workflowTileId(wf.id));
   }
 
   #itemsAtScope(): { nodeIds: string[]; groupIds: string[] } {
@@ -925,11 +933,12 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
-  // Klickbare Rollen-Kachel im Bearbeiten-Modus: Klick auf den Körper
-  // startet/beendet den Verbindungs-Modus (s. #onWorkflowEditRoleClick,
-  // analog zum Drag-basierten Verbinden echter Nodes, aber ohne Ports —
-  // eine Rollen-Verbindung im Template kennt keine Port-Geometrie, s.
-  // #buildPausedPlaceholderEdges). "×"-Knopf entfernt die Rolle.
+  // Ziehbare Rollen-Kachel im Bearbeiten-Modus (wie eine echte Node-
+  // Kachel, s. #onTilePointerDown-Aufruf unten). Ein reiner Klick (keine
+  // Bewegung) startet/beendet den Verbindungs-Modus (s.
+  // #onWorkflowEditRoleClick) — ohne echte Ports, eine Rollen-Verbindung
+  // im Template kennt keine Port-Geometrie, daher Kachel-zu-Kachel statt
+  // Port-zu-Port. "×"-Knopf entfernt die Rolle.
   #renderEditableRoleTile(workflowId: string, role: { name: string; nodeType: string }): SVGGElement {
     const id = pausedPlaceholderId(workflowId, role.name);
     const pos = this.#positions[id] ?? { x: 0, y: 0 };
@@ -952,15 +961,19 @@ export class FlowCanvas extends HTMLElement {
     body.style.cursor = "pointer";
     const bodyTitle = document.createElementNS(SVG_NS, "title");
     bodyTitle.textContent = armed
-      ? "Zielrolle anklicken, um zu verbinden (oder hier klicken zum Abbrechen)"
-      : "Klicken, dann Zielrolle anklicken, um zu verbinden";
+      ? "Zielrolle anklicken, um zu verbinden (oder hier klicken zum Abbrechen) — ziehen zum Verschieben"
+      : "Klicken, dann Zielrolle anklicken, um zu verbinden — ziehen zum Verschieben";
     body.appendChild(bodyTitle);
-    body.addEventListener("pointerdown", (ev) => ev.stopPropagation());
-    body.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this.#onWorkflowEditRoleClick(role.name);
-    });
     g.appendChild(body);
+
+    // Nutzerwunsch (2026-07-26): "wie eine Gruppe bearbeiten" — dieselbe
+    // Zieh-Logik wie bei echten Node-/Gruppen-Kacheln (#onTilePointerDown
+    // ist ID-agnostisch), damit sich Rollen-Kacheln frei positionieren
+    // lassen. Ein reiner Klick ohne Bewegung (#onPointerUp, kind==="node")
+    // erkennt anhand von workflowEditRoleName(), dass `id` eine Rollen-
+    // Kachel ist, und ruft #onWorkflowEditRoleClick() statt
+    // #openParameterPanel() auf.
+    g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, id));
 
     const nameText = document.createElementNS(SVG_NS, "text");
     nameText.setAttribute("x", "8");
@@ -1215,11 +1228,8 @@ export class FlowCanvas extends HTMLElement {
     for (const frame of this.#buildWorkflowFrames(tiles)) {
       this.#viewportGroup.appendChild(frame);
     }
-    for (const line of this.#buildPausedPlaceholderEdges()) {
-      this.#viewportGroup.appendChild(line);
-    }
-    for (const placeholder of this.#buildPausedPlaceholderTiles()) {
-      this.#viewportGroup.appendChild(placeholder);
+    for (const workflowTile of this.#renderIdleWorkflowTiles()) {
+      this.#viewportGroup.appendChild(workflowTile);
     }
     for (const tile of tiles) {
       this.#viewportGroup.appendChild(this.#renderTile(tile));
@@ -1260,29 +1270,26 @@ export class FlowCanvas extends HTMLElement {
     return wf.status === "stopped" || wf.status === "paused";
   }
 
+  // Nur noch für LAUFENDE Workflows (Nutzerwunsch 2026-07-26: gestoppte/
+  // pausierte Workflows bekommen stattdessen eine kollabierte Kachel wie
+  // eine Gruppe, s. #renderIdleWorkflowTiles, statt eines Rahmens um
+  // ausgebreitete Platzhalter-Kacheln).
   #buildWorkflowFrames(tiles: TileSpec[]): SVGGElement[] {
     const visibleIds = new Set(tiles.map((t) => t.id));
     const frames: SVGGElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
-      // Ein stopped/paused Workflow hat keine Runtime-Node-IDs mehr
-      // (Runtime wird beim Pausieren/Stoppen geleert, s.
-      // #isIdleWorkflow-Doku) — der Rahmen umschließt dann die
-      // Platzhalter-Kacheln (synthetische IDs, s. pausedPlaceholderId)
-      // statt echter Runtime-Nodes.
-      const isIdle = this.#isIdleWorkflow(wf);
-      const ids = isIdle
-        ? wf.definition.roles.map((r) => pausedPlaceholderId(wf.id, r.name))
-        : Object.values(wf.runtime ?? {})
-            .map((rt) => rt.nodeId)
-            .filter((id): id is string => !!id);
+      if (this.#isIdleWorkflow(wf)) continue;
+      const ids = Object.values(wf.runtime ?? {})
+        .map((rt) => rt.nodeId)
+        .filter((id): id is string => !!id);
       if (ids.length === 0) continue;
-      if (!isIdle && !ids.every((id) => visibleIds.has(id))) continue;
+      if (!ids.every((id) => visibleIds.has(id))) continue;
       if (!ids.every((id) => this.#positions[id])) continue;
 
       const boxes = ids.map((id) => {
         const pos = this.#positions[id];
-        const height = isIdle ? MIN_BODY_HEIGHT + HEADER_HEIGHT : this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
+        const height = this.#tileHeightById.get(id) ?? MIN_BODY_HEIGHT + HEADER_HEIGHT;
         return { minX: pos.x, minY: pos.y, maxX: pos.x + NODE_WIDTH, maxY: pos.y + height };
       });
 
@@ -1316,120 +1323,99 @@ export class FlowCanvas extends HTMLElement {
       label.setAttribute("y", String(minY + LABEL_HEIGHT - 4));
       label.setAttribute("fill", color);
       label.setAttribute("font-size", "11");
-      label.textContent = isIdle ? `▭ ${wf.name} (${wf.status}) — Doppelklick zum Bearbeiten` : `▭ ${wf.name} (${wf.status})`;
+      label.textContent = `▭ ${wf.name} (${wf.status})`;
       g.appendChild(label);
-
-      // Bug 2: Doppelklick auf den Rahmen (nicht nur auf eine einzelne
-      // Platzhalter-Kachel, s. #buildPausedPlaceholderTiles) öffnet den
-      // Bearbeiten-Modus — analog zum bestehenden Doppelklick auf eine
-      // Gruppen-Kachel (#renderTile). Nur sinnvoll, solange der Workflow
-      // überhaupt bearbeitbar ist (enterWorkflowEditScope() lehnt einen
-      // laufenden Workflow ohnehin ab, hier zusätzlich schon keinen
-      // Cursor/Hinweis dafür anzubieten).
-      if (isIdle) {
-        rect.style.cursor = "pointer";
-        g.addEventListener("dblclick", (ev) => {
-          ev.stopPropagation();
-          this.enterWorkflowEditScope(wf.id);
-        });
-      }
 
       frames.push(g);
     }
     return frames;
   }
 
-  // Kapitel 12 Teil 3 (§12.3c wörtlich: "der Editor rendert die Rollen
-  // als Platzhalter-Kacheln (Rollenname + Typ, gestrichelter Rahmen …)
-  // im Workflow-Rahmen weiter"). Eine Kachel pro Rolle eines pausierten
-  // Workflows, an der synthetischen Position aus pausedPlaceholderId —
-  // keine Ports (ein pausierter Workflow hat keinen laufenden Node, der
-  // welche liefern könnte).
-  #buildPausedPlaceholderTiles(): SVGGElement[] {
+  // Nutzerwunsch (2026-07-26, wörtlich): "ein Workflow soll im Root (oder
+  // Parent) aussehen wie eine Gruppe. Mit Doppelklick in die Gruppe/
+  // Workflow. Dann kann man ihn wie eine Gruppe bearbeiten. Diesen
+  // Status kann man speichern/updaten." Ersetzt die vorherige "Rahmen +
+  // einzelne Platzhalter-Kacheln"-Darstellung für gestoppte/pausierte
+  // Workflows durch EINE kollabierte Kachel pro Workflow, optisch wie
+  // eine echte Gruppen-Kachel (gleiche Farben wie der isGroup-Zweig in
+  // #renderTile). Doppelklick öffnet aber enterWorkflowEditScope() statt
+  // #enterScope() — ein Workflow ist keine echte B5-Gruppe (viele haben
+  // gar keine, s. #workflowEditId-Doku), daher ein eigener, aber optisch
+  // identischer Renderpfad statt Wiederverwendung der TileSpec/
+  // #renderTile-Pipeline (deren dblclick fest auf #enterScope zeigt und
+  // eine echte groupTree-ID erwartet). Nur im Root-Scope — ein Workflow
+  // ist nicht innerhalb einer Gruppe verschachtelbar.
+  #renderIdleWorkflowTiles(): SVGGElement[] {
+    if (this.#scope !== null) return [];
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const tiles: SVGGElement[] = [];
 
     for (const wf of this.#workflowsInScope()) {
       if (!this.#isIdleWorkflow(wf)) continue;
-      for (const role of wf.definition.roles) {
-        const id = pausedPlaceholderId(wf.id, role.name);
-        const pos = this.#positions[id];
-        if (!pos) continue;
+      const id = workflowTileId(wf.id);
+      const pos = this.#positions[id];
+      if (!pos) continue;
 
-        const g = document.createElementNS(SVG_NS, "g");
-        g.setAttribute("data-role", "paused-placeholder");
-        g.setAttribute("data-id", id);
-        g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("data-role", "workflow-tile");
+      g.setAttribute("data-workflow-id", wf.id);
+      g.setAttribute("transform", `translate(${pos.x},${pos.y})`);
 
-        const body = document.createElementNS(SVG_NS, "rect");
-        body.setAttribute("width", String(NODE_WIDTH));
-        body.setAttribute("height", String(height));
-        body.setAttribute("rx", "4");
-        body.setAttribute("fill", "none");
-        body.setAttribute("stroke", "#5b9bd5");
-        body.setAttribute("stroke-width", "2");
-        body.setAttribute("stroke-dasharray", "6 3");
-        body.style.cursor = "pointer";
-        g.appendChild(body);
+      const body = document.createElementNS(SVG_NS, "rect");
+      body.setAttribute("width", String(NODE_WIDTH));
+      body.setAttribute("height", String(height));
+      body.setAttribute("rx", "4");
+      body.setAttribute("fill", "#2d3a4d");
+      body.setAttribute("stroke", "#5b9bd5");
+      body.setAttribute("stroke-width", "2");
+      g.appendChild(body);
 
-        // Bug 2: Doppelklick auf eine einzelne Platzhalter-Kachel öffnet
-        // ebenfalls den Bearbeiten-Modus (falls der Klick den Rahmen
-        // selbst verfehlt, z. B. bei stark überlappenden Kacheln).
-        g.addEventListener("dblclick", (ev) => {
-          ev.stopPropagation();
-          this.enterWorkflowEditScope(wf.id);
-        });
+      const header = document.createElementNS(SVG_NS, "rect");
+      header.setAttribute("width", String(NODE_WIDTH));
+      header.setAttribute("height", String(HEADER_HEIGHT));
+      header.setAttribute("rx", "4");
+      header.setAttribute("fill", "#3a4a5d");
+      g.appendChild(header);
 
-        const nameText = document.createElementNS(SVG_NS, "text");
-        nameText.setAttribute("x", "8");
-        nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
-        nameText.setAttribute("fill", "#f0f0f0");
-        nameText.setAttribute("font-size", "12");
-        nameText.textContent = role.name;
-        g.appendChild(nameText);
-
-        const typeText = document.createElementNS(SVG_NS, "text");
-        typeText.setAttribute("x", "8");
-        typeText.setAttribute("y", String(HEADER_HEIGHT + 16));
-        typeText.setAttribute("fill", "#999");
-        typeText.setAttribute("font-size", "11");
-        typeText.textContent = role.nodeType;
-        g.appendChild(typeText);
-
-        tiles.push(g);
+      const fullLabel = `▣ ${wf.name}`;
+      const title = document.createElementNS(SVG_NS, "text");
+      title.setAttribute("x", "8");
+      title.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      title.setAttribute("fill", "#f0f0f0");
+      title.setAttribute("font-size", "12");
+      title.setAttribute("pointer-events", "none");
+      title.textContent = truncateTileTitle(fullLabel, 20);
+      if (fullLabel.length > 20) {
+        const tooltip = document.createElementNS(SVG_NS, "title");
+        tooltip.textContent = fullLabel;
+        title.appendChild(tooltip);
       }
+      g.appendChild(title);
+
+      const subtitle = document.createElementNS(SVG_NS, "text");
+      subtitle.setAttribute("x", "8");
+      subtitle.setAttribute("y", String(HEADER_HEIGHT + 16));
+      subtitle.setAttribute("fill", "#999");
+      subtitle.setAttribute("font-size", "11");
+      subtitle.setAttribute("pointer-events", "none");
+      subtitle.textContent = `${wf.status} — Doppelklick zum Bearbeiten`;
+      g.appendChild(subtitle);
+
+      // Wie eine echte Gruppen-Kachel: ziehbar (#onTilePointerDown ist ID-
+      // agnostisch, arbeitet nur über #positions/#drag) UND per Doppelklick
+      // zu öffnen. #onTilePointerDown ruft bei einem reinen Klick (keine
+      // Bewegung) #openParameterPanel(id) auf — die bricht für eine ID
+      // ohne Graph-Node-Treffer bereits selbst früh ab (s. dortige Doku),
+      // also ungefährlich für diese synthetische ID.
+      g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, id));
+      g.addEventListener("dblclick", (ev) => {
+        ev.stopPropagation();
+        this.enterWorkflowEditScope(wf.id);
+      });
+
+      tiles.push(g);
     }
     return tiles;
-  }
-
-  // Template-Kanten eines pausierten Workflows als gestrichelte Linien
-  // (§12.3c) — ohne Port-Geometrie (die gibt es ohne laufenden Node
-  // nicht), daher schlicht Kachelmitte zu Kachelmitte statt der
-  // bezier-basierten #renderEdge()-Kanten für echte Ports.
-  #buildPausedPlaceholderEdges(): SVGLineElement[] {
-    const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
-    const lines: SVGLineElement[] = [];
-
-    for (const wf of this.#workflowsInScope()) {
-      if (!this.#isIdleWorkflow(wf)) continue;
-      for (const conn of wf.definition.connections) {
-        const fromPos = this.#positions[pausedPlaceholderId(wf.id, conn.fromRole)];
-        const toPos = this.#positions[pausedPlaceholderId(wf.id, conn.toRole)];
-        if (!fromPos || !toPos) continue;
-
-        const line = document.createElementNS(SVG_NS, "line");
-        line.setAttribute("data-role", "paused-placeholder-edge");
-        line.setAttribute("x1", String(fromPos.x + NODE_WIDTH / 2));
-        line.setAttribute("y1", String(fromPos.y + height / 2));
-        line.setAttribute("x2", String(toPos.x + NODE_WIDTH / 2));
-        line.setAttribute("y2", String(toPos.y + height / 2));
-        line.setAttribute("stroke", "#5b9bd5");
-        line.setAttribute("stroke-width", "2");
-        line.setAttribute("stroke-dasharray", "4 4");
-        lines.push(line);
-      }
-    }
-    return lines;
   }
 
   #renderBreadcrumb() {
@@ -2156,7 +2142,19 @@ export class FlowCanvas extends HTMLElement {
       if (this.#drag.moved) {
         this.#saveLayout();
       } else {
-        this.#openParameterPanel(this.#drag.nodeId);
+        // Ein reiner Klick (keine Bewegung) auf eine Rollen-Kachel des
+        // gerade bearbeiteten Workflows (s. #renderEditableRoleTile)
+        // steuert den Klick-zu-Verbinden-Zustand statt das (für so eine
+        // synthetische ID ohnehin wirkungslose) Parameter-Panel zu
+        // öffnen.
+        const roleName = this.#workflowEditId
+          ? workflowEditRoleName(this.#workflowEditId, this.#drag.nodeId)
+          : null;
+        if (roleName !== null) {
+          this.#onWorkflowEditRoleClick(roleName);
+        } else {
+          this.#openParameterPanel(this.#drag.nodeId);
+        }
       }
     } else if (this.#drag?.kind === "connect") {
       this.#finishConnect(ev);
@@ -3121,6 +3119,25 @@ export class FlowCanvas extends HTMLElement {
 // Reloads hinweg stabil, genau wie bei jeder anderen Kachel.
 function pausedPlaceholderId(workflowId: string, role: string): string {
   return `paused:${workflowId}:${role}`;
+}
+
+// Rückrichtung zu pausedPlaceholderId — liefert den Rollennamen zurück,
+// wenn `id` eine Rollen-Kachel DES angegebenen (gerade bearbeiteten)
+// Workflows ist, sonst null. Wird von #onPointerUp gebraucht, um einen
+// beendeten Klick-Drag auf so einer Kachel von einem echten Node-/
+// Gruppen-Klick zu unterscheiden (s. dortige Doku).
+function workflowEditRoleName(workflowId: string, id: string): string | null {
+  const prefix = pausedPlaceholderId(workflowId, "");
+  return id.startsWith(prefix) ? id.slice(prefix.length) : null;
+}
+
+// Position der EINEN kollabierten Wurzel-Kachel eines gestoppten/
+// pausierten Workflows (s. #renderIdleWorkflowTiles) — eigener
+// Namensraum ("workflow-tile:"), damit er nicht mit einer
+// Rollen-Platzhalter-ID (pausedPlaceholderId) kollidieren kann, falls
+// ein Workflow zufällig eine Rolle namens z. B. dem eigenen Namen hätte.
+function workflowTileId(workflowId: string): string {
+  return `workflow-tile:${workflowId}`;
 }
 
 function healthColor(health: string): string {

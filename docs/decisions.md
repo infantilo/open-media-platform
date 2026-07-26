@@ -12914,3 +12914,68 @@ alle geänderten Dateien grün.
 **Umgesetzt in:** `orchestrator/internal/workflows/{service.go,
 service_test.go, store.go}`, `ui/graph/flow-canvas.ts`. Lokal committet,
 **nicht gepusht** (User muss erneut um Push bitten).
+
+## 2026-07-26 (Nachtrag 95) — Bug-2-Nachmeldung 2: Workflow-Darstellung
+im Root auf echte Gruppen-Optik vereinheitlicht
+
+Nutzer, wörtlich, nach Nachtrag 94: "das bearbeiten eines workflows ist
+immer noch nicht wie gewünscht. ein workflow soll im root (oder parent)
+aussehen wie eine gruppe. mit doppelklick in die gruppe/workflow. dann
+kann man ihn wie eine gruppe bearbeiten. diesen status kann man
+speichern/updaten. man braucht sonst keine bearbeitungsmöglichkeit."
+Kein neuer Bug, sondern eine Präzisierung: Nachtrag 94 zeigte einen
+gestoppten Workflow im Root als **Rahmen um sechs ausgebreitete
+Platzhalter-Kacheln** — das ist optisch etwas anderes als eine
+kollabierte Gruppen-Kachel (eine Box), auch wenn beide per Doppelklick
+"reingehen" ließen. Der Nutzer wollte explizit die exakt gleiche Optik
+wie eine echte Gruppe, nicht nur eine ähnliche.
+
+**Umgesetzt — vollständige Vereinheitlichung mit dem Gruppen-Look:**
+- Neue `#renderIdleWorkflowTiles()` ersetzt die bisherigen
+  `#buildPausedPlaceholderTiles()`/`#buildPausedPlaceholderEdges()`
+  komplett: EINE kollabierte Kachel pro gestopptem/pausiertem Workflow
+  im Root-Scope (`this.#scope === null`), optisch identisch zum
+  `isGroup`-Zweig in `#renderTile()` (gleiche Farben, "▣"-Präfix,
+  Kopfzeile). `#buildWorkflowFrames()` behandelt jetzt wieder
+  ausschließlich LAUFENDE Workflows (Rahmen um echte Runtime-Kacheln,
+  unverändert gegenüber vor Nachtrag 93) — der Rahmen-um-Platzhalter-
+  Zwischenstand aus Nachtrag 93/94 ist komplett entfernt.
+- Neue synthetische Positions-ID `workflowTileId()` (eigener
+  Namensraum "workflow-tile:", getrennt von `pausedPlaceholderId()` für
+  die Rollen-Kacheln INNERHALB des Bearbeiten-Modus) —
+  `#pausedPlaceholderIds()` in `#workflowEditRolePlaceholderIds()`
+  (nur der gerade bearbeitete Workflow) und `#idleWorkflowTileIds()`
+  (alle gestoppten/pausierten Workflows, für die Root-Kachel-Position)
+  aufgeteilt.
+- Die kollabierte Kachel ist **ziehbar** wie eine echte Gruppen-Kachel
+  (`#onTilePointerDown` ist ID-agnostisch, funktioniert unverändert für
+  die synthetische ID — ein reiner Klick ohne Bewegung ist ungefährlich,
+  da `#openParameterPanel()` für IDs ohne Graph-Node-Treffer bereits
+  selbst früh abbricht) und öffnet per Doppelklick
+  `enterWorkflowEditScope()` statt `#enterScope()` (ein Workflow ist
+  keine echte B5-Gruppe im `#groupTree`).
+- **Auch innerhalb** des Bearbeiten-Modus jetzt "wie eine Gruppe":
+  Rollen-Kacheln waren in Nachtrag 93/94 an ihrer Position fixiert
+  (nur Klick zum Verbinden, kein Ziehen) — jetzt per
+  `#onTilePointerDown`/`#onPointerUp` genau wie echte Node-Kacheln frei
+  verschiebbar; ein reiner Klick (keine Bewegung) wird über die neue
+  Rückwärtsauflösung `workflowEditRoleName()` als Rollen-Klick erkannt
+  und steuert weiterhin den Klick-zu-Verbinden-Zustand (echte Ports
+  gibt es für eine nicht laufende Rolle nicht, daher weiterhin
+  Kachel-zu-Kachel statt Port-zu-Port-Ziehen).
+- Speichern-Button/Entwurf/Verwerfen-Bestätigung aus Nachtrag 94
+  unverändert — das war laut Nutzer bereits richtig ("dann kann man
+  ihn... speichern/updaten").
+
+**Live per CDP verifiziert** (echte "Regie 1", danach zurückgesetzt):
+Root zeigt genau eine Kachel "▣ Regie 1" (keine Platzhalter, kein
+Rahmen mehr); Ziehen der Kachel ändert ihre Position; Doppelklick öffnet
+den Bearbeiten-Modus mit 6 Rollen-Kacheln; Ziehen einer Rollen-Kachel
+ändert deren Position; ein reiner Klick auf eine andere Rolle armiert
+den Verbindungs-Modus (gelber Rahmen `#ffcc00`); Klick auf eine dritte
+Rolle legt die Verbindung im Entwurf an (Server unverändert); Speichern
+persistiert (Server-Verbindungsliste enthält beide Verbindungen
+danach). `deno check` über alle drei Dateien grün.
+
+**Umgesetzt in:** `ui/graph/flow-canvas.ts`. Lokal committet, **nicht
+gepusht** (User muss erneut um Push bitten).
