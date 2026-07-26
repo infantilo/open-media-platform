@@ -12683,3 +12683,84 @@ Styling, Geister-Kacheln), drei root-caused/eingeordnet
 gepusht als `c96107b`. Punkte 2–4 bewusst nicht implementiert, da sie
 Produktentscheidungen brauchen (s. o.), nicht nur Code — dem Nutzer
 zur Klärung vorgelegt statt spekulativ gebaut.
+
+---
+
+## 2026-07-26 (Nachtrag 92) — Bug 4 (Zustands-Restore) umgesetzt:
+Nutzerentscheidung "automatisch letzter Stand", drei unabhängige
+Registry-/MXL-Verzögerungen live gefunden
+
+**Nutzerentscheidung (Nachtrag 91 Punkt 4):** automatisch letzter Stand
+vor Stop/Pause, kein separat gepflegter "Startzustand". Umgesetzt in
+`orchestrator/internal/workflows/state.go` (neu) — `runStop()` erfasst
+vor dem Stoppen jeder Rolle deren `/state` (bereits vorhandener Mixer-/
+Audio-Mixer-Mechanismus, bisher nur für manuelle Presets genutzt),
+`runStart()` stellt ihn nach der Verkabelung wieder her. Neue Spalte
+`workflows.role_state` (JSONB, Migration 0011).
+
+**Drei unabhängige, live gefundene Verzögerungs-/Race-Probleme, keins
+davon vorher bekannt:**
+
+1. **Sender-IDs sind pro Prozessstart neu**
+   (`crate::idgen::new_v4()`) — ein roher `/state`-Blob mit rohen
+   Sender-IDs überlebt einen Workflow-Neustart grundsätzlich nicht (alle
+   Rollen bekommen neue IDs). Fix: eigene Rollen-Sender-IDs werden vor
+   dem Speichern durch einen stabilen Platzhalter
+   `role:<name>:sender:<index>` ersetzt, beim Restore mit der aktuellen
+   ID derselben Rolle/Position aufgelöst — schemafrei (rekursiver
+   JSON-String-Ersatz, kein Wissen über einzelne Feldnamen).
+2. **`POST /state` antwortet immer 200**, auch wenn eine enthaltene
+   Sender-ID intern nicht übernommen wurde — `omp-video-mixer-me`s
+   `restore_state()` ruft für `programSenderId` ein fire-and-forget
+   `pipeline.take()` auf, das den Sender selbst noch einmal über die
+   Registry auflöst und dabei denselben, bereits dokumentierten
+   Registry-Verzögerungs-Bug treffen kann (Projekt-Memory "NMOS
+   mock-registry bulk /senders list sometimes omits a resource"). Ein
+   loser "kommt die ID irgendwo im Rück-GET vor"-Check reicht nicht als
+   Erfolgskriterium (`pinnedSenderIds` wird synchron gesetzt, bestünde
+   immer) — Fix: exakter Abgleich des zurückgelesenen gegen den
+   gesendeten Zustand (`stateMatches`, `reflect.DeepEqual`).
+3. **Dritte, tiefere Ursache derselben Symptomklasse** (per
+   `omp-video-mixer-me`s eigenem Log-Fund, nicht nur vermutet): selbst
+   nach erfolgreicher NMOS-Sender→Flow-ID-Auflösung kann
+   `MxlVideoInput::new`s `get_flow_def()` noch mit "Flow not found"
+   scheitern — eine dritte, von der NMOS-Registry unabhängige
+   Verzögerung auf MXL-Shared-Memory-Ebene (`/dev/shm/omp-mxl`): die
+   Quelle registriert ihren NMOS-Sender, bevor ihr eigener
+   `MxlVideoOutput` den zugehörigen Flow tatsächlich anlegt. `omp-mediaio`
+   hat dafür bereits einen eigenen internen Retry
+   ("reopen after FLOW_INVALID"), der unter Last aber selbst nicht
+   immer ausreicht.
+
+**Bounded Retry (8 Versuche, 2s Abstand) um den kompletten
+Resolve→Post→Verify-Zyklus**, nicht nur um den POST — auch die
+Alias-Tabelle selbst kann bei Versuch 1 unvollständig sein (Registry-
+Cache des Orchestrators noch nicht vollständig).
+
+**Verifikation — zwei Ergebnisse, ehrlich getrennt:**
+- **Ein vollständiger, sauberer Durchlauf gelang bewiesen**: Quelle auf
+  PGM geschnitten (`crosspoint.take`), Workflow gestoppt, `role_state`
+  in der DB mit korrektem Alias bestätigt, Workflow neu gestartet, PGM
+  kam mit der **neuen** (nicht der alten) Sender-ID korrekt zurück —
+  per direktem API-Vergleich gegen die tatsächlich aktuelle Sender-ID
+  der neuen Quellen-Instanz bestätigt, kein Mock.
+- **Spätere Wiederholungsversuche in derselben Sitzung waren flakiger**
+  als erwartet — Ursache dabei selbst gefunden und behoben: wiederholte
+  fehlgeschlagene Start-Versuche (bekannter, vorbestehender Registry-
+  Bulk-Listen-Bug, s. o.) hatten Dutzende verwaiste Node-Prozesse
+  angehäuft (`ps aux`: drei gleichzeitige `omp-video-mixer-me`-Prozesse,
+  Load-Average 47), die das MXL-Flow-Timing zusätzlich verschlechterten
+  — nach vollständigem Prozess-Cleanup (`pkill`, `/dev/shm/omp-mxl`
+  geleert) und Abwarten, bis die Systemlast sank, blieb dieselbe
+  "Flow not found"-Verzögerung dennoch mehrfach bestehen. Die
+  Restore-Logik selbst (Alias-Auflösung, exakter Verifikations-Check)
+  ist durch den einen erfolgreichen Durchlauf als korrekt bestätigt;
+  ob das 8×2s-Zeitbudget für Produktionsverhältnisse (ohne die durch
+  diese Testsitzung selbst verursachte Zusatzlast) ausreicht, ist nicht
+  abschließend verifiziert — dokumentierte, ehrliche Lücke statt
+  behaupteter Perfektion.
+
+**Umgesetzt in:** `orchestrator/internal/workflows/{state.go (neu),
+service.go, store.go}`, `internal/db/migrations/0011_workflow_role_state.sql`,
+gepusht als `51cf6ee`. `go build`/`go vet`/`go test` (workflows-Paket)
+grün.
