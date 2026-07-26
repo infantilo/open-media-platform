@@ -718,6 +718,30 @@ impl RegistryClient {
         }
     }
 
+    /// Meldet eine Node explizit bei der Registry ab (`DELETE
+    /// .../resource/nodes/<id>`, IS-04 Registration API v1.3, 204 bei
+    /// Erfolg — Pfad/Statuscode gegen `specs.amwa.tv`s
+    /// RegistrationAPI.html verifiziert, nicht geraten). Best-Effort-
+    /// Aufruf beim Shutdown (`node.rs`s SIGTERM-Handler): ohne das
+    /// wartet die Registry auf den nächsten verpassten Heartbeat über
+    /// `registration_expiry_interval` hinweg (bis zu 60s), bevor sie den
+    /// Node als verschwunden meldet — im Flow-Editor bis dahin sichtbar
+    /// als "Geister-Kachel" eines längst beendeten Prozesses (Bugfix
+    /// 2026-07-26, docs/decisions.md). Ein 404 (schon abgemeldet, z. B.
+    /// durch zwischenzeitlichen Heartbeat-Ablauf) zählt als Erfolg, kein
+    /// Fehlerfall.
+    pub fn deregister_node(&self, node_id: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/x-nmos/registration/v1.3/resource/nodes/{}",
+            self.base_url, node_id
+        );
+        match ureq::delete(&url).call() {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(404)) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
     /// Hält eine registrierte Node am Leben (muss innerhalb von
     /// `registration_expiry_interval` wiederholt werden).
     pub fn heartbeat(&self, node_id: &str) -> Result<(), HeartbeatError> {

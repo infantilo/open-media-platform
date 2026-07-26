@@ -126,7 +126,9 @@ class AppShell extends HTMLElement {
       const { isAdmin } = await whoami();
       if (!isAdmin || this.#tabs.some((t) => t.id === "admin")) return;
       this.#tabs.push(ADMIN_TAB);
-      this.#tabsWrap.appendChild(this.#buildTabButton(ADMIN_TAB));
+      const btn = this.#buildTabButton(ADMIN_TAB);
+      this.#tabsWrap.appendChild(btn);
+      this.#styleTabButton(btn);
     } catch {
       // Kein Administration-Tab ohne bestätigtes isAdmin — sicherer
       // Default, kein Rätselraten bei einem unerreichbaren Orchestrator.
@@ -249,16 +251,27 @@ class AppShell extends HTMLElement {
     return btn;
   }
 
+  // Gemeinsam mit #loadAdminTab() genutzt (Bugfix 2026-07-26): der
+  // Administration-Tab wird erst asynchron nach whoami() angehängt,
+  // also NACH dem synchronen #switchTab("flow") in connectedCallback()
+  // — ohne dieses Neu-Stylen blieb sein Button vollständig ungestylt
+  // (kein TAB_BUTTON_BASE, kein aktiv/inaktiv-Zustand) und zeigte damit
+  // die native Browser-Button-Optik (hellgrau), die neben den bewusst
+  // dunkel/transparent gestylten übrigen Tabs wie "aktiv/ausgewählt"
+  // aussah, obwohl der Flow-Editor-Tab tatsächlich aktiv war.
+  #styleTabButton(btn: HTMLButtonElement) {
+    const isActive = btn.getAttribute("data-tab-id") === this.#activeTab;
+    btn.style.cssText =
+      TAB_BUTTON_BASE +
+      (isActive
+        ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
+        : "background:transparent;color:var(--omp-text-dim);");
+  }
+
   #switchTab(id: TabId) {
     this.#activeTab = id;
     for (const el of this.#tabsWrap.children) {
-      const btn = el as HTMLButtonElement;
-      const isActive = btn.getAttribute("data-tab-id") === id;
-      btn.style.cssText =
-        TAB_BUTTON_BASE +
-        (isActive
-          ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
-          : "background:transparent;color:var(--omp-text-dim);");
+      this.#styleTabButton(el as HTMLButtonElement);
     }
     const tab = this.#tabs.find((t) => t.id === id);
     if (!tab) return;

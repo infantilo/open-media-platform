@@ -424,6 +424,43 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         publisher: publisher.clone(),
     };
 
+    // Bugfix 2026-07-26 (Geister-Kacheln im Flow-Editor nach Stop/
+    // Pause): der Instanz-Launcher stoppt eine lokale Node ausschließlich
+    // per SIGTERM (`orchestrator/internal/launcher/launcher.go`, "SIGTERM,
+    // Grace, SIGKILL") — `tokio::signal::ctrl_c()`, das jeder Node in
+    // seiner eigenen `main()` für die eigene Pipeline-Abschaltung nutzt,
+    // reagiert auf Unix aber ausschließlich auf SIGINT, nicht SIGTERM.
+    // Ohne einen eigenen SIGTERM-Handler beendet die Standard-Aktion des
+    // Betriebssystems den Prozess sofort, ohne dass irgendein Rust-Code
+    // (auch kein `Drop`) noch läuft — die Node bleibt bei der Registry
+    // bis zum nächsten verpassten Heartbeat "registriert" (bis zu
+    // `registration_expiry_interval`, 60s) und erscheint so lange als
+    // tote Kachel im Flow-Editor. Bewusst als eigener, zusätzlicher
+    // Task statt in den bestehenden `ctrl_c()`-Pfad jedes einzelnen
+    // Node-`main()` integriert: SIGINT (manueller Ctrl+C-Devbetrieb)
+    // bleibt dadurch unverändert bei der bereits funktionierenden,
+    // Pipeline-eigenen Abschaltlogik jedes Nodes — dieser Task
+    // übernimmt ausschließlich den bisher komplett unbehandelten
+    // SIGTERM-Pfad, keine Konkurrenz zu bestehendem Code.
+    let dereg_registry = registry.clone();
+    let dereg_node_id = node_id.clone();
+    tokio::spawn(async move {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(e) => {
+                eprintln!("omp-node-sdk: failed to install SIGTERM handler: {e}");
+                return;
+            }
+        }
+        eprintln!("omp-node-sdk: SIGTERM received, deregistering {dereg_node_id}");
+        if let Err(e) = dereg_registry.deregister_node(&dereg_node_id) {
+            eprintln!("omp-node-sdk: deregister failed: {e}");
+        }
+        std::process::exit(0);
+    });
+
     tokio::spawn(heartbeat_loop(
         registry,
         node_id,
