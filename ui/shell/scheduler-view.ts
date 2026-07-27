@@ -109,6 +109,16 @@ function fmtMinutes(m: number): string {
   return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
+// Wandelt einen gespeicherten ISO-Zeitstempel in den von
+// <input type="datetime-local"> erwarteten lokalen Wert um (dieselbe
+// Logik wie workflows-view.ts toDatetimeLocalValue — bewusst dupliziert,
+// kein gemeinsames Util-Modul zwischen View-Dateien in diesem Projekt).
+function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function parseTimeOfDay(s: string | undefined): number | null {
   if (!s) return null;
   const parts = s.split(":");
@@ -205,8 +215,14 @@ class SchedulerView extends HTMLElement {
   #dragging = false;
 
   connectedCallback() {
+    // position:relative ist Pflicht: #openAddMenu positioniert das
+    // Add-Menü absolut relativ zu DIESEM Element (per getBoundingClientRect-
+    // Differenz berechnet) — ohne eigenen Positionierungskontext hätte
+    // "position:absolute" stattdessen relativ zum nächsten positionierten
+    // Vorfahren (oder dem Viewport) gewirkt, was das Menü weit außerhalb
+    // des sichtbaren Bereichs landen ließ (Nutzerfund 2026-07-27).
     this.style.cssText =
-      "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
+      "display:block;position:relative;background:var(--omp-surface);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;user-select:none;";
     this.#poll();
@@ -512,7 +528,11 @@ class SchedulerView extends HTMLElement {
       "padding:4px;z-index:10;display:flex;flex-direction:column;gap:2px;font-size:11px;";
     const rect = anchor.getBoundingClientRect();
     const hostRect = this.getBoundingClientRect();
-    menu.style.left = `${rect.left - hostRect.left}px`;
+    // Am RECHTEN statt linken Rand des "+"-Knopfs verankern (wächst nach
+    // links): der Knopf sitzt selbst nahe dem rechten Zeilenrand, ein
+    // linksbündiges Menü würde regelmäßig über den rechten Bildschirmrand
+    // hinauswachsen.
+    menu.style.right = `${hostRect.right - rect.right}px`;
     menu.style.top = `${rect.bottom - hostRect.top + 2}px`;
 
     (["daily", "weekly", "once"] as const).forEach((kind) => {
@@ -576,8 +596,101 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointerleave", () => (delBtn.style.display = "none"));
 
     el.addEventListener("pointerdown", (ev) => this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, left, right));
+    // Doppelklick: exakte HH:MM-Eingabe wie im alten Formular
+    // (workflows-view.ts #renderScheduleRow) — Ziehen ist ungenau
+    // (30-Min-Snapping), für exakte Zeiten bleibt das Tippen die
+    // verlässlichere Alternative (Nutzerfund 2026-07-27).
+    el.addEventListener("dblclick", (ev) => {
+      ev.stopPropagation();
+      this.#openTimeEditor(wf, bar, el);
+    });
 
     return el;
+  }
+
+  #openTimeEditor(wf: Workflow, bar: Bar, anchor: HTMLElement) {
+    this.querySelector('[data-role="add-menu"]')?.remove();
+    this.querySelector('[data-role="time-editor"]')?.remove();
+
+    const panel = document.createElement("div");
+    panel.dataset.role = "time-editor";
+    panel.style.cssText =
+      "position:absolute;background:#222;border:1px solid #444;border-radius:3px;" +
+      "padding:6px;z-index:10;display:flex;flex-direction:column;gap:4px;font-size:11px;";
+    const rect = anchor.getBoundingClientRect();
+    const hostRect = this.getBoundingClientRect();
+    panel.style.left = `${Math.min(Math.max(0, rect.left - hostRect.left), hostRect.width - 160)}px`;
+    panel.style.top = `${rect.bottom - hostRect.top + 2}px`;
+
+    // Lokale, veränderbare Kopie — jede Feldänderung speichert sofort
+    // (gleiche "committed on change"-Konvention wie beim Drag), operiert
+    // aber auf einer Kopie, damit ein Zwischen-Poll während des Tippens
+    // (selten, aber möglich) nicht mit einer halb bearbeiteten Referenz
+    // kollidiert.
+    const schedules = (wf.definition.schedules ?? []).map((s) => ({ ...s }));
+
+    const addRow = (label: string, inst: Instance | undefined) => {
+      if (!inst) return;
+      const target = schedules.find((s) => s.id === inst.schedule.id);
+      if (!target) return;
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:4px;";
+      const lbl = document.createElement("span");
+      lbl.textContent = label;
+      lbl.style.cssText = "color:var(--omp-text-dim);width:32px;";
+      row.appendChild(lbl);
+
+      if (target.kind === "weekly") {
+        const weekdaySelect = document.createElement("select");
+        WEEKDAY_LABELS.forEach((wd, idx) => {
+          const opt = document.createElement("option");
+          opt.value = String(idx);
+          opt.textContent = wd;
+          if (target.weekday === idx) opt.selected = true;
+          weekdaySelect.appendChild(opt);
+        });
+        weekdaySelect.addEventListener("change", () => {
+          target.weekday = Number(weekdaySelect.value);
+          void this.#persist(wf, schedules);
+        });
+        row.appendChild(weekdaySelect);
+      }
+
+      if (target.kind === "once") {
+        const dt = document.createElement("input");
+        dt.type = "datetime-local";
+        dt.value = target.at ? toDatetimeLocalValue(target.at) : "";
+        dt.addEventListener("change", () => {
+          target.at = dt.value ? new Date(dt.value).toISOString() : undefined;
+          void this.#persist(wf, schedules);
+        });
+        row.appendChild(dt);
+      } else {
+        const time = document.createElement("input");
+        time.type = "time";
+        time.value = target.timeOfDay ?? "";
+        time.addEventListener("change", () => {
+          target.timeOfDay = time.value || undefined;
+          void this.#persist(wf, schedules);
+        });
+        row.appendChild(time);
+      }
+
+      panel.appendChild(row);
+    };
+
+    addRow("Start", bar.start);
+    addRow("Stop", bar.stop);
+
+    this.appendChild(panel);
+    const closeOnOutside = (ev: MouseEvent) => {
+      if (!panel.contains(ev.target as Node)) {
+        panel.remove();
+        document.removeEventListener("pointerdown", closeOnOutside, true);
+      }
+    };
+    window.setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
   }
 
   #startDrag(
@@ -643,7 +756,12 @@ class SchedulerView extends HTMLElement {
       el.removeEventListener("pointercancel", onUp);
       el.style.cursor = "grab";
       this.#dragging = false;
-      this.#commitDrag(wf, bar, currentLeft, currentRight, mode);
+      // Ein reiner Klick (auch die zwei Klicks eines Doppelklicks für
+      // #openTimeEditor) darf keine unnötige PUT auslösen — nur
+      // speichern, wenn sich tatsächlich etwas verschoben hat.
+      if (currentLeft !== originalLeft || currentRight !== originalRight) {
+        this.#commitDrag(wf, bar, currentLeft, currentRight, mode);
+      }
     };
 
     el.addEventListener("pointermove", onMove);

@@ -16,6 +16,22 @@ BIN="$ROOT_DIR/bin/omp-orchestrator"
 
 mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
 
+# mxl.env (LD_LIBRARY_PATH für libmxl.so, MXL_INFO_BIN, ...) muss VOR dem
+# Orchestrator-Start gesourct sein — jeder von ihm gestartete Node-Prozess
+# erbt sein Environment (internal/launcher/launcher.go buildEnv nutzt
+# os.Environ() als Basis). Bisher musste das jede/r Bedienende von Hand vor
+# `make start` in derselben Shell tun (dokumentierter Stolperstein, mehrfach
+# vergessen, zuletzt 2026-07-27: alle MXL-Nodes crash-loopten mit
+# "libmxl.so: cannot open shared object file") — hier automatisch nachholen,
+# damit `make start` allein immer reicht. Kein Fehler, falls die Datei fehlt
+# (z. B. MXL noch nicht gebaut) — dann bleibt das bisherige Verhalten
+# unverändert (Nodes ohne MXL-Bedarf funktionieren weiterhin).
+MXL_ENV_FILE="$ROOT_DIR/deploy/dev/mxl.env"
+if [ -f "$MXL_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$MXL_ENV_FILE"
+fi
+
 # /dev/shm ist tmpfs und überlebt einen Neustart/eine Bereinigung nicht
 # (docs/decisions.md, 2026-07-17) — ohne dieses Verzeichnis schlägt jeder
 # MXL-Node-Start mit "Domain path is not a directory" fehl, bis jemand es

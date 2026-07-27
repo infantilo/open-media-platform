@@ -13408,3 +13408,73 @@ aufgeräumt: Testworkflow gelöscht, Regie 1 im Ausgangszustand bestätigt.
 
 **Umgesetzt in:** `ui/shell/scheduler-view.ts` (kompletter Umbau). Kein
 Backend-Code geändert.
+
+---
+
+## 2026-07-27 (Nachtrag 101) — Drei Nutzerfunde nach Nachtrag 100: Add-
+Menü außerhalb des Bildschirms, Doppelklick-Zeit-Editor, `mxl.env`
+automatisch in `start-omp.sh` gesourct
+
+**Fund 1 — Add-Menü außerhalb des Bildschirms.** Root Cause: der Host
+(`<omp-scheduler-view>`) hatte kein `position:relative` — das Add-Menü
+positionierte sich per `getBoundingClientRect()`-Differenz relativ zum
+Host, aber `position:absolute` wirkte mangels eigenem
+Positionierungskontext tatsächlich relativ zum nächsten positionierten
+Vorfahren (bzw. dem Viewport), ein klarer Bezugsrahmen-Mismatch. Fix:
+`position:relative` auf dem Host ergänzt, zusätzlich das Menü am
+RECHTEN statt linken Rand des "+"-Knopfs verankert (wächst nach links)
+— der Knopf sitzt selbst nahe dem rechten Zeilenrand, ein linksbündiges
+Menü wäre strukturell fast immer über den Rand hinausgewachsen.
+
+**Fund 2 — Doppelklick auf Balken für exakte HH:MM-Eingabe.** Drag ist
+auf 30-Min-Raster begrenzt (gewollt fürs Verschieben/Verlängern), für
+punktgenaue Zeiten fehlte ein Weg. Neu: Doppelklick öffnet ein kleines
+Panel mit denselben Feldern wie das alte Formular
+(`workflows-view.ts#renderScheduleRow`) — `time`-Eingabe (+ Wochentag-
+Auswahl bei "weekly") oder `datetime-local` bei "once" —, jede Änderung
+speichert sofort (`change`-Event, gleiche "committed on change"-
+Konvention wie beim Drag). Dabei außerdem einen kleinen Nebenfund
+behoben: ein reiner Klick (auch die zwei Klicks eines Doppelklicks)
+lieferte bisher immer eine PUT-Anfrage über `#commitDrag`, auch ohne
+tatsächliche Positionsänderung — jetzt nur noch, wenn sich `left`/
+`right` wirklich geändert haben.
+
+**Fund 3 — "source nodes starten nicht (lbxml)".** Reproduziert statt
+geraten: Log zeigte
+`libmxl.so: cannot open shared object file: No such file or directory`
+für JEDEN MXL-nutzenden Node-Typ (source/viewer/mixer/audio/ograf) —
+der seit Langem dokumentierte Stolperstein
+(`docs/decisions.md`/Memory: "mxl.env muss vor `make start` in
+derselben Shell gesourct sein", zuletzt in dieser Sitzung selbst
+vergessen). Sofortfix: `make stop`, `mxl.env` gesourct, `make start` —
+sowohl ein frischer Testworkflow als auch **Regie 1 selbst** starten
+seitdem wieder vollständig (6/6 Rollen laufen echt). Nachhaltiger Fix:
+`deploy/dev/start-omp.sh` sourct `deploy/dev/mxl.env` jetzt selbst
+(falls vorhanden) VOR dem Orchestrator-Start — jeder von ihm gestartete
+Node-Prozess erbt sein Environment
+(`internal/launcher/launcher.go buildEnv` nutzt `os.Environ()` als
+Basis), das Vergessen-Problem sollte damit endgültig entfallen. Kein
+Fehler, falls die Datei fehlt (unverändertes Alt-Verhalten). Konnte
+nicht per Neustart-Test verifiziert werden, da Regie 1 zum Zeitpunkt
+dieser Änderung real lief (echte, vom Nutzer selbst gestartete Prozesse
+mit eigenem geplantem Stop um 16:30) — bewusst nicht angetastet.
+Stattdessen Syntax (`bash -n`) und die Sourcing-Logik isoliert
+verifiziert (`LD_LIBRARY_PATH` korrekt gesetzt).
+
+**Nebenbefund, nicht Teil des Fixes:** die frühere Vermutung, ein
+Zeitplan auf Regie 1 hätte "mysteriös" gefeuert (Nachtrag 100), ist
+damit aufgeklärt — der Nutzer hat den Tab erkennbar selbst in einer
+eigenen Sitzung ausprobiert (ein `once`-Zeitplan mit echtem Start/Stop
+tauchte dort zwischenzeitlich auf), kein Bug im neuen Code.
+
+**Verifikation:** `deno check`/`deno test ui/` (70/70) grün, `make ui`
+grün. Live per CDP gegen einen Wegwerf-Testworkflow: Add-Menü-Rect
+bestätigt vollständig innerhalb des Viewports (rechter Rand 766px bei
+780px Breite, vorher weit darüber hinaus); Doppelklick öffnete das
+Zeit-Panel mit korrekt vorbefüllten Feldern (09:00/17:00), Änderung auf
+08:15 per API bestätigt übernommen. `mxl.env`-Fix live gegen einen
+frischen Testworkflow UND Regie 1 selbst bestätigt (beide starten jetzt
+vollständig, keine crash-loopenden Prozesse mehr).
+
+**Umgesetzt in:** `ui/shell/scheduler-view.ts`,
+`deploy/dev/start-omp.sh`.
