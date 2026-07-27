@@ -164,9 +164,6 @@ type workflowStore interface {
 	Delete(id string) error
 	UpdateSchedules(id string, schedules []Schedule) error
 	UpdateRuntime(wf Workflow) error
-	// SetThumbnail/GetThumbnail (Kapitel 12 Teil 6, §22.3 Punkt 5).
-	SetThumbnail(id string, jpeg []byte) error
-	GetThumbnail(id string) ([]byte, bool, error)
 	// SetRoleState/GetRoleState (Bugfix 2026-07-26, Migration 0011).
 	SetRoleState(id, role string, state json.RawMessage) error
 	GetRoleState(id string) (map[string]json.RawMessage, error)
@@ -203,10 +200,11 @@ type Service struct {
 	events    EventPublisher
 	methods   methodInvoker
 	resources ResourcePrecheck
-	// httpClient (Kapitel 12 Teil 6, §22.3 Punkt 5): derselbe ggf.
-	// mTLS-fähige Client wie methods, hier zusätzlich direkt gehalten,
-	// weil captureThumbnail() den rohen MJPEG-Multipart-Body liest
-	// (methodInvoker kennt nur das {"value": ...}-Parameter-Format).
+	// httpClient: derselbe ggf. mTLS-fähige Client wie methods, hier
+	// zusätzlich direkt gehalten, weil state.go (getNodeState/
+	// postNodeState) den rohen JSON-Body des Node-eigenen /state-
+	// Endpunkts liest/schreibt (methodInvoker kennt nur das
+	// {"value": ...}-Parameter-Format).
 	httpClient *http.Client
 	// authz (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s. AuthzBinder.
 	authz AuthzBinder
@@ -301,13 +299,6 @@ func (s *Service) List() ([]Workflow, error) {
 // Get liefert einen einzelnen Workflow.
 func (s *Service) Get(id string) (Workflow, error) {
 	return s.store.Get(id)
-}
-
-// GetThumbnail liefert das zuletzt erfasste Vorschau-Bild eines
-// Workflows (Kapitel 12 Teil 6, §22.3 Punkt 5) — ok=false, wenn noch
-// nie eines erfasst wurde (s. Store.GetThumbnail-Doku).
-func (s *Service) GetThumbnail(id string) ([]byte, bool, error) {
-	return s.store.GetThumbnail(id)
 }
 
 // FindRoleForNode löst auf, ob nodeID aktuell eine Rolle in einem
@@ -663,25 +654,10 @@ func (s *Service) runStart(wf Workflow) {
 
 	// Bugfix 2026-07-26 (Nachtrag 91 Punkt 4): den beim letzten Stop/
 	// Pause erfassten Bedienzustand (PGM/PST, DSK/PIP-Quelle o. Ä.)
-	// wiederherstellen, bevor das Thumbnail erfasst wird (s. u.) — sonst
-	// zeigt der erste Frame wieder Schwarzbild, obwohl der Crosspoint
-	// direkt danach ohnehin auf den wiederhergestellten Stand springt
-	// (Nachtrag 91 Punkt 3).
+	// wiederherstellen — sonst würde der Crosspoint erst durch das
+	// nächste manuelle Umschalten wieder auf den vorherigen Stand
+	// zurückkehren.
 	s.restoreRoleState(wf)
-
-	// Kapitel 12 Teil 6 (§22.3 Punkt 5: "optional automatisch bei jedem
-	// start, sobald die Program-Bus-Rolle 'media-ready' meldet") — ein
-	// eigener dediziertes Bereitschafts-Event existiert dafür nicht (kein
-	// Node meldet "media-ready" heute), pragmatischer Ersatz: sofort nach
-	// erfolgreicher Verkabelung versuchen, mit kurzem, in
-	// captureWorkflowThumbnail gebundenem Timeout (der Preview-Broadcaster
-	// liefert ohnehin erst das erste tatsächlich produzierte Frame, s.
-	// omp-mediaio::preview::serve_client — kein Rennen gegen eine noch
-	// nicht laufende Pipeline). Eigene Goroutine: runStart() selbst läuft
-	// bereits im Hintergrund, soll aber nicht durch einen langsamen/
-	// hängenden Preview-Endpunkt zusätzlich verzögert bleiben, bevor der
-	// nächste Start-Aufruf dieselbe Rolle erneut provisionieren könnte.
-	go s.captureWorkflowThumbnail(wf)
 }
 
 // awaitRegistration pollt den Node-Bestand, bis für jede Rolle ein Node

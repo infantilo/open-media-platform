@@ -118,9 +118,6 @@ type WorkflowService interface {
 	Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error)
 	List() ([]workflows.Workflow, error)
 	Get(id string) (workflows.Workflow, error)
-	// GetThumbnail (Kapitel 12 Teil 6, §22.3 Punkt 5) — s.
-	// handleWorkflowThumbnail in workflow_handlers.go.
-	GetThumbnail(id string) ([]byte, bool, error)
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
@@ -275,7 +272,6 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
 	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireAuth(handleExportWorkflow(workflowSvc)))
-	mux.HandleFunc("GET /api/v1/workflows/{id}/thumbnail", g.requireAuth(handleWorkflowThumbnail(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))

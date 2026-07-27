@@ -25,7 +25,6 @@ func (f *fakeEventPublisher) Broadcast(e sse.Event) { f.types = append(f.types, 
 type fakeStore struct {
 	mu         sync.Mutex
 	wfs        map[string]Workflow
-	thumbnails fakeThumbnailStore
 	roleStates fakeRoleStateStore
 }
 
@@ -91,30 +90,10 @@ func (f *fakeStore) UpdateRuntime(wf Workflow) error {
 	return nil
 }
 
-// thumbnails spiegelt die separate bytea-Spalte (Kapitel 12 Teil 6) —
-// eigene Map statt eines Felds auf Workflow, da Store.SetThumbnail
-// bewusst nicht über das Workflow-Objekt selbst geht (s. store.go).
-type fakeThumbnailStore = map[string][]byte
-
-func (f *fakeStore) SetThumbnail(id string, jpeg []byte) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.thumbnails == nil {
-		f.thumbnails = fakeThumbnailStore{}
-	}
-	f.thumbnails[id] = jpeg
-	return nil
-}
-
-func (f *fakeStore) GetThumbnail(id string) ([]byte, bool, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	jpeg, ok := f.thumbnails[id]
-	return jpeg, ok, nil
-}
-
 // roleStates spiegelt die separate role_state-JSONB-Spalte (Migration
-// 0011), gleicher Grund wie thumbnails oben.
+// 0011) — eigene Map statt eines Felds auf Workflow, da
+// Store.SetRoleState bewusst nicht über das Workflow-Objekt selbst
+// geht (s. store.go).
 type fakeRoleStateStore = map[string]map[string]json.RawMessage
 
 func (f *fakeStore) SetRoleState(id, role string, state json.RawMessage) error {

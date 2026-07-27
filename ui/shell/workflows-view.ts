@@ -192,23 +192,6 @@ class WorkflowsView extends HTMLElement {
   #searchQuery = "";
   #filterCategory = "";
   #filterStatus = "";
-  // Kapitel 12 Teil 6, Unterteil 3 (§22.3 Punkt 5: Thumbnail-Capture).
-  // Object-URLs (Blob) statt eines direkten <img src="/api/v1/
-  // workflows/{id}/thumbnail">: der Endpunkt sitzt hinter
-  // requireAuth() (Live-Vorschaubilder sind kein öffentlicher Inhalt),
-  // ein <img>-Tag kann aber keinen Authorization-Header mitschicken —
-  // gleiches Muster wie #exportWorkflow() (Blob + URL.createObjectURL).
-  // null = geprüft, kein Thumbnail vorhanden (404) — Unterscheidung zu
-  // "noch nicht geprüft" (kein Eintrag), gleiches Muster wie
-  // ui/graph/flow-canvas.ts #previewUrlById.
-  #thumbnailUrlById: Map<string, string | null> = new Map();
-  #thumbnailFetchInFlight: Set<string> = new Set();
-  // Vorheriger Status je Workflow-ID — #poll() invalidiert einen
-  // gecachten Thumbnail-Eintrag, sobald ein Workflow frisch in
-  // "started" wechselt (dann hat runStart() ggf. gerade ein neues Bild
-  // erfasst, s. orchestrator/internal/workflows/service.go
-  // captureWorkflowThumbnail).
-  #lastStatusById: Map<string, string> = new Map();
 
   connectedCallback() {
     this.style.cssText =
@@ -229,15 +212,6 @@ class WorkflowsView extends HTMLElement {
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
-    // Object-URLs sind Browser-weite Blob-Referenzen, kein
-    // DOM-gebundener Speicher — ohne explizites Revoke blieben sie über
-    // das Verlassen des Workflows-Tabs hinaus (app-shell.ts ersetzt die
-    // Tab-Inhalte per replaceChildren, das ruft disconnectedCallback)
-    // im Speicher.
-    for (const url of this.#thumbnailUrlById.values()) {
-      if (url) URL.revokeObjectURL(url);
-    }
-    this.#thumbnailUrlById.clear();
   }
 
   #onSseMessage = (ev: Event) => {
@@ -271,28 +245,9 @@ class WorkflowsView extends HTMLElement {
       const res = await apiFetch("/api/v1/workflows");
       if (!res.ok) return;
       this.#workflows = await res.json();
-      this.#invalidateThumbnailsOnFreshStart();
       this.#render();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
-    }
-  }
-
-  // Kapitel 12 Teil 6, Unterteil 3: ein frischer Übergang in "started"
-  // bedeutet, dass runStart() soeben versucht hat, ein neues Thumbnail
-  // zu erfassen (captureWorkflowThumbnail) — der clientseitige Cache
-  // (s. #thumbnailUrlById-Doku) muss diesen einen Eintrag verwerfen,
-  // sonst bliebe ein früher gecachtes "kein Thumbnail" (null) oder ein
-  // veraltetes Bild bis zum nächsten vollen Seiten-Reload stehen.
-  #invalidateThumbnailsOnFreshStart() {
-    for (const wf of this.#workflows) {
-      const prev = this.#lastStatusById.get(wf.id);
-      if (prev !== "started" && wf.status === "started") {
-        const cached = this.#thumbnailUrlById.get(wf.id);
-        if (cached) URL.revokeObjectURL(cached);
-        this.#thumbnailUrlById.delete(wf.id);
-      }
-      this.#lastStatusById.set(wf.id, wf.status);
     }
   }
 
@@ -649,11 +604,9 @@ class WorkflowsView extends HTMLElement {
     empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
     this.appendChild(empty);
 
-    // Kapitel 12 Teil 6 (§22.3 Punkt 6: "Katalog-Übersicht (Kachel-Grid)
-    // ... zeigt gespeicherte Workflows als Kacheln mit Thumbnail, Titel,
-    // gekürzter Beschreibung, Status-Badge, Kategorie-Icon"). Thumbnail
-    // (Punkt 5, MJPEG-Preview-Capture) bleibt bewusst nicht Teil dieses
-    // Schritts — dokumentierte Folgearbeit, s. docs/decisions.md.
+    // Kapitel 12 Teil 6 (§22.3 Punkt 6): Katalog-Übersicht als
+    // Kachel-Grid mit Topologie-Vorschau, Titel, gekürzter Beschreibung,
+    // Status-Badge, Kategorie-Icon.
     const grid = document.createElement("div");
     grid.setAttribute("data-role", "workflow-grid");
     grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;";
@@ -735,66 +688,94 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
-  // Kapitel 12 Teil 6, Unterteil 3 (§22.3 Punkt 5: "Für einen
-  // gestoppten Workflow bleibt das zuletzt erfasste Thumbnail stehen
-  // ... ohne je erfasstes Bild zeigt der Designer einen generischen
-  // Platzhalter nach Kategorie"). Drei Zustände im Cache
-  // (#thumbnailUrlById): kein Eintrag = noch nicht geprüft (löst
-  // #maybeFetchThumbnail aus), `null` = geprüft, keins vorhanden
-  // (Platzhalter, kein erneuter Versuch), String = Object-URL des
-  // zuletzt geladenen Bilds.
-  #renderThumbnail(wf: Workflow): HTMLElement {
+  // Ersetzt das frühere PGM-Video-Thumbnail (§22.3 Punkt 5,
+  // captureWorkflowThumbnail): statt eines Frames vom laufenden
+  // Programm-Ausgang (bei einem gestoppten Workflow zwangsläufig
+  // veraltet oder — nie gestartet — gar nicht vorhanden) zeigt die
+  // Vorschau jetzt unabhängig vom Status immer dieselbe kleine
+  // Topologie-Grafik: Rollen als Kacheln, Verbindungen als Linien,
+  // direkt aus der bereits geladenen Workflow-Definition gerendert
+  // (kein Netzwerk-Request, kein Cache nötig — Grund für die 2026-07-27
+  // Änderung: docs/decisions.md).
+  #renderTopologyPreview(wf: Workflow): HTMLElement {
     const box = document.createElement("div");
     box.style.cssText =
       "width:100%;height:100px;border-radius:2px;margin-bottom:4px;overflow:hidden;" +
-      "background:#111;display:flex;align-items:center;justify-content:center;";
+      `background:#111;border:1px solid ${STATUS_COLORS[wf.status] ?? "#999"}44;`;
 
-    const cached = this.#thumbnailUrlById.get(wf.id);
-    if (cached) {
-      const img = document.createElement("img");
-      img.src = cached;
-      img.alt = "Vorschau";
-      img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
-      box.appendChild(img);
-    } else {
-      // Generischer Platzhalter nach Kategorie (§22.3 Punkt 5) — Text
-      // statt Icon, gleiche Zurückhaltung wie beim Kategorie-Badge
-      // oben (kein Icon-Katalog vorhanden).
-      const placeholder = document.createElement("span");
-      placeholder.style.cssText = "color:#555;font-size:11px;";
-      placeholder.textContent = wf.definition.category
-        ? (CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category)
-        : "Keine Vorschau";
+    const roles = wf.definition.roles;
+    if (roles.length === 0) {
+      const placeholder = document.createElement("div");
+      placeholder.style.cssText =
+        "width:100%;height:100%;display:flex;align-items:center;justify-content:center;" +
+        "color:#555;font-size:11px;";
+      placeholder.textContent = "Keine Rollen";
       box.appendChild(placeholder);
-      if (cached === undefined) this.#maybeFetchThumbnail(wf.id);
+      return box;
     }
-    return box;
-  }
 
-  // Lädt das Thumbnail authentifiziert per apiFetch() als Blob (s.
-  // Cache-Doku oben zur Begründung gegenüber einem direkten <img src>)
-  // und rendert bei Erfolg neu — #refreshGrid() statt #render(), damit
-  // ein gerade laufender Such-Tastendruck den Fokus behält (gleicher
-  // Grund wie beim Suchfeld selbst).
-  #maybeFetchThumbnail(id: string) {
-    if (this.#thumbnailUrlById.has(id) || this.#thumbnailFetchInFlight.has(id)) return;
-    this.#thumbnailFetchInFlight.add(id);
-    apiFetch(`/api/v1/workflows/${id}/thumbnail`)
-      .then(async (res) => {
-        if (!res.ok) {
-          this.#thumbnailUrlById.set(id, null);
-          return;
-        }
-        const blob = await res.blob();
-        this.#thumbnailUrlById.set(id, URL.createObjectURL(blob));
-      })
-      .catch(() => {
-        this.#thumbnailUrlById.set(id, null);
-      })
-      .finally(() => {
-        this.#thumbnailFetchInFlight.delete(id);
-        this.#refreshGrid();
-      });
+    // Einfaches Zeilenraster statt echtem Graph-Layout — reicht für ein
+    // Vorschau-Icon-Format (kein Bezier-Routing/Kollisionsvermeidung
+    // wie im vollen Flow-Editor nötig). Bis zu 4 Rollen pro Zeile.
+    const cols = Math.min(4, Math.ceil(Math.sqrt(roles.length)) + 1);
+    const rowsCount = Math.ceil(roles.length / cols);
+    const cellW = 100 / cols;
+    const cellH = 100 / rowsCount;
+    const centerOf = (i: number): [number, number] => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      return [col * cellW + cellW / 2, row * cellH + cellH / 2];
+    };
+    const indexByRole = new Map(roles.map((r, i) => [r.name, i]));
+
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.style.cssText = "width:100%;height:100%;display:block;";
+
+    for (const conn of wf.definition.connections) {
+      const fromIdx = indexByRole.get(conn.fromRole);
+      const toIdx = indexByRole.get(conn.toRole);
+      if (fromIdx === undefined || toIdx === undefined) continue;
+      const [x1, y1] = centerOf(fromIdx);
+      const [x2, y2] = centerOf(toIdx);
+      const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      line.setAttribute("x1", String(x1));
+      line.setAttribute("y1", String(y1));
+      line.setAttribute("x2", String(x2));
+      line.setAttribute("y2", String(y2));
+      line.setAttribute("stroke", "#5b9bd5");
+      line.setAttribute("stroke-width", "0.6");
+      svg.appendChild(line);
+    }
+
+    roles.forEach((role, i) => {
+      const [cx, cy] = centerOf(i);
+      const boxW = cellW * 0.7;
+      const boxH = Math.min(cellH * 0.6, 14);
+      const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      rect.setAttribute("x", String(cx - boxW / 2));
+      rect.setAttribute("y", String(cy - boxH / 2));
+      rect.setAttribute("width", String(boxW));
+      rect.setAttribute("height", String(boxH));
+      rect.setAttribute("rx", "1");
+      rect.setAttribute("fill", "#2a2a2a");
+      rect.setAttribute("stroke", "#666");
+      rect.setAttribute("stroke-width", "0.4");
+      svg.appendChild(rect);
+
+      const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      label.setAttribute("x", String(cx));
+      label.setAttribute("y", String(cy + 1.5));
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("font-size", "3.6");
+      label.setAttribute("fill", "#ccc");
+      label.textContent = role.name.length > 14 ? role.name.slice(0, 13) + "…" : role.name;
+      svg.appendChild(label);
+    });
+
+    box.appendChild(svg);
+    return box;
   }
 
   #renderWorkflowRow(wf: Workflow): HTMLElement {
@@ -805,7 +786,7 @@ class WorkflowsView extends HTMLElement {
       `padding:6px 8px;border-radius:3px;background:rgba(255,255,255,0.04);` +
       `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};display:flex;flex-direction:column;`;
 
-    row.appendChild(this.#renderThumbnail(wf));
+    row.appendChild(this.#renderTopologyPreview(wf));
 
     const header = document.createElement("div");
     header.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:4px;";
@@ -824,9 +805,7 @@ class WorkflowsView extends HTMLElement {
     row.appendChild(header);
 
     // Kategorie-Icon-Platzhalter (Punkt 6/7): eine Text-Badge statt
-    // eines echten Icons — bis auf Weiteres kein Icon-Katalog vorhanden,
-    // gleiche Zurückhaltung wie beim generischen Kategorie-Platzhalter
-    // ohne Thumbnail (§22.3 Punkt 5).
+    // eines echten Icons — bis auf Weiteres kein Icon-Katalog vorhanden.
     if (wf.definition.category) {
       const categoryBadge = document.createElement("span");
       categoryBadge.style.cssText =

@@ -13085,3 +13085,66 @@ Fehlschlag weiterhin der vorbestehende, unabhängige
 **Umgesetzt in:** `orchestrator/internal/workflows/{service.go,
 service_test.go}`, `ui/graph/flow-canvas.ts`. Lokal committet, **nicht
 gepusht** (User muss erneut um Push bitten).
+
+---
+
+## 2026-07-27 (Nachtrag 97) — Bug 3 (Vorschaubild fast immer schwarz)
+gelöst: PGM-Thumbnail-Capture komplett durch Topologie-Grafik ersetzt
+
+**Ausgangslage (Nachtrag 91 Punkt 3):** `captureWorkflowThumbnail()`
+fängt technisch korrekt einen MJPEG-Frame der ersten Rolle mit
+`previewUrl` ab, der Frame ist aber praktisch immer schwarz, weil die
+Erfassung exakt beim Workflow-Start passiert, bevor der Mixer-PGM auf
+irgendetwas anderes als `BLK` steht. Punkt 4 (Zustands-Wiederherstellung
+beim Start) wurde in Nachtrag 92 gelöst (`restoreRoleState`) — das
+verkürzt das Schwarzbild-Fenster, behebt es aber nicht grundsätzlich:
+ein Workflow, der noch nie gestartet wurde, hat gar kein Thumbnail
+(generischer Kategorie-Platzhalter), und ein gestoppter Workflow zeigt
+zwangsläufig ein veraltetes Bild vom letzten Lauf.
+
+**Entscheidung:** statt die Erfassung zeitlich zu verschieben (z. B.
+erst nach einer manuellen Umschaltung, kein sauberer Trigger dafür
+vorhanden) oder einen "media-ready"-Event zu erfinden, der nirgends
+existiert, komplette Streichung des PGM-Video-Thumbnails. Ersetzt durch
+eine reine Topologie-Grafik (Rollen als Kacheln, Verbindungen als
+Linien, `ui/shell/workflows-view.ts #renderTopologyPreview`) — direkt
+aus der bereits geladenen `Workflow.definition` gerendert, kein
+Netzwerk-Request, kein Status-abhängiges Verhalten, kein Veraltungs-
+Problem. Zeigt bewusst nur die *statischen* Verbindungen aus der
+Definition (bei "Regie 1" nur `mixer→viewer`) — die übrigen Rollen sind
+zur Entwurfszeit unverbunden, weil Crosspoint-Verkabelung erst zur
+Laufzeit über NMOS/Params-RPC entsteht (Nachtrag 96: keine statische
+Port-Beschreibung pro Node-Typ). Das ist korrektes Verhalten, keine
+Lücke der Vorschau.
+
+**Backend:** Migration 0012 (`ALTER TABLE workflows DROP COLUMN
+thumbnail`, Migration 0007 rückgängig gemacht) sowie vollständige
+Entfernung von `Store.{Set,Get}Thumbnail`, `Service.GetThumbnail`,
+`GET /api/v1/workflows/{id}/thumbnail`,
+`orchestrator/internal/workflows/thumbnail.go` und des
+`go s.captureWorkflowThumbnail(wf)`-Aufrufs in `runStart()`.
+`restoreRoleState()` bleibt unverändert (Kommentar in `state.go`
+korrigiert, verwies zuvor auf das jetzt entfernte Thumbnail-Capture).
+
+**Frontend:** `#renderThumbnail()`/`#maybeFetchThumbnail()`/
+`#thumbnailUrlById`-Cache (Blob+Object-URL-Muster) komplett entfernt,
+durch `#renderTopologyPreview()` ersetzt (einfaches Zeilenraster,
+bis zu 4 Rollen pro Zeile, SVG `viewBox="0 0 100 100"`).
+
+**Verifikation:** `go build`/`go vet`/`go test ./...` grün (orchestrator;
+einziger Fehlschlag weiterhin der vorbestehende, unabhängige
+`TestHistoryRawWindowReturnsSamplesWithinCutoff` in `internal/hosts`,
+unberührt von dieser Änderung). Migration lief beim `make start` sauber
+durch, "Regie 1" (`role_bindings` von `operator1` inklusive) blieb
+erhalten. Live per CDP verifiziert: eingeloggt als `admin`, Workflows-
+Tab geöffnet — "Regie 1"-Kachel zeigt eine SVG-Topologie mit 6
+Rollen-Kästchen (`source-smpte`, `source-ball`, `ograf`, `mixer`,
+`audio`, `viewer`) und der einen definierten Verbindungslinie
+`mixer→viewer`, Screenshot bestätigt saubere Darstellung ohne
+Platzhalter/Fehlerzustand.
+
+**Umgesetzt in:** `orchestrator/internal/db/migrations/
+0012_drop_workflow_thumbnails.sql`, `orchestrator/internal/httpapi/
+{server.go,workflow_handlers.go,server_test.go}`,
+`orchestrator/internal/workflows/{service.go,service_test.go,state.go,
+store.go}` (thumbnail.go gelöscht), `ui/shell/workflows-view.ts`.

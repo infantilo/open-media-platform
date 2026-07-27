@@ -21,9 +21,8 @@ import (
 // manuelle Presets aufgerufen) — der Orchestrator kennt den Inhalt
 // nicht, reicht ihn nur zwischen Erfassung und Wiederherstellung durch
 // (`Store.SetRoleState`/`GetRoleState`, Migration 0011). Node-Typen
-// ohne `/state` (die meisten) liefern 404 — best effort wie
-// `captureWorkflowThumbnail`, kein Fehlerfall, keine Sonderbehandlung
-// nötig.
+// ohne `/state` (die meisten) liefern 404 — best effort, kein
+// Fehlerfall, keine Sonderbehandlung nötig.
 //
 // **Live gefundenes, zunächst übersehenes Problem:** ein `/state`-Blob
 // referenziert andere Nodes über deren Sender-IDs (z. B.
@@ -130,10 +129,8 @@ const restoreStateRetryDelay = 2 * time.Second
 
 // restoreRoleState wird nach erfolgreicher Verkabelung eines frisch
 // gestarteten Workflows aufgerufen (nach den `applyConnection`-Aufrufen
-// in runStart, vor dem Thumbnail-Capture — ein wiederhergestellter
-// Crosspoint zeigt dann auch im ersten erfassten Vorschaubild bereits
-// den richtigen Inhalt statt Schwarzbild, s. Nachtrag 91 Punkt 3).
-// Best effort, wie captureRoleState.
+// in runStart, s. Nachtrag 91 Punkt 3). Best effort, wie
+// captureRoleState.
 func (s *Service) restoreRoleState(wf Workflow) {
 	saved, err := s.store.GetRoleState(wf.ID)
 	if err != nil {
