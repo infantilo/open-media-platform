@@ -13331,3 +13331,80 @@ service.go,service_test.go,forecast.go(neu)}`,
 `orchestrator/internal/placement/{placement.go,placement_test.go}`,
 `orchestrator/internal/httpapi/workflow_handlers.go`,
 `ui/shell/workflows-view.ts`.
+
+---
+
+## 2026-07-27 (Nachtrag 100) — Scheduler-Tab umgebaut: horizontaler
+Tag/Woche/Monat-Stundenplan mit Drag&Drop statt flacher Liste
+
+**Kontext:** Direktes Nutzerfeedback unmittelbar nach Nachtrag 98:
+"scheduler sollte aber als tag/woche/monat im horizontalen
+(halb-)Stundenplan sein". Per `AskUserQuestion` präzisiert: Drag mit der
+Maus (nicht Klick-öffnet-Formularfelder) — deutlich mehr Aufwand
+(Pointer-Events, 30-Min-Snapping), aber die eigentliche
+"Stundenplan"-Erfahrung, bewusst vom Nutzer so gewählt.
+
+**Komplettumbau** von `ui/shell/scheduler-view.ts`: eine Zeile pro
+Workflow, horizontale Zeitachse. **Tag**: 24h in 30-Min-Raster (Stunden-
+Beschriftung alle 2h). **Woche**: 7 Tage auf EINER durchgehenden
+Minuten-Koordinate (Tag-Index×1440+Minute) — nicht 7 getrennte
+Unter-Container, damit ein Balken beim Ziehen tatsächlich über
+Tagesgrenzen wandern kann: bei `weekly` ändert das den `weekday`, bei
+`once` das Datum, bei `daily` bewusst geklemmt auf den ursprünglichen
+Tag (ein Tageswechsel wäre bei einem täglich wiederkehrenden Zeitplan
+bedeutungslos). **Monat**: reine Tages-Übersicht ohne Uhrzeit-Auflösung
+(gefüllte/leere Zellen), kein Drag — Klick springt in die Tagesansicht
+dieses Datums. Bewusste Scope-Grenze, wie in praktisch jeder verbreiteten
+Kalender-App: das Monatsraster ist Überblick, nicht direkt editierbar.
+
+**Interaktion:** `pointerdown` in der Mitte eines Balkens = verschieben,
+innerhalb von 8px vom Rand = die jeweilige Seite verlängern/verkürzen
+(Mindestdauer 30 Min, Snapping auf 30 Min). **Sofortiges Speichern bei
+Loslassen** (nicht das gestufte Explizite-Speichern-Muster aus
+`workflows-view.ts`) — Direktmanipulation "committed on drop" ist hier
+die erwartete Interaktion, bewusst andere Konvention als beim
+Text-Formular. Während des Ziehens werden Poll-/SSE-getriebene
+Re-Renders übersprungen (`#dragging`-Guard, gleiches Muster wie
+`omp-fader`/`omp-knob`) — sonst würde ein Zwischen-Render das gerade
+gezogene DOM-Element ersetzen und den Drag abbrechen. "+"-Knopf pro
+Zeile legt ein neues Start+Stop-Paar mit Standardzeiten an (09:00–17:00,
+Kind wählbar) statt Klick-Zieh-Neuanlegen auf leerer Fläche — reduziert
+Aufwand, ohne Funktion zu verlieren (danach normal ziehbar).
+
+**Echter Vorfall während der Live-Verifikation:** ein Zeitplan auf
+"Regie 1" mit `timeOfDay` nahe der echten Uhrzeit hatte real gefeuert
+(`lastFiredAt` gesetzt) — der echte `workflows.Scheduler`-Hintergrund-
+Loop hatte tatsächlich `Start()` ausgelöst, alle sechs echten
+Node-Prozesse crash-loopten sofort (exit status 1 — die bekannte
+"mxl.env nicht in dieser Shell gesourct"-Ursache, kein Bug im neuen
+Code), eine Minute später feuerte der gekoppelte Stop-Zeitplan und fuhr
+alles wieder herunter. Kein bleibender Schaden (Instanzenliste leer,
+Rollen/Verbindungen von Regie 1 unangetastet), Ursache des einzelnen
+Zeitplan-Eintrags nicht abschließend geklärt (denkbar: der Nutzer hat
+den zuvor ausgelieferten Tab selbst in einer eigenen Browser-Sitzung
+ausprobiert, während an diesem Umbau gearbeitet wurde — nicht
+bestätigt). Regie 1 sofort bereinigt (`schedules` zurückgesetzt, keine
+laufenden Instanzen bestätigt). Lehre unabhängig von der genauen
+Ursache: ein Zeitplan ist anders als jede andere UI-Testinteraktion
+NICHT inert nach Testende — er kann später unbeaufsichtigt real feuern.
+Ab sofort werden Scheduler-Tests ausschließlich gegen einen
+Wegwerf-Testworkflow gefahren, nie gegen Regie 1.
+
+**Verifikation:** `deno check`/`deno test ui/` (70/70) grün, `make ui`
+grün. Live per CDP gegen einen Wegwerf-Testworkflow: neuen täglichen
+Zeitplan über "+" angelegt (09:00–17:00), per echtem simulierten
+Maus-Drag (CDP `Input.dispatchMouseEvent`) auf 11:30–19:30 verschoben —
+per API bestätigt korrekt übernommen; rechten Rand gezogen, Ende auf
+20:30 verlängert — bestätigt; "×" geklickt, Zeitplan gelöscht —
+bestätigt leer. Wochenansicht: Balken korrekt im Montag-Segment
+positioniert, horizontales Scrollen über die restlichen 6 Tage
+bestätigt (Screenshot). Monatsansicht: gefüllte Zellen für jeden Tag
+(täglicher Zeitplan), Klick auf eine Tageszelle sprang korrekt in die
+Tagesansicht dieses Datums. Ein kleiner kosmetischer Fund dabei behoben:
+Monatszellen-Tooltip zeigte den Wochentag doppelt
+(`fmtDayLabel` enthält ihn bereits) — Redundanz entfernt, toter
+`WEEKDAY_LABELS_MONDAY_FIRST`-Konstante mitgelöscht. Danach
+aufgeräumt: Testworkflow gelöscht, Regie 1 im Ausgangszustand bestätigt.
+
+**Umgesetzt in:** `ui/shell/scheduler-view.ts` (kompletter Umbau). Kein
+Backend-Code geändert.
