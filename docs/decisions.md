@@ -13148,3 +13148,64 @@ Platzhalter/Fehlerzustand.
 {server.go,workflow_handlers.go,server_test.go}`,
 `orchestrator/internal/workflows/{service.go,service_test.go,state.go,
 store.go}` (thumbnail.go gelöscht), `ui/shell/workflows-view.ts`.
+
+---
+
+## 2026-07-27 (Nachtrag 98) — Scheduler-Tab (workflow-übergreifende
+Zeitplan-Übersicht + Bearbeitung), Teil 1 von "Scheduler + Auto-Place"
+
+**Kontext:** Fortsetzung einer vormittags besprochenen, aus dem Kontext
+gefallenen Entscheidung ("weiter mit scheduler und auto place") — per
+Rückfrage neu geklärt: Scheduler-Tab soll ALLE Zeitpläne aller Workflows
+zeigen und direktes Bearbeiten (löschen, neu, verlängern/verkürzen,
+verschieben) erlauben, nicht nur die bestehende Pro-Workflow-Ansicht im
+Bearbeiten-Formular. Per Plan-Modus entworfen (3 parallele
+Explore-Agenten: Backend-Scheduler/Placement-Code, bestehende
+Architektur-Doku zu Placement/Redundanz, UI-Muster für neue Tabs),
+zusammen mit einem zweiten, größeren Schritt ("intelligentes
+Auto-Placement", eigener Nachtrag folgt) — hier nur Teil 1.
+
+**Kein Backend-Umbau nötig:** Zeitpläne bleiben Teil von
+`Definition.Schedules`, CRUD läuft weiter über das bestehende `GET/PUT
+/api/v1/workflows[/{id}]` — `Update()` ersetzt immer die GANZE
+`Definition` (`wf.Definition = def`, kein Partial-Merge, verifiziert vor
+dem Bauen), der neue Tab schickt daher bei jeder Speicherung die
+unverändert übernommene restliche Definition (roles/connections/
+settings/title/…) mit, nur `schedules` wird ersetzt.
+
+**Neu `ui/shell/scheduler-view.ts`** (`<omp-scheduler-view>`): Skelett wie
+`alarm-view.ts` (Poll + SSE auf `workflow.updated`/`lost-events`), pro
+Workflow ein Abschnitt. Schreibgeschützte Übersicht gruppiert Start+Stop-
+Paare gleicher `kind`+`weekday` zu einer Zeile ("täglich: 08:00 → 22:00")
+für die geforderte "verlängern/verkürzen"-Lesbarkeit — Bearbeiten bleibt
+bewusst pro einzelnem `Schedule`-Objekt (kein verschmolzenes
+Datenmodell, nur eine freundlichere Anzeige, robuster als ein
+Zwei-Felder-Merge-Widget). **Explizites Speichern statt PUT-pro-Klick**
+(s. [[feedback_editors_need_explicit_save]]): "Bearbeiten" versetzt genau
+einen Workflow in einen lokalen Entwurfsmodus (`#draftSchedules`,
+unabhängig vom Poll-getriebenen `#workflows`) — ein SSE-getriebener Poll
+während des Bearbeitens überschreibt dadurch nie eine unfertige Eingabe,
+nur die schreibgeschützten Zeilen der anderen Workflows aktualisieren
+sich live. Zeilen-Widgets (Kind/Aktion-Select, `datetime-local` für
+"once", Zeit+Wochentag für "daily"/"weekly") 1:1 aus
+`workflows-view.ts#renderScheduleRow` übernommen (bewusst dupliziert,
+kein gemeinsames Util-Modul zwischen View-Dateien in diesem Projekt).
+`workflows-view.ts`s eigene Schedule-Sektion im Bearbeiten-Formular
+bleibt unverändert bestehen (zwei Blickwinkel auf dieselbe Datenquelle,
+wie Instanzen sowohl im Flow-Editor als auch im Instanzen-Tab).
+
+**Tab-Registrierung** (`app-shell.ts`): neuer `BASE_TABS`-Eintrag
+(`scheduler`/"Scheduler"), sichtbar für alle wie der Workflows-Tab selbst
+— kein eigenes Client-Gating, das zugrunde liegende PUT bleibt
+serverseitig `VerbConfigure`-gated.
+
+**Verifikation:** `deno check`/`deno test ui/` (70/70) grün, `make ui`
+grün. Live per CDP gegen die echte "Regie 1": Zeitplan über den neuen Tab
+angelegt (täglich 09:30 Start) — per API bestätigt (`schedules` korrekt,
+`roles`/`connections` unverändert bei 6/1, also kein Datenverlust durch
+den Full-Definition-PUT), Zeit auf 11:00 verschoben — per API bestätigt,
+gelöscht — Endzustand exakt wie vor dem Test (`schedules: undefined`,
+6 Rollen, 1 Connection).
+
+**Umgesetzt in:** `ui/shell/scheduler-view.ts` (neu), `ui/shell/
+app-shell.ts`. Kein Backend-Code geändert.

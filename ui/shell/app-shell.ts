@@ -13,11 +13,12 @@ import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./instances-view.ts";
 import "./alarm-view.ts";
+import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "admin";
+type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -36,6 +37,13 @@ const BASE_TABS: TabDef[] = [
   // §17 Teil 3 (docs/END-GOAL-FEATURES.md, 2026-07-17): genereller
   // Alarm-View, fünfter Tab neben Flow-Editor/Workflows/Hosts/Instanzen.
   { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
+  // Nachtrag 97 Folgearbeit (2026-07-27): workflow-übergreifende
+  // Zeitplan-Übersicht/-Bearbeitung, sichtbar für alle wie der
+  // Workflows-Tab selbst — kein eigenes Client-Gating, das zugrunde
+  // liegende PUT /api/v1/workflows/{id} bleibt serverseitig
+  // VerbConfigure-gated (schlägt für Nutzer ohne diesen Verb einfach
+  // fehl, exakt wie im bestehenden Workflow-Formular).
+  { id: "scheduler", label: "Scheduler", element: "omp-scheduler-view" },
 ];
 
 // Kapitel 11 Teil 1 (docs/END-GOAL-FEATURES.md §11.4): eigener Tab statt
