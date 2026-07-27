@@ -24,8 +24,35 @@ func TestResolveNoBindingsReturnsEmptyResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if result.HasEngineeringAccess || len(result.Consoles) != 0 {
+	if result.HasEngineeringAccess || result.HasOperateBindings || len(result.Consoles) != 0 {
 		t.Errorf("Resolve() = %+v, want empty result", result)
+	}
+}
+
+// TestResolveOperateBindingWithNothingCurrentlyRunning ist der Bugfix
+// 2026-07-27: operator1 hat eine echte, workflow-gescopte operate-
+// Bindung, aber die Rolle läuft gerade nicht (kein Node erfüllt sie) —
+// HasOperateBindings muss trotzdem true sein, obwohl Consoles leer
+// bleibt (die Shell braucht genau diese Unterscheidung, um NICHT auf
+// die Engineering-Ansicht zurückzufallen).
+func TestResolveOperateBindingWithNothingCurrentlyRunning(t *testing.T) {
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "operator1", WorkflowID: "wf-1", NodeID: "mixer", Verb: authz.VerbOperate},
+	}}, nil)
+
+	// Kein Node läuft, der zu dieser Bindung passt.
+	result, err := resolver.Resolve("operator1", nil)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !result.HasOperateBindings {
+		t.Errorf("HasOperateBindings = false, want true (real operate binding exists, even though nothing currently matches)")
+	}
+	if len(result.Consoles) != 0 {
+		t.Errorf("Consoles = %+v, want empty (nothing currently running)", result.Consoles)
+	}
+	if result.HasEngineeringAccess {
+		t.Errorf("HasEngineeringAccess = true, want false (operate-only binding)")
 	}
 }
 

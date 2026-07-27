@@ -47,6 +47,16 @@ const WORKFLOW_CONSOLE_ROUTE = /^\/console\/([^/]+)$/;
 
 interface ConsolesResponse {
   hasEngineeringAccess: boolean;
+  // hasOperateBindings (Bugfix 2026-07-27): unabhängig von consoles —
+  // true, sobald der Nutzer IRGENDEINE operate-Bindung besitzt, auch
+  // wenn gerade nichts läuft, das dazu passt. consoles selbst enthält
+  // nur die aktuell LAUFENDE Teilmenge (orchestrator/internal/consoles/
+  // resolve.go) — ohne dieses Signal ließe sich "hat Bindungen, aber
+  // gerade läuft nichts" nicht von "hat gar keine Bindungen" unterscheiden,
+  // beides ergab bislang identisch consoles.length===0 und fiel deshalb
+  // fälschlich auf die volle Engineering-Ansicht zurück (Nutzerfund:
+  // operator1 landete mit scheinbar vollem Zugriff im Flow-Editor).
+  hasOperateBindings: boolean;
   consoles: ConsoleEntry[];
 }
 
@@ -54,7 +64,7 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   const res = await fetch("/api/v1/me/consoles");
   // Kein erreichbarer Orchestrator/Fehler: auf die vor C13 einzig
   // existierende Ansicht zurückfallen, statt eine leere Seite zu zeigen.
-  if (!res.ok) return { hasEngineeringAccess: true, consoles: [] };
+  if (!res.ok) return { hasEngineeringAccess: true, hasOperateBindings: false, consoles: [] };
   const body = (await res.json()) as ConsolesResponse;
   // Gos `[]ConsoleEntry` serialisiert als JSON `null`, wenn der Slice nie
   // befüllt wurde (kein Treffer für den Nutzer, z. B. weil noch keine
@@ -62,7 +72,11 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   // statt an jeder Verwendungsstelle unten gegen `null` absichern zu
   // müssen (per Browser-Test gefunden: "Cannot read properties of null
   // (reading 'length')").
-  return { hasEngineeringAccess: body.hasEngineeringAccess, consoles: body.consoles ?? [] };
+  return {
+    hasEngineeringAccess: body.hasEngineeringAccess,
+    hasOperateBindings: body.hasOperateBindings,
+    consoles: body.consoles ?? [],
+  };
 }
 
 // §7.6-Ergänzung (docs/END-GOAL-FEATURES.md, 2026-07-17: "Operator-UI
@@ -140,7 +154,7 @@ function watchConsoleEntries(
 async function renderShell(root: HTMLElement, username: string | null) {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
-  const { hasEngineeringAccess, consoles } = await fetchConsoles();
+  const { hasEngineeringAccess, hasOperateBindings, consoles } = await fetchConsoles();
 
   if (kioskMatch) {
     const [, , nodeRoleId] = kioskMatch;
@@ -149,15 +163,27 @@ async function renderShell(root: HTMLElement, username: string | null) {
     root.replaceChildren(view);
     await view.setEntries(selectEntries(consoles), nodeRoleId);
     watchConsoleEntries(view, selectEntries, nodeRoleId);
-  } else if (hasEngineeringAccess || consoles.length === 0) {
+  } else if (hasEngineeringAccess || (!hasOperateBindings && consoles.length === 0)) {
     // Kein Rollenbindungs-Treffer überhaupt (typischerweise: noch keine
     // Rollenbindungen angelegt) fällt bewusst auf Engineering zurück —
     // das vor C13 einzig existierende Verhalten bleibt der Default,
     // solange niemand Rollenbindungen konfiguriert hat. Seit K1-Teil-1
     // ist die Engineering-Ansicht die App-Bar-Shell (Tabs Flow-Editor/
     // Workflows/Hosts) statt des nackten <omp-flow-canvas> + zwei
-    // Floating-Toggle-Buttons.
+    // Floating-Toggle-Buttons. Bugfix 2026-07-27: `hasOperateBindings`
+    // grenzt das jetzt sauber von "hat echte operate-Bindungen, aber
+    // gerade läuft nichts" ab (s. u.) — vorher fielen beide Fälle
+    // identisch hierher, ein reiner Operator landete dadurch mit
+    // scheinbar vollem Zugriff im Flow-Editor, sobald sein zugewiesener
+    // Workflow gerade gestoppt war.
     root.replaceChildren(document.createElement("omp-app-shell"));
+  } else if (consoles.length === 0) {
+    // Bugfix 2026-07-27: reiner Operator MIT echten Bindungen, aber
+    // aktuell läuft keine davon — weder Engineering (er hat dafür keine
+    // Rechte) noch die Workflow-Auswahl (die hätte nichts zum Auflisten)
+    // sind hier richtig. Eigener, expliziter Leerzustand statt eines der
+    // beiden falschen Rückfälle.
+    renderNoActiveConsole(root);
   } else {
     // Kapitel 12 Teil 5 (docs/END-GOAL-FEATURES.md §12.3f): reiner
     // Operator (kein configure/admin) — "landet nach dem Login auf
@@ -198,6 +224,42 @@ async function renderShell(root: HTMLElement, username: string | null) {
   if (username) {
     document.body.appendChild(buildUserWidget(username));
   }
+}
+
+// Bugfix 2026-07-27: eigener Leerzustand für einen reinen Operator mit
+// echten Bindungen, dessen zugewiesene(r) Workflow(s) aktuell nicht
+// laufen — weder Engineering noch Workflow-Auswahl passen hier (s.
+// renderShell). Kein Live-Refresh (bewusst dasselbe, bereits
+// bestehende Muster wie renderWorkflowPicker direkt darunter — auch
+// die Workflow-Auswahl aktualisiert sich nicht selbst, falls währenddessen
+// ein weiterer Workflow startet; ein manueller Neu-laden-Knopf reicht,
+// symmetrisch zum Nachbar-Screen statt eines Alleingangs nur hier).
+function renderNoActiveConsole(root: HTMLElement) {
+  const container = document.createElement("div");
+  container.style.cssText =
+    "display:flex;flex-direction:column;align-items:center;justify-content:center;" +
+    "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
+
+  const heading = document.createElement("h1");
+  heading.textContent = "Kein aktiver Regieplatz";
+  heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
+  container.appendChild(heading);
+
+  const message = document.createElement("p");
+  message.textContent =
+    "Du hast Bedienrechte für mindestens eine Rolle, aber aktuell läuft kein Workflow, der dazu passt. " +
+    "Sobald ein zugewiesener Workflow gestartet wird, erscheint er hier.";
+  message.style.cssText = "max-width:420px;color:#aaa;font-size:13px;margin:0;";
+  container.appendChild(message);
+
+  const reloadBtn = document.createElement("button");
+  reloadBtn.textContent = "Neu laden";
+  reloadBtn.style.cssText =
+    "padding:8px 20px;border:1px solid #444;border-radius:4px;background:#232323;color:#eee;cursor:pointer;";
+  reloadBtn.addEventListener("click", () => location.reload());
+  container.appendChild(reloadBtn);
+
+  root.replaceChildren(container);
 }
 
 // Kapitel 12 Teil 5: "Workflow-Auswahl (nur gebundene Workflows, als

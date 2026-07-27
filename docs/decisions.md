@@ -13557,3 +13557,65 @@ damit aber identisch zum CI-Log durch); endgültige Bestätigung braucht
 den nächsten echten GitHub-Actions-Lauf.
 
 **Umgesetzt in:** `Makefile`, `.github/workflows/ci.yml`.
+
+---
+
+## 2026-07-27 (Nachtrag 104) — Bug behoben: reiner Operator landete mit
+scheinbar vollem Zugriff im Flow-Editor, wenn gerade nichts lief
+
+**Anlass:** Nutzer, wörtlich: "wenn sich operator1 einloggt und nichts
+gestartet ist, wofür er Rechte hat, dann kommt er derzeit in den
+Floweditor und darf dort alles. Das darf nicht sein. Sein Startscreen
+muss dann zeigen, dass er gerade nirgends etwas steuern kann. Wenn zum
+Beispiel mehrere Workflows gestartet sind, in denen er was steuern darf,
+dann muss er eine schöne Auswahl haben, in welchen Workflow er jetzt
+will." Per Explore-Agent recherchiert statt geraten.
+
+**Root Cause** (`ui/shell/shell.ts` `renderShell()`, alte Zeile ~152):
+`if (hasEngineeringAccess || consoles.length === 0)` fällt auf die volle
+Engineering-Ansicht (`<omp-app-shell>`, alle Tabs inkl. Flow-Editor)
+zurück. Diese Bedingung unterschied nicht zwischen zwei völlig
+verschiedenen Fällen, die beide `consoles.length === 0` ergeben:
+(a) der Nutzer hat GAR KEINE Rollenbindungen (der seit C13 gewollte
+Default-Fallback), vs. (b) der Nutzer (operator1) hat ECHTE
+`operate`-Bindungen, aber gerade läuft nichts, das dazu passt —
+`consoles` (nur die aktuell LAUFENDE Teilmenge,
+`orchestrator/internal/consoles/resolve.go Resolve()`) ist dafür aus
+einem völlig anderen Grund leer. Backend-seitig war das kein
+Autorisierungs-Leck (`requireVerbOnNode`/`requireVerbGlobal` blockieren
+Schreibzugriffe für operator1 bereits korrekt, live mehrfach verifiziert
+in früheren Nachträgen) — rein ein Frontend-Routing-Bug: die falsche
+Ansicht wird gezeigt, nicht falsch autorisiert.
+
+**Fix:** neues Signal `HasOperateBindings` in `consoles.Result`
+(`orchestrator/internal/consoles/resolve.go`) — unabhängig von
+`Consoles`, true sobald der Nutzer IRGENDEINE `operate`-Bindung besitzt,
+egal ob sie gerade gegen einen laufenden Node auflöst. `shell.ts`
+unterscheidet jetzt drei Fälle statt zwei: `hasEngineeringAccess ||
+(!hasOperateBindings && consoles.length === 0)` → Engineering (nur noch
+echt "keine Bindungen"); `consoles.length === 0` (mit
+`hasOperateBindings`) → neuer Leerzustand `renderNoActiveConsole()`
+("Kein aktiver Regieplatz", erklärender Text, "Neu laden"-Knopf, kein
+Live-Refresh — bewusst symmetrisch zum bereits bestehenden
+`renderWorkflowPicker()`, der ebenfalls nicht live aktualisiert); sonst
+unverändert die bereits bestehende Workflow-Kachel-Auswahl
+(`renderWorkflowPicker`, greift schon korrekt bei mehreren aktuell
+laufenden zugewiesenen Workflows — das vom Nutzer als Beispiel genannte
+"schöne Auswahl" existierte bereits, war nur wegen des Routing-Bugs nie
+erreichbar für den beschriebenen Ausgangsfall).
+
+**Verifiziert:** neuer Go-Test
+`TestResolveOperateBindingWithNothingCurrentlyRunning` (+ bestehender
+No-Bindings-Test um die neue Feld-Prüfung ergänzt), `go build/vet/test`
+grün. Live gegen den echten `operator1` (Passwort aus früherer Sitzung
+bekannt) und die echte "Regie 1": bei gestopptem Workflow zeigt `GET
+/api/v1/me/consoles` jetzt `{hasEngineeringAccess:false,
+hasOperateBindings:true, consoles:[]}`, per CDP bestätigt — kein
+`<omp-app-shell>` im DOM, stattdessen der neue "Kein aktiver
+Regieplatz"-Screen. Regie 1 testweise echt gestartet (6/6 Rollen) —
+operator1 landet jetzt korrekt im Konsolen-Board mit allen sechs
+zugewiesenen Rollen-Kacheln, kein Flow-Editor. Danach Regie 1 wieder
+gestoppt (Ausgangszustand). `deno check`/`deno test ui/` (70/70) grün.
+
+**Umgesetzt in:** `orchestrator/internal/consoles/{resolve.go,
+resolve_test.go}`, `ui/shell/shell.ts`.

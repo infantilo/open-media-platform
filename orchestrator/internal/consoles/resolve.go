@@ -58,8 +58,19 @@ type ConsoleEntry struct {
 // für Engineering statt Console als Startansicht") — eine kleine,
 // pragmatische Erweiterung der in ARCHITECTURE.md beschriebenen reinen
 // Array-Antwort, weil die Shell dieses Signal sonst nicht bekäme.
+//
+// HasOperateBindings (Bugfix 2026-07-27, Nutzerfund: "operator1 landet
+// im Flow-Editor mit vollem Zugriff, wenn gerade nichts läuft, wofür er
+// Rechte hat"): unabhängig von Consoles — true, sobald der Nutzer
+// IRGENDEINE operate-Bindung besitzt, ganz gleich ob sie gerade gegen
+// einen laufenden Node auflöst. Consoles ist bewusst nur die aktuell
+// LAUFENDE Teilmenge (s. Resolve-Doku unten) — ohne dieses zusätzliche
+// Signal kann die Shell "hat Bindungen, aber gerade läuft nichts" nicht
+// von "hat überhaupt keine Bindungen" unterscheiden und fiel bislang in
+// BEIDEN Fällen identisch auf die volle Engineering-Ansicht zurück.
 type Result struct {
 	HasEngineeringAccess bool           `json:"hasEngineeringAccess"`
+	HasOperateBindings   bool           `json:"hasOperateBindings"`
 	Consoles             []ConsoleEntry `json:"consoles"`
 }
 
@@ -126,6 +137,7 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 		if b.Verb != authz.VerbOperate {
 			continue
 		}
+		result.HasOperateBindings = true
 		for _, n := range nodes {
 			roleID := NodeRoleID(n)
 
