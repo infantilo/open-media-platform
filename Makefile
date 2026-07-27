@@ -1,4 +1,4 @@
-.PHONY: build test check up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
+.PHONY: build test check check-ci up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent
 
@@ -39,6 +39,22 @@ check:
 	deno check ui/**/*.ts
 	deno test ui/
 	cd nodes && cargo test --workspace && cargo deny check && cargo audit
+
+# CI-Variante von `check`: identische Go/Deno-Schritte, aber OHNE den
+# Cargo-Teil (Nutzerentscheidung 2026-07-27, docs/decisions.md) —
+# GitHub-Actions-Runner haben third_party/mxl nicht gevendort
+# (gitignored, lokal per install-mxl.sh gebaut) und können den
+# Rust-Workspace deshalb gar nicht erst manifest-auflösen (`mxl`/
+# `mxl-sys` sind PATH-Dependencies von omp-mediaio, Cargo lädt deren
+# Manifest workspace-weit auch dann, wenn das jeweilige Feature nicht
+# aktiv ist). Rust/MXL-Code bleibt wie bisher Pflicht zur echten
+# lokalen Live-Verifikation vor jedem Commit (`make check`, s. Historie
+# in docs/decisions.md) — nur nicht Teil des automatisierten
+# GitHub-Actions-Gates.
+check-ci:
+	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
+	deno check ui/**/*.ts
+	deno test ui/
 
 # Dev-Fallback statt systemd-Quadlets: die auf dieser Maschine verfügbare
 # Podman-Version (Debian bookworm, 4.3.1) unterstützt Quadlets erst ab 4.4+

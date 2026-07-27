@@ -19,23 +19,17 @@ jobs:
         with:
           deno-version: v2.x
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: nodes
-
-      # `make ci` ruft u.a. `cargo deny check`/`cargo audit` als CLI-Tools
-      # auf (einzige Quelle der Wahrheit, gleiche Kommandos lokal wie in
-      # CI) — hier als vorgebaute Binaries installiert statt per
-      # `cargo install` (Compile-Zeit aus Quelle wäre mehrere Minuten pro
-      # CI-Lauf, docs/decisions.md Schritt C1).
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny,cargo-audit
-
-      - name: make ci
-        run: make ci
+      # Kein Rust-Toolchain-Setup hier (Nutzerentscheidung 2026-07-27,
+      # docs/decisions.md): der Rust-Workspace (nodes/) hängt über
+      # omp-mediaio an third_party/mxl (PATH-Dependency, gitignored,
+      # lokal per install-mxl.sh gebaut) — ein GitHub-Actions-Runner hat
+      # das nicht, `cargo`-Aufrufe scheiterten hier bereits beim
+      # Manifest-Laden (root-caused 2026-07-27, seit dem MXL-Vendoring/
+      # C4 nie funktioniert). Rust/MXL-Code bleibt Pflicht zur echten
+      # lokalen Live-Verifikation vor jedem Commit (`make check`, s.
+      # Historie in docs/decisions.md) statt Teil dieses Gates.
+      - name: make check-ci
+        run: make check-ci
 
   # Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen unsere
   # nmos-cpp-Registry (IS-04-02, Registration+Query API). NICHT gegen
@@ -78,6 +72,18 @@ jobs:
       # Argumente, ignoriert jedes CMD) — für den nicht-interaktiven
       # CLI-Modus muss der Entrypoint überschrieben werden (verifiziert
       # am echten Image, docs/decisions.md 2026-07-13).
+      # nmos-test.py selbst liefert einen Exit-Code ungleich 0, sobald
+      # IRGENDEIN Test im Suite-Lauf nicht "PASS" ist — auch für die drei
+      # bewusst akzeptierten, dauerhaften Abweichungen (test_01/test_02/
+      # test_27, s. u.). Ohne das "|| true" bricht `bash -e` (GH-Actions-
+      # Default-Shell für Run-Steps) den gesamten Job an dieser Stelle ab,
+      # BEVOR der eigentliche Auswertungsschritt unten (mit seiner
+      # `--allow`-Ausnahmeliste) überhaupt startet — genau das war der
+      # tatsächliche Grund, warum dieser Job seit A9 nie grün war
+      # (root-caused 2026-07-27, nicht die zuvor vermuteten "Unable to
+      # update repository"-Meldungen direkt darüber, die sind selbst
+      # unschädlich/vom Tool abgefangen). Die echte Auswertung passiert
+      # bewusst NICHT hier, sondern im nächsten Schritt.
       - name: AMWA NMOS Testing Tool — IS-04-02 (Registry APIs) ausführen
         run: |
           mkdir -p nmos-results
@@ -87,7 +93,7 @@ jobs:
             docker.io/amwa/nmos-testing:latest \
             nmos-test.py suite IS-04-02 \
               --host localhost localhost --port 8010 8010 --version v1.3 v1.3 \
-              --selection all --output /tmp/results/is0402.json
+              --selection all --output /tmp/results/is0402.json || true
 
       # Definierte Testliste (UMSETZUNG.md D2): alle IS-04-02-Tests außer
       # den drei unten dokumentierten, bewusst akzeptierten Abweichungen

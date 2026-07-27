@@ -13500,3 +13500,60 @@ durch (gegen eine Wegwerf-`omp_test`-Datenbank, s.
 [[feedback_go_test_wipes_dev_postgres]]).
 
 **Umgesetzt in:** `orchestrator/internal/hosts/history_test.go`.
+
+---
+
+## 2026-07-27 (Nachtrag 103) — CI seit Langem strukturell rot: beide
+Jobs root-caused und behoben, nicht nur der neue Push
+
+**Anlass:** Nutzer bekommt nach jedem Push eine "run failed"-Mail.
+Geprüft statt angenommen: `gh run list` zeigt **0 von 50** Läufen
+erfolgreich — dieser Zustand ist nicht neu, sondern besteht seit A9/dem
+MXL-Vendoring (C4). Beide CI-Jobs strukturell, deterministisch rot
+(nicht flakig/netzwerkbedingt), einzeln root-caused:
+
+**Job `check`:** `cargo test --workspace` scheitert immer beim
+Manifest-Laden — `nodes/omp-mediaio`s `mxl`/`mxl-sys`-Abhängigkeiten
+sind PATH-Dependencies auf `third_party/mxl` (gitignored, lokal per
+`install-mxl.sh` gebaut, existiert auf einem GitHub-Actions-Runner
+nicht). Zwar ist das `mxl`-Feature selbst optional/nicht default (extra
+dafür entworfen, "damit Mock/Playout ohne geklontes MXL-Repo bauen") —
+Cargo lädt bei einem workspace-weiten Befehl trotzdem eagerly JEDES
+Mitglieds-Manifest inkl. dessen PATH-Dependency-Ziele, unabhängig davon,
+ob das jeweilige Feature aktiv ist. Nutzerentscheidung (2 Optionen
+vorgelegt): Rust/MXL komplett aus dem automatisierten CI-Gate nehmen
+(statt MXL zusätzlich in CI zu bauen — vcpkg-Fremdbau wäre mehrere
+Minuten pro Lauf plus ein zusätzliches Netzwerk-Zuverlässigkeitsrisiko
+in CI). Neues `make check-ci` (Makefile) — identische Go/Deno-Schritte
+wie `check`, ohne den Cargo-Teil; `make check`/`make ci` selbst bleiben
+für die lokale Entwicklung unverändert (weiterhin die Pflicht-
+Live-Verifikation vor jedem Commit, wie in der gesamten bisherigen
+Projekthistorie praktiziert). `.github/workflows/ci.yml`: Rust-
+Toolchain-Setup/rust-cache/cargo-deny-Install komplett entfernt, Schritt
+ruft jetzt `make check-ci`.
+
+**Job `amwa-nmos-testing`:** Die "Unable to update repository"-
+Meldungen (ursprünglich verdächtigt) sind unschädlich — vom Tool selbst
+abgefangen, Initialisierung läuft trotzdem durch (lokal per `podman
+run` nachgestellt: Flask-Testserver starten normal, echte Anfragen an
+die Registry laufen durch). Der tatsächliche Fehler: `nmos-test.py`
+selbst liefert einen Exit-Code ≠ 0, sobald IRGENDEIN Test im
+Suite-Lauf nicht "PASS" ist — auch für die drei bereits seit 2026-07-13
+bekannten, bewusst akzeptierten Abweichungen (test_01/test_02/test_27,
+kein mDNS, abweichendes `registration_expiry_interval`). Da GitHub-
+Actions-Run-Steps standardmäßig mit `bash -e` laufen, brach der Job
+genau an dieser Stelle ab — der eigentliche Auswertungsschritt
+(`tools/nmos-conformance-check`, der die drei Ausnahmen bereits korrekt
+kennt) kam nie zum Zug. Fix: `|| true` am `docker run`-Aufruf, die
+echte Entscheidung bleibt beim nachfolgenden Go-Auswerter.
+
+**Verifikation:** `make check-ci` lokal gegen eine Wegwerf-`omp_test`-
+Datenbank vollständig grün (Go: alle Module inkl. `internal/hosts` nach
+Nachtrag 102 zum ersten Mal ohne Ausnahme, Deno: 70/70). YAML-Syntax
+beider Workflow-Änderungen mit `python3 -c "import yaml"` geprüft. Der
+AMWA-Fix konnte nicht komplett lokal nachgestellt werden (kein `docker`
+in dieser Sandbox, nur `podman` — Repo-Init und Testserver-Start liefen
+damit aber identisch zum CI-Log durch); endgültige Bestätigung braucht
+den nächsten echten GitHub-Actions-Lauf.
+
+**Umgesetzt in:** `Makefile`, `.github/workflows/ci.yml`.
