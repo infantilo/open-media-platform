@@ -13478,3 +13478,25 @@ vollständig, keine crash-loopenden Prozesse mehr).
 
 **Umgesetzt in:** `ui/shell/scheduler-view.ts`,
 `deploy/dev/start-omp.sh`.
+
+---
+
+## 2026-07-27 (Nachtrag 102) — Chronisch flakiger Test endgültig
+behoben: `TestHistoryRawWindowReturnsSamplesWithinCutoff`
+
+**Kontext:** dieser Test scheiterte in praktisch jeder Sitzung seit
+längerem (immer als "vorbestehender, unabhängiger Fehlschlag"
+dokumentiert, nie root-caused). Root Cause: `base :=
+time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)` — ein hartkodiertes
+Kalenderdatum, während `History.Window()` relativ zu `time.Now()`
+schneidet (`rawWindow = 1h`). Der Test lief nur so lange grün, wie die
+reale Uhrzeit innerhalb einer Stunde nach dem 2026-07-19 12:00 UTC lag
+— danach zwangsläufig `Samples = 0`. Alle anderen Tests derselben Datei
+verwenden bereits korrekt `time.Now().Add(-x)`; dieser eine war der
+einzige Ausreißer. Fix: `base := time.Now().Add(-20 * time.Minute)`,
+gleiches Muster wie die Nachbartests. `go test ./...` läuft jetzt zum
+ersten Mal in dieser gesamten Historie ohne einen einzigen Fehlschlag
+durch (gegen eine Wegwerf-`omp_test`-Datenbank, s.
+[[feedback_go_test_wipes_dev_postgres]]).
+
+**Umgesetzt in:** `orchestrator/internal/hosts/history_test.go`.

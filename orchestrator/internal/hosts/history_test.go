@@ -18,7 +18,12 @@ func TestHistoryWindowUnknownHost(t *testing.T) {
 
 func TestHistoryRawWindowReturnsSamplesWithinCutoff(t *testing.T) {
 	h := NewHistory()
-	base := time.Date(2026, 7, 19, 12, 0, 0, 0, time.UTC)
+	// Relativ zu time.Now() statt eines festen Kalenderdatums (Bugfix
+	// 2026-07-27: ein hartkodiertes Datum verfällt automatisch, sobald die
+	// reale Zeit über rawWindow hinaus vergangen ist — Window() schneidet
+	// relativ zu time.Now(), s. Kommentar unten; gleiches Muster wie die
+	// übrigen Tests in dieser Datei).
+	base := time.Now().Add(-20 * time.Minute)
 
 	// Drei Samples über 20 Minuten verteilt — eine 10-Minuten-Abfrage
 	// darf nur die letzten beiden sehen.
