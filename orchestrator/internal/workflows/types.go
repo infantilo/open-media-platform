@@ -37,13 +37,31 @@ const (
 // Role ist eine benötigte Node-Rolle innerhalb eines Workflows — „Rolle"
 // im Sinn von §6.2, nicht die Rollenbindung aus §12 (Namenskollision im
 // Konzeptpapier, hier bewusst als NodeType/Label statt "role" betitelt,
-// um Verwechslung mit authz.Verb-Rollen zu vermeiden). HostID ist
-// optional (leer = lokal, gesetzt = Remote-Host, UMSETZUNG.md D6 Teil 2)
-// — dieselbe Semantik wie beim Instanz-Launcher.
+// um Verwechslung mit authz.Verb-Rollen zu vermeiden).
+//
+// HostID (Nachtrag 99, 2026-07-27 — Bedeutung geändert): war bis dahin
+// ein Zwang (leer = lokal, gesetzt = genau dieser Host oder Start-
+// Fehlschlag). Ist jetzt nur noch eine PRÄFERENZ — reicht der Host nicht
+// (fehlt/überlastet/durch eine Redundanz-Gruppe blockiert), platziert
+// `placement.Engine.SelectHost` automatisch anderswo, der Start selbst
+// schlägt dafür nie mehr fehl (s. service.go runStart). Der tatsächlich
+// gewählte Host landet in `RoleRuntime.HostID` (s. u.), nicht hier.
+//
+// AffinityGroup/RedundancyGroup (Nachtrag 99): freie Tags, GLOBAL
+// (nicht workflow-scoped) — ein Redundanzpaar besteht typischerweise aus
+// zwei Rollen in zwei VERSCHIEDENEN Workflows (§21.3 "(c)": parallele,
+// identisch bediente Standby-Instanz), Affinität kann ebenso
+// workflow-übergreifend gemeint sein (z. B. zwei Rollen mit derselben
+// DMA-/MXL-lokalen Kopplung). Rollen mit demselben AffinityGroup-Tag
+// werden von SelectHost bevorzugt auf denselben Host gezogen, Rollen mit
+// demselben RedundancyGroup-Tag bevorzugt AUSEINANDER gehalten (aber nie
+// so strikt, dass ein Start deswegen scheitert).
 type Role struct {
-	Name     string `json:"name"`
-	NodeType string `json:"nodeType"`
-	HostID   string `json:"hostId,omitempty"`
+	Name            string `json:"name"`
+	NodeType        string `json:"nodeType"`
+	HostID          string `json:"hostId,omitempty"`
+	AffinityGroup   string `json:"affinityGroup,omitempty"`
+	RedundancyGroup string `json:"redundancyGroup,omitempty"`
 }
 
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht
@@ -186,10 +204,15 @@ type Definition struct {
 }
 
 // RoleRuntime hält fest, welche konkrete Instanz/Node gerade eine Rolle
-// erfüllt — leer, solange der Workflow gestoppt ist.
+// erfüllt — leer, solange der Workflow gestoppt ist. HostID (Nachtrag
+// 99) ist der von `placement.Engine.SelectHost` beim Start TATSÄCHLICH
+// gewählte Host — kann von `Role.HostID` (nur noch eine Präferenz)
+// abweichen, wenn dieser nicht erreichbar/überlastet war oder eine
+// Redundanz-Gruppe ausgewichen ist.
 type RoleRuntime struct {
 	InstanceID string `json:"instanceId"`
 	NodeID     string `json:"nodeId,omitempty"`
+	HostID     string `json:"hostId,omitempty"`
 }
 
 // ExportedWorkflow ist das Datei-Format für Kapitel 12 Teil 3

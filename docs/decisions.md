@@ -13209,3 +13209,125 @@ gelöscht — Endzustand exakt wie vor dem Test (`schedules: undefined`,
 
 **Umgesetzt in:** `ui/shell/scheduler-view.ts` (neu), `ui/shell/
 app-shell.ts`. Kein Backend-Code geändert.
+
+---
+
+## 2026-07-27 (Nachtrag 99) — Intelligentes Auto-Placement (Teil 2 von
+"Scheduler + Auto-Place"): Affinität, Redundanz, Scheduler-Forecast
+
+**Kontext:** Auto-Place war bis dahin ein harter Pass/Fail-Gate auf
+GENAU einem vom Nutzer fest eingetragenen Host (`Role.HostID`) —
+scheiterte `placement.Engine.CheckHost`, scheiterte der gesamte
+Workflow-Start (`checkResources`, D7 Teil 2). Kein Konzept von Affinität
+(Latenz-/DMA-Kopplung) oder Redundanz (zwei Rollen sollen NICHT
+denselben Host teilen), keine Berücksichtigung des Scheduler-Wissens
+(ein Host, der jetzt frei ist, aber laut Zeitplan in 5 Minuten einen
+anderen Workflow bekommt). Nutzeranforderung wörtlich: "das muss
+intelligent sein... er muss auch den Scheduler kennen." Recherchiert (3
+parallele Explore-Agenten, s. Nachtrag 98 für den zugehörigen
+Scheduler-Tab): kein Affinitäts-/Redundanz-Feld existierte im
+Datenmodell; die einzige bestehende "wähle unter mehreren Hosts"-Logik
+war `healthiestAlternative` für bereits laufende, überlastete
+Migrationsziele (advisory), nicht für neue Starts. `ARCHITECTURE.md`
+§16 beschreibt bereits (nur als unverbindliche Vorschau, nie als
+Reservierung) eine "Kapazitätsplanung über die Zeit" — der
+Forecast-Teil hier nutzt dieselbe Grundidee, aber als tatsächlichen
+SelectHost-Eingang, nicht nur als Anzeige. Per Plan-Modus entworfen,
+vom Nutzer bestätigt.
+
+**Datenmodell** (`orchestrator/internal/workflows/types.go`): `Role.
+HostID` bedeutet jetzt PRÄFERENZ statt Zwang. Neue `Role.AffinityGroup`/
+`Role.RedundancyGroup` — freie, GLOBALE (nicht workflow-scoped) Tags:
+ein Redundanzpaar besteht typischerweise aus zwei Rollen in zwei
+VERSCHIEDENEN Workflows (§21.3 "(c)": parallele, identisch bediente
+Standby-Instanz). Neues `RoleRuntime.HostID` — der beim Start
+TATSÄCHLICH aufgelöste Host (kann von der Präferenz abweichen).
+
+**Placement-Engine** (`orchestrator/internal/placement/placement.go`):
+`CheckHost`s Bewertungslogik in `scoreHost()` extrahiert (kein
+Logik-Duplikat), neue `SelectHost(PlacementRequest, Occupancy)
+PlacementResult` — Kandidaten = alle registrierten Hosts + lokal als
+Fallback letzter Instanz. Reihenfolge: (1) nach Ressourcen filtern
+(inkl. Forecast-Zusatzlast), (2) Redundanz-Konflikte ausschließen
+(außer das ließe nichts übrig — der Start muss laut Vorgabe IMMER
+gelingen, dann wird der Konflikt in Kauf genommen und im `Reason`
+vermerkt), (3) unter den verbleibenden Affinität bevorzugen, (4) bei
+Gleichstand die Präferenz, sonst den ausgelastungsärmsten. Neue
+`ProjectedLoad()` (öffentlich gemachte `lookupProfile`) — lässt
+`workflows.Service` dieselbe Profil-Fallback-Logik für den Forecast
+nutzen, ohne selbst eine `profiles.Store`-Abhängigkeit zu brauchen.
+
+**Forecast** (`orchestrator/internal/workflows/forecast.go`, neu):
+`buildOccupancy()` sammelt "jetzt" (laufende Workflows über
+`RoleRuntime.HostID`) und "demnächst" (Schedules, die innerhalb
+`ForecastWindow`, Default 15 min, fällig werden) — bewusste
+Vereinfachung: der Forecast-Teil deckt NUR Rollen mit gesetzter
+`HostID`-Präferenz ab (eine präferenzlose Rolle ließe sich nur durch
+rekursives Platzieren vorhersagen, zirkulär). `ForecastWindow` ist ein
+package-`var` (Test-Seam wie `tickInterval`/`fireWindow` in
+scheduler.go), bewusst NICHT über `config.go`/`OMP_PLACEMENT_*`-Env-Var
+geführt — anders als der Plan ursprünglich vorsah: geprüft, dass KEIN
+existierender Timing-Wert im ganzen Projekt env-konfigurierbar ist (nur
+Schwellwerte/Business-Config laufen über `config.go`), Abweichung vom
+Plan zugunsten der tatsächlich etablierten Konvention.
+
+**Verdrahtung** (`service.go`): `checkResources()` (harter Vor-Start-
+Gate) ersatzlos entfernt, `ErrResourcesUnavailable` + der zugehörige
+503-Fall in `httpapi.writeWorkflowError` mitentfernt (kann nie mehr
+auftreten). `runStart()` löst pro Rolle, IN Reihenfolge von
+`Definition.Roles` (damit Geschwister-Rollen DESSELBEN Starts sich
+gegenseitig als Nachbarn sehen), über `SelectHost` auf, merged das
+Ergebnis sofort in die lokale Occupancy-Kopie für die nächste Rolle,
+schreibt den aufgelösten Host in `RoleRuntime.HostID` und startet den
+Launcher mit dem AUFGELÖSTEN statt dem rohen `role.HostID`.
+**Beobachtbare Verhaltensänderung (bewusst, User-bestätigt):** `POST
+.../start` schlägt nicht mehr wegen Ressourcenüberlastung fehl.
+
+**UI** (`ui/shell/workflows-view.ts`): Rollen-Editor bekommt zwei neue
+Freitext-Felder ("Affinität"/"Redundanz", mit erklärendem Tooltip);
+Host-Dropdown-Tooltip erklärt "Präferenz, kein Zwang". Die
+schreibgeschützte Rollen-Zeile zeigt bei gestarteten Workflows den
+tatsächlich aufgelösten Host an (`Runtime[role].hostId`), falls von der
+Präferenz abweichend/gesetzt.
+
+**Tests:** 8 neue Tabellen-Tests in `placement_test.go` (bevorzugter
+Host frei/überlastet/unbekannt/kein-Host-registriert, Redundanz-
+Vermeidung inkl. Kein-Ausweg-Fall, Affinitäts-Bevorzugung,
+Forecast-Zusatzlast) — alle rein funktional, keine echten Hosts nötig.
+`service_test.go`: alter Hart-Fehlschlag-Test
+(`TestStartRejectsWhenTargetHostResourcesUnavailable`) zu
+`TestStartFallsBackToAlternativeHostWhenPreferredIsOverloaded`
+umgeschrieben (Start gelingt jetzt, landet nachweisbar auf dem
+simulierten Ausweichhost).
+
+**Live verifiziert (echte Prozesse, nicht nur Unit-Tests) — wie D6 Teil
+2/3-Muster:** zwei simulierte Remote-Hosts (zwei `omp-host-agent`-
+Prozesse, eigenes Label/State-File/Katalog, Bootstrap-Token über
+`POST /api/v1/admin/hosts/bootstrap-tokens`) registrierten sich mit
+echter Live-Telemetrie. **Redundanz-Test:** ein echter Workflow mit
+zwei `omp-mock`-Rollen, BEIDE mit derselben `HostID`-Präferenz (Host 1)
+UND demselben `redundancyGroup`-Tag — echter Start: `mixer-a` bekam
+Host 1 (frei), `mixer-b` wich automatisch auf Host 2 aus (`Runtime[
+mixer-b].hostId` bestätigt per API), obwohl beide dieselbe Präferenz
+eingetragen hatten. **Affinitäts-Test:** zwei Rollen ohne jede
+Host-Präferenz, aber mit demselben `affinityGroup`-Tag — beide landeten
+auf demselben real gewählten Host, per API bestätigt. Beide echten
+`omp-mock`-Prozesse liefen tatsächlich remote über NATS-Kommandokanal
+(Host-Agent-Logs bestätigen `command received`/Prozessstart auf dem
+jeweils richtigen Host). Nebenfund (Simulationsartefakt, kein Bug am
+neuen Code): beide simulierten Hosts teilen sich denselben physischen
+Rechner/Portraum — der zweite `omp-mock`-Prozess kollidierte auf Port
+9001 mit dem ersten, registrierte sich aber trotzdem erfolgreich bei
+NMOS (unabhängiger Registrierungspfad). Danach aufgeräumt: Test-
+Workflows gestoppt/gelöscht, Instanzenliste leer bestätigt, beide
+Host-Agent-Prozesse beendet, Test-Hosts aus der DB entfernt (gleiche
+Disziplin wie D6 Teil 1-3). `go build/vet/test ./...` grün (einziger
+Fehlschlag weiterhin der vorbestehende, unabhängige
+`TestHistoryRawWindowReturnsSamplesWithinCutoff`), `deno check/test`
+(70/70) grün.
+
+**Umgesetzt in:** `orchestrator/internal/workflows/{types.go,
+service.go,service_test.go,forecast.go(neu)}`,
+`orchestrator/internal/placement/{placement.go,placement_test.go}`,
+`orchestrator/internal/httpapi/workflow_handlers.go`,
+`ui/shell/workflows-view.ts`.

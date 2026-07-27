@@ -217,8 +217,6 @@ func writeWorkflowError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, workflows.ErrNotStopped), errors.Is(err, workflows.ErrNotRunning), errors.Is(err, workflows.ErrConfirmationRequired):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, workflows.ErrResourcesUnavailable):
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}

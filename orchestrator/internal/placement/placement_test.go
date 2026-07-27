@@ -321,3 +321,130 @@ func TestCheckHostOKWhenNoProfileKnownAtAllEvenWithReaderSet(t *testing.T) {
 		t.Fatalf("CheckHost() = (%q, %v), want (\"\", true) for a never-profiled node type", reason, ok)
 	}
 }
+
+// --- SelectHost (Nachtrag 99, ARCHITECTURE.md §6.1/§16-Erweiterung) ---
+
+func TestSelectHostPreferredHostHealthyIsChosen(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source", PreferredHostID: "h1"}, Occupancy{})
+	if result.HostID != "h1" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (preferred host healthy)", result.HostID, "h1")
+	}
+}
+
+func TestSelectHostFallsBackWhenPreferredHostOverloaded(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 95, MemUsedBytes: 1000, MemTotalBytes: 4000}, // over threshold
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source", PreferredHostID: "h1"}, Occupancy{})
+	if result.HostID != "h2" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (preferred host overloaded, must fall back)", result.HostID, "h2")
+	}
+	if result.Reason == "" {
+		t.Fatalf("SelectHost().Reason is empty, want an explanation for the fallback")
+	}
+}
+
+func TestSelectHostFallsBackToLocalWhenPreferredHostUnknown(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}}}
+	mr := fakeMetrics{"h1": {CPUPercent: 95, MemUsedBytes: 1000, MemTotalBytes: 4000}} // only host, overloaded
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source", PreferredHostID: "does-not-exist"}, Occupancy{})
+	if result.HostID != "" {
+		t.Fatalf("SelectHost().HostID = %q, want \"\" (local fallback, no viable remote host)", result.HostID)
+	}
+}
+
+func TestSelectHostFallsBackToLocalWhenNoHostsRegistered(t *testing.T) {
+	e := NewEngine(fakeHosts{}, fakeMetrics{}, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source"}, Occupancy{})
+	if result.HostID != "" {
+		t.Fatalf("SelectHost().HostID = %q, want \"\" (no hosts registered at all)", result.HostID)
+	}
+}
+
+func TestSelectHostAvoidsRedundancyGroupCollocation(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	// h1 already runs a role tagged "mixer-pair" — the redundant sibling
+	// being placed now (same tag) must avoid h1, even though h1 looks
+	// just as healthy as h2.
+	occ := Occupancy{RedundancyGroupHosts: map[string][]string{"mixer-pair": {"h1"}}}
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-video-mixer-me", RedundancyGroup: "mixer-pair"}, occ)
+	if result.HostID != "h2" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (must avoid the host already running the redundant sibling)", result.HostID, "h2")
+	}
+}
+
+func TestSelectHostAcceptsRedundancyCollocationWhenNoAlternative(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}}}
+	mr := fakeMetrics{"h1": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000}}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	// Only one viable host exists, and it already runs the redundant
+	// sibling — the start must still succeed (never block), just with a
+	// reason that flags the accepted conflict.
+	occ := Occupancy{RedundancyGroupHosts: map[string][]string{"mixer-pair": {"h1"}}}
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-video-mixer-me", RedundancyGroup: "mixer-pair"}, occ)
+	if result.HostID != "h1" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (no alternative, must still place)", result.HostID, "h1")
+	}
+	if result.Reason == "" {
+		t.Fatalf("SelectHost().Reason is empty, want a note about the accepted redundancy conflict")
+	}
+}
+
+func TestSelectHostPrefersAffinityGroupCollocation(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		// h2 looks slightly healthier than h1 on raw load...
+		"h1": {CPUPercent: 30, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	// ...but h1 already runs the affinity-group sibling (latency/DMA
+	// co-location need), which should win over the raw load difference.
+	occ := Occupancy{AffinityGroupHosts: map[string][]string{"dma-cluster": {"h1"}}}
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source", AffinityGroup: "dma-cluster"}, occ)
+	if result.HostID != "h1" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (affinity co-location should win over minor load difference)", result.HostID, "h1")
+	}
+}
+
+func TestSelectHostForecastExtraLoadMakesHostUnattractive(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	// h1 looks free right now (30% CPU)...
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 30, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {CPUPercent: 40, MemUsedBytes: 1000, MemTotalBytes: 4000},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	// ...but a scheduled workflow is about to claim another 60% CPU on
+	// h1 (Scheduler-Forecast) — projected 90%, over the 85% threshold,
+	// so h1 must be rejected in favor of h2 even though h2's live value
+	// alone is higher.
+	occ := Occupancy{ExtraLoad: map[string]profiles.Snapshot{"h1": {CPUAvg: 60}}}
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source"}, occ)
+	if result.HostID != "h2" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (forecast load should make h1 unattractive)", result.HostID, "h2")
+	}
+}

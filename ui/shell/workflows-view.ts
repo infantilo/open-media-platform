@@ -34,10 +34,21 @@ interface HostEntry {
   label: string;
 }
 
+// hostId (Nachtrag 99): seit dem Auto-Placement nur noch eine
+// PRÄFERENZ, kein Zwang mehr — reicht der Host nicht, platziert der
+// Orchestrator automatisch anderswo (s. runtime.hostId für den
+// tatsächlich gewählten Host). affinityGroup/redundancyGroup: freie,
+// globale (nicht workflow-scoped) Tags — Rollen mit demselben
+// affinityGroup-Tag werden bevorzugt auf denselben Host gezogen
+// (Latenz-/DMA-Kopplung), Rollen mit demselben redundancyGroup-Tag
+// bevorzugt AUSEINANDER gehalten (Redundanzpaare, typischerweise in
+// zwei verschiedenen Workflows).
 interface Role {
   name: string;
   nodeType: string;
   hostId?: string;
+  affinityGroup?: string;
+  redundancyGroup?: string;
 }
 
 // Kapitel 12 Teil 1 (docs/END-GOAL-FEATURES.md §12.3a): fromSender/
@@ -101,7 +112,7 @@ interface Workflow {
   };
   status: string;
   error?: string;
-  runtime?: Record<string, { instanceId: string; nodeId?: string }>;
+  runtime?: Record<string, { instanceId: string; nodeId?: string; hostId?: string }>;
 }
 
 // Erweitert den §13.5-Node-Kategorien-Enum um "regieplatz" (§22.3
@@ -279,7 +290,13 @@ class WorkflowsView extends HTMLElement {
     const body = {
       name: this.#formName,
       definition: {
-        roles: roles.map((r) => ({ name: r.name, nodeType: r.nodeType, hostId: r.hostId || undefined })),
+        roles: roles.map((r) => ({
+          name: r.name,
+          nodeType: r.nodeType,
+          hostId: r.hostId || undefined,
+          affinityGroup: r.affinityGroup || undefined,
+          redundancyGroup: r.redundancyGroup || undefined,
+        })),
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
         settings: Object.keys(settings).length > 0 ? settings : undefined,
         schedules: schedules.length > 0 ? schedules : undefined,
@@ -838,7 +855,19 @@ class WorkflowsView extends HTMLElement {
 
     const roles = document.createElement("div");
     roles.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
-    roles.textContent = wf.definition.roles.map((r) => r.name).join(", ");
+    // Nachtrag 99: zeigt den vom Auto-Placement tatsächlich gewählten
+    // Host an (Runtime.hostId), sobald gestartet — kann von der bloßen
+    // Präferenz (Role.hostId) abweichen, falls diese nicht reichte.
+    // Leer/"" (lokal) wird nicht extra angezeigt, nur ein echter
+    // Remote-Host ist hier interessant.
+    roles.textContent = wf.definition.roles
+      .map((r) => {
+        const resolved = wf.runtime?.[r.name]?.hostId;
+        if (!resolved) return r.name;
+        const label = this.#hosts.find((h) => h.id === resolved)?.label ?? resolved;
+        return `${r.name} (@${label})`;
+      })
+      .join(", ");
     row.appendChild(roles);
 
     // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
@@ -1045,12 +1074,12 @@ class WorkflowsView extends HTMLElement {
 
     this.#formRoles.forEach((role, i) => {
       const roleRow = document.createElement("div");
-      roleRow.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
+      roleRow.style.cssText = "display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap;";
 
       const nameField = document.createElement("input");
       nameField.placeholder = "Rollenname";
       nameField.value = role.name;
-      nameField.style.cssText = "width:30%;";
+      nameField.style.cssText = "width:22%;";
       nameField.addEventListener("input", () => {
         role.name = nameField.value;
       });
@@ -1079,8 +1108,12 @@ class WorkflowsView extends HTMLElement {
         role.nodeType = typeSelect.value;
       });
 
+      // hostId (Nachtrag 99): nur noch Präferenz — Titel erklärt das,
+      // damit "(lokal)" nicht wie ein Zwang wirkt, den Auto-Place
+      // ignorieren könnte.
       const hostSelect = document.createElement("select");
-      hostSelect.style.cssText = "width:25%;";
+      hostSelect.style.cssText = "width:18%;";
+      hostSelect.title = "Bevorzugter Host — reicht er nicht, platziert Auto-Place automatisch anderswo.";
       const localOpt = document.createElement("option");
       localOpt.value = "";
       localOpt.textContent = "(lokal)";
@@ -1096,6 +1129,29 @@ class WorkflowsView extends HTMLElement {
         role.hostId = hostSelect.value;
       });
 
+      // affinityGroup/redundancyGroup (Nachtrag 99): freie Tags fürs
+      // Auto-Placement — Latenz-/DMA-Kopplung bzw. Redundanzpaare, s.
+      // Role-Doku oben. Freitext statt Dropdown: es gibt keinen
+      // Tag-Katalog, dieselbe Zurückhaltung wie bei den Sender-/
+      // Receiver-Labels der Connections unten.
+      const affinityInput = document.createElement("input");
+      affinityInput.placeholder = "Affinität (optional)";
+      affinityInput.title = "Rollen mit demselben Tag werden bevorzugt auf denselben Host gezogen.";
+      affinityInput.value = role.affinityGroup ?? "";
+      affinityInput.style.cssText = "width:15%;";
+      affinityInput.addEventListener("input", () => {
+        role.affinityGroup = affinityInput.value || undefined;
+      });
+
+      const redundancyInput = document.createElement("input");
+      redundancyInput.placeholder = "Redundanz (optional)";
+      redundancyInput.title = "Rollen mit demselben Tag werden bevorzugt AUSEINANDER gehalten (Redundanzpaare).";
+      redundancyInput.value = role.redundancyGroup ?? "";
+      redundancyInput.style.cssText = "width:15%;";
+      redundancyInput.addEventListener("input", () => {
+        role.redundancyGroup = redundancyInput.value || undefined;
+      });
+
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "×";
       removeBtn.title = "Rolle entfernen";
@@ -1105,7 +1161,7 @@ class WorkflowsView extends HTMLElement {
         this.#render();
       });
 
-      roleRow.append(nameField, typeSelect, hostSelect, removeBtn);
+      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, removeBtn);
       form.appendChild(roleRow);
     });
 

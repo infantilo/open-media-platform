@@ -11,6 +11,8 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -1149,10 +1151,17 @@ func TestStopWithoutConfirmStopSettingIgnoresConfirmFlag(t *testing.T) {
 	}
 }
 
-// --- D7 Teil 2: Ressourcen-Vorprüfung als Start-Vorbedingung ---
+// --- Nachtrag 99: Auto-Placement ersetzt die harte D7-Teil-2-Vorprüfung ---
 
+// fakeResourcePrecheck simuliert *placement.Engine für service_test.go
+// (keine echte Engine mit Postgres-Profile-Store nötig, gleiches Muster
+// wie fakeLauncher/fakeNodeLister/fakeGraph). altHostID ist der Host, auf
+// den SelectHost ausweicht, wenn PreferredHostID in deniedHosts steht —
+// ein simples Test-Double, keine echte Kandidatenliste wie die reale
+// Engine (die hat eigene SelectHost-Tests in placement_test.go).
 type fakeResourcePrecheck struct {
 	deniedHosts map[string]string // hostID -> Ablehnungsgrund
+	altHostID   string
 }
 
 func (f *fakeResourcePrecheck) CheckHost(hostID, nodeType string) (string, bool) {
@@ -1162,31 +1171,52 @@ func (f *fakeResourcePrecheck) CheckHost(hostID, nodeType string) (string, bool)
 	return "", true
 }
 
-func TestStartRejectsWhenTargetHostResourcesUnavailable(t *testing.T) {
-	store := newFakeStore()
+func (f *fakeResourcePrecheck) SelectHost(req placement.PlacementRequest, _ placement.Occupancy) placement.PlacementResult {
+	if reason, denied := f.deniedHosts[req.PreferredHostID]; denied && req.PreferredHostID != "" {
+		return placement.PlacementResult{HostID: f.altHostID, Reason: "ausgewichen: " + reason}
+	}
+	return placement.PlacementResult{HostID: req.PreferredHostID}
+}
+
+func (f *fakeResourcePrecheck) ProjectedLoad(nodeType, hostID string) profiles.Snapshot {
+	return profiles.Snapshot{}
+}
+
+func TestStartFallsBackToAlternativeHostWhenPreferredIsOverloaded(t *testing.T) {
+	nodes := &fakeNodeLister{}
 	l := &fakeLauncher{}
-	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
-	svc.resources = &fakeResourcePrecheck{deniedHosts: map[string]string{"host-1": "CPU 95% über dem Schwellwert"}}
+	svc := newTestService(newFakeStore(), nodes, &fakeGraph{}, l)
+	svc.resources = &fakeResourcePrecheck{
+		deniedHosts: map[string]string{"host-1": "CPU 95% über dem Schwellwert"},
+		altHostID:   "host-2",
+	}
 
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source", HostID: "host-1"}}}
 	wf, _ := svc.Create("wf", def, nil)
 
-	err := svc.Start(context.Background(), wf.ID)
-	if !errors.Is(err, ErrResourcesUnavailable) {
-		t.Fatalf("Start() error = %v, want ErrResourcesUnavailable", err)
+	// Nachtrag 99: Start() schlägt nicht mehr wegen Ressourcenüberlastung
+	// fehl — es findet immer einen Host (hier: den simulierten Ausweich-
+	// host-2 statt des überlasteten host-1).
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v, want nil (must succeed by placing on an alternative host)", err)
 	}
 
-	// Kein Teil-Start: der Launcher darf gar nicht erst aufgerufen worden
-	// sein, und der Workflow muss "stopped" bleiben (nie "starting").
-	l.mu.Lock()
-	startedCount := len(l.started)
-	l.mu.Unlock()
-	if startedCount != 0 {
-		t.Fatalf("launcher.Start() calls = %d, want 0 (no partial start)", startedCount)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	after, _ := svc.Get(wf.ID)
-	if after.Status != StatusStopped {
-		t.Fatalf("Status after rejected Start() = %q, want unchanged %q", after.Status, StatusStopped)
+	srcInstance := l.instanceIDFor("omp-source")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance})
+
+	started := waitForStatus(t, svc, wf.ID, StatusStarted)
+	if started.Runtime["src"].HostID != "host-2" {
+		t.Fatalf("Runtime[src].HostID = %q, want %q (resolved via SelectHost fallback, not the overloaded preference)", started.Runtime["src"].HostID, "host-2")
 	}
 }
 

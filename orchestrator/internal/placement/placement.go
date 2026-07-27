@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -208,9 +209,33 @@ func (e *Engine) List() []Advice {
 // Bedarf ist kein Blocker, nur eine fehlende Datengrundlage (§14.3d:
 // "nie ein stiller Block").
 func (e *Engine) CheckHost(hostID, nodeType string) (string, bool) {
-	m, ok := e.metrics.Get(hostID)
-	if !ok {
-		return "", true
+	s := e.scoreHost(hostID, nodeType, profiles.Snapshot{})
+	return s.reason, s.ok
+}
+
+// scored ist das Ergebnis einer Ressourcen-Bewertung für GENAU einen
+// Host (Nachtrag 99, extrahiert aus der vormals monolithischen
+// CheckHost-Logik, damit SelectHost dieselbe Bewertung pro
+// Kandidatenhost wiederverwenden kann statt sie zu duplizieren).
+type hostScore struct {
+	cpuPercent float64
+	memPercent float64
+	hasMetrics bool
+	ok         bool
+	reason     string
+}
+
+// scoreHost bewertet hostID für nodeType wie CheckHost, plus optional
+// extraLoad (Nachtrag 99: Scheduler-Forecast-Zusatzlast anderer, bald
+// fällig werdender Workflows, s. workflows.Service) — additiv auf
+// dieselbe Weise wie das Node-Typ-Profil projiziert. Fehlende Telemetrie
+// bleibt fail-open (hasMetrics=false, ok=true) — SelectHost behandelt
+// einen unbekannten Host dadurch als validen, aber nicht besonders
+// bevorzugten Kandidaten (s. dortige Sortierung).
+func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot) hostScore {
+	m, hasMetrics := e.metrics.Get(hostID)
+	if !hasMetrics {
+		return hostScore{ok: true}
 	}
 	memPercent := 0.0
 	if m.MemTotalBytes > 0 {
@@ -224,19 +249,178 @@ func (e *Engine) CheckHost(hostID, nodeType string) (string, bool) {
 			memPercent += float64(snap.RSSAvg) / float64(m.MemTotalBytes) * 100
 		}
 	}
+	if extraLoad.CPUAvg > 0 || extraLoad.RSSAvg > 0 {
+		cpuPercent += extraLoad.CPUAvg
+		if m.MemTotalBytes > 0 {
+			memPercent += float64(extraLoad.RSSAvg) / float64(m.MemTotalBytes) * 100
+		}
+	}
 
 	overCPU := cpuPercent >= e.thresholds.CPUPercent
 	overMem := memPercent >= e.thresholds.MemPercent
 	switch {
 	case overCPU && overMem:
-		return fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, memPercent, nodeType), false
+		return hostScore{cpuPercent, memPercent, true, false,
+			fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, memPercent, nodeType)}
 	case overCPU:
-		return fmt.Sprintf("CPU %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, nodeType), false
+		return hostScore{cpuPercent, memPercent, true, false,
+			fmt.Sprintf("CPU %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, nodeType)}
 	case overMem:
-		return fmt.Sprintf("RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", memPercent, nodeType), false
+		return hostScore{cpuPercent, memPercent, true, false,
+			fmt.Sprintf("RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", memPercent, nodeType)}
 	default:
-		return "", true
+		return hostScore{cpuPercent, memPercent, true, true, ""}
 	}
+}
+
+// PlacementRequest beschreibt eine einzelne, noch zu platzierende Rolle
+// (Nachtrag 99, ARCHITECTURE.md §6.1/§16-Erweiterung) — Eingabe für
+// SelectHost.
+type PlacementRequest struct {
+	NodeType        string
+	PreferredHostID string // workflows.Role.HostID — darf leer sein (keine Präferenz)
+	AffinityGroup   string
+	RedundancyGroup string
+}
+
+// Occupancy fasst zusammen, welche Affinitäts-/Redundanz-Tags auf
+// welchen Hosts JETZT oder demnächst (laut Scheduler-Forecast) präsent
+// sind, sowie eine optionale Zusatzlast je Host — vom Aufrufer
+// (workflows.Service) gebaut, damit placement KEINE Abhängigkeit auf
+// workflows braucht (Abhängigkeitsrichtung bleibt unverändert:
+// workflows importiert placement, nicht umgekehrt).
+type Occupancy struct {
+	AffinityGroupHosts   map[string][]string
+	RedundancyGroupHosts map[string][]string
+	ExtraLoad            map[string]profiles.Snapshot
+}
+
+// PlacementResult ist das Ergebnis von SelectHost. HostID="" bedeutet
+// lokal (beim Orchestrator selbst, wie schon immer bei leerem
+// workflows.Role.HostID).
+type PlacementResult struct {
+	HostID string
+	Reason string
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// SelectHost wählt den Zielhost für EINE Rolle eines Workflow-Starts
+// (Nachtrag 99 — löst die vormals harte checkResources-Vorbedingung ab,
+// s. workflows.Service.runStart): anders als CheckHost (ein Host, ein
+// Pass/Fail) sucht SelectHost unter ALLEN registrierten Hosts plus
+// "lokal" den besten — der Start soll laut Vorgabe IMMER gelingen, nur
+// eben ggf. anderswo als ursprünglich in der Definition eingetragen.
+//
+// Ablauf: (1) Kandidaten = alle Hosts + lokal, nach Ressourcen filtern
+// (scoreHost inkl. occ.ExtraLoad) — ein Host ohne Telemetrie bleibt
+// dabei ein valider, aber nicht bevorzugter Kandidat (fail-open, wie
+// CheckHost). (2) Redundanz: Hosts ausschließen, auf denen laut
+// occ.RedundancyGroupHosts[req.RedundancyGroup] bereits derselbe Tag
+// sitzt — außer das ließe keinen Kandidaten übrig, dann Ausschluss
+// fallen lassen (Start muss gelingen). (3) Affinität: unter den
+// verbleibenden Hosts bevorzugen, wer laut
+// occ.AffinityGroupHosts[req.AffinityGroup] den Tag schon trägt.
+// (4) Unter Gleichstand: req.PreferredHostID, falls noch Kandidat, sonst
+// der am wenigsten ausgelastete (Telemetrie-Hosts vor telemetrielosen).
+// Lokal bleibt der Anker: nur automatisch gewählt, wenn PreferredHostID
+// leer ist UND kein Remote-Host besser/registriert ist — bestehendes
+// Ein-Host-Dev-Verhalten bleibt dadurch unverändert.
+//
+// Bewusste Scope-Grenze (Nachtrag 99, kein stiller Gap): lokale
+// Host-eigene CPU/RAM-Last fließt NICHT ein (der Orchestrator misst
+// sich selbst nicht) — lokal bleibt wie bisher unconstrained.
+func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult {
+	allHosts, err := e.hostLister.ListHosts()
+	if err != nil {
+		slog.Warn("placement: SelectHost: list hosts failed, falling back to local", "error", err)
+		return PlacementResult{HostID: "", Reason: "Host-Liste nicht verfügbar, lokal gestartet"}
+	}
+
+	type candidate struct {
+		hostID     string
+		score      hostScore
+		affinity   bool
+		redundancy bool
+	}
+
+	var candidates []candidate
+	for _, h := range allHosts {
+		s := e.scoreHost(h.ID, req.NodeType, occ.ExtraLoad[h.ID])
+		if !s.ok {
+			continue
+		}
+		candidates = append(candidates, candidate{
+			hostID:     h.ID,
+			score:      s,
+			affinity:   req.AffinityGroup != "" && containsString(occ.AffinityGroupHosts[req.AffinityGroup], h.ID),
+			redundancy: req.RedundancyGroup != "" && containsString(occ.RedundancyGroupHosts[req.RedundancyGroup], h.ID),
+		})
+	}
+
+	pick := func(pool []candidate, reasonSuffix string) (PlacementResult, bool) {
+		if len(pool) == 0 {
+			return PlacementResult{}, false
+		}
+		// Präferenz gewinnt, falls noch im Pool.
+		if req.PreferredHostID != "" {
+			for _, c := range pool {
+				if c.hostID == req.PreferredHostID {
+					return PlacementResult{HostID: c.hostID, Reason: "bevorzugter Host verfügbar" + reasonSuffix}, true
+				}
+			}
+		}
+		// Affinität bevorzugen.
+		var affinityPool []candidate
+		for _, c := range pool {
+			if c.affinity {
+				affinityPool = append(affinityPool, c)
+			}
+		}
+		if len(affinityPool) > 0 {
+			pool = affinityPool
+			reasonSuffix += fmt.Sprintf(" (Affinitäts-Gruppe %q bereits auf diesem Host)", req.AffinityGroup)
+		}
+		best := pool[0]
+		for _, c := range pool[1:] {
+			if c.score.hasMetrics && (!best.score.hasMetrics || c.score.cpuPercent < best.score.cpuPercent ||
+				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent < best.score.memPercent)) {
+				best = c
+			}
+		}
+		return PlacementResult{HostID: best.hostID, Reason: strings.TrimSpace("Ausweichhost gewählt" + reasonSuffix)}, true
+	}
+
+	// Redundanz zuerst versuchen zu respektieren (Hosts mit demselben
+	// Redundanz-Tag ausschließen); nur falls das nichts übrig lässt,
+	// den Ausschluss fallen lassen — der Start muss laut Vorgabe immer
+	// gelingen.
+	var withoutRedundancyConflict []candidate
+	for _, c := range candidates {
+		if !c.redundancy {
+			withoutRedundancyConflict = append(withoutRedundancyConflict, c)
+		}
+	}
+	if result, ok := pick(withoutRedundancyConflict, ""); ok {
+		return result
+	}
+	if result, ok := pick(candidates, ""); ok {
+		if req.RedundancyGroup != "" {
+			result.Reason = fmt.Sprintf("%s (Redundanz-Gruppe %q hatte auf keinem Kandidaten Platz, Konflikt in Kauf genommen)", result.Reason, req.RedundancyGroup)
+		}
+		return result
+	}
+
+	// Kein Remote-Host registriert/ok — lokal ist der Anker, der immer
+	// funktioniert (bestehendes Ein-Host-Dev-Verhalten).
+	return PlacementResult{HostID: "", Reason: "kein passender Remote-Host, lokal gestartet"}
 }
 
 // lookupProfile holt das Profil für (nodeType, hostID), fällt auf das
@@ -254,6 +438,21 @@ func (e *Engine) lookupProfile(nodeType, hostID string) (profiles.Snapshot, bool
 		return snap, true
 	}
 	return profiles.Snapshot{}, false
+}
+
+// ProjectedLoad liefert das erwartete Verbrauchsprofil von nodeType auf
+// hostID (host-spezifisch oder Typ-Fallback, s. lookupProfile) —
+// öffentlich gemacht, damit workflows.Service beim Bau des Scheduler-
+// Forecasts (Nachtrag 99: die Zusatzlast bald fälliger Starts ANDERER
+// Workflows) dieselbe Profil-Logik nutzen kann, ohne selbst eine
+// profiles.Store-Abhängigkeit zu brauchen. Leeres Snapshot{}, wenn
+// nichts bekannt ist (kein Fehlerfall, wie überall in diesem Paket).
+func (e *Engine) ProjectedLoad(nodeType, hostID string) profiles.Snapshot {
+	snap, ok := e.lookupProfile(nodeType, hostID)
+	if !ok {
+		return profiles.Snapshot{}
+	}
+	return snap
 }
 
 // scored bündelt einen Host mit seiner zuletzt gesehenen Telemetrie und

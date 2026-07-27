@@ -14,6 +14,8 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
@@ -100,11 +102,6 @@ var (
 	// Definition.Settings.ConfirmStop gesetzt ist und der Aufruf ohne
 	// confirm=true erfolgte (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2).
 	ErrConfirmationRequired = errors.New("workflows: stop requires confirmation")
-	// ErrResourcesUnavailable wird von Start() geliefert, wenn die
-	// Ressourcen-Vorprüfung (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3)
-	// mindestens einen Ziel-Host als aktuell nicht platzierbar meldet —
-	// vor jedem Provisionieren geprüft, kein Teil-Start.
-	ErrResourcesUnavailable = errors.New("workflows: resources unavailable")
 )
 
 // NodeLister liefert den zuletzt bekannten Node-Snapshot (implementiert
@@ -172,12 +169,11 @@ type workflowStore interface {
 	ClearRoleState(id string) error
 }
 
-// ResourcePrecheck prüft, ob ein Host aktuell neue Rollen aufnehmen darf
-// (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3: "harte Vorbedingung" statt
-// der advisory-only Placement-Engine aus §6.1/D6 Teil 3). Implementiert
-// von *placement.Engine (CheckHost), die dieselben Alarm-Schwellwerte
-// wiederverwendet, die bereits die Hosts-Ansicht/Alarm-View zeigen —
-// bewusst kein drittes Schwellwert-Konzept.
+// ResourcePrecheck ist die von *placement.Engine implementierte
+// Teilmenge, die workflows.Service für die Host-Platzierung braucht.
+// Bewusst als Interface gehalten (nicht *placement.Engine direkt), damit
+// service_test.go ohne eine echte Engine (Postgres-Profile-Store etc.)
+// auskommt — gleiches Muster wie NodeLister/Launcher/EventPublisher.
 type ResourcePrecheck interface {
 	// CheckHost liefert (Ablehnungsgrund, ok) für den Start von nodeType
 	// auf hostID. ok=true bei freien Ressourcen ODER fehlender Telemetrie
@@ -186,8 +182,21 @@ type ResourcePrecheck interface {
 	// fehlenden Daten). Seit Kapitel 14 Teil 4 rechnet die Prüfung mit dem
 	// Verbrauchsprofil von nodeType (falls bekannt), nicht mehr nur mit
 	// dem aktuellen Momentwert des Hosts (docs/END-GOAL-FEATURES.md
-	// §14.4 Teil 4).
+	// §14.4 Teil 4). Bleibt öffentlich (u. a. von httpapi genutzt für
+	// Diagnose-Zwecke), auch wenn runStart selbst seit Nachtrag 99
+	// SelectHost statt CheckHost direkt aufruft.
 	CheckHost(hostID, nodeType string) (reason string, ok bool)
+	// SelectHost (Nachtrag 99, ARCHITECTURE.md §6.1/§16-Erweiterung)
+	// wählt den tatsächlichen Zielhost für EINE Rolle eines
+	// Workflow-Starts — ersetzt die vormals harte checkResources-
+	// Vorbedingung: der Start soll immer gelingen, s. runStart.
+	SelectHost(req placement.PlacementRequest, occ placement.Occupancy) placement.PlacementResult
+	// ProjectedLoad liefert das erwartete Verbrauchsprofil von nodeType
+	// auf hostID (host-spezifisch oder Typ-Fallback) — von
+	// buildOccupancy genutzt, um die Forecast-Zusatzlast bald fälliger
+	// Starts ANDERER Workflows zu schätzen (Nachtrag 99), ohne dass
+	// workflows selbst eine profiles.Store-Abhängigkeit bräuchte.
+	ProjectedLoad(nodeType, hostID string) profiles.Snapshot
 }
 
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
@@ -485,9 +494,6 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if wf.Status != StatusStopped && wf.Status != StatusFailed && wf.Status != StatusPaused {
 		return ErrNotStopped
 	}
-	if err := s.checkResources(wf); err != nil {
-		return err
-	}
 
 	wf.Status = StatusStarting
 	wf.Error = ""
@@ -525,41 +531,6 @@ func (s *Service) persistSchedule(wf Workflow) error {
 	return nil
 }
 
-// checkResources ist die Ressourcen-Vorprüfung als harte Start-
-// Vorbedingung (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 3): bevor
-// irgendetwas provisioniert wird, muss für JEDE Rolle mit gesetzter
-// HostID (Remote-Platzierung, s. Role-Doku) feststehen, dass der
-// Ziel-Host aktuell nicht überlastet ist — kein Teil-Start, der mangels
-// Ressourcen auf halbem Weg hängen bleibt. Lokale Rollen (HostID leer)
-// sind nicht Teil der Prüfung: der Orchestrator hat für "den lokalen
-// Host" selbst keine Telemetrie (nur registrierte Remote-Hosts senden
-// welche, s. internal/hosts) — dokumentierte Folgearbeit, kein stiller
-// Blocker ohne Datengrundlage.
-//
-// Seit Kapitel 14 Teil 4 wird **jede** Rolle einzeln geprüft (vor Teil 4
-// genügte ein Check pro HostID, weil nur der host-weite Momentwert
-// zählte) — CheckHost projiziert jetzt zusätzlich das Verbrauchsprofil
-// von role.NodeType, zwei Rollen desselben Typs auf demselben Host
-// hätten sonst nur einmal gezählt. Bewusst vereinfacht: mehrere
-// verschiedene Rollen auf demselben Host werden gegen dieselbe,
-// unveränderte Host-Momentmessung geprüft (kein kumulatives
-// "alle Rollen zusammen simulieren") — konsistent mit dem advisory-
-// artigen, best-effort Charakter dieser gesamten Vorprüfung.
-func (s *Service) checkResources(wf Workflow) error {
-	if s.resources == nil {
-		return nil
-	}
-	for _, role := range wf.Definition.Roles {
-		if role.HostID == "" {
-			continue
-		}
-		if reason, ok := s.resources.CheckHost(role.HostID, role.NodeType); !ok {
-			return fmt.Errorf("%w: host %s: %s", ErrResourcesUnavailable, role.HostID, reason)
-		}
-	}
-	return nil
-}
-
 // runStart führt die eigentliche Provisionierung aus (Hintergrund-
 // Goroutine, s. Start()). Fehler bei einzelnen Rollen werden gesammelt
 // statt beim ersten Fehler abzubrechen (gleiches Muster wie
@@ -568,10 +539,17 @@ func (s *Service) checkResources(wf Workflow) error {
 // **absichtlich laufen** (kein automatisches Rollback: ein Teil-Start ist
 // im Zweifel nützlicher als ein sofortiger Stopp mitten in der
 // Provisionierung, und die Rollen sind über den Workflow jederzeit per
-// Stop() gebündelt wieder zu beenden). Volle Ressourcen-Vorprüfung, die
-// einen Teil-Start von vornherein verhindert, ist §6.2s "harte
-// Vorbedingung" — braucht die noch zurückgestellte Placement-Engine
-// (§6.1), dokumentierte Folgearbeit, nicht Teil 1.
+// Stop() gebündelt wieder zu beenden).
+//
+// Host-Platzierung (Nachtrag 99, löst die vormals harte checkResources-
+// Vorbedingung ab): pro Rolle, IN Reihenfolge von Definition.Roles
+// (damit mehrere Rollen DESSELBEN Starts sich gegenseitig als
+// Affinitäts-/Redundanz-Nachbarn sehen, nicht nur bereits laufende
+// andere Workflows), s.resources.SelectHost() aufrufen statt role.HostID
+// ungeprüft zu verwenden — der Start soll laut Vorgabe IMMER gelingen,
+// nur eben ggf. anderswo als in der Definition eingetragen. s.resources
+// darf nil sein (z. B. Tests ohne verdrahtete Placement-Engine) — dann
+// bleibt role.HostID unverändert wie vor Nachtrag 99.
 func (s *Service) runStart(wf Workflow) {
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	defer cancel()
@@ -589,15 +567,49 @@ func (s *Service) runStart(wf Workflow) {
 		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
 	}
 
+	// Nachtrag 99: Ausgangs-Belegung aus ALLEN ANDEREN Workflows (jetzt
+	// laufend + Scheduler-Forecast) — einmal pro Start gebaut, dann
+	// unten pro Rolle um die bereits IN DIESEM Start aufgelösten
+	// Geschwister-Rollen ergänzt (s. Merge unten), damit z. B. zwei
+	// Rollen mit derselben RedundancyGroup im selben Start sich
+	// gegenseitig ausweichen, nicht nur bereits laufenden Workflows.
+	occ := s.buildOccupancy(time.Now())
+
 	pending := map[string]string{} // roleName -> instanceID, noch nicht in der Registry gesehen
 	for _, role := range wf.Definition.Roles {
-		inst, err := s.launcher.Start(role.NodeType, "", role.HostID, extraEnv)
+		resolvedHostID := role.HostID
+		var placementReason string
+		if s.resources != nil {
+			result := s.resources.SelectHost(placement.PlacementRequest{
+				NodeType:        role.NodeType,
+				PreferredHostID: role.HostID,
+				AffinityGroup:   role.AffinityGroup,
+				RedundancyGroup: role.RedundancyGroup,
+			}, occ)
+			resolvedHostID = result.HostID
+			placementReason = result.Reason
+		}
+
+		inst, err := s.launcher.Start(role.NodeType, "", resolvedHostID, extraEnv)
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return
 		}
-		wf.Runtime[role.Name] = RoleRuntime{InstanceID: inst.ID}
+		wf.Runtime[role.Name] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
 		pending[role.Name] = inst.ID
+		if placementReason != "" && resolvedHostID != role.HostID {
+			slog.Info("workflows: role placed on a different host than preferred",
+				"workflow", wf.ID, "role", role.Name, "preferredHostId", role.HostID,
+				"resolvedHostId", resolvedHostID, "reason", placementReason)
+		}
+		// Geschwister-Rollen DESSELBEN Starts als Nachbarn sichtbar
+		// machen, bevor die nächste Rolle aufgelöst wird (s. Doku oben).
+		if role.AffinityGroup != "" {
+			occ.AffinityGroupHosts[role.AffinityGroup] = append(occ.AffinityGroupHosts[role.AffinityGroup], resolvedHostID)
+		}
+		if role.RedundancyGroup != "" {
+			occ.RedundancyGroupHosts[role.RedundancyGroup] = append(occ.RedundancyGroupHosts[role.RedundancyGroup], resolvedHostID)
+		}
 
 		// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: Control-Plane-Rollen
 		// (s. controlPlaneNodeTypes) bekommen sofort eine Workflow-
