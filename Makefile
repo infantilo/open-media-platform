@@ -30,12 +30,23 @@ nodes:
 contract:
 	cd tools/contract-check && NODE_URL=$(NODE_URL) go run .
 
+# OMP_POSTGRES_URL wird hier explizit exportiert (Nachtrag 108,
+# docs/decisions.md): die DB-Store-Tests (workflows/snapshots/hosts/…)
+# verbinden sich seit Nachtrag 108 NICHT mehr implizit mit der lokalen
+# Dev-Postgres, wenn die Variable fehlt — sie überspringen sich dann
+# nur noch. `make test`/`check`/`check-ci` sind bewusste, vom Nutzer
+# aufgerufene Vollverifikationen (anders als ein ad-hoc `go test ./...`
+# für ein einzelnes Paket) und sollen die DB-Tests weiterhin real gegen
+# die per `make up` gestartete Dev-Postgres laufen lassen — deshalb hier
+# explizit gesetzt, nicht dem Zufall/der Shell-Umgebung überlassen.
+DEV_POSTGRES_URL := postgres://omp:omp@localhost:5432/omp?sslmode=disable
+
 test:
-	$(foreach m,$(GO_MODULES),cd $(m) && go test ./... && cd $(CURDIR) &&) true
+	$(foreach m,$(GO_MODULES),cd $(m) && OMP_POSTGRES_URL=$(DEV_POSTGRES_URL) go test ./... && cd $(CURDIR) &&) true
 	cd nodes && cargo test --workspace
 
 check:
-	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
+	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && OMP_POSTGRES_URL=$(DEV_POSTGRES_URL) go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts
 	deno test ui/
 	cd nodes && cargo test --workspace && cargo deny check && cargo audit
@@ -50,7 +61,9 @@ check:
 # aktiv ist). Rust/MXL-Code bleibt wie bisher Pflicht zur echten
 # lokalen Live-Verifikation vor jedem Commit (`make check`, s. Historie
 # in docs/decisions.md) — nur nicht Teil des automatisierten
-# GitHub-Actions-Gates.
+# GitHub-Actions-Gates. OMP_POSTGRES_URL wird hier NICHT gesetzt — ein
+# GitHub-Actions-Runner hat ohnehin keine Postgres unter dieser DSN
+# laufen, die DB-Tests überspringen sich dort wie schon zuvor.
 check-ci:
 	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts

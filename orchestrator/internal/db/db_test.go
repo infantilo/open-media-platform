@@ -6,26 +6,24 @@ import (
 	"testing"
 )
 
-// testDSN liefert die Postgres-DSN für Tests: OMP_POSTGRES_URL falls
-// gesetzt (gleiche Variable wie die Orchestrator-Konfiguration, config.go),
-// sonst dieselbe lokale Dev-Default-DSN. Tests, die eine echte Postgres-
-// Instanz brauchen, überspringen sich selbst (t.Skip), wenn sie nicht
-// erreichbar ist — kein Postgres-Mock (SQL-Korrektheit ist ohne echte DB
-// nicht sinnvoll prüfbar), aber auch kein harter CI-/Dev-Zwang, immer
-// eine laufende Instanz zu haben (`make up` startet sie, docs/decisions.md
-// D1).
-func testDSN() string {
-	if v := os.Getenv("OMP_POSTGRES_URL"); v != "" {
-		return v
-	}
-	return "postgres://omp:omp@localhost:5432/omp?sslmode=disable"
-}
-
+// connectOrSkip verbindet für Tests, die eine echte Postgres-Instanz
+// brauchen — ausschließlich über OMP_POSTGRES_URL, kein impliziter
+// Fallback auf die lokale Dev-Default-DSN mehr (Nachtrag 108,
+// docs/decisions.md): dieser Fallback verband sich bei fehlendem
+// OMP_POSTGRES_URL unbemerkt mit der echten, dauerhaft laufenden
+// Dev-Postgres und führte in anderen Paketen (workflows, snapshots, …)
+// zu echtem Datenverlust, weil deren Tests danach `DELETE FROM ...`
+// gegen genau diese Verbindung ausführen. Wer diese Tests laufen lassen
+// will, muss OMP_POSTGRES_URL jetzt explizit selbst setzen.
 func connectOrSkip(t *testing.T) *sql.DB {
 	t.Helper()
-	db, err := Connect(testDSN())
+	dsn := os.Getenv("OMP_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("OMP_POSTGRES_URL nicht gesetzt — DB-Test übersprungen (kein impliziter Fallback mehr, s. docs/decisions.md Nachtrag 108)")
+	}
+	db, err := Connect(dsn)
 	if err != nil {
-		t.Skipf("postgres nicht erreichbar (%v) — für diesen Test `make up` starten", err)
+		t.Skipf("postgres nicht erreichbar (%v)", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db

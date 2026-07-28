@@ -12,13 +12,22 @@ import (
 // Muster wie internal/workflows/store_test.go).
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
+	// Kein impliziter Fallback auf die lokale Standard-Dev-DSN mehr
+	// (Nachtrag 108, docs/decisions.md): genau dieser Fallback verband
+	// sich bei fehlendem OMP_POSTGRES_URL unbemerkt mit der echten,
+	// dauerhaft laufenden Dev-Postgres (identische Default-DSN) und
+	// löschte dort per anschließendem `DELETE FROM ...`/Cleanup echte,
+	// nie absichtlich in Kauf genommene Daten (u. a. den gespeicherten
+	// Workflow "Regieplatz 1"). Wer diese Tests laufen lassen will,
+	// muss OMP_POSTGRES_URL jetzt explizit selbst setzen — ein
+	// bewusster Akt statt eines stillen Defaults.
 	dsn := os.Getenv("OMP_POSTGRES_URL")
 	if dsn == "" {
-		dsn = "postgres://omp:omp@localhost:5432/omp?sslmode=disable"
+		t.Skip("OMP_POSTGRES_URL nicht gesetzt — DB-Test übersprungen (kein impliziter Fallback mehr, s. docs/decisions.md Nachtrag 108)")
 	}
 	database, err := db.Connect(dsn)
 	if err != nil {
-		t.Skipf("postgres nicht erreichbar (%v) — für diesen Test `make up` starten", err)
+		t.Skipf("postgres nicht erreichbar (%v)", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	if err := db.Migrate(database); err != nil {

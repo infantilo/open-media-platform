@@ -13619,3 +13619,67 @@ gestoppt (Ausgangszustand). `deno check`/`deno test ui/` (70/70) grün.
 
 **Umgesetzt in:** `orchestrator/internal/consoles/{resolve.go,
 resolve_test.go}`, `ui/shell/shell.ts`.
+
+---
+
+## 2026-07-28 (Nachtrag 108) — Fünftes go-test-Postgres-Wipe-Incident: Workflow "Regieplatz 1" verloren, diesmal root-caused + tatsächlich behoben
+
+**Vorfall:** Nutzer meldete, der gespeicherte Workflow "Regieplatz 1"
+(`2b2e1fc1ad21033420653f2bf0e85aa9`) fehle. `SELECT count(*) FROM
+workflows` gegen die echte Dev-Postgres bestätigte 0 Zeilen; Audit-Log
+zeigt aktive Nutzung des Workflows bis 2026-07-28 10:50 UTC+2 (ein
+`stop`-Aufruf), aber **keinen** `DELETE`-Eintrag dafür — das Verschwinden
+lief also nicht über die (audit-geloggte) HTTP-API.
+
+**Root Cause gefunden (zuvor laut Memory "4. Vorfall, keine Lösung
+bekannt"):** `internal/workflows/store_test.go`s `testDB()`-Helfer (und
+identisch sieben weitere Pakete: `auth`, `authz`, `launcher`, `layouts`,
+`profiles`, `hosts`, `snapshots`, plus `db_test.go` in leicht anderer
+Form) fiel bei fehlendem `OMP_POSTGRES_URL` **stillschweigend** auf
+`postgres://omp:omp@localhost:5432/omp?sslmode=disable` zurück — exakt
+die DSN der echten, dauerhaft laufenden Dev-Postgres auf dieser Maschine.
+`workflows/store_test.go` ruft danach unconditional `DELETE FROM
+workflows` (Setup **und** Cleanup) auf. In CI fällt das nie auf, weil dort
+unter dieser DSN gar keine Postgres läuft (der Verbindungsversuch
+schlägt fehl, Test skippt) — nur auf einer Maschine mit echter,
+dauerhaft laufender Dev-Postgres unter der Standard-DSN wird der
+Fallback zur Falle. Ausgelöst durch einen in dieser Sitzung selbst
+ausgeführten `go test ./internal/workflows/... ./internal/launcher/...
+./internal/httpapi/...`-Lauf — vor dem Lauf wurde zwar geprüft, dass
+`OMP_POSTGRES_URL` in der Shell nicht gesetzt ist, aber nicht erkannt,
+dass genau das den gefährlichen Fallback auslöst statt eines Skips.
+
+**Nicht wiederherstellbar:** kein `DELETE`-Aufruf im Audit-Log (nur
+Methode/Pfad/Status protokolliert, kein Request-Body) und die einzige
+vorhandene Postgres-Sicherung (`.backups/omp-20260717T203529Z.sql.gz`)
+ist elf Tage älter als der zuletzt aktive Stand des Workflows — enthält
+ihn nicht in brauchbarem Zustand. Der Nutzer muss "Regieplatz 1" von
+Hand neu anlegen.
+
+**Tatsächlicher Fix (nicht nur dokumentiert wie bei den vorigen vier
+Vorfällen):** in allen neun betroffenen Testdateien entfällt der
+implizite DSN-Fallback vollständig — fehlt `OMP_POSTGRES_URL`, skippt
+der Test jetzt (`t.Skip`), verbindet sich aber nicht mehr. Damit ein
+bewusster `make test`/`make check`/`make check-ci`-Lauf (dokumentierter
+Verifikationsweg, `UMSETZUNG.md` D1 u. a.) weiterhin real gegen die per
+`make up` gestartete Dev-Postgres läuft, exportieren `test`/`check` im
+Makefile `OMP_POSTGRES_URL` jetzt explizit selbst (`check-ci` bewusst
+nicht — dort läuft ohnehin keine Postgres unter dieser DSN). Ein
+isolierter `go test ./internal/<paket>/...`-Aufruf ohne diese
+Vorbereitung — genau der Fall, der alle fünf Vorfälle auslöste —
+überspringt die DB-Tests jetzt sicher, statt die reale Dev-Postgres zu
+berühren.
+
+**Verifiziert:** `go build`/`go vet` (orchestrator) grün;
+`go test ./internal/workflows/... -run TestStore -v` ohne
+`OMP_POSTGRES_URL` zeigt jetzt `SKIP` statt einer echten DB-Verbindung
+für alle sieben Store-Tests; derselbe Testlauf **mit** explizit
+gesetztem `OMP_POSTGRES_URL` verbindet sich weiterhin real
+(`internal/db`s `TestMigrateCreatesTablesAndIsIdempotent` lief damit
+grün durch). Bewusst nicht erneut die vollen DB-Testsuiten laufen
+lassen (unnötiges zusätzliches Risiko, `workflows` ist ohnehin schon
+leer).
+
+**Betroffene Dateien:** `Makefile`,
+`orchestrator/internal/{auth,authz,launcher,layouts,profiles,workflows,
+hosts,snapshots,audit,db}/*_test.go`.
