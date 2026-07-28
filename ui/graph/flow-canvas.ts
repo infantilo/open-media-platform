@@ -3001,9 +3001,14 @@ export class FlowCanvas extends HTMLElement {
     }
 
     const query = this.#paletteFilterQuery.trim().toLowerCase();
-    const filtered = query === ""
+    const filtered = (query === ""
       ? catalog
-      : catalog.filter((entry) => entry.label.toLowerCase().includes(query) || entry.type.toLowerCase().includes(query));
+      : catalog.filter((entry) => entry.label.toLowerCase().includes(query) || entry.type.toLowerCase().includes(query)))
+      // Nutzerwunsch 2026-07-28: alphabetisch statt in deploy/catalog.json-
+      // Dateireihenfolge (historisch gewachsen, kein bewusstes Ordnungs-
+      // prinzip) — localeCompare für Umlaute/Groß-Kleinschreibung korrekt.
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label));
 
     if (filtered.length === 0) {
       const empty = document.createElement("p");

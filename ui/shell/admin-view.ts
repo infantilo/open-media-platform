@@ -953,7 +953,9 @@ class AdminView extends HTMLElement {
       </tr>`;
       table.appendChild(thead);
       const tbody = document.createElement("tbody");
-      for (const entry of this.#catalog) {
+      // Nutzerwunsch 2026-07-28: alphabetisch statt Katalog-Dateireihenfolge.
+      const sortedCatalog = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
+      for (const entry of sortedCatalog) {
         tbody.appendChild(this.#renderCatalogRow(entry));
       }
       table.appendChild(tbody);

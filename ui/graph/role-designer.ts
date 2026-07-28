@@ -265,7 +265,9 @@ export class RoleDesigner extends HTMLElement {
     emptyOpt.value = "";
     emptyOpt.textContent = "Node-Typ …";
     typeSelect.appendChild(emptyOpt);
-    for (const entry of this.#catalog) {
+    // Nutzerwunsch 2026-07-28: alphabetisch statt Katalog-Dateireihenfolge.
+    const sortedCatalog = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
+    for (const entry of sortedCatalog) {
       const opt = document.createElement("option");
       opt.value = entry.type;
       opt.textContent = entry.label;
