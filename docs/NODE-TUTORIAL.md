@@ -199,15 +199,35 @@ beste Referenzbeispiel ist bereits im Repo, vollständig lauffähig:
   in deiner `NodeConfig` statt der leeren `SenderSpec::default()` aus
   Schritt 1 — registriert Sender **und** Flow gemeinsam. Konvention:
   Flow-UUID == MXL-`flow-id` (`flow: Some(FlowSpec::Video{ id: Some(flow_id), .. })`).
-- **`media_ready` ehrlich setzen** (§5 Punkt 6, `UMSETZUNG.md` D5-prep):
-  `MediaReadySource::NotApplicable` ist ab jetzt falsch (du hast Medien-
-  I/O). Baue eine echte Probe statt zu raten — `omp-source` macht das,
-  indem es einen Buffer-Zähler an einer internen `fakesink`-Abzweigung
-  auf ein Sticky-Flag umlegt (`pipeline.rs`, `video_flowed:
-  Arc<AtomicBool>`), das per `MediaReadySource::Probe(Arc::new(move || …))`
-  an die `NodeConfig` gereicht wird. Hast du noch keine Probe verdrahtet,
-  ist `MediaReadySource::Unknown` (meldet konservativ `false`) ehrlicher
-  als ein geratenes `true`.
+- **`media_ready` ehrlich setzen** (§5 Punkt 6, `UMSETZUNG.md` D5-prep/
+  D5-prep-2): `MediaReadySource::NotApplicable` ist ab jetzt falsch (du
+  hast Medien-I/O). Seit D5-prep-2 bringt `omp_mediaio::MediaFlow`
+  (`lib.rs`, `fn has_flowed(&self) -> bool`) das für alle MXL-/RTP-/
+  ST-2110-I/O-Typen bereits fertig mit — für den Normalfall (dein Node
+  baut seine `MxlVideoOutput`/`MxlAudioOutput`/`MxlVideoInput`/… einmal
+  auf und behält sie über die gesamte Prozesslaufzeit) reicht ein
+  direkter Aufruf, kein eigener Zähler nötig:
+  ```rust
+  // Element lebt in derselben Struktur, die die NodeConfig baut:
+  media_ready: omp_node_sdk::MediaReadySource::Probe(Arc::new({
+      let output = mxl_output.clone(); // Arc<MxlVideoOutput> o.ä.
+      move || output.has_flowed()
+  }))
+  ```
+  Lebt dein I/O-Element nur innerhalb eines separaten Pipeline-Threads
+  (nicht über die gesamte Prozesslaufzeit erreichbar, z. B. `omp-player`s
+  `ActivePipeline`) nimm stattdessen den eigenständigen, klonbaren
+  Griff `MxlVideoOutput::flowed_handle() -> Arc<AtomicBool>` (gleiche
+  Semantik, unabhängig von der Element-Lebensdauer).
+  **Ausnahme, mehr Aufwand nötig:** baut dein Node seinen Eingang zur
+  Laufzeit neu auf (Umschalten der Quelle wie bei einem Switcher/Viewer),
+  stirbt das interne Flag bei jedem Rebuild mit der alten Instanz — dort
+  brauchst du ein von außen persistentes, über Rebuilds hinweg bewusst
+  zurückgesetztes Flag samt eigener Pad-Probe (Referenzmuster:
+  `nodes/omp-viewer/src/pipeline.rs`s `flowed`/`flowed_probe`,
+  kommentiert). Hast du gar keine Probe verdrahtet, ist
+  `MediaReadySource::Unknown` (meldet konservativ `false`) ehrlicher als
+  ein geratenes `true`.
 
 Für Empfänger (dein Node **liest** einen MXL-Flow, z. B. wie
 `omp-viewer`) ist `MxlVideoInput`/`MxlAudioInput` das Gegenstück — du
@@ -217,11 +237,31 @@ in `omp-viewer`s `main.rs`, Stichwort IS-05-Receiver-PATCH).
 ## Schritt 5: In den Instanz-Launcher/GUI-Katalog aufnehmen (optional)
 
 Damit dein Node aus der GUI heraus startbar ist (statt nur per
-`cargo run`/Terminal, `UMSETZUNG.md` C8): Eintrag in
-`deploy/catalog.json` ergänzen (`{type, label, command: ["nodes/target/debug/mein-node"], env: {}}`),
-Binary vorher bauen (`cargo build -p mein-node`, der Launcher startet
-kein `cargo run`). Danach erscheint dein Node-Typ in der
-Katalog-Palette des Flow-Editors, mehrfach instanziierbar.
+`cargo run`/Terminal, `UMSETZUNG.md` C8) — zwei unterschiedliche Wege,
+je nachdem, wie du deinen Node ausliefern willst:
+
+**Weg A — lokal gebautes Binary (dein Fall nach Schritt 3, kein
+Container):** Eintrag in `deploy/catalog.json` ergänzen
+(`{"type": "mein-node", "label": "Mein Node", "command": ["nodes/target/debug/mein-node"], "env": {}}`
+— `"runner"` weglassen, Default ist `"process"`), Binary vorher bauen
+(`cargo build -p mein-node`, der Launcher startet kein `cargo run`).
+**Wichtig, leicht zu übersehen:** `deploy/catalog.json` wird nur beim
+Orchestrator-**Start** gelesen, kein Hot-Reload — nach dem Editieren
+`make stop && make start` (bzw. nur den Orchestrator-Prozess neu
+starten), sonst bleibt dein Eintrag unsichtbar. Danach erscheint dein
+Node-Typ in der Katalog-Palette des Flow-Editors, mehrfach
+instanziierbar.
+
+**Weg B — Katalog-Import über die GUI (`Administration`-Tab, §17 Teil
+4/5, `docs/HANDBUCH.md` Abschnitt 9.5):** ohne Orchestrator-Neustart, aber
+**nur für containerisierte Nodes** — `POST /api/v1/catalog` (bzw. das
+Import-Formular) verlangt serverseitig `runner: "podman"` plus ein
+Image (`launcher.ImportCatalogEntry`, `orchestrator/internal/launcher/
+launcher.go`); ein reiner Prozess-Eintrag wie aus Weg A lässt sich
+darüber **nicht** anlegen (weder API noch GUI). Für deinen frisch per
+`cargo build` erzeugten Node ist Weg A also weiterhin der einzige Weg —
+Weg B wird erst relevant, wenn du deinen Node zusätzlich als
+Container-Image paketierst.
 
 ## Troubleshooting
 
@@ -245,6 +285,30 @@ nein, ein Registrierungsproblem (siehe oben).
 `Cargo.toml` prüfen (`{ path = "../omp-node-sdk" }`, relativ zu
 `nodes/mein-node/`), und dass `mein-node` in `nodes/Cargo.toml`s
 `members` steht (bei `cargo new` innerhalb von `nodes/` automatisch).
+
+## Weitere SDK-Fähigkeiten (optional, nicht in diesem Tutorial ausgebaut)
+
+Über die vier `ParamStore`-Pflichtmethoden hinaus bringt das SDK drei
+weitere, opt-in nutzbare Bausteine mit — nur relevant, sobald dein Node
+sie tatsächlich braucht:
+
+- **Eigene REST-Endpunkte** (`ParamStore::extra_route`, Default `None`)
+  — Escape-Hatch für alles, was nicht als Parameter/Methode passt (z. B.
+  `GET/POST /state` für Snapshot-Export/Import, s.
+  `nodes/omp-video-mixer-me/src/main.rs`s `extra_route`-Implementierung,
+  oder die `/ui/manifest.json`/`/ui/bundle.js`-Routen einer eigenen
+  Node-UI, s. `nodes/*/src/uibundle.rs`).
+- **Generischer Plugin-Host** (`ParamStore::plugins()`,
+  `omp_node_sdk::plugins::PluginRegistry`, `UMSETZUNG.md` C19) — für
+  runtime-(de)aktivierbare Zusatzfunktionen mit eigener Konfiguration
+  (Referenz: `omp-playout-automation`s SCTE-35-Plugin), liefert
+  automatisch `GET /plugins`/`PATCH /plugins/<id>` ohne eigenen
+  Routing-Code.
+- **Direkte Node-zu-Node-Aufrufe** (`omp_node_sdk::peer::PeerClient`,
+  `RegistryClient::get_node`, `UMSETZUNG.md` Kapitel 15 Teil 3) — falls
+  dein Node aktiv einen anderen Node aufrufen muss (nicht nur über den
+  Orchestrator-Proxy erreichbar sein), z. B. um an dessen Lowres-Vorschau
+  zu aktivieren (Referenz: `omp-multiviewer`s Discovery-Code).
 
 ## Weiterführend
 

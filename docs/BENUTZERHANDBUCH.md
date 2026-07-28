@@ -17,7 +17,7 @@ Orchestrator erreichbar ist) erscheint zuerst die Anmeldemaske:
 ![Anmeldemaske](screenshots/login.png)
 
 Nutzername/Passwort vergibt der Administrator über die
-Administration-Ansicht (Abschnitt 6). Im lokalen Dev-Betrieb existiert
+Administration-Ansicht (Abschnitt 7). Im lokalen Dev-Betrieb existiert
 standardmäßig ein `admin`-Nutzer (siehe `HANDBUCH.md` Abschnitt 3 für
 das Dev-Passwort — nicht für den Produktivbetrieb geeignet).
 
@@ -30,7 +30,13 @@ abläuft.
 Der Flow Editor ist die zentrale Ansicht: links der **Node-Katalog**
 (alle Node-Typen, die auf dieser Installation gestartet werden können),
 rechts die **Arbeitsfläche** mit den bereits laufenden Instanzen als
-Kacheln.
+Kacheln. Jeder Katalog-Eintrag zeigt zusätzlich eine kurze
+Funktionsbeschreibung, eine grobe Lasteinschätzung (z. B. „~ gering,
+konstant") und, sobald der Typ mindestens einmal lief, eine gemessene
+CPU-/RAM-Hausnummer („typisch 47–56 % CPU · 34 MB RAM") — hilfreich, um
+vor dem Start abzuschätzen, was eine weitere Instanz kostet. Das
+Suchfeld über der Liste filtert nach Name/Typ, ohne die Seite neu zu
+laden.
 
 ![Flow Editor mit laufenden Instanzen](screenshots/flow-editor.png)
 
@@ -118,7 +124,50 @@ zuvor exportierte Workflow-Definition. Die App-Bar-Auswahl „Workflow:
 Alle" (oben rechts, auf jeder Seite sichtbar) filtert den Flow Editor
 auf die Instanzen eines einzelnen Workflows, sobald welche existieren.
 
-## 5. Alarme
+**Rollenname = Quellen-Label:** der frei vergebbare „Rollenname" jeder
+Rolle im Workflow-Formular ist zugleich das Label, unter dem diese
+Quelle später überall erscheint, wo sie auswählbar ist — z. B. in den
+Kreuzschienen-Dropdowns von Bild-/Audiomischer. Eine Rolle „Kamera 1"
+zeigt sich dort als „Kamera 1", nicht als kryptische Instanz-ID. Direkt
+über den „+"-Knopf im Node-Katalog (Abschnitt 2.1) gestartete Instanzen
+ohne Workflow-Zugehörigkeit bekommen dagegen weiterhin nur das
+generische „`<Typ>` (`<Kurz-ID>`)"-Label — ein eigenes Namensfeld dafür
+gibt es in der Oberfläche noch nicht.
+
+## 5. Scheduler
+
+Der Reiter **Scheduler** zeigt für jeden Workflow eine eigene Zeile auf
+einer horizontalen Zeitachse — Tag- (30-Minuten-Raster), Wochen- (7 Tage,
+gleiche Auflösung, nur schmaler) und Monatsansicht (reiner Tage-
+Überblick ohne Uhrzeit, Klick springt in die Tagesansicht) über die drei
+Knöpfe oben umschaltbar, `◀`/`Heute`/`▶` navigiert:
+
+![Scheduler: Wochenansicht mit einem Zeitplan-Balken pro Tag](screenshots/scheduler.png)
+
+- **„+"** am rechten Rand einer Workflow-Zeile legt ein neues Start-/
+  Stop-Paar mit Standardzeiten an (09:00–17:00), sofort per Maus
+  verschieb- und größenveränderbar — Loslassen speichert direkt, kein
+  separater „Speichern"-Schritt (anders als das Workflow-Formular in
+  Abschnitt 4).
+- **Doppelklick** auf einen Balken öffnet exakte HH:MM-Eingabefelder
+  (Ziehen bleibt auf das 30-Minuten-Raster begrenzt).
+- Ein Zeitplan ist **einmalig**, **täglich** oder **wöchentlich**
+  (Wochentag wählbar) und löst je nach Balkenende **Start** oder **Stop**
+  des gesamten Workflows aus — technisch dieselbe Aktion, die auch ein
+  Klick auf „Start"/„Stop" im Workflows-Tab auslöst.
+- **„×"** an einem Balken löscht den Zeitplan.
+
+Der Tab ist für alle Nutzer mit Lesezugriff sichtbar; Änderungen
+verlangen (wie das Workflow-Formular selbst) das Konfigurationsrecht auf
+den betroffenen Workflow — ohne dieses Recht schlägt das Speichern mit
+einer Fehlermeldung fehl, statt die Änderung still zu verwerfen.
+
+**Vorsicht bei eigenen Tests:** ein hier eingetragener Zeitplan startet/
+stoppt den echten Workflow zur eingetragenen Uhrzeit, auch unbeaufsichtigt
+— zum Ausprobieren einen eigens dafür angelegten, unwichtigen Workflow
+verwenden, nicht einen produktiv genutzten Regieplatz.
+
+## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative
 Aufmerksamkeit braucht: abgestürzte oder instabile (flappende)
@@ -127,7 +176,7 @@ Normalbetrieb bleibt er leer:
 
 ![Alarme (keine aktiven)](screenshots/alarme.png)
 
-## 6. Administration
+## 7. Administration
 
 Der Reiter **Administration** (nur sichtbar für Nutzer mit
 Administrationsrecht) verwaltet Nutzerkonten, Rollenbindungen und
@@ -145,7 +194,7 @@ zeigt ein Audit-Log aller schreibenden API-Zugriffe:
   API-Pfad, welcher HTTP-Status) — auch fehlgeschlagene Versuche (rot
   markierte Statuscodes) bleiben sichtbar.
 
-## 7. Hosts (Remote-Betrieb)
+## 8. Hosts (Remote-Betrieb)
 
 Der Reiter **Hosts** zeigt entfernte Maschinen, auf denen ein
 Host-Agent läuft und die sich beim Orchestrator registriert haben —
@@ -160,10 +209,10 @@ lokal konfigurierten Katalog aus — der Orchestrator kann keinen
 beliebigen Befehl auf einem entfernten Host ausführen, das ist eine
 bewusste Sicherheitsgrenze.
 
-## 8. Operator-Konsole (Regieplatz)
+## 9. Operator-Konsole (Regieplatz)
 
 Ein Nutzer ohne Konfigurationsrecht, aber mit `Bedienen`-Rechten auf
-mehrere Node-Rollen innerhalb eines Workflows (Abschnitt 6:
+mehrere Node-Rollen innerhalb eines Workflows (Abschnitt 7:
 Rollenbindungen), landet nach dem Anmelden nicht im Flow Editor, sondern
 direkt auf einer **Operator-Konsole** — einer reinen Bedienoberfläche
 ohne Graph, Katalog oder Verkabelungsmöglichkeit. Sind einem Nutzer
@@ -203,7 +252,7 @@ Regieplatz im Browser gespeichert und bleiben über einen Seiten-Reload
 hinweg erhalten — passend zu einem fest installierten Regieplatz-
 Bildschirm, an dem stets derselbe Browser läuft.
 
-### 8.1 Beispiel: Regieplatz „Regie 1"
+### 9.1 Beispiel: Regieplatz „Regie 1"
 
 Ein zweites, vollständiges Beispiel — der Workflow „Regie 1" ohne
 Playout-Automation, dafür mit zwei parallelen Testquellen (zwei
@@ -232,7 +281,7 @@ und Viewer, mit einem Operator, der auf alle sechs Rollen
   (Cut/Auto, Kreuzschiene, DSK/PIP) statt über eine Playlist — passend
   für einen reinen Live-Schaltplatz ohne Bandmaterial.
 
-## 9. Weiterführende Dokumente
+## 10. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
   Troubleshooting, mTLS/Backup/Soak-Betrieb.

@@ -375,6 +375,34 @@ vendort in MXL selbst (`third_party/mxl/lib/fabrics/ofi/`).
 zu `docs/NODE-TUTORIAL.md` für eigene Node-Implementierungen; einziger
 mTLS-fähiger Node bisher (Abschnitt 2.1).
 
+### 9.5 Eigenen Microservice zum Katalog hinzufügen
+
+Zwei unabhängige Wege, je nach Auslieferungsform (Details/Codepfade:
+`docs/NODE-TUTORIAL.md` Schritt 5):
+
+- **Lokal gebautes Binary** (`runner: "process"`, der Normalfall für
+  einen frisch mit dem SDK gebauten Node, s. `docs/NODE-TUTORIAL.md`):
+  Eintrag von Hand in `deploy/catalog.json`, danach Orchestrator neu
+  starten (`make stop && make start`) — die Datei wird nur beim Start
+  gelesen, kein Hot-Reload.
+- **Container-Image** (`runner: "podman"`, §17 Teil 4/5): Import über
+  den **Administration**-Tab (bzw. `POST /api/v1/catalog`) ohne
+  Orchestrator-Neustart, inkl. Admission-Check und Mehrfachversionen
+  desselben Typs (§17 Teil 5). Dieser Weg akzeptiert serverseitig
+  ausschließlich `runner: "podman"` — ein reiner Prozess-Eintrag lässt
+  sich darüber nicht anlegen.
+
+### 9.6 Instanz-Label vergeben
+
+Ohne eigenes Label heißt jede gestartete Instanz generisch
+„`<Katalog-Label>` (`<Kurz-ID>`)" (z. B. „Source (66a0c71b)") — auch in
+Kreuzschienen-Dropdowns anderer Nodes (Bild-/Audiomischer). Für über
+einen **Workflow** gestartete Rollen übernimmt der Launcher automatisch
+den im Workflow frei vergebenen Rollennamen als Label (kein Zusatzschritt
+nötig). Für einen direkten Katalog-Start (`POST /api/v1/instances`) lässt
+sich ein Label zusätzlich explizit im Request-Body mitgeben:
+`{"type": "omp-source", "label": "Kamera 1"}`.
+
 ## 10. Mehr Kontext
 
 - Architektur/Konzepte: `ARCHITECTURE.md` (Referenzdokument, wird bei jeder
