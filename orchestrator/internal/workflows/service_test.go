@@ -211,6 +211,9 @@ type fakeLauncher struct {
 	// catalog (Kapitel 12 Teil 3, §12.3d) — von Import() gegen
 	// Rollen-nodeType-Werte geprüft.
 	catalog []launcher.CatalogEntry
+	// lastLabel (Nutzerwunsch 2026-07-28) — das customLabel des zuletzt
+	// beobachteten StartLabeled()-Aufrufs, ein Eintrag pro nodeType.
+	lastLabel map[string]string
 }
 
 func (f *fakeLauncher) Catalog() []launcher.CatalogEntry {
@@ -220,6 +223,10 @@ func (f *fakeLauncher) Catalog() []launcher.CatalogEntry {
 }
 
 func (f *fakeLauncher) Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error) {
+	return f.StartLabeled(nodeType, version, hostID, "", extraEnv)
+}
+
+func (f *fakeLauncher) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
@@ -235,7 +242,15 @@ func (f *fakeLauncher) Start(nodeType, version, hostID string, extraEnv map[stri
 		f.lastExtraEnv = map[string]map[string]string{}
 	}
 	f.lastExtraEnv[nodeType] = extraEnv
-	return launcher.Instance{ID: id, Type: nodeType, HostID: hostID}, nil
+	if f.lastLabel == nil {
+		f.lastLabel = map[string]string{}
+	}
+	f.lastLabel[nodeType] = customLabel
+	label := customLabel
+	if label == "" {
+		label = nodeType
+	}
+	return launcher.Instance{ID: id, Type: nodeType, Label: label, HostID: hostID}, nil
 }
 
 func (f *fakeLauncher) Stop(id string) error {

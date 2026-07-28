@@ -542,11 +542,11 @@ func TestImportCatalogEntryRealMultiVersion(t *testing.T) {
 	}
 
 	var ambiguous *ErrCatalogVersionAmbiguous
-	if _, err := l.startLocal(base.Type, "", nil); !errors.As(err, &ambiguous) {
+	if _, err := l.startLocal(base.Type, "", "", nil); !errors.As(err, &ambiguous) {
 		t.Fatalf("startLocal(imported-mock-mv, \"\") error = %v, want *ErrCatalogVersionAmbiguous", err)
 	}
 
-	inst, err := l.startLocal(base.Type, "2.0.0", nil)
+	inst, err := l.startLocal(base.Type, "2.0.0", "", nil)
 	if err != nil {
 		t.Fatalf("startLocal(imported-mock-mv, 2.0.0) error = %v", err)
 	}

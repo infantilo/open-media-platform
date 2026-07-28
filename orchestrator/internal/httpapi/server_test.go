@@ -183,6 +183,10 @@ func (f fakeLauncherService) Start(nodeType, version, hostID string, extraEnv ma
 	return f.started, f.startErr
 }
 
+func (f fakeLauncherService) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error) {
+	return f.started, f.startErr
+}
+
 func (f fakeLauncherService) Stop(id string) error {
 	return f.stopErr
 }

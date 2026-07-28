@@ -100,6 +100,9 @@ type LauncherService interface {
 	// tatsächlich die vom Orchestrator gestartete Instanz ist.
 	Get(id string) (launcher.Instance, bool)
 	Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error)
+	// StartLabeled ist Start mit optionalem customLabel (Nutzerwunsch
+	// 2026-07-28) — leer heißt automatisch generiertes Label wie bisher.
+	StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 	// TotalRestarts (S8, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — s.
 	// handleMetrics in metrics.go.

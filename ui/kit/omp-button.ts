@@ -51,7 +51,6 @@ TEMPLATE.innerHTML = `
       transition: box-shadow 0.1s ease, transform 0.05s ease, background 0.1s ease;
       width: 100%;
       height: 100%;
-      min-height: 32px;
       overflow: hidden;
     }
     /* Glanzlicht-Sheen im oberen Drittel (rein CSS, kein Bild-Asset) —

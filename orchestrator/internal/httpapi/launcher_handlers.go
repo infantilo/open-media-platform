@@ -139,13 +139,18 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // importierten Versionen desselben Typs — fehlt es und ist der Typ
 // eindeutig (statisch oder nur einmal importiert), unverändertes
 // Verhalten; ist er mehrdeutig, liefert svc.Start
-// ErrCatalogVersionAmbiguous (HTTP 409, s. writeLauncherError).
+// ErrCatalogVersionAmbiguous (HTTP 409, s. writeLauncherError). Ein
+// optionales {"label": "..."} (Nutzerwunsch 2026-07-28) ersetzt das
+// automatisch generierte "<Typ> (<Kurz-ID>)"-Label — landet u. a. als
+// NMOS-Sender-Label und macht die Quelle dadurch in Kreuzschienen-
+// Dropdowns (Bild-/Audiomischer) sinnvoll benennbar.
 func handlePostInstance(svc LauncherService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Type    string `json:"type"`
 			Version string `json:"version"`
 			HostID  string `json:"hostId"`
+			Label   string `json:"label"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -155,7 +160,7 @@ func handlePostInstance(svc LauncherService) http.HandlerFunc {
 		// Direkter Katalog-Start hat keinen Workflow-Kontext, also kein
 		// extraEnv (Kapitel 15, s. launcher.Launcher.Start-Doku) — Nodes
 		// laufen mit ihren Katalog-/Programm-Defaults.
-		inst, err := svc.Start(body.Type, body.Version, body.HostID, nil)
+		inst, err := svc.StartLabeled(body.Type, body.Version, body.HostID, body.Label, nil)
 		if err != nil {
 			writeLauncherError(w, err)
 			return

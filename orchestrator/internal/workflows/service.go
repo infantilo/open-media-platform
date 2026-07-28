@@ -128,6 +128,12 @@ type Launcher interface {
 	// Verhalten: löst sich wie vor §17 Teil 5 auf, solange der Typ nicht
 	// mehrdeutig mehrfach importiert wurde).
 	Start(nodeType, version, hostID string, extraEnv map[string]string) (launcher.Instance, error)
+	// StartLabeled ist Start mit optionalem customLabel (Nutzerwunsch
+	// 2026-07-28) — s. dortige Doku. Genutzt hier, um jede Rolle mit
+	// ihrem Rollennamen statt einem generischen "<Typ> (<Kurz-ID>)"-Label
+	// zu starten, damit Quellen in Kreuzschienen-Dropdowns (Bild-/
+	// Audiomischer) sinnvoll benannt sind.
+	StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (launcher.Instance, error)
 	Stop(id string) error
 	// Catalog liefert die bekannten Node-Typen (Kapitel 12 Teil 3,
 	// §12.3d: Import validiert unbekannte nodeType-Werte dagegen, statt
@@ -590,7 +596,7 @@ func (s *Service) runStart(wf Workflow) {
 			placementReason = result.Reason
 		}
 
-		inst, err := s.launcher.Start(role.NodeType, "", resolvedHostID, extraEnv)
+		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, extraEnv)
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return

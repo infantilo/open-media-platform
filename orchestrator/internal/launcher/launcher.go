@@ -773,10 +773,21 @@ func (l *Launcher) sampleLocalResources() {
 // Katalog-Einträge, keine freien Kommandos") bleibt intakt, sie gilt
 // jetzt zusätzlich für Umgebungsvariablen statt nur für den Node-Typ.
 func (l *Launcher) Start(nodeType, version, hostID string, extraEnv map[string]string) (Instance, error) {
+	return l.StartLabeled(nodeType, version, hostID, "", extraEnv)
+}
+
+// StartLabeled ist Start plus optionalem customLabel (Nutzerwunsch
+// 2026-07-28: Quellen tauchten in Kreuzschienen-Dropdowns nur als
+// "<Typ> (<Instanz-ID-Kurzform>)" auf, ohne Möglichkeit, sie sinnvoll zu
+// benennen). Leer = unverändertes Verhalten (automatisch generiertes
+// Label aus Katalog-Label/Node-Typ + Instanz-ID-Kurzform); nicht-leer
+// ersetzt dieses Label 1:1 (wird u. a. zu OMP_LABEL und damit zum NMOS-
+// Sender-Label, s. omp-node-sdk::node::start).
+func (l *Launcher) StartLabeled(nodeType, version, hostID, customLabel string, extraEnv map[string]string) (Instance, error) {
 	if hostID != "" {
-		return l.startRemote(nodeType, hostID, extraEnv)
+		return l.startRemote(nodeType, hostID, customLabel, extraEnv)
 	}
-	return l.startLocal(nodeType, version, extraEnv)
+	return l.startLocal(nodeType, version, customLabel, extraEnv)
 }
 
 // startLocal — unverändertes Verhalten aus C8 (OMP_INSTANCE_ID/
@@ -785,7 +796,7 @@ func (l *Launcher) Start(nodeType, version, hostID string, extraEnv map[string]s
 // extraEnv (s. `Start`-Doku). version (§17 Teil 5) wählt zwischen
 // mehreren importierten Versionen desselben Typs — leer heißt "die
 // einzige/statische Version", s. resolveCatalogEntry.
-func (l *Launcher) startLocal(nodeType, version string, extraEnv map[string]string) (Instance, error) {
+func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv map[string]string) (Instance, error) {
 	entry, err := l.resolveCatalogEntry(nodeType, version)
 	if err != nil {
 		return Instance{}, err
@@ -795,7 +806,10 @@ func (l *Launcher) startLocal(nodeType, version string, extraEnv map[string]stri
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
 	}
-	label := fmt.Sprintf("%s (%s)", entry.Label, id[:8])
+	label := customLabel
+	if label == "" {
+		label = fmt.Sprintf("%s (%s)", entry.Label, id[:8])
+	}
 	launchSecret, err := newInstanceID()
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate launch secret: %w", err)
@@ -1131,7 +1145,7 @@ func (l *Launcher) recordRestartLocked(id string) (shouldRestart bool, totalRest
 // Zielhost kommt als Fehler in der Kommando-Antwort zurück. extraEnv
 // (S3) wird mitgeschickt — der Host-Agent prüft es gegen seine eigene
 // Allowlist, s. `Start`-Doku.
-func (l *Launcher) startRemote(nodeType, hostID string, extraEnv map[string]string) (Instance, error) {
+func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv map[string]string) (Instance, error) {
 	if l.nc == nil {
 		return Instance{}, ErrRemoteUnavailable
 	}
@@ -1140,7 +1154,10 @@ func (l *Launcher) startRemote(nodeType, hostID string, extraEnv map[string]stri
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: generate instance id: %w", err)
 	}
-	label := fmt.Sprintf("%s (%s)", nodeType, id[:8])
+	label := customLabel
+	if label == "" {
+		label = fmt.Sprintf("%s (%s)", nodeType, id[:8])
+	}
 
 	resp, err := l.sendCommand(hostID, remoteCommand{
 		Action:     "start",
