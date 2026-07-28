@@ -266,6 +266,14 @@ kein Plattform-Fork.
 
 ### 6.1 Resource-Aware Placement & Live-Migration (geplant, ab P2)
 
+**Status (2026-07-28):** Telemetrie + Placement-Engine (advisory, inkl.
+Schedule-Forecast als Eingang für `SelectHost`) sind umgesetzt
+(`UMSETZUNG.md` D6 Teil 1/2, Nachtrag 98/99) — Alarm+Vorschlag bei
+Überlast läuft live. **Weiterhin offen:** I/O-Karten-Claim/Release
+(kein Geräte-Inventar existiert), Eskalationsstufen jenseits von
+`advisory` (`auto-confirm-window`/`auto`), GPU/NIC-Telemetrie,
+Cloud-Kostenfaktor — genau die in D6/D7 dokumentierten Scope-Grenzen.
+
 **Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
 jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete
 Maschine einen Audio-/Video-Ausfall verursacht (z. B. ein zu schwerer
@@ -417,6 +425,15 @@ Eskalationsstufen vollständig auf der Single-Host-Dev-Maschine simulierbar
 **Phase:** D6/§6.1 wie oben, Host-Klassen-Details siehe §18.8/§18.9.
 
 ### 6.2 Workflow-Bereitstellung & -Verteilung (geplant, ab Phase D)
+
+**Status (2026-07-28):** Workflow-Objekt, Bundle-Start/-Stop,
+Zeitsteuerung, Stop-Sicherheitsabfrage und Ressourcen-Vorprüfung als
+harte Start-Vorbedingung sind vollständig umgesetzt (`UMSETZUNG.md` D7
+Teil 1/2) — inkl. UI (Workflows-Tab + Scheduler-Tab mit Tag-/Wochen-/
+Monatsansicht, Nachtrag 97/98/100/101). **Weiterhin offen:**
+Registry-Föderation über mehrere Quellen mit getrenntem
+Publisher-Vertrauen (Erweiterung 2026-07-13, Punkt 1/3 unten) —
+Katalog-Import (§6.4) kennt bisher nur eine implizite lokale Quelle.
 
 **Anforderung:** Vergleichbare Cloud-Produktionsplattformen erlauben
 Operator:innen, nach Login App-Kategorien (Core Apps, Inputs, Play &
@@ -586,6 +603,14 @@ keine A–C-Schritte ändern ihren Scope.
 
 ### 6.3 Reaktives Failover: Service-Crash darf den Workflow nicht stoppen (geplant, ab P2)
 
+**Status (2026-07-28):** Stufen 1-3 sind umgesetzt und produktiv —
+Crash-Erkennung + automatischer Neustart mit Crash-Loop-Bremse
+(`UMSETZUNG.md` K7-Teil-1), Degradation-Verhalten bereits seit C7
+gelebt. **Stufe 4 (Hot-Standby/N+1) ist weiterhin nicht gebaut** —
+§21.3 hat die grundsätzliche Zielrichtung dafür entschieden (Option
+(c), Freeze-Frame-Standby statt vollem Genlock-Äquivalent), die
+Umsetzung selbst steht noch aus.
+
 **Anforderung:** Microservices **und** die Hosts, auf denen sie laufen,
 werden überwacht; oberste Aufgabe: (a) bei knapp werdenden Ressourcen
 proaktiv entscheiden, welcher Service ausfallsicher
@@ -654,6 +679,15 @@ unsichtbare Übernahme (wie §6.1: „kein Ausfall des Workflows", nicht
 Orchestrator-Ausfall ohnehin weiter, §4.1).
 
 ### 6.4 Microservice-Distribution & -Lifecycle über die UI (geplant, ab P2)
+
+**Status (2026-07-28):** Teilumgesetzt (`docs/END-GOAL-FEATURES.md` §17
+Teil 4/5) — Katalog-Import/-Entfernen über die UI (Administration-Tab)
+mit Admission-Check (`tools/contract-check` als Aufnahme-Gate) und
+Mehrfachversionen desselben Typs, aber **nur für `runner:"podman"`**
+(Container-Images) — `deploy/catalog.json` bleibt für lokal gebaute
+Prozess-Binaries der einzige Weg (`docs/NODE-TUTORIAL.md` Schritt 5).
+**Weiterhin offen:** Digest-Pinning, Signaturprüfung
+(Publisher-Vertrauensanker), Registry-Föderation (§6.2-Status oben).
 
 **Anforderung:** Microservices (Node-Images — OMPs eigene wie die von
 Drittanbietern) sollen über die UI installiert/importiert/entfernt/
@@ -847,10 +881,19 @@ der ohne RDMA-Hardware testbar ist. Begründung: weniger eigener Code
 (gleiches Prinzip wie C4 „MXL statt eigenem Zero-Copy-Transport"),
 sofort ohne Sonder-Hardware verifizierbar, Migrationspfad zu echter
 RoCEv2-Hardware bleibt ein reiner Provider-Wechsel
-(`--provider tcp` → `verbs`/`efa`), kein Architekturschwenk. Aktuell
-nicht gebaut (`MXL_ENABLE_FABRICS_OFI` steht in
-`third_party/mxl/CMakeLists.txt` auf `OFF`; nötig: dieses Flag `ON` +
-`libfabric-dev`, im Debian-Bookworm-Repo bereits verfügbar).
+(`--provider tcp` → `verbs`/`efa`), kein Architekturschwenk.
+
+**Status (2026-07-28):** Gebaut und live verifiziert (`docs/END-GOAL-
+FEATURES.md` Kapitel 16 Teil 0-2) — `MXL_ENABLE_FABRICS_OFI=ON` beim
+lokalen Dev-Build (`third_party/mxl/CMakeLists.txt`-Default bleibt
+bewusst `OFF` für einen plain Checkout, die Install-Routine setzt das
+Flag), `omp-fabrics-gateway` relayt einen kompletten MXL-Flow per
+echtem One-Sided-RDMA-Write über den `tcp`-Provider zwischen zwei
+Domains auf einem Host. **Weiterhin offen:** Teil 3 (echte
+Mehr-Host-Verifikation, braucht einen zweiten physischen Host), Teil 4
+(`verbs`/`efa` mit echter RoCEv2-Hardware, Beschaffung entschieden),
+automatische Placement-Auswahl Fabrics vs. ST2110/SRT, Katalog-Eintrag
+für den Gateway (bisher nur von Hand startbar).
 
 **Hardware-Ausblick (2026-07-17 entschieden):** echte RoCEv2-Hardware
 für den Regelbetrieb ist **fest eingeplant**, nicht optional — der
@@ -1335,16 +1378,14 @@ davon unberührt erlaubt — §13.1 verbietet nur das Aufsplitten
 **innerhalb** einer M/E-Bank, nicht die Verkettung eigenständiger Nodes
 mit eigenem, im Latenzbudget (§15) zu berücksichtigendem Zusatz-Hop.
 
-**Scope-Unschärfe zu Demo 3 (offen, 2026-07-11):** §7.4 zählt OGraf
-ausdrücklich zur Demo-3-Definition des kleinen Regieplatzes, die
-`UMSETZUNG.md`-Schrittliste (C10–C13) enthält aber keinen OGraf-Schritt
-und der dortige Demo-3-Meilensteintext nennt nur Bildmischer/
-Audiomischer/Player/Live-Quellen. Nicht stillschweigend aufgelöst —
-Optionen: (a) OGraf als eigenen Schritt in den C10–C13-Block aufnehmen
-(z. B. nach C10, weil dessen Keyer sonst nur eine Testfarbfläche zum
-Keyen hat statt eines echten Sende-Grafikelements), oder (b) die
-§7.4-Erwähnung bewusst auf Demo 4 verschieben. Nutzerentscheidung
-aussteht, siehe `docs/decisions.md` 2026-07-11.
+**Scope-Unschärfe zu Demo 3 — aufgelöst:** weder (a) noch (b) wörtlich —
+OGraf wurde als eigene Kapitel-10-Scheibe (K5-Teil-0 Render-Spike,
+K5-Teil-1 Kern-Node, `UMSETZUNG.md`, 2026-07-15/16) direkt im Anschluss
+an C10–C13 umgesetzt, nicht in den C10–C13-Block eingefügt und nicht auf
+Demo 4 verschoben. `wpesrc` (unten entschieden) hat sich bestätigt: 5
+Templates pixelidentisch gerendert, Alpha + MXL `video/v210a` verifiziert;
+alle 46 vorhandenen PIPELINE-CONTROLLER-Templates seither importiert
+(Template-Picker/-Editor, 2026-07-21/22).
 
 **Entschieden** (`docs/decisions.md` 2026-07-10): Render-Technik ist
 GStreamer `wpesrc` (WPE WebKit) — nativ in der Pipeline, Alpha direkt,
@@ -1381,6 +1422,13 @@ Control-Modelle, also keine Kollision.
 Source: [sony/nmos-cpp](https://github.com/sony/nmos-cpp)
 
 ## 12. Nutzer- und Rollenmodell (AuthZ, geplant, ab P2 zusammen mit D3)
+
+**Status (2026-07-28):** Umgesetzt (`UMSETZUNG.md` D3 Teil 2,
+2026-07-14) — lokale Nutzerkonten, Workflow-gescopte Rollenbindungen
+(Tripel Rolle/Wirkungsbereich/Verb), zentrale Durchsetzung im
+Orchestrator-Proxy, Audit-Log, Administration-UI. **Weiterhin offen:**
+AD/LDAP-Anbindung (Punkt 1 unten) — bewusst zurückgestellt, Identität
+hinter einem Interface gekapselt, additiv nachrüstbar.
 
 **Anforderung:** Lokale Benutzerkonten **und** Active-Directory-Anbindung;
 ein Rollenmodell, das Bedienrechte auf Workflows/Regieplätze begrenzt:
@@ -1455,6 +1503,15 @@ v1: kein feldgenaues Parameter-ACL (der Scope endet an Node-Rolle +
 Verb), kein Multi-Tenant-Mandantenmodell.
 
 ## 13. Produktions-Microservices für den Regieplatz (geplant, ab P2/P4)
+
+**Status (2026-07-28):** Alle in diesem Abschnitt festgelegten
+Node-Grenzen sind umgesetzt und produktiv — `omp-video-mixer-me`
+(§13.1, C10, seither mehrfach vertieft: kuratierte Kreuzschiene, PIP als
+eigener Layer, DSK-Gruppierung), `omp-audio-mixer` (§13.2, C11, EQ/
+Kompressor/Limiter/AFV), `omp-player` (§13.3, C12, ein Crate für Video-/
+Jingle-Profil), Live-Quellen (§13.4, seit C21 auch als Playlist-Item),
+Katalog-Kategorien (§13.5). DVE/Keyer-**Tiefe** über die Minimalausbaustufe
+hinaus bleibt wie hier vorgesehen Community-/Weiterentwicklungs-Scope.
 
 **Anforderung (2026-07-11):** Für einen vorführbaren Regieplatz fehlen noch
 konkrete Node-Typen jenseits von Playout (§7) und OGraf (§11.2): Bildmischer
@@ -1629,6 +1686,12 @@ trivial (Katalog-JSON mit `category` befüllen, Palette gruppiert sichtbar).
 **Phase:** P2/P4, zusammen mit den jeweiligen Node-Typen aus 13.1–13.3.
 
 ## 14. Rollen-gescoptes Operator-Console-UI („virtuelles Pult") (geplant, ab P2 zusammen mit §12/D3)
+
+**Status (2026-07-28):** Umgesetzt (`UMSETZUNG.md` C13, seither erweitert
+um ein Kachel-Board für Nutzer mit mehreren Rollen im selben Workflow,
+Kapitel 12 Teil 5) — `GET /api/v1/me/consoles`, Kiosk-Route
+`/console/<workflowId>/<nodeRoleId>`, automatische Weiche Engineering-
+vs. Console-Ansicht nach Rollenauflösung, exakt wie hier spezifiziert.
 
 **Anforderung (2026-07-11):** Ein Bildmeister/Tonmeister an seinem
 Arbeitsplatz soll sein „virtuelles Mischpult" öffnen können, ohne den
@@ -1953,6 +2016,13 @@ Offline-Erkennung als beim Default). **Phase:** P2, zusammen mit §6.1/§6.3
 A–C-Schritte ändern ihren Scope.
 
 ## 18. Remote-Host-Erkennung & Host-Agent (geplant, ab P2; Grundlage von §6.1/§6.2)
+
+**Status (2026-07-28):** §18.1-§18.7 (Bootstrap, Telemetrie,
+Kommandokanal, UI-Sichtbarkeit) sind umgesetzt (`UMSETZUNG.md` D6 Teil
+1/2) — `host-agent`-Modul, Bootstrap-Token-Flow über step-ca, Hosts-Tab
+in der Shell, Remote-Instanz-Start über den Launcher. **§18.8/§18.9
+(Host-Klassen-Mix, AWS-Ausbaustufen) bleiben Konzept** — kein
+Cloud-spezifischer Code existiert bisher.
 
 **Anforderung (2026-07-11):** Was müssen wir bauen, damit unser Server
 (Orchestrator) eine entfernte Maschine (virtuell oder Bare-Metal) erkennt,
@@ -2308,13 +2378,11 @@ wird** (keine neuen Bausteine erfunden, nur sinnvoll sequenziert):
    Active+Standby) + `omp-seamless-switch` als eigener Referenzknoten.
 5. Zuletzt: Determinismus-Härtung + Divergenz-Monitoring.
 
-**Noch nicht final priorisiert** — Nutzer-Entscheidung zwischen (a)
-schneller sichtbarer Cut behalten, (b) obige Reihenfolge als Zielbild
-festschreiben, (c) Zwischenlösung (paralleler, identisch bedienter
-Standby + Downstream-Freeze-Frame) steht noch aus. **Siehe §21.1 für die
-Einordnung in das konsolidierte Redundanz-Gesamtbild und §21.3 für eine
-Empfehlung (Option c als pragmatischer Standardweg) — weiterhin keine
-Entscheidung, nur eine Empfehlung.**
+**Entschieden 2026-07-24, siehe §21.3:** Option (c) — Zwischenlösung
+(paralleler, identisch bedienter Standby + Downstream-Freeze-Frame) als
+Standardweg, Tür zu (b) bleibt offen. Der Rest dieses Abschnitts (die
+Fundament-Reihenfolge unten) bleibt als Bauplan für (b) gültig, falls
+später doch verfolgt.
 
 ### 20.2 Dynamischer, durchsuchbarer Microservice-Katalog
 
@@ -2549,6 +2617,21 @@ neues Rechtekonzept) — Navigationspunkte ohne passende Rolle werden nicht
 gerendert, nicht nur deaktiviert (gleiche „Filterung ist Komfort,
 Durchsetzung bleibt beim Orchestrator"-Regel wie überall in §12/§14).
 
+**Status (2026-07-28): tatsächliche Tab-Leiste (`ui/shell/app-shell.ts`)
+weicht ab, keine stille Divergenz.** Gebaut wurden: Flow Editor,
+Workflows, Hosts, **Instanzen** (§17 Teil 2, hier nicht vorgesehen),
+**Alarme** (§17 Teil 3, hier nicht vorgesehen), **Scheduler** (Nachtrag
+97/98/100, deckt einen Teil von §6.2 Punkt 1 ab, kein eigener
+Kalender-Konflikt-Check), Administration (fasst „Microservice-Katalog"
+und „Rollen/Nutzer" in einem admin-only-Tab zusammen statt zwei
+getrennten Punkten). Der Workflows-Tab selbst **ist** bereits das
+§22.3-Kachel-Grid (Titel, Beschreibung, Suche über Titel/Beschreibung/
+Tags, Topologie-Vorschau statt Video-Thumbnail, s. Status-Notiz zu
+§22.3 Punkt 5). **Nicht gebaut:** ein eigener „Microservice-Katalog"-Tab
+(lebt innerhalb von Administration statt als eigener Navigationspunkt)
+und der Kapazitäts-Kalender (§16). Funktional deckt sich das meiste, die
+konkrete Navigationsstruktur hier ist nicht mehr der Ist-Stand.
+
 ### 22.2 UI-Verwaltung: Design-System (konkretisiert aus §20.3)
 
 - Ein zentraler CSS-Custom-Properties-Token-Satz (Farbe, Typografie,
@@ -2596,10 +2679,10 @@ Bedienoberfläche dafür.
 4. **Titel/Beschreibung/Tags:** additive Textfelder am Workflow-Objekt
    (`title`, `description`, `tags[]`) — sauber in der neuen
    Metadatenebene (§23.3) verortet statt lose angehängt.
-5. **Screenshot-Thumbnail — Mechanik:** Bei „Speichern" (und optional
-   automatisch bei jedem `start`, sobald die Program-Bus-Rolle
-   „media-ready" meldet, §5 Punkt 6) fragt der Designer einen
-   Preview-Frame der Program-Bus-Rolle ab — **Wiederverwendung** des
+5. **Screenshot-Thumbnail — Mechanik (überholt, siehe Status unten):** Bei
+   „Speichern" (und optional automatisch bei jedem `start`, sobald die
+   Program-Bus-Rolle „media-ready" meldet, §5 Punkt 6) fragt der Designer
+   einen Preview-Frame der Program-Bus-Rolle ab — **Wiederverwendung** des
    bereits vorhandenen MJPEG-Preview-Mechanismus (`omp-viewer`, §13-C6,
    seit dem C13-Nachtrag als gemeinsames `preview`-Feature in
    `omp-mediaio`): `GET <previewUrl>` liefert ohnehin einzelne JPEGs,
@@ -2612,6 +2695,13 @@ Bedienoberfläche dafür.
    Kategorie (Punkt 7 unten). Ereignisgetrieben über denselben
    `node.added`/Status-Listener, der bereits §6.2/§6.3/§15 Punkt 6
    bedient — kein Dauer-Polling.
+
+   **Status (2026-07-28): live durch eine Topologie-Grafik ersetzt.**
+   Der MJPEG-Preview-Frame der Program-Bus-Rolle war in der Praxis fast
+   immer schwarz (Rolle lief noch nicht/hatte kein Bild) — behoben
+   durch eine reine Topologie-Grafik (Rollen als Kacheln, Verbindungen
+   als Linien, kein Video-Frame) statt des hier beschriebenen
+   Live-Screenshots (`docs/decisions.md` Nachtrag 97, 2026-07-27).
 6. **Katalog-Übersicht (Kachel-Grid):** neue Landing-Ansicht zeigt
    gespeicherte Workflows als Kacheln mit Thumbnail, Titel, gekürzter
    Beschreibung, Status-Badge (läuft/gestoppt/geplant, aus dem
@@ -2754,6 +2844,10 @@ eigene Pipeline). Dieser Abschnitt deckt den Rest ab, den PIPELINE
 CONTROLLER zusätzlich bietet, plus eine dabei aufgefallene
 Kontroll-Lücke.
 
+**Status (2026-07-28): vollständig umgesetzt** (`UMSETZUNG.md` C16-C22,
+2026-07-22/24) — alle sechs Teilabschnitte unten sind live verifiziert,
+s. jeweils „Umgesetzt und live verifiziert" darin.
+
 ### 24.1 Control-Enforcement-Fix: Automatisation über den Orchestrator-Proxy
 
 **Korrektur (nach Code-Prüfung, war in der ersten Fassung dieses
@@ -2880,6 +2974,11 @@ PCs "Playlist-Array mit Library-Dauer anreichern",
 **Standards-Abdeckung:** keine. **Testbarkeit:** Scan über
 `OMP_MEDIA_DIR` mit 2–3 Testdateien, `ffprobe`-Werte stimmen,
 `setSegments`/Rescan/Cleanup live geprüft. **Phase:** C17.
+
+**Umgesetzt und live verifiziert** (2026-07-22, `UMSETZUNG.md`
+Status-Checkliste C17): `omp-media-library` als reiner Control-Plane-Node
+wie hier spezifiziert, `scan()`/`rescan()`/`cleanup()`/`setSegments()`
+gegen echte Testdateien mit `ffprobe`-Metadaten verifiziert.
 
 ### 24.3 Cart-/Interrupt-Assets
 
