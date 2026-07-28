@@ -158,6 +158,12 @@ type EventPublisher interface {
 // `resources ResourcePrecheck`.
 type AuthzBinder interface {
 	Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
+	// LoadByWorkflow/DeleteByWorkflow (Nutzerwunsch 2026-07-28): Export
+	// kann Workflow-gescopte Bindungen optional mitexportieren (s.
+	// Export-Doku), Delete räumt sie beim endgültigen Löschen eines
+	// Workflows verwaisungsfrei mit auf.
+	LoadByWorkflow(workflowID string) ([]authz.Binding, error)
+	DeleteByWorkflow(workflowID string) error
 }
 
 type workflowStore interface {
@@ -360,6 +366,18 @@ func (s *Service) Delete(id string) error {
 	if err := s.store.Delete(id); err != nil {
 		return err
 	}
+	// Nutzerwunsch 2026-07-28: ein endgültig gelöschter Workflow darf
+	// keine verwaisten Rollenbindungen zurücklassen, die auf eine nicht
+	// mehr existierende workflow_id zeigen (sonst zeigt die
+	// Administration-Ansicht dauerhaft Bindungen für einen Workflow, den
+	// es gar nicht mehr gibt). Best effort wie die Service-Prinzipal-
+	// Bindung bei Start() — ein Fehler hier bricht das bereits
+	// erfolgreiche Löschen des Workflows selbst nicht mehr ab.
+	if s.authz != nil {
+		if err := s.authz.DeleteByWorkflow(id); err != nil {
+			slog.Warn("workflows: failed to clean up role bindings after delete", "workflow", id, "error", err)
+		}
+	}
 	// S2: gleicher Grund wie bei Create() — ein extern gelöschter
 	// Workflow soll auch in anderen offenen Tabs sofort verschwinden.
 	// Der Payload trägt den letzten bekannten Stand vor dem Löschen; die
@@ -379,13 +397,27 @@ const exportVersion = 1
 // Export liefert den Datei-Inhalt für GET /api/v1/workflows/{id}/export
 // (Kapitel 12 Teil 3, §12.3d) — in jedem Zustand abrufbar (auch
 // laufend: der Export beschreibt die Definition, nicht den
-// Laufzeitzustand).
-func (s *Service) Export(id string) (ExportedWorkflow, error) {
+// Laufzeitzustand). includeBindings (Nutzerwunsch 2026-07-28, opt-in,
+// Default false über den HTTP-Handler) hängt zusätzlich die aktuellen
+// Workflow-gescopten Rollenbindungen an — bewusst nicht Teil des
+// portablen Standard-Exports (s. ExportedWorkflow.Bindings-Doku), nur
+// für den engeren Delete→Import-auf-demselben-System-Fall.
+func (s *Service) Export(id string, includeBindings bool) (ExportedWorkflow, error) {
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return ExportedWorkflow{}, err
 	}
-	return ExportedWorkflow{Version: exportVersion, Name: wf.Name, Definition: wf.Definition}, nil
+	exported := ExportedWorkflow{Version: exportVersion, Name: wf.Name, Definition: wf.Definition}
+	if includeBindings && s.authz != nil {
+		bindings, err := s.authz.LoadByWorkflow(id)
+		if err != nil {
+			return ExportedWorkflow{}, err
+		}
+		for _, b := range bindings {
+			exported.Bindings = append(exported.Bindings, ExportedBinding{Subject: b.Subject, Role: b.NodeID, Verb: b.Verb})
+		}
+	}
+	return exported, nil
 }
 
 // Import legt aus einer zuvor per Export() erzeugten Datei einen neuen,
@@ -412,7 +444,24 @@ func (s *Service) Import(exported ExportedWorkflow) (Workflow, error) {
 	}
 	name := uniqueWorkflowName(exported.Name, existing)
 
-	return s.Create(name, exported.Definition, nil)
+	wf, err := s.Create(name, exported.Definition, nil)
+	if err != nil {
+		return Workflow{}, err
+	}
+
+	// Nutzerwunsch 2026-07-28: mitexportierte Bindungen (s. Export)
+	// gegen die neue Workflow-ID wiederherstellen — best effort, ein
+	// einzelner Fehler (z. B. ein Subject, das inzwischen gelöscht
+	// wurde) bricht den bereits erfolgreichen Import nicht ab.
+	if s.authz != nil {
+		for _, b := range exported.Bindings {
+			if _, err := s.authz.Create(b.Subject, wf.ID, b.Role, b.Verb); err != nil {
+				slog.Warn("workflows: failed to restore role binding on import", "workflow", wf.ID, "subject", b.Subject, "role", b.Role, "error", err)
+			}
+		}
+	}
+
+	return wf, nil
 }
 
 func uniqueWorkflowName(name string, existing []Workflow) string {
@@ -596,7 +645,24 @@ func (s *Service) runStart(wf Workflow) {
 			placementReason = result.Reason
 		}
 
-		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, extraEnv)
+		// Nutzerwunsch 2026-07-28: role.Format überschreibt (pro Rolle,
+		// nicht workflow-weit) OMP_WIDTH/OMP_HEIGHT aus der Programm-
+		// Auflösung oben plus neu OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN —
+		// eigene Map statt Mutation von extraEnv, damit die nächste
+		// Rolle in dieser Schleife nicht versehentlich das Format der
+		// vorigen erbt.
+		roleEnv := extraEnv
+		if roleFormatEnv := formatExtraEnv(role.Format); roleFormatEnv != nil {
+			roleEnv = make(map[string]string, len(extraEnv)+len(roleFormatEnv))
+			for k, v := range extraEnv {
+				roleEnv[k] = v
+			}
+			for k, v := range roleFormatEnv {
+				roleEnv[k] = v
+			}
+		}
+
+		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return
@@ -1101,6 +1167,11 @@ func validate(def Definition) error {
 		}
 		if _, ok := nodeTypeByRole[r.Name]; ok {
 			return fmt.Errorf("%w: duplicate role name %q", ErrValidation, r.Name)
+		}
+		if r.Format != "" {
+			if _, ok := standardFormats[r.Format]; !ok {
+				return fmt.Errorf("%w: role %q references unknown format %q (not one of %v)", ErrValidation, r.Name, r.Format, StandardFormatNames())
+			}
 		}
 		nodeTypeByRole[r.Name] = r.NodeType
 	}

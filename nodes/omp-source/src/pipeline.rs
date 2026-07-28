@@ -61,6 +61,12 @@ pub struct Config {
     pub initial_pattern: String,
     pub width: u32,
     pub height: u32,
+    /// Nutzerwunsch 2026-07-28: einstellbares Standard-Format je
+    /// Source-Instanz (nicht mehr nur Breite/Höhe) — dieselbe
+    /// Env-Var-Konvention wie `width`/`height` (0/fehlend fällt auf
+    /// `FRAMERATE_NUMERATOR`/`FRAMERATE_DENOMINATOR` zurück), s. main.rs.
+    pub framerate_numerator: u32,
+    pub framerate_denominator: u32,
 }
 
 pub enum Event {
@@ -121,8 +127,8 @@ impl Pipeline {
                     .field(
                         "framerate",
                         gst::Fraction::new(
-                            FRAMERATE_NUMERATOR as i32,
-                            FRAMERATE_DENOMINATOR as i32,
+                            config.framerate_numerator as i32,
+                            config.framerate_denominator as i32,
                         ),
                     )
                     .build(),
@@ -185,8 +191,8 @@ impl Pipeline {
             &config.label,
             config.width,
             config.height,
-            FRAMERATE_NUMERATOR,
-            FRAMERATE_DENOMINATOR,
+            config.framerate_numerator,
+            config.framerate_denominator,
         )
         .map_err(PipelineError)?;
         mxl_output.set_active(true);
@@ -209,8 +215,8 @@ impl Pipeline {
                 &format!("{} Lowres", config.label),
                 LOWRES_WIDTH,
                 LOWRES_HEIGHT,
-                FRAMERATE_NUMERATOR,
-                FRAMERATE_DENOMINATOR,
+                config.framerate_numerator,
+                config.framerate_denominator,
             )
             .map_err(PipelineError)?,
         );

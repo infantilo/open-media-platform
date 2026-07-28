@@ -397,7 +397,7 @@ func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool)
 	return f.pauseErr
 }
 
-func (f fakeWorkflowService) Export(id string) (workflows.ExportedWorkflow, error) {
+func (f fakeWorkflowService) Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error) {
 	return f.exported, f.exportErr
 }
 

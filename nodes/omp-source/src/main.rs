@@ -176,6 +176,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let height: u32 = env_or("OMP_HEIGHT", "")
         .parse()
         .unwrap_or(pipeline::DEFAULT_HEIGHT);
+    // Nutzerwunsch 2026-07-28 (einstellbares Standard-Format je Source-
+    // Instanz statt nur Breite/Höhe): OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN,
+    // gesetzt vom Orchestrator aus einer Rollen-Formatwahl
+    // (orchestrator/internal/workflows/service.go runStart, formats.go) —
+    // gleiche "fehlt/ungültig fällt auf Node-Default zurück"-Konvention
+    // wie width/height.
+    let framerate_numerator: u32 = env_or("OMP_FRAMERATE_NUM", "")
+        .parse()
+        .unwrap_or(pipeline::FRAMERATE_NUMERATOR);
+    let framerate_denominator: u32 = env_or("OMP_FRAMERATE_DEN", "")
+        .parse()
+        .unwrap_or(pipeline::FRAMERATE_DENOMINATOR);
     // Für GET /params/pattern nachgehalten (Contract-Check UMSETZUNG.md
     // C9 fand den Bug: `set()` änderte bisher nur die Pipeline-Property,
     // `get()` kannte "pattern" gar nicht — PATCH schien zu funktionieren,
@@ -208,6 +220,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         initial_pattern,
         width,
         height,
+        framerate_numerator,
+        framerate_denominator,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_thread =
@@ -261,8 +275,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         id: Some(flow_id),
                         frame_width: width,
                         frame_height: height,
-                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                        grain_rate_numerator: framerate_numerator,
+                        grain_rate_denominator: framerate_denominator,
                     }),
                     tags: HashMap::from([(
                         "urn:x-nmos:tag:grouphint/v1.0".to_string(),
@@ -276,8 +290,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         id: Some(lowres_flow_id),
                         frame_width: pipeline::LOWRES_WIDTH,
                         frame_height: pipeline::LOWRES_HEIGHT,
-                        grain_rate_numerator: pipeline::FRAMERATE_NUMERATOR,
-                        grain_rate_denominator: pipeline::FRAMERATE_DENOMINATOR,
+                        grain_rate_numerator: framerate_numerator,
+                        grain_rate_denominator: framerate_denominator,
                     }),
                     label: Some(lowres_sender_label),
                     tags: HashMap::from([(

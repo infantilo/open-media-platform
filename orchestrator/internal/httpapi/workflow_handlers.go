@@ -177,10 +177,15 @@ func handlePauseWorkflow(svc WorkflowService) http.HandlerFunc {
 }
 
 // handleExportWorkflow liefert GET /api/v1/workflows/{id}/export
-// (Kapitel 12 Teil 3, §12.3d) — in jedem Zustand abrufbar.
+// (Kapitel 12 Teil 3, §12.3d) — in jedem Zustand abrufbar. Optionales
+// `?includeBindings=true` (Nutzerwunsch 2026-07-28) hängt die aktuellen
+// Workflow-gescopten Rollenbindungen an (s. workflows.ExportedWorkflow.
+// Bindings-Doku) — Default `false`, damit der portable Standard-Export
+// unverändert ohne Nutzerdaten bleibt.
 func handleExportWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		exported, err := svc.Export(r.PathValue("id"))
+		includeBindings := r.URL.Query().Get("includeBindings") == "true"
+		exported, err := svc.Export(r.PathValue("id"), includeBindings)
 		if err != nil {
 			writeWorkflowError(w, err)
 			return

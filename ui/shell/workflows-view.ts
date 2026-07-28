@@ -49,7 +49,17 @@ interface Role {
   hostId?: string;
   affinityGroup?: string;
   redundancyGroup?: string;
+  format?: string;
 }
+
+// Standard-Format-Presets je Rolle (Nutzerwunsch 2026-07-28: "test
+// sources brauchen einstellbares Format, Standardformate vorgeben,
+// 1080p50 im Endausbau am wichtigsten, jetzt minimalstes Format wegen
+// schwacher CPU") — muss exakt die Namen aus
+// orchestrator/internal/workflows/formats.go spiegeln (einzige Quelle
+// der Wahrheit bleibt dort, validate() lehnt jeden anderen Namen ab).
+// Leer = Node-eigener Default, unverändertes Verhalten.
+const ROLE_FORMATS = ["480p25", "576p25", "720p50", "1080p25", "1080p50"];
 
 // Kapitel 12 Teil 1 (docs/END-GOAL-FEATURES.md §12.3a): fromSender/
 // toReceiver sind optionale IS-04-Port-Labels — leer = Kompatibilitäts-
@@ -296,6 +306,7 @@ class WorkflowsView extends HTMLElement {
           hostId: r.hostId || undefined,
           affinityGroup: r.affinityGroup || undefined,
           redundancyGroup: r.redundancyGroup || undefined,
+          format: r.format || undefined,
         })),
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
         settings: Object.keys(settings).length > 0 ? settings : undefined,
@@ -1152,6 +1163,29 @@ class WorkflowsView extends HTMLElement {
         role.redundancyGroup = redundancyInput.value || undefined;
       });
 
+      // format (Nutzerwunsch 2026-07-28): pro Rolle wählbares Standard-
+      // Auflösung+Framerate-Preset — bewusst pro Rolle statt workflow-
+      // weit wie die bestehende Programm-Auflösung (Kapitel 15, s.
+      // Settings-Formular weiter unten): unterschiedliche Quellen im
+      // selben Workflow können unterschiedliche native Formate brauchen.
+      const formatSelect = document.createElement("select");
+      formatSelect.style.cssText = "width:15%;";
+      formatSelect.title = "Standard-Format dieser Rolle — leer lässt den Node bei seinem eigenen Default.";
+      const formatDefaultOpt = document.createElement("option");
+      formatDefaultOpt.value = "";
+      formatDefaultOpt.textContent = "Format: Node-Standard";
+      formatSelect.appendChild(formatDefaultOpt);
+      for (const name of ROLE_FORMATS) {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        if (name === role.format) opt.selected = true;
+        formatSelect.appendChild(opt);
+      }
+      formatSelect.addEventListener("change", () => {
+        role.format = formatSelect.value || undefined;
+      });
+
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "×";
       removeBtn.title = "Rolle entfernen";
@@ -1161,7 +1195,7 @@ class WorkflowsView extends HTMLElement {
         this.#render();
       });
 
-      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, removeBtn);
+      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, formatSelect, removeBtn);
       form.appendChild(roleRow);
     });
 

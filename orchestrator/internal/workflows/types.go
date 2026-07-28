@@ -14,7 +14,11 @@
 // checkResources).
 package workflows
 
-import "time"
+import (
+	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+)
 
 // Status-Werte eines Workflows (Lifecycle, §6.2; paused/pausing:
 // Kapitel 12 Teil 3, docs/END-GOAL-FEATURES.md §12.3c). "paused" hat
@@ -62,6 +66,17 @@ type Role struct {
 	HostID          string `json:"hostId,omitempty"`
 	AffinityGroup   string `json:"affinityGroup,omitempty"`
 	RedundancyGroup string `json:"redundancyGroup,omitempty"`
+	// Format (Nutzerwunsch 2026-07-28): benanntes Standard-Auflösung+
+	// Framerate-Preset für diese Rolle (s. formats.go,
+	// StandardFormatNames) — leer = Node-eigener Default (unverändertes
+	// Verhalten). Bewusst pro Rolle statt workflow-weit wie Settings.
+	// ProgramWidth/-Height (Kapitel 15): verschiedene Quellen im selben
+	// Workflow können unterschiedliche native Formate brauchen, ein
+	// Scaler-/Framerate-Converter-Node gleicht Unterschiede bei Bedarf
+	// aus. Wirkt nur beim Start (kein Live-Wechsel — ein Auflösungs-
+	// wechsel braucht einen MXL-Flow-Neuaufbau, gleiche Einschränkung
+	// wie die bestehende Programm-Auflösung).
+	Format string `json:"format,omitempty"`
 }
 
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht
@@ -228,6 +243,26 @@ type ExportedWorkflow struct {
 	Version    int        `json:"version"`
 	Name       string     `json:"name"`
 	Definition Definition `json:"definition"`
+	// Bindings (Nutzerwunsch 2026-07-28) — bewusst NICHT Teil des
+	// Standard-Exports (leer/omitted, es sei denn `includeBindings=true`
+	// wird explizit angefragt, s. Service.Export): der obige Grundsatz
+	// "ohne Nutzerdaten mitzuschleppen" gilt für den portablen
+	// Standardfall (ein Regieplatz wandert zwischen Systemen mit
+	// potenziell anderen Nutzerkonten) unverändert. Dieses Feld deckt
+	// den engeren, selben-System-Fall ab: ein endgültig gelöschter
+	// Workflow (Service.Delete räumt seine Bindungen weg) lässt sich per
+	// Export→Delete→Import auch mit denselben Berechtigungen
+	// wiederherstellen, wenn der Exportierende das ausdrücklich anfordert.
+	Bindings []ExportedBinding `json:"bindings,omitempty"`
+}
+
+// ExportedBinding ist eine Workflow-gescopte Rollenbindung (authz.Binding
+// ohne ID/WorkflowID, die sich beim Import ohnehin ändern) — Nutzername,
+// Rollenname (oder authz.AnyNode für "der ganze Workflow") und Verb.
+type ExportedBinding struct {
+	Subject string     `json:"subject"`
+	Role    string     `json:"role"`
+	Verb    authz.Verb `json:"verb"`
 }
 
 // Workflow ist der Body von GET /api/v1/workflows (Liste/Einzelabruf)

@@ -64,6 +64,41 @@ func (s *Store) Delete(id string) error {
 	return err
 }
 
+// LoadByWorkflow liefert alle Workflow-gescopten Bindungen für workflowID
+// (Nutzerwunsch 2026-07-28) — genutzt von workflows.Service.Export, wenn
+// Bindungen mitexportiert werden sollen (opt-in, s. dortige Doku).
+func (s *Store) LoadByWorkflow(workflowID string) ([]Binding, error) {
+	rows, err := s.db.Query(
+		`SELECT id, subject, workflow_id, node_id, verb FROM role_bindings WHERE workflow_id = $1 ORDER BY subject, node_id`,
+		workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var bindings []Binding
+	for rows.Next() {
+		var b Binding
+		if err := rows.Scan(&b.ID, &b.Subject, &b.WorkflowID, &b.NodeID, &b.Verb); err != nil {
+			return nil, err
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings, rows.Err()
+}
+
+// DeleteByWorkflow entfernt alle Workflow-gescopten Bindungen für
+// workflowID (Nutzerwunsch 2026-07-28: ein endgültig gelöschter Workflow
+// darf keine verwaisten Bindungen zurücklassen, die auf eine nicht mehr
+// existierende workflow_id zeigen) — aufgerufen von
+// workflows.Service.Delete, bevor/nachdem der Workflow selbst gelöscht
+// wird. Kein Fehler, wenn keine Bindungen existieren (idempotent, s.
+// Delete oben).
+func (s *Store) DeleteByWorkflow(workflowID string) error {
+	_, err := s.db.Exec(`DELETE FROM role_bindings WHERE workflow_id = $1`, workflowID)
+	return err
+}
+
 // Check prüft, ob subject mindestens minVerb auf nodeID hat (direkte
 // Bindung oder eine "*"-Bindung) — die pro-Request genutzte Prüfung der
 // Middleware (internal/httpapi), als eigene, gescopte Query statt über

@@ -126,7 +126,7 @@ type WorkflowService interface {
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
 	Pause(ctx context.Context, id string, confirm bool) error
-	Export(id string) (workflows.ExportedWorkflow, error)
+	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
 	// FindRoleForNode (Kapitel 12 Teil 4) — s. WorkflowRoleFinder in
 	// auth_middleware.go, dieselbe Methode, hier Teil der ohnehin
@@ -274,7 +274,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/start", g.requireVerbGlobal(authz.VerbAdmin, handleStartWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
-	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireAuth(handleExportWorkflow(workflowSvc)))
+	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch
+	// 2026-07-28): der optionale ?includeBindings=true-Parameter (s.
+	// handleExportWorkflow) hängt Nutzernamen+Rechte anderer Nutzer an —
+	// dieselbe Schwelle wie Import, das ebenfalls VerbConfigure verlangt.
+	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireVerbGlobal(authz.VerbConfigure, handleExportWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))

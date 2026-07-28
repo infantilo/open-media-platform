@@ -296,6 +296,34 @@ func (f *fakeAuthzBinder) snapshot() []authz.Binding {
 	return out
 }
 
+// LoadByWorkflow/DeleteByWorkflow (Nutzerwunsch 2026-07-28) — minimale,
+// aber echte In-Memory-Semantik statt No-Ops, damit Export/Delete-Tests
+// tatsächlich etwas prüfen können.
+func (f *fakeAuthzBinder) LoadByWorkflow(workflowID string) ([]authz.Binding, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []authz.Binding
+	for _, b := range f.created {
+		if b.WorkflowID == workflowID {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeAuthzBinder) DeleteByWorkflow(workflowID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.created[:0]
+	for _, b := range f.created {
+		if b.WorkflowID != workflowID {
+			kept = append(kept, b)
+		}
+	}
+	f.created = kept
+	return nil
+}
+
 // newTestService baut einen Service direkt per Struct-Literal statt über
 // NewService (das eine konkrete *Store, keine Fakes, erwartet) — gleiches
 // Muster wie internal/snapshots.newTestService.
@@ -934,6 +962,73 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 	}
 }
 
+// TestCreateRejectsUnknownFormat deckt den Nutzerwunsch 2026-07-28 ab
+// (einstellbares Standard-Format je Rolle): ein Tippfehler/unbekannter
+// Preset-Name wird sofort bei Create() abgelehnt, nicht erst beim Start
+// stillschweigend ignoriert.
+func TestCreateRejectsUnknownFormat(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source", Format: "4k-does-not-exist"}}}
+	if _, err := svc.Create("regie", def, nil); !errors.Is(err, ErrValidation) {
+		t.Fatalf("Create() error = %v, want ErrValidation", err)
+	}
+}
+
+// TestStartAppliesPerRoleFormatIndependently deckt den Nutzerwunsch
+// 2026-07-28 ab: zwei Rollen im selben Workflow mit unterschiedlichem
+// Role.Format bekommen unterschiedliche OMP_WIDTH/OMP_HEIGHT/
+// OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN — die Rollen dürfen sich nicht
+// gegenseitig beeinflussen (roleEnv ist eine eigene Map pro Rolle, s.
+// runStart-Doku), und eine dritte Rolle ohne Format bleibt unverändert
+// (Node-eigener Default, kein OMP_WIDTH gesetzt).
+func TestStartAppliesPerRoleFormatIndependently(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 200 * time.Millisecond
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{Roles: []Role{
+		{Name: "cheap", NodeType: "omp-source", Format: "480p25"},
+		{Name: "flagship", NodeType: "omp-viewer", Format: "1080p50"},
+	}}
+	wf, err := svc.Create("mixed-formats", def, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		_, ok1 := l.lastExtraEnv["omp-source"]
+		_, ok2 := l.lastExtraEnv["omp-viewer"]
+		l.mu.Unlock()
+		if ok1 && ok2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	l.mu.Lock()
+	cheapEnv := l.lastExtraEnv["omp-source"]
+	flagshipEnv := l.lastExtraEnv["omp-viewer"]
+	l.mu.Unlock()
+
+	if cheapEnv["OMP_WIDTH"] != "854" || cheapEnv["OMP_HEIGHT"] != "480" || cheapEnv["OMP_FRAMERATE_NUM"] != "25" {
+		t.Fatalf("cheap role extraEnv = %+v, want 480p25", cheapEnv)
+	}
+	if flagshipEnv["OMP_WIDTH"] != "1920" || flagshipEnv["OMP_HEIGHT"] != "1080" || flagshipEnv["OMP_FRAMERATE_NUM"] != "50" {
+		t.Fatalf("flagship role extraEnv = %+v, want 1080p50", flagshipEnv)
+	}
+}
+
 // TestInstanceRestartedRewiresAffectedRole ist die workflows-Seite von
 // K7-Teil-1 (docs/END-GOAL-FEATURES.md §7.3a/§7.6, launcher.
 // RestartObserver): nachdem eine Rollen-Instanz vom Launcher automatisch
@@ -1468,7 +1563,7 @@ func TestExportRoundTripsDefinition(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	exported, err := svc.Export(wf.ID)
+	exported, err := svc.Export(wf.ID, false)
 	if err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
@@ -1482,8 +1577,114 @@ func TestExportRoundTripsDefinition(t *testing.T) {
 
 func TestExportUnknownWorkflowReturnsNotFound(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	if _, err := svc.Export("does-not-exist"); !errors.Is(err, ErrNotFound) {
+	if _, err := svc.Export("does-not-exist", false); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Export() error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestExportOmitsBindingsByDefault deckt den in ExportedWorkflow.Bindings
+// dokumentierten Grundsatz ab ("ohne Nutzerdaten mitzuschleppen"): ohne
+// includeBindings=true bleibt das Feld leer, selbst wenn Bindungen für
+// den Workflow existieren.
+func TestExportOmitsBindingsByDefault(t *testing.T) {
+	az := &fakeAuthzBinder{}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{}, authz: az}
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := az.Create("bildmeister", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatalf("az.Create() error = %v", err)
+	}
+
+	exported, err := svc.Export(wf.ID, false)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if len(exported.Bindings) != 0 {
+		t.Fatalf("Export(includeBindings=false).Bindings = %+v, want empty", exported.Bindings)
+	}
+
+	exportedWithBindings, err := svc.Export(wf.ID, true)
+	if err != nil {
+		t.Fatalf("Export(includeBindings=true) error = %v", err)
+	}
+	if len(exportedWithBindings.Bindings) != 1 || exportedWithBindings.Bindings[0].Subject != "bildmeister" || exportedWithBindings.Bindings[0].Role != "mixer" {
+		t.Fatalf("Export(includeBindings=true).Bindings = %+v, want one bildmeister/mixer binding", exportedWithBindings.Bindings)
+	}
+}
+
+// TestDeleteCascadesRoleBindings deckt den Nutzerwunsch 2026-07-28 ab:
+// ein endgültig gelöschter Workflow darf keine verwaisten Bindungen
+// zurücklassen.
+func TestDeleteCascadesRoleBindings(t *testing.T) {
+	az := &fakeAuthzBinder{}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{}, authz: az}
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := az.Create("bildmeister", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatalf("az.Create() error = %v", err)
+	}
+	if _, err := az.Create("other-user", "some-other-workflow", authz.AnyNode, authz.VerbAdmin); err != nil {
+		t.Fatalf("az.Create() error = %v", err)
+	}
+
+	if err := svc.Delete(wf.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	remaining, err := az.LoadByWorkflow(wf.ID)
+	if err != nil {
+		t.Fatalf("LoadByWorkflow() error = %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("LoadByWorkflow(%s) after Delete = %+v, want empty", wf.ID, remaining)
+	}
+	if len(az.snapshot()) != 1 {
+		t.Fatalf("unrelated bindings for other workflows = %+v, want exactly the one untouched binding", az.snapshot())
+	}
+}
+
+// TestImportRestoresBindingsFromExport deckt den Nutzerwunsch
+// 2026-07-28 ab: Export(includeBindings=true) → Import stellt dieselben
+// Bindungen gegen die neue Workflow-ID wieder her.
+func TestImportRestoresBindingsFromExport(t *testing.T) {
+	az := &fakeAuthzBinder{}
+	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-video-mixer-me"}}}
+	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: l, authz: az}
+
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := az.Create("bildmeister", wf.ID, "mixer", authz.VerbOperate); err != nil {
+		t.Fatalf("az.Create() error = %v", err)
+	}
+	exported, err := svc.Export(wf.ID, true)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+
+	if err := svc.Delete(wf.ID); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+
+	reimported, err := svc.Import(exported)
+	if err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	if reimported.ID == wf.ID {
+		t.Fatalf("Import() reused the deleted workflow's id, want a fresh one")
+	}
+
+	restored, err := az.LoadByWorkflow(reimported.ID)
+	if err != nil {
+		t.Fatalf("LoadByWorkflow() error = %v", err)
+	}
+	if len(restored) != 1 || restored[0].Subject != "bildmeister" || restored[0].NodeID != "mixer" || restored[0].Verb != authz.VerbOperate {
+		t.Fatalf("LoadByWorkflow(%s) after Import = %+v, want the restored bildmeister/mixer binding", reimported.ID, restored)
 	}
 }
 
