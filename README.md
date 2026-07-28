@@ -102,10 +102,19 @@ stoppen, über einen Host-Agent mit host-lokalem Katalog als
 Sicherheitsgrenze), automatischer Prozess-Neustart mit
 Crash-Loop-Bremse, ein Metrics-Endpunkt, sowie eine Betriebsansicht mit
 laufenden Instanzen (CPU/RAM je Prozess), Host-Ressourcenverlauf und
-gesammelten Alarmen.
+gesammelten Alarmen. Dazu inzwischen: ein Scheduler-Tab für
+zeitgesteuertes Start/Stop ganzer Workflows (Tag-/Wochen-/
+Monatsansicht, per Maus verschieb-/größenveränderbare Zeitpläne), eine
+Ressourcen-Vorschau (typische CPU-/RAM-Last je Node-Typ direkt im
+Katalog, aus echter Messhistorie), ein GUI-Import-Weg für
+containerisierte Fremd-Microservices (Podman-Images, Admission-Check,
+mehrere Versionen desselben Typs parallel) und eine erste,
+ratschlagende Placement-Engine (Überlast-Alarm + Zielhost-Vorschlag,
+berücksichtigt bereits geplante Zeitpläne anderer Workflows).
 
-Offen: automatische Placement-Engine (Ressourcen-bewusste Zielhost-
-Wahl), RDMA-Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
+Offen: automatische (statt nur ratschlagende) Placement-Entscheidungen,
+I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-
+Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
 Hardware-Beschaffung), NDI-/Dante-Gateways, PTP-Zeitbasis für die
 2110-Pfade.
 
