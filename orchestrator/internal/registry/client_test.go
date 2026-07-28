@@ -1,6 +1,11 @@
 package registry
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func strPtr(s string) *string { return &s }
 
@@ -94,5 +99,96 @@ func TestBuildSnapshotIncludesAPIBaseURL(t *testing.T) {
 
 	if views[0].APIBaseURL != "http://127.0.0.1:9001" {
 		t.Errorf("APIBaseURL = %q, want http://127.0.0.1:9001", views[0].APIBaseURL)
+	}
+}
+
+// TestFetchSnapshotFillsDeviceMissingFromBulkSendersList deckt den
+// Nutzerfund 2026-07-28 ab (Regieplatz-1-Start scheiterte mit "role
+// omp-video-mixer-me has no sender", obwohl der Sender real registriert
+// war): nmos-cpp's ungefilterte Bulk-Liste `GET .../senders` kann eine
+// real vorhandene Ressource dauerhaft auslassen, während
+// `GET .../senders?device_id=X` sie korrekt liefert. FetchSnapshot muss
+// für ein Device, das im Bulk-Ergebnis mit null Sendern/Empfängern
+// dasteht, die gezielte Device-gescopte Nachfrage stellen und deren
+// Ergebnis übernehmen.
+func TestFetchSnapshotFillsDeviceMissingFromBulkSendersList(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/x-nmos/query/v1.3/nodes":
+			_, _ = w.Write([]byte(`[{"id":"node-1","label":"Mixer"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/devices":
+			_, _ = w.Write([]byte(`[{"id":"dev-1","label":"Mixer Device","node_id":"node-1"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "":
+			// Bulk-Liste lässt den Sender dieses Device bewusst aus (der
+			// live beobachtete Bug) — leer statt des echten Eintrags.
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1":
+			_, _ = w.Write([]byte(`[{"id":"send-1","label":"PGM","device_id":"dev-1","flow_id":"flow-1"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/flows":
+			_, _ = w.Write([]byte(`[{"id":"flow-1","format":"urn:x-nmos:format:video"}]`))
+		default:
+			t.Errorf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	views, err := client.FetchSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSnapshot() error = %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("len(views) = %d, want 1", len(views))
+	}
+	senders := views[0].Senders
+	if len(senders) != 1 || senders[0].ID != "send-1" || senders[0].Format != "urn:x-nmos:format:video" {
+		t.Fatalf("Senders = %+v, want the device-scoped fallback sender with resolved flow format", senders)
+	}
+}
+
+// TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult stellt sicher,
+// dass die Device-gescopte Zusatzabfrage NUR für tatsächlich leer
+// erscheinende Devices läuft, nicht pauschal für jedes — sonst würde
+// jeder Poll-Zyklus unnötige Zusatzlast für jedes Control-Plane-Device
+// ohne Medien-Ressourcen erzeugen.
+func TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult(t *testing.T) {
+	scopedQueryCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/x-nmos/query/v1.3/nodes":
+			_, _ = w.Write([]byte(`[{"id":"node-1","label":"Source"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/devices":
+			_, _ = w.Write([]byte(`[{"id":"dev-1","label":"Source Device","node_id":"node-1"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "":
+			_, _ = w.Write([]byte(`[{"id":"send-1","label":"Sender 1","device_id":"dev-1"}]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1":
+			scopedQueryCount++
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/x-nmos/query/v1.3/flows":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			t.Errorf("unexpected request: %s?%s", r.URL.Path, r.URL.RawQuery)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(server.URL, nil)
+	views, err := client.FetchSnapshot(context.Background())
+	if err != nil {
+		t.Fatalf("FetchSnapshot() error = %v", err)
+	}
+	if len(views[0].Senders) != 1 {
+		t.Fatalf("Senders = %+v, want the one bulk sender untouched", views[0].Senders)
+	}
+	if scopedQueryCount != 0 {
+		t.Errorf("device-scoped sender query ran %d times, want 0 (device already had a bulk sender)", scopedQueryCount)
 	}
 }

@@ -13769,3 +13769,56 @@ Nachtrag-109-Test) grün.
 **Betroffene Dateien:** `nodes/omp-scaler/` (neu), `nodes/Cargo.toml`,
 `deploy/catalog.json`, `orchestrator/internal/workflows/formats.go`,
 `orchestrator/internal/workflows/service_test.go`, `docs/HANDBUCH.md`.
+
+---
+
+## 2026-07-28 (Nachtrag 110) — "Regieplatz 1" kann nicht starten: der am 2026-07-24 dokumentierte, bis dahin ungelöste NMOS-Bulk-Listen-Bug tatsächlich behoben
+
+**Nutzermeldung:** "Regieplatz 1 kann nicht starten (bekomme Fehler)".
+Fehler: `connection omp-video-mixer-me -> omp-viewer: role
+omp-video-mixer-me has no sender`.
+
+**Root Cause bestätigt (dieselbe Klasse wie 2026-07-24, s.
+[[project_nmos_registry_senders_list_bug]]-Memory, dort als ungelöst
+vermerkt):** die ungefilterte Bulk-Liste `GET /x-nmos/query/v1.3/senders`
+der nmos-cpp-Registry ließ den Mixer-PGM-Sender **dauerhaft, reproduzierbar
+über mehrere aufeinanderfolgende Poll-Zyklen** aus (nicht nur kurz
+transient) — `GET .../senders?device_id=<mixer-device-id>` lieferte
+denselben Sender dagegen zuverlässig korrekt. Live verifiziert: dreimal
+hintereinander die Bulk-Liste abgefragt, der Sender fehlte jedes Mal
+identisch (10 statt 11 Einträge), obwohl er reell registriert war.
+Strukturell identisch zu allen anderen (sichtbaren) Sendern — kein
+Validierungs-/Content-Unterschied gefunden, vermutlich ein internes
+Indizierungsproblem der nmos-cpp-Registry selbst, nicht in OMPs Code
+reparierbar.
+
+**Tatsächlicher Fix (kein reiner Workaround-Hinweis wie am
+2026-07-24):** `registry.Client.FetchSnapshot` prüft nach dem
+normalen Bulk-Merge jedes Device auf null Sender UND null Empfänger —
+für genau diesen Verdachtsfall (nicht pauschal für jedes Device, das
+würde unnötige Zusatzlast für echte Control-Plane-Devices ohne jede
+Medien-Ressource erzeugen) eine gezielte Device-gescopte Nachfrage
+(`?device_id=X`) für Sender und Empfänger, deren Ergebnis in die
+Snapshot-Ansicht übernommen wird. Selbstheilend: sobald die Bulk-Liste
+den Sender doch wieder zeigt, entfällt die Zusatzabfrage für dieses
+Device automatisch (die "bereits vorhanden"-Prüfung greift dann).
+
+**Verifiziert (echte Registry, kein Mock):** vor dem Fix zeigte
+`GET /api/v1/nodes` für den Mixer `"senders": []`; nach Orchestrator-
+Neustart mit dem Fix sofort `"senders": [{"id":"...","label":"PGM",...}]`.
+"Regieplatz 1" (7 Rollen: omp-ograf, omp-scaler, omp-viewer,
+omp-video-mixer-me, zwei omp-source, omp-audio-mixer — vom Nutzer nach
+dem Datenverlust in Nachtrag 108 bereits neu angelegt, jetzt auch mit
+dem neuen omp-scaler-Node) danach vollständig gestoppt (alle sieben
+Alt-Prozesse sauber beendet) und neu gestartet: Status `started`, kein
+Fehler, alle sieben Prozesse laufen, `omp-viewer`s `connectedFlowId`
+bestätigt die tatsächlich hergestellte Mixer→Viewer-Verbindung. Zwei
+neue Tests (`TestFetchSnapshotFillsDeviceMissingFromBulkSendersList`,
+`TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult`) decken sowohl
+den Fix als auch die "keine unnötige Zusatzlast"-Grenze ab, echter
+`httptest`-Server simuliert exakt das beobachtete Bulk-Liste-vs-
+Device-Query-Verhalten. `go build/vet/test` (orchestrator, inkl.
+`internal/registry`) grün.
+
+**Betroffene Dateien:** `orchestrator/internal/registry/client.go`,
+`orchestrator/internal/registry/client_test.go`.

@@ -48,7 +48,87 @@ func (c *Client) FetchSnapshot(ctx context.Context) ([]NodeView, error) {
 		}
 	}
 
-	return buildSnapshot(nodes, devices, senders, receivers, flows), nil
+	flowFormat := make(map[string]string, len(flows))
+	for _, fl := range flows {
+		flowFormat[fl.ID] = fl.Format
+	}
+
+	views := buildSnapshot(nodes, devices, senders, receivers, flows)
+
+	// Nutzerfund 2026-07-28 (Regieplatz-1-Start scheiterte mit "role
+	// omp-video-mixer-me has no sender", docs/decisions.md — Fortsetzung
+	// des am 2026-07-24 dokumentierten, bis dahin ungelösten Bugs): die
+	// ungefilterte Bulk-Liste `GET .../senders` (bzw. `/receivers`) der
+	// nmos-cpp-Registry lässt reproduzierbar, dauerhaft (nicht nur kurz
+	// transient) einzelne real vorhandene Ressourcen aus, während
+	// `GET .../senders?device_id=<id>` dieselbe Ressource korrekt
+	// liefert (live verifiziert: ein Mixer-Sender fehlte über mehrere
+	// aufeinanderfolgende Poll-Zyklen konsequent in der Bulk-Antwort,
+	// eine gezielte Device-gescopte Abfrage fand ihn sofort). Fix: für
+	// jedes Device, das im Bulk-Ergebnis mit null Sendern UND null
+	// Empfängern dasteht (der einzige beobachtete Verdachtsfall — ein
+	// Device mit tatsächlich mindestens einer Ressource verhält sich
+	// nicht so), eine gezielte Nachfrage genau für dieses Device. Bewusst
+	// nicht pauschal für jedes Device (unnötige Zusatzlast pro Poll-
+	// Zyklus für reine Control-Plane-Devices ohne jede Medien-Ressource,
+	// z. B. omp-playout-automation).
+	c.fillSuspiciouslyEmptyDevices(ctx, views, flowFormat)
+
+	return views, nil
+}
+
+// fillSuspiciouslyEmptyDevices ergänzt Sender/Receiver für Devices, die im
+// Bulk-Ergebnis leer erscheinen, per gezielter Device-gescopter Nachfrage
+// (s. FetchSnapshot-Doku). Mutiert views in place. Fehler bei der
+// Nachfrage sind nicht fatal (der Poll insgesamt bleibt gültig, das
+// betroffene Device bleibt dann wie zuvor leer) — best effort, kein
+// zusätzlicher Fehlerpfad für den ohnehin schon dokumentiert unzuverlässigen
+// Bulk-Endpunkt.
+func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeView, flowFormat map[string]string) {
+	for ni := range views {
+		for di := range views[ni].Devices {
+			deviceID := views[ni].Devices[di].ID
+			if hasSenderOrReceiverFor(views[ni], deviceID) {
+				continue
+			}
+
+			var extraSenders []is04Sender
+			if err := c.getJSON(ctx, "senders?device_id="+deviceID, &extraSenders); err == nil {
+				for _, s := range extraSenders {
+					format := ""
+					if s.FlowID != nil {
+						format = flowFormat[*s.FlowID]
+					}
+					views[ni].Senders = append(views[ni].Senders, SenderView{
+						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format,
+					})
+				}
+			}
+
+			var extraReceivers []is04Receiver
+			if err := c.getJSON(ctx, "receivers?device_id="+deviceID, &extraReceivers); err == nil {
+				for _, r := range extraReceivers {
+					views[ni].Receivers = append(views[ni].Receivers, ReceiverView{
+						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format,
+					})
+				}
+			}
+		}
+	}
+}
+
+func hasSenderOrReceiverFor(view NodeView, deviceID string) bool {
+	for _, s := range view.Senders {
+		if s.DeviceID == deviceID {
+			return true
+		}
+	}
+	for _, r := range view.Receivers {
+		if r.DeviceID == deviceID {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
