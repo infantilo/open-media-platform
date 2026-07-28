@@ -19,4 +19,5 @@ members = [
     "omp-fabrics-gateway",
     "omp-media-library",
     "omp-recorder",
+    "omp-scaler",
 ]

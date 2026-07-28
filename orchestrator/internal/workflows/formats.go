@@ -27,8 +27,19 @@ type videoFormat struct {
 // (kleiner als der bisherige 640×480-Node-Default, für schwache Dev-
 // Hardware); "1080p50" ist das im Endausbau wichtigste Zielformat.
 // Reihenfolge hier ist auch die UI-Anzeigereihenfolge (StandardFormatNames).
+//
+// **Breite 848 statt der web-üblichen 854 bei "480p25" (live gefundener
+// Bug, 2026-07-28):** 854 ist nicht durch 8 teilbar (854/8=106,75) —
+// MXLs v210-Schreibpfad verlangt eine durch 8 teilbare Breite, ohne das
+// bricht `MxlVideoInput::new` beim NÄCHSTEN Node in der Kette mit
+// "flow_def: frame_width fehlt" (live reproduziert: source(480p25,854)
+// → viewer UND source(480p25,854) → scaler schlugen beide exakt so
+// fehl). Alle anderen Breiten hier (640/720/1280/1920) sind bereits
+// durch 16 teilbar und unauffällig; 848 ist der in der Videotechnik
+// übliche Ersatz für 854 aus genau diesem Ausrichtungsgrund (durch 16
+// teilbar: 848/16=53).
 var standardFormats = map[string]videoFormat{
-	"480p25":  {Width: 854, Height: 480, FramerateNumerator: 25, FramerateDenominator: 1},
+	"480p25":  {Width: 848, Height: 480, FramerateNumerator: 25, FramerateDenominator: 1},
 	"576p25":  {Width: 720, Height: 576, FramerateNumerator: 25, FramerateDenominator: 1},
 	"720p50":  {Width: 1280, Height: 720, FramerateNumerator: 50, FramerateDenominator: 1},
 	"1080p25": {Width: 1920, Height: 1080, FramerateNumerator: 25, FramerateDenominator: 1},

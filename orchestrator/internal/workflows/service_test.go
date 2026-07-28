@@ -1021,7 +1021,7 @@ func TestStartAppliesPerRoleFormatIndependently(t *testing.T) {
 	flagshipEnv := l.lastExtraEnv["omp-viewer"]
 	l.mu.Unlock()
 
-	if cheapEnv["OMP_WIDTH"] != "854" || cheapEnv["OMP_HEIGHT"] != "480" || cheapEnv["OMP_FRAMERATE_NUM"] != "25" {
+	if cheapEnv["OMP_WIDTH"] != "848" || cheapEnv["OMP_HEIGHT"] != "480" || cheapEnv["OMP_FRAMERATE_NUM"] != "25" {
 		t.Fatalf("cheap role extraEnv = %+v, want 480p25", cheapEnv)
 	}
 	if flagshipEnv["OMP_WIDTH"] != "1920" || flagshipEnv["OMP_HEIGHT"] != "1080" || flagshipEnv["OMP_FRAMERATE_NUM"] != "50" {

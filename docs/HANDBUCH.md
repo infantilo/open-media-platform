@@ -323,6 +323,7 @@ startbar ist.
 | **omp-ograf** | Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. |
 | **omp-media-library** | Datei-Katalog mit technischen Metadaten (`ffprobe`) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline. |
 | **omp-recorder** | Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf (`record.start`/`record.stop`). Ausschließlich MXL als Eingang, keine Capture-Karte. „Warm, unabonniert" bis zum Start — keine Lese-Pipeline im Leerlauf. |
+| **omp-scaler** | Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Formular) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus. **Bekannte Einschränkung:** in einer Kette Quelle→Scaler→Ziel innerhalb desselben Workflow-Starts kann die letzte Verbindung (Scaler→Ziel) zu früh ausgelöst werden, bevor der Scaler seinen eigenen Ausgangs-Flow fertig aufgebaut hat — betroffene Verbindung im Flow-Editor einmal neu ziehen behebt es sofort (s. `docs/decisions.md` Nachtrag 109). |
 
 ### 9.2 Gateway-Nodes (Standort-/Fremdgeräte-Anbindung)
 

@@ -13683,3 +13683,89 @@ leer).
 **Betroffene Dateien:** `Makefile`,
 `orchestrator/internal/{auth,authz,launcher,layouts,profiles,workflows,
 hosts,snapshots,audit,db}/*_test.go`.
+
+---
+
+## 2026-07-28 (Nachtrag 109 Fortsetzung) — omp-scaler: neuer Scaler-/Framerate-Converter-Node, ein echter Bug im Format-Preset gefunden+behoben, eine Grenze dokumentiert
+
+**Anlass:** Nutzerwunsch direkt im Anschluss an das einstellbare
+Rollen-Format (Nachtrag 109): "einfaches Scaler/Framerate-Converter-Node".
+
+**Umsetzung:** neuer Node `omp-scaler` (`nodes/omp-scaler`), Struktur
+fast 1:1 aus `omp-viewer::pipeline` übernommen (Rebuild-bei-Reconnect,
+`ReceiverControl`/`PipelineHandle`-Muster), nur der MJPEG-Preview-Zweig
+ersetzt durch einen echten zweiten `MxlVideoOutput`. **Kein eigener
+Skalier-/Rate-Code nötig:** `omp_mediaio::mxl::MxlVideoOutput::new`
+baut bereits intern `videoconvert ! videoscale ! videorate !
+capsfilter(Zielformat)` auf (`omp-mediaio/src/mxl.rs:146-172`) — der
+Node ist nur die Verkabelung `MxlVideoInput → MxlVideoOutput
+(Zielformat aus Rollen-Format wie omp-source, s. Nachtrag 109)`.
+Katalog-Eintrag `omp-scaler` ergänzt (`deploy/catalog.json`).
+
+**Echter Bug beim Live-Test gefunden+behoben:** das ursprüngliche
+"480p25"-Preset (854×480) ließ jeden nachgeschalteten MXL-Konsumenten
+mit `flow_def: frame_width fehlt` scheitern — reproduziert sowohl
+direkt (`omp-source → omp-viewer`, ganz ohne Scaler) als auch über den
+Scaler. Ursache: 854 ist nicht durch 8 teilbar, MXLs v210-Schreibpfad
+verlangt das; alle anderen Presets (640/720/1280/1920) sind bereits
+durch 16 teilbar. Fix: Breite auf 848 geändert (durch 16 teilbar,
+848/16=53) — der in der Videotechnik übliche Ersatz für 854 aus genau
+diesem Ausrichtungsgrund. Nach dem Fix lief die exakt gleiche Kette
+fehlerfrei.
+
+**Zweiter, unabhängiger Fund — Verbindungs-Reihenfolge bei leerem
+`fromSender` mehrdeutig:** eine Connection ohne explizites
+`fromSender`-Label nimmt laut `findSender()` (`service.go:979-991`)
+den ERSTEN Sender aus `node.Senders` — dessen Reihenfolge kommt aber
+aus der NMOS-Registry-Abfrage, nicht zwingend aus der
+Registrierungsreihenfolge des Node-Prozesses (`omp-source` registriert
+Video zuerst, aber die Registry kann anders sortieren). Live beobachtet:
+dieselbe `{fromRole, toRole}`-Verbindung ohne `fromSender` griff dabei
+teils den Audio- statt den Video-Sender, was `MxlVideoInput::new` mit
+genau demselben `frame_width fehlt` quittiert (Audio-Flow-Defs haben
+kein `frame_width`) — reproduzierbar durch explizites Setzen von
+`fromSender: "<Rolle> Sender 1"`, danach zuverlässig der Video-Sender.
+Nicht behoben (vorbestehendes Verhalten, betrifft jede Mehr-Sender-Rolle,
+nicht nur `omp-scaler`) — Empfehlung für Workflows mit Mehr-Sender-Rollen
+(z. B. `omp-source`): `fromSender` explizit setzen statt sich auf den
+leeren Fallback zu verlassen, bis eine deterministische Sender-Reihenfolge
+sichergestellt ist.
+
+**Dritter Fund, dokumentierte Grenze, nicht behoben — Verbindungs-
+Wettlauf in Ketten (Quelle→Scaler→Ziel):** `runStart()` wendet
+Connections in Definitionsreihenfolge an
+(`service.go:714-729`), wartet dabei aber nur auf NMOS-Registrierung
+(`awaitRegistration`), nicht auf "der Node hat seine eigene Pipeline
+tatsächlich aufgebaut". Bei einer Kette, in der eine Zwischen-Rolle
+(hier: der Scaler) selbst erst durch die VORHERIGE Connection einen
+eigenen MXL-Ausgangs-Flow aufbaut, kann die NÄCHSTE Connection (Scaler→
+Ziel) zu früh feuern — live beobachtet: `omp-viewer` scheiterte mit
+`get_flow_def(...): Flow not found`, weil `omp-scaler`s eigener
+Pipeline-Rebuild (asynchron, ausgelöst durch die erste Connection) zu
+diesem Zeitpunkt noch nicht fertig war. Ein manuelles Neuziehen genau
+dieser einen Kante (`POST /api/v1/graph/edges`) direkt danach
+funktionierte sofort — reiner Start-Zeitpunkt-Wettlauf, kein
+dauerhafter Defekt. **Bewusst nicht in dieser Runde behoben** (bräuchte
+entweder eine topologische Sortierung der Connections oder ein
+Warten auf "media-ready" der Quelle vor jeder abhängigen Connection —
+eine echte Erweiterung von `runStart`, kein kleiner Fix, betrifft jede
+Mehrfach-Hop-Kette, nicht nur `omp-scaler`). Workaround dokumentiert in
+`docs/HANDBUCH.md` §9.1 (betroffene Kante nach dem Start einmal neu
+ziehen).
+
+**Live verifiziert** (echte Prozesse, drei-Rollen-Workflow
+`omp-source(480p25)` → `omp-scaler(1080p50)` → `omp-viewer`, danach
+sauber gestoppt/gelöscht): `connectedFlowId`/`targetWidth`/
+`targetHeight`/`targetFramerate` des Scalers korrekt gesetzt
+(1920×1080, 50/1); nach manuellem Neuziehen der letzten Kante lieferte
+der Viewer echte, sichtbar korrekt skalierte SMPTE-Farbbalken (16:9,
+keine Verzerrung) mit dem erwarteten UMD-Text „upscaler Sender 1" —
+über den echten MJPEG-Preview-Stream extrahiert und visuell geprüft,
+nicht nur „kein Fehler". `cargo build --workspace --bins`/
+`cargo clippy -p omp-scaler` sauber, `go build/vet/test`
+(orchestrator, inkl. korrigiertem 848-Erwartungswert im
+Nachtrag-109-Test) grün.
+
+**Betroffene Dateien:** `nodes/omp-scaler/` (neu), `nodes/Cargo.toml`,
+`deploy/catalog.json`, `orchestrator/internal/workflows/formats.go`,
+`orchestrator/internal/workflows/service_test.go`, `docs/HANDBUCH.md`.

@@ -106,5 +106,14 @@
     "env": {},
     "description": "Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf. Ausschließlich MXL als Eingang, keine Capture-Karte.",
     "expectedResources": "moderat während einer Aufnahme (Encoding), sonst sehr gering (keine Quelle abonniert)"
+  },
+  {
+    "type": "omp-scaler",
+    "label": "Scaler",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-scaler"],
+    "env": {},
+    "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus.",
+    "expectedResources": "gering, wächst mit Zielauflösung"
   }
 ]
