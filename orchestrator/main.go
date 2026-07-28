@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -143,9 +144,24 @@ func main() {
 		slog.Error("mtls config failed", "error", err)
 		os.Exit(1)
 	}
-	nodeHTTPClient := http.DefaultClient
+	// Bewusst nur Dial-/Response-Header-Timeout, kein Client.Timeout
+	// (Nutzerfund 2026-07-28: das nmos-cpp-Registry-Self-Registrierungs-
+	// href zeigte auf eine seit einem Neustart unerreichbare Container-
+	// interne IP — der Parameter-Panel-Klick hing daraufhin ~30s an der
+	// OS-Standard-TCP-Connect-Timeout, statt zeitnah einen Fehler zu
+	// zeigen). Ein Client.Timeout würde dieselbe Deadline auch auf
+	// bewusst lang laufende Antworten anwenden (z. B. den MJPEG-Preview-
+	// Multipart-Stream-Proxy, handleNodeStreamProxy) und diese nach
+	// Ablauf abbrechen — DialContext/ResponseHeaderTimeout begrenzen nur
+	// Verbindungsaufbau bzw. Warten auf die erste Antwort, nicht das
+	// Lesen eines bereits begonnenen, absichtlich offenen Streams.
+	nodeTransport := &http.Transport{
+		TLSClientConfig:       nodeTLSConfig,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 5 * time.Second,
+	}
+	nodeHTTPClient := &http.Client{Transport: nodeTransport}
 	if nodeTLSConfig != nil {
-		nodeHTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: nodeTLSConfig}}
 		slog.Info("mtls enabled for orchestrator-to-node requests")
 	}
 
