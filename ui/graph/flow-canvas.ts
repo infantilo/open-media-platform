@@ -24,6 +24,7 @@ import {
 } from "./geometry.ts";
 import { portsCompatible } from "./compatibility.ts";
 import {
+  addMember,
   breadcrumbPath,
   createGroup,
   dissolveGroup,
@@ -46,7 +47,8 @@ import {
 } from "./controls.ts";
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
-import { uniqueRoleName } from "./roles.ts";
+import { ROLE_FORMATS, uniqueRoleName } from "./roles.ts";
+import { renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -370,11 +372,26 @@ export class FlowCanvas extends HTMLElement {
   // die ID nach #workflowScopeExtraNodeIds (s. #reconcileWorkflowScopePendingInstances).
   #workflowScopeExtraNodeIds: Set<string> = new Set();
   #workflowScopePendingInstanceIds: Set<string> = new Set();
+  // Nutzerreport 2026-07-30 ("in einer Gruppe neue Nodes hinzufügen
+  // landet im Root"): dasselbe Zeitfenster-Problem wie oben
+  // (#workflowScopePendingInstanceIds), nur fürs B5-Gruppenmodell statt
+  // Workflow-Scopes — die beiden Container-Konzepte sind laut #render()
+  // strikt getrennt (Workflow-Bearbeiten-Modus überspringt
+  // #buildTilesAtScope() komplett), #startInstance kannte bisher nur
+  // den Workflow-Fall. Wert = groupId, in der das Node bei Klick auf den
+  // Katalog-Button landen soll (nicht einfach "die aktuelle Gruppe" zum
+  // Reconcile-Zeitpunkt — der Nutzer kann die Gruppe zwischen Klick und
+  // NMOS-Registrierung bereits wieder verlassen haben).
+  #groupScopePendingInstances: Map<string, string> = new Map();
   // Klick-zu-Verbinden-Zustand (kein Drag möglich — Platzhalter-Kacheln
   // haben keine echten Ports, da ihr Node nicht läuft): erster Klick
   // markiert die Quellrolle, zweiter Klick auf eine andere Rolle legt
   // die Verbindung an, erneuter Klick auf dieselbe Rolle bricht ab.
   #connectFromRole: string | null = null;
+  // Nutzerwunsch 2026-07-30 ("sprechender Name" je Service/Stream, s.
+  // `renameRole`-Doku in role-designer-logic.ts): Rollenkachel im
+  // Bearbeiten-Modus, deren Name gerade per Doppelklick umbenannt wird.
+  #editingWorkflowRoleName: string | null = null;
   #tally: Record<string, boolean> = {};
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
@@ -696,6 +713,7 @@ export class FlowCanvas extends HTMLElement {
     // #fitViewportToPositions() zurück, weil `blob.viewport` dann schon
     // (falsch) gesetzt wäre.
     let changed = this.#pruneStalePositions();
+    changed = this.#reconcileGroupScopePendingInstances() || changed;
     changed = this.#assignMissingPositions(false) || changed;
     if (this.#viewportNeedsFit) {
       this.#viewportNeedsFit = false;
@@ -728,6 +746,27 @@ export class FlowCanvas extends HTMLElement {
         delete this.#positions[id];
         changed = true;
       }
+    }
+    return changed;
+  }
+
+  // Löst #groupScopePendingInstances gegen den aktuellen #graph.nodes-
+  // Stand auf (s. dortige Doku) — Gegenstück zu
+  // #reconcileWorkflowScopePendingInstances, nur fürs B5-Gruppenmodell.
+  // Läuft bei jedem #fetchAndRender(), nicht nur während eine Gruppe
+  // offen ist: die Ziel-Gruppe steht schon fest (im Map-Value), der
+  // Nutzer kann also zwischenzeitlich woanders hin navigiert sein, ohne
+  // dass das Node deshalb am Root landen soll.
+  #reconcileGroupScopePendingInstances(): boolean {
+    if (this.#groupScopePendingInstances.size === 0) return false;
+    let changed = false;
+    for (const node of this.#graph.nodes) {
+      if (!node.instanceId) continue;
+      const groupId = this.#groupScopePendingInstances.get(node.instanceId);
+      if (groupId === undefined) continue;
+      this.#groupScopePendingInstances.delete(node.instanceId);
+      this.#groupTree = addMember(this.#groupTree, groupId, node.id);
+      changed = true;
     }
     return changed;
   }
@@ -1068,6 +1107,57 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
+  // Textfeld-Ersatz für die Namens-`<text>` einer Bearbeiten-Modus-
+  // Kachel (`#editingWorkflowRoleName`) — gleiches Muster wie
+  // `RoleDesigner#renderRoleNameEditor`, eigene Kopie statt geteilter
+  // Helfer: unterschiedliche Host-Klassen (`this` ist hier `FlowCanvas`,
+  // dort `RoleDesigner`), reine JSON-Logik (`renameRole`) ist bereits
+  // geteilt, nur das DOM-Rendering nicht.
+  #renderWorkflowRoleNameEditor(oldName: string): SVGForeignObjectElement {
+    const editObject = document.createElementNS(SVG_NS, "foreignObject") as SVGForeignObjectElement;
+    editObject.setAttribute("x", "6");
+    editObject.setAttribute("y", "2");
+    editObject.setAttribute("width", String(NODE_WIDTH - 16));
+    editObject.setAttribute("height", String(HEADER_HEIGHT - 4));
+    editObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = oldName;
+    input.style.cssText =
+      "width:100%;height:100%;box-sizing:border-box;font-size:12px;font-family:inherit;" +
+      "background:#1e1e1e;color:#f0f0f0;border:1px solid #5b9bd5;border-radius:2px;padding:0 3px;";
+
+    let settled = false;
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      this.#renameWorkflowRole(oldName, input.value);
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      this.#editingWorkflowRoleName = null;
+      this.#render();
+    };
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commit();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancel();
+      }
+    });
+    input.addEventListener("blur", commit);
+    editObject.appendChild(input);
+    queueMicrotask(() => {
+      input.focus();
+      input.select();
+    });
+    return editObject;
+  }
+
   // Ziehbare Rollen-Kachel im Bearbeiten-Modus (wie eine echte Node-
   // Kachel, s. #onTilePointerDown-Aufruf unten). Ein reiner Klick (keine
   // Bewegung) startet/beendet den Verbindungs-Modus (s.
@@ -1110,14 +1200,32 @@ export class FlowCanvas extends HTMLElement {
     // #openParameterPanel() auf.
     g.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, id));
 
-    const nameText = document.createElementNS(SVG_NS, "text");
-    nameText.setAttribute("x", "8");
-    nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
-    nameText.setAttribute("fill", "#f0f0f0");
-    nameText.setAttribute("font-size", "12");
-    nameText.setAttribute("pointer-events", "none");
-    nameText.textContent = role.name;
-    g.appendChild(nameText);
+    if (this.#editingWorkflowRoleName === role.name) {
+      g.appendChild(this.#renderWorkflowRoleNameEditor(role.name));
+    } else {
+      const nameText = document.createElementNS(SVG_NS, "text");
+      nameText.setAttribute("data-role", "workflow-edit-role-name");
+      nameText.setAttribute("x", "8");
+      nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      nameText.setAttribute("fill", "#f0f0f0");
+      nameText.setAttribute("font-size", "12");
+      nameText.textContent = role.name;
+      nameText.style.cursor = "text";
+      // Muss Pointer-Events selbst fangen (dblclick zum Umbenennen) —
+      // dafür wie bei `closeBtn` explizit stoppen, sonst startet
+      // derselbe Klick zusätzlich #onTilePointerDown/den Verbinden-Klick.
+      nameText.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      nameText.addEventListener("dblclick", (ev) => {
+        ev.stopPropagation();
+        this.#editingWorkflowRoleName = role.name;
+        this.#render();
+      });
+      const nameTitle = document.createElementNS(SVG_NS, "title");
+      nameTitle.textContent =
+        "Doppelklick zum Umbenennen — dieser Name erscheint als Sender-/Crosspoint-Label (Nutzerwunsch 2026-07-30: sprechende Namen).";
+      nameText.appendChild(nameTitle);
+      g.appendChild(nameText);
+    }
 
     const typeText = document.createElementNS(SVG_NS, "text");
     typeText.setAttribute("x", "8");
@@ -1209,6 +1317,30 @@ export class FlowCanvas extends HTMLElement {
       roles: draft.roles.filter((r) => r.name !== roleName),
       connections: draft.connections.filter((c) => c.fromRole !== roleName && c.toRole !== roleName),
     }));
+  }
+
+  #renameWorkflowRole(oldName: string, newName: string) {
+    this.#editingWorkflowRoleName = null;
+    if (!this.#workflowEditDraft) return;
+    const result = renameRole(this.#workflowEditDraft.roles, this.#workflowEditDraft.connections, oldName, newName);
+    if (!result.ok) {
+      if (newName.trim() && newName.trim() !== oldName) {
+        this.#showToast(`Name "${newName.trim()}" ist schon vergeben oder ungültig.`);
+      }
+      this.#render();
+      return;
+    }
+    if (this.#connectFromRole === oldName) this.#connectFromRole = newName.trim();
+    const workflowId = this.#workflowEditId;
+    if (workflowId) {
+      const oldId = pausedPlaceholderId(workflowId, oldName);
+      const newId = pausedPlaceholderId(workflowId, newName.trim());
+      if (this.#positions[oldId]) {
+        this.#positions[newId] = this.#positions[oldId];
+        delete this.#positions[oldId];
+      }
+    }
+    this.#mutateWorkflowDraft((draft) => ({ ...draft, roles: result.roles, connections: result.connections }));
   }
 
   #addWorkflowConnection(fromRole: string, toRole: string) {
@@ -1433,6 +1565,15 @@ export class FlowCanvas extends HTMLElement {
       for (const groupId of items.groupIds) {
         const group = this.#groupTree.groups[groupId];
         if (!group) continue;
+        // Live gefundener Bug (Nutzerreport 2026-07-29: "regiplatz 1
+        // doppelt im floweditor"): eine Gruppe mit `workflowId` wird am
+        // Root bereits über #renderWorkflowTiles() als EINE kollabierte
+        // Kachel gezeigt (s. Kommentar zu workflowMemberIds oben, exakt
+        // dieselbe Begründung — nur dort bisher nur für die einzelnen
+        // Mitglieds-NODES angewendet, nicht für die Gruppen-Kachel
+        // selbst). Ohne diesen Schnitt rendert eine solche Gruppe
+        // zusätzlich hier noch ein zweites Mal als eigene Gruppen-Kachel.
+        if (this.#scope === null && group.workflowId) continue;
         const { inputs, outputs } = promotedPorts(this.#groupTree, groupId, allPorts, this.#graph.edges);
         tiles.push({
           id: groupId,
@@ -2678,6 +2819,22 @@ export class FlowCanvas extends HTMLElement {
     title.style.cssText = "margin:0 0 8px 0;font-size:14px;";
     this.#panelContent.appendChild(title);
 
+    // Rollen-Zielformat (Nutzerwunsch 2026-07-29: "scaler hat immer noch
+    // keine Auswahl im Property-Editor für Format") — nur für Node-Typen
+    // ohne eigenes UI-Bundle relevant (omp-scaler/omp-source landen hier
+    // im generischen Panel; role.Format ist aber ein workflow-weiter
+    // Mechanismus, kein scaler-spezifischer, s. formats.go). Setzt
+    // NICHT live per PATCH /params (alle Scaler-Parameter sind bewusst
+    // readonly, die Zielauflösung ist am MXL-Ausgangs-Flow fest verankert)
+    // — startet stattdessen NUR diese eine Rolle neu (Orchestrator-
+    // Entscheidung 2026-07-29: kein Live-Rekonfigurations-Risiko wie bei
+    // der früheren swap_input_resolution-Baustelle), Rest des Workflows
+    // läuft unterbrechungsfrei weiter.
+    const roleInfo = await this.#findRunningRoleForNode(nodeId);
+    if (roleInfo) {
+      this.#panelContent.appendChild(this.#buildRoleFormatSection(roleInfo));
+    }
+
     for (const param of descriptor.parameters) {
       const value = await this.#fetchParamValue(nodeId, param.name);
       this.#panelContent.appendChild(this.#buildParamRow(nodeId, param, value));
@@ -2695,6 +2852,100 @@ export class FlowCanvas extends HTMLElement {
       btn.addEventListener("click", () => this.#invokeMethod(nodeId, method));
       this.#panelContent.appendChild(btn);
     }
+  }
+
+  // Löst nodeId auf ein (workflowId, roleName, aktuelles role.Format) auf
+  // — nur für Rollen eines aktuell GESTARTETEN Workflows (RestartRole
+  // verlangt genau das, s. dortige Doku); sonst `null`, die Format-
+  // Sektion bleibt dann einfach weg (z. B. Node ganz ohne Workflow-
+  // Zugehörigkeit, oder Workflow gerade nicht "started"). Kein neuer
+  // Backend-Endpunkt nötig: GET /api/v1/workflows liefert `runtime`
+  // bereits vollständig, gleiches Musters wie omp-audio-mixers
+  // `loadFollowTargets` (ui/bundle.js).
+  async #findRunningRoleForNode(
+    nodeId: string,
+  ): Promise<{ workflowId: string; roleName: string; format: string } | null> {
+    try {
+      const res = await apiFetch("/api/v1/workflows");
+      if (!res.ok) return null;
+      const list = (await res.json()) as Array<{
+        id: string;
+        status: string;
+        definition: { roles: Array<{ name: string; format?: string }> };
+        runtime?: Record<string, { nodeId?: string }>;
+      }>;
+      for (const wf of list) {
+        if (wf.status !== "started") continue;
+        for (const [roleName, rt] of Object.entries(wf.runtime ?? {})) {
+          if (rt.nodeId !== nodeId) continue;
+          const role = wf.definition.roles.find((r) => r.name === roleName);
+          return { workflowId: wf.id, roleName, format: role?.format ?? "" };
+        }
+      }
+    } catch {
+      // Sektion bleibt weg — kein harter Fehler fürs übrige Panel.
+    }
+    return null;
+  }
+
+  #buildRoleFormatSection(info: { workflowId: string; roleName: string; format: string }): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-role", "role-format-row");
+    wrapper.style.cssText =
+      "margin:8px 0 14px 0;padding:8px;border:1px solid var(--omp-border,#444);border-radius:4px;";
+
+    const label = document.createElement("label");
+    label.textContent = "Rollen-Zielformat";
+    label.style.cssText = "display:block;margin-bottom:4px;color:#aaa;";
+    wrapper.appendChild(label);
+
+    const select = document.createElement("select");
+    select.style.cssText = "width:100%;";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "Node-Standard";
+    select.appendChild(defaultOpt);
+    for (const name of ROLE_FORMATS) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === info.format) opt.selected = true;
+      select.appendChild(opt);
+    }
+    wrapper.appendChild(select);
+
+    const applyBtn = document.createElement("button");
+    applyBtn.textContent = "Übernehmen (Node neu starten)";
+    applyBtn.style.cssText = "display:block;margin-top:6px;cursor:pointer;";
+    applyBtn.addEventListener("click", async () => {
+      const confirmed = await confirmDialog(
+        `Rolle "${info.roleName}" mit neuem Format neu starten? Der Node ist dabei kurz nicht erreichbar, der Rest des Workflows läuft weiter.`,
+      );
+      if (!confirmed) return;
+      applyBtn.disabled = true;
+      try {
+        const res = await apiFetch(
+          `/api/v1/workflows/${info.workflowId}/roles/${encodeURIComponent(info.roleName)}/restart`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ format: select.value }),
+          },
+        );
+        if (!res.ok) {
+          this.#showToast(`Neustart fehlgeschlagen: ${await res.text()}`);
+        } else {
+          this.#showToast(`Rolle "${info.roleName}" wird mit neuem Format neu gestartet …`);
+        }
+      } catch (err) {
+        this.#showToast(`Neustart fehlgeschlagen: ${err}`);
+      } finally {
+        applyBtn.disabled = false;
+      }
+    });
+    wrapper.appendChild(applyBtn);
+
+    return wrapper;
   }
 
   async #fetchParamValue(nodeId: string, name: string): Promise<unknown> {
@@ -3272,9 +3523,16 @@ export class FlowCanvas extends HTMLElement {
       // auftaucht (s. #reconcileWorkflowScopePendingInstances, am
       // Anfang jedes #renderRunningWorkflowScope()-Laufs aufgerufen).
       const scopedWf = this.#workflowEditId ? this.#workflows.find((w) => w.id === this.#workflowEditId) : undefined;
-      if (scopedWf && !this.#isIdleWorkflow(scopedWf)) {
+      // Sonst, falls stattdessen eine echte B5-Gruppe offen ist (s.
+      // #groupScopePendingInstances-Doku): gleiches Prinzip, andere
+      // Zielstruktur (#groupTree statt Workflow-Runtime).
+      if ((scopedWf && !this.#isIdleWorkflow(scopedWf)) || (!this.#workflowEditId && this.#scope !== null)) {
         const inst = (await res.json()) as { id: string };
-        this.#workflowScopePendingInstanceIds.add(inst.id);
+        if (scopedWf) {
+          this.#workflowScopePendingInstanceIds.add(inst.id);
+        } else if (this.#scope !== null) {
+          this.#groupScopePendingInstances.set(inst.id, this.#scope);
+        }
       }
       this.#showToast(`${type} wird gestartet …`);
       await this.#renderPalette();

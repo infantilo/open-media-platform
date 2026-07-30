@@ -125,6 +125,11 @@ type WorkflowService interface {
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
+	// RestartRole (Nutzerwunsch 2026-07-29) — s. workflows.Service.
+	// RestartRole-Doku: startet nur EINE Rolle eines laufenden Workflows
+	// neu, optional mit neuem role.Format, statt den ganzen Workflow zu
+	// stoppen.
+	RestartRole(ctx context.Context, id, role, format string) error
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
@@ -274,6 +279,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/start", g.requireVerbGlobal(authz.VerbAdmin, handleStartWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartWorkflowRole(workflowSvc)))
 	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch
 	// 2026-07-28): der optionale ?includeBindings=true-Parameter (s.
 	// handleExportWorkflow) hängt Nutzernamen+Rechte anderer Nutzer an —

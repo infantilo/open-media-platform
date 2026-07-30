@@ -41,5 +41,12 @@ bindgen = { version = "0.72", features = ["experimental"], optional = true }
 [features]
 mxl = ["dep:mxl", "dep:mxl-sys", "dep:gstreamer-app", "dep:serde_json"]
 preview = ["dep:tiny_http", "dep:gstreamer-app"]
+# Feature `audio-stream`: MP3-über-HTTP-Audio-Monitoring (Nutzerwunsch
+# 2026-07-29, "können wir audio abhören?"), `omp-audio-monitor` — eigenes
+# Feature statt Teil von `preview`: dieselben Zusatz-Deps
+# (tiny_http+gstreamer-app), aber MP3-Byte-Dauerstrom statt MJPEG-
+# Multipart-Framing (grundverschiedene Framing-Logik, s. audio_stream.rs
+# Moduldoku), und kein Consumer braucht je beides gleichzeitig.
+audio-stream = ["dep:tiny_http", "dep:gstreamer-app"]
 fabrics = ["dep:libloading", "dep:bindgen"]
 ptp = ["dep:gstreamer-net"]

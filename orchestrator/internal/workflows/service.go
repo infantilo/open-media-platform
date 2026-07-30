@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -910,6 +911,168 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
 }
 
+// RestartRole startet die Instanz EINER Rolle eines bereits laufenden
+// Workflows neu, optional mit einem neuen `role.Format` — Nutzerwunsch
+// 2026-07-29 ("scaler hat immer noch keine Auswahl im Property-Editor
+// für Format"): der Property-Editor eines laufenden Nodes (generisches
+// Panel, `flow-canvas.ts`, für Node-Typen ohne eigenes UI-Bundle wie
+// `omp-scaler`/`omp-source`) zeigte bisher nur readonly-Parameter — ein
+// neues Zielformat ließ sich nur über den (nur bei gestopptem Workflow
+// erreichbaren) grafischen Rollen-Designer setzen. Statt einer echten
+// Live-Rekonfiguration der laufenden MXL-Ausgangs-Flow (deutlich
+// riskanter, gleiche Bug-Kategorie wie die frühere
+// `swap_input_resolution`-Baustelle, s. `UMSETZUNG.md`) startet dies nur
+// die EINE betroffene Rolle neu — der Rest des Workflows läuft
+// unterbrechungsfrei weiter, exakt der vom Projektinhaber gewählte
+// Ansatz. Persistiert die Formatänderung sofort synchron (sichtbar auch
+// falls der Neustart selbst fehlschlägt); der eigentliche Stop/Start/
+// Reconnect läuft danach asynchron im Hintergrund (`runRestartRole`),
+// gleiches Muster wie `Start()`/`Stop()` — ein synchroner Handler würde
+// sonst bis zu `registrationTimeout` blockieren.
+func (s *Service) RestartRole(ctx context.Context, id, roleName, format string) error {
+	wf, err := s.store.Get(id)
+	if err != nil {
+		return err
+	}
+	if wf.Status != StatusStarted {
+		return ErrNotRunning
+	}
+	roleIdx := -1
+	for i, r := range wf.Definition.Roles {
+		if r.Name == roleName {
+			roleIdx = i
+			break
+		}
+	}
+	if roleIdx == -1 {
+		return fmt.Errorf("%w: role %q not found", ErrValidation, roleName)
+	}
+	if format != "" {
+		if _, ok := standardFormats[format]; !ok {
+			return fmt.Errorf("%w: unknown format %q (not one of %v)", ErrValidation, format, StandardFormatNames())
+		}
+	}
+
+	wf.Definition.Roles[roleIdx].Format = format
+	wf.UpdatedAt = time.Now()
+	if err := s.store.UpdateRuntime(wf); err != nil {
+		return err
+	}
+	s.publish(wf)
+
+	go s.runRestartRole(wf, roleName)
+	return nil
+}
+
+// runRestartRole führt den eigentlichen Neustart aus RestartRole aus:
+// alte Instanz stoppen, neue mit dem (bereits in wf.Definition
+// persistierten) Format starten, auf ihre Registrierung warten und alle
+// Connections neu anwenden, die diese Rolle betreffen — letzteres
+// dieselbe Logik wie `rewireAfterRestart` nach einem Crash-Neustart,
+// hier nur bewusst statt reaktiv ausgelöst. Best effort: Fehler landen
+// im Log statt die Rolle über `fail()` in einen Workflow-weiten
+// "failed"-Zustand zu versetzen — ein einzelner Rollen-Neustart, der
+// nicht klappt, soll die übrigen, weiterlaufenden Rollen nicht als
+// Kollateralschaden mit reißen.
+func (s *Service) runRestartRole(wf Workflow, roleName string) {
+	role, ok := roleByName(wf, roleName)
+	if !ok {
+		return
+	}
+
+	if oldRuntime, hadOld := wf.Runtime[roleName]; hadOld && oldRuntime.InstanceID != "" {
+		if err := s.launcher.Stop(oldRuntime.InstanceID); err != nil {
+			slog.Warn("workflows: RestartRole: stop old instance failed", "workflow", wf.ID, "role", roleName, "error", err)
+		}
+	}
+
+	extraEnv := map[string]string{}
+	if wf.Definition.Settings.ProgramWidth > 0 {
+		extraEnv["OMP_WIDTH"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramWidth), 10)
+	}
+	if wf.Definition.Settings.ProgramHeight > 0 {
+		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
+	}
+	roleEnv := extraEnv
+	if roleFormatEnv := formatExtraEnv(role.Format); roleFormatEnv != nil {
+		roleEnv = make(map[string]string, len(extraEnv)+len(roleFormatEnv))
+		for k, v := range extraEnv {
+			roleEnv[k] = v
+		}
+		for k, v := range roleFormatEnv {
+			roleEnv[k] = v
+		}
+	}
+
+	resolvedHostID := role.HostID
+	if s.resources != nil {
+		occ := s.buildOccupancy(time.Now())
+		result := s.resources.SelectHost(placement.PlacementRequest{
+			NodeType:        role.NodeType,
+			PreferredHostID: role.HostID,
+			AffinityGroup:   role.AffinityGroup,
+			RedundancyGroup: role.RedundancyGroup,
+		}, occ)
+		resolvedHostID = result.HostID
+	}
+
+	inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
+	if err != nil {
+		slog.Warn("workflows: RestartRole: start failed", "workflow", wf.ID, "role", roleName, "error", err)
+		return
+	}
+	wf.Runtime[roleName] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
+	if err := s.store.UpdateRuntime(wf); err != nil {
+		slog.Warn("workflows: RestartRole: persist intermediate state failed", "workflow", wf.ID, "role", roleName, "error", err)
+	}
+	s.publish(wf)
+
+	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
+	defer cancel()
+	if err := s.awaitRegistration(ctx, wf, map[string]string{roleName: inst.ID}); err != nil {
+		slog.Warn("workflows: RestartRole: registration timed out", "workflow", wf.ID, "role", roleName, "error", err)
+		return
+	}
+
+	for _, conn := range wf.Definition.Connections {
+		if conn.FromRole != roleName && conn.ToRole != roleName {
+			continue
+		}
+		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
+		if !ok {
+			slog.Warn("workflows: RestartRole: sender role not ready", "workflow", wf.ID, "connection", conn)
+			continue
+		}
+		toNode, ok := s.nodeForRole(wf, conn.ToRole)
+		if !ok {
+			slog.Warn("workflows: RestartRole: receiver role not ready", "workflow", wf.ID, "connection", conn)
+			continue
+		}
+		connectCtx, connectCancel := context.WithTimeout(context.Background(), registrationTimeout)
+		err := s.applyConnection(connectCtx, conn, fromNode, toNode, roleNodeType(wf, conn.ToRole))
+		connectCancel()
+		if err != nil {
+			slog.Warn("workflows: RestartRole: reconnect failed", "workflow", wf.ID, "connection", conn, "error", err)
+		}
+	}
+
+	wf.UpdatedAt = time.Now()
+	if err := s.store.UpdateRuntime(wf); err != nil {
+		slog.Warn("workflows: RestartRole: persist final state failed", "workflow", wf.ID, "role", roleName, "error", err)
+	}
+	s.publish(wf)
+	slog.Info("workflows: restarted role", "workflow", wf.ID, "role", roleName, "instance", inst.ID)
+}
+
+func roleByName(wf Workflow, roleName string) (Role, bool) {
+	for _, r := range wf.Definition.Roles {
+		if r.Name == roleName {
+			return r, true
+		}
+	}
+	return Role{}, false
+}
+
 // waitForCrosspointInput pollt param auf dem Zielnode, bis senderID
 // unter dessen automatisch entdeckten Eingängen erscheint — s.
 // crosspointMethod-Doku oben zum Grund. Gleiches Poll-Muster wie
@@ -941,27 +1104,60 @@ func (s *Service) waitForCrosspointInput(ctx context.Context, baseURL, param, se
 	}
 }
 
+// formatVideo/formatAudio sind die IS-04 flow.Format-Werte, wie sie
+// registry.SenderView.Format/ReceiverView.Format direkt aus der Registry
+// übernehmen (s. registry/client.go buildSnapshot) — hier nur benannt,
+// um sie in findSenders format-bewusster Auswahl unten nicht als
+// magische Strings zu wiederholen.
+const (
+	formatVideo = "urn:x-nmos:format:video"
+	formatAudio = "urn:x-nmos:format:audio"
+)
+
 // applyConnection löst eine einzelne Workflow-Connection auf: ein echter
 // IS-05 Connect, falls die Zielrolle einen IS-04-Receiver hat (Standard-
 // fall, z. B. omp-viewer); sonst ein Crosspoint-Methodenaufruf, falls der
 // Zielrollen-Node-Typ in crosspointByNodeType bekannt ist (s.
 // Connection-Doku in types.go); sonst ein verständlicher Fehler statt
 // eines stillen No-Op.
+//
+// **Live-Bug gefunden 2026-07-29 (Nutzerreport "Scaler erzeugt keinen
+// Output-Stream"):** Der Sender wurde bisher VOR dem Receiver aufgelöst,
+// ohne dessen Format zu kennen — der leere-Label-Fallback in findSender
+// nahm deshalb blind `node.Senders[0]`. Für eine Rolle mit mehreren
+// Sendern unterschiedlichen Formats (z. B. `omp-source`: Video- UND
+// Audio-Sender seit dem Audio-Companion-Pattern, `[[project_c21_live_mxl_
+// playlist_item_done]]`) landete eine unbeschriftete Connection
+// registrierungsreihenfolge-abhängig auch mal auf dem Audio-Sender, selbst
+// wenn die Zielrolle (hier `omp-scaler`) nur einen Video-Receiver hat.
+// Live reproduziert: `omp-scaler` bekam per IS-05-PATCH die `flow_id`
+// von `src`s Audio-Sender zugewiesen, `MxlVideoInput::new` scheiterte
+// erwartungsgemäß an `flow_def: frame_width fehlt` (Audio-Flow-Def hat
+// kein `frame_width`) — die Pipeline baute nie auf, kein Output-Stream.
+// Fix: Receiver zuerst auflösen (sein Format steht direkt am Resource,
+// s. registry/types.go), dann den Sender bevorzugt auf dasselbe Format
+// filtern — nur bei explizitem `FromSender`-Label unverändert (Label
+// schlägt Format-Präferenz). Der Crosspoint-Zweig bekommt dieselbe
+// Behandlung mit fest `formatVideo` (`crosspointByNodeType` enthält
+// heute ausschließlich Video-Crosspoints, s. Map oben).
 func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode, toNode registry.NodeView, toRoleNodeType string) error {
-	sender, ok := findSender(fromNode, conn.FromSender)
-	if !ok {
-		return fmt.Errorf("connection %s -> %s: role %s has no sender%s", conn.FromRole, conn.ToRole, conn.FromRole, labelSuffix(conn.FromSender))
-	}
-
 	if len(toNode.Receivers) > 0 {
 		receiver, ok := findReceiver(toNode, conn.ToReceiver)
 		if !ok {
 			return fmt.Errorf("connection %s -> %s: role %s has no receiver%s", conn.FromRole, conn.ToRole, conn.ToRole, labelSuffix(conn.ToReceiver))
 		}
+		sender, ok := findSender(fromNode, conn.FromSender, receiver.Format)
+		if !ok {
+			return fmt.Errorf("connection %s -> %s: role %s has no sender%s", conn.FromRole, conn.ToRole, conn.FromRole, labelSuffix(conn.FromSender))
+		}
 		return s.graph.Connect(ctx, sender.ID, receiver.ID)
 	}
 
 	if cp, ok := crosspointByNodeType[toRoleNodeType]; ok {
+		sender, ok := findSender(fromNode, conn.FromSender, formatVideo)
+		if !ok {
+			return fmt.Errorf("connection %s -> %s: role %s has no sender%s", conn.FromRole, conn.ToRole, conn.FromRole, labelSuffix(conn.FromSender))
+		}
 		if toNode.APIBaseURL == "" {
 			return fmt.Errorf("connection %s -> %s: role %s has no reachable api endpoint", conn.FromRole, conn.ToRole, conn.ToRole)
 		}
@@ -975,11 +1171,39 @@ func (s *Service) applyConnection(ctx context.Context, conn Connection, fromNode
 }
 
 // findSender wählt den Sender eines Nodes nach Label — leeres label
-// bedeutet den bisherigen Kompatibilitäts-Fallback (erster Sender).
-func findSender(node registry.NodeView, label string) (registry.SenderView, bool) {
+// bedeutet den bisherigen Kompatibilitäts-Fallback (erster Sender),
+// jetzt zusätzlich format-bewusst: unter mehreren unbeschrifteten
+// Sendern wird der erste GEWÄHLT, dessen Format zu preferFormat passt
+// (leer = keine Präferenz, unverändertes Verhalten); passt keiner,
+// bleibt der alte blinde Fallback (node.Senders[0]) — lieber eine
+// zunächst falsch verkabelte, aber sichtbar fehlschlagende Connection
+// als ein harter Fehler für Aufrufer, die (noch) kein Format kennen.
+//
+// Unter den format-passenden Sendern wird zusätzlich ein "Lowres"-
+// Companion-Sender (`{label} Lowres`, einheitliche Namenskonvention in
+// omp-source/omp-ograf/omp-player) übersprungen, solange ein
+// gleich-formatiger Nicht-Lowres-Sender existiert: sonst würde eine
+// unbeschriftete Connection lautlos auf dem 640×360-Vorschau-Companion
+// statt dem Hauptsignal landen — kein Fehler, nur eine leise falsche
+// Wahl, die schwerer auffällt als der ursprüngliche Bug (live gefunden,
+// direkt im Anschluss an den Scaler-"kein Output"-Fix: unbeschriftetes
+// src->scaler verband ohne dies auf `src Lowres` statt `src`).
+func findSender(node registry.NodeView, label, preferFormat string) (registry.SenderView, bool) {
 	if label == "" {
 		if len(node.Senders) == 0 {
 			return registry.SenderView{}, false
+		}
+		if preferFormat != "" {
+			for _, sndr := range node.Senders {
+				if sndr.Format == preferFormat && !isLowresCompanion(sndr.Label) {
+					return sndr, true
+				}
+			}
+			for _, sndr := range node.Senders {
+				if sndr.Format == preferFormat {
+					return sndr, true
+				}
+			}
 		}
 		return node.Senders[0], true
 	}
@@ -989,6 +1213,10 @@ func findSender(node registry.NodeView, label string) (registry.SenderView, bool
 		}
 	}
 	return registry.SenderView{}, false
+}
+
+func isLowresCompanion(label string) bool {
+	return strings.HasSuffix(label, "Lowres")
 }
 
 // findReceiver wählt den Receiver eines Nodes nach Label — analog

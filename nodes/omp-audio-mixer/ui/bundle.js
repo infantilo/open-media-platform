@@ -415,6 +415,15 @@ class OmpAudioMixerPanel extends HTMLElement {
       let muted = false;
       muteBtn.addEventListener("click", () => call(`channel.${id}.setMute`, { muted: !muted }).then(poll));
 
+      // Solo/PFL (Nutzerwunsch 2026-07-29): schaltet diesen Kanal
+      // prefader auf den Monitor-Bus (s. main.rs/pipeline.rs) — separate
+      // Abhör-Taste, keine Auswirkung auf Gain/Mute/Programm-Ausgang.
+      const pflBtn = document.createElement("omp-button");
+      pflBtn.textContent = "Solo";
+      pflBtn.setAttribute("color", "cue");
+      let pfl = false;
+      pflBtn.addEventListener("click", () => call(`channel.${id}.setPfl`, { enabled: !pfl }).then(poll));
+
       const afv = document.createElement("details");
       afv.className = "afv";
       const summary = document.createElement("summary");
@@ -513,7 +522,7 @@ class OmpAudioMixerPanel extends HTMLElement {
       removeBtn.textContent = "entfernen";
       removeBtn.addEventListener("click", () => call("removeChannel", { channelId: id }).then(poll));
 
-      el.append(labelEl, sourceSelect, eqSection, compDetail, faderRow, muteBtn, afv, removeBtn);
+      el.append(labelEl, sourceSelect, eqSection, compDetail, faderRow, muteBtn, pflBtn, afv, removeBtn);
 
       return {
         el,
@@ -536,6 +545,10 @@ class OmpAudioMixerPanel extends HTMLElement {
         muteBtn,
         set muted(v) {
           muted = v;
+        },
+        pflBtn,
+        set pfl(v) {
+          pfl = v;
         },
         followSelect,
         modeSelect,
@@ -645,6 +658,8 @@ class OmpAudioMixerPanel extends HTMLElement {
       if (!dragging.has(refs.fader)) refs.fader.value = data.gain ?? 0;
       refs.muteBtn.active = !!data.mute;
       refs.muted = !!data.mute;
+      refs.pflBtn.active = !!data.pfl;
+      refs.pfl = !!data.pfl;
       if (!dragging.has(refs.eqLowKnob)) refs.eqLowKnob.value = data.eqLow ?? 0;
       if (!dragging.has(refs.eqMidKnob)) refs.eqMidKnob.value = data.eqMid ?? 0;
       if (!dragging.has(refs.eqHighKnob)) refs.eqHighKnob.value = data.eqHigh ?? 0;
@@ -705,6 +720,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         source,
         gain,
         mute,
+        pfl,
         eqLow,
         eqMid,
         eqHigh,
@@ -729,6 +745,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         getParam(`channel.${id}.source`),
         getParam(`channel.${id}.gain`),
         getParam(`channel.${id}.mute`),
+        getParam(`channel.${id}.pfl`),
         getParam(`channel.${id}.eqLow`),
         getParam(`channel.${id}.eqMid`),
         getParam(`channel.${id}.eqHigh`),
@@ -754,6 +771,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         source,
         gain,
         mute,
+        pfl,
         eqLow,
         eqMid,
         eqHigh,

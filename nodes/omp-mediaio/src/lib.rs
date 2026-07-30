@@ -28,6 +28,9 @@ pub mod fabrics;
 #[cfg(feature = "preview")]
 pub mod preview;
 
+#[cfg(feature = "audio-stream")]
+pub mod audio_stream;
+
 #[cfg(feature = "ptp")]
 pub mod ptp;
 

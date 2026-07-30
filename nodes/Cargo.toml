@@ -20,4 +20,5 @@ members = [
     "omp-media-library",
     "omp-recorder",
     "omp-scaler",
+    "omp-audio-monitor",
 ]

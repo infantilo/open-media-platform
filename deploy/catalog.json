@@ -45,6 +45,15 @@
     "expectedResources": "gering bis moderat, wächst mit Kanalzahl"
   },
   {
+    "type": "omp-audio-monitor",
+    "label": "Audio Monitor",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-audio-monitor"],
+    "env": {},
+    "description": "Spielt einen ausgewählten MXL-Audiostream (z. B. einen Audio-Mixer-Pre-Listen-Bus) als Abhörstrom im Browser ab.",
+    "expectedResources": "gering"
+  },
+  {
     "type": "omp-player-video",
     "label": "Videoplayer",
     "runner": "process",

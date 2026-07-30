@@ -12,6 +12,7 @@ export interface DraftRole {
   name: string;
   nodeType: string;
   hostId?: string;
+  format?: string;
 }
 
 export interface DraftConnection {
@@ -31,6 +32,36 @@ export function removeRole(
   return {
     roles: roles.filter((r) => r.name !== name),
     connections: connections.filter((c) => c.fromRole !== name && c.toRole !== name),
+  };
+}
+
+// renameRole: Nutzerwunsch 2026-07-30 ("wir müssen in der Lage sein,
+// jedem Service und Stream einen sprechenden Namen zu geben") — der
+// Rollenname IST bereits das Sender-Label (`OMP_LABEL`,
+// `workflows.Service.StartLabeled`, s. dortige Doku), landet also 1:1
+// in den Crosspoint-Tasten des Mixers; bisher aber nur beim Anlegen
+// automatisch vergeben (`uniqueRoleName`), nie danach änderbar. Lehnt
+// wie `addConnection` leere/duplizierte Namen ab statt sie still zu
+// ignorieren; benennt jede Verbindung, die die alte Rolle referenziert,
+// mit um (sonst ein Definitions-Torso, gleicher Grund wie bei
+// `removeRole`).
+export function renameRole(
+  roles: DraftRole[],
+  connections: DraftConnection[],
+  oldName: string,
+  newName: string,
+): { roles: DraftRole[]; connections: DraftConnection[]; ok: boolean } {
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed === oldName) return { roles, connections, ok: false };
+  if (!roles.some((r) => r.name === oldName)) return { roles, connections, ok: false };
+  if (roles.some((r) => r.name === trimmed)) return { roles, connections, ok: false };
+  return {
+    roles: roles.map((r) => (r.name === oldName ? { ...r, name: trimmed } : r)),
+    connections: connections.map((c) => ({
+      fromRole: c.fromRole === oldName ? trimmed : c.fromRole,
+      toRole: c.toRole === oldName ? trimmed : c.toRole,
+    })),
+    ok: true,
   };
 }
 

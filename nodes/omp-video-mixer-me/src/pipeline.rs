@@ -127,6 +127,21 @@ const KEYER_COLOR_ARGB: u32 = 0xFFFF00FF;
 /// damit nicht zwei Writer-Threads überlappend schreiben.
 const OLD_WRITER_DRAIN: Duration = Duration::from_millis(300);
 
+/// Nutzerreport 2026-07-30: "source->scaler->videomixer m/e schaltet
+/// scaler nicht auf pgm, PGM ist schwarz". Root Cause per Log-Analyse
+/// gefunden (nicht geraten, `UMSETZUNG.md` §0 Punkt 9): ein frisch
+/// gestarteter Scaler ist manchmal schon per IS-04 als Sender discoverbar,
+/// bevor sein MXL-Flow für andere Prozesse tatsächlich lesbar ist
+/// (`get_flow_def` liefert "Flow not found") — `build_one_input` überspringt
+/// diesen einen Eingang dann korrekt (kein Pipeline-Abschuss), aber
+/// `inputs_changed` verglich bisher nur die Sender-ID-MENGE: bleibt die
+/// Menge über den nächsten Poll (alle 2s) unverändert, fand nie wieder ein
+/// Rebuild-Versuch statt — der Eingang blieb für die gesamte Lebensdauer
+/// der Pipeline dauerhaft schwarz, PGM sprang beim Auswählen auf BLK
+/// zurück. Fix unten: fehlende Eingänge werden jetzt unabhängig von der
+/// ID-Mengen-Änderung ein paar Mal auf dem Leerlauf-Tick erneut versucht.
+const MISSING_INPUT_RETRIES: u32 = 5;
+
 pub struct Config {
     pub domain: String,
     pub flow_id: String,
@@ -750,6 +765,21 @@ fn switch_isel(isel: &gst::Element, pads: &HashMap<String, gst::Pad>, black: &gs
     }
 }
 
+/// Liefert die `sender_id`s aus `inputs`, für die `build_one_input`
+/// keinen Pad in `pads` anlegen konnte (Registry-Discovery vs. tatsächlich
+/// lesbarer MXL-Flow ist ein bekanntes Zeitfenster, s. Moduldoku "Start-
+/// Race zwischen IS-04-Sender-Discovery und MXL-Flow-Verfügbarkeit"
+/// unten): Grundlage für die Retry-Logik der Haupt-Loop, statt einen
+/// einmal übersprungenen Eingang bis zur nächsten echten Mengenänderung
+/// dauerhaft schwarz zu lassen.
+fn missing_input_ids(inputs: &[DiscoveredInput], pads: &HashMap<String, gst::Pad>) -> Vec<String> {
+    inputs
+        .iter()
+        .map(|i| i.sender_id.clone())
+        .filter(|id| !pads.contains_key(id))
+        .collect()
+}
+
 fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("xpos", box_.x);
     pad.set_property("ypos", box_.y);
@@ -1176,6 +1206,11 @@ pub fn run(
     };
     let mut program: Option<String> = None;
     let mut preset: Option<String> = None;
+    // Startup-Race-Retry (s. `MISSING_INPUT_RETRIES`-Doku oben): Eingänge,
+    // die beim letzten Build keinen Pad bekamen, plus verbleibendes
+    // Retry-Budget. Wird nach jedem erfolgreichen Rebuild neu berechnet.
+    let mut missing_inputs: Vec<String> = Vec::new();
+    let mut missing_retries_left: u32 = 0;
     let mut dve_box = DveBox::full_frame(config.width, config.height);
     let mut keyer_enabled = false;
     let mut pip_enabled = false;
@@ -1231,6 +1266,9 @@ pub fn run(
                                 .set_property("alpha", if pip_enabled { 1.0f64 } else { 0.0f64 });
                             let previous = program.clone();
                             program = applied_program;
+                            missing_inputs = missing_input_ids(&current_inputs, &p.source_pads_fg);
+                            missing_retries_left =
+                                if missing_inputs.is_empty() { 0 } else { MISSING_INPUT_RETRIES };
                             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
                             active = Some(p);
                             let _ = tx.send(Event::ProgramChanged {
@@ -1527,7 +1565,77 @@ pub fn run(
                 }
                 let _ = tx.send(Event::PipChanged(enabled));
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Startup-Race-Retry (s. `MISSING_INPUT_RETRIES`-Doku):
+                // ohne diesen Zweig bliebe ein beim letzten Build
+                // übersprungener Eingang bis zur nächsten echten Mengen-
+                // änderung dauerhaft schwarz — kein Wechsel der Eingangs-
+                // menge nötig hier, nur ein zweiter Versuch mit denselben
+                // `current_inputs`, nachdem der Flow inzwischen vermutlich
+                // lesbar geworden ist.
+                if !missing_inputs.is_empty()
+                    && missing_retries_left > 0
+                    && !fading.load(Ordering::Acquire)
+                {
+                    missing_retries_left -= 1;
+                    join_fade(&fade_thread);
+                    fading.store(false, Ordering::Release);
+                    active = None;
+                    std::thread::sleep(OLD_WRITER_DRAIN);
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                        Ok((p, warnings)) => {
+                            for w in warnings {
+                                let _ = tx.send(Event::Error(w));
+                            }
+                            let applied_program =
+                                switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &program);
+                            switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &program);
+                            apply_dve_box(&p.comp_pip_pad, &dve_box);
+                            p.comp_keyer_pad
+                                .set_property("alpha", if keyer_enabled { 1.0f64 } else { 0.0f64 });
+                            p.comp_pip_pad
+                                .set_property("alpha", if pip_enabled { 1.0f64 } else { 0.0f64 });
+                            let previous = program.clone();
+                            program = applied_program;
+                            missing_inputs = missing_input_ids(&current_inputs, &p.source_pads_fg);
+                            if missing_inputs.is_empty() {
+                                missing_retries_left = 0;
+                            }
+                            *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
+                            active = Some(p);
+                            let _ = tx.send(Event::ProgramChanged {
+                                previous,
+                                current: program.clone(),
+                            });
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(format!(
+                                "missing-input retry rebuild failed: {e} — falling back to black"
+                            )));
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                                Ok((p, _warnings)) => {
+                                    apply_dve_box(&p.comp_pip_pad, &dve_box);
+                                    let previous = program.take();
+                                    preset = None;
+                                    *flowed_slot.lock().expect("lock poisoned") =
+                                        Some(p.flowed.clone());
+                                    active = Some(p);
+                                    let _ = tx.send(Event::ProgramChanged {
+                                        previous,
+                                        current: None,
+                                    });
+                                }
+                                Err(e2) => {
+                                    let _ = tx.send(Event::Error(format!(
+                                        "fallback black-only build also failed: {e2}"
+                                    )));
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

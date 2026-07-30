@@ -38,8 +38,8 @@ import {
   type Viewport,
   zoomAt,
 } from "./geometry.ts";
-import { uniqueRoleName } from "./roles.ts";
-import { addConnection, type DraftConnection, type DraftRole, removeRole } from "./role-designer-logic.ts";
+import { ROLE_FORMATS, uniqueRoleName } from "./roles.ts";
+import { addConnection, type DraftConnection, type DraftRole, removeRole, renameRole } from "./role-designer-logic.ts";
 import { apiFetch } from "../shell/connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 
@@ -47,7 +47,14 @@ export type { DraftConnection, DraftRole };
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const DRAG_THRESHOLD_PX = 3;
-const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+// Nutzerwunsch 2026-07-29: Scaler-Zielformat war im grafischen Designer
+// nirgends wählbar (nur im Text-Formular, workflows-view.ts) — die
+// Kachel bekommt deshalb eine zusätzliche Zeile für das
+// Format-Dropdown, TILE_HEIGHT wächst entsprechend (Anker-/
+// Body-Positionen hängen unten bereits dynamisch von TILE_HEIGHT ab,
+// keine weiteren Anpassungen nötig).
+const FORMAT_ROW_HEIGHT = 22;
+const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT + FORMAT_ROW_HEIGHT;
 const ANCHOR_RADIUS = 6;
 
 interface CatalogEntry {
@@ -94,6 +101,12 @@ export class RoleDesigner extends HTMLElement {
   #hosts: HostEntry[] = [];
   #drag: DesignerDragState | null = null;
   #saving = false;
+  // Nutzerwunsch 2026-07-30 ("sprechender Name" je Service/Stream, s.
+  // `renameRole`-Doku in role-designer-logic.ts): welche Kachel gerade
+  // per Doppelklick auf ihren Namen im Umbenennen-Modus ist (Textfeld
+  // statt statischem `<text>`) — nur eine gleichzeitig, `#render()`
+  // baut bei jeder Mutation ohnehin alle Kacheln neu auf.
+  #editingRoleName: string | null = null;
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -203,6 +216,25 @@ export class RoleDesigner extends HTMLElement {
     this.#roles = result.roles;
     this.#connections = result.connections;
     delete this.#positions[name];
+    this.#render();
+  }
+
+  #renameRole(oldName: string, newName: string) {
+    const result = renameRole(this.#roles, this.#connections, oldName, newName);
+    this.#editingRoleName = null;
+    if (!result.ok) {
+      if (newName.trim() && newName.trim() !== oldName) {
+        showToast(`Name "${newName.trim()}" ist schon vergeben oder ungültig.`);
+      }
+      this.#render();
+      return;
+    }
+    this.#roles = result.roles;
+    this.#connections = result.connections;
+    if (this.#positions[oldName]) {
+      this.#positions[newName.trim()] = this.#positions[oldName];
+      delete this.#positions[oldName];
+    }
     this.#render();
   }
 
@@ -404,6 +436,57 @@ export class RoleDesigner extends HTMLElement {
     return g;
   }
 
+  // Textfeld-Ersatz für die Namens-`<text>` einer Kachel im
+  // Umbenennen-Modus (`#editingRoleName`) — gleiches `foreignObject`-
+  // Muster wie das Format-`<select>` weiter unten.
+  #renderRoleNameEditor(oldName: string): SVGForeignObjectElement {
+    const editObject = document.createElementNS(SVG_NS, "foreignObject") as SVGForeignObjectElement;
+    editObject.setAttribute("x", "6");
+    editObject.setAttribute("y", "2");
+    editObject.setAttribute("width", String(NODE_WIDTH - 26));
+    editObject.setAttribute("height", String(HEADER_HEIGHT - 4));
+    editObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = oldName;
+    input.style.cssText =
+      "width:100%;height:100%;box-sizing:border-box;font-size:12px;font-family:inherit;" +
+      "background:#1e1e1e;color:#f0f0f0;border:1px solid #5b9bd5;border-radius:2px;padding:0 3px;";
+
+    let settled = false;
+    const commit = () => {
+      if (settled) return;
+      settled = true;
+      this.#renameRole(oldName, input.value);
+    };
+    const cancel = () => {
+      if (settled) return;
+      settled = true;
+      this.#editingRoleName = null;
+      this.#render();
+    };
+    input.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") {
+        ev.preventDefault();
+        commit();
+      } else if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancel();
+      }
+    });
+    input.addEventListener("blur", commit);
+    editObject.appendChild(input);
+    // `#render()` hängt das Element frisch ein — Fokus erst nach dem
+    // eigentlichen DOM-Insert möglich (`g.appendChild` im Aufrufer läuft
+    // synchron danach), ein Mikrotask reicht.
+    queueMicrotask(() => {
+      input.focus();
+      input.select();
+    });
+    return editObject;
+  }
+
   #renderRoleTile(role: DraftRole): SVGGElement {
     const pos = this.#positions[role.name] ?? { x: 0, y: 0 };
     const g = document.createElementNS(SVG_NS, "g");
@@ -423,14 +506,33 @@ export class RoleDesigner extends HTMLElement {
     body.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, role.name));
     g.appendChild(body);
 
-    const nameText = document.createElementNS(SVG_NS, "text");
-    nameText.setAttribute("x", "8");
-    nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
-    nameText.setAttribute("fill", "#f0f0f0");
-    nameText.setAttribute("font-size", "12");
-    nameText.textContent = role.name;
-    nameText.style.pointerEvents = "none";
-    g.appendChild(nameText);
+    if (this.#editingRoleName === role.name) {
+      g.appendChild(this.#renderRoleNameEditor(role.name));
+    } else {
+      const nameText = document.createElementNS(SVG_NS, "text");
+      nameText.setAttribute("data-role", "role-tile-name");
+      nameText.setAttribute("x", "8");
+      nameText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
+      nameText.setAttribute("fill", "#f0f0f0");
+      nameText.setAttribute("font-size", "12");
+      nameText.textContent = role.name;
+      nameText.style.cursor = "text";
+      // Muss Pointer-Events selbst fangen (dblclick zum Umbenennen) —
+      // dafür wie bei `removeBtn`/`formatSelect` explizit stoppen, sonst
+      // bubbelt derselbe Klick bis zum `<svg>` durch und startet
+      // zusätzlich `#onCanvasPointerDown`s Canvas-Pan.
+      nameText.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+      nameText.addEventListener("dblclick", (ev) => {
+        ev.stopPropagation();
+        this.#editingRoleName = role.name;
+        this.#render();
+      });
+      const title = document.createElementNS(SVG_NS, "title");
+      title.textContent =
+        "Doppelklick zum Umbenennen — dieser Name erscheint als Sender-/Crosspoint-Label (Nutzerwunsch 2026-07-30: sprechende Namen).";
+      nameText.appendChild(title);
+      g.appendChild(nameText);
+    }
 
     const typeText = document.createElementNS(SVG_NS, "text");
     typeText.setAttribute("x", "8");
@@ -440,6 +542,37 @@ export class RoleDesigner extends HTMLElement {
     typeText.textContent = role.nodeType + (role.hostId ? ` @ ${role.hostId}` : "");
     typeText.style.pointerEvents = "none";
     g.appendChild(typeText);
+
+    const formatObject = document.createElementNS(SVG_NS, "foreignObject");
+    formatObject.setAttribute("x", "6");
+    formatObject.setAttribute("y", String(HEADER_HEIGHT + MIN_BODY_HEIGHT));
+    formatObject.setAttribute("width", String(NODE_WIDTH - 12));
+    formatObject.setAttribute("height", String(FORMAT_ROW_HEIGHT));
+    // pointerdown darf nicht bis zum <svg> durchbubbeln — sonst startet
+    // ein Klick ins Dropdown stattdessen einen Canvas-Pan (kein Listener
+    // auf `g` selbst, nur auf `body`/den Ankern, s. Kopfkommentar zur
+    // Pointer-Interaktion unten).
+    formatObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    const formatSelect = document.createElement("select");
+    formatSelect.title = "Standard-Format dieser Rolle — leer lässt den Node bei seinem eigenen Default.";
+    formatSelect.style.cssText =
+      "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+    const formatDefaultOpt = document.createElement("option");
+    formatDefaultOpt.value = "";
+    formatDefaultOpt.textContent = "Format: Node-Standard";
+    formatSelect.appendChild(formatDefaultOpt);
+    for (const name of ROLE_FORMATS) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === role.format) opt.selected = true;
+      formatSelect.appendChild(opt);
+    }
+    formatSelect.addEventListener("change", () => {
+      role.format = formatSelect.value || undefined;
+    });
+    formatObject.appendChild(formatSelect);
+    g.appendChild(formatObject);
 
     const removeBtn = document.createElementNS(SVG_NS, "text");
     removeBtn.setAttribute("data-role", "role-tile-remove");

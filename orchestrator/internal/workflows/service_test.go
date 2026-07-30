@@ -1141,6 +1141,154 @@ func TestInstanceRestartedIgnoresInstanceOutsideAnyWorkflow(t *testing.T) {
 	}
 }
 
+// TestRestartRoleAppliesNewFormatAndReconnects (Nutzerwunsch 2026-07-29:
+// "scaler hat immer noch keine Auswahl im Property-Editor für Format")
+// deckt den gewählten Ansatz ab: nur EINE Rolle eines laufenden
+// Workflows neu starten, mit neuem role.Format, ohne den Rest zu
+// stoppen — Format landet in der Definition, alte Instanz wird
+// gestoppt, neue mit den passenden OMP_WIDTH/HEIGHT/FRAMERATE-Envs
+// gestartet, betroffene Connections werden neu angewendet.
+func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{
+		Roles: []Role{
+			{Name: "src", NodeType: "omp-source"},
+			{Name: "scaler", NodeType: "omp-scaler"},
+		},
+		Connections: []Connection{{FromRole: "src", ToRole: "scaler"}},
+	}
+	wf, err := svc.Create("regie", def, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	srcInstance, scalerInstance := l.instanceIDFor("omp-source"), l.instanceIDFor("omp-scaler")
+	nodes.add(registry.NodeView{ID: "node-src", InstanceID: srcInstance, Senders: []registry.SenderView{{ID: "send-1", Format: formatVideo}}})
+	nodes.add(registry.NodeView{ID: "node-scaler", InstanceID: scalerInstance, Receivers: []registry.ReceiverView{{ID: "recv-1", Format: formatVideo}}})
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	if err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50"); err != nil {
+		t.Fatalf("RestartRole() error = %v", err)
+	}
+
+	// role.Format persistiert sofort, synchron (nicht erst nach dem
+	// Hintergrund-Neustart) — Nutzer soll die Auswahl sofort im
+	// Property-Panel bestätigt sehen.
+	wfAfterCall, err := svc.Get(wf.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	gotFormat := ""
+	for _, r := range wfAfterCall.Definition.Roles {
+		if r.Name == "scaler" {
+			gotFormat = r.Format
+		}
+	}
+	if gotFormat != "1080p50" {
+		t.Fatalf("role.Format = %q, want 1080p50 immediately after RestartRole()", gotFormat)
+	}
+
+	// Neue Registrierung für die neue Instanz simulieren (anderer Sender
+	// als zuvor, wie bei einem echten Rebuild mit neuer Auflösung).
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		stoppedOld := len(l.stopped) > 0 && l.stopped[0] == scalerInstance
+		l.mu.Unlock()
+		if stoppedOld {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	newScalerInstance := l.instanceIDFor("omp-scaler")
+	if newScalerInstance == scalerInstance {
+		t.Fatalf("expected a new omp-scaler instance to have been started, still see the old one %q", scalerInstance)
+	}
+	nodes.add(registry.NodeView{ID: "node-scaler-2", InstanceID: newScalerInstance, Receivers: []registry.ReceiverView{{ID: "recv-2", Format: formatVideo}}})
+
+	deadline = time.Now().Add(2 * time.Second)
+	var wfAfter Workflow
+	for time.Now().Before(deadline) {
+		wfAfter, err = svc.Get(wf.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if wfAfter.Runtime["scaler"].NodeID == "node-scaler-2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if wfAfter.Runtime["scaler"].NodeID != "node-scaler-2" {
+		t.Fatalf("Runtime[\"scaler\"].NodeID = %q, want it updated to node-scaler-2 after the role restart", wfAfter.Runtime["scaler"].NodeID)
+	}
+
+	l.mu.Lock()
+	env := l.lastExtraEnv["omp-scaler"]
+	l.mu.Unlock()
+	if env["OMP_WIDTH"] != "1920" || env["OMP_HEIGHT"] != "1080" || env["OMP_FRAMERATE_NUM"] != "50" {
+		t.Errorf("new instance extraEnv = %+v, want 1920x1080@50 from the 1080p50 preset", env)
+	}
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.calls) != 2 {
+		t.Fatalf("connect calls after role restart = %+v, want a second call reconnecting to the new receiver", g.calls)
+	}
+	if g.calls[1].fromSender != "send-1" || g.calls[1].toReceiver != "recv-2" {
+		t.Errorf("second connect call = %+v, want send-1 -> recv-2", g.calls[1])
+	}
+}
+
+func TestRestartRoleRejectsUnknownFormat(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{Roles: []Role{{Name: "scaler", NodeType: "omp-scaler"}}}
+	wf, _ := svc.Create("wf", def, nil)
+	started := wf
+	started.Status = StatusStarted
+	started.Runtime = map[string]RoleRuntime{"scaler": {InstanceID: "inst-1", NodeID: "node-1"}}
+
+	store := svc.store.(*fakeStore)
+	store.Put(started)
+
+	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "not-a-real-format")
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("RestartRole() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestRestartRoleRequiresStartedWorkflow(t *testing.T) {
+	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
+	def := Definition{Roles: []Role{{Name: "scaler", NodeType: "omp-scaler"}}}
+	wf, _ := svc.Create("wf", def, nil) // stays "stopped"
+
+	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50")
+	if !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("RestartRole() error = %v, want ErrNotRunning", err)
+	}
+}
+
 func TestStartFailsWhenRegistrationTimesOut(t *testing.T) {
 	original, originalPoll := registrationTimeout, registrationPollInterval
 	registrationTimeout = 100 * time.Millisecond

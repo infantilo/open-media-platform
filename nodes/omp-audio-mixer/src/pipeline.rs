@@ -72,6 +72,11 @@ pub struct Config {
     pub domain: String,
     pub flow_id: String,
     pub label: String,
+    /// Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29, END-GOAL-FEATURES
+    /// Kapitel-10-Entscheidung K4 "Solo/PFL wird gebaut") — zweiter,
+    /// eigenständiger MXL-Audio-Sender neben `flow_id`, s.
+    /// `build()`/`pfl_mixer`.
+    pub monitor_flow_id: String,
 }
 
 pub enum Event {
@@ -181,6 +186,7 @@ enum Command {
     SetEqBand { id: String, band: EqBand, freq: f64, width: f64 },
     SetComp { id: String, params: CompParams },
     SetMasterLimiter { params: CompParams },
+    SetPfl { id: String, enabled: bool },
 }
 
 #[derive(Clone)]
@@ -236,6 +242,14 @@ impl PipelineHandle {
 
     pub fn set_master_limiter(&self, params: CompParams) {
         let _ = self.commands.send(Command::SetMasterLimiter { params });
+    }
+
+    /// Solo/PFL (Nutzerwunsch 2026-07-29): schaltet den Prefader-Abhörweg
+    /// dieses Kanals auf dem Monitor-Bus ein/aus — s. `Command::SetPfl`-
+    /// Behandlung in `run()` für die "fällt auf Programm-Summe zurück,
+    /// solange kein Kanal soloed ist"-Logik.
+    pub fn set_pfl(&self, id: String, enabled: bool) {
+        let _ = self.commands.send(Command::SetPfl { id, enabled });
     }
 }
 
@@ -293,6 +307,17 @@ struct ChannelBranch {
     comp: gst::Element,
     comp_makeup: gst::Element,
     mixer_pad: gst::Pad,
+    /// Solo/PFL-Prefader-Abgriff (Nutzerwunsch 2026-07-29): `volume`-
+    /// Element zwischen dem Kanal-`tee` (nach `level`, vor `mixer_pad` —
+    /// derselbe Punkt, an dem heute schon post-EQ/Kompressor, aber noch
+    /// vor Gain/Mute gemessen wird, s. `level`-Kommentar in
+    /// `add_channel_branch`) und `pfl_mixer.sink_%u`. `0.0` = nicht
+    /// soloed (Default), `1.0` = soloed — umgeschaltet über
+    /// `Command::SetPfl`, das auch `pfl_enabled` unten pflegt, um die
+    /// Rückfall-auf-Programm-Logik am Master-Zweig neu zu berechnen.
+    pfl_gain: gst::Element,
+    pfl_pad: gst::Pad,
+    pfl_enabled: bool,
     /// Hält den Lese-Thread einer externen Quelle am Leben (`Drop`
     /// stoppt ihn) — `None` beim internen Testton.
     _external_input: Option<MxlAudioInput>,
@@ -307,7 +332,29 @@ struct ActivePipeline {
     master_limiter: gst::Element,
     master_makeup: gst::Element,
     _mxl_output: MxlAudioOutput,
+    /// Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — separater
+    /// `audiomixer`, den jeder Kanalzweig über seinen `pfl_gain` sowie
+    /// der Master-Zweig über `master_pfl_gain` bespeist (s. `build()`).
+    pfl_mixer: gst::Element,
+    /// Programm-Summe-Rückfall auf dem Monitor-Bus: `1.0` solange KEIN
+    /// Kanal soloed ist (Monitor spiegelt dann das Programm), `0.0`
+    /// sobald mindestens ein Kanal `pfl_enabled` ist (Monitor hört dann
+    /// exklusiv die solo(t)en Kanäle) — s. `recompute_master_pfl_gain`.
+    master_pfl_gain: gst::Element,
+    _pfl_output: MxlAudioOutput,
     flowed: Arc<AtomicBool>,
+}
+
+/// Nach jeder `SetPfl`/`RemoveChannel`-Änderung neu berechnet (s.
+/// `run()`): der Master-Zweig ist auf dem Monitor-Bus nur hörbar, wenn
+/// KEIN Kanal aktuell soloed ist — genau die "Monitor-Summe (Default) +
+/// Solo schaltet auf den/die solo(t)en Kanal/Kanäle um"-Semantik eines
+/// klassischen Konsolen-PFL-Wegs.
+fn recompute_master_pfl_gain(active: &ActivePipeline) {
+    let any_active = active.channels.values().any(|b| b.pfl_enabled);
+    active
+        .master_pfl_gain
+        .set_property("volume", if any_active { 0.0f64 } else { 1.0f64 });
 }
 
 impl Drop for ActivePipeline {
@@ -410,20 +457,68 @@ fn add_channel_branch(
         .map_err(|e| format!("link channel chain ({id}): {e}"))?;
     elements.push(convert);
 
+    // Solo/PFL-Abzweig (Nutzerwunsch 2026-07-29): ein `tee` direkt hinter
+    // `level` speist zusätzlich zum unveränderten Haupt-Pfad
+    // (`mixer_pad`, mit Gain/Mute) einen zweiten, eigenen `queue+volume`-
+    // Zweig zum Monitor-Bus (`pfl_mixer`) — exakt der Punkt zwischen
+    // "klangformend" (EQ/Kompressor, bereits durchlaufen) und "Fader"
+    // (Gain/Mute, noch nicht erreicht), also echtes Prefader-Signal.
+    let pfl_tee = gst::ElementFactory::make("tee")
+        .name(format!("pfl-tee-{id}"))
+        .build()
+        .map_err(|e| format!("tee (pfl, {id}): {e}"))?;
+    let main_queue = gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (main, {id}): {e}"))?;
+    let pfl_queue = gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (pfl, {id}): {e}"))?;
+    let pfl_gain = gst::ElementFactory::make("volume")
+        .name(format!("pfl-gain-{id}"))
+        .property("volume", 0.0f64)
+        .build()
+        .map_err(|e| format!("volume (pfl, {id}): {e}"))?;
+
+    active
+        .pipeline
+        .add(&pfl_tee)
+        .and_then(|()| active.pipeline.add(&main_queue))
+        .and_then(|()| active.pipeline.add(&pfl_queue))
+        .and_then(|()| active.pipeline.add(&pfl_gain))
+        .map_err(|e| format!("add pfl elements ({id}): {e}"))?;
+    gst::Element::link_many([&level, &pfl_tee]).map_err(|e| format!("link level to pfl tee ({id}): {e}"))?;
+    gst::Element::link_many([&pfl_tee, &main_queue])
+        .map_err(|e| format!("link pfl tee to main queue ({id}): {e}"))?;
+    gst::Element::link_many([&pfl_tee, &pfl_queue, &pfl_gain])
+        .map_err(|e| format!("link pfl tee to pfl gain ({id}): {e}"))?;
+
     let mixer_pad = active
         .mixer
         .request_pad_simple("sink_%u")
         .ok_or_else(|| format!("audiomixer: request sink pad failed ({id})"))?;
-    level
+    main_queue
         .static_pad("src")
-        .ok_or("level: no src pad")?
+        .ok_or("main_queue: no src pad")?
         .link(&mixer_pad)
-        .map_err(|e| format!("link level to mixer ({id}): {e}"))?;
+        .map_err(|e| format!("link main queue to mixer ({id}): {e}"))?;
+
+    let pfl_pad = active
+        .pfl_mixer
+        .request_pad_simple("sink_%u")
+        .ok_or_else(|| format!("pfl_mixer: request sink pad failed ({id})"))?;
+    pfl_gain
+        .static_pad("src")
+        .ok_or("pfl_gain: no src pad")?
+        .link(&pfl_pad)
+        .map_err(|e| format!("link pfl gain to pfl mixer ({id}): {e}"))?;
 
     // Neue Elemente in einer bereits laufenden (PLAYING) Pipeline müssen
     // ihren Zustand explizit an den Elternzustand angleichen — sonst
     // bleiben sie in NULL/READY hängen und liefern nie Daten.
-    for el in elements.iter().chain([&eq, &comp, &comp_makeup, &level]) {
+    for el in elements
+        .iter()
+        .chain([&eq, &comp, &comp_makeup, &level, &pfl_tee, &main_queue, &pfl_queue, &pfl_gain])
+    {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent ({id}): {e}"))?;
     }
@@ -432,6 +527,10 @@ fn add_channel_branch(
     elements.push(comp.clone());
     elements.push(comp_makeup.clone());
     elements.push(level.clone());
+    elements.push(pfl_tee);
+    elements.push(main_queue);
+    elements.push(pfl_queue);
+    elements.push(pfl_gain.clone());
     active.channels.insert(
         id.to_string(),
         ChannelBranch {
@@ -440,6 +539,9 @@ fn add_channel_branch(
             comp,
             comp_makeup,
             mixer_pad,
+            pfl_gain,
+            pfl_pad,
+            pfl_enabled: false,
             _external_input: external_input,
         },
     );
@@ -450,17 +552,25 @@ fn remove_channel_branch(active: &mut ActivePipeline, id: &str) {
     let Some(branch) = active.channels.remove(id) else {
         return;
     };
-    // Reihenfolge: erst den Mixer-Pad freigeben (stoppt den Datenfluss in
-    // den Mixer sauber), dann jedes Zweig-Element auf NULL setzen und aus
-    // der Pipeline entfernen — Gegenrichtung des Aufbaus in
-    // `add_channel_branch`. `_external_input` wird beim Drop von `branch`
-    // am Ende dieser Funktion automatisch verworfen, was den Lese-Thread
-    // stoppt (aber nicht dessen Pipeline-Elemente entfernt — die stehen
-    // bereits in `elements` und werden hier explizit aufgeräumt).
+    let was_pfl_enabled = branch.pfl_enabled;
+    // Reihenfolge: erst beide Mixer-Pads freigeben (stoppt den Datenfluss
+    // in Haupt- UND Monitor-Bus sauber), dann jedes Zweig-Element auf
+    // NULL setzen und aus der Pipeline entfernen — Gegenrichtung des
+    // Aufbaus in `add_channel_branch`. `_external_input` wird beim Drop
+    // von `branch` am Ende dieser Funktion automatisch verworfen, was den
+    // Lese-Thread stoppt (aber nicht dessen Pipeline-Elemente entfernt —
+    // die stehen bereits in `elements` und werden hier explizit
+    // aufgeräumt).
     active.mixer.release_request_pad(&branch.mixer_pad);
+    active.pfl_mixer.release_request_pad(&branch.pfl_pad);
     for el in &branch.elements {
         let _ = el.set_state(gst::State::Null);
         let _ = active.pipeline.remove(el);
+    }
+    // Ein entfernter, zuvor soloed Kanal kann der letzte gewesen sein —
+    // Monitor muss dann auf die Programm-Summe zurückfallen.
+    if was_pfl_enabled {
+        recompute_master_pfl_gain(active);
     }
 }
 
@@ -504,9 +614,66 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
     gst::Element::link_many([&mixer, &master_limiter, &master_makeup, &level_master])
         .map_err(|e| format!("link mixer to level (master): {e}"))?;
 
+    // Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29, K4-Entscheidung
+    // "Monitor-Summe + lokale Wiedergabe"): ein `tee` NACH `level_master`
+    // speist zusätzlich zum unveränderten Haupt-Pfad (`master_out_queue`
+    // → `mxl_output`, exakt wie zuvor `level_master` direkt) einen
+    // zweiten Zweig zum Monitor-Bus (`pfl_mixer`, gespeist außerdem von
+    // jedem Kanal über dessen Prefader-`pfl_gain`, s.
+    // `add_channel_branch`) — `master_pfl_gain` ist per Default (kein
+    // Kanal soloed) hörbar und schaltet stumm, sobald mindestens ein
+    // Kanal soloed wird (`recompute_master_pfl_gain`). Bewusst VOR dem
+    // ersten `MxlAudioOutput::new`-Aufruf aufgebaut (statt hinterher per
+    // Unlink/Relink umzuverdrahten) — `MxlAudioOutput::new` verlinkt sein
+    // `upstream`-Argument bereits intern, ein sauberer Tee-Vorbau ist
+    // einfacher als das Ergebnis nachträglich aufzutrennen.
+    let pfl_mixer = gst::ElementFactory::make("audiomixer")
+        .name("pfl-mixer")
+        .build()
+        .map_err(|e| format!("audiomixer (pfl): {e}"))?;
+    let master_pfl_tee = gst::ElementFactory::make("tee")
+        .name("master-pfl-tee")
+        .build()
+        .map_err(|e| format!("tee (master pfl): {e}"))?;
+    let master_out_queue = gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (master out): {e}"))?;
+    let master_pfl_queue = gst::ElementFactory::make("queue")
+        .build()
+        .map_err(|e| format!("queue (master pfl): {e}"))?;
+    let master_pfl_gain = gst::ElementFactory::make("volume")
+        .name("master-pfl-gain")
+        .property("volume", 1.0f64)
+        .build()
+        .map_err(|e| format!("volume (master pfl): {e}"))?;
+
+    pipeline
+        .add(&pfl_mixer)
+        .and_then(|()| pipeline.add(&master_pfl_tee))
+        .and_then(|()| pipeline.add(&master_out_queue))
+        .and_then(|()| pipeline.add(&master_pfl_queue))
+        .and_then(|()| pipeline.add(&master_pfl_gain))
+        .map_err(|e| format!("add pfl elements (master): {e}"))?;
+
+    gst::Element::link_many([&level_master, &master_pfl_tee])
+        .map_err(|e| format!("link level_master to master pfl tee: {e}"))?;
+    gst::Element::link_many([&master_pfl_tee, &master_out_queue])
+        .map_err(|e| format!("link master pfl tee to master out queue: {e}"))?;
+    gst::Element::link_many([&master_pfl_tee, &master_pfl_queue, &master_pfl_gain])
+        .map_err(|e| format!("link master pfl tee to master pfl gain: {e}"))?;
+
+    let master_pfl_pad = pfl_mixer
+        .request_pad_simple("sink_%u")
+        .ok_or("pfl_mixer: request sink pad failed (master)")?;
+    master_pfl_gain
+        .static_pad("src")
+        .ok_or("master_pfl_gain: no src pad")?
+        .link(&master_pfl_pad)
+        .map_err(|e| format!("link master pfl gain to pfl mixer: {e}"))?;
+
     let mxl_output = MxlAudioOutput::new(
         &pipeline,
-        &level_master,
+        &master_out_queue,
         context.clone(),
         &config.flow_id,
         &config.label,
@@ -516,6 +683,18 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
     .map_err(|e| format!("MxlAudioOutput: {e}"))?;
     mxl_output.set_active(true);
     let flowed = mxl_output.flowed_handle();
+
+    let pfl_output = MxlAudioOutput::new(
+        &pipeline,
+        &pfl_mixer,
+        context.clone(),
+        &config.monitor_flow_id,
+        &format!("{} Monitor", config.label),
+        SAMPLE_RATE,
+        CHANNELS,
+    )
+    .map_err(|e| format!("MxlAudioOutput (pfl): {e}"))?;
+    pfl_output.set_active(true);
 
     pipeline
         .set_state(gst::State::Playing)
@@ -528,6 +707,9 @@ fn build(context: &Arc<MxlContext>, config: &Config) -> Result<ActivePipeline, S
         master_limiter,
         master_makeup,
         _mxl_output: mxl_output,
+        pfl_mixer,
+        master_pfl_gain,
+        _pfl_output: pfl_output,
         flowed,
     })
 }
@@ -634,6 +816,18 @@ pub fn run(
             }
             Ok(Command::SetMasterLimiter { params }) => {
                 apply_comp_params(&active.master_limiter, &active.master_makeup, &params);
+            }
+            Ok(Command::SetPfl { id, enabled }) => {
+                let changed = if let Some(branch) = active.channels.get_mut(&id) {
+                    branch.pfl_gain.set_property("volume", if enabled { 1.0f64 } else { 0.0f64 });
+                    branch.pfl_enabled = enabled;
+                    true
+                } else {
+                    false
+                };
+                if changed {
+                    recompute_master_pfl_gain(&active);
+                }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

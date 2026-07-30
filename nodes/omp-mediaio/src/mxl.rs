@@ -525,8 +525,16 @@ impl MxlAudioOutput {
             )
             .build()
             .map_err(|e| format!("capsfilter(audio planar): {e}"))?;
+        // Kein `.name(...)`: die feste Bezeichnung "mxl_audio_output_valve"
+        // war live gefundener Bug (Nutzerwunsch 2026-07-29, Solo/PFL-
+        // Monitor-Bus, `omp-audio-mixer`) — ein Node mit ZWEI
+        // `MxlAudioOutput`s in derselben Pipeline (Programm- + Monitor-
+        // Ausgang) ließ `pipeline.add()` beim zweiten mit "Failed to add
+        // element" scheitern (GStreamer erlaubt keine zwei gleichnamigen
+        // Elemente in einer Bin). Der Name wurde nirgends per
+        // `get_by_name` nachgeschlagen, ohne ihn vergibt GStreamer
+        // automatisch eindeutige Namen (`valve0`, `valve1`, …).
         let valve = gst::ElementFactory::make("valve")
-            .name("mxl_audio_output_valve")
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;

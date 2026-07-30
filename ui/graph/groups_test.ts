@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
+  addMember,
   breadcrumbPath,
   createGroup,
   dissolveGroup,
@@ -32,6 +33,31 @@ Deno.test("createGroup removes members from top-level and creates the group", ()
 
   const inside = topLevelItems(grouped, "g1", ["a", "b", "c"]);
   assertEquals(sorted(inside.nodeIds), ["a", "b"]);
+});
+
+Deno.test("addMember appends a newly created node to an existing group", () => {
+  let tree = emptyTree();
+  tree = createGroup(tree, "g1", "Regie 1", null, ["a", "b"], []);
+
+  const result = addMember(tree, "g1", "c");
+  assertEquals(sorted(result.groups["g1"].nodeIds), ["a", "b", "c"]);
+
+  const inside = topLevelItems(result, "g1", ["a", "b", "c"]);
+  assertEquals(sorted(inside.nodeIds), ["a", "b", "c"]);
+});
+
+Deno.test("addMember is a no-op when the node is already a member", () => {
+  let tree = emptyTree();
+  tree = createGroup(tree, "g1", "Regie 1", null, ["a", "b"], []);
+
+  const result = addMember(tree, "g1", "a");
+  assertEquals(result.groups["g1"].nodeIds, ["a", "b"]);
+});
+
+Deno.test("addMember is a no-op for an unknown group", () => {
+  const tree = emptyTree();
+  const result = addMember(tree, "does-not-exist", "a");
+  assertEquals(result, tree);
 });
 
 Deno.test("setGroupWorkflowId attaches the workflow id, leaving other groups untouched", () => {

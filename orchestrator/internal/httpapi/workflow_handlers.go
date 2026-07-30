@@ -147,6 +147,39 @@ func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleRestartWorkflowRole liefert POST
+// /api/v1/workflows/{id}/roles/{role}/restart — Nutzerwunsch 2026-07-29,
+// s. workflows.Service.RestartRole-Doku. Body optional: {"format": "..."}
+// (leer/fehlend = Node-eigener Default, identisch zu role.Format beim
+// Anlegen). Asynchron wie Start/Stop: liefert sofort den aktuellen
+// Workflow-Stand zurück, der eigentliche Rollen-Neustart läuft im
+// Hintergrund weiter (per SSE/Poll beobachtbar).
+func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		role := r.PathValue("role")
+		var body struct {
+			Format string `json:"format"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := svc.RestartRole(r.Context(), id, role, body.Format); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		wf, err := svc.Get(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
 // handlePauseWorkflow liefert POST /api/v1/workflows/{id}/pause
 // (Kapitel 12 Teil 3, §12.3c) — analog zu handleStopWorkflow, gleiches
 // optionales {"confirm": true} für confirm_stop (gilt identisch für

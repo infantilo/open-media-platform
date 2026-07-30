@@ -118,6 +118,22 @@ export function createGroup(
   return { groups };
 }
 
+/** Nutzerreport 2026-07-30: "wenn ich in einer Gruppe bin und neue Nodes
+ * hinzufüge, werden diese im Root erstellt anstatt innerhalb der
+ * Gruppe" — `createGroup` fasst nur einen Momentzustand zusammen, es
+ * gab bisher keinen Weg, ein NACH dem Gruppieren neu entstandenes Node
+ * nachträglich als Mitglied aufzunehmen (flow-canvas.ts' `#startInstance`
+ * kennt nur den analogen Mechanismus für Workflow-Scopes,
+ * `#workflowScopeExtraNodeIds`, nie einen für `#groupTree`). Fügt
+ * nodeId zu groupId hinzu, sofern die Gruppe existiert und das Node
+ * nicht schon Mitglied ist (kein Effekt, kein Fehler bei doppeltem
+ * Aufruf — Aufrufer muss nicht selbst prüfen). */
+export function addMember(tree: GroupTree, groupId: string, nodeId: string): GroupTree {
+  const group = tree.groups[groupId];
+  if (!group || group.nodeIds.includes(nodeId)) return tree;
+  return { groups: { ...tree.groups, [groupId]: { ...group, nodeIds: [...group.nodeIds, nodeId] } } };
+}
+
 /** Verknüpft eine Gruppe mit dem Workflow, der per "Als Workflow
  * speichern" aus ihr angelegt wurde (s. GroupNode.workflowId-Doku). Kein
  * Effekt, wenn die Gruppe nicht (mehr) existiert. */

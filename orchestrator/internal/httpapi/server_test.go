@@ -355,22 +355,23 @@ func (f fakeHostHistory) Window(hostID string, window time.Duration) (hosts.Hist
 }
 
 type fakeWorkflowService struct {
-	created   workflows.Workflow
-	createErr error
-	list      []workflows.Workflow
-	listErr   error
-	get       workflows.Workflow
-	getErr    error
-	deleteErr error
-	startErr  error
-	stopErr   error
-	updated   workflows.Workflow
-	updateErr error
-	pauseErr  error
-	exported  workflows.ExportedWorkflow
-	exportErr error
-	imported  workflows.Workflow
-	importErr error
+	created        workflows.Workflow
+	createErr      error
+	list           []workflows.Workflow
+	listErr        error
+	get            workflows.Workflow
+	getErr         error
+	deleteErr      error
+	startErr       error
+	stopErr        error
+	restartRoleErr error
+	updated        workflows.Workflow
+	updateErr      error
+	pauseErr       error
+	exported       workflows.ExportedWorkflow
+	exportErr      error
+	imported       workflows.Workflow
+	importErr      error
 }
 
 func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error) {
@@ -391,6 +392,10 @@ func (f fakeWorkflowService) Start(ctx context.Context, id string) error { retur
 
 func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) error {
 	return f.stopErr
+}
+
+func (f fakeWorkflowService) RestartRole(ctx context.Context, id, role, format string) error {
+	return f.restartRoleErr
 }
 
 func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool) error {

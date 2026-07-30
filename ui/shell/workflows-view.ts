@@ -23,6 +23,7 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 // Rollen-Designer als Alternative zum Text-Formular unten.
 import "../graph/role-designer.ts";
 import type { RoleDesigner } from "../graph/role-designer.ts";
+import { ROLE_FORMATS } from "../graph/roles.ts";
 
 interface CatalogEntry {
   type: string;
@@ -52,21 +53,9 @@ interface Role {
   format?: string;
 }
 
-// Standard-Format-Presets je Rolle (Nutzerwunsch 2026-07-28: "test
-// sources brauchen einstellbares Format, Standardformate vorgeben,
-// 1080p50 im Endausbau am wichtigsten, jetzt minimalstes Format wegen
-// schwacher CPU"; erweitert 2026-07-28 auf "alle gängigen Formate" für
-// den Scaler-Node) — muss exakt die Namen aus
-// orchestrator/internal/workflows/formats.go spiegeln (einzige Quelle
-// der Wahrheit bleibt dort, validate() lehnt jeden anderen Namen ab).
-// Leer = Node-eigener Default, unverändertes Verhalten.
-const ROLE_FORMATS = [
-  "480p25", "480p29.97",
-  "576p25", "576p50",
-  "720p25", "720p29.97", "720p50", "720p59.94", "720p60",
-  "1080p25", "1080p29.97", "1080p30", "1080p50", "1080p59.94", "1080p60",
-  "2160p25", "2160p29.97", "2160p30", "2160p50", "2160p59.94", "2160p60",
-];
+// Standard-Format-Presets je Rolle: s. ROLE_FORMATS (ui/graph/roles.ts,
+// geteilt mit dem grafischen Role-Designer). Leer = Node-eigener
+// Default, unverändertes Verhalten.
 
 // Kapitel 12 Teil 1 (docs/END-GOAL-FEATURES.md §12.3a): fromSender/
 // toReceiver sind optionale IS-04-Port-Labels — leer = Kompatibilitäts-

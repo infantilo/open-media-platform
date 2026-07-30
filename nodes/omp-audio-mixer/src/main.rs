@@ -86,6 +86,15 @@ struct ChannelState {
     label: String,
     gain_db: f64,
     mute: bool,
+    /// Solo/PFL (Nutzerwunsch 2026-07-29, END-GOAL-FEATURES Kapitel-10-
+    /// Entscheidung K4 "Solo/PFL wird gebaut"): schaltet diesen Kanal auf
+    /// den separaten Monitor-Bus (`pipeline::PipelineHandle::set_pfl`) —
+    /// bewusst NICHT Teil von `capture_state`/`restore_state`: Solo ist
+    /// ein momentaner Abhör-Hilfsschalter, kein Mix-Parameter, ein
+    /// wiederhergestelltes Preset soll den Monitor nicht überraschend
+    /// auf einen längst irrelevanten Kanal stehen lassen (analog dazu,
+    /// dass echte Konsolen Solo/PFL ebenfalls nicht in Szenen speichern).
+    pfl: bool,
     eq_low: f64,
     eq_mid: f64,
     eq_high: f64,
@@ -148,6 +157,7 @@ impl ChannelState {
             label,
             gain_db: 0.0,
             mute: false,
+            pfl: false,
             eq_low: 0.0,
             eq_mid: 0.0,
             eq_high: 0.0,
@@ -323,6 +333,7 @@ impl ParamStore for AudioMixerStore {
                 Some(Range::Number { min: -60.0, max: 12.0 }),
             ));
             parameters.push(channel_param(id, "mute", ParamType::Boolean, None));
+            parameters.push(channel_param(id, "pfl", ParamType::Boolean, None));
             for band in ["eqLow", "eqMid", "eqHigh"] {
                 parameters.push(channel_param(
                     id,
@@ -419,6 +430,13 @@ impl ParamStore for AudioMixerStore {
                 name: format!("channel.{id}.setMute"),
                 args: vec![MethodArg {
                     name: "muted".to_string(),
+                    kind: ParamType::Boolean,
+                }],
+            });
+            methods.push(MethodSpec {
+                name: format!("channel.{id}.setPfl"),
+                args: vec![MethodArg {
+                    name: "enabled".to_string(),
                     kind: ParamType::Boolean,
                 }],
             });
@@ -530,6 +548,7 @@ impl ParamStore for AudioMixerStore {
             "label" => Some(serde_json::json!(ch.label)),
             "gain" => Some(serde_json::json!(ch.gain_db)),
             "mute" => Some(serde_json::json!(ch.mute)),
+            "pfl" => Some(serde_json::json!(ch.pfl)),
             "eqLow" => Some(serde_json::json!(ch.eq_low)),
             "eqMid" => Some(serde_json::json!(ch.eq_mid)),
             "eqHigh" => Some(serde_json::json!(ch.eq_high)),
@@ -854,6 +873,15 @@ impl AudioMixerStore {
                 self.pipeline.set_mute(id.to_string(), muted);
                 Ok(())
             }
+            "setPfl" => {
+                let enabled = args
+                    .get("enabled")
+                    .and_then(Value::as_bool)
+                    .ok_or(InvokeError::Unknown)?;
+                ch.pfl = enabled;
+                self.pipeline.set_pfl(id.to_string(), enabled);
+                Ok(())
+            }
             "setEq" => {
                 let low = args.get("low").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
                 let mid = args.get("mid").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
@@ -929,6 +957,7 @@ impl AudioMixerStore {
                 // Kommandos ankommen.
                 self.pipeline.set_gain(id.to_string(), ch.gain_db);
                 self.pipeline.set_mute(id.to_string(), ch.mute);
+                self.pipeline.set_pfl(id.to_string(), ch.pfl);
                 self.pipeline
                     .set_eq(id.to_string(), ch.eq_low, ch.eq_mid, ch.eq_high);
                 self.pipeline.set_eq_band(
@@ -1023,6 +1052,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let sender_id = omp_node_sdk::idgen::new_v4();
     let flow_id = omp_node_sdk::idgen::new_v4();
+    // Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — zweiter,
+    // eigenständiger MXL-Audio-Sender neben dem Programm-Ausgang, s.
+    // `pipeline::build`.
+    let monitor_sender_id = omp_node_sdk::idgen::new_v4();
+    let monitor_flow_id = omp_node_sdk::idgen::new_v4();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -1032,6 +1066,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         flow_id: flow_id.clone(),
         label: label.clone(),
+        monitor_flow_id: monitor_flow_id.clone(),
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_thread =
@@ -1075,6 +1110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // klonen; `registry_url` ebenso, weil `NodeConfig` sie konsumiert.
     let own_sender_id = sender_id.clone();
     let discovery_registry_url = registry_url.clone();
+    // `label` wird gleich per Shorthand-Feld in `NodeConfig` verschoben —
+    // vorher klonen für den zweiten (Monitor-)Sender unten.
+    let monitor_sender_label = format!("{label} Monitor");
 
     let handle = omp_node_sdk::start(
         NodeConfig {
@@ -1083,18 +1121,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             port,
             registry_url,
             nats_url: nats_url.clone(),
-            senders: vec![SenderSpec {
-                id: Some(sender_id),
-                transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
-                flow: Some(omp_node_sdk::node::FlowSpec::Audio {
-                    id: Some(flow_id),
-                    sample_rate_numerator: pipeline::SAMPLE_RATE,
-                    channel_count: pipeline::CHANNELS,
-                    media_type: "audio/float32".to_string(),
-                    bit_depth: 32,
-                }),
-                ..Default::default()
-            }],
+            senders: vec![
+                SenderSpec {
+                    id: Some(sender_id),
+                    transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                    flow: Some(omp_node_sdk::node::FlowSpec::Audio {
+                        id: Some(flow_id),
+                        sample_rate_numerator: pipeline::SAMPLE_RATE,
+                        channel_count: pipeline::CHANNELS,
+                        media_type: "audio/float32".to_string(),
+                        bit_depth: 32,
+                    }),
+                    ..Default::default()
+                },
+                // Solo/PFL-Monitor-Bus (Nutzerwunsch 2026-07-29) — zweiter
+                // Sender, per Drag & Drop z. B. an `omp-audio-monitor`
+                // anschließbar wie jeder andere MXL-Audio-Sender auch.
+                SenderSpec {
+                    id: Some(monitor_sender_id),
+                    label: Some(monitor_sender_label),
+                    transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                    flow: Some(omp_node_sdk::node::FlowSpec::Audio {
+                        id: Some(monitor_flow_id),
+                        sample_rate_numerator: pipeline::SAMPLE_RATE,
+                        channel_count: pipeline::CHANNELS,
+                        media_type: "audio/float32".to_string(),
+                        bit_depth: 32,
+                    }),
+                    ..Default::default()
+                },
+            ],
             receivers: vec![],
             instance_id,
             // "media-ready" über PipelineHandle::media_ready()
