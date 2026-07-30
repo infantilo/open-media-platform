@@ -65,6 +65,7 @@ struct RecorderStore {
 impl ParamStore for RecorderStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "record.status".to_string(),

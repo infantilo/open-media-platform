@@ -66,6 +66,7 @@ struct IngestStore {
 impl ParamStore for IngestStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "direction".to_string(),
@@ -171,6 +172,7 @@ struct OutputStore {
 impl ParamStore for OutputStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "direction".to_string(),

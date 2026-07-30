@@ -31,6 +31,7 @@ struct GatewayStore {
 impl ParamStore for GatewayStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "direction".to_string(),

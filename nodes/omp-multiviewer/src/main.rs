@@ -41,6 +41,7 @@ struct MultiviewerStore {
 impl ParamStore for MultiviewerStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 // JSON-Array [{senderId,label}] — gleiche Array-Ausnahme
                 // wie omp-switchers "inputs" (v0-Schema kennt keinen

@@ -77,6 +77,7 @@ struct MonitorStore {
 impl ParamStore for MonitorStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "connectedFlowId".to_string(),

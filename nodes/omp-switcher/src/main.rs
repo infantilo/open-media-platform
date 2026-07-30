@@ -37,6 +37,7 @@ struct SwitcherStore {
 impl ParamStore for SwitcherStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "inputs".to_string(),

@@ -62,6 +62,7 @@ struct PlayoutStore {
 impl ParamStore for PlayoutStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![ParamSpec {
                 name: "fps".to_string(),
                 kind: ParamType::Number,

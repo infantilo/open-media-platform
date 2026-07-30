@@ -250,7 +250,7 @@ mod tests {
 
     impl ParamStore for FakeStore {
         fn descriptor(&self) -> Descriptor {
-            Descriptor { parameters: vec![], methods: vec![] }
+            Descriptor { parameters: vec![], methods: vec![], latency: None }
         }
         fn get(&self, _name: &str) -> Option<Value> {
             None

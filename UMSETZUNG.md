@@ -1566,20 +1566,32 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   eigentlichen Ausgleich. Vier Teile, sequenziell (jeder baut auf dem
   vorigen auf):
 
-  **D8 Teil 1 (SDK: Per-Node-Latenzdeklaration, additiv).** Descriptor-
-  Erweiterung in `omp-node-sdk` (analog zum Katalog-Descriptor, §6.2 —
-  rein additiv, kein Breaking Change für bestehende Nodes): jeder Node
-  liefert optional `minLatencyFrames`/`maxLatencyFrames` getrennt für
-  Video/Audio/Daten sowie `supportsDelayCompensation: bool` +, falls
-  `true`, eine Methode `setOutputDelay(frames)` (ARCHITECTURE.md §15.1
-  Punkt 1). Reihenfolge: zuerst 2-3 repräsentative Nodes von Hand
-  vermessen (z. B. `omp-scaler`, `omp-video-mixer-me`, `omp-audio-mixer`
-  — mit demselben Kopf/Wallclock-Skew-Verfahren wie oben, aber pro Node
-  statt Ende-zu-Ende), danach die SDK-Feldnamen/-Typen daran
-  festmachen, nicht umgekehrt geraten. **Verifikation:** `descriptor.json`
-  eines instrumentierten Nodes zeigt plausible, live gemessene Werte;
-  bestehende Nodes ohne dieses Feld bleiben unverändert lauffähig
-  (Contract-Check C9 weiterhin grün).
+  **D8 Teil 1 (SDK: Per-Node-Latenzdeklaration, additiv, erledigt
+  2026-07-30).** Descriptor-Erweiterung in `omp-node-sdk` (analog zum
+  Katalog-Descriptor, §6.2 — rein additiv im JSON-Wire-Format, kein
+  Breaking Change für bestehende Nodes): `Descriptor.latency:
+  Option<LatencyInfo>` mit `minLatencyFrames`/`maxLatencyFrames` getrennt
+  für Video/Audio/Daten sowie `supportsDelayCompensation: bool`
+  (ARCHITECTURE.md §15.1 Punkt 1). Reihenfolge wie geplant: zuerst drei
+  repräsentative Nodes per echtem Testworkflow (`src(25fps)→scaler→mix` +
+  `audiomix`) mit dem Kopf-Index/Wallclock-Skew-Verfahren vermessen
+  (`mxl-info`s eingebautes `Latency (grains, ms)`-Feld, fünf Samples je
+  Node), danach SDK-Feldnamen/-Typen + tatsächliche Werte daran
+  festgemacht: `omp-scaler` deterministisch 1 Frame (Origin-Index-
+  Durchreichung, C13-Nachtrag 2, alle 5 Samples identisch),
+  `omp-video-mixer-me` 0-2 Frames Jitter-Spanne (neuer Ursprung beim
+  Compositing, §15.1 Punkt 4), `omp-audio-mixer` 0-480 Samples (neuer
+  Ursprung + Commit-Batch-Größe als konservative Obergrenze, nicht die
+  verrauschten Rohwerte — Details Nachtrag 111). `setOutputDelay(frames)`
+  selbst (D8 Teil 3) noch nicht implementiert, alle drei Nodes melden
+  `supportsDelayCompensation: false`. **Verifikation bestanden:**
+  `descriptor.json` der drei instrumentierten Nodes zeigt die gemessenen
+  Werte; `omp-source` (unverändert) hat gar kein `latency`-Feld im JSON;
+  `make contract` (C9) PASS für alle vier Rollen inkl. Schema-Validierung
+  gegen das um `latency`/`latencyInfo`/`latencyRange` erweiterte
+  `docs/descriptor-v0.schema.json`; `cargo build --workspace --bins
+  --examples`/`cargo clippy --workspace --all-targets`/`cargo test
+  --workspace` grün. Details: `docs/decisions.md` Nachtrag 111.
 
   **D8 Teil 2 (Orchestrator: Workflow-Latenz-Budget als Preflight).**
   Neues Workflow-Feld `targetLatencyFrames` (Definition + UI-Formular,

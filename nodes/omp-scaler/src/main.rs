@@ -22,8 +22,8 @@ use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverReso
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
-    ReceiverSpec, SenderSpec, SetError,
+    Descriptor, InvokeError, LatencyInfo, LatencyRange, NodeConfig, ParamSpec, ParamStore,
+    ParamType, RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use serde_json::Value;
 
@@ -72,6 +72,22 @@ struct ScalerStore {
 impl ParamStore for ScalerStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            // D8 Teil 1 (UMSETZUNG.md, ARCHITECTURE.md §15.1 Punkt 1/4): live
+            // per Kopf-Index-Vergleich gemessen (5 Samples eines echten
+            // Testworkflows `src(25fps)->scaler->mix`, `docs/decisions.md`
+            // Nachtrag zu D8 Teil 1) — `omp-scaler` reicht den MXL-Origin-
+            // Index unverändert durch (C13-Nachtrag 2), der Scaler-Ausgang
+            // lag deshalb in allen 5 Samples exakt einen Grain (=1 Frame der
+            // Ziel-Framerate) hinter dem Eingang zurück, deterministisch
+            // (min==max). Ergänzende `omp-video-mixer-me`/`omp-audio-mixer`-
+            // Vermessung: `nodes/omp-video-mixer-me/src/main.rs`,
+            // `nodes/omp-audio-mixer/src/main.rs`.
+            latency: Some(LatencyInfo {
+                video: Some(LatencyRange { min_latency_frames: 1, max_latency_frames: 1 }),
+                audio: None,
+                data: None,
+                supports_delay_compensation: false,
+            }),
             parameters: vec![
                 ParamSpec {
                     name: "connectedFlowId".to_string(),

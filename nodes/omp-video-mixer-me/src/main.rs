@@ -38,8 +38,8 @@ use omp_node_sdk::is04;
 use omp_node_sdk::is04::{RegistryClient, Sender, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
-    RawResponse, SenderSpec, SetError,
+    Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodArg, MethodSpec, NodeConfig,
+    ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
 };
 use pipeline::{DiscoveredInput, DiscoveredKeyFill, DveBox};
 use serde_json::Value;
@@ -83,6 +83,23 @@ fn json_number(args: &serde_json::Map<String, Value>, name: &str) -> Result<i32,
 impl ParamStore for MixerStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            // D8 Teil 1 (UMSETZUNG.md, ARCHITECTURE.md §15.1 Punkt 1/4): live
+            // per Kopf-Index/Wallclock-Skew-Verfahren gemessen (5 Samples
+            // eines echten Testworkflows, `docs/decisions.md` Nachtrag zu D8
+            // Teil 1). Anders als `omp-scaler` reicht der Mixer den MXL-
+            // Origin-Index NICHT durch (Compositing kombiniert mehrere
+            // Eingänge zu einem Ausgangs-Grain — nach Definition ein neuer
+            // Ursprung, ARCHITECTURE.md §15.1 Punkt 4 letzter Absatz) —
+            // gemessen wurde deshalb die eigene Kopfindex-Distanz zur
+            // Wallclock, nicht die kumulierte Latenz gegenüber dem
+            // Scaler-Eingang. Beobachtete Streuung 0-2 Grains (Queue-/
+            // Compositor-Jitter, s. `docs/decisions.md` Nachtrag 63).
+            latency: Some(LatencyInfo {
+                video: Some(LatencyRange { min_latency_frames: 0, max_latency_frames: 2 }),
+                audio: None,
+                data: None,
+                supports_delay_compensation: false,
+            }),
             parameters: vec![
                 // Wie bei omp-switcher (C7): "inputs" ist ein JSON-Array,
                 // das v0-Schema kennt keinen Array-Typ — der Wert wird

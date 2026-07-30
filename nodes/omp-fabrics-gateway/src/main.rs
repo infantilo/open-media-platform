@@ -46,6 +46,7 @@ struct TargetStore {
 impl ParamStore for TargetStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "role".to_string(),
@@ -133,6 +134,7 @@ struct InitiatorStore {
 impl ParamStore for InitiatorStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "role".to_string(),

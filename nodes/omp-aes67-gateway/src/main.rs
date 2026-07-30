@@ -71,6 +71,7 @@ struct SinkStore {
 impl ParamStore for SinkStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 ParamSpec { name: "flowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
@@ -149,6 +150,7 @@ struct SourceStore {
 impl ParamStore for SourceStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
                 ParamSpec { name: "connectedFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },

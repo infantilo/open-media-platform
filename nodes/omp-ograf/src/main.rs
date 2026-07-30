@@ -36,6 +36,7 @@ struct OgrafStore {
 impl ParamStore for OgrafStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "templates".to_string(),
@@ -178,6 +179,7 @@ struct HarnessOnlyStore {
 impl ParamStore for HarnessOnlyStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![],
             methods: vec![],
         }

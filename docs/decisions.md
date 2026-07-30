@@ -13822,3 +13822,113 @@ Device-Query-Verhalten. `go build/vet/test` (orchestrator, inkl.
 
 **Betroffene Dateien:** `orchestrator/internal/registry/client.go`,
 `orchestrator/internal/registry/client_test.go`.
+
+## 2026-07-30 (Nachtrag 111) — D8 Teil 1: Per-Node-Latenzdeklaration im SDK (additiv), drei Nodes live vermessen
+
+**Anlass:** `UMSETZUNG.md` D8 Teil 1 (`ARCHITECTURE.md` §15.1 Punkt 1) —
+erster von vier D8-Teilschritten zum Latenzbudget/Delay-Ausgleich, deren
+Vorausplanung Nachtrag 110 dokumentiert. Reihenfolge laut Plan: zuerst
+2-3 repräsentative Nodes von Hand vermessen, danach SDK-Feldnamen/-Typen
+daran festmachen — nicht umgekehrt geraten.
+
+**Messverfahren:** dasselbe Kopf-Index/Wallclock-Skew-Verfahren wie bei
+der A/V-Sync-Messung (Nachtrag 110-Anschluss, `UMSETZUNG.md`-Zeile zu
+"A/V-Sync-Live-Messung am Sink"), aber pro Node statt Ende-zu-Ende —
+`mxl-info`s eingebautes `Latency (grains, ms)`-Feld (`tools/mxl-info/
+main.cpp::outputLatency`) berechnet exakt das: `mxlGetTime()` minus der
+TAI-Zeit des aktuellen Kopf-Index, in Grains und ms. Echter Testworkflow
+`src(25fps)→scaler→mix` (Video) + `audiomix` mit `src`s Audio-Sender als
+Kanalquelle (Video/Audio getrennt, §15.1 Punkt 5), fünf Samples je Node
+im Sekundenabstand.
+
+**Befund 1 (`omp-scaler`, deterministisch):** `omp-scaler` reicht den
+MXL-Origin-Index unverändert durch (C13-Nachtrag 2) — sein Kopf-Index lag
+in allen 5 Samples exakt einen Grain (=1 Frame bei 25fps) hinter dem
+Eingang zurück, kein einziger Ausreißer. `minLatencyFrames=maxLatencyFrames=1`.
+
+**Befund 2 (`omp-video-mixer-me`, Jitter-Spanne):** Der Mixer setzt beim
+Compositing einen NEUEN Ursprung (mehrere Eingänge → ein Ausgangs-Grain,
+§15.1 Punkt 4 letzter Absatz: "Mixer-Ausgänge ... nach Definition ein
+neuer Ursprung") — die Wallclock-Skew-Messung zeigt deshalb die eigene
+Kopfindex-Distanz zur Wallclock, nicht die kumulierte Latenz gegenüber
+dem Scaler-Eingang. Beobachtete Streuung über 5 Samples: 0, 2, 0, 1, 0
+Grains (Queue-/Compositor-Jitter, vgl. Nachtrag 63). `minLatencyFrames=0,
+maxLatencyFrames=2`.
+
+**Befund 3 (`omp-audio-mixer`, andere Einheit):** Gleiches
+Neuer-Ursprung-Verhalten wie der Mixer. Rohmessung zeigte durchgehend
+NEGATIVE Latenz (-1098..-987 Samples, d. h. Kopf-Index bis zu ~23ms VOR
+der Wallclock) — ein Artefakt des Lookahead-Batch-Schreibens (`mxl-info`:
+"Commit batch size: 480"), keine echte Verarbeitungslatenz. Statt der
+Rohmesswerte deshalb bewusst die tatsächliche Commit-Batch-Größe als
+konservative Obergrenze übernommen: `minLatencyFrames=0,
+maxLatencyFrames=480` (Samples bei 48kHz, nicht Video-Frames — §15.1
+Punkt 5 sieht das explizit vor: "audio ggf. in Samples ... audio-
+frame-äquivalenten Einheiten").
+
+**SDK-Erweiterung (additiv, kein Breaking Change):** `nodes/omp-node-sdk/
+src/descriptor.rs` — neues `Descriptor.latency: Option<LatencyInfo>`
+(`#[serde(skip_serializing_if = "Option::is_none")]`, fehlt komplett im
+JSON, wenn `None`), `LatencyInfo { video, audio, data:
+Option<LatencyRange>, supports_delay_compensation: bool }`,
+`LatencyRange { min_latency_frames, max_latency_frames: u32 }`.
+`setOutputDelay(frames)` (§15.1 Punkt 3, D8 Teil 3) selbst noch NICHT
+implementiert — `supports_delay_compensation` steht bei allen drei
+vermessenen Nodes bewusst auf `false`, das Feld beschreibt nur die
+künftige Fähigkeit.
+
+**Rust-Struct-Literal-Konsequenz (kein Wire-Format-Bruch, aber ein
+Source-Bruch):** Da `Descriptor` ein neues Feld bekommt, mussten alle ca.
+20 bestehenden `Descriptor { parameters, methods }`-Konstruktionsstellen
+in den Node-Binaries um `latency: None` ergänzt werden, sonst kompiliert
+der Workspace nicht — additiv ist hier ausschließlich das JSON-Wire-
+Format (bestehende Nodes ohne Instrumentierung liefern exakt dasselbe
+`descriptor.json` wie vorher, verifiziert unten), nicht der Rust-Quelltext
+selbst.
+
+**Schema-Erweiterung:** `docs/descriptor-v0.schema.json` hatte
+`"additionalProperties": false` auf oberster Ebene — ein neues Top-Level-
+Feld ohne Schema-Erweiterung hätte den C9-Contract-Check (`tools/
+contract-check`, validiert strikt gegen dieses Schema) für jeden
+instrumentierten Node brechen. Neues optionales `latency`-Property
+(`oneOf: [null, $ref latencyInfo]`) + `$defs.latencyInfo`/
+`$defs.latencyRange` ergänzt, `required: ["parameters","methods"]` auf
+oberster Ebene unverändert.
+
+**Go-Seite unverändert:** der Orchestrator parst `descriptor.json` nicht
+in ein vollständiges Struct — `snapshots/nodeclient.go::descriptorResponse`
+liest nur `parameters[].name/readonly` (Go `encoding/json` ignoriert
+unbekannte Felder standardmäßig) — kein Go-Code-Änderungsbedarf für
+dieses additive Feld. `nodes/mock/internal/descriptor` (Go-Referenz-
+Node) bewusst NICHT mitgezogen — reine Testfixture, kein Node-Contract-
+Erfordernis dafür.
+
+**Live verifiziert (echter Workflow, kein Mock):** frischer Testworkflow
+`src→scaler→mix` + `audiomix` gestartet, `descriptor.json` aller vier
+Rollen abgefragt — `scaler`/`mix`/`audiomix` zeigen die oben genannten
+gemessenen Werte, `src` (unverändert) hat gar kein `latency`-Feld im
+JSON. `make contract NODE_URL=...` (C9) gegen alle vier Instanzen: PASS,
+inklusive `Descriptor-Schema entspricht docs/descriptor-v0.schema.json`
+für sowohl instrumentierte als auch unveränderte Nodes. `cargo build
+--workspace --bins --examples` (20 Node-Binaries)/`cargo clippy
+--workspace --all-targets` (keine neuen Warnungen)/`cargo test
+--workspace` grün. Test-Workflow danach gestoppt+gelöscht, keine
+verwaisten Prozesse (`ps aux` geprüft).
+
+**Offen (D8 Teil 2-4, s. Nachtrag 110):** Workflow-Latenzbudget als
+Preflight, Delay-Zuweisung (`setOutputDelay` selbst), getrenntes Audio-/
+Daten-Handling im Orchestrator, wiederverwendbares Diagnose-Werkzeug.
+Diese Scheibe liefert nur die Deklaration + drei reale Datenpunkte.
+
+**Betroffene Dateien:** `nodes/omp-node-sdk/src/descriptor.rs`,
+`nodes/omp-node-sdk/src/lib.rs`, `nodes/omp-node-sdk/src/server.rs`,
+`nodes/omp-node-sdk/examples/hello_node.rs`, `nodes/omp-scaler/src/main.rs`,
+`nodes/omp-video-mixer-me/src/main.rs`, `nodes/omp-audio-mixer/src/main.rs`,
+`nodes/omp-viewer/src/main.rs`, `nodes/omp-source/src/main.rs`,
+`nodes/omp-switcher/src/main.rs`, `nodes/omp-multiviewer/src/main.rs`,
+`nodes/omp-ograf/src/main.rs`, `nodes/omp-srt-gateway/src/main.rs`,
+`nodes/omp-2110-gateway/src/main.rs`, `nodes/omp-aes67-gateway/src/main.rs`,
+`nodes/omp-fabrics-gateway/src/main.rs`, `nodes/omp-media-library/src/main.rs`,
+`nodes/omp-audio-monitor/src/main.rs`, `nodes/omp-recorder/src/main.rs`,
+`nodes/omp-player/src/main.rs`, `nodes/omp-playout-automation/src/main.rs`,
+`nodes/playout/src/main.rs`, `docs/descriptor-v0.schema.json`.

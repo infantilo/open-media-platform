@@ -17,7 +17,9 @@ pub mod peer;
 pub mod plugins;
 pub mod server;
 
-pub use descriptor::{Descriptor, MethodArg, MethodSpec, ParamSpec, ParamType, Range};
+pub use descriptor::{
+    Descriptor, LatencyInfo, LatencyRange, MethodArg, MethodSpec, ParamSpec, ParamType, Range,
+};
 pub use node::{MediaReadySource, NodeConfig, NodeHandle, ReceiverSpec, SenderSpec, run, start};
 pub use peer::{PeerClient, resolve_owning_node_href};
 pub use plugins::{PluginInfo, PluginRegistry};

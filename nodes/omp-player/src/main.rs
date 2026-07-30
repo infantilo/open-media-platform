@@ -325,7 +325,7 @@ impl ParamStore for PlayerStore {
             });
         }
 
-        Descriptor { parameters, methods }
+        Descriptor { parameters, methods, latency: None }
     }
 
     fn get(&self, name: &str) -> Option<Value> {

@@ -62,6 +62,7 @@ struct ViewerStore {
 impl ParamStore for ViewerStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "connectedFlowId".to_string(),

@@ -51,6 +51,7 @@ struct SourceStore {
 impl ParamStore for SourceStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "pattern".to_string(),

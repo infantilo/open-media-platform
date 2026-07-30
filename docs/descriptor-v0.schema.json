@@ -13,6 +13,13 @@
     "methods": {
       "type": "array",
       "items": { "$ref": "#/$defs/method" }
+    },
+    "latency": {
+      "description": "Optionale Per-Node-Latenzdeklaration (ARCHITECTURE.md §15, UMSETZUNG.md D8 Teil 1) — additiv, ein Node ohne dieses Feld bleibt für den künftigen Budget-Rechner \"Latenz unbekannt\" (§15.2), sonst unverändert lauffähig. Fehlt oder null, wenn der Node keine Angabe macht.",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/latencyInfo" }
+      ]
     }
   },
   "additionalProperties": false,
@@ -83,6 +90,29 @@
           "type": "string",
           "enum": ["number", "boolean", "enum", "string"]
         }
+      },
+      "additionalProperties": false
+    },
+    "latencyInfo": {
+      "type": "object",
+      "description": "Inhärente Verarbeitungslatenz eines Nodes, getrennt nach Medienart (§15.1 Punkt 5: ein Video-Frame-Budget ist kein automatisches Audio-/Daten-Budget). video/audio/data sind jeweils in der Grain-Rate des betroffenen Flows zu verstehen (z. B. Video-Frames bei Videoraten, Samples bei Audio).",
+      "properties": {
+        "video": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/latencyRange" }] },
+        "audio": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/latencyRange" }] },
+        "data": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/latencyRange" }] },
+        "supportsDelayCompensation": {
+          "description": "true, falls der Node zusätzlich zu seiner inhärenten Latenz per POST /methods/setOutputDelay {\"frames\": N} eine einstellbare Zusatzverzögerung unterstützt (§15.1 Punkt 3, D8 Teil 3). false/fehlend = kein Delay-Ausgleich möglich.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "latencyRange": {
+      "type": "object",
+      "required": ["minLatencyFrames", "maxLatencyFrames"],
+      "properties": {
+        "minLatencyFrames": { "type": "integer", "minimum": 0 },
+        "maxLatencyFrames": { "type": "integer", "minimum": 0 }
       },
       "additionalProperties": false
     }

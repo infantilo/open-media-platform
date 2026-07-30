@@ -512,7 +512,32 @@ impl ParamStore for AudioMixerStore {
             });
         }
 
-        Descriptor { parameters, methods }
+        Descriptor {
+            parameters,
+            methods,
+            // D8 Teil 1 (UMSETZUNG.md, ARCHITECTURE.md §15.1 Punkt 4/5): live
+            // per Kopf-Index/Wallclock-Skew-Verfahren gemessen (5 Testworkflow-
+            // Samples, `docs/decisions.md` Nachtrag zu D8 Teil 1). Wie
+            // `omp-video-mixer-me` setzt der Audiomixer einen neuen Ursprung
+            // (kein durchgereichter Origin-Index von den Kanal-Quellen) —
+            // gemessen wurde die eigene Kopfindex-Distanz zur Wallclock, nicht
+            // die kumulierte Latenz eines Eingangspfads. Einheit: Samples der
+            // Audio-Grain-Rate (48 kHz), nicht Video-Frames. Beobachtet:
+            // -1098..-987 Samples (Head index bis zu einem Commit-Batch der
+            // Wallclock voraus, Lookahead-Batch-Schreiben) — `maxLatencyFrames`
+            // deshalb konservativ auf die tatsächliche Commit-Batch-Größe
+            // (480 Samples, s. `mxl-info`s "Commit batch size") gesetzt, nicht
+            // auf die wenigen Rohmesswerte, die nur diese Batch-Grenze zeigen.
+            latency: Some(omp_node_sdk::LatencyInfo {
+                video: None,
+                audio: Some(omp_node_sdk::LatencyRange {
+                    min_latency_frames: 0,
+                    max_latency_frames: 480,
+                }),
+                data: None,
+                supports_delay_compensation: false,
+            }),
+        }
     }
 
     fn get(&self, name: &str) -> Option<Value> {

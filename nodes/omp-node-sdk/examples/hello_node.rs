@@ -35,6 +35,7 @@ impl HelloStore {
 impl ParamStore for HelloStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
+            latency: None,
             parameters: vec![
                 ParamSpec {
                     name: "label".to_string(),
