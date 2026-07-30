@@ -251,7 +251,7 @@ func writeWorkflowError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, workflows.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, workflows.ErrValidation):
+	case errors.Is(err, workflows.ErrValidation), errors.Is(err, workflows.ErrLatencyBudgetInsufficient):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, workflows.ErrNotStopped), errors.Is(err, workflows.ErrNotRunning), errors.Is(err, workflows.ErrConfirmationRequired):
 		http.Error(w, err.Error(), http.StatusConflict)

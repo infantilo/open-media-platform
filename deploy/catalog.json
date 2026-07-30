@@ -33,7 +33,8 @@
     "command": ["../nodes/target/debug/omp-video-mixer-me"],
     "env": {},
     "description": "Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus, Cut/Auto-Transition, DVE-Kanal, Keyer, Tally-Signalisierung.",
-    "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen"
+    "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 2 } }
   },
   {
     "type": "omp-audio-mixer",
@@ -42,7 +43,8 @@
     "command": ["../nodes/target/debug/omp-audio-mixer"],
     "env": {},
     "description": "Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ pro Kanal und automatischem Audio-Follow-Video.",
-    "expectedResources": "gering bis moderat, wächst mit Kanalzahl"
+    "expectedResources": "gering bis moderat, wächst mit Kanalzahl",
+    "latency": { "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 480 } }
   },
   {
     "type": "omp-audio-monitor",
@@ -123,6 +125,7 @@
     "command": ["../nodes/target/debug/omp-scaler"],
     "env": {},
     "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus.",
-    "expectedResources": "gering, wächst mit Zielauflösung"
+    "expectedResources": "gering, wächst mit Zielauflösung",
+    "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 } }
   }
 ]

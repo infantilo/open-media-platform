@@ -1593,22 +1593,39 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   --examples`/`cargo clippy --workspace --all-targets`/`cargo test
   --workspace` grün. Details: `docs/decisions.md` Nachtrag 111.
 
-  **D8 Teil 2 (Orchestrator: Workflow-Latenz-Budget als Preflight).**
-  Neues Workflow-Feld `targetLatencyFrames` (Definition + UI-Formular,
-  analog `Settings.ProgramWidth`/`confirmStop`). Bei `Start()`, als
-  zusätzlicher Schritt der bestehenden Ressourcen-Vorprüfung
-  (`workflows.Service.checkResources`, D7 Teil 2/Kapitel 14 Teil 4):
-  für jeden Pfad im Verbindungs-Template die Summe der
-  `minLatencyFrames` der beteiligten Rollen bilden (Graph-Traversal
-  über `Definition.Connections`, ein Pfad pro Quelle→Senke-Route), das
-  Maximum ist die Mindestlatenz des Workflows; ist `targetLatencyFrames`
-  kleiner, `Start()` mit derselben ehrlichen Ablehnung wie beim
-  I/O-Karten-Fall (§6.1) verweigern, nicht still kürzer starten.
-  **Verifikation:** Unit-Test mit synthetischem Verbindungsgraphen
-  (Fan-in/Fan-out, unterschiedliche Pfadlängen) plus ein echter
-  Live-Start eines zu knapp budgetierten Workflows, der mit klarer
-  Fehlermeldung („Zielband zu knapp für Pfad X→Y→Z, Minimum N Frames")
-  scheitert statt zu starten.
+  **D8 Teil 2 (Orchestrator: Workflow-Latenz-Budget als Preflight,
+  erledigt 2026-07-30).** Neues Workflow-Feld `targetLatencyFrames`
+  (`Settings`, Definition + UI-Formular, analog `Settings.ProgramWidth`/
+  `confirmStop`; 0 = nicht gesetzt, kein Check). Latenzwerte pro
+  Node-Typ kommen bewusst statisch aus `deploy/catalog.json`
+  (`CatalogEntry.Latency`, von Hand parallel zur Rust-Konstante gepflegt)
+  statt aus einem gelernten Laufzeitprofil wie Kapitel 14 Teil 3 —
+  Nutzerentscheidung 2026-07-30 (per AskUserQuestion geklärt): die Werte
+  sind pro Node-Typ deterministisch und müssen VOR dem ersten Start
+  bekannt sein, ein gelerntes Profil hätte dafür ein Henne-Ei-Bootstrap-
+  Problem (Details `docs/decisions.md` Nachtrag 112). Bei `Start()`,
+  synchron VOR jeder Provisionierung (kein `checkResources`-Anschluss
+  nötig, reine Berechnung ohne I/O): für jeden Pfad im Verbindungs-
+  Template die Summe der `minLatencyFrames(video)` der beteiligten
+  Rollen bilden (DFS über `Definition.Connections`, ein Pfad pro
+  Quelle→Senke-Route inkl. Zyklus-Erkennung), das Maximum ist die
+  Mindestlatenz des Workflows; ist `targetLatencyFrames` kleiner ODER
+  deklariert eine beteiligte Rolle gar keine Video-Latenz (§15.2 "hoch
+  annehmen" als ehrliche Ablehnung statt erfundenem Zahlenwert),
+  `Start()` mit derselben ehrlichen Ablehnung wie beim I/O-Karten-Fall
+  (§6.1) verweigern (HTTP 400), nicht still kürzer starten. Bewusst nur
+  Video-Frames in dieser Scheibe — Audio/Daten s. D8 Teil 4.
+  **Verifikation bestanden:** Unit-Tests mit synthetischem
+  Verbindungsgraphen (Fan-in/Fan-out, isolierte Rolle, Zyklus inkl.
+  quellenlosem Sonderfall, unbekannte Latenz, `Start()` gegen den echten
+  Service) plus ein echter Live-Start (zwei `omp-scaler`-Rollen in
+  Reihe, real gemessene Kettenlatenz 2 Frames): `targetLatencyFrames=1`
+  scheitert mit HTTP 400 „Zielband zu knapp für Pfad s1→s2, Minimum 2
+  Frames" und startet keinen einzigen Prozess, `targetLatencyFrames=2`
+  startet beide Prozesse tatsächlich. UI-Formularfeld + Kachel-Badge per
+  echtem CDP-Klicktest verifiziert (Chromium headless, echte
+  Formular-Interaktion, kein API-Only-Test). Details: `docs/
+  decisions.md` Nachtrag 112.
 
   **D8 Teil 3 (Delay-Zuweisung entlang zu kurzer Pfade).** Für jeden
   Pfad, der kürzer als `targetLatencyFrames` ist, weist der

@@ -68,6 +68,37 @@ type CatalogEntry struct {
 	// dürfen parallel im Katalog stehen — Identität ist das Paar
 	// (Type, Version), s. Launcher.ImportCatalogEntry/findEntry.
 	Version string `json:"version,omitempty"`
+	// Latency (D8 Teil 1/2, ARCHITECTURE.md §15.1 Punkt 1/2) spiegelt
+	// omp_node_sdk::LatencyInfo (nodes/omp-node-sdk/src/descriptor.rs) —
+	// von Hand gepflegt parallel zur Rust-Konstante im jeweiligen Node,
+	// bewusst statisch statt eines gelernten Laufzeitprofils wie
+	// profiles.Store (Nutzerentscheidung 2026-07-30, docs/decisions.md
+	// Nachtrag 112): die Werte sind pro Node-Typ deterministisch (keine
+	// Lastabhängigkeit wie CPU/RAM) und müssen VOR dem ersten Start
+	// bekannt sein, wenn workflows.Service.Start() das Latenzbudget prüft
+	// — ein gelerntes Profil hätte dafür ein Henne-Ei-Bootstrap-Problem
+	// (unbekannt bis zum ersten Lauf). Gleiches Zwei-Quellen-Risiko wie
+	// ExpectedResources oben, bewusst in Kauf genommen. Optional — ein
+	// Node-Typ ohne dieses Feld bleibt gültig, der Latenz-Budget-Rechner
+	// behandelt ihn dann als "Latenz unbekannt" (§15.2).
+	Latency *CatalogLatency `json:"latency,omitempty"`
+}
+
+// LatencyRange ist ein Latenzbereich in Frames (Video) bzw. Samples
+// (Audio, Grain-Rate des betroffenen Flows) — identisches Shape zu
+// omp_node_sdk::LatencyRange.
+type LatencyRange struct {
+	MinLatencyFrames uint32 `json:"minLatencyFrames"`
+	MaxLatencyFrames uint32 `json:"maxLatencyFrames"`
+}
+
+// CatalogLatency spiegelt omp_node_sdk::LatencyInfo — getrennt nach
+// Medienart (§15.1 Punkt 5), da ein Video-Frame-Budget kein
+// automatisches Audio-/Daten-Budget ist.
+type CatalogLatency struct {
+	Video *LatencyRange `json:"video,omitempty"`
+	Audio *LatencyRange `json:"audio,omitempty"`
+	Data  *LatencyRange `json:"data,omitempty"`
 }
 
 // LoadCatalog liest und validiert die Katalog-Datei unter path. Ein

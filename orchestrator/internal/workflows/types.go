@@ -127,6 +127,17 @@ type Settings struct {
 	// Bestätigung ist beim Anlegen des Zeitplans bereits erfolgt, nicht
 	// erst um 03:00 nachts (ARCHITECTURE.md §6.2 Punkt 2, wörtlich).
 	ConfirmStop bool `json:"confirmStop,omitempty"`
+	// TargetLatencyFrames (D8 Teil 2, ARCHITECTURE.md §15.1 Punkt 2): pro
+	// Workflow konfigurierbares Latenzbudget in Video-Frames — Start()
+	// verweigert den Start, wenn kein Pfad im Verbindungs-Template dieses
+	// Budget mit der Summe der deklarierten minLatencyFrames unterschreiten
+	// kann (ehrliche Ablehnung statt stillem Kürzer-Start, dieselbe
+	// Haltung wie beim I/O-Karten-Fall §6.1). 0 = nicht gesetzt (kein
+	// Check, unverändertes Verhalten) — gleiche Konvention wie
+	// ProgramWidth/-Height oben. Bewusst nur Video-Frames in dieser
+	// Scheibe: Audio-/Daten-Pfade sind laut Plan D8 Teil 4 (§15.1 Punkt 5:
+	// "kein Kopieren des Video-Frame-Budgets").
+	TargetLatencyFrames uint32 `json:"targetLatencyFrames,omitempty"`
 }
 
 // ScheduleKind unterscheidet einmalige von wiederkehrenden Zeitplänen

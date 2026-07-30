@@ -13932,3 +13932,105 @@ Diese Scheibe liefert nur die Deklaration + drei reale Datenpunkte.
 `nodes/omp-audio-monitor/src/main.rs`, `nodes/omp-recorder/src/main.rs`,
 `nodes/omp-player/src/main.rs`, `nodes/omp-playout-automation/src/main.rs`,
 `nodes/playout/src/main.rs`, `docs/descriptor-v0.schema.json`.
+
+## 2026-07-30 (Nachtrag 112) — D8 Teil 2: Workflow-Latenzbudget als Start()-Preflight
+
+**Anlass:** `UMSETZUNG.md` D8 Teil 2 (`ARCHITECTURE.md` §15.1 Punkt 2),
+direkter Anschluss an Nachtrag 111 (D8 Teil 1).
+
+**Design-Entscheidung (Nutzerentscheidung 2026-07-30, per AskUserQuestion
+geklärt):** Bevor irgendein Node startet, muss der Orchestrator die
+`minLatencyFrames` jeder Rolle kennen — zu diesem Zeitpunkt läuft aber
+noch kein Prozess, dessen `descriptor.json` (D8 Teil 1) abgefragt werden
+könnte. Zwei Optionen abgewogen: (a) statisches Feld in
+`deploy/catalog.json`, von Hand parallel zur Rust-Konstante gepflegt
+(gleiches Muster wie das bestehende `expectedResources`-Freitextfeld);
+(b) gelerntes Profil wie `profiles.Store` (Kapitel 14 Teil 3, CPU/RAM aus
+Live-Instanzen aggregiert). Gewählt: **(a)** — Latenzwerte sind
+deterministisch pro Node-Typ (keine Lastabhängigkeit wie CPU/RAM) und
+müssen VOR dem ersten Start bekannt sein; ein gelerntes Profil hätte ein
+Henne-Ei-Bootstrap-Problem (unbekannt bis zum ersten Lauf) für genau den
+Fall, den die Prüfung eigentlich abdecken soll.
+
+**Umsetzung:**
+- `orchestrator/internal/launcher/catalog.go`: `CatalogEntry.Latency
+  *CatalogLatency` (Video/Audio/Data je `*LatencyRange{MinLatencyFrames,
+  MaxLatencyFrames}`) — spiegelt `omp_node_sdk::LatencyInfo` 1:1.
+  `deploy/catalog.json` bekommt die D8-Teil-1-Messwerte für
+  `omp-scaler`/`omp-video-mixer-me`/`omp-audio-mixer`.
+- `orchestrator/internal/workflows/types.go`: `Settings.TargetLatencyFrames
+  uint32` — 0 = nicht gesetzt (kein Check, exaktes Vorher-Verhalten),
+  gleiche Konvention wie `ProgramWidth`/`ProgramHeight`. Bewusst nur
+  Video-Frames in dieser Scheibe (Audio/Daten: D8 Teil 4, §15.1 Punkt 5).
+- `orchestrator/internal/workflows/latencybudget.go` (neu):
+  `enumerateLatencyPaths` traversiert das Verbindungs-Template
+  (Definition.Connections) per DFS von jeder Quelle (Rolle ohne
+  eingehende Connection, auch eine isolierte Rolle zählt als trivialer
+  Pfad) zu jeder erreichbaren Senke, summiert je Pfad die deklarierten
+  `minLatencyFrames(video)`. Ein Zyklus im Template (Medienfluss ist
+  strukturell gerichtet) wird als `ErrValidation` gemeldet — inkl. des
+  Sonderfalls eines Zyklus OHNE jede Quelle (z. B. reines a→b→a, jede
+  Rolle hat eine eingehende Connection, die quellenbasierte Traversal
+  hätte ihn sonst still übergangen statt zu melden; gefunden per eigenem
+  Unit-Test, s. u.). `checkLatencyBudget` vergleicht jeden Pfad gegen
+  `targetLatencyFrames`: eine Rolle ohne deklarierte Video-Latenz macht
+  den Pfad "nicht prüfbar" (§15.2s "Latenz unbekannt, hoch annehmen" wird
+  hier wörtlich als ehrliche Ablehnung mit Rollennamen+Typ in der
+  Fehlermeldung umgesetzt, kein erfundener Zahlenwert), ein zu kurzer
+  Pfad liefert "Zielband zu knapp für Pfad X→Y→Z, Minimum N Frames".
+- `service.go::Start()`: Aufruf **synchron**, direkt nach der
+  `ErrNotStopped`-Prüfung, VOR `wf.Status = StatusStarting` — reine
+  Berechnung auf Definition+Katalog ohne I/O, ein abgelehnter Start
+  hinterlässt den Workflow unverändert `stopped`, kein einziger Node
+  wird gestartet (anders als die Host-Platzierung, die seit Nachtrag 99
+  bewusst nie hart ablehnt, sondern ausweicht — die Latenzprüfung ist
+  eine andere Fehlerklasse: kein Host-Ausweich-Mechanismus kann ein zu
+  kurzes `targetLatencyFrames` "reparieren").
+- `httpapi/workflow_handlers.go::writeWorkflowError`: neuer Fall für
+  `ErrLatencyBudgetInsufficient` → HTTP 400 (war zuvor ungemappt, wäre
+  auf 500 gefallen — eine Client-korrigierbare Ablehnung ist kein
+  Serverfehler).
+- UI (`ui/shell/workflows-view.ts`): `Settings.targetLatencyFrames`,
+  Formularfeld "Latenzbudget in Video-Frames (optional)" (gleiches Muster
+  wie die Auflösungs-Felder), Badge auf der Workflow-Kachel
+  ("Latenzbudget N Frames").
+
+**Verifiziert:**
+- Unit-Tests (`latencybudget_test.go`): Fan-out (zwei unabhängige Pfade
+  ab derselben Quelle, je eigene Summe), Fan-in (zwei Quellen, ein
+  gemeinsamer Senken-Pfad), isolierte Rolle (trivialer Ein-Rollen-Pfad),
+  Zyklus-Erkennung (inkl. des quellenlosen Sonderfalls), Zielband
+  ausreichend/zu knapp/Rolle mit unbekannter Latenz, sowie ein
+  `Start()`-Test gegen den echten Service (`fakeLauncher`): abgelehnter
+  Start ruft `Launcher.Start()` kein einziges Mal auf, Status bleibt
+  `stopped`.
+- Live (echter Orchestrator, zwei `omp-scaler`-Rollen in Reihe, real
+  gemessene Kettenlatenz = 2 Frames): `targetLatencyFrames=1` → `POST
+  .../start` liefert HTTP 400 mit "Zielband zu knapp für Pfad s1→s2,
+  Minimum 2 Frames (targetLatencyFrames=1)", `ps aux` bestätigt keinen
+  gestarteten `omp-scaler`-Prozess. `targetLatencyFrames=2` → Start
+  gelingt, beide Prozesse laufen tatsächlich.
+- UI live per echtem CDP-Klicktest (Chromium headless, kein API-Only-
+  Test): Login → Workflows-Tab → "+ Neu" → Rollenname/Node-Typ per
+  echten `input`/`change`-Events gesetzt, neues Latenzbudget-Feld auf 7
+  gesetzt, "Anlegen" geklickt → Workflow-Kachel zeigt echt "Latenzbudget
+  7 Frames", `GET /api/v1/workflows` bestätigt
+  `settings.targetLatencyFrames: 7` im gespeicherten Definition-JSON.
+- `go build/vet/test ./...` (orchestrator, inkl. der zuvor als flaky
+  identifizierten `TestLauncherStopSendsSigkillIfSigtermIgnored` isoliert
+  grün), `deno check`/`deno test` (UI) grün, UI-Bundle neu gebaut. Alle
+  Test-Workflows/-Prozesse danach gestoppt/gelöscht, kein Chromium- oder
+  Node-Prozess verwaist zurückgelassen.
+
+**Offen (D8 Teil 3/4):** `setOutputDelay()` selbst (der eigentliche
+Delay-Ausgleich für zu kurze Pfade) sowie getrenntes Audio-/Daten-
+Handling im Budget-Rechner. Diese Scheibe liefert nur die Ablehnung bei
+zu knappem Budget, noch keine automatische Kompensation.
+
+**Betroffene Dateien:** `orchestrator/internal/launcher/catalog.go`,
+`orchestrator/internal/workflows/types.go`,
+`orchestrator/internal/workflows/latencybudget.go` (neu),
+`orchestrator/internal/workflows/latencybudget_test.go` (neu),
+`orchestrator/internal/workflows/service.go`,
+`orchestrator/internal/httpapi/workflow_handlers.go`,
+`deploy/catalog.json`, `ui/shell/workflows-view.ts`.

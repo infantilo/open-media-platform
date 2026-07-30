@@ -80,6 +80,10 @@ interface Settings {
   programWidth?: number;
   programHeight?: number;
   confirmStop?: boolean;
+  // targetLatencyFrames (D8 Teil 2, ARCHITECTURE.md §15.1 Punkt 2):
+  // Latenzbudget in Video-Frames — 0/undefined = nicht gesetzt (kein
+  // Preflight-Check beim Start, unverändertes Verhalten).
+  targetLatencyFrames?: number;
 }
 
 // Schedule (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 1, orchestrator/
@@ -192,6 +196,10 @@ class WorkflowsView extends HTMLElement {
   // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1/2).
   #formSchedules: Schedule[] = [];
   #formConfirmStop = false;
+  // D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): leer = kein
+  // targetLatencyFrames im Request, gleiche Konvention wie
+  // #formWidth/#formHeight oben.
+  #formTargetLatencyFrames = "";
   #showForm = false;
   // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}, §22.3 Punkt 2): gesetzt
   // während "Bearbeiten" eines bestehenden (gestoppten) Workflows —
@@ -280,6 +288,10 @@ class WorkflowsView extends HTMLElement {
     if (Number.isFinite(width) && width > 0) settings.programWidth = width;
     if (Number.isFinite(height) && height > 0) settings.programHeight = height;
     if (this.#formConfirmStop) settings.confirmStop = true;
+    const targetLatencyFrames = parseInt(this.#formTargetLatencyFrames, 10);
+    if (Number.isFinite(targetLatencyFrames) && targetLatencyFrames > 0) {
+      settings.targetLatencyFrames = targetLatencyFrames;
+    }
     // Nur vollständig ausgefüllte Zeilen mitschicken (gleiche Haltung
     // wie roles/connections oben) — die Backend-Validierung (D7 Teil 2)
     // lehnt eine unvollständige Zeile ohnehin mit einem verständlichen
@@ -348,6 +360,7 @@ class WorkflowsView extends HTMLElement {
     this.#formHeight = "";
     this.#formSchedules = [];
     this.#formConfirmStop = false;
+    this.#formTargetLatencyFrames = "";
     this.#formTitle = "";
     this.#formDescription = "";
     this.#formTags = "";
@@ -365,6 +378,9 @@ class WorkflowsView extends HTMLElement {
     this.#formWidth = wf.definition.settings?.programWidth ? String(wf.definition.settings.programWidth) : "";
     this.#formHeight = wf.definition.settings?.programHeight ? String(wf.definition.settings.programHeight) : "";
     this.#formConfirmStop = wf.definition.settings?.confirmStop ?? false;
+    this.#formTargetLatencyFrames = wf.definition.settings?.targetLatencyFrames
+      ? String(wf.definition.settings.targetLatencyFrames)
+      : "";
     // lastFiredAt unverändert übernehmen (s. Schedule-Doku oben) — sonst
     // könnte ein bereits gefeuertes "once"-Schedule beim Speichern erneut
     // feuern.
@@ -891,6 +907,7 @@ class WorkflowsView extends HTMLElement {
     // stehen im Formular ("Bearbeiten").
     const badges: string[] = [];
     if (settings?.confirmStop) badges.push("Sicherheitsabfrage beim Stoppen");
+    if (settings?.targetLatencyFrames) badges.push(`Latenzbudget ${settings.targetLatencyFrames} Frames`);
     const scheduleCount = wf.definition.schedules?.length ?? 0;
     if (scheduleCount > 0) badges.push(`${scheduleCount} Zeitplan${scheduleCount === 1 ? "" : "e"}`);
     if (badges.length > 0) {
@@ -1294,6 +1311,30 @@ class WorkflowsView extends HTMLElement {
     });
     settingsRow.append(widthInput, xLabel, heightInput);
     form.appendChild(settingsRow);
+
+    // D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): Latenzbudget, optional —
+    // leer gelassen startet der Workflow unverändert ohne Preflight-
+    // Check (0/undefined = "nicht gesetzt", gleiche Konvention wie
+    // Breite/Höhe oben). Bewusst nur Video-Frames (D8 Teil 2-Scope, s.
+    // orchestrator/internal/workflows/latencybudget.go).
+    const latencyHeading = document.createElement("div");
+    latencyHeading.textContent = "Latenzbudget in Video-Frames (optional)";
+    latencyHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    form.appendChild(latencyHeading);
+
+    const latencyRow = document.createElement("div");
+    latencyRow.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:8px;";
+    const latencyInput = document.createElement("input");
+    latencyInput.type = "number";
+    latencyInput.min = "0";
+    latencyInput.placeholder = "z. B. 5";
+    latencyInput.value = this.#formTargetLatencyFrames;
+    latencyInput.style.cssText = "width:45%;";
+    latencyInput.addEventListener("input", () => {
+      this.#formTargetLatencyFrames = latencyInput.value;
+    });
+    latencyRow.append(latencyInput);
+    form.appendChild(latencyRow);
 
     // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): Start/Stop-Zeitpläne.
     const scheduleHeading = document.createElement("div");

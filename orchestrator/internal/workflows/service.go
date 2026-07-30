@@ -551,6 +551,15 @@ func (s *Service) Start(ctx context.Context, id string) error {
 		return ErrNotStopped
 	}
 
+	// D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): Latenzbudget-Preflight
+	// VOR jeder Provisionierung (noch kein StatusStarting, noch kein
+	// einziger Node gestartet) — reine Berechnung auf Definition+Katalog,
+	// kein I/O nötig, deshalb synchron statt in runStart (anders als die
+	// eigentliche Host-Platzierung, die auf Live-Telemetrie wartet).
+	if err := checkLatencyBudget(wf.Definition, s.launcher.Catalog()); err != nil {
+		return err
+	}
+
 	wf.Status = StatusStarting
 	wf.Error = ""
 	wf.Runtime = map[string]RoleRuntime{}
