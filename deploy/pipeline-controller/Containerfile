@@ -1,0 +1,114 @@
+# PIPELINE CONTROLLER als OMP-Microservice-Image.
+#
+# Build-Context wird von build.sh zusammengestellt (nicht direkt PC-Repo!):
+#   ./pc/            Snapshot von PIPELINE CONTROLLER + additive Patches (patches/)
+#   ./mxl-plugin/     OMPs bereits gebautes gst-mxl-rs-Plugin (libgstmxl.so)
+#   ./adapter/        Release-Binary von nodes/omp-pipeline-controller (Host-gebaut,
+#                      gleiche Debian-Bookworm-glibc wie das Basisimage — kein
+#                      eigener Rust-Build-Stage nötig, ldd zeigt nur libc/libgcc_s).
+#
+# ENTRYPOINT ist der Adapter, nicht `node server.js` direkt — er startet
+# PIPELINE CONTROLLER selbst als Kindprozess (kontrolliert dessen Lebenszyklus
+# für NMOS-Registrierung/-Deregistrierung) und dient dem Launcher als der eine
+# nach außen veröffentlichte Port (reverse-proxied PC-UI, s. proxy.rs).
+
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# GStreamer-Runtime + -Entwicklungsbibliotheken (letztere nur für den einmaligen
+# node-gyp-Build von gst-kit gebraucht, s. PIPELINE CONTROLLERs eigenes INSTALL.md
+# Abschnitt 1+5) + Puppeteer/Chromium-Laufzeit-Abhängigkeiten (oGraf-Grafik-Engine,
+# INSTALL.md "Puppeteer/oGraf Chrome-Abhängigkeiten") + libunwind8/libdw1 (gst-mxl-rs
+# NEEDED-Einträge, per readelf geprüft) + Node.js 18+.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl gnupg \
+      gstreamer1.0-tools \
+      gstreamer1.0-plugins-base \
+      gstreamer1.0-plugins-good \
+      gstreamer1.0-plugins-bad \
+      gstreamer1.0-plugins-ugly \
+      gstreamer1.0-libav \
+      gstreamer1.0-alsa \
+      libgstreamer1.0-dev \
+      libgstreamer-plugins-base1.0-dev \
+      libglib2.0-dev \
+      build-essential python3 pkg-config \
+      libunwind8 libdw1 \
+      libatk1.0-0 libatk-bridge2.0-0 libcups2 \
+      libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+      libgbm1 libxkbcommon0 libpango-1.0-0 libcairo2 \
+      libasound2 libnspr4 libnss3 libx11-xcb1 \
+      libxcb-dri3-0 libdrm2 \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# package.json zuerst kopieren (eigene Layer) — der teure `npm install`
+# (Puppeteer-Chromium-Download + gst-kit-node-gyp-Build, ~2min) bleibt so
+# gecacht, solange nur Config-Dateien unten oder die Patches sich ändern,
+# nicht das komplette pc/ jedes Mal neu.
+COPY pc/package.json /app/package.json
+RUN npm install --omit=optional
+
+COPY pc/ /app/
+
+# gst-mxl-rs-Plugin (mxlsink/mxlsrc) an einen festen Pfad. PC_DATA_DIR=/data
+# (unten) macht server.js von der im Repo mitgelieferten, echten lokalen
+# settings.json/env-Datei unabhängig (die trägt Host-absolute Dev-Pfade,
+# z.B. httpsKey — ungeeignet fürs Image) — server.js liest env/mxl.env +
+# settings.json konsequent aus `PC_DATA_DIR || __dirname` (server.js:17-40),
+# beide Dateien liegen deshalb hier unter /data, nicht /app.
+COPY mxl-plugin/ /opt/omp-mxl/
+# libmxl.so wird von gst-mxl-rs per dlopen("libmxl.so") geladen (bare Name,
+# kein Pfad, third_party/mxl/rust/mxl/src/config.rs get_mxl_so_path). Live
+# gefunden: glibcs dynamischer Lader übernimmt LD_LIBRARY_PATH-Änderungen
+# per `process.env.LD_LIBRARY_PATH = …` (PIPELINE CONTROLLERs eigener
+# env/mxl.env-Sourcing-Trick, server.js:17-29) NICHT rückwirkend für
+# spätere dlopen()-Aufrufe — nur GST_PLUGIN_PATH funktioniert so (Gstreamer
+# liest es frisch bei gst_init()). LD_LIBRARY_PATH muss deshalb schon beim
+# `execve()` von `node` gesetzt sein, also als Image-ENV statt nur in
+# env/mxl.env.
+ENV LD_LIBRARY_PATH=/opt/omp-mxl
+RUN mkdir -p /data/env && printf '%s\n' \
+      'GST_PLUGIN_PATH=/opt/omp-mxl:${GST_PLUGIN_PATH:-}' \
+      > /data/env/mxl.env
+# Minimale, container-taugliche settings.json (kein HTTPS, kein Auth,
+# fakesink/fakesink — headless-sicher, lib/MasterPipeline.js:150-157 würde
+# das ohnehin erzwingen, hier explizit statt implizit). mxlDomain zeigt auf
+# denselben Pfad, den der Launcher optional in den Container mountet
+# (orchestrator/internal/launcher/podman.go, MxlAccess-Opt-in).
+RUN mkdir -p /data && printf '%s\n' \
+      '{' \
+      '  "videoSink": "fakesink",' \
+      '  "audioSink": "fakesink",' \
+      '  "authEnabled": false,' \
+      '  "mxlDomain": "/dev/shm/omp-mxl"' \
+      '}' \
+      > /data/settings.json
+# audio_config.json (ebenfalls PC_DATA_DIR-aware, server.js:82
+# _writablePath) hat pro Audiogruppe ein EIGENES sink-Feld
+# (lib/AudioRouter.js ~500-594), unabhängig von settings.json.audioSink —
+# ohne diese Datei fällt "pgm-stereo" auf "autoaudiosink" zurück (Fehler
+# "Failed to connect: Connection refused" ohne echten PulseAudio-Server
+# im Container, live gefunden). Container-taugliche Minimalfassung: alle
+# drei Standardgruppen auf fakesink.
+RUN printf '%s\n' \
+      '{' \
+      '  "groups": [' \
+      '    { "id": "pgm-stereo",  "label": "Stereo Programmton",  "channels": 2, "sink": "fakesink" },' \
+      '    { "id": "begl-stereo", "label": "Begleitton Stereo",   "channels": 2, "sink": "fakesink" },' \
+      '    { "id": "pgm-51",      "label": "5.1 Programmton",     "channels": 6, "sink": "fakesink" }' \
+      '  ]' \
+      '}' \
+      > /data/audio_config.json
+
+COPY adapter/omp-pipeline-controller /usr/local/bin/omp-pipeline-controller
+
+ENV PORT=3000
+ENV PC_DATA_DIR=/data
+EXPOSE 3000
+
+ENTRYPOINT ["/usr/local/bin/omp-pipeline-controller"]

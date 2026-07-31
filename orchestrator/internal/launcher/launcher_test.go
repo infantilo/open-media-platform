@@ -266,6 +266,55 @@ func TestLauncherStartStopPodmanReal(t *testing.T) {
 	}
 }
 
+// TestLauncherPodmanMxlAccessMount (PIPELINE-CONTROLLER-Microservice-Runde,
+// s. UMSETZUNG.md): echter Nachweis, dass `MxlAccess:true` die lokale
+// MXL-Domain 1:1 in den Container mountet, und dass ein Katalog-Eintrag
+// OHNE das Feld (weiterhin) keinen Zugriff bekommt — beides live gegen
+// echtes `podman exec` geprüft, nicht nur die Kommandozeilen-Konstruktion.
+func TestLauncherPodmanMxlAccessMount(t *testing.T) {
+	requirePodman(t)
+
+	domain := t.TempDir()
+	t.Setenv("OMP_MXL_DOMAIN", domain)
+	marker := domain + "/marker.txt"
+	if err := os.WriteFile(marker, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile(marker) error = %v", err)
+	}
+
+	withAccess := []CatalogEntry{{
+		Type: "podman-mxl-on", Label: "Podman MXL On", Runner: runnerPodman,
+		Image: "docker.io/library/busybox:latest", Command: []string{"sleep", "3600"},
+		MxlAccess: true,
+	}}
+	withoutAccess := []CatalogEntry{{
+		Type: "podman-mxl-off", Label: "Podman MXL Off", Runner: runnerPodman,
+		Image: "docker.io/library/busybox:latest", Command: []string{"sleep", "3600"},
+	}}
+
+	lOn := newWithStore(withAccess, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
+	instOn, err := lOn.Start("podman-mxl-on", "", "", nil)
+	if err != nil {
+		t.Fatalf("Start(mxlAccess=true) error = %v", err)
+	}
+	defer func() { _ = lOn.Stop(instOn.ID) }()
+
+	out, err := exec.Command("podman", "exec", instOn.ContainerID, "cat", marker).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(out)) != "hello" {
+		t.Fatalf("mit MxlAccess=true: marker nicht sichtbar, out=%q err=%v", out, err)
+	}
+
+	lOff := newWithStore(withoutAccess, "http://registry", "nats://nats", newFakeInstanceStore(), nil, nil, nil)
+	instOff, err := lOff.Start("podman-mxl-off", "", "", nil)
+	if err != nil {
+		t.Fatalf("Start(mxlAccess=false) error = %v", err)
+	}
+	defer func() { _ = lOff.Stop(instOff.ID) }()
+
+	if err := exec.Command("podman", "exec", instOff.ContainerID, "cat", marker).Run(); err == nil {
+		t.Fatal("ohne MxlAccess: marker unerwartet sichtbar — Domain wurde trotzdem gemountet")
+	}
+}
+
 // requireImage überspringt den Test, wenn image lokal nicht vorhanden
 // ist — genutzt für den echten Admission-Check-Test gegen ein reales
 // omp-mock-Image, das (anders als busybox) keine Containerfile im Repo

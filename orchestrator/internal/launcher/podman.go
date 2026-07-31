@@ -4,11 +4,25 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// defaultMxlDomain spiegelt den Default aus deploy/dev/install-mxl.sh/
+// start-omp.sh (dieselbe Ambient-Env-Konvention, unter der auch die
+// regulären Rust-Nodes OMP_MXL_DOMAIN geerbt bekommen — der Orchestrator-
+// Prozess selbst braucht dafür keine eigene buildEnv-Verdrahtung).
+const defaultMxlDomain = "/dev/shm/omp-mxl"
+
+func mxlDomainPath() string {
+	if d := os.Getenv("OMP_MXL_DOMAIN"); d != "" {
+		return d
+	}
+	return defaultMxlDomain
+}
 
 // containerNetworkGateway ist der von rootless Podman standardmäßig
 // bereitgestellte DNS-Alias, über den ein Container den Host erreicht
@@ -111,6 +125,14 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 		"run", "-d", "--rm",
 		"--name", "omp-" + id,
 		"-p", fmt.Sprintf("%d:%d", port, port),
+	}
+	// MxlAccess: expliziter Opt-in am Katalog-Eintrag (s. catalog.go-Doku)
+	// — Pfad innen wie außen identisch, keine Domain-Pfad-Übersetzung
+	// (vermeidet eine eigene Klasse von Konfigurationsfehlern zwischen
+	// Host-Settings und Container-Settings desselben Fremd-Microservice).
+	if entry.MxlAccess {
+		domain := mxlDomainPath()
+		args = append(args, "-v", domain+":"+domain)
 	}
 	for k, v := range merged {
 		args = append(args, "-e", k+"="+v)

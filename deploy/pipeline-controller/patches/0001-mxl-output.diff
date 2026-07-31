@@ -1,0 +1,42 @@
+--- a/lib/OutputEngine.js	2026-07-31 15:59:49.631343400 +0200
++++ b/lib/OutputEngine.js	2026-07-31 16:00:14.982344572 +0200
+@@ -132,6 +132,29 @@
+       const quoted = `"${String(out.uri || '').replace(/"/g, '\\"')}"`;
+       return `${videoBranch} ${audioBranch} matroskamux name=mux streamable=true ! filesink location=${quoted} sync=false`;
+     }
++    case 'mxl': {
++      // Eigener, unkodierter Zweig statt der gemeinsamen videoBranch/audioBranch oben
++      // (die sind auf x264/aac+mux zugeschnitten) — mxlsink will rohe Caps.
++      // Pad-Template von mxlsink (third_party/mxl/rust/gst-mxl-rs, gst-inspect-1.0
++      // geprüft): video/x-raw,format=v210, audio/x-raw,format=F32LE,layout=interleaved.
++      if (!out.mxlDomain) throw new Error('MXL-Ausgang: mxlDomain fehlt');
++      if (!out.mxlVideoFlowId || !out.mxlAudioFlowId) throw new Error('MXL-Ausgang: mxlVideoFlowId/mxlAudioFlowId fehlen');
++      const mxlVideoBranch = (
++        `intervideosrc channel=${videoChannel}` +
++        ` ! queue max-size-buffers=10 max-size-time=200000000 max-size-bytes=0 leaky=downstream` +
++        ` ! videoconvert${scale}` +
++        ` ! video/x-raw,format=v210` +
++        ` ! mxlsink flow-id=${out.mxlVideoFlowId} domain="${out.mxlDomain}"`
++      );
++      const mxlAudioBranch = (
++        `interaudiosrc channel=${audioChannel} do-timestamp=true` +
++        ` ! queue max-size-buffers=20 max-size-time=200000000 max-size-bytes=0 leaky=downstream` +
++        ` ! audioconvert ! audioresample` +
++        ` ! audio/x-raw,format=F32LE,layout=interleaved` +
++        ` ! mxlsink flow-id=${out.mxlAudioFlowId} domain="${out.mxlDomain}"`
++      );
++      return `${mxlVideoBranch} ${mxlAudioBranch}`;
++    }
+     default:
+       throw new Error(`Unbekannter Sink-Typ: "${out.sink}"`);
+   }
+@@ -321,6 +344,9 @@
+         uri:          cfg.uri,
+         deviceNumber: cfg.deviceNumber,
+         decklinkMode: cfg.decklinkMode,
++        mxlDomain:       cfg.mxlDomain,
++        mxlVideoFlowId:  cfg.mxlVideoFlowId,
++        mxlAudioFlowId:  cfg.mxlAudioFlowId,
+       };
+     }
+     return result;

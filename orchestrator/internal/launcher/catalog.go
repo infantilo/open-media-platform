@@ -82,6 +82,15 @@ type CatalogEntry struct {
 	// Node-Typ ohne dieses Feld bleibt gültig, der Latenz-Budget-Rechner
 	// behandelt ihn dann als "Latenz unbekannt" (§15.2).
 	Latency *CatalogLatency `json:"latency,omitempty"`
+	// MxlAccess (nur runner:"podman") mountet die lokale MXL-Shared-
+	// Memory-Domain (OMP_MXL_DOMAIN, Default /dev/shm/omp-mxl) unverändert
+	// in den Container — Default false. Bewusst kein globales Verhalten für
+	// jeden Podman-Import: das ist eine echte Vertrauens-Erweiterung
+	// gegenüber nur schwach per C9 geprüftem Fremdcode (derselbe Grund,
+	// warum runPodmanEntry kein --network=host nutzt, s. podman.go), also
+	// nur für Katalog-Einträge, die es explizit setzen (admin-only Import,
+	// s. httpapi ImportCatalogEntry).
+	MxlAccess bool `json:"mxlAccess,omitempty"`
 }
 
 // LatencyRange ist ein Latenzbereich in Frames (Video) bzw. Samples
