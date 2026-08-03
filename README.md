@@ -93,8 +93,11 @@ Stehen bereits: Fundament, Flow-Editor mit Drag&Drop-Routing,
 Workflow-Objekte/-Presets, der kleine Regieplatz (Source/Switcher/
 Video-Mixer/Audio-Mixer/Player/Multiviewer/Playout-Automation/
 OGraf-Grafik, alle GUI-startbar), Mixer-Presets (Snapshot/Recall),
-ST 2110-Video/AES67-Audio + ein natives ST-2110-Gateway zusätzlich zum
-SRT-Gateway, echter **Remote Memory Access** zwischen zwei OMP-Hosts
+ST 2110-Video/AES67-Audio (inkl. Dante im AES67-Modus, SAP-Discovery)
++ ein natives ST-2110-Gateway zusätzlich zum SRT-Gateway, eine opt-in
+PTP-Zeitbasis für die 2110-Pfade (`OMP_PTP_DOMAIN`, live über zwei
+Netzwerk-Namespaces synchronisiert verifiziert), echter **Remote
+Memory Access** zwischen zwei OMP-Hosts
 über MXL-native Fabrics (`omp-fabrics-gateway`, Software-`tcp`-Provider
 live verifiziert — RDMA-Zero-Copy ohne RDMA-Hardware testbar, s.
 `docs/HANDBUCH.md` §9.3), PostgreSQL-Backend, mTLS
@@ -126,8 +129,8 @@ delay-fähigen Nodes aus (bisher `omp-scaler`, `omp-video-mixer-me`).
 Offen: automatische (statt nur ratschlagende) Placement-Entscheidungen,
 I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-
 Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
-Hardware-Beschaffung), NDI-/Dante-Gateways, PTP-Zeitbasis für die
-2110-Pfade.
+Hardware-Beschaffung), ein NDI-Gateway sowie proprietäres Dante (Dante
+im AES67-Modus läuft bereits über `omp-aes67-gateway`).
 
 ## Verwandtes Projekt
 

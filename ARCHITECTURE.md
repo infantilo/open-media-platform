@@ -601,15 +601,19 @@ Single-Host-Dev-Maschine simulierbar (fingierte Inventare wie bei
 in D7 (bestehende Sequenzierung nach D4, zusammen mit D6 — unverändert);
 keine A–C-Schritte ändern ihren Scope.
 
-### 6.3 Reaktives Failover: Service-Crash darf den Workflow nicht stoppen (geplant, ab P2)
+### 6.3 Reaktives Failover: Service-Crash darf den Workflow nicht stoppen (alle vier Stufen umgesetzt)
 
-**Status (2026-07-28):** Stufen 1-3 sind umgesetzt und produktiv —
+**Status (2026-08-03):** Alle vier Stufen sind umgesetzt und produktiv —
 Crash-Erkennung + automatischer Neustart mit Crash-Loop-Bremse
 (`UMSETZUNG.md` K7-Teil-1), Degradation-Verhalten bereits seit C7
-gelebt. **Stufe 4 (Hot-Standby/N+1) ist weiterhin nicht gebaut** —
-§21.3 hat die grundsätzliche Zielrichtung dafür entschieden (Option
-(c), Freeze-Frame-Standby statt vollem Genlock-Äquivalent), die
-Umsetzung selbst steht noch aus.
+gelebt, **Stufe 4 (Hot-Standby/N+1) seit K7 Teil 4 (2026-08-03)**:
+`Role.standbyFor` im Workflow-Objekt, Beförderung sowohl Crash-Loop- als
+auch Host-Offline-ausgelöst (§21.3s Option (c), Freeze-Frame-Standby
+statt vollem Genlock-Äquivalent — genau wie dort entschieden, kein
+Command-Mirroring/`omp-seamless-switch`), Bedienzustand-Übernahme über
+den bestehenden State-Export/Import-Mechanismus (§5 Punkt 6). Details/
+Race-Conditions, die dabei gefunden und behoben wurden:
+`docs/decisions.md` Nachtrag 113.
 
 **Anforderung:** Microservices **und** die Hosts, auf denen sie laufen,
 werden überwacht; oberste Aufgabe: (a) bei knapp werdenden Ressourcen
@@ -1826,8 +1830,14 @@ früher am Ausgang an als ein Bildpfad durch DVE+Keyer+Grafik-Kompositing
    Zähler-Fallback (z. B. Mixer-Ausgänge/Testquellen ohne durchgereichten
    Ursprung — nach Definition ein neuer Ursprung). Rein additiv in der
    SDK-Schicht, kein Breaking Change für bestehende Nodes. Der `D`-Term
-   selbst (`setOutputDelay()`) bleibt weiterhin P2/D-Scope — nur die
-   Voraussetzung dafür (Origin-Erhalt) ist jetzt vorhanden. Nebeneffekt:
+   selbst (`setOutputDelay()`) war zu diesem Zeitpunkt noch P2/D-Scope —
+   nur die Voraussetzung dafür (Origin-Erhalt) war hier bereits
+   vorhanden. **Nachtrag D8 Teil 3 (2026-08-03):** `setOutputDelay()`
+   ist inzwischen real umgesetzt (`omp-scaler`, `omp-video-mixer-me`),
+   inkl. eines dabei gefundenen Design-Bugs für originlose Nodes
+   (Delay fror nach dem ersten Frame ein, s. `docs/decisions.md`
+   Nachtrag 114) — Audio-/Daten-Pfade (Punkt 5 unten) bleiben weiterhin
+   offen. Nebeneffekt:
    dieselbe Origin-Erhaltung ist auch die notwendige (nicht hinreichende)
    Grundlage für einen künftigen `omp-seamless-switch`-Redundanz-Node
    (§6.3/§20.1) — Zustands-Synchronität und Rebind-Zeit bleiben davon
@@ -2577,9 +2587,11 @@ Nutzer sich später doch dafür entscheidet (`docs/END-GOAL-FEATURES.md`
 
 **Standards-Abdeckung:** keine (Bewertung, keine neue Technik).
 **Phase:** Konzept entschieden, Umsetzung (Hot-Standby, §6.3 Stufe 4)
-bleibt wie in §20.1/Kapitel 7 sequenziert — kein `UMSETZUNG.md`-Schritt
-aus dieser Entscheidung allein, nur Prozess-Auto-Restart (K7-Teil-1) ist
-bereits umgesetzt.
+bleibt wie in §20.1/Kapitel 7 sequenziert. **Nachtrag 2026-08-03:**
+Option (c) ist inzwischen real umgesetzt (K7 Teil 4, s. §6.3-Status
+oben) — Option (b) (Command-Mirroring/`omp-seamless-switch`) bleibt wie
+hier entschieden offen für eine spätere Ausbaustufe, kein aktueller
+Bedarf.
 
 ## 22. Professionelles UI-Gesamtkonzept (2026-07-13)
 
