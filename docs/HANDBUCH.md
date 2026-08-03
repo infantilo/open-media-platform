@@ -314,7 +314,7 @@ startbar ist.
 |---|---|
 | **omp-source** | Erzeugt ein wählbares GStreamer-Testbild (Farbbalken u. a.) inkl. Testton als MXL-Flow. Reine Testquelle, keine echte Kamera-/Dateianbindung. |
 | **omp-switcher** | Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf — kein Programm-/Preset-Bus, kein Mischeffekt (funktionaler Vorläufer des Video Mixer M/E). |
-| **omp-video-mixer-me** | Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus (Kreuzschiene), Cut/Auto-Transition, DVE-Kanal (PIP), Downstream-Keyer (DSK, Fill+Key), Tally-Signalisierung. |
+| **omp-video-mixer-me** | Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus (Kreuzschiene), Cut/Auto-Transition, DVE-Kanal (PIP), Downstream-Keyer (DSK, Fill+Key), Tally-Signalisierung. Unterstützt seit D8 Teil 3 `setOutputDelay()` (Latenzbudget-Ausgleich, s. Abschnitt 9.7). |
 | **omp-audio-mixer** | Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ (LO/MID/HIGH) und Kompressor pro Kanal, Master-Limiter, automatischem Audio-Follow-Video. |
 | **omp-player** | Datei-/Playlist-Player, cue/take-bedient. Zwei Katalog-Profile desselben Binaries: `omp-player-video` (Video inkl. Audio) und `omp-player-jingle` (nur Audio, für Jingles/Musik). Kann seit [C21] zusätzlich eine entdeckte Live-MXL-Quelle als Playlist-Item abspielen. |
 | **omp-multiviewer** | Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal. |
@@ -323,7 +323,7 @@ startbar ist.
 | **omp-ograf** | Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. |
 | **omp-media-library** | Datei-Katalog mit technischen Metadaten (`ffprobe`) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline. |
 | **omp-recorder** | Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf (`record.start`/`record.stop`). Ausschließlich MXL als Eingang, keine Capture-Karte. „Warm, unabonniert" bis zum Start — keine Lese-Pipeline im Leerlauf. |
-| **omp-scaler** | Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Formular) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus. **Bekannte Einschränkung:** in einer Kette Quelle→Scaler→Ziel innerhalb desselben Workflow-Starts kann die letzte Verbindung (Scaler→Ziel) zu früh ausgelöst werden, bevor der Scaler seinen eigenen Ausgangs-Flow fertig aufgebaut hat — betroffene Verbindung im Flow-Editor einmal neu ziehen behebt es sofort (s. `docs/decisions.md` Nachtrag 109). |
+| **omp-scaler** | Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Formular) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus. Unterstützt seit D8 Teil 3 `setOutputDelay()` (Latenzbudget-Ausgleich, s. Abschnitt 9.7). **Bekannte Einschränkung:** in einer Kette Quelle→Scaler→Ziel innerhalb desselben Workflow-Starts kann die letzte Verbindung (Scaler→Ziel) zu früh ausgelöst werden, bevor der Scaler seinen eigenen Ausgangs-Flow fertig aufgebaut hat — betroffene Verbindung im Flow-Editor einmal neu ziehen behebt es sofort (s. `docs/decisions.md` Nachtrag 109). |
 
 ### 9.2 Gateway-Nodes (Standort-/Fremdgeräte-Anbindung)
 
@@ -403,6 +403,34 @@ den im Workflow frei vergebenen Rollennamen als Label (kein Zusatzschritt
 nötig). Für einen direkten Katalog-Start (`POST /api/v1/instances`) lässt
 sich ein Label zusätzlich explizit im Request-Body mitgeben:
 `{"type": "omp-source", "label": "Kamera 1"}`.
+
+### 9.7 Redundanz & Latenzbudget (Workflow-Einstellungen)
+
+Zwei Workflow-Definitions-Felder betreffen mehrere Rollen gleichzeitig
+und werden erst beim `Start()` durchgesetzt — beide rein deklarativ im
+Rollen-Designer bzw. Workflow-Formular gesetzt, kein manueller
+Orchestrator-Eingriff nötig (Bedienung im Detail:
+`docs/BENUTZERHANDBUCH.md` Abschnitt 4):
+
+- **Hot-Standby (`Role.standbyFor`, seit K7 Teil 4):** eine Rolle kann
+  eine andere Rolle gleichen Node-Typs als Standby begleiten. Fällt die
+  Primärinstanz nach Ausschöpfung der Crash-Loop-Bremse endgültig aus,
+  oder wird ihr Host als offline erkannt (Telemetrie-Staleness), wird
+  die Standby-Instanz automatisch befördert — Verkabelung und
+  Bedienzustand (per `/state` GET/POST) übernommen, ihre Kachel im Flow
+  Editor bis dahin gestrichelt dargestellt. Break-before-make (kurzer
+  sichtbarer Schnitt), kein Genlock-Äquivalent — Details/Grenzen in
+  `ARCHITECTURE.md` §6.3 Stufe 4.
+- **Latenzbudget (`Settings.targetLatencyFrames`, seit D8):** legt fest,
+  nach wie vielen Frames jeder Pfad des Workflows den Graphen verlassen
+  soll. `Start()` lehnt eine Verkabelung hart ab, deren kürzester Pfad
+  länger als das Zielband wäre; für Pfade, die **kürzer** sind, weist
+  der Orchestrator die fehlende Differenz automatisch der spätesten
+  delay-fähigen Rolle im Pfad per `setOutputDelay()` zu (bisher
+  `omp-scaler`, `omp-video-mixer-me`, s. Abschnitt 9.1-Tabelle). Kein
+  delay-fähiger Node auf einem zu kurzen Pfad → derselbe harte
+  Start-Fehler statt stillem Teil-Ausgleich. Details:
+  `ARCHITECTURE.md` §15.1.
 
 ## 10. Mehr Kontext
 

@@ -234,6 +234,79 @@ Für Empfänger (dein Node **liest** einen MXL-Flow, z. B. wie
 löst die `flow_id` der Quelle über die Registry-Query-API auf (Muster
 in `omp-viewer`s `main.rs`, Stichwort IS-05-Receiver-PATCH).
 
+## Latenz deklarieren & Delay-Kompensation (optional, empfohlen für Medien-Nodes)
+
+Sobald dein Node echtes Medien-I/O hat (Schritt 4), sollte er zusätzlich
+seine inhärente Verarbeitungslatenz deklarieren — das ist die
+Voraussetzung dafür, dass der Orchestrator ein Workflow-Latenzbudget
+(`targetLatencyFrames`, `ARCHITECTURE.md` §15.1) überhaupt berechnen
+kann. Formal additiv nachrüstbar (kein SDK-v1-Pflichtpunkt), aber
+**empfohlen**: ein Node ohne diese Angabe zwingt jeden Pfad, der ihn
+enthält, in den konservativen „Latenz unbekannt" -Fallback, der ein
+gesetztes Latenzbudget für diesen Pfad ablehnt.
+
+In deiner `Descriptor` (`ParamStore::descriptor()`) setzt du das
+`latency`-Feld:
+
+```rust
+Descriptor {
+    // …
+    latency: Some(LatencyInfo {
+        video: Some(LatencyRange { min_latency_frames: 1, max_latency_frames: 1 }),
+        audio: None,
+        data: None,
+        supports_delay_compensation: false, // s. u.
+    }),
+}
+```
+
+`min`/`max_latency_frames` sind die Anzahl Frames, die zwischen Eingang
+und Ausgang deines Nodes strukturell vergeht (z. B. `0/0` für einen
+reinen Generator ohne Eingang wie `omp-source` — er ist sein eigener
+Ursprung; `1/1` für einen Node mit genau einem Frame Pipeline-Latenz).
+Miss das nicht raten — falscher Wert unterläuft das Latenzbudget
+stillschweigend, ehrlich hoch geschätzt ist besser als optimistisch
+geraten.
+
+**Delay-Kompensation (`supportsDelayCompensation`/`setOutputDelay`):**
+kann dein Node seinen Ausgang zusätzlich um eine vom Orchestrator
+vorgegebene Frame-Zahl verzögern (typisch für Nodes, die ohnehin schon
+einen MXL-Ausgang selbst schreiben, z. B. über
+`omp_mediaio::mxl::MxlVideoOutput`), setze `supports_delay_compensation:
+true` und ergänze eine Methode:
+
+```rust
+Descriptor {
+    // …
+    methods: vec![MethodSpec {
+        name: "setOutputDelay".into(),
+        args: vec![MethodArg { name: "frames".into(), kind: ParamType::Number }],
+    }],
+}
+```
+
+`invoke("setOutputDelay", args)` liest `frames` (`u64`, negative/
+fehlende Werte ablehnen) und muss den Wert **live**, ohne
+Pipeline-Neuaufbau, wirksam machen — der Orchestrator ruft die Methode
+üblicherweise erst nach `awaitRegistration` auf, also potenziell
+**nachdem** dein Node bereits den ersten Frame geschrieben hat. Ein
+Referenzmuster (`omp-mediaio::mxl::MxlVideoOutput`/`write_loop`, genutzt
+von `omp-scaler` und `omp-video-mixer-me`, D8 Teil 3): das aktuell
+gesetzte Delay in einem von außen übergebenen `Arc<AtomicU64>` halten
+(überlebt Pipeline-Neuaufbauten, anders als ein pipeline-lokales
+Element) und bei **jedem** geschriebenen Frame frisch auslesen statt es
+einmalig beim ersten Frame zu „verankern" — ein reales Design-Bug in
+der ersten Fassung fror den Wert genau an dieser Stelle dauerhaft ein
+(`docs/decisions.md` Nachtrag 114). Reicht dein Node einen
+`GstReferenceTimestampMeta`-Ursprungsindex durch (Empfänger-seitig via
+`MxlVideoInput`/`MxlAudioInput` automatisch angehängt), ist der
+Ziel-Grain-Index `Ursprungs-Index + Delay`; hat dein Node keinen
+durchgereichten Ursprung (z. B. ein Compositor-Ausgang wie beim Mixer,
+der immer einen neuen Ursprung setzt), gilt dieselbe Formel gegenüber
+der aktuellen Wallclock-Position — in beiden Fällen bleibt der
+bestehende Monotonie-Schutz (`max(Ziel, letzter_Index + 1)`) unverändert
+nötig.
+
 ## Schritt 5: In den Instanz-Launcher/GUI-Katalog aufnehmen (optional)
 
 Damit dein Node aus der GUI heraus startbar ist (statt nur per
@@ -315,7 +388,8 @@ sie tatsächlich braucht:
 - `ARCHITECTURE.md` §5 (Node-Contract, vollständig), §11.1
   (IS-12/14-Objektmodell für komplexere Nodes: Blocks/Workers statt
   flacher Parameterliste, sobald dein Node mehrere logische Einheiten
-  hat wie z. B. ein Mixer mit mehreren Kanälen).
+  hat wie z. B. ein Mixer mit mehreren Kanälen), §15.1/§15.2
+  (Latenzdeklaration/Delay-Kompensation im Detail, Standards-Einordnung).
 - `nodes/omp-node-sdk/src/node.rs` (`NodeConfig`, `SenderSpec`,
   `ReceiverSpec`, `MediaReadySource` — vollständige Doc-Kommentare im
   Quelltext).

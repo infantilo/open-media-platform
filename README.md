@@ -43,6 +43,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   (ffprobe) and mark-in/out segments
 - **omp-recorder** — records an MXL source (video/audio) to a Matroska
   file; MXL-only input, no capture-card dependency
+- **omp-scaler** — scales/converts a connected MXL video source to a
+  fixed target format; also one of two nodes that can absorb a
+  workflow's declared output-delay compensation (see Status)
 - **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
   AES67 audio gateways for inter-site contribution with foreign
   equipment
@@ -62,7 +65,7 @@ A graphical user interface is being developed in parallel, consistently implemen
 
 Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.
 
-The focus is currently deliberately not on topics such as high availability, redundancy, or commercial support. The goal is to verify the architecture and demonstrate the potential of open standards like DMF, MXL, NMOS, and NATS.
+High availability is no longer entirely out of scope: critical roles can run with an automatic hot-standby (a mirrored instance that takes over on crash-loop exhaustion or host-offline detection, break-before-make handover, operator state carried across via the existing state export/import mechanism), and a workflow can declare a target end-to-end latency budget — the orchestrator hard-rejects wiring that can't meet it and automatically compensates paths that are too short by assigning output delay to capable nodes (currently `omp-scaler` and `omp-video-mixer-me`). Commercial support is still not offered. The goal remains to verify the architecture and demonstrate the potential of open standards like DMF, MXL, NMOS, and NATS.
 
 I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
 
@@ -110,7 +113,15 @@ Katalog, aus echter Messhistorie), ein GUI-Import-Weg für
 containerisierte Fremd-Microservices (Podman-Images, Admission-Check,
 mehrere Versionen desselben Typs parallel) und eine erste,
 ratschlagende Placement-Engine (Überlast-Alarm + Zielhost-Vorschlag,
-berücksichtigt bereits geplante Zeitpläne anderer Workflows).
+berücksichtigt bereits geplante Zeitpläne anderer Workflows). Seit
+Kapitel K7 Teil 4 zusätzlich ein automatischer Hot-Standby-Failover für
+kritische Rollen (`Role.standbyFor`, Crash-Loop- oder
+Host-Offline-ausgelöst, Bedienzustand wandert über den bestehenden
+State-Export/Import-Mechanismus mit) sowie, seit D8, ein
+Workflow-Latenzbudget (`targetLatencyFrames`): der Orchestrator lehnt
+eine Verkabelung, die das Zielband nicht erreichen kann, hart ab und
+gleicht zu kurze Pfade automatisch per `setOutputDelay()` auf
+delay-fähigen Nodes aus (bisher `omp-scaler`, `omp-video-mixer-me`).
 
 Offen: automatische (statt nur ratschlagende) Placement-Entscheidungen,
 I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-

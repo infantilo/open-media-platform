@@ -134,6 +134,46 @@ ohne Workflow-Zugehörigkeit bekommen dagegen weiterhin nur das
 generische „`<Typ>` (`<Kurz-ID>`)"-Label — ein eigenes Namensfeld dafür
 gibt es in der Oberfläche noch nicht.
 
+### 4.1 Hot-Standby (Redundanz für kritische Rollen)
+
+Im Rollen-Designer bietet jede Rolle ein zusätzliches Dropdown „Standby
+für: …", das alle anderen Rollen desselben Node-Typs im Workflow
+auflistet. Wird eine Rolle als Standby für eine andere eingetragen,
+läuft sie ab dem Workflow-Start dauerhaft mit, aber unverbunden — im
+Flow Editor gestrichelt dargestellt, solange sie nicht aktiv ist.
+
+Fällt die begleitete Rolle endgültig aus (Prozess-Absturz jenseits der
+Neustart-Bremse, oder ihr Host wird als nicht mehr erreichbar erkannt),
+übernimmt die Standby-Instanz automatisch: Verkabelung und
+Bedienzustand (z. B. Kreuzschienen-Stellung, Kanalpegel) werden
+übertragen, ihre Kachel wechselt von gestrichelt auf normal, und eine
+Toast-Meldung „Failover: … → …" erscheint. Die Übernahme selbst ist ein
+kurzer sichtbarer Schnitt (kein unterbrechungsfreier Genlock-Wechsel) —
+für unkritische Regieplätze meist unnötig, für 24/7-Sendeplätze mit
+einer einzelnen tragenden Rolle (z. B. dem Bildmischer) empfohlen.
+
+### 4.2 Latenzbudget (Verzögerungsausgleich)
+
+Das Workflow-Formular hat ein Feld „Ziel-Latenz (Frames)"
+(`targetLatencyFrames`). Ist es gesetzt, muss jeder Signalpfad im
+Workflow nach genau dieser Anzahl Frames beim jeweiligen Ausgang
+ankommen:
+
+- Ist das Ziel **zu knapp** für den kürzesten möglichen Pfad, lehnt
+  „Start" den Workflow mit einer konkreten Fehlermeldung ab (welcher
+  Pfad, wie viele Frames fehlen) — kein Teilstart.
+- Ist ein Pfad **kürzer** als das Ziel, weist der Orchestrator die
+  fehlende Verzögerung automatisch einem geeigneten Node entlang des
+  Pfads zu (aktuell Bildmischer und Scaler) — ohne dass dafür etwas
+  manuell verkabelt oder eingestellt werden muss. Steht auf einem zu
+  kurzen Pfad kein geeigneter Node zur Verfügung, schlägt „Start"
+  ebenso mit einer konkreten Fehlermeldung fehl.
+
+Praktisch nützlich, um mehrere Kamerapfade unterschiedlicher Länge (z. B.
+einer über einen Scaler, einer direkt) am Bildmischer wieder
+bildsynchron ankommen zu lassen, ohne die Verzögerung von Hand
+auszurechnen.
+
 ## 5. Scheduler
 
 Der Reiter **Scheduler** zeigt für jeden Workflow eine eigene Zeile auf
