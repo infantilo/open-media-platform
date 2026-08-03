@@ -13,6 +13,11 @@ export interface DraftRole {
   nodeType: string;
   hostId?: string;
   format?: string;
+  // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4): Name einer
+  // anderen Rolle, für die diese Rolle als warmer Standby dient — s.
+  // orchestrator/internal/workflows/types.go Role.StandbyFor (einzige
+  // Quelle der Durchsetzungs-Wahrheit, hier nur Dropdown-Komfort).
+  standbyFor?: string;
 }
 
 export interface DraftConnection {
@@ -30,7 +35,12 @@ export function removeRole(
   name: string,
 ): { roles: DraftRole[]; connections: DraftConnection[] } {
   return {
-    roles: roles.filter((r) => r.name !== name),
+    // Eine Rolle, die `name` als standbyFor referenzierte, wird zu einer
+    // normalen Rolle statt eines Torsos mit einer toten Referenz (gleicher
+    // Grund wie das Herausfiltern der Connections unten).
+    roles: roles
+      .filter((r) => r.name !== name)
+      .map((r) => (r.standbyFor === name ? { ...r, standbyFor: undefined } : r)),
     connections: connections.filter((c) => c.fromRole !== name && c.toRole !== name),
   };
 }
@@ -56,13 +66,34 @@ export function renameRole(
   if (!roles.some((r) => r.name === oldName)) return { roles, connections, ok: false };
   if (roles.some((r) => r.name === trimmed)) return { roles, connections, ok: false };
   return {
-    roles: roles.map((r) => (r.name === oldName ? { ...r, name: trimmed } : r)),
+    roles: roles.map((r) => {
+      if (r.name === oldName) return { ...r, name: trimmed };
+      if (r.standbyFor === oldName) return { ...r, standbyFor: trimmed };
+      return r;
+    }),
     connections: connections.map((c) => ({
       fromRole: c.fromRole === oldName ? trimmed : c.fromRole,
       toRole: c.toRole === oldName ? trimmed : c.toRole,
     })),
     ok: true,
   };
+}
+
+// standbyCandidates: welche anderen Rollen kann `role` als Standby
+// referenzieren (K7 Teil 4) — spiegelt orchestrator/internal/workflows/
+// service.go validate()s Regeln rein für die Dropdown-Optionsliste (das
+// Backend bleibt die eigentliche Durchsetzung, s. dortige Doku): gleicher
+// NodeType, keine Selbstreferenz, keine Ketten (ein Kandidat, der selbst
+// bereits ein Standby ist, scheidet aus), höchstens ein Standby pro
+// Primärrolle (ein Kandidat, der schon einen ANDEREN Standby hat,
+// scheidet aus).
+export function standbyCandidates(roles: DraftRole[], role: DraftRole): DraftRole[] {
+  return roles.filter((r) =>
+    r.name !== role.name &&
+    r.nodeType === role.nodeType &&
+    !r.standbyFor &&
+    !roles.some((other) => other.name !== role.name && other.standbyFor === r.name)
+  );
 }
 
 // addConnection: lehnt Selbstschleifen (fromRole === toRole, ergäbe

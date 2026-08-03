@@ -230,6 +230,11 @@ type Service struct {
 	httpClient *http.Client
 	// authz (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s. AuthzBinder.
 	authz AuthzBinder
+	// hostMetrics (K7 Teil 4, failover.go) — s. SetHostMetrics/
+	// HostMetricsReader. Nil = Host-Offline-Failover-Trigger bleibt aus
+	// (kein Crash, nur ein fehlendes Feature ohne Verdrahtung, gleiches
+	// Nil-Safety-Muster wie resources ResourcePrecheck).
+	hostMetrics HostMetricsReader
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -886,6 +891,17 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 		slog.Warn("workflows: rewireAfterRestart: registration timed out", "workflow", wf.ID, "role", role, "error", err)
 		return
 	}
+
+	// Live gefunden (K7 Teil 4, Hot-Standby-Live-Test): awaitFreshRegistration
+	// oben kann mehrere Sekunden dauern — in dieser Zeit kann ein NEUERES
+	// Ereignis für dieselbe Rolle bereits gewonnen haben, z. B. eine
+	// promoteStandby-Übernahme (failover.go) auf eine ANDERE Instanz.
+	fresh, ok := s.stillBacks(workflowID, role, instanceID)
+	if !ok {
+		return
+	}
+	wf = fresh
+
 	rt := wf.Runtime[role]
 	rt.NodeID = node.ID
 	wf.Runtime[role] = rt
@@ -894,6 +910,26 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 		if conn.FromRole != role && conn.ToRole != role {
 			continue
 		}
+
+		// Zweite, PRO VERBINDUNG wiederholte Prüfung — live gefunden
+		// (Hot-Standby-Live-Test): die vorige applyConnection-Anwendung
+		// dieser selben Schleife (z. B. waitForCrosspointInput) kann selbst
+		// bis zu ~10-20s bis zu ihrem eigenen Timeout blockieren. Ein reiner
+		// Check VOR der Schleife (oben) reicht deshalb NICHT — ohne diesen
+		// zweiten Check würde eine WÄHREND der Schleife (nicht nur davor)
+		// eintreffende Standby-Übernahme übersehen, und die NÄCHSTE
+		// Connection dieser Schleife (hier: "active"->"view") würde trotzdem
+		// real gepatcht — mit dem längst toten Sender der überholten
+		// Primär-Instanz. Live reproduziert: `view`s Receiver wurde nach
+		// einer bereits erfolgreichen Standby-Übernahme fälschlich wieder
+		// auf den verschwundenen Sender der ursprünglichen (gecrashten)
+		// Instanz zurückgepatcht, weil genau dieser Zwischen-Check fehlte.
+		if _, ok := s.stillBacks(workflowID, role, instanceID); !ok {
+			slog.Info("workflows: rewireAfterRestart: role superseded mid-reconnect, aborting remaining connections",
+				"workflow", wf.ID, "role", role, "instance", instanceID)
+			return
+		}
+
 		fromNode, ok := s.nodeForRole(wf, conn.FromRole)
 		if !ok {
 			slog.Warn("workflows: rewireAfterRestart: sender role not ready", "workflow", wf.ID, "connection", conn)
@@ -912,12 +948,42 @@ func (s *Service) rewireAfterRestart(instanceID string) {
 		}
 	}
 
+	// Maßgebliche, letzte Prüfung unmittelbar vor dem Persistieren — deckt
+	// das letzte kurze Zeitfenster nach der letzten Connection ab (s.
+	// stillBacks-Doku: dieselbe Frage wird an mehreren Stellen dieser
+	// Funktion neu gestellt, da jede der potenziell langsamen I/O-Operation
+	// dazwischen eine neuere Übernahme unsichtbar verpassen könnte).
+	final, ok := s.stillBacks(workflowID, role, instanceID)
+	if !ok {
+		slog.Info("workflows: rewireAfterRestart: role superseded by a newer event, dropping stale rewiring",
+			"workflow", wf.ID, "role", role, "instance", instanceID)
+		return
+	}
+	wf = final
+	wf.Runtime[role] = rt
+
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: rewireAfterRestart: persist failed", "workflow", wf.ID, "error", err)
 	}
 	s.publish(wf)
 	slog.Info("workflows: rewired role after automatic restart", "workflow", wf.ID, "role", role, "instance", instanceID)
+}
+
+// stillBacks lädt den Workflow frisch nach und meldet, ob role dort
+// weiterhin (Status "started" vorausgesetzt) GENAU von instanceID erfüllt
+// wird — wiederverwendet an mehreren Stellen in rewireAfterRestart, die
+// über potenziell langsames I/O hinweg (Registrierungs-Warten,
+// Connection-Anwendung) wiederholt dieselbe Frage stellen müssen: "gilt
+// das, was ich gerade tue, noch, oder hat mich eine neuere Übernahme
+// (K7 Teil 4, promoteStandby) oder ein noch neuerer Restart bereits
+// überholt?" (s. Live-Fund-Dokumentation dort).
+func (s *Service) stillBacks(workflowID, role, instanceID string) (Workflow, bool) {
+	wf, err := s.store.Get(workflowID)
+	if err != nil || wf.Status != StatusStarted || wf.Runtime[role].InstanceID != instanceID {
+		return Workflow{}, false
+	}
+	return wf, true
 }
 
 // RestartRole startet die Instanz EINER Rolle eines bereits laufenden
@@ -1432,6 +1498,38 @@ func validate(def Definition) error {
 			crosspointTargets[c.ToRole] = true
 		}
 	}
+	// K7 Teil 4 (Hot-Standby, docs/END-GOAL-FEATURES.md §7.4): StandbyFor
+	// muss eine andere, existierende Rolle desselben NodeTypes referenzieren
+	// — keine Selbstreferenz, keine Ketten (eine Rolle ist entweder Primär-
+	// oder Standby-Rolle, nie beides), höchstens ein Standby pro Primärrolle.
+	roleByName := map[string]Role{}
+	for _, r := range def.Roles {
+		roleByName[r.Name] = r
+	}
+	standbyOfPrimary := map[string]string{} // primaryRole -> standbyRole (Eindeutigkeit)
+	for _, r := range def.Roles {
+		if r.StandbyFor == "" {
+			continue
+		}
+		if r.StandbyFor == r.Name {
+			return fmt.Errorf("%w: role %q cannot be a standby for itself", ErrValidation, r.Name)
+		}
+		primary, ok := roleByName[r.StandbyFor]
+		if !ok {
+			return fmt.Errorf("%w: role %q references unknown standbyFor role %q", ErrValidation, r.Name, r.StandbyFor)
+		}
+		if primary.NodeType != r.NodeType {
+			return fmt.Errorf("%w: standby role %q (%s) must match nodeType of %q (%s)", ErrValidation, r.Name, r.NodeType, r.StandbyFor, primary.NodeType)
+		}
+		if primary.StandbyFor != "" {
+			return fmt.Errorf("%w: role %q is itself a standby role, cannot have a standby (no chains)", ErrValidation, r.StandbyFor)
+		}
+		if existing, ok := standbyOfPrimary[r.StandbyFor]; ok {
+			return fmt.Errorf("%w: role %q already has a standby role %q, at most one standby per primary", ErrValidation, r.StandbyFor, existing)
+		}
+		standbyOfPrimary[r.StandbyFor] = r.Name
+	}
+
 	for _, sched := range def.Schedules {
 		if err := validateSchedule(sched); err != nil {
 			return err

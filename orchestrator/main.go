@@ -319,6 +319,16 @@ func main() {
 	// workflowSvc launcherSvc als Konstruktor-Argument braucht.
 	launcherSvc.SetRestartObserver(workflowSvc)
 
+	// K7-Teil-4 (docs/END-GOAL-FEATURES.md §7.4, Hot-Standby): Crash-Loop-
+	// Trigger (launcher gibt eine Instanz endgültig auf) + Host-Offline-
+	// Trigger (hostMetricsTracker, bereits oben für Placement/Profile
+	// verdrahtet, hier wiederverwendet statt eines zweiten Telemetrie-
+	// Konsumenten). RunFailoverWatcher deckt zusätzlich die periodische
+	// Bedienzustands-Erfassung für Rollen mit Standby ab (s. failover.go).
+	launcherSvc.SetFailoverObserver(workflowSvc)
+	workflowSvc.SetHostMetrics(hostMetricsTracker)
+	go workflowSvc.RunFailoverWatcher(ctx)
+
 	// D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): führt Start/Stop-
 	// Zeitpläne aus, unabhängig vom HTTP-Handler.
 	workflowScheduler := workflows.NewScheduler(workflowSvc)

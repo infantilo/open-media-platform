@@ -14034,3 +14034,176 @@ zu knappem Budget, noch keine automatische Kompensation.
 `orchestrator/internal/workflows/service.go`,
 `orchestrator/internal/httpapi/workflow_handlers.go`,
 `deploy/catalog.json`, `ui/shell/workflows-view.ts`.
+
+## 2026-08-03 (Nachtrag 113) — K7 Teil 4: Hot-Standby (automatischer Cross-Host-Failover), zwei echte Races live gefunden+behoben
+
+`UMSETZUNG.md` §7.4 Teil 4 / `docs/END-GOAL-FEATURES.md` Kapitel 7 waren
+der letzte offene Punkt im HA-Konzept — Teil 1 (Prozess-Auto-Restart,
+gleicher Host) seit 2026-07-17 fertig, Teil 4 (Rollenwechsel auf einen
+**anderen** Host, ohne Operator-Eingriff) bisher nur konzeptionell
+entschieden (§7.5/§7.7). Nutzerauftrag: "K7 4 fertig machen". Zwei
+Nutzerentscheidungen per `AskUserQuestion` vor Beginn geklärt: (1) beide
+Failover-Trigger diese Sitzung (Crash-Loop-Bremse-erschöpft UND
+Host-komplett-offline, nicht nur ersterer), (2) volle UI-Anbindung
+(Rollen-Designer-Dropdown + Badge/Toast, nicht nur Backend/JSON).
+
+**Datenmodell (additiv, keine Migration — `Definition` ist JSONB):**
+`Role.StandbyFor string` (`types.go`) — Name einer anderen Rolle
+DESSELBEN Workflows, für die diese Rolle als warmer Standby dient.
+Validierung in `validate()` (`service.go`): referenzierte Rolle muss
+existieren, gleicher `NodeType`, keine Selbstreferenz, keine Ketten (eine
+Rolle ist entweder Primär- oder Standby-Rolle), höchstens ein Standby pro
+Primärrolle. `RoleRuntime.StandbyActive bool` — rein informativ, gesetzt
+nach einer Übernahme (UI-Badge).
+
+**Warum "warm-unabonniert" keinen Sonderfall-Code braucht:**
+`Definition.Connections` referenziert eine Standby-Rolle nie (Connections
+zeigen auf die Primärrolle) — die Standby-Instanz startet normal, wird
+NMOS-discoverable ("warm"), bleibt aber automatisch unverbunden, weil
+`runStart`s Connection-Schleife sie nie anspricht. Live bestätigt: `GET
+/state` der Standby-Node zeigte `programSenderId: null`, während die
+Primärrolle bereits auf eine Quelle geschaltet war.
+
+**Zwei Failover-Trigger** (`orchestrator/internal/workflows/failover.go`,
+neu):
+1. **Crash-Loop erschöpft** — neues `launcher.FailoverObserver`-Interface
+   (analog `RestartObserver`), aufgerufen an allen sechs "Launcher gibt
+   endgültig auf"-Stellen in `launcher.go` (lokal: Prozess + Podman, je
+   Crash-Loop- und Neustart-fehlgeschlagen-Fall; remote: dieselben zwei
+   Fälle in `HandleRemoteExit`) — wiederverwendet die bestehende
+   Crash-Loop-Bremse (`maxCrashRestarts=5`/`crashRestartWindow=60s`,
+   bereits in §7.5 Punkt 2 als Failover-Schwelle festgelegt), keine neue
+   Konfiguration.
+2. **Host komplett offline** — neuer `RunFailoverWatcher`-Ticker
+   (5s-Takt, analog `placement.Engine.Run`), prüft für jede Rolle MIT
+   Standby, ob `hostMetricsTracker.Get(hostID)` seit `hostOfflineTimeout`
+   (20s = 4× der 5s-Host-Agent-Telemetriefrequenz) keine Telemetrie mehr
+   zeigt. Deckt genau den Fall ab, den ein reiner Prozess-Crash-Loop nie
+   melden würde (Host-Agent selbst ist weg, kein NATS-Exit-Event). Neues
+   `HostMetricsReader`-Interface, `Service.SetHostMetrics` (main.go:
+   `hostMetricsTracker` wiederverwendet, bereits für Placement/Profile
+   verdrahtet).
+
+**`promoteStandby`** ist strukturell `rewireAfterRestart` (K7-Teil-1-
+Rewiring) nachempfunden — eine Rolle bekommt eine neue Instanz/Node-ID,
+alle ihre Connections werden neu angewendet, Runtime persistiert, SSE
+publiziert — mit einem Zusatz: der zuletzt erfasste Bedienzustand
+(`state.go`, bisher nur bei Stop erfasst) wird auf die neue Node
+übertragen. Neue `captureOneRoleState`-Funktion (aus `captureRoleState`
+extrahiert) läuft periodisch im selben 5s-Ticker für Primärrollen MIT
+Standby — ohne das gäbe es beim Host-Offline-Trigger (tote Node nicht
+mehr befragbar) keinen aktuellen Zustand zum Übertragen.
+
+**Zwei echte Races live gefunden (nicht in Unit-Tests sichtbar, nur unter
+echter Crash-Loop-Last mit fünf aufeinanderfolgenden Neustarts vor dem
+sechsten, endgültigen Aufgeben):**
+
+1. **Stale `rewireAfterRestart` dreht die Runtime zurück.** Jeder der
+   fünf ERFOLGREICHEN Neustarts vor dem Crash-Loop-Ende löst sein eigenes
+   `go rewireAfterRestart(instanceID)` aus (`InstanceRestarted`) — bis zu
+   fünf davon können gleichzeitig laufen, jedes mit `awaitFreshRegistration`
+   (bis zu `registrationTimeout`=20s) blockiert. Lief eine
+   `promoteStandby`-Übernahme dazwischen durch, schrieb das älteste dieser
+   Goroutinen beim Fertigwerden trotzdem noch die (veraltete) Runtime auf
+   die längst tote Primär-Instanz zurück — live reproduziert: `Runtime
+   ["active"].instanceId` sprang nach erfolgreicher Übernahme wieder auf
+   die gecrashte ID. Fix: neue `stillBacks(workflowID, role, instanceID)`-
+   Hilfsfunktion (lädt frisch nach, prüft `Runtime[role].InstanceID ==
+   instanceID` UND `Status==started`) — aufgerufen VOR dem Connection-
+   Rewiring (früher Ausstieg) UND unmittelbar vor dem finalen Persist.
+2. **Reicht nicht — der stale Reconnect selbst ist der eigentliche
+   Schaden.** Ein einzelner Freshness-Check vor/nach der gesamten
+   Connection-Schleife reicht NICHT: `applyConnection`/
+   `waitForCrosspointInput` kann pro Verbindung selbst bis zu ~10-20s bis
+   zum eigenen Timeout blockieren — WÄHREND dieser Zeit kann eine
+   Übernahme passieren, und die NÄCHSTE Verbindung derselben Schleife
+   würde trotzdem real gepatcht, mit dem Sender der toten Instanz. Live
+   reproduziert: `view`s IS-05-Receiver wurde nach einer bereits
+   erfolgreichen Standby-Übernahme fälschlich wieder auf den
+   verschwundenen Sender der ursprünglichen Instanz zurückgepatcht (per
+   direktem `GET .../connection/v1.1/single/receivers/.../active` am
+   Node bestätigt, nicht nur am Orchestrator-Cache). Fix: `stillBacks`-
+   Check JETZT VOR JEDER EINZELNEN Connection der Schleife wiederholt,
+   nicht nur einmal davor/danach.
+3. **Symmetrischer Fund in `promoteStandby` selbst:** ein naiver
+   `stillBacks`-Check direkt in dessen eigener Connection-Schleife schlug
+   IMMER fehl, weil `promoteStandby` zu diesem Zeitpunkt selbst noch gar
+   nicht persistiert hatte (`Runtime[role]` in der DB zeigte noch die
+   ALTE Instanz) — jeder Übernahme-Versuch brach sich sofort selbst ab.
+   Fix: die neue Zuordnung wird SOFORT committet (früher `UpdateRuntime`-
+   Aufruf), bevor der langsame Teil (State-Restore, Connections) beginnt
+   — analog zu `rewireAfterRestart`, dessen `instanceID` von Anfang an
+   unverändert bleibt und deshalb als Vergleichsbasis taugt.
+
+**Frontend:**
+- `ui/graph/role-designer-logic.ts`: `DraftRole.standbyFor`,
+  `standbyCandidates()` (reine Funktion, spiegelt die Backend-Regeln für
+  die Dropdown-Optionsliste), `removeRole`/`renameRole` halten
+  `standbyFor`-Referenzen konsistent (kein Torso bei Löschen/Umbenennen).
+- `ui/graph/role-designer.ts`: zweite Dropdown-Zeile "Standby für: …"
+  (gleiches Baumuster wie das Format-Dropdown vom 2026-07-29).
+- `ui/graph/flow-canvas.ts`: neues `TileSpec.isStandby` (nur von
+  `#renderRunningWorkflowScope` befüllt), gestrichelter Kachelrahmen +
+  Tooltip; neues `"workflow.failover"`-SSE-Handling (Toast "Rolle „X" auf
+  Standby umgeschaltet (Grund: …)" — das begleitende `"workflow.updated"`
+  löst den eigentlichen Neu-Render bereits aus, `GRAPH_REFRESH_EVENT_TYPES`
+  unverändert).
+
+**Verifiziert:**
+- `go build/vet/test ./...` grün (neue `failover_test.go`: Crash-Loop-
+  Trigger via `InstanceGaveUp`, Idempotenz bei doppeltem
+  Übernahme-Versuch, Host-Offline-Schwellwert-Grenzfall
+  frisch/veraltet, `StandbyFor`-Validierung inkl. aller Ablehnungsfälle);
+  vorbestehender `TestLauncherStopSendsSigkillIfSigtermIgnored`-Flake
+  bestätigt unabhängig von dieser Änderung (auch auf sauberem `main`
+  reproduzierbar).
+- `deno check`/`deno test ui/` grün (18 neue/geänderte Fälle in
+  `role-designer-logic_test.ts`).
+- **Live, Crash-Loop-Trigger** (echter Orchestrator, echte Prozesse,
+  sechs Testläufe bis der oben beschriebene Race-Fix stand): Workflow
+  `src → active(omp-video-mixer-me) → view`, `standby` mit `standbyFor:
+  "active"`, PGM auf `src`s Sender geschaltet, `kill -9` sechsmal in
+  Folge gegen `active` → Crash-Loop-Bremse zieht → `standby promoted`
+  (SSE `workflow.failover`) → `Runtime["active"]` zeigt stabil (keine
+  spätere Zurückdrehung mehr) auf die Standby-Instanz,
+  `StandbyActive:true` → `GET /state` der promoteten Node zeigt exakt
+  denselben `programSenderId` wie vor dem Crash (Bedienzustand
+  übernommen) → `view`s IS-05-Receiver-`/active`-Endpoint (direkt am Node
+  abgefragt, nicht am Orchestrator-Cache) zeigt den PGM-Sender der
+  promoteten Node.
+- **Live, Host-Offline-Trigger:** echter zweiter `omp-host-agent`-Prozess
+  (reales Bootstrap-Token, reale Telemetrie über NATS), Rolle `active`
+  (Katalog-Profil-bewusst als `omp-source` statt `omp-video-mixer-me`
+  gewählt — Letzteres war durch die vorangegangenen Crash-Tests auf
+  "überbucht" profiliert und wurde von der Placement-Engine korrekt
+  remote abgelehnt, kein Bug) explizit auf diesen Host platziert,
+  Host-Agent-Prozess hart beendet (kein NATS-Exit-Event, nur
+  Telemetrie-Stille) → nach `hostOfflineTimeout` `workflow.failover` mit
+  `trigger:"host-offline"`, `Runtime["active"]` zeigt auf die
+  Standby-Instanz, `view`s Receiver direkt am Node bestätigt umgeschaltet
+  auf den neuen Sender — **ohne** jedes Crash-Loop-Ereignis, rein über
+  Telemetrie-Staleness ausgelöst.
+- Alle Test-Workflows/-Prozesse/der zweite Host-Agent danach
+  gestoppt/gelöscht (mehrere davon erst nach erneutem `Stop()`, da
+  Launcher-seitig bereits "unknown instance" für längst tote
+  Standby-Reste), `/dev/shm/omp-mxl` geleert, keine verwaisten Prozesse
+  zurückgelassen (ein einzelner `omp-viewer`-Nachzügler beim
+  Aufräumen gefunden+beendet).
+
+**Bewusst nicht Teil dieser Sitzung** (im Plan dokumentiert, kein
+stiller Gap): §19 Orchestrator-Active-Passive (Teil 5, eigener Termin),
+ST-2110-2022-7-Dual-Path (Teil 3, eigener Termin), Genlock-Äquivalenz
+(Teil 6, aspirational). Alte Primär-Instanz wird nach einer Übernahme
+NICHT automatisch gestoppt (könnte bei einem reinen Netzwerk-Split noch
+leben) — bleibt sichtbar `crashed`/verwaist im Katalog-UI, manuelles
+Aufräumen durch den Operator vorgesehen. `replicas`/mehr als ein Standby
+pro Primärrolle: YAGNI, nicht gebaut.
+
+**Betroffene Dateien:** `orchestrator/internal/workflows/types.go`,
+`orchestrator/internal/workflows/service.go`,
+`orchestrator/internal/workflows/state.go`,
+`orchestrator/internal/workflows/failover.go` (neu),
+`orchestrator/internal/workflows/failover_test.go` (neu),
+`orchestrator/internal/launcher/launcher.go`, `orchestrator/main.go`,
+`ui/graph/role-designer-logic.ts`, `ui/graph/role-designer-logic_test.ts`,
+`ui/graph/role-designer.ts`, `ui/graph/flow-canvas.ts`.

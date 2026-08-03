@@ -39,7 +39,14 @@ import {
   zoomAt,
 } from "./geometry.ts";
 import { ROLE_FORMATS, uniqueRoleName } from "./roles.ts";
-import { addConnection, type DraftConnection, type DraftRole, removeRole, renameRole } from "./role-designer-logic.ts";
+import {
+  addConnection,
+  type DraftConnection,
+  type DraftRole,
+  removeRole,
+  renameRole,
+  standbyCandidates,
+} from "./role-designer-logic.ts";
 import { apiFetch } from "../shell/connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 
@@ -54,7 +61,11 @@ const DRAG_THRESHOLD_PX = 3;
 // Body-Positionen hängen unten bereits dynamisch von TILE_HEIGHT ab,
 // keine weiteren Anpassungen nötig).
 const FORMAT_ROW_HEIGHT = 22;
-const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT + FORMAT_ROW_HEIGHT;
+// K7 Teil 4 (docs/END-GOAL-FEATURES.md §7.4, Hot-Standby): zweite Zeile
+// unter dem Format-Dropdown für "Standby für: <Rolle>" — gleiches Muster
+// wie FORMAT_ROW_HEIGHT seinerzeit, TILE_HEIGHT wächst entsprechend.
+const STANDBY_ROW_HEIGHT = 22;
+const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT;
 const ANCHOR_RADIUS = 6;
 
 interface CatalogEntry {
@@ -573,6 +584,40 @@ export class RoleDesigner extends HTMLElement {
     });
     formatObject.appendChild(formatSelect);
     g.appendChild(formatObject);
+
+    // K7 Teil 4 (docs/END-GOAL-FEATURES.md §7.4/§7.7, Hot-Standby):
+    // "Standby für: <Rolle>"-Dropdown, gleiches Baumuster wie der
+    // Format-Dropdown oben. Kandidatenliste kommt aus standbyCandidates
+    // (role-designer-logic.ts, reine Funktion) — nur Rollen desselben
+    // NodeTypes ohne bereits bestehende Standby-Bindung, das Backend
+    // (workflows.validate) bleibt die eigentliche Durchsetzung.
+    const standbyObject = document.createElementNS(SVG_NS, "foreignObject");
+    standbyObject.setAttribute("x", "6");
+    standbyObject.setAttribute("y", String(HEADER_HEIGHT + MIN_BODY_HEIGHT + FORMAT_ROW_HEIGHT));
+    standbyObject.setAttribute("width", String(NODE_WIDTH - 12));
+    standbyObject.setAttribute("height", String(STANDBY_ROW_HEIGHT));
+    standbyObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    const standbySelect = document.createElement("select");
+    standbySelect.title = "Warme Standby-Rolle für eine andere Rolle desselben Node-Typs — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).";
+    standbySelect.style.cssText =
+      "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+    const standbyNoneOpt = document.createElement("option");
+    standbyNoneOpt.value = "";
+    standbyNoneOpt.textContent = "Standby für: —";
+    standbySelect.appendChild(standbyNoneOpt);
+    for (const candidate of standbyCandidates(this.#roles, role)) {
+      const opt = document.createElement("option");
+      opt.value = candidate.name;
+      opt.textContent = `Standby für: ${candidate.name}`;
+      if (candidate.name === role.standbyFor) opt.selected = true;
+      standbySelect.appendChild(opt);
+    }
+    standbySelect.addEventListener("change", () => {
+      role.standbyFor = standbySelect.value || undefined;
+      this.#render();
+    });
+    standbyObject.appendChild(standbySelect);
+    g.appendChild(standbyObject);
 
     const removeBtn = document.createElementNS(SVG_NS, "text");
     removeBtn.setAttribute("data-role", "role-tile-remove");

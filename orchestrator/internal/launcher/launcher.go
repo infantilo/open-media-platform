@@ -225,6 +225,19 @@ type RestartObserver interface {
 	InstanceRestarted(instanceID string)
 }
 
+// FailoverObserver wird benachrichtigt, sobald die Crash-Loop-Bremse
+// (maxCrashRestarts je crashRestartWindow) für eine Instanz greift und der
+// Launcher endgültig aufgibt, sie automatisch neu zu starten (K7 Teil 4,
+// docs/END-GOAL-FEATURES.md §7.4/§7.5 Punkt 2: dieselbe Schwelle wird als
+// Failover-Trigger wiederverwendet, keine eigene Konfiguration) —
+// implementiert von *workflows.Service, das daraufhin prüft, ob die
+// betroffene Rolle eine warme Standby-Rolle hat und diese übernehmen
+// lässt. Optional (darf unverdrahtet bleiben), gleiches Muster wie
+// RestartObserver.
+type FailoverObserver interface {
+	InstanceGaveUp(instanceID string)
+}
+
 // restartState hält die Crash-Loop-Buchführung einer Instanz (nicht
 // persistiert — ein Orchestrator-Neustart ist ein anderer, bereits
 // separat behandelter Fehlerfall, s. loadState).
@@ -292,12 +305,13 @@ type Launcher struct {
 	// nicht anfassen zu müssen; wie registryURL/natsURL nur einmal beim
 	// Start gesetzt, vor dem ersten bedienten Request, deshalb ohne
 	// Mutex gelesen.
-	orchestratorURL string
-	store           instanceStore
-	catalog         catalogStore
-	events          EventPublisher
-	nc              NATSRequester
-	restartObserver RestartObserver
+	orchestratorURL  string
+	store            instanceStore
+	catalog          catalogStore
+	events           EventPublisher
+	nc               NATSRequester
+	restartObserver  RestartObserver
+	failoverObserver FailoverObserver
 
 	mu              sync.Mutex
 	instances       map[string]Instance
@@ -334,6 +348,13 @@ type Launcher struct {
 // wie die übrigen main.go-Service-Verkabelungen auch.
 func (l *Launcher) SetRestartObserver(o RestartObserver) {
 	l.restartObserver = o
+}
+
+// SetFailoverObserver verdrahtet einen Beobachter für endgültig
+// aufgegebene (Crash-Loop-erschöpfte) Instanzen — gleiches Verdrahtungs-
+// Muster/gleicher Zeitpunkt wie SetRestartObserver.
+func (l *Launcher) SetFailoverObserver(o FailoverObserver) {
+	l.failoverObserver = o
 }
 
 // New erstellt einen Launcher und lädt einen zuvor in store
@@ -932,6 +953,9 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 			slog.Warn("launcher: crash loop detected, giving up auto-restart",
 				"id", id, "type", nodeType, "restarts", restartCount)
 			l.publishCrash(current)
+			if l.failoverObserver != nil {
+				l.failoverObserver.InstanceGaveUp(id)
+			}
 			return
 		}
 		l.mu.Unlock()
@@ -969,6 +993,9 @@ func (l *Launcher) supervise(id, nodeType string, entry CatalogEntry, label stri
 			l.mu.Unlock()
 			if stillTracked {
 				l.publishCrash(current)
+				if l.failoverObserver != nil {
+					l.failoverObserver.InstanceGaveUp(id)
+				}
 			}
 			return
 		}
@@ -1041,6 +1068,9 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 			slog.Warn("launcher: container crash loop detected, giving up auto-restart",
 				"id", id, "type", nodeType, "restarts", restartCount)
 			l.publishCrash(current)
+			if l.failoverObserver != nil {
+				l.failoverObserver.InstanceGaveUp(id)
+			}
 			return
 		}
 		l.mu.Unlock()
@@ -1073,6 +1103,9 @@ func (l *Launcher) supervisePodman(id, nodeType string, entry CatalogEntry, labe
 			l.mu.Unlock()
 			if stillTracked {
 				l.publishCrash(current)
+				if l.failoverObserver != nil {
+					l.failoverObserver.InstanceGaveUp(id)
+				}
 			}
 			return
 		}
@@ -1286,6 +1319,9 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		slog.Warn("launcher: remote crash loop detected, giving up auto-restart",
 			"id", ev.InstanceID, "host_id", hostID, "restarts", restartCount)
 		l.publishCrash(current)
+		if l.failoverObserver != nil {
+			l.failoverObserver.InstanceGaveUp(ev.InstanceID)
+		}
 		return
 	}
 	l.mu.Unlock()
@@ -1328,6 +1364,9 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		l.mu.Unlock()
 		if tracked {
 			l.publishCrash(current)
+			if l.failoverObserver != nil {
+				l.failoverObserver.InstanceGaveUp(ev.InstanceID)
+			}
 		}
 		return
 	}

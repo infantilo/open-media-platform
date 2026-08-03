@@ -57,32 +57,42 @@ const maxRoleStateBytes = 1 << 20 // 1 MiB — ein Bedienzustand ist ein paar hu
 // Rollen-Fehler (Node antwortet nicht mehr, kein /state, Timeout)
 // wird nur geloggt, bricht den eigentlichen Stop-Vorgang nie ab.
 func (s *Service) captureRoleState(wf Workflow) {
+	senderToAlias := s.buildSenderAliasIndex(wf)
+	for role := range wf.Runtime {
+		s.captureOneRoleState(wf, role, senderToAlias)
+	}
+}
+
+// captureOneRoleState ist der pro-Rolle-Kern von captureRoleState,
+// herausgelöst für K7 Teil 4 (failover.go): der Failover-Ticker ruft dies
+// periodisch NUR für Primärrollen mit einer Standby-Rolle auf (kein
+// unnötiger /state-Overhead für redundanzlose Rollen) — sonst gäbe es beim
+// Host-Offline-Trigger keinen aktuellen Bedienzustand zum Übertragen, weil
+// die tote Node dann nicht mehr befragbar ist. senderToAlias wird vom
+// Aufrufer einmal pro Workflow gebaut (buildSenderAliasIndex braucht einen
+// vollständigen Registry-Scan, nicht pro Rolle wiederholen).
+func (s *Service) captureOneRoleState(wf Workflow, role string, senderToAlias map[string]string) {
+	node, ok := s.nodeForRole(wf, role)
+	if !ok || node.APIBaseURL == "" {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
 	defer cancel()
-
-	senderToAlias := s.buildSenderAliasIndex(wf)
-
-	for role := range wf.Runtime {
-		node, ok := s.nodeForRole(wf, role)
-		if !ok || node.APIBaseURL == "" {
-			continue
-		}
-		raw, err := getNodeState(ctx, s.httpClient, node.APIBaseURL)
-		if err != nil {
-			// Kein /state (häufigster Fall, die meisten Node-Typen) oder
-			// Node bereits nicht mehr erreichbar — beides erwartbar,
-			// keine Warnung wert (würde bei jedem Stop eines Workflows
-			// ohne Mixer/Audio-Mixer-Rolle unnötig im Log stehen).
-			continue
-		}
-		state, err := aliasSenderIDs(raw, senderToAlias)
-		if err != nil {
-			slog.Warn("workflows: failed to alias role state", "workflow", wf.ID, "role", role, "error", err)
-			continue
-		}
-		if err := s.store.SetRoleState(wf.ID, role, state); err != nil {
-			slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", err)
-		}
+	raw, err := getNodeState(ctx, s.httpClient, node.APIBaseURL)
+	if err != nil {
+		// Kein /state (häufigster Fall, die meisten Node-Typen) oder
+		// Node bereits nicht mehr erreichbar — beides erwartbar,
+		// keine Warnung wert (würde bei jedem Stop eines Workflows
+		// ohne Mixer/Audio-Mixer-Rolle unnötig im Log stehen).
+		return
+	}
+	state, err := aliasSenderIDs(raw, senderToAlias)
+	if err != nil {
+		slog.Warn("workflows: failed to alias role state", "workflow", wf.ID, "role", role, "error", err)
+		return
+	}
+	if err := s.store.SetRoleState(wf.ID, role, state); err != nil {
+		slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", err)
 	}
 }
 

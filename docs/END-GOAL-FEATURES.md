@@ -1360,13 +1360,20 @@ zweite Konfigurationsebene einführen.
   opt-in konfigurierbare Fähigkeit in `omp-mediaio::st2110` (D4-Basis).
   Kleinster Schritt mit „echtem" Broadcast-Redundanz-Anspruch (0 Frames
   Verlust auf dem Netzpfad).
-- **Teil 4 — Hot-Standby (§6.3 Stufe 4), sequenziert nach D6 Teil 3:**
-  Workflow-Rollenfeld `standby`, Claim einer zweiten Instanz über die
-  dann existierende Placement-Engine, Command-Mirroring **nicht**
-  vorausgesetzt (break-before-make wie in §6.3 spezifiziert — die
-  „warm, unabonniert"-Zwischenstufe aus dem Memory-Update 2026-07-12
-  ist hier der günstigste konkrete Startpunkt: Standby-Prozess läuft,
-  aber ohne aktiven MXL-Reader/Render-Load, bis Übernahme).
+- **✅ Teil 4 — Hot-Standby (§6.3 Stufe 4), erledigt 2026-08-03
+  (`UMSETZUNG.md`, `docs/decisions.md` Nachtrag 113):**
+  `Role.StandbyFor` statt eines reinen `standby`-Flags (referenziert die
+  Primärrolle namentlich, ermöglicht die im Text unten beschriebene
+  "warm, unabonniert"-Semantik ohne Sonderfall-Code — eine Standby-Rolle
+  wird nie von `Definition.Connections` referenziert, bleibt also
+  automatisch unverbunden). Zwei Trigger statt nur des ursprünglich
+  angenommenen Crash-Loop-Falls: zusätzlich echte Host-Offline-Erkennung
+  (Telemetrie-Staleness) für den Fall, den ein reiner Prozess-Crash-Loop
+  nie melden würde (Host-Agent selbst ist weg). Kein Command-Mirroring,
+  break-before-make wie hier spezifiziert — nur der Bedienzustand
+  (`GET`/`POST /state`) wird übernommen. Placement-Engine-Anbindung
+  bereits vorhanden (`SelectHost`, Nachtrag 99), keine neue Placement-
+  Logik nötig.
 - **Teil 5 — Orchestrator Active-Passive (§19):** nur bei echtem
   24/7-Bedarf, wie in §19 selbst bereits terminiert — kein neuer
   Designschritt, reine Umsetzung des bestehenden Konzepts.

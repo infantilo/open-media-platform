@@ -170,7 +170,9 @@ interface WorkflowSummary {
 // Bearbeiten-Entwurfs (#workflowEditDraft), da beide dieselbe Form
 // haben (ein Entwurf IST eine Definition, nur (noch) nicht gespeichert).
 type WorkflowDefinition = {
-  roles: { name: string; nodeType: string }[];
+  // standbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4) — s.
+  // orchestrator/internal/workflows/types.go Role.StandbyFor.
+  roles: { name: string; nodeType: string; standbyFor?: string }[];
   connections: { fromRole: string; toRole: string }[];
 } & Record<string, unknown>;
 
@@ -192,6 +194,11 @@ interface TileSpec {
   kind: "node" | "group";
   health: string;
   instanceId?: string;
+  // isStandby (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4, Hot-Standby):
+  // gesetzt, wenn dieser Node eine warme, aktuell unverbundene
+  // Standby-Rolle erfüllt (Role.StandbyFor in der Workflow-Definition) —
+  // nur von #renderRunningWorkflowScope befüllt, s. dortige Doku.
+  isStandby?: boolean;
 }
 
 // CatalogEntry (UMSETZUNG.md C8) — Wire-Format identisch zu
@@ -213,6 +220,17 @@ interface CatalogEntry {
   // (unverändertes Verhalten seit §17 Teil 4) — gesetzt, wenn mehrere
   // Versionen desselben Typs parallel importiert wurden.
   version?: string;
+}
+
+// FailoverEvent — Wire-Format identisch zum "workflow.failover"-SSE-Event
+// (orchestrator/internal/workflows/failover.go, K7 Teil 4, Hot-Standby).
+interface FailoverEvent {
+  workflowId: string;
+  role: string;
+  fromInstanceId: string;
+  toInstanceId: string;
+  trigger: "crash-loop" | "host-offline";
+  at: string;
 }
 
 // LauncherInstance — Wire-Format identisch zu
@@ -584,6 +602,20 @@ export class FlowCanvas extends HTMLElement {
       const inst = parsed.data as LauncherInstance;
       this.#showToast(`${inst.label} automatisch neu gestartet (${inst.restartCount ?? "?"}. Neustart)`);
       void this.#renderPalette();
+      return;
+    }
+
+    // K7 Teil 4 (docs/END-GOAL-FEATURES.md §7.4, Hot-Standby): eine
+    // Rolle wurde automatisch auf ihre warme Standby-Instanz umgeschaltet
+    // — das begleitende "workflow.updated"-Event (promoteStandby,
+    // failover.go) lässt GRAPH_REFRESH_EVENT_TYPES oben bereits neu
+    // laden, hier nur der zusätzliche, erklärende Toast (§7.6: der
+    // Operator soll unmerklich weiterarbeiten können, aber trotzdem
+    // erfahren, DASS/WARUM gerade umgeschaltet wurde).
+    if (parsed.type === "workflow.failover") {
+      const ev = parsed.data as FailoverEvent;
+      const reason = ev.trigger === "host-offline" ? "Host nicht mehr erreichbar" : "Prozess-Absturz";
+      this.#showToast(`Rolle „${ev.role}" auf Standby umgeschaltet (${reason})`);
     }
   }
 
@@ -1021,6 +1053,17 @@ export class FlowCanvas extends HTMLElement {
     );
     for (const id of this.#workflowScopeExtraNodeIds) memberIds.add(id);
 
+    // K7 Teil 4: nodeId -> Rollenname (Runtime), Rollenname -> ob sie eine
+    // Standby-Rolle ist (Definition) — zwei kleine lokale Lookups statt
+    // einer dauerhaften Struktur, nur für diesen Render-Durchlauf gebraucht.
+    const roleNameByNodeId = new Map<string, string>();
+    for (const [roleName, rt] of Object.entries(wf.runtime ?? {})) {
+      if (rt.nodeId) roleNameByNodeId.set(rt.nodeId, roleName);
+    }
+    const standbyRoleNames = new Set(
+      wf.definition.roles.filter((r) => !!r.standbyFor).map((r) => r.name),
+    );
+
     const tiles: TileSpec[] = this.#graph.nodes
       .filter((n) => memberIds.has(n.id))
       .map((n) => ({
@@ -1031,6 +1074,7 @@ export class FlowCanvas extends HTMLElement {
         kind: "node" as const,
         health: n.health,
         instanceId: n.instanceId,
+        isStandby: standbyRoleNames.has(roleNameByNodeId.get(n.id) ?? ""),
       }));
 
     this.#portLocation.clear();
@@ -2106,10 +2150,22 @@ export class FlowCanvas extends HTMLElement {
     body.setAttribute("fill", onTally ? "#8b1a1a" : isGroup ? "#2d3a4d" : "#2d2d2d");
     body.setAttribute(
       "stroke",
-      selected ? "#ffcc00" : onTally ? "#ff3b3b" : isGroup ? "#5b9bd5" : healthColor(tile.health),
+      selected ? "#ffcc00" : onTally ? "#ff3b3b" : tile.isStandby ? "#e0a020" : isGroup ? "#5b9bd5" : healthColor(tile.health),
     );
     body.setAttribute("stroke-width", selected || onTally ? "3" : "2");
-    if (selected) body.setAttribute("stroke-dasharray", "6 3");
+    if (selected) {
+      body.setAttribute("stroke-dasharray", "6 3");
+    } else if (tile.isStandby) {
+      // K7 Teil 4 (Hot-Standby): gestrichelter Rahmen statt eines
+      // durchgezogenen — visuell "wartet, ist noch nicht das aktive
+      // Signal", analog dem Muster für ausgewählte Kacheln oben, nur
+      // engmaschiger gestrichelt, um beide Zustände unterscheidbar zu
+      // halten.
+      body.setAttribute("stroke-dasharray", "3 3");
+      const standbyTitle = document.createElementNS(SVG_NS, "title");
+      standbyTitle.textContent = "Standby (warm) — übernimmt automatisch, wenn die Primärrolle ausfällt (K7 Teil 4).";
+      body.appendChild(standbyTitle);
+    }
     g.appendChild(body);
 
     const header = document.createElementNS(SVG_NS, "rect");

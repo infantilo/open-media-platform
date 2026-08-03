@@ -77,6 +77,21 @@ type Role struct {
 	// wechsel braucht einen MXL-Flow-Neuaufbau, gleiche Einschränkung
 	// wie die bestehende Programm-Auflösung).
 	Format string `json:"format,omitempty"`
+	// StandbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4/§7.7): Name
+	// einer anderen Rolle DESSELBEN Workflows, für die diese Rolle als
+	// warmer Standby dient. Leer = normale Rolle (unverändertes
+	// Verhalten). Eine Standby-Rolle wird beim Start wie jede andere
+	// Rolle provisioniert/registriert (NMOS-discoverable, "warm"), bleibt
+	// aber automatisch unverbunden — `Definition.Connections` referenziert
+	// nur die Primärrolle, nie die Standby-Rolle selbst, s. runStart.
+	// Übernimmt die Primärrolle erst bei einer echten Übernahme
+	// (failover.go: Crash-Loop erschöpft ODER Host komplett offline).
+	// Validierung (validate() in service.go): referenzierte Rolle muss
+	// existieren, denselben NodeType haben, keine Selbstreferenz, keine
+	// Ketten (eine Rolle ist entweder Primär- oder Standby-Rolle, nicht
+	// beides), höchstens ein Standby pro Primärrolle (kein `replicas`
+	// diese Runde — YAGNI, s. Plan).
+	StandbyFor string `json:"standbyFor,omitempty"`
 }
 
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht
@@ -239,6 +254,13 @@ type RoleRuntime struct {
 	InstanceID string `json:"instanceId"`
 	NodeID     string `json:"nodeId,omitempty"`
 	HostID     string `json:"hostId,omitempty"`
+	// StandbyActive (K7 Teil 4): gesetzt, sobald eine Übernahme
+	// stattgefunden hat — diese Rolle wird gerade von der Instanz ihrer
+	// (vormaligen) Standby-Rolle erfüllt statt von ihrer ursprünglichen
+	// Primärinstanz. Rein informativ (UI-Badge/Alarm-Sichtbarkeit,
+	// §7.2-Referenz "sichtbarer Status im UI"), beeinflusst kein
+	// Orchestrator-Verhalten selbst.
+	StandbyActive bool `json:"standbyActive,omitempty"`
 }
 
 // ExportedWorkflow ist das Datei-Format für Kapitel 12 Teil 3
