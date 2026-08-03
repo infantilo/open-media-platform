@@ -15,7 +15,7 @@
 //! sein (`deploy/dev/mxl.env`).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -153,6 +153,14 @@ impl MxlVideoOutput {
         height: u32,
         framerate_numerator: u32,
         framerate_denominator: u32,
+        // output_delay (D8 Teil 3, ARCHITECTURE.md §15.1 Punkt 3/4):
+        // vom AUFRUFER gehaltener, über Pipeline-Neuaufbauten hinweg
+        // stabiler Griff (Gegenstück zu `flowed_handle()` oben, das
+        // einen Wert NACH außen exponiert — hier fließt der Wert VON
+        // außen rein). Nodes ohne Delay-Fähigkeit übergeben einfach
+        // `Arc::new(AtomicU64::new(0))` (No-Op, unverändertes
+        // Verhalten). `write_loop` liest ihn live, s. dort.
+        output_delay: Arc<AtomicU64>,
     ) -> Result<Self, String> {
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
@@ -295,6 +303,7 @@ impl MxlVideoOutput {
                 &app_sink,
                 &running_thread,
                 &flowed_thread,
+                &output_delay,
             );
         });
 
@@ -306,6 +315,48 @@ impl MxlVideoOutput {
     }
 }
 
+/// Berechnet den für einen Buffer zu schreibenden Grain-Index (D8 Teil 3,
+/// ARCHITECTURE.md §15.1 Punkt 3/4: Ausgangs-Grain(N) = Eingangs-Grain(N)
+/// plus D) — aus `write_loop` extrahiert für isolierte Testbarkeit ohne
+/// echte GStreamer-Pipeline/MXL-Domain.
+///
+/// Ursprungs-Index bevorzugen, falls ein durchgereichter Node (z. B.
+/// `omp-scaler`) die TAI-Herkunftszeit als Meta trägt (ARCHITECTURE.md §15
+/// Punkt 4) — sonst gegen die aktuelle Wallclock rechnen (z. B. ein
+/// Mixer-Ausgang oder eine Test-Quelle ohne durchgereichten Ursprung, per
+/// Definition ein neuer Ursprung). `delay` UND (im ursprungslosen Fall)
+/// `now()` werden bei JEDEM Aufruf neu gelesen, nicht nur einmalig beim
+/// ersten Frame — live gefunden (D8-Teil-3-Verifikation, Mixer-PGM-Test):
+/// eine frühere Fassung fror den Freilauf-Zähler nach dem ersten Frame
+/// auf `anchor() + delay` ein und ignorierte jede SPÄTERE
+/// `setOutputDelay()`-Änderung dauerhaft — der Orchestrator ruft
+/// `setOutputDelay` aber erst NACH `awaitRegistration` auf (der Node
+/// muss zuerst über die Registry erreichbar sein, um seine API-Adresse
+/// zu kennen), zu diesem Zeitpunkt hat ein Node wie der Mixer (der
+/// "immer etwas produziert", auch ohne Eingang) oft schon Frames
+/// geschrieben — der eingefrorene Zähler hätte das Delay dann NIE mehr
+/// angewendet. `max(candidate, letzter+1)` schützt weiterhin vor
+/// Rückwärtssprüngen (z. B. durch von `videorate` duplizierte Buffer mit
+/// identischer Meta, oder einen zwischenzeitlich VERKLEINERTEN Delay-
+/// Wert — Letzteres bewusst in Kauf genommen: ein Delay lässt sich live
+/// erhöhen, aber nicht unter den bereits geschriebenen Stand senken,
+/// ohne Rückwärtssprünge zu riskieren).
+fn compute_write_index(
+    origin_index: Option<u64>,
+    last_written: Option<u64>,
+    delay: u64,
+    now: impl FnOnce() -> u64,
+) -> u64 {
+    let candidate = match origin_index {
+        Some(origin) => origin + delay,
+        None => now() + delay,
+    };
+    match last_written {
+        Some(last) => candidate.max(last + 1),
+        None => candidate,
+    }
+}
+
 fn write_loop(
     context: &Arc<MxlContext>,
     grain_writer: mxl::GrainWriter,
@@ -313,9 +364,9 @@ fn write_loop(
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
+    output_delay: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
-    let mut index: Option<u64> = None;
     let mut last_written: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
@@ -330,21 +381,11 @@ fn write_loop(
             continue;
         };
 
-        // Ursprungs-Index bevorzugen, falls ein durchgereichter Node
-        // (z. B. omp-switcher) die TAI-Herkunftszeit als Meta trägt
-        // (ARCHITECTURE.md §15 Punkt 4) — sonst wie bisher fortlaufend
-        // zählen (z. B. ein Mixer-Ausgang oder eine Test-Quelle ohne
-        // durchgereichten Ursprung, per Definition ein neuer Ursprung).
-        // `max(origin, letzter+1)` schützt vor Rückwärtssprüngen (z. B.
-        // durch von `videorate` duplizierte Buffer mit identischer Meta).
+        let delay = output_delay.load(Ordering::Relaxed);
         let origin_index = origin_index_from_buffer(context, buffer, &reference_caps, grain_rate);
-        let this_index = match origin_index {
-            Some(origin) => match last_written {
-                Some(last) => origin.max(last + 1),
-                None => origin,
-            },
-            None => *index.get_or_insert_with(|| context.instance.get_current_index(grain_rate)),
-        };
+        let this_index = compute_write_index(origin_index, last_written, delay, || {
+            context.instance.get_current_index(grain_rate)
+        });
 
         match grain_writer.open_grain(this_index) {
             Ok(mut access) => {
@@ -363,7 +404,6 @@ fn write_loop(
         }
 
         last_written = Some(this_index);
-        index = Some(this_index + 1);
     }
 }
 
@@ -1590,6 +1630,66 @@ mod tests {
 
     const TEST_FLOW_ID: &str = "6f2a9c1e-6b7d-4a3a-9c1e-6b7d4a3a9c1e";
 
+    // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3/4): `compute_write_index`
+    // ist eine reine Funktion, keine echte MXL-Domain/GStreamer-Pipeline
+    // nötig — anders als die übrigen Tests in diesem Modul.
+
+    #[test]
+    fn compute_write_index_adds_delay_to_origin() {
+        let now_called = std::cell::Cell::new(false);
+        let index = compute_write_index(Some(1000), None, 3, || {
+            now_called.set(true);
+            0
+        });
+        assert_eq!(index, 1003, "origin + delay, exakt nach §15.1 Punkt 4");
+        assert!(!now_called.get(), "now()-Closure darf bei vorhandenem Origin nicht laufen");
+    }
+
+    #[test]
+    fn compute_write_index_zero_delay_is_a_no_op() {
+        let index = compute_write_index(Some(1000), None, 0, || 0);
+        assert_eq!(index, 1000, "unverändertes Verhalten ohne gesetztes Delay");
+    }
+
+    #[test]
+    fn compute_write_index_origin_with_delay_still_monotonic() {
+        // last_written liegt bereits VOR origin+delay -> origin+delay gewinnt.
+        let index = compute_write_index(Some(1000), Some(1001), 3, || 0);
+        assert_eq!(index, 1003);
+        // last_written liegt NACH origin+delay (z. B. ein vorheriger, größerer
+        // Delay-Wert) -> Monotonie-Schutz greift, kein Rückwärtssprung.
+        let index = compute_write_index(Some(1000), Some(1010), 3, || 0);
+        assert_eq!(index, 1011, "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen");
+    }
+
+    #[test]
+    fn compute_write_index_no_origin_reads_delay_and_wallclock_every_call() {
+        // Live gefunden (D8-Teil-3-Verifikation, Mixer-PGM): anders als eine
+        // frühere Fassung wird HIER JEDER Aufruf frisch gegen die aktuelle
+        // Wallclock-Position UND den aktuellen Delay-Wert berechnet, nicht
+        // nur einmalig am ersten Frame — eine später (nach dem ersten
+        // geschriebenen Grain) gesetzte Delay-Änderung muss sofort wirken,
+        // weil der Orchestrator setOutputDelay erst NACH awaitRegistration
+        // aufrufen kann, ein Node wie der Mixer aber ggf. schon vorher
+        // Frames schreibt (s. compute_write_index-Doku).
+        let index = compute_write_index(None, None, 5, || 2000);
+        assert_eq!(index, 2005);
+        // Folgeaufruf mit geändertem Delay UND fortgeschrittener Wallclock
+        // -> beide werden neu gelesen, nicht eingefroren.
+        let index = compute_write_index(None, Some(2005), 9, || 2001);
+        assert_eq!(index, 2010, "wallclock (2001) + neues delay (9), nicht der alte Anker");
+    }
+
+    #[test]
+    fn compute_write_index_no_origin_monotonic_guard_when_wallclock_lags_behind() {
+        // Ein zwischenzeitlich VERKLEINERTER Delay-Wert (oder eine Wallclock-
+        // Messung, die kurzzeitig hinter dem zuletzt geschriebenen Index
+        // zurückfällt) darf keinen Rückwärtssprung erzeugen — dieselbe
+        // max(candidate, letzter+1)-Regel wie im Origin-Fall.
+        let index = compute_write_index(None, Some(2010), 0, || 2001);
+        assert_eq!(index, 2011, "max(wallclock+delay, letzter+1) schützt vor Rückwärtssprüngen");
+    }
+
     #[test]
     fn write_then_read_loopback() {
         gst::init().expect("gst::init");
@@ -1621,6 +1721,7 @@ mod tests {
             480,
             25,
             1,
+            Arc::new(AtomicU64::new(0)),
         )
         .expect("MxlVideoOutput::new");
         _output.set_active(true);
@@ -1714,6 +1815,7 @@ mod tests {
             480,
             25,
             1,
+            Arc::new(AtomicU64::new(0)),
         )
         .expect("MxlVideoOutput::new");
         _output.set_active(true);

@@ -35,7 +35,7 @@
 //! sichtbarer Unterbruch auf den unbeteiligten Zweigen/dem PGM-Ausgang.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -643,6 +643,8 @@ fn build(
         config.height,
         FRAMERATE_NUMERATOR,
         FRAMERATE_DENOMINATOR,
+        // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+        Arc::new(AtomicU64::new(0)),
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     mxl_output.set_active(true);

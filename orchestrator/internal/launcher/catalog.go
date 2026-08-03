@@ -108,6 +108,13 @@ type CatalogLatency struct {
 	Video *LatencyRange `json:"video,omitempty"`
 	Audio *LatencyRange `json:"audio,omitempty"`
 	Data  *LatencyRange `json:"data,omitempty"`
+	// SupportsDelayCompensation (D8 Teil 3, ARCHITECTURE.md §15.1 Punkt
+	// 3) spiegelt omp_node_sdk::LatencyInfo.supports_delay_compensation
+	// — true, wenn der Node zusätzlich `POST /methods/setOutputDelay
+	// {"frames": N}` unterstützt. Node-Ebene, nicht pro Medienart (wie
+	// Video/Audio/Data oben), da ein Node entweder die Fähigkeit hat
+	// oder nicht.
+	SupportsDelayCompensation bool `json:"supportsDelayCompensation,omitempty"`
 }
 
 // LoadCatalog liest und validiert die Katalog-Datei unter path. Ein

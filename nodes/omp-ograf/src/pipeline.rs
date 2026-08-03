@@ -16,7 +16,7 @@
 //! kein Rückkanal von der Seite in die Pipeline nötig für Teil 1.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -352,6 +352,8 @@ impl Pipeline {
             config.height,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
+            // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+            Arc::new(AtomicU64::new(0)),
         )
         .map_err(PipelineError)?;
         mxl_fill.set_active(true);
@@ -371,6 +373,7 @@ impl Pipeline {
                 LOWRES_HEIGHT,
                 FRAMERATE_NUMERATOR,
                 FRAMERATE_DENOMINATOR,
+                Arc::new(AtomicU64::new(0)),
             )
             .map_err(PipelineError)?,
         );
@@ -402,6 +405,8 @@ impl Pipeline {
             config.height,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
+            // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+            Arc::new(AtomicU64::new(0)),
         )
         .map_err(PipelineError)?;
         mxl_key.set_active(true);

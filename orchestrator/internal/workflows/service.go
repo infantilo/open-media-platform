@@ -564,6 +564,16 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if err := checkLatencyBudget(wf.Definition, s.launcher.Catalog()); err != nil {
 		return err
 	}
+	// D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): zweiter, ebenfalls rein
+	// auf Definition+Katalog rechnender Preflight — schlägt fehl, wenn
+	// ein zu kurzer Pfad KEINEN delay-fähigen Node hat oder zwei Pfade
+	// widersprüchliche Verzögerungen von derselben Rolle verlangen. Der
+	// eigentliche Plan wird hier verworfen (nur die Fehlerprüfung zählt)
+	// und in runStart erneut berechnet, nachdem die Rollen registriert
+	// sind (dort werden die setOutputDelay-Methodenaufrufe angewendet).
+	if _, err := computeDelayPlan(wf.Definition, s.launcher.Catalog()); err != nil {
+		return err
+	}
 
 	wf.Status = StatusStarting
 	wf.Error = ""
@@ -742,6 +752,13 @@ func (s *Service) runStart(wf Workflow) {
 			return
 		}
 	}
+
+	// D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): Plan erneut berechnen
+	// (Start() hat ihn bereits als Preflight validiert, hier nur noch
+	// angewendet) und per setOutputDelay auf die jetzt registrierten
+	// Rollen anwenden — VOR dem ersten produzierten Frame, damit kein
+	// Delay-loser Anfangsabschnitt entsteht.
+	s.applyDelayPlan(ctx, wf)
 
 	wf.Status = StatusStarted
 	wf.Error = ""

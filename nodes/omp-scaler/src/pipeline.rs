@@ -19,7 +19,7 @@
 //! dasselbe Muster wie `omp-viewer::pipeline`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -56,6 +56,12 @@ enum Command {
 pub struct PipelineHandle {
     commands: Sender<Command>,
     flowed: Arc<AtomicBool>,
+    // output_delay (D8 Teil 3, ARCHITECTURE.md §15.1 Punkt 3): derselbe
+    // Arc wird bei jedem Pipeline-Neuaufbau erneut in `MxlVideoOutput::
+    // new` hineingereicht (s. `build()`) — bleibt dadurch über
+    // Connect/Disconnect-Zyklen hinweg stabil, anders als die
+    // pipeline-lokalen Elemente in `ActivePipeline`.
+    output_delay: Arc<AtomicU64>,
 }
 
 impl PipelineHandle {
@@ -67,6 +73,13 @@ impl PipelineHandle {
     pub fn disconnect(&self) {
         self.flowed.store(false, Ordering::Relaxed);
         let _ = self.commands.send(Command::Disconnect);
+    }
+
+    /// `setOutputDelay` (D8 Teil 3): reiner atomarer Store, kein
+    /// Pipeline-Neuaufbau nötig — `write_loop` (`omp-mediaio::mxl`)
+    /// liest den Wert live bei jedem geschriebenen Grain.
+    pub fn set_output_delay(&self, frames: u64) {
+        self.output_delay.store(frames, Ordering::Relaxed);
     }
 
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6) — ob die aktuell
@@ -104,6 +117,7 @@ fn build(
     source_flow_id: &str,
     config: &Config,
     flowed: Arc<AtomicBool>,
+    output_delay: Arc<AtomicU64>,
 ) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
@@ -130,6 +144,7 @@ fn build(
         config.target_height,
         config.target_framerate_numerator,
         config.target_framerate_denominator,
+        output_delay,
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     output.set_active(true);
@@ -188,9 +203,11 @@ pub fn run(
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) =
         std::sync::mpsc::channel();
     let flowed = Arc::new(AtomicBool::new(false));
+    let output_delay = Arc::new(AtomicU64::new(0));
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: flowed.clone(),
+        output_delay: output_delay.clone(),
     }));
 
     let mut active: Option<ActivePipeline> = None;
@@ -204,7 +221,7 @@ pub fn run(
                 // Eingangs-Reader-Thread), bevor die neue denselben
                 // MxlContext für einen neuen Reader/Writer nutzt.
                 active = None;
-                match build(&context, &source_flow_id, &config, flowed.clone()) {
+                match build(&context, &source_flow_id, &config, flowed.clone(), output_delay.clone()) {
                     Ok(p) => active = Some(p),
                     Err(e) => {
                         let _ =

@@ -14,8 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use omp_node_sdk::is04::TRANSPORT_MXL;
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, Range,
-    SenderSpec, SetError,
+    Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodSpec, NodeConfig, ParamSpec,
+    ParamStore, ParamType, Range, SenderSpec, SetError,
 };
 use pipeline::{CHANNELS, SAMPLE_RATE};
 use serde_json::Value;
@@ -51,7 +51,24 @@ struct SourceStore {
 impl ParamStore for SourceStore {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
-            latency: None,
+            // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 1/2, live gefundene
+            // Lücke bei der Verifikation): eine Quelle OHNE deklarierte
+            // Video-Latenz macht jeden Pfad, der sie enthält, für
+            // checkLatencyBudget zu "unbekannt" (§15.2 "hoch annehmen" als
+            // ehrliche Ablehnung) — praktisch jeden real budgetierten
+            // Workflow, da fast jeder Pfad bei einer Quelle beginnt.
+            // Bewusst 0/0 statt eines Kopf-Index/Wallclock-Skew-Werts wie
+            // bei omp-scaler/omp-video-mixer-me (D8 Teil 1): eine reine
+            // Testquelle setzt per Definition den Ursprung selbst (ihr
+            // erster geschriebener Grain IST der Origin-Index, s.
+            // ARCHITECTURE.md §15.1 Punkt 4) — es gibt keinen Eingang, zu
+            // dem eine zusätzliche Latenz messbar wäre.
+            latency: Some(LatencyInfo {
+                video: Some(LatencyRange { min_latency_frames: 0, max_latency_frames: 0 }),
+                audio: None,
+                data: None,
+                supports_delay_compensation: false,
+            }),
             parameters: vec![
                 ParamSpec {
                     name: "pattern".to_string(),

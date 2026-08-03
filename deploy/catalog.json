@@ -6,7 +6,8 @@
     "command": ["../nodes/target/debug/omp-source"],
     "env": {},
     "description": "Erzeugt ein wählbares GStreamer-Testbild (Farbbalken u. a.) inkl. Testton als MXL-Flow. Reine Testquelle, keine echte Kamera-/Dateianbindung.",
-    "expectedResources": "gering, konstant"
+    "expectedResources": "gering, konstant",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
     "type": "omp-switcher",
@@ -34,7 +35,7 @@
     "env": {},
     "description": "Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus, Cut/Auto-Transition, DVE-Kanal, Keyer, Tally-Signalisierung.",
     "expectedResources": "moderat, wächst mit Eingangszahl/Vorschauen",
-    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 2 } }
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 2 }, "supportsDelayCompensation": true }
   },
   {
     "type": "omp-audio-mixer",
@@ -126,6 +127,6 @@
     "env": {},
     "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus.",
     "expectedResources": "gering, wächst mit Zielauflösung",
-    "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 } }
+    "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 }, "supportsDelayCompensation": true }
   }
 ]

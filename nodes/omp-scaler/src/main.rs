@@ -22,8 +22,8 @@ use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverReso
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
-    Descriptor, InvokeError, LatencyInfo, LatencyRange, NodeConfig, ParamSpec, ParamStore,
-    ParamType, RawResponse, ReceiverSpec, SenderSpec, SetError,
+    Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodArg, MethodSpec, NodeConfig,
+    ParamSpec, ParamStore, ParamType, RawResponse, ReceiverSpec, SenderSpec, SetError,
 };
 use serde_json::Value;
 
@@ -67,6 +67,9 @@ struct ScalerStore {
     target_framerate_numerator: u32,
     target_framerate_denominator: u32,
     connection: Arc<ReceiverConnection<ScalerControl>>,
+    // pipeline (D8 Teil 3): eigener Klon nur für `invoke("setOutputDelay")`
+    // — `ScalerControl` hält den anderen für IS-05-Connect/Disconnect.
+    pipeline: pipeline::PipelineHandle,
 }
 
 impl ParamStore for ScalerStore {
@@ -82,11 +85,16 @@ impl ParamStore for ScalerStore {
             // (min==max). Ergänzende `omp-video-mixer-me`/`omp-audio-mixer`-
             // Vermessung: `nodes/omp-video-mixer-me/src/main.rs`,
             // `nodes/omp-audio-mixer/src/main.rs`.
+            // supportsDelayCompensation: true seit D8 Teil 3 (ARCHITECTURE.md
+            // §15.1 Punkt 3) — `setOutputDelay(frames)` unten real
+            // implementiert (nicht nur deklariert), `omp-scaler` reicht den
+            // MXL-Origin-Index unverändert durch (s. Latenz-Kommentar oben),
+            // "Ausgangs-Grain(N) = Eingangs-Grain(N) + D" gilt hier direkt.
             latency: Some(LatencyInfo {
                 video: Some(LatencyRange { min_latency_frames: 1, max_latency_frames: 1 }),
                 audio: None,
                 data: None,
-                supports_delay_compensation: false,
+                supports_delay_compensation: true,
             }),
             parameters: vec![
                 ParamSpec {
@@ -125,7 +133,13 @@ impl ParamStore for ScalerStore {
                     readonly: true,
                 },
             ],
-            methods: vec![],
+            methods: vec![MethodSpec {
+                name: "setOutputDelay".to_string(),
+                args: vec![MethodArg {
+                    name: "frames".to_string(),
+                    kind: ParamType::Number,
+                }],
+            }],
         }
     }
 
@@ -151,10 +165,26 @@ impl ParamStore for ScalerStore {
 
     fn invoke(
         &self,
-        _name: &str,
-        _args: &serde_json::Map<String, Value>,
+        name: &str,
+        args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        match name {
+            // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): vom Orchestrator
+            // beim Start aufgerufen, um den Ausgang um genau `frames`
+            // MXL-Grains gegenüber dem durchgereichten Origin-Index zu
+            // verzögern (`omp-mediaio::mxl::write_loop`).
+            "setOutputDelay" => {
+                let frames = args
+                    .get("frames")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(|v| v as u64)
+                    .ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_output_delay(frames);
+                Ok(())
+            }
+            _ => Err(InvokeError::Unknown),
+        }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -229,6 +259,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let media_ready_pipeline = pipeline_handle.clone();
+    // D8 Teil 3: eigener Klon für `invoke("setOutputDelay")` — der
+    // Original-Handle wandert unten vollständig in `ScalerControl`.
+    let delay_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
     let connection = Arc::new(ReceiverConnection::new(
         receiver_id.clone(),
@@ -247,6 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         target_framerate_numerator,
         target_framerate_denominator,
         connection,
+        pipeline: delay_pipeline,
     });
 
     let handle = omp_node_sdk::start(

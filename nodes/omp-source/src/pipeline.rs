@@ -193,6 +193,8 @@ impl Pipeline {
             config.height,
             config.framerate_numerator,
             config.framerate_denominator,
+            // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+            Arc::new(AtomicU64::new(0)),
         )
         .map_err(PipelineError)?;
         mxl_output.set_active(true);
@@ -217,6 +219,7 @@ impl Pipeline {
                 LOWRES_HEIGHT,
                 config.framerate_numerator,
                 config.framerate_denominator,
+                Arc::new(AtomicU64::new(0)),
             )
             .map_err(PipelineError)?,
         );

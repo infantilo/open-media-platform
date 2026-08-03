@@ -24,7 +24,7 @@
 //! Video+Audio-Gateway-Betrieb besteht.
 
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -142,6 +142,8 @@ pub fn run_ingest(
         config.height as u32,
         config.framerate_numerator as u32,
         config.framerate_denominator as u32,
+        // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+        Arc::new(AtomicU64::new(0)),
     ) {
         Ok(o) => o,
         Err(e) => {

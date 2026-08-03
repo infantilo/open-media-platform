@@ -89,7 +89,7 @@
 //! Eingang.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -248,6 +248,13 @@ pub struct PipelineHandle {
     /// Begründung (Rebuild bei jeder Quellenmengen-Änderung, C10 folgt
     /// demselben Discovery-Muster wie C7).
     flowed: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    /// output_delay (D8 Teil 3, ARCHITECTURE.md §15.1 Punkt 3/4): anders
+    /// als `flowed` bewusst KEIN `Mutex<Option<...>>>`, das bei jedem
+    /// Rebuild neu belegt wird — derselbe Arc wird bei jedem Rebuild
+    /// erneut in `MxlVideoOutput::new` hineingereicht (s. `build()`),
+    /// bleibt also über Input-Set-Änderungen hinweg stabil, exakt wie
+    /// bei `omp-scaler::pipeline::PipelineHandle::output_delay`.
+    output_delay: Arc<AtomicU64>,
 }
 
 impl PipelineHandle {
@@ -260,6 +267,12 @@ impl PipelineHandle {
             .expect("lock poisoned")
             .as_ref()
             .is_some_and(|f| f.load(Ordering::Relaxed))
+    }
+
+    /// `setOutputDelay` (D8 Teil 3) — reiner atomarer Store, kein
+    /// Pipeline-Neuaufbau nötig.
+    pub fn set_output_delay(&self, frames: u64) {
+        self.output_delay.store(frames, Ordering::Relaxed);
     }
 
     pub fn set_inputs(&self, inputs: Vec<DiscoveredInput>) {
@@ -830,6 +843,7 @@ fn build_pip_tail(
 /// Build nicht scheitern — er wird übersprungen und als Eintrag im
 /// zweiten Rückgabewert gemeldet, den der Aufrufer (`run()`) als
 /// `Event::Error` weiterreicht.
+#[allow(clippy::too_many_arguments)]
 fn build(
     context: &Arc<MxlContext>,
     config: &Config,
@@ -837,6 +851,7 @@ fn build(
     keyfill_inputs: &[DiscoveredKeyFill],
     keyer_source: &Option<String>,
     pip_source: &Option<String>,
+    output_delay: Arc<AtomicU64>,
 ) -> Result<(ActivePipeline, Vec<String>), String> {
     let pipeline = gst::Pipeline::new();
 
@@ -1081,6 +1096,7 @@ fn build(
         config.height,
         FRAMERATE_NUMERATOR,
         FRAMERATE_DENOMINATOR,
+        output_delay,
     )
     .map_err(|e| format!("MxlVideoOutput: {e}"))?;
     mxl_output.set_active(true);
@@ -1188,12 +1204,13 @@ pub fn run(
     };
 
     let flowed_slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
+    let output_delay = Arc::new(AtomicU64::new(0));
 
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_source: Option<String> = None;
     let mut pip_source: Option<String> = None;
-    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+    let mut active = match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
         Ok((p, _warnings)) => {
             *flowed_slot.lock().expect("lock poisoned") = Some(p.flowed.clone());
             Some(p)
@@ -1222,6 +1239,7 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: flowed_slot.clone(),
+        output_delay: output_delay.clone(),
     }));
 
     /// Wartet auf einen laufenden Transition-Thread, falls vorhanden —
@@ -1246,7 +1264,7 @@ pub fn run(
                     fading.store(false, Ordering::Release);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1285,7 +1303,7 @@ pub fn run(
                                 "rebuild with {} inputs failed: {e} — falling back to black",
                                 current_inputs.len()
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();
@@ -1328,7 +1346,7 @@ pub fn run(
                     fading.store(false, Ordering::Release);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1354,7 +1372,7 @@ pub fn run(
                             let _ = tx.send(Event::Error(format!(
                                 "keyer source rebuild failed: {e} — falling back to black"
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();
@@ -1389,7 +1407,7 @@ pub fn run(
                     fading.store(false, Ordering::Release);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1415,7 +1433,7 @@ pub fn run(
                             let _ = tx.send(Event::Error(format!(
                                 "pip source rebuild failed: {e} — falling back to black"
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();
@@ -1582,7 +1600,7 @@ pub fn run(
                     fading.store(false, Ordering::Release);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
-                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source) {
+                    match build(&context, &config, &current_inputs, &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                         Ok((p, warnings)) => {
                             for w in warnings {
                                 let _ = tx.send(Event::Error(w));
@@ -1612,7 +1630,7 @@ pub fn run(
                             let _ = tx.send(Event::Error(format!(
                                 "missing-input retry rebuild failed: {e} — falling back to black"
                             )));
-                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source) {
+                            match build(&context, &config, &[], &keyfill_inputs, &keyer_source, &pip_source, output_delay.clone()) {
                                 Ok((p, _warnings)) => {
                                     apply_dve_box(&p.comp_pip_pad, &dve_box);
                                     let previous = program.take();

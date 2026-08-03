@@ -39,7 +39,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
@@ -1142,6 +1142,8 @@ fn build(
             config.height,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
+            // D8 Teil 3: kein Delay-Bedarf für dieses Ausgangsformat.
+            Arc::new(AtomicU64::new(0)),
         )
         .map_err(|e| format!("MxlVideoOutput: {e}"))?;
         output.set_active(true);
@@ -1168,6 +1170,7 @@ fn build(
             LOWRES_HEIGHT,
             FRAMERATE_NUMERATOR,
             FRAMERATE_DENOMINATOR,
+            Arc::new(AtomicU64::new(0)),
         )
         .map_err(|e| format!("MxlVideoOutput (lowres): {e}"))?;
 

@@ -14207,3 +14207,146 @@ pro Primärrolle: YAGNI, nicht gebaut.
 `orchestrator/internal/launcher/launcher.go`, `orchestrator/main.go`,
 `ui/graph/role-designer-logic.ts`, `ui/graph/role-designer-logic_test.ts`,
 `ui/graph/role-designer.ts`, `ui/graph/flow-canvas.ts`.
+
+## 2026-08-03 (Nachtrag 114) — D8 Teil 3: Delay-Zuweisung entlang zu kurzer Pfade, `setOutputDelay` für `omp-scaler` UND `omp-video-mixer-me` real implementiert, ein echter Designfehler live gefunden+behoben
+
+Direkte Fortsetzung von D8 Teil 1/2 (Nachtrag 111/112) — der eigentliche
+Ausgleichsmechanismus für Pfade, die KÜRZER als
+`Settings.TargetLatencyFrames` sind (ARCHITECTURE.md §15.1 Punkt 3).
+Nutzerentscheidung per `AskUserQuestion`: diese Runde beide vermessenen
+Video-Nodes mit echter Delay-Fähigkeit ausstatten (`omp-scaler` UND
+`omp-video-mixer-me`), nicht nur den einfacheren originerhaltenden
+Scaler-Fall.
+
+**Mechanik** (§15.1 Punkt 4, Fundament seit 2026-07-12 vorhanden):
+"Ausgangs-Grain(N) = Eingangs-Grain(N) + D". Für `omp-scaler`
+(originerhaltend) ist das direkt der durchgereichte Origin-Index plus
+Delay. Für `omp-video-mixer-me` (setzt beim Compositing einen NEUEN
+Ursprung, kein durchgereichter Origin) gilt dieselbe Formel gegenüber
+der Wallclock.
+
+**Rust (`omp-mediaio::mxl`):** `MxlVideoOutput::new`/`write_loop`
+bekommen einen von außen übergebenen, über Pipeline-Neuaufbauten hinweg
+stabilen `Arc<AtomicU64>` (`output_delay`) — Signaturänderung betrifft
+alle 8+ bestehenden Aufrufstellen (`omp-source`, `omp-switcher`,
+`omp-player`, `omp-2110-gateway`, `omp-ograf` zweimal, `omp-scaler`,
+`omp-video-mixer-me`), sechs davon bekommen schlicht
+`Arc::new(AtomicU64::new(0))` (No-Op). Die eigentliche Indexberechnung
+liegt jetzt in einer reinen, isoliert testbaren Funktion
+`compute_write_index` (aus `write_loop` extrahiert). Neue
+`setOutputDelay`-Methode in `omp-scaler`/`omp-video-mixer-me`
+(`supportsDelayCompensation: true` im Descriptor).
+
+**Ein echter Designfehler live gefunden (nicht in den ersten Unit-Tests
+sichtbar, erst bei der Live-Verifikation gegen den echten Mixer):** die
+ursprüngliche Fassung von `compute_write_index` berechnete für den
+ursprungslosen Zweig (Freilauf-Zähler, z. B. Mixer-PGM) den Delay-Offset
+nur EINMAL, am allerersten geschriebenen Frame — jede spätere
+`setOutputDelay()`-Änderung wurde danach dauerhaft ignoriert. Für
+`omp-scaler` fiel das nie auf (Origin-Zweig liest `delay` jede Iteration
+frisch), aber der ORCHESTRATOR ruft `setOutputDelay` erst NACH
+`awaitRegistration` auf (er braucht die Node-Adresse aus der Registry,
+die es erst nach der Registrierung gibt) — ein Node wie der Mixer, der
+"immer etwas produziert" (§5 Punkt 6, auch ohne Eingang), hat zu diesem
+Zeitpunkt oft schon Frames mit Delay=0 geschrieben, der eingefrorene
+Zähler hätte das zugewiesene Delay dann NIE mehr angewendet. Live
+reproduziert: mehrere manuelle `setOutputDelay`-Aufrufe gegen einen
+bereits laufenden Mixer-Prozess zeigten in der Kopf-Index-Skew-Messung
+keinerlei Wirkung, obwohl der HTTP-Aufruf durchgehend `200 OK` lieferte
+und der (per `eprintln!`-Debug bestätigt) korrekt gelesene Delay-Wert im
+gemeinsamen `Arc` ankam. **Fix:** `compute_write_index` liest jetzt bei
+JEDEM Aufruf sowohl `delay` als auch (im ursprungslosen Fall) die
+aktuelle Wallclock-Position frisch (`now()` statt eines einmalig
+eingefrorenen Ankers), der bestehende Monotonie-Schutz
+(`max(candidate, letzter+1)`) bleibt unverändert gegen Rückwärtssprünge
+bestehen. Signatur dadurch sogar einfacher (`running_index`-Parameter
+entfällt komplett, ein `index`-Zustand in `write_loop` wird überflüssig).
+
+**Zweiter, kleinerer live gefundener Blinder Fleck:** `omp-source` hatte
+bis dahin GAR KEINE deklarierte Video-Latenz — praktisch jeder real
+budgetierte Pfad beginnt bei einer Quelle, `checkLatencyBudget` hätte
+das als "unbekannt" (§15.2) ehrlich, aber unnötig abgelehnt. Ergänzt:
+`0/0` Frames (strukturell begründet, nicht per Skew-Messung wie bei
+`omp-scaler`/`omp-video-mixer-me` — eine reine Testquelle setzt per
+Definition selbst den Ursprung, es gibt keinen Eingang, zu dem eine
+Zusatzlatenz messbar wäre), `supports_delay_compensation: false`
+(bewusst kein Delay-Ausgleich an der Quelle, §15.1 Punkt 3 bevorzugt
+ohnehin möglichst späte Nodes im Pfad).
+
+**Orchestrator (Go):** `launcher.CatalogLatency.SupportsDelayCompensation`
+(additiv). Neue Datei `delayassignment.go`:
+`computeDelayPlan(def, catalog)` nutzt die bereits vorhandene
+`enumerateLatencyPaths`/`buildVideoLatencyLookup`-Infrastruktur (D8
+Teil 2) wieder — für jeden Pfad mit `frames < target` wird die
+SPÄTESTE delay-fähige Rolle im Pfad rückwärts gesucht (§15.1 Punkt 3:
+"möglichst spät, um Tally/Preview nicht unnötig zu verzögern"); fehlt
+eine delay-fähige Rolle ganz, oder verlangen zwei Pfade widersprüchliche
+Werte von derselben Rolle (z. B. ein gemeinsamer Fan-in-Knoten), wird
+das als `ErrLatencyBudgetInsufficient` abgelehnt — kein stiller
+Teil-Ausgleich. Zweiter, ebenfalls synchroner Preflight in `Start()`
+direkt neben dem bestehenden `checkLatencyBudget`-Aufruf; tatsächliche
+Anwendung (`applyDelayPlan`, per generischem Methoden-Invoker, gleicher
+Pfad wie Crosspoint-Methoden) in `runStart` nach der
+Connection-Anwendungsschleife, vor `restoreRoleState`.
+
+**Verifiziert:**
+- `cargo build --workspace --bins`, `cargo test -p omp-mediaio`
+  (13 Tests inkl. 5 neuer/überarbeiteter `compute_write_index`-Fälle),
+  `cargo clippy --workspace --all-targets` sauber (nur vorbestehende,
+  unveränderte Warnungen in anderen Nodes).
+- `go build/vet/test ./...` grün (6 neue `delayassignment_test.go`-Fälle:
+  Zuweisung an letzte fähige Rolle, kein fähiger Node → Fehler, zwei
+  Pfade mit gleichem Defizit an unterschiedlichen Rollen → kein Fehler,
+  widersprüchliche Defizite an derselben Rolle → Fehler, `target==0` →
+  leerer Plan, echter `Start()`-Test gegen ein kompensierbares Defizit).
+- `deno check`/`deno test ui/` grün (unverändert, keine UI-Anpassung
+  nötig — D8 Teil 3 ist ein interner Ausgleichsmechanismus).
+- **Live, Scaler:** `src(0/0) → scaler(1/1) → ` mit
+  `targetLatencyFrames=4` (Defizit 3 an `scaler`) — sauberer A/B-Vergleich
+  zweier frisch gestarteter Prozesse (kein manuelles Nachjustieren auf
+  demselben Prozess, das hätte den Monotonie-Schutz künstlich "einrasten"
+  lassen, live selbst so hereingefallen bei der ersten Messrunde): Ø-Skew
+  ohne Delay ≈ -1,9 Grains, mit Delay=3 ≈ +1,0 Grains, Delta ≈ 2,9 ≈ 3 —
+  exakt der zugewiesene Wert. Kopf-Index-Skew-Verfahren gegen die ECHTEN
+  MXL-Flow-IDs (`GET /x-nmos/query/v1.3/flows`, NICHT die Sender-IDs —
+  live gefunden: Sender- und Flow-Ressource sind in NMOS getrennte
+  Objekte mit unterschiedlichen UUIDs, eine Verwechslung lieferte
+  reproduzierbar "Failed to create flow reader" bzw. durch Bash-
+  Arithmetik auf leeren Strings maskierte Falsch-Nullen).
+- **Live, Mixer:** `src(0/0) → mix(0-2) → ` (Crosspoint-Verkabelung) mit
+  `targetLatencyFrames=5` (Defizit 5 an `mix`) — Ø-Skew ohne Delay ≈ +1,
+  mit Delay=5 ≈ +7, Delta ≈ 6 ≈ 5 — exakt der zugewiesene Wert, nach dem
+  oben beschriebenen Fix (vor dem Fix: keinerlei Wirkung messbar,
+  unabhängig vom gewählten Delay-Wert).
+- **Live, ehrliche Ablehnung:** isolierte `omp-source`-Rolle (0 Frames
+  Eigenlatenz, `supportsDelayCompensation:false`),
+  `targetLatencyFrames=3` → `Start()` scheitert mit HTTP 400 "Pfad src
+  braucht 3 Frames Verzögerung, aber keine Rolle entlang des Pfads
+  unterstützt setOutputDelay", `ps aux` bestätigt keinen gestarteten
+  Prozess.
+- Alle Test-Workflows/-Prozesse danach gestoppt/gelöscht, `/dev/shm/
+  omp-mxl` geleert (mehrfach nötig — verwaiste `mxl-info`-Flow-Reader
+  aus der ausführlichen Debugging-Sitzung erschöpften zwischenzeitlich
+  echte Domain-Ressourcen, unabhängig vom eigentlichen Feature-Bug,
+  s. o.), keine verwaisten Prozesse zurückgelassen.
+
+**Bewusst nicht Teil dieser Sitzung** (kein stiller Gap): Audio-/
+Daten-Pfade (D8 Teil 4, eigene Einheit/eigener Mechanismus laut Plan),
+`omp-audio-mixer`s Delay-Fähigkeit (Teil 4), Re-Berechnung bei laufender
+Graph-Änderung (§15.1 Punkt 6, eigener `node.added`-Anschluss),
+Neuanwendung des Delay-Plans nach einem K7-Teil-1-Crash-Neustart einer
+delay-tragenden Rolle (`rewireAfterRestart` ruft `applyDelayPlan`
+bewusst nicht auf — ein neu gestarteter Prozess verliert sein
+zugewiesenes Delay, dokumentierte Lücke, kein akuter Blocker für diese
+Runde: würde erst bei einem ECHTEN Crash einer delay-tragenden Rolle
+sichtbar).
+
+**Betroffene Dateien:** `nodes/omp-mediaio/src/mxl.rs`,
+`nodes/omp-scaler/src/{main.rs,pipeline.rs}`,
+`nodes/omp-video-mixer-me/src/{main.rs,pipeline.rs}`,
+`nodes/omp-source/src/main.rs`,
+`nodes/{omp-switcher,omp-player,omp-2110-gateway,omp-ograf}/src/pipeline.rs`
+(mechanische `output_delay`-Signaturanpassung),
+`orchestrator/internal/launcher/catalog.go`,
+`orchestrator/internal/workflows/{delayassignment.go,delayassignment_test.go}`
+(neu), `orchestrator/internal/workflows/service.go`, `deploy/catalog.json`.

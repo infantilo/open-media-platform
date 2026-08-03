@@ -94,11 +94,19 @@ impl ParamStore for MixerStore {
             // Wallclock, nicht die kumulierte Latenz gegenüber dem
             // Scaler-Eingang. Beobachtete Streuung 0-2 Grains (Queue-/
             // Compositor-Jitter, s. `docs/decisions.md` Nachtrag 63).
+            // supportsDelayCompensation: true seit D8 Teil 3 (ARCHITECTURE.md
+            // §15.1 Punkt 3) — `setOutputDelay(frames)` unten real
+            // implementiert. Der Mixer setzt beim Compositing zwar einen
+            // NEUEN Ursprung (s. o.), §15.1 Punkt 4 letzter Absatz definiert
+            // "Ausgangs-Grain(N) = Eingangs-Grain(N) + D" für diesen Fall
+            // gegenüber der Wallclock statt eines durchgereichten Origin-
+            // Index — genau das rechnet `omp-mediaio::mxl::write_loop`s
+            // Freilauf-Zähler-Zweig um.
             latency: Some(LatencyInfo {
                 video: Some(LatencyRange { min_latency_frames: 0, max_latency_frames: 2 }),
                 audio: None,
                 data: None,
-                supports_delay_compensation: false,
+                supports_delay_compensation: true,
             }),
             parameters: vec![
                 // Wie bei omp-switcher (C7): "inputs" ist ein JSON-Array,
@@ -277,6 +285,15 @@ impl ParamStore for MixerStore {
                     args: vec![MethodArg {
                         name: "senderId".to_string(),
                         kind: ParamType::String,
+                    }],
+                },
+                // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): vom
+                // Orchestrator beim Start aufgerufen.
+                MethodSpec {
+                    name: "setOutputDelay".to_string(),
+                    args: vec![MethodArg {
+                        name: "frames".to_string(),
+                        kind: ParamType::Number,
                     }],
                 },
             ],
@@ -459,6 +476,20 @@ impl ParamStore for MixerStore {
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
                 self.pinned.lock().expect("lock poisoned").retain(|s| s != sender_id);
+                Ok(())
+            }
+            // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): verzögert den
+            // PGM-Ausgang um `frames` MXL-Grains gegenüber der Wallclock
+            // (`omp-mediaio::mxl::write_loop`s Freilauf-Zähler-Zweig, s.
+            // Latenz-Kommentar im Descriptor oben).
+            "setOutputDelay" => {
+                let frames = args
+                    .get("frames")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite() && *v >= 0.0)
+                    .map(|v| v as u64)
+                    .ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_output_delay(frames);
                 Ok(())
             }
             _ => Err(InvokeError::Unknown),
