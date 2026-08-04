@@ -26,6 +26,15 @@
 # Rust-Workspace-Rebuild + Live-Regressionstest (omp-source schreibt
 # einen echten Flow, mxl-info bestätigt) gegen die bestehenden
 # MXL-Pfade abgesichert, nicht nur den neuen Fabrics-Pfad.
+#
+# OMP-eigene Patches (deploy/dev/mxl-patches/, docs/decisions.md
+# Nachtrag 116): third_party/mxl ist komplett gitignored — ein
+# `git checkout $MXL_VERSION` (unten) auf einen bewegten/neuen Tag
+# würde lokale Fixes im vendorten Baum sonst stillschweigend
+# zurücksetzen. Deshalb werden hier per `git apply` echte, gegen den
+# Original-Tag erzeugte Patches angewendet (gleiches Muster wie
+# deploy/pipeline-controller/patches/*.diff für PIPELINE CONTROLLER),
+# statt die Fixes nur lokal unversioniert im Checkout zu belassen.
 set -euo pipefail
 
 MXL_VERSION="v1.1.0-beta-1"
@@ -57,11 +66,36 @@ fi
 
 echo "== Clone dmf-mxl/mxl @ $MXL_VERSION =="
 if [ -d "$MXL_SRC_DIR/.git" ]; then
-  git -C "$MXL_SRC_DIR" fetch --depth 1 origin "tag" "$MXL_VERSION"
-  git -C "$MXL_SRC_DIR" checkout "$MXL_VERSION"
+  # Bereits gepatchter Checkout + gleiche Version: nicht anfassen — ein
+  # `checkout` auf denselben Stand ist harmlos, ein erneutes Anwenden der
+  # Patches unten ist trotzdem idempotent abgesichert (git apply --check),
+  # aber ein `fetch`/`checkout` bei jedem Lauf ist unnötiger Netzwerk-/
+  # Arbeitsaufwand für den Normalfall "läuft schon".
+  current_ref="$(git -C "$MXL_SRC_DIR" describe --tags --exact-match 2>/dev/null || true)"
+  if [ "$current_ref" != "$MXL_VERSION" ]; then
+    git -C "$MXL_SRC_DIR" fetch --depth 1 origin "tag" "$MXL_VERSION"
+    git -C "$MXL_SRC_DIR" checkout "$MXL_VERSION"
+  fi
 else
   mkdir -p "$(dirname "$MXL_SRC_DIR")"
   git clone --depth 1 --branch "$MXL_VERSION" https://github.com/dmf-mxl/mxl "$MXL_SRC_DIR"
+fi
+
+echo "== OMP-eigene Patches anwenden (deploy/dev/mxl-patches/) =="
+MXL_PATCHES_DIR="$ROOT_DIR/deploy/dev/mxl-patches"
+if [ -d "$MXL_PATCHES_DIR" ]; then
+  for p in "$MXL_PATCHES_DIR"/*.diff; do
+    [ -e "$p" ] || continue
+    if git -C "$MXL_SRC_DIR" apply --check --reverse "$p" 2>/dev/null; then
+      echo "  - $(basename "$p") (bereits angewendet, übersprungen)"
+    elif git -C "$MXL_SRC_DIR" apply --check "$p" 2>/dev/null; then
+      echo "  - $(basename "$p")"
+      git -C "$MXL_SRC_DIR" apply "$p"
+    else
+      echo "  ! $(basename "$p") passt nicht mehr auf $MXL_VERSION — von Hand prüfen (docs/decisions.md Nachtrag 116)." >&2
+      exit 1
+    fi
+  done
 fi
 
 echo "== Build libmxl + Tools (CMake Preset: $MXL_PRESET) =="

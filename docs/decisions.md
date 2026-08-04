@@ -14670,3 +14670,55 @@ bestätigt.
 `deploy/pipeline-controller/patches/{0001-mxl-output.diff,0002-mxl-output-settings-api.diff}`
 (überarbeitet), `deploy/pipeline-controller/patches/0003-headless-sink-restriction.diff`
 (neu).
+
+## 2026-08-04 (Nachtrag 118) — gst-mxl-rs/C++-Fixes aus Nachtrag 116 als echte Patches versioniert (Verlust-Risiko bei Versions-Bump behoben)
+
+Nutzerauftrag: "gst-mxl-rs/C++-Fixes in third_party/mxl/ übernehmen" —
+schließt die in Nachtrag 116/117 offen dokumentierte Lücke ("lebt nur
+lokal, geht bei nächstem `install-mxl.sh`-Versions-Bump verloren").
+
+`third_party/mxl` ist ein ECHTES Git-Repo (detached HEAD auf
+`v1.1.0-beta-1`, von `install-mxl.sh` selbst geklont) — `git diff`
+darin liefert einen exakten, gegen den offiziellen Upstream-Tag
+erzeugten Patch. Neues `deploy/dev/mxl-patches/
+0001-mxlsink-set-caps-idempotent-and-continuous-flow-cleanup.diff`
+(alle drei Nachtrag-116-Dateien: `mxlsink/imp.rs`, `mxlsink/state.rs`,
+`FlowManager.cpp`) — gleiches Muster wie
+`deploy/pipeline-controller/patches/*.diff` für PIPELINE CONTROLLER,
+nur dass hier `git apply` statt `patch -p1` läuft (der Zielbaum ist
+selbst ein Git-Repo).
+
+`deploy/dev/install-mxl.sh` wendet die Patches jetzt nach jedem
+Clone/Checkout automatisch an, mit zwei Idempotenz-Absicherungen: (1)
+`git checkout $MXL_VERSION` läuft nur noch, wenn der Checkout NICHT
+bereits exakt auf diesem Tag steht (`git describe --tags
+--exact-match`, vermeidet unnötigen Netzwerk-Zugriff im Normalfall);
+(2) jeder Patch wird vor dem Anwenden per `git apply --check
+--reverse` geprüft — ist er schon drin, wird er übersprungen statt mit
+"already applied"-Fehler abzubrechen. Ein künftiger echter
+Versions-Bump (ändert `MXL_VERSION` in `install-mxl.sh`) checkt aus,
+versucht dieselben Patches erneut anzuwenden — passt der Patch nicht
+mehr (Zeilen haben sich stromaufwärts verschoben), bricht das Skript
+kontrolliert mit einer Fehlermeldung ab (Verweis auf diesen Nachtrag)
+statt die Fixes still zu verlieren.
+
+**Live verifiziert:** `install-mxl.sh` zweimal gegen den bereits
+gepatchten Checkout gelaufen — erkennt korrekt "Version schon aktuell"
+(kein Fetch/Checkout) und "Patch schon angewendet" (kein erneuter
+`git apply`), voller `cmake`-Rebuild lief fehlerfrei durch (nur
+vorbestehende, unveränderte Compiler-Warnungen in nicht berührten
+Dateien), `git status` in `third_party/mxl` zeigt danach weiterhin
+genau die drei erwarteten modifizierten Dateien (keine ungewollte
+Reversion). `cargo build -p gst-mxl-rs` gegen die neu gebaute
+`libmxl.so` erneut grün.
+
+**Damit entfällt die in Nachtrag 116/117 dokumentierte Verlustgefahr**
+— die Fixes überleben jetzt einen Versions-Bump (oder scheitern
+kontrolliert statt still), solange der Patch noch anwendbar ist.
+Weiterhin gilt: `third_party/mxl/` selbst bleibt gitignored (bewusst,
+Upstream-Quellcode gehört nicht in dieses Repo), nur der PATCH ist ab
+jetzt versioniert.
+
+**Dateien:** `deploy/dev/install-mxl.sh`,
+`deploy/dev/mxl-patches/0001-mxlsink-set-caps-idempotent-and-continuous-flow-cleanup.diff`
+(neu).

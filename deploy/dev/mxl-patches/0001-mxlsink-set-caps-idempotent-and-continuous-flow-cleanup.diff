@@ -1,0 +1,319 @@
+diff --git a/lib/internal/src/FlowManager.cpp b/lib/internal/src/FlowManager.cpp
+index 8e54324..b045ea8 100644
+--- a/lib/internal/src/FlowManager.cpp
++++ b/lib/internal/src/FlowManager.cpp
+@@ -271,50 +271,65 @@ namespace mxl::lib
+         }
+ 
+         auto const tempDirectory = createTemporaryFlowDirectory(_mxlDomain);
+-        try
+-        {
+-            // Write the json file to disk.
+-            writeFlowDescriptor(tempDirectory, flowDef);
++        // Live found (not assumed): unlike createOrOpenDiscreteFlow above,
++        // this function only cleaned up tempDirectory in the exception
++        // path (catch(...) below) — the perfectly normal "flow already
++        // exists, opening it instead" outcome (publishFlowDirectory
++        // returns false, no exception) fell through WITHOUT removing
++        // tempDirectory, leaking an orphaned .mxl-tmp-* directory per such
++        // occurrence. Reproduced via a real GStreamer pipeline with a
++        // gst-mxl-rs mxlsink whose set_caps() legitimately fires more than
++        // once for the same flow-id (caps renegotiation) — every
++        // "already exists" outcome left one more leaked temp directory
++        // behind in the domain. Same unconditional defer-based cleanup as
++        // the discrete path above closes this for every exit path (normal
++        // return of either branch, or an exception) instead of only one.
++        auto _ = defer(
++            [&]() noexcept
++            {
++                std::error_code ec;
++                std::filesystem::remove_all(tempDirectory, ec);
++                if (ec)
++                {
++                    MXL_WARN("Failed to remove temporary flow directory: {}", ec.message());
++                }
++            });
++
++        // Write the json file to disk.
++        writeFlowDescriptor(tempDirectory, flowDef);
+ 
+-            auto const flowDataPath = makeFlowDataFilePath(tempDirectory);
+-            auto flowData = std::make_unique<ContinuousFlowData>(flowDataPath.string().c_str(), AccessMode::CREATE_READ_WRITE, LockMode::Shared);
++        auto const flowDataPath = makeFlowDataFilePath(tempDirectory);
++        auto flowData = std::make_unique<ContinuousFlowData>(flowDataPath.string().c_str(), AccessMode::CREATE_READ_WRITE, LockMode::Shared);
+ 
+-            auto& info = *flowData->flowInfo();
+-            info.version = FLOW_DATA_VERSION;
+-            info.size = sizeof info;
+-            info.config.common = initCommonFlowConfigInfo(flowId, flowFormat, sampleRate, maxSyncBatchSizeHintOpt, maxCommitBatchSizeHintOpt);
+-            info.config.continuous = {};
+-            info.config.continuous.channelCount = channelCount;
+-            info.config.continuous.bufferLength = bufferLength;
++        auto& info = *flowData->flowInfo();
++        info.version = FLOW_DATA_VERSION;
++        info.size = sizeof info;
++        info.config.common = initCommonFlowConfigInfo(flowId, flowFormat, sampleRate, maxSyncBatchSizeHintOpt, maxCommitBatchSizeHintOpt);
++        info.config.continuous = {};
++        info.config.continuous.channelCount = channelCount;
++        info.config.continuous.bufferLength = bufferLength;
+ 
+-            info.runtime = initFlowRuntimeInfo();
++        info.runtime = initFlowRuntimeInfo();
+ 
+-            auto& state = *flowData->flowState();
+-            state = initFlowState(flowDataPath);
++        auto& state = *flowData->flowState();
++        state = initFlowState(flowDataPath);
+ 
+-            flowData->openChannelBuffers(makeChannelDataFilePath(tempDirectory).string().c_str(), sampleWordSize);
++        flowData->openChannelBuffers(makeChannelDataFilePath(tempDirectory).string().c_str(), sampleWordSize);
+ 
+-            auto const finalDir = makeFlowDirectoryName(_mxlDomain, uuidString);
+-            if (publishFlowDirectory(tempDirectory, finalDir))
++        auto const finalDir = makeFlowDirectoryName(_mxlDomain, uuidString);
++        if (publishFlowDirectory(tempDirectory, finalDir))
++        {
++            return {true, std::move(flowData)};
++        }
++        else
++        {
++            auto existingFlowData = dynamic_pointer_cast<ContinuousFlowData>(openFlow(flowId, AccessMode::READ_WRITE));
++            if (!existingFlowData)
+             {
+-                return {true, std::move(flowData)};
++                throw std::runtime_error("Could not open existing flow because it is of a different format");
+             }
+-            else
+-            {
+-                auto existingFlowData = dynamic_pointer_cast<ContinuousFlowData>(openFlow(flowId, AccessMode::READ_WRITE));
+-                if (!existingFlowData)
+-                {
+-                    throw std::runtime_error("Could not open existing flow because it is of a different format");
+-                }
+ 
+-                return {false, std::move(existingFlowData)};
+-            }
+-        }
+-        catch (...)
+-        {
+-            auto ec = std::error_code{};
+-            remove_all(tempDirectory, ec);
+-            throw;
++            return {false, std::move(existingFlowData)};
+         }
+     }
+ 
+diff --git a/rust/gst-mxl-rs/src/mxlsink/imp.rs b/rust/gst-mxl-rs/src/mxlsink/imp.rs
+index 814962f..f33a084 100644
+--- a/rust/gst-mxl-rs/src/mxlsink/imp.rs
++++ b/rust/gst-mxl-rs/src/mxlsink/imp.rs
+@@ -37,6 +37,7 @@ use crate::mxlsink::state::State;
+ use crate::mxlsink::state::init_state_with_audio;
+ use crate::mxlsink::state::init_state_with_data;
+ use crate::mxlsink::state::init_state_with_video;
++use crate::mxlsink::state::lock_domain_ops;
+ use crate::mxlsink::{render_audio, render_data, render_video};
+ 
+ pub(crate) static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
+@@ -375,6 +376,33 @@ impl BaseSinkImpl for MxlSink {
+             .as_mut()
+             .ok_or(gst::loggable_error!(CAT, "Failed to get state",))?;
+ 
++        // Live found (not assumed): GStreamer can legally call set_caps()
++        // more than once on the SAME pad for the SAME flow-id — a
++        // renegotiation once upstream elements (audioconvert/audioresample
++        // here) settle on concrete caps, observed reliably for the audio
++        // branch of a video+audio mxlsink pair under heavy concurrent
++        // pipeline-construction load, never for video (its caps are fully
++        // fixed — width/height/framerate/v210 — from the very first
++        // negotiation, nothing left to renegotiate). Before this guard,
++        // EVERY set_caps call unconditionally tried to create a FRESH MXL
++        // flow writer for the same flow-id — the second call always failed
++        // ("the UUID belongs to a flow with another active writer", since
++        // the first writer from the first set_caps call was still active
++        // and perfectly valid), and gst-mxl-rs turned that into a fatal
++        // element error that killed the whole pipeline, even though the
++        // flow was already being written correctly. Idempotent no-op if
++        // this element already owns a writer of the matching kind — the
++        // existing writer keeps running, no data loss/gap.
++        if state.video.is_some() || state.audio.is_some() || state.data.is_some() {
++            gst::info!(
++                CAT,
++                imp = self,
++                "set_caps called again with an active writer already present — \
++                 treating as a caps renegotiation, keeping the existing MXL writer"
++            );
++            return Ok(());
++        }
++
+         let settings = self
+             .settings
+             .lock()
+@@ -453,8 +481,24 @@ fn init_mxl_instance(
+     // Best-effort: reclaim any flow directories left behind by a writer that
+     // exited or crashed before its destructors ran. Long-running processes
+     // get a fresh GC pass every time an element opens an instance.
+-    if let Err(e) = mxl_instance.garbage_collect_flows() {
+-        gst::warning!(CAT, "MXL garbage collection on init failed: {}", e);
++    //
++    // Locked against DOMAIN_LOCK (state.rs doc comment has the full root
++    // cause): this GC pass scans the WHOLE domain, not just this element's
++    // own flow — running it concurrently with a SIBLING mxlsink element's
++    // create_flow_writer() (own MxlInstance, own start()/set_caps() timing)
++    // can hit that sibling's not-yet-locked, freshly-created flow directory
++    // and reclaim it as if orphaned. Live found with two mxlsink elements
++    // (video+audio branches of one pipeline) under heavy concurrent
++    // pipeline-construction load (PIPELINE CONTROLLER's `mxl` output type,
++    // deploy/pipeline-controller/patches/0001-mxl-output.diff) — one branch
++    // intermittently failed with "the UUID belongs to a flow with another
++    // active writer" only during this window, self-healed on the next
++    // auto-restart once the race missed by luck.
++    {
++        let _domain_lock = lock_domain_ops();
++        if let Err(e) = mxl_instance.garbage_collect_flows() {
++            gst::warning!(CAT, "MXL garbage collection on init failed: {}", e);
++        }
+     }
+ 
+     Ok(mxl_instance)
+diff --git a/rust/gst-mxl-rs/src/mxlsink/state.rs b/rust/gst-mxl-rs/src/mxlsink/state.rs
+index d4ddac3..4826029 100644
+--- a/rust/gst-mxl-rs/src/mxlsink/state.rs
++++ b/rust/gst-mxl-rs/src/mxlsink/state.rs
+@@ -5,7 +5,7 @@ use std::{
+     collections::HashMap,
+     process,
+     str::FromStr,
+-    sync::{Arc, Condvar, Mutex},
++    sync::{Arc, Condvar, LazyLock, Mutex},
+     thread,
+ };
+ 
+@@ -35,6 +35,41 @@ pub(crate) const DEFAULT_FLOW_ID: &str = "";
+ pub(crate) const DEFAULT_DOMAIN: &str = "";
+ const MAX_CHANNEL_SIZE: usize = 50;
+ 
++/// Process-wide lock serializing every MXL domain-mutating operation across
++/// ALL `mxlsink` instances in this process (`Instance::garbage_collect_flows`
++/// AND `Instance::create_flow_writer`, both below and in `imp.rs::start`).
++///
++/// Root cause (found live, not assumed): a pipeline with two `mxlsink`
++/// elements writing to the SAME domain under DIFFERENT flow-ids (e.g. a
++/// video+audio branch pair, PIPELINE CONTROLLER's `mxl` output type,
++/// `deploy/pipeline-controller/patches/0001-mxl-output.diff`) intermittently
++/// failed with "the UUID belongs to a flow with another active writer" on
++/// ONE of the two branches — reproducible under heavy concurrent pipeline
++/// construction (many other pipelines starting at the same time), never
++/// reproducible in an isolated two-element pipeline. `Instance::_mutex`
++/// (`lib/internal/src/Instance.cpp`, `createFlowWriter`) only serializes
++/// calls against the SAME `Instance` — each `mxlsink` element owns its OWN
++/// `MxlInstance` (`init_mxl_instance`, `imp.rs`), so two SIBLING elements'
++/// `garbage_collect_flows()`/`create_flow_writer()` calls are NOT
++/// synchronized against each other by that mutex. `garbage_collect_flows()`
++/// scans the WHOLE domain directory and reclaims any `*.mxl-flow` whose
++/// data file is not currently flock'd — if it runs (from one sibling's
++/// `start()`) in the narrow window between another sibling's flow directory
++/// being created and its flock being acquired (`create_flow_writer()`), the
++/// not-yet-locked, freshly-created flow looks orphaned and the two race.
++/// Fix: never let a GC pass and a flow-writer creation from this process
++/// overlap, regardless of which `MxlInstance`/UUID is involved — a single
++/// process-wide lock is sufficient (MXL flow creation/GC is not a
++/// steady-state hot path, only happens once per element start, so the
++/// serialization cost is negligible).
++static DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
++
++/// RAII-Guard-Handle für `DOMAIN_LOCK` — `imp.rs` braucht ihn für
++/// `garbage_collect_flows()`, dieses Modul für `create_flow_writer()`.
++pub(crate) fn lock_domain_ops() -> std::sync::MutexGuard<'static, ()> {
++    DOMAIN_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
++}
++
+ #[derive(Debug, Clone)]
+ pub(crate) struct Settings {
+     pub flow_id: String,
+@@ -204,14 +239,21 @@ pub(crate) fn init_state_with_video(
+     };
+     let instance = &state.instance;
+ 
+-    let (flow_writer, flow, is_created) = instance
+-        .create_flow_writer(
+-            serde_json::to_string(&flow_def)
+-                .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
+-                .as_str(),
+-            None,
+-        )
+-        .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?;
++    let (flow_writer, flow, is_created) = {
++        // s. DOMAIN_LOCK-Doku: darf mit keiner GC-Runde eines Geschwister-
++        // mxlsink im selben Prozess überlappen — Lock nur für diesen einen
++        // Aufruf, nicht für die restliche Funktion (Thread-Spawn etc.
++        // braucht keine Domain-Exklusivität mehr).
++        let _domain_lock = lock_domain_ops();
++        instance
++            .create_flow_writer(
++                serde_json::to_string(&flow_def)
++                    .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
++                    .as_str(),
++                None,
++            )
++            .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?
++    };
+     if !is_created {
+         return Err(gst::loggable_error!(
+             CAT,
+@@ -291,15 +333,19 @@ pub(crate) fn init_state_with_audio(
+         details: FlowDefDetails::Audio(flow_def_details.clone()),
+     };
+ 
+-    let (flow_writer, flow, is_created) = state
+-        .instance
+-        .create_flow_writer(
+-            serde_json::to_string(&flow_def)
+-                .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
+-                .as_str(),
+-            None,
+-        )
+-        .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?;
++    let (flow_writer, flow, is_created) = {
++        // s. DOMAIN_LOCK-Doku.
++        let _domain_lock = lock_domain_ops();
++        state
++            .instance
++            .create_flow_writer(
++                serde_json::to_string(&flow_def)
++                    .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
++                    .as_str(),
++                None,
++            )
++            .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?
++    };
+     let writer = Some(
+         flow_writer
+             .to_samples_writer()
+@@ -380,14 +426,18 @@ pub(crate) fn init_state_with_data(
+     };
+     let instance = &state.instance;
+ 
+-    let (flow_writer, flow, is_created) = instance
+-        .create_flow_writer(
+-            serde_json::to_string(&flow_def)
+-                .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
+-                .as_str(),
+-            None,
+-        )
+-        .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?;
++    let (flow_writer, flow, is_created) = {
++        // s. DOMAIN_LOCK-Doku.
++        let _domain_lock = lock_domain_ops();
++        instance
++            .create_flow_writer(
++                serde_json::to_string(&flow_def)
++                    .map_err(|e| gst::loggable_error!(CAT, "Failed to convert: {}", e))?
++                    .as_str(),
++                None,
++            )
++            .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?
++    };
+     if !is_created {
+         return Err(gst::loggable_error!(
+             CAT,
