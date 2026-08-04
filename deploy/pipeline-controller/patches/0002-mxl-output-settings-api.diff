@@ -1,12 +1,14 @@
---- a/server.js	2026-07-31 16:00:40.297345760 +0200
-+++ b/server.js	2026-07-31 16:00:40.412345766 +0200
-@@ -2721,6 +2721,9 @@
+--- a/server.js
++++ b/server.js
+@@ -2721,6 +2721,11 @@
        deviceNumber: o.deviceNumber != null ? parseInt(o.deviceNumber) : null,
        decklinkMode: o.decklinkMode || '1080p25',
        decklinkAudio: o.decklinkAudio !== false,
 +      mxlDomain:       o.mxlDomain || '',
 +      mxlVideoFlowId:  o.mxlVideoFlowId || '',
 +      mxlAudioFlowId:  o.mxlAudioFlowId || '',
++      mxlFrameRateNum: o.mxlFrameRateNum != null ? parseInt(o.mxlFrameRateNum) : 0,
++      mxlFrameRateDen: o.mxlFrameRateDen != null ? parseInt(o.mxlFrameRateDen) : 0,
      }));
      _settings.extraOutputs = outputs;
      saveSettings(_settings);

@@ -1,6 +1,6 @@
---- a/lib/OutputEngine.js	2026-07-31 15:59:49.631343400 +0200
-+++ b/lib/OutputEngine.js	2026-07-31 16:00:14.982344572 +0200
-@@ -132,6 +132,29 @@
+--- a/lib/OutputEngine.js
++++ b/lib/OutputEngine.js
+@@ -132,6 +132,52 @@
        const quoted = `"${String(out.uri || '').replace(/"/g, '\\"')}"`;
        return `${videoBranch} ${audioBranch} matroskamux name=mux streamable=true ! filesink location=${quoted} sync=false`;
      }
@@ -11,10 +11,33 @@
 +      // geprüft): video/x-raw,format=v210, audio/x-raw,format=F32LE,layout=interleaved.
 +      if (!out.mxlDomain) throw new Error('MXL-Ausgang: mxlDomain fehlt');
 +      if (!out.mxlVideoFlowId || !out.mxlAudioFlowId) throw new Error('MXL-Ausgang: mxlVideoFlowId/mxlAudioFlowId fehlen');
++      // Live gefundener Bug (nicht nur vermutet): ohne explizite Caps direkt nach
++      // intervideosrc kann die allererste Caps-Verhandlung dieses Zweigs auf einem
++      // GStreamer-internen Fallback (320x240@30) statt der echten Master-Auflösung
++      // landen, falls intervideosink (MasterPipeline.js) beim Verbindungsaufbau
++      // dieses Zweigs noch keinen einzigen Frame geliefert hat — mxlsink legt den
++      // MXL-Flow dann mit der FALSCHEN Auflösung an ("MXL Test Flow, 240p30" im
++      // resultierenden flow_def.json, live per echtem Boot reproduziert). Eine
++      // spätere, korrekte Neuverhandlung auf die echte Auflösung kommt zwar von
++      // GStreamer, aber mxlsink erstellt dafür laut Flow-Semantik keinen zweiten
++      // Flow-Writer für dieselbe Flow-ID (führt sonst zum separat behobenen
++      // "another active writer"-Fehler) — die falsche Auflösung bliebe für die
++      // gesamte Ausgangs-Laufzeit bestehen, jeder nachfolgende (korrekt große)
++      // Buffer würde in einen zu kleinen Grain-Payload hineinkopiert (Bild zerfällt
++      // in diagonale Streifen). Fix: Auflösung+Framerate hart direkt nach
++      // intervideosrc anfordern (vom Adapter mitgegeben, s. main.rs
++      // configure_mxl_output) — erzwingt, dass intervideosrc auf die ECHTEN Master-
++      // Caps wartet, statt einen Fallback zu akzeptieren, bevor mxlsink sie je zu
++      // Gesicht bekommt. Rückwärtskompatibel: fehlen width/height (älterer Adapter),
++      // bleibt das Verhalten wie zuvor unbeschränkt.
++      const mxlRateCaps = (out.mxlFrameRateNum && out.mxlFrameRateDen)
++        ? `,framerate=${parseInt(out.mxlFrameRateNum)}/${parseInt(out.mxlFrameRateDen)}` : '';
++      const mxlPinCaps = (w && h) ? ` ! video/x-raw,width=${w},height=${h}${mxlRateCaps}` : '';
 +      const mxlVideoBranch = (
 +        `intervideosrc channel=${videoChannel}` +
++        mxlPinCaps +
 +        ` ! queue max-size-buffers=10 max-size-time=200000000 max-size-bytes=0 leaky=downstream` +
-+        ` ! videoconvert${scale}` +
++        ` ! videoconvert` +
 +        ` ! video/x-raw,format=v210` +
 +        ` ! mxlsink flow-id=${out.mxlVideoFlowId} domain="${out.mxlDomain}"`
 +      );
@@ -30,7 +53,7 @@
      default:
        throw new Error(`Unbekannter Sink-Typ: "${out.sink}"`);
    }
-@@ -321,6 +344,9 @@
+@@ -321,6 +367,9 @@
          uri:          cfg.uri,
          deviceNumber: cfg.deviceNumber,
          decklinkMode: cfg.decklinkMode,

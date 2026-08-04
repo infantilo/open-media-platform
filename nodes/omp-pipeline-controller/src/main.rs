@@ -41,6 +41,21 @@ use serde_json::Value;
 /// Launcher veröffentlicht ausschließlich `OMP_PORT` nach außen.
 const PC_PORT: u16 = 3000;
 
+/// Programm-Auflösung/-Framerate — sowohl für die IS-04-Flow-Registrierung
+/// (`SenderSpec::flow`, unten) als auch für `configure_mxl_output` (Patch
+/// 0001-mxl-output.diff: explizite Caps direkt nach `intervideosrc`, damit
+/// die allererste Caps-Verhandlung nicht auf einem GStreamer-Fallback wie
+/// 320x240@30 landet, bevor die echten Master-Caps verfügbar sind — live
+/// gefunden: sonst legt mxlsink den Flow dauerhaft in der falschen
+/// Auflösung an, jeder Buffer läuft danach über einen zu kleinen
+/// Grain-Payload, Bild zerfällt in diagonale Streifen). Eine Konstante
+/// statt zweier unabhängiger Literale, damit beide Stellen nie
+/// auseinanderlaufen können.
+const PROGRAM_WIDTH: u32 = 1920;
+const PROGRAM_HEIGHT: u32 = 1080;
+const PROGRAM_FPS_NUM: u32 = 25;
+const PROGRAM_FPS_DEN: u32 = 1;
+
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
@@ -134,6 +149,10 @@ fn configure_mxl_output(pc_base: &str, domain: &str, video_flow_id: &str, audio_
             "mxlDomain": domain,
             "mxlVideoFlowId": video_flow_id,
             "mxlAudioFlowId": audio_flow_id,
+            "width": PROGRAM_WIDTH,
+            "height": PROGRAM_HEIGHT,
+            "mxlFrameRateNum": PROGRAM_FPS_NUM,
+            "mxlFrameRateDen": PROGRAM_FPS_DEN,
         }]
     });
     if let Err(e) = ureq::post(&format!("{pc_base}/api/outputs/settings")).send_json(body) {
@@ -210,10 +229,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     transport: Some(TRANSPORT_MXL.to_string()),
                     flow: Some(FlowSpec::Video {
                         id: Some(video_flow_id),
-                        frame_width: 1920,
-                        frame_height: 1080,
-                        grain_rate_numerator: 25,
-                        grain_rate_denominator: 1,
+                        frame_width: PROGRAM_WIDTH,
+                        frame_height: PROGRAM_HEIGHT,
+                        grain_rate_numerator: PROGRAM_FPS_NUM,
+                        grain_rate_denominator: PROGRAM_FPS_DEN,
                     }),
                     label: Some(format!("{} Programm", env_or("OMP_LABEL", "PIPELINE CONTROLLER"))),
                     ..Default::default()

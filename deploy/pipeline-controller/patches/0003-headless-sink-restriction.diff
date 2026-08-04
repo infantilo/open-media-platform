@@ -1,0 +1,32 @@
+--- a/ui.html
++++ b/ui.html
+@@ -1328,13 +1328,10 @@
+       <div style="font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:10px 0 8px" data-i18n="cfg.audio.output">Audio-Output</div>
+       <div class="fld"><label data-i18n="cfg.audio.sink">Standard Audio-Sink</label>
+         <select id="cfg-audio-sink">
+-          <option value="pulsesink">PulseAudio (pulsesink)</option>
+-          <option value="alsasink">ALSA (alsasink)</option>
+           <option value="fakesink" data-i18n="cfg.audio.fakesink">Fake (kein Audio)</option>
+-          <option value="autoaudiosink">Auto</option>
+         </select>
+       </div>
+-      <div style="font-size:9px;color:var(--dim);margin-bottom:6px">Gilt als Fallback für Gruppen ohne eigene Sink-Auswahl.</div>
++      <div style="font-size:9px;color:var(--dim);margin-bottom:6px">OMP-Microservice: Medienausgabe läuft ausschließlich über den MXL-Zusatzausgang, kein lokales Audiogerät im Container verfügbar — Auswahl daher auf Fake beschränkt. Gilt als Fallback für Gruppen ohne eigene Sink-Auswahl.</div>
+       <button class="btn btn-p" style="font-size:10px" onclick="saveAudioSink()" data-i18n="cfg.audio.saveSink">💾 Audio-Sink speichern &amp; Neustart</button>
+ 
+       <div class="sep"></div>
+@@ -1376,13 +1373,10 @@
+       </div>
+       <div class="fld"><label data-i18n="cfg.video.sink">Video-Sink</label>
+         <select id="cfg-video-sink" onchange="cfgFilterFormatBySink()">
+-          <option value="autovideosink">Auto (detect)</option>
+           <option value="fakesink" data-i18n="cfg.video.fakewin">Fake (kein Fenster)</option>
+-          <option value="ximagesink">X11 (Crostini)</option>
+-          <option value="waylandsink">Wayland</option>
+-          <option value="xvimagesink">XV (Hardware)</option>
+         </select>
+       </div>
++      <div style="font-size:9px;color:var(--dim);margin-bottom:6px">OMP-Microservice: Medienausgabe läuft ausschließlich über den MXL-Zusatzausgang, kein lokales Anzeigegerät im Container verfügbar — Auswahl daher auf Fake beschränkt.</div>
+       <div class="fld"><label data-i18n="cfg.video.resolution">Auflösung / Framerate</label>
+         <select id="cfg-format">
+           <option value="1920x1080@25">1080p25 — 1920×1080 @ 25fps</option>
