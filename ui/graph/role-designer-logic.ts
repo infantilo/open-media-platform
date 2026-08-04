@@ -18,6 +18,14 @@ export interface DraftRole {
   // orchestrator/internal/workflows/types.go Role.StandbyFor (einzige
   // Quelle der Durchsetzungs-Wahrheit, hier nur Dropdown-Komfort).
   standbyFor?: string;
+  // placement (D6 Teil 4, ARCHITECTURE.md §6.1 Erweiterung 2026-07-13
+  // Punkt 2): Placement-Eskalationsstufe dieser Rolle — bewusst als
+  // verschachteltes Objekt statt flacher Felder, identisch zum
+  // Backend-Wire-Format (orchestrator/internal/workflows/types.go
+  // Role.Placement), damit role-designer.ts es unverändert
+  // durchreichen kann (kein Flatten/Un-Flatten beim Laden/Speichern
+  // nötig). undefined/leeres escalation = "advisory" (Default).
+  placement?: { escalation?: string; confirmWindowSeconds?: number };
 }
 
 export interface DraftConnection {

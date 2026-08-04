@@ -137,6 +137,12 @@ type WorkflowService interface {
 	// auth_middleware.go, dieselbe Methode, hier Teil der ohnehin
 	// injizierten WorkflowService-Implementierung.
 	FindRoleForNode(nodeID string) (workflowID, workflowName, role string, ok bool)
+	// PendingMigrations/ConfirmMigration/CancelMigration (D6 Teil 4,
+	// ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2, migration.go)
+	// — Bedienung der auto-confirm-window-Eskalationsstufe.
+	PendingMigrations() []workflows.PendingMigrationView
+	ConfirmMigration(workflowID, role string) error
+	CancelMigration(workflowID, role string) error
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -261,6 +267,15 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// UMSETZUNG.md D6 Teil 3) — view-artig wie /api/v1/hosts, kein
 	// eigener Verb-Scope, die Engine führt selbst nichts aus.
 	mux.HandleFunc("GET /api/v1/placement/advice", g.requireAuth(handleListPlacementAdvice(placementAdvisor)))
+
+	// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
+	// Bedienung laufender auto-confirm-window-Countdowns — gleicher
+	// Verb-Scope wie Workflow-Start/-Stop (VerbAdmin: "ein Workflow-Start
+	// ist nichts anderes als mehrere gebündelte Instanz-Starts", hier
+	// analog für den Rollen-Umzug).
+	mux.HandleFunc("GET /api/v1/placement/migrations", g.requireAuth(handleListPendingMigrations(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/placement/migrations/{workflowId}/{role}/confirm", g.requireVerbGlobal(authz.VerbAdmin, handleConfirmMigration(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/placement/migrations/{workflowId}/{role}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelMigration(workflowSvc)))
 
 	// Verbrauchsprofile pro Node-Typ, advisory (Kapitel 14 Teil 3,
 	// docs/END-GOAL-FEATURES.md §14.3d) — view-artig wie /api/v1/hosts.

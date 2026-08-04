@@ -92,6 +92,75 @@ type Role struct {
 	// beides), höchstens ein Standby pro Primärrolle (kein `replicas`
 	// diese Runde — YAGNI, s. Plan).
 	StandbyFor string `json:"standbyFor,omitempty"`
+	// Placement (D6 Teil 4, ARCHITECTURE.md §6.1 Erweiterung
+	// 2026-07-13 Punkt 2): pro-Rolle konfigurierbare Eskalationsstufe
+	// für die Placement-Engine (placement.Engine.evaluateOnce-Alarm bei
+	// Überlast). nil verhält sich exakt wie vor D6 Teil 4 — reines
+	// Advisory, keine automatische Aktion. Bewusst ein Pointer (nicht
+	// ein Wert-Struct): Gos `encoding/json` behandelt `omitempty` bei
+	// Struct-**Werten** nie als "leer" (nur bei Slices/Maps/Strings/
+	// Zahlen/Pointern) — ein Wert-Struct hätte für JEDE Rolle
+	// dauerhaft ein sichtbares, aber bedeutungsloses `"placement":{}`
+	// in jede Workflow-Definition geschrieben (live per echtem
+	// `POST /api/v1/workflows`-Roundtrip gefunden, nicht vermutet).
+	Placement *RolePlacementPolicy `json:"placement,omitempty"`
+}
+
+// PlacementEscalation liefert die Eskalationsstufe dieser Rolle,
+// nil-sicher (Placement=="" gilt als EscalationAdvisory) — einzige
+// Stelle, die r.Placement dereferenziert, alle anderen Aufrufer (service.go
+// validate, migration.go considerMigration) nutzen dies statt selbst
+// nil zu prüfen.
+func (r Role) PlacementEscalation() string {
+	if r.Placement == nil || r.Placement.Escalation == "" {
+		return EscalationAdvisory
+	}
+	return r.Placement.Escalation
+}
+
+// PlacementConfirmWindowSeconds liefert das konfigurierte
+// Bestätigungsfenster dieser Rolle, nil-sicher (0 = Backend-Default,
+// s. DefaultConfirmWindowSeconds).
+func (r Role) PlacementConfirmWindowSeconds() int {
+	if r.Placement == nil {
+		return 0
+	}
+	return r.Placement.ConfirmWindowSeconds
+}
+
+// Eskalationsstufen-Werte für RolePlacementPolicy.Escalation.
+const (
+	EscalationAdvisory          = "advisory"
+	EscalationAutoConfirmWindow = "auto-confirm-window"
+	EscalationAuto              = "auto"
+)
+
+// DefaultConfirmWindowSeconds gilt, wenn Escalation=="auto-confirm-window"
+// und ConfirmWindowSeconds==0 — 30s, wie in §6.1 als Beispielwert
+// genannt ("z. B. 30 s").
+const DefaultConfirmWindowSeconds = 30
+
+// RolePlacementPolicy steuert, was passiert, wenn die Placement-Engine
+// den Host dieser Rolle als überlastet meldet und einen gesunden
+// Ausweichhost gefunden hat (placement.Advice.SuggestedHostID):
+//
+//   - "" / "advisory" (Default): nur der bestehende UI-Alarm+Vorschlag,
+//     keine automatische Aktion — unverändertes Vor-D6-Teil-4-Verhalten.
+//   - "auto-confirm-window": ein Timer (ConfirmWindowSeconds, Default
+//     DefaultConfirmWindowSeconds) läuft an; ohne manuellen Eingriff
+//     (POST .../confirm oder .../cancel) führt der Ablauf des Timers
+//     dieselbe Migration aus wie "auto".
+//   - "auto": die Migration (migration.go: executeMigration, echtes
+//     Make-before-break — neue Instanz zuerst, alte erst nach
+//     erfolgreicher Umschaltung gestoppt) läuft sofort, sobald die
+//     Engine den Alarm meldet.
+//
+// Bewusst pro Rolle statt global (wie Role.StandbyFor/§17.1s
+// Erkennungsgeschwindigkeit): nicht jede Rolle soll gleich vertrauens-
+// voll automatisch umgezogen werden.
+type RolePlacementPolicy struct {
+	Escalation           string `json:"escalation,omitempty"`
+	ConfirmWindowSeconds int    `json:"confirmWindowSeconds,omitempty"`
 }
 
 // Connection ist ein Eintrag im Verbindungs-Template: Rolle→Rolle, nicht

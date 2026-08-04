@@ -65,7 +65,11 @@ const FORMAT_ROW_HEIGHT = 22;
 // unter dem Format-Dropdown für "Standby für: <Rolle>" — gleiches Muster
 // wie FORMAT_ROW_HEIGHT seinerzeit, TILE_HEIGHT wächst entsprechend.
 const STANDBY_ROW_HEIGHT = 22;
-const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT;
+// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2): dritte
+// Zeile für die Placement-Eskalation dieser Rolle — gleiches Muster wie
+// FORMAT_ROW_HEIGHT/STANDBY_ROW_HEIGHT.
+const PLACEMENT_ROW_HEIGHT = 22;
+const TILE_HEIGHT = MIN_BODY_HEIGHT + HEADER_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT + PLACEMENT_ROW_HEIGHT;
 const ANCHOR_RADIUS = 6;
 
 interface CatalogEntry {
@@ -618,6 +622,62 @@ export class RoleDesigner extends HTMLElement {
     });
     standbyObject.appendChild(standbySelect);
     g.appendChild(standbyObject);
+
+    // D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
+    // Placement-Eskalation bei Host-Überlast — gleiches Baumuster wie
+    // Format-/Standby-Dropdown oben. "auto-confirm-window" blendet
+    // zusätzlich ein Zahlenfeld für das Bestätigungsfenster (Sekunden)
+    // ein, leer = Backend-Default (30s, s. workflows.DefaultConfirmWindowSeconds).
+    const placementObject = document.createElementNS(SVG_NS, "foreignObject");
+    placementObject.setAttribute("x", "6");
+    placementObject.setAttribute("y", String(HEADER_HEIGHT + MIN_BODY_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT));
+    placementObject.setAttribute("width", String(NODE_WIDTH - 12));
+    placementObject.setAttribute("height", String(PLACEMENT_ROW_HEIGHT));
+    placementObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    const placementWrap = document.createElement("div");
+    placementWrap.style.cssText = "display:flex;gap:2px;width:100%;box-sizing:border-box;";
+    const placementSelect = document.createElement("select");
+    placementSelect.title =
+      "Placement-Eskalation bei Host-Überlast (D6 Teil 4) — advisory zeigt nur einen Alarm, auto-confirm-window/auto ziehen die Rolle automatisch auf einen gesunden Ausweichhost um.";
+    placementSelect.style.cssText =
+      "flex:1;min-width:0;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+    const windowInput = document.createElement("input");
+    windowInput.type = "number";
+    windowInput.min = "1";
+    windowInput.placeholder = "30s";
+    windowInput.title = "Bestätigungsfenster in Sekunden, bevor die Migration ohne Eingriff automatisch ausgeführt wird (leer = 30s).";
+    windowInput.style.cssText =
+      "width:44px;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+    windowInput.value = role.placement?.confirmWindowSeconds ? String(role.placement.confirmWindowSeconds) : "";
+    windowInput.style.display = role.placement?.escalation === "auto-confirm-window" ? "" : "none";
+    windowInput.addEventListener("change", () => {
+      const n = parseInt(windowInput.value, 10);
+      role.placement = {
+        escalation: role.placement?.escalation,
+        confirmWindowSeconds: Number.isFinite(n) && n > 0 ? n : undefined,
+      };
+    });
+    const placementOptions: Array<[string, string]> = [
+      ["", "Placement: advisory"],
+      ["auto-confirm-window", "Placement: auto (Bestätigung)"],
+      ["auto", "Placement: auto (sofort)"],
+    ];
+    for (const [value, label] of placementOptions) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      if (value === (role.placement?.escalation ?? "")) opt.selected = true;
+      placementSelect.appendChild(opt);
+    }
+    placementSelect.addEventListener("change", () => {
+      const escalation = placementSelect.value || undefined;
+      role.placement = escalation ? { escalation, confirmWindowSeconds: role.placement?.confirmWindowSeconds } : undefined;
+      this.#render();
+    });
+    placementWrap.appendChild(placementSelect);
+    placementWrap.appendChild(windowInput);
+    placementObject.appendChild(placementWrap);
+    g.appendChild(placementObject);
 
     const removeBtn = document.createElementNS(SVG_NS, "text");
     removeBtn.setAttribute("data-role", "role-tile-remove");

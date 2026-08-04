@@ -67,14 +67,41 @@ interface PlacementAdvice {
   detectedAt: string;
 }
 
+// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2) —
+// spiegelt workflows.PendingMigrationView (migration.go): ein laufender
+// auto-confirm-window-Countdown.
+interface PendingMigration {
+  workflowId: string;
+  role: string;
+  targetHostId: string;
+  targetHostLabel: string;
+  deadlineAt: string;
+}
+
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 
 const HOST_METRICS_SUBJECT_PREFIX = "omp.host.";
 const HOST_METRICS_SUBJECT_SUFFIX = ".metrics";
 
 function isRefreshEvent(type: string): boolean {
-  if (type === "host.registered" || type === "placement.advice" || type === "lost-events") return true;
+  if (
+    type === "host.registered" ||
+    type === "placement.advice" ||
+    // D6 Teil 4: "workflow.migration" deckt sowohl neu geplante als auch
+    // bestätigte/abgelaufene/abgebrochene/abgeschlossene Migrationen ab —
+    // ein voller Re-Poll (statt eines eigenen Diff-Pfads) hält die
+    // Pending-Liste und die Host-Tabelle konsistent zueinander.
+    type === "workflow.migration" ||
+    type === "lost-events"
+  ) return true;
   return type.startsWith(HOST_METRICS_SUBJECT_PREFIX) && type.endsWith(HOST_METRICS_SUBJECT_SUFFIX);
+}
+
+// D6 Teil 4: Rest-Sekunden bis deadlineAt, nie negativ (ein knapp
+// abgelaufener, aber noch nicht per SSE aktualisierter Countdown soll
+// "0s" zeigen, keine negative Zahl).
+function secondsUntil(deadlineAt: string): number {
+  return Math.max(0, Math.round((new Date(deadlineAt).getTime() - Date.now()) / 1000));
 }
 
 function reasonLabel(reason: string): string {
@@ -130,21 +157,46 @@ function formatMinAvgMax(min: number, avg: number, max: number): string {
 
 class HostsView extends HTMLElement {
   #pollHandle: number | undefined;
+  // D6 Teil 4: 1s-Ticker für den Live-Countdown der Pending-Migrationen
+  // — läuft nur, solange #lastPending nicht leer ist (s. #render),
+  // rendert mit den zuletzt geholten Daten neu statt jede Sekunde die
+  // API abzufragen.
+  #countdownHandle: number | undefined;
+  #lastHosts: HostEntry[] = [];
+  #lastAdvice: PlacementAdvice[] = [];
+  #lastHistory: Map<string, HistoryWindow> = new Map();
+  #lastPending: PendingMigration[] = [];
 
   connectedCallback() {
     this.style.cssText =
       "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
-    this.#render([], [], new Map());
+    this.#render([], [], new Map(), []);
     this.#poll();
     this.#pollHandle = window.setInterval(() => this.#poll(), POLL_FALLBACK_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
+    // Event-Delegation auf `this` statt Listener pro Render neu zu
+    // binden (#render setzt innerHTML komplett neu) — gleiches Muster
+    // wie datenattributgetriebene Klick-Handler andernorts im Projekt.
+    this.addEventListener("click", this.#onClick);
   }
+
+  #onClick = (ev: Event) => {
+    const target = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-migration-action]");
+    if (!target) return;
+    const workflowId = target.dataset.workflowId ?? "";
+    const role = target.dataset.role ?? "";
+    if (!workflowId || !role) return;
+    if (target.dataset.migrationAction === "confirm") this.#confirmMigration(workflowId, role);
+    else if (target.dataset.migrationAction === "cancel") this.#cancelMigration(workflowId, role);
+  };
 
   disconnectedCallback() {
     if (this.#pollHandle !== undefined) window.clearInterval(this.#pollHandle);
+    this.#stopCountdown();
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
+    this.removeEventListener("click", this.#onClick);
   }
 
   #onSseMessage = (ev: Event) => {
@@ -159,18 +211,48 @@ class HostsView extends HTMLElement {
 
   async #poll() {
     try {
-      const [hostsRes, adviceRes] = await Promise.all([
+      const [hostsRes, adviceRes, pendingRes] = await Promise.all([
         apiFetch("/api/v1/hosts"),
         apiFetch("/api/v1/placement/advice"),
+        apiFetch("/api/v1/placement/migrations"),
       ]);
       if (!hostsRes.ok) return;
       const hosts = (await hostsRes.json()) as HostEntry[];
       const advice = adviceRes.ok ? ((await adviceRes.json()) as PlacementAdvice[]) : [];
+      const pending = pendingRes.ok ? ((await pendingRes.json()) as PendingMigration[]) : [];
       const history = await this.#fetchHistory(hosts);
-      this.#render(hosts, advice, history);
+      this.#render(hosts, advice, history, pending);
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
+  }
+
+  #startCountdown() {
+    if (this.#countdownHandle !== undefined) return;
+    this.#countdownHandle = window.setInterval(() => {
+      this.#render(this.#lastHosts, this.#lastAdvice, this.#lastHistory, this.#lastPending);
+    }, 1000);
+  }
+
+  #stopCountdown() {
+    if (this.#countdownHandle === undefined) return;
+    window.clearInterval(this.#countdownHandle);
+    this.#countdownHandle = undefined;
+  }
+
+  // D6 Teil 4: "Jetzt ausführen"/"Abbrechen" für einen laufenden
+  // auto-confirm-window-Countdown — best effort wie andere
+  // Bedien-Aktionen dieser View (fehlt kein eigenes Fehler-Toast, der
+  // nächste SSE-"workflow.migration"-Event bzw. Poll zeigt den
+  // tatsächlichen Stand ohnehin wieder an).
+  async #confirmMigration(workflowId: string, role: string) {
+    await apiFetch(`/api/v1/placement/migrations/${encodeURIComponent(workflowId)}/${encodeURIComponent(role)}/confirm`, { method: "POST" });
+    this.#poll();
+  }
+
+  async #cancelMigration(workflowId: string, role: string) {
+    await apiFetch(`/api/v1/placement/migrations/${encodeURIComponent(workflowId)}/${encodeURIComponent(role)}/cancel`, { method: "POST" });
+    this.#poll();
   }
 
   // Kapitel 14 Teil 1: eine Anfrage pro Host, parallel — Anzahl Hosts ist
@@ -194,7 +276,14 @@ class HostsView extends HTMLElement {
     return new Map(entries.filter((e): e is [string, HistoryWindow] => e !== undefined));
   }
 
-  #render(hosts: HostEntry[], advice: PlacementAdvice[], history: Map<string, HistoryWindow>) {
+  #render(hosts: HostEntry[], advice: PlacementAdvice[], history: Map<string, HistoryWindow>, pending: PendingMigration[]) {
+    this.#lastHosts = hosts;
+    this.#lastAdvice = advice;
+    this.#lastHistory = history;
+    this.#lastPending = pending;
+    if (pending.length > 0) this.#startCountdown();
+    else this.#stopCountdown();
+
     const rows = hosts
       .map((h) => {
         const m = h.metrics;
@@ -232,9 +321,26 @@ class HostsView extends HTMLElement {
       })
       .join("");
 
+    // D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
+    // laufende auto-confirm-window-Countdowns — eigener Banner-Block
+    // unterhalb der reinen advisory-Alarme, mit Live-Countdown (der
+    // 1s-Ticker aus #startCountdown rendert diese Funktion erneut) und
+    // Bedien-Buttons.
+    const pendingBanner = pending
+      .map((p) => {
+        const remaining = secondsUntil(p.deadlineAt);
+        return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(255,183,77,0.15);border:1px solid var(--omp-cue);border-radius:var(--omp-radius);display:flex;align-items:center;gap:var(--omp-space-2);flex-wrap:wrap;">
+          <span>Rolle <strong>${escapeHtml(p.role)}</strong> zieht in <strong>${remaining}s</strong> automatisch auf <strong>${escapeHtml(p.targetHostLabel || p.targetHostId)}</strong> um, falls kein Eingriff erfolgt.</span>
+          <button data-migration-action="confirm" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">Jetzt ausführen</button>
+          <button data-migration-action="cancel" data-workflow-id="${escapeHtml(p.workflowId)}" data-role="${escapeHtml(p.role)}" style="font-size:11px;padding:2px 8px;cursor:pointer;">Abbrechen</button>
+        </div>`;
+      })
+      .join("");
+
     this.innerHTML = `
       <div style="font-weight:600;margin-bottom:6px;">Hosts (${hosts.length})</div>
       ${adviceBanner}
+      ${pendingBanner}
       ${
         hosts.length === 0
           ? `<div style="color:var(--omp-text-dim);">Noch kein Host registriert.</div>`

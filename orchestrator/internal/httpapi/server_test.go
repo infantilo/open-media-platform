@@ -414,6 +414,16 @@ func (f fakeWorkflowService) FindRoleForNode(nodeID string) (workflowID, workflo
 	return "", "", "", false
 }
 
+func (f fakeWorkflowService) PendingMigrations() []workflows.PendingMigrationView { return nil }
+
+func (f fakeWorkflowService) ConfirmMigration(workflowID, role string) error {
+	return workflows.ErrNoPendingMigration
+}
+
+func (f fakeWorkflowService) CancelMigration(workflowID, role string) error {
+	return workflows.ErrNoPendingMigration
+}
+
 type fakePlacementAdvisor struct {
 	advice []placement.Advice
 }

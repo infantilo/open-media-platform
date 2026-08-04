@@ -328,7 +328,7 @@ func (f *fakeAuthzBinder) DeleteByWorkflow(workflowID string) error {
 // NewService (das eine konkrete *Store, keine Fakes, erwartet) — gleiches
 // Muster wie internal/snapshots.newTestService.
 func newTestService(store workflowStore, nodes NodeLister, g GraphService, l Launcher) *Service {
-	return &Service{store: store, nodes: nodes, graph: g, launcher: l}
+	return &Service{store: store, nodes: nodes, graph: g, launcher: l, migrations: newMigrationState()}
 }
 
 func waitForStatus(t *testing.T, svc *Service, id, status string) Workflow {

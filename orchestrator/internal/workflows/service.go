@@ -235,6 +235,13 @@ type Service struct {
 	// (kein Crash, nur ein fehlendes Feature ohne Verdrahtung, gleiches
 	// Nil-Safety-Muster wie resources ResourcePrecheck).
 	hostMetrics HostMetricsReader
+	// migrations (D6 Teil 4, migration.go) — Buchführung für
+	// auto-confirm-window-Timer und laufende Migrationsversuche. Immer
+	// initialisiert (nie nil, s. NewService), damit migration.go ohne
+	// Nil-Checks auskommt — anders als resources/authzBinder/hostMetrics
+	// ist das keine optionale externe Abhängigkeit, sondern rein
+	// interner Zustand.
+	migrations *migrationState
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -253,7 +260,7 @@ func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launche
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient, authz: authzBinder}
+	return &Service{store: store, nodes: nodes, graph: graphSvc, launcher: l, events: events, methods: newHTTPMethodInvoker(httpClient), resources: resources, httpClient: httpClient, authz: authzBinder, migrations: newMigrationState()}
 }
 
 // Create legt einen neuen Workflow an — gestoppt, es sei denn adopt ist
@@ -1545,6 +1552,18 @@ func validate(def Definition) error {
 			return fmt.Errorf("%w: role %q already has a standby role %q, at most one standby per primary", ErrValidation, r.StandbyFor, existing)
 		}
 		standbyOfPrimary[r.StandbyFor] = r.Name
+	}
+
+	// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
+	// nur die drei dokumentierten Eskalationsstufen sind gültig — leer
+	// zählt als "advisory" (Default, s. Role.Placement-Doku), kein
+	// eigener Sonderfall nötig.
+	for _, r := range def.Roles {
+		switch esc := r.PlacementEscalation(); esc {
+		case EscalationAdvisory, EscalationAutoConfirmWindow, EscalationAuto:
+		default:
+			return fmt.Errorf("%w: role %q has unknown placement escalation %q", ErrValidation, r.Name, esc)
+		}
 	}
 
 	for _, sched := range def.Schedules {

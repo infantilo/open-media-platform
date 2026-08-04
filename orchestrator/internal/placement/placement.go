@@ -126,6 +126,31 @@ type Advice struct {
 	DetectedAt         time.Time `json:"detectedAt"`
 }
 
+// AdviceObserver wird informiert, wenn sich der Alarm-Stand EINES Hosts
+// ändert (D6 Teil 4, ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt
+// 2) — implementiert von *workflows.Service, das daraus pro betroffener
+// Instanz die zuständige Rolle auflöst und je nach
+// Role.Placement.Escalation reagiert (advisory: nichts, s. dortige
+// Doku). Bewusst dieselbe Granularität wie publishChanges/broadcastAdvice
+// (ein Aufruf pro geändertem Host, kein Volltext-Diff nötig) — die
+// Placement-Engine bleibt dadurch weiterhin vollständig
+// workflow-unwissend, sie reicht nur ihren ohnehin schon berechneten
+// Alarm-Stand durch (gleiches Entkopplungsmuster wie EventPublisher).
+type AdviceObserver interface {
+	// OnAdviceRaised wird für jeden Host aufgerufen, dessen Alarm neu
+	// erschienen oder verändert ist (inkl. jedes Ticks mit leicht
+	// geänderten Live-Metriken, s. evaluateOnce — der Aufrufer muss
+	// selbst idempotent sein, nicht die Engine).
+	OnAdviceRaised(Advice)
+	// OnAdviceCleared wird aufgerufen, sobald ein zuvor gemeldeter Alarm
+	// für hostID verschwunden ist (Host wieder unter dem Schwellwert
+	// oder keine betroffenen Instanzen mehr) — der Aufrufer nutzt das,
+	// um einen noch laufenden auto-confirm-window-Timer für diesen Host
+	// zu verwerfen (die Überlast, die ihn ausgelöst hat, besteht nicht
+	// mehr).
+	OnAdviceCleared(hostID string)
+}
+
 // Engine bewertet periodisch alle Hosts gegen Thresholds und hält den
 // zuletzt berechneten Alarm-Stand vor (GET /api/v1/placement/advice).
 type Engine struct {
@@ -135,9 +160,20 @@ type Engine struct {
 	events     EventPublisher
 	thresholds Thresholds
 	profiles   ProfileReader
+	adviceObs  AdviceObserver
 
 	mu     sync.RWMutex
 	advice map[string]Advice // hostID -> aktueller Alarm
+}
+
+// SetAdviceObserver verdrahtet den Eskalations-Beobachter nach dem
+// Konstruieren (main.go: workflows.Service existiert nicht vor der
+// Placement-Engine, gleiches Nachträglich-Verdrahtungsmuster wie
+// launcher.SetRestartObserver/workflows.Service.SetHostMetrics). Nicht
+// nebenläufigkeitsgeschützt — vor dem ersten Run()-Tick verdrahten, wie
+// die übrigen main.go-Verkabelungen auch.
+func (e *Engine) SetAdviceObserver(o AdviceObserver) {
+	e.adviceObs = o
 }
 
 // NewEngine erstellt eine Engine. events darf nil sein (kein SSE-Fanout,
@@ -586,25 +622,35 @@ func (e *Engine) healthiestAlternative(candidates []scored, excludeID string) (s
 // nur HostID gesetzt hat und Reason == "cleared", damit UI-Clients ohne
 // vollständigen Re-Poll wissen, welcher Alarm weg ist). Unveränderte
 // Hosts erzeugen kein Event — kein SSE-Dauerfeuer bei stabiler Last.
+// Ruft zusätzlich (unabhängig von e.events, s. u.) den D6-Teil-4-
+// AdviceObserver für dieselben Host-Änderungen auf — dieselbe
+// "geändert seit letztem Lauf"-Granularität, kein zweiter,
+// abweichender Diff nötig.
 func (e *Engine) publishChanges(prev, next map[string]Advice) {
-	if e.events == nil {
-		return
-	}
 	for hostID, a := range next {
 		if old, ok := prev[hostID]; ok && reflect.DeepEqual(old, a) {
 			continue
 		}
 		e.broadcastAdvice(a)
+		if e.adviceObs != nil {
+			e.adviceObs.OnAdviceRaised(a)
+		}
 	}
 	for hostID, old := range prev {
 		if _, stillPresent := next[hostID]; stillPresent {
 			continue
 		}
 		e.broadcastAdvice(Advice{HostID: hostID, HostLabel: old.HostLabel, Reason: "cleared"})
+		if e.adviceObs != nil {
+			e.adviceObs.OnAdviceCleared(hostID)
+		}
 	}
 }
 
 func (e *Engine) broadcastAdvice(a Advice) {
+	if e.events == nil {
+		return
+	}
 	data, err := json.Marshal(a)
 	if err != nil {
 		slog.Warn("placement: failed to marshal advice for event", "error", err)

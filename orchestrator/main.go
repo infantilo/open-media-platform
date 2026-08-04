@@ -329,6 +329,16 @@ func main() {
 	workflowSvc.SetHostMetrics(hostMetricsTracker)
 	go workflowSvc.RunFailoverWatcher(ctx)
 
+	// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
+	// automatisierte Placement-Eskalation (auto-confirm-window/auto) —
+	// placementEngine bleibt dabei workflow-unwissend, sie reicht nur
+	// ihren ohnehin berechneten Alarm-Stand an workflowSvc durch, das die
+	// betroffene Rolle auflöst und je nach Role.Placement.Escalation
+	// reagiert (s. migration.go). Erst hier verdrahtbar (workflowSvc
+	// existiert erst ab hier), gleiches Nachträglich-Verdrahtungsmuster
+	// wie SetRestartObserver/SetFailoverObserver oben.
+	placementEngine.SetAdviceObserver(workflowSvc)
+
 	// D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): führt Start/Stop-
 	// Zeitpläne aus, unabhängig vom HTTP-Handler.
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
