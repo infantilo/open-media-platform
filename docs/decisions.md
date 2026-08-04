@@ -14350,3 +14350,323 @@ sichtbar).
 `orchestrator/internal/launcher/catalog.go`,
 `orchestrator/internal/workflows/{delayassignment.go,delayassignment_test.go}`
 (neu), `orchestrator/internal/workflows/service.go`, `deploy/catalog.json`.
+
+## 2026-08-04 (Nachtrag 115) — D6 Teil 4: Automatisierte Placement-Eskalation (README "Offen"-Punkt 1), ein echter Wire-Format-Bug live gefunden+behoben
+
+Nutzerauftrag "Punkt 1 fertig machen" (README-"Offen"-Liste: "automatische
+(statt nur ratschlagende) Placement-Entscheidungen"). ARCHITECTURE.md §6.1
+(Erweiterung 2026-07-13 Punkt 2) hatte das Zielbild bereits spezifiziert:
+pro Workflow-Rolle konfigurierbare Eskalationsstufen (advisory/
+auto-confirm-window/auto) statt eines globalen Schalters. Zwei
+Nutzerentscheidungen per `AskUserQuestion` vorab geklärt: (1) alle drei
+Stufen vollständig in dieser Runde (nicht nur auto-confirm-window), (2)
+kein Node-Typ-Ausschluss — State-Transfer bleibt best-effort wie bei K7
+Teil 4, keine Rolle wird strukturell von "auto" ausgeschlossen.
+
+**Kernstück:** `orchestrator/internal/workflows/migration.go` (neu) —
+`executeMigration` ist das eigentliche Make-before-break-Protokoll (§6.1
+Punkt 3): neue Instanz auf dem von der Placement-Engine vorgeschlagenen
+Zielhost starten (`launcher.StartLabeled`), auf ihre Registrierung warten
+(`awaitFreshRegistration`, wiederverwendet aus K7 Teil 4), Betriebszustand
++ Connections der Rolle umziehen, ERST DANACH die alte Instanz stoppen.
+Strukturell eng an `failover.go` (K7 Teil 4) angelehnt — dieselbe "vor
+JEDEM Seiteneffekt erneut per `stillBacks` prüfen, ob die Rolle
+zwischenzeitlich überholt wurde"-Lektion (Nachtrag 113) wiederverwendet,
+diesmal für den Fall, dass eine FRISCHE statt einer bereits laufenden
+warmen Standby-Instanz übernimmt.
+
+**Placement-Engine bleibt workflow-unwissend** (`internal/placement`):
+neues optionales `AdviceObserver`-Interface (`OnAdviceRaised`/
+`OnAdviceCleared`), von `publishChanges` bei jeder Host-Alarm-Änderung
+aufgerufen — dieselbe "geändert seit letztem Lauf"-Granularität wie das
+bestehende SSE-Event, kein zweiter Diff-Pfad. `workflows.Service`
+implementiert es und löst pro betroffener Instanz die zuständige Rolle
+auf (`findStartedRoleForInstance`, aus K7 Teil 4 wiederverwendet).
+
+**Eskalationsstufen** (`Role.Placement.Escalation`): advisory (Default,
+unverändert) / auto-confirm-window (Timer, Default 30s, SSE
+"workflow.migration" mit Status pending/executing/done/failed/cancelled,
+`POST .../confirm`/`.../cancel`) / auto (sofort). Idempotenz/Cooldown
+(`migrationRetryCooldown = 60s`) verhindert, dass ein dauerhaft
+fehlschlagender Zielhost bei jedem 5s-Placement-Tick einen neuen Versuch
+auslöst, und dass ein bestätigter/abgebrochener Timer durch den
+nächsten Tick sofort wieder aufgesetzt wird.
+
+**Ein echter Bug live gefunden (nicht im Unit-Test sichtbar, erst beim
+echten `POST`/`PUT /api/v1/workflows`-Roundtrip gegen den laufenden
+Orchestrator):** `Role.Placement` zunächst als Wert-Struct mit
+`json:"placement,omitempty"` modelliert — Gos `encoding/json` behandelt
+`omitempty` bei Struct-**Werten** nie als "leer" (nur bei Slices/Maps/
+Strings/Zahlen/Pointern), jede Rolle jeder Workflow-Definition hätte
+dauerhaft ein sichtbares, aber bedeutungsloses `"placement":{}`
+mitgeschleppt — live per echtem `curl` gegen `POST /api/v1/workflows`
+bestätigt (`src`-Rolle ohne jede Placement-Angabe zeigte trotzdem
+`"placement":{}`), nicht vermutet. Fix: `Placement *RolePlacementPolicy`
+(Pointer), neue nil-sichere `Role.PlacementEscalation()`/
+`PlacementConfirmWindowSeconds()`-Methoden als einzige Dereferenzierungsstelle.
+Zweiter Live-Check nach dem Fix bestätigte das korrigierte Wire-Format
+(`src` ohne `placement`-Feld, `active` mit dem tatsächlich gesetzten Wert).
+
+**UI:** `ui/graph/role-designer.ts` — dritte Dropdown-Zeile pro Rollen-
+Kachel (gleiches Baumuster wie Format-/Standby-Dropdown), `placement` als
+verschachteltes Feld identisch zum Backend-Wire-Format (kein Flatten/
+Un-Flatten). `ui/shell/hosts-view.ts` — Banner für laufende
+auto-confirm-window-Countdowns mit Live-Sekunden-Anzeige (1s-Ticker,
+rendert mit zwischengespeicherten Daten statt jede Sekunde neu zu
+pollen) plus "Jetzt ausführen"/"Abbrechen"-Buttons.
+
+**Bewusst nicht Teil dieser Runde** (§6.1 selbst nennt sie als separate,
+offene Punkte): I/O-Karten-Claim/Release (kein Geräte-Inventar), GPU/NIC-
+Telemetrie, Cloud-Kostenfaktor-Scoring — README-"Offen"-Liste entsprechend
+nachgezogen, nur Punkt 1 als erledigt markiert.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`go test ./...` grün
+(neue `migration_test.go`: advisory-No-Op, auto-Happy-Path inkl.
+Make-before-break-Reihenfolge/Reconnect, auto-confirm-window-Ablauf,
+Confirm/Cancel, OnAdviceCleared-Abbruch — sechs Szenarien, alle über
+`svc.OnAdviceRaised` direkt statt eine echte `placement.Engine`
+mitzustarten, gleiches Fake-basiertes Testmuster wie `failover_test.go`).
+`deno check`/`deno test ui/` (84/84) grün, `deno bundle` grün. Live gegen
+den echten, laufenden Orchestrator verifiziert: Login, Wegwerf-Workflow
+mit `placement`-Feld über die echte HTTP-API angelegt/aktualisiert (deckte
+den Wire-Format-Bug auf), `GET /api/v1/placement/advice`/
+`/api/v1/placement/migrations` beide `200 []` auf einer unbelasteten
+Dev-Maschine, sauber wieder gelöscht. Ein echter Zwei-Host-Überlast-
+Roundtrip (fingierte hohe CPU-Last auf einem zweiten registrierten Host,
+tatsächliche Migration live beobachtet) wurde NICHT gefahren — bewusste
+Abgrenzung, deckt sich mit der bereits in §6.1 dokumentierten Testbarkeits-
+Grenze der advisory-Vorstufe ("auf der aktuellen Single-Host-Dev-Maschine
+nur das Protokoll simulierbar") und mit dem, was die neuen Unit-Tests per
+fingierter `placement.Advice` bereits deterministisch abdecken.
+
+**Dateien:** `orchestrator/internal/workflows/{types.go,service.go,migration.go,migration_test.go,service_test.go}`,
+`orchestrator/internal/placement/placement.go`,
+`orchestrator/internal/httpapi/{server.go,placement_handlers.go,server_test.go}`,
+`orchestrator/main.go`, `ui/graph/{role-designer.ts,role-designer-logic.ts}`,
+`ui/shell/hosts-view.ts`.
+
+## 2026-08-04 (Nachtrag 116) — PIPELINE CONTROLLER: OMP-MXL-Ausgang startete intermittierend nicht, echter Bug in gst-mxl-rs root-ursächlich gefunden+behoben (nicht nur Konfiguration)
+
+Nutzerauftrag: "unser pipeline controller node startet die pipeline darin
+nicht. debugge und fixe. eventuell pfade der ui configs, etc" — Verdacht
+des Nutzers (Pfade/Configs) live geprüft und ausgeschlossen; der echte
+Root Cause lag in `third_party/mxl/rust/gst-mxl-rs` (vendorter GStreamer-
+Sink, s. u. zum `.gitignore`-Risiko), nicht in irgendeiner OMP-eigenen
+Konfiguration.
+
+**Symptom:** `podman logs` eines gestarteten `omp-pipeline-controller`-
+Containers zeigte `[ERROR][output] [omp-mxl] GStreamer-Fehler: Internal
+data stream error.` kurz nach dem Boot — der "OMP MXL"-Zusatzausgang
+(§0001-mxl-output.diff, Kapitel PIPELINE-CONTROLLER-Microservice,
+2026-07-31) kam nicht hoch. Der vorgefundene, 22h alte Container stand
+auf Podman-Status "Created" (nie sauber weitergelaufen).
+
+**Falsche erste Spur (verworfen, aber lehrreich):** die Debug-Logs
+zeigten "The writer could not be created, the UUID belongs to a flow
+with another active writer" — sah nach einer Race zwischen den ZWEI
+gleichzeitig gestarteten `mxlsink`-Elementen (Video+Audio-Zweig
+derselben Pipeline, je eigene `MxlInstance`) aus: `Instance::
+garbage_collect_flows()` (`lib/internal/src/Instance.cpp`, läuft in
+JEDES Elements `start()`) scannt die GESAMTE Domain und reklamiert jedes
+`*.mxl-flow`, dessen `data`-Datei nicht geflockt ist — falls das mit dem
+schmalen Fenster eines Geschwister-Elements zwischen Flow-Verzeichnis-
+Erstellung und Flock-Erwerb kollidiert, sieht ein frisch angelegter,
+noch nicht gesperrter Flow orphaned aus. Fix versucht: ein
+prozessweiter `DOMAIN_LOCK` (`state.rs`), der `garbage_collect_flows()`
+und jeden `create_flow_writer()`-Aufruf serialisiert
+(`lock_domain_ops()`, in `imp.rs::start` und allen drei
+`init_state_with_*`-Funktionen). **Live widerlegt:** Stresstest (10
+Container-Boots mit gemounteter gefixter `.so`) zeigte unter aktiviertem
+`GST_DEBUG` sogar MEHR Fehlschläge (5/6) als vorher — die GC-Race war
+nicht die Ursache. Der Lock bleibt trotzdem drin (harmlos, schließt
+diesen Pfad für den unwahrscheinlichen Fall eines echten Crash-
+Recovery-Szenarios weiterhin ab), war aber nicht die Lösung.
+
+**Echter Root Cause (per systematischem Stresstest + gelesenem
+C++-Quellcode gefunden, nicht vermutet):** GStreamer ruft `set_caps()`
+auf einem Sink-Pad legitim MEHR ALS EINMAL auf, wenn sich die
+tatsächlich ausgehandelten Caps nach der ersten Verhandlung noch
+präzisieren (hier: der Audio-Zweig — `interaudiosrc ! audioconvert !
+audioresample ! audio/x-raw,format=F32LE,layout=interleaved ! mxlsink`
+— Rate/Channels bleiben in der expliziten Caps-Filterung offen). Der
+Video-Zweig (`v210`, feste Breite/Höhe/Framerate) verhandelt dagegen nur
+einmal — deckt sich exakt mit dem beobachteten Muster "ausnahmslos nur
+der Audio-Zweig scheitert, nie Video". `MxlSink::set_caps`
+(`gst-mxl-rs/src/mxlsink/imp.rs`) rief bei JEDEM Aufruf bedingungslos
+`init_state_with_audio`/`_video`/`_data` auf, die wiederum
+`create_flow_writer` für dieselbe Flow-ID aufrufen — der ZWEITE Aufruf
+traf zwangsläufig auf den vom ERSTEN Aufruf bereits aktiven, völlig
+gesunden Writer und scheiterte mit "another active writer"; gst-mxl-rs
+machte daraus einen fatalen Element-Fehler, der die GESAMTE Pipeline
+tötete, obwohl der Flow die ganze Zeit korrekt geschrieben wurde. Fix:
+`set_caps()` ist jetzt idempotent — liegt für die betroffene Pad-Art
+(`state.video`/`audio`/`data`) bereits ein aktiver Writer vor, wird der
+Aufruf als Renegotiation erkannt und der bestehende Writer beibehalten
+statt einen zweiten anzulegen.
+
+**Zweiter, direkt angrenzender Bug gefunden (C++-Kern,
+`lib/internal/src/FlowManager.cpp`):** `createOrOpenContinuousFlow`
+(Audio-/kontinuierlicher Pfad) räumte das temporäre Flow-Verzeichnis nur
+im Exception-Fall auf (`catch(...) { remove_all(tempDirectory); throw;
+}`) — der völlig normale "Flow existiert bereits, öffne den
+bestehenden"-Ausgang (`publishFlowDirectory` liefert `false`, keine
+Exception) ließ das `.mxl-tmp-*`-Verzeichnis für immer liegen. Das
+diskrete/Video-Pendant (`createOrOpenDiscreteFlow`) hatte dafür bereits
+ein unbedingtes `defer`-Cleanup (jeder Exit-Pfad). Fix: dieselbe
+`defer`-Konstruktion auf den kontinuierlichen Pfad übertragen (try/catch
+entfernt, da überflüssig). Vor dem Fix akkumulierten sich beim
+Stresstesten binnen Minuten über ein Dutzend verwaister
+`.mxl-tmp-*`-Verzeichnisse in `/dev/shm/omp-mxl`; nach beiden Fixes: 19
+von 19 Container-Boots (fünf davon gegen das frisch gebaute
+Produktions-Image, ohne jeden Bind-Mount-Override) ohne einen einzigen
+Fehler, keine verwaisten Verzeichnisse mehr, `mxl-info` bestätigte
+echten, laufenden Datenfluss (Head-Index wuchs 31 Grains in ~1s bei
+30fps).
+
+**`.gitignore`-Risiko, wie bei Nachtrag 78/79 bereits einmal in
+Kauf genommen:** `third_party/mxl/` ist komplett gitignored
+(`deploy/dev/install-mxl.sh` klont/checkt `dmf-mxl/mxl` bei einem festen
+Tag aus, aktuell `v1.1.0-beta-1`) — diese Änderungen leben NUR in der
+lokalen Arbeitskopie dieser Maschine, nicht im Git-Verlauf. Ein
+künftiger `install-mxl.sh`-Lauf zum Versions-Bump (Nachtrag 42 hat genau
+das schon einmal getan) würde `gst-mxl-rs/src/mxlsink/{imp.rs,state.rs}`
+und `lib/internal/src/FlowManager.cpp` auf den Upstream-Stand
+zurücksetzen und BEIDE Fixes stillschweigend verlieren, sofern sie nicht
+vorher stromaufwärts (github.com/dmf-mxl/mxl) eingereicht oder hier
+erneut nachgezogen werden — bewusst wie bei Nachtrag 78/79 in Kauf
+genommen statt eines Wrapper-Workarounds auf OMP-Seite, weil die
+eigentlichen Bugs strukturell im vendorten Sink/Kern liegen, nicht an
+der OMP-Aufrufstelle umgehbar sind. Dokumentiert hier + in
+`UMSETZUNG.md`, damit ein künftiger Versions-Bump diesen Eintrag findet.
+
+**Verifikation:** `cargo build -p gst-mxl-rs` grün (`cargo test`
+scheitert auf dieser Maschine an einer vorbestehenden, unabhängigen
+Umgebungsgrenze — System-GStreamer 1.22.0, `gstreamer-base-sys`
+verlangt für Tests `>= 1.24, ` kein Bezug zu dieser Änderung). C++-Kern
+per `cmake --build . --target mxl` neu gebaut. `deploy/pipeline-
+controller/build.sh` neu gebaut (frisches Produktions-Image mit beiden
+Fixes). 19/19 echte Container-Boots ohne Fehler (s. o.), Domain danach
+sauber (keine `.mxl-tmp-*`-Leichen), `mxl-info` bestätigt aktiven
+Schreiber mit wachsendem Head-Index. Alle Test-Container/-Domain-Reste
+aufgeräumt.
+
+**Dateien (alle unter `third_party/mxl/`, gitignored — s. o.):**
+`rust/gst-mxl-rs/src/mxlsink/imp.rs`,
+`rust/gst-mxl-rs/src/mxlsink/state.rs`,
+`lib/internal/src/FlowManager.cpp`.
+
+## 2026-08-04 (Nachtrag 117) — PIPELINE CONTROLLER: Adapter-Totalausfall (SSE-Deadlock) + falsche MXL-Auflösung root-ursächlich behoben, Ende-zu-Ende gegen echte Playlist verifiziert
+
+Direkte Fortsetzung von Nachtrag 116 (derselbe Nutzerauftrag "debugge und
+fixe"). Nachtrag 116 behob den gst-mxl-rs-internen `set_caps`-Bug; dieser
+Nachtrag behebt zwei GRUNDSÄTZLICH ANDERE Bugs, die trotzdem denselben
+äußeren Eindruck ("Pipeline startet nicht") erzeugten, plus die vom
+Nutzer gewünschte UI-Einschränkung.
+
+**Bug 1 (schwerwiegender als vermutet): `omp-pipeline-controller`s
+Rust-Adapter fror beim Laden der eingebetteten Oberfläche KOMPLETT ein,
+nicht nur `/events` selbst.** `ui.html` öffnet beim Laden unbedingt
+`new EventSource('/events')`. `proxy.rs`s `proxy()` liest JEDE Antwort
+vollständig per `resp.body_mut().read_to_vec()` — ein
+`text/event-stream`-Body endet nie, der Read blockiert für immer.
+`main.rs` läuft mit `#[tokio::main(flavor = "current_thread")]` (ein
+einziger Runtime-Thread) — dieser eine hängende Read blockierte damit
+den GESAMTEN Adapter, live bestätigt: nach dem ersten UI-Laden
+antwortete der externe Port auf GAR NICHTS mehr (`/healthz`,
+`/descriptor.json`, jede PC-eigene Route), während PIPELINE
+CONTROLLERs eigener interner Port (direkt per `podman exec` geprüft)
+weiterhin normal antwortete — der Adapter war blockiert, nicht PIPELINE
+CONTROLLER selbst. Fix (`proxy.rs`): `Content-Type: text/event-stream`
+wird an den Response-Headern erkannt, BEVOR der Body gelesen wird —
+Body-Read wird für diesen Fall übersprungen, stattdessen sofort ein
+synthetischer 501 zurückgegeben (der Browser-`EventSource` verbindet
+sich dann per Spezifikation automatisch neu, statt die ganze App
+lahmzulegen). Zusätzlich `timeout_recv_body` (10s) als zweite
+Absicherung gegen JEDE andere, aus anderem Grund hängende
+Backend-Antwort.
+
+**Bug 2 (der eigentliche Grund für "bunte Linien"): der `mxl`-
+Ausgangszweig verhandelte beim allerersten Verbindungsaufbau manchmal
+eine FALSCHE Auflösung.** `intervideosrc channel=rec_pgm_v` (Patch
+0001) hatte keine expliziten Caps — falls `intervideosink`
+(`MasterPipeline.js`) beim Verbindungsaufbau dieses Zweigs noch keinen
+einzigen Frame geliefert hatte, negoziierte `videoconvert` gegen einen
+GStreamer-internen Fallback statt der echten Master-Auflösung. Live
+bestätigt (nicht vermutet): `flow_def.json` des resultierenden
+MXL-Flows zeigte `"label": "MXL Test Flow, 240p30"`,
+`frame_width: 320`, `frame_height: 240` statt der tatsächlich
+konfigurierten 1920×1080@25 — `mxlsink` legt den Flow bei der ERSTEN
+`set_caps()` an, eine SPÄTERE korrekte Neuverhandlung auf die echte
+Auflösung erzeugt (nach dem in Nachtrag 116 gefixten
+Idempotenz-Verhalten) keinen zweiten Flow-Writer mehr — die falsche
+Auflösung blieb für die gesamte Ausgangs-Laufzeit bestehen, jeder
+nachfolgende (tatsächlich große) GStreamer-Buffer wurde dadurch in
+einen viel zu kleinen MXL-Grain-Payload hineinkopiert
+(`copy_len = min(payload.len(), data.buf.len())` truncierte
+faktisch), was beim Lesen als diagonal verschobene Streifen erscheint
+— exakt das gemeldete Bild. Per Debug-Build isoliert bestätigt: bei
+1920×1080 (48-pixel-aligned) stimmen `payload.len()` und
+`data.buf.len()` exakt überein (5.529.600 Bytes beidseitig), kein
+Stride-Bug in `gst-mxl-rs` selbst — das Problem war ausschließlich die
+FALSCHE verhandelte Auflösung, nicht die Byte-Kopie. Per echtem
+`gst-mxl-rs`-eigenem Rundlauf (`mxlsink`→`mxlsrc`, host-seitig, saubere
+Domain) zusätzlich verifiziert, dass Schreiben/Lesen bei KORREKTER
+Auflösung tatsächlich byte-exakt korrekt sind (echtes SMPTE-Bild ohne
+jeden Fehler) — der Bug lag ausschließlich am Rand (Caps-
+Verhandlungs-Timing), nicht im Kern.
+
+Fix (`deploy/pipeline-controller/patches/0001-mxl-output.diff` +
+`nodes/omp-pipeline-controller/src/main.rs`): Auflösung+Framerate
+werden jetzt vom Adapter explizit mitgegeben
+(`configure_mxl_output`: neue Felder `width`/`height`/
+`mxlFrameRateNum`/`mxlFrameRateDen`, dieselben Werte wie in der
+IS-04-Sender-Registrierung — neue gemeinsame Konstanten
+`PROGRAM_WIDTH`/`PROGRAM_HEIGHT`/`PROGRAM_FPS_NUM`/`PROGRAM_FPS_DEN`,
+damit beide Stellen nie auseinanderlaufen können) und direkt nach
+`intervideosrc` als expliziter Capsfilter erzwungen — `intervideosrc`
+muss dadurch auf die ECHTEN Master-Caps warten, statt einen Fallback zu
+akzeptieren, bevor `mxlsink` sie je zu Gesicht bekommt. Rückwärts-
+kompatibel (fehlen width/height, bleibt das alte unbeschränkte
+Verhalten). `server.js`s Settings-Whitelist (Patch
+0002-mxl-output-settings-api.diff) um `mxlFrameRateNum`/
+`mxlFrameRateDen` erweitert (sonst hätte `POST /api/outputs/settings`
+diese Felder stillschweigend verworfen).
+
+**Nutzerwunsch, per Rückfrage bestätigt (Video-/Audio-Sink-Dropdown,
+nicht der Ausgangs-Sink-Typ):** neuer Patch
+`0003-headless-sink-restriction.diff` — `ui.html`s "Video-Output"/
+"Audio-Output"-Einstellungen boten bisher Auto/X11/Wayland/XV/
+PulseAudio/ALSA an, allesamt im headless MXL-only-Container
+funktionsunfähig (kein Display-/Audiogerät). Auf die einzige
+tatsächlich funktionierende Option (`fakesink`) beschränkt, mit
+erklärendem Hinweistext.
+
+**Alle vier Fixes gemeinsam Ende-zu-Ende gegen eine echte, einfache
+Playlist verifiziert** (nicht nur Idle-Zustand wie in Nachtrag 116):
+`POST /api/playlist/set` mit einem SMPTE-Testbild-Event,
+`POST /api/playlist/start` → `_state:"playing"` bestätigt, echtes
+JPEG-Frame aus dem Viewer-Preview zeigt saubere, korrekte
+SMPTE-Farbbalken ohne jeden Artefakt, `flow_def.json` zeigt die
+korrekte 1080p25-Auflösung von der allerersten Verhandlung an. Fünf
+komplette Container-Boot-Zyklen gegen das finale Produktions-Image
+durchgeführt, alle fehlerfrei.
+
+**Nebenbefund während dieser Sitzung: Festplatte lief während der
+wiederholten Image-Neubauten voll** (`no space left on device`,
+170GB+ ungenutzte Podman-Images/Buildah-Zwischencontainer aus dieser
+und früheren Sitzungen). `podman image prune -f` + `buildah rm --all`
+(verwaiste `*-working-container` von einem fehlgeschlagenen Build)
+schufen wieder Platz; dabei auch einen nie gestarteten (Status
+"Created", keine Daten) `omp-step-ca`-Container mitentfernt — folgenlos
+per `make mtls-up` neu anlegbar, falls gebraucht.
+
+**Verifikation:** `cargo build --workspace --bins` (nodes) grün,
+`cargo build -p gst-mxl-rs` grün. Fünf frische Produktions-Image-Boots
+(kein Bind-Mount-Override) alle fehlerfrei, echte Playlist-Wiedergabe
+bestätigt, UI-Dropdown-Einschränkung im ausgelieferten `ui.html`
+bestätigt.
+
+**Dateien:** `nodes/omp-pipeline-controller/src/{main.rs,proxy.rs}`,
+`deploy/pipeline-controller/patches/{0001-mxl-output.diff,0002-mxl-output-settings-api.diff}`
+(überarbeitet), `deploy/pipeline-controller/patches/0003-headless-sink-restriction.diff`
+(neu).

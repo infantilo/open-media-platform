@@ -114,20 +114,23 @@ Monatsansicht, per Maus verschieb-/größenveränderbare Zeitpläne), eine
 Ressourcen-Vorschau (typische CPU-/RAM-Last je Node-Typ direkt im
 Katalog, aus echter Messhistorie), ein GUI-Import-Weg für
 containerisierte Fremd-Microservices (Podman-Images, Admission-Check,
-mehrere Versionen desselben Typs parallel) und eine erste,
-ratschlagende Placement-Engine (Überlast-Alarm + Zielhost-Vorschlag,
-berücksichtigt bereits geplante Zeitpläne anderer Workflows). Seit
-Kapitel K7 Teil 4 zusätzlich ein automatischer Hot-Standby-Failover für
-kritische Rollen (`Role.standbyFor`, Crash-Loop- oder
-Host-Offline-ausgelöst, Bedienzustand wandert über den bestehenden
-State-Export/Import-Mechanismus mit) sowie, seit D8, ein
-Workflow-Latenzbudget (`targetLatencyFrames`): der Orchestrator lehnt
-eine Verkabelung, die das Zielband nicht erreichen kann, hart ab und
-gleicht zu kurze Pfade automatisch per `setOutputDelay()` auf
-delay-fähigen Nodes aus (bisher `omp-scaler`, `omp-video-mixer-me`).
+mehrere Versionen desselben Typs parallel) und eine Placement-Engine
+(Überlast-Alarm + Zielhost-Vorschlag, berücksichtigt bereits geplante
+Zeitpläne anderer Workflows) — seit Kapitel D6 Teil 4 pro Workflow-Rolle
+konfigurierbar zwischen rein ratschlagend (Default), einer
+Bestätigungsfrist mit automatischem Ausführen bei Ablauf und sofortiger
+automatischer Ausführung, jeweils per echtem Make-before-break-Umzug auf
+einen gesunden Ausweichhost. Seit Kapitel K7 Teil 4 zusätzlich ein
+automatischer Hot-Standby-Failover für kritische Rollen
+(`Role.standbyFor`, Crash-Loop- oder Host-Offline-ausgelöst,
+Bedienzustand wandert über den bestehenden State-Export/Import-
+Mechanismus mit) sowie, seit D8, ein Workflow-Latenzbudget
+(`targetLatencyFrames`): der Orchestrator lehnt eine Verkabelung, die
+das Zielband nicht erreichen kann, hart ab und gleicht zu kurze Pfade
+automatisch per `setOutputDelay()` auf delay-fähigen Nodes aus (bisher
+`omp-scaler`, `omp-video-mixer-me`).
 
-Offen: automatische (statt nur ratschlagende) Placement-Entscheidungen,
-I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-
+Offen: I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-
 Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
 Hardware-Beschaffung), ein NDI-Gateway sowie proprietäres Dante (Dante
 im AES67-Modus läuft bereits über `omp-aes67-gateway`).

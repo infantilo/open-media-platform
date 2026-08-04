@@ -264,15 +264,20 @@ kein Plattform-Fork.
   `omp-srt-gateway` — ST 2110 ⇄ SRT, RIST folgt bei Bedarf als weiterer
   `omp-mediaio`-Transport nach demselben Muster (nicht Teil von D4).
 
-### 6.1 Resource-Aware Placement & Live-Migration (geplant, ab P2)
+### 6.1 Resource-Aware Placement & Live-Migration (Kern umgesetzt, Rest ab P2)
 
-**Status (2026-07-28):** Telemetrie + Placement-Engine (advisory, inkl.
+**Status (2026-08-04):** Telemetrie + Placement-Engine (inkl.
 Schedule-Forecast als Eingang für `SelectHost`) sind umgesetzt
 (`UMSETZUNG.md` D6 Teil 1/2, Nachtrag 98/99) — Alarm+Vorschlag bei
-Überlast läuft live. **Weiterhin offen:** I/O-Karten-Claim/Release
-(kein Geräte-Inventar existiert), Eskalationsstufen jenseits von
-`advisory` (`auto-confirm-window`/`auto`), GPU/NIC-Telemetrie,
-Cloud-Kostenfaktor — genau die in D6/D7 dokumentierten Scope-Grenzen.
+Überlast läuft live. **Seit D6 Teil 4 (2026-08-04, Nachtrag 115) sind
+alle drei Eskalationsstufen aus Punkt 2 unten umgesetzt** —
+`advisory` (Default), `auto-confirm-window` (Timer + manuelles
+Confirm/Cancel) und `auto` (sofort) —, jeweils pro Workflow-Rolle
+konfigurierbar (`Role.Placement.Escalation`), inkl. echtem
+Make-before-break-Protokoll (Punkt 3 unten). **Weiterhin offen:**
+I/O-Karten-Claim/Release (kein Geräte-Inventar existiert), GPU/NIC-
+Telemetrie, Cloud-Kostenfaktor — genau die in D6/D7 dokumentierten
+Scope-Grenzen, unverändert durch D6 Teil 4.
 
 **Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
 jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete
