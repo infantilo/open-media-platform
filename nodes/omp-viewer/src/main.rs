@@ -6,18 +6,21 @@
 //! Kommandozeile) — dadurch funktioniert Drag & Drop im bestehenden
 //! Flow-Editor (B3) sofort, ohne Orchestrator-Änderung.
 
+mod audio_meters;
 mod pipeline;
 mod uibundle;
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use omp_mediaio::levels;
 use omp_mediaio::preview;
 use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
-    Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
-    ReceiverSpec, SetError,
+    Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, NodeHandle, ParamSpec, ParamStore,
+    ParamType, RawResponse, ReceiverSpec, SetError,
 };
 use serde_json::Value;
 
@@ -53,10 +56,62 @@ impl ReceiverControl for ViewerControl {
     }
 }
 
+/// Setzt IS-05-PATCHes auf einen dynamisch per `addAudioInput`
+/// angelegten Audio-Eingang um (2026-08-06) — gleiches Muster wie
+/// `ViewerControl`, aber ohne Pipeline-Neuaufbau: `AudioMeterHandle::
+/// add_input`/`remove_input` bauen nur den EINEN betroffenen
+/// Meter-Zweig chirurgisch an-/ab (s. `audio_meters.rs`-Moduldoku).
+struct AudioInputControl {
+    input_id: String,
+    registry: RegistryClient,
+    meter: audio_meters::AudioMeterHandle,
+}
+
+impl ReceiverControl for AudioInputControl {
+    fn apply(&self, resource: &ReceiverResource) {
+        match (&resource.sender_id, resource.master_enable) {
+            (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
+                Ok(sender) => match sender.flow_id {
+                    Some(flow_id) => self.meter.add_input(self.input_id.clone(), flow_id),
+                    None => eprintln!("omp-viewer: sender {sender_id} has no flow_id"),
+                },
+                Err(e) => eprintln!("omp-viewer: resolve sender {sender_id} failed: {e}"),
+            },
+            _ => self.meter.remove_input(self.input_id.clone()),
+        }
+    }
+}
+
+struct AudioInputEntry {
+    label: String,
+    connection: Arc<ReceiverConnection<AudioInputControl>>,
+}
+
+/// Kommandos von `ViewerStore::invoke` (synchroner HTTP-Handler-Kontext,
+/// s. `omp_node_sdk::server`) an `audio_input_worker` (asynchroner Task
+/// auf demselben `current_thread`-Runtime wie `main()`) — `add_receiver`/
+/// `remove_receiver` sind async (registrieren bei der Registry über
+/// `spawn_blocking`), `ParamStore::invoke` selbst ist aber bewusst
+/// synchron (Trait-Signatur, `omp_node_sdk::server`) und läuft auf einem
+/// `tiny_http`-Worker-Thread, nicht auf dem Tokio-Runtime-Thread — ein
+/// `Handle::block_on` von dort auf einen `current_thread`-Runtime würde
+/// dort zuverlässig fehlschlagen (nur der Thread, der den Runtime
+/// ursprünglich getrieben hat, darf `block_on`en). Tokios
+/// `UnboundedSender::send` ist dagegen ein normaler synchroner Aufruf,
+/// von jedem Thread sicher nutzbar — dieselbe Brücke, die `pipeline.rs`
+/// bereits für `pipeline::Event` in die andere Richtung nutzt.
+enum ViewerCommand {
+    AddAudioInput { label: Option<String> },
+    RemoveAudioInput { id: String },
+}
+
 struct ViewerStore {
     connected_flow_id: Arc<Mutex<String>>,
     preview_url: String,
     connection: Arc<ReceiverConnection<ViewerControl>>,
+    levels_url: String,
+    audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>>,
+    commands: tokio::sync::mpsc::UnboundedSender<ViewerCommand>,
 }
 
 impl ParamStore for ViewerStore {
@@ -78,8 +133,36 @@ impl ParamStore for ViewerStore {
                     range: None,
                     readonly: true,
                 },
+                // JSON-SSE-Strom {inputId,rms,peak} — ein Port für ALLE
+                // dynamischen Audio-Eingänge (s. audio_meters.rs-
+                // Moduldoku "teilen sich EINEN Broadcaster").
+                ParamSpec {
+                    name: "levelsUrl".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                // JSON-Array [{id,label}] — die aktuell angelegten
+                // Audio-Eingänge (2026-08-06, dynamische Eingangszahl).
+                ParamSpec {
+                    name: "audioInputs".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
-            methods: vec![],
+            methods: vec![
+                MethodSpec {
+                    name: "addAudioInput".to_string(),
+                    args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
+                },
+                MethodSpec {
+                    name: "removeAudioInput".to_string(),
+                    args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
+                },
+            ],
         }
     }
 
@@ -89,6 +172,15 @@ impl ParamStore for ViewerStore {
                 *self.connected_flow_id.lock().expect("lock poisoned")
             )),
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
+            "levelsUrl" => Some(serde_json::json!(self.levels_url)),
+            "audioInputs" => Some(serde_json::json!(
+                self.audio_inputs
+                    .lock()
+                    .expect("lock poisoned")
+                    .iter()
+                    .map(|(id, entry)| serde_json::json!({"id": id, "label": entry.label}))
+                    .collect::<Vec<_>>()
+            )),
             _ => None,
         }
     }
@@ -97,12 +189,26 @@ impl ParamStore for ViewerStore {
         Err(SetError::ReadOnly)
     }
 
-    fn invoke(
-        &self,
-        _name: &str,
-        _args: &serde_json::Map<String, Value>,
-    ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+    fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        match name {
+            "addAudioInput" => {
+                let label = args
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                self.commands
+                    .send(ViewerCommand::AddAudioInput { label })
+                    .map_err(|_| InvokeError::Unknown)
+            }
+            "removeAudioInput" => {
+                let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+                self.commands
+                    .send(ViewerCommand::RemoveAudioInput { id })
+                    .map_err(|_| InvokeError::Unknown)
+            }
+            _ => Err(InvokeError::Unknown),
+        }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -113,7 +219,68 @@ impl ParamStore for ViewerStore {
                 body,
             });
         }
+        {
+            let audio_inputs = self.audio_inputs.lock().expect("lock poisoned");
+            for entry in audio_inputs.values() {
+                if let Some((status, content_type, body)) = entry.connection.handle(method, path, body) {
+                    return Some(RawResponse {
+                        status,
+                        content_type,
+                        body,
+                    });
+                }
+            }
+        }
         uibundle::route(method, path)
+    }
+}
+
+/// Verarbeitet `ViewerCommand`s asynchron (s. dortige Doku) — läuft als
+/// eigener Tokio-Task auf demselben `current_thread`-Runtime wie
+/// `main()`, solange der Node lebt.
+async fn audio_input_worker(
+    mut commands: tokio::sync::mpsc::UnboundedReceiver<ViewerCommand>,
+    handle: NodeHandle,
+    registry: RegistryClient,
+    meter: audio_meters::AudioMeterHandle,
+    audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>>,
+) {
+    while let Some(cmd) = commands.recv().await {
+        match cmd {
+            ViewerCommand::AddAudioInput { label } => {
+                let receiver_id = omp_node_sdk::idgen::new_v4();
+                let spec = ReceiverSpec {
+                    id: Some(receiver_id.clone()),
+                    transport: Some(TRANSPORT_MXL.to_string()),
+                    media_types: Some(vec!["audio/float32".to_string()]),
+                    label,
+                };
+                match handle.add_receiver(spec).await {
+                    Ok(receiver) => {
+                        let connection = Arc::new(ReceiverConnection::new(
+                            receiver_id.clone(),
+                            AudioInputControl {
+                                input_id: receiver_id.clone(),
+                                registry: registry.clone(),
+                                meter: meter.clone(),
+                            },
+                        ));
+                        audio_inputs.lock().expect("lock poisoned").insert(
+                            receiver_id,
+                            AudioInputEntry { label: receiver.label, connection },
+                        );
+                    }
+                    Err(e) => eprintln!("omp-viewer: addAudioInput failed: {e}"),
+                }
+            }
+            ViewerCommand::RemoveAudioInput { id } => {
+                audio_inputs.lock().expect("lock poisoned").remove(&id);
+                meter.remove_input(id.clone());
+                if let Err(e) = handle.remove_receiver(&id).await {
+                    eprintln!("omp-viewer: removeAudioInput failed: {e}");
+                }
+            }
+        }
     }
 }
 
@@ -151,12 +318,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         preview::spawn(&format!("0.0.0.0:{preview_port}"), broadcaster.clone())?;
     let preview_url = format!("http://{host}:{actual_preview_port}/preview");
 
+    // Eigener SSE-Port für die Pegelanzeigen dynamischer Audio-Eingänge
+    // (2026-08-06, s. `audio_meters.rs`-Moduldoku) — dieselbe, bereits
+    // etablierte Wahl (`omp_mediaio::levels`) wie bei `omp-audio-mixer`.
+    let levels_port: u16 = env_or("OMP_VIEWER_LEVELS_PORT", "0").parse()?;
+    let levels_broadcaster = Arc::new(levels::Broadcaster::new());
+    let actual_levels_port = levels::spawn(&format!("0.0.0.0:{levels_port}"), levels_broadcaster.clone())?;
+    let levels_url = format!("http://{host}:{actual_levels_port}/levels");
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
     let pipeline_config = pipeline::Config {
-        domain,
+        domain: domain.clone(),
         sink_element,
     };
     let pipeline_shutdown = shutdown.clone();
@@ -183,6 +358,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
+    // Zweite, unabhängige Pipeline nur für Audio-Eingangs-Pegel (s.
+    // `audio_meters.rs`-Moduldoku, warum getrennt vom Video-Pfad oben).
+    let (level_tx, mut level_rx) = tokio::sync::mpsc::unbounded_channel::<audio_meters::LevelEvent>();
+    let meter_shutdown = shutdown.clone();
+    let (meter_ready_tx, meter_ready_rx) = tokio::sync::oneshot::channel();
+    let meter_thread = std::thread::spawn(move || {
+        audio_meters::run(domain, level_tx, meter_shutdown, meter_ready_tx)
+    });
+    let meter_handle = match meter_ready_rx.await {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(e)) => {
+            eprintln!("omp-viewer: audio meter pipeline init failed: {e}");
+            return Err(e.into());
+        }
+        Err(_) => {
+            eprintln!("omp-viewer: audio meter thread ended before reporting readiness");
+            return Err("audio meter thread ended before reporting readiness".into());
+        }
+    };
+    tokio::spawn(async move {
+        while let Some(event) = level_rx.recv().await {
+            let json = serde_json::json!({
+                "inputId": event.input_id,
+                "rms": event.rms,
+                "peak": event.peak,
+            })
+            .to_string();
+            levels_broadcaster.publish(&json);
+        }
+    });
+
     let media_ready_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
     let connection = Arc::new(ReceiverConnection::new(
@@ -194,10 +400,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         },
     ));
 
+    let audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>> = Arc::new(Mutex::new(HashMap::new()));
+    let (commands_tx, commands_rx) = tokio::sync::mpsc::unbounded_channel::<ViewerCommand>();
+
     let store: Arc<dyn ParamStore> = Arc::new(ViewerStore {
         connected_flow_id,
         preview_url,
         connection,
+        levels_url,
+        audio_inputs: audio_inputs.clone(),
+        commands: commands_tx,
     });
 
     let handle = omp_node_sdk::start(
@@ -205,7 +417,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             label,
             host,
             port,
-            registry_url,
+            registry_url: registry_url.clone(),
             nats_url,
             senders: vec![],
             receivers: vec![ReceiverSpec {
@@ -226,6 +438,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
+
+    // Erst jetzt verfügbar (braucht `handle` aus `start()`) — s.
+    // `ViewerCommand`-Doku zur Sync/Async-Brücke.
+    tokio::spawn(audio_input_worker(
+        commands_rx,
+        handle.clone(),
+        RegistryClient::new(registry_url),
+        meter_handle,
+        audio_inputs,
+    ));
 
     let events = async {
         while let Some(event) = rx.recv().await {
@@ -249,6 +471,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     shutdown.store(true, Ordering::Relaxed);
     let _ = pipeline_thread.join();
+    let _ = meter_thread.join();
 
     Ok(())
 }

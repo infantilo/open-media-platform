@@ -9,6 +9,16 @@
 // intern denselben previewUrl-Parameter auf und reicht die Antwort
 // durch) — derselbe Auth-Schutz wie jeder andere `/api/v1`-Endpunkt,
 // der Browser kennt nie Host/Port des zweiten Node-Ports.
+//
+// 2026-08-06 (Nutzerwunsch: "dynamische Anzahl an Eingängen ... damit
+// ich zb den mxf player hinrouten kann und alle Gruppen sehe"): zeigt
+// jetzt zusätzlich `<omp-meter>`-Pegelbalken für beliebig viele, zur
+// Laufzeit hinzufügbare Audio-Eingänge — jeder ein eigener,
+// NMOS-discoverbarer IS-05-Receiver (`main.rs`s `addAudioInput`/
+// `removeAudioInput`, `omp_node_sdk::NodeHandle::add_receiver`, erste
+// Nutzung dieser SDK-Fähigkeit). `<omp-meter>` selbst kommt aus
+// `ui/kit` (global von der Shell registriert, s. `ui/kit/index.ts`) —
+// hier direkt per `document.createElement`, kein eigener Import nötig.
 class OmpViewerPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -22,6 +32,20 @@ class OmpViewerPanel extends HTMLElement {
         border: 1px solid #444;
       }
       p { font-size: 12px; color: #888; }
+      .audio-inputs { margin-top: 10px; }
+      .audio-inputs h4 { margin: 0 0 6px 0; font-size: 12px; color: #aaa; font-weight: normal; }
+      .input-row {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+      }
+      .input-row .label { font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .input-row button {
+        background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
+        cursor: pointer; font-size: 11px; padding: 2px 6px;
+      }
+      .add-btn {
+        margin-top: 4px; background: #2d4a2d; color: #eee; border: 1px solid #4a7a4a;
+        border-radius: 3px; cursor: pointer; font-size: 11px; padding: 4px 8px;
+      }
     `;
 
     const img = document.createElement("img");
@@ -31,21 +55,113 @@ class OmpViewerPanel extends HTMLElement {
     const status = document.createElement("p");
     status.textContent = "lade Vorschau …";
 
-    shadow.append(style, img, status);
+    const audioSection = document.createElement("div");
+    audioSection.className = "audio-inputs";
+    const audioTitle = document.createElement("h4");
+    audioTitle.textContent = "Audio-Eingänge";
+    const rowsContainer = document.createElement("div");
+    const addBtn = document.createElement("button");
+    addBtn.className = "add-btn";
+    addBtn.textContent = "+ Audio-Eingang";
+    audioSection.append(audioTitle, rowsContainer, addBtn);
+
+    shadow.append(style, img, status, audioSection);
 
     img.addEventListener("load", () => status.remove());
     img.addEventListener("error", () => {
       status.textContent = "keine Vorschau verfügbar";
     });
-    // `<img src>` kann keinen `Authorization`-Header setzen (Web-
-    // Plattform-Einschränkung) — derselbe `?access_token=`-Fallback wie
-    // bei der Shell-eigenen SSE-Verbindung (ui/shell/connection.ts),
-    // ohne den bekäme jede Vorschau ein stilles 401 statt eines Bildes,
-    // sobald ein echter Nutzer angemeldet ist (live per CDP gefunden).
     const token = localStorage.getItem("omp-auth-token");
     img.src = token
       ? `/api/v1/nodes/${nodeId}/stream/previewUrl?access_token=${encodeURIComponent(token)}`
       : `/api/v1/nodes/${nodeId}/stream/previewUrl`;
+
+    const call = (method, body) =>
+      fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+
+    const getParam = async (name) => {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`);
+      if (!res.ok) return undefined;
+      return (await res.json()).value;
+    };
+
+    // id -> {row, meter}. Neu ankommende `inputId`s aus dem SSE-Strom,
+    // die (noch) keine Zeile haben (Race zwischen `addAudioInput`-Antwort
+    // und dem nächsten `renderInputs()`-Poll), werden einfach verworfen —
+    // der nächste Poll holt sie nach.
+    const meterEls = new Map();
+
+    const renderInputs = async () => {
+      const inputs = (await getParam("audioInputs")) || [];
+      const currentIds = new Set(inputs.map((i) => i.id));
+      for (const id of meterEls.keys()) {
+        if (!currentIds.has(id)) {
+          meterEls.get(id).row.remove();
+          meterEls.delete(id);
+        }
+      }
+      for (const input of inputs) {
+        if (meterEls.has(input.id)) {
+          meterEls.get(input.id).row.querySelector(".label").textContent = input.label;
+          continue;
+        }
+        const row = document.createElement("div");
+        row.className = "input-row";
+        const meter = document.createElement("omp-meter");
+        const labelEl = document.createElement("span");
+        labelEl.className = "label";
+        labelEl.textContent = input.label;
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "✕";
+        removeBtn.addEventListener("click", () => call("removeAudioInput", { id: input.id }).then(renderInputs));
+        row.append(meter, labelEl, removeBtn);
+        rowsContainer.appendChild(row);
+        meterEls.set(input.id, { row, meter });
+      }
+    };
+
+    addBtn.addEventListener("click", () => {
+      // Drag & Drop im Flow-Editor verbindet die Quelle danach wie bei
+      // jedem anderen Receiver auch (IS-05-PATCH, `AudioInputControl`
+      // in `main.rs`) — dieser Button legt nur den leeren Empfänger an.
+      call("addAudioInput", {}).then(() => setTimeout(renderInputs, 500));
+    });
+
+    renderInputs();
+    this._inputsInterval = setInterval(renderInputs, 3000);
+
+    // Ein SSE-Strom für ALLE Audio-Eingänge (`inputId`-markiert), s.
+    // `main.rs`/`audio_meters.rs`-Moduldoku — gleiches Muster wie
+    // `omp-audio-mixer`s `/levels`.
+    getParam("levelsUrl").then((url) => {
+      if (!url) return;
+      const streamUrl = token
+        ? `/api/v1/nodes/${nodeId}/stream/levelsUrl?access_token=${encodeURIComponent(token)}`
+        : `/api/v1/nodes/${nodeId}/stream/levelsUrl`;
+      this._levelsSource = new EventSource(streamUrl);
+      this._levelsSource.onmessage = (ev) => {
+        let parsed;
+        try {
+          parsed = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+        const refs = meterEls.get(parsed.inputId);
+        if (refs) {
+          refs.meter.value = parsed.rms;
+          refs.meter.peak = parsed.peak;
+        }
+      };
+    });
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._inputsInterval);
+    if (this._levelsSource) this._levelsSource.close();
   }
 }
 
