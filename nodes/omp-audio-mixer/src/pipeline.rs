@@ -92,38 +92,13 @@ pub enum Event {
     },
 }
 
-/// dB → 0..1-Näherung fürs `<omp-meter>`-Kit-Element (0 dBFS = 1.0,
-/// alles darunter linear kleiner) — dieselbe Formel wie `db_to_linear`
-/// unten, hier separat benannt, weil sie fachlich etwas anderes
-/// ausdrückt (Anzeige-Pegel, nicht Fader-Gain).
-fn db_to_meter_level(db: f64) -> f64 {
-    10f64.powf(db / 20.0).clamp(0.0, 1.0)
-}
-
-/// Liest die `rms`/`peak`-Arrays aus einem `level`-Element-Bus-Message
-/// und mittelt sie zu einem einzelnen Wert — das Kit-Meter zeigt einen
-/// Balken pro Kanalzug, keine getrennte L/R-Anzeige (Teil 1). **Typ ist
-/// `glib::ValueArray` (`GValueArray`), nicht `gst::Array`
-/// (`GST_TYPE_ARRAY`)** — per Live-Test mit `gst-launch-1.0 -m`
-/// verifiziert (`rms=(GValueArray)< ... >` in der Bus-Message-Ausgabe),
-/// nicht angenommen: mit `gst::Array` schlug `structure.get()` still
-/// fehl (kein Panic, nur `Err` → `?` → `None`), sodass nie ein Level-
-/// Event verschickt wurde, obwohl die Bus-Messages selbst ankamen — ein
-/// per Live-Verifikation (`curl`/rohes TCP gegen `/levels`, 0 Bytes
-/// Body trotz erfolgreicher Verbindung) gefundener Bug.
-fn parse_level_message(structure: &gst::StructureRef) -> Option<(f64, f64)> {
-    let rms = structure.get::<gst::glib::ValueArray>("rms").ok()?;
-    let peak = structure.get::<gst::glib::ValueArray>("peak").ok()?;
-    let avg = |arr: &gst::glib::ValueArray| -> f64 {
-        let values: Vec<f64> = arr.iter().filter_map(|v| v.get::<f64>().ok()).collect();
-        if values.is_empty() {
-            f64::NEG_INFINITY
-        } else {
-            values.iter().sum::<f64>() / values.len() as f64
-        }
-    };
-    Some((db_to_meter_level(avg(&rms)), db_to_meter_level(avg(&peak))))
-}
+// `db_to_meter_level`/`parse_level_message` leben seit 2026-08-06 in
+// `omp_mediaio::levels` (s. dortige Moduldoku "nach hier verschoben") —
+// `omp-viewer`s neue dynamische Audio-Eingangs-Pegelanzeigen sind der
+// zweite Verbraucher, der diese Verschiebung motiviert hat. Re-Export
+// hier vermieden (Aufrufer unten nutzen `levels::`-Präfix direkt), reine
+// Verschiebung ohne Verhaltensänderung.
+use omp_mediaio::levels::parse_level_message;
 
 /// Woher ein Kanal sein Audio bezieht — `Internal` (Testton) oder
 /// `External` (echter MXL-Audio-Flow, per `flow_id` adressiert; die

@@ -48,5 +48,21 @@ preview = ["dep:tiny_http", "dep:gstreamer-app"]
 # Multipart-Framing (grundverschiedene Framing-Logik, s. audio_stream.rs
 # Moduldoku), und kein Consumer braucht je beides gleichzeitig.
 audio-stream = ["dep:tiny_http", "dep:gstreamer-app"]
+# Feature `pcm-stream` (2026-08-06, `omp-audio-monitor`-Redesign):
+# rohes/unkomprimiertes PCM-über-chunked-HTTP statt MP3 —
+# Nutzerwunsch nach spürbar geringerer Latenz fürs Browser-Abhören
+# (kein Encoder-Lookahead wie bei `lamemp3enc`) und ohne native
+# `<audio controls>`-Oberfläche. Bewusst weiterhin über denselben
+# generischen Orchestrator-Stream-Proxy ausgeliefert wie `audio-stream`/
+# `preview`/`levels` (reiner GET-Request/Antwort-Strom, kein WebSocket-
+# Upgrade) — der Proxy kennt nur HTTP request/response, eine
+# Protokoll-Upgrade-fähige Variante wäre eine eigene, hier nicht
+# gerechtfertigte Orchestrator-Änderung gewesen.
+pcm-stream = ["dep:tiny_http", "dep:gstreamer-app"]
+# Feature `levels`: SSE-Pegelanzeigen (K4-Teil-1, ursprünglich
+# `omp-audio-mixer`-lokal, 2026-08-06 hierher gehoben, s. levels.rs-
+# Moduldoku) — `omp-viewer`s dynamische Audio-Eingänge sind der zweite
+# Verbraucher, der diese Verschiebung motiviert hat.
+levels = ["dep:tiny_http"]
 fabrics = ["dep:libloading", "dep:bindgen"]
 ptp = ["dep:gstreamer-net"]

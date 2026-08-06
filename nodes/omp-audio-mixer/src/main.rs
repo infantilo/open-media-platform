@@ -14,7 +14,6 @@
 //! B6/das eigene UI-Bundle re-fetchen entsprechend (kein Push-Mechanismus
 //! nötig, `ARCHITECTURE.md` §13.2).
 
-mod levels;
 mod pipeline;
 mod uibundle;
 
@@ -23,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use omp_mediaio::levels;
 use omp_node_sdk::health;
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{

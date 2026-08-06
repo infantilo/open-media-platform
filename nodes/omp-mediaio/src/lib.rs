@@ -31,6 +31,12 @@ pub mod preview;
 #[cfg(feature = "audio-stream")]
 pub mod audio_stream;
 
+#[cfg(feature = "pcm-stream")]
+pub mod pcm_stream;
+
+#[cfg(feature = "levels")]
+pub mod levels;
+
 #[cfg(feature = "ptp")]
 pub mod ptp;
 
