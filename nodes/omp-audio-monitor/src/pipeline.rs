@@ -1,11 +1,13 @@
 //! GStreamer-Pipeline von `omp-audio-monitor` (Nutzerwunsch 2026-07-29:
 //! "wir müssen auch das audio abhören können"): liest einen per IS-05-
 //! Receiver-PATCH gewählten MXL-Audio-Flow über
-//! `omp_mediaio::mxl::MxlAudioInput` und speist ihn in einen MP3-über-
-//! HTTP-Zweig (`omp_mediaio::audio_stream`) — exaktes Strukturmuster von
-//! `omp-viewer::pipeline` (MJPEG statt MP3, Video statt Audio), inkl.
-//! desselben "gesamte Pipeline neu aufbauen statt Pad-Relinking"-Musters
-//! bei jedem Quellwechsel.
+//! `omp_mediaio::mxl::MxlAudioInput` und speist ihn in einen rohen
+//! PCM-über-HTTP-Zweig (`omp_mediaio::pcm_stream`, 2026-08-06 an
+//! Stelle des ursprünglichen MP3-Zweigs — s. dortige Moduldoku:
+//! spürbar geringere Latenz ohne Encoder-Lookahead) — exaktes
+//! Strukturmuster von `omp-viewer::pipeline` (MJPEG statt PCM, Video
+//! statt Audio), inkl. desselben "gesamte Pipeline neu aufbauen statt
+//! Pad-Relinking"-Musters bei jedem Quellwechsel.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,8 +16,8 @@ use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
-use omp_mediaio::audio_stream::{self, Broadcaster};
 use omp_mediaio::mxl::{MxlAudioInput, MxlContext};
+use omp_mediaio::pcm_stream::{self, Broadcaster};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -90,7 +92,7 @@ fn build(
         gst::PadProbeReturn::Remove
     });
 
-    audio_stream::build_mp3_branch(&pipeline, &input.tail, broadcaster)?;
+    pcm_stream::build_pcm_branch(&pipeline, &input.tail, broadcaster)?;
 
     pipeline
         .set_state(gst::State::Playing)
