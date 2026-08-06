@@ -14976,3 +14976,179 @@ erneut grün, Live-Test mit dem bereinigten Binary wiederholt
 (Workspace-Member), `deploy/catalog.json` (neuer Eintrag,
 `runner:"process"`, Debug-Pfad wie bei anderen Nodes im Dev-Betrieb
 üblich).
+
+## 2026-08-06 (Nachtrag 121) — omp-mxf-player: Programmgruppen/Shuffle-Presets Postgres-gestützt statt hartcodiert, dabei echten mxfdemux-Thread-Leak gefunden (teilweise behoben, Rest als offenes Plugin-Problem dokumentiert)
+
+Nutzerauftrag: "als i hate hardcoding, we should be able to define
+shuffle presets and output groups dynamically in player settings for
+easier future adaptions" — die in Nachtrag 120 gerade erst verifizierten
+5 Programmgruppen/13 Presets aus `nodes/omp-mxf-player/src/presets.rs`
+sollten nicht länger eine Rust-Neukompilierung für jede ORF-Anpassung
+erfordern. Zwei Vorentscheidungen per Rückfrage geklärt: Speicherung in
+Postgres (nicht Datei — konsistent mit D1, "PostgreSQL für Layouts/
+Snapshots statt Datei-Backend"), Programmgruppen-Änderungen dürfen einen
+Neustart der Instanz erfordern (wie der Sender-Satz jedes anderen Nodes
+in diesem System auch — kein neuer Live-Sender-Add/Remove-Mechanismus
+nötig).
+
+**Architektur** (bewusst am nächstliegenden Vorbild orientiert, nicht neu
+erfunden): gleiches Ein-Blob-pro-Schlüssel-Muster wie `catalog_entries`
+(0009) und `layouts` (0001) — neue, bewusst GENERISCHE Tabelle
+`node_type_settings(node_type TEXT PRIMARY KEY, data JSONB, updated_at)`
+(Migration `0013_node_type_settings.sql`) statt einer mxf-player-
+spezifischen Tabelle, damit künftige Node-Typen mit eigenen
+Einstellungen denselben Mechanismus ohne neue Migration mitnutzen
+können — nur der Handler (`orchestrator/internal/httpapi/
+node_settings_handlers.go`) kennt das mxf-player-spezifische Schema samt
+Validierung (eindeutige, nicht-leere Group-/Preset-IDs, Kanalzahl
+1-64, jede Preset-Route referenziert eine tatsächlich existierende
+Gruppe innerhalb ihrer Kanalzahl, mindestens eine Gruppe/ein Preset
+bleibt übrig). Routen: `GET /api/v1/node-types/omp-mxf-player/settings`
+(jeder authentifizierte Nutzer — auch die Node-Instanz selbst beim
+Start), `PUT` admin-only (`requireVerbGlobal(authz.VerbAdmin, ...)`,
+dieselbe Schwelle wie `POST /api/v1/catalog`) mit Ganz-Dokument-Ersatz
+(kein PATCH-per-Feld, `feedback_editors_need_explicit_save`). Fehlt der
+Postgres-Eintrag (nie gespeichert), liefert GET die ORF-Standardwerte
+aus Nachtrag 120 unverändert.
+
+Node-Seite (`nodes/omp-mxf-player/src/orchestrator_settings.rs`, neu):
+identisches Service-Token-Muster wie `omp-playout-automation::remote::
+fetch_service_token` (`OMP_LAUNCH_SECRET` gegen ein Bearer-Token
+tauschen, ARCHITECTURE.md §24.1) — bewusst NICHT dessen volle
+`ProxyClient`/Token-Refresh-Maschinerie übernommen, da dieser Node das
+Token nur EINMAL beim Start braucht. `presets.rs`s `GROUPS`/`PRESETS`
+wurden von `&'static`-Konstanten auf owned `Settings{groups,presets}`
+umgestellt (Struct-Form unverändert) und bleiben als
+`default_settings()`-Fallback bestehen — jeder Fehler beim Laden
+(Launcher-Env fehlt, Orchestrator nicht erreichbar, ungültige Antwort)
+fällt darauf zurück, mit einer eindeutigen Log-Zeile, welcher Pfad
+genommen wurde. `pipeline.rs`s komplette Sender-/Isel-/Matrix-Aufbau-
+Logik (`build()`, `build_empty_branch`, `build_mxf_branch`,
+`replace_slot`) wurde von der globalen `presets::GROUPS`-Konstante auf
+eine laufzeit-große `Vec<ProgramGroup>`/`Vec<AudioPreset>` (`Config`/
+`ActivePipeline`-Felder) umgestellt — die Struktur der Funktionen blieb
+dabei praktisch unverändert, nur die Datenquelle.
+
+UI (`ui/graph/flow-canvas.ts`, `#buildMxfPlayerSettingsSection` +
+Helfer): bewusst NICHT als generischer Framework-Mechanismus für jeden
+Node-Typ gebaut (Overkill für einen Anwendungsfall), sondern über die
+Existenz der beiden charakteristischen readonly-Params `programGroups`/
+`shufflePresets` im Descriptor erkannt (kein Node-"type"-Feld auf
+`GraphNode` verfügbar — die Graph-Daten kommen aus der NMOS-Registry,
+nicht aus dem Launcher-Katalog). Editierbare Tabellen für Gruppen
+(id/label/Kanalzahl) und Presets (id/label + verschachtelte Routen-
+Tabelle: Quell-Tonspur/Gruppen-Dropdown/Zielkanal), Ganz-Dokument-Save-
+Button statt PATCH-per-Feld. Kein client-seitiges Admin-Gating (kein
+bestehendes Muster dafür in dieser Datei) — GET ist für jeden
+angemeldeten Nutzer ok, ein PUT-Versuch ohne Admin-Rechte scheitert am
+Server mit 403, von `#showToast` wie jeder andere Speicherfehler
+angezeigt.
+
+**Live-Verifikation** (echter Orchestrator-Neustart mit der neuen
+Migration, echte Postgres-Instanz, echter Headless-Chromium/CDP-
+Browser-Test für die UI, echte ORF-Testdatei):
+- `GET .../settings` liefert vor jedem Speichern die 5/13 ORF-Standard-
+  werte exakt wie zuvor hartcodiert.
+- Realer Browser-Test (CDP, kein curl): Parameter-Panel für eine
+  omp-mxf-player-Instanz geöffnet, "Programmgruppen/Presets bearbeiten"
+  aufgeklappt, per UI eine neue Testgruppe hinzugefügt, gespeichert —
+  Toast "Gespeichert…" bestätigt, `GET` direkt danach zeigt die neue
+  Gruppe tatsächlich persistiert.
+- Eine FRISCH gestartete Instanz nach diesem Save zeigt 7 statt 6 NMOS-
+  Sender (neue Gruppe real als eigener Sender registriert, `GET
+  /api/v1/nodes` bestätigt Label+Kanalzahl) — belegt das dokumentierte
+  Restart-on-apply-Verhalten für Gruppen.
+- Verhalten ohne jede Einstellungsänderung (reiner Fallback-/Default-
+  Pfad) bleibt unverändert: `cargo test -p omp-mxf-player` (5 neue,
+  reine Logiktests für `matrix_for`/`find_preset`/`default_settings`)
+  grün, `go test ./internal/{launcher,httpapi,db}/...` grün (4 neue
+  Handler-Tests inkl. zweier Validierungs-Ablehnungen).
+- Am Ende der Sitzung auf die reinen ORF-Standardwerte zurückgesetzt
+  (Test-Gruppe aus der Sitzung nicht als produktiver Endzustand
+  belassen).
+
+### Nebenfund: echter Ressourcen-/Thread-Leak bei wiederholtem cue()/take() — Fix mildert ihn deutlich, löst ihn aber nicht vollständig (Ursache im mxfdemux-Plugin selbst)
+
+Beim Verifizieren mit mehreren aufeinanderfolgenden `cue()`/`take()`-
+Zyklen (nötig, um Preset-Wechsel zu testen) fiel exakt dasselbe
+Symptombild wie beim `gst-kit`-Fund in Nachtrag 119 auf: `node`- bzw.
+hier `omp-mxf-player`-Prozess-CPU sprang nach wenigen Zyklen auf
+500-700%, `mxl-info`s "Head index" für die Programmton-Gruppe blieb
+dabei über mehrere Sekunden exakt konstant (kein neuer Grain) —
+reproduzierbar per direktem Vergleich (frisch gestartete Instanz: Head
+index steigt beim ersten `take()` nachweislich kontinuierlich; ab dem
+zweiten Zyklus komplett eingefroren).
+
+**Root Cause, Teil 1 (gefunden und behoben):** `pipeline.rs`s
+`teardown_branch`/`remove_elements` riefen `element.set_state(Null)`
+zweimal auf und werteten das Ergebnis beide Male nie aus (`let _ =
+...`) — bei einem `Async`-Zustandswechsel (plausibel für `mxfdemux`s
+interne Streaming-Schleife, s. Moduldoku) wurde das Element sofort
+danach aus der Pipeline entfernt, bevor der Übergang tatsächlich
+abgeschlossen war. Exakt dieselbe Bug-Klasse wie der `gst-kit`-Fund
+derselben Sitzung (Nachtrag 119), unabhängig davon gefunden, in
+komplett anderem Code. Fix: neue `stop_element_and_wait()`-Funktion,
+die auf den bestätigten Abschluss wartet (erst 500ms, bei Bedarf
+eskalierend 3s, mit lauter Warnung statt stillem Schlucken, falls auch
+das nicht reicht) — Reihenfolge (State-Null vor Unlink, s.
+`omp-player::pipeline::teardown_branch`-Lektion) dabei unverändert
+beibehalten.
+
+**Wirkung des Fixes, gemessen:** vorher scheiterte bereits der ZWEITE
+`cue()`/`take()`-Zyklus praktisch immer. Mit dem Fix: fünf
+aufeinanderfolgende Zyklen auf derselben Instanz durchgehend gemessen
+(1s Cue-Take-Abstand) — CPU stieg gleichmäßig, aber deutlich langsamer
+(81,6 % → 108 % → 124 % → 125 % → 160 %) und die ersten VIER Zyklen
+zeigten durchgehend real fließende Grains (`mxl-info`-Head-Index-Deltas
+55.680–80.640 pro Zyklus); erst der FÜNFTE Zyklus fror wieder ein. Die
+neue Warnzeile ("erreichte GST_STATE_NULL nicht innerhalb ~3.5s") feuerte
+dabei KEIN einziges Mal — jedes Element bestätigte seinen Übergang nach
+GStreamers eigener Buchführung korrekt.
+
+**Root Cause, Teil 2 (gefunden, NICHT behebbar von hier aus):**
+`/proc/<pid>/task`-Thread-Auflistung nach mehreren Zyklen zeigte
+Threads namens `mxfdemux3:sink`/`mxfdemux4:sink` (je 8 Stück) sowie
+15+ nummerierte `queueNN:src`-Threads gleichzeitig aktiv — weit mehr,
+als eine einzige aktuell aktive Verzweigung (8 Tonspuren) erklären
+würde, und mit Namen, die eindeutig auf ALTE, laut GStreamer-
+Zustandsmaschine bereits sauber auf NULL gebrachte Zweige verweisen
+(`mxfdemux3`/`4` aus vorherigen Zyklen, nicht der aktuellen). Das
+bedeutet: `mxfdemux`s PLUGIN-INTERNER Thread pro Tonspur-Pad wird beim
+Zustandsübergang auf NULL nicht zuverlässig beendet/gejoint, obwohl
+GStreamers eigene Zustandsmaschine (die einzige Ebene, die
+`stop_element_and_wait()` aus Rust heraus beeinflussen/abfragen kann)
+den Übergang bereits als abgeschlossen bestätigt — ein Bug innerhalb
+des `mxfdemux`-Plugins selbst (vermutlich Teil von `gst-plugins-bad`),
+nicht in diesem Node-Code oder der GStreamer-Rust-Bindings-Schicht.
+Von hier aus nicht weiter behebbar, ohne das Plugin selbst zu patchen
+oder `mxfdemux` durch einen alternativen Demux-Pfad zu ersetzen —
+beides außerhalb des Auftragsumfangs dieser Sitzung.
+
+**Einordnung/Empfehlung:** die Kern-Funktionalität (Datei abspielen,
+Preset-Routing, jetzt auch dynamische Programmgruppen/Presets) bleibt
+für den in Nachtrag 120 verifizierten UND diesen Sitzungs-Anwendungsfall
+voll funktionsfähig — der Leak betrifft ausschließlich sehr häufiges,
+schnelles erneutes Cuen/Taken DESSELBEN oder wiederholt WECHSELNDER
+MXF-Items auf derselben, langlebigen Instanz, nicht den regulären
+Einzel-Play-Fall. Für den produktiven Playout-Betrieb (ein Item
+abspielen lassen, gelegentlich das nächste cuen) unkritisch; für einen
+zukünftigen Belastungstest mit sehr vielen Cue/Take-Zyklen in kurzer
+Zeit (z. B. eine automatisierte Testsuite) relevant. Nicht als "erledigt"
+zu verstehen, sondern als offener Folgepunkt: entweder eine periodische
+Instanz-Neustart-Strategie für Hochlast-Szenarien, oder mittelfristig
+Prüfung eines alternativen MXF-Demux-Wegs (z. B. eigener, schlanker
+MXF-Parser statt des vollen `mxfdemux`-Elements, analog zur
+`filesrc ! mxfdemux`-Entscheidung in Nachtrag 120 selbst, die
+`uridecodebin` schon einmal zugunsten von mehr Kontrolle verworfen
+hat).
+
+**Dateien:** `orchestrator/internal/db/migrations/
+0013_node_type_settings.sql` (neu), `orchestrator/internal/launcher/
+node_settings_store.go` (neu), `orchestrator/internal/httpapi/
+node_settings_handlers.go` (neu) + `server.go`/`server_test.go`
+(Routen+Wiring+Tests), `orchestrator/main.go` (Store-Wiring),
+`nodes/omp-mxf-player/src/orchestrator_settings.rs` (neu),
+`nodes/omp-mxf-player/src/{main,pipeline,presets}.rs` (laufzeit-
+ladbare Settings statt `&'static`-Konstanten, plus der Thread-Leak-
+Fix in `pipeline.rs`), `ui/graph/flow-canvas.ts` (Einstellungs-
+Editor-Sektion im generischen Panel).
