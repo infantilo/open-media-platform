@@ -206,6 +206,7 @@ func main() {
 		launcherNATS = natsRequester{nc: nc}
 	}
 	launcherSvc := launcher.New(catalog, cfg.RegistryURL, cfg.NatsURL, launcher.NewStore(database), hub, launcherNATS, launcher.NewCatalogStore(database))
+	nodeSettingsStore := launcher.NewNodeSettingsStore(database)
 	// ARCHITECTURE.md §24.1, UMSETZUNG.md C16: OMP_ORCHESTRATOR_URL für
 	// jede lokal gestartete Instanz — Control-Plane-Nodes nutzen sie,
 	// um sich ein Service-Token zu holen und den generischen Proxy
@@ -344,7 +345,7 @@ func main() {
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
 	go workflowScheduler.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

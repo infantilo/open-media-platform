@@ -17,6 +17,7 @@
 //! dargestellt, s. Plan-Dokument — kein Sonderfall wie bei
 //! `omp-player`s Cue/Take- bzw. Cart-Wall-Oberflächen).
 
+mod orchestrator_settings;
 mod pipeline;
 mod presets;
 
@@ -57,6 +58,12 @@ struct PlayerStore {
     next_seq: AtomicU64,
     pipeline: PipelineHandle,
     media_dir: PathBuf,
+    // Vom Orchestrator geladen (oder presets::default_settings()-
+    // Fallback) — s. orchestrator_settings.rs-Moduldoku. Feststehend für
+    // die Lebensdauer dieses Prozesses (Nutzerentscheidung: Änderungen
+    // an Programmgruppen/Presets wirken erst nach einem Neustart).
+    groups: Vec<presets::ProgramGroup>,
+    shuffle_presets: Vec<presets::AudioPreset>,
 }
 
 const DEFAULT_DURATION_MS: u64 = 5000;
@@ -91,9 +98,11 @@ fn probe_duration_ms(path: &Path) -> Option<u64> {
     info.duration().map(|d| d.mseconds())
 }
 
-fn resolve_preset_id(requested: Option<&str>) -> String {
+fn resolve_preset_id(presets_list: &[presets::AudioPreset], requested: Option<&str>) -> String {
     requested
-        .filter(|s| !s.is_empty() && presets::find_preset(s).is_some())
+        .filter(|s| !s.is_empty() && presets::find_preset(presets_list, s).is_some())
+        .or_else(|| presets_list.iter().find(|p| p.id == DEFAULT_PRESET).map(|_| DEFAULT_PRESET))
+        .or_else(|| presets_list.first().map(|p| p.id.as_str()))
         .unwrap_or(DEFAULT_PRESET)
         .to_string()
 }
@@ -204,13 +213,13 @@ impl ParamStore for PlayerStore {
                 Some(serde_json::json!(files))
             }
             "programGroups" => Some(serde_json::json!(
-                presets::GROUPS
+                self.groups
                     .iter()
                     .map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels}))
                     .collect::<Vec<_>>()
             )),
             "shufflePresets" => Some(serde_json::json!(
-                presets::PRESETS
+                self.shuffle_presets
                     .iter()
                     .map(|p| serde_json::json!({"id": p.id, "label": p.label}))
                     .collect::<Vec<_>>()
@@ -237,7 +246,7 @@ impl ParamStore for PlayerStore {
                     .map(|d| d as u64)
                     .or_else(|| probe_duration_ms(&abs))
                     .unwrap_or(DEFAULT_DURATION_MS);
-                let audio_preset = resolve_preset_id(args.get("audioPreset").and_then(Value::as_str));
+                let audio_preset = resolve_preset_id(&self.shuffle_presets, args.get("audioPreset").and_then(Value::as_str));
                 let label = label.unwrap_or_else(|| format!("Item {seq}"));
                 self.state.lock().expect("lock poisoned").items.push(PlaylistItem {
                     id: format!("item{seq}"),
@@ -264,7 +273,7 @@ impl ParamStore for PlayerStore {
                         id: format!("item{seq}"),
                         label: li.label,
                         file: li.file,
-                        audio_preset: resolve_preset_id(li.audio_preset.as_deref()),
+                        audio_preset: resolve_preset_id(&self.shuffle_presets, li.audio_preset.as_deref()),
                         duration_ms,
                     });
                 }
@@ -295,7 +304,7 @@ impl ParamStore for PlayerStore {
             "setItemPreset" => {
                 let item_id = args.get("itemId").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
                 let preset_id = args.get("audioPreset").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
-                if presets::find_preset(preset_id).is_none() {
+                if presets::find_preset(&self.shuffle_presets, preset_id).is_none() {
                     return Err(InvokeError::Unknown);
                 }
                 let mut state = self.state.lock().expect("lock poisoned");
@@ -350,14 +359,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
     let width: u32 = env_or("OMP_WIDTH", "").parse().unwrap_or(pipeline::DEFAULT_WIDTH);
     let height: u32 = env_or("OMP_HEIGHT", "").parse().unwrap_or(pipeline::DEFAULT_HEIGHT);
+    // ARCHITECTURE.md §24.1 (gleiches Muster wie omp-playout-automation):
+    // Basis-URL des Orchestrators + eigenes Launch-Secret, um sich vor
+    // dem Pipeline-Aufbau die Programmgruppen/Shuffle-Presets zu holen
+    // (orchestrator_settings.rs) statt presets.rs' eingebaute
+    // ORF-Standardwerte fest zu verdrahten (Nutzerwunsch 2026-08-06).
+    let orchestrator_url = env_or("OMP_ORCHESTRATOR_URL", "http://localhost:8000");
+    let launch_secret = std::env::var("OMP_LAUNCH_SECRET").unwrap_or_default();
 
     let media_dir = PathBuf::from(env_or("OMP_MEDIA_DIR", "data/media"));
     if let Err(e) = std::fs::create_dir_all(&media_dir) {
         eprintln!("omp-mxf-player: OMP_MEDIA_DIR ({media_dir:?}) konnte nicht angelegt werden: {e}");
     }
 
+    let mxf_settings = orchestrator_settings::load_settings(&orchestrator_url, instance_id.as_deref(), &launch_secret);
+
     let video_flow_id = omp_node_sdk::idgen::new_v4();
-    let group_flow_ids: Vec<String> = presets::GROUPS.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
+    let group_flow_ids: Vec<String> = mxf_settings.groups.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
@@ -367,6 +385,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         domain,
         video_flow_id: video_flow_id.clone(),
         group_flow_ids: group_flow_ids.clone(),
+        groups: mxf_settings.groups.clone(),
+        presets: mxf_settings.presets.clone(),
         label: label.clone(),
         width,
         height,
@@ -386,7 +406,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    let mut senders = Vec::with_capacity(1 + presets::GROUPS.len());
+    let mut senders = Vec::with_capacity(1 + mxf_settings.groups.len());
     senders.push(SenderSpec {
         transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
         flow: Some(omp_node_sdk::node::FlowSpec::Video {
@@ -399,7 +419,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         label: Some(format!("{label} Programm")),
         ..Default::default()
     });
-    for (group, flow_id) in presets::GROUPS.iter().zip(group_flow_ids.into_iter()) {
+    for (group, flow_id) in mxf_settings.groups.iter().zip(group_flow_ids.into_iter()) {
         senders.push(SenderSpec {
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Audio {
@@ -428,6 +448,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         next_seq: AtomicU64::new(1),
         pipeline: pipeline_handle,
         media_dir,
+        groups: mxf_settings.groups,
+        shuffle_presets: mxf_settings.presets,
     });
 
     let handle = omp_node_sdk::start(

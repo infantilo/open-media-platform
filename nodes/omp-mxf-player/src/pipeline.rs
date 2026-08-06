@@ -5,8 +5,9 @@
 //! Pad neu, `take()` schaltet ausschließlich `active-pad` um), hier auf
 //! MEHRERE gleichzeitig aktive Audio-Ausgänge verallgemeinert: statt
 //! einem `input-selector` für Video + einem für Audio gibt es einen für
-//! Video + einen JE PROGRAMMGRUPPE (`presets::GROUPS`, aktuell 5:
-//! Programmton/Hörfilm-AD/Originalton/Dolby E/5.1 diskret).
+//! Video + einen JE PROGRAMMGRUPPE (`Config::groups`, laufzeit-geladen —
+//! standardmäßig 5: Programmton/Hörfilm-AD/Originalton/Dolby E/5.1
+//! diskret, s. `presets.rs`/`orchestrator_settings.rs`).
 //!
 //! **Warum kein `uridecodebin`:** `omp-player`s Datei-Zweig nutzt
 //! `uridecodebin(expose-all-streams=false)` — liefert genau EINEN
@@ -70,8 +71,13 @@ const EMPTY_PATTERN: &str = "black";
 pub struct Config {
     pub domain: String,
     pub video_flow_id: String,
-    /// Reihenfolge == `presets::GROUPS`.
+    /// Reihenfolge == `groups`.
     pub group_flow_ids: Vec<String>,
+    /// Vom Orchestrator geladen oder `presets::default_settings()`-
+    /// Fallback (main.rs) — nicht mehr `presets::GROUPS` (Nutzerwunsch
+    /// 2026-08-06, s. presets.rs-Moduldoku).
+    pub groups: Vec<presets::ProgramGroup>,
+    pub presets: Vec<presets::AudioPreset>,
     pub label: String,
     pub width: u32,
     pub height: u32,
@@ -199,13 +205,53 @@ struct Terminal {
 struct Branch {
     elements: Arc<Mutex<Vec<gst::Element>>>,
     video: Terminal,
-    /// Reihenfolge == `presets::GROUPS`.
+    /// Reihenfolge == die `groups`-Liste, mit der dieser Branch gebaut wurde.
     groups: Vec<Terminal>,
+}
+
+/// Bringt `el` auf `GST_STATE_NULL` und wartet auf den TATSÄCHLICHEN
+/// Abschluss des Übergangs, statt das Ergebnis von `set_state()` zu
+/// verwerfen. Live gefunden (2026-08-06, exakt dieselbe Bug-Klasse wie
+/// der PIPELINE-CONTROLLER-`gst-kit`-Fund derselben Sitzung, s.
+/// docs/decisions.md Nachtrag 119): `set_state(Null)` kann `Async`
+/// liefern — der Übergang läuft dann im Hintergrund weiter, u. a. weil
+/// `mxfdemux`s interne Streaming-Schleife (Moduldoku oben) noch
+/// beendet werden muss. Der bisherige Code (`let _ =
+/// el.set_state(Null)`) wertete das nie aus und entfernte das Element
+/// sofort aus der Pipeline (`pipeline.remove()`, vormals direkt im
+/// Anschluss) — bei einer noch laufenden Streaming-Schleife blieb
+/// deren Thread dabei orphaned zurück (spinnt weiter, versucht in eine
+/// entfernte/ungelinkte Pipeline zu schreiben). Reproduzierbar live
+/// beobachtet: zweiter `cue()`/`take()`-Zyklus auf derselben Instanz
+/// ließ `node`-Prozess-CPU auf 500-700% springen UND den neu gebauten
+/// Branch komplett ohne fließende Daten stehen (`mxl-info`s "Head
+/// index" blieb über mehrere Sekunden exakt konstant, während der
+/// ERSTE Zyklus auf einer frisch gestarteten Instanz denselben Wert
+/// nachweislich kontinuierlich vorantrieb) — der Leak vom ersten Zyklus
+/// (dessen Branch nur den harmlosen `videotestsrc`/`audiotestsrc`-
+/// Leerlauf-Zweig betraf, keine komplexe Streaming-Schleife) fiel dabei
+/// noch nicht auf, der zweite (echter `mxfdemux`) schon.
+fn stop_element_and_wait(el: &gst::Element) {
+    let confirmed = match el.set_state(gst::State::Null) {
+        Ok(gst::StateChangeSuccess::Success) => true,
+        _ => el.state(gst::ClockTime::from_mseconds(500)).0.is_ok(),
+    };
+    if confirmed {
+        return;
+    }
+    // Erster Versuch nicht innerhalb 500ms bestätigt — derselbe bereits
+    // angestoßene Übergang läuft weiter (kein erneuter set_state()
+    // nötig), nur mit deutlich längerem Timeout erneut abgefragt.
+    if el.state(gst::ClockTime::from_seconds(3)).0.is_err() {
+        eprintln!(
+            "omp-mxf-player: {} erreichte GST_STATE_NULL nicht innerhalb ~3.5s — möglicher Thread-/Ressourcen-Leak",
+            el.name()
+        );
+    }
 }
 
 fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
     for el in elements {
-        let _ = el.set_state(gst::State::Null);
         let _ = pipeline.remove(el);
     }
 }
@@ -218,6 +264,7 @@ fn build_empty_branch(
     pipeline: &gst::Pipeline,
     video_pad: gst::Pad,
     group_pads: Vec<gst::Pad>,
+    groups: &[presets::ProgramGroup],
     width: u32,
     height: u32,
 ) -> Result<Branch, String> {
@@ -250,8 +297,8 @@ fn build_empty_branch(
         .map_err(|e| format!("link empty video branch to isel: {e}"))?;
     elements.extend([vsrc, vconvert, vscale, vrate, vcaps]);
 
-    let mut groups = Vec::with_capacity(group_pads.len());
-    for (group, pad) in presets::GROUPS.iter().zip(group_pads.into_iter()) {
+    let mut group_terminals = Vec::with_capacity(group_pads.len());
+    for (group, pad) in groups.iter().zip(group_pads.into_iter()) {
         let asrc = gst::ElementFactory::make("audiotestsrc")
             .property("is-live", true)
             .property("volume", 0.0)
@@ -274,7 +321,7 @@ fn build_empty_branch(
             .link(&pad)
             .map_err(|e| format!("link empty audio branch ({}) to isel: {e}", group.id))?;
         elements.extend([asrc, acaps]);
-        groups.push(Terminal { sink_pad: pad, tail_src_pad: tail_pad });
+        group_terminals.push(Terminal { sink_pad: pad, tail_src_pad: tail_pad });
     }
 
     for el in &elements {
@@ -285,7 +332,7 @@ fn build_empty_branch(
     Ok(Branch {
         elements: Arc::new(Mutex::new(elements)),
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
-        groups,
+        groups: group_terminals,
     })
 }
 
@@ -306,6 +353,7 @@ fn build_mxf_branch(
     pipeline: &gst::Pipeline,
     video_pad: gst::Pad,
     group_pads: Vec<gst::Pad>,
+    groups: &[presets::ProgramGroup],
     path: &str,
     preset: &presets::AudioPreset,
     width: u32,
@@ -376,9 +424,9 @@ fn build_mxf_branch(
     let mut elements = vec![filesrc.clone(), demux.clone(), decodebin, vconvert, vscale, vrate, vcaps, vqueue];
     elements.extend([interleave.clone(), aconvert, atee.clone()]);
 
-    let mut groups = Vec::with_capacity(group_pads.len());
+    let mut group_terminals = Vec::with_capacity(group_pads.len());
     let mut matrix_elements = Vec::with_capacity(group_pads.len());
-    for (group, pad) in presets::GROUPS.iter().zip(group_pads.into_iter()) {
+    for (group, pad) in groups.iter().zip(group_pads.into_iter()) {
         let queue = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue({}): {e}", group.id))?;
         // Reihenfolge kritisch (live gefunden): der Builder-Kette
         // (`.property().property()…build()`) ist NICHT garantiert, dass
@@ -412,8 +460,8 @@ fn build_mxf_branch(
             .link(&pad)
             .map_err(|e| format!("link group chain ({}) to isel: {e}", group.id))?;
         elements.extend([queue, matrix.clone(), caps]);
-        groups.push(Terminal { sink_pad: pad, tail_src_pad: tail_pad });
-        matrix_elements.push((group.id, group.channels, matrix));
+        group_terminals.push(Terminal { sink_pad: pad, tail_src_pad: tail_pad });
+        matrix_elements.push((group.id.clone(), group.channels, matrix));
     }
 
     // "Konsument vor Produzent" (omp-player::pipeline-Lektion, s. dortige
@@ -463,7 +511,13 @@ fn build_mxf_branch(
         }
     });
 
-    let preset_id = preset.id.to_string();
+    // Geklonter, owned Preset statt eines erneuten Id-Lookups im Closure
+    // (vor der Umstellung auf laufzeit-ladbare Settings war `preset` ein
+    // `&'static AudioPreset` aus der festen `PRESETS`-Konstante — ein
+    // GStreamer-Signal-Closure muss 'static sein, ein Klon des bereits
+    // vorliegenden Presets ist hier einfacher und robuster als eine
+    // erneute Id-Suche in einer geklonten Presets-Liste, s. presets.rs).
+    let preset_owned = preset.clone();
     let pipeline_for_nmp = pipeline.clone();
     let elements_for_nmp = elements.clone();
     demux.connect_no_more_pads(move |_demux| {
@@ -519,11 +573,8 @@ fn build_mxf_branch(
             elements_for_nmp.lock().expect("lock poisoned").push(queue);
         }
 
-        let preset = presets::find_preset(&preset_id);
         for (group_id, group_channels, matrix_el) in &matrix_elements {
-            let coeffs = preset
-                .map(|p| presets::matrix_for(p, group_id, *group_channels, input_channels.max(1)))
-                .unwrap_or_else(|| vec![vec![0.0f64; input_channels.max(1) as usize]; *group_channels as usize]);
+            let coeffs = presets::matrix_for(&preset_owned, group_id, *group_channels, input_channels.max(1));
             matrix_el.set_property("in-channels", input_channels.max(1));
             matrix_el.set_property("out-channels", *group_channels);
             matrix_el.set_property("matrix", matrix_to_gst_array(&coeffs));
@@ -543,7 +594,7 @@ fn build_mxf_branch(
     Ok(Branch {
         elements,
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
-        groups,
+        groups: group_terminals,
     })
 }
 
@@ -558,8 +609,14 @@ fn build_mxf_branch(
 /// übernommen statt riskant neu zu erfinden.
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     let elements = branch.elements.lock().expect("lock poisoned");
+    // State-Null MUSS vor dem Unlink passieren (Reihenfolge exakt wie
+    // vor diesem Fix, `omp-player::pipeline::teardown_branch`-Lektion:
+    // Use-after-free, wenn ein noch aktiver Streaming-Thread eines
+    // `queue`-Elements während des Unlink schiebt) — jetzt zusätzlich
+    // mit ECHTEM Warten auf den Abschluss statt eines verworfenen
+    // `set_state()`-Ergebnisses, s. `stop_element_and_wait`-Doku.
     for el in elements.iter() {
-        let _ = el.set_state(gst::State::Null);
+        stop_element_and_wait(el);
     }
     let _ = branch.video.tail_src_pad.unlink(&branch.video.sink_pad);
     for terminal in &branch.groups {
@@ -573,6 +630,8 @@ struct ActivePipeline {
     video_isel: gst::Element,
     group_isels: Vec<gst::Element>,
     branches: HashMap<Slot, Branch>,
+    groups: Vec<presets::ProgramGroup>,
+    presets: Vec<presets::AudioPreset>,
     width: u32,
     height: u32,
     _mxl_video_output: MxlVideoOutput,
@@ -596,11 +655,11 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, source: &ItemSource) ->
 
     let branch = match source {
         ItemSource::TestPattern => {
-            build_empty_branch(&active.pipeline, video_pad, group_pads, active.width, active.height)?
+            build_empty_branch(&active.pipeline, video_pad, group_pads, &active.groups, active.width, active.height)?
         }
         ItemSource::Mxf { path, preset_id } => {
-            let preset = presets::find_preset(preset_id).ok_or_else(|| format!("unknown preset: {preset_id}"))?;
-            build_mxf_branch(&active.pipeline, video_pad, group_pads, path, preset, active.width, active.height)?
+            let preset = presets::find_preset(&active.presets, preset_id).ok_or_else(|| format!("unknown preset: {preset_id}"))?;
+            build_mxf_branch(&active.pipeline, video_pad, group_pads, &active.groups, path, preset, active.width, active.height)?
         }
     };
     active.branches.insert(slot, branch);
@@ -626,8 +685,8 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
         .map_err(|e| format!("video input-selector: {e}"))?;
     pipeline.add(&video_isel).map_err(|e| format!("add video isel: {e}"))?;
 
-    let mut group_isels = Vec::with_capacity(presets::GROUPS.len());
-    for group in presets::GROUPS {
+    let mut group_isels = Vec::with_capacity(config.groups.len());
+    for group in &config.groups {
         let isel = gst::ElementFactory::make("input-selector")
             .name(format!("isel_{}", group.id))
             .property("sync-streams", false)
@@ -643,13 +702,13 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
             .request_pad_simple(&format!("sink_{}", slot.pad_index()))
             .ok_or_else(|| format!("video isel: request sink_{} failed", slot.pad_index()))?;
         let mut group_pads = Vec::with_capacity(group_isels.len());
-        for (isel, group) in group_isels.iter().zip(presets::GROUPS.iter()) {
+        for (isel, group) in group_isels.iter().zip(config.groups.iter()) {
             let pad = isel
                 .request_pad_simple(&format!("sink_{}", slot.pad_index()))
                 .ok_or_else(|| format!("isel({}): request sink_{} failed", group.id, slot.pad_index()))?;
             group_pads.push(pad);
         }
-        let branch = build_empty_branch(&pipeline, video_pad, group_pads, config.width, config.height)?;
+        let branch = build_empty_branch(&pipeline, video_pad, group_pads, &config.groups, config.width, config.height)?;
         branches.insert(slot, branch);
     }
 
@@ -671,7 +730,7 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
     let mut mxl_group_outputs = Vec::with_capacity(group_isels.len());
     for i in 0..group_isels.len() {
         let isel = &group_isels[i];
-        let group = &presets::GROUPS[i];
+        let group = &config.groups[i];
         let flow_id = &config.group_flow_ids[i];
         let output = MxlAudioOutput::new(
             &pipeline,
@@ -702,6 +761,8 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
         video_isel,
         group_isels,
         branches,
+        groups: config.groups.clone(),
+        presets: config.presets.clone(),
         width: config.width,
         height: config.height,
         _mxl_video_output: mxl_video_output,

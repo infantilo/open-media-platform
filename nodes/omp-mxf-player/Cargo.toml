@@ -16,3 +16,7 @@ omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }
+# Für orchestrator_settings.rs: Service-Token-Abruf + GET der
+# Node-Typ-Einstellungen (ARCHITECTURE.md §24.1), gleiche Version wie
+# omp-playout-automation/omp-pipeline-controller.
+ureq = { version = "3.3.0", features = ["json"] }

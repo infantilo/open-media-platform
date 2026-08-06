@@ -77,6 +77,17 @@ type LayoutStore interface {
 	Put(name string, data json.RawMessage) error
 }
 
+// NodeSettingsStore persistiert Node-Typ-weite Einstellungs-Blobs
+// (implementiert von *launcher.NodeSettingsStore, Nutzerwunsch
+// "Shuffle Presets und Output Groups dynamisch definieren" für
+// omp-mxf-player) — anders als LayoutStore kennt der Handler
+// (node_settings_handlers.go) den Inhalt sehr wohl (Validierung vor
+// dem Schreiben), der Store selbst bleibt aber opak.
+type NodeSettingsStore interface {
+	Get(nodeType string) (json.RawMessage, error)
+	Put(nodeType string, data json.RawMessage) error
+}
+
 // SnapshotService erfasst und stellt Szenen wieder her (implementiert
 // von *snapshots.Service, UMSETZUNG.md B7).
 type SnapshotService interface {
@@ -187,7 +198,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
@@ -240,6 +251,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/catalog", g.requireAuth(handleCatalog(launcherSvc)))
 	mux.HandleFunc("POST /api/v1/catalog", g.requireVerbGlobal(authz.VerbAdmin, handlePostCatalogEntry(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/catalog/{type}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteCatalogEntry(launcherSvc)))
+	mux.HandleFunc("GET /api/v1/node-types/omp-mxf-player/settings", g.requireAuth(handleGetMxfPlayerSettings(nodeSettingsStore)))
+	mux.HandleFunc("PUT /api/v1/node-types/omp-mxf-player/settings", g.requireVerbGlobal(authz.VerbAdmin, handlePutMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))

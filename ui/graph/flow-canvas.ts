@@ -297,6 +297,33 @@ interface ProfileResponse {
   projectedMemPercent?: number;
 }
 
+// Wire-Format identisch zu orchestrator/internal/httpapi/node_settings_
+// handlers.go's mxfPlayerSettings (Nutzerwunsch 2026-08-06: Shuffle-
+// Presets/Programmgruppen für omp-mxf-player nicht mehr in Rust
+// hartcodiert, s. #buildMxfPlayerSettingsSection).
+interface MxfProgramGroup {
+  id: string;
+  label: string;
+  channels: number;
+}
+
+interface MxfRoute {
+  srcTrack: number;
+  group: string;
+  groupChannel: number;
+}
+
+interface MxfPreset {
+  id: string;
+  label: string;
+  routes: MxfRoute[];
+}
+
+interface MxfPlayerSettings {
+  groups: MxfProgramGroup[];
+  presets: MxfPreset[];
+}
+
 interface PortLocation {
   tileId: string;
   side: PortSide;
@@ -2891,6 +2918,23 @@ export class FlowCanvas extends HTMLElement {
       this.#panelContent.appendChild(this.#buildRoleFormatSection(roleInfo));
     }
 
+    // Nutzerwunsch 2026-08-06 ("Shuffle Presets und Output Groups
+    // dynamisch definieren, für einfachere künftige Anpassungen"): statt
+    // eines neuen, generischen Editor-Mechanismus für JEDEN Node-Typ
+    // (Overkill für diesen einen Fall) hier node-typ-spezifisch, erkannt
+    // über das Vorhandensein der beiden dafür charakteristischen
+    // readonly-Params (nicht über einen Node-"type"-Vergleich —
+    // `GraphNode` kennt den Katalog-Typ hier gar nicht, s. Moduldoku
+    // oben zur NMOS-Registry-Herkunft der Graph-Daten; robuster
+    // Nebeneffekt: jeder künftige Node-Typ mit denselben zwei Params
+    // bekäme denselben Editor automatisch).
+    const hasMxfPlayerSettings =
+      descriptor.parameters.some((p) => p.name === "programGroups") &&
+      descriptor.parameters.some((p) => p.name === "shufflePresets");
+    if (hasMxfPlayerSettings) {
+      this.#panelContent.appendChild(this.#buildMxfPlayerSettingsSection());
+    }
+
     for (const param of descriptor.parameters) {
       const value = await this.#fetchParamValue(nodeId, param.name);
       this.#panelContent.appendChild(this.#buildParamRow(nodeId, param, value));
@@ -3002,6 +3046,292 @@ export class FlowCanvas extends HTMLElement {
     wrapper.appendChild(applyBtn);
 
     return wrapper;
+  }
+
+  // Programmgruppen/Shuffle-Presets für omp-mxf-player (Nutzerwunsch
+  // 2026-08-06) — Node-Typ-weite, nicht Instanz-weite Einstellungen
+  // (orchestrator/internal/httpapi/node_settings_handlers.go), deshalb
+  // ohne nodeId-Bezug in der API (anders als #buildParamRow). Kein
+  // client-seitiges Admin-Gating (kein bestehendes Muster dafür in
+  // dieser Datei, s. Katalog-Palette oben) — GET ist für jeden
+  // angemeldeten Nutzer erlaubt, PUT lehnt der Server für Nicht-Admins
+  // mit 403 ab, was #showToast unten genauso wie jeden anderen
+  // Speicherfehler anzeigt.
+  #buildMxfPlayerSettingsSection(): HTMLElement {
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-role", "mxf-player-settings-section");
+    wrapper.style.cssText =
+      "margin:8px 0 14px 0;padding:8px;border:1px solid var(--omp-border,#444);border-radius:4px;";
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.textContent = "Programmgruppen/Presets bearbeiten";
+    toggleBtn.style.cssText = "cursor:pointer;";
+
+    const body = document.createElement("div");
+    body.style.cssText = "display:none;margin-top:10px;";
+    let loaded = false;
+
+    toggleBtn.addEventListener("click", async () => {
+      const isOpen = body.style.display !== "none";
+      if (isOpen) {
+        body.style.display = "none";
+        return;
+      }
+      body.style.display = "block";
+      if (!loaded) {
+        loaded = true;
+        await this.#loadMxfPlayerSettingsEditor(body);
+      }
+    });
+
+    wrapper.append(toggleBtn, body);
+    return wrapper;
+  }
+
+  async #loadMxfPlayerSettingsEditor(container: HTMLElement): Promise<void> {
+    container.replaceChildren();
+    const loading = document.createElement("p");
+    loading.textContent = "Lädt…";
+    container.appendChild(loading);
+
+    let settings: MxfPlayerSettings;
+    try {
+      const res = await apiFetch("/api/v1/node-types/omp-mxf-player/settings");
+      if (!res.ok) throw new Error(String(res.status));
+      settings = await res.json();
+    } catch (err) {
+      container.replaceChildren();
+      const p = document.createElement("p");
+      p.textContent = `Einstellungen konnten nicht geladen werden: ${err}`;
+      container.appendChild(p);
+      return;
+    }
+
+    this.#renderMxfPlayerSettingsEditor(container, settings);
+  }
+
+  // `state` ist eine lokale Arbeitskopie — Bearbeitung sammelt sich nur
+  // im Browser, erst der "Speichern"-Klick schreibt per PUT (Ganz-
+  // Dokument-Ersatz, kein PATCH-per-Feldänderung,
+  // feedback_editors_need_explicit_save).
+  #renderMxfPlayerSettingsEditor(container: HTMLElement, state: MxfPlayerSettings): void {
+    container.replaceChildren();
+    const rerender = () => this.#renderMxfPlayerSettingsEditor(container, state);
+
+    const hint = document.createElement("p");
+    hint.textContent =
+      "Programmgruppen-Änderungen wirken erst nach einem Neustart der Instanz (neue NMOS-Sender werden nur beim Start registriert). Preset-Änderungen wirken sofort für neu gecute Items.";
+    hint.style.cssText = "font-size:11px;color:var(--omp-text-dim,#888);margin:0 0 10px 0;";
+    container.appendChild(hint);
+
+    const groupsHeading = document.createElement("h4");
+    groupsHeading.textContent = "Programmgruppen";
+    groupsHeading.style.cssText = "margin:0 0 4px 0;font-size:12px;";
+    container.appendChild(groupsHeading);
+    container.appendChild(this.#buildMxfGroupsTable(state, rerender));
+
+    const presetsHeading = document.createElement("h4");
+    presetsHeading.textContent = "Shuffle-Presets";
+    presetsHeading.style.cssText = "margin:14px 0 4px 0;font-size:12px;";
+    container.appendChild(presetsHeading);
+    container.appendChild(this.#buildMxfPresetsTable(state, rerender));
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Speichern";
+    saveBtn.style.cssText = "display:block;margin-top:12px;cursor:pointer;";
+    saveBtn.addEventListener("click", async () => {
+      saveBtn.disabled = true;
+      try {
+        const res = await apiFetch("/api/v1/node-types/omp-mxf-player/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(state),
+        });
+        if (!res.ok) {
+          this.#showToast(`Speichern fehlgeschlagen: ${await res.text()}`);
+        } else {
+          this.#showToast("Gespeichert — Programmgruppen wirken erst nach Neustart der Instanz.");
+        }
+      } catch (err) {
+        this.#showToast(`Speichern fehlgeschlagen: ${err}`);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+    container.appendChild(saveBtn);
+  }
+
+  #buildMxfGroupsTable(state: MxfPlayerSettings, rerender: () => void): HTMLElement {
+    const table = document.createElement("div");
+    table.setAttribute("data-role", "mxf-groups-table");
+
+    for (const group of state.groups) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:4px;";
+
+      const idInput = document.createElement("input");
+      idInput.type = "text";
+      idInput.value = group.id;
+      idInput.placeholder = "id";
+      idInput.style.cssText = "width:70px;";
+      idInput.addEventListener("change", () => {
+        group.id = idInput.value;
+      });
+
+      const labelInput = document.createElement("input");
+      labelInput.type = "text";
+      labelInput.value = group.label;
+      labelInput.placeholder = "Label";
+      labelInput.style.cssText = "flex:1;";
+      labelInput.addEventListener("change", () => {
+        group.label = labelInput.value;
+      });
+
+      const channelsInput = document.createElement("input");
+      channelsInput.type = "number";
+      channelsInput.min = "1";
+      channelsInput.max = "64";
+      channelsInput.value = String(group.channels);
+      channelsInput.style.cssText = "width:56px;";
+      channelsInput.addEventListener("change", () => {
+        group.channels = Number(channelsInput.value) || 1;
+      });
+
+      const removeBtn = document.createElement("button");
+      removeBtn.textContent = "✕";
+      removeBtn.style.cssText = "cursor:pointer;";
+      removeBtn.addEventListener("click", () => {
+        state.groups = state.groups.filter((g) => g !== group);
+        rerender();
+      });
+
+      row.append(idInput, labelInput, channelsInput, removeBtn);
+      table.appendChild(row);
+    }
+
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Gruppe";
+    addBtn.style.cssText = "cursor:pointer;";
+    addBtn.addEventListener("click", () => {
+      state.groups.push({ id: "", label: "", channels: 2 });
+      rerender();
+    });
+    table.appendChild(addBtn);
+
+    return table;
+  }
+
+  #buildMxfPresetsTable(state: MxfPlayerSettings, rerender: () => void): HTMLElement {
+    const table = document.createElement("div");
+    table.setAttribute("data-role", "mxf-presets-table");
+
+    for (const preset of state.presets) {
+      const presetBox = document.createElement("div");
+      presetBox.style.cssText =
+        "border:1px solid var(--omp-border,#444);border-radius:4px;padding:6px;margin-bottom:6px;";
+
+      const headerRow = document.createElement("div");
+      headerRow.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:4px;";
+
+      const idInput = document.createElement("input");
+      idInput.type = "text";
+      idInput.value = preset.id;
+      idInput.placeholder = "id";
+      idInput.style.cssText = "width:110px;";
+      idInput.addEventListener("change", () => {
+        preset.id = idInput.value;
+      });
+
+      const labelInput = document.createElement("input");
+      labelInput.type = "text";
+      labelInput.value = preset.label;
+      labelInput.placeholder = "Label";
+      labelInput.style.cssText = "flex:1;";
+      labelInput.addEventListener("change", () => {
+        preset.label = labelInput.value;
+      });
+
+      const removePresetBtn = document.createElement("button");
+      removePresetBtn.textContent = "✕ Preset";
+      removePresetBtn.style.cssText = "cursor:pointer;";
+      removePresetBtn.addEventListener("click", () => {
+        state.presets = state.presets.filter((p) => p !== preset);
+        rerender();
+      });
+
+      headerRow.append(idInput, labelInput, removePresetBtn);
+      presetBox.appendChild(headerRow);
+
+      for (const route of preset.routes) {
+        const routeRow = document.createElement("div");
+        routeRow.style.cssText = "display:flex;gap:4px;align-items:center;margin:2px 0 2px 12px;";
+
+        const trackInput = document.createElement("input");
+        trackInput.type = "number";
+        trackInput.min = "1";
+        trackInput.title = "Quell-Tonspur (1-basiert)";
+        trackInput.value = String(route.srcTrack);
+        trackInput.style.cssText = "width:48px;";
+        trackInput.addEventListener("change", () => {
+          route.srcTrack = Number(trackInput.value) || 1;
+        });
+
+        const groupSelect = document.createElement("select");
+        for (const g of state.groups) {
+          const opt = document.createElement("option");
+          opt.value = g.id;
+          opt.textContent = g.id || "(ohne id)";
+          if (g.id === route.group) opt.selected = true;
+          groupSelect.appendChild(opt);
+        }
+        groupSelect.addEventListener("change", () => {
+          route.group = groupSelect.value;
+        });
+
+        const channelInput = document.createElement("input");
+        channelInput.type = "number";
+        channelInput.min = "0";
+        channelInput.title = "Ziel-Kanal in der Gruppe (0-basiert)";
+        channelInput.value = String(route.groupChannel);
+        channelInput.style.cssText = "width:48px;";
+        channelInput.addEventListener("change", () => {
+          route.groupChannel = Number(channelInput.value) || 0;
+        });
+
+        const removeRouteBtn = document.createElement("button");
+        removeRouteBtn.textContent = "✕";
+        removeRouteBtn.style.cssText = "cursor:pointer;";
+        removeRouteBtn.addEventListener("click", () => {
+          preset.routes = preset.routes.filter((r) => r !== route);
+          rerender();
+        });
+
+        routeRow.append(trackInput, groupSelect, channelInput, removeRouteBtn);
+        presetBox.appendChild(routeRow);
+      }
+
+      const addRouteBtn = document.createElement("button");
+      addRouteBtn.textContent = "+ Route";
+      addRouteBtn.style.cssText = "cursor:pointer;margin-left:12px;";
+      addRouteBtn.addEventListener("click", () => {
+        preset.routes.push({ srcTrack: 1, group: state.groups[0]?.id ?? "", groupChannel: 0 });
+        rerender();
+      });
+      presetBox.appendChild(addRouteBtn);
+
+      table.appendChild(presetBox);
+    }
+
+    const addPresetBtn = document.createElement("button");
+    addPresetBtn.textContent = "+ Preset";
+    addPresetBtn.style.cssText = "cursor:pointer;";
+    addPresetBtn.addEventListener("click", () => {
+      state.presets.push({ id: "", label: "", routes: [] });
+      rerender();
+    });
+    table.appendChild(addPresetBtn);
+
+    return table;
   }
 
   async #fetchParamValue(nodeId: string, name: string): Promise<unknown> {
