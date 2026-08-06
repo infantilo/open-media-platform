@@ -4,10 +4,16 @@
 //! (Playlist/Grafik/Player/...) bleibt vollständig PIPELINE CONTROLLERs
 //! eigene Sache, OMP bekommt dafür kein eigenes Methoden-Interface.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_node_sdk::connection::{ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::RegistryClient;
+
+/// Wartezeit, bevor ein durch `apply()` ausgelöster `sync()` tatsächlich
+/// feuert — s. `SharedLiveSource::sync_debounced` Doku.
+const SYNC_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// Feste ID des von diesem Adapter verwalteten Live-Source-Eintrags in
 /// PIPELINE CONTROLLERs `_settings.liveSources` — GET-then-merge (s.
@@ -35,6 +41,9 @@ pub struct SharedLiveSource {
     domain: String,
     registry: RegistryClient,
     state: Mutex<LiveSourceState>,
+    /// Zählt jeden `apply()`-Aufruf hoch — Grundlage für die Debounce-Prüfung
+    /// in `sync_debounced` (s. dort).
+    generation: AtomicU64,
 }
 
 impl SharedLiveSource {
@@ -44,7 +53,36 @@ impl SharedLiveSource {
             domain,
             registry,
             state: Mutex::new(LiveSourceState::default()),
+            generation: AtomicU64::new(0),
         })
+    }
+
+    /// Live gefunden (2026-08-05): Video- und Audio-Receiver connecten bei
+    /// einem Workflow-Start fast gleichzeitig, aber über zwei UNABHÄNGIGE
+    /// IS-05-Patches — jeder löst seinen eigenen `apply()`-Aufruf aus. Ohne
+    /// Debounce feuert das direkt zwei `sync()`-POSTs an PIPELINE CONTROLLER
+    /// kurz hintereinander (erst nur Audio bekannt, Sekundenbruchteile später
+    /// zusätzlich Video) — jeder POST löst dort einen vollen Master-Pipeline-
+    /// Rebuild (`master.stop()+ensureMaster()`) aus. PIPELINE CONTROLLERs
+    /// eigener Rebuild ist nicht robust gegen einen zweiten Rebuild, der
+    /// startet, während der erste noch abbaut (live beobachtet: "Master-
+    /// Pipeline fehlgeschlagen — kein Video, Preview bleibt schwarz" direkt
+    /// nach dem zweiten von zwei Rebuilds in a Rate <1s). Fix hier statt in
+    /// PIPELINE CONTROLLER (separates Projekt, s. CLAUDE.md): den zweiten,
+    /// meist unmittelbar folgenden Receiver-Connect abwarten und beide zu
+    /// EINEM sync() zusammenfassen, statt PC zweimal in schneller Folge
+    /// rebuilden zu lassen. `generation` verwirft einen bereits angestoßenen,
+    /// aber noch nicht gefeuerten Sync, sobald ein neuerer apply()-Aufruf
+    /// dazwischenkommt.
+    fn sync_debounced(self: &Arc<Self>) {
+        let my_gen = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        let this = Arc::clone(self);
+        std::thread::spawn(move || {
+            std::thread::sleep(SYNC_DEBOUNCE);
+            if this.generation.load(Ordering::SeqCst) == my_gen {
+                this.sync();
+            }
+        });
     }
 
     fn sync(&self) {
@@ -104,6 +142,6 @@ impl ReceiverControl for LiveSourceControl {
                 FlowKind::Audio => state.audio_flow_id = flow_id,
             }
         }
-        self.shared.sync();
+        self.shared.sync_debounced();
     }
 }

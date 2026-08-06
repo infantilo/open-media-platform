@@ -1,0 +1,17 @@
+--- a/server.js
++++ b/server.js
+@@ -3894,6 +3894,14 @@
+     }
+     _settings.liveSources = b.liveSources;
+     masterOpts.liveSources = b.liveSources;
++    // PlaylistEngine cacht liveSources nur als Kopie zur Konstruktionszeit
++    // (this._liveSources = opts.liveSources || [], PlaylistEngine.js) und
++    // hat sonst keinen Refresh-Pfad — ohne diese Zeile bleibt eine zur
++    // Laufzeit hinzugefügte Live-Quelle für validate()/_isPlayer() unsichtbar
++    // (playlist.set() lehnt sie mit "Kein Dateiname" ab, weil sie wie ein
++    // normaler Player-Clip ohne Datei behandelt wird), obwohl der Master
++    // dieselbe Quelle bereits über masterOpts.liveSources kennt.
++    playlist._liveSources = b.liveSources;
+     saveSettings(_settings);
+     _userLog(sess, 'config.save', `live-sources: ${b.liveSources.length} Einträge (${b.liveSources.map(l=>l.id).join(', ')})`);
+     log(`Live-Quellen aktualisiert: ${b.liveSources.length} Einträge — Pipeline wird neu aufgebaut`, 'info', 'system');

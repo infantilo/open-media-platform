@@ -20,6 +20,7 @@
 
 mod livesource;
 mod proxy;
+mod sse_proxy;
 mod uibundle;
 
 use std::process::Stdio;
@@ -62,6 +63,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 
 struct Store {
     web_ui_url: String,
+    events_url: String,
     video_connection: Arc<ReceiverConnection<LiveSourceControl>>,
     audio_connection: Arc<ReceiverConnection<LiveSourceControl>>,
     proxy_agent: ureq::Agent,
@@ -72,13 +74,22 @@ impl ParamStore for Store {
     fn descriptor(&self) -> Descriptor {
         Descriptor {
             latency: None,
-            parameters: vec![ParamSpec {
-                name: "webUiUrl".to_string(),
-                kind: ParamType::String,
-                unit: None,
-                range: None,
-                readonly: true,
-            }],
+            parameters: vec![
+                ParamSpec {
+                    name: "webUiUrl".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+                ParamSpec {
+                    name: "eventsUrl".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
+            ],
             methods: vec![],
         }
     }
@@ -86,6 +97,7 @@ impl ParamStore for Store {
     fn get(&self, name: &str) -> Option<Value> {
         match name {
             "webUiUrl" => Some(serde_json::json!(self.web_ui_url)),
+            "eventsUrl" => Some(serde_json::json!(self.events_url)),
             _ => None,
         }
     }
@@ -209,8 +221,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let web_ui_url = format!("http://{host}:{port}/");
 
+    // Eigener, echt streamender zweiter Listener für PIPELINE CONTROLLERs
+    // SSE-Kanal (s. sse_proxy.rs-Moduldoku) — proxy.rs' `/events`-Kurzschluss
+    // (501) hielt den Adapter am Leben, ließ `ui.html` aber dauerhaft im
+    // "OFFLINE"-Zustand hängen (live per Browser/CDP gefunden, nicht nur per
+    // API getestet). OMP_EXTRA_PORT: vom Launcher vorab per `podman run -p`
+    // veröffentlichter Port (CatalogEntry.ExtraPort, s. dortige Doku) — ein
+    // containerinterner `:0`-Zufallsport wäre von außen (Browser) nicht
+    // erreichbar, anders als bei omp-viewers `preview_port` (nativer
+    // Prozess, kein Container-Netzwerk-Namensraum dazwischen). Fehlt die
+    // Env (z. B. lokaler `cargo run` ohne Launcher), fällt `:0` zurück —
+    // dann läuft der Adapter selbst nativ, also ohne Erreichbarkeitslücke.
+    let events_port_env: u16 = env_or("OMP_EXTRA_PORT", "0").parse()?;
+    let events_port = sse_proxy::spawn(&format!("0.0.0.0:{events_port_env}"), pc_base.clone())?;
+    let events_url = format!("http://{host}:{events_port}/events");
+
     let store: Arc<dyn ParamStore> = Arc::new(Store {
         web_ui_url,
+        events_url,
         video_connection: video_connection.clone(),
         audio_connection: audio_connection.clone(),
         proxy_agent: proxy::make_agent(),

@@ -91,6 +91,23 @@ type CatalogEntry struct {
 	// nur für Katalog-Einträge, die es explizit setzen (admin-only Import,
 	// s. httpapi ImportCatalogEntry).
 	MxlAccess bool `json:"mxlAccess,omitempty"`
+	// ExtraPort (nur runner:"podman") veröffentlicht einen ZWEITEN,
+	// vorab vom Launcher gewählten Port (`podman run -p`, s. podman.go)
+	// und teilt ihn dem Container als OMP_EXTRA_PORT mit — für Nodes, die
+	// neben dem regulären Node-Contract-Port (OMP_PORT, gepuffertes
+	// extra_route/RawResponse) einen zweiten, echt streamenden Endpunkt
+	// brauchen (Vorbild: omp-viewer/omp-multiviewers MJPEG-Vorschau,
+	// omp-audio-mixers SSE-Metering — beides NATIVE Prozesse, deren
+	// zweiter Port ohne jede Veröffentlichung schon erreichbar ist, weil
+	// kein Container-Netzwerk-Namensraum dazwischenliegt). Ein Container
+	// braucht dieselbe Fähigkeit explizit veröffentlicht, sonst bleibt
+	// sein zweiter Port von außen unerreichbar (live gefunden:
+	// PIPELINE-CONTROLLER-Microservice, `nodes/omp-pipeline-controller`s
+	// `eventsUrl`-Parameter für echtes SSE-Streaming von `/events`, das
+	// der gepufferte Haupt-Proxy prinzipbedingt nicht liefern kann).
+	// Default false: wie MxlAccess ein bewusster Opt-in, kein globales
+	// Verhalten für jeden Podman-Import.
+	ExtraPort bool `json:"extraPort,omitempty"`
 }
 
 // LatencyRange ist ein Latenzbereich in Frames (Video) bzw. Samples

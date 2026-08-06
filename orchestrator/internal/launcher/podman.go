@@ -98,6 +98,13 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	if err != nil {
 		return "", 0, err
 	}
+	var extraPort int
+	if entry.ExtraPort {
+		extraPort, err = findFreePort()
+		if err != nil {
+			return "", 0, err
+		}
+	}
 
 	merged := map[string]string{}
 	for k, v := range entry.Env {
@@ -120,11 +127,17 @@ func runPodmanEntry(entry CatalogEntry, id, label, launchSecret string, extraEnv
 	if launchSecret != "" {
 		merged["OMP_LAUNCH_SECRET"] = launchSecret
 	}
+	if entry.ExtraPort {
+		merged["OMP_EXTRA_PORT"] = strconv.Itoa(extraPort)
+	}
 
 	args := []string{
 		"run", "-d", "--rm",
 		"--name", "omp-" + id,
 		"-p", fmt.Sprintf("%d:%d", port, port),
+	}
+	if entry.ExtraPort {
+		args = append(args, "-p", fmt.Sprintf("%d:%d", extraPort, extraPort))
 	}
 	// MxlAccess: expliziter Opt-in am Katalog-Eintrag (s. catalog.go-Doku)
 	// — Pfad innen wie außen identisch, keine Domain-Pfad-Übersetzung

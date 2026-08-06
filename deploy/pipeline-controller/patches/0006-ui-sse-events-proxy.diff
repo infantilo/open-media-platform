@@ -1,0 +1,47 @@
+--- a/ui.html
++++ b/ui.html
+@@ -2545,6 +2545,26 @@
+ // SSE mit Auto-Reconnect
+ let _sseRetry=null;
+ let _sseOffline=false;
++// OMP-Microservice: proxy.rs kann `/events` nicht streamen (gepufferte
++// RawResponse, s. dortige Moduldoku) und antwortet bewusst mit 501 statt
++// den Adapter an einem nie endenden Body zu blockieren — ohne diesen
++// Parameter bliebe die eingebettete Oberfläche dadurch DAUERHAFT im
++// "OFFLINE"-Zustand (live per Browser gefunden, nicht nur per API/curl
++// getestet). Der Adapter liefert bei Bedarf einen echten, streamenden
++// zweiten Endpunkt über den Node-Parameter `eventsUrl`; steht dieser
++// Parameter nicht zur Verfügung (Standalone-PIPELINE-CONTROLLER, kein
++// OMP-Adapter davor), bleibt `_sseEventsBase` `null` und `_connectSSE`
++// nutzt weiterhin den bisherigen relativen `/events`-Pfad — unverändertes
++// Verhalten für alle Nicht-OMP-Deployments.
++let _sseEventsBase=null;
++async function _resolveSseEventsBase(){
++  try{
++    const r=await fetch('/params/eventsUrl');
++    if(!r.ok) return;
++    const d=await r.json();
++    if(typeof d?.value==='string' && /^https?:\/\//.test(d.value)) _sseEventsBase=d.value;
++  }catch{/* kein OMP-Adapter davor, oder Param unbekannt — Fallback bleibt relativ */}
++}
+ function _sseSetOffline(){
+   if(_sseOffline) return;
+   _sseOffline=true;
+@@ -2570,7 +2590,8 @@
+ function _connectSSE(){
+   if(window._sse){try{window._sse.close();}catch{}}
+   if(_sseRetry){clearInterval(_sseRetry);_sseRetry=null;}
+-  const sseUrl = _auth?.token ? `/events?token=${encodeURIComponent(_auth.token)}` : '/events';
++  const evUrl = _sseEventsBase || '/events';
++  const sseUrl = _auth?.token ? `${evUrl}?token=${encodeURIComponent(_auth.token)}` : evUrl;
+   const sse=new EventSource(sseUrl);
+   window._sse=sse;
+   sse.addEventListener('open',()=>{
+@@ -12579,6 +12600,7 @@
+     }
+     _applyAuthUI();
+   } catch { /* server offline — proceed, SSE error handler will show offline */ }
++  await _resolveSseEventsBase();
+   _connectSSE();
+   _loadShortcuts();
+   loadSavedList();

@@ -20,9 +20,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 # node-gyp-Build von gst-kit gebraucht, s. PIPELINE CONTROLLERs eigenes INSTALL.md
 # Abschnitt 1+5) + Puppeteer/Chromium-Laufzeit-Abhängigkeiten (oGraf-Grafik-Engine,
 # INSTALL.md "Puppeteer/oGraf Chrome-Abhängigkeiten") + libunwind8/libdw1 (gst-mxl-rs
-# NEEDED-Einträge, per readelf geprüft) + Node.js 18+.
+# NEEDED-Einträge, per readelf geprüft) + Node.js 18+ + ffmpeg (INSTALL.md Abschnitt 1,
+# Zeile 21 — live gefunden: ohne dieses Paket wirft lib/MediaLibrary.js' ffprobe-
+# basierte Analyse für JEDE Datei in mediaDir, der periodische scan()-Job (alle 5s)
+# verschiebt daraufhin jede neu abgelegte Mediendatei sofort nach dead/ — Datei-
+# basierte Wiedergabe war dadurch für den gesamten Microservice unbemerkt kaputt,
+# da bisher nie eine echte Datei ins Container-mediaDir gelegt wurde).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl gnupg \
+      ffmpeg \
       gstreamer1.0-tools \
       gstreamer1.0-plugins-base \
       gstreamer1.0-plugins-good \

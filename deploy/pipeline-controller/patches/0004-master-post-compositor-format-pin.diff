@@ -1,0 +1,27 @@
+--- a/lib/MasterPipeline.js
++++ b/lib/MasterPipeline.js
+@@ -272,7 +272,23 @@
+     const pipe = [
+       // ── Video main path ──────────────────────────────────────────────────────
+       compElem,
+-      `${useGl ? '! gldownload ' : ''}! videoconvert ! ${vcaps}`,
++      // Live gefunden (OMP-Microservice-Container, 2026-08-05): `comp`s drei
++      // Sink-Pads sind alle RGBA (fg/bg/grafikSrc, s. rgba-Konstante unten),
++      // `vcaps` erzwingt hier aber NUR width/height/framerate/colorimetry,
++      // KEIN Format — die Caps-Verhandlung landet dadurch auf RGBA (billigste
++      // Wahl), und `colorimetry=bt709` auf einem RGB-Format ist fuer GStreamer
++      // bedeutungslos/inkonsistent ("invalid matrix N for RGB format"-Warnung).
++      // Ergebnis: gst_video_frame_map_id-Assertion auf JEDEM nachgelagerten
++      // videoconvert (comp.-Ausgang wird an mehrere Tee-Zweige verteilt),
++      // Dauerfeuer mehrfach pro Frame in stderr/journal — kein Fehler auf dem
++      // Bus (nur GLib-CRITICAL), daher unbemerkt lauffaehig, aber Log-Spam
++      // und ein GStreamer-Assertion-Pfad, der nicht dauerhaft verlassen
++      // werden sollte. Fix: direkt nach dem Compositor explizit auf ein echtes
++      // YUV-Format (I420, das die vorhandene Farbmatrix sinnvoll traegt)
++      // konvertieren, bevor die Caps an nachgelagerte Zweige weitergereicht
++      // werden — videoconvert leistet ohnehin die Konvertierungsarbeit, nur
++      // jetzt mit einem eindeutigen Ziel statt einer offenen Formatwahl.
++      `${useGl ? '! gldownload ' : ''}! videoconvert ! video/x-raw,format=I420,width=${width},height=${height},framerate=${fps}/1,colorimetry=${colorimetry}`,
+       // rec_pgm_v: post-grafik, pre-branding — tee before branding overlay
+       `! tee name=rec_pgm_tee`,
+       `rec_pgm_tee. ! queue leaky=downstream max-size-buffers=5 ! intervideosink channel=rec_pgm_v sync=false async=false`,

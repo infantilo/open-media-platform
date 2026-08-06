@@ -1,0 +1,83 @@
+--- a/lib/MasterPipeline.js
++++ b/lib/MasterPipeline.js
+@@ -1248,7 +1248,19 @@ class MasterPipeline extends EventEmitter {
+     const p = this._liveFeederPipelines.get(lsId);
+     if (!p) return;
+     this._liveFeederPipelines.delete(lsId);
+-    try { await p.stop(2000); } catch {}
++    // s. stopSeeder() in server.js für die ausführliche Begründung: gst-kit
++    // resolved p.stop() auch bei GST_STATE_CHANGE_ASYNC (Timeout), nie ein
++    // reject — ein zu kurzes Timeout ließ die alte Feeder-Pipeline (samt
++    // GStreamer-Threads) unbemerkt weiterlaufen statt sie zu beenden.
++    try {
++      let r = await p.stop(2000);
++      if (r?.result !== 'success') r = await p.stop(5000);
++      if (r?.result !== 'success') {
++        this._log(`Live-Feeder ${lsId}: stop() bestätigte kein GST_STATE_NULL (result=${r?.result}) — evtl. nicht sauber beendet`, 'warn');
++      }
++    } catch (e) {
++      this._log(`Live-Feeder ${lsId}: stop()-Fehler: ${e.message}`, 'warn');
++    }
+     this._log(`Live-Feeder gestoppt: ${lsId}`);
+   }
+
+@@ -1266,7 +1278,32 @@ class MasterPipeline extends EventEmitter {
+     this._liveSignalEls = {};
+     await this.stopAllLiveFeeders();
+     if (this.opts.debugger?.enabled) this.opts.debugger.stop('master');
+-    if (this.pipeline) { try { await this.pipeline.stop(); } catch {} this.pipeline = null; }
++    if (this.pipeline) {
++      // s. stopSeeder() in server.js / stopLiveFeeder() oben: gst-kit resolved
++      // p.stop() auch bei GST_STATE_CHANGE_ASYNC (Timeout), nie ein reject —
++      // die Haupt-Pipeline hat mit Abstand die meisten Elemente (Compositor,
++      // alle Tee-Zweige, OMP-MXL-Zusatzausgang), ein zu kurzes Timeout ließ
++      // sie unbemerkt komplett weiterlaufen, während sofort danach eine neue
++      // aufgebaut wurde (ensureMaster()) — akkumuliert bei jedem Neuaufbau
++      // (Live-Quellen-Änderung, Settings-Wechsel, …) weitere GStreamer-Threads,
++      // live per Thread-Namen (audiotestsrc/queue/intervideosrc, hochzählend
++      // über mehrere Neuaufbau-Zyklen hinweg) und via CPU-Vergleich vor/nach
++      // manuellem stop() bestätigt (stop() senkte die Prozess-CPU-Last sofort
++      // drastisch, ein anschließendes start() sprang sofort wieder auf den
++      // hohen Ausgangswert zurück — beweist, dass die Last direkt an der
++      // Anzahl gleichzeitig laufender Pipeline-Instanzen hängt, nicht an
++      // OMPs Live-Quellen-/SSE-Code, der bei diesem Test unbeteiligt war).
++      try {
++        let r = await this.pipeline.stop(2000);
++        if (r?.result !== 'success') r = await this.pipeline.stop(8000);
++        if (r?.result !== 'success') {
++          this._log(`Master-Pipeline: stop() bestätigte kein GST_STATE_NULL (result=${r?.result}) — evtl. nicht sauber beendet, neue Pipeline läuft möglicherweise parallel zur alten weiter`, 'warn');
++        }
++      } catch (e) {
++        this._log(`Master-Pipeline: stop()-Fehler: ${e.message}`, 'warn');
++      }
++      this.pipeline = null;
++    }
+     if (this._grafikProbeUnsub) { try { this._grafikProbeUnsub(); } catch {} this._grafikProbeUnsub = null; }
+     this._grafikPtsBase    = null;
+     this._transparentFrame = null;
+--- a/server.js
++++ b/server.js
+@@ -326,7 +326,24 @@ async function stopSeeder(slotId) {
+   const p = _seeders[slotId];
+   if (!p) return;
+   _seeders[slotId] = null;
+-  try { await p.stop(); } catch {}
++  // gst-kit's Pipeline.stop() resolves successfully even when the underlying
++  // GST_STATE_NULL transition times out (result:"async" instead of "success") —
++  // it never rejects/throws on timeout, so the previous `try{await p.stop()}catch{}`
++  // silently treated a stuck teardown as done. With several audiotestsrc/
++  // interaudiosink elements per seeder (one per audio group), the default 1s
++  // timeout can be too short under load; the old, still-running pipeline (and
++  // its GStreamer streaming threads) was then abandoned instead of stopped,
++  // leaking on every startSeeder() cycle. Explicit result-check + one retry
++  // with a longer timeout, loud warning if it still doesn't confirm.
++  try {
++    let r = await p.stop(1000);
++    if (r?.result !== 'success') r = await p.stop(5000);
++    if (r?.result !== 'success') {
++      console.warn(`[WARN][seeder] Seeder ${slotId}: stop() bestätigte kein GST_STATE_NULL (result=${r?.result}) — Pipeline evtl. nicht sauber beendet`);
++    }
++  } catch (e) {
++    console.warn(`[WARN][seeder] Seeder ${slotId}: stop() Fehler: ${e.message}`);
++  }
+ }
