@@ -14722,3 +14722,257 @@ jetzt versioniert.
 **Dateien:** `deploy/dev/install-mxl.sh`,
 `deploy/dev/mxl-patches/0001-mxlsink-set-caps-idempotent-and-continuous-flow-cleanup.diff`
 (neu).
+
+## 2026-08-06 (Nachtrag 119) — PIPELINE CONTROLLER: drei Fixes aus der Vorsitzung (2026-08-05) live verifiziert, ein vierter, echter Ressourcen-Leak beim Verifizieren selbst gefunden+behoben
+
+Fortsetzung derselben Nutzeraufgabe ("pipeline controller node startet
+die pipeline darin nicht, debugge und fixe", zuletzt Nachtrag 117/118).
+Die Vorsitzung (2026-08-05) hatte bereits drei PC-Fixes + den
+zugehörigen OMP-seitigen Code geschrieben, aber unverifiziert und
+unkommittiert hinterlassen: `deploy/pipeline-controller/patches/
+0004-master-post-compositor-format-pin.diff`,
+`0005-playlist-livesources-sync.diff`, `0006-ui-sse-events-proxy.diff`,
+`nodes/omp-pipeline-controller/src/sse_proxy.rs` (neu),
+`nodes/omp-pipeline-controller/src/{main,livesource}.rs`,
+`orchestrator/internal/launcher/{catalog,podman}.go`
+(`CatalogEntry.ExtraPort`), `deploy/pipeline-controller/Containerfile`
+(ffmpeg). Diese Sitzung: echten Image-Build (`deploy/pipeline-
+controller/build.sh`) durchgeführt, Instanz über den Orchestrator
+gestartet (Katalogeintrag `omp-pipeline-controller` war bereits mit
+`extraPort:true` importiert), alle drei Fixes einzeln gegen die echte
+Instanz verifiziert:
+
+**0004 (Format-Pin):** `pipelineString` aus dem echten Master-Zustand
+(`GET /api/config`, per SSE-`state`-Event bestätigt) zeigt
+`video/x-raw,format=I420,...` direkt nach dem Compositor; Container-Log
+zeigt über die gesamte Testdauer keine `invalid matrix`/`gst_video_
+frame_map_id`-GLib-CRITICALs mehr.
+
+**0005 (Live-Quellen-Sync):** Echten `omp-source` gestartet, Video- UND
+Audio-Sender per `POST /api/v1/graph/edges` auf PC Verifys Receiver
+gepatcht, `GET /api/live-sources` zeigt danach einen kombinierten
+Eintrag mit BEIDEN Flow-IDs in einer URI (Beweis, dass `sync_debounced`
+aus `livesource.rs` — s. u. — beide Connects zu einem Sync
+zusammenfasst). `POST /api/playlist/set` mit
+`[{"source":"omp-input","duration":10}]` liefert `"ok":true` /
+`validation:[{"ok":true}]` — ohne den Patch hätte `_isPlayer()` das
+Item mangels bekannter Live-Quelle als Player-Clip behandelt und mit
+"Kein Dateiname" abgelehnt (Code-Pfad `PlaylistEngine.js:1204ff.
+_isLiveSource`/`:1265 _isPlayer` gegengelesen, nicht nur vermutet).
+
+**0006 (SSE-Events-Proxy) + `ExtraPort`:** `curl -N` gegen den
+`eventsUrl`-Port zeigt einen echten, ungepufferten `text/event-
+stream` (50 KB in 4s, kein `Content-Length`). Zusätzlich per echtem
+Headless-Chromium (CDP, `chromium --headless=new --remote-debugging-
+port`, `feedback_browser_verification_cdp_over_dump_dom` befolgt)
+gegen die eingebettete `ui.html` verifiziert:
+`window._sse.readyState === 1` (OPEN), `window._sse.url` zeigt exakt
+auf den `eventsUrl`-Port, kein "OFFLINE"-Element im DOM — der
+ursprünglich behobene Bug (dauerhaft OFFLINE durch `proxy.rs`s
+bewusstes 501 auf `/events`) tritt nicht mehr auf.
+
+**`livesource.rs`s `sync_debounced()`:** Video- und Audio-Receiver-
+Connect via zwei parallelen `POST /api/v1/graph/edges`-Aufrufen
+ausgelöst — Container-Log zeigt exakt EIN `"Live-Quellen aktualisiert:
+1 Einträge — Pipeline wird neu aufgebaut"` statt zwei, bestätigt die
+500ms-Debounce-Koaleszenz.
+
+### Ressourcen-Leak beim Verifizieren gefunden: `gst-kit`s `Pipeline.stop()` bestätigt kein `GST_STATE_NULL`, PC-Aufrufer werten das Resolve nie aus
+
+**Symptom:** Beim Verifizieren fiel eine `node server.js`-CPU-Last von
+teils >450% (Mehrkernsystem) auf, die mit jedem weiteren Master-
+Pipeline-Neuaufbau (`ensureMaster()`, ausgelöst z. B. durch das
+Live-Quellen-Speichern oben) weiter STIEG statt sich auf einen
+stationären Wert einzupendeln — reproduzierbar auf einer komplett
+unberührten Zweitinstanz (kein Live-Source-Wiring, kein SSE-Client,
+nichts), also unabhängig von 0004/0005/0006 (per direktem A/B-Test
+zusätzlich bestätigt: `0004` in einer laufenden Instanz live per
+`podman exec`+`sed` auf den alten, unbeschränkten `${vcaps}`-Ausdruck
+zurückgesetzt und neu gestartet — CPU stieg identisch weiter).
+
+**Diagnose:** `/proc/<pid>/task/*/comm` gegen den `node server.js`-
+Prozess zeigte weit mehr als plausible GStreamer-Streaming-Threads für
+EINE Instanz — u. a. `audiotestsrc63:` bis `audiotestsrc94:` (32
+Stück, bei nur 3 Playern × 3 Audio-Gruppen = 9 pro Zyklus erwartet)
+und `queue133:src` bis `queue200:src`. `POST /api/master/stop` senkte
+die CPU-Last der Instanz binnen Sekunden von ~475% auf ~50–110%;
+`POST /api/master/start` sprang sofort wieder auf ~475–490% —
+bewies, dass die Last direkt an der Zahl gleichzeitig laufender
+Pipeline-Instanzen hängt (Leak), nicht am OMP-Live-Quellen-/SSE-Code.
+
+**Root Cause** (`node_modules/gst-kit/src/cpp/{pipeline,async-
+workers}.cpp`, im Container-Image mitgeliefert, gelesen statt
+geraten): `Pipeline::stop()` ruft `gst_element_set_state(pipeline,
+GST_STATE_NULL)` und wartet per `gst_element_get_state(..., timeout)`
+(Default 1000ms, aus JS ohne Zeitangabe). Läuft der Zustandswechsel
+über den Timeout hinaus (`GST_STATE_CHANGE_ASYNC`, bei einer
+Multi-Branch-Pipeline mit 9+ Elementen unter Last plausibel), wird
+`StateChangeWorker::OnOK()` TROTZDEM aufgerufen (Promise resolved,
+niemals reject) — nur das `result`-Feld im Resolve-Wert unterscheidet
+`"success"` von `"async"`. PIPELINE CONTROLLERs eigener Code
+(`stopSeeder()` in `server.js`, `stopLiveFeeder()` und die
+Master-`stop()`-Methode in `MasterPipeline.js`) hat dieses `result`-
+Feld nirgends geprüft — nur `try { await p.stop(...) } catch {}`,
+was bei einem resolvten (nicht rejecteten) Timeout gar nicht erst
+greift. Eine noch nicht wirklich auf NULL gestellte, alte Pipeline
+wurde damit stillschweigend als "gestoppt" behandelt und sofort
+danach eine komplett neue aufgebaut — bei jedem Neuaufbau-Zyklus (jede
+Live-Quellen-/Settings-Änderung) blieben so weitere GStreamer-Threads
+der alten Pipeline unbemerkt am Leben.
+
+**Fix, neuer Patch `0007-pipeline-stop-async-timeout-leak.diff`**
+(dieselbe Sitzung, dasselbe Muster wie 0001-0006 — Änderung direkt in
+der echten `/home/infantilo/PIPELINE CONTROLLER`-Arbeitskopie gemacht,
+`git diff` als Patch gesichert, Arbeitskopie danach `git checkout`
+zurückgesetzt, s. CLAUDE.md "bleibt unangetastet"): an allen drei
+Aufrufstellen (`stopSeeder` in `server.js`; `stopLiveFeeder` und die
+Haupt-`stop()`-Methode in `MasterPipeline.js`, letztere mit Abstand am
+wichtigsten — die Compositor-Hauptpipeline hat die meisten Elemente)
+wird das Resolve-Ergebnis jetzt geprüft; bei `result !== "success"`
+folgt ein zweiter Versuch mit deutlich längerem Timeout (5s/5s/8s
+statt 1s/2s/2s), und erst wenn auch der nicht bestätigt, eine laute
+Warnung ins Log (statt stillem Schlucken) — kann einen echten
+GStreamer-seitigen Deadlock nicht auflösen, macht ihn aber sichtbar
+statt ihn als Leak zu verstecken.
+
+**Verifikation des Fixes:** Image mit `0007` neu gebaut, frische
+Instanz gestartet, `/proc/<pid>/task`-Thread-Zählung nach Boot: 129
+GStreamer-artige Threads. Drei explizite `master/stop`+`master/start`-
+Zyklen hintereinander ausgeführt — Zählung bleibt bei allen drei exakt
+bei 129 (vorher: sichtbares Wachstum über mehrere Zyklen,
+audiotestsrc-Index 12–18 → 63–94 → 133–200). Keine der neuen
+Warnmeldungen im Log — jeder `stop()` bestätigte in dieser Sitzung
+`GST_STATE_NULL` innerhalb der (ggf. verlängerten) Frist.
+
+**Bekannter Restwert, kein Bug:** die Instanz pendelt sich nach dem
+Fix bei ~475–490% CPU EINER laufenden Master-Pipeline ein (statt
+weiter zu wachsen) — das ist die tatsächliche Kompositions-/Encoding-
+Last einer vollen Software-Broadcast-Pipeline (Compositor, 3
+Audio-Gruppen à 2/2/6 Kanälen, Branding, MXL-Zusatzausgang, alles ohne
+GPU im headless Container) und keine Regression aus dieser oder der
+Vorsitzung — bewusst nicht weiter "optimiert", da außerhalb des
+Sitzungsauftrags und potenziell PC-intern (separates Projekt, s.
+CLAUDE.md).
+
+**Nebenfund, unklarer Ursprung:** `ui/graph/flow-canvas.ts` trug beim
+Start dieser Sitzung bereits eine unkommittierte Änderung (readonly-
+Parameter-Renderer zeigt Objekt-/Array-Werte jetzt als formatiertes
+JSON statt `"[object Object]", referenziert im eigenen Kommentar
+explizit `omp-mxf-player`s `items`/`mediaLibrary`/`programGroups`/
+`shufflePresets`-Parameter) — inhaltlich korrekt, direkt an das unten
+dokumentierte `omp-mxf-player` gekoppelt, `deno bundle` kompiliert
+sauber (per `make start` bestätigt); vermutlich Teil derselben
+Vorsitzung, nur nicht im initial beobachteten Git-Status dieser
+Sitzung sichtbar gewesen. Mitcommitted, kein eigenständiger Fund
+dieser Sitzung.
+
+**Aufgeräumt:** alle für die Verifikation gestarteten Test-Container/
+-Instanzen (PC Verify, PC Baseline, PC Fix Verify, omp-source) über
+die Launcher-API wieder entfernt, `podman image prune` nach jedem
+Build, `/dev/shm/omp-mxl` zurückgesetzt — keine Leichen hinterlassen.
+
+**Dateien:** `deploy/pipeline-controller/Containerfile`,
+`deploy/pipeline-controller/patches/000{4,5,6,7}-*.diff` (0007 neu),
+`nodes/omp-pipeline-controller/src/{main,livesource}.rs`,
+`nodes/omp-pipeline-controller/src/sse_proxy.rs` (neu),
+`nodes/omp-pipeline-controller/Cargo.toml`,
+`orchestrator/internal/launcher/{catalog,podman}.go`,
+`ui/graph/flow-canvas.ts`.
+
+## 2026-08-06 (Nachtrag 120) — Neuer Node `omp-mxf-player`: MXF-Player mit ORF-Programmgruppen-Audio-Shuffle, live gegen echte MXF-Datei verifiziert
+
+Nutzerauftrag aus der Vorsitzung (2026-08-05, unkommittiert
+hinterlassen): eigenständiger MXF-Player nach `Audio Tonspurerweiterung
+Q3 2026 PD.pdf` (ORF-intern, `/home/infantilo/`) — 8 MXF-Mono-
+Tonspuren werden je nach gewähltem Preset (13 offizielle "PCMS
+ausspielen als"-Status ab 15.9.2026, PDF S.3+4/5) auf fünf
+gleichzeitig aktive MXL-Sender verteilt: Programmton, Hörfilm/AD,
+Originalton, Dolby E (bit-exakter Durchgriff), 5.1 diskret. Kein
+Zusammenhang mit dem am 2026-07-14 recherchierten "K2 Teil 2 (MXF)"
+(dortige MPEG-2-Codec-Frage bleibt für den regulären `omp-player`-
+Phasenplan offen — dieser Node ist ein separater, ORF-spezifischer
+Ad-hoc-Auftrag, keine Umsetzung von K2 Teil 2).
+
+Diese Sitzung: den bereits geschriebenen, aber unverifizierten Code
+(`nodes/omp-mxf-player/{Cargo.toml,src/{main,pipeline,presets}.rs}`,
+~1500 Zeilen, `deploy/catalog.json`- und `nodes/Cargo.toml`-Eintrag)
+vollständig gegengelesen und live verifiziert.
+
+**Architektur** (`pipeline.rs`-Moduldoku für Details): `omp-player`s
+A/B-Slot-Cue/Take 1:1 übernommen, aber auf MEHRERE gleichzeitig aktive
+Audio-Ausgänge verallgemeinert (ein `input-selector` je Programmgruppe
+statt nur einem für Audio). `filesrc ! mxfdemux` statt
+`uridecodebin` — reale ORF-MXF-Dateien tragen die 8 Tonspuren als 8
+separate Mono-Essenzspuren (`ffprobe` gegen `/home/infantilo/PIPELINE
+CONTROLLER/media/ET270438.mxf` bestätigt: 8× `pcm_s24le, channels=1`,
+diese Sitzung erneut nachgeprüft), `uridecodebin` liefert dagegen nur
+einen einzigen Audio-Pad. `mxfdemux`s Track-Pads (`track_<N>`) kommen
+in unbestimmter Reihenfolge und — live diese Sitzung entdeckt — mit
+einer nicht bei 1 beginnenden Nummerierung (`track_1` ist die
+Timecode-Spur ohne Essenz, `track_2` Video, `track_3`…`track_10` die 8
+Audiospuren); der Code selbst ist davon unberührt, da er nicht die
+rohe `track_<N>`-Nummer, sondern den RANG in der bei `no-more-pads`
+aufsteigend sortierten Liste als "Tonspur 1..8" interpretiert.
+
+**Live-Verifikation** (`nodes/target/debug/omp-mxf-player`, echte
+NATS/Registry/MXL-Domain, Datei-Kopie von `ET270438.mxf`, kein
+Symlink — ein Symlink hätte `mediaLibrary`s `DirEntry::file_type()`
+fälschlich als "kein File" ausgeschlossen, reines Testartefakt, kein
+Code-Bug):
+- `append`/`cue`/`take` über die echte Node-Contract-API; Dauer-Probe
+  (`gst_pbutils::Discoverer`) liefert korrekt `10000ms`.
+- Alle 6 MXL-Sender (1 Video + 5 Audiogruppen) erscheinen bei
+  `mxl-info -l` UND in der NMOS-Registry (`GET /x-nmos/query/v1.3/
+  senders`), alle `Active: true`.
+- **Preset-Routing per Pad-Probe UND per externem MXL-Consumer
+  doppelt bestätigt:** ein temporärer GStreamer-Pad-Probe direkt auf
+  dem `audiomixmatrix`-Sink/Src-Pad der "pt"-Gruppe zeigte reale,
+  fortlaufend nicht-nullwertige Puffer (Beweis, dass Audio bis dorthin
+  fließt) — UND, unabhängig davon, `gst-launch-1.0 mxlsrc … !
+  fakesink dump=true` gegen die tatsächlich laufende Instanz-Flow-ID:
+  bei Preset `stereo` ist die "pt"-Gruppe durchgehend nicht-still
+  (Tonspur 1/2 tragen laut `ffprobe astats` echtes Signal, −26 dB
+  RMS), "ot" durchgehend still (keine Route). Bei Preset `2ton-mono`
+  wechselt "ad" (Hörfilm/AD, gespeist aus Tonspur 2, ebenfalls
+  echtes Signal) von still auf nicht-still — direkter Beweis, dass
+  unterschiedliche Presets tatsächlich unterschiedliches, reales Audio
+  auf unterschiedliche Sender routen, nicht nur unterschiedliche
+  (aber wirkungslose) Matrix-Properties setzen.
+- Preset `stereo-51-diskret` zusätzlich gegen die echte Datei
+  durchlaufen: `mxl-info`-Kanalzahl der `surround51`-Gruppe korrekt 6.
+- Kein GStreamer-CRITICAL/-ERROR über die gesamte Testdauer
+  (mehrere Cue/Take-Zyklen, mehrere Preset-Wechsel, echte MXF-
+  Demux-/Encode-Kette).
+
+**Testmethodik-Fallstricke dieser Sitzung** (kein Code-Bug, aber
+zeitaufwendig): `/dev/shm/omp-mxl` ist tmpfs und wird von MXL-Flow-
+Dateien nicht automatisch geräumt, wenn ein Prozess per SIGKILL statt
+sauber beendet wird — mehrfaches Neustarten des Test-Prozesses ohne
+zwischenzeitliches Leeren führte dazu, dass zunächst gegen
+verwaiste, eingefrorene Flow-IDs aus vorherigen Testläufen
+konsumiert wurde (scheinbare Stille, tatsächlich keine reale
+Verbindung zum aktuell laufenden Prozess) — Ursache erst über
+`/proc/<pid>/fd` (welche Flow-IDs hält der AKTUELLE Prozess offen)
+zweifelsfrei geklärt. Zusätzlich: mehrzeilige Bash-Befehlsketten
+brachen beim ersten fehlschlagenden Einzelbefehl (z. B. `pkill`, wenn
+kein Prozess lief) sang- und klanglos komplett ab — künftig für
+mehrstufige Testabläufe ein Skript mit `set +e` statt einer
+Befehlskette verwenden. Passt zu `feedback_debug_tap_shared_file_race`
+(bereits gespeichert): verwaiste Prozesse/geteilte Dateien vor jedem
+Repro-Versuch räumen.
+
+**Aufräumen:** vor dem finalen Commit die drei `eprintln!("…DEBUG…")`-
+Zeilen aus `pipeline.rs`s `no-more-pads`-Handler entfernt (Rest-
+Instrumentierung aus der Vorsitzung) — kein anderer Node im
+Workspace lässt bare `DEBUG`-Trace-`eprintln!`s im committeten Code
+stehen (`grep -rn 'eprintln!.*DEBUG' nodes/*/src/*.rs` gegengeprüft),
+alle anderen `eprintln!`-Aufrufe im gesamten Workspace sind echte
+Fehlerpfade. `cargo build -p omp-mxf-player` nach dem Aufräumen
+erneut grün, Live-Test mit dem bereinigten Binary wiederholt
+(Preset `stereo-51-diskret`) — unverändert sauber.
+
+**Dateien:** `nodes/omp-mxf-player/` (neu: `Cargo.toml`,
+`src/{main,pipeline,presets}.rs`), `nodes/Cargo.toml`
+(Workspace-Member), `deploy/catalog.json` (neuer Eintrag,
+`runner:"process"`, Debug-Pfad wie bei anderen Nodes im Dev-Betrieb
+üblich).
