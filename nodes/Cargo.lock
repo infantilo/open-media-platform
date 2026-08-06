@@ -1251,7 +1251,6 @@ dependencies = [
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",
- "tiny_http",
  "tokio",
 ]
 
@@ -1323,6 +1322,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "ureq",
 ]
 
 [[package]]
@@ -1457,6 +1457,7 @@ name = "omp-viewer"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-app",
  "omp-mediaio",
  "omp-node-sdk",
  "serde_json",

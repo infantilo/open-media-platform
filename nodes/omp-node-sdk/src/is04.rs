@@ -37,7 +37,14 @@ pub const TRANSPORT_MXL: &str = "urn:x-omp:transport:mxl";
 /// teilen können).
 pub const INSTANCE_TAG: &str = "urn:x-omp:instance";
 
-fn now_version() -> String {
+/// `pub(crate)` seit 2026-08-06: `node::NodeHandle::add_receiver`/
+/// `remove_receiver` müssen `Device::version` selbst auffrischen, bevor
+/// sie das mutierte Device erneut registrieren (IS-04-Registries
+/// behandeln `version` als striktes Änderungs-Ordnungskriterium — ein
+/// erneutes POST mit UNVERÄNDERTEM `version`-Wert wurde von der echten
+/// nmos-cpp-Registry live mit HTTP 400 abgelehnt, nicht angenommen,
+/// s. docs/decisions.md).
+pub(crate) fn now_version() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Systemzeit vor 1970");
@@ -734,6 +741,27 @@ impl RegistryClient {
         let url = format!(
             "{}/x-nmos/registration/v1.3/resource/nodes/{}",
             self.base_url, node_id
+        );
+        match ureq::delete(&url).call() {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(404)) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Meldet einen einzelnen Receiver bei der Registry ab (`DELETE
+    /// .../resource/receivers/<id>`, gleiches Pfad-Schema wie
+    /// `deregister_node` — die IS-04-Registration-API generalisiert über
+    /// `<resourceType>s/<id>` für jeden Resource-Typ, s.
+    /// `specs.amwa.tv`s RegistrationAPI.html). Neu 2026-08-06 für
+    /// [`crate::node::NodeHandle::remove_receiver`] — bislang gab es
+    /// nichts, das einen Receiver EINZELN (statt den ganzen Node) wieder
+    /// entfernt. 404 zählt wie bei `deregister_node` als Erfolg
+    /// (idempotent).
+    pub fn deregister_receiver(&self, receiver_id: &str) -> Result<(), String> {
+        let url = format!(
+            "{}/x-nmos/registration/v1.3/resource/receivers/{}",
+            self.base_url, receiver_id
         );
         match ureq::delete(&url).call() {
             Ok(_) => Ok(()),

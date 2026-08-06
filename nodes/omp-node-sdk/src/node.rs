@@ -184,12 +184,30 @@ impl MediaReadySource {
     }
 }
 
+/// Gemeinsamer, veränderlicher Registrierungszustand zwischen dem
+/// Heartbeat-Task und [`NodeHandle::add_receiver`]/[`NodeHandle::
+/// remove_receiver`] (2026-08-06, `omp-viewer`s dynamische Audio-
+/// Eingänge — erste Node in OMP, die Empfänger nach `start()` noch
+/// hinzufügt/entfernt, statt sie einmalig aus `NodeConfig::receivers`
+/// abzuleiten). `node`/`sources`/`flows`/`senders` bleiben nach `start()`
+/// unverändert (kein Node braucht bisher dynamische Sender/Flows) — nur
+/// `device` (dessen `receivers`-Liste referenziert werden muss) und
+/// `receivers` selbst wandern hier rein, alles andere bleibt wie bisher
+/// direkt in `heartbeat_loop` gefangen.
+struct RegisteredReceivers {
+    device: Device,
+    receivers: Vec<Receiver>,
+}
+
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
 /// die Möglichkeit, zusätzliche Events wie Alarme zu veröffentlichen.
 #[derive(Clone)]
 pub struct NodeHandle {
     pub node_id: String,
     publisher: Option<Arc<health::Publisher>>,
+    registry: RegistryClient,
+    label: String,
+    shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
 }
 
 impl NodeHandle {
@@ -241,6 +259,106 @@ impl NodeHandle {
         if let Err(e) = publisher.publish_item_ended(&self.node_id, item_id).await {
             eprintln!("omp-node-sdk: itemEnded publish failed: {e}");
         }
+    }
+}
+
+/// Baut ein einzelnes `Receiver`-Resource aus einer [`ReceiverSpec`] —
+/// gemeinsame Logik von `start()` (einmalig aus `NodeConfig::receivers`)
+/// und [`NodeHandle::add_receiver`] (2026-08-06, nach `start()` zur
+/// Laufzeit). `label_index` speist nur den generischen Fallback-Namen
+/// ("<Label> Receiver <n>"), keine Identität.
+fn build_receiver(id: &str, label_index: usize, spec: &ReceiverSpec, device_id: &str, node_label: &str) -> Receiver {
+    let label = spec
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("{node_label} Receiver {}", label_index + 1));
+    let mut receiver = Receiver::new(id, &label, device_id);
+    if let Some(transport) = &spec.transport {
+        receiver.transport = transport.clone();
+    }
+    if let Some(media_types) = &spec.media_types {
+        receiver.caps.media_types = media_types.clone();
+        // Live gefunden (Kapitel 19 Teil 3, `docs/decisions.md`):
+        // `Receiver::new` setzt `format` fest auf `FORMAT_VIDEO`,
+        // unabhängig von `media_types` — inkonsistent zu
+        // `caps.media_types` und von der Registry mit HTTP 400
+        // abgelehnt, sobald ein Node einen Audio-Receiver mit eigenen
+        // `media_types` deklariert. `format` muss zum tatsächlichen
+        // Medientyp passen, nicht am Video-Default kleben bleiben.
+        if let Some(first) = media_types.first() {
+            if first.starts_with("audio/") {
+                receiver.format = is04::FORMAT_AUDIO.to_string();
+            } else if first.starts_with("video/") {
+                receiver.format = is04::FORMAT_VIDEO.to_string();
+            }
+        }
+    }
+    receiver
+}
+
+impl NodeHandle {
+    /// Registriert einen zusätzlichen Receiver **nach** `start()` — erste
+    /// Nutzung in OMP (2026-08-06, `omp-viewer`s dynamische Audio-
+    /// Eingänge: "wie viele Meter ich sehen will, ist eine Operator-
+    /// Entscheidung zur Laufzeit, keine Startkonfiguration"). Jeder
+    /// andere Node bleibt unverändert bei der statischen
+    /// `NodeConfig::receivers`-Liste aus `start()` — dieser Pfad ist rein
+    /// additiv, keine bestehende Nutzung ändert sich.
+    ///
+    /// Registriert den neuen Receiver UND das aktualisierte Device
+    /// (dessen `receivers`-Liste ihn jetzt referenzieren muss) sofort
+    /// (nicht erst beim nächsten Heartbeat-Tick, für zügige Sichtbarkeit
+    /// im Flow-Editor) und trägt ihn in die geteilte Liste ein, die der
+    /// Heartbeat-Task ab jetzt mit am Leben hält.
+    pub async fn add_receiver(&self, spec: ReceiverSpec) -> Result<Receiver, BoxError> {
+        let id = spec.id.clone().unwrap_or_else(crate::idgen::new_v4);
+        let (receiver, device_snapshot) = {
+            let mut shared = self.shared_receivers.lock().expect("lock poisoned");
+            let label_index = shared.receivers.len();
+            let receiver = build_receiver(&id, label_index, &spec, &shared.device.id, &self.label);
+            shared.receivers.push(receiver.clone());
+            shared.device.receivers.push(id.clone());
+            shared.device.version = is04::now_version();
+            (receiver, shared.device.clone())
+        };
+
+        let registry = self.registry.clone();
+        let receiver_for_register = receiver.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), is04::RegisterError> {
+            registry.register("device", &device_snapshot)?;
+            registry.register("receiver", &receiver_for_register)?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(receiver)
+    }
+
+    /// Entfernt einen per [`add_receiver`](Self::add_receiver) hinzugefügten
+    /// Receiver wieder — deregistriert ihn bei der Registry und
+    /// aktualisiert das Device (dessen `receivers`-Liste ihn nicht mehr
+    /// referenzieren darf, sonst meldet die Registry ein Device mit einem
+    /// toten Receiver-Verweis). Kein Fehler, wenn `receiver_id` unbekannt
+    /// ist (idempotent, gleiche Linie wie `RegistryClient::deregister_node`).
+    pub async fn remove_receiver(&self, receiver_id: &str) -> Result<(), BoxError> {
+        let device_snapshot = {
+            let mut shared = self.shared_receivers.lock().expect("lock poisoned");
+            shared.receivers.retain(|r| r.id != receiver_id);
+            shared.device.receivers.retain(|id| id != receiver_id);
+            shared.device.version = is04::now_version();
+            shared.device.clone()
+        };
+
+        let registry = self.registry.clone();
+        let id = receiver_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), BoxError> {
+            registry.deregister_receiver(&id).map_err(|e| -> BoxError { e.into() })?;
+            registry.register("device", &device_snapshot)?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(())
     }
 }
 
@@ -342,42 +460,11 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         })
         .collect();
     let sender_count = senders.len();
-    let receiver_count = config.receivers.len();
     let receivers: Vec<Receiver> = receiver_ids
         .iter()
         .zip(&config.receivers)
         .enumerate()
-        .map(|(i, (id, spec))| {
-            let label = spec
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("{} Receiver {}", config.label, i + 1));
-            let mut receiver = Receiver::new(id, &label, &device_id);
-            if let Some(transport) = &spec.transport {
-                receiver.transport = transport.clone();
-            }
-            if let Some(media_types) = &spec.media_types {
-                receiver.caps.media_types = media_types.clone();
-                // Live gefunden (Kapitel 19 Teil 3, `docs/decisions.md`):
-                // `Receiver::new` setzt `format` fest auf
-                // `FORMAT_VIDEO`, unabhängig von `media_types` — für
-                // jeden bisherigen Aufrufer zufällig unschädlich (kein
-                // Node deklarierte bislang einen Audio-Receiver mit
-                // eigenen `media_types`), aber inkonsistent zu
-                // `caps.media_types` und von der Registry mit HTTP 400
-                // abgelehnt, sobald doch (hier: `omp-aes67-gateway`s
-                // Sink-Rolle). `format` muss zum tatsächlichen Medientyp
-                // passen, nicht am Video-Default kleben bleiben.
-                if let Some(first) = media_types.first() {
-                    if first.starts_with("audio/") {
-                        receiver.format = is04::FORMAT_AUDIO.to_string();
-                    } else if first.starts_with("video/") {
-                        receiver.format = is04::FORMAT_VIDEO.to_string();
-                    }
-                }
-            }
-            receiver
-        })
+        .map(|(i, (id, spec))| build_receiver(id, i, spec, &device_id, &config.label))
         .collect();
 
     let registry = RegistryClient::new(config.registry_url.clone());
@@ -419,9 +506,17 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         }
     };
 
+    let shared_receivers = Arc::new(std::sync::Mutex::new(RegisteredReceivers {
+        device: device_res.clone(),
+        receivers: receivers.clone(),
+    }));
+
     let handle = NodeHandle {
         node_id: node_id.clone(),
         publisher: publisher.clone(),
+        registry: registry.clone(),
+        label: config.label.clone(),
+        shared_receivers: shared_receivers.clone(),
     };
 
     // Bugfix 2026-07-26 (Geister-Kacheln im Flow-Editor nach Stop/
@@ -465,15 +560,13 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         registry,
         node_id,
         node_res,
-        device_res,
         sources,
         flows,
         senders,
-        receivers,
+        shared_receivers,
         publisher,
         config.label,
         sender_count,
-        receiver_count,
         config.media_ready,
     ));
 
@@ -493,15 +586,13 @@ async fn heartbeat_loop(
     registry: RegistryClient,
     node_id: String,
     node_res: NodeResource,
-    device_res: Device,
     sources: Vec<Source>,
     flows: Vec<FlowResource>,
     senders: Vec<Sender>,
-    receivers: Vec<Receiver>,
+    shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
     publisher: Option<Arc<health::Publisher>>,
     label: String,
     sender_count: usize,
-    receiver_count: usize,
     media_ready: MediaReadySource,
 ) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -512,17 +603,27 @@ async fn heartbeat_loop(
         let node_id_clone = node_id.clone();
         let heartbeat_result =
             tokio::task::spawn_blocking(move || registry_clone.heartbeat(&node_id_clone)).await;
+        // Aktuellen Stand von Device/Receivers bei JEDEM Tick frisch aus
+        // dem geteilten Zustand lesen (statt einer beim Start
+        // eingefrorenen Kopie) — sonst würde ein per `add_receiver` nach
+        // `start()` hinzugefügter Receiver bei einer nötigen
+        // Re-Registrierung (z. B. nach Registry-Neustart) wieder
+        // verschwinden.
+        let (device_snapshot, receivers_snapshot) = {
+            let shared = shared_receivers.lock().expect("lock poisoned");
+            (shared.device.clone(), shared.receivers.clone())
+        };
         match heartbeat_result {
             Ok(Ok(())) => {}
             Ok(Err(HeartbeatError::NotRegistered)) => {
                 register_with_retry(
                     &registry,
                     &node_res,
-                    &device_res,
+                    &device_snapshot,
                     &sources,
                     &flows,
                     &senders,
-                    &receivers,
+                    &receivers_snapshot,
                 )
                 .await;
             }
@@ -536,7 +637,7 @@ async fn heartbeat_loop(
                 label: label.clone(),
                 status: "ok".to_string(),
                 senders: sender_count,
-                receivers: receiver_count,
+                receivers: receivers_snapshot.len(),
                 media_ready: media_ready.is_ready(),
             };
             if let Err(e) = publisher.publish(&status).await {
