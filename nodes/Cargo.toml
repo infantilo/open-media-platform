@@ -10,6 +10,7 @@ members = [
     "omp-video-mixer-me",
     "omp-audio-mixer",
     "omp-player",
+    "omp-mxf-player",
     "omp-multiviewer",
     "omp-playout-automation",
     "omp-srt-gateway",

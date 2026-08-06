@@ -3097,6 +3097,17 @@ export class FlowCanvas extends HTMLElement {
       }
       case "readonly":
       default: {
+        // Manche readonly-String-Params tragen bereits geparstes JSON
+        // (Arrays/Objekte, z. B. omp-player/omp-audio-mixer/omp-mxf-player
+        // items/mediaLibrary/programGroups/shufflePresets) — `String(value)`
+        // ergäbe "[object Object]" statt einer lesbaren Darstellung.
+        if (value !== null && typeof value === "object") {
+          const pre = document.createElement("pre");
+          pre.style.cssText =
+            "margin:0;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow:auto;font-size:11px;";
+          pre.textContent = JSON.stringify(value, null, 2);
+          return pre;
+        }
         const span = document.createElement("span");
         span.textContent = String(value ?? "–");
         return span;

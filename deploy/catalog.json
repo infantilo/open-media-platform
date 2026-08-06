@@ -66,6 +66,15 @@
     "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
   {
+    "type": "omp-mxf-player",
+    "label": "MXF-Player",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-mxf-player"],
+    "env": {},
+    "description": "MXF-Player mit Programmgruppen-Audio-Shuffle (Audio-Tonspur-Erweiterung Q3/2026): ordnet die 8 MXF-Tonspuren je nach gewähltem Preset fünf getrennten Sendern zu (Programmton, Hörfilm/AD, Originalton, Dolby E, 5.1 diskret).",
+    "expectedResources": "gering bis moderat (Datei-Decoding)"
+  },
+  {
     "type": "omp-player-jingle",
     "label": "Jingle-Player",
     "runner": "process",
