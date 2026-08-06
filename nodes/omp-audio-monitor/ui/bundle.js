@@ -20,15 +20,28 @@
 // Float32Array-Paare (bereits pro Kanal entflochten, s. `deinterleave`
 // unten) in einer einfachen FIFO-Warteschlange und liefert bei jedem
 // `process()`-Aufruf (128 Samples/Block, WebAudio-Konstante) so viele
-// Samples wie verfügbar — bei leerer Warteschlange Stille statt
-// Unterbrechung (Netzwerk-Jitter darf nicht knacksen/abreißen, ein
-// kurzer Stille-Moment ist beim Abhören unauffälliger als ein Klick).
+// Samples wie verfügbar.
+//
+// Jitter-Puffer mit Hysterese (live gefundener Bug: die ursprüngliche
+// Fassung fing sofort mit dem allerersten eingetroffenen Chunk an zu
+// spielen und griff bei leerer Warteschlange direkt auf Stille zurück —
+// ohne jedes Polster erzeugt JEDE auch nur leicht verspätete
+// `fetch()`-Chunk-Anlieferung (normaler HTTP/TCP-Jitter über den
+// Orchestrator-Stream-Proxy, kein Fehlerfall) eine hörbare Lücke mitten
+// in der Wiedergabe — "interrupted audio"). Erst ab `PREBUFFER_FRAMES`
+// (~150ms) angestauten Frames wird überhaupt zu spielen begonnen;
+// läuft die Warteschlange danach leer (Underrun), wird NICHT weiter
+// framezeise Stille eingestreut, sondern zurück in den Puffer-Modus
+// gewechselt, bis sich erneut ein Polster angesammelt hat — vermeidet
+// wiederkehrende Mini-Aussetzer, die ein reiner "spiel sofort, was da
+// ist"-Ansatz bei leicht schwankender Netzwerk-Taktung produziert.
 const WORKLET_SOURCE = `
 class PcmPlayerProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._queue = []; // Array<[Float32Array left, Float32Array right]>
     this._queuedFrames = 0;
+    this._buffering = true;
     this.port.onmessage = (ev) => {
       const [left, right] = ev.data;
       this._queue.push([left, right]);
@@ -49,6 +62,13 @@ class PcmPlayerProcessor extends AudioWorkletProcessor {
     const output = outputs[0];
     const left = output[0];
     const right = output[1] || output[0];
+
+    const PREBUFFER_FRAMES = sampleRate * 0.15;
+    if (this._buffering) {
+      if (this._queuedFrames < PREBUFFER_FRAMES) return true;
+      this._buffering = false;
+    }
+
     let filled = 0;
     while (filled < left.length && this._queue.length > 0) {
       const [qLeft, qRight] = this._queue[0];
@@ -63,7 +83,14 @@ class PcmPlayerProcessor extends AudioWorkletProcessor {
         this._queue[0] = [qLeft.subarray(take), qRight.subarray(take)];
       }
     }
-    // Rest (Warteschlange leer) bleibt Stille (Float32Array-Default 0).
+    // Rest (Warteschlange nach obiger Schleife leer) bleibt Stille
+    // (Float32Array-Default 0) — passiert nur noch innerhalb EINES
+    // 128-Sample-Blocks (< 3ms), nicht mehr als wiederkehrendes Muster,
+    // weil ein vollständiger Underrun sofort zurück in den Puffer-Modus
+    // schaltet.
+    if (this._queue.length === 0) {
+      this._buffering = true;
+    }
     return true;
   }
 }

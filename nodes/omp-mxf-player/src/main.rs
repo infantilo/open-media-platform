@@ -90,12 +90,32 @@ fn resolve_media_path(media_dir: &Path, rel: &str) -> Result<PathBuf, InvokeErro
 /// Dateipfad statt einer `file://`-URI (`mxfdemux` braucht keine URI-
 /// Auflösung, `Discoverer::discover_uri` aber schon: `filename_to_uri`
 /// analog `omp-player::file_uri`).
+///
+/// Läuft wie `omp-player::probe_duration_ms` auf einem eigenen,
+/// zeit-gedeckelten Thread statt direkt im `append()`-Aufrufpfad:
+/// `mxfdemux`s bekannter Thread-Leak (Nachtrag 121, `docs/
+/// decisions.md` — Demuxer-Threads überleben ihren eigenen bestätigten
+/// `NULL`-Übergang) kann `discover_uri()`s internen Pipeline-Teardown
+/// weit über dessen nominellen 5s-Timeout hinaus blockieren; da dieser
+/// Node genau EIN Format bedient (MXF), träfe das hier JEDE `append()`-
+/// Dauerprobe potenziell, nicht nur Einzelfälle. Ein Hänger im
+/// einzigen Accept-Loop-Thread des Node-Servers würde sonst nicht nur
+/// diesen Aufruf, sondern den gesamten Node auf unbestimmte Zeit
+/// einfrieren.
 fn probe_duration_ms(path: &Path) -> Option<u64> {
-    let _ = gst::init();
-    let uri = gst::glib::filename_to_uri(path, None).ok()?;
-    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5)).ok()?;
-    let info = discoverer.discover_uri(uri.as_str()).ok()?;
-    info.duration().map(|d| d.mseconds())
+    let path = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = gst::init();
+        let result = (|| -> Option<u64> {
+            let uri = gst::glib::filename_to_uri(&path, None).ok()?;
+            let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5)).ok()?;
+            let info = discoverer.discover_uri(uri.as_str()).ok()?;
+            info.duration().map(|d| d.mseconds())
+        })();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(8)).ok().flatten()
 }
 
 fn resolve_preset_id(presets_list: &[presets::AudioPreset], requested: Option<&str>) -> String {

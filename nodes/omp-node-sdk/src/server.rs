@@ -24,10 +24,22 @@ pub enum SetError {
     ReadOnly,
 }
 
-/// Grund, warum `ParamStore::invoke` fehlschlug.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Grund, warum `ParamStore::invoke` fehlschlug. `Unknown` bleibt der
+/// knappe Default (unbekannte Methode oder ein Node, der keine genauere
+/// Ursache mitgeben will/kann) — `Message` ist für Nodes, die bereits
+/// eine konkrete, fürs Debugging wertvolle Fehlermeldung selbst gebaut
+/// haben (z. B. `omp-playout-automation`s `AutomationStore::invoke`,
+/// das jeden `Result<(), String>`-Fehler intern schon über `self.
+/// report()` loggt): live gefunden, dass der generische Proxy-Pfad
+/// diese Meldung bislang IMMER zur nichtssagenden "unknown method"-
+/// 404 abflachte — ein echter 403 (fehlende Workflow-/Rollenbindung
+/// des aufrufenden Service-Tokens auf den Ziel-Node) sah dadurch aus
+/// wie ein simpler Tippfehler im Methodennamen, kostete beim Debuggen
+/// dieses genauen Falls unnötig Zeit.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvokeError {
     Unknown,
+    Message(String),
 }
 
 /// Antwort auf eine node-eigene Zusatzroute (siehe
@@ -157,7 +169,8 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
         };
         return match store.invoke(name, &args) {
             Ok(()) => json_response(200, &serde_json::json!({"ok": true})),
-            Err(_) => error_response(404, "unknown method"),
+            Err(InvokeError::Unknown) => error_response(404, "unknown method"),
+            Err(InvokeError::Message(msg)) => error_response(400, &msg),
         };
     }
 

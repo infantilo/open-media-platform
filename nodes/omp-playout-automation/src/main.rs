@@ -1358,8 +1358,8 @@ impl ParamStore for AutomationStore {
         };
 
         result.map_err(|e| {
-            self.report(e);
-            InvokeError::Unknown
+            self.report(e.clone());
+            InvokeError::Message(e)
         })
     }
 

@@ -20,6 +20,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }
       .connected { padding: 2px 7px; border-radius: 3px; background: #7a1f1f; }
       .connected.ok { background: #2e7d32; }
+      .error-banner {
+        display: none; padding: 6px 10px; margin-bottom: 8px; border-radius: 4px;
+        background: #7a1f1f; color: #fff; font-size: 12px;
+      }
+      .error-banner.show { display: block; }
       .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
       .status-row .mode-badge { padding: 3px 8px; border-radius: 3px; background: #333; }
       .status-row .mode-badge.onair { background: #2e7d32; }
@@ -96,6 +101,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       .cart button.fire { border-color: #d4a017; }
       .cart button.fire:disabled, .cart button.remove:disabled { opacity: 0.4; cursor: default; }
     `;
+
+    const errorBanner = document.createElement("div");
+    errorBanner.className = "error-banner";
+    let errorBannerTimer = null;
+    const showError = (text) => {
+      errorBanner.textContent = text;
+      errorBanner.classList.add("show");
+      clearTimeout(errorBannerTimer);
+      errorBannerTimer = setTimeout(() => errorBanner.classList.remove("show"), 6000);
+    };
 
     const targetsRow = document.createElement("div");
     targetsRow.className = "targets";
@@ -294,13 +309,27 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
     cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
 
-    shadow.append(style, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
+    shadow.append(style, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
 
+    // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
+    // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
+    // einem Nicht-2xx-Status — ein `.then(poll)`-Aufrufer würde einen Fehler
+    // sonst nie bemerken, z. B. `do_append`s "Player-append fehlgeschlagen",
+    // wenn der Ziel-Player eine Datei ablehnt oder nicht antwortet).
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body || {}),
+      }).then(async (res) => {
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          showError(`${method} fehlgeschlagen: ${detail || res.status}`);
+        }
+        return res;
+      }).catch((e) => {
+        showError(`${method} fehlgeschlagen: ${e}`);
+        throw e;
       });
 
     const setParam = (name, value) =>

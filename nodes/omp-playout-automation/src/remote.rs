@@ -21,10 +21,27 @@
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_node_sdk::is04::RegistryClient;
 use serde::Deserialize;
 use serde_json::Value;
+
+/// Harte Obergrenze für `get_param`/`invoke`-Aufrufe gegen einen
+/// Ziel-Node (`ureq`s Default ist unbegrenzt, `Timeouts::default()`
+/// lässt `recv_response`/`global` auf `None` — geprüft gegen den
+/// vendorten Crate-Quellcode). Ohne diesen Deckel hängt ein Aufruf, der
+/// im Ziel-Node auf einen blockierenden Handler trifft (z. B. ein
+/// steckengebliebenes GStreamer-Plugin im `append()`-Pfad von
+/// `omp-player`/`omp-mxf-player`, s. dortige `probe_duration_ms`-Doku),
+/// unbegrenzt lang — und blockiert damit, da dieser Node selbst nur
+/// einen einzigen Accept-Loop-Thread hat
+/// (`omp_node_sdk::server::accept_loop`), JEDE weitere Anfrage an
+/// DIESEN Node (Polls, cue, take, …), nicht nur den einen Aufruf. Eher
+/// großzügig gewählt (langsame, aber legitime Operationen wie eine
+/// echte Dauer-Probe sollen nicht künstlich abgebrochen werden), aber
+/// endlich.
+const CALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug)]
 pub enum RemoteError {
@@ -155,7 +172,13 @@ impl ProxyClient {
             "{}/api/v1/nodes/{}/params/{}",
             self.orchestrator_url, self.node_id, name
         );
-        match ureq::get(&url).header("Authorization", &auth_header).call() {
+        match ureq::get(&url)
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .build()
+            .header("Authorization", &auth_header)
+            .call()
+        {
             Ok(mut resp) => {
                 let body: Value = resp
                     .body_mut()
@@ -179,7 +202,13 @@ impl ProxyClient {
             "{}/api/v1/nodes/{}/methods/{}",
             self.orchestrator_url, self.node_id, name
         );
-        match ureq::post(&url).header("Authorization", &auth_header).send_json(args) {
+        match ureq::post(&url)
+            .config()
+            .timeout_global(Some(CALL_TIMEOUT))
+            .build()
+            .header("Authorization", &auth_header)
+            .send_json(args)
+        {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(code)) => Err(RemoteError::Status(code)),
             Err(e) => Err(RemoteError::Request(e.to_string())),

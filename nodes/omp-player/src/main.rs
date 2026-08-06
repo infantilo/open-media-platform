@@ -147,11 +147,35 @@ fn file_uri(path: &Path) -> Result<String, InvokeError> {
 /// `gst::init()` ist idempotent (interner `INITIALIZED`-Guard) — der
 /// defensive Aufruf hier deckt den Fall ab, dass `append`/`load` vor dem
 /// ersten `gst::init()` auf dem Pipeline-Thread aufgerufen würde.
+///
+/// Läuft auf einem eigenen, kurzlebigen Thread mit einem harten
+/// Wartezeit-Deckel: `Discoverer`s eigener 5s-Timeout deckt nur die
+/// Discovery-Phase ab, nicht zwingend den Teardown der dabei intern
+/// aufgebauten Pipeline — ein Container-Format, dessen Demuxer-Plugin
+/// beim Stoppen hängt (live beobachtet bei `mxfdemux`, s. `omp-mxf-
+/// player`s Nachtrag zum Thread-Leak), kann `discover_uri()` dadurch
+/// weit über die nominelle Frist hinaus blockieren. Dieser Aufrufpfad
+/// läuft synchron im einzigen Accept-Loop-Thread des Node-Servers
+/// (`omp_node_sdk::server::accept_loop`) — ein Hänger hier würde nicht
+/// nur diesen `append()`-Aufruf, sondern jede weitere Anfrage an den
+/// gesamten Node (inkl. simpler Param-Polls) auf unbestimmte Zeit
+/// einfrieren. Der Probe-Thread selbst wird beim Timeout bewusst NICHT
+/// abgebrochen (GStreamer-Elemente lassen sich nicht von außen killen)
+/// und bleibt als harmloser Zombie zurück — besser als ein blockierter
+/// Node.
 fn probe_duration_ms(uri: &str) -> Option<u64> {
-    let _ = gst::init();
-    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5)).ok()?;
-    let info = discoverer.discover_uri(uri).ok()?;
-    info.duration().map(|d| d.mseconds())
+    let uri = uri.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = gst::init();
+        let result = (|| -> Option<u64> {
+            let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(5)).ok()?;
+            let info = discoverer.discover_uri(&uri).ok()?;
+            info.duration().map(|d| d.mseconds())
+        })();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(8)).ok().flatten()
 }
 
 #[derive(Deserialize)]
