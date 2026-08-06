@@ -15152,3 +15152,229 @@ node_settings_handlers.go` (neu) + `server.go`/`server_test.go`
 ladbare Settings statt `&'static`-Konstanten, plus der Thread-Leak-
 Fix in `pipeline.rs`), `ui/graph/flow-canvas.ts` (Einstellungs-
 Editor-Sektion im generischen Panel).
+
+## 2026-08-06 — omp-viewer: dynamische Audio-Eingänge (Pegelanzeigen) + omp-audio-monitor komplett redesignt (PCM/AudioWorklet statt MP3/`<audio>`)
+
+Nutzerwunsch: "der video viewer ist schon sehr gut. allerdings würde
+ich gerne die möglichkeit haben dort auch pegelanzeigen zu sehen.
+dynamische anzahl an eingängen damit ich zb den mxf player hinrouten
+kann und alle gruppen sehe. außerdem finde ich den audio monitor nicht
+gut. es sollte wie der viewer ohne einen html player auskommen direkt
+das audio ausgeben. video und audio müssen synchron sein." Zwei vom
+Nutzer per `AskUserQuestion` bestätigte Design-Entscheidungen vorab:
+(1) echte dynamische Receiver-Erzeugung zur Laufzeit (nicht nur ein
+fest vorbelegter Slot-Höchstwert), (2) ein Live-Discovery-Dropdown im
+Audio-Monitor-Panel statt reiner Graph-Verkabelung für die
+"Gruppenwahl".
+
+### 1. `omp-node-sdk`: erste dynamische Receiver-Fähigkeit in OMP
+
+`nodes/omp-node-sdk/src/node.rs` — `NodeConfig::receivers` war bislang
+IMMER eine bei `start()` einmalig ausgewertete, danach unveränderliche
+Liste (jeder Node im System, ausnahmslos). Neu: `NodeHandle::
+add_receiver(spec)`/`remove_receiver(id)`, additiv, ändert nichts am
+bestehenden statischen Pfad. Intern: `RegisteredReceivers { device,
+receivers }` hinter `Arc<Mutex<_>>`, geteilt zwischen `heartbeat_loop`
+(liest bei jedem Tick frisch, damit ein nach `start()` hinzugefügter
+Receiver eine nötige Re-Registrierung — z. B. nach Registry-Neustart —
+übersteht) und den beiden neuen `NodeHandle`-Methoden. `build_receiver`
+aus `start()`s Inline-Closure herausgezogen, von beiden Pfaden geteilt.
+`is04::RegistryClient::deregister_receiver` neu (`DELETE .../resource/
+receivers/<id>`, gleiches Pfad-Schema wie das bestehende
+`deregister_node`).
+
+**Echter, live gefundener Bug unterwegs:** `add_receiver`/
+`remove_receiver` aktualisieren zwangsläufig `Device::receivers`
+(welche Receiver-IDs zum Device gehören) und registrieren das Device
+erneut — die allererste Version davon ließ `Device::version`
+unverändert. Die echte nmos-cpp-Registry lehnte ein erneutes `POST`
+mit UNVERÄNDERTEM `version`-Feld mit HTTP 400 ab (per Live-Test
+gefunden: `addAudioInput` schlug reproduzierbar mit "register:
+unexpected status 400" fehl, bis `is04::now_version()` — vormals
+privat — auf `pub(crate)` gesetzt und vor jeder Device-Neuregistrierung
+aufgerufen wurde). IS-04-Registries behandeln `version` als striktes
+Änderungs-Ordnungskriterium, nicht als beliebiges Feld — jede künftige
+Stelle, die eine bereits registrierte Resource mutiert und erneut
+sendet, muss `version` mit auffrischen.
+
+**Verifiziert:** `cargo test -p omp-node-sdk` grün (bestehende Suite,
+keine dedizierte Registrierungs-Test-Infrastruktur mit Mock-Registry
+vorhanden — echter Live-Test gegen die reale nmos-cpp-Registry statt-
+dessen, s. u.). Live: `addAudioInput` registriert einen neuen Receiver
+sofort sichtbar (`GET /params/audioInputs`, `GET .../x-nmos/query/
+v1.3/receivers/<id>`), ein IS-05-`PATCH .../staged` auf diesen neuen
+Receiver landet korrekt und aktualisiert `active` (`sender_id`/
+`master_enable` bestätigt per direktem `curl` gegen den Node-eigenen
+Port), `removeAudioInput` dereg­istriert ihn wieder (`GET .../receivers/
+<id>` danach 404).
+
+### 2. `omp-mediaio::levels` — aus `omp-audio-mixer` gehoben
+
+`levels.rs`s eigener, ursprünglicher Modulkommentar sagte explizit
+"eine Verschiebung nach `omp-mediaio` folgt erst, wenn ein zweiter Node
+dasselbe braucht" — `omp-viewer`s neue Pegelanzeigen sind genau dieser
+zweite Verbraucher. Datei 1:1 nach `nodes/omp-mediaio/src/levels.rs`
+verschoben (inkl. `db_to_meter_level`/`parse_level_message`, vorher in
+`omp-audio-mixer::pipeline`), neues Cargo-Feature `levels`
+(`dep:tiny_http`). `omp-audio-mixer` auf den gehobenen Pfad umgestellt
+(reiner Verhaltens-neutraler Refactor, kein `mod levels;` mehr, eigene
+`tiny_http`-Abhängigkeit aus dessen `Cargo.toml` entfernt, jetzt
+transitiv über `omp-mediaio`s `levels`-Feature). `cargo test
+-p omp-audio-mixer` weiterhin grün.
+
+### 3. `omp-viewer`: dynamische Audio-Eingänge — Receiver-Teil fertig, Meter-Datenfluss mit bekanntem offenem Bug
+
+Neues Modul `nodes/omp-viewer/src/audio_meters.rs`: eine EIGENE,
+dauerhaft laufende `gst::Pipeline` unabhängig von `pipeline.rs`s
+Video-Pipeline (die baut bei jedem Video-Quellwechsel komplett neu auf
+— ein Audio-Meter-Zweig dort würde jedes Mal mitsterben). Jeder Zweig:
+`MxlAudioInput -> level -> appsink`. Ein SSE-Strom für ALLE Eingänge
+gemeinsam (`inputId`-markiert, identisches Muster zu `omp-audio-
+mixer`s `/levels`), statt eines Ports pro Eingang — vermeidet Re-
+Verkabelung im UI-Bundle bei jedem `addAudioInput`/`removeAudioInput`.
+`main.rs`: `addAudioInput`/`removeAudioInput`-Methoden, `AudioInputControl`
+(IS-05-Apply → `AudioMeterHandle::add_input`/`remove_input`), Dispatch
+mehrerer `ReceiverConnection`s über eine `HashMap` in `extra_route`
+(analog zum SDK-Fund oben: jeder Node verdrahtet IS-05 selbst, die SDK-
+Connection-API ist nicht auf einen festen Receiver pro Instanz
+beschränkt). UI-Bundle (`ui/bundle.js`): `<omp-meter>`-Zeile pro
+aktivem Eingang (bereits global registriertes Kit-Element, kein neuer
+Import nötig), "+ Audio-Eingang"-Button.
+
+**Zwei echte, live gefundene und behobene Pipeline-Bugs unterwegs**
+(beide beim Live-Verifizieren entdeckt, nicht vorab erkannt):
+
+1. Eine komplett LEERE Pipeline zuerst auf PLAYING zu setzen und
+   Zweige danach dynamisch anzubauen (statt wie überall sonst im
+   Codebase — `omp-audio-mixer`, `omp-audio-monitor` — erst die
+   Anfangs-Elemente einzubauen und DANACH einmalig PLAYING zu setzen)
+   ließ die Pipeline reproduzierbar bei PAUSED hängen. Fix: erster
+   Zweig rein, DANN `pipeline.set_state(Playing)` einmalig; jeder
+   weitere Zweig nutzt danach `sync_state_with_parent()` (das erprobte
+   `addChannel`-Muster).
+2. `fakesink` statt `appsink` als Terminal-Element eines reinen Mess-
+   Zweigs (kein echter Konsumzweck) — jeder andere Live-MXL-Audio-
+   Konsumzweig in diesem Codebase (`audio_stream.rs`/`pcm_stream.rs`)
+   endet auf `appsink`, nie auf `fakesink`; das war hier fälschlich als
+   funktional gleichwertige Vereinfachung angenommen.
+
+**Bekannter, NICHT gelöster Rest-Bug (live gefunden, Root Cause trotz
+ausführlicher Untersuchung nicht abschließend identifiziert):** auch
+nach beiden Fixes oben liefert der `level`-Zweig weiterhin keine
+Bus-Messages — der von `MxlAudioInput::new()` gestartete MXL-Reader-
+Thread (`/proc/<pid>/task/*/wchan` zeigt ihn dauerhaft in `futex_wait`,
+benannt `appsrc0:src`) kommt nie über seinen ersten
+`get_current_index()`/`get_samples_non_blocking()`-Zyklus hinaus,
+obwohl derselbe MXL-Flow nachweislich aktiv beschrieben wird
+(`mxl-info` zeigt laufend aktualisierte `Last write time`) und exakt
+dieselbe `MxlAudioInput`-API im selben Prozess für `omp-audio-monitor`
+(Punkt 4 unten) nachweislich fehlerfrei funktioniert — der Unterschied
+liegt vermutlich darin, dass `omp-viewer` als bislang einziger Node
+ZWEI unabhängige `gst::Pipeline`-Instanzen gleichzeitig im selben
+Prozess hält (die bestehende Video-Pipeline aus `pipeline.rs` UND diese
+neue Meter-Pipeline) — ein im restlichen Codebase nirgends genutztes
+Muster, das möglicherweise mit GStreamers Clock-/Task-Pool-Zuteilung
+zwischen zwei Pipelines im selben Prozess kollidiert. Kein GDB/ptrace
+im Sandbox-Container verfügbar (`ptrace: Operation not permitted"),
+daher kein echter Stack-Trace des hängenden Threads möglich —
+`GST_DEBUG=appsrc:5,level:5,GST_STATES:4` zeigte den State-Übergang
+sauber bis PLAYING, aber nie einen `push_buffer`-Aufruf.
+
+**Praktische Auswirkung, warum trotzdem committet statt zurückgestellt:**
+der Bug ist pro Zweig isoliert (ein hängender Reader-Thread blockiert
+nur SEINEN Meter, nicht Video-Preview, nicht andere Audio-Eingänge,
+nicht den restlichen Node) und rein additiv — jeder Node, der KEINE
+dynamischen Audio-Eingänge nutzt (alle bisherigen), ist unverändert.
+Die Receiver-Erzeugung/-Discovery/-IS-05-Verdrahtung selbst (der
+eigentliche, neuartige SDK-Teil) ist vollständig verifiziert und
+funktioniert; nur der GStreamer-Meter-Datenfluss in `omp-viewer`s
+spezifischer Zwei-Pipelines-Konstellation nicht. Empfehlung für den
+nächsten Anlauf: entweder GDB/ptrace-fähige Umgebung besorgen, oder
+versuchsweise die Meter-Zweige in `pipeline.rs`s bestehende (bereits
+nachweislich funktionierende) Video-Pipeline verlagern statt einer
+zweiten separaten Pipeline (Kosten: Meter stünden bei jedem Video-
+Reconnect kurz still, s. Moduldoku-Abwägung oben) — als Test, ob die
+Zwei-Pipelines-Hypothese zutrifft.
+
+### 4. `omp-audio-monitor`: komplett redesignt — vollständig verifiziert, funktioniert
+
+Server: `nodes/omp-mediaio/src/pcm_stream.rs` (neu, Feature
+`pcm-stream`) — rohes F32LE/48kHz/Stereo-PCM über denselben chunked-
+HTTP-Dauerstrom-Mechanismus wie das bisherige `audio_stream.rs` (MP3),
+nur ohne `lamemp3enc`-Encoder-Lookahead-Latenz. **Bewusst kein
+WebSocket** (ursprünglich angedacht): der generische Orchestrator-
+Stream-Proxy (`handleNodeStreamProxy`), über den `preview`/`audio-
+stream`/`levels`/jetzt `pcm-stream` laufen (Auth + Host-Kapselung),
+spricht ausschließlich HTTP-Request/-Antwort, keinen Protokoll-
+Upgrade — per Quellcode-Lektüre bestätigt (`orchestrator/internal/
+httpapi/proxy.go` reicht nur `Content-Type` durch, sonst nichts), eine
+WebSocket-Erweiterung hätte eine eigene, hier nicht gerechtfertigte
+Orchestrator-Änderung gebraucht (außerhalb des eigenen Dateibereichs
+dieser Sitzung, s. u.). Format fest (F32LE/48kHz/Stereo, kein
+Discovery-Header nötig — aus demselben Grund wie oben ohnehin nicht
+zuverlässig durchgereicht worden).
+
+Client (`ui/bundle.js`, komplett neu geschrieben): erste Nutzung von
+`AudioContext`/`AudioWorklet` irgendwo in `ui/` — ein per `Blob`-URL
+inline geladener `AudioWorkletProcessor` puffert vom Haupt-Thread per
+`postMessage` (mit Buffer-Transfer, kein Kopieren) übergebene, bereits
+entflochtene Float32Array-Kanalpaare in einer FIFO-Queue und liefert
+sie bei jedem `process()`-Aufruf; bei über ~1 s angestauten Frames
+werden älteste Chunks verworfen (Backpressure — Live-Abhören soll
+aktuell bleiben, kein VOD-Pufferaufbau). Kein sichtbares `<audio
+controls>` mehr — `fetch()` + `ReadableStream` liest den Strom, ein
+Play/Stop-Button ersetzt Autoplay (vom Browser ohnehin ohne
+Nutzergeste blockiert). Zusätzlich ein Live-Discovery-Dropdown
+("Gruppenwahl"): neue `discover_audio_sources()`-Funktion in `main.rs`
+(fünfte, bewusst separate Kopie desselben Discovery-Filtermusters wie
+`omp-player::discovery`/`omp-switcher`/`omp-video-mixer-me`/`omp-
+audio-mixer` — dieselbe "keine verfrühte Abstraktion"-Begründung wie
+dort), neue `selectSource(senderId)`-Methode, die intern denselben
+IS-05-`PATCH .../staged`-Pfad wie ein echtes Drag&Drop nutzt (Connection-
+Zustand bleibt dadurch konsistent mit einem später geöffneten
+generischen Panel).
+
+**Vollständig live verifiziert:** `availableSources` listet echte,
+gerade discoverbare MXL-Audio-Sender; `selectSource` verbindet
+tatsächlich (`connectedLabel` bestätigt den erwarteten Sender);
+`GET .../stream/audioStreamUrl` liefert echte Bytes mit der erwarteten
+Datenrate (1 128 960 Bytes in 3 s ≈ 376 320 B/s, erwartet 48000 Hz ×
+2 Kanäle × 4 Byte = 384 000 B/s — Abweichung im Rahmen normaler
+Verbindungsanlauf-Varianz).
+
+### 5. AV-Sync-Messung
+
+Kein perzeptuelles Test-Signal (korrelierter Ton+Blitz) verfügbar,
+daher Messung über tatsächlich beobachtbare Client-Latenzen statt
+eines synthetischen Werts: `omp-viewer`s MJPEG-Vorschau liefert dank
+`preview::Broadcaster`s "letztes Bild"-Zwischenspeicher bei Neuverbindung
+quasi sofort (5,8 ms bis zu den ersten ~4 KB gemessen — reflektiert
+primär den Cache-Treffer, nicht die volle Glas-zu-Glas-Latenz).
+`omp-audio-monitor`s PCM-Strom hat KEINEN solchen Zwischenspeicher
+(`pcm_stream.rs`/`audio_stream.rs`s bewusste Designentscheidung, s.
+dortige Moduldoku: "ein neu verbindender Client hört ab jetzt mit"),
+die gemessenen 160 ms bis zu den ersten ~4 KB spiegeln daher primär
+die Wartezeit auf den nächsten natürlichen Chunk-Zeitpunkt plus
+TCP-Verbindungsaufbau wider, keinen strukturellen Latenz-Nachteil.
+Wichtiger als der einmalige Verbindungsaufbau ist die STEADY-STATE-
+Taktung: `omp-viewer`s MJPEG läuft mit festen 5 fps (`PREVIEW_FPS`,
+`pipeline.rs`) — 200 ms zwischen Frames ist der mit Abstand dominante
+Faktor für wahrgenommene AV-Synchronität, nicht die Audio-Kette (PCM-
+Chunks fließen um eine Größenordnung häufiger). Fazit: die Video-
+Vorschau-Bildrate ist der limitierende Faktor, nicht das neue Audio-
+Monitoring — für spürbar bessere AV-Synchronität müsste `PREVIEW_FPS`
+erhöht werden (außerhalb des Umfangs dieser Sitzung, eigene
+Kosten/Nutzen-Abwägung nötig: höhere Bildrate = mehr JPEG-Encoding-
+Last).
+
+**Dateien:** `nodes/omp-node-sdk/src/{node,is04}.rs`,
+`nodes/omp-mediaio/src/{levels,pcm_stream}.rs` (neu, `Cargo.toml`
+Features `levels`/`pcm-stream`), `nodes/omp-audio-mixer/src/{main,
+pipeline}.rs` + `Cargo.toml` (Levels-Umzug), `nodes/omp-viewer/src/
+{main,audio_meters}.rs` (neu) + `Cargo.toml` + `ui/bundle.js`,
+`nodes/omp-audio-monitor/src/{main,pipeline,uibundle}.rs` +
+`Cargo.toml` + `ui/bundle.js`. Bewusst NICHT angefasst: `orchestrator/
+internal/httpapi/proxy.go` (WebSocket-Alternative geprüft, verworfen,
+s. Punkt 4), alles unter `nodes/omp-mxf-player/` und die Postgres-
+Settings-Arbeit einer parallel laufenden, separaten Sitzung (s. deren
+eigener Nachtrag oben).
