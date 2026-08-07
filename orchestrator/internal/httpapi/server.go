@@ -254,7 +254,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/node-types/omp-mxf-player/settings", g.requireAuth(handleGetMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("PUT /api/v1/node-types/omp-mxf-player/settings", g.requireVerbGlobal(authz.VerbAdmin, handlePutMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
-	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc)))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
 

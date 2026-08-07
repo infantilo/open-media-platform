@@ -3,9 +3,12 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
 
 // mergeInstanceMetrics reichert list um die zuletzt vom Host-Agent
@@ -144,7 +147,25 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // automatisch generierte "<Typ> (<Kurz-ID>)"-Label — landet u. a. als
 // NMOS-Sender-Label und macht die Quelle dadurch in Kreuzschienen-
 // Dropdowns (Bild-/Audiomischer) sinnvoll benennbar.
-func handlePostInstance(svc LauncherService) http.HandlerFunc {
+//
+// Live gefundener Bug (2026-08-07): ein per Katalog manuell gestarteter
+// Control-Plane-Node (workflows.IsControlPlaneNodeType, z. B.
+// `omp-playout-automation`) bekam bislang GAR KEINE Rollenbindung —
+// diese entsteht bisher nur in workflows.Service.runStart, workflow-
+// gescopt auf `wf.ID`. Ohne Workflow-Kontext blieb sein Service-Token
+// (POST /api/v1/instances/<id>/service-token, dasselbe Secret-Verfahren)
+// zwar ausstellbar, aber auf jedem Ziel-Node wirkungslos: sowohl
+// authz.Store.Check (nur workflow_id = "") als auch CheckWorkflow
+// (verlangt eine Workflow-Rolle des Ziel-Nodes, s. dortige Doku "z. B.
+// eine manuell über den Katalog gestartete Instanz") schlagen fehl ->
+// `requireVerbOnNode` liefert 403 auf jeden proxierten params-/methods-
+// Aufruf, z. B. omp-playout-automations `append()` gegen einen ebenso
+// manuell gestarteten Player. Fix: dieselbe Bindung wie beim Workflow-
+// Start, aber mit leerem workflowId (= globaler/Node-gescopter Scope,
+// "unverändertes Vor-Kapitel-12-Teil-4-Verhalten", s. authz.Store.Create-
+// Doku) statt eines Workflow-Scopes, den es hier gar nicht gibt — best
+// effort wie beim Workflow-Pfad, ein Fehler hier bricht den Start nicht ab.
+func handlePostInstance(svc LauncherService, authzStore AuthzChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Type    string `json:"type"`
@@ -165,6 +186,14 @@ func handlePostInstance(svc LauncherService) http.HandlerFunc {
 			writeLauncherError(w, err)
 			return
 		}
+
+		if workflows.IsControlPlaneNodeType(body.Type) {
+			if _, err := authzStore.Create(inst.ID, "", authz.AnyNode, authz.VerbOperate); err != nil {
+				slog.Warn("launcher: failed to provision service-token role binding for manually started instance",
+					"instance", inst.ID, "type", body.Type, "error", err)
+			}
+		}
+
 		writeJSON(w, http.StatusOK, inst)
 	}
 }

@@ -70,6 +70,16 @@ var crosspointByNodeType = map[string]crosspointMethod{
 // tatsächlichen Node-Quelltext übernommen (nicht geraten, UMSETZUNG.md
 // §0 Punkt 6): `nodes/omp-playout-automation` ist heute der einzige
 // reine Control-Plane-Node, der andere Nodes fernsteuert.
+// IsControlPlaneNodeType meldet, ob nodeType als Automatisations-/
+// Control-Plane-Node gilt (s. controlPlaneNodeTypes-Doku) — exportiert,
+// damit ein manueller Katalog-Start (httpapi.handlePostInstance, kein
+// Workflow-Kontext) dieselbe Liste für sein eigenes, workflow-loses
+// Bindungs-Äquivalent nutzen kann (s. dortige Doku), statt sie ein
+// zweites Mal zu pflegen.
+func IsControlPlaneNodeType(nodeType string) bool {
+	return controlPlaneNodeTypes[nodeType]
+}
+
 var controlPlaneNodeTypes = map[string]bool{
 	"omp-playout-automation": true,
 }

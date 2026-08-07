@@ -1,0 +1,65 @@
+--- a/lib/GrafixEngine.js
++++ b/lib/GrafixEngine.js
+@@ -56,6 +56,19 @@
+ const DEFAULT_HEIGHT   = 1080;
+ const RENDER_FPS       = 25;
+ const RENDER_INTERVAL  = Math.round(1000 / RENDER_FPS);   // 40ms @ 25fps — full rate when grafik active
++// OMP-Integration, 2026-08-07: NICHT geändert (Nutzerentscheidung nach
++// Live-Test) — ein Umstellen von IDLE/NOGFX auf RENDER_INTERVAL behebt
++// zwar reproduzierbar ein live gefundenes Bild-Alternieren (SMPTE-Idle
++// wechselte sichtbar mit Schwarzbild, sowohl über omp-viewer als auch
++// direkt gegen PIPELINE CONTROLLERs eigenen `/preview/frame.jpg` bestätigt
++// — der Compositor braucht laut Kommentar in start() "grafikSrc appsrc
++// MUST receive frames at all times", sonst rendert er zeitweise das GANZE
++// PGM-Bild schwarz statt nur die transparente Overlay-Ebene zu
++// überspringen), kostet dabei aber live gemessen ~500% Dauer-CPU für
++// `node server.js` (ein durchgehender appsrc-Push in Pipeline-Takt statt
++// alle 1-5s) — für diese Umgebung/diesen Nutzer inakzeptabel. Bewusst als
++// bekannter, unbehobener Bug zurückgelassen statt mit diesem CPU-Preis
++// erkauft (s. docs/decisions.md Nachtrag zu diesem Fund im OMP-Repo).
+ const RENDER_INTERVAL_IDLE   = 1000;   // 1fps — grafik active but static (no pixel change)
+ const RENDER_INTERVAL_NOGFX  = 5000;  // 0.2fps — no grafik at all (transparent frames)
+ 
+@@ -137,6 +150,7 @@
+     this._page         = null;
+     this._renderTimer  = null;
+     this._running      = false;
++    this._startPromise = null;
+     this._currentTemplate = null;
+     this._currentData     = {};
+     this._currentLayer    = 'overlay';
+@@ -186,7 +200,34 @@
+ 
+   async start() {
+     if (this._running) return true;
++    // OMP-Integration, 2026-08-07: ensureMaster() (server.js) läuft an
++    // mehreren Stellen unawaited/parallel an (Server-Boot UND jeder Live-
++    // Quellen-Sync, z. B. bei einem NMOS-Receiver-Connect eines Adapters) —
++    // der bisherige Guard "if (this._running) return true;" schützt nicht
++    // vor einem ZWEITEN Aufruf, der eintrifft, während der erste noch mitten
++    // im (bis zu 10s dauernden) Puppeteer-Start hängt (_running wird erst
++    // GANZ am Ende von _doStart() gesetzt). Live beobachtet: ein zweiter
++    // Aufruf in diesem Fenster startete einen kompletten zweiten Chromium-
++    // Prozessbaum UND ein zweites listen() auf demselben Port (EADDRINUSE),
++    // der zweite Browser überschrieb _browser/_page und blieb als nie
++    // geschlossener Waisenprozess zurück (ps aux im Container: zwei volle
++    // Chromium-Baumstrukturen gleichzeitig, >500% CPU) — die dadurch
++    // verdoppelte Last ließ den 25fps-Render-Timer/den Compositor-Zweig
++    // sink_2 zeitweise hungern, PGM alternierte sichtbar zwischen SMPTE-
++    // Idle-Bild und Schwarzbild. Fix: ein In-Flight-Promise, ein
++    // überlappender Aufruf hängt sich daran statt die Startsequenz erneut
++    // auszuführen (gleiches Prinzip wie der _pageRecreating-Guard weiter
++    // unten für den Browser-Watchdog).
++    if (this._startPromise) return this._startPromise;
++    this._startPromise = this._doStart();
++    try {
++      return await this._startPromise;
++    } finally {
++      this._startPromise = null;
++    }
++  }
+ 
++  async _doStart() {
+     fs.mkdirSync(this.templatesDir, { recursive: true });
+     this._ensureDefaultTemplates();
+ 

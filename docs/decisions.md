@@ -15378,3 +15378,116 @@ internal/httpapi/proxy.go` (WebSocket-Alternative geprüft, verworfen,
 s. Punkt 4), alles unter `nodes/omp-mxf-player/` und die Postgres-
 Settings-Arbeit einer parallel laufenden, separaten Sitzung (s. deren
 eigener Nachtrag oben).
+
+## 2026-08-07 (Nachtrag 122) — Zwei Live-Bugs: Playout-Automation-403 vollständig behoben, PC-MXL-Test-Viewer-Flackern nur teilweise (Root Cause gefunden, CPU-Kosten des vollständigen Fixes vom Nutzer abgelehnt)
+
+Nutzerauftrag: zwei in der laufenden Dev-Umgebung beobachtete Bugs
+debuggen — (1) `+Item` (Datei/MXF) in Playout-Automation schlägt mit
+"Player-append fehlgeschlagen: remote: unexpected status 403" fehl, (2)
+`PC-MXL-Test`-Workflow zeigt im Viewer abwechselnd Colorbar/Schwarzbild
+statt des echten Pipeline-Controller-Signals.
+
+### 1. Playout-Automation-403 — vollständig behoben
+
+Root Cause: `omp-node-sdk`s Service-Prinzipal-Mechanismus (§24.1/C16)
+vergibt eine Rollenbindung für Control-Plane-Nodes (aktuell nur
+`omp-playout-automation`) ausschließlich in `workflows.Service.runStart`,
+workflow-gescopt auf die startende `wf.ID` (`orchestrator/internal/
+workflows/service.go:727`). Ein per Katalog **manuell** gestarteter
+Control-Plane-Node (kein Workflow-Kontext) bekam dadurch **gar keine**
+Bindung — sein Service-Token blieb ausstellbar, aber auf jedem Node
+wirkungslos (weder `authz.Store.Check` noch `CheckWorkflow` griffen), da
+`FindRoleForNode` für einen ebenfalls manuell gestarteten Ziel-Node immer
+`ok=false` liefert (s. dortige Doku: "z. B. eine manuell über den Katalog
+gestartete Instanz"). Live reproduziert: alle vier Nodes des
+Demo-Setups (Playout-Automation, MXF-Player, Viewer, Video-Mixer) liefen
+manuell, kein Workflow aktiv → `append()` 403 auf jeden Aufruf.
+
+Fix: `workflows.IsControlPlaneNodeType` exportiert (dieselbe, bisher
+private `controlPlaneNodeTypes`-Liste), `httpapi.handlePostInstance`
+(POST /api/v1/instances, der Katalog-Start-Pfad) vergibt jetzt dieselbe
+Bindung wie `runStart`, aber mit **leerem** `workflowId` — globaler/
+Node-gescopter Scope, "unverändertes Vor-Kapitel-12-Teil-4-Verhalten"
+(s. `authz.Store.Create`-Doku), da es hier gar keinen Workflow gibt, auf
+den man scopen könnte. Verletzt nicht die in §24.1 getestete
+Workflow-Isolation (die schützt zwischen zwei *unterschiedlichen*
+Workflows, hier existiert keiner). Live verifiziert: Admin-Rollenbindung
+für die laufende Instanz nachträglich angelegt → `append()` sofort 200;
+Orchestrator neu gebaut+gestartet (Code-Fix), ein frisch per Katalog
+gestarteter `omp-playout-automation`-Test-Node bekam die Bindung
+automatisch (bestätigt über `GET /api/v1/admin/role-bindings`), danach
+wieder entfernt. **Dateien:** `orchestrator/internal/workflows/
+service.go`, `orchestrator/internal/httpapi/{launcher_handlers,
+server}.go`.
+
+### 2. PC-MXL-Test-Flackern — Root Cause gefunden, nur der ungefährliche
+### Teil-Fix blieb im Repo
+
+Live gegen den laufenden Workflow reproduziert und per Screenshot
+bestätigt: der Viewer zeigte abwechselnd PIPELINE CONTROLLERs
+SMPTE-Idle-Bild und ein reines Schwarzbild — **derselbe** Wechsel war
+auch direkt gegen PC's eigenen `/preview/frame.jpg`-Endpunkt zu sehen
+(Frame-Größe alternierte zwischen ~15,5 KB und ~4,3 KB), also ein reiner
+PC-interner Bug, unabhängig von OMP/MXL/omp-viewer.
+
+**Zwei getrennte Ursachen in `lib/GrafixEngine.js` gefunden:**
+
+a) **Reentrancy-Bug (behoben, im Repo)**: `GrafixEngine.start()`s Guard
+`if (this._running) return true;` schützt nicht vor einem zweiten
+Aufruf, der eintrifft, während der erste noch mitten im (bis zu 10s
+dauernden) Puppeteer-Start hängt (`_running` wird erst am Ende gesetzt).
+`server.js` ruft `ensureMaster()` (das intern `grafixEngine.start()`
+aufruft) an mehreren Stellen unawaited/parallel auf (Server-Boot UND
+jeder Live-Quellen-Sync). Live per `ps aux` im Container bestätigt: ein
+überlappender zweiter Aufruf startete einen **kompletten zweiten
+Chromium-Prozessbaum** UND ein zweites `listen()` auf demselben Port
+(EADDRINUSE im Log) — der zweite Browser blieb als nie geschlossener
+Waisenprozess zurück. Fix: `this._startPromise` als In-Flight-Guard, ein
+überlappender Aufruf hängt sich an denselben an statt die Startsequenz
+erneut auszuführen. Zweimal live über volle Rebuild-Zyklen (Image neu
+gebaut, Workflow-Rolle neu gestartet) bestätigt: danach immer nur noch
+**ein** Chromium-Profil (`ps aux | grep user-data-dir`), keine
+EADDRINUSE-Zeile mehr im Log.
+
+b) **Render-Intervall zu langsam für den Compositor (Root Cause
+gefunden, Fix NICHT übernommen)**: `_scheduleRender()` pusht ohne
+aktive Grafik nur alle `RENDER_INTERVAL_NOGFX` (5000ms) bzw. bei
+statischer Grafik alle `RENDER_INTERVAL_IDLE` (1000ms) einen Frame in
+`grafikSrc` (den `appsrc`-Zweig des Compositors, `comp.sink_2`) —
+`start()`s eigener Kommentar sagt bereits "grafikSrc appsrc MUST receive
+frames at all times — the compositor blocks if sink_2 starves". Live
+bestätigt: mit beiden Intervallen auf `RENDER_INTERVAL` (40ms, volle
+Pipeline-Taktrate) gesetzt verschwand das Alternieren reproduzierbar
+(12/12 stabile Frames über `/preview/frame.jpg`, mehrfach über
+Workflow-Neustarts hinweg bestätigt). **Aber**: dieser Fix hält
+`node server.js` dauerhaft bei ~500% CPU (durchgehender appsrc-Push in
+Pipeline-Takt statt alle 1-5s) — für die aktuelle Umgebung inakzeptabel,
+Nutzer hat den Fix nach Live-Demonstration des CPU-Preises explizit
+abgelehnt (AskUserQuestion, Option "Reentrancy-Fix behalten,
+Render-Interval-Fix zurückrollen").
+
+**Offener, ungeklärter Befund**: nach dem Zurückrollen auf die
+Original-Intervalle (1000/5000ms) blieb `node server.js` in einem
+erneuten Test trotzdem bei ~430-440% CPU über >90s, ohne sich zu
+beruhigen (Load-Average stieg weiter, 3-4 → 18 während des Tests). Das
+widerspricht der Annahme, dass die Intervall-Werte allein die CPU-Last
+erklären — es ist unklar, ob das reine Puppeteer/Chromium-Hochfahren
+(Software-Rendering via `swiftshader-webgl`, mehrere Renderer-/GPU-/
+Utility-Subprozesse) in dieser sandboxten/verschachtelten Umgebung an
+sich schon so teuer ist, oder ob ein dritter, noch nicht gefundener
+Faktor die Ursache ist. **Nicht weiter untersucht** (Nutzerpriorität war
+CPU runter, nicht Ursachenforschung) — für einen künftigen Anlauf:
+`enablePuppeteer: false` in PC's eigenen `GrafixEngine`-Opts als Test,
+ob die CPU-Last dann verschwindet (würde Puppeteer als Ursache
+bestätigen/ausschließen, unabhängig vom Render-Intervall).
+
+**Ergebnis**: Colorbar/Schwarzbild-Flackern bleibt ein bekannter, nicht
+behobener Bug. `PC-MXL-Test` sollte in dieser Umgebung bis zur Klärung
+der CPU-Frage nicht unbeaufsichtigt gestartet werden (Workflow läuft
+`omp-pipeline-controller`, das per Design Puppeteer startet).
+
+**Dateien:** `deploy/pipeline-controller/patches/
+0008-grafix-engine-start-reentrancy.diff` (neu, nur der
+Reentrancy-Fix — Patch wird auf einen Build-Zeit-Snapshot angewandt,
+`/home/infantilo/PIPELINE CONTROLLER`s echte Arbeitskopie blieb
+unangetastet, s. CLAUDE.md).
