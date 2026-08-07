@@ -696,9 +696,9 @@ export class FlowCanvas extends HTMLElement {
     const breadcrumb = document.createElement("div");
     breadcrumb.setAttribute("data-role", "breadcrumb");
     breadcrumb.style.cssText =
-      "position:absolute;top:0;left:160px;right:0;padding:6px 10px;" +
-      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
-      "display:flex;gap:6px;align-items:center;z-index:10;";
+      "position:absolute;top:0;left:160px;right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
+      "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
+      "display:flex;gap:var(--omp-space-2);align-items:center;z-index:10;border-bottom:1px solid var(--omp-border);";
 
     const panel = document.createElement("div");
     panel.setAttribute("data-role", "parameter-panel");
@@ -725,10 +725,10 @@ export class FlowCanvas extends HTMLElement {
     const snapshotBar = document.createElement("div");
     snapshotBar.setAttribute("data-role", "snapshot-bar");
     snapshotBar.style.cssText =
-      "position:absolute;bottom:0;left:0;right:0;padding:6px 10px;" +
-      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
-      "display:flex;gap:8px;align-items:center;z-index:10;" +
-      "border-top:1px solid #444;box-sizing:border-box;";
+      "position:absolute;bottom:0;left:0;right:0;padding:var(--omp-space-2) var(--omp-space-3);" +
+      "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
+      "display:flex;gap:var(--omp-space-2);align-items:center;z-index:10;" +
+      "border-top:1px solid var(--omp-border);box-sizing:border-box;";
 
     // Katalog-Palette (UMSETZUNG.md C8): Node-Typen aus /api/v1/catalog
     // mit Start-Button, symmetrisch zum Parameter-Panel auf der rechten
@@ -737,9 +737,9 @@ export class FlowCanvas extends HTMLElement {
     palette.setAttribute("data-role", "palette");
     palette.style.cssText =
       "position:absolute;top:0;left:0;bottom:0;width:160px;" +
-      "background:#252525;color:#ddd;font-family:sans-serif;font-size:12px;" +
-      "padding:10px;padding-top:36px;overflow-y:auto;" +
-      "z-index:10;border-right:1px solid #444;box-sizing:border-box;";
+      "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
+      "padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
+      "z-index:10;border-right:1px solid var(--omp-border);box-sizing:border-box;";
 
     this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar);
     this.#svg = svg;
@@ -1197,7 +1197,7 @@ export class FlowCanvas extends HTMLElement {
     input.value = oldName;
     input.style.cssText =
       "width:100%;height:100%;box-sizing:border-box;font-size:12px;font-family:inherit;" +
-      "background:#1e1e1e;color:#f0f0f0;border:1px solid #5b9bd5;border-radius:2px;padding:0 3px;";
+      "background:var(--omp-bg);color:var(--omp-text);border:1px solid var(--omp-info);border-radius:2px;padding:0 3px;";
 
     let settled = false;
     const commit = () => {
@@ -1872,7 +1872,8 @@ export class FlowCanvas extends HTMLElement {
       const dirty = this.#isDraftDirty();
       const saveBtn = document.createElement("button");
       saveBtn.textContent = isLive ? "Im Workflow speichern" : "Speichern";
-      saveBtn.style.cssText = `margin-left:auto;font-size:11px;cursor:pointer;${dirty ? "font-weight:bold;" : ""}`;
+      if (dirty) saveBtn.className = "omp-btn-primary";
+      saveBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
       saveBtn.disabled = !dirty;
       saveBtn.title = dirty ? "" : "Keine ungespeicherten Änderungen";
       saveBtn.addEventListener("click", () => {
@@ -2324,7 +2325,7 @@ export class FlowCanvas extends HTMLElement {
     const img = document.createElement("img");
     img.src = streamProxyUrl(nodeId, "previewUrl");
     img.alt = "Vorschau";
-    img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:#000;border:1px solid #444;border-radius:2px;`;
+    img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;`;
     fo.appendChild(img);
     return fo;
   }
@@ -2942,7 +2943,7 @@ export class FlowCanvas extends HTMLElement {
 
     if (descriptor.methods.length > 0) {
       const hr = document.createElement("hr");
-      hr.style.borderColor = "#444";
+      hr.style.borderColor = "var(--omp-border)";
       this.#panelContent.appendChild(hr);
     }
     for (const method of descriptor.methods) {
@@ -2996,7 +2997,7 @@ export class FlowCanvas extends HTMLElement {
 
     const label = document.createElement("label");
     label.textContent = "Rollen-Zielformat";
-    label.style.cssText = "display:block;margin-bottom:4px;color:#aaa;";
+    label.style.cssText = "display:block;margin-bottom:var(--omp-space-1);color:var(--omp-text-dim);";
     wrapper.appendChild(label);
 
     const select = document.createElement("select");
@@ -3352,7 +3353,7 @@ export class FlowCanvas extends HTMLElement {
 
     const label = document.createElement("label");
     label.textContent = param.name + (param.unit ? ` (${param.unit})` : "");
-    label.style.cssText = "display:block;margin-bottom:2px;color:#aaa;";
+    label.style.cssText = "display:block;margin-bottom:2px;color:var(--omp-text-dim);";
     wrapper.appendChild(label);
 
     const control = this.#buildControlElement(controlKindFor(param), param, value, (newValue) => {
@@ -3852,7 +3853,7 @@ export class FlowCanvas extends HTMLElement {
     if (inst.restartCount) {
       const restartTag = document.createElement("div");
       restartTag.textContent = `↻ ${inst.restartCount}× automatisch neu gestartet`;
-      restartTag.style.cssText = "color:#f0ad4e;font-size:9px;margin-top:1px;";
+      restartTag.style.cssText = "color:var(--omp-cue);font-size:9px;margin-top:1px;";
       row.appendChild(restartTag);
     }
 
@@ -3860,7 +3861,7 @@ export class FlowCanvas extends HTMLElement {
       const hostLabel = hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId;
       const hostTag = document.createElement("div");
       hostTag.textContent = `Host: ${hostLabel}`;
-      hostTag.style.cssText = "color:#888;font-size:9px;";
+      hostTag.style.cssText = "color:var(--omp-text-dim);font-size:9px;";
       row.appendChild(hostTag);
     }
 
@@ -3870,14 +3871,14 @@ export class FlowCanvas extends HTMLElement {
       const resourceTag = document.createElement("div");
       const rss = inst.rssBytes !== undefined ? `${(inst.rssBytes / 1024 / 1024).toFixed(0)} MB` : "?";
       resourceTag.textContent = `CPU ${inst.cpuPercent.toFixed(0)}% · RAM ${rss}`;
-      resourceTag.style.cssText = "color:#888;font-size:9px;";
+      resourceTag.style.cssText = "color:var(--omp-text-dim);font-size:9px;";
       row.appendChild(resourceTag);
     }
 
     if (inst.crashed) {
       const msg = document.createElement("div");
       msg.textContent = inst.crashMessage || "Prozess abgestürzt";
-      msg.style.cssText = "color:#e57373;white-space:pre-wrap;word-break:break-word;margin-top:2px;";
+      msg.style.cssText = "color:var(--omp-error);white-space:pre-wrap;word-break:break-word;margin-top:2px;";
       row.appendChild(msg);
     }
 

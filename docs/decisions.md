@@ -15782,3 +15782,49 @@ einzeln ersetzt.
 **Dateien:** `ui/design-tokens.css`, `ui/shell/{auth,app-shell,
 workflows-view,hosts-view,instances-view,alarm-view,scheduler-view,
 admin-view}.ts`, `ui/graph/flow-canvas.ts`.
+
+## 2026-08-07 (Nachtrag 126) — Orchestrator-Shell-Modernisierung fortgesetzt: `flow-canvas.ts`s drei Haupt-Container + Node-Kachel-Status-Texte
+
+Direkte Fortsetzung von Nachtrag 125 (Nutzerauftrag "push. update git.
+dann fahre fort" — Fortsetzung des UI-Modernisierungs-Themas, kein neuer
+Auftrag). Beim gezielten Nachpolieren der in Nachtrag 125 als offen
+dokumentierten `flow-canvas.ts`-Stellen fiel live auf, dass die DREI
+strukturellen Hauptcontainer des Flow-Editors — Katalog-Palette
+(links), Breadcrumb-Leiste (oben), Snapshot-Leiste (unten), alle drei
+in jedem Screenshot sichtbar — noch komplett hartkodierte Werte
+(`#252525`/`#ddd`/`sans-serif`/`#444`) statt Tokens nutzten. Optisch
+nah genug am Theme, um beim ersten Blick durchzugehen, aber bei
+genauem Hinsehen ein sichtbar anderer Grauton als der Rest der Shell
+(`var(--omp-surface)` #1a1d21 vs. hartkodiert #252525) — genau die Art
+Inkonsistenz, die der Nutzerauftrag ("modern und einfach") beheben
+sollte. Auf Tokens umgestellt, live per CDP bestätigt: alle drei
+Container jetzt nahtlos identisch zum Rest der Shell.
+
+Zusätzlich nachgezogen: Workflow-Speichern-Button (Breadcrumb-Leiste im
+Workflow-Bearbeiten-Modus) zeigt jetzt `.omp-btn-primary`, wenn
+ungespeicherte Änderungen vorliegen (vorher nur `font-weight:bold` —
+funktional gleichwertig als Hinweis, aber weniger auffällig als die
+jetzt einheitliche Akzentfarbe); Node-Kachel-Statustexte (Neustart-
+Warnung, Host-Label, CPU/RAM, Absturz-Meldung) von hartkodierten Hex-
+Werten auf die passenden Signalfarben-Tokens (`--omp-cue`/`--omp-text-
+dim`/`--omp-error`); Inline-Umbenennen-Eingabefeld, Preview-Bild-Rahmen,
+zwei Formular-Label-Farben.
+
+**Verifiziert:** `deno check`/`deno test` (84/84 grün), `deno bundle`
+erfolgreich, live per CDP-Screenshot bestätigt (Katalog-Palette/
+Breadcrumb-Leiste/Snapshot-Leiste jetzt nahtlos, keine sichtbare
+Grenze mehr zum restlichen Shell-Hintergrund). Der Speichern-Button-
+Primärfarbe-Zustand (nur im Workflow-Bearbeiten-Modus mit
+ungespeicherten Änderungen sichtbar) wurde NICHT separat per CDP
+angeklickt-verifiziert (derselbe `dirty`-Bedingungspfad wie das bereits
+bestehende, getestete `disabled`-Verhalten — geringes Regressionsrisiko,
+Typecheck+Tests grün).
+
+**Weiterhin offen, unverändert seit Nachtrag 125:** die selten
+geöffneten Preset-Editor-/Rollen-Designer-Detailformen bekommen den
+globalen Formularelement-Reset automatisch, aber keine gezielten
+Varianten-Klassen (Danger/Primary) — kein bekannter konkreter
+Trittstein mehr gefunden, eher Vollständigkeits-Politur für eine
+künftige Sitzung als ein offener Bug.
+
+**Dateien:** `ui/graph/flow-canvas.ts`.
