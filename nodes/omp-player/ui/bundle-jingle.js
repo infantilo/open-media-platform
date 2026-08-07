@@ -7,6 +7,31 @@
 // wie omp-audio-mixers `setSource`-gefolgt-von-`setGain`, C11), das
 // sequentielle Await hier ist also sicher, kein Sonderprotokoll nötig.
 // Gleiche generische Node-Proxy-API wie alle anderen Node-Panels.
+
+// Vanille-Nachbau von `ui/kit/omp-confirm.ts`s `confirmDialog()` (UX-Audit
+// 2026-08-07, gleicher Fund/Fix wie `omp-playout-automation/ui/bundle.js`):
+// "x" entfernt ein Cart-Item OHNE jede Prüfung, ob es gerade on-air ist
+// (anders als `bundle-video.js`s Playlist, die das gecute/on-air Item
+// bereits vor dem Entfernen schützt) — hier also die einzige Absicherung
+// gegen einen versehentlichen Klick mitten in einer Live-Sendung.
+function confirmDialog(message, confirmLabel) {
+  if (!customElements.get("omp-confirm")) return Promise.resolve(window.confirm(message));
+  return new Promise((resolve) => {
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener(
+      "resolve",
+      (ev) => {
+        resolve(ev.detail);
+        el.remove();
+      },
+      { once: true },
+    );
+    document.body.appendChild(el);
+  });
+}
+
 class OmpPlayerJinglePanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -101,7 +126,10 @@ class OmpPlayerJinglePanel extends HTMLElement {
       const removeBtn = document.createElement("span");
       removeBtn.className = "remove";
       removeBtn.textContent = "x";
-      removeBtn.addEventListener("click", () => call("remove", { itemId: item.id }).then(poll));
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDialog(`„${item.label}" wirklich aus dem Cart entfernen?`, "Entfernen"))) return;
+        call("remove", { itemId: item.id }).then(poll);
+      });
       el.append(labelEl, removeBtn);
       return { el, labelEl, removeBtn };
     };

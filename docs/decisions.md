@@ -15617,3 +15617,69 @@ nicht separat versioniert — auf Anfrage rekonstruierbar.
 
 **Dateien:** `nodes/omp-audio-mixer/ui/bundle.js`,
 `nodes/omp-playout-automation/ui/bundle.js`.
+
+## 2026-08-07 (Nachtrag 124) — UX/UI-Audit fortgesetzt: omp-player (Video- + Jingle-Profil) auf dieselbe Bestätigungs-Lücke geprüft und behoben
+
+Nutzerauftrag "dann starte mit ui" — Fortsetzung von Nachtrag 123 Teil 2
+(Fork hatte drei Bundles geprüft/gefixt und explizit "weitere Bundles auf
+denselben Lücken-Typ prüfen" als offenen Punkt hinterlassen). Alle
+verbleibenden eigenständigen `ui/bundle.js`/`bundle-*.js`-Dateien
+systematisch nach destruktiven Aktionen ohne (oder mit unpassender)
+Bestätigung durchsucht (`omp-audio-monitor`, `omp-media-library`,
+`omp-ograf`, `omp-pipeline-controller`, `omp-switcher`, `omp-viewer`,
+`omp-player` — jeweils `bundle-jingle.js`/`bundle-video.js`).
+
+**Zwei echte Treffer, beide in `omp-player`:**
+- `bundle-video.js`: "Entfernen" für ein Playlist-Item hatte GAR KEINE
+  Bestätigung — war aber bereits für das gerade on-air/gecute Item
+  deaktiviert (`refs.removeBtn.disabled = isOnair || isCued`), also
+  strukturell sicherer als die bereits gefixten Fälle. Trotzdem
+  behoben, für Konsistenz mit `omp-playout-automation`s jetzt
+  bestätigungspflichtigem Rundown-Entfernen (dieselbe Aktionsklasse:
+  ein zukünftiges, noch nicht ausgestrahltes Item aus einem laufenden
+  Rundown entfernen).
+- `bundle-jingle.js`: "x" entfernt ein Cart-Item KOMPLETT ohne Prüfung,
+  auch wenn es gerade on-air ist (kein `disabled`-Schutz wie beim
+  Video-Player) — höheres Risiko als der Video-Fall, keine
+  Bestätigung vorhanden.
+
+**Zwei geprüfte Nicht-Treffer, bewusst NICHT geändert** (Zero-Training-
+Philosophie aus Nachtrag 123: nicht jede entfernbare Sache ist eine
+On-Air-Gefahr, unnötige Bestätigungsdialoge sind selbst eine Form von
+Reibung):
+- `omp-video-mixer-me`: `crosspoint.unpin` entfernt nur einen
+  kuratierten/gepinnten Favoriten aus der Kreuzschienen-Auswahlliste,
+  kein Signalfluss betroffen, trivial rückgängig (erneut pinnen).
+- `omp-viewer`: `removeAudioInput` entfernt nur eine Pegelanzeige
+  (`audio_meters.rs`s eigene Moduldoku: "liefert bewusst KEIN Audio in
+  den Browser"), kein Broadcast-Signal betroffen, trivial neu
+  hinzufügbar.
+
+Fix: derselbe `confirmDialog()`-Vanille-Nachbau wie in den drei bereits
+gefixten Bundles, 1:1 kopiert (kein gemeinsames Modul möglich —
+`include_str!`, kein Build-/Import-Schritt für diese eigenständigen
+Bundles).
+
+**Live per echtem CDP-Browser-Test verifiziert** (headless Chromium,
+`ws`-basierter Node-Treiber, da kein Python-`websockets`-Paket
+verfügbar war — Skripte im Scratchpad, nicht versioniert): echten
+`omp-player-jingle`/`omp-player-video` gestartet, je ein Test-Item per
+`append(pattern:"tone")` angelegt, Flow-Editor-Panel per synthetischem
+`PointerEvent`-Paar geöffnet (die Kachel reagiert auf `pointerdown`/
+`pointerup`, nicht auf `click`/`dblclick` — `flow-canvas.ts`s
+`#onPointerUp` löst `#openParameterPanel` erst nach dieser Erkenntnis
+zuverlässig aus). Für beide Bundles: "Entfernen"/"x" geklickt → Dialog
+erscheint mit korrektem Text → "Abbrechen" → Item bleibt (`GET
+.../params/items` bestätigt unverändert) → erneut "Entfernen" →
+"Entfernen" bestätigt → Item tatsächlich weg (`GET .../params/items`
+liefert `[]`). Alle Test-Instanzen und der Chromium-Prozess danach
+aufgeräumt.
+
+**Damit ist der vom Fork offen gelassene Punkt 1 ("weitere Bundles auf
+denselben Lücken-Typ prüfen") abgeschlossen** — keine weiteren Treffer
+in den verbleibenden Node-UI-Bundles gefunden. Größere UX-Vorschläge
+aus Nachtrag 123 (Setup-Wizard, `recover()`-Wrapper für den
+Orchestrator) bleiben offen, nicht Teil dieser Sitzung.
+
+**Dateien:** `nodes/omp-player/ui/bundle-jingle.js`,
+`nodes/omp-player/ui/bundle-video.js`.

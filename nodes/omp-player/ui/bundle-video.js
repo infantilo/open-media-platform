@@ -9,6 +9,35 @@
 // danach nur noch aktualisiert (kein Rebuild bei jedem 2s-Poll), sonst
 // flackert die Liste und ein gerade fokussiertes Eingabefeld verliert den
 // Fokus.
+
+// Vanille-Nachbau von `ui/kit/omp-confirm.ts`s `confirmDialog()` (UX-Audit
+// 2026-08-07, gleicher Fund/Fix wie `omp-playout-automation/ui/bundle.js`):
+// dieses eigenständige Bundle (`include_str!`, kein TS-Import möglich) kann
+// das global registrierte `<omp-confirm>` trotzdem verwenden, sobald die
+// Shell geladen hat (`ui/kit/index.ts`). "Entfernen" für ein Playlist-Item
+// ist zwar schon für das gerade on-air/gecute Item deaktiviert (s.
+// `refs.removeBtn.disabled` unten), bleibt aber für alle anderen — noch
+// nicht ausgestrahlten — Rundown-Items eine destruktive Aktion ohne
+// Rückgängig; konsistent mit `omp-playout-automation`s Rundown-Entfernen
+// jetzt ebenfalls bestätigungspflichtig.
+function confirmDialog(message, confirmLabel) {
+  if (!customElements.get("omp-confirm")) return Promise.resolve(window.confirm(message));
+  return new Promise((resolve) => {
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener(
+      "resolve",
+      (ev) => {
+        resolve(ev.detail);
+        el.remove();
+      },
+      { once: true },
+    );
+    document.body.appendChild(el);
+  });
+}
+
 class OmpPlayerVideoPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -151,7 +180,10 @@ class OmpPlayerVideoPanel extends HTMLElement {
 
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "Entfernen";
-      removeBtn.addEventListener("click", () => call("remove", { itemId: item.id }).then(poll));
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDialog(`„${item.label}" wirklich aus der Playlist entfernen?`, "Entfernen"))) return;
+        call("remove", { itemId: item.id }).then(poll);
+      });
 
       el.append(labelEl, cueBtn, removeBtn);
       return { el, labelEl, cueBtn, removeBtn };
