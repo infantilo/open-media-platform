@@ -32,7 +32,6 @@ const PREVIEW_FPS: i32 = 5;
 const PREVIEW_JPEG_QUALITY: i32 = 70;
 
 pub struct Config {
-    pub domain: String,
     pub sink_element: Option<String>,
 }
 
@@ -201,6 +200,7 @@ fn build_sink_branch(
 /// die Pipeline komplett neu auf.
 pub fn run(
     config: Config,
+    context: Arc<MxlContext>,
     broadcaster: Arc<Broadcaster>,
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
@@ -212,15 +212,6 @@ pub fn run(
         let _ = ready.send(Err(msg));
         return;
     }
-
-    let context = match MxlContext::new(&config.domain) {
-        Ok(c) => Arc::new(c),
-        Err(e) => {
-            let _ = tx.send(Event::Error(e.clone()));
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) =
         std::sync::mpsc::channel();

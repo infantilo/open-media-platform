@@ -28,6 +28,43 @@
 //! `inputId` markiert statt eines Ports pro Eingang — vermeidet, dass
 //! das UI-Bundle bei jedem `addAudioInput`/`removeAudioInput` neu
 //! verkabeln müsste, s. `main.rs`).
+//!
+//! **`MxlContext` wird von `main.rs` hereingereicht, nicht hier selbst
+//! erzeugt (2026-08-07):** dieses Modul öffnete zuvor einen ZWEITEN,
+//! unabhängigen `MxlContext::new(domain)`, während `pipeline.rs` bereits
+//! einen ersten für dieselbe Domain offen hielt — `MxlContext`s eigene
+//! Struct-Doku sagt explizit "ein `MxlContext` pro Prozess reicht",
+//! jeder andere Node im Codebase hält sich exakt daran (grep bestätigt
+//! 2026-08-07), `omp-viewer` war der einzige mit zwei. Aufgeräumt als
+//! echte Konventions-Abweichung — **war aber NICHT die Ursache des
+//! Rest-Bugs unten** (per isoliertem Test widerlegt, s. dort): `main.rs`
+//! erzeugt jetzt trotzdem EINEN `Arc<MxlContext>` für `pipeline::run` UND
+//! `audio_meters::run`, weil es die dokumentierte Konvention ist, nicht
+//! weil es den Bug behebt.
+//!
+//! **Der zuvor offene Rest-Bug (Reader-Thread liefert nie eine
+//! `level`-Bus-Message) ist jetzt wirklich root-caused + behoben
+//! (2026-08-07):** kein MXL-/GStreamer-Problem, sondern ein Rust-
+//! Ownership-Bug in DIESEM Modul. `build_branch` hielt in `Branch` nur
+//! die geklonten `gst::Element`s (`elements`), nicht den `MxlAudioInput`
+//! selbst — dessen lokale Variable `input` fiel am Ende von
+//! `build_branch` aus dem Scope. `MxlAudioInput::drop` setzt
+//! `running=false`, was den frisch gestarteten Reader-Thread SOFORT nach
+//! dessen allererstem (erfolglosen, weil legitim `OutOfRangeTooEarly`)
+//! Non-Blocking-Read-Versuch beendet — kein Hang, kein Fehler, der
+//! Thread terminiert einfach lautlos nach einer Iteration, bevor er
+//! jemals Daten liefern konnte. Live per Instrumentierung bewiesen: ein
+//! `get_current_index`/`get_samples_non_blocking`-Erstaufruf mit
+//! identischem Timing in einem isolierten Test (kein GStreamer, kein
+//! `omp-viewer`, nur die rohen `mxl`-Crate-Aufrufe, auch mit 8s
+//! künstlicher Verzögerung vor dem ersten Lesezugriff) lief
+//! reproduzierbar in Mikrosekunden durch — die vendorte MXL-Bibliothek
+//! selbst ist also NICHT die Ursache, anders als der frühere, hier
+//! ursprünglich dokumentierte Verdacht (weder "zwei `gst::Pipeline`s im
+//! Prozess" noch "zwei `MxlContext`s" halten der Live-Prüfung stand).
+//! `omp-audio-mixer::pipeline::ChannelBranch` macht es bereits richtig
+//! (Feld `_external_input: Option<MxlAudioInput>`, exakt zu diesem
+//! Zweck) — `Branch` unten übernimmt jetzt dasselbe Muster.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -72,6 +109,15 @@ impl AudioMeterHandle {
 
 struct Branch {
     elements: Vec<gst::Element>,
+    /// Hält den eigentlichen `MxlAudioInput` am Leben (2026-08-07,
+    /// root-caused Fix für den zuvor offenen Meter-Rest-Bug) — dessen
+    /// `Drop` setzt `running=false`, was den Reader-Thread sofort nach
+    /// dem allerersten Non-Blocking-Read-Versuch beendet, s.
+    /// `build_branch`-Kommentar für die volle Herleitung. Nur die davor
+    /// geklonten `gst::Element`s (`elements` oben) zu behalten reichte
+    /// nicht, weil `MxlAudioInput` selbst (nicht die Elemente) den
+    /// Reader-Thread kontrolliert.
+    _input: MxlAudioInput,
 }
 
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
@@ -145,7 +191,7 @@ fn build_branch(pipeline: &gst::Pipeline, context: &Arc<MxlContext>, flow_id: &s
     elements.push(level);
     elements.push(sink);
 
-    Ok(Branch { elements })
+    Ok(Branch { elements, _input: input })
 }
 
 /// Läuft auf einem eigenen Thread (analog `pipeline::run`): baut die
@@ -153,7 +199,7 @@ fn build_branch(pipeline: &gst::Pipeline, context: &Arc<MxlContext>, flow_id: &s
 /// Add-/Remove-Kommandos und pollt `level`-Bus-Messages nicht-blockierend
 /// (identisches Muster zu `omp-audio-mixer::pipeline::run`).
 pub fn run(
-    domain: String,
+    context: Arc<MxlContext>,
     tx: UnboundedSender<LevelEvent>,
     shutdown: Arc<AtomicBool>,
     ready: tokio::sync::oneshot::Sender<Result<AudioMeterHandle, String>>,
@@ -162,13 +208,6 @@ pub fn run(
         let _ = ready.send(Err("gst init failed (audio meters)".to_string()));
         return;
     }
-    let context = match MxlContext::new(&domain) {
-        Ok(c) => Arc::new(c),
-        Err(e) => {
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
 
     // Bewusst NICHT hier schon auf PLAYING gesetzt (anders als der
     // ursprüngliche Ansatz, live als Bug gefunden): jeder andere Node in

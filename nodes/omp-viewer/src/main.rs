@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::levels;
+use omp_mediaio::mxl::MxlContext;
 use omp_mediaio::preview;
 use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
@@ -326,19 +327,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let actual_levels_port = levels::spawn(&format!("0.0.0.0:{levels_port}"), levels_broadcaster.clone())?;
     let levels_url = format!("http://{host}:{actual_levels_port}/levels");
 
+    // EIN `MxlContext` für den ganzen Prozess (2026-08-07, root-caused
+    // Fix für den zuvor offenen Meter-Rest-Bug, s. `audio_meters.rs`-
+    // Moduldoku): `pipeline::run` und `audio_meters::run` laufen auf
+    // getrennten Threads, dürfen sich die MXL-Domain-Instanz aber NICHT
+    // je selbst ein zweites Mal öffnen — s. dortige Doku.
+    let mxl_context = match MxlContext::new(&domain) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            eprintln!("omp-viewer: MxlContext::new failed: {e}");
+            return Err(e.into());
+        }
+    };
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
-    let pipeline_config = pipeline::Config {
-        domain: domain.clone(),
-        sink_element,
-    };
+    let pipeline_config = pipeline::Config { sink_element };
     let pipeline_shutdown = shutdown.clone();
     let broadcaster_for_pipeline = broadcaster.clone();
+    let context_for_pipeline = mxl_context.clone();
     let pipeline_thread = std::thread::spawn(move || {
         pipeline::run(
             pipeline_config,
+            context_for_pipeline,
             broadcaster_for_pipeline,
             tx,
             pipeline_shutdown,
@@ -364,7 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let meter_shutdown = shutdown.clone();
     let (meter_ready_tx, meter_ready_rx) = tokio::sync::oneshot::channel();
     let meter_thread = std::thread::spawn(move || {
-        audio_meters::run(domain, level_tx, meter_shutdown, meter_ready_tx)
+        audio_meters::run(mxl_context, level_tx, meter_shutdown, meter_ready_tx)
     });
     let meter_handle = match meter_ready_rx.await {
         Ok(Ok(handle)) => handle,

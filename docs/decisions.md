@@ -15491,3 +15491,129 @@ der CPU-Frage nicht unbeaufsichtigt gestartet werden (Workflow läuft
 Reentrancy-Fix — Patch wird auf einen Build-Zeit-Snapshot angewandt,
 `/home/infantilo/PIPELINE CONTROLLER`s echte Arbeitskopie blieb
 unangetastet, s. CLAUDE.md).
+
+## 2026-08-07 (Nachtrag 123) — omp-viewer Audio-Meter-Rest-Bug (2026-08-06) endgültig root-caused + behoben; parallel dazu UX/UI-Audit + Enterprise-Roadmap (Fork)
+
+Fortsetzung der Sitzung nach einem Computer-Absturz (der vorherige,
+unfertige Stand war bereits vollständig — s. Nachtrag 122 — und wurde
+zuerst nur noch committet+gepusht). Nutzerauftrag "fahre fort": nächster
+offener Punkt aus `UMSETZUNG.md` §7 war der zuletzt (2026-08-06)
+dokumentierte, ungelöste `omp-viewer`-Meter-Bug. Mitten in der Sitzung
+kam ein zweiter, unabhängiger Auftrag (vom Nutzer per AskUserQuestion
+bestätigt als "parallel bitte") — beides unten dokumentiert.
+
+### 1. omp-viewer Audio-Meter: Reader-Thread liefert nie eine `level`-Bus-Message — root-caused
+
+Der 2026-08-06 dokumentierte Rest-Bug (`docs/decisions.md`, selbes
+Datum) hatte zwei frühere Verdachtsmomente: "zwei `gst::Pipeline`s im
+selben Prozess" und (neu vermutet, aber nie geprüft) "zwei unabhängige
+`MxlContext`s für dieselbe Domain im selben Prozess" — `pipeline.rs`
+und `audio_meters.rs` öffneten je ihren eigenen. Letzteres ist eine
+echte Konventions-Abweichung (`MxlContext`s eigene Doku: "ein
+`MxlContext` pro Prozess reicht", jeder andere Node im Codebase hält
+sich daran) und wurde aufgeräumt (`main.rs` öffnet jetzt genau einen
+`Arc<MxlContext>`, reicht ihn an `pipeline::run` UND `audio_meters::run`
+weiter) — **behob den Bug aber NICHT**, live re-verifiziert: weiterhin
+0 `level`-Bus-Messages nach dem Fix.
+
+Echte Ursache per Instrumentierung gefunden (temporäre `eprintln!`s in
+`read_audio_loop`, danach wieder entfernt): der Reader-Thread lief exakt
+EINE Iteration (`get_current_index` → `get_samples_non_blocking` →
+legitimes `OutOfRangeTooEarly`, beide binnen Mikrosekunden) und
+verschwand dann spurlos — kein Fehler, kein Panic, einfach kein
+zweiter Logeintrag mehr. Isolierter Test (rohe `mxl`-Crate-Aufrufe,
+kein GStreamer, kein `omp-viewer`, sogar mit künstlichen 8s Verzögerung
+vor dem ersten Lesezugriff, um "Reader lange nach Prozessstart geöffnet"
+nachzustellen) lief reproduzierbar in Mikrosekunden durch — die
+vendorte MXL-Bibliothek selbst war es nicht.
+
+**Root Cause:** `audio_meters.rs::build_branch` behielt in seinem
+`Branch`-Struct nur die geklonten `gst::Element`s (`elements`), nicht
+den `MxlAudioInput`-Wert selbst — dessen lokale Variable `input` fiel am
+Ende von `build_branch` aus dem Scope. `MxlAudioInput::drop` setzt
+`running=false`, was den frisch gestarteten Reader-Thread beim
+allernächsten Schleifendurchlauf (`while running.load(...)`) sofort
+beendet — nach genau einer Iteration, still, ohne jede Fehlermeldung.
+`omp-audio-mixer::pipeline::ChannelBranch` macht exakt das schon
+richtig (Feld `_external_input: Option<MxlAudioInput>`, mit
+Kommentar, der genau diesen Zweck benennt) — `audio_meters.rs`s
+`Branch` folgte diesem etablierten Muster bislang nicht. Fix:
+`Branch` bekommt ein `_input: MxlAudioInput`-Feld, `build_branch` gibt
+den `input`-Wert jetzt mit zurück statt ihn fallen zu lassen.
+
+**Verifiziert (voller Add→Read→Remove→Re-Add-Zyklus, echter Dev-Stack):**
+`omp-source` (Audio-Companion-Sender) + `omp-viewer` gestartet,
+`addAudioInput` → IS-05-`PATCH .../staged` auf den neuen Empfänger →
+`GET /levels` (SSE) liefert echte, kontinuierliche `{inputId,peak,rms}`-
+Werte (Heartbeat-Log: "562 element bus msgs seen" statt dauerhaft 0).
+`removeAudioInput` entfernt den Zweig sauber (Heartbeat-Log stoppt,
+`audioInputs`-Param wird leer), ein zweiter `addAudioInput` auf
+demselben Sender funktioniert erneut fehlerfrei — kein Leck, keine
+Karteileiche. Zusätzlich der unveränderte Video-Pfad gegenverifiziert
+(gemeinsamer `MxlContext` jetzt auch von `pipeline.rs` genutzt): echte
+MJPEG-Frames (`ffd8 ffe0`-JPEG-Header bestätigt) weiterhin über
+`/preview` abrufbar, keine Regression durch den Context-Sharing-
+Aufräumer. `cargo test --workspace`: alle Tests grün (ein Prozess-
+Exit-Segfault in `omp-mediaio`s Testbinary NACH "14 passed" — vorbestehend,
+nicht durch diese Änderung verursacht, `git diff` zeigt `mxl.rs` selbst
+unverändert ggü. `HEAD`).
+
+**Dateien:** `nodes/omp-viewer/src/{main,pipeline,audio_meters}.rs`.
+
+### 2. Parallel: UX/UI-Zero-Training-Audit + Enterprise-Produktionsreife-Roadmap (Fork, per Nutzerauftrag "parallel bitte")
+
+Mitten in obiger Untersuchung kam ein per WhatsApp weitergeleiteter,
+zuvor nie in diesem Repo aufgetauchter Auftrag herein (zwei kombinierte
+Rollen: "UX/UI-Experte, Zero-Training-User-Experience" +
+"autonomer Lead Developer/Co-Product-Owner, Enterprise-Roadmap"). Da
+weder Git-Historie noch Memory einen Bezug dazu hatten, erst per
+Rückfrage geklärt (der Nutzer bestätigte: doch für dieses Projekt,
+"parallel bitte") — dann per Fork parallel zur laufenden
+Meter-Bug-Untersuchung bearbeitet (eigener Kontext, kein gemeinsamer
+Dateibereich).
+
+**UX/UI-Ergebnis:** wichtigster Rahmenbefund zuerst — "Zero-Training"
+ist für die meisten OMP-Oberflächen die falsche Latte (professionelles
+Broadcast-Fachvokabular wie PGM/PST/DSK/Keyer ist für die tatsächliche
+Zielgruppe, trainierte TV-Operator:innen, KORREKT, nicht zu
+vereinfachen) — echte Zero-Training-Relevanz liegt in Fehlertoleranz.
+Konkreter, live gefundener und behobener Lücken-Fund: von drei
+geprüften Operator-Bedienoberflächen (`omp-playout-automation`,
+`omp-audio-mixer`) hatten zwei destruktive Aktionen GAR KEINE
+Bestätigung (Rundown-Item entfernen, Cart entfernen, Audio-Kanal
+entfernen), eine dritte (Stop → Schwarzbild) nutzte das blockierende,
+UI-fremde `window.confirm()` statt des bereits vorhandenen, dafür
+gebauten `<omp-confirm>`-Kit-Elements (`ui/kit/omp-confirm.ts`). Fix:
+ein ~15-zeiliger Vanille-Nachbau von `confirmDialog()` in beiden
+eigenständigen `ui/bundle.js`-Dateien (die keinen TS-Build/Import-Pfad
+haben), verkabelt an alle vier Stellen — `<omp-confirm>` ist bereits
+global registriert, sobald die Shell lädt, auch für ein eigenständiges
+Bundle nutzbar. Live per CDP-Browser-Test verifiziert (Cart-Entfernen:
+Dialog erscheint, Bestätigen entfernt echt; Audio-Kanal-Entfernen:
+Dialog erscheint, Abbrechen entfernt NICHT). Größere Vorschläge (Setup-
+Wizard, weitere Bundles auf denselben Lücken-Typ prüfen) bewusst nur
+als offene Punkte dokumentiert, nicht blind umgesetzt.
+
+**Roadmap-Ergebnis (verifiziert, nicht nur aus `UMSETZUNG.md` übernommen):**
+höchste Priorität: kein einziges `recover()` im gesamten Orchestrator
+(`grep -rn "recover()" orchestrator/` → 0 Treffer) — jede
+Hintergrund-Goroutine (`launcher.supervise`, `workflows.runStart`/
+`rewireAfterRestart`, `failover.tryPromoteForInstance`/
+`promoteStandby`, `migration.considerMigration`/`executeMigration`)
+kann bei einem Panic den GANZEN Orchestrator-Prozess mitreißen, inkl.
+aller laufenden Workflows — ein `defer recover()`-Wrapper um alle
+Goroutine-Einstiegspunkte wäre die höchste Hebelwirkung (begrenzt den
+Schaden JEDES künftigen Bugs, statt einen einzelnen zu beheben) und
+ist als nächster Schritt empfohlen. Zweiter Punkt, direkt an die
+eigene Sitzung anschließend: Rust-Node-interne Worker-Threads (wie
+`read_audio_loop` oben) werden nirgends auf Liveness überwacht — ein
+Thread-Panic tötet den Prozess NICHT, der Launcher (der nur den Prozess
+beobachtet) merkt nichts, der Node meldet sich weiter "gesund", liefert
+aber keine Daten mehr — exakt die Bug-Klasse aus Teil 1 oben, bislang
+nur Fall für Fall gefunden statt generisch abgesichert. Details (Datei-
+Zeilen, weitere niedriger priorisierte Befunde: keine SQL-Injection-
+Stellen gefunden, kein `math/rand` für Secrets) nur im Fork-Bericht,
+nicht separat versioniert — auf Anfrage rekonstruierbar.
+
+**Dateien:** `nodes/omp-audio-mixer/ui/bundle.js`,
+`nodes/omp-playout-automation/ui/bundle.js`.

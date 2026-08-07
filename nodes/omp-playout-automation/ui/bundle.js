@@ -5,6 +5,41 @@
 // Auto/Hold-Modeschalter samt Fortschrittsbalken für das on-air Item.
 // Gleiche generische Node-Proxy-API wie alle anderen Nodes:
 // /api/v1/nodes/<id>/params/<name>, /api/v1/nodes/<id>/methods/<name>.
+
+// Vanille-Nachbau von `ui/kit/omp-confirm.ts`s `confirmDialog()` (UX-
+// Audit 2026-08-07): dieses Bundle ist ein eigenständiges, nicht über
+// den Shell-Build laufendes JS (`include_str!`, kein TS-Import möglich),
+// aber `<omp-confirm>` selbst ist bereits global registriert, sobald die
+// Shell lädt (`ui/kit/index.ts`s Moduldoku: "kann die Tags danach in
+// seinem eigenen Shadow-DOM verwenden, ohne selbst zu importieren") —
+// hier nur der Aufruf-Wrapper nachgebaut, damit auch dieses Bundle
+// dasselbe modale Overlay statt des blockierenden `window.confirm()`
+// nutzen kann. Vorher: der "■ Stop"-Button (schaltet den On-Air-Kanal
+// sofort auf Schwarzbild) nutzte `window.confirm()`, Rundown-Item- und
+// Cart-„Entfernen"-Buttons hatten GAR KEINE Bestätigung — ein
+// versehentlicher Klick löschte ein Rundown-Item ohne jede Rückfrage.
+function confirmDialog(message, confirmLabel) {
+  if (!customElements.get("omp-confirm")) {
+    // Fallback für einen (in der Praxis nicht vorkommenden) Stand-
+    // alone-Aufruf dieses Bundles außerhalb der Shell.
+    return Promise.resolve(window.confirm(message));
+  }
+  return new Promise((resolve) => {
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener(
+      "resolve",
+      (ev) => {
+        resolve(ev.detail);
+        el.remove();
+      },
+      { once: true },
+    );
+    document.body.appendChild(el);
+  });
+}
+
 class OmpPlayoutAutomationPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -166,8 +201,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     stopBtn.className = "pl-ctrl-btn stop";
     stopBtn.textContent = "■ Stop";
     stopBtn.title = "Hauptkanal sofort auf Schwarzbild schalten (Rundown bleibt erhalten)";
-    stopBtn.addEventListener("click", () => {
-      if (!confirm("Hauptkanal wirklich auf Schwarzbild schalten?")) return;
+    stopBtn.addEventListener("click", async () => {
+      if (!(await confirmDialog("Hauptkanal wirklich auf Schwarzbild schalten?", "Auf Schwarzbild schalten"))) return;
       call("stop", {}).then(poll);
     });
 
@@ -506,7 +541,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "✕";
       removeBtn.title = "Entfernen";
-      removeBtn.addEventListener("click", () => call("remove", { itemId: item.id }).then(poll));
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
+        call("remove", { itemId: item.id }).then(poll);
+      });
       actionsEl.append(cueBtn, removeBtn);
 
       el.addEventListener("dragstart", (ev) => {
@@ -585,7 +623,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const removeBtn = document.createElement("button");
       removeBtn.className = "remove";
       removeBtn.textContent = "Entfernen";
-      removeBtn.addEventListener("click", () => call("cart.remove", { assetId: asset.id }).then(poll));
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDialog(`Cart „${asset.label}" wirklich entfernen?`, "Entfernen"))) return;
+        call("cart.remove", { assetId: asset.id }).then(poll);
+      });
 
       el.append(labelEl, fireBtn, removeBtn);
       return { el, labelEl, fireBtn, removeBtn };

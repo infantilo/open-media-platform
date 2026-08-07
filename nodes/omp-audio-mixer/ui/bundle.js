@@ -22,6 +22,30 @@
 // (analog zum bisherigen "fokussiertes Input nicht überschreiben",
 // `dragging`-Set statt `activeElement`-Vergleich, weil Kit-Elemente die
 // eigentliche Eingabe in ihrem eigenen Shadow-DOM kapseln).
+// Vanille-Nachbau von `ui/kit/omp-confirm.ts`s `confirmDialog()` (UX-Audit
+// 2026-08-07, gleicher Fund/Fix wie `omp-playout-automation/ui/bundle.js`):
+// `<omp-confirm>` ist bereits global registriert, sobald die Shell lädt
+// (`ui/kit/index.ts`), dieses eigenständige Bundle kann es aber nicht
+// importieren (`include_str!`, kein TS-Build) — nur der Aufruf-Wrapper.
+// Vorher hatte "entfernen" (Kanal löschen) GAR KEINE Bestätigung.
+function confirmDialog(message, confirmLabel) {
+  if (!customElements.get("omp-confirm")) return Promise.resolve(window.confirm(message));
+  return new Promise((resolve) => {
+    const el = document.createElement("omp-confirm");
+    el.textContent = message;
+    if (confirmLabel) el.setAttribute("confirm-label", confirmLabel);
+    el.addEventListener(
+      "resolve",
+      (ev) => {
+        resolve(ev.detail);
+        el.remove();
+      },
+      { once: true },
+    );
+    document.body.appendChild(el);
+  });
+}
+
 class OmpAudioMixerPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -520,7 +544,10 @@ class OmpAudioMixerPanel extends HTMLElement {
       const removeBtn = document.createElement("button");
       removeBtn.className = "remove-btn";
       removeBtn.textContent = "entfernen";
-      removeBtn.addEventListener("click", () => call("removeChannel", { channelId: id }).then(poll));
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDialog(`Kanal „${label}" wirklich entfernen?`, "Entfernen"))) return;
+        call("removeChannel", { channelId: id }).then(poll);
+      });
 
       el.append(labelEl, sourceSelect, eqSection, compDetail, faderRow, muteBtn, pflBtn, afv, removeBtn);
 
