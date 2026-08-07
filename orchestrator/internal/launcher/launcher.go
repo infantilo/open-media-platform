@@ -35,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 	"github.com/infantilo/openmediaplatform/tools/contract-check/checker"
 )
@@ -868,7 +869,7 @@ func (l *Launcher) startLocal(nodeType, version, customLabel string, extraEnv ma
 	// extraEnv wandert mit, damit ein automatischer Neustart dieselben
 	// Workflow-Settings (z. B. Auflösung) wieder anwendet, nicht die
 	// Katalog-Defaults.
-	go l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail)
+	safego.Go("launcher.supervise", func() { l.supervise(id, nodeType, entry, label, extraEnv, cmd, stderrTail) })
 
 	return inst, nil
 }
@@ -892,7 +893,7 @@ func (l *Launcher) startPodmanLocal(nodeType string, entry CatalogEntry, id, lab
 	}
 	l.mu.Unlock()
 
-	go l.supervisePodman(id, nodeType, entry, label, extraEnv, containerID)
+	safego.Go("launcher.supervisePodman", func() { l.supervisePodman(id, nodeType, entry, label, extraEnv, containerID) })
 
 	return inst, nil
 }

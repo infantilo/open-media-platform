@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -95,7 +96,7 @@ func (s *Service) publishFailover(ev failoverEvent) {
 // Fehlerfall, nur der bestehende K7-Teil-1-Zustand ("crashed, wartet auf
 // Bediener") bleibt unverändert bestehen.
 func (s *Service) InstanceGaveUp(instanceID string) {
-	go s.tryPromoteForInstance(instanceID, "crash-loop")
+	safego.Go("workflows.tryPromoteForInstance", func() { s.tryPromoteForInstance(instanceID, "crash-loop") })
 }
 
 func (s *Service) tryPromoteForInstance(instanceID, trigger string) {
@@ -347,5 +348,5 @@ func (s *Service) checkHostOffline(wf Workflow, primaryRole, standbyRole string)
 	}
 	slog.Warn("workflows: host offline, triggering failover",
 		"workflow", wf.ID, "role", primaryRole, "host", rt.HostID, "lastSeen", m.ReceivedAt)
-	go s.promoteStandby(wf, primaryRole, standbyRole, "host-offline")
+	safego.Go("workflows.promoteStandby", func() { s.promoteStandby(wf, primaryRole, standbyRole, "host-offline") })
 }

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -173,7 +174,9 @@ func (s *Service) OnAdviceRaised(a placement.Advice) {
 		if !s.claimMigrationAttempt(instanceID) {
 			continue
 		}
-		go s.considerMigration(instanceID, a.HostID, a.SuggestedHostID, a.SuggestedHostLabel)
+		safego.Go("workflows.considerMigration", func() {
+			s.considerMigration(instanceID, a.HostID, a.SuggestedHostID, a.SuggestedHostLabel)
+		})
 	}
 }
 
@@ -324,7 +327,9 @@ func (s *Service) ConfirmMigration(workflowID, role string) error {
 	if !ok {
 		return ErrNoPendingMigration
 	}
-	go s.executeMigration(pm.workflowID, pm.role, pm.instanceID, pm.targetHostID, "overload-confirmed")
+	safego.Go("workflows.executeMigration", func() {
+		s.executeMigration(pm.workflowID, pm.role, pm.instanceID, pm.targetHostID, "overload-confirmed")
+	})
 	return nil
 }
 

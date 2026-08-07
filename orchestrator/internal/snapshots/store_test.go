@@ -2,42 +2,25 @@ package snapshots
 
 import (
 	"database/sql"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
 )
 
-// testDB liefert eine migrierte, verbundene Datenbank für Tests (gleiches
-// Muster wie internal/layouts/store_test.go/internal/db/db_test.go) und
+// testDB liefert eine migrierte, verbundene Datenbank für Tests und
 // leert die snapshots-Tabelle davor/danach — anders als layouts' per-Test
 // eindeutigem Namen liest List() hier alle Zeilen, Tests würden sich sonst
 // gegenseitig verfälschen. Sicher, weil Go-Tests innerhalb eines Pakets
-// standardmäßig sequenziell laufen (kein t.Parallel() hier).
+// standardmäßig sequenziell laufen (kein t.Parallel() hier) UND weil
+// dbtest.Open() auf eine von OMP_POSTGRES_URL ABGELEITETE, isolierte
+// Testdatenbank verbindet, NIEMALS auf die per OMP_POSTGRES_URL
+// angegebene Datenbank selbst (docs/decisions.md Nachtrag 128: ein
+// früherer Vorfall verlor echte Workflows genau über dieses Muster, s.
+// dortige Doku für die volle Herleitung).
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	// Kein impliziter Fallback auf die lokale Standard-Dev-DSN mehr
-	// (Nachtrag 108, docs/decisions.md): genau dieser Fallback verband
-	// sich bei fehlendem OMP_POSTGRES_URL unbemerkt mit der echten,
-	// dauerhaft laufenden Dev-Postgres (identische Default-DSN) und
-	// löschte dort per anschließendem `DELETE FROM ...`/Cleanup echte,
-	// nie absichtlich in Kauf genommene Daten (u. a. den gespeicherten
-	// Workflow "Regieplatz 1"). Wer diese Tests laufen lassen will,
-	// muss OMP_POSTGRES_URL jetzt explizit selbst setzen — ein
-	// bewusster Akt statt eines stillen Defaults.
-	dsn := os.Getenv("OMP_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("OMP_POSTGRES_URL nicht gesetzt — DB-Test übersprungen (kein impliziter Fallback mehr, s. docs/decisions.md Nachtrag 108)")
-	}
-	database, err := db.Connect(dsn)
-	if err != nil {
-		t.Skipf("postgres nicht erreichbar (%v)", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("Migrate() error = %v", err)
-	}
+	database := dbtest.Open(t)
 	if _, err := database.Exec(`DELETE FROM snapshots`); err != nil {
 		t.Fatalf("cleanup snapshots table: %v", err)
 	}

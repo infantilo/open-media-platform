@@ -18,6 +18,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/safego"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
 )
 
@@ -601,7 +602,7 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	}
 	s.publish(wf)
 
-	go s.runStart(wf)
+	safego.Go("workflows.runStart", func() { s.runStart(wf) })
 	return nil
 }
 
@@ -868,7 +869,7 @@ func (s *Service) awaitFreshRegistration(ctx context.Context, instanceID, exclud
 // Rolle betreffen. Läuft im Hintergrund — der Launcher darf auf diesen
 // Aufruf nicht warten müssen.
 func (s *Service) InstanceRestarted(instanceID string) {
-	go s.rewireAfterRestart(instanceID)
+	safego.Go("workflows.rewireAfterRestart", func() { s.rewireAfterRestart(instanceID) })
 }
 
 func (s *Service) rewireAfterRestart(instanceID string) {
@@ -1069,7 +1070,7 @@ func (s *Service) RestartRole(ctx context.Context, id, roleName, format string) 
 	}
 	s.publish(wf)
 
-	go s.runRestartRole(wf, roleName)
+	safego.Go("workflows.runRestartRole", func() { s.runRestartRole(wf, roleName) })
 	return nil
 }
 
@@ -1438,7 +1439,7 @@ func (s *Service) stopOrPause(ctx context.Context, id string, confirm bool, targ
 	}
 	s.publish(wf)
 
-	go s.runStop(wf, targetStatus)
+	safego.Go("workflows.runStop", func() { s.runStop(wf, targetStatus) })
 	return nil
 }
 

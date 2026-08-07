@@ -2,38 +2,23 @@ package workflows
 
 import (
 	"database/sql"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
 )
 
-// testDB liefert eine migrierte, verbundene Datenbank für Tests (gleiches
-// Muster wie internal/snapshots/store_test.go).
+// testDB liefert eine migrierte, verbundene Datenbank für Tests — eine
+// von OMP_POSTGRES_URL ABGELEITETE, isolierte Testdatenbank
+// ("<db>_test"), NIEMALS die per OMP_POSTGRES_URL angegebene Datenbank
+// selbst (dbtest.Open, docs/decisions.md Nachtrag 128: ein früherer
+// Vorfall, "Regieplatz 1"/"PC-MXL-Test" per echtem `go test`-Lauf gegen
+// die reale Dev-Postgres verloren, weil dieses testDB() früher direkt
+// dort per `DELETE FROM workflows` aufräumte — s. dortige Doku für die
+// volle Herleitung).
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	// Kein impliziter Fallback auf die lokale Standard-Dev-DSN mehr
-	// (Nachtrag 108, docs/decisions.md): genau dieser Fallback verband
-	// sich bei fehlendem OMP_POSTGRES_URL unbemerkt mit der echten,
-	// dauerhaft laufenden Dev-Postgres (identische Default-DSN) und
-	// löschte dort per anschließendem `DELETE FROM ...`/Cleanup echte,
-	// nie absichtlich in Kauf genommene Daten (u. a. den gespeicherten
-	// Workflow "Regieplatz 1"). Wer diese Tests laufen lassen will,
-	// muss OMP_POSTGRES_URL jetzt explizit selbst setzen — ein
-	// bewusster Akt statt eines stillen Defaults.
-	dsn := os.Getenv("OMP_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("OMP_POSTGRES_URL nicht gesetzt — DB-Test übersprungen (kein impliziter Fallback mehr, s. docs/decisions.md Nachtrag 108)")
-	}
-	database, err := db.Connect(dsn)
-	if err != nil {
-		t.Skipf("postgres nicht erreichbar (%v)", err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	if err := db.Migrate(database); err != nil {
-		t.Fatalf("Migrate() error = %v", err)
-	}
+	database := dbtest.Open(t)
 	if _, err := database.Exec(`DELETE FROM workflows`); err != nil {
 		t.Fatalf("cleanup workflows table: %v", err)
 	}

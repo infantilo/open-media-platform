@@ -15871,3 +15871,97 @@ liefert `[]`). `deno check`/`deno test` (84/84) grün, `deno bundle`
 erfolgreich.
 
 **Dateien:** `ui/graph/flow-canvas.ts`.
+
+## 2026-08-07 (Nachtrag 128) — safego.Go (Panic-Recovery für Hintergrund-Goroutinen) + echter Datenverlust-Vorfall beim Verifizieren: "Regieplatz 1"/"PC-MXL-Test" verloren, Root Cause endgültig behoben
+
+Nutzerauftrag: höchste Priorität aus dem UX-Audit-Roadmap-Befund
+(Nachtrag 123) umsetzen — kein `recover()` im gesamten Orchestrator,
+ein Panic in jeder der zehn `go`-Aufrufstellen (`workflows.runStart`/
+`rewireAfterRestart`/`runRestartRole`/`runStop`, `failover.
+tryPromoteForInstance`/`promoteStandby`, `migration.considerMigration`/
+`executeMigration`, `launcher.supervise`/`supervisePodman`) reißt sonst
+den GANZEN Orchestrator-Prozess mit, inkl. jedes laufenden Workflows.
+
+### 1. `internal/safego`: Go(name, fn) fängt Panics ab, loggt strukturiert (inkl. Stacktrace), Prozess läuft weiter
+
+Neues, minimales Paket (`safego.Go`), alle zehn Aufrufstellen umgestellt
+(`go s.runStart(wf)` → `safego.Go("workflows.runStart", func() {
+s.runStart(wf) })`). Drei Tests beweisen direkt: normale Ausführung
+funktioniert weiter, ein Panic crasht den Testprozess NICHT (sonst
+würde `go test` selbst abstürzen statt den Test fehlschlagen zu lassen
+— das Nicht-Abstürzen IST der Beweis), eine nachfolgende Goroutine
+läuft nach einem vorherigen Panic unbeeinträchtigt weiter. `go build`/
+`go vet ./...` sauber, komplettes Paket + alle zehn Aufrufer-Pakete neu
+gebaut, Orchestrator neu gestartet, `/healthz` bestätigt.
+
+### 2. Echter Datenverlust-Vorfall beim Verifizieren — root-caused, NICHT nur umschifft
+
+Zum Verifizieren der `safego`-Änderung `go test ./...` mit
+`OMP_POSTGRES_URL` auf die echte, per `make start` laufende Dev-Postgres
+gesetzt ausgeführt — exakt die von `make test`/`make check` selbst
+vorgesehene Nutzung (Makefile-Kommentar: "sollen die DB-Tests weiterhin
+real gegen die per `make up` gestartete Dev-Postgres laufen lassen").
+Danach: `SELECT count(*) FROM workflows` lieferte 0. Die beiden echten
+Demo-Workflows "Regieplatz 1" (seit 2026-07-22, s. Memory) und
+"PC-MXL-Test" waren komplett gelöscht.
+
+**Root Cause:** `workflows/store_test.go`s `testDB()`-Hilfsfunktion
+führte als Test-Setup bedingungslos `DELETE FROM workflows` gegen genau
+die per `OMP_POSTGRES_URL` übergebene Datenbank aus — identisch
+kopiert in `snapshots/store_test.go` (`DELETE FROM snapshots`) und
+`launcher/store_test.go` (`DELETE FROM instances`). Nachtrag 108
+(früherer, fast identischer Vorfall, s. Kommentar in genau diesen
+Dateien) hatte NUR den STILLEN Fallback auf die Dev-Default-DSN bei
+fehlendem `OMP_POSTGRES_URL` entfernt — der Fall, dass die Variable
+ABSICHTLICH auf die echte Dev-Postgres zeigt (der von `make test`
+selbst vorgesehene Normalfall!), blieb genauso destruktiv wie vorher.
+Kein Backup half: `.backups/` enthält nur einen Stand vom 2026-07-17,
+vor der Erstellung beider Workflows. Per Rückfrage mit dem Nutzer
+geklärt: Workflows werden vom Nutzer selbst neu angelegt (nicht von
+Claude rekonstruiert), Root-Cause-Fix jetzt sofort.
+
+**Fix (neues Paket `internal/dbtest`):** `dbtest.Open(t)` verbindet
+NIEMALS zur per `OMP_POSTGRES_URL` übergebenen Datenbank selbst,
+sondern zu einer davon ABGELEITETEN, isolierten "<db>_test"-Datenbank
+(automatisch per `CREATE DATABASE` angelegt, `42P04`/"already exists"
+beim zweiten Lauf erwartet und ignoriert). Tests dürfen darin beliebig
+aggressiv aufräumen (volle Tabellen leeren), ganz gleich, welche DSN
+übergeben wird — die App-Datenbank ist strukturell unerreichbar, nicht
+nur per Konvention geschützt. `workflows/store_test.go`,
+`snapshots/store_test.go`, `launcher/store_test.go` umgestellt (deren
+`DELETE FROM <ganze Tabelle>` bleibt bestehen, zielt jetzt aber
+IMMER auf die isolierte DB). `launcher/catalog_store_test.go` nutzt
+dieselbe `testDB()` transitiv, keine eigene Änderung nötig. Alle
+anderen `OMP_POSTGRES_URL`-Nutzer (`auth`, `authz`, `hosts`,
+`profiles`, `layouts`, `audit`, `db` selbst) geprüft — nutzen bereits
+per-Test scoped `DELETE ... WHERE <eindeutiges Testmerkmal>` statt
+einer vollen Tabellen-Leerung, waren nie betroffen.
+
+**Verifiziert:** live der GENAU GLEICHE Vorfall-auslösende Befehl erneut
+ausgeführt (`OMP_POSTGRES_URL` auf die echte Dev-Postgres, `go test
+./...` komplett) — `internal/dbtest`s eigener Test
+(`TestOpenNeverTouchesTheOriginalDatabase`) bestätigt live per
+`SELECT current_database()`, dass NIE `omp` zurückkommt; `SELECT
+count(*)` auf `workflows`/`instances`/`catalog_entries`/`snapshots` in
+der echten `omp`-Datenbank vor UND nach dem vollen Testlauf identisch
+(0, da bereits durch den Vorfall selbst geleert — der eigentliche
+Beweis ist, dass sich die Zahl durch den Testlauf NICHT mehr ändert).
+Neue, separate `omp_test`-Datenbank live bestätigt automatisch
+angelegt. Einziger verbleibender Fehlschlag im vollen Testlauf:
+`audit.TestListCursorPaginatesThroughAllEntries` (200-Seiten-
+Sicherheitsgrenze, echte `audit_log`-Tabelle hat durch Wochen echter
+Nutzung + diese Sitzung 2853 Zeilen) — unabhängig von dieser Änderung
+(kein Commit rührt `internal/audit` an), nicht behoben (out of scope,
+eigene Baustelle).
+
+**Lehre für künftige Sitzungen:** `go test ./...`/`make test`/`make
+check` mit gesetztem `OMP_POSTGRES_URL` sind ab jetzt tatsächlich
+gefahrlos gegen die reale Dev-Postgres ausführbar — vorher war das nur
+scheinbar so (Nachtrag 108 hatte den Eindruck von Sicherheit erzeugt,
+ohne den eigentlichen Massenlöschungspfad zu schließen).
+
+**Dateien:** `orchestrator/internal/safego/{safego,safego_test}.go`
+(neu), `orchestrator/internal/dbtest/{dbtest,dbtest_test}.go` (neu),
+`orchestrator/internal/workflows/{failover,migration,service,
+store_test}.go`, `orchestrator/internal/launcher/{launcher,
+store_test}.go`, `orchestrator/internal/snapshots/store_test.go`.
