@@ -2248,7 +2248,7 @@ export class FlowCanvas extends HTMLElement {
       stopBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       stopBtn.addEventListener("click", (ev) => {
         ev.stopPropagation();
-        this.#stopInstance(instanceId);
+        this.#stopInstance(instanceId, tile.label);
       });
       g.appendChild(stopBtn);
     } else if (isGroup && this.#groupTree.groups[tile.id]?.workflowId) {
@@ -3139,7 +3139,8 @@ export class FlowCanvas extends HTMLElement {
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "Speichern";
-    saveBtn.style.cssText = "display:block;margin-top:12px;cursor:pointer;";
+    saveBtn.className = "omp-btn-primary";
+    saveBtn.style.cssText = "display:block;margin-top:var(--omp-space-3);";
     saveBtn.addEventListener("click", async () => {
       saveBtn.disabled = true;
       try {
@@ -3200,7 +3201,7 @@ export class FlowCanvas extends HTMLElement {
 
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "✕";
-      removeBtn.style.cssText = "cursor:pointer;";
+      removeBtn.className = "omp-btn-danger";
       removeBtn.addEventListener("click", () => {
         state.groups = state.groups.filter((g) => g !== group);
         rerender();
@@ -3254,7 +3255,7 @@ export class FlowCanvas extends HTMLElement {
 
       const removePresetBtn = document.createElement("button");
       removePresetBtn.textContent = "✕ Preset";
-      removePresetBtn.style.cssText = "cursor:pointer;";
+      removePresetBtn.className = "omp-btn-danger";
       removePresetBtn.addEventListener("click", () => {
         state.presets = state.presets.filter((p) => p !== preset);
         rerender();
@@ -3301,7 +3302,7 @@ export class FlowCanvas extends HTMLElement {
 
         const removeRouteBtn = document.createElement("button");
         removeRouteBtn.textContent = "✕";
-        removeRouteBtn.style.cssText = "cursor:pointer;";
+        removeRouteBtn.className = "omp-btn-danger";
         removeRouteBtn.addEventListener("click", () => {
           preset.routes = preset.routes.filter((r) => r !== route);
           rerender();
@@ -3885,7 +3886,8 @@ export class FlowCanvas extends HTMLElement {
     const stopBtn = document.createElement("button");
     stopBtn.textContent = inst.crashed ? "Entfernen" : "Stop";
     stopBtn.style.cssText = "font-size:10px;cursor:pointer;margin-top:3px;";
-    stopBtn.addEventListener("click", () => this.#stopInstance(inst.id));
+    stopBtn.className = "omp-btn-danger";
+    stopBtn.addEventListener("click", () => this.#stopInstance(inst.id, inst.label));
     row.appendChild(stopBtn);
 
     return row;
@@ -3937,7 +3939,14 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
-  async #stopInstance(instanceId: string) {
+  // UX-Audit 2026-08-07 (Nachtrag 126): bislang KEINE Bestätigung — ein
+  // versehentlicher Klick auf das kleine "⏹"-Icon einer Kachel (oder den
+  // "Stop"-Knopf in der generischen Instanz-Zeile, s. dortigen Aufrufer)
+  // beendete die Instanz sofort, ohne Rückfrage. Gleiches Muster wie
+  // #stopWorkflow oben (confirmDialog, "confirmLabel" statt der
+  // englischen Default-Beschriftung).
+  async #stopInstance(instanceId: string, label: string) {
+    if (!(await confirmDialog(`Instanz „${label}" wirklich stoppen?`, { confirmLabel: "Stoppen" }))) return;
     try {
       const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}`, {
         method: "DELETE",

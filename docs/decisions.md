@@ -15828,3 +15828,46 @@ Trittstein mehr gefunden, eher Vollständigkeits-Politur für eine
 künftige Sitzung als ein offener Bug.
 
 **Dateien:** `ui/graph/flow-canvas.ts`.
+
+## 2026-08-07 (Nachtrag 127) — flow-canvas.ts weiterpoliert: echter Bestätigungs-Lücken-Fund beim Kachel-Stop-Icon (kein Cosmetic-Fund)
+
+Direkte Fortsetzung von Nachtrag 126 (Nutzerauftrag "UI weiter
+polieren" nach Rückfrage per AskUserQuestion zwischen drei
+Fortsetzungsoptionen). Beim Nachziehen der verbliebenen `flow-
+canvas.ts`-Formulare (MXF-Player-Programmgruppen-/Presets-Editor:
+"✕"/"✕ Preset" → `.omp-btn-danger`, "Speichern" → `.omp-btn-primary`,
+gleiches Muster wie die Workflow-Bearbeiten-Leiste) fiel ein
+funktionaler, nicht nur kosmetischer Fund auf:
+
+**`#stopInstance` (das rote "⏹"-Icon auf JEDER manuell gestarteten
+Node-Kachel im Flow-Editor UND der "Stop"-Knopf in der generischen
+Instanz-Zeile) hatte GAR KEINE Bestätigung** — ein einzelner
+(Fehl-)Klick auf das kleine, direkt in der Kachel-Kopfzeile sitzende
+Icon löste sofort `DELETE /api/v1/instances/<id>` aus, kein
+`confirmDialog()`, kein Rückgängig. Exakt dieselbe Bug-Klasse wie die
+in Nachtrag 123/124 in den Node-UI-Bundles gefundenen und behobenen
+Lücken — hier aber in der Engineering-Shell selbst, am mit Abstand
+sichtbarsten/am leichtesten aus Versehen treffbaren Kontrollelement
+des ganzen Flow-Editors (jede Kachel hat es). `#stopWorkflow` (Stop
+eines ganzen Workflows) hatte bereits `confirmDialog()` — `#stopInstance`
+(Einzelinstanz) nicht, vermutlich schlicht übersehen, als C8s
+Stop-Control ursprünglich gebaut wurde (vor `confirmDialog()`s
+Einführung).
+
+Fix: `confirmDialog()`-Guard direkt in `#stopInstance` (schützt beide
+Aufrufer zentral statt zweimal), Label-Parameter ergänzt (`tile.label`/
+`inst.label`) für eine lesbare Bestätigungsnachricht statt der reinen
+Instanz-ID. Generische-Panel-"Stop"-Knopf zusätzlich `.omp-btn-danger`
+für visuelle Konsistenz mit den übrigen destruktiven Aktionen dieser
+Sitzung.
+
+**Live per CDP voll verifiziert** (echte `omp-source`-Instanz
+gestartet): Klick auf das "⏹"-Icon → Dialog "Instanz „Source
+(dbb3b2eb)" wirklich stoppen?" erscheint (Screenshot bestätigt,
+korrektes Label) → "Abbrechen" → Instanz läuft nachweislich weiter
+(`GET /api/v1/instances` unverändert) → erneut Icon geklickt →
+"Stoppen" bestätigt → Instanz tatsächlich weg (`GET /api/v1/instances`
+liefert `[]`). `deno check`/`deno test` (84/84) grün, `deno bundle`
+erfolgreich.
+
+**Dateien:** `ui/graph/flow-canvas.ts`.
