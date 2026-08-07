@@ -15683,3 +15683,102 @@ Orchestrator) bleiben offen, nicht Teil dieser Sitzung.
 
 **Dateien:** `nodes/omp-player/ui/bundle-jingle.js`,
 `nodes/omp-player/ui/bundle-video.js`.
+
+## 2026-08-07 (Nachtrag 125) — Orchestrator-Shell (Engineering-UI) modernisiert: einheitliches Formularelement-Design statt roher Browser-Defaults
+
+Nutzerauftrag: "orchestrator ui muss auch professionel, modern und
+einfach werden." Anders als Nachtrag 123/124 (Operator-Bedienoberflächen
+der Node-UI-Bundles) betrifft das hier die Engineering-Shell selbst:
+Flow-Editor, Workflows/Hosts/Instanzen/Alarme/Scheduler/Administration-
+Tabs, Login-Bildschirm.
+
+**Bestandsaufnahme vor der Änderung:** `ui/design-tokens.css` (Studio-
+Dark-Theme, Kapitel-10-Entscheidung) existierte bereits vollständig
+durchdacht — Flächen-/Text-/Signalfarben, Typografie-, Radius-/Spacing-
+Skala. Trotzdem sahen alle Screenshots der Shell wie unstyled rohes
+HTML aus (Standard-Browser-Buttons mit grauer 3D-Fase, weiße
+`<select>`-Dropdowns, keine konsistenten Abstände). Grund per grep
+gefunden: `ui/shell/shell.ts` (App-Bar) nutzte GAR KEIN Token, `ui/shell/
+console-board.ts`/`console-view.ts` ebenfalls null, `ui/shell/
+{workflows,instances,scheduler}-view.ts` nur 2, `ui/graph/flow-canvas.ts`
+nur 9 — das vorhandene Token-System wurde schlicht nicht konsequent
+verwendet.
+
+**Architektur-Entscheidung, die die Umsetzung stark vereinfacht hat:**
+geprüft (grep `attachShadow`), dass `ui/shell/*.ts` und `ui/graph/
+flow-canvas.ts` AUSNAHMSLOS ins Light-DOM rendern (kein Shadow-DOM) —
+anders als `ui/kit/*` (z. B. `omp-button.ts`, die "beleuchtete
+Hardware-Taste" für Operator-Konsolen, bewusst unangetastet gelassen:
+für ein Formular/eine Liste wäre der Mischpult-Look overdressed) und
+jedes Node-UI-Bundle. Ein globaler Tag-Selektor (`button {}`, `select,
+input, textarea {}`) in `design-tokens.css` durchdringt deshalb KEINE
+Shadow-Grenze (anders als `var(--omp-*)`, das ist der dokumentierte
+Zweck von Custom Properties) und reskinnt automatisch JEDEN rohen
+`<button>`/`<select>`/`<input>`/`<textarea>` der gesamten Shell, ohne
+dass jede der 60+ Aufrufstellen einzeln angefasst werden musste — live
+mit einem einzigen CSS-Block bestätigt (Workflows-Tab sah bereits nach
+dem Reset allein dramatisch besser aus, vor jeder weiteren Datei-
+Änderung). Ursprünglich angelegte `.omp-btn`/`.omp-select`/`.omp-input`-
+Klassen wurden deshalb wieder entfernt (redundant mit dem Tag-Selektor)
+— nur echte Varianten (`.omp-btn-primary`, `.omp-btn-danger`) und
+Nicht-Formularelement-Bausteine (`.omp-card`, `.omp-empty`, `.omp-badge*`,
+`.omp-h1`) blieben als Klassen bestehen.
+
+**Umgesetzt:**
+- `ui/design-tokens.css`: Formularelement-Reset (s. o.) + kleines Set
+  echter Utility-Klassen.
+- `ui/shell/auth.ts`: Login-Overlay + "Angemeldet als …"-Widget komplett
+  auf Tokens umgestellt (vorher hartkodiertes `sans-serif`/Hex-Farben
+  wie `#111`/`#1c1c1c`/`#333` statt `var(--omp-*)`).
+- `ui/shell/app-shell.ts`: Workflow-Filter-`<select>` (vorher nur
+  `font-size` gesetzt, sonst nackter weißer Browser-Dropdown), Retry-
+  Button im Disconnected-Banner.
+- `ui/graph/flow-canvas.ts`: Node-Katalog-Buttons/-Suchfeld/-Leerzustand,
+  "Alle einpassen", "Snapshot speichern" — bewusst NUR die im
+  Standard-Tab sichtbaren Elemente, die übrigen ~15 Button-Stellen in
+  selten geöffneten Panels (Preset-Editor, Rollen-Designer-Detailformen)
+  profitieren zwar schon vom globalen Reset, wurden aber nicht einzeln
+  mit Varianten-Klassen nachpoliert — als Folgepunkt dokumentiert, nicht
+  stillschweigend übersprungen.
+- `ui/shell/workflows-view.ts`: Karten-Container jetzt mit echtem
+  Rahmen/Radius (vorher `rgba(255,255,255,0.04)` ohne Border), "Löschen"
+  → `.omp-btn-danger`, Überschriften → `.omp-h1`, Leerzustände →
+  `.omp-empty`.
+- `ui/shell/{hosts,instances,alarm}-view.ts`: waren bereits weitgehend
+  token-konsistent (nutzen viel `var(--omp-*)` in Template-Strings) —
+  nur Überschriften/Leerzustände/eine rgba-Fläche nachgezogen.
+- `ui/shell/scheduler-view.ts`: Überschrift, drei hartkodierte
+  Akzentfarben-Stellen (`#5b9bd5`, teils über ein nie definiertes
+  `var(--omp-accent, …)`-Fallback) → `var(--omp-info)`/`var(--omp-cue)`.
+- `ui/shell/admin-view.ts`: drei "Löschen"/"Entfernen"-Buttons →
+  `.omp-btn-danger` (Nutzer-Löschen/Rollenbindung-Löschen/Katalog-
+  Eintrag-Entfernen nutzten bereits `confirmDialog()` aus einer früheren
+  Sitzung — jetzt zusätzlich visuell als gefährlich erkennbar), vier
+  Sektions-Überschriften → `.omp-h1`.
+
+**Verifiziert:** `deno check ui/**/*.ts` (keine Typfehler), `deno test
+ui/` (84/84 grün), `deno bundle` erfolgreich. Live per echtem CDP-
+Browser-Test alle sieben Tabs durchgeklickt (headless Chromium,
+`Network.setCacheDisabled` gesetzt — sonst servierte der Browser eine
+gecachte alte `design-tokens.css` und die Änderung schien wirkungslos,
+live gefundener Fallstrick dieser Sitzung) — Login-Bildschirm, App-Bar,
+Flow-Editor-Katalog, Workflows-Karten (inkl. jetzt rot hervorgehobenem
+"Löschen"), Hosts/Instanzen/Alarme-Leerzustände, Scheduler-Zeitachse
+(Akzentfarbe korrekt blau), Administration-Tabellen (rote Löschen-
+Buttons klar erkennbar). Ein einzelner scheinbar leerer Scheduler-Tab-
+Screenshot beim ersten Durchlauf war ein reines Test-Skript-Timing-
+Problem (zu kurzes `sleep` zwischen Tab-Klick und Screenshot bei
+schnellem Tab-Durchklicken, kein echter Code-Fehler) — mit mehr
+Wartezeit erneut geprüft, rendert zuverlässig.
+
+**Offene Folgepunkte, nicht Teil dieser Sitzung:** die selten
+geöffneten `flow-canvas.ts`-Panels (Preset-Editor, Rollen-Designer-
+Detailformen) profitieren vom globalen Reset, wurden aber nicht mit
+Varianten-Klassen (Danger/Primary) nachpoliert; einige raue Hex-Farben
+in `workflows-view.ts`s Kartendetails (`#999`/`#ccc`/`#555`) sind
+visuell schon nah an den Tokens und wurden aus Aufwandsgründen nicht
+einzeln ersetzt.
+
+**Dateien:** `ui/design-tokens.css`, `ui/shell/{auth,app-shell,
+workflows-view,hosts-view,instances-view,alarm-view,scheduler-view,
+admin-view}.ts`, `ui/graph/flow-canvas.ts`.

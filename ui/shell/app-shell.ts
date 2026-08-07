@@ -365,7 +365,7 @@ class AppShell extends HTMLElement {
     const retryBtn = document.createElement("button");
     retryBtn.type = "button";
     retryBtn.textContent = "Jetzt verbinden";
-    retryBtn.style.cssText = "cursor:pointer;font-size:var(--omp-font-size-xs);";
+    retryBtn.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
     retryBtn.addEventListener("click", () => connectionMonitor.reconnectNow());
     this.#bannerEl.replaceChildren(label, retryBtn);
 

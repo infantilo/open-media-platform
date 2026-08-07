@@ -361,7 +361,8 @@ class SchedulerView extends HTMLElement {
     toolbar.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;";
 
     const heading = document.createElement("div");
-    heading.style.cssText = "font-weight:600;margin-right:8px;";
+    heading.className = "omp-h1";
+    heading.style.cssText = "margin-right:var(--omp-space-2);";
     heading.textContent = "Scheduler";
     toolbar.appendChild(heading);
 
@@ -373,7 +374,7 @@ class SchedulerView extends HTMLElement {
       const active = this.#viewMode === mode;
       btn.style.cssText =
         `font-size:11px;cursor:pointer;padding:3px 8px;` +
-        `background:${active ? "var(--omp-accent, #5b9bd5)" : "rgba(255,255,255,0.06)"};` +
+        `background:${active ? "var(--omp-info)" : "rgba(255,255,255,0.06)"};` +
         `color:${active ? "#fff" : "var(--omp-text)"};border:none;border-radius:2px;`;
       btn.addEventListener("click", () => this.#setViewMode(mode));
       modeGroup.appendChild(btn);
@@ -568,7 +569,7 @@ class SchedulerView extends HTMLElement {
       `position:absolute;top:${(ROW_HEIGHT_PX - BAR_HEIGHT_PX) / 2}px;height:${BAR_HEIGHT_PX}px;` +
       `left:${(left / totalMinutes) * 100}%;width:${((right - left) / totalMinutes) * 100}%;` +
       `background:${isPartial ? "rgba(224,160,32,0.55)" : "rgba(91,155,213,0.7)"};` +
-      `border:1px solid ${isPartial ? "#e0a020" : "#5b9bd5"};border-radius:3px;cursor:grab;` +
+      `border:1px solid ${isPartial ? "var(--omp-cue)" : "var(--omp-info)"};border-radius:3px;cursor:grab;` +
       "box-sizing:border-box;display:flex;align-items:center;justify-content:center;overflow:hidden;";
     el.title =
       (bar.start ? `Start ${fmtMinutes(bar.start.minutes)}` : "kein Start") +
@@ -853,7 +854,7 @@ class SchedulerView extends HTMLElement {
         const cell = document.createElement("div");
         cell.style.cssText =
           `flex:1;height:14px;margin:0 1px;border-radius:2px;cursor:pointer;` +
-          `background:${hasAny ? "#5b9bd5" : "rgba(255,255,255,0.05)"};`;
+          `background:${hasAny ? "var(--omp-info)" : "rgba(255,255,255,0.05)"};`;
         cell.addEventListener("click", () => {
           this.#anchorDate = date;
           this.#viewMode = "day";

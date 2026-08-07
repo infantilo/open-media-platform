@@ -79,3 +79,139 @@ body {
     opacity: 0.55;
   }
 }
+
+/* Basis-Reset für rohe Formularelemente in der Orchestrator-Shell
+   (2026-08-07, gleicher Nutzerauftrag wie unten): `ui/shell/*.ts` und
+   `ui/graph/flow-canvas.ts` rendern ausnahmslos ins Light-DOM (kein
+   `attachShadow` in einer dieser Dateien, geprüft per grep) — anders als
+   `ui/kit/*` (z. B. `omp-button.ts`) und jedes Node-UI-Bundle, die ihr
+   eigenes Shadow-DOM aufspannen. Ein Tag-Selektor wie `button {}` hier
+   im Light-DOM-Stylesheet durchdringt daher KEINE Shadow-Grenze (anders
+   als `var(--omp-*)`, s. Kommentar oben) — reskinnt also automatisch
+   jeden rohen `<button>`/`<select>`/`<input>`/`<textarea>` in der
+   gesamten Engineering-Shell, ohne dass jede einzelne Aufrufstelle
+   einzeln angefasst werden muss, UND lässt `<omp-button>`s bewusst
+   andere "Hardware-Taste"-Optik für Operator-Konsolen unangetastet. */
+button {
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-sm);
+  color: var(--omp-text);
+  background: var(--omp-surface-raised);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  padding: var(--omp-space-1) var(--omp-space-2);
+  cursor: pointer;
+  transition: background 0.1s ease, border-color 0.1s ease, opacity 0.1s ease;
+}
+button:hover:not(:disabled) {
+  background: var(--omp-surface);
+  border-color: var(--omp-text-dim);
+}
+button:active:not(:disabled) {
+  background: var(--omp-bg);
+}
+button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+select,
+input,
+textarea {
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-sm);
+  color: var(--omp-text);
+  background: var(--omp-surface);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  padding: var(--omp-space-1) var(--omp-space-2);
+}
+select:focus,
+input:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--omp-info);
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--omp-text-disabled);
+}
+
+/* Gemeinsame Utility-Klassen für die Orchestrator-Shell (2026-08-07,
+   Nutzerauftrag "orchestrator ui muss auch professionell, modern und
+   einfach werden"). Gelten nur für Light-DOM-Views (ui/shell/*-view.ts,
+   app-shell.ts, auth.ts — keine davon nutzt attachShadow), deshalb reicht
+   eine globale Klasse hier, ohne die Shadow-DOM-Grenzen-Problematik, die
+   TAB_BUTTON_BASE in app-shell.ts per JS-cssText-Konstante umgeht. Nur
+   für Admin-/Engineering-Oberflächen gedacht — die "beleuchtete
+   Hardware-Taste" (`ui/kit/omp-button.ts`) bleibt bewusst getrennt und
+   unverändert für Operator-Konsolen (Mischpult-Look ist dort gewollt,
+   hier wäre er overdressed für eine Liste/ein Formular).
+
+   Kein eigenes `.omp-btn`/`.omp-select`/`.omp-input` mit Basis-Optik
+   nötig — der Formularelement-Reset oben (`button`/`select`/`input`)
+   deckt genau das bereits ab, jeder rohe `<button>` sieht ohne
+   zusätzliche Klasse schon richtig aus. Nur die ECHTEN Varianten
+   (Akzentfarbe/Gefahr) und Nicht-Formularelement-Bausteine (Karte,
+   Leerzustand, Badge, Überschrift) brauchen eine eigene Klasse. */
+.omp-btn-primary {
+  background: var(--omp-info);
+  border-color: var(--omp-info);
+  color: #fff;
+}
+.omp-btn-primary:hover:not(:disabled) {
+  background: #5a95f5;
+  border-color: #5a95f5;
+}
+.omp-btn-danger {
+  background: transparent;
+  border-color: var(--omp-error);
+  color: var(--omp-error);
+}
+.omp-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 83, 80, 0.12);
+}
+
+.omp-card {
+  background: var(--omp-surface);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  padding: var(--omp-space-4);
+}
+
+.omp-empty {
+  color: var(--omp-text-dim);
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-md);
+  padding: var(--omp-space-4) 0;
+}
+
+.omp-badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--omp-text-dim);
+  background: var(--omp-surface-raised);
+  border: 1px solid var(--omp-border);
+  border-radius: 999px;
+  padding: 2px var(--omp-space-2);
+}
+.omp-badge-running {
+  color: var(--omp-preset);
+  border-color: var(--omp-preset);
+}
+.omp-badge-error {
+  color: var(--omp-error);
+  border-color: var(--omp-error);
+}
+
+.omp-h1 {
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-lg);
+  font-weight: 600;
+  color: var(--omp-text);
+  margin: 0;
+}

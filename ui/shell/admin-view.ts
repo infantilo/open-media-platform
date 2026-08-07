@@ -547,8 +547,9 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText =
-      "font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;";
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
+    title.className = "omp-h1";
     title.textContent = `Nutzer (${this.#users.length})`;
     const newBtn = document.createElement("button");
     newBtn.textContent = this.#showUserForm ? "Abbrechen" : "+ Neuer Nutzer";
@@ -705,7 +706,8 @@ class AdminView extends HTMLElement {
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
-    delBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteUser(u.username));
 
     actionsTd.append(resetBtn, delBtn);
@@ -719,8 +721,9 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText =
-      "font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;";
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
+    title.className = "omp-h1";
     title.textContent = `Rollenbindungen (${this.#bindings.length})`;
     const newBtn = document.createElement("button");
     newBtn.textContent = this.#showBindingForm ? "Abbrechen" : "+ Neue Bindung";
@@ -883,7 +886,8 @@ class AdminView extends HTMLElement {
     actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
-    delBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteBinding(b));
     actionsTd.appendChild(delBtn);
     tr.appendChild(actionsTd);
@@ -913,8 +917,9 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText =
-      "font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;";
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
     const title = document.createElement("span");
+    title.className = "omp-h1";
     title.textContent = `Node-Katalog: Import/Export (${this.#catalog.length})`;
     const newBtn = document.createElement("button");
     newBtn.textContent = this.#showCatalogForm ? "Abbrechen" : "+ Node/Microservice importieren";
@@ -1103,7 +1108,8 @@ class AdminView extends HTMLElement {
     if (isImported) {
       const delBtn = document.createElement("button");
       delBtn.textContent = "Entfernen";
-      delBtn.style.cssText = "font-size:11px;cursor:pointer;";
+      delBtn.className = "omp-btn-danger";
+      delBtn.style.cssText = "font-size:11px;";
       delBtn.addEventListener("click", () => this.#removeCatalogEntry(entry));
       actionsTd.appendChild(delBtn);
     }
@@ -1116,7 +1122,8 @@ class AdminView extends HTMLElement {
     const section = document.createElement("div");
 
     const heading = document.createElement("div");
-    heading.style.cssText = "font-weight:600;margin-bottom:6px;";
+    heading.className = "omp-h1";
+    heading.style.cssText = "margin-bottom:var(--omp-space-3);";
     // S5: die Zahl ist die Anzahl geladener, nicht aller je
     // protokollierten Zeilen (Cursor-Pagination, "Mehr laden" lädt
     // weitere nach) — deshalb "geladen" statt einer nackten Zahl, die

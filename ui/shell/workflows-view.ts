@@ -565,8 +565,11 @@ class WorkflowsView extends HTMLElement {
     this.replaceChildren();
 
     const heading = document.createElement("div");
-    heading.style.cssText = "font-weight:600;margin-bottom:6px;display:flex;justify-content:space-between;";
-    heading.innerHTML = `<span>Workflows (${this.#workflows.length})</span>`;
+    heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
+    const headingTitle = document.createElement("span");
+    headingTitle.className = "omp-h1";
+    headingTitle.textContent = `Workflows (${this.#workflows.length})`;
+    heading.appendChild(headingTitle);
     const newBtn = document.createElement("button");
     newBtn.textContent = this.#showForm ? "Abbrechen" : "+ Neu";
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
@@ -618,7 +621,7 @@ class WorkflowsView extends HTMLElement {
 
     if (this.#workflows.length === 0 && !this.#showForm) {
       const empty = document.createElement("div");
-      empty.style.cssText = "color:#999;";
+      empty.className = "omp-empty";
       empty.textContent = "Noch kein Workflow angelegt.";
       this.appendChild(empty);
       return;
@@ -640,7 +643,7 @@ class WorkflowsView extends HTMLElement {
     // Fokus verlieren.
     const empty = document.createElement("div");
     empty.setAttribute("data-role", "workflow-filter-empty");
-    empty.style.cssText = "color:#999;";
+    empty.className = "omp-empty";
     empty.textContent = filtered.length === 0 ? "Kein Workflow entspricht dem aktuellen Filter." : "";
     this.appendChild(empty);
 
@@ -823,7 +826,8 @@ class WorkflowsView extends HTMLElement {
     row.setAttribute("data-role", "workflow-row");
     row.setAttribute("data-workflow-id", wf.id);
     row.style.cssText =
-      `padding:6px 8px;border-radius:3px;background:rgba(255,255,255,0.04);` +
+      `padding:var(--omp-space-2) var(--omp-space-3);border-radius:var(--omp-radius);` +
+      `background:var(--omp-surface);border:1px solid var(--omp-border);` +
       `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};display:flex;flex-direction:column;`;
 
     row.appendChild(this.#renderTopologyPreview(wf));
@@ -1002,7 +1006,8 @@ class WorkflowsView extends HTMLElement {
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
-    delBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
     delBtn.disabled = !isIdle;
     delBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann löschen";
     delBtn.addEventListener("click", () => this.#deleteWorkflow(wf.id));

@@ -338,12 +338,12 @@ class HostsView extends HTMLElement {
       .join("");
 
     this.innerHTML = `
-      <div style="font-weight:600;margin-bottom:6px;">Hosts (${hosts.length})</div>
+      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Hosts (${hosts.length})</div>
       ${adviceBanner}
       ${pendingBanner}
       ${
         hosts.length === 0
-          ? `<div style="color:var(--omp-text-dim);">Noch kein Host registriert.</div>`
+          ? `<div class="omp-empty">Noch kein Host registriert.</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
                 <th style="padding:2px 8px;">Label</th>

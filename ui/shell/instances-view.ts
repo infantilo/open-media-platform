@@ -133,10 +133,10 @@ class InstancesView extends HTMLElement {
       .join("");
 
     this.innerHTML = `
-      <div style="font-weight:600;margin-bottom:6px;">Laufende Instanzen (${instances.length})</div>
+      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Laufende Instanzen (${instances.length})</div>
       ${
         instances.length === 0
-          ? `<div style="color:var(--omp-text-dim);">Keine Instanz läuft.</div>`
+          ? `<div class="omp-empty">Keine Instanz läuft.</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
                 <th style="padding:2px 8px;">Instanz</th>

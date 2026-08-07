@@ -1908,7 +1908,7 @@ export class FlowCanvas extends HTMLElement {
     // zuverlässig an den rechten Rand, außerhalb der Palette-Spalte.
     const fitBtn = document.createElement("button");
     fitBtn.textContent = "Alle einpassen";
-    fitBtn.style.cssText = "margin-left:auto;font-size:11px;cursor:pointer;";
+    fitBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
 
@@ -3503,7 +3503,6 @@ export class FlowCanvas extends HTMLElement {
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = "Snapshot speichern";
-    saveBtn.style.cursor = "pointer";
     saveBtn.addEventListener("click", () => this.#saveSnapshot());
     this.#snapshotBar.appendChild(saveBtn);
 
@@ -3616,7 +3615,8 @@ export class FlowCanvas extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.textContent = "Node-Katalog";
-    heading.style.cssText = "font-weight:bold;margin-bottom:8px;";
+    heading.className = "omp-h1";
+    heading.style.cssText = "font-size:var(--omp-font-size-md);margin-bottom:var(--omp-space-2);";
     this.#palette.appendChild(heading);
 
     const catalog = this.#paletteCatalog;
@@ -3625,7 +3625,7 @@ export class FlowCanvas extends HTMLElement {
     if (catalog.length === 0) {
       const empty = document.createElement("p");
       empty.textContent = "Katalog leer.";
-      empty.style.cssText = "color:#888;";
+      empty.className = "omp-empty";
       this.#palette.appendChild(empty);
       return;
     }
@@ -3635,9 +3635,7 @@ export class FlowCanvas extends HTMLElement {
     searchInput.type = "search";
     searchInput.placeholder = "Suchen…";
     searchInput.value = this.#paletteFilterQuery;
-    searchInput.style.cssText =
-      "width:100%;box-sizing:border-box;margin-bottom:8px;padding:4px 6px;" +
-      "background:#1b1b1b;color:#ddd;border:1px solid #444;border-radius:4px;font-size:12px;";
+    searchInput.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:var(--omp-space-2);";
     searchInput.addEventListener("input", () => {
       this.#paletteFilterQuery = searchInput.value;
       this.#renderPaletteList();
@@ -3661,7 +3659,7 @@ export class FlowCanvas extends HTMLElement {
     if (filtered.length === 0) {
       const empty = document.createElement("p");
       empty.textContent = "Keine Treffer.";
-      empty.style.cssText = "color:#888;";
+      empty.className = "omp-empty";
       this.#palette.appendChild(empty);
       return;
     }
@@ -3684,7 +3682,7 @@ export class FlowCanvas extends HTMLElement {
       const tooltipParts = [`${entry.label} starten`, entry.description, entry.expectedResources]
         .filter((p): p is string => !!p);
       btn.title = tooltipParts.join(" — ");
-      btn.style.cssText = "cursor:pointer;flex:1;text-align:left;padding:4px 6px;";
+      btn.style.cssText = "flex:1;text-align:left;justify-content:flex-start;";
 
       // Host-Auswahl nur anzeigen, wenn es überhaupt entfernte Hosts
       // gibt — im (heute üblichen) Fall ohne Host-Agents bleibt die
@@ -3693,7 +3691,7 @@ export class FlowCanvas extends HTMLElement {
       if (hosts.length > 0) {
         hostSelect = document.createElement("select");
         hostSelect.title = "Zielhost";
-        hostSelect.style.cssText = "font-size:10px;max-width:90px;";
+        hostSelect.style.cssText = "font-size:10px;max-width:90px;padding:2px 4px;";
         const localOpt = document.createElement("option");
         localOpt.value = "";
         localOpt.textContent = "(lokal)";

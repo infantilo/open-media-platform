@@ -81,35 +81,39 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   const overlay = document.createElement("div");
   overlay.style.cssText =
     "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;" +
-    "background:#111;font-family:sans-serif;z-index:2000;";
+    "background:var(--omp-bg);font-family:var(--omp-font);z-index:2000;";
 
   const form = document.createElement("form");
   form.style.cssText =
-    "display:flex;flex-direction:column;gap:8px;background:#1c1c1c;padding:24px;" +
-    "border-radius:8px;border:1px solid #333;min-width:220px;";
+    "display:flex;flex-direction:column;gap:var(--omp-space-3);background:var(--omp-surface);" +
+    "padding:var(--omp-space-4) 28px 28px;border-radius:10px;border:1px solid var(--omp-border);" +
+    "min-width:260px;box-shadow:0 8px 24px rgba(0,0,0,0.4);";
 
   const title = document.createElement("h2");
   title.textContent = "OpenMediaPlatform";
-  title.style.cssText = "color:#eee;font-size:15px;margin:0 0 8px;";
+  title.style.cssText =
+    "color:var(--omp-text);font-size:var(--omp-font-size-lg);font-weight:600;margin:0 0 var(--omp-space-2);";
 
   const userInput = document.createElement("input");
   userInput.placeholder = "Nutzername";
   userInput.autocomplete = "username";
-  userInput.style.cssText = "padding:6px;font-size:13px;";
+  userInput.style.padding = "9px var(--omp-space-2)";
 
   const passInput = document.createElement("input");
   passInput.type = "password";
   passInput.placeholder = "Passwort";
   passInput.autocomplete = "current-password";
-  passInput.style.cssText = "padding:6px;font-size:13px;";
+  passInput.style.padding = "9px var(--omp-space-2)";
 
   const error = document.createElement("div");
-  error.style.cssText = "color:#e66;font-size:12px;min-height:14px;";
+  error.style.cssText =
+    "color:var(--omp-error);font-size:var(--omp-font-size-sm);min-height:16px;font-family:var(--omp-font);";
 
   const submit = document.createElement("button");
   submit.type = "submit";
   submit.textContent = "Anmelden";
-  submit.style.cssText = "padding:6px;font-size:13px;cursor:pointer;";
+  submit.className = "omp-btn-primary";
+  submit.style.cssText = "padding:9px var(--omp-space-3);font-size:var(--omp-font-size-md);margin-top:var(--omp-space-1);";
 
   form.append(title, userInput, passInput, error, submit);
   overlay.append(form);
@@ -138,14 +142,16 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
 export function buildUserWidget(username: string): HTMLElement {
   const widget = document.createElement("div");
   widget.style.cssText =
-    "position:fixed;bottom:6px;right:6px;z-index:1000;font-family:sans-serif;" +
-    "font-size:11px;color:#999;background:#111;padding:4px 6px;border-radius:4px;" +
-    "border:1px solid #333;display:flex;gap:6px;align-items:center;";
+    "position:fixed;bottom:var(--omp-space-2);right:var(--omp-space-2);z-index:1000;" +
+    "font-family:var(--omp-font);font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);" +
+    "background:var(--omp-surface);padding:var(--omp-space-1) var(--omp-space-2);" +
+    "border-radius:var(--omp-radius);border:1px solid var(--omp-border);" +
+    "display:flex;gap:var(--omp-space-2);align-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
   const label = document.createElement("span");
   label.textContent = `Angemeldet als ${username}`;
   const logoutButton = document.createElement("button");
   logoutButton.textContent = "Abmelden";
-  logoutButton.style.cssText = "font-size:11px;cursor:pointer;";
+  logoutButton.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
   logoutButton.addEventListener("click", logout);
   widget.append(label, logoutButton);
   return widget;

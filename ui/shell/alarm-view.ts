@@ -195,7 +195,7 @@ class AlarmView extends HTMLElement {
   #render(alarms: Alarm[]) {
     if (alarms.length === 0) {
       this.innerHTML = `
-        <div style="font-weight:600;margin-bottom:6px;">Alarme</div>
+        <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Alarme</div>
         <div style="padding:var(--omp-space-2);color:var(--omp-preset);">✓ Keine aktiven Alarme.</div>
       `;
       return;
@@ -207,7 +207,7 @@ class AlarmView extends HTMLElement {
     const rows = alarms
       .map(
         (a) => `
-        <div style="display:flex;gap:var(--omp-space-2);align-items:flex-start;padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(255,255,255,0.04);border-left:3px solid ${SEVERITY_COLOR[a.severity]};border-radius:var(--omp-radius);">
+        <div style="display:flex;gap:var(--omp-space-2);align-items:flex-start;padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:var(--omp-surface);border:1px solid var(--omp-border);border-left:3px solid ${SEVERITY_COLOR[a.severity]};border-radius:var(--omp-radius);">
           <span style="color:${SEVERITY_COLOR[a.severity]};font-size:var(--omp-font-size-xs);font-weight:600;white-space:nowrap;">${SEVERITY_LABEL[a.severity]}</span>
           <div>
             <div><strong>${escapeHtml(a.source)}: ${escapeHtml(a.title)}</strong></div>
@@ -218,7 +218,7 @@ class AlarmView extends HTMLElement {
       .join("");
 
     this.innerHTML = `
-      <div style="font-weight:600;margin-bottom:6px;">
+      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">
         Alarme (${criticalCount} kritisch, ${warningCount} Warnung${warningCount === 1 ? "" : "en"})
       </div>
       ${rows}
