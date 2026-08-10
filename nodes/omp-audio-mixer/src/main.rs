@@ -1121,7 +1121,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // `OMP_VIEWER_PREVIEW_PORT`, C6/C8).
     let levels_port: u16 = env_or("OMP_AUDIO_MIXER_LEVELS_PORT", "0").parse()?;
     let levels_broadcaster = Arc::new(levels::Broadcaster::new());
-    let actual_levels_port = levels::spawn(&format!("0.0.0.0:{levels_port}"), levels_broadcaster.clone())?;
+    let levels_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_levels_port = levels::spawn(
+        &format!("0.0.0.0:{levels_port}"),
+        levels_broadcaster.clone(),
+        levels_heartbeat.clone(),
+    )?;
     let levels_url = format!("http://{host}:{actual_levels_port}/levels");
 
     let store: Arc<dyn ParamStore> = Arc::new(AudioMixerStore {
@@ -1193,8 +1198,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
-    // Nachtrag 130/131).
+    // Nachtrag 130-133).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("levels-accept", levels_heartbeat);
 
     let follow_video = audio_follow_video_loop(nats_url, channels, pipeline_handle);
     let discovery = discovery_loop(discovery_registry_url, own_sender_id, available_sources);

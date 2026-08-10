@@ -265,8 +265,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let receiver_id = omp_node_sdk::idgen::new_v4();
 
     let broadcaster = Arc::new(pcm_stream::Broadcaster::new());
-    let actual_stream_port =
-        pcm_stream::spawn(&format!("0.0.0.0:{stream_port}"), broadcaster.clone())?;
+    let pcm_stream_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_stream_port = pcm_stream::spawn(
+        &format!("0.0.0.0:{stream_port}"),
+        broadcaster.clone(),
+        pcm_stream_heartbeat.clone(),
+    )?;
     let audio_stream_url = format!("http://{host}:{actual_stream_port}/pcm-stream");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
@@ -351,8 +355,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
-    // Nachtrag 130/131).
+    // Nachtrag 130-133).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("pcm-stream-accept", pcm_stream_heartbeat);
 
     let events = async {
         while let Some(event) = rx.recv().await {

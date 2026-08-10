@@ -315,8 +315,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let receiver_id = omp_node_sdk::idgen::new_v4();
 
     let broadcaster = Arc::new(preview::Broadcaster::new());
-    let actual_preview_port =
-        preview::spawn(&format!("0.0.0.0:{preview_port}"), broadcaster.clone())?;
+    let preview_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_preview_port = preview::spawn(
+        &format!("0.0.0.0:{preview_port}"),
+        broadcaster.clone(),
+        preview_heartbeat.clone(),
+    )?;
     let preview_url = format!("http://{host}:{actual_preview_port}/preview");
 
     // Eigener SSE-Port für die Pegelanzeigen dynamischer Audio-Eingänge
@@ -324,7 +328,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // etablierte Wahl (`omp_mediaio::levels`) wie bei `omp-audio-mixer`.
     let levels_port: u16 = env_or("OMP_VIEWER_LEVELS_PORT", "0").parse()?;
     let levels_broadcaster = Arc::new(levels::Broadcaster::new());
-    let actual_levels_port = levels::spawn(&format!("0.0.0.0:{levels_port}"), levels_broadcaster.clone())?;
+    let levels_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_levels_port = levels::spawn(
+        &format!("0.0.0.0:{levels_port}"),
+        levels_broadcaster.clone(),
+        levels_heartbeat.clone(),
+    )?;
     let levels_url = format!("http://{host}:{actual_levels_port}/levels");
 
     // EIN `MxlContext` für den ganzen Prozess (2026-08-07, root-caused
@@ -425,8 +434,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
-    // Nachtrag 130/131).
+    // Nachtrag 130-133).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("preview-accept", preview_heartbeat);
+    handle.register_worker("levels-accept", levels_heartbeat);
 
     // Zweite, unabhängige Pipeline nur für Audio-Eingangs-Pegel (s.
     // `audio_meters.rs`-Moduldoku, warum getrennt vom Video-Pfad oben).

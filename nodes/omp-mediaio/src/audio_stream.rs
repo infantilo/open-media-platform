@@ -16,8 +16,10 @@
 //! jetzt mit, exakt wie bei echtem Internet-Radio).
 
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -65,7 +67,7 @@ impl Broadcaster {
 /// Bindet addr synchron, Accept-Loop auf eigenem Thread — identisches
 /// Muster zu [`crate::preview::spawn`] (s. dortige Begründung: eine
 /// dauerhaft offene Antwort pro Client darf den Listener nicht blockieren).
-pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<u16> {
+pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64>) -> std::io::Result<u16> {
     let server = Server::http(addr).map_err(std::io::Error::other)?;
     let port = server
         .server_addr()
@@ -73,13 +75,25 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<u16> 
         .map(|socket_addr| socket_addr.port())
         .unwrap_or(0);
     std::thread::spawn(move || {
-        for request in server.incoming_requests() {
-            if request.url() != "/audio-stream" {
-                let _ = request.respond(Response::from_string("not found").with_status_code(404));
-                continue;
+        // S. `omp_mediaio::preview::spawn` — dieselbe Umstellung, gleicher
+        // Grund (docs/decisions.md Nachtrag 130-133).
+        loop {
+            heartbeat.fetch_add(1, Ordering::Relaxed);
+            match server.recv_timeout(Duration::from_secs(1)) {
+                Ok(Some(request)) => {
+                    if request.url() != "/audio-stream" {
+                        let _ = request.respond(Response::from_string("not found").with_status_code(404));
+                        continue;
+                    }
+                    let broadcaster = broadcaster.clone();
+                    std::thread::spawn(move || serve_client(request, &broadcaster));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("omp-mediaio(audio_stream): accept failed: {e}");
+                    break;
+                }
             }
-            let broadcaster = broadcaster.clone();
-            std::thread::spawn(move || serve_client(request, &broadcaster));
         }
     });
     Ok(port)

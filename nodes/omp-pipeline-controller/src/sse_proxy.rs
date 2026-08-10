@@ -20,6 +20,9 @@
 //! `proxy()`) auf ein vollständiges `read_to_vec()` zu warten.
 
 use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use tiny_http::{Response, Server};
 
@@ -27,7 +30,7 @@ use tiny_http::{Response, Server};
 /// Accept-Loop in einen eigenen Thread — liefert den tatsächlich
 /// gebundenen Port zurück (addr-Port `0` → vom OS zugewiesen), den
 /// `main.rs` für den neuen `eventsUrl`-Parameter braucht.
-pub fn spawn(addr: &str, pc_base: String) -> std::io::Result<u16> {
+pub fn spawn(addr: &str, pc_base: String, heartbeat: Arc<AtomicU64>) -> std::io::Result<u16> {
     let server = Server::http(addr).map_err(std::io::Error::other)?;
     let port = server
         .server_addr()
@@ -35,9 +38,21 @@ pub fn spawn(addr: &str, pc_base: String) -> std::io::Result<u16> {
         .map(|socket_addr| socket_addr.port())
         .unwrap_or(0);
     std::thread::spawn(move || {
-        for request in server.incoming_requests() {
-            let pc_base = pc_base.clone();
-            std::thread::spawn(move || serve_client(request, &pc_base));
+        // S. `omp_mediaio::preview::spawn` — dieselbe Umstellung, gleicher
+        // Grund (docs/decisions.md Nachtrag 130-133).
+        loop {
+            heartbeat.fetch_add(1, Ordering::Relaxed);
+            match server.recv_timeout(Duration::from_secs(1)) {
+                Ok(Some(request)) => {
+                    let pc_base = pc_base.clone();
+                    std::thread::spawn(move || serve_client(request, &pc_base));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("omp-pipeline-controller(sse_proxy): accept failed: {e}");
+                    break;
+                }
+            }
         }
     });
     Ok(port)

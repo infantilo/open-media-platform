@@ -16280,3 +16280,56 @@ HTTP/SSE-Annahme-Threads (Preview/Levels/Audio-Stream, kein
 Kern-Medienpfad) abgeschlossen.**
 
 **Dateien:** `nodes/omp-ograf/src/{main,pipeline}.rs`.
+
+## 2026-08-10 (Nachtrag 133) — Gemeinsam genutzte omp_mediaio-HTTP/SSE-Annahme-Threads an LivenessMonitor angeschlossen
+
+Nutzerauftrag "wire the omp_mediaio HTTP accept loops too" — schließt
+die letzte in Nachtrag 130-132 als "bewusst offen" markierte Lücke.
+Fünf Module mit identischer Accept-Loop-Form: `omp_mediaio::{preview,
+levels, audio_stream, pcm_stream}` (genutzt von `omp-viewer`,
+`omp-multiviewer`, `omp-audio-mixer`, `omp-audio-monitor`) plus
+`omp-pipeline-controller::sse_proxy` (eigenständiges Modul, gleiches
+Muster, dort aber die EINZIGE dauerhafte Hintergrund-Arbeit dieses
+Node-Typs — `omp-pipeline-controller` hat keinen eigenen
+`pipeline::run`-Thread, s. Nachtrag 131s Doku dazu, warum dieser
+Node-Typ dort nicht in der Liste stand).
+
+**Dieselbe Einschränkung wie bei `omp-srt-gateway` (Nachtrag 131):**
+alle fünf nutzten `Server::incoming_requests()` — blockiert unbegrenzt
+bis zur nächsten HTTP-Anfrage. Ein ruhiger, gesunder Listener ohne
+verbundene Browser-Clients hätte nie getickt (Nachtrag 131 hat diese
+Klasse Fehler dort bereits einmal gefixt und explizit dokumentiert,
+dass sie bei jedem weiteren `tiny_http`-Accept-Loop wieder auftreten
+würde). Fix: `Server::recv_timeout(1s)` statt der blockierenden
+Iterator-Schleife — liefert `Ok(None)` bei Timeout (Schleife tickt
+weiter), `Ok(Some(request))` bei echter Anfrage (unverändertes
+Request-Handling), `Err` bei echtem Socket-Fehler (Thread endet, jetzt
+zusätzlich geloggt statt stillschweigend). Funktional unverändert für
+jeden tatsächlich verbindenden Client.
+
+**Verifiziert:** `cargo build --workspace --bins` + `cargo test
+--workspace --lib` grün. Live gegen TEST1 + eigenständige
+`omp-audio-monitor`-Instanz:
+- `omp-viewer`s `/preview` (MJPEG): echter Multipart-Frame mit
+  gültigem JPEG-Header (`ffd8`) abgerufen — Accept-Loop-Umstellung hat
+  den tatsächlichen Client-Empfang nicht beeinträchtigt.
+- `omp-audio-mixer`s `/levels` (SSE): kontinuierliche echte
+  `{"channelId":...,"peak":...,"rms":...}`-Events abgerufen.
+- `omp-audio-monitor`s `/pcm-stream`: `curl -v` bestätigt sofortiges
+  `200 OK` bei Verbindungsaufbau (kein Hängen am Handshake), danach
+  erwartungsgemäß kein Datenfluss (keine verbundene Quelle) — exakt
+  das im Code dokumentierte "Header sofort flushen"-Verhalten.
+- `nats sub omp.health.<id>` über mehrere 5s-Ticks: `omp-viewer`
+  (jetzt 4 registrierte Worker: `pipeline`, `preview-accept`,
+  `levels-accept`, Audio-Meter-Zweig) und `omp-audio-mixer` (`pipeline`
+  + `levels-accept`) durchgehend `"status":"ok"` — kein Fehlalarm durch
+  die zusätzlichen Registrierungen.
+
+**Damit sind jetzt wirklich alle Node-internen Hintergrund-Threads in
+diesem Codebase beim `LivenessMonitor` registriert.**
+
+**Dateien:** `nodes/omp-mediaio/src/{preview,levels,audio_stream,
+pcm_stream}.rs`, `nodes/omp-pipeline-controller/src/{main,sse_proxy}.rs`,
+`nodes/omp-audio-monitor/src/main.rs`,
+`nodes/omp-multiviewer/src/main.rs`,
+`nodes/omp-audio-mixer/src/main.rs`, `nodes/omp-viewer/src/main.rs`.

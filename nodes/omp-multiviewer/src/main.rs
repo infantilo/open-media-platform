@@ -117,8 +117,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let instance_id = std::env::var("OMP_INSTANCE_ID").ok();
 
     let broadcaster = Arc::new(preview::Broadcaster::new());
-    let actual_preview_port =
-        preview::spawn(&format!("0.0.0.0:{preview_port}"), broadcaster.clone())?;
+    let preview_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_preview_port = preview::spawn(
+        &format!("0.0.0.0:{preview_port}"),
+        broadcaster.clone(),
+        preview_heartbeat.clone(),
+    )?;
     let preview_url = format!("http://{host}:{actual_preview_port}/preview");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
@@ -182,8 +186,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
-    // Nachtrag 130/131).
+    // Nachtrag 130-133).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("preview-accept", preview_heartbeat);
 
     let discovery = discovery_loop(registry_url, pipeline_handle, inputs);
 

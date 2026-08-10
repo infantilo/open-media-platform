@@ -25,6 +25,7 @@ mod uibundle;
 
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use livesource::{FlowKind, LiveSourceControl, SharedLiveSource};
@@ -233,7 +234,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Env (z. B. lokaler `cargo run` ohne Launcher), fällt `:0` zurück —
     // dann läuft der Adapter selbst nativ, also ohne Erreichbarkeitslücke.
     let events_port_env: u16 = env_or("OMP_EXTRA_PORT", "0").parse()?;
-    let events_port = sse_proxy::spawn(&format!("0.0.0.0:{events_port_env}"), pc_base.clone())?;
+    let sse_proxy_heartbeat = Arc::new(AtomicU64::new(0));
+    let events_port = sse_proxy::spawn(
+        &format!("0.0.0.0:{events_port_env}"),
+        pc_base.clone(),
+        sse_proxy_heartbeat.clone(),
+    )?;
     let events_url = format!("http://{host}:{events_port}/events");
 
     let store: Arc<dyn ParamStore> = Arc::new(Store {
@@ -302,7 +308,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
-    let _ = &handle;
+
+    // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    // Nachtrag 133).
+    handle.register_worker("sse-proxy-accept", sse_proxy_heartbeat);
 
     tokio::signal::ctrl_c().await?;
     eprintln!("omp-pipeline-controller: shutdown requested");

@@ -17,8 +17,10 @@
 //! Listener für alle weiteren Clients blockieren.
 
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
@@ -82,7 +84,7 @@ impl Broadcaster {
 /// mehrere gleichzeitig vom Instanz-Launcher gestartete Viewer nötig,
 /// da sie sich sonst einen festen Preview-Port teilen müssten) weist
 /// das OS einen freien Port zu, den `main.rs` für `previewUrl` braucht.
-pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<u16> {
+pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64>) -> std::io::Result<u16> {
     let server = Server::http(addr).map_err(std::io::Error::other)?;
     let port = server
         .server_addr()
@@ -90,13 +92,30 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>) -> std::io::Result<u16> 
         .map(|socket_addr| socket_addr.port())
         .unwrap_or(0);
     std::thread::spawn(move || {
-        for request in server.incoming_requests() {
-            if request.url() != "/preview" {
-                let _ = request.respond(Response::from_string("not found").with_status_code(404));
-                continue;
+        // Umgestellt von `server.incoming_requests()` (blockiert
+        // unbegrenzt bis zur nächsten Anfrage) auf eine 1s-Poll-
+        // Schleife — omp_node_sdk::liveness::LivenessMonitor
+        // (docs/decisions.md Nachtrag 130-133) braucht einen Tick auch
+        // während einer ruhigen Accept-Loop ohne verbundene Clients;
+        // funktional unverändert (`recv_timeout` liefert `Ok(None)` bei
+        // Timeout, dieselbe Anfragebehandlung wie zuvor sonst).
+        loop {
+            heartbeat.fetch_add(1, Ordering::Relaxed);
+            match server.recv_timeout(Duration::from_secs(1)) {
+                Ok(Some(request)) => {
+                    if request.url() != "/preview" {
+                        let _ = request.respond(Response::from_string("not found").with_status_code(404));
+                        continue;
+                    }
+                    let broadcaster = broadcaster.clone();
+                    std::thread::spawn(move || serve_client(request, &broadcaster));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    eprintln!("omp-mediaio(preview): accept failed: {e}");
+                    break;
+                }
             }
-            let broadcaster = broadcaster.clone();
-            std::thread::spawn(move || serve_client(request, &broadcaster));
         }
     });
     Ok(port)
