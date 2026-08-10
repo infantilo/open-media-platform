@@ -16678,3 +16678,26 @@ und Teil 3 (Drag = begleiteter Host-Umzug) — beide im Dokument bereits
 konkret vorgeplant, keine neue Recherche nötig, wenn aufgegriffen.
 
 **Dateien:** `ui/graph/flow-canvas.ts`.
+
+## 2026-08-10 (Nachtrag 138) — ARCHITECTURE.md: "Matrox Origin"-Erwähnungen entfernt (Nutzerauftrag)
+
+Nutzeranweisung: "matrox origin darf nirgends erwähnt werden". §1 (Vision)
+hatte seit dem 2026-07-11-Vendor-Neutralitäts-Pass (s. oben) noch bewusst
+"z. B. Matrox Origin" als Beispiel stehen — jetzt durch den generischen
+§20.7-Konvention-Verweis ersetzt. §9/§10 (Marktkompatibilität/
+Zukunftssicherheit) hatten zusätzlich drei "Matrox ORIGIN"-Erwähnungen
+(MXL-Kompatibilitäts-Werbeaussage, Austauschbarkeits-Beispiel,
+Drift-Risiko-Beispiel) — entfernt, Kernaussage jeweils ohne
+Produktnamen erhalten.
+
+**Bewusst NICHT angetastet** (engere Auslegung des Auftrags, deckt sich
+mit der 2026-07-11-Entscheidung, generische Vendor-Nennungen in der
+faktischen Marktrecherche zu belassen): die übrigen "Matrox"-Nennungen
+in §9/§10 (Tiger-Team-Mitgliedschaft, ConvertIP/DSX/Avio2-Interop,
+Quellenangabe) — dort geht es um den Firmennamen als einer von mehreren
+Großvendoren bzw. eine reale Presse-Quellenangabe, nicht um "Matrox
+Origin" als Produkt/Plattform. Die historischen Zitate in
+`docs/decisions.md` (2026-07-11-Eintrag) bleiben als Append-Only-
+Protokoll unverändert.
+
+**Dateien:** `ARCHITECTURE.md` §1/§9/§10.

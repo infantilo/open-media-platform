@@ -9,8 +9,8 @@ Referenzdokument. Bei jeder größeren Entscheidung hierher zurückkommen und fo
 ## 1. Vision
 
 Offene, modulare Broadcast-/Streaming-Plattform (TV, Radio, OTT) als europäische
-Alternative zu proprietären Cloud-Produktionsplattformen (z. B. Matrox Origin).
-Kein Vendor-Lock, keine
+Alternative zu proprietären Cloud-Produktionsplattformen (§20.7-Konvention:
+kein Herstellername im Dokument). Kein Vendor-Lock, keine
 Lizenzgebühren, 24/7-tauglich, läuft unverändert auf Bare-Metal, On-Prem-Cluster
 und (Ziel) Cloud. Jede Funktion (Mediaplayer, Audiomixer, Videomixer, DVE,
 OGraf-Grafik-Engine, Playout, …) ist ein eigenständiger, ersetzbarer Node —
@@ -1168,12 +1168,12 @@ MXL-Ebene ist im Aufbau, IS-12/14 ist dünn verbreitet.**
   kein Warten auf MXL nötig für die Basis-Interop.
 - **MXL:** Spec v1.0 erst März 2026 veröffentlicht. Tiger-Team/Treiber:
   Matrox, Lawo, Riedel, Intel, NVIDIA + Broadcaster (BBC, CBC,
-  France TV, Bell Media, SVT, RTÉ, VRT). **Matrox ORIGIN Fabric wird bereits
-  explizit als "MXL-kompatibel" beworben** — direkter Bezugspunkt zur
+  France TV, Bell Media, SVT, RTÉ, VRT). Einzelne Tiger-Team-Produkte werben
+  bereits explizit mit "MXL-kompatibel" — direkter Bezugspunkt zur
   Nutzeranfrage. Erwartung laut Branchenpresse:
   2026 erste MXL-fähige Produkte/Trials, kein breiter Serienstand. Fazit:
   unsere MXL-Nodes werden untereinander und mit früh adoptierenden Produkten
-  (Matrox ORIGIN zuerst) austauschbar sein, aber noch nicht mit dem
+  austauschbar sein, aber noch nicht mit dem
   Gesamtmarkt — Fallback bleibt die 2110-Ebene.
 - **IS-12/14 (Control Framework):** deutlich dünner adoptiert als IS-04/05.
   Für Fremdgeräte ohne IS-12/14 braucht es pragmatisch Adapter-Nodes
@@ -1203,7 +1203,7 @@ Konkrete Maßnahmen gegen "an der Marktentwicklung vorbei bauen":
    Stelle nachgezogen, nicht in jedem Node.
 2. **MXL-Tiger-Team = 5 Großvendoren** (Matrox, Lawo, Riedel,
    Intel, NVIDIA) — Risiko, dass die Spec Richtung deren proprietärer
-   Produkte drifted (z.B. Matrox ORIGIN Fabric). Gegenmaßnahme: **DMF-
+   Produkte drifted. Gegenmaßnahme: **DMF-
    Prinzipien + NMOS bleiben der vendor-neutrale Anker** (EBU-getrieben,
    breiter abgestützt); MXL wird als austauschbare Transport-Implementierung
    behandelt, nicht als Kernabhängigkeit (siehe Punkt 1).

@@ -97,10 +97,27 @@ func TestListCursorPaginatesThroughAllEntries(t *testing.T) {
 	username := "test-audit-pagination-user"
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM audit_log WHERE username = $1`, username) })
 
+	// `audit_log` ist die echte, dauerhaft geteilte Dev-Tabelle (kein
+	// isoliertes Test-Schema, s. Kommentar zum Cursor-Fortschritt unten)
+	// und wächst über die Projektlaufzeit monoton mit jeder Sitzung, die
+	// gegen den echten Orchestrator testet — ein fester Seiten-Deckel
+	// (früher: 200) geht früher oder später am tatsächlichen
+	// Tabellenbestand vorbei kaputt, ohne dass die Pagination selbst
+	// einen Fehler hat (live gefunden: bei 3225 vorhandenen Zeilen und
+	// limit=10 sind >322 Seiten nötig, um bis zum echten Tabellenende
+	// zu laufen). Deckel deshalb aus dem tatsächlichen Bestand
+	// ableiten statt aus einer geschätzten Konstante.
+	var existingCount int
+	if err := database.QueryRow(`SELECT count(*) FROM audit_log`).Scan(&existingCount); err != nil {
+		t.Fatalf("count(*) error = %v", err)
+	}
+
 	const total = 25
 	for i := 0; i < total; i++ {
 		store.Log(username, "GET", "/api/v1/pagination-test", "", 200)
 	}
+
+	maxPages := (existingCount+total)/10 + 5
 
 	seen := map[int64]bool{}
 	var before int64
@@ -112,8 +129,8 @@ func TestListCursorPaginatesThroughAllEntries(t *testing.T) {
 			t.Fatalf("List() error = %v", err)
 		}
 		pages++
-		if pages > 200 {
-			t.Fatal("too many pages, pagination likely stuck in a loop")
+		if pages > maxPages {
+			t.Fatalf("too many pages (%d, cap %d based on %d existing + %d new rows), pagination likely stuck in a loop", pages, maxPages, existingCount, total)
 		}
 		if len(page) == 0 {
 			break
