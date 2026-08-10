@@ -67,7 +67,7 @@
 //! Zweck) — `Branch` unten übernimmt jetzt dasselbe Muster.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver as MpscReceiver, Sender as MpscSender};
 use std::sync::Arc;
 use std::time::Duration;
@@ -118,6 +118,17 @@ struct Branch {
     /// nicht, weil `MxlAudioInput` selbst (nicht die Elemente) den
     /// Reader-Thread kontrolliert.
     _input: MxlAudioInput,
+    /// S. `reader_worker_name` — für `LivenessMonitor::unregister` beim
+    /// Abbau dieses Zweigs.
+    heartbeat: Arc<AtomicU64>,
+}
+
+/// Name, unter dem der Reader-Thread eines Eingangs bei
+/// `omp_node_sdk::liveness::LivenessMonitor` registriert wird — als
+/// eigene Funktion, damit Registrieren (`run`) und Abmelden
+/// (`run`/Teardown-Pfade) garantiert denselben Namen verwenden.
+fn reader_worker_name(input_id: &str) -> String {
+    format!("audio-meters:reader:{input_id}")
 }
 
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
@@ -191,7 +202,12 @@ fn build_branch(pipeline: &gst::Pipeline, context: &Arc<MxlContext>, flow_id: &s
     elements.push(level);
     elements.push(sink);
 
-    Ok(Branch { elements, _input: input })
+    // Liveness-Heartbeat des Reader-Threads (`docs/decisions.md`
+    // Nachtrag 123/2026-08-10) — VOR dem Verschieben von `input` in
+    // `Branch` abholen, s. `LivenessMonitor::register`-Aufruf in `run()`.
+    let heartbeat = input.heartbeat_handle();
+
+    Ok(Branch { elements, _input: input, heartbeat })
 }
 
 /// Läuft auf einem eigenen Thread (analog `pipeline::run`): baut die
@@ -203,11 +219,25 @@ pub fn run(
     tx: UnboundedSender<LevelEvent>,
     shutdown: Arc<AtomicBool>,
     ready: tokio::sync::oneshot::Sender<Result<AudioMeterHandle, String>>,
+    node: omp_node_sdk::NodeHandle,
 ) {
     if gst::init().is_err() {
         let _ = ready.send(Err("gst init failed (audio meters)".to_string()));
         return;
     }
+
+    // Bug 2026-08-07 (docs/decisions.md Nachtrag 123): genau dieser
+    // Thread ist der historische Auslöser des Liveness-Mechanismus (s.
+    // Moduldoku oben) — die äußere Schleife selbst blieb beim
+    // ursprünglichen Bug am Leben (pollte weiter, loggte sogar ihren
+    // eigenen Debug-Heartbeat), nur der VERSCHACHTELTE Reader-Thread
+    // eines einzelnen `MxlAudioInput` starb still. Deshalb zwei
+    // Registrierungsebenen: die äußere Schleife hier (erkennt einen Hang
+    // z. B. im `commands_rx`/Bus-Polling selbst) UND, unten bei jedem
+    // `AddInput`, der jeweilige Reader-Thread (erkennt exakt den
+    // ursprünglich gefundenen Bug).
+    let outer_heartbeat = Arc::new(AtomicU64::new(0));
+    node.register_worker("audio-meters:outer-loop", outer_heartbeat.clone());
 
     // Bewusst NICHT hier schon auf PLAYING gesetzt (anders als der
     // ursprüngliche Ansatz, live als Bug gefunden): jeder andere Node in
@@ -238,16 +268,19 @@ pub fn run(
     let mut debug_last_report = std::time::Instant::now();
 
     loop {
+        outer_heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(Command::AddInput { input_id, flow_id }) => {
                 if let Some(old) = branches.remove(&input_id) {
+                    node.unregister_worker(&reader_worker_name(&input_id));
                     teardown_branch(&pipeline, old);
                 }
                 match build_branch(&pipeline, &context, &flow_id, &input_id) {
                     Ok(branch) => {
+                        node.register_worker(reader_worker_name(&input_id), branch.heartbeat.clone());
                         branches.insert(input_id.clone(), branch);
                         if !pipeline_started {
                             // Erster Zweig: Pipeline (inkl. gerade
@@ -273,6 +306,7 @@ pub fn run(
             }
             Ok(Command::RemoveInput { input_id }) => {
                 if let Some(branch) = branches.remove(&input_id) {
+                    node.unregister_worker(&reader_worker_name(&input_id));
                     teardown_branch(&pipeline, branch);
                 }
             }
@@ -311,8 +345,10 @@ pub fn run(
         }
     }
 
-    for (_, branch) in branches.drain() {
+    for (input_id, branch) in branches.drain() {
+        node.unregister_worker(&reader_worker_name(&input_id));
         teardown_branch(&pipeline, branch);
     }
+    node.unregister_worker("audio-meters:outer-loop");
     let _ = pipeline.set_state(gst::State::Null);
 }

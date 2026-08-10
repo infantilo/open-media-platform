@@ -208,9 +208,30 @@ pub struct NodeHandle {
     registry: RegistryClient,
     label: String,
     shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
+    liveness: Arc<crate::liveness::LivenessMonitor>,
 }
 
 impl NodeHandle {
+    /// Registriert einen Node-internen Worker-Thread für die generische
+    /// Liveness-Überwachung (`docs/decisions.md` Nachtrag 123: Bug-Klasse
+    /// "Thread stirbt still, Prozess/Health melden trotzdem weiter
+    /// 'ok'"). `counter` muss der Worker selbst bei JEDEM
+    /// Schleifendurchlauf erhöhen (z. B. `omp_mediaio::mxl::
+    /// MxlAudioInput::heartbeat_handle()`), unabhängig davon, ob dabei
+    /// Daten flossen — s. `liveness`-Moduldoku. Rein additiv: ein Node,
+    /// der dies nie aufruft, verhält sich unverändert (`status` bleibt
+    /// immer `"ok"`).
+    pub fn register_worker(&self, name: impl Into<String>, counter: Arc<std::sync::atomic::AtomicU64>) {
+        self.liveness.register(name, counter);
+    }
+
+    /// Kehrseite von `register_worker` — aufrufen, wenn ein Worker
+    /// absichtlich beendet wird (sonst meldet `status` ihn ab dann für
+    /// immer fälschlich als hängend).
+    pub fn unregister_worker(&self, name: &str) {
+        self.liveness.unregister(name);
+    }
+
     /// Veröffentlicht einen Alarm auf `omp.alert.<node_id>` (z. B. bei
     /// einem Pipeline-Fehler, `UMSETZUNG.md` C2). Kein NATS verbunden ⇒
     /// stiller No-Op, nur eine Log-Zeile — Alarme sind Zusatzinformation,
@@ -529,12 +550,15 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         receivers: receivers.clone(),
     }));
 
+    let liveness = Arc::new(crate::liveness::LivenessMonitor::new());
+
     let handle = NodeHandle {
         node_id: node_id.clone(),
         publisher: publisher.clone(),
         registry: registry.clone(),
         label: config.label.clone(),
         shared_receivers: shared_receivers.clone(),
+        liveness: liveness.clone(),
     };
 
     // Bugfix 2026-07-26 (Geister-Kacheln im Flow-Editor nach Stop/
@@ -586,6 +610,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         config.label,
         sender_count,
         config.media_ready,
+        liveness,
     ));
 
     Ok(handle)
@@ -612,6 +637,7 @@ async fn heartbeat_loop(
     label: String,
     sender_count: usize,
     media_ready: MediaReadySource,
+    liveness: Arc<crate::liveness::LivenessMonitor>,
 ) {
     let mut interval = tokio::time::interval(HEARTBEAT_INTERVAL);
     loop {
@@ -650,10 +676,27 @@ async fn heartbeat_loop(
         }
 
         if let Some(publisher) = &publisher {
+            // Bug 2026-08-07 (docs/decisions.md Nachtrag 123): `status`
+            // war bislang IMMER "ok" — der einzige Weg, wie ein Node sich
+            // selbst als beeinträchtigt melden konnte, war `media_ready`,
+            // und das ist sticky (bleibt für immer `true`, sobald einmal
+            // Daten flossen). `liveness.check()` schließt die Lücke: ein
+            // registrierter, aber seit dem letzten Tick nicht mehr
+            // vorangekommener Worker (z. B. ein still gestorbener MXL-
+            // Reader-Thread) zieht `status` auf "degraded", mit den
+            // Namen im Log — ohne registrierte Worker (die meisten
+            // Node-Typen heute, s. `liveness`-Moduldoku) unverändert
+            // immer "ok".
+            let (workers_alive, stuck_workers) = liveness.check();
+            if !workers_alive {
+                eprintln!(
+                    "omp-node-sdk: worker liveness check failed, node {node_id} degraded: {stuck_workers:?}"
+                );
+            }
             let status = health::Status {
                 node_id: node_id.clone(),
                 label: label.clone(),
-                status: "ok".to_string(),
+                status: if workers_alive { "ok" } else { "degraded" }.to_string(),
                 senders: sender_count,
                 receivers: receivers_snapshot.len(),
                 media_ready: media_ready.is_ready(),

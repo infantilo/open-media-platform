@@ -139,6 +139,17 @@ pub struct MxlVideoOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
+    // heartbeat (Bug-Klasse 2026-08-07, docs/decisions.md Nachtrag 123:
+    // omp-viewers audio_meters-Reader-Thread starb still, ohne Panic,
+    // nach einem gedroppten Guard — der Prozess lief weiter, health blieb
+    // "ok"): anders als `flowed` (bleibt für immer `true`, sobald einmal
+    // etwas floss) zählt `heartbeat` JEDEN Schleifendurchlauf von
+    // `write_loop`, unabhängig davon, ob dabei tatsächlich Daten
+    // geschrieben wurden. Ein Aufrufer (`omp-node-sdk::liveness::
+    // LivenessMonitor`) erkennt einen still gestorbenen Thread daran,
+    // dass sich der Zähler zwischen zwei Health-Ticks nicht mehr bewegt
+    // — `flowed` allein hätte den Bug NICHT erkannt, da es sticky ist.
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl MxlVideoOutput {
@@ -287,6 +298,8 @@ impl MxlVideoOutput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let heartbeat_thread = heartbeat.clone();
         let app_sink: gst_app::AppSink = match appsink.clone().dynamic_cast::<gst_app::AppSink>() {
             Ok(a) => a,
             Err(_) => {
@@ -303,6 +316,7 @@ impl MxlVideoOutput {
                 &app_sink,
                 &running_thread,
                 &flowed_thread,
+                &heartbeat_thread,
                 &output_delay,
             );
         });
@@ -311,6 +325,7 @@ impl MxlVideoOutput {
             valve,
             running,
             flowed,
+            heartbeat,
         })
     }
 }
@@ -357,6 +372,7 @@ fn compute_write_index(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_loop(
     context: &Arc<MxlContext>,
     grain_writer: mxl::GrainWriter,
@@ -364,11 +380,13 @@ fn write_loop(
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
+    heartbeat: &Arc<AtomicU64>,
     output_delay: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut last_written: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             None => continue,
@@ -448,6 +466,13 @@ impl MxlVideoOutput {
     pub fn flowed_handle(&self) -> Arc<AtomicBool> {
         self.flowed.clone()
     }
+
+    /// Griff auf den Liveness-Heartbeat des Schreib-Threads (s. Struct-
+    /// Doku oben zu `heartbeat`) — für
+    /// `omp_node_sdk::liveness::LivenessMonitor::register`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
+    }
 }
 
 impl crate::MediaFlow for MxlVideoOutput {
@@ -523,6 +548,8 @@ pub struct MxlAudioOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
+    /// S. `MxlVideoOutput::heartbeat`.
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl MxlAudioOutput {
@@ -655,6 +682,8 @@ impl MxlAudioOutput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let heartbeat_thread = heartbeat.clone();
         let app_sink: gst_app::AppSink = match appsink.clone().dynamic_cast::<gst_app::AppSink>() {
             Ok(a) => a,
             Err(_) => {
@@ -673,6 +702,7 @@ impl MxlAudioOutput {
                 &app_sink,
                 &running_thread,
                 &flowed_thread,
+                &heartbeat_thread,
             );
         });
 
@@ -680,6 +710,7 @@ impl MxlAudioOutput {
             valve,
             running,
             flowed,
+            heartbeat,
         })
     }
 }
@@ -694,11 +725,13 @@ fn write_audio_loop(
     app_sink: &gst_app::AppSink,
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
+    heartbeat: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
     let mut last_written: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             None => continue,
@@ -770,6 +803,11 @@ impl MxlAudioOutput {
     pub fn flowed_handle(&self) -> Arc<AtomicBool> {
         self.flowed.clone()
     }
+
+    /// S. `MxlVideoOutput::heartbeat_handle`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
+    }
 }
 
 impl crate::MediaFlow for MxlAudioOutput {
@@ -816,6 +854,8 @@ pub struct MxlVideoInput {
     pub elements: Vec<gst::Element>,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
+    /// S. `MxlVideoOutput::heartbeat`.
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl MxlVideoInput {
@@ -1003,6 +1043,8 @@ impl MxlVideoInput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let heartbeat_thread = heartbeat.clone();
         let app_src: gst_app::AppSrc = match appsrc.clone().dynamic_cast::<gst_app::AppSrc>() {
             Ok(a) => a,
             Err(_) => {
@@ -1021,6 +1063,7 @@ impl MxlVideoInput {
                 &app_src,
                 &running_thread,
                 &flowed_thread,
+                &heartbeat_thread,
             );
         });
 
@@ -1029,10 +1072,12 @@ impl MxlVideoInput {
             tail: videorate,
             running,
             flowed,
+            heartbeat,
         })
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_loop(
     context: &Arc<MxlContext>,
     grain_reader: mxl::GrainReader,
@@ -1041,6 +1086,7 @@ fn read_loop(
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
+    heartbeat: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(grain_rate);
@@ -1048,6 +1094,7 @@ fn read_loop(
     // unten für den Grund) — außerhalb dieses einen Zweigs immer `Some`.
     let mut grain_reader = Some(grain_reader);
     while running.load(Ordering::Relaxed) {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
@@ -1222,6 +1269,11 @@ impl MxlVideoInput {
         self.flowed.clone()
     }
 
+    /// S. `MxlVideoOutput::heartbeat_handle`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
+    }
+
     /// Signalisiert dem `read_loop`-Thread das Ende, OHNE die eigenen
     /// GStreamer-Elemente anzufassen — für Aufrufer, die (anders als ein
     /// simples `drop()`) diese Elemente selbst chirurgisch aus der
@@ -1290,6 +1342,8 @@ pub struct MxlAudioInput {
     pub elements: Vec<gst::Element>,
     running: Arc<AtomicBool>,
     flowed: Arc<AtomicBool>,
+    /// S. `MxlVideoOutput::heartbeat`.
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl MxlAudioInput {
@@ -1415,6 +1469,8 @@ impl MxlAudioInput {
         let running_thread = running.clone();
         let flowed = Arc::new(AtomicBool::new(false));
         let flowed_thread = flowed.clone();
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let heartbeat_thread = heartbeat.clone();
         let app_src: gst_app::AppSrc = match appsrc.clone().dynamic_cast::<gst_app::AppSrc>() {
             Ok(a) => a,
             Err(_) => {
@@ -1434,6 +1490,7 @@ impl MxlAudioInput {
                 &app_src,
                 &running_thread,
                 &flowed_thread,
+                &heartbeat_thread,
             );
         });
 
@@ -1442,6 +1499,7 @@ impl MxlAudioInput {
             tail: convert,
             running,
             flowed,
+            heartbeat,
         })
     }
 }
@@ -1494,6 +1552,7 @@ fn read_audio_loop(
     app_src: &gst_app::AppSrc,
     running: &Arc<AtomicBool>,
     flowed: &Arc<AtomicBool>,
+    heartbeat: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
     let mut index = context.instance.get_current_index(sample_rate);
@@ -1501,6 +1560,7 @@ fn read_audio_loop(
     // `FLOW_INVALID`-Zweig) — außerhalb dieses einen Zweigs immer `Some`.
     let mut samples_reader = Some(samples_reader);
     while running.load(Ordering::Relaxed) {
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
                 let mut buffer = gst::Buffer::from_slice(interleave_samples(&data));
@@ -1591,6 +1651,11 @@ impl MxlAudioInput {
     /// S. `MxlVideoOutput::flowed_handle`.
     pub fn flowed_handle(&self) -> Arc<AtomicBool> {
         self.flowed.clone()
+    }
+
+    /// S. `MxlVideoOutput::heartbeat_handle`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
     }
 
     /// S. `MxlVideoInput::stop` — identisches Muster/identische

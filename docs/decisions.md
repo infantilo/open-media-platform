@@ -15965,3 +15965,170 @@ ohne den eigentlichen Massenlöschungspfad zu schließen).
 `orchestrator/internal/workflows/{failover,migration,service,
 store_test}.go`, `orchestrator/internal/launcher/{launcher,
 store_test}.go`, `orchestrator/internal/snapshots/store_test.go`.
+
+## 2026-08-10 (Nachtrag 129) — Bugreport "Nodes verlieren Settings/UID beim Workflow-Neustart" behoben: generischer Param-Fallback + stabile Node-/Device-IDs
+
+Nutzerbug: "beim stoppen und wieder starten von workflows verlieren
+viele microservices ihre settings/state den die vor dem stoppen
+hatten... zb source node verliert ausgewähltes pattern, manchmal
+verändern sich die uid's". Zwei getrennte Root Causes, beide live gegen
+TEST1 verifiziert (zwei volle Stop/Start-Zyklen, dazwischen ein
+kompletter Node-Binary-Rebuild).
+
+**1. `captureRoleState`/`restoreRoleState` (`workflows/state.go`,
+Nachtrag 91) griff nur bei Nodes mit eigener `/state`-Route** — bislang
+ausschließlich `omp-video-mixer-me`/`omp-audio-mixer`. Jeder andere
+Node-Typ (u. a. `omp-source`s `pattern`) lieferte auf `GET .../state`
+404 und wurde beim Stop stillschweigend übersprungen, kein Fallback.
+Fix: `captureOneRoleState` fällt jetzt bei fehlendem `/state` auf
+generisches Erfassen aller schreibbaren Parameter zurück
+(`descriptor.json` + `GET/PATCH /params/<name>`, dasselbe Muster wie
+das manuelle Szenen-Feature `internal/snapshots`, hier aber an
+`runStart`/`runStop` gekoppelt statt manuell getriggert). Gespeicherte
+`role_state`-Zeilen bekommen dafür eine neue Hülle
+(`roleStateEnvelope{Kind, Blob, Params}`) — rückwärtskompatibel zu
+bereits vor dieser Änderung gespeicherten Zeilen (die haben kein
+`__kind`/`__blob`, `restoreOneRoleState` erkennt das über `Kind == ""`
+und behandelt den kompletten Rohwert wie bisher als `/state`-Blob).
+Live per `psql` bestätigt: `role_state` für `omp-source` nach einem
+`PATCH .../params/pattern {"value":"ball"}` + Stop enthält
+`{"__kind":"params","__params":{"pattern":"ball"}}`; nach Neustart
+(auch nach komplettem `cargo build --workspace`-Rebuild der Node-
+Binaries) lieferte `GET .../params/pattern` wieder `"ball"` statt des
+Hardcoded-Defaults `"smpte"`.
+
+**2. `node_id`/`device_id` (`omp-node-sdk::node::start`) wurden bei
+JEDEM Prozessstart neu gewürfelt** (`idgen::new_v4()`), auch bei einem
+reinen Workflow-Neustart derselben Rolle — sichtbar als "UID ändert
+sich" in der UI/Registry. Fix: `idgen::deterministic_v4(seed)` (FNV-1a
+statt einer zusätzlichen Hash-Crate, Minimal-Dependency-Regel) leitet
+node_id/device_id aus einem neuen Env-Var `OMP_ROLE_SEED` her, den der
+Orchestrator deterministisch aus `(Workflow-ID, Rollenname)` bildet
+(`workflows/state.go::withRoleSeed`, SHA-256). Bewusst NUR in
+`runStart`/`runRestartRole` verdrahtet — beides Pfade, in denen eine
+alte Instanz derselben Rolle garantiert schon gestoppt ist, bevor die
+neue startet. **Nicht** in `executeMigration` (migration.go): dort
+läuft die alte Instanz während des Starts der neuen bewusst weiter
+(Live-Migration), ein stabiler Seed hätte dort kurzzeitig zwei NMOS-
+Nodes mit identischer ID erzeugt. `OMP_ROLE_SEED` zusätzlich in
+`host-agent/internal/commands/commands.go`s `allowedExtraEnvKeys`
+eingetragen, sonst hätte ein Remote-Host den ganzen Start abgelehnt
+(S3-Allowlist-Grenze, bisher nur `OMP_WIDTH`/`OMP_HEIGHT`). Ohne
+`OMP_ROLE_SEED` (manuelle Katalog-Starts, Live-Migration) unverändertes
+Zufallsverhalten wie bisher.
+
+**Live verifiziert:** TEST1 (`omp-audio-mixer`, `omp-video-mixer-me`,
+`omp-viewer`, `omp-source`, `omp-source-2`) zweimal hintereinander
+gestoppt/gestartet — alle 5 `nodeId`s über beide Zyklen exakt
+identisch, auch nach einem `cargo build --workspace --bins` zwischen
+den Zyklen (Beweis, dass es an der Herleitung aus `OMP_ROLE_SEED` liegt,
+nicht an einem zufälligen Nicht-Neustart des Prozesses).
+
+**Dateien:** `orchestrator/internal/workflows/{state,service}.go`,
+`host-agent/internal/commands/commands.go`,
+`nodes/omp-node-sdk/src/{idgen,node}.rs`. Commit `85113dd`.
+
+## 2026-08-10 (Nachtrag 130) — Generische Worker-Thread-Liveness-Überwachung (Roadmap-Punkt 2 aus Nachtrag 123) umgesetzt
+
+Nutzerauftrag "fahre fort" nach Nachtrag 129 — laut Nachtrag 123s
+Roadmap-Befund der zweithöchste priorisierte Punkt nach `safego.Go`
+(Nachtrag 128): "Rust-Node-interne Worker-Threads werden nirgends auf
+Liveness überwacht — ein Thread-Panic tötet den Prozess NICHT, der
+Launcher (der nur den Prozess beobachtet) merkt nichts, der Node meldet
+sich weiter 'gesund', liefert aber keine Daten mehr" — exakt die
+Bug-Klasse aus dem in Nachtrag 123 selbst gefixten `omp-viewer`-Audio-
+Meter-Bug (`MxlAudioInput` gedroppt, Reader-Thread starb still nach
+einer Iteration, kein Panic, keine Fehlermeldung).
+
+**Bestandsaufnahme vor der Umsetzung** (Fork-Recherche): `health::Status
+.status` war seit jeher hartkodiert `"ok"` — kein Node-Typ setzte je
+einen anderen Wert. Das einzige dynamische Signal, `media_ready`
+(`MediaReadySource::Probe`), ist STICKY (`omp_mediaio::MediaFlow::
+has_flowed`, bleibt für immer `true`, sobald einmal ein Buffer floss)
+und kann die Bug-Klasse deshalb strukturell nicht erkennen. Kein
+Rust-seitiges Gegenstück zu `internal/safego` existierte. Inventur:
+~24 Node-Crates spawnen `thread::spawn` außerhalb des SDK, die meisten
+über das einheitliche `pipeline::run(...)`-Muster — aber die eigentliche
+Bug-Quelle liegt tiefer: `omp-mediaio::mxl`s 4 interne Reader-/
+Schreiber-Threads (`read_loop`, `read_audio_loop`, `write_loop`,
+`write_audio_loop`, genutzt von `MxlVideoInput`/`MxlAudioInput`/
+`MxlVideoOutput`/`MxlAudioOutput`), die transitiv von praktisch jedem
+Media-Node verwendet werden und bislang gar keinen `JoinHandle` oder
+Liveness-Ausgang nach außen hatten (nur `flowed`, sticky wie oben).
+
+**Umsetzung, zwei Ebenen:**
+1. `nodes/omp-mediaio/src/mxl.rs`: alle 4 internen Thread-Funktionen
+   bekommen einen zusätzlichen `heartbeat: Arc<AtomicU64>`, den JEDER
+   Schleifendurchlauf erhöht — unabhängig davon, ob dabei Daten flossen
+   (anders als `flowed`). Neue Accessor-Methoden `heartbeat_handle()`
+   auf allen 4 `Mxl*`-Typen, exakt nach dem Muster von
+   `flowed_handle()` — bewusst NICHT als neue Methode auf dem
+   `MediaFlow`-Trait (hätte alle 9 Implementierer, inkl. `rtp.rs`/
+   `st2110.rs`, zu einer Änderung gezwungen, obwohl nur die 4 MXL-Typen
+   betroffen sind).
+2. `nodes/omp-node-sdk/src/liveness.rs` (neu): `LivenessMonitor`,
+   generisch, rein additiv — `register(name, Arc<AtomicU64>)`/
+   `unregister(name)`/`check() -> (alle_lebendig, haengende_namen)`. Ein
+   frisch registrierter Worker gilt beim NÄCHSTEN `check()` unbedingt
+   als lebendig (`fresh`-Flag), sonst hätte ein `check()` unmittelbar
+   nach dem Start jeden Worker fälschlich als hängend gemeldet, bevor er
+   überhaupt Zeit für seinen ersten Tick hatte — beim Schreiben des
+   ersten Unit-Tests live als eigener kleiner Bug in der ersten Fassung
+   gefunden (Test schlug fehl, weil `register` `last_seen` direkt auf
+   den aktuellen — noch 0 — Zählerstand setzte, ohne die Grace-Period).
+   `node::start` legt pro Prozess EINEN `Arc<LivenessMonitor>` an, reicht
+   ihn über `NodeHandle::register_worker`/`unregister_worker` (neu,
+   synchron aufrufbar) nach außen und lässt `heartbeat_loop`
+   (5s-Takt, wie der IS-04-Heartbeat) bei jedem Tick `check()` aufrufen
+   — `status` wird jetzt `"degraded"` statt `"ok"`, wenn mindestens ein
+   registrierter Worker seit dem letzten Tick nicht vorangekommen ist,
+   Namen der hängenden Worker zusätzlich als `eprintln!`-Warnung. Rein
+   additiv: kein bestehender Node-Typ musste angefasst werden, `status`
+   bleibt `"ok"`, solange niemand `register_worker` aufruft.
+
+**Referenz-Verdrahtung am historischen Bug-Beispiel** (`omp-viewer`):
+`audio_meters::run` bekommt jetzt eine `NodeHandle` und registriert (a)
+die äußere Schleife selbst (`"audio-meters:outer-loop"`, tickt pro
+Iteration) und (b) bei jedem `AddInput` den `heartbeat_handle()` des
+frisch gebauten `MxlAudioInput` (`"audio-meters:reader:<input_id>"`,
+abgemeldet bei `RemoveInput`/Ersetzen/Shutdown) — exakt die zwei
+Ebenen, die im ursprünglichen Bug auseinanderfielen (äußere Schleife
+blieb am Leben und loggte sogar ihren eigenen Debug-Heartbeat, der
+VERSCHACHTELTE Reader-Thread starb still). Dafür musste der
+`meter_thread`-Spawn in `main.rs` von vor `omp_node_sdk::start()` nach
+danach verschoben werden (brauchte den `NodeHandle`, den es vorher an
+der Stelle noch nicht gab) — reine Umsortierung, keine
+Verhaltensänderung der Startreihenfolge selbst (nichts dazwischen hing
+vorher von der alten Reihenfolge ab, geprüft).
+
+**Verifiziert:** `cargo test --workspace --lib` (mit `mxl`-Feature,
+`deploy/dev/mxl.env` gesourct) komplett grün, inkl. der drei echten
+MXL-Rundlauf-Tests (`write_then_read_loopback`,
+`three_concurrent_readers_same_flow_do_not_hang`, u. a.) unverändert
+funktionsfähig mit dem neuen Heartbeat-Feld. `cargo build --workspace
+--bins` sauber. Live gegen TEST1 (kompletter Node-Rebuild vorher):
+`nats sub omp.health.<viewer-node-id>` zeigt `"status":"ok"` sowohl im
+Ruhezustand als auch während ein echter Audio-Meter-Zweig lief
+(`addAudioInput` → `POST /api/v1/graph/edges` gegen `omp-source`s
+Audio-Companion-Sender → `GET /levels` (SSE) lieferte kontinuierliche
+`{"inputId":...,"peak":...,"rms":...}`-Events) — kein Fehlalarm durch
+die neue Registrierung. `removeAudioInput` anschließend geprüft:
+`receivers` in der Health-Nachricht sinkt wieder korrekt, `status`
+bleibt `"ok"` (kein liegen gebliebener "hängend"-Eintrag nach
+`unregister_worker`). Ein tatsächliches Erzwingen des historischen
+Stuck-Threads (Reader stirbt still) wurde NICHT live nachgestellt (der
+Bug, der das auslöste, ist bereits behoben) — die Erkennungslogik
+selbst ist stattdessen durch vier Unit-Tests in `liveness.rs`
+abgedeckt (`stalled_counter_is_reported_stuck` u. a.).
+
+**Offener Folgepunkt, nicht Teil dieser Sitzung:** nur `omp-viewer`s
+Audio-Meter-Pfad ist verdrahtet — die übrigen ~15 Node-Typen mit einem
+`pipeline::run`-Thread (s. Fork-Inventur oben) registrieren sich noch
+nicht bei `LivenessMonitor`. Der Mechanismus selbst ist fertig und
+bewusst so gebaut, dass jeder weitere Node-Typ nur eine
+`register_worker`-Zeile an seinem Pipeline-Thread-Spawn braucht — kein
+SDK-seitiger Umbau mehr nötig.
+
+**Dateien:** `nodes/omp-mediaio/src/mxl.rs`,
+`nodes/omp-node-sdk/src/{lib,liveness,node}.rs` (liveness.rs neu),
+`nodes/omp-viewer/src/{main,audio_meters}.rs`.

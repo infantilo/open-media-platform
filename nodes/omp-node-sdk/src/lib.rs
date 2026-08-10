@@ -12,6 +12,7 @@ pub mod descriptor;
 pub mod health;
 pub mod idgen;
 pub mod is04;
+pub mod liveness;
 pub mod node;
 pub mod peer;
 pub mod plugins;
@@ -20,6 +21,7 @@ pub mod server;
 pub use descriptor::{
     Descriptor, LatencyInfo, LatencyRange, MethodArg, MethodSpec, ParamSpec, ParamType, Range,
 };
+pub use liveness::LivenessMonitor;
 pub use node::{MediaReadySource, NodeConfig, NodeHandle, ReceiverSpec, SenderSpec, run, start};
 pub use peer::{PeerClient, resolve_owning_node_href};
 pub use plugins::{PluginInfo, PluginRegistry};

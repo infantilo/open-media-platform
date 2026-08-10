@@ -371,37 +371,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
 
-    // Zweite, unabhängige Pipeline nur für Audio-Eingangs-Pegel (s.
-    // `audio_meters.rs`-Moduldoku, warum getrennt vom Video-Pfad oben).
-    let (level_tx, mut level_rx) = tokio::sync::mpsc::unbounded_channel::<audio_meters::LevelEvent>();
-    let meter_shutdown = shutdown.clone();
-    let (meter_ready_tx, meter_ready_rx) = tokio::sync::oneshot::channel();
-    let meter_thread = std::thread::spawn(move || {
-        audio_meters::run(mxl_context, level_tx, meter_shutdown, meter_ready_tx)
-    });
-    let meter_handle = match meter_ready_rx.await {
-        Ok(Ok(handle)) => handle,
-        Ok(Err(e)) => {
-            eprintln!("omp-viewer: audio meter pipeline init failed: {e}");
-            return Err(e.into());
-        }
-        Err(_) => {
-            eprintln!("omp-viewer: audio meter thread ended before reporting readiness");
-            return Err("audio meter thread ended before reporting readiness".into());
-        }
-    };
-    tokio::spawn(async move {
-        while let Some(event) = level_rx.recv().await {
-            let json = serde_json::json!({
-                "inputId": event.input_id,
-                "rms": event.rms,
-                "peak": event.peak,
-            })
-            .to_string();
-            levels_broadcaster.publish(&json);
-        }
-    });
-
     let media_ready_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
     let connection = Arc::new(ReceiverConnection::new(
@@ -451,6 +420,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
+
+    // Zweite, unabhängige Pipeline nur für Audio-Eingangs-Pegel (s.
+    // `audio_meters.rs`-Moduldoku, warum getrennt vom Video-Pfad oben).
+    // Bug 2026-08-07 (docs/decisions.md Nachtrag 123, `LivenessMonitor`
+    // seit 2026-08-10): dieser Thread-Spawn wurde extra bis NACH
+    // `omp_node_sdk::start()` verschoben (vorher direkt nach dem
+    // `MxlContext`-Aufbau, vor `start()`), damit `handle.register_worker`
+    // unten zur Verfügung steht — die genau hier lebende Reader-Thread-
+    // Klasse war der Auslöser für den Liveness-Mechanismus.
+    let (level_tx, mut level_rx) = tokio::sync::mpsc::unbounded_channel::<audio_meters::LevelEvent>();
+    let meter_shutdown = shutdown.clone();
+    let (meter_ready_tx, meter_ready_rx) = tokio::sync::oneshot::channel();
+    let meter_node_handle = handle.clone();
+    let meter_thread = std::thread::spawn(move || {
+        audio_meters::run(mxl_context, level_tx, meter_shutdown, meter_ready_tx, meter_node_handle)
+    });
+    let meter_handle = match meter_ready_rx.await {
+        Ok(Ok(handle)) => handle,
+        Ok(Err(e)) => {
+            eprintln!("omp-viewer: audio meter pipeline init failed: {e}");
+            return Err(e.into());
+        }
+        Err(_) => {
+            eprintln!("omp-viewer: audio meter thread ended before reporting readiness");
+            return Err("audio meter thread ended before reporting readiness".into());
+        }
+    };
+    tokio::spawn(async move {
+        while let Some(event) = level_rx.recv().await {
+            let json = serde_json::json!({
+                "inputId": event.input_id,
+                "rms": event.rms,
+                "peak": event.peak,
+            })
+            .to_string();
+            levels_broadcaster.publish(&json);
+        }
+    });
 
     // Erst jetzt verfügbar (braucht `handle` aus `start()`) — s.
     // `ViewerCommand`-Doku zur Sync/Async-Brücke.
