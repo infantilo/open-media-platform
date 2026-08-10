@@ -34,7 +34,7 @@
 mod pipeline;
 mod uibundle;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::pcm_stream;
@@ -276,6 +276,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_config = pipeline::Config { domain };
     let pipeline_shutdown = shutdown.clone();
     let broadcaster_for_pipeline = broadcaster.clone();
+    let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
+    let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
     let pipeline_thread = std::thread::spawn(move || {
         pipeline::run(
             pipeline_config,
@@ -283,6 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             tx,
             pipeline_shutdown,
             ready_tx,
+            pipeline_heartbeat_thread,
         )
     });
 
@@ -346,6 +349,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
+
+    // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    // Nachtrag 130/131).
+    handle.register_worker("pipeline", pipeline_heartbeat);
 
     let events = async {
         while let Some(event) = rx.recv().await {

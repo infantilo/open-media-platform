@@ -80,7 +80,7 @@ mod sys {
 
 use std::ffi::CString;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// `MXL_FABRICS_API_VERSION` aus `mxl/fabrics.h` (aktuell `0`) — als
 /// Rust-Konstante nachgebildet statt per bindgen gezogen: das
@@ -400,8 +400,11 @@ impl FabricsTarget {
     /// nicht mehr von einem lokal geschriebenen zu unterscheiden. Endet,
     /// sobald `stop` gesetzt wird oder ein echter (nicht Not-Ready/
     /// Timeout-)Fehler auftritt.
-    pub fn relay_incoming_grains(&self, stop: &AtomicBool) -> Result<(), String> {
+    pub fn relay_incoming_grains(&self, stop: &AtomicBool, heartbeat: &Arc<AtomicU64>) -> Result<(), String> {
         while !stop.load(Ordering::Relaxed) {
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            heartbeat.fetch_add(1, Ordering::Relaxed);
             if let Some(index) = self.read_grain(200)? {
                 self.commit_relayed_grain(index)?;
             }
@@ -505,7 +508,7 @@ impl FabricsInitiator {
     /// Multi-UHD/hohen Kanalzahlen nötig, dieselbe Grenze gilt hier)
     /// ausreichend; echtes Slice-Batching bleibt ein möglicher, nicht
     /// begonnener Folgeschritt, keine geratene Vereinfachung.
-    pub fn relay_outgoing_grains(&self, stop: &AtomicBool) -> Result<(), String> {
+    pub fn relay_outgoing_grains(&self, stop: &AtomicBool, heartbeat: &Arc<AtomicU64>) -> Result<(), String> {
         let mut config_info = core_sys::FlowConfigInfo::default();
         let status = unsafe { self.runtime.core_api.flow_reader_get_config_info(self.reader, &mut config_info) };
         status_ok_core(status).map_err(|e| format!("mxlFlowReaderGetConfigInfo: {e}"))?;
@@ -514,6 +517,9 @@ impl FabricsInitiator {
         let mut index = unsafe { self.runtime.core_api.get_current_index(&rate) };
 
         while !stop.load(Ordering::Relaxed) {
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            heartbeat.fetch_add(1, Ordering::Relaxed);
             let mut grain_info = core_sys::GrainInfo::default();
             let mut payload: *mut u8 = std::ptr::null_mut();
             // 20ms statt der ursprünglich angenommenen 200ms (live
@@ -821,13 +827,16 @@ mod tests {
         // Ab hier übernehmen die eigentlichen Relay-Methoden — nicht
         // mehr die manuelle Poll-Schleife der vorherigen Tests.
         let stop_relay = Arc::new(AtomicBool::new(false));
+        let test_heartbeat = Arc::new(AtomicU64::new(0));
         let initiator_thread = {
             let stop_relay = stop_relay.clone();
-            std::thread::spawn(move || initiator.relay_outgoing_grains(&stop_relay))
+            let heartbeat = test_heartbeat.clone();
+            std::thread::spawn(move || initiator.relay_outgoing_grains(&stop_relay, &heartbeat))
         };
         let target_thread = {
             let stop_relay = stop_relay.clone();
-            std::thread::spawn(move || target.relay_incoming_grains(&stop_relay))
+            let heartbeat = test_heartbeat.clone();
+            std::thread::spawn(move || target.relay_incoming_grains(&stop_relay, &heartbeat))
         };
 
         std::thread::sleep(Duration::from_millis(1500));

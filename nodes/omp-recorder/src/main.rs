@@ -9,7 +9,7 @@
 mod pipeline;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
@@ -188,8 +188,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let pipeline_config = pipeline::Config { domain, media_dir };
     let pipeline_shutdown = shutdown.clone();
-    let pipeline_thread =
-        std::thread::spawn(move || pipeline::run(pipeline_config, tx, pipeline_shutdown, ready_tx));
+    let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
+    let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
+    let pipeline_thread = std::thread::spawn(move || {
+        pipeline::run(pipeline_config, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
+    });
 
     let pipeline_handle = match ready_rx.await {
         Ok(Ok(handle)) => handle,
@@ -262,6 +265,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
+
+    // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    // Nachtrag 130/131).
+    handle.register_worker("pipeline", pipeline_heartbeat);
 
     let events = async {
         while let Some(event) = rx.recv().await {

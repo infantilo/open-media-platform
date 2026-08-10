@@ -16,6 +16,7 @@
 mod pipeline;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use omp_node_sdk::{Descriptor, InvokeError, NodeConfig, ParamSpec, ParamStore, ParamType, SetError};
 use pipeline::{Config, Direction};
@@ -117,8 +118,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let (events_tx, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+    let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_handle = Arc::new(
-        pipeline::build(&cfg, events_tx)
+        pipeline::build(&cfg, events_tx, pipeline_heartbeat.clone())
             .map_err(|e| format!("omp-srt-gateway: pipeline build failed: {e}"))?,
     );
     let media_ready_pipeline = pipeline_handle.clone();
@@ -151,6 +153,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         store,
     )
     .await?;
+
+    // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    // Nachtrag 130/131).
+    handle.register_worker("pipeline", pipeline_heartbeat);
 
     let events = async {
         while let Some(event) = events_rx.recv().await {

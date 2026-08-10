@@ -38,7 +38,7 @@
 //! `FabricsInitiator::relay_outgoing_grains`s eigene "kein Slice-Batching"-
 //! Notiz.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::fabrics::{FabricsRuntime, Provider};
@@ -105,11 +105,19 @@ pub struct TargetConfig {
 pub struct TargetHandle {
     pub target_info: String,
     flowed: Arc<AtomicBool>,
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl TargetHandle {
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// S. `omp_mediaio::mxl::MxlVideoOutput::heartbeat_handle` — für
+    /// `omp_node_sdk::NodeHandle::register_worker` (docs/decisions.md
+    /// Nachtrag 130/131).
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
     }
 }
 
@@ -136,10 +144,16 @@ pub fn start_target(
 
     let flowed = Arc::new(AtomicBool::new(false));
     let flowed_thread = flowed.clone();
+    let heartbeat = Arc::new(AtomicU64::new(0));
+    let heartbeat_thread = heartbeat.clone();
     std::thread::spawn(move || {
         // S. Moduldoku "Bewusste Vereinfachung": erstes Grain nur zum
         // Nachweis konsumiert, nicht committet.
         while !shutdown.load(Ordering::Relaxed) {
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131) — derselbe Zähler begleitet unten auch
+            // die dauerhafte `relay_incoming_grains`-Phase.
+            heartbeat_thread.fetch_add(1, Ordering::Relaxed);
             match target.read_grain(200) {
                 Ok(Some(_)) => {
                     flowed_thread.store(true, Ordering::Relaxed);
@@ -152,12 +166,12 @@ pub fn start_target(
                 }
             }
         }
-        if let Err(e) = target.relay_incoming_grains(&shutdown) {
+        if let Err(e) = target.relay_incoming_grains(&shutdown, &heartbeat_thread) {
             let _ = tx.send(Event::Error(format!("Fabrics target relay: {e}")));
         }
     });
 
-    Ok(TargetHandle { target_info, flowed })
+    Ok(TargetHandle { target_info, flowed, heartbeat })
 }
 
 pub struct InitiatorConfig {
@@ -187,6 +201,11 @@ pub struct InitiatorHandle {
     tx: UnboundedSender<Event>,
     active: Mutex<Option<ActiveInitiator>>,
     flowed: Arc<AtomicBool>,
+    /// Über alle Reconnects hinweg derselbe Zähler (anders als `active`,
+    /// das bei jedem `connect()` einen neuen Thread bekommt) — ein
+    /// `register_worker`-Aufruf in `main.rs` reicht für die gesamte
+    /// Prozesslaufzeit, s. `heartbeat_handle`.
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl InitiatorHandle {
@@ -201,11 +220,17 @@ impl InitiatorHandle {
             tx,
             active: Mutex::new(None),
             flowed: Arc::new(AtomicBool::new(false)),
+            heartbeat: Arc::new(AtomicU64::new(0)),
         }))
     }
 
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// S. `TargetHandle::heartbeat_handle`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
     }
 
     /// Baut die relayte Quelle auf `flow_id` um — beendet zuerst eine
@@ -250,6 +275,7 @@ impl InitiatorHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let flowed_thread = self.flowed.clone();
+        let heartbeat_thread = self.heartbeat.clone();
         let tx = self.tx.clone();
         let thread = std::thread::spawn(move || {
             // Verbindungsaufbau treiben (gleiches Muster wie
@@ -257,6 +283,9 @@ impl InitiatorHandle {
             // over_tcp`): wiederholt `make_progress_blocking`, bis sie
             // `Ok(true)` (verbunden) meldet oder abgebrochen wird.
             loop {
+                // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+                // Nachtrag 130/131).
+                heartbeat_thread.fetch_add(1, Ordering::Relaxed);
                 if stop_thread.load(Ordering::Relaxed) {
                     return;
                 }
@@ -270,7 +299,7 @@ impl InitiatorHandle {
                 }
             }
             flowed_thread.store(true, Ordering::Relaxed);
-            if let Err(e) = initiator.relay_outgoing_grains(&stop_thread) {
+            if let Err(e) = initiator.relay_outgoing_grains(&stop_thread, &heartbeat_thread) {
                 let _ = tx.send(Event::Error(format!("Fabrics initiator relay: {e}")));
             }
         });

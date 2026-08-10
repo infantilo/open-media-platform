@@ -25,7 +25,7 @@ mod pipeline;
 mod sap;
 mod sdp;
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -328,7 +328,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
             let pipeline_shutdown = shutdown.clone();
-            let pipeline_thread = std::thread::spawn(move || pipeline::run_sink(cfg, events_tx, pipeline_shutdown, ready_tx));
+            let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
+            let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
+            let pipeline_thread = std::thread::spawn(move || {
+                pipeline::run_sink(cfg, events_tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
+            });
 
             let pipeline_handle = match ready_rx.await {
                 Ok(Ok(handle)) => handle,
@@ -380,6 +384,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await?;
 
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            handle.register_worker("pipeline", pipeline_heartbeat);
+
             run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, None).await;
         }
         Direction::Source => {
@@ -400,7 +408,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
             let pipeline_shutdown = shutdown.clone();
-            let pipeline_thread = std::thread::spawn(move || pipeline::run_source(cfg, events_tx, pipeline_shutdown, ready_tx));
+            let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
+            let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
+            let pipeline_thread = std::thread::spawn(move || {
+                pipeline::run_source(cfg, events_tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
+            });
 
             let pipeline_handle = match ready_rx.await {
                 Ok(Ok(handle)) => handle,
@@ -471,6 +483,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 store,
             )
             .await?;
+
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            handle.register_worker("pipeline", pipeline_heartbeat);
+            handle.register_worker("sap-announcer", sap_announcer.heartbeat_handle());
 
             run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, Some(sap_announcer)).await;
         }

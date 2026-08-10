@@ -549,6 +549,7 @@ pub fn run(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<PipelineHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     let pipeline = match Pipeline::build(&config) {
         Ok(p) => p,
@@ -612,6 +613,9 @@ pub fn run(
     let mut pending: Option<Command> = None;
 
     loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

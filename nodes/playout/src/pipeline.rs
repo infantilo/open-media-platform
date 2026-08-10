@@ -198,6 +198,7 @@ pub fn run(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<Arc<RtpVideoOutput>, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     let pipeline = match Pipeline::build(&config) {
         Ok(p) => p,
@@ -211,6 +212,9 @@ pub fn run(
     let _ = ready.send(Ok(pipeline.rtp_output.clone()));
 
     loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

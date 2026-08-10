@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddrV4, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -98,6 +98,11 @@ pub struct Announcer {
     socket: UdpSocket,
     msg_id_hash: u16,
     origin: Ipv4Addr,
+    /// omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    /// Nachtrag 130/131) — tickt in der inneren 200ms-Warteschleife
+    /// unten, NICHT nur einmal pro vollem Announce-Intervall (das kann
+    /// deutlich über dem 5s-Health-Tick-Takt liegen, s. `heartbeat_handle`).
+    heartbeat: Arc<AtomicU64>,
 }
 
 impl Announcer {
@@ -128,9 +133,12 @@ impl Announcer {
         let stop = Arc::new(AtomicBool::new(false));
         let thread_stop = stop.clone();
         let thread_socket = socket.try_clone().map_err(|e| format!("SAP-Socket klonen: {e}"))?;
+        let heartbeat = Arc::new(AtomicU64::new(0));
+        let thread_heartbeat = heartbeat.clone();
         let thread = std::thread::spawn(move || {
             let dest = SocketAddrV4::new(SAP_GROUP, SAP_PORT);
             while !thread_stop.load(Ordering::Relaxed) {
+                thread_heartbeat.fetch_add(1, Ordering::Relaxed);
                 let packet = build_packet(msg_id_hash, origin, &sdp, false);
                 if let Err(e) = thread_socket.send_to(&packet, dest) {
                     eprintln!("omp-aes67-gateway: SAP-Announce senden fehlgeschlagen: {e}");
@@ -140,12 +148,23 @@ impl Announcer {
                     if thread_stop.load(Ordering::Relaxed) {
                         return;
                     }
+                    // Tickt hier (nicht nur einmal pro vollem
+                    // Announce-Intervall) — ein Intervall über 5s
+                    // (Default-Health-Tick-Takt, `heartbeat_loop`) würde
+                    // sonst fälschlich als "hängend" gemeldet.
+                    thread_heartbeat.fetch_add(1, Ordering::Relaxed);
                     std::thread::sleep(Duration::from_millis(200));
                 }
             }
         });
 
-        Ok(Announcer { stop, thread: Some(thread), socket, msg_id_hash, origin })
+        Ok(Announcer { stop, thread: Some(thread), socket, msg_id_hash, origin, heartbeat })
+    }
+
+    /// S. `omp_mediaio::mxl::MxlVideoOutput::heartbeat_handle` — für
+    /// `omp_node_sdk::NodeHandle::register_worker`.
+    pub fn heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.heartbeat.clone()
     }
 }
 

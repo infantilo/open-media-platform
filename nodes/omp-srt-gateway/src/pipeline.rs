@@ -22,6 +22,9 @@
 //! `omp-switcher`, C7, "0 Receiver in v0") — Operator konfiguriert
 //! Host/Port/SRT-URI beim Start, kein Drag&Drop auf die WAN-Seite.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::MediaFlow;
@@ -101,6 +104,7 @@ impl PipelineHandle {
 pub fn build(
     cfg: &Config,
     events: tokio::sync::mpsc::UnboundedSender<Event>,
+    heartbeat: Arc<AtomicU64>,
 ) -> Result<PipelineHandle, String> {
     gst::init().map_err(|e| format!("gst::init: {e}"))?;
     let pipeline = gst::Pipeline::new();
@@ -113,18 +117,29 @@ pub fn build(
     let bus = pipeline.bus().expect("pipeline always has a bus");
     let pipeline_weak = pipeline.downgrade();
     std::thread::spawn(move || {
-        for msg in bus.iter_timed(gst::ClockTime::NONE) {
-            use gst::MessageView;
-            match msg.view() {
-                MessageView::Error(err) => {
-                    let _ = events.send(Event::Error(format!(
-                        "{} ({})",
-                        err.error(),
-                        err.debug().unwrap_or_default()
-                    )));
+        // Umgestellt von `bus.iter_timed(ClockTime::NONE)` (blockiert
+        // unbegrenzt bis zur nächsten Nachricht) auf eine 1s-Poll-
+        // Schleife — omp_node_sdk::liveness::LivenessMonitor
+        // (docs/decisions.md Nachtrag 130/131) braucht einen Tick auch
+        // während einer ruhigen, gesunden Pipeline ohne Bus-Traffic;
+        // dieselbe `timed_pop`-Poll-Kadenz wie z. B. `omp-source::
+        // pipeline::poll_error`, funktional unverändert (Error/Eos wie
+        // zuvor behandelt, nur ohne unbegrenztes Blockieren dazwischen).
+        loop {
+            heartbeat.fetch_add(1, Ordering::Relaxed);
+            if let Some(msg) = bus.timed_pop(gst::ClockTime::from_seconds(1)) {
+                use gst::MessageView;
+                match msg.view() {
+                    MessageView::Error(err) => {
+                        let _ = events.send(Event::Error(format!(
+                            "{} ({})",
+                            err.error(),
+                            err.debug().unwrap_or_default()
+                        )));
+                    }
+                    MessageView::Eos(_) => break,
+                    _ => {}
                 }
-                MessageView::Eos(_) => break,
-                _ => {}
             }
             if pipeline_weak.upgrade().is_none() {
                 break;

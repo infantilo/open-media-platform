@@ -16132,3 +16132,105 @@ SDK-seitiger Umbau mehr nötig.
 **Dateien:** `nodes/omp-mediaio/src/mxl.rs`,
 `nodes/omp-node-sdk/src/{lib,liveness,node}.rs` (liveness.rs neu),
 `nodes/omp-viewer/src/{main,audio_meters}.rs`.
+
+## 2026-08-10 (Nachtrag 131) — Worker-Thread-Liveness auf alle Node-Typen ausgeweitet
+
+Nutzerauftrag "alle node types an livenessmonitor" — direkte
+Fortsetzung von Nachtrag 130, das den `LivenessMonitor`-Mechanismus
+gebaut und nur an `omp-viewer`s Audio-Meter-Pfad als Referenz
+verdrahtet hatte (dort ausdrücklich als offener Folgepunkt notiert: "die
+übrigen ~15 Node-Typen ... registrieren sich noch nicht").
+
+**Umfang:** jeder Node-Typ mit einem dauerhaften Hintergrund-Thread
+bekommt jetzt mindestens seinen primären Arbeits-Thread beim
+`LivenessMonitor` registriert — 18 Node-Crates, 34 Dateien:
+
+- **Elf Nodes mit dem einheitlichen `pipeline::run(config, tx,
+  shutdown, ready)`-Muster** (`omp-player`, `omp-audio-mixer`,
+  `omp-mxf-player`, `omp-ograf`, `omp-recorder`, `omp-scaler`,
+  `omp-source`, `playout`, `omp-switcher`, `omp-video-mixer-me`,
+  `omp-viewer`s Video-Pipeline) — mechanisch identisches Muster: `run`
+  bekommt einen zusätzlichen `heartbeat: Arc<AtomicU64>`-Parameter,
+  tickt am Kopf der äußeren `loop`, `main.rs` erzeugt den Zähler vor dem
+  `thread::spawn` und ruft `handle.register_worker("pipeline",
+  pipeline_heartbeat)` unmittelbar nach `omp_node_sdk::start()` auf.
+- **Sonderfälle**, je mit eigener Loop-Form:
+  - `omp-2110-gateway`: zwei eigenständige Rollen-Funktionen
+    (`run_ingest`/`run_output`), beide verdrahtet.
+  - `omp-aes67-gateway`: `run_sink`/`run_output` (Pipeline-Rollen) PLUS
+    `sap::Announcer`s dauerhafter SAP-Announce-Thread (läuft für die
+    gesamte Source-Rollen-Prozesslaufzeit, überlebt jeden IS-05-
+    Reconnect) — Heartbeat tickt bewusst in der INNEREN 200ms-
+    Warteschleife, nicht nur einmal pro vollem Announce-Intervall
+    (Default 30s, konfigurierbar): ein Intervall über dem 5s-Health-
+    Tick-Takt hätte sonst einen völlig gesunden Announcer fälschlich
+    als "hängend" gemeldet — live beim Schreiben bedacht, nicht erst
+    beim Testen gefunden.
+  - `omp-audio-monitor`/`omp-multiviewer`: strukturell identisch zum
+    Hauptmuster, nur mit einer Inline-Closure statt eines benannten
+    `pipeline::run`-Aufrufs.
+  - `omp-fabrics-gateway`: kein GStreamer, reine Fabrics-Relay-Threads
+    in `omp_mediaio::fabrics` (`relay_incoming_grains`/
+    `relay_outgoing_grains`, jeweils ein neuer `heartbeat`-Parameter,
+    beide Methoden zusätzlich in ihrem eigenen Test — `fabrics::tests::
+    transfers_a_real_grain_between_two_domains_over_tcp` — angepasst
+    und weiterhin grün) plus die umgebenden `relay.rs`-Threads
+    (`TargetHandle`/`InitiatorHandle`, je eigener `heartbeat_handle()`-
+    Accessor nach dem `MxlVideoOutput::flowed_handle`-Muster).
+    `InitiatorHandle`s Zähler überlebt bewusst jeden `connect()`-
+    Reconnect (ein `register_worker`-Aufruf für die gesamte
+    Prozesslaufzeit, kein Neu-Registrieren pro Verbindung).
+  - `omp-srt-gateway`: einzige Stelle, an der die reine
+    Zähler-Ergänzung nicht reichte — der Bus-Watch-Thread nutzte
+    `bus.iter_timed(gst::ClockTime::NONE)` (blockiert unbegrenzt bis
+    zur nächsten Bus-Nachricht). Ein still gesunder, Bus-ruhiger 2110↔
+    SRT-Strom hätte dort NIE getickt. Umgestellt auf dieselbe
+    `timed_pop`-1s-Poll-Kadenz, die praktisch jeder andere Node in
+    diesem Codebase bereits nutzt (z. B. `omp-source::pipeline::
+    poll_error`) — funktional unverändert (Error/Eos-Behandlung
+    identisch), nur ohne das unbegrenzte Blockieren dazwischen.
+
+**Bewusst nicht in dieser Sitzung verdrahtet** (kein Node-Typ ohne
+jede Abdeckung, aber diese sekundären/gemeinsam genutzten Threads
+bleiben offen):
+- `omp-ograf::pipeline.rs`s zwei interne Zusatz-Threads (Alpha-Key-
+  Brücken-Thread, GLib-`main_loop.run()`-Dispatch-Thread) — `omp-ograf`
+  selbst ist über seinen primären `pipeline::run`-Thread bereits
+  abgedeckt, diese beiden sind Zusatz-Threads innerhalb desselben
+  Node-Typs.
+- Die gemeinsam genutzten HTTP/SSE-Annahme-Threads in `omp_mediaio`
+  (`preview.rs`, `levels.rs`, `audio_stream.rs`, `pcm_stream.rs`,
+  `sse_proxy.rs`) — optionale Browser-Debug-/Vorschau-Features
+  mehrerer Node-Typen, kein Kern-Medienpfad.
+
+**Verifiziert:** `cargo build --workspace --bins` sauber, `cargo test
+--workspace --lib` komplett grün (inkl. des angepassten echten
+Fabrics-TCP-Tests). Live gegen TEST1 (`omp-audio-mixer`,
+`omp-video-mixer-me`, `omp-viewer`, `omp-source`, `omp-source-2` —
+fünf verschiedene Node-Typen gleichzeitig, alle jetzt mit neu
+registriertem Pipeline-Worker): `nats sub omp.health.<id>` zeigt für
+alle fünf `"status":"ok"` nach dem Start. `omp-viewer`s Audio-Meter-Pfad
+zusätzlich erneut end-to-end durchgespielt (`addAudioInput` →
+`POST /api/v1/graph/edges` → `/levels`-SSE liefert echte Events) MIT
+jetzt zwei gleichzeitig registrierten Workern (`pipeline` +
+`audio-meters:reader:<id>`) — weiterhin `"status":"ok"`, kein
+Fehlalarm durch die zusätzliche Registrierung.
+
+**Dateien:** `nodes/omp-2110-gateway/src/{main,pipeline}.rs`,
+`nodes/omp-aes67-gateway/src/{main,pipeline,sap}.rs`,
+`nodes/omp-audio-mixer/src/{main,pipeline}.rs`,
+`nodes/omp-audio-monitor/src/{main,pipeline}.rs`,
+`nodes/omp-fabrics-gateway/src/{main,relay}.rs`,
+`nodes/omp-mediaio/src/fabrics.rs`,
+`nodes/omp-multiviewer/src/{main,pipeline}.rs`,
+`nodes/omp-mxf-player/src/{main,pipeline}.rs`,
+`nodes/omp-ograf/src/{main,pipeline}.rs`,
+`nodes/omp-player/src/{main,pipeline}.rs`,
+`nodes/omp-recorder/src/{main,pipeline}.rs`,
+`nodes/omp-scaler/src/{main,pipeline}.rs`,
+`nodes/omp-source/src/{main,pipeline}.rs`,
+`nodes/omp-srt-gateway/src/{main,pipeline}.rs`,
+`nodes/omp-switcher/src/{main,pipeline}.rs`,
+`nodes/omp-video-mixer-me/src/{main,pipeline}.rs`,
+`nodes/omp-viewer/src/{main,pipeline}.rs`,
+`nodes/playout/src/{main,pipeline}.rs`.

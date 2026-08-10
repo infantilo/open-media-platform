@@ -96,6 +96,7 @@ pub fn run_ingest(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<IngestHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -205,6 +206,9 @@ pub fn run_ingest(
     // Warteschleife bis zum Shutdown, gleiche Poll-Kadenz wie
     // `omp-viewer::pipeline::run`s Command-Loop.
     while !shutdown.load(Ordering::Relaxed) {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(500));
     }
 }
@@ -351,6 +355,7 @@ pub fn run_output(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<OutputPipelineHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -379,6 +384,9 @@ pub fn run_output(
 
     let mut active: Option<ActiveOutputPipeline> = None;
     loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

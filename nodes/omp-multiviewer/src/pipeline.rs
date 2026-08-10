@@ -12,7 +12,7 @@
 //! ein Multiviewer speist in der Praxis eine Bedienplatz-Anzeige, kein
 //! weiterverkettbares Programmsignal.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -266,6 +266,7 @@ pub fn run(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<PipelineHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -306,6 +307,9 @@ pub fn run(
     }));
 
     loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

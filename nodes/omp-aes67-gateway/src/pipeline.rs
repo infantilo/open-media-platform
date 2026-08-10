@@ -17,7 +17,7 @@
 //!   Dante-Geräte im AES67-Modus finden Fremdströme ausschließlich über
 //!   SAP, nicht durch aktives Scannen von Adressbereichen.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -81,6 +81,7 @@ pub fn run_sink(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<SinkHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -169,6 +170,9 @@ pub fn run_sink(
     }));
 
     while !shutdown.load(Ordering::Relaxed) {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(500));
     }
 }
@@ -299,6 +303,7 @@ pub fn run_source(
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<SourcePipelineHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -343,6 +348,9 @@ pub fn run_source(
 
     let mut active: Option<ActiveSourcePipeline> = None;
     loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130/131).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }

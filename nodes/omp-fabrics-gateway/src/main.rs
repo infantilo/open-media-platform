@@ -235,6 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // und startet selbst den dauerhaften Relay-Thread.
             let target_handle = relay::start_target(cfg, events_tx, shutdown.clone())
                 .map_err(|e| format!("Fabrics target build failed: {e}"))?;
+            let target_heartbeat = target_handle.heartbeat_handle();
 
             let store: Arc<dyn ParamStore> = Arc::new(TargetStore {
                 flow_id: flow_id.clone(),
@@ -267,6 +268,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await?;
 
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            handle.register_worker("fabrics-target-relay", target_heartbeat);
+
             run_event_loop(handle, &mut events_rx, shutdown).await;
         }
         Role::Initiator => {
@@ -278,6 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 .map_err(|e| format!("Fabrics initiator runtime build failed: {e}"))?;
 
             let media_ready_handle = initiator_handle.clone();
+            let initiator_heartbeat = initiator_handle.heartbeat_handle();
             let receiver_id = omp_node_sdk::idgen::new_v4();
             let connected_flow_id = Arc::new(Mutex::new(String::new()));
             let connection = Arc::new(ReceiverConnection::new(
@@ -314,6 +320,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 store,
             )
             .await?;
+
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            handle.register_worker("fabrics-initiator-relay", initiator_heartbeat);
 
             run_event_loop(handle, &mut events_rx, shutdown).await;
         }
