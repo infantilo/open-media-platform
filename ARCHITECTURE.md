@@ -2435,16 +2435,60 @@ nebeneinander zeigt und dadurch Stil-Inkonsistenz zuerst sichtbar
 gemacht). **Konkretisiert in §22.2 (Token-Satz, `ui/kit/`-Bibliothek,
 Theming inkl. „Studio-Dark") und §22.1 (Navigations-/Menü-Struktur).**
 
-### 20.4 Security/Auth-Hardening (D3) — Priorität prüfen
+### 20.4 Security/Auth-Hardening (D3) — umgesetzt, Restlücken bekannt
 
-Bereits geplant (`UMSETZUNG.md` D3: step-ca/mTLS, IS-10/OAuth2, §12-
-Rollenmodell), aber ohne festen Zeitpunkt („Phase D"). Für echten 24/7-
-Mehrpersonen-Betrieb (mehrere Bildmeister/Tonmeister/Admins, §14) ist D3
-kein Nice-to-have, sondern Voraussetzung — C13 (Operator-Console) baut
-heute bewusst noch mit einem **Rollen-Stub** statt echter Durchsetzung
-(`UMSETZUNG.md` C13: „echte Durchsetzung folgt mit D3"). Empfehlung: D3
-nicht beliebig weit nach hinten schieben, sobald mehr als eine Person
-gleichzeitig am System arbeitet.
+**Status (2026-08-10, korrigiert — dieser Abschnitt war seit dem
+2026-07-12-Gap-Analyse-Datum veraltet):** D3 ist **nicht** mehr
+unscheduled/„Phase D" — Teil 1 (mTLS Orchestrator↔Nodes, Go-Seite) und
+Teil 2 (§12-Nutzer-/Rollenmodell: lokale Konten, bcrypt, handgebautes
+HS256-JWT, Postgres-Rollenbindungen, zentrale Durchsetzung im
+Orchestrator-Proxy, Audit-Log) sind seit 2026-07-13/14 fertig
+(`UMSETZUNG.md` D3 Teil 1/2). C13s Rollen-Stub wurde durch echte
+Durchsetzung ersetzt — s. §12s eigene, spätere Status-Notiz, die
+diesem Abschnitt hier lange widersprach, ohne dass er nachgezogen
+wurde.
+
+Eine 2026-08-10 durchgeführte Code-Bestandsaufnahme (nicht nur
+Doku-Abgleich) fand vier konkrete, code-verifizierte Restlücken und hat
+sie behoben:
+
+1. **Kein Rate-Limiting/Lockout auf `POST /api/v1/auth/login`** —
+   unbegrenzt viele Versuche, nur bcryptes Rechenkosten als Bremse.
+   Behoben: `internal/auth.LoginLockout` (prozesslokal, in-memory) sperrt
+   einen Nutzernamen nach 5 Fehlversuchen innerhalb von 15 Minuten für
+   15 Minuten.
+2. **Login-Ereignisse (Erfolg/Fehlschlag/Sperre) landeten nie im
+   Audit-Log** — nur 403-Verweigerungen und abgeschlossene Schreib-
+   Requests wurden protokolliert, ein Credential-Stuffing-Versuch wäre
+   spurlos geblieben. Behoben: `handleLogin` protokolliert jetzt jeden
+   Versuch (200/401/429) inkl. des versuchten Nutzernamens.
+3. **`?access_token=`-Query-Param-Fallback galt für JEDEN Endpunkt**,
+   nicht nur für die drei Routen, die ihn tatsächlich brauchen
+   (`/api/v1/events` SSE, `/api/v1/nodes/<id>/ui/bundle.js` natives
+   `import()`, `/api/v1/nodes/<id>/stream/<name>` Node-Stream-Proxy —
+   alles Browser-APIs ohne eigene Header). Ein Token in der URL landet
+   in Browser-Historie/Server-Logs/Referrer-Headern — unnötig breite
+   Angriffsfläche für alle anderen, auch schreibenden Endpunkte. Behoben
+   durch eine explizite Pfad-Allowlist (`queryTokenAllowedPath`) statt
+   einer Header-Heuristik — eine zunächst erwogene `Accept: text/
+   event-stream`-Heuristik hätte den `import()`-Fall übersehen (dessen
+   Accept-Header ist kein SSE-Typ), live vor dem Ausrollen bemerkt.
+4. Dieser Abschnitt selbst wurde korrigiert (dieser Absatz).
+
+**Weiterhin offen, bewusst nicht Teil dieser Runde** (größerer
+Design-/Scope-Aufwand, kein Versehen):
+- AD/LDAP-Anbindung — explizit zurückgestellt, `auth.Service` hinter
+  einem schmalen Interface, additiv nachrüstbar.
+- Token-Refresh/-Revocation — kein Mechanismus, ein geleaktes Token gilt
+  bis zum natürlichen Ablauf (12h Nutzer-/24h Service-Token).
+- CORS-Policy — nicht konfiguriert (bislang kein dokumentierter
+  Bedarf, Same-Origin-Auslieferung).
+- mTLS deckt nur Orchestrator↔Nodes (Go-Mock-Node) ab, opt-in/aus
+  per Default — keiner der zehn echten Rust-Node-Typen kann TLS
+  terminieren; host-agent↔Orchestrator (NATS) bleibt unverschlüsselt,
+  einziger Schutz ist ein Einmal-Bootstrap-Token. Beide Zustände sind
+  an anderer Stelle bereits als bewusste Entscheidungen dokumentiert
+  (§18.3, `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
 
 ### 20.5 Control-Plane-HA — bereits abgedeckt
 

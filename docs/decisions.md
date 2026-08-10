@@ -16333,3 +16333,98 @@ pcm_stream}.rs`, `nodes/omp-pipeline-controller/src/{main,sse_proxy}.rs`,
 `nodes/omp-audio-monitor/src/main.rs`,
 `nodes/omp-multiviewer/src/main.rs`,
 `nodes/omp-audio-mixer/src/main.rs`, `nodes/omp-viewer/src/main.rs`.
+
+## 2026-08-10 (Nachtrag 134) — Security/Auth-Hardening (ARCHITECTURE.md §20.4): vier konkrete Lücken behoben, §20.4 selbst korrigiert
+
+Nutzerauftrag "Security/Auth-Hardening zuerst angehen" — Fortsetzung der
+"nächste offene Punkte"-Liste. Vor der Umsetzung Bestandsaufnahme per
+Fork (Code, nicht nur Doku): §20.4 selbst erwies sich als veraltet — D3
+(mTLS Orchestrator↔Nodes + §12-Nutzer-/Rollenmodell: bcrypt,
+handgebautes HS256-JWT, Postgres-Rollenbindungen, zentrale
+Durchsetzung, Audit-Log) ist seit 2026-07-13/14 fertig, nicht der
+unscheduled/Stub-Zustand, den §20.4 beschrieb — §12s eigene, spätere
+Status-Notiz widersprach dem längst, ohne dass §20.4 je nachgezogen
+wurde. Per `AskUserQuestion` auf vier konkret umrissene,
+code-verifizierte Lücken eingegrenzt (Token-Refresh/-Revocation und
+AD/LDAP bewusst nicht in dieser Runde — größerer Design-/Scope-Aufwand,
+kein Versehen).
+
+**1. Rate-Limiting/Lockout auf `POST /api/v1/auth/login`:** vorher
+unbegrenzt oft aufrufbar, nur bcryptes Rechenkosten als Bremse. Neues
+`internal/auth/lockout.go`: `LoginLockout`, prozesslokal/in-memory
+(bewusst nicht Postgres — ein Orchestrator-Prozess, kein horizontal
+skalierter Cluster, ein Neustart setzt Sperren zurück, für dieses
+Bedrohungsmodell ausreichend, kein neues Schema nötig). 5 Fehlversuche
+innerhalb von 15 Minuten sperren den Nutzernamen für 15 Minuten,
+unabhängig davon, ob er existiert (dieselbe Begründung wie
+`Service.Login()`s bestehendes "gleicher Fehler für unbekannten
+Nutzer wie falsches Passwort"-Prinzip — sonst würde ein Lockout selbst
+zum neuen Nutzernamen-Enumerations-Orakel). `now func() time.Time`
+statt intern `time.Now()` (dasselbe Testbarkeits-Muster wie
+`Signer.issue`/`verify` in jwt.go) — Tests spielen 15-Minuten-Fenster
+ohne echtes Warten durch. In `httpapi.NewHandler` prozesslokal
+konstruiert statt injiziert (kein Test-Doppelgänger nötig, hätte sonst
+durch die ohnehin sehr lange `NewHandler`-Parameterliste gereicht
+werden müssen, ~50 Testaufrufstellen betroffen).
+
+**2. Login-Ereignisse landeten nie im Audit-Log** — nur 403-
+Verweigerungen und abgeschlossene Schreib-Requests wurden protokolliert
+(`requireVerbOnNode`/`requireVerbGlobal`), `handleLogin` rief den
+Audit-Logger nie auf. Ein Credential-Stuffing-Versuch gegen `/api/v1/
+auth/login` wäre komplett spurlos geblieben. Behoben: `handleLogin`
+protokolliert jetzt jeden Versuch (200 Erfolg, 401 Fehlschlag, 429
+Sperre) inkl. des versuchten Nutzernamens, auch bei nicht existierenden
+Nutzernamen (dieselbe Enumerations-Begründung wie oben).
+
+**3. `?access_token=`-Query-Param-Fallback galt für JEDEN Endpunkt,
+nicht nur die drei, die ihn tatsächlich brauchen.** `bearerToken()`
+akzeptierte den Fallback bislang für jeden Request — ein Token in der
+URL landet in Browser-Historie/Server-Logs/Referrer-Headern, unnötig
+breite Angriffsfläche für alle anderen (auch schreibenden) Endpunkte,
+die ihn nie nutzten. **Live gefundener Beinahe-Fehler beim Entwerfen
+des Fixes:** ein erster Ansatz (Fallback nur bei `Accept: text/
+event-stream` erlauben, passend zur `EventSource`-Spezifikation) hätte
+den zweiten der drei echten Bedarfsfälle gebrochen —
+`ui/shell/ui-bundle.ts`s natives `import()` zum Laden eines Node-UI-
+Bundles umgeht den gepatchten `fetch()`-Wrapper (derselbe
+"Browser-API kann keine eigenen Header setzen"-Grund wie SSE, aber ein
+anderer Accept-Header). Per gezieltem Grep über `ui/` UND alle Node-UI-
+Bundles (`nodes/*/ui/bundle.js`) vor dem Umsetzen gefunden — sonst
+hätte der Sicherheits-Fix eine echte Funktionsregression eingeführt,
+exakt die Bug-Klasse, die dieselbe Codebase bereits zweimal live
+getroffen hat (Nachtrag zu K4/unauthentifizierten Node-Stream-Ports,
+Nachtrag 81 zu `omp-playout-automation`s Proxy-Umgehung). Stattdessen:
+explizite Pfad-Allowlist (`queryTokenAllowedPath`) für genau die drei
+bekannten Routen (`/api/v1/events`, `/api/v1/nodes/<id>/ui/bundle.js`,
+`/api/v1/nodes/<id>/stream/<name>`) statt einer Header-Heuristik.
+
+**4. §20.4 selbst korrigiert** (s. o.) — beschreibt jetzt den
+tatsächlichen Stand (D3 fertig) statt des veralteten "unscheduled"-
+Zustands, plus die vier hier behobenen Lücken und die bewusst
+zurückgestellten (AD/LDAP, Token-Refresh/Revocation, CORS, mTLS für
+Rust-Nodes/host-agent).
+
+**Verifiziert:** `go build ./...`, `go vet ./...`, `go test ./...`
+(komplettes Orchestrator-Modul) grün, inkl. neuer Tests
+(`internal/auth/lockout_test.go`: Sperre bei 5. Fehlversuch, Entsperren
+nach Ablauf, Fenster-Reset, `RecordSuccess` löscht den Zähler, Sperren
+sind pro Nutzername unabhängig; `auth_handlers_test.go`:
+`handleLogin`s drei Pfade 200/401/429 inkl. Audit-Aufruf und Lockout-
+Interaktion; `auth_middleware_test.go`: `bearerToken()`s Allowlist
+positiv UND negativ, Authorization-Header funktioniert unabhängig vom
+Pfad weiter). Live gegen den echten Dev-Orchestrator: `admin` fünfmal
+mit Falsch-Passwort versucht → 401×5, sechster Versuch MIT korrektem
+Passwort → 429 (Sperre greift auch für das eigentlich richtige
+Passwort, wie beabsichtigt); `SELECT ... FROM audit_log` bestätigt
+alle sechs Versuche inkl. Status-Codes; nach Orchestrator-Neustart
+(Sperre zurückgesetzt, dokumentiertes Verhalten) `/api/v1/events?
+access_token=` weiterhin 200, `/api/v1/instances?access_token=`
+(nicht auf der Allowlist) jetzt 401 ohne Header, mit `Authorization`-
+Header weiterhin 200; echte `omp-viewer`-Instanz bestätigt beide
+node-bezogenen Allowlist-Routen (`ui/bundle.js`, `stream/previewUrl`)
+weiterhin per Query-Param-Token erreichbar.
+
+**Dateien:** `orchestrator/internal/auth/{lockout,lockout_test}.go`
+(neu), `orchestrator/internal/httpapi/{auth_handlers,auth_middleware,
+auth_handlers_test,auth_middleware_test,server}.go`,
+`ARCHITECTURE.md` §20.4.

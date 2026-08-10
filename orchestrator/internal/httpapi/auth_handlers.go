@@ -33,18 +33,40 @@ type loginResponse struct {
 // handleLogin ist POST /api/v1/auth/login — unauthentifiziert erreichbar
 // (sonst könnte sich niemand je anmelden), liefert ein Bearer-Token
 // (NMOS IS-10/BCP-003-02-Transportkonvention, ARCHITECTURE.md §12).
-func handleLogin(authSvc AuthService) http.HandlerFunc {
+//
+// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): vorher war
+// dieser Endpunkt beliebig oft aufrufbar, bcryptes Rechenkosten die
+// einzige Bremse gegen automatisiertes Durchprobieren, und weder
+// erfolgreiche noch fehlgeschlagene Versuche landeten im Audit-Log —
+// ein Credential-Stuffing-Angriff wäre komplett spurlos geblieben.
+// lockout (s. auth.LoginLockout) sperrt einen Nutzernamen nach
+// wiederholten Fehlversuchen; audit protokolliert jeden Versuch
+// (Erfolg/Fehlschlag/Sperre) mit dem versuchten Nutzernamen — auch bei
+// einem nicht existierenden Nutzernamen, s. LoginLockout-Doku, sonst
+// wäre "wird nicht geloggt" selbst wieder ein Enumerations-Orakel.
+func handleLogin(authSvc AuthService, audit AuditLogger, lockout LoginRateLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req loginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
+
+		if lockout.Locked(req.Username) {
+			audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusTooManyRequests)
+			http.Error(w, "too many failed login attempts, try again later", http.StatusTooManyRequests)
+			return
+		}
+
 		token, exp, err := authSvc.Login(r.Context(), req.Username, req.Password)
 		if err != nil {
+			lockout.RecordFailure(req.Username)
+			audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusUnauthorized)
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
+		lockout.RecordSuccess(req.Username)
+		audit.Log(req.Username, r.Method, r.URL.Path, "", http.StatusOK)
 		writeJSON(w, http.StatusOK, loginResponse{Token: token, ExpiresAt: exp, Username: req.Username})
 	}
 }

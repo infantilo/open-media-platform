@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
@@ -200,6 +201,12 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // gegenüber vor D3 Teil 2.
 func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
+	// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): prozesslokal
+	// statt injiziert — reines In-Memory-Rate-Limiting braucht keinen
+	// austauschbaren Test-Doppelgänger, der über die ohnehin schon sehr
+	// lange NewHandler-Parameterliste gereicht werden müsste (s.
+	// auth.LoginLockout-Doku für die Bedrohungsmodell-Begründung).
+	loginLockout := auth.NewLoginLockout()
 
 	// S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): ein Zähler pro
 	// Prozess, geteilt zwischen der zählenden Middleware (unten,
@@ -214,7 +221,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
 	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters))
 
-	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc))
+	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout))
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore)))

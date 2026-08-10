@@ -96,6 +96,52 @@ func TestRequireAuthAcceptsQueryParamTokenForSSE(t *testing.T) {
 	}
 }
 
+// TestBearerTokenQueryParamAllowlist (Sicherheits-Härtung 2026-08-10,
+// ARCHITECTURE.md §20.4): der ?access_token=-Fallback darf NUR für die
+// drei dokumentierten Browser-API-ohne-eigene-Header-Routen greifen
+// (queryTokenAllowedPath), nicht für jeden beliebigen Endpunkt — sonst
+// vergrößert sich die Token-Leck-Fläche (Browser-Historie/Server-Logs)
+// unnötig auf alle anderen, auch schreibenden Endpunkte.
+func TestBearerTokenQueryParamAllowlist(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{"/api/v1/events", true},
+		{"/api/v1/nodes/inst-1/ui/bundle.js", true},
+		{"/api/v1/nodes/inst-1/stream/previewUrl", true},
+		{"/api/v1/nodes/inst-1/stream/levelsUrl", true},
+		// nicht erlaubt: alles andere, auch innerhalb von /api/v1/nodes/.
+		{"/api/v1/instances", false},
+		{"/api/v1/nodes/inst-1/params/gain", false},
+		{"/api/v1/admin/audit-log", false},
+		{"/api/v1/auth/users", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodGet, tc.path+"?access_token=valid-token", nil)
+		token, ok := bearerToken(req)
+		if ok != tc.want {
+			t.Errorf("bearerToken(%s?access_token=...) ok = %v, want %v", tc.path, ok, tc.want)
+		}
+		if tc.want && token != "valid-token" {
+			t.Errorf("bearerToken(%s?access_token=...) token = %q, want valid-token", tc.path, token)
+		}
+	}
+}
+
+// TestBearerTokenAuthorizationHeaderAlwaysWins (Sicherheits-Härtung
+// 2026-08-10): der Authorization-Header muss unabhängig vom Pfad
+// weiterhin funktionieren — die Allowlist betrifft ausschließlich den
+// Query-Param-Fallback.
+func TestBearerTokenAuthorizationHeaderAlwaysWins(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
+	req.Header.Set("Authorization", "Bearer header-token")
+	token, ok := bearerToken(req)
+	if !ok || token != "header-token" {
+		t.Errorf("bearerToken() = (%q, %v), want (header-token, true)", token, ok)
+	}
+}
+
 func TestRequireVerbOnNodeForbidsInsufficientVerbAndAudits(t *testing.T) {
 	auditLog := &fakeAuditSvc{}
 	g := &authGate{

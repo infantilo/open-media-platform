@@ -53,6 +53,15 @@ type AuditLogger interface {
 	Log(username, method, path, nodeID string, status int)
 }
 
+// LoginRateLimiter drosselt Login-Versuche pro Nutzername (implementiert
+// von *auth.LoginLockout, Sicherheits-Härtung 2026-08-10,
+// ARCHITECTURE.md §20.4) — s. handleLogin.
+type LoginRateLimiter interface {
+	Locked(username string) bool
+	RecordFailure(username string)
+	RecordSuccess(username string)
+}
+
 type principalContextKey struct{}
 
 // principalFromContext liefert den authentifizierten Nutzer, den eine
@@ -75,18 +84,50 @@ type authGate struct {
 	workflows WorkflowRoleFinder // Kapitel 12 Teil 4 — darf nil sein (Tests)
 }
 
+// queryTokenAllowedPath meldet, ob r.URL.Path einer der wenigen Routen
+// entspricht, für die bearerToken() unten den ?access_token=-Fallback
+// akzeptiert — jede davon wird vom Browser über eine Web-API aufgerufen,
+// die keine eigenen Header setzen kann:
+//   - GET /api/v1/events (SSE, EventSource-API).
+//   - GET /api/v1/nodes/<id>/ui/bundle.js (natives import() umgeht den
+//     in ui/shell/auth.ts gepatchten fetch()-Wrapper, s. dortige Doku in
+//     ui/shell/ui-bundle.ts).
+//   - GET /api/v1/nodes/<id>/stream/<name> (Node-Stream-Proxy, K4 —
+//     MJPEG-Vorschau/Level-SSE je nach Stream-Typ, aus demselben Grund).
+//
+// Explizite Allowlist statt Header-Heuristik (z. B. `Accept: text/
+// event-stream`): eine Heuristik hätte den import()-Fall übersehen
+// (dessen Accept-Header ist nicht text/event-stream) — live beim
+// Schreiben dieser Änderung bemerkt, bevor es zur Regression wurde. Beim
+// Hinzufügen eines künftigen Endpunkts mit demselben "Browser-API ohne
+// eigene Header"-Bedürfnis: hier ergänzen.
+func queryTokenAllowedPath(path string) bool {
+	if path == "/api/v1/events" {
+		return true
+	}
+	if !strings.HasPrefix(path, "/api/v1/nodes/") {
+		return false
+	}
+	return strings.HasSuffix(path, "/ui/bundle.js") || strings.Contains(path, "/stream/")
+}
+
 // bearerToken liest das Token aus dem Authorization-Header oder,
-// ersatzweise, aus ?access_token= — der Browser-EventSource-API (für
-// /api/v1/events, SSE) fehlt die Möglichkeit, eigene Header zu setzen,
-// das ist eine dokumentierte Einschränkung der Web-Plattform, kein
-// Design-Fehler hier. Query-Param-Tokens sind allgemein üblich für genau
-// diesen Streaming-Fall (z. B. auch bei WebSockets).
+// ersatzweise (nur für queryTokenAllowedPath-Routen), aus ?access_token=.
+//
+// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): der Fallback
+// galt zuvor für JEDEN Request, nicht nur für die drei Routen, die ihn
+// tatsächlich brauchen — ein Token in der URL landet in Browser-
+// Historie/Server-Logs/Referrer-Headern, eine unnötig breite
+// Angriffsfläche für alle anderen (insbesondere schreibenden)
+// Endpunkte, die den Fallback nie nutzen.
 func bearerToken(r *http.Request) (string, bool) {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
 		return strings.TrimPrefix(h, "Bearer "), true
 	}
-	if t := r.URL.Query().Get("access_token"); t != "" {
-		return t, true
+	if queryTokenAllowedPath(r.URL.Path) {
+		if t := r.URL.Query().Get("access_token"); t != "" {
+			return t, true
+		}
 	}
 	return "", false
 }

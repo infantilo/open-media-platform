@@ -13,12 +13,90 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 )
 
+// fakeLoginLockout ist ein Test-Doppelgänger für LoginRateLimiter
+// (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md §20.4).
+type fakeLoginLockout struct {
+	locked          bool
+	recordedFailure string
+	recordedSuccess string
+}
+
+func (f *fakeLoginLockout) Locked(username string) bool { return f.locked }
+func (f *fakeLoginLockout) RecordFailure(username string) {
+	f.recordedFailure = username
+}
+func (f *fakeLoginLockout) RecordSuccess(username string) {
+	f.recordedSuccess = username
+}
+
 // withPrincipal setzt den Principal so in den Request-Kontext, wie es
 // requireVerbGlobal/requireAuth im Erfolgsfall tun (auth_middleware.go) —
 // hier direkt gesetzt, weil diese Tests die Handler ohne die Middleware
 // darüber aufrufen (Kapitel 11 Teil 1, docs/END-GOAL-FEATURES.md §11.4).
 func withPrincipal(r *http.Request, username string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), principalContextKey{}, auth.Principal{Username: username}))
+}
+
+// --- Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): handleLogin ---
+
+func TestHandleLoginSucceedsRecordsSuccessAndAudits200(t *testing.T) {
+	authSvc := fakeAuthSvc{loginToken: "tok", loginExpires: time.Unix(100, 0)}
+	audit := &fakeAuditSvc{}
+	lockout := &fakeLoginLockout{}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"alice","password":"secret123"}`))
+	rec := httptest.NewRecorder()
+	handleLogin(authSvc, audit, lockout)(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if lockout.recordedSuccess != "alice" {
+		t.Errorf("RecordSuccess called with %q, want alice", lockout.recordedSuccess)
+	}
+	if len(audit.logged) != 1 || audit.logged[0].Status != http.StatusOK || audit.logged[0].Username != "alice" {
+		t.Errorf("audit.logged = %+v, want one 200 entry for alice", audit.logged)
+	}
+}
+
+func TestHandleLoginFailureRecordsFailureAndAudits401(t *testing.T) {
+	authSvc := fakeAuthSvc{loginErr: auth.ErrInvalidCredentials}
+	audit := &fakeAuditSvc{}
+	lockout := &fakeLoginLockout{}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"alice","password":"wrong"}`))
+	rec := httptest.NewRecorder()
+	handleLogin(authSvc, audit, lockout)(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if lockout.recordedFailure != "alice" {
+		t.Errorf("RecordFailure called with %q, want alice", lockout.recordedFailure)
+	}
+	if len(audit.logged) != 1 || audit.logged[0].Status != http.StatusUnauthorized {
+		t.Errorf("audit.logged = %+v, want one 401 entry", audit.logged)
+	}
+}
+
+func TestHandleLoginLockedOutSkipsCredentialCheckAndAudits429(t *testing.T) {
+	authSvc := fakeAuthSvc{loginToken: "tok"} // würde bei einem Aufruf "erfolgreich" liefern
+	audit := &fakeAuditSvc{}
+	lockout := &fakeLoginLockout{locked: true}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"username":"alice","password":"secret123"}`))
+	rec := httptest.NewRecorder()
+	handleLogin(authSvc, audit, lockout)(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429 (locked out)", rec.Code)
+	}
+	if lockout.recordedFailure != "" || lockout.recordedSuccess != "" {
+		t.Errorf("lockout = %+v, want neither Record* called while already locked", lockout)
+	}
+	if len(audit.logged) != 1 || audit.logged[0].Status != http.StatusTooManyRequests {
+		t.Errorf("audit.logged = %+v, want one 429 entry", audit.logged)
+	}
 }
 
 func TestHandleListUsersMarksGlobalAdmins(t *testing.T) {
