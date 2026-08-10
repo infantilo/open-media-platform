@@ -96,6 +96,25 @@ links); „Gruppe auflösen" dort macht die Gruppierung wieder rückgängig.
 „Als Workflow speichern" innerhalb einer Gruppe legt aus ihr direkt ein
 startbares Workflow-Objekt an (Abschnitt 4).
 
+### 2.5 Host-Ansicht (Zonen für Mehr-Host-Betrieb)
+
+Sobald mehr als ein Host registriert ist (Abschnitt 8), zeigt der Flow
+Editor auf der Arbeitsfläche automatisch **Host-Zonen** an — je ein
+Rechteck pro Host, mit Label, Online-Punkt und live CPU-/RAM-Anzeige im
+Zonen-Kopf, dazu eine feste Zone „Orchestrator-Host (lokal)" für lokal
+gestartete Instanzen und eine Zone „Unzugeordnet" für Nodes ohne
+Instanz-Launcher-Zuordnung. Jede Kachel liegt sichtbar in der Zone des
+Hosts, auf dem sie tatsächlich läuft — praktisch, um auf einen Blick zu
+sehen, welche Instanz auf welcher Maschine sitzt, gerade wenn eine
+Verbindung zwei Hosts überspannt.
+
+Der Knopf **„Host-Ansicht: An/Aus"** (oben rechts, nur im Root-Graphen
+sichtbar) schaltet die Zonen manuell um; unterhalb von zwei
+registrierten Hosts bleibt sie standardmäßig aus. Positionen innerhalb
+einer Zone lassen sich frei verschieben — dieses Layout wird getrennt
+vom normalen freien Layout gemerkt: Ausschalten stellt die Kachel-
+Positionen von vor dem Einschalten unverändert wieder her.
+
 ## 3. Instanzen-Übersicht
 
 Der Reiter **Instanzen** zeigt alle laufenden Node-Prozesse tabellarisch
@@ -248,6 +267,12 @@ Ein Host-Agent führt ausschließlich Node-Typen aus seinem eigenen,
 lokal konfigurierten Katalog aus — der Orchestrator kann keinen
 beliebigen Befehl auf einem entfernten Host ausführen, das ist eine
 bewusste Sicherheitsgrenze.
+
+Sobald mindestens zwei Hosts registriert sind, zeigt der Flow Editor
+zusätzlich eine **Host-Ansicht** mit Zonen pro Host direkt auf der
+Arbeitsfläche (Abschnitt 2.5) — die Hosts-Tabelle hier bleibt die
+Detailsicht (Registrierung, Ressourcenverlauf), die Zonen im Flow
+Editor zeigen, welche laufende Instanz auf welchem Host sitzt.
 
 ## 9. Operator-Konsole (Regieplatz)
 

@@ -108,7 +108,11 @@ stoppen, über einen Host-Agent mit host-lokalem Katalog als
 Sicherheitsgrenze), automatischer Prozess-Neustart mit
 Crash-Loop-Bremse, ein Metrics-Endpunkt, sowie eine Betriebsansicht mit
 laufenden Instanzen (CPU/RAM je Prozess), Host-Ressourcenverlauf und
-gesammelten Alarmen. Dazu inzwischen: ein Scheduler-Tab für
+gesammelten Alarmen. Der Flow-Editor selbst zeigt bei mehr als einem
+registrierten Host automatisch Host-Zonen auf derselben Arbeitsfläche
+(je eine Zone pro Maschine mit Live-CPU/RAM, feste Lanes, umschaltbar) —
+sichtbar, welche Instanz tatsächlich auf welchem Host läuft, statt nur
+im separaten Hosts-Tab. Dazu inzwischen: ein Scheduler-Tab für
 zeitgesteuertes Start/Stop ganzer Workflows (Tag-/Wochen-/
 Monatsansicht, per Maus verschieb-/größenveränderbare Zeitpläne), eine
 Ressourcen-Vorschau (typische CPU-/RAM-Last je Node-Typ direkt im

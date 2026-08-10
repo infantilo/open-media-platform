@@ -138,6 +138,10 @@ jeder angemeldete Nutzer wird ungefragt ausgeloggt.
   ```
 - Gestartete Instanzen erscheinen automatisch als Kacheln (Selbstregistrierung
   über NMOS, kein manuelles Eintragen).
+- Sobald mehr als ein Host über einen Host-Agenten registriert ist, zeigt
+  der Flow-Editor automatisch Host-Zonen pro Maschine an (Toggle
+  „Host-Ansicht" oben rechts) — Details mit Screenshots:
+  [`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §2.5/§8.
 
 ## 5. Backup & Restore
 
