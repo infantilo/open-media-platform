@@ -2,7 +2,7 @@
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
-Neues, eigenständiges Projekt (getrennt von `PIPELINE CONTROLLER`).
+New, standalone project (separate from `PIPELINE CONTROLLER`).
 
 ## An Open-Source Orchestrator for Broadcast – A Current Status
 
@@ -72,74 +72,74 @@ I'm excited to see how this approach evolves and look forward to exchanging idea
 ## Quickstart
 
 ```sh
-make start   # NATS + NMOS-Registry + Orchestrator, siehe docs/HANDBUCH.md
+make start   # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
 ```
 
-Danach http://localhost:8000 öffnen. Details/Troubleshooting:
-[`docs/HANDBUCH.md`](docs/HANDBUCH.md). Bedienungsanleitung für die
-Oberfläche (mit Screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+Then open http://localhost:8000. Details/troubleshooting:
+[`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
+screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+(Both docs are in German — this README is the only English-language
+entry point so far.)
 
-![Flow Editor mit laufenden Node-Instanzen](docs/screenshots/flow-editor.png)
+![Flow editor with running node instances](docs/screenshots/flow-editor.png)
 
-![Regieplatz "Regie 1": mehrere Microservice-UIs (Audio Mixer, OGraf Grafik, zwei Sources, Video Mixer M/E, Viewer) in einer Operator-Konsole](docs/screenshots/regieplatz-1.png)
+![Control room "Regie 1": several microservice UIs (audio mixer, OGraf graphics, two sources, video mixer M/E, viewer) in one operator console](docs/screenshots/regieplatz-1.png)
 
 ## Status
 
-Architektur/Tech-Stack entschieden (siehe `ARCHITECTURE.md`), Umsetzung
-läuft nach `UMSETZUNG.md` (Status-Checkliste dort, laufend
-fortgeschrieben — dort steht der jeweils aktuelle Stand, nicht hier).
+Architecture/tech stack decided (see `ARCHITECTURE.md`), implementation
+follows `UMSETZUNG.md` (status checklist there, continuously updated —
+that's where the actual current state lives, not here).
 
-Stehen bereits: Fundament, Flow-Editor mit Drag&Drop-Routing,
-Workflow-Objekte/-Presets, der kleine Regieplatz (Source/Switcher/
-Video-Mixer/Audio-Mixer/Player/Multiviewer/Playout-Automation/
-OGraf-Grafik, alle GUI-startbar), Mixer-Presets (Snapshot/Recall),
-ST 2110-Video/AES67-Audio (inkl. Dante im AES67-Modus, SAP-Discovery)
-+ ein natives ST-2110-Gateway zusätzlich zum SRT-Gateway, eine opt-in
-PTP-Zeitbasis für die 2110-Pfade (`OMP_PTP_DOMAIN`, live über zwei
-Netzwerk-Namespaces synchronisiert verifiziert), echter **Remote
-Memory Access** zwischen zwei OMP-Hosts
-über MXL-native Fabrics (`omp-fabrics-gateway`, Software-`tcp`-Provider
-live verifiziert — RDMA-Zero-Copy ohne RDMA-Hardware testbar, s.
-`docs/HANDBUCH.md` §9.3), PostgreSQL-Backend, mTLS
-Orchestrator↔Nodes, ein lokales Nutzer-/Rollenmodell mit Login und
-Audit-Log, ein Node-SDK-Tutorial, Remote-Host-Erkennung samt
-Kommandokanal (Instanzen auch auf einer entfernten Maschine starten/
-stoppen, über einen Host-Agent mit host-lokalem Katalog als
-Sicherheitsgrenze), automatischer Prozess-Neustart mit
-Crash-Loop-Bremse, ein Metrics-Endpunkt, sowie eine Betriebsansicht mit
-laufenden Instanzen (CPU/RAM je Prozess), Host-Ressourcenverlauf und
-gesammelten Alarmen. Der Flow-Editor selbst zeigt bei mehr als einem
-registrierten Host automatisch Host-Zonen auf derselben Arbeitsfläche
-(je eine Zone pro Maschine mit Live-CPU/RAM, feste Lanes, umschaltbar) —
-sichtbar, welche Instanz tatsächlich auf welchem Host läuft, statt nur
-im separaten Hosts-Tab. Dazu inzwischen: ein Scheduler-Tab für
-zeitgesteuertes Start/Stop ganzer Workflows (Tag-/Wochen-/
-Monatsansicht, per Maus verschieb-/größenveränderbare Zeitpläne), eine
-Ressourcen-Vorschau (typische CPU-/RAM-Last je Node-Typ direkt im
-Katalog, aus echter Messhistorie), ein GUI-Import-Weg für
-containerisierte Fremd-Microservices (Podman-Images, Admission-Check,
-mehrere Versionen desselben Typs parallel) und eine Placement-Engine
-(Überlast-Alarm + Zielhost-Vorschlag, berücksichtigt bereits geplante
-Zeitpläne anderer Workflows) — seit Kapitel D6 Teil 4 pro Workflow-Rolle
-konfigurierbar zwischen rein ratschlagend (Default), einer
-Bestätigungsfrist mit automatischem Ausführen bei Ablauf und sofortiger
-automatischer Ausführung, jeweils per echtem Make-before-break-Umzug auf
-einen gesunden Ausweichhost. Seit Kapitel K7 Teil 4 zusätzlich ein
-automatischer Hot-Standby-Failover für kritische Rollen
-(`Role.standbyFor`, Crash-Loop- oder Host-Offline-ausgelöst,
-Bedienzustand wandert über den bestehenden State-Export/Import-
-Mechanismus mit) sowie, seit D8, ein Workflow-Latenzbudget
-(`targetLatencyFrames`): der Orchestrator lehnt eine Verkabelung, die
-das Zielband nicht erreichen kann, hart ab und gleicht zu kurze Pfade
-automatisch per `setOutputDelay()` auf delay-fähigen Nodes aus (bisher
+Already in place: foundation, drag-and-drop flow editor, workflow
+objects/presets, the small control room (source/switcher/video mixer/
+audio mixer/player/multiviewer/playout automation/OGraf graphics, all
+launchable from the GUI), mixer presets (snapshot/recall), ST 2110
+video/AES67 audio (incl. Dante in AES67 mode, SAP discovery) plus a
+native ST 2110 gateway in addition to the SRT gateway, an opt-in PTP
+timebase for the 2110 paths (`OMP_PTP_DOMAIN`, verified live
+synchronized across two network namespaces), real **remote memory
+access** between two OMP hosts via MXL-native Fabrics
+(`omp-fabrics-gateway`, verified live over the software `tcp` provider
+— RDMA zero-copy testable without RDMA hardware, see
+`docs/HANDBUCH.md` §9.3), a PostgreSQL backend, mTLS orchestrator↔
+nodes, a local user/role model with login and audit log, a node SDK
+tutorial, remote-host discovery including a command channel (instances
+can also be started/stopped on a remote machine, via a host agent with
+a host-local catalog as the trust boundary), automatic process restart
+with a crash-loop brake, a metrics endpoint, plus an operations view
+with running instances (CPU/RAM per process), host resource history,
+and collected alarms. The flow editor itself automatically shows host
+zones on the same canvas once more than one host is registered (one
+zone per machine with live CPU/RAM, fixed lanes, toggleable) — makes it
+visible at a glance which instance is actually running on which host,
+not just in the separate hosts tab. Also added since then: a scheduler
+tab for time-driven start/stop of entire workflows (day/week/month
+view, drag-to-move/resize schedules), a resource preview (typical
+CPU/RAM load per node type right in the catalog, from real measurement
+history), a GUI import path for containerized third-party microservices
+(Podman images, admission check, multiple versions of the same type in
+parallel), and a placement engine (overload alarm + target-host
+suggestion, already accounts for other workflows' scheduled runs) —
+since Kapitel D6 Teil 4 configurable per workflow role between purely
+advisory (default), a confirmation window with automatic execution on
+expiry, and immediate automatic execution, each via a real
+make-before-break move to a healthy fallback host. Since Kapitel K7
+Teil 4 additionally an automatic hot-standby failover for critical
+roles (`Role.standbyFor`, triggered by crash-loop or host-offline
+detection, operator state carried over via the existing state
+export/import mechanism), plus, since D8, a workflow latency budget
+(`targetLatencyFrames`): the orchestrator hard-rejects wiring that
+can't meet the target and automatically compensates paths that are too
+short by assigning output delay to capable nodes (currently
 `omp-scaler`, `omp-video-mixer-me`).
 
-Offen: I/O-Karten als eigene, exklusiv belegbare Ressourcenklasse, RDMA-
-Hardware-Anbindung (`verbs`/EFA-Provider, wartet auf
-Hardware-Beschaffung), ein NDI-Gateway sowie proprietäres Dante (Dante
-im AES67-Modus läuft bereits über `omp-aes67-gateway`).
+Open: I/O cards as their own, exclusively-claimable resource class,
+RDMA hardware integration (`verbs`/EFA providers, pending hardware
+procurement), an NDI gateway, and proprietary Dante (Dante in AES67
+mode already runs via `omp-aes67-gateway`).
 
-## Verwandtes Projekt
+## Related project
 
-Für Broadcast-/GStreamer-/Playout-Erfahrung siehe `PIPELINE CONTROLLER`
-(separates Repo, siehe `CLAUDE.md` für Details).
+For broadcast/GStreamer/playout experience, see `PIPELINE CONTROLLER`
+(separate repo, see `CLAUDE.md` for details).
