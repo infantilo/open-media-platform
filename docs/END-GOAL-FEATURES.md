@@ -2630,8 +2630,11 @@ Dokument).
 1. **Zonen-Anordnung:** feste vertikale Lanes nebeneinander
    (übersichtlich, ordnet sich selbst) oder frei verschieb-/
    skalierbare Rechtecke (flexibler, aber mehr Layout-Pflege)?
+   **Beantwortet (2026-08-10): feste vertikale Lanes**, umgesetzt in
+   Teil 1 (docs/decisions.md Nachtrag 137).
 2. Soll die Host-Ansicht automatisch Default werden, sobald mehr als
-   ein Host registriert ist?
+   ein Host registriert ist? **Beantwortet (2026-08-10): ja**, umgesetzt
+   in Teil 1 (docs/decisions.md Nachtrag 137).
 3. Ist der begleitete Umzug per Drag (Teil 3) Teil des Zielbilds, oder
    reicht „Start auf Host X" über die Palette (existiert seit D6
    Teil 2)?

@@ -16536,3 +16536,145 @@ zu D3 Teil 1, das ebenfalls eine eigene Sitzung bekam) — kein
 überstürzter Eingriff in laufende Kernkommunikation (Event-Bus bzw.
 jeder Node-HTTP-Endpunkt) am Ende einer bereits langen Sitzung. Details
 in ARCHITECTURE.md §20.4 dokumentiert, nicht separat versioniert.
+
+## 2026-08-10 (Nachtrag 136) — Rollen-Designer: Speichern-Button auf `.omp-btn-primary`
+
+Letzter offener Politur-Punkt aus der UX/UI-Audit-Reihe (Nachträge
+123-127): `ui/graph/role-designer.ts`s Speichern-Button
+(`#buildToolbar`) war noch ein unstyled `<button>` ohne
+Varianten-Klasse. Anders als `flow-canvas.ts`s eigener Workflow-
+Bearbeiten-Speichern-Button (der `.omp-btn-primary` nur bei
+`#isDraftDirty()` setzt, s. Nachtrag davor) hat der Rollen-Designer
+kein "dirty"-Tracking — er ist immer im aktiven Bearbeiten-Modus
+(Entwurf vor dem ersten Speichern), daher hier immer `.omp-btn-primary`
+statt bedingt.
+
+Zwei weitere Stellen aus der ursprünglichen Gap-Notiz geprüft und
+absichtlich NICHT geändert:
+- MXF-Player-Preset-Editor (`flow-canvas.ts` `#buildMxfPresetsTable`)
+  hat die Varianten-Klassen bereits seit Nachtrag 127 (grep bestätigt
+  Zeilen 3142/3204/3258/3305) — die Gap-Notiz war hier bereits veraltet.
+- Rollen-Designers "×"-Entfernen-Glyph (`#removeRole`) ist ein SVG
+  `<text>`-Element, kein HTML-`<button>` — `.omp-btn-danger` greift
+  dort nicht, hat bereits eine eigene rötliche `fill`-Farbe. Kein
+  `confirmDialog()` ergänzt: das Entfernen betrifft einen ungespeicherten
+  Design-Zeit-Entwurf (nicht live/on-air), gleiche Linie wie Nachtrag
+  124s eigene Unterscheidung "nicht jedes Entfernen braucht eine
+  Bestätigung".
+
+**Verifiziert:** `deno check`/`deno test ui/` grün (84/84). Auf einen
+vollen CDP-Bildschirm-Test verzichtet — reine CSS-Klassen-Zuweisung,
+dieselbe Klasse läuft bereits mehrfach live-verifiziert im selben
+globalen `design-tokens.css`-Stylesheet (Nachträge 123-127).
+
+**Dateien:** `ui/graph/role-designer.ts`.
+
+## 2026-08-10 (Nachtrag 137) — Kapitel 13 Teil 1: Host-Zonen im Flow-Editor (Rendering, kein Backend)
+
+Nutzerauftrag "3,4.13" (Nachtrag 136 + dieser Punkt), nach
+`AskUserQuestion`-Bestätigung des kombinierten Umfangs. Kapitel 13
+(`docs/END-GOAL-FEATURES.md` §13) war bereits vollständig entworfen
+(Ist-Zustand, Ziel-Design, Phasenplan, vier offene Fragen an den
+Projektinhaber) — Teil 1 laut Phasenplan: "Zonen-Rendering, eine
+Sitzung, kein Backend" (§13.1 bestätigt: `Instance.HostID` existiert
+serverseitig bereits vollständig, der Join `graph.instanceId →
+instances.hostId → hosts.label` ist reine Client-Arbeit).
+
+Vor der Umsetzung zwei der vier offenen Fragen per `AskUserQuestion`
+geklärt (die anderen beiden betreffen Teil 3 bzw. den Hosts-Tab, für
+Teil 1 nicht entscheidungsrelevant):
+- §13.5 Frage 1 (Zonen-Anordnung): **feste vertikale Lanes** (nicht
+  frei verschiebbare Rechtecke) — ein Host = eine Spalte, Kacheln
+  innerhalb einer Lane bleiben frei positionierbar.
+- §13.5 Frage 2 (Auto-Default): **ja, automatisch ab 2 registrierten
+  Hosts** — vorher bleibt die Host-Ansicht aus wie bisher.
+
+### Design
+
+- **Zonen-Zuordnung** (`#zoneIdForTile`): `"local"` (kein
+  `instanceId→hostId`, inkl. lokal gestarteter Instanzen — der
+  Orchestrator-Host registriert sich nie selbst als `hosts`-Zeile, s.
+  §13.1), `"unassigned"` (gar kein `instanceId`, manuell außerhalb des
+  Launchers gestartete Nodes, C8), sonst die echte `hostId`. Reihenfolge
+  der Lanes (`#hostZones`): immer zuerst lokal, dann alle registrierten
+  Hosts in API-Reihenfolge, "Unzugeordnet" nur falls tatsächlich eine
+  Kachel betroffen ist.
+- **Bewusst außen vor:** Gruppen- und (kollabierte) Workflow-Kacheln
+  bekommen keine Zonen-Zuordnung — beide können mehrere Hosts
+  aggregieren (ein Regieplatz kann über zwei Hosts liegen, §13.3 "Zusammenspiel
+  mit K12"), eine einzelne Zonen-Zuordnung wäre dafür keine ehrliche
+  Aussage. Sie bleiben im freien Layout sichtbar, unverändert von der
+  Host-Ansicht.
+- **Zwei getrennt gemerkte Positions-Sätze** für Root-Node-Kacheln
+  (`LayoutBlob.positions` bleibt IMMER das freie Layout,
+  `LayoutBlob.hostViewPositions` NEU die separat gemerkte
+  Lane-Anordnung — §13.3 wörtlich: "Positionen werden beim Einschalten
+  … angeordnet und separat gemerkt, Ausschalten stellt das freie Layout
+  wieder her"). Umgesetzt ohne Umbau der ca. 50 bestehenden
+  `#positions`-Zugriffsstellen im Modul: `#positions` bleibt das EINE
+  aktive Feld, `#enableHostView()`/`#disableHostView()` tauschen beim
+  Umschalten nur den INHALT der Root-Node-Einträge aus (Backup in
+  `#freeRootPositions`, reiner Laufzeit-Zustand). `#saveLayout()` baut
+  daraus beim Speichern wieder die zwei korrekten Sichten für den
+  Server zusammen — sonst hätte ein Reload während aktiver Host-Ansicht
+  das freie Layout dauerhaft mit Lane-Koordinaten überschrieben (im
+  Code als eigener Kommentar festgehalten, live per
+  `GET /api/v1/layouts/default` nach einem Toggle-Zyklus bestätigt:
+  `hostViewPositions` enthält die Lane-Koordinaten, `positions` weiterhin
+  die freien).
+- **Live-Metriken im Zonen-Kopf:** `GET /api/v1/hosts` liefert
+  `metrics` bereits vollständig (gleiches Wire-Format wie
+  `hosts-view.ts`) — kein neuer Endpunkt. Online-Punkt: grün, wenn die
+  letzte Telemetrie < 15s alt ist (Host-Agent sendet alle 5s), sonst
+  grau — reine Client-Schätzung, kein neues Server-Feld. Reagiert live
+  auf `omp.host.<id>.metrics`-SSE-Ticks über einen neuen
+  leichtgewichtigen Pfad (`#refreshHostMetrics`, nur `GET
+  /api/v1/hosts`, nicht der komplette `#renderPalette()`-Refresh mit
+  Katalog/Instanzen) sowie auf `host.registered` (voller
+  `#renderPalette()`-Refresh, seltenes Event, prüft auch den
+  Auto-Default neu).
+- **Toolbar-Toggle** ("Host-Ansicht: An/Aus", `.omp-btn-primary` wenn
+  aktiv) nur am Root sichtbar (`#scope === null`) — Zonen bilden immer
+  die gesamte Root-Ebene ab, innerhalb einer B5-Gruppe keine sinnvolle
+  Aussage.
+- **Z-Ordnung:** neue unterste Ebene `#buildHostZoneLayer` (eigenes
+  `<g data-role="host-zones">`, `pointer-events:none` — reines
+  Hintergrundbild, Pan/Rubber-Band-Select bleiben unverändert
+  klickbar), Kanten-Einfügepunkt in `#render()` von "immer ganz vorne"
+  auf "nach der Zonen-Ebene, vor den Kacheln" umgestellt (fällt ohne
+  aktive Host-Ansicht auf das alte Verhalten zurück).
+
+### Verifiziert
+
+`deno check`/`deno test ui/` grün (84/84, keine Regression). Live gegen
+echten Orchestrator/Postgres/NATS/Registry: zweiter echter
+`omp-host-agent`-Prozess auf derselben Dev-Maschine registriert
+(gleiches Zwei-Host-Testmuster wie D6/K7-Teil-4-Nachträge, echtes
+Admin-Bootstrap-Token), echte `omp-source`-Remote-Instanz mit `hostId`
+auf diesen Host gestartet. Per CDP (Deno-natives WebSocket, kein
+externes Tool nötig) im echten Headless-Chromium bestätigt:
+- Auto-Default korrekt aktiv ("Host-Ansicht: An") sobald der zweite
+  Host registriert war, ohne manuellen Klick.
+- Vier Zonen gerendert: lokal, zwei echte Hosts (einer mit lebendigem
+  Host-Agent — grüner Punkt, CPU/RAM live von der echten `/proc`-Messung
+  —, einer mit zwischenzeitlich beendetem Prozess — korrekt grauer
+  Punkt, letzte bekannte Metrik weiter angezeigt), "Unzugeordnet".
+- Die Remote-`omp-source`-Kachel lag sichtbar innerhalb der Lane ihres
+  tatsächlichen Hosts, nicht der lokalen Zone.
+- Toggle aus → alle vier Zonen verschwinden, die Kachel fällt auf ihre
+  (mangels vorheriger freier Position frisch zugewiesene)
+  Default-Rasterposition zurück. Toggle wieder an → identische vier
+  Zonen-IDs erneut, Lane-Zuordnung unverändert.
+- `GET /api/v1/layouts/default` nach dem Zyklus bestätigt die korrekte
+  Trennung der zwei Positions-Sätze (s. Design-Abschnitt oben).
+
+Test-Instanz gestoppt, Host-Agent-Prozess beendet, beide Test-Host-Zeilen
+aus der DB entfernt (gleiche Aufräum-Disziplin wie frühere
+Zwei-Host-Verifikationen).
+
+**Bewusst nicht Teil dieser Sitzung** (Phasenplan §13.4): Teil 2
+(Kanten-Klassifizierung/MXL-Warnstil über Zonengrenzen, Zonen-Kollaps)
+und Teil 3 (Drag = begleiteter Host-Umzug) — beide im Dokument bereits
+konkret vorgeplant, keine neue Recherche nötig, wenn aufgegriffen.
+
+**Dateien:** `ui/graph/flow-canvas.ts`.

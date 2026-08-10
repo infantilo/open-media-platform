@@ -54,6 +54,23 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
 
+// Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3/§13.4 Teil 1): feste
+// Lane-Breite/Kopfhöhe für die Host-Ansicht — konstant statt vom
+// Inhalt abgeleitet (das ist gerade der Punkt der "festen Lanes",
+// §13.5 Frage 1), nur die Lane-Höhe wächst mit der tatsächlichen
+// Kachel-Anzahl (s. #buildHostZoneLayer).
+const HOST_ZONE_LANE_WIDTH = NODE_WIDTH + 100;
+const HOST_ZONE_LANE_GAP = 30;
+const HOST_ZONE_HEADER_HEIGHT = 46;
+const HOST_ZONE_TILE_GAP = 24;
+const HOST_ZONE_MARGIN = 24;
+// Ein Host gilt als "online", wenn seine letzte Telemetrie nicht älter
+// als das Dreifache des Sende-Intervalls ist (host-agent, alle 5s,
+// s. host-agent/main.go) — großzügig genug, um einzelne verpasste
+// NATS-Zyklen nicht sofort als offline zu werten, aber knapp genug,
+// dass ein tatsächlich abgeschalteter Host zeitnah als offline zeigt.
+const HOST_ONLINE_THRESHOLD_MS = 15000;
+
 // Gleicher Storage-Key wie `auth.ts`s `TOKEN_KEY`/`connection.ts`s eigene
 // Kopie davon, absichtlich dupliziert statt eines gemeinsamen Imports
 // (s. `connection.ts`s Begründung: `auth.ts`s Modul-Ladezeit-Seiteneffekt
@@ -128,6 +145,15 @@ interface LayoutBlob {
   // ohne das landeten gespeicherte Kachel-Positionen nach einem Reload
   // ggf. außerhalb des sichtbaren Bereichs (Nutzerfund 2026-07-12).
   viewport?: Viewport;
+  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3): "Positionen werden
+  // beim Einschalten [der Host-Ansicht] innerhalb der Zone des
+  // jeweiligen Hosts angeordnet und separat gemerkt — Ausschalten
+  // stellt das freie Layout wieder her." `positions` bleibt IMMER die
+  // freie Kachel-Anordnung (auch während die Host-Ansicht aktiv ist,
+  // s. #saveLayout); dieses Feld hält nur die Root-Node-Positionen der
+  // Lane-Anordnung, separat vom freien Layout. Fehlt bei älteren
+  // Layouts — dann berechnet #enableHostView() die Lanes einmalig neu.
+  hostViewPositions?: Record<string, Point>;
 }
 
 interface SnapshotSummary {
@@ -264,12 +290,25 @@ interface LauncherInstance {
   version?: string;
 }
 
+// Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3): Momentwert-Telemetrie für
+// den Zonen-Kopf im Host-Ansicht-Modus — gleiches Wire-Format wie
+// hosts-view.ts' eigene (separate, bewusst duplizierte statt geteilte)
+// HostMetrics-Deklaration.
+interface HostMetrics {
+  cpuPercent: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  receivedAt: string;
+}
+
 // HostEntry — Wire-Format identisch zu httpapi.hostResponse
 // (ARCHITECTURE.md §18, UMSETZUNG.md D6). Nur die für die Katalog-
-// Palette gebrauchten Felder.
+// Palette gebrauchten Felder — metrics zusätzlich seit Kapitel 13 für
+// den Zonen-Kopf (Live-CPU/RAM, s. #buildHostZoneLayer).
 interface HostEntry {
   id: string;
   label: string;
+  metrics?: HostMetrics;
 }
 
 // ProfileResponse — Wire-Format identisch zu httpapi.profileResponse
@@ -356,6 +395,15 @@ const GRAPH_REFRESH_EVENT_TYPES = new Set([
 ]);
 const TALLY_EVENT_PREFIX = "omp.tally.";
 const DRAG_THRESHOLD_PX = 3;
+
+// Kapitel 13: gleiches Erkennungsmuster für den rohen NATS-Subject-
+// Passthrough "omp.host.<id>.metrics" wie hosts-view.ts' eigene (bewusst
+// duplizierte, s. dortige Modul-Doku) isRefreshEvent()-Prüfung.
+const HOST_METRICS_SUBJECT_PREFIX = "omp.host.";
+const HOST_METRICS_SUBJECT_SUFFIX = ".metrics";
+function isHostMetricsEvent(type: string): boolean {
+  return type.startsWith(HOST_METRICS_SUBJECT_PREFIX) && type.endsWith(HOST_METRICS_SUBJECT_SUFFIX);
+}
 
 export class FlowCanvas extends HTMLElement {
   #viewport: Viewport = { ...IDENTITY_VIEWPORT };
@@ -478,6 +526,24 @@ export class FlowCanvas extends HTMLElement {
   #paletteInstances: LauncherInstance[] = [];
   #paletteHosts: HostEntry[] = [];
 
+  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13): Host-Zonen im
+  // Flow-Editor. #hostViewEnabled ist nur bei #scope===null relevant
+  // (root) — s. #buildHostZoneLayer/#renderBreadcrumb. #hostViewUserSet
+  // unterscheidet "noch nie manuell umgeschaltet" (dann greift der
+  // Auto-Default ab >1 Host, §13.5 Frage 2, Nutzerentscheidung
+  // 2026-08-10) von einer bewussten Nutzerwahl, die der Auto-Default
+  // danach nicht mehr überschreibt. #hostViewPositions ist die separat
+  // gemerkte Lane-Anordnung (persistiert, s. LayoutBlob); #freeRoot
+  // Positions ist nur ein Laufzeit-Backup der freien Layout-Positionen
+  // der Root-Node-Kacheln für die Dauer der aktiven Host-Ansicht (s.
+  // #enableHostView/#saveLayout) — kein eigenes Persistenzfeld nötig,
+  // #positions selbst bleibt bei ausgeschalteter Host-Ansicht ohnehin
+  // die freie Wahrheit.
+  #hostViewEnabled = false;
+  #hostViewUserSet = false;
+  #hostViewPositions: Record<string, Point> = {};
+  #freeRootPositions: Record<string, Point> = {};
+
   // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
   #renderQueue: Promise<void> = Promise.resolve();
   #viewportSaveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -536,6 +602,7 @@ export class FlowCanvas extends HTMLElement {
         const blob = (await response.json()) as Partial<LayoutBlob>;
         this.#positions = blob.positions ?? {};
         this.#groupTree = blob.groups ?? emptyTree();
+        this.#hostViewPositions = blob.hostViewPositions ?? {};
         // Gespeicherte Layouts von vor diesem Fix (2026-07-12) haben kein
         // `viewport`-Feld — dann auf den Kachel-Bestand zentrieren statt
         // stur auf IDENTITY_VIEWPORT zurückzufallen (Nutzerfund: nach
@@ -560,11 +627,38 @@ export class FlowCanvas extends HTMLElement {
     this.#groupTree = emptyTree();
   }
 
+  // Kapitel 13: solange die Host-Ansicht aktiv ist, hält #positions für
+  // die Root-Node-Kacheln die Lane-Anordnung, nicht das freie Layout —
+  // ein naives `positions: this.#positions` würde das freie Layout beim
+  // Speichern also stillschweigend mit Lane-Koordinaten überschreiben
+  // (bei einem Reload während aktiver Host-Ansicht sonst dauerhaft
+  // verloren). #hostViewPositions wird hier zusätzlich aus dem
+  // aktuellen #positions synchronisiert (deckt auch ein Verschieben
+  // einer Kachel INNERHALB der Host-Ansicht ab, nicht nur den
+  // Ein-/Ausschalt-Übergang selbst).
   async #saveLayout() {
+    let positionsToPersist = this.#positions;
+    let hostViewPositionsToPersist = this.#hostViewPositions;
+    if (this.#hostViewEnabled) {
+      const rootIds = this.#rootNodeTileIds();
+      const syncedHostViewPositions = { ...this.#hostViewPositions };
+      const freeOverride: Record<string, Point> = {};
+      for (const id of rootIds) {
+        if (this.#positions[id]) syncedHostViewPositions[id] = this.#positions[id];
+        if (this.#freeRootPositions[id]) freeOverride[id] = this.#freeRootPositions[id];
+      }
+      hostViewPositionsToPersist = syncedHostViewPositions;
+      positionsToPersist = { ...this.#positions, ...freeOverride };
+      for (const id of rootIds) {
+        if (!this.#freeRootPositions[id]) delete positionsToPersist[id];
+      }
+      this.#hostViewPositions = syncedHostViewPositions;
+    }
     const blob: LayoutBlob = {
-      positions: this.#positions,
+      positions: positionsToPersist,
       groups: this.#groupTree,
       viewport: this.#viewport,
+      hostViewPositions: hostViewPositionsToPersist,
     };
     try {
       const response = await apiFetch(`/api/v1/layouts/${LAYOUT_NAME}`, {
@@ -604,6 +698,21 @@ export class FlowCanvas extends HTMLElement {
       const nodeId = parsed.type.slice(TALLY_EVENT_PREFIX.length);
       const on = (parsed.data as { on?: boolean } | null)?.on === true;
       this.#setTally(nodeId, on);
+      return;
+    }
+
+    // Kapitel 13: ein neu registrierter Host kann den Auto-Default
+    // (§13.5 Frage 2) umschalten — voller #renderPalette()-Refresh wie
+    // beim Crash-/Neustart-Pfad unten (seltenes Event, kein Performance-
+    // Thema). Reine CPU/RAM-Ticks (alle 5s pro Host) bekommen dagegen
+    // den leichtgewichtigen Pfad, damit nicht bei jedem Tick Katalog +
+    // Instanzen unnötig neu geholt werden.
+    if (parsed.type === "host.registered") {
+      void this.#renderPalette();
+      return;
+    }
+    if (isHostMetricsEvent(parsed.type)) {
+      if (this.#hostViewEnabled) void this.#refreshHostMetrics();
       return;
     }
 
@@ -772,8 +881,17 @@ export class FlowCanvas extends HTMLElement {
     // #fitViewportToPositions() zurück, weil `blob.viewport` dann schon
     // (falsch) gesetzt wäre.
     let changed = this.#pruneStalePositions();
+    changed = this.#pruneStaleHostViewPositions() || changed;
     changed = this.#reconcileGroupScopePendingInstances() || changed;
     changed = this.#assignMissingPositions(false) || changed;
+    // Kapitel 13: zwischenzeitlich neu erschienene Root-Node-Kacheln
+    // (z. B. per Instanz-Launcher gestartet, während die Host-Ansicht
+    // bereits aktiv ist) bekämen sonst erst beim nächsten manuellen
+    // Ein-/Ausschalten eine Lane-Position statt der generischen
+    // #assignMissingPositions()-Rasterposition oben.
+    if (this.#hostViewEnabled) {
+      changed = this.#arrangeIntoLanes(this.#rootNodeTiles()) || changed;
+    }
     if (this.#viewportNeedsFit) {
       this.#viewportNeedsFit = false;
       this.#viewport = this.#fitViewportToPositions();
@@ -803,6 +921,23 @@ export class FlowCanvas extends HTMLElement {
     for (const id of Object.keys(this.#positions)) {
       if (!validIds.has(id)) {
         delete this.#positions[id];
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // Kapitel 13: Gegenstück zu #pruneStalePositions() für die separat
+  // gemerkte Lane-Anordnung (#hostViewPositions) — die enthält nur
+  // Root-Node-IDs (nie Gruppen/Workflows, s. #arrangeIntoLanes), sonst
+  // wächst sie über viele Sitzungen unbegrenzt mit längst entfernten
+  // Instanzen weiter.
+  #pruneStaleHostViewPositions(): boolean {
+    const validIds = new Set(this.#graph.nodes.map((n) => n.id));
+    let changed = false;
+    for (const id of Object.keys(this.#hostViewPositions)) {
+      if (!validIds.has(id)) {
+        delete this.#hostViewPositions[id];
         changed = true;
       }
     }
@@ -922,6 +1057,147 @@ export class FlowCanvas extends HTMLElement {
       this.#scope,
       this.#graph.nodes.map((n) => n.id),
     );
+  }
+
+  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13): dieselbe Node-Auswahl
+  // wie #itemsAtScope()/#buildTilesAtScope() für den Root-Scope, aber
+  // bewusst UNABHÄNGIG vom aktuell offenen #scope — die Host-Ansicht
+  // betrifft immer die Root-Kacheln, auch wenn der Aufruf (z. B.
+  // #saveLayout während einer Kachel-Verschiebung innerhalb einer
+  // Gruppe) gerade in einem anderen Scope passiert. Gruppen-/Workflow-
+  // Kacheln bleiben bewusst außen vor (s. #zoneIdForTile-Doku).
+  #rootNodeTileIds(): string[] {
+    const items = topLevelItems(this.#groupTree, null, this.#graph.nodes.map((n) => n.id));
+    const workflowMemberIds = this.#allWorkflowMemberNodeIds();
+    return items.nodeIds.filter((id) => !workflowMemberIds.has(id));
+  }
+
+  #rootNodeTiles(): TileSpec[] {
+    const rootIds = new Set(this.#rootNodeTileIds());
+    const tiles: TileSpec[] = [];
+    for (const node of this.#graph.nodes) {
+      if (!rootIds.has(node.id)) continue;
+      tiles.push({
+        id: node.id,
+        label: node.label,
+        inputs: node.inputs,
+        outputs: node.outputs,
+        kind: "node",
+        health: node.health,
+        instanceId: node.instanceId,
+      });
+    }
+    return tiles;
+  }
+
+  // Welcher Zone (Host) eine Root-Node-Kachel zugeordnet ist — reine
+  // Client-Arbeit (§13.1: "der Join graph.instanceId → instances.hostId
+  // → hosts.label ist reine Client-Arbeit, für Teil 1 ist kein neuer
+  // Endpunkt nötig"). "local" = kein instanceId→hostId (lokal gestartet
+  // oder Instanz-Liste kurzzeitig veraltet), "unassigned" = gar kein
+  // instanceId (manuell gestartet, kein Launcher-Node, C8).
+  #zoneIdForTile(tile: TileSpec): string {
+    if (!tile.instanceId) return "unassigned";
+    const inst = this.#paletteInstances.find((i) => i.id === tile.instanceId);
+    if (!inst || !inst.hostId) return "local";
+    return inst.hostId;
+  }
+
+  // Zonen-Reihenfolge für die festen Lanes (§13.5 Frage 1, Nutzerwahl
+  // 2026-08-10: "feste vertikale Lanes"): immer zuerst die lokale Zone
+  // (Orchestrator-Host selbst registriert sich nie als eigener Host-
+  // Datensatz, s. §13.1), dann alle registrierten Remote-Hosts in
+  // API-Reihenfolge, zuletzt — nur falls tatsächlich mindestens eine
+  // Kachel betroffen ist — "Unzugeordnet".
+  #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics }[] {
+    const zones: { id: string; label: string; metrics?: HostMetrics }[] = [
+      { id: "local", label: "Orchestrator-Host (lokal)" },
+      ...this.#paletteHosts.map((h) => ({ id: h.id, label: h.label, metrics: h.metrics })),
+    ];
+    if (tiles.some((t) => this.#zoneIdForTile(t) === "unassigned")) {
+      zones.push({ id: "unassigned", label: "Unzugeordnet" });
+    }
+    return zones;
+  }
+
+  // Ordnet jede der übergebenen Root-Node-Kacheln in die Lane ihrer
+  // Zone ein — bereits in #hostViewPositions gemerkte Kacheln behalten
+  // ihre (ggf. innerhalb der Lane verschobene) Position, nur wirklich
+  // neue bekommen eine Default-Stapelposition innerhalb ihrer Lane.
+  // Rein additiv zu #positions (schreibt nur die übergebenen IDs) —
+  // aufrufbar sowohl beim Einschalten (alle Root-Node-Kacheln) als auch
+  // nach einem #fetchAndRender() für zwischenzeitlich neu erschienene
+  // Kacheln (s. dortiger Aufruf).
+  #arrangeIntoLanes(tiles: TileSpec[]): boolean {
+    let changed = false;
+    const zones = this.#hostZones(tiles);
+    let x = HOST_ZONE_MARGIN;
+    for (const zone of zones) {
+      const zoneTiles = tiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
+      for (const tile of zoneTiles) {
+        const remembered = this.#hostViewPositions[tile.id];
+        const pos = remembered ?? { x, y };
+        if (!this.#positions[tile.id] || this.#positions[tile.id].x !== pos.x || this.#positions[tile.id].y !== pos.y) {
+          this.#positions[tile.id] = pos;
+          changed = true;
+        }
+        if (!remembered) this.#hostViewPositions[tile.id] = pos;
+        const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
+        y += height + HOST_ZONE_TILE_GAP;
+      }
+      x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
+    }
+    return changed;
+  }
+
+  // Auto-Default (§13.5 Frage 2, Nutzerentscheidung 2026-08-10: "ja,
+  // automatisch ab 2 Hosts"): greift nur, solange der Nutzer die
+  // Host-Ansicht in dieser Sitzung noch nicht selbst umgeschaltet hat
+  // (#hostViewUserSet) — danach hat die bewusste Wahl Vorrang, auch
+  // wenn sich die Host-Zahl danach nochmal ändert. Von #renderPalette()
+  // nach jedem Host-Abruf aufgerufen (dort wird #paletteHosts befüllt).
+  #updateHostViewAutoDefault() {
+    if (this.#hostViewUserSet) return;
+    const shouldEnable = this.#paletteHosts.length > 1;
+    if (shouldEnable !== this.#hostViewEnabled) this.#toggleHostView(shouldEnable, false);
+  }
+
+  #toggleHostView(enabled: boolean, userInitiated = true) {
+    if (userInitiated) this.#hostViewUserSet = true;
+    if (enabled === this.#hostViewEnabled) return;
+    if (enabled) this.#enableHostView();
+    else this.#disableHostView();
+  }
+
+  // s. #hostViewEnabled-Doku: #positions hält für die Root-Node-Kacheln
+  // ab hier die Lane-Anordnung statt des freien Layouts — #freeRoot
+  // Positions sichert das freie Layout für #disableHostView().
+  #enableHostView() {
+    const rootIds = this.#rootNodeTileIds();
+    this.#freeRootPositions = {};
+    for (const id of rootIds) {
+      if (this.#positions[id]) this.#freeRootPositions[id] = this.#positions[id];
+    }
+    this.#hostViewEnabled = true;
+    this.#arrangeIntoLanes(this.#rootNodeTiles());
+    this.#render();
+    this.#saveLayout();
+  }
+
+  #disableHostView() {
+    const rootIds = this.#rootNodeTileIds();
+    for (const id of rootIds) {
+      if (this.#positions[id]) this.#hostViewPositions[id] = this.#positions[id];
+    }
+    this.#hostViewEnabled = false;
+    for (const id of rootIds) {
+      if (this.#freeRootPositions[id]) this.#positions[id] = this.#freeRootPositions[id];
+      else delete this.#positions[id];
+    }
+    this.#assignMissingPositions(false);
+    this.#render();
+    this.#saveLayout();
   }
 
   #allPortRefs(): PortRef[] {
@@ -1698,6 +1974,14 @@ export class FlowCanvas extends HTMLElement {
       );
     }
 
+    // Kapitel 13: Zonen-Hintergrund ist die unterste Ebene der Canvas —
+    // vor allem anderen angehängt, damit Kanten/Kacheln optisch darüber
+    // liegen (s. #buildHostZoneLayer-Doku für die Scope-Einschränkung).
+    const zoneLayer = (this.#hostViewEnabled && this.#scope === null)
+      ? this.#buildHostZoneLayer(tiles.filter((t) => t.kind === "node"))
+      : null;
+    if (zoneLayer) this.#viewportGroup.appendChild(zoneLayer);
+
     for (const workflowTile of this.#renderWorkflowTiles()) {
       this.#viewportGroup.appendChild(workflowTile);
     }
@@ -1706,7 +1990,12 @@ export class FlowCanvas extends HTMLElement {
     }
     for (const edge of this.#graph.edges) {
       const edgeEl = this.#renderEdge(edge);
-      if (edgeEl) this.#viewportGroup.insertBefore(edgeEl, this.#viewportGroup.firstChild);
+      if (edgeEl) {
+        // Kanten sollen über dem Zonen-Hintergrund, aber unter den
+        // Kacheln liegen — ohne zoneLayer bleibt es beim bisherigen
+        // Verhalten (ganz vorne, s. Git-Historie vor Kapitel 13).
+        this.#viewportGroup.insertBefore(edgeEl, zoneLayer ? zoneLayer.nextSibling : this.#viewportGroup.firstChild);
+      }
     }
   }
 
@@ -1912,6 +2201,20 @@ export class FlowCanvas extends HTMLElement {
     fitBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
+
+    // Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3: "Umschaltbar:
+    // Toolbar-Toggle 'Host-Ansicht'") — nur am Root sinnvoll, s.
+    // #buildHostZoneLayer-Doku (Zonen bilden immer die GESAMTE
+    // Root-Ebene ab, nicht den Inhalt einer B5-Gruppe).
+    if (this.#scope === null) {
+      const hostViewBtn = document.createElement("button");
+      hostViewBtn.setAttribute("data-role", "host-view-toggle");
+      hostViewBtn.textContent = this.#hostViewEnabled ? "Host-Ansicht: An" : "Host-Ansicht: Aus";
+      if (this.#hostViewEnabled) hostViewBtn.className = "omp-btn-primary";
+      hostViewBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
+      hostViewBtn.addEventListener("click", () => this.#toggleHostView(!this.#hostViewEnabled));
+      this.#breadcrumbBar.appendChild(hostViewBtn);
+    }
 
     if (this.#scope !== null) {
       const dissolveBtn = document.createElement("button");
@@ -2157,6 +2460,107 @@ export class FlowCanvas extends HTMLElement {
       y: rect.height / 2 - (minY + maxY) / 2,
       scale: 1,
     };
+  }
+
+  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3): der Hintergrund-Ebene
+  // "ein Zonen-Rechteck mit Kopfzeile (Label, Online-Punkt, CPU/RAM
+  // live) pro registriertem Host". Nur am Root sinnvoll (#render() ruft
+  // dies auch nur dort auf) — Zonen bilden immer die GESAMTE Fläche ab,
+  // eine B5-Gruppe zeigt nur einen Ausschnitt ihrer Mitglieder, deren
+  // Host-Zugehörigkeit hier keine sinnvolle Lane-Aussage mehr hätte.
+  // `pointer-events:none` auf jedem Element: reines Hintergrundbild,
+  // Klicks (Pan/Rubber-Band-Select) müssen unverändert bis zur Canvas
+  // durchgereicht werden.
+  #buildHostZoneLayer(nodeTiles: TileSpec[]): SVGGElement {
+    const layer = document.createElementNS(SVG_NS, "g");
+    layer.setAttribute("data-role", "host-zones");
+    layer.setAttribute("pointer-events", "none");
+
+    const zones = this.#hostZones(nodeTiles);
+    let x = HOST_ZONE_MARGIN;
+    for (const zone of zones) {
+      const zoneTiles = nodeTiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      let bottom = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2;
+      for (const tile of zoneTiles) {
+        const pos = this.#positions[tile.id];
+        if (!pos) continue;
+        const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
+        bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+      }
+
+      const g = document.createElementNS(SVG_NS, "g");
+      g.setAttribute("data-role", "host-zone");
+      g.setAttribute("data-host-id", zone.id);
+      g.setAttribute("transform", `translate(${x},0)`);
+
+      const rect = document.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", "0");
+      rect.setAttribute("y", "0");
+      rect.setAttribute("width", String(HOST_ZONE_LANE_WIDTH));
+      rect.setAttribute("height", String(bottom));
+      rect.setAttribute("rx", "6");
+      rect.setAttribute("fill", "#26282b");
+      rect.setAttribute("stroke", "#3a3d42");
+      rect.setAttribute("stroke-width", "1");
+      g.appendChild(rect);
+
+      const header = document.createElementNS(SVG_NS, "rect");
+      header.setAttribute("x", "0");
+      header.setAttribute("y", "0");
+      header.setAttribute("width", String(HOST_ZONE_LANE_WIDTH));
+      header.setAttribute("height", String(HOST_ZONE_HEADER_HEIGHT));
+      header.setAttribute("rx", "6");
+      header.setAttribute("fill", "#2f3237");
+      g.appendChild(header);
+
+      // Online-Punkt (§13.3) nur für echte Hosts (Metriken kommen per
+      // NATS vom Host-Agent, s. HOST_ONLINE_THRESHOLD_MS-Doku) — die
+      // lokale Zone hat keinen eigenen Host-Agent (der Orchestrator
+      // selbst registriert sich nie als Host, s. §13.1) und
+      // "Unzugeordnet" ist kein Host, also kein Punkt für beide.
+      let labelX = 10;
+      if (zone.id !== "local" && zone.id !== "unassigned") {
+        const online = !!zone.metrics &&
+          Date.now() - Date.parse(zone.metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
+        const dot = document.createElementNS(SVG_NS, "text");
+        dot.setAttribute("x", "10");
+        dot.setAttribute("y", "18");
+        dot.setAttribute("fill", online ? "#4caf50" : "#777");
+        dot.setAttribute("font-size", "12");
+        dot.textContent = "●";
+        g.appendChild(dot);
+        labelX = 22;
+      }
+
+      const label = document.createElementNS(SVG_NS, "text");
+      label.setAttribute("x", String(labelX));
+      label.setAttribute("y", "18");
+      label.setAttribute("fill", "#e0e0e0");
+      label.setAttribute("font-size", "12");
+      label.textContent = truncateTileTitle(zone.label, 26);
+      if (zone.label.length > 26) {
+        const tooltip = document.createElementNS(SVG_NS, "title");
+        tooltip.textContent = zone.label;
+        label.appendChild(tooltip);
+      }
+      g.appendChild(label);
+
+      if (zone.metrics) {
+        const metricsText = document.createElementNS(SVG_NS, "text");
+        metricsText.setAttribute("x", String(labelX));
+        metricsText.setAttribute("y", "34");
+        metricsText.setAttribute("fill", "#9aa0a6");
+        metricsText.setAttribute("font-size", "10");
+        const gb = (bytes: number) => (bytes / 1024 / 1024 / 1024).toFixed(1);
+        metricsText.textContent =
+          `CPU ${zone.metrics.cpuPercent.toFixed(0)}% · RAM ${gb(zone.metrics.memUsedBytes)}/${gb(zone.metrics.memTotalBytes)} GB`;
+        g.appendChild(metricsText);
+      }
+
+      layer.appendChild(g);
+      x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
+    }
+    return layer;
   }
 
   #renderTile(tile: TileSpec): SVGGElement {
@@ -3593,10 +3997,32 @@ export class FlowCanvas extends HTMLElement {
       // optional — kein Fehler, wenn der Endpunkt (noch) nichts liefert
       // oder der Nutzer keine Admin-Sicht hat (403 möglich, D3 Teil 2).
       this.#paletteHosts = hostsRes.ok ? await hostsRes.json() : [];
+      this.#updateHostViewAutoDefault();
     } catch {
       this.#paletteCatalog = null;
     }
     this.#renderPaletteList();
+    // Kapitel 13: neue/aktualisierte Host-Metriken bzw. ein per
+    // Auto-Default umgeschalteter Modus wirken sich auf den Zonen-Kopf
+    // im Canvas aus, nicht nur auf die Palette-Liste selbst.
+    if (this.#hostViewEnabled) this.#render();
+  }
+
+  // Kapitel 13: leichtgewichtiges Gegenstück zu #renderPalette() für
+  // die 5s-CPU/RAM-Ticks (omp.host.<id>.metrics) — nur der Hosts-Abruf,
+  // ohne Katalog/Instanzen erneut zu holen und ohne die Palette-Liste
+  // (inkl. Fokus-Erhalt-Logik) neu aufzubauen, die sich durch reine
+  // Metrik-Änderungen nie ändert.
+  async #refreshHostMetrics() {
+    try {
+      const res = await apiFetch("/api/v1/hosts");
+      if (!res.ok) return;
+      this.#paletteHosts = (await res.json()) as HostEntry[];
+    } catch {
+      return;
+    }
+    this.#updateHostViewAutoDefault();
+    if (this.#hostViewEnabled) this.#render();
   }
 
   // Reiner DOM-Aufbau aus den zuletzt per #renderPalette() geholten Daten

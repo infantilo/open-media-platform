@@ -355,6 +355,7 @@ export class RoleDesigner extends HTMLElement {
 
     const saveBtn = document.createElement("button");
     saveBtn.textContent = this.#saving ? "Speichert …" : this.#workflowId ? "Speichern" : "Anlegen";
+    saveBtn.className = "omp-btn-primary";
     saveBtn.disabled = this.#saving;
     saveBtn.addEventListener("click", () => this.#save());
     this.#toolbar.appendChild(saveBtn);
