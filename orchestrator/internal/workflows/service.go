@@ -704,6 +704,7 @@ func (s *Service) runStart(wf Workflow) {
 				roleEnv[k] = v
 			}
 		}
+		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
 		if err != nil {
@@ -1113,6 +1114,7 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 			roleEnv[k] = v
 		}
 	}
+	roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 	resolvedHostID := role.HostID
 	if s.resources != nil {
@@ -1126,6 +1128,13 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 		resolvedHostID = result.HostID
 	}
 
+	// oldRuntime wurde oben bereits gestoppt (s. Aufruf von
+	// s.launcher.Stop), bevor withRoleSeed denselben Seed für die neue
+	// Instanz vergibt — anders als bei executeMigration (migration.go),
+	// wo die alte Instanz während des Starts der neuen bewusst
+	// weiterläuft und ein stabiler Seed daher zwei gleichzeitig lebende
+	// NMOS-Nodes mit identischer ID erzeugen würde (deshalb dort bewusst
+	// kein withRoleSeed).
 	inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
 	if err != nil {
 		slog.Warn("workflows: RestartRole: start failed", "workflow", wf.ID, "role", roleName, "error", err)

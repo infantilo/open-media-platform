@@ -3,6 +3,8 @@ package workflows
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -52,6 +54,36 @@ const senderAliasPrefix = "@@omp-role-sender:"
 const roleStateTimeout = 3 * time.Second
 const maxRoleStateBytes = 1 << 20 // 1 MiB — ein Bedienzustand ist ein paar hundert Bytes JSON, keine Mediendaten
 
+// roleSeedEnvKey ist der ExtraEnv-Schlüssel, über den eine Workflow-Rolle
+// omp-node-sdk (node::start) einen über einen Stop/Start-Zyklus stabilen
+// Seed für node_id/device_id mitgibt (Bug 2026-08-10: "UIDs ändern sich
+// beim Neustart"). Muss zusätzlich zur launcher-eigenen Env-Allowlist
+// auch in host-agent/internal/commands/commands.go (allowedExtraEnvKeys)
+// eingetragen sein, sonst lehnt ein Remote-Host den Start komplett ab.
+const roleSeedEnvKey = "OMP_ROLE_SEED"
+
+// withRoleSeed setzt roleSeedEnvKey deterministisch aus (Workflow-ID,
+// Rollenname) — dieselbe Rolle desselben Workflows bekommt bei jedem aus
+// runStart/runRestartRole gestarteten Prozess denselben Seed und damit
+// dieselbe NMOS-Node-/Device-ID. Nur an Aufrufstellen verwenden, an
+// denen eine eventuell noch laufende alte Instanz derselben Rolle
+// garantiert bereits gestoppt ist, bevor die neue startet (runStart:
+// erst nach vollständigem Stop erreichbar; runRestartRole: stoppt die
+// alte Instanz explizit vor diesem Aufruf) — sonst liefen kurzzeitig
+// zwei NMOS-Nodes mit identischer ID parallel. executeMigration
+// (migration.go) startet bewusst NICHT so: dort läuft die alte Instanz
+// während des Starts der neuen weiter (Live-Migration), deshalb dort
+// kein withRoleSeed.
+func withRoleSeed(env map[string]string, workflowID, roleName string) map[string]string {
+	out := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		out[k] = v
+	}
+	sum := sha256.Sum256([]byte(workflowID + "|" + roleName))
+	out[roleSeedEnvKey] = hex.EncodeToString(sum[:])
+	return out
+}
+
 // captureRoleState fragt vor dem Stoppen jeder Rolle ihren aktuellen
 // Zustand ab und persistiert ihn — best effort, jeder einzelne
 // Rollen-Fehler (Node antwortet nicht mehr, kein /state, Timeout)
@@ -61,6 +93,42 @@ func (s *Service) captureRoleState(wf Workflow) {
 	for role := range wf.Runtime {
 		s.captureOneRoleState(wf, role, senderToAlias)
 	}
+}
+
+// roleStateKindNode/roleStateKindParams unterscheiden, wie ein
+// gespeicherter role_state-Eintrag wiederhergestellt werden muss — s.
+// roleStateEnvelope.
+const (
+	roleStateKindNode   = "node-state"
+	roleStateKindParams = "params"
+)
+
+// roleStateEnvelope ist die ab 2026-08-10 gespeicherte Hülle um einen
+// role_state-Eintrag (Bug: "beim Stoppen/Neustarten eines Workflows
+// verlieren viele Nodes ihre Einstellungen" — ursprünglich griff
+// captureRoleState nur bei Nodes mit eigener `/state`-Route, s. Moduldoku
+// oben; das sind bislang nur omp-video-mixer-me/omp-audio-mixer, alle
+// anderen Node-Typen — z. B. omp-source mit seinem `pattern`-Parameter —
+// lieferten 404 und wurden stillschweigend übersprungen). Kind
+// "node-state": Blob ist die rohe `GET .../state`-Antwort (unverändertes
+// Verhalten, Node hat Vorrang, s. captureOneRoleState). Kind "params":
+// Params sind Name->Wert aller schreibbaren Parameter, generisch über
+// descriptor.json + /params/<name> erfasst (dasselbe Muster wie das
+// manuelle Szenen-Feature, `internal/snapshots`, dort aber nicht an den
+// Workflow-Lifecycle gekoppelt) — Fallback für jeden Node-Typ ohne
+// eigene `/state`-Route.
+//
+// Rückwärtskompatibel zu vor dieser Änderung gespeicherten Zeilen: eine
+// alte Zeile ist direkt die `{"state": ...}`-GET-Antwort — hat also
+// zufällig auch ein Top-Level-Feld "state", landet aber wegen des
+// JSON-Tags "__blob" (nicht "state") NICHT in Blob, sondern lässt Kind
+// und Blob leer. restoreOneRoleState behandelt Kind=="" als
+// node-state-Fall und verwendet dann den kompletten (aliasaufgelösten)
+// Rohwert statt Blob — exakt das alte Verhalten.
+type roleStateEnvelope struct {
+	Kind   string                     `json:"__kind,omitempty"`
+	Blob   json.RawMessage            `json:"__blob,omitempty"`
+	Params map[string]json.RawMessage `json:"__params,omitempty"`
 }
 
 // captureOneRoleState ist der pro-Rolle-Kern von captureRoleState,
@@ -78,12 +146,26 @@ func (s *Service) captureOneRoleState(wf Workflow, role string, senderToAlias ma
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
 	defer cancel()
-	raw, err := getNodeState(ctx, s.httpClient, node.APIBaseURL)
-	if err != nil {
+
+	var env roleStateEnvelope
+	if blob, err := getNodeState(ctx, s.httpClient, node.APIBaseURL); err == nil {
+		env = roleStateEnvelope{Kind: roleStateKindNode, Blob: blob}
+	} else {
 		// Kein /state (häufigster Fall, die meisten Node-Typen) oder
-		// Node bereits nicht mehr erreichbar — beides erwartbar,
-		// keine Warnung wert (würde bei jedem Stop eines Workflows
-		// ohne Mixer/Audio-Mixer-Rolle unnötig im Log stehen).
+		// Node bereits nicht mehr erreichbar — beides erwartbar, keine
+		// Warnung wert. Fallback: generische schreibbare Parameter
+		// (deckt z. B. omp-source::pattern ab, das nie /state
+		// implementiert hat).
+		params, perr := captureGenericParams(ctx, s.httpClient, node.APIBaseURL)
+		if perr != nil || len(params) == 0 {
+			return
+		}
+		env = roleStateEnvelope{Kind: roleStateKindParams, Params: params}
+	}
+
+	raw, err := json.Marshal(env)
+	if err != nil {
+		slog.Warn("workflows: failed to marshal role state envelope", "workflow", wf.ID, "role", role, "error", err)
 		return
 	}
 	state, err := aliasSenderIDs(raw, senderToAlias)
@@ -94,6 +176,33 @@ func (s *Service) captureOneRoleState(wf Workflow, role string, senderToAlias ma
 	if err := s.store.SetRoleState(wf.ID, role, state); err != nil {
 		slog.Warn("workflows: failed to persist role state", "workflow", wf.ID, "role", role, "error", err)
 	}
+}
+
+// captureGenericParams fragt den Descriptor eines Nodes nach seinen
+// schreibbaren Parametern und liest jeden davon einzeln — dasselbe
+// Muster wie snapshots.Service.Create für Nodes ohne eigene /state-Route
+// (internal/snapshots/nodeclient.go), hier bewusst dupliziert statt
+// importiert (gleicher Stil wie getNodeState/postNodeState oben: dieses
+// Paket kennt den generischen HTTP-Node-Client aus internal/snapshots
+// nicht, beide Pakete sprechen unabhängig denselben Standard-Node-
+// Contract). Best effort: ein einzelner Parameter, der nicht gelesen
+// werden kann, wird übersprungen statt den ganzen Capture-Versuch
+// abzubrechen.
+func captureGenericParams(ctx context.Context, client *http.Client, apiBaseURL string) (map[string]json.RawMessage, error) {
+	names, err := getWritableParamNames(ctx, client, apiBaseURL)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(names))
+	for _, name := range names {
+		value, err := getParamValue(ctx, client, apiBaseURL, name)
+		if err != nil {
+			slog.Warn("workflows: failed to capture param", "node", apiBaseURL, "param", name, "error", err)
+			continue
+		}
+		out[name] = value
+	}
+	return out, nil
 }
 
 // restoreStateRetries/restoreStateRetryDelay (live gefunden, s. u.):
@@ -182,9 +291,34 @@ func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMess
 			continue
 		}
 		aliasToSender := s.buildAliasSenderIndex(wf)
-		state, resolvedIDs, err := resolveSenderAliases(raw, aliasToSender)
+		resolved, resolvedIDs, err := resolveSenderAliases(raw, aliasToSender)
 		if err != nil {
 			return err // Parsing-Fehler, kein Retry-würdiger Zustand
+		}
+
+		var env roleStateEnvelope
+		if err := json.Unmarshal(resolved, &env); err != nil {
+			return err // Parsing-Fehler, kein Retry-würdiger Zustand
+		}
+
+		if env.Kind == roleStateKindParams {
+			ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
+			err := restoreGenericParams(ctx, s.httpClient, node.APIBaseURL, env.Params)
+			cancel()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return nil
+		}
+
+		// Kind == roleStateKindNode oder leer (Rückwärtskompatibilität
+		// zu vor dieser Änderung gespeicherten Zeilen, s. roleStateEnvelope-
+		// Doku): Blob ist dann leer, resolved selbst IST bereits der
+		// vollständige, alte GET-/state-Rohwert.
+		state := env.Blob
+		if env.Kind == "" && len(state) == 0 {
+			state = resolved
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), roleStateTimeout)
@@ -213,6 +347,31 @@ func (s *Service) restoreOneRoleState(wf Workflow, role string, raw json.RawMess
 			return nil
 		default:
 			lastErr = fmt.Errorf("restored state did not stick (registry propagation lag)")
+		}
+	}
+	return lastErr
+}
+
+// restoreGenericParams ist die Kehrseite von captureGenericParams: setzt
+// jeden erfassten Parameter einzeln per PATCH /params/<name>. Anders als
+// der node-state-Pfad oben keine Rück-GET-Verifikation nötig — ein Node
+// setzt einen einfachen Parameterwert synchron (kein fire-and-forget wie
+// `take()` bei Sender-IDs, s. restoreStateRetries-Doku), ein 200-OK auf
+// den PATCH ist daher bereits der Beweis, dass er angekommen ist. Ein
+// einzelner fehlgeschlagener Parameter bricht die übrigen nicht ab
+// (bestmögliche Wiederherstellung statt Alles-oder-nichts), wird aber
+// als Fehler zurückgegeben, damit der äußere Retry-Loop es erneut
+// versucht (z. B. wenn der Node unmittelbar nach dem Start kurzzeitig
+// noch nicht antwortet).
+func restoreGenericParams(ctx context.Context, client *http.Client, apiBaseURL string, params map[string]json.RawMessage) error {
+	var lastErr error
+	for name, value := range params {
+		pctx, cancel := context.WithTimeout(ctx, roleStateTimeout)
+		err := patchParamValue(pctx, client, apiBaseURL, name, value)
+		cancel()
+		if err != nil {
+			lastErr = err
+			slog.Warn("workflows: failed to restore param", "node", apiBaseURL, "param", name, "error", err)
 		}
 	}
 	return lastErr
@@ -367,6 +526,91 @@ func postNodeState(ctx context.Context, client *http.Client, apiBaseURL string, 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("workflows: unexpected status %d from POST %s/state", resp.StatusCode, apiBaseURL)
+	}
+	return nil
+}
+
+// descriptorParam/descriptorResponse sind die für die generische
+// Parametererfassung relevante Teilmenge eines Descriptors
+// (docs/descriptor-v0.schema.json) — dieselbe Struktur wie
+// internal/snapshots/nodeclient.go, hier unabhängig dupliziert (s.
+// captureGenericParams-Doku).
+type descriptorParam struct {
+	Name     string `json:"name"`
+	ReadOnly bool   `json:"readonly"`
+}
+
+type descriptorResponse struct {
+	Parameters []descriptorParam `json:"parameters"`
+}
+
+func getWritableParamNames(ctx context.Context, client *http.Client, apiBaseURL string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"/descriptor.json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("workflows: unexpected status %d from GET %s/descriptor.json", resp.StatusCode, apiBaseURL)
+	}
+	var out descriptorResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(out.Parameters))
+	for _, p := range out.Parameters {
+		if !p.ReadOnly {
+			names = append(names, p.Name)
+		}
+	}
+	return names, nil
+}
+
+func getParamValue(ctx context.Context, client *http.Client, apiBaseURL, name string) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBaseURL+"/params/"+name, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("workflows: unexpected status %d from GET %s/params/%s", resp.StatusCode, apiBaseURL, name)
+	}
+	var body struct {
+		Value json.RawMessage `json:"value"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	return body.Value, nil
+}
+
+func patchParamValue(ctx context.Context, client *http.Client, apiBaseURL, name string, value json.RawMessage) error {
+	payload, err := json.Marshal(struct {
+		Value json.RawMessage `json:"value"`
+	}{Value: value})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, apiBaseURL+"/params/"+name, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("workflows: unexpected status %d from PATCH %s/params/%s", resp.StatusCode, apiBaseURL, name)
 	}
 	return nil
 }

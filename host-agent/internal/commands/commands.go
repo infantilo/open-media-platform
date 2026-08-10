@@ -57,8 +57,9 @@ const crashStderrLines = 5
 // Kapitel-15-Werte (Workflow-Auflösung); Erweiterung ist additiv, kein
 // Format-Wechsel.
 var allowedExtraEnvKeys = map[string]bool{
-	"OMP_WIDTH":  true,
-	"OMP_HEIGHT": true,
+	"OMP_WIDTH":     true,
+	"OMP_HEIGHT":    true,
+	"OMP_ROLE_SEED": true, // Bug 2026-08-10: stabile node_id/device_id über einen Workflow-Neustart hinweg, s. workflows/state.go withRoleSeed
 }
 
 // Request ist die auf omp.host.<hostId>.cmd empfangene Nachricht.

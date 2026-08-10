@@ -367,8 +367,26 @@ impl NodeHandle {
 /// ist die einzige Node-spezifische Eingabe. Gibt sofort nach erfolgreicher
 /// Erstregistrierung zurück.
 pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<NodeHandle, BoxError> {
-    let node_id = crate::idgen::new_v4();
-    let device_id = crate::idgen::new_v4();
+    // Bug 2026-08-10: "beim Stoppen/Neustarten eines Workflows verlieren
+    // viele Nodes ihre UID" — bislang würfelte jeder Prozessstart
+    // node_id/device_id komplett neu, auch wenn derselbe Launcher dieselbe
+    // Workflow-Rolle nur neu gestartet hat. `OMP_ROLE_SEED` (vom
+    // Orchestrator ausschließlich für Workflow-Rollen gesetzt, nie für
+    // manuelle Katalog-Starts oder während einer Live-Migration mit
+    // parallel weiterlaufender alter Instanz, s. `workflows/service.go`
+    // runStart/runRestartRole) macht node_id/device_id über einen
+    // Stop/Start-Zyklus hinweg stabil, ohne dass jeder einzelne Node-Typ
+    // dafür etwas tun muss. Ohne den Env-Var (unverändertes Verhalten):
+    // zufällig wie bisher.
+    let role_seed = std::env::var("OMP_ROLE_SEED").ok();
+    let node_id = role_seed
+        .as_deref()
+        .map(|seed| crate::idgen::deterministic_v4(&format!("node:{seed}")))
+        .unwrap_or_else(crate::idgen::new_v4);
+    let device_id = role_seed
+        .as_deref()
+        .map(|seed| crate::idgen::deterministic_v4(&format!("device:{seed}")))
+        .unwrap_or_else(crate::idgen::new_v4);
     let sender_ids: Vec<String> = config
         .senders
         .iter()
