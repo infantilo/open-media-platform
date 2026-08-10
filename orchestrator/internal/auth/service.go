@@ -50,15 +50,32 @@ func (s *Service) DeleteUser(ctx context.Context, username string) error {
 
 // SetPassword hasht password und überschreibt den Hash des bestehenden
 // Nutzers (Admin-Passwort-Reset).
+//
+// Sicherheits-Härtung 2026-08-10: widerruft danach zusätzlich alle
+// laufenden Sitzungen dieses Nutzers — ein Passwort-Wechsel soll
+// erwartungsgemäß jedes zuvor ausgestellte Token ungültig machen (z. B.
+// nach Verdacht auf ein kompromittiertes Konto), nicht nur künftige
+// Logins mit dem alten Passwort verhindern. Best effort: ein Fehler
+// beim Widerruf lässt den bereits erfolgreichen Passwort-Wechsel
+// bestehen (der Nutzer ist trotzdem nicht schlechter dran als vorher),
+// wird aber an den Aufrufer durchgereicht, damit er sichtbar bleibt.
 func (s *Service) SetPassword(ctx context.Context, username, password string) error {
 	hash, err := HashPassword(password)
 	if err != nil {
 		return err
 	}
-	return s.store.SetPasswordHash(ctx, username, hash)
+	if err := s.store.SetPasswordHash(ctx, username, hash); err != nil {
+		return err
+	}
+	return s.store.RevokeSessions(ctx, username)
 }
 
 // Login prüft Nutzername/Passwort und stellt bei Erfolg ein Token aus.
+// Bettet den aktuellen SessionsEpoch des Nutzers fest ins Token ein (s.
+// Service.Authenticate) — ein Login, das unmittelbar nach einem
+// RevokeSessions-Aufruf desselben Nutzers erfolgt, liest den bereits
+// erhöhten Wert frisch aus der DB und bekommt ihn eingebettet, ganz
+// unabhängig vom zeitlichen Abstand zum vorangegangenen Widerruf.
 func (s *Service) Login(ctx context.Context, username, password string) (token string, expiresAt time.Time, err error) {
 	u, ok, err := s.store.ByUsername(ctx, username)
 	if err != nil {
@@ -67,12 +84,43 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 	if !ok || !VerifyPassword(u.PasswordHash, password) {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
-	return s.signer.issue(Principal{UserID: u.ID, Username: u.Username}, time.Now())
+	return s.signer.issue(Principal{UserID: u.ID, Username: u.Username, Epoch: u.SessionsEpoch}, time.Now())
 }
 
 // Authenticate verifiziert ein Bearer-Token und liefert den Principal.
-func (s *Service) Authenticate(token string) (Principal, error) {
-	return s.signer.verify(token, time.Now())
+//
+// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): nach der
+// (weiterhin zustandslosen) Signatur-/Ablauf-Prüfung ein zusätzlicher
+// Abgleich des im Token eingebetteten Epoch-Werts gegen den aktuellen
+// User.SessionsEpoch — weicht er ab, wurde der Nutzer seit dem
+// Ausstellen dieses Tokens mindestens einmal widerrufen (RevokeSessions,
+// s. dort), das Token gilt trotz gültiger Signatur/Ablaufzeit als
+// ungültig. Bewusst NUR für echte Nutzerkonten: ein Service-Token
+// (issueService, Subject=Username=instanceID) hat keine Zeile in
+// users — ByUsername liefert dann ok=false, was hier als "nichts zu
+// prüfen" behandelt wird, nicht als Fehler (sonst bräche jede
+// Control-Plane-Instanz, die den Orchestrator-Proxy anspricht).
+func (s *Service) Authenticate(ctx context.Context, token string) (Principal, error) {
+	p, err := s.signer.verify(token, time.Now())
+	if err != nil {
+		return Principal{}, err
+	}
+	u, ok, err := s.store.ByUsername(ctx, p.Username)
+	if err != nil {
+		return Principal{}, err
+	}
+	if ok && p.Epoch != u.SessionsEpoch {
+		return Principal{}, ErrTokenRevoked
+	}
+	return p, nil
+}
+
+// RevokeSessions (Sicherheits-Härtung 2026-08-10) invalidiert sofort
+// jedes zuvor für username ausgestellte Token — für einen expliziten
+// "an allen Geräten abmelden"-Admin-Eingriff bei Verdacht auf ein
+// geleaktes Token, unabhängig von einem Passwort-Wechsel.
+func (s *Service) RevokeSessions(ctx context.Context, username string) error {
+	return s.store.RevokeSessions(ctx, username)
 }
 
 // IssueServiceToken stellt ein Bearer-Token für einen Service-Prinzipal

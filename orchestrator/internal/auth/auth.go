@@ -24,12 +24,25 @@ type User struct {
 	Username     string
 	PasswordHash string
 	CreatedAt    time.Time
+	// SessionsEpoch (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md
+	// §20.4, s. db/migrations/0014_session_revocation.sql) — bei jedem
+	// RevokeSessions-Aufruf um 1 erhöht. Ein Token trägt den Epoch-Wert,
+	// der beim Ausstellen aktuell war (Principal.Epoch); Authenticate
+	// verlangt exakte Übereinstimmung mit dem aktuellen Wert hier —
+	// jedes davor ausgestellte Token hat zwangsläufig einen anderen
+	// (kleineren) Wert und wird abgelehnt, unabhängig von jeder
+	// Zeitstempel-Auflösung (s. Migrations-Kommentar für den Grund,
+	// warum kein Zeitstempel-Vergleich verwendet wird).
+	SessionsEpoch int64
 }
 
 // Principal ist die aus einem verifizierten Token gewonnene Identität —
 // bewusst schmaler als User (kein PasswordHash), das ist alles, was
-// Handler/Middleware nach der Authentifizierung noch brauchen.
+// Handler/Middleware nach der Authentifizierung noch brauchen. Epoch
+// wird nur intern von Service.Authenticate für den Revocation-Abgleich
+// genutzt (s. User.SessionsEpoch).
 type Principal struct {
 	UserID   string
 	Username string
+	Epoch    int64
 }

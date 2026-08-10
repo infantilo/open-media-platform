@@ -16,10 +16,14 @@ import (
 // typische Schichtlänge im Sendebetrieb (§12: Regieplatz-Bedienung über
 // eine Sitzung hinweg), lang genug, dass ein Operator nicht mitten in
 // einer Sendung erneut anmelden muss, kurz genug, dass ein
-// kompromittiertes Token nicht unbegrenzt gültig bleibt. Kein
-// Refresh-Token-Mechanismus in dieser Runde (würde Revocation-Zustand
-// brauchen, den es noch nicht gibt) — bewusster Scope-Schnitt, s.
-// docs/decisions.md D3 Teil 2.
+// kompromittiertes Token nicht unbegrenzt gültig bleibt. Ein
+// kompromittiertes Token muss seither nicht mehr bis zum natürlichen
+// Ablauf abgewartet werden — s. Principal.Epoch/RevokeSessions
+// (Sicherheits-Härtung 2026-08-10). Kein Refresh-Token-Mechanismus
+// (kurzlebiges Access-Token + rotierendes Refresh-Token) in dieser
+// Runde — eigenständiger Scope-Schnitt, unabhängig von Revocation: löst
+// ein anderes Problem (Blast-Radius weiter verkleinern), nicht "kein
+// Weg, früh zu invalidieren".
 const TokenTTL = 12 * time.Hour
 
 // ServiceTokenTTL ist die Gültigkeitsdauer eines Service-Tokens
@@ -39,6 +43,11 @@ var (
 	// ErrTokenExpired ist separat, damit Aufrufer (falls gewünscht) eine
 	// eigene "bitte neu anmelden"-Meldung zeigen können.
 	ErrTokenExpired = errors.New("auth: token expired")
+	// ErrTokenRevoked (Sicherheits-Härtung 2026-08-10) — Signatur und
+	// Ablaufzeit sind gültig, aber der im Token eingebettete Epoch-Wert
+	// stimmt nicht mehr mit User.SessionsEpoch überein (s.
+	// Service.Authenticate/RevokeSessions).
+	ErrTokenRevoked = errors.New("auth: token revoked")
 )
 
 // claims ist der JWT-Payload — bewusst schlank (NMOS IS-10/BCP-003-02
@@ -52,6 +61,12 @@ type claims struct {
 	Username string `json:"username"`
 	IssuedAt int64  `json:"iat"`
 	ExpireAt int64  `json:"exp"`
+	// Epoch (Sicherheits-Härtung 2026-08-10) — s. Principal.Epoch/
+	// User.SessionsEpoch. Fehlt der Claim (Token wurde vor dieser
+	// Änderung ausgestellt), liefert json.Unmarshal den Nullwert 0 —
+	// entspricht genau dem Default-Epoch nie widerrufener Nutzer, kein
+	// Sonderfall nötig.
+	Epoch int64 `json:"epoch"`
 }
 
 const jwtHeader = `{"alg":"HS256","typ":"JWT"}`
@@ -103,7 +118,7 @@ func (s *Signer) issueService(instanceID string, now time.Time) (string, time.Ti
 
 func (s *Signer) issueWithTTL(p Principal, now time.Time, ttl time.Duration) (string, time.Time, error) {
 	exp := now.Add(ttl)
-	c := claims{Subject: p.UserID, Username: p.Username, IssuedAt: now.Unix(), ExpireAt: exp.Unix()}
+	c := claims{Subject: p.UserID, Username: p.Username, IssuedAt: now.Unix(), ExpireAt: exp.Unix(), Epoch: p.Epoch}
 	payload, err := json.Marshal(c)
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("auth: marshal claims: %w", err)
@@ -142,5 +157,5 @@ func (s *Signer) verify(token string, now time.Time) (Principal, error) {
 	if now.Unix() > c.ExpireAt {
 		return Principal{}, ErrTokenExpired
 	}
-	return Principal{UserID: c.Subject, Username: c.Username}, nil
+	return Principal{UserID: c.Subject, Username: c.Username, Epoch: c.Epoch}, nil
 }

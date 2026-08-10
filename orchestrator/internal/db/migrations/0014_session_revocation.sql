@@ -1,0 +1,25 @@
+-- Session-Revocation (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md
+-- §20.4): Tokens sind zustandslose HS256-JWTs (jwt.go) — bislang gab es
+-- keinen Weg, ein bereits ausgestelltes Token vor seinem natürlichen
+-- Ablauf (12h Nutzer-/24h Service-Token) für ungültig zu erklären.
+--
+-- Monotoner Epoch-Zähler statt eines Zeitstempels (live gefundener Fund,
+-- nicht vorab erkannt): ein Vergleich "Token-`iat` vor
+-- sessions_revoked_at?" bräche, weil `iat` als JWT-Standard-Claim nur
+-- Sekundenauflösung hat (RFC 7519 NumericDate), Postgres' `now()` aber
+-- Mikrosekunden — ein frisch ausgestelltes Token, dessen `iat` in
+-- dieselbe Sekunde wie ein vorangegangener Widerruf fällt, würde dann
+-- fälschlich als "vor dem Widerruf ausgestellt" gelten, obwohl es DANACH
+-- kam. Ein Epoch-Zähler umgeht das Auflösungsproblem strukturell: jedes
+-- Token trägt den Epoch-Wert, der beim Ausstellen aktuell war (fest
+-- eingebettet, kein Zeitstempel-Vergleich nötig); Authenticate verlangt
+-- exakte Übereinstimmung mit dem AKTUELLEN Datenbank-Wert. Ein Login
+-- direkt nach RevokeSessions liest den neuen (inkrementierten) Wert
+-- frisch aus der DB und bekommt ihn eingebettet — unabhängig davon, wie
+-- knapp der zeitliche Abstand zum vorangegangenen Widerruf war.
+--
+-- 0 = Standardwert für neue/nie widerrufene Nutzer — Tokens, die vor
+-- dieser Migration ausgestellt wurden, tragen (noch) keinen Epoch-Claim
+-- und werden von Service.Authenticate wie Epoch 0 behandelt (kein
+-- Bruch für bereits laufende Sitzungen zum Zeitpunkt des Deployments).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_epoch INTEGER NOT NULL DEFAULT 0;

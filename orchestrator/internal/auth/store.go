@@ -74,8 +74,8 @@ func (s *Store) ByUsername(ctx context.Context, username string) (User, bool, er
 func (s *Store) byUsername(ctx context.Context, username string) (User, error) {
 	var u User
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, created_at FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt)
+		`SELECT id, username, password_hash, created_at, sessions_epoch FROM users WHERE username = $1`, username,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt, &u.SessionsEpoch)
 	return u, err
 }
 
@@ -123,6 +123,26 @@ func (s *Store) Delete(ctx context.Context, username string) error {
 // Nutzers (Admin-Passwort-Reset, Kapitel 11 Teil 1).
 func (s *Store) SetPasswordHash(ctx context.Context, username, hash string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE users SET password_hash = $1 WHERE username = $2`, hash, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// RevokeSessions (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md §20.4)
+// erhöht sessions_epoch um 1 — jedes zuvor mit dem alten Epoch-Wert
+// ausgestellte Token dieses Nutzers gilt ab sofort als ungültig (s.
+// Service.Authenticate, Migrations-Kommentar für den Grund, warum ein
+// Zähler statt eines Zeitstempels verwendet wird).
+func (s *Store) RevokeSessions(ctx context.Context, username string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET sessions_epoch = sessions_epoch + 1 WHERE username = $1`, username)
 	if err != nil {
 		return err
 	}

@@ -16428,3 +16428,111 @@ weiterhin per Query-Param-Token erreichbar.
 (neu), `orchestrator/internal/httpapi/{auth_handlers,auth_middleware,
 auth_handlers_test,auth_middleware_test,server}.go`,
 `ARCHITECTURE.md` §20.4.
+
+## 2026-08-10 (Nachtrag 135) — Security/Auth-Hardening fortgesetzt: Token-Revocation (mit live gefundenem Race-Bug), CORS bestätigt, Bypass-Sweep ohne neue Funde
+
+Nutzerauftrag "starte lieber mit 5-9" — Fortsetzung der ursprünglich in
+Nachtrag 134 auf vier Punkte gescopten Lücken-Liste (dort explizit als
+"Punkte 5-9 nicht Teil dieser Runde" benannt). Die Reihenfolge wurde
+nach Aufwand sortiert bearbeitet, nicht strikt numerisch.
+
+### 1. Bypass-Sweep (Punkt 9 der ursprünglichen Liste) — keine neuen Funde
+
+Diese Codebase hat die "Umgehung der zentralen Durchsetzung"-Bug-Klasse
+bereits zweimal live getroffen (unauthentifizierte MJPEG/SSE-Node-Ports,
+`omp-playout-automation`s direkte `PeerClient`-Aufrufe, beide gefixt).
+Gezielter Sweep über alle verbleibenden `PeerClient`-Aufrufstellen
+(`omp-multiviewer`, `omp-switcher`, `omp-fabrics-gateway`): alle drei
+begrenzt auf Low-Blast-Radius-Aktionen zwischen Nodes, die bereits über
+den Graph verkabelt sind (`activateLowresPreview`/
+`releaseLowresPreview`, `fabricsTargetInfo` lesen) — strukturell anders
+als die Cross-Channel-Steuerung, die die beiden historischen Funde
+betraf. Keine weitere Maßnahme nötig.
+
+### 2. CORS (Punkt 5) — geprüft, bewusst unverändert
+
+Kein Endpunkt im Orchestrator setzt `Access-Control-Allow-*`-Header
+(`grep -rn "Access-Control\|w.Header().Set" server.go` bestätigt nur
+`Cache-Control`/SSE-Header). Das ist bereits der sichere Zustand
+(Same-Origin-Policy des Browsers greift per Default deny) — eine
+CORS-Policy hinzuzufügen wäre hier eine Lockerung, keine Härtung, ohne
+einen dokumentierten Cross-Origin-Bedarf. Keine Code-Änderung, nur
+Klarstellung in ARCHITECTURE.md §20.4.
+
+### 3. Token-Revocation (Punkt 6) — mit live gefundenem Entwurfsfehler
+
+**Erster Entwurf (verworfen):** `users.sessions_revoked_at
+TIMESTAMPTZ`, `Service.Authenticate` vergleicht JWT-`iat` gegen diesen
+Zeitstempel (`iat &lt;= revoked_at` → abgelehnt). Kompiliert, alle Tests
+grün — bis auf einen: `TestServiceAuthenticateNewLoginAfterRevocationSucceeds`
+schlug beim ECHTEN Testlauf gegen Postgres fehl (nicht beim reinen
+`go vet`/Compile-Check). Root Cause: JWTs `iat`-Claim hat laut RFC 7519
+(NumericDate) nur Sekundenauflösung, Postgres' `now()` dagegen
+Mikrosekunden — ein `Login()` unmittelbar nach `RevokeSessions()`
+(z. B. beide innerhalb derselben Sekunde, auf localhost mit Postgres im
+selben Podman-Netz durchaus üblich) erzeugte ein `iat`, das nach dem
+Abschneiden auf volle Sekunden VOR dem mikrosekunden-genauen
+`sessions_revoked_at` lag, obwohl der Login tatsächlich danach
+passierte — das frische, legitime Token wurde fälschlich als "vor dem
+Widerruf ausgestellt" abgelehnt. Kein Konstruktionsfehler im Test,
+reale Zeitauflösungs-Kollision.
+
+**Zweiter Entwurf (umgesetzt):** `users.sessions_epoch INTEGER NOT NULL
+DEFAULT 0` (`db/migrations/0014_session_revocation.sql`) statt eines
+Zeitstempels. `RevokeSessions` erhöht ihn um 1; `Login`/`IssueServiceToken`
+betten den AKTUELLEN Wert fest ins Token ein (neuer JWT-Claim `epoch`,
+`Principal.Epoch`); `Authenticate` verlangt exakte Übereinstimmung mit
+dem aktuellen DB-Wert statt eines Zeitstempel-Vergleichs — ein Login
+unmittelbar nach einem Widerruf liest den bereits erhöhten Wert frisch
+aus der DB und bekommt ihn eingebettet, unabhängig vom zeitlichen
+Abstand. Kein Auflösungsproblem mehr möglich, da kein
+Zeitstempel-Vergleich mehr stattfindet.
+
+`SetPassword` (Admin-Passwort-Reset) ruft `RevokeSessions` jetzt
+automatisch mit auf — ein Passwort-Wechsel soll erwartungsgemäß alle
+vorherigen Sitzungen invalidieren. Neuer eigenständiger Endpunkt `POST
+/api/v1/auth/users/{name}/revoke-sessions` (admin-only) für den Fall,
+dass nur ein vermutlich geleaktes Token gesperrt werden soll, ohne
+gleich ein neues Passwort zu erzwingen. Bewusst NUR für echte
+Nutzerkonten wirksam: ein Service-Token (Subject=Username=instanceID,
+`issueService`) hat keine Zeile in `users` — `ByUsername` liefert dann
+`ok=false`, was als "nichts zu prüfen" behandelt wird (sonst bräche
+jede Control-Plane-Instanz, die den Orchestrator-Proxy anspricht).
+
+Bereits gegen die echte Dev-Postgres angewendete `ALTER TABLE`-Anweisung
+aus dem ersten Entwurf wurde manuell zurückgenommen (`sessions_revoked_at`
+entfernt, `sessions_epoch` ergänzt) — die Migrationsdatei selbst wurde
+umgeschrieben (nicht als neue Nummer angelegt), da noch kein anderes
+System auf dem alten Schema aufsetzte.
+
+**Verifiziert:** `go build`/`go vet`/`go test ./...` grün (inkl. neuem
+`service_test.go`: `TestServiceAuthenticateRejectsTokenIssuedBeforeRevocation`,
+`TestServiceAuthenticateNewLoginAfterRevocationSucceeds` — der Test, der
+den Entwurfsfehler ursprünglich aufdeckte, ist jetzt deterministisch
+grün ohne jede Zeit-Abhängigkeit —, `TestServiceSetPasswordRevokesExistingSessions`,
+`TestServiceAuthenticateIgnoresRevocationForServiceTokens`). Live gegen
+den echten Dev-Orchestrator: Token funktioniert → `revoke-sessions` →
+dasselbe Token 401 → sofortiger Neu-Login 200 mit neuem Token, keine
+Wartezeit nötig; unbekannter Nutzername → 404; Passwort-Reset (auch mit
+identischem Passwort) widerruft das zuvor genutzte Token automatisch
+(401), ein weiterer Neu-Login funktioniert sofort wieder.
+
+**Dateien:** `orchestrator/internal/db/migrations/0014_session_revocation.sql`,
+`orchestrator/internal/auth/{auth,jwt,service,store,service_test,
+store_test}.go`, `orchestrator/internal/httpapi/{auth_handlers,
+auth_middleware,server,server_test}.go`, `ARCHITECTURE.md` §20.4.
+
+### 4. Punkte 7/8 (mTLS Rust-Nodes, NATS-Verschlüsselung) — Scope-Entscheidung
+
+Vor der Umsetzung kurz recherchiert: NATS-Client-Seite ist
+überraschend klein (Go-Orchestrator + alle zehn Rust-Node-Typen laufen
+durch je eine zentrale Verbindungsfunktion), der eigentliche Aufwand
+liegt server-seitig (NATS-Container ohne TLS-Config, bräuchte
+Zertifikatsverteilung + sorgfältige Live-Verifikation der gesamten
+Flotte). mTLS für die zehn Rust-Node-Typen bleibt groß (`tiny_http`
+kann kein TLS, bräuchte eine neue HTTP-Server-Bibliothek im SDK). Per
+`AskUserQuestion` explizit auf eine eigene Sitzung verschoben (analog
+zu D3 Teil 1, das ebenfalls eine eigene Sitzung bekam) — kein
+überstürzter Eingriff in laufende Kernkommunikation (Event-Bus bzw.
+jeder Node-HTTP-Endpunkt) am Ende einer bereits langen Sitzung. Details
+in ARCHITECTURE.md §20.4 dokumentiert, nicht separat versioniert.

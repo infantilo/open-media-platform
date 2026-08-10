@@ -15,12 +15,15 @@ import (
 // Zustand (implementiert von *auth.Service, UMSETZUNG.md D3 Teil 2).
 type AuthService interface {
 	UserCount(ctx context.Context) (int, error)
-	Authenticate(token string) (auth.Principal, error)
+	Authenticate(ctx context.Context, token string) (auth.Principal, error)
 	Login(ctx context.Context, username, password string) (token string, expiresAt time.Time, err error)
 	CreateUser(ctx context.Context, username, password string) (auth.User, error)
 	ListUsers(ctx context.Context) ([]auth.User, error)
 	DeleteUser(ctx context.Context, username string) error
 	SetPassword(ctx context.Context, username, password string) error
+	// RevokeSessions (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md
+	// §20.4) — s. handleRevokeSessions.
+	RevokeSessions(ctx context.Context, username string) error
 	// IssueServiceToken (ARCHITECTURE.md §24.1, UMSETZUNG.md C16) — s.
 	// handleIssueServiceToken.
 	IssueServiceToken(instanceID string) (token string, expiresAt time.Time, err error)
@@ -149,7 +152,7 @@ func (g *authGate) authenticate(r *http.Request) (p auth.Principal, bypass bool,
 	if !present {
 		return auth.Principal{}, false, false
 	}
-	p, err = g.auth.Authenticate(token)
+	p, err = g.auth.Authenticate(r.Context(), token)
 	if err != nil {
 		return auth.Principal{}, false, false
 	}

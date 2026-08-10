@@ -91,6 +91,55 @@ func TestStoreByUsernameMissingReturnsNotOK(t *testing.T) {
 	}
 }
 
+// TestStoreRevokeSessions (Sicherheits-Härtung 2026-08-10) — s. service_test.go
+// für den End-to-End-Test über Authenticate hinweg.
+func TestStoreRevokeSessionsIncrementsEpoch(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	ctx := context.Background()
+	username := "test-store-revoke-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username) })
+
+	created, err := store.Create(ctx, username, "hash-value")
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.SessionsEpoch != 0 {
+		t.Fatalf("SessionsEpoch = %d on a freshly created user, want 0", created.SessionsEpoch)
+	}
+
+	if err := store.RevokeSessions(ctx, username); err != nil {
+		t.Fatalf("RevokeSessions() error = %v", err)
+	}
+
+	got, ok, err := store.ByUsername(ctx, username)
+	if err != nil || !ok {
+		t.Fatalf("ByUsername() = (ok=%v, err=%v)", ok, err)
+	}
+	if got.SessionsEpoch != 1 {
+		t.Fatalf("SessionsEpoch = %d after one RevokeSessions(), want 1", got.SessionsEpoch)
+	}
+
+	if err := store.RevokeSessions(ctx, username); err != nil {
+		t.Fatalf("second RevokeSessions() error = %v", err)
+	}
+	got, _, err = store.ByUsername(ctx, username)
+	if err != nil {
+		t.Fatalf("ByUsername() error = %v", err)
+	}
+	if got.SessionsEpoch != 2 {
+		t.Fatalf("SessionsEpoch = %d after two RevokeSessions() calls, want 2", got.SessionsEpoch)
+	}
+}
+
+func TestStoreRevokeSessionsUnknownUserReturnsNotFound(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	if err := store.RevokeSessions(context.Background(), "does-not-exist-"+mustNewID(t)); err != ErrUserNotFound {
+		t.Fatalf("RevokeSessions() error = %v, want ErrUserNotFound", err)
+	}
+}
+
 func mustNewID(t *testing.T) string {
 	t.Helper()
 	id, err := newID()

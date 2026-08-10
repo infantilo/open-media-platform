@@ -2449,8 +2449,8 @@ diesem Abschnitt hier lange widersprach, ohne dass er nachgezogen
 wurde.
 
 Eine 2026-08-10 durchgeführte Code-Bestandsaufnahme (nicht nur
-Doku-Abgleich) fand vier konkrete, code-verifizierte Restlücken und hat
-sie behoben:
+Doku-Abgleich, zwei Runden) fand neun konkrete Punkte; sieben davon
+sind inzwischen erledigt:
 
 1. **Kein Rate-Limiting/Lockout auf `POST /api/v1/auth/login`** —
    unbegrenzt viele Versuche, nur bcryptes Rechenkosten als Bremse.
@@ -2473,22 +2473,72 @@ sie behoben:
    einer Header-Heuristik — eine zunächst erwogene `Accept: text/
    event-stream`-Heuristik hätte den `import()`-Fall übersehen (dessen
    Accept-Header ist kein SSE-Typ), live vor dem Ausrollen bemerkt.
-4. Dieser Abschnitt selbst wurde korrigiert (dieser Absatz).
+4. Dieser Abschnitt selbst wurde korrigiert.
+5. **CORS-Policy — geprüft, bewusst unverändert.** Kein Endpunkt setzt
+   `Access-Control-Allow-*`-Header — das ist bereits der sichere
+   Zustand (Same-Origin-Policy des Browsers greift per Default deny),
+   keine nachträgliche "Absicherung" nötig. Eine CORS-Policy hinzuzufügen
+   wäre hier eine Lockerung, keine Härtung, solange kein echter
+   Cross-Origin-Bedarf existiert.
+6. **Kein Token-Revocation-Mechanismus** — ein geleaktes Token galt bis
+   zum natürlichen Ablauf (12h Nutzer-/24h Service-Token). Behoben:
+   `users.sessions_epoch` (`db/migrations/0014_session_revocation.sql`),
+   ein monoton wachsender Zähler pro Nutzer, fest im Token eingebettet
+   (`Principal.Epoch`/JWT-Claim `epoch`) und bei jedem Request gegen den
+   aktuellen DB-Wert geprüft. `RevokeSessions` (neuer Admin-Endpunkt
+   `POST /api/v1/auth/users/{name}/revoke-sessions`) erhöht ihn; ein
+   Passwort-Wechsel (Admin-Reset) löst denselben Widerruf automatisch
+   mit aus. **Live gefundener Entwurfsfehler, korrigiert vor dem
+   Ausrollen:** ein erster Entwurf verglich Zeitstempel (`sessions_
+   revoked_at` vs. JWT-`iat`) — JWTs `iat` hat laut Standard nur
+   Sekundenauflösung, Postgres' `now()` Mikrosekunden; ein frisch nach
+   einem Widerruf ausgestelltes Token in derselben Sekunde wäre
+   fälschlich als "davor ausgestellt" abgelehnt worden (per Testlauf
+   tatsächlich reproduziert, kein theoretisches Risiko). Der Epoch-
+   Zähler umgeht das Auflösungsproblem strukturell, kein
+   Zeitstempel-Vergleich mehr nötig.
+7. **Sweep auf weitere Instanzen der "Umgehung der zentralen
+   Durchsetzung"-Bug-Klasse** (die bereits zweimal live gefunden wurde:
+   unauthentifizierte Node-Stream-Ports, `omp-playout-automation`s
+   direkte `PeerClient`-Aufrufe) — keine neuen Funde. Die verbleibenden
+   `PeerClient`-Aufrufstellen (`omp-multiviewer`, `omp-switcher`,
+   `omp-fabrics-gateway`) sind auf Low-Blast-Radius-Aktionen zwischen
+   bereits über den Graph verkabelten Nodes begrenzt
+   (`activateLowresPreview`/`releaseLowresPreview`, `fabricsTargetInfo`
+   lesen) — nicht die Cross-Channel-Steuerungsklasse der beiden
+   historischen Funde.
 
 **Weiterhin offen, bewusst nicht Teil dieser Runde** (größerer
-Design-/Scope-Aufwand, kein Versehen):
+Design-/Scope-Aufwand — für #8/#9 explizit per Nutzer-Entscheidung
+2026-08-10 auf eine eigene Sitzung verschoben, analog zu D3 Teil 1, das
+ebenfalls eine eigene Sitzung bekam):
 - AD/LDAP-Anbindung — explizit zurückgestellt, `auth.Service` hinter
   einem schmalen Interface, additiv nachrüstbar.
-- Token-Refresh/-Revocation — kein Mechanismus, ein geleaktes Token gilt
-  bis zum natürlichen Ablauf (12h Nutzer-/24h Service-Token).
-- CORS-Policy — nicht konfiguriert (bislang kein dokumentierter
-  Bedarf, Same-Origin-Auslieferung).
-- mTLS deckt nur Orchestrator↔Nodes (Go-Mock-Node) ab, opt-in/aus
-  per Default — keiner der zehn echten Rust-Node-Typen kann TLS
-  terminieren; host-agent↔Orchestrator (NATS) bleibt unverschlüsselt,
-  einziger Schutz ist ein Einmal-Bootstrap-Token. Beide Zustände sind
-  an anderer Stelle bereits als bewusste Entscheidungen dokumentiert
-  (§18.3, `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
+- Token-Refresh (kurzlebiges Access-Token + rotierendes Refresh-Token,
+  zusätzlich zur jetzt vorhandenen Revocation) — eigenständiges
+  Vorhaben, würde den Blast-Radius eines Leaks weiter verkleinern, löst
+  aber ein anderes Problem als Revocation.
+- **NATS-Verschlüsselung (host-agent/Nodes↔Orchestrator).** Client-
+   seitig überraschend klein — sowohl der Go-Orchestrator
+   (`eventbus.Connect`) als auch alle zehn Rust-Node-Typen (über
+   `omp-node-sdk::health.rs`, zwei Aufrufstellen in einer Datei) laufen
+   durch zentrale Verbindungsfunktionen. Der eigentliche Aufwand liegt
+   server-seitig: der NATS-Container läuft aktuell als reiner `podman
+   run` ohne TLS-Konfiguration — bräuchte eine Server-Config
+   (Cert/Key/CA, ließe sich vom bestehenden step-ca-Setup mitnutzen)
+   und sorgfältige Live-Verifikation, dass die gesamte Flotte
+   (Orchestrator, host-agent, jede laufende Node-Instanz) unter beiden
+   Modi verbindet — das ist der Event-Bus, an dem Health/Events/Alarme
+   für das gesamte System hängen.
+- **mTLS für die zehn echten Rust-Node-Typen (HTTP).** Bleibt groß:
+   `tiny_http` (die von `omp-node-sdk` genutzte HTTP-Server-Bibliothek)
+   unterstützt kein TLS — bräuchte entweder eine neue TLS-fähige
+   HTTP-Server-Bibliothek im SDK oder einen Terminierungs-Wrapper, plus
+   Zertifikatsverteilung an jede Node-Instanz. host-agent↔Orchestrator
+   bleibt bis dahin ebenfalls unverschlüsselt (einziger Schutz: ein
+   Einmal-Bootstrap-Token) — beide Zustände sind an anderer Stelle
+   bereits als bewusste Entscheidungen dokumentiert (§18.3,
+   `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
 
 ### 20.5 Control-Plane-HA — bereits abgedeckt
 

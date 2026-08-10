@@ -97,7 +97,7 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc
 			writeJSON(w, http.StatusOK, map[string]any{"authRequired": true, "authenticated": false, "isAdmin": false})
 			return
 		}
-		p, err := authSvc.Authenticate(token)
+		p, err := authSvc.Authenticate(r.Context(), token)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"authRequired": true, "authenticated": false, "isAdmin": false})
 			return
@@ -251,6 +251,27 @@ func handleResetPassword(authSvc AuthService) http.HandlerFunc {
 			return
 		}
 		if err := authSvc.SetPassword(r.Context(), r.PathValue("name"), req.Password); err != nil {
+			if errors.Is(err, auth.ErrUserNotFound) {
+				http.Error(w, "user not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// handleRevokeSessions ist POST /api/v1/auth/users/{name}/revoke-sessions
+// — admin-only (server.go). Sicherheits-Härtung 2026-08-10
+// (ARCHITECTURE.md §20.4): invalidiert sofort jedes zuvor für {name}
+// ausgestellte Token, unabhängig von einem Passwort-Wechsel (der das
+// ohnehin schon automatisch mit auslöst, s. auth.Service.SetPassword)
+// — für den Fall, dass ein Admin nur ein vermutlich geleaktes Token
+// sperren will, ohne dem Nutzer gleich ein neues Passwort aufzuzwingen.
+func handleRevokeSessions(authSvc AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if err := authSvc.RevokeSessions(r.Context(), r.PathValue("name")); err != nil {
 			if errors.Is(err, auth.ErrUserNotFound) {
 				http.Error(w, "user not found", http.StatusNotFound)
 				return

@@ -227,6 +227,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore)))
 	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUser(authSvc, authzStore)))
 	mux.HandleFunc("PUT /api/v1/auth/users/{name}/password", g.requireVerbGlobal(authz.VerbAdmin, handleResetPassword(authSvc)))
+	mux.HandleFunc("POST /api/v1/auth/users/{name}/revoke-sessions", g.requireVerbGlobal(authz.VerbAdmin, handleRevokeSessions(authSvc)))
 
 	mux.HandleFunc("GET /api/v1/nodes", g.requireAuth(handleNodes(nodes)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
