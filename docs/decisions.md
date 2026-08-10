@@ -16234,3 +16234,49 @@ Fehlalarm durch die zusätzliche Registrierung.
 `nodes/omp-video-mixer-me/src/{main,pipeline}.rs`,
 `nodes/omp-viewer/src/{main,pipeline}.rs`,
 `nodes/playout/src/{main,pipeline}.rs`.
+
+## 2026-08-10 (Nachtrag 132) — omp-ografs zwei restliche interne Threads an LivenessMonitor angeschlossen
+
+Nutzerauftrag "wire omp-ografs restlichen zwei Threads auch an" —
+schließt die in Nachtrag 131 explizit offen gelassene Lücke
+(`spawn_alpha_key_bridge`-Thread, GLib-`main_loop.run()`-Dispatch-
+Thread).
+
+**Alpha-Key-Brücke** (`spawn_alpha_key_bridge`): mechanisch identisch
+zum Standardmuster — neuer `heartbeat: Arc<AtomicU64>`-Parameter,
+Tick am Kopf der bereits vorhandenen `while running.load(...)`-
+Schleife (schon per `try_pull_sample(200ms)` gebunden getaktet). Der
+Zähler musste von `spawn_alpha_key_bridge` durch `Pipeline::build`
+(neues `Pipeline`-Feld `key_bridge_heartbeat`) bis zu `PipelineHandle`
+(neue Methode `key_bridge_heartbeat_handle()`, exakt das
+`flowed_handle`-Muster) durchgereicht werden — vier Zwischenschichten,
+mechanisch, keine Logikänderung.
+
+**GLib-`main_loop.run()`-Thread — kein Schleifenkopf zum Anticken:**
+anders als jeder bisher verdrahtete Thread hat `MainLoop::run()`
+keine eigene, editierbare `while`/`loop`-Schleife (es ist ein einziger
+blockierender Aufruf, der GLib-intern dispatcht, bis `quit()` fällt).
+Lösung: ein periodischer GLib-Timeout (`gst::glib::timeout_add(1s,
+...)`), registriert auf dem Default-`MainContext` (an dem `MainLoop::
+new(None, false)` bereits hängt) VOR dem `thread::spawn`, der
+`main_loop.run()` aufruft. Der Timeout wird nur dann tatsächlich
+gefeuert, wenn der Thread den Context auch wirklich dispatcht — bleibt
+`main_loop.run()` hängen (oder stirbt der Thread), feuert der Timeout
+nicht mehr, genau das gesuchte Liveness-Signal, ohne den bestehenden
+`bus.add_watch()`-Mechanismus anzufassen. Erste Nutzung von
+`glib::timeout_add` in diesem Codebase (bisher nirgends gebraucht).
+
+**Verifiziert:** `cargo build --workspace --bins` + `cargo test
+--workspace --lib` grün. Live: eigenständige `omp-ograf`-Instanz über
+den Katalog gestartet (kein Workflow nötig), `nats sub omp.health.<id>`
+über drei aufeinanderfolgende 5s-Ticks beobachtet — durchgehend
+`"status":"ok"` mit allen drei jetzt registrierten Workern
+(`pipeline`, `alpha-key-bridge`, `glib-main-loop`). Instanz danach
+sauber gestoppt.
+
+**Damit sind alle in Nachtrag 131 als "bewusst offen" markierten
+Node-internen Threads bis auf die gemeinsam genutzten `omp_mediaio`-
+HTTP/SSE-Annahme-Threads (Preview/Levels/Audio-Stream, kein
+Kern-Medienpfad) abgeschlossen.**
+
+**Dateien:** `nodes/omp-ograf/src/{main,pipeline}.rs`.

@@ -295,6 +295,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let media_ready_pipeline = pipeline_handle.clone();
+    let key_bridge_heartbeat = pipeline_handle.key_bridge_heartbeat_handle();
+    let main_loop_heartbeat = pipeline_handle.main_loop_heartbeat_handle();
 
     let store: Arc<dyn ParamStore> = Arc::new(OgrafStore {
         templates,
@@ -385,8 +387,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     .await?;
 
     // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
-    // Nachtrag 130/131).
+    // Nachtrag 130-132).
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("alpha-key-bridge", key_bridge_heartbeat);
+    handle.register_worker("glib-main-loop", main_loop_heartbeat);
 
     let events = async {
         while let Some(event) = rx.recv().await {

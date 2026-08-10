@@ -144,6 +144,7 @@ fn spawn_alpha_key_bridge(
     width: u32,
     height: u32,
     running: Arc<AtomicBool>,
+    heartbeat: Arc<AtomicU64>,
 ) -> Result<gst::Element, PipelineError> {
     let queue = gst::ElementFactory::make("queue")
         .build()
@@ -224,6 +225,9 @@ fn spawn_alpha_key_bridge(
     let pixel_count = (width as usize) * (height as usize);
     thread::spawn(move || {
         while running.load(Ordering::Relaxed) {
+            // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+            // Nachtrag 130/131).
+            heartbeat.fetch_add(1, Ordering::Relaxed);
             let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
                 Some(sample) => sample,
                 None => continue,
@@ -261,6 +265,9 @@ struct Pipeline {
     wpesrc: gst::Element,
     page_ready: Arc<AtomicBool>,
     key_bridge_running: Arc<AtomicBool>,
+    /// S. `spawn_alpha_key_bridge` — für `PipelineHandle::
+    /// key_bridge_heartbeat_handle` (docs/decisions.md Nachtrag 132).
+    key_bridge_heartbeat: Arc<AtomicU64>,
     _mxl_fill: MxlVideoOutput,
     _mxl_key: MxlVideoOutput,
     lowres_output: Arc<MxlVideoOutput>,
@@ -379,12 +386,14 @@ impl Pipeline {
         );
 
         let key_bridge_running = Arc::new(AtomicBool::new(true));
+        let key_bridge_heartbeat = Arc::new(AtomicU64::new(0));
         let key_appsrc = spawn_alpha_key_bridge(
             &pipeline,
             &tee,
             config.width,
             config.height,
             key_bridge_running.clone(),
+            key_bridge_heartbeat.clone(),
         )?;
         let key_convert = gst::ElementFactory::make("videoconvert")
             .build()
@@ -466,6 +475,7 @@ impl Pipeline {
             wpesrc,
             page_ready,
             key_bridge_running,
+            key_bridge_heartbeat,
             _mxl_fill: mxl_fill,
             _mxl_key: mxl_key,
             lowres_output,
@@ -495,6 +505,8 @@ pub struct PipelineHandle {
     page_ready: Arc<AtomicBool>,
     lowres_output: Arc<MxlVideoOutput>,
     lowres_active_count: Arc<AtomicUsize>,
+    key_bridge_heartbeat: Arc<AtomicU64>,
+    main_loop_heartbeat: Arc<AtomicU64>,
 }
 
 impl PipelineHandle {
@@ -504,6 +516,18 @@ impl PipelineHandle {
 
     pub fn media_ready(&self) -> bool {
         self.page_ready.load(Ordering::Relaxed)
+    }
+
+    /// S. `omp_mediaio::mxl::MxlVideoOutput::heartbeat_handle` — für
+    /// `omp_node_sdk::NodeHandle::register_worker` (docs/decisions.md
+    /// Nachtrag 130-132).
+    pub fn key_bridge_heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.key_bridge_heartbeat.clone()
+    }
+
+    /// S. `key_bridge_heartbeat_handle`.
+    pub fn main_loop_heartbeat_handle(&self) -> Arc<AtomicU64> {
+        self.main_loop_heartbeat.clone()
     }
 
     /// Aktiviert die Fill-Lowres-Vorschau referenzgezählt (Kapitel 15
@@ -592,6 +616,23 @@ pub fn run(
             gst::glib::ControlFlow::Continue
         })
         .expect("bus add_watch");
+    // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+    // Nachtrag 130-132): ein GLib-`MainLoop::run()` blockiert bis
+    // `quit()`, es gibt keinen "Schleifenkopf" wie bei einer normalen
+    // `while`-Schleife, den man einfach anticken könnte. Stattdessen ein
+    // periodischer GLib-Timeout, VOR dem Thread-Spawn am Default-Context
+    // registriert (an dem `main_loop` hängt, `MainLoop::new(None, ..)`)
+    // — der Timeout wird nur dann tatsächlich ausgeführt, wenn der
+    // gleich gestartete Thread den Context auch wirklich dispatcht;
+    // bleibt `main_loop.run()` hängen oder stirbt der Thread, feuert der
+    // Timeout nicht mehr, genau das gewünschte Liveness-Signal.
+    let main_loop_heartbeat = Arc::new(AtomicU64::new(0));
+    let main_loop_heartbeat_source = main_loop_heartbeat.clone();
+    gst::glib::timeout_add(std::time::Duration::from_secs(1), move || {
+        main_loop_heartbeat_source.fetch_add(1, Ordering::Relaxed);
+        gst::glib::ControlFlow::Continue
+    });
+
     let main_loop_thread = {
         let main_loop = main_loop.clone();
         thread::spawn(move || main_loop.run())
@@ -603,6 +644,8 @@ pub fn run(
         page_ready: pipeline.page_ready.clone(),
         lowres_output: pipeline.lowres_output.clone(),
         lowres_active_count: pipeline.lowres_active_count.clone(),
+        key_bridge_heartbeat: pipeline.key_bridge_heartbeat.clone(),
+        main_loop_heartbeat,
     }));
 
     // Bereitschafts-Wartepuffer: ein `show()`/`hide()`, das eintrifft,
