@@ -16700,6 +16700,8 @@ Origin" als Produkt/Plattform. Die historischen Zitate in
 `docs/decisions.md` (2026-07-11-Eintrag) bleiben als Append-Only-
 Protokoll unverändert.
 
+**Dateien:** `ARCHITECTURE.md` §1/§9/§10.
+
 ## 2026-08-12 (Nachtrag 139) — Kapitel 13 Teil 2: Kanten-Klassifizierung + Zonen-Kollaps; live gefundener Gruppen-Bug in der Host-Ansicht behoben
 
 Nutzerauftrag "starte wo wir zuletzt aufgehört haben" → Kapitel 13 Teil
@@ -16821,12 +16823,143 @@ Sitzung (mehrere parallel offene CDP-Tabs), kein Produktbug, da ein
 Nutzer in der Praxis nicht mehrere Tabs mit unterschiedlich altem
 Zustand gegen dieselbe Gruppe aktiv hält.
 
-**Bewusst nicht Teil dieser Sitzung** (Phasenplan §13.4, weiterhin
-offen): Teil 3 (Drag = begleiteter Host-Umzug) — hängt an §13.5 Frage
-3, noch nicht mit dem Projektinhaber geklärt.
+**Teil 3 (Drag = begleiteter Host-Umzug):** §13.5 Frage 3 wurde direkt
+im Anschluss an diese Sitzung beantwortet ("ja, bauen") — Umsetzung s.
+Nachtrag 140.
 
 **Dateien:** `orchestrator/internal/registry/types.go`,
 `orchestrator/internal/registry/client.go`,
 `orchestrator/internal/graph/graph.go`, `ui/graph/flow-canvas.ts`.
 
-**Dateien:** `ARCHITECTURE.md` §1/§9/§10.
+## 2026-08-12 (Nachtrag 140) — Kapitel 13 Teil 3: Drag = begleiteter Host-Umzug (nur eigenständige Nodes)
+
+Nutzerauftrag "weiter mit teile 3" direkt im Anschluss an Nachtrag 139.
+§13.5 Frage 3 ("ist der begleitete Umzug per Drag Teil des Zielbilds,
+oder reicht die Palette-Funktion") per Rückfrage beantwortet: "ja,
+bauen".
+
+### Architektur-Fund beim Verdrahten, der den Umfang neu zuschnitt
+
+Der ursprünglich angenommene Ablauf ("Rollen-Kachel eines laufenden
+Workflows in eine andere Zone ziehen") ist in der aktuellen UI gar
+nicht erreichbar: ein laufender Workflow erscheint in der Host-Ansicht
+immer als EINE kollabierte Kachel (Nutzerentscheidung 2026-07-26,
+unabhängig vom Status) — einzelne Rollen-Nodes bekommen nie eine
+eigene Zonen-Position, man kann sie also nicht einzeln in eine andere
+Zone ziehen. §13.3s Formulierung ("Workflow-Rahmen zeichnet über
+Zonengrenzen hinweg") beschreibt noch das ÄLTERE §12.3b-Modell (Rahmen
+um einzeln sichtbare Rollen-Kacheln), das die 2026-07-26-Entscheidung
+für die Root-Ansicht bereits ersetzt hat — ein Doku/Implementierung-
+Auseinanderlauf, der beim Bauen auffiel, nicht vorher bekannt war.
+
+Per Rückfrage entschieden (zwei Optionen: UI für laufende Workflows
+grundlegend erweitern vs. Scope auf eigenständige Nodes verengen):
+**Scope auf eigenständige (nicht Workflow-gebundene) Nodes verengt**
+— die einzigen, die heute individuell in Host-Zonen-Lanes erscheinen.
+
+### Backend, zwei unabhängige Pfade
+
+**Workflow-Pfad (gebaut, aber noch ohne UI-Anschluss — Folgearbeit):**
+`workflows.Service.MigrateRole(ctx, workflowID, role, targetHostID)`
+(`orchestrator/internal/workflows/migration.go`) — bedienerausgelöster
+Anstoßpunkt für das bereits bestehende Make-before-break-Protokoll
+`executeMigration` (D6 Teil 4/K7 Teil 4), das für den automatischen
+Placement-Eskalationspfad schon existierte. Kein Placement-Escalation-
+Gate (der Bediener hat per Bestätigungsdialog bereits entschieden).
+Route `POST /api/v1/workflows/{id}/roles/{role}/migrate`. Vier neue
+Tests (`migration_test.go`): Happy Path (Reconnect gegen den neuen
+Receiver bestätigt) plus drei Validierungsfehler (unbekannte Rolle,
+bereits auf dem Zielhost, Workflow nicht gestartet).
+
+**Graph-Pfad (an die UI angeschlossen):** neues Paket
+`orchestrator/internal/instancemigrate` — bewusst UNABHÄNGIG von
+`workflows` (eine eigenständige Instanz hat keinen Workflow-Zustand,
+kein Make-before-break nötig, ein kurzer Signalausfall ist hinnehmbar,
+da der Bediener den Umzug bewusst ausgelöst hat). Ablauf: aktuelle
+Kanten der Instanz aus dem Live-Graph erfassen (VOR dem Stop!), alte
+Instanz stoppen, neue vom selben Typ auf dem Zielhost starten, ihre
+Registrierung abwarten (gleiches Poll-Muster wie
+`workflows.awaitFreshRegistration`), dann alle erfassten Kanten gegen
+die neue Instanz neu anwenden — Zuordnung über Port-ROLLE (Seite +
+Index in der IS-04-Registrierungsreihenfolge), nicht über die IDs
+selbst, da Sender-/Receiver-IDs bei jedem Neustart neu vergeben
+werden. `NewHandler` baut den Service selbst aus bereits vorhandenen
+Parametern (`nodes`/`launcherSvc`/`graphSvc` erfüllen strukturell die
+kleineren `instancemigrate`-Interfaces) — kein neuer `NewHandler`-
+Parameter, `main.go` unverändert. Route
+`POST /api/v1/instances/{id}/migrate`. Vier neue Tests
+(`instancemigrate/service_test.go`): Happy Path (Reconnect-Zuordnung
+über Port-Index bestätigt) plus drei Validierungsfehler.
+
+### Frontend
+
+`#handleZoneMigrationDrop()` (in `#onPointerUp`s Node-Drag-Zweig):
+erkennt per `#zoneIdAtX()` (neuer Lane-Hit-Test, dieselbe Reihenfolge/
+Breite wie `#arrangeIntoLanes`/`#buildHostZoneLayer`), ob eine Kachel
+in eine ANDERE Zone fiel als ihre aktuelle (datengetriebene) Zone.
+Position springt sofort auf den Ausgangspunkt zurück (kein optisches
+Vor-Hüpfen vor der Bestätigung — die endgültige Position ergibt sich
+nach einem erfolgreichen Umzug ohnehin neu über `#arrangeIntoLanes`,
+sobald die neue Instanz registriert ist). Drei Ausgänge: kein gültiges
+Ziel (Unzugeordnet/Gruppen-Pseudo-Zone) → Toast; gehört zu einem
+laufenden Workflow → Toast mit Erklärung (kein stiller Fehlschlag);
+sonst → `confirmDialog()` (`<omp-confirm>`, gleiches Muster wie
+`#stopInstance` etc.) → `POST /api/v1/instances/{id}/migrate`.
+
+### Verifiziert
+
+`go build`/`go vet`/`go test ./...` (orchestrator, inkl. neuem
+`instancemigrate`-Paket + host-agent) und `deno check`/`deno test ui/`
+(84/84) grün. Live gegen echten Orchestrator/Postgres/NATS mit echtem
+zweiten `omp-host-agent` (gleiches Zwei-Host-Testmuster wie
+Teil 1/Teil 2): `omp-source` (lokal) → `omp-viewer` (lokal) per echter
+IS-05-Verbindung verkabelt, Viewer-Kachel per simuliertem Drag in die
+Zone des zweiten Hosts gezogen, Bestätigungsdialog erschien mit
+korrektem Text, nach Bestätigen per `GET /api/v1/instances` bestätigt:
+alte Instanz weg, neue mit `hostId` des Zielhosts, gleiches Label
+übernommen; `GET /api/v1/graph` bestätigt die Kante automatisch neu
+verbunden (`fromSender` unverändert, `toReceiver` zeigt auf den neuen
+Receiver). Per CDP-Screenshot zusätzlich bestätigt: die migrierte
+Kachel erscheint in der richtigen Zonen-Lane, die jetzt zonenüber-
+greifende MXL-Kante rendert automatisch im Teil-2-Warnstil (beide
+Features greifen korrekt ineinander), die live-MJPEG-Vorschau der
+migrierten Instanz läuft (Beweis: der neue Prozess ist tatsächlich
+funktionsfähig, nicht nur registriert).
+
+**Zwei CDP-Testwerkzeug-Gotchas gefunden** (Testinfrastruktur dieser
+Sitzung, kein Produktbug):
+1. Ein per JS `dispatchEvent(new PointerEvent(...))` synthetisch
+   erzeugtes Pointer-Event hat keinen echten aktiven Pointer, an den
+   `setPointerCapture()` andocken kann (`NotFoundError`) — die App
+   selbst funktioniert im echten Browser einwandfrei (echte Maus-/
+   Touch-Gesten haben immer einen aktiven Pointer), nur das
+   Test-Skript musste auf CDP-native `Input.dispatchMouseEvent`
+   umgestellt werden.
+2. Die Katalog-Palette (`position:absolute; left:0; width:160px;
+   z-index:10`) liegt optisch UND für Klicks über dem Canvas — ein
+   Klick-/Drag-Startpunkt innerhalb einer Kachel, die (teilweise)
+   hinter der Palette liegt, trifft stattdessen die Palette (hier:
+   ein Katalog-Host-Dropdown öffnete sich statt die Kachel zu
+   greifen). Für künftige CDP-Tests: Klickpunkt in den sichtbaren,
+   nicht überlappten Teil der Kachel legen — und bei einem
+   verschobenen Klickpunkt den Ziel-Offset GLEICH mitverschieben
+   (Zentrum-zu-Zentrum-Delta statt unabhängig berechneter Start-/
+   Zielpunkte), sonst verkürzt sich die tatsächliche Drag-Distanz
+   unbemerkt.
+
+**Weiterhin offen:** Workflow-Rollen-Umzug per Drag — Backend fertig
+(`MigrateRole`, getestet), aber ohne UI-Anschluss, da laufende
+Workflows in der Host-Ansicht keine individuell zonierten Rollen-
+Kacheln haben (s. Architektur-Fund oben). Nächster Schritt wäre die
+Host-Ansicht für laufende Workflows zu erweitern (eigene, größere
+Entscheidung).
+
+**Dateien:** `orchestrator/internal/workflows/migration.go`,
+`orchestrator/internal/workflows/migration_test.go`,
+`orchestrator/internal/httpapi/server.go`,
+`orchestrator/internal/httpapi/workflow_handlers.go`,
+`orchestrator/internal/httpapi/launcher_handlers.go`,
+`orchestrator/internal/httpapi/server_test.go`,
+`orchestrator/internal/instancemigrate/service.go` (neu),
+`orchestrator/internal/instancemigrate/service_test.go` (neu),
+`ui/graph/flow-canvas.ts`.

@@ -15,6 +15,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
@@ -126,6 +127,13 @@ type LauncherService interface {
 	RemoveCatalogEntry(nodeType, version string) error
 }
 
+// InstanceMigrator (Kapitel 13 Teil 3, docs/END-GOAL-FEATURES.md §13.4)
+// ist die von handleMigrateInstance genutzte Schnittstelle —
+// implementiert von *instancemigrate.Service.
+type InstanceMigrator interface {
+	MigrateInstance(ctx context.Context, id, targetHostID string) error
+}
+
 // WorkflowService verwaltet Workflow-Definitionen und führt Bundle-
 // Start/-Stop aus (implementiert von *workflows.Service,
 // ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1).
@@ -142,6 +150,10 @@ type WorkflowService interface {
 	// neu, optional mit neuem role.Format, statt den ganzen Workflow zu
 	// stoppen.
 	RestartRole(ctx context.Context, id, role, format string) error
+	// MigrateRole (Kapitel 13 Teil 3) — s. workflows.Service.MigrateRole-
+	// Doku: bedienerausgelöster Make-before-break-Umzug einer laufenden
+	// Rolle auf einen anderen Host (Drag-Umzug im Flow-Editor).
+	MigrateRole(ctx context.Context, id, role, targetHostID string) error
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
 	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
@@ -201,6 +213,12 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // gegenüber vor D3 Teil 2.
 func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
+
+	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
+	// keinen eigenen NewHandler-Parameter: nodes/launcherSvc/graphSvc
+	// sind schon da und erfüllen strukturell die (bewusst kleineren)
+	// Interfaces von instancemigrate.
+	instanceMigrateSvc := instancemigrate.NewService(nodes, launcherSvc, graphSvc)
 	// Sicherheits-Härtung 2026-08-10 (ARCHITECTURE.md §20.4): prozesslokal
 	// statt injiziert — reines In-Memory-Rate-Limiting braucht keinen
 	// austauschbaren Test-Doppelgänger, der über die ohnehin schon sehr
@@ -264,6 +282,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
 	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore)))
 	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
+	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
+	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
+	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.
+	mux.HandleFunc("POST /api/v1/instances/{id}/migrate", g.requireVerbGlobal(authz.VerbAdmin, handleMigrateInstance(instanceMigrateSvc)))
 	mux.HandleFunc("GET /api/v1/me/consoles", g.requireAuth(handleMeConsoles(nodes, consoleResolver)))
 
 	// Service-Token-Ausgabe für Control-Plane-Instanzen (ARCHITECTURE.md
@@ -316,6 +338,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/workflows/{id}/stop", g.requireVerbGlobal(authz.VerbAdmin, handleStopWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/restart", g.requireVerbGlobal(authz.VerbAdmin, handleRestartWorkflowRole(workflowSvc)))
+	mux.HandleFunc("POST /api/v1/workflows/{id}/roles/{role}/migrate", g.requireVerbGlobal(authz.VerbAdmin, handleMigrateWorkflowRole(workflowSvc)))
 	// requireVerbGlobal(VerbConfigure) statt requireAuth (Nutzerwunsch
 	// 2026-07-28): der optionale ?includeBindings=true-Parameter (s.
 	// handleExportWorkflow) hängt Nutzernamen+Rechte anderer Nutzer an —

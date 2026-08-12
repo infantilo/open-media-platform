@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -365,6 +366,46 @@ func (s *Service) takePendingMigration(workflowID, role string) (*pendingMigrati
 	pm.timer.Stop()
 	delete(s.migrations.pendingMigrations, key)
 	return pm, true
+}
+
+// MigrateRole (Kapitel 13 Teil 3, docs/END-GOAL-FEATURES.md §13.4:
+// "Drag = begleiteter Umzug") — der bedienerausgelöste Anstoßpunkt für
+// den Drag-Umzug im Flow-Editor (Host-Ansicht): eine Kachel in eine
+// andere Host-Zone gezogen → Bestätigungsdialog im Client → dieser
+// Aufruf. Nutzt exakt dasselbe Make-before-break-Protokoll wie der
+// automatische D6-Teil-4-Pfad (executeMigration) — der Bediener hat
+// bereits explizit entschieden (Bestätigungsdialog), daher kein
+// Placement-Escalation-Gate wie bei considerMigration. targetHostID =
+// "" bedeutet lokal (gleiche Konvention wie überall sonst,
+// launcher.StartLabeled). Asynchron wie RestartRole/Start/Stop:
+// liefert selbst nur "angestoßen", nicht "fertig" zurück (per SSE/Poll
+// beobachtbar).
+func (s *Service) MigrateRole(ctx context.Context, workflowID, role, targetHostID string) error {
+	wf, err := s.store.Get(workflowID)
+	if err != nil {
+		return err
+	}
+	if wf.Status != StatusStarted {
+		return ErrNotRunning
+	}
+	if _, ok := roleByName(wf, role); !ok {
+		return fmt.Errorf("%w: role %q not found", ErrValidation, role)
+	}
+	rt, ok := wf.Runtime[role]
+	if !ok || rt.InstanceID == "" {
+		return fmt.Errorf("%w: role %q has no running instance", ErrValidation, role)
+	}
+	if rt.HostID == targetHostID {
+		return fmt.Errorf("%w: role %q is already on the target host", ErrValidation, role)
+	}
+	if !s.claimMigrationAttempt(rt.InstanceID) {
+		return fmt.Errorf("%w: a migration for role %q is already in progress", ErrValidation, role)
+	}
+
+	safego.Go("workflows.executeMigration", func() {
+		s.executeMigration(wf.ID, role, rt.InstanceID, targetHostID, "manual-drag")
+	})
+	return nil
 }
 
 // executeMigration ist das eigentliche Make-before-break-Protokoll

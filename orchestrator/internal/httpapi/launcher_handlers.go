@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
@@ -206,6 +207,43 @@ func handleDeleteInstance(svc LauncherService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handleMigrateInstance liefert POST /api/v1/instances/<id>/migrate
+// (Kapitel 13 Teil 3) — s. instancemigrate.Service.MigrateInstance-Doku.
+// Body: {"targetHostId": "..."} ("" oder fehlend = lokal, gleiche
+// Konvention wie überall sonst). Asynchron wie Restart/Migrate bei
+// Workflow-Rollen: liefert sofort zurück, der eigentliche Umzug läuft
+// im Hintergrund weiter (per SSE/Poll auf /api/v1/instances bzw.
+// /api/v1/graph beobachtbar).
+func handleMigrateInstance(svc InstanceMigrator) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			TargetHostID string `json:"targetHostId"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := svc.MigrateInstance(r.Context(), r.PathValue("id"), body.TargetHostID); err != nil {
+			writeInstanceMigrateError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+func writeInstanceMigrateError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, instancemigrate.ErrUnknownInstance):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, instancemigrate.ErrSameHost), errors.Is(err, instancemigrate.ErrNotRegistered):
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
 

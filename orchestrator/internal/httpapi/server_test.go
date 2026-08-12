@@ -395,6 +395,7 @@ type fakeWorkflowService struct {
 	startErr       error
 	stopErr        error
 	restartRoleErr error
+	migrateRoleErr error
 	updated        workflows.Workflow
 	updateErr      error
 	pauseErr       error
@@ -426,6 +427,10 @@ func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) 
 
 func (f fakeWorkflowService) RestartRole(ctx context.Context, id, role, format string) error {
 	return f.restartRoleErr
+}
+
+func (f fakeWorkflowService) MigrateRole(ctx context.Context, id, role, targetHostID string) error {
+	return f.migrateRoleErr
 }
 
 func (f fakeWorkflowService) Pause(ctx context.Context, id string, confirm bool) error {

@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -153,6 +154,100 @@ func TestExecuteMigrationAutoEscalationHappyPath(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4): MigrateRole ist
+// der bedienerausgelöste Anstoßpunkt für den Drag-Umzug im Flow-Editor
+// — gleiches Make-before-break-Protokoll wie der automatische Pfad
+// oben (TestExecuteMigrationAutoEscalationHappyPath), hier direkt statt
+// über OnAdviceRaised/Escalation ausgelöst.
+func TestMigrateRoleHappyPath(t *testing.T) {
+	svc, nodes, g, l, wfID, activeInstance := setupMigrationWorkflow(t, "", 0)
+
+	if err := svc.MigrateRole(context.Background(), wfID, "active", "host-b"); err != nil {
+		t.Fatalf("MigrateRole() error = %v", err)
+	}
+
+	waitFor(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return len(l.started) == 3
+	})
+	newInstance := l.instanceIDFor("omp-viewer")
+	if newInstance == activeInstance {
+		t.Fatalf("expected a fresh instance ID for the migrated role")
+	}
+	nodes.add(registry.NodeView{ID: "node-active-2", InstanceID: newInstance, Receivers: []registry.ReceiverView{{ID: "recv-active-2"}}})
+
+	waitFor(t, func() bool {
+		wf, err := svc.Get(wfID)
+		if err != nil {
+			return false
+		}
+		return wf.Runtime["active"].InstanceID == newInstance
+	})
+	wf, err := svc.Get(wfID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if wf.Runtime["active"].HostID != "host-b" {
+		t.Fatalf("Runtime HostID = %q, want %q", wf.Runtime["active"].HostID, "host-b")
+	}
+
+	waitFor(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, id := range l.stopped {
+			if id == activeInstance {
+				return true
+			}
+		}
+		return false
+	})
+
+	waitFor(t, func() bool {
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		for _, c := range g.calls {
+			if c.toReceiver == "recv-active-2" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func TestMigrateRoleRejectsUnknownRole(t *testing.T) {
+	svc, _, _, _, wfID, _ := setupMigrationWorkflow(t, "", 0)
+
+	err := svc.MigrateRole(context.Background(), wfID, "does-not-exist", "host-b")
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("MigrateRole() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestMigrateRoleRejectsSameHost(t *testing.T) {
+	svc, _, _, _, wfID, _ := setupMigrationWorkflow(t, "", 0)
+
+	// "active" lief in setupMigrationWorkflow lokal (kein role.HostID
+	// gesetzt) — Runtime.HostID ist also "", identisch zum Zielwert hier.
+	err := svc.MigrateRole(context.Background(), wfID, "active", "")
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("MigrateRole() error = %v, want ErrValidation", err)
+	}
+}
+
+func TestMigrateRoleRequiresStartedWorkflow(t *testing.T) {
+	svc, _, _, _, wfID, _ := setupMigrationWorkflow(t, "", 0)
+	if err := svc.Stop(context.Background(), wfID, true); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+	waitForStatus(t, svc, wfID, StatusStopped)
+
+	err := svc.MigrateRole(context.Background(), wfID, "active", "host-b")
+	if !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("MigrateRole() error = %v, want ErrNotRunning", err)
+	}
 }
 
 func TestAutoConfirmWindowExpiresAndMigrates(t *testing.T) {

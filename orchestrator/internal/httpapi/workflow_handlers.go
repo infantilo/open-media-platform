@@ -180,6 +180,39 @@ func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
 	}
 }
 
+// handleMigrateWorkflowRole liefert POST
+// /api/v1/workflows/{id}/roles/{role}/migrate (Kapitel 13 Teil 3,
+// docs/END-GOAL-FEATURES.md §13.4) — s. workflows.Service.MigrateRole-
+// Doku. Body: {"targetHostId": "..."} ("" oder fehlend = lokal, gleiche
+// Konvention wie überall sonst). Asynchron wie Restart: liefert sofort
+// den aktuellen Workflow-Stand zurück, der eigentliche Make-before-
+// break-Umzug läuft im Hintergrund weiter (per SSE/Poll beobachtbar).
+func handleMigrateWorkflowRole(svc WorkflowService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		role := r.PathValue("role")
+		var body struct {
+			TargetHostID string `json:"targetHostId"`
+		}
+		if r.ContentLength != 0 {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid JSON body", http.StatusBadRequest)
+				return
+			}
+		}
+		if err := svc.MigrateRole(r.Context(), id, role, body.TargetHostID); err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		wf, err := svc.Get(id)
+		if err != nil {
+			writeWorkflowError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, wf)
+	}
+}
+
 // handlePauseWorkflow liefert POST /api/v1/workflows/{id}/pause
 // (Kapitel 12 Teil 3, §12.3c) — analog zu handleStopWorkflow, gleiches
 // optionales {"confirm": true} für confirm_stop (gilt identisch für

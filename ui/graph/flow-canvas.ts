@@ -1223,6 +1223,20 @@ export class FlowCanvas extends HTMLElement {
     return zones;
   }
 
+  // Kapitel 13 Teil 3 (§13.4: "Drag = begleiteter Umzug"): welche Zone
+  // liegt an der Welt-X-Koordinate x — dieselbe Lane-Reihenfolge/-Breite
+  // wie #arrangeIntoLanes/#buildHostZoneLayer, hier als Hit-Test für den
+  // Drop-Punkt beim Drag-Umzug (#handleZoneMigrationDrop). null = außerhalb
+  // jeder Lane (z. B. zu weit rechts).
+  #zoneIdAtX(tiles: TileSpec[], x: number): string | null {
+    let laneX = HOST_ZONE_MARGIN;
+    for (const zone of this.#hostZones(tiles)) {
+      if (x >= laneX && x < laneX + HOST_ZONE_LANE_WIDTH) return zone.id;
+      laneX += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
+    }
+    return null;
+  }
+
   // Ordnet jede der übergebenen Root-Node-Kacheln in die Lane ihrer
   // Zone ein — bereits in #hostViewPositions gemerkte Kacheln behalten
   // ihre (ggf. innerhalb der Lane verschobene) Position, nur wirklich
@@ -3187,7 +3201,9 @@ export class FlowCanvas extends HTMLElement {
   #onPointerUp(ev: PointerEvent) {
     if (this.#drag?.kind === "node") {
       if (this.#drag.moved) {
-        this.#saveLayout();
+        if (!this.#handleZoneMigrationDrop(this.#drag.nodeId, this.#drag.startWorld)) {
+          this.#saveLayout();
+        }
       } else {
         // Ein reiner Klick (keine Bewegung) auf eine Rollen-Kachel des
         // gerade bearbeiteten Workflows (s. #renderEditableRoleTile)
@@ -3218,6 +3234,99 @@ export class FlowCanvas extends HTMLElement {
       }
     }
     this.#drag = null;
+  }
+
+  // Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4: "Drag = begleiteter
+  // Umzug"): erkennt, ob eine Node-Kachel in eine ANDERE Host-Zone gezogen
+  // wurde als ihre aktuelle (datengetriebene, s. #zoneIdForNodeId) Zone.
+  // Falls ja, wird der Drag NICHT als normale Positionsänderung behandelt
+  // (kein #saveLayout()): die Position springt sofort auf startWorld
+  // zurück (die Kachel "hüpft" nicht optisch vor, während erst noch
+  // bestätigt/ausgeführt wird — ihre endgültige Position ergibt sich
+  // ohnehin neu über #arrangeIntoLanes, sobald nach einem erfolgreichen
+  // Umzug die NEUE Instanz registriert ist), danach läuft
+  // #confirmAndMigrateInstance() asynchron weiter.
+  //
+  // Nutzerentscheidung 2026-08-12: nur eigenständige (nicht Workflow-
+  // gebundene) Nodes sind ein gültiges Drag-Ziel — ein laufender
+  // Workflow zeigt sich in der Host-Ansicht immer als EINE kollabierte
+  // Kachel (Nutzerentscheidung 2026-07-26), seine einzelnen Rollen
+  // erscheinen dort nie individuell und sind folglich auch nie die
+  // Kachel, die hier tileId sein könnte — der Workflow-Check unten ist
+  // trotzdem nötig, weil #buildTilesForWorkflowFilter/
+  // #renderRunningWorkflowScope an anderer Stelle einzelne Rollen-Nodes
+  // MIT derselben ID wie ein echter Graph-Node rendern (Bearbeiten-Modus)
+  // — dort ist #hostViewEnabled aber baubedingt nie aktiv (s.
+  // #buildHostZoneLayer-Doku), diese Methode kann also nur am Root
+  // greifen, wo #graph.nodes.find() ausschließlich echte, freistehende
+  // Nodes UND (jetzt gültig) laufende, nicht workflow-gebundene Instanzen
+  // liefert.
+  //
+  // Gibt true zurück, wenn der Drag als Umzugs-Versuch behandelt wurde
+  // (auch wenn er am Ende abgelehnt/ungültig war) — der Aufrufer soll
+  // dann kein normales #saveLayout() mehr ausführen.
+  #handleZoneMigrationDrop(tileId: string, startWorld: Point): boolean {
+    if (!this.#hostViewEnabled || this.#scope !== null) return false;
+    const node = this.#graph.nodes.find((n) => n.id === tileId);
+    if (!node || !node.instanceId) return false;
+
+    const currentZone = this.#zoneIdForNodeId(tileId);
+    const dropX = this.#positions[tileId]?.x ?? startWorld.x;
+    const dropZone = this.#zoneIdAtX(this.#rootZoneTiles(), dropX);
+    if (dropZone === null || dropZone === currentZone) return false;
+
+    this.#positions[tileId] = startWorld;
+    this.#render();
+
+    if (dropZone === "unassigned" || dropZone === "mixed") {
+      this.#showToast("Kein gültiges Umzugsziel — auf eine Host-Zone ziehen.");
+      return true;
+    }
+
+    if (this.#workflowRoleForNodeId(tileId)) {
+      this.#showToast(
+        `„${node.label}" gehört zu einem laufenden Workflow — Rollen-Umzug per Drag ist noch nicht unterstützt.`,
+      );
+      return true;
+    }
+
+    void this.#confirmAndMigrateInstance(node.instanceId, node.label, dropZone);
+    return true;
+  }
+
+  // Rollenbindung einer Node-ID in einem laufenden Workflow, falls
+  // vorhanden — s. #handleZoneMigrationDrop-Doku.
+  #workflowRoleForNodeId(nodeId: string): { workflowId: string; role: string } | null {
+    for (const wf of this.#workflows) {
+      if (wf.status !== "started") continue;
+      for (const [role, rt] of Object.entries(wf.runtime ?? {})) {
+        if (rt.nodeId === nodeId) return { workflowId: wf.id, role };
+      }
+    }
+    return null;
+  }
+
+  async #confirmAndMigrateInstance(instanceId: string, nodeLabel: string, targetZoneId: string) {
+    const targetLabel = this.#hostZones(this.#rootZoneTiles()).find((z) => z.id === targetZoneId)?.label ?? targetZoneId;
+    const confirmed = await confirmDialog(
+      `„${nodeLabel}" nach „${targetLabel}" verschieben? Die Instanz wird gestoppt und dort neu gestartet, bestehende Verbindungen werden nach Möglichkeit wiederhergestellt.`,
+      { confirmLabel: "Verschieben" },
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await apiFetch(`/api/v1/instances/${encodeURIComponent(instanceId)}/migrate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetHostId: targetZoneId === "local" ? "" : targetZoneId }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Umzug fehlgeschlagen: ${text || res.status}`);
+      }
+    } catch (err) {
+      this.#showToast(`Umzug fehlgeschlagen: ${err}`);
+    }
   }
 
   #onWheel(ev: WheelEvent) {

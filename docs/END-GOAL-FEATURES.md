@@ -2630,9 +2630,19 @@ Dokument).
   ebenfalls eine Zone (eindeutig → deren Lane, uneinheitlich → neue
   Pseudo-Zone "Gruppen über mehrere Hosts") statt wie zuvor komplett
   außerhalb der Zonen-Darstellung zu landen.
-- **Teil 3 — Drag = begleiteter Umzug:** Bestätigungsdialog,
-  Advisory-Integration (K14/D6 Teil 3), Neu-Verkabelung über den
-  bestehenden Workflow-/Graph-Pfad.
+- **Teil 3 — Drag = begleiteter Umzug (erledigt 2026-08-12, docs/
+  decisions.md Nachtrag 140, Scope auf eigenständige Nodes verengt):**
+  Bestätigungsdialog, Neu-Verkabelung über den Graph-Pfad
+  (`instancemigrate`-Paket, Port-Rolle statt Port-ID als Zuordnung).
+  Architektur-Fund beim Bauen: ein laufender Workflow zeigt sich in
+  der Host-Ansicht immer als EINE kollabierte Kachel (2026-07-26-
+  Entscheidung) — einzelne Rollen-Kacheln erscheinen dort nie
+  individuell, sind also aktuell kein gültiges Drag-Ziel. Für sie
+  existiert der analoge Workflow-Pfad (`workflows.Service.
+  MigrateRole`, Make-before-break über das bestehende D6-Teil-4-
+  Protokoll) bereits fertig und getestet, aber noch ohne UI-Anschluss
+  — Folgearbeit, falls die Host-Ansicht für laufende Workflows später
+  erweitert wird.
 
 ### 13.5 Offene Fragen an den Projektinhaber
 
@@ -2646,7 +2656,8 @@ Dokument).
    in Teil 1 (docs/decisions.md Nachtrag 137).
 3. Ist der begleitete Umzug per Drag (Teil 3) Teil des Zielbilds, oder
    reicht „Start auf Host X" über die Palette (existiert seit D6
-   Teil 2)?
+   Teil 2)? **Beantwortet (2026-08-12): ja, bauen**, umgesetzt in
+   Teil 3 für eigenständige Nodes (docs/decisions.md Nachtrag 140).
 4. Bleibt der Hosts-Tab nach Teil 1 bestehen (Empfehlung: ja — als
    Detail-/Verwaltungssicht, ab K14 mit Historie), oder soll er ganz
    im Flow-Editor aufgehen?
