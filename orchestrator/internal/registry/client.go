@@ -100,7 +100,7 @@ func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeV
 						format = flowFormat[*s.FlowID]
 					}
 					views[ni].Senders = append(views[ni].Senders, SenderView{
-						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format,
+						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format, Transport: s.Transport,
 					})
 				}
 			}
@@ -109,7 +109,7 @@ func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeV
 			if err := c.getJSON(ctx, "receivers?device_id="+deviceID, &extraReceivers); err == nil {
 				for _, r := range extraReceivers {
 					views[ni].Receivers = append(views[ni].Receivers, ReceiverView{
-						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format,
+						ID: r.ID, Label: r.Label, DeviceID: r.DeviceID, Format: r.Format, Transport: r.Transport,
 					})
 				}
 			}
@@ -196,19 +196,21 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 					format = flowFormat[*s.FlowID]
 				}
 				view.Senders = append(view.Senders, SenderView{
-					ID:       s.ID,
-					Label:    s.Label,
-					DeviceID: s.DeviceID,
-					Format:   format,
+					ID:        s.ID,
+					Label:     s.Label,
+					DeviceID:  s.DeviceID,
+					Format:    format,
+					Transport: s.Transport,
 				})
 			}
 
 			for _, r := range receiversByDevice[d.ID] {
 				view.Receivers = append(view.Receivers, ReceiverView{
-					ID:       r.ID,
-					Label:    r.Label,
-					DeviceID: r.DeviceID,
-					Format:   r.Format,
+					ID:        r.ID,
+					Label:     r.Label,
+					DeviceID:  r.DeviceID,
+					Format:    r.Format,
+					Transport: r.Transport,
 				})
 			}
 		}

@@ -33,17 +33,19 @@ type is04Device struct {
 }
 
 type is04Sender struct {
-	ID       string  `json:"id"`
-	Label    string  `json:"label"`
-	DeviceID string  `json:"device_id"`
-	FlowID   *string `json:"flow_id"`
+	ID        string  `json:"id"`
+	Label     string  `json:"label"`
+	DeviceID  string  `json:"device_id"`
+	FlowID    *string `json:"flow_id"`
+	Transport string  `json:"transport"`
 }
 
 type is04Receiver struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	DeviceID string `json:"device_id"`
-	Format   string `json:"format"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	DeviceID  string `json:"device_id"`
+	Format    string `json:"format"`
+	Transport string `json:"transport"`
 }
 
 type is04Flow struct {
@@ -77,20 +79,26 @@ type DeviceView struct {
 }
 
 // SenderView ist die normalisierte Sicht auf einen IS-04-Sender inkl. des
-// über den referenzierten Flow aufgelösten Medien-Formats.
+// über den referenzierten Flow aufgelösten Medien-Formats. Transport kommt
+// unverändert aus dem IS-04-Snapshot (z. B. "urn:x-omp:transport:mxl" oder
+// "urn:x-nmos:transport:rtp", s. nodes/omp-node-sdk/src/is04.rs) — Kapitel
+// 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4) nutzt das im Flow-Editor zur
+// Kanten-Klassifizierung über Zonengrenzen (MXL ist host-lokal, §13.1).
 type SenderView struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	DeviceID string `json:"device_id"`
-	Format   string `json:"format"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	DeviceID  string `json:"device_id"`
+	Format    string `json:"format"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // ReceiverView ist die normalisierte Sicht auf einen IS-04-Receiver. Das
 // Format steht bei Receivern (anders als bei Sendern) direkt am Resource,
-// nicht über einen Flow.
+// nicht über einen Flow. Transport s. SenderView-Doku.
 type ReceiverView struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	DeviceID string `json:"device_id"`
-	Format   string `json:"format"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	DeviceID  string `json:"device_id"`
+	Format    string `json:"format"`
+	Transport string `json:"transport,omitempty"`
 }

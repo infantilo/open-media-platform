@@ -70,6 +70,14 @@ const HOST_ZONE_MARGIN = 24;
 // NATS-Zyklen nicht sofort als offline zu werten, aber knapp genug,
 // dass ein tatsächlich abgeschalteter Host zeitnah als offline zeigt.
 const HOST_ONLINE_THRESHOLD_MS = 15000;
+// Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4): identischer
+// Transport-URN-Wert wie nodes/omp-node-sdk/src/is04.rs::TRANSPORT_MXL
+// (keine gemeinsame Konstante über die Sprachgrenze hinweg möglich) —
+// Grundlage der Kanten-Klassifizierung über Host-Zonengrenzen (§13.3:
+// "MXL ist host-lokal").
+const TRANSPORT_MXL = "urn:x-omp:transport:mxl";
+const MXL_ZONE_WARNING_TITLE =
+  "MXL ist host-lokal — für Hostgrenzen ST-2110/SRT-Gateway (D4) einsetzen";
 
 // Gleicher Storage-Key wie `auth.ts`s `TOKEN_KEY`/`connection.ts`s eigene
 // Kopie davon, absichtlich dupliziert statt eines gemeinsamen Imports
@@ -111,6 +119,12 @@ interface GraphPort {
   id: string;
   label: string;
   format: string;
+  // Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4): IS-04-Transport-
+  // URN unverändert vom Orchestrator durchgereicht (orchestrator/internal/
+  // graph.Port), z. B. "urn:x-omp:transport:mxl" — Grundlage für die
+  // Kanten-Klassifizierung über Host-Zonengrenzen (#isMxlTransport).
+  // Optional: ältere/gemockte Graph-Antworten haben das Feld nicht.
+  transport?: string;
 }
 
 interface GraphNode {
@@ -491,6 +505,13 @@ export class FlowCanvas extends HTMLElement {
   #selectionRect: SVGRectElement | null = null;
   #selectedEdgeId: string | null = null;
   #portLocation: Map<string, PortLocation> = new Map();
+  // Kapitel 13 Teil 2: Transport-URN je Port-ID, unabhängig vom aktuell
+  // sichtbaren Scope (anders als #portLocation) — eine Gruppen-Kachel
+  // promotet fremde Port-IDs unverändert (s. groups.ts::promotedPorts),
+  // die Transport-Zugehörigkeit bleibt also über die ID auffindbar, egal
+  // ob der Port gerade an seiner Node- oder an einer Gruppen-Kachel
+  // hängt. Aus #graph.nodes befüllt (#fetchAndRender), nicht aus tiles.
+  #portTransport: Map<string, string> = new Map();
   #tileHeightById: Map<string, number> = new Map();
   // Inline-Vorschau auf der Kachel selbst (nicht nur im geöffneten
   // Parameter-Panel) für Nodes mit einem "previewUrl"-Parameter (bisher
@@ -543,6 +564,13 @@ export class FlowCanvas extends HTMLElement {
   #hostViewUserSet = false;
   #hostViewPositions: Record<string, Point> = {};
   #freeRootPositions: Record<string, Point> = {};
+  // Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4: "Zone
+  // einklappbar (analog B5-Gruppe)"): rein session-lokal wie
+  // #hostViewEnabled selbst (kein Persistenzbedarf — anders als
+  // #hostViewPositions ist "eingeklappt" ein reiner Sichtbarkeits-,
+  // kein Layout-Zustand, eine neue Sitzung startet wieder vollständig
+  // ausgeklappt).
+  #collapsedZoneIds: Set<string> = new Set();
 
   // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
   #renderQueue: Promise<void> = Promise.resolve();
@@ -640,7 +668,7 @@ export class FlowCanvas extends HTMLElement {
     let positionsToPersist = this.#positions;
     let hostViewPositionsToPersist = this.#hostViewPositions;
     if (this.#hostViewEnabled) {
-      const rootIds = this.#rootNodeTileIds();
+      const rootIds = this.#rootZoneTileIdsFlat();
       const syncedHostViewPositions = { ...this.#hostViewPositions };
       const freeOverride: Record<string, Point> = {};
       for (const id of rootIds) {
@@ -864,6 +892,12 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
+    this.#portTransport.clear();
+    for (const node of this.#graph.nodes) {
+      for (const p of [...node.inputs, ...node.outputs]) {
+        if (p.transport) this.#portTransport.set(p.id, p.transport);
+      }
+    }
     // Kapitel 12 Teil 2: best effort — ein fehlgeschlagener Workflow-
     // Abruf (z. B. fehlende Rechte) lässt den Graphen selbst unberührt,
     // nur die Rahmen bleiben dann leer statt den ganzen Refresh
@@ -890,7 +924,7 @@ export class FlowCanvas extends HTMLElement {
     // Ein-/Ausschalten eine Lane-Position statt der generischen
     // #assignMissingPositions()-Rasterposition oben.
     if (this.#hostViewEnabled) {
-      changed = this.#arrangeIntoLanes(this.#rootNodeTiles()) || changed;
+      changed = this.#arrangeIntoLanes(this.#rootZoneTiles()) || changed;
     }
     if (this.#viewportNeedsFit) {
       this.#viewportNeedsFit = false;
@@ -928,12 +962,16 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Kapitel 13: Gegenstück zu #pruneStalePositions() für die separat
-  // gemerkte Lane-Anordnung (#hostViewPositions) — die enthält nur
-  // Root-Node-IDs (nie Gruppen/Workflows, s. #arrangeIntoLanes), sonst
-  // wächst sie über viele Sitzungen unbegrenzt mit längst entfernten
-  // Instanzen weiter.
+  // gemerkte Lane-Anordnung (#hostViewPositions) — enthält Root-Node-IDs
+  // UND Root-Gruppen-IDs (seit dem Nutzerfund 2026-08-12, s.
+  // #rootZoneTileIds-Doku), nie Workflow-Kacheln (s. #arrangeIntoLanes),
+  // sonst wächst sie über viele Sitzungen unbegrenzt mit längst
+  // entfernten Instanzen/aufgelösten Gruppen weiter.
   #pruneStaleHostViewPositions(): boolean {
-    const validIds = new Set(this.#graph.nodes.map((n) => n.id));
+    const validIds = new Set([
+      ...this.#graph.nodes.map((n) => n.id),
+      ...Object.keys(this.#groupTree.groups),
+    ]);
     let changed = false;
     for (const id of Object.keys(this.#hostViewPositions)) {
       if (!validIds.has(id)) {
@@ -1059,24 +1097,39 @@ export class FlowCanvas extends HTMLElement {
     );
   }
 
-  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13): dieselbe Node-Auswahl
-  // wie #itemsAtScope()/#buildTilesAtScope() für den Root-Scope, aber
-  // bewusst UNABHÄNGIG vom aktuell offenen #scope — die Host-Ansicht
+  // Kapitel 13 (docs/END-GOAL-FEATURES.md §13): dieselbe Node-/Gruppen-
+  // Auswahl wie #itemsAtScope()/#buildTilesAtScope() für den Root-Scope,
+  // aber bewusst UNABHÄNGIG vom aktuell offenen #scope — die Host-Ansicht
   // betrifft immer die Root-Kacheln, auch wenn der Aufruf (z. B.
   // #saveLayout während einer Kachel-Verschiebung innerhalb einer
-  // Gruppe) gerade in einem anderen Scope passiert. Gruppen-/Workflow-
-  // Kacheln bleiben bewusst außen vor (s. #zoneIdForTile-Doku).
-  #rootNodeTileIds(): string[] {
+  // Gruppe) gerade in einem anderen Scope passiert. Workflow-Kacheln
+  // bleiben außen vor (eigener Renderpfad, #renderWorkflowTiles) — echte
+  // B5-Gruppen dagegen bekommen seit dem Nutzerfund 2026-08-12 ("Gruppen-
+  // Nodes werden nicht in der Host-Ansicht angezeigt") ebenfalls eine
+  // Zone (s. #zoneIdForTile-Doku), statt wie zuvor komplett außerhalb
+  // der Lanes an ihrer alten Freilayout-Position zu verharren.
+  #rootZoneTileIds(): { nodeIds: string[]; groupIds: string[] } {
     const items = topLevelItems(this.#groupTree, null, this.#graph.nodes.map((n) => n.id));
     const workflowMemberIds = this.#allWorkflowMemberNodeIds();
-    return items.nodeIds.filter((id) => !workflowMemberIds.has(id));
+    const nodeIds = items.nodeIds.filter((id) => !workflowMemberIds.has(id));
+    // Eine Gruppe, die zugleich einen Workflow repräsentiert, erscheint
+    // am Root bereits über #renderWorkflowTiles() (s. #buildTilesAtScope-
+    // Kommentar zu group.workflowId) — dieselbe Ausnahme gilt hier.
+    const groupIds = items.groupIds.filter((id) => !this.#groupTree.groups[id]?.workflowId);
+    return { nodeIds, groupIds };
   }
 
-  #rootNodeTiles(): TileSpec[] {
-    const rootIds = new Set(this.#rootNodeTileIds());
+  #rootZoneTileIdsFlat(): string[] {
+    const { nodeIds, groupIds } = this.#rootZoneTileIds();
+    return [...nodeIds, ...groupIds];
+  }
+
+  #rootZoneTiles(): TileSpec[] {
+    const { nodeIds, groupIds } = this.#rootZoneTileIds();
+    const nodeIdSet = new Set(nodeIds);
     const tiles: TileSpec[] = [];
     for (const node of this.#graph.nodes) {
-      if (!rootIds.has(node.id)) continue;
+      if (!nodeIdSet.has(node.id)) continue;
       tiles.push({
         id: node.id,
         label: node.label,
@@ -1087,28 +1140,75 @@ export class FlowCanvas extends HTMLElement {
         instanceId: node.instanceId,
       });
     }
+    if (groupIds.length > 0) {
+      const allPorts = this.#allPortRefs();
+      for (const groupId of groupIds) {
+        const group = this.#groupTree.groups[groupId];
+        if (!group) continue;
+        const { inputs, outputs } = promotedPorts(this.#groupTree, groupId, allPorts, this.#graph.edges);
+        tiles.push({
+          id: groupId,
+          label: group.label,
+          inputs: inputs.map((p) => ({ id: p.portId, label: p.label, format: p.format })),
+          outputs: outputs.map((p) => ({ id: p.portId, label: p.label, format: p.format })),
+          kind: "group",
+          health: "",
+        });
+      }
+    }
     return tiles;
   }
 
-  // Welcher Zone (Host) eine Root-Node-Kachel zugeordnet ist — reine
+  // Welche Zone (Host) eine Root-Gruppen-Kachel zugeordnet ist: die
+  // gemeinsame Zone all ihrer (rekursiven) Mitglieder-Nodes, sofern
+  // eindeutig — eine Gruppe KANN Nodes auf verschiedenen Hosts
+  // enthalten (deshalb ursprünglich ganz von der Zonen-Zuordnung
+  // ausgenommen), landet dann aber in der eigenen "Gruppen über mehrere
+  // Hosts"-Lane statt gar nicht angezeigt zu werden. Eine leere Gruppe
+  // (nur verschachtelte Untergruppen ohne eigene Nodes, praktisch nie
+  // der Fall) zählt ebenfalls als gemischt — es gibt keine sinnvollere
+  // Einzel-Zone dafür.
+  #zoneIdForGroup(groupId: string): string {
+    const memberIds = flattenMembers(this.#groupTree, groupId);
+    const zones = new Set(memberIds.map((id) => this.#zoneIdForNodeId(id)));
+    return zones.size === 1 ? [...zones][0] : "mixed";
+  }
+
+  #zoneIdForNodeId(nodeId: string): string {
+    const node = this.#graph.nodes.find((n) => n.id === nodeId);
+    if (!node?.instanceId) return "unassigned";
+    const inst = this.#paletteInstances.find((i) => i.id === node.instanceId);
+    if (!inst || !inst.hostId) return "local";
+    return inst.hostId;
+  }
+
+  // Welcher Zone (Host) eine Root-Kachel zugeordnet ist — reine
   // Client-Arbeit (§13.1: "der Join graph.instanceId → instances.hostId
   // → hosts.label ist reine Client-Arbeit, für Teil 1 ist kein neuer
   // Endpunkt nötig"). "local" = kein instanceId→hostId (lokal gestartet
   // oder Instanz-Liste kurzzeitig veraltet), "unassigned" = gar kein
-  // instanceId (manuell gestartet, kein Launcher-Node, C8).
+  // instanceId (manuell gestartet, kein Launcher-Node, C8), "mixed" =
+  // Gruppen-Kachel mit Mitgliedern auf uneinheitlichen Zonen
+  // (#zoneIdForGroup-Doku).
   #zoneIdForTile(tile: TileSpec): string {
-    if (!tile.instanceId) return "unassigned";
-    const inst = this.#paletteInstances.find((i) => i.id === tile.instanceId);
-    if (!inst || !inst.hostId) return "local";
-    return inst.hostId;
+    return this.#zoneIdForTileId(tile.id);
+  }
+
+  // Wie #zoneIdForTile, aber ohne TileSpec — für Kapitel 13 Teil 2s
+  // Kanten-Klassifizierung (#renderEdge), die nur die tileId aus
+  // #portLocation kennt, keine volle TileSpec.
+  #zoneIdForTileId(tileId: string): string {
+    return this.#groupTree.groups[tileId] ? this.#zoneIdForGroup(tileId) : this.#zoneIdForNodeId(tileId);
   }
 
   // Zonen-Reihenfolge für die festen Lanes (§13.5 Frage 1, Nutzerwahl
   // 2026-08-10: "feste vertikale Lanes"): immer zuerst die lokale Zone
   // (Orchestrator-Host selbst registriert sich nie als eigener Host-
   // Datensatz, s. §13.1), dann alle registrierten Remote-Hosts in
-  // API-Reihenfolge, zuletzt — nur falls tatsächlich mindestens eine
-  // Kachel betroffen ist — "Unzugeordnet".
+  // API-Reihenfolge, danach — nur falls tatsächlich betroffen —
+  // "Unzugeordnet", zuletzt "Gruppen über mehrere Hosts" (Nutzerfund
+  // 2026-08-12: Gruppen-Kacheln mit uneinheitlichen Mitglieder-Zonen,
+  // s. #zoneIdForGroup-Doku).
   #hostZones(tiles: TileSpec[]): { id: string; label: string; metrics?: HostMetrics }[] {
     const zones: { id: string; label: string; metrics?: HostMetrics }[] = [
       { id: "local", label: "Orchestrator-Host (lokal)" },
@@ -1116,6 +1216,9 @@ export class FlowCanvas extends HTMLElement {
     ];
     if (tiles.some((t) => this.#zoneIdForTile(t) === "unassigned")) {
       zones.push({ id: "unassigned", label: "Unzugeordnet" });
+    }
+    if (tiles.some((t) => this.#zoneIdForTile(t) === "mixed")) {
+      zones.push({ id: "mixed", label: "Gruppen über mehrere Hosts" });
     }
     return zones;
   }
@@ -1128,6 +1231,18 @@ export class FlowCanvas extends HTMLElement {
   // aufrufbar sowohl beim Einschalten (alle Root-Node-Kacheln) als auch
   // nach einem #fetchAndRender() für zwischenzeitlich neu erschienene
   // Kacheln (s. dortiger Aufruf).
+  //
+  // Live-Fund 2026-08-12 (beim Verifizieren von Kapitel 13 Teil 2 mit
+  // einem zweiten Host): eine "gemerkte" Position ist nur INNERHALB
+  // ihrer eigenen Lane vertrauenswürdig — registriert sich ein neuer
+  // Host, verschiebt sich die Lane-Reihenfolge (z. B. rückt
+  // "Unzugeordnet" von Index 1 auf Index 2), und eine alte gemerkte
+  // Position landet dann optisch in einer FREMDEN Lane, obwohl die
+  // Kachel weiterhin korrekt der richtigen Zone zugeordnet ist (rein
+  // datengetrieben über #zoneIdForTile, unabhängig von #positions).
+  // Ein `remembered.x`-Abgleich gegen die Lane-Grenzen der AKTUELLEN
+  // Zone verwirft eine so verwaiste Position statt sie blind zu
+  // übernehmen.
   #arrangeIntoLanes(tiles: TileSpec[]): boolean {
     let changed = false;
     const zones = this.#hostZones(tiles);
@@ -1137,12 +1252,13 @@ export class FlowCanvas extends HTMLElement {
       let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
       for (const tile of zoneTiles) {
         const remembered = this.#hostViewPositions[tile.id];
-        const pos = remembered ?? { x, y };
+        const rememberedInThisLane = !!remembered && remembered.x >= x - 1 && remembered.x < x + HOST_ZONE_LANE_WIDTH;
+        const pos = rememberedInThisLane ? remembered : { x, y };
         if (!this.#positions[tile.id] || this.#positions[tile.id].x !== pos.x || this.#positions[tile.id].y !== pos.y) {
           this.#positions[tile.id] = pos;
           changed = true;
         }
-        if (!remembered) this.#hostViewPositions[tile.id] = pos;
+        if (!rememberedInThisLane) this.#hostViewPositions[tile.id] = pos;
         const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
         y += height + HOST_ZONE_TILE_GAP;
       }
@@ -1163,6 +1279,17 @@ export class FlowCanvas extends HTMLElement {
     if (shouldEnable !== this.#hostViewEnabled) this.#toggleHostView(shouldEnable, false);
   }
 
+  // Kapitel 13 Teil 2 (§13.4: "Zone einklappbar, analog B5-Gruppe") —
+  // reiner Sichtbarkeits-Toggle, s. #collapsedZoneIds-Doku.
+  #toggleZoneCollapsed(zoneId: string) {
+    if (this.#collapsedZoneIds.has(zoneId)) {
+      this.#collapsedZoneIds.delete(zoneId);
+    } else {
+      this.#collapsedZoneIds.add(zoneId);
+    }
+    this.#render();
+  }
+
   #toggleHostView(enabled: boolean, userInitiated = true) {
     if (userInitiated) this.#hostViewUserSet = true;
     if (enabled === this.#hostViewEnabled) return;
@@ -1174,19 +1301,19 @@ export class FlowCanvas extends HTMLElement {
   // ab hier die Lane-Anordnung statt des freien Layouts — #freeRoot
   // Positions sichert das freie Layout für #disableHostView().
   #enableHostView() {
-    const rootIds = this.#rootNodeTileIds();
+    const rootIds = this.#rootZoneTileIdsFlat();
     this.#freeRootPositions = {};
     for (const id of rootIds) {
       if (this.#positions[id]) this.#freeRootPositions[id] = this.#positions[id];
     }
     this.#hostViewEnabled = true;
-    this.#arrangeIntoLanes(this.#rootNodeTiles());
+    this.#arrangeIntoLanes(this.#rootZoneTiles());
     this.#render();
     this.#saveLayout();
   }
 
   #disableHostView() {
-    const rootIds = this.#rootNodeTileIds();
+    const rootIds = this.#rootZoneTileIdsFlat();
     for (const id of rootIds) {
       if (this.#positions[id]) this.#hostViewPositions[id] = this.#positions[id];
     }
@@ -1961,9 +2088,20 @@ export class FlowCanvas extends HTMLElement {
 
     const tiles = this.#buildTilesAtScope();
 
+    // Kapitel 13 Teil 2 ("Zone einklappbar"): Kacheln einer eingeklappten
+    // Zone bekommen bewusst WEDER eine #portLocation- NOCH eine
+    // #tileHeightById-Eintragung — #renderEdge()s bestehender
+    // `!fromLoc || !toLoc`-Guard blendet ihre Kanten dadurch automatisch
+    // mit aus, ohne eigene Kanten-Filterlogik. Nur am Root relevant
+    // (s. #buildHostZoneLayer-Doku).
+    const hiddenTileIds = this.#hostViewEnabled && this.#scope === null
+      ? new Set(tiles.filter((t) => this.#collapsedZoneIds.has(this.#zoneIdForTile(t))).map((t) => t.id))
+      : new Set<string>();
+
     this.#portLocation.clear();
     this.#tileHeightById.clear();
     for (const tile of tiles) {
+      if (hiddenTileIds.has(tile.id)) continue;
       const hasPreview = !!this.#hasPreviewById.get(tile.id);
       this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length, hasPreview));
       tile.inputs.forEach((p, i) =>
@@ -1977,8 +2115,13 @@ export class FlowCanvas extends HTMLElement {
     // Kapitel 13: Zonen-Hintergrund ist die unterste Ebene der Canvas —
     // vor allem anderen angehängt, damit Kanten/Kacheln optisch darüber
     // liegen (s. #buildHostZoneLayer-Doku für die Scope-Einschränkung).
+    // `tiles` ist hier bereits die volle Root-Liste (Nodes UND Gruppen,
+    // s. #buildTilesAtScope) — seit dem Nutzerfund 2026-08-12 bekommen
+    // auch Gruppen-Kacheln eine Zone (#zoneIdForTile), ein Filtern auf
+    // `kind === "node"` würde ihre Lane sonst wieder ohne Hintergrund/
+    // Kopfzeile lassen.
     const zoneLayer = (this.#hostViewEnabled && this.#scope === null)
-      ? this.#buildHostZoneLayer(tiles.filter((t) => t.kind === "node"))
+      ? this.#buildHostZoneLayer(tiles)
       : null;
     if (zoneLayer) this.#viewportGroup.appendChild(zoneLayer);
 
@@ -1986,6 +2129,7 @@ export class FlowCanvas extends HTMLElement {
       this.#viewportGroup.appendChild(workflowTile);
     }
     for (const tile of tiles) {
+      if (hiddenTileIds.has(tile.id)) continue;
       this.#viewportGroup.appendChild(this.#renderTile(tile));
     }
     for (const edge of this.#graph.edges) {
@@ -2471,21 +2615,24 @@ export class FlowCanvas extends HTMLElement {
   // `pointer-events:none` auf jedem Element: reines Hintergrundbild,
   // Klicks (Pan/Rubber-Band-Select) müssen unverändert bis zur Canvas
   // durchgereicht werden.
-  #buildHostZoneLayer(nodeTiles: TileSpec[]): SVGGElement {
+  #buildHostZoneLayer(rootTiles: TileSpec[]): SVGGElement {
     const layer = document.createElementNS(SVG_NS, "g");
     layer.setAttribute("data-role", "host-zones");
     layer.setAttribute("pointer-events", "none");
 
-    const zones = this.#hostZones(nodeTiles);
+    const zones = this.#hostZones(rootTiles);
     let x = HOST_ZONE_MARGIN;
     for (const zone of zones) {
-      const zoneTiles = nodeTiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      const zoneTiles = rootTiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      const collapsed = this.#collapsedZoneIds.has(zone.id);
       let bottom = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2;
-      for (const tile of zoneTiles) {
-        const pos = this.#positions[tile.id];
-        if (!pos) continue;
-        const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
-        bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+      if (!collapsed) {
+        for (const tile of zoneTiles) {
+          const pos = this.#positions[tile.id];
+          if (!pos) continue;
+          const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
+          bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+        }
       }
 
       const g = document.createElementNS(SVG_NS, "g");
@@ -2516,10 +2663,11 @@ export class FlowCanvas extends HTMLElement {
       // Online-Punkt (§13.3) nur für echte Hosts (Metriken kommen per
       // NATS vom Host-Agent, s. HOST_ONLINE_THRESHOLD_MS-Doku) — die
       // lokale Zone hat keinen eigenen Host-Agent (der Orchestrator
-      // selbst registriert sich nie als Host, s. §13.1) und
-      // "Unzugeordnet" ist kein Host, also kein Punkt für beide.
+      // selbst registriert sich nie als Host, s. §13.1), "Unzugeordnet"
+      // und "Gruppen über mehrere Hosts" (Nutzerfund 2026-08-12) sind
+      // beide keine echten Hosts, also kein Punkt für alle drei.
       let labelX = 10;
-      if (zone.id !== "local" && zone.id !== "unassigned") {
+      if (zone.id !== "local" && zone.id !== "unassigned" && zone.id !== "mixed") {
         const online = !!zone.metrics &&
           Date.now() - Date.parse(zone.metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
         const dot = document.createElementNS(SVG_NS, "text");
@@ -2545,7 +2693,7 @@ export class FlowCanvas extends HTMLElement {
       }
       g.appendChild(label);
 
-      if (zone.metrics) {
+      if (zone.metrics && !collapsed) {
         const metricsText = document.createElementNS(SVG_NS, "text");
         metricsText.setAttribute("x", String(labelX));
         metricsText.setAttribute("y", "34");
@@ -2556,6 +2704,40 @@ export class FlowCanvas extends HTMLElement {
           `CPU ${zone.metrics.cpuPercent.toFixed(0)}% · RAM ${gb(zone.metrics.memUsedBytes)}/${gb(zone.metrics.memTotalBytes)} GB`;
         g.appendChild(metricsText);
       }
+
+      if (collapsed) {
+        const countText = document.createElementNS(SVG_NS, "text");
+        countText.setAttribute("x", String(labelX));
+        countText.setAttribute("y", "34");
+        countText.setAttribute("fill", "#9aa0a6");
+        countText.setAttribute("font-size", "10");
+        countText.textContent = zoneTiles.length === 1 ? "1 Kachel" : `${zoneTiles.length} Kacheln`;
+        g.appendChild(countText);
+      }
+
+      // Einklapp-Toggle (§13.4 Teil 2: "Zone einklappbar, analog
+      // B5-Gruppe") — einziges interaktive Element innerhalb der sonst
+      // rein dekorativen, `pointer-events:none`-Ebene (s. #buildHostZoneLayer
+      // -Doku); SVG erlaubt pro-Element-Overrides, `stopPropagation()`
+      // verhindert, dass derselbe Klick zusätzlich die Canvas-Pan-Logik
+      // auf der Ebene darunter auslöst.
+      const toggle = document.createElementNS(SVG_NS, "text");
+      toggle.setAttribute("x", String(HOST_ZONE_LANE_WIDTH - 18));
+      toggle.setAttribute("y", "18");
+      toggle.setAttribute("fill", "#9aa0a6");
+      toggle.setAttribute("font-size", "11");
+      toggle.setAttribute("pointer-events", "auto");
+      toggle.setAttribute("data-role", "host-zone-toggle");
+      toggle.style.cursor = "pointer";
+      toggle.textContent = collapsed ? "▸" : "▾";
+      const toggleTitle = document.createElementNS(SVG_NS, "title");
+      toggleTitle.textContent = collapsed ? "Zone ausklappen" : "Zone einklappen";
+      toggle.appendChild(toggleTitle);
+      toggle.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        this.#toggleZoneCollapsed(zone.id);
+      });
+      g.appendChild(toggle);
 
       layer.appendChild(g);
       x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
@@ -2831,6 +3013,7 @@ export class FlowCanvas extends HTMLElement {
     const to = this.#portWorldPosition(toLoc);
 
     const selected = edge.id === this.#selectedEdgeId;
+    const mxlZoneWarning = this.#isCrossZoneMxlEdge(edge, fromLoc.tileId, toLoc.tileId);
     const midX = (from.x + to.x) / 2;
     const path = document.createElementNS(SVG_NS, "path");
     path.setAttribute(
@@ -2838,17 +3021,39 @@ export class FlowCanvas extends HTMLElement {
       `M ${from.x} ${from.y} C ${midX} ${from.y}, ${midX} ${to.y}, ${to.x} ${to.y}`,
     );
     path.setAttribute("fill", "none");
-    path.setAttribute("stroke", selected ? "#ffffff" : edge.state === "active" ? "#e0a030" : "#666");
+    path.setAttribute(
+      "stroke",
+      selected ? "#ffffff" : mxlZoneWarning ? "var(--omp-error)" : edge.state === "active" ? "#e0a030" : "#666",
+    );
     path.setAttribute("stroke-width", selected ? "3" : "2");
+    if (mxlZoneWarning) path.setAttribute("stroke-dasharray", "6 4");
     path.setAttribute("data-role", "edge");
     path.setAttribute("data-id", edge.id);
     path.style.cursor = "pointer";
+    if (mxlZoneWarning) {
+      const title = document.createElementNS(SVG_NS, "title");
+      title.textContent = MXL_ZONE_WARNING_TITLE;
+      path.appendChild(title);
+    }
     path.addEventListener("pointerdown", (ev) => {
       ev.stopPropagation();
       this.#selectedEdgeId = edge.id;
       this.#render();
     });
     return path;
+  }
+
+  // Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.3): "eine Kante
+  // zwischen Kacheln verschiedener Zonen, deren Ports MXL-Format
+  // tragen, wird im Warn-Stil gerendert" — advisory, kein Blockieren
+  // (harte Durchsetzung wäre Graph-API-Arbeit, bewusst spätere Stufe).
+  // Nur relevant, solange die Host-Ansicht tatsächlich sichtbar ist
+  // (Root-Scope, s. #buildHostZoneLayer-Doku) — außerhalb hat "Zone"
+  // keine Bedeutung.
+  #isCrossZoneMxlEdge(edge: GraphEdge, fromTileId: string, toTileId: string): boolean {
+    if (!this.#hostViewEnabled || this.#scope !== null) return false;
+    if (this.#portTransport.get(edge.fromSender) !== TRANSPORT_MXL) return false;
+    return this.#zoneIdForTileId(fromTileId) !== this.#zoneIdForTileId(toTileId);
   }
 
   #portWorldPosition(loc: PortLocation): Point {

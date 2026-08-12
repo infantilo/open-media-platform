@@ -2618,9 +2618,18 @@ Dokument).
   Host-ID registrieren (D6-Muster), Remote-Instanz starten → Kachel
   liegt in dessen Zone, CPU/RAM im Zonen-Kopf; CDP-Klick-Test:
   Toggle an/aus, freies Layout bleibt erhalten.
-- **Teil 2 — Kanten-Klassifizierung + Zonen-Kollaps:**
-  Transport-Erkennung aus Port-Format/IS-04-Transport, MXL-Warnstil
-  über Zonengrenzen; Zone einklappbar (analog B5-Gruppe).
+- **Teil 2 — Kanten-Klassifizierung + Zonen-Kollaps (erledigt
+  2026-08-12, docs/decisions.md Nachtrag 139):** Transport-Feld neu
+  durch den ganzen Stack durchgereicht (IS-04 `transport` →
+  `registry.SenderView`/`ReceiverView` → `graph.Port` → UI), MXL-
+  Warnstil (gestrichelt, `var(--omp-error)`, Tooltip) für Kanten
+  zwischen unterschiedlichen Zonen mit MXL-Sender live gegen einen
+  echten zweiten Host verifiziert. Zone einklappbar (▾/▸ im
+  Zonen-Kopf, session-lokal, analog B5-Gruppe). Dabei außerdem einen
+  live gefundenen Bug behoben: B5-Gruppen-Kacheln bekommen jetzt
+  ebenfalls eine Zone (eindeutig → deren Lane, uneinheitlich → neue
+  Pseudo-Zone "Gruppen über mehrere Hosts") statt wie zuvor komplett
+  außerhalb der Zonen-Darstellung zu landen.
 - **Teil 3 — Drag = begleiteter Umzug:** Bestätigungsdialog,
   Advisory-Integration (K14/D6 Teil 3), Neu-Verkabelung über den
   bestehenden Workflow-/Graph-Pfad.

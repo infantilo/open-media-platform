@@ -29,11 +29,15 @@ const ReconcileInterval = 60 * time.Second
 // Format kommt unverändert aus dem IS-04-Snapshot (registry.SenderView/
 // ReceiverView) und erlaubt der UI, inkompatible Ports beim Drag & Drop
 // zu erkennen (UMSETZUNG.md B3) — der Orchestrator selbst entscheidet
-// nichts über Kompatibilität.
+// nichts über Kompatibilität. Transport (seit Kapitel 13 Teil 2,
+// docs/END-GOAL-FEATURES.md §13.4) ebenso unverändert durchgereicht —
+// die UI nutzt ihn, um MXL-Kanten (host-lokal, §13.1) über Host-
+// Zonengrenzen hinweg im Warn-Stil zu rendern.
 type Port struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Format string `json:"format"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Format    string `json:"format"`
+	Transport string `json:"transport,omitempty"`
 }
 
 // Node ist eine Kachel im Flow-Editor.
@@ -403,10 +407,10 @@ func buildNodes(views []registry.NodeView) []Node {
 	for _, v := range views {
 		n := Node{ID: v.ID, Label: v.Label, Inputs: []Port{}, Outputs: []Port{}, Health: health(v), InstanceID: v.InstanceID}
 		for _, r := range v.Receivers {
-			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format})
+			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format, Transport: r.Transport})
 		}
 		for _, sn := range v.Senders {
-			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label, Format: sn.Format})
+			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label, Format: sn.Format, Transport: sn.Transport})
 		}
 		nodes = append(nodes, n)
 	}

@@ -16700,4 +16700,133 @@ Origin" als Produkt/Plattform. Die historischen Zitate in
 `docs/decisions.md` (2026-07-11-Eintrag) bleiben als Append-Only-
 Protokoll unverändert.
 
+## 2026-08-12 (Nachtrag 139) — Kapitel 13 Teil 2: Kanten-Klassifizierung + Zonen-Kollaps; live gefundener Gruppen-Bug in der Host-Ansicht behoben
+
+Nutzerauftrag "starte wo wir zuletzt aufgehört haben" → Kapitel 13 Teil
+1 war der letzte abgeschlossene Schritt, Teil 2 (§13.4:
+"Kanten-Klassifizierung + Zonen-Kollaps") stand als nächster,
+konkret vorgeplanter Punkt an. Bevor Teil 2 begann, meldete der Nutzer
+zusätzlich einen live beobachteten Bug: "gruppen nodes werden nicht im
+host gruppen fenster angezeigt".
+
+### 1. Bug: B5-Gruppen-Kacheln verschwanden/verirrten sich in der Host-Ansicht
+
+Root-caused per echtem CDP-Test (zwei echte Node-Instanzen gruppiert,
+Host-Ansicht an): Teil 1 hatte Gruppen-/Workflow-Kacheln bewusst von
+der Zonen-Zuordnung ausgenommen (`#rootNodeTileIds()`, Kommentar
+"bleiben bewusst außen vor") — der Gedanke war richtig (eine Gruppe
+KANN Mitglieder auf verschiedenen Hosts haben), die Konsequenz aber
+falsch: eine Gruppen-Kachel blieb bei ihrer alten freien
+Layout-Position stehen, die nach dem Umschalten auf Lane-Koordinaten
+meist irgendwo unterhalb/außerhalb der Zonen landete — sichtbar, aber
+optisch komplett vom Zonen-Konzept abgekoppelt (Screenshot-Beweis:
+Kachel schwebt unterhalb aller Zonen-Rechtecke).
+
+**Fix:** `#rootNodeTileIds()/#rootNodeTiles()` → umbenannt zu
+`#rootZoneTileIds()/#rootZoneTiles()`, liefern jetzt zusätzlich
+Root-Gruppen (ohne `workflowId`, gleiche Ausnahme wie
+`#buildTilesAtScope()`). Neue `#zoneIdForGroup(groupId)`: rekursive
+Mitglieder (`flattenMembers`) auf ihre Zone abgebildet — eindeutig →
+diese Zone (z. B. eine rein lokale Gruppe landet jetzt korrekt in
+"Orchestrator-Host (lokal)"); uneinheitlich → neue Pseudo-Zone
+"Gruppen über mehrere Hosts" (analog zu "Unzugeordnet", nur bei
+Bedarf als Lane gerendert). `#buildHostZoneLayer()`s Aufruf filterte
+bisher hart auf `kind === "node"` — dadurch bekam selbst eine korrekt
+einsortierte Gruppen-Kachel keinen Zonen-Hintergrund/Kopfzeile; Filter
+entfernt (die Funktion selbst war schon generisch). Nebenfund beim
+Verifizieren: der Online-Punkt (nur für echte Hosts gedacht) erschien
+fälschlich auch bei "Gruppen über mehrere Hosts" — Bedingung um
+`zone.id !== "mixed"` ergänzt.
+
+**Zweiter, unabhängiger Live-Fund beim Verifizieren mit einem echten
+zweiten Host:** eine "gemerkte" Lane-Position (`#hostViewPositions`)
+wurde bisher blind übernommen, auch wenn sich die Zonen-Reihenfolge
+seither verschoben hatte (z. B. weil zwischenzeitlich ein neuer Host
+registriert wurde) — eine alte Position landete dann optisch in der
+FALSCHEN Nachbar-Lane, obwohl die Kachel weiterhin korrekt zugeordnet
+war (rein datengetrieben, unabhängig von `#positions`). Fix in
+`#arrangeIntoLanes()`: eine gemerkte Position wird nur noch akzeptiert,
+wenn ihr `x` tatsächlich innerhalb der Lane-Grenzen der AKTUELLEN Zone
+liegt, sonst frisch berechnet.
+
+### 2. Kanten-Klassifizierung (§13.3: MXL-Warnstil über Zonengrenzen)
+
+Transport-Feld war bisher nirgends im Stack vorhanden (nur Format).
+Neu durchgereicht, unverändert, keine eigene Logik im Orchestrator
+(ARCHITECTURE.md §4.5a-Prinzip, wie beim bestehenden Format-Feld):
+IS-04 `transport` (`is04Sender`/`is04Receiver`) →
+`registry.SenderView`/`ReceiverView` → `graph.Port.Transport` →
+`GraphPort.transport` (UI). Live gegen echte Nodes bestätigt: OMP-Nodes
+registrieren `urn:x-omp:transport:mxl` (`nodes/omp-node-sdk/src/is04.rs`).
+
+`#renderEdge()` prüft neu `#isCrossZoneMxlEdge()`: nur relevant bei
+aktiver Host-Ansicht am Root, nur wenn Sender-Transport MXL ist UND
+Quelle/Ziel-Kachel unterschiedlichen Zonen zugeordnet sind (neue
+`#zoneIdForTileId()`, tileId-basierte Variante von `#zoneIdForTile()`
+für den Kanten-Pfad, der nur die tileId aus `#portLocation` kennt).
+Warn-Stil exakt wie in §13.3 vorgegeben: gestrichelt, `var(--omp-error)`
+(erste Verwendung eines CSS-Custom-Property-Werts direkt als
+SVG-`stroke`-Attribut in dieser Datei — funktioniert, da `--omp-error`
+auf `:root` steht und Custom Properties Shadow-DOM-Grenzen
+durchdringen), `<title>`-Tooltip mit dem §13.3-Wortlaut.
+
+### 3. Zonen-Kollaps (§13.4: "analog B5-Gruppe")
+
+Rein session-lokaler Zustand (`#collapsedZoneIds`, wie
+`#hostViewEnabled` selbst — kein Persistenzbedarf, eine neue Sitzung
+startet wieder vollständig ausgeklappt). Klickbares ▾/▸-Symbol im
+Zonen-Kopf (einziges interaktives Element innerhalb der sonst
+`pointer-events:none`-Hintergrundebene, `stopPropagation()` gegen die
+Canvas-Pan-Logik darunter). Eingeklappt: Zonen-Rechteck schrumpft auf
+reine Kopfzeilenhöhe, CPU/RAM-Zeile weicht einer "N Kacheln"-Anzeige.
+Kacheln einer eingeklappten Zone bekommen bewusst weder eine
+`#portLocation`- noch `#tileHeightById`-Eintragung — `#renderEdge()`s
+bestehender `!fromLoc || !toLoc`-Guard blendet ihre Kanten dadurch
+automatisch mit aus, ganz ohne eigene Kanten-Filterlogik.
+
+### Verifiziert
+
+`go build`/`go vet`/`go test ./...` (orchestrator + host-agent) grün,
+`deno check`/`deno test ui/` grün (84/84). Live gegen echten
+Orchestrator/Postgres/NATS/Registry, zweiter echter `omp-host-agent`
+(gleiches Zwei-Host-Testmuster wie Teil 1/D6/K7-Teil-4): per CDP
+(Deno-natives WebSocket) im echten Headless-Chromium bestätigt —
+- Lokale Gruppe (zwei echte, lokal gestartete Instanzen) landet nach
+  dem Fix sichtbar in der "Orchestrator-Host (lokal)"-Lane statt
+  losgelöst unterhalb aller Zonen.
+- Gruppe mit gemischten Mitgliedern (lokaler Node + `omp-registry`
+  ohne `instanceId`) erzeugt korrekt die neue "Gruppen über mehrere
+  Hosts"-Zone, ohne fälschlichen Online-Punkt.
+- Echte hostübergreifende MXL-Verbindung (lokaler `omp-source` →
+  `omp-viewer` auf echtem zweiten Host, über
+  `POST /api/v1/graph/edges`) rendert gestrichelt in
+  `var(--omp-error)` (`getComputedStyle` bestätigt `rgb(239, 83, 80)`),
+  korrekter Tooltip-Text per DOM bestätigt.
+- Zonen-Kollaps: Klick versteckt Kachel + Kante des Zielhosts
+  nachweislich (`querySelectorAll` vor/nach verglichen), Zonen-Kopf
+  zeigt "1 Kachel", erneuter Klick stellt beides wieder her.
+- Stale-Lane-Position-Fix: nach Registrierung des zweiten Hosts landete
+  `omp-registry`s alte gemerkte Position vor dem Fix sichtbar in der
+  FALSCHEN (neuen Host-)Lane, danach korrekt in "Unzugeordnet".
+
+Test-Instanzen gestoppt, Host-Agent-Prozess beendet, Test-Host-Zeile aus
+der DB entfernt, Test-Gruppen aus dem Standard-Layout entfernt (gleiche
+Aufräum-Disziplin wie Teil 1) — dabei ein Nebeneffekt beobachtet, aber
+nicht weiter verfolgt: eine bereits geschlossene Browser-Session kann,
+solange ihr Tab technisch noch offen ist, auf einen SSE-Graph-Change
+(z. B. eine Instanz-Löschung) hin mit ihrem eigenen, noch veralteten
+`#groupTree` erneut speichern und einen serverseitig bereits bereinigten
+Testzustand ungewollt wiederherstellen — reiner Test-Artefakt dieser
+Sitzung (mehrere parallel offene CDP-Tabs), kein Produktbug, da ein
+Nutzer in der Praxis nicht mehrere Tabs mit unterschiedlich altem
+Zustand gegen dieselbe Gruppe aktiv hält.
+
+**Bewusst nicht Teil dieser Sitzung** (Phasenplan §13.4, weiterhin
+offen): Teil 3 (Drag = begleiteter Host-Umzug) — hängt an §13.5 Frage
+3, noch nicht mit dem Projektinhaber geklärt.
+
+**Dateien:** `orchestrator/internal/registry/types.go`,
+`orchestrator/internal/registry/client.go`,
+`orchestrator/internal/graph/graph.go`, `ui/graph/flow-canvas.ts`.
+
 **Dateien:** `ARCHITECTURE.md` §1/§9/§10.
