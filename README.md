@@ -18,10 +18,84 @@ The core of the system is an orchestrator developed in Go. It handles discovery,
 
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
-Several microservices are currently available as demonstrators — each
-one an independent process that self-registers via NMOS, with its own
-UI and its own set of self-described parameters (full list with
-functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
+Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.
+
+I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
+
+## Quickstart
+
+```sh
+make start   # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
+```
+
+Then open http://localhost:8000. Details/troubleshooting:
+[`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
+screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+(Both docs are in German — this README is the only English-language
+entry point so far.)
+
+## Screenshots
+
+![Flow editor with running node instances](docs/screenshots/flow-editor.png)
+
+_The flow editor: node catalog on the left, drag-and-drop wiring on the
+canvas, a running workflow shown as a collapsible tile._
+
+![Host zones: two hosts, a group spanning both, and an MXL connection flagged for crossing a host boundary](docs/screenshots/host-zonen.png)
+
+_Multi-host operation made visible: each registered host gets its own
+zone with live CPU/RAM; a source migrated to a second host while its
+viewer stayed local — the resulting MXL connection (host-local by
+design) is automatically flagged in the warning style, because that
+link needs an ST 2110/SRT/Fabrics gateway to actually work across
+hosts, not a same-host zero-copy MXL flow._
+
+![Operator console with four assigned node UIs plus two sources honestly reporting they have no UI of their own](docs/screenshots/operator-konsole.png)
+
+_An operator's console: every node UI it's entitled to operate, live,
+side by side — no flow editor, no catalog, nothing to misconfigure._
+
+More screens (login, instances, workflows, scheduler, alarms,
+administration, hosts, grouped tiles) are in
+[`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+
+## What's in the box
+
+**Standard-based core**
+
+- EBU DMF-style service decomposition — a mixer, a player, a graphics
+  engine, etc. are independent, self-describing processes, not modules
+  inside a monolith.
+- AMWA NMOS IS-04/IS-05 for discovery and routing; IS-12/IS-14 for
+  self-described parameters and methods — the orchestrator never has
+  built-in knowledge of a specific node type.
+- MXL zero-copy shared memory for same-host media exchange; SMPTE
+  ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
+  for cross-host exchange, including AES67 audio (Dante-compatible).
+- PostgreSQL-backed state, mTLS between orchestrator and nodes, a
+  local user/role model with audit log — no external directory server
+  required.
+
+**Flow editor & workflows**
+
+- Drag-and-drop canvas: nodes register automatically and appear as
+  tiles; connecting two ports creates a real IS-05 connection.
+- Reusable workflow objects (named role→role templates), snapshots/
+  presets, grouping tiles into collapsible macro blocks, import/export.
+- A scheduler tab for time-driven start/stop of whole workflows
+  (day/week/month view, drag to move/resize).
+- Multi-host operation is visible on the same canvas, not a separate
+  screen: once more than one host is registered, the flow editor shows
+  a zone per host (live CPU/RAM, fixed lanes, toggleable), a connection
+  that crosses a host boundary while using host-local MXL is flagged
+  automatically (dashed, with an explanation), zones are collapsible,
+  and dragging a standalone node's tile into another zone triggers a
+  guided move (stop, start on the target host, best-effort reconnect
+  of its existing connections) after a confirmation dialog.
+
+**Microservices** — each an independent process that self-registers
+via NMOS, with its own UI and self-described parameters (full list
+with functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
 - **omp-switcher** — simple video switcher between auto-discovered
@@ -59,31 +133,80 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   for real RoCEv2 hardware are a drop-in config change, hardware
   procurement pending.
 
-All components run as independent services and can be started, stopped, or extended independently — either locally via the built-in instance launcher, or on a separate machine via a lightweight host agent that registers itself with the orchestrator and executes only pre-approved node types (agent-local catalog as the trust boundary, not a wide-open remote-exec channel).
+All components run as independent services and can be started,
+stopped, or extended independently — either locally via the built-in
+instance launcher, or on a separate machine via a lightweight host
+agent that registers itself with the orchestrator and executes only
+pre-approved node types (agent-local catalog as the trust boundary,
+not a wide-open remote-exec channel). Third-party microservices can
+also be imported as Podman containers straight from the GUI, subject
+to an admission check against the same node contract every built-in
+node has to satisfy.
 
-A graphical user interface is being developed in parallel, consistently implementing the concept of a software-defined broadcast system. Nodes register automatically, appear in the flow editor, and can be connected via drag and drop. Parameters are dynamically generated from their respective self-descriptions—without having to develop separate interfaces for each device type. Login-based user/role accounts (local, no external directory server required) gate who can wire the graph, launch instances, or administer hosts.
+**Reliability & operations**
 
-Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.
+- Automatic process restart with a crash-loop brake; a metrics
+  endpoint; an operations view with running instances (CPU/RAM per
+  process), host resource history, and collected alarms.
+- Optional hot-standby for critical roles: a mirrored instance takes
+  over on crash-loop exhaustion or host-offline detection
+  (break-before-make handover, operator state carried across).
+- A workflow can declare a target end-to-end latency budget — the
+  orchestrator hard-rejects wiring that can't meet it and automatically
+  compensates paths that are too short by assigning output delay to
+  capable nodes.
+- A placement engine (overload alarm + target-host suggestion,
+  configurable per workflow role between purely advisory, a
+  confirmation window with automatic execution on expiry, or immediate
+  automatic execution) plus, since Kapitel 13, a manual guided move via
+  drag in the flow editor for standalone nodes (see above); the
+  equivalent for workflow roles exists in the orchestrator (reuses the
+  same make-before-break protocol) but has no UI trigger yet — see
+  "What OpenMediaPlatform does not do" below.
+- Login-based user/role accounts (local, no external directory server
+  required) gate who can wire the graph, launch instances, or
+  administer hosts; every write access is captured in an audit log.
 
-High availability is no longer entirely out of scope: critical roles can run with an automatic hot-standby (a mirrored instance that takes over on crash-loop exhaustion or host-offline detection, break-before-make handover, operator state carried across via the existing state export/import mechanism), and a workflow can declare a target end-to-end latency budget — the orchestrator hard-rejects wiring that can't meet it and automatically compensates paths that are too short by assigning output delay to capable nodes (currently `omp-scaler` and `omp-video-mixer-me`). Commercial support is still not offered. The goal remains to verify the architecture and demonstrate the potential of open standards like DMF, MXL, NMOS, and NATS.
+## What OpenMediaPlatform does **not** do
 
-I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
+Being upfront about the current edges, not just the highlights:
 
-## Quickstart
+- **No capture/output hardware support.** Sources today are software
+  test patterns; there is no SDI/capture-card I/O layer yet — I/O
+  cards as their own, exclusively-claimable resource class is on the
+  open list, not built.
+- **No RDMA hardware verified.** MXL-native Fabrics is implemented and
+  live-tested, but only over the software `tcp` libfabric provider;
+  `verbs`/`efa` for real RoCEv2 NICs is a drop-in config change that
+  hasn't been run against real hardware yet (procurement pending).
+- **No NDI gateway, no proprietary Dante.** AES67 (which most Dante
+  devices also speak) is supported via `omp-aes67-gateway`; native NDI
+  and Dante's proprietary control protocol are not implemented.
+- **No orchestrator-level high availability.** Node/role-level
+  redundancy exists (hot-standby, crash-loop restart, host-offline
+  failover); the orchestrator process itself is a single point of
+  failure — there's no multi-orchestrator clustering.
+- **Workflow-role migration has no UI yet.** The backend for moving a
+  running workflow role to another host exists and is tested, but a
+  running workflow currently always renders as a single collapsed tile
+  in the flow editor's host view, so there's no tile to drag for an
+  individual role — only standalone (non-workflow) node instances can
+  be moved today via drag-and-drop.
+- **No independent security audit.** Auth, mTLS, and audit logging
+  exist and are exercised by the test suite, but there has been no
+  external penetration test or formal security review.
+- **Not production-hardened at broadcast scale.** This is a working
+  proof of concept, developed and demonstrated on a single laptop-class
+  machine (see below) — it has not been run in a real multi-day,
+  multi-operator broadcast production, and there is no commercial
+  support offering.
+- **No mobile/tablet-optimized UI.** The web UI targets desktop
+  operator positions and engineering workstations.
+- **No external identity provider.** User accounts are local to the
+  orchestrator; there is no SSO/LDAP/OIDC integration.
 
-```sh
-make start   # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
-```
-
-Then open http://localhost:8000. Details/troubleshooting:
-[`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
-screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
-(Both docs are in German — this README is the only English-language
-entry point so far.)
-
-![Flow editor with running node instances](docs/screenshots/flow-editor.png)
-
-![Control room "Regie 1": several microservice UIs (audio mixer, OGraf graphics, two sources, video mixer M/E, viewer) in one operator console](docs/screenshots/regieplatz-1.png)
+If any of these matter for your use case and you'd like to help close
+the gap, contributions and issues are welcome.
 
 ## Status
 
@@ -113,7 +236,11 @@ and collected alarms. The flow editor itself automatically shows host
 zones on the same canvas once more than one host is registered (one
 zone per machine with live CPU/RAM, fixed lanes, toggleable) — makes it
 visible at a glance which instance is actually running on which host,
-not just in the separate hosts tab. Also added since then: a scheduler
+not just in the separate hosts tab. A connection that would cross a
+host boundary over host-local MXL is flagged in a warning style right
+on the canvas, zones can be collapsed, and a standalone node's tile can
+be dragged into another zone to trigger a guided move (confirmation
+dialog, then stop/start/reconnect). Also added since then: a scheduler
 tab for time-driven start/stop of entire workflows (day/week/month
 view, drag-to-move/resize schedules), a resource preview (typical
 CPU/RAM load per node type right in the catalog, from real measurement
@@ -136,8 +263,18 @@ short by assigning output delay to capable nodes (currently
 
 Open: I/O cards as their own, exclusively-claimable resource class,
 RDMA hardware integration (`verbs`/EFA providers, pending hardware
-procurement), an NDI gateway, and proprietary Dante (Dante in AES67
-mode already runs via `omp-aes67-gateway`).
+procurement), an NDI gateway, proprietary Dante (Dante in AES67 mode
+already runs via `omp-aes67-gateway`), and a UI trigger for the
+already-built workflow-role migration backend (see "What
+OpenMediaPlatform does not do" above).
+
+## License
+
+Apache License 2.0 — see [`LICENSE`](LICENSE). Vendored third-party
+components under `third_party/` (MXL, libfabric) are never committed
+to this repository (fetched at build time by `deploy/dev/install-mxl.sh`
+and friends) and keep their own upstream licenses (both Apache-2.0/
+BSD-or-GPLv2-compatible).
 
 ## Related project
 

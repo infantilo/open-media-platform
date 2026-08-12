@@ -16963,3 +16963,127 @@ Entscheidung).
 `orchestrator/internal/instancemigrate/service.go` (neu),
 `orchestrator/internal/instancemigrate/service_test.go` (neu),
 `ui/graph/flow-canvas.ts`.
+
+## 2026-08-12 (Nachtrag 141) — README/Benutzerhandbuch aktualisiert, LICENSE ergänzt, Copyright-Prüfung
+
+Nutzerauftrag: README aktualisieren (Feature-Liste + ehrliche
+"was es nicht macht"-Liste), Screenshots aller Screens erneuern,
+Benutzerhandbuch synchronisieren, Copyright-Risiken ausschließen, dann
+committen+pushen.
+
+### 1. Copyright-Prüfung — zwei echte Funde vor jeder Doku-Arbeit
+
+**Kein LICENSE-File.** Trotz "Open Source"/"No licensing fees" in
+README und Hero-Grafik hatte das Repo keine Lizenzdatei — ohne sie
+gilt rechtlich "alle Rechte vorbehalten", niemand darf das Projekt
+tatsächlich nutzen/forken. Per Rückfrage (Apache-2.0 vs. MIT vs.
+AGPL-3.0 vs. "später") **Apache-2.0** gewählt (passt zu MXL selbst,
+expliziter Patent-Grant relevant bei Broadcast-Standards). Text
+wortgleich aus dem bereits im Repo vorhandenen, unveränderten
+`third_party/mxl/LICENSE.txt` übernommen (verbatim, keine Web-Suche
+nötig) — nur die Copyright-Zeile im Appendix ausgefüllt
+("OpenMediaPlatform contributors"). `third_party/mxl`
+(Apache-2.0)/`third_party/libfabric` (BSD/GPLv2) werden nie
+mitcommittet (gitignored, per `install-mxl.sh` zur Build-Zeit
+geholt) — keine Lizenz-Kompatibilitätszwänge für den eigenen Code.
+
+**"OpenMediaPlatform CI.jpeg"** (Corporate-Identity-Mockup mit
+Studio-Fotos unklarer Herkunft) lag unreferenziert im Repo-Root, in
+keiner Doku eingebunden. Per Rückfrage entfernt.
+
+**Während der Screenshot-Arbeit ein DRITTER, schwerwiegenderer Fund:**
+das OGraf-Grafik-Panel zeigte im ersten Operator-Konsole-Screenshot
+standardmäßig das Template `02700111` (Autor lt. Manifest "Grok",
+Felder "Dolby Digital"/"Neue Folge"/"Neue Serie"/"Zweikanalton" —
+echte deutsche Broadcast-Fachbegriffe) statt des eigens dafür
+existierenden, garantiert lizenzfreien `hello-lower-third`-Templates
+(`author: "OpenMediaPlatform"`, s. K5-Teil-1). Ursache: der `show()`-
+Methodenaufruf setzt nur den On-Air-Zustand, nicht die im
+Parameter-Panel selbst ausgewählte Template-ID — die Dropdown-
+Auswahl blieb auf dem alphabetisch/scan-Reihenfolge-ersten
+importierten (gitignored, `data/ograf-templates/`, NIE committet)
+Drittanbieter-Template stehen. Wäre unbemerkt geblieben, hätte das
+Template-Feldnamen-Vokabular eines nicht offengelegten Dritt-Autors
+in einem committeten, öffentlichen Screenshot landen lassen. Fix:
+Template-Dropdown im laufenden Browser gezielt per JS (Shadow-DOM-
+Traversal, da Node-UI-Bundles per Custom-Element/Shadow-Root statt
+iframe eingebettet sind) auf `hello-lower-third` umgestellt, danach
+neu geschossen. **Generelle Lektion, s. auch
+[[project_ograf_templates_imported]]-artige Altfunde:** jeder
+Screenshot, der ein OGraf-Panel zeigt, muss aktiv geprüft werden,
+welches Template gerade ausgewählt ist — der Default ist nicht
+deterministisch sicher.
+
+### 2. Screenshots — alle elf Screens neu, plus ein neuer
+
+Komplett neu aufgenommen (CDP, Headless-Chromium, 1600×1000, echte
+Dev-Instanz wie schon immer): `login`, `flow-editor`, `gruppen`,
+`instanzen`, `workflows`, `scheduler`, `alarme`, `administration`,
+`hosts` — dafür ein realistisches Demo-Setup gebaut (Workflow
+„Regie 1" mit sechs Rollen, `operator1`-Rollenbindung auf den ganzen
+Workflow, ein zweiter echter `omp-host-agent`, ein Zeitplan). Neu
+dazugekommen: `host-zonen.png` (zeigt alle vier Zonen-Typen inkl. der
+neuen "Gruppen über mehrere Hosts"-Pseudo-Zone aus Kapitel 13 Teil 2,
+plus eine echte, per Instanz-Migration erzeugte MXL-Kante im
+Warnstil über eine Zonengrenze). `regieplatz-1.png` entfernt (nicht
+mehr referenziert) — sein Inhalt (Sources ohne eigenes UI-Bundle,
+sechs-Rollen-Konsole) deckt jetzt derselbe `operator-konsole.png`
+mit ab, spart eine fast redundante zweite Aufnahme.
+
+**Live gefundener, echter Produkt-Bug beim Aufbau des Demo-Workflows**
+(nicht Teil des Copyright-Themas, aber dokumentiert, da real): zwei
+`omp-source`-Instanzen, die als Rollen desselben Workflows exakt
+gleichzeitig starten, können sich eine Registrierungs-Race teilen —
+in zwei von zwei beobachteten Workflow-Starts fehlte danach bei
+GENAU EINER der beiden (nicht deterministisch welcher) der Video-
+Sender in der NMOS-Registry (Audio-Sender blieb unberührt). Ein
+gezielter Solo-Neustart der betroffenen Rolle (`RestartRole`, Kapitel
+13 Teil 3 zufällig direkt griffbereit) behebt es zuverlässig. Nicht
+weiter untersucht (Scope dieser Sitzung war Dokumentation, kein
+Pipeline-Debugging, s. `docs/decisions.md` 2026-07-09 "nicht raten,
+auch nicht bei GStreamer/Medien-Pipelines" — würde eine eigene
+Sitzung mit `/home/infantilo/PIPELINE CONTROLLER`-Abgleich
+verdienen) — für eine künftige Sitzung vorgemerkt.
+
+### 3. README.md
+
+Neu strukturierte Feature-Liste nach Kategorien (Standard-Kern, Flow
+Editor & Workflows inkl. Kapitel-13-Fähigkeiten, Microservices,
+Zuverlässigkeit & Betrieb) statt einer flachen Aufzählung. Neuer
+Abschnitt "What OpenMediaPlatform does **not** do" (fehlende I/O-
+Karten-Unterstützung, RDMA nur software-getestet, kein NDI/kein
+proprietäres Dante, keine Orchestrator-HA, Workflow-Rollen-Migration
+ohne UI-Anschluss, kein externes Sicherheitsaudit, keine
+Produktionshärtung im großen Maßstab, keine mobile UI, kein externer
+Identity-Provider) — bewusst konkret statt vage, jeder Punkt mit
+Begründung. Neuer Abschnitt "License" (Apache-2.0, Hinweis auf
+gitignorete Drittanbieter-Vendoring). Drei Screenshots eingebunden
+(`flow-editor`, `host-zonen`, `operator-konsole`), Rest per Verweis
+auf `BENUTZERHANDBUCH.md`.
+
+### 4. BENUTZERHANDBUCH.md
+
+Alle Bildverweise auf die neuen Screenshots umgestellt, Begleittext an
+den tatsächlich sichtbaren Inhalt angepasst (populierte Workflows-/
+Scheduler-/Administration-/Hosts-Ansichten statt der alten Leerzustände,
+Rollenbindung-Beispiel "ganzer Workflow" statt einzelner Nodes).
+Abschnitt 2.5 (Host-Ansicht) um Kapitel 13 Teil 2 (Kanten-Warnstil,
+Zonen-Kollaps) und Teil 3 (begleiteter Umzug per Drag, inkl. der
+Einschränkung auf eigenständige Nodes) erweitert. Abschnitt 9
+(Operator-Konsole) mit dem alten Abschnitt 9.1 (Regieplatz-1-Beispiel)
+zusammengeführt, da ein einziger Screenshot jetzt beide Aspekte zeigt.
+
+### Verifiziert
+
+Alle Bildpfade in README.md/BENUTZERHANDBUCH.md gegen das Dateisystem
+geprüft (kein toter Link). `grep` gegen bekannte Fremdmarken-Namen in
+README/Handbuch/LICENSE: keine Treffer außer der bewusst faktischen
+"Dante (nicht implementiert)"-Erwähnung. Test-Infrastruktur aufgeräumt
+(zweiter Host-Agent-Prozess + DB-Zeile entfernt, Chromium beendet,
+Screenshot-Scaffolding-Instanzen gestoppt) — der Demo-Workflow
+„Regie 1" (sechs Rollen, gestartet) bleibt bewusst als lebendes
+Beispiel stehen, passend zu den neuen Screenshots.
+
+**Dateien:** `LICENSE` (neu), `OpenMediaPlatform CI.jpeg` (entfernt),
+`README.md`, `docs/BENUTZERHANDBUCH.md`, `docs/screenshots/*.png`
+(elf erneuert, `host-zonen.png` neu, `regieplatz-1.png` entfernt).
