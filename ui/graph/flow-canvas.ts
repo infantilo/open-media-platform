@@ -193,7 +193,7 @@ interface WorkflowSummary {
   id: string;
   name: string;
   status: string;
-  runtime?: Record<string, { instanceId: string; nodeId?: string }>;
+  runtime?: Record<string, { instanceId: string; nodeId?: string; hostId?: string }>;
   // Kapitel 12 Teil 3 (§12.3c): für die Platzhalter-Kacheln eines
   // pausierten Workflows — der hat keine Runtime-Nodes mehr (gleiche
   // Ressourcen-Wirkung wie "stopped"), daher Rollenname+Typ+Template-
@@ -962,15 +962,17 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // Kapitel 13: Gegenstück zu #pruneStalePositions() für die separat
-  // gemerkte Lane-Anordnung (#hostViewPositions) — enthält Root-Node-IDs
-  // UND Root-Gruppen-IDs (seit dem Nutzerfund 2026-08-12, s.
-  // #rootZoneTileIds-Doku), nie Workflow-Kacheln (s. #arrangeIntoLanes),
-  // sonst wächst sie über viele Sitzungen unbegrenzt mit längst
-  // entfernten Instanzen/aufgelösten Gruppen weiter.
+  // gemerkte Lane-Anordnung (#hostViewPositions) — enthält Root-Node-IDs,
+  // Root-Gruppen-IDs (seit dem Nutzerfund 2026-08-12, s.
+  // #rootZoneTileIds-Doku) UND seit Kapitel 13 Teil 4 auch Workflow-
+  // Kacheln-IDs (s. #arrangeIntoLanes), sonst wächst sie über viele
+  // Sitzungen unbegrenzt mit längst entfernten Instanzen/aufgelösten
+  // Gruppen/Workflows weiter.
   #pruneStaleHostViewPositions(): boolean {
     const validIds = new Set([
       ...this.#graph.nodes.map((n) => n.id),
       ...Object.keys(this.#groupTree.groups),
+      ...this.#allWorkflowTileIds(),
     ]);
     let changed = false;
     for (const id of Object.keys(this.#hostViewPositions)) {
@@ -1103,8 +1105,14 @@ export class FlowCanvas extends HTMLElement {
   // betrifft immer die Root-Kacheln, auch wenn der Aufruf (z. B.
   // #saveLayout während einer Kachel-Verschiebung innerhalb einer
   // Gruppe) gerade in einem anderen Scope passiert. Workflow-Kacheln
-  // bleiben außen vor (eigener Renderpfad, #renderWorkflowTiles) — echte
-  // B5-Gruppen dagegen bekommen seit dem Nutzerfund 2026-08-12 ("Gruppen-
+  // bleiben hier außen vor — eigener Renderpfad (#renderWorkflowTiles),
+  // eigene TileSpec-lose ID-Liste, dafür aber seit dem Nutzerfund
+  // 2026-08-13 ("Regie 1 sollte multihost sein, wird aber im
+  // Host-Fenster nicht gezeichnet") separat in #arrangeIntoLanes/
+  // #hostZones/#buildHostZoneLayer eingebunden (s. #zoneIdForWorkflow) —
+  // sie verharren also NICHT mehr komplett außerhalb der Lanes wie vor
+  // Kapitel 13 Teil 4, nur eben nicht über diese Node-/Gruppen-Liste.
+  // Echte B5-Gruppen bekommen seit dem Nutzerfund 2026-08-12 ("Gruppen-
   // Nodes werden nicht in der Host-Ansicht angezeigt") ebenfalls eine
   // Zone (s. #zoneIdForTile-Doku), statt wie zuvor komplett außerhalb
   // der Lanes an ihrer alten Freilayout-Position zu verharren.
@@ -1174,6 +1182,22 @@ export class FlowCanvas extends HTMLElement {
     return zones.size === 1 ? [...zones][0] : "mixed";
   }
 
+  // Zone einer Workflow-Kachel (Kapitel 13 Teil 4, Nutzerfund 2026-08-13:
+  // "Regie 1 sollte multihost sein, wird aber im Host-Fenster nicht
+  // gezeichnet") — analog #zoneIdForGroup, aber direkt aus
+  // wf.runtime[role].hostId statt über #paletteInstances-Join (die
+  // Workflow-API liefert hostId bereits inline pro Rolle mit, s.
+  // orchestrator/internal/httpapi/workflow_handlers.go). Kein Runtime
+  // (gestoppt/pausiert) oder eine Rolle ohne hostId (lokal gestartet)
+  // zählt als "local", uneinheitliche Rollen-Hosts als "mixed" (gleiche
+  // Bedeutung wie bei #zoneIdForGroup).
+  #zoneIdForWorkflow(wf: WorkflowSummary): string {
+    const runtime = wf.runtime;
+    if (!runtime || Object.keys(runtime).length === 0) return "local";
+    const zones = new Set(Object.values(runtime).map((rt) => rt.hostId || "local"));
+    return zones.size === 1 ? [...zones][0] : "mixed";
+  }
+
   #zoneIdForNodeId(nodeId: string): string {
     const node = this.#graph.nodes.find((n) => n.id === nodeId);
     if (!node?.instanceId) return "unassigned";
@@ -1217,7 +1241,14 @@ export class FlowCanvas extends HTMLElement {
     if (tiles.some((t) => this.#zoneIdForTile(t) === "unassigned")) {
       zones.push({ id: "unassigned", label: "Unzugeordnet" });
     }
-    if (tiles.some((t) => this.#zoneIdForTile(t) === "mixed")) {
+    // Workflow-Kacheln (Kapitel 13 Teil 4) landen ebenfalls in der
+    // "mixed"-Lane, wenn ihre Rollen auf uneinheitlichen Hosts laufen —
+    // dieselbe Lane wie gemischte B5-Gruppen, eigene Prüfung nötig, weil
+    // Workflow-Kacheln nicht Teil von `tiles` sind (s. #rootZoneTileIds).
+    if (
+      tiles.some((t) => this.#zoneIdForTile(t) === "mixed") ||
+      this.#workflowsInScope().some((wf) => this.#zoneIdForWorkflow(wf) === "mixed")
+    ) {
       zones.push({ id: "mixed", label: "Gruppen über mehrere Hosts" });
     }
     return zones;
@@ -1260,21 +1291,38 @@ export class FlowCanvas extends HTMLElement {
   #arrangeIntoLanes(tiles: TileSpec[]): boolean {
     let changed = false;
     const zones = this.#hostZones(tiles);
+    // Kapitel 13 Teil 4: Workflow-Kacheln (eigener Renderpfad, s.
+    // #renderWorkflowTiles) bekommen hier eine eigene Liste aus
+    // {id, height}-Einträgen — sie sind keine TileSpecs (kein Graph-Node,
+    // keine Ports), teilen sich aber denselben Lane-Stapel wie die echten
+    // Root-Kacheln ihrer Zone (#zoneIdForWorkflow), sonst bleiben sie wie
+    // vor diesem Fix frei schwebend außerhalb des Host-Fensters.
+    const workflowHeight = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+    const workflowEntries = this.#workflowsInScope().map((wf) => ({
+      id: workflowTileId(wf.id),
+      zoneId: this.#zoneIdForWorkflow(wf),
+      height: workflowHeight,
+    }));
     let x = HOST_ZONE_MARGIN;
     for (const zone of zones) {
-      const zoneTiles = tiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      const zoneEntries: { id: string; height: number }[] = [
+        ...tiles.filter((t) => this.#zoneIdForTile(t) === zone.id).map((t) => ({
+          id: t.id,
+          height: this.#tileHeightById.get(t.id) ?? nodeHeight(t.inputs.length, t.outputs.length),
+        })),
+        ...workflowEntries.filter((e) => e.zoneId === zone.id),
+      ];
       let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
-      for (const tile of zoneTiles) {
-        const remembered = this.#hostViewPositions[tile.id];
+      for (const entry of zoneEntries) {
+        const remembered = this.#hostViewPositions[entry.id];
         const rememberedInThisLane = !!remembered && remembered.x >= x - 1 && remembered.x < x + HOST_ZONE_LANE_WIDTH;
         const pos = rememberedInThisLane ? remembered : { x, y };
-        if (!this.#positions[tile.id] || this.#positions[tile.id].x !== pos.x || this.#positions[tile.id].y !== pos.y) {
-          this.#positions[tile.id] = pos;
+        if (!this.#positions[entry.id] || this.#positions[entry.id].x !== pos.x || this.#positions[entry.id].y !== pos.y) {
+          this.#positions[entry.id] = pos;
           changed = true;
         }
-        if (!rememberedInThisLane) this.#hostViewPositions[tile.id] = pos;
-        const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
-        y += height + HOST_ZONE_TILE_GAP;
+        if (!rememberedInThisLane) this.#hostViewPositions[entry.id] = pos;
+        y += entry.height + HOST_ZONE_TILE_GAP;
       }
       x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
     }
@@ -1315,7 +1363,11 @@ export class FlowCanvas extends HTMLElement {
   // ab hier die Lane-Anordnung statt des freien Layouts — #freeRoot
   // Positions sichert das freie Layout für #disableHostView().
   #enableHostView() {
-    const rootIds = this.#rootZoneTileIdsFlat();
+    // Kapitel 13 Teil 4: Workflow-Kacheln-IDs gehören hier mit dazu (s.
+    // #arrangeIntoLanes-Doku) — sonst überlebt ihre freie Vor-Host-Ansicht-
+    // Position #disableHostView() nicht (würde sonst stumm gelöscht statt
+    // wiederhergestellt).
+    const rootIds = [...this.#rootZoneTileIdsFlat(), ...this.#allWorkflowTileIds()];
     this.#freeRootPositions = {};
     for (const id of rootIds) {
       if (this.#positions[id]) this.#freeRootPositions[id] = this.#positions[id];
@@ -1327,7 +1379,7 @@ export class FlowCanvas extends HTMLElement {
   }
 
   #disableHostView() {
-    const rootIds = this.#rootZoneTileIdsFlat();
+    const rootIds = [...this.#rootZoneTileIdsFlat(), ...this.#allWorkflowTileIds()];
     for (const id of rootIds) {
       if (this.#positions[id]) this.#hostViewPositions[id] = this.#positions[id];
     }
@@ -2209,7 +2261,13 @@ export class FlowCanvas extends HTMLElement {
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     const tiles: SVGGElement[] = [];
 
+    // Kapitel 13 Teil 4: dieselbe Einklapp-Ausblendung wie für echte
+    // Root-Kacheln (s. #render()s hiddenTileIds) — sonst bliebe eine
+    // Workflow-Kachel in einer eingeklappten Zone trotzdem sichtbar,
+    // während ihre Zonen-Box selbst zusammengeklappt ist.
+    const hostViewHiding = this.#hostViewEnabled && this.#scope === null;
     for (const wf of this.#workflowsInScope()) {
+      if (hostViewHiding && this.#collapsedZoneIds.has(this.#zoneIdForWorkflow(wf))) continue;
       const id = workflowTileId(wf.id);
       const pos = this.#positions[id];
       if (!pos) continue;
@@ -2635,9 +2693,17 @@ export class FlowCanvas extends HTMLElement {
     layer.setAttribute("pointer-events", "none");
 
     const zones = this.#hostZones(rootTiles);
+    // Kapitel 13 Teil 4: Workflow-Kacheln zählen für Höhe/Kachel-Anzahl
+    // einer Zone mit (s. #arrangeIntoLanes-Doku) — ohne das wäre die
+    // Zonen-Box zu kurz und die Workflow-Kachel ragte unten heraus.
+    const workflowZoneIds = this.#workflowsInScope().map((wf) => ({
+      id: workflowTileId(wf.id),
+      zoneId: this.#zoneIdForWorkflow(wf),
+    }));
     let x = HOST_ZONE_MARGIN;
     for (const zone of zones) {
       const zoneTiles = rootTiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
+      const zoneWorkflowTileIds = workflowZoneIds.filter((e) => e.zoneId === zone.id).map((e) => e.id);
       const collapsed = this.#collapsedZoneIds.has(zone.id);
       let bottom = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2;
       if (!collapsed) {
@@ -2646,6 +2712,11 @@ export class FlowCanvas extends HTMLElement {
           if (!pos) continue;
           const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
           bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+        }
+        for (const id of zoneWorkflowTileIds) {
+          const pos = this.#positions[id];
+          if (!pos) continue;
+          bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
         }
       }
 
@@ -2725,7 +2796,8 @@ export class FlowCanvas extends HTMLElement {
         countText.setAttribute("y", "34");
         countText.setAttribute("fill", "#9aa0a6");
         countText.setAttribute("font-size", "10");
-        countText.textContent = zoneTiles.length === 1 ? "1 Kachel" : `${zoneTiles.length} Kacheln`;
+        const totalCount = zoneTiles.length + zoneWorkflowTileIds.length;
+        countText.textContent = totalCount === 1 ? "1 Kachel" : `${totalCount} Kacheln`;
         g.appendChild(countText);
       }
 

@@ -15,6 +15,16 @@ export interface ConsoleEntry {
   nodeRoleId: string;
   nodeLabel: string;
   uiBundleUrl: string;
+  // hostId/hostLabel (Kapitel 13 Teil 4, Nutzerfund 2026-08-13: "im
+  // Regieplatz expandiert ist nicht ersichtlich, welcher Node wo
+  // gehostet ist"): reine Client-Anreicherung in shell.ts#fetchConsoles
+  // (Join nodeRoleId===instanceId gegen GET /api/v1/instances/hosts,
+  // gleiches Muster wie ui/graph/flow-canvas.ts §13.1) — der Orchestrator
+  // selbst liefert GET /api/v1/me/consoles unverändert ohne Host-Feld.
+  // Fehlt (undefined), wenn die Anreicherung fehlschlug (z. B. Rolle
+  // gerade lokal ohne Host-Agent) oder noch nicht gelaufen ist.
+  hostId?: string;
+  hostLabel?: string;
 }
 
 export class ConsoleView extends HTMLElement {
@@ -67,7 +77,7 @@ export class ConsoleView extends HTMLElement {
     this.#tabs.style.display = this.#entries.length > 1 ? "flex" : "none";
     for (const entry of this.#entries) {
       const tab = document.createElement("button");
-      tab.textContent = entry.nodeLabel;
+      tab.textContent = entry.hostLabel ? `${entry.nodeLabel} · ${entry.hostLabel}` : entry.nodeLabel;
       tab.style.cssText = `cursor:pointer;padding:6px 12px;border:1px solid #555;border-radius:4px;background:${
         entry.nodeRoleId === this.#activeNodeRoleId ? "#2e7d32" : "#222"
       };color:#eee;`;

@@ -60,6 +60,49 @@ interface ConsolesResponse {
   consoles: ConsoleEntry[];
 }
 
+// Kapitel 13 Teil 4 (Nutzerfund 2026-08-13: "im Regieplatz expandiert ist
+// nicht ersichtlich, welcher Node wo gehostet ist"): reiner Client-Join,
+// gleiches Muster wie ui/graph/flow-canvas.ts §13.1 ("graph.instanceId →
+// instances.hostId → hosts.label ist reine Client-Arbeit, kein neuer
+// Endpunkt nötig") — GET /api/v1/instances und /api/v1/hosts sind beide
+// nur hinter requireAuth (kein Konfigurations-/Admin-Recht nötig, s.
+// orchestrator/internal/httpapi/server.go), ein reiner Operator (der
+// einzige Aufrufer dieses Codepfads) kann beide also lesen.
+// `nodeRoleId` einer ConsoleEntry IST die Launcher-Instanz-ID
+// (orchestrator/internal/consoles/resolve.go NodeRoleID), identisch zum
+// `id`-Feld von GET /api/v1/instances.
+interface InstanceEntry {
+  id: string;
+  hostId?: string;
+}
+interface HostEntry {
+  id: string;
+  label: string;
+}
+
+async function fetchHostLabelsByInstanceId(): Promise<Map<string, string>> {
+  const byInstance = new Map<string, string>();
+  try {
+    const [instancesRes, hostsRes] = await Promise.all([
+      fetch("/api/v1/instances"),
+      fetch("/api/v1/hosts"),
+    ]);
+    if (!instancesRes.ok || !hostsRes.ok) return byInstance;
+    const instances = (await instancesRes.json()) as InstanceEntry[] | null;
+    const hosts = (await hostsRes.json()) as HostEntry[] | null;
+    const hostLabelById = new Map((hosts ?? []).map((h) => [h.id, h.label]));
+    for (const inst of instances ?? []) {
+      byInstance.set(inst.id, inst.hostId ? hostLabelById.get(inst.hostId) ?? inst.hostId : "Lokal");
+    }
+  } catch {
+    // Best effort — eine fehlgeschlagene Anreicherung lässt die Konsole
+    // selbst unberührt, es fehlt dann nur die Host-Anzeige (s.
+    // ConsoleEntry.hostLabel-Doku), kein Grund den ganzen Refresh
+    // abzubrechen.
+  }
+  return byInstance;
+}
+
 async function fetchConsoles(): Promise<ConsolesResponse> {
   const res = await fetch("/api/v1/me/consoles");
   // Kein erreichbarer Orchestrator/Fehler: auf die vor C13 einzig
@@ -72,10 +115,17 @@ async function fetchConsoles(): Promise<ConsolesResponse> {
   // statt an jeder Verwendungsstelle unten gegen `null` absichern zu
   // müssen (per Browser-Test gefunden: "Cannot read properties of null
   // (reading 'length')").
+  const consoles = body.consoles ?? [];
+  if (consoles.length > 0) {
+    const hostLabelByInstance = await fetchHostLabelsByInstanceId();
+    for (const entry of consoles) {
+      entry.hostLabel = hostLabelByInstance.get(entry.nodeRoleId);
+    }
+  }
   return {
     hasEngineeringAccess: body.hasEngineeringAccess,
     hasOperateBindings: body.hasOperateBindings,
-    consoles: body.consoles ?? [],
+    consoles,
   };
 }
 

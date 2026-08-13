@@ -108,12 +108,28 @@ export class ConsoleBoard extends HTMLElement {
     this.#applyLayout(wrapper, this.#layouts[entry.nodeRoleId]);
 
     const header = document.createElement("div");
-    header.textContent = entry.nodeLabel;
     header.title = "Ziehen zum Verschieben";
     header.style.cssText =
       "cursor:move;padding:6px 10px;background:#262626;border-bottom:1px solid #444;" +
-      "font-size:12px;font-weight:bold;color:#eee;user-select:none;flex-shrink:0;" +
-      "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+      "display:flex;align-items:baseline;gap:6px;user-select:none;flex-shrink:0;" +
+      "white-space:nowrap;overflow:hidden;";
+    const label = document.createElement("span");
+    label.textContent = entry.nodeLabel;
+    label.style.cssText = "font-size:12px;font-weight:bold;color:#eee;overflow:hidden;text-overflow:ellipsis;";
+    header.appendChild(label);
+    // Host-Anzeige (Kapitel 13 Teil 4, Nutzerfund 2026-08-13): welcher
+    // Host diese Rolle gerade ausführt — shell.ts#fetchConsoles reichert
+    // hostLabel client-seitig an (s. ConsoleEntry-Doku), fehlt sie (noch
+    // nicht angereichert/Join fehlgeschlagen), bleibt nur der Node-Name.
+    if (entry.hostLabel) {
+      const hostBadge = document.createElement("span");
+      hostBadge.textContent = entry.hostLabel;
+      hostBadge.title = `Host: ${entry.hostLabel}`;
+      hostBadge.style.cssText =
+        "font-size:10px;font-weight:normal;color:#9aa0a6;background:#1a1a1a;padding:1px 6px;" +
+        "border-radius:8px;overflow:hidden;text-overflow:ellipsis;";
+      header.appendChild(hostBadge);
+    }
     header.addEventListener("pointerdown", (ev) => this.#onDragStart(ev, entry.nodeRoleId));
 
     const content = document.createElement("div");
