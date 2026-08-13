@@ -92,6 +92,11 @@ type Config struct {
 	BackupDir         string
 	PostgresContainer string
 	BackupKeep        int
+	// SupervisorURL zeigt auf den eigenständigen Backup/Restore-
+	// Supervisor-Prozess (supervisor/main.go, Nutzerwunsch 2026-08-13) —
+	// lauscht nur auf 127.0.0.1, s. dessen Kopfkommentar zur
+	// Vertrauensgrenze.
+	SupervisorURL string
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
@@ -137,7 +142,8 @@ func Load() Config {
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-/Audit-Defaults oben).
-		BackupKeep: getEnvInt("OMP_BACKUP_KEEP", 14),
+		BackupKeep:    getEnvInt("OMP_BACKUP_KEEP", 14),
+		SupervisorURL: getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
 	}
 }
 

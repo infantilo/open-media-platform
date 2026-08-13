@@ -39,6 +39,8 @@ if curl -fs http://localhost:8000/healthz > /dev/null 2>&1; then
 fi
 
 if [ "${1:-}" = "--all" ]; then
+  echo "==> Supervisor stoppen"
+  "$ROOT_DIR/deploy/dev/stop-supervisor.sh"
   echo "==> NATS + NMOS-Registry stoppen"
   make -C "$ROOT_DIR" down
 fi

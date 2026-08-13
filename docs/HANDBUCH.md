@@ -149,18 +149,33 @@ Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,
 Layouts, Snapshots, Workflows, Hosts) liegt in Postgres (`omp-postgres`-
 Container).
 
-**Backup — auch über die GUI möglich** (Nutzerwunsch 2026-08-13):
-Administration → Backup/Restore → „Backup jetzt erstellen“
-(`POST /api/v1/admin/backup`, Admin-Recht nötig) erstellt eine
-Sicherung genau wie `backup-omp.sh` (gleicher `.backups/`-Ordner,
-gleiche Rotation) und liefert sie sofort als Download. Restore läuft
-weiterhin nur über die Kommandozeile (unten) — ein Zurückspielen
-verlangt, dass der Orchestrator selbst gestoppt ist, was ein laufender
-Prozess sich nicht selbst befehlen kann; ein eigenständiger Supervisor-
-Prozess dafür ist geplant, aber noch nicht gebaut.
+**Backup und Restore — beide über die GUI möglich** (Nutzerwunsch
+2026-08-13): Administration → Backup/Restore.
+
+- „Backup jetzt erstellen“ (`POST /api/v1/admin/backup`, Admin-Recht
+  nötig) erstellt eine Sicherung genau wie `backup-omp.sh` (gleicher
+  `.backups/`-Ordner, gleiche Rotation) und liefert sie sofort als
+  Download.
+- Restore: Backup aus der Liste wählen, den Dateinamen zur Bestätigung
+  exakt eintippen, „Zurückspielen“. Ein Zurückspielen verlangt, dass
+  der Orchestrator selbst gestoppt ist — ein laufender Prozess kann
+  sich das nicht selbst befehlen, während er gerade den Restore-Request
+  beantwortet. Deshalb läuft seit Nutzerentscheidung 2026-08-13 immer
+  ein eigenständiger, dauerhaft laufender **Supervisor-Prozess**
+  daneben (`omp-supervisor`, `supervisor/main.go`, nur auf `127.0.0.1`
+  erreichbar, automatisch von `make start`/`start-omp.sh` mitgestartet,
+  überlebt einen `make stop`/`make start`-Zyklus des Orchestrators
+  unverändert) — der Orchestrator-Endpunkt ruft ihn intern auf, er
+  führt den eigentlichen Stop→Restore→Start-Zyklus aus (ruft dafür
+  dieselben `stop-omp.sh`/`start-omp.sh`-Skripte wie unten auf, keine
+  eigene Neuimplementierung). Die Browserseite meldet währenddessen
+  „Server wird neu gestartet …“ und lädt sich nach ca. 5–10s automatisch
+  neu, sobald `/healthz` wieder antwortet.
 
 Zwei Skripte, `deploy/dev/backup-omp.sh`/`restore-omp.sh`
-(bzw. `make backup`/`make restore`):
+(bzw. `make backup`/`make restore`) — bleiben als Kommandozeilen-
+Alternative bestehen, z. B. für ein Skript-gesteuertes Deployment ohne
+Browser:
 
 **Backup:**
 ```sh

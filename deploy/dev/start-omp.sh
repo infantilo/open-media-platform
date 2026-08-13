@@ -59,6 +59,15 @@ fi
 echo "==> NATS + NMOS-Registry (Podman, make up)"
 make -C "$ROOT_DIR" up
 
+# Backup/Restore-Supervisor (Nutzerwunsch 2026-08-13) — muss den
+# Orchestrator-Neustart, den er selbst für einen Restore auslöst,
+# unabhängig überleben, deshalb hier gestartet statt Teil des
+# Orchestrator-Prozesses unten (gleiche Einordnung wie NATS/Registry
+# oben: Infrastruktur, die vor dem eigentlichen Orchestrator steht,
+# idempotent bei bereits laufendem Supervisor).
+echo "==> Supervisor (Backup/Restore-Unterbau)"
+"$ROOT_DIR/deploy/dev/start-supervisor.sh"
+
 echo "==> UI-Bundle bauen"
 make -C "$ROOT_DIR" ui
 

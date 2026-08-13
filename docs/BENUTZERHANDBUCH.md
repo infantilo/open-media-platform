@@ -286,11 +286,13 @@ Normalbetrieb bleibt er leer:
 
 Der Reiter **Administration** (nur sichtbar für Nutzer mit
 Administrationsrecht) verwaltet Nutzerkonten, Rollenbindungen, den
-Node-Katalog-Import/Export und zeigt ein Audit-Log aller schreibenden
-API-Zugriffe — seit Nutzerwunsch 2026-08-13 als vier eigene Unter-Reiter
-(Nutzer/Rollenbindungen/Node-Katalog/Audit-Log) statt einer einzigen,
-lang scrollenden Seite (der Screenshot unten zeigt noch den älteren
-Stand, alle vier Abschnitte untereinander):
+Node-Katalog-Import/Export, zeigt ein Audit-Log aller schreibenden
+API-Zugriffe und erstellt/restauriert Datenbank-Sicherungen — seit
+Nutzerwunsch 2026-08-13 als fünf eigene Unter-Reiter (Nutzer/
+Rollenbindungen/Node-Katalog/Audit-Log/Backup-Restore) statt einer
+einzigen, lang scrollenden Seite (der Screenshot unten zeigt noch den
+älteren Stand, die ersten vier Abschnitte untereinander, noch ohne
+Backup/Restore):
 
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
@@ -312,6 +314,12 @@ Stand, alle vier Abschnitte untereinander):
 - **Audit-Log** — jede schreibende Anfrage (wer, wann, welcher
   API-Pfad, welcher HTTP-Status) — auch fehlgeschlagene Versuche (rot
   markierte Statuscodes) bleiben sichtbar.
+- **Backup/Restore** — „Backup jetzt erstellen“ erstellt sofort einen
+  Download; Restore verlangt, den gewählten Dateinamen exakt
+  einzutippen (Bestätigung), ersetzt danach den kompletten
+  Datenbankinhalt und lädt die Seite nach einigen Sekunden automatisch
+  neu, sobald der Orchestrator wieder erreichbar ist (Details:
+  `docs/HANDBUCH.md` §5, inkl. des dafür nötigen Supervisor-Prozesses).
 
 ## 8. Hosts (Remote-Betrieb)
 

@@ -184,16 +184,24 @@ class AdminView extends HTMLElement {
   #admissionResults: AdmissionResult[] | null = null;
 
   // Nutzerwunsch 2026-08-13 ("generelles Backup/Restore über das
-  // Browser-UI"): Backup ist fertig (POST /api/v1/admin/backup, GET
-  // .../admin/backups). Restore braucht einen eigenständigen, immer
-  // laufenden Supervisor-Prozess (der Orchestrator kann sich nicht
-  // selbst befehlen, sich zu stoppen, während er den Restore-Request
-  // gerade beantwortet — Nutzerentscheidung 2026-08-13, s.
-  // project_feature_triage_2026_08_13 im Memory) — noch nicht gebaut,
-  // Abschnitt zeigt deshalb bewusst nur einen Hinweis auf den
-  // bestehenden CLI-Weg statt eines nicht-funktionalen Formulars.
+  // Browser-UI"): Backup und Restore laufen jetzt beide über die GUI.
+  // Restore braucht den eigenständigen, immer laufenden Supervisor-
+  // Prozess (der Orchestrator kann sich nicht selbst befehlen, sich zu
+  // stoppen, während er den Restore-Request gerade beantwortet —
+  // Nutzerentscheidung 2026-08-13, s. supervisor/main.go), der
+  // Orchestrator-Prozess ist während eines Restores für einige Sekunden
+  // nicht erreichbar — #restoring/#reconnecting bilden das im UI ab
+  // (Overlay statt einer scheinbar hängenden Seite), #restoreSelected/
+  // #restoreTyped sind die "Dateinamen exakt eintippen"-Bestätigung
+  // (gleiche Reibung wie restore-omp.shs "yes"-Eingabe, hier aber
+  // dateiname-spezifisch statt generisch, damit sichtbar wird, WAS
+  // gerade zurückgespielt wird, nicht nur DASS bestätigt wurde).
   #backups: string[] = [];
   #creatingBackup = false;
+  #restoreSelected = "";
+  #restoreTyped = "";
+  #restoring = false;
+  #reconnecting = false;
 
   connectedCallback() {
     this.style.cssText =
@@ -532,6 +540,74 @@ class AdminView extends HTMLElement {
         this.#render();
       }
     })();
+  }
+
+  // Löst POST /api/v1/admin/restore aus — nur erreichbar, wenn
+  // #restoreTyped exakt #restoreSelected entspricht (s. #restoreSelected-
+  // Doku), plus eine zusätzliche confirmDialog()-Rückfrage direkt davor
+  // (gleiches Muster wie überall sonst in dieser Datei für destruktive
+  // Aktionen, z. B. #removeRole in role-designer.ts).
+  async #restoreDatabase() {
+    if (!this.#restoreSelected || this.#restoreTyped !== this.#restoreSelected) return;
+    const confirmed = await confirmDialog(
+      `Backup „${this.#restoreSelected}" wirklich zurückspielen? Dies ERSETZT den kompletten ` +
+        `aktuellen Datenbankinhalt (Nutzer, Rollenbindungen, Audit-Log, Layouts, Snapshots, ` +
+        `Workflows, Hosts) unwiderruflich.`,
+      { confirmLabel: "Zurückspielen" },
+    );
+    if (!confirmed) return;
+
+    this.#restoring = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const res = await apiFetch("/api/v1/admin/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file: this.#restoreSelected, confirm: true }),
+      });
+      if (!res.ok) {
+        // Klarer Fehlschlag VOR dem eigentlichen Restore (Validierung,
+        // Supervisor nicht erreichbar) — der Orchestrator lebt
+        // unverändert weiter, kein Reconnect-Overlay nötig.
+        this.#error = `Restore fehlgeschlagen: ${await res.text()}`;
+        this.#restoring = false;
+        this.#render();
+        return;
+      }
+    } catch {
+      // Ein Netzwerkfehler HIER ist mehrdeutig: entweder eine echte
+      // Verbindungsstörung, oder der Orchestrator-Prozess ist bereits
+      // mitten in der Antwort gestorben (s. supervisor/main.go
+      // sleepBeforeStop-Doku — ein knappes Zeitfenster bleibt trotz der
+      // Verzögerung theoretisch möglich). Beide Fälle behandelt die
+      // Reconnect-Logik unten identisch, statt einen für den Nutzer
+      // nicht unterscheidbaren Fehler zu zeigen.
+    }
+    this.#waitForReconnectAndReload();
+  }
+
+  #waitForReconnectAndReload() {
+    this.#restoring = false;
+    this.#reconnecting = true;
+    this.#render();
+    const poll = () => {
+      fetch("/healthz")
+        .then((res) => {
+          if (res.ok) {
+            window.location.reload();
+            return;
+          }
+          setTimeout(poll, 1000);
+        })
+        .catch(() => setTimeout(poll, 1000));
+    };
+    // Anfangsverzögerung: der alte Prozess braucht selbst nach dem
+    // Antworten noch einen Moment, um tatsächlich zu sterben (s.
+    // supervisor/main.go sleepBeforeStop) — ein sofortiger erster Poll
+    // träfe fast immer noch ihn selbst und meldete fälschlich "schon
+    // wieder da", bevor der eigentliche Neustart überhaupt begonnen hat.
+    setTimeout(poll, 2000);
   }
 
   // Füllt das Formular aus einer zuvor per #exportCatalogEntry
@@ -1334,12 +1410,18 @@ class AdminView extends HTMLElement {
     return section;
   }
 
-  // Nutzerwunsch 2026-08-13: Backup ist voll funktionsfähig (Backend s.
-  // orchestrator/internal/backup); Restore braucht den noch nicht
-  // gebauten Supervisor-Prozess (s. #backups-Doku oben) — dieser
-  // Abschnitt zeigt deshalb zwei klar getrennte Blöcke statt eines
-  // Formulars mit einem toten Restore-Knopf.
+  // Nutzerwunsch 2026-08-13: Backup und Restore sind beide voll
+  // funktionsfähig (Backend s. orchestrator/internal/backup +
+  // supervisor/main.go). Während eines Restores (#restoring/
+  // #reconnecting) ersetzt diese Methode ihre gesamte Ausgabe durch ein
+  // Overlay — der Orchestrator ist für einige Sekunden komplett nicht
+  // erreichbar, jede andere Interaktion in diesem Abschnitt wäre in
+  // diesem Fenster ohnehin bedeutungslos.
   #renderBackupSection(): HTMLElement {
+    if (this.#restoring || this.#reconnecting) {
+      return this.#renderRestoreOverlay();
+    }
+
     const section = document.createElement("div");
 
     const backupHeading = document.createElement("div");
@@ -1399,19 +1481,90 @@ class AdminView extends HTMLElement {
     restoreHeading.textContent = "Restore";
     section.appendChild(restoreHeading);
 
+    if (this.#backups.length === 0) {
+      const noBackups = document.createElement("div");
+      noBackups.style.cssText = "color:var(--omp-text-dim);";
+      noBackups.textContent = "Erst ein Backup erstellen, bevor ein Restore möglich ist.";
+      section.appendChild(noBackups);
+      return section;
+    }
+
     const restoreHint = document.createElement("div");
-    restoreHint.style.cssText = "color:var(--omp-text-dim);white-space:pre-wrap;";
+    restoreHint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-2);white-space:pre-wrap;";
     restoreHint.textContent =
-      "Restore ist noch nicht über die Oberfläche verfügbar — ein Zurückspielen ersetzt den " +
-      "kompletten Datenbankinhalt und verlangt deshalb, dass der Orchestrator selbst gestoppt " +
-      "ist (der laufende Prozess kann sich das nicht selbst befehlen, während er gerade diese " +
-      "Anfrage beantwortet). Bis dahin über die Kommandozeile:\n\n" +
-      "  make stop\n" +
-      "  make restore ARGS=.backups/<dateiname>.sql.gz\n\n" +
-      "(verlangt eine interaktive Bestätigung, s. docs/HANDBUCH.md §5).";
+      "ERSETZT den kompletten aktuellen Datenbankinhalt (Nutzer, Rollenbindungen, Audit-Log, " +
+      "Layouts, Snapshots, Workflows, Hosts) mit dem gewählten Stand — nicht rückgängig zu " +
+      "machen, außer durch ein weiteres Restore. Der Orchestrator ist während des Vorgangs " +
+      "(wenige Sekunden) nicht erreichbar, diese Seite lädt danach automatisch neu.";
     section.appendChild(restoreHint);
 
+    const select = document.createElement("select");
+    select.style.cssText = "margin-bottom:var(--omp-space-2);";
+    const placeholderOpt = document.createElement("option");
+    placeholderOpt.value = "";
+    placeholderOpt.textContent = "Backup wählen …";
+    select.appendChild(placeholderOpt);
+    for (const name of this.#backups) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === this.#restoreSelected) opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", () => {
+      this.#restoreSelected = select.value;
+      this.#restoreTyped = "";
+      this.#render();
+    });
+    section.appendChild(select);
+
+    if (this.#restoreSelected) {
+      const confirmLabel = document.createElement("div");
+      confirmLabel.style.cssText = "color:var(--omp-text-dim);margin:var(--omp-space-2) 0 4px;";
+      confirmLabel.textContent = `Zur Bestätigung exakt eintippen: ${this.#restoreSelected}`;
+      section.appendChild(confirmLabel);
+
+      const confirmRow = document.createElement("div");
+      confirmRow.style.cssText = "display:flex;gap:var(--omp-space-2);align-items:center;";
+      const typedInput = document.createElement("input");
+      typedInput.type = "text";
+      typedInput.value = this.#restoreTyped;
+      typedInput.style.cssText = "width:320px;";
+      typedInput.addEventListener("input", () => {
+        this.#restoreTyped = typedInput.value;
+        // Nur den Knopf-Zustand aktualisieren, kein voller #render() —
+        // sonst verliert das Eingabefeld bei jedem Tastendruck den Fokus
+        // (gleiches Muster wie #renderFilterBar in workflows-view.ts).
+        restoreBtn.disabled = this.#restoreTyped !== this.#restoreSelected;
+      });
+      const restoreBtn: HTMLButtonElement = document.createElement("button");
+      restoreBtn.textContent = "Zurückspielen";
+      restoreBtn.className = "omp-btn-danger";
+      restoreBtn.disabled = this.#restoreTyped !== this.#restoreSelected;
+      restoreBtn.style.cssText = "font-size:11px;cursor:pointer;";
+      restoreBtn.addEventListener("click", () => void this.#restoreDatabase());
+      confirmRow.append(typedInput, restoreBtn);
+      section.appendChild(confirmRow);
+    }
+
     return section;
+  }
+
+  #renderRestoreOverlay(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "padding:var(--omp-space-4) 0;text-align:center;color:var(--omp-text);";
+    const title = document.createElement("div");
+    title.className = "omp-h1";
+    title.style.cssText = "margin-bottom:var(--omp-space-2);";
+    title.textContent = this.#restoring ? "Restore wird eingeleitet …" : "Server wird neu gestartet …";
+    const detail = document.createElement("div");
+    detail.style.cssText = "color:var(--omp-text-dim);";
+    detail.textContent = this.#restoring
+      ? "Sende den Restore-Auftrag an den Supervisor."
+      : "Datenbank wird zurückgespielt, der Orchestrator startet danach automatisch neu — " +
+        "diese Seite lädt sich von selbst neu, sobald er wieder erreichbar ist.";
+    wrap.append(title, detail);
+    return wrap;
   }
 }
 

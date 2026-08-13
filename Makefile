@@ -1,6 +1,6 @@
 .PHONY: build test check check-ci up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
 
-GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent
+GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent supervisor
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
@@ -129,6 +129,11 @@ status:
 	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
 	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
+	@if [ -f .run/supervisor.pid ] && kill -0 "$$(cat .run/supervisor.pid)" 2>/dev/null; then \
+		echo "Supervisor (Backup/Restore): läuft (PID $$(cat .run/supervisor.pid))"; \
+	else \
+		echo "Supervisor (Backup/Restore): nicht gestartet"; \
+	fi
 
 # Backup/Restore (S9, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
 # .backups/omp-<timestamp>.sql.gz, Rotation N=14. `make restore

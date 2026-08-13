@@ -211,7 +211,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
@@ -305,6 +305,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/backup", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBackup(backupSvc)))
 	mux.HandleFunc("GET /api/v1/admin/backups", g.requireVerbGlobal(authz.VerbAdmin, handleListBackups(backupSvc)))
 	mux.HandleFunc("GET /api/v1/admin/backups/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadBackup(backupSvc)))
+	mux.HandleFunc("POST /api/v1/admin/restore", g.requireVerbGlobal(authz.VerbAdmin, handleRestore(backupSvc, supervisorClient)))
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
