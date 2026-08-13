@@ -82,12 +82,23 @@ type Config struct {
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
 	// Löschung (s. audit.Store.PurgeOlderThan).
 	AuditRetentionDays int
+	// BackupDir/PostgresContainer/BackupKeep (Nutzerwunsch 2026-08-13:
+	// Backup über das Browser-UI) — spiegeln exakt deploy/dev/
+	// backup-omp.shs BACKUP_DIR/Container-Name/BACKUP_KEEP, beide Wege
+	// teilen sich denselben Ordner und dieselbe Rotation. Default relativ
+	// zum orchestrator/-Arbeitsverzeichnis (Dev-Fallback, gleiches Muster
+	// wie UIDir/CatalogPath oben) — start-omp.sh exportiert den
+	// tatsächlichen absoluten Pfad.
+	BackupDir         string
+	PostgresContainer string
+	BackupKeep        int
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_ORCHESTRATOR_URL, OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
 // OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
-// OMP_PLACEMENT_* und OMP_AUDIT_RETENTION_DAYS;
+// OMP_PLACEMENT_*, OMP_AUDIT_RETENTION_DAYS und OMP_BACKUP_DIR/
+// OMP_POSTGRES_CONTAINER/OMP_BACKUP_KEEP;
 // fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
 // NATS-Ports aus UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade
@@ -121,6 +132,12 @@ func Load() Config {
 		// Placement-Defaults oben — config bleibt frei von
 		// Business-Logik-Abhängigkeiten).
 		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
+		BackupDir:          getEnv("OMP_BACKUP_DIR", "../.backups"),
+		PostgresContainer:  getEnv("OMP_POSTGRES_CONTAINER", "omp-postgres"),
+		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier
+		// dupliziert statt importiert, gleiches Muster wie die
+		// Placement-/Audit-Defaults oben).
+		BackupKeep: getEnvInt("OMP_BACKUP_KEEP", 14),
 	}
 }
 

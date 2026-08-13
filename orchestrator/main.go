@@ -17,6 +17,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
@@ -345,7 +346,9 @@ func main() {
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
 	go workflowScheduler.Run(ctx)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore)
+	backupSvc := backup.NewService(cfg.PostgresContainer, cfg.BackupDir, cfg.BackupKeep)
+
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

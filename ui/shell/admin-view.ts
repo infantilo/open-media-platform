@@ -121,12 +121,13 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "bindings" | "catalog" | "audit";
+type AdminTabId = "users" | "bindings" | "catalog" | "audit" | "backup";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "bindings", label: "Rollenbindungen" },
   { id: "catalog", label: "Node-Katalog" },
   { id: "audit", label: "Audit-Log" },
+  { id: "backup", label: "Backup/Restore" },
 ];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
@@ -182,6 +183,18 @@ class AdminView extends HTMLElement {
   // diese Detailauflösung der eigentliche Zweck des Checks ist.
   #admissionResults: AdmissionResult[] | null = null;
 
+  // Nutzerwunsch 2026-08-13 ("generelles Backup/Restore über das
+  // Browser-UI"): Backup ist fertig (POST /api/v1/admin/backup, GET
+  // .../admin/backups). Restore braucht einen eigenständigen, immer
+  // laufenden Supervisor-Prozess (der Orchestrator kann sich nicht
+  // selbst befehlen, sich zu stoppen, während er den Restore-Request
+  // gerade beantwortet — Nutzerentscheidung 2026-08-13, s.
+  // project_feature_triage_2026_08_13 im Memory) — noch nicht gebaut,
+  // Abschnitt zeigt deshalb bewusst nur einen Hinweis auf den
+  // bestehenden CLI-Weg statt eines nicht-funktionalen Formulars.
+  #backups: string[] = [];
+  #creatingBackup = false;
+
   connectedCallback() {
     this.style.cssText =
       "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
@@ -194,6 +207,7 @@ class AdminView extends HTMLElement {
     this.#loadNodes();
     this.#loadWorkflows();
     this.#loadCatalog();
+    this.#loadBackups();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
@@ -442,6 +456,84 @@ class AdminView extends HTMLElement {
     }
   }
 
+  async #loadBackups() {
+    try {
+      const res = await apiFetch("/api/v1/admin/backups");
+      if (res.ok) {
+        this.#backups = await res.json();
+        this.#render();
+      }
+    } catch {
+      // s.o.
+    }
+  }
+
+  // Gleiches Blob+<a download>-Muster wie workflows-view.ts'
+  // #exportWorkflow — POST erstellt eine neue Sicherung UND liefert sie
+  // direkt zurück (kein zweiter Request nötig), Download startet sofort.
+  async #createBackup() {
+    this.#creatingBackup = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const res = await apiFetch("/api/v1/admin/backup", { method: "POST" });
+      if (!res.ok) {
+        this.#error = `Backup fehlgeschlagen: ${await res.text()}`;
+        return;
+      }
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="([^"]+)"/.exec(disposition);
+      const filename = match?.[1] ?? "backup.sql.gz";
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      // Kein zusätzlicher Erfolgs-Hinweis nötig — der gestartete Download
+      // plus die neue Zeile in der (gleich neu geladenen) Backup-Liste
+      // sind die Bestätigung, gleiches Prinzip wie überall sonst in
+      // dieser Datei (z. B. #createUser: die neue Zeile IST die
+      // Bestätigung, kein separater Toast).
+      await this.#loadBackups();
+    } catch (err) {
+      this.#error = `Backup fehlgeschlagen: ${err}`;
+    } finally {
+      this.#creatingBackup = false;
+      this.#render();
+    }
+  }
+
+  // Lädt eine bereits vorhandene Sicherung erneut herunter — gleiches
+  // Blob-Muster wie #createBackup (nicht per direktem <a href>-Link:
+  // der Token steckt im localStorage, nicht in einem automatisch
+  // mitgeschickten Cookie, s. connection.ts — ein simpler Link ohne
+  // Authorization-Header bekäme 401, apiFetch() muss den Request
+  // stellen).
+  #downloadBackup(name: string) {
+    void (async () => {
+      try {
+        const res = await apiFetch(`/api/v1/admin/backups/${encodeURIComponent(name)}`);
+        if (!res.ok) {
+          this.#error = `Download fehlgeschlagen: ${await res.text()}`;
+          this.#render();
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = name;
+        link.click();
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        this.#error = `Download fehlgeschlagen: ${err}`;
+        this.#render();
+      }
+    })();
+  }
+
   // Füllt das Formular aus einer zuvor per #exportCatalogEntry
   // heruntergeladenen (oder von einem anderen OMP-Deployment
   // stammenden) JSON-Datei — reiner Komfort für den Import-Rundlauf,
@@ -578,6 +670,9 @@ class AdminView extends HTMLElement {
         break;
       case "audit":
         this.appendChild(this.#renderAuditSection());
+        break;
+      case "backup":
+        this.appendChild(this.#renderBackupSection());
         break;
     }
   }
@@ -1235,6 +1330,86 @@ class AdminView extends HTMLElement {
       moreBtn.addEventListener("click", () => this.#loadMoreAudit());
       section.appendChild(moreBtn);
     }
+
+    return section;
+  }
+
+  // Nutzerwunsch 2026-08-13: Backup ist voll funktionsfähig (Backend s.
+  // orchestrator/internal/backup); Restore braucht den noch nicht
+  // gebauten Supervisor-Prozess (s. #backups-Doku oben) — dieser
+  // Abschnitt zeigt deshalb zwei klar getrennte Blöcke statt eines
+  // Formulars mit einem toten Restore-Knopf.
+  #renderBackupSection(): HTMLElement {
+    const section = document.createElement("div");
+
+    const backupHeading = document.createElement("div");
+    backupHeading.style.cssText =
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+    const backupTitle = document.createElement("span");
+    backupTitle.className = "omp-h1";
+    backupTitle.textContent = `Backups (${this.#backups.length})`;
+    const createBtn = document.createElement("button");
+    createBtn.textContent = this.#creatingBackup ? "Erstellt …" : "Backup jetzt erstellen";
+    createBtn.disabled = this.#creatingBackup;
+    createBtn.className = "omp-btn-primary";
+    createBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    createBtn.addEventListener("click", () => void this.#createBackup());
+    backupHeading.append(backupTitle, createBtn);
+    section.appendChild(backupHeading);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-3);";
+    hint.textContent =
+      "Ein Backup ist ein vollständiger pg_dump der Orchestrator-Datenbank (Nutzer, Rollenbindungen, " +
+      "Audit-Log, Layouts, Snapshots, Workflows, Hosts) — komprimiert, sofort als Download. " +
+      "Dieselbe Rotation (14 neueste behalten) wie „make backup“.";
+    section.appendChild(hint);
+
+    if (this.#backups.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-4);";
+      empty.textContent = "Noch kein Backup vorhanden.";
+      section.appendChild(empty);
+    } else {
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;width:100%;margin-bottom:var(--omp-space-4);";
+      const tbody = document.createElement("tbody");
+      for (const name of this.#backups) {
+        const row = document.createElement("tr");
+        const nameCell = document.createElement("td");
+        nameCell.style.cssText = "padding:2px 8px;";
+        nameCell.textContent = name;
+        const actionCell = document.createElement("td");
+        actionCell.style.cssText = "padding:2px 8px;text-align:right;";
+        const dlBtn = document.createElement("button");
+        dlBtn.textContent = "Herunterladen";
+        dlBtn.style.cssText = "font-size:11px;cursor:pointer;";
+        dlBtn.addEventListener("click", () => this.#downloadBackup(name));
+        actionCell.appendChild(dlBtn);
+        row.append(nameCell, actionCell);
+        tbody.appendChild(row);
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+    }
+
+    const restoreHeading = document.createElement("div");
+    restoreHeading.className = "omp-h1";
+    restoreHeading.style.cssText = "margin-bottom:var(--omp-space-2);";
+    restoreHeading.textContent = "Restore";
+    section.appendChild(restoreHeading);
+
+    const restoreHint = document.createElement("div");
+    restoreHint.style.cssText = "color:var(--omp-text-dim);white-space:pre-wrap;";
+    restoreHint.textContent =
+      "Restore ist noch nicht über die Oberfläche verfügbar — ein Zurückspielen ersetzt den " +
+      "kompletten Datenbankinhalt und verlangt deshalb, dass der Orchestrator selbst gestoppt " +
+      "ist (der laufende Prozess kann sich das nicht selbst befehlen, während er gerade diese " +
+      "Anfrage beantwortet). Bis dahin über die Kommandozeile:\n\n" +
+      "  make stop\n" +
+      "  make restore ARGS=.backups/<dateiname>.sql.gz\n\n" +
+      "(verlangt eine interaktive Bestätigung, s. docs/HANDBUCH.md §5).";
+    section.appendChild(restoreHint);
 
     return section;
   }

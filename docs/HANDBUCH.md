@@ -147,7 +147,19 @@ jeder angemeldete Nutzer wird ungefragt ausgeloggt.
 
 Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,
 Layouts, Snapshots, Workflows, Hosts) liegt in Postgres (`omp-postgres`-
-Container). Zwei Skripte, `deploy/dev/backup-omp.sh`/`restore-omp.sh`
+Container).
+
+**Backup — auch über die GUI möglich** (Nutzerwunsch 2026-08-13):
+Administration → Backup/Restore → „Backup jetzt erstellen“
+(`POST /api/v1/admin/backup`, Admin-Recht nötig) erstellt eine
+Sicherung genau wie `backup-omp.sh` (gleicher `.backups/`-Ordner,
+gleiche Rotation) und liefert sie sofort als Download. Restore läuft
+weiterhin nur über die Kommandozeile (unten) — ein Zurückspielen
+verlangt, dass der Orchestrator selbst gestoppt ist, was ein laufender
+Prozess sich nicht selbst befehlen kann; ein eigenständiger Supervisor-
+Prozess dafür ist geplant, aber noch nicht gebaut.
+
+Zwei Skripte, `deploy/dev/backup-omp.sh`/`restore-omp.sh`
 (bzw. `make backup`/`make restore`):
 
 **Backup:**

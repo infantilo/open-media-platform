@@ -76,6 +76,10 @@ echo "==> Orchestrator starten"
 # stimmten dann nicht mit dem tatsächlichen Port-Owner überein).
 export OMP_UI_DIR="$ROOT_DIR/ui"
 export OMP_CATALOG_PATH="$ROOT_DIR/deploy/catalog.json"
+# Backup über das Browser-UI (Nutzerwunsch 2026-08-13) — derselbe
+# Ordner wie backup-omp.sh/restore-omp.sh, gleicher Grund für den
+# absoluten Pfad wie bei OMP_UI_DIR/OMP_CATALOG_PATH oben.
+export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
 # mTLS (UMSETZUNG.md D3) ist per Default aus (OMP_MTLS_ENABLED unten nur
 # gesetzt, falls schon in der aufrufenden Shell exportiert) — die
 # Pfad-Variablen selbst müssen trotzdem immer absolut sein, aus demselben
