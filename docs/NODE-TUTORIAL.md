@@ -383,6 +383,153 @@ sie tatsächlich braucht:
   Orchestrator-Proxy erreichbar sein), z. B. um an dessen Lowres-Vorschau
   zu aktivieren (Referenz: `omp-multiviewer`s Discovery-Code).
 
+## Mit einer KI (Claude o. ä.) einen eigenen Node bauen lassen
+
+Der Node-Contract (oben) ist bewusst so klein und explizit gehalten,
+dass eine KI ihn zuverlässig umsetzen kann, wenn sie die richtigen
+Informationen bekommt — er ist dieselbe Grundlage, auf der auch dieses
+Repo selbst entsteht (`CLAUDE.md`, `UMSETZUNG.md`). Zwei grundsätzlich
+verschiedene Wege, je nachdem, wer den Node baut:
+
+**Weg 1 — natives Rust-Crate in diesem Repo** (Schritt 1–5 oben): für
+alle, die direkt an diesem Workspace mitarbeiten wollen/können. Die KI
+schreibt ein `ParamStore` + `main()` gegen `omp-node-sdk`, wie im
+gesamten Tutorial gezeigt.
+
+**Weg 2 — eigenständiger Container in beliebiger Sprache** (Schritt 5,
+„Weg B"/Administration-Tab, `docs/HANDBUCH.md` §9.5): für Dritte, die
+*keinen* Zugriff auf dieses Repo haben (wollen) — z. B. wenn ihr
+Microservice bereits in Python/Go/Node.js/… existiert oder eine eigene
+Toolchain mitbringt. Der Node-Contract ist bewusst sprachunabhängig
+(IS-04-Registrierung per einfachem HTTP-POST an die Registry, die
+Descriptor-/Params-/Methods-Endpunkte sind reines JSON-über-HTTP) — es
+braucht kein Rust und kein SDK, nur die sechs Punkte aus
+`ARCHITECTURE.md` §5 von Hand implementiert. Referenzmuster für genau
+diesen Weg: `PIPELINE CONTROLLER` wurde als fremdes, eigenständiges
+Node.js-Projekt exakt so an OMP angebunden (eigene UI iframed, echtes
+Medien-I/O, kein OMP-seitiger Rust-Code nötig). Der Import läuft über
+`POST /api/v1/catalog` (Administration-Tab in der GUI) — verlangt
+`runner: "podman"` + ein Image, durchläuft denselben Admission-Check
+(`tools/contract-check`) wie jeder eingebaute Node, und bekommt
+dieselben Umgebungsvariablen wie ein lokal gestarteter Node injiziert:
+`OMP_INSTANCE_ID`, `OMP_LABEL`, `OMP_PORT`, `OMP_REGISTRY_URL`,
+`OMP_NATS_URL` (s. `orchestrator/internal/launcher/podman.go`) — dieselben
+Namen, die auch die Rust-`NodeConfig` oben erwartet, nur von Hand statt
+über das SDK gelesen.
+
+### Wie man den Auftrag an die KI beschreibt
+
+Eine KI kann den Contract technisch korrekt umsetzen, aber sie kann
+nicht erraten, *was* dein Node fachlich tun soll oder welche Parameter
+sinnvoll sind — das musst du liefern. Vor dem Prompt kurz festlegen:
+
+1. **Zweck in einem Satz.** Was tut der Node fachlich (z. B. „liest
+   einen MXL-Videostream, legt ein Wasserzeichen-Bild darüber, schreibt
+   das Ergebnis wieder als MXL-Flow")?
+2. **Medien-I/O oder reiner Control-Plane-Node?** Liest/schreibt er
+   Video/Audio (dann Schritt 4 relevant, `omp-mediaio`/MXL) oder hat er
+   gar keine Medien-Pipeline (dann `MediaReadySource::NotApplicable`,
+   wie `hello_node.rs`)?
+3. **Parameter/Methoden**, so konkret wie möglich — Name, Typ, Einheit,
+   Wertebereich, readonly oder nicht; bei Methoden: Name + Argumente.
+   Ungefähr reicht nicht, die KI würde sonst raten (und `descriptor()`/
+   `get()`/`set()` müssen exakt zueinander passen, s. Troubleshooting
+   oben).
+4. **Nächstliegender Referenz-Node.** Nenne den existierenden Node, der
+   deinem am ähnlichsten ist (`nodes/omp-scaler` für „liest einen
+   Stream, verändert ihn, schreibt einen aus", `nodes/omp-viewer` für
+   „liest nur, keine eigene Ausgabe", `nodes/omp-player` für „hat einen
+   internen Zustandsautomaten") — das verankert die KI an echtem,
+   bereits funktionierendem Code statt an einer generischen Vorstellung
+   von „Node-Contract".
+5. **Eigene UI nötig?** Falls ja: welche Bedienelemente, sonst reicht
+   das generische Parameter-Panel (Default, kein Zusatzaufwand).
+6. **Weg 1 oder Weg 2** (oben) — und bei Weg 2 zusätzlich die Zielsprache/
+   das Ziel-Framework.
+
+### Beispiel-Prompt (Weg 1, natives Rust-Crate)
+
+```
+Ich baue einen neuen Node für OpenMediaPlatform (Rust-SDK
+`omp-node-sdk`, Workspace unter `nodes/`). Lies zuerst
+`docs/NODE-TUTORIAL.md` und `ARCHITECTURE.md` §5 (Node-Contract) im
+Repo — das ist die verbindliche Spec, nicht raten.
+
+Zweck: [z. B. "ein Node, der einen MXL-Videostream liest, ein
+halbtransparentes PNG-Logo oben rechts überlagert, und das Ergebnis als
+eigenen MXL-Flow schreibt"].
+
+Referenz-Node (nächstliegendes Muster, bitte dessen Aufbau
+übernehmen): `nodes/[z. B. omp-scaler]` — insbesondere
+`src/pipeline.rs` (Pipeline-Aufbau) und `src/main.rs`
+(ParamStore/NodeConfig).
+
+Parameter:
+- [Name] ([Typ: string/number/bool], [Einheit falls zutreffend],
+  [Wertebereich falls zutreffend], [readonly: ja/nein])
+- …
+
+Methoden:
+- [Name]([Argument: Name+Typ, …])
+- …
+
+Baue ein neues Workspace-Crate `nodes/[mein-node]` nach Schritt 3 des
+Tutorials (`cargo new --bin` innerhalb von `nodes/`, `Cargo.toml` mit
+`omp-node-sdk = { path = "../omp-node-sdk" }`). Verifiziere danach
+selbst mit `cargo run -p [mein-node]` + `NODE_URL=http://localhost:<port>
+make contract` (aus dem Repo-Root) — ohne PASS beim Contract-Check gilt
+der Node nicht als fertig.
+```
+
+### Beispiel-Prompt (Weg 2, eigenständiger Container, beliebige Sprache)
+
+```
+Ich baue einen eigenständigen Microservice, der sich als Node in
+OpenMediaPlatform einbinden lassen soll — als Podman-Container-Import
+über die Administration-GUI, NICHT als Teil des OMP-Rust-Repos. Ziel-
+Stack: [z. B. Python/FastAPI].
+
+Der Node-Contract (sechs Pflichtpunkte, sprachunabhängig, HTTP+JSON):
+1. Beim Start per HTTP POST bei der AMWA-NMOS-IS-04-Registration-API
+   registrieren (Node/Device/Sender/Receiver-Resources, Registry-URL aus
+   der Umgebungsvariable OMP_REGISTRY_URL, Standard-Port 8010, API-Pfad
+   .../x-nmos/registration/v1.3/resource).
+2. GET /descriptor.json liefert Parameter/Methoden als JSON
+   (Feldformat: [hier das reale Beispiel aus
+   `docs/NODE-TUTORIAL.md` Schritt 2 einfügen]).
+3. PATCH /params/<name> setzt einen Parameterwert, POST
+   /methods/<name> ruft eine Methode auf.
+4. Nur falls echtes Medien-I/O nötig: MXL (lokal, Zero-Copy) oder
+   ST 2110 — kein proprietäres Format. [Falls dein Node KEIN
+   Medien-I/O braucht, diesen Punkt weglassen — reiner
+   Control-Plane-Node.]
+5. Eigenständiger Prozess/Container, unabhängig neustartbar, liest
+   OMP_INSTANCE_ID/OMP_LABEL/OMP_PORT/OMP_REGISTRY_URL/OMP_NATS_URL aus
+   der Umgebung (vom Launcher injiziert).
+6. Vollständigen Parameterzustand über den Descriptor-Mechanismus
+   export-/importierbar machen (Punkt 2 deckt das ab).
+
+Zweck: [wie oben].
+Parameter/Methoden: [wie oben].
+
+Als Referenz, wie ein fremdsprachiger Node real angebunden wurde (nicht
+kopieren, nur Muster): `PIPELINE CONTROLLER`
+(`/home/infantilo/PIPELINE CONTROLLER`, separates Repo) — Node.js,
+eigene UI iframed, per Podman-Import angebunden.
+
+Verifiziere zum Schluss: `curl http://localhost:<port>/descriptor.json`
+liefert gültiges JSON, und ein Import über die GUI (Administration-Tab,
+„+ Node/Microservice importieren") läuft ohne Admission-Check-Fehler
+durch.
+```
+
+**Wichtig, unabhängig vom Weg:** der Contract-Check (`make contract`
+bzw. der automatische Admission-Check beim GUI-Import) ist die
+tatsächliche Abnahme, nicht die Selbsteinschätzung der KI — beide
+Beispiel-Prompts enden deshalb bewusst mit der Aufforderung, das Ergebnis
+selbst gegen den echten Check laufen zu lassen, statt "PASS" zu
+behaupten.
+
 ## Weiterführend
 
 - `ARCHITECTURE.md` §5 (Node-Contract, vollständig), §11.1

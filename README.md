@@ -186,12 +186,16 @@ Being upfront about the current edges, not just the highlights:
   redundancy exists (hot-standby, crash-loop restart, host-offline
   failover); the orchestrator process itself is a single point of
   failure — there's no multi-orchestrator clustering.
-- **Workflow-role migration has no UI yet.** The backend for moving a
-  running workflow role to another host exists and is tested, but a
-  running workflow currently always renders as a single collapsed tile
-  in the flow editor's host view, so there's no tile to drag for an
-  individual role — only standalone (non-workflow) node instances can
-  be moved today via drag-and-drop.
+- **Workflow-role migration has no drag-to-move UI yet.** The backend
+  for moving a running workflow role to another host exists and is
+  tested (`POST /api/v1/workflows/{id}/roles/{role}/migrate`), and the
+  flow editor's host view now correctly places a running workflow's
+  collapsed tile in the zone matching where its roles actually run
+  (including a dedicated zone when roles are split across hosts) — but
+  it's still one collapsed tile, so there's no individual-role tile to
+  drag. Only standalone (non-workflow) node instances can be moved
+  today via drag-and-drop; migrating a workflow role needs the API
+  directly for now.
 - **No independent security audit.** Auth, mTLS, and audit logging
   exist and are exercised by the test suite, but there has been no
   external penetration test or formal security review.
@@ -259,14 +263,19 @@ export/import mechanism), plus, since D8, a workflow latency budget
 (`targetLatencyFrames`): the orchestrator hard-rejects wiring that
 can't meet the target and automatically compensates paths that are too
 short by assigning output delay to capable nodes (currently
-`omp-scaler`, `omp-video-mixer-me`).
+`omp-scaler`, `omp-video-mixer-me`). Since Kapitel 13 Teil 4, a running
+workflow's collapsed tile is placed in the host zone matching where its
+roles actually run (its own zone when split across hosts), instead of
+floating outside the host view; the operator console also now shows
+which host each assigned node UI is running on.
 
 Open: I/O cards as their own, exclusively-claimable resource class,
 RDMA hardware integration (`verbs`/EFA providers, pending hardware
 procurement), an NDI gateway, proprietary Dante (Dante in AES67 mode
-already runs via `omp-aes67-gateway`), and a UI trigger for the
-already-built workflow-role migration backend (see "What
-OpenMediaPlatform does not do" above).
+already runs via `omp-aes67-gateway`), and a drag-to-move UI for the
+already-built workflow-role migration backend — the flow editor now at
+least places a running workflow's tile in its correct host zone (see
+"What OpenMediaPlatform does not do" above).
 
 ## License
 

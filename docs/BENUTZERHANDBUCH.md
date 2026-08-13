@@ -150,7 +150,10 @@ sich beim Neustart ändert). Für Rollen innerhalb eines laufenden
 Workflows gibt es diese Drag-Funktion noch nicht — ein laufender
 Workflow zeigt sich in der Host-Ansicht immer als eine kollabierte
 Kachel (Abschnitt 2), einzelne Rollen erscheinen dort nicht individuell
-zonierbar.
+zonierbar. Die kollabierte Kachel selbst liegt aber in der zu ihren
+Rollen passenden Zone (bei uneinheitlichen Hosts in der Sammelzone
+„Gruppen über mehrere Hosts" oben) — nur das Hineinziehen einer
+einzelnen Rolle in eine andere Zone fehlt noch.
 
 ## 3. Instanzen-Übersicht
 
@@ -372,6 +375,13 @@ bedienberechtigt:
   Flow-Editor ein (Parameter-Panel bei Doppelklick auf die Kachel).
 - **Programmvorschau** — zeigt das tatsächliche PGM-Ausgangsbild des
   Bildmischers als Live-Vorschau.
+
+Läuft mehr als ein Host (Abschnitt 8), zeigt die Titelleiste jeder
+Kachel zusätzlich ein kleines Host-Label (z. B. „Studio 2 (Remote)")
+— welcher Host eine Rolle gerade ausführt, ist damit auch im
+Regieplatz sichtbar, nicht nur im Flow Editor (Abschnitt 2.5). Der
+Screenshot oben stammt aus einem Single-Host-Setup und zeigt deshalb
+kein Host-Label.
 
 Jede Kachel besitzt eine Titelleiste zum Verschieben (Ziehen) und einen
 Anfasser unten rechts zum Skalieren. Position und Größe werden pro
