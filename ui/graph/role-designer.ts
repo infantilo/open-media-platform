@@ -105,9 +105,20 @@ interface WorkflowDto {
   };
 }
 
+// Nutzerwunsch 2026-08-13 ("drag-and-drop und undo/redo bauen"): ein
+// Snapshot deckt bewusst NUR die Graph-Substanz ab (Rollen, Verbindungen,
+// Positionen) — nicht #name (Workflow-Name-Textfeld hat sein eigenes,
+// natives Undo im Browser) und nicht #editingRoleName/#drag (reiner
+// UI-Zustand, kein fachlicher Bearbeitungsschritt).
+interface DesignerSnapshot {
+  roles: DraftRole[];
+  connections: DraftConnection[];
+  positions: Record<string, Point>;
+}
+
 type DesignerDragState =
   | { kind: "pan"; startScreen: Point; startViewport: Viewport; moved: boolean }
-  | { kind: "tile"; role: string; startScreen: Point; startWorld: Point; moved: boolean }
+  | { kind: "tile"; role: string; startScreen: Point; startWorld: Point; moved: boolean; snapshotBefore: DesignerSnapshot }
   | { kind: "connect"; fromRole: string; fromWorld: Point; currentScreen: Point };
 
 // Kapitel 12 Teil 1 (§12.3c): Bearbeiten einer bestehenden Definition
@@ -133,10 +144,44 @@ export class RoleDesigner extends HTMLElement {
   // statt statischem `<text>`) — nur eine gleichzeitig, `#render()`
   // baut bei jeder Mutation ohnehin alle Kacheln neu auf.
   #editingRoleName: string | null = null;
+  // Nutzerwunsch 2026-08-13 ("drag-and-drop und undo/redo bauen"): Katalog-
+  // Palette links (Ziehen ODER Klicken legt eine Rolle an) ersetzt das
+  // bisherige toolbar-typeSelect-Dropdown; #hostPreference ist der globale
+  // "Zielhost der nächsten Rolle"-Wert, den vorher nur die toolbar-
+  // Closure kannte — jetzt auch von #renderPalette()/Drop-Handler
+  // gebraucht, deshalb als Feld statt lokaler Variable.
+  #paletteFilterQuery = "";
+  #hostPreference = "";
+  // Undo/Redo: Stapel von Snapshots VOR der jeweiligen Änderung (klassisches
+  // Command-Pattern-light ohne eigene Command-Objekte — bei der über-
+  // schaubaren Datengröße hier (wenige Rollen/Verbindungen) ist ein voller
+  // Struktur-Snapshot pro Schritt einfacher und robuster als differenzielle
+  // Undo-Operationen je Aktionstyp). Deckelung auf 50 Einträge, damit ein
+  // sehr langer Bearbeitungsmarathon nicht unbegrenzt Speicher aufbaut.
+  #undoStack: DesignerSnapshot[] = [];
+  #redoStack: DesignerSnapshot[] = [];
+  #undoBtn: HTMLButtonElement | null = null;
+  #redoBtn: HTMLButtonElement | null = null;
+  #onKeyDown = (ev: KeyboardEvent) => {
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement || active instanceof HTMLSelectElement || active instanceof HTMLTextAreaElement) {
+      return; // natives Undo/Redo im Textfeld (z. B. Rollen-Umbenennen) nicht überschreiben.
+    }
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    const key = ev.key.toLowerCase();
+    if (key === "z" && !ev.shiftKey) {
+      ev.preventDefault();
+      this.#undo();
+    } else if (key === "y" || (key === "z" && ev.shiftKey)) {
+      ev.preventDefault();
+      this.#redo();
+    }
+  };
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
   #toolbar!: HTMLElement;
+  #palette!: HTMLDivElement;
   #rubberBand: SVGLineElement | null = null;
 
   connectedCallback() {
@@ -156,7 +201,10 @@ export class RoleDesigner extends HTMLElement {
     // (in `#finishConnect`) traf dort nie den Anker, jede Verbindung zu/von
     // einer zweiten Zeile ging beim Speichern verloren (Bug-Report: Viewer
     // ohne Vorschau, weil PGM→Viewer nie tatsächlich gezogen werden konnte).
-    svg.style.cssText = "position:absolute;top:40px;left:0;right:0;width:100%;height:calc(100% - 40px);background:#1e1e1e;touch-action:none;";
+    // left:180px statt 0: Katalog-Palette (s. #renderPalette) nimmt den
+    // Platz links ein, gleiches Layout-Muster wie flow-canvas.ts' eigene
+    // Palette (dort width:160px, hier 180px wegen etwas längerer Labels).
+    svg.style.cssText = "position:absolute;top:40px;left:180px;right:0;width:calc(100% - 180px);height:calc(100% - 40px);background:#1e1e1e;touch-action:none;";
     const viewportGroup = document.createElementNS(SVG_NS, "g");
     svg.appendChild(viewportGroup);
     this.#svg = svg;
@@ -167,6 +215,22 @@ export class RoleDesigner extends HTMLElement {
     svg.addEventListener("pointerup", (ev) => this.#onPointerUp(ev));
     svg.addEventListener("pointercancel", (ev) => this.#onPointerUp(ev));
     svg.addEventListener("wheel", (ev) => this.#onWheel(ev), { passive: false });
+    // Drag-and-Drop (Nutzerwunsch 2026-08-13): dragover MUSS preventDefault()
+    // aufrufen, sonst verweigert der Browser den drop komplett (Standard-
+    // verhalten: kein gültiges Drop-Ziel).
+    svg.addEventListener("dragover", (ev) => {
+      ev.preventDefault();
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+    });
+    svg.addEventListener("drop", (ev) => {
+      ev.preventDefault();
+      const nodeType = ev.dataTransfer?.getData("text/plain");
+      if (!nodeType) return;
+      const world = screenToWorld(this.#screenPoint(ev), this.#viewport);
+      // Kachel unter dem Cursor zentrieren statt ihre Ecke an den Drop-Punkt
+      // zu setzen — fühlt sich beim Ziehen sonst spürbar "verschoben" an.
+      this.#addRole(nodeType, this.#hostPreference, { x: world.x - NODE_WIDTH / 2, y: world.y - TILE_HEIGHT / 2 });
+    });
 
     const toolbar = document.createElement("div");
     toolbar.setAttribute("data-role", "role-designer-toolbar");
@@ -176,10 +240,24 @@ export class RoleDesigner extends HTMLElement {
       "gap:8px;padding:0 8px;box-sizing:border-box;z-index:10;";
     this.#toolbar = toolbar;
 
-    this.append(toolbar, svg);
+    const palette = document.createElement("div");
+    palette.setAttribute("data-role", "role-designer-palette");
+    palette.style.cssText =
+      "position:absolute;top:40px;left:0;bottom:0;width:180px;background:#252525;color:#ddd;" +
+      "font-family:var(--omp-font,sans-serif);padding:8px;overflow-y:auto;box-sizing:border-box;" +
+      "border-right:1px solid #444;z-index:10;";
+    this.#palette = palette;
+
+    this.append(toolbar, palette, svg);
+    window.addEventListener("keydown", this.#onKeyDown);
     this.#loadCatalogAndHosts();
     this.#renderToolbar();
+    this.#renderPalette();
     this.#render();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("keydown", this.#onKeyDown);
   }
 
   // Öffnet den Designer für einen neuen, noch nicht gespeicherten
@@ -208,6 +286,11 @@ export class RoleDesigner extends HTMLElement {
     this.#roles.forEach((r, i) => {
       this.#positions[r.name] = defaultPosition(i);
     });
+    // Neuer Workflow/neue Definition geladen — eine alte Undo-Historie
+    // würde sonst über den Wechsel hinweg fälschlich auf diesem neuen
+    // Stand weiterarbeiten.
+    this.#undoStack = [];
+    this.#redoStack = [];
     this.#renderToolbar();
     this.#render();
   }
@@ -218,23 +301,82 @@ export class RoleDesigner extends HTMLElement {
       if (catalogRes.ok) this.#catalog = await catalogRes.json();
       if (hostsRes.ok) this.#hosts = await hostsRes.json();
       this.#renderToolbar();
+      this.#renderPalette();
     } catch {
       // Katalog/Hosts optional für die Palette — "+ Rolle" bleibt ohne
       // sie funktionslos (leere Auswahl), kein harter Fehler.
     }
   }
 
-  #addRole(nodeType: string, hostId: string) {
+  // `position` optional: gesetzt vom Drop-Handler (Ziehen aus der Palette
+  // an eine bestimmte Canvas-Stelle), sonst Standardposition wie bisher
+  // (Klick auf einen Palette-Eintrag).
+  #addRole(nodeType: string, hostId: string, position?: Point) {
     if (!nodeType) return;
+    this.#pushUndo();
     const used = new Set(this.#roles.map((r) => r.name));
     const name = uniqueRoleName(nodeType, used);
     this.#roles.push({ name, nodeType, hostId: hostId || undefined });
-    this.#positions[name] = this.#nextDefaultPosition();
+    this.#positions[name] = position ?? this.#nextDefaultPosition();
     this.#render();
   }
 
   #nextDefaultPosition(): Point {
     return defaultPosition(this.#roles.length - 1);
+  }
+
+  // --- Undo/Redo (Nutzerwunsch 2026-08-13) ---
+
+  #snapshot(): DesignerSnapshot {
+    return {
+      roles: this.#roles.map((r) => ({ ...r })),
+      connections: this.#connections.map((c) => ({ ...c })),
+      positions: Object.fromEntries(Object.entries(this.#positions).map(([k, v]) => [k, { ...v }])),
+    };
+  }
+
+  // Snapshot des Zustands VOR der jetzt beginnenden Änderung — jede
+  // mutierende Aktion ruft dies unmittelbar vor der eigentlichen Mutation
+  // auf. Löscht den Redo-Stapel (klassisches Undo/Redo-Verhalten: ein neuer
+  // Schritt macht die alte "Zukunft" ungültig).
+  #pushUndo() {
+    this.#pushUndoSnapshot(this.#snapshot());
+  }
+
+  #pushUndoSnapshot(snapshot: DesignerSnapshot) {
+    this.#undoStack.push(snapshot);
+    if (this.#undoStack.length > 50) this.#undoStack.shift();
+    this.#redoStack = [];
+    this.#updateHistoryButtons();
+  }
+
+  #applySnapshot(snapshot: DesignerSnapshot) {
+    this.#roles = snapshot.roles.map((r) => ({ ...r }));
+    this.#connections = snapshot.connections.map((c) => ({ ...c }));
+    this.#positions = Object.fromEntries(Object.entries(snapshot.positions).map(([k, v]) => [k, { ...v }]));
+    this.#editingRoleName = null;
+    this.#drag = null;
+    this.#render();
+    this.#updateHistoryButtons();
+  }
+
+  #undo() {
+    if (this.#undoStack.length === 0) return;
+    const previous = this.#undoStack.pop()!;
+    this.#redoStack.push(this.#snapshot());
+    this.#applySnapshot(previous);
+  }
+
+  #redo() {
+    if (this.#redoStack.length === 0) return;
+    const next = this.#redoStack.pop()!;
+    this.#undoStack.push(this.#snapshot());
+    this.#applySnapshot(next);
+  }
+
+  #updateHistoryButtons() {
+    if (this.#undoBtn) this.#undoBtn.disabled = this.#undoStack.length === 0;
+    if (this.#redoBtn) this.#redoBtn.disabled = this.#redoStack.length === 0;
   }
 
   // Nutzerfund 2026-08-13 ("Rollen-Editor muss intuitiver werden"): das
@@ -256,6 +398,7 @@ export class RoleDesigner extends HTMLElement {
       message = `Rolle „${name}" wirklich entfernen? Dabei gehen auch ${losses} verloren.`;
     }
     if (!(await confirmDialog(message, { confirmLabel: "Entfernen" }))) return;
+    this.#pushUndo();
     const result = removeRole(this.#roles, this.#connections, name);
     this.#roles = result.roles;
     this.#connections = result.connections;
@@ -273,6 +416,7 @@ export class RoleDesigner extends HTMLElement {
       this.#render();
       return;
     }
+    this.#pushUndo();
     this.#roles = result.roles;
     this.#connections = result.connections;
     if (this.#positions[oldName]) {
@@ -283,6 +427,7 @@ export class RoleDesigner extends HTMLElement {
   }
 
   #removeConnection(index: number) {
+    this.#pushUndo();
     this.#connections = this.#connections.filter((_, i) => i !== index);
     this.#render();
   }
@@ -337,7 +482,7 @@ export class RoleDesigner extends HTMLElement {
     this.#toolbar.appendChild(nameInput);
 
     const hostSelect = document.createElement("select");
-    hostSelect.title = "Ziel-Host für die nächste hinzugefügte Rolle.";
+    hostSelect.title = "Ziel-Host für die nächste hinzugefügte Rolle (Klick oder Ziehen aus dem Katalog links).";
     const localOpt = document.createElement("option");
     localOpt.value = "";
     localOpt.textContent = "(lokal)";
@@ -348,38 +493,31 @@ export class RoleDesigner extends HTMLElement {
       opt.textContent = host.label;
       hostSelect.appendChild(opt);
     }
+    hostSelect.value = this.#hostPreference;
+    hostSelect.addEventListener("change", () => {
+      this.#hostPreference = hostSelect.value;
+    });
     this.#toolbar.appendChild(hostSelect);
 
-    // Nutzerfund 2026-08-13 ("Rollen-Editor muss intuitiver werden"):
-    // vorher zwei getrennte Schritte (Typ wählen, dann extra auf
-    // "+ Rolle" klicken) für dieselbe eine Absicht — die Typ-Auswahl
-    // legt die Rolle jetzt direkt an (change feuert erst bei
-    // abgeschlossener Auswahl, nicht bei jedem Pfeiltasten-Durchlauf
-    // innerhalb der Liste, also kein Risiko für versehentliches Anlegen
-    // beim reinen Durchblättern). Host bleibt ein separates Feld
-    // (globale Voreinstellung für die nächste Rolle, gleiches Muster
-    // wie die Export-Checkbox in workflows-view.ts), weil er sich
-    // seltener ändert als der Typ.
-    const typeSelect = document.createElement("select");
-    typeSelect.title = "Node-Typ wählen, um sofort eine neue Rolle dieses Typs anzulegen.";
-    const emptyOpt = document.createElement("option");
-    emptyOpt.value = "";
-    emptyOpt.textContent = "+ Rolle: Node-Typ wählen …";
-    typeSelect.appendChild(emptyOpt);
-    // Nutzerwunsch 2026-07-28: alphabetisch statt Katalog-Dateireihenfolge.
-    const sortedCatalog = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
-    for (const entry of sortedCatalog) {
-      const opt = document.createElement("option");
-      opt.value = entry.type;
-      opt.textContent = entry.label;
-      typeSelect.appendChild(opt);
-    }
-    typeSelect.addEventListener("change", () => {
-      if (!typeSelect.value) return;
-      this.#addRole(typeSelect.value, hostSelect.value);
-      typeSelect.value = "";
-    });
-    this.#toolbar.appendChild(typeSelect);
+    // Nutzerwunsch 2026-08-13 ("drag-and-drop und undo/redo bauen"): das
+    // frühere Ein-Klick-Dropdown ("Typ wählen legt sofort an") ist jetzt
+    // die Katalog-Palette links (#renderPalette) — Klick dort tut
+    // dasselbe (Standardposition), Ziehen zusätzlich mit Positionskontrolle.
+    const undoBtn = document.createElement("button");
+    undoBtn.textContent = "↶ Rückgängig";
+    undoBtn.title = "Rückgängig (Strg+Z)";
+    undoBtn.disabled = this.#undoStack.length === 0;
+    undoBtn.addEventListener("click", () => this.#undo());
+    this.#toolbar.appendChild(undoBtn);
+    this.#undoBtn = undoBtn;
+
+    const redoBtn = document.createElement("button");
+    redoBtn.textContent = "↷ Wiederholen";
+    redoBtn.title = "Wiederholen (Strg+Y)";
+    redoBtn.disabled = this.#redoStack.length === 0;
+    redoBtn.addEventListener("click", () => this.#redo());
+    this.#toolbar.appendChild(redoBtn);
+    this.#redoBtn = redoBtn;
 
     const spacer = document.createElement("span");
     spacer.style.flex = "1";
@@ -389,7 +527,8 @@ export class RoleDesigner extends HTMLElement {
     hint.style.cssText = "color:#999;";
     hint.textContent =
       "Ziehen: verschieben · vom Kreis rechts zum Kreis links ziehen: verbinden · " +
-      "Kante oder ✕ anklicken: entfernen · ✎ oder Doppelklick auf den Namen: umbenennen";
+      "Kante oder ✕ anklicken: entfernen · ✎ oder Doppelklick auf den Namen: umbenennen · " +
+      "Strg+Z/Strg+Y: rückgängig/wiederholen";
     this.#toolbar.appendChild(hint);
 
     const saveBtn = document.createElement("button");
@@ -403,6 +542,90 @@ export class RoleDesigner extends HTMLElement {
     closeBtn.textContent = "Schließen";
     closeBtn.addEventListener("click", () => this.#close());
     this.#toolbar.appendChild(closeBtn);
+  }
+
+  // --- Palette (Nutzerwunsch 2026-08-13: "drag-and-drop bauen") ---
+  //
+  // Ersetzt das frühere toolbar-typeSelect-Dropdown. Jeder Katalog-
+  // Eintrag ist sowohl klickbar (legt die Rolle an der Standardposition
+  // an, exakt das bisherige Verhalten) als auch per natives HTML5-Drag
+  // auf die Fläche ziehbar (legt sie an der Drop-Position an) — dieselbe
+  // #addRole()-Methode bedient beide Wege, nur mit/ohne explizite
+  // Position. Gleiches Grundmuster (Suchfeld, alphabetisch sortiert,
+  // Fokus-Erhalt beim Neu-Rendern) wie flow-canvas.ts' #renderPaletteList,
+  // aber bewusst eine eigene, kleinere Kopie statt geteiltem Code — s.
+  // Kopfkommentar dieser Datei zur Begründung, warum flow-canvas.ts und
+  // der Designer hier getrennt bleiben.
+  #renderPalette() {
+    const searchWasFocused =
+      this.#palette.querySelector<HTMLInputElement>('[data-role="designer-palette-search"]') === document.activeElement;
+    const searchSelectionStart = searchWasFocused ? (document.activeElement as HTMLInputElement).selectionStart : null;
+
+    this.#palette.replaceChildren();
+
+    const heading = document.createElement("div");
+    heading.textContent = "Node-Katalog";
+    heading.style.cssText = "font-size:12px;font-weight:600;margin-bottom:6px;color:#ddd;";
+    this.#palette.appendChild(heading);
+
+    if (this.#catalog.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "Katalog wird geladen …";
+      empty.style.cssText = "color:#999;font-size:11px;";
+      this.#palette.appendChild(empty);
+      return;
+    }
+
+    const searchInput = document.createElement("input");
+    searchInput.setAttribute("data-role", "designer-palette-search");
+    searchInput.type = "search";
+    searchInput.placeholder = "Suchen…";
+    searchInput.value = this.#paletteFilterQuery;
+    searchInput.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:6px;font-size:11px;";
+    searchInput.addEventListener("input", () => {
+      this.#paletteFilterQuery = searchInput.value;
+      this.#renderPalette();
+    });
+    this.#palette.appendChild(searchInput);
+    if (searchWasFocused) {
+      searchInput.focus();
+      if (searchSelectionStart !== null) searchInput.setSelectionRange(searchSelectionStart, searchSelectionStart);
+    }
+
+    const query = this.#paletteFilterQuery.trim().toLowerCase();
+    const filtered = (query === ""
+      ? this.#catalog
+      : this.#catalog.filter((e) => e.label.toLowerCase().includes(query) || e.type.toLowerCase().includes(query)))
+      .slice()
+      .sort((a, b) => a.label.localeCompare(b.label));
+
+    if (filtered.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "Keine Treffer.";
+      empty.style.cssText = "color:#999;font-size:11px;";
+      this.#palette.appendChild(empty);
+      return;
+    }
+
+    for (const entry of filtered) {
+      const item = document.createElement("div");
+      item.setAttribute("data-role", "designer-palette-item");
+      item.setAttribute("data-node-type", entry.type);
+      item.draggable = true;
+      item.textContent = `+ ${entry.label}`;
+      item.title =
+        `${entry.label} — auf die Fläche ziehen, um an einer bestimmten Position anzulegen, ` +
+        "oder klicken für die Standardposition.";
+      item.style.cssText =
+        "padding:4px 6px;margin-bottom:4px;border:1px solid #444;border-radius:3px;cursor:grab;" +
+        "background:#2a2a2a;color:#ddd;font-size:11px;user-select:none;";
+      item.addEventListener("dragstart", (ev) => {
+        ev.dataTransfer?.setData("text/plain", entry.type);
+        if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "copy";
+      });
+      item.addEventListener("click", () => this.#addRole(entry.type, this.#hostPreference));
+      this.#palette.appendChild(item);
+    }
   }
 
   // --- Rendering ---
@@ -695,6 +918,7 @@ export class RoleDesigner extends HTMLElement {
       hostSelect.appendChild(unknownOpt);
     }
     hostSelect.addEventListener("change", () => {
+      this.#pushUndo();
       role.hostId = hostSelect.value || undefined;
     });
     hostObject.appendChild(hostSelect);
@@ -726,6 +950,7 @@ export class RoleDesigner extends HTMLElement {
       formatSelect.appendChild(opt);
     }
     formatSelect.addEventListener("change", () => {
+      this.#pushUndo();
       role.format = formatSelect.value || undefined;
     });
     formatObject.appendChild(formatSelect);
@@ -759,6 +984,7 @@ export class RoleDesigner extends HTMLElement {
       standbySelect.appendChild(opt);
     }
     standbySelect.addEventListener("change", () => {
+      this.#pushUndo();
       role.standbyFor = standbySelect.value || undefined;
       this.#render();
     });
@@ -796,6 +1022,7 @@ export class RoleDesigner extends HTMLElement {
     windowInput.value = role.placement?.confirmWindowSeconds ? String(role.placement.confirmWindowSeconds) : "";
     windowInput.style.display = role.placement?.escalation === "auto-confirm-window" ? "" : "none";
     windowInput.addEventListener("change", () => {
+      this.#pushUndo();
       const n = parseInt(windowInput.value, 10);
       role.placement = {
         escalation: role.placement?.escalation,
@@ -815,6 +1042,7 @@ export class RoleDesigner extends HTMLElement {
       placementSelect.appendChild(opt);
     }
     placementSelect.addEventListener("change", () => {
+      this.#pushUndo();
       const escalation = placementSelect.value || undefined;
       role.placement = escalation ? { escalation, confirmWindowSeconds: role.placement?.confirmWindowSeconds } : undefined;
       this.#render();
@@ -926,7 +1154,18 @@ export class RoleDesigner extends HTMLElement {
     ev.stopPropagation();
     (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
     const startWorld = this.#positions[roleName] ?? { x: 0, y: 0 };
-    this.#drag = { kind: "tile", role: roleName, startScreen: this.#screenPoint(ev), startWorld, moved: false };
+    // Snapshot VOR der Bewegung mitgeführt statt sofort auf den Undo-Stapel
+    // gelegt — ein reiner Klick ohne tatsächliche Bewegung (moved bleibt
+    // false) soll die Historie nicht mit einem No-op-Eintrag verschmutzen
+    // (s. #onPointerUp, das den Snapshot nur bei moved===true committet).
+    this.#drag = {
+      kind: "tile",
+      role: roleName,
+      startScreen: this.#screenPoint(ev),
+      startWorld,
+      moved: false,
+      snapshotBefore: this.#snapshot(),
+    };
   }
 
   #onOutputAnchorPointerDown(ev: PointerEvent, roleName: string) {
@@ -974,6 +1213,10 @@ export class RoleDesigner extends HTMLElement {
   #onPointerUp(ev: PointerEvent) {
     if (this.#drag?.kind === "connect") {
       this.#finishConnect(ev);
+    } else if (this.#drag?.kind === "tile" && this.#drag.moved) {
+      // Erst jetzt, am Ende einer TATSÄCHLICHEN Verschiebung, auf den
+      // Undo-Stapel legen (s. #onTilePointerDown-Kommentar).
+      this.#pushUndoSnapshot(this.#drag.snapshotBefore);
     }
     this.#drag = null;
   }
@@ -996,6 +1239,8 @@ export class RoleDesigner extends HTMLElement {
     const result = addConnection(this.#connections, fromRole, toRole);
     if (!result.ok) {
       showToast(fromRole === toRole ? "Eine Rolle kann sich nicht selbst verbinden." : "Diese Verbindung besteht bereits.");
+    } else {
+      this.#pushUndo();
     }
     this.#connections = result.connections;
     this.#render();
