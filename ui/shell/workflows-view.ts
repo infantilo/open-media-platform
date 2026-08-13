@@ -167,10 +167,24 @@ const STATUS_COLORS: Record<string, string> = {
 // ExportedWorkflow (Kapitel 12 Teil 3, §12.3d) — Wire-Format identisch
 // zu workflows.ExportedWorkflow. Bewusst nur Definition, s. Backend-Doku
 // (orchestrator/internal/workflows/types.go).
+// Bindings (Nutzerwunsch 2026-07-28, orchestrator/internal/workflows/
+// types.go ExportedWorkflow.Bindings-Doku): bewusst NICHT Teil des
+// portablen Standard-Exports (der Grundfall — ein Regieplatz wandert
+// zwischen Systemen mit potenziell anderen Nutzerkonten) — nur wenn die
+// UI explizit `?includeBindings=true` anfragt (s. #exportWithBindings),
+// für den engeren "gleiches System"-Fall (Export→Löschen→Import mit
+// denselben Rechten).
+interface ExportedBinding {
+  subject: string;
+  role: string;
+  verb: string;
+}
+
 interface ExportedWorkflow {
   version: number;
   name: string;
   definition: Workflow["definition"];
+  bindings?: ExportedBinding[];
 }
 
 class WorkflowsView extends HTMLElement {
@@ -181,6 +195,14 @@ class WorkflowsView extends HTMLElement {
   #formRoles: Role[] = [{ name: "", nodeType: "", hostId: "" }];
   #formConnections: Connection[] = [];
   #formName = "";
+  // Feature-Wunsch 2026-08-13: globaler Schalter statt einer Checkbox
+  // pro Zeile (eine pro Workflow-Karte wäre reine Wiederholung derselben
+  // Entscheidung) — gilt für den nächsten Klick auf irgendeine
+  // "Exportieren"-Karte. Absichtlich nicht persistiert (localStorage o. ä.):
+  // der "gleiches System"-Fall (s. ExportedBinding-Doku) ist die
+  // Ausnahme, portabler Export ohne Bindungen soll der unauffällige
+  // Default bleiben, auch nach einem Seiten-Reload.
+  #exportWithBindings = false;
   // Kapitel 12 Teil 6 (§22.3 Punkte 4/7): rein darstellungsbezogen,
   // s. Definition-Doku im Backend. #formTags als Komma-getrennter
   // Freitext (einfachste Eingabe, keine eigene Tag-Chip-UI nötig für
@@ -453,7 +475,8 @@ class WorkflowsView extends HTMLElement {
   // eigene Dialog-UI nötig.
   async #exportWorkflow(wf: Workflow) {
     try {
-      const res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
+      const query = this.#exportWithBindings ? "?includeBindings=true" : "";
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/export${query}`);
       if (!res.ok) {
         showToast(`Export fehlgeschlagen: ${await res.text()}`);
         return;
@@ -613,6 +636,25 @@ class WorkflowsView extends HTMLElement {
     });
     importLabel.appendChild(importInput);
     heading.appendChild(importLabel);
+
+    // Feature-Wunsch 2026-08-13: die Backend-Unterstützung für
+    // Rollenbindungen im Export existierte bereits vollständig
+    // (Service.Export includeBindings-Parameter), war aber aus der UI
+    // heraus nie erreichbar — #exportWorkflow() liest dieses Feld.
+    const bindingsLabel = document.createElement("label");
+    bindingsLabel.style.cssText = "font-size:11px;cursor:pointer;margin-left:10px;display:inline-flex;align-items:center;gap:4px;";
+    bindingsLabel.title =
+      "Nur sinnvoll für Export→Import auf demselben System (dieselben Nutzerkonten) — " +
+      "ein Export auf ein anderes System bleibt ohne diese Option portabel.";
+    const bindingsCheckbox = document.createElement("input");
+    bindingsCheckbox.type = "checkbox";
+    bindingsCheckbox.checked = this.#exportWithBindings;
+    bindingsCheckbox.addEventListener("change", () => {
+      this.#exportWithBindings = bindingsCheckbox.checked;
+    });
+    bindingsLabel.append(bindingsCheckbox, "Rollenbindungen mit exportieren");
+    heading.appendChild(bindingsLabel);
+
     this.appendChild(heading);
 
     if (this.#showForm) {
