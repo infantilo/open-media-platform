@@ -287,7 +287,10 @@ Normalbetrieb bleibt er leer:
 Der Reiter **Administration** (nur sichtbar für Nutzer mit
 Administrationsrecht) verwaltet Nutzerkonten, Rollenbindungen, den
 Node-Katalog-Import/Export und zeigt ein Audit-Log aller schreibenden
-API-Zugriffe:
+API-Zugriffe — seit Nutzerwunsch 2026-08-13 als vier eigene Unter-Reiter
+(Nutzer/Rollenbindungen/Node-Katalog/Audit-Log) statt einer einzigen,
+lang scrollenden Seite (der Screenshot unten zeigt noch den älteren
+Stand, alle vier Abschnitte untereinander):
 
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 

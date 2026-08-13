@@ -108,7 +108,36 @@ const VERB_LABEL: Record<string, string> = {
   admin: "Administrieren",
 };
 
+// Nutzerwunsch 2026-08-13: die vier Abschnitte liefen bisher als eine
+// einzige, lang scrollende Seite untereinander — bei vier unabhängigen
+// Tabellen (Nutzer/Rollenbindungen/Node-Katalog/Audit-Log) unnötig
+// unübersichtlich. Eigene, kleine Sub-Tab-Leiste statt eines weiteren
+// Eintrags in app-shell.ts' TabDef-Liste (dort sind Tabs eigene
+// Custom-Element-Instanzen mit eigenem Lifecycle — hier sind es vier
+// Methoden auf demselben Element mit gemeinsam geladenen Daten, ein
+// Wechsel darf kein Neuladen auslösen). Style bewusst dieselbe CSS-
+// Formel wie app-shell.ts' TAB_BUTTON_BASE/#styleTabButton (visuelle
+// Konsistenz), aber als eigene, kleine Kopie hier — admin-view.ts
+// importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
+// die anderen kleinen bewussten Dopplungen im Projekt, z. B.
+// STREAM_TOKEN_KEY in flow-canvas.ts).
+type AdminTabId = "users" | "bindings" | "catalog" | "audit";
+const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
+  { id: "users", label: "Nutzer" },
+  { id: "bindings", label: "Rollenbindungen" },
+  { id: "catalog", label: "Node-Katalog" },
+  { id: "audit", label: "Audit-Log" },
+];
+const SUB_TAB_BUTTON_BASE =
+  "border:1px solid transparent;border-radius:var(--omp-radius);" +
+  "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;";
+
 class AdminView extends HTMLElement {
+  // Nutzerwunsch 2026-08-13: welcher der vier Abschnitte gerade sichtbar
+  // ist — überlebt #render()-Aufrufe (Klassenfeld, nicht in #render()
+  // neu initialisiert), damit ein Datennachladen (#loadUsers() etc.)
+  // oder eine Mutation nicht auf "Nutzer" zurückspringt.
+  #activeAdminTab: AdminTabId = "users";
   #users: UserEntry[] = [];
   #bindings: RoleBinding[] = [];
   #audit: AuditEntry[] = [];
@@ -535,10 +564,46 @@ class AdminView extends HTMLElement {
       this.appendChild(err);
     }
 
-    this.appendChild(this.#renderUsersSection());
-    this.appendChild(this.#renderBindingsSection());
-    this.appendChild(this.#renderCatalogSection());
-    this.appendChild(this.#renderAuditSection());
+    this.appendChild(this.#renderTabBar());
+
+    switch (this.#activeAdminTab) {
+      case "users":
+        this.appendChild(this.#renderUsersSection());
+        break;
+      case "bindings":
+        this.appendChild(this.#renderBindingsSection());
+        break;
+      case "catalog":
+        this.appendChild(this.#renderCatalogSection());
+        break;
+      case "audit":
+        this.appendChild(this.#renderAuditSection());
+        break;
+    }
+  }
+
+  #renderTabBar(): HTMLElement {
+    const bar = document.createElement("div");
+    bar.setAttribute("data-role", "admin-sub-tabs");
+    bar.style.cssText = "display:flex;gap:var(--omp-space-2);margin-bottom:var(--omp-space-3);";
+    for (const tab of ADMIN_SUB_TABS) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = tab.label;
+      btn.setAttribute("data-tab-id", tab.id);
+      const isActive = tab.id === this.#activeAdminTab;
+      btn.style.cssText =
+        SUB_TAB_BUTTON_BASE +
+        (isActive
+          ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
+          : "background:transparent;color:var(--omp-text-dim);");
+      btn.addEventListener("click", () => {
+        this.#activeAdminTab = tab.id;
+        this.#render();
+      });
+      bar.appendChild(btn);
+    }
+    return bar;
   }
 
   #renderUsersSection(): HTMLElement {
