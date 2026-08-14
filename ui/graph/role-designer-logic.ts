@@ -26,6 +26,14 @@ export interface DraftRole {
   // durchreichen kann (kein Flatten/Un-Flatten beim Laden/Speichern
   // nötig). undefined/leeres escalation = "advisory" (Default).
   placement?: { escalation?: string; confirmWindowSeconds?: number };
+  // mixerLevels (Nutzerwunsch 2026-08-14: "dynamische Anzahl an
+  // Mischerebenen... jede mit eigenem Output") — nur für
+  // nodeType==="omp-video-mixer-me" gezeigt (s. role-designer.ts
+  // #renderRoleTile), aber wie orchestrator/internal/workflows/
+  // types.go Role.MixerLevels generisch am DraftRole gehalten, kein
+  // Sonderfall im Wire-Format. undefined/0 = Node-eigener Default
+  // (1 Ebene).
+  mixerLevels?: number;
 }
 
 export interface DraftConnection {

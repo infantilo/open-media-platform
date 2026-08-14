@@ -690,20 +690,11 @@ func (s *Service) runStart(wf Workflow) {
 
 		// Nutzerwunsch 2026-07-28: role.Format überschreibt (pro Rolle,
 		// nicht workflow-weit) OMP_WIDTH/OMP_HEIGHT aus der Programm-
-		// Auflösung oben plus neu OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN —
-		// eigene Map statt Mutation von extraEnv, damit die nächste
-		// Rolle in dieser Schleife nicht versehentlich das Format der
-		// vorigen erbt.
-		roleEnv := extraEnv
-		if roleFormatEnv := formatExtraEnv(role.Format); roleFormatEnv != nil {
-			roleEnv = make(map[string]string, len(extraEnv)+len(roleFormatEnv))
-			for k, v := range extraEnv {
-				roleEnv[k] = v
-			}
-			for k, v := range roleFormatEnv {
-				roleEnv[k] = v
-			}
-		}
+		// Auflösung oben plus neu OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN;
+		// role.MixerLevels (Nutzerwunsch 2026-08-14) setzt zusätzlich
+		// OMP_ME_LEVELS — s. roleExtraEnv-Doku zur Begründung der neuen
+		// statt mutierten Map.
+		roleEnv := roleExtraEnv(extraEnv, role)
 		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
@@ -1104,16 +1095,9 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	if wf.Definition.Settings.ProgramHeight > 0 {
 		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
 	}
-	roleEnv := extraEnv
-	if roleFormatEnv := formatExtraEnv(role.Format); roleFormatEnv != nil {
-		roleEnv = make(map[string]string, len(extraEnv)+len(roleFormatEnv))
-		for k, v := range extraEnv {
-			roleEnv[k] = v
-		}
-		for k, v := range roleFormatEnv {
-			roleEnv[k] = v
-		}
-	}
+	// S. runStart-Aufrufstelle/roleExtraEnv-Doku: role.Format +
+	// role.MixerLevels (Nutzerwunsch 2026-08-14) additiv gemergt.
+	roleEnv := roleExtraEnv(extraEnv, role)
 	roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
 
 	resolvedHostID := role.HostID

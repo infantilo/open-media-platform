@@ -76,8 +76,24 @@ const PLACEMENT_ROW_HEIGHT = 22;
 // Zeile macht ihn nachträglich änderbar, gleiches Baumuster wie
 // FORMAT_ROW_HEIGHT.
 const HOST_ROW_HEIGHT = 22;
+// Nutzerwunsch 2026-08-14 ("dynamische Anzahl an Mischerebenen... jede
+// mit eigenem Output", Teil 3): fünfte Zeile für role.mixerLevels —
+// gleiches Baumuster wie FORMAT_ROW_HEIGHT/HOST_ROW_HEIGHT, aber ihr
+// Inhalt bleibt für jede Rolle AUSSER nodeType==="omp-video-mixer-me"
+// leer/versteckt (s. `#renderRoleTile`) statt die Zeile ganz wegzulassen
+// — vermeidet eine pro-Rolle unterschiedliche TILE_HEIGHT (hätte alle
+// zwölf TILE_HEIGHT-Verwendungsstellen, u. a. Anker-/Verbindungs-
+// Positionen, auf eine Pro-Rolle-Funktion umstellen müssen), Kosten ist
+// eine minimal höhere Kachel für Nicht-Mixer-Rollen.
+const MIXER_LEVELS_ROW_HEIGHT = 22;
 const TILE_HEIGHT =
-  MIN_BODY_HEIGHT + HEADER_HEIGHT + HOST_ROW_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT + PLACEMENT_ROW_HEIGHT;
+  MIN_BODY_HEIGHT +
+  HEADER_HEIGHT +
+  HOST_ROW_HEIGHT +
+  FORMAT_ROW_HEIGHT +
+  STANDBY_ROW_HEIGHT +
+  PLACEMENT_ROW_HEIGHT +
+  MIXER_LEVELS_ROW_HEIGHT;
 // Nutzerfund 2026-08-13: 6px-Anker waren ein zu kleines, präzisions-
 // abhängiges Ziel zum Verbinden — auf 9px vergrößert (weiterhin klein
 // genug, um bei TILE_HEIGHT nicht zu dominieren).
@@ -1051,6 +1067,52 @@ export class RoleDesigner extends HTMLElement {
     placementWrap.appendChild(windowInput);
     placementObject.appendChild(placementWrap);
     g.appendChild(placementObject);
+
+    // Nutzerwunsch 2026-08-14 ("dynamische Anzahl an Mischerebenen"),
+    // bekannte Lücke aus Teil 3 geschlossen: bislang war role.mixerLevels
+    // nur per Roh-JSON/API setzbar. Gleiches foreignObject-Baumuster wie
+    // die Zeilen oben, aber nur für nodeType==="omp-video-mixer-me"
+    // sichtbar (s. MIXER_LEVELS_ROW_HEIGHT-Doku) — jede andere Rolle
+    // lässt die Zeile leer/versteckt statt sie ganz wegzulassen.
+    const mixerLevelsObject = document.createElementNS(SVG_NS, "foreignObject");
+    mixerLevelsObject.setAttribute("x", "6");
+    mixerLevelsObject.setAttribute(
+      "y",
+      String(
+        HEADER_HEIGHT + MIN_BODY_HEIGHT + HOST_ROW_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT +
+          PLACEMENT_ROW_HEIGHT,
+      ),
+    );
+    mixerLevelsObject.setAttribute("width", String(NODE_WIDTH - 12));
+    mixerLevelsObject.setAttribute("height", String(MIXER_LEVELS_ROW_HEIGHT));
+    mixerLevelsObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    if (role.nodeType === "omp-video-mixer-me") {
+      const mixerLevelsWrap = document.createElement("div");
+      mixerLevelsWrap.style.cssText = "display:flex;align-items:center;gap:4px;width:100%;box-sizing:border-box;";
+      const mixerLevelsLabel = document.createElement("span");
+      mixerLevelsLabel.textContent = "Ebenen:";
+      mixerLevelsLabel.style.cssText = "font-size:10px;color:#999;white-space:nowrap;";
+      const mixerLevelsInput = document.createElement("input");
+      mixerLevelsInput.type = "number";
+      mixerLevelsInput.min = "1";
+      mixerLevelsInput.max = "8";
+      mixerLevelsInput.placeholder = "1";
+      mixerLevelsInput.title =
+        "Anzahl unabhängiger M/E-Ebenen dieses Mixers, jede mit eigenem PGM-Ausgang (z. B. für einen Studio-Monitor unabhängig vom Sende-PGM) — leer/1 = Node-eigener Default, nur beim Start wirksam.";
+      mixerLevelsInput.style.cssText =
+        "width:40px;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+      mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
+      mixerLevelsInput.addEventListener("change", () => {
+        this.#pushUndo();
+        const n = parseInt(mixerLevelsInput.value, 10);
+        role.mixerLevels = Number.isFinite(n) && n > 1 ? n : undefined;
+        mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
+      });
+      mixerLevelsWrap.appendChild(mixerLevelsLabel);
+      mixerLevelsWrap.appendChild(mixerLevelsInput);
+      mixerLevelsObject.appendChild(mixerLevelsWrap);
+    }
+    g.appendChild(mixerLevelsObject);
 
     const removeBtn = document.createElementNS(SVG_NS, "text");
     removeBtn.setAttribute("data-role", "role-tile-remove");

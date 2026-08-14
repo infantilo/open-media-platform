@@ -77,6 +77,17 @@ type Role struct {
 	// wechsel braucht einen MXL-Flow-Neuaufbau, gleiche Einschränkung
 	// wie die bestehende Programm-Auflösung).
 	Format string `json:"format,omitempty"`
+	// MixerLevels (Nutzerwunsch 2026-08-14: "dynamische Anzahl an
+	// Mischerebenen... jede mit eigenem Output") — nur für
+	// nodeType=="omp-video-mixer-me" relevant (setzt OMP_ME_LEVELS in
+	// runStart/rewireAfterRestart, s. dortige formatExtraEnv-
+	// Aufrufstellen), aber bewusst generisch benannt/kein Sonderfall im
+	// Scheduler: jeder andere Node-Typ ignoriert das Env einfach. 0/leer
+	// = Node-eigener Default (1 Ebene, unverändertes Verhalten). Wie
+	// Format nur beim Start wirksam (fester Ebenen-Satz für die gesamte
+	// Prozess-Laufzeit, kein Live-Hinzufügen — s. `nodes/
+	// omp-video-mixer-me/src/main.rs` OMP_ME_LEVELS-Doku).
+	MixerLevels int `json:"mixerLevels,omitempty"`
 	// StandbyFor (K7 Teil 4, docs/END-GOAL-FEATURES.md §7.4/§7.7): Name
 	// einer anderen Rolle DESSELBEN Workflows, für die diese Rolle als
 	// warmer Standby dient. Leer = normale Rolle (unverändertes

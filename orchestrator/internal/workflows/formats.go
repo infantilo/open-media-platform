@@ -102,3 +102,34 @@ func formatExtraEnv(name string) map[string]string {
 		"OMP_FRAMERATE_DEN": strconv.FormatUint(uint64(f.FramerateDenominator), 10),
 	}
 }
+
+// roleExtraEnv baut das per-Rolle-Env für einen Start (runStart/
+// RestartRole) — merged role.Format (formatExtraEnv) und role.MixerLevels
+// (Nutzerwunsch 2026-08-14: "dynamische Anzahl an Mischerebenen") additiv
+// in eine NEUE Map statt extraEnv zu mutieren, aus demselben Grund wie
+// zuvor bei formatExtraEnv allein: die nächste Rolle in einer Start-
+// Schleife darf die Overrides der vorigen nicht versehentlich erben.
+// Liefert extraEnv selbst zurück (dieselbe Map, kein Kopieren), wenn
+// weder Format noch MixerLevels gesetzt sind — unverändertes Verhalten
+// für den häufigen Fall ohne Rollen-Overrides.
+func roleExtraEnv(extraEnv map[string]string, role Role) map[string]string {
+	roleFormatEnv := formatExtraEnv(role.Format)
+	var mixerLevelsEnv map[string]string
+	if role.MixerLevels > 0 {
+		mixerLevelsEnv = map[string]string{"OMP_ME_LEVELS": strconv.Itoa(role.MixerLevels)}
+	}
+	if roleFormatEnv == nil && mixerLevelsEnv == nil {
+		return extraEnv
+	}
+	merged := make(map[string]string, len(extraEnv)+len(roleFormatEnv)+len(mixerLevelsEnv))
+	for k, v := range extraEnv {
+		merged[k] = v
+	}
+	for k, v := range roleFormatEnv {
+		merged[k] = v
+	}
+	for k, v := range mixerLevelsEnv {
+		merged[k] = v
+	}
+	return merged
+}
