@@ -45,6 +45,16 @@ import (
 // Metriken zu iterieren.
 const EvaluateInterval = 5 * time.Second
 
+// HostOnlineThreshold: ein Host gilt für SelectHost nur dann als
+// erreichbar, wenn seine letzte Telemetrie höchstens so alt ist —
+// derselbe Wert wie der Online-Punkt im Flow-Editor (ui/graph/
+// flow-canvas.ts::HOST_ONLINE_THRESHOLD_MS), damit ein Host, den der
+// Operator dort als "offline" (grauer Punkt) sieht, auch von der
+// automatischen Platzierung gemieden wird — s. SelectHost-Doku zum
+// Live-Fund 2026-08-14 ("Neue Gruppe"-Workflow-Start hing an einem seit
+// Registrierung nie online gewesenen Host).
+const HostOnlineThreshold = 15 * time.Second
+
 // HostLister liefert alle registrierten Hosts (implementiert von
 // *hosts.Store).
 type HostLister interface {
@@ -261,13 +271,31 @@ type hostScore struct {
 	reason     string
 }
 
+// hostOnline meldet, ob hostID innerhalb von HostOnlineThreshold
+// Telemetrie geschickt hat — SelectHost nutzt das als harten
+// Erreichbarkeits-Filter VOR scoreHost (s. dortige Live-Fund-Doku),
+// unabhängig von dessen bewusst fail-open gehaltener Ressourcen-
+// Bewertung. Kein eigenständiger CheckHost-Gate: CheckHost bleibt die
+// reine Ressourcen-Vorprüfung für einen vom Nutzer/Katalog explizit
+// gewählten Host (§14.3d, "nie ein stiller Block") — dort bewusst
+// unverändert.
+func (e *Engine) hostOnline(hostID string) bool {
+	m, ok := e.metrics.Get(hostID)
+	if !ok {
+		return false
+	}
+	return time.Since(m.ReceivedAt) < HostOnlineThreshold
+}
+
 // scoreHost bewertet hostID für nodeType wie CheckHost, plus optional
 // extraLoad (Nachtrag 99: Scheduler-Forecast-Zusatzlast anderer, bald
 // fällig werdender Workflows, s. workflows.Service) — additiv auf
 // dieselbe Weise wie das Node-Typ-Profil projiziert. Fehlende Telemetrie
-// bleibt fail-open (hasMetrics=false, ok=true) — SelectHost behandelt
-// einen unbekannten Host dadurch als validen, aber nicht besonders
-// bevorzugten Kandidaten (s. dortige Sortierung).
+// bleibt fail-open (hasMetrics=false, ok=true) — für CheckHost (reine
+// Ressourcen-Vorprüfung eines bereits feststehenden Hosts) unverändert
+// die richtige Haltung; SelectHost filtert nicht erreichbare Hosts
+// bereits vorher über hostOnline() aus, bevor es hier überhaupt
+// ankommt (s. dortige Doku).
 func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot) hostScore {
 	m, hasMetrics := e.metrics.Get(hostID)
 	if !hasMetrics {
@@ -355,10 +383,14 @@ func containsString(list []string, s string) bool {
 // "lokal" den besten — der Start soll laut Vorgabe IMMER gelingen, nur
 // eben ggf. anderswo als ursprünglich in der Definition eingetragen.
 //
-// Ablauf: (1) Kandidaten = alle Hosts + lokal, nach Ressourcen filtern
-// (scoreHost inkl. occ.ExtraLoad) — ein Host ohne Telemetrie bleibt
-// dabei ein valider, aber nicht bevorzugter Kandidat (fail-open, wie
-// CheckHost). (2) Redundanz: Hosts ausschließen, auf denen laut
+// Ablauf: (1) Kandidaten = alle Hosts + lokal, zuerst auf ERREICHBARKEIT
+// gefiltert (s. hostOnline/HostOnlineThreshold — ein Host, der noch nie
+// oder seit über 15s keine Telemetrie mehr geschickt hat, fliegt hier
+// ganz raus, unabhängig von scoreHost), danach nach Ressourcen
+// (scoreHost inkl. occ.ExtraLoad) — unter den verbliebenen ERREICHBAREN
+// Hosts bleibt fehlende Lastauskunft weiterhin fail-open (kann bei
+// gerade eben verbundenen Hosts kurz vorkommen, s. scoreHost-Doku).
+// (2) Redundanz: Hosts ausschließen, auf denen laut
 // occ.RedundancyGroupHosts[req.RedundancyGroup] bereits derselbe Tag
 // sitzt — außer das ließe keinen Kandidaten übrig, dann Ausschluss
 // fallen lassen (Start muss gelingen). (3) Affinität: unter den
@@ -367,8 +399,21 @@ func containsString(list []string, s string) bool {
 // (4) Unter Gleichstand: req.PreferredHostID, falls noch Kandidat, sonst
 // der am wenigsten ausgelastete (Telemetrie-Hosts vor telemetrielosen).
 // Lokal bleibt der Anker: nur automatisch gewählt, wenn PreferredHostID
-// leer ist UND kein Remote-Host besser/registriert ist — bestehendes
-// Ein-Host-Dev-Verhalten bleibt dadurch unverändert.
+// leer ist UND kein Remote-Host besser/registriert/ERREICHBAR ist —
+// bestehendes Ein-Host-Dev-Verhalten bleibt dadurch unverändert.
+//
+// Live-Fund 2026-08-14 ("Neue Gruppe"-Workflow-Start hing minutenlang an
+// „launcher: remote start on host …: nats: timeout"): vor diesem Fix
+// zählte ein Host OHNE jemals empfangene Telemetrie (nie online
+// gewesener/verwaister Registry-Eintrag) als "fail-open"-Kandidat GENAU
+// WIE ein Host mit Telemetrie, aber niedriger Last — SelectHost konnte
+// ihn also bevorzugt wählen (erster Kandidat ohne Metrik-Gegenkandidaten
+// gewinnt, s. pick()), obwohl ein Start dort GARANTIERT scheitert (kein
+// Host-Agent, der den NATS-Remote-Start beantwortet). Das widerspricht
+// dem eigentlichen Zweck dieser Funktion ("der Start soll IMMER
+// gelingen") — Ressourcen-Unbekanntheit (§14.3d: "nie ein stiller
+// Block") und Erreichbarkeits-Unbekanntheit sind unterschiedliche Fragen;
+// nur Erstere bleibt hier weiterhin bewusst fail-open.
 //
 // Bewusste Scope-Grenze (Nachtrag 99, kein stiller Gap): lokale
 // Host-eigene CPU/RAM-Last fließt NICHT ein (der Orchestrator misst
@@ -389,6 +434,9 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 
 	var candidates []candidate
 	for _, h := range allHosts {
+		if !e.hostOnline(h.ID) {
+			continue
+		}
 		s := e.scoreHost(h.ID, req.NodeType, occ.ExtraLoad[h.ID])
 		if !s.ok {
 			continue

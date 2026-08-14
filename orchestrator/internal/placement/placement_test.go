@@ -17,8 +17,17 @@ func (f fakeHosts) ListHosts() ([]hosts.Host, error) { return f.hosts, nil }
 
 type fakeMetrics map[string]hosts.Metrics
 
+// Get füllt einen fehlenden (Zeitwert-Null-)ReceivedAt mit time.Now() —
+// die Test-Fixtures unten setzen ReceivedAt nie explizit, meinen mit
+// einem Eintrag aber "Telemetrie für diesen Host liegt vor und ist
+// aktuell", nicht "vor Jahrzehnten empfangen". Ohne das würde
+// SelectHosts hostOnline()-Gate (s. dortige Live-Fund-Doku) jeden
+// Fixture-Host als nicht erreichbar behandeln.
 func (f fakeMetrics) Get(hostID string) (hosts.Metrics, bool) {
 	m, ok := f[hostID]
+	if ok && m.ReceivedAt.IsZero() {
+		m.ReceivedAt = time.Now()
+	}
 	return m, ok
 }
 
