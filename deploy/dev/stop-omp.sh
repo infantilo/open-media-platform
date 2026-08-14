@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Stoppt den per start-omp.sh gestarteten Orchestrator-Prozess.
-# `./stop-omp.sh --all` stoppt zusätzlich NATS + NMOS-Registry (make down).
+# `./stop-omp.sh --all` stoppt zusätzlich Supervisor, simulierte
+# Host-Agents (falls per start-hosts.sh gestartet) und NATS + NMOS-
+# Registry (make down).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -41,6 +43,8 @@ fi
 if [ "${1:-}" = "--all" ]; then
   echo "==> Supervisor stoppen"
   "$ROOT_DIR/deploy/dev/stop-supervisor.sh"
+  echo "==> Host-Agents stoppen (falls per start-hosts.sh gestartet)"
+  "$ROOT_DIR/deploy/dev/stop-hosts.sh"
   echo "==> NATS + NMOS-Registry stoppen"
   make -C "$ROOT_DIR" down
 fi

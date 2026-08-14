@@ -50,7 +50,39 @@ Launcher-Zustand (C8) und `role-bindings.json` (C13) in Benutzung.
 
 Log des Orchestrators: `.run/orchestrator.log` (nicht versioniert).
 
-### 2.1 Optional: mTLS Orchestrator↔Nodes (D3)
+### 2.1 Optional: mehrere Hosts simulieren (Dev)
+
+Standardmäßig läuft nur ein Host (dieser Rechner, unsichtbar für die
+GUI, solange kein Host-Agent registriert ist). Für Kapitel 13/14/15
+(Host-Zonen im Flow-Editor, Placement, Ressourcen-Profile — s. `make
+start` oben, Abschnitt 4) braucht es mindestens zwei registrierte
+Hosts. Zwei simulierte `omp-host-agent`-Prozesse auf derselben Maschine
+reichen dafür (`docs/decisions.md` 2026-08-13 ff., "Regie-Host-A"/
+"Regie-Host-B"):
+
+```sh
+make hosts
+```
+
+Baut `bin/omp-host-agent` und startet beide Agents im Hintergrund
+(`.run/host1/`, `.run/host2/` — Logs, PID-Datei, `state.json`). Die
+Host-Identität (Host-ID + Label) bleibt über `state.json` stabil über
+Neustarts hinweg — ein erneuter `make hosts`-Aufruf registriert wieder
+dieselben zwei Hosts (an die bestehende Zonen-Zuordnungen/Workflows
+anknüpfen), keine neuen. Idempotent: ein bereits laufender Agent wird
+übersprungen. Beide lesen denselben Katalog wie der Instanz-Launcher
+(`deploy/catalog.json`, nach `/tmp/host-catalog.json` kopiert, weil
+`/tmp` einen Neustart nicht übersteht).
+
+```sh
+deploy/dev/stop-hosts.sh   # stoppt beide wieder (state.json bleibt erhalten)
+```
+
+`make stop ARGS=--all` stoppt sie automatisch mit. Weiteres zur
+Host-Ansicht im Flow-Editor: Abschnitt 4 unten,
+[`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §2.5/§8.
+
+### 2.2 Optional: mTLS Orchestrator↔Nodes (D3)
 
 Standardmäßig **aus** — der Schnellstart oben braucht nichts davon, alle
 Flows funktionieren unverändert per Klartext-HTTP. Zum Ausprobieren von

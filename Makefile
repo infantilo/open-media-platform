@@ -1,4 +1,4 @@
-.PHONY: build test check check-ci up down ci ui nodes contract start stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
+.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent supervisor
 
@@ -113,8 +113,20 @@ down:
 start:
 	@./deploy/dev/start-omp.sh
 
+# Simulierte Multi-Host-Konfiguration (Nutzerfrage 2026-08-14, "wie
+# starte ich das nächste Mal in der aktuellen Multi-Host-Konfiguration"):
+# zwei omp-host-agent-Prozesse ("Regie-Host-A"/"Regie-Host-B") auf
+# derselben Maschine, docs/HANDBUCH.md §2.2. Bewusst NICHT Teil von
+# `make start` (Opt-in, wie der Supervisor kein eigenes `make`-Target
+# für den Start braucht — hier trotzdem eins, weil zwei Prozesse statt
+# einem gestartet werden). `make stop ARGS=--all` stoppt sie wieder mit.
+hosts:
+	@./deploy/dev/start-hosts.sh
+
 # Stoppt nur den Orchestrator-Prozess (Container laufen weiter, schnelles
-# Neustarten). `make stop ARGS=--all` stoppt zusätzlich NATS/Registry.
+# Neustarten). `make stop ARGS=--all` stoppt zusätzlich Supervisor,
+# simulierte Host-Agents (falls per `make hosts` gestartet) und
+# NATS/Registry/Postgres.
 stop:
 	@./deploy/dev/stop-omp.sh $(ARGS)
 
@@ -133,6 +145,16 @@ status:
 		echo "Supervisor (Backup/Restore): läuft (PID $$(cat .run/supervisor.pid))"; \
 	else \
 		echo "Supervisor (Backup/Restore): nicht gestartet"; \
+	fi
+	@if [ -f .run/host1/pid ] && kill -0 "$$(cat .run/host1/pid)" 2>/dev/null; then \
+		echo "Host-Agent Regie-Host-A: läuft (PID $$(cat .run/host1/pid))"; \
+	else \
+		echo "Host-Agent Regie-Host-A: nicht gestartet (optional, siehe 'make hosts')"; \
+	fi
+	@if [ -f .run/host2/pid ] && kill -0 "$$(cat .run/host2/pid)" 2>/dev/null; then \
+		echo "Host-Agent Regie-Host-B: läuft (PID $$(cat .run/host2/pid))"; \
+	else \
+		echo "Host-Agent Regie-Host-B: nicht gestartet (optional, siehe 'make hosts')"; \
 	fi
 
 # Backup/Restore (S9, docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) —
