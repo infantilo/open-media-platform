@@ -41,7 +41,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodArg, MethodSpec, NodeConfig,
     ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
 };
-use pipeline::{DiscoveredInput, DiscoveredKeyFill, DveBox};
+use pipeline::{DEFAULT_TRANS_RATE_FRAMES, DiscoveredInput, DiscoveredKeyFill, DveBox};
 use serde_json::Value;
 
 /// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
@@ -70,6 +70,13 @@ struct MixerStore {
     /// `crosspoint.select`/`take` funktionieren unverändert mit jeder
     /// entdeckten `senderId`, unabhängig vom Pin-Status.
     pinned: Arc<Mutex<Vec<String>>>,
+    /// `crosspoint.transRate` (Bug 4, vormals ausgegraut — s.
+    /// `ui/bundle.js`-Moduldoku "K3-Teil-2"): Rampendauer für
+    /// `crosspoint.autoTrans`, in Frames @25fps (6/12/25/50, s.
+    /// `ui/bundle.js::RATES`). Nur Buchführung fürs `get()`, die
+    /// eigentliche Umrechnung/Anwendung läuft über
+    /// `pipeline::PipelineHandle::set_trans_rate`.
+    trans_rate: Arc<Mutex<i32>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -184,6 +191,19 @@ impl ParamStore for MixerStore {
                 // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): vom
                 // Operator per "+" angepinnte `senderId`s — JSON-Array,
                 // gleiche Array-Ausnahme wie "crosspoint.inputs".
+                // Bug 4 (vormals "K3-Teil-2", s. `ui/bundle.js`-Moduldoku):
+                // aktuelle Rampendauer für `crosspoint.autoTrans`, in
+                // Frames @25fps — Mutation über die Methode
+                // `crosspoint.setTransRate` unten, gleiche Konvention wie
+                // die übrigen `readonly:true`-Parameter hier (s.
+                // Modul-Doku zu MS-05-02/eigenen Klassen oben).
+                ParamSpec {
+                    name: "crosspoint.transRate".to_string(),
+                    kind: ParamType::Number,
+                    unit: Some("frames".to_string()),
+                    range: None,
+                    readonly: true,
+                },
                 ParamSpec {
                     name: "crosspoint.pinnedSenderIds".to_string(),
                     kind: ParamType::String,
@@ -287,6 +307,17 @@ impl ParamStore for MixerStore {
                         kind: ParamType::String,
                     }],
                 },
+                // Bug 4: Rate-Wahl-Tasten in der UI (6f/12f/25f/50f, s.
+                // `ui/bundle.js::RATES`) — Frames statt Millisekunden, um
+                // dieselben Werte wie ein "echtes Pult" (PGM-Tasten-
+                // Beschriftung, §3.3) zu zeigen.
+                MethodSpec {
+                    name: "crosspoint.setTransRate".to_string(),
+                    args: vec![MethodArg {
+                        name: "frames".to_string(),
+                        kind: ParamType::Number,
+                    }],
+                },
                 // D8 Teil 3 (ARCHITECTURE.md §15.1 Punkt 3): vom
                 // Orchestrator beim Start aufgerufen.
                 MethodSpec {
@@ -357,6 +388,9 @@ impl ParamStore for MixerStore {
             "crosspoint.pinnedSenderIds" => Some(serde_json::json!(
                 self.pinned.lock().expect("lock poisoned").clone()
             )),
+            "crosspoint.transRate" => Some(serde_json::json!(
+                *self.trans_rate.lock().expect("lock poisoned")
+            )),
             _ => None,
         }
     }
@@ -399,6 +433,21 @@ impl ParamStore for MixerStore {
             }
             "crosspoint.autoTrans" => {
                 self.pipeline.auto_trans();
+                Ok(())
+            }
+            // Bug 4: Rate-Wahl-Tasten (6f/12f/25f/50f) — wirkt erst auf den
+            // NÄCHSTEN `autoTrans()`, s. `PipelineHandle::set_trans_rate`-
+            // Doku. Obergrenze 250 Frames (10s @25fps) ist eine reine
+            // Plausibilitätsschranke, keine UI-/Standardvorgabe.
+            "crosspoint.setTransRate" => {
+                let frames = args
+                    .get("frames")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite() && *v >= 1.0 && *v <= 250.0)
+                    .map(|v| v as i32)
+                    .ok_or(InvokeError::Unknown)?;
+                *self.trans_rate.lock().expect("lock poisoned") = frames;
+                self.pipeline.set_trans_rate(frames as u32);
                 Ok(())
             }
             "dve.setBox" => {
@@ -539,6 +588,7 @@ impl MixerStore {
             "pipEnabled": *self.pip_enabled.lock().expect("lock poisoned"),
             "pipSourceSenderId": self.pip_source.lock().expect("lock poisoned").clone(),
             "pinnedSenderIds": self.pinned.lock().expect("lock poisoned").clone(),
+            "transRateFrames": *self.trans_rate.lock().expect("lock poisoned"),
         })
     }
 
@@ -582,6 +632,11 @@ impl MixerStore {
                 .filter_map(Value::as_str)
                 .map(str::to_string)
                 .collect();
+        }
+        if let Some(frames) = doc.get("transRateFrames").and_then(Value::as_f64) {
+            let frames = frames as i32;
+            *self.trans_rate.lock().expect("lock poisoned") = frames;
+            self.pipeline.set_trans_rate(frames as u32);
         }
     }
 }
@@ -653,6 +708,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pip_enabled = Arc::new(Mutex::new(false));
     let pip_source = Arc::new(Mutex::new(None::<String>));
     let pinned = Arc::new(Mutex::new(Vec::<String>::new()));
+    let trans_rate = Arc::new(Mutex::new(DEFAULT_TRANS_RATE_FRAMES as i32));
 
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
         inputs: inputs.clone(),
@@ -665,6 +721,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pip_enabled: pip_enabled.clone(),
         pip_source: pip_source.clone(),
         pinned: pinned.clone(),
+        trans_rate: trans_rate.clone(),
         pipeline: pipeline_handle.clone(),
     });
 

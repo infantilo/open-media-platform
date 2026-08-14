@@ -18,10 +18,12 @@
 //
 // T-Bar (Teil 2: `crosspoint.transitionPosition`/`setTransitionPosition`
 // existieren noch nicht): rein kosmetisch, animiert nur während eines
-// Auto-Trans-Klicks über eine feste Heuristik-Dauer, kein echtes
-// Server-Feedback. Rate-Wahl/Wipe sind ausgegraut mit Tooltip (Teil 2 /
-// außerhalb des aktuellen Scopes) statt weggelassen — "gehört zur
-// 'echtes Pult'-Anmutung" (§3.3).
+// Auto-Trans-Klicks, kein echtes Server-Feedback — die Dauer folgt aber
+// seit Bug 4 der echten `crosspoint.transRate` (nicht mehr einer festen
+// Heuristik), s. `animateTBar`/`RATES` unten. Wipe bleibt ausgegraut mit
+// Tooltip (außerhalb des aktuellen Scopes) statt weggelassen — "gehört
+// zur 'echtes Pult'-Anmutung" (§3.3); Rate-Wahl ist seit Bug 4
+// (`main.rs::crosspoint.setTransRate`, `pipeline.rs::frames_to_ms`) real.
 //
 // PGM-Reihe: Hot-Cut (K3-Teil-2, §3.5 offene Frage 1 entschieden
 // 2026-07-16 — Projektinhaber-Feedback). Ruft `crosspoint.take`
@@ -34,7 +36,16 @@ const PIP_BOX = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) }
 PIP_BOX.x = WIDTH - PIP_BOX.width - 16;
 PIP_BOX.y = HEIGHT - PIP_BOX.height - 16;
 
-const AUTO_TRANS_VISUAL_MS = 1000;
+// 1000ms Default (25 Frames @25fps) — überschrieben, sobald `refresh()`
+// die echte `crosspoint.transRate` gelesen hat (s. `currentTransRateMs`
+// unten). Bleibt als Fallback, falls der erste Poll noch nicht
+// zurückkam, wenn `autoBtn` schon geklickt wird.
+const DEFAULT_AUTO_TRANS_VISUAL_MS = 1000;
+// Muss zu `pipeline.rs::FRAMERATE_NUMERATOR`/`frames_to_ms` passen (25fps
+// ⇒ 40ms/Frame) — eigenständiges UI-Bundle ohne Zugriff auf die Rust-
+// Konstante (s. Moduldoku oben "kein Framework-Zwang"), daher hier
+// dupliziert statt importiert.
+const MS_PER_TRANS_FRAME = 40;
 
 class OmpVideoMixerMePanel extends HTMLElement {
   connectedCallback() {
@@ -274,12 +285,18 @@ class OmpVideoMixerMePanel extends HTMLElement {
       animateTBar();
     });
 
+    // Bug 4: folgt seit `refresh()`s erstem erfolgreichen Poll der echten
+    // `crosspoint.transRate` statt der festen `DEFAULT_AUTO_TRANS_VISUAL_MS`
+    // (s. dortige Doku).
+    let currentTransRateMs = DEFAULT_AUTO_TRANS_VISUAL_MS;
+
     let tBarAnimation = null;
     const animateTBar = () => {
       if (tBarAnimation) cancelAnimationFrame(tBarAnimation);
+      const durationMs = currentTransRateMs;
       const start = performance.now();
       const tick = (now) => {
-        const pct = Math.min(1, (now - start) / AUTO_TRANS_VISUAL_MS);
+        const pct = Math.min(1, (now - start) / durationMs);
         tBar.value = pct;
         if (pct < 1) {
           tBarAnimation = requestAnimationFrame(tick);
@@ -291,12 +308,17 @@ class OmpVideoMixerMePanel extends HTMLElement {
       tBarAnimation = requestAnimationFrame(tick);
     };
 
+    // Bug 4 (vormals ausgegraut, "K3-Teil-2"): jetzt echte Rate-Wahl-
+    // Tasten, `crosspoint.setTransRate` (main.rs) wirkt ab dem nächsten
+    // `autoTrans()`-Aufruf (pipeline.rs::PipelineHandle::set_trans_rate).
     const RATES = [6, 12, 25, 50];
+    const rateButtons = new Map();
     for (const frames of RATES) {
       const btn = document.createElement("omp-button");
       btn.textContent = `${frames}f`;
-      btn.setAttribute("disabled", "");
-      btn.title = "Rate-Wahl (crosspoint.transRate): K3-Teil-2";
+      btn.title = `Rampendauer: ${frames} Frames (${frames * MS_PER_TRANS_FRAME}ms)`;
+      btn.addEventListener("click", () => call("crosspoint.setTransRate", { frames }));
+      rateButtons.set(frames, btn);
       rateRow.append(btn);
     }
 
@@ -485,7 +507,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const refresh = async () => {
       const [
         inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
-        pipEnabledRes, pipSourceRes, pinnedRes, ownSenderIds,
+        pipEnabledRes, pipSourceRes, pinnedRes, transRateRes, ownSenderIds,
       ] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.programInput`),
@@ -496,6 +518,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         fetch(`/api/v1/nodes/${nodeId}/params/pip.enabled`),
         fetch(`/api/v1/nodes/${nodeId}/params/pip.source`),
         fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.pinnedSenderIds`),
+        fetch(`/api/v1/nodes/${nodeId}/params/crosspoint.transRate`),
         senderWorkflowLabel(),
       ]);
       if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
@@ -508,6 +531,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
       pipEnabled = pipEnabledRes.ok ? (await pipEnabledRes.json()).value === true : false;
       const pipSource = pipSourceRes.ok ? (await pipSourceRes.json()).value || "" : "";
       const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
+      const transRateFrames = transRateRes.ok ? (await transRateRes.json()).value || 0 : 0;
+      if (transRateFrames > 0) {
+        currentTransRateMs = transRateFrames * MS_PER_TRANS_FRAME;
+        for (const [frames, btn] of rateButtons) btn.active = frames === transRateFrames;
+      }
       latestInputs = inputs;
       latestPinned = pinned;
       latestOwnSenderIds = ownSenderIds;

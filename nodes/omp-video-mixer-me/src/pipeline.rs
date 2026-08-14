@@ -22,8 +22,10 @@
 //!
 //! **Crosspoint-Semantik:** `select(senderId)` setzt nur die
 //! Preset-Bus-Auswahl, ändert das Programmbild nicht. `cut()` schaltet
-//! Preset sofort hart auf Programm. `autoTrans()` überblendet über
-//! `TRANS_DURATION_MS` in `STEP_MS`-Schritten (40ms ≙ eine Bildperiode
+//! Preset sofort hart auf Programm. `autoTrans()` überblendet über die
+//! per `crosspoint.setTransRate` gewählte Dauer (Bug 4, vormals fest auf
+//! `TRANS_DURATION_MS`/25 Frames verdrahtet, s. `DEFAULT_TRANS_RATE_FRAMES`
+//! /`frames_to_ms`) in `STEP_MS`-Schritten (40ms ≙ eine Bildperiode
 //! @25fps, wie im Vorbild). Läuft bereits eine Transition, werden weitere
 //! `cut()`/`autoTrans()`-Aufrufe ignoriert (`fading`-Sperre) — ausreichend
 //! fürs manuelle Bedienen; alles darüber hinaus (Warteschlange, weitere
@@ -84,7 +86,7 @@
 //!
 //! Unverändert: während einer laufenden `autoTrans()` zeigt
 //! `comp_bg_pad` das **ausgehende** Bild noch sichtbar (Alpha rampt erst
-//! über `TRANS_DURATION_MS` von 1 auf 0), `isel_bg`s aktiver Pad
+//! über die gewählte Rampendauer von 1 auf 0), `isel_bg`s aktiver Pad
 //! wechselt erst am Ende des Fades (`spawn_autotrans`) auf den neuen
 //! Eingang.
 
@@ -114,7 +116,20 @@ pub const FRAMERATE_DENOMINATOR: u32 = 1;
 /// Eine Bildperiode @25fps — Animationsschrittweite für `autoTrans()`,
 /// identisch zu PIPELINE CONTROLLERs `STEP_MS`.
 const STEP_MS: u64 = 40;
-const TRANS_DURATION_MS: u64 = 1000;
+
+/// `crosspoint.transRate` (Bug 4, vormals ausgegraut, s.
+/// `../ui/bundle.js`-Moduldoku "K3-Teil-2"): Default-Rate, bis der
+/// Operator eine der vier UI-Tasten (6f/12f/25f/50f) wählt. 25 Frames
+/// @25fps ≙ 1000ms — bewusst identisch zum bisherigen festen
+/// `TRANS_DURATION_MS`, damit sich am Standardverhalten nichts ändert.
+pub const DEFAULT_TRANS_RATE_FRAMES: u32 = 25;
+
+/// Rechnet eine Bildanzahl (`crosspoint.transRate`, an der aktuellen
+/// `FRAMERATE_NUMERATOR`/`_DENOMINATOR` gemessen) in eine Millisekunden-
+/// Dauer für `spawn_autotrans` um.
+fn frames_to_ms(frames: u32) -> u64 {
+    frames as u64 * 1000 * FRAMERATE_DENOMINATOR as u64 / FRAMERATE_NUMERATOR as u64
+}
 
 /// Feste DSK-Farbfläche des Keyers (ARGB, big-endian, wie
 /// `videotestsrc::foreground-color`): kräftiges Magenta, im Viewer klar
@@ -255,6 +270,11 @@ pub struct PipelineHandle {
     /// bleibt also über Input-Set-Änderungen hinweg stabil, exakt wie
     /// bei `omp-scaler::pipeline::PipelineHandle::output_delay`.
     output_delay: Arc<AtomicU64>,
+    /// `crosspoint.transRate` (Bug 4): wie `output_delay` ein reiner
+    /// atomarer Store statt eines `Command` — die Rate wird beim nächsten
+    /// `AutoTrans` gelesen, kein Pipeline-Neuaufbau nötig, s.
+    /// `set_trans_rate`.
+    trans_rate_ms: Arc<AtomicU64>,
 }
 
 impl PipelineHandle {
@@ -300,6 +320,14 @@ impl PipelineHandle {
 
     pub fn auto_trans(&self) {
         let _ = self.commands.send(Command::AutoTrans);
+    }
+
+    /// `crosspoint.setTransRate` (Bug 4): setzt die Rampendauer für die
+    /// NÄCHSTE(n) `autoTrans()`-Aufrufe — eine bereits laufende
+    /// Überblendung läuft mit ihrer ursprünglichen Dauer zu Ende
+    /// (`spawn_autotrans` liest `duration_ms` einmalig beim Start).
+    pub fn set_trans_rate(&self, frames: u32) {
+        self.trans_rate_ms.store(frames_to_ms(frames), Ordering::Relaxed);
     }
 
     pub fn set_dve_box(&self, box_: DveBox) {
@@ -1160,16 +1188,17 @@ fn spawn_autotrans(
     isel_bg: gst::Element,
     bg_target_pad: gst::Pad,
     fading: Arc<AtomicBool>,
+    duration_ms: u64,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let steps = (TRANS_DURATION_MS / STEP_MS).max(2);
+        let steps = (duration_ms / STEP_MS).max(2);
         let start = std::time::Instant::now();
         for i in 1..=steps {
-            let target = Duration::from_millis(TRANS_DURATION_MS * i / steps);
+            let target = Duration::from_millis(duration_ms * i / steps);
             if let Some(wait) = target.checked_sub(start.elapsed()) {
                 std::thread::sleep(wait);
             }
-            let t = (start.elapsed().as_millis() as f64 / TRANS_DURATION_MS as f64).min(1.0);
+            let t = (start.elapsed().as_millis() as f64 / duration_ms as f64).min(1.0);
             fg_pad.set_property("alpha", t);
         }
         fg_pad.set_property("alpha", 1.0f64);
@@ -1206,6 +1235,7 @@ pub fn run(
 
     let flowed_slot: Arc<Mutex<Option<Arc<AtomicBool>>>> = Arc::new(Mutex::new(None));
     let output_delay = Arc::new(AtomicU64::new(0));
+    let trans_rate_ms = Arc::new(AtomicU64::new(frames_to_ms(DEFAULT_TRANS_RATE_FRAMES)));
 
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
@@ -1241,6 +1271,7 @@ pub fn run(
         commands: commands_tx,
         flowed: flowed_slot.clone(),
         output_delay: output_delay.clone(),
+        trans_rate_ms: trans_rate_ms.clone(),
     }));
 
     /// Wartet auf einen laufenden Transition-Thread, falls vorhanden —
@@ -1549,6 +1580,7 @@ pub fn run(
                         p.isel_bg.clone(),
                         target_pad_bg,
                         fading.clone(),
+                        trans_rate_ms.load(Ordering::Relaxed),
                     );
                     *fade_thread.lock().expect("lock poisoned") = Some(handle);
                     let _ = tx.send(Event::ProgramChanged {
