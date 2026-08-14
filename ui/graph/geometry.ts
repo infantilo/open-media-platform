@@ -105,3 +105,135 @@ export function defaultPosition(index: number): Point {
   const row = Math.floor(index / columns);
   return { x: column * columnWidth + 40, y: row * rowHeight + 40 };
 }
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Sicherheitsabstand um bereits belegte Kacheln herum — ohne den würden
+// zwei exakt aneinandergrenzende Kacheln (0 Abstand, Ränder berühren sich)
+// optisch verschmelzen, obwohl rectsOverlap() sie technisch als
+// "nicht überlappend" durchgehen ließe.
+const FREE_POSITION_MARGIN = 20;
+
+function rectsOverlap(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width + FREE_POSITION_MARGIN &&
+    a.x + a.width + FREE_POSITION_MARGIN > b.x &&
+    a.y < b.y + b.height + FREE_POSITION_MARGIN &&
+    a.y + a.height + FREE_POSITION_MARGIN > b.y
+  );
+}
+
+/** Nächste Default-Rasterposition ab `startIndex`, die mit keinem der
+ * `occupied`-Rechtecke überlappt — probiert aufsteigende Grid-Indizes
+ * durch (dasselbe Raster wie `defaultPosition`), bis eine Kachel der
+ * Größe `width`×`height` dort kollisionsfrei Platz hat. Deckt den Fall
+ * ab, dass bereits vorhandene Kacheln manuell auf ein Default-Rasterfeld
+ * verschoben wurden (`defaultPosition` allein kennt nur den Index, nicht
+ * den tatsächlich belegten Platz). */
+export function findFreePosition(
+  occupied: Rect[],
+  startIndex: number,
+  width: number,
+  height: number,
+): Point {
+  const MAX_ATTEMPTS = 10000;
+  for (let index = startIndex; index < startIndex + MAX_ATTEMPTS; index++) {
+    const pos = defaultPosition(index);
+    const candidate: Rect = { x: pos.x, y: pos.y, width, height };
+    if (!occupied.some((r) => rectsOverlap(candidate, r))) return pos;
+  }
+  return defaultPosition(startIndex);
+}
+
+export interface ArrangeNode {
+  id: string;
+  width: number;
+  height: number;
+}
+
+export interface ArrangeEdge {
+  from: string;
+  to: string;
+}
+
+const ARRANGE_COLUMN_GAP = 80;
+const ARRANGE_ROW_GAP = 30;
+const ARRANGE_MARGIN = 40;
+
+/** Ordnet Kacheln spaltenweise von Quellen (links) zu Senken (rechts) an,
+ * nach Signalfluss-Tiefe (längster Pfad von einer Quelle ohne Eingänge) —
+ * reine Topologie-Funktion für den "Auto-Anordnen"-Button, DOM-frei
+ * testbar. Zyklen brechen die Berechnung nicht ab: Knoten, die wegen
+ * eines Zyklus nie eine Eingangs-Kante von 0 erreichen, bekommen
+ * pauschal die Spalte hinter der bisher tiefsten Ebene, statt undefiniert
+ * (und damit optisch übereinander bei (0,0)) zu bleiben. */
+export function arrangeByFlow(nodes: ArrangeNode[], edges: ArrangeEdge[]): Record<string, Point> {
+  const ids = new Set(nodes.map((n) => n.id));
+  const outgoing = new Map<string, string[]>();
+  const remaining = new Map<string, number>();
+  for (const n of nodes) {
+    outgoing.set(n.id, []);
+    remaining.set(n.id, 0);
+  }
+  for (const e of edges) {
+    if (!ids.has(e.from) || !ids.has(e.to) || e.from === e.to) continue;
+    outgoing.get(e.from)!.push(e.to);
+    remaining.set(e.to, (remaining.get(e.to) ?? 0) + 1);
+  }
+
+  // Kahn-artige Ebenen-Zuweisung: layer(v) = 1 + max(layer(u)) über alle
+  // Kanten u->v, in Verarbeitungsreihenfolge topologisch aufsteigend.
+  const layer = new Map<string, number>();
+  const queue: string[] = [];
+  for (const n of nodes) {
+    if (remaining.get(n.id) === 0) {
+      queue.push(n.id);
+      layer.set(n.id, 0);
+    }
+  }
+  let processed = 0;
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    processed++;
+    const l = layer.get(id) ?? 0;
+    for (const next of outgoing.get(id) ?? []) {
+      layer.set(next, Math.max(layer.get(next) ?? 0, l + 1));
+      const left = (remaining.get(next) ?? 0) - 1;
+      remaining.set(next, left);
+      if (left === 0) queue.push(next);
+    }
+  }
+  if (processed < nodes.length) {
+    const fallbackLayer = Math.max(0, ...[...layer.values()]) + 1;
+    for (const n of nodes) {
+      if (!layer.has(n.id)) layer.set(n.id, fallbackLayer);
+    }
+  }
+
+  const columns = new Map<number, ArrangeNode[]>();
+  for (const n of nodes) {
+    const l = layer.get(n.id) ?? 0;
+    if (!columns.has(l)) columns.set(l, []);
+    columns.get(l)!.push(n);
+  }
+
+  const positions: Record<string, Point> = {};
+  const sortedLayers = [...columns.keys()].sort((a, b) => a - b);
+  let x = ARRANGE_MARGIN;
+  for (const l of sortedLayers) {
+    let y = ARRANGE_MARGIN;
+    let widestInColumn = 0;
+    for (const n of columns.get(l)!) {
+      positions[n.id] = { x, y };
+      y += n.height + ARRANGE_ROW_GAP;
+      widestInColumn = Math.max(widestInColumn, n.width);
+    }
+    x += widestInColumn + ARRANGE_COLUMN_GAP;
+  }
+  return positions;
+}

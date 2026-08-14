@@ -6,7 +6,11 @@
 // EventSource-APIs.
 
 import {
+  type ArrangeEdge,
+  type ArrangeNode,
+  arrangeByFlow,
   defaultPosition,
+  findFreePosition,
   HEADER_HEIGHT,
   IDENTITY_VIEWPORT,
   MIN_BODY_HEIGHT,
@@ -17,6 +21,7 @@ import {
   type Point,
   type PortSide,
   portPosition,
+  type Rect,
   screenToWorld,
   type Viewport,
   worldToScreen,
@@ -58,9 +63,15 @@ const LAYOUT_NAME = "default";
 // Lane-Breite/Kopfhöhe für die Host-Ansicht — konstant statt vom
 // Inhalt abgeleitet (das ist gerade der Punkt der "festen Lanes",
 // §13.5 Frage 1), nur die Lane-Höhe wächst mit der tatsächlichen
-// Kachel-Anzahl (s. #buildHostZoneLayer).
+// Kachel-Anzahl (s. #buildHostZoneLayer). Default-Breite, per Ziehgriff
+// je Zone überschreibbar (Nutzerfund 2026-08-14: "brauchen Möglichkeit,
+// die Host-Frames zu resizen" — s. #hostZoneWidths/#laneWidth).
 const HOST_ZONE_LANE_WIDTH = NODE_WIDTH + 100;
 const HOST_ZONE_LANE_GAP = 30;
+// Kleiner als das, und selbst eine einzelne Kachel (NODE_WIDTH) hätte
+// keinen sichtbaren Rand mehr innerhalb ihrer Lane.
+const HOST_ZONE_MIN_LANE_WIDTH = NODE_WIDTH + 40;
+const HOST_ZONE_RESIZE_HANDLE_WIDTH = 8;
 const HOST_ZONE_HEADER_HEIGHT = 46;
 const HOST_ZONE_TILE_GAP = 24;
 const HOST_ZONE_MARGIN = 24;
@@ -168,6 +179,10 @@ interface LayoutBlob {
   // Lane-Anordnung, separat vom freien Layout. Fehlt bei älteren
   // Layouts — dann berechnet #enableHostView() die Lanes einmalig neu.
   hostViewPositions?: Record<string, Point>;
+  // Nutzerfund 2026-08-14: manuell gesetzte Host-Zone-Breiten (s.
+  // #hostZoneWidths-Doku) — fehlt bei älteren Layouts, dann gilt
+  // HOST_ZONE_LANE_WIDTH für jede Zone.
+  hostZoneWidths?: Record<string, number>;
 }
 
 interface SnapshotSummary {
@@ -388,7 +403,12 @@ type DragState =
   | { kind: "pan"; startScreen: Point; startViewport: Viewport; moved: boolean }
   | { kind: "node"; nodeId: string; startScreen: Point; startWorld: Point; moved: boolean }
   | { kind: "connect"; fromPortId: string; fromFormat: string; fromWorld: Point; currentScreen: Point }
-  | { kind: "select"; startScreen: Point };
+  | { kind: "select"; startScreen: Point }
+  // Bug (Nutzerfund 2026-08-14): "brauchen Möglichkeit, die Host-Frames
+  // zu resizen" — Ziehgriff am rechten Rand einer Host-Zone-Box
+  // (#buildHostZoneLayer), ändert nur die Breite DIESER einen Zone
+  // (#hostZoneWidths), persistiert wie eine Kachel-Position.
+  | { kind: "zone-resize"; zoneId: string; startScreen: Point; startWidth: number };
 
 // Event-Typen, die ein volles Neuladen des Graphen auslösen: Node-
 // Inventar-Änderungen (registry.Poller) sowie Kanten-Änderungen
@@ -537,6 +557,8 @@ export class FlowCanvas extends HTMLElement {
   #panelNodeId: string | null = null;
   #snapshotBar!: HTMLDivElement;
   #palette!: HTMLDivElement;
+  #hostMigrateMenu!: HTMLDivElement;
+  #closeHostMigrateMenuListener: ((ev: PointerEvent) => void) | null = null;
   // Skalierungs-Review D5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md):
   // Suchfeld für den Node-Katalog — Query + zuletzt geholte Daten getrennt
   // von #renderPalette() gehalten, damit ein Tastendruck nur neu filtert
@@ -564,6 +586,14 @@ export class FlowCanvas extends HTMLElement {
   #hostViewUserSet = false;
   #hostViewPositions: Record<string, Point> = {};
   #freeRootPositions: Record<string, Point> = {};
+  // Nutzerfund 2026-08-14 ("brauchen Möglichkeit, die Host-Frames zu
+  // resizen"): Breiten-Override je Zonen-ID, per Ziehgriff gesetzt
+  // (#buildHostZoneLayer/#laneWidth) — fehlt ein Eintrag, gilt
+  // HOST_ZONE_LANE_WIDTH wie bisher. Persistiert wie #hostViewPositions
+  // (s. #loadLayout/#saveLayout), nicht session-lokal wie
+  // #collapsedZoneIds: eine bewusst gewählte Breite soll einen Reload
+  // überleben.
+  #hostZoneWidths: Record<string, number> = {};
   // Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4: "Zone
   // einklappbar (analog B5-Gruppe)"): rein session-lokal wie
   // #hostViewEnabled selbst (kein Persistenzbedarf — anders als
@@ -614,6 +644,7 @@ export class FlowCanvas extends HTMLElement {
     document.removeEventListener("keydown", this.#onKeyDown);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     clearTimeout(this.#viewportSaveTimer);
+    this.#closeHostMigrateMenu();
   }
 
   async #init() {
@@ -631,6 +662,7 @@ export class FlowCanvas extends HTMLElement {
         this.#positions = blob.positions ?? {};
         this.#groupTree = blob.groups ?? emptyTree();
         this.#hostViewPositions = blob.hostViewPositions ?? {};
+        this.#hostZoneWidths = blob.hostZoneWidths ?? {};
         // Gespeicherte Layouts von vor diesem Fix (2026-07-12) haben kein
         // `viewport`-Feld — dann auf den Kachel-Bestand zentrieren statt
         // stur auf IDENTITY_VIEWPORT zurückzufallen (Nutzerfund: nach
@@ -668,7 +700,17 @@ export class FlowCanvas extends HTMLElement {
     let positionsToPersist = this.#positions;
     let hostViewPositionsToPersist = this.#hostViewPositions;
     if (this.#hostViewEnabled) {
-      const rootIds = this.#rootZoneTileIdsFlat();
+      // Nutzerfund 2026-08-14 ("Neue Gruppe"-Position in der Host-Ansicht
+      // ging nach jedem Refresh/Reload verloren): #enableHostView/
+      // #disableHostView zählen Workflow-Kacheln (#allWorkflowTileIds)
+      // schon lange zu den Root-IDs — hier fehlten sie, #hostViewPositions
+      // wurde für eine gezogene Workflow-Kachel also NIE aktualisiert.
+      // #arrangeIntoLanes liest beim nächsten Lauf ausschließlich
+      // #hostViewPositions (nicht #positions direkt), fiel für sie damit
+      // jedes Mal auf die Default-Stapelposition zurück — die Kachel
+      // "vergaß" ihre Position, obwohl der Drag im Moment selbst sichtbar
+      // funktionierte.
+      const rootIds = [...this.#rootZoneTileIdsFlat(), ...this.#allWorkflowTileIds()];
       const syncedHostViewPositions = { ...this.#hostViewPositions };
       const freeOverride: Record<string, Point> = {};
       for (const id of rootIds) {
@@ -687,6 +729,7 @@ export class FlowCanvas extends HTMLElement {
       groups: this.#groupTree,
       viewport: this.#viewport,
       hostViewPositions: hostViewPositionsToPersist,
+      hostZoneWidths: this.#hostZoneWidths,
     };
     try {
       const response = await apiFetch(`/api/v1/layouts/${LAYOUT_NAME}`, {
@@ -878,7 +921,20 @@ export class FlowCanvas extends HTMLElement {
       "padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
       "z-index:10;border-right:1px solid var(--omp-border);box-sizing:border-box;";
 
-    this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar);
+    // Kontextmenü für den Host-Umzug (Bug 1, Nutzerentscheidung
+    // 2026-08-14: Drag bleibt in der eigenen Zone geklemmt, Umzug läuft
+    // stattdessen über Rechtsklick auf eine Kachel, s.
+    // #openHostMigrateMenu) — leichtgewichtiges HTML-Overlay statt
+    // SVG-Untermenü, gleiches Grundprinzip wie Palette/Panel oben.
+    const hostMigrateMenu = document.createElement("div");
+    hostMigrateMenu.setAttribute("data-role", "host-migrate-menu");
+    hostMigrateMenu.style.cssText =
+      "position:fixed;display:none;min-width:160px;padding:4px 0;" +
+      "background:var(--omp-surface, #26282b);color:var(--omp-text, #e8eaed);font-family:var(--omp-font);" +
+      "font-size:var(--omp-font-size-sm, 12px);border:1px solid var(--omp-border, #3a3d42);border-radius:6px;" +
+      "box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:30;";
+
+    this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar, hostMigrateMenu);
     this.#svg = svg;
     this.#viewportGroup = viewportGroup;
     this.#breadcrumbBar = breadcrumb;
@@ -887,6 +943,7 @@ export class FlowCanvas extends HTMLElement {
     this.#panelContent = panelContent;
     this.#snapshotBar = snapshotBar;
     this.#palette = palette;
+    this.#hostMigrateMenu = hostMigrateMenu;
   }
 
   async #fetchAndRender() {
@@ -1037,6 +1094,20 @@ export class FlowCanvas extends HTMLElement {
     // alle stapeln sich auf derselben Default-Position — beobachtet mit
     // vier gestarteten Instanzen, die alle auf (40,40) landeten.
     let nextIndex = Object.keys(this.#positions).length;
+    // Bug: eine neue Kachel landete stur auf ihrem Grid-Slot, auch wenn
+    // dort längst eine manuell verschobene Kachel saß (defaultPosition()
+    // kennt nur den Index, nicht die tatsächliche Belegung) — sie
+    // stapelten sich sichtbar. `occupied` sammelt alle bereits bekannten
+    // Kachel-Rechtecke, findFreePosition() überspringt besetzte
+    // Grid-Slots; jede neu vergebene Position wird sofort mit
+    // aufgenommen, damit zwei neue Kacheln im selben Aufruf sich nicht
+    // gegenseitig überlappen.
+    const occupied: Rect[] = Object.entries(this.#positions).map(([id, pos]) => ({
+      x: pos.x,
+      y: pos.y,
+      width: NODE_WIDTH,
+      height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
+    }));
     for (
       const id of [
         ...items.nodeIds,
@@ -1046,7 +1117,10 @@ export class FlowCanvas extends HTMLElement {
       ]
     ) {
       if (!this.#positions[id]) {
-        this.#positions[id] = defaultPosition(nextIndex);
+        const height = this.#tileHeightById.get(id) ?? nodeHeight(0, 0);
+        const pos = findFreePosition(occupied, nextIndex, NODE_WIDTH, height);
+        this.#positions[id] = pos;
+        occupied.push({ x: pos.x, y: pos.y, width: NODE_WIDTH, height });
         nextIndex++;
         changed = true;
       }
@@ -1221,7 +1295,27 @@ export class FlowCanvas extends HTMLElement {
   // Wie #zoneIdForTile, aber ohne TileSpec — für Kapitel 13 Teil 2s
   // Kanten-Klassifizierung (#renderEdge), die nur die tileId aus
   // #portLocation kennt, keine volle TileSpec.
+  //
+  // Live-Fund 2026-08-14 ("Neue Gruppe" verschwand beim Ziehen in der
+  // Host-Ansicht, erst nach Reload zurück): eine kollabierte Workflow-
+  // Kachel (`workflow-tile:<id>`, s. #renderWorkflowTiles) ist WEDER eine
+  // #groupTree-Gruppe NOCH ein echter #graph.nodes-Eintrag — fiel bislang
+  // auf #zoneIdForNodeId() durch, das für eine unbekannte ID "unassigned"
+  // zurückgab. #clampToOwnZone (Bug 1, selbe Sitzung) klemmte den Drag
+  // dadurch auf die X-Spanne der "Unzugeordnet"-Lane statt der Lane, in
+  // der die Kachel tatsächlich gerendert wird (#zoneIdForWorkflow) — die
+  // Kachel sprang optisch in eine andere Lane und verschwand dort
+  // faktisch (kein Re-Render bringt sie zurück, nur #fetchAndRender()
+  // nach einem Reload berechnet ihre Position über #arrangeIntoLanes neu
+  // und "repariert" sie). Own-Zone-Auflösung jetzt IDENTISCH zu der, die
+  // #renderWorkflowTiles/#arrangeIntoLanes/#buildHostZoneLayer für
+  // dieselbe ID verwenden.
   #zoneIdForTileId(tileId: string): string {
+    const workflowId = workflowIdFromTileId(tileId);
+    if (workflowId !== null) {
+      const wf = this.#workflows.find((w) => w.id === workflowId);
+      return wf ? this.#zoneIdForWorkflow(wf) : "unassigned";
+    }
     return this.#groupTree.groups[tileId] ? this.#zoneIdForGroup(tileId) : this.#zoneIdForNodeId(tileId);
   }
 
@@ -1254,18 +1348,26 @@ export class FlowCanvas extends HTMLElement {
     return zones;
   }
 
-  // Kapitel 13 Teil 3 (§13.4: "Drag = begleiteter Umzug"): welche Zone
-  // liegt an der Welt-X-Koordinate x — dieselbe Lane-Reihenfolge/-Breite
-  // wie #arrangeIntoLanes/#buildHostZoneLayer, hier als Hit-Test für den
-  // Drop-Punkt beim Drag-Umzug (#handleZoneMigrationDrop). null = außerhalb
-  // jeder Lane (z. B. zu weit rechts).
-  #zoneIdAtX(tiles: TileSpec[], x: number): string | null {
-    let laneX = HOST_ZONE_MARGIN;
+  // Breite EINER Lane — HOST_ZONE_LANE_WIDTH, falls der Nutzer sie nicht
+  // per Ziehgriff überschrieben hat (#hostZoneWidths).
+  #laneWidth(zoneId: string): number {
+    return this.#hostZoneWidths[zoneId] ?? HOST_ZONE_LANE_WIDTH;
+  }
+
+  // Kumulative Start-X jeder Lane, EINMAL berechnet aus #hostZones()s
+  // fester Reihenfolge — #zoneXRange/#arrangeIntoLanes/
+  // #buildHostZoneLayer nutzen alle diese eine Quelle. Nötig, weil eine
+  // per Ziehgriff (#hostZoneWidths) geänderte Breite ALLE nachfolgenden
+  // Lanes nach rechts verschiebt — drei getrennte `x +=`-Schleifen mit
+  // je eigener Breitenannahme würden sonst leicht auseinanderlaufen.
+  #laneOffsets(tiles: TileSpec[]): Map<string, number> {
+    const offsets = new Map<string, number>();
+    let x = HOST_ZONE_MARGIN;
     for (const zone of this.#hostZones(tiles)) {
-      if (x >= laneX && x < laneX + HOST_ZONE_LANE_WIDTH) return zone.id;
-      laneX += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
+      offsets.set(zone.id, x);
+      x += this.#laneWidth(zone.id) + HOST_ZONE_LANE_GAP;
     }
-    return null;
+    return offsets;
   }
 
   // Ordnet jede der übergebenen Root-Node-Kacheln in die Lane ihrer
@@ -1303,8 +1405,10 @@ export class FlowCanvas extends HTMLElement {
       zoneId: this.#zoneIdForWorkflow(wf),
       height: workflowHeight,
     }));
-    let x = HOST_ZONE_MARGIN;
+    const laneOffsets = this.#laneOffsets(tiles);
     for (const zone of zones) {
+      const x = laneOffsets.get(zone.id)!;
+      const laneWidth = this.#laneWidth(zone.id);
       const zoneEntries: { id: string; height: number }[] = [
         ...tiles.filter((t) => this.#zoneIdForTile(t) === zone.id).map((t) => ({
           id: t.id,
@@ -1313,18 +1417,41 @@ export class FlowCanvas extends HTMLElement {
         ...workflowEntries.filter((e) => e.zoneId === zone.id),
       ];
       let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
+      // Live-Fund 2026-08-14 (Verifizieren von Bug 2 "allgemein Kacheln
+      // nicht überlappen lassen"): zwei kurz hintereinander gestartete
+      // Instanzen in derselben Zone landeten sichtbar exakt übereinander.
+      // Ursache: `remembered` galt bislang als gültig, sobald es nur in
+      // die eigene Lane fiel (x-Test) — unabhängig davon, ob eine ANDERE
+      // Kachel in DIESEM Durchlauf bereits denselben Platz bekommen hatte.
+      // Bei instabiler Registry-Reihenfolge (s. #assignMissingPositions-
+      // Doku: "nach letzter Aktivität sortiert, nicht nach
+      // Registrierungsreihenfolge") kann eine frisch erschienene Kachel
+      // mal vor, mal nach einer älteren mit gemerkter Position stehen —
+      // stand sie davor, bekam sie den Standard-Platz ganz oben, und die
+      // ältere Kachel beanspruchte denselben Platz per `remembered`
+      // erneut. `placed` verfolgt die in DIESEM Durchlauf tatsächlich
+      // belegten Bereiche; eine kollidierende `remembered`-Position wird
+      // verworfen (Kachel bekommt stattdessen den nächsten freien
+      // Standard-Platz), der Stapel-Cursor `y` folgt der tatsächlichen
+      // (nicht der hypothetischen Standard-)Position jeder Kachel.
+      const placed: { y: number; height: number }[] = [];
+      const overlapsPlaced = (candidateY: number, height: number) =>
+        placed.some((p) =>
+          candidateY < p.y + p.height + HOST_ZONE_TILE_GAP && candidateY + height + HOST_ZONE_TILE_GAP > p.y
+        );
       for (const entry of zoneEntries) {
         const remembered = this.#hostViewPositions[entry.id];
-        const rememberedInThisLane = !!remembered && remembered.x >= x - 1 && remembered.x < x + HOST_ZONE_LANE_WIDTH;
+        const rememberedInThisLane = !!remembered && remembered.x >= x - 1 && remembered.x < x + laneWidth &&
+          !overlapsPlaced(remembered.y, entry.height);
         const pos = rememberedInThisLane ? remembered : { x, y };
         if (!this.#positions[entry.id] || this.#positions[entry.id].x !== pos.x || this.#positions[entry.id].y !== pos.y) {
           this.#positions[entry.id] = pos;
           changed = true;
         }
         if (!rememberedInThisLane) this.#hostViewPositions[entry.id] = pos;
-        y += entry.height + HOST_ZONE_TILE_GAP;
+        placed.push({ y: pos.y, height: entry.height });
+        y = Math.max(y, pos.y + entry.height + HOST_ZONE_TILE_GAP);
       }
-      x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
     }
     return changed;
   }
@@ -2316,7 +2443,18 @@ export class FlowCanvas extends HTMLElement {
       subtitle.setAttribute("fill", color);
       subtitle.setAttribute("font-size", "11");
       subtitle.setAttribute("pointer-events", "none");
-      subtitle.textContent = `${wf.status} — Doppelklick zum Bearbeiten`;
+      // Nutzerfund 2026-08-14: ungekürzt ragte "started — Doppelklick zum
+      // Bearbeiten" (u. Ä. bei längeren Status-Wörtern) über den rechten
+      // Kachel-Rand hinaus — gleiches Kürzungsmuster wie beim Titel oben
+      // (truncateTileTitle), nur mit größerem Budget (kleinere Schrift,
+      // 11px statt 12px).
+      const fullSubtitle = `${wf.status} — Doppelklick zum Bearbeiten`;
+      subtitle.textContent = truncateTileTitle(fullSubtitle, 26);
+      if (fullSubtitle.length > 26) {
+        const subtitleTooltip = document.createElementNS(SVG_NS, "title");
+        subtitleTooltip.textContent = fullSubtitle;
+        subtitle.appendChild(subtitleTooltip);
+      }
       g.appendChild(subtitle);
 
       // Wie eine echte Gruppen-Kachel: ziehbar (#onTilePointerDown ist ID-
@@ -2374,11 +2512,23 @@ export class FlowCanvas extends HTMLElement {
       // statt eines Entwurfs — Positions-/Verbindungsänderungen
       // wirken dort ohnehin schon sofort, nur neue Nodes müssen noch
       // in der Definition verankert werden.
+      // Nutzerfund 2026-08-14: fehlte hier komplett (Bug 3 hatte den
+      // Button nur im freien Root-/Gruppen-Layout verdrahtet) — der
+      // Bearbeiten-Modus ist aus Nutzersicht "auch nur eine Gruppe".
+      // #autoArrange() erkennt #workflowEditId selbst und verzweigt in
+      // #autoArrangeWorkflowEdit() (live vs. pausiert/Entwurf).
+      const arrangeBtn = document.createElement("button");
+      arrangeBtn.textContent = "Auto-Anordnen";
+      arrangeBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
+      arrangeBtn.title = "Kacheln nach Signalfluss anordnen — Quellen links, Senken rechts.";
+      arrangeBtn.addEventListener("click", () => this.#autoArrange());
+      this.#breadcrumbBar.appendChild(arrangeBtn);
+
       const dirty = this.#isDraftDirty();
       const saveBtn = document.createElement("button");
       saveBtn.textContent = isLive ? "Im Workflow speichern" : "Speichern";
       if (dirty) saveBtn.className = "omp-btn-primary";
-      saveBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
+      saveBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
       saveBtn.disabled = !dirty;
       saveBtn.title = dirty ? "" : "Keine ungespeicherten Änderungen";
       saveBtn.addEventListener("click", () => {
@@ -2417,6 +2567,24 @@ export class FlowCanvas extends HTMLElement {
     fitBtn.style.cssText = "margin-left:auto;font-size:var(--omp-font-size-xs);";
     fitBtn.addEventListener("click", () => this.#fitAllToViewport());
     this.#breadcrumbBar.appendChild(fitBtn);
+
+    // Bug 3 (Nutzerfund 2026-08-14): Kacheln nach Signalfluss anordnen
+    // (Quellen links -> Senken rechts, s. arrangeByFlow in geometry.ts).
+    // Nur fürs freie Layout sinnvoll — in der Host-Ansicht am Root
+    // bestimmt #arrangeIntoLanes die Positionen ohnehin neu bei jedem
+    // Fetch-Zyklus (Nutzerentscheidung 2026-08-14: Host-Lanes bleiben
+    // unangetastet), der Button ist dort deaktiviert statt versteckt,
+    // damit klar bleibt, dass die Funktion existiert.
+    const arrangeBtn = document.createElement("button");
+    arrangeBtn.textContent = "Auto-Anordnen";
+    arrangeBtn.style.cssText = "font-size:var(--omp-font-size-xs);";
+    const hostViewBlocksArrange = this.#hostViewEnabled && this.#scope === null;
+    arrangeBtn.disabled = hostViewBlocksArrange;
+    arrangeBtn.title = hostViewBlocksArrange
+      ? "In der Host-Ansicht bestimmen die Host-Zonen die Anordnung."
+      : "Kacheln nach Signalfluss anordnen — Quellen links, Senken rechts.";
+    arrangeBtn.addEventListener("click", () => this.#autoArrange());
+    this.#breadcrumbBar.appendChild(arrangeBtn);
 
     // Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3: "Umschaltbar:
     // Toolbar-Toggle 'Host-Ansicht'") — nur am Root sinnvoll, s.
@@ -2464,6 +2632,106 @@ export class FlowCanvas extends HTMLElement {
     const ids = this.#itemsAtScope();
     this.#viewport = this.#fitViewportToIds([...ids.nodeIds, ...ids.groupIds]);
     this.#applyViewportTransform();
+    this.#saveLayout();
+  }
+
+  // Bug 3: "Auto-Anordnen"-Button — ordnet die Kacheln im aktuellen Scope
+  // per arrangeByFlow() (geometry.ts) nach Signalfluss-Tiefe an, Quellen
+  // links, Senken rechts. Nutzerfund 2026-08-14: der Button fehlte im
+  // Bearbeiten-Modus eines Workflows (#workflowEditId) komplett — dessen
+  // Kachel-Menge kommt NICHT über #itemsAtScope() (das kennt nur echte
+  // B5-Gruppen/#scope, keine Workflow-Rollen), also eigener Zweig
+  // #autoArrangeWorkflowEdit() statt des freien Root-/Gruppen-Layouts.
+  #autoArrange() {
+    if (this.#workflowEditId) {
+      this.#autoArrangeWorkflowEdit();
+      return;
+    }
+    const ids = this.#itemsAtScope();
+    const tileIds = [...ids.nodeIds, ...ids.groupIds];
+    if (tileIds.length === 0) return;
+    const nodes: ArrangeNode[] = tileIds.map((id) => ({
+      id,
+      width: NODE_WIDTH,
+      height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
+    }));
+    this.#applyAutoArrange(tileIds, nodes, this.#edgesAmongTiles(new Set(tileIds)));
+  }
+
+  // Zwei Fälle, je nachdem ob der bearbeitete Workflow gerade läuft oder
+  // pausiert/gestoppt ist (s. #renderBreadcrumb "Bearbeiten (live)"-
+  // Unterscheidung über #isIdleWorkflow):
+  // - Live (#renderRunningWorkflowScope): echte Graph-Nodes/-Ports, exakt
+  //   dieselbe Kanten-Übersetzung wie im freien Layout oben, nur auf die
+  //   Workflow-Mitglieder eingeschränkt.
+  // - Pausiert/Entwurf (#renderWorkflowEditScope): synthetische
+  //   Platzhalter-Kacheln (pausedPlaceholderId) ohne echte Ports, Kanten
+  //   kommen direkt aus draft.connections (Rollenname-basiert), nicht aus
+  //   #graph.edges/#portLocation.
+  #autoArrangeWorkflowEdit() {
+    const workflowId = this.#workflowEditId;
+    const wf = workflowId ? this.#workflows.find((w) => w.id === workflowId) : undefined;
+    if (!workflowId || !wf) return;
+
+    if (this.#isIdleWorkflow(wf)) {
+      const draft = this.#workflowEditDraft;
+      if (!draft || draft.roles.length === 0) return;
+      const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
+      const nodes: ArrangeNode[] = draft.roles.map((role) => ({
+        id: pausedPlaceholderId(workflowId, role.name),
+        width: NODE_WIDTH,
+        height,
+      }));
+      const edges: ArrangeEdge[] = draft.connections.map((conn) => ({
+        from: pausedPlaceholderId(workflowId, conn.fromRole),
+        to: pausedPlaceholderId(workflowId, conn.toRole),
+      }));
+      this.#applyAutoArrange(nodes.map((n) => n.id), nodes, edges);
+      return;
+    }
+
+    const memberIds = new Set(
+      Object.values(wf.runtime ?? {}).map((rt) => rt.nodeId).filter((id): id is string => !!id),
+    );
+    for (const id of this.#workflowScopeExtraNodeIds) memberIds.add(id);
+    if (memberIds.size === 0) return;
+    const tileIds = [...memberIds];
+    const nodes: ArrangeNode[] = tileIds.map((id) => ({
+      id,
+      width: NODE_WIDTH,
+      height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
+    }));
+    this.#applyAutoArrange(tileIds, nodes, this.#edgesAmongTiles(memberIds));
+  }
+
+  // Übersetzt #graph.edges (fromSender/toReceiver-Port-IDs) in
+  // Kachel-zu-Kachel-Kanten über #portLocation — nur Kanten, deren BEIDE
+  // Enden in `tileIdSet` sichtbar sind, zählen (dieselbe Einschränkung
+  // wie z. B. #renderEdge), sonst würde eine Kante zu einer aktuell nicht
+  // gerenderten Kachel (anderer Scope) die Ebenen-Berechnung verfälschen.
+  #edgesAmongTiles(tileIdSet: Set<string>): ArrangeEdge[] {
+    const edges: ArrangeEdge[] = [];
+    for (const edge of this.#graph.edges) {
+      const fromLoc = this.#portLocation.get(edge.fromSender);
+      const toLoc = this.#portLocation.get(edge.toReceiver);
+      if (!fromLoc || !toLoc) continue;
+      if (!tileIdSet.has(fromLoc.tileId) || !tileIdSet.has(toLoc.tileId)) continue;
+      edges.push({ from: fromLoc.tileId, to: toLoc.tileId });
+    }
+    return edges;
+  }
+
+  // Gemeinsamer Abschluss aller drei #autoArrange*-Zweige: Layout
+  // berechnen, Positionen übernehmen, Viewport drauf einpassen,
+  // rendern, speichern.
+  #applyAutoArrange(tileIds: string[], nodes: ArrangeNode[], edges: ArrangeEdge[]) {
+    const arranged = arrangeByFlow(nodes, edges);
+    for (const [id, pos] of Object.entries(arranged)) {
+      this.#positions[id] = pos;
+    }
+    this.#viewport = this.#fitViewportToIds(tileIds);
+    this.#applyViewportTransform();
+    this.#render();
     this.#saveLayout();
   }
 
@@ -2678,6 +2946,27 @@ export class FlowCanvas extends HTMLElement {
     };
   }
 
+  // Untere Kante der Zonen-Box (Kapitel 13 Teil 4-Doku bei
+  // #buildHostZoneLayer): wächst mit der tatsächlichen Kachel-Stapelhöhe
+  // der Zone (Root-Nodes + Workflow-Kacheln), NIE mit fremden Zonen.
+  #zoneContentBottom(zoneId: string, rootTiles: TileSpec[]): number {
+    let bottom = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2;
+    for (const tile of rootTiles) {
+      if (this.#zoneIdForTile(tile) !== zoneId) continue;
+      const pos = this.#positions[tile.id];
+      if (!pos) continue;
+      const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
+      bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
+    }
+    for (const wf of this.#workflowsInScope()) {
+      if (this.#zoneIdForWorkflow(wf) !== zoneId) continue;
+      const pos = this.#positions[workflowTileId(wf.id)];
+      if (!pos) continue;
+      bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
+    }
+    return bottom;
+  }
+
   // Kapitel 13 (docs/END-GOAL-FEATURES.md §13.3): der Hintergrund-Ebene
   // "ein Zonen-Rechteck mit Kopfzeile (Label, Online-Punkt, CPU/RAM
   // live) pro registriertem Host". Nur am Root sinnvoll (#render() ruft
@@ -2700,25 +2989,16 @@ export class FlowCanvas extends HTMLElement {
       id: workflowTileId(wf.id),
       zoneId: this.#zoneIdForWorkflow(wf),
     }));
-    let x = HOST_ZONE_MARGIN;
+    const laneOffsets = this.#laneOffsets(rootTiles);
     for (const zone of zones) {
+      const x = laneOffsets.get(zone.id)!;
+      const laneWidth = this.#laneWidth(zone.id);
       const zoneTiles = rootTiles.filter((t) => this.#zoneIdForTile(t) === zone.id);
       const zoneWorkflowTileIds = workflowZoneIds.filter((e) => e.zoneId === zone.id).map((e) => e.id);
       const collapsed = this.#collapsedZoneIds.has(zone.id);
-      let bottom = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2;
-      if (!collapsed) {
-        for (const tile of zoneTiles) {
-          const pos = this.#positions[tile.id];
-          if (!pos) continue;
-          const height = this.#tileHeightById.get(tile.id) ?? nodeHeight(tile.inputs.length, tile.outputs.length);
-          bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + height + HOST_ZONE_MARGIN);
-        }
-        for (const id of zoneWorkflowTileIds) {
-          const pos = this.#positions[id];
-          if (!pos) continue;
-          bottom = Math.max(bottom, pos.y - HOST_ZONE_MARGIN + (MIN_BODY_HEIGHT + HEADER_HEIGHT) + HOST_ZONE_MARGIN);
-        }
-      }
+      const bottom = collapsed
+        ? HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN * 2
+        : this.#zoneContentBottom(zone.id, rootTiles);
 
       const g = document.createElementNS(SVG_NS, "g");
       g.setAttribute("data-role", "host-zone");
@@ -2728,7 +3008,7 @@ export class FlowCanvas extends HTMLElement {
       const rect = document.createElementNS(SVG_NS, "rect");
       rect.setAttribute("x", "0");
       rect.setAttribute("y", "0");
-      rect.setAttribute("width", String(HOST_ZONE_LANE_WIDTH));
+      rect.setAttribute("width", String(laneWidth));
       rect.setAttribute("height", String(bottom));
       rect.setAttribute("rx", "6");
       rect.setAttribute("fill", "#26282b");
@@ -2739,7 +3019,7 @@ export class FlowCanvas extends HTMLElement {
       const header = document.createElementNS(SVG_NS, "rect");
       header.setAttribute("x", "0");
       header.setAttribute("y", "0");
-      header.setAttribute("width", String(HOST_ZONE_LANE_WIDTH));
+      header.setAttribute("width", String(laneWidth));
       header.setAttribute("height", String(HOST_ZONE_HEADER_HEIGHT));
       header.setAttribute("rx", "6");
       header.setAttribute("fill", "#2f3237");
@@ -2808,7 +3088,7 @@ export class FlowCanvas extends HTMLElement {
       // verhindert, dass derselbe Klick zusätzlich die Canvas-Pan-Logik
       // auf der Ebene darunter auslöst.
       const toggle = document.createElementNS(SVG_NS, "text");
-      toggle.setAttribute("x", String(HOST_ZONE_LANE_WIDTH - 18));
+      toggle.setAttribute("x", String(laneWidth - 18));
       toggle.setAttribute("y", "18");
       toggle.setAttribute("fill", "#9aa0a6");
       toggle.setAttribute("font-size", "11");
@@ -2825,8 +3105,43 @@ export class FlowCanvas extends HTMLElement {
       });
       g.appendChild(toggle);
 
+      // Ziehgriff (Nutzerfund 2026-08-14: "brauchen Möglichkeit, die
+      // Host-Frames zu resizen") — schmaler, sonst unsichtbarer Streifen
+      // am rechten Rand, der auf Hover sichtbar wird; `pointer-events:auto`
+      // durchbricht bewusst das sonst rein dekorative
+      // `pointer-events:none` der Ebene (gleiches Prinzip wie der
+      // Einklapp-Toggle oben).
+      const resizeHandle = document.createElementNS(SVG_NS, "rect");
+      resizeHandle.setAttribute("x", String(laneWidth - HOST_ZONE_RESIZE_HANDLE_WIDTH / 2));
+      resizeHandle.setAttribute("y", "0");
+      resizeHandle.setAttribute("width", String(HOST_ZONE_RESIZE_HANDLE_WIDTH));
+      resizeHandle.setAttribute("height", String(bottom));
+      resizeHandle.setAttribute("fill", "transparent");
+      resizeHandle.setAttribute("pointer-events", "auto");
+      resizeHandle.setAttribute("data-role", "host-zone-resize-handle");
+      resizeHandle.style.cursor = "ew-resize";
+      resizeHandle.addEventListener("pointerenter", () => resizeHandle.setAttribute("fill", "#5b9bd5"));
+      resizeHandle.addEventListener("pointerleave", () => {
+        if (this.#drag?.kind !== "zone-resize" || this.#drag.zoneId !== zone.id) {
+          resizeHandle.setAttribute("fill", "transparent");
+        }
+      });
+      const resizeTitle = document.createElementNS(SVG_NS, "title");
+      resizeTitle.textContent = "Breite ziehen";
+      resizeHandle.appendChild(resizeTitle);
+      resizeHandle.addEventListener("pointerdown", (ev) => {
+        ev.stopPropagation();
+        (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
+        this.#drag = {
+          kind: "zone-resize",
+          zoneId: zone.id,
+          startScreen: this.#screenPoint(ev),
+          startWidth: laneWidth,
+        };
+      });
+      g.appendChild(resizeHandle);
+
       layer.appendChild(g);
-      x += HOST_ZONE_LANE_WIDTH + HOST_ZONE_LANE_GAP;
     }
     return layer;
   }
@@ -2968,6 +3283,16 @@ export class FlowCanvas extends HTMLElement {
       g.addEventListener("dblclick", (ev) => {
         ev.stopPropagation();
         this.#enterScope(tile.id);
+      });
+    }
+    // Umzug auf einen anderen Host: Rechtsklick statt Drag, s.
+    // #openHostMigrateMenu-Doku (Bug 1) — nur für eigenständige
+    // Instanz-Kacheln in der Host-Ansicht sinnvoll.
+    if (!isGroup && tile.instanceId && this.#hostViewEnabled && this.#scope === null) {
+      g.addEventListener("contextmenu", (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        this.#openHostMigrateMenu(ev as MouseEvent, tile.id);
       });
     }
 
@@ -3252,6 +3577,15 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
 
+    if (this.#drag.kind === "zone-resize") {
+      const dxScreen = current.x - this.#drag.startScreen.x;
+      const dxWorld = dxScreen / this.#viewport.scale;
+      const width = Math.max(HOST_ZONE_MIN_LANE_WIDTH, Math.round(this.#drag.startWidth + dxWorld));
+      this.#hostZoneWidths[this.#drag.zoneId] = width;
+      this.#render();
+      return;
+    }
+
     const dxScreen = current.x - this.#drag.startScreen.x;
     const dyScreen = current.y - this.#drag.startScreen.y;
     // Klick-Toleranz: Mausjitter unterhalb der Schwelle löst noch keinen
@@ -3263,19 +3597,27 @@ export class FlowCanvas extends HTMLElement {
 
     const dxWorld = dxScreen / this.#viewport.scale;
     const dyWorld = dyScreen / this.#viewport.scale;
-    this.#positions[this.#drag.nodeId] = {
+    let nextPos = {
       x: this.#drag.startWorld.x + dxWorld,
       y: this.#drag.startWorld.y + dyWorld,
     };
+    // Nutzerentscheidung 2026-08-14: Drag bleibt in der Host-Ansicht immer
+    // innerhalb der eigenen (datengetriebenen) Zonen-Box geklemmt — sie
+    // "hüpft" also nie mehr über den Rahmen hinaus oder landet in der
+    // Lücke zwischen zwei Lanes (Nutzerfund). Umzug auf einen anderen Host
+    // läuft seitdem ausschließlich über das Kontextmenü
+    // (#openHostMigrateMenu), nicht mehr per Drag über die Zonengrenze.
+    if (this.#hostViewEnabled && this.#scope === null) {
+      nextPos = this.#clampToOwnZone(this.#drag.nodeId, nextPos);
+    }
+    this.#positions[this.#drag.nodeId] = nextPos;
     this.#render();
   }
 
   #onPointerUp(ev: PointerEvent) {
     if (this.#drag?.kind === "node") {
       if (this.#drag.moved) {
-        if (!this.#handleZoneMigrationDrop(this.#drag.nodeId, this.#drag.startWorld)) {
-          this.#saveLayout();
-        }
+        this.#saveLayout();
       } else {
         // Ein reiner Klick (keine Bewegung) auf eine Rollen-Kachel des
         // gerade bearbeiteten Workflows (s. #renderEditableRoleTile)
@@ -3304,70 +3646,137 @@ export class FlowCanvas extends HTMLElement {
       } else {
         this.#closePanel();
       }
+    } else if (this.#drag?.kind === "zone-resize") {
+      this.#saveLayout();
     }
     this.#drag = null;
   }
 
-  // Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4: "Drag = begleiteter
-  // Umzug"): erkennt, ob eine Node-Kachel in eine ANDERE Host-Zone gezogen
-  // wurde als ihre aktuelle (datengetriebene, s. #zoneIdForNodeId) Zone.
-  // Falls ja, wird der Drag NICHT als normale Positionsänderung behandelt
-  // (kein #saveLayout()): die Position springt sofort auf startWorld
-  // zurück (die Kachel "hüpft" nicht optisch vor, während erst noch
-  // bestätigt/ausgeführt wird — ihre endgültige Position ergibt sich
-  // ohnehin neu über #arrangeIntoLanes, sobald nach einem erfolgreichen
-  // Umzug die NEUE Instanz registriert ist), danach läuft
-  // #confirmAndMigrateInstance() asynchron weiter.
+  // Nutzerfund 2026-08-14 ("Bug 1"): Kacheln durften beim Ziehen in der
+  // Host-Ansicht beliebig weit aus ihrer Zonen-Box heraus wandern — z. B.
+  // in die Lücke zwischen zwei Lanes, wo kein Drop-Ziel mehr erkannt wurde
+  // und die Kachel dort einfach liegen blieb (kein gültiges Umzugsziel,
+  // aber auch kein Zurückspringen). Klemmt eine Kachel-Position auf die
+  // X-Spanne ihrer eigenen (datengetriebenen, s. #zoneIdForTileId) Zone
+  // und mindestens auf die Höhe unterhalb des Zonen-Headers — sie kann
+  // die eigene Box also nie mehr optisch verlassen. Umzug auf einen
+  // anderen Host läuft seitdem nur noch übers Kontextmenü
+  // (#openHostMigrateMenu), nicht mehr per Drag über die Zonengrenze
+  // (Nutzerentscheidung 2026-08-14).
   //
-  // Nutzerentscheidung 2026-08-12: nur eigenständige (nicht Workflow-
-  // gebundene) Nodes sind ein gültiges Drag-Ziel — ein laufender
-  // Workflow zeigt sich in der Host-Ansicht immer als EINE kollabierte
-  // Kachel (Nutzerentscheidung 2026-07-26), seine einzelnen Rollen
-  // erscheinen dort nie individuell und sind folglich auch nie die
-  // Kachel, die hier tileId sein könnte — der Workflow-Check unten ist
-  // trotzdem nötig, weil #buildTilesForWorkflowFilter/
-  // #renderRunningWorkflowScope an anderer Stelle einzelne Rollen-Nodes
-  // MIT derselben ID wie ein echter Graph-Node rendern (Bearbeiten-Modus)
-  // — dort ist #hostViewEnabled aber baubedingt nie aktiv (s.
-  // #buildHostZoneLayer-Doku), diese Methode kann also nur am Root
-  // greifen, wo #graph.nodes.find() ausschließlich echte, freistehende
-  // Nodes UND (jetzt gültig) laufende, nicht workflow-gebundene Instanzen
-  // liefert.
-  //
-  // Gibt true zurück, wenn der Drag als Umzugs-Versuch behandelt wurde
-  // (auch wenn er am Ende abgelehnt/ungültig war) — der Aufrufer soll
-  // dann kein normales #saveLayout() mehr ausführen.
-  #handleZoneMigrationDrop(tileId: string, startWorld: Point): boolean {
-    if (!this.#hostViewEnabled || this.#scope !== null) return false;
+  // Nutzerfund 2026-08-14 (Nachtrag, Revert): eine feste Obergrenze für Y
+  // (analog zur X-Obergrenze, "Geschwister-Höhe ohne die gezogene
+  // Kachel") klang symmetrisch, fror eine Kachel aber komplett fest,
+  // sobald sie die EINZIGE ihrer Zone war (Geschwister-Höhe = leere
+  // Box, praktisch kein Spielraum — "Neue Gruppe" als einzige Kachel in
+  // "Orchestrator-Host (lokal)" ließ sich dadurch gar nicht mehr nach
+  // unten bewegen, die Box "skalierte nicht mehr mit"). Y bekommt daher
+  // bewusst NUR eine Untergrenze, X dagegen beide (dort ist "die Lane
+  // hat eine feste Breite" der eigentliche, gewünschte Fall) — die Box
+  // wächst nach unten weiterhin frei mit (#zoneContentBottom, von
+  // #buildHostZoneLayer gelesen), wie sie es schon vor Bug 1 tat.
+  #clampToOwnZone(tileId: string, pos: Point): Point {
+    const rootTiles = this.#rootZoneTiles();
+    const zoneId = this.#zoneIdForTileId(tileId);
+    const range = this.#zoneXRange(rootTiles, zoneId);
+    if (!range) return pos;
+    const minX = range.xMin;
+    const maxX = Math.max(minX, range.xMax - NODE_WIDTH);
+    const minY = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
+    return {
+      x: Math.min(Math.max(pos.x, minX), maxX),
+      y: Math.max(pos.y, minY),
+    };
+  }
+
+  // Liefert die X-Spanne [xMin, xMax) der Lane einer bekannten Zonen-ID,
+  // für #clampToOwnZone oben — dieselbe Lane-Reihenfolge/-Breite wie
+  // #arrangeIntoLanes/#buildHostZoneLayer (#laneOffsets/#laneWidth).
+  #zoneXRange(tiles: TileSpec[], zoneId: string): { xMin: number; xMax: number } | null {
+    const laneX = this.#laneOffsets(tiles).get(zoneId);
+    if (laneX === undefined) return null;
+    return { xMin: laneX, xMax: laneX + this.#laneWidth(zoneId) };
+  }
+
+  // Kapitel 13 Teil 3 (§13.4: "Umzug"), Umsetzung seit Bug 1 (2026-08-14)
+  // per Rechtsklick statt Drag (s. #clampToOwnZone-Doku) — Rechtsklick auf
+  // eine eigenständige (nicht Workflow-gebundene) Instanz-Kachel in der
+  // Host-Ansicht öffnet ein Kontextmenü mit allen anderen echten Hosts,
+  // Auswahl ruft dieselbe #confirmAndMigrateInstance() wie zuvor der
+  // Drag-Pfad.
+  #openHostMigrateMenu(ev: MouseEvent, tileId: string) {
+    // Räumt einen etwaigen noch offenen Menü-Zustand (samt seines
+    // outsideClick-Listeners) VOR dem Neuaufbau auf — nicht danach: sonst
+    // schließt dieser Aufruf sein eigenes, gerade erst sichtbar gemachtes
+    // Menü wieder (Bug live gefunden: das Menü blitzte nur für einen
+    // synchronen Moment auf und war beim nächsten Check schon wieder
+    // `display:none`).
+    this.#closeHostMigrateMenu();
+
     const node = this.#graph.nodes.find((n) => n.id === tileId);
-    if (!node || !node.instanceId) return false;
-
-    const currentZone = this.#zoneIdForNodeId(tileId);
-    const dropX = this.#positions[tileId]?.x ?? startWorld.x;
-    const dropZone = this.#zoneIdAtX(this.#rootZoneTiles(), dropX);
-    if (dropZone === null || dropZone === currentZone) return false;
-
-    this.#positions[tileId] = startWorld;
-    this.#render();
-
-    if (dropZone === "unassigned" || dropZone === "mixed") {
-      this.#showToast("Kein gültiges Umzugsziel — auf eine Host-Zone ziehen.");
-      return true;
-    }
+    if (!node || !node.instanceId) return;
+    const instanceId = node.instanceId;
 
     if (this.#workflowRoleForNodeId(tileId)) {
       this.#showToast(
-        `„${node.label}" gehört zu einem laufenden Workflow — Rollen-Umzug per Drag ist noch nicht unterstützt.`,
+        `„${node.label}" gehört zu einem laufenden Workflow — Rollen-Umzug ist noch nicht unterstützt.`,
       );
-      return true;
+      return;
     }
 
-    void this.#confirmAndMigrateInstance(node.instanceId, node.label, dropZone);
-    return true;
+    const currentZone = this.#zoneIdForNodeId(tileId);
+    const targets = this.#hostZones(this.#rootZoneTiles()).filter(
+      (z) => z.id !== currentZone && z.id !== "unassigned" && z.id !== "mixed",
+    );
+    if (targets.length === 0) {
+      this.#showToast("Kein anderer Host verfügbar.");
+      return;
+    }
+
+    this.#hostMigrateMenu.replaceChildren();
+    for (const zone of targets) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.textContent = zone.label;
+      item.style.cssText =
+        "display:block;width:100%;text-align:left;padding:6px 12px;background:none;border:none;" +
+        "color:inherit;font:inherit;cursor:pointer;white-space:nowrap;";
+      item.addEventListener("mouseenter", () => (item.style.background = "var(--omp-bg-2, #333)"));
+      item.addEventListener("mouseleave", () => (item.style.background = "none"));
+      item.addEventListener("click", () => {
+        this.#closeHostMigrateMenu();
+        void this.#confirmAndMigrateInstance(instanceId, node.label, zone.id);
+      });
+      this.#hostMigrateMenu.appendChild(item);
+    }
+
+    this.#hostMigrateMenu.style.left = `${ev.clientX}px`;
+    this.#hostMigrateMenu.style.top = `${ev.clientY}px`;
+    this.#hostMigrateMenu.style.display = "block";
+
+    // Schließt bei jedem Klick außerhalb des Menüs — per capture-Phase
+    // registriert, damit ein Klick auf eine andere Kachel/den Canvas
+    // dahinter zuerst das Menü schließt, nicht dessen eigene Handler
+    // auslöst (gleiches Prinzip wie der `blur`-Schutz beim Add-Source-
+    // Picker in den Mixer-Node-Bundles).
+    const outsideClick = (closeEv: PointerEvent) => {
+      if (this.#hostMigrateMenu.contains(closeEv.target as Node)) return;
+      this.#closeHostMigrateMenu();
+    };
+    this.#closeHostMigrateMenuListener = outsideClick;
+    document.addEventListener("pointerdown", outsideClick, { capture: true });
+  }
+
+  #closeHostMigrateMenu() {
+    this.#hostMigrateMenu.style.display = "none";
+    if (this.#closeHostMigrateMenuListener) {
+      document.removeEventListener("pointerdown", this.#closeHostMigrateMenuListener, { capture: true });
+      this.#closeHostMigrateMenuListener = null;
+    }
   }
 
   // Rollenbindung einer Node-ID in einem laufenden Workflow, falls
-  // vorhanden — s. #handleZoneMigrationDrop-Doku.
+  // vorhanden — s. #openHostMigrateMenu-Doku.
   #workflowRoleForNodeId(nodeId: string): { workflowId: string; role: string } | null {
     for (const wf of this.#workflows) {
       if (wf.status !== "started") continue;
@@ -4851,6 +5260,14 @@ function workflowEditRoleName(workflowId: string, id: string): string | null {
 // eine Rolle namens z. B. dem eigenen Namen hätte.
 function workflowTileId(workflowId: string): string {
   return `workflow-tile:${workflowId}`;
+}
+
+// Rückrichtung zu workflowTileId — liefert die Workflow-ID zurück, falls
+// id eine kollabierte Workflow-Wurzel-Kachel ist, sonst null (s.
+// #zoneIdForTileId-Doku).
+function workflowIdFromTileId(id: string): string | null {
+  const prefix = "workflow-tile:";
+  return id.startsWith(prefix) ? id.slice(prefix.length) : null;
 }
 
 function healthColor(health: string): string {
