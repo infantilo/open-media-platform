@@ -18300,3 +18300,149 @@ D13s Auftrag).
 host_handlers_test}.go`, `orchestrator/main.go`,
 `host-agent/{main,main_test}.go`, `ARCHITECTURE.md` (§6.1, §18.4),
 `UMSETZUNG.md` (D13 + Checkliste).
+
+## 2026-08-18 (Nachtrag 151) — Schritt D14: NATS-Clustering (ARCHITECTURE.md §19.3 Punkt 7), live mit echtem Failover verifiziert
+
+**Kontext:** Nutzerauftrag "NATS clustering" — auf Nachfrage "whats
+next to do?" hatte ich zwei Kandidaten vorgeschlagen (NATS-Clustering
+als direkte, aufwandsarme Fortsetzung von D12; den weiterhin offenen
+`swap_input_resolution`-Compositor-Bug als real, aber unabhängig davon)
+und NATS-Clustering als Empfehlung genannt — Nutzer bestätigte genau
+das. Löst den in §19.3 Punkt 7 seit D12 (Nachtrag 149) offen benannten
+Rest-SPOF: Raft macht den Orchestrator-**Prozess** nicht mehr zum SPOF,
+aber NATS selbst war bis hierhin weiterhin ein Einzelknoten.
+
+**Recherche vor der Umsetzung** (`UMSETZUNG.md` §0 Punkt 6): geprüft,
+ob NATS-Go- und NATS-Rust-Clients eine kommagetrennte `OMP_NATS_URL`
+gleich behandeln — nicht geraten, sondern den vendorten Quelltext
+beider Bibliotheken gelesen. `nats.go` (`processUrlString`,
+`nats.go:1784`) splittet selbst auf Kommas, trimmt Whitespace/
+Trailing-Slash. `async-nats` 0.49.1 dagegen: `impl ToServerAddrs for
+str` (`lib.rs:1713`) parst die GESAMTE Zeichenkette als eine einzige
+`ServerAddr` — kein Split. Nur `impl<T: AsRef<str>> ToServerAddrs for
+Vec<T>` (`lib.rs:1739`) unterstützt mehrere Adressen. Diese Asymmetrie
+wäre sonst erst live beim ersten Multi-Node-Test eines Rust-Nodes als
+Parse-Fehler aufgefallen — hier vorab durch Quelltext-Lektüre
+vermieden.
+
+**Umsetzung:**
+
+- `Makefile`: `up`/`down`/`status` starten/stoppen/prüfen jetzt
+  `omp-nats-1/2/3` statt eines einzelnen `omp-nats` — Client-Ports
+  4222/4223/4224, Cluster-Ports 6222/6223/6224, Monitor-Ports
+  8222/8223/8224, `--cluster_name OMP`. **`--network=host`** statt
+  eines eigenen Podman-Netzwerks: rootless Podmans Default-Bridge löst
+  Container-Namen für die `--routes`-Adressen zwischen den drei Knoten
+  nicht zuverlässig genug auf (gleiche Bauart-Entscheidung wie bereits
+  bei Caddy/`proxy-up`) — mit Host-Networking erreicht jeder Knoten die
+  anderen zwei einfach über `127.0.0.1:<Port>`, keine Container-DNS-
+  Frage. Alte Einzelknoten-Container (`omp-nats`) manuell gestoppt/
+  entfernt, bevor der neue Drei-Container-Aufbau getestet wurde (kein
+  Datenverlust-Risiko: NATS hält hier keine JetStream-Streams, reines
+  Pub/Sub, s. u.).
+- **Echter Fund 1 (live, nicht vorhergesehen):** der erste `make up`-
+  Versuch brach auf allen drei Knoten sofort mit "jetstream cluster
+  requires `server_name` to be set" ab — JetStream (`-js`, seit A2
+  aktiviert, aber nie für echte Streams genutzt, reines Pub/Sub im
+  ganzen Projekt) verlangt bei gleichzeitig aktiviertem Clustering
+  einen eindeutigen `--server_name` pro Knoten. Behoben durch
+  `--server_name omp-nats-1/2/3`.
+- `deploy/quadlets/omp-nats.container`: Produktions-Referenz auf
+  Cluster-Betrieb umgestellt (Kommentar macht klar: in echter
+  Produktion läuft dieses eine Quadlet-File unverändert auf drei
+  getrennten Hosts, `--routes` zeigt auf die beiden anderen echten
+  Hostnamen statt `localhost` wie im Ein-Maschine-Dev-Setup).
+- `orchestrator/internal/config/config.go`/`host-agent/main.go`: neue
+  `defaultNatsURL`-Konstante (kommagetrennte Drei-Adressen-Liste,
+  identisch dupliziert zwischen den beiden eigenständigen Go-Modulen,
+  gleiches Muster wie der Rest des projektweiten Wire-Formats) als
+  `OMP_NATS_URL`-Default. Kein weiterer Go-Code nötig —
+  `internal/eventbus.Connect` hatte `nats.RetryOnFailedConnect(true)`/
+  `nats.MaxReconnects(-1)`/Reconnect-Handler-Logging bereits vor D14
+  (ursprünglich nur für den Fall "NATS kurz weg und wieder da"
+  gedacht, funktioniert für Multi-Server-Failover unverändert mit).
+- **Echter Fund 2 (live, nicht vorhergesehen):** die oben beschriebene
+  Async-Nats/`str`-Asymmetrie. Behoben durch eine neue
+  `parse_server_addrs`-Funktion in `omp-node-sdk/src/health.rs`
+  (spiegelt `nats.go`s `processUrlString`: Split auf Komma, Trim
+  Whitespace/Trailing-Slash, leere Einträge verwerfen), angewendet an
+  BEIDEN `async_nats::ConnectOptions::connect(...)`-Aufrufstellen
+  (`Publisher::connect`, `subscribe_tally`) — das sind laut Grep die
+  EINZIGEN NATS-Connect-Orte im gesamten SDK, alle 22 Node-Typen reichen
+  `nats_url` nur als String durch `NodeConfig`/`omp_node_sdk::start`
+  durch, kein eigener Connect-Aufruf pro Node-Crate. Ein Fix statt 22.
+  Individuelle Node-Crate-Defaults (`env_or("OMP_NATS_URL",
+  "nats://localhost:4222")`, weiterhin an 22 Stellen) bewusst NICHT
+  angefasst: der Launcher setzt `OMP_NATS_URL` für jede orchestrator-
+  gestartete Instanz explizit (`internal/launcher.buildEnv`,
+  `merged["OMP_NATS_URL"] = natsURL`), die Crate-Defaults greifen nur
+  bei manuellem `cargo run` ohne Orchestrator — dort bleibt ein
+  einzelner lokaler NATS-Knoten der sinnvollere Default, kein
+  Drei-Knoten-Cluster für einen Wegwerf-Testlauf nötig.
+
+**Automatisierte Verifikation:** `internal/config`: bestehender Test
+auf die neue `defaultNatsURL`-Konstante umgestellt. `omp-node-sdk`: 4
+neue Tests für `parse_server_addrs` (Einzeladresse, Kommatrennung,
+Whitespace/Trailing-Slash, leere Einträge) — alle 33 SDK-Tests grün,
+`cargo test --workspace` grün (Hinweis: `LD_LIBRARY_PATH` muss für
+`cargo test`/`cargo build` mit MXL-Feature gesetzt sein,
+`source deploy/dev/mxl.env` — sonst schlagen fünf MXL-Tests mit
+"libmxl.so nicht gefunden" fehl, unabhängig von dieser Änderung, reines
+Sitzungs-Setup-Detail, live erneut auf die harte Tour gefunden). `cargo
+clippy -p omp-node-sdk`/`cargo clippy --workspace` sauber (nur
+vorbestehende, unveränderte Warnungen in `omp-ograf`). `go build/vet/
+test ./...` grün in beiden Go-Modulen.
+
+**Zusätzlich live verifiziert** (nicht nur Unit-Tests):
+
+1. Drei echte `nats-server`-Prozesse gestartet, Cluster-Bildung über
+   `/varz`/`/routez` bestätigt: `cluster.name: "OMP"` auf allen drei,
+   Knoten 1 zeigte 8 aktive Routen zu genau 2 verschiedenen Remote-
+   Server-IDs (Pool-Size 3 pro Route × 2 Remotes + Rundungsreste).
+2. Eine über Knoten 1 (Port 4222) publizierte Nachricht kam bei einem
+   auf Knoten 3 (Port 4224) lauschenden `nats sub`-Abonnenten an —
+   echtes Cluster-Routing zwischen unterschiedlichen physischen
+   Verbindungen, nicht nur lokale Zustellung an denselben Client.
+3. Ein echter Orchestrator-Prozess (neu gebautes Binary, Default-
+   Drei-Adressen-`OMP_NATS_URL`) verband sich (laut `/connz`) mit
+   Knoten 1. Ein über Knoten 2 publiziertes `omp.health.*`-Event kam
+   korrekt als SSE-Event über die echte HTTP-API an — Cluster-Routing
+   durch die tatsächliche Anwendung bestätigt, nicht nur rohes NATS.
+4. `podman kill omp-nats-1` (genau der Knoten, mit dem der
+   Orchestrator verbunden war): Log zeigte binnen Millisekunden "nats
+   disconnected" (`error: EOF`) gefolgt von "nats reconnected"
+   (`url: nats://localhost:4223`) — automatischer Failover ohne
+   Prozess-Neustart. Ein DANACH über Knoten 3 publiziertes Event kam
+   weiterhin korrekt als SSE an (`GET /healthz` ebenfalls unverändert
+   `200`) — volle Funktionsfähigkeit nach Failover bestätigt, nicht nur
+   die Reconnect-Log-Zeile allein.
+5. Ein echter, per GStreamer/MXL laufender `omp-source`-Rust-Node
+   (`nodes/target/debug/omp-source`, `deploy/dev/mxl.env` gesourced)
+   wurde mit derselben Drei-Adressen-`OMP_NATS_URL` gestartet,
+   registrierte sich real bei der NMOS-Registry und maß echte
+   Video-Framerate (Beweis: die GStreamer-Pipeline lief tatsächlich,
+   kein Absturz vor der NATS-Verbindung) — `/connz` bestätigte einen
+   verbundenen Client mit `lang: "rust"`, `name: "omp-node-sdk"` auf
+   Knoten 2. Bestätigt `parse_server_addrs` im echten Node-SDK-Pfad,
+   nicht nur in den Unit-Tests.
+
+Ausgefallener Knoten (`omp-nats-1`) danach neu gestartet, Cluster-
+Rejoin über `/routez` (wieder 8 Routen) bestätigt. Alle Demo-Prozesse
+(Orchestrator, Rust-Testknoten) gestoppt, NMOS-Registry-Container
+wieder in den Vor-Sitzungs-Zustand (gestoppt) zurückversetzt — das
+Drei-Knoten-NATS-Cluster selbst bewusst laufen gelassen (das ist der
+neue Dev-Normalzustand nach `make up`, kein Sitzungs-Artefakt).
+
+**Bewusst nicht Teil dieser Sitzung:** Postgres-HA (§19.3 Punkt 7,
+eigenes aufwändiges Thema — kein natives "einfach drei Knoten"-Feature
+wie bei NATS, echte Streaming-Replikation + Failover-Tooling wie
+Patroni nötig — unverändert zurückgestellt). NATS ist damit der einzige
+der beiden in §19.3 Punkt 7 genannten Rest-SPOFs, der geschlossen
+wurde; Postgres bleibt der letzte verbleibende echte
+Single-Point-of-Failure der Control-Plane.
+
+**Dateien:** `Makefile`, `deploy/quadlets/omp-nats.container`,
+`orchestrator/internal/config/{config,config_test}.go`,
+`host-agent/main.go`, `nodes/omp-node-sdk/src/health.rs`,
+`ARCHITECTURE.md` (§19.3 Punkt 7, §20-Gap-Tabelle), `UMSETZUNG.md`
+(D14 + Checkliste).

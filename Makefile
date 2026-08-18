@@ -73,13 +73,46 @@ check-ci:
 # Podman-Version (Debian bookworm, 4.3.1) unterstützt Quadlets erst ab 4.4+
 # (siehe docs/decisions.md). deploy/quadlets/*.container bleibt als
 # Referenz für spätere On-Prem-Produktion (ARCHITECTURE.md §4.3) erhalten.
+#
+# NATS-Clustering (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14):
+# drei Knoten statt einem — ein Einzelknoten überlebt seinen eigenen
+# Ausfall nicht, egal wie viele Clients verbunden sind. --network=host
+# statt eines eigenen Podman-Netzwerks (wie schon bei `proxy-up`/Caddy):
+# rootless Podmans Default-Bridge bietet keine zuverlässige Container-
+# Namensauflösung für die --routes-Adressen zwischen den drei Knoten;
+# mit Host-Networking erreicht jeder Knoten die anderen zwei einfach
+# über 127.0.0.1:<eigener Port>, drei disjunkte Portsätze statt
+# Container-DNS. Client-Ports 4222/4223/4224 (orchestrator/internal/
+# config.go defaultNatsURL und host-agent/main.go defaultNatsURL
+# erwarten exakt diese drei) — ein einzelner NATS-Client braucht dafür
+# KEINEN Code-Unterschied zum früheren Ein-Knoten-Setup: `nats.Connect`/
+# `async-nats` bekommen einfach eine kommagetrennte Drei-Adressen-Liste
+# statt einer einzelnen und failen bei Verbindungsverlust selbst auf
+# einen der beiden anderen Knoten um.
 up:
-	@if podman container exists omp-nats; then \
-		podman start omp-nats; \
+	@if podman container exists omp-nats-1; then \
+		podman start omp-nats-1; \
 	else \
-		podman run -d --name omp-nats --restart=always \
-			-p 4222:4222 -p 8222:8222 \
-			docker.io/library/nats:latest -js -m 8222; \
+		podman run -d --name omp-nats-1 --restart=always --network=host \
+			docker.io/library/nats:latest -js --server_name omp-nats-1 -p 4222 -m 8222 \
+			--cluster_name OMP --cluster nats://127.0.0.1:6222 \
+			--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224; \
+	fi
+	@if podman container exists omp-nats-2; then \
+		podman start omp-nats-2; \
+	else \
+		podman run -d --name omp-nats-2 --restart=always --network=host \
+			docker.io/library/nats:latest -js --server_name omp-nats-2 -p 4223 -m 8223 \
+			--cluster_name OMP --cluster nats://127.0.0.1:6223 \
+			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224; \
+	fi
+	@if podman container exists omp-nats-3; then \
+		podman start omp-nats-3; \
+	else \
+		podman run -d --name omp-nats-3 --restart=always --network=host \
+			docker.io/library/nats:latest -js --server_name omp-nats-3 -p 4224 -m 8224 \
+			--cluster_name OMP --cluster nats://127.0.0.1:6224 \
+			--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223; \
 	fi
 	@if podman container exists omp-nmos-registry; then \
 		podman start omp-nmos-registry; \
@@ -100,8 +133,8 @@ up:
 	fi
 
 down:
-	-podman stop omp-nats
-	-podman rm omp-nats
+	-podman stop omp-nats-1 omp-nats-2 omp-nats-3
+	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
 	-podman stop omp-nmos-registry
 	-podman rm omp-nmos-registry
 	-podman stop omp-postgres
@@ -136,7 +169,9 @@ status:
 	else \
 		echo "Orchestrator: nicht gestartet (make start)"; \
 	fi
-	@podman container exists omp-nats && echo "NATS: läuft" || echo "NATS: gestoppt"
+	@for n in 1 2 3; do \
+		podman container exists omp-nats-$$n && echo "NATS-Knoten $$n: läuft" || echo "NATS-Knoten $$n: gestoppt"; \
+	done
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
 	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"

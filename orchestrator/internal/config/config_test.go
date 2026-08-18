@@ -23,8 +23,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RegistryURL != "http://localhost:8010" {
 		t.Errorf("RegistryURL = %q, want %q", cfg.RegistryURL, "http://localhost:8010")
 	}
-	if cfg.NatsURL != "nats://localhost:4222" {
-		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, "nats://localhost:4222")
+	if cfg.NatsURL != defaultNatsURL {
+		t.Errorf("NatsURL = %q, want %q", cfg.NatsURL, defaultNatsURL)
 	}
 	if cfg.UIDir != "../ui" {
 		t.Errorf("UIDir = %q, want %q", cfg.UIDir, "../ui")

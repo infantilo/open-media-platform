@@ -90,17 +90,39 @@ pub struct Publisher {
     client: async_nats::Client,
 }
 
+/// Zerlegt eine ggf. kommagetrennte `OMP_NATS_URL` in einzelne Server-
+/// Adressen (ARCHITECTURE.md §19.3 Punkt 7/UMSETZUNG.md D14, NATS-
+/// Clustering) — spiegelt `nats.go`s `processUrlString` (Orchestrator/
+/// Host-Agent, dieselbe Env-Var), damit ein und derselbe `OMP_NATS_URL`-
+/// Wert für Go- UND Rust-Prozesse identisch funktioniert. Nötig, weil
+/// `async-nats`s `impl ToServerAddrs for str` die GESAMTE Zeichenkette
+/// als EINE Adresse parst, anders als `nats.go` nicht selbst auf Kommas
+/// aufteilt (live an einem echten Parse-Fehler bei einer 3-Adressen-URL
+/// gefunden, nicht vermutet) — `Vec<String>` nutzt stattdessen
+/// `impl<T: AsRef<str>> ToServerAddrs for Vec<T>`. Ein einzelner Eintrag
+/// (kein Komma) funktioniert unverändert wie zuvor.
+fn parse_server_addrs(url: &str) -> Vec<String> {
+    url.split(',')
+        .map(|s| s.trim().trim_end_matches('/'))
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 impl Publisher {
     /// Stellt die Verbindung her. Ein initial nicht erreichbares NATS ist
     /// nicht fatal (`retry_on_initial_connect` + unbegrenzte Reconnects) —
     /// gleiche Resilienz-Linie wie beim Go-Mock-Node und dem Orchestrator
-    /// (`internal/eventbus`).
+    /// (`internal/eventbus`). `url` darf eine kommagetrennte Liste mehrerer
+    /// Server-Adressen sein (s. `parse_server_addrs`) — der Client wählt
+    /// dann selbst einen erreichbaren Server und failt automatisch auf
+    /// einen anderen um, falls der verbundene Server ausfällt.
     pub async fn connect(url: &str) -> Result<Self, async_nats::ConnectError> {
         let client = async_nats::ConnectOptions::new()
             .retry_on_initial_connect()
             .max_reconnects(None)
             .name("omp-node-sdk")
-            .connect(url)
+            .connect(parse_server_addrs(url))
             .await?;
         Ok(Publisher { client })
     }
@@ -180,7 +202,7 @@ pub async fn subscribe_tally(url: &str) -> Result<TallySubscription, SubscribeEr
         .retry_on_initial_connect()
         .max_reconnects(None)
         .name("omp-node-sdk-tally-sub")
-        .connect(url)
+        .connect(parse_server_addrs(url))
         .await
         .map_err(SubscribeError::Connect)?;
     let subscriber = client
@@ -234,5 +256,46 @@ impl TallySubscription {
             };
             return Some((node_id.to_string(), tally.on));
         }
+    }
+}
+
+#[cfg(test)]
+mod parse_server_addrs_tests {
+    use super::*;
+
+    #[test]
+    fn single_address_unchanged() {
+        assert_eq!(
+            parse_server_addrs("nats://localhost:4222"),
+            vec!["nats://localhost:4222".to_string()]
+        );
+    }
+
+    #[test]
+    fn splits_comma_separated_addresses() {
+        assert_eq!(
+            parse_server_addrs("nats://a:4222,nats://b:4222,nats://c:4222"),
+            vec![
+                "nats://a:4222".to_string(),
+                "nats://b:4222".to_string(),
+                "nats://c:4222".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn trims_whitespace_and_trailing_slash() {
+        assert_eq!(
+            parse_server_addrs(" nats://a:4222/ , nats://b:4222 "),
+            vec!["nats://a:4222".to_string(), "nats://b:4222".to_string()]
+        );
+    }
+
+    #[test]
+    fn drops_empty_entries() {
+        assert_eq!(
+            parse_server_addrs("nats://a:4222,,nats://b:4222"),
+            vec!["nats://a:4222".to_string(), "nats://b:4222".to_string()]
+        );
     }
 }

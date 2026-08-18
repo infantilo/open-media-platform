@@ -2511,15 +2511,39 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
    kein solcher Zustand mehr vorhanden) — sie startet ihre gegateten
    Loops einfach neu, die lesen ihren Ausgangsstand ohnehin frisch aus
    Postgres/Telemetrie.
-7. **Bewusst weiterhin nicht mitgelöst** (unverändert gegenüber der
-   alten Skizze, gleiche Begründung): Postgres selbst und NATS selbst
-   sind in diesem Design nicht redundant. NATS-Clustering (3 Knoten,
-   natives Feature) bleibt die empfohlene, aufwandsarme Ergänzung — kann
-   unabhängig von D12 gemacht werden. Postgres-HA (Patroni o. Ä.) bleibt
-   ein eigenes, aufwändiges Thema, weiterhin zurückgestellt. Ehrlich
-   benannt: Raft macht den Orchestrator-**Prozess** nicht mehr zum SPOF
-   und schließt zusätzlich die alte „Leader-Wahl hängt an Postgres"-
-   Lücke — es macht Postgres/NATS selbst nicht redundant.
+7. **NATS-Clustering seit D14 umgesetzt (2026-08-18); Postgres-HA
+   weiterhin bewusst zurückgestellt.** NATS-Clustering (3 Knoten,
+   natives Feature) war hier ursprünglich nur als "empfohlene,
+   aufwandsarme Ergänzung" genannt — inzwischen gebaut, s. eigener
+   Abschnitt unten. Postgres-HA (Patroni o. Ä.) bleibt dagegen ein
+   eigenes, aufwändiges Thema, weiterhin zurückgestellt (kein
+   natives "einfach drei Knoten"-Feature wie bei NATS — echte
+   Streaming-Replikation + Failover-Tooling). Ehrlich benannt: Raft
+   (D12) macht den Orchestrator-**Prozess** nicht mehr zum SPOF und
+   schließt die alte „Leader-Wahl hängt an Postgres"-Lücke; NATS-
+   Clustering (D14) macht zusätzlich den Event-Bus selbst redundant —
+   nur Postgres bleibt jetzt noch ein echter Single-Point-of-Failure
+   der Control-Plane.
+
+**Umsetzung (2026-08-18, UMSETZUNG.md D14):** Drei `nats-server`-
+Prozesse (`--cluster`/`--routes`/`--cluster_name`, je ein eindeutiger
+`--server_name` — JetStream verlangt das bei aktiviertem Clustering,
+live gefunden, nicht vorhergesehen) statt einem — im Dev-Setup
+(`Makefile up`) als drei Podman-Container mit `--network=host`
+(rootless Podmans Default-Bridge löst Container-Namen für die
+`--routes`-Adressen nicht zuverlässig genug auf), auf Bare-Metal/
+On-Prem als drei reguläre `omp-nats`-Quadlets auf drei echten Hosts
+(`deploy/quadlets/omp-nats.container`). **Kein Code-Unterschied
+zwischen Ein- und Drei-Knoten-Betrieb** — `OMP_NATS_URL` wird einfach
+zu einer kommagetrennten Liste; `nats.go` (Orchestrator/Host-Agent)
+teilt sie selbst auf und wählt/failt automatisch zwischen den
+Servern um, das war schon vor D14 so. Für `async-nats` (Rust-Node-SDK)
+galt das NICHT: `impl ToServerAddrs for str` parst die gesamte
+Zeichenkette als EINE Adresse — ein echter, beim Testen gefundener
+Parse-Fehler, nicht vorher erkannt, weil die alte Ein-Knoten-Konfiguration
+ihn nie ausgelöst hätte. Behoben durch `parse_server_addrs` in
+`omp-node-sdk::health` (einziger NATS-Connect-Ort für alle Node-Typen,
+kein Fix pro Node-Crate nötig).
 
 **Standards-Abdeckung:** keine (Eigenentwicklung; NMOS-Multi-Registry-
 Registrierung bleibt als bestehendes Feature nutzbar, nicht Teil dieses
@@ -2833,7 +2857,7 @@ macht eine konkrete Empfehlung zur offenen §20.1-Frage.
 | Host-Totalausfall | N+1-Reservekapazität je Host-Pool/Fabric + automatisierte Migration bei Staleness | unerwarteten Hardware-/VM-Ausfall | I/O-Karten-gebundene Rollen ohne Ersatz-Host | §6.1/§18 |
 | Seamless (Genlock-Äquivalent) | Command-Mirroring + `omp-seamless-switch` (Zielbild, priorisierungsoffen) | unsichtbare Übernahme mitten in einer Transition | — (genau das ist der Zweck) | §20.1, Empfehlung §21.3 |
 | Control-Plane | Raft-Quorum zwischen Orchestrator-Instanzen (D12) | Steuerungsausfall bei Host-Verlust, auch bei gleichzeitigem Postgres-Ausfall | Postgres/NATS-eigene Redundanz | §19 |
-| Persistenz | Postgres-HA/NATS-Clustering (noch nicht gebaut) | Datenverlust bei DB-/Bus-Host-Ausfall | — | §19.3 Punkt 7 |
+| Persistenz | NATS-Clustering (D14, erledigt); Postgres-HA weiterhin nicht gebaut | Datenverlust/Ausfall bei Postgres-Host-Ausfall (NATS-Host-Ausfall jetzt abgedeckt) | — | §19.3 Punkt 7 |
 | Standort/Region | neu, §21.2 | kompletten Standortausfall | echte Sendefähigkeit von einem Zweitstandort (eigenes, größeres Vorhaben) | §21.2 |
 
 **Leseanleitung:** keine Zeile ersetzt eine andere — ein 24/7-Kanal

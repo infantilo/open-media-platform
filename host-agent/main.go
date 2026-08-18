@@ -37,6 +37,14 @@ import (
 	"github.com/infantilo/openmediaplatform/host-agent/internal/telemetry"
 )
 
+// defaultNatsURL zeigt auf den per `make up` gestarteten Drei-Knoten-
+// NATS-Cluster (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14) —
+// dieselbe Adressliste/Konstante wie orchestrator/internal/config
+// (eigenständige Go-Module, bewusste kleine Duplikation, gleiches Muster
+// wie der Rest des projektweiten Wire-Formats). `nats.Connect` teilt die
+// kommagetrennte Liste selbst auf.
+const defaultNatsURL = "nats://localhost:4222,nats://localhost:4223,nats://localhost:4224"
+
 func envOr(key, fallback string) string {
 	if v, ok := os.LookupEnv(key); ok && v != "" {
 		return v
@@ -49,7 +57,7 @@ func main() {
 
 	orchestratorURL := envOr("OMP_ORCHESTRATOR_URL", "http://localhost:8000")
 	registryURL := envOr("OMP_REGISTRY_URL", "http://localhost:8010")
-	natsURL := envOr("OMP_NATS_URL", "nats://localhost:4222")
+	natsURL := envOr("OMP_NATS_URL", defaultNatsURL)
 	statePath := envOr("OMP_HOST_AGENT_STATE_FILE", ".omp-host-agent-state.json")
 	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", "")
 	ioPortsPath := envOr("OMP_HOST_AGENT_IO_PORTS_PATH", "")

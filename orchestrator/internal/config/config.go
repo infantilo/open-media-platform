@@ -6,6 +6,12 @@ import (
 	"strconv"
 )
 
+// defaultNatsURL zeigt auf den per `make up` gestarteten Drei-Knoten-
+// NATS-Cluster (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14) —
+// Ports/Adressen exakt wie in `Makefile`s `up`-Target (Client-Ports
+// 4222/4223/4224). `nats.go` teilt die kommagetrennte Liste selbst auf.
+const defaultNatsURL = "nats://localhost:4222,nats://localhost:4223,nats://localhost:4224"
+
 // Config bündelt die zur Laufzeit veränderbaren Einstellungen des
 // Orchestrators. Alle Felder haben sinnvolle Defaults für den lokalen
 // Dev-Betrieb (siehe Load).
@@ -22,7 +28,13 @@ type Config struct {
 	// Gleiches Muster wie RegistryURL: vom Launcher an jede gestartete
 	// Instanz als OMP_ORCHESTRATOR_URL durchgereicht.
 	OrchestratorURL string
-	// NatsURL zeigt auf den NATS-Event-Bus.
+	// NatsURL zeigt auf den NATS-Event-Bus — seit D14 (ARCHITECTURE.md
+	// §19.3 Punkt 7, NATS-Clustering) im Default eine kommagetrennte
+	// Liste aller drei Dev-Cluster-Knoten statt einer einzelnen Adresse.
+	// `nats.go` teilt eine solche Liste selbst auf (`processUrlString`)
+	// und wählt/failt automatisch zwischen den Servern um — kein
+	// Code-Unterschied zum Ein-Knoten-Fall nötig, nur der Wert ändert
+	// sich. Ein einzelner Eintrag (kein Komma) funktioniert unverändert.
 	NatsURL string
 	// UIDir ist das Verzeichnis, aus dem die UI-Shell statisch ausgeliefert wird.
 	UIDir string
@@ -143,7 +155,7 @@ func Load() Config {
 		Listen:          getEnv("OMP_LISTEN", ":8000"),
 		OrchestratorURL: getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
 		RegistryURL:     getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
-		NatsURL:         getEnv("OMP_NATS_URL", "nats://localhost:4222"),
+		NatsURL:         getEnv("OMP_NATS_URL", defaultNatsURL),
 		UIDir:           getEnv("OMP_UI_DIR", "../ui"),
 		CatalogPath:     getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
 		PostgresURL:     getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),

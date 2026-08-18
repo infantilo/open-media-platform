@@ -1,12 +1,23 @@
 [Unit]
-Description=OpenMediaPlatform Event-Bus (NATS)
+Description=OpenMediaPlatform Event-Bus (NATS, Cluster-Knoten)
 After=network-online.target
 
 [Container]
 Image=docker.io/library/nats:latest
 ContainerName=omp-nats
-Exec=-js -m 8222
+# NATS-Clustering (ARCHITECTURE.md §19.3 Punkt 7, UMSETZUNG.md D14):
+# dieses Quadlet ist EIN Knoten eines Drei-Knoten-Clusters — auf
+# Bare-Metal/On-Prem laeuft es unveraendert auf drei getrennten Hosts,
+# je einmal. --cluster ist die eigene, von den anderen Knoten
+# erreichbare Adresse dieses Hosts; --routes zeigt auf die ANDEREN
+# beiden Hosts (reale Hostnamen/IPs statt localhost, anders als das
+# Drei-Container-Dev-Setup in Makefile, das alle drei auf einer
+# Maschine simuliert). ClusterHostB/ClusterHostC sind Platzhalter, vor
+# dem Deployment durch die echten Hostnamen der anderen beiden Knoten
+# ersetzen.
+Exec=-js -m 8222 --cluster_name OMP --cluster nats://0.0.0.0:6222 --routes nats://ClusterHostB:6222,nats://ClusterHostC:6222
 PublishPort=4222:4222
+PublishPort=6222:6222
 PublishPort=8222:8222
 AutoUpdate=registry
 

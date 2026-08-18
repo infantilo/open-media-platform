@@ -2071,6 +2071,87 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   SDK-Auto-Erkennung (s. Design-Entscheidung 1 oben), GPU/NIC-Telemetrie,
   Cloud-Kostenfaktor (§6.1, unverändert offen).
 
+- **D14 (erledigt, 2026-08-18) — NATS-Clustering (ARCHITECTURE.md §19.3
+  Punkt 7).** Nutzerauftrag "NATS clustering" im Anschluss an D13 —
+  löst den in §19.3 Punkt 7 seit D12 offen benannten Rest-SPOF ("Raft
+  macht Postgres/NATS selbst nicht redundant"). Drei `nats-server`-
+  Prozesse (Cluster `--routes`) statt einem, sowohl im Dev-Setup
+  (`Makefile up`, drei Podman-Container) als auch als Quadlet-Referenz
+  für echte Mehr-Host-Produktion (`deploy/quadlets/omp-nats.container`).
+
+  **Zwei echte Funde beim Umsetzen, keiner vorhergesehen:**
+  (1) NATS verlangt bei gleichzeitig aktiviertem JetStream (`-js`) UND
+  Clustering einen eindeutigen `--server_name` pro Knoten — ohne das
+  bricht der Server sofort mit "jetstream cluster requires
+  `server_name` to be set" ab, live beim ersten `make up`-Versuch
+  gefunden. (2) `nats.go` (Go, Orchestrator/Host-Agent) teilt eine
+  kommagetrennte `OMP_NATS_URL` bereits von selbst auf
+  (`processUrlString`) — für `async-nats` (Rust, Node-SDK) gilt das
+  NICHT: `impl ToServerAddrs for str` parst die GESAMTE Zeichenkette
+  als eine einzige Adresse, ein Mehrfach-URL-Wert hätte dort einen
+  Parse-Fehler ausgelöst, den die alte Ein-Knoten-Konfiguration nie
+  ausgelöst hat. Behoben durch eine neue `parse_server_addrs`-Funktion
+  in `omp-node-sdk::health` (dem einzigen NATS-Connect-Ort für ALLE
+  22 Node-Typen — ein Fix statt 22).
+
+  **Umsetzung:** `Makefile`: `up`/`down`/`status` starten/stoppen/
+  prüfen jetzt `omp-nats-1/2/3` (Client-Ports 4222/4223/4224,
+  Cluster-Ports 6222/6223/6224, `--network=host` statt eines eigenen
+  Podman-Netzwerks — rootless Podmans Default-Bridge löst
+  Container-Namen für die `--routes`-Adressen nicht zuverlässig genug
+  auf). `orchestrator/internal/config.go`/`host-agent/main.go`:
+  `OMP_NATS_URL`-Default jetzt die kommagetrennte Drei-Adressen-Liste
+  (identische Konstante, eigenständige Go-Module, bewusste kleine
+  Duplikation wie beim Rest des Wire-Formats) — kein weiterer
+  Code-Unterschied im Go-Client nötig (`internal/eventbus.Connect`
+  hatte `nats.RetryOnFailedConnect`/`nats.MaxReconnects(-1)` bereits
+  vor D14). `omp-node-sdk/src/health.rs`: `parse_server_addrs` (splittet/
+  trimmt wie `nats.go`s `processUrlString`) vor beiden
+  `async_nats::ConnectOptions::connect(...)`-Aufrufen (`Publisher::
+  connect`, `subscribe_tally`) — `Vec<String>` nutzt
+  `impl<T: AsRef<str>> ToServerAddrs for Vec<T>` statt der auf eine
+  einzelne Adresse begrenzten `str`-Instanz. Individuelle Node-Crate-
+  Defaults (`env_or("OMP_NATS_URL", "nats://localhost:4222")`, 22
+  Stellen) bewusst NICHT angefasst — der Launcher setzt `OMP_NATS_URL`
+  für jede orchestrator-gestartete Instanz ohnehin explizit
+  (`internal/launcher.buildEnv`), die Crate-Defaults greifen nur bei
+  manuellem `cargo run` ohne Orchestrator, wo ein einzelner lokaler
+  NATS-Knoten der sinnvollere Default bleibt.
+
+  **Verifikation (bestanden):** `go build/vet/test ./...` grün (neuer
+  Test-Erwartungswert in `config_test.go`), `cargo test --workspace`
+  grün (4 neue `parse_server_addrs`-Tests: Einzeladresse unverändert,
+  Kommatrennung, Leerzeichen/Trailing-Slash-Trimmen, leere Einträge
+  verwerfen), `cargo build --workspace --bins`/`cargo clippy -p
+  omp-node-sdk` sauber. **Live verifiziert, nicht nur Unit-Tests:**
+  drei echte `nats-server`-Prozesse gestartet, Cluster-Bildung über
+  `/routez` bestätigt (8 Routen zu genau 2 verschiedenen Remote-IDs);
+  eine über Knoten 1 publizierte Nachricht kam bei einem auf Knoten 3
+  lauschenden Abonnenten an (echtes Cluster-Routing, nicht nur lokale
+  Zustellung). Ein echter Orchestrator-Prozess mit der neuen
+  Drei-Adressen-Default-URL verband sich (zufällig) mit Knoten 1; ein
+  über Knoten 2 publiziertes Health-Event kam korrekt als SSE-Event an
+  (Cluster-Routing durch die echte Anwendung bestätigt, nicht nur rohes
+  NATS). Danach `podman kill` GENAU des Knotens, mit dem der
+  Orchestrator verbunden war — Log zeigte binnen Millisekunden "nats
+  disconnected" gefolgt von "nats reconnected" (neue URL: Knoten 2),
+  kein Prozess-Neustart nötig; ein DANACH über Knoten 3 publiziertes
+  Event kam weiterhin korrekt als SSE an (volle Funktionsfähigkeit nach
+  Failover bestätigt). Ein echter, per GStreamer/MXL laufender
+  `omp-source`-Rust-Node wurde mit der Drei-Adressen-URL gestartet,
+  registrierte sich real und verband sich (laut NATS `/connz`,
+  `lang: "rust"`) erfolgreich mit einem der drei Knoten — bestätigt,
+  dass `parse_server_addrs` auch im echten Node-SDK-Pfad funktioniert,
+  nicht nur in den Unit-Tests. Ausgefallener Knoten danach neu
+  gestartet (Cluster wieder auf 3/3, 8 Routen bestätigt), alle
+  Demo-Prozesse gestoppt, NMOS-Registry-Container wieder in den
+  Vor-Sitzungs-Zustand (gestoppt) zurückversetzt. Details:
+  `docs/decisions.md` Nachtrag 151.
+  **Bewusst nicht Teil dieser Sitzung:** Postgres-HA (§19.3 Punkt 7,
+  eigenes aufwändiges Thema, unverändert zurückgestellt) — NATS ist
+  damit der einzige der beiden in §19.3 Punkt 7 genannten Rest-SPOFs,
+  der geschlossen wurde.
+
 ---
 
 ## 6a. Kapitel 10 — Endziel-Anforderungen (`docs/END-GOAL-FEATURES.md`)
@@ -2734,3 +2815,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D12 Teil 2 (Live-Mitgliedschaft: Join/Leave-API) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1. `POST /api/v1/cluster/join`/`DELETE /api/v1/cluster/members/{id}` (Admin-Verb), `raft.AddVoter`/`RemoveServer`; neue Instanzen starten mit `OMP_CLUSTER_JOIN=true` (`cluster.Config.SkipBootstrap`, warten passiv statt sich selbst zu bootstrappen). Peer-HTTP-Adressbuch jetzt FSM-repliziert statt statisch (jede Instanz kündigt sich bei Führungsübernahme selbst an, `CommandSetPeerHTTPAddr`) — Follower leiten Join/Leave transparent per `httputil.ReverseProxy` an die echte Leader-Adresse weiter (`forwardToLeader`), ersetzt den in der alten Skizze noch für nötig gehaltenen externen VIP/Proxy-Baustein vollständig. Empirisch korrigierte Annahme unterwegs: `raft.Config.ShutdownOnRemove` fährt laut Quelltext nur den Leader herunter, wenn er sich selbst entfernt, nicht eine entfernte Nicht-Leader-Instanz (vor der Umsetzung per gezieltem Testlauf geklärt, nicht der Doku-Formulierung vertraut). `go test ./...` grün (4 neue Cluster-Tests); zusätzlich live mit drei echten Prozessen verifiziert: Cluster wuchs 1→2→3 über echte `POST /api/v1/cluster/join`-Aufrufe, ein an den FOLLOWER gerichteter Join-Request wurde nachweislich (Response trug die Leader-`nodeId`) transparent weitergeleitet statt lokal falsch beantwortet, `kill -9` des Leaders löste echte Neuwahl aus, `DELETE .../members/{id}` schrumpfte den Cluster 3→2 mit korrekt bereinigtem Adressbuch auf beiden Überlebenden. Details: `docs/decisions.md` Nachtrag 148. Teil 3 (FSM-Migration der echten Control-Plane-Zustände + Aktiv/Passiv-Gating) offen. | 2026-08-18 |
 | D12 Teil 3 (Aktiv/Passiv-Gating, Plan bei Umsetzung vereinfacht) | erledigt | Direkter Nutzerauftrag "proceed" im Anschluss an Teil 2. Code-Lektüre vor der Umsetzung zeigte: die geplante FSM-Migration der §19.3-Punkt-5-Zustände (Migrations-Sperren, Crash-Loop-Zähler, Standby-Beförderung, Scheduler-Feuerzustand) ist unnötig — alle vier sind bereits rein lokale Objekte einer Prozessinstanz, Aktiv/Passiv-Gating der erzeugenden Loops allein macht Doppel-Ausführung strukturell unmöglich. Neue `main.go`-Helfer `runWhileLeader`/`subscribeWhileLeader` (2s-Poll auf `cluster.Node.IsLeader()`) gaten `placementEngine.Run`/`workflowScheduler.Run`/`workflowSvc.RunFailoverWatcher` sowie die `omp.host.*.events`-NATS-Subscription — bei deren Analyse ein echter, bisher unbemerkter Multi-Instanz-Bug gefunden: jede Cluster-Instanz hätte denselben Broadcast-Subject unabhängig abonniert und unabhängig Crash-Loop-Zählung/Failover-Promotion ausgelöst. `scheduler.go`: `LastFiredAt` wird jetzt vor statt nach dem Feuern persistiert (schließt eine seit D7 Teil 2 bestehende, von Clustering unabhängige Doppel-Feuer-Lücke bei Persistenzfehlern/Prozess-Crash). `go build/vet/test ./...` grün (`go vet` fand einen echten lostcancel-Bug in der ersten `runWhileLeader`-Fassung, behoben durch return-basierte Cancel-Weitergabe; neuer Test `TestSchedulerDoesNotFireIfPersistFails`). Live mit drei echten Prozessen verifiziert: ein sofort fälliger Schedule feuerte nachweislich nur auf der Leader-Instanz (Log + `GET /api/v1/instances` bestätigten genau einen tatsächlichen Start), NATS `/subsz` zeigte genau eine aktive Subscription cluster-weit; nach `kill -9` des Leaders migrierten sowohl die Scheduler-Aktivität als auch die NATS-Subscription nachweislich zur neuen Leader-Instanz. Details: `docs/decisions.md` Nachtrag 149. Mit Teil 3 ist D12 vollständig abgeschlossen. | 2026-08-18 |
 | D13 (I/O-Karten-Claim/Release, ARCHITECTURE.md §6.1 Erweiterung 2026-07-10) | erledigt | Nutzerauftrag "make I/O-card claim/release" im Anschluss an D12 — schließt die seit 2026-07-10 offen dokumentierte Lücke ("kein Geräte-Inventar vorhanden"). Zwei Design-Entscheidungen vor der Umsetzung geklärt: Inventar wird vom Host-Agent aus einer lokalen JSON-Datei gelesen (`OMP_HOST_AGENT_IO_PORTS_PATH`), nicht automatisch per Hersteller-SDK erkannt (echte Hardware zum Testen fehlt); Claim/Release lebt in Postgres (neues Paket `internal/ioports`, atomarer `WITH … FOR UPDATE OF … SKIP LOCKED … INSERT … ON CONFLICT DO NOTHING`-Satz, `PRIMARY KEY (host_id, port_id)` als Exklusivitäts-Garantie), nicht im D12-Raft-FSM — dieselbe bei D12 Teil 3 gewonnene Lehre bestätigt sich. `workflows.Role.RequiredIOPort` (additiv), `Service.Start()` claimt als dritten synchronen Preflight VOR `StatusStarting` (ehrliche Ablehnung + Rollback bei Teilfehler, kein Teil-Start), `Service.Stop()` gibt frei, `migration.go: executeMigration` erzwingt die Migrations-Grenze ("nicht migrierbar" ohne freien Zielport, kein stiller Fallback) für beide Trigger (manueller Drag-Umzug UND automatische Placement-Eskalation, gemeinsamer Code-Pfad). `GET /api/v1/hosts` liefert Inventar+Belegung mit. `go build/vet/test ./...` grün (10 neue `ioports`-Tests inkl. echtem 20-Goroutinen-Nebenläufigkeitstest gegen echtes Postgres, 6 neue `workflows`-Tests, 4 neue `host-agent`-Tests). Live mit echtem Host-Agent-Prozess + echtem Orchestrator verifiziert: Registrierung mit Inventar, Claim beim Start sichtbar in `GET /api/v1/hosts`, konkurrierender zweiter Start ehrlich mit HTTP 400 abgelehnt, nach `Stop()` sofort wieder claimbar — alle Testdaten danach aus der Dev-Postgres entfernt. Details: `docs/decisions.md` Nachtrag 150. | 2026-08-18 |
+| D14 (NATS-Clustering, ARCHITECTURE.md §19.3 Punkt 7) | erledigt | Nutzerauftrag "NATS clustering" im Anschluss an D13 — löst den seit D12 offen benannten Rest-SPOF ("Raft macht Postgres/NATS selbst nicht redundant"). Drei `nats-server`-Prozesse (`--cluster`/`--routes`/`--cluster_name`) statt einem, dev per `Makefile up` (drei Podman-Container, `--network=host`), Produktion als drei `omp-nats`-Quadlets auf drei echten Hosts. Zwei echte Funde: JetStream+Clustering verlangt einen eindeutigen `--server_name` pro Knoten (Server brach sonst sofort ab); `nats.go` teilt eine kommagetrennte `OMP_NATS_URL` bereits selbst auf, `async-nats` (Rust-SDK) NICHT (`impl ToServerAddrs for str` parst die gesamte Zeichenkette als eine Adresse) — behoben durch neue `parse_server_addrs`-Funktion im einzigen NATS-Connect-Ort des Node-SDK (`omp-node-sdk::health`, deckt alle 22 Node-Typen mit einem Fix ab). `OMP_NATS_URL`-Default in Orchestrator/Host-Agent jetzt die Drei-Adressen-Liste, kein weiterer Go-Code-Unterschied nötig (Reconnect-Optionen waren schon vor D14 gesetzt). `go build/vet/test ./...` + `cargo test --workspace`/`cargo clippy` grün. Live verifiziert: echte Drei-Knoten-Cluster-Bildung (`/routez`), Cross-Node-Pub/Sub-Routing, ein echter Orchestrator-Prozess überlebte per `podman kill` des verbundenen Knotens einen automatischen Reconnect (Log: "nats disconnected"/"nats reconnected", kein Prozess-Neustart) mit voller Funktionsfähigkeit danach, ein echter GStreamer/MXL-`omp-source`-Rust-Node verband sich nachweislich (NATS `/connz`, `lang: rust`) über die neue Drei-Adressen-URL. Details: `docs/decisions.md` Nachtrag 151. | 2026-08-18 |
