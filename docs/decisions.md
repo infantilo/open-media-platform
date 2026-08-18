@@ -17993,3 +17993,148 @@ das Aktiv/Passiv-Gating der Hintergrund-Loops).
 `orchestrator/internal/httpapi/{server,cluster_handlers,server_test}.go`,
 `orchestrator/internal/config/config.go`, `orchestrator/main.go`,
 `UMSETZUNG.md` (D12 Teil 2 + Checkliste).
+
+## 2026-08-18 (Nachtrag 149) — Schritt D12 Teil 3: Aktiv/Passiv-Gating statt FSM-Migration (Plan bei der Umsetzung vereinfacht), echter Multi-Instanz-Bug gefunden, live verifiziert — D12 damit vollständig
+
+**Kontext:** Nutzerauftrag "proceed" im Anschluss an Nachtrag 148 (D12
+Teil 2). Der ursprüngliche Plan (Nachtrag 146/`UMSETZUNG.md` D12 Teil 3,
+vor jeder Umsetzung geschrieben) ging davon aus, die in §19.3 Punkt 5
+aufgezählten Zustände bräuchten eigene FSM-Kommandotypen. Vor dem
+eigentlichen Implementieren wurden `migration.go`, `scheduler.go`,
+`failover.go` und die Crash-Loop-Bücher in `launcher.go` vollständig
+gelesen (`UMSETZUNG.md` §0 Punkt 6: nicht raten) — das Ergebnis war ein
+einfacherer, tatsächlich umgesetzter Weg, der den ursprünglichen Plan an
+einer zentralen Stelle korrigiert.
+
+**Zentrale Erkenntnis: keiner der vier Zustände brauchte je einen
+eigenen FSM-Kommandotyp.** Alle vier sind bereits heute rein lokale,
+`sync.Mutex`-geschützte In-Memory-Objekte EINER Prozessinstanz
+(`migrationState`, der Crash-Loop-Zähler in `launcher.go`, kein
+eigenständiger Zustand für `promoteStandby` jenseits des Aufrufpfads,
+der Scheduler-Feuerzustand). Eine zweite, über Raft repliziert Kopie
+derselben Tatsache wäre eine zweite Quelle der Wahrheit gewesen — echte
+Exklusivität lässt sich strukturell einfacher erreichen: läuft der
+JEWEILS EINZIGE Hintergrund-Loop, der diesen Zustand erzeugt/liest, nur
+noch auf der aktuellen Leader-Instanz, kann es per Konstruktion keine
+zweite Instanz geben, die ihn parallel führt. Detailanalyse je Zustand:
+
+1. **Migrations-Sperren/Bestätigungsfenster** (`migration.go`) — werden
+   ausschließlich aus `placement.Engine.Run` → `OnAdviceRaised`
+   angestoßen; Leader-Gating von `placement.Engine.Run` reicht. Ein
+   offenes `auto-confirm-window` (mit seinem `*time.Timer`, der ohnehin
+   nicht über einen Prozessneustart hinweg replizierbar wäre — reiner
+   Prozessspeicher) überlebt einen Leader-Wechsel dadurch NICHT
+   unverändert, sondern heilt sich selbst: die neue Leader-Instanz
+   wertet beim nächsten Placement-Tick (~5s) erneut aus und eröffnet,
+   falls der Host weiterhin überlastet ist, ein neues Fenster — kein
+   Doppel-Ausführen, nur ein kurzer Fenster-Reset. Das ist eine bewusst
+   schwächere Zusicherung als der ursprüngliche Plan-Wortlaut
+   ("überlebt einen kill -9") versprach — ehrlich benannt statt
+   stillschweigend übernommen, s. `UMSETZUNG.md`-Korrektur.
+2. **Crash-Loop-Zähler/-Bremse** — zwei strukturell verschiedene Pfade,
+   erst bei dieser Analyse getrennt betrachtet: der **lokale**
+   `os/exec`-Supervise-Pfad (`supervise`/`supervisePodman`) ist von
+   Natur aus schon single-owner (nur der Prozess, der ein Kind selbst
+   geforkt hat, kann `cmd.Wait()` überhaupt beobachten) — kein Gating
+   nötig, kein Risiko. Der **entfernte**, per Host-Agent/NATS gemeldete
+   Pfad (`HandleRemoteExit`, Subject `omp.host.*.events`) dagegen ist
+   ein **echter, bei dieser Analyse neu gefundener Bug**: `main.go`
+   abonniert diesen Broadcast-Subject bisher ungegated — in einem
+   Drei-Instanzen-Cluster hätte JEDE Instanz dieselbe Exit-Nachricht
+   erhalten und unabhängig ihre eigene, rein lokale Crash-Loop-Zählung
+   geführt, unabhängig entschieden, wann die Bremse greift, und
+   unabhängig einen Neustart-Befehl an den Host-Agenten geschickt —
+   bis zu dreifache Neustart-Kommandos für dasselbe Ereignis. Behoben
+   durch Gating der Subscription selbst, nicht durch FSM-Replikation
+   des Zählers.
+3. **Standby-Beförderung** (`failover.go`) — Crash-Loop-Auslöser erbt
+   das Gating von Punkt 2; Host-Offline-Auslöser läuft nur noch aus dem
+   jetzt Leader-gated `RunFailoverWatcher`.
+4. **Scheduler-Feuerzustand** (`scheduler.go`) — anders als die anderen
+   drei bereits **vor D12 durchgängig in Postgres persistiert**
+   (`Store.UpdateSchedules`, seit D7 Teil 2), nicht rein lokal. Der
+   tatsächliche Fund hier war kein Multi-Instanz-Problem, sondern eine
+   **Reihenfolge-Lücke, die schon vor D12 im Single-Prozess-Betrieb
+   bestand**: `tickWorkflow` feuerte (rief `Start()`/`Stop()` auf) und
+   persistierte `LastFiredAt` erst DANACH — ein Prozess-Crash oder
+   fehlgeschlagener Postgres-Schreibzugriff zwischen beidem hätte die
+   Markierung verloren, der nächste Tick hätte ein zweites Mal gefeuert
+   (strukturell dieselbe Bug-Klasse wie der 2026-07-18 live gefundene
+   "einmal-Schedule feuert dreimal"-Fund, docs/decisions.md, dort aus
+   einem anderen Auslöser). Behoben durch Umkehrung: Claim/Persist ZUERST,
+   dann feuern — schlägt der Persist-Versuch fehl, wird gar nicht
+   gefeuert (verpasst statt verdoppelt, passt zur bestehenden
+   "verfallen lassen"-Linie). `Scheduler.Run` zusätzlich Leader-gated,
+   aber das war hier Vermeidung nutzloser N-facher Auswertung, kein
+   eigenständiges Korrektheitsproblem mehr (die Reihenfolge-Korrektur
+   allein hätte bereits ausgereicht).
+
+**Umsetzung:**
+
+- `main.go`: `runWhileLeader(ctx, clusterNode, fn)` — startet/storniert
+  einen von `ctx` abgeleiteten Kontext für `fn` je nach
+  `cluster.Node.IsLeader()`, 2s-Poll (`leaderPollInterval`, in derselben
+  Größenordnung wie die übrigen Kontroll-Ticker dieser Datei). Reines
+  Polling statt einer Push-Benachrichtigung, weil `cluster.Node` aktuell
+  keine öffentliche Fan-out-API für Führungswechsel anbietet (der
+  interne `notifyCh` aus D12 Teil 2 wird bereits von `watchLeadership`
+  verbraucht) — bei 2s praktisch ununterscheidbar von Push, ohne
+  `cluster.Node` um eine zweite Concurrency-Grundierung zu erweitern.
+  Gated: `placementEngine.Run`, `workflowScheduler.Run`,
+  `workflowSvc.RunFailoverWatcher`.
+- `main.go`: `subscribeWhileLeader(ctx, clusterNode, nc, subject,
+  handler)` — gleiches Poll-Prinzip, aber für NATS-Subscribe/-Unsubscribe
+  statt Goroutine-Start/-Stop. Gated: `omp.host.*.events`
+  (`launcherSvc.HandleRemoteExit`).
+- **Echter `go vet`-Fund unterwegs:** die erste `runWhileLeader`-Fassung
+  hielt `cancel` in einer über Schleifen-Iterationen wiederverwendeten
+  Variablen — `go vet`s `lostcancel`-Analyse konnte nicht zuverlässig
+  nachvollziehen, dass `defer stop()` die jeweils aktuelle Cancel-Funktion
+  tatsächlich aufruft (bekannte Grenze dieser Analyse bei indirekt über
+  Closures aufgerufenen, wiederverwendeten Cancel-Variablen). Behoben
+  durch Auslagerung in `startLeaderSession(ctx, fn) func()`, das seine
+  Cancel-Funktion direkt an der Entstehungsstelle zurückgibt — ein
+  Muster, das `go vet` zuverlässig verfolgt.
+- `internal/workflows/scheduler.go`: `tickWorkflow` sammelt jetzt erst
+  alle in diesem Tick fälligen Schedules, persistiert sie EINMAL, und
+  feuert erst danach jede fällige Aktion — vorher: pro Schedule
+  markieren+feuern, am Ende erst persistieren.
+
+**Automatisierte Verifikation:** neuer Test
+`TestSchedulerDoesNotFireIfPersistFails` (persistSchedule schlägt fehl →
+kein `Start()`-Aufruf, belegt die neue sichere Fehlerrichtung). Alle
+bestehenden Scheduler-/Cluster-/Workflow-Tests weiterhin grün. `go
+build/vet/test ./...` grün, keine Regression (26 Pakete, ein bereits
+vor dieser Sitzung bekannter, unabhängiger Timing-Flake in
+`internal/launcher` isoliert reproduziert und als nicht-verursacht
+bestätigt, s. Verifikation dieser Sitzung).
+
+**Zusätzlich live mit drei echten, separaten OS-Prozessen verifiziert**
+(gegen dieselbe echte Dev-Postgres/-NATS wie die vorigen Nachträge):
+Cluster `a`/`b`/`c` gestartet, `b` als Leader ermittelt. Ein Workflow
+mit einem sofort fälligen `once`-Schedule wurde über die FOLLOWER-API
+(`a`) angelegt; nach dem nächsten Tick zeigte NUR `b`s Log "scheduled
+action fired", `a` und `c` keines — `GET /api/v1/instances` bestätigte
+auf `b` genau eine tatsächlich gestartete `omp-source`-Instanz, auf `a`
+und `c` keine (kein Doppel-Start). NATS `/subsz?subs=1` zeigte im
+gesamten Cluster genau eine aktive Subscription auf
+`omp.host.*.events` (nicht drei). Danach echtes `kill -9` von `b`,
+Neuwahl abgewartet (`a` wurde neuer Leader), ein zweiter sofort fälliger
+Schedule über den verbliebenen Follower `c` angelegt — NUR `a` feuerte
+diesmal, `c` nicht; `/subsz` zeigte danach dieselbe Subscription unter
+einer NEUEN Connection-ID (die Subscription war nachweislich zur neuen
+Leader-Instanz migriert, nicht verwaist). Alle Demo-Prozesse/Scratch-
+Verzeichnisse (`/tmp/omp-t3-demo`) danach entfernt.
+
+**Bewusst nicht Teil dieser Sitzung:** I/O-Karten-Claim/Release
+(§6.1-Erweiterung, Geräte-Inventar existiert im Code noch nicht — bei
+Bedarf zunächst prüfen, ob Leader-Gating auch dort ausreicht, statt
+FSM-Replikation vorauszusetzen), Postgres-HA/NATS-Clustering (§19.3
+Punkt 7, eigenständige Folgearbeit). **Mit dieser Sitzung ist D12
+(Orchestrator-Cluster, ARCHITECTURE.md §19) im für diese Sitzungsreihe
+geplanten Umfang vollständig abgeschlossen** (Teile 1-3).
+
+**Dateien:** `orchestrator/main.go`,
+`orchestrator/internal/workflows/{scheduler,scheduler_test}.go`,
+`ARCHITECTURE.md` (§19.3 Punkt 5/6), `UMSETZUNG.md` (D12 Teil 3 +
+Checkliste).

@@ -77,8 +77,28 @@ func (s *Scheduler) tick() {
 	}
 }
 
+// tickWorkflow markiert alle diesen Tick fälligen Schedules und
+// persistiert die Markierung, BEVOR auch nur einer von ihnen tatsächlich
+// feuert (Start()/Stop()) — umgekehrte Reihenfolge gegenüber der
+// ursprünglichen D7-Teil-2-Fassung (dort: erst feuern, danach
+// persistieren). D12 Teil 3 (ARCHITECTURE.md §19.3 Punkt 5/6): Run()
+// läuft jetzt nur noch auf der aktuellen Leader-Instanz (main.go
+// runWhileLeader) — das allein macht "genau einmal cluster-weit" bereits
+// wasserdicht, eine zusätzliche, über raft.Apply replizierte
+// Feuerzustand-Kopie wäre eine zweite Quelle für dieselbe Tatsache und
+// damit unnötige Komplexität. Die verbleibende Lücke ist rein
+// Crash-Timing: schlägt persistSchedule fehl oder stirbt der Prozess
+// mittendrin, wird in der alten Reihenfolge trotzdem gefeuert, aber
+// nichts gemerkt — der nächste Tick (auf dieser oder einer neuen
+// Leader-Instanz) feuert dann ein zweites Mal (das ist exakt der
+// 2026-07-18 live gefundene "einmal-Schedule feuert dreimal"-Bug,
+// docs/decisions.md, hier strukturell für den verbleibenden Fall
+// erneut geschlossen). Umgekehrt (Claim zuerst) fällt ein
+// Crash/Persistenzfehler immer auf die sichere Seite: das Feuern wird
+// verpasst statt verdoppelt — passt zur bestehenden "verfallen
+// lassen"-Linie für zeitweise nicht erreichbare Zeitpunkte.
 func (s *Scheduler) tickWorkflow(wf Workflow, now time.Time) {
-	changed := false
+	var due []ScheduleAction
 	for i := range wf.Definition.Schedules {
 		sched := &wf.Definition.Schedules[i]
 		occ, ok := occurrenceAt(*sched, now)
@@ -95,13 +115,18 @@ func (s *Scheduler) tickWorkflow(wf Workflow, now time.Time) {
 
 		firedAt := occ
 		sched.LastFiredAt = &firedAt
-		changed = true
-		s.fire(wf.ID, wf.Name, sched.Action)
+		due = append(due, sched.Action)
 	}
-	if changed {
-		if err := s.svc.persistSchedule(wf); err != nil {
-			slog.Warn("workflows: scheduler: failed to persist LastFiredAt", "workflow", wf.ID, "error", err)
-		}
+	if len(due) == 0 {
+		return
+	}
+
+	if err := s.svc.persistSchedule(wf); err != nil {
+		slog.Warn("workflows: scheduler: failed to persist LastFiredAt before firing, skipping this tick (will retry next tick)", "workflow", wf.ID, "error", err)
+		return
+	}
+	for _, action := range due {
+		s.fire(wf.ID, wf.Name, action)
 	}
 }
 

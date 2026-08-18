@@ -2,6 +2,7 @@ package workflows
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -19,11 +20,13 @@ type schedulerAction struct {
 // hält Workflows in einer Map (wie fakeStore), zeichnet Start/Stop-
 // Aufrufe auf und übernimmt persistSchedule() wie ein echter Store.
 type fakeSchedulerLauncher struct {
-	mu       sync.Mutex
-	wfs      map[string]Workflow
-	actions  []schedulerAction
-	startErr error
-	stopErr  error
+	mu          sync.Mutex
+	wfs         map[string]Workflow
+	actions     []schedulerAction
+	startErr    error
+	stopErr     error
+	persistErr  error
+	persistCall int
 }
 
 func newFakeSchedulerLauncher(wfs ...Workflow) *fakeSchedulerLauncher {
@@ -61,6 +64,10 @@ func (f *fakeSchedulerLauncher) Stop(ctx context.Context, id string, confirm boo
 func (f *fakeSchedulerLauncher) persistSchedule(wf Workflow) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.persistCall++
+	if f.persistErr != nil {
+		return f.persistErr
+	}
 	f.wfs[wf.ID] = wf
 	return nil
 }
@@ -225,6 +232,39 @@ func TestSchedulerStopFiresWithConfirmTrue(t *testing.T) {
 
 	if launcher.actionCount() != 1 || launcher.actions[0].action != "stop" || !launcher.actions[0].confirm {
 		t.Fatalf("actions = %+v, want one stop with confirm=true even though ConfirmStop is set", launcher.actions)
+	}
+}
+
+// TestSchedulerDoesNotFireIfPersistFails belegt die D12-Teil-3-
+// Umkehrung der Reihenfolge (ARCHITECTURE.md §19.3 Punkt 5/6,
+// docs/decisions.md Nachtrag 149): schlägt persistSchedule fehl, wird
+// NICHT gefeuert — die alte Reihenfolge (erst feuern, dann
+// persistieren) hätte hier trotz Persistenzfehler einen echten Start()-
+// Aufruf ausgelöst, ohne dass LastFiredAt je ankam, und beim nächsten
+// Tick ein zweites Mal gefeuert (exakt die 2026-07-18 live gefundene
+// Bug-Klasse, s. Kommentar bei tickWorkflow).
+func TestSchedulerDoesNotFireIfPersistFails(t *testing.T) {
+	fireAt := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+	wf := Workflow{
+		ID:   "wf1",
+		Name: "test",
+		Definition: Definition{
+			Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
+			Schedules: []Schedule{{ID: "s1", Kind: ScheduleOnce, Action: ScheduleActionStart, At: &fireAt}},
+		},
+	}
+	launcher := newFakeSchedulerLauncher(wf)
+	launcher.persistErr = errors.New("boom: postgres unreachable")
+	sched := NewScheduler(launcher)
+	sched.now = func() time.Time { return fireAt.Add(10 * time.Second) }
+
+	sched.tick()
+
+	if launcher.persistCall != 1 {
+		t.Fatalf("persistSchedule calls = %d, want exactly 1 (attempted before firing)", launcher.persistCall)
+	}
+	if launcher.actionCount() != 0 {
+		t.Fatalf("actions = %+v, want none — a failed persist must not still fire", launcher.actions)
 	}
 }
 

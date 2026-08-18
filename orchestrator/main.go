@@ -82,6 +82,113 @@ func hostIDFromEventsSubject(subject string) (string, bool) {
 	return hostID, true
 }
 
+// leaderPollInterval ist der Abstand, in dem runWhileLeader/
+// subscribeWhileLeader den aktuellen Führungsstatus prüfen (D12 Teil 3,
+// ARCHITECTURE.md §19.3 Punkt 6) — in derselben Größenordnung wie die
+// übrigen Kontroll-Ticker dieser Datei (placement.EvaluateInterval/
+// failoverCheckInterval, je 5s), damit ein Führungswechsel nicht
+// spürbar länger braucht, bis der neue Leader die cluster-weiten
+// Entscheidungsschleifen übernimmt, als die Schleifen selbst ohnehin
+// zum Reagieren bräuchten.
+const leaderPollInterval = 2 * time.Second
+
+// runWhileLeader startet fn (typischerweise ein Run(ctx)-Hintergrund-
+// Loop wie placement.Engine.Run/workflows.Scheduler.Run/
+// workflows.Service.RunFailoverWatcher) nur, solange diese Instanz
+// aktueller Raft-Leader ist — verliert sie die Führung, wird fns
+// Kontext storniert (fn muss ctx.Done() beachten, wie es die genannten
+// Loops bereits für den äußeren main.go-ctx tun); gewinnt sie sie
+// zurück (oder erneut), startet fn neu. Reines Polling statt einer
+// Leadership-Notify-Subscription (cluster.Node liefert aktuell keine
+// öffentliche Fan-out-API dafür, nur den intern von watchLeadership
+// verbrauchten Kanal) — bei leaderPollInterval=2s ist das Verhalten
+// praktisch ununterscheidbar von einer Push-Benachrichtigung, ohne
+// cluster.Node um eine zweite Concurrency-Grundierung zu erweitern.
+func runWhileLeader(ctx context.Context, clusterNode *cluster.Node, fn func(context.Context)) {
+	ticker := time.NewTicker(leaderPollInterval)
+	defer ticker.Stop()
+
+	var stop func()
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	for {
+		switch isLeader := clusterNode.IsLeader(); {
+		case isLeader && stop == nil:
+			stop = startLeaderSession(ctx, fn)
+		case !isLeader && stop != nil:
+			stop()
+			stop = nil
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// startLeaderSession startet fn in einer eigenen Goroutine mit einem von
+// ctx abgeleiteten, eigenständig stornierbaren Kontext und liefert die
+// Storno-Funktion zurück — ausgelagert aus runWhileLeader, damit
+// `context.WithCancel`s Cancel-Funktion direkt an ihrem Entstehungsort
+// zurückgegeben (statt in einer Schleife bedingt wiederverwendet) wird;
+// `go vet`s lostcancel-Analyse verfolgt eine an den Aufrufer
+// zurückgegebene Cancel-Funktion zuverlässig, eine in einer
+// Schleifenvariable wiederverwendete dagegen nicht immer.
+func startLeaderSession(ctx context.Context, fn func(context.Context)) func() {
+	loopCtx, cancel := context.WithCancel(ctx)
+	go fn(loopCtx)
+	return cancel
+}
+
+// subscribeWhileLeader hält subject nur abonniert, solange diese
+// Instanz Leader ist — gleiches Gating-Prinzip wie runWhileLeader, aber
+// für eine NATS-Subscription statt eines Run(ctx)-Loops (der
+// Host-Exit-Event-Konsument unten ist kein solcher Loop, sondern eine
+// dauerhafte Registrierung). Verliert die Instanz die Führung, wird die
+// Subscription beendet — ein danach eintreffendes Exit-Event erreicht
+// dann nur noch den neuen Leader, kein doppeltes Verarbeiten durch
+// mehrere Instanzen gleichzeitig (ARCHITECTURE.md §19.3 Punkt 5: löst
+// den bei der D12-Teil-3-Analyse gefundenen echten Multi-Instanz-Bug —
+// jede Instanz abonniert denselben Broadcast-Subject, hätte ohne dieses
+// Gating unabhängig voneinander ihre eigene, rein lokale Crash-Loop-
+// Zählung hochgezählt und unabhängig doppelt neu gestartet/failover-
+// befördert).
+func subscribeWhileLeader(ctx context.Context, clusterNode *cluster.Node, nc *nats.Conn, subject string, handler nats.MsgHandler) {
+	var sub *nats.Subscription
+	unsub := func() {
+		if sub != nil {
+			_ = sub.Unsubscribe()
+			sub = nil
+		}
+	}
+	defer unsub()
+
+	ticker := time.NewTicker(leaderPollInterval)
+	defer ticker.Stop()
+	for {
+		switch isLeader := clusterNode.IsLeader(); {
+		case isLeader && sub == nil:
+			s, err := nc.Subscribe(subject, handler)
+			if err != nil {
+				slog.Warn("leader-gated subscribe failed, will retry", "subject", subject, "error", err)
+			} else {
+				sub = s
+			}
+		case !isLeader && sub != nil:
+			unsub()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -277,19 +384,25 @@ func main() {
 	// kennt den Typ nicht und ignoriert ihn) — keine doppelte
 	// Geschäftslogik, nur ein zweiter, unabhängiger Konsument derselben
 	// NATS-Nachricht.
+	//
+	// D12 Teil 3 (ARCHITECTURE.md §19.3 Punkt 5/6): Leader-gated
+	// (subscribeWhileLeader) — jede Cluster-Instanz abonniert denselben
+	// Broadcast-Subject, ohne dieses Gating hätte jede unabhängig ihre
+	// eigene, rein lokale Crash-Loop-Zählung geführt und unabhängig
+	// doppelt neu gestartet/failover-befördert (echter, bei der
+	// Teil-3-Analyse gefundener Multi-Instanz-Bug, s.
+	// docs/decisions.md Nachtrag 149 — der lokale os/exec-Supervise-Pfad
+	// braucht dieses Gating NICHT: nur der Prozess, der ein Kind selbst
+	// geforkt hat, kann dessen Ende überhaupt beobachten, das ist
+	// bereits von Natur aus single-owner).
 	if nc != nil {
-		hostEventsSub, err := nc.Subscribe("omp.host.*.events", func(msg *nats.Msg) {
+		go subscribeWhileLeader(ctx, clusterNode, nc, "omp.host.*.events", func(msg *nats.Msg) {
 			hostID, ok := hostIDFromEventsSubject(msg.Subject)
 			if !ok {
 				return
 			}
 			launcherSvc.HandleRemoteExit(hostID, msg.Data)
 		})
-		if err != nil {
-			slog.Warn("host exit event subscribe failed", "error", err)
-		} else {
-			defer hostEventsSub.Unsubscribe()
-		}
 	}
 
 	// Nutzer-/Rollenmodell (ARCHITECTURE.md §12, UMSETZUNG.md D3 Teil 2)
@@ -342,7 +455,13 @@ func main() {
 		HealthyMemPercent: cfg.PlacementHealthyMemThreshold,
 	}
 	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds, profileStore)
-	go placementEngine.Run(ctx)
+	// D12 Teil 3: nur die aktuelle Leader-Instanz wertet aus/löst
+	// Migrations-Empfehlungen aus (s. runWhileLeader-Doku) — ohne dieses
+	// Gating würde jede Cluster-Instanz unabhängig denselben Alarm
+	// erkennen und unabhängig eine Migration anstoßen (migration.go:
+	// claimMigrationAttempt schützt nur innerhalb EINES Prozesses, nicht
+	// clusterweit).
+	go runWhileLeader(ctx, clusterNode, placementEngine.Run)
 
 	// Workflow-Bereitstellung & -Verteilung (ARCHITECTURE.md §6.2,
 	// UMSETZUNG.md D7 Teil 1/Teil 2): bündelt mehrere launcherSvc.Start()-
@@ -374,7 +493,16 @@ func main() {
 	// Bedienzustands-Erfassung für Rollen mit Standby ab (s. failover.go).
 	launcherSvc.SetFailoverObserver(workflowSvc)
 	workflowSvc.SetHostMetrics(hostMetricsTracker)
-	go workflowSvc.RunFailoverWatcher(ctx)
+	// D12 Teil 3: gleiches Leader-Gating wie placementEngine.Run oben —
+	// der Host-Offline-Trigger (Stufe 2 in failover.go) würde sonst auf
+	// jeder Cluster-Instanz unabhängig denselben Host als offline
+	// erkennen und unabhängig promoteStandby auslösen. Der
+	// Crash-Loop-Trigger (Stufe 1, launcherSvc.SetFailoverObserver oben)
+	// braucht dieses Gating dagegen nicht separat: er feuert nur aus dem
+	// bereits leader-gated HandleRemoteExit-Pfad (subscribeWhileLeader
+	// oben) bzw. aus dem von Natur aus single-owner lokalen
+	// os/exec-Supervise-Pfad.
+	go runWhileLeader(ctx, clusterNode, workflowSvc.RunFailoverWatcher)
 
 	// D6 Teil 4 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-13 Punkt 2):
 	// automatisierte Placement-Eskalation (auto-confirm-window/auto) —
@@ -389,7 +517,12 @@ func main() {
 	// D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): führt Start/Stop-
 	// Zeitpläne aus, unabhängig vom HTTP-Handler.
 	workflowScheduler := workflows.NewScheduler(workflowSvc)
-	go workflowScheduler.Run(ctx)
+	// D12 Teil 3: Leader-Gating wie oben — der Scheduler selbst ist seit
+	// dem Persist-vor-Feuern-Fix (scheduler.go, docs/decisions.md
+	// Nachtrag 149) auch ohne Gating korrekt (kein Doppel-Feuern), aber
+	// ungegatet würden N-1 Instanzen bei jedem Tick nutzlos dieselbe
+	// Auswertung wiederholen.
+	go runWhileLeader(ctx, clusterNode, workflowScheduler.Run)
 
 	backupSvc := backup.NewService(cfg.PostgresContainer, cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)

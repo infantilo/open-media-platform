@@ -2348,56 +2348,92 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
    `../data/raft/<nodeID>`) hält BoltDB-Log/Stable-Store +
    `raft.FileSnapshotStore`-Snapshots — analog zu den bereits
    bestehenden instanzlokalen Zustandsdateien (`instances.json` u. Ä.).
-5. **FSM-Scope — was konkret repliziert wird** (direkt aus dem
-   bestehenden Code identifiziert, nicht geraten, `UMSETZUNG.md` §0
-   Punkt 6): alles, was heute als **In-Memory-Zustand einer einzelnen
-   `workflows.Service`-Instanz** exklusiv/genau-einmal sein muss und bei
-   zwei gleichzeitig aktiven Orchestratoren zu doppelter Ausführung oder
-   einem inkonsistenten Zustand führen würde:
-   - Migrations-Exklusivsperren (`migration.go`:
-     `claimMigrationAttempt`/`releaseMigrationClaim`) — zwei Instanzen
-     dürfen nie gleichzeitig dieselbe Rolle migrieren.
-   - Offene Bestätigungsfenster (`migration.go`: `pendingMigration`) —
-     ein `ConfirmMigration`/`CancelMigration`-API-Aufruf muss
-     unabhängig davon wirken, welche Instanz ihn beantwortet, und der
-     Fenster-Timer darf nur einmal cluster-weit feuern.
-   - Crash-Loop-Zähler/-Bremse (K7-Teil-1, aktuell in `launcher`/`health`)
-     — zwei Instanzen dürfen nicht unabhängig doppelt neu starten oder
-     unabhängig die Bremse ziehen.
-   - Standby-Beförderungsentscheidung (`failover.go`: `promoteStandby`)
-     — muss cluster-weit exakt einmal passieren.
-   - Scheduler-Feuerzustand (`scheduler.go`: `fire`) — ein geplanter
-     Workflow-Start/-Stop darf nicht doppelt (einmal pro Instanz)
-     ausgelöst werden.
-   - Zukünftige I/O-Karten-Claim/Release-Sperren (§6.1 „Erweiterung
-     2026-07-10" — heute noch nicht gebaut, kein Geräte-Inventar
-     vorhanden) sollen, **sobald** dieser Baustein kommt, dieselbe
-     FSM-Apply-Sperr-Primitive nutzen statt eigenen lokalen Zustand —
-     hier nur als Vorgriff dokumentiert, kein Teil von D12.
+5. **FSM-Scope — was konkret repliziert wird, korrigiert nach
+   Code-Lektüre (D12 Teil 3, 2026-08-18):** Die ursprüngliche Liste
+   unten (erste Fassung dieses Abschnitts) nahm an, jeder der
+   aufgezählten Zustände müsse als eigener FSM-Kommandotyp repliziert
+   werden. Beim tatsächlichen Implementieren zeigte die Code-Lektüre
+   (`UMSETZUNG.md` §0 Punkt 6: nicht geraten) einen einfacheren Weg:
+   **keiner** dieser vier Zustände braucht eine FSM-Replikation, um
+   „genau einmal cluster-weit" zu erreichen — Punkt 6 (Aktiv/Passiv-
+   Gating) allein reicht, weil jeder bereits ein rein lokales,
+   Mutex-geschütztes In-Memory-Bestandsobjekt EINER
+   `workflows.Service`/`launcher.Launcher`-Instanz ist: läuft der
+   erzeugende Hintergrund-Loop nur noch auf der jeweils aktuellen
+   Leader-Instanz, kann es strukturell keine zweite Instanz mehr geben,
+   die denselben Zustand parallel führt. Im Einzelnen:
+   - Migrations-Exklusivsperren + offene Bestätigungsfenster
+     (`migration.go`: `claimMigrationAttempt`/`pendingMigration`) —
+     `OnAdviceRaised` wird nur noch aus `placement.Engine.Run` heraus
+     aufgerufen, das jetzt Leader-gated läuft (Punkt 6) — nur eine
+     Instanz führt je Zeitpunkt Migrations-Buchhaltung. Ein offenes
+     Bestätigungsfenster überlebt einen Leader-Wechsel NICHT
+     unverändert (der `*time.Timer` ist Prozessspeicher, nicht
+     replizierbar) — es heilt stattdessen selbst: die neue
+     Leader-Instanz wertet beim nächsten Placement-Tick (~5s) erneut
+     aus und eröffnet, falls der Host weiterhin überlastet ist, ein
+     neues Fenster. Kein doppeltes Ausführen, nur ein kurzer
+     Fenster-Reset — bewusst akzeptiert (dieselbe Toleranzlinie wie
+     §19.1: Sekunden Steuerungs-Unschärfe um einen Führungswechsel).
+   - Crash-Loop-Zähler/-Bremse: der **lokale** `os/exec`-Supervise-Pfad
+     (`launcher.go`, `supervise`/`supervisePodman`) ist von Natur aus
+     schon single-owner (nur der Prozess, der ein Kind selbst geforkt
+     hat, sieht dessen Ende) — kein Gating nötig. Der **entfernte**,
+     per NATS gemeldete Pfad (`HandleRemoteExit`, `omp.host.*.events`)
+     dagegen ist ein echter, bei der Umsetzung gefundener Bug: jede
+     Cluster-Instanz abonniert denselben Broadcast-Subject und hätte
+     ohne Gegenmaßnahme unabhängig doppelt gezählt/doppelt neu
+     gestartet — behoben durch Leader-Gating der Subscription selbst
+     (`main.go: subscribeWhileLeader`, nicht durch FSM-Replikation des
+     Zählers).
+   - Standby-Beförderung (`failover.go`: `promoteStandby`) — der
+     Host-Offline-Auslöser läuft nur noch aus dem jetzt Leader-gated
+     `RunFailoverWatcher`; der Crash-Loop-Auslöser erbt das Gating vom
+     vorigen Punkt.
+   - Scheduler-Feuerzustand (`scheduler.go`) — bereits vor D12 durchgängig
+     in Postgres persistiert (`Store.UpdateSchedules`, seit D7 Teil 2),
+     nicht rein lokal — brauchte nur eine Reihenfolge-Korrektur
+     (Claim/Persist VOR statt NACH dem Feuern, schließt eine seit D7
+     Teil 2 bestehende Lücke: ein Prozess-Crash zwischen Feuern und
+     Persistieren hätte auch schon vor D12 zu Doppel-Feuern geführt)
+     plus Leader-Gating von `Scheduler.Run` (verhindert nutzlose
+     N-fache Auswertung, nicht bereits ein Korrektheitsproblem für
+     sich).
 
-   Bewusst **nicht** im FSM: Workflow-Definitionen/Config/Layouts/
-   Snapshots/Katalog (bleiben Postgres, unverändert), Host-Telemetrie-
-   Rohwerte (§14, bleiben ephemer/lokal pro Instanz — reine
-   Lesedaten ohne Exklusivitätsanforderung, jede Instanz kann sie
-   unabhängig aus NATS neu aufbauen).
-6. **Aktiv/Passiv-Ausführungsmodell:** Nur die aktuelle Raft-Leader-
-   Instanz treibt die Hintergrund-Loops, die cluster-weite Entscheidungen
-   treffen (`placement.Engine.Run`, `workflows.Scheduler.Run`,
-   `workflows.Service.RunFailoverWatcher`, Migrations-Timer) — Follower
-   laufen mit, beantworten lesende API-Aufrufe direkt, aber leiten
-   schreibende Aufrufe, die FSM-Zustand aus Punkt 5 berühren, per
-   einfachem HTTP-Reverse-Proxy an die aktuelle Leader-HTTP-Adresse
-   weiter (Adresse aus der in Punkt 3 gepflegten Peer-Tabelle, aufgelöst
-   über `raft.Leader()`). Das ersetzt den in der alten Skizze als
-   „einzigen externen Baustein" genannten VIP-/Proxy-Bedarf (VRRP/
-   keepalived) — **hier nicht mehr nötig**, weil jede Instanz die
-   Leader-Adresse bereits kennt und selbst weiterleiten kann; das
-   vereinfacht den Betrieb gegenüber der alten Skizze (kein zusätzlicher
-   Fremd-Baustein). Bei Leader-Wechsel baut die neue Leader-Instanz ihren
-   In-Memory-`workflows.Service`-Zustand aus dem FSM-Snapshot
-   (klein — nur Punkt-5-Daten, nicht die vollen Workflow-Objekte, die
-   weiterhin aus Postgres geladen werden) plus einem Neuladen der
-   Workflow-Definitionen aus Postgres wieder auf.
+   **Ergebnis:** Das FSM bleibt bei dem in Teil 2 eingeführten Umfang
+   (Leader-Identität + Peer-HTTP-Adressbuch) — kein zusätzlicher
+   Kommandotyp für Punkt-5-Zustände in D12 Teil 3. Zukünftige
+   I/O-Karten-Claim/Release-Sperren (§6.1 „Erweiterung 2026-07-10" —
+   heute noch nicht gebaut) sollten, sobald dieser Baustein kommt,
+   zunächst nach demselben Muster geprüft werden (reicht Leader-Gating
+   des erzeugenden Loops, oder ist eine echte FSM-Sperre nötig, weil
+   *mehrere* gleichzeitig aktive Entscheidungsquellen existieren) statt
+   FSM-Replikation vorschnell anzunehmen.
+
+   Weiterhin bewusst **nicht** im FSM: Workflow-Definitionen/Config/
+   Layouts/Snapshots/Katalog (bleiben Postgres), Host-Telemetrie-
+   Rohwerte (§14, bleiben ephemer/lokal pro Instanz).
+6. **Aktiv/Passiv-Ausführungsmodell (umgesetzt D12 Teil 3):** Nur die
+   aktuelle Raft-Leader-Instanz treibt die Hintergrund-Loops, die
+   cluster-weite Entscheidungen treffen — `placement.Engine.Run`,
+   `workflows.Scheduler.Run`, `workflows.Service.RunFailoverWatcher`
+   (alle drei über `main.go: runWhileLeader`, 2s-Poll auf
+   `cluster.Node.IsLeader()`, startet/storniert einen von `ctx`
+   abgeleiteten Kontext) sowie die `omp.host.*.events`-NATS-Subscription
+   (`subscribeWhileLeader`, gleiches Poll-Prinzip für Subscribe/
+   Unsubscribe statt Goroutine-Start/-Stop). Follower laufen mit,
+   beantworten lesende API-Aufrufe direkt; schreibende
+   Cluster-Mitgliedschafts-Aufrufe (`/api/v1/cluster/join`/`/members/
+   {id}`, D12 Teil 2) werden weiterhin per HTTP-Reverse-Proxy an die
+   Leader-Adresse weitergeleitet — Workflow-/Placement-Schreibaufrufe
+   brauchen diese Weiterleitung NICHT (anders als in Teil 2 vorgesehen):
+   sie schreiben direkt nach Postgres, unabhängig davon, welche Instanz
+   sie beantwortet; nur die *auswertenden* Hintergrund-Loops mussten
+   exklusiv werden, nicht der Schreibpfad selbst. Bei Leader-Wechsel
+   braucht die neue Leader-Instanz keinen FSM-Snapshot-Rebuild (Punkt 5:
+   kein solcher Zustand mehr vorhanden) — sie startet ihre gegateten
+   Loops einfach neu, die lesen ihren Ausgangsstand ohnehin frisch aus
+   Postgres/Telemetrie.
 7. **Bewusst weiterhin nicht mitgelöst** (unverändert gegenüber der
    alten Skizze, gleiche Begründung): Postgres selbst und NATS selbst
    sind in diesem Design nicht redundant. NATS-Clustering (3 Knoten,
@@ -2416,7 +2452,8 @@ Datenverzeichnissen derselben Maschine, `kill -9` der Leader-Instanz →
 Neuwahl unter den verbleibenden Followern messbar über
 `GET /api/v1/cluster/status`). **Phase:** `UMSETZUNG.md` D12, in Teile
 1–3 gegliedert (Grundgerüst+Single-Node → Join/Leave-API+Mehrknoten-
-Live-Test → FSM-Migration der Punkt-5-Zustände), siehe dort für
+Live-Test → Aktiv/Passiv-Gating der Entscheidungs-Loops, Punkt 5/6 oben
+— alle drei Teile abgeschlossen, 2026-08-18), siehe dort für
 Verifikationskriterien je Teil.
 
 ## 20. 24/7 Broadcast-Grade Hardening — Gap-Analyse & Fahrplan (Zielbild, Priorisierung ausstehend)

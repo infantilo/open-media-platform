@@ -1818,7 +1818,7 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Testfunktionen), fünf reale `nmos-test.py suite IS-05-01`-Läufe gegen
   den frisch gebauten Mock-Node. Details: `docs/decisions.md`
   Nachtrag 145.
-- **D12 (ARCHITECTURE.md §19, Teil 1+2 erledigt 2026-08-18, Teil 3 offen)**
+- **D12 (ARCHITECTURE.md §19, vollständig erledigt 2026-08-18, Teil 1-3)**
   Orchestrator-Cluster: Raft-Konsens zwischen mehreren
   Orchestrator-Instanzen, ersetzt die alte Postgres-Advisory-Lock-Skizze
   (Nutzerauftrag 2026-08-18, s. `docs/decisions.md` Nachtrag 146 für die
@@ -1940,37 +1940,65 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   toten Knoten sauber — Cluster schrumpft 3→2, `peers` UND
   `peerHttpAddrs` auf beiden verbliebenen Instanzen korrekt bereinigt.
 
-  **D12 Teil 3 — FSM-Migration: Punkt-5-Zustände + Aktiv/Passiv-Gating.**
-  Die in §19.3 Punkt 5 aufgezählten State-Objekte
-  (`migration.go`: `claimMigrationAttempt`/`pendingMigration`;
-  Crash-Loop-Zähler/-Bremse; `failover.go`: `promoteStandby`;
-  `scheduler.go`: `fire`) wandern von lokalem
-  `sync.Mutex`-geschütztem In-Memory-Zustand in FSM-`Apply`-Aufrufe
-  (Raft-Log als Serialisierungspunkt statt lokalem Mutex). Nur die
-  aktuelle Leader-Instanz startet `placement.Engine.Run`,
-  `workflows.Scheduler.Run`, `workflows.Service.RunFailoverWatcher` und
-  aktive Migrations-Timer (`raft.Leader()`/Leadership-Notify-Channel
-  gated); bei Leader-Wechsel baut die neue Leader-Instanz ihren
-  In-Memory-`workflows.Service`-Zustand aus dem FSM-Snapshot (klein)
-  plus einem Neuladen der Workflow-Definitionen aus Postgres wieder auf.
-  Schreibende Workflow-/Migrations-/Katalog-Routen, die diesen Zustand
-  berühren, werden auf Followern jetzt (Teil-2-Proxy erweitert) zum
-  Leader weitergeleitet.
-  **Verifikation:** live, nicht nur Unit-Tests — (a) ein geplanter
-  Workflow-Start (Scheduler) feuert nachweislich genau einmal, auch mit
-  drei laufenden Instanzen (kein doppelter Start durch zwei Instanzen
-  gleichzeitig); (b) ein offenes Migrations-Bestätigungsfenster
-  überlebt einen `kill -9` der Leader-Instanz — die neue Leader-Instanz
-  kennt das Fenster weiter, `ConfirmMigration` über eine beliebige
-  Instanz wirkt danach korrekt; (c) ein Crash-Loop-Szenario
-  (wiederholtes `kill -9` derselben Node-Instanz) löst die Bremse
-  weiterhin nur einmal cluster-weit aus, nicht einmal pro
-  Orchestrator-Instanz. `go test ./...` weiterhin grün.
+  **D12 Teil 3 (erledigt, 2026-08-18) — Aktiv/Passiv-Gating statt
+  FSM-Migration (Plan bei der Umsetzung vereinfacht).** Die ursprüngliche
+  Planung (oben in früheren Fassungen dieses Dokuments) ging davon aus,
+  die in §19.3 Punkt 5 aufgezählten Zustände (`migration.go`:
+  `claimMigrationAttempt`/`pendingMigration`; Crash-Loop-Zähler/-Bremse;
+  `failover.go`: `promoteStandby`; `scheduler.go`: Feuerzustand)
+  bräuchten eigene FSM-Kommandotypen. Code-Lektüre vor der Umsetzung
+  (`UMSETZUNG.md` §0 Punkt 6: nicht geraten) zeigte einen einfacheren,
+  tatsächlich umgesetzten Weg: **alle vier sind bereits rein lokale,
+  Mutex-geschützte Objekte EINER Prozessinstanz** — Aktiv/Passiv-Gating
+  der sie erzeugenden Hintergrund-Loops macht Doppel-Ausführung
+  strukturell unmöglich, ganz ohne eine zweite, FSM-replizierte Kopie
+  derselben Tatsache. Details/Begründung je Zustand: ARCHITECTURE.md
+  §19.3 Punkt 5 (überarbeitet), volle Herleitung: `docs/decisions.md`
+  Nachtrag 149.
+
+  **Umsetzung:** `main.go` bekommt zwei neue Gating-Helfer —
+  `runWhileLeader(ctx, clusterNode, fn)` (startet/storniert einen
+  `Run(ctx)`-Loop je nach `cluster.Node.IsLeader()`, 2s-Poll) für
+  `placementEngine.Run`, `workflowScheduler.Run`,
+  `workflowSvc.RunFailoverWatcher`; `subscribeWhileLeader(ctx,
+  clusterNode, nc, subject, handler)` (gleiches Poll-Prinzip für
+  Subscribe/Unsubscribe) für die `omp.host.*.events`-NATS-Subscription
+  (`launcherSvc.HandleRemoteExit`) — bei deren Analyse ein echter,
+  bisher unbemerkter Multi-Instanz-Bug gefunden wurde: jede
+  Cluster-Instanz hätte denselben Broadcast-Subject unabhängig
+  abonniert und unabhängig ihre eigene Crash-Loop-Zählung geführt.
+  Zusätzlich `scheduler.go`: `tickWorkflow` persistiert `LastFiredAt`
+  jetzt VOR statt NACH dem Feuern (schließt eine seit D7 Teil 2
+  bestehende, von D12 unabhängige Lücke: ein Prozess-Crash zwischen
+  Feuern und Persistieren hätte schon vor dem Cluster-Betrieb zu
+  Doppel-Feuern führen können — bei einem Persistenzfehler wird jetzt
+  gar nicht gefeuert statt "feuern, Markierung verlieren, nächstes Mal
+  nochmal feuern").
+
+  **Verifikation (bestanden), live mit drei echten, separaten
+  OS-Prozessen (nicht nur Unit-Tests):** ein Workflow mit einem sofort
+  fälligen `once`-Schedule wurde über eine FOLLOWER-Instanz angelegt;
+  nur die Leader-Instanz zeigte "scheduled action fired" in ihrem Log,
+  beide Follower keines — `GET /api/v1/instances` bestätigte exakt eine
+  tatsächlich gestartete `omp-source`-Instanz, nur auf der
+  Leader-Instanz (keine doppelten Starts). NATS-`/subsz` zeigte exakt
+  eine aktive Subscription auf `omp.host.*.events` im gesamten Cluster
+  (nicht drei). Danach `kill -9` der Leader-Instanz, Neuwahl abgewartet,
+  ein zweiter sofort fälliger Schedule über den verbliebenen Follower
+  angelegt — nur die NEUE Leader-Instanz feuerte, die
+  NATS-Subscription war nachweislich (neue Connection-ID) zur neuen
+  Leader-Instanz migriert. `go build/vet/test ./...` grün (neuer
+  Scheduler-Test `TestSchedulerDoesNotFireIfPersistFails` belegt die
+  Reihenfolge-Korrektur; `go vet` mahnte einen echten lostcancel-Fund in
+  der ersten `runWhileLeader`-Fassung an — auf return-basierte
+  Cancel-Weitergabe umgestellt, s. `main.go: startLeaderSession`).
   **Bewusst nicht Teil 3:** I/O-Karten-Claim/Release (§6.1-Erweiterung,
-  existiert im Code noch nicht — s. §19.3 Punkt 5 letzter Spiegelstrich,
-  eigene spätere Sitzung sobald das Geräte-Inventar selbst gebaut wird),
-  Postgres-HA/NATS-Clustering (§19.3 Punkt 7, eigenständige, unabhängig
-  planbare Folgearbeit).
+  existiert im Code noch nicht — bei Bedarf zunächst prüfen, ob
+  Leader-Gating auch dort reicht, statt FSM-Replikation vorauszusetzen,
+  s. ARCHITECTURE.md §19.3 Punkt 5), Postgres-HA/NATS-Clustering (§19.3
+  Punkt 7, eigenständige, unabhängig planbare Folgearbeit). Mit Teil 3
+  ist D12 (Orchestrator-Cluster) in dem für diese Sitzungsreihe
+  geplanten Umfang abgeschlossen.
 
 ---
 
@@ -2633,3 +2661,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D11 (Gezielte AMWA-NMOS-Pitfall-Behebung) | erledigt | Nutzerauftrag: "compliance test: analyze typical pitfalls where custom Go NMOS implementations fail ... AMWA NMOS Testing Tool suites" — angewendet auf D9s bereits benannte 19-Ausnahmen-Liste (IS-05-01), jede Ausnahme am echten AMWA-Testcode (`IS0501Test.py`/`IS05Utils.py`) verifiziert statt geraten. Drei von vier D9-Ursachengruppen geschlossen: `transport_params`-Default wortgleich zum AMWA-Beispiel (13 Felder statt `{}`), echte PATCH-Teil-Update-Semantik inkl. Leg-Merge, vollständiger `activation`-Lebenszyklus (`activation_time` + "staged resettet, active persistiert", am Beispiel `receiver-active-get-200.json` bestätigt), `{"bad":"data"}` wird mit 400 abgelehnt, echte `POST /bulk/receivers`-Semantik. Eigener Design-Bug vor dem ersten Tool-Lauf per Code-Review gefunden (naives `*string` für SenderID konnte "fehlt" nicht von "explizit null" unterscheiden, hätte Disconnect-PATCHes ignoriert — `OptionalSenderID` behoben). Vier weitere echte Bugs über fünf Tool-Lauf-Runden gefunden (Pass/Fail: 17/19 → 24/12 → 25/11 → 27/9 → 29/7): `fec_mode` fehlte in der "auto"-Auflösung, `active`s uninitialisierter Default zeigte noch "auto" (am Beispiel `receiver-active-get-200-uninit.json` gegengeprüft), geplante Aktivierungen lieferten `activation_time` erst beim Feuern statt sofort, `activate_scheduled_absolute` interpretierte `requested_time` als Unix- statt echte TAI-Zeit (`NMOSUtils.get_TAI_time`, 37s-Schaltsekunden-Versatz). Nur noch eine Ursachengruppe offen: `auto_connection_1/2/3/4/5/6/13` (brauchen einen echten Sender, Mock-Node läuft mit `-senders 0`) — CI-Ausnahmeliste von 19 auf 7 geschrumpft, lokal verifiziert (`exit 0`) vor dem Eintragen. Bewusst nicht Teil: Rust-SDK-Parität (reale, dokumentierte Lücke zwischen Go-Mock und Produktions-Nodes), Sender-Test-Fixture, IS-09. `go build/vet/test ./...` grün, fünf reale `nmos-test.py`-Läufe. Details: `docs/decisions.md` Nachtrag 145. | 2026-08-18 |
 | D12 Teil 1 (Orchestrator-Cluster: Raft-Grundgerüst) | erledigt | Nutzerauftrag "Architect a highly available, clustered Orchestrator setup ... using a Raft consensus mechanism" (2026-08-18); ersetzt die alte Postgres-Advisory-Lock-Skizze aus ARCHITECTURE.md §19 (Begründung: schließt deren offen zugegebene Lücke, dass die Leader-Wahl selbst an Postgres hing). Neues Paket `internal/cluster` (`hashicorp/raft` v1.7.3 + `raft-boltdb/v2` v2.3.1, eigener TCP(+mTLS)-Transport statt NATS-Nachbau), `GET /api/v1/cluster/status`, Selbst-Bootstrap als Ein- oder Mehr-Knoten-Cluster je nach `OMP_CLUSTER_PEERS`. `go test ./...` grün (neue Tests inkl. echtem Drei-Knoten-Bootstrap/Replikation/Neuwahl über echtes TCP im Testprozess); zusätzlich live mit drei echten, separaten OS-Prozessen verifiziert — ein echtes `kill -9` des Leader-Prozesses löste binnen Sekunden eine echte Neuwahl unter den beiden Überlebenden aus (Term 2→4, per HTTP-API bestätigt), eine vierte Solo-Instanz ohne `OMP_CLUSTER_PEERS` bestätigte unverändertes Single-Host-Verhalten. Details: `docs/decisions.md` Nachtrag 146 (Architektur-Entscheidung)/147 (Umsetzung). Teil 2 (Join/Leave-API)/Teil 3 (FSM-Migration der echten Control-Plane-Zustände) offen. | 2026-08-18 |
 | D12 Teil 2 (Live-Mitgliedschaft: Join/Leave-API) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1. `POST /api/v1/cluster/join`/`DELETE /api/v1/cluster/members/{id}` (Admin-Verb), `raft.AddVoter`/`RemoveServer`; neue Instanzen starten mit `OMP_CLUSTER_JOIN=true` (`cluster.Config.SkipBootstrap`, warten passiv statt sich selbst zu bootstrappen). Peer-HTTP-Adressbuch jetzt FSM-repliziert statt statisch (jede Instanz kündigt sich bei Führungsübernahme selbst an, `CommandSetPeerHTTPAddr`) — Follower leiten Join/Leave transparent per `httputil.ReverseProxy` an die echte Leader-Adresse weiter (`forwardToLeader`), ersetzt den in der alten Skizze noch für nötig gehaltenen externen VIP/Proxy-Baustein vollständig. Empirisch korrigierte Annahme unterwegs: `raft.Config.ShutdownOnRemove` fährt laut Quelltext nur den Leader herunter, wenn er sich selbst entfernt, nicht eine entfernte Nicht-Leader-Instanz (vor der Umsetzung per gezieltem Testlauf geklärt, nicht der Doku-Formulierung vertraut). `go test ./...` grün (4 neue Cluster-Tests); zusätzlich live mit drei echten Prozessen verifiziert: Cluster wuchs 1→2→3 über echte `POST /api/v1/cluster/join`-Aufrufe, ein an den FOLLOWER gerichteter Join-Request wurde nachweislich (Response trug die Leader-`nodeId`) transparent weitergeleitet statt lokal falsch beantwortet, `kill -9` des Leaders löste echte Neuwahl aus, `DELETE .../members/{id}` schrumpfte den Cluster 3→2 mit korrekt bereinigtem Adressbuch auf beiden Überlebenden. Details: `docs/decisions.md` Nachtrag 148. Teil 3 (FSM-Migration der echten Control-Plane-Zustände + Aktiv/Passiv-Gating) offen. | 2026-08-18 |
+| D12 Teil 3 (Aktiv/Passiv-Gating, Plan bei Umsetzung vereinfacht) | erledigt | Direkter Nutzerauftrag "proceed" im Anschluss an Teil 2. Code-Lektüre vor der Umsetzung zeigte: die geplante FSM-Migration der §19.3-Punkt-5-Zustände (Migrations-Sperren, Crash-Loop-Zähler, Standby-Beförderung, Scheduler-Feuerzustand) ist unnötig — alle vier sind bereits rein lokale Objekte einer Prozessinstanz, Aktiv/Passiv-Gating der erzeugenden Loops allein macht Doppel-Ausführung strukturell unmöglich. Neue `main.go`-Helfer `runWhileLeader`/`subscribeWhileLeader` (2s-Poll auf `cluster.Node.IsLeader()`) gaten `placementEngine.Run`/`workflowScheduler.Run`/`workflowSvc.RunFailoverWatcher` sowie die `omp.host.*.events`-NATS-Subscription — bei deren Analyse ein echter, bisher unbemerkter Multi-Instanz-Bug gefunden: jede Cluster-Instanz hätte denselben Broadcast-Subject unabhängig abonniert und unabhängig Crash-Loop-Zählung/Failover-Promotion ausgelöst. `scheduler.go`: `LastFiredAt` wird jetzt vor statt nach dem Feuern persistiert (schließt eine seit D7 Teil 2 bestehende, von Clustering unabhängige Doppel-Feuer-Lücke bei Persistenzfehlern/Prozess-Crash). `go build/vet/test ./...` grün (`go vet` fand einen echten lostcancel-Bug in der ersten `runWhileLeader`-Fassung, behoben durch return-basierte Cancel-Weitergabe; neuer Test `TestSchedulerDoesNotFireIfPersistFails`). Live mit drei echten Prozessen verifiziert: ein sofort fälliger Schedule feuerte nachweislich nur auf der Leader-Instanz (Log + `GET /api/v1/instances` bestätigten genau einen tatsächlichen Start), NATS `/subsz` zeigte genau eine aktive Subscription cluster-weit; nach `kill -9` des Leaders migrierten sowohl die Scheduler-Aktivität als auch die NATS-Subscription nachweislich zur neuen Leader-Instanz. Details: `docs/decisions.md` Nachtrag 149. Mit Teil 3 ist D12 vollständig abgeschlossen. | 2026-08-18 |
