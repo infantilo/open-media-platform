@@ -10,6 +10,16 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-decklink",
+    "label": "DeckLink",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-decklink"],
+    "env": {},
+    "description": "Erfasst eine echte Blackmagic-DeckLink-SDI/IP-Capture-Karte (Video+Audio) als MXL-Flow (UMSETZUNG.md D10 Teil 1: Ingest). Braucht echte, per OMP_DECKLINK_DEVICE_NUMBER gewählte Hardware am jeweiligen Host — auf einem Host ohne Karte startet die Instanz mit klarem Fehler statt still zu laufen. Nur Empfang; Ausgabe (MXL → DeckLink-Ausgang) ist Teil 2, noch nicht umgesetzt.",
+    "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
     "type": "omp-switcher",
     "label": "Switcher",
     "runner": "process",

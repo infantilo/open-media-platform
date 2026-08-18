@@ -3822,3 +3822,154 @@ Recherchierte Faktenlage (Stand 2026-07):
    (Pfad-Redundanz):** gibt es einen konkreten Bedarfsträger
    (z. B. gesetzliche Untertitelpflicht eines Ziel-Playouts), der
    Teil 6 aus „optional" zu „geplant" macht?
+
+## 20. Blackmagic DeckLink SDI/IP: physische Capture-Karten als omp-Node
+
+> Nutzeranfrage (2026-08-18): „baue Support für Blackmagic DeckLink IP
+> und DeckLink SDI Capture-Karten um 2110-Signal zu senden/empfangen."
+> `ARCHITECTURE.md` §24.6/§24.7 hatten bisher zweimal „kein Capture-
+> Karten-Pfad" entschieden — beide Male ausdrücklich mit „keine
+> testbare Hardware auf der Dev-Maschine" begründet
+> (`UMSETZUNG.md` §0 Punkt 7). Nutzer bestätigte echte Hardware an
+> anderer Stelle im eigenen Setup und wies per direkter Anweisung an,
+> die Entscheidung aufzuheben und umzusetzen — der Blocker gilt damit
+> nicht mehr, die Entscheidung ist ab hier **aufgehoben**
+> (`docs/decisions.md` Nachtrag 143).
+
+### 20.1 Referenz PIPELINE CONTROLLER (konsultiert, nicht geraten)
+
+`UMSETZUNG.md` §0 Punkt 9 verlangt, GStreamer-/Broadcast-Muster erst
+dort nachzulesen. PIPELINE CONTROLLER hat echte, produktiv gelaufene
+DeckLink-Integration in beide Richtungen:
+
+- **Ausgabe** (`lib/OutputEngine.js`): `... ! decklinkvideosink
+  device-number=<n> mode=<mode> sync=true` + `... !
+  decklinkaudiosink device-number=<n> sync=true`. `mode` ist dort
+  bewusst NICHT `auto` — `decklinkvideosink` ist modus-gebunden
+  (keine freie Auflösung), eine feste `DECKLINK_MODES`-Tabelle
+  (Auflösung/Framerate je Modus-Name) wählt die Caps davor.
+- **Eingabe** (`lib/MasterPipeline.js`, `server.js`): `decklinkvideosrc
+  device-number=<n>` + `decklinkaudiosrc device-number=<n>
+  channels=<n>`. Zwei reale, dort dokumentierte Betriebs-Fallstricke:
+  1. `decklinkaudiosrc`s `channels`-Property ist ein **fixer Enum
+     {2, 8, 16}** (0 = "max") — jeder andere Wert ist eine ungültige
+     Property und bricht den gesamten Pipeline-Parse (echter,
+     produktiv aufgetretener Bug, nicht theoretisch).
+  2. `signal` (gültiges Eingangssignal anliegend) ist nur **lesbar**,
+     das Plugin postet dafür **keine** Bus-Events — die Property muss
+     aktiv gepollt werden (`_startLiveSignalPoll`, Timer-basiert).
+- **Geräte-Erkennung:** `gst-device-monitor-1.0 Video/Source`,
+  Namensfilter `decklink|blackmagic`, Device-Number/Channel-Zahl aus
+  dem Textblock geparst — mit einem `HW_DECKLINK_PRESENT=0`-Env-
+  Kurzschluss, um den (bis zu 5 s dauernden) Scan auf Hosts ohne Karte
+  zu überspringen. Dasselbe Muster ("Host hat vielleicht keine Karte,
+  nicht raten, prüfen") gilt hier.
+- **Wichtiger, hart limitierender Fund für 2110-IP-Karten:** die
+  eigentlichen **Netzwerk-Transportparameter (Multicast-Adresse,
+  PTP, SDP) einer DeckLink-IP-Karte sind über GStreamer NICHT
+  zugänglich** — die liegen ausschließlich im Blackmagic-Treiber/
+  „Desktop Video Setup"-Tool. Aus Software-Sicht (GStreamer) sind
+  DeckLink-SDI- und DeckLink-IP-Karten **identisch** ansprechbar
+  (dieselben Elemente `decklinkvideosrc`/`decklinkvideosink`/
+  `decklinkaudiosrc`/`decklinkaudiosink`) — die SDI/IP-Unterscheidung
+  ist reine Treiber-/Firmware-Konfiguration außerhalb des OMP-Node-
+  Codes. Konsequenz: OMP kann eine DeckLink-IP-Karte **nicht** über
+  IS-05 (Multicast-Ziel/PTP-Domain) fernsteuern — nur Start/Stopp/
+  Mode/Device-Auswahl, wie bei SDI auch. Ehrlich zu dokumentieren,
+  nicht zu verschweigen.
+- **PTP:** `lib/ClockStrategy.js`s `ptp-decklink` (implementiert dort)
+  nutzt die PTP-gelockte Karten-Clock als Pipeline-Clock — relevant,
+  falls OMP später echte Studio-PTP-Synchronität über eine DeckLink-
+  IP-Karte anstrebt (nicht Teil dieser Runde).
+
+### 20.2 Ziel-Design
+
+Ein neuer, gerichteter Node `omp-decklink` (`OMP_DECKLINK_DIRECTION`-
+artiges Muster wie `omp-srt-gateway`, hier zunächst nur die Ingest-
+Richtung implementiert, s. 20.3) statt eines Karten-spezifischen
+Sonderpfads irgendwo im Kern — genau das etablierte Gateway-Node-
+Strukturvorbild (`omp-2110-gateway`/`omp-aes67-gateway`/
+`omp-srt-gateway`).
+
+- **Ingest (Teil 1, umgesetzt):** `decklinkvideosrc` + `decklink-
+  audiosrc` → `MxlVideoOutput`/`MxlAudioOutput` (`UMSETZUNG.md` C4),
+  strukturell identisch zu `omp-source`s Pipeline, nur echte Hardware
+  statt `videotestsrc`/`audiotestsrc`.
+- **Modus bewusst fest, nicht `auto`:** ein MXL-Video-Flow deklariert
+  Auflösung/Framerate bei der Flow-Erstellung — `mode=auto` kennt die
+  tatsächliche Auflösung erst nach Signalerkennung, ein Henne-Ei-
+  Problem. `OMP_DECKLINK_MODE` (Default `1080p25`) muss vorab
+  feststehen, wie `omp-source`s `width`/`height`.
+  Nur die sechs bereits in PIPELINE CONTROLLER produktiv verifizierten
+  Modi unterstützt (`pal-p`, `720p50`, `720p5994`, `1080p25`,
+  `1080p2997`, `1080p50`) — keine der 68 GStreamer-`mode`-Enum-
+  Varianten zusätzlich geraten. Interlaced Eingänge (1080i50 etc.)
+  bräuchten eine eigene De-Interlace-Kette wie PIPELINE CONTROLLERs
+  `lib/InterlaceChain.js` — bewusst nicht Teil dieser Runde.
+- **`channels`-Enum-Validierung übernommen** ({2, 8, 16}), inkl. des
+  in PIPELINE CONTROLLER dokumentierten Fallstricks — vor dem
+  Pipeline-Aufbau geprüft, nicht erst beim Property-Set scheitern
+  lassen.
+- **`signal`-Polling** (jeder Heartbeat-Tick, `1s`-Takt wie die
+  Fehler-Poll-Schleife) statt Bus-Events, als readonly Descriptor-
+  Parameter exponiert + Alarm bei Signalverlust (`handle.publish_
+  alert`) — dasselbe Konzept wie PIPELINE CONTROLLERs
+  `_startLiveSignalPoll`, hier über den bestehenden `Event`-Kanal des
+  Node-Lifecycles statt eines eigenen Timers.
+- **Kein Placement-/Inventar-Anschluss in dieser Runde.** `ARCHITECTURE.md`
+  §6.1 („I/O-Karten als erstklassige Host-Ressource") plant dafür
+  Host-Agent-Geräteinventar + Placement-Claim/Release — laut dortigem
+  Status (2026-08-04) weiterhin nicht gebaut. `omp-decklink` wird
+  vorerst wie jeder andere Node manuell/per Host-Präferenz
+  (`Role.HostID`, Scheduler-Autoplace) auf einen Host mit echter Karte
+  gelegt — kein automatisches Karten-Claim/Release. Eigener künftiger
+  Schritt, nicht stillschweigend vermischt.
+- **Ausgabe (Teil 2, noch nicht begonnen):** `MxlVideoOutput`/
+  `MxlAudioOutput`-Empfang → `decklinkvideosink`/`decklinkaudiosink`
+  (Monitor-/SDI-Ausgang), analog `omp-recorder`s Empfangsseite +
+  PIPELINE CONTROLLERs `_buildDecklinkPipelineStr`-Muster
+  (Modus-Tabelle, `sync=true`, da der DeckLink-Sink alleiniger
+  Clock-Provider einer eigenständigen Pipeline ist).
+
+### 20.3 Umgesetzt (2026-08-18, Teil 1: Ingest)
+
+Neuer Rust-Node `nodes/omp-decklink` (`src/main.rs`, `src/pipeline.rs`),
+Katalogeintrag in `deploy/catalog.json`. Env-Konfiguration:
+`OMP_DECKLINK_DEVICE_NUMBER` (Default 0), `OMP_DECKLINK_MODE` (Default
+`1080p25`), `OMP_DECKLINK_AUDIO_CHANNELS` (Default 2). Descriptor:
+readonly `signal`/`deviceNumber`/`mode`/`audioChannels`/`flowId`/
+`audioFlowId`, keine Methoden/schreibbaren Parameter (Konfiguration ist
+Start-Zeit-fest, wie bei den meisten Ein-Zweck-Nodes).
+
+**Echter Bug live gefunden und behoben** (ohne Hardware getestet — s.
+Testbarkeits-Grenze unten, aber diesen Fund betraf das NICHT): ein
+fehlgeschlagener `PLAYING`-Übergang (Karte fehlt) OHNE anschließendes
+explizites `set_state(Null)` ließ den Prozess mit Coredump abstürzen
+(SIGSEGV im nativen DeckLink-Plugin-Cleanup, dreimal reproduziert) —
+nicht reproduzierbar mit reinem `gst-launch-1.0 decklinkvideosrc !
+fakesink` (dort scheitert derselbe `PAUSED`-Übergang sauber, kein
+Absturz), also kein Plugin-Bug, sondern eine bekannte `gstreamer-rs`-
+Falle: `gst::Pipeline`s `Drop` räumt nicht automatisch über `NULL` ab.
+Fix: expliziter `set_state(Null)`-Aufruf auf jedem Fehlerpfad vor dem
+Return, dreimal in Folge sauber (`exit 1`, klare Fehlermeldung, kein
+Coredump) reproduziert.
+
+**Testbarkeits-Grenze (ehrlich, nicht verschwiegen):** diese Dev-
+Maschine hat keine DeckLink-Hardware — verifiziert wurde die
+GStreamer-Plugin-Verfügbarkeit (`gst-inspect-1.0 decklinkvideosrc`,
+Version 1.22.0, `gst-plugins-bad` bereits installiert), der komplette
+Build (`cargo build/clippy -D warnings --workspace` grün), und der
+**ehrliche Ablehnungspfad ohne Hardware** (drei reale Prozessläufe:
+sauberer, klarer Fehler bei fehlender Karte, `OMP_DECKLINK_MODE`/
+`OMP_DECKLINK_AUDIO_CHANNELS`-Validierung greift vor jedem Pipeline-
+Aufbau). **Nicht verifizierbar hier:** tatsächlicher Signalempfang,
+`signal`-Property-Korrektheit gegen echtes SDI/IP-Eingangssignal,
+Bild-/Tonqualität — das braucht den Host mit der echten Karte
+(`UMSETZUNG.md` §0 Punkt 7 bleibt für DIESE Restverifikation in Kraft,
+nur der Baustopp selbst ist aufgehoben).
+
+**Standards-Abdeckung:** IS-04 (Sender-Registrierung, wie jeder
+MXL-Sender-Node) — keine neue. **Nicht Teil dieser Runde:** Ausgabe-
+Richtung (Teil 2), Host-Inventar/Placement-Claim-Release (§6.1),
+Interlace-Modi, PTP-Kartentakt als Pipeline-Clock. **Phase:**
+`UMSETZUNG.md` D10.
