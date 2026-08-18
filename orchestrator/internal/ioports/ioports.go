@@ -25,8 +25,6 @@ package ioports
 import (
 	"database/sql"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 // Port ist ein einzelner, vom Host-Agent gemeldeter physischer I/O-Port
@@ -92,7 +90,7 @@ func (s *Store) SetInventory(hostID string, ports []Port) error {
 		WHERE host_id = $1
 		  AND NOT (port_id = ANY($2))
 		  AND port_id NOT IN (SELECT port_id FROM io_port_claims WHERE host_id = $1)
-	`, hostID, pq.Array(reported)); err != nil {
+	`, hostID, reported); err != nil {
 		return err
 	}
 

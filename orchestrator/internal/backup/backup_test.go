@@ -26,7 +26,7 @@ func TestListReturnsNewestFirst(t *testing.T) {
 	touch(t, dir, "omp-20260201T000000Z.sql.gz")
 	touch(t, dir, "not-a-backup.txt")
 
-	svc := NewService("omp-postgres", dir, 14)
+	svc := NewService(nil, dir, 14)
 	names, err := svc.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -43,7 +43,7 @@ func TestListReturnsNewestFirst(t *testing.T) {
 }
 
 func TestListOnMissingDirReturnsEmptyNotError(t *testing.T) {
-	svc := NewService("omp-postgres", filepath.Join(t.TempDir(), "does-not-exist"), 14)
+	svc := NewService(nil, filepath.Join(t.TempDir(), "does-not-exist"), 14)
 	names, err := svc.List()
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -59,7 +59,7 @@ func TestRotateKeepsOnlyNewestN(t *testing.T) {
 	touch(t, dir, "omp-20260102T000000Z.sql.gz")
 	touch(t, dir, "omp-20260103T000000Z.sql.gz")
 
-	svc := NewService("omp-postgres", dir, 2)
+	svc := NewService(nil, dir, 2)
 	if err := svc.rotate(); err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRotateKeepsOnlyNewestN(t *testing.T) {
 func TestPathRejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	touch(t, dir, "omp-20260101T000000Z.sql.gz")
-	svc := NewService("omp-postgres", dir, 14)
+	svc := NewService(nil, dir, 14)
 
 	if _, err := svc.Path("../../../etc/passwd"); err == nil {
 		t.Fatal("Path() should reject a traversal attempt")

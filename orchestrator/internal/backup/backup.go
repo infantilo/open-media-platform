@@ -9,26 +9,116 @@
 // verlangt, den Orchestrator-Prozess selbst zu stoppen, was der
 // Orchestrator sich nicht selbst befehlen kann (s. supervisor/, das
 // eigenständige Gegenstück).
+//
+// Seit D15 (ARCHITECTURE.md §19.3, Postgres-HA via Patroni) gibt es
+// keinen festen "omp-postgres"-Container mehr, aus dem sich einfach
+// `pg_dump` ziehen ließe — welcher der drei Knoten gerade Primary ist
+// UND auf welchem lokalen Port dessen Postgres lauscht (die drei
+// Dev-Knoten teilen sich einen Host, brauchen also unterschiedliche
+// Ports, s. Makefile postgres-up), wechselt bei jedem Failover.
+// resolvePrimary fragt deshalb bei JEDEM Create()-Aufruf neu Patronis
+// eigene REST-API (`GET {RestURL}/cluster`, liefert Name/Rolle/Host/Port
+// aller Mitglieder aus einer einzigen Antwort) — kein statisch
+// gepflegter Port pro Knoten nötig, keine zweite Wahrheitsquelle neben
+// dem, was Patroni selbst gerade weiß.
 package backup
 
 import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
-// Service erstellt und listet Backups einer per podman laufenden
-// Postgres-Instanz.
+// PatroniNode verbindet einen podman-Container-Namen mit der
+// Patroni-REST-API-Adresse desselben Knotens.
+type PatroniNode struct {
+	Container string
+	RestURL   string
+}
+
+// ParsePatroniNodes liest das "container=resturl,container=resturl,..."
+// Format aus config.Config.PatroniNodes.
+func ParsePatroniNodes(spec string) []PatroniNode {
+	var nodes []PatroniNode
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		container, restURL, ok := strings.Cut(entry, "=")
+		if !ok || container == "" || restURL == "" {
+			continue
+		}
+		nodes = append(nodes, PatroniNode{Container: container, RestURL: restURL})
+	}
+	return nodes
+}
+
+// patroniClusterMember ist der für uns relevante Ausschnitt eines
+// Eintrags in Patronis `GET /cluster`-Antwort — `name` entspricht per
+// Konstruktion (PATRONI_NAME beim `podman run`, s. Makefile
+// postgres-up) exakt dem podman-Container-Namen.
+type patroniClusterMember struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+	Port int    `json:"port"`
+}
+
+type patroniClusterResponse struct {
+	Members []patroniClusterMember `json:"members"`
+}
+
+// resolvePrimary fragt die Knoten nacheinander über deren Patroni-
+// REST-API (`GET {RestURL}/cluster`) nach der vollständigen
+// Cluster-Topologie und liefert Container-Name + lokalen Postgres-Port
+// des Mitglieds mit role "leader" — reicht bereits eine erreichbare
+// REST-API, die anderen beiden Knoten müssen dafür nicht selbst
+// erreichbar sein (Patroni synchronisiert die Topologie über die
+// gemeinsame DCS, jeder Knoten kennt den ganzen Cluster).
+func resolvePrimary(ctx context.Context, nodes []PatroniNode) (container string, port int, err error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	var errs []string
+	for _, n := range nodes {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, n.RestURL+"/cluster", nil)
+		if reqErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", n.Container, reqErr))
+			continue
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", n.Container, doErr))
+			continue
+		}
+		var cluster patroniClusterResponse
+		decodeErr := json.NewDecoder(resp.Body).Decode(&cluster)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: /cluster decode: %v", n.Container, decodeErr))
+			continue
+		}
+		for _, m := range cluster.Members {
+			if m.Role == "leader" {
+				return m.Name, m.Port, nil
+			}
+		}
+		errs = append(errs, fmt.Sprintf("%s: /cluster ohne leader-Mitglied", n.Container))
+	}
+	return "", 0, fmt.Errorf("kein Patroni-Primary gefunden unter %d Knoten: %s", len(nodes), strings.Join(errs, "; "))
+}
+
+// Service erstellt und listet Backups des per Patroni verwalteten
+// Postgres-Clusters.
 type Service struct {
-	containerName string
-	dir           string
-	keep          int
+	nodes []PatroniNode
+	dir   string
+	keep  int
 }
 
 // NewService — dir muss existieren oder anlegbar sein (Create legt es
@@ -36,9 +126,10 @@ type Service struct {
 // keep ist die Rotationsgrenze (identisch zu backup-omp.shs
 // BACKUP_KEEP=14 — beide Wege teilen sich denselben `.backups/`-Ordner
 // und dieselbe Namenskonvention, eine Rotation räumt also unabhängig
-// vom Erstellungsweg auf).
-func NewService(containerName, dir string, keep int) *Service {
-	return &Service{containerName: containerName, dir: dir, keep: keep}
+// vom Erstellungsweg auf). nodes kommt aus config.Config.PatroniNodes
+// (ParsePatroniNodes).
+func NewService(nodes []PatroniNode, dir string, keep int) *Service {
+	return &Service{nodes: nodes, dir: dir, keep: keep}
 }
 
 // Result ist eine erstellte Sicherung.
@@ -58,12 +149,18 @@ func (s *Service) Create(ctx context.Context) (Result, error) {
 		return Result{}, fmt.Errorf("backup dir anlegen: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "podman", "exec", s.containerName, "pg_dump", "-U", "omp", "--clean", "--if-exists", "omp")
+	container, port, err := resolvePrimary(ctx, s.nodes)
+	if err != nil {
+		return Result{}, fmt.Errorf("primary-knoten ermitteln: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "podman", "exec", container, "pg_dump",
+		"-h", "127.0.0.1", "-p", strconv.Itoa(port), "-U", "omp", "--clean", "--if-exists", "omp")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return Result{}, fmt.Errorf("pg_dump im Container %q fehlgeschlagen: %w (%s)", s.containerName, err, stderr.String())
+		return Result{}, fmt.Errorf("pg_dump im Container %q fehlgeschlagen: %w (%s)", container, err, stderr.String())
 	}
 
 	name := fmt.Sprintf("omp-%s.sql.gz", time.Now().UTC().Format("20060102T150405Z"))

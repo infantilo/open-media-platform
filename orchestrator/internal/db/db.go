@@ -6,11 +6,26 @@
 // Minimal-Dependency-Regel (UMSETZUNG.md §0 Punkt 5) verlangt eine
 // Begründung vor jedem `go get` — für den hier gebrauchten Umfang (ein
 // paar sequenzielle .sql-Dateien, kein Down-Migrations-Bedarf, kein
-// Multi-DB-Support) wäre ein Framework Overhead ohne Gegenwert. `lib/pq`
-// selbst ist die eine, unvermeidbare Ausnahme (reiner Postgres-
-// Wire-Protocol-Treiber für `database/sql`, keine eigenen
-// Transitiv-Abhängigkeiten) — dieselbe Kategorie Ausnahme wie
-// `nats.go` in `internal/eventbus` (docs/decisions.md, Schritt A6).
+// Multi-DB-Support) wäre ein Framework Overhead ohne Gegenwert. Der
+// Postgres-Treiber selbst ist die eine, unvermeidbare Ausnahme (reiner
+// Wire-Protocol-Treiber für `database/sql`) — dieselbe Kategorie
+// Ausnahme wie `nats.go` in `internal/eventbus` (docs/decisions.md,
+// Schritt A6).
+//
+// `jackc/pgx/v5/stdlib` ersetzt seit D15 (ARCHITECTURE.md §19.3,
+// UMSETZUNG.md D15, 2026-08-18) das bisherige `lib/pq` — nicht wegen
+// Performance/API-Komfort, sondern weil `lib/pq` (seit Jahren im reinen
+// Wartungsmodus) keine mehrere Hosts in einer einzigen DSN unterstützt.
+// Postgres-HA (Patroni, 3 Knoten) braucht genau das: `Connect()` bekommt
+// jetzt eine kommagetrennte Host-Liste + `target_session_attrs=read-write`
+// (Postgres-Standardparameter seit v10, von pgx über die interne
+// pgconn-DSN-Auswertung unterstützt) — der Pool verbindet sich beim
+// (Re-)Connect automatisch mit dem Knoten, der gerade tatsächlich
+// beschreibbar ist (Patronis aktueller Primary), ohne eigenen
+// Discovery-Code. Gleiches Muster wie bei NATS/nats.go (D14) und
+// async-nats (D14, SDK) — der jeweilige Client übernimmt die
+// Mehr-Knoten-Auswahl selbst, kein zusätzlicher Proxy (HAProxy o. Ä.,
+// sonst der übliche Patroni-Begleiter) nötig.
 package db
 
 import (
@@ -21,7 +36,7 @@ import (
 	"sort"
 	"strings"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 //go:embed migrations/*.sql
@@ -48,7 +63,7 @@ const migrationLockKey = 84271936
 // zusätzlich ein `Ping()`, damit ein nicht erreichbarer Postgres beim
 // Start sofort auffällt statt erst beim ersten API-Aufruf.
 func Connect(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("postgres", dsn)
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("db: open: %w", err)
 	}

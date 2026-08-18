@@ -19,7 +19,10 @@
 // bereits vorhanden und getestet, ein Neuschreiben in Go wäre reines
 // Duplikations-/Regressionsrisiko ohne Nutzen). Der eigentliche
 // Restore-Befehl selbst spiegelt restore-omp.shs `gunzip -c | podman
-// exec -i omp-postgres psql ...` exakt.
+// exec -i <primary> psql ...` exakt — seit D15 (ARCHITECTURE.md §19.3,
+// Postgres-HA via Patroni) wird der Ziel-Container/-Port bei jedem Lauf
+// neu über Patronis REST-API ermittelt (s. resolvePrimary unten), kein
+// fester "omp-postgres"-Name mehr.
 //
 // Vertrauensgrenze: lauscht NUR auf 127.0.0.1 (nie 0.0.0.0) — jeder
 // Prozess, der diesen Port lokal erreicht, kann einen Restore auslösen.
@@ -34,6 +37,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +46,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -209,10 +215,86 @@ func (s *server) doRestore(backupPath string) error {
 	return nil
 }
 
+// patroniNode/parsePatroniNodes/resolvePrimary spiegeln
+// orchestrator/internal/backup.{PatroniNode,ParsePatroniNodes,
+// resolvePrimary} bewusst wortgleich (Duplikation statt Import — ein
+// eigenständiges Go-Modul, gleiches Muster wie die defaultNatsURL-
+// Duplikation zwischen orchestrator/host-agent, D14) — Postgres-HA via
+// Patroni (ARCHITECTURE.md §19.3, UMSETZUNG.md D15) hat keinen festen
+// "omp-postgres"-Container mehr, welcher der drei Knoten gerade Primary
+// ist wechselt bei jedem Failover.
+type patroniNode struct {
+	container string
+	restURL   string
+}
+
+func parsePatroniNodes(spec string) []patroniNode {
+	var nodes []patroniNode
+	for _, entry := range strings.Split(spec, ",") {
+		entry = strings.TrimSpace(entry)
+		container, restURL, ok := strings.Cut(entry, "=")
+		if !ok || container == "" || restURL == "" {
+			continue
+		}
+		nodes = append(nodes, patroniNode{container: container, restURL: restURL})
+	}
+	return nodes
+}
+
+type patroniClusterMember struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+	Port int    `json:"port"`
+}
+
+type patroniClusterResponse struct {
+	Members []patroniClusterMember `json:"members"`
+}
+
+func resolvePrimary(ctx context.Context, nodes []patroniNode) (container string, port int, err error) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	var errs []string
+	for _, n := range nodes {
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodGet, n.restURL+"/cluster", nil)
+		if reqErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", n.container, reqErr))
+			continue
+		}
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", n.container, doErr))
+			continue
+		}
+		var cluster patroniClusterResponse
+		decodeErr := json.NewDecoder(resp.Body).Decode(&cluster)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			errs = append(errs, fmt.Sprintf("%s: /cluster decode: %v", n.container, decodeErr))
+			continue
+		}
+		for _, m := range cluster.Members {
+			if m.Role == "leader" {
+				return m.Name, m.Port, nil
+			}
+		}
+		errs = append(errs, fmt.Sprintf("%s: /cluster ohne leader-Mitglied", n.container))
+	}
+	return "", 0, fmt.Errorf("kein Patroni-Primary gefunden unter %d Knoten: %s", len(nodes), strings.Join(errs, "; "))
+}
+
 // restorePostgres spiegelt restore-omp.shs `gunzip -c "$BACKUP_FILE" |
-// podman exec -i omp-postgres psql -U omp -v ON_ERROR_STOP=1 -q omp`
-// exakt, nur als Go-Prozesskette statt einer Shell-Pipe.
+// podman exec -i <primary> psql -U omp -v ON_ERROR_STOP=1 -q omp` exakt,
+// nur als Go-Prozesskette statt einer Shell-Pipe — Container+Port des
+// Ziels werden seit D15 bei jedem Restore neu über Patronis REST-API
+// ermittelt statt fest "omp-postgres" anzunehmen.
 func restorePostgres(backupPath string) error {
+	nodes := parsePatroniNodes(envOr("OMP_POSTGRES_PATRONI_NODES",
+		"omp-patroni-1=http://127.0.0.1:8008,omp-patroni-2=http://127.0.0.1:8018,omp-patroni-3=http://127.0.0.1:8028"))
+	container, port, err := resolvePrimary(context.Background(), nodes)
+	if err != nil {
+		return fmt.Errorf("primary-knoten ermitteln: %w", err)
+	}
+
 	f, err := os.Open(backupPath)
 	if err != nil {
 		return fmt.Errorf("backup-datei öffnen: %w", err)
@@ -226,7 +308,8 @@ func restorePostgres(backupPath string) error {
 		return fmt.Errorf("gunzip pipe: %w", err)
 	}
 
-	psql := exec.Command("podman", "exec", "-i", "omp-postgres", "psql", "-U", "omp", "-v", "ON_ERROR_STOP=1", "-q", "omp")
+	psql := exec.Command("podman", "exec", "-i", container, "psql",
+		"-h", "127.0.0.1", "-p", strconv.Itoa(port), "-U", "omp", "-v", "ON_ERROR_STOP=1", "-q", "omp")
 	psql.Stdin = gunzipOut
 	var psqlErr bytes.Buffer
 	psql.Stderr = &psqlErr

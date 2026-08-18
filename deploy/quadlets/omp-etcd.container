@@ -1,0 +1,33 @@
+[Unit]
+Description=OpenMediaPlatform Postgres-HA Koordination (etcd, ARCHITECTURE.md §19.3, UMSETZUNG.md D15)
+After=network-online.target
+
+[Container]
+Image=quay.io/coreos/etcd:v3.5.17
+ContainerName=omp-etcd
+# etcd-Dreiknoten-Cluster als Patronis DCS (Distributed Configuration
+# Store) — dieses Quadlet ist EIN Knoten, auf Bare-Metal/Produktion
+# läuft es unveraendert auf drei getrennten Hosts, je einmal (gleiches
+# Muster wie omp-nats.container, D14). ThisHost/EtcdHostB/EtcdHostC sind
+# Platzhalter, vor dem Deployment durch die echten Hostnamen ersetzen.
+# Standard-Ports 2379 (Client)/2380 (Peer) reichen hier, anders als das
+# simulierte Ein-Maschine-Dev-Setup in Makefile postgres-up (das drei
+# disjunkte Portsätze braucht, da alle drei Knoten dort denselben Host
+# teilen).
+Exec=etcd --name omp-etcd --data-dir /etcd-data \
+  --initial-advertise-peer-urls http://ThisHost:2380 --listen-peer-urls http://0.0.0.0:2380 \
+  --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://ThisHost:2379 \
+  --initial-cluster-token omp-etcd-cluster \
+  --initial-cluster omp-etcd=http://ThisHost:2380,EtcdHostB=http://EtcdHostB:2380,EtcdHostC=http://EtcdHostC:2380 \
+  --initial-cluster-state new
+Volume=omp-etcd-data:/etcd-data
+PublishPort=2379:2379
+PublishPort=2380:2380
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=30
+
+[Install]
+WantedBy=default.target

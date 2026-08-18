@@ -2511,19 +2511,143 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
    kein solcher Zustand mehr vorhanden) — sie startet ihre gegateten
    Loops einfach neu, die lesen ihren Ausgangsstand ohnehin frisch aus
    Postgres/Telemetrie.
-7. **NATS-Clustering seit D14 umgesetzt (2026-08-18); Postgres-HA
-   weiterhin bewusst zurückgestellt.** NATS-Clustering (3 Knoten,
-   natives Feature) war hier ursprünglich nur als "empfohlene,
-   aufwandsarme Ergänzung" genannt — inzwischen gebaut, s. eigener
-   Abschnitt unten. Postgres-HA (Patroni o. Ä.) bleibt dagegen ein
-   eigenes, aufwändiges Thema, weiterhin zurückgestellt (kein
-   natives "einfach drei Knoten"-Feature wie bei NATS — echte
-   Streaming-Replikation + Failover-Tooling). Ehrlich benannt: Raft
-   (D12) macht den Orchestrator-**Prozess** nicht mehr zum SPOF und
-   schließt die alte „Leader-Wahl hängt an Postgres"-Lücke; NATS-
-   Clustering (D14) macht zusätzlich den Event-Bus selbst redundant —
-   nur Postgres bleibt jetzt noch ein echter Single-Point-of-Failure
-   der Control-Plane.
+7. **NATS-Clustering seit D14 umgesetzt (2026-08-18); Postgres-HA seit
+   D15 umgesetzt (2026-08-18) — beide Rest-SPOFs geschlossen.**
+   NATS-Clustering (3 Knoten, natives Feature) war hier ursprünglich nur
+   als "empfohlene, aufwandsarme Ergänzung" genannt — inzwischen gebaut,
+   s. eigener Abschnitt oben. Postgres-HA (Nutzerentscheidung
+   2026-08-18: Patroni + etcd, industrieüblicher Standard statt eines
+   Eigenbaus auf dem bestehenden Raft-Cluster) ist ebenfalls gebaut, s.
+   §19.4 unten. Ehrlich benannt: Raft (D12) macht den Orchestrator-
+   **Prozess** nicht mehr zum SPOF und schließt die alte „Leader-Wahl
+   hängt an Postgres"-Lücke; NATS-Clustering (D14) macht den Event-Bus
+   redundant; Patroni/etcd (D15) macht zuletzt auch die eigentliche
+   Datenhaltung redundant — keiner der drei in diesem Abschnitt
+   ursprünglich benannten Bausteine (Orchestrator-Prozess, Event-Bus,
+   Datenbank) ist jetzt noch ein Single-Point-of-Failure der
+   Control-Plane.
+
+### 19.4 Umsetzung: Postgres-HA via Patroni + etcd (2026-08-18, UMSETZUNG.md D15)
+
+**Warum Patroni statt eines Eigenbaus auf dem bestehenden Raft-Cluster
+(Nutzerentscheidung 2026-08-18):** Zwei Optionen standen zur Wahl —
+(a) native Postgres-Streaming-Replikation mit Failover-Entscheidungen
+durch den bereits vorhandenen Raft-Leader (D12), kein neues externes
+Tool; (b) Patroni + etcd, der industrieübliche Standard. Der Unterschied
+ist nicht Aufwand, sondern **Fehlerklasse**: bei (a) müsste dieses
+Projekt Split-Brain-Vermeidung, Replikations-Lag-Grenzwerte und
+sichere Promotion-Semantik selbst nachbauen — bei einer Datenbank sind
+das genau die Fehler, die zu echtem, irreversiblem Datenverlust führen,
+anders als bei D12/D14 (dort war im Fehlerfall nur Koordination
+betroffen, nie Nutzdaten). (b) verlagert dieses Risiko auf ein
+Werkzeug, dessen Fehlerfälle bereits breit erprobt/dokumentiert sind —
+hier bewusst der Minimal-Dependency-Linie (§4.1/§4.3) vorgezogen,
+gleiche Abwägung wie bereits bei Raft selbst (§19.3 "Warum Raft").
+
+1. **DCS (Distributed Configuration Store): etcd, drei Knoten.** Nicht
+   das bereits vorhandene Raft-Cluster der Orchestrator-Instanzen (D12)
+   wiederverwendet — Patroni erwartet eine eigene, in seinem Betrieb
+   erprobte DCS-Anbindung (etcd/Consul/ZooKeeper/Kubernetes), kein
+   generisches Raft-Log; ein Adapter auf das Orchestrator-eigene Raft
+   wäre selbst wieder der unter Punkt 0 verworfene Eigenbau gewesen,
+   nur eine Schicht tiefer versteckt. `quay.io/coreos/etcd` (Dev:
+   `Makefile postgres-up`, drei Podman-Container mit `--network=host` —
+   gleiche Begründung wie bei NATS/D14, rootless Podmans Default-Bridge
+   löst Container-Namen für Peer-Adressen nicht zuverlässig genug auf).
+2. **Postgres-Image: selbst gebaut (`deploy/patroni/Dockerfile`), FROM
+   `postgres:16-alpine`.** Das erste selbst gebaute Image in diesem
+   Projekt — jeder andere Container läuft unverändert von Docker
+   Hub/quay.io. Kein vertrauenswürdiges, offiziell gepflegtes
+   "postgres+patroni"-Image existiert; Alpines eigenes Repo hat kein
+   `patroni`-Paket (live per `apk search` geprüft), deshalb
+   `pip install patroni[etcd3]` on top von exakt der Basis, die bisher
+   schon lief — keine neue, unbekannte Postgres-Distribution, nur
+   Patroni selbst kommt hinzu.
+3. **Client-seitiges Failover: `pgx`/`target_session_attrs=read-write`
+   statt eines Proxys (HAProxy o. Ä., der übliche Patroni-Begleiter).**
+   `lib/pq` (bisheriger Treiber, seit Jahren im Wartungsmodus) ersetzt
+   durch `jackc/pgx/v5/stdlib` — unterstützt seit Postgres v10 genormte
+   Mehr-Host-DSNs (`postgres://user:pw@host1,host2,host3/db?
+   target_session_attrs=read-write`) nativ. Der Verbindungs-Pool
+   verbindet sich beim (Re-)Connect automatisch mit dem Knoten, der
+   gerade tatsächlich beschreibbar ist (Patronis aktueller Primary) —
+   live verifiziert: `pgx` verweigerte im Test explizit Replikat-
+   Verbindungen (`ValidateConnect failed: read only connection`) und
+   versuchte nur den (zeitweise toten) Primary, genau wie beabsichtigt.
+   Gleiches Prinzip wie die kommagetrennte `NatsURL` (D14) — kein
+   zusätzlicher Netzwerk-Baustein, der Client übernimmt die Knotenwahl
+   selbst.
+4. **Backup/Restore: Primary-Ermittlung bei jedem Lauf neu, nicht
+   gecacht.** `orchestrator/internal/backup`, `supervisor/main.go`,
+   `deploy/dev/{backup,restore}-omp.sh` kannten bisher einen festen
+   Container-Namen ("omp-postgres"). Mit drei Knoten wechselt der
+   tatsächliche Primary bei jedem Failover — alle vier Stellen fragen
+   jetzt Patronis eigene REST-API (`GET .../cluster`, liefert Name/
+   Rolle/Port aller Mitglieder aus einer Antwort) neu ab, bevor sie
+   `pg_dump`/`psql` ausführen (Go-Version einmal in `internal/backup`,
+   in `supervisor/main.go` bewusst dupliziert statt importiert — eigenes
+   Modul, gleiches Muster wie die `defaultNatsURL`-Duplikation
+   Orchestrator/Host-Agent aus D14 — und ein drittes Mal in Bash für die
+   Dev-Skripte).
+
+**Drei echte, beim Bauen gefundene Bugs (nicht vorhergesehen, jeweils
+über Log-/Quelltext-Lektüre root-caused statt geraten):**
+
+- **Patroni bootstrappt nie, wenn die Konfiguration rein aus
+  Umgebungsvariablen besteht.** `ha.py`s Bootstrap-Zweig prüft wörtlich
+  `'bootstrap' in self.patroni.config` — ein Env-Var-only-Setup (wie bei
+  NATS/D14 erfolgreich) erreicht diesen verschachtelten Abschnitt nicht,
+  alle Knoten hängen dauerhaft in "waiting for leader to bootstrap".
+  Behoben durch eine mitgebaute `bootstrap.yml` (Log-/initdb-/
+  pg_hba-Konfiguration), per `CMD` im Image mitgegeben statt eines
+  reinen Env-Var-Setups.
+- **`initdb` verweigert sich als root.** Das offizielle
+  `postgres:16-alpine`-Image löst das über sein eigenes
+  `docker-entrypoint.sh` (das dieses Projekt hier NICHT nutzt, der
+  eigene `ENTRYPOINT` zeigt direkt auf `patroni`) — nachgebaut über ein
+  eigenes, schlankes `entrypoint.sh` (`chown` + `su-exec postgres`,
+  gleiches im Basis-Image bereits vorhandenes Werkzeug). Ein neu per
+  `pg_basebackup` angelegter Replica-Knoten übernahm zusätzlich nur die
+  Berechtigungen des Bind-Mount-Verzeichnisses (0755) statt der von
+  Postgres verlangten 0700 — im selben `entrypoint.sh` mit erzwungenem
+  `chmod 700` behoben.
+- **Ein neuer Replica-Knoten hing scheinbar reaktionslos in "bootstrap
+  from leader ... in progress".** `pg_stat_activity.wait_event` auf der
+  Primary zeigte `CheckpointStart`/`CheckpointDone`: `pg_basebackup`
+  wartet ohne `checkpoint: fast` auf den nächsten, über
+  `checkpoint_completion_target` verteilten regulären Checkpoint der
+  Primary (Postgres-Default, mehrere Minuten) — kein Fehler, nur eine
+  für den Dev-/Verifikationszyklus unpraktikable Wartezeit. Behoben
+  durch `postgresql.basebackup: [{checkpoint: fast}]` in `bootstrap.yml`.
+
+**Live verifiziert** (nicht nur Unit-Tests, gleiche Disziplin wie
+D12–D14): echter Drei-Knoten-etcd-Cluster (`etcdctl endpoint health`);
+echter Drei-Knoten-Patroni-Cluster (`patronictl list`: 1 Leader + 2
+Replikate, 0 Lag); ein echter Schreibvorgang auf dem Primary erschien
+binnen 2s auf einem Replikat; **`podman kill` des Primary-Containers**
+→ automatische Promotion eines Replikats nach Ablauf der DCS-TTL (30s,
+matched `bootstrap.dcs.ttl`), Schreibzugriffe auf dem neuen Primary
+funktionierten sofort, das dritte Mitglied folgte dem neuen Primary
+korrekt; der alte Primary rejoined nach Neustart automatisch als
+gesunder Replica (`pg_rewind`, keine manuelle Neusynchronisation
+nötig); ein echter, laufender Orchestrator-Prozess (Multi-Host-DSN,
+`pgx`) überstand denselben `podman kill`-Test ohne Neustart — Log zeigt
+`connection refused` auf den toten Primary und `ValidateConnect
+failed: read only connection` auf beiden Replikaten während der
+~30s-Lücke, danach lückenlos weiterlaufende Hintergrund-Loops (kein
+manueller Eingriff); `backup-omp.sh`/`restore-omp.sh` sowie
+`internal/backup.Service.Create` fanden den (durch den vorherigen Test
+bereits verschobenen) tatsächlichen Primary-Knoten korrekt über die
+REST-API, ohne Anpassung an den neuen Knoten-Namen.
+
+**Standards-Abdeckung:** keine (Patroni/etcd sind Betriebs-Infrastruktur,
+kein Broadcast-Standard betroffen). **Testbarkeit:** vollständig auf der
+Single-Host-Dev-Maschine simulierbar (drei Patroni-/etcd-Container mit
+disjunkten Portsätzen, `podman kill` einer Primary-Instanz → Promotion
+messbar über `patronictl list`/Patroni-REST-API `/cluster`). **Phase:**
+`UMSETZUNG.md` D15 (2026-08-18, in einer Sitzung abgeschlossen: Cluster-
+Infrastruktur → Client-seitige Primary-Discovery (`pgx`) → Backup/
+Restore-Anpassung → Dokumentation).
 
 **Umsetzung (2026-08-18, UMSETZUNG.md D14):** Drei `nats-server`-
 Prozesse (`--cluster`/`--routes`/`--cluster_name`, je ein eindeutiger
@@ -2857,7 +2981,7 @@ macht eine konkrete Empfehlung zur offenen §20.1-Frage.
 | Host-Totalausfall | N+1-Reservekapazität je Host-Pool/Fabric + automatisierte Migration bei Staleness | unerwarteten Hardware-/VM-Ausfall | I/O-Karten-gebundene Rollen ohne Ersatz-Host | §6.1/§18 |
 | Seamless (Genlock-Äquivalent) | Command-Mirroring + `omp-seamless-switch` (Zielbild, priorisierungsoffen) | unsichtbare Übernahme mitten in einer Transition | — (genau das ist der Zweck) | §20.1, Empfehlung §21.3 |
 | Control-Plane | Raft-Quorum zwischen Orchestrator-Instanzen (D12) | Steuerungsausfall bei Host-Verlust, auch bei gleichzeitigem Postgres-Ausfall | Postgres/NATS-eigene Redundanz | §19 |
-| Persistenz | NATS-Clustering (D14, erledigt); Postgres-HA weiterhin nicht gebaut | Datenverlust/Ausfall bei Postgres-Host-Ausfall (NATS-Host-Ausfall jetzt abgedeckt) | — | §19.3 Punkt 7 |
+| Persistenz | NATS-Clustering (D14, erledigt); Postgres-HA via Patroni+etcd (D15, erledigt) | — (beide früheren Host-Ausfallrisiken jetzt abgedeckt) | — | §19.3 Punkt 7, §19.4 |
 | Standort/Region | neu, §21.2 | kompletten Standortausfall | echte Sendefähigkeit von einem Zweitstandort (eigenes, größeres Vorhaben) | §21.2 |
 
 **Leseanleitung:** keine Zeile ersetzt eine andere — ein 24/7-Kanal

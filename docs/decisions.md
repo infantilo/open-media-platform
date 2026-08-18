@@ -18446,3 +18446,223 @@ Single-Point-of-Failure der Control-Plane.
 `host-agent/main.go`, `nodes/omp-node-sdk/src/health.rs`,
 `ARCHITECTURE.md` (§19.3 Punkt 7, §20-Gap-Tabelle), `UMSETZUNG.md`
 (D14 + Checkliste).
+
+## 2026-08-18 (Nachtrag 152) — Schritt D15: Postgres-HA via Patroni + etcd (ARCHITECTURE.md §19.3 Punkt 7, §19.4), letzter Rest-SPOF geschlossen
+
+**Kontext:** Nutzerauftrag "update and push git. solve SPOF postgress."
+im Anschluss an D14 — der von D12/D14 offen benannte letzte
+Single-Point-of-Failure der Control-Plane. Vor der Umsetzung per
+`AskUserQuestion` geklärt statt geraten: Patroni + etcd (industrieüblicher
+Standard) gegen (a) native Streaming-Replikation mit Failover-
+Entscheidungen durch den bereits vorhandenen D12-Raft-Leader (kein
+neues externes Tool) und (b) Replikation ohne automatischen Failover.
+Nutzer wählte explizit Patroni + etcd. Begründung im Rückblick: bei
+einer Datenbank ist Split-Brain/Datenverlust die falsche Fehlerklasse
+für einen Erstversuch in Eigenbau-Code — anders als bei D12/D14, wo im
+Fehlerfall nur Koordination, nie Nutzdaten betroffen waren.
+
+**Design-Entscheidungen:**
+
+1. **DCS: etcd, nicht das bestehende D12-Raft-Cluster wiederverwendet.**
+   Patroni erwartet eine in seinem eigenen Betrieb erprobte DCS-Anbindung
+   (etcd/Consul/ZooKeeper/Kubernetes) — ein Adapter auf das
+   Orchestrator-eigene Raft wäre selbst wieder der verworfene Eigenbau
+   gewesen, nur eine Schicht tiefer versteckt. `quay.io/coreos/etcd`
+   v3.5.17, drei Knoten.
+2. **Postgres-Image: erstes selbst gebautes Image dieses Projekts.**
+   Jeder andere Container läuft bisher unverändert von Docker Hub/
+   quay.io. Recherche vor der Umsetzung (nicht geraten): Alpines
+   `apk search patroni` liefert nichts — kein natives Paket. `FROM
+   docker.io/library/postgres:16-alpine` + `pip install
+   patroni[etcd3]==4.1.5` (Alpine hat `py3-pip`/`py3-psycopg2`,
+   psycopg2 vorkompiliert). `deploy/patroni/Dockerfile`.
+3. **Client-seitiges Failover: `pgx` + `target_session_attrs=read-write`
+   statt eines HAProxy-Vorbaus (der übliche Patroni-Begleiter).**
+   `lib/pq` (Wartungsmodus seit Jahren) unterstützt keine Mehr-Host-DSNs.
+   `jackc/pgx/v5/stdlib` unterstützt das native Postgres-Feature seit
+   v10 (`target_session_attrs`) direkt — kein zusätzlicher Netzwerk-
+   Baustein nötig, gleiches Prinzip wie die kommagetrennte `NatsURL`
+   (D14).
+4. **Backup/Restore: Primary-Ermittlung bei jedem Lauf neu.** Vier
+   Stellen kannten bisher einen festen "omp-postgres"-Container-Namen
+   (`internal/backup`, `supervisor/main.go`, zwei Dev-Skripte) — mit
+   drei Knoten wechselt der tatsächliche Primary bei jedem Failover.
+   Alle vier fragen jetzt Patronis eigene `GET .../cluster`-REST-API
+   (liefert Name/Rolle/Port aller Mitglieder in einer Antwort).
+
+**Drei echte Funde bei der Umsetzung (live, nicht vorhergesehen, jeweils
+über Log-/Quelltext-Lektüre root-caused statt geraten):**
+
+1. **Patroni bootstrappt nie mit reiner Env-Var-Konfiguration.** Erster
+   Versuch (nur `PATRONI_*`-Umgebungsvariablen, kein YAML-File — genau
+   das Muster, das bei NATS/D14 funktionierte) ließ alle drei Knoten
+   dauerhaft in "waiting for leader to bootstrap" hängen. Quelltext-Lektüre
+   (`patroni/ha.py`, Methode `bootstrap()`) zeigte die Ursache:
+   ```
+   if self.cluster.is_unlocked() and self.cluster.initialize is None \
+           and not self.patroni.nofailover and 'bootstrap' in self.patroni.config:
+   ```
+   `'bootstrap' in self.patroni.config` ist mit reinen Env-Vars nie
+   erfüllt — der verschachtelte `initdb`/`pg_hba`/`users`-Abschnitt lässt
+   sich darüber nicht ausdrücken. Behoben durch eine mitgebaute
+   `bootstrap.yml`, als `CMD`-Argument an `patroni` übergeben.
+2. **`initdb` verweigert sich als root.** Das offizielle
+   `postgres:16-alpine`-Image löst das über sein eigenes
+   `docker-entrypoint.sh` (chown+`gosu postgres`) — hier NICHT genutzt,
+   `ENTRYPOINT` zeigt direkt auf `patroni`. Fehler: "initdb: error:
+   cannot be run as root". Nachgebaut über ein eigenes `entrypoint.sh`
+   (`chown -R postgres:postgres` + `su-exec postgres patroni`, `su-exec`
+   bereits im Basis-Image vorhanden). Zweiter, verwandter Fund direkt im
+   Anschluss: ein per `pg_basebackup` NEU angelegter Replica-Knoten
+   übernahm nur die 0755-Berechtigung des Host-Bind-Mount-Verzeichnisses
+   statt der von Postgres verlangten 0700 ("data directory ... has
+   invalid permissions") — `initdb` selbst setzt das für einen frischen
+   Bootstrap-Knoten korrekt, `pg_basebackup` in ein bereits bestehendes
+   Verzeichnis NICHT. Behoben durch explizites `chmod 700` im selben
+   `entrypoint.sh`, für beide Fälle.
+3. **Ein neuer Replica-Knoten hing scheinbar reaktionslos in "bootstrap
+   from leader ... in progress".** Kein Fehler im Log. Diagnose über
+   `SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE
+   usename='replicator'` auf der Primary: `wait_event`
+   `CheckpointStart`/`CheckpointDone` — `pg_basebackup` wartet ohne
+   `--checkpoint=fast` auf den nächsten, über `checkpoint_completion_target`
+   verteilten regulären Checkpoint der Primary (Postgres-Default, kann
+   mehrere Minuten dauern). Ein manuelles `CHECKPOINT;` auf der Primary
+   löste die laufenden Basebackups sofort. Dauerhaft behoben über
+   `postgresql.basebackup: [{checkpoint: fast}]` in `bootstrap.yml` (gilt
+   für JEDEN Basebackup-Lauf, nicht nur den initialen Cluster-Bootstrap).
+
+**Umsetzung:**
+
+- `deploy/patroni/{Dockerfile,bootstrap.yml,post-init.sh,entrypoint.sh}`
+  (neu). `post-init.sh` legt Rolle+Datenbank "omp" selbst an (NICHT über
+  `bootstrap.users` — `post_init` läuft VOR der `users`-Anwendung, ein
+  vierter kleinerer, ebenfalls live gefundener Reihenfolge-Fund: ein
+  erster Versuch mit `CREATE DATABASE ... OWNER omp` im `post_init`-Skript
+  bei gleichzeitig über `users:` definierter Rolle "omp" schlug mit "role
+  omp does not exist" fehl).
+- `Makefile`: neues `postgres-up`-Target. Erstbootstrap-Reihenfolge nur
+  beim allerersten Start (kein Container existiert noch): Knoten 1 zuerst
+  vollständig hochfahren lassen (Poll auf `role: primary` über dessen
+  REST-API), dann Knoten 2+3 — alle drei gleichzeitig starten lässt sie
+  bei einem echten Erstbootstrap unendlich hängen (derselbe Bug wie Fund
+  1 oben, aber durch die Start-Reihenfolge ausgelöst statt durch fehlende
+  Config: jeder Knoten sieht in der Race-Situation bereits
+  Mitgliedseinträge der anderen in etcd, aber keinen erfolgreich
+  gesetzten Initialize-Schlüssel, und hält sich deshalb selbst für nicht
+  bootstrap-berechtigt). Bei einem Neustart bereits bestehender Container
+  entfällt das (jeder Knoten kennt seine Rolle aus eigenem
+  Datenverzeichnis + etcd). `up`/`down`/`status` rufen `postgres-up` auf
+  statt des bisherigen Einzelknoten-`omp-postgres`-Containers.
+- `orchestrator/internal/db/db.go`: `lib/pq` → `jackc/pgx/v5/stdlib`.
+  `internal/dbtest`: `pq.QuoteIdentifier`/`*pq.Error` →
+  `pgx.Identifier{}.Sanitize()`/`*pgconn.PgError` (`errors.As`).
+  `internal/auth/store.go`: `isUniqueViolation` auf `*pgconn.PgError`
+  umgestellt. `internal/ioports/ioports.go`: `pq.Array(reported)` entfällt
+  ersatzlos — `pgx`s `database/sql`-Treiber kodiert Go-Slices bereits
+  selbst als Postgres-Arrays, live gegen die echte Migration verifiziert
+  statt vermutet.
+- `orchestrator/internal/config/config.go`: `defaultPostgresURL` jetzt
+  `postgres://omp:omp@localhost:5432,localhost:5442,localhost:5452/omp?
+  sslmode=disable&target_session_attrs=read-write` (Ports exakt wie
+  `Makefile postgres-up`). `PostgresContainer`/`OMP_POSTGRES_CONTAINER`
+  ersetzt durch `PatroniNodes`/`OMP_POSTGRES_PATRONI_NODES`
+  ("container=resturl"-Paare).
+- `orchestrator/internal/backup/backup.go`: `Service.containerName` →
+  `Service.nodes []PatroniNode`; `resolvePrimary` fragt `GET
+  {RestURL}/cluster` (liefert `members[].{name,role,port}` in einer
+  Antwort — reicht bereits eine erreichbare REST-API, Patroni
+  synchronisiert die Topologie über die gemeinsame DCS) statt `/primary`
+  auf jedem Knoten einzeln abzuklopfen (schlankere erste Fassung wurde
+  während der Umsetzung durch diese ersetzt, weil `/cluster` zusätzlich
+  den für `pg_dump -p` nötigen Port mitliefert, den `/primary` nicht
+  preisgibt — ohne diesen Port verband sich `pg_dump` mangels `-p` auf
+  den falschen Default-Port 5432 und scheiterte mit "No such file or
+  directory" auf dem Unix-Socket-Pfad, ein weiterer live gefundener,
+  kleinerer Fund).
+- `supervisor/main.go`: identische Resolver-Logik dupliziert (eigenes
+  Go-Modul, gleiches Muster wie die `defaultNatsURL`-Duplikation aus
+  D14) — `restorePostgres` ermittelt Container+Port vor jedem Restore
+  neu.
+- `deploy/dev/{backup,restore}-omp.sh`: dieselbe Logik ein drittes Mal in
+  Bash (`curl .../cluster | python3 -c '...'`).
+- `deploy/quadlets/omp-postgres.container` entfernt, ersetzt durch
+  `omp-etcd.container`/`omp-patroni.container` (Drei-Host-Platzhalter,
+  gleiches Muster wie `omp-nats.container` aus D14; Passwörter als
+  Platzhalter mit Verweis auf externes Secret-Management).
+
+**Automatisierte Verifikation:** `go build/vet/test ./...` grün in
+`orchestrator` (alle Postgres-Store-Tests real gegen den neuen
+Patroni-Primary: `db`, `dbtest`, `auth`, `ioports`, `workflows`, `hosts`,
+`snapshots`, `layouts`, `launcher`, `profiles`, `audit`, `authz`) UND in
+`supervisor`. `lib/pq` per `go mod tidy` vollständig aus go.mod/go.sum
+entfernt.
+
+**Live verifiziert (nicht nur Unit-Tests):**
+
+1. Drei echte `etcd`-Prozesse gestartet, Cluster-Bildung über `etcdctl
+   endpoint health` (alle drei "healthy") und `member list` bestätigt.
+2. Drei echte Patroni-Prozesse (Erstbootstrap-Reihenfolge s. o.):
+   `patronictl list` zeigte 1 Leader + 2 Replikate, `state: streaming`,
+   0 Lag. `pg_stat_replication` auf der Primary bestätigte zwei aktive
+   `async`-Streaming-Verbindungen.
+3. Ein echter Schreibvorgang (`INSERT`) auf dem Primary erschien binnen
+   2s per `SELECT` auf einem Replikat.
+4. **`podman kill` des Primary-Containers:** nach ~30s (matched
+   `bootstrap.dcs.ttl: 30`) zeigte die REST-API eines Replikats
+   `role: primary` — automatische Promotion bestätigt, nicht nur
+   angenommen. Ein Schreibvorgang auf dem neuen Primary replizierte
+   sofort korrekt zum verbliebenen dritten Knoten. Der alte
+   (neugestartete) Primary rejoined automatisch als gesunder Replica
+   (`pg_rewind`, Log zeigt "selected new timeline"/"doing crash recovery
+   in a single user mode", `patronictl list` bestätigte 3/3 Knoten
+   streaming binnen ~15s nach Neustart) — kein manueller Eingriff nötig.
+5. Ein echter, per `go build` erzeugter Orchestrator-Prozess (Default-
+   Mehr-Host-`OMP_POSTGRES_URL`, Raft-Port/-Datenverzeichnis für den
+   Test isoliert von der laufenden Dev-Instanz) verband sich erfolgreich
+   und beantwortete API-Aufrufe. Während desselben `podman kill`-Tests
+   wie oben zeigte sein Log für die volle ~30s-Lücke wiederholte,
+   erwartete Fehler auf ALLEN drei Adressen der Mehr-Host-DSN: "connection
+   refused" auf dem toten Primary, UND — der eigentliche Beweis, dass
+   `target_session_attrs=read-write` korrekt wirkt — "ValidateConnect
+   failed: read only connection" auf BEIDEN weiterhin laufenden
+   Replikaten (der Treiber verweigerte sie aktiv als Schreibziel, statt
+   sie fälschlich zu akzeptieren). Nach der Promotion (~28s) liefen alle
+   Hintergrund-Loops (`workflows: failoverTick`, `workflows: scheduler`,
+   `placement: list hosts`) ohne jeden weiteren Fehler und ohne
+   Prozess-Neustart weiter — kein manueller Eingriff.
+6. `backup-omp.sh` fand danach korrekt den (durch Test 4 bereits
+   verschobenen) tatsächlichen neuen Primary-Knoten über dessen REST-API
+   und erstellte einen echten `pg_dump`. `restore-omp.sh` spielte diesen
+   Dump gegen denselben, korrekt ermittelten Primary erfolgreich zurück
+   (`set_config`/`setval`-Ausgabe von `psql` bestätigt echte Ausführung,
+   nicht nur Exit-Code 0). Eine eigens für den Go-seitigen Test
+   angelegte, danach wieder entfernte `live_verify_test.go` bestätigte
+   dieselbe Dynamik für `internal/backup.Service.Create` (gleiches
+   Muster wie die bereits bestehende Live-Test-Konvention in
+   `backup_test.go`: podman-anfassende Pfade werden von Hand verifiziert,
+   nicht als dauerhafter Testcode gehalten).
+
+Ausgefallener Primary-Container nach Test 4 neu gestartet und Rejoin
+bestätigt (s. o.). Legacy-Container `omp-postgres` (Vor-D15-Zustand)
+entfernt. Alle Demo-/Test-Artefakte (`/tmp/omp-d15-*`, temporäre
+Orchestrator-Instanz) aufgeräumt, das Drei-Knoten-etcd+Patroni-Cluster
+selbst bewusst laufen gelassen (neuer Dev-Normalzustand nach `make up`,
+kein Sitzungs-Artefakt).
+
+**Bewusst nicht Teil dieser Sitzung:** keine — mit D15 sind alle drei in
+§19.3 ursprünglich benannten Rest-SPOFs (Orchestrator-Prozess/D12,
+Event-Bus/D14, Datenhaltung/D15) geschlossen.
+
+**Dateien:** `deploy/patroni/{Dockerfile,bootstrap.yml,post-init.sh,
+entrypoint.sh}` (neu), `deploy/quadlets/omp-postgres.container`
+(entfernt), `deploy/quadlets/{omp-etcd,omp-patroni}.container` (neu),
+`Makefile`, `orchestrator/internal/db/db.go`,
+`orchestrator/internal/dbtest/dbtest.go`,
+`orchestrator/internal/auth/store.go`,
+`orchestrator/internal/ioports/ioports.go`,
+`orchestrator/internal/backup/backup.go`,
+`orchestrator/internal/config/{config,config_test}.go`,
+`orchestrator/main.go`, `supervisor/main.go`,
+`deploy/dev/{backup,restore}-omp.sh`, `ARCHITECTURE.md` (§19.3 Punkt 7,
+§19.4 neu, §20-Gap-Tabelle), `UMSETZUNG.md` (D15 + Checkliste).

@@ -26,13 +26,15 @@ package dbtest
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
 )
@@ -99,17 +101,18 @@ func deriveTestDSN(dsn string) (testDSN, dbName string, err error) {
 // DATABASE. Ein bereits existierendes "<db>_test" (jeder Testlauf außer
 // dem allerersten) ist der Normalfall, kein Fehler.
 func ensureDatabaseExists(originalDSN, testDBName string) error {
-	admin, err := sql.Open("postgres", originalDSN)
+	admin, err := sql.Open("pgx", originalDSN)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
 	}
 	defer admin.Close()
 
-	_, err = admin.Exec(fmt.Sprintf("CREATE DATABASE %s", pq.QuoteIdentifier(testDBName)))
+	_, err = admin.Exec(fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{testDBName}.Sanitize()))
 	if err == nil {
 		return nil
 	}
-	if pqErr, ok := err.(*pq.Error); ok && string(pqErr.Code) == postgresDuplicateDatabase {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == postgresDuplicateDatabase {
 		return nil
 	}
 	return err

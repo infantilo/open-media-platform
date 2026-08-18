@@ -2152,6 +2152,97 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   damit der einzige der beiden in §19.3 Punkt 7 genannten Rest-SPOFs,
   der geschlossen wurde.
 
+- **D15 (erledigt, 2026-08-18) — Postgres-HA via Patroni + etcd
+  (ARCHITECTURE.md §19.3 Punkt 7, §19.4).** Nutzerauftrag "solve SPOF
+  postgres" im Anschluss an D14 — löst den letzten von D12/D14 offen
+  benannten Rest-SPOF. Nutzerentscheidung vor der Umsetzung (Frage
+  gestellt, nicht geraten): Patroni + etcd (industrieüblicher Standard)
+  statt eines Eigenbaus auf dem bestehenden Raft-Cluster (D12) — bei
+  einer Datenbank ist Split-Brain/Datenverlust die falsche Fehlerklasse
+  für einen Erstversuch in eigenem Code.
+
+  **Drei echte Funde beim Umsetzen, keiner vorhergesehen** (jeweils über
+  Log-/Quelltext-Lektüre root-caused): (1) Patroni bootstrappt nie mit
+  reiner Env-Var-Konfiguration — `ha.py` prüft wörtlich `'bootstrap' in
+  self.patroni.config`, alle Knoten hingen dauerhaft in "waiting for
+  leader to bootstrap"; behoben durch eine mitgebaute `bootstrap.yml`.
+  (2) `initdb` verweigert sich als root (das eigene `ENTRYPOINT` umgeht
+  das offizielle `postgres:16-alpine`-Entrypoint-Skript, das das sonst
+  löst) und ein per `pg_basebackup` neu angelegter Replica-Knoten
+  übernahm nur die 0755-Berechtigung des Bind-Mounts statt der von
+  Postgres verlangten 0700 — beides behoben in einem eigenen
+  `entrypoint.sh` (`chown`+`su-exec postgres`+`chmod 700`). (3) Ein
+  neuer Replica-Knoten hing scheinbar reaktionslos in "bootstrap from
+  leader ... in progress" — `pg_stat_activity.wait_event` zeigte
+  `CheckpointStart`/`CheckpointDone`: `pg_basebackup` wartet ohne
+  `checkpoint: fast` auf den nächsten, über mehrere Minuten verteilten
+  regulären Checkpoint der Primary; behoben durch
+  `postgresql.basebackup: [{checkpoint: fast}]`.
+
+  **Umsetzung:** `deploy/patroni/{Dockerfile,bootstrap.yml,post-init.sh,
+  entrypoint.sh}` (neu) — erstes selbst gebautes Image in diesem Projekt,
+  FROM `postgres:16-alpine` (kein offizielles "postgres+patroni"-Image
+  verfügbar, Alpine hat kein `patroni`-Paket, live per `apk search`
+  geprüft). `Makefile`: neues `postgres-up`-Target (etcd-Dreiknoten-
+  Cluster + Patroni-Dreiknoten-Cluster, `--network=host`, mit
+  Erstbootstrap-Reihenfolge nur beim allerersten Start: Knoten 1 zuerst
+  vollständig hochfahren lassen, dann 2+3 — alle drei gleichzeitig
+  lassen sie sonst unendlich auf "waiting for leader to bootstrap"
+  hängen, live gefunden); `up`/`down`/`status` rufen es auf statt des
+  bisherigen Einzelknoten-`omp-postgres`. `orchestrator/internal/db`:
+  `lib/pq` → `jackc/pgx/v5/stdlib` (unterstützt Mehr-Host-DSNs +
+  `target_session_attrs=read-write` nativ, `lib/pq` nicht) — betrifft
+  auch `internal/dbtest` (`pq.QuoteIdentifier`/`*pq.Error` →
+  `pgx.Identifier{}.Sanitize()`/`*pgconn.PgError`), `internal/auth`
+  (`isUniqueViolation`), `internal/ioports` (`pq.Array` entfällt, `pgx`
+  kodiert Go-Slices bereits selbst als Postgres-Arrays).
+  `config.go`: `defaultPostgresURL` jetzt eine Mehr-Host-DSN mit
+  `target_session_attrs=read-write`; `PostgresContainer` (fester
+  Container-Name) ersetzt durch `PatroniNodes` (Container↔REST-API-
+  Adress-Paare) — `internal/backup`, `supervisor/main.go`,
+  `deploy/dev/{backup,restore}-omp.sh` fragen bei JEDEM Lauf Patronis
+  REST-API (`GET .../cluster`) nach dem aktuellen Primary, statt einen
+  Container-Namen fest anzunehmen (Go-Version in `internal/backup`
+  einmal implementiert, in `supervisor/main.go` bewusst dupliziert statt
+  importiert — eigenes Modul, gleiches Muster wie die
+  `defaultNatsURL`-Duplikation aus D14; ein drittes Mal in Bash für die
+  Dev-Skripte). `deploy/quadlets/omp-postgres.container` entfernt,
+  ersetzt durch `omp-etcd.container`/`omp-patroni.container`
+  (Produktions-Referenz, Drei-Host-Platzhalter wie bei
+  `omp-nats.container`, D14).
+
+  **Verifikation (bestanden):** `go build/vet/test ./...` grün in
+  orchestrator UND supervisor (u. a. alle Postgres-Store-Tests real
+  gegen den neuen Patroni-Primary, `config_test.go` auf die neue
+  Mehr-Host-DSN umgestellt), `lib/pq` vollständig aus go.mod/go.sum
+  entfernt. **Live verifiziert, nicht nur Unit-Tests:** echter
+  Drei-Knoten-etcd-Cluster (`etcdctl endpoint health`); echter
+  Drei-Knoten-Patroni-Cluster (`patronictl list`: 1 Leader + 2 Replikate,
+  0 Lag, `pg_stat_replication` bestätigt Streaming); ein Schreibvorgang
+  auf dem Primary erschien binnen 2s auf einem Replikat.
+  **`podman kill` des Primary-Containers** → automatische Promotion
+  eines Replikats nach ~30s (DCS-`ttl`), Schreibzugriffe auf dem neuen
+  Primary funktionierten sofort, das dritte Mitglied folgte korrekt; der
+  alte Primary rejoined nach Neustart automatisch als gesunder Replica
+  (`pg_rewind`, keine manuelle Neusynchronisation). Ein echter,
+  laufender Orchestrator-Prozess (neue Mehr-Host-DSN) überstand
+  denselben `podman kill`-Test OHNE Neustart — Log zeigt während der
+  ~30s-Lücke `connection refused` auf den toten Primary UND
+  `ValidateConnect failed: read only connection` auf beiden Replikaten
+  (pgx verweigerte korrekt Schreibversuche gegen Read-only-Knoten),
+  danach lückenlos weiterlaufende Hintergrund-Loops ohne manuellen
+  Eingriff. `backup-omp.sh`/`restore-omp.sh` sowie
+  `internal/backup.Service.Create` (Live-Testdatei, nach Verifikation
+  wieder entfernt — gleiches Muster wie andere podman-anfassende Tests
+  in diesem Projekt) fanden den durch den vorherigen Test bereits
+  verschobenen tatsächlichen Primary-Knoten korrekt über die REST-API,
+  ohne jede Anpassung. Ein vollständiger Backup→Restore-Zyklus gegen den
+  echten, gerade aktuellen Primary lief fehlerfrei durch. Details:
+  `docs/decisions.md` Nachtrag 152.
+  **Bewusst nicht Teil dieser Sitzung:** keine offenen Rest-SPOFs mehr
+  in §19.3/§19.4 — Orchestrator-Prozess (D12), Event-Bus (D14) und
+  Datenhaltung (D15) sind jetzt alle redundant.
+
 ---
 
 ## 6a. Kapitel 10 — Endziel-Anforderungen (`docs/END-GOAL-FEATURES.md`)
@@ -2816,3 +2907,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D12 Teil 3 (Aktiv/Passiv-Gating, Plan bei Umsetzung vereinfacht) | erledigt | Direkter Nutzerauftrag "proceed" im Anschluss an Teil 2. Code-Lektüre vor der Umsetzung zeigte: die geplante FSM-Migration der §19.3-Punkt-5-Zustände (Migrations-Sperren, Crash-Loop-Zähler, Standby-Beförderung, Scheduler-Feuerzustand) ist unnötig — alle vier sind bereits rein lokale Objekte einer Prozessinstanz, Aktiv/Passiv-Gating der erzeugenden Loops allein macht Doppel-Ausführung strukturell unmöglich. Neue `main.go`-Helfer `runWhileLeader`/`subscribeWhileLeader` (2s-Poll auf `cluster.Node.IsLeader()`) gaten `placementEngine.Run`/`workflowScheduler.Run`/`workflowSvc.RunFailoverWatcher` sowie die `omp.host.*.events`-NATS-Subscription — bei deren Analyse ein echter, bisher unbemerkter Multi-Instanz-Bug gefunden: jede Cluster-Instanz hätte denselben Broadcast-Subject unabhängig abonniert und unabhängig Crash-Loop-Zählung/Failover-Promotion ausgelöst. `scheduler.go`: `LastFiredAt` wird jetzt vor statt nach dem Feuern persistiert (schließt eine seit D7 Teil 2 bestehende, von Clustering unabhängige Doppel-Feuer-Lücke bei Persistenzfehlern/Prozess-Crash). `go build/vet/test ./...` grün (`go vet` fand einen echten lostcancel-Bug in der ersten `runWhileLeader`-Fassung, behoben durch return-basierte Cancel-Weitergabe; neuer Test `TestSchedulerDoesNotFireIfPersistFails`). Live mit drei echten Prozessen verifiziert: ein sofort fälliger Schedule feuerte nachweislich nur auf der Leader-Instanz (Log + `GET /api/v1/instances` bestätigten genau einen tatsächlichen Start), NATS `/subsz` zeigte genau eine aktive Subscription cluster-weit; nach `kill -9` des Leaders migrierten sowohl die Scheduler-Aktivität als auch die NATS-Subscription nachweislich zur neuen Leader-Instanz. Details: `docs/decisions.md` Nachtrag 149. Mit Teil 3 ist D12 vollständig abgeschlossen. | 2026-08-18 |
 | D13 (I/O-Karten-Claim/Release, ARCHITECTURE.md §6.1 Erweiterung 2026-07-10) | erledigt | Nutzerauftrag "make I/O-card claim/release" im Anschluss an D12 — schließt die seit 2026-07-10 offen dokumentierte Lücke ("kein Geräte-Inventar vorhanden"). Zwei Design-Entscheidungen vor der Umsetzung geklärt: Inventar wird vom Host-Agent aus einer lokalen JSON-Datei gelesen (`OMP_HOST_AGENT_IO_PORTS_PATH`), nicht automatisch per Hersteller-SDK erkannt (echte Hardware zum Testen fehlt); Claim/Release lebt in Postgres (neues Paket `internal/ioports`, atomarer `WITH … FOR UPDATE OF … SKIP LOCKED … INSERT … ON CONFLICT DO NOTHING`-Satz, `PRIMARY KEY (host_id, port_id)` als Exklusivitäts-Garantie), nicht im D12-Raft-FSM — dieselbe bei D12 Teil 3 gewonnene Lehre bestätigt sich. `workflows.Role.RequiredIOPort` (additiv), `Service.Start()` claimt als dritten synchronen Preflight VOR `StatusStarting` (ehrliche Ablehnung + Rollback bei Teilfehler, kein Teil-Start), `Service.Stop()` gibt frei, `migration.go: executeMigration` erzwingt die Migrations-Grenze ("nicht migrierbar" ohne freien Zielport, kein stiller Fallback) für beide Trigger (manueller Drag-Umzug UND automatische Placement-Eskalation, gemeinsamer Code-Pfad). `GET /api/v1/hosts` liefert Inventar+Belegung mit. `go build/vet/test ./...` grün (10 neue `ioports`-Tests inkl. echtem 20-Goroutinen-Nebenläufigkeitstest gegen echtes Postgres, 6 neue `workflows`-Tests, 4 neue `host-agent`-Tests). Live mit echtem Host-Agent-Prozess + echtem Orchestrator verifiziert: Registrierung mit Inventar, Claim beim Start sichtbar in `GET /api/v1/hosts`, konkurrierender zweiter Start ehrlich mit HTTP 400 abgelehnt, nach `Stop()` sofort wieder claimbar — alle Testdaten danach aus der Dev-Postgres entfernt. Details: `docs/decisions.md` Nachtrag 150. | 2026-08-18 |
 | D14 (NATS-Clustering, ARCHITECTURE.md §19.3 Punkt 7) | erledigt | Nutzerauftrag "NATS clustering" im Anschluss an D13 — löst den seit D12 offen benannten Rest-SPOF ("Raft macht Postgres/NATS selbst nicht redundant"). Drei `nats-server`-Prozesse (`--cluster`/`--routes`/`--cluster_name`) statt einem, dev per `Makefile up` (drei Podman-Container, `--network=host`), Produktion als drei `omp-nats`-Quadlets auf drei echten Hosts. Zwei echte Funde: JetStream+Clustering verlangt einen eindeutigen `--server_name` pro Knoten (Server brach sonst sofort ab); `nats.go` teilt eine kommagetrennte `OMP_NATS_URL` bereits selbst auf, `async-nats` (Rust-SDK) NICHT (`impl ToServerAddrs for str` parst die gesamte Zeichenkette als eine Adresse) — behoben durch neue `parse_server_addrs`-Funktion im einzigen NATS-Connect-Ort des Node-SDK (`omp-node-sdk::health`, deckt alle 22 Node-Typen mit einem Fix ab). `OMP_NATS_URL`-Default in Orchestrator/Host-Agent jetzt die Drei-Adressen-Liste, kein weiterer Go-Code-Unterschied nötig (Reconnect-Optionen waren schon vor D14 gesetzt). `go build/vet/test ./...` + `cargo test --workspace`/`cargo clippy` grün. Live verifiziert: echte Drei-Knoten-Cluster-Bildung (`/routez`), Cross-Node-Pub/Sub-Routing, ein echter Orchestrator-Prozess überlebte per `podman kill` des verbundenen Knotens einen automatischen Reconnect (Log: "nats disconnected"/"nats reconnected", kein Prozess-Neustart) mit voller Funktionsfähigkeit danach, ein echter GStreamer/MXL-`omp-source`-Rust-Node verband sich nachweislich (NATS `/connz`, `lang: rust`) über die neue Drei-Adressen-URL. Details: `docs/decisions.md` Nachtrag 151. | 2026-08-18 |
+| D15 (Postgres-HA via Patroni+etcd, ARCHITECTURE.md §19.3 Punkt 7, §19.4) | erledigt | Nutzerauftrag "solve SPOF postgres" im Anschluss an D14 — löst den letzten offen benannten Rest-SPOF. Nutzerentscheidung vor der Umsetzung: Patroni+etcd statt Eigenbau auf dem D12-Raft-Cluster (Fehlerklasse Datenverlust rechtfertigt den erprobten Standard). Drei echte Funde: Patroni bootstrappt nie mit reiner Env-Var-Konfiguration (`'bootstrap' in self.patroni.config`-Check in `ha.py`), `initdb` verweigert root + ein neuer Replica übernahm falsche Verzeichnisrechte (eigenes `entrypoint.sh` behebt beides), `pg_basebackup` hängt ohne `checkpoint: fast` mehrere Minuten auf dem nächsten regulären Checkpoint. Erstes selbst gebautes Image des Projekts (`deploy/patroni/`, FROM `postgres:16-alpine` + Patroni via pip, kein offizielles Image verfügbar). `lib/pq` → `jackc/pgx/v5/stdlib` (Mehr-Host-DSN + `target_session_attrs=read-write`, kein Proxy nötig). Backup/Restore (`internal/backup`, `supervisor/main.go`, Dev-Skripte) fragen jetzt bei jedem Lauf Patronis REST-API nach dem aktuellen Primary statt einen Container-Namen fest anzunehmen. `go build/vet/test ./...` grün in orchestrator+supervisor. Live verifiziert: echter Drei-Knoten-etcd+Patroni-Cluster (1 Leader+2 Replikate, 0 Lag), `podman kill` des Primary → automatische Promotion nach ~30s, alter Primary rejoined automatisch (`pg_rewind`); ein echter Orchestrator-Prozess mit der neuen Mehr-Host-DSN überstand denselben Test ohne Neustart (Log zeigt pgx verweigert Replikate korrekt, danach lückenlos weiterlaufende Loops); Backup+Restore gegen den durch den vorherigen Failover-Test bereits verschobenen echten Primary liefen fehlerfrei. Details: `docs/decisions.md` Nachtrag 152. | 2026-08-18 |

@@ -32,8 +32,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.CatalogPath != "../deploy/catalog.json" {
 		t.Errorf("CatalogPath = %q, want %q", cfg.CatalogPath, "../deploy/catalog.json")
 	}
-	if want := "postgres://omp:omp@localhost:5432/omp?sslmode=disable"; cfg.PostgresURL != want {
-		t.Errorf("PostgresURL = %q, want %q", cfg.PostgresURL, want)
+	if cfg.PostgresURL != defaultPostgresURL {
+		t.Errorf("PostgresURL = %q, want %q", cfg.PostgresURL, defaultPostgresURL)
 	}
 	if cfg.MTLSEnabled {
 		t.Error("MTLSEnabled = true, want false (opt-in, must default off)")

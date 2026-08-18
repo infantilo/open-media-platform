@@ -39,14 +39,18 @@ contract:
 # für ein einzelnes Paket) und sollen die DB-Tests weiterhin real gegen
 # die per `make up` gestartete Dev-Postgres laufen lassen — deshalb hier
 # explizit gesetzt, nicht dem Zufall/der Shell-Umgebung überlassen.
-DEV_POSTGRES_URL := postgres://omp:omp@localhost:5432/omp?sslmode=disable
+# Multi-Host-DSN + target_session_attrs=read-write statt eines einzelnen
+# Ports seit D15 (ARCHITECTURE.md §19.3, Postgres-HA via Patroni) — der
+# `pgx`-Treiber verbindet sich automatisch mit dem Knoten, der gerade
+# beschreibbar ist (Patronis aktueller Primary), unabhängig von Failover.
+DEV_POSTGRES_URL := postgres://omp:omp@localhost:5432,localhost:5442,localhost:5452/omp?sslmode=disable&target_session_attrs=read-write
 
 test:
-	$(foreach m,$(GO_MODULES),cd $(m) && OMP_POSTGRES_URL=$(DEV_POSTGRES_URL) go test ./... && cd $(CURDIR) &&) true
+	$(foreach m,$(GO_MODULES),cd $(m) && OMP_POSTGRES_URL="$(DEV_POSTGRES_URL)" go test ./... && cd $(CURDIR) &&) true
 	cd nodes && cargo test --workspace
 
 check:
-	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && OMP_POSTGRES_URL=$(DEV_POSTGRES_URL) go test ./... && cd $(CURDIR) &&) true
+	$(foreach m,$(GO_MODULES),cd $(m) && go vet ./... && OMP_POSTGRES_URL="$(DEV_POSTGRES_URL)" go test ./... && cd $(CURDIR) &&) true
 	deno check ui/**/*.ts
 	deno test ui/
 	cd nodes && cargo test --workspace && cargo deny check && cargo audit
@@ -123,22 +127,101 @@ up:
 			-e RUN_NODE=FALSE \
 			docker.io/rhastie/nmos-cpp:latest; \
 	fi
-	@if podman container exists omp-postgres; then \
-		podman start omp-postgres; \
+	@$(MAKE) postgres-up
+
+# Postgres-HA (ARCHITECTURE.md §19.3, UMSETZUNG.md D15) — ersetzt den
+# bisherigen Einzelknoten-omp-postgres-Container: etcd-Dreiknoten-Cluster
+# (Patronis DCS/Failover-Koordinator, gleiche Rolle wie Raft bei D12, aber
+# ein eigenständiges, für genau diesen Zweck gebautes Tool statt
+# Marke-Eigenbau) + Patroni-verwaltetes Postgres (1 Primary + 2 Replikate,
+# Streaming-Replikation, automatische Promotion bei Primary-Ausfall).
+# Eigenes Target statt Teil von `up` direkt, weil der Erstlauf eine
+# Reihenfolge braucht (s. u.), die eine einzelne flache `up`-Befehlsliste
+# nicht sauber ausdrücken kann.
+#
+# Bootstrap-Reihenfolge nur beim ALLERERSTEN Start nötig (kein Container
+# existiert noch): Knoten 1 muss `initdb` abgeschlossen und sich selbst
+# als Primary in etcd eingetragen haben, BEVOR Knoten 2/3 starten — alle
+# drei gleichzeitig zu starten lässt sie alle unendlich auf "waiting for
+# leader to bootstrap" hängen (live gefunden, 2026-08-18, s.
+# docs/decisions.md D15: jeder Knoten sieht in der Race-Situation bereits
+# Mitgliedseinträge der anderen in etcd, aber keinen erfolgreich
+# gesetzten Initialize-Schlüssel, und hält sich deshalb selbst für nicht
+# bootstrap-berechtigt). Bei einem Neustart bereits bestehender Container
+# (Normalfall nach dem ersten `make up`) entfällt das: jeder Knoten kennt
+# seine Rolle bereits aus eigenem Datenverzeichnis + etcd, `podman start`
+# in beliebiger Reihenfolge reicht.
+postgres-up:
+	@podman image exists localhost/omp-patroni:latest || \
+		podman build -t localhost/omp-patroni:latest -f deploy/patroni/Dockerfile deploy/patroni
+	@for n in 1 2 3; do \
+		case $$n in \
+			1) PEER=2380; CLI=2379 ;; \
+			2) PEER=2390; CLI=2389 ;; \
+			3) PEER=2400; CLI=2399 ;; \
+		esac; \
+		if podman container exists omp-etcd-$$n; then \
+			podman start omp-etcd-$$n; \
+		else \
+			podman run -d --name omp-etcd-$$n --restart=always --network=host \
+				quay.io/coreos/etcd:v3.5.17 etcd \
+				--name etcd-$$n --data-dir /etcd-data \
+				--initial-advertise-peer-urls http://127.0.0.1:$$PEER --listen-peer-urls http://127.0.0.1:$$PEER \
+				--listen-client-urls http://127.0.0.1:$$CLI --advertise-client-urls http://127.0.0.1:$$CLI \
+				--initial-cluster-token omp-etcd-cluster \
+				--initial-cluster etcd-1=http://127.0.0.1:2380,etcd-2=http://127.0.0.1:2390,etcd-3=http://127.0.0.1:2400 \
+				--initial-cluster-state new; \
+		fi; \
+	done
+	@FRESH=false; \
+	podman container exists omp-patroni-1 || FRESH=true; \
+	if podman container exists omp-patroni-1; then \
+		podman start omp-patroni-1; \
 	else \
-		podman run -d --name omp-postgres --restart=always \
-			-p 5432:5432 \
-			-e POSTGRES_USER=omp -e POSTGRES_PASSWORD=omp -e POSTGRES_DB=omp \
-			docker.io/library/postgres:16-alpine; \
+		podman run -d --name omp-patroni-1 --restart=always --network=host \
+			-e PATRONI_NAME=omp-patroni-1 -e PATRONI_SCOPE=omp-postgres \
+			-e PATRONI_ETCD3_HOSTS=127.0.0.1:2379,127.0.0.1:2389,127.0.0.1:2399 \
+			-e PATRONI_RESTAPI_LISTEN=127.0.0.1:8008 -e PATRONI_RESTAPI_CONNECT_ADDRESS=127.0.0.1:8008 \
+			-e PATRONI_POSTGRESQL_LISTEN=127.0.0.1:5432 -e PATRONI_POSTGRESQL_CONNECT_ADDRESS=127.0.0.1:5432 \
+			-e PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata \
+			-e PATRONI_SUPERUSER_USERNAME=postgres -e PATRONI_SUPERUSER_PASSWORD=omp-superuser-dev \
+			-e PATRONI_REPLICATION_USERNAME=replicator -e PATRONI_REPLICATION_PASSWORD=omp-replicator-dev \
+			localhost/omp-patroni:latest; \
+	fi; \
+	if [ "$$FRESH" = "true" ]; then \
+		echo "Warte auf Erst-Bootstrap von omp-patroni-1 (initdb)..."; \
+		for i in $$(seq 1 30); do \
+			ROLE=$$(curl -s http://127.0.0.1:8008/patroni 2>/dev/null | grep -o '"role": *"[^"]*"' | cut -d'"' -f4); \
+			[ "$$ROLE" = "primary" ] && break; \
+			sleep 2; \
+		done; \
 	fi
+	@for n in 2 3; do \
+		if podman container exists omp-patroni-$$n; then \
+			podman start omp-patroni-$$n; \
+		else \
+			case $$n in 2) PGPORT=5442; RESTPORT=8018 ;; 3) PGPORT=5452; RESTPORT=8028 ;; esac; \
+			podman run -d --name omp-patroni-$$n --restart=always --network=host \
+				-e PATRONI_NAME=omp-patroni-$$n -e PATRONI_SCOPE=omp-postgres \
+				-e PATRONI_ETCD3_HOSTS=127.0.0.1:2379,127.0.0.1:2389,127.0.0.1:2399 \
+				-e PATRONI_RESTAPI_LISTEN=127.0.0.1:$$RESTPORT -e PATRONI_RESTAPI_CONNECT_ADDRESS=127.0.0.1:$$RESTPORT \
+				-e PATRONI_POSTGRESQL_LISTEN=127.0.0.1:$$PGPORT -e PATRONI_POSTGRESQL_CONNECT_ADDRESS=127.0.0.1:$$PGPORT \
+				-e PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata \
+				-e PATRONI_SUPERUSER_USERNAME=postgres -e PATRONI_SUPERUSER_PASSWORD=omp-superuser-dev \
+				-e PATRONI_REPLICATION_USERNAME=replicator -e PATRONI_REPLICATION_PASSWORD=omp-replicator-dev \
+				localhost/omp-patroni:latest; \
+		fi; \
+	done
 
 down:
 	-podman stop omp-nats-1 omp-nats-2 omp-nats-3
 	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
 	-podman stop omp-nmos-registry
 	-podman rm omp-nmos-registry
-	-podman stop omp-postgres
-	-podman rm omp-postgres
+	-podman stop omp-patroni-1 omp-patroni-2 omp-patroni-3
+	-podman rm omp-patroni-1 omp-patroni-2 omp-patroni-3
+	-podman stop omp-etcd-1 omp-etcd-2 omp-etcd-3
+	-podman rm omp-etcd-1 omp-etcd-2 omp-etcd-3
 
 # Einfacher Einstiegspunkt für die ganze Dev-Umgebung (docs/HANDBUCH.md):
 # NATS + NMOS-Registry (make up) + UI-Bundle + Orchestrator-Binary bauen,
@@ -173,7 +256,18 @@ status:
 		podman container exists omp-nats-$$n && echo "NATS-Knoten $$n: läuft" || echo "NATS-Knoten $$n: gestoppt"; \
 	done
 	@podman container exists omp-nmos-registry && echo "NMOS-Registry: läuft" || echo "NMOS-Registry: gestoppt"
-	@podman container exists omp-postgres && echo "Postgres: läuft" || echo "Postgres: gestoppt"
+	@for n in 1 2 3; do \
+		podman container exists omp-etcd-$$n && echo "etcd-Knoten $$n: läuft" || echo "etcd-Knoten $$n: gestoppt"; \
+	done
+	@for n in 1 2 3; do \
+		if podman container exists omp-patroni-$$n; then \
+			case $$n in 1) PORT=8008 ;; 2) PORT=8018 ;; 3) PORT=8028 ;; esac; \
+			ROLE=$$(curl -s http://127.0.0.1:$$PORT/patroni 2>/dev/null | grep -o '"role": *"[^"]*"' | cut -d'"' -f4); \
+			echo "Postgres-Knoten $$n: läuft (Rolle: $${ROLE:-unbekannt})"; \
+		else \
+			echo "Postgres-Knoten $$n: gestoppt"; \
+		fi; \
+	done
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
 	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
 	@if [ -f .run/supervisor.pid ] && kill -0 "$$(cat .run/supervisor.pid)" 2>/dev/null; then \

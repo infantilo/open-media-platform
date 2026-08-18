@@ -1,0 +1,51 @@
+[Unit]
+Description=OpenMediaPlatform Persistenz (PostgreSQL via Patroni, ARCHITECTURE.md §19.3, UMSETZUNG.md D15)
+After=network-online.target omp-etcd.service
+
+[Container]
+Image=localhost/omp-patroni:latest
+ContainerName=omp-patroni
+# Patroni-verwaltetes PostgreSQL — dieses Quadlet ist EIN Knoten eines
+# Dreiknoten-Clusters, auf Bare-Metal/Produktion läuft es unveraendert
+# auf drei getrennten Hosts, je einmal, mit identischen Standard-Ports
+# (anders als das simulierte Ein-Maschine-Dev-Setup in Makefile
+# postgres-up, das drei disjunkte Portsätze 5432/5442/5452 braucht, da
+# alle drei Knoten dort denselben Host teilen). Image muss vorher lokal
+# gebaut sein (`podman build -t localhost/omp-patroni:latest -f
+# deploy/patroni/Dockerfile deploy/patroni`) oder aus einer internen
+# Registry stammen — kein offizielles Docker-Hub-"postgres+patroni"-
+# Image existiert (deploy/patroni/Dockerfile-Kopfkommentar). ThisHost/
+# EtcdHostB/EtcdHostC sind Platzhalter, vor dem Deployment durch die
+# echten Hostnamen ersetzen. PATRONI_NAME muss je Host eindeutig sein
+# (z. B. "omp-patroni-<hostname>").
+#
+# Passwörter hier als Platzhalter — vor dem Deployment durch echte,
+# nicht im Repo abgelegte Secrets ersetzen (Umgebungs-Datei via
+# `EnvironmentFile=` statt einzelner `Environment=`-Zeilen, oder ein
+# Secret-Management passend zur jeweiligen Produktionsumgebung — dieses
+# Projekt legt sich hier bewusst nicht auf ein bestimmtes Tool fest,
+# gleiche Zurückhaltung wie bei anderen Produktions-Secrets in diesem
+# Verzeichnis).
+Environment=PATRONI_NAME=omp-patroni-this-host
+Environment=PATRONI_SCOPE=omp-postgres
+Environment=PATRONI_ETCD3_HOSTS=ThisHost:2379,EtcdHostB:2379,EtcdHostC:2379
+Environment=PATRONI_RESTAPI_LISTEN=0.0.0.0:8008
+Environment=PATRONI_RESTAPI_CONNECT_ADDRESS=ThisHost:8008
+Environment=PATRONI_POSTGRESQL_LISTEN=0.0.0.0:5432
+Environment=PATRONI_POSTGRESQL_CONNECT_ADDRESS=ThisHost:5432
+Environment=PATRONI_POSTGRESQL_DATA_DIR=/home/postgres/pgdata
+Environment=PATRONI_SUPERUSER_USERNAME=postgres
+Environment=PATRONI_SUPERUSER_PASSWORD=changeme-see-secrets-management
+Environment=PATRONI_REPLICATION_USERNAME=replicator
+Environment=PATRONI_REPLICATION_PASSWORD=changeme-see-secrets-management
+Volume=omp-patroni-data:/home/postgres/pgdata
+PublishPort=5432:5432
+PublishPort=8008:8008
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=60
+
+[Install]
+WantedBy=default.target

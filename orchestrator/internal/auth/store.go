@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/lib/pq"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrUserExists wird geliefert, wenn CreateUser gegen einen bereits
@@ -157,12 +157,12 @@ func (s *Store) RevokeSessions(ctx context.Context, username string) error {
 }
 
 // isUniqueViolation erkennt einen Postgres-Unique-Constraint-Verstoß
-// (SQLSTATE 23505) am strukturierten *pq.Error statt an einem
+// (SQLSTATE 23505) am strukturierten *pgconn.PgError statt an einem
 // String-Grep über die Fehlermeldung.
 func isUniqueViolation(err error) bool {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		return pqErr.Code == "23505"
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
 	}
 	return false
 }

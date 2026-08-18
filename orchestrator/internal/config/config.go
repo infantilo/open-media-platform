@@ -12,6 +12,19 @@ import (
 // 4222/4223/4224). `nats.go` teilt die kommagetrennte Liste selbst auf.
 const defaultNatsURL = "nats://localhost:4222,nats://localhost:4223,nats://localhost:4224"
 
+// defaultPostgresURL zeigt auf den per `make up`/`make postgres-up`
+// gestarteten Patroni-Dreiknoten-Cluster (ARCHITECTURE.md §19.3,
+// UMSETZUNG.md D15) — Ports exakt wie in `Makefile`s `postgres-up`-Target
+// (5432/5442/5452). `target_session_attrs=read-write` (Postgres-
+// Standardparameter seit v10) sorgt dafür, dass sich der `pgx`-Treiber
+// (seit D15 statt `lib/pq`, s. internal/db-Kopfkommentar) beim
+// (Re-)Connect immer mit dem Knoten verbindet, der gerade tatsächlich
+// beschreibbar ist — Patronis aktueller Primary, unabhängig davon, ob
+// das noch Knoten 1 ist oder ein nach einer Promotion neuer. Kein
+// eigener Discovery-Code nötig, gleiches Prinzip wie die kommagetrennte
+// NatsURL oben (D14).
+const defaultPostgresURL = "postgres://omp:omp@localhost:5432,localhost:5442,localhost:5452/omp?sslmode=disable&target_session_attrs=read-write"
+
 // Config bündelt die zur Laufzeit veränderbaren Einstellungen des
 // Orchestrators. Alle Felder haben sinnvolle Defaults für den lokalen
 // Dev-Betrieb (siehe Load).
@@ -48,7 +61,9 @@ type Config struct {
 	// Zustand (vorher data/instances.json, C8) — kein separates DataDir
 	// mehr nötig, dieses Feld wurde mit S4 entfernt (nichts referenzierte
 	// es mehr; role-bindings.json war bereits mit D3 Teil 2 durch die
-	// authz-Tabelle ersetzt).
+	// authz-Tabelle ersetzt). Default zeigt seit D15 (ARCHITECTURE.md
+	// §19.3) auf den Patroni-Dreiknoten-Cluster statt eines Einzelknotens
+	// (defaultPostgresURL-Doku oben).
 	PostgresURL string
 	// MTLSEnabled schaltet mTLS zwischen Orchestrator und Nodes ein
 	// (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) — Default **aus**, bewusst
@@ -94,16 +109,24 @@ type Config struct {
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
 	// Löschung (s. audit.Store.PurgeOlderThan).
 	AuditRetentionDays int
-	// BackupDir/PostgresContainer/BackupKeep (Nutzerwunsch 2026-08-13:
-	// Backup über das Browser-UI) — spiegeln exakt deploy/dev/
-	// backup-omp.shs BACKUP_DIR/Container-Name/BACKUP_KEEP, beide Wege
-	// teilen sich denselben Ordner und dieselbe Rotation. Default relativ
-	// zum orchestrator/-Arbeitsverzeichnis (Dev-Fallback, gleiches Muster
-	// wie UIDir/CatalogPath oben) — start-omp.sh exportiert den
-	// tatsächlichen absoluten Pfad.
-	BackupDir         string
-	PostgresContainer string
-	BackupKeep        int
+	// BackupDir/PatroniNodes/BackupKeep (Nutzerwunsch 2026-08-13: Backup
+	// über das Browser-UI) — spiegeln exakt deploy/dev/backup-omp.shs
+	// BACKUP_DIR/BACKUP_KEEP, beide Wege teilen sich denselben Ordner und
+	// dieselbe Rotation. Default relativ zum orchestrator/-Arbeits-
+	// verzeichnis (Dev-Fallback, gleiches Muster wie UIDir/CatalogPath
+	// oben) — start-omp.sh exportiert den tatsächlichen absoluten Pfad.
+	BackupDir string
+	// PatroniNodes ersetzt seit D15 (ARCHITECTURE.md §19.3) das frühere
+	// PostgresContainer (ein fester Container-Name "omp-postgres" ergibt
+	// keinen Sinn mehr — welcher der drei Patroni-Knoten gerade
+	// tatsächlich Primary ist, wechselt bei jedem Failover). Format:
+	// kommagetrennte "container=patroni-rest-url"-Paare; internal/backup
+	// fragt bei jedem Backup/Restore neu über die REST-API nach ("/primary"
+	// antwortet nur 200 auf dem aktuellen Primary), statt einen Knoten
+	// fest anzunehmen. Defaults exakt wie in `Makefile`s
+	// `postgres-up`-Target (REST-Ports 8008/8018/8028).
+	PatroniNodes string
+	BackupKeep   int
 	// SupervisorURL zeigt auf den eigenständigen Backup/Restore-
 	// Supervisor-Prozess (supervisor/main.go, Nutzerwunsch 2026-08-13) —
 	// lauscht nur auf 127.0.0.1, s. dessen Kopfkommentar zur
@@ -135,7 +158,7 @@ type Config struct {
 // OMP_ORCHESTRATOR_URL, OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
 // OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
 // OMP_PLACEMENT_*, OMP_AUDIT_RETENTION_DAYS, OMP_BACKUP_DIR/
-// OMP_POSTGRES_CONTAINER/OMP_BACKUP_KEEP und OMP_NODE_ID/
+// OMP_POSTGRES_PATRONI_NODES/OMP_BACKUP_KEEP und OMP_NODE_ID/
 // OMP_RAFT_LISTEN/OMP_RAFT_DATA_DIR/OMP_CLUSTER_PEERS/OMP_CLUSTER_JOIN
 // (ARCHITECTURE.md §19.3, UMSETZUNG.md D12); fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
@@ -158,7 +181,7 @@ func Load() Config {
 		NatsURL:         getEnv("OMP_NATS_URL", defaultNatsURL),
 		UIDir:           getEnv("OMP_UI_DIR", "../ui"),
 		CatalogPath:     getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
-		PostgresURL:     getEnv("OMP_POSTGRES_URL", "postgres://omp:omp@localhost:5432/omp?sslmode=disable"),
+		PostgresURL:     getEnv("OMP_POSTGRES_URL", defaultPostgresURL),
 		MTLSEnabled:     mtlsEnabled,
 		MTLSCertFile:    getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
 		MTLSKeyFile:     getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
@@ -178,8 +201,9 @@ func Load() Config {
 		// Placement-Defaults oben — config bleibt frei von
 		// Business-Logik-Abhängigkeiten).
 		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
-		BackupDir:          getEnv("OMP_BACKUP_DIR", "../.backups"),
-		PostgresContainer:  getEnv("OMP_POSTGRES_CONTAINER", "omp-postgres"),
+		BackupDir: getEnv("OMP_BACKUP_DIR", "../.backups"),
+		PatroniNodes: getEnv("OMP_POSTGRES_PATRONI_NODES",
+			"omp-patroni-1=http://127.0.0.1:8008,omp-patroni-2=http://127.0.0.1:8018,omp-patroni-3=http://127.0.0.1:8028"),
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-/Audit-Defaults oben).

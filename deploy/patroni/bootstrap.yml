@@ -1,0 +1,64 @@
+# Cluster-weiter Patroni-Bootstrap (ARCHITECTURE.md §19.3, UMSETZUNG.md D15)
+# — identisch auf allen drei Knoten gemountet, nur EINMAL wirksam (der
+# Knoten, der die Initialize-Sperre in etcd gewinnt, führt `initdb` +
+# post_init aus; die anderen beiden holen sich den Stand per Basisbackup
+# von ihm, s. Patroni-Doku "bootstrap"). Ohne einen `bootstrap`-Abschnitt
+# überhaupt (live gefunden, 2026-08-18: reine Env-Var-Konfiguration ohne
+# YAML-Datei) bricht Patroni den Bootstrap-Zweig in ha.py stillschweigend
+# ab ("waiting for leader to bootstrap" in Endlosschleife auf allen
+# Knoten, s. docs/decisions.md D15) — `'bootstrap' in self.patroni.config`
+# muss wahr sein, ein Env-Var-only-Setup erreicht das nicht zuverlässig
+# für den verschachtelten initdb/pg_hba/users-Teil.
+bootstrap:
+  dcs:
+    ttl: 30
+    loop_wait: 10
+    retry_timeout: 10
+    maximum_lag_on_failover: 1048576
+    postgresql:
+      use_pg_rewind: true
+      parameters:
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+  initdb:
+    - encoding: UTF8
+    - data-checksums
+  # 0.0.0.0/0 statt einer engeren CIDR: dieselbe "vertrauenswürdiges
+  # internes Netz, kein Transport-TLS zwischen den Cluster-Knoten
+  # selbst"-Linie wie bereits bei NATS-Clustering (D14) und dem
+  # etcd-Cluster hier — Zugriffskontrolle läuft über die Passwörter
+  # (PATRONI_SUPERUSER_PASSWORD/PATRONI_REPLICATION_PASSWORD/
+  # PATRONI_omp_PASSWORD), nicht über Netzwerksegmentierung. Auf
+  # Bare-Metal/Produktion läuft der Cluster ohnehin nur im internen
+  # Sendezentrums-Netz (kein öffentlicher Zugriff, s. ARCHITECTURE.md §1).
+  pg_hba:
+    - host replication replicator 0.0.0.0/0 md5
+    - host all all 0.0.0.0/0 md5
+  # Anwendungsrolle+Datenbank "omp" werden bewusst NICHT über den
+  # `users:`-Abschnitt angelegt (ersetzt POSTGRES_USER aus dem bisherigen
+  # Einzelknoten-Setup, deploy/quadlets/omp-postgres.container) — live
+  # gefunden, 2026-08-18: `post_init` läuft VOR der `users:`-Anwendung,
+  # ein `CREATE DATABASE ... OWNER omp` im Skript schlägt dann mit
+  # "role omp does not exist" fehl (s. docs/decisions.md D15). post-init.sh
+  # legt Rolle UND Datenbank deshalb selbst an, keine Reihenfolge-Annahme
+  # nötig. Passwort bewusst identisch zum bisherigen Dev-Default (omp/omp,
+  # UMSETZUNG.md D1) — kein Sicherheitsgewinn/-verlust ggü. vorher, nur
+  # Postgres-HA ist neu, nicht Auth-Härtung (die läuft über OMP_AUTH_JWT_*
+  # separat, ARCHITECTURE.md §4.7).
+  post_init: /home/postgres/post-init.sh
+
+# Gilt für JEDEN pg_basebackup-Lauf (Erst-Bootstrap eines Replicas UND
+# spätere Re-Synchronisation, nicht nur den initialen Cluster-Bootstrap
+# oben) — ohne `checkpoint: fast` wartet pg_basebackup auf den nächsten
+# reguRÄREN, über checkpoint_completion_target verteilten Checkpoint der
+# Primary (Postgres-Default, mehrere Minuten), bevor überhaupt die erste
+# Datei kopiert wird. Live gefunden, 2026-08-18 (s. docs/decisions.md
+# D15): ein neu gestarteter Replica-Knoten hing scheinbar reaktionslos in
+# "bootstrap from leader ... in progress" — `pg_stat_activity.wait_event`
+# auf der Primary zeigte `CheckpointStart`/`CheckpointDone`, kein
+# eigentlicher Fehler.
+postgresql:
+  basebackup:
+    - checkpoint: fast
