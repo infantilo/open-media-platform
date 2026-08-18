@@ -47,7 +47,7 @@ func TestHandleCreateBootstrapToken(t *testing.T) {
 func TestHandleRegisterHostSuccess(t *testing.T) {
 	registry := fakeHostRegistry{createdHost: hosts.Host{ID: "host-1", Label: "Test Host"}}
 	pub := &fakeEventPublisher{}
-	h := handleRegisterHost(registry, pub)
+	h := handleRegisterHost(registry, nil, pub)
 
 	body := `{"token":"valid","label":"Test Host","hostname":"test.local","capabilities":{"cores":8}}`
 	rec := httptest.NewRecorder()
@@ -70,7 +70,7 @@ func TestHandleRegisterHostSuccess(t *testing.T) {
 
 func TestHandleRegisterHostSucceedsWithoutEventPublisher(t *testing.T) {
 	registry := fakeHostRegistry{createdHost: hosts.Host{ID: "host-1", Label: "Test Host"}}
-	h := handleRegisterHost(registry, nil)
+	h := handleRegisterHost(registry, nil, nil)
 
 	body := `{"token":"valid","label":"Test Host","hostname":"test.local"}`
 	rec := httptest.NewRecorder()
@@ -83,7 +83,7 @@ func TestHandleRegisterHostSucceedsWithoutEventPublisher(t *testing.T) {
 
 func TestHandleRegisterHostInvalidToken(t *testing.T) {
 	registry := fakeHostRegistry{consumeErr: hosts.ErrInvalidToken}
-	h := handleRegisterHost(registry, nil)
+	h := handleRegisterHost(registry, nil, nil)
 
 	body := `{"token":"bogus","label":"X","hostname":"x.local"}`
 	rec := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestHandleRegisterHostInvalidToken(t *testing.T) {
 }
 
 func TestHandleRegisterHostMissingFields(t *testing.T) {
-	h := handleRegisterHost(fakeHostRegistry{}, nil)
+	h := handleRegisterHost(fakeHostRegistry{}, nil, nil)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodPost, "/api/v1/hosts/register", strings.NewReader(`{"token":"x"}`)))
@@ -114,7 +114,7 @@ func TestHandleListHostsMergesMetrics(t *testing.T) {
 	metrics := fakeHostMetrics{byHost: map[string]hosts.Metrics{
 		"host-1": {CPUPercent: 12.5, MemUsedBytes: 100, MemTotalBytes: 1000},
 	}}
-	h := handleListHosts(registry, metrics)
+	h := handleListHosts(registry, metrics, nil)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest(http.MethodGet, "/api/v1/hosts", nil))

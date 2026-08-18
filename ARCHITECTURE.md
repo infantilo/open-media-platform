@@ -274,10 +274,13 @@ alle drei Eskalationsstufen aus Punkt 2 unten umgesetzt** —
 `advisory` (Default), `auto-confirm-window` (Timer + manuelles
 Confirm/Cancel) und `auto` (sofort) —, jeweils pro Workflow-Rolle
 konfigurierbar (`Role.Placement.Escalation`), inkl. echtem
-Make-before-break-Protokoll (Punkt 3 unten). **Weiterhin offen:**
-I/O-Karten-Claim/Release (kein Geräte-Inventar existiert), GPU/NIC-
-Telemetrie, Cloud-Kostenfaktor — genau die in D6/D7 dokumentierten
-Scope-Grenzen, unverändert durch D6 Teil 4.
+Make-before-break-Protokoll (Punkt 3 unten). **I/O-Karten-Claim/Release
+seit D13 umgesetzt** (2026-08-18, s. „Erweiterung 2026-07-10" unten für
+die vollständige Beschreibung) — Geräte-Inventar existiert jetzt
+(`internal/ioports`, host-agent-konfiguriert statt automatisch
+erkannt). **Weiterhin offen:** GPU/NIC-Telemetrie, Cloud-Kostenfaktor —
+genau die in D6/D7 dokumentierten Scope-Grenzen, unverändert durch D6
+Teil 4/D13.
 
 **Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
 jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete
@@ -344,6 +347,68 @@ Telemetrie-Schema. Auf der k3s-Stufe (§4.3) entspricht das dem
 Device-Plugin-/Extended-Resources-Muster, das als Vorbild dient, nicht
 als Abhängigkeit (Bare-Metal/Quadlets brauchen dieselbe Semantik ohne
 k3s).
+
+**Umsetzung (2026-08-18, UMSETZUNG.md D13):**
+
+1. **Inventar konfiguriert, nicht automatisch erkannt.** §18.4 hatte
+   herstellerspezifische Laufzeit-Erkennung (z. B. Blackmagic DeckLink
+   über dessen SDK) als „Eigenrecherche bei der Umsetzung" offengelassen
+   — bei der tatsächlichen Umsetzung zeigte sich: echte Erkennung
+   bräuchte echte Hardware zum Testen, die auf der Single-Host-Dev-
+   Maschine nicht existiert (`UMSETZUNG.md` §0 Punkt 7). Der Host-Agent
+   liest sein Inventar stattdessen aus einer lokalen JSON-Datei
+   (`OMP_HOST_AGENT_IO_PORTS_PATH`, gleiches Muster wie
+   `OMP_HOST_AGENT_CATALOG_PATH`) und meldet sie einmalig bei
+   `POST /api/v1/hosts/register` — echte SDK-Erkennung kann diese Datei
+   später ersetzen/generieren, ohne das Wireformat zu ändern.
+2. **Claim/Release: Postgres-Atomarität, kein Bezug zur Raft-Cluster-
+   Schicht (D12).** Neues Paket `internal/ioports`
+   (`host_io_ports`/`io_port_claims`, `db/migrations/0015_io_ports.sql`)
+   — ein Claim ist ein einzelner atomarer SQL-Satz
+   (`WITH … FOR UPDATE OF … SKIP LOCKED … INSERT … ON CONFLICT DO
+   NOTHING`), der PRIMARY KEY (host_id, port_id) IST die Exklusivitäts-
+   Garantie. Dieselbe bei D12 Teil 3 gewonnene Erkenntnis (Nachtrag 149):
+   wenn sich Exklusivität bereits über eine Datenbank-Unique-Bedingung
+   abbilden lässt, ist eine zusätzliche, über Raft replizierte Kopie
+   derselben Tatsache unnötige Komplexität — funktioniert unverändert
+   korrekt, unabhängig davon, wie viele Orchestrator-Instanzen (D12)
+   gleichzeitig einen Workflow-Start bearbeiten.
+3. **Harte Vorbedingung VOR jeder Provisionierung.** `Role.RequiredIOPort`
+   (additiv, `nil` = unverändertes Verhalten). `workflows.Service.Start()`
+   claimt für jede solche Rolle atomar einen Port, BEVOR
+   `StatusStarting` gesetzt wird (dritter Preflight neben den beiden
+   Latenzbudget-Prüfungen aus §15.1) — findet auch nur eine Rolle keinen
+   passenden freien Port, werden alle in diesem Aufruf bereits
+   erfolgreichen Claims sofort zurückgegeben und der GESAMTE Start
+   abgelehnt (kein Teil-Start mit einer unbedienbaren Rolle, wörtlich
+   „ehrliche Ablehnung statt Teil-Start" wie an anderer Stelle bereits
+   für das Latenzbudget etabliert). Der geclaimte Host überschreibt
+   dabei `SelectHost`s CPU/RAM-Heuristik vollständig für diese Rolle —
+   „harte Bedingungen vor weichen" (Punkt 2 oben) ist damit nicht nur
+   eine Prüf-Reihenfolge, sondern bestimmt auch, WER am Ende über den
+   Zielhost entscheidet.
+4. **Migrations-Grenze real umgesetzt** (Punkt 3 oben): `executeMigration`
+   (migration.go, gemeinsamer Pfad für manuellen Drag-Umzug UND
+   automatische Placement-Eskalation) claimt einen passenden Port auf
+   dem Zielhost, BEVOR die neue Instanz überhaupt gestartet wird — ohne
+   Treffer bricht die Migration sofort ab ("nicht migrierbar", Alarm via
+   `workflow.migration`-SSE-Event, Reason `not-migrable-no-free-io-port`),
+   die alte Instanz bleibt unangetastet. Alter und neuer Claim koexistieren
+   für dieselbe Rolle kurzzeitig (unterschiedliche Ports), bis der
+   eigentliche Break-Schritt (alte Instanz stoppen) den alten gezielt
+   freigibt.
+5. **Sichtbarkeit** (§18.7): `GET /api/v1/hosts` liefert `ioPorts`
+   (Inventar) und `ioPortClaims` (aktuelle Belegung inkl.
+   Workflow-ID/Rolle/Instanz-ID) je Host mit.
+
+**Live verifiziert** (nicht nur Unit-Tests, echter Host-Agent-Prozess +
+echter Orchestrator): ein Host-Agent mit deklariertem Ein-Port-Inventar
+registrierte sich real; ein Workflow mit passender `requiredIoPort`-Rolle
+claimte den Port beim Start (sichtbar in `GET /api/v1/hosts`); ein
+zweiter, konkurrierender Workflow-Start auf demselben Host/Porttyp wurde
+mit HTTP 400 und der genauen Ablehnungsbegründung verweigert; nach
+`Stop()` des ersten Workflows war der Claim weg und der zweite Start
+gelang. Details: `docs/decisions.md` Nachtrag 150.
 
 **Standards-Abdeckung:** IS-04 (neue Instanz entdecken), IS-05 (die
 eigentliche Umschaltung), Descriptor-Selbstbeschreibung (Zustand
@@ -970,7 +1035,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 |---|---|---|
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Referenz-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle, C1–C3 **erledigt**) **+ Node-Contract/SDK inkl. Doku** (D5 offen) — Community-Onboarding startet ab hier. **Resequenziert (§7.4, 2026-07-11):** direkt danach zuerst der kleine manuell bedienbare Regieplatz (§13 Bildmischer/Audiomischer/Player-Minimalausbau + §14 Operator-Console + OGraf §11.2 = „Demo 3"), **erst danach** die Playout-Automation-Vertiefung (ehemals C10/C11) | Du |
-| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups), NDI/RTSP-Gateways (§6.5), RDMA-Aktivierungspfad (§6.6), Registry-Föderation & automatisierte Migrationsstufen (§6.1-/§6.4-Erweiterungen), Host-Klassen-Mix Bare-Metal/VM/AWS (§18.8/§18.9), Ausfallsicherheits-Konsolidierung inkl. Standortredundanz (§21), professionelles UI/Workflow-Katalog mit Thumbnails/Suche (§22), Asset-Metadatenebene (§23) | Community + Du |
+| **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1 — Kern inkl. I/O-Karten-Claim/Release bereits als D13 vorgezogen umgesetzt, s. §6.1), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups), NDI/RTSP-Gateways (§6.5), RDMA-Aktivierungspfad (§6.6), Registry-Föderation & automatisierte Migrationsstufen (§6.1-/§6.4-Erweiterungen), Host-Klassen-Mix Bare-Metal/VM/AWS (§18.8/§18.9), Ausfallsicherheits-Konsolidierung inkl. Standortredundanz (§21), professionelles UI/Workflow-Katalog mit Thumbnails/Suche (§22), Asset-Metadatenebene (§23) | Community + Du |
 | **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Ausnahme (Nutzerauftrag 2026-08-18):** Orchestrator-Redundanz/Control-Plane-HA (§19) vorgezogen als `UMSETZUNG.md` D12 (Phase D), nicht mehr P3-gebunden — s. §19 für Begründung des Vorziehens | Später |
 | **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal, DVE/Keyer/Kompressor/Limiter/Expander-**Vertiefung** der in Phase C bereits vorgezogenen §13-Minimalknoten (Grundgerüst siehe P1-Zeile/§7.4), **Ressourcen-Kapazitätsplanung/Kalender (§16)** nach D7, **Remote-Host-Erkennung (§18)** sobald eine zweite Maschine real verfügbar ist | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
@@ -2097,13 +2162,22 @@ Netzwerktopologie-Wissen, das der Orchestrator sonst nirgends braucht.
 ### 18.4 Telemetrie/Inventar (Detaillierung von §6.1 Punkt 1)
 
 Nach der Registrierung publiziert der Agent periodisch auf demselben
-NATS-Bus, der auch Node-Health trägt (§3/§6.1): CPU/RAM/GPU/NIC-Auslastung
-plus das I/O-Karten-Inventar (Kartentyp, Port-Anzahl/-Richtung,
-Belegungszustand). **Wie** gemessen wird, ist zum Umsetzungszeitpunkt zu
-verifizieren, nicht zu raten: Standardmetriken über `/proc`/`/sys`,
-I/O-Karten herstellerspezifisch (z. B. Blackmagic DeckLink über dessen
-CLI/API) — das ist Eigenrecherche bei der D6/§6.1-Umsetzung, kein
-Standardformat.
+NATS-Bus, der auch Node-Health trägt (§3/§6.1): CPU/RAM/GPU/NIC-
+Auslastung (`/proc`/`/sys`, kontinuierliche Metriken, ephemer über
+NATS). Das I/O-Karten-Inventar dagegen (diskret/exklusiv, s. §6.1
+Erweiterung 2026-07-10) läuft NICHT über diesen periodischen
+Telemetrie-Kanal, sondern wird **einmalig bei der Registrierung**
+gemeldet (`POST /api/v1/hosts/register`, `internal/ioports`,
+UMSETZUNG.md D13) — die Belegung (welcher Port ist gerade wie belegt)
+ist danach Postgres-Zustand (`io_port_claims`), nicht NATS-Zustand, weil
+Claim/Release echte Exklusivitäts-Garantien brauchen, die ein
+periodischer Broadcast nicht bietet. **Wie das Inventar selbst entsteht**
+war zum Umsetzungszeitpunkt zu verifizieren, nicht zu raten (§0 Punkt 6):
+herstellerspezifische Laufzeit-Erkennung (z. B. Blackmagic DeckLink über
+dessen SDK) bräuchte echte Hardware zum Testen — bewusst durch eine vom
+Host-Agent gelesene, lokal konfigurierte Datei ersetzt
+(`OMP_HOST_AGENT_IO_PORTS_PATH`), s. §6.1 „Umsetzung (2026-08-18)" für
+Details.
 
 ### 18.5 Kommandokanal: Instanz-Launcher wird Remote-fähig
 
@@ -2402,13 +2476,16 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
 
    **Ergebnis:** Das FSM bleibt bei dem in Teil 2 eingeführten Umfang
    (Leader-Identität + Peer-HTTP-Adressbuch) — kein zusätzlicher
-   Kommandotyp für Punkt-5-Zustände in D12 Teil 3. Zukünftige
-   I/O-Karten-Claim/Release-Sperren (§6.1 „Erweiterung 2026-07-10" —
-   heute noch nicht gebaut) sollten, sobald dieser Baustein kommt,
-   zunächst nach demselben Muster geprüft werden (reicht Leader-Gating
-   des erzeugenden Loops, oder ist eine echte FSM-Sperre nötig, weil
-   *mehrere* gleichzeitig aktive Entscheidungsquellen existieren) statt
-   FSM-Replikation vorschnell anzunehmen.
+   Kommandotyp für Punkt-5-Zustände in D12 Teil 3. **Bestätigt durch
+   D13** (2026-08-18, s. §6.1 „Erweiterung 2026-07-10"/Umsetzung): die
+   I/O-Karten-Claim/Release-Sperren wurden inzwischen gebaut — genau
+   nach dem hier vorgeschlagenen Prüfmuster, mit demselben Ergebnis wie
+   bei den vier D12-Teil-3-Zuständen: keine FSM-Replikation nötig, weil
+   sich die Exklusivität bereits über eine Postgres-Unique-Bedingung
+   (PRIMARY KEY, `internal/ioports`) abbilden lässt — hier war der Grund
+   sogar noch direkter, da der auslösende Schreibpfad (Workflow-Start)
+   selbst nie leader-gated war/ist, ein Leader-Gating-Ansatz allein hätte
+   also gar nicht ausgereicht.
 
    Weiterhin bewusst **nicht** im FSM: Workflow-Definitionen/Config/
    Layouts/Snapshots/Katalog (bleiben Postgres), Host-Telemetrie-

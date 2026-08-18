@@ -516,7 +516,7 @@ func (f fakeProfileReader) Get(_ context.Context, nodeType, hostID string) (prof
 }
 
 func TestHandleHealthz(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
@@ -534,7 +534,7 @@ func TestHandleHealthz(t *testing.T) {
 }
 
 func TestHandleInfo(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/info", nil))
@@ -558,7 +558,7 @@ func TestHandleNodes(t *testing.T) {
 	lister := fakeNodeLister{nodes: []registry.NodeView{
 		{ID: "node-1", Label: "Fake Node", Online: true, Devices: []registry.DeviceView{}, Senders: []registry.SenderView{}, Receivers: []registry.ReceiverView{}},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
@@ -576,7 +576,7 @@ func TestHandleNodes(t *testing.T) {
 }
 
 func TestHandleNodesEmptyListSerializesAsEmptyArray(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
@@ -590,7 +590,7 @@ func TestHandleEventsStreamsBroadcastEvents(t *testing.T) {
 	ch := make(chan sse.Event, 1)
 	ch <- sse.Event{Type: "omp.health.test", Data: []byte(`{"ok":true}`)}
 
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: ch}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: ch}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
@@ -639,7 +639,7 @@ func TestHandleNodeProxyUIManifestAndBundle(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/ui/manifest.json", nil))
@@ -671,7 +671,7 @@ func TestHandleNodeProxyDescriptor(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/descriptor", nil))
@@ -698,7 +698,7 @@ func TestHandleNodeProxyPatchParam(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/params/gain", strings.NewReader(`{"value":-6}`))
@@ -723,7 +723,7 @@ func TestHandleNodeProxyMethod(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-1/methods/reset", nil))
@@ -749,7 +749,7 @@ func TestHandleNodeProxyGetPlugins(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/plugins", nil))
@@ -776,7 +776,7 @@ func TestHandleNodeProxyPatchPlugin(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/nodes/node-1/plugins/scte35", strings.NewReader(`{"enabled":true}`))
@@ -808,7 +808,7 @@ func TestHandleNodeProxyGetTimelineWindowForwardsQueryString(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/timeline/window?fromIndex=3&count=10", nil))
@@ -835,7 +835,7 @@ func TestHandleNodeProxyWithoutQueryStringUnaffected(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/params/gain", nil))
@@ -846,7 +846,7 @@ func TestHandleNodeProxyWithoutQueryStringUnaffected(t *testing.T) {
 }
 
 func TestHandleNodeProxyUnknownNodeReturns404(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/does-not-exist/descriptor", nil))
@@ -883,7 +883,7 @@ func TestHandleNodeStreamProxy(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
@@ -906,7 +906,7 @@ func TestHandleNodeStreamProxyUnknownParamReturns404(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/levelsUrl", nil))
@@ -924,7 +924,7 @@ func TestHandleNodeStreamProxyEmptyValueReturns404(t *testing.T) {
 	defer nodeServer.Close()
 
 	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/stream/previewUrl", nil))
@@ -935,7 +935,7 @@ func TestHandleNodeStreamProxyEmptyValueReturns404(t *testing.T) {
 }
 
 func TestHandleNodeStreamProxyUnknownNodeReturns404(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/does-not-exist/stream/previewUrl", nil))
@@ -950,7 +950,7 @@ func TestHandleGraph(t *testing.T) {
 		Nodes: []graph.Node{{ID: "node-1", Label: "Node 1"}},
 		Edges: []graph.Edge{{ID: "recv-1", FromSender: "send-1", ToReceiver: "recv-1", State: "active"}},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/graph", nil))
@@ -969,7 +969,7 @@ func TestHandleGraph(t *testing.T) {
 
 func TestHandlePostGraphEdge(t *testing.T) {
 	svc := &fakeGraphService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"send-1","to":"recv-1"}`))
@@ -985,7 +985,7 @@ func TestHandlePostGraphEdge(t *testing.T) {
 
 func TestHandlePostGraphEdgeUnknownReceiverReturns404(t *testing.T) {
 	svc := &fakeGraphService{connectErr: graph.ErrUnknownReceiver}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/graph/edges", strings.NewReader(`{"from":"send-1","to":"nope"}`))
@@ -998,7 +998,7 @@ func TestHandlePostGraphEdgeUnknownReceiverReturns404(t *testing.T) {
 
 func TestHandleDeleteGraphEdge(t *testing.T) {
 	svc := &fakeGraphService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, svc, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/graph/edges/recv-1", nil))
@@ -1013,7 +1013,7 @@ func TestHandleDeleteGraphEdge(t *testing.T) {
 
 func TestHandleGetLayoutNotFound(t *testing.T) {
 	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/layouts/default", nil))
@@ -1025,7 +1025,7 @@ func TestHandleGetLayoutNotFound(t *testing.T) {
 
 func TestHandlePutThenGetLayoutRoundTrips(t *testing.T) {
 	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	body := `{"positions":{"node-1":{"x":1,"y":2}},"groups":{}}`
 	rec := httptest.NewRecorder()
@@ -1046,7 +1046,7 @@ func TestHandlePutThenGetLayoutRoundTrips(t *testing.T) {
 
 func TestHandlePutLayoutInvalidJSONReturns400(t *testing.T) {
 	store := fakeLayoutStore{data: map[string]json.RawMessage{}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, store, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/api/v1/layouts/default", strings.NewReader("not json")))
@@ -1058,7 +1058,7 @@ func TestHandlePutLayoutInvalidJSONReturns400(t *testing.T) {
 
 func TestHandleListSnapshots(t *testing.T) {
 	svc := fakeSnapshotService{list: []snapshots.Snapshot{{ID: "s1", Label: "Szene 1"}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/snapshots", nil))
@@ -1077,7 +1077,7 @@ func TestHandleListSnapshots(t *testing.T) {
 
 func TestHandleCreateSnapshot(t *testing.T) {
 	svc := fakeSnapshotService{created: snapshots.Snapshot{ID: "s1", Label: "Szene 1"}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/snapshots", strings.NewReader(`{"label":"Szene 1"}`))
@@ -1097,7 +1097,7 @@ func TestHandleCreateSnapshot(t *testing.T) {
 
 func TestHandleApplySnapshot(t *testing.T) {
 	svc := fakeSnapshotService{applyResult: snapshots.ApplyResult{Errors: []string{}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/snapshots/s1/apply", nil))
@@ -1116,7 +1116,7 @@ func TestHandleApplySnapshot(t *testing.T) {
 
 func TestHandleApplySnapshotUnknownReturns404(t *testing.T) {
 	svc := fakeSnapshotService{applyErr: snapshots.ErrNotFound}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, svc, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/snapshots/does-not-exist/apply", nil))
@@ -1127,7 +1127,7 @@ func TestHandleApplySnapshotUnknownReturns404(t *testing.T) {
 }
 
 func TestAPIResponsesAreNotCached(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil))
@@ -1142,7 +1142,7 @@ func TestStaticUIServingIsNotForcedNoStore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
 		t.Fatalf("failed to write placeholder index.html: %v", err)
 	}
-	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -1159,7 +1159,7 @@ func TestStaticUIServing(t *testing.T) {
 		t.Fatalf("failed to write placeholder index.html: %v", err)
 	}
 
-	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -1176,7 +1176,7 @@ func TestHandleCatalog(t *testing.T) {
 	svc := fakeLauncherService{catalog: []launcher.CatalogEntry{
 		{Type: "omp-source", Label: "Source", Runner: "process", Command: []string{"bin"}},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/catalog", nil))
@@ -1195,7 +1195,7 @@ func TestHandleCatalog(t *testing.T) {
 
 func TestHandlePostCatalogEntry(t *testing.T) {
 	svc := fakeLauncherService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"acme-widget","runner":"podman","image":"example.com/acme/widget:1.0"}`))
@@ -1222,7 +1222,7 @@ func TestHandlePostCatalogEntryAdmissionFailureReturns422(t *testing.T) {
 	svc := fakeLauncherService{importErr: &launcher.ErrAdmissionCheckFailed{Results: []checker.Result{
 		{Name: "IS-04-Registrierung", Status: checker.StatusFail, Detail: "nicht gefunden"},
 	}}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"acme-widget","runner":"podman","image":"example.com/acme/widget:1.0"}`))
@@ -1238,7 +1238,7 @@ func TestHandlePostCatalogEntryAdmissionFailureReturns422(t *testing.T) {
 
 func TestHandlePostCatalogEntryDuplicateTypeReturns409(t *testing.T) {
 	svc := fakeLauncherService{importErr: launcher.ErrCatalogTypeExists}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/catalog", strings.NewReader(`{"type":"omp-source","runner":"podman","image":"x"}`))
@@ -1251,7 +1251,7 @@ func TestHandlePostCatalogEntryDuplicateTypeReturns409(t *testing.T) {
 
 func TestHandleDeleteCatalogEntry(t *testing.T) {
 	svc := fakeLauncherService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/catalog/acme-widget", nil)
@@ -1264,7 +1264,7 @@ func TestHandleDeleteCatalogEntry(t *testing.T) {
 
 func TestHandleDeleteCatalogEntryNotImportedReturns404(t *testing.T) {
 	svc := fakeLauncherService{removeErr: launcher.ErrCatalogTypeNotImported}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/catalog/omp-source", nil)
@@ -1280,7 +1280,7 @@ func TestHandleDeleteCatalogEntryNotImportedReturns404(t *testing.T) {
 // gespeichert wurde (unverändertes Verhalten für jeden, der die neue
 // Einstellungsseite nie öffnet).
 func TestHandleGetMxfPlayerSettingsDefaults(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/node-types/omp-mxf-player/settings", nil))
@@ -1305,7 +1305,7 @@ func TestHandleGetMxfPlayerSettingsDefaults(t *testing.T) {
 // gespeicherte Fassung anschließend statt der Defaults geliefert wird.
 func TestHandlePutThenGetMxfPlayerSettingsRoundTrips(t *testing.T) {
 	store := fakeNodeSettingsStore{data: map[string]json.RawMessage{}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, store, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, store, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	body := `{"groups":[{"id":"pt","label":"Programmton","channels":2}],"presets":[{"id":"stereo","label":"Stereo","routes":[{"srcTrack":1,"group":"pt","groupChannel":0},{"srcTrack":2,"group":"pt","groupChannel":1}]}]}`
 	rec := httptest.NewRecorder()
@@ -1336,7 +1336,7 @@ func TestHandlePutThenGetMxfPlayerSettingsRoundTrips(t *testing.T) {
 // voraussetzt: eine Preset-Route darf keine Gruppe referenzieren, die
 // nicht in derselben Einstellung existiert.
 func TestHandlePutMxfPlayerSettingsRejectsUnknownGroupReference(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	body := `{"groups":[{"id":"pt","label":"Programmton","channels":2}],"presets":[{"id":"stereo","label":"Stereo","routes":[{"srcTrack":1,"group":"does-not-exist","groupChannel":0}]}]}`
 	rec := httptest.NewRecorder()
@@ -1352,7 +1352,7 @@ func TestHandlePutMxfPlayerSettingsRejectsUnknownGroupReference(t *testing.T) {
 // wird (sonst würde presets::matrix_for still eine Route verwerfen,
 // statt dem Admin sofort zu sagen, dass die Eingabe unsinnig ist).
 func TestHandlePutMxfPlayerSettingsRejectsOutOfRangeChannel(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	body := `{"groups":[{"id":"pt","label":"Programmton","channels":2}],"presets":[{"id":"stereo","label":"Stereo","routes":[{"srcTrack":1,"group":"pt","groupChannel":5}]}]}`
 	rec := httptest.NewRecorder()
@@ -1367,7 +1367,7 @@ func TestHandlePutMxfPlayerSettingsRejectsOutOfRangeChannel(t *testing.T) {
 // Dokument ohne jede Gruppe (die Instanz hätte dann keinen einzigen
 // Sender mehr) abgelehnt wird statt gespeichert zu werden.
 func TestHandlePutMxfPlayerSettingsRejectsEmptyGroups(t *testing.T) {
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{data: map[string]json.RawMessage{}}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	body := `{"groups":[],"presets":[]}`
 	rec := httptest.NewRecorder()
@@ -1382,7 +1382,7 @@ func TestHandleListInstances(t *testing.T) {
 	svc := fakeLauncherService{instances: []launcher.Instance{
 		{ID: "inst-1", Type: "omp-source", Label: "Source (inst-1)", PID: 4242},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil))
@@ -1419,7 +1419,7 @@ func TestHandleListInstancesMergesRemoteInstanceMetrics(t *testing.T) {
 			},
 		},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, metrics, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, metrics, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil))
@@ -1452,7 +1452,7 @@ func TestHandleListInstancesMergesRemoteInstanceMetrics(t *testing.T) {
 
 func TestHandlePostInstance(t *testing.T) {
 	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-1", Type: "omp-source", Label: "Source (inst-1)", PID: 4242}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-source"}`))
@@ -1472,7 +1472,7 @@ func TestHandlePostInstance(t *testing.T) {
 
 func TestHandlePostInstanceUnknownTypeReturns404(t *testing.T) {
 	svc := fakeLauncherService{startErr: launcher.ErrUnknownType}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"does-not-exist"}`))
@@ -1485,7 +1485,7 @@ func TestHandlePostInstanceUnknownTypeReturns404(t *testing.T) {
 
 func TestHandleDeleteInstance(t *testing.T) {
 	svc := fakeLauncherService{}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/instances/inst-1", nil)
@@ -1498,7 +1498,7 @@ func TestHandleDeleteInstance(t *testing.T) {
 
 func TestHandleDeleteInstanceUnknownReturns404(t *testing.T) {
 	svc := fakeLauncherService{stopErr: launcher.ErrUnknownInstance}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/instances/does-not-exist", nil)
@@ -1516,7 +1516,7 @@ func TestHandleMeConsoles(t *testing.T) {
 			{WorkflowID: "default", WorkflowLabel: "Regieplatz", NodeRoleID: "inst-1", NodeLabel: "Video Mixer M/E", UIBundleURL: "/api/v1/nodes/node-1"},
 		},
 	}}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, resolver, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, resolver, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me/consoles", nil))
@@ -1535,7 +1535,7 @@ func TestHandleMeConsoles(t *testing.T) {
 
 func TestHandleMeConsolesPropagatesStoreError(t *testing.T) {
 	resolver := fakeConsoleResolver{err: errors.New("boom")}
-	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, resolver, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, resolver, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/me/consoles", nil))
@@ -1551,7 +1551,7 @@ func TestConsoleKioskRouteFallsBackToIndexHTML(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(html), 0o644); err != nil {
 		t.Fatalf("failed to write placeholder index.html: %v", err)
 	}
-	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{})
+	h := NewHandler(config.Config{UIDir: dir}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/console/default/inst-1", nil))

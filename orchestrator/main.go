@@ -27,6 +27,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
@@ -58,6 +59,36 @@ func (r natsRequester) RequestBytes(subject string, data []byte, timeout time.Du
 		return nil, err
 	}
 	return msg.Data, nil
+}
+
+// ioPortAdapter adaptiert *ioports.Store auf workflows.IOPortClaimer —
+// reshaped nur GetClaim (ioports.Claim → Klartext-Strings), alle
+// anderen Methoden haben identische Signaturen und werden direkt
+// durchgereicht (s. Kommentar bei SetIOPortClaimer unten).
+type ioPortAdapter struct{ store *ioports.Store }
+
+func (a ioPortAdapter) Claim(cardType, direction, preferredHostID, workflowID, role, instanceID string) (string, string, bool, error) {
+	return a.store.Claim(cardType, direction, preferredHostID, workflowID, role, instanceID)
+}
+
+func (a ioPortAdapter) UpdateInstanceID(workflowID, role, instanceID string) error {
+	return a.store.UpdateInstanceID(workflowID, role, instanceID)
+}
+
+func (a ioPortAdapter) Release(workflowID, role string) error {
+	return a.store.Release(workflowID, role)
+}
+
+func (a ioPortAdapter) GetClaim(workflowID, role string) (hostID, portID string, found bool, err error) {
+	c, ok, err := a.store.GetClaim(workflowID, role)
+	if err != nil || !ok {
+		return "", "", ok, err
+	}
+	return c.HostID, c.PortID, true, nil
+}
+
+func (a ioPortAdapter) ReleasePort(hostID, portID string) error {
+	return a.store.ReleasePort(hostID, portID)
 }
 
 // hostEventsSubjectPrefix/-Suffix identifizieren die S3-Prozessende-
@@ -428,6 +459,13 @@ func main() {
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
 
+	// I/O-Karten als erstklassige Host-Ressource (ARCHITECTURE.md §6.1
+	// Erweiterung 2026-07-10, UMSETZUNG.md D13) — Postgres-Atomarität
+	// reicht für "genau einmal cluster-weit geclaimt" bereits aus (s.
+	// internal/ioports-Paketkommentar), kein Bezug zur Raft-Cluster-
+	// Schicht (D12) nötig.
+	ioPortStore := ioports.NewStore(database)
+
 	// Verbrauchsprofile pro Node-Typ (Kapitel 14 Teil 3, docs/END-GOAL-
 	// FEATURES.md §14.3c) — tastet dieselben Instanz-/Host-Telemetrie-
 	// Quellen ab wie placementEngine (unten), aggregiert sie aber pro
@@ -470,6 +508,12 @@ func main() {
 	// und prüft vor jedem Start die Ressourcenlage der Ziel-Hosts
 	// (placementEngine.CheckHost).
 	workflowSvc := workflows.NewService(workflows.NewStore(database), store, graphSvc, launcherSvc, hub, nodeHTTPClient, placementEngine, authzStore)
+	// D13: ioPortAdapter reshapes *ioports.Store.GetClaim (liefert
+	// ioports.Claim) auf die schlanken Klartext-Strings, die
+	// workflows.IOPortClaimer erwartet — gleiches Adapter-Muster wie
+	// natsRequester oben (workflows bleibt frei von einer direkten
+	// ioports-Paket-Abhängigkeit, s. dortige IOPortClaimer-Doku).
+	workflowSvc.SetIOPortClaimer(ioPortAdapter{store: ioPortStore})
 
 	// Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): löst
 	// Rollenbindungen für die Operator-Console auf, jetzt inkl. echter
@@ -527,7 +571,7 @@ func main() {
 	backupSvc := backup.NewService(cfg.PostgresContainer, cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

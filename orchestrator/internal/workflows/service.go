@@ -223,6 +223,33 @@ type ResourcePrecheck interface {
 	ProjectedLoad(nodeType, hostID string) profiles.Snapshot
 }
 
+// IOPortClaimer ist die von *ioports.Store implementierte Teilmenge, die
+// workflows.Service für Rollen mit Role.RequiredIOPort braucht
+// (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10, UMSETZUNG.md D13) —
+// Interface-Entkopplung wie bei NodeLister/Launcher/ResourcePrecheck
+// (kein workflows→ioports-Paket-Import nötig).
+type IOPortClaimer interface {
+	// Claim reserviert atomar einen freien Port (kein stiller Fallback
+	// auf einen anderen Host als preferredHostID, falls dieses gesetzt
+	// ist — s. ioports.Store.Claim-Doku).
+	Claim(cardType, direction, preferredHostID, workflowID, role, instanceID string) (hostID, portID string, ok bool, err error)
+	// UpdateInstanceID trägt die tatsächliche Launcher-Instanz-ID nach,
+	// sobald sie bekannt ist (Claim läuft VOR der Provisionierung, s.
+	// Service.claimIOPortsForStart) — rein für Anzeigezwecke, ändert
+	// nichts an der Exklusivität selbst.
+	UpdateInstanceID(workflowID, role, instanceID string) error
+	Release(workflowID, role string) error
+	// GetClaim/ReleasePort (migration.go) — eine laufende Migration hält
+	// vorübergehend ZWEI Claims für dasselbe (workflowID, role): den
+	// alten (Quellhost, noch aktiv) und den neuen (Zielhost, gerade erst
+	// reserviert). Release(workflowID, role) allein wäre hier
+	// mehrdeutig (löscht beide) — GetClaim liefert den exakten
+	// (hostID, portID) des ALTEN Claims vor dem Umzug, ReleasePort gibt
+	// gezielt nur diesen frei, nachdem der Umzug abgeschlossen ist.
+	GetClaim(workflowID, role string) (hostID, portID string, found bool, err error)
+	ReleasePort(hostID, portID string) error
+}
+
 // Service verwaltet Workflow-Definitionen und führt Bundle-Start/-Stop
 // aus (ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1/Teil 2).
 type Service struct {
@@ -253,6 +280,22 @@ type Service struct {
 	// ist das keine optionale externe Abhängigkeit, sondern rein
 	// interner Zustand.
 	migrations *migrationState
+	// ioPorts (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10, UMSETZUNG.md
+	// D13) — s. SetIOPortClaimer/IOPortClaimer. Nil = Rollen mit
+	// Role.RequiredIOPort können nicht bedient werden (Start() lehnt sie
+	// dann explizit ab, s. claimIOPortsForStart — anders als
+	// resources/hostMetrics ist das KEIN stilles Feature-Fehlen, weil
+	// eine deklarierte Hardware-Anforderung sonst unbemerkt ignoriert
+	// würde).
+	ioPorts IOPortClaimer
+}
+
+// SetIOPortClaimer verdrahtet den I/O-Port-Store nachträglich (main.go:
+// gleiches Nachträglich-Verdrahtungsmuster wie SetHostMetrics — die
+// Konstruktions-Reihenfolge in main.go braucht workflowSvc, bevor der
+// I/O-Port-Store sinnvoll darauf verweisen kann).
+func (s *Service) SetIOPortClaimer(c IOPortClaimer) {
+	s.ioPorts = c
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -592,17 +635,31 @@ func (s *Service) Start(ctx context.Context, id string) error {
 	if _, err := computeDelayPlan(wf.Definition, s.launcher.Catalog()); err != nil {
 		return err
 	}
+	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10): I/O-Karten-Port-
+	// Claim als DRITTER Preflight, gleiche Position/Begründung wie die
+	// beiden Latenz-Prüfungen oben (VOR StatusStarting) — anders als
+	// jene beiden ist das kein reiner Definition+Katalog-Check, sondern
+	// mutiert bereits echten, geteilten Zustand (Postgres-Zeilen in
+	// io_port_claims), deshalb synchron und mit Rollback bei Teilfehler
+	// (s. claimIOPortsForStart-Doku), nicht erst in runStart.
+	ioAssignments, err := s.claimIOPortsForStart(wf)
+	if err != nil {
+		return err
+	}
 
 	wf.Status = StatusStarting
 	wf.Error = ""
 	wf.Runtime = map[string]RoleRuntime{}
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
+		if s.ioPorts != nil {
+			s.releaseClaimedRoles(wf.ID, ioAssignmentRoles(ioAssignments))
+		}
 		return err
 	}
 	s.publish(wf)
 
-	safego.Go("workflows.runStart", func() { s.runStart(wf) })
+	safego.Go("workflows.runStart", func() { s.runStart(wf, ioAssignments) })
 	return nil
 }
 
@@ -629,6 +686,73 @@ func (s *Service) persistSchedule(wf Workflow) error {
 	return nil
 }
 
+// claimIOPortsForStart (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10,
+// UMSETZUNG.md D13) reserviert atomar einen physischen I/O-Port für
+// jede Rolle mit Role.RequiredIOPort, BEVOR irgendetwas provisioniert
+// wird — "harte Bedingungen (Port frei?) werden vor weichen (CPU-Trend)
+// geprüft", wörtlich aus §6.1. Anders als die CPU/RAM-Platzierung
+// (SelectHost, Nachtrag 99: "der Start soll immer gelingen") gibt es
+// hier keinen weichen Fallback: findet auch nur eine solche Rolle
+// keinen passenden freien Port, werden alle in DIESEM Aufruf bereits
+// erfolgreichen Claims sofort wieder freigegeben und der gesamte Start
+// ehrlich abgelehnt (kein Teil-Start mit einer unbedienbaren Rolle).
+// Liefert (nil, nil), wenn keine Rolle einen Port braucht — der
+// bestehende Erfolgspfad ohne I/O-Karten bleibt dadurch unverändert.
+func (s *Service) claimIOPortsForStart(wf Workflow) (map[string]string, error) {
+	needsPorts := false
+	for _, role := range wf.Definition.Roles {
+		if role.RequiredIOPort != nil {
+			needsPorts = true
+			break
+		}
+	}
+	if !needsPorts {
+		return nil, nil
+	}
+	if s.ioPorts == nil {
+		return nil, fmt.Errorf("%w: workflow needs an I/O port but no I/O port inventory is configured on this orchestrator", ErrValidation)
+	}
+
+	assignments := map[string]string{}
+	var claimedRoles []string
+	for _, role := range wf.Definition.Roles {
+		if role.RequiredIOPort == nil {
+			continue
+		}
+		hostID, _, ok, err := s.ioPorts.Claim(role.RequiredIOPort.CardType, role.RequiredIOPort.Direction, role.HostID, wf.ID, role.Name, "")
+		if err != nil {
+			s.releaseClaimedRoles(wf.ID, claimedRoles)
+			return nil, fmt.Errorf("workflows: claim io port for role %q: %w", role.Name, err)
+		}
+		if !ok {
+			s.releaseClaimedRoles(wf.ID, claimedRoles)
+			if role.HostID != "" {
+				return nil, fmt.Errorf("%w: role %q needs a free %s/%s port on host %q, none available (no silent fallback to another host)", ErrValidation, role.Name, role.RequiredIOPort.CardType, role.RequiredIOPort.Direction, role.HostID)
+			}
+			return nil, fmt.Errorf("%w: role %q needs a free %s/%s port, none available on any host", ErrValidation, role.Name, role.RequiredIOPort.CardType, role.RequiredIOPort.Direction)
+		}
+		assignments[role.Name] = hostID
+		claimedRoles = append(claimedRoles, role.Name)
+	}
+	return assignments, nil
+}
+
+func (s *Service) releaseClaimedRoles(workflowID string, roles []string) {
+	for _, role := range roles {
+		if err := s.ioPorts.Release(workflowID, role); err != nil {
+			slog.Warn("workflows: rollback: release io port claim failed", "workflow", workflowID, "role", role, "error", err)
+		}
+	}
+}
+
+func ioAssignmentRoles(assignments map[string]string) []string {
+	roles := make([]string, 0, len(assignments))
+	for role := range assignments {
+		roles = append(roles, role)
+	}
+	return roles
+}
+
 // runStart führt die eigentliche Provisionierung aus (Hintergrund-
 // Goroutine, s. Start()). Fehler bei einzelnen Rollen werden gesammelt
 // statt beim ersten Fehler abzubrechen (gleiches Muster wie
@@ -648,7 +772,14 @@ func (s *Service) persistSchedule(wf Workflow) error {
 // nur eben ggf. anderswo als in der Definition eingetragen. s.resources
 // darf nil sein (z. B. Tests ohne verdrahtete Placement-Engine) — dann
 // bleibt role.HostID unverändert wie vor Nachtrag 99.
-func (s *Service) runStart(wf Workflow) {
+//
+// ioAssignments (D13, s. claimIOPortsForStart) überschreibt für Rollen
+// mit Role.RequiredIOPort den SelectHost-Aufruf komplett — der Host
+// steht durch den bereits erfolgreichen Port-Claim in Start() fest,
+// eine zusätzliche, davon unabhängige CPU/RAM-basierte Umplatzierung
+// hier würde den gerade erst geclaimten Port auf dem falschen Host
+// zurücklassen.
+func (s *Service) runStart(wf Workflow, ioAssignments map[string]string) {
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	defer cancel()
 
@@ -677,7 +808,12 @@ func (s *Service) runStart(wf Workflow) {
 	for _, role := range wf.Definition.Roles {
 		resolvedHostID := role.HostID
 		var placementReason string
-		if s.resources != nil {
+		if claimedHostID, ok := ioAssignments[role.Name]; ok {
+			// D13: der Host steht bereits per I/O-Port-Claim fest (harte
+			// Bedingung) — SelectHost (weiche CPU/RAM-Heuristik) bekommt
+			// hier bewusst kein Mitspracherecht, s. runStart-Doku.
+			resolvedHostID = claimedHostID
+		} else if s.resources != nil {
 			result := s.resources.SelectHost(placement.PlacementRequest{
 				NodeType:        role.NodeType,
 				PreferredHostID: role.HostID,
@@ -701,6 +837,15 @@ func (s *Service) runStart(wf Workflow) {
 		if err != nil {
 			s.fail(wf, fmt.Sprintf("role %s: start failed: %v", role.Name, err))
 			return
+		}
+		if _, claimed := ioAssignments[role.Name]; claimed && s.ioPorts != nil {
+			// Rein für Anzeigezwecke (s. IOPortClaimer.UpdateInstanceID-
+			// Doku) — ein Fehler hier ist kein Startabbruch (der Claim
+			// selbst besteht bereits, nur sein Instanz-ID-Anzeigefeld
+			// bliebe leer).
+			if err := s.ioPorts.UpdateInstanceID(wf.ID, role.Name, inst.ID); err != nil {
+				slog.Warn("workflows: update io port claim instance id failed", "workflow", wf.ID, "role", role.Name, "error", err)
+			}
 		}
 		wf.Runtime[role.Name] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
 		pending[role.Name] = inst.ID
@@ -1442,6 +1587,26 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 	// weg und hat nichts mehr zu befragen.
 	s.captureRoleState(wf)
 
+	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10): I/O-Port-Claims
+	// freigeben — über Definition.Roles statt nur wf.Runtime, damit auch
+	// eine Rolle sauber aufgeräumt wird, deren Port bereits geclaimt,
+	// deren Instanz-Start aber fehlgeschlagen war (s.
+	// claimIOPortsForStart/runStart: ein solcher Workflow landet in
+	// "failed", der Claim bliebe ohne diesen Schritt hier verwaist
+	// liegen, bis Stop() ihn — wie jeden anderen teilgestarteten Workflow
+	// auch — gebündelt aufräumt). Release() ist ein No-Op ohne Fehler,
+	// wenn für eine Rolle nie ein Claim existierte.
+	if s.ioPorts != nil {
+		for _, role := range wf.Definition.Roles {
+			if role.RequiredIOPort == nil {
+				continue
+			}
+			if err := s.ioPorts.Release(wf.ID, role.Name); err != nil {
+				slog.Warn("workflows: release io port claim failed", "workflow", wf.ID, "role", role.Name, "error", err)
+			}
+		}
+	}
+
 	var errs []string
 	for role, rt := range wf.Runtime {
 		if rt.InstanceID == "" {
@@ -1502,6 +1667,14 @@ func validate(def Definition) error {
 		if r.Format != "" {
 			if _, ok := standardFormats[r.Format]; !ok {
 				return fmt.Errorf("%w: role %q references unknown format %q (not one of %v)", ErrValidation, r.Name, r.Format, StandardFormatNames())
+			}
+		}
+		if r.RequiredIOPort != nil {
+			if r.RequiredIOPort.CardType == "" {
+				return fmt.Errorf("%w: role %q requiredIoPort needs a cardType", ErrValidation, r.Name)
+			}
+			if r.RequiredIOPort.Direction != "in" && r.RequiredIOPort.Direction != "out" {
+				return fmt.Errorf("%w: role %q requiredIoPort.direction must be \"in\" or \"out\", got %q", ErrValidation, r.Name, r.RequiredIOPort.Direction)
 			}
 		}
 		nodeTypeByRole[r.Name] = r.NodeType

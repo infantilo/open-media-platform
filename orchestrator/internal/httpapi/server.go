@@ -211,7 +211,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
@@ -310,8 +310,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.
 	mux.HandleFunc("POST /api/v1/admin/hosts/bootstrap-tokens", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBootstrapToken(hostRegistry)))
-	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, events))
-	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics)))
+	mux.HandleFunc("POST /api/v1/hosts/register", handleRegisterHost(hostRegistry, ioPortStore, events))
+	mux.HandleFunc("GET /api/v1/hosts", g.requireAuth(handleListHosts(hostRegistry, hostMetrics, ioPortStore)))
 	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12 Teil 1).
 	mux.HandleFunc("GET /api/v1/cluster/status", g.requireAuth(handleClusterStatus(clusterSvc)))
 	// D12 Teil 2: Laufzeit-Mitgliedschaft — Admin-Verb wie andere

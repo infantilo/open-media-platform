@@ -439,6 +439,63 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	}
 	oldNodeID := wf.Runtime[role].NodeID
 
+	// D13 (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10 Punkt 3, wörtlich:
+	// "gibt es keinen Ersatz-Host mit Karte, ist der ehrliche Befund
+	// 'nicht migrierbar' [...], kein stiller Fallback") — VOR jedem
+	// Seiteneffekt (noch keine neue Instanz gestartet, kein
+	// "executing"-Event) geprüft: braucht die Rolle einen I/O-Port,
+	// muss der Zielhost einen passenden freien haben, sonst bricht die
+	// Migration hier komplett ab, die alte Instanz bleibt unangetastet.
+	// Der neue Claim teilt sich (workflowID, role) mit dem noch aktiven
+	// alten — beide koexistieren bis zum erfolgreichen Cutover unten
+	// (s. IOPortClaimer-Doku in service.go), deshalb GetClaim/
+	// ReleasePort statt des mehrdeutigen Release(workflowID, role).
+	var newPortHostID, newPortID string
+	var oldPortHostID, oldPortID string
+	var hasNewPort, hasOldPort bool
+	if roleDef.RequiredIOPort != nil {
+		if s.ioPorts == nil {
+			slog.Warn("workflows: executeMigration: role needs an io port but no io port inventory is configured, not migrable",
+				"workflow", workflowID, "role", role)
+			s.publishMigrationEvent(migrationEvent{
+				WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
+				Reason: "not-migrable-no-io-port-inventory", Status: "failed", At: time.Now(),
+			})
+			return
+		}
+		// Zuerst den ALTEN Claim festhalten (vor dem neuen Claim
+		// unzweideutig, s. Kommentar oben) — fehlt er (z. B. weil das
+		// Inventar zwischenzeitlich geändert wurde), ist das kein
+		// Abbruchgrund für sich, nur ReleasePort unten entfällt dann.
+		if h, p, ok, err := s.ioPorts.GetClaim(workflowID, role); err != nil {
+			slog.Warn("workflows: executeMigration: lookup of existing io port claim failed", "workflow", workflowID, "role", role, "error", err)
+		} else if ok {
+			oldPortHostID, oldPortID, hasOldPort = h, p, true
+		}
+
+		claimedHost, claimedPort, ok, err := s.ioPorts.Claim(roleDef.RequiredIOPort.CardType, roleDef.RequiredIOPort.Direction, targetHostID, workflowID, role, "")
+		if err != nil {
+			slog.Warn("workflows: executeMigration: io port claim on target host failed",
+				"workflow", workflowID, "role", role, "targetHost", targetHostID, "error", err)
+			s.publishMigrationEvent(migrationEvent{
+				WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
+				Reason: "not-migrable-io-port-claim-error", Status: "failed", At: time.Now(),
+			})
+			return
+		}
+		if !ok {
+			slog.Info("workflows: executeMigration: not migrable, target host has no free matching io port",
+				"workflow", workflowID, "role", role, "targetHost", targetHostID,
+				"cardType", roleDef.RequiredIOPort.CardType, "direction", roleDef.RequiredIOPort.Direction)
+			s.publishMigrationEvent(migrationEvent{
+				WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
+				Reason: "not-migrable-no-free-io-port", Status: "failed", At: time.Now(),
+			})
+			return
+		}
+		newPortHostID, newPortID, hasNewPort = claimedHost, claimedPort, true
+	}
+
 	s.publishMigrationEvent(migrationEvent{
 		WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
 		Reason: reason, Status: "executing", At: time.Now(),
@@ -462,6 +519,18 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		}
 	}
 
+	// releaseNewPortOnAbort gibt den oben (falls vorhanden) neu
+	// geclaimten Port wieder frei — der ALTE Claim bleibt in allen drei
+	// Abbruchpfaden unten unangetastet (die alte Instanz läuft ja
+	// unverändert weiter).
+	releaseNewPortOnAbort := func() {
+		if hasNewPort {
+			if err := s.ioPorts.ReleasePort(newPortHostID, newPortID); err != nil {
+				slog.Warn("workflows: executeMigration: release new io port claim after abort failed", "workflow", workflowID, "role", role, "error", err)
+			}
+		}
+	}
+
 	// Schritt 1: neue Instanz auf dem Zielhost — die alte bleibt
 	// unangetastet laufen (der eigentliche Unterschied zu
 	// rewireAfterRestart/promoteStandby, wo die alte Instanz bereits
@@ -470,11 +539,17 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	if err != nil {
 		slog.Warn("workflows: executeMigration: start on target host failed, keeping old instance",
 			"workflow", workflowID, "role", role, "targetHost", targetHostID, "error", err)
+		releaseNewPortOnAbort()
 		s.publishMigrationEvent(migrationEvent{
 			WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, TargetHostID: targetHostID,
 			Reason: reason, Status: "failed", At: time.Now(),
 		})
 		return
+	}
+	if hasNewPort {
+		if err := s.ioPorts.UpdateInstanceID(workflowID, role, newInst.ID); err != nil {
+			slog.Warn("workflows: executeMigration: update new io port claim instance id failed", "workflow", workflowID, "role", role, "error", err)
+		}
 	}
 
 	// Schritt 2: auf ihre Registrierung warten.
@@ -487,6 +562,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
 			slog.Warn("workflows: executeMigration: cleanup of failed new instance failed", "instance", newInst.ID, "error", stopErr)
 		}
+		releaseNewPortOnAbort()
 		s.publishMigrationEvent(migrationEvent{
 			WorkflowID: workflowID, Role: role, FromInstanceID: oldInstanceID, ToInstanceID: newInst.ID, TargetHostID: targetHostID,
 			Reason: reason, Status: "failed", At: time.Now(),
@@ -498,6 +574,7 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	if !ok {
 		slog.Info("workflows: executeMigration: role superseded before cutover, stopping the now-unneeded extra instance",
 			"workflow", workflowID, "role", role)
+		releaseNewPortOnAbort()
 		if stopErr := s.launcher.Stop(newInst.ID); stopErr != nil {
 			slog.Warn("workflows: executeMigration: cleanup after supersede failed", "instance", newInst.ID, "error", stopErr)
 		}
@@ -570,9 +647,17 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	}
 
 	// Schritt 6: erst JETZT die alte Instanz stoppen — der eigentliche
-	// "Break"-Schritt, bewusst zuletzt.
+	// "Break"-Schritt, bewusst zuletzt. Der ALTE I/O-Port-Claim wird
+	// erst hier freigegeben (gezielt per ReleasePort, nicht per
+	// Release(workflowID, role) — der neue Claim für dasselbe
+	// (workflowID, role) muss bestehen bleiben, s. Kommentar oben).
 	if err := s.launcher.Stop(oldInstanceID); err != nil {
 		slog.Warn("workflows: executeMigration: stop old instance failed", "workflow", wf.ID, "role", role, "instance", oldInstanceID, "error", err)
+	}
+	if hasOldPort {
+		if err := s.ioPorts.ReleasePort(oldPortHostID, oldPortID); err != nil {
+			slog.Warn("workflows: executeMigration: release old io port claim failed", "workflow", wf.ID, "role", role, "error", err)
+		}
 	}
 
 	s.publishMigrationEvent(migrationEvent{

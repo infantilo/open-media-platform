@@ -115,6 +115,27 @@ type Role struct {
 	// in jede Workflow-Definition geschrieben (live per echtem
 	// `POST /api/v1/workflows`-Roundtrip gefunden, nicht vermutet).
 	Placement *RolePlacementPolicy `json:"placement,omitempty"`
+	// RequiredIOPort (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10,
+	// UMSETZUNG.md D13): deklariert, dass diese Rolle für ihre gesamte
+	// Laufzeit einen exklusiven physischen Host-I/O-Port braucht (z. B.
+	// eine DeckLink-SDI-Eingangs-Karte) — anders als CPU/RAM (§6.1
+	// Punkt 1, kontinuierlich, weich über SelectHost) ist das eine
+	// diskrete, exklusive Ressource: entweder ein passender freier Port
+	// existiert, oder der Start wird ehrlich abgelehnt, kein stiller
+	// Ausweich-Host wie bei CPU-Überlast. nil (Default) = unverändertes
+	// Verhalten, keine Port-Anforderung.
+	RequiredIOPort *IOPortRequirement `json:"requiredIoPort,omitempty"`
+}
+
+// IOPortRequirement benennt die Art des benötigten Ports — CardType/
+// Direction müssen exakt einen von ioports.Store.ListInventory
+// gemeldeten Port matchen (z. B. CardType="decklink", Direction="in").
+// Bewusst kein konkreter Host hier (das ist role.HostID, unverändert) —
+// Placement wählt bei leerem HostID selbst einen Host mit freiem
+// passendem Port, s. Service.claimIOPortsForStart.
+type IOPortRequirement struct {
+	CardType  string `json:"cardType"`
+	Direction string `json:"direction"` // "in" | "out"
 }
 
 // PlacementEscalation liefert die Eskalationsstufe dieser Rolle,

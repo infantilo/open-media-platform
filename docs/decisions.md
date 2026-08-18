@@ -18138,3 +18138,165 @@ geplanten Umfang vollständig abgeschlossen** (Teile 1-3).
 `orchestrator/internal/workflows/{scheduler,scheduler_test}.go`,
 `ARCHITECTURE.md` (§19.3 Punkt 5/6), `UMSETZUNG.md` (D12 Teil 3 +
 Checkliste).
+
+## 2026-08-18 (Nachtrag 150) — Schritt D13: I/O-Karten-Claim/Release (ARCHITECTURE.md §6.1 Erweiterung 2026-07-10), live mit echtem Host-Agent verifiziert
+
+**Kontext:** Nutzerauftrag "make I/O-card claim/release" im direkten
+Anschluss an D12 (Nachtrag 149). Schließt eine seit 2026-07-10 in §6.1/
+§18.4 offen dokumentierte Lücke: "I/O-Karten-Claim/Release (kein
+Geräte-Inventar existiert)" stand seit D6 Teil 3 (2026-07-14) als
+bekannte Scope-Grenze im Dokument.
+
+**Zwei Design-Entscheidungen vor der Umsetzung geklärt, nicht geraten**
+(`UMSETZUNG.md` §0 Punkt 6):
+
+1. **Geräte-Inventar: konfiguriert, nicht automatisch erkannt.** §18.4
+   hatte die Frage "wie wird das Inventar gemessen" explizit als
+   "Eigenrecherche bei der Umsetzung" offengelassen. `nodes/omp-decklink`
+   (D10) zeigte den Präzedenzfall: der Node adressiert eine DeckLink-
+   Karte nur über einen numerischen `device-number`-Parameter (GStreamer
+   `decklinkvideosrc`/-`sink`), keine eigene Geräte-Enumeration — D10
+   selbst wurde bereits bewusst "ohne Hardware" getestet/verifiziert. Da
+   die Single-Host-Dev-Maschine keine echte DeckLink-Karte hat und
+   `UMSETZUNG.md` §0 Punkt 7 ausdrücklich verbietet, etwas einzubauen,
+   "das nur mit Broadcast-Hardware testbar wäre", wurde eine echte
+   SDK-Erkennung bewusst NICHT gebaut. Stattdessen liest der Host-Agent
+   sein Inventar aus einer lokalen JSON-Datei
+   (`OMP_HOST_AGENT_IO_PORTS_PATH`, exakt dasselbe Muster wie
+   `OMP_HOST_AGENT_CATALOG_PATH` für den Instanz-Katalog) und meldet sie
+   einmalig bei der Registrierung — eine künftige echte Erkennung kann
+   diese Datei ersetzen/generieren, ohne das Registrierungs-Wireformat
+   (`ioPorts`-Feld) zu ändern.
+2. **Claim/Release: Postgres-Atomarität statt Raft-FSM (D12).** Direkt
+   auf der bei D12 Teil 3 gewonnenen Erkenntnis aufgebaut (Nachtrag 149:
+   "prüfen, ob Leader-Gating reicht, oder eine echte Sperre nötig ist,
+   statt FSM-Replikation vorschnell anzunehmen"): I/O-Port-Claims sind
+   KEIN lokales Objekt einer einzelnen Prozessinstanz (anders als die
+   vier D12-Teil-3-Zustände) — der auslösende Schreibpfad
+   (`POST /api/v1/workflows/{id}/start`) ist eine normale, NICHT
+   leader-gated HTTP-Route, kann also auf jeder Cluster-Instanz (D12)
+   gleichzeitig ausgeführt werden. Ein Leader-Gating-Ansatz allein hätte
+   hier folglich NICHT ausgereicht — echte Exklusivität war nötig.
+   Diese liefert Postgres direkt: ein einzelner atomarer SQL-Satz
+   (`WITH candidate AS (… FOR UPDATE OF p SKIP LOCKED) INSERT … ON
+   CONFLICT DO NOTHING`), `PRIMARY KEY (host_id, port_id)` auf
+   `io_port_claims` ist die Exklusivitäts-Garantie — funktioniert
+   korrekt unabhängig davon, wie viele Orchestrator-Instanzen
+   gleichzeitig einen Start bearbeiten, ganz ohne Raft-Bezug. Damit
+   bestätigt sich die D12-Lehre kein zweites Mal zufällig, sondern an
+   einem Fall, der sie noch direkter braucht.
+
+**Umsetzung:**
+
+- `db/migrations/0015_io_ports.sql`: `host_io_ports` (statisches
+  Inventar, Fremdschlüssel auf `hosts.id`) + `io_port_claims`
+  (dynamische Belegung, `PRIMARY KEY (host_id, port_id)`).
+- `orchestrator/internal/ioports` (neues Paket): `Store.SetInventory`
+  (Upsert + Löschen nicht mehr gemeldeter Ports — mit einer Ausnahme:
+  ein aktuell BELEGTER Port wird nie entfernt, selbst wenn er im neuen
+  Inventar fehlt, damit ein Host-Agent-Neustart mit geändertem Inventar
+  keinen laufenden Claim stillschweigend verwaist), `Claim` (die oben
+  beschriebene atomare Ein-Satz-Reservierung, respektiert
+  `preferredHostID` ohne stillen Fallback auf einen anderen Host),
+  `Release`/`GetClaim`/`ReleasePort` (letztere beiden für migration.go:
+  eine laufende Migration hält vorübergehend ZWEI Claims für dasselbe
+  `(workflowID, role)` — den alten auf dem Quell-, den neuen auf dem
+  Zielhost —, `Release(workflowID, role)` allein wäre dort mehrdeutig).
+- `orchestrator/internal/workflows`: `Role.RequiredIOPort` (additiv,
+  `nil` = unverändertes Verhalten), `IOPortClaimer`-Interface (gleiches
+  Entkopplungsmuster wie `ResourcePrecheck`/`HostMetricsReader` — kein
+  `workflows`→`ioports`-Paket-Import). `Service.Start()`:
+  `claimIOPortsForStart` als dritter synchroner Preflight (neben den
+  beiden Latenzbudget-Prüfungen aus D8), VOR `StatusStarting` — findet
+  auch nur eine Rolle keinen passenden freien Port, werden alle in
+  diesem Aufruf bereits erfolgreichen Claims sofort zurückgegeben und
+  der GESAMTE Start abgelehnt (kein Teil-Start, "ehrliche Ablehnung
+  statt Teil-Start", dieselbe Formulierung wie bereits beim
+  Latenzbudget-Preflight etabliert). `runStart`: der geclaimte Host
+  überschreibt `SelectHost`s CPU/RAM-Heuristik für die betroffene Rolle
+  vollständig ("harte Bedingungen vor weichen" ist damit nicht nur eine
+  Prüf-Reihenfolge, sondern entscheidet auch, WER am Ende den Zielhost
+  bestimmt). `runStop`: Freigabe über `Definition.Roles` (nicht nur
+  `Runtime`) — räumt dadurch auch eine Rolle auf, deren Port bereits
+  geclaimt, deren `launcher.StartLabeled` aber fehlgeschlagen war (der
+  Workflow landet dann in "failed", `Stop()` muss ihn trotzdem sauber
+  aufräumen können, exakt wie das bereits für alle anderen Teil-Start-
+  Fälle gilt).
+- `orchestrator/internal/workflows/migration.go`: `executeMigration`
+  (gemeinsamer Pfad für manuellen Drag-Umzug `MigrateRole` UND
+  automatische Placement-Eskalation `considerMigration`/
+  `firePendingMigration`/`ConfirmMigration` — ein einziger Hook deckt
+  beide Auslöser ab) claimt bei `RequiredIOPort`-Rollen einen Port auf
+  dem Zielhost VOR jedem Seiteneffekt (vor Schritt 1, "neue Instanz
+  starten"); kein Treffer heißt sofortiger Abbruch mit
+  `workflow.migration`-SSE-Event `Reason: "not-migrable-no-free-io-port"`,
+  Status `failed` — keine neue Instanz wird je gestartet. Erfolgreiche
+  Migration: der neue Claim koexistiert mit dem alten (unterschiedliche
+  `host_id`/`port_id`, dieselbe `(workflowID, role)`), bis der
+  Break-Schritt (alte Instanz stoppen) den alten gezielt per
+  `ReleasePort` freigibt.
+- `orchestrator/internal/httpapi`: `IOPortInventoryStore`-Interface
+  (bewusst mit dem konkreten `ioports.Port`/`ioports.Claim`-Typ, nicht
+  wie sonst mit Platzhaltern — httpapi ist bereits die äußere
+  Komposition-Schicht, importiert auch `hosts.Host` direkt).
+  `POST /api/v1/hosts/register` nimmt ein optionales `ioPorts`-Feld;
+  `GET /api/v1/hosts` liefert `ioPorts`/`ioPortClaims` je Host mit.
+- `host-agent/main.go`: `loadIOPorts` (liest die JSON-Datei, s. Design-
+  Entscheidung 1), `register()` sendet sie mit.
+
+**Automatisierte Verifikation:** `internal/ioports` (10 neue Tests,
+echte Postgres-Verbindung über `dbtest.Open` — u. a.
+`TestClaimIsAtomicUnderRealConcurrency`: 20 parallele Goroutinen
+claimen denselben einzigen Port, genau einer gewinnt, dreimal
+wiederholt ohne Flake; `TestSetInventoryKeepsClaimedPortsEvenIfNotReReported`;
+`TestGetClaimAndReleasePortDuringMigration`). Ein echter Test-
+Isolationsfehler live gefunden+behoben: die ersten Testläufe zeigten
+falsche Treffer, weil `Claim()` ohne `preferredHostID` bewusst über
+ALLE Hosts sucht — ein von einem früheren Test stehengebliebener Port
+in derselben `dbtest`-Datenbank wurde fälschlich gefunden; behoben durch
+`cleanTables` (leert `io_port_claims`/`host_io_ports`/`hosts` vor UND
+nach jedem Test, gleiches Muster wie `internal/launcher/store_test.go`).
+`internal/workflows` (6 neue Tests: Claim beim Start, ehrliche Ablehnung
+ohne passenden Port, Ablehnung ohne konfigurierten Claimer, Rollback bei
+Teilfehler über zwei Rollen, Freigabe bei Stop, Migrations-Grenze
+rejects/moves). `host-agent` (4 neue Tests für `loadIOPorts`). `go
+build/vet/test ./...` grün in beiden Modulen, keine Regression (ein
+bereits bekannter, unabhängiger Timing-Flake in `internal/launcher`
+erneut isoliert reproduziert und als nicht-verursacht bestätigt).
+
+**Zusätzlich live mit einem echten Host-Agent-Prozess + echtem
+Orchestrator verifiziert** (NMOS-Registry temporär wieder gestartet, da
+sie zu Sitzungsbeginn auf Nutzerwunsch gestoppt worden war — danach
+wieder gestoppt): ein Host-Agent mit `OMP_HOST_AGENT_IO_PORTS_PATH` auf
+eine Ein-Port-DeckLink-Inventar-Datei registrierte sich real über einen
+echten Bootstrap-Token-Fluss — `GET /api/v1/hosts` zeigte das Inventar
+korrekt. Ein Workflow mit einer `requiredIoPort`-Rolle (echter
+`omp-decklink`-Node-Typ, `nodes/target/debug/omp-decklink`) wurde
+gestartet — der Port-Claim erschien sofort in `GET /api/v1/hosts`
+(`ioPortClaims`), obwohl der eigentliche Prozess-Start am Host-Agent-
+seitig fehlenden Katalog-Eintrag scheiterte (erwartet, D6-Teil-2-
+Sicherheitsgrenze, kein D13-Bug) — bewies genau den Teilfehler-Fall:
+der Claim blieb bestehen, bis der Workflow explizit gestoppt wurde. Ein
+zweiter, konkurrierender Workflow mit identischer Port-Anforderung auf
+demselben Host wurde beim Start-Versuch mit HTTP 400 und der Meldung
+„role … needs a free decklink/in port on host …, none available (no
+silent fallback to another host)" abgelehnt. Nach `Stop()` des ersten
+Workflows verschwand der Claim (`ioPortClaims: null`), der zweite
+Start gelang sofort danach (HTTP 200). Beide Test-Workflows und der
+Test-Host danach über die echte API bzw. direkt in Postgres entfernt
+(keine Reste in `hosts`/`host_io_ports`/`io_port_claims`), alle
+Demo-Prozesse gestoppt, NMOS-Registry-Container wieder in den
+Vor-Sitzungs-Zustand (gestoppt) zurückversetzt.
+
+**Bewusst nicht Teil dieser Sitzung:** echte herstellerspezifische
+SDK-Geräte-Erkennung (s. Design-Entscheidung 1), GPU/NIC-Telemetrie,
+Cloud-Kostenfaktor (§6.1, unverändert offen, keine dieser drei war
+D13s Auftrag).
+
+**Dateien:** `orchestrator/internal/db/migrations/0015_io_ports.sql`
+(neu), `orchestrator/internal/ioports/{ioports,ioports_test}.go` (neu),
+`orchestrator/internal/workflows/{types,service,migration,ioports_test}.go`,
+`orchestrator/internal/httpapi/{host_handlers,server,server_test,
+host_handlers_test}.go`, `orchestrator/main.go`,
+`host-agent/{main,main_test}.go`, `ARCHITECTURE.md` (§6.1, §18.4),
+`UMSETZUNG.md` (D13 + Checkliste).

@@ -2000,6 +2000,77 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   ist D12 (Orchestrator-Cluster) in dem für diese Sitzungsreihe
   geplanten Umfang abgeschlossen.
 
+- **D13 (erledigt, 2026-08-18) — I/O-Karten-Claim/Release (ARCHITECTURE.md
+  §6.1 Erweiterung 2026-07-10).** Nutzerauftrag "make I/O-card
+  claim/release" im Anschluss an D12. Schließt die in §6.1/§18.4 seit
+  2026-07-10 offen dokumentierte Lücke ("kein Geräte-Inventar
+  vorhanden") — Geräte-Inventar UND Claim/Release-Semantik jetzt real
+  gebaut, nicht nur skizziert.
+
+  **Design-Entscheidungen vor der Umsetzung geklärt (nicht geraten):**
+  (1) Inventar wird vom Host-Agent aus einer lokalen JSON-Datei gelesen
+  (`OMP_HOST_AGENT_IO_PORTS_PATH`), NICHT automatisch per Hersteller-SDK
+  erkannt — echte DeckLink-Erkennung bräuchte echte Hardware, die auf
+  der Single-Host-Dev-Maschine nicht existiert (`UMSETZUNG.md` §0
+  Punkt 7); die Datei kann später durch echte Erkennung ersetzt werden,
+  ohne das Wireformat zu ändern. (2) Claim/Release lebt in Postgres
+  (neues Paket `internal/ioports`, `host_io_ports`/`io_port_claims`,
+  `db/migrations/0015_io_ports.sql`), NICHT im Raft-FSM aus D12 — ein
+  einzelner atomarer SQL-Satz (`WITH … FOR UPDATE OF … SKIP LOCKED …
+  INSERT … ON CONFLICT DO NOTHING`, `PRIMARY KEY (host_id, port_id)` als
+  Exklusivitäts-Garantie) reicht für "genau einmal cluster-weit
+  geclaimt", dieselbe bei D12 Teil 3 gewonnene Lehre (Nachtrag 149)
+  bestätigt sich hier — mit einem noch direkteren Grund, da der
+  auslösende Schreibpfad (Workflow-Start) nie leader-gated ist/war, ein
+  reiner Leader-Gating-Ansatz hätte hier also gar nicht ausgereicht.
+
+  **Umsetzung:** `internal/ioports.Store` (`SetInventory` — Upsert +
+  Löschen nicht mehr gemeldeter, UNGEclaimter Ports, ein aktiver Claim
+  überlebt ein geändertes Inventar immer; `Claim`/`Release`/`GetClaim`/
+  `ReleasePort`/`ListAllPorts`/`ListClaims`). `workflows.Role.
+  RequiredIOPort` (additiv, `nil` = unverändert). `Service.Start()`:
+  dritter synchroner Preflight (`claimIOPortsForStart`, neben den beiden
+  Latenzbudget-Prüfungen aus D8) — claimt VOR `StatusStarting`, bei
+  Teilfehler werden alle in diesem Aufruf bereits erfolgreichen Claims
+  sofort zurückgegeben, der GESAMTE Start ehrlich abgelehnt (kein
+  Teil-Start). Der geclaimte Host überschreibt `SelectHost` vollständig
+  für die betroffene Rolle. `Service.Stop()`/`runStop`: Freigabe über
+  `Definition.Roles` (nicht nur `Runtime`), damit auch eine Rolle
+  aufräumt, deren Port bereits geclaimt, deren Instanz-Start aber
+  fehlgeschlagen war. `migration.go: executeMigration` (gemeinsamer Pfad
+  für manuellen Drag-Umzug UND automatische Placement-Eskalation):
+  claimt einen Port auf dem Zielhost VOR dem ersten Seiteneffekt — kein
+  Treffer heißt "nicht migrierbar" (Alarm, `not-migrable-no-free-io-port`),
+  Abbruch ohne jede neue Instanz; alter und neuer Claim koexistieren
+  kurzzeitig (unterschiedliche Ports, dieselbe Rolle), bis der
+  Break-Schritt den alten gezielt freigibt (`ReleasePort`, nicht das
+  mehrdeutige `Release(workflowID, role)`). `POST /api/v1/hosts/register`
+  nimmt jetzt ein optionales `ioPorts`-Feld; `GET /api/v1/hosts` liefert
+  `ioPorts`/`ioPortClaims` je Host mit.
+
+  **Verifikation (bestanden):** `go build/vet/test ./...` grün — neue
+  Pakete/Tests: `internal/ioports` (10 Tests inkl. eines echten
+  Nebenläufigkeits-Tests: 20 parallele Goroutinen gegen denselben Port,
+  genau ein Gewinner, echte Postgres-Verbindung, kein Mock), 6 neue
+  `workflows`-Tests (Claim beim Start, ehrliche Ablehnung ohne
+  passenden Port, Ablehnung ohne konfigurierten Claimer, Rollback bei
+  Teilfehler, Freigabe bei Stop, Migrations-Grenze rejects/moves), 4
+  neue `host-agent`-Tests (`loadIOPorts`). **Zusätzlich live mit einem
+  echten Host-Agent-Prozess + echtem Orchestrator verifiziert:** ein
+  Host-Agent mit deklariertem Ein-Port-DeckLink-Inventar registrierte
+  sich real (Inventar sichtbar in `GET /api/v1/hosts`); ein Workflow mit
+  passender `requiredIoPort`-Rolle claimte den Port beim Start (Claim
+  sichtbar in derselben API-Antwort); ein zweiter, konkurrierender
+  Workflow-Start auf demselben Host/Porttyp wurde mit HTTP 400 und der
+  exakten Ablehnungsbegründung verweigert; nach `Stop()` des ersten
+  Workflows war der Claim weg, der zweite Start gelang sofort danach.
+  Alle Testdaten (Workflows, Test-Host) danach aus der echten
+  Dev-Postgres entfernt, NMOS-Registry-Container wieder gestoppt (Stand
+  vor dieser Sitzung). Details: `docs/decisions.md` Nachtrag 150.
+  **Bewusst nicht Teil dieser Sitzung:** echte herstellerspezifische
+  SDK-Auto-Erkennung (s. Design-Entscheidung 1 oben), GPU/NIC-Telemetrie,
+  Cloud-Kostenfaktor (§6.1, unverändert offen).
+
 ---
 
 ## 6a. Kapitel 10 — Endziel-Anforderungen (`docs/END-GOAL-FEATURES.md`)
@@ -2662,3 +2733,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D12 Teil 1 (Orchestrator-Cluster: Raft-Grundgerüst) | erledigt | Nutzerauftrag "Architect a highly available, clustered Orchestrator setup ... using a Raft consensus mechanism" (2026-08-18); ersetzt die alte Postgres-Advisory-Lock-Skizze aus ARCHITECTURE.md §19 (Begründung: schließt deren offen zugegebene Lücke, dass die Leader-Wahl selbst an Postgres hing). Neues Paket `internal/cluster` (`hashicorp/raft` v1.7.3 + `raft-boltdb/v2` v2.3.1, eigener TCP(+mTLS)-Transport statt NATS-Nachbau), `GET /api/v1/cluster/status`, Selbst-Bootstrap als Ein- oder Mehr-Knoten-Cluster je nach `OMP_CLUSTER_PEERS`. `go test ./...` grün (neue Tests inkl. echtem Drei-Knoten-Bootstrap/Replikation/Neuwahl über echtes TCP im Testprozess); zusätzlich live mit drei echten, separaten OS-Prozessen verifiziert — ein echtes `kill -9` des Leader-Prozesses löste binnen Sekunden eine echte Neuwahl unter den beiden Überlebenden aus (Term 2→4, per HTTP-API bestätigt), eine vierte Solo-Instanz ohne `OMP_CLUSTER_PEERS` bestätigte unverändertes Single-Host-Verhalten. Details: `docs/decisions.md` Nachtrag 146 (Architektur-Entscheidung)/147 (Umsetzung). Teil 2 (Join/Leave-API)/Teil 3 (FSM-Migration der echten Control-Plane-Zustände) offen. | 2026-08-18 |
 | D12 Teil 2 (Live-Mitgliedschaft: Join/Leave-API) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1. `POST /api/v1/cluster/join`/`DELETE /api/v1/cluster/members/{id}` (Admin-Verb), `raft.AddVoter`/`RemoveServer`; neue Instanzen starten mit `OMP_CLUSTER_JOIN=true` (`cluster.Config.SkipBootstrap`, warten passiv statt sich selbst zu bootstrappen). Peer-HTTP-Adressbuch jetzt FSM-repliziert statt statisch (jede Instanz kündigt sich bei Führungsübernahme selbst an, `CommandSetPeerHTTPAddr`) — Follower leiten Join/Leave transparent per `httputil.ReverseProxy` an die echte Leader-Adresse weiter (`forwardToLeader`), ersetzt den in der alten Skizze noch für nötig gehaltenen externen VIP/Proxy-Baustein vollständig. Empirisch korrigierte Annahme unterwegs: `raft.Config.ShutdownOnRemove` fährt laut Quelltext nur den Leader herunter, wenn er sich selbst entfernt, nicht eine entfernte Nicht-Leader-Instanz (vor der Umsetzung per gezieltem Testlauf geklärt, nicht der Doku-Formulierung vertraut). `go test ./...` grün (4 neue Cluster-Tests); zusätzlich live mit drei echten Prozessen verifiziert: Cluster wuchs 1→2→3 über echte `POST /api/v1/cluster/join`-Aufrufe, ein an den FOLLOWER gerichteter Join-Request wurde nachweislich (Response trug die Leader-`nodeId`) transparent weitergeleitet statt lokal falsch beantwortet, `kill -9` des Leaders löste echte Neuwahl aus, `DELETE .../members/{id}` schrumpfte den Cluster 3→2 mit korrekt bereinigtem Adressbuch auf beiden Überlebenden. Details: `docs/decisions.md` Nachtrag 148. Teil 3 (FSM-Migration der echten Control-Plane-Zustände + Aktiv/Passiv-Gating) offen. | 2026-08-18 |
 | D12 Teil 3 (Aktiv/Passiv-Gating, Plan bei Umsetzung vereinfacht) | erledigt | Direkter Nutzerauftrag "proceed" im Anschluss an Teil 2. Code-Lektüre vor der Umsetzung zeigte: die geplante FSM-Migration der §19.3-Punkt-5-Zustände (Migrations-Sperren, Crash-Loop-Zähler, Standby-Beförderung, Scheduler-Feuerzustand) ist unnötig — alle vier sind bereits rein lokale Objekte einer Prozessinstanz, Aktiv/Passiv-Gating der erzeugenden Loops allein macht Doppel-Ausführung strukturell unmöglich. Neue `main.go`-Helfer `runWhileLeader`/`subscribeWhileLeader` (2s-Poll auf `cluster.Node.IsLeader()`) gaten `placementEngine.Run`/`workflowScheduler.Run`/`workflowSvc.RunFailoverWatcher` sowie die `omp.host.*.events`-NATS-Subscription — bei deren Analyse ein echter, bisher unbemerkter Multi-Instanz-Bug gefunden: jede Cluster-Instanz hätte denselben Broadcast-Subject unabhängig abonniert und unabhängig Crash-Loop-Zählung/Failover-Promotion ausgelöst. `scheduler.go`: `LastFiredAt` wird jetzt vor statt nach dem Feuern persistiert (schließt eine seit D7 Teil 2 bestehende, von Clustering unabhängige Doppel-Feuer-Lücke bei Persistenzfehlern/Prozess-Crash). `go build/vet/test ./...` grün (`go vet` fand einen echten lostcancel-Bug in der ersten `runWhileLeader`-Fassung, behoben durch return-basierte Cancel-Weitergabe; neuer Test `TestSchedulerDoesNotFireIfPersistFails`). Live mit drei echten Prozessen verifiziert: ein sofort fälliger Schedule feuerte nachweislich nur auf der Leader-Instanz (Log + `GET /api/v1/instances` bestätigten genau einen tatsächlichen Start), NATS `/subsz` zeigte genau eine aktive Subscription cluster-weit; nach `kill -9` des Leaders migrierten sowohl die Scheduler-Aktivität als auch die NATS-Subscription nachweislich zur neuen Leader-Instanz. Details: `docs/decisions.md` Nachtrag 149. Mit Teil 3 ist D12 vollständig abgeschlossen. | 2026-08-18 |
+| D13 (I/O-Karten-Claim/Release, ARCHITECTURE.md §6.1 Erweiterung 2026-07-10) | erledigt | Nutzerauftrag "make I/O-card claim/release" im Anschluss an D12 — schließt die seit 2026-07-10 offen dokumentierte Lücke ("kein Geräte-Inventar vorhanden"). Zwei Design-Entscheidungen vor der Umsetzung geklärt: Inventar wird vom Host-Agent aus einer lokalen JSON-Datei gelesen (`OMP_HOST_AGENT_IO_PORTS_PATH`), nicht automatisch per Hersteller-SDK erkannt (echte Hardware zum Testen fehlt); Claim/Release lebt in Postgres (neues Paket `internal/ioports`, atomarer `WITH … FOR UPDATE OF … SKIP LOCKED … INSERT … ON CONFLICT DO NOTHING`-Satz, `PRIMARY KEY (host_id, port_id)` als Exklusivitäts-Garantie), nicht im D12-Raft-FSM — dieselbe bei D12 Teil 3 gewonnene Lehre bestätigt sich. `workflows.Role.RequiredIOPort` (additiv), `Service.Start()` claimt als dritten synchronen Preflight VOR `StatusStarting` (ehrliche Ablehnung + Rollback bei Teilfehler, kein Teil-Start), `Service.Stop()` gibt frei, `migration.go: executeMigration` erzwingt die Migrations-Grenze ("nicht migrierbar" ohne freien Zielport, kein stiller Fallback) für beide Trigger (manueller Drag-Umzug UND automatische Placement-Eskalation, gemeinsamer Code-Pfad). `GET /api/v1/hosts` liefert Inventar+Belegung mit. `go build/vet/test ./...` grün (10 neue `ioports`-Tests inkl. echtem 20-Goroutinen-Nebenläufigkeitstest gegen echtes Postgres, 6 neue `workflows`-Tests, 4 neue `host-agent`-Tests). Live mit echtem Host-Agent-Prozess + echtem Orchestrator verifiziert: Registrierung mit Inventar, Claim beim Start sichtbar in `GET /api/v1/hosts`, konkurrierender zweiter Start ehrlich mit HTTP 400 abgelehnt, nach `Stop()` sofort wieder claimbar — alle Testdaten danach aus der Dev-Postgres entfernt. Details: `docs/decisions.md` Nachtrag 150. | 2026-08-18 |
