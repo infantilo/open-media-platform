@@ -25,6 +25,21 @@ import (
 // registration_expiry_interval (12s, deploy/nmos/registry.json).
 const heartbeatInterval = 5 * time.Second
 
+// withCORS ergänzt jede Antwort um `Access-Control-Allow-Origin: *` —
+// alle NMOS-APIs (IS-04, IS-05) müssen laut AMWA-Spezifikation CORS für
+// Browser-basierte Controller unterstützen. Live am echten AMWA-IS-05-01-
+// Tool-Lauf gefunden (UMSETZUNG.md D9, docs/decisions.md): ohne diesen
+// Header schlugen elf Tests mit "'Access-Control-Allow-Origin' not in
+// CORS headers" fehl. Global statt pro Handler-Paket (`descriptor`/
+// `connection`/`uibundle`), weil die Anforderung API-übergreifend gilt,
+// nicht IS-05-spezifisch ist.
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -130,13 +145,14 @@ func main() {
 	if *uiBundle {
 		mux.Handle("/ui/", uibundle.Handler())
 	}
+	handler := withCORS(mux)
 
 	go func() {
 		addr := fmt.Sprintf(":%d", *port)
 		var serveErr error
 		if tlsConfig != nil {
 			slog.Info("mock node https (mTLS) api listening", "addr", addr)
-			srv := &http.Server{Addr: addr, Handler: mux, TLSConfig: tlsConfig}
+			srv := &http.Server{Addr: addr, Handler: handler, TLSConfig: tlsConfig}
 			// Zertifikat/Key sind bereits in tlsConfig geladen
 			// (mtls.ServerTLSConfig) — leere Pfade weisen
 			// ListenAndServeTLS an, ausschließlich srv.TLSConfig zu
@@ -144,7 +160,7 @@ func main() {
 			serveErr = srv.ListenAndServeTLS("", "")
 		} else {
 			slog.Info("mock node http api listening", "addr", addr)
-			serveErr = http.ListenAndServe(addr, mux)
+			serveErr = http.ListenAndServe(addr, handler)
 		}
 		if serveErr != nil {
 			slog.Error("mock node http api stopped", "error", serveErr)

@@ -17087,3 +17087,168 @@ Beispiel stehen, passend zu den neuen Screenshots.
 **Dateien:** `LICENSE` (neu), `OpenMediaPlatform CI.jpeg` (entfernt),
 `README.md`, `docs/BENUTZERHANDBUCH.md`, `docs/screenshots/*.png`
 (elf erneuert, `host-zonen.png` neu, `regieplatz-1.png` entfernt).
+
+## 2026-08-18 (Nachtrag 142) — Blackmagic-DeckLink-Scope-Frage geklärt (vertagt); Schritt D9: IS-05-01-Basis-Discovery-Endpunkte, live gegen das echte AMWA-Tool verifiziert
+
+**Kontext:** Nutzeranfrage "zwei Dinge, gerne parallel": (1) Blackmagic-
+DeckLink-IP/-SDI-Capture-Karten-Support für ST-2110-Senden/Empfangen,
+(2) AMWA-NMOS-Konformitätstests (IS-04/IS-05/IS-09) vertiefen. Beide
+Anfragen kollidierten mit bestehenden Leitplanken: §24.6/§24.7
+(`ARCHITECTURE.md`) hatten bereits zweimal "kein Capture-Karten-Pfad"
+entschieden, und `UMSETZUNG.md` §0 Punkt 2 verlangt genau einen Schritt
+pro Sitzung. Per `AskUserQuestion` geklärt statt stillschweigend
+entschieden oder blind umgesetzt:
+
+**DeckLink (vertagt, nicht diese Sitzung):** Nutzer bestätigte, dass an
+anderer Stelle im Setup echte DeckLink-Hardware existiert (§0 Punkt 7 —
+"nichts bauen, das nur mit Broadcast-Hardware testbar wäre" — greift
+damit nicht mehr als Blocker) und wählte NMOS-Compliance zuerst.
+§24.6/§24.7s "kein Capture-Karten-Pfad" ist damit **nicht mehr
+dauerhaft**, sondern nur bis zu einer eigenen, noch nicht begonnenen
+Sitzung vertagt — kein Code dieser Sitzung berührt das.
+
+**NMOS-Compliance:** `docs/decisions.md` 2026-07-13 (D2) hatte bereits
+festgehalten, dass IS-05-01 (Connection API) gegen unsere Nodes sofort
+mit 0 Tests abbricht, weil die IS-05-Basis-Discovery-Pfade fehlten (nur
+`staged`/`active` pro Receiver, Schritt B1) — "Kandidat für später,
+sobald diese Endpunkte existieren". Genau das ist Schritt D9. IS-09
+(System API) hat in diesem Projekt noch keinerlei Code-Berührung — zu
+groß für dieselbe Sitzung, eigener künftiger Schritt.
+
+**IS-05-Spec nachgeschlagen, nicht geraten** (§0 Punkt 6): AMWA-TV/is-05
+v1.1.x, `ConnectionAPI.raml` + Beispiel-JSONs (`base-get-200`,
+`single-root`, `receiver-resource-get-200`, `sender-resource-get-200`,
+`receiver-constraints-get-200`, `transporttype-get`) — Basis-Discovery
+ist: `/x-nmos/connection/v1.1/` → `["single/"]` (kein `bulk/`, s.u.),
+`/single/` → `["senders/","receivers/"]`, `/single/receivers/` →
+UUID-Liste mit "/", `/single/receivers/{id}/` →
+`["constraints/","staged/","active/","transporttype/"]` (Sender
+zusätzlich `transportfile/`). RAML-Fund: `bulk/senders`+`bulk/receivers`
+sind feste Pfade, GET liefert dort laut Spec **immer** 405 — nicht
+optional, wie eine erste (falsche) Lesart annahm, s.u.
+
+**Implementiert (Go `nodes/mock/internal/connection`, Rust
+`nodes/omp-node-sdk/src/connection.rs`):** beide Sprachimplementierungen
+bekamen dieselben Basis-Discovery-Endpunkte. Rust: `SenderConnection`/
+`ReceiverConnection` neues `transport_urn`-Feld, Default `TRANSPORT_MXL`
+(die meisten Sender/Receiver dieses Projekts sind Zero-Copy-MXL, nicht
+RTP), per `.with_transport(...)`-Builder überschreibbar — genau ein
+Aufrufer braucht das (`nodes/playout`, der einzige echte RTP-Sender aus
+Schritt C3), alle anderen ~11 Aufrufstellen (`omp-viewer`,
+`omp-2110-gateway`, `omp-scaler`, `omp-recorder`, `omp-pipeline-
+controller`, …) bleiben unverändert bei MXL — keine Breaking-Change an
+deren Konstruktor-Signatur. `is04::TRANSPORT_RTP` dafür von `const` auf
+`pub const` gehoben (eine Quelle für die URN statt einer zweiten Kopie).
+
+**Vier echte Bugs live am AMWA-Tool-Lauf gefunden und behoben** (nicht
+vorhergesehen, nicht geraten — jeder einzelne durch einen echten
+`nmos-test.py suite IS-05-01 --host localhost --port 9099`-Lauf gegen
+den lokal laufenden Mock-Node aufgedeckt, Podman statt Docker lokal,
+`docker.io/amwa/nmos-testing:latest`):
+
+1. **Trailing-Slash-Schatten-Bug (Go):** `net/http`s `ServeMux` behandelt
+   ein auf `/` endendes Muster (`.../receivers/{id}/`) als
+   Teilbaum-Wildcard — ohne explizite Registrierung der `/`-Varianten
+   von `staged`/`active`/`constraints`/`transporttype` fing dieses
+   Wurzel-Listing-Muster Anfragen wie `GET .../active/` (das AMWA-Tool
+   ruft konsequent beide Formen ab) fälschlich ab und lieferte das
+   Listing-Array statt der echten Ressource. Sichtbar als zwei
+   AMWA-Traceback-Abstürze (`test_12_02`/`test_16`,
+   `TypeError: list indices must be integers`, weil
+   `response["transport_params"]` auf einer Liste aufgerufen wurde).
+   Fix: jede Leaf-Route sowohl mit als auch ohne `/` registriert.
+2. **Dasselbe Muster spiegelverkehrt (Rust):** `strip_prefix` ließ ein
+   abschließendes `/` unverändert im `sub`-String stehen, wodurch die
+   Slash-Variante KEINEN Match-Arm traf (`None` statt der Ressource) —
+   der entgegengesetzte Fehler zur Go-Seite (kein Treffer statt
+   falschem Treffer), gefunden durch dieselbe Analyse, nicht am
+   Rust-Node selbst getestet (CI hat keine Rust-Toolchain, s.u.), aber
+   durch einen neuen Unit-Test (`trailing_slash_leaf_paths_match_bare_
+   paths`) abgesichert. Fix: `sub.strip_suffix('/').unwrap_or(sub)`.
+3. **Wurzel-Wildcard verschluckte `/bulk/*`:** dieselbe
+   Teilbaum-Wildcard-Falle wie (1), eine Ebene höher — `GET
+   /x-nmos/connection/v1.1/bulk/senders` traf keine spezifischere Route
+   und wurde vom Wurzel-Handler mit `200`+Wurzel-Listing statt (laut
+   RAML) `405` beantwortet (`test_34`/`test_35`). Fix: Wurzel-Handler
+   vergleicht `r.URL.Path` jetzt exakt gegen `/x-nmos/connection/v1.1/`,
+   liefert sonst 404; `bulk/senders`+`bulk/receivers` bekamen eigene
+   GET-405-Routen (POST bleibt unimplementiert — echte Bulk-Semantik
+   ist eigener künftiger Scope, s. offene Punkte unten).
+4. **Fehlerantworten waren `text/plain` statt `application/json`:**
+   `http.Error` liefert hartcodiert Klartext; AMWA-`test_34`/`test_35`/
+   `auto_connection_22` schlugen mit "API signalled a Content-Type of
+   text/plain ... rather than application/json" fehl. Fix: neuer
+   `writeError`-Helfer nach IS-05s `error-schema.json`
+   (`code`/`error`/`debug`, alle drei required, Feldnamen gegen die
+   AMWA-Spec geprüft), ersetzt alle `http.Error`-Aufrufe im Paket.
+   Zusätzlich global `withCORS`-Middleware in `nodes/mock/main.go`
+   ergänzt (`Access-Control-Allow-Origin: *` auf jeder Antwort) — elf
+   Tests scheiterten zuvor an fehlenden CORS-Headern, API-übergreifend
+   behoben statt nur für IS-05.
+
+**Ergebnis, viermal live gemessen** (0 → 8 → 14 → 17 Pass, jeweils nach
+einem Fix-Zyklus neu gegen das echte Tool verifiziert, nicht nur gegen
+die eigenen Unit-Tests): `test_12`/`test_12_01`/`test_12_02`/`test_16`/
+`test_21`/`test_24_01`/`test_39`/`test_40` u.a. jetzt grün, wo vorher
+die Suite mit 0 ausgeführten Tests abbrach (D2-Ausgangslage). 19
+verbleibende `Fail`-Ergebnisse fallen in vier klar benannte, bewusst
+NICHT in dieser Sitzung geschlossene Lücken:
+
+- **Kein echter Sender zum Verbinden** (`auto_connection_1/2/4/5/6/13`,
+  teilweise `3/10/12`): Mock-Node läuft mit `-senders 0`
+  (B1-Scope-Grenze, rein Receiver-seitig) — bräuchte einen echten
+  Sender+Receiver-Test-Fixture, eigener künftiger Aufwand.
+- **`transport_params`-Feldtiefe** (`test_10/14/24/26/28/30/32`): Legs
+  sind bewusst nur `{}`, PATCH übernimmt Felder wie `destination_port`
+  gar nicht in den gespeicherten Zustand — braucht ein echtes
+  Leg-Datenmodell + Merge-Logik, kein Ein-Zeilen-Fix.
+- **`activation_time` fehlt** (`test_18`): Activation-Response-Schema
+  verlangt das berechnete Aktivierungs-Zeitfeld, `Activation`-Struct hat
+  bisher nur `mode`/`requested_time`.
+- **Keine PATCH-Validierung + keine echte Bulk-POST-Semantik**
+  (`test_20`/`test_37`): der Mock-Node akzeptiert aktuell jeden
+  PATCH-Body unkritisch; Bulk-POST (Mehrfach-Staging mit
+  Teilerfolgs-Reporting nach `bulk-*-post-schema.json`) ist eine eigene
+  Feature-Größenordnung, nicht Teil von "Basis-Discovery".
+
+Alle 19 einzeln als `--allow`-Ausnahme in der CI-Auswertung benannt
+(kein "alles grün machen um jeden Preis", gleiche Methode wie D2) — der
+Gate-Befehl wurde vor dem Eintragen ins Workflow-File lokal gegen die
+echte Ergebnisdatei verifiziert (`go run . --results …
+--allow …` → `exit 0`, 0 unerwartet fehlgeschlagen).
+
+**CI (`amwa-nmos-testing`-Job):** neuer Schritt baut den Mock-Node-
+Go-Binary und startet ihn (`-senders 0 -receivers 2`, Port 9099), dann
+derselbe `nmos-test.py suite IS-05-01`-Aufruf wie lokal, danach
+`tools/nmos-conformance-check` mit der oben verifizierten Ausnahmeliste.
+Kein neues Tool nötig — dieselbe Go-Auswertungslogik wie D2 (IS-04-02)
+handhabt "Could Not Test"/"Not Applicable"/"Test Disabled" bereits
+automatisch als Nicht-Fail (`tools/nmos-conformance-check/results.go`),
+nur echte `Fail`-Zustände brauchen eine `--allow`-Begründung.
+
+**Verifiziert:** `go build/vet/test ./...` (mock-Modul, 4 neue
+Test-Funktionen: `TestHandlerBaseDiscovery`,
+`TestHandlerTrailingSlashLeafPathsMatchBarePaths`,
+`TestHandlerRootDoesNotSwallowUnknownSubpaths`,
+`TestHandlerBulkGetIsMethodNotAllowed`, `TestHandlerErrorsAreJSON`,
+`TestWithCORSSetsHeaderOnEveryResponse`), `cargo build/clippy -D
+warnings/test --workspace` (omp-node-sdk: 5 neue Tests inkl.
+`trailing_slash_leaf_paths_match_bare_paths`) — beides grün. Vier echte
+`nmos-test.py suite IS-05-01`-Läufe gegen den lokal laufenden Mock-Node
+(Podman, `docker.io/amwa/nmos-testing:latest`, entspricht dem
+CI-Docker-Aufruf), jeweils nach einem Fix erneut ausgeführt statt nur
+einmal am Ende. Ein vorbestehender, unabhängiger `cargo clippy
+--workspace`-Fehler in `omp-playout-automation` (nicht in dieser
+Sitzung berührt, `collapsible_if`) — nicht Teil dieses Schritts,
+unverändert gelassen.
+
+**Nicht Teil dieser Sitzung (bewusst, s.o.):** `transport_params`-
+Feldtiefe/PATCH-Merge, `activation_time`, PATCH-Validierung, echte
+Bulk-POST-Semantik, ein Sender+Receiver-Test-Fixture für
+`auto_connection_*`, IS-09 (System API, noch kein Code), DeckLink
+(vertagt, s.o.).
+
+**Dateien:** `nodes/mock/internal/connection/{receiver,handler}.go`
+(+Tests), `nodes/mock/main.go` (+Test), `nodes/omp-node-sdk/src/
+{connection,is04}.rs`, `nodes/playout/src/main.rs`,
+`.github/workflows/ci.yml`, `UMSETZUNG.md` (Schritt D9 + Checkliste).

@@ -3326,11 +3326,20 @@ Eingangs-Discovery — `omp-switcher` (C7), `omp-video-mixer-me`s
 alle 2s `RegistryClient::list_senders()` pollen, auf `transport==MXL`
 filtern, eigenen Sender + Lowres-Begleiter ausschließen.
 
-**Entschieden:** kein Blackmagic-/DeckLink-/Capture-Karten-Pfad als
-Quelle (bestätigt bestehende Linie — physische I/O-Karten bleiben
-§6.1/§18-Zukunftsscope, PIPELINE CONTROLLERs DeckLink-Ingest wird
-**nicht** portiert). Live-Quellen kommen ausschließlich über MXL, wie
-bereits in §13.4 festgelegt.
+**Entschieden (Stand damals):** kein Blackmagic-/DeckLink-/Capture-
+Karten-Pfad als Quelle (bestätigt bestehende Linie — physische I/O-
+Karten bleiben §6.1/§18-Zukunftsscope, PIPELINE CONTROLLERs DeckLink-
+Ingest wird **nicht** portiert). Live-Quellen kommen ausschließlich
+über MXL, wie bereits in §13.4 festgelegt.
+
+**Update 2026-08-18 (`docs/decisions.md` Nachtrag 142):** diese
+Entscheidung war bisher immer mit "keine testbare Hardware auf der
+Dev-Maschine" begründet (`UMSETZUNG.md` §0 Punkt 7). Nutzer bestätigte,
+dass an anderer Stelle im Setup echte DeckLink-IP-/SDI-Karten
+existieren — der Blocker gilt damit nicht mehr uneingeschränkt. Noch
+**nicht** umgesetzt (per `AskUserQuestion` zugunsten von Schritt D9,
+NMOS-Compliance, vertagt), aber kein dauerhaft geschlossenes Thema
+mehr — eigener künftiger Schritt, sobald an der Reihe.
 
 **Umsetzung (Detailplan zu Beginn von C21):** neue `ItemSource::Live {
 sender_id: String }` in `omp-player`; eigene `discover()`/

@@ -21,6 +21,7 @@ use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::rtp::RtpVideoOutput;
 use omp_node_sdk::connection::{SenderConnection, SenderControl, SenderResource, SenderSdp};
+use omp_node_sdk::is04::TRANSPORT_RTP;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
     SenderSpec, SetError,
@@ -186,13 +187,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     };
     let connection = rtp_output.clone().map(|output| {
-        Arc::new(SenderConnection::new(
-            sender_id.clone(),
-            RtpControl {
-                output: output.clone(),
-            },
-            RtpSdp { output },
-        ))
+        Arc::new(
+            SenderConnection::new(
+                sender_id.clone(),
+                RtpControl {
+                    output: output.clone(),
+                },
+                RtpSdp { output },
+            )
+            .with_transport(TRANSPORT_RTP),
+        )
     });
 
     let store: Arc<dyn ParamStore> = Arc::new(PlayoutStore {

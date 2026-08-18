@@ -33,14 +33,21 @@ jobs:
 
   # Schritt D2 (UMSETZUNG.md): AMWA NMOS Testing Tool gegen unsere
   # nmos-cpp-Registry (IS-04-02, Registration+Query API). NICHT gegen
-  # eigene Nodes (IS-04-01/IS-05-01) — verifiziert am echten Tool-Lauf
-  # (docs/decisions.md 2026-07-13): unsere Nodes implementieren
-  # bewusst kein eigenständiges IS-04-"Node API" (Registration-API-Push
-  # statt Peer-to-Peer-Discovery, ARCHITECTURE.md §3/§5) und noch nicht
-  # die IS-05-Basis-Discovery-Endpunkte (nur staged/active pro Receiver,
-  # Schritt B1) — beide Test-Suiten brechen deshalb sofort ab (0 Tests),
-  # kein sinnvolles CI-Gate. Kandidat für später, sobald diese
-  # Endpunkte existieren.
+  # eigene Nodes für IS-04-01 — verifiziert am echten Tool-Lauf
+  # (docs/decisions.md 2026-07-13): unsere Nodes implementieren bewusst
+  # kein eigenständiges IS-04-"Node API" (Registration-API-Push statt
+  # Peer-to-Peer-Discovery, ARCHITECTURE.md §3/§5), die Suite bricht
+  # deshalb sofort mit 0 Tests ab — kein sinnvolles CI-Gate, dauerhaft
+  # akzeptiert (keine architektonische Lücke, sondern eine bewusste
+  # Design-Entscheidung).
+  #
+  # IS-05-01 (Connection API) lief bis Schritt D9 aus demselben Grund
+  # nicht mit — der fehlenden Basis-Discovery-Endpunkte wegen (nur
+  # staged/active pro Receiver, Schritt B1). Seit D9 (UMSETZUNG.md,
+  # docs/decisions.md) hat der Mock-Node die vollständigen IS-05-01-
+  # Basis-Discovery-Pfade — läuft jetzt echt gegen ihn, mit einer
+  # explizit begründeten Ausnahmeliste unten (analog zu IS-04-02s
+  # test_01/test_02/test_27).
   amwa-nmos-testing:
     runs-on: ubuntu-latest
     steps:
@@ -99,13 +106,85 @@ jobs:
       # den drei unten dokumentierten, bewusst akzeptierten Abweichungen
       # müssen grün sein. Kein Ergebnis stillschweigend ignoriert — jede
       # Ausnahme ist einzeln begründet und am echten Tool-Lauf verifiziert.
-      - name: Ergebnisse auswerten (definierte Testliste grün, Abweichungen dokumentiert)
+      - name: Ergebnisse auswerten (IS-04-02: definierte Testliste grün, Abweichungen dokumentiert)
         run: |
           cd tools/nmos-conformance-check
           go run . --results ../../nmos-results/is0402.json \
             --allow "test_01=mDNS-Advertisement bewusst nicht implementiert — OMP-Nodes/die Registry verbinden über eine feste OMP_REGISTRY_URL statt Zero-Config-Discovery (gleiche Design-Entscheidung wie ARCHITECTURE.md §18.2 für Host-Discovery)" \
             --allow "test_02=mDNS-Advertisement bewusst nicht implementiert, s. test_01" \
             --allow "test_27=registration_expiry_interval bewusst auf 60s statt der vom AMWA-Tool angenommenen 12s (GARBAGE_COLLECTION_TIMEOUT) gesetzt — deploy/nmos/registry.json, am echten Tool-Lauf mit 12s gegenverifiziert (docs/decisions.md 2026-07-13)"
+
+      # Schritt D9 (UMSETZUNG.md): der Mock-Node selbst als IS-05-01-
+      # Testziel — kein Registry-Umweg nötig, IS-05 läuft node-zu-node
+      # (orchestrator/internal/is05/client.go-Doc). `-senders 0`, weil
+      # der Mock-Node bewusst nur Receiver-seitig implementiert ist
+      # (Schritt B1) — die dadurch blockierten Sender-/Auto-Connection-
+      # Tests stehen einzeln in der Ausnahmeliste unten.
+      - name: Mock-Node für IS-05-01 starten
+        run: |
+          cd nodes/mock
+          go build -o /tmp/omp-mock .
+          OMP_REGISTRY_URL="http://localhost:8010" OMP_NATS_URL="nats://localhost:4222" \
+            /tmp/omp-mock -senders 0 -receivers 2 -port 9099 &
+          for i in $(seq 1 20); do
+            curl -fs http://localhost:9099/x-nmos/connection/v1.1/ > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fs http://localhost:9099/x-nmos/connection/v1.1/ > /dev/null
+
+      - name: AMWA NMOS Testing Tool — IS-05-01 (Connection API) gegen den Mock-Node ausführen
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/nmos-results":/tmp/results \
+            --entrypoint python3 \
+            docker.io/amwa/nmos-testing:latest \
+            nmos-test.py suite IS-05-01 \
+              --host localhost --port 9099 --version v1.1 \
+              --selection all --output /tmp/results/is0501.json || true
+
+      # Definierte Testliste (UMSETZUNG.md D9): am echten Tool-Lauf
+      # verifiziert (docs/decisions.md, nicht geraten), vier
+      # Ursachen-Gruppen, jede einzeln benannt statt pauschal
+      # weggewischt:
+      #   (a) auto_connection_1/2/4/5/6/13 und auto_connection_3/10/12 —
+      #       brauchen einen echten IS-04-registrierten Sender zum
+      #       Verbinden; der Mock-Node läuft hier bewusst mit
+      #       `-senders 0` (B1-Scope-Grenze), kein neuer Test-Fixture-
+      #       Aufwand für dieses Ziel gerechtfertigt.
+      #   (b) test_10/14/24/26/28/30/32 — `transport_params`-Legs sind
+      #       bewusst minimal (nur `{}`, keine benannten RTP-Felder wie
+      #       destination_port); PATCH übernimmt `transport_params`
+      #       aktuell gar nicht in den gespeicherten Zustand. Echte
+      #       Lücke, kein Missverständnis — eigener künftiger Schritt.
+      #   (c) test_18 — `activation_time` (berechnet bei sofortiger
+      #       Aktivierung) fehlt im Activation-Response-Schema.
+      #   (d) test_20/37 — keine Eingabevalidierung auf PATCH-Bodies
+      #       (400 bei ungültigen Werten) und keine echte Bulk-POST-
+      #       Semantik (nur die per RAML vorgeschriebene 405-GET-Form,
+      #       s. D9-Handler-Kommentar).
+      - name: Ergebnisse auswerten (IS-05-01: definierte Testliste grün, Abweichungen dokumentiert)
+        run: |
+          cd tools/nmos-conformance-check
+          go run . --results ../../nmos-results/is0501.json \
+            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D9" \
+            --allow "auto_connection_2=s. auto_connection_1" \
+            --allow "auto_connection_3=s. auto_connection_1 (zusätzlich transport_params-Feldtiefe, s. test_10-Begründung)" \
+            --allow "auto_connection_4=s. auto_connection_1" \
+            --allow "auto_connection_5=s. auto_connection_1" \
+            --allow "auto_connection_6=s. auto_connection_1" \
+            --allow "auto_connection_10=s. auto_connection_1" \
+            --allow "auto_connection_12=s. auto_connection_1" \
+            --allow "auto_connection_13=s. auto_connection_1" \
+            --allow "test_10=transport_params-Legs sind bewusst minimal (nur {}), PATCH übernimmt transport_params (z.B. destination_port) noch nicht in den gespeicherten Zustand — echte Lücke, eigener künftiger Schritt, UMSETZUNG.md D9" \
+            --allow "test_14=s. test_10 (Response-Schema-Validierung scheitert an denselben fehlenden Feldern)" \
+            --allow "test_18=activation_time (berechnet bei sofortiger Aktivierung) fehlt im Activation-Response-Schema — eigener künftiger Schritt, UMSETZUNG.md D9" \
+            --allow "test_20=keine Eingabevalidierung auf PATCH-Bodies (400 bei ungültigen Werten) — eigener künftiger Schritt, UMSETZUNG.md D9" \
+            --allow "test_24=s. test_10 (destination_port fehlt im PATCH-Roundtrip)" \
+            --allow "test_26=s. test_10" \
+            --allow "test_28=s. test_10" \
+            --allow "test_30=s. test_10" \
+            --allow "test_32=s. test_10" \
+            --allow "test_37=keine echte Bulk-POST-Semantik implementiert, nur die per RAML vorgeschriebene 405-GET-Form auf bulk/senders+bulk/receivers — eigener künftiger Schritt, UMSETZUNG.md D9"
 
       - name: Ergebnisse als Artefakt sichern
         if: always()

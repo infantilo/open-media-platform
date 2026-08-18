@@ -6,42 +6,142 @@ import (
 )
 
 // Handler baut den HTTP-Handler für die IS-05-Connection-API-Pfade der
-// Receiver: GET/PATCH .../staged, GET .../active.
+// Receiver: GET/PATCH .../staged, GET .../active, plus die
+// Basis-Discovery-Pfade (Wurzel/single/receivers-Listing,
+// constraints/transporttype pro Receiver, UMSETZUNG.md D9) — Grundlage
+// für AMWA-IS-05-01-Konformitätstests, die vor D9 an den fehlenden
+// Discovery-Pfaden mit 0 ausgeführten Tests abbrachen (docs/decisions.md
+// 2026-07-13). Kein `bulk/`-Interface (der Mock-Node ist rein
+// Receiver-seitig, Bulk-Operationen hätten hier keinen Aufrufer) — laut
+// AMWA-TV/is-05-Spec ein optionaler Teil der Connection API.
+//
+// Jedes Leaf-Resource (constraints/staged/active/transporttype) wird
+// bewusst SOWOHL ohne als auch mit abschließendem "/" registriert: das
+// AMWA-Testing-Tool ruft beide Formen ab (am echten Tool-Lauf beobachtet,
+// docs/decisions.md D9). Ohne die explizite "/"-Variante fängt Gos
+// `ServeMux` (`{id}/` ist ein Teilbaum-Muster, da es auf "/" endet) diese
+// Anfragen fälschlich im Wurzel-Listing-Handler ab — echter Bug, live am
+// Tool-Lauf gefunden: `test_12_02`/`test_16` schlugen mit `TypeError:
+// list indices must be integers` fehl, weil `GET .../active/` (mit
+// Slash) das Listing-Array statt der Active-Resource lieferte.
 func Handler(store *ReceiverStore) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/", func(w http.ResponseWriter, r *http.Request) {
+		// `net/http`s `ServeMux` behandelt ein auf "/" endendes Muster als
+		// Teilbaum-Wildcard: ohne diesen expliziten Pfad-Vergleich würde
+		// JEDER nicht anderweitig registrierte Unterpfad (z. B.
+		// `bulk/senders`) hier fälschlich mit dem Wurzel-Listing statt 404
+		// beantwortet — echter Bug, live an AMWA-`test_34`/`test_35`
+		// gefunden (erwarteten 405 für GET auf die zwei per RAML
+		// (`ConnectionAPI.raml`) fest definierten `bulk/senders`+
+		// `bulk/receivers`-Pfade, bekamen stattdessen 200 mit dem
+		// Wurzel-Listing-Body). Derselbe Bugtyp wie der bereits oben
+		// gefixte `{id}/`-Fall, hier eine Ebene höher.
+		if r.URL.Path != "/x-nmos/connection/v1.1/" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, []string{"single/"})
+	})
+
+	// `bulk/senders`+`bulk/receivers` sind laut RAML (`ConnectionAPI.raml`)
+	// feste Basis-Discovery-Pfade, die auch ohne echte Bulk-POST-
+	// Implementierung existieren müssen: GET liefert dort laut Spec immer
+	// 405 (Method Not Allowed), nicht 404 — der Mock-Node kennt Bulk-
+	// Operationen (POST) selbst nicht (er ist rein Receiver-seitig, s.
+	// Doc-Kommentar oben), daher bewusst kein POST-Handler hier (Go
+	// liefert dafür automatisch 405, korrekt für "nicht implementiert",
+	// aber nicht das vom AMWA-Tool für POST erwartete 200 mit echter
+	// Bulk-Antwort — dokumentierte, offene Lücke, `UMSETZUNG.md` D9).
+	bulkMethodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusMethodNotAllowed, "GET not allowed on bulk resources")
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/bulk/senders", bulkMethodNotAllowed)
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/bulk/receivers", bulkMethodNotAllowed)
+
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []string{"senders/", "receivers/"})
+	})
+
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/senders/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []string{})
+	})
+
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/", func(w http.ResponseWriter, r *http.Request) {
+		ids := store.IDs()
+		listing := make([]string, len(ids))
+		for i, id := range ids {
+			listing[i] = id + "/"
+		}
+		writeJSON(w, http.StatusOK, listing)
+	})
+
+	resourceRoot := func(w http.ResponseWriter, r *http.Request) {
+		if !store.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown receiver")
+			return
+		}
+		writeJSON(w, http.StatusOK, []string{"constraints/", "staged/", "active/", "transporttype/"})
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/", resourceRoot)
+
+	constraints := func(w http.ResponseWriter, r *http.Request) {
+		if !store.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown receiver")
+			return
+		}
+		writeJSON(w, http.StatusOK, Constraints())
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/constraints", constraints)
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/constraints/", constraints)
+
+	transportType := func(w http.ResponseWriter, r *http.Request) {
+		if !store.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown receiver")
+			return
+		}
+		writeJSON(w, http.StatusOK, TransportType)
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/transporttype", transportType)
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/transporttype/", transportType)
+
+	staged := func(w http.ResponseWriter, r *http.Request) {
 		res, ok := store.Staged(r.PathValue("id"))
 		if !ok {
-			http.Error(w, "unknown receiver", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "unknown receiver")
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
-	})
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged", staged)
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged/", staged)
 
 	mux.HandleFunc("PATCH /x-nmos/connection/v1.1/single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
 		var req PatchRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
 			return
 		}
 
 		res, ok := store.PatchStaged(r.PathValue("id"), req)
 		if !ok {
-			http.Error(w, "unknown receiver", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "unknown receiver")
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
 	})
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active", func(w http.ResponseWriter, r *http.Request) {
+	active := func(w http.ResponseWriter, r *http.Request) {
 		res, ok := store.Active(r.PathValue("id"))
 		if !ok {
-			http.Error(w, "unknown receiver", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "unknown receiver")
 			return
 		}
 		writeJSON(w, http.StatusOK, res)
-	})
+	}
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active", active)
+	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active/", active)
 
 	return mux
 }
@@ -50,4 +150,20 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// errorResponse ist die IS-05-Standard-Fehlerantwort (`error-schema.json`
+// — code/error/debug, alle drei required). `http.Error` liefert dagegen
+// hartcodiert `text/plain` — live an AMWA-`test_34`/`test_35`/
+// `auto_connection_22` gefunden (UMSETZUNG.md D9, docs/decisions.md):
+// "API signalled a Content-Type of text/plain ... rather than
+// application/json".
+type errorResponse struct {
+	Code  int     `json:"code"`
+	Error string  `json:"error"`
+	Debug *string `json:"debug"`
+}
+
+func writeError(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, errorResponse{Code: status, Error: message, Debug: nil})
 }

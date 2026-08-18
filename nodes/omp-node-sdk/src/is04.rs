@@ -13,7 +13,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const INTERFACE_NAME: &str = "eth0";
-const TRANSPORT_RTP: &str = "urn:x-nmos:transport:rtp";
+/// `pub` seit IS-05-01-Basis-Discovery (UMSETZUNG.md D9): `connection`
+/// braucht dieselbe URN für den `transporttype/`-Endpoint, keine zweite
+/// Kopie des Literals.
+pub const TRANSPORT_RTP: &str = "urn:x-nmos:transport:rtp";
 /// IS-04-Format-URN für Video-Flows/-Sources — `pub`, damit discovery-
 /// polling Nodes (`omp-switcher`/`omp-video-mixer-me`, C7/C10) MXL-Sender
 /// per `get_flow_format()` danach filtern können, statt den String selbst
