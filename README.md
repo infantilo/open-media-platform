@@ -76,9 +76,14 @@ administration, hosts, grouped tiles) are in
 - MXL zero-copy shared memory for same-host media exchange; SMPTE
   ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
   for cross-host exchange, including AES67 audio (Dante-compatible).
-- PostgreSQL-backed state, mTLS between orchestrator and nodes, a
+- PostgreSQL-backed state (highly available via Patroni + etcd, no
+  single-node database SPOF), mTLS between orchestrator and nodes, a
   local user/role model with audit log — no external directory server
   required.
+- The orchestrator itself runs as a Raft-consensus cluster (one or more
+  instances, automatic leader election/failover) and the NATS event bus
+  is clustered too — no single point of failure anywhere in the control
+  plane.
 
 **Flow editor & workflows**
 
@@ -181,12 +186,6 @@ node has to satisfy.
 
 Being upfront about the current edges, not just the highlights:
 
-- **I/O cards aren't a placement-aware resource yet.** `omp-decklink`
-  bridges a real Blackmagic DeckLink SDI/IP card to/from MXL (see
-  above), but the orchestrator has no device inventory or exclusive-
-  claim/release logic for physical cards — placing an instance on a
-  host with the right, free card is a manual/host-preference choice
-  today, not something the placement engine reasons about.
 - **No RDMA hardware verified.** MXL-native Fabrics is implemented and
   live-tested, but only over the software `tcp` libfabric provider;
   `verbs`/`efa` for real RoCEv2 NICs is a drop-in config change that
@@ -194,10 +193,6 @@ Being upfront about the current edges, not just the highlights:
 - **No NDI gateway, no proprietary Dante.** AES67 (which most Dante
   devices also speak) is supported via `omp-aes67-gateway`; native NDI
   and Dante's proprietary control protocol are not implemented.
-- **No orchestrator-level high availability.** Node/role-level
-  redundancy exists (hot-standby, crash-loop restart, host-offline
-  failover); the orchestrator process itself is a single point of
-  failure — there's no multi-orchestrator clustering.
 - **Workflow-role migration has no drag-to-move UI yet.** The backend
   for moving a running workflow role to another host exists and is
   tested (`POST /api/v1/workflows/{id}/roles/{role}/migrate`), and the
@@ -241,7 +236,8 @@ synchronized across two network namespaces), real **remote memory
 access** between two OMP hosts via MXL-native Fabrics
 (`omp-fabrics-gateway`, verified live over the software `tcp` provider
 — RDMA zero-copy testable without RDMA hardware, see
-`docs/HANDBUCH.md` §9.3), a PostgreSQL backend, mTLS orchestrator↔
+`docs/HANDBUCH.md` §9.3), a highly available PostgreSQL backend
+(Patroni + etcd, automatic primary failover), mTLS orchestrator↔
 nodes, a local user/role model with login and audit log, a node SDK
 tutorial, remote-host discovery including a command channel (instances
 can also be started/stopped on a remote machine, via a host agent with
@@ -289,10 +285,24 @@ malformed bodies, a scheduled-activation TAI/UTC time bug), with every
 remaining accepted deviation named individually rather than skipped
 silently. Since Kapitel D10, a real Blackmagic DeckLink SDI/IP capture
 card can be bridged to/from MXL (`omp-decklink`, both directions).
+Since D12, the orchestrator itself runs as a Raft-consensus cluster —
+one or more instances, automatic leader election, and the critical
+control-plane state (migration locks, crash-loop tracking, standby
+promotion, scheduler firing) survives a leader failover without
+duplicate or lost actions. Since D13, I/O cards (e.g. the DeckLink
+ports above) are a placement-aware resource: a real device inventory
+plus exclusive claim/release means the placement engine only ever
+starts an instance where the required port is actually free, with a
+clean rejection (and rollback) otherwise. Since D14, the NATS event bus
+is clustered too (three nodes, automatic client failover). Since D15,
+PostgreSQL itself is highly available via Patroni + etcd — a killed
+primary is automatically promoted from a replica within seconds, and
+the orchestrator's own database connection follows the failover with
+no restart. Together, D12/D14/D15 close every remaining single point of
+failure in the control plane (orchestrator process, event bus, and
+datastore are all redundant now).
 
-Open: I/O cards as a placement-aware resource (device inventory,
-exclusive claim/release — the cards themselves already work, see
-above), RDMA hardware integration (`verbs`/EFA providers, pending
+Open: RDMA hardware integration (`verbs`/EFA providers, pending
 hardware procurement), an NDI gateway, proprietary Dante (Dante in
 AES67 mode already runs via `omp-aes67-gateway`), and a drag-to-move UI
 for the already-built workflow-role migration backend — the flow
