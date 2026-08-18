@@ -1818,6 +1818,159 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Testfunktionen), fünf reale `nmos-test.py suite IS-05-01`-Läufe gegen
   den frisch gebauten Mock-Node. Details: `docs/decisions.md`
   Nachtrag 145.
+- **D12 (ARCHITECTURE.md §19, Teil 1+2 erledigt 2026-08-18, Teil 3 offen)**
+  Orchestrator-Cluster: Raft-Konsens zwischen mehreren
+  Orchestrator-Instanzen, ersetzt die alte Postgres-Advisory-Lock-Skizze
+  (Nutzerauftrag 2026-08-18, s. `docs/decisions.md` Nachtrag 146 für die
+  volle Begründung/Abwägung, Nachtrag 147 für die Teil-1-Umsetzung).
+  Architektur steht vollständig in ARCHITECTURE.md §19.3; hier die
+  Drei-Teile-Gliederung für je eine Sitzung.
+
+  **D12 Teil 1 (erledigt, 2026-08-18) — Grundgerüst: Single-Node-Raft,
+  Transport, Status-API.** Neues Paket `orchestrator/internal/cluster`
+  (`cluster.go`/`fsm.go`/`transport.go`): `hashicorp/raft` v1.7.3 +
+  `hashicorp/raft-boltdb/v2` v2.3.1 eingebunden (Begründung s. §19.3
+  Punkt 1 — schließt die Postgres-Abhängigkeit der ursprünglichen
+  Leader-Wahl-Idee, Minimal-Dependency-Regel damit erfüllt trotz zweier
+  neuer Bibliotheken). `raft.NetworkTransport` über eigenen TCP-Port
+  (`OMP_RAFT_LISTEN`, Default `127.0.0.1:8300`) via eigenem
+  `streamLayer` (raft.StreamLayer, echtes TCP statt eines
+  NATS-Pub/Sub-Nachbaus, s. §19.3 Punkt 2), optional mTLS über eine neue
+  `mtls.ServerTLSConfig` (ergänzt die bestehende `ClientTLSConfig`,
+  gemergt zu einer Peer-tauglichen `*tls.Config` in
+  `cluster.peerTLSConfig` — Raft-Instanzen sind sich gegenseitig
+  gleichrangige Peers, nicht Client/Server in getrennten Rollen wie
+  Orchestrator↔Node) — reuse derselben `OMP_MTLS_*`-Zertifikate wie D3,
+  kein zweiter PKI-Pfad. `raft.FileSnapshotStore` + BoltDB-Log/Stable-
+  Store unter `OMP_RAFT_DATA_DIR` (Default `../data/raft/<nodeID>`).
+  FSM minimal wie geplant (`FSM.Apply` zählt nur einen Versionszähler
+  hoch — Teil 3 füllt den echten Inhalt). Frische Instanz ohne
+  bestehenden Raft-Log bootstrapt sich selbst — als Ein-Knoten-Cluster
+  (`OMP_CLUSTER_PEERS` leer, Default) oder mit der vollen, bei allen
+  Gründungsmitgliedern identisch gesetzten Peer-Liste
+  (`raft.BootstrapCluster` mit der kompletten `raft.Configuration` auf
+  jeder Instanz gleichzeitig — empirisch verifiziert, dass das
+  zuverlässig konvergiert, s. Verifikation unten; kein Sonderfall-Code
+  für „nur eine Instanz", das ist der Normalfall). Neuer Endpunkt
+  `GET /api/v1/cluster/status` (`ClusterService`-Interface,
+  `cluster_handlers.go`, authentifiziert wie `GET /api/v1/hosts`) liefert
+  Leader-ID/-Adresse, Term, angewandten/letzten Log-Index, FSM-Version,
+  volle Peer-Liste. `main.go`: `cluster.New()` vor allen bisherigen
+  Hintergrund-Loops konstruiert (`defer clusterNode.Shutdown(...)`),
+  diese laufen in Teil 1 noch unverändert immer auf jeder Instanz
+  (Aktiv/Passiv-Gating erst Teil 3) — reine Additions-Sitzung, kein
+  Verhaltensumbau der bestehenden Loops.
+
+  **Verifikation (bestanden):** `go build/vet/test ./...` grün
+  (`internal/cluster` neu: `ParsePeers`-Fälle, Ein-Knoten-Bootstrap wird
+  Leader, Drei-Knoten-Bootstrap repliziert einen echten `Apply()` auf
+  alle drei FSM-Instanzen, Leader-`Shutdown()` löst echte Neuwahl unter
+  den verbleibenden zwei aus — alles über echtes TCP/Loopback zwischen
+  echten `*raft.Raft`-Instanzen im Testprozess, kein gemockter
+  Transport); `internal/mtls` um `ServerTLSConfig`-Tests erweitert.
+  **Zusätzlich live gegen drei echte, separate OS-Prozesse verifiziert**
+  (nicht nur der Testprozess oben): drei reale
+  `orchestrator`-Binaries (`OMP_LISTEN`/`OMP_NODE_ID`/`OMP_RAFT_LISTEN`/
+  `OMP_RAFT_DATA_DIR` je eindeutig, `OMP_CLUSTER_PEERS` identisch)
+  gegen dieselbe echte Dev-Postgres/-NATS gestartet — `GET
+  /api/v1/cluster/status` (echter HTTP-Login mit dem Dev-Admin-Konto)
+  zeigte auf allen drei Instanzen übereinstimmend genau einen Leader +
+  zwei Follower; ein echtes `kill -9` des Leader-Prozesses ließ einen
+  der beiden verbliebenen Follower binnen Sekunden zum neuen Leader
+  werden (Term 2→4, per API auf beiden Überlebenden bestätigt). Eine
+  vierte, separat gestartete Solo-Instanz ohne `OMP_CLUSTER_PEERS`
+  bestätigte das unveränderte Default-Verhalten (Ein-Knoten-Cluster,
+  sofort eigener Leader, `GET /api/v1/nodes`/`/healthz` unverändert
+  funktionsfähig — keine Regression für den bisherigen Single-Host-
+  Betrieb).
+  **Bewusst nicht Teil 1:** Join/Leave-API (Teil 2), jede Änderung an
+  `workflows`/`placement`/`launcher` (Teil 3).
+
+  **D12 Teil 2 (erledigt, 2026-08-18) — Live-Mitgliedschaft: Join/Leave-API,
+  Mehrknoten-Wachstum.** `POST /api/v1/cluster/join` (Admin-Verb, nur auf
+  dem aktuellen Leader wirksam — `cluster.Node.Join` ruft `raft.AddVoter`
+  für die beitretende Instanz auf, sonst Weiterleitung über
+  `forwardToLeader`); `DELETE /api/v1/cluster/members/{id}` das
+  Gegenstück (`raft.RemoveServer`). **Design-Korrektur gegenüber der
+  ursprünglichen Skizze:** statt die HTTP-Adressen statisch in
+  `OMP_CLUSTER_PEERS` vorzubelegen, kündigt jede Instanz ihre eigene
+  HTTP-Adresse (`OMP_ORCHESTRATOR_URL`, wiederverwendet statt eines
+  neuen Feldes) automatisch bei jedem Führungswechsel selbst über einen
+  neuen, kleinen FSM-Kommandotyp an (`cluster.watchLeadership` +
+  `CommandSetPeerHTTPAddr`, `fsm.go`) — das eigentliche Peer-
+  Adressbuch lebt damit repliziert im FSM statt in lokaler Config,
+  jede Instanz (inkl. neu beigetretener) lernt es beim Nachziehen des
+  Logs automatisch mit. Einfacher HTTP-Reverse-Proxy
+  (`httputil.NewSingleHostReverseProxy`, `forwardToLeader` in
+  `cluster_handlers.go`): eine Nicht-Leader-Instanz leitet
+  `/api/v1/cluster/join`/`/members/{id}` transparent an die per
+  `LeaderHTTPAddr()` aufgelöste echte Leader-Adresse weiter. Neue
+  Beitritts-Instanzen starten mit `OMP_CLUSTER_JOIN=true`
+  (`cluster.Config.SkipBootstrap`) — bootstrappen sich NICHT selbst,
+  warten passiv auf `Join()` durch eine bestehende Leader-Instanz
+  (Standard-Beitritts-Muster aus `raft.Raft.BootstrapCluster`s eigener
+  Doku: "bootstrap a single server … then invoke AddVoter()").
+  **Empirisch korrigierte Annahme:** `raft.Config.ShutdownOnRemove`
+  (Default true) fährt laut Quelltext (`raft.go` `leaderLoop`) NUR den
+  Leader herunter, wenn er SICH SELBST entfernt — eine entfernte
+  Nicht-Leader-Instanz fährt ihren lokalen `*raft.Raft` nicht
+  automatisch herunter, erkennt ihre Entfernung aber korrekt in der
+  eigenen `GetConfiguration()`/Status()-Sicht (live verifiziert, s.
+  `docs/decisions.md` Nachtrag 148) — ursprünglich anders angenommen,
+  vor der Umsetzung durch einen gezielten Testlauf statt durch
+  Doku-Vertrauen geklärt.
+  **Verifikation (bestanden):** `go build/vet/test ./...` grün (neue
+  Tests: `TestLeaderSelfAnnouncesHTTPAddr`,
+  `TestJoinAddsVoterAndAnnouncesHTTPAddr`,
+  `TestJoinOnFollowerFailsWithErrNotLeader`,
+  `TestLeaveRemovesVoterAndPeerHTTPAddr`). **Zusätzlich live mit drei
+  echten, separaten OS-Prozessen verifiziert:** Instanz `a` startet solo
+  (Ein-Knoten-Leader wie Teil 1); Instanz `b` startet mit
+  `OMP_CLUSTER_JOIN=true` und wartet ("no known peers, aborting
+  election"); ein echter `POST /api/v1/cluster/join` gegen `a` fügt `b`
+  hinzu (Cluster 1→2, `peerHttpAddrs` korrekt für beide gefüllt); Instanz
+  `c` startet ebenso wartend, ihr Join-Request wird bewusst an den
+  FOLLOWER `b` geschickt (nicht an den Leader `a`) — die Antwort trägt
+  nachweislich `"nodeId":"a"` (`b` hat transparent weitergeleitet, nicht
+  lokal geantwortet), Cluster wächst 1→2→3, auf allen drei Instanzen per
+  `GET /api/v1/cluster/status` bestätigt. Echtes `kill -9` von `a`:
+  `b` wird binnen Sekunden neuer Leader (Term 2→3), kündigt seine
+  eigene HTTP-Adresse automatisch neu an. Ein `DELETE
+  /api/v1/cluster/members/a` (gegen den neuen Leader `b`) entfernt den
+  toten Knoten sauber — Cluster schrumpft 3→2, `peers` UND
+  `peerHttpAddrs` auf beiden verbliebenen Instanzen korrekt bereinigt.
+
+  **D12 Teil 3 — FSM-Migration: Punkt-5-Zustände + Aktiv/Passiv-Gating.**
+  Die in §19.3 Punkt 5 aufgezählten State-Objekte
+  (`migration.go`: `claimMigrationAttempt`/`pendingMigration`;
+  Crash-Loop-Zähler/-Bremse; `failover.go`: `promoteStandby`;
+  `scheduler.go`: `fire`) wandern von lokalem
+  `sync.Mutex`-geschütztem In-Memory-Zustand in FSM-`Apply`-Aufrufe
+  (Raft-Log als Serialisierungspunkt statt lokalem Mutex). Nur die
+  aktuelle Leader-Instanz startet `placement.Engine.Run`,
+  `workflows.Scheduler.Run`, `workflows.Service.RunFailoverWatcher` und
+  aktive Migrations-Timer (`raft.Leader()`/Leadership-Notify-Channel
+  gated); bei Leader-Wechsel baut die neue Leader-Instanz ihren
+  In-Memory-`workflows.Service`-Zustand aus dem FSM-Snapshot (klein)
+  plus einem Neuladen der Workflow-Definitionen aus Postgres wieder auf.
+  Schreibende Workflow-/Migrations-/Katalog-Routen, die diesen Zustand
+  berühren, werden auf Followern jetzt (Teil-2-Proxy erweitert) zum
+  Leader weitergeleitet.
+  **Verifikation:** live, nicht nur Unit-Tests — (a) ein geplanter
+  Workflow-Start (Scheduler) feuert nachweislich genau einmal, auch mit
+  drei laufenden Instanzen (kein doppelter Start durch zwei Instanzen
+  gleichzeitig); (b) ein offenes Migrations-Bestätigungsfenster
+  überlebt einen `kill -9` der Leader-Instanz — die neue Leader-Instanz
+  kennt das Fenster weiter, `ConfirmMigration` über eine beliebige
+  Instanz wirkt danach korrekt; (c) ein Crash-Loop-Szenario
+  (wiederholtes `kill -9` derselben Node-Instanz) löst die Bremse
+  weiterhin nur einmal cluster-weit aus, nicht einmal pro
+  Orchestrator-Instanz. `go test ./...` weiterhin grün.
+  **Bewusst nicht Teil 3:** I/O-Karten-Claim/Release (§6.1-Erweiterung,
+  existiert im Code noch nicht — s. §19.3 Punkt 5 letzter Spiegelstrich,
+  eigene spätere Sitzung sobald das Geräte-Inventar selbst gebaut wird),
+  Postgres-HA/NATS-Clustering (§19.3 Punkt 7, eigenständige, unabhängig
+  planbare Folgearbeit).
 
 ---
 
@@ -2478,3 +2631,5 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D10 (Blackmagic DeckLink SDI/IP, Teil 1: Ingest) | erledigt | Direkte Nutzeranweisung im Anschluss an D9: "§24.6/§24.7 'kein Capture-Karten-Pfad' aufheben und umsetzen" — hebt die zweimal bestätigte Entscheidung auf (Grund war stets fehlende testbare Hardware, laut Nutzer inzwischen anderswo im Setup vorhanden). Design + Referenz-Analyse von `/home/infantilo/PIPELINE CONTROLLER`s echter, produktiv gelaufener DeckLink-Integration in `docs/END-GOAL-FEATURES.md` Kapitel 20 (u.a. Fund: DeckLink-IP-Netzwerkparameter (Multicast/PTP/SDP) sind über GStreamer nicht zugänglich, liegen im Blackmagic-Treiber — IS-05 kann sie nicht fernsteuern, SDI und IP sind aus Software-Sicht identisch ansprechbar). Neuer Node `nodes/omp-decklink` (`decklinkvideosrc`+`decklinkaudiosrc` → `MxlVideoOutput`/`MxlAudioOutput`, strukturell wie `omp-source`), fester `OMP_DECKLINK_MODE` (sechs aus PIPELINE CONTROLLER übernommene, dort bereits verifizierte Modi, kein `auto` — MXL-Flows brauchen die Auflösung vorab), `channels`-Enum-Validierung ({2,8,16}, derselbe reale in PIPELINE CONTROLLER dokumentierte Fallstrick), gepolltes `signal` + Alarm bei Signalverlust. **Echter Bug live gefunden+behoben** (ohne Hardware, betraf den Ablehnungspfad selbst): fehlgeschlagener `PLAYING`-Übergang ohne `set_state(Null)` ließ den Prozess mit Coredump abstürzen (bekannte gstreamer-rs-Falle, dreimal reproduziert, dann dreimal sauber mit `exit 1` bestätigt) — `gst-launch-1.0` mit demselben Element allein zeigte den Absturz nicht, kein Plugin-Bug. Bewusst nicht Teil dieser Runde: Ausgabe-Richtung (Teil 2), Host-Inventar/Placement-Claim-Release für exklusive I/O-Karten-Ressourcen (§6.1, seit D6 Teil 4 unverändert offen), interlaced Modi, PTP-Kartentakt als Pipeline-Clock. `cargo build/clippy -D warnings --workspace` grün, drei reale Prozessläufe ohne Hardware (klarer Fehler statt Absturz). Nicht hier verifizierbar (§0 Punkt 7 gilt für den Rest weiter): echter Signalempfang, Bild-/Tonqualität — braucht den Host mit der echten Karte. `deploy/catalog.json` neuer Eintrag. Details: `docs/decisions.md` Nachtrag 143. | 2026-08-18 |
 | D10 Teil 2 (Ausgabe-Richtung) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1: "Teil 2 (Ausgabe-Richtung) umsetzen". `omp-decklink` gerichtet (`OMP_DECKLINK_DIRECTION=ingest\|output`), zweite `pipeline.rs`-Sektion (`OutputConfig`/`run_output`/`build_output`), IS-05-Receiver-PATCH-gesteuerte Video-/Audio-Quellwahl (gleiches `is_video`-Muster wie `omp-recorder`), Pipeline-Rebuild bei jeder Verbindungsänderung (wie `omp-2110-gateway`). Video als Anker-Verbindung, Audio optionaler Zusatz (PIPELINE CONTROLLERs eigenes Muster). `decklinkaudiosink` hat kein `channels`-Property (anders als `decklinkaudiosrc`, geprüft nicht angenommen) — Kanalzahl über explizite Caps. Derselbe Coredump-Bugtyp wie Teil 1 präventiv mitgefixt (`Drop`-Absicherung, da diese Pipeline mehrfach neu entsteht). **Stärker verifiziert als Teil 1:** echter End-to-End-Lauf (lokale Registry+NATS, echter `omp-source`-Flow, echtes IS-05-PATCH) — Registry-Auflösung/`MxlVideoInput` funktionierten nachweislich, nur `decklinkvideosink`s `set_state(Playing)` scheiterte mangels Karte, sauber, zweimal wiederholt, kein Coredump, danach vollständig aufgeräumt. `cargo build/clippy -D warnings/test` grün. Details: `docs/decisions.md` Nachtrag 144. | 2026-08-18 |
 | D11 (Gezielte AMWA-NMOS-Pitfall-Behebung) | erledigt | Nutzerauftrag: "compliance test: analyze typical pitfalls where custom Go NMOS implementations fail ... AMWA NMOS Testing Tool suites" — angewendet auf D9s bereits benannte 19-Ausnahmen-Liste (IS-05-01), jede Ausnahme am echten AMWA-Testcode (`IS0501Test.py`/`IS05Utils.py`) verifiziert statt geraten. Drei von vier D9-Ursachengruppen geschlossen: `transport_params`-Default wortgleich zum AMWA-Beispiel (13 Felder statt `{}`), echte PATCH-Teil-Update-Semantik inkl. Leg-Merge, vollständiger `activation`-Lebenszyklus (`activation_time` + "staged resettet, active persistiert", am Beispiel `receiver-active-get-200.json` bestätigt), `{"bad":"data"}` wird mit 400 abgelehnt, echte `POST /bulk/receivers`-Semantik. Eigener Design-Bug vor dem ersten Tool-Lauf per Code-Review gefunden (naives `*string` für SenderID konnte "fehlt" nicht von "explizit null" unterscheiden, hätte Disconnect-PATCHes ignoriert — `OptionalSenderID` behoben). Vier weitere echte Bugs über fünf Tool-Lauf-Runden gefunden (Pass/Fail: 17/19 → 24/12 → 25/11 → 27/9 → 29/7): `fec_mode` fehlte in der "auto"-Auflösung, `active`s uninitialisierter Default zeigte noch "auto" (am Beispiel `receiver-active-get-200-uninit.json` gegengeprüft), geplante Aktivierungen lieferten `activation_time` erst beim Feuern statt sofort, `activate_scheduled_absolute` interpretierte `requested_time` als Unix- statt echte TAI-Zeit (`NMOSUtils.get_TAI_time`, 37s-Schaltsekunden-Versatz). Nur noch eine Ursachengruppe offen: `auto_connection_1/2/3/4/5/6/13` (brauchen einen echten Sender, Mock-Node läuft mit `-senders 0`) — CI-Ausnahmeliste von 19 auf 7 geschrumpft, lokal verifiziert (`exit 0`) vor dem Eintragen. Bewusst nicht Teil: Rust-SDK-Parität (reale, dokumentierte Lücke zwischen Go-Mock und Produktions-Nodes), Sender-Test-Fixture, IS-09. `go build/vet/test ./...` grün, fünf reale `nmos-test.py`-Läufe. Details: `docs/decisions.md` Nachtrag 145. | 2026-08-18 |
+| D12 Teil 1 (Orchestrator-Cluster: Raft-Grundgerüst) | erledigt | Nutzerauftrag "Architect a highly available, clustered Orchestrator setup ... using a Raft consensus mechanism" (2026-08-18); ersetzt die alte Postgres-Advisory-Lock-Skizze aus ARCHITECTURE.md §19 (Begründung: schließt deren offen zugegebene Lücke, dass die Leader-Wahl selbst an Postgres hing). Neues Paket `internal/cluster` (`hashicorp/raft` v1.7.3 + `raft-boltdb/v2` v2.3.1, eigener TCP(+mTLS)-Transport statt NATS-Nachbau), `GET /api/v1/cluster/status`, Selbst-Bootstrap als Ein- oder Mehr-Knoten-Cluster je nach `OMP_CLUSTER_PEERS`. `go test ./...` grün (neue Tests inkl. echtem Drei-Knoten-Bootstrap/Replikation/Neuwahl über echtes TCP im Testprozess); zusätzlich live mit drei echten, separaten OS-Prozessen verifiziert — ein echtes `kill -9` des Leader-Prozesses löste binnen Sekunden eine echte Neuwahl unter den beiden Überlebenden aus (Term 2→4, per HTTP-API bestätigt), eine vierte Solo-Instanz ohne `OMP_CLUSTER_PEERS` bestätigte unverändertes Single-Host-Verhalten. Details: `docs/decisions.md` Nachtrag 146 (Architektur-Entscheidung)/147 (Umsetzung). Teil 2 (Join/Leave-API)/Teil 3 (FSM-Migration der echten Control-Plane-Zustände) offen. | 2026-08-18 |
+| D12 Teil 2 (Live-Mitgliedschaft: Join/Leave-API) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1. `POST /api/v1/cluster/join`/`DELETE /api/v1/cluster/members/{id}` (Admin-Verb), `raft.AddVoter`/`RemoveServer`; neue Instanzen starten mit `OMP_CLUSTER_JOIN=true` (`cluster.Config.SkipBootstrap`, warten passiv statt sich selbst zu bootstrappen). Peer-HTTP-Adressbuch jetzt FSM-repliziert statt statisch (jede Instanz kündigt sich bei Führungsübernahme selbst an, `CommandSetPeerHTTPAddr`) — Follower leiten Join/Leave transparent per `httputil.ReverseProxy` an die echte Leader-Adresse weiter (`forwardToLeader`), ersetzt den in der alten Skizze noch für nötig gehaltenen externen VIP/Proxy-Baustein vollständig. Empirisch korrigierte Annahme unterwegs: `raft.Config.ShutdownOnRemove` fährt laut Quelltext nur den Leader herunter, wenn er sich selbst entfernt, nicht eine entfernte Nicht-Leader-Instanz (vor der Umsetzung per gezieltem Testlauf geklärt, nicht der Doku-Formulierung vertraut). `go test ./...` grün (4 neue Cluster-Tests); zusätzlich live mit drei echten Prozessen verifiziert: Cluster wuchs 1→2→3 über echte `POST /api/v1/cluster/join`-Aufrufe, ein an den FOLLOWER gerichteter Join-Request wurde nachweislich (Response trug die Leader-`nodeId`) transparent weitergeleitet statt lokal falsch beantwortet, `kill -9` des Leaders löste echte Neuwahl aus, `DELETE .../members/{id}` schrumpfte den Cluster 3→2 mit korrekt bereinigtem Adressbuch auf beiden Überlebenden. Details: `docs/decisions.md` Nachtrag 148. Teil 3 (FSM-Migration der echten Control-Plane-Zustände + Aktiv/Passiv-Gating) offen. | 2026-08-18 |

@@ -971,7 +971,7 @@ Fertigstellung zum wichtigsten Gate**, nicht das Ende der Roadmap. Deshalb P5
 | **P0 – Fundament** | Repo, Go-Orchestrator-Skeleton, NMOS-Registry (fork/embed statt Neubau), NATS, Podman-Quadlet-Dev-Setup, UI-Shell-Skeleton **+ Flow-Editor v1 (§4.5a)**, `omp-mediaio`-Adapter-SDK (§10.1) | Du |
 | **P1 – Erster Node + SDK v1** | Playout-Referenz-Node aus PIPELINE-CONTROLLER portiert (IS-12/14, MXL/2110-I/O, UI-Bundle, C1–C3 **erledigt**) **+ Node-Contract/SDK inkl. Doku** (D5 offen) — Community-Onboarding startet ab hier. **Resequenziert (§7.4, 2026-07-11):** direkt danach zuerst der kleine manuell bedienbare Regieplatz (§13 Bildmischer/Audiomischer/Player-Minimalausbau + §14 Operator-Console + OGraf §11.2 = „Demo 3"), **erst danach** die Playout-Automation-Vertiefung (ehemals C10/C11) | Du |
 | **P2 – Community-Nodes + Platform-Hardening** (parallel) | DVE, großer Audiomixer, Formatkonverter (UHD↔HD, 50↔60Hz, Colorspace) durch Dritte; du: Redundanz (2022-7), IS-10-Auth/mTLS, Konformitätstests in CI, Review/Integration der Community-Nodes, Resource-Aware Placement & Live-Migration (§6.1, inkl. I/O-Karten-Inventar), Workflow-Bereitstellung & -Verteilung (§6.2, inkl. Scheduler/Stop-Bestätigung/Ressourcen-Vorprüfung), Reaktives Failover (§6.3), Microservice-Distribution über die UI (§6.4), Nutzer-/Rollenmodell (§12, zusammen mit IS-10-Auth/D3), Rollen-gescoptes Operator-Console-UI (§14), Latenz-Budget-Rechner/Delay-Ausgleich (§15), Monitoring-Vertiefung/konfigurierbare Erkennungsgeschwindigkeit (§17), Remote-Host-Erkennung/Host-Agent (§18, Grundlage von §6.1/§6.2 auf echten Mehr-Host-Setups), NDI/RTSP-Gateways (§6.5), RDMA-Aktivierungspfad (§6.6), Registry-Föderation & automatisierte Migrationsstufen (§6.1-/§6.4-Erweiterungen), Host-Klassen-Mix Bare-Metal/VM/AWS (§18.8/§18.9), Ausfallsicherheits-Konsolidierung inkl. Standortredundanz (§21), professionelles UI/Workflow-Katalog mit Thumbnails/Suche (§22), Asset-Metadatenebene (§23) | Community + Du |
-| **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Bei Bedarf auch hier eingeordnet, nicht vorher:** Orchestrator-Redundanz/Control-Plane-HA (§19) — erst relevant, wenn eine echte 24/7-Sendeabwicklung ansteht (§1-Zielbild), nicht für die Demo-Phasen | Später |
+| **P3 – Radio & MAM** | **Bewusst nach 2029 verschoben** — nicht nötig für TV-Regieplatz-Demo, Scope-Cut für Termintreue. **Ausnahme (Nutzerauftrag 2026-08-18):** Orchestrator-Redundanz/Control-Plane-HA (§19) vorgezogen als `UMSETZUNG.md` D12 (Phase D), nicht mehr P3-gebunden — s. §19 für Begründung des Vorziehens | Später |
 | **P4 – Demo-Vorbereitung** | **OGraf-Grafik-Node, vollwertig (§11.2)** — bewusste Aufwertung gegenüber dem früheren Scope „Minimal-Grafik-Node (kein volles OGraf/AI nötig)" per Nutzeranforderung 2026-07-10; größtenteils Know-how-Transfer aus PIPELINE CONTROLLER statt Neuland, siehe §11.2 — **Kompositing über MXL Zero-Copy**, das dank der vorgezogenen MXL-Fundament-Arbeit (`UMSETZUNG.md` C4, docs/decisions.md 2026-07-09 „MXL-Timing per Nutzer-Machtwort vorgezogen") schon aus der Source/Switcher/Viewer-Demo-Trias (Phase C, „Demo 2") vorhanden ist, statt hier erstmals gebaut zu werden, Cloud-Gateway als Architektur-Nachweis (muss nicht produktionsreif sein), Integration aller Nodes, Rehearsal, DVE/Keyer/Kompressor/Limiter/Expander-**Vertiefung** der in Phase C bereits vorgezogenen §13-Minimalknoten (Grundgerüst siehe P1-Zeile/§7.4), **Ressourcen-Kapazitätsplanung/Kalender (§16)** nach D7, **Remote-Host-Erkennung (§18)** sobald eine zweite Maschine real verfügbar ist | Du + Community |
 | **P5 – IBC 2029 Demo** | Fernsehregieplatz: Playout + community-gebaute Nodes + UI-Shell live | Alle |
 
@@ -2223,15 +2223,24 @@ echtes Geld, kein Ersatz für die Single-Host-Simulation, nicht Teil der
 Standard-Dev-Verifikation. **Phase:** nach dem §18-Kernbau (D6), kein
 zusätzlicher Foundational-Schritt.
 
-## 19. Orchestrator-Redundanz / Control-Plane-HA (Konzept, gestaffelt — kein Umsetzungsschritt vor Bedarf)
+## 19. Orchestrator-Redundanz / Control-Plane-HA (Konzept + Umsetzungsplan ab D12, 2026-08-18)
 
 **Anforderung (2026-07-11):** Haben wir ein Redundanzkonzept für unseren
 Server (Orchestrator) — brauchen wir überhaupt eines?
 
-**Kurze Antwort: aktuell nicht, für das 24/7-Sendezentrum-Zielbild
-irgendwann ja — gestaffelt, nicht jetzt bauen.** §6.3 hatte
-Orchestrator-HA bereits explizit als „Bewusste Nicht-Ziele v1" benannt,
-aber ohne Begründung/Plan stehen lassen; dieser Abschnitt liefert beides.
+**Kurze Antwort ursprünglich (2026-07-11): aktuell nicht, für das
+24/7-Sendezentrum-Zielbild irgendwann ja — gestaffelt, nicht jetzt bauen.**
+§6.3 hatte Orchestrator-HA bereits explizit als „Bewusste Nicht-Ziele v1"
+benannt, aber ohne Begründung/Plan stehen lassen; §19.1/19.2 liefern
+beides und bleiben unverändert gültig als Begründung, **warum** das
+Thema bis hierhin zurückgestellt war. **Update (2026-08-18): expliziter
+Nutzerauftrag** („Architect a highly available, clustered Orchestrator
+setup … using a Raft consensus mechanism") zieht die Umsetzung vor die
+in §19.2 beschriebene „echte 24/7-Sendeabwicklung steht an"-Schwelle —
+die Schwelle war eine Priorisierungs-Heuristik, kein hartes Gate; ein
+expliziter Auftrag sticht sie. §19.3 (unten) ersetzt dabei die bisherige
+Postgres-Advisory-Lock-Skizze durch ein Raft-basiertes Design, s. dort für
+die Begründung. Umsetzung als Schritt **D12** in `UMSETZUNG.md` §6.
 
 ### 19.1 Warum aktuell nicht
 
@@ -2260,59 +2269,155 @@ nur einem Orchestrator die Steuerung für die Dauer der Reparatur lahm.
 (§1-Zielbild), nicht für die aktuellen Demo-Phasen — deshalb hier nur als
 Konzept, kein Schritt in `UMSETZUNG.md`.
 
-### 19.3 Konzept-Skizze für später: Active-Passive über die ohnehin vorhandene Postgres/NATS-Basis
+### 19.3 Umsetzung: Raft-Konsens zwischen Orchestrator-Instanzen (ersetzt die Postgres-Advisory-Lock-Skizze, 2026-08-18)
 
-Wichtige Ausgangslage, die die Lösung deutlich vereinfacht: der
-Orchestrator ist bereits so gebaut, dass er kaum eigenen, nicht
-wiederherstellbaren Zustand hält — Config/Snapshots/Layouts liegen in
-PostgreSQL (§4.4), Health/Tally sind ephemer auf NATS, Discovery-Zustand
-liegt in der NMOS-Registry (§11: nmos-cpp). Orchestrator-HA muss also
-**keine eigene Konsens-Logik** für Orchestrator-Zustand erfinden — nur
-regeln, welche Instanz gerade „aktiv" ist.
+**Warum Raft statt der ursprünglichen Postgres-Advisory-Lock-Idee (oben,
+jetzt verworfen):** Die alte Skizze war architektonisch sauber
+begründet (kein neues Fremd-Tool, Datenbank ist ohnehin da), hatte aber
+selbst offen zugegeben (ehemaliger Punkt 4): sie beseitigt **nicht**
+jeden Single-Point-of-Failure, weil die Leader-Wahl selbst wieder von
+Postgres abhängt — fällt Postgres aus, kann auch die passive Instanz
+nicht übernehmen, und echte Postgres-HA (Patroni o. Ä.) wurde als
+eigenes, aufwändiges Thema bewusst zurückgestellt. Ein in den
+Orchestrator-Prozessen selbst eingebettetes Raft-Quorum schließt genau
+diese Lücke: Leader-Wahl und die unten definierte kritische
+Control-Plane-Zustandsmenge überleben einen Postgres-Ausfall, weil sie
+nicht mehr von Postgres abhängen — ohne den Aufwand einer vollen
+Postgres-HA-Lösung. Das ist der konkrete technische Gewinn, der die
+Abweichung von der Minimal-Dependency-Linie (§4.1/§4.3) hier
+rechtfertigt (Begründungspflicht aus `UMSETZUNG.md` §0 Punkt 5).
 
-1. **Mehrere Orchestrator-Prozesse**, auf getrennten Hosts, alle gegen
-   dieselbe (später geclusterte) Postgres + denselben NATS-Cluster +
-   dieselbe(n) NMOS-Registry-Instanz(en) verbunden (NMOS IS-04 erlaubt
-   Nodes ohnehin die Registrierung bei mehreren Registries — auch dafür
-   also kein neuer Mechanismus nötig).
-2. **Leader-Wahl über eine Postgres-Advisory-Lock** statt eines
-   zusätzlichen Konsens-Tools (etcd/Raft-Bibliothek o. Ä.) — passt zur
-   Ein-Binary-Sparsamkeitslinie (§4.1/§4.3): die Datenbank ist ohnehin da,
-   ein zusätzlicher Fremd-Prozess nur für Leader-Wahl wäre unnötiges
-   Gewicht. Die passive Instanz hält den Lock nicht, beantwortet
-   Health-/Read-Endpunkte, lehnt Schreibkommandos ab (oder leitet sie an
-   die aktive Instanz weiter); verliert die aktive Instanz die
-   Datenbankverbindung/stirbt, läuft der Lock ab und die passive Instanz
-   übernimmt.
-3. **Einziger Teil, der nicht rein software-intern lösbar ist:** Clients/
-   Nodes müssen dieselbe Adresse ansprechen können, unabhängig davon,
-   welche Instanz gerade aktiv ist — entweder ein schlanker
-   VIP-Mechanismus (keepalived/VRRP) oder ein einfacher
-   Health-Check-basierter L4/L7-Proxy davor. Das ist der einzige neue
-   Fremd-Baustein in diesem Konzept — bewusst so knapp wie möglich
-   gehalten (kein volles Service-Mesh).
-4. **Bewusst nicht mitgelöst — eigene Baustellen, nicht Teil dieses
-   Konzepts:** Postgres selbst und NATS selbst sind in diesem Entwurf noch
-   nicht redundant. NATS-Clustering ist ein natives, einfaches Feature (3
-   Knoten) — Empfehlung: früh mitnehmen, geringer Zusatzaufwand.
-   Postgres-HA (Streaming-Replikation + Failover-Tooling wie Patroni) ist
-   dagegen ein eigenes, aufwändiges Thema mit hohem
-   Aufwand/Nutzen-Verhältnis, solange keine echte 24/7-Sendeabwicklung
-   ansteht — bewusst zurückgestellt, nicht jetzt bauen. Ehrlich benannt:
-   „Orchestrator-HA" im obigen Sinn beseitigt **nicht** automatisch jeden
-   Single-Point-of-Failure der Control-Plane, solange Postgres/NATS selbst
-   nicht redundant sind — nur den Orchestrator-Prozess selbst.
+**Scope-Entscheidung (Nutzerentscheidung 2026-08-18):** Raft repliziert
+**nur Leader-Identität + eine kleine Menge kritischer,
+exklusivitätspflichtiger Control-Plane-Zustände** (Punkt 5 unten) — nicht
+den gesamten Orchestrator-Zustand. Workflows/Config/Layouts/Snapshots/
+Katalog bleiben unverändert in PostgreSQL (§4.4); Host-Telemetrie-Historie
+(§14) bleibt unverändert ephemer/in-memory. Eine volle Zustandsmaschine
+(Raft-Log ersetzt Postgres komplett) wurde bewusst **nicht** gewählt —
+deutlich größerer Umbau ohne zusätzlichen HA-Gewinn gegenüber der
+schlanken Variante, da die Postgres-Daten selbst nicht das Problem sind
+(sie sind schon heute korrekt persistiert), sondern nur die *Koordination
+zwischen mehreren aktiven Orchestrator-Prozessen*.
+
+1. **Bibliothek:** `github.com/hashicorp/raft` (die vom Nutzer genannte
+   Referenzimplementierung — Konsul/Nomad/Vault-erprobt, reine
+   Go-Library, kein externer Prozess) + `github.com/hashicorp/raft-boltdb/v2`
+   als Log-/Stable-Store (Raft selbst braucht einen dauerhaften Log —
+   ein reiner In-Memory-Store würde den gesamten HA-Zweck beim
+   Prozess-Neustart zunichtemachen). Zwei neue Dependencies, beide
+   reine Bibliotheken ohne eigenen Laufzeit-Prozess — passt zur
+   Ein-Binary-Linie (§4.1/§4.3) trotz der Abweichung von „noch weniger
+   Deps" oben unter Punkt „Warum Raft" begründet.
+2. **Transport: direktes TCP, nicht NATS.** `raft.NetworkTransport`
+   (Raft-eigener, ausgereifter TCP-Transport) über eine neue,
+   dedizierte Portadresse je Instanz (`OMP_RAFT_LISTEN`), gesichert mit
+   der bereits vorhandenen mTLS-Infrastruktur (§4.6, step-ca) — 
+   `internal/mtls` bekommt dafür ergänzend zur bestehenden
+   `ClientTLSConfig` eine `ServerTLSConfig`-Funktion. **Bewusst nicht**
+   über den bestehenden NATS-Bus (§4.2): NATS-Pub/Sub bietet nicht die
+   geordnete, verbindungsgebundene Punkt-zu-Punkt-Zustellung, auf der
+   Raft-Korrektheit beruht — ein eigener Transport darüber nachzubauen
+   wäre riskanter und aufwändiger als Raft-eigenen, breit erprobten
+   TCP-Code zu nutzen. NATS bleibt unverändert bei seiner bisherigen
+   Rolle (Tally/Health/Alarme/Telemetrie, §4.2) — keine
+   Doppelverwendung, klare Ein-Job-pro-Baustein-Linie wie überall sonst
+   im Stack (Postgres = dauerhafte Config, NATS = ephemerer Bus, jetzt
+   Raft-TCP = Konsens).
+3. **Clustergröße & Bootstrap — „eine oder mehrere Instanzen" wird durch
+   Raft selbst abgedeckt, kein Sonderfall-Code:** Ein Raft-Quorum aus
+   genau einem Stimmberechtigten ist eine gültige (entartete)
+   Konfiguration — das deckt den heutigen Single-Host-Dev-/Demo-Betrieb
+   unverändert ab, ohne einen zweiten Code-Pfad „Standalone-Modus" zu
+   brauchen. Eine frisch startende Instanz ohne bestehenden Raft-Log auf
+   Platte bootstrapt sich selbst als Ein-Knoten-Cluster
+   (`raft.BootstrapCluster`); Wachstum auf 3 oder 5 Knoten (empfohlene
+   Produktionsgrößen — ungerade Anzahl, 3 toleriert einen Ausfall, 5
+   zwei; mehr ist für eine Sendezentrums-Control-Plane nicht sinnvoll)
+   geschieht **live über eine neue Admin-API**
+   (`POST /api/v1/cluster/join` auf dem aktuellen Leader ruft intern
+   `raft.AddVoter` für die beitretende Instanz auf;
+   `DELETE /api/v1/cluster/members/{id}` das Gegenstück), nicht über
+   einen Neustart-des-gesamten-Clusters-Migrationsschritt.
+   Peer-Adressen (Raft-TCP-Adresse ↔ HTTP-API-Adresse derselben
+   Instanz, für Punkt 6 gebraucht) kommen aus statischer Konfiguration
+   (`OMP_NODE_ID`, `OMP_CLUSTER_PEERS`) — bewusst kein zusätzlicher
+   Discovery-Mechanismus (Gossip/DNS-SD), passt zur bereits an anderer
+   Stelle (§18.2) getroffenen Entscheidung „feste Adressen statt
+   Zero-Config-Discovery".
+4. **Datenverzeichnis:** `OMP_RAFT_DATA_DIR` (Default
+   `../data/raft/<nodeID>`) hält BoltDB-Log/Stable-Store +
+   `raft.FileSnapshotStore`-Snapshots — analog zu den bereits
+   bestehenden instanzlokalen Zustandsdateien (`instances.json` u. Ä.).
+5. **FSM-Scope — was konkret repliziert wird** (direkt aus dem
+   bestehenden Code identifiziert, nicht geraten, `UMSETZUNG.md` §0
+   Punkt 6): alles, was heute als **In-Memory-Zustand einer einzelnen
+   `workflows.Service`-Instanz** exklusiv/genau-einmal sein muss und bei
+   zwei gleichzeitig aktiven Orchestratoren zu doppelter Ausführung oder
+   einem inkonsistenten Zustand führen würde:
+   - Migrations-Exklusivsperren (`migration.go`:
+     `claimMigrationAttempt`/`releaseMigrationClaim`) — zwei Instanzen
+     dürfen nie gleichzeitig dieselbe Rolle migrieren.
+   - Offene Bestätigungsfenster (`migration.go`: `pendingMigration`) —
+     ein `ConfirmMigration`/`CancelMigration`-API-Aufruf muss
+     unabhängig davon wirken, welche Instanz ihn beantwortet, und der
+     Fenster-Timer darf nur einmal cluster-weit feuern.
+   - Crash-Loop-Zähler/-Bremse (K7-Teil-1, aktuell in `launcher`/`health`)
+     — zwei Instanzen dürfen nicht unabhängig doppelt neu starten oder
+     unabhängig die Bremse ziehen.
+   - Standby-Beförderungsentscheidung (`failover.go`: `promoteStandby`)
+     — muss cluster-weit exakt einmal passieren.
+   - Scheduler-Feuerzustand (`scheduler.go`: `fire`) — ein geplanter
+     Workflow-Start/-Stop darf nicht doppelt (einmal pro Instanz)
+     ausgelöst werden.
+   - Zukünftige I/O-Karten-Claim/Release-Sperren (§6.1 „Erweiterung
+     2026-07-10" — heute noch nicht gebaut, kein Geräte-Inventar
+     vorhanden) sollen, **sobald** dieser Baustein kommt, dieselbe
+     FSM-Apply-Sperr-Primitive nutzen statt eigenen lokalen Zustand —
+     hier nur als Vorgriff dokumentiert, kein Teil von D12.
+
+   Bewusst **nicht** im FSM: Workflow-Definitionen/Config/Layouts/
+   Snapshots/Katalog (bleiben Postgres, unverändert), Host-Telemetrie-
+   Rohwerte (§14, bleiben ephemer/lokal pro Instanz — reine
+   Lesedaten ohne Exklusivitätsanforderung, jede Instanz kann sie
+   unabhängig aus NATS neu aufbauen).
+6. **Aktiv/Passiv-Ausführungsmodell:** Nur die aktuelle Raft-Leader-
+   Instanz treibt die Hintergrund-Loops, die cluster-weite Entscheidungen
+   treffen (`placement.Engine.Run`, `workflows.Scheduler.Run`,
+   `workflows.Service.RunFailoverWatcher`, Migrations-Timer) — Follower
+   laufen mit, beantworten lesende API-Aufrufe direkt, aber leiten
+   schreibende Aufrufe, die FSM-Zustand aus Punkt 5 berühren, per
+   einfachem HTTP-Reverse-Proxy an die aktuelle Leader-HTTP-Adresse
+   weiter (Adresse aus der in Punkt 3 gepflegten Peer-Tabelle, aufgelöst
+   über `raft.Leader()`). Das ersetzt den in der alten Skizze als
+   „einzigen externen Baustein" genannten VIP-/Proxy-Bedarf (VRRP/
+   keepalived) — **hier nicht mehr nötig**, weil jede Instanz die
+   Leader-Adresse bereits kennt und selbst weiterleiten kann; das
+   vereinfacht den Betrieb gegenüber der alten Skizze (kein zusätzlicher
+   Fremd-Baustein). Bei Leader-Wechsel baut die neue Leader-Instanz ihren
+   In-Memory-`workflows.Service`-Zustand aus dem FSM-Snapshot
+   (klein — nur Punkt-5-Daten, nicht die vollen Workflow-Objekte, die
+   weiterhin aus Postgres geladen werden) plus einem Neuladen der
+   Workflow-Definitionen aus Postgres wieder auf.
+7. **Bewusst weiterhin nicht mitgelöst** (unverändert gegenüber der
+   alten Skizze, gleiche Begründung): Postgres selbst und NATS selbst
+   sind in diesem Design nicht redundant. NATS-Clustering (3 Knoten,
+   natives Feature) bleibt die empfohlene, aufwandsarme Ergänzung — kann
+   unabhängig von D12 gemacht werden. Postgres-HA (Patroni o. Ä.) bleibt
+   ein eigenes, aufwändiges Thema, weiterhin zurückgestellt. Ehrlich
+   benannt: Raft macht den Orchestrator-**Prozess** nicht mehr zum SPOF
+   und schließt zusätzlich die alte „Leader-Wahl hängt an Postgres"-
+   Lücke — es macht Postgres/NATS selbst nicht redundant.
 
 **Standards-Abdeckung:** keine (Eigenentwicklung; NMOS-Multi-Registry-
-Registrierung wird nur als bestehendes Feature mitgenutzt, nicht neu
-gebaut). **Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine
-simulierbar, sobald gebaut (zwei Orchestrator-Prozesse gegen dieselbe
-lokale Postgres, `kill -9` der aktiven Instanz → passive übernimmt den
-Advisory-Lock messbar). **Phase:** kein Schritt vor Bedarf — wird bei
-Planung einer echten 24/7-Sendeabwicklung (§1-Zielbild) als P3-Baustein
-konkretisiert, siehe §7-Phasenplan-Anmerkung bei P3. Bis dahin ist
-Prozess-Restart via systemd/Quadlet-Restart-Policy (§4.3) die einzige und
-für den aktuellen Scope ausreichende Antwort.
+Registrierung bleibt als bestehendes Feature nutzbar, nicht Teil dieses
+Designs). **Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine
+simulierbar (mehrere Orchestrator-Prozesse auf verschiedenen Ports/
+Datenverzeichnissen derselben Maschine, `kill -9` der Leader-Instanz →
+Neuwahl unter den verbleibenden Followern messbar über
+`GET /api/v1/cluster/status`). **Phase:** `UMSETZUNG.md` D12, in Teile
+1–3 gegliedert (Grundgerüst+Single-Node → Join/Leave-API+Mehrknoten-
+Live-Test → FSM-Migration der Punkt-5-Zustände), siehe dort für
+Verifikationskriterien je Teil.
 
 ## 20. 24/7 Broadcast-Grade Hardening — Gap-Analyse & Fahrplan (Zielbild, Priorisierung ausstehend)
 
@@ -2613,8 +2718,8 @@ macht eine konkrete Empfehlung zur offenen §20.1-Frage.
 | Ressourcen-Migration | Placement-Engine, Make-before-break, jetzt mit Eskalationsstufen | drohende Überlast, bevor sie zum Ausfall wird | plötzlichen Host-Totalausfall ohne Vorwarnzeit | §6.1 (+ Erweiterung 2026-07-13) |
 | Host-Totalausfall | N+1-Reservekapazität je Host-Pool/Fabric + automatisierte Migration bei Staleness | unerwarteten Hardware-/VM-Ausfall | I/O-Karten-gebundene Rollen ohne Ersatz-Host | §6.1/§18 |
 | Seamless (Genlock-Äquivalent) | Command-Mirroring + `omp-seamless-switch` (Zielbild, priorisierungsoffen) | unsichtbare Übernahme mitten in einer Transition | — (genau das ist der Zweck) | §20.1, Empfehlung §21.3 |
-| Control-Plane | Active-Passive-Orchestrator (Postgres-Advisory-Lock) | Steuerungsausfall bei Host-Verlust | Postgres/NATS-eigene Redundanz | §19 |
-| Persistenz | Postgres-HA/NATS-Clustering (noch nicht gebaut) | Datenverlust bei DB-/Bus-Host-Ausfall | — | §19 Punkt 4 |
+| Control-Plane | Raft-Quorum zwischen Orchestrator-Instanzen (D12) | Steuerungsausfall bei Host-Verlust, auch bei gleichzeitigem Postgres-Ausfall | Postgres/NATS-eigene Redundanz | §19 |
+| Persistenz | Postgres-HA/NATS-Clustering (noch nicht gebaut) | Datenverlust bei DB-/Bus-Host-Ausfall | — | §19.3 Punkt 7 |
 | Standort/Region | neu, §21.2 | kompletten Standortausfall | echte Sendefähigkeit von einem Zweitstandort (eigenes, größeres Vorhaben) | §21.2 |
 
 **Leseanleitung:** keine Zeile ersetzt eine andere — ein 24/7-Kanal

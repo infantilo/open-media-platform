@@ -37,9 +37,10 @@ var migrationFiles embed.FS
 // eigenen Prozess und lief ohne diesen Lock in einen echten Race
 // (`CREATE TABLE IF NOT EXISTS` ist in Postgres NICHT race-frei gegen
 // gleichzeitige Erstversuche, siehe docs/decisions.md D1). Dieselbe
-// Technik ist bereits als Baustein für Orchestrator-HA vorgesehen
-// (ARCHITECTURE.md §19.3: Leader-Wahl über eine Postgres-Advisory-Lock)
-// — hier schon einmal in echtem Einsatz, nicht neu erfunden.
+// Technik war ursprünglich auch als Baustein für die Orchestrator-HA-
+// Leader-Wahl vorgesehen; diese läuft inzwischen über Raft statt Postgres
+// (ARCHITECTURE.md §19.3, 2026-08-18, D12) — hier bleibt der Advisory-Lock
+// nur für seinen ursprünglichen Zweck (Migrations-Serialisierung).
 const migrationLockKey = 84271936
 
 // Connect öffnet den Postgres-Pool. `database/sql` verbindet lazy (der

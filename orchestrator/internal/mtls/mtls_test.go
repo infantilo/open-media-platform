@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -108,5 +109,43 @@ func TestClientTLSConfigInvalidCAFileErrors(t *testing.T) {
 	_, err := ClientTLSConfig(Config{Enabled: true, CertFile: certFile, KeyFile: keyFile, CAFile: badCA})
 	if err == nil {
 		t.Fatal("ClientTLSConfig() error = nil, want error for invalid CA file")
+	}
+}
+
+func TestServerTLSConfigDisabledReturnsNil(t *testing.T) {
+	got, err := ServerTLSConfig(Config{Enabled: false})
+	if err != nil {
+		t.Fatalf("ServerTLSConfig() error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Errorf("ServerTLSConfig() = %v, want nil when disabled", got)
+	}
+}
+
+func TestServerTLSConfigRequiresAndVerifiesClientCert(t *testing.T) {
+	certPEM, keyPEM := generateSelfSignedCert(t)
+	certFile, keyFile, caFile := writeTempFiles(t, certPEM, keyPEM)
+
+	got, err := ServerTLSConfig(Config{Enabled: true, CertFile: certFile, KeyFile: keyFile, CAFile: caFile})
+	if err != nil {
+		t.Fatalf("ServerTLSConfig() error = %v", err)
+	}
+	if len(got.Certificates) != 1 {
+		t.Errorf("Certificates = %d entries, want 1", len(got.Certificates))
+	}
+	if got.ClientCAs == nil {
+		t.Error("ClientCAs is nil, want populated pool")
+	}
+	if got.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Errorf("ClientAuth = %v, want RequireAndVerifyClientCert — an ohne Client-Zertifikat verbundener Aufrufer muss abgewiesen werden", got.ClientAuth)
+	}
+}
+
+func TestServerTLSConfigMissingCertFileErrors(t *testing.T) {
+	certPEM, keyPEM := generateSelfSignedCert(t)
+	_, _, caFile := writeTempFiles(t, certPEM, keyPEM)
+	_, err := ServerTLSConfig(Config{Enabled: true, CertFile: "/no/such/file", KeyFile: "/no/such/file", CAFile: caFile})
+	if err == nil {
+		t.Fatal("ServerTLSConfig() error = nil, want error for missing cert file")
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/cluster"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
@@ -166,6 +167,49 @@ func main() {
 	if nodeTLSConfig != nil {
 		slog.Info("mtls enabled for orchestrator-to-node requests")
 	}
+
+	// Orchestrator-Cluster (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) —
+	// vor allen Hintergrund-Loops konstruiert, weil deren Aktiv/Passiv-
+	// Gating erst mit D12 Teil 3 kommt (bis dahin laufen alle Loops
+	// unverändert auf jeder Instanz, s. dortiger Plan). Läuft immer, kein
+	// Ein-/Ausschalter wie mTLS: ein Ein-Knoten-Cluster (ClusterPeers
+	// leer, ClusterJoin false) ist der heutige Single-Host-Normalfall.
+	// Reuse derselben mTLS-Zertifikate/-CA wie Orchestrator↔Node (§4.6)
+	// für den Raft-Transport, statt einer zweiten, eigenen PKI-
+	// Konfiguration — beide Richtungen sichern dieselbe Vertrauensgrenze
+	// (step-ca). HTTPAddr reused OrchestratorURL (D12 Teil 2, s.
+	// cluster.Config.HTTPAddr-Doku) statt eines eigenen Feldes.
+	clusterFoundingPeers, err := cluster.ParsePeers(cfg.ClusterPeers)
+	if err != nil {
+		slog.Error("cluster peer config invalid", "error", err, "value", cfg.ClusterPeers)
+		os.Exit(1)
+	}
+	clusterNode, err := cluster.New(cluster.Config{
+		NodeID:   cfg.ClusterNodeID,
+		RaftAddr: cfg.ClusterRaftAddr,
+		HTTPAddr: cfg.OrchestratorURL,
+		DataDir:  cfg.ClusterDataDir,
+		TLS: mtls.Config{
+			Enabled:  cfg.MTLSEnabled,
+			CertFile: cfg.MTLSCertFile,
+			KeyFile:  cfg.MTLSKeyFile,
+			CAFile:   cfg.MTLSCAFile,
+		},
+		FoundingPeers: clusterFoundingPeers,
+		SkipBootstrap: cfg.ClusterJoin,
+	})
+	if err != nil {
+		slog.Error("cluster start failed", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := clusterNode.Shutdown(shutdownCtx); err != nil {
+			slog.Warn("cluster shutdown failed", "error", err)
+		}
+	}()
+	slog.Info("cluster started", "node_id", cfg.ClusterNodeID, "raft_addr", cfg.ClusterRaftAddr, "founding_peers", len(clusterFoundingPeers), "skip_bootstrap", cfg.ClusterJoin)
 
 	store := registry.NewStore()
 	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
@@ -350,7 +394,7 @@ func main() {
 	backupSvc := backup.NewService(cfg.PostgresContainer, cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -97,19 +97,48 @@ type Config struct {
 	// lauscht nur auf 127.0.0.1, s. dessen Kopfkommentar zur
 	// Vertrauensgrenze.
 	SupervisorURL string
+	// ClusterNodeID/ClusterRaftAddr/ClusterDataDir/ClusterPeers steuern
+	// die Raft-Konsens-Schicht zwischen Orchestrator-Instanzen
+	// (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — läuft immer (kein
+	// Ein-/Ausschalter wie MTLSEnabled: ein Ein-Knoten-Cluster IST der
+	// Normalfall, s. cluster.Config-Doku), nicht optional wie mTLS.
+	// ClusterPeers leer bedeutet Ein-Knoten-Cluster (heutiges
+	// Single-Host-Dev-Verhalten unverändert); gesetzt bedeutet
+	// statisches Gründungs-Bootstrap mit dieser Mitgliederliste (D12
+	// Teil 1). ClusterJoin (D12 Teil 2) ist das Gegenteil von
+	// ClusterPeers-Bootstrap: statt sich selbst zu bootstrappen, wartet
+	// die Instanz passiv, bis eine bestehende Leader-Instanz sie per
+	// POST /api/v1/cluster/join aufnimmt (Operator-Aktion, s.
+	// cluster.Config.SkipBootstrap-Doku) — beide Felder ergeben nur
+	// gemeinsam Sinn, wenn ClusterJoin true ist, ist ClusterPeers
+	// wirkungslos (New() bootstrapt dann gar nicht).
+	ClusterNodeID   string
+	ClusterRaftAddr string
+	ClusterDataDir  string
+	ClusterPeers    string
+	ClusterJoin     bool
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_ORCHESTRATOR_URL, OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
 // OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
-// OMP_PLACEMENT_*, OMP_AUDIT_RETENTION_DAYS und OMP_BACKUP_DIR/
-// OMP_POSTGRES_CONTAINER/OMP_BACKUP_KEEP;
-// fehlende Werte
+// OMP_PLACEMENT_*, OMP_AUDIT_RETENTION_DAYS, OMP_BACKUP_DIR/
+// OMP_POSTGRES_CONTAINER/OMP_BACKUP_KEEP und OMP_NODE_ID/
+// OMP_RAFT_LISTEN/OMP_RAFT_DATA_DIR/OMP_CLUSTER_PEERS/OMP_CLUSTER_JOIN
+// (ARCHITECTURE.md §19.3, UMSETZUNG.md D12); fehlende Werte
 // fallen auf Defaults für den lokalen Dev-Betrieb zurück (Registry/
 // NATS-Ports aus UMSETZUNG.md A2/A3, Postgres-Port aus D1, alle Pfade
 // relativ zum orchestrator/-Arbeitsverzeichnis).
 func Load() Config {
 	mtlsEnabled, _ := strconv.ParseBool(getEnv("OMP_MTLS_ENABLED", "false"))
+	// ClusterNodeID zuerst aufgelöst, weil ClusterDataDirs Default davon
+	// abhängt (../data/raft/<nodeID> statt eines von OMP_NODE_ID
+	// unabhängigen fixen Pfades — sonst würden zwei Instanzen mit
+	// unterschiedlichem OMP_NODE_ID, aber ohne explizit gesetztem
+	// OMP_RAFT_DATA_DIR, versehentlich denselben Log/Snapshot-Ordner
+	// teilen).
+	clusterNodeID := getEnv("OMP_NODE_ID", "node-1")
+	clusterJoin, _ := strconv.ParseBool(getEnv("OMP_CLUSTER_JOIN", "false"))
 	return Config{
 		Listen:          getEnv("OMP_LISTEN", ":8000"),
 		OrchestratorURL: getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
@@ -144,6 +173,17 @@ func Load() Config {
 		// Placement-/Audit-Defaults oben).
 		BackupKeep:    getEnvInt("OMP_BACKUP_KEEP", 14),
 		SupervisorURL: getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
+		// Defaults ergeben einen einzelnen Ein-Knoten-Cluster auf einer
+		// unbenutzten lokalen Adresse — identisch zum heutigen
+		// Single-Host-Dev-Verhalten, solange nicht mehrere Instanzen
+		// gleichzeitig gestartet werden (dann müssen alle drei
+		// OMP_CLUSTER_*-Werte pro Instanz eindeutig gesetzt werden, s.
+		// UMSETZUNG.md D12 Teil 1 Verifikation).
+		ClusterNodeID:   clusterNodeID,
+		ClusterRaftAddr: getEnv("OMP_RAFT_LISTEN", "127.0.0.1:8300"),
+		ClusterDataDir:  getEnv("OMP_RAFT_DATA_DIR", "../data/raft/"+clusterNodeID),
+		ClusterPeers:    getEnv("OMP_CLUSTER_PEERS", ""),
+		ClusterJoin:     clusterJoin,
 	}
 }
 
