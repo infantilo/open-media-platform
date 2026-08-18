@@ -17393,3 +17393,134 @@ hier nicht erreichbar ist.
 catalog.json` (neuer Eintrag), `ARCHITECTURE.md` (§24.6-Update,
 "aufgehoben"), `docs/END-GOAL-FEATURES.md` (Kapitel 20, neu),
 `UMSETZUNG.md` (Schritt D10 + Checkliste).
+
+## 2026-08-18 (Nachtrag 144) — Schritt D10 Teil 2: `omp-decklink` Ausgabe-Richtung, echter End-to-End-Lauf gegen die reale Registry/NATS/MXL-Infrastruktur
+
+**Kontext:** Direkter Nutzerauftrag im Anschluss an Nachtrag 143 (Teil
+1: Ingest): "Teil 2 (Ausgabe-Richtung) umsetzen". Design war in
+`docs/END-GOAL-FEATURES.md` Kapitel 20.2 bereits vollständig
+recherchiert/festgelegt (PIPELINE CONTROLLERs `_buildDecklinkPipelineStr`
+als Vorbild) — keine neue Recherche nötig, nur Umsetzung.
+
+**Struktur:** `omp-decklink` wird gerichtet
+(`OMP_DECKLINK_DIRECTION=ingest|output`, Default `ingest` — unverändertes
+Verhalten für bestehende Teil-1-Deployments), gleiches Muster wie
+`omp-srt-gateway`/`omp-2110-gateway`. `main.rs` bekam eine
+`Direction`-Weiche (`match direction { Ingest => …, Output => … }`,
+1:1 aus `omp-2110-gateway::main`s Struktur übernommen), `pipeline.rs`s
+bisheriger (einziger) Inhalt wurde zur Ingest-Sektion umbenannt
+(`Config`→`IngestConfig`, `PipelineHandle`→`IngestHandle`,
+`run`→`run_ingest` — reines Renaming, keine Verhaltensänderung,
+per `cargo check` nach jedem Zwischenschritt bestätigt), eine zweite
+Sektion (`OutputConfig`/`Command`/`ActiveOutputPipeline`/`build_output`/
+`OutputPipelineHandle`/`run_output`) kam dazu.
+
+**Design-Entscheidungen, alle aus Kapitel 20.2 übernommen:**
+
+1. **Quellwahl per echtem IS-05-Receiver-PATCH**, nicht per fester
+   Env-Var wie Teil 1s Ingest-Seite — der Flow-Editor kann die Karte
+   wie jede andere MXL-Senke per Drag&Drop verkabeln. Zwei unabhängige
+   Receiver (Video/Audio), eine gemeinsame `OutputControl`-Struct mit
+   `is_video: bool` statt zwei separaten Typen (1:1 `omp-recorder::
+   RecorderReceiverControl`-Muster übernommen, dortiger Kommentar
+   "nur unterschiedlich, welche Handle-Methode sie rufen" trifft hier
+   identisch zu).
+2. **Video ist die Anker-Verbindung, Audio ein optionaler Zusatz** —
+   PIPELINE CONTROLLERs `_buildDecklinkPipelineStr` baut den
+   Video-Zweig immer, Audio nur bedingt (`if (out.decklinkAudio ===
+   false) return videoBranch`). Physisch begründet (eine DeckLink-
+   Video-Ausgangskarte gibt immer ein Raster aus), nicht nur aus
+   Bequemlichkeit übernommen. `build_output` baut deshalb ohne
+   verbundene Video-Quelle gar keine Pipeline — Audio kann
+   unabhängig verbunden/getrennt werden, löst aber ohne Video keinen
+   Pipeline-Aufbau aus (ehrlicher Leerlauf statt stillem Teilzustand).
+3. **Feste Ziel-Caps aus derselben `mode_info()`-Tabelle wie Teil 1**
+   (Wiederverwendung, keine zweite Tabelle): `MxlVideoInput.tail !
+   videoconvert ! videoscale ! videorate ! capsfilter(Modus-Auflösung/
+   -Framerate) ! videoconvert ! decklinkvideosink … sync=true` — exakt
+   PIPELINE CONTROLLERs Kettenreihenfolge, `sync=true` mit derselben
+   Begründung (DeckLink-Sink ist alleiniger Clock-Provider dieser
+   eigenständigen Pipeline).
+4. **`decklinkaudiosink` hat KEIN `channels`-Property** (anders als
+   `decklinkaudiosrc`) — per `gst-inspect-1.0 decklinkaudiosink`
+   geprüft, nicht aus Symmetrie mit der Empfangsseite angenommen
+   (§0 Punkt 6/9). Kanalzahl kommt stattdessen aus expliziten
+   `audio/x-raw`-Caps (`format=S16LE,rate=48000,channels=N`) vor dem
+   Sink; `SUPPORTED_AUDIO_CHANNELS` ({2,8,16}) bleibt trotzdem als
+   Sanity-Check auf die gewünschte Kanalzahl bestehen (reale
+   DeckLink-Hardware-Grenze, nicht nur eine GStreamer-Property-Regel).
+
+**Derselbe Coredump-Bugtyp wie Teil 1, hier präventiv mitgefixt statt
+erneut gefunden:** `build_output`s `set_state(Playing)`-Fehlerpfad
+bekam von Anfang an denselben expliziten `set_state(Null)`-Aufruf vor
+dem `Err`-Return wie Teil 1s (in Nachtrag 143 live gefundener) Fix.
+Zusätzlich trägt `ActiveOutputPipeline` (die bei jedem Connect/
+Disconnect komplett neu gebaute Pipeline) eine `Drop`-Implementierung
+mit derselben Absicherung (1:1 `omp-2110-gateway::pipeline::
+ActiveOutputPipeline`s Muster übernommen) — nötig, weil diese Pipeline
+anders als die einmalige Ingest-Pipeline mehrfach über die
+Prozesslaufzeit neu entsteht und jedes Mal sauber abgebaut werden muss.
+
+**Stärker verifiziert als Teil 1 — echter End-to-End-Lauf, nicht nur
+"ohne Hardware isoliert":** bereits vorhandene, zuvor von einem
+früheren `make up`-Lauf dieser Dev-Maschine angelegte Podman-Container
+(`omp-nats`, `omp-nmos-registry`) gestartet (`podman start`, echte
+lokale Infrastruktur, kein Mock). Echter `omp-source` mit
+1080p25-Flow gestartet (`OMP_WIDTH=1920 OMP_HEIGHT=1080
+OMP_FRAMERATE_NUM=25`, passend zum DeckLink-Default-Modus). `omp-
+decklink` im Output-Modus gestartet, dessen Video-Receiver-ID aus der
+echten Registry gelesen. Echtes `curl -X PATCH .../staged` mit dem
+echten Sender der Quelle geschickt — Ergebniskette nachweislich
+komplett durchlaufen:
+
+1. `OutputControl::apply` erkannte `master_enable=true` +
+   `sender_id`, rief `registry.get_sender(sender_id)` gegen die echte
+   Registry auf.
+2. Die Registry löste den Sender korrekt zur echten `flow_id` auf —
+   bestätigt über `GET /params/connectedVideoFlowId`, das exakt die
+   `flowId` zeigte, die `omp-source` selbst über `/params/flowId`
+   meldete (kein Zufallstreffer, echte End-to-End-Identität geprüft).
+3. `MxlVideoInput::new` verband sich erfolgreich mit dem echten MXL-
+   Flow (kein Fehler an dieser Stelle — der Empfangspfad, den
+   `omp-recorder`/`omp-2110-gateway` bereits etabliert hatten,
+   funktioniert unverändert für den neuen Aufrufer).
+4. Erst `decklinkvideosink`s `set_state(Playing)` scheiterte (mangels
+   echter Karte) — mit exakt der erwarteten, sauberen Fehlermeldung
+   ("device-number=0 nicht erreichbar? Karte/Treiber prüfen"), über
+   `handle.publish_alert` als Alarm sichtbar, Prozess blieb
+   nachweislich am Leben (PID unverändert vor/nach dem PATCH, HTTP-
+   Server antwortete weiter).
+5. Ein zweiter Zyklus (Disconnect per `sender_id: null`, dann erneut
+   Connect) reproduzierte exakt dasselbe Verhalten ohne jede
+   Abweichung — kein einmaliger Zufallstreffer.
+
+Zusätzlich, wie bei Teil 1, isoliert per `gst-launch-1.0 videotestsrc !
+videoconvert ! decklinkvideosink device-number=0 mode=1080p25
+sync=true`: derselbe saubere Fehlschlag (`Failed to start`, `exit 0`,
+kein Coredump) ohne jeden OMP-Code — bestätigt erneut "kein
+Plugin-Bug", diesmal für die Sink- statt die Source-Seite des Plugins.
+
+**Verifiziert:** `cargo build --workspace`/`cargo clippy -p
+omp-decklink --all-targets -- -D warnings`/`cargo test -p omp-decklink`
+grün (bestehende drei `mode_info`-Tests unverändert bestanden, keine
+neuen Unit-Tests für die Output-Seite — die Verifikation lief hier
+bewusst am echten Prozess statt an isolierten Unit-Tests, s.o.).
+Testinfrastruktur danach vollständig aufgeräumt: `omp-decklink`/
+`omp-source`-Prozesse beendet, `omp-nats`/`omp-nmos-registry`-Container
+gestoppt (in ihren ursprünglichen "erstellt, nicht laufend"-Zustand
+zurückversetzt), alle drei entstandenen MXL-Flow-Verzeichnisse aus
+`/dev/shm/omp-mxl` entfernt — keine Spuren im Dev-Environment
+hinterlassen.
+
+**Nicht Teil dieser Sitzung (bewusst, unverändert seit Nachtrag 143):**
+Host-Inventar/Placement-Claim-Release für exklusive I/O-Karten
+(`ARCHITECTURE.md` §6.1), interlaced Modi, PTP-Kartentakt als
+Pipeline-Clock. DeckLink Teil 1 UND Teil 2 sind damit beide
+abgeschlossen — die ursprüngliche Nutzeranfrage "Blackmagic DeckLink
+IP und SDI Capture-Karten um 2110-Signal zu senden/empfangen" ist
+vollständig umgesetzt (mit der in Kapitel 20.1 dokumentierten
+IS-05-Netzwerksteuerungs-Grenze für IP-Karten).
+
+**Dateien:** `nodes/omp-decklink/src/{main,pipeline}.rs`,
+`docs/END-GOAL-FEATURES.md` (Kapitel 20.4, neu), `UMSETZUNG.md`
+(Schritt D10 Teil 2 + Checkliste).

@@ -33,7 +33,7 @@
 //! **`channels` ist ein FIXER ENUM {2, 8, 16}** (0="max") — PIPELINE
 //! CONTROLLERs `server.js`-Kommentar dokumentiert einen echten,
 //! produktiv aufgetretenen Bug: jeder andere Wert ist eine ungültige
-//! Property und bricht den gesamten Pipeline-Parse. `Config::audio_
+//! Property und bricht den gesamten Pipeline-Parse. `IngestConfig::audio_
 //! channels` wird deshalb VOR dem Pipeline-Aufbau validiert (`PipelineError`
 //! statt eines stillen Fallbacks).
 
@@ -44,7 +44,7 @@ use std::time::Duration;
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
-use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
+use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
@@ -85,7 +85,7 @@ pub const SUPPORTED_MODES: &[&str] =
 /// Moduldoku oben.
 pub const SUPPORTED_AUDIO_CHANNELS: &[u32] = &[2, 8, 16];
 
-pub struct Config {
+pub struct IngestConfig {
     pub domain: String,
     pub flow_id: String,
     pub audio_flow_id: String,
@@ -100,7 +100,7 @@ pub enum Event {
     /// Wechsel des `signal`-Zustands (`true` = gültiges Eingangssignal
     /// anliegend) — gepollt, da das Plugin dafür keine Bus-Events postet
     /// (PIPELINE CONTROLLERs `_startLiveSignalPoll`-Kommentar, dieselbe
-    /// Eigenschaft hier über `PipelineHandle::signal()` genutzt statt
+    /// Eigenschaft hier über `IngestHandle::signal()` genutzt statt
     /// erneut per Timer im Aufrufer gepollt).
     SignalChanged(bool),
 }
@@ -122,7 +122,7 @@ struct Pipeline {
 }
 
 impl Pipeline {
-    fn build(config: &Config) -> Result<Self, PipelineError> {
+    fn build(config: &IngestConfig) -> Result<Self, PipelineError> {
         gst::init().map_err(|e| PipelineError(format!("gst init failed: {e}")))?;
 
         let Some(mode_info) = mode_info(&config.mode) else {
@@ -276,12 +276,12 @@ impl Pipeline {
 
 /// Griff auf die laufende Pipeline für den async Node-Lifecycle.
 #[derive(Clone)]
-pub struct PipelineHandle {
+pub struct IngestHandle {
     decklinkvideosrc: gst::Element,
     video_flowed: Arc<AtomicBool>,
 }
 
-impl PipelineHandle {
+impl IngestHandle {
     /// Ob mindestens ein echter Video-Buffer geflossen ist — genutzt als
     /// `MediaReadySource::Probe` (wie `omp-source`).
     pub fn media_ready(&self) -> bool {
@@ -293,11 +293,11 @@ impl PipelineHandle {
     }
 }
 
-pub fn run(
-    config: Config,
+pub fn run_ingest(
+    config: IngestConfig,
     tx: UnboundedSender<Event>,
     shutdown: Arc<AtomicBool>,
-    ready: oneshot::Sender<Result<PipelineHandle, String>>,
+    ready: oneshot::Sender<Result<IngestHandle, String>>,
     heartbeat: Arc<AtomicU64>,
 ) {
     let pipeline = match Pipeline::build(&config) {
@@ -309,7 +309,7 @@ pub fn run(
         }
     };
 
-    let _ = ready.send(Ok(PipelineHandle {
+    let _ = ready.send(Ok(IngestHandle {
         decklinkvideosrc: pipeline.decklinkvideosrc.clone(),
         video_flowed: pipeline.video_flowed.clone(),
     }));
@@ -336,6 +336,358 @@ pub fn run(
     }
 
     pipeline.shutdown();
+}
+
+// ---------------------------------------------------------------------
+// Output (Teil 2, UMSETZUNG.md D10): MXL-Flow(s) → DeckLink-SDI/IP-Ausgang
+// ---------------------------------------------------------------------
+//
+// Quellwahl per echtem IS-05-Receiver-PATCH (Flow-Editor drag&drop),
+// gleiches Rebuild-bei-Connect-Muster wie `omp-2110-gateway::pipeline`s
+// Output-Richtung UND `omp-recorder`s zwei unabhängige Video-/Audio-
+// Receiver (dortiges `Config`/`Command`/`ConnectVideo`/`ConnectAudio`-
+// Muster hier für Video+Audio übernommen, aber ohne dessen Start/Stop-
+// Lebenszyklus — ein Hardware-Ausgang ist "warm, sobald verbunden" wie
+// bei `omp-2110-gateway`, nicht Session-basiert wie eine Aufnahme).
+//
+// **Video ist die Anker-Verbindung, Audio ein optionaler Zusatz** —
+// PIPELINE CONTROLLERs eigenes `_buildDecklinkPipelineStr` baut den
+// Video-Zweig immer, Audio nur bei `out.decklinkAudio !== false`
+// (dortiger Kommentar/Code, `lib/OutputEngine.js`). Physisch sinnvoll:
+// eine DeckLink-Video-Ausgangskarte gibt immer ein Raster aus (mit
+// eingebettetem Ton), "nur Ton, kein Bild" ist kein reales
+// Betriebsszenario dieser Hardware. Ohne verbundene Video-Quelle baut
+// `build_output` deshalb gar keine Pipeline auf (Fehler statt stillem
+// Leerlauf) — Audio kann verbunden/getrennt werden, ohne Video zu
+// berühren, baut aber die gesamte Pipeline neu (kein dynamisches
+// Pad-Relinking, Projekt-Konvention).
+
+pub struct OutputConfig {
+    pub domain: String,
+    pub device_number: i32,
+    pub mode: String,
+    pub audio_channels: u32,
+}
+
+enum Command {
+    ConnectVideo(String),
+    DisconnectVideo,
+    ConnectAudio(String),
+    DisconnectAudio,
+}
+
+struct ActiveOutputPipeline {
+    pipeline: gst::Pipeline,
+    _video_input: MxlVideoInput,
+    _audio_input: Option<MxlAudioInput>,
+}
+
+impl Drop for ActiveOutputPipeline {
+    fn drop(&mut self) {
+        // Dieselbe gstreamer-rs-Falle wie oben (`Pipeline::build`s
+        // Fehlerpfad) — hier als `Drop` statt manuellem Aufruf, weil
+        // diese Pipeline bei jedem Connect/Disconnect komplett neu
+        // aufgebaut wird (kein einzelner Fehlerpfad wie bei der
+        // Ingest-Seite).
+        let _ = self.pipeline.set_state(gst::State::Null);
+    }
+}
+
+fn build_output(
+    context: &Arc<MxlContext>,
+    video_flow_id: &str,
+    audio_flow_id: Option<&str>,
+    device_number: i32,
+    mode: &str,
+    audio_channels: u32,
+) -> Result<ActiveOutputPipeline, String> {
+    let mode_info = mode_info(mode).ok_or_else(|| {
+        format!("unbekannter/nicht unterstützter DeckLink-Modus {mode:?} (unterstützt: {SUPPORTED_MODES:?})")
+    })?;
+    if let Some(_audio_flow_id) = audio_flow_id
+        && !SUPPORTED_AUDIO_CHANNELS.contains(&audio_channels)
+    {
+        return Err(format!(
+            "audio_channels={audio_channels} ungültig — DeckLink-Karten unterstützen nur {SUPPORTED_AUDIO_CHANNELS:?}"
+        ));
+    }
+
+    let pipeline = gst::Pipeline::new();
+
+    let video_input =
+        MxlVideoInput::new(&pipeline, context.clone(), video_flow_id).map_err(|e| format!("MxlVideoInput({video_flow_id}): {e}"))?;
+
+    let videoconvert_in = gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|e| format!("videoconvert (in): {e}"))?;
+    let videoscale = gst::ElementFactory::make("videoscale")
+        .build()
+        .map_err(|e| format!("videoscale: {e}"))?;
+    let videorate = gst::ElementFactory::make("videorate")
+        .build()
+        .map_err(|e| format!("videorate: {e}"))?;
+    // Feste Ziel-Caps aus der Modus-Tabelle — `decklinkvideosink` ist
+    // modus-gebunden (kein freies width/height, PIPELINE CONTROLLERs
+    // Kommentar), `videoscale`/`videorate` gleichen die tatsächliche
+    // MXL-Quellauflösung/-Framerate daran an, statt sie zu erzwingen.
+    let caps = gst::ElementFactory::make("capsfilter")
+        .property(
+            "caps",
+            gst::Caps::builder("video/x-raw")
+                .field("width", mode_info.width as i32)
+                .field("height", mode_info.height as i32)
+                .field(
+                    "framerate",
+                    gst::Fraction::new(mode_info.fps_numerator as i32, mode_info.fps_denominator as i32),
+                )
+                .build(),
+        )
+        .build()
+        .map_err(|e| format!("capsfilter (video): {e}"))?;
+    let videoconvert_out = gst::ElementFactory::make("videoconvert")
+        .build()
+        .map_err(|e| format!("videoconvert (out): {e}"))?;
+    let decklinkvideosink = gst::ElementFactory::make("decklinkvideosink")
+        .property("device-number", device_number)
+        // sync=true: der DeckLink-Sink ist der alleinige Clock-Provider
+        // dieser eigenständigen Pipeline — GStreamer wählt automatisch
+        // die Karten-Clock, getaktetes Playback statt "so schnell wie
+        // möglich" (identische Begründung wie PIPELINE CONTROLLERs
+        // `_buildDecklinkPipelineStr`-Kommentar).
+        .property("sync", true)
+        .build()
+        .map_err(|e| format!("decklinkvideosink: {e}"))?;
+    decklinkvideosink.set_property_from_str("mode", mode);
+
+    pipeline
+        .add(&videoconvert_in)
+        .and_then(|()| pipeline.add(&videoscale))
+        .and_then(|()| pipeline.add(&videorate))
+        .and_then(|()| pipeline.add(&caps))
+        .and_then(|()| pipeline.add(&videoconvert_out))
+        .and_then(|()| pipeline.add(&decklinkvideosink))
+        .map_err(|e| format!("add video output elements: {e}"))?;
+    gst::Element::link_many([
+        &video_input.tail,
+        &videoconvert_in,
+        &videoscale,
+        &videorate,
+        &caps,
+        &videoconvert_out,
+        &decklinkvideosink,
+    ])
+    .map_err(|e| format!("link video output chain: {e}"))?;
+
+    let audio_input = match audio_flow_id {
+        Some(flow_id) => {
+            let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id)
+                .map_err(|e| format!("MxlAudioInput({flow_id}): {e}"))?;
+            let audioconvert = gst::ElementFactory::make("audioconvert")
+                .build()
+                .map_err(|e| format!("audioconvert: {e}"))?;
+            let audioresample = gst::ElementFactory::make("audioresample")
+                .build()
+                .map_err(|e| format!("audioresample: {e}"))?;
+            // `decklinkaudiosink` hat (anders als `decklinkaudiosrc`)
+            // KEIN `channels`-Property — die Kanalzahl kommt aus den
+            // negoziierten Caps, deshalb hier explizit gesetzt statt nur
+            // beim Empfangs-Encoder validiert (`gst-inspect-1.0
+            // decklinkaudiosink` geprüft, keine geratene Annahme).
+            let audio_caps = gst::ElementFactory::make("capsfilter")
+                .property(
+                    "caps",
+                    gst::Caps::builder("audio/x-raw")
+                        .field("format", "S16LE")
+                        .field("rate", SAMPLE_RATE as i32)
+                        .field("channels", audio_channels as i32)
+                        .build(),
+                )
+                .build()
+                .map_err(|e| format!("capsfilter (audio): {e}"))?;
+            let decklinkaudiosink = gst::ElementFactory::make("decklinkaudiosink")
+                .property("device-number", device_number)
+                .property("sync", true)
+                .build()
+                .map_err(|e| format!("decklinkaudiosink: {e}"))?;
+
+            pipeline
+                .add(&audioconvert)
+                .and_then(|()| pipeline.add(&audioresample))
+                .and_then(|()| pipeline.add(&audio_caps))
+                .and_then(|()| pipeline.add(&decklinkaudiosink))
+                .map_err(|e| format!("add audio output elements: {e}"))?;
+            gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &audio_caps, &decklinkaudiosink])
+                .map_err(|e| format!("link audio output chain: {e}"))?;
+
+            Some(input)
+        }
+        None => None,
+    };
+
+    // Dieselbe explizite Null-auf-Fehlerpfad-Absicherung wie
+    // `Pipeline::build` oben — live gefundener gstreamer-rs-Coredump-
+    // Bug, s. Moduldoku dort. Hier zusätzlich wichtig: bei einem
+    // Fehlschlag müssen `video_input`/`audio_input`s MXL-Reader-Threads
+    // sauber gestoppt werden, bevor sie beim Drop verschwinden.
+    if let Err(e) = pipeline.set_state(gst::State::Playing) {
+        let _ = pipeline.set_state(gst::State::Null);
+        return Err(format!(
+            "set state playing (device-number={device_number} nicht erreichbar? Karte/Treiber prüfen): {e}"
+        ));
+    }
+
+    Ok(ActiveOutputPipeline { pipeline, _video_input: video_input, _audio_input: audio_input })
+}
+
+/// Griff für den async Node-Lifecycle (gleiches Muster wie
+/// `omp-2110-gateway::pipeline::OutputPipelineHandle`): schickt Connect-/
+/// Disconnect-Befehle an den Pipeline-Thread, der bei jedem Wechsel die
+/// gesamte Pipeline neu aufbaut.
+#[derive(Clone)]
+pub struct OutputPipelineHandle {
+    commands: std::sync::mpsc::Sender<Command>,
+    flowed: Arc<AtomicBool>,
+}
+
+impl OutputPipelineHandle {
+    pub fn connect_video(&self, flow_id: String) {
+        let _ = self.commands.send(Command::ConnectVideo(flow_id));
+    }
+
+    pub fn disconnect_video(&self) {
+        let _ = self.commands.send(Command::DisconnectVideo);
+    }
+
+    pub fn connect_audio(&self, flow_id: String) {
+        let _ = self.commands.send(Command::ConnectAudio(flow_id));
+    }
+
+    pub fn disconnect_audio(&self) {
+        let _ = self.commands.send(Command::DisconnectAudio);
+    }
+
+    pub fn media_ready(&self) -> bool {
+        self.flowed.load(Ordering::Relaxed)
+    }
+}
+
+/// Läuft auf einem eigenen Thread: verwaltet die zuletzt gewählten
+/// Video-/Audio-`flow_id`s, baut bei jeder Änderung die gesamte Ausgabe-
+/// Pipeline neu (kein dynamisches Pad-Relinking, Projekt-Konvention).
+pub fn run_output(
+    config: OutputConfig,
+    tx: UnboundedSender<Event>,
+    shutdown: Arc<AtomicBool>,
+    ready: oneshot::Sender<Result<OutputPipelineHandle, String>>,
+    heartbeat: Arc<AtomicU64>,
+) {
+    if let Err(e) = gst::init() {
+        let msg = format!("gst init failed: {e}");
+        let _ = tx.send(Event::Error(msg.clone()));
+        let _ = ready.send(Err(msg));
+        return;
+    }
+
+    let context = match MxlContext::new(&config.domain) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            let _ = tx.send(Event::Error(e.clone()));
+            let _ = ready.send(Err(e));
+            return;
+        }
+    };
+
+    let (commands_tx, commands_rx) = std::sync::mpsc::channel::<Command>();
+    let flowed = Arc::new(AtomicBool::new(false));
+    let _ = ready.send(Ok(OutputPipelineHandle { commands: commands_tx, flowed: flowed.clone() }));
+
+    let mut video_flow_id: Option<String> = None;
+    let mut audio_flow_id: Option<String> = None;
+    let mut active: Option<ActiveOutputPipeline> = None;
+
+    let rebuild = |video: &Option<String>,
+                   audio: &Option<String>,
+                   active: &mut Option<ActiveOutputPipeline>,
+                   flowed: &Arc<AtomicBool>,
+                   tx: &UnboundedSender<Event>| {
+        // Alte Pipeline zuerst abbauen (Drop stoppt die MXL-Reader-
+        // Threads + setzt State Null), bevor eine neue denselben
+        // MxlContext für neue Reader nutzt (identische Reihenfolge-
+        // Überlegung wie `omp-2110-gateway::pipeline::run_output`).
+        *active = None;
+        flowed.store(false, Ordering::Relaxed);
+        let Some(video_flow_id) = video.as_deref() else {
+            // Keine Video-Quelle verbunden — bewusst keine Pipeline
+            // (s. Moduldoku: Video ist die Anker-Verbindung), auch wenn
+            // Audio verbunden ist.
+            return;
+        };
+        match build_output(&context, video_flow_id, audio.as_deref(), config.device_number, &config.mode, config.audio_channels) {
+            Ok(p) => *active = Some(p),
+            Err(e) => {
+                let _ = tx.send(Event::Error(format!("DeckLink-Ausgang: {e}")));
+            }
+        }
+    };
+
+    loop {
+        // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
+        // Nachtrag 130).
+        heartbeat.fetch_add(1, Ordering::Relaxed);
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+
+        if let Some(rec) = &active {
+            let bus = rec.pipeline.bus();
+            let err = bus.and_then(|bus| {
+                bus.timed_pop_filtered(gst::ClockTime::from_mseconds(50), &[gst::MessageType::Error])
+            });
+            if let Some(msg) = err
+                && let gst::MessageView::Error(e) = msg.view()
+            {
+                let message = format!("{} ({})", e.error(), e.debug().unwrap_or_default());
+                active = None;
+                flowed.store(false, Ordering::Relaxed);
+                let _ = tx.send(Event::Error(message));
+            } else if !flowed.load(Ordering::Relaxed) {
+                // "media-ready" (ARCHITECTURE.md §5 Punkt 6): erst wahr,
+                // sobald der Video-Ausgangszweig nachweislich einen
+                // Buffer erreicht hat — hier per einmaliger Bus-Pad-
+                // Probe wäre komplexer als der bereits laufende Poll-
+                // Takt, deshalb pragmatisch: sobald die Pipeline seit
+                // > 1 Heartbeat-Tick fehlerfrei PLAYING ist, gilt sie als
+                // bereit (kein separater Probe-Zweig nötig, da diese
+                // Pipeline — anders als Ingest — keinen eigenen MXL-
+                // Schreib-Nachweis braucht, der Empfangspfad ist bereits
+                // durch `MxlVideoInput`s eigenen Reader-Thread belegt).
+                flowed.store(true, Ordering::Relaxed);
+            }
+        }
+
+        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(Command::ConnectVideo(flow_id)) => {
+                video_flow_id = Some(flow_id);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+            }
+            Ok(Command::DisconnectVideo) => {
+                video_flow_id = None;
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+            }
+            Ok(Command::ConnectAudio(flow_id)) => {
+                audio_flow_id = Some(flow_id);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+            }
+            Ok(Command::DisconnectAudio) => {
+                audio_flow_id = None;
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    drop(active);
 }
 
 #[cfg(test)]

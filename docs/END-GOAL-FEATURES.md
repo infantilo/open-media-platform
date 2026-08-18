@@ -3970,6 +3970,72 @@ nur der Baustopp selbst ist aufgehoben).
 
 **Standards-Abdeckung:** IS-04 (Sender-Registrierung, wie jeder
 MXL-Sender-Node) — keine neue. **Nicht Teil dieser Runde:** Ausgabe-
-Richtung (Teil 2), Host-Inventar/Placement-Claim-Release (§6.1),
-Interlace-Modi, PTP-Kartentakt als Pipeline-Clock. **Phase:**
-`UMSETZUNG.md` D10.
+Richtung (Teil 2, s. 20.4 — inzwischen umgesetzt), Host-Inventar/
+Placement-Claim-Release (§6.1), Interlace-Modi, PTP-Kartentakt als
+Pipeline-Clock. **Phase:** `UMSETZUNG.md` D10.
+
+### 20.4 Umgesetzt (2026-08-18, Teil 2: Output)
+
+Direkter Nutzerauftrag im Anschluss an Teil 1: "Teil 2 (Ausgabe-
+Richtung) umsetzen". `omp-decklink` wird gerichtet
+(`OMP_DECKLINK_DIRECTION=ingest|output`, gleiches Muster wie
+`omp-srt-gateway`/`omp-2110-gateway` — bereits in 20.2 so geplant, hier
+umgesetzt): `main.rs` bekommt eine `Direction`-Weiche, `pipeline.rs`
+eine zweite Sektion (`OutputConfig`/`run_output`/`build_output`) neben
+der bestehenden Ingest-Sektion (dort umbenannt zu `IngestConfig`/
+`run_ingest`/`IngestHandle` für Symmetrie, keine Verhaltensänderung).
+
+**Design, direkt aus 20.2 übernommen, keine neue Recherche nötig:**
+Quellwahl per echtem IS-05-Receiver-PATCH (Flow-Editor drag&drop) statt
+fester Env-Var-Konfiguration — zwei unabhängige Receiver (Video/Audio,
+gleiches Muster wie `omp-recorder`s Empfangsseite: eine gemeinsame
+`ReceiverControl`-Struct mit `is_video`-Flag statt zwei separaten
+Typen), jede Verbindungsänderung baut die gesamte Ausgabe-Pipeline neu
+(kein dynamisches Pad-Relinking, wie `omp-2110-gateway`s Output-
+Richtung). **Video ist die Anker-Verbindung, Audio ein optionaler
+Zusatz** (PIPELINE CONTROLLERs eigenes `_buildDecklinkPipelineStr` baut
+den Video-Zweig immer, Audio nur bedingt) — ohne verbundene
+Video-Quelle baut `build_output` bewusst gar keine Pipeline (ehrlicher
+Leerlauf statt stillem Teilzustand). Feste Ziel-Caps aus derselben
+`mode_info()`-Tabelle wie Teil 1 (`videoconvert ! videoscale !
+videorate !` Caps-Filter auf Modus-Auflösung/-Framerate `!
+videoconvert ! decklinkvideosink … sync=true`), `decklinkaudiosink` hat
+anders als `decklinkaudiosrc` **kein** `channels`-Property (`gst-
+inspect-1.0 decklinkaudiosink` geprüft, nicht angenommen) — Kanalzahl
+kommt stattdessen aus expliziten Caps vor dem Sink.
+
+**Live gefundener, derselbe Bugtyp wie Teil 1, hier präventiv
+mitgefixt statt erneut gefunden:** `build_output`s Fehlerpfad
+(fehlgeschlagener `PLAYING`-Übergang) bekam denselben expliziten
+`set_state(Null)`-Aufruf VOR dem `Err`-Return wie Teil 1 — zusätzlich
+trägt `ActiveOutputPipeline` (die bei jedem Connect/Disconnect neu
+gebaute Pipeline) eine `Drop`-Implementierung mit derselben Absicherung
+(analog `omp-2110-gateway::pipeline::ActiveOutputPipeline`), da diese
+Pipeline anders als die Ingest-Seite mehrfach über die Prozesslaufzeit
+neu entsteht.
+
+**Stärker verifiziert als Teil 1** (kein "nur ohne Hardware", sondern
+ein echter End-to-End-Lauf gegen die reale restliche Infrastruktur):
+lokale NMOS-Registry + NATS gestartet (bereits vorhandene, zuvor
+angelegte Podman-Container dieser Dev-Maschine), ein echter
+`omp-source` mit 1080p25-Flow gestartet, `omp-decklink` im
+Output-Modus gestartet, **echtes IS-05-PATCH** gegen dessen
+Video-Receiver mit dem echten Sender der Quelle geschickt —
+`OutputControl::apply` löste den `sender_id` über die echte Registry
+zu einer `flow_id` auf (`connectedVideoFlowId` zeigte danach korrekt
+die echte Flow-UUID), `MxlVideoInput` verband sich erfolgreich mit dem
+echten Flow, erst `decklinkvideosink`s `set_state(Playing)` scheiterte
+(mangels echter Karte) — mit exakt der erwarteten, sauberen
+Fehlermeldung, Prozess blieb am Leben (PID unverändert), zweimal
+wiederholt (Disconnect+Reconnect) ohne jeden Unterschied im Verhalten,
+kein Coredump. Zusätzlich isoliert per `gst-launch-1.0 videotestsrc !
+videoconvert ! decklinkvideosink …`: derselbe saubere Fehlschlag ohne
+OMP-Code, bestätigt denselben "kein Plugin-Bug"-Befund wie bei
+`decklinkvideosrc` in Teil 1. Testinfrastruktur danach vollständig
+aufgeräumt (Prozesse beendet, Container gestoppt, MXL-Flows entfernt).
+
+**Standards-Abdeckung:** IS-04 (Receiver-Registrierung), IS-05
+(Connection-API-PATCH für die Quellwahl) — beide bereits etablierte
+Muster, keine neuen. **Nicht Teil dieser Runde** (unverändert seit
+20.3): Host-Inventar/Placement-Claim-Release (§6.1), Interlace-Modi,
+PTP-Kartentakt als Pipeline-Clock. **Phase:** `UMSETZUNG.md` D10 Teil 2.
