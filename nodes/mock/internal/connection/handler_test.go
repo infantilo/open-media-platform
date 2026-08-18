@@ -212,3 +212,44 @@ func TestHandlerTrailingSlashLeafPathsMatchBarePaths(t *testing.T) {
 		}
 	}
 }
+
+// TestHandlerBulkReceiversPost — live an AMWA-test_37 gefunden
+// (docs/decisions.md D11): POST /bulk/receivers muss echte PATCHes
+// ausführen, nicht nur mit 200 antworten.
+func TestHandlerBulkReceiversPost(t *testing.T) {
+	store := NewReceiverStore([]string{"recv-1"})
+	h := Handler(store)
+
+	body := `[
+		{"id": "recv-1", "params": {"transport_params": [{"destination_port": 6000}]}},
+		{"id": "does-not-exist", "params": {"master_enable": true}},
+		{"id": "recv-1", "params": {"bad": "data"}}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x-nmos/connection/v1.1/bulk/receivers", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST bulk/receivers status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	var results []bulkResultItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results len = %d, want 3", len(results))
+	}
+	if results[0].ID != "recv-1" || results[0].Code != http.StatusOK {
+		t.Fatalf("results[0] = %+v, want {recv-1, 200}", results[0])
+	}
+	if results[1].ID != "does-not-exist" || results[1].Code != http.StatusNotFound || results[1].Error == nil {
+		t.Fatalf("results[1] = %+v, want {does-not-exist, 404, error set}", results[1])
+	}
+	if results[2].Code != http.StatusBadRequest || results[2].Error == nil {
+		t.Fatalf("results[2] = %+v, want {400, error set} for the unknown field", results[2])
+	}
+
+	staged, _ := store.Staged("recv-1")
+	if staged.TransportParams[0]["destination_port"] != float64(6000) {
+		t.Fatalf("destination_port after bulk PATCH = %v, want 6000 (real effect, not just a 200 stub)", staged.TransportParams[0]["destination_port"])
+	}
+}

@@ -1771,6 +1771,54 @@ Grob geschnitten, Detail-Schritte werden am Ende von Phase C konkretisiert:
   Release (§6.1), Interlace-Modi, PTP-Kartentakt. Details: `docs/
   decisions.md` Nachtrag 144, `docs/END-GOAL-FEATURES.md` Kapitel 20.4.
 
+- **D11 (Gezielte AMWA-NMOS-Pitfall-Behebung, erledigt 2026-08-18).**
+  Nutzerauftrag: "compliance test: analyze typical pitfalls where
+  custom Go NMOS implementations fail ... AMWA NMOS Testing Tool
+  suites" — angewendet auf D9s bereits benannte, aber offene 19-
+  Ausnahmen-Liste (IS-05-01), nicht als abstrakte Recherche. Für jede
+  Ausnahme den echten AMWA-Testcode (`AMWA-TV/nmos-testing`,
+  `IS0501Test.py`/`IS05Utils.py`) gelesen statt aus dem Fehlertext
+  geraten. Drei der vier D9-Ursachengruppen vollständig geschlossen:
+  `transport_params`-Default jetzt wortgleich zum AMWA-Referenzbeispiel
+  (13 Felder statt leerem `{}`), echte PATCH-Teil-Update-Semantik inkl.
+  Leg-Merge (`transport_params` war im Body vorher gar nicht bekannt),
+  vollständiger `activation`-Lebenszyklus (`activation_time`-Feld +
+  "staged resettet, active persistiert"-Regel, direkt am AMWA-Beispiel
+  `receiver-active-get-200.json` bestätigt), `{"bad":"data"}` wird
+  jetzt mit 400 abgelehnt (`patchableFields`-Allowlist), echte
+  `POST /bulk/receivers`-Semantik (dünner Wrapper um dieselbe
+  `PatchStaged`-Logik). **Eigener Design-Bug vor jedem Tool-Lauf per
+  Code-Review gefunden:** eine naive `*string`-Fassung von `SenderID`
+  konnte "Feld fehlt" nicht von "Feld ist explizit null" unterscheiden
+  — hätte jedes Disconnect-PATCH stillschweigend ignoriert; behoben mit
+  `OptionalSenderID`+eigenem `UnmarshalJSON` vor dem ersten Tool-Lauf.
+  **Vier weitere echte Bugs live über fünf Tool-Lauf-Runden gefunden**
+  (Pass/Fail: 17/19 → 24/12 → 25/11 → 27/9 → 29/7): `fec_mode` fehlte
+  in der "auto"-Auflösung; `active`s uninitialisierter Default zeigte
+  noch "auto" (am AMWA-Beispiel `receiver-active-get-200-uninit.json`
+  gegengeprüft, bestätigt exakt die schon gewählten Port-Konventionen
+  Port/Port+1/Port+2/Port+4); geplante Aktivierungen lieferten
+  `activation_time` erst beim tatsächlichen Feuern statt sofort in der
+  PATCH-Antwort (Schema-Text: "will ... activate", Futur); und ein
+  echter TAI-vs-UTC-Bug — `activate_scheduled_absolute`s
+  `requested_time` ist laut `NMOSUtils.get_TAI_time` echte TAI (37s vor
+  UTC), die erste Fassung interpretierte es als Unix-Zeit und feuerte
+  ~37s zu spät. **Ergebnis:** nur noch EINE Ursachengruppe offen
+  (`auto_connection_1/2/3/4/5/6/13` — brauchen einen echten Sender zum
+  Verbinden, Mock-Node läuft mit `-senders 0`, B1-Scope-Grenze) — CI-
+  Ausnahmeliste von 19 auf 7 Einträge geschrumpft, lokal gegen die
+  echte Ergebnisdatei verifiziert (`exit 0`) vor dem Eintragen.
+  **Bewusst nicht Teil dieser Sitzung:** Rust-SDK-Parität (alle Fixes
+  betreffen nur den Go-Mock-Node, das einzige CI-testbare Ziel — echte
+  Produktions-Nodes haben seit D9 dieselbe Basis-Discovery, aber NICHT
+  dieselbe `transport_params`-Tiefe/PATCH-Merge/Aktivierungs-
+  Lebenszyklus/Bulk-Semantik, eine reale, dokumentierte Lücke),
+  Sender-Test-Fixture für `auto_connection_*`, IS-09. **Verifikation
+  bestanden:** `go build/vet/test ./...` grün (6 neue/aktualisierte
+  Testfunktionen), fünf reale `nmos-test.py suite IS-05-01`-Läufe gegen
+  den frisch gebauten Mock-Node. Details: `docs/decisions.md`
+  Nachtrag 145.
+
 ---
 
 ## 6a. Kapitel 10 — Endziel-Anforderungen (`docs/END-GOAL-FEATURES.md`)
@@ -2429,3 +2477,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | D9 (IS-05-01-Basis-Discovery-Endpunkte) | erledigt | Nutzeranfrage "NMOS-Compliance vertiefen (IS-04/IS-05/IS-09)", per AskUserQuestion gegen eine parallel gestellte DeckLink-Anfrage priorisiert (DeckLink vertagt, §24.6/§24.7-Entscheidung nicht mehr dauerhaft, s. docs/decisions.md). D2 hatte IS-05-01 bereits als "Kandidat für später" vorgemerkt (0 Tests, fehlende Basis-Discovery-Pfade). Beide Sprachimplementierungen (`nodes/mock/internal/connection` Go, `nodes/omp-node-sdk/src/connection.rs` Rust) bekamen die vollständigen `/x-nmos/connection/v1.1/`-Discovery-Ressourcen; vier echte Bugs live am AMWA-Tool gefunden+behoben (Go-Trailing-Slash-Teilbaum-Falle, spiegelverkehrtes Rust-Pendant, Wurzel-Wildcard verschluckte `/bulk/*`, fehlende CORS-Header/falscher Error-Content-Type). Vier reale `nmos-test.py suite IS-05-01`-Läufe gegen den lokalen Mock-Node (Podman): 0 → 8 → 14 → 17 bestandene Tests; 19 verbleibende Fails einzeln als CI-`--allow`-Ausnahme benannt (vier klar benannte, bewusst offene Lücken: kein Sender-Testfixture, `transport_params`-Feldtiefe, `activation_time`, PATCH-Validierung/Bulk-POST). `.github/workflows/ci.yml` führt IS-05-01 jetzt echt gegen den Mock-Node aus. IS-09 nicht begonnen (eigener künftiger Schritt). `go build/vet/test`/`cargo build/clippy -D warnings/test --workspace` grün. Details: `docs/decisions.md` Nachtrag 142. | 2026-08-18 |
 | D10 (Blackmagic DeckLink SDI/IP, Teil 1: Ingest) | erledigt | Direkte Nutzeranweisung im Anschluss an D9: "§24.6/§24.7 'kein Capture-Karten-Pfad' aufheben und umsetzen" — hebt die zweimal bestätigte Entscheidung auf (Grund war stets fehlende testbare Hardware, laut Nutzer inzwischen anderswo im Setup vorhanden). Design + Referenz-Analyse von `/home/infantilo/PIPELINE CONTROLLER`s echter, produktiv gelaufener DeckLink-Integration in `docs/END-GOAL-FEATURES.md` Kapitel 20 (u.a. Fund: DeckLink-IP-Netzwerkparameter (Multicast/PTP/SDP) sind über GStreamer nicht zugänglich, liegen im Blackmagic-Treiber — IS-05 kann sie nicht fernsteuern, SDI und IP sind aus Software-Sicht identisch ansprechbar). Neuer Node `nodes/omp-decklink` (`decklinkvideosrc`+`decklinkaudiosrc` → `MxlVideoOutput`/`MxlAudioOutput`, strukturell wie `omp-source`), fester `OMP_DECKLINK_MODE` (sechs aus PIPELINE CONTROLLER übernommene, dort bereits verifizierte Modi, kein `auto` — MXL-Flows brauchen die Auflösung vorab), `channels`-Enum-Validierung ({2,8,16}, derselbe reale in PIPELINE CONTROLLER dokumentierte Fallstrick), gepolltes `signal` + Alarm bei Signalverlust. **Echter Bug live gefunden+behoben** (ohne Hardware, betraf den Ablehnungspfad selbst): fehlgeschlagener `PLAYING`-Übergang ohne `set_state(Null)` ließ den Prozess mit Coredump abstürzen (bekannte gstreamer-rs-Falle, dreimal reproduziert, dann dreimal sauber mit `exit 1` bestätigt) — `gst-launch-1.0` mit demselben Element allein zeigte den Absturz nicht, kein Plugin-Bug. Bewusst nicht Teil dieser Runde: Ausgabe-Richtung (Teil 2), Host-Inventar/Placement-Claim-Release für exklusive I/O-Karten-Ressourcen (§6.1, seit D6 Teil 4 unverändert offen), interlaced Modi, PTP-Kartentakt als Pipeline-Clock. `cargo build/clippy -D warnings --workspace` grün, drei reale Prozessläufe ohne Hardware (klarer Fehler statt Absturz). Nicht hier verifizierbar (§0 Punkt 7 gilt für den Rest weiter): echter Signalempfang, Bild-/Tonqualität — braucht den Host mit der echten Karte. `deploy/catalog.json` neuer Eintrag. Details: `docs/decisions.md` Nachtrag 143. | 2026-08-18 |
 | D10 Teil 2 (Ausgabe-Richtung) | erledigt | Direkter Nutzerauftrag im Anschluss an Teil 1: "Teil 2 (Ausgabe-Richtung) umsetzen". `omp-decklink` gerichtet (`OMP_DECKLINK_DIRECTION=ingest\|output`), zweite `pipeline.rs`-Sektion (`OutputConfig`/`run_output`/`build_output`), IS-05-Receiver-PATCH-gesteuerte Video-/Audio-Quellwahl (gleiches `is_video`-Muster wie `omp-recorder`), Pipeline-Rebuild bei jeder Verbindungsänderung (wie `omp-2110-gateway`). Video als Anker-Verbindung, Audio optionaler Zusatz (PIPELINE CONTROLLERs eigenes Muster). `decklinkaudiosink` hat kein `channels`-Property (anders als `decklinkaudiosrc`, geprüft nicht angenommen) — Kanalzahl über explizite Caps. Derselbe Coredump-Bugtyp wie Teil 1 präventiv mitgefixt (`Drop`-Absicherung, da diese Pipeline mehrfach neu entsteht). **Stärker verifiziert als Teil 1:** echter End-to-End-Lauf (lokale Registry+NATS, echter `omp-source`-Flow, echtes IS-05-PATCH) — Registry-Auflösung/`MxlVideoInput` funktionierten nachweislich, nur `decklinkvideosink`s `set_state(Playing)` scheiterte mangels Karte, sauber, zweimal wiederholt, kein Coredump, danach vollständig aufgeräumt. `cargo build/clippy -D warnings/test` grün. Details: `docs/decisions.md` Nachtrag 144. | 2026-08-18 |
+| D11 (Gezielte AMWA-NMOS-Pitfall-Behebung) | erledigt | Nutzerauftrag: "compliance test: analyze typical pitfalls where custom Go NMOS implementations fail ... AMWA NMOS Testing Tool suites" — angewendet auf D9s bereits benannte 19-Ausnahmen-Liste (IS-05-01), jede Ausnahme am echten AMWA-Testcode (`IS0501Test.py`/`IS05Utils.py`) verifiziert statt geraten. Drei von vier D9-Ursachengruppen geschlossen: `transport_params`-Default wortgleich zum AMWA-Beispiel (13 Felder statt `{}`), echte PATCH-Teil-Update-Semantik inkl. Leg-Merge, vollständiger `activation`-Lebenszyklus (`activation_time` + "staged resettet, active persistiert", am Beispiel `receiver-active-get-200.json` bestätigt), `{"bad":"data"}` wird mit 400 abgelehnt, echte `POST /bulk/receivers`-Semantik. Eigener Design-Bug vor dem ersten Tool-Lauf per Code-Review gefunden (naives `*string` für SenderID konnte "fehlt" nicht von "explizit null" unterscheiden, hätte Disconnect-PATCHes ignoriert — `OptionalSenderID` behoben). Vier weitere echte Bugs über fünf Tool-Lauf-Runden gefunden (Pass/Fail: 17/19 → 24/12 → 25/11 → 27/9 → 29/7): `fec_mode` fehlte in der "auto"-Auflösung, `active`s uninitialisierter Default zeigte noch "auto" (am Beispiel `receiver-active-get-200-uninit.json` gegengeprüft), geplante Aktivierungen lieferten `activation_time` erst beim Feuern statt sofort, `activate_scheduled_absolute` interpretierte `requested_time` als Unix- statt echte TAI-Zeit (`NMOSUtils.get_TAI_time`, 37s-Schaltsekunden-Versatz). Nur noch eine Ursachengruppe offen: `auto_connection_1/2/3/4/5/6/13` (brauchen einen echten Sender, Mock-Node läuft mit `-senders 0`) — CI-Ausnahmeliste von 19 auf 7 geschrumpft, lokal verifiziert (`exit 0`) vor dem Eintragen. Bewusst nicht Teil: Rust-SDK-Parität (reale, dokumentierte Lücke zwischen Go-Mock und Produktions-Nodes), Sender-Test-Fixture, IS-09. `go build/vet/test ./...` grün, fünf reale `nmos-test.py`-Läufe. Details: `docs/decisions.md` Nachtrag 145. | 2026-08-18 |

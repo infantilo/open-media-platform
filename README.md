@@ -68,7 +68,11 @@ administration, hosts, grouped tiles) are in
   inside a monolith.
 - AMWA NMOS IS-04/IS-05 for discovery and routing; IS-12/IS-14 for
   self-described parameters and methods — the orchestrator never has
-  built-in knowledge of a specific node type.
+  built-in knowledge of a specific node type. Conformance isn't just
+  claimed: the official AMWA NMOS Testing Tool runs in CI on every push
+  against a real running registry (IS-04-02) and a real running node
+  (IS-05-01), with every accepted deviation individually named and
+  justified in the workflow file — no silent skips.
 - MXL zero-copy shared memory for same-host media exchange; SMPTE
   ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
   for cross-host exchange, including AES67 audio (Dante-compatible).
@@ -98,6 +102,12 @@ via NMOS, with its own UI and self-described parameters (full list
 with functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
+- **omp-decklink** — Blackmagic DeckLink SDI/IP capture card bridge,
+  directed per instance (ingest: card → MXL; output: MXL → card,
+  video-anchored with an independent optional audio leg); SDI and IP
+  cards are addressed identically in software — a DeckLink IP card's
+  network-side configuration (multicast/PTP/SDP) lives entirely in
+  Blackmagic's own driver, outside NMOS's reach
 - **omp-switcher** — simple video switcher between auto-discovered
   sources (no program/preset bus)
 - **omp-video-mixer-me** — video mixer (1 M/E with cut, crossfade,
@@ -171,10 +181,12 @@ node has to satisfy.
 
 Being upfront about the current edges, not just the highlights:
 
-- **No capture/output hardware support.** Sources today are software
-  test patterns; there is no SDI/capture-card I/O layer yet — I/O
-  cards as their own, exclusively-claimable resource class is on the
-  open list, not built.
+- **I/O cards aren't a placement-aware resource yet.** `omp-decklink`
+  bridges a real Blackmagic DeckLink SDI/IP card to/from MXL (see
+  above), but the orchestrator has no device inventory or exclusive-
+  claim/release logic for physical cards — placing an instance on a
+  host with the right, free card is a manual/host-preference choice
+  today, not something the placement engine reasons about.
 - **No RDMA hardware verified.** MXL-native Fabrics is implemented and
   live-tested, but only over the software `tcp` libfabric provider;
   `verbs`/`efa` for real RoCEv2 NICs is a drop-in config change that
@@ -267,15 +279,25 @@ short by assigning output delay to capable nodes (currently
 workflow's collapsed tile is placed in the host zone matching where its
 roles actually run (its own zone when split across hosts), instead of
 floating outside the host view; the operator console also now shows
-which host each assigned node UI is running on.
+which host each assigned node UI is running on. Since Kapitel D9/D11,
+IS-05-01 (Connection API) conformance runs for real in CI against a
+running node, not just IS-04-02 against the registry — the official
+AMWA NMOS Testing Tool goes from 0 executed tests to 29 passing after
+adding the missing base-discovery endpoints and fixing real gaps it
+then surfaced (schema-incomplete default responses, PATCH accepting
+malformed bodies, a scheduled-activation TAI/UTC time bug), with every
+remaining accepted deviation named individually rather than skipped
+silently. Since Kapitel D10, a real Blackmagic DeckLink SDI/IP capture
+card can be bridged to/from MXL (`omp-decklink`, both directions).
 
-Open: I/O cards as their own, exclusively-claimable resource class,
-RDMA hardware integration (`verbs`/EFA providers, pending hardware
-procurement), an NDI gateway, proprietary Dante (Dante in AES67 mode
-already runs via `omp-aes67-gateway`), and a drag-to-move UI for the
-already-built workflow-role migration backend — the flow editor now at
-least places a running workflow's tile in its correct host zone (see
-"What OpenMediaPlatform does not do" above).
+Open: I/O cards as a placement-aware resource (device inventory,
+exclusive claim/release — the cards themselves already work, see
+above), RDMA hardware integration (`verbs`/EFA providers, pending
+hardware procurement), an NDI gateway, proprietary Dante (Dante in
+AES67 mode already runs via `omp-aes67-gateway`), and a drag-to-move UI
+for the already-built workflow-role migration backend — the flow
+editor now at least places a running workflow's tile in its correct
+host zone (see "What OpenMediaPlatform does not do" above).
 
 ## License
 

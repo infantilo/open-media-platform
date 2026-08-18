@@ -142,49 +142,34 @@ jobs:
               --host localhost --port 9099 --version v1.1 \
               --selection all --output /tmp/results/is0501.json || true
 
-      # Definierte Testliste (UMSETZUNG.md D9): am echten Tool-Lauf
-      # verifiziert (docs/decisions.md, nicht geraten), vier
-      # Ursachen-Gruppen, jede einzeln benannt statt pauschal
-      # weggewischt:
-      #   (a) auto_connection_1/2/4/5/6/13 und auto_connection_3/10/12 —
-      #       brauchen einen echten IS-04-registrierten Sender zum
-      #       Verbinden; der Mock-Node läuft hier bewusst mit
-      #       `-senders 0` (B1-Scope-Grenze), kein neuer Test-Fixture-
-      #       Aufwand für dieses Ziel gerechtfertigt.
-      #   (b) test_10/14/24/26/28/30/32 — `transport_params`-Legs sind
-      #       bewusst minimal (nur `{}`, keine benannten RTP-Felder wie
-      #       destination_port); PATCH übernimmt `transport_params`
-      #       aktuell gar nicht in den gespeicherten Zustand. Echte
-      #       Lücke, kein Missverständnis — eigener künftiger Schritt.
-      #   (c) test_18 — `activation_time` (berechnet bei sofortiger
-      #       Aktivierung) fehlt im Activation-Response-Schema.
-      #   (d) test_20/37 — keine Eingabevalidierung auf PATCH-Bodies
-      #       (400 bei ungültigen Werten) und keine echte Bulk-POST-
-      #       Semantik (nur die per RAML vorgeschriebene 405-GET-Form,
-      #       s. D9-Handler-Kommentar).
+      # Definierte Testliste (UMSETZUNG.md D11, docs/decisions.md
+      # Nachtrag 145): am echten Tool-Lauf verifiziert (nicht geraten).
+      # D9 hatte hier noch 19 Ausnahmen in vier Ursachen-Gruppen — D11
+      # hat drei davon vollständig geschlossen (`transport_params`-
+      # Feldtiefe + echtes PATCH-Merge, `activation_time`-Lebenszyklus
+      # inkl. echter zeitgesteuerter Aktivierung, echte Bulk-POST-
+      # Semantik) und dabei zwei zusätzliche, erst dadurch sichtbar
+      # gewordene reale Bugs gefunden+behoben ("auto"-Platzhalter
+      # blieben unaufgelöst in /active; `activate_scheduled_absolute`
+      # interpretierte `requested_time` als Unix- statt echter TAI-Zeit,
+      # ~37s Schaltsekunden-Versatz). Nur eine Ursachen-Gruppe bleibt:
+      #   auto_connection_1/2/3/4/5/6/13 — brauchen einen echten
+      #   IS-04-registrierten Sender zum Verbinden; der Mock-Node läuft
+      #   hier bewusst mit `-senders 0` (B1-Scope-Grenze, rein
+      #   Receiver-seitig) — ein eigener Sender-Test-Fixture wäre ein
+      #   separater, größerer Schritt für ausschließlich diese sieben
+      #   Tests.
       - name: Ergebnisse auswerten (IS-05-01: definierte Testliste grün, Abweichungen dokumentiert)
         run: |
           cd tools/nmos-conformance-check
           go run . --results ../../nmos-results/is0501.json \
-            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D9" \
+            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D11" \
             --allow "auto_connection_2=s. auto_connection_1" \
-            --allow "auto_connection_3=s. auto_connection_1 (zusätzlich transport_params-Feldtiefe, s. test_10-Begründung)" \
+            --allow "auto_connection_3=s. auto_connection_1" \
             --allow "auto_connection_4=s. auto_connection_1" \
             --allow "auto_connection_5=s. auto_connection_1" \
             --allow "auto_connection_6=s. auto_connection_1" \
-            --allow "auto_connection_10=s. auto_connection_1" \
-            --allow "auto_connection_12=s. auto_connection_1" \
-            --allow "auto_connection_13=s. auto_connection_1" \
-            --allow "test_10=transport_params-Legs sind bewusst minimal (nur {}), PATCH übernimmt transport_params (z.B. destination_port) noch nicht in den gespeicherten Zustand — echte Lücke, eigener künftiger Schritt, UMSETZUNG.md D9" \
-            --allow "test_14=s. test_10 (Response-Schema-Validierung scheitert an denselben fehlenden Feldern)" \
-            --allow "test_18=activation_time (berechnet bei sofortiger Aktivierung) fehlt im Activation-Response-Schema — eigener künftiger Schritt, UMSETZUNG.md D9" \
-            --allow "test_20=keine Eingabevalidierung auf PATCH-Bodies (400 bei ungültigen Werten) — eigener künftiger Schritt, UMSETZUNG.md D9" \
-            --allow "test_24=s. test_10 (destination_port fehlt im PATCH-Roundtrip)" \
-            --allow "test_26=s. test_10" \
-            --allow "test_28=s. test_10" \
-            --allow "test_30=s. test_10" \
-            --allow "test_32=s. test_10" \
-            --allow "test_37=keine echte Bulk-POST-Semantik implementiert, nur die per RAML vorgeschriebene 405-GET-Form auf bulk/senders+bulk/receivers — eigener künftiger Schritt, UMSETZUNG.md D9"
+            --allow "auto_connection_13=s. auto_connection_1"
 
       - name: Ergebnisse als Artefakt sichern
         if: always()

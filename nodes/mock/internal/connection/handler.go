@@ -2,6 +2,9 @@ package connection
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
 )
 
@@ -11,9 +14,10 @@ import (
 // constraints/transporttype pro Receiver, UMSETZUNG.md D9) — Grundlage
 // für AMWA-IS-05-01-Konformitätstests, die vor D9 an den fehlenden
 // Discovery-Pfaden mit 0 ausgeführten Tests abbrachen (docs/decisions.md
-// 2026-07-13). Kein `bulk/`-Interface (der Mock-Node ist rein
-// Receiver-seitig, Bulk-Operationen hätten hier keinen Aufrufer) — laut
-// AMWA-TV/is-05-Spec ein optionaler Teil der Connection API.
+// 2026-07-13). Bulk-`POST /bulk/receivers` seit UMSETZUNG.md D11 echt
+// implementiert (live an AMWA-`test_37` gefunden) — dieselbe
+// `PatchStaged`-Logik wie das Einzel-PATCH, s. dort. Kein
+// `/bulk/senders`-POST (der Mock-Node hat nie eigene Sender, s. u.).
 //
 // Jedes Leaf-Resource (constraints/staged/active/transporttype) wird
 // bewusst SOWOHL ohne als auch mit abschließendem "/" registriert: das
@@ -46,14 +50,11 @@ func Handler(store *ReceiverStore) http.Handler {
 	})
 
 	// `bulk/senders`+`bulk/receivers` sind laut RAML (`ConnectionAPI.raml`)
-	// feste Basis-Discovery-Pfade, die auch ohne echte Bulk-POST-
-	// Implementierung existieren müssen: GET liefert dort laut Spec immer
-	// 405 (Method Not Allowed), nicht 404 — der Mock-Node kennt Bulk-
-	// Operationen (POST) selbst nicht (er ist rein Receiver-seitig, s.
-	// Doc-Kommentar oben), daher bewusst kein POST-Handler hier (Go
-	// liefert dafür automatisch 405, korrekt für "nicht implementiert",
-	// aber nicht das vom AMWA-Tool für POST erwartete 200 mit echter
-	// Bulk-Antwort — dokumentierte, offene Lücke, `UMSETZUNG.md` D9).
+	// feste Basis-Discovery-Pfade: GET liefert dort laut Spec immer 405
+	// (Method Not Allowed), nicht 404. `bulk/senders` bleibt komplett
+	// ohne POST-Handler (Go liefert dafür automatisch 405 — korrekt,
+	// der Mock-Node hat nie eigene Sender). `bulk/receivers` bekommt
+	// unten zusätzlich einen echten POST-Handler.
 	bulkMethodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "GET not allowed on bulk resources")
 	}
@@ -118,18 +119,65 @@ func Handler(store *ReceiverStore) http.Handler {
 	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged/", staged)
 
 	mux.HandleFunc("PATCH /x-nmos/connection/v1.1/single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
-		var req PatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON body")
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "reading request body failed")
 			return
 		}
 
-		res, ok := store.PatchStaged(r.PathValue("id"), req)
+		req, err := parsePatchRequest(body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		res, status, ok := store.PatchStaged(r.PathValue("id"), req)
 		if !ok {
 			writeError(w, http.StatusNotFound, "unknown receiver")
 			return
 		}
-		writeJSON(w, http.StatusOK, res)
+		writeJSON(w, status, res)
+	})
+
+	// `POST /bulk/receivers` — echte Bulk-Aktivierung (live an
+	// AMWA-`test_37` gefunden, docs/decisions.md): jeder Eintrag wendet
+	// dieselbe `PatchStaged`-Logik wie das Einzel-PATCH an (kein
+	// separater Codepfad, keine zweite Fehlerquelle), Antwortform nach
+	// `bulk-response-schema.json` (Array aus `{id, code, error?,
+	// debug?}`). Kein `/bulk/senders`-POST-Handler — der Mock-Node hat
+	// nie eigene Sender (s. Moduldoku), GET dort bleibt bei 405 (Go
+	// liefert das für POST auf einen nur-GET-registrierten Pfad
+	// automatisch), kein Testfall dieses Projekts braucht mehr.
+	mux.HandleFunc("POST /x-nmos/connection/v1.1/bulk/receivers", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "reading request body failed")
+			return
+		}
+
+		var items []bulkRequestItem
+		if err := json.Unmarshal(body, &items); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		results := make([]bulkResultItem, 0, len(items))
+		for _, item := range items {
+			req, err := parsePatchRequest(item.Params)
+			if err != nil {
+				msg := err.Error()
+				results = append(results, bulkResultItem{ID: item.ID, Code: http.StatusBadRequest, Error: &msg})
+				continue
+			}
+			_, status, ok := store.PatchStaged(item.ID, req)
+			if !ok {
+				msg := "unknown receiver"
+				results = append(results, bulkResultItem{ID: item.ID, Code: http.StatusNotFound, Error: &msg})
+				continue
+			}
+			results = append(results, bulkResultItem{ID: item.ID, Code: status})
+		}
+		writeJSON(w, http.StatusOK, results)
 	})
 
 	active := func(w http.ResponseWriter, r *http.Request) {
@@ -144,6 +192,50 @@ func Handler(store *ReceiverStore) http.Handler {
 	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active/", active)
 
 	return mux
+}
+
+// parsePatchRequest dekodiert+validiert einen PATCH-`staged`-Body —
+// gemeinsame Logik für das Einzel-PATCH und jeden Eintrag von
+// `POST /bulk/receivers` (dasselbe `params`-Objekt, nur eingebettet in
+// ein Array-Element statt der alleinige Body). Lehnt unbekannte
+// Top-Level-Felder ab (`receiver-stage-schema.json`:
+// `additionalProperties: false`, live an AMWA-`test_20` gefunden).
+func parsePatchRequest(body []byte) (PatchRequest, error) {
+	var rawFields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &rawFields); err != nil {
+		return PatchRequest{}, errors.New("invalid JSON body")
+	}
+	for field := range rawFields {
+		if !patchableFields[field] {
+			return PatchRequest{}, fmt.Errorf("unknown field: %s", field)
+		}
+	}
+
+	var req PatchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return PatchRequest{}, errors.New("invalid JSON body")
+	}
+	return req, nil
+}
+
+// bulkRequestItem ist ein Element des `POST /bulk/receivers`-Bodys
+// (`bulk-receiver-post-schema.json`) — `Params` bleibt roh, weil es
+// exakt derselbe Body wie ein Einzel-PATCH ist (`parsePatchRequest`
+// entscheidet, nicht ein zweites Schema).
+type bulkRequestItem struct {
+	ID     string          `json:"id"`
+	Params json.RawMessage `json:"params"`
+}
+
+// bulkResultItem ist ein Element der `bulk-response-schema.json`-Antwort
+// — `Error`/`Debug` nur bei einem Fehler-`Code` gesetzt (`omitempty`,
+// das Schema erlaubt beide Felder wegzulassen, anders als bei der
+// Einzel-PATCH-`errorResponse`, deren `debug` immer required ist).
+type bulkResultItem struct {
+	ID    string  `json:"id"`
+	Code  int     `json:"code"`
+	Error *string `json:"error,omitempty"`
+	Debug *string `json:"debug,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -17524,3 +17524,167 @@ IS-05-Netzwerksteuerungs-Grenze für IP-Karten).
 **Dateien:** `nodes/omp-decklink/src/{main,pipeline}.rs`,
 `docs/END-GOAL-FEATURES.md` (Kapitel 20.4, neu), `UMSETZUNG.md`
 (Schritt D10 Teil 2 + Checkliste).
+
+## 2026-08-18 (Nachtrag 145) — Schritt D11: gezielte AMWA-Pitfall-Analyse, IS-05-01-Ausnahmeliste von 19 auf 7 reduziert (nur noch Sender-Fixture-Lücke offen)
+
+**Kontext:** Nutzerauftrag: "mache den angeforderten compliance test:
+analyze typical pitfalls where custom Go NMOS implementations fail the
+rigorous automated AMWA NMOS Testing Tool suites. danach update readme,
+sofern positiv. wenn negativ, fixe zuerst." D9 hatte bereits 17 von 45
+auswertbaren IS-05-01-Tests grün, mit 19 einzeln benannten, aber NICHT
+geschlossenen Ausnahmen. Dieser Schritt schließt drei der vier
+D9-Ursachengruppen vollständig — keine neue Recherche zu "typischen
+Pitfalls" im Allgemeinen, sondern gezielte, am ECHTEN AMWA-Tool-Quellcode
+verifizierte Behebung der bereits konkret benannten Lücken (§0 Punkt 6:
+Standards nicht raten — für jeden Fund wurde `nmos-testing`s eigener
+Python-Quellcode auf GitHub direkt gelesen, nicht aus dem Testergebnis
+zurückgeschlossen).
+
+**Methodik:** für jede der 19 Ausnahmen wurde die exakte AMWA-Testmethode
+(`IS0501Test.py`/`IS05Utils.py`, `AMWA-TV/nmos-testing`) im Quellcode
+nachgelesen, um die tatsächliche Erwartung zu kennen statt sie aus dem
+Fehlertext zu erraten. Vier echte, dabei gefundene Ursachen, alle
+behoben:
+
+1. **`transport_params`-Default war ein leeres `{}` statt der vollen
+   Feldliste.** `receiver-get-200-uninit.json` (AMWA-Referenzbeispiel)
+   zeigt 13 benannte Felder (`source_ip`/`interface_ip`/
+   `destination_port`/… teils `"auto"`, teils konkrete Defaults) — ein
+   leeres Objekt bestand keine Schema-/Constraints-Validierung
+   (`test_10`/`test_14`/`test_32`). `defaultTransportParamsLeg()` jetzt
+   wortgleich zum Beispiel.
+2. **PATCH kannte `transport_params` gar nicht, keine echte
+   Teil-Update-Semantik.** `check_change_transport_param`
+   (`IS05Utils.py`) PATCHt gezielt einzelne Felder (z. B.
+   `destination_port`) und erwartet, dass andere Leg-Felder erhalten
+   bleiben. `PatchRequest` bekam `TransportParams []map[string]any`,
+   `PatchStaged` mischt jetzt nur die im Body genannten Schlüssel in
+   das bestehende Leg (`test_24`/`test_26`/`test_28`/`test_30`).
+3. **`activation_time` fehlte komplett im `Activation`-Struct.**
+   `activation-schema.json` verlangt es als `required` (auch als
+   `null`) — `test_18`. Zusätzlich (am `receiver-active-get-200.json`-
+   Beispiel bestätigt, nicht geraten) ein vollständiger
+   Lebenszyklus: bei `activate_immediate` zeigt NUR die PATCH-Antwort
+   `mode: "activate_immediate"` + echtes `activation_time` — der
+   PERSISTIERTE `staged`-Zustand setzt beide sofort auf `null` zurück
+   ("returns to null on the staged endpoint"), `active` trägt sie
+   dauerhaft.
+4. **Kein `{"bad":"data"}` wurde abgelehnt.**
+   `check_refuses_invalid_patch` (`IS05Utils.py`) schickt exakt diesen
+   Body und erwartet 400 — Gos `encoding/json` ignoriert unbekannte
+   Felder standardmäßig, `test_20` bekam bisher 200. Neue
+   `patchableFields`-Allowlist + Zwei-Pass-Parsing (erst
+   `map[string]json.RawMessage` für die Schlüsselprüfung, dann erst
+   die typisierte `PatchRequest`).
+
+**Ein Design-Bug beim Umsetzen von (2) selbst gefunden, vor jedem
+Tool-Lauf** (reines Code-Review, nicht am Tool beobachtet): die naive
+erste Fassung machte `SenderID` zu einem `*string` mit "Teil-Update"-
+Semantik ("nil = nicht angegeben") — das kann in Go NICHT von "explizit
+auf `null` gesetzt" (= trennen) unterschieden werden, da beide Fälle
+denselben nil-Pointer ergeben. Ein Disconnect-PATCH
+(`{"sender_id": null, ...}`) hätte die bestehende Verbindung
+stillschweigend NICHT getrennt — ein selbst eingeführter Regressions-
+Bug, noch vor dem ersten Tool-Lauf im Test (`TestPatchStagedDisconnect`,
+bereits vorhanden) gefunden. Fix: `OptionalSenderID` mit eigenem
+`UnmarshalJSON` (`Set`-Flag wird nur bei tatsächlichem Vorkommen des
+JSON-Schlüssels gesetzt — der Standardmechanismus, mit dem Go
+"Feld fehlt" von "Feld ist null" unterscheidet).
+
+**Vier weitere Runden echter Tool-Läufe, jede einen neuen, vorher
+unsichtbaren Fund freigelegt** (Pass/Fail je Runde: 17/19 → 24/12 →
+25/11 → 27/9 → 29/7):
+
+5. **`resolveAutoValues` fehlte für `fec_mode`.** `test_12_02`s
+   `fecAutoParams`-Liste (`IS05Utils.py`) PATCHt auch `fec_mode` auf
+   `"auto"` — in der ersten Fassung nicht behandelt, nachträglich
+   ergänzt (Default `"1D"`, wie `defaultTransportParamsLeg`).
+6. **`active`s uninitialisierter Default zeigte noch `"auto"`.**
+   `test_12_01` scannt JEDEN Receiver auf das Wort `"auto"` in
+   `/active` — da `NewReceiverStore` `active` mit demselben Default wie
+   `staged` initialisierte, schlug das für JEDE noch nie aktivierte
+   Instanz fehl. `receiver-active-get-200-uninit.json` (AMWA-Beispiel)
+   bestätigte exakt die schon gewählten Konventionen (destination_port
+   5004, rtcp_destination_port = Port+1 = 5005, fec1D/2D = Port+2/+4 =
+   5006/5008) — kein Raten, direkt gegengeprüft. Fix: `active`s Default
+   läuft jetzt selbst durch `resolveAutoValues`.
+7. **`activation_time` fehlte in der PATCH-Antwort für geplante
+   Aktivierungen.** `test_28`/`test_30` erwarteten SOFORT (nicht erst
+   beim tatsächlichen Feuern) einen gültigen Zeitstempel — der
+   Schema-Text sagt ausdrücklich "will ... activate" (Futur, nicht nur
+   "did"). `scheduleActivation` berechnet den Ziel-Zeitpunkt jetzt
+   sofort und liefert ihn an die PATCH-Antwort zurück.
+8. **`activate_scheduled_absolute` interpretierte `requested_time` als
+   Unix- statt echte TAI-Zeit.** `NMOSUtils.get_TAI_time`
+   (`AMWA-TV/nmos-testing`) addiert die Schaltsekunden-Differenz (37s,
+   unverändert seit 1. Januar 2017 laut IERS) auf UTC — ohne den Abzug
+   feuerte die Aktivierung ~37s zu spät, der Test gibt nach `maxTries=3`
+   kurzen Versuchen auf (`test_30`: "did not transition ... (Tries:
+   3)"). Neue `taiUtcOffsetSeconds`-Konstante, nur für die Rückrechnung
+   eines vom Client gesendeten ABSOLUTEN Zeitpunkts gebraucht (`nowTimestamp`/
+   ausgehende `activation_time`-Werte bleiben bewusst UTC≈TAI, das Tool
+   prüft dort nur das Regex-Format, keinen exakten Wert).
+
+**`POST /bulk/receivers` zusätzlich echt implementiert** (`test_37`,
+per AMWA-Quellcode — `check_bulk_stage` schickt ein Array aus
+`{id, params}`, erwartet `bulk-response-schema.json`: `[{id, code,
+error?, debug?}]`) — dünner Wrapper um dieselbe `PatchStaged`-Logik wie
+das Einzel-PATCH, kein zweiter Codepfad. Kein `/bulk/senders`-POST (der
+Mock-Node hat nie eigene Sender).
+
+**Ergebnis, fünfmal live gemessen** (0 → 8 → 14 → 17 [D9-Ende] → 24 →
+25 → 27 → 29 Pass; 19 → 12 → 11 → 9 → 7 Fail, jede Zahl nach einem
+eigenen, echten `nmos-test.py suite IS-05-01`-Lauf gegen den frisch
+gebauten Mock-Node — Podman, `docker.io/amwa/nmos-testing:latest`).
+**Nur noch EINE Ursachengruppe offen**, alle sieben verbleibenden
+`Fail`: `auto_connection_1/2/3/4/5/6/13` — brauchen einen echten
+IS-04-registrierten Sender zum Verbinden (Mock-Node läuft mit
+`-senders 0`, B1-Scope-Grenze, rein Receiver-seitig). Ein eigener
+Sender-Test-Fixture wäre ein separater, größerer Schritt, gerechtfertigt
+für ausschließlich diese sieben Tests — bewusst nicht Teil dieser
+Sitzung.
+
+**Live gefundener Infrastruktur-Stolperstein** (kein Code-Bug, aber
+zweimal echte Zeit gekostet): ein zuvor gestarteter Mock-Node-Prozess
+blieb nach einem fehlgeschlagenen `pkill`-Aufruf (Bash-Kette brach beim
+ersten nicht-null-Exit-Code ab, bevor der eigentliche Kill-Befehl
+ausgeführt wurde) auf Port 9099 hängen; ein NEUER Prozess band den Port
+nicht ("address already in use"), lief aber im Hintergrund weiter
+(Registrierung/Heartbeat liefen, nur der HTTP-Server nicht) — zwei
+Tool-Läufe in Folge testeten dadurch unbemerkt den ALTEN, unveränderten
+Binary. Erst ein expliziter `pgrep`/`ss -ltnp`-Check vor jedem Neustart
+deckte das auf. Festgehalten, weil es dieselbe Klasse Fehler ist wie die
+schon mehrfach in `docs/decisions.md` dokumentierten "Bash-Kette bricht
+beim ersten Fehler ab, nachfolgende Befehle laufen nie"-Fälle — kein
+neuer Fund, aber ein weiterer Beleg, künftig jeden Kill/Neustart-Schritt
+einzeln zu verifizieren statt einer verketteten Befehlskette zu
+vertrauen.
+
+**Bewusst nicht Teil dieser Sitzung:**
+
+- **Rust-SDK-Parität** (`nodes/omp-node-sdk/src/connection.rs`): alle
+  acht hier gefundenen Fixes betreffen ausschließlich den Go-Mock-Node
+  (das einzige CI-testbare Ziel, `.github/workflows/ci.yml` hat wie
+  dokumentiert keine Rust-Toolchain). Die echten Produktions-Nodes
+  (Rust) haben dieselbe Basis-Discovery seit D9, aber NICHT dieselbe
+  `transport_params`-Tiefe/PATCH-Merge/Aktivierungs-Lebenszyklus/Bulk-
+  Semantik — eine reale, dokumentierte Lücke zwischen Go-Mock und
+  echten Nodes, kein Vorwand. Eigener künftiger Schritt.
+- Sender-Test-Fixture für `auto_connection_*` (s. o.).
+- IS-09 (System API) — weiterhin kein Code, unverändert seit D9.
+
+**Verifiziert:** `go build/vet/test ./...` (mock-Modul, sechs neue
+Testfunktionen: aktualisierte Fälle für Teil-Update-Semantik +
+`TestPatchStagedFieldOmittedLeavesItUnchanged`,
+`TestPatchStagedMergesTransportParamsLeg`,
+`TestPatchStagedScheduledRelativeActivationFiresLater`,
+`TestPatchStagedScheduledAbsoluteActivationUsesTaiOffset`,
+`TestHandlerBulkReceiversPost`, aktualisierte Assertions in
+`TestNewReceiverStoreStartsUnconnected`) grün. `tools/nmos-conformance-
+check`s neue, von 19 auf 7 Einträge geschrumpfte Ausnahmeliste lokal
+gegen die echte Ergebnisdatei verifiziert (`exit 0`) VOR dem Eintragen
+in `.github/workflows/ci.yml` — dieselbe Reihenfolge wie D9.
+
+**Dateien:** `nodes/mock/internal/connection/{receiver,handler}.go`
+(+Tests), `.github/workflows/ci.yml`, `UMSETZUNG.md` (Schritt D11 +
+Checkliste).
