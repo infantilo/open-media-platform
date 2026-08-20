@@ -121,7 +121,7 @@ func (s *Store) Check(subject, nodeID string, minVerb Verb) (bool, error) {
 		if err := rows.Scan(&v); err != nil {
 			return false, err
 		}
-		if v.covers(minVerb) {
+		if v.Covers(minVerb) {
 			return true, nil
 		}
 	}
@@ -148,7 +148,7 @@ func (s *Store) CheckWorkflow(subject, workflowID, role string, minVerb Verb) (b
 		if err := rows.Scan(&v); err != nil {
 			return false, err
 		}
-		if v.covers(minVerb) {
+		if v.Covers(minVerb) {
 			return true, nil
 		}
 	}

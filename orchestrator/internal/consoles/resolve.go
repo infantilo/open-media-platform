@@ -134,7 +134,15 @@ func (r *Resolver) Resolve(username string, nodes []NodeInfo) (Result, error) {
 		if b.Verb == authz.VerbConfigure || b.Verb == authz.VerbAdmin {
 			result.HasEngineeringAccess = true
 		}
-		if b.Verb != authz.VerbOperate {
+		// Rang-Hierarchie statt exakter Gleichheit (Nutzerfund 2026-08-20:
+		// "als admin muss ich immer alles auch in der operator konsolen
+		// ansicht sehen können") — admin/configure deckt operate mit ab
+		// (s. authz.Verb.Covers-Doku, dieselbe Annahme, die
+		// HasEngineeringAccess oben schon trifft). Vorher verglich dieser
+		// Gate exakt auf VerbOperate: ein Admin ohne EXTRA-Operate-Bindung
+		// bekam dadurch eine leere Konsolen-Liste, obwohl er laut Rang
+		// eigentlich alles sehen darf.
+		if !b.Verb.Covers(authz.VerbOperate) {
 			continue
 		}
 		result.HasOperateBindings = true

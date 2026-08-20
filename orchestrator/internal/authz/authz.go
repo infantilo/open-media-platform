@@ -35,7 +35,16 @@ var rank = map[Verb]int{
 	VerbAdmin:     4,
 }
 
-func (v Verb) covers(min Verb) bool {
+// Covers (exportiert, Nutzerfund 2026-08-20: "als admin muss ich immer
+// alles auch in der operator konsolen ansicht sehen können") — bis
+// hierher blieb diese Methode paketintern (`covers`), `internal/
+// consoles.Resolve` konnte sie deshalb NICHT nutzen und verglich Verben
+// dort auf reine Gleichheit (`b.Verb != authz.VerbOperate`) statt auf
+// die oben dokumentierte Rang-Hierarchie — ein Admin/Configure-Nutzer
+// ohne EXTRA explizite operate-Bindung bekam dadurch in der
+// Operator-Konsolen-Ansicht eine leere Liste, obwohl er laut genau
+// dieser Rang-Annahme eigentlich alles sehen darf.
+func (v Verb) Covers(min Verb) bool {
 	return rank[v] >= rank[min]
 }
 

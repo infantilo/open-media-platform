@@ -106,7 +106,14 @@ func TestResolveWildcardBindsAllNodes(t *testing.T) {
 	}
 }
 
-func TestResolveConfigureGrantsEngineeringAccessWithoutConsoleEntry(t *testing.T) {
+// Nutzerfund 2026-08-20: "als admin muss ich immer alles auch in der
+// operator konsolen ansicht sehen können" — configure/admin decken laut
+// der Rang-Hierarchie (authz.Verb.Covers) auch operate ab, bekommen
+// deshalb jetzt ebenfalls Konsolen-Einträge für JEDEN aktuell laufenden
+// Node (AnyNode-Bindung), nicht nur das Engineering-Zugriffssignal.
+// Ersetzt die vorherige Erwartung "configure is not operate" (leere
+// Konsolen-Liste), die genau diesen Bug dokumentierte.
+func TestResolveConfigureGrantsEngineeringAccessAndConsoleEntries(t *testing.T) {
 	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
 		{Subject: "engineer1", NodeID: authz.AnyNode, Verb: authz.VerbConfigure},
 	}}, nil)
@@ -119,8 +126,31 @@ func TestResolveConfigureGrantsEngineeringAccessWithoutConsoleEntry(t *testing.T
 	if !result.HasEngineeringAccess {
 		t.Errorf("HasEngineeringAccess = false, want true for configure binding")
 	}
-	if len(result.Consoles) != 0 {
-		t.Errorf("Consoles = %+v, want empty (configure is not operate)", result.Consoles)
+	if !result.HasOperateBindings {
+		t.Errorf("HasOperateBindings = false, want true (configure covers operate)")
+	}
+	if len(result.Consoles) != 1 || result.Consoles[0].NodeRoleID != "inst-mixer" {
+		t.Errorf("Consoles = %+v, want one entry for inst-mixer (configure covers operate)", result.Consoles)
+	}
+}
+
+// Gleiches Verhalten für admin — die stärkste Stufe darf keine Lücke
+// gegenüber configure haben.
+func TestResolveAdminGrantsEngineeringAccessAndConsoleEntries(t *testing.T) {
+	resolver := NewResolver(fakeBindingLoader{bindings: []authz.Binding{
+		{Subject: "admin1", NodeID: authz.AnyNode, Verb: authz.VerbAdmin},
+	}}, nil)
+	nodes := []NodeInfo{{ID: "n1", Label: "Mixer", InstanceID: "inst-mixer"}, {ID: "n2", Label: "Source", InstanceID: "inst-source"}}
+
+	result, err := resolver.Resolve("admin1", nodes)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !result.HasEngineeringAccess {
+		t.Errorf("HasEngineeringAccess = false, want true for admin binding")
+	}
+	if len(result.Consoles) != 2 {
+		t.Errorf("Consoles = %+v, want an entry for every currently running node (admin covers operate)", result.Consoles)
 	}
 }
 

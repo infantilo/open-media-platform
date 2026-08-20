@@ -16,8 +16,8 @@ func TestVerbCovers(t *testing.T) {
 		{VerbView, VerbView, true},
 	}
 	for _, c := range cases {
-		if got := c.have.covers(c.min); got != c.want {
-			t.Errorf("%s.covers(%s) = %v, want %v", c.have, c.min, got, c.want)
+		if got := c.have.Covers(c.min); got != c.want {
+			t.Errorf("%s.Covers(%s) = %v, want %v", c.have, c.min, got, c.want)
 		}
 	}
 }
