@@ -402,9 +402,28 @@ func (s *Service) buildEdgesMap(ctx context.Context, views []registry.NodeView) 
 // buildNodes ordnet Devices/Senders/Receivers eines NodeView den
 // Ein-/Ausgangs-Ports einer Kachel zu. Reine Funktion, kein I/O —
 // unabhängig von buildEdges testbar.
+// buildNodes überspringt IS-04-Node-Ressourcen ohne ein einziges Device
+// (Nutzerfund 2026-08-20: die NMOS-Registry selbst — nmos-cpp — trägt
+// sich, auch mit RUN_NODE=FALSE, zusätzlich zum reinen Registrierungs-
+// dienst als eigene Node-Ressource in ihre eigene Datenbank ein, mit
+// einer container-internen, vom Orchestrator-Prozess nicht erreichbaren
+// Adresse und OHNE jedes Device — sie taucht sonst als klickbare,
+// portlose Kachel in der Flow-Editor-Palette auf, deren Property-Tab
+// zwangsläufig "Descriptor konnte nicht geladen werden: Error: 502"
+// zeigt, weil dort schlicht kein omp-node-sdk-Descriptor existiert).
+// Eine Node-Ressource ohne Device ist nach IS-04 grundsätzlich nutzlos
+// für Routing UND Properties (Devices sind die einzigen Träger von
+// Sendern/Empfängern) — der Filter ist damit ein generisches IS-04-
+// Faktum, keine nmos-cpp-Sonderbehandlung (registry.Client selbst bleibt
+// bewusst ungefiltert, s. dortige Moduldoku "kein Orchestrator-
+// Sonderwissen" — diese Domänenentscheidung gehört hierher, in die
+// OMP-eigene Graph-Schicht).
 func buildNodes(views []registry.NodeView) []Node {
 	nodes := make([]Node, 0, len(views))
 	for _, v := range views {
+		if len(v.Devices) == 0 {
+			continue
+		}
 		n := Node{ID: v.ID, Label: v.Label, Inputs: []Port{}, Outputs: []Port{}, Health: health(v), InstanceID: v.InstanceID}
 		for _, r := range v.Receivers {
 			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format, Transport: r.Transport})

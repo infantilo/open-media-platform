@@ -15,6 +15,7 @@ func strPtr(s string) *string { return &s }
 func TestBuildNodesMapsPortsAndHealth(t *testing.T) {
 	views := []registry.NodeView{{
 		ID: "node-1", Label: "Node 1", Online: true,
+		Devices:   []registry.DeviceView{{ID: "dev-1"}},
 		Senders:   []registry.SenderView{{ID: "send-1", Label: "Sender 1", Format: "urn:x-nmos:format:video"}},
 		Receivers: []registry.ReceiverView{{ID: "recv-1", Label: "Receiver 1", Format: "urn:x-nmos:format:video"}},
 	}}
@@ -37,10 +38,28 @@ func TestBuildNodesMapsPortsAndHealth(t *testing.T) {
 }
 
 func TestBuildNodesOfflineHealth(t *testing.T) {
-	views := []registry.NodeView{{ID: "node-1", Online: false}}
+	views := []registry.NodeView{{ID: "node-1", Online: false, Devices: []registry.DeviceView{{ID: "dev-1"}}}}
 	nodes := buildNodes(views)
 	if nodes[0].Health != "offline" {
 		t.Errorf("Health = %q, want offline", nodes[0].Health)
+	}
+}
+
+// TestBuildNodesExcludesNodesWithoutDevices deckt den Nutzerfund
+// 2026-08-20 ab: die NMOS-Registry trägt sich selbst ohne jedes Device in
+// ihre eigene Node-Liste ein — eine solche Ressource darf nicht als
+// klickbare Kachel im Flow-Editor landen (Properties-Tab hätte dort
+// nichts zu laden, s. buildNodes-Moduldoku).
+func TestBuildNodesExcludesNodesWithoutDevices(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "registry-self", Label: "omp-registry", Online: true},
+		{ID: "node-1", Label: "Node 1", Online: true, Devices: []registry.DeviceView{{ID: "dev-1"}}},
+	}
+
+	nodes := buildNodes(views)
+
+	if len(nodes) != 1 || nodes[0].ID != "node-1" {
+		t.Fatalf("buildNodes() = %+v, want only node-1 (device-less registry-self excluded)", nodes)
 	}
 }
 
