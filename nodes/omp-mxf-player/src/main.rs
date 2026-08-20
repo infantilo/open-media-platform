@@ -12,14 +12,25 @@
 //! Cue/Take, `append`/`load`/`remove`/`cue`/`take`, s. `pipeline.rs`-
 //! Moduldoku für die Abweichungen) — bewusst OHNE `omp-player`s
 //! `TestPattern`/`Live`-Item-Typen (dort C21/§0-Punkt-7-Scope, hier nicht
-//! gebraucht) und ohne eigenes UI-Bundle (mehrere gleichartige,
-//! sprechend beschriftete Sender werden vom Flow-Editor bereits generisch
-//! dargestellt, s. Plan-Dokument — kein Sonderfall wie bei
-//! `omp-player`s Cue/Take- bzw. Cart-Wall-Oberflächen).
+//! gebraucht).
+//!
+//! **Eigenes UI-Bundle** (`uibundle.rs`, Nutzerauftrag 2026-08-20: "mxf
+//! player muss vernünftige gui haben um clip auszuwählen, shuffeling zu
+//! editieren") — direkter Nachbau von `omp-player/ui/bundle-video.js`s
+//! Cue/Take-Ansicht (dieselbe generische Node-Proxy-API, dieselbe
+//! Playlist-Interaktion), erweitert um das, was speziell diesen Node von
+//! `omp-player` unterscheidet: einen Audio-Shuffle-Preset-Wähler pro
+//! Playlist-Item (`setItemPreset`) und ein Referenz-Panel, das die
+//! Programmgruppen sowie — pro Preset aufklappbar — die tatsächliche
+//! Track→Gruppe-Zuordnung zeigt (`shufflePresets`s neues `routes`-Feld
+//! unten). Ohne dieses Panel bliebe ein Preset-Name wie
+//! "stereo-dolbye-hoerfilm" für den Bedienenden reine Rateerei — genau
+//! der ursprünglich vom generischen B6-Panel unbeantwortete Bedarf.
 
 mod orchestrator_settings;
 mod pipeline;
 mod presets;
+mod uibundle;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -30,7 +41,7 @@ use gstreamer as gst;
 use gstreamer_pbutils as gst_pbutils;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
-    Range, SenderSpec, SetError,
+    RawResponse, Range, SenderSpec, SetError,
 };
 use pipeline::{PipelineHandle, Slot};
 use serde::Deserialize;
@@ -238,10 +249,14 @@ impl ParamStore for PlayerStore {
                     .map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels}))
                     .collect::<Vec<_>>()
             )),
+            // "routes" zusätzlich zu id/label (Nutzerauftrag 2026-08-20,
+            // s. Moduldoku) — das UI-Bundle zeigt sie als aufklappbare
+            // Track→Gruppe-Zuordnung, ein reiner Preset-NAME allein wäre
+            // für den Bedienenden nicht interpretierbar.
             "shufflePresets" => Some(serde_json::json!(
                 self.shuffle_presets
                     .iter()
-                    .map(|p| serde_json::json!({"id": p.id, "label": p.label}))
+                    .map(|p| serde_json::json!({"id": p.id, "label": p.label, "routes": p.routes}))
                     .collect::<Vec<_>>()
             )),
             _ => None,
@@ -361,6 +376,10 @@ impl ParamStore for PlayerStore {
             }
             _ => Err(InvokeError::Unknown),
         }
+    }
+
+    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+        uibundle::route(method, path)
     }
 }
 
