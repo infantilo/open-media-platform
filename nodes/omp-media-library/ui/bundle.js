@@ -16,6 +16,12 @@ class OmpMediaLibraryPanel extends HTMLElement {
       button:hover { background: #388e3c; }
       button:disabled { opacity: 0.4; cursor: default; }
       .status { font-size: 11px; color: #aaa; margin: 4px 0; }
+      .status.error { color: #ef5350; }
+      .status.ok { color: #43a047; }
+      .settings { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+      .settings label { font-size: 11px; color: #aaa; }
+      .settings input[type="text"] { flex: 1; min-width: 260px; font-size: 12px; padding: 6px 8px;
+               background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px; }
       .entries { max-height: 600px; overflow-y: auto; }
       .entry { border: 1px solid #444; border-radius: 4px; padding: 8px;
                margin-bottom: 6px; background: #1a1a1a; }
@@ -28,6 +34,30 @@ class OmpMediaLibraryPanel extends HTMLElement {
       .segment { background: #222; padding: 4px 6px; margin: 2px 0; border-radius: 2px; }
       .empty { color: #666; font-style: italic; }
     `;
+
+    // Nutzerauftrag 2026-08-20 ("medialibary node needs setting for the
+    // path the medias"): Verzeichnis-Eingabe + "Set"-Knopf statt der
+    // vorher fixen, nur per Env-Var (OMP_MEDIA_DIR) beim Prozessstart
+    // gesetzten Pfads. Eigene Zeile vor den bestehenden Scan/Cleanup-
+    // Aktionen, damit die Reihenfolge "erst Pfad festlegen, dann scannen"
+    // auch optisch nahegelegt wird.
+    const settingsRow = document.createElement("div");
+    settingsRow.className = "settings";
+    const mediaDirLabel = document.createElement("label");
+    mediaDirLabel.textContent = "Medienverzeichnis:";
+    const mediaDirInput = document.createElement("input");
+    mediaDirInput.type = "text";
+    mediaDirInput.placeholder = "/pfad/zu/medien";
+    mediaDirInput.title = "Absoluter Pfad auf dem Host, auf dem dieser Node läuft — muss dort als Verzeichnis existieren.";
+    const setMediaDirBtn = document.createElement("button");
+    setMediaDirBtn.textContent = "Setzen";
+    setMediaDirBtn.addEventListener("click", async () => {
+      const path = mediaDirInput.value.trim();
+      if (!path) return;
+      await call("setMediaDir", { path });
+      await poll(nodeId);
+    });
+    settingsRow.append(mediaDirLabel, mediaDirInput, setMediaDirBtn);
 
     const controls = document.createElement("div");
     controls.className = "controls";
@@ -48,7 +78,7 @@ class OmpMediaLibraryPanel extends HTMLElement {
     const entriesContainer = document.createElement("div");
     entriesContainer.className = "entries";
 
-    shadow.append(style, controls, entriesContainer);
+    shadow.append(style, settingsRow, controls, entriesContainer);
 
     // Initial poll
     poll(nodeId);
@@ -63,13 +93,33 @@ class OmpMediaLibraryPanel extends HTMLElement {
         body: JSON.stringify(args),
       });
       if (!resp.ok) {
-        statusEl.textContent = `Error: ${methodName} failed`;
+        // setMediaDir liefert bei Ablehnung einen konkreten Grund im
+        // Body (InvokeError::Message, s. main.rs) statt nur eines
+        // Status-Codes — hier direkt angezeigt statt einer
+        // nichtssagenden "failed"-Meldung.
+        const text = await resp.text().catch(() => "");
+        statusEl.textContent = `Error: ${methodName} failed${text ? ` — ${text}` : ""}`;
+        statusEl.className = "status error";
       } else {
         statusEl.textContent = `${methodName} completed`;
+        statusEl.className = "status ok";
       }
     }
 
     async function poll(nid) {
+      // Eingabefeld nur befüllen, wenn es nicht gerade editiert wird —
+      // sonst würde der 5s-Poll-Takt eine laufende Eingabe überschreiben.
+      // `shadow.activeElement` (nicht `document.activeElement`, das
+      // durchdringt Shadow-DOM-Grenzen nicht) liefert den fokussierten
+      // Knoten INNERHALB dieses Shadow-Roots.
+      if (shadow.activeElement !== mediaDirInput) {
+        const dirResp = await fetch(`/api/v1/nodes/${nid}/params/mediaDir`).catch(() => null);
+        if (dirResp && dirResp.ok) {
+          const dirData = await dirResp.json();
+          if (typeof dirData.value === "string") mediaDirInput.value = dirData.value;
+        }
+      }
+
       const resp = await fetch(`/api/v1/nodes/${nid}/params/entries`);
       if (!resp.ok) return;
       const data = await resp.json();

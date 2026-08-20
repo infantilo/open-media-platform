@@ -92,6 +92,46 @@ impl LibraryStore {
         }
     }
 
+    fn media_dir_string(&self) -> String {
+        let state = self.state.lock().expect("lock poisoned");
+        state.media_dir.display().to_string()
+    }
+
+    /// Nutzerauftrag 2026-08-20 ("medialibary node needs setting for the
+    /// path the medias") — bislang war `OMP_MEDIA_DIR` eine fixe, beim
+    /// Prozessstart gelesene Env-Var OHNE jede Möglichkeit, sie danach zu
+    /// ändern (nicht mal per Katalog/Workflow-Rolle einstellbar, geschweige
+    /// denn zur Laufzeit) — Default war sogar ein hart auf diese
+    /// Dev-Maschine codierter absoluter Pfad. `setMediaDir` als validierte
+    /// Methode statt eines einfachen `set()`-Parameters: `SetError` (s.
+    /// `ParamStore::set`) kann anders als `InvokeError::Message` keinen
+    /// Freitext-Grund transportieren, der generische Parameter-Proxy
+    /// flacht jeden `set()`-Fehler zu einer nichtssagenden 404 ab (server.rs)
+    /// — bei einem Tippfehler im Pfad bekäme der Bedienende sonst keinen
+    /// Hinweis, WARUM die Änderung nicht griff.
+    fn do_set_media_dir(&self, path: &str) -> Result<(), String> {
+        if path.trim().is_empty() {
+            return Err("path must not be empty".to_string());
+        }
+        let path_buf = PathBuf::from(path);
+        if !path_buf.is_dir() {
+            return Err(format!("directory does not exist: {path}"));
+        }
+        {
+            let mut state = self.state.lock().expect("lock poisoned");
+            state.media_dir = path_buf;
+        }
+        // Bewusst KEIN Rollback bei einem Scan-Fehler danach (z. B.
+        // Leserechte innerhalb des Verzeichnisses) — der Pfad selbst war
+        // gültig (s. Prüfung oben), das ist die eigentliche Nutzerabsicht
+        // dieser Methode; ein Scan-Problem meldet sich separat über den
+        // bestehenden "Full Scan"-Button/dessen Fehleranzeige.
+        if let Err(e) = self.do_scan() {
+            eprintln!("omp-media-library: rescan after setMediaDir failed: {e}");
+        }
+        Ok(())
+    }
+
     fn do_scan(&self) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
 
@@ -295,11 +335,30 @@ impl ParamStore for LibraryStore {
                     range: None,
                     readonly: true,
                 },
+                // Nutzerauftrag 2026-08-20: "medialibary node needs
+                // setting for the path the medias" — Anzeige des aktuell
+                // konfigurierten Verzeichnisses; die Änderung selbst läuft
+                // über die validierte `setMediaDir`-Methode unten (s.
+                // dortige Doku, warum keine einfache `set()`-Property).
+                ParamSpec {
+                    name: "mediaDir".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![
                 MethodSpec {
                     name: "scan".to_string(),
                     args: vec![],
+                },
+                MethodSpec {
+                    name: "setMediaDir".to_string(),
+                    args: vec![MethodArg {
+                        name: "path".to_string(),
+                        kind: ParamType::String,
+                    }],
                 },
                 MethodSpec {
                     name: "rescan".to_string(),
@@ -332,6 +391,7 @@ impl ParamStore for LibraryStore {
     fn get(&self, name: &str) -> Option<Value> {
         match name {
             "entries" => Some(self.get_entries_json()),
+            "mediaDir" => Some(json!(self.media_dir_string())),
             _ => None,
         }
     }
@@ -345,6 +405,13 @@ impl ParamStore for LibraryStore {
             "scan" => {
                 self.do_scan().map_err(|_| InvokeError::Unknown)?;
                 Ok(())
+            }
+            "setMediaDir" => {
+                let path = args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| InvokeError::Message("path argument required".to_string()))?;
+                self.do_set_media_dir(path).map_err(InvokeError::Message)
             }
             "rescan" => {
                 let file = args
@@ -517,5 +584,48 @@ mod tests {
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].label, "Intro");
         assert_eq!(segments[1].start, 1000);
+    }
+
+    // Nutzerauftrag 2026-08-20 ("medialibary node needs setting for the
+    // path the medias"): setMediaDir muss den neuen Pfad ehrlich ablehnen,
+    // wenn er nicht existiert, statt ihn stillschweigend zu übernehmen —
+    // sonst zeigt "entries" danach einfach nichts mehr, ohne erkennbaren
+    // Grund für den Bedienenden.
+
+    #[test]
+    fn set_media_dir_accepts_an_existing_directory() {
+        let store = LibraryStore::new(PathBuf::from("/tmp"), vec!["mp4".to_string()]);
+        let tmp = std::env::temp_dir();
+        let result = store.do_set_media_dir(tmp.to_str().unwrap());
+        assert!(result.is_ok(), "do_set_media_dir should accept an existing directory: {result:?}");
+        assert_eq!(store.media_dir_string(), tmp.display().to_string());
+    }
+
+    #[test]
+    fn set_media_dir_rejects_a_nonexistent_path() {
+        let store = LibraryStore::new(PathBuf::from("/tmp"), vec!["mp4".to_string()]);
+        let result = store.do_set_media_dir("/this/path/does/not/exist/hopefully");
+        assert!(result.is_err(), "do_set_media_dir should reject a nonexistent directory");
+        // Der ALTE Pfad muss unangetastet bleiben — keine stille
+        // Teil-Übernahme eines ungültigen Werts.
+        assert_eq!(store.media_dir_string(), "/tmp");
+    }
+
+    #[test]
+    fn set_media_dir_rejects_an_empty_path() {
+        let store = LibraryStore::new(PathBuf::from("/tmp"), vec!["mp4".to_string()]);
+        let result = store.do_set_media_dir("   ");
+        assert!(result.is_err(), "do_set_media_dir should reject a blank path");
+        assert_eq!(store.media_dir_string(), "/tmp");
+    }
+
+    #[test]
+    fn set_media_dir_rejects_a_file_that_is_not_a_directory() {
+        let store = LibraryStore::new(PathBuf::from("/tmp"), vec!["mp4".to_string()]);
+        // /etc/hostname existiert auf jedem Linux-System, ist aber keine
+        // Datei — der Pfad muss ein VERZEICHNIS sein, keine beliebige
+        // existierende Datei.
+        let result = store.do_set_media_dir("/etc/hostname");
+        assert!(result.is_err(), "do_set_media_dir should reject a path that is a file, not a directory");
     }
 }
