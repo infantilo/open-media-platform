@@ -1,13 +1,18 @@
-//! omp-multiviewer: dynamische Eingangszahl, Grid-Monitoring aller
-//! entdeckten MXL-Video-Sender (Nutzeranforderung 2026-07-12, gleiche
+//! omp-multiviewer ("Automatic Multiviewer", umbenannt 2026-08-20 —
+//! Nutzerauftrag, s. `nodes/omp-multiviewer-custom` für das neue,
+//! manuell konfigurierte Geschwister mit Layout-Editor/Tally/UMD pro
+//! Kachel): dynamische Eingangszahl, Grid-Monitoring ALLER entdeckten
+//! MXL-Video-Sender (Nutzeranforderung 2026-07-12, gleiche
 //! §13-Produktions-Microservice-Einordnung wie C10-C12). Discovery rein
 //! über IS-04 (gleicher Poll-Stil wie `omp-switcher`, C7): alle ~2s
 //! werden alle registrierten MXL-Video-Sender abgefragt, jeder erscheint
 //! automatisch als Kachel im Grid — kein manuelles Patchen pro Quelle
-//! nötig. Reiner Monitor: kein MXL-Sende-Ausgang, nur MJPEG-über-HTTP
-//! (`omp_mediaio::preview`, aus `omp-viewer`/C6 hierher extrahiert) —
-//! ein Multiviewer speist in der Praxis eine Bedienplatz-Anzeige, kein
-//! weiterverkettbares Programmsignal.
+//! nötig, aber auch keine Auswahl/kein individuelles Layout (dafür der
+//! neue `omp-multiviewer-custom`). Reiner Monitor: kein MXL-Sende-
+//! Ausgang, nur MJPEG-über-HTTP (`omp_mediaio::preview`, aus
+//! `omp-viewer`/C6 hierher extrahiert) — ein Multiviewer speist in der
+//! Praxis eine Bedienplatz-Anzeige, kein weiterverkettbares
+//! Programmsignal.
 
 mod pipeline;
 
@@ -104,7 +109,7 @@ fn env_or(key: &str, fallback: &str) -> String {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let label = env_or("OMP_LABEL", "Multiviewer");
+    let label = env_or("OMP_LABEL", "Automatic Multiviewer");
     let host = env_or("OMP_HOST", "127.0.0.1");
     let port: u16 = env_or("OMP_PORT", "9380").parse()?;
     let registry_url = env_or("OMP_REGISTRY_URL", "http://localhost:8010");

@@ -15,7 +15,7 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-decklink"],
     "env": {},
-    "description": "Erfasst eine echte Blackmagic-DeckLink-SDI/IP-Capture-Karte (Video+Audio) als MXL-Flow (UMSETZUNG.md D10 Teil 1: Ingest). Braucht echte, per OMP_DECKLINK_DEVICE_NUMBER gewählte Hardware am jeweiligen Host — auf einem Host ohne Karte startet die Instanz mit klarem Fehler statt still zu laufen. Nur Empfang; Ausgabe (MXL → DeckLink-Ausgang) ist Teil 2, noch nicht umgesetzt.",
+    "description": "Blackmagic-DeckLink-SDI/IP-Karte (Video+Audio) ⇄ MXL, gerichtet je Instanz (UMSETZUNG.md D10: Teil 1 Ingest, Teil 2 Ausgabe). Braucht echte Hardware am jeweiligen Host, per OMP_DECKLINK_DEVICE_NUMBER/OMP_DECKLINK_DIRECTION gewählt — auf einem Host ohne passende Karte startet die Instanz mit klarem Fehler statt still zu laufen. Für Rollen mit requiredIoPort (§6.1 Erweiterung 2026-07-10, D13) setzt der Orchestrator beide Variablen automatisch aus dem geclaimten Port; ohne requiredIoPort bleibt der eingebaute Default (device-number=0, ingest).",
     "expectedResources": "gering, konstant (Hardware-Erfassung, kein Software-Encoding)",
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
@@ -95,12 +95,21 @@
   },
   {
     "type": "omp-multiviewer",
-    "label": "Multiviewer",
+    "label": "Automatic Multiviewer",
     "runner": "process",
     "command": ["../nodes/target/debug/omp-multiviewer"],
     "env": {},
-    "description": "Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal.",
+    "description": "Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster, ohne manuelle Auswahl/Layout. Reines Monitoring, kein weiterverkettbares Programmsignal. Für manuell konfigurierte Layouts mit Tally/UMD s. \"Multiviewer\" (omp-multiviewer-custom).",
     "expectedResources": "wächst mit der Zahl sichtbarer Kacheln"
+  },
+  {
+    "type": "omp-multiviewer-custom",
+    "label": "Multiviewer",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-multiviewer-custom"],
+    "env": {},
+    "description": "Manuell konfigurierbarer Multiviewer: grafischer Layout-Editor (Position/Größe je Kachel), frei wählbare Quellen, dynamische Kachelzahl, Tally (omp.tally.<nodeId>-Bus) + individueller UMD-Text pro Kachel. Reines Monitoring wie \"Automatic Multiviewer\" (omp-multiviewer), aber ohne automatische Alle-Quellen-Discovery.",
+    "expectedResources": "wächst mit der Zahl konfigurierter Kacheln"
   },
   {
     "type": "omp-playout-automation",
