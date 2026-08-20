@@ -518,6 +518,24 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 			roleEnv[k] = v
 		}
 	}
+	// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku in ioports.go): ohne
+	// dies startet die neue Instanz auf dem Zielhost mit dem eingebauten
+	// device-number-Default statt dem hier gerade neu geclaimten Port —
+	// derselbe Bug wie in runStart, hier zusätzlich sicherheitsrelevant,
+	// weil sonst zwei Instanzen (alte + neue) denselben Port(0) ansprechen
+	// könnten, statt den tatsächlich exklusiv reservierten.
+	if hasNewPort {
+		if portEnv := IoPortExtraEnv(roleDef.RequiredIOPort, newPortID); portEnv != nil {
+			merged := make(map[string]string, len(roleEnv)+len(portEnv))
+			for k, v := range roleEnv {
+				merged[k] = v
+			}
+			for k, v := range portEnv {
+				merged[k] = v
+			}
+			roleEnv = merged
+		}
+	}
 
 	// releaseNewPortOnAbort gibt den oben (falls vorhanden) neu
 	// geclaimten Port wieder frei — der ALTE Claim bleibt in allen drei

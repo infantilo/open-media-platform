@@ -254,3 +254,17 @@ func (s *Store) Release(workflowID, role string) error {
 	_, err := s.db.Exec(`DELETE FROM io_port_claims WHERE workflow_id = $1 AND role = $2`, workflowID, role)
 	return err
 }
+
+// ReleaseClaimedByInstance gibt den Claim frei, dessen `instance_id`
+// exakt `instanceID` trägt — für Aufrufer ohne einen (workflowID, role)-
+// Schlüssel (Nutzerfund 2026-08-20, "deklink node crasht immer noch
+// beim start"): `httpapi.handleDeleteInstance` kennt beim Stoppen einer
+// direkt über den Node-Katalog gestarteten Instanz nur deren
+// Instanz-ID, keinen Workflow/keine Rolle. Setzt voraus, dass
+// `UpdateInstanceID` den Claim bereits mit dieser Instanz-ID versehen
+// hat (`httpapi.handlePostInstance`) — ohne passenden Claim ein No-Op,
+// kein Fehler (gleiche Nachsicht wie `Release`).
+func (s *Store) ReleaseClaimedByInstance(instanceID string) error {
+	_, err := s.db.Exec(`DELETE FROM io_port_claims WHERE instance_id = $1`, instanceID)
+	return err
+}

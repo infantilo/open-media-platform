@@ -60,6 +60,17 @@ var allowedExtraEnvKeys = map[string]bool{
 	"OMP_WIDTH":     true,
 	"OMP_HEIGHT":    true,
 	"OMP_ROLE_SEED": true, // Bug 2026-08-10: stabile node_id/device_id über einen Workflow-Neustart hinweg, s. workflows/state.go withRoleSeed
+	// D13-Fix (2026-08-20): Role.RequiredIOPort (workflows/ioports.go
+	// ioPortExtraEnv) reicht den geclaimten physischen Port an die
+	// Instanz weiter — auf einem lokal (Orchestrator-Prozess selbst)
+	// gestarteten Node griff das bereits, auf einem per Host-Agent
+	// entfernt gestarteten Node (der eigentliche Zielfall für I/O-Karten,
+	// die typischerweise NICHT auf der Orchestrator-Maschine stecken)
+	// lehnte diese Allowlist die Anfrage bislang komplett ab
+	// ("extraEnv key ... not allowed") — live mit einem echten Host-Agent
+	// gefunden, s. docs/decisions.md.
+	"OMP_DECKLINK_DEVICE_NUMBER": true,
+	"OMP_DECKLINK_DIRECTION":     true,
 }
 
 // Request ist die auf omp.host.<hostId>.cmd empfangene Nachricht.

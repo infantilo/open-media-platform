@@ -86,6 +86,12 @@ const HOST_ROW_HEIGHT = 22;
 // Positionen, auf eine Pro-Rolle-Funktion umstellen müssen), Kosten ist
 // eine minimal höhere Kachel für Nicht-Mixer-Rollen.
 const MIXER_LEVELS_ROW_HEIGHT = 22;
+// Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-Fix,
+// s. role-designer-logic.ts DraftRole.requiredIoPort-Doku): sechste Zeile
+// für die Richtung des geclaimten physischen I/O-Ports — gleiches
+// Baumuster wie MIXER_LEVELS_ROW_HEIGHT, nur für nodeType==="omp-decklink"
+// sichtbar, jede andere Rolle lässt die Zeile leer/versteckt.
+const IO_PORT_ROW_HEIGHT = 22;
 const TILE_HEIGHT =
   MIN_BODY_HEIGHT +
   HEADER_HEIGHT +
@@ -93,7 +99,8 @@ const TILE_HEIGHT =
   FORMAT_ROW_HEIGHT +
   STANDBY_ROW_HEIGHT +
   PLACEMENT_ROW_HEIGHT +
-  MIXER_LEVELS_ROW_HEIGHT;
+  MIXER_LEVELS_ROW_HEIGHT +
+  IO_PORT_ROW_HEIGHT;
 // Nutzerfund 2026-08-13: 6px-Anker waren ein zu kleines, präzisions-
 // abhängiges Ziel zum Verbinden — auf 9px vergrößert (weiterhin klein
 // genug, um bei TILE_HEIGHT nicht zu dominieren).
@@ -332,7 +339,14 @@ export class RoleDesigner extends HTMLElement {
     this.#pushUndo();
     const used = new Set(this.#roles.map((r) => r.name));
     const name = uniqueRoleName(nodeType, used);
-    this.#roles.push({ name, nodeType, hostId: hostId || undefined });
+    // requiredIoPort (s. role-designer-logic.ts DraftRole-Doku): eine
+    // omp-decklink-Rolle ohne geclaimten Port kann mit echter Hardware
+    // ohnehin nie funktionieren (fester device-number=0-Default) — direkt
+    // beim Anlegen gesetzt statt einer Rolle, die erst nachträglich per
+    // Dropdown "scharf" gemacht werden müsste. Default "in" (Ingest,
+    // Teil 1) — Nutzer kann unten auf "out" umstellen.
+    const requiredIoPort = nodeType === "omp-decklink" ? { cardType: "decklink", direction: "in" } : undefined;
+    this.#roles.push({ name, nodeType, hostId: hostId || undefined, requiredIoPort });
     this.#positions[name] = position ?? this.#nextDefaultPosition();
     this.#render();
   }
@@ -1113,6 +1127,56 @@ export class RoleDesigner extends HTMLElement {
       mixerLevelsObject.appendChild(mixerLevelsWrap);
     }
     g.appendChild(mixerLevelsObject);
+
+    // Nutzerauftrag 2026-08-20 (im Anschluss an den DeckLink-Crash-Loop-
+    // Fix): Richtung des geclaimten physischen I/O-Ports — gleiches
+    // Baumuster wie die mixerLevels-Zeile oben, nur für
+    // nodeType==="omp-decklink" sichtbar. cardType bleibt fix "decklink"
+    // (bislang einziges I/O-Karten-nodeType, s. DraftRole-Doku) — nur die
+    // Richtung ist wählbar.
+    const ioPortObject = document.createElementNS(SVG_NS, "foreignObject");
+    ioPortObject.setAttribute("x", "6");
+    ioPortObject.setAttribute(
+      "y",
+      String(
+        HEADER_HEIGHT + MIN_BODY_HEIGHT + HOST_ROW_HEIGHT + FORMAT_ROW_HEIGHT + STANDBY_ROW_HEIGHT +
+          PLACEMENT_ROW_HEIGHT + MIXER_LEVELS_ROW_HEIGHT,
+      ),
+    );
+    ioPortObject.setAttribute("width", String(NODE_WIDTH - 12));
+    ioPortObject.setAttribute("height", String(IO_PORT_ROW_HEIGHT));
+    ioPortObject.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    if (role.nodeType === "omp-decklink") {
+      const ioPortSelect = document.createElement("select");
+      ioPortSelect.title =
+        "Physischer DeckLink-Port, den diese Rolle exklusiv belegt (D13 I/O-Karten-Claim) — legt device-number/Richtung beim Start fest. Ohne freien passenden Port lehnt der Orchestrator den Start ehrlich ab, statt mit dem eingebauten Default (device-number=0, Eingang) in einen Crash-Loop zu laufen. 'Nicht zugewiesen' behält genau dieses alte, ungeprüfte Default-Verhalten bei.";
+      ioPortSelect.style.cssText =
+        "width:100%;font-size:10px;background:#1e1e1e;color:#ddd;border:1px solid #444;box-sizing:border-box;";
+      // Leere Option = kein Claim (unverändertes Alt-Verhalten, gleiche
+      // "unset" -Konvention wie formatSelect oben) statt eines
+      // irreführenden vorausgewählten "Eingang" für Rollen, die (z. B.
+      // aus einer vor diesem Feature gespeicherten Definition) tatsächlich
+      // requiredIoPort===undefined haben — #addRole setzt es für NEUE
+      // Rollen direkt auf "in", s. dortige Doku.
+      const ioPortOptions: Array<[string, string]> = [
+        ["", "I/O-Port: nicht zugewiesen"],
+        ["in", "I/O-Port: Eingang (SDI-In)"],
+        ["out", "I/O-Port: Ausgang (SDI-Out)"],
+      ];
+      for (const [value, label] of ioPortOptions) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = label;
+        if (value === (role.requiredIoPort?.direction ?? "")) opt.selected = true;
+        ioPortSelect.appendChild(opt);
+      }
+      ioPortSelect.addEventListener("change", () => {
+        this.#pushUndo();
+        role.requiredIoPort = ioPortSelect.value ? { cardType: "decklink", direction: ioPortSelect.value } : undefined;
+      });
+      ioPortObject.appendChild(ioPortSelect);
+    }
+    g.appendChild(ioPortObject);
 
     const removeBtn = document.createElementNS(SVG_NS, "text");
     removeBtn.setAttribute("data-role", "role-tile-remove");

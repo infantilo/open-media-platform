@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -11,6 +14,18 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
+
+// newID erzeugt eine zufällige Hex-ID — gleiche kleine, paketlokale
+// Dopplung wie workflows.newID/snapshots.newID (keine gemeinsame Util-
+// Datei nur für diese eine Zeile), hier für die je-Claim-eindeutige
+// "role" in handlePostInstance (s. dortige Doku).
+func newID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
 
 // mergeInstanceMetrics reichert list um die zuletzt vom Host-Agent
 // gemeldeten CPU%/RSS-Werte entfernter Instanzen an (Kapitel 14 Teil 2,
@@ -166,26 +181,105 @@ func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) htt
 // "unverändertes Vor-Kapitel-12-Teil-4-Verhalten", s. authz.Store.Create-
 // Doku) statt eines Workflow-Scopes, den es hier gar nicht gibt — best
 // effort wie beim Workflow-Pfad, ein Fehler hier bricht den Start nicht ab.
-func handlePostInstance(svc LauncherService, authzStore AuthzChecker) http.HandlerFunc {
+// Nutzerfund 2026-08-20 ("deklink node crasht immer noch beim start"):
+// ein per Node-Katalog/Instanzen-Tab DIREKT gestarteter `omp-decklink`
+// (kein Workflow-Kontext) durchlief NIE workflows.Service.Start()s
+// claimIOPortsForStart — selbst nach dessen Fix (D13-Portweitergabe,
+// s. workflows/ioports.go) startete diese Instanz weiterhin mit dem
+// eingebauten Default (device-number=0, ingest) und lief auf jedem Host
+// ohne echte Karte an genau diesem Index in denselben Crash-Loop. Fix:
+// derselbe Claim-Mechanismus, jetzt auch am direkten Start-Pfad — ein
+// optionales `{"requiredIoPort":{"cardType":"decklink","direction":
+// "in"|"out"}}` im Body claimt VOR dem Start atomar einen passenden
+// freien Port (bevorzugt auf `hostId`, falls gesetzt — "kein stiller
+// Fallback auf einen anderen Host", dieselbe Linie wie
+// workflows.Service.claimIOPortsForStart), übersetzt ihn über
+// `workflows.IoPortExtraEnv` in die vom Node gelesenen Umgebungs-
+// variablen und trägt bei Erfolg die tatsächliche Instanz-ID auf dem
+// Claim nach (rein für die Anzeige in `GET /api/v1/hosts`, best effort).
+// `ioPortStore` darf nil sein (kein I/O-Port-Inventar konfiguriert) —
+// dann wird eine Anfrage MIT requiredIoPort ehrlich abgelehnt statt
+// still zu ignorieren (gleiche Regel wie am Workflow-Pfad).
+func handlePostInstance(svc LauncherService, authzStore AuthzChecker, ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Type    string `json:"type"`
-			Version string `json:"version"`
-			HostID  string `json:"hostId"`
-			Label   string `json:"label"`
+			Type           string                     `json:"type"`
+			Version        string                     `json:"version"`
+			HostID         string                     `json:"hostId"`
+			Label          string                     `json:"label"`
+			RequiredIOPort *workflows.IOPortRequirement `json:"requiredIoPort,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
 
-		// Direkter Katalog-Start hat keinen Workflow-Kontext, also kein
-		// extraEnv (Kapitel 15, s. launcher.Launcher.Start-Doku) — Nodes
-		// laufen mit ihren Katalog-/Programm-Defaults.
-		inst, err := svc.StartLabeled(body.Type, body.Version, body.HostID, body.Label, nil)
+		// Direkter Katalog-Start hat keinen Workflow-Kontext, also
+		// normalerweise kein extraEnv (Kapitel 15, s. launcher.Launcher.
+		// Start-Doku) — Nodes laufen mit ihren Katalog-/Programm-Defaults,
+		// AUSSER die Anfrage deklariert requiredIoPort (s. Funktionsdoku).
+		hostID := body.HostID
+		var extraEnv map[string]string
+		var claimedHostID, claimedPortID string
+		var claimRole string
+		if body.RequiredIOPort != nil {
+			if body.RequiredIOPort.CardType == "" {
+				http.Error(w, "requiredIoPort.cardType must not be empty", http.StatusBadRequest)
+				return
+			}
+			if body.RequiredIOPort.Direction != "in" && body.RequiredIOPort.Direction != "out" {
+				http.Error(w, `requiredIoPort.direction must be "in" or "out"`, http.StatusBadRequest)
+				return
+			}
+			if ioPortStore == nil {
+				http.Error(w, "instance needs an I/O port but no I/O port inventory is configured on this orchestrator", http.StatusBadRequest)
+				return
+			}
+			// Eindeutiger (workflowId="", role)-Schlüssel je Claim-Versuch
+			// (s. Funktionsdoku) — Store.Release/UpdateInstanceID schlagen
+			// beide auf (workflow_id, role) nach; ein wiederverwendeter
+			// fester role-Wert über mehrere gleichzeitige Direkt-Starts
+			// hinweg würde deren Claims live gefunden nicht mehr
+			// unterscheidbar machen.
+			id, err := newID()
+			if err != nil {
+				http.Error(w, "failed to generate claim id", http.StatusInternalServerError)
+				return
+			}
+			claimRole = "direct:" + body.Type + ":" + id
+			var ok bool
+			claimedHostID, claimedPortID, ok, err = ioPortStore.Claim(body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID, "", claimRole, "")
+			if err != nil {
+				http.Error(w, "claim io port: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !ok {
+				if hostID != "" {
+					http.Error(w, fmt.Sprintf("needs a free %s/%s port on host %q, none available (no silent fallback to another host)", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction, hostID), http.StatusBadRequest)
+				} else {
+					http.Error(w, fmt.Sprintf("needs a free %s/%s port, none available on any host", body.RequiredIOPort.CardType, body.RequiredIOPort.Direction), http.StatusBadRequest)
+				}
+				return
+			}
+			hostID = claimedHostID
+			extraEnv = workflows.IoPortExtraEnv(body.RequiredIOPort, claimedPortID)
+		}
+
+		inst, err := svc.StartLabeled(body.Type, body.Version, hostID, body.Label, extraEnv)
 		if err != nil {
+			if claimRole != "" {
+				if relErr := ioPortStore.ReleasePort(claimedHostID, claimedPortID); relErr != nil {
+					slog.Warn("launcher: rollback: release io port claim after failed start failed", "type", body.Type, "error", relErr)
+				}
+			}
 			writeLauncherError(w, err)
 			return
+		}
+
+		if claimRole != "" {
+			if err := ioPortStore.UpdateInstanceID("", claimRole, inst.ID); err != nil {
+				slog.Warn("launcher: update io port claim instance id failed", "instance", inst.ID, "error", err)
+			}
 		}
 
 		if workflows.IsControlPlaneNodeType(body.Type) {
@@ -199,12 +293,23 @@ func handlePostInstance(svc LauncherService, authzStore AuthzChecker) http.Handl
 	}
 }
 
-// handleDeleteInstance liefert DELETE /api/v1/instances/<id>.
-func handleDeleteInstance(svc LauncherService) http.HandlerFunc {
+// handleDeleteInstance liefert DELETE /api/v1/instances/<id>. Gibt einen
+// per handlePostInstance geclaimten I/O-Port wieder frei (Nutzerfund
+// 2026-08-20, s. dortige Doku) — best effort wie UpdateInstanceID, ein
+// Fehler hier verhindert nicht den eigentlichen Stop; `ReleasePort`
+// selbst ist ein No-Op, wenn diese Instanz nie einen Port geclaimt hatte
+// (kein passender Claim-Datensatz gefunden).
+func handleDeleteInstance(svc LauncherService, ioPortStore IOPortInventoryStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.Stop(r.PathValue("id")); err != nil {
+		id := r.PathValue("id")
+		if err := svc.Stop(id); err != nil {
 			writeLauncherError(w, err)
 			return
+		}
+		if ioPortStore != nil {
+			if err := ioPortStore.ReleaseClaimedByInstance(id); err != nil {
+				slog.Warn("launcher: release io port claim on instance stop failed", "instance", id, "error", err)
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}

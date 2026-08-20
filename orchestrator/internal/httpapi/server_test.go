@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/ioports"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
@@ -264,6 +266,95 @@ func (f fakeLauncherService) ImportCatalogEntry(entry launcher.CatalogEntry) err
 }
 
 func (f fakeLauncherService) RemoveCatalogEntry(nodeType, version string) error { return f.removeErr }
+
+// fakeIOPortStore ist ein Test-Double für IOPortInventoryStore
+// (Nutzerfund 2026-08-20, "deklink node crasht immer noch beim start")
+// — hält Ports/Claims rein im Speicher, gleiches Muster wie
+// workflows.fakeIOPortClaimer (die echte Postgres-Atomarität ist bereits
+// in internal/ioports/ioports_test.go verifiziert). Pointer-Receiver
+// überall, damit Tests Claim-Aufrufe/Rollback tatsächlich beobachten
+// können.
+type fakeIOPortStore struct {
+	mu      sync.Mutex
+	ports   map[string]bool // "hostId/portId" -> frei
+	claims  map[string]ioportClaimRecord
+	claimed []ioportClaimRecord // Aufrufreihenfolge, für Assertions
+}
+
+type ioportClaimRecord struct {
+	cardType, direction, hostID, portID, workflowID, role, instanceID string
+}
+
+func newFakeIOPortStore(freePorts ...string) *fakeIOPortStore {
+	ports := map[string]bool{}
+	for _, p := range freePorts {
+		ports[p] = true
+	}
+	return &fakeIOPortStore{ports: ports, claims: map[string]ioportClaimRecord{}}
+}
+
+func (f *fakeIOPortStore) SetInventory(hostID string, ports []ioports.Port) error { return nil }
+func (f *fakeIOPortStore) ListAllPorts() ([]ioports.Port, error)                 { return nil, nil }
+func (f *fakeIOPortStore) ListClaims() ([]ioports.Claim, error)                  { return nil, nil }
+
+func (f *fakeIOPortStore) Claim(cardType, direction, preferredHostID, workflowID, role, instanceID string) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, free := range f.ports {
+		if !free {
+			continue
+		}
+		hostID, portID, _ := strings.Cut(key, "/")
+		if preferredHostID != "" && hostID != preferredHostID {
+			continue
+		}
+		f.ports[key] = false
+		rec := ioportClaimRecord{cardType, direction, hostID, portID, workflowID, role, instanceID}
+		f.claims[key] = rec
+		f.claimed = append(f.claimed, rec)
+		return hostID, portID, true, nil
+	}
+	return "", "", false, nil
+}
+
+func (f *fakeIOPortStore) UpdateInstanceID(workflowID, role, instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, c := range f.claims {
+		if c.workflowID == workflowID && c.role == role {
+			c.instanceID = instanceID
+			f.claims[key] = c
+		}
+	}
+	return nil
+}
+
+func (f *fakeIOPortStore) ReleasePort(hostID, portID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := hostID + "/" + portID
+	delete(f.claims, key)
+	f.ports[key] = true
+	return nil
+}
+
+func (f *fakeIOPortStore) ReleaseClaimedByInstance(instanceID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for key, c := range f.claims {
+		if c.instanceID == instanceID {
+			delete(f.claims, key)
+			f.ports[key] = true
+		}
+	}
+	return nil
+}
+
+func (f *fakeIOPortStore) claimCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.claims)
+}
 
 // fakeAuthSvc ist ein Test-Double für AuthService — UserCount 0 im
 // Zero-Value (Bootstrap-Bypass, s. authGate.authenticate), damit alle
@@ -787,6 +878,164 @@ func TestHandleNodeProxyPatchPlugin(t *testing.T) {
 	}
 	if gotBody != `{"enabled":true}` {
 		t.Fatalf("proxied body = %q, want forwarded request body", gotBody)
+	}
+}
+
+// Nutzerauftrag 2026-08-20 (omp-multiviewer-custom-Layout-Editor):
+// `GET/POST /state` waren bislang nur vom Snapshot-Service serverseitig
+// direkt gegen node.APIBaseURL erreichbar — reine Lücke für jedes
+// Node-eigene UI-Bundle, das seinen eigenen `/state`-Endpunkt über den
+// Browser lesen/schreiben will (gleiche generische handleNodeProxy-
+// Maschinerie wie params/plugins oben, s. dortige Tests).
+func TestHandleNodeProxyGetState(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/state" {
+			t.Errorf("proxied request = %s %q, want GET /state", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"state":{"canvasWidth":1920,"canvasHeight":1080,"pips":[]}}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/state", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "canvasWidth") {
+		t.Fatalf("body = %q, want to contain proxied state", rec.Body.String())
+	}
+}
+
+func TestHandleNodeProxyPostState(t *testing.T) {
+	var gotBody string
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/state" {
+			t.Errorf("proxied request = %s %q, want POST /state", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-1/state", strings.NewReader(`{"state":{"pips":[]}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotBody != `{"state":{"pips":[]}}` {
+		t.Fatalf("proxied body = %q, want forwarded request body", gotBody)
+	}
+}
+
+// Nutzerauftrag 2026-08-20 ("mehrere layouts pro multiviewer anlegbar/
+// aufrufbar machen, layouts export/import") — dieselbe generische
+// handleNodeProxy-Maschinerie wie /state/plugins oben, hier für die vier
+// neuen /layouts-Routen von omp-multiviewer-custom.
+func TestHandleNodeProxyGetLayouts(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/layouts" {
+			t.Errorf("proxied request = %s %q, want GET /layouts", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"layouts":[{"name":"Regie 1","layout":{"canvasWidth":1920,"canvasHeight":1080,"pips":[]}}]}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-1/layouts", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Regie 1") {
+		t.Fatalf("body = %q, want to contain proxied layout list", rec.Body.String())
+	}
+}
+
+func TestHandleNodeProxyPostLayouts(t *testing.T) {
+	var gotBody string
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/layouts" {
+			t.Errorf("proxied request = %s %q, want POST /layouts", r.Method, r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-1/layouts", strings.NewReader(`{"name":"Regie 1","layout":{"pips":[]}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if gotBody != `{"name":"Regie 1","layout":{"pips":[]}}` {
+		t.Fatalf("proxied body = %q, want forwarded request body", gotBody)
+	}
+}
+
+func TestHandleNodeProxyApplyLayout(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/layouts/Regie 1/apply" {
+			t.Errorf("proxied request = %s %q, want POST /layouts/Regie 1/apply", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/node-1/layouts/Regie%201/apply", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+func TestHandleNodeProxyDeleteLayout(t *testing.T) {
+	nodeServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/layouts/Regie 1" {
+			t.Errorf("proxied request = %s %q, want DELETE /layouts/Regie 1", r.Method, r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer nodeServer.Close()
+
+	lister := fakeNodeLister{nodes: []registry.NodeView{{ID: "node-1", APIBaseURL: nodeServer.URL}}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, lister, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, fakeLauncherService{}, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/node-1/layouts/Regie%201", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
 
@@ -1480,6 +1729,111 @@ func TestHandlePostInstanceUnknownTypeReturns404(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+// Nutzerfund 2026-08-20 ("deklink node crasht immer noch beim start"):
+// ein direkter Katalog-Start mit `requiredIoPort` muss denselben
+// Claim-Mechanismus wie ein Workflow-Start durchlaufen — dieser Test
+// belegt, dass ein Claim tatsächlich entsteht und der Start trotzdem
+// normal durchläuft (das eigentliche extraEnv/hostId landet am
+// launcher.Launcher selbst, s. dortige Tests — fakeLauncherService hier
+// hat bewusst Value-Receiver wie alle bestehenden Tests, kann Aufrufe
+// also nicht aufzeichnen, ohne jeden bestehenden Test-Call-Site
+// anzufassen).
+func TestHandlePostInstanceWithRequiredIOPortClaimsAPort(t *testing.T) {
+	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-decklink-1", Type: "omp-decklink"}}
+	ioPorts := newFakeIOPortStore("host-1/0")
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s, want 200", rec.Code, rec.Body.String())
+	}
+	if ioPorts.claimCount() != 1 {
+		t.Errorf("claimCount() = %d, want 1", ioPorts.claimCount())
+	}
+	ioPorts.mu.Lock()
+	claim, ok := ioPorts.claims["host-1/0"]
+	ioPorts.mu.Unlock()
+	if !ok || claim.instanceID != "inst-decklink-1" {
+		t.Errorf("claim = %+v (ok=%v), want instanceId updated to inst-decklink-1 after start", claim, ok)
+	}
+}
+
+func TestHandlePostInstanceRequiredIOPortRejectsWhenNoStoreConfigured(t *testing.T) {
+	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-1"}}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, nil)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (no io port inventory configured, no silent fallback)", rec.Code)
+	}
+}
+
+func TestHandlePostInstanceRequiredIOPortRejectsWhenNoFreePort(t *testing.T) {
+	svc := fakeLauncherService{started: launcher.Instance{ID: "inst-1"}}
+	ioPorts := newFakeIOPortStore() // keine freien Ports
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (honest rejection, no free port)", rec.Code)
+	}
+	if ioPorts.claimCount() != 0 {
+		t.Errorf("claimCount() = %d, want 0", ioPorts.claimCount())
+	}
+}
+
+// Ein fehlgeschlagener Start NACH erfolgreichem Claim darf den Port
+// nicht dauerhaft belegt lassen (Rollback, s. handlePostInstance-Doku).
+func TestHandlePostInstanceReleasesClaimWhenStartFails(t *testing.T) {
+	svc := fakeLauncherService{startErr: errors.New("boom")}
+	ioPorts := newFakeIOPortStore("host-1/0")
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{"type":"omp-decklink","requiredIoPort":{"cardType":"decklink","direction":"in"}}`))
+	h.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Fatalf("status = 200, want an error status (launcher start failed)")
+	}
+	if ioPorts.claimCount() != 0 {
+		t.Errorf("claimCount() = %d, want 0 (claim must be rolled back after a failed start)", ioPorts.claimCount())
+	}
+}
+
+func TestHandleDeleteInstanceReleasesClaimedIOPort(t *testing.T) {
+	svc := fakeLauncherService{}
+	ioPorts := newFakeIOPortStore("host-1/0")
+	hostID, portID, ok, err := ioPorts.Claim("decklink", "in", "", "", "role", "")
+	if err != nil || !ok {
+		t.Fatalf("test setup: Claim() = %v, %v, %v, %v", hostID, portID, ok, err)
+	}
+	if err := ioPorts.UpdateInstanceID("", "role", "inst-1"); err != nil {
+		t.Fatalf("test setup: UpdateInstanceID() error = %v", err)
+	}
+	h := NewHandler(config.Config{UIDir: t.TempDir()}, fakeNodeLister{}, fakeEventSubscriber{ch: make(chan sse.Event)}, &fakeGraphService{}, fakeLayoutStore{}, fakeSnapshotService{}, svc, fakeConsoleResolver{}, nil, fakeAuthSvc{}, fakeAuthzSvc{}, &fakeAuditSvc{}, &fakeAuditSvc{}, fakeHostRegistry{}, fakeHostMetrics{}, fakeHostHistory{}, fakeWorkflowService{}, fakePlacementAdvisor{}, fakeProfileReader{}, placement.Thresholds{}, fakeNodeSettingsStore{}, fakeBackupSvc{}, fakeSupervisorClient{}, fakeClusterService{}, ioPorts)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/instances/inst-1", nil)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ioPorts.claimCount() != 0 {
+		t.Errorf("claimCount() = %d, want 0 (stopping the instance must release its io port claim)", ioPorts.claimCount())
 	}
 }
 

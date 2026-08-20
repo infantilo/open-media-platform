@@ -167,6 +167,57 @@ func TestClaimIsExclusiveAndReleaseFreesIt(t *testing.T) {
 	}
 }
 
+// Nutzerfund 2026-08-20 ("deklink node crasht immer noch beim start"):
+// ReleaseClaimedByInstance ist der Release-Pfad für Claims OHNE
+// Workflow-Kontext (direkter Katalog-Start, httpapi.handleDeleteInstance)
+// — anders als Release(workflowID, role) muss er ausschließlich den
+// Claim MIT genau dieser instanceId treffen, keinen anderen.
+func TestReleaseClaimedByInstance(t *testing.T) {
+	database := dbtest.Open(t)
+	cleanTables(t, database)
+	hostStore := hosts.NewStore(database)
+	store := NewStore(database)
+	hostID := newTestHost(t, hostStore)
+
+	if err := store.SetInventory(hostID, []Port{
+		{HostID: hostID, PortID: "p1", CardType: "decklink", Direction: "in"},
+		{HostID: hostID, PortID: "p2", CardType: "decklink", Direction: "in"},
+	}); err != nil {
+		t.Fatalf("SetInventory() error = %v", err)
+	}
+
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-decklink:a", "inst-a"); err != nil || !ok {
+		t.Fatalf("Claim(a) = ok=%v, err=%v", ok, err)
+	}
+	if _, _, ok, err := store.Claim("decklink", "in", "", "", "direct:omp-decklink:b", "inst-b"); err != nil || !ok {
+		t.Fatalf("Claim(b) = ok=%v, err=%v", ok, err)
+	}
+	if err := store.UpdateInstanceID("", "direct:omp-decklink:a", "inst-a"); err != nil {
+		t.Fatalf("UpdateInstanceID(a) error = %v", err)
+	}
+	if err := store.UpdateInstanceID("", "direct:omp-decklink:b", "inst-b"); err != nil {
+		t.Fatalf("UpdateInstanceID(b) error = %v", err)
+	}
+
+	if err := store.ReleaseClaimedByInstance("inst-a"); err != nil {
+		t.Fatalf("ReleaseClaimedByInstance(inst-a) error = %v", err)
+	}
+
+	claims, err := store.ListClaims()
+	if err != nil {
+		t.Fatalf("ListClaims() error = %v", err)
+	}
+	if len(claims) != 1 || claims[0].InstanceID != "inst-b" {
+		t.Fatalf("ListClaims() after release = %+v, want exactly inst-b's claim untouched", claims)
+	}
+
+	// No-op statt Fehler für eine unbekannte/bereits freie Instanz-ID
+	// (gleiche Nachsicht wie Release, s. dortige Doku).
+	if err := store.ReleaseClaimedByInstance("inst-does-not-exist"); err != nil {
+		t.Fatalf("ReleaseClaimedByInstance(unknown) error = %v, want nil (no-op)", err)
+	}
+}
+
 func TestUpdateInstanceID(t *testing.T) {
 	database := dbtest.Open(t)
 	cleanTables(t, database)

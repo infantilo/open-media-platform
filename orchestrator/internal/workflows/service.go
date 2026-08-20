@@ -698,7 +698,7 @@ func (s *Service) persistSchedule(wf Workflow) error {
 // ehrlich abgelehnt (kein Teil-Start mit einer unbedienbaren Rolle).
 // Liefert (nil, nil), wenn keine Rolle einen Port braucht — der
 // bestehende Erfolgspfad ohne I/O-Karten bleibt dadurch unverändert.
-func (s *Service) claimIOPortsForStart(wf Workflow) (map[string]string, error) {
+func (s *Service) claimIOPortsForStart(wf Workflow) (map[string]ioPortAssignment, error) {
 	needsPorts := false
 	for _, role := range wf.Definition.Roles {
 		if role.RequiredIOPort != nil {
@@ -713,13 +713,13 @@ func (s *Service) claimIOPortsForStart(wf Workflow) (map[string]string, error) {
 		return nil, fmt.Errorf("%w: workflow needs an I/O port but no I/O port inventory is configured on this orchestrator", ErrValidation)
 	}
 
-	assignments := map[string]string{}
+	assignments := map[string]ioPortAssignment{}
 	var claimedRoles []string
 	for _, role := range wf.Definition.Roles {
 		if role.RequiredIOPort == nil {
 			continue
 		}
-		hostID, _, ok, err := s.ioPorts.Claim(role.RequiredIOPort.CardType, role.RequiredIOPort.Direction, role.HostID, wf.ID, role.Name, "")
+		hostID, portID, ok, err := s.ioPorts.Claim(role.RequiredIOPort.CardType, role.RequiredIOPort.Direction, role.HostID, wf.ID, role.Name, "")
 		if err != nil {
 			s.releaseClaimedRoles(wf.ID, claimedRoles)
 			return nil, fmt.Errorf("workflows: claim io port for role %q: %w", role.Name, err)
@@ -731,7 +731,7 @@ func (s *Service) claimIOPortsForStart(wf Workflow) (map[string]string, error) {
 			}
 			return nil, fmt.Errorf("%w: role %q needs a free %s/%s port, none available on any host", ErrValidation, role.Name, role.RequiredIOPort.CardType, role.RequiredIOPort.Direction)
 		}
-		assignments[role.Name] = hostID
+		assignments[role.Name] = ioPortAssignment{HostID: hostID, PortID: portID}
 		claimedRoles = append(claimedRoles, role.Name)
 	}
 	return assignments, nil
@@ -745,7 +745,7 @@ func (s *Service) releaseClaimedRoles(workflowID string, roles []string) {
 	}
 }
 
-func ioAssignmentRoles(assignments map[string]string) []string {
+func ioAssignmentRoles(assignments map[string]ioPortAssignment) []string {
 	roles := make([]string, 0, len(assignments))
 	for role := range assignments {
 		roles = append(roles, role)
@@ -779,7 +779,7 @@ func ioAssignmentRoles(assignments map[string]string) []string {
 // eine zusätzliche, davon unabhängige CPU/RAM-basierte Umplatzierung
 // hier würde den gerade erst geclaimten Port auf dem falschen Host
 // zurücklassen.
-func (s *Service) runStart(wf Workflow, ioAssignments map[string]string) {
+func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignment) {
 	ctx, cancel := context.WithTimeout(context.Background(), registrationTimeout)
 	defer cancel()
 
@@ -808,11 +808,13 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]string) {
 	for _, role := range wf.Definition.Roles {
 		resolvedHostID := role.HostID
 		var placementReason string
-		if claimedHostID, ok := ioAssignments[role.Name]; ok {
+		var claimedPortID string
+		if assignment, ok := ioAssignments[role.Name]; ok {
 			// D13: der Host steht bereits per I/O-Port-Claim fest (harte
 			// Bedingung) — SelectHost (weiche CPU/RAM-Heuristik) bekommt
 			// hier bewusst kein Mitspracherecht, s. runStart-Doku.
-			resolvedHostID = claimedHostID
+			resolvedHostID = assignment.HostID
+			claimedPortID = assignment.PortID
 		} else if s.resources != nil {
 			result := s.resources.SelectHost(placement.PlacementRequest{
 				NodeType:        role.NodeType,
@@ -832,6 +834,19 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]string) {
 		// statt mutierten Map.
 		roleEnv := roleExtraEnv(extraEnv, role)
 		roleEnv = withRoleSeed(roleEnv, wf.ID, role.Name)
+		// D13-Fix (2026-08-20, s. ioPortExtraEnv-Doku): der geclaimte
+		// physische Port muss an die Instanz weitergereicht werden, sonst
+		// startet sie immer mit ihrem eingebauten device-number-Default.
+		if portEnv := IoPortExtraEnv(role.RequiredIOPort, claimedPortID); portEnv != nil {
+			merged := make(map[string]string, len(roleEnv)+len(portEnv))
+			for k, v := range roleEnv {
+				merged[k] = v
+			}
+			for k, v := range portEnv {
+				merged[k] = v
+			}
+			roleEnv = merged
+		}
 
 		inst, err := s.launcher.StartLabeled(role.NodeType, "", resolvedHostID, role.Name, roleEnv)
 		if err != nil {

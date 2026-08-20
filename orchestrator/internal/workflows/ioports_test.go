@@ -152,6 +152,18 @@ func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
 	if ioPorts.claimCount() != 1 {
 		t.Errorf("claimCount() = %d, want 1", ioPorts.claimCount())
 	}
+
+	// Live gefundener Bug (2026-08-20): der geclaimte Port (hier "p1")
+	// wurde bislang nie an die gestartete Instanz weitergereicht — sie
+	// startete immer mit dem eingebauten device-number=0-Default, egal
+	// welcher Port tatsächlich frei/geclaimt war (s. ioPortExtraEnv-Doku).
+	gotEnv := l.lastExtraEnv["omp-decklink"]
+	if gotEnv["OMP_DECKLINK_DEVICE_NUMBER"] != "p1" {
+		t.Errorf("OMP_DECKLINK_DEVICE_NUMBER = %q, want %q (the claimed port)", gotEnv["OMP_DECKLINK_DEVICE_NUMBER"], "p1")
+	}
+	if gotEnv["OMP_DECKLINK_DIRECTION"] != "ingest" {
+		t.Errorf("OMP_DECKLINK_DIRECTION = %q, want %q", gotEnv["OMP_DECKLINK_DIRECTION"], "ingest")
+	}
 }
 
 func TestStartRejectsWhenNoMatchingIOPortAvailable(t *testing.T) {
@@ -372,6 +384,18 @@ func TestMigrateRoleMovesIOPortClaimOnSuccess(t *testing.T) {
 	if newInstance == oldInstance {
 		t.Fatalf("expected a fresh instance ID for the migrated role")
 	}
+
+	// Live gefundener Bug (2026-08-20, s. ioPortExtraEnv-Doku): der neu
+	// auf host-2 geclaimte Port ("p2") wurde bislang nie an die neue
+	// Instanz weitergereicht — sie startete mit dem eingebauten
+	// device-number=0-Default statt "p2".
+	l.mu.Lock()
+	gotEnv := l.lastExtraEnv["omp-decklink"]
+	l.mu.Unlock()
+	if gotEnv["OMP_DECKLINK_DEVICE_NUMBER"] != "p2" {
+		t.Errorf("OMP_DECKLINK_DEVICE_NUMBER = %q, want %q (the newly claimed port on host-2)", gotEnv["OMP_DECKLINK_DEVICE_NUMBER"], "p2")
+	}
+
 	nodes.add(registry.NodeView{ID: "node-ingest-2", InstanceID: newInstance})
 
 	waitFor(t, func() bool {

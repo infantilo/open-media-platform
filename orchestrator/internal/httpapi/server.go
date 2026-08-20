@@ -265,6 +265,31 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
+	// Node-eigener Vollzustand (`GET`/`POST /state`, bisher NUR vom
+	// Snapshot-Service serverseitig direkt gegen node.APIBaseURL genutzt,
+	// s. internal/snapshots/nodeclient.go) — Nutzerauftrag 2026-08-20
+	// (omp-multiviewer-custom-Layout-Editor): dessen eigenes UI-Bundle
+	// muss denselben `/state`-Endpunkt über den Browser erreichen können,
+	// was bislang für JEDES Node-UI-Bundle fehlte (reine Lücke, kein
+	// Rückbau — Snapshot funktionierte serverseitig immer schon). Gleiche
+	// generische `handleNodeProxy`-Maschinerie/Auth-Abstufung wie
+	// params/plugins oben (lesen = requireAuth, schreiben =
+	// requireVerbOnNode VerbOperate).
+	mux.HandleFunc("GET /api/v1/nodes/{id}/state", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/state")))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/state", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/state")))
+	// Benannte Node-eigene Layouts (Nutzerauftrag 2026-08-20:
+	// "mehrere layouts pro multiviewer anlegbar/aufrufbar machen") —
+	// bislang nur von omp-multiviewer-custom implementiert, aber wie
+	// /state/plugins generisch über handleNodeProxy geroutet (kein
+	// Node-Typ-Wissen im Orchestrator, ARCHITECTURE.md §2/§11.1). NICHT
+	// zu verwechseln mit dem bestehenden, global gescopten
+	// `/api/v1/layouts/{name}` (Flow-Editor-Kachelpositionen,
+	// layouts.Store) — unterschiedlicher Pfad-Präfix (`/nodes/{id}/`),
+	// unterschiedlicher Anwendungsfall.
+	mux.HandleFunc("GET /api/v1/nodes/{id}/layouts", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/layouts")))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts")))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts/{name}/apply", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}/apply")))
+	mux.HandleFunc("DELETE /api/v1/nodes/{id}/layouts/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}")))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
@@ -280,8 +305,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/node-types/omp-mxf-player/settings", g.requireAuth(handleGetMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("PUT /api/v1/node-types/omp-mxf-player/settings", g.requireVerbGlobal(authz.VerbAdmin, handlePutMxfPlayerSettings(nodeSettingsStore)))
 	mux.HandleFunc("GET /api/v1/instances", g.requireAuth(handleListInstances(launcherSvc, hostMetrics)))
-	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore)))
-	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc)))
+	mux.HandleFunc("POST /api/v1/instances", g.requireVerbGlobal(authz.VerbAdmin, handlePostInstance(launcherSvc, authzStore, ioPortStore)))
+	mux.HandleFunc("DELETE /api/v1/instances/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteInstance(launcherSvc, ioPortStore)))
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — Drag-Umzug
 	// im Flow-Editor für eigenständige (nicht Workflow-gebundene)
 	// Instanzen, s. instancemigrate.Service.MigrateInstance-Doku.

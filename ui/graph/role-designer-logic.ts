@@ -34,6 +34,21 @@ export interface DraftRole {
   // Sonderfall im Wire-Format. undefined/0 = Node-eigener Default
   // (1 Ebene).
   mixerLevels?: number;
+  // requiredIoPort (Nutzerauftrag 2026-08-20, im Anschluss an den
+  // DeckLink-Crash-Loop-Fix): spiegelt orchestrator/internal/workflows/
+  // types.go Role.RequiredIOPort — deklariert, dass diese Rolle für ihre
+  // gesamte Laufzeit einen exklusiven physischen I/O-Port braucht (D13,
+  // ARCHITECTURE.md §6.1 Erweiterung 2026-07-10). Bislang nur per
+  // Roh-JSON/API setzbar, was live gefundene Folgefehler hatte: ohne
+  // requiredIoPort startet jede omp-decklink-Instanz mit ihrem
+  // eingebauten Default (device-number=0, ingest, s. nodes/omp-decklink/
+  // src/main.rs) — auf einem Host ohne Karte an genau diesem Index ein
+  // Crash-Loop statt einer ehrlichen "kein freier Port"-Ablehnung. Nur
+  // für nodeType==="omp-decklink" gezeigt/gesetzt (s. role-designer.ts
+  // #renderRoleTile/#addRole) — cardType ist dort fix "decklink", da das
+  // bislang einzige I/O-Karten-nodeType; direction ("in"|"out") steuert
+  // zugleich OMP_DECKLINK_DIRECTION (ioports.go ioPortExtraEnv).
+  requiredIoPort?: { cardType: string; direction: string };
 }
 
 export interface DraftConnection {

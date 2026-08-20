@@ -4928,6 +4928,34 @@ export class FlowCanvas extends HTMLElement {
         row.appendChild(hostSelect);
       }
 
+      // I/O-Port-Richtung (Nutzerfund 2026-08-20, "deklink node crasht
+      // immer noch beim start"): ein direkter Katalog-Start OHNE
+      // requiredIoPort läuft immer mit dem eingebauten device-number=0/
+      // ingest-Default des Nodes — auf jedem Host ohne echte Karte an
+      // genau diesem Index derselbe Crash-Loop wie zuvor am Workflow-
+      // Pfad (dort bereits über role-designer.ts behoben). Nur für
+      // omp-decklink gezeigt (bislang einziges I/O-Karten-nodeType, s.
+      // role-designer.ts DraftRole.requiredIoPort-Doku) — cardType bleibt
+      // fix "decklink", nur die Richtung ist wählbar.
+      let ioPortSelect: HTMLSelectElement | null = null;
+      if (entry.type === "omp-decklink") {
+        ioPortSelect = document.createElement("select");
+        ioPortSelect.title =
+          "Physischer DeckLink-Port, den diese Instanz exklusiv belegt (D13 I/O-Karten-Claim). Ohne freien passenden Port lehnt der Orchestrator den Start ehrlich ab, statt mit dem eingebauten Default (device-number=0, Eingang) in einen Crash-Loop zu laufen.";
+        ioPortSelect.style.cssText = "font-size:10px;max-width:110px;padding:2px 4px;";
+        const ioPortOptions: Array<[string, string]> = [
+          ["in", "I/O-Port: Eingang"],
+          ["out", "I/O-Port: Ausgang"],
+        ];
+        for (const [value, label] of ioPortOptions) {
+          const opt = document.createElement("option");
+          opt.value = value;
+          opt.textContent = label;
+          ioPortSelect.appendChild(opt);
+        }
+        row.appendChild(ioPortSelect);
+      }
+
       // Bug 2: im Bearbeiten-Modus eines GESTOPPTEN/PAUSIERTEN Workflows
       // fügt der Katalog-Button eine Rolle zur Definition hinzu statt
       // eine Instanz zu starten — der Host-Selector greift hier nicht
@@ -4945,7 +4973,8 @@ export class FlowCanvas extends HTMLElement {
             return;
           }
         }
-        this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined);
+        const requiredIoPort = ioPortSelect ? { cardType: "decklink", direction: ioPortSelect.value } : undefined;
+        this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort);
       });
       row.appendChild(btn);
       this.#palette.appendChild(row);
@@ -5114,12 +5143,17 @@ export class FlowCanvas extends HTMLElement {
     return row;
   }
 
-  async #startInstance(type: string, version?: string, hostId?: string) {
+  async #startInstance(type: string, version?: string, hostId?: string, requiredIoPort?: { cardType: string; direction: string }) {
     try {
       const res = await apiFetch("/api/v1/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type, ...(version ? { version } : {}), ...(hostId ? { hostId } : {}) }),
+        body: JSON.stringify({
+          type,
+          ...(version ? { version } : {}),
+          ...(hostId ? { hostId } : {}),
+          ...(requiredIoPort ? { requiredIoPort } : {}),
+        }),
       });
       if (!res.ok) {
         const text = await res.text();

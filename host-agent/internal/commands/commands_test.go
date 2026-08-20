@@ -168,6 +168,31 @@ func TestStartAllowsAllowlistedExtraEnvKeys(t *testing.T) {
 	e.Handle(Request{Action: "stop", InstanceID: "test-allow"})
 }
 
+// TestStartAllowsDecklinkIOPortExtraEnvKeys — live gefundener Bug
+// (2026-08-20): workflows.ioPortExtraEnv reicht den per Role.RequiredIOPort
+// geclaimten Port als OMP_DECKLINK_DEVICE_NUMBER/OMP_DECKLINK_DIRECTION
+// weiter, war aber bis hierher nie in der Allowlist — ein Workflow mit
+// requiredIoPort auf einem per Host-Agent verwalteten Remote-Host (der
+// eigentliche Zielfall für physische I/O-Karten) scheiterte deshalb
+// komplett mit "extraEnv key ... not allowed", statt die Instanz mit dem
+// richtigen Port zu starten.
+func TestStartAllowsDecklinkIOPortExtraEnvKeys(t *testing.T) {
+	e := NewExecutor([]catalog.Entry{
+		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}},
+	}, "", "", "host-1", nil)
+
+	resp := e.Handle(Request{
+		Action:     "start",
+		Type:       "sleeper",
+		InstanceID: "test-allow-decklink",
+		ExtraEnv:   map[string]string{"OMP_DECKLINK_DEVICE_NUMBER": "3", "OMP_DECKLINK_DIRECTION": "ingest"},
+	})
+	if !resp.OK {
+		t.Fatalf("Handle() = %+v, want OK=true for allowlisted decklink extraEnv keys", resp)
+	}
+	e.Handle(Request{Action: "stop", InstanceID: "test-allow-decklink"})
+}
+
 // TestUnexpectedExitPublishesExitEvent — S3-Kernverhalten: ein Prozess,
 // der von selbst (nicht per stop()) endet, muss ein ExitEvent auf
 // omp.host.<hostId>.events auslösen.
