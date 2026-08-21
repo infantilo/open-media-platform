@@ -19260,4 +19260,69 @@ UND Viewer-Panel zeigen sauber "nicht verbunden").
 **Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (Flush-Versuch in
 `teardown_branch`, `run_with_timeout` + Verwendung in `replace_slot`),
 `ui/graph/flow-canvas.ts` + `nodes/omp-viewer/ui/bundle.js`
-("nicht verbunden"-Anzeige). Noch **nicht committet**.
+("nicht verbunden"-Anzeige).
+
+## 2026-08-21 (Nachtrag 158) — "Seek/einfaches Play geht nicht": Ursache gefunden, teilweise behoben — funktioniert während echter Wiedergabe, NICHT nach bereits erreichtem echtem Dateiende (mxfdemux-Grenze)
+
+Nutzerbug, an der laufenden Instanz validiert (wie verlangt, keine
+neue angelegt): `seek()` lieferte `{"ok":true}`, die Position bewegte
+sich aber nie. Root-Cause per Diagnose-Build (temporäres `eprintln!`
+um den tatsächlichen `demux.seek()`-Rückgabewert zu sehen, nicht
+geraten): **`demux.seek()` liefert `Ok(())` — GStreamer meldet
+Erfolg — sobald aber `mxfdemux`s eigener Pull-Mode-Task nach echtem
+Datei-EOS bereits selbst gestoppt hat (`gst_pad_pause_task()`),
+bewirkt der Seek NICHTS**, weil kein laufender Task mehr übrig ist,
+der das neue Ziel überhaupt bemerken könnte.
+
+**Erster Fix-Versuch:** `seek_to()` schickt nach dem Seek zusätzlich
+einen expliziten `PAUSED`→`PLAYING`-Zyklus an `demux`, um GStreamers
+normale Zustandsübergangs-Maschinerie zum erneuten
+`gst_pad_start_task()` zu zwingen. Funktionierte anfangs unzuverlässig
+(mal ja, mal nein) — Ursache: derselbe fire-and-forget-`set_state()`-
+Fehler wie bei `stop_element_and_wait`/`start_element_and_wait`
+(Nachtrag 155/157), hier nachgerüstet: `demux.state(500ms)` wartet
+jetzt echt auf den Abschluss von `PAUSED`, bevor `PLAYING` erneut
+angefordert wird.
+
+**Nach dem Nachbessern per `gdb` bestätigt: IMMER NOCH nicht
+ausreichend.** Der eigentliche `mxfdemux`-Task-Thread hängt auch nach
+dem korrekt abgewarteten `PAUSED`→`PLAYING`-Zyklus unverändert im
+selben `g_cond_wait` fest wie vorher — der Zustandswechsel allein
+reicht bei `mxfdemux` offenbar nicht, um den Task nach eigenem EOS
+wieder anlaufen zu lassen (vermutlich ein internes "bereits fertig"-
+Flag, das ein bloßer `PAUSED`/`PLAYING`-Zyklus nicht zurücksetzt — ein
+echter, tieferer `mxfdemux`-Implementierungs-Befund, keine
+Zeitschätzungs-Ungenauigkeit wie bei den vorherigen Nachträgen).
+
+**Präzise verifizierte Grenze:** `seek`/`step` (Jog)/Shuttle
+funktionieren VOLLSTÄNDIG KORREKT, solange `mxfdemux`s Task noch läuft
+— also während der Zwei-Sekunden-Zeitspanne, bevor das ungebremste
+Decoding (Nachtrag 153/156, weiterhin offen) das Item real durchlaufen
+lässt. Live mehrfach bestätigt: `step(+100 Frames)` während laufender
+Wiedergabe bewegte die Position sofort und korrekt (7960ms nach
+1s). Ein `seek()`/`step()` NACH bereits erreichtem echtem Dateiende
+bewegt dagegen gar nichts — auch nach fünf Wiederholversuchen in
+Folge nicht.
+
+**Warum das den Bugreport erklärt:** weil das ungebremste Decoding ein
+Item ohnehin binnen ~1-2 Sekunden real durchlaufen lässt, landet
+JEDE realistische Bedienpause (Klicken, Beobachten, dann Seeken)
+fast immer schon nach dem echten Dateiende — wodurch Seek für den
+Nutzer praktisch IMMER wirkungslos wirkt, obwohl der Mechanismus für
+sich funktioniert. Die beiden offenen Baustellen (Nachtrag 153/156
+Unpaced-Decode UND dieser mxfdemux-Task-Neustart) verstärken sich
+gegenseitig zu genau dem beobachteten "seek und einfaches play gehen
+nicht".
+
+**Nicht in dieser Sitzung weiterverfolgt** (Budget): der volle Fix
+bräuchte entweder (a) einen härteren Reset (`NULL`→`READY`→`PAUSED`→
+`PLAYING`, riskanter — löst ggf. auch die Pad-Verlinkung, s. dieselbe
+Risikoklasse wie die früheren Teardown-Experimente) oder (b) ein
+transparentes Neuaufbauen des gesamten Zweigs bei einem Seek/Step auf
+ein bereits fertiges Item (praktisch identisch zu einem erneuten
+`cue()`+`take()` auf dasselbe Item, nur automatisch ausgelöst statt
+vom Bedienenden). Die (bereits vorhandene) Nachtrag-153/156-Lösung
+für das Pacing-Problem würde dieses Symptom in der Praxis STARK
+entschärfen, ohne den mxfdemux-Befund selbst zu beheben.
+
+**Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`seek_to`).

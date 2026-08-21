@@ -1074,7 +1074,8 @@ pub fn run(
                 if let Some(demux) = onair_demux(&active) {
                     let current = query_position_ms(demux).unwrap_or(0);
                     let delta_ms = frames * 1000 * FRAMERATE_DENOMINATOR as i64 / FRAMERATE_NUMERATOR as i64;
-                    seek_to(demux, (current + delta_ms).max(0) as u64);
+                    let target = (current + delta_ms).max(0) as u64;
+                    seek_to(demux, target);
                 }
             }
             Ok(Command::SetRate(rate)) => {
@@ -1143,4 +1144,30 @@ fn seek_to(demux: &gst::Element, target_ms: u64) {
         gst::SeekType::None,
         gst::ClockTime::NONE,
     );
+    // 2026-08-21 root-caused per Diagnose-Build (Nutzerfund "seek und
+    // einfaches play geht nicht" — bestätigt an der laufenden Instanz):
+    // `demux.seek()` liefert `Ok(())` und meldet damit Erfolg, sobald
+    // aber `mxfdemux`s eigener Pull-Mode-Task nach echtem Datei-EOS
+    // bereits selbst gestoppt hat (`gst_pad_pause_task()`), bewirkt der
+    // Seek NICHTS — der Task läuft nie wieder an, um das neue Ziel
+    // überhaupt zu bemerken (`GST_ELEMENT(demux)`s Zustand bleibt dabei
+    // unverändert PLAYING, ein einfaches "nochmal auf Playing setzen"
+    // wäre daher ein GStreamer-seitiges No-Op). Ein expliziter
+    // PAUSED→PLAYING-Zyklus zwingt GStreamers normale
+    // Zustandsübergangs-Maschinerie dazu, `gst_pad_start_task()` für
+    // den Sink-Pad-Task erneut aufzurufen — anders als der reine
+    // Seek-Aufruf allein.
+    //
+    // Live-Test-Fund (direkt beim Verifizieren dieses Fixes, dieselbe
+    // Sitzung): ein reines Hintereinander-`set_state()` ohne auf den
+    // Abschluss von PAUSED zu warten, war selbst noch unzuverlässig
+    // (mal wirkte der Seek, mal nicht — exakt dieselbe Bug-Klasse wie
+    // `start_element_and_wait`/`stop_element_and_wait` an anderer
+    // Stelle: ein `set_state()`-Aufruf kann `Async` liefern, der
+    // NÄCHSTE `set_state()`-Aufruf trifft dann auf einen noch
+    // laufenden Übergang). Jetzt wird auf PAUSED echt gewartet, bevor
+    // PLAYING erneut angefordert wird.
+    let _ = demux.set_state(gst::State::Paused);
+    let _ = demux.state(gst::ClockTime::from_mseconds(500));
+    let _ = demux.set_state(gst::State::Playing);
 }
