@@ -307,6 +307,48 @@ fn stop_element_and_wait(el: &gst::Element) {
     }
 }
 
+/// Startup-Pendant zu `stop_element_and_wait` oben: ruft
+/// `sync_state_with_parent()` und wartet auf den TATSÄCHLICHEN Abschluss
+/// eines dabei angestoßenen `Async`-Übergangs, statt ihn zu verwerfen.
+///
+/// Per `GST_DEBUG` belegt (docs/decisions.md Nachtrag 155, "Position
+/// bleibt kurz nach `take()` stehen"): ein neu in eine bereits PLAYING-
+/// laufende Pipeline eingefügtes `decodebin` geht dabei sichtbar
+/// `ASYNC` ("lost state of PLAYING, new PAUSED", hier ~76ms bis
+/// `async-done`) — ohne auf diesen Abschluss zu warten, begann `mxfdemux`
+/// (dank "Konsument vor Produzent"-Reihenfolge zwar SPÄTER als
+/// `decodebin`, aber trotzdem zu früh) direkt danach mit dem Pushen von
+/// Daten, bevor `decodebin`s Sink-Pad wirklich aufnahmebereit war.
+/// `gst_mxf_demux_loop` meldete daraufhin "Internal data stream
+/// error"/`GST_FLOW_ERROR` und stoppte seine GESAMTE Schleife dauerhaft
+/// (Video UND Audio zusammen, da beide über denselben Loop laufen,
+/// s. Moduldoku oben) — reproduzierbar ab dem zweiten `cue()`/
+/// `take()`-Zyklus (mehr Elemente in der Pipeline zu diesem Zeitpunkt,
+/// der Übergang dadurch eher wirklich asynchron statt synchron/sofort).
+fn start_element_and_wait(el: &gst::Element) -> Result<(), String> {
+    // `sync_state_with_parent()` liefert (anders als `set_state()`) nur
+    // `Result<(), BoolError>` — ob der Übergang dabei synchron oder
+    // `ASYNC` verlief, ist am Rückgabetyp nicht sichtbar. Deshalb hier
+    // IMMER anschließend per `state(timeout)` bestätigen, statt wie bei
+    // `stop_element_and_wait` nur im Async-Fall.
+    el.sync_state_with_parent()
+        .map_err(|e| format!("sync_state_with_parent ({}): {e}", el.name()))?;
+    if el.state(gst::ClockTime::from_mseconds(500)).0.is_ok() {
+        return Ok(());
+    }
+    // Gleiches Muster wie `stop_element_and_wait`: erster Versuch nicht
+    // innerhalb 500ms bestätigt, derselbe bereits angestoßene Übergang
+    // läuft weiter (kein erneuter Aufruf nötig), nur mit deutlich
+    // längerem Timeout erneut abgefragt.
+    if el.state(gst::ClockTime::from_seconds(3)).0.is_err() {
+        return Err(format!(
+            "{} erreichte den Ziel-Zustand nicht innerhalb ~3.5s",
+            el.name()
+        ));
+    }
+    Ok(())
+}
+
 fn remove_elements(pipeline: &gst::Pipeline, elements: &[gst::Element]) {
     for el in elements {
         let _ = pipeline.remove(el);
@@ -524,10 +566,13 @@ fn build_mxf_branch(
 
     // "Konsument vor Produzent" (omp-player::pipeline-Lektion, s. dortige
     // Moduldoku): alles stromabwärts von mxfdemux zuerst auf den
-    // Pipeline-Zustand syncen, `mxfdemux`/`filesrc` erst danach.
+    // Pipeline-Zustand syncen, `mxfdemux`/`filesrc` erst danach. Nicht nur
+    // ANSTOSSEN, sondern per `start_element_and_wait` auch den TATSÄCHLICHEN
+    // Abschluss abwarten (s. dortige Doku) — sonst kann `mxfdemux` unten zu
+    // früh zu pushen beginnen, während z. B. `decodebin` noch mitten in
+    // einem `ASYNC`-Übergang steckt.
     for el in elements.iter().skip(2) {
-        el.sync_state_with_parent()
-            .map_err(|e| format!("sync_state_with_parent (mxf branch): {e}"))?;
+        start_element_and_wait(el)?;
     }
     let elements = Arc::new(Mutex::new(elements));
 
@@ -642,12 +687,8 @@ fn build_mxf_branch(
     // `filesrc`/`mxfdemux` erst jetzt starten (s. Sync-Reihenfolge-
     // Kommentar oben) — alle stromabwärtigen Konform-Ketten stehen
     // bereits auf PLAYING/PAUSED.
-    filesrc
-        .sync_state_with_parent()
-        .map_err(|e| format!("sync_state_with_parent (filesrc): {e}"))?;
-    demux
-        .sync_state_with_parent()
-        .map_err(|e| format!("sync_state_with_parent (mxfdemux): {e}"))?;
+    start_element_and_wait(&filesrc)?;
+    start_element_and_wait(&demux)?;
 
     Ok(Branch {
         elements,

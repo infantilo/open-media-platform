@@ -18981,5 +18981,103 @@ Preroll-Vermutung aus Nachtrag 153, aber nicht mehr Teil dieses
 Nachtrags.
 
 **Dateien:** `nodes/omp-mediaio/src/mxl.rs` (`write_loop`,
-`write_audio_loop`). Noch **nicht committet** — s. Statusfrage an den
-Nutzer.
+`write_audio_loop`).
+
+## 2026-08-21 (Nachtrag 155) — "Position bleibt nach zweitem take() stehen": vollständig root-caused und behoben (Appsink-EOS-Latch)
+
+Nutzerauftrag: "fix nachtrag 153" (die dort unter Punkt 2 als offen
+notierte Flakiness, nach Nachtrag 154 präzisiert: CPU bleibt korrekt
+niedrig, aber die Wiedergabe-Position bleibt gelegentlich schon kurz
+nach `take()` stehen).
+
+**Reproduktion isoliert:** ein frisches `omp-mxf-player` spielt sein
+ERSTES `cue()`/`take()`-Item immer korrekt (Position schreitet real
+voran). Ein ZWEITES `cue()`/`take()` auf derselben Instanz (egal ob
+dasselbe oder ein anderes File — mit einer zweiten, testweise aus
+PIPELINE CONTROLLERs Medienordner kopierten Datei gegengeprüft, exakt
+dasselbe Symptom) bleibt reproduzierbar bei einer sehr kleinen Position
+(100–200ms) stehen, CPU dabei durchgehend niedrig (kein Rückfall in den
+Nachtrag-154-Bug).
+
+**Echter, gefundener UND behobener Bug:** per `gdb`-Backtrace-Vergleich
+entdeckt — nach dem `break` aus Nachtrag 154 waren nach dem ERSTEN
+`take()`-Zyklus ALLE SECHS `write_loop`/`write_audio_loop`-Threads
+bereits dauerhaft beendet (0 Treffer für diese Funktionen im
+Backtrace). Diese Threads werden aber nur EINMAL pro Prozesslaufzeit
+gestartet (`MxlVideoOutput`/`MxlAudioOutput`, in `build()`) und bedienen
+über die gesamte Lebensdauer des Nodes hinweg JEDEN nacheinander aktiv
+geschalteten A/B-Slot-Zweig — EOS bedeutet hier "dieses Item ist fertig",
+nicht "der Node ist fertig". Der `break` aus Nachtrag 154 war für
+GENAU DIESE Architektur falsch: er beendete die Schreib-Threads
+dauerhaft nach dem ersten Playlist-Item, wonach niemand mehr Samples
+vom (prozessweit geteilten) Appsink abholte — ein zweites Item hätte
+selbst bei korrekt laufendem `mxfdemux` nie mehr geschrieben werden
+können. Fix: `sleep(200ms); continue;` statt `break` — kein Spinnen
+(CPU bleibt niedrig, das eigentliche Nachtrag-154-Ziel), aber der
+Thread bleibt am Leben. Per `gdb` erneut bestätigt: alle sechs
+Schreib-Threads sind nach dem ersten EOS jetzt weiterhin vorhanden.
+
+**Zweiter, ebenfalls versuchter, aber verworfener Fix:**
+`build_mxf_branch`s "Konsument vor Produzent"-Schleife rief
+`sync_state_with_parent()` bisher fire-and-forget auf; ein neu
+hinzugefügtes `decodebin` geht beim Einfügen in eine bereits PLAYING-
+laufende Pipeline nachweislich `ASYNC` ("lost state of PLAYING, new
+PAUSED", ~76ms bis `async-done`, per `GST_DEBUG` belegt). Neue Funktion
+`start_element_and_wait` (Pendant zu `stop_element_and_wait`) wartet
+jetzt echt auf Bestätigung, für `filesrc`/`mxfdemux` UND die
+Konsumenten-Kette. Diese Änderung ist in sich korrekt/harmlos (behoben
+Fehler statt sie zu verwerfen) und bleibt drin, behebt das Kernsymptom
+aber NICHT — der Fehler trat mit UND ohne diese Änderung identisch auf.
+
+**Kernursache (bestätigt):** selbst mit lebenden Schreib-Threads UND
+bestätigtem Zustandsübergang blieb `mxfdemux2` (das zweite reale Item)
+beim allerersten Push mit `gst_mxf_demux_loop: error: Internal data
+stream error` / `GST_FLOW_ERROR (-5)` stehen (`mxfdemux2:sink`-Task-
+Thread danach dauerhaft in `g_cond_wait` innerhalb von
+`libgstreamer-1.0.so.0`, per `gdb` bestätigt). Unmittelbar davor
+(`GST_DEBUG` mit `GST_PADS:4`) erschien `WARN … gst_pad_peer_query:
+<valve0:src> could not send sticky events` — der gemeinsame, einmalig
+gebaute `appsink` (aus `MxlVideoOutput`/`MxlAudioOutput`) latcht sein
+internes EOS-Flag, sobald der vorher aktive Zweig real EOS erreicht;
+ein reiner `active-pad`-Wechsel am `input-selector` (`apply_active`)
+hebt dieses Latch NICHT auf — bestätigt durch den erfolgreichen Fix
+unten (gezielter Flush direkt am Appsink löst das Problem vollständig).
+
+**Erstes Experiment verworfen:** `FLUSH_START`/`FLUSH_STOP` über den
+`input-selector`-eigenen Src-Pad bei jedem `apply_active()`-Aufruf
+gesendet (Analogie zu Seek-nach-EOS) — machte es SCHLIMMER: auch das
+bislang immer funktionierende ERSTE `take()` blieb danach bei Position
+0 stehen. Grund (rückblickend klar): der Flush kollidierte mit dem
+eigenen, noch laufenden `ASYNC`-Preroll des GERADE ERST aktiv
+geschalteten neuen Zweigs — zu früh und am falschen Pad platziert.
+
+**Zweites Experiment: erfolgreich, behebt den Bug.** Statt am
+`input-selector` (trifft den gesamten stromabwärtigen Pfad, unabhängig
+vom tatsächlichen EOS-Zustand) den Flush stattdessen GENAU DORT und GENAU
+DANN senden, wo/wann `write_loop`/`write_audio_loop` selbst echtes EOS
+feststellen (`last_written.is_some() && app_sink.is_eos()`) — auf dem
+eigenen Sink-Pad des `appsink` (`app_sink.static_pad("sink")`), bevor in
+den 200ms-Schlaf gegangen wird. Dadurch: (a) vom `apply_active`-Timing
+komplett entkoppelt (kein Wettlauf mit dem Preroll des nächsten Zweigs
+mehr, da der Flush oft schon Sekunden vor dem nächsten `take()`
+passiert), (b) idempotent (wird alle 200ms wiederholt, solange der
+Appsink noch im EOS-Zustand verharrt — sobald echte neue Daten fließen,
+verlässt die Schleife diesen Zweig ohnehin von selbst), (c) minimal-
+invasiv (betrifft nur den Appsink selbst, nicht den `input-selector`
+oder andere Geschwister-Zweige).
+
+**Live verifiziert:** vier aufeinanderfolgende `cue()`/`take()`-Zyklen
+auf derselben Instanz — jeder zeigt echte, fortschreitende Position
+(z. B. Zyklus 2: 1720→6480→10000ms, Zyklus 3: 1800→7320→10000ms),
+CPU bleibt durchgehend bei ~2–16% (kein Rückfall in Nachtrag 154). Der
+vierte Zyklus zusätzlich per verbundenem `omp-viewer` bestätigt: zwei
+im Abstand von 1,5s gezogene Frames unterscheiden sich (echtes,
+laufendes Bild, kein eingefrorener Stand).
+
+**Dateien (dieser Nachtrag):** `nodes/omp-mediaio/src/mxl.rs`
+(`sleep`+`continue` statt `break`, plus Appsink-Selbst-Flush im
+EOS-Zweig), `nodes/omp-mxf-player/src/pipeline.rs`
+(`start_element_and_wait`, an beiden bisherigen
+`sync_state_with_parent()`-Aufrufstellen in `build_mxf_branch`
+verwendet — bleibt als eigenständige, korrekte Verbesserung erhalten,
+auch wenn sie für sich allein nicht die Kernursache behoben hatte).

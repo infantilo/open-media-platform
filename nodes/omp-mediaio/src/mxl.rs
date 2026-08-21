@@ -412,23 +412,53 @@ fn write_loop(
             // unbegrenzt weiter, ohne dass `running` je auf `false`
             // gesetzt wird — ~100% CPU auf diesem Thread für immer,
             // sichtbar sogar in `gst_debug_log` selbst (so oft aufgerufen,
-            // dass GStreamers eigenes Logging im Profil auftaucht). Bei
-            // echtem EOS bricht die Schleife jetzt sauber ab, statt zu
-            // spinnen.
+            // dass GStreamers eigenes Logging im Profil auftaucht).
             //
             // `last_written.is_some()` zusätzlich zu `is_eos()` geprüft
             // (2026-08-21, zweiter Fund direkt beim Verifizieren des
             // ersten): `gst_app_sink_is_eos()` liefert laut GStreamer-
             // Doku AUCH `TRUE`, wenn der Appsink noch gar nicht in
             // PAUSED/PLAYING angekommen ist — nicht nur bei echtem EOS.
-            // Ohne diese Zusatzbedingung brach der Thread sofort beim
-            // allerersten `None` ab (Pipeline-Start, bevor auch nur ein
-            // einziges Sample floss) — schlimmer als der Ursprungs-Bug:
-            // gar kein Bild/Ton mehr, in jedem einzelnen Testlauf
-            // reproduziert (`last_written` dabei immer noch `None`).
-            // Jetzt gilt EOS erst als "echt", nachdem mindestens ein
-            // Grain erfolgreich geschrieben wurde.
-            None if last_written.is_some() && app_sink.is_eos() => break,
+            //
+            // `break` (statt Schlafen+Weiterlaufen) war ein DRITTER,
+            // schwerwiegenderer Fund beim Fixen von Nachtrag 155 ("Position
+            // bleibt kurz nach zweitem take() stehen"): dieser Thread wird
+            // GENAU EINMAL pro Prozesslaufzeit gestartet
+            // (`MxlVideoOutput::new()`/`build()`), nicht neu pro Cue/Take-
+            // Zyklus — er bedient über die gesamte Lebensdauer des Nodes
+            // hinweg JEDEN Zweig, der der A/B-Slot-Architektur zufolge
+            // nacheinander aktiv geschaltet wird (`apply_active`s
+            // `active-pad`-Wechsel am gemeinsamen `input-selector`). EOS
+            // hier bedeutet nur "DIESER Zweig ist fertig", nicht "der Node
+            // ist fertig" — ein `break` beendete den Thread nach dem
+            // ERSTEN Playlist-Item dauerhaft; jeder folgende Cue/Take
+            // schaltete danach zwar korrekt auf einen neuen, echt
+            // laufenden Zweig um, aber niemand pullte dessen Samples mehr
+            // vom (gemeinsamen) Appsink ab — per `gdb` bestätigt: nach dem
+            // ersten EOS keine `write_loop`/`write_audio_loop`-Threads
+            // mehr im Backtrace vorhanden. Jetzt: kurzer Schlaf statt
+            // Spinnen, Schleife läuft weiter (identisches Prinzip zum
+            // 200ms-Timeout, den ein `None` normalerweise ohnehin
+            // abgewartet hätte).
+            None if last_written.is_some() && app_sink.is_eos() => {
+                // EXPERIMENT 2026-08-21 (docs/decisions.md Nachtrag 155,
+                // Fortsetzung): den Appsink selbst per Flush auf seinem
+                // eigenen Sink-Pad aus dem EOS-Latch holen — entkoppelt
+                // vom `apply_active`-Zeitpunkt (der frühere Versuch,
+                // stattdessen beim `active-pad`-Wechsel über den
+                // `input-selector`-Src zu flushen, störte den bereits
+                // laufenden Preroll des NEUEN Zweigs und brach sogar das
+                // bislang funktionierende erste `take()`). Hier passiert
+                // das idempotent, sooft der Appsink im EOS-Zustand
+                // verharrt — sobald echte neue Daten fließen, verlässt
+                // die Schleife diesen Zweig ohnehin von selbst.
+                if let Some(sink_pad) = app_sink.static_pad("sink") {
+                    let _ = sink_pad.send_event(gst::event::FlushStart::new());
+                    let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
             None => continue,
         };
         let Some(buffer) = sample.buffer() else {
@@ -779,8 +809,16 @@ fn write_audio_loop(
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             // Gleicher Fund/gleiche Begründung wie in `write_loop` oben,
-            // inkl. `last_written.is_some()`-Zusatzbedingung.
-            None if last_written.is_some() && app_sink.is_eos() => break,
+            // inkl. `last_written.is_some()`-Zusatzbedingung, Schlafen-
+            // statt-`break` UND Appsink-Selbst-Flush (Nachtrag 155).
+            None if last_written.is_some() && app_sink.is_eos() => {
+                if let Some(sink_pad) = app_sink.static_pad("sink") {
+                    let _ = sink_pad.send_event(gst::event::FlushStart::new());
+                    let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
             None => continue,
         };
         let Some(buffer) = sample.buffer() else {
