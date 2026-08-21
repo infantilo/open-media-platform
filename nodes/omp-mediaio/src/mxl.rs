@@ -217,6 +217,20 @@ impl MxlVideoOutput {
         // ob/wann der erste Puffer ankommt — exakt das dokumentierte
         // Muster, das PIPELINE CONTROLLER für jeden Tee-Zweig-Sink
         // (`intervideosink`/`interaudiosink`) verwendet.
+        // 2026-08-21: `sync=true` versucht (Fund: `omp-mxf-player` läuft
+        // mit `sync=false` unpaced, ~600% CPU über 6 Threads, da
+        // Datei-Decode — anders als der Moduldoc-Annahme "videotestsrc" —
+        // nicht selbstgetaktet ist, s. `docs/decisions.md`). `sync=true`
+        // senkt die CPU-Last zuverlässig, friert aber die MXL-Ausgabe auf
+        // einem einzelnen Frame ein (per Live-Test an mehreren frischen
+        // Instanzen bestätigt, kein Messartefakt) — vermutlich
+        // Zusammenspiel mit dem `valve`-gesteuerten Cue/Take-Slot-Modell
+        // (Pipeline geht schon beim `cue` auf PLAYING, `take` öffnet das
+        // Valve erst später; Basiszeit/Segment-Timing dieser Kombination
+        // nicht weiter untersucht). Deshalb zurück auf `sync=false` —
+        // funktionierende, aber ungebremste Wiedergabe schlägt kaputte.
+        // Echte Echtzeit-Drosselung für Datei-Wiedergabe bleibt offen,
+        // s. docs/decisions.md.
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
             .property("async", false)
@@ -605,6 +619,10 @@ impl MxlAudioOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
+        // `sync=false` (2026-08-21): `sync=true` versucht und wieder
+        // verworfen, gleicher Fund/gleiche Begründung wie beim
+        // Video-Appsink oben (s. dortiger Kommentar) — friert die
+        // MXL-Ausgabe ein statt sie nur zu verlangsamen.
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
             .property("max-buffers", 4u32)

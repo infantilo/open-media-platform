@@ -71,10 +71,21 @@ class OmpViewerPanel extends HTMLElement {
     img.addEventListener("error", () => {
       status.textContent = "keine Vorschau verfügbar";
     });
-    const token = localStorage.getItem("omp-auth-token");
-    img.src = token
-      ? `/api/v1/nodes/${nodeId}/stream/previewUrl?access_token=${encodeURIComponent(token)}`
-      : `/api/v1/nodes/${nodeId}/stream/previewUrl`;
+    // Einzelbild-Polling statt `multipart/x-mixed-replace` (2026-08-21
+    // per CDP root-caused, s. `nodes/omp-mediaio/src/preview.rs`-
+    // Moduldoku — aktuelles Chromium rendert die Multipart-Technik gar
+    // nicht mehr, weder hier noch in der Flow-Editor-Kachel-Vorschau,
+    // `ui/graph/flow-canvas.ts`s `previewSnapshotUrl`).
+    const previewUrl = () => {
+      const token = localStorage.getItem("omp-auth-token");
+      const base = `/api/v1/nodes/${nodeId}/stream/previewUrl`;
+      const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
+      return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
+    };
+    img.src = previewUrl();
+    this._previewInterval = setInterval(() => {
+      img.src = previewUrl();
+    }, 500);
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -161,6 +172,7 @@ class OmpViewerPanel extends HTMLElement {
 
   disconnectedCallback() {
     clearInterval(this._inputsInterval);
+    clearInterval(this._previewInterval);
     if (this._levelsSource) this._levelsSource.close();
   }
 }

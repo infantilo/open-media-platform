@@ -1,80 +1,62 @@
-//! MJPEG-über-HTTP-Vorschau (`UMSETZUNG.md` C6, nach `omp-mediaio`
+//! Snapshot-über-HTTP-Vorschau (`UMSETZUNG.md` C6, nach `omp-mediaio`
 //! verschoben in C-Nachtrag 2026-07-12 für `omp-multiviewer`-
-//! Wiederverwendung) — PIPELINE CONTROLLERs bewährtes Preview-Muster
-//! (`lib/PreviewPipeline.js` + `server.js`s `/preview`-Route), hier als
-//! eigener, zweiter `tiny_http`-Listener auf einem eigenen Thread (z. B.
-//! `OMP_VIEWER_PREVIEW_PORT`), unabhängig vom Descriptor-Server
-//! (`omp_node_sdk::server`). `GET /preview` liefert
-//! `multipart/x-mixed-replace; boundary=frame`; jedes vom aufrufenden
-//! Node über [`Broadcaster::publish`] eingespeiste JPEG-Frame geht an
-//! alle verbundenen Clients. Node-agnostisch (kein Wissen über
+//! Wiederverwendung) — eigener, zweiter `tiny_http`-Listener auf einem
+//! eigenen Thread (z. B. `OMP_VIEWER_PREVIEW_PORT`), unabhängig vom
+//! Descriptor-Server (`omp_node_sdk::server`). `GET /preview` liefert das
+//! zuletzt über [`Broadcaster::publish`] eingespeiste JPEG-Frame als
+//! normale `image/jpeg`-Antwort (ein Bild pro Request, sofort
+//! geschlossen); der Client pollt. Node-agnostisch (kein Wissen über
 //! Pipeline-Interna) — genutzt von `omp-viewer` (ein Bild) und
 //! `omp-multiviewer` (das bereits zum Grid komponierte Gesamtbild).
 //!
-//! Ein Thread pro Verbindung, nicht `omp_node_sdk::server`s Single-
-//! Thread-Accept-Loop: eine MJPEG-Antwort bleibt dauerhaft offen (kein
-//! `Content-Length`, `into_writer()` roh geschrieben) und würde sonst den
-//! Listener für alle weiteren Clients blockieren.
+//! **War ursprünglich `multipart/x-mixed-replace` (PIPELINE CONTROLLERs
+//! `lib/PreviewPipeline.js`-Muster, dauerhaft offene Verbindung, Server
+//! pusht jedes Frame).** Auf `mxf-player`→Viewer/Multiviewer 2026-08-21
+//! per CDP-Test root-caused: aktuelles Chromium (151) rendert
+//! `multipart/x-mixed-replace` überhaupt nicht mehr — weder in einem
+//! `<img>` noch bei direkter Top-Level-Navigation auf die Stream-URL
+//! bleibt es schwarz, ohne `load`/`error`-Event. Kein OMP-Bug, sondern
+//! eine inzwischen von Chrome fallengelassene Legacy-Technik. Deshalb auf
+//! Einzelbild-Polling umgestellt (s. `ui/graph/flow-canvas.ts`,
+//! `nodes/omp-viewer/ui/bundle.js`).
 
-use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
-use tiny_http::{Request, Response, Server};
+use tiny_http::{Header, Response, Server};
 
 type Frame = Arc<Vec<u8>>;
 
-struct Client {
-    tx: Sender<Frame>,
-}
-
-/// Verteilt JPEG-Frames vom Pipeline-Thread an beliebig viele
-/// MJPEG-HTTP-Clients. Hält zusätzlich das zuletzt gesendete Frame vor,
-/// damit ein neu verbindender Client sofort ein Bild sieht statt auf das
-/// nächste zu warten (analog `PreviewPipeline.addClient`).
+/// Hält das zuletzt vom Pipeline-Thread encodierte JPEG-Frame vor; jeder
+/// `GET /preview` liefert genau dieses eine Bild (s. Moduldoku).
 pub struct Broadcaster {
-    clients: Mutex<Vec<Client>>,
     last_frame: Mutex<Option<Frame>>,
 }
 
 impl Broadcaster {
     pub fn new() -> Self {
         Broadcaster {
-            clients: Mutex::new(Vec::new()),
             last_frame: Mutex::new(None),
         }
     }
 
-    /// Vom Pipeline-Thread aufgerufen: verteilt ein neues JPEG-Frame an
-    /// alle verbundenen Clients, entfernt dabei getrennte Clients.
+    /// Vom Pipeline-Thread aufgerufen: hinterlegt das neueste JPEG-Frame.
     pub fn publish(&self, jpeg: &[u8]) {
-        let frame = Arc::new(jpeg.to_vec());
-        *self.last_frame.lock().expect("lock poisoned") = Some(frame.clone());
-        self.clients
-            .lock()
-            .expect("lock poisoned")
-            .retain(|c| c.tx.send(frame.clone()).is_ok());
+        *self.last_frame.lock().expect("lock poisoned") = Some(Arc::new(jpeg.to_vec()));
     }
 
     /// Beim Trennen (`ReceiverControl::apply` ohne aktiven Sender): kein
-    /// veraltetes letztes Bild mehr für künftige Clients vorhalten.
+    /// veraltetes letztes Bild mehr für künftige Requests vorhalten.
     pub fn reset(&self) {
         *self.last_frame.lock().expect("lock poisoned") = None;
     }
 
-    fn subscribe(&self) -> (Receiver<Frame>, Option<Frame>) {
-        let (tx, rx) = channel();
-        let last = self.last_frame.lock().expect("lock poisoned").clone();
-        self.clients
-            .lock()
-            .expect("lock poisoned")
-            .push(Client { tx });
-        (rx, last)
+    fn snapshot(&self) -> Option<Frame> {
+        self.last_frame.lock().expect("lock poisoned").clone()
     }
 }
 
@@ -107,8 +89,31 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
                         let _ = request.respond(Response::from_string("not found").with_status_code(404));
                         continue;
                     }
+                    // Ein Request = ein Snapshot, sofort beantwortet
+                    // (kein Push-Thread mehr nötig, s. Moduldoku) —
+                    // bleibt trotzdem im eigenen Thread, damit ein
+                    // langsamer Client (Netzwerk-Backpressure beim
+                    // `respond()`) nicht die Accept-Loop blockiert.
                     let broadcaster = broadcaster.clone();
-                    std::thread::spawn(move || serve_client(request, &broadcaster));
+                    std::thread::spawn(move || {
+                        let jpeg_header = Header::from_bytes(&b"Content-Type"[..], &b"image/jpeg"[..])
+                            .expect("static header");
+                        let no_store =
+                            Header::from_bytes(&b"Cache-Control"[..], &b"no-store"[..]).expect("static header");
+                        match broadcaster.snapshot() {
+                            Some(frame) => {
+                                let response = Response::from_data(frame.as_slice())
+                                    .with_header(jpeg_header)
+                                    .with_header(no_store);
+                                let _ = request.respond(response);
+                            }
+                            None => {
+                                let _ = request.respond(
+                                    Response::from_string("no frame yet").with_status_code(503),
+                                );
+                            }
+                        }
+                    });
                 }
                 Ok(None) => {}
                 Err(e) => {
@@ -119,49 +124,6 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
         }
     });
     Ok(port)
-}
-
-fn serve_client(request: Request, broadcaster: &Broadcaster) {
-    let (rx, last) = broadcaster.subscribe();
-    let mut writer = request.into_writer();
-
-    let header = "HTTP/1.1 200 OK\r\n\
-                  Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\
-                  Cache-Control: no-cache\r\n\
-                  Connection: close\r\n\r\n";
-    // Explizit flushen statt implizit auf das erste `write_frame()` zu
-    // warten: ist `last` (noch) `None` (frisch verbundener Client, bevor
-    // je ein Frame publiziert wurde), würde der Header sonst im
-    // Writer-Puffer hängen bleiben, bis `rx.recv()` unten das erste
-    // Frame liefert — bei einem Node, der noch keine Quelle bespielt,
-    // potenziell nie. Per Live-Test an `levels.rs` (K4-Teil-1, gleiches
-    // Muster) gefunden und hierher zurückübertragen.
-    if writer.write_all(header.as_bytes()).is_err() || writer.flush().is_err() {
-        return;
-    }
-
-    if let Some(frame) = last
-        && write_frame(&mut writer, &frame).is_err()
-    {
-        return;
-    }
-
-    while let Ok(frame) = rx.recv() {
-        if write_frame(&mut writer, &frame).is_err() {
-            break;
-        }
-    }
-}
-
-fn write_frame(writer: &mut dyn Write, jpeg: &[u8]) -> std::io::Result<()> {
-    write!(
-        writer,
-        "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
-        jpeg.len()
-    )?;
-    writer.write_all(jpeg)?;
-    writer.write_all(b"\r\n")?;
-    writer.flush()
 }
 
 /// Baut einen `videoscale ! videorate ! capsfilter ! jpegenc ! appsink`-

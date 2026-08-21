@@ -109,6 +109,19 @@ function streamProxyUrl(nodeId: string, paramName: string): string {
   return token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
 }
 
+// Kachel-Vorschau: Einzelbild-Polling statt `multipart/x-mixed-replace`
+// (2026-08-21 per CDP root-caused, s. `nodes/omp-mediaio/src/preview.rs`-
+// Moduldoku — aktuelles Chromium rendert die Multipart-Technik gar nicht
+// mehr). `previewUrl` liefert jetzt ein einzelnes `image/jpeg` pro
+// Request; hier per Cache-Busting-Query-Parameter alle
+// `PREVIEW_POLL_INTERVAL_MS` neu angefragt.
+const PREVIEW_POLL_INTERVAL_MS = 500;
+
+function previewSnapshotUrl(nodeId: string): string {
+  const base = streamProxyUrl(nodeId, "previewUrl");
+  return `${base}${base.includes("?") ? "&" : "?"}_=${Date.now()}`;
+}
+
 // Parameter-Panel-Breite (§1.6, docs/END-GOAL-FEATURES.md, 2026-07-17):
 // die frühere feste 280px liess Operator-Konsolen-Bundles wie den
 // Bildmischer ihre eigentlich horizontale Crosspoint-Reihe umbrechen —
@@ -545,6 +558,7 @@ export class FlowCanvas extends HTMLElement {
   // Einmalig pro Node-ID abgefragt, nicht bei jedem Render-Tick erneut.
   #hasPreviewById: Map<string, boolean> = new Map();
   #previewFetchInFlight: Set<string> = new Set();
+  #previewPollTimerById: Map<string, ReturnType<typeof setInterval>> = new Map();
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -645,6 +659,8 @@ export class FlowCanvas extends HTMLElement {
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     clearTimeout(this.#viewportSaveTimer);
     this.#closeHostMigrateMenu();
+    for (const timer of this.#previewPollTimerById.values()) clearInterval(timer);
+    this.#previewPollTimerById.clear();
   }
 
   async #init() {
@@ -3311,6 +3327,7 @@ export class FlowCanvas extends HTMLElement {
   #renderPreviewThumbnail(nodeId: string): SVGForeignObjectElement | null {
     this.#maybeFetchPreviewUrl(nodeId);
     if (!this.#hasPreviewById.get(nodeId)) return null;
+    this.#ensurePreviewPolling(nodeId);
 
     const fo = document.createElementNS(SVG_NS, "foreignObject");
     fo.setAttribute("x", "8");
@@ -3320,11 +3337,28 @@ export class FlowCanvas extends HTMLElement {
     fo.style.pointerEvents = "none"; // Ziehen/Auswählen der Kachel bleibt unverändert möglich.
 
     const img = document.createElement("img");
-    img.src = streamProxyUrl(nodeId, "previewUrl");
+    img.dataset.previewNodeId = nodeId;
+    img.src = previewSnapshotUrl(nodeId);
     img.alt = "Vorschau";
     img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;`;
     fo.appendChild(img);
     return fo;
+  }
+
+  // Ein Timer pro Node-ID, unabhängig von `#render()`-Aufrufen gestartet
+  // (sonst müsste jeder Poll-Tick einen vollen Canvas-Re-Render auslösen,
+  // s. `previewSnapshotUrl`-Kommentar) — aktualisiert stattdessen direkt
+  // das/die im DOM stehende(n) `<img>`, falls die Kachel gerade sichtbar
+  // gerendert ist.
+  #ensurePreviewPolling(nodeId: string) {
+    if (this.#previewPollTimerById.has(nodeId)) return;
+    const timer = setInterval(() => {
+      const url = previewSnapshotUrl(nodeId);
+      this.#svg.querySelectorAll<HTMLImageElement>(`img[data-preview-node-id="${nodeId}"]`).forEach((img) => {
+        img.src = url;
+      });
+    }, PREVIEW_POLL_INTERVAL_MS);
+    this.#previewPollTimerById.set(nodeId, timer);
   }
 
   #maybeFetchPreviewUrl(nodeId: string) {

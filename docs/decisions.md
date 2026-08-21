@@ -18666,3 +18666,222 @@ entrypoint.sh}` (neu), `deploy/quadlets/omp-postgres.container`
 `orchestrator/main.go`, `supervisor/main.go`,
 `deploy/dev/{backup,restore}-omp.sh`, `ARCHITECTURE.md` (§19.3 Punkt 7,
 §19.4 neu, §20-Gap-Tabelle), `UMSETZUNG.md` (D15 + Checkliste).
+
+## 2026-08-21 (Nachtrag 153) — Bugreport "MXF-Player → Viewer/Multiviewer kein Bild": Chrome-MJPEG-Fix verifiziert+gepusht-bereit; `omp-mxf-player`-CPU-Burn root-caused, Fix zurückgerollt (Regression schlimmer als Original); SIGTERM-Bug gefunden, noch offen
+
+**Auslöser:** Nutzer meldete "mxf player auf viewer/multiviewer kein bild"
+plus den separaten Wunsch nach Jog/Shuttle/Seek für `omp-mxf-player`
+(letzterer noch nicht begonnen). Reihenfolge laut Nutzer für diese
+Sitzung: CPU-Befund zuerst root-causen, dann SIGTERM-Bug fixen, dann
+Jog/Shuttle/Seek.
+
+### 1. Schwarzbild-Bug: root-caused + behoben
+
+Per CDP (`chromium --headless=new --remote-debugging-port`, `ws`-Paket
+aus `/home/infantilo/node_modules`, kein neuer Dependency) direkt im
+echten Flow-Editor reproduziert: die Viewer-Kachel blieb schwarz, obwohl
+ein direkter `curl` auf denselben `/stream/previewUrl`-Endpunkt echte
+JPEG-Frames lieferte (letzte Sitzung, 2026-08-20, hatte genau diesen
+curl-Check für "behoben" gehalten — falsches Sicherheitsgefühl, s.
+[[project_mxf_player_viewer_still_black_2026_08_20]] falls als Memory
+vorhanden).
+
+Direkter Beweis: sowohl ein `<img src=…>` als auch eine Top-Level-
+Navigation des Browser-Tabs selbst auf die `multipart/x-mixed-replace`-
+Stream-URL blieben schwarz — kein `load`-/`error`-Event, `naturalWidth`
+bleibt `0`. Aktuelles Chromium (151) rendert die Multipart-Technik gar
+nicht mehr, unabhängig vom einbettenden Kontext (auch nicht als
+`foreignObject`-`<img>` in der SVG-Kachel — separat getestet, keine
+Rolle). Kein OMP-Bug, sondern eine von Chrome inzwischen fallengelassene
+Legacy-Technik (dieselbe, die `nodes/omp-mediaio/src/preview.rs`
+ursprünglich von PIPELINE CONTROLLERs `lib/PreviewPipeline.js` übernommen
+hatte).
+
+**Fix:** `preview.rs`s HTTP-Server liefert jetzt pro `GET /preview` genau
+ein aktuelles JPEG (`image/jpeg`, kein Multipart-Envelope, Verbindung
+schließt danach) statt einer dauerhaft offenen Push-Verbindung; dadurch
+vereinfacht sich der Server selbst (kein Thread-pro-Client-Broadcast
+mehr nötig, nur noch `last_frame`-Snapshot). Beide Konsumenten auf
+Polling umgestellt: `ui/graph/flow-canvas.ts`s Kachel-Inline-Vorschau
+(ein `setInterval` pro Node-ID, direktes `<img>`-Update ohne vollen
+Canvas-Re-Render) und `nodes/omp-viewer/ui/bundle.js`s Parameter-Panel
+(gleiches Prinzip). Live per CDP verifiziert: Kachel zeigt jetzt echtes,
+laufendes Bild. Betrifft `omp-viewer`, `omp-multiviewer` (nutzt
+dieselbe `flow-canvas.ts`-Kachel-Vorschau) und `omp-multiviewer-custom`
+(gleiche `preview.rs`-Basis) gleichermaßen — nicht einzeln
+nachverifiziert, da Architektur identisch.
+
+**Noch offen:** ob das ursprüngliche Nutzerproblem *ausschließlich* diese
+Ursache hatte, oder ob der unten dokumentierte CPU-/Freeze-Bug an
+`omp-mxf-player` selbst zusätzlich beitrug (ein eingefrorenes erstes
+Bild wäre über den alten Multipart-Pfad ebenfalls nie sichtbar
+geworden — beide Bugs koexistierten, unklar ob der Nutzer je über den
+Multipart-Fix hinaus ein wirklich laufendes Bild sah).
+
+### 2. `omp-mxf-player` CPU-Burn: root-caused, Fix-Versuch zurückgerollt
+
+Per `/proc/<pid>/stat`-Delta (nicht `ps`, s.
+[[feedback_ps_pcpu_unreliable_in_sandbox]]) bestätigt: ~600–650% CPU
+über 6 Threads, **dauerhaft**, nicht nur kurz beim Start. `sudo gdb -p
+<pid> -batch -ex "thread apply all bt"` (Sandbox verlangt
+`dangerouslyDisableSandbox`+`sudo`, `ptrace_scope=1` verbietet sonst
+Non-Parent-Attach) zeigte alle sechs heißen Threads in
+`omp_mediaio::mxl::write_loop`/`write_audio_loop`
+(`nodes/omp-mediaio/src/mxl.rs:390`/`735`), blockiert in
+`AppSink::try_pull_sample(200ms)` — ein *legitimer* Blocking-Call, kein
+Busy-Spin für sich genommen.
+
+**Root Cause (bestätigt):** beide dortigen `appsink`-Elemente setzen
+`sync=false` (Video `mxl.rs:220`, Audio `mxl.rs:608`) — kopiert aus
+PIPELINE CONTROLLERs Tee-Zweig-Muster
+(`docs/decisions.md` 2026-07-16, K5-Teil-1), aber dort trägt IMMER ein
+anderer, primärer Sink (`intervideosink`/`interaudiosink sync=true`) die
+Echtzeit-Taktung; die Tee-Zweig-Sinks folgen nur mit. Der
+`mxl.rs`-Moduldoc selbst dokumentiert die (bisher nie verletzte)
+Annahme: "korrekt, solange Samples ungefähr im konfigurierten Takt
+ankommen (gegeben bei `videotestsrc`/`videorate`)" — eine selbstgetaktete
+Live-Quelle. `omp-mxf-player` ist der erste Aufrufer, der stattdessen
+eine Datei dekodiert (`filesrc ! mxfdemux ! decodebin`,
+`build_mxf_branch`) — ohne EIGENE Taktung, und ohne einen einzigen
+`sync=true`-Anker irgendwo im Pfad läuft die gesamte Pipeline unbegrenzt
+statt in Echtzeit.
+
+**Fix versucht:** `sync=true` (plus `async=false`, K5-Teil-1-kompatibel)
+auf beiden `appsink`s. Ergebnis über mehrere frische, sauber isolierte
+Einzel-Instanz-Tests: CPU blieb bei ~600–650% (keine Verbesserung
+gegenüber `sync=false`), UND das ausgegebene Bild blieb ab dem ersten
+Frame eingefroren (`md5sum` über mehrfache `previewUrl`-Snapshots im
+15-Sekunden-Fenster identisch, bei laufendem `mode=onair`).
+
+**Zurückgerollt** auf `sync=false` (`nodes/omp-mediaio/src/mxl.rs`,
+Kommentare an beiden Appsinks aktualisiert) — eine funktionierende, aber
+ungebremste Wiedergabe schlägt eine kaputte.
+
+**Wichtiger Nachtrag beim Verifizieren des Rollbacks:** derselbe
+Freeze-ab-Frame-1 bei weiterhin ~620–650% CPU trat AUCH mit dem
+zurückgerollten (Original-)Code auf, über ein eng getaktetes 15-
+Sekunden-Fenster (1s-Samples, `md5sum` jedes Frames) sauber
+nachgewiesen. Der Freeze ist damit **kein** durch den `sync=true`-
+Versuch eingeführter Regressions-Bug, sondern bereits im
+unveränderten Code vorhanden — mein ursprünglicher "Regression"-Schluss
+beim ersten `sync=true`-Test war voreilig (zwei verschiedene,
+möglicherweise unabhängige Symptome fielen zeitlich zusammen).
+
+**Wahrscheinliche eigentliche Ursache (nicht mehr implementiert, nur
+noch recherchiert):** `nodes/omp-mxf-player/src/pipeline.rs:749` ruft
+`pipeline.set_state(gst::State::Playing)` direkt auf, ohne vorher über
+`PAUSED` zu gehen und auf vollständiges Preroll (Bus-Message
+`async-done` bzw. `stream-start` bei synchronem Preroll) zu warten.
+PIPELINE CONTROLLERs `lib/PlayerPipeline.js` (`_tryPipeline`,
+Zeile ~548ff.) dokumentiert genau diese Klasse Bug explizit: "Preroll in
+PAUSED: mxfdemux/decodebin pushen genau 1 Frame pro Sink dann stoppen.
+So wird der PLAYING→PAUSED Deadlock vermieden" — und wartet aktiv auf
+dem Bus auf `async-done`/`stream-start`, bevor die Pipeline als
+"läuft" gilt, inkl. Sonderbehandlung für `async=false`-Sinks ("Ohne
+dieses Wait schlägt seek() fehl → Pipeline stumm"). `omp-mxf-player`
+überspringt diese gesamte Handshake-Sequenz — passt exakt zu "genau 1
+Frame, dann Stillstand bei weiterlaufenden `mxfdemux1:sink`/`queueN:src`-
+Threads" (ebenfalls per `gdb`-Backtrace beobachtet, Thread-Namen
+bestätigen mxfdemux-Beteiligung).
+
+**Nicht mehr in dieser Sitzung umgesetzt** (Budget/Risiko: der
+`sync=true`-Versuch oben zeigt, wie leicht ein Teil-Fix an dieser
+Pipeline eine neue, schwerer zu findende Regression erzeugt): eine
+echte PAUSED→Preroll-Wait→PLAYING-Zustandsmaschine analog
+`PlayerPipeline.js::_tryPipeline` für `nodes/omp-mxf-player/src/
+pipeline.rs::build()`/`run()`. Braucht GStreamer-Bus-Polling
+(`bus.timed_pop_filtered` o. ä.), Auswertung von `async-done` vs.
+`stream-start`, Timeout-Handling, Fehler-/Warnungs-Filterung (siehe
+Referenzimplementierung). Nicht trivial, sollte als eigener Schritt mit
+eigener Verifikation behandelt werden, nicht nebenbei.
+
+### 3. SIGTERM überspringt sauberes Pipeline-Teardown — gefunden UND behoben
+
+`nodes/omp-node-sdk/src/node.rs:584-599`: der SIGTERM-Handler
+(Nachtrag/Bugfix 2026-07-26, "Geister-Kacheln nach Stop/Pause") rief
+nach `deregister_node()` direkt `std::process::exit(0)` auf. Das
+überspringt JEDEN Rust-`Drop`-Impl im Prozess — insbesondere
+`ActivePipeline::drop()` (setzt die GStreamer-Pipeline sauber auf
+`Null`, lässt MXL-Reader-/Writer-Threads regulär aus ihrer
+Push/Pull-Schleife aussteigen). Der reguläre SIGINT-Pfad
+(`tokio::signal::ctrl_c()` in jedem Node-eigenen `main()`) macht genau
+das korrekt — SIGTERM (der vom Launcher tatsächlich verwendete Stop-
+Signalweg, `orchestrator/internal/launcher/launcher.go`) umging ihn
+komplett. Betrifft potenziell jeden Node mit einer GStreamer-Pipeline,
+nicht nur `omp-mxf-player`.
+
+**Fix:** statt selbst zu exiten, sendet der SIGTERM-Handler jetzt
+`libc::kill(eigene_pid, SIGINT)` an den eigenen Prozess, NACHDEM
+dereg­istriert wurde (Ghost-Tile-Fix bleibt intakt, unabhängig davon, wie
+lange das Pipeline-Teardown danach braucht). Jede Node-`main()`, die
+bereits `tokio::signal::ctrl_c()` für ihre eigene, korrekte
+Abschaltsequenz nutzt, reagiert dadurch jetzt identisch auf SIGTERM wie
+auf manuelles Ctrl+C — kein einziger Node musste dafür geändert werden.
+Nodes ohne eigenen `ctrl_c()`-Handler verhalten sich wie zuvor (Standard-
+SIGINT-Aktion beendet den Prozess sofort), kein Regressionsrisiko.
+`libc` als neue, direkte (vorher nur transitive) Abhängigkeit von
+`omp-node-sdk` hinzugefügt (Minimal-Dependency-Regel: einziger Zweck ist
+dieser eine `kill()`-Aufruf).
+
+**Live verifiziert:** echter `DELETE /api/v1/instances/<id>` (= SIGTERM
+über den Launcher) gegen eine on-air `omp-mxf-player`-Instanz zeigte im
+Log erstmals sowohl `"forwarding as SIGINT for graceful pipeline
+shutdown"` als auch direkt danach `"omp-mxf-player: shutdown
+requested"` (das bislang bei SIGTERM nie erreichte `ctrl_c()`-Log aus
+`main.rs`) — Vergleich mit mehreren älteren Log-Einträgen aus
+FRÜHEREN Instanzen derselben Sitzung (alle nur mit der
+`"SIGTERM received, deregistering …"`-Zeile, ohne jede Fortsetzung)
+bestätigt den Unterschied unmittelbar im selben Log.
+
+### 4. Jog/Shuttle/Seek für `omp-mxf-player` (Nutzerauftrag 2026-08-21)
+
+Backend (`nodes/omp-mxf-player/src/pipeline.rs`): `Branch` trägt jetzt
+optional sein `mxfdemux`-Element (`None` beim Leerlaufzweig). Drei neue
+`Command`-Varianten (`Seek`, `Step`, `SetRate`), verarbeitet im
+bestehenden Kommando-Loop (Tick-Intervall von 500ms auf 200ms verkürzt,
+für reaktionsschnelleres Shuttle UND aktuellere Positionswerte), wirken
+immer auf den aktuellen On-Air-Zweig (`onair_demux()`-Helfer), NIE auf
+die gesamte `pipeline` (die auch den anderen A/B-Slot enthält — ein
+`pipeline`-weiter Seek hätte fälschlich beide Zweige getroffen).
+
+**Bewusste Vereinfachung, dokumentiert nicht geraten:** Shuttle ist
+KEIN echter GStreamer-Segment-Rate-Seek (`rate≠1.0`), sondern getaktete
+Einzel-Seeks (alle 200ms um `rate × 200ms` weiterspringen), die IMMER
+vorwärts mit Rate 1.0 decodieren — auch bei negativer Shuttle-Rate
+(Rückwärts-"Scrubbing" per wiederholtem Rücksprung + Vorwärtsdecode,
+nicht per echtem Rückwärtsdecode). Grund: `mxfdemux`/MPEG-2-Software-
+Decoder unterstützen echtes Rückwärtsdecoding nicht verlässlich — ein
+Versuch hätte dasselbe Regressionsrisiko wie der zurückgerollte
+`sync=true`-CPU-Fix oben. `playheadPositionMs` liefert jetzt die echte
+Pipeline-Position (`query_position`) statt der bisherigen
+`Instant::now() - onair_since`-Wanduhr, die nach jedem Seek/Shuttle
+sofort auseinanderlief.
+
+Neue Methoden `seek(positionMs)`/`step(frames)`/`setRate(rate)`, neuer
+Param `shuttleRate`. UI (`nodes/omp-mxf-player/ui/bundle.js`):
+Scrub-Leiste (Live-Anzeige beim Ziehen, Seek erst bei `change`/Loslassen),
+Jog-Buttons (±1/±10 Bilder), Shuttle-Buttons (±1×/±2×/±8×, aktive Rate
+hervorgehoben). Live per CDP im echten Flow-Editor verifiziert: 8×-
+Rückwärts-Shuttle bewegte die Scrub-Leiste sichtbar von 0:10 auf 0:08,
++10-Jog sprang wieder ans Ende.
+
+**Bekannte Einschränkung:** durch den unter Nachtrag 153 Punkt 2
+dokumentierten, noch offenen Preroll-Bug (`omp-mxf-player`s Pipeline
+friert gelegentlich nach einigen Sekunden ein) funktioniert Jog/Shuttle/
+Seek nur zuverlässig, solange dieser Bug nicht gerade zuschlägt — ein
+Seek scheint das Einfrieren dabei sogar oft (nicht zuverlässig) kurzzeitig
+aufzulösen (vermutlich weil ein flushender Seek `mxfdemux`s
+Streaming-Schleife neu anstößt), das ist aber ein Nebeneffekt, kein
+verlässlicher Workaround.
+
+**Dateien (dieser Nachtrag):** `nodes/omp-mediaio/src/preview.rs`
+(Server auf Snapshot-Antwort umgestellt), `nodes/omp-mediaio/src/mxl.rs`
+(Appsink-Kommentare, `sync`-Wert unverändert bei `false` belassen nach
+Rollback), `ui/graph/flow-canvas.ts`, `nodes/omp-viewer/ui/bundle.js`
+(beide auf Preview-Polling umgestellt), `nodes/omp-node-sdk/src/node.rs`
++ `Cargo.toml` (SIGTERM-Fix), `nodes/omp-mxf-player/src/{main,
+pipeline}.rs` + `ui/bundle.js` (Jog/Shuttle/Seek). Nebenbefund: Festplatte
+lief während dieser Sitzung mit 16 MB frei praktisch voll (50GB davon
+`nodes/target/`, reine Rust-Build-Artefakte) — per `cargo clean` auf
+Nutzeranweisung aufgeräumt (56GB freigegeben), kein Code-Bug. Noch
+**nicht committet** — s. Statusfrage an den Nutzer.

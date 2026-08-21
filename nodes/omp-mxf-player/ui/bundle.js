@@ -53,6 +53,18 @@ class OmpMxfPlayerPanel extends HTMLElement {
         background: #7a1f1f; color: #fff; font-weight: bold; font-size: 14px;
       }
       button.take:disabled { opacity: 0.4; cursor: default; }
+      .transport-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+      .transport-row.disabled { opacity: 0.4; pointer-events: none; }
+      .scrub-row { display: flex; align-items: center; gap: 8px; }
+      .scrub-row input[type="range"] { flex: 1; min-width: 200px; }
+      .scrub-row .time { font-variant-numeric: tabular-nums; color: #aaa; min-width: 90px; }
+      .jog-shuttle { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+      .jog-shuttle button {
+        cursor: pointer; padding: 4px 8px; border-radius: 3px; border: 1px solid #555;
+        background: #222; color: #eee; font-variant-numeric: tabular-nums;
+      }
+      .jog-shuttle button.rate-active { background: #1565c0; border-color: #42a5f5; }
+      .jog-shuttle .sep { width: 1px; align-self: stretch; background: #444; margin: 0 2px; }
       .add-row { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
       .add-row input[type="text"] { width: 130px; }
       .add-row input[type="number"] { width: 64px; }
@@ -95,6 +107,75 @@ class OmpMxfPlayerPanel extends HTMLElement {
     takeBtn.textContent = "TAKE";
     takeBtn.addEventListener("click", () => call("take", {}).then(poll));
     statusRow.append(modeEl, playheadEl, takeBtn);
+
+    // Jog/Shuttle/Seek (Nutzerauftrag 2026-08-21: "mxf player braucht
+    // zusätzlich jog/shuttel/seek") — nur relevant/bedienbar, solange ein
+    // Item on-air ist (`transport-row.disabled` unten in `poll()`), wirkt
+    // serverseitig immer auf den On-Air-Zweig (s. `pipeline::Command`-Doku
+    // in `nodes/omp-mxf-player/src/pipeline.rs`).
+    const transportRow = document.createElement("div");
+    transportRow.className = "transport-row";
+
+    const scrubRow = document.createElement("div");
+    scrubRow.className = "scrub-row";
+    const scrubBar = document.createElement("input");
+    scrubBar.type = "range";
+    scrubBar.min = "0";
+    scrubBar.max = "0";
+    scrubBar.step = "40"; // 1 Frame bei 25fps (ms) — s. FRAMERATE_* in pipeline.rs.
+    const timeEl = document.createElement("span");
+    timeEl.className = "time";
+    timeEl.textContent = "0:00 / 0:00";
+    // Live-Anzeige während des Ziehens (`input`), tatsächlicher Seek erst
+    // beim Loslassen (`change`) — sonst ein Netzwerk-Request pro Pixel.
+    scrubBar.addEventListener("input", () => {
+      timeEl.textContent = `${formatTime(Number(scrubBar.value))} / ${formatTime(Number(scrubBar.max))}`;
+    });
+    scrubBar.addEventListener("change", () => {
+      call("seek", { positionMs: Number(scrubBar.value) });
+    });
+    scrubRow.append(scrubBar, timeEl);
+
+    const jogShuttle = document.createElement("div");
+    jogShuttle.className = "jog-shuttle";
+    const jogBtn = (label, title, onClick) => {
+      const btn = document.createElement("button");
+      btn.textContent = label;
+      btn.title = title;
+      btn.addEventListener("click", onClick);
+      return btn;
+    };
+    const sep = () => {
+      const s = document.createElement("span");
+      s.className = "sep";
+      return s;
+    };
+    const rateButtons = [];
+    const shuttleBtn = (rate) => {
+      const btn = jogBtn(
+        rate === 1 ? "▶ 1×" : `${rate > 0 ? "▶▶" : "◀◀"} ${Math.abs(rate)}×`,
+        `Shuttle ${rate}×`,
+        () => call("setRate", { rate }),
+      );
+      btn.dataset.rate = String(rate);
+      rateButtons.push(btn);
+      return btn;
+    };
+    jogShuttle.append(
+      jogBtn("⏮ -10", "10 Bilder zurück (Jog)", () => call("step", { frames: -10 })),
+      jogBtn("◀ -1", "1 Bild zurück (Jog)", () => call("step", { frames: -1 })),
+      sep(),
+      shuttleBtn(-8),
+      shuttleBtn(-2),
+      shuttleBtn(1),
+      shuttleBtn(2),
+      shuttleBtn(8),
+      sep(),
+      jogBtn("+1 ▶", "1 Bild vor (Jog)", () => call("step", { frames: 1 })),
+      jogBtn("+10 ⏭", "10 Bilder vor (Jog)", () => call("step", { frames: 10 })),
+    );
+
+    transportRow.append(scrubRow, jogShuttle);
 
     const addRow = document.createElement("div");
     addRow.className = "add-row";
@@ -164,7 +245,14 @@ class OmpMxfPlayerPanel extends HTMLElement {
     routesEmpty.textContent = "Kein Preset ausgewählt.";
     reference.append(referenceSummary, groupsTable, referenceControls, routesTable, routesEmpty);
 
-    shadow.append(style, statusRow, addRow, list, empty, reference);
+    shadow.append(style, statusRow, transportRow, addRow, list, empty, reference);
+
+    const formatTime = (ms) => {
+      const total = Math.max(0, Math.round(ms / 1000));
+      const m = Math.floor(total / 60);
+      const s = total % 60;
+      return `${m}:${String(s).padStart(2, "0")}`;
+    };
 
     const call = (method, body) =>
       fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
@@ -289,13 +377,14 @@ class OmpMxfPlayerPanel extends HTMLElement {
     };
 
     const poll = async () => {
-      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, mediaLibrary, groupsValue, presetsValue] =
+      const [itemsValue, currentItemId, cuedItemId, mode, playheadMs, shuttleRate, mediaLibrary, groupsValue, presetsValue] =
         await Promise.all([
           getParam("items"),
           getParam("currentItemId"),
           getParam("cuedItemId"),
           getParam("mode"),
           getParam("playheadPositionMs"),
+          getParam("shuttleRate"),
           getParam("mediaLibrary"),
           getParam("programGroups"),
           getParam("shufflePresets"),
@@ -340,6 +429,20 @@ class OmpMxfPlayerPanel extends HTMLElement {
       modeEl.className = mode === "onair" ? "mode onair" : "mode";
       playheadEl.textContent = mode === "onair" ? `${Math.round((playheadMs || 0) / 1000)}s` : "";
       takeBtn.disabled = !cuedItemId;
+
+      const onairItem = items.find((it) => it.id === currentItemId);
+      transportRow.classList.toggle("disabled", mode !== "onair" || !onairItem);
+      // Nicht während des Ziehens überschreiben (gleiches Muster wie
+      // `fillPresetOptions`/`mediaLibraryList` oben: `shadow.activeElement`
+      // markiert "wird gerade bedient").
+      if (shadow.activeElement !== scrubBar) {
+        scrubBar.max = String(onairItem ? onairItem.durationMs : 0);
+        scrubBar.value = String(playheadMs || 0);
+        timeEl.textContent = `${formatTime(playheadMs || 0)} / ${formatTime(onairItem ? onairItem.durationMs : 0)}`;
+      }
+      for (const btn of rateButtons) {
+        btn.classList.toggle("rate-active", Number(btn.dataset.rate) === (shuttleRate ?? 1));
+      }
 
       for (const item of items) {
         let refs = itemEls.get(item.id);

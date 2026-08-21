@@ -572,13 +572,24 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     // (auch kein `Drop`) noch läuft — die Node bleibt bei der Registry
     // bis zum nächsten verpassten Heartbeat "registriert" (bis zu
     // `registration_expiry_interval`, 60s) und erscheint so lange als
-    // tote Kachel im Flow-Editor. Bewusst als eigener, zusätzlicher
-    // Task statt in den bestehenden `ctrl_c()`-Pfad jedes einzelnen
-    // Node-`main()` integriert: SIGINT (manueller Ctrl+C-Devbetrieb)
-    // bleibt dadurch unverändert bei der bereits funktionierenden,
-    // Pipeline-eigenen Abschaltlogik jedes Nodes — dieser Task
-    // übernimmt ausschließlich den bisher komplett unbehandelten
-    // SIGTERM-Pfad, keine Konkurrenz zu bestehendem Code.
+    // tote Kachel im Flow-Editor.
+    //
+    // Korrektur 2026-08-21 (docs/decisions.md Nachtrag 153): der
+    // ursprüngliche Fix rief hier direkt `std::process::exit(0)` auf —
+    // das deregistriert zwar sofort, überspringt dabei aber JEDEN
+    // Rust-`Drop` im Prozess (`process::exit` läuft keine Destruktoren),
+    // insbesondere `ActivePipeline::drop()` in jedem GStreamer-Node
+    // (setzt die Pipeline sauber auf `Null`, lässt MXL-Reader-/
+    // Writer-Threads regulär aus ihrer Push/Pull-Schleife aussteigen).
+    // Statt hier selbst zu exiten, wird SIGINT an den eigenen Prozess
+    // gesendet (`libc::kill`) — dasselbe Signal, auf das jede Node-
+    // `main()` bereits per `tokio::signal::ctrl_c()` für ihre EIGENE,
+    // bereits korrekte Pipeline-Abschaltsequenz wartet. Kein einziger
+    // Node muss dafür geändert werden: Nodes mit `ctrl_c()`-Handler
+    // fahren jetzt bei SIGTERM genauso sauber herunter wie bei
+    // manuellem Ctrl+C; Nodes ohne eigenen `ctrl_c()`-Handler (kein
+    // Pipeline-Lifecycle) verhalten sich wie zuvor (SIGINTs
+    // Standardaktion beendet den Prozess), kein Regressionsrisiko.
     let dereg_registry = registry.clone();
     let dereg_node_id = node_id.clone();
     tokio::spawn(async move {
@@ -595,7 +606,12 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         if let Err(e) = dereg_registry.deregister_node(&dereg_node_id) {
             eprintln!("omp-node-sdk: deregister failed: {e}");
         }
-        std::process::exit(0);
+        eprintln!("omp-node-sdk: forwarding as SIGINT for graceful pipeline shutdown");
+        // SAFETY: `kill(2)` mit der eigenen PID und SIGINT — keine
+        // Speicherzugriffe, reiner Syscall-Wrapper.
+        unsafe {
+            libc::kill(std::process::id() as libc::pid_t, libc::SIGINT);
+        }
     });
 
     tokio::spawn(heartbeat_loop(

@@ -1355,6 +1355,7 @@ dependencies = [
  "async-nats",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "serde",
  "serde_json",
  "tiny_http",

@@ -46,7 +46,7 @@
 //! konsequent vermieden.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -123,6 +123,20 @@ impl Slot {
 enum Command {
     LoadSlot { slot: Slot, source: ItemSource },
     SetActive(Slot),
+    /// Jog/Shuttle/Seek (Nutzerauftrag 2026-08-21) — wirken immer auf den
+    /// aktuell On-Air-Zweig (`ActivePipeline::onair_slot`), nicht auf
+    /// einen explizit übergebenen Slot: ein Bedienpult scrubbt das
+    /// laufende Programm, nicht einen im Hintergrund gecuten Zweig.
+    /// `Seek`: absolute Zielposition in ms. `Step`: relative Framezahl
+    /// (±, Jog). `SetRate`: Shuttle-Geschwindigkeit — bewusst NICHT als
+    /// echter GStreamer-Segment-Rate-Seek umgesetzt (Rückwärts-Decoding
+    /// ist bei `mxfdemux`/MPEG-2-Software-Decodern kein verlässlich
+    /// unterstützter Pfad, s. `run()`s Shuttle-Tick-Kommentar) — stattdessen
+    /// per getakteten Einzel-Seeks simuliert, die immer vorwärts mit
+    /// Rate 1.0 decodieren.
+    Seek(i64),
+    Step(i64),
+    SetRate(f64),
 }
 
 pub enum Event {
@@ -134,6 +148,8 @@ pub struct PipelineHandle {
     commands: Sender<Command>,
     video_flowed: Arc<AtomicBool>,
     group_flowed: Vec<Arc<AtomicBool>>,
+    position_ms: Arc<AtomicI64>,
+    rate_milli: Arc<AtomicI64>,
 }
 
 impl PipelineHandle {
@@ -143,6 +159,38 @@ impl PipelineHandle {
 
     pub fn set_active(&self, slot: Slot) {
         let _ = self.commands.send(Command::SetActive(slot));
+    }
+
+    /// Absoluter Sprung zur Zielposition (ms) im On-Air-Zweig.
+    pub fn seek(&self, position_ms: i64) {
+        let _ = self.commands.send(Command::Seek(position_ms));
+    }
+
+    /// Jog: relativer Sprung um `frames` Bilder (± = rückwärts/vorwärts)
+    /// gegenüber der aktuellen Position.
+    pub fn step(&self, frames: i64) {
+        let _ = self.commands.send(Command::Step(frames));
+    }
+
+    /// Shuttle: Such-Geschwindigkeit als Vielfaches der Normalgeschwindigkeit
+    /// (negativ = rückwärts, `1.0` = normale Wiedergabe). `0.0` kehrt zur
+    /// normalen Vorwärtswiedergabe zurück (kein echtes Anhalten/Standbild —
+    /// s. `Command::SetRate`-Doku).
+    pub fn set_rate(&self, rate: f64) {
+        let _ = self.commands.send(Command::SetRate(rate));
+    }
+
+    /// Aktuelle Position im On-Air-Zweig in ms — echte Pipeline-Position
+    /// (`query_position`), keine Wanduhr mehr (Bugfix 2026-08-21: die
+    /// bisherige `Instant::now() - onair_since`-Berechnung in `main.rs`
+    /// lief nach jedem Seek/Shuttle sofort auseinander).
+    pub fn position_ms(&self) -> i64 {
+        self.position_ms.load(Ordering::Relaxed)
+    }
+
+    /// Aktuelle Shuttle-Rate (s. `set_rate`).
+    pub fn rate(&self) -> f64 {
+        self.rate_milli.load(Ordering::Relaxed) as f64 / 1000.0
     }
 
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6): Video- UND alle
@@ -207,6 +255,15 @@ struct Branch {
     video: Terminal,
     /// Reihenfolge == die `groups`-Liste, mit der dieser Branch gebaut wurde.
     groups: Vec<Terminal>,
+    /// `mxfdemux`-Element dieses Zweigs (Jog/Shuttle/Seek, Nutzerauftrag
+    /// 2026-08-21) — `None` beim "schwarz/stumm"-Leerlaufzweig
+    /// (`build_empty_branch`, kein Datei-Decode, nichts zu seeken).
+    /// `seek()` auf `demux` statt auf die gesamte `pipeline` gerufen:
+    /// betrifft dadurch garantiert nur DIESEN Zweig, nicht den parallel
+    /// im anderen Slot laufenden (s. `build()`-Moduldoku zum
+    /// A/B-Slot-Modell — beide Zweige laufen unabhängig durch dieselbe
+    /// `pipeline`, ein `pipeline`-weiter Seek würde fälschlich beide treffen).
+    demux: Option<gst::Element>,
 }
 
 /// Bringt `el` auf `GST_STATE_NULL` und wartet auf den TATSÄCHLICHEN
@@ -333,6 +390,7 @@ fn build_empty_branch(
         elements: Arc::new(Mutex::new(elements)),
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
         groups: group_terminals,
+        demux: None,
     })
 }
 
@@ -595,6 +653,7 @@ fn build_mxf_branch(
         elements,
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
         groups: group_terminals,
+        demux: Some(demux),
     })
 }
 
@@ -806,12 +865,22 @@ pub fn run(
     };
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) = std::sync::mpsc::channel();
+    let position_ms = Arc::new(AtomicI64::new(0));
+    // 1000 == Rate 1.0 ("normal"), s. `Command::SetRate`-Doku.
+    let rate_milli = Arc::new(AtomicI64::new(1000));
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         video_flowed: active.video_flowed.clone(),
         group_flowed: active.group_flowed.clone(),
+        position_ms: position_ms.clone(),
+        rate_milli: rate_milli.clone(),
     }));
 
+    // Tick-Intervall von vormals 500ms auf 200ms verkürzt: sowohl für
+    // spürbar reaktionsschnelleres Shuttle (s. unten) als auch für
+    // aktuellere `position_ms`-Werte — der Heartbeat (LivenessMonitor)
+    // feuert dabei einfach häufiger, das ist unschädlich.
+    const TICK: Duration = Duration::from_millis(200);
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -819,7 +888,7 @@ pub fn run(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        match commands_rx.recv_timeout(TICK) {
             Ok(Command::LoadSlot { slot, source }) => {
                 if let Err(e) = replace_slot(&mut active, slot, &source) {
                     let _ = tx.send(Event::Error(format!("cue into slot {slot:?} failed: {e}")));
@@ -828,10 +897,82 @@ pub fn run(
             Ok(Command::SetActive(slot)) => {
                 apply_active(&active, slot);
             }
+            Ok(Command::Seek(target_ms)) => {
+                if let Some(demux) = onair_demux(&active) {
+                    seek_to(demux, target_ms.max(0) as u64);
+                }
+            }
+            Ok(Command::Step(frames)) => {
+                if let Some(demux) = onair_demux(&active) {
+                    let current = query_position_ms(demux).unwrap_or(0);
+                    let delta_ms = frames * 1000 * FRAMERATE_DENOMINATOR as i64 / FRAMERATE_NUMERATOR as i64;
+                    seek_to(demux, (current + delta_ms).max(0) as u64);
+                }
+            }
+            Ok(Command::SetRate(rate)) => {
+                rate_milli.store((rate * 1000.0).round() as i64, Ordering::Relaxed);
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        if let Some(demux) = onair_demux(&active)
+            && let Some(pos_ms) = query_position_ms(demux)
+        {
+            position_ms.store(pos_ms, Ordering::Relaxed);
+
+            // Shuttle (Nutzerauftrag 2026-08-21): bewusst KEIN echter
+            // GStreamer-Segment-Rate-Seek (Rückwärts-Decoding ist bei
+            // `mxfdemux`/MPEG-2-Software-Decodern kein verlässlich
+            // unterstützter Pfad) — stattdessen simuliert per getakteten
+            // Einzel-Seeks, die IMMER vorwärts mit Rate 1.0 decodieren:
+            // jeden Tick um `rate × TICK` weiterspringen. Rate `1.0`
+            // ("normal") tickt bewusst NICHT — dort läuft die Pipeline
+            // ungestört durch statt alle 200ms neu zu seeken.
+            let rate = rate_milli.load(Ordering::Relaxed) as f64 / 1000.0;
+            if rate != 1.0 {
+                let delta_ms = (rate * TICK.as_millis() as f64) as i64;
+                seek_to(demux, (pos_ms + delta_ms).max(0) as u64);
+            }
         }
     }
 
     drop(active);
+}
+
+/// `mxfdemux`-Element des aktuell On-Air-Zweigs (`None` beim
+/// "schwarz/stumm"-Leerlaufzweig oder falls das Item bereits ausgetauscht
+/// wurde, während `onair_slot` noch den alten Wert trägt — reiner
+/// Best-Effort-Zugriff, kein Fehlerfall).
+fn onair_demux(active: &ActivePipeline) -> Option<&gst::Element> {
+    let slot = if active.onair_slot.load(Ordering::Relaxed) == Slot::A.code() {
+        Slot::A
+    } else {
+        Slot::B
+    };
+    active.branches.get(&slot)?.demux.as_ref()
+}
+
+fn query_position_ms(demux: &gst::Element) -> Option<i64> {
+    demux.query_position::<gst::ClockTime>().map(|t| t.mseconds() as i64)
+}
+
+/// Absoluter, flushender, framegenauer Seek auf `target_ms` — immer mit
+/// Rate 1.0 vorwärts (s. `Command::SetRate`-Doku, gilt für `Seek`, `Step`
+/// UND den Shuttle-Tick oben gleichermaßen). Fehler werden bewusst
+/// verschluckt: ein Seek über das Dateiende hinaus (Shuttle/Jog am
+/// Item-Ende) soll nicht den gesamten Node-Prozess mit einer
+/// `Event::Error`-Meldung überschwemmen, sondern schlicht wirkungslos
+/// bleiben (`mxfdemux` ignoriert einen Seek jenseits der Dauer bereits
+/// selbst, meist ohne Fehler — dieses `let _ =` deckt nur die übrigen,
+/// seltenen Fehlerfälle ab, z. B. noch nicht preroll-fertige Elemente).
+fn seek_to(demux: &gst::Element, target_ms: u64) {
+    let _ = demux.seek(
+        1.0,
+        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+        gst::SeekType::Set,
+        gst::ClockTime::from_mseconds(target_ms),
+        gst::SeekType::None,
+        gst::ClockTime::NONE,
+    );
 }

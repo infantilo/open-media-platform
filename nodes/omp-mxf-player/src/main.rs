@@ -169,6 +169,16 @@ impl ParamStore for PlayerStore {
                 range: None,
                 readonly: true,
             },
+            // Jog/Shuttle/Seek (Nutzerauftrag 2026-08-21): aktuelle
+            // Such-/Wiedergabegeschwindigkeit, s. `seek`/`step`/`setRate`
+            // unten. `1.0` = normale Vorwärtswiedergabe.
+            ParamSpec {
+                name: "shuttleRate".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             // JSON-Array [string] — Dateinamen direkt unter OMP_MEDIA_DIR
             // (gleiches flaches Muster wie omp-player::mediaLibrary).
             ParamSpec { name: "mediaLibrary".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
@@ -205,6 +215,20 @@ impl ParamStore for PlayerStore {
             },
             MethodSpec { name: "cue".to_string(), args: vec![MethodArg { name: "itemId".to_string(), kind: ParamType::String }] },
             MethodSpec { name: "take".to_string(), args: vec![] },
+            // Jog/Shuttle/Seek (Nutzerauftrag 2026-08-21) — wirken auf den
+            // aktuell On-Air-Zweig, s. `pipeline::Command`-Doku.
+            MethodSpec {
+                name: "seek".to_string(),
+                args: vec![MethodArg { name: "positionMs".to_string(), kind: ParamType::Number }],
+            },
+            MethodSpec {
+                name: "step".to_string(),
+                args: vec![MethodArg { name: "frames".to_string(), kind: ParamType::Number }],
+            },
+            MethodSpec {
+                name: "setRate".to_string(),
+                args: vec![MethodArg { name: "rate".to_string(), kind: ParamType::Number }],
+            },
         ];
 
         Descriptor { parameters, methods, latency: None }
@@ -229,9 +253,14 @@ impl ParamStore for PlayerStore {
             "currentItemId" => Some(serde_json::json!(state.onair_item.clone().unwrap_or_default())),
             "cuedItemId" => Some(serde_json::json!(state.cued_item.clone().unwrap_or_default())),
             "mode" => Some(serde_json::json!(if state.onair_item.is_some() { "onair" } else { "black" })),
+            // Echte Pipeline-Position statt Wanduhr (Bugfix 2026-08-21,
+            // s. `pipeline::PipelineHandle::position_ms`-Doku) — lief nach
+            // jedem Seek/Shuttle sofort auseinander, wenn hier stattdessen
+            // weiter `Instant::now() - onair_since` gerechnet würde.
             "playheadPositionMs" => Some(serde_json::json!(
-                state.onair_since.map(|since| since.elapsed().as_millis() as f64).unwrap_or(0.0)
+                if state.onair_item.is_some() { self.pipeline.position_ms() as f64 } else { 0.0 }
             )),
+            "shuttleRate" => Some(serde_json::json!(self.pipeline.rate())),
             "mediaLibrary" => {
                 let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
                     .into_iter()
@@ -372,6 +401,21 @@ impl ParamStore for PlayerStore {
                 state.onair_slot = target_slot;
                 state.onair_item = Some(cued_item);
                 state.onair_since = Some(Instant::now());
+                Ok(())
+            }
+            "seek" => {
+                let position_ms = args.get("positionMs").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                self.pipeline.seek(position_ms as i64);
+                Ok(())
+            }
+            "step" => {
+                let frames = args.get("frames").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                self.pipeline.step(frames as i64);
+                Ok(())
+            }
+            "setRate" => {
+                let rate = args.get("rate").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_rate(rate);
                 Ok(())
             }
             _ => Err(InvokeError::Unknown),
