@@ -3376,6 +3376,19 @@ export class FlowCanvas extends HTMLElement {
     const timer = setInterval(() => {
       const url = previewSnapshotUrl(nodeId);
       this.#svg.querySelectorAll<HTMLImageElement>(`img[data-preview-node-id="${nodeId}"]`).forEach((img) => {
+        // Nutzerfund 2026-08-21 ("viewer/multiviewer zeigt immer wieder
+        // 'not connected' für einzelne Frames"): `img.src` wurde hier
+        // BLIND im Takt neu gesetzt, unabhängig davon, ob der vorherige
+        // Request schon fertig war. War der Server bei EINEM Tick auch
+        // nur etwas langsamer als das Poll-Intervall (normale Jitter
+        // unter Last, kein echter Verbindungsabbruch), riss das
+        // Neusetzen von `src` den noch laufenden Request ab — und ein
+        // vom Browser abgebrochener Bild-Request feuert `error`, exakt
+        // wie ein echter Fehler. `img.complete` ist erst wahr, sobald
+        // der vorherige Request (Erfolg ODER Fehler) tatsächlich
+        // abgeschlossen ist — bis dahin diesen Tick überspringen, statt
+        // ihn abzubrechen.
+        if (!img.complete) return;
         img.src = url;
       });
     }, PREVIEW_POLL_INTERVAL_MS);

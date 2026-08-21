@@ -101,7 +101,15 @@ class OmpViewerPanel extends HTMLElement {
       return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
     };
     img.src = previewUrl();
+    // S. `ui/graph/flow-canvas.ts`s `#ensurePreviewPolling`-Kommentar
+    // (Nutzerfund 2026-08-21, "not connected" für einzelne Frames): erst
+    // neu pollen, wenn der vorherige Request wirklich abgeschlossen ist
+    // (`img.complete`) — sonst reißt ein blindes Neusetzen von `src`
+    // einen bloß etwas langsamen (aber sonst intakten) Request ab, was
+    // der Browser als `error` meldet, ununterscheidbar von einer echten
+    // Verbindungsstörung.
     this._previewInterval = setInterval(() => {
+      if (!img.complete) return;
       img.src = previewUrl();
     }, 500);
 

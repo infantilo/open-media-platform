@@ -19615,3 +19615,45 @@ falls nötig manuell entfernt werden.
 **Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`build()`),
 `nodes/omp-mediaio/src/mxl.rs` (`write_loop`, `write_audio_loop`,
 sowie der aus Nachtrag 160 übernommene `new_paced`/`new_impl`-Umbau).
+
+## 2026-08-21 (Nachtrag 162) — "Viewer/Multiviewer zeigt zwischendurch 'nicht verbunden'": Poll-Race gefunden+behoben
+
+Nutzerbug: Viewer- UND Multiviewer-Vorschau (beide über den in Nachtrag
+153 auf Einzelbild-Polling umgestellten Mechanismus, s. dortige
+Moduldoku `nodes/omp-mediaio/src/preview.rs`) zeigten immer wieder für
+ein einzelnes Frame "nicht verbunden", obwohl die Verbindung tatsächlich
+bestand.
+
+**Root Cause (kein Server-/Verbindungsproblem, reiner Client-Bug):**
+sowohl `ui/graph/flow-canvas.ts`s `#ensurePreviewPolling` (bedient
+Multiviewer-Vorschau — der Node hat kein eigenes UI-Bundle, wird nur als
+Flow-Editor-Kachel angezeigt) als auch `nodes/omp-viewer/ui/bundle.js`s
+eigenes Panel setzten `img.src` BLIND im festen Takt (500ms) neu, ohne
+zu prüfen, ob der vorherige Request überhaupt schon fertig war. War der
+Server bei einem einzelnen Tick minimal langsamer als das Poll-Intervall
+(normale Jitter unter Last — reicht schon ein gerade laufender
+Cargo-Build oder ein zweiter aktiver Node auf derselben Maschine), riss
+das Neusetzen von `img.src` den noch laufenden Request ab. Ein vom
+Browser per `src`-Wechsel abgebrochener Bild-Request feuert `error` —
+ununterscheidbar vom `error`-Event einer echten Verbindungsstörung, auf
+das der bereits vorhandene "nicht verbunden"-Handler (Nachtrag 153)
+korrekt reagierte. Der eigentliche Verbindungs-/Server-Code
+(`preview.rs`) war die ganze Zeit unbeteiligt.
+
+**Fix:** `img.complete` vor jedem Neusetzen von `src` prüfen (an beiden
+Stellen identisch) — `true` erst, sobald der vorherige Request
+tatsächlich abgeschlossen ist (Erfolg ODER echter Fehler), `false`
+während er noch läuft. Ein Tick, der auf einen noch laufenden Request
+trifft, wird einfach übersprungen statt ihn abzubrechen — kostet im
+schlimmsten Fall ein leicht verspätetes nächstes Frame, nie einen
+fälschlichen "nicht verbunden"-Blitzer.
+
+**Verifiziert:** `deno check ui/**/*.ts` + `deno test ui/` (92/92) grün,
+`ui/dist/shell.js` neu gebaut (`make ui`); `cargo build -p omp-viewer`
+grün (bettet das korrigierte `bundle.js` per `include_str!` neu ein).
+Laufende Instanzen müssen neu gestartet werden, um das neu eingebettete
+Bundle zu bekommen (nicht Teil dieses Commits — Prozess-Neustart ist
+Betriebsangelegenheit, kein Code-Fix).
+
+**Dateien:** `ui/graph/flow-canvas.ts` (`#ensurePreviewPolling`),
+`nodes/omp-viewer/ui/bundle.js` (Preview-Poll-Intervall).
