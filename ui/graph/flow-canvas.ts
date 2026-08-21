@@ -3340,8 +3340,29 @@ export class FlowCanvas extends HTMLElement {
     img.dataset.previewNodeId = nodeId;
     img.src = previewSnapshotUrl(nodeId);
     img.alt = "Vorschau";
-    img.style.cssText = `display:block;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;`;
+    img.style.cssText = `display:none;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;object-fit:cover;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;`;
+
+    // Nutzerfund 2026-08-21: ohne Sender (kein verbundener Edge) liefert
+    // `/preview` 503 statt eines JPEGs — dann zeigte der Browser sein
+    // natives "broken image"-Icon, ohne jede Erklärung. Jetzt bleibt das
+    // `<img>` bis zum ersten erfolgreichen Frame versteckt, ein Text
+    // "nicht verbunden" füllt die Kachel stattdessen; `#ensurePreviewPolling`
+    // setzt `img.src` alle 200ms neu, load/error toggeln dieselben zwei
+    // Elemente bei jedem Poll erneut.
+    const notConnected = document.createElement("div");
+    notConnected.textContent = "nicht verbunden";
+    notConnected.style.cssText = `display:flex;align-items:center;justify-content:center;width:${PREVIEW_WIDTH}px;height:${PREVIEW_HEIGHT}px;background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:2px;color:var(--omp-text-dim,#888);font-size:11px;`;
+    img.addEventListener("load", () => {
+      img.style.display = "block";
+      notConnected.style.display = "none";
+    });
+    img.addEventListener("error", () => {
+      img.style.display = "none";
+      notConnected.style.display = "flex";
+    });
+
     fo.appendChild(img);
+    fo.appendChild(notConnected);
     return fo;
   }
 

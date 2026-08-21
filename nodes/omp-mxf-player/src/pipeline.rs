@@ -698,6 +698,31 @@ fn build_mxf_branch(
     })
 }
 
+/// Führt `f` auf einem eigenen Thread aus und wartet höchstens `timeout`
+/// darauf — Sicherheitsnetz gegen echte GStreamer-interne Deadlocks
+/// (docs/decisions.md Nachtrag 157: `interleave`s `GstCollectPads` kann
+/// beim Teardown eines Zweigs, dessen `mxfdemux` bereits vorher gestoppt
+/// wurde, für immer auf ein nie ankommendes Geschwister-Track-Event
+/// warten — per `gdb` an zwei verschiedenen Stellen bestätigt, einmal
+/// sogar im eigens dagegen eingebauten Flush-Versuch selbst). Ohne
+/// dieses Sicherheitsnetz legt ein einzelner solcher Hänger den
+/// GESAMTEN Pipeline-Kommando-Thread für immer lahm (der Node meldet
+/// sich dauerhaft `degraded`, jeder künftige Cue/Take/Seek bleibt
+/// wirkungslos). Bei Timeout wird der Hilfs-Thread NICHT abgebrochen
+/// (kein sicherer Weg, einen blockierten OS-/GStreamer-Thread von außen
+/// zu unterbrechen) — er läuft im Hintergrund weiter und wird beim
+/// nächsten Erfolg einfach fallengelassen; ein gelegentlicher
+/// Leck-Thread ist der klar kleinere Schaden gegenüber einem dauerhaft
+/// eingefrorenen Node.
+fn run_with_timeout<F: FnOnce() + Send + 'static>(timeout: Duration, f: F) -> bool {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = done_tx.send(());
+    });
+    done_rx.recv_timeout(timeout).is_ok()
+}
+
 /// Entfernt die Elemente eines Zweigs (Unlink + State Null + aus der
 /// Pipeline entfernen) — die isel-Sink-Pads selbst (`Terminal::sink_pad`)
 /// bleiben bestehen, damit `replace_slot` denselben Pad-Referenzwert
@@ -709,6 +734,32 @@ fn build_mxf_branch(
 /// übernommen statt riskant neu zu erfinden.
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     let elements = branch.elements.lock().expect("lock poisoned");
+    // Nachtrag 157 (2026-08-21, echter Live-Deadlock per `gdb` gefunden,
+    // reproduzierbar spätestens ab dem zweiten `cue()`/`take()`-Zyklus
+    // auf einem Item, das bereits echtes EOS erreicht hatte): `interleave`
+    // sammelt (GstCollectPads) auf ALLEN seinen Sink-Pads, bevor es
+    // irgendetwas weiterreicht — auch das EOS-Event. Stand ein Track-
+    // Queue (z. B. `queue0`) mitten in `gst_pad_push_event()` (schiebt
+    // sein eigenes EOS in `interleave`), während `mxfdemux` (der EINZIGE
+    // Produzent für ALLE 8 Tracks) bereits weiter oben in dieser
+    // Schleife auf Null gesetzt wurde, kommt das fehlende EOS eines
+    // Geschwister-Tracks NIE mehr an — `interleave`s Collect wartet für
+    // immer, `queue0`s Task-Thread bleibt für immer in diesem Push
+    // hängen, und der SPÄTERE `stop_element_and_wait(queue0)` weiter
+    // unten blockiert dann seinerseits für immer beim Versuch,
+    // `gst_pad_stop_task()` auf diesen nie endenden Thread anzuwenden —
+    // der komplette Pipeline-Kommando-Thread hängt, `LivenessMonitor`
+    // meldet den Node dauerhaft "degraded". Fix: JEDEN Pad JEDES
+    // Elements zuerst flushen (`GstCollectPads` reagiert auf Flush auf
+    // egal welchem verwalteten Pad, indem es alle gerade laufenden
+    // Collect-Waits sofort freigibt) — bevor überhaupt ein einziges
+    // `set_state(Null)` versucht wird, nicht erst danach.
+    for el in elements.iter() {
+        for pad in el.pads() {
+            let _ = pad.send_event(gst::event::FlushStart::new());
+            let _ = pad.send_event(gst::event::FlushStop::new(true));
+        }
+    }
     // State-Null MUSS vor dem Unlink passieren (Reihenfolge exakt wie
     // vor diesem Fix, `omp-player::pipeline::teardown_branch`-Lektion:
     // Use-after-free, wenn ein noch aktiver Streaming-Thread eines
@@ -751,7 +802,22 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, source: &ItemSource) ->
     let old = active.branches.remove(&slot).ok_or("replace_slot: branch missing")?;
     let video_pad = old.video.sink_pad.clone();
     let group_pads: Vec<gst::Pad> = old.groups.iter().map(|t| t.sink_pad.clone()).collect();
-    teardown_branch(&active.pipeline, old);
+    // `run_with_timeout` statt eines direkten Aufrufs (Nachtrag 157, s.
+    // dortige Doku): ein hängender Teardown darf NIEMALS den gesamten
+    // Kommando-Thread mitreißen. Bei Timeout wird DIESER Cue-Versuch mit
+    // einer klaren Fehlermeldung abgebrochen (statt eines stillen
+    // Dauerhängers) — der betroffene Slot bleibt danach ohne Zweig
+    // (kein automatisches Selbstheilen, s. Doku), der ANDERE Slot und
+    // alle übrigen Kommandos (Seek/Shuttle/Take auf den bereits aktiven
+    // Zweig) bleiben aber uneingeschränkt bedienbar.
+    let pipeline_for_teardown = active.pipeline.clone();
+    if !run_with_timeout(Duration::from_secs(5), move || {
+        teardown_branch(&pipeline_for_teardown, old);
+    }) {
+        return Err(format!(
+            "teardown von Slot {slot:?} nach 5s abgebrochen (vermutlich GStreamer-Deadlock, docs/decisions.md Nachtrag 157) — {slot:?} bleibt vorerst ohne Zweig"
+        ));
+    }
 
     let branch = match source {
         ItemSource::TestPattern => {

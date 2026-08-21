@@ -19129,3 +19129,100 @@ Kein Code-Fix in diesem Nachtrag, nur Kommentare in
 `nodes/omp-mediaio/src/mxl.rs` aktualisiert (dritter Versuch
 dokumentiert, damit er nicht in einer künftigen Sitzung ein viertes Mal
 blind wiederholt wird).
+
+## 2026-08-21 (Nachtrag 157) — Echter GStreamer-Deadlock beim Teardown gefunden (interleave-Collect-Pads); Watchdog als Sicherheitsnetz eingebaut, Kernursache NICHT vollständig gelöst; "broken image" → "nicht verbunden"-Anzeige behoben
+
+Nutzerbug (an bestehenden, bereits laufenden Instanzen kontrolliert,
+nicht neu erstellt): "viewer ist immer schwarz, play button des files
+geht nicht". Der Node meldete sich im Log wiederholt
+`worker liveness check failed, degraded: ["pipeline"]` — das ist NEU
+und schwerwiegender als alles bisher in Nachtrag 153-156 Gefundene: der
+gesamte Pipeline-Kommando-Thread hängt komplett, nicht nur eine
+einzelne Demux-Instanz.
+
+**Root-Cause per `gdb` an der tatsächlich betroffenen Live-Instanz
+zweifelsfrei belegt (zwei verschiedene Varianten):**
+
+1. `teardown_branch`s `stop_element_and_wait(queue0)` blockierte
+   dauerhaft in `gst_pad_stop_task()` (Mutex-Wait). `queue0`s eigener
+   Task-Thread selbst steckte in `gst_pad_push_event()` fest — schob
+   sein eigenes EOS in `interleave` hinein. `interleave` nutzt intern
+   `GstCollectPads`: es liefert EOS erst weiter, wenn ALLE seiner
+   Sink-Pads (eins je der 8 MXF-Tonspuren) ihr eigenes EOS geliefert
+   haben. `mxfdemux` — der EINZIGE Produzent für alle 8 Tracks — wurde
+   in derselben Teardown-Schleife bereits VORHER (frühzeitig in der
+   Elementliste) auf Null gesetzt. Fehlt dadurch auch nur EIN
+   Geschwister-Track sein EOS, wartet `interleave` für immer, `queue0`s
+   Push bleibt für immer hängen, und der spätere
+   `gst_pad_stop_task(queue0)` blockiert dann seinerseits für immer.
+2. Ein erster Fix-Versuch (`teardown_branch` sendet vor dem Stoppen
+   jedes Elements erst `FLUSH_START`/`FLUSH_STOP` an alle seine Pads —
+   `GstCollectPads` soll laut GStreamer-Doku auf Flush mit sofortiger
+   Freigabe jedes hängenden Collect-Waits reagieren) verringerte die
+   Häufigkeit messbar (Zyklus 2 lief jetzt sauber durch, vorher hing
+   schon Zyklus 2 fast immer), verlagerte den Deadlock aber nur:
+   `pad.send_event(FlushStart)` selbst blockierte beim DRITTEN Zyklus
+   erneut, diesmal INNERHALB von `libgstinterleave.so`s eigenem
+   `gst_iterator_fold` über seine Pads — mein Flush-Aufruf und ein noch
+   aktiver Producer-Push konkurrieren offenbar um dasselbe interne
+   `GstCollectPads`-Lock. Das ist ein GStreamer-internes
+   Nebenläufigkeitsproblem, kein einfacher Anwendungscode-Bug — von
+   außen nicht zuverlässig sauber lösbar, ohne die Architektur (z. B.
+   auf explizite Pad-Probes/Blockierung vor jedem Teardown umzustellen,
+   GStreamers eigenes empfohlenes Muster für "Teilbaum aus laufender
+   Pipeline sicher entfernen") grundlegend zu überarbeiten — NICHT in
+   dieser Sitzung geleistet.
+
+**Umgesetzter Fix (Sicherheitsnetz, kein Root-Cause-Fix):** neue
+`run_with_timeout()`-Hilfsfunktion — führt `teardown_branch` auf einem
+eigenen Thread aus, wartet höchstens 5s. Bei Timeout bricht `cue()` mit
+einer klaren Fehlermeldung ab (`pipeline error: cue into slot X failed:
+teardown von Slot X nach 5s abgebrochen …`) statt den Kommando-Thread
+für immer zu blockieren. **Entscheidend:** live mit fünf aufeinander
+folgenden Zyklen verifiziert — der Node meldete sich dabei KEIN
+einziges Mal mehr `degraded`, obwohl der zugrundeliegende Deadlock in
+Zyklus 2 UND 3 tatsächlich auftrat (im Log sichtbar als die neue
+Timeout-Fehlermeldung). Der betroffene Slot bleibt danach allerdings
+ohne Zweig (kein automatisches Selbstheilen — ein weiterer `cue()` auf
+denselben Slot scheitert sofort mit "branch missing"); nach fünf
+Zyklen waren in diesem Test beide A/B-Slots so "verbraucht". Der Node
+selbst blieb aber die ganze Zeit ansprechbar (Position-Queries, Take
+auf den noch laufenden Zweig etc. funktionierten weiter) — das ist der
+entscheidende Unterschied zu vorher: aus einem stillen, permanenten
+Totalausfall (nur per Kill behebbar) wird ein lauter, lokalisierter
+Fehlschlag, der einen Neustart NUR dieses Nodes braucht, nicht mehr
+zwingend sofort, aber absehbar.
+
+**Für eine künftige Sitzung, falls dies wieder aufgegriffen wird:**
+GStreamers eigenes empfohlenes Muster für "Element sicher aus
+laufender Pipeline entfernen" nutzt `gst_pad_add_probe` mit
+`GST_PAD_PROBE_TYPE_BLOCK_DOWNSTREAM`, wartet im Probe-Callback (der
+GARANTIERT nicht mit einem aktiven Push kollidiert) auf tatsächliche
+Ruhe, und erst DANN wird geflusht/gestoppt/entfernt — grundlegend
+anders als das aktuelle "einfach der Reihe nach `set_state(Null)`
+aufrufen"-Muster, das für einfache lineare Ketten funktioniert, aber
+nicht für `interleave`s Fan-in-Topologie. Eine echte Lösung braucht
+diese Umstellung als eigenen, dedizierten Schritt mit eigener
+Verifikation — nicht als Seitenreparatur.
+
+**Zweiter, unabhängiger, VOLLSTÄNDIG gelöster Bug (Nutzerfund, gleiche
+Meldung):** "wenn Viewer nicht connected, wird ein 'broken' Image
+angezeigt, stattdessen sollte 'not connected' stehen." Ursache: sowohl
+die Flow-Editor-Kachel-Vorschau (`ui/graph/flow-canvas.ts`) als auch
+das Viewer-eigene Parameter-Panel (`nodes/omp-viewer/ui/bundle.js`)
+setzten `<img src>` unbedingt, ohne auf das `error`-Event zu reagieren
+(die Kachel gar nicht, das Panel nur beim ALLERERSTEN Mal — `status.
+remove()` entfernte das Fallback-Textelement dauerhaft aus dem DOM,
+ein SPÄTERES Trennen zeigte danach nur noch das native "broken
+image"-Icon ohne jeden Text). Fix: `<img>` bleibt bis zum ersten
+erfolgreichen Frame (bzw. dauerhaft ohne Sender) per
+`style.display=none` versteckt, ein Text "nicht verbunden" ersetzt es
+bei jedem `error`-Event — inkl. erneutem Umschalten bei jedem
+folgenden Poll-Zyklus (kein einmaliges `remove()` mehr). Live per CDP
+in beiden UI-Oberflächen verifiziert (Screenshots: Flow-Editor-Kachel
+UND Viewer-Panel zeigen sauber "nicht verbunden").
+
+**Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (Flush-Versuch in
+`teardown_branch`, `run_with_timeout` + Verwendung in `replace_slot`),
+`ui/graph/flow-canvas.ts` + `nodes/omp-viewer/ui/bundle.js`
+("nicht verbunden"-Anzeige). Noch **nicht committet**.

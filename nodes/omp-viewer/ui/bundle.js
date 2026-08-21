@@ -51,6 +51,13 @@ class OmpViewerPanel extends HTMLElement {
     const img = document.createElement("img");
     img.alt = "Vorschau";
     img.width = 320;
+    // Bis zum ersten erfolgreichen Frame (oder dauerhaft, falls nie
+    // verbunden) versteckt — sonst zeigt der Browser sein natives
+    // "broken image"-Icon an, sobald `/preview` mangels verbundenem
+    // Sender mit 503 statt echtem JPEG antwortet (Nutzerfund
+    // 2026-08-21: "wenn viewer nicht connected, dann wird ein broken
+    // image angezeigt, stattdessen sollte 'not connected' stehen").
+    img.style.display = "none";
 
     const status = document.createElement("p");
     status.textContent = "lade Vorschau …";
@@ -67,9 +74,20 @@ class OmpViewerPanel extends HTMLElement {
 
     shadow.append(style, img, status, audioSection);
 
-    img.addEventListener("load", () => status.remove());
+    // Bewusst per `style.display` statt `status.remove()` umgeschaltet
+    // (vormaliger Bug: nach dem ersten erfolgreichen Frame war `status`
+    // dauerhaft aus dem DOM entfernt — trennte sich der Sender SPÄTER
+    // wieder, lief der `error`-Handler zwar noch, änderte aber nur noch
+    // ein bereits entferntes, unsichtbares Element; das Bild blieb als
+    // Browser-natives "broken image"-Icon sichtbar, ohne jeden Text).
+    img.addEventListener("load", () => {
+      status.style.display = "none";
+      img.style.display = "";
+    });
     img.addEventListener("error", () => {
-      status.textContent = "keine Vorschau verfügbar";
+      img.style.display = "none";
+      status.textContent = "nicht verbunden";
+      status.style.display = "";
     });
     // Einzelbild-Polling statt `multipart/x-mixed-replace` (2026-08-21
     // per CDP root-caused, s. `nodes/omp-mediaio/src/preview.rs`-
