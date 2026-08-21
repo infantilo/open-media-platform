@@ -322,44 +322,73 @@ fn stop_element_and_wait(el: &gst::Element) {
     }
 }
 
-/// Startup-Pendant zu `stop_element_and_wait` oben: ruft
-/// `sync_state_with_parent()` und wartet auf den TATSÄCHLICHEN Abschluss
-/// eines dabei angestoßenen `Async`-Übergangs, statt ihn zu verwerfen.
+/// Vier kleine Phasen-Helfer statt einer monolithischen Funktion
+/// (Nachtrag 160, 2026-08-21) — `build_mxf_branch` muss zwischen dem
+/// Anfordern und dem Bestätigen von PAUSED noch auf `mxfdemux`s
+/// `no-more-pads` warten (die per-Tonspur-Queues entstehen erst darin,
+/// s. dortige Doku), eine einzelne Rundum-Funktion könnte diesen
+/// Zwischenschritt nicht abbilden.
 ///
-/// Per `GST_DEBUG` belegt (docs/decisions.md Nachtrag 155, "Position
-/// bleibt kurz nach `take()` stehen"): ein neu in eine bereits PLAYING-
-/// laufende Pipeline eingefügtes `decodebin` geht dabei sichtbar
-/// `ASYNC` ("lost state of PLAYING, new PAUSED", hier ~76ms bis
-/// `async-done`) — ohne auf diesen Abschluss zu warten, begann `mxfdemux`
-/// (dank "Konsument vor Produzent"-Reihenfolge zwar SPÄTER als
-/// `decodebin`, aber trotzdem zu früh) direkt danach mit dem Pushen von
-/// Daten, bevor `decodebin`s Sink-Pad wirklich aufnahmebereit war.
-/// `gst_mxf_demux_loop` meldete daraufhin "Internal data stream
-/// error"/`GST_FLOW_ERROR` und stoppte seine GESAMTE Schleife dauerhaft
-/// (Video UND Audio zusammen, da beide über denselben Loop laufen,
-/// s. Moduldoku oben) — reproduzierbar ab dem zweiten `cue()`/
-/// `take()`-Zyklus (mehr Elemente in der Pipeline zu diesem Zeitpunkt,
-/// der Übergang dadurch eher wirklich asynchron statt synchron/sofort).
-fn start_element_and_wait(el: &gst::Element) -> Result<(), String> {
-    // `sync_state_with_parent()` liefert (anders als `set_state()`) nur
-    // `Result<(), BoolError>` — ob der Übergang dabei synchron oder
-    // `ASYNC` verlief, ist am Rückgabetyp nicht sichtbar. Deshalb hier
-    // IMMER anschließend per `state(timeout)` bestätigen, statt wie bei
-    // `stop_element_and_wait` nur im Async-Fall.
-    el.sync_state_with_parent()
-        .map_err(|e| format!("sync_state_with_parent ({}): {e}", el.name()))?;
-    if el.state(gst::ClockTime::from_mseconds(500)).0.is_ok() {
-        return Ok(());
+/// Übersetzung des in PIPELINE CONTROLLERs `lib/PlayerPipeline.js::
+/// _tryPipeline` bewährten Musters (dort: EIN `pause()` auf die ganze
+/// eigene, isolierte Pipeline, danach blockierend auf die Bus-Nachricht
+/// `async-done` warten — explizit NICHT auf `stream-start`/`new-clock`,
+/// die dort nachweislich zu früh feuern) auf unser Modell einer
+/// dauerhaft laufenden, von beiden A/B-Slots gemeinsam genutzten
+/// Pipeline: die kann nicht als Ganzes pausiert werden (der jeweils
+/// andere Slot kann gerade on air sein), also wird hier PRO ELEMENT
+/// `set_state(Paused)` angefordert statt `sync_state_with_parent()` (das
+/// würde direkt Richtung PLAYING zielen, weil die GEMEINSAME Pipeline
+/// durchgehend läuft) — und zwar für ALLE Elemente in einem einzigen,
+/// nicht-wartenden Durchlauf, genau wie `GstBin` es intern für seine
+/// Kinder tut, wenn man `set_state()` auf die ganze Bin ruft. Erst
+/// NACHDEM alle angefordert sind, wird auf die tatsächliche Bestätigung
+/// jedes einzelnen gewartet (`confirm_branch_state`).
+///
+/// Sequenzielles Anfordern+Bestätigen (wie das alte
+/// `start_element_and_wait` es pro Element tat) würde hier deadlocken:
+/// das zuerst angefragte Element (z. B. ein Downstream-`queue`) käme nie
+/// auf bestätigtes PAUSED, weil der Produzent (`filesrc`/`demux`) noch
+/// gar nicht angefragt wäre und deshalb keine Daten liefert — ein Sink
+/// erreicht bestätigtes PAUSED erst, sobald er tatsächlich einen ersten
+/// Puffer geprerollt hat.
+fn request_branch_paused(elements: &[gst::Element]) -> Result<(), String> {
+    for el in elements {
+        el.set_state(gst::State::Paused)
+            .map_err(|e| format!("set Paused ({}): {e}", el.name()))?;
     }
-    // Gleiches Muster wie `stop_element_and_wait`: erster Versuch nicht
-    // innerhalb 500ms bestätigt, derselbe bereits angestoßene Übergang
-    // läuft weiter (kein erneuter Aufruf nötig), nur mit deutlich
-    // längerem Timeout erneut abgefragt.
-    if el.state(gst::ClockTime::from_seconds(3)).0.is_err() {
-        return Err(format!(
-            "{} erreichte den Ziel-Zustand nicht innerhalb ~3.5s",
-            el.name()
-        ));
+    Ok(())
+}
+
+/// S. `request_branch_paused`-Doku. Bestätigt für jedes Element in
+/// `elements` den tatsächlichen Abschluss des zuvor angeforderten
+/// Übergangs nach `target` (nicht nur "kein Fehler", sondern auch den
+/// TATSÄCHLICH erreichten Zustand, s. Nachtrag-160-Analyse: `async=false`
+/// hätte hier fälschlich sofort "fertig" melden können, ohne wirklich
+/// geprerollt zu haben — betrifft diesen Appsink nicht mehr, s.
+/// `mxl::MxlVideoOutput::new_paced`, ist aber der Grund, warum hier
+/// explizit auf `target` statt nur auf Erfolg geprüft wird).
+fn confirm_branch_state(elements: &[gst::Element], target: gst::State, timeout: gst::ClockTime) -> Result<(), String> {
+    for el in elements {
+        let (result, state, _pending) = el.state(timeout);
+        result.map_err(|e| format!("{} erreichte {target:?} nicht: {e}", el.name()))?;
+        if state != target {
+            return Err(format!("{} meldet nach dem Warten Zustand {state:?} statt {target:?}", el.name()));
+        }
+    }
+    Ok(())
+}
+
+/// S. `request_branch_paused`-Doku — Playing-Gegenstück. Anders als die
+/// Paused-Phase per `sync_state_with_parent()` (nicht `set_state(Playing)`):
+/// das berechnet korrekt die Basiszeit für den Einstieg in die bereits
+/// laufende, gemeinsam genutzte Pipeline (genau der dafür vorgesehene
+/// Zweck von `sync_state_with_parent()` bei einem bereits geprerollten
+/// Element, s. GStreamer-Doku zu dynamisch hinzugefügten Elementen).
+fn request_branch_playing(elements: &[gst::Element]) -> Result<(), String> {
+    for el in elements {
+        el.sync_state_with_parent()
+            .map_err(|e| format!("sync to Playing ({}): {e}", el.name()))?;
     }
     Ok(())
 }
@@ -581,16 +610,12 @@ fn build_mxf_branch(
         matrix_elements.push((group.id.clone(), group.channels, matrix));
     }
 
-    // "Konsument vor Produzent" (omp-player::pipeline-Lektion, s. dortige
-    // Moduldoku): alles stromabwärts von mxfdemux zuerst auf den
-    // Pipeline-Zustand syncen, `mxfdemux`/`filesrc` erst danach. Nicht nur
-    // ANSTOSSEN, sondern per `start_element_and_wait` auch den TATSÄCHLICHEN
-    // Abschluss abwarten (s. dortige Doku) — sonst kann `mxfdemux` unten zu
-    // früh zu pushen beginnen, während z. B. `decodebin` noch mitten in
-    // einem `ASYNC`-Übergang steckt.
-    for el in elements.iter().skip(2) {
-        start_element_and_wait(el)?;
-    }
+    // Preroll-Reihenfolge jetzt komplett anders als früher (Nachtrag 160,
+    // 2026-08-21, s. `request_branch_paused`-Doku): kein "Konsument vor
+    // Produzent, sequenziell je Element sofort auf PLAYING" mehr — erst
+    // NACH der Handler-Registrierung unten wird `demux`/`filesrc`
+    // überhaupt erst angestoßen (request_branch_paused), sonst würden
+    // `pad-added`/`no-more-pads` verpasst.
     let elements = Arc::new(Mutex::new(elements));
 
     let pending = Arc::new(Mutex::new(PendingAudio { pads: Vec::new() }));
@@ -644,6 +669,13 @@ fn build_mxf_branch(
     // Closure verschluckt wird — wird unten für `Branch::interleave`
     // gebraucht (Nachtrag 157, `drain_interleave`).
     let interleave_for_nmp = interleave.clone();
+    // Signalisiert (Nachtrag 160, 2026-08-21), dass `no-more-pads`
+    // vollständig abgearbeitet ist — d. h. alle per-Tonspur-Queues
+    // existieren, sind verlinkt UND bereits Richtung PAUSED angefordert.
+    // Erst DANACH darf der aufrufende Thread unten den vollständigen
+    // `elements`-Bestand für die finale Preroll-Bestätigung einsammeln
+    // (s. `request_branch_paused`-Doku zum kompletten Ablauf).
+    let (nmp_done_tx, nmp_done_rx) = std::sync::mpsc::channel::<()>();
     demux.connect_no_more_pads(move |_demux| {
         let mut sorted = std::mem::take(&mut pending.lock().expect("lock poisoned").pads);
         sorted.sort_by_key(|(track, _)| *track);
@@ -680,8 +712,15 @@ fn build_mxf_branch(
                 eprintln!("omp-mxf-player: add queue(track {rank}) failed: {e:?}");
                 continue;
             }
-            if let Err(e) = queue.sync_state_with_parent() {
-                eprintln!("omp-mxf-player: sync_state_with_parent (queue track {rank}) failed: {e:?}");
+            // `set_state(Paused)` statt `sync_state_with_parent()`
+            // (Nachtrag 160, 2026-08-21): `sync_state_with_parent()` zielt
+            // auf den Zustand der GEMEINSAMEN Pipeline (durchgehend
+            // PLAYING) — würde diese frisch entstandene Queue sofort an
+            // PLAYING vorbeischleusen, am unten folgenden bestätigten
+            // PAUSED-Preroll aller Zweig-Elemente vorbei. `request_branch_playing`
+            // holt sie später gemeinsam mit allen anderen nach.
+            if let Err(e) = queue.set_state(gst::State::Paused) {
+                eprintln!("omp-mxf-player: set Paused (queue track {rank}) failed: {e:?}");
                 continue;
             }
             let Some(queue_sink) = queue.static_pad("sink") else { continue };
@@ -703,13 +742,33 @@ fn build_mxf_branch(
             matrix_el.set_property("out-channels", *group_channels);
             matrix_el.set_property("matrix", matrix_to_gst_array(&coeffs));
         }
+        let _ = nmp_done_tx.send(());
     });
 
-    // `filesrc`/`mxfdemux` erst jetzt starten (s. Sync-Reihenfolge-
-    // Kommentar oben) — alle stromabwärtigen Konform-Ketten stehen
-    // bereits auf PLAYING/PAUSED.
-    start_element_and_wait(&filesrc)?;
-    start_element_and_wait(&demux)?;
+    // Preroll-Ablauf (Nachtrag 160, 2026-08-21, s. `request_branch_paused`-
+    // Doku für die volle Begründung):
+    //
+    // 1) PAUSED für alle bisher bekannten (statischen) Elemente anfordern
+    //    — das stößt `demux`/`filesrc` überhaupt erst an; die per-Tonspur-
+    //    Queues existieren zu diesem Zeitpunkt noch NICHT.
+    request_branch_paused(&elements.lock().expect("lock poisoned"))?;
+
+    // 2) Auf `no-more-pads` warten — erst dann existieren/sind verlinkt
+    //    auch die per-Tonspur-Queues (oben bereits einzeln Richtung
+    //    PAUSED angefordert). `mxfdemux` liest den MXF-Header sehr früh
+    //    (Spurliste steht am Dateianfang), 3s sind großzügig bemessen.
+    if nmp_done_rx.recv_timeout(Duration::from_secs(3)).is_err() {
+        return Err("mxfdemux: no-more-pads nicht innerhalb 3s erreicht (Datei-Header-Parse hängt?)".to_string());
+    }
+
+    // 3) Jetzt den VOLLSTÄNDIGEN Zweig (statische Elemente + frisch
+    //    entstandene Queues) einsammeln, bestätigtes PAUSED für alle
+    //    abwarten (= echter Preroll, s. Moduldoku), dann gemeinsam auf
+    //    PLAYING wechseln und auch das bestätigen.
+    let full = elements.lock().expect("lock poisoned").clone();
+    confirm_branch_state(&full, gst::State::Paused, gst::ClockTime::from_seconds(3))?;
+    request_branch_playing(&full)?;
+    confirm_branch_state(&full, gst::State::Playing, gst::ClockTime::from_seconds(3))?;
 
     Ok(Branch {
         elements,
@@ -949,7 +1008,13 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
         branches.insert(slot, branch);
     }
 
-    let mxl_video_output = MxlVideoOutput::new(
+    // `new_paced` (Nachtrag 160, 2026-08-21): omp-mxf-player-Datei-Decode
+    // ist NICHT selbstgetaktet (anders als `new`s Standardannahme
+    // "videotestsrc"), braucht also echte `sync=true`-Ausgabe-Drosselung.
+    // Voraussetzung dafür ist der explizite, bestätigte PAUSED-Preroll in
+    // `build_mxf_branch` (s. dort) — ohne den friert dieser Appsink nach
+    // 1-2 Frames ein (dreifach live bestätigt, s. docs/decisions.md).
+    let mxl_video_output = MxlVideoOutput::new_paced(
         &pipeline,
         &video_isel,
         context.clone(),
@@ -969,7 +1034,8 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
         let isel = &group_isels[i];
         let group = &config.groups[i];
         let flow_id = &config.group_flow_ids[i];
-        let output = MxlAudioOutput::new(
+        // S. `new_paced`-Kommentar beim Video-Output oben.
+        let output = MxlAudioOutput::new_paced(
             &pipeline,
             isel,
             context.clone(),
@@ -984,6 +1050,28 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
     }
 
     pipeline.set_state(gst::State::Playing).map_err(|e| format!("set state playing: {e}"))?;
+    // Nachtrag 161, 2026-08-21: TATSÄCHLICHEN Abschluss dieses initialen
+    // Übergangs abwarten, statt sofort zurückzukehren — Live-Fund (per
+    // MXL-Grain-Head-Index bestätigt, nicht nur vermutet): ein sehr
+    // schnell nach Prozessstart eintreffender `cue()`/`take()` (z. B.
+    // vom Orchestrator automatisiert ausgelöst, ohne die manuelle
+    // Verzögerung mehrerer Curl-Aufrufe wie bei einem von Hand
+    // getesteten Ablauf) kann `build_mxf_branch`s eigenen Preroll- und
+    // `sync_state_with_parent()`-Ablauf treffen, WÄHREND die Pipeline
+    // selbst noch mitten in ihrem EIGENEN, hier bisher nie bestätigten
+    // `Playing`-Übergang steckt (Basiszeit/Clock evtl. noch nicht final
+    // gesetzt) — reproduzierbar als "erste paar Grains geschrieben, dann
+    // für immer eingefroren" (identischer Head-Index über >8s bestätigt),
+    // während ein Ablauf mit mehr natürlicher Verzögerung zwischen
+    // Prozessstart und erstem `cue()`/`take()` (z. B. manuell getestet)
+    // dieselbe Race NIE traf und sauber mit Echtzeit-Tempo durchlief
+    // (per `GST_DEBUG=basesink:6` bestätigt: über die volle 10s-Datei
+    // hinweg korrekt getaktete Frame-Renderings).
+    let (result, state, _pending) = pipeline.state(gst::ClockTime::from_seconds(5));
+    result.map_err(|e| format!("pipeline erreichte PLAYING nicht: {e}"))?;
+    if state != gst::State::Playing {
+        return Err(format!("pipeline meldet nach dem Warten Zustand {state:?} statt PLAYING"));
+    }
 
     video_isel.set_property("active-pad", &branches[&Slot::A].video.sink_pad);
     for (isel, terminal) in group_isels.iter().zip(branches[&Slot::A].groups.iter()) {

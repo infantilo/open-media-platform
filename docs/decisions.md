@@ -19505,3 +19505,113 @@ Pipeline-Basiszeit vergleichen), statt erneut blind `sync=true` zu
 versuchen — die Preroll-Seite ist jetzt aus dem Verdacht.
 
 **Dateien:** keine (vollständig zurückgesetzt).
+
+## 2026-08-21 (Nachtrag 161) — Echtzeit-Pacing: fünfter Versuch, ERFOLGREICH — Nutzer wies auf ein Clock-Problem hin, zwei reale, unabhängige Races gefunden und behoben
+
+Direkter Nutzerauftrag nach Nachtrag 160 ("fixe das. clock problem? ich
+habe doch von anfang an gesagt, es ist vielleicht ein clock problem?
+alles im DMF braucht eine einheitliche Zeitebene."). Nachtrag 160
+selbst re-implementiert (`git apply` auf den gesicherten Diff) statt neu
+geschrieben — derselbe PAUSED-Preroll-Aufbau (`request_branch_paused`/
+`confirm_branch_state`/`request_branch_playing`, `MxlVideoOutput::
+new_paced`/`MxlAudioOutput::new_paced`) war strukturell bereits richtig,
+das Problem lag woanders.
+
+**Erster, entscheidender Fehlschluss aus Nachtrag 160 korrigiert:** das
+dortige "Freeze"-Urteil beruhte auf identischen JPEG-Snapshots über
+mehrere Sekunden — per `GST_DEBUG=basesink:6` (Element-Kategorie, nicht
+die zuvor benutzte, real nicht existierende Kategorie
+"GST_BASE_TIME") direkt am eigens dafür manuell gestarteten Prozess
+(Orchestrator umgeht damit auch den in dieser Sitzung neu aufgetretenen
+401 nach Nutzer-Login, s. u.) zeigte sich: `appsink0` renderte in einem
+sauber durchlaufenden Testlauf tatsächlich 10 volle Sekunden lang echte,
+korrekt getaktete Frames (`gst_base_sink_do_sync`: `reset rc_time`
+wanderte im Gleichschritt mit der Wanduhrzeit von `0:00:00.140` bis
+`0:00:10.100`, sauberes EOS+Flush danach) — die Testdatei zeigt über
+weite Strecken schlicht ein optisch (nahezu) unverändertes Bild
+(ORF-Standbild/Bauchbinde), weshalb identische Snapshots ALLEIN kein
+Freeze-Beweis sind. **Neue, robuste Verifikationsmethode ab hier:**
+`mxl-info --domain /dev/shm/omp-mxl -f <flow>` im Sekundentakt, `Head
+index` beobachten — ein GENUINER Live-Zähler, unabhängig von
+Bildinhalt UND von der bereits als irreführend bekannten
+`playheadPositionMs`.
+
+**Mit dieser Methode zwei ECHTE, unabhängige Races gefunden** (beide nur
+manchmal reproduzierend — je nach Zeitabstand zwischen Prozessstart und
+erstem `cue()`/`take()` bzw. zwischen Zweig-Preroll-Beginn und dem
+ersten poll-Zyklus des Schreib-Threads):
+
+1. **`build()` bestätigte den EIGENEN initialen `pipeline.set_state
+   (Playing)`-Übergang nie** — reiner Fire-and-Forget. Ein sehr schnell
+   nach Prozessstart eintreffendes `cue()`/`take()` (z. B. automatisiert
+   vom Orchestrator ausgelöst, ohne die natürliche Verzögerung mehrerer
+   von Hand getippter `curl`-Aufrufe) konnte `build_mxf_branch`s eigenen
+   Preroll treffen, während die Pipeline selbst noch mitten im eigenen,
+   nie abgewarteten `PLAYING`-Übergang steckte. Live reproduziert: exakt
+   5 initiale Grains geschrieben (die MXL-Ringpuffergröße), danach für
+   >8s bestätigt eingefroren. Fix: `pipeline.state(5s)` nach dem
+   `set_state(Playing)` in `build()`, mit Fehler-Propagation statt
+   Ignorieren.
+2. **Nach Fix 1 verbesserte sich das Bild (echtes Pacing setzte ein),
+   fror aber trotzdem nach ca. 2s/50 Frames wieder ein** — per `gdb` an
+   der konkret eingefrorenen Instanz und per erneutem `GST_DEBUG=
+   basesink:6`-Lauf auf einer absichtlich SCHNELL (nur 1s Verzögerung
+   nach Prozessstart) angesteuerten Instanz reproduziert: `appsink0`
+   selbst renderte laut Trace weiterhin sauber die VOLLEN 10 Sekunden
+   durch — die Diskrepanz lag also NICHT mehr in GStreamer/dem Appsink,
+   sondern zwischen "Appsink rendert" und "unser Rust-Schreib-Thread
+   bekommt es tatsächlich ab". Ursache gefunden in `mxl.rs`s
+   `write_loop`/`write_audio_loop` (Nachtrag 155): der dortige
+   Selbst-Flush ("Appsink aus dem EOS-Latch holen") feuerte bereits beim
+   ERSTEN `None`+`is_eos()==true`-Treffer — mit `sync=false` (der alte
+   Normalfall) war das Fenster, in dem `is_eos()` fälschlich `true`
+   liefert (laut GStreamer-Doku auch VOR echtem Preroll, nicht nur bei
+   echtem Dateiende), praktisch nicht existent (alles lief quasi sofort
+   durch). Mit `sync=true`/echtem, jetzt mehrere hundert Millisekunden
+   bis über eine Sekunde dauerndem Preroll (Fix aus Nachtrag 160) traf
+   dieser SOFORTIGE Flush-auf-eigenem-Sink-Pad-Aufruf — von einem
+   komplett unsynchronisierten Hintergrund-Thread aus, ohne jede
+   Kenntnis von `build_mxf_branch`s laufendem Preroll — reproduzierbar
+   GENAU in dieses Preroll-Fenster hinein und riss den gerade erst
+   sauber aufgebauten Segment-/Preroll-Zustand wieder ein. Fix: ERST ab
+   5 AUFEINANDERFOLGENDEN `None`+`is_eos()`-Treffern flushen (~1s bei
+   200ms-Poll-Intervall, Zähler bei jedem erfolgreichen Sample-Pull auf
+   0 zurückgesetzt) — unterscheidet einen nur vorübergehenden
+   Preroll-Blip zuverlässig von einem echten, dauerhaften EOS-Stau, ohne
+   die ursprüngliche Nachtrag-155-Reparatur selbst aufzugeben. Gleiche
+   Änderung in `write_audio_loop` gespiegelt.
+
+**Verifiziert:** manuell gestarteter Prozess (Orchestrator-Login-Umgehung,
+s. u.), `append`+`cue`+`take` mit nur 1s Verzögerung nach Prozessstart
+(bewusst der zuvor reproduzierende schnelle Fall) — `mxl-info`-Head-Index
+lief 12 volle Sekunden am Stück durch (Zuwächse pro Sekunde zwischen 30
+und 67 Grains, konsistent mit 25fps plus Zähl-Jitter durch die
+1s-Polling-Granularität), kein Einfrieren beobachtet. `cargo test -p
+omp-mxf-player -p omp-mediaio` grün (13+8 Tests, nach `source
+deploy/dev/mxl.env` für `LD_LIBRARY_PATH`). `cargo build --workspace`
+grün — die anderen 12 `MxlVideoOutput`/`MxlAudioOutput`-Aufrufer bleiben
+über `new()` (unverändert `paced=false`) strukturell unberührt.
+
+**Nebenbefund, nicht weiterverfolgt:** während der Verifikation lief
+ein `cue()` auf einen zweiten Slot ins bereits dokumentierte Nachtrag-
+157-Teardown-Timeout ("teardown von Slot B nach 5s abgebrochen").
+Ursache nicht geklärt (vermutlich eine parallele Interaktion über die
+gemeinsame NMOS-Registry mit einem der für diese Untersuchung manuell
+gestarteten Diagnose-Prozesse, die denselben Namen/dieselbe Registry
+teilen wie echte Orchestrator-Instanzen) — betraf einen ANDEREN Slot als
+den gerade unter Beobachtung stehenden und störte die Pacing-Messung
+selbst nachweislich nicht.
+
+**Aufräum-Einschränkung dieser Sitzung:** der Orchestrator verlangt seit
+einem während dieser Sitzung vom Nutzer selbst angelegten Login
+plötzlich Authentifizierung (zuvor Bootstrap-Modus ohne Login) — eigene
+Test-Instanzen konnten daher nicht mehr sauber per
+`DELETE /api/v1/instances/<id>` entfernt werden, nur per direktem
+`kill`. Ein per `kill` beendeter, orchestrator-verwalteter
+Test-Prozess (`730d9929`) blieb dadurch möglicherweise als Prozess- oder
+Registry-Leiche zurück; sollte bei Gelegenheit über die UI geprüft und
+falls nötig manuell entfernt werden.
+
+**Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`build()`),
+`nodes/omp-mediaio/src/mxl.rs` (`write_loop`, `write_audio_loop`,
+sowie der aus Nachtrag 160 übernommene `new_paced`/`new_impl`-Umbau).

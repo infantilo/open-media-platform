@@ -153,8 +153,78 @@ pub struct MxlVideoOutput {
 }
 
 impl MxlVideoOutput {
+    /// Unverändertes Verhalten aller bisherigen Aufrufer (`sync=false`,
+    /// `async=false` — s. `new_impl`-Dokumentation für den K5-Teil-1-
+    /// Deadlock-Fund, den `async=false` dort verhindert).
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        width: u32,
+        height: u32,
+        framerate_numerator: u32,
+        framerate_denominator: u32,
+        output_delay: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
+        Self::new_impl(
+            pipeline,
+            upstream,
+            context,
+            flow_id,
+            label,
+            width,
+            height,
+            framerate_numerator,
+            framerate_denominator,
+            output_delay,
+            false,
+        )
+    }
+
+    /// Echtzeit-getaktete Variante (Nachtrag 160, 2026-08-21):
+    /// `sync=true` statt `sync=false` am Appsink, für Aufrufer, deren
+    /// vorgelagerte Kette (anders als z. B. `omp-source`s selbstgetaktete
+    /// `videotestsrc`) NICHT von sich aus in Echtzeit produziert — aktuell
+    /// nur `omp-mxf-player` (Datei-Decode läuft sonst unkontrolliert
+    /// schneller als Echtzeit durch die Pipeline, s. docs/decisions.md
+    /// Nachtrag 153/156/160). Setzt voraus, dass der Aufrufer den
+    /// vorgelagerten Zweig VOR dem Aufruf per explizitem, bestätigtem
+    /// PAUSED-Preroll vorbereitet (s. Nachtrag 160) — ohne das friert die
+    /// Ausgabe nach 1-2 Frames ein (dreifach live bestätigter Fund dieser
+    /// Sitzung, s. `new_impl`-Dokumentation).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_paced(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        width: u32,
+        height: u32,
+        framerate_numerator: u32,
+        framerate_denominator: u32,
+        output_delay: Arc<AtomicU64>,
+    ) -> Result<Self, String> {
+        Self::new_impl(
+            pipeline,
+            upstream,
+            context,
+            flow_id,
+            label,
+            width,
+            height,
+            framerate_numerator,
+            framerate_denominator,
+            output_delay,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_impl(
         pipeline: &gst::Pipeline,
         upstream: &gst::Element,
         context: Arc<MxlContext>,
@@ -172,6 +242,12 @@ impl MxlVideoOutput {
         // `Arc::new(AtomicU64::new(0))` (No-Op, unverändertes
         // Verhalten). `write_loop` liest ihn live, s. dort.
         output_delay: Arc<AtomicU64>,
+        // `paced` (Nachtrag 160, 2026-08-21): `true` nur über `new_paced`
+        // erreichbar — hält `sync=false`/`async=false` für ALLE
+        // bestehenden Aufrufer strukturell unverändert bei (kein
+        // gemeinsamer Blast-Radius über einen einzelnen Bool-Parameter an
+        // 13 Aufrufstellen, s. dortige Doku).
+        paced: bool,
     ) -> Result<Self, String> {
         let videoconvert = gst::ElementFactory::make("videoconvert")
             .build()
@@ -202,44 +278,49 @@ impl MxlVideoOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
-        // `async=false` (Live-Test-Fund K5-Teil-1, docs/decisions.md
-        // 2026-07-16, bestätigtes Muster aus `PIPELINE CONTROLLER/lib/
-        // PlayerPipeline.js`/`MasterPipeline.js`, `UMSETZUNG.md` §0 Punkt
-        // 9): ohne dieses Flag muss der Sink erst einen Puffer empfangen
-        // (Preroll), bevor sein eigener PAUSED→PLAYING-Übergang als
-        // abgeschlossen gilt — bei `omp-ograf` (K5-Teil-1) mit `wpesrc`
-        // und drei Appsinks in einer `tee`-Topologie führte das
-        // reproduzierbar zu einem Dauer-Deadlock in
-        // `gst_base_sink_wait_preroll()` (per `gdb`/`GST_DEBUG=
-        // GST_STATES:5` hart nachgewiesen), sobald ein Zweig minimal
-        // langsamer lief als die anderen. `async=false` lässt den
-        // Zustandswechsel synchron/sofort durchlaufen, unabhängig davon,
-        // ob/wann der erste Puffer ankommt — exakt das dokumentierte
-        // Muster, das PIPELINE CONTROLLER für jeden Tee-Zweig-Sink
-        // (`intervideosink`/`interaudiosink`) verwendet.
-        // 2026-08-21: `sync=true` versucht (Fund: `omp-mxf-player` läuft
-        // mit `sync=false` unpaced, ~600% CPU über 6 Threads, da
-        // Datei-Decode — anders als der Moduldoc-Annahme "videotestsrc" —
-        // nicht selbstgetaktet ist, s. `docs/decisions.md`). `sync=true`
-        // senkt die CPU-Last zuverlässig, friert aber die MXL-Ausgabe auf
-        // einem einzelnen Frame ein. Nachtrag 156 (2026-08-21) versuchte
-        // `sync=true` nach den Nachtrag-155-Fixes (Appsink-Selbst-Flush,
-        // Schreib-Thread-am-Leben) erneut — die `playheadPositionMs`-
-        // Anzeige lief zwar (irreführend: sie spiegelt `mxfdemux`s
-        // internen Lese-/Parse-Fortschritt, nicht die tatsächliche
-        // Ausgabe), das ECHTE Videobild fror aber nachweislich nach dem
-        // zweiten Frame ein (`md5sum` über mehrere `previewUrl`-
-        // Snapshots identisch) — derselbe reale Freeze wie beim ersten
-        // Versuch, nur diesmal an der Position-Anzeige vorbei verdeckt.
-        // Wieder zurück auf `sync=false`. Echte Echtzeit-Drosselung für
-        // Datei-Wiedergabe bleibt offen, s. docs/decisions.md.
-        let appsink = gst::ElementFactory::make("appsink")
-            .property("sync", false)
-            .property("async", false)
-            .property("max-buffers", 2u32)
-            .property("drop", true)
-            .build()
-            .map_err(|e| format!("appsink: {e}"))?;
+        // `async=false` bei `paced=false` (Live-Test-Fund K5-Teil-1,
+        // docs/decisions.md 2026-07-16, bestätigtes Muster aus
+        // `PIPELINE CONTROLLER/lib/PlayerPipeline.js`/`MasterPipeline.js`,
+        // `UMSETZUNG.md` §0 Punkt 9): ohne dieses Flag muss der Sink erst
+        // einen Puffer empfangen (Preroll), bevor sein eigener
+        // PAUSED→PLAYING-Übergang als abgeschlossen gilt — bei `omp-ograf`
+        // (K5-Teil-1) mit `wpesrc` und drei Appsinks in einer
+        // `tee`-Topologie führte das reproduzierbar zu einem
+        // Dauer-Deadlock in `gst_base_sink_wait_preroll()` (per
+        // `gdb`/`GST_DEBUG=GST_STATES:5` hart nachgewiesen), sobald ein
+        // Zweig minimal langsamer lief als die anderen. `async=false`
+        // lässt den Zustandswechsel synchron/sofort durchlaufen,
+        // unabhängig davon, ob/wann der erste Puffer ankommt.
+        //
+        // `sync=true`/`async` bleibt Standard(`true`) bei `paced=true`
+        // (Nachtrag 160, 2026-08-21, nur über `new_paced` erreichbar,
+        // s. dortige Doku): zwei frühere `sync=true`-Versuche (Nachtrag
+        // 153/156) ließen `async=false` unverändert stehen und froren
+        // die Ausgabe nach 1-2 Frames ein — mit `async=false` meldet der
+        // Appsink seinen eigenen PAUSED-Übergang als abgeschlossen, OHNE
+        // tatsächlich auf den ersten Puffer gewartet zu haben, weshalb
+        // ein nachgelagertes "auf bestätigtes PAUSED warten" (wie
+        // Nachtrag 160 es jetzt braucht) wirkungslos gewesen wäre.
+        // `paced=true` lässt `async` deshalb bewusst auf dem Standard
+        // (`true`), NUR dieser Zweig betrifft `omp-mxf-player` — die
+        // anderen 12 `new()`-Aufrufer bleiben exakt beim bisherigen,
+        // K5-Teil-1-sicheren `async=false` (s. `new`-Wrapper oben).
+        let appsink = if paced {
+            gst::ElementFactory::make("appsink")
+                .property("sync", true)
+                .property("max-buffers", 2u32)
+                .property("drop", true)
+                .build()
+                .map_err(|e| format!("appsink: {e}"))?
+        } else {
+            gst::ElementFactory::make("appsink")
+                .property("sync", false)
+                .property("async", false)
+                .property("max-buffers", 2u32)
+                .property("drop", true)
+                .build()
+                .map_err(|e| format!("appsink: {e}"))?
+        };
 
         pipeline
             .add(&videoconvert)
@@ -401,6 +482,15 @@ fn write_loop(
 ) {
     let reference_caps = tai_reference_caps();
     let mut last_written: Option<u64> = None;
+    // Nachtrag 161, 2026-08-21: zählt AUFEINANDERFOLGENDE `None`+`is_eos()`-
+    // Treffer, s. Doku beim Flush-Zweig unten — unterscheidet einen
+    // GENUINEN, dauerhaften EOS-Stau (Zweig fertig, `apply_active` noch
+    // nicht gewechselt) von einem nur VORÜBERGEHENDEN `is_eos()==true`
+    // während eines gerade laufenden, mit `sync=true`
+    // (`mxl::MxlVideoOutput::new_paced`) nun echt mehrere hundert
+    // Millisekunden bis Sekunden dauernden PAUSED-Preroll-Vorgangs
+    // (Nachtrag 160/161, `build_mxf_branch`).
+    let mut consecutive_eos_polls: u32 = 0;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
@@ -454,15 +544,51 @@ fn write_loop(
                 // das idempotent, sooft der Appsink im EOS-Zustand
                 // verharrt — sobald echte neue Daten fließen, verlässt
                 // die Schleife diesen Zweig ohnehin von selbst.
-                if let Some(sink_pad) = app_sink.static_pad("sink") {
-                    let _ = sink_pad.send_event(gst::event::FlushStart::new());
-                    let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                //
+                // ERST ab mehreren AUFEINANDERFOLGENDEN Treffern flushen
+                // (Nachtrag 161, 2026-08-21, live per `GST_DEBUG=
+                // basesink:6` gefunden): `is_eos()` liefert laut
+                // GStreamer-Doku (s. oben) AUCH `TRUE`, solange der
+                // Appsink noch gar nicht in PAUSED/PLAYING angekommen
+                // ist — mit `sync=true` (`new_paced`) dauert der ECHTE,
+                // bestätigte PAUSED-Preroll eines neuen Zweigs
+                // (`build_mxf_branch`, Nachtrag 160) jetzt real mehrere
+                // hundert Millisekunden bis über eine Sekunde, statt wie
+                // vorher praktisch sofort durchzulaufen. Ein SOFORTIGER
+                // Flush auf dem ersten Treffer traf dadurch reproduzierbar
+                // GENAU in dieses Preroll-Fenster hinein und störte es
+                // (Beobachtung: Video spielte danach nur noch einige
+                // Frames/Sekunden lang echt getaktet, dann dauerhaft
+                // Stillstand — MXL-Grain-Head-Index bestätigt eingefroren,
+                // obwohl `GstDebug` weiterhin normale
+                // `gst_base_sink_chain_unlocked`-Aktivität zeigte, also
+                // eine Diskrepanz zwischen "Appsink rendert" und "unser
+                // Schreib-Thread bekommt es tatsächlich ab", genau wie
+                // ein durch diesen Flush zurückgesetzter Segment-/
+                // Preroll-Zustand es erklären würde). Ein echter,
+                // dauerhafter EOS-Stau (Zweig fertig, `apply_active` noch
+                // nicht gewechselt) bleibt dagegen PERSISTENT über viele
+                // aufeinanderfolgende Polls hinweg — 5 Treffer (~1s bei
+                // 200ms Poll-Intervall) unterscheiden das zuverlässig von
+                // einem nur vorübergehenden Preroll-Fenster, ohne die
+                // eigentliche Nachtrag-155-Reparatur selbst aufzugeben.
+                consecutive_eos_polls += 1;
+                if consecutive_eos_polls >= 5 {
+                    if let Some(sink_pad) = app_sink.static_pad("sink") {
+                        let _ = sink_pad.send_event(gst::event::FlushStart::new());
+                        let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                    }
+                    consecutive_eos_polls = 0;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }
-            None => continue,
+            None => {
+                consecutive_eos_polls = 0;
+                continue;
+            }
         };
+        consecutive_eos_polls = 0;
         let Some(buffer) = sample.buffer() else {
             continue;
         };
@@ -625,6 +751,7 @@ pub struct MxlAudioOutput {
 }
 
 impl MxlAudioOutput {
+    /// Unverändertes Verhalten aller bisherigen Aufrufer, s. `MxlVideoOutput::new`.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pipeline: &gst::Pipeline,
@@ -634,6 +761,34 @@ impl MxlAudioOutput {
         label: &str,
         sample_rate: u32,
         channels: u32,
+    ) -> Result<Self, String> {
+        Self::new_impl(pipeline, upstream, context, flow_id, label, sample_rate, channels, false)
+    }
+
+    /// S. `MxlVideoOutput::new_paced` (Nachtrag 160, 2026-08-21).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_paced(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        sample_rate: u32,
+        channels: u32,
+    ) -> Result<Self, String> {
+        Self::new_impl(pipeline, upstream, context, flow_id, label, sample_rate, channels, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_impl(
+        pipeline: &gst::Pipeline,
+        upstream: &gst::Element,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+        label: &str,
+        sample_rate: u32,
+        channels: u32,
+        paced: bool,
     ) -> Result<Self, String> {
         let audioconvert = gst::ElementFactory::make("audioconvert")
             .build()
@@ -677,11 +832,13 @@ impl MxlAudioOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
-        // `sync=false` (2026-08-21, Nachtrag 156): `sync=true` erneut
-        // versucht und wieder verworfen, gleicher Fund/gleiche
-        // Begründung wie beim Video-Appsink oben (s. dortiger Kommentar).
+        // `sync`/`paced`: s. `MxlVideoOutput::new_impl`-Kommentar (gleicher
+        // Fund/gleiche Begründung, `async` bleibt hier für BEIDE Zweige
+        // unangetastet auf dem Standard `true` — dieser Appsink hatte nie
+        // ein explizites `async=false`, der K5-Teil-1-Fund betraf nur den
+        // Video-Zweig).
         let appsink = gst::ElementFactory::make("appsink")
-            .property("sync", false)
+            .property("sync", paced)
             .property("max-buffers", 4u32)
             .property("drop", true)
             .build()
@@ -805,23 +962,35 @@ fn write_audio_loop(
     let reference_caps = tai_reference_caps();
     let mut index: Option<u64> = None;
     let mut last_written: Option<u64> = None;
+    // S. `write_loop`-Kommentar (Nachtrag 161).
+    let mut consecutive_eos_polls: u32 = 0;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
             // Gleicher Fund/gleiche Begründung wie in `write_loop` oben,
             // inkl. `last_written.is_some()`-Zusatzbedingung, Schlafen-
-            // statt-`break` UND Appsink-Selbst-Flush (Nachtrag 155).
+            // statt-`break` UND Appsink-Selbst-Flush (Nachtrag 155), UND
+            // die Aufeinanderfolge-Schwelle gegen den Preroll-Fenster-Fund
+            // (Nachtrag 161).
             None if last_written.is_some() && app_sink.is_eos() => {
-                if let Some(sink_pad) = app_sink.static_pad("sink") {
-                    let _ = sink_pad.send_event(gst::event::FlushStart::new());
-                    let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                consecutive_eos_polls += 1;
+                if consecutive_eos_polls >= 5 {
+                    if let Some(sink_pad) = app_sink.static_pad("sink") {
+                        let _ = sink_pad.send_event(gst::event::FlushStart::new());
+                        let _ = sink_pad.send_event(gst::event::FlushStop::new(true));
+                    }
+                    consecutive_eos_polls = 0;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 continue;
             }
-            None => continue,
+            None => {
+                consecutive_eos_polls = 0;
+                continue;
+            }
         };
+        consecutive_eos_polls = 0;
         let Some(buffer) = sample.buffer() else {
             continue;
         };
