@@ -18883,5 +18883,103 @@ Rollback), `ui/graph/flow-canvas.ts`, `nodes/omp-viewer/ui/bundle.js`
 pipeline}.rs` + `ui/bundle.js` (Jog/Shuttle/Seek). Nebenbefund: Festplatte
 lief während dieser Sitzung mit 16 MB frei praktisch voll (50GB davon
 `nodes/target/`, reine Rust-Build-Artefakte) — per `cargo clean` auf
-Nutzeranweisung aufgeräumt (56GB freigegeben), kein Code-Bug. Noch
-**nicht committet** — s. Statusfrage an den Nutzer.
+Nutzeranweisung aufgeräumt (56GB freigegeben), kein Code-Bug.
+
+## 2026-08-21 (Nachtrag 154) — CPU-Burn aus Nachtrag 153 Punkt 2 wirklich root-caused und behoben (echte Ursache war eine andere als vermutet)
+
+Nutzerauftrag: "CPU burn aus punkt 3 fixen" (= Nachtrag 153 Punkt 2). Die
+dort vermutete Ursache (fehlende PAUSED→Preroll-Wait→PLAYING-
+Handshake, analog PIPELINE CONTROLLER) erwies sich beim genaueren
+Hinsehen als NICHT zutreffend für diese Architektur: `omp-mxf-player`
+fügt neue Zweige einer bereits laufenden (PLAYING-)Pipeline hinzu
+(`sync_state_with_parent()`), kein Kaltstart-Preroll-Szenario wie bei
+PIPELINE CONTROLLERs frisch gebauten Pipelines — dafür ist deren Muster
+nicht 1:1 übertragbar, ohne genauer hinzusehen.
+
+**Echte Ursache, per `GST_DEBUG` + `gdb` zweifelsfrei belegt (nicht
+geraten):**
+
+1. Node manuell (nicht über den Launcher) mit
+   `GST_DEBUG="*:2,mxfdemux:6,decodebin:5,GST_STATES:5,…"` gestartet
+   (Launcher-API erlaubt keine Custom-Env pro Instanz). Reproduktion
+   zeigte: `playheadPositionMs` blieb nach einiger Zeit exakt bei
+   `10000` stehen, während die CPU weiter bei ~620% verharrte.
+2. `ffprobe` gegen `data/media/ET270438.mxf` bestätigte: die Datei ist
+   real exakt `10.000000s` lang — das "Einfrieren bei 10000ms" war die
+   ganze Zeit KORREKTES, planmäßiges Erreichen des echten Dateiendes,
+   kein Pipeline-Bug. Der GST_DEBUG-Log zeigte exakt dort das letzte
+   `Pushing buffer`/`Consuming KLV` von `mxfdemux`, danach nur noch
+   wiederholte `handling query position` / `Returning position
+   10000000000`-Zeilen im 200ms-Takt (= dem eigenen Playhead-Poll-Tick
+   aus Nachtrag 153).
+3. Die tatsächliche Ursache der CPU-Last: `sudo gdb -p <pid> -batch -ex
+   "thread apply all bt"` (Sandbox verlangt `dangerouslyDisableSandbox`
+   + `sudo`, `ptrace_scope=1` verbietet sonst Non-Parent-Attach) auf den
+   sechs heißen Threads (identifiziert per `/proc/<pid>/task/*/stat`-
+   Delta, nicht `ps`) zeigte sie ALLE in
+   `omp_mediaio::mxl::write_loop`/`write_audio_loop`
+   (`nodes/omp-mediaio/src/mxl.rs`), gefangen in
+   `AppSink::try_pull_sample` — einer davon sogar mitten in GStreamers
+   eigenem `gst_debug_log_valist()`, aufgerufen aus
+   `gst_app_sink_try_pull_object()`: ein untrügliches Zeichen für einen
+   Aufruf in extrem hoher Frequenz. **`try_pull_sample(200ms)` liefert
+   nach EOS `None` SOFORT statt den Timeout abzuwarten** (dokumentiertes
+   GStreamer-Verhalten) — der bisherige Code (`None => continue`)
+   drehte die `while running.load() {…}`-Schleife danach unbegrenzt
+   weiter, da nichts `running` je auf `false` setzt. Ein einzelner
+   Thread, der pro Sekunde zehntausende Male leer durch
+   `try_pull_sample` läuft, erklärt die ~100%/Thread × 6 Threads
+   vollständig — und erklärt zugleich, warum die vorherige `sync=true`-
+   Änderung (Nachtrag 153) nichts brachte: sie adressierte reines
+   Decoding-Tempo, nicht das Verhalten NACH Erreichen von EOS.
+
+**Fix:** `None if last_written.is_some() && app_sink.is_eos() => break`
+statt `None => continue` in beiden Schleifen (`write_loop`,
+`write_audio_loop`) — bricht die Schleife sauber ab, sobald echtes EOS
+erkannt UND mindestens ein Grain bereits geschrieben wurde.
+
+**Zweiter, live beim Verifizieren gefundener Bug in der ersten Fassung
+des Fixes (`None if app_sink.is_eos() => break`, ohne
+`last_written.is_some()`):** `gst_app_sink_is_eos()` liefert laut
+GStreamer-Doku AUCH `TRUE`, wenn der Appsink noch gar nicht in
+PAUSED/PLAYING angekommen ist — nicht nur bei echtem Stream-Ende. Da
+die Schreib-Threads sofort bei der Konstruktion von
+`MxlVideoOutput`/`MxlAudioOutput` starten (potenziell bevor die
+Pipeline vollständig PLAYING erreicht hat), brach der erste Fixversuch
+den Thread beim ALLERERSTEN `None` ab — noch bevor auch nur ein
+einziges Sample floss (`last_written` dabei nachweislich immer noch
+`None`, per temporärem `eprintln!`-Diagnose-Build verifiziert). Ergebnis:
+gar kein Bild/Ton mehr, in JEDEM Testlauf reproduziert (`omp-viewer`-Log:
+"connect … failed: get_flow_def(…): Flow not found" — der Flow blieb
+leer, da nie ein Grain committet wurde) — schlimmer als der
+Ursprungsbug. Per einer einzigen zusätzlichen Bedingung
+(`last_written.is_some()`) behoben: EOS gilt jetzt erst als "echt",
+nachdem mindestens ein Grain erfolgreich geschrieben wurde.
+
+**Live verifiziert (mehrere frische, isolierte Einzel-Instanz-Läufe,
+inkl. eines mit `GST_DEBUG`):**
+- CPU während echter Wiedergabe: ~12-17% (vorher ~600-650%).
+- CPU nach echtem Dateiende (10s, per `ffprobe` bestätigt): bleibt bei
+  ~12-17% bzw. sinkt weiter, statt unbegrenzt bei ~600% zu verharren.
+- Video/Audio fließen weiterhin normal zu einem verbundenen Viewer
+  (echtes JPEG, 640×360, per `file`-Check bestätigt) — kein Rückschritt
+  durch den zweiten Fix.
+- Der Fix liegt im geteilten `omp-mediaio`-Modul, betrifft also auch
+  `omp-player`/`omp-source`/`omp-video-mixer-me`/`omp-audio-mixer` (alle
+  gegen dasselbe `write_loop`/`write_audio_loop` gebaut, alle
+  neu kompiliert und verifiziert grün) — potenziell derselbe latente
+  Bug bei jedem MXL-Sender, dessen Quelle irgendwann real EOS erreicht
+  (bislang vermutlich nie beobachtet, weil `omp-source`/Live-Quellen
+  praktisch nie EOS erreichen und `omp-player`/`omp-mxf-player` bislang
+  wenig mit kurzen Testdateien gegen echtes EOS gelaufen sind).
+
+**Weiterhin offen, unverändert:** die bereits in Nachtrag 153 notierte
+"Position bleibt gelegentlich schon kurz nach `take()` stehen"-
+Flakiness (unabhängig von diesem Fix reproduziert, CPU bleibt dabei
+aber korrekt niedrig) — vermutlich tatsächlich verwandt mit der
+Preroll-Vermutung aus Nachtrag 153, aber nicht mehr Teil dieses
+Nachtrags.
+
+**Dateien:** `nodes/omp-mediaio/src/mxl.rs` (`write_loop`,
+`write_audio_loop`). Noch **nicht committet** — s. Statusfrage an den
+Nutzer.

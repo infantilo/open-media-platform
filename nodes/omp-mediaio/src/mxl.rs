@@ -403,6 +403,32 @@ fn write_loop(
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
+            // 2026-08-21 root-caused per `gdb`-Backtrace an
+            // `omp-mxf-player` (docs/decisions.md Nachtrag 154): einmal
+            // EOS erreicht, liefert `try_pull_sample` `None` SOFORT statt
+            // den 200ms-Timeout abzuwarten (dokumentiertes, korrektes
+            // GStreamer-Verhalten — nichts wartet mehr auf EOS). Ein
+            // schlichtes `continue` drehte diese Schleife danach
+            // unbegrenzt weiter, ohne dass `running` je auf `false`
+            // gesetzt wird — ~100% CPU auf diesem Thread für immer,
+            // sichtbar sogar in `gst_debug_log` selbst (so oft aufgerufen,
+            // dass GStreamers eigenes Logging im Profil auftaucht). Bei
+            // echtem EOS bricht die Schleife jetzt sauber ab, statt zu
+            // spinnen.
+            //
+            // `last_written.is_some()` zusätzlich zu `is_eos()` geprüft
+            // (2026-08-21, zweiter Fund direkt beim Verifizieren des
+            // ersten): `gst_app_sink_is_eos()` liefert laut GStreamer-
+            // Doku AUCH `TRUE`, wenn der Appsink noch gar nicht in
+            // PAUSED/PLAYING angekommen ist — nicht nur bei echtem EOS.
+            // Ohne diese Zusatzbedingung brach der Thread sofort beim
+            // allerersten `None` ab (Pipeline-Start, bevor auch nur ein
+            // einziges Sample floss) — schlimmer als der Ursprungs-Bug:
+            // gar kein Bild/Ton mehr, in jedem einzelnen Testlauf
+            // reproduziert (`last_written` dabei immer noch `None`).
+            // Jetzt gilt EOS erst als "echt", nachdem mindestens ein
+            // Grain erfolgreich geschrieben wurde.
+            None if last_written.is_some() && app_sink.is_eos() => break,
             None => continue,
         };
         let Some(buffer) = sample.buffer() else {
@@ -752,6 +778,9 @@ fn write_audio_loop(
         heartbeat.fetch_add(1, Ordering::Relaxed);
         let sample = match app_sink.try_pull_sample(gst::ClockTime::from_mseconds(200)) {
             Some(sample) => sample,
+            // Gleicher Fund/gleiche Begründung wie in `write_loop` oben,
+            // inkl. `last_written.is_some()`-Zusatzbedingung.
+            None if last_written.is_some() && app_sink.is_eos() => break,
             None => continue,
         };
         let Some(buffer) = sample.buffer() else {
