@@ -19392,3 +19392,116 @@ in ca. 8-9s Wandzeit durch, spürbar schneller als Echtzeit).
 **Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`Branch::source`,
 `build_empty_branch`, `build_mxf_branch`, `seek_onair_with_revive`,
 `Command::Seek`/`Command::Step`/Shuttle-Tick).
+
+## 2026-08-21 (Nachtrag 160) — Echtzeit-Pacing: vierter Versuch, PIPELINE-CONTROLLER-Muster übersetzt, IMPLEMENTIERT+GETESTET, WIEDER VERWORFEN — gleiches Freeze-Symptom wie Versuch 2/3, aber neue Diagnose-Erkenntnis
+
+Nutzer live beim Zusehen (`playheadPositionMs` blieb sichtbar auf
+`Duration` eingefroren, echtes Bild wechselte nie): "eventuell läuft
+das Video schneller als Echtzeit durch die Pipeline. dann wäre es ein
+Clock-Problem" — korrekte, unabhängige Bestätigung des bereits
+dokumentierten Befunds (Nachtrag 153/156). Nutzerentscheidung auf
+Rückfrage: vierten Versuch WAGEN, diesmal mit dem tatsächlichen
+PIPELINE-CONTROLLER-Muster statt eines blinden `sync=true`-Flips.
+
+**Recherche** (`lib/PlayerPipeline.js::_tryPipeline`, read-only per
+Fork): PIPELINE CONTROLLER geht NIE direkt auf PLAYING — `pause()` auf
+die GANZE eigene Pipeline, dann blockierend auf die Bus-Nachricht
+`async-done` warten (explizit NICHT `stream-start`/`new-clock`, die
+dort nachweislich zu früh feuern), ERST DANACH `play()`. Sink-seitig
+`sync=true` + `max-lateness=-1`. Ohne den PAUSED-Zwischenschritt: "1
+Frame pro Sink, dann Stillstand" (dortige Doku).
+
+**Übersetzungsproblem, live beim Umsetzen gefunden:** unsere Pipeline
+läuft PROZESSLEBENSDAUER-lang durchgehend (der jeweils andere A/B-Slot
+kann on air sein) — ein `pipeline.set_state(Paused)` auf die GANZE
+Pipeline ist keine Option. Übersetzt auf PRO-ELEMENT-`set_state(Paused)`
+(alle Elemente EINES Zweigs in einem nicht-wartenden Durchlauf
+angefordert, genau wie `GstBin` es intern für ein `set_state()` auf die
+ganze Bin täte), erst danach bestätigt gewartet — sequenzielles
+Anfordern+Bestätigen (wie das alte `start_element_and_wait`) hätte
+deadlocken müssen, weil der zuerst gefragte Downstream-Konsument nie
+PAUSED bestätigen kann, solange der Produzent noch gar nicht läuft.
+
+**Zweites Übersetzungsproblem:** `omp-mxf-player`s per-Tonspur-Queues
+(8 Stück) entstehen reaktiv erst in `mxfdemux`s `no-more-pads`-Callback
+— existieren zur Zeit des ersten PAUSED-Anforderns also noch gar nicht.
+Gelöst per explizitem Fertig-Signal (`mpsc::channel`) am Ende des
+Callbacks: Phase 1 fordert PAUSED nur für die bereits bekannten
+(statischen) Elemente an (das allein bringt `mxfdemux`/`filesrc` erst
+zum Laufen), Phase 2 wartet auf dieses Signal, Phase 3 sammelt DANN den
+vollständigen Zweig (statisch + frisch entstandene Queues) ein,
+bestätigt PAUSED für alle, wechselt gemeinsam auf PLAYING. Die
+Queue-eigene `sync_state_with_parent()`-Aufruf innerhalb des Callbacks
+musste dabei auf `set_state(Paused)` umgestellt werden —
+`sync_state_with_parent()` hätte auf den Zustand der GEMEINSAMEN,
+durchgehend laufenden Pipeline gezielt (PLAYING), am eigentlichen
+Preroll-Schritt vorbei.
+
+`mxl::MxlVideoOutput`/`MxlAudioOutput` bekamen dafür `new_paced()` als
+zusätzliche, rein additive Konstruktor-Variante (`sync=true`,
+`async` bleibt Standard `true` statt des bestehenden `async=false`) —
+`new()` selbst UNVERÄNDERT, alle 12 anderen Aufrufer (u. a. `omp-ograf`,
+dessen `async=false` einen ECHTEN, anderen Deadlock aus K5-Teil-1
+verhindert, s. dortiger Code-Kommentar) blieben dadurch nachweislich
+unberührt (`cargo build --workspace` grün, kein einziger anderer
+Aufrufer musste angefasst werden).
+
+**Implementiert, kompiliert sauber, live getestet — ERGEBNIS: gleiches
+Freeze-Symptom wie Versuch 2/3, trotz strukturell korrektem Muster.**
+Zwei frische Instanzen (Player+Viewer), reale IS-05-Verbindung, `cue()`+
+`take()` liefen OHNE Fehler durch (kein Timeout, kein `Err` aus der
+neuen Preroll-Sequenz) — das allein ist neu gegenüber den Versuchen 2/3,
+die schon vorher keinen sauberen Start hatten. `playheadPositionMs`
+sprang aber sofort auf die volle Datei-Dauer (10000ms) und blieb dort
+über 12 aufeinanderfolgende Sekunden-Checks unverändert stehen; ein
+echtes JPEG-Frame über den verbundenen Viewer zeigte NICHT Schwarzbild,
+sondern echten, erkennbaren Programminhalt (ORF-Bauchbinde, Person im
+Bild) — vier Snapshots über mehrere Sekunden hinweg exakt identisch
+(`md5sum`-gleich). Also: mindestens ein echter, dekodierter Frame kam
+diesmal nachweislich durch die GESAMTE neue Preroll-Kette bis zum
+Viewer — ein echter Fortschritt gegenüber den früheren Versuchen, bei
+denen unklar blieb, ob überhaupt initial korrekt geprerollt wurde. Aber
+exakt danach: Stillstand, identisch zum dokumentierten Verhalten aus
+Nachtrag 153/156.
+
+**gdb-Befund (neue Erkenntnis dieses Versuchs):** `mxfdemux`s eigener
+Pad-Task-Thread (`mxfdemux1:sink`, per Namensgebung dessen
+Pull-Mode-Task) hing zum Untersuchungszeitpunkt in `libgstreamer-1.0.so`s
+GENERISCHER `GstTask`-Verwaltungs-`g_cond_wait` fest — NICHT innerhalb
+der Demuxer-eigenen `gst_mxf_demux_loop`-Pull/Push-Schleife (anders als
+der für Nachtrag 157 dokumentierte, aktiv aus `gst_mxf_demux_loop`
+heraus feststeckende Fall). D. h. der Task selbst ist nicht mitten in
+einem blockierten Push, sondern schlicht NICHT AM LAUFEN/gerade nicht
+zum Weiterlaufen eingeplant — passt eher zu "Downstream übt Backpressure
+aus, Task pausiert dadurch normal zwischen Zyklen" als zu einem reinen
+Demuxer-internen Hänger. Acht weitere Threads mit ähnlichem Namen lagen
+in `libavutil.so`-`pthread_cond_wait` (mutmaßlich `avdec_mpeg2video`s
+eigener Multithread-Decode-Pool, idle) — nicht der eigentliche
+Demux-Task, kein eigener Befund.
+
+**Einordnung:** die PAUSED-Preroll-Lücke war real und ist jetzt
+strukturell behoben (Beweis: `cue()`/`take()` liefen fehlerfrei durch,
+ein echter Frame kam an) — aber sie war NICHT die alleinige Ursache des
+Freeze-Symptoms. Es gibt einen ZWEITEN, unabhängigen Mechanismus, der
+die Ausgabe nach minimalem Fortschritt anhält, sobald `sync=true` aktiv
+ist — plausibler Verdacht (nicht verifiziert, nicht geraten als
+Tatsache hingeschrieben): eine Clock-/Basiszeit-Fehlberechnung beim
+Beitritt eines dynamisch hinzugefügten Zweigs zu einer bereits
+laufenden, gemeinsam genutzten Pipeline (unser A/B-Modell hat dafür
+keine direkte Entsprechung in PIPELINE CONTROLLERs Architektur, die pro
+Wiedergabe-Sitzung eine FRISCHE, isolierte Pipeline aufbaut — dort
+entsteht das Problem einer nachträglich beitretenden Basiszeit gar
+nicht erst).
+
+**Entscheidung:** Änderung vollständig verworfen
+(`git checkout -- nodes/omp-mediaio/src/mxl.rs
+nodes/omp-mxf-player/src/pipeline.rs`), zurück auf den Stand nach dem
+Seek-Revive-Fix. Diff des vierten Versuchs NICHT im Repo, nur als
+Sitzungs-Artefakt gesichert — bei einem fünften Versuch lohnt es sich,
+gezielt die Clock-/Basiszeit-Hypothese zu prüfen (`GST_DEBUG=
+GST_CLOCK:6,GST_BASE_TIME:6` o. ä., oder `gst_element_get_base_time()`
+der neu beigetretenen Elemente per `gdb call` gegen die
+Pipeline-Basiszeit vergleichen), statt erneut blind `sync=true` zu
+versuchen — die Preroll-Seite ist jetzt aus dem Verdacht.
+
+**Dateien:** keine (vollständig zurückgesetzt).
