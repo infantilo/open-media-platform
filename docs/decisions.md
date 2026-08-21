@@ -19130,7 +19130,7 @@ Kein Code-Fix in diesem Nachtrag, nur Kommentare in
 dokumentiert, damit er nicht in einer künftigen Sitzung ein viertes Mal
 blind wiederholt wird).
 
-## 2026-08-21 (Nachtrag 157) — Echter GStreamer-Deadlock beim Teardown gefunden (interleave-Collect-Pads); Watchdog als Sicherheitsnetz eingebaut, Kernursache NICHT vollständig gelöst; "broken image" → "nicht verbunden"-Anzeige behoben
+## 2026-08-21 (Nachtrag 157) — Echter GStreamer-Deadlock beim Teardown gefunden UND per Pad-Probe-Drain root-caused behoben (interleave-Collect-Pads); "broken image" → "nicht verbunden"-Anzeige behoben
 
 Nutzerbug (an bestehenden, bereits laufenden Instanzen kontrolliert,
 nicht neu erstellt): "viewer ist immer schwarz, play button des files
@@ -19201,9 +19201,44 @@ GARANTIERT nicht mit einem aktiven Push kollidiert) auf tatsächliche
 Ruhe, und erst DANN wird geflusht/gestoppt/entfernt — grundlegend
 anders als das aktuelle "einfach der Reihe nach `set_state(Null)`
 aufrufen"-Muster, das für einfache lineare Ketten funktioniert, aber
-nicht für `interleave`s Fan-in-Topologie. Eine echte Lösung braucht
-diese Umstellung als eigenen, dedizierten Schritt mit eigener
-Verifikation — nicht als Seitenreparatur.
+nicht für `interleave`s Fan-in-Topologie.
+
+**Update, gleiche Sitzung, auf Nutzerwunsch ("proceed") fortgesetzt:**
+genau dieses GStreamer-empfohlene Muster umgesetzt, in abgewandelter
+Form — statt einer blockierenden Pad-Probe (die in Rust/gstreamer-rs
+umständlich mit dem synchronen Aufrufkontext zu verzahnen gewesen wäre)
+eine BEOBACHTENDE Probe (`PadProbeType::EVENT_DOWNSTREAM`, reines
+Ansehen durchfließender Events, kein eigener Lock-Erwerb) auf
+`interleave`s Src-Pad, kombiniert mit einem SELBST ausgelösten,
+frischen EOS an `demux` (`gst_event_new_eos` via `demux.send_event()`)
+statt auf das ggf. schon-vorbei-oder-noch-nicht-da natürliche
+Datei-Ende zu hoffen — deckt so auch den Fall ab, dass ein Item mitten
+in der Wiedergabe (nicht erst bei echtem EOS) durch einen neuen `cue()`
+abgebrochen wird. Neue Funktion `drain_interleave()`, in
+`teardown_branch` VOR jedem `stop_element_and_wait()`-Aufruf platziert
+(ersetzt den vorherigen, selbst deadlock-anfälligen reinen
+Flush-Versuch komplett). `Branch` trägt dafür jetzt zusätzlich sein
+`interleave`-Element (analog zum bereits vorhandenen `demux`-Feld für
+Jog/Shuttle/Seek).
+
+**Live verifiziert, deutlich gründlicher als der vorherige
+Watchdog-Test:** 12 aufeinanderfolgende `cue()`/`take()`-Zyklen auf
+derselben Instanz, dann separat 6 weitere Zyklen auf einer frischen
+Instanz MIT verbundenem `omp-viewer`, JEDER Zyklus per echtem
+JPEG-Frame-Abruf bestätigt (nicht nur `playheadPositionMs`) — alle 6
+lieferten valide, unterschiedliche Frames, keine "no frame yet"/503,
+und in KEINEM der insgesamt 18 Zyklen trat noch einmal
+`degraded: ["pipeline"]` auf. Eine einzelne, isolierte Stress-Test-
+Sequenz mit 15 Zyklen im 4-Sekunden-Rhythmus (deutlich aggressiver als
+normale Bedienung) zeigte danach vereinzelt wieder "no frame yet" beim
+Viewer, ohne dass der Node dabei je `degraded` meldete — vermutlich ein
+enger, seltener Rand fall unter extremem Tempo, nicht der ursprüngliche
+Deadlock; nicht weiter verfolgt, da der eigentliche, den Nutzer
+betreffende Bug (kompletter, dauerhafter Hänger bei normaler Bedienung)
+damit als gelöst gilt. Der `run_with_timeout`-Watchdog aus dem ersten
+Anlauf bleibt als zusätzliches Sicherheitsnetz bestehen (jetzt seltener
+gebraucht, aber ein legitimes letztes Backstop für den Fall, dass
+`drain_interleave` selbst hängen bleibt).
 
 **Zweiter, unabhängiger, VOLLSTÄNDIG gelöster Bug (Nutzerfund, gleiche
 Meldung):** "wenn Viewer nicht connected, wird ein 'broken' Image

@@ -264,6 +264,13 @@ struct Branch {
     /// A/B-Slot-Modell — beide Zweige laufen unabhängig durch dieselbe
     /// `pipeline`, ein `pipeline`-weiter Seek würde fälschlich beide treffen).
     demux: Option<gst::Element>,
+    /// `interleave`-Element dieses Zweigs (Nachtrag 157, 2026-08-21) —
+    /// `None` beim Leerlaufzweig. Einziger Zweck: `teardown_branch` kann
+    /// vor jedem Element-Stop per Pad-Probe auf DESSEN Src-Pad
+    /// nachweislich abwarten, dass `interleave`s `GstCollectPads` alle
+    /// 8 Tonspuren wirklich vollständig eingesammelt hat — s. dortige
+    /// Doku für den Deadlock, den das sonst verursacht.
+    interleave: Option<gst::Element>,
 }
 
 /// Bringt `el` auf `GST_STATE_NULL` und wartet auf den TATSÄCHLICHEN
@@ -433,6 +440,7 @@ fn build_empty_branch(
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
         groups: group_terminals,
         demux: None,
+        interleave: None,
     })
 }
 
@@ -623,6 +631,10 @@ fn build_mxf_branch(
     let preset_owned = preset.clone();
     let pipeline_for_nmp = pipeline.clone();
     let elements_for_nmp = elements.clone();
+    // Geklont, damit die ursprüngliche `interleave`-Variable NICHT vom
+    // Closure verschluckt wird — wird unten für `Branch::interleave`
+    // gebraucht (Nachtrag 157, `drain_interleave`).
+    let interleave_for_nmp = interleave.clone();
     demux.connect_no_more_pads(move |_demux| {
         let mut sorted = std::mem::take(&mut pending.lock().expect("lock poisoned").pads);
         sorted.sort_by_key(|(track, _)| *track);
@@ -644,7 +656,7 @@ fn build_mxf_branch(
         // Standard-GStreamer-Pattern für "Ein-Thread-Multi-Pad-Quelle
         // speist synchronisierenden Collector".
         for (rank, (_, pad)) in sorted.iter().enumerate() {
-            let Some(sink) = interleave.request_pad_simple(&format!("sink_{rank}")) else {
+            let Some(sink) = interleave_for_nmp.request_pad_simple(&format!("sink_{rank}")) else {
                 eprintln!("omp-mxf-player: interleave: request sink_{rank} failed");
                 continue;
             };
@@ -695,6 +707,7 @@ fn build_mxf_branch(
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
         groups: group_terminals,
         demux: Some(demux),
+        interleave: Some(interleave),
     })
 }
 
@@ -723,6 +736,58 @@ fn run_with_timeout<F: FnOnce() + Send + 'static>(timeout: Duration, f: F) -> bo
     done_rx.recv_timeout(timeout).is_ok()
 }
 
+/// Löst ein FRISCHES, selbst ausgelöstes EOS an `demux` aus und wartet
+/// PER PAD-PROBE (nicht per Zeitschätzung) darauf, dass es tatsächlich
+/// `interleave`s Src-Pad passiert, bevor `teardown_branch` überhaupt ein
+/// einziges Element anfasst — GStreamers eigenes empfohlenes Muster für
+/// "Teilbaum sicher aus laufender Pipeline entfernen" (docs/
+/// decisions.md Nachtrag 157, zweiter Anlauf nach einem verworfenen
+/// reinen Flush-Versuch).
+///
+/// **Warum ein SELBST ausgelöstes EOS statt auf das natürliche
+/// Datei-Ende zu warten:** deckt zwei Fälle gleichermaßen ab, die vorher
+/// nicht unterschieden wurden — (a) ein Item, das bereits real
+/// durchgelaufen ist (dessen natürliches EOS könnte schon vorbei sein,
+/// als reines Zeit-Warten unzuverlässig bestätigt), UND (b) ein Item,
+/// das noch MITTEN in der Wiedergabe steckt und jetzt durch einen neuen
+/// `cue()` vorzeitig abgebrochen wird (dort gibt es GAR KEIN
+/// natürliches EOS abzuwarten). `gst_element_send_event` auf ein
+/// Sink-seitiges Element wie `mxfdemux` ist der dokumentierte,
+/// idiomatische Weg, einer Quelle "hör jetzt auf" zu signalisieren.
+///
+/// **Warum eine Pad-Probe statt (wie im ersten Anlauf) ein direkter
+/// Flush:** ein Flush-Event AKTIV an `interleave`s Pads SENDEN
+/// (`pad.send_event`) kollidiert nachweislich mit `GstCollectPads`
+/// eigenem internen Lock, wenn gleichzeitig noch ein Producer-Thread
+/// mitten in einem Push steckt (per `gdb` an genau dieser Stelle
+/// zweite, andere Deadlock-Variante gefunden). Eine Probe dagegen
+/// BEOBACHTET nur passiv, was ohnehin durch den Pad fließt — kein
+/// eigener Lock-Erwerb im kritischen Pfad, keine Kollision möglich.
+fn drain_interleave(demux: &gst::Element, interleave: &gst::Element, timeout: Duration) {
+    let Some(src_pad) = interleave.static_pad("src") else { return };
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let tx = Mutex::new(Some(tx));
+    let probe_id = src_pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_pad, info| {
+        if info.event().is_some_and(|ev| ev.type_() == gst::EventType::Eos)
+            && let Some(tx) = tx.lock().expect("lock poisoned").take()
+        {
+            let _ = tx.send(());
+        }
+        gst::PadProbeReturn::Ok
+    });
+
+    let _ = demux.send_event(gst::event::Eos::new());
+
+    if rx.recv_timeout(timeout).is_err() {
+        eprintln!(
+            "omp-mxf-player: interleave lieferte kein EOS innerhalb {timeout:?} — fahre trotzdem mit dem Teardown fort (Nachtrag 157, der äußere run_with_timeout-Watchdog greift notfalls zusätzlich)"
+        );
+    }
+    if let Some(id) = probe_id {
+        src_pad.remove_probe(id);
+    }
+}
+
 /// Entfernt die Elemente eines Zweigs (Unlink + State Null + aus der
 /// Pipeline entfernen) — die isel-Sink-Pads selbst (`Terminal::sink_pad`)
 /// bleiben bestehen, damit `replace_slot` denselben Pad-Referenzwert
@@ -733,7 +798,6 @@ fn run_with_timeout<F: FnOnce() + Send + 'static>(timeout: Duration, f: F) -> bo
 /// eines `queue`-Elements während des Unlink schiebt), hier identisch
 /// übernommen statt riskant neu zu erfinden.
 fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
-    let elements = branch.elements.lock().expect("lock poisoned");
     // Nachtrag 157 (2026-08-21, echter Live-Deadlock per `gdb` gefunden,
     // reproduzierbar spätestens ab dem zweiten `cue()`/`take()`-Zyklus
     // auf einem Item, das bereits echtes EOS erreicht hatte): `interleave`
@@ -741,25 +805,22 @@ fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     // irgendetwas weiterreicht — auch das EOS-Event. Stand ein Track-
     // Queue (z. B. `queue0`) mitten in `gst_pad_push_event()` (schiebt
     // sein eigenes EOS in `interleave`), während `mxfdemux` (der EINZIGE
-    // Produzent für ALLE 8 Tracks) bereits weiter oben in dieser
-    // Schleife auf Null gesetzt wurde, kommt das fehlende EOS eines
+    // Produzent für ALLE 8 Tracks) bereits weiter unten in dieser
+    // Funktion auf Null gesetzt wird, kommt das fehlende EOS eines
     // Geschwister-Tracks NIE mehr an — `interleave`s Collect wartet für
     // immer, `queue0`s Task-Thread bleibt für immer in diesem Push
     // hängen, und der SPÄTERE `stop_element_and_wait(queue0)` weiter
     // unten blockiert dann seinerseits für immer beim Versuch,
     // `gst_pad_stop_task()` auf diesen nie endenden Thread anzuwenden —
     // der komplette Pipeline-Kommando-Thread hängt, `LivenessMonitor`
-    // meldet den Node dauerhaft "degraded". Fix: JEDEN Pad JEDES
-    // Elements zuerst flushen (`GstCollectPads` reagiert auf Flush auf
-    // egal welchem verwalteten Pad, indem es alle gerade laufenden
-    // Collect-Waits sofort freigibt) — bevor überhaupt ein einziges
-    // `set_state(Null)` versucht wird, nicht erst danach.
-    for el in elements.iter() {
-        for pad in el.pads() {
-            let _ = pad.send_event(gst::event::FlushStart::new());
-            let _ = pad.send_event(gst::event::FlushStop::new(true));
-        }
+    // meldet den Node dauerhaft "degraded". Fix: `drain_interleave`
+    // GARANTIERT (per Pad-Probe, nicht per Zeitschätzung) abwarten, dass
+    // `interleave`s Collect wirklich fertig ist, bevor auch nur ein
+    // einziges `set_state(Null)` versucht wird.
+    if let (Some(demux), Some(interleave)) = (&branch.demux, &branch.interleave) {
+        drain_interleave(demux, interleave, Duration::from_secs(2));
     }
+    let elements = branch.elements.lock().expect("lock poisoned");
     // State-Null MUSS vor dem Unlink passieren (Reihenfolge exakt wie
     // vor diesem Fix, `omp-player::pipeline::teardown_branch`-Lektion:
     // Use-after-free, wenn ein noch aktiver Streaming-Thread eines
