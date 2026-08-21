@@ -271,6 +271,14 @@ struct Branch {
     /// 8 Tonspuren wirklich vollständig eingesammelt hat — s. dortige
     /// Doku für den Deadlock, den das sonst verursacht.
     interleave: Option<gst::Element>,
+    /// Woraus dieser Zweig gebaut wurde (Nachtrag 159, 2026-08-21) —
+    /// einziger Zweck: `maybe_revive_onair_branch` kann denselben Zweig
+    /// 1:1 neu aufbauen, wenn `mxfdemux`s Pull-Task nach echtem EOS
+    /// bereits gestoppt hat und ein Seek/Jog ihn deshalb nicht mehr
+    /// erreicht (s. docs/decisions.md Nachtrag 158 — ein reiner
+    /// `PAUSED`→`PLAYING`-Zyklus reicht bei `mxfdemux` dafür
+    /// nachweislich NICHT aus).
+    source: ItemSource,
 }
 
 /// Bringt `el` auf `GST_STATE_NULL` und wartet auf den TATSÄCHLICHEN
@@ -441,6 +449,7 @@ fn build_empty_branch(
         groups: group_terminals,
         demux: None,
         interleave: None,
+        source: ItemSource::TestPattern,
     })
 }
 
@@ -708,6 +717,7 @@ fn build_mxf_branch(
         groups: group_terminals,
         demux: Some(demux),
         interleave: Some(interleave),
+        source: ItemSource::Mxf { path: path.to_string(), preset_id: preset.id.clone() },
     })
 }
 
@@ -1066,16 +1076,13 @@ pub fn run(
                 apply_active(&active, slot);
             }
             Ok(Command::Seek(target_ms)) => {
-                if let Some(demux) = onair_demux(&active) {
-                    seek_to(demux, target_ms.max(0) as u64);
-                }
+                seek_onair_with_revive(&mut active, target_ms.max(0) as u64);
             }
             Ok(Command::Step(frames)) => {
-                if let Some(demux) = onair_demux(&active) {
-                    let current = query_position_ms(demux).unwrap_or(0);
+                if let Some(current) = onair_demux(&active).and_then(query_position_ms) {
                     let delta_ms = frames * 1000 * FRAMERATE_DENOMINATOR as i64 / FRAMERATE_NUMERATOR as i64;
                     let target = (current + delta_ms).max(0) as u64;
-                    seek_to(demux, target);
+                    seek_onair_with_revive(&mut active, target);
                 }
             }
             Ok(Command::SetRate(rate)) => {
@@ -1085,9 +1092,7 @@ pub fn run(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        if let Some(demux) = onair_demux(&active)
-            && let Some(pos_ms) = query_position_ms(demux)
-        {
+        if let Some(pos_ms) = onair_demux(&active).and_then(query_position_ms) {
             position_ms.store(pos_ms, Ordering::Relaxed);
 
             // Shuttle (Nutzerauftrag 2026-08-21): bewusst KEIN echter
@@ -1101,7 +1106,8 @@ pub fn run(
             let rate = rate_milli.load(Ordering::Relaxed) as f64 / 1000.0;
             if rate != 1.0 {
                 let delta_ms = (rate * TICK.as_millis() as f64) as i64;
-                seek_to(demux, (pos_ms + delta_ms).max(0) as u64);
+                let target = (pos_ms + delta_ms).max(0) as u64;
+                seek_onair_with_revive(&mut active, target);
             }
         }
     }
@@ -1170,4 +1176,61 @@ fn seek_to(demux: &gst::Element, target_ms: u64) {
     let _ = demux.set_state(gst::State::Paused);
     let _ = demux.state(gst::ClockTime::from_mseconds(500));
     let _ = demux.set_state(gst::State::Playing);
+}
+
+/// Führt einen Seek auf den aktuellen On-Air-Zweig aus und baut ihn bei
+/// Bedarf automatisch neu auf (Nachtrag 159, 2026-08-21). Hintergrund:
+/// `seek_to`s PAUSED→PLAYING-Zyklus reicht nachweislich NICHT aus, um
+/// `mxfdemux`s Pull-Task nach echtem Datei-EOS wieder anlaufen zu lassen
+/// (per `gdb` an der laufenden Instanz bestätigt, 5 Wiederholungen, s.
+/// `seek_to`-Doku) — ein Seek/Jog danach bliebe sonst für immer
+/// wirkungslos. Erkennung bewusst simpel und ohne GStreamer-interne
+/// Zustände abzufragen (die laut gdb-Befund dabei PLAYING bleiben, also
+/// kein brauchbares Signal liefern): Position vor und nach dem Seek
+/// vergleichen — bewegt sie sich trotz eines eigentlich nötigen Sprungs
+/// nicht, war der Task tot. Der Neuaufbau nutzt bewusst denselben Weg wie
+/// `cue()`/`take()` (`replace_slot`/`build_mxf_branch`), der in dieser
+/// Sitzung bereits über 18 Zyklen hinweg live verifiziert wurde (Nachtrag
+/// 157) — kein neuer, unabhängig zu verifizierender Codepfad. Gilt für
+/// `Seek`, `Step` UND den Shuttle-Tick gleichermaßen (alle drei rufen
+/// diese Funktion statt `seek_to` direkt).
+fn seek_onair_with_revive(active: &mut ActivePipeline, target_ms: u64) {
+    let slot = if active.onair_slot.load(Ordering::Relaxed) == Slot::A.code() {
+        Slot::A
+    } else {
+        Slot::B
+    };
+    let Some(branch) = active.branches.get(&slot) else { return };
+    let Some(demux) = branch.demux.clone() else {
+        // Leerlaufzweig (`build_empty_branch`, kein Datei-Decode) — nichts zu seeken.
+        return;
+    };
+    let source = branch.source.clone();
+    // `branch`-Ausleihe endet hier (letzte Verwendung oben) — ab jetzt
+    // wieder frei für die `&mut active`-Aufrufe unten (`replace_slot`).
+
+    let before_pos = query_position_ms(&demux);
+    seek_to(&demux, target_ms);
+    // Live-Test-Fund: ein lebendiger Task reagiert auf einen Seek nahezu
+    // sofort (<100ms bis sich die Position bewegt) — 250ms Toleranz
+    // reicht für eine zuverlässige Erkennung, ohne Jog/Shuttle spürbar zu
+    // verlangsamen.
+    std::thread::sleep(Duration::from_millis(250));
+    let after_pos = query_position_ms(&demux);
+    let seek_was_needed = before_pos != Some(target_ms as i64);
+    let stuck = seek_was_needed && before_pos.is_some() && after_pos == before_pos;
+    if !stuck {
+        return;
+    }
+
+    eprintln!(
+        "omp-mxf-player: Seek auf Slot {slot:?} (Ziel {target_ms}ms) wirkungslos — mxfdemux-Task vermutlich nach EOS gestoppt, baue Zweig neu auf (Nachtrag 159)"
+    );
+    if let Err(e) = replace_slot(active, slot, &source) {
+        eprintln!("omp-mxf-player: Zweig-Neuaufbau für Seek fehlgeschlagen: {e}");
+        return;
+    }
+    if let Some(new_demux) = active.branches.get(&slot).and_then(|b| b.demux.as_ref()) {
+        seek_to(new_demux, target_ms);
+    }
 }

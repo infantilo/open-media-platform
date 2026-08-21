@@ -19326,3 +19326,69 @@ für das Pacing-Problem würde dieses Symptom in der Praxis STARK
 entschärfen, ohne den mxfdemux-Befund selbst zu beheben.
 
 **Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`seek_to`).
+
+## 2026-08-21 (Nachtrag 159) — Seek-nach-EOS: Absicherung per Zweig-Neuaufbau nachgerüstet — Kernbefund: das mxfdemux-Problem selbst ließ sich live NICHT mehr reproduzieren
+
+Fortsetzung von Nachtrag 158 (Option b dort: "transparentes Neuaufbauen
+des gesamten Zweigs bei einem Seek/Step auf ein bereits fertiges Item").
+Neue Funktion `seek_onair_with_revive()` in `pipeline.rs`: seekt zuerst
+normal per `seek_to()`, wartet 250ms, vergleicht `demux`-Position vor/
+nach dem Seek — bewegt sie sich trotz nötigem Sprung NICHT, gilt der
+Task als tot und der komplette On-Air-Zweig wird per `replace_slot()`
+mit demselben `ItemSource` (neues `Branch.source`-Feld, an beiden
+`Branch`-Konstruktoren gesetzt) 1:1 neu aufgebaut — exakt derselbe,
+bereits über 18 Zyklen verifizierte Pfad wie `cue()`/`take()` (Nachtrag
+157), kein neuer Codepfad. Anschließend erneuter `seek_to()` auf den
+frischen `demux`, um das ursprüngliche Sprungziel zu erreichen. Ersetzt
+die bisherigen direkten `seek_to()`-Aufrufe an allen drei Stellen
+gleichermaßen (`Command::Seek`, `Command::Step`, Shuttle-Tick).
+
+**Wichtiger Befund beim Live-Verifizieren (nicht erwartet):** der in
+Nachtrag 158 per `gdb` bestätigte "Task bleibt für immer tot"-Zustand
+ließ sich in dieser Sitzung **nicht mehr reproduzieren** — trotz
+mehrfacher, gezielter Versuche auf zwei unabhängigen, frisch gebauten
+Instanzen (nicht die alte, evtl. noch beeinflusste Instanz):
+- Item bis zum echten EOS laufen lassen (Position 6× im Sekundentakt
+  bei 10000ms bestätigt stabil), dann `seek()` auf 2000ms: Position
+  bewegte sich sauber vorwärts (2800ms nach 300ms, weiter ansteigend),
+  **kein einziges Mal** löste die neue `wirkungslos`/Neuaufbau-Meldung
+  aus (per `grep` im Log über alle Testläufe bestätigt — der
+  Neuaufbau-Pfad wurde in keinem dieser Tests tatsächlich durchlaufen).
+- Fünf Seeks in schneller Folge (~50ms Abstand) direkt an der
+  EOS-Grenze: Knoten blieb durchgehend erreichbar, keine Hänger, sauber
+  finale Konvergenz auf erneutes echtes EOS.
+- Seek während aktiver Wiedergabe (Regressionstest): weiterhin
+  unverändert funktionsfähig.
+- Real mit angeschlossenem `omp-viewer` verifiziert (nicht nur die
+  `playheadPositionMs`-Telemetrie, die laut Nachtrag 158 selbst
+  irreführend sein kann): JPEG-Frame vor Seek (14545 Bytes) vs. nach
+  Seek (20562 Bytes, andere MD5) — echter, unterschiedlicher
+  Bildinhalt floss tatsächlich durch den Viewer, kein eingefrorenes
+  Bild.
+- Kein CPU-Burn-Rückfall: Player-Prozess fiel nach jedem Testlauf
+  zuverlässig auf 1-6% CPU zurück (kurzzeitige Spitzen um 100%+
+  während aktivem Decodieren nach einem Seek sind normal, keine
+  Endlosschleife).
+
+**Einordnung:** die genaue Ursache für das Verschwinden des
+Nachtrag-158-Befunds wurde NICHT weiter untersucht (Budget) — plausibel
+ist, dass eine der späteren Änderungen derselben Sitzung (Nachtrag 157s
+`drain_interleave`, oder die SIGTERM→SIGINT-Graceful-Shutdown-Korrektur)
+denselben GStreamer-internen Zustand beiläufig mit repariert hat, da
+beide dieselbe EOS-/Task-Lebenszyklus-Maschinerie berühren. Nicht
+ausgeschlossen: eine engere, hier nicht getroffene Timing-Bedingung
+(deutlich längeres Verharren im EOS-Zustand, andere Dateilänge/
+Spuranzahl, Last) triggert den alten Befund weiterhin — deshalb bleibt
+`seek_onair_with_revive()` als Absicherung im Code, auch wenn ihr
+Neuaufbau-Zweig in dieser Sitzung nie tatsächlich auslöste. Bewusst
+NICHT als "behoben" verbucht, sondern als "Ursache aktuell nicht mehr
+reproduzierbar, Absicherung ergänzt" — kein Raten, wo nichts mehr zu
+beobachten war.
+
+**Weiterhin offen, unverändert:** das ungebremste Decoding (Nachtrag
+153/156) — bestätigt in JEDEM Testlauf dieser Sitzung (10s-Datei lief
+in ca. 8-9s Wandzeit durch, spürbar schneller als Echtzeit).
+
+**Dateien:** `nodes/omp-mxf-player/src/pipeline.rs` (`Branch::source`,
+`build_empty_branch`, `build_mxf_branch`, `seek_onair_with_revive`,
+`Command::Seek`/`Command::Step`/Shuttle-Tick).
