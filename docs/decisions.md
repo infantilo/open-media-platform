@@ -19081,3 +19081,51 @@ EOS-Zweig), `nodes/omp-mxf-player/src/pipeline.rs`
 `sync_state_with_parent()`-Aufrufstellen in `build_mxf_branch`
 verwendet — bleibt als eigenständige, korrekte Verbesserung erhalten,
 auch wenn sie für sich allein nicht die Kernursache behoben hatte).
+
+## 2026-08-21 (Nachtrag 156) — Scrub-Bug ("seek springt ans Dateiende, Wiedergabe tot") auf bekannte Unpaced-Decode-Ursache zurückgeführt; `sync=true` ein drittes Mal probiert und wieder verworfen
+
+Nutzerfund: Scrub-Leiste im `omp-mxf-player`-Panel seekt korrekt, das
+Bild "springt" danach aber sichtbar binnen 1-2s ans Dateiende, "Play
+funktioniert nicht mehr".
+
+**Zwei Teilbefunde, beide live verifiziert (verbundener `omp-viewer`,
+echte JPEG-Frames verglichen, nicht nur `playheadPositionMs`):**
+
+1. **Seek selbst funktioniert mechanisch korrekt**, auch rückwärts NACH
+   echtem Dateiende (Position 10000→2000 zurückgesprungen: echte,
+   unterschiedliche Frames über mehrere Sekunden bestätigt, dank der
+   Nachtrag-155-Fixes — vorher wäre das am Appsink-EOS-Latch
+   gescheitert). "Play funktioniert nicht mehr" ist NICHT dauerhaft:
+   ein Rücksprung reaktiviert echte Wiedergabe.
+2. **Das eigentliche, sichtbare Problem ist die bereits seit dem
+   allerersten CPU-Nachtrag bekannte, nie behobene Unpaced-Decode-
+   Eigenschaft** (`sync=false`, keine Echtzeit-Drosselung) — nicht
+   spezifisch für Seek: JEDE Wiedergabe (auch ganz ohne Seek, ab
+   Position 0) erreicht bei diesem 10s-Testclip das reale Dateiende
+   innerhalb von 1-2 Sekunden statt der echten 10s, weil nichts das
+   Decodetempo an die Echtzeit koppelt. Ein Seek zu Position X springt
+   danach binnen 1-2s weiter bis ganz ans Ende — sieht wie "seek
+   kaputt" aus, ist aber dieselbe alte Ursache, nur durch Seeking
+   sichtbarer gemacht (bei einer echten, minutenlangen Sendung fiele
+   das entsprechend weniger krass auf, wäre aber genauso real falsch).
+
+**`sync=true` ein drittes Mal versucht** (nach den Nachtrag-155-Fixes,
+in der Hoffnung, dass diese den ursprünglichen Freeze-Grund mit
+behoben hätten) — **wieder verworfen**: `playheadPositionMs` lief zwar
+(täuschend: die Zahl spiegelt `mxfdemux`s internen Lese-/Parse-
+Fortschritt, nicht die tatsächliche Ausgabe), das ECHTE Videobild fror
+aber nachweislich nach dem zweiten Frame ein (`md5sum` über mehrere
+`previewUrl`-Snapshots identisch, verbundener Viewer). Sofort
+zurückgerollt (`sync=false`, wie zuvor).
+
+**Status:** drei unabhängige `sync=true`-Versuche in dieser Sitzung
+(Nachtrag 153, 154-Kontext, 156), alle mit demselben Symptom (Freeze
+nach 1-2 echten Frames). Echte Echtzeit-Drosselung für Datei-Wiedergabe
+braucht vermutlich tatsächlich die in Nachtrag 153 skizzierte
+PAUSED→Preroll-Wait→PLAYING-Zustandsmaschine (analog PIPELINE
+CONTROLLERs `_tryPipeline`) statt einer einzelnen Appsink-Property —
+nicht in dieser Sitzung umgesetzt (Budget/Risiko, s. dortige Notiz).
+Kein Code-Fix in diesem Nachtrag, nur Kommentare in
+`nodes/omp-mediaio/src/mxl.rs` aktualisiert (dritter Versuch
+dokumentiert, damit er nicht in einer künftigen Sitzung ein viertes Mal
+blind wiederholt wird).

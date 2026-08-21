@@ -222,15 +222,17 @@ impl MxlVideoOutput {
         // Datei-Decode — anders als der Moduldoc-Annahme "videotestsrc" —
         // nicht selbstgetaktet ist, s. `docs/decisions.md`). `sync=true`
         // senkt die CPU-Last zuverlässig, friert aber die MXL-Ausgabe auf
-        // einem einzelnen Frame ein (per Live-Test an mehreren frischen
-        // Instanzen bestätigt, kein Messartefakt) — vermutlich
-        // Zusammenspiel mit dem `valve`-gesteuerten Cue/Take-Slot-Modell
-        // (Pipeline geht schon beim `cue` auf PLAYING, `take` öffnet das
-        // Valve erst später; Basiszeit/Segment-Timing dieser Kombination
-        // nicht weiter untersucht). Deshalb zurück auf `sync=false` —
-        // funktionierende, aber ungebremste Wiedergabe schlägt kaputte.
-        // Echte Echtzeit-Drosselung für Datei-Wiedergabe bleibt offen,
-        // s. docs/decisions.md.
+        // einem einzelnen Frame ein. Nachtrag 156 (2026-08-21) versuchte
+        // `sync=true` nach den Nachtrag-155-Fixes (Appsink-Selbst-Flush,
+        // Schreib-Thread-am-Leben) erneut — die `playheadPositionMs`-
+        // Anzeige lief zwar (irreführend: sie spiegelt `mxfdemux`s
+        // internen Lese-/Parse-Fortschritt, nicht die tatsächliche
+        // Ausgabe), das ECHTE Videobild fror aber nachweislich nach dem
+        // zweiten Frame ein (`md5sum` über mehrere `previewUrl`-
+        // Snapshots identisch) — derselbe reale Freeze wie beim ersten
+        // Versuch, nur diesmal an der Position-Anzeige vorbei verdeckt.
+        // Wieder zurück auf `sync=false`. Echte Echtzeit-Drosselung für
+        // Datei-Wiedergabe bleibt offen, s. docs/decisions.md.
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
             .property("async", false)
@@ -675,10 +677,9 @@ impl MxlAudioOutput {
             .property("drop", true)
             .build()
             .map_err(|e| format!("valve: {e}"))?;
-        // `sync=false` (2026-08-21): `sync=true` versucht und wieder
-        // verworfen, gleicher Fund/gleiche Begründung wie beim
-        // Video-Appsink oben (s. dortiger Kommentar) — friert die
-        // MXL-Ausgabe ein statt sie nur zu verlangsamen.
+        // `sync=false` (2026-08-21, Nachtrag 156): `sync=true` erneut
+        // versucht und wieder verworfen, gleicher Fund/gleiche
+        // Begründung wie beim Video-Appsink oben (s. dortiger Kommentar).
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
             .property("max-buffers", 4u32)
