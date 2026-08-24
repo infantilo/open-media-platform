@@ -96,7 +96,15 @@ export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
 export OMP_MTLS_CERT_FILE="${OMP_MTLS_CERT_FILE:-$ROOT_DIR/.run/mtls/orchestrator.crt}"
 export OMP_MTLS_KEY_FILE="${OMP_MTLS_KEY_FILE:-$ROOT_DIR/.run/mtls/orchestrator.key}"
 export OMP_MTLS_CA_FILE="${OMP_MTLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
-nohup "$BIN" > "$LOG_FILE" 2>&1 &
+# >> statt > (Nutzerfund 2026-08-24, Debugging-Sitzung zu einem
+# Multiviewer-Bug): ein einfaches `>` leert die Log-Datei bei JEDEM
+# `make start` komplett — verlor dabei wiederholt die einzige Spur eines
+# gerade untersuchten Vorfalls (Prozess stirbt, Log wird sofort danach
+# durch einen Neustart überschrieben, bevor jemand reingesehen hat).
+# Wächst dafür unbegrenzt über eine lange Dev-Sitzung — bei diesem
+# Log-Volumen (kein Per-Frame-Logging) über Wochen kein reales Problem;
+# bei Bedarf einfach `.run/orchestrator.log` von Hand leeren/rotieren.
+nohup "$BIN" >> "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"
 
 printf "==> Warte auf /healthz "
