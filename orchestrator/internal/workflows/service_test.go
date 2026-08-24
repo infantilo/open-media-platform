@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1258,6 +1262,118 @@ func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
 	}
 	if g.calls[1].fromSender != "send-1" || g.calls[1].toReceiver != "recv-2" {
 		t.Errorf("second connect call = %+v, want send-1 -> recv-2", g.calls[1])
+	}
+}
+
+// TestRestartRoleCapturesAndRestoresNodeState (Nutzerfund 2026-08-24:
+// "multiviewer-pip-layout nach Rollen-Neustart verloren") deckt eine
+// zuvor fehlende Verdrahtung ab: RestartRole nutzte das bereits für
+// executeMigration (migration.go)/promoteStandby (failover.go) gebaute
+// Capture/Restore-Muster (state.go, GET/POST /state) nicht — ein
+// Format-/Ebenen-Neustart im Property-Panel verlor dadurch jeden Node-
+// internen /state-Zustand (z. B. omp-multiviewer-customs Pip-Layout),
+// obwohl Connections danach korrekt neu angewendet wurden.
+func TestRestartRoleCapturesAndRestoresNodeState(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	var mu sync.Mutex
+	var postedBodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/state":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"state":{"pips":[{"id":"p1"}]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/state":
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			postedBodies = append(postedBodies, string(body))
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := &Service{store: newFakeStore(), nodes: nodes, graph: g, launcher: l, migrations: newMigrationState(), httpClient: http.DefaultClient}
+
+	def := Definition{Roles: []Role{{Name: "mv", NodeType: "omp-multiviewer-custom"}}}
+	wf, err := svc.Create("regie", def, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mvInstance := l.instanceIDFor("omp-multiviewer-custom")
+	nodes.add(registry.NodeView{ID: "node-mv", InstanceID: mvInstance, APIBaseURL: srv.URL})
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	if err := svc.RestartRole(context.Background(), wf.ID, "mv", "", nil); err != nil {
+		t.Fatalf("RestartRole() error = %v", err)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		stoppedOld := len(l.stopped) > 0 && l.stopped[0] == mvInstance
+		l.mu.Unlock()
+		if stoppedOld {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	newInstance := l.instanceIDFor("omp-multiviewer-custom")
+	if newInstance == mvInstance {
+		t.Fatalf("expected a new omp-multiviewer-custom instance after restart, still see %q", mvInstance)
+	}
+	nodes.add(registry.NodeView{ID: "node-mv-2", InstanceID: newInstance, APIBaseURL: srv.URL})
+
+	deadline = time.Now().Add(2 * time.Second)
+	var wfAfter Workflow
+	for time.Now().Before(deadline) {
+		wfAfter, err = svc.Get(wf.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if wfAfter.Runtime["mv"].NodeID == "node-mv-2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if wfAfter.Runtime["mv"].NodeID != "node-mv-2" {
+		t.Fatalf("Runtime[\"mv\"].NodeID = %q, want node-mv-2", wfAfter.Runtime["mv"].NodeID)
+	}
+
+	// restoreOneRoleState läuft asynchron innerhalb von runRestartRole,
+	// nach awaitRegistration aber noch vor dem finalen wf-Commit oben —
+	// zum Zeitpunkt, an dem NodeID bereits node-mv-2 zeigt, muss der POST
+	// also längst passiert sein.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(postedBodies) == 0 {
+		t.Fatalf("expected the captured /state to be POSTed back to the new instance, got no POST /state calls")
+	}
+	if !strings.Contains(postedBodies[len(postedBodies)-1], `"p1"`) {
+		t.Fatalf("last POST /state body = %q, want it to contain the captured pip layout", postedBodies[len(postedBodies)-1])
 	}
 }
 

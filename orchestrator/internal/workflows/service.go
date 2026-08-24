@@ -1260,6 +1260,26 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 		return
 	}
 
+	// Node-eigenen Betriebszustand VOR dem Stop erfassen (Nutzerfund
+	// 2026-08-24: ein RestartRole-Neustart — Format- oder Ebenenwechsel
+	// im Property-Panel — verlor bislang jeden Node-internen Zustand
+	// außerhalb der IS-05-Verkabelung, z. B. omp-video-mixer-mes
+	// Crosspoint-Routing oder omp-multiviewer-customs Pip-Layout: der
+	// Reconnect-Block unten stellt nur wieder her, WELCHE Quellen
+	// verbunden sind, nicht den Node-internen Zustand). Identisches
+	// Capture/Restore-Muster wie `executeMigration` (migration.go) und
+	// `promoteStandby` (failover.go) — beide nutzen bereits denselben,
+	// für genau diesen Zweck gebauten Mechanismus (state.go, Nachtrag 91:
+	// GET/POST /state mit Sender-ID-Alias-Auflösung, Fallback auf
+	// generische Parameter für Node-Typen ohne eigene /state-Route). Der
+	// Crash-Neustart-Pfad (rewireAfterRestart) bleibt bewusst
+	// unverändert außen vor — RestartRole ist ein gezielter, vom
+	// Bedienenden ausgelöster Neustart, kein Reaktion auf einen
+	// tatsächlichen Absturz (dort wäre der zuletzt erfasste Zustand ggf.
+	// selbst schon der Grund des Absturzes).
+	senderToAlias := s.buildSenderAliasIndex(wf)
+	s.captureOneRoleState(wf, roleName, senderToAlias)
+
 	if oldRuntime, hadOld := wf.Runtime[roleName]; hadOld && oldRuntime.InstanceID != "" {
 		if err := s.launcher.Stop(oldRuntime.InstanceID); err != nil {
 			slog.Warn("workflows: RestartRole: stop old instance failed", "workflow", wf.ID, "role", roleName, "error", err)
@@ -1313,6 +1333,18 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	if err := s.awaitRegistration(ctx, wf, map[string]string{roleName: inst.ID}); err != nil {
 		slog.Warn("workflows: RestartRole: registration timed out", "workflow", wf.ID, "role", roleName, "error", err)
 		return
+	}
+
+	// Erfassten Zustand auf die neue Instanz übertragen — nach der
+	// Registrierung (restoreOneRoleState braucht die aufgelöste NodeID
+	// über s.nodeForRole), vor dem Reconnect-Block unten, identische
+	// Reihenfolge wie executeMigration (s. Doku oben).
+	if saved, err := s.store.GetRoleState(wf.ID); err != nil {
+		slog.Warn("workflows: RestartRole: load role state failed", "workflow", wf.ID, "role", roleName, "error", err)
+	} else if raw, ok := saved[roleName]; ok {
+		if err := s.restoreOneRoleState(wf, roleName, raw); err != nil {
+			slog.Warn("workflows: RestartRole: state restore failed", "workflow", wf.ID, "role", roleName, "error", err)
+		}
 	}
 
 	for _, conn := range wf.Definition.Connections {
