@@ -726,4 +726,19 @@ function cssEscape(s) {
   return String(s).replace(/[^a-zA-Z0-9_-]/g, (c) => `\\${c}`);
 }
 
-customElements.define("omp-multiviewer-custom-panel", OmpMultiviewerCustomPanel);
+// `if (!customElements.get(...))`-Guard (Nutzerfund 2026-08-24, "zeigt
+// im property panel keine ui sondern nur mehr das JSON sources"): fehlte
+// hier bislang, anders als bei jedem anderen Node-UI-Bundle in diesem
+// Repo (omp-video-mixer-me/omp-audio-mixer/omp-viewer/...). `mountUIBundle`
+// (ui/shell/ui-bundle.ts) importiert `<apiBase>/ui/bundle.js` per
+// natives `import()`, mit `apiBase` = `/api/v1/nodes/<nodeId>` — jede
+// zweite Instanz dieses Node-Typs (oder dieselbe Instanz nach einem
+// Rollen-Neustart mit neuer nodeId) hat eine andere Bundle-URL, der
+// Browser cacht Module NUR pro exakter URL, führt das Modul also ein
+// zweites Mal aus — `customElements.define` ohne Guard warf dann
+// `NotSupportedError`, das `mountUIBundle`s try/catch still schluckte
+// und auf das generische Parameter-Panel zurückfallen ließ (dort
+// erscheint "sources" als roher JSON-String, s. main.rs `readonly:true`).
+if (!customElements.get("omp-multiviewer-custom-panel")) {
+  customElements.define("omp-multiviewer-custom-panel", OmpMultiviewerCustomPanel);
+}

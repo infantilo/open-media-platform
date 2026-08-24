@@ -187,4 +187,6 @@ class OmpMediaLibraryPanel extends HTMLElement {
   }
 }
 
-customElements.define("omp-media-library-panel", OmpMediaLibraryPanel);
+if (!customElements.get("omp-media-library-panel")) {
+  customElements.define("omp-media-library-panel", OmpMediaLibraryPanel);
+}
