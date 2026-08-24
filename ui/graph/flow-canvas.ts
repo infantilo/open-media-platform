@@ -559,6 +559,12 @@ export class FlowCanvas extends HTMLElement {
   #hasPreviewById: Map<string, boolean> = new Map();
   #previewFetchInFlight: Set<string> = new Set();
   #previewPollTimerById: Map<string, ReturnType<typeof setInterval>> = new Map();
+  // Wiederverwendete <img>/"nicht verbunden"-Elemente je Node-ID
+  // (Nutzerfund 2026-08-24, s. `#renderPreviewThumbnail`-Doku dort).
+  #previewElementsById: Map<
+    string,
+    { fo: SVGForeignObjectElement; img: HTMLImageElement; notConnected: HTMLDivElement }
+  > = new Map();
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -965,6 +971,7 @@ export class FlowCanvas extends HTMLElement {
   async #fetchAndRender() {
     const response = await apiFetch("/api/v1/graph");
     this.#graph = await response.json();
+    this.#cleanupStalePreviewState();
     this.#portTransport.clear();
     for (const node of this.#graph.nodes) {
       for (const p of [...node.inputs, ...node.outputs]) {
@@ -3329,6 +3336,26 @@ export class FlowCanvas extends HTMLElement {
     if (!this.#hasPreviewById.get(nodeId)) return null;
     this.#ensurePreviewPolling(nodeId);
 
+    // Wiederverwendung statt Neubau (Nutzerfund 2026-08-24: "beim Ziehen
+    // JEDES Nodes flackert der Multiviewer/Viewer kurz auf 'nicht
+    // verbunden'", ursprünglich vermutet als GStreamer-Pipeline-Bug am
+    // Video-Mixer — live widerlegt, tatsächlich rein clientseitig).
+    // #onPointerMove ruft bei JEDEM Drag-Tick #render() auf (auch beim
+    // Ziehen eines VÖLLIG unbeteiligten Nodes, s. dortiger Kommentar) —
+    // #render() baut die komplette Kachel-<g> neu auf. Ein hier frisch
+    // erzeugtes <img> beginnt IMMER ungeladen ("nicht verbunden"),
+    // unabhängig vom tatsächlichen Verbindungsstatus, bis sein nächster
+    // load-Event feuert — und `previewSnapshotUrl`s Cache-Busting-
+    // Query-Parameter erzwingt bei jedem Neubau einen echten neuen
+    // Netzwerk-Request statt eines Browser-Cache-Treffers. appendChild
+    // eines bereits vorhandenen Elements VERSCHIEBT es im DOM (kein
+    // Klon) — Wiederverwendung überspringt den Reset komplett und lässt
+    // `#ensurePreviewPolling`s `img.complete`-Guard (Nutzerfund
+    // 2026-08-21) tatsächlich greifen, statt bei jedem Re-Render
+    // umgangen zu werden.
+    const cached = this.#previewElementsById.get(nodeId);
+    if (cached) return cached.fo;
+
     const fo = document.createElementNS(SVG_NS, "foreignObject");
     fo.setAttribute("x", "8");
     fo.setAttribute("y", String(HEADER_HEIGHT + 4));
@@ -3363,7 +3390,29 @@ export class FlowCanvas extends HTMLElement {
 
     fo.appendChild(img);
     fo.appendChild(notConnected);
+    this.#previewElementsById.set(nodeId, { fo, img, notConnected });
     return fo;
+  }
+
+  // Räumt Vorschau-Zustand (Wiederverwendungs-Cache, Poll-Timer,
+  // "hat Vorschau"-Flag) für Node-IDs auf, die im frisch geladenen Graph
+  // nicht mehr vorkommen — ohne das liefe der 500ms-Poll-Timer eines
+  // gelöschten Nodes über die gesamte restliche Sitzungsdauer leer
+  // weiter (CPU-/Netzwerk-Leck, s. Nutzerwarnung 2026-08-24 "achte auf
+  // CPU burning" — bestand bereits vor dem Wiederverwendungs-Cache oben,
+  // der zusätzlich ein <img>-Element pro je einmal gesehener Node-ID
+  // hielte, wenn hier nicht aufgeräumt würde). Läuft nach jedem
+  // `#fetchAndRender()` (Poll-Intervall bzw. SSE-getriggerter Refresh),
+  // O(aktuelle Node-Zahl) statt O(jemals gesehene Node-Zahl).
+  #cleanupStalePreviewState() {
+    const liveIds = new Set(this.#graph.nodes.map((n) => n.id));
+    for (const [nodeId, timer] of this.#previewPollTimerById) {
+      if (liveIds.has(nodeId)) continue;
+      clearInterval(timer);
+      this.#previewPollTimerById.delete(nodeId);
+      this.#previewElementsById.delete(nodeId);
+      this.#hasPreviewById.delete(nodeId);
+    }
   }
 
   // Ein Timer pro Node-ID, unabhängig von `#render()`-Aufrufen gestartet
