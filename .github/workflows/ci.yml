@@ -106,7 +106,7 @@ jobs:
       # den drei unten dokumentierten, bewusst akzeptierten Abweichungen
       # müssen grün sein. Kein Ergebnis stillschweigend ignoriert — jede
       # Ausnahme ist einzeln begründet und am echten Tool-Lauf verifiziert.
-      - name: Ergebnisse auswerten (IS-04-02: definierte Testliste grün, Abweichungen dokumentiert)
+      - name: "Ergebnisse auswerten (IS-04-02: definierte Testliste grün, Abweichungen dokumentiert)"
         run: |
           cd tools/nmos-conformance-check
           go run . --results ../../nmos-results/is0402.json \
@@ -159,7 +159,7 @@ jobs:
       #   Receiver-seitig) — ein eigener Sender-Test-Fixture wäre ein
       #   separater, größerer Schritt für ausschließlich diese sieben
       #   Tests.
-      - name: Ergebnisse auswerten (IS-05-01: definierte Testliste grün, Abweichungen dokumentiert)
+      - name: "Ergebnisse auswerten (IS-05-01: definierte Testliste grün, Abweichungen dokumentiert)"
         run: |
           cd tools/nmos-conformance-check
           go run . --results ../../nmos-results/is0501.json \
