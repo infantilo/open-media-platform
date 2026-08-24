@@ -19657,3 +19657,115 @@ Betriebsangelegenheit, kein Code-Fix).
 
 **Dateien:** `ui/graph/flow-canvas.ts` (`#ensurePreviewPolling`),
 `nodes/omp-viewer/ui/bundle.js` (Preview-Poll-Intervall).
+
+## 2026-08-24 (Nachtrag 163) — "nicht verbunden"-Blitzer: Nachtrag 162 war unvollständig, echte Restursache gefunden; RestartRole verlor Node-Zustand; Release-Profil für omp-video-mixer-me/omp-multiviewer-custom geprüft und verworfen (kein Effekt unter echter Last)
+
+Drei getrennte Funde einer Debugging-Sitzung zum omp-video-mixer-me
+"mehrere M/E-Ebenen"-Feature.
+
+**1. Nachtrag 162 hat den "nicht verbunden"-Blitzer nicht vollständig
+behoben.** Nutzerbeobachtung: der Blitzer trat weiterhin auf, und zwar
+korreliert mit einem M/E1-PGM-Tastendruck am Mixer, nicht mit PST —
+zunächst als GStreamer-Pipeline-Bug vermutet (`input-selector`s
+`active-pad`-Wechsel löst evtl. eine Segment-/Caps-Renegotiation aus,
+die über den gemeinsamen `compositor` im Multiviewer alle Kacheln
+gleichzeitig blankt). Live mit `GST_DEBUG=input-selector:6,
+videoaggregator:6,compositor:6,GST_EVENT:5` widerlegt: null
+Segment-/Caps-/Gap-/Flush-Events während eines `take()`-Aufrufs, auf
+beiden Seiten. Strukturell auch gar nicht möglich — jede Mixer-
+Eingangs-Branch wird VOR dem `input-selector` bereits auf feste Caps
+normalisiert (`videoconvert!videoscale!videorate!capsfilter`,
+`pipeline.rs:552-573`), ein `active-pad`-Wechsel kann dahinter keine
+Renegotiation mehr auslösen — exakt der dokumentierte "seamless
+switching"-Vertrag von `input-selector`.
+
+Der entscheidende Hinweis kam vom Nutzer selbst: derselbe Blitzer trat
+auch beim bloßen Ziehen (Drag) eines VÖLLIG unbeteiligten Nodes im Flow
+Editor auf — kein Pipeline-Bezug möglich. Tatsächliche Ursache:
+`#onPointerMove` (flow-canvas.ts) ruft bei jedem Drag-Tick `#render()`
+auf, `#render()` baut jede Kachel-`<g>` komplett neu auf, und
+`#renderPreviewThumbnail` erzeugte dabei bei JEDEM Aufruf ein
+brandneues `<img>` mit `previewSnapshotUrl`s Cache-Busting-Query-Param
+(erzwingt einen echten neuen Netzwerk-Request statt Browser-Cache). Ein
+frisch erzeugtes `<img>` beginnt IMMER ungeladen ("nicht verbunden"),
+unabhängig vom tatsächlichen Verbindungsstatus — Nachtrag 162s
+`img.complete`-Guard in `#ensurePreviewPolling` bekam dadurch nie eine
+Chance zu greifen, weil das Element, auf das er sich bezog, bei jedem
+Re-Render weggeworfen und neu gebaut wurde. Reproduzierbar durch JEDEN
+Re-Render-Auslöser (Drag eines beliebigen Nodes, vermutlich auch ein
+Tally-SSE-Event bei PGM — PST löst offenbar keinen vergleichbaren
+Re-Render aus).
+
+**Fix:** `<img>`/"nicht verbunden"-Elementpaar je Node-ID in einer Map
+(`#previewElementsById`) cachen und über mehrere `#render()`-Aufrufe
+hinweg wiederverwenden — `appendChild` eines bereits vorhandenen
+Elements VERSCHIEBT es im DOM (kein Klon), der `img.complete`-Guard
+greift dadurch jetzt tatsächlich. Aufräumen der Map/des Poll-Timers für
+Node-IDs, die im frisch geladenen Graph nicht mehr vorkommen (vorher
+bereits bestehendes, hier zusätzlich geschlossenes Leck: ein gelöschter
+Node ließ seinen 500ms-Poll-Timer für den Rest der Sitzung leer
+weiterlaufen).
+
+**2. RestartRole verlor Node-internen Zustand.** Ein Format-/Ebenen-
+Neustart einer einzelnen Rolle übers Property-Panel (RestartRole,
+Nutzerwunsch 2026-07-29/2026-08-24) wendete Connections danach zwar
+korrekt neu an, aber node-interner `/state`-Zustand (Mixer-Crosspoint-
+Routing, omp-multiviewer-customs Pip-Layout) ging komplett verloren —
+live entdeckt, als eine Debugging-Sitzung mehrfach dieselbe Rolle neu
+startete und dabei wiederholt die Layout-Konfiguration des Multiviewers
+zerstörte. Root Cause: fehlende Verdrahtung, nicht fehlender
+Mechanismus — `captureOneRoleState`/`restoreOneRoleState` (state.go,
+Nachtrag 91) existieren bereits und werden von `executeMigration`
+(migration.go) und `promoteStandby` (failover.go) korrekt genutzt,
+`runRestartRole` rief sie nur nie auf. Fix: State vor dem Stop der
+alten Instanz erfassen, nach der Registrierung der neuen Instanz
+wiederherstellen — identisches Muster/identische Aufrufreihenfolge wie
+`executeMigration`. Bewusst NICHT auf `rewireAfterRestart` (Crash-
+Neustart-Pfad) ausgeweitet — ein echter Absturz ist ein anderes
+Risikoprofil als ein bewusst vom Bedienenden ausgelöster Neustart.
+
+**3. omp-video-mixer-me/omp-multiviewer-custom: Release-Profil GEPRÜFT
+und VERWORFEN — bringt unter echter Last nichts.** Bei der Untersuchung
+fiel per `/proc`-Delta-Messung (nicht `ps -o pcpu`, s. Projekt-Memory zur
+Unzuverlässigkeit in dieser Sandbox) auf: beide liefen dauerhaft mit
+mehreren hundert Prozent CPU. Ein erster Stichprobenvergleich
+(Debug unter TEST1s echter 4-Pip-/2-Ebenen-Last vs. frisch gestartetes
+`--release` OHNE jede konfigurierte Quelle/Pip, standalone) suggerierte
+einen großen Gewinn (~4-5× beim Multiviewer, ~1.5-2× beim Mixer) — **war
+aber kein fairer Vergleich** (Leerlauf gegen Last). Richtig gemacht
+(beide unter identischer TEST1-Last: 4 Pips — dank Fund 2 oben
+automatisch restauriert —, 2 Mixer-Ebenen, jeweils per echtem
+Orchestrator-Start über `deploy/catalog.json`, nicht standalone):
+
+| Node | Debug (eingeschwungen) | Release (eingeschwungen) |
+|---|---|---|
+| omp-video-mixer-me (2 Ebenen, 4 Pips Last) | ~224 % | ~203-210 % |
+| omp-multiviewer-custom (4 Pips) | ~343 % | ~344-348 % |
+
+Praktisch kein Unterschied. Nachvollziehbar: die eigentliche
+Frame-Verarbeitung (Compositor-Blending, Skalierung, Farbraum-
+Konvertierung) läuft in GStreamer/gst-plugins' eigenem, bereits
+optimiertem C-Code — Rusts Debug-/Release-Profil betrifft nur die dünne
+Glue-Schicht drumherum, die neben kontinuierlicher Echtzeit-Komposition
+kaum ins Gewicht fällt. **Entscheidung: `deploy/catalog.json`/`Makefile`
+NICHT geändert** (auf Debug belassen) — der beobachtete CPU-Verbrauch
+ist reale Arbeitslast (2 volle Compositor-/Isel-/Videoconvert-Ketten
+bzw. ein 12-Sink-Pad-Compositor bei voller Framerate), kein
+Debug-Build-Artefakt, und ein Release-Wechsel hätte nur unnötige
+Build-Komplexität ohne messbaren Nutzen gebracht. Festgehalten als
+Lehre: ein Vorher/Nachher-Vergleich muss unter identischer Last laufen,
+sonst täuscht er.
+
+**Verifiziert:** (1) `deno check ui/**/*.ts` + `deno test ui/` (92/92)
+grün, `ui/dist/shell.js` neu gebaut, live per Orchestrator-Neustart
+deployt. (2) `go vet`/`go test ./...` grün inkl. neuem
+`TestRestartRoleCapturesAndRestoresNodeState`
+(httptest-Server-basiert, prüft echten GET/POST-`/state`-Roundtrip).
+(3) Debug-vs-Release-Vergleich unter identischer TEST1-Last live per
+Orchestrator-Start gemessen (s. Tabelle oben), `deploy/catalog.json`
+danach auf Debug zurückgesetzt.
+
+**Dateien:** `ui/graph/flow-canvas.ts` (`#previewElementsById`,
+`#cleanupStalePreviewState`), `orchestrator/internal/workflows/
+service.go` (`runRestartRole`)
+(`nodes`-Target).

@@ -18,6 +18,20 @@ ui:
 # Baut die per deploy/catalog.json vom Instanz-Launcher startbaren Node-
 # Binaries (UMSETZUNG.md C8) — separates Target von `build`, weil der
 # Launcher vorgebaute Binaries erwartet, kein `cargo run` pro Start.
+#
+# KEIN Release-Profil für omp-video-mixer-me/omp-multiviewer-custom
+# trotz ihres hohen CPU-Verbrauchs (Nutzerfund 2026-08-24, "CPU
+# burning", mehrere hundert Prozent bei aktiver Kompositions-Last) —
+# per fairem Debug-vs-Release-Vergleich UNTER DERSELBEN echten
+# Arbeitslast (4 Multiviewer-Pips, 2 Mixer-Ebenen, nicht im Leerlauf)
+# live widerlegt: praktisch kein Unterschied (s. docs/decisions.md
+# Nachtrag 163). Die eigentliche Frame-Verarbeitung läuft in
+# GStreamer/gst-plugins' eigenem, bereits optimiertem C-Code — Rusts
+# Debug-/Release-Profil betrifft nur die dünne Rust-Glue-Schicht
+# drumherum, die neben kontinuierlicher Echtzeit-Komposition kaum ins
+# Gewicht fällt. Ein erster, vorschneller Vergleich (Leerlauf-Release
+# gegen belastetes Debug) hatte fälschlich einen großen Unterschied
+# suggeriert — dieser Vergleich war nicht fair, s. Nachtrag 163.
 nodes:
 	cd nodes && cargo build --workspace --bins
 
