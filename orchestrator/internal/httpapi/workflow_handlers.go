@@ -149,17 +149,29 @@ func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 
 // handleRestartWorkflowRole liefert POST
 // /api/v1/workflows/{id}/roles/{role}/restart — Nutzerwunsch 2026-07-29,
-// s. workflows.Service.RestartRole-Doku. Body optional: {"format": "..."}
-// (leer/fehlend = Node-eigener Default, identisch zu role.Format beim
-// Anlegen). Asynchron wie Start/Stop: liefert sofort den aktuellen
-// Workflow-Stand zurück, der eigentliche Rollen-Neustart läuft im
-// Hintergrund weiter (per SSE/Poll beobachtbar).
+// s. workflows.Service.RestartRole-Doku. Body optional: {"format": "...",
+// "mixerLevels": N} (beide unabhängig voneinander optional). "format"
+// fehlend/leer = Node-eigener Default, identisch zu role.Format beim
+// Anlegen (unverändertes Verhalten). "mixerLevels" FEHLEND (kein Feld im
+// JSON) lässt role.MixerLevels unangetastet — wichtig, weil das
+// generische Property-Panel (Format-Sektion, flow-canvas.ts) und das
+// omp-video-mixer-me-eigene UI-Bundle (Ebenen-Sektion) unabhängige
+// Buttons/Requests sind: ein reiner Format-Restart darf eine zuvor
+// gesetzte Ebenenzahl nicht stillschweigend auf den Default
+// zurücksetzen, und umgekehrt (Nutzerwunsch 2026-08-24, "im laufenden
+// Betrieb im property panel, mit restart aber reconnect aller zuvor
+// aufgelegten quellen"). *int statt int, weil 0 ein gültiger expliziter
+// Wert ist ("auf Node-Default zurücksetzen") und von "Feld fehlt" (nil)
+// unterscheidbar bleiben muss. Asynchron wie Start/Stop: liefert sofort
+// den aktuellen Workflow-Stand zurück, der eigentliche Rollen-Neustart
+// läuft im Hintergrund weiter (per SSE/Poll beobachtbar).
 func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		role := r.PathValue("role")
 		var body struct {
-			Format string `json:"format"`
+			Format      string `json:"format"`
+			MixerLevels *int   `json:"mixerLevels"`
 		}
 		if r.ContentLength != 0 {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -167,7 +179,7 @@ func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
 				return
 			}
 		}
-		if err := svc.RestartRole(r.Context(), id, role, body.Format); err != nil {
+		if err := svc.RestartRole(r.Context(), id, role, body.Format, body.MixerLevels); err != nil {
 			writeWorkflowError(w, err)
 			return
 		}

@@ -1189,7 +1189,7 @@ func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
 	nodes.add(registry.NodeView{ID: "node-scaler", InstanceID: scalerInstance, Receivers: []registry.ReceiverView{{ID: "recv-1", Format: formatVideo}}})
 	waitForStatus(t, svc, wf.ID, StatusStarted)
 
-	if err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50"); err != nil {
+	if err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50", nil); err != nil {
 		t.Fatalf("RestartRole() error = %v", err)
 	}
 
@@ -1272,7 +1272,7 @@ func TestRestartRoleRejectsUnknownFormat(t *testing.T) {
 	store := svc.store.(*fakeStore)
 	store.Put(started)
 
-	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "not-a-real-format")
+	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "not-a-real-format", nil)
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("RestartRole() error = %v, want ErrValidation", err)
 	}
@@ -1283,9 +1283,120 @@ func TestRestartRoleRequiresStartedWorkflow(t *testing.T) {
 	def := Definition{Roles: []Role{{Name: "scaler", NodeType: "omp-scaler"}}}
 	wf, _ := svc.Create("wf", def, nil) // stays "stopped"
 
-	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50")
+	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50", nil)
 	if !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("RestartRole() error = %v, want ErrNotRunning", err)
+	}
+}
+
+// TestRestartRoleMixerLevelsIndependentOfFormat (Nutzerwunsch 2026-08-24:
+// "im laufenden Betrieb im property panel, mit restart aber reconnect
+// aller zuvor aufgelegten quellen") deckt den *int-Grund aus
+// handleRestartWorkflowRole ab: ein Restart, der nur mixerLevels setzt
+// (format=="", mixerLevels!=nil), darf role.Format nicht auf ""
+// zurücksetzen, und umgekehrt darf ein reiner Format-Restart
+// (mixerLevels==nil) eine zuvor gesetzte role.MixerLevels nicht auf 0
+// zurücksetzen — das omp-video-mixer-me-eigene UI-Bundle (Ebenen-
+// Sektion) und die generische Format-Sektion im Property-Panel
+// (flow-canvas.ts) sind unabhängige Buttons/Requests.
+func TestRestartRoleMixerLevelsIndependentOfFormat(t *testing.T) {
+	original, originalPoll := registrationTimeout, registrationPollInterval
+	registrationTimeout = 2 * time.Second
+	registrationPollInterval = 10 * time.Millisecond
+	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
+
+	nodes := &fakeNodeLister{}
+	g := &fakeGraph{}
+	l := &fakeLauncher{}
+	svc := newTestService(newFakeStore(), nodes, g, l)
+
+	def := Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}
+	wf, err := svc.Create("regie", def, nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := svc.Start(context.Background(), wf.ID); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		startedCount := len(l.started)
+		l.mu.Unlock()
+		if startedCount == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mixerInstance := l.instanceIDFor("omp-video-mixer-me")
+	nodes.add(registry.NodeView{ID: "node-mixer", InstanceID: mixerInstance})
+	waitForStatus(t, svc, wf.ID, StatusStarted)
+
+	levels := 3
+	if err := svc.RestartRole(context.Background(), wf.ID, "mixer", "", &levels); err != nil {
+		t.Fatalf("RestartRole(mixerLevels=3) error = %v", err)
+	}
+	wfAfter, err := svc.Get(wf.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	role, _ := roleByName(wfAfter, "mixer")
+	if role.MixerLevels != 3 || role.Format != "" {
+		t.Fatalf("role after mixerLevels-only restart = %+v, want MixerLevels=3, Format=\"\"", role)
+	}
+
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		l.mu.Lock()
+		stoppedOld := len(l.stopped) > 0 && l.stopped[0] == mixerInstance
+		l.mu.Unlock()
+		if stoppedOld {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	secondInstance := l.instanceIDFor("omp-video-mixer-me")
+	if secondInstance == mixerInstance {
+		t.Fatalf("expected a new omp-video-mixer-me instance after restart, still see %q", mixerInstance)
+	}
+	nodes.add(registry.NodeView{ID: "node-mixer-2", InstanceID: secondInstance})
+
+	deadline = time.Now().Add(2 * time.Second)
+	var wfAfter2 Workflow
+	for time.Now().Before(deadline) {
+		wfAfter2, err = svc.Get(wf.ID)
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if wfAfter2.Runtime["mixer"].NodeID == "node-mixer-2" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if wfAfter2.Runtime["mixer"].NodeID != "node-mixer-2" {
+		t.Fatalf("Runtime[\"mixer\"].NodeID = %q, want node-mixer-2", wfAfter2.Runtime["mixer"].NodeID)
+	}
+
+	l.mu.Lock()
+	env := l.lastExtraEnv["omp-video-mixer-me"]
+	l.mu.Unlock()
+	if env["OMP_ME_LEVELS"] != "3" {
+		t.Fatalf("extraEnv after mixerLevels restart = %+v, want OMP_ME_LEVELS=3", env)
+	}
+
+	// Zweiter Restart: nur format setzen (mixerLevels==nil) — darf die
+	// zuvor gesetzte MixerLevels==3 NICHT auf 0 zurücksetzen.
+	if err := svc.RestartRole(context.Background(), wf.ID, "mixer", "1080p50", nil); err != nil {
+		t.Fatalf("RestartRole(format only) error = %v", err)
+	}
+	wfAfter3, err := svc.Get(wf.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	role3, _ := roleByName(wfAfter3, "mixer")
+	if role3.MixerLevels != 3 || role3.Format != "1080p50" {
+		t.Fatalf("role after format-only restart = %+v, want MixerLevels still 3, Format=1080p50", role3)
 	}
 }
 

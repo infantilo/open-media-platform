@@ -145,11 +145,14 @@ type WorkflowService interface {
 	Delete(id string) error
 	Start(ctx context.Context, id string) error
 	Stop(ctx context.Context, id string, confirm bool) error
-	// RestartRole (Nutzerwunsch 2026-07-29) — s. workflows.Service.
-	// RestartRole-Doku: startet nur EINE Rolle eines laufenden Workflows
-	// neu, optional mit neuem role.Format, statt den ganzen Workflow zu
-	// stoppen.
-	RestartRole(ctx context.Context, id, role, format string) error
+	// RestartRole (Nutzerwunsch 2026-07-29, mixerLevels-Parameter
+	// 2026-08-24) — s. workflows.Service.RestartRole-Doku: startet nur EINE
+	// Rolle eines laufenden Workflows neu, optional mit neuem role.Format
+	// und/oder role.MixerLevels, statt den ganzen Workflow zu stoppen.
+	// mixerLevels==nil lässt den bisherigen Wert unangetastet (Format und
+	// MixerLevels werden vom Property-Panel über unabhängige Buttons
+	// gesetzt, s. handleRestartWorkflowRole-Doku).
+	RestartRole(ctx context.Context, id, role, format string, mixerLevels *int) error
 	// MigrateRole (Kapitel 13 Teil 3) — s. workflows.Service.MigrateRole-
 	// Doku: bedienerausgelöster Make-before-break-Umzug einer laufenden
 	// Rolle auf einen anderen Host (Drag-Umzug im Flow-Editor).

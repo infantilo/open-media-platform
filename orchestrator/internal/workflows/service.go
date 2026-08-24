@@ -1174,24 +1174,36 @@ func (s *Service) stillBacks(workflowID, role, instanceID string) (Workflow, boo
 }
 
 // RestartRole startet die Instanz EINER Rolle eines bereits laufenden
-// Workflows neu, optional mit einem neuen `role.Format` — Nutzerwunsch
-// 2026-07-29 ("scaler hat immer noch keine Auswahl im Property-Editor
-// für Format"): der Property-Editor eines laufenden Nodes (generisches
-// Panel, `flow-canvas.ts`, für Node-Typen ohne eigenes UI-Bundle wie
-// `omp-scaler`/`omp-source`) zeigte bisher nur readonly-Parameter — ein
-// neues Zielformat ließ sich nur über den (nur bei gestopptem Workflow
-// erreichbaren) grafischen Rollen-Designer setzen. Statt einer echten
-// Live-Rekonfiguration der laufenden MXL-Ausgangs-Flow (deutlich
-// riskanter, gleiche Bug-Kategorie wie die frühere
-// `swap_input_resolution`-Baustelle, s. `UMSETZUNG.md`) startet dies nur
-// die EINE betroffene Rolle neu — der Rest des Workflows läuft
-// unterbrechungsfrei weiter, exakt der vom Projektinhaber gewählte
-// Ansatz. Persistiert die Formatänderung sofort synchron (sichtbar auch
-// falls der Neustart selbst fehlschlägt); der eigentliche Stop/Start/
-// Reconnect läuft danach asynchron im Hintergrund (`runRestartRole`),
-// gleiches Muster wie `Start()`/`Stop()` — ein synchroner Handler würde
-// sonst bis zu `registrationTimeout` blockieren.
-func (s *Service) RestartRole(ctx context.Context, id, roleName, format string) error {
+// Workflows neu, optional mit einem neuen `role.Format` und/oder neuer
+// `role.MixerLevels` — Nutzerwunsch 2026-07-29 ("scaler hat immer noch
+// keine Auswahl im Property-Editor für Format"): der Property-Editor
+// eines laufenden Nodes (generisches Panel, `flow-canvas.ts`, für
+// Node-Typen ohne eigenes UI-Bundle wie `omp-scaler`/`omp-source`) zeigte
+// bisher nur readonly-Parameter — ein neues Zielformat ließ sich nur über
+// den (nur bei gestopptem Workflow erreichbaren) grafischen
+// Rollen-Designer setzen. Statt einer echten Live-Rekonfiguration der
+// laufenden MXL-Ausgangs-Flow (deutlich riskanter, gleiche Bug-Kategorie
+// wie die frühere `swap_input_resolution`-Baustelle, s. `UMSETZUNG.md`)
+// startet dies nur die EINE betroffene Rolle neu — der Rest des
+// Workflows läuft unterbrechungsfrei weiter, exakt der vom
+// Projektinhaber gewählte Ansatz. Persistiert die Änderung(en) sofort
+// synchron (sichtbar auch falls der Neustart selbst fehlschlägt); der
+// eigentliche Stop/Start/Reconnect läuft danach asynchron im Hintergrund
+// (`runRestartRole`), gleiches Muster wie `Start()`/`Stop()` — ein
+// synchroner Handler würde sonst bis zu `registrationTimeout` blockieren.
+//
+// mixerLevels (Nutzerwunsch 2026-08-24, "im laufenden Betrieb im
+// property panel, mit restart aber reconnect aller zuvor aufgelegten
+// quellen"): dasselbe Restart+Reconnect-Muster wie Format, für
+// `omp-video-mixer-me`s Ebenenzahl (role.MixerLevels, s.
+// role-designer.ts/OMP_ME_LEVELS-Doku in main.rs). *int statt int, weil
+// nil (Feld fehlt im Request) von 0 (explizit auf Node-Default
+// zurücksetzen) unterscheidbar bleiben muss — das omp-video-mixer-me-
+// eigene UI-Bundle setzt nur mixerLevels, die generische Format-Sektion
+// im Property-Panel nur format; keiner der beiden Restart-Buttons darf
+// das jeweils andere Feld des laufenden Workflows stillschweigend
+// zurücksetzen.
+func (s *Service) RestartRole(ctx context.Context, id, roleName, format string, mixerLevels *int) error {
 	wf, err := s.store.Get(id)
 	if err != nil {
 		return err
@@ -1214,8 +1226,14 @@ func (s *Service) RestartRole(ctx context.Context, id, roleName, format string) 
 			return fmt.Errorf("%w: unknown format %q (not one of %v)", ErrValidation, format, StandardFormatNames())
 		}
 	}
+	if mixerLevels != nil && (*mixerLevels < 0 || *mixerLevels > 8) {
+		return fmt.Errorf("%w: mixerLevels must be between 0 (Node-Standard) and 8, got %d", ErrValidation, *mixerLevels)
+	}
 
 	wf.Definition.Roles[roleIdx].Format = format
+	if mixerLevels != nil {
+		wf.Definition.Roles[roleIdx].MixerLevels = *mixerLevels
+	}
 	wf.UpdatedAt = time.Now()
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		return err

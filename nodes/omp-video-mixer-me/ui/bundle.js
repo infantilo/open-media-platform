@@ -57,6 +57,30 @@
 // Registrierungsreihenfolge folgt (`graphContext()`-Doku unten) — und
 // nur in der Mastereben als feste Tasten
 // rendern (`renderBusRow`s `levelOutputSenderIds`-Parameter).
+//
+// Ebenenzahl live ändern (Nutzerwunsch 2026-08-24: "im laufenden Betrieb
+// im property panel, mit restart aber reconnect aller zuvor aufgelegten
+// quellen"): OMP_ME_LEVELS ist bei main.rs::main() fest für die
+// gesamte Prozess-Laufzeit — ein Ebenenwechsel braucht daher denselben
+// Restart-Mechanismus, den `flow-canvas.ts#buildRoleFormatSection` seit
+// 2026-07-29 für role.Format nutzt (POST .../roles/{role}/restart, s.
+// orchestrator/internal/workflows/service.go RestartRole-Doku): alte
+// Instanz stoppen, neue mit dem neuen OMP_ME_LEVELS starten, auf
+// Registrierung warten, alle Connections dieser Rolle neu anwenden (also
+// exakt "restart aber reconnect aller zuvor aufgelegten Quellen"). Da
+// dieser Node ein eigenes UI-Bundle hat, landet er NIE in
+// flow-canvas.ts' generischem Panel (`mountUIBundle` gewinnt, s. dortige
+// Doku) — die Ebenen-Sektion unten ist deshalb die einzige Stelle, an
+// der das für omp-video-mixer-me überhaupt zugänglich ist, und lebt
+// bewusst hier statt dort. `mixerLevels` ist server-seitig `*int` (nil
+// = unverändert lassen, s. handleRestartWorkflowRole-Doku) — `format`
+// dagegen bleibt ein normaler String, der bei JEDEM Restart-Aufruf
+// (unabhängig von der Quelle) übernommen wird, ein fehlendes Feld zählt
+// dort weiterhin als "auf Node-Standard zurücksetzen" (unverändertes
+// Verhalten der Format-Sektion in flow-canvas.ts). Diese Ebenen-Sektion
+// muss das aktuelle `format` deshalb selbst mitschicken (aus
+// `findRunningRole()` unten), sonst würde ein reiner Ebenenwechsel ein
+// separat gesetztes role.Format stillschweigend zurücksetzen.
 const WIDTH = 640;
 const HEIGHT = 480;
 const PIP_BOX = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
@@ -680,6 +704,90 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const banks = [];
     for (let level = 0; level < levelCount; level++) banks.push(buildBank(level));
 
+    // Ebenen-Restart-Sektion (s. Moduldoku oben zu "Ebenenzahl live
+    // ändern") — ermittelt Workflow/Rolle/aktuelles Format über einen
+    // eigenen `/api/v1/workflows`-Fetch (kleiner, einmaliger Aufruf beim
+    // Panel-Aufbau, anders geformt als `graphContext()`s Poll-Rückgabe
+    // oben, daher nicht wiederverwendet). `null`, wenn dieser Node
+    // keiner gestarteten Workflow-Rolle zugeordnet ist — die Sektion
+    // bleibt dann einfach weg, gleiches Verhalten wie
+    // `flow-canvas.ts#findRunningRoleForNode`.
+    const findRunningRole = async () => {
+      try {
+        const res = await fetch("/api/v1/workflows");
+        if (!res.ok) return null;
+        const list = await res.json();
+        for (const wf of list) {
+          if (wf.status !== "started") continue;
+          for (const [roleName, rt] of Object.entries(wf.runtime || {})) {
+            if (rt.nodeId !== nodeId) continue;
+            const role = (wf.definition.roles || []).find((r) => r.name === roleName);
+            return { workflowId: wf.id, roleName, format: role?.format || "" };
+          }
+        }
+      } catch {
+        // Sektion bleibt weg — kein harter Fehler fürs übrige Panel.
+      }
+      return null;
+    };
+
+    let levelsSection = null;
+    const roleInfo = await findRunningRole();
+    if (roleInfo) {
+      levelsSection = document.createElement("omp-panel-section");
+      levelsSection.setAttribute("label", "Mischerebenen");
+
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:6px;";
+      const label = document.createElement("span");
+      label.textContent = "Ebenen:";
+      label.style.cssText = "font-size:11px;color:var(--omp-text-dim, #9aa0a6);";
+      const input = document.createElement("input");
+      input.type = "number";
+      input.min = "1";
+      input.max = "8";
+      input.value = String(levelCount);
+      input.style.cssText =
+        "width:50px;height:24px;font-size:11px;border-radius:4px;" +
+        "background:var(--omp-bg-2, #1c1f22);color:var(--omp-text, #e8eaed);" +
+        "border:1px solid var(--omp-border, #2e3338);";
+      const applyBtn = document.createElement("omp-button");
+      applyBtn.textContent = "Übernehmen (Node neu starten)";
+
+      // Sendet `roleInfo.format` unverändert mit (s. Moduldoku oben) —
+      // nur `mixerLevels` ist die eigentlich gewollte Änderung dieses
+      // Buttons, `format` bleibt server-seitig sonst nicht "unangetastet"
+      // wie ein fehlendes `mixerLevels`-Feld, sondern würde auf den
+      // Node-Standard zurückgesetzt.
+      applyBtn.addEventListener("click", async () => {
+        const n = Math.max(1, Math.min(8, parseInt(input.value, 10) || 1));
+        const ok = confirm(
+          `Rolle "${roleInfo.roleName}" mit ${n} Ebene(n) neu starten? Der Node ist dabei kurz nicht erreichbar, ` +
+            `zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.`,
+        );
+        if (!ok) return;
+        applyBtn.setAttribute("disabled", "");
+        try {
+          const res = await fetch(
+            `/api/v1/workflows/${roleInfo.workflowId}/roles/${encodeURIComponent(roleInfo.roleName)}/restart`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ format: roleInfo.format, mixerLevels: n }),
+            },
+          );
+          if (!res.ok) alert(`Neustart fehlgeschlagen: ${await res.text()}`);
+        } catch (err) {
+          alert(`Neustart fehlgeschlagen: ${err}`);
+        } finally {
+          applyBtn.removeAttribute("disabled");
+        }
+      });
+
+      row.append(label, input, applyBtn);
+      levelsSection.append(row);
+    }
+
     // §4.6 Punkt 4 (docs/END-GOAL-FEATURES.md, "Mixer-Presets",
     // docs/decisions.md Nachtrag 40): UI-Anschluss des Backend-seitig
     // bereits vorhandenen `GET`/`POST /state` (main.rs::capture_state/
@@ -736,7 +844,12 @@ class OmpVideoMixerMePanel extends HTMLElement {
     presetSection.setAttribute("label", "Presets");
     presetSection.append(presetSaveBtn, presetList);
 
-    shadow.append(style, ...banks.map((b) => b.section), presetSection);
+    shadow.append(
+      style,
+      ...banks.map((b) => b.section),
+      ...(levelsSection ? [levelsSection] : []),
+      presetSection,
+    );
     renderPresets();
 
     // Ein gemeinsamer Graph/Workflows-Fetch je Poll für alle Banken (s.

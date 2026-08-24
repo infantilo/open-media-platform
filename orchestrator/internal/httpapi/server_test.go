@@ -557,7 +557,7 @@ func (f fakeWorkflowService) Stop(ctx context.Context, id string, confirm bool) 
 	return f.stopErr
 }
 
-func (f fakeWorkflowService) RestartRole(ctx context.Context, id, role, format string) error {
+func (f fakeWorkflowService) RestartRole(ctx context.Context, id, role, format string, mixerLevels *int) error {
 	return f.restartRoleErr
 }
 
