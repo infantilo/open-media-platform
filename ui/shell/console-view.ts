@@ -8,6 +8,7 @@
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
 import { mountUIBundle } from "./ui-bundle.ts";
 import { pickActiveEntry } from "./console-logic.ts";
+import { hasPreviewUrl, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
 export interface ConsoleEntry {
   workflowId: string;
@@ -32,6 +33,7 @@ export class ConsoleView extends HTMLElement {
   #activeNodeRoleId: string | null = null;
   #tabs!: HTMLDivElement;
   #panel!: HTMLDivElement;
+  #previewHandle?: MountedPreview;
 
   connectedCallback() {
     this.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;";
@@ -40,7 +42,7 @@ export class ConsoleView extends HTMLElement {
     this.#tabs.style.cssText = "display:flex;gap:4px;padding:6px;border-bottom:1px solid #333;flex-shrink:0;";
 
     this.#panel = document.createElement("div");
-    this.#panel.style.cssText = "flex:1;min-height:0;overflow:auto;padding:12px;";
+    this.#panel.style.cssText = "flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;";
 
     this.append(this.#tabs, this.#panel);
   }
@@ -61,6 +63,8 @@ export class ConsoleView extends HTMLElement {
 
     if (entries.length === 0) {
       this.#activeNodeRoleId = null;
+      this.#previewHandle?.dispose();
+      this.#previewHandle = undefined;
       this.#panel.replaceChildren();
       const p = document.createElement("p");
       p.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
@@ -89,6 +93,8 @@ export class ConsoleView extends HTMLElement {
   async #activate(nodeRoleId: string) {
     this.#activeNodeRoleId = nodeRoleId;
     this.#renderTabs();
+    this.#previewHandle?.dispose();
+    this.#previewHandle = undefined;
     const entry = this.#entries.find((e) => e.nodeRoleId === nodeRoleId);
     this.#panel.replaceChildren();
     if (!entry) return;
@@ -103,11 +109,29 @@ export class ConsoleView extends HTMLElement {
     loading.style.cssText = "color:#999;";
     this.#panel.appendChild(loading);
 
-    const mounted = await mountUIBundle(this.#panel, entry.uiBundleUrl);
+    // Live-Vorschau (previewUrl-Stream) ÜBER dem UI-Bundle, sofern der
+    // Node einen previewUrl-Parameter hat — Nutzerfund 2026-08-25: ein
+    // reiner Operator sah bisher nur das node-eigene Bundle (z. B. beim
+    // Multiviewer nur dessen PIP-Layout-Editor), nie das Video selbst.
+    const showsPreview = await hasPreviewUrl(entry.uiBundleUrl);
+    if (this.#activeNodeRoleId !== nodeRoleId) return; // zwischenzeitlich weitergeklickt
+    this.#panel.replaceChildren();
+
+    if (showsPreview) {
+      this.#previewHandle = mountNodePreview(entry.uiBundleUrl);
+      this.#panel.appendChild(this.#previewHandle.element);
+    }
+
+    const bundleContainer = document.createElement("div");
+    bundleContainer.style.cssText = "flex:1;min-height:0;";
+    this.#panel.appendChild(bundleContainer);
+
+    const mounted = await mountUIBundle(bundleContainer, entry.uiBundleUrl);
     if (!mounted) {
+      bundleContainer.replaceChildren();
       const p = document.createElement("p");
       p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
-      this.#panel.appendChild(p);
+      bundleContainer.appendChild(p);
     }
   }
 }

@@ -19,12 +19,14 @@
 import { mountUIBundle } from "./ui-bundle.ts";
 import type { ConsoleEntry } from "./console-view.ts";
 import { diffEntries, reconcileLayouts, MIN_TILE_HEIGHT, MIN_TILE_WIDTH, type TileLayout } from "./console-board-logic.ts";
+import { hasPreviewUrl, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
 const FALLBACK_CONTAINER_WIDTH = 1200;
 
 interface Tile {
   wrapper: HTMLDivElement;
   content: HTMLDivElement;
+  previewHandle?: MountedPreview;
 }
 
 export class ConsoleBoard extends HTMLElement {
@@ -80,7 +82,9 @@ export class ConsoleBoard extends HTMLElement {
     this.#entries = entries;
 
     for (const roleId of diff.toUnmount) {
-      this.#tiles.get(roleId)?.wrapper.remove();
+      const tile = this.#tiles.get(roleId);
+      tile?.previewHandle?.dispose();
+      tile?.wrapper.remove();
       this.#tiles.delete(roleId);
       delete this.#layouts[roleId];
     }
@@ -133,7 +137,8 @@ export class ConsoleBoard extends HTMLElement {
     header.addEventListener("pointerdown", (ev) => this.#onDragStart(ev, entry.nodeRoleId));
 
     const content = document.createElement("div");
-    content.style.cssText = "flex:1;min-height:0;overflow:auto;padding:8px;color:#eee;";
+    content.style.cssText =
+      "flex:1;min-height:0;overflow:auto;padding:8px;color:#eee;display:flex;flex-direction:column;gap:8px;";
 
     const resizeHandle = document.createElement("div");
     resizeHandle.title = "Ziehen zum Skalieren";
@@ -156,20 +161,44 @@ export class ConsoleBoard extends HTMLElement {
     await this.#loadTileContent(tile.content, entry);
   }
 
+  // Zeigt, falls vorhanden, die Live-Vorschau (previewUrl-Stream) ÜBER
+  // dem node-eigenen UI-Bundle in derselben Kachel — Nutzerfund
+  // 2026-08-25: ein Operator mit nur `operate` auf z. B.
+  // omp-multiviewer-custom bekam bisher NUR dessen PIP-Layout-Editor zu
+  // sehen, nie das eigentliche Video ("er muss ja das Video sehen
+  // können"). previewUrl ist node-typ-unabhängig (Viewer, Multiviewer,
+  // …) — kein Hardcoding auf einen bestimmten Node-Typ nötig.
   async #loadTileContent(content: HTMLDivElement, entry: ConsoleEntry) {
+    this.#tiles.get(entry.nodeRoleId)?.previewHandle?.dispose();
+
     content.replaceChildren();
     const loading = document.createElement("p");
     loading.textContent = "Lädt …";
     loading.style.cssText = "color:#999;margin:0;";
     content.appendChild(loading);
 
-    const mounted = await mountUIBundle(content, entry.uiBundleUrl);
+    const showsPreview = await hasPreviewUrl(entry.uiBundleUrl);
+    content.replaceChildren();
+
+    let previewHandle: MountedPreview | undefined;
+    if (showsPreview) {
+      previewHandle = mountNodePreview(entry.uiBundleUrl);
+      content.appendChild(previewHandle.element);
+    }
+    const tile = this.#tiles.get(entry.nodeRoleId);
+    if (tile) tile.previewHandle = previewHandle;
+
+    const bundleContainer = document.createElement("div");
+    bundleContainer.style.cssText = "flex:1;min-height:0;";
+    content.appendChild(bundleContainer);
+
+    const mounted = await mountUIBundle(bundleContainer, entry.uiBundleUrl);
     if (!mounted) {
-      content.replaceChildren();
+      bundleContainer.replaceChildren();
       const p = document.createElement("p");
       p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
       p.style.margin = "0";
-      content.appendChild(p);
+      bundleContainer.appendChild(p);
     }
   }
 
