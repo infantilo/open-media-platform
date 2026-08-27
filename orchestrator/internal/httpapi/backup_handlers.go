@@ -4,11 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 )
+
+// maxBackupUploadBytes begrenzt POST /api/v1/admin/backups/upload —
+// eine Sicherung der Control-Plane-Datenbank (Nutzer, Rollenbindungen,
+// Audit-Log, Layouts, Snapshots, Workflows, Hosts) bleibt klein
+// (Audit-Log-Retention begrenzt deren größten Anteil, s. config.go
+// OMP_AUDIT_RETENTION_DAYS); 512 MiB ist bewusst großzügig bemessen,
+// nicht aus einer echten Dump-Größe abgeleitet, verhindert aber einen
+// unbegrenzten Speicherverbrauch durch einen versehentlich falschen
+// (oder böswilligen) Upload — der komplette Body wird wie bei Create()
+// vollständig in den Speicher gelesen, kein Streaming nötig.
+const maxBackupUploadBytes = 512 << 20
 
 // BackupService — schmales Interface auf internal/backup.Service
 // (Nutzerwunsch 2026-08-13: Backup über das Browser-UI), gleiches
@@ -18,6 +30,7 @@ type BackupService interface {
 	Create(ctx context.Context) (backup.Result, error)
 	List() ([]string, error)
 	Path(name string) (string, error)
+	Import(data []byte) (backup.Result, error)
 }
 
 // SupervisorClient löst den eigentlichen Restore-Auftrag beim
@@ -72,6 +85,38 @@ func handleDownloadBackup(svc BackupService) http.HandlerFunc {
 			return
 		}
 		serveBackupFile(w, path, name)
+	}
+}
+
+// handleUploadBackup liefert POST /api/v1/admin/backups/upload —
+// Nutzerfund 2026-08-27 ("backup kann downgeloaded werden, aber nicht
+// per upload im Browser wiederhergestellt werden — derzeit nur aus der
+// Dropdownbox"): nimmt die rohen Bytes einer zuvor heruntergeladenen
+// (oder von einem anderen OMP-Deployment stammenden) `.sql.gz`-Datei
+// entgegen und legt sie unter einem neuen, serverseitig vergebenen
+// Namen in `.backups/` ab (backup.Service.Import) — taucht danach ganz
+// normal in GET /api/v1/admin/backups auf und lässt sich über den
+// bestehenden, bewusst reibungsvollen POST /api/v1/admin/restore-Weg
+// zurückspielen (getippte Dateinamen-Bestätigung bleibt unverändert
+// nötig, dieser Endpunkt fügt nur eine zweite Quelle für "eine Datei in
+// der Liste" hinzu, keine Abkürzung um die Restore-Bestätigung herum).
+// Body: rohe Bytes, kein multipart/form-data nötig (ein einzelnes,
+// binäres Dokument je Anfrage — gleiche Einfachheit wie
+// serveBackupFile()s Gegenstück beim Download).
+func handleUploadBackup(svc BackupService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, maxBackupUploadBytes)
+		data, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Hochladen fehlgeschlagen (evtl. zu groß): %s", err), http.StatusBadRequest)
+			return
+		}
+		result, err := svc.Import(data)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Import fehlgeschlagen: %s", err), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"name": result.Name})
 	}
 }
 

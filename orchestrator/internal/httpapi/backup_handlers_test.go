@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
 )
 
 func TestHandleRestoreRequiresConfirm(t *testing.T) {
@@ -61,6 +63,40 @@ type fakeBackupSvcRejectingPath struct{ fakeBackupSvc }
 
 func (fakeBackupSvcRejectingPath) Path(name string) (string, error) {
 	return "", errors.New("backup nicht gefunden")
+}
+
+// fakeBackupSvcRejectingImport — Import() lehnt jeden Upload ab, wie es
+// ein echter backup.Service für ungültige/nicht-gzip-Daten täte.
+type fakeBackupSvcRejectingImport struct{ fakeBackupSvc }
+
+func (fakeBackupSvcRejectingImport) Import(data []byte) (backup.Result, error) {
+	return backup.Result{}, errors.New("keine gültige gzip-Datei")
+}
+
+// TestHandleUploadBackupSucceeds/Rejects — Nutzerfund 2026-08-27
+// ("backup kann downgeloaded werden, aber nicht per upload im Browser
+// wiederhergestellt werden — derzeit nur aus der Dropdownbox").
+func TestHandleUploadBackupSucceeds(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backups/upload", strings.NewReader("fake gzip bytes"))
+	handleUploadBackup(fakeBackupSvc{})(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "omp-imported.sql.gz") {
+		t.Errorf("response body = %s, want it to contain the imported backup's name", rec.Body.String())
+	}
+}
+
+func TestHandleUploadBackupRejectsInvalidData(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/backups/upload", strings.NewReader("not a backup"))
+	handleUploadBackup(fakeBackupSvcRejectingImport{})(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (invalid upload)", rec.Code)
+	}
 }
 
 // fakeSupervisorClientCapturing — zeichnet den übergebenen Dateinamen auf.

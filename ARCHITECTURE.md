@@ -2432,7 +2432,16 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
    Instanz, ein Formular erzeugt live das Start-Skript für eine neue
    Instanz und ruft `POST /api/v1/cluster/join` per Klick auf, statt es
    von Hand per curl zu bedienen — kein neuer Endpunkt, nur eine
-   UI-Schicht über die hier beschriebene API.
+   UI-Schicht über die hier beschriebene API. `DELETE .../members/{id}`
+   (`cluster.Node.Leave()`) lehnt seit demselben Datum hart ab, den
+   Leader zu entfernen, wenn er das einzige verbleibende Mitglied ist
+   (`ErrLastVoterIsLeader`, 409) — Nutzerfund, live beim eigenen
+   Cluster-Tab-Testlauf ausgelöst: ein sich selbst entfernender
+   Ein-Knoten-Leader bricht den Cluster dauerhaft (kein Server mehr
+   übrig, der je wieder eine Wahl abhalten könnte). Bei mehreren
+   Mitgliedern bleibt Selbst-Entfernung des Leaders erlaubt
+   (`raft.Config.ShutdownOnRemove` löst eine Neuwahl unter den
+   Verbleibenden aus, unterstützter Vorgang).
 4. **Datenverzeichnis:** `OMP_RAFT_DATA_DIR` (Default
    `../data/raft/<nodeID>`) hält BoltDB-Log/Stable-Store +
    `raft.FileSnapshotStore`-Snapshots — analog zu den bereits

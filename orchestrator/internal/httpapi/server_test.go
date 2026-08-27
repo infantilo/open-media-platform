@@ -150,6 +150,10 @@ func (fakeBackupSvc) List() ([]string, error) { return []string{"omp-fake.sql.gz
 
 func (fakeBackupSvc) Path(name string) (string, error) { return "/tmp/" + name, nil }
 
+func (fakeBackupSvc) Import(data []byte) (backup.Result, error) {
+	return backup.Result{Name: "omp-imported.sql.gz", Path: "/tmp/omp-imported.sql.gz"}, nil
+}
+
 // fakeSupervisorClient — Test-Double für SupervisorClient, kein echter
 // Supervisor-Prozess nötig für Handler-Tests.
 type fakeSupervisorClient struct{ err error }

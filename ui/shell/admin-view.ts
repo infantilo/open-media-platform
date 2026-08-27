@@ -224,6 +224,13 @@ class AdminView extends HTMLElement {
   // gerade zurückgespielt wird, nicht nur DASS bestätigt wurde).
   #backups: string[] = [];
   #creatingBackup = false;
+  // Nutzerfund 2026-08-27 ("backup kann downgeloaded werden, aber
+  // nicht per upload im Browser wiederhergestellt werden — derzeit
+  // nur aus der Dropdownbox"): #uploadBackup unten lädt eine lokale
+  // Datei hoch und wählt sie danach automatisch in genau dieser
+  // Dropdown/Bestätigungs-Kette aus — kein separater Restore-Pfad,
+  // nur ein zweiter Weg, eine Datei in die Liste zu bekommen.
+  #uploadingBackup = false;
   #restoreSelected = "";
   #restoreTyped = "";
   #restoring = false;
@@ -554,6 +561,44 @@ class AdminView extends HTMLElement {
     }
   }
 
+  // Nutzerfund 2026-08-27: eine zuvor heruntergeladene (oder von einem
+  // anderen OMP-Deployment stammende) Backup-Datei hochladen und
+  // zurückspielen können, nicht nur aus der Server-eigenen Liste
+  // wählen. Rohe Bytes im Body (kein multipart/form-data nötig für
+  // eine einzelne Datei) — POST /api/v1/admin/backups/upload legt sie
+  // unter einem neuen, serverseitig vergebenen Namen in .backups/ ab
+  // (backup.Service.Import, nie der Client-Dateiname). Nach Erfolg:
+  // Liste neu laden UND die hochgeladene Datei direkt in der
+  // bestehenden Restore-Auswahl vorselektieren — die getippte
+  // Namens-Bestätigung bleibt unverändert Pflicht, dieser Weg spart
+  // nur das Suchen in der Dropdown-Liste.
+  async #uploadBackup(file: File) {
+    this.#uploadingBackup = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const data = await file.arrayBuffer();
+      const res = await apiFetch("/api/v1/admin/backups/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/gzip" },
+        body: data,
+      });
+      if (!res.ok) {
+        this.#error = `Hochladen fehlgeschlagen: ${await res.text()}`;
+        return;
+      }
+      const body = (await res.json()) as { name: string };
+      await this.#loadBackups();
+      this.#restoreSelected = body.name;
+      this.#restoreTyped = "";
+    } catch (err) {
+      this.#error = `Hochladen fehlgeschlagen: ${err}`;
+    } finally {
+      this.#uploadingBackup = false;
+      this.#render();
+    }
+  }
+
   // Lädt eine bereits vorhandene Sicherung erneut herunter — gleiches
   // Blob-Muster wie #createBackup (nicht per direktem <a href>-Link:
   // der Token steckt im localStorage, nicht in einem automatisch
@@ -795,13 +840,34 @@ class AdminView extends HTMLElement {
     this.#render();
   }
 
+  // Nutzerfund 2026-08-27 (live im eigenen Testlauf desselben Tages
+  // erlebt): der Leader konnte sich selbst entfernen, auch als
+  // einziges verbleibendes Mitglied — das bricht den Cluster dauerhaft
+  // (kein Mitglied mehr übrig, das je wieder eine Wahl abhalten
+  // könnte). Serverseitig jetzt hart abgelehnt
+  // (cluster.ErrLastVoterIsLeader) — dieser Client-seitige Guard
+  // verhindert zusätzlich den unnötigen Rundlauf UND macht die
+  // Einschränkung sichtbar, bevor überhaupt geklickt wird (s.
+  // #renderClusterPeerRow: Button ist für genau diesen Fall
+  // deaktiviert). Entfernt der Leader sich selbst, während ANDERE
+  // Mitglieder übrig bleiben, ist das dagegen ein unterstützter Vorgang
+  // (Neuwahl unter den Verbleibenden, raft.Config.ShutdownOnRemove) —
+  // nur eine deutlichere Warnung statt eines Blocks.
   async #leaveClusterMember(peer: ClusterPeer) {
-    if (
-      !(await confirmDialog(`Mitglied "${peer.id}" (${peer.raftAddr}) wirklich aus dem Cluster entfernen?`, {
-        confirmLabel: "Entfernen",
-      }))
-    )
+    const isLeader = peer.id === this.#cluster?.leaderId;
+    const memberCount = this.#cluster?.peers.length ?? 0;
+    if (isLeader && memberCount <= 1) {
+      this.#error =
+        `„${peer.id}" ist der Leader und das einzige verbleibende Cluster-Mitglied — ` +
+        "Entfernen ist gesperrt, das würde den Cluster dauerhaft unbrauchbar machen.";
+      this.#render();
       return;
+    }
+    const message = isLeader
+      ? `„${peer.id}" (${peer.raftAddr}) ist der aktuelle Leader. Nach dem Entfernen wählen die ` +
+        `verbleibenden ${memberCount - 1} Mitglieder automatisch einen neuen Leader. Wirklich entfernen?`
+      : `Mitglied "${peer.id}" (${peer.raftAddr}) wirklich aus dem Cluster entfernen?`;
+    if (!(await confirmDialog(message, { confirmLabel: "Entfernen" }))) return;
     const res = await apiFetch(`/api/v1/cluster/members/${encodeURIComponent(peer.id)}`, { method: "DELETE" });
     if (!res.ok) {
       this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
@@ -1609,10 +1675,28 @@ class AdminView extends HTMLElement {
     restoreHeading.textContent = "Restore";
     section.appendChild(restoreHeading);
 
+    const uploadRow = document.createElement("div");
+    uploadRow.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:var(--omp-space-3);";
+    const uploadLabel = document.createElement("span");
+    uploadLabel.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
+    uploadLabel.textContent = this.#uploadingBackup
+      ? "Wird hochgeladen …"
+      : "Backup-Datei hochladen (statt aus der Liste oben zu wählen):";
+    const uploadInput = document.createElement("input");
+    uploadInput.type = "file";
+    uploadInput.accept = ".gz,application/gzip";
+    uploadInput.disabled = this.#uploadingBackup;
+    uploadInput.style.cssText = "font-size:11px;";
+    uploadInput.addEventListener("change", () => {
+      if (uploadInput.files?.[0]) void this.#uploadBackup(uploadInput.files[0]);
+    });
+    uploadRow.append(uploadLabel, uploadInput);
+    section.appendChild(uploadRow);
+
     if (this.#backups.length === 0) {
       const noBackups = document.createElement("div");
       noBackups.style.cssText = "color:var(--omp-text-dim);";
-      noBackups.textContent = "Erst ein Backup erstellen, bevor ein Restore möglich ist.";
+      noBackups.textContent = "Noch kein Backup vorhanden — erst eines erstellen oder eine Datei oben hochladen.";
       section.appendChild(noBackups);
       return section;
     }
@@ -1896,6 +1980,13 @@ class AdminView extends HTMLElement {
     delBtn.textContent = "Entfernen";
     delBtn.className = "omp-btn-danger";
     delBtn.style.cssText = "font-size:11px;";
+    // Sichtbar gesperrt statt erst nach dem Klick abgewiesen — der
+    // Leader als letztes verbleibendes Mitglied ließe sich nie wieder
+    // rückgängig machen (s. #leaveClusterMember-Doku).
+    if (peer.id === c.leaderId && c.peers.length <= 1) {
+      delBtn.disabled = true;
+      delBtn.title = "Der letzte verbleibende Leader kann nicht entfernt werden.";
+    }
     delBtn.addEventListener("click", () => void this.#leaveClusterMember(peer));
     actionsTd.appendChild(delBtn);
     tr.appendChild(actionsTd);

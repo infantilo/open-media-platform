@@ -307,6 +307,65 @@ func TestJoinOnFollowerFailsWithErrNotLeader(t *testing.T) {
 	}
 }
 
+// Nutzerfund 2026-08-27 ("verhindere dass ich den cluster leader
+// selbst entferne, vor allem, wenn es keinen anderen gibt") — live im
+// eigenen Testlauf desselben Tages erlebt: ein Ein-Knoten-Cluster, der
+// sich selbst entfernt, hat danach null Mitglieder und kann sich nie
+// wieder selbst bootstrappen (kein Server mehr übrig, der eine Wahl
+// abhalten könnte). Muss hart abgelehnt werden, statt live zu
+// scheitern.
+func TestLeaveRejectsRemovingLastVoterSelf(t *testing.T) {
+	cfg := Config{
+		NodeID:   "solo",
+		RaftAddr: freeTCPAddr(t),
+		DataDir:  t.TempDir(),
+	}
+	node, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = node.Shutdown(ctx)
+	}()
+
+	if !waitFor(10*time.Second, node.IsLeader) {
+		t.Fatalf("single-node cluster never became leader, status=%+v", node.Status())
+	}
+
+	if err := node.Leave("solo"); err != ErrLastVoterIsLeader {
+		t.Fatalf("Leave(self) on a 1-member cluster error = %v, want ErrLastVoterIsLeader", err)
+	}
+	// Muss tatsächlich Mitglied geblieben sein — kein Teilfortschritt.
+	if len(node.Status().Peers) != 1 {
+		t.Errorf("Status().Peers = %+v after rejected self-Leave, want still 1 (self)", node.Status().Peers)
+	}
+}
+
+// Gegenprobe zum Block oben: entfernt sich der Leader selbst, während
+// ANDERE Mitglieder übrig bleiben, ist das ein unterstützter Vorgang
+// (raft.Config.ShutdownOnRemove greift für genau diesen Fall, s.
+// Leave()-Doku) — die neue Prüfung darf das nicht mit blockieren.
+func TestLeaveAllowsLeaderRemovingItselfWhenOthersRemain(t *testing.T) {
+	nodes := startFoundingCluster(t, 3)
+	defer shutdownAll(nodes)
+	leader := waitForLeader(t, nodes, 15*time.Second)
+	leaderID := leader.config.NodeID
+
+	if err := leader.Leave(leaderID); err != nil {
+		t.Fatalf("Leave(self) with other members present error = %v, want nil", err)
+	}
+
+	remaining := waitForLeader(t, nodes, 15*time.Second)
+	if remaining.config.NodeID == leaderID {
+		t.Fatalf("waitForLeader() still returned the removed former leader %s", leaderID)
+	}
+	if !waitFor(10*time.Second, func() bool { return len(remaining.Status().Peers) == 2 }) {
+		t.Errorf("new leader still sees %d peers, want 2 (former leader removed)", len(remaining.Status().Peers))
+	}
+}
+
 func TestLeaveRemovesVoterAndPeerHTTPAddr(t *testing.T) {
 	nodes := startFoundingCluster(t, 3)
 	defer shutdownAll(nodes)

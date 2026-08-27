@@ -333,6 +333,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/backup", g.requireVerbGlobal(authz.VerbAdmin, handleCreateBackup(backupSvc)))
 	mux.HandleFunc("GET /api/v1/admin/backups", g.requireVerbGlobal(authz.VerbAdmin, handleListBackups(backupSvc)))
 	mux.HandleFunc("GET /api/v1/admin/backups/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadBackup(backupSvc)))
+	mux.HandleFunc("POST /api/v1/admin/backups/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadBackup(backupSvc)))
 	mux.HandleFunc("POST /api/v1/admin/restore", g.requireVerbGlobal(authz.VerbAdmin, handleRestore(backupSvc, supervisorClient)))
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).

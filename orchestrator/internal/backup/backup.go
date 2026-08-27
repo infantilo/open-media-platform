@@ -189,6 +189,57 @@ func (s *Service) Create(ctx context.Context) (Result, error) {
 	return Result{Name: name, Path: finalPath}, nil
 }
 
+// Import speichert eine vom Browser hochgeladene Sicherung (Nutzerfund
+// 2026-08-27: "backup kann downgeloaded werden, aber nicht per upload
+// im Browser wiederhergestellt werden — derzeit nur aus der
+// Dropdownbox"). Bewusst symmetrisch zu handleDownloadBackup: dieselben
+// Rohbytes, die ein Download liefert (bereits gzip-komprimiertes
+// pg_dump-Ergebnis), kommen hier unverändert wieder rein — kein
+// erneutes Komprimieren wie in Create(). Der Dateiname wird IMMER
+// serverseitig neu vergeben (gleiches Zeitstempel-Schema wie Create()),
+// nie der vom Client mitgeschickte Name — ein Client-Dateiname ist
+// unvertrauenswürdige Eingabe (Path Traversal, Kollision mit einer
+// bestehenden Sicherung); ein selbst generierter Name macht diese Sorge
+// für den Upload-Pfad von vornherein hinfällig, statt sie erst bei
+// Path() abzufangen. Wendet danach dieselbe Rotation wie Create() an —
+// eine hochgeladene Sicherung zählt wie jede andere.
+func (s *Service) Import(data []byte) (Result, error) {
+	if len(data) == 0 {
+		return Result{}, fmt.Errorf("hochgeladene Datei ist leer")
+	}
+	// Nur der Container-Check (ist es überhaupt gzip?), keine
+	// SQL-Inhaltsprüfung — Create() validiert den pg_dump-Inhalt selbst
+	// auch nicht vorab, das übernimmt `psql` erst beim tatsächlichen
+	// Restore (gleicher Vertrauensstand wie der bestehende Weg).
+	if gr, err := gzip.NewReader(bytes.NewReader(data)); err != nil {
+		return Result{}, fmt.Errorf("keine gültige gzip-Datei: %w", err)
+	} else {
+		_ = gr.Close()
+	}
+
+	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+		return Result{}, fmt.Errorf("backup dir anlegen: %w", err)
+	}
+
+	name := fmt.Sprintf("omp-%s.sql.gz", time.Now().UTC().Format("20060102T150405Z"))
+	finalPath := filepath.Join(s.dir, name)
+	tmpPath := finalPath + ".tmp"
+
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return Result{}, fmt.Errorf("hochgeladene Sicherung schreiben: %w", err)
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return Result{}, fmt.Errorf("backup umbenennen: %w", err)
+	}
+
+	if err := s.rotate(); err != nil {
+		_ = err // best effort, gleiche Begründung wie in Create()
+	}
+
+	return Result{Name: name, Path: finalPath}, nil
+}
+
 // List liefert die Dateinamen vorhandener Backups, neueste zuerst.
 func (s *Service) List() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)

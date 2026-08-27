@@ -34,6 +34,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -47,6 +48,20 @@ import (
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 )
+
+// ErrLastVoterIsLeader — Nutzerfund 2026-08-27 (im Anschluss an den
+// eigenen Cluster-Tab-Testlauf desselben Tages live erlebt): der
+// Leader kann sich selbst entfernen (raft.Config.ShutdownOnRemove
+// greift dann, s. Leave()-Doku unten) — solange andere Mitglieder
+// übrig bleiben, ist das eine unterstützte Übergabe (Neuwahl unter den
+// Verbleibenden). Ist er aber das EINZIGE Mitglied, entfernt er sich
+// aus einer Konfiguration mit null verbleibenden Servern — der Cluster
+// kann sich danach nie wieder selbst bootstrappen (kein Mitglied mehr
+// vorhanden, das eine Wahl abhalten könnte), einzige Reparatur ist ein
+// manuelles Löschen des Raft-Datenverzeichnisses und ein Neustart als
+// frischer Ein-Knoten-Cluster. Dieser Fall wird hart abgelehnt, statt
+// ihn erst live scheitern zu lassen.
+var ErrLastVoterIsLeader = errors.New("cluster: refusing to remove the last remaining member (would permanently break the cluster)")
 
 // transportMaxPool/transportTimeout sind Raft-Transport-Parameter ohne
 // projektspezifische Bedeutung — Werte aus der hashicorp/raft-eigenen
@@ -410,11 +425,41 @@ func (n *Node) Leave(nodeID string) error {
 	if !n.IsLeader() {
 		return raft.ErrNotLeader
 	}
+	if nodeID == n.config.NodeID {
+		cfgFuture := n.raft.GetConfiguration()
+		if err := cfgFuture.Error(); err != nil {
+			return fmt.Errorf("cluster: read configuration: %w", err)
+		}
+		if len(cfgFuture.Configuration().Servers) <= 1 {
+			return ErrLastVoterIsLeader
+		}
+	}
 	future := n.raft.RemoveServer(raft.ServerID(nodeID), 0, applyTimeout)
 	if err := future.Error(); err != nil {
 		return fmt.Errorf("cluster: remove server: %w", err)
 	}
 	if err := n.apply(Command{Type: CommandRemovePeerHTTPAddr, NodeID: nodeID}); err != nil {
+		// Selbst-Entfernung des Leaders bei noch vorhandenen anderen
+		// Mitgliedern (Nutzerfund 2026-08-27, Test
+		// TestLeaveAllowsLeaderRemovingItselfWhenOthersRemain): das
+		// RemoveServer oben löst über raft.Config.ShutdownOnRemove
+		// bereits SYNCHRON das Herunterfahren dieser eigenen
+		// Raft-Instanz aus, noch während Leave() läuft — der
+		// nachfolgende Apply-Aufruf hier trifft dann unvermeidlich auf
+		// eine bereits abgeschaltete Instanz (raft.ErrRaftShutdown) und
+		// kann grundsätzlich nicht mehr gelingen, es gibt keine laufende
+		// Instanz mehr, die ihn ausführen könnte. Die eigentliche
+		// Entfernung (RemoveServer oben) ist zu diesem Zeitpunkt bereits
+		// erfolgreich committed — nur der zusätzliche
+		// Adressbuch-Eintrag des entfernten Knotens bleibt als
+		// harmloser Rest im FSM der übrigen Instanzen stehen (wird bei
+		// einem künftigen erneuten Join derselben Node-ID automatisch
+		// überschrieben, s. Join()/SetPeerHTTPAddr) — kein Fehlerfall
+		// für den Aufrufer. Jede andere Ursache (auch bei Selbst-
+		// Entfernung) bleibt ein echter Fehler.
+		if nodeID == n.config.NodeID && errors.Is(err, raft.ErrRaftShutdown) {
+			return nil
+		}
 		return fmt.Errorf("cluster: forget peer http addr: %w", err)
 	}
 	return nil

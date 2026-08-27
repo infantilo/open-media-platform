@@ -126,12 +126,15 @@ func forwardToLeader(clusterSvc ClusterService, w http.ResponseWriter, r *http.R
 }
 
 // clusterErrorStatus bildet cluster.Node-Fehler auf HTTP-Status ab —
-// aktuell nur raft.ErrNotLeader (kann trotz des IsLeader()-Checks oben
-// in den Handlern noch auftreten, wenn die Führung genau zwischen
-// Check und Apply wechselt) auf 409, alles andere bleibt 500. Kleine
-// Hilfsfunktion statt eines Sonderfalls in jedem Handler.
+// raft.ErrNotLeader (kann trotz des IsLeader()-Checks oben in den
+// Handlern noch auftreten, wenn die Führung genau zwischen Check und
+// Apply wechselt) und cluster.ErrLastVoterIsLeader (Nutzerfund
+// 2026-08-27: der Leader darf sich nicht selbst als letztes
+// verbleibendes Mitglied entfernen, s. dortige Doku) werden beide als
+// 409 gemeldet, alles andere bleibt 500. Kleine Hilfsfunktion statt
+// eines Sonderfalls in jedem Handler.
 func clusterErrorStatus(err error) int {
-	if errors.Is(err, raft.ErrNotLeader) {
+	if errors.Is(err, raft.ErrNotLeader) || errors.Is(err, cluster.ErrLastVoterIsLeader) {
 		return http.StatusConflict
 	}
 	return http.StatusInternalServerError
