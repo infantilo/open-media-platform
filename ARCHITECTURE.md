@@ -2097,12 +2097,21 @@ A–C-Schritte ändern ihren Scope.
 
 ## 18. Remote-Host-Erkennung & Host-Agent (geplant, ab P2; Grundlage von §6.1/§6.2)
 
-**Status (2026-07-28):** §18.1-§18.7 (Bootstrap, Telemetrie,
-Kommandokanal, UI-Sichtbarkeit) sind umgesetzt (`UMSETZUNG.md` D6 Teil
-1/2) — `host-agent`-Modul, Bootstrap-Token-Flow über step-ca, Hosts-Tab
-in der Shell, Remote-Instanz-Start über den Launcher. **§18.8/§18.9
-(Host-Klassen-Mix, AWS-Ausbaustufen) bleiben Konzept** — kein
-Cloud-spezifischer Code existiert bisher.
+**Status (2026-07-28, UI-Ergänzung 2026-08-27):** §18.1-§18.7
+(Bootstrap, Telemetrie, Kommandokanal, UI-Sichtbarkeit) sind umgesetzt
+(`UMSETZUNG.md` D6 Teil 1/2) — `host-agent`-Modul, Bootstrap-Token-Flow
+über step-ca, Hosts-Tab in der Shell, Remote-Instanz-Start über den
+Launcher. Seit 2026-08-27 ist der bis dahin nur per API bediente
+Bootstrap-Token-Flow zusätzlich ein geführter Wizard im Hosts-Tab
+(„+ Neuen Host hinzufügen", `ui/shell/host-wizard.ts`) — Zielumgebung
+(Bare-Metal/VM/Cloud-AWS) wählen, Token wird automatisch erzeugt, ein
+kopierbares Provisionierungs-Skript (Shell bzw. EC2-User-Data) wird
+generiert, die Anmeldung wird live erkannt (SSE+Poll). **§18.8/§18.9
+(Host-Klassen-Mix, AWS-Ausbaustufen) bleiben inhaltlich Konzept** —
+der Wizard formuliert nur das passende Skript für die gewählte Klasse,
+es existiert weiterhin kein Cloud-spezifischer Code im Orchestrator-
+Kern und kein automatisches Hochfahren einer Cloud-Instanz (bewusst,
+§18.9 Punkt 5).
 
 **Anforderung (2026-07-11):** Was müssen wir bauen, damit unser Server
 (Orchestrator) eine entfernte Maschine (virtuell oder Bare-Metal) erkennt,
@@ -2417,7 +2426,13 @@ zwischen mehreren aktiven Orchestrator-Prozessen*.
    (`OMP_NODE_ID`, `OMP_CLUSTER_PEERS`) — bewusst kein zusätzlicher
    Discovery-Mechanismus (Gossip/DNS-SD), passt zur bereits an anderer
    Stelle (§18.2) getroffenen Entscheidung „feste Adressen statt
-   Zero-Config-Discovery".
+   Zero-Config-Discovery". Seit 2026-08-27 hat diese Admin-API
+   zusätzlich eine geführte UI (Administration → Cluster,
+   `ui/shell/admin-view.ts`): Status/Mitgliederliste der eigenen
+   Instanz, ein Formular erzeugt live das Start-Skript für eine neue
+   Instanz und ruft `POST /api/v1/cluster/join` per Klick auf, statt es
+   von Hand per curl zu bedienen — kein neuer Endpunkt, nur eine
+   UI-Schicht über die hier beschriebene API.
 4. **Datenverzeichnis:** `OMP_RAFT_DATA_DIR` (Default
    `../data/raft/<nodeID>`) hält BoltDB-Log/Stable-Store +
    `raft.FileSnapshotStore`-Snapshots — analog zu den bereits

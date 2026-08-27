@@ -175,6 +175,43 @@ jeder angemeldete Nutzer wird ungefragt ausgeloggt.
   „Host-Ansicht" oben rechts) — Details mit Screenshots:
   [`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §2.5/§8.
 
+### 4.1 Echten Remote-Host hinzufügen (Wizard)
+
+Abschnitt 2.1 oben simuliert zwei Hosts auf derselben Dev-Maschine.
+Für einen echten zweiten Rechner (Bare-Metal, VM, oder eine AWS-EC2-
+Instanz) den bisher nur per API erreichbaren Bootstrap-Token-Flow
+(`ARCHITECTURE.md` §18.3) über die GUI bedienen: Hosts-Tab → „+ Neuen
+Host hinzufügen" (nur für Admins sichtbar). Der Wizard erzeugt das
+Token, liefert ein fertiges Provisionierungs-Skript (Shell-Einzeiler
+bzw. EC2-User-Data, je nach gewählter Zielumgebung) und erkennt die
+Anmeldung des neuen `omp-host-agent` live. Details mit Screenshot:
+[`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §8.1.
+
+Kein vorgefertigtes Installations-Artefakt für `omp-host-agent`
+existiert bisher (kein curl-Installer) — das erzeugte Skript geht davon
+aus, dass die Binary bereits auf dem Zielhost liegt (`cd host-agent &&
+go build -o omp-host-agent .`, oder `bin/omp-host-agent` von dieser
+Maschine dorthin kopiert).
+
+### 4.2 Orchestrator-Cluster einrichten (Wizard)
+
+Für die in §19.3 (`ARCHITECTURE.md`) beschriebene Raft-Redundanz des
+Orchestrators selbst: Administration → Cluster (Details mit
+Screenshot: [`docs/BENUTZERHANDBUCH.md`](BENUTZERHANDBUCH.md) §7).
+Zeigt Status/Mitglieder der eigenen Instanz und bietet „+ Weiteren
+Orchestrator hinzufügen" — Formular für Node-ID/Raft-Adresse/
+HTTP-Adresse der neuen Instanz erzeugt live das nötige Start-Skript
+(`OMP_NODE_ID`/`OMP_RAFT_LISTEN`/`OMP_RAFT_DATA_DIR`/
+`OMP_CLUSTER_JOIN=true`), ein Klick auf „Jetzt beitreten lassen" ruft
+danach `POST /api/v1/cluster/join` auf. Für einen lokalen Testlauf mit
+zwei echten Orchestrator-Prozessen auf derselben Maschine (statt einer
+echten zweiten Maschine) reicht ein zweiter `bin/omp-orchestrator`-
+Aufruf mit eigenem `OMP_NODE_ID`/`OMP_RAFT_LISTEN`/`OMP_RAFT_DATA_DIR`/
+`OMP_LISTEN`/`OMP_CLUSTER_JOIN=true` und denselben `OMP_POSTGRES_URL`/
+`OMP_NATS_URL` wie die erste Instanz (geteilte Infrastruktur) —
+Postgres/NATS/Registry-Adressen unverändert lassen, nur die
+cluster-spezifischen Variablen sind pro Instanz eindeutig.
+
 ## 5. Backup & Restore
 
 Der komplette Orchestrator-Zustand (Nutzer, Rollenbindungen, Audit-Log,

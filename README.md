@@ -16,6 +16,18 @@ For local, high-performance media exchange, MXL (Media Exchange Layer) is used. 
 
 The core of the system is an orchestrator developed in Go. It handles discovery, routing, and communication between the individual services. NATS is used as the event bus, while AMWA NMOS (IS-04 and IS-05) handles the automatic registration and routing of the components. This means the orchestrator doesn't have to rely on fixed device types or proprietary interfaces.
 
+**A note on scope:** the microservices listed below (`omp-source`,
+`omp-video-mixer-me`, `omp-player`, etc.) exist to demonstrate what the
+orchestrator can actually coordinate end to end — they are reference
+implementations, not the product. The project's core focus, and where
+most of the engineering effort goes, is the orchestrator itself:
+discovery/routing, placement and multi-host operation, high
+availability (Raft cluster, clustered NATS, Patroni/etcd Postgres),
+auth/audit, and the tooling around it (Flow Editor, guided Host and
+Cluster setup wizards, workflows). Anyone is welcome to build their own
+nodes against the same NMOS-based contract; the orchestrator doesn't
+need to know or care what they do.
+
 An essential part of the architecture is also the NMOS Control Framework (IS-12/IS-14). Each service describes its own parameters and capabilities. Therefore, the orchestrator doesn't need to know whether it's a video mixer, audio mixer, or a future node type. New components can be integrated without requiring any modifications to the orchestrator. This self-description capability is precisely what makes the platform scalable in the long term.
 
 Although the project is still in its early stages, the current version is already fully functional on my Chromebook. For me, this is important proof that modern broadcast architectures can initially be developed and validated with manageable resources.
@@ -56,8 +68,8 @@ _An operator's console: every node UI it's entitled to operate, live,
 side by side — no flow editor, no catalog, nothing to misconfigure._
 
 More screens (login, instances, workflows, scheduler, alarms,
-administration, hosts, grouped tiles) are in
-[`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+administration, cluster, hosts, the host-setup wizard, grouped tiles)
+are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 
 ## What's in the box
 
@@ -83,7 +95,10 @@ administration, hosts, grouped tiles) are in
 - The orchestrator itself runs as a Raft-consensus cluster (one or more
   instances, automatic leader election/failover) and the NATS event bus
   is clustered too — no single point of failure anywhere in the control
-  plane.
+  plane. Both onboarding a new host (bare-metal, VM, or an AWS EC2
+  instance) and growing the orchestrator cluster itself are guided,
+  point-and-click wizards in the Administration UI — not a curl-only
+  API you have to script by hand.
 
 **Flow editor & workflows**
 
@@ -102,9 +117,10 @@ administration, hosts, grouped tiles) are in
   guided move (stop, start on the target host, best-effort reconnect
   of its existing connections) after a confirmation dialog.
 
-**Microservices** — each an independent process that self-registers
-via NMOS, with its own UI and self-described parameters (full list
-with functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
+**Microservices** (demonstration nodes, not the focus — see the note
+above) — each an independent process that self-registers via NMOS,
+with its own UI and self-described parameters (full list with
+functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 
 - **omp-source** — test sources (color bars etc. plus test tone)
 - **omp-decklink** — Blackmagic DeckLink SDI/IP capture card bridge,
@@ -300,7 +316,11 @@ primary is automatically promoted from a replica within seconds, and
 the orchestrator's own database connection follows the failover with
 no restart. Together, D12/D14/D15 close every remaining single point of
 failure in the control plane (orchestrator process, event bus, and
-datastore are all redundant now).
+datastore are all redundant now). Also added since then: a guided
+Host-Setup wizard (bare-metal/VM/AWS, in the Hosts tab) and a Cluster
+tab under Administration (Raft status, plus a guided join/leave for
+growing or shrinking the orchestrator cluster) — both flows existed as
+API-only since D6/D12, now they're a walkthrough in the UI.
 
 Open: RDMA hardware integration (`verbs`/EFA providers, pending
 hardware procurement), an NDI gateway, proprietary Dante (Dante in

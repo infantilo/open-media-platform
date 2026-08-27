@@ -287,12 +287,13 @@ Normalbetrieb bleibt er leer:
 Der Reiter **Administration** (nur sichtbar für Nutzer mit
 Administrationsrecht) verwaltet Nutzerkonten, Rollenbindungen, den
 Node-Katalog-Import/Export, zeigt ein Audit-Log aller schreibenden
-API-Zugriffe und erstellt/restauriert Datenbank-Sicherungen — seit
-Nutzerwunsch 2026-08-13 als fünf eigene Unter-Reiter (Nutzer/
-Rollenbindungen/Node-Katalog/Audit-Log/Backup-Restore) statt einer
-einzigen, lang scrollenden Seite (der Screenshot unten zeigt noch den
-älteren Stand, die ersten vier Abschnitte untereinander, noch ohne
-Backup/Restore):
+API-Zugriffe, erstellt/restauriert Datenbank-Sicherungen und verwaltet
+den Orchestrator-Cluster selbst — seit Nutzerwunsch 2026-08-13 (und
+seit 2026-08-27 um den Cluster-Reiter ergänzt) als sechs eigene
+Unter-Reiter (Nutzer/Rollenbindungen/Node-Katalog/Audit-Log/
+Backup-Restore/Cluster) statt einer einzigen, lang scrollenden Seite
+(der Screenshot unten zeigt noch den älteren Stand, die ersten vier
+Abschnitte untereinander, noch ohne Backup/Restore und Cluster):
 
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
@@ -320,6 +321,23 @@ Backup/Restore):
   Datenbankinhalt und lädt die Seite nach einigen Sekunden automatisch
   neu, sobald der Orchestrator wieder erreichbar ist (Details:
   `docs/HANDBUCH.md` §5, inkl. des dafür nötigen Supervisor-Prozesses).
+- **Cluster** — Redundanz des Orchestrators selbst (Raft-Konsens,
+  `ARCHITECTURE.md` §19.3): eine Statuskarte zeigt die eigene Node-ID,
+  Zustand (Leader/Follower), Term und angewandten Log-Index dieser
+  Instanz sowie den aktuellen Leader; darunter die Mitgliederliste mit
+  Leader-Kennzeichnung und „Entfernen“ (mit Sicherheitsabfrage) je
+  Mitglied. „+ Weiteren Orchestrator hinzufügen“ öffnet ein Formular
+  (Node-ID, Raft-Adresse, optional die HTTP-Adresse der neuen Instanz),
+  das darunter live ein fertiges Start-Skript mit allen nötigen
+  Umgebungsvariablen erzeugt — auf der neuen Maschine ausführen, warten
+  bis sie läuft, dann hier „Jetzt beitreten lassen“ klicken:
+
+  ![Cluster-Reiter: Status dieser Instanz, Mitgliederliste, ausgefülltes Beitritts-Formular mit generiertem Start-Skript](screenshots/cluster.png)
+
+  Beitritt/Entfernen laufen serverseitig immer auf dem tatsächlichen
+  Leader (eine Anfrage an eine Follower-Instanz wird automatisch
+  dorthin weitergeleitet) — welcher Orchestrator gerade befragt wird,
+  spielt für die Bedienung keine Rolle.
 
 ## 8. Hosts (Remote-Betrieb)
 
@@ -339,6 +357,35 @@ Ein Host-Agent führt ausschließlich Node-Typen aus seinem eigenen,
 lokal konfigurierten Katalog aus — der Orchestrator kann keinen
 beliebigen Befehl auf einem entfernten Host ausführen, das ist eine
 bewusste Sicherheitsgrenze.
+
+### 8.1 Neuen Host hinzufügen (Wizard)
+
+„+ Neuen Host hinzufügen“ (nur für Admins sichtbar) führt durch vier
+Schritte statt den Bootstrap-Token-Flow von Hand per API zu bedienen:
+Zielumgebung (Bare-Metal, VM im lokalen Cluster, oder Cloud/AWS EC2)
+plus ein Label wählen; ein einmaliges, eine Stunde gültiges
+Bootstrap-Token wird automatisch erzeugt; ein fertiges,
+kopierbares Provisionierungs-Skript erscheint — je nach gewählter
+Zielumgebung ein einfacher Shell-Befehl oder ein EC2-User-Data-Skript,
+mit editierbaren Feldern für Orchestrator-/Registry-/NATS-Adresse
+(vorbelegt, aber Vermutungen, die auf einer anderen Maschine ggf.
+angepasst werden müssen):
+
+![Host-Wizard: Schritt „Provisionierung" mit generiertem Skript für eine Cloud-Zielumgebung](screenshots/host-wizard.png)
+
+Nach dem Übertragen des Skripts auf den neuen Host wartet der Wizard
+live (per SSE, mit Poll als Fallback) auf die Anmeldung des Host-Agents
+und zeigt seine gemeldeten Capabilities (Betriebssystem, Architektur,
+CPU-Zahl), sobald sie eintrifft — kein manuelles Nachschauen im
+Hosts-Tab nötig. Der Wizard kann jederzeit im Hintergrund
+weiterlaufen gelassen und geschlossen werden: das Token bleibt bis zum
+Ablauf gültig, der Host erscheint bei erfolgreicher Anmeldung ohnehin
+in der Tabelle oben. Bare-Metal, VM und Cloud unterscheiden sich für
+den Host-Agent selbst nicht — die Auswahl bestimmt nur den Wortlaut des
+erzeugten Skripts (`ARCHITECTURE.md` §18.8). Ein tatsächliches
+automatisches Hochfahren einer Cloud-Instanz gehört bewusst nicht dazu
+(kein Cloud-SDK im Orchestrator-Kern, `ARCHITECTURE.md` §18.9 Punkt 5)
+— das Anlegen der Maschine selbst bleibt Sache des Betreibers.
 
 Sobald mindestens zwei Hosts registriert sind, zeigt der Flow Editor
 zusätzlich eine **Host-Ansicht** mit Zonen pro Host direkt auf der
