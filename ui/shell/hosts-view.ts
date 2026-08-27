@@ -14,6 +14,8 @@
 // ein Fehlschlag den geteilten ConnectionMonitor auf "degraded" setzt
 // statt still zu bleiben.
 import { apiFetch, connectionMonitor } from "./connection.ts";
+import { whoami } from "./auth.ts";
+import { openHostWizard } from "./host-wizard.ts";
 
 interface HostMetrics {
   cpuPercent: number;
@@ -166,6 +168,13 @@ class HostsView extends HTMLElement {
   #lastAdvice: PlacementAdvice[] = [];
   #lastHistory: Map<string, HistoryWindow> = new Map();
   #lastPending: PendingMigration[] = [];
+  // Der "Neuen Host hinzufügen"-Button ist admin-only (der dahinter
+  // liegende Bootstrap-Token-Endpunkt ist es server-seitig ohnehin,
+  // s. host-wizard.ts) — gleiches whoami()-Gating wie app-shell.ts'
+  // Administration-Tab, hier zusätzlich rein clientseitig, damit
+  // Nicht-Admins den Button gar nicht erst sehen statt einen 403 zu
+  // erleben.
+  #isAdmin = false;
 
   connectedCallback() {
     this.style.cssText =
@@ -180,9 +189,24 @@ class HostsView extends HTMLElement {
     // binden (#render setzt innerHTML komplett neu) — gleiches Muster
     // wie datenattributgetriebene Klick-Handler andernorts im Projekt.
     this.addEventListener("click", this.#onClick);
+    whoami()
+      .then(({ isAdmin }) => {
+        if (!isAdmin) return;
+        this.#isAdmin = true;
+        this.#render(this.#lastHosts, this.#lastAdvice, this.#lastHistory, this.#lastPending);
+      })
+      .catch(() => {
+        // Nicht angemeldet/Fehler — Button bleibt ausgeblendet, kein
+        // Absturz dieser sonst rein lesenden View.
+      });
   }
 
   #onClick = (ev: Event) => {
+    const wizardTarget = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-action='add-host']");
+    if (wizardTarget) {
+      openHostWizard();
+      return;
+    }
     const target = (ev.target as HTMLElement)?.closest<HTMLElement>("[data-migration-action]");
     if (!target) return;
     const workflowId = target.dataset.workflowId ?? "";
@@ -337,8 +361,15 @@ class HostsView extends HTMLElement {
       })
       .join("");
 
+    const addHostButton = this.#isAdmin
+      ? `<button type="button" data-action="add-host" class="omp-btn-primary" style="font-size:11px;padding:4px 10px;">+ Neuen Host hinzufügen</button>`
+      : "";
+
     this.innerHTML = `
-      <div class="omp-h1" style="margin-bottom:var(--omp-space-3);">Hosts (${hosts.length})</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--omp-space-3);">
+        <div class="omp-h1">Hosts (${hosts.length})</div>
+        ${addHostButton}
+      </div>
       ${adviceBanner}
       ${pendingBanner}
       ${
