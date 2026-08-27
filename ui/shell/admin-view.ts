@@ -63,6 +63,31 @@ interface NodeEntry {
   instanceId?: string;
 }
 
+// ClusterStatus/ClusterPeer — Wire-Format identisch zu
+// orchestrator/internal/cluster::Status/Peer (ARCHITECTURE.md §19.3,
+// UMSETZUNG.md D12). Nur die Felder, die dieser View tatsächlich
+// anzeigt (kein FSMVersion/PeerHTTPAddrs-Bedarf hier).
+interface ClusterPeer {
+  id: string;
+  raftAddr: string;
+  suffrage: string;
+}
+
+interface ClusterStatus {
+  nodeId: string;
+  raftAddr: string;
+  httpAddr?: string;
+  state: string;
+  isLeader: boolean;
+  leaderId?: string;
+  leaderRaftAddr?: string;
+  leaderHttpAddr?: string;
+  term: number;
+  appliedIndex: number;
+  lastIndex: number;
+  peers: ClusterPeer[];
+}
+
 // CatalogEntry — Wire-Format identisch zu orchestrator/internal/
 // launcher/catalog.go::CatalogEntry (§17 Teil 4/5). Runner ist bei
 // eigenen (statischen) Einträgen immer "process", bei importierten
@@ -121,13 +146,14 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "bindings" | "catalog" | "audit" | "backup";
+type AdminTabId = "users" | "bindings" | "catalog" | "audit" | "backup" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "bindings", label: "Rollenbindungen" },
   { id: "catalog", label: "Node-Katalog" },
   { id: "audit", label: "Audit-Log" },
   { id: "backup", label: "Backup/Restore" },
+  { id: "cluster", label: "Cluster" },
 ];
 const SUB_TAB_BUTTON_BASE =
   "border:1px solid transparent;border-radius:var(--omp-radius);" +
@@ -203,6 +229,20 @@ class AdminView extends HTMLElement {
   #restoring = false;
   #reconnecting = false;
 
+  // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
+  // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
+  // Oberfläche (Nutzerauftrag 2026-08-27, gleicher Anlass wie
+  // host-wizard.ts). Kein eigener Poll-Loop (anders als hosts-view.ts):
+  // kein SSE-Event für Cluster-Änderungen existiert, ein manueller
+  // "Aktualisieren"-Button genügt für einen selten wechselnden
+  // Control-Plane-Zustand — gleiche Zurückhaltung wie die übrigen
+  // admin-view.ts-Abschnitte (Laden einmalig + gezielt nach Mutation).
+  #cluster: ClusterStatus | null = null;
+  #showClusterJoinForm = false;
+  #newClusterNodeId = "";
+  #newClusterRaftAddr = "";
+  #newClusterHttpAddr = "";
+
   connectedCallback() {
     this.style.cssText =
       "display:block;background:var(--omp-surface);font-family:var(--omp-font);" +
@@ -216,6 +256,7 @@ class AdminView extends HTMLElement {
     this.#loadWorkflows();
     this.#loadCatalog();
     this.#loadBackups();
+    this.#loadClusterStatus();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     connectionMonitor.addEventListener("sse-message", this.#onSseMessage);
   }
@@ -715,6 +756,90 @@ class AdminView extends HTMLElement {
     URL.revokeObjectURL(url);
   }
 
+  async #loadClusterStatus() {
+    try {
+      const res = await apiFetch("/api/v1/cluster/status");
+      if (res.ok) {
+        this.#cluster = await res.json();
+        this.#render();
+      }
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — "Aktualisieren" versucht es erneut.
+    }
+  }
+
+  // Join wird auf dem Leader ausgeführt (server-seitig transparent
+  // weitergeleitet, falls diese Instanz nicht selbst Leader ist —
+  // s. cluster_handlers.go:forwardToLeader) — kein eigener
+  // Leader-Check hier nötig.
+  async #joinClusterMember() {
+    const nodeId = this.#newClusterNodeId.trim();
+    const raftAddr = this.#newClusterRaftAddr.trim();
+    if (!nodeId || !raftAddr) return;
+    const res = await apiFetch("/api/v1/cluster/join", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nodeId, raftAddr, httpAddr: this.#newClusterHttpAddr.trim() || undefined }),
+    });
+    if (!res.ok) {
+      this.#error = `Beitritt fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#showClusterJoinForm = false;
+    this.#newClusterNodeId = "";
+    this.#newClusterRaftAddr = "";
+    this.#newClusterHttpAddr = "";
+    this.#cluster = await res.json();
+    this.#render();
+  }
+
+  async #leaveClusterMember(peer: ClusterPeer) {
+    if (
+      !(await confirmDialog(`Mitglied "${peer.id}" (${peer.raftAddr}) wirklich aus dem Cluster entfernen?`, {
+        confirmLabel: "Entfernen",
+      }))
+    )
+      return;
+    const res = await apiFetch(`/api/v1/cluster/members/${encodeURIComponent(peer.id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#cluster = await res.json();
+    this.#render();
+  }
+
+  // buildClusterJoinSnippet: das kopierbare Env-Variablen-Skript für
+  // die NEUE Instanz (host-wizard.ts' #buildSnippet-Pendant für den
+  // Cluster-Fall) — Variablennamen aus config.go verifiziert (OMP_NODE_ID/
+  // OMP_RAFT_LISTEN/OMP_RAFT_DATA_DIR/OMP_CLUSTER_JOIN), nicht geraten.
+  // Postgres/NATS/Registry bewusst NICHT wiederholt: das ist identisch
+  // zu jeder anderen Orchestrator-Instanz, kein Cluster-Spezifikum.
+  #buildClusterJoinSnippet(): string {
+    const nodeId = this.#newClusterNodeId.trim() || "<Node-ID>";
+    const raftAddr = this.#newClusterRaftAddr.trim() || "<von anderen Instanzen erreichbare host:port-Adresse>";
+    const httpAddr = this.#newClusterHttpAddr.trim();
+    const lines = [
+      "# Auf der NEUEN Instanz ausführen. Startet passiv (kein Selbst-",
+      "# Bootstrap, ARCHITECTURE.md §19.3) und wartet, bis sie über",
+      '# „Jetzt beitreten lassen" unten aufgenommen wird. OMP_POSTGRES_URL/',
+      "# OMP_NATS_URL/OMP_REGISTRY_URL wie bei jeder anderen Instanz setzen",
+      "# (identische, bereits geteilte Infrastruktur) — hier nur die",
+      "# cluster-spezifischen Variablen.",
+      `OMP_NODE_ID="${nodeId}" \\`,
+      `OMP_RAFT_LISTEN="${raftAddr}" \\`,
+      `OMP_RAFT_DATA_DIR="../data/raft/${nodeId}" \\`,
+      "OMP_CLUSTER_JOIN=true \\",
+    ];
+    if (httpAddr) lines.push(`OMP_ORCHESTRATOR_URL="${httpAddr}" \\`);
+    lines.push("./orchestrator");
+    return lines.join("\n");
+  }
+
   #render() {
     this.replaceChildren();
 
@@ -749,6 +874,9 @@ class AdminView extends HTMLElement {
         break;
       case "backup":
         this.appendChild(this.#renderBackupSection());
+        break;
+      case "cluster":
+        this.appendChild(this.#renderClusterSection());
         break;
     }
   }
@@ -1565,6 +1693,214 @@ class AdminView extends HTMLElement {
         "diese Seite lädt sich von selbst neu, sobald er wieder erreichbar ist.";
     wrap.append(title, detail);
     return wrap;
+  }
+
+  #renderClusterSection(): HTMLElement {
+    const section = document.createElement("div");
+
+    const heading = document.createElement("div");
+    heading.style.cssText =
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:var(--omp-space-2);";
+    const title = document.createElement("span");
+    title.className = "omp-h1";
+    title.textContent = `Cluster (${this.#cluster?.peers.length ?? 0} Mitglieder)`;
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:6px;";
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "Aktualisieren";
+    refreshBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    refreshBtn.addEventListener("click", () => void this.#loadClusterStatus());
+    const joinToggleBtn = document.createElement("button");
+    joinToggleBtn.textContent = this.#showClusterJoinForm ? "Abbrechen" : "+ Weiteren Orchestrator hinzufügen";
+    joinToggleBtn.className = this.#showClusterJoinForm ? "" : "omp-btn-primary";
+    joinToggleBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    joinToggleBtn.addEventListener("click", () => {
+      this.#showClusterJoinForm = !this.#showClusterJoinForm;
+      this.#render();
+    });
+    actions.append(refreshBtn, joinToggleBtn);
+    heading.append(title, actions);
+    section.appendChild(heading);
+
+    if (!this.#cluster) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);";
+      empty.textContent = "Cluster-Status wird geladen …";
+      section.appendChild(empty);
+      return section;
+    }
+
+    const c = this.#cluster;
+    const statusCard = document.createElement("div");
+    statusCard.className = "omp-card";
+    statusCard.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;flex-wrap:wrap;gap:var(--omp-space-4);";
+    const facts: [string, string][] = [
+      ["Diese Instanz", c.nodeId],
+      ["Zustand", c.isLeader ? "Leader" : c.state],
+      ["Term", String(c.term)],
+      ["Angewandter Log-Index", String(c.appliedIndex)],
+      ["Leader", c.leaderId ? (c.leaderId === c.nodeId ? `${c.leaderId} (diese Instanz)` : c.leaderId) : "unbekannt"],
+    ];
+    for (const [k, v] of facts) {
+      const box = document.createElement("div");
+      const kEl = document.createElement("div");
+      kEl.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+      kEl.textContent = k;
+      const vEl = document.createElement("div");
+      vEl.style.cssText = "font-weight:600;";
+      vEl.textContent = v;
+      box.append(kEl, vEl);
+      statusCard.appendChild(box);
+    }
+    section.appendChild(statusCard);
+
+    if (this.#showClusterJoinForm) {
+      section.appendChild(this.#renderClusterJoinForm());
+    }
+
+    if (c.peers.length > 0) {
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;width:100%;";
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
+        <th style="padding:2px 8px;">Node-ID</th>
+        <th style="padding:2px 8px;">Raft-Adresse</th>
+        <th style="padding:2px 8px;">Rolle</th>
+        <th style="padding:2px 8px;"></th>
+      </tr>`;
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const peer of c.peers) {
+        tbody.appendChild(this.#renderClusterPeerRow(peer, c));
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+    }
+
+    return section;
+  }
+
+  #renderClusterJoinForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.style.cssText =
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:var(--omp-space-3);" +
+      "margin-bottom:var(--omp-space-3);";
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      "Node-ID und Raft-Adresse der neuen Instanz eintragen, das Skript unten auf ihr ausführen, " +
+      "warten bis sie läuft (passiv, ohne Selbst-Bootstrap) — dann hier beitreten lassen.";
+    form.appendChild(hint);
+
+    const fieldsRow = document.createElement("div");
+    fieldsRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--omp-space-2);";
+
+    const nodeIdInput = document.createElement("input");
+    nodeIdInput.placeholder = "Node-ID, z. B. node-2";
+    nodeIdInput.value = this.#newClusterNodeId;
+    nodeIdInput.style.cssText = "flex:1;min-width:120px;";
+    const raftInput = document.createElement("input");
+    raftInput.placeholder = "Raft-Adresse, z. B. host-2:8300";
+    raftInput.value = this.#newClusterRaftAddr;
+    raftInput.style.cssText = "flex:1;min-width:160px;";
+    const httpInput = document.createElement("input");
+    httpInput.placeholder = "HTTP-Adresse (optional), z. B. http://host-2:8000";
+    httpInput.value = this.#newClusterHttpAddr;
+    httpInput.style.cssText = "flex:1;min-width:200px;";
+
+    const preview = document.createElement("pre");
+    preview.style.cssText =
+      "background:var(--omp-bg);border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+      "padding:var(--omp-space-2);font-family:var(--omp-font-mono);font-size:var(--omp-font-size-xs);" +
+      "white-space:pre-wrap;word-break:break-all;margin:0 0 var(--omp-space-2) 0;";
+    preview.textContent = this.#buildClusterJoinSnippet();
+
+    const updatePreview = () => {
+      preview.textContent = this.#buildClusterJoinSnippet();
+    };
+    nodeIdInput.addEventListener("input", () => {
+      this.#newClusterNodeId = nodeIdInput.value;
+      updatePreview();
+    });
+    raftInput.addEventListener("input", () => {
+      this.#newClusterRaftAddr = raftInput.value;
+      updatePreview();
+    });
+    httpInput.addEventListener("input", () => {
+      this.#newClusterHttpAddr = httpInput.value;
+      updatePreview();
+    });
+
+    fieldsRow.append(nodeIdInput, raftInput, httpInput);
+    form.appendChild(fieldsRow);
+    form.appendChild(preview);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:6px;";
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Skript kopieren";
+    copyBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(this.#buildClusterJoinSnippet());
+        copyBtn.textContent = "Kopiert!";
+        window.setTimeout(() => {
+          copyBtn.textContent = "Skript kopieren";
+        }, 1500);
+      } catch {
+        // Kein Clipboard-Zugriff — <pre> steht ohnehin zum manuellen Markieren da.
+      }
+    });
+    const joinBtn = document.createElement("button");
+    joinBtn.type = "button";
+    joinBtn.textContent = "Jetzt beitreten lassen";
+    joinBtn.className = "omp-btn-primary";
+    joinBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    joinBtn.addEventListener("click", () => void this.#joinClusterMember());
+    actions.append(copyBtn, joinBtn);
+    form.appendChild(actions);
+
+    return form;
+  }
+
+  #renderClusterPeerRow(peer: ClusterPeer, c: ClusterStatus): HTMLElement {
+    const tr = document.createElement("tr");
+
+    const idTd = document.createElement("td");
+    idTd.style.cssText = "padding:2px 8px;";
+    idTd.textContent = peer.id;
+    if (peer.id === c.leaderId) {
+      const badge = document.createElement("span");
+      badge.className = "omp-badge omp-badge-running";
+      badge.style.cssText = "margin-left:6px;";
+      badge.textContent = "Leader";
+      idTd.appendChild(badge);
+    }
+    tr.appendChild(idTd);
+
+    const raftTd = document.createElement("td");
+    raftTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
+    raftTd.textContent = peer.raftAddr;
+    tr.appendChild(raftTd);
+
+    const suffrageTd = document.createElement("td");
+    suffrageTd.style.cssText = "padding:2px 8px;";
+    suffrageTd.textContent = peer.suffrage;
+    tr.appendChild(suffrageTd);
+
+    const actionsTd = document.createElement("td");
+    actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Entfernen";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
+    delBtn.addEventListener("click", () => void this.#leaveClusterMember(peer));
+    actionsTd.appendChild(delBtn);
+    tr.appendChild(actionsTd);
+
+    return tr;
   }
 }
 
