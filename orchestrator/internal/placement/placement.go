@@ -13,8 +13,12 @@
 //
 // Ebenfalls bewusst nicht in dieser Runde: I/O-Karten-Claim/Release
 // (§6.1 Erweiterung 2026-07-10 — braucht ein noch nicht existierendes
-// Geräte-Inventar), GPU/NIC-Telemetrie (§18.4: herstellerspezifisch),
-// Cloud-Kostenfaktor (§6.1 Punkt 4). Das Kernpaket ist bewusst
+// Geräte-Inventar), GPU-Telemetrie (§18.4: herstellerspezifisch),
+// Cloud-Kostenfaktor (§6.1 Punkt 4). NIC-Bandbreite dagegen ist seit
+// 2026-09-02 Teil der Bewertung (s. Thresholds.NetPercent,
+// netUtilizationPercent) — dieselbe kontinuierlich-teilbare
+// Ressourcenklasse wie CPU/RAM, keine diskret-exklusive wie ein
+// I/O-Karten-Port. Das Kernpaket ist bewusst
 // host-klassen-unwissend (§6.1 Erweiterung 2026-07-13 Punkt 1: "ein
 // Metrik-Schema, drei Quellen, ein Bus") — es liest ausschließlich
 // hosts.Tracker, unabhängig davon, ob die Telemetrie von einem
@@ -96,26 +100,44 @@ type EventPublisher interface {
 
 // Thresholds steuert, ab wann ein Host als überlastet gilt und ab wann
 // ein anderer Host als Ausweichziel taugt. HealthyCPUPercent/
-// HealthyMemPercent liegen bewusst unter CPUPercent/MemPercent (mit
-// Abstand dazwischen) — ein Kandidat, der selbst nur knapp unter der
-// Alarmschwelle liegt, wäre kein sinnvoller Vorschlag.
+// HealthyMemPercent/HealthyNetPercent liegen bewusst unter CPUPercent/
+// MemPercent/NetPercent (mit Abstand dazwischen) — ein Kandidat, der
+// selbst nur knapp unter der Alarmschwelle liegt, wäre kein sinnvoller
+// Vorschlag.
+//
+// NetPercent/HealthyNetPercent (Nutzerauftrag 2026-09-02, "netzwerk-
+// bandbreite ... auch relevant"): dieselbe Rolle wie CPUPercent, nur
+// gegen die per Host-Agent gemessene NIC-Auslastung (s.
+// hosts.NetMetrics) statt CPU-Zeit. Nur wirksam, wenn ein Host
+// überhaupt ein Interface MIT bekannter Link-Geschwindigkeit meldet
+// (s. scoreHost/netUtilizationPercent) — ein Host ohne diese Angabe
+// bleibt für die Netz-Dimension fail-open, exakt wie fehlende Telemetrie
+// insgesamt.
 type Thresholds struct {
 	CPUPercent        float64
 	MemPercent        float64
+	NetPercent        float64
 	HealthyCPUPercent float64
 	HealthyMemPercent float64
+	HealthyNetPercent float64
 }
 
 // DefaultThresholds sind die Dev-Defaults (config.Load) — 85%/90% Alarm,
 // 60%/70% "gilt als Ausweichziel geeignet". Großzügig genug, um auf
 // einer Single-Host-Dev-Maschine mit fingierten Metriken beide Fälle
 // (Alarm mit und ohne verfügbaren Ausweichhost) gezielt provozieren zu
-// können.
+// können. NetPercent/HealthyNetPercent spiegeln bewusst dieselben Zahlen
+// wie CPUPercent/HealthyCPUPercent — keine belastbare eigene Empirie für
+// einen abweichenden NIC-Schwellwert vorhanden, s. Thresholds-Doku;
+// beide über OMP_PLACEMENT_NET_THRESHOLD/
+// OMP_PLACEMENT_HEALTHY_NET_THRESHOLD justierbar (config.Load).
 var DefaultThresholds = Thresholds{
 	CPUPercent:        85,
 	MemPercent:        90,
+	NetPercent:        85,
 	HealthyCPUPercent: 60,
 	HealthyMemPercent: 70,
+	HealthyNetPercent: 60,
 }
 
 // Advice ist der aktuelle Alarm+Vorschlag für genau einen überlasteten
@@ -125,11 +147,15 @@ var DefaultThresholds = Thresholds{
 // dasselbe Prinzip für den Hardware-Fall), kein stiller Fallback auf
 // irgendeinen Host.
 type Advice struct {
-	HostID             string    `json:"hostId"`
-	HostLabel          string    `json:"hostLabel"`
-	Reason             string    `json:"reason"` // "cpu", "mem" oder "cpu+mem"
-	CPUPercent         float64   `json:"cpuPercent"`
-	MemPercent         float64   `json:"memPercent"`
+	HostID     string  `json:"hostId"`
+	HostLabel  string  `json:"hostLabel"`
+	Reason     string  `json:"reason"` // "cpu", "mem", "net" oder eine "+"-verbundene Kombination
+	CPUPercent float64 `json:"cpuPercent"`
+	MemPercent float64 `json:"memPercent"`
+	// NetPercent ist nil, wenn dieser Host keine NIC-Auslastung mit
+	// bekannter Link-Kapazität meldet (s. netUtilizationPercent) — kein
+	// stiller 0-Wert, der wie "gemessen und leer" aussähe.
+	NetPercent         *float64  `json:"netPercent,omitempty"`
 	InstanceIDs        []string  `json:"instanceIds"`
 	SuggestedHostID    string    `json:"suggestedHostId,omitempty"`
 	SuggestedHostLabel string    `json:"suggestedHostLabel,omitempty"`
@@ -266,9 +292,29 @@ func (e *Engine) CheckHost(hostID, nodeType string) (string, bool) {
 type hostScore struct {
 	cpuPercent float64
 	memPercent float64
+	// netPercent s. netUtilizationPercent-Doku: nil, wenn für diesen Host
+	// keine NIC-Auslastung mit bekannter Link-Kapazität vorliegt.
+	netPercent *float64
 	hasMetrics bool
 	ok         bool
 	reason     string
+}
+
+// netUtilizationPercent berechnet die NIC-Auslastung aus m.Net in
+// Prozent der gemeldeten Link-Kapazität — nil, wenn der Host-Agent kein
+// Interface konfiguriert hat ODER der Treiber dessen
+// Verbindungsgeschwindigkeit nicht meldet (s. hosts.NetMetrics.LinkMbps-
+// Doku). Kein Rateversuch in diesem Fall (§14.3d-Prinzip "nie raten",
+// hier auf Bandbreite übertragen) — der Aufrufer behandelt nil als
+// fail-open für die Netz-Dimension, exakt wie fehlende Host-Telemetrie
+// insgesamt anderswo in diesem Paket.
+func netUtilizationPercent(m hosts.Metrics) *float64 {
+	if m.Net == nil || m.Net.LinkMbps <= 0 {
+		return nil
+	}
+	usedMbps := (m.Net.RxBytesPerSec + m.Net.TxBytesPerSec) * 8 / 1_000_000
+	p := usedMbps / m.Net.LinkMbps * 100
+	return &p
 }
 
 // hostOnline meldet, ob hostID innerhalb von HostOnlineThreshold
@@ -319,22 +365,35 @@ func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot)
 			memPercent += float64(extraLoad.RSSAvg) / float64(m.MemTotalBytes) * 100
 		}
 	}
+	// Kein Profil-/ExtraLoad-Zuschlag für Netz wie bei CPU/RAM oben: es
+	// gibt noch keine gemessene Pro-Node-Typ-Bandbreitenschätzung
+	// (dokumentierte Folgearbeit, gleiche Grenze wie der
+	// ExpectedResources-Freitext im Node-Katalog).
+	netPercent := netUtilizationPercent(m)
 
-	overCPU := cpuPercent >= e.thresholds.CPUPercent
-	overMem := memPercent >= e.thresholds.MemPercent
-	switch {
-	case overCPU && overMem:
-		return hostScore{cpuPercent, memPercent, true, false,
-			fmt.Sprintf("CPU %.0f%% / RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, memPercent, nodeType)}
-	case overCPU:
-		return hostScore{cpuPercent, memPercent, true, false,
-			fmt.Sprintf("CPU %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", cpuPercent, nodeType)}
-	case overMem:
-		return hostScore{cpuPercent, memPercent, true, false,
-			fmt.Sprintf("RAM %.0f%% über dem Schwellwert (inkl. erwartetem Bedarf von %s)", memPercent, nodeType)}
-	default:
-		return hostScore{cpuPercent, memPercent, true, true, ""}
+	type overage struct {
+		over  bool
+		label string
+		value float64
 	}
+	overages := []overage{
+		{cpuPercent >= e.thresholds.CPUPercent, "CPU", cpuPercent},
+		{memPercent >= e.thresholds.MemPercent, "RAM", memPercent},
+	}
+	if netPercent != nil {
+		overages = append(overages, overage{*netPercent >= e.thresholds.NetPercent, "Netz", *netPercent})
+	}
+	var over []string
+	for _, o := range overages {
+		if o.over {
+			over = append(over, fmt.Sprintf("%s %.0f%%", o.label, o.value))
+		}
+	}
+	if len(over) == 0 {
+		return hostScore{cpuPercent, memPercent, netPercent, true, true, ""}
+	}
+	return hostScore{cpuPercent, memPercent, netPercent, true, false,
+		fmt.Sprintf("%s über dem Schwellwert (inkl. erwartetem Bedarf von %s)", strings.Join(over, " / "), nodeType)}
 }
 
 // PlacementRequest beschreibt eine einzelne, noch zu platzierende Rolle
@@ -365,6 +424,18 @@ type Occupancy struct {
 type PlacementResult struct {
 	HostID string
 	Reason string
+}
+
+// netPercentOrZero behandelt eine unbekannte Netz-Auslastung als 0 für
+// Tie-Break-Vergleiche (pick()/healthiestAlternative) — bestraft einen
+// Host ohne Bandbreiten-Telemetrie dadurch NICHT gegenüber einem Host
+// mit gemessener, aber niedriger Auslastung, gleiche fail-open-Haltung
+// wie beim übrigen Metriken-Handling in diesem Paket.
+func netPercentOrZero(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
 }
 
 func containsString(list []string, s string) bool {
@@ -475,7 +546,9 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 		best := pool[0]
 		for _, c := range pool[1:] {
 			if c.score.hasMetrics && (!best.score.hasMetrics || c.score.cpuPercent < best.score.cpuPercent ||
-				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent < best.score.memPercent)) {
+				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent < best.score.memPercent) ||
+				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent == best.score.memPercent &&
+					netPercentOrZero(c.score.netPercent) < netPercentOrZero(best.score.netPercent))) {
 				best = c
 			}
 		}
@@ -540,11 +613,13 @@ func (e *Engine) ProjectedLoad(nodeType, hostID string) profiles.Snapshot {
 }
 
 // scored bündelt einen Host mit seiner zuletzt gesehenen Telemetrie und
-// der daraus abgeleiteten Speicherauslastung in Prozent.
+// der daraus abgeleiteten Speicher-/Netz-Auslastung in Prozent.
 type scored struct {
 	host       hosts.Host
 	m          hosts.Metrics
 	memPercent float64
+	// netPercent s. netUtilizationPercent-Doku.
+	netPercent *float64
 }
 
 func (e *Engine) evaluateOnce() {
@@ -580,7 +655,7 @@ func (e *Engine) evaluateOnce() {
 		if m.MemTotalBytes > 0 {
 			memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 		}
-		withMetrics = append(withMetrics, scored{host: h, m: m, memPercent: memPercent})
+		withMetrics = append(withMetrics, scored{host: h, m: m, memPercent: memPercent, netPercent: netUtilizationPercent(m)})
 	}
 
 	next := map[string]Advice{}
@@ -592,16 +667,21 @@ func (e *Engine) evaluateOnce() {
 
 		overCPU := s.m.CPUPercent >= e.thresholds.CPUPercent
 		overMem := s.memPercent >= e.thresholds.MemPercent
-		if !overCPU && !overMem {
+		overNet := s.netPercent != nil && *s.netPercent >= e.thresholds.NetPercent
+		if !overCPU && !overMem && !overNet {
 			continue
 		}
-		reason := "cpu"
-		switch {
-		case overCPU && overMem:
-			reason = "cpu+mem"
-		case overMem:
-			reason = "mem"
+		var reasonParts []string
+		if overCPU {
+			reasonParts = append(reasonParts, "cpu")
 		}
+		if overMem {
+			reasonParts = append(reasonParts, "mem")
+		}
+		if overNet {
+			reasonParts = append(reasonParts, "net")
+		}
+		reason := strings.Join(reasonParts, "+")
 
 		detectedAt := time.Now()
 		if prevAdvice, ok := prev[s.host.ID]; ok {
@@ -619,6 +699,7 @@ func (e *Engine) evaluateOnce() {
 			Reason:      reason,
 			CPUPercent:  s.m.CPUPercent,
 			MemPercent:  s.memPercent,
+			NetPercent:  s.netPercent,
 			InstanceIDs: instanceIDs,
 			DetectedAt:  detectedAt,
 		}
@@ -653,10 +734,16 @@ func (e *Engine) healthiestAlternative(candidates []scored, excludeID string) (s
 		if c.m.CPUPercent > e.thresholds.HealthyCPUPercent || c.memPercent > e.thresholds.HealthyMemPercent {
 			continue
 		}
+		if c.netPercent != nil && *c.netPercent > e.thresholds.HealthyNetPercent {
+			continue
+		}
 		if !found ||
 			c.m.CPUPercent < best.m.CPUPercent ||
 			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent < best.memPercent) ||
-			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent && c.host.ID < best.host.ID) {
+			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent &&
+				netPercentOrZero(c.netPercent) < netPercentOrZero(best.netPercent)) ||
+			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent &&
+				netPercentOrZero(c.netPercent) == netPercentOrZero(best.netPercent) && c.host.ID < best.host.ID) {
 			best = c
 			found = true
 		}

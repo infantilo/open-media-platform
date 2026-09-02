@@ -104,6 +104,13 @@ type Config struct {
 	PlacementMemThreshold        float64
 	PlacementHealthyCPUThreshold float64
 	PlacementHealthyMemThreshold float64
+	// PlacementNetThreshold/PlacementHealthyNetThreshold (Nutzerauftrag
+	// 2026-09-02): dieselbe Rolle wie die CPU-Variante oben, nur gegen
+	// die per Host-Agent gemessene NIC-Auslastung (s.
+	// placement.Thresholds.NetPercent-Doku) — wirkungslos auf Hosts ohne
+	// konfiguriertes Netz-Interface (OMP_HOST_AGENT_NET_IFACE).
+	PlacementNetThreshold        float64
+	PlacementHealthyNetThreshold float64
 	// AuditRetentionDays ist die Aufbewahrungsdauer des Audit-Logs (S5,
 	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — audit.Store.RunRetention
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
@@ -196,6 +203,8 @@ func Load() Config {
 		PlacementMemThreshold:        getEnvFloat("OMP_PLACEMENT_MEM_THRESHOLD", 90),
 		PlacementHealthyCPUThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_CPU_THRESHOLD", 60),
 		PlacementHealthyMemThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_MEM_THRESHOLD", 70),
+		PlacementNetThreshold:        getEnvFloat("OMP_PLACEMENT_NET_THRESHOLD", 85),
+		PlacementHealthyNetThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_NET_THRESHOLD", 60),
 		// Default spiegelt audit.DefaultRetentionDays (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-Defaults oben — config bleibt frei von

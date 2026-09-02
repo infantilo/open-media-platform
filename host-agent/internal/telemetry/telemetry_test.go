@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -12,7 +13,7 @@ import (
 // UMSETZUNG.md §0 Punkt 7). Prüft nur Plausibilität, kein exakter Wert
 // (Auslastung ist per Definition nicht deterministisch).
 func TestTakeAgainstRealProc(t *testing.T) {
-	sample, err := Take(50 * time.Millisecond)
+	sample, err := Take(50*time.Millisecond, "")
 	if err != nil {
 		t.Fatalf("Take() error = %v", err)
 	}
@@ -24,6 +25,91 @@ func TestTakeAgainstRealProc(t *testing.T) {
 	}
 	if sample.MemUsedBytes > sample.MemTotalBytes {
 		t.Errorf("MemUsedBytes (%d) > MemTotalBytes (%d)", sample.MemUsedBytes, sample.MemTotalBytes)
+	}
+	if sample.Net != nil {
+		t.Errorf("Net = %+v, want nil (kein Interface übergeben)", sample.Net)
+	}
+}
+
+// TestTakeWithNetIfaceLoopback läuft gegen das "lo"-Interface, das auf
+// jeder Linux-Maschine existiert (kein echtes 2110-Netz nötig, s.
+// UMSETZUNG.md §0 Punkt 7) — erzeugt selbst etwas Loopback-Traffic, damit
+// die rx/tx-Deltas nicht zufällig 0 sind (im Leerlauf plausibel, aber ein
+// Test soll einen echten Zähler-Fortschritt sehen, nicht nur "kein
+// Fehler").
+func TestTakeWithNetIfaceLoopback(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	defer ln.Close()
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				buf := make([]byte, 4096)
+				for {
+					if _, err := conn.Read(buf); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+
+	payload := make([]byte, 64*1024)
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				return
+			}
+			conn.Write(payload)
+			conn.Close()
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+
+	sample, err := Take(80*time.Millisecond, "lo")
+	if err != nil {
+		t.Fatalf("Take() error = %v", err)
+	}
+	if sample.Net == nil {
+		t.Fatalf("Net = nil, want a NetSample for iface %q", "lo")
+	}
+	if sample.Net.Iface != "lo" {
+		t.Errorf("Net.Iface = %q, want %q", sample.Net.Iface, "lo")
+	}
+	if sample.Net.RxBytesPerSec <= 0 {
+		t.Errorf("Net.RxBytesPerSec = %v, want > 0 (Traffic lief während der Messung)", sample.Net.RxBytesPerSec)
+	}
+	if sample.Net.TxBytesPerSec <= 0 {
+		t.Errorf("Net.TxBytesPerSec = %v, want > 0 (Traffic lief während der Messung)", sample.Net.TxBytesPerSec)
+	}
+}
+
+// TestTakeWithUnknownNetIface prüft die Nachsichts-Linie aus der Take()-
+// Doku: ein nicht existentes Interface lässt die gesamte Momentaufnahme
+// nicht fehlschlagen, Net bleibt einfach nil.
+func TestTakeWithUnknownNetIface(t *testing.T) {
+	sample, err := Take(20*time.Millisecond, "omp-does-not-exist0")
+	if err != nil {
+		t.Fatalf("Take() error = %v", err)
+	}
+	if sample.Net != nil {
+		t.Errorf("Net = %+v, want nil (Interface existiert nicht)", sample.Net)
 	}
 }
 

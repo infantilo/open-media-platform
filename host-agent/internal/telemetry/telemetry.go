@@ -1,8 +1,9 @@
 // Package telemetry misst Host-Auslastung über /proc (Linux) —
 // ARCHITECTURE.md §18.4: "Wie gemessen wird, ist zum
-// Umsetzungszeitpunkt zu verifizieren, nicht zu raten". Bewusst nur
-// CPU/RAM in dieser Runde (UMSETZUNG.md D6 Teil 1) — GPU/NIC sind
-// herstellerspezifisch und explizit als Folgearbeit dokumentiert
+// Umsetzungszeitpunkt zu verifizieren, nicht zu raten". CPU/RAM seit
+// D6 Teil 1, Netzwerk-Durchsatz/-Kapazität seit 2026-09-02 (Nutzerauftrag
+// "netzwerkbandbreite ... auch relevant"; s. NetSample-Doku) — GPU bleibt
+// herstellerspezifisch und weiterhin als Folgearbeit dokumentiert
 // (docs/decisions.md).
 package telemetry
 
@@ -27,6 +28,34 @@ type Sample struct {
 	// bei einer älteren Agent-Version egal (json.Unmarshal ignoriert
 	// fehlende Felder).
 	Instances []InstanceSample `json:"instances,omitempty"`
+	// Net ist nil, wenn OMP_HOST_AGENT_NET_IFACE nicht gesetzt ist (s.
+	// main.go) — kein konfiguriertes Interface bedeutet "nicht
+	// gemessen", nicht "0 Bandbreite" (gleiche Ehrlichkeitslinie wie
+	// ProfileResponse.known=false in orchestrator/internal/profiles).
+	Net *NetSample `json:"net,omitempty"`
+}
+
+// NetSample ist die zuletzt gemessene Durchsatz-/Kapazitäts-
+// Momentaufnahme GENAU EINES, per OMP_HOST_AGENT_NET_IFACE explizit
+// benannten Netzwerk-Interfaces (ARCHITECTURE.md §6.1: NIC-Auslastung ist
+// wie CPU/RAM eine kontinuierliche, teilbare Ressource, keine
+// diskret-exklusive wie ein I/O-Karten-Port — s. Erweiterung 2026-07-10
+// dort). Bewusst explizit konfiguriert statt automatisch erkannt (das
+// Default-Route-Interface ist auf einem Host mit dedizierter 2110-NIC
+// typischerweise NICHT die Management-Schnittstelle, über die der
+// Host-Agent selbst mit dem Orchestrator spricht) — exakt dasselbe
+// Prinzip wie beim I/O-Karten-Inventar (§6.1 Erweiterung 2026-07-10:
+// "host-agent-konfiguriert statt automatisch erkannt").
+type NetSample struct {
+	Iface         string  `json:"iface"`
+	RxBytesPerSec float64 `json:"rxBytesPerSec"`
+	TxBytesPerSec float64 `json:"txBytesPerSec"`
+	// LinkMbps ist die vom Treiber gemeldete Verbindungsgeschwindigkeit
+	// (/sys/class/net/<iface>/speed, Mbit/s) — 0 (Feld dadurch
+	// weggelassen, omitempty), wenn der Treiber sie nicht meldet (z. B.
+	// virtuelle/Bridge-Interfaces); dann bleibt nur der Rohdurchsatz oben
+	// aussagekräftig, kein Auslastungs-%.
+	LinkMbps float64 `json:"linkMbps,omitempty"`
 }
 
 // InstanceSample ist die Pro-Instanz-Telemetrie einer vom Host-Agent
@@ -86,27 +115,65 @@ func readCPUTimes() (cpuTimes, error) {
 	return cpuTimes{idle: idle, total: total}, nil
 }
 
-// cpuPercent misst die CPU-Auslastung über ein kurzes Sample-Intervall
-// (blockierend) — Standardtechnik: /proc/stat zweimal lesen, Differenz
-// bilden. interval sollte kurz genug sein, um den periodischen
-// Telemetrie-Tick (Sekunden) nicht spürbar zu verzögern.
-func cpuPercent(interval time.Duration) (float64, error) {
-	first, err := readCPUTimes()
-	if err != nil {
-		return 0, err
-	}
-	time.Sleep(interval)
-	second, err := readCPUTimes()
-	if err != nil {
-		return 0, err
-	}
+// netBytes ist rx/tx aus /proc/net/dev für ein einzelnes Interface.
+type netBytes struct {
+	rx uint64
+	tx uint64
+}
 
-	totalDelta := second.total - first.total
-	if totalDelta == 0 {
-		return 0, nil
+// readNetDevBytes liest rx_bytes/tx_bytes für iface aus /proc/net/dev.
+// Format je Zeile (Documentation/filesystems/proc.rst): "<iface>: <rx
+// bytes> <rx packets> ... (6 weitere rx-Felder) <tx bytes> ..." — nach
+// dem Doppelpunkt ist Feld 0 rx_bytes, Feld 8 tx_bytes.
+func readNetDevBytes(iface string) (netBytes, error) {
+	f, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return netBytes{}, fmt.Errorf("telemetry: open /proc/net/dev: %w", err)
 	}
-	idleDelta := second.idle - first.idle
-	return (1 - float64(idleDelta)/float64(totalDelta)) * 100, nil
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		colon := strings.IndexByte(line, ':')
+		if colon < 0 {
+			continue // Kopfzeilen (die ersten zwei) haben keinen Doppelpunkt.
+		}
+		name := strings.TrimSpace(line[:colon])
+		if name != iface {
+			continue
+		}
+		fields := strings.Fields(line[colon+1:])
+		if len(fields) < 9 {
+			return netBytes{}, fmt.Errorf("telemetry: unexpected /proc/net/dev format for %q: %q", iface, line)
+		}
+		rx, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return netBytes{}, fmt.Errorf("telemetry: parse rx_bytes for %q: %w", iface, err)
+		}
+		tx, err := strconv.ParseUint(fields[8], 10, 64)
+		if err != nil {
+			return netBytes{}, fmt.Errorf("telemetry: parse tx_bytes for %q: %w", iface, err)
+		}
+		return netBytes{rx: rx, tx: tx}, nil
+	}
+	return netBytes{}, fmt.Errorf("telemetry: interface %q not found in /proc/net/dev", iface)
+}
+
+// readNetLinkMbps liest die vom Treiber gemeldete Verbindungs-
+// geschwindigkeit aus /sys/class/net/<iface>/speed. 0 heißt "unbekannt"
+// (virtuelles Interface, Link down, oder Treiber unterstützt es nicht) —
+// bewusst kein Fehler, s. NetSample.LinkMbps-Doku.
+func readNetLinkMbps(iface string) float64 {
+	data, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/speed", iface))
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return float64(v)
 }
 
 // memoryUsage liest /proc/meminfo. "used" ist MemTotal-MemAvailable
@@ -147,17 +214,61 @@ func parseMeminfoLine(line string) uint64 {
 }
 
 // Take nimmt eine Momentaufnahme — blockiert für interval, um die
-// CPU-Auslastung zu messen (s. cpuPercent).
-func Take(interval time.Duration) (Sample, error) {
-	cpu, err := cpuPercent(interval)
+// CPU-Auslastung UND (falls netIface gesetzt ist) den Netzwerk-Durchsatz
+// über dasselbe Zeitfenster zu messen (ein zweiter, eigener Sleep für Net
+// wäre unnötig verdoppelte Wartezeit). netIface == "" überspringt die
+// Netz-Messung komplett (Sample.Net bleibt nil) — s. NetSample-Doku,
+// warum das Interface explizit benannt statt erraten wird.
+func Take(interval time.Duration, netIface string) (Sample, error) {
+	firstCPU, err := readCPUTimes()
 	if err != nil {
 		return Sample{}, err
 	}
+
+	var firstNet netBytes
+	haveNet := netIface != ""
+	if haveNet {
+		firstNet, err = readNetDevBytes(netIface)
+		if err != nil {
+			// Interface (noch) nicht vorhanden/falsch benannt — kein
+			// Fehlschlag der gesamten Momentaufnahme, gleiche Nachsicht
+			// wie ein bereits beendeter Prozess in ProcessSampler.Sample.
+			// main.go loggt den ersten Fehlschlag beim Start bereits.
+			haveNet = false
+		}
+	}
+
+	time.Sleep(interval)
+
+	secondCPU, err := readCPUTimes()
+	if err != nil {
+		return Sample{}, err
+	}
+	var cpu float64
+	if totalDelta := secondCPU.total - firstCPU.total; totalDelta > 0 {
+		idleDelta := secondCPU.idle - firstCPU.idle
+		cpu = (1 - float64(idleDelta)/float64(totalDelta)) * 100
+	}
+
 	used, total, err := memoryUsage()
 	if err != nil {
 		return Sample{}, err
 	}
-	return Sample{CPUPercent: cpu, MemUsedBytes: used, MemTotalBytes: total}, nil
+	sample := Sample{CPUPercent: cpu, MemUsedBytes: used, MemTotalBytes: total}
+
+	if haveNet {
+		if secondNet, err := readNetDevBytes(netIface); err == nil {
+			elapsed := interval.Seconds()
+			sample.Net = &NetSample{
+				Iface:         netIface,
+				RxBytesPerSec: float64(secondNet.rx-firstNet.rx) / elapsed,
+				TxBytesPerSec: float64(secondNet.tx-firstNet.tx) / elapsed,
+				LinkMbps:      readNetLinkMbps(netIface),
+			}
+		}
+	}
+
+	return sample, nil
 }
 
 // clockTicksPerSecond ist USER_HZ, der Skalierungsfaktor von

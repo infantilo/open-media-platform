@@ -61,6 +61,11 @@ func main() {
 	statePath := envOr("OMP_HOST_AGENT_STATE_FILE", ".omp-host-agent-state.json")
 	catalogPath := envOr("OMP_HOST_AGENT_CATALOG_PATH", "")
 	ioPortsPath := envOr("OMP_HOST_AGENT_IO_PORTS_PATH", "")
+	// Netzwerk-Interface für die Bandbreiten-Telemetrie (Nutzerauftrag
+	// 2026-09-02) — bewusst kein Default/Auto-Erkennung, s.
+	// telemetry.NetSample-Doku. Leer = Netz-Telemetrie deaktiviert
+	// (Sample.Net bleibt nil), unverändertes Verhalten gegenüber vorher.
+	netIface := envOr("OMP_HOST_AGENT_NET_IFACE", "")
 	telemetryInterval := 5 * time.Second
 
 	cat, err := catalog.Load(catalogPath)
@@ -153,6 +158,11 @@ func main() {
 
 	subject := fmt.Sprintf("omp.host.%s.metrics", st.HostID)
 	slog.Info("publishing telemetry", "subject", subject, "interval", telemetryInterval)
+	if netIface != "" {
+		slog.Info("network bandwidth telemetry enabled", "iface", netIface)
+	} else {
+		slog.Info("network bandwidth telemetry disabled (OMP_HOST_AGENT_NET_IFACE unset)")
+	}
 
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): additive
 	// Pro-Instanz-Messung im selben Tick-Takt wie die Host-Telemetrie —
@@ -166,7 +176,7 @@ func main() {
 		// Take() blockiert kurz zur CPU%-Messung (s. telemetry.Take) —
 		// bewusst deutlich kürzer als telemetryInterval, damit der
 		// Tick-Takt nicht spürbar driftet.
-		sample, err := telemetry.Take(200 * time.Millisecond)
+		sample, err := telemetry.Take(200*time.Millisecond, netIface)
 		if err != nil {
 			slog.Warn("telemetry sample failed", "error", err)
 			continue

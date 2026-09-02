@@ -38,6 +38,11 @@ interface PlacementAdvice {
   reason: string;
   cpuPercent: number;
   memPercent: number;
+  // netPercent fehlt (statt 0), wenn dieser Host keine NIC-Auslastung mit
+  // bekannter Link-Kapazität meldet (orchestrator/internal/placement.
+  // Advice.NetPercent-Doku, Nutzerauftrag 2026-09-02) — kein stiller
+  // 0-Wert, der wie "gemessen und leer" aussähe.
+  netPercent?: number;
   instanceIds: string[];
   suggestedHostId?: string;
   suggestedHostLabel?: string;
@@ -80,17 +85,18 @@ const REFRESH_EVENT_TYPES = new Set([
   "lost-events",
 ]);
 
+// Nutzerauftrag 2026-09-02 ("netzwerkbandbreite ... auch relevant"):
+// "reason" kommt vom Backend als "+"-verbundene Liste über- schwellener
+// Dimensionen (placement.evaluateOnce) — generisch übersetzt statt fest
+// verdrahteter Kombinationen, sonst müsste jede neue Kombination (jetzt:
+// net, cpu+net, mem+net, cpu+mem+net) hier extra nachgezogen werden.
+const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz" };
+
 function reasonLabel(reason: string): string {
-  switch (reason) {
-    case "cpu":
-      return "CPU";
-    case "mem":
-      return "RAM";
-    case "cpu+mem":
-      return "CPU+RAM";
-    default:
-      return reason;
-  }
+  return reason
+    .split("+")
+    .map((token) => REASON_TOKEN_LABEL[token] ?? token)
+    .join("+");
 }
 
 function buildAlarms(instances: LauncherInstance[], advice: PlacementAdvice[], workflows: Workflow[]): Alarm[] {
@@ -122,11 +128,12 @@ function buildAlarms(instances: LauncherInstance[], advice: PlacementAdvice[], w
     const target = a.suggestedHostId
       ? `Ausweichhost: ${a.suggestedHostLabel ?? a.suggestedHostId}`
       : "kein Ausweichhost frei";
+    const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
     alarms.push({
       severity: "warning",
       source: "Host",
       title: a.hostLabel,
-      detail: `überlastet (${reasonLabel(a.reason)}: CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%), ${a.instanceIds.length} Instanz(en) betroffen — ${target}`,
+      detail: `überlastet (${reasonLabel(a.reason)}: CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}), ${a.instanceIds.length} Instanz(en) betroffen — ${target}`,
     });
   }
 

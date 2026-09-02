@@ -278,9 +278,17 @@ Make-before-break-Protokoll (Punkt 3 unten). **I/O-Karten-Claim/Release
 seit D13 umgesetzt** (2026-08-18, s. „Erweiterung 2026-07-10" unten für
 die vollständige Beschreibung) — Geräte-Inventar existiert jetzt
 (`internal/ioports`, host-agent-konfiguriert statt automatisch
-erkannt). **Weiterhin offen:** GPU/NIC-Telemetrie, Cloud-Kostenfaktor —
-genau die in D6/D7 dokumentierten Scope-Grenzen, unverändert durch D6
-Teil 4/D13.
+erkannt). **NIC-Bandbreite seit 2026-09-02 umgesetzt** (Nutzerauftrag
+"netzwerkbandbreite ... auch relevant"): Host-Agent misst Durchsatz/
+Link-Kapazität eines explizit konfigurierten Interfaces
+(`OMP_HOST_AGENT_NET_IFACE`, `host-agent/internal/telemetry.NetSample`),
+die Placement-Engine wertet sie als dritte kontinuierlich-teilbare
+Ressourcendimension neben CPU/RAM (`Thresholds.NetPercent`,
+`internal/placement.netUtilizationPercent`) — fail-open, wenn kein
+Interface konfiguriert ist oder der Treiber keine Link-Geschwindigkeit
+meldet. **Weiterhin offen:** GPU-Telemetrie, Cloud-Kostenfaktor — genau
+die in D6/D7 dokumentierten Scope-Grenzen, unverändert durch D6 Teil
+4/D13.
 
 **Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
 jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete

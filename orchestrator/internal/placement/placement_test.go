@@ -2,6 +2,7 @@ package placement
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,10 @@ func (f fakeProfiles) Get(_ context.Context, nodeType, hostID string) (profiles.
 }
 
 func testThresholds() Thresholds {
-	return Thresholds{CPUPercent: 85, MemPercent: 90, HealthyCPUPercent: 60, HealthyMemPercent: 70}
+	return Thresholds{
+		CPUPercent: 85, MemPercent: 90, NetPercent: 85,
+		HealthyCPUPercent: 60, HealthyMemPercent: 70, HealthyNetPercent: 60,
+	}
 }
 
 func TestEvaluateOnceNoAdviceBelowThreshold(t *testing.T) {
@@ -117,6 +121,71 @@ func TestEvaluateOnceAdviceWithSuggestedTarget(t *testing.T) {
 	}
 	if len(events.events) != 1 || events.events[0].Type != "placement.advice" {
 		t.Errorf("events = %+v, want exactly one placement.advice event", events.events)
+	}
+}
+
+// TestEvaluateOnceAdviceForNetOverload (Nutzerauftrag 2026-09-02):
+// h1 ist bei CPU/RAM unauffällig, aber die NIC ist zu 95% ausgelastet —
+// muss denselben Alarm+Vorschlag-Weg wie ein CPU-Überlast auslösen.
+func TestEvaluateOnceAdviceForNetOverload(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{
+		{ID: "h1", Label: "Host 1"},
+		{ID: "h2", Label: "Host 2"},
+	}}
+	mr := fakeMetrics{
+		"h1": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 10_000_000, TxBytesPerSec: 1_875_000, LinkMbps: 100}, // 95%
+		},
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000}, // gesund, kein Net konfiguriert
+	}
+	il := fakeInstances{instances: []launcher.Instance{{ID: "i1", HostID: "h1"}}}
+
+	e := NewEngine(hl, mr, il, nil, testThresholds(), nil)
+	e.evaluateOnce()
+
+	got := e.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %+v, want exactly one advice", got)
+	}
+	a := got[0]
+	if a.Reason != "net" {
+		t.Errorf("Reason = %q, want net", a.Reason)
+	}
+	if a.NetPercent == nil || *a.NetPercent < 85 {
+		t.Errorf("NetPercent = %v, want a pointer to a value >= 85", a.NetPercent)
+	}
+	if a.SuggestedHostID != "h2" {
+		t.Errorf("SuggestedHostID = %q, want h2", a.SuggestedHostID)
+	}
+}
+
+// TestEvaluateOnceSkipsNetOverloadedHostAsSuggestion: h2 ist bei CPU/RAM
+// gesund, aber seine NIC liegt über HealthyNetPercent — darf NICHT als
+// Ausweichziel für den überlasteten h1 vorgeschlagen werden.
+func TestEvaluateOnceSkipsNetOverloadedHostAsSuggestion(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{
+		{ID: "h1", Label: "Host 1"},
+		{ID: "h2", Label: "Host 2"},
+	}}
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 95, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 10_000_000, TxBytesPerSec: 1_875_000, LinkMbps: 100}, // 95%, über HealthyNetPercent (60)
+		},
+	}
+	il := fakeInstances{instances: []launcher.Instance{{ID: "i1", HostID: "h1"}}}
+
+	e := NewEngine(hl, mr, il, nil, testThresholds(), nil)
+	e.evaluateOnce()
+
+	got := e.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %+v, want exactly one advice", got)
+	}
+	if got[0].SuggestedHostID != "" {
+		t.Errorf("SuggestedHostID = %q, want empty (h2's NIC is over the healthy threshold)", got[0].SuggestedHostID)
 	}
 }
 
@@ -258,6 +327,42 @@ func TestCheckHostRejectsOverMemThreshold(t *testing.T) {
 	}
 }
 
+// TestCheckHostRejectsOverNetThreshold (Nutzerauftrag 2026-09-02):
+// RxBytesPerSec+TxBytesPerSec ergeben zusammen 90 Mbit/s auf einem
+// 100-MBit-Link (LinkMbps: 100) — 90% liegt über der 85%-Schwelle.
+func TestCheckHostRejectsOverNetThreshold(t *testing.T) {
+	mr := fakeMetrics{"h1": {
+		CPUPercent: 10, MemUsedBytes: 1000, MemTotalBytes: 4000,
+		Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 8_000_000, TxBytesPerSec: 3_250_000, LinkMbps: 100},
+	}}
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	reason, ok := e.CheckHost("h1", "omp-video-mixer-me")
+	if ok || reason == "" {
+		t.Fatalf("CheckHost() = (%q, %v), want a non-empty rejection reason (net over threshold)", reason, ok)
+	}
+	if !strings.Contains(reason, "Netz") {
+		t.Errorf("reason = %q, want it to mention Netz", reason)
+	}
+}
+
+// TestCheckHostOKWhenNetLinkSpeedUnknown: derselbe Durchsatz wie oben,
+// aber LinkMbps == 0 (Treiber meldet keine Verbindungsgeschwindigkeit,
+// z. B. virtuelles Interface) — kein Prozentwert berechenbar, also
+// fail-open für die Netz-Dimension (kein Rateversuch, s.
+// netUtilizationPercent-Doku).
+func TestCheckHostOKWhenNetLinkSpeedUnknown(t *testing.T) {
+	mr := fakeMetrics{"h1": {
+		CPUPercent: 10, MemUsedBytes: 1000, MemTotalBytes: 4000,
+		Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 8_000_000, TxBytesPerSec: 3_250_000, LinkMbps: 0},
+	}}
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	if reason, ok := e.CheckHost("h1", "omp-video-mixer-me"); !ok || reason != "" {
+		t.Fatalf("CheckHost() = (%q, %v), want (\"\", true) — unbekannte Link-Kapazität darf nicht blockieren", reason, ok)
+	}
+}
+
 func TestCheckHostOKWhenNoTelemetrySeen(t *testing.T) {
 	e := NewEngine(fakeHosts{}, fakeMetrics{}, fakeInstances{}, nil, testThresholds(), nil)
 
@@ -361,6 +466,30 @@ func TestSelectHostFallsBackWhenPreferredHostOverloaded(t *testing.T) {
 	}
 	if result.Reason == "" {
 		t.Fatalf("SelectHost().Reason is empty, want an explanation for the fallback")
+	}
+}
+
+// TestSelectHostNetPercentBreaksCPUMemTie (Nutzerauftrag 2026-09-02): h1
+// und h2 sind bei CPU/RAM exakt gleichauf — ohne Präferenz muss der mit
+// der niedrigeren NIC-Auslastung gewinnen, nicht einfach der erste im
+// Ergebnis von ListHosts().
+func TestSelectHostNetPercentBreaksCPUMemTie(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		"h1": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 5_000_000, TxBytesPerSec: 0, LinkMbps: 100}, // 40%
+		},
+		"h2": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Net: &hosts.NetMetrics{Iface: "eth0", RxBytesPerSec: 1_250_000, TxBytesPerSec: 0, LinkMbps: 100}, // 10%
+		},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source"}, Occupancy{})
+	if result.HostID != "h2" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (lower NIC utilization at equal CPU/RAM)", result.HostID, "h2")
 	}
 }
 

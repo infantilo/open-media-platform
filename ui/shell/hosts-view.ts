@@ -17,11 +17,24 @@ import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { openHostWizard } from "./host-wizard.ts";
 
+// netMetrics fehlt (statt eines Nullwert-Objekts), wenn der Host-Agent
+// kein Interface für die Bandbreiten-Telemetrie konfiguriert hat
+// (host-agent/internal/telemetry.NetSample-Doku, Nutzerauftrag
+// 2026-09-02) — kein stiller "0 Mbit/s", der wie eine echte Leerlauf-
+// Messung aussähe.
+interface NetMetrics {
+  iface: string;
+  rxBytesPerSec: number;
+  txBytesPerSec: number;
+  linkMbps?: number;
+}
+
 interface HostMetrics {
   cpuPercent: number;
   memUsedBytes: number;
   memTotalBytes: number;
   receivedAt: string;
+  net?: NetMetrics;
 }
 
 interface HostEntry {
@@ -63,6 +76,10 @@ interface PlacementAdvice {
   reason: string;
   cpuPercent: number;
   memPercent: number;
+  // netPercent fehlt, wenn dieser Host keine NIC-Auslastung mit bekannter
+  // Link-Kapazität meldet (orchestrator/internal/placement.Advice.
+  // NetPercent-Doku, Nutzerauftrag 2026-09-02).
+  netPercent?: number;
   instanceIds: string[];
   suggestedHostId?: string;
   suggestedHostLabel?: string;
@@ -106,21 +123,34 @@ function secondsUntil(deadlineAt: string): number {
   return Math.max(0, Math.round((new Date(deadlineAt).getTime() - Date.now()) / 1000));
 }
 
+// Nutzerauftrag 2026-09-02: "reason" kommt vom Backend als "+"-
+// verbundene Liste überschwellener Dimensionen (placement.evaluateOnce)
+// — generisch übersetzt statt fest verdrahteter Kombinationen (gleiches
+// Muster wie alarm-view.ts' reasonLabel), sonst müsste jede neue
+// Kombination hier extra nachgezogen werden.
+const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz" };
+
 function reasonLabel(reason: string): string {
-  switch (reason) {
-    case "cpu":
-      return "CPU";
-    case "mem":
-      return "RAM";
-    case "cpu+mem":
-      return "CPU+RAM";
-    default:
-      return reason;
-  }
+  return reason
+    .split("+")
+    .map((token) => REASON_TOKEN_LABEL[token] ?? token)
+    .join("+");
 }
 
 function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+// formatNetRate zeigt Rx/Tx in Mbit/s (Netzwerk-Konvention, nicht
+// MB/s wie formatBytes oben) plus, falls bekannt, die Auslastung in %
+// der gemeldeten Link-Kapazität (Nutzerauftrag 2026-09-02).
+function formatNetRate(net: NetMetrics): string {
+  const rxMbps = (net.rxBytesPerSec * 8) / 1_000_000;
+  const txMbps = (net.txBytesPerSec * 8) / 1_000_000;
+  const base = `↓${rxMbps.toFixed(1)} ↑${txMbps.toFixed(1)} Mbit/s`;
+  if (!net.linkMbps) return base;
+  const percent = ((rxMbps + txMbps) / net.linkMbps) * 100;
+  return `${base} (${percent.toFixed(0)}%)`;
 }
 
 // Sparkline für CPU% der letzten Stunde (Kapitel 14 Teil 1) — feste
@@ -313,6 +343,7 @@ class HostsView extends HTMLElement {
         const m = h.metrics;
         const cpu = m ? `${m.cpuPercent.toFixed(0)}%` : "–";
         const mem = m ? `${formatBytes(m.memUsedBytes)} / ${formatBytes(m.memTotalBytes)}` : "–";
+        const net = m?.net ? formatNetRate(m.net) : "–";
         const seen = m ? new Date(m.receivedAt).toLocaleTimeString() : "nie";
         const win = history.get(h.id);
         const cpuValues = win?.samples?.map((s) => s.cpuPercent) ?? [];
@@ -326,6 +357,7 @@ class HostsView extends HTMLElement {
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>
           <td style="padding:2px 8px;">${mem}</td>
+          <td style="padding:2px 8px;white-space:nowrap;">${net}</td>
           <td style="padding:2px 8px;">${spark}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${minAvgMax}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${seen}</td>
@@ -338,8 +370,9 @@ class HostsView extends HTMLElement {
         const target = a.suggestedHostId
           ? `Vorschlag: <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
           : `<span style="color:var(--omp-cue);">kein Ausweichhost frei</span>`;
+        const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
-          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%),
+          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}),
           ${a.instanceIds.length} Instanz(en) betroffen — ${target}
         </div>`;
       })
@@ -381,6 +414,7 @@ class HostsView extends HTMLElement {
                 <th style="padding:2px 8px;">Hostname</th>
                 <th style="padding:2px 8px;">CPU</th>
                 <th style="padding:2px 8px;">RAM</th>
+                <th style="padding:2px 8px;">Netz</th>
                 <th style="padding:2px 8px;">Verlauf (1h)</th>
                 <th style="padding:2px 8px;">Min/Ø/Max CPU</th>
                 <th style="padding:2px 8px;">Zuletzt gesehen</th>
