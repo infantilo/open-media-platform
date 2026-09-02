@@ -37,13 +37,19 @@ export class ConsoleBoard extends HTMLElement {
   #emptyMessage!: HTMLParagraphElement;
 
   connectedCallback() {
+    // Nutzerauftrag 2026-09-02 ("Console nach demselben Muster"): eigene
+    // Farben durch Design-Tokens ersetzt — die "beleuchtete Hardware-
+    // Taste" der eigentlichen Operator-UI-Bundles bleibt davon
+    // unberührt, hier geht es nur um das Kachel-Chrome dieser View
+    // selbst (Rahmen/Titelleisten, s. #mountTile unten).
     this.style.cssText =
       "display:block;position:relative;width:100%;height:100%;overflow:auto;" +
-      "background:#181818;font-family:sans-serif;";
+      "background:var(--omp-bg);font-family:var(--omp-font);";
 
     this.#emptyMessage = document.createElement("p");
+    this.#emptyMessage.className = "omp-empty";
     this.#emptyMessage.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
-    this.#emptyMessage.style.cssText = "color:#eee;padding:12px;display:none;";
+    this.#emptyMessage.style.cssText = "padding:12px;display:none;";
     this.appendChild(this.#emptyMessage);
   }
 
@@ -107,19 +113,20 @@ export class ConsoleBoard extends HTMLElement {
     const wrapper = document.createElement("div");
     wrapper.dataset.nodeRoleId = entry.nodeRoleId;
     wrapper.style.cssText =
-      "position:absolute;display:flex;flex-direction:column;background:#1f1f1f;" +
-      "border:1px solid #444;border-radius:6px;overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,0.4);";
+      "position:absolute;display:flex;flex-direction:column;background:var(--omp-surface);" +
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;box-shadow:0 2px 6px rgba(0,0,0,0.4);";
     this.#applyLayout(wrapper, this.#layouts[entry.nodeRoleId]);
 
     const header = document.createElement("div");
     header.title = "Ziehen zum Verschieben";
     header.style.cssText =
-      "cursor:move;padding:6px 10px;background:#262626;border-bottom:1px solid #444;" +
+      "cursor:move;padding:6px 10px;background:var(--omp-surface-raised);border-bottom:1px solid var(--omp-border);" +
       "display:flex;align-items:baseline;gap:6px;user-select:none;flex-shrink:0;" +
       "white-space:nowrap;overflow:hidden;";
     const label = document.createElement("span");
     label.textContent = entry.nodeLabel;
-    label.style.cssText = "font-size:12px;font-weight:bold;color:#eee;overflow:hidden;text-overflow:ellipsis;";
+    label.style.cssText =
+      "font-size:var(--omp-font-size-sm);font-weight:bold;color:var(--omp-text);overflow:hidden;text-overflow:ellipsis;";
     header.appendChild(label);
     // Host-Anzeige (Kapitel 13 Teil 4, Nutzerfund 2026-08-13): welcher
     // Host diese Rolle gerade ausführt — shell.ts#fetchConsoles reichert
@@ -130,7 +137,7 @@ export class ConsoleBoard extends HTMLElement {
       hostBadge.textContent = entry.hostLabel;
       hostBadge.title = `Host: ${entry.hostLabel}`;
       hostBadge.style.cssText =
-        "font-size:10px;font-weight:normal;color:#9aa0a6;background:#1a1a1a;padding:1px 6px;" +
+        "font-size:10px;font-weight:normal;color:var(--omp-text-dim);background:var(--omp-surface);padding:1px 6px;" +
         "border-radius:8px;overflow:hidden;text-overflow:ellipsis;";
       header.appendChild(hostBadge);
     }
@@ -138,14 +145,14 @@ export class ConsoleBoard extends HTMLElement {
 
     const content = document.createElement("div");
     content.style.cssText =
-      "flex:1;min-height:0;overflow:auto;padding:8px;color:#eee;display:flex;flex-direction:column;gap:8px;";
+      "flex:1;min-height:0;overflow:auto;padding:8px;color:var(--omp-text);display:flex;flex-direction:column;gap:8px;";
 
     const resizeHandle = document.createElement("div");
     resizeHandle.title = "Ziehen zum Skalieren";
     resizeHandle.textContent = "◢";
     resizeHandle.style.cssText =
       "position:absolute;right:0;bottom:0;width:16px;height:16px;cursor:nwse-resize;" +
-      "font-size:10px;line-height:16px;text-align:right;padding-right:1px;color:#666;user-select:none;";
+      "font-size:10px;line-height:16px;text-align:right;padding-right:1px;color:var(--omp-text-dim);user-select:none;";
     resizeHandle.addEventListener("pointerdown", (ev) => this.#onResizeStart(ev, entry.nodeRoleId));
 
     wrapper.append(header, content, resizeHandle);
@@ -174,7 +181,7 @@ export class ConsoleBoard extends HTMLElement {
     content.replaceChildren();
     const loading = document.createElement("p");
     loading.textContent = "Lädt …";
-    loading.style.cssText = "color:#999;margin:0;";
+    loading.style.cssText = "color:var(--omp-text-dim);margin:0;";
     content.appendChild(loading);
 
     const showsPreview = await hasPreviewUrl(entry.uiBundleUrl);
@@ -197,7 +204,7 @@ export class ConsoleBoard extends HTMLElement {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
       p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
-      p.style.margin = "0";
+      p.style.cssText = "margin:0;color:var(--omp-error);";
       bundleContainer.appendChild(p);
     }
   }

@@ -36,10 +36,19 @@ export class ConsoleView extends HTMLElement {
   #previewHandle?: MountedPreview;
 
   connectedCallback() {
-    this.style.cssText = "display:flex;flex-direction:column;width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;";
+    // Nutzerauftrag 2026-09-02 ("Console nach demselben Muster"): eigene
+    // Farben durch Design-Tokens ersetzt — die "beleuchtete Hardware-
+    // Taste" der eigentlichen Operator-UI-Bundles bleibt davon
+    // unberührt (design-tokens.css-Doku, bewusst getrennt gehalten),
+    // hier geht es nur um die SCHALE (Tab-Leiste/Hintergrund) dieser
+    // View selbst.
+    this.style.cssText =
+      "display:flex;flex-direction:column;width:100%;height:100%;" +
+      "background:var(--omp-bg);color:var(--omp-text);font-family:var(--omp-font);";
 
     this.#tabs = document.createElement("div");
-    this.#tabs.style.cssText = "display:flex;gap:4px;padding:6px;border-bottom:1px solid #333;flex-shrink:0;";
+    this.#tabs.style.cssText =
+      "display:flex;gap:var(--omp-space-1);padding:6px;border-bottom:1px solid var(--omp-border);flex-shrink:0;";
 
     this.#panel = document.createElement("div");
     this.#panel.style.cssText = "flex:1;min-height:0;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px;";
@@ -67,6 +76,7 @@ export class ConsoleView extends HTMLElement {
       this.#previewHandle = undefined;
       this.#panel.replaceChildren();
       const p = document.createElement("p");
+      p.className = "omp-empty";
       p.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
       this.#panel.appendChild(p);
       return;
@@ -82,9 +92,17 @@ export class ConsoleView extends HTMLElement {
     for (const entry of this.#entries) {
       const tab = document.createElement("button");
       tab.textContent = entry.hostLabel ? `${entry.nodeLabel} · ${entry.hostLabel}` : entry.nodeLabel;
-      tab.style.cssText = `cursor:pointer;padding:6px 12px;border:1px solid #555;border-radius:4px;background:${
-        entry.nodeRoleId === this.#activeNodeRoleId ? "#2e7d32" : "#222"
-      };color:#eee;`;
+      // Gleiche Formel wie app-shell.ts' TAB_BUTTON_BASE/#styleTabButton
+      // und admin-view.ts' SUB_TAB_BUTTON_BASE (bewusste kleine
+      // Dopplung, gleiches Prinzip wie dort — kein gemeinsames Modul
+      // zwischen unabhängigen View-Dateien in diesem Projekt).
+      const isActive = entry.nodeRoleId === this.#activeNodeRoleId;
+      tab.style.cssText =
+        "border:1px solid transparent;border-radius:var(--omp-radius);" +
+        "padding:6px 12px;font-size:var(--omp-font-size-sm);font-family:var(--omp-font);cursor:pointer;" +
+        (isActive
+          ? "background:var(--omp-surface-raised);color:var(--omp-text);border-color:var(--omp-border);"
+          : "background:transparent;color:var(--omp-text-dim);");
       tab.addEventListener("click", () => this.#activate(entry.nodeRoleId));
       this.#tabs.appendChild(tab);
     }
@@ -106,7 +124,7 @@ export class ConsoleView extends HTMLElement {
     // flackern.
     const loading = document.createElement("p");
     loading.textContent = "Lädt …";
-    loading.style.cssText = "color:#999;";
+    loading.style.cssText = "color:var(--omp-text-dim);";
     this.#panel.appendChild(loading);
 
     // Live-Vorschau (previewUrl-Stream) ÜBER dem UI-Bundle, sofern der
@@ -130,6 +148,7 @@ export class ConsoleView extends HTMLElement {
     if (!mounted) {
       bundleContainer.replaceChildren();
       const p = document.createElement("p");
+      p.style.cssText = "color:var(--omp-error);";
       p.textContent = `UI-Bundle für "${entry.nodeLabel}" konnte nicht geladen werden.`;
       bundleContainer.appendChild(p);
     }
