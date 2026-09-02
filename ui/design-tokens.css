@@ -178,6 +178,17 @@ textarea::placeholder {
   padding: var(--omp-space-4);
 }
 
+/* Gleiche Fläche/Rahmen wie .omp-card, aber enger gepolstert — für schmale
+   Sidebar-Kontexte (Flow-Editor-Palette, 2026-09-02), wo viele Karten
+   hintereinander in einer schmalen Spalte stehen und der volle
+   --omp-space-4-Rand zu viel vertikalen Platz kosten würde. */
+.omp-card-compact {
+  background: var(--omp-surface-raised);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  padding: var(--omp-space-2);
+}
+
 .omp-empty {
   color: var(--omp-text-dim);
   font-family: var(--omp-font);
@@ -214,4 +225,79 @@ textarea::placeholder {
   font-weight: 600;
   color: var(--omp-text);
   margin: 0;
+}
+
+/* Node-Katalog-Redesign (Nutzerauftrag 2026-09-02, "orchestrator-ui
+   überarbeiten, node-katalog als beispiel") — Pilot fürs restliche UI,
+   erweitert das 2026-08-07 begonnene System um Modal/Suchfeld/Karten-Grid,
+   damit spätere Tabs (Flow-Editor, Console, ...) dieselben Klassen
+   wiederverwenden können statt erneut Ad-hoc-Inline-Styles zu erfinden. */
+
+/* Gleiche Backdrop/Dialog-Formel wie ui/kit/omp-confirm.ts, hier als
+   globale Klassen statt Shadow-DOM-Styles — admin-view.ts & Co. rendern
+   ins Light-DOM (s. Kommentar oben) und binden ihr Ein-/Ausblenden direkt
+   an ein Klassenfeld statt an einen Promise-Rückgabewert wie omp-confirm,
+   brauchen die Kapselung einer eigenen Komponente hier also nicht. */
+.omp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+.omp-modal {
+  position: relative;
+  background: var(--omp-surface);
+  color: var(--omp-text);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  padding: var(--omp-space-4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  max-width: 560px;
+  width: calc(100vw - var(--omp-space-4) * 2);
+  max-height: calc(100vh - var(--omp-space-4) * 2);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.omp-search-input {
+  padding-left: 26px;
+  background-image: linear-gradient(0deg, transparent, transparent);
+  background-repeat: no-repeat;
+  background-position: 8px center;
+}
+/* Lupe als Pseudo-Element statt eines echten Icons/SVG-Sprites (keine
+   neue Asset-Abhängigkeit für ein einzelnes Symbol) — der umschließende
+   Wrapper braucht dafür position:relative, s. Verwendung in
+   admin-view.ts' #renderCatalogSection. */
+.omp-search-wrap {
+  position: relative;
+  display: inline-block;
+}
+.omp-search-wrap::before {
+  content: "⌕";
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--omp-text-dim);
+  font-size: var(--omp-font-size-md);
+  pointer-events: none;
+}
+
+.omp-badge-imported {
+  color: var(--omp-cue);
+  border-color: var(--omp-cue);
+}
+.omp-badge-builtin {
+  color: var(--omp-text-dim);
+  border-color: var(--omp-border);
+}
+
+.omp-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--omp-space-3);
 }

@@ -196,6 +196,10 @@ class AdminView extends HTMLElement {
   // bereits vollständig inkl. C9-Admission-Check und Versionierung.
   #catalog: CatalogEntry[] = [];
   #showCatalogForm = false;
+  // Node-Katalog-Redesign 2026-09-02: rein clientseitiger Freitext-Filter
+  // (Katalog ist klein, kein Server-Roundtrip nötig) über Label/Typ/
+  // Beschreibung — siehe #filteredCatalog.
+  #catalogSearch = "";
   #newCatalogType = "";
   #newCatalogLabel = "";
   #newCatalogImage = "";
@@ -1341,131 +1345,212 @@ class AdminView extends HTMLElement {
     return b.nodeId === "*" ? `${wfName} (ganzer Workflow)` : `${wfName} → ${b.nodeId}`;
   }
 
+  // Node-Katalog-Redesign 2026-09-02: rein clientseitiger Filter über
+  // Label/Typ/Beschreibung, alphabetisch (Nutzerwunsch 2026-07-28,
+  // unverändert) — Katalog ist klein genug, kein Server-Roundtrip nötig.
+  #filteredCatalog(): CatalogEntry[] {
+    const sorted = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
+    const q = this.#catalogSearch.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      (e) =>
+        e.label.toLowerCase().includes(q) ||
+        e.type.toLowerCase().includes(q) ||
+        (e.description ?? "").toLowerCase().includes(q),
+    );
+  }
+
   #renderCatalogSection(): HTMLElement {
     const section = document.createElement("div");
     section.style.cssText = "margin-bottom:var(--omp-space-4);";
 
     const heading = document.createElement("div");
     heading.style.cssText =
-      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:var(--omp-space-3);flex-wrap:wrap;";
     const title = document.createElement("span");
     title.className = "omp-h1";
-    title.textContent = `Node-Katalog: Import/Export (${this.#catalog.length})`;
+    title.textContent = `Node-Katalog (${this.#catalog.length})`;
+    heading.appendChild(title);
+
+    const controls = document.createElement("div");
+    controls.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-2);";
+    const searchWrap = document.createElement("span");
+    searchWrap.className = "omp-search-wrap";
+    const searchInput = document.createElement("input");
+    searchInput.className = "omp-search-input";
+    searchInput.type = "search";
+    searchInput.placeholder = "Suche nach Label, Typ, Beschreibung …";
+    searchInput.value = this.#catalogSearch;
+    searchInput.style.cssText = "width:220px;";
+    searchInput.addEventListener("input", () => {
+      this.#catalogSearch = searchInput.value;
+      this.#render();
+    });
+    searchWrap.appendChild(searchInput);
+    controls.appendChild(searchWrap);
+
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showCatalogForm ? "Abbrechen" : "+ Node/Microservice importieren";
-    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    newBtn.className = "omp-btn-primary";
+    newBtn.textContent = "+ Node/Microservice importieren";
     newBtn.addEventListener("click", () => {
-      this.#showCatalogForm = !this.#showCatalogForm;
+      this.#showCatalogForm = true;
       this.#admissionResults = null;
       this.#render();
     });
-    heading.append(title, newBtn);
+    controls.appendChild(newBtn);
+    heading.appendChild(controls);
     section.appendChild(heading);
 
     const hint = document.createElement("div");
-    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:8px;";
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-3);";
     hint.textContent =
       "Importierte Microservices laufen als Podman-Container (OCI-Image) und durchlaufen vor der Aufnahme denselben Contract-Check wie `make contract` — ein Kandidat, der den Node-Contract nicht erfüllt, wird abgelehnt.";
     section.appendChild(hint);
 
-    if (this.#showCatalogForm) {
-      section.appendChild(this.#renderCatalogForm());
-    }
-    if (this.#admissionResults) {
-      section.appendChild(this.#renderAdmissionResults(this.#admissionResults));
+    const filtered = this.#filteredCatalog();
+    if (filtered.length > 0) {
+      const grid = document.createElement("div");
+      grid.className = "omp-card-grid";
+      for (const entry of filtered) grid.appendChild(this.#renderCatalogCard(entry));
+      section.appendChild(grid);
+    } else {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = this.#catalogSearch
+        ? "Keine Katalog-Einträge passen zur Suche."
+        : "Noch keine Katalog-Einträge.";
+      section.appendChild(empty);
     }
 
-    if (this.#catalog.length > 0) {
-      const table = document.createElement("table");
-      table.style.cssText = "border-collapse:collapse;width:100%;";
-      const thead = document.createElement("thead");
-      thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Typ</th>
-        <th style="padding:2px 8px;">Label</th>
-        <th style="padding:2px 8px;">Version</th>
-        <th style="padding:2px 8px;">Herkunft</th>
-        <th style="padding:2px 8px;"></th>
-      </tr>`;
-      table.appendChild(thead);
-      const tbody = document.createElement("tbody");
-      // Nutzerwunsch 2026-07-28: alphabetisch statt Katalog-Dateireihenfolge.
-      const sortedCatalog = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
-      for (const entry of sortedCatalog) {
-        tbody.appendChild(this.#renderCatalogRow(entry));
-      }
-      table.appendChild(tbody);
-      section.appendChild(table);
-    }
+    if (this.#showCatalogForm) section.appendChild(this.#renderCatalogModal());
 
     return section;
   }
 
+  #closeCatalogModal() {
+    this.#showCatalogForm = false;
+    this.#admissionResults = null;
+    this.#render();
+  }
+
+  // Backdrop-Klick/Escape schließen das Modal, gleiches Prinzip wie
+  // ui/kit/omp-confirm.ts — hier als schlichte Klassen statt einer eigenen
+  // Shadow-DOM-Komponente, weil admin-view.ts ohnehin komplett neu rendert
+  // (kein Promise-Rückgabewert nötig, nur #showCatalogForm/#render()).
+  #renderCatalogModal(): HTMLElement {
+    const overlay = document.createElement("div");
+    overlay.className = "omp-modal-overlay";
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) this.#closeCatalogModal();
+    });
+    overlay.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") this.#closeCatalogModal();
+    });
+
+    const modal = document.createElement("div");
+    modal.className = "omp-modal";
+
+    const modalHeading = document.createElement("div");
+    modalHeading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
+    const modalTitle = document.createElement("span");
+    modalTitle.className = "omp-h1";
+    modalTitle.textContent = "Node/Microservice importieren";
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.setAttribute("aria-label", "Schließen");
+    closeBtn.addEventListener("click", () => this.#closeCatalogModal());
+    modalHeading.append(modalTitle, closeBtn);
+    modal.appendChild(modalHeading);
+
+    modal.appendChild(this.#renderCatalogForm());
+    if (this.#admissionResults) modal.appendChild(this.#renderAdmissionResults(this.#admissionResults));
+
+    overlay.appendChild(modal);
+    // Erst nach dem tatsächlichen Einhängen fokussieren (dieser Aufruf
+    // läuft synchron VOR dem umschließenden appendChild in #render()) —
+    // sonst greift focus() ins Leere, weil das Feld noch nicht im Dokument
+    // ist. Zugleich macht das Escape von Anfang an nutzbar (s. o.), ohne
+    // dass der Nutzer erst ins Formular klicken muss.
+    queueMicrotask(() => modal.querySelector("input")?.focus());
+    return overlay;
+  }
+
   #renderCatalogForm(): HTMLElement {
     const form = document.createElement("div");
-    form.style.cssText =
-      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px;" +
-      "margin-bottom:8px;display:flex;flex-direction:column;gap:6px;";
+    form.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-3);";
 
     const fileRow = document.createElement("div");
     fileRow.style.cssText = "display:flex;align-items:center;gap:6px;";
     const fileLabel = document.createElement("span");
-    fileLabel.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
+    fileLabel.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
     fileLabel.textContent = "Aus exportierter Datei vorbefüllen:";
     const fileInput = document.createElement("input");
     fileInput.type = "file";
     fileInput.accept = "application/json";
-    fileInput.style.cssText = "font-size:11px;";
+    fileInput.style.cssText = "font-size:var(--omp-font-size-xs);";
     fileInput.addEventListener("change", () => {
       if (fileInput.files?.[0]) this.#loadCatalogFromFile(fileInput.files[0]);
     });
     fileRow.append(fileLabel, fileInput);
     form.appendChild(fileRow);
 
-    const fieldsRow = document.createElement("div");
-    fieldsRow.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
-
-    const mkInput = (placeholder: string, value: string, onInput: (v: string) => void, width = "140px") => {
+    // <label>, die Text + Feld umschließt, statt reiner Placeholder-
+    // Beschriftung (Nutzerauftrag 2026-09-02, "modern, intuitiv") —
+    // Feldnamen/State-Bindings unverändert gegenüber vorher.
+    const mkField = (labelText: string, placeholder: string, value: string, onInput: (v: string) => void, width = "140px") => {
+      const wrap = document.createElement("label");
+      wrap.style.cssText =
+        `display:flex;flex-direction:column;gap:2px;flex:1;min-width:${width};` +
+        "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
+      const labelSpan = document.createElement("span");
+      labelSpan.textContent = labelText;
+      wrap.appendChild(labelSpan);
       const input = document.createElement("input");
       input.placeholder = placeholder;
       input.value = value;
-      input.style.cssText = `flex:1;min-width:${width};`;
       input.addEventListener("input", () => onInput(input.value));
-      return input;
+      wrap.appendChild(input);
+      return wrap;
     };
 
+    const fieldsRow = document.createElement("div");
+    fieldsRow.style.cssText = "display:flex;gap:var(--omp-space-2);flex-wrap:wrap;";
     fieldsRow.append(
-      mkInput("Typ (z. B. omp-thirdparty-node)", this.#newCatalogType, (v) => (this.#newCatalogType = v)),
-      mkInput("Label", this.#newCatalogLabel, (v) => (this.#newCatalogLabel = v)),
-      mkInput("Image (registry/name:tag)", this.#newCatalogImage, (v) => (this.#newCatalogImage = v), "220px"),
-      mkInput("Version (optional)", this.#newCatalogVersion, (v) => (this.#newCatalogVersion = v), "100px"),
+      mkField("Typ", "z. B. omp-thirdparty-node", this.#newCatalogType, (v) => (this.#newCatalogType = v)),
+      mkField("Label", "Anzeigename", this.#newCatalogLabel, (v) => (this.#newCatalogLabel = v)),
+      mkField("Image", "registry/name:tag", this.#newCatalogImage, (v) => (this.#newCatalogImage = v), "220px"),
+      mkField("Version", "optional", this.#newCatalogVersion, (v) => (this.#newCatalogVersion = v), "100px"),
     );
     form.appendChild(fieldsRow);
 
     const fieldsRow2 = document.createElement("div");
-    fieldsRow2.style.cssText = "display:flex;gap:6px;flex-wrap:wrap;";
+    fieldsRow2.style.cssText = "display:flex;gap:var(--omp-space-2);flex-wrap:wrap;";
     fieldsRow2.append(
-      mkInput("Beschreibung (optional)", this.#newCatalogDescription, (v) => (this.#newCatalogDescription = v), "220px"),
-      mkInput("Erwartete Ressourcen (optional)", this.#newCatalogExpectedResources, (v) => (this.#newCatalogExpectedResources = v)),
-      mkInput("Command-Override (optional, Leerzeichen-getrennt)", this.#newCatalogCommand, (v) => (this.#newCatalogCommand = v), "220px"),
+      mkField("Beschreibung", "optional", this.#newCatalogDescription, (v) => (this.#newCatalogDescription = v), "220px"),
+      mkField("Erwartete Ressourcen", "z. B. ~5% CPU · ~40 MB RAM", this.#newCatalogExpectedResources, (v) => (this.#newCatalogExpectedResources = v)),
+      mkField("Command-Override", "optional, Leerzeichen-getrennt", this.#newCatalogCommand, (v) => (this.#newCatalogCommand = v), "220px"),
     );
     form.appendChild(fieldsRow2);
 
+    const envWrap = document.createElement("label");
+    envWrap.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
     const envLabel = document.createElement("span");
-    envLabel.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
-    envLabel.textContent = "Env (JSON-Objekt, optional):";
-    form.appendChild(envLabel);
+    envLabel.textContent = "Env (JSON-Objekt, optional)";
+    envWrap.appendChild(envLabel);
     const envInput = document.createElement("textarea");
     envInput.rows = 3;
     envInput.value = this.#newCatalogEnvText;
-    envInput.style.cssText = "font-family:var(--omp-mono, monospace);font-size:11px;";
+    envInput.style.cssText = "font-family:var(--omp-font-mono);font-size:var(--omp-font-size-xs);";
     envInput.addEventListener("input", () => {
       this.#newCatalogEnvText = envInput.value;
     });
-    form.appendChild(envInput);
+    envWrap.appendChild(envInput);
+    form.appendChild(envWrap);
 
     const importBtn = document.createElement("button");
+    importBtn.className = "omp-btn-primary";
     importBtn.textContent = "Importieren";
-    importBtn.style.cssText = "cursor:pointer;align-self:flex-start;";
+    importBtn.style.cssText = "align-self:flex-start;";
     importBtn.addEventListener("click", () => this.#importCatalogEntry());
     form.appendChild(importBtn);
 
@@ -1475,18 +1560,20 @@ class AdminView extends HTMLElement {
   #renderAdmissionResults(results: AdmissionResult[]): HTMLElement {
     const box = document.createElement("div");
     box.style.cssText =
-      "border:1px solid var(--omp-error);border-radius:var(--omp-radius);padding:8px;margin-bottom:8px;";
+      "border:1px solid var(--omp-error);border-radius:var(--omp-radius);padding:var(--omp-space-2);margin-top:var(--omp-space-3);";
     const title = document.createElement("div");
-    title.style.cssText = "font-weight:600;color:var(--omp-error);margin-bottom:4px;";
+    title.style.cssText = "font-weight:600;color:var(--omp-error);margin-bottom:var(--omp-space-2);";
     title.textContent = "Import abgelehnt: Contract-Check nicht bestanden";
     box.appendChild(title);
     const table = document.createElement("table");
-    table.style.cssText = "border-collapse:collapse;width:100%;font-size:11px;";
+    table.style.cssText = "border-collapse:collapse;width:100%;font-size:var(--omp-font-size-xs);";
+    const badgeClass = (status: string) =>
+      status === "FAIL" ? "omp-badge omp-badge-error" : status === "PASS" ? "omp-badge omp-badge-running" : "omp-badge";
     const rows = results
       .map(
         (r) => `<tr>
         <td style="padding:2px 8px;">${escapeHtml(r.Name)}</td>
-        <td style="padding:2px 8px;color:${r.Status === "FAIL" ? "var(--omp-error)" : r.Status === "PASS" ? "var(--omp-preset)" : "var(--omp-text-dim)"};">${r.Status}</td>
+        <td style="padding:2px 8px;"><span class="${badgeClass(r.Status)}">${escapeHtml(r.Status)}</span></td>
         <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(r.Detail)}</td>
       </tr>`,
       )
@@ -1496,56 +1583,65 @@ class AdminView extends HTMLElement {
     return box;
   }
 
-  #renderCatalogRow(entry: CatalogEntry): HTMLElement {
-    const tr = document.createElement("tr");
+  #renderCatalogCard(entry: CatalogEntry): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "omp-card";
+    card.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-1);";
     const isImported = entry.runner === "podman";
 
-    const typeTd = document.createElement("td");
-    typeTd.style.cssText = "padding:2px 8px;";
-    typeTd.textContent = entry.type;
-    tr.appendChild(typeTd);
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:flex-start;gap:var(--omp-space-2);";
+    const label = document.createElement("span");
+    label.style.cssText = "font-weight:600;";
+    label.textContent = entry.label;
+    const badge = document.createElement("span");
+    badge.className = `omp-badge ${isImported ? "omp-badge-imported" : "omp-badge-builtin"}`;
+    badge.textContent = isImported ? "Importiert" : "Eingebaut";
+    head.append(label, badge);
+    card.appendChild(head);
 
-    const labelTd = document.createElement("td");
-    labelTd.style.cssText = "padding:2px 8px;";
-    labelTd.textContent = entry.label;
-    tr.appendChild(labelTd);
+    const sub = document.createElement("div");
+    sub.style.cssText = "font-family:var(--omp-font-mono);font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
+    sub.textContent = `${entry.type}${entry.version ? " · " + entry.version : ""}`;
+    card.appendChild(sub);
 
-    const versionTd = document.createElement("td");
-    versionTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
-    versionTd.textContent = entry.version || "–";
-    tr.appendChild(versionTd);
-
-    const originTd = document.createElement("td");
-    originTd.style.cssText = "padding:2px 8px;";
-    if (isImported) {
-      const badge = document.createElement("span");
-      badge.textContent = `importiert · ${entry.image}`;
-      badge.style.cssText = "color:var(--omp-cue);font-size:var(--omp-font-size-xs);";
-      originTd.appendChild(badge);
-    } else {
-      originTd.textContent = "eingebaut";
-      originTd.style.color = "var(--omp-text-dim)";
+    // Nur bei vorhandenem Wert rendern (optionale Freitextfelder) — bisher
+    // in der Tabelle unsichtbares Backend-Feld, s. plan-Kontext.
+    if (entry.description) {
+      const desc = document.createElement("div");
+      desc.style.cssText = "font-size:var(--omp-font-size-sm);";
+      desc.textContent = entry.description;
+      card.appendChild(desc);
     }
-    tr.appendChild(originTd);
+    if (entry.expectedResources) {
+      const res = document.createElement("div");
+      res.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);";
+      res.textContent = entry.expectedResources;
+      card.appendChild(res);
+    }
+    if (isImported) {
+      const image = document.createElement("div");
+      image.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);word-break:break-all;";
+      image.textContent = entry.image ?? "";
+      card.appendChild(image);
+    }
 
-    const actionsTd = document.createElement("td");
-    actionsTd.style.cssText = "padding:2px 8px;text-align:right;white-space:nowrap;";
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:var(--omp-space-2);margin-top:var(--omp-space-2);";
     const exportBtn = document.createElement("button");
     exportBtn.textContent = "Export";
-    exportBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
     exportBtn.addEventListener("click", () => this.#exportCatalogEntry(entry));
-    actionsTd.appendChild(exportBtn);
+    actions.appendChild(exportBtn);
     if (isImported) {
       const delBtn = document.createElement("button");
       delBtn.textContent = "Entfernen";
       delBtn.className = "omp-btn-danger";
-      delBtn.style.cssText = "font-size:11px;";
       delBtn.addEventListener("click", () => this.#removeCatalogEntry(entry));
-      actionsTd.appendChild(delBtn);
+      actions.appendChild(delBtn);
     }
-    tr.appendChild(actionsTd);
+    card.appendChild(actions);
 
-    return tr;
+    return card;
   }
 
   #renderAuditSection(): HTMLElement {

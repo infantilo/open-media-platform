@@ -937,8 +937,13 @@ export class FlowCanvas extends HTMLElement {
     // Seite platziert.
     const palette = document.createElement("div");
     palette.setAttribute("data-role", "palette");
+    // Breite 160px→220px (Nutzerauftrag 2026-09-02, "moderner und
+    // übersichtlicher") — die Katalog-Karten unten (Beschreibung +
+    // Ressourcen-Schätzung + Profil-Ampel + laufende Instanzen je Eintrag)
+    // waren bei 160px auf 9px-Schrift angewiesen, um überhaupt lesbar zu
+    // bleiben; 220px erlaubt die normale --omp-font-size-xs-Stufe.
     palette.style.cssText =
-      "position:absolute;top:0;left:0;bottom:0;width:160px;" +
+      "position:absolute;top:0;left:0;bottom:0;width:220px;" +
       "background:var(--omp-surface);color:var(--omp-text);font-family:var(--omp-font);font-size:var(--omp-font-size-sm);" +
       "padding:var(--omp-space-2);padding-top:36px;overflow-y:auto;" +
       "z-index:10;border-right:1px solid var(--omp-border);box-sizing:border-box;";
@@ -4970,17 +4975,22 @@ export class FlowCanvas extends HTMLElement {
       return;
     }
 
+    const searchWrap = document.createElement("span");
+    searchWrap.className = "omp-search-wrap";
+    searchWrap.style.cssText = "display:block;margin-bottom:var(--omp-space-2);";
     const searchInput = document.createElement("input");
     searchInput.setAttribute("data-role", "palette-search");
+    searchInput.className = "omp-search-input";
     searchInput.type = "search";
     searchInput.placeholder = "Suchen…";
     searchInput.value = this.#paletteFilterQuery;
-    searchInput.style.cssText = "width:100%;box-sizing:border-box;margin-bottom:var(--omp-space-2);";
+    searchInput.style.cssText = "width:100%;box-sizing:border-box;";
     searchInput.addEventListener("input", () => {
       this.#paletteFilterQuery = searchInput.value;
       this.#renderPaletteList();
     });
-    this.#palette.appendChild(searchInput);
+    searchWrap.appendChild(searchInput);
+    this.#palette.appendChild(searchWrap);
     if (searchWasFocused) {
       searchInput.focus();
       if (searchSelectionStart !== null) searchInput.setSelectionRange(searchSelectionStart, searchSelectionStart);
@@ -5007,8 +5017,18 @@ export class FlowCanvas extends HTMLElement {
     const instances = this.#paletteInstances;
     const hosts = this.#paletteHosts;
     for (const entry of filtered) {
+      // Nutzerauftrag 2026-09-02 ("moderner und übersichtlicher"): Start-
+      // Button, Beschreibung/Ressourcen-Schätzung, Profil-Ampel UND
+      // laufende Instanzen dieses Katalog-Eintrags stehen jetzt in EINER
+      // umrandeten Karte statt als lose Geschwister-Divs — bei vielen
+      // Einträgen war vorher auf den ersten Blick nicht erkennbar, welche
+      // Zeile zu welchem Eintrag gehört.
+      const card = document.createElement("div");
+      card.className = "omp-card-compact";
+      card.style.cssText = "margin-bottom:var(--omp-space-2);";
+
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;gap:4px;margin-bottom:4px;";
+      row.style.cssText = "display:flex;gap:4px;";
 
       const btn = document.createElement("button");
       // version (§17 Teil 5): mehrere importierte Versionen desselben
@@ -5031,7 +5051,7 @@ export class FlowCanvas extends HTMLElement {
       if (hosts.length > 0) {
         hostSelect = document.createElement("select");
         hostSelect.title = "Zielhost";
-        hostSelect.style.cssText = "font-size:10px;max-width:90px;padding:2px 4px;";
+        hostSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:90px;padding:2px 4px;";
         const localOpt = document.createElement("option");
         localOpt.value = "";
         localOpt.textContent = "(lokal)";
@@ -5059,7 +5079,7 @@ export class FlowCanvas extends HTMLElement {
         ioPortSelect = document.createElement("select");
         ioPortSelect.title =
           "Physischer DeckLink-Port, den diese Instanz exklusiv belegt (D13 I/O-Karten-Claim). Ohne freien passenden Port lehnt der Orchestrator den Start ehrlich ab, statt mit dem eingebauten Default (device-number=0, Eingang) in einen Crash-Loop zu laufen.";
-        ioPortSelect.style.cssText = "font-size:10px;max-width:110px;padding:2px 4px;";
+        ioPortSelect.style.cssText = "font-size:var(--omp-font-size-xs);max-width:110px;padding:2px 4px;";
         const ioPortOptions: Array<[string, string]> = [
           ["in", "I/O-Port: Eingang"],
           ["out", "I/O-Port: Ausgang"],
@@ -5094,7 +5114,7 @@ export class FlowCanvas extends HTMLElement {
         this.#startInstance(entry.type, entry.version, hostSelect?.value || undefined, requiredIoPort);
       });
       row.appendChild(btn);
-      this.#palette.appendChild(row);
+      card.appendChild(row);
 
       // §17 Teil 1 (docs/END-GOAL-FEATURES.md, 2026-07-17): sichtbare
       // Kurzbeschreibung + grobe Ressourcen-Schätzung statt nur eines
@@ -5105,7 +5125,7 @@ export class FlowCanvas extends HTMLElement {
       // davon, ob der Node-Typ je gemessen wurde).
       if (entry.description || entry.expectedResources) {
         const meta = document.createElement("div");
-        meta.style.cssText = "margin:-2px 0 6px 2px;color:var(--omp-text-dim);font-size:9px;line-height:1.3;";
+        meta.style.cssText = "margin:var(--omp-space-1) 0;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);line-height:1.3;";
         if (entry.description) {
           const desc = document.createElement("div");
           desc.textContent = entry.description;
@@ -5117,7 +5137,7 @@ export class FlowCanvas extends HTMLElement {
           res.style.cssText = "font-style:italic;";
           meta.appendChild(res);
         }
-        this.#palette.appendChild(meta);
+        card.appendChild(meta);
       }
 
       // Kapitel 14 Teil 3 (docs/END-GOAL-FEATURES.md §14.3d):
@@ -5128,8 +5148,8 @@ export class FlowCanvas extends HTMLElement {
       // Kapazität).
       const profileTag = document.createElement("div");
       profileTag.setAttribute("data-role", "profile-tag");
-      profileTag.style.cssText = "margin:-2px 0 6px 2px;font-size:9px;line-height:1.3;";
-      this.#palette.appendChild(profileTag);
+      profileTag.style.cssText = "margin:var(--omp-space-1) 0;font-size:var(--omp-font-size-xs);line-height:1.3;";
+      card.appendChild(profileTag);
       void this.#applyProfileTag(profileTag, entry.type, hostSelect?.value || "");
       hostSelect?.addEventListener("change", () => {
         void this.#applyProfileTag(profileTag, entry.type, hostSelect.value || "");
@@ -5140,8 +5160,9 @@ export class FlowCanvas extends HTMLElement {
       // seiner Versions-Karten doppelt auftauchen, sobald mehrere
       // Versionen desselben Typs importiert sind.
       for (const inst of instances.filter((i) => i.type === entry.type && (i.version || "") === (entry.version || ""))) {
-        this.#palette.appendChild(this.#renderInstanceRow(inst, hosts));
+        card.appendChild(this.#renderInstanceRow(inst, hosts));
       }
+      this.#palette.appendChild(card);
     }
   }
 
@@ -5204,10 +5225,15 @@ export class FlowCanvas extends HTMLElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "instance-row");
     row.setAttribute("data-instance-id", inst.id);
+    // Oberer Rahmen statt des früheren reinen Einrückungs-Abstands
+    // (Nutzerauftrag 2026-09-02) — trennt sichtbar von der Start-Zeile/
+    // Metadaten desselben Katalog-Eintrags oberhalb, jetzt dass beide im
+    // selben `.omp-card-compact` stecken.
     row.style.cssText =
-      `margin:0 0 6px 4px;padding:3px 5px;border-radius:3px;font-size:10px;` +
-      `border-left:3px solid ${inst.crashed ? "#c0392b" : "#4caf50"};` +
-      `background:${inst.crashed ? "rgba(192,57,43,0.15)" : "rgba(255,255,255,0.04)"};`;
+      `margin-top:var(--omp-space-2);padding:var(--omp-space-2) var(--omp-space-2) var(--omp-space-2) 6px;` +
+      `border-top:1px solid var(--omp-border);font-size:var(--omp-font-size-xs);border-radius:0 var(--omp-radius) var(--omp-radius) 0;` +
+      `border-left:3px solid ${inst.crashed ? "var(--omp-error)" : "var(--omp-preset)"};` +
+      `background:${inst.crashed ? "rgba(239,83,80,0.12)" : "rgba(67,160,71,0.08)"};`;
 
     const label = document.createElement("div");
     label.textContent = inst.label;
@@ -5221,7 +5247,7 @@ export class FlowCanvas extends HTMLElement {
     if (inst.restartCount) {
       const restartTag = document.createElement("div");
       restartTag.textContent = `↻ ${inst.restartCount}× automatisch neu gestartet`;
-      restartTag.style.cssText = "color:var(--omp-cue);font-size:9px;margin-top:1px;";
+      restartTag.style.cssText = "color:var(--omp-cue);font-size:var(--omp-font-size-xs);margin-top:1px;";
       row.appendChild(restartTag);
     }
 
@@ -5229,7 +5255,7 @@ export class FlowCanvas extends HTMLElement {
       const hostLabel = hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId;
       const hostTag = document.createElement("div");
       hostTag.textContent = `Host: ${hostLabel}`;
-      hostTag.style.cssText = "color:var(--omp-text-dim);font-size:9px;";
+      hostTag.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
       row.appendChild(hostTag);
     }
 
@@ -5239,7 +5265,7 @@ export class FlowCanvas extends HTMLElement {
       const resourceTag = document.createElement("div");
       const rss = inst.rssBytes !== undefined ? `${(inst.rssBytes / 1024 / 1024).toFixed(0)} MB` : "?";
       resourceTag.textContent = `CPU ${inst.cpuPercent.toFixed(0)}% · RAM ${rss}`;
-      resourceTag.style.cssText = "color:var(--omp-text-dim);font-size:9px;";
+      resourceTag.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
       row.appendChild(resourceTag);
     }
 
@@ -5252,7 +5278,7 @@ export class FlowCanvas extends HTMLElement {
 
     const stopBtn = document.createElement("button");
     stopBtn.textContent = inst.crashed ? "Entfernen" : "Stop";
-    stopBtn.style.cssText = "font-size:10px;cursor:pointer;margin-top:3px;";
+    stopBtn.style.cssText = "font-size:var(--omp-font-size-xs);cursor:pointer;margin-top:3px;";
     stopBtn.className = "omp-btn-danger";
     stopBtn.addEventListener("click", () => this.#stopInstance(inst.id, inst.label));
     row.appendChild(stopBtn);
