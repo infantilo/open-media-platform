@@ -205,10 +205,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    // Kein eigener Teardown-Code (s. pipeline.rs-Moduldoku): der Prozess
-    // endet hier, das OS räumt die GStreamer-Pipeline mit ihm auf — kein
-    // zweiter Zweig, kein Wiederverwenden, kein kontrollierter Drain
-    // nötig wie bei omp-mxf-player.
+    // Kein eigener Teardown-Code hier: `pipeline::run()` läuft in einer
+    // eigenen Endlosschleife (baut den Zweig bei jedem EOS neu auf, s.
+    // dortige Doku zum Nutzerfund 2026-09-02 "Loop statt Stillstand nach
+    // dem ersten Dateiende") — der Prozess endet hier, das OS räumt die
+    // GStreamer-Pipeline mit ihm ab.
     drop(pipeline_thread);
     Ok(())
 }

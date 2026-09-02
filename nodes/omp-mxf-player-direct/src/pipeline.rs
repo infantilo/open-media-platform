@@ -56,6 +56,17 @@
 //! nicht das aufwendigere Zwei-Phasen-Verfahren aus `omp-mxf-player`,
 //! das dort spezifisch die "anderer Slot läuft parallel weiter"-
 //! Randbedingung adressiert, die hier nicht existiert.
+//!
+//! **Loop statt Stillstand nach EOS** (Nutzerfund 2026-09-02: "zeigt
+//! automatic multiviewer nur ein Karo/Rennflaggen-Muster"): die erste
+//! Fassung spielte die Datei EINMAL und stand danach für immer still —
+//! per CDP live bestätigt, dass WÄHREND echter Wiedergabe reales Bild
+//! ankommt (kein Rendering-Bug), das Karo-Muster war schlicht
+//! Multiviewers eigene Anzeige für eine seit einer Weile inaktive
+//! Quelle. `run()` baut den Zweig deshalb jetzt bei jedem EOS komplett
+//! neu auf (s. dortige Doku) — dieselben `flow_id`s bleiben über alle
+//! Zyklen gleich, ein Betrachter sieht denselben Flow einfach
+//! durchgehend weiterlaufen statt eines neuen pro Zyklus.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -157,7 +168,7 @@ pub struct ActivePipeline {
 /// `Playing` für die gesamte Pipeline an — s. Moduldoku für die
 /// Begründung, warum hier (anders als `omp-mxf-player`) kein
 /// mehrphasiger Preroll-Tanz nötig ist.
-fn build(config: &Config, tx: UnboundedSender<Event>) -> Result<ActivePipeline, String> {
+fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mpsc::Sender<()>) -> Result<ActivePipeline, String> {
     let context = Arc::new(MxlContext::new(&config.domain)?);
     let pipeline = gst::Pipeline::new();
 
@@ -374,6 +385,18 @@ fn build(config: &Config, tx: UnboundedSender<Event>) -> Result<ActivePipeline, 
         eprintln!("omp-mxf-player-direct: no-more-pads nicht innerhalb 3s nach Playing beobachtet (nur Diagnose, kein Abbruch)");
     }
 
+    // Nutzerfund 2026-09-02 ("testinstanz hat kein UI... zeigt automatic
+    // multiviewer nur ein Karo/Rennflaggen-Muster"): live per CDP
+    // bestätigt, dass WÄHREND echter Wiedergabe reales Bild ankommt (kein
+    // Rendering-Bug) — das Karo-Muster war lediglich der Multiviewer-
+    // eigene "Quelle liefert schon länger nichts mehr"-Zustand, weil
+    // dieser Node bis hierhin nach einem einzelnen EOS für immer
+    // stillstand (kein Loop, keine Playlist-Bedienung, um erneut
+    // abzuspielen). Fix: EOS baut den Zweig automatisch neu auf (Loop),
+    // `run()` unten fängt das über `cycle_done` ab — kein Alert mehr bei
+    // EOS (das ist jetzt der erwartete, wiederkehrende Normalfall, kein
+    // Fehler), nur noch echte Bus-Errors gehen weiterhin als
+    // `Event::Error`/Alert raus.
     let bus = pipeline.bus().expect("pipeline has no bus");
     let tx_for_bus = tx.clone();
     std::thread::spawn(move || {
@@ -381,14 +404,13 @@ fn build(config: &Config, tx: UnboundedSender<Event>) -> Result<ActivePipeline, 
             use gst::MessageView;
             match msg.view() {
                 MessageView::Error(err) => {
-                    let _ = tx_for_bus.send(Event::Error(format!(
-                        "{} ({:?})",
-                        err.error(),
-                        err.debug()
-                    )));
+                    let _ = tx_for_bus.send(Event::Error(format!("{} ({:?})", err.error(), err.debug())));
+                    let _ = cycle_done.send(());
+                    return;
                 }
                 MessageView::Eos(_) => {
-                    let _ = tx_for_bus.send(Event::Error("Datei-Ende erreicht (EOS) — kein Loop in diesem Diagnose-Node".to_string()));
+                    let _ = cycle_done.send(());
+                    return;
                 }
                 _ => {}
             }
@@ -404,6 +426,19 @@ fn build(config: &Config, tx: UnboundedSender<Event>) -> Result<ActivePipeline, 
     })
 }
 
+/// Läuft in einer Endlosschleife: baut den Zweig, spielt ihn bis zu einem
+/// echten EOS (oder Bus-Error) durch, baut ihn dann KOMPLETT neu
+/// (dieselbe `Config`, also dieselben MXL-`flow_id`s — Multiviewer/Viewer
+/// sehen denselben Flow einfach kontinuierlich weiterlaufen statt eines
+/// neuen) — s. Moduldoku-Ergänzung zum Nutzerfund 2026-09-02 ("Karo/
+/// Rennflaggen-Muster" = Multiviewers Anzeige für eine seit einer Weile
+/// stillstehende Quelle, kein Rendering-Bug). Kein `seek(0)` auf den
+/// bestehenden `mxfdemux` nach EOS (dokumentiert unzuverlässig,
+/// `omp-mxf-player/src/pipeline.rs` Nachtrag 158/159: `mxfdemux`s
+/// eigener Pull-Task startet nach echtem Dateiende nicht zuverlässig neu)
+/// — kompletter Neuaufbau ist derselbe, bereits als fehlerfrei bestätigte
+/// Weg wie der allererste Aufbau, kein zweiter, unabhängig zu
+/// verifizierender Codepfad.
 pub fn run(
     config: Config,
     tx: UnboundedSender<Event>,
@@ -416,26 +451,40 @@ pub fn run(
         return;
     }
 
-    let active = match build(&config, tx.clone()) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = tx.send(Event::Error(format!("build failed: {e}")));
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
-
-    let _ = ready.send(Ok(PipelineHandle {
-        video_flowed: active.video_flowed.clone(),
-        group_flowed: active.group_flowed.clone(),
-    }));
-
-    // Hält die Pipeline (und damit `active`, dessen Drop sie abbaut)
-    // für die Lebensdauer des Prozesses am Leben — Teardown erfolgt wie
-    // bei jedem anderen Node über SIGTERM→Prozessende, kein eigener
-    // Teardown-Code nötig (kein zweiter Zweig, kein Wiederverwenden).
+    let mut ready = Some(ready);
     loop {
-        std::thread::park();
+        let (cycle_done_tx, cycle_done_rx) = std::sync::mpsc::channel::<()>();
+        let active = match build(&config, tx.clone(), cycle_done_tx) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = tx.send(Event::Error(format!("build failed: {e}")));
+                if let Some(r) = ready.take() {
+                    let _ = r.send(Err(e));
+                    return; // erster Aufbau fehlgeschlagen — Prozess beendet sich (main.rs).
+                }
+                // Ein SPÄTERER Neuaufbau (nach mind. einem erfolgreichen
+                // Durchlauf) schlägt fehl: nicht den ganzen, bereits
+                // registrierten Node abwürgen — kurz warten, erneut
+                // versuchen (z. B. transiente Ressourcenknappheit).
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                continue;
+            }
+        };
+
+        if let Some(r) = ready.take() {
+            let _ = r.send(Ok(PipelineHandle {
+                video_flowed: active.video_flowed.clone(),
+                group_flowed: active.group_flowed.clone(),
+            }));
+        }
+
+        // Blockiert, bis DIESER Zyklus per Bus-Thread EOS oder einen
+        // Error meldet (s. build()) — danach `active` fallenlassen (baut
+        // Pipeline+MXL-Outputs sauber ab, s. ActivePipeline-Doku) und von
+        // vorn beginnen.
+        let _ = cycle_done_rx.recv();
+        drop(active);
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
 
