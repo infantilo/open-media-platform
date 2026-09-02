@@ -151,17 +151,34 @@ const POLL_FALLBACK_INTERVAL_MS = 30000;
 // Event-Typen, bei denen die Workflow-Liste neu geladen wird.
 const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 
+// Nutzerauftrag 2026-09-02 ("Workflows nach demselben Muster"): Design-
+// Tokens statt roher Hex-Werte, gleiche Farbsemantik wie überall sonst
+// im Projekt (preset=grün/aktiv-gut, cue=orange/Übergang, error=rot,
+// info=blau für einen eigenständigen Zustand, text-dim=grau/inaktiv).
 const STATUS_COLORS: Record<string, string> = {
-  stopped: "#999",
-  starting: "#e0a020",
-  started: "#4caf50",
-  stopping: "#e0a020",
-  failed: "#e57373",
+  stopped: "var(--omp-text-dim)",
+  starting: "var(--omp-cue)",
+  started: "var(--omp-preset)",
+  stopping: "var(--omp-cue)",
+  failed: "var(--omp-error)",
   // Kapitel 12 Teil 3: eigene Farbe statt "stopped" grau — visuell klar
   // unterscheidbar, dass hier bewusst pausiert statt (endgültig)
   // gestoppt wurde.
-  paused: "#5b9bd5",
-  pausing: "#e0a020",
+  paused: "var(--omp-info)",
+  pausing: "var(--omp-cue)",
+};
+
+// Badge-Modifier-Klasse (design-tokens.css) je Status — dieselbe
+// Farbzuordnung wie STATUS_COLORS oben, als CSS-Klasse statt Inline-Farbe
+// für die Status-Badges in #renderWorkflowRow.
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  stopped: "",
+  starting: "omp-badge-cue",
+  started: "omp-badge-running",
+  stopping: "omp-badge-cue",
+  failed: "omp-badge-error",
+  paused: "omp-badge-info",
+  pausing: "omp-badge-cue",
 };
 
 // ExportedWorkflow (Kapitel 12 Teil 3, §12.3d) — Wire-Format identisch
@@ -550,7 +567,7 @@ class WorkflowsView extends HTMLElement {
   #openRoleDesigner(workflowId: string | null) {
     const overlay = document.createElement("div");
     overlay.setAttribute("data-role", "role-designer-overlay");
-    overlay.style.cssText = "position:fixed;inset:0;z-index:2000;background:#1e1e1e;";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:2000;background:var(--omp-bg);";
 
     const designer = document.createElement("omp-role-designer") as RoleDesigner;
     overlay.appendChild(designer);
@@ -593,18 +610,18 @@ class WorkflowsView extends HTMLElement {
     headingTitle.className = "omp-h1";
     headingTitle.textContent = `Workflows (${this.#workflows.length})`;
     heading.appendChild(headingTitle);
+    // Nutzerauftrag 2026-09-02 ("Workflows nach demselben Muster"): "+ Neu"
+    // öffnet jetzt das Modal (s. #renderFormModal) statt die Form inline
+    // aufzuklappen — schließen läuft über #closeWorkflowForm (Modal-×,
+    // Backdrop-Klick, Escape), deshalb hier immer ein frischer Start statt
+    // eines Umschalt-Zustands mit "Abbrechen"-Beschriftung.
     const newBtn = document.createElement("button");
-    newBtn.textContent = this.#showForm ? "Abbrechen" : "+ Neu";
-    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    newBtn.className = "omp-btn-primary";
+    newBtn.textContent = "+ Neu";
     newBtn.addEventListener("click", () => {
-      this.#showForm = !this.#showForm;
-      if (!this.#showForm) {
-        // Abbrechen räumt auch einen laufenden Bearbeiten-Vorgang auf —
-        // sonst würde ein späteres "+ Neu" versehentlich wieder als PUT
-        // auf die zuletzt bearbeitete ID gesendet.
-        this.#editingId = null;
-        this.#resetForm();
-      }
+      this.#editingId = null;
+      this.#resetForm();
+      this.#showForm = true;
       this.#render();
     });
     heading.appendChild(newBtn);
@@ -614,7 +631,7 @@ class WorkflowsView extends HTMLElement {
     // reine UX-Alternative, kein zweiter Datenpfad.
     const designBtn = document.createElement("button");
     designBtn.textContent = "Grafisch entwerfen";
-    designBtn.style.cssText = "font-size:11px;cursor:pointer;margin-left:6px;";
+    designBtn.style.cssText = "margin-left:6px;";
     designBtn.addEventListener("click", () => this.#openRoleDesigner(null));
     heading.appendChild(designBtn);
 
@@ -624,7 +641,7 @@ class WorkflowsView extends HTMLElement {
     const importLabel = document.createElement("label");
     importLabel.textContent = "Importieren";
     importLabel.style.cssText =
-      "font-size:11px;cursor:pointer;border:1px solid #555;border-radius:3px;padding:2px 6px;margin-left:6px;";
+      "font-size:11px;cursor:pointer;border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:2px 6px;margin-left:6px;";
     const importInput = document.createElement("input");
     importInput.type = "file";
     importInput.accept = "application/json";
@@ -658,7 +675,7 @@ class WorkflowsView extends HTMLElement {
     this.appendChild(heading);
 
     if (this.#showForm) {
-      this.appendChild(this.#renderForm());
+      this.appendChild(this.#renderFormModal());
     }
 
     if (this.#workflows.length === 0 && !this.#showForm) {
@@ -694,7 +711,7 @@ class WorkflowsView extends HTMLElement {
     // Status-Badge, Kategorie-Icon.
     const grid = document.createElement("div");
     grid.setAttribute("data-role", "workflow-grid");
-    grid.style.cssText = "display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px;";
+    grid.className = "omp-card-grid";
     for (const wf of filtered) {
       grid.appendChild(this.#renderWorkflowRow(wf));
     }
@@ -710,15 +727,21 @@ class WorkflowsView extends HTMLElement {
     const bar = document.createElement("div");
     bar.style.cssText = "display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap;";
 
+    const searchWrap = document.createElement("span");
+    searchWrap.className = "omp-search-wrap";
+    searchWrap.style.cssText = "flex:1;min-width:160px;";
     const searchInput = document.createElement("input");
+    searchInput.className = "omp-search-input";
+    searchInput.type = "search";
     searchInput.placeholder = "Suche (Titel, Beschreibung, Tags) …";
     searchInput.value = this.#searchQuery;
-    searchInput.style.cssText = "flex:1;min-width:160px;";
+    searchInput.style.cssText = "width:100%;box-sizing:border-box;";
     searchInput.addEventListener("input", () => {
       this.#searchQuery = searchInput.value;
       this.#refreshGrid();
     });
-    bar.appendChild(searchInput);
+    searchWrap.appendChild(searchInput);
+    bar.appendChild(searchWrap);
 
     const categorySelect = document.createElement("select");
     const anyCategoryOpt = document.createElement("option");
@@ -784,16 +807,21 @@ class WorkflowsView extends HTMLElement {
   // Änderung: docs/decisions.md).
   #renderTopologyPreview(wf: Workflow): HTMLElement {
     const box = document.createElement("div");
+    // Rand in voller Status-Farbe statt der früheren "+44"-Alpha-
+    // Abblendung (Hex-Alpha-Suffix lässt sich nicht auf einen
+    // var(--omp-*)-Wert aufkleben) — gleiche volle Deckkraft wie der
+    // Akzent-Rand in #renderWorkflowRow, optisch konsistent statt einer
+    // zweiten, abweichenden Rand-Intensität.
     box.style.cssText =
       "width:100%;height:100px;border-radius:2px;margin-bottom:4px;overflow:hidden;" +
-      `background:#111;border:1px solid ${STATUS_COLORS[wf.status] ?? "#999"}44;`;
+      `background:var(--omp-bg);border:1px solid ${STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)"};`;
 
     const roles = wf.definition.roles;
     if (roles.length === 0) {
       const placeholder = document.createElement("div");
       placeholder.style.cssText =
         "width:100%;height:100%;display:flex;align-items:center;justify-content:center;" +
-        "color:#555;font-size:11px;";
+        "color:var(--omp-text-dim);font-size:11px;";
       placeholder.textContent = "Keine Rollen";
       box.appendChild(placeholder);
       return box;
@@ -829,7 +857,10 @@ class WorkflowsView extends HTMLElement {
       line.setAttribute("y1", String(y1));
       line.setAttribute("x2", String(x2));
       line.setAttribute("y2", String(y2));
-      line.setAttribute("stroke", "#5b9bd5");
+      // CSS-Custom-Properties werden von SVG-Präsentationsattributen
+      // (nicht nur style=) aufgelöst — kein Fallback-Hex nötig, dieselbe
+      // --omp-info-Variable wie überall sonst.
+      line.setAttribute("stroke", "var(--omp-info)");
       line.setAttribute("stroke-width", "0.6");
       svg.appendChild(line);
     }
@@ -844,8 +875,8 @@ class WorkflowsView extends HTMLElement {
       rect.setAttribute("width", String(boxW));
       rect.setAttribute("height", String(boxH));
       rect.setAttribute("rx", "1");
-      rect.setAttribute("fill", "#2a2a2a");
-      rect.setAttribute("stroke", "#666");
+      rect.setAttribute("fill", "var(--omp-surface-raised)");
+      rect.setAttribute("stroke", "var(--omp-border)");
       rect.setAttribute("stroke-width", "0.4");
       svg.appendChild(rect);
 
@@ -854,7 +885,7 @@ class WorkflowsView extends HTMLElement {
       label.setAttribute("y", String(cy + 1.5));
       label.setAttribute("text-anchor", "middle");
       label.setAttribute("font-size", "3.6");
-      label.setAttribute("fill", "#ccc");
+      label.setAttribute("fill", "var(--omp-text)");
       label.textContent = role.name.length > 14 ? role.name.slice(0, 13) + "…" : role.name;
       svg.appendChild(label);
     });
@@ -867,10 +898,12 @@ class WorkflowsView extends HTMLElement {
     const row = document.createElement("div");
     row.setAttribute("data-role", "workflow-row");
     row.setAttribute("data-workflow-id", wf.id);
+    row.className = "omp-card";
+    // .omp-card liefert Fläche/Rahmen/Radius — nur der Status-Akzentrand
+    // links bleibt hier Inline (variiert pro Workflow, keine Klasse dafür).
     row.style.cssText =
-      `padding:var(--omp-space-2) var(--omp-space-3);border-radius:var(--omp-radius);` +
-      `background:var(--omp-surface);border:1px solid var(--omp-border);` +
-      `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "#999"};display:flex;flex-direction:column;`;
+      `padding:var(--omp-space-2) var(--omp-space-3);` +
+      `border-left:3px solid ${STATUS_COLORS[wf.status] ?? "var(--omp-text-dim)"};display:flex;flex-direction:column;`;
 
     row.appendChild(this.#renderTopologyPreview(wf));
 
@@ -886,7 +919,7 @@ class WorkflowsView extends HTMLElement {
     const status = document.createElement("span");
     status.setAttribute("data-role", "workflow-status");
     status.textContent = wf.status;
-    status.style.cssText = `color:${STATUS_COLORS[wf.status] ?? "#999"};font-size:11px;flex-shrink:0;`;
+    status.className = `omp-badge ${STATUS_BADGE_CLASS[wf.status] ?? ""}`.trim();
     header.append(title, status);
     row.appendChild(header);
 
@@ -894,9 +927,8 @@ class WorkflowsView extends HTMLElement {
     // eines echten Icons — bis auf Weiteres kein Icon-Katalog vorhanden.
     if (wf.definition.category) {
       const categoryBadge = document.createElement("span");
-      categoryBadge.style.cssText =
-        "display:inline-block;font-size:10px;color:#bbb;border:1px solid #555;border-radius:3px;" +
-        "padding:0 4px;margin-top:2px;align-self:flex-start;";
+      categoryBadge.className = "omp-badge";
+      categoryBadge.style.cssText = "margin-top:2px;align-self:flex-start;";
       categoryBadge.textContent = CATEGORY_LABELS[wf.definition.category] ?? wf.definition.category;
       row.appendChild(categoryBadge);
     }
@@ -904,7 +936,7 @@ class WorkflowsView extends HTMLElement {
     if (wf.definition.description) {
       const desc = document.createElement("div");
       desc.style.cssText =
-        "color:#ccc;font-size:11px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;" +
+        "font-size:var(--omp-font-size-xs);margin-top:2px;overflow:hidden;text-overflow:ellipsis;" +
         "display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;";
       desc.textContent = wf.definition.description;
       row.appendChild(desc);
@@ -915,7 +947,8 @@ class WorkflowsView extends HTMLElement {
       tagsRow.style.cssText = "display:flex;gap:3px;flex-wrap:wrap;margin-top:2px;";
       for (const tag of wf.definition.tags) {
         const pill = document.createElement("span");
-        pill.style.cssText = "font-size:10px;color:#999;background:rgba(255,255,255,0.06);border-radius:8px;padding:0 6px;";
+        pill.style.cssText =
+          "font-size:10px;color:var(--omp-text-dim);background:var(--omp-surface-raised);border-radius:8px;padding:0 6px;";
         pill.textContent = tag;
         tagsRow.appendChild(pill);
       }
@@ -923,7 +956,7 @@ class WorkflowsView extends HTMLElement {
     }
 
     const roles = document.createElement("div");
-    roles.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
+    roles.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
     // Nachtrag 99: zeigt den vom Auto-Placement tatsächlich gewählten
     // Host an (Runtime.hostId), sobald gestartet — kann von der bloßen
     // Präferenz (Role.hostId) abweichen, falls diese nicht reichte.
@@ -944,7 +977,7 @@ class WorkflowsView extends HTMLElement {
     const settings = wf.definition.settings;
     if (settings?.programWidth && settings?.programHeight) {
       const res = document.createElement("div");
-      res.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
+      res.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
       res.textContent = `${settings.programWidth}×${settings.programHeight}`;
       row.appendChild(res);
     }
@@ -958,14 +991,14 @@ class WorkflowsView extends HTMLElement {
     if (scheduleCount > 0) badges.push(`${scheduleCount} Zeitplan${scheduleCount === 1 ? "" : "e"}`);
     if (badges.length > 0) {
       const badgeRow = document.createElement("div");
-      badgeRow.style.cssText = "color:#999;font-size:11px;margin-top:2px;";
+      badgeRow.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
       badgeRow.textContent = badges.join(" · ");
       row.appendChild(badgeRow);
     }
 
     if (wf.error) {
       const err = document.createElement("div");
-      err.style.cssText = "color:#e57373;font-size:11px;margin-top:2px;white-space:pre-wrap;";
+      err.style.cssText = "color:var(--omp-error);font-size:11px;margin-top:2px;white-space:pre-wrap;";
       err.textContent = wf.error;
       row.appendChild(err);
     }
@@ -985,14 +1018,12 @@ class WorkflowsView extends HTMLElement {
 
     const startBtn = document.createElement("button");
     startBtn.textContent = wf.status === "paused" ? "Fortsetzen" : "Start";
-    startBtn.style.cssText = "font-size:11px;cursor:pointer;";
     startBtn.disabled = !canStart;
     startBtn.addEventListener("click", () => this.#startWorkflow(wf.id));
     actions.appendChild(startBtn);
 
     const stopBtn = document.createElement("button");
     stopBtn.textContent = "Stop";
-    stopBtn.style.cssText = "font-size:11px;cursor:pointer;";
     stopBtn.disabled = !canStop;
     stopBtn.addEventListener("click", () => this.#stopWorkflow(wf));
     actions.appendChild(stopBtn);
@@ -1000,7 +1031,6 @@ class WorkflowsView extends HTMLElement {
     // Kapitel 12 Teil 3 (§12.3c).
     const pauseBtn = document.createElement("button");
     pauseBtn.textContent = "Pausieren";
-    pauseBtn.style.cssText = "font-size:11px;cursor:pointer;";
     pauseBtn.disabled = !canPause;
     pauseBtn.addEventListener("click", () => this.#pauseWorkflow(wf));
     actions.appendChild(pauseBtn);
@@ -1010,7 +1040,6 @@ class WorkflowsView extends HTMLElement {
     // Löschen, kein Umschreiben unter laufenden Prozessen.
     const editBtn = document.createElement("button");
     editBtn.textContent = "Bearbeiten";
-    editBtn.style.cssText = "font-size:11px;cursor:pointer;";
     editBtn.disabled = !isIdle;
     editBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
     editBtn.addEventListener("click", () => this.#editWorkflow(wf));
@@ -1021,7 +1050,6 @@ class WorkflowsView extends HTMLElement {
     // (PUT nur in stopped/paused), reine UX-Alternative.
     const designEditBtn = document.createElement("button");
     designEditBtn.textContent = "Grafisch bearbeiten";
-    designEditBtn.style.cssText = "font-size:11px;cursor:pointer;";
     designEditBtn.disabled = !isIdle;
     designEditBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
     designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
@@ -1038,7 +1066,6 @@ class WorkflowsView extends HTMLElement {
     // muss (gleiche lose Kopplung wie sonst zwischen den Tab-Views).
     const editInFlowBtn = document.createElement("button");
     editInFlowBtn.textContent = "Im Flow-Editor bearbeiten";
-    editInFlowBtn.style.cssText = "font-size:11px;cursor:pointer;";
     editInFlowBtn.disabled = !isIdle;
     editInFlowBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
     editInFlowBtn.addEventListener("click", () => {
@@ -1049,7 +1076,6 @@ class WorkflowsView extends HTMLElement {
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
     delBtn.className = "omp-btn-danger";
-    delBtn.style.cssText = "font-size:11px;";
     delBtn.disabled = !isIdle;
     delBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann löschen";
     delBtn.addEventListener("click", () => this.#deleteWorkflow(wf.id));
@@ -1059,7 +1085,6 @@ class WorkflowsView extends HTMLElement {
     // Export beschreibt die Definition, nicht den Laufzeitzustand).
     const exportBtn = document.createElement("button");
     exportBtn.textContent = "Exportieren";
-    exportBtn.style.cssText = "font-size:11px;cursor:pointer;";
     exportBtn.addEventListener("click", () => this.#exportWorkflow(wf));
     actions.appendChild(exportBtn);
 
@@ -1067,9 +1092,64 @@ class WorkflowsView extends HTMLElement {
     return row;
   }
 
+  #closeWorkflowForm() {
+    this.#showForm = false;
+    this.#editingId = null;
+    this.#resetForm();
+    this.#render();
+  }
+
+  // Backdrop-Klick/Escape schließen das Modal — gleiche Formel wie
+  // admin-view.ts' #renderCatalogModal (Node-Katalog-Redesign
+  // 2026-09-02), hier wiederverwendet statt neu erfunden. Deutlich
+  // größeres Formular als beim Node-Katalog (Rollen/Verbindungen/
+  // Zeitpläne) — eigene max-width statt der .omp-modal-Vorgabe.
+  #renderFormModal(): HTMLElement {
+    const overlay = document.createElement("div");
+    overlay.className = "omp-modal-overlay";
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) this.#closeWorkflowForm();
+    });
+    overlay.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") this.#closeWorkflowForm();
+    });
+
+    const modal = document.createElement("div");
+    modal.className = "omp-modal";
+    // 880px statt der .omp-modal-Vorgabe (560px): die Rollen-Zeile hat
+    // sechs Nebeneinander-Felder (Name/Typ/Host/Affinität/Redundanz/
+    // Format) — bei 720px liefen Platzhaltertexte sichtbar ab
+    // (live per CDP entdeckt), 880px reicht auf einem normalen Monitor
+    // ohne unnötiges Umbrechen (flex-wrap bleibt als Fallback für
+    // schmalere Fenster erhalten).
+    modal.style.maxWidth = "880px";
+
+    const modalHeading = document.createElement("div");
+    modalHeading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
+    const modalTitle = document.createElement("span");
+    modalTitle.className = "omp-h1";
+    modalTitle.textContent = this.#editingId ? "Workflow bearbeiten" : "Neuen Workflow anlegen";
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.setAttribute("aria-label", "Schließen");
+    closeBtn.addEventListener("click", () => this.#closeWorkflowForm());
+    modalHeading.append(modalTitle, closeBtn);
+    modal.appendChild(modalHeading);
+
+    modal.appendChild(this.#renderForm());
+
+    overlay.appendChild(modal);
+    queueMicrotask(() => modal.querySelector("input")?.focus());
+    return overlay;
+  }
+
   #renderForm(): HTMLElement {
+    // Kein eigener Rahmen/Hintergrund mehr — dieses Formular steckt jetzt
+    // in .omp-modal (s. #renderFormModal), das beides bereits liefert.
+    // Kein flex/gap hier: die einzelnen Felder/Reihen unten tragen bereits
+    // je eigene margin-bottom-Werte (unverändert) — ein zusätzliches Gap
+    // würde sich damit addieren, nicht ersetzen.
     const form = document.createElement("div");
-    form.style.cssText = "border:1px solid #333;border-radius:4px;padding:8px;margin-bottom:8px;";
 
     const nameInput = document.createElement("input");
     nameInput.placeholder = "Workflow-Name";
@@ -1085,7 +1165,7 @@ class WorkflowsView extends HTMLElement {
     // Katalog den Namen als Titel-Fallback und keine Beschreibung/Tags.
     const metaHeading = document.createElement("div");
     metaHeading.textContent = "Katalog-Metadaten (optional)";
-    metaHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    metaHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(metaHeading);
 
     const titleInput = document.createElement("input");
@@ -1140,7 +1220,7 @@ class WorkflowsView extends HTMLElement {
 
     const rolesHeading = document.createElement("div");
     rolesHeading.textContent = "Rollen";
-    rolesHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    rolesHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(rolesHeading);
 
     this.#formRoles.forEach((role, i) => {
@@ -1272,7 +1352,7 @@ class WorkflowsView extends HTMLElement {
 
     const connHeading = document.createElement("div");
     connHeading.textContent = "Verbindungen (Rolle → Rolle)";
-    connHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    connHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(connHeading);
 
     const roleNames = this.#formRoles.map((r) => r.name).filter(Boolean);
@@ -1332,7 +1412,7 @@ class WorkflowsView extends HTMLElement {
     // ihren eigenen Default.
     const settingsHeading = document.createElement("div");
     settingsHeading.textContent = "Auflösung (optional)";
-    settingsHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    settingsHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(settingsHeading);
 
     const settingsRow = document.createElement("div");
@@ -1347,7 +1427,7 @@ class WorkflowsView extends HTMLElement {
     });
     const xLabel = document.createElement("span");
     xLabel.textContent = "×";
-    xLabel.style.cssText = "color:#999;";
+    xLabel.style.cssText = "color:var(--omp-text-dim);";
     const heightInput = document.createElement("input");
     heightInput.type = "number";
     heightInput.placeholder = "Höhe (z. B. 720)";
@@ -1366,7 +1446,7 @@ class WorkflowsView extends HTMLElement {
     // orchestrator/internal/workflows/latencybudget.go).
     const latencyHeading = document.createElement("div");
     latencyHeading.textContent = "Latenzbudget in Video-Frames (optional)";
-    latencyHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    latencyHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(latencyHeading);
 
     const latencyRow = document.createElement("div");
@@ -1386,7 +1466,7 @@ class WorkflowsView extends HTMLElement {
     // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1): Start/Stop-Zeitpläne.
     const scheduleHeading = document.createElement("div");
     scheduleHeading.textContent = "Zeitsteuerung (optional)";
-    scheduleHeading.style.cssText = "color:#999;margin-bottom:2px;";
+    scheduleHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(scheduleHeading);
 
     this.#formSchedules.forEach((sched, i) => {
@@ -1417,8 +1497,9 @@ class WorkflowsView extends HTMLElement {
     form.appendChild(confirmStopRow);
 
     const createBtn = document.createElement("button");
+    createBtn.className = "omp-btn-primary";
     createBtn.textContent = this.#editingId ? "Speichern" : "Anlegen";
-    createBtn.style.cssText = "display:block;cursor:pointer;";
+    createBtn.style.cssText = "display:block;";
     createBtn.addEventListener("click", () => this.#submitForm());
     form.appendChild(createBtn);
 

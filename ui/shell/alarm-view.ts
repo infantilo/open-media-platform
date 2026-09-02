@@ -211,11 +211,15 @@ class AlarmView extends HTMLElement {
     const criticalCount = alarms.filter((a) => a.severity === "critical").length;
     const warningCount = alarms.length - criticalCount;
 
+    // Nutzerauftrag 2026-09-02 ("Alarme nach demselben Muster"): .omp-card
+    // statt Inline-Duplikation von Fläche/Rahmen/Radius (identische
+    // Formel wie überall sonst), Severity-Badge statt reiner Farbtext —
+    // nur der linke Akzentrand bleibt Inline (variiert je Alarm).
     const rows = alarms
       .map(
         (a) => `
-        <div style="display:flex;gap:var(--omp-space-2);align-items:flex-start;padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:var(--omp-surface);border:1px solid var(--omp-border);border-left:3px solid ${SEVERITY_COLOR[a.severity]};border-radius:var(--omp-radius);">
-          <span style="color:${SEVERITY_COLOR[a.severity]};font-size:var(--omp-font-size-xs);font-weight:600;white-space:nowrap;">${SEVERITY_LABEL[a.severity]}</span>
+        <div class="omp-card" style="display:flex;gap:var(--omp-space-2);align-items:flex-start;padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);border-left:3px solid ${SEVERITY_COLOR[a.severity]};">
+          <span class="omp-badge" style="color:${SEVERITY_COLOR[a.severity]};border-color:${SEVERITY_COLOR[a.severity]};white-space:nowrap;flex-shrink:0;">${SEVERITY_LABEL[a.severity]}</span>
           <div>
             <div><strong>${escapeHtml(a.source)}: ${escapeHtml(a.title)}</strong></div>
             <div style="color:var(--omp-text-dim);white-space:pre-wrap;word-break:break-word;">${escapeHtml(a.detail)}</div>

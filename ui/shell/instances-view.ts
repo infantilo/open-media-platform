@@ -113,8 +113,8 @@ class InstancesView extends HTMLElement {
       .map((inst) => {
         const hostLabel = inst.hostId ? hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId : "lokal";
         const status = inst.crashed
-          ? `<span style="color:var(--omp-error);">Abgestürzt</span>`
-          : `<span style="color:var(--omp-preset);">Läuft</span>`;
+          ? `<span class="omp-badge omp-badge-error">Abgestürzt</span>`
+          : `<span class="omp-badge omp-badge-running">Läuft</span>`;
         const restarts =
           inst.restartCount ? `↻ ${inst.restartCount}×` : `<span style="color:var(--omp-text-dim);">–</span>`;
         const crashLine = inst.crashed

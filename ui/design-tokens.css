@@ -218,6 +218,19 @@ textarea::placeholder {
   color: var(--omp-error);
   border-color: var(--omp-error);
 }
+/* Nutzerauftrag 2026-09-02 (Workflows-Tab): zwei weitere generische
+   Varianten neben running/error — cue für Übergangszustände (starting/
+   stopping/…), info für einen eigenständigen, nicht warnungswürdigen
+   Zustand (z. B. "paused"). Kein Modifier = Basis-Look (gedimmt), passt
+   bereits für einen inaktiven/gestoppten Zustand ohne eigene Klasse. */
+.omp-badge-cue {
+  color: var(--omp-cue);
+  border-color: var(--omp-cue);
+}
+.omp-badge-info {
+  color: var(--omp-info);
+  border-color: var(--omp-info);
+}
 
 .omp-h1 {
   font-family: var(--omp-font);
