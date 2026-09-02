@@ -371,11 +371,10 @@ class SchedulerView extends HTMLElement {
     (["day", "week", "month"] as const).forEach((mode) => {
       const btn = document.createElement("button");
       btn.textContent = mode === "day" ? "Tag" : mode === "week" ? "Woche" : "Monat";
-      const active = this.#viewMode === mode;
-      btn.style.cssText =
-        `font-size:11px;cursor:pointer;padding:3px 8px;` +
-        `background:${active ? "var(--omp-info)" : "rgba(255,255,255,0.06)"};` +
-        `color:${active ? "#fff" : "var(--omp-text)"};border:none;border-radius:2px;`;
+      // Aktiver Modus per .omp-btn-primary statt eigener Farb-Inline-
+      // Duplikation (Nutzerauftrag 2026-09-02) — der globale
+      // button-Reset (design-tokens.css) deckt den Rest bereits ab.
+      if (this.#viewMode === mode) btn.className = "omp-btn-primary";
       btn.addEventListener("click", () => this.#setViewMode(mode));
       modeGroup.appendChild(btn);
     });
@@ -383,13 +382,11 @@ class SchedulerView extends HTMLElement {
 
     const prevBtn = document.createElement("button");
     prevBtn.textContent = "◀";
-    prevBtn.style.cssText = "cursor:pointer;font-size:11px;";
     prevBtn.addEventListener("click", () => this.#navigate(-1));
     toolbar.appendChild(prevBtn);
 
     const todayBtn = document.createElement("button");
     todayBtn.textContent = "Heute";
-    todayBtn.style.cssText = "cursor:pointer;font-size:11px;";
     todayBtn.addEventListener("click", () => {
       this.#anchorDate = startOfDay(new Date());
       this.#render();
@@ -398,12 +395,11 @@ class SchedulerView extends HTMLElement {
 
     const nextBtn = document.createElement("button");
     nextBtn.textContent = "▶";
-    nextBtn.style.cssText = "cursor:pointer;font-size:11px;";
     nextBtn.addEventListener("click", () => this.#navigate(1));
     toolbar.appendChild(nextBtn);
 
     const label = document.createElement("span");
-    label.style.cssText = "color:var(--omp-text-dim);font-size:12px;margin-left:4px;";
+    label.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);margin-left:4px;";
     label.textContent = this.#rangeLabel();
     toolbar.appendChild(label);
 
@@ -524,9 +520,8 @@ class SchedulerView extends HTMLElement {
 
     const menu = document.createElement("div");
     menu.dataset.role = "add-menu";
-    menu.style.cssText =
-      "position:absolute;background:#222;border:1px solid #444;border-radius:3px;" +
-      "padding:4px;z-index:10;display:flex;flex-direction:column;gap:2px;font-size:11px;";
+    menu.className = "omp-popover";
+    menu.style.cssText = "position:absolute;padding:4px;z-index:10;display:flex;flex-direction:column;gap:2px;";
     const rect = anchor.getBoundingClientRect();
     const hostRect = this.getBoundingClientRect();
     // Am RECHTEN statt linken Rand des "+"-Knopfs verankern (wächst nach
@@ -577,14 +572,14 @@ class SchedulerView extends HTMLElement {
       (bar.stop ? `Stop ${fmtMinutes(bar.stop.minutes)}` : "kein Stop");
 
     const timeLabel = document.createElement("span");
-    timeLabel.style.cssText = "font-size:9px;color:#fff;pointer-events:none;white-space:nowrap;";
+    timeLabel.style.cssText = "font-size:9px;color:var(--omp-text);pointer-events:none;white-space:nowrap;";
     timeLabel.textContent = `${bar.start ? fmtMinutes(bar.start.minutes) : "?"}–${bar.stop ? fmtMinutes(bar.stop.minutes) : "?"}`;
     el.appendChild(timeLabel);
 
     const delBtn = document.createElement("span");
     delBtn.textContent = "×";
     delBtn.style.cssText =
-      "position:absolute;right:1px;top:-1px;font-size:11px;color:#fff;cursor:pointer;display:none;" +
+      "position:absolute;right:1px;top:-1px;font-size:11px;color:var(--omp-text);cursor:pointer;display:none;" +
       "background:rgba(0,0,0,0.4);border-radius:2px;padding:0 3px;line-height:1.3;";
     delBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     delBtn.addEventListener("click", (ev) => {
@@ -615,9 +610,8 @@ class SchedulerView extends HTMLElement {
 
     const panel = document.createElement("div");
     panel.dataset.role = "time-editor";
-    panel.style.cssText =
-      "position:absolute;background:#222;border:1px solid #444;border-radius:3px;" +
-      "padding:6px;z-index:10;display:flex;flex-direction:column;gap:4px;font-size:11px;";
+    panel.className = "omp-popover";
+    panel.style.cssText = "position:absolute;padding:6px;z-index:10;display:flex;flex-direction:column;gap:4px;";
     const rect = anchor.getBoundingClientRect();
     const hostRect = this.getBoundingClientRect();
     panel.style.left = `${Math.min(Math.max(0, rect.left - hostRect.left), hostRect.width - 160)}px`;

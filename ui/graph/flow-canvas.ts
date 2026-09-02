@@ -955,11 +955,12 @@ export class FlowCanvas extends HTMLElement {
     // SVG-Untermenü, gleiches Grundprinzip wie Palette/Panel oben.
     const hostMigrateMenu = document.createElement("div");
     hostMigrateMenu.setAttribute("data-role", "host-migrate-menu");
-    hostMigrateMenu.style.cssText =
-      "position:fixed;display:none;min-width:160px;padding:4px 0;" +
-      "background:var(--omp-surface, #26282b);color:var(--omp-text, #e8eaed);font-family:var(--omp-font);" +
-      "font-size:var(--omp-font-size-sm, 12px);border:1px solid var(--omp-border, #3a3d42);border-radius:6px;" +
-      "box-shadow:0 4px 12px rgba(0,0,0,0.4);z-index:30;";
+    // .omp-popover (design-tokens.css, 2026-09-02) bündelt die
+    // Fläche/Rahmen/Schatten-Formel, die hier vorher inline dupliziert
+    // war — Positionierung (fixed/min-width/padding/z-index) bleibt
+    // hier, weil sie zu dieser konkreten Aufrufstelle gehört.
+    hostMigrateMenu.className = "omp-popover";
+    hostMigrateMenu.style.cssText = "position:fixed;display:none;min-width:160px;padding:4px 0;z-index:30;";
 
     this.replaceChildren(svg, breadcrumb, panel, palette, snapshotBar, hostMigrateMenu);
     this.#svg = svg;
@@ -3863,7 +3864,7 @@ export class FlowCanvas extends HTMLElement {
       item.style.cssText =
         "display:block;width:100%;text-align:left;padding:6px 12px;background:none;border:none;" +
         "color:inherit;font:inherit;cursor:pointer;white-space:nowrap;";
-      item.addEventListener("mouseenter", () => (item.style.background = "var(--omp-bg-2, #333)"));
+      item.addEventListener("mouseenter", () => (item.style.background = "var(--omp-surface-raised)"));
       item.addEventListener("mouseleave", () => (item.style.background = "none"));
       item.addEventListener("click", () => {
         this.#closeHostMigrateMenu();

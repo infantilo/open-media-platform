@@ -301,3 +301,21 @@ textarea::placeholder {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: var(--omp-space-3);
 }
+
+/* Anchored kleines Kontextmenü/Popover (rechtsklick-Menü, "+"-Zeitplan-
+   Auswahl, Zeit-Editor) — Positionierung (position/top/left/right/
+   z-index) bleibt bewusst Sache der jeweiligen Aufrufstelle (variiert:
+   fixed vs. absolute, Anker links/rechts), nur die visuelle Formel ist
+   hier gebündelt. Dritte Fundstelle desselben bisher Ad-hoc-inline
+   duplizierten Looks (ui/graph/flow-canvas.ts host-migrate-menu,
+   ui/shell/scheduler-view.ts add-menu/time-editor, 2026-09-02) —
+   deshalb jetzt als Klasse statt einer vierten Kopie. */
+.omp-popover {
+  background: var(--omp-surface);
+  color: var(--omp-text);
+  border: 1px solid var(--omp-border);
+  border-radius: var(--omp-radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  font-family: var(--omp-font);
+  font-size: var(--omp-font-size-sm);
+}
