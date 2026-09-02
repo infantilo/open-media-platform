@@ -12,6 +12,7 @@ members = [
     "omp-audio-mixer",
     "omp-player",
     "omp-mxf-player",
+    "omp-mxf-player-direct",
     "omp-multiviewer",
     "omp-multiviewer-custom",
     "omp-playout-automation",

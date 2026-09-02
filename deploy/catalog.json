@@ -85,6 +85,15 @@
     "expectedResources": "gering bis moderat (Datei-Decoding)"
   },
   {
+    "type": "omp-mxf-player-direct",
+    "label": "MXF-Player (Direkt, ohne Playlist)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-mxf-player-direct"],
+    "env": { "OMP_MXF_FILE": "ET270438.mxf" },
+    "description": "Diagnose-/Direkt-Variante von omp-mxf-player (Nutzerauftrag 2026-09-02): kein A/B-Slot-Cue/Take, keine Playlist — spielt automatisch beim Start GENAU eine Datei (OMP_MXF_FILE) direkt in die MXL-Ausgänge. Isoliert, ob der reine Datei-Decode-Pfad (ohne input-selector-Umschaltung) tatsächlich Video+Audio liefert.",
+    "expectedResources": "gering bis moderat (Datei-Decoding)"
+  },
+  {
     "type": "omp-player-jingle",
     "label": "Jingle-Player",
     "runner": "process",

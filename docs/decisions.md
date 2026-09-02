@@ -19769,3 +19769,127 @@ danach auf Debug zurückgesetzt.
 `#cleanupStalePreviewState`), `orchestrator/internal/workflows/
 service.go` (`runRestartRole`)
 (`nodes`-Target).
+
+## 2026-09-02 (Nachtrag 164) — Bugreport "mxf player still not working": `omp-mxf-player`s `cue()`/`take()`-Pfad bringt weiterhin KEIN Bild/Ton (Ursache im `input-selector`-Umschalten isoliert, NICHT behoben); neuer, playlist-loser `omp-mxf-player-direct`-Node umgeht das Problem und spielt echte MXF-Dateien korrekt in Echtzeit — als funktionierender Ersatzweg, nicht als Fix des Originals
+
+**Anlass:** Nutzer, wörtlich: "der mxf player still not working! create an
+instance without playlist function. but working to play MXF video and
+audio! test and verify". `omp-mxf-player` galt seit Nachtrag 161 (5.
+Pacing-Versuch, ERFOLGREICH) als funktionierend — dieser Bugreport war
+also entweder eine echte Regression oder eine bisher nicht abgedeckte
+Fallkonstellation.
+
+**Reproduktion (echter Orchestrator-Prozess, echte HTTP-API, KEIN
+manuell umgangener Login wie in Nachtrag 161):** `append`+`cue`+`take`
+gegen die reale `ET270438.mxf`-Testdatei, verifiziert per `mxl-info
+--domain /dev/shm/omp-mxl -f <flow>` im Sekundentakt (dieselbe robuste
+Methode wie Nachtrag 161 — NICHT `playheadPositionMs`/JPEG-Vorschau,
+beide bekannt irreführend). Zwei unabhängige, saubere Testläufe (frisch
+gestartete Instanz, genau EIN `cue()`/`take()`-Zyklus, einmal mit ~1s,
+einmal mit ~8s Wartezeit zwischen den Aufrufen — dieselbe Timing-
+Variation, die Nachtrag 161s Race betraf):
+
+1. **Zyklus 1:** `cue()`/`take()` melden `{"ok":true}`, KEIN
+   `pipeline error` im Log (`build_mxf_branch`s Preroll-Tanz —
+   `request_branch_paused`/`confirm_branch_state`/`request_branch_playing`
+   — läuft nachweislich fehlerfrei durch, inkl. `filesrc`/`mxfdemux`).
+   `mxl-info`s Head-Index bewegt sich TROTZDEM über 8+ Sekunden nicht,
+   weder Video- noch Audio-Flow — komplett anders als das alte
+   "5-Grains-dann-Freeze"-Symptom (Nachtrag 161 Fund 1), hier ist es NULL
+   Bewegung von Anfang an. `playheadPositionMs` meldet sofort 10000
+   (volle Dateidauer) — bekannt irreführend (s. o.), täuscht "durchgespielt"
+   vor, wo `mxl-info` echtes Stillstehen zeigt.
+2. **Zyklus 2** (zweiter `cue()` auf denselben Slot, zum Vergleich mit
+   längerer Wartezeit): ECHTER, bisher undokumentierter Fehler im Log:
+   `"cue into slot A failed: filesrc1 meldet nach dem Warten Zustand
+   Paused statt Playing"` — `confirm_branch_state` schlägt für `filesrc`
+   selbst fehl, obwohl `mxfdemux`/die Tonspur-Queues offenbar bereits
+   bestätigt Paused waren (sonst wäre der Fehler früher aufgetreten).
+
+**Root Cause NICHT gefunden** (dokumentierter offener Punkt, kein
+stiller Gap) — beide Symptome zeigen auf `omp-mxf-player`s
+`input-selector`-basiertes A/B-Slot-Umschalten (`apply_active`,
+`video_isel`/`isel_<group>`), NICHT auf den Datei-Decode-Pfad selbst:
+`build_mxf_branch` allein (Zyklus 1) lief nachweislich fehlerfrei durch,
+trotzdem kam nie ein Bild/Ton an. `git log` bestätigt: seit Nachtrag 161
+(2026-08-21) wurde `pipeline.rs`/`mxl.rs` NICHT verändert — keine
+Code-Regression, GStreamer-Version ebenfalls unverändert (1.22.0). Die
+"18 Zyklen ohne Deadlock"-Verifikation aus Nachtrag 157 bezog sich
+nachweislich nur auf Teardown-Deadlocks (per `gdb`/Prozess-Überleben),
+NICHT auf per `mxl-info` bestätigten tatsächlichen Frame-Fluss danach —
+diese robustere Methode existiert erst seit Nachtrag 161, das selbst nur
+EINEN erfolgreichen Lauf über den offiziellen Orchestrator-Pfad
+dokumentiert (der Rest lief an einem manuell gestarteten Diagnose-Prozess
+vorbei am damaligen Auth-Bug). Die tatsächliche Root Cause im
+`input-selector`-Umschalten bleibt für eine künftige Sitzung offen.
+
+**Stattdessen: neuer, separater Node `omp-mxf-player-direct`**
+(`nodes/omp-mxf-player-direct/`, `deploy/catalog.json`) — genau das, was
+der Nutzer angefragt hat: KEIN `input-selector`, KEINE A/B-Slots, KEIN
+`append`/`load`/`cue`/`take`/Playlist-Zustand. Ein einziger, fest
+verdrahteter Zweig `filesrc ! mxfdemux ! …` DIREKT in
+`MxlVideoOutput::new_paced`/`MxlAudioOutput::new_paced`, Datei kommt aus
+`OMP_MXF_FILE`, Wiedergabe startet automatisch beim Prozessstart. Der
+komplette Datei-Decode-/Routing-Aufbau (Video-Kette, Audio-Backbone,
+Track→Gruppen-Matrix, `no-more-pads`-Synchronisierung) ist wortgleich aus
+`omp-mxf-player/src/pipeline.rs` übernommen (bereits als fehlerfrei
+bestätigt, s. o.) — nur zwei Dinge unterscheiden sich:
+
+1. **Verzweigung ans Ende:** Zweig-Enden (`vqueue`/Gruppen-`capsfilter`)
+   werden direkt als `upstream` an `new_paced` übergeben statt an einen
+   `input-selector`-Sink-Pad — genau die Komponente, auf die beide
+   Symptome oben zeigen, existiert hier schlicht nicht.
+2. **Zustands-Orchestrierung vereinfacht:** `omp-mxf-player`s
+   mehrphasiger `request_branch_paused`/`confirm_branch_state`/
+   `request_branch_playing`-Tanz ist dort NUR nötig, weil Zweige
+   NACHTRÄGLICH in eine bereits dauerhaft laufende, von einem ZWEITEN
+   Slot geteilte Pipeline eingefügt werden. Dieser Node hat weder einen
+   zweiten Zweig noch eine bereits laufende Pipeline — der komplette
+   Graph (Decode UND MXL-Ausgänge) entsteht einmalig VOR dem ersten
+   `pipeline.set_state(Playing)`, exakt die Situation, die
+   `omp-mxf-player::build()` für sein eigenes initiales, statisches
+   Setup (input-selector + Leerlauf-Zweige + MXL-Ausgänge) ohnehin schon
+   nutzt: ein einziger Sammel-Übergang, keine Einzel-Element-
+   Choreographie. Für `mxfdemux`s dynamisch entstehende Pro-Tonspur-
+   Queues gilt GStreamers eigenes dokumentiertes Standardmuster für
+   dynamische Demuxer-Pads (`pipeline.add()` + `sync_state_with_parent()`
+   innerhalb des `pad-added`/`no-more-pads`-Handlers, während der
+   Sammel-Übergang noch läuft) statt des aufwendigeren Verfahrens, das
+   dort die "anderer Slot läuft parallel"-Randbedingung adressiert.
+
+**Ein echter Implementierungsfehler unterwegs, live gefunden+behoben:**
+erster Versuch hielt `MxlVideoOutput`/`MxlAudioOutput` nur als lokale
+Variablen in `build()` — beide Typen setzen in ihrem `Drop` `running=
+false` (beendet den `write_loop`-Thread sofort), das Funktionsende von
+`build()` warf sie also augenblicklich wieder weg. Symptom: Flow wurde
+kurz erzeugt, `mxl-info --list` zeigte ihn Sekunden später aber gar nicht
+mehr, `/dev/shm/omp-mxl` bekam kein neues Verzeichnis. Fix: beide Werte
+zusätzlich in `ActivePipeline` gehalten (`_mxl_video_output`/
+`_mxl_group_outputs`).
+
+**Verifiziert (echter Orchestrator-Instanz-Start, `mxl-info`-Head-Index
+im 0,5s-Takt ab Sekundenbruchteilen nach dem Start):** Video-Flow UND
+"Programmton"-Audio-Flow liefen beide **~10 volle Sekunden ununterbrochen
+mit stabiler Echtzeit-Rate** (Video: durchgängig ~27-30 Grains/s bei
+25fps-Ziel; Audio: durchgängig ~48000 Samples/s bei 48kHz-Ziel), dann
+korrektes, einmaliges EOS (kein Loop in diesem Node, bewusst — Bus-EOS
+wird als `Event::Error` mit Klartext-Hinweis durchgereicht, kein stiller
+Stillstand). Kein CPU-Burn (Prozess pendelte nach EOS bei ~1% CPU, nicht
+der historische Busy-Spin aus Nachtrag 153). `cargo build --workspace
+--examples` und `cargo test -p omp-mxf-player-direct` grün. Nebenbei:
+`mxl-info --garbage-collect` räumte 66 inaktive Alt-Flows aus früheren
+Testsitzungen weg (bewusst NICHT vorher gelöscht — reiner Cleanup-Fund,
+keine funktionale Änderung).
+
+**Bewusste Scope-Grenze:** `omp-mxf-player` selbst bleibt unverändert und
+weiterhin kaputt für den Playlist-/Cue-Take-Anwendungsfall — dieser
+Nachtrag behebt NICHT die zugrundeliegende `input-selector`-Ursache,
+sondern liefert nur einen funktionierenden Direktwiedergabe-Weg für den
+"eine Datei, kein Playout-Automat"-Anwendungsfall. Root-Cause-Fix für
+`omp-mxf-player` selbst: dokumentierte Folgearbeit.
+
+**Dateien:** `nodes/omp-mxf-player-direct/` (neu: `Cargo.toml`,
+`src/main.rs`, `src/pipeline.rs`, `src/presets.rs` — Letzteres 1:1
+Kopie von `omp-mxf-player/src/presets.rs`), `nodes/Cargo.toml`
+(Workspace-Member ergänzt), `deploy/catalog.json` (neuer Katalog-
+Eintrag `omp-mxf-player-direct`).
