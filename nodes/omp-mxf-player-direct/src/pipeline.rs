@@ -164,6 +164,40 @@ pub struct ActivePipeline {
     _mxl_group_outputs: Vec<MxlAudioOutput>,
 }
 
+impl ActivePipeline {
+    /// Bringt die GESAMTE Pipeline explizit auf `GST_STATE_NULL`, bevor
+    /// `self` fallengelassen wird — live gefunden (2026-09-02, Nutzerfund
+    /// "im audiomonitor höre ich aber keinen ton", tatsächliche Ursache
+    /// beim Nachschauen: 200% CPU / 2,3 GB RAM nach ~7 Minuten Laufzeit):
+    /// ein bloßes `drop(active)` verlässt sich auf `gstreamer-rs`s
+    /// Standard-`Drop`, der die zugrundeliegende GStreamer-Pipeline NICHT
+    /// automatisch auf NULL bringt (dasselbe Prinzip, aus dem
+    /// `omp-mxf-player`s `stop_element_and_wait` überhaupt existiert,
+    /// dort nur pro Einzel-Element statt für die ganze eigene Pipeline
+    /// nötig, weil dort nur EIN Zweig, nie die geteilte Pipeline selbst,
+    /// abgebaut wird). Ohne dieses `set_state(Null)` blieb bei jedem
+    /// Loop-Zyklus (s. `run()`) die komplette alte Pipeline (Demuxer-
+    /// Threads, MXL-Schreib-Threads, GStreamer-Elemente) als Leiche
+    /// bestehen — akkumulierte über ~42 Zyklen (~7 Minuten) zu 200% CPU
+    /// und 2,3 GB RSS. Ein einziger `pipeline.set_state(Null)`-Aufruf
+    /// reicht (anders als bei `omp-mxf-player`): `GstBin`s Zustands-
+    /// wechsel kaskadiert automatisch auf ALLE Kind-Elemente, keine
+    /// Einzel-Choreographie nötig, weil hier die GANZE Pipeline (nicht
+    /// nur ein Zweig neben einem weiterlaufenden zweiten) abgebaut wird.
+    fn teardown(&self) {
+        if let Err(e) = self._pipeline.set_state(gst::State::Null) {
+            eprintln!("omp-mxf-player-direct: Pipeline-Teardown (set_state Null) fehlgeschlagen: {e}");
+            return;
+        }
+        let (result, state, _pending) = self._pipeline.state(gst::ClockTime::from_seconds(3));
+        if result.is_err() || state != gst::State::Null {
+            eprintln!(
+                "omp-mxf-player-direct: Pipeline erreichte NULL nicht innerhalb 3s beim Zyklus-Teardown (state={state:?}) — möglicher Ressourcen-Leak"
+            );
+        }
+    }
+}
+
 /// Baut den vollständigen, einzweigigen Graphen und fordert EINMAL
 /// `Playing` für die gesamte Pipeline an — s. Moduldoku für die
 /// Begründung, warum hier (anders als `omp-mxf-player`) kein
@@ -283,9 +317,28 @@ fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mps
     // GStreamer-Standardmuster für dynamische Demuxer-Pads gilt
     // unverändert (s. Moduldoku).
     let preset_owned = config.preset.clone();
-    let pipeline_for_nmp = pipeline.clone();
+    // SCHWACHE Referenz statt `pipeline.clone()` (Nutzerfund 2026-09-02:
+    // "im audiomonitor höre ich aber keinen ton" — tatsächliche Ursache:
+    // 180% CPU/stetig wachsendes RSS, weil dieser Node im Gegensatz zu
+    // `omp-mxf-player` die GANZE Pipeline pro Zyklus neu aufbaut/abbaut).
+    // `pipeline.clone()` HIER wäre ein echter Referenzzirkel:
+    // `pipeline` besitzt `demux` als Kind-Element, `demux`s eigener
+    // `no-more-pads`-Handler (dieser Closure) hielte seinerseits einen
+    // starken Klon von `pipeline` — GObject-Refcounting erkennt/löst
+    // solche Zirkel nicht auf, die alte Pipeline samt allem darin bliebe
+    // nach jedem Zyklus für immer unerreichbar-aber-ungeräumt im Speicher
+    // (live bestätigt: RSS wuchs linear über mehrere Minuten, 41+ Threads
+    // nach ~9 Zyklen). `omp-mxf-player` hat denselben Klon-Zirkel
+    // (`pipeline_for_nmp`, dort harmlos, weil DESSEN eine Pipeline nie
+    // zur Laufzeit neu aufgebaut wird, nur einzelne Zweige). Fix hier:
+    // `downgrade()`/`upgrade()` (bereits etabliertes Muster,
+    // `omp-srt-gateway/src/pipeline.rs`) — `None` bedeutet schlicht "die
+    // Pipeline dieses Zyklus wurde bereits abgebaut, bevor `no-more-pads`
+    // feuerte", kein Fehlerfall.
+    let pipeline_weak = pipeline.downgrade();
     let (nmp_done_tx, nmp_done_rx) = std::sync::mpsc::channel::<()>();
     demux.connect_no_more_pads(move |_demux| {
+        let Some(pipeline_for_nmp) = pipeline_weak.upgrade() else { return };
         let mut sorted = std::mem::take(&mut pending.lock().expect("lock poisoned").pads);
         sorted.sort_by_key(|(track, _)| *track);
         let input_channels = sorted.len() as u32;
@@ -479,10 +532,11 @@ pub fn run(
         }
 
         // Blockiert, bis DIESER Zyklus per Bus-Thread EOS oder einen
-        // Error meldet (s. build()) — danach `active` fallenlassen (baut
-        // Pipeline+MXL-Outputs sauber ab, s. ActivePipeline-Doku) und von
-        // vorn beginnen.
+        // Error meldet (s. build()) — danach explizit abbauen
+        // (`teardown()`, s. dortige Doku: ein bloßes `drop()` reicht
+        // NICHT, brachte die Pipeline nie auf NULL) und von vorn beginnen.
         let _ = cycle_done_rx.recv();
+        active.teardown();
         drop(active);
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
