@@ -1353,6 +1353,7 @@ name = "omp-mxf-player-direct"
 version = "0.1.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-pbutils",
  "omp-mediaio",
  "omp-node-sdk",
  "serde",

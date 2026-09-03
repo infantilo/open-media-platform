@@ -20609,3 +20609,67 @@ gelöscht.
 
 **Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`,
 `nodes/omp-mxf-player-direct/src/main.rs`.
+
+## 2026-09-03 (Nachtrag 174) — Nutzerauftrag direkt nach Nachtrag 173: "the player should not load/play an video on creation. seeking is not possible when player is in stop." — Autoplay entfernt, Seek im Leerlauf ("cue") ergänzt
+
+**Autoplay entfernt:** `shared.playing` startete bisher `true` — der
+Node baute beim Prozessstart sofort die Pipeline für `OMP_MXF_FILE` auf
+und begann zu senden, bevor irgendjemand "Play" gedrückt hatte. Jetzt
+startet `shared.playing` `false`, `run()`s äußere Schleife geht sofort
+in den Leerlauf, KEINE Pipeline/kein MXL-Flow entsteht, bis `play`/
+`load` kommt. Nebenwirkung, die dabei gefixt werden musste: die
+`PipelineHandle` wurde bisher erst NACH dem ersten erfolgreichen
+`build()` an `ready` gesendet — ohne Autoplay hätte `main.rs`s
+`ready_rx.await` also für immer blockiert, solange niemand spielt, der
+Node hätte sich nie als NMOS-Node registrieren können. Fix: `ready` wird
+jetzt SOFORT nach dem Anlegen von Kanal/`SharedState` gesendet, die
+gesamte `Option<Sender<...>>`-Verzögerungslogik (`ready.take()`) entfällt
+ersatzlos.
+
+**Seek im Leerlauf ("cue"):** ein `Seek`-Kommando während `Stop` baute
+bisher gar nichts auf und tat schlicht nichts (No-op) — genau der vom
+Nutzer gemeldete Zustand. Jetzt merkt sich `run()` das Ziel in einem
+neuen `pending_seek_ms` (Sentinel `-1` = nichts ausstehend, konsumiert
+per `AtomicI64::swap` beim nächsten erfolgreichen Zweig-Aufbau, direkt
+nach `Playing` per `perform_seek` angewendet) — `positionMs` zeigt den
+gecueten Wert sofort an, OHNE dass dafür eine Pipeline entsteht (kein
+Widerspruch zum entfernten Autoplay). Ein `Load` verwirft ein noch
+ausstehendes `pending_seek_ms` (neue Datei, alte Zielposition ergibt
+keinen Sinn mehr). `Stop` setzt `position_ms`/`duration_ms` NICHT mehr
+auf `0` zurück (vorheriges Verhalten) — beide bleiben auf dem zuletzt
+bekannten Stand stehen, sonst hätte die UI-Scrub-Bar (deren `max` an
+`durationMs` hängt) im Stillstand keinen brauchbaren Bereich.
+
+**Zusatzfund beim Live-Test — Scrub-Bar VOR dem allerersten Play
+unbedienbar:** `durationMs` blieb bis zum ersten `play` bei `0` (nichts
+hatte die echte Dateilänge je ermittelt), die UI-Scrub-Bar (`<input
+type="range" max="0">`) ließ sich also gar nicht sinnvoll ziehen — ein
+per JS gesetzter Wert wie `4500` wurde vom Browser klemmend auf `0`
+zurückgesetzt. Root-Fund per echtem CDP-Klicktest (`scrubMax: "0"` im
+Ergebnis), nicht vorab vermutet. Fix: `probe_duration_ms()`
+(`gst_pbutils::Discoverer`, wortgleiches Muster aus `omp-mxf-player`)
+ermittelt die Dauer jetzt SYNCHRON beim Prozessstart (für die
+`OMP_MXF_FILE`-Datei) UND bei jedem `load` (für die neu gewählte Datei),
+`PipelineHandle::set_duration_hint()` (neu) schreibt das Ergebnis in
+denselben `duration_ms`-Wert, den auch die laufende Wiedergabe
+fortlaufend aktualisiert — ein späterer echter Tick-Poll überschreibt
+den bloß vorläufigen Hinweis unschädlich, nie umgekehrt.
+
+**Live verifiziert** (frische Instanz über den Orchestrator gestartet,
+echte HTTP-API + `mxl-info`, zusätzlich echter Chromium-Headless-CDP-
+Klicktest): direkt nach `POST /api/v1/instances` — `status: "stopped"`,
+`durationMs: 10000` (Datei bereits korrekt vorab vermessen), KEIN
+MXL-Flow existiert (`mxl-info --list` liefert keinen Treffer für die
+Instanz). `seek` im Stillstand setzt `positionMs` sofort, ohne Flow.
+`play` danach startet spürbar NAHE der gecueten Position (nicht bei 0).
+`stop` erhält die zuletzt bekannte Position/Dauer. `load` verwirft eine
+noch ausstehende Cue-Position und startet sauber bei 0. UI-Panel:
+`scrubMax` zeigt sofort `"10000"`, Scrubben im Stillstand aktualisiert
+die Zeitanzeige korrekt OHNE den Status zu ändern, "Play" danach
+resumed sichtbar von der gescrubbten Position. `cargo test --workspace`
+weiter grün, alle Test-Instanzen danach gelöscht.
+
+**Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`,
+`nodes/omp-mxf-player-direct/src/main.rs`,
+`nodes/omp-mxf-player-direct/Cargo.toml` (neue Abhängigkeit
+`gstreamer-pbutils`).

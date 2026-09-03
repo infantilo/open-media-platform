@@ -8,25 +8,54 @@
 //! **Steuer-UI** (`uibundle.rs`, Nutzerauftrag 2026-09-03: "mxf player
 //! (direkt ohne playliste) braucht noch ein ui zum laden des clips,
 //! seeking, play, stop... und audioshuffle selection") — `OMP_MXF_FILE`
-//! bleibt der Startwert (Autoplay beim Prozessstart, unverändert), das UI
-//! kann die Datei danach live wechseln (`load`), abspielen/anhalten
-//! (`play`/`stop`), innerhalb des Clips suchen (`seek`) und das
-//! Audio-Shuffle-Preset ändern (`setPreset`) — direkter, vereinfachter
-//! Nachbau von `omp-mxf-player/ui/bundle.js` (dieselbe generische
-//! Node-Proxy-API `/api/v1/nodes/<id>/methods/<name>`), OHNE dessen
-//! Playlist/Cue-Take-Mechanik (dieser Node hat nur EINEN aktiven Clip,
-//! kein Vorbereiten eines zweiten während der erste läuft).
+//! ist nur noch der anfangs VORGESCHLAGENE Startwert, KEIN Autoplay mehr
+//! (Nutzerfund 2026-09-03: "the player should not load/play an video on
+//! creation", s. `pipeline.rs::run()`-Moduldoku): der Node registriert
+//! sich im Leerlauf, Wiedergabe beginnt erst auf `play`/`load`. Das UI
+//! kann die Datei live wechseln (`load`), abspielen/anhalten
+//! (`play`/`stop`), innerhalb des Clips suchen (`seek` — auch im
+//! Stillstand: merkt sich das Ziel und wendet es beim nächsten
+//! `play`/`load` an) und das Audio-Shuffle-Preset ändern (`setPreset`)
+//! — direkter, vereinfachter Nachbau von `omp-mxf-player/ui/bundle.js`
+//! (dieselbe generische Node-Proxy-API
+//! `/api/v1/nodes/<id>/methods/<name>`), OHNE dessen Playlist/Cue-Take-
+//! Mechanik (dieser Node hat nur EINEN aktiven Clip, kein Vorbereiten
+//! eines zweiten während der erste läuft).
 mod pipeline;
 mod presets;
 mod uibundle;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
 };
 use pipeline::PipelineHandle;
 use serde_json::Value;
+
+/// S. `omp-mxf-player::probe_duration_ms` — wortgleich übernommen
+/// (eigener Thread + `gst_pbutils::Discoverer`, damit ein `gst::init()`
+/// hier keine Kollision mit dem bereits laufenden Pipeline-Thread
+/// riskiert). Gebraucht seit dem Wegfall des Autoplays (Nutzerfund
+/// 2026-09-03): ohne einen vorab ermittelten Wert bliebe `durationMs`
+/// bis zum ersten `play` bei `0`, die UI-Scrub-Bar (deren `max` daran
+/// hängt) wäre im Stillstand also gar nicht bedienbar — s.
+/// `pipeline::PipelineHandle::set_duration_hint`-Doku.
+fn probe_duration_ms(path: &Path) -> Option<u64> {
+    let path = path.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = gstreamer::init();
+        let result = (|| -> Option<u64> {
+            let uri = gstreamer::glib::filename_to_uri(&path, None).ok()?;
+            let discoverer = gstreamer_pbutils::Discoverer::new(gstreamer::ClockTime::from_seconds(5)).ok()?;
+            let info = discoverer.discover_uri(uri.as_str()).ok()?;
+            info.duration().map(|d| d.mseconds())
+        })();
+        let _ = tx.send(result);
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(8)).ok().flatten()
+}
 
 struct PlayerStore {
     pipeline: PipelineHandle,
@@ -146,6 +175,14 @@ impl ParamStore for PlayerStore {
                     return Err(InvokeError::Unknown);
                 }
                 let abs = resolve_media_path(&self.media_dir, file).map_err(|_| InvokeError::Unknown)?;
+                // Dauer VORAB bekannt machen (s. `probe_duration_ms`-Doku)
+                // — vor `self.pipeline.load(...)`, damit ein späterer,
+                // echter Tick-Poll aus laufender Wiedergabe diesen bloß
+                // vorläufigen Wert unschädlich überschreiben kann, nie
+                // umgekehrt.
+                if let Some(ms) = probe_duration_ms(&abs) {
+                    self.pipeline.set_duration_hint(ms as i64);
+                }
                 self.pipeline.load(abs.to_string_lossy().to_string());
                 Ok(())
             }
@@ -251,6 +288,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             return Err("pipeline thread ended before reporting readiness".into());
         }
     };
+
+    // Dauer des anfangs vorgeschlagenen Clips VORAB bekannt machen (s.
+    // `probe_duration_ms`-Doku) — ohne Autoplay (Nutzerfund 2026-09-03)
+    // gäbe es sonst bis zum ersten `play` keine Möglichkeit, `durationMs`
+    // zu ermitteln, die UI-Scrub-Bar bliebe im Stillstand unbedienbar.
+    if let Some(ms) = probe_duration_ms(&file_path) {
+        pipeline_handle.set_duration_hint(ms as i64);
+    }
 
     let mut senders = Vec::with_capacity(1 + settings.groups.len());
     senders.push(SenderSpec {

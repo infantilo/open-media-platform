@@ -24,8 +24,11 @@
 //! Zweig (kein `input-selector`, keine A/B-Slots, kein `cue()`/`take()`,
 //! keine Playlist) von `filesrc`/`mxfdemux` DIREKT in
 //! `MxlVideoOutput::new_paced`/`MxlAudioOutput::new_paced` — Datei kommt
-//! aus `OMP_MXF_FILE` (absoluter Pfad oder relativ zu `OMP_MEDIA_DIR`),
-//! Wiedergabe startet automatisch beim Prozessstart. Alle Element-
+//! aus `OMP_MXF_FILE` (absoluter Pfad oder relativ zu `OMP_MEDIA_DIR`) —
+//! seit dem UI-Steuer-Auftrag (2026-09-03) nur noch der ANFANGS
+//! vorgeschlagene Clip, kein Autoplay mehr: der Node startet im
+//! Leerlauf, Wiedergabe beginnt erst auf `play`/`load` (s. `run()`-
+//! Moduldoku). Alle Element-
 //! Bauschritte (Video-Kette, Audio-Backbone, Track→Gruppen-Routing,
 //! `no-more-pads`-Synchronisierung) sind wortgleich aus
 //! `omp-mxf-player/src/pipeline.rs` übernommen (bereits als fehlerfrei
@@ -202,6 +205,20 @@ impl PipelineHandle {
 
     pub fn duration_ms(&self) -> i64 {
         self.duration_ms.load(Ordering::Relaxed)
+    }
+
+    /// Setzt einen VORAB (per `gst_pbutils::Discoverer`, s. `main.rs`)
+    /// ermittelten Dauer-Wert, BEVOR überhaupt eine Pipeline gebaut
+    /// wurde — Nutzerfund 2026-09-03: ohne diesen Hinweis blieb
+    /// `durationMs` bis zum ersten `play` bei `0`, die Scrub-Bar der UI
+    /// (deren `max` an `durationMs` gebunden ist) ließ sich also im
+    /// Stillstand gar nicht sinnvoll ziehen — Seek-im-Leerlauf war zwar
+    /// serverseitig längst möglich, aber über die UI praktisch
+    /// unbedienbar. Wird bei laufender Wiedergabe ohnehin sofort vom
+    /// nächsten Tick-Poll (`query_duration_ms`) überschrieben, ein
+    /// Wettlauf ist also unschädlich.
+    pub fn set_duration_hint(&self, ms: i64) {
+        self.duration_ms.store(ms, Ordering::Relaxed);
     }
 }
 
@@ -655,10 +672,27 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(200);
 /// dieser Übergänge hinweg gleich (Video/Audio-Ausgänge sind fix ab
 /// `main.rs`s Sender-Registrierung), ein Betrachter (Multiviewer/Viewer)
 /// sieht denselben Flow einfach weiterlaufen bzw. kurz einfrieren statt
-/// eines komplett neuen. Autoplay beim Prozessstart bleibt erhalten (s.
-/// Moduldoku-Kopf) — `shared.playing` startet `true`, das UI muss also
-/// nicht extra "Play" drücken, nur um das an `OMP_MXF_FILE` übergebene
-/// Material überhaupt zu sehen.
+/// eines komplett neuen.
+///
+/// **KEIN Autoplay mehr beim Prozessstart** (Nutzerfund 2026-09-03: "the
+/// player should not load/play an video on creation") — `shared.playing`
+/// startet jetzt `false`, der Node bleibt bis zum ersten `play`/`load`
+/// im Leerlauf (kein Pipeline-Aufbau, kein MXL-Flow). Die
+/// `PipelineHandle` wird deshalb SOFORT nach dem Anlegen von Kanal/
+/// `SharedState` an `ready` gesendet, NICHT erst nach dem ersten
+/// erfolgreichen `build()` wie vorher — sonst würde `main.rs`s
+/// `ready_rx.await` für immer blockieren, solange niemand "Play" drückt,
+/// und der Node könnte sich nie als NMOS-Node registrieren.
+///
+/// **Seek im Leerlauf** (Nutzerfund 2026-09-03: "seeking is not possible
+/// when player is in stop"): ein `Seek`-Kommando während `Stop` baut
+/// KEINE Pipeline auf (bliebe dem "kein Autoplay"-Prinzip oben
+/// widersprechend), merkt sich das Ziel aber in `pending_seek_ms` —
+/// `positionMs` zeigt es sofort an (die Bedienoberfläche kann also auch
+/// im Stillstand vorpositionieren), tatsächlich angewendet wird es beim
+/// NÄCHSTEN erfolgreichen Zweig-Aufbau (`play`/`load`), direkt nach
+/// `Playing`. Ein `Load` verwirft ein noch ausstehendes `pending_seek_ms`
+/// (neue Datei, alte Zielposition ergibt keinen Sinn mehr).
 pub fn run(
     config: Config,
     tx: UnboundedSender<Event>,
@@ -676,27 +710,41 @@ pub fn run(
     let shared = Arc::new(Mutex::new(SharedState {
         file_path: cfg.file_path.clone(),
         preset_id: cfg.preset.id.clone(),
-        playing: true,
+        playing: false,
         video_flowed: Arc::new(AtomicBool::new(false)),
         group_flowed: Vec::new(),
     }));
     let position_ms = Arc::new(AtomicI64::new(0));
     let duration_ms = Arc::new(AtomicI64::new(0));
-    let mut ready = Some(ready);
+    // Sentinel `-1` == kein Seek im Leerlauf ausstehend, s. Moduldoku
+    // oben zu "Seek im Leerlauf".
+    let pending_seek_ms = Arc::new(AtomicI64::new(-1));
+
+    // PipelineHandle sofort verfügbar machen, NICHT erst nach dem ersten
+    // erfolgreichen Pipeline-Aufbau (s. Moduldoku "KEIN Autoplay mehr").
+    let _ = ready.send(Ok(PipelineHandle {
+        events: event_tx.clone(),
+        shared: shared.clone(),
+        position_ms: position_ms.clone(),
+        duration_ms: duration_ms.clone(),
+    }));
 
     'outer: loop {
         if !shared.lock().expect("lock poisoned").playing {
-            position_ms.store(0, Ordering::Relaxed);
-            duration_ms.store(0, Ordering::Relaxed);
-            // Leerlauf nach `Stop`: KEINE Pipeline aufgebaut, keine
-            // Ressourcen belegt — wartet blockierend auf ein Kommando, das
-            // die Wiedergabe wieder aufnimmt.
+            // Leerlauf (Prozessstart ODER nach `Stop`): KEINE Pipeline
+            // aufgebaut, keine Ressourcen belegt — wartet blockierend auf
+            // ein Kommando, das die Wiedergabe (wieder) aufnimmt.
+            // `position_ms`/`duration_ms` bleiben bewusst UNANGETASTET
+            // (zeigen entweder 0/0 vor dem allerersten Aufbau, oder die
+            // zuletzt bekannte Position/Dauer nach einem `Stop` — s.
+            // Moduldoku "Seek im Leerlauf").
             match event_rx.recv() {
                 Ok(LoopEvent::Cmd(Command::Play)) => {
                     shared.lock().expect("lock poisoned").playing = true;
                 }
                 Ok(LoopEvent::Cmd(Command::Load(file))) => {
                     cfg.file_path = file.clone();
+                    pending_seek_ms.store(-1, Ordering::Relaxed);
                     let mut s = shared.lock().expect("lock poisoned");
                     s.file_path = file;
                     s.playing = true; // "Laden" heißt hier direkt "zeigen", s. Moduldoku/PipelineHandle::load.
@@ -707,7 +755,15 @@ pub fn run(
                     cfg.preset = preset;
                     // Bleibt im Leerlauf — wirkt erst beim nächsten Play/Load.
                 }
-                Ok(LoopEvent::Cmd(Command::Stop)) | Ok(LoopEvent::Cmd(Command::Seek(_))) => {}
+                Ok(LoopEvent::Cmd(Command::Seek(target_ms))) => {
+                    // S. Moduldoku "Seek im Leerlauf": merken, sofort
+                    // anzeigen, tatsächlich angewendet beim nächsten
+                    // erfolgreichen Aufbau — kein Pipeline-Aufbau HIER
+                    // (kein Autoplay-Widerspruch).
+                    pending_seek_ms.store(target_ms as i64, Ordering::Relaxed);
+                    position_ms.store(target_ms as i64, Ordering::Relaxed);
+                }
+                Ok(LoopEvent::Cmd(Command::Stop)) => {}
                 Ok(LoopEvent::CycleDone) => {}
                 Err(_) => return,
             }
@@ -718,14 +774,10 @@ pub fn run(
             Ok(p) => p,
             Err(e) => {
                 let _ = tx.send(Event::Error(format!("build failed: {e}")));
-                if let Some(r) = ready.take() {
-                    let _ = r.send(Err(e));
-                    return; // erster Aufbau fehlgeschlagen — Prozess beendet sich (main.rs).
-                }
-                // Ein SPÄTERER Neuaufbau (nach mind. einem erfolgreichen
-                // Durchlauf) schlägt fehl: nicht den ganzen, bereits
-                // registrierten Node abwürgen — kurz warten, erneut
-                // versuchen (z. B. transiente Ressourcenknappheit).
+                // Nicht den ganzen, bereits registrierten Node abwürgen —
+                // kurz warten, erneut versuchen (z. B. transiente
+                // Ressourcenknappheit, oder eine dauerhaft unbaubare
+                // Datei bis der Bedienende korrigiert).
                 //
                 // Nutzerfund 2026-09-03 ("nach dem Laden eines neuen Clips
                 // ist die Ausgabe kaputt/eingefroren"): dieser Zweig las
@@ -746,13 +798,21 @@ pub fn run(
                     }
                     Ok(LoopEvent::Cmd(Command::Load(file))) => {
                         cfg.file_path = file.clone();
+                        pending_seek_ms.store(-1, Ordering::Relaxed);
                         shared.lock().expect("lock poisoned").file_path = file;
                     }
                     Ok(LoopEvent::Cmd(Command::SetPreset(preset))) => {
                         shared.lock().expect("lock poisoned").preset_id = preset.id.clone();
                         cfg.preset = preset;
                     }
-                    Ok(LoopEvent::Cmd(Command::Play)) | Ok(LoopEvent::Cmd(Command::Seek(_))) | Ok(LoopEvent::CycleDone) => {}
+                    Ok(LoopEvent::Cmd(Command::Seek(target_ms))) => {
+                        // Zweig lässt sich gerade nicht aufbauen — dasselbe
+                        // "merken, sofort anzeigen"-Verhalten wie im
+                        // Leerlauf oben, s. Moduldoku "Seek im Leerlauf".
+                        pending_seek_ms.store(target_ms as i64, Ordering::Relaxed);
+                        position_ms.store(target_ms as i64, Ordering::Relaxed);
+                    }
+                    Ok(LoopEvent::Cmd(Command::Play)) | Ok(LoopEvent::CycleDone) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                 }
@@ -765,13 +825,14 @@ pub fn run(
             s.group_flowed = active.group_flowed.clone();
         }
 
-        if let Some(r) = ready.take() {
-            let _ = r.send(Ok(PipelineHandle {
-                events: event_tx.clone(),
-                shared: shared.clone(),
-                position_ms: position_ms.clone(),
-                duration_ms: duration_ms.clone(),
-            }));
+        // Ein im Leerlauf (oder während eines vorherigen Baufehlers)
+        // vorgemerktes Seek-Ziel jetzt anwenden — EINMALIG (`swap`
+        // konsumiert es), s. Moduldoku "Seek im Leerlauf". Betrifft NICHT
+        // einen normalen EOS-Loop-Neuaufbau, da dort längst `-1` steht.
+        let pending = pending_seek_ms.swap(-1, Ordering::Relaxed);
+        if pending >= 0 {
+            perform_seek(&active.demux, pending as u64);
+            position_ms.store(pending, Ordering::Relaxed);
         }
 
         // Ein einziger `recv_timeout` bedient gleichzeitig: das natürliche
@@ -796,6 +857,7 @@ pub fn run(
                 Ok(LoopEvent::Cmd(Command::Play)) => {} // Bereits aktiv — No-op.
                 Ok(LoopEvent::Cmd(Command::Load(file))) => {
                     cfg.file_path = file.clone();
+                    pending_seek_ms.store(-1, Ordering::Relaxed);
                     shared.lock().expect("lock poisoned").file_path = file;
                     active.teardown();
                     drop(active);

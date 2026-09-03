@@ -8,6 +8,11 @@ publish = false
 
 [dependencies]
 gstreamer = "0.25.3"
+# gstreamer-pbutils::Discoverer für die Dauer-Probe eines noch nicht
+# abgespielten Clips (Nutzerauftrag 2026-09-03: Seek im Stillstand
+# braucht eine bekannte Dauer für die Scrub-Bar, gleiches Muster wie
+# omp-mxf-player, s. dortige Cargo.toml-Doku).
+gstreamer-pbutils = "0.25.2"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
 serde = { version = "1.0.228", features = ["derive"] }
