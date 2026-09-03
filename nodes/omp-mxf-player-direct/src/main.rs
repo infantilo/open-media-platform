@@ -89,12 +89,20 @@ impl ParamStore for PlayerStore {
             "durationMs" => Some(serde_json::json!(self.pipeline.duration_ms() as f64)),
             "audioPreset" => Some(serde_json::json!(self.pipeline.current_preset_id())),
             "mediaLibrary" => {
+                // Nur `.mxf`-Dateien (Nutzerfund 2026-09-03: "nach dem
+                // Laden eines neuen Clips ist die Ausgabe kaputt/
+                // eingefroren") — `OMP_MEDIA_DIR` enthält auch Testdateien
+                // anderer Nodes (z. B. `.mp4` für omp-source/omp-viewer);
+                // dieser Node baut fest auf `mxfdemux`, ein geladenes
+                // Nicht-MXF-Datei-Angebot in der Auswahlliste führte
+                // direkt zu einer dauerhaft unbaubaren Pipeline.
                 let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
                     .into_iter()
                     .flatten()
                     .filter_map(|entry| entry.ok())
                     .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
                     .filter_map(|entry| entry.file_name().into_string().ok())
+                    .filter(|name| name.to_ascii_lowercase().ends_with(".mxf"))
                     .collect();
                 files.sort();
                 Some(serde_json::json!(files))
@@ -128,6 +136,15 @@ impl ParamStore for PlayerStore {
             }
             "load" => {
                 let file = args.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or(InvokeError::Unknown)?;
+                // Nur `.mxf` (s. `mediaLibrary`-Doku oben) — Grenze zur
+                // Außenwelt, hier statt erst in `pipeline::run()`
+                // geprüft, damit ein falsches Angebot (Tippfehler, alte
+                // UI-Version, Handschriftlicher API-Aufruf) sofort mit
+                // einem klaren Fehler abgelehnt wird statt die laufende
+                // Wiedergabe dauerhaft in eine Fehlerschleife zu reißen.
+                if !file.to_ascii_lowercase().ends_with(".mxf") {
+                    return Err(InvokeError::Unknown);
+                }
                 let abs = resolve_media_path(&self.media_dir, file).map_err(|_| InvokeError::Unknown)?;
                 self.pipeline.load(abs.to_string_lossy().to_string());
                 Ok(())

@@ -20542,3 +20542,70 @@ test --workspace` weiter grün, Test-Instanz danach gelöscht.
 `nodes/omp-mxf-player-direct/src/uibundle.rs` (neu),
 `nodes/omp-mxf-player-direct/ui/manifest.json` (neu),
 `nodes/omp-mxf-player-direct/ui/bundle.js` (neu).
+
+## 2026-09-03 (Nachtrag 173) — Nutzerfund direkt nach Nachtrag 172s Auslieferung: "seeking not working. after loading a new clip, output is broken/frozen" — zwei getrennte, echte Bugs gefunden und behoben
+
+**Bug 1 — Laden einer Nicht-MXF-Datei legte die Wiedergabe DAUERHAFT
+lahm:** `mediaLibrary` listete bislang ALLE Dateien unter
+`OMP_MEDIA_DIR`, nicht nur `.mxf` — darunter `.mp4`-Testdateien anderer
+Nodes (`omp-source`/`omp-viewer`). Wurde eine davon per `load` geladen,
+versuchte `build()` `mxfdemux` auf einer Nicht-MXF-Datei zu öffnen,
+scheiterte ("pipeline erreichte Playing nicht innerhalb 8s"), und
+`run()`s Fehler-Rückfallpfad (`Err(e) => { ...; sleep(2s);
+continue 'outer }`) las dabei `event_rx` GAR NICHT — ein danach
+gesendetes korrigierendes `load` mit einer echten MXF-Datei blieb im
+Kanal liegen, OHNE je `cfg`/`shared` zu aktualisieren, `build()`
+versuchte also ENDLOS dieselbe kaputte Konfiguration erneut. Live am
+tatsächlich betroffenen, vom Nutzer über die reale UI gestarteten
+Prozess bestätigt (Log: dutzende Wiederholungen von "pipeline error:
+build failed: pipeline erreichte Playing nicht innerhalb 8s
+(state=Ready)"; `mxl-info --flow` lieferte durchgehend "Failed to create
+flow reader", auch nach einem erneuten `load` mit der ursprünglichen
+MXF-Datei). Fix in drei Ebenen:
+- `pipeline.rs::run()`: der Fehler-Rückfallpfad nutzt jetzt
+  `event_rx.recv_timeout(2s)` statt blindem `sleep` und wendet ein
+  währenddessen eintreffendes `Stop`/`Load`/`SetPreset` genauso an wie
+  der normale Innenloop — ein korrigierendes Kommando bricht die
+  Fehlerschleife jetzt tatsächlich auf.
+- `main.rs`: `invoke("load", ...)` lehnt Dateien ohne `.mxf`-Endung
+  jetzt sofort mit einem klaren Fehler ab (Grenze zur Außenwelt), statt
+  die laufende Wiedergabe erst in die Fehlerschleife laufen zu lassen.
+- `main.rs`: `mediaLibrary` listet nur noch `.mxf`-Dateien — die Auswahl
+  bietet Nicht-MXF-Dateien gar nicht mehr an.
+
+**Bug 2 — Seeking wirkungslos/hängend:** `seek_to()` war wortgleich aus
+`omp-mxf-player` übernommen worden, inklusive des dortigen manuellen
+`demux.set_state(Paused)` → warten → `set_state(Playing)`-Zyklus nach
+dem eigentlichen `seek()`-Aufruf. Dort ist das korrekt, weil `demux` das
+Kind-Element eines per `set_locked_state(true)` bewusst vom
+GstBin-Zustandsmanagement ABGEKOPPELTEN A/B-Slot-Zweigs ist — der
+manuelle Zyklus ist dort der einzige Weg, GENAU diesen einen Zweig neu
+zu takten. `omp-mxf-player-direct` hat keine Slots und kein
+`set_locked_state`: `demux` ist ein GANZ NORMALES Kind-Element der
+einzigen, komplett `Playing` laufenden Pipeline. Ein direkter
+`set_state()`-Aufruf auf ein ungesperrtes Kind-Element, während der
+umgebende `GstBin` selbst `Playing` ist, gerät mit dessen eigener
+Zustandsverwaltung in Konflikt — genau das führte zu den gemeldeten
+hängenden Seeks. Fix: `seek_to()` ruft jetzt nur noch den flushenden
+`demux.seek(...)` auf, ohne den State-Zyklus — das GStreamer-
+Standardmuster für einen Seek auf eine bereits laufende Pipeline. Der
+verbleibende Nachtrag-159-Sonderfall (Pull-Task nach echtem EOS bereits
+gestorben) bleibt über `perform_seek`s Stillstands-Erkennung + Zweig-
+Neuaufbau abgedeckt — unverändert.
+
+**Live verifiziert** (frische Instanz über den Orchestrator gestartet,
+eindeutiges Instanz-Label gegen das Nachtrag-172-Gotcha, echte HTTP-API
++ `mxl-info`): `mediaLibrary` liefert jetzt nur `ET270438.mxf`; ein
+`load` mit `test-smpte-5s.mp4` wird mit einem Fehler abgelehnt, Flow
+läuft währenddessen unverändert weiter (Head-Index advancing,
+`Active: true`); Vorwärts-, Rückwärts- und Nah-EOS-Seeks (500 ms,
+5000 ms, 8000 ms, 2000 ms, 9500 ms in Folge) landen alle korrekt und
+der Flow bleibt danach durchgehend aktiv. UI-Panel zusätzlich per
+echtem Chromium-Headless-CDP-Test bestätigt: Scrub-Bar-`change`-Event
+löst den Seek aus (Zeitanzeige sprang korrekt auf ~6s), Datei-Eingabe +
+"Laden"-Klick lädt erfolgreich neu, Status bleibt `PLAYING`. `cargo
+test -p omp-mxf-player-direct` weiter grün, Test-Instanz danach
+gelöscht.
+
+**Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`,
+`nodes/omp-mxf-player-direct/src/main.rs`.

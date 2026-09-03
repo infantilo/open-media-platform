@@ -579,11 +579,26 @@ fn query_duration_ms(demux: &gst::Element) -> Option<i64> {
     demux.query_duration::<gst::ClockTime>().map(|t| t.mseconds() as i64)
 }
 
-/// S. `omp-mxf-player/src/pipeline.rs::seek_to` — wortgleich übernommen
-/// (identisches, dort bereits live verifiziertes Gotcha: ein bloßer
-/// `demux.seek()` kann `Ok(())` melden, obwohl `mxfdemux`s Pull-Task nach
-/// einem vorherigen echten Datei-EOS gar nicht mehr läuft; der explizite
-/// PAUSED→PLAYING-Zyklus zwingt GStreamer, den Task neu zu starten).
+/// EIN flushender, framegenauer Seek — anders als `omp-mxf-player::
+/// seek_to` OHNE den dortigen manuellen PAUSED→PLAYING-Zyklus danach
+/// (Nutzerfund 2026-09-03: "seeking not working"). Grund für den
+/// Unterschied: dort ist `demux` ein Kind-Element eines per
+/// `set_locked_state(true)` bewusst vom GstBin-Zustandsmanagement
+/// ABGEKOPPELTEN A/B-Slot-Zweigs — der manuelle Zyklus ist DORT der
+/// einzige Weg, diesen einen Zweig gezielt neu zu takten, während der
+/// Rest der geteilten Pipeline weiterläuft. Hier gibt es keine Slots und
+/// kein `set_locked_state`: `demux` ist ein GANZ NORMALES Kind-Element
+/// der einzigen, komplett PLAYING laufenden Pipeline. Ein direkter
+/// `set_state()`-Aufruf auf ein ungesperrtes Kind-Element, während der
+/// umgebende `GstBin` selbst auf PLAYING steht, gerät mit dessen eigener
+/// Zustands-Verwaltung in Konflikt (live bestätigt: genau dieser Zyklus
+/// führte zu den gemeldeten hängenden/eingefrorenen Seeks) — der
+/// einfache, flushende `seek()`-Aufruf allein ist hier das GStreamer-
+/// Standardmuster für einen Seek auf eine bereits laufende Pipeline und
+/// reicht aus, SOLANGE `mxfdemux`s Pull-Task noch lebt. Der verbleibende
+/// Nachtrag-159-Sonderfall (Task nach echtem EOS bereits gestorben) wird
+/// weiterhin über `perform_seek`s Stillstands-Erkennung + kompletten
+/// Zweig-Neuaufbau in `run()` abgefangen, s. dort.
 fn seek_to(demux: &gst::Element, target_ms: u64) {
     let _ = demux.seek(
         1.0,
@@ -593,9 +608,6 @@ fn seek_to(demux: &gst::Element, target_ms: u64) {
         gst::SeekType::None,
         gst::ClockTime::NONE,
     );
-    let _ = demux.set_state(gst::State::Paused);
-    let _ = demux.state(gst::ClockTime::from_mseconds(500));
-    let _ = demux.set_state(gst::State::Playing);
 }
 
 /// Wie `omp-mxf-player::seek_onair_with_revive`s Erkennungsteil (Nachtrag
@@ -714,7 +726,36 @@ pub fn run(
                 // Durchlauf) schlägt fehl: nicht den ganzen, bereits
                 // registrierten Node abwürgen — kurz warten, erneut
                 // versuchen (z. B. transiente Ressourcenknappheit).
-                std::thread::sleep(std::time::Duration::from_secs(2));
+                //
+                // Nutzerfund 2026-09-03 ("nach dem Laden eines neuen Clips
+                // ist die Ausgabe kaputt/eingefroren"): dieser Zweig las
+                // `event_rx` bislang GAR NICHT, sondern schlief blind 2s
+                // und versuchte danach `build(&cfg, ...)` MIT DERSELBEN
+                // (kaputten) `cfg` erneut — ein korrigierendes `Load`/
+                // `Stop` blieb im Kanal liegen, ohne je `cfg`/`shared` zu
+                // aktualisieren, der Node steckte bei einer dauerhaft
+                // unbaubaren Datei (z. B. eine versehentlich aus der
+                // `mediaLibrary` gewählte Nicht-MXF-Datei) FÜR IMMER in
+                // dieser Fehlerschleife fest. Jetzt: statt blind zu
+                // schlafen, bis zu 2s auf genau EIN Kommando warten und es
+                // anwenden — derselbe Kommandopfad wie im normalen
+                // Innenloop unten, nur ohne aktives `ActivePipeline`.
+                match event_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                    Ok(LoopEvent::Cmd(Command::Stop)) => {
+                        shared.lock().expect("lock poisoned").playing = false;
+                    }
+                    Ok(LoopEvent::Cmd(Command::Load(file))) => {
+                        cfg.file_path = file.clone();
+                        shared.lock().expect("lock poisoned").file_path = file;
+                    }
+                    Ok(LoopEvent::Cmd(Command::SetPreset(preset))) => {
+                        shared.lock().expect("lock poisoned").preset_id = preset.id.clone();
+                        cfg.preset = preset;
+                    }
+                    Ok(LoopEvent::Cmd(Command::Play)) | Ok(LoopEvent::Cmd(Command::Seek(_))) | Ok(LoopEvent::CycleDone) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
                 continue 'outer;
             }
         };
