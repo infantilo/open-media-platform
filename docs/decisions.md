@@ -20673,3 +20673,76 @@ weiter grün, alle Test-Instanzen danach gelöscht.
 `nodes/omp-mxf-player-direct/src/main.rs`,
 `nodes/omp-mxf-player-direct/Cargo.toml` (neue Abhängigkeit
 `gstreamer-pbutils`).
+
+## 2026-09-03 (Nachtrag 175) — Nutzerfund direkt nach Nachtrag 174: "wenn mxf player im stop und ich seeke, dann bleibt das bild im viewer unverändert, nicht also das geseekte frame" — `Stop` grundlegend neu gebaut (pausiert statt abzureißen), Seek läuft jetzt immer über echtes `Playing`
+
+**Root Cause 1 — `Stop` zerstörte den MXL-Flow komplett:** Nachtrag
+174s `Stop` rief weiterhin `active.teardown()` (volles `set_state(Null)`
++ Drop von `MxlVideoOutput`/`MxlAudioOutput`) auf `pending_seek_ms`s
+reine Zahlen-Anzeige — ein Seek im Stillstand hatte also buchstäblich
+nichts Sichtbares mehr, worauf es wirken könnte (bestätigt: `mxl-info
+--flow` lieferte während `Stop` "Failed to create flow reader"). Fix:
+`run()`s gesamte Zustandsverwaltung umgebaut — `active:
+Option<ActivePipeline>` bleibt jetzt bei `Stop` ERHALTEN, nur
+`ActivePipeline::set_target_state(Paused, ...)` (neu) bringt die
+GESAMTE, weiterhin existierende Pipeline auf `Paused`, OHNE sie
+abzubauen. `pending_seek_ms` entfällt ersatzlos — ein `Seek` wirkt jetzt
+IMMER direkt auf eine lebende (ggf. kurz aufgebaute) Pipeline, s. unten.
+
+**Root Cause 2 — ein Seek während `Paused` blieb selbst dann
+unsichtbar, wenn die Pipeline gar nicht mehr abgebaut wurde:** live per
+`mxl-info` bestätigt (Head-Index blieb bei `0`, obwohl `Active: true`
+und `positionMs` korrekt den Zielwert zeigte). Ursache in
+`omp-mediaio/src/mxl.rs` gefunden (nicht verändert, nur verstanden):
+`write_loop` pullt Samples per `AppSink::try_pull_sample()` — diese API
+liefert laut GStreamer-Dokumentation bewusst NICHT das reine
+Preroll-Sample einer `Paused`-Pipeline (nur `try_pull_preroll()` täte
+das, hier aber nicht verwendet). Ein flushender Seek während `Paused`
+lässt also zwar `mxfdemux`/den Rest der Pipeline korrekt neu
+preroll(en), aber `write_loop` bekommt dieses erste Sample nie zu
+Gesicht. Fix: `build()` geht — wie schon vor diesem gesamten
+UI-Auftrag, unverändert bewährt — IMMER bis `Playing` durch (der
+`target_state`-Parameter aus einem Zwischenstand wurde wieder entfernt).
+`run()`s Seek-Behandlung schaltet eine pausierte Pipeline jetzt VOR dem
+eigentlichen `seek()`-Aufruf kurz auf `Playing`, seekt dort (liefert
+garantiert reguläre, nicht-Preroll-Samples), und erst NACH einem
+erfolgreichen Seek — falls der gewünschte Ruhezustand `Stop` ist — wieder
+zurück auf `Paused`. Dasselbe Prinzip gilt jetzt auch für einen
+`SetPreset`-Neuaufbau im Stillstand.
+
+**Root Cause 3 — reine Zeit-basierte Fertig-Erkennung blieb selbst mit
+großzügiger fester Wartezeit unzuverlässig:** ein flushender Seek zwingt
+`mxfdemux` zum Neu-Einlesen ab dem nächsten Keyframe VOR dem Ziel plus
+Neu-Dekodierung bis dorthin — eine variable, gelegentlich lange Latenz
+(GOP-Struktur-abhängig), die keine feste Wartezeit zuverlässig abdeckt.
+Per Stresstest belegt: 250ms (ursprünglich, 1:1 aus `omp-mxf-player`
+übernommen) ≈ 1 von 6 Versuchen scheiterte sichtbar, 600ms (erster
+Fixversuch) ≈ 1 von 12. Fix: `ActivePipeline` bekommt ein neues
+`frame_count: Arc<AtomicU64>`, per Pad-Probe (`PadProbeType::BUFFER`)
+auf `vqueue`s Src-Pad hochgezählt — `perform_seek()` wartet jetzt aktiv
+(kurze 20ms-Zwischenschritte, 2s als Sicherheitsnetz) auf einen
+TATSÄCHLICHEN neuen Video-Buffer statt blind eine feste Zeit
+verstreichen zu lassen, plus 150ms feste Nachlaufzeit (der Zähler sitzt
+VOR `MxlVideoOutput`s eigener, hier nicht einsehbarer interner Kette
+[`videoconvert`/`videoscale`/`videorate`/`appsink`] — diese Reststrecke
+ist aber kurz und wenig variabel, reine Formatkonvertierung ohne
+Codec-Decode). Bewusst KEIN Eingriff in die geteilte
+`omp-mediaio`-Bibliothek (träfe alle ~13 Aufrufstellen, s. dortige
+`paced`-Blast-Radius-Doku) — die Lösung bleibt vollständig lokal in
+diesem Node.
+
+**Live verifiziert** (frische Instanz über den Orchestrator gestartet,
+echte HTTP-API + `mxl-info`, jeweils Head-Index als Ground Truth statt
+`positionMs`): 25 aufeinanderfolgende Seeks im Stillstand (zufällige
+Zielwerte über die gesamte Clip-Länge, inkl. des allerersten Seeks vor
+jeder Wiedergabe) — 25/25 zeigten ein tatsächlich neues, dem Ziel
+entsprechendes MXL-Bild (Head-Index bewegte sich, blieb danach stabil
+eingefroren). Zusätzlich verifiziert: `Play` nach `Stop` setzt die
+ECHTE Wiedergabe fort (Head-Index advancing), `SetPreset` sowohl bei
+laufender als auch bei gestoppter Wiedergabe (Routing wechselt, Status
+bleibt korrekt erhalten, im gestoppten Fall liefert der Neuaufbau
+ebenfalls ein frisches Bild), `Load` im Stillstand startet weiterhin
+sauber von vorn auf `Playing` (unverändertes Verhalten). `cargo test
+--workspace` weiter grün, alle Test-Instanzen danach gelöscht.
+
+**Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`.

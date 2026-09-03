@@ -11,11 +11,14 @@
 //! ist nur noch der anfangs VORGESCHLAGENE Startwert, KEIN Autoplay mehr
 //! (Nutzerfund 2026-09-03: "the player should not load/play an video on
 //! creation", s. `pipeline.rs::run()`-Moduldoku): der Node registriert
-//! sich im Leerlauf, Wiedergabe beginnt erst auf `play`/`load`. Das UI
-//! kann die Datei live wechseln (`load`), abspielen/anhalten
+//! sich im Leerlauf, Wiedergabe beginnt erst auf `play`/`load`/`seek`.
+//! Das UI kann die Datei live wechseln (`load`), abspielen/anhalten
 //! (`play`/`stop`), innerhalb des Clips suchen (`seek` — auch im
-//! Stillstand: merkt sich das Ziel und wendet es beim nächsten
-//! `play`/`load` an) und das Audio-Shuffle-Preset ändern (`setPreset`)
+//! Stillstand: `stop` bringt eine bestehende Pipeline nur auf PAUSED
+//! statt sie abzubauen, ein Seek danach liefert also ein echtes
+//! Vorschaubild statt bloß eine Zahl, s. `pipeline.rs::run()`-Moduldoku
+//! "Stop pausiert, baut NICHT mehr ab") und das Audio-Shuffle-Preset
+//! ändern (`setPreset`)
 //! — direkter, vereinfachter Nachbau von `omp-mxf-player/ui/bundle.js`
 //! (dieselbe generische Node-Proxy-API
 //! `/api/v1/nodes/<id>/methods/<name>`), OHNE dessen Playlist/Cue-Take-
