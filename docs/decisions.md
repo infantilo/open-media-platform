@@ -20265,3 +20265,57 @@ liefert Elemente zurück), `nodes/omp-viewer/src/pipeline.rs`
 (`PREVIEW_FPS_MIN/MAX`, `rebuild_mjpeg_branch`, `Command::
 SetPreviewFps`), `nodes/omp-viewer/src/main.rs` (`previewFps`-Param),
 `nodes/omp-viewer/ui/bundle.js` (Bildraten-Regler + `token`-Scope-Fix).
+
+## 2026-09-03 (Nachtrag 169) — Nutzerfund: beim Workflow-Start tauchen die einzelnen Rollen-Nodes kurz einzeln im Flow-Editor-Host-Fenster auf, bevor sie in die kollabierte Workflow-Kachel wandern — Root Cause im Orchestrator gefunden und behoben, kein Frontend-Bug
+
+**Root Cause:** `workflows.Service.runStart()` startet alle Rollen-
+Instanzen, ruft dann `awaitRegistration()` auf, das pollt, bis für JEDE
+Rolle ein registrierter Node mit passender `InstanceID` auftaucht, und
+trägt dessen `NodeID` in `wf.Runtime[role]` ein — bis heute aber NUR
+lokal im `wf`-Wert dieser Goroutine, sichtbar für Store/SSE-Abonnenten
+erst NACH der gesamten Schleife (`s.store.UpdateRuntime`/`s.publish`
+liefen bisher nur EINMAL, ganz am Ende von `runStart`, nachdem ALLE
+Rollen registriert waren). Der Flow-Editor (`ui/graph/flow-canvas.ts`)
+bekommt aber pro gestarteter Instanz SOFORT ein eigenes
+`"node.added"`-SSE-Event, sobald sie sich bei der NMOS-Registry
+anmeldet — löst `#fetchAndRender()` aus. Zu diesem frühen Zeitpunkt
+zeigte `GET /api/v1/workflows` für diese Rolle noch KEINE `NodeID`,
+`#allWorkflowMemberNodeIds()` filtert den Node deshalb noch nicht aus
+der Root-Kachelliste — er erscheint einzeln, bis das EINE,
+abschließende `"workflow.updated"`-Event nach der KOMPLETTEN
+Registrierung aller Rollen eintrifft. Bei mehreren Rollen (dem
+Normalfall) kann das mehrere Sekunden dauern statt nur einen Frame —
+exakt das gemeldete Verhalten. Kein Frontend-Bug: `#allWorkflowMember
+NodeIds()`/`#rootZoneTileIds()` filtern bereits korrekt, sobald die
+Information tatsächlich vorliegt.
+
+**Fix (`orchestrator/internal/workflows/service.go::awaitRegistration`):**
+jede einzeln aufgelöste Rollen-`NodeID` wird jetzt SOFORT persistiert
+UND publiziert (`s.store.UpdateRuntime(wf)` + `s.publish(wf)`, dieselben
+Aufrufe, die `runStart` selbst am Ende ohnehin macht — hier zusätzlich
+PRO Rolle statt nur einmal am Schluss). `awaitRegistration` wird sowohl
+vom initialen Workflow-Start (`runStart`) als auch von einem anderen
+Rollen-Neustart-Pfad genutzt — derselbe Fix gilt für beide, ohne
+Sonderfall. `wf.Runtime` ist eine Map (Referenztyp) — die Mutation im
+lokalen `wf`-Wert dieser Funktion ist über den geteilten Store/dieselbe
+zugrundeliegende Map auch für `runStart`s eigenen `wf`-Wert sichtbar,
+kein zusätzlicher Rückgabewert nötig. `store.UpdateRuntime` ist laut
+eigener Dokumentation genau für wiederholte Zwischen-Persistierung
+während eines Starts/Stopps ausgelegt (bewahrt `definition.schedules`
+gegen einen parallelen Scheduler-Write) — mehrfacher statt einmaliger
+Aufruf ist bestimmungsgemäße Nutzung, kein Zweckentfremden.
+
+**Verifiziert (echter Orchestrator-Pfad, disponibler 4-Rollen-Test-
+Workflow "TEST1"):** `POST .../start` ausgelöst, `/api/v1/graph` und
+`/api/v1/workflows/<id>` im 250ms-Takt parallel gepollt. Vorher hätte
+das letzte `workflow.updated` erst nach der KOMPLETTEN Registrierung
+aller vier Rollen kommen können (`runtime_bound` bliebe bis dahin bei
+0/4, während `graph_nodes` schon vorher steigt). Live gemessen: im
+selben Poll-Tick, in dem `graph_nodes` von 0 auf 4 sprang, war
+`runtime_bound` bereits `3/4` — die letzte Rolle folgte im NÄCHSTEN
+Tick ~330ms später (`4/4`, `status: started`). `go test ./...`
+(gesamtes Orchestrator-Modul) grün, `go vet`/Build sauber. Workflow
+danach sauber gestoppt, keine verwaisten Instanzen.
+
+**Datei:** `orchestrator/internal/workflows/service.go`
+(`awaitRegistration`).

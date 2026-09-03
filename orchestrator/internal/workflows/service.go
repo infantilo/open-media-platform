@@ -949,6 +949,30 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 // awaitRegistration pollt den Node-Bestand, bis für jede Rolle ein Node
 // mit passender InstanceID erscheint, und trägt dessen Node-ID in
 // wf.Runtime ein.
+//
+// **UI-Flackern behoben (Nutzerfund 2026-09-03):** "die einzelnen Nodes
+// tauchen kurz im Flow-Editor im Host-Fenster selbst auf und werden dann
+// erst in den Workflow-Node geschoben". Root Cause: bis hierhin trug
+// diese Funktion jede aufgelöste `NodeID` nur im LOKALEN `wf`-Wert
+// dieser Goroutine nach — sichtbar für Store/SSE-Abonnenten erst am
+// Ende von `runStart` (nach der `for`-Schleife hier), also erst NACHDEM
+// ALLE Rollen registriert sind. Der Flow-Editor bekommt aber pro
+// gestarteter Instanz sofort ein eigenes `"node.added"`-SSE-Event (löst
+// `#fetchAndRender()` aus, sobald die Instanz sich bei der NMOS-Registry
+// anmeldet) — zu diesem frühen Zeitpunkt zeigt `GET /api/v1/workflows`
+// für diese Rolle noch KEINE `NodeID`, `#allWorkflowMemberNodeIds()`
+// (ui/graph/flow-canvas.ts) filtert den Node deshalb noch nicht aus der
+// Root-Kachelliste heraus — er erscheint kurz einzeln, bis das
+// EINE, abschließende `"workflow.updated"`-Event nach der kompletten
+// Registrierung ALLER Rollen eintrifft. Bei mehreren Rollen (dem
+// Normalfall) kann das mehrere Sekunden dauern, nicht nur einen
+// Frame. Fix: JEDE einzeln aufgelöste Rollen-`NodeID` sofort persistieren
+// UND publizieren (`s.store.UpdateRuntime`/`s.publish`, dieselben
+// Aufrufe, die `runStart` selbst am Ende ohnehin schon macht — hier nur
+// zusätzlich PRO Rolle statt nur einmal am Schluss) — der Flow-Editor
+// bekommt die Bindung dadurch spätestens einen `registrationPollInterval`
+// (300ms) nach dem `node.added`-Event derselben Instanz, statt erst nach
+// der gesamten restlichen Rollen-Registrierung.
 func (s *Service) awaitRegistration(ctx context.Context, wf Workflow, pending map[string]string) error {
 	ticker := time.NewTicker(registrationPollInterval)
 	defer ticker.Stop()
@@ -960,6 +984,10 @@ func (s *Service) awaitRegistration(ctx context.Context, wf Workflow, pending ma
 				rt.NodeID = node.ID
 				wf.Runtime[role] = rt
 				delete(pending, role)
+				if err := s.store.UpdateRuntime(wf); err != nil {
+					slog.Warn("workflows: failed to persist incremental role registration", "id", wf.ID, "role", role, "error", err)
+				}
+				s.publish(wf)
 			}
 		}
 		if len(pending) == 0 {
