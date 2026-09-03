@@ -20108,3 +20108,74 @@ Queue-Handler; `request_branch_paused`: `set_locked_state(false)` vor
 `send_event`, pro-Pad statt pro-Element; `replace_slot`: neuer
 `fresh_slot_pads`-Helper + Fallback-auf-Leerlaufzweig bei jedem
 Branch-Aufbau-Fehlschlag).
+
+## 2026-09-03 (Nachtrag 167) — Nutzerauftrag "mach das auch für omp-player": Nachtrag 166s Kaskaden-Fix (Bug 3) 1:1 nachgebaut, live verifiziert; dabei NEUER, von diesem Fix komplett unabhängiger Bug gefunden: `omp-player`s `File`-Wiedergabe (`uridecodebin`) liefert nach `take()` STILL KEIN einziges MXL-Grain — TestPattern-Items funktionieren einwandfrei
+
+**Anlass:** Nutzer bestätigte nach Nachtrag 166s Analyse ("ist der Bug
+in `omp-player` relevant?"), den dort identifizierten Fund 3
+(`replace_slot` verliert einen Slot dauerhaft bei JEDEM Fehlschlag,
+nicht nur beim Teardown-Timeout — `omp-player`s eigenes `replace_slot`
+hat exakt dieselbe `remove()`-vor-`?`-vor-`insert()`-Struktur) genauso
+für `omp-player` nachzubauen.
+
+**Fix 1:1 übertragen** (`nodes/omp-player/src/pipeline.rs`):
+- `run_with_timeout` (wortgleich aus `omp-mxf-player` übernommen) —
+  `omp-player`s `teardown_branch` hatte bis dahin GAR KEINEN Timeout-
+  Schutz (kein Äquivalent zu Nachtrag 157), obwohl der eigene
+  Funktions-Kommentar dort explizit dokumentiert, dass `set_state(Null)`
+  ABSICHTLICH blockierend verwendet wird, bis GStreamers Streaming-
+  Thread eines Elements tatsächlich gestoppt hat — ein dort steckender
+  Thread hätte den GESAMTEN Kommando-Thread für immer lahmgelegt, ohne
+  dass irgendein Sicherheitsnetz das je abgefangen hätte.
+- Neuer `teardown_and_get_pad`-Helper (Äquivalent zu `fresh_slot_pads`):
+  bei Timeout wird statt des alten ein frischer `input-selector`-Sink-
+  Pad angefordert (`sink_%u`, "On request"). `apply_active` liest den
+  Pad bereits vorher IMMER dynamisch aus `branch.pad`, keine Änderung
+  dort nötig.
+- `replace_slot` in eine reine `try_build_branches`-Aufbaufunktion
+  (unverändert übernommene ursprüngliche Match-Logik über die drei
+  `ItemSource`-Varianten) plus einen äußeren Fallback-Block aufgeteilt:
+  bei JEDEM Fehlschlag wird per `contains_key`-Prüfung festgestellt,
+  welche der beiden UNABHÄNGIGEN Branch-Arten (Video optional, Audio
+  immer) noch fehlt — bei `TestPattern`/`Live` kann nämlich genau EINE
+  von beiden bereits erfolgreich eingefügt worden sein, bevor die
+  andere scheiterte (anders als bei `omp-mxf-player`s einzelnem
+  Branch pro Slot) — und füllt NUR die fehlende(n) mit einem frischen
+  Pad + schwarzem/stummem Leerlaufzweig auf. Der ursprüngliche Fehler
+  wird weiterhin ehrlich zurückgegeben.
+
+**Verifikation (echter Orchestrator-Pfad):** 60 `append`/`cue`/`take`-
+Zyklen mit `TestPattern`-Items (kein Delay zwischen den HTTP-Aufrufen)
+liefen KOMPLETT fehlerfrei durch — null Teardown-Timeouts, null
+kaskadierte Fehlschläge, `mxl-info`s Head-Index klettert danach sauber
+mit ~25fps weiter. Ein früherer Testlauf mit `File`-Items UND
+Vergleichslauf mit realistischem Bedien-Tempo (12 Zyklen, ~2,5s
+Abstand) zeigten ebenfalls je 2 echte, live aufgetretene Teardown-
+Timeouts, beide sauber selbstgeheilt, keine Kaskade — der Fix greift
+also nachweislich genauso wie bei `omp-mxf-player`. `cargo test -p
+omp-player` weiterhin grün (2/2).
+
+**Wichtiger Nebenfund, UNABHÄNGIG von diesem Fix — nicht behoben,
+klar dokumentiert statt stillschweigend übergangen:** derselbe `File`-
+Zyklustest (Firehose-Tempo) zeigte zusätzlich eine massiv abweichende
+Symptomatik gegenüber `TestPattern`-Items — Dutzende Teardown-Timeouts
+in Folge, Thread-Zahl (189→238+) und RSS (607MB→682MB+) stiegen
+ungebremst über 30s, `omp-node-sdk`s Liveness-Check meldete den Node
+wiederholt `degraded: ["pipeline"]`. Beim Isolieren stellte sich heraus:
+**`build_file_branches` (der `uridecodebin`-Pfad) liefert nach `cue()`+
+`take()` KEIN einziges MXL-Grain, weder Video noch Audio — nicht
+"selten", sondern reproduzierbar bei JEDEM getesteten Versuch,
+UNABHÄNGIG vom heutigen Fix.** Bestätigt per `git stash` auf den
+UNVERÄNDERTEN Vorher-Stand: derselbe Freeze tritt dort identisch auf —
+eindeutig ein bereits vorher bestehender, heute nur zufällig erstmals
+bemerkter Bug, keine Regression dieser Sitzung. `TestPattern`-Items
+(`videotestsrc`/`audiotestsrc`) funktionieren dagegen einwandfrei, auch
+über viele Zyklen hinweg (s. Verifikation oben) — der Fehler ist
+spezifisch auf den `File`-Zweig eingegrenzt, keine Fehlermeldung im Log
+in keinem der Testläufe. Root Cause NICHT untersucht (klar außerhalb
+des heutigen Auftrags) — nächste Sitzung: `GST_DEBUG=basesink:6,
+appsink:5` gegen einen manuell gestarteten `omp-player`-Prozess mit
+einem `File`-Item, analog zu Nachtrag 165s Methode.
+
+**Datei:** `nodes/omp-player/src/pipeline.rs` (neu: `run_with_timeout`,
+`teardown_and_get_pad`, `try_build_branches`; `replace_slot` umgebaut).

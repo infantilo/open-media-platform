@@ -869,6 +869,32 @@ fn build_file_branches(
     Ok((video_branch, audio_branch))
 }
 
+/// Führt `f` auf einem eigenen Thread aus und wartet höchstens `timeout`
+/// darauf — Sicherheitsnetz gegen einen echten GStreamer-internen
+/// Deadlock (Root-Cause-Fix 2026-09-03, docs/decisions.md Nachtrag 166,
+/// 1:1 aus `omp-mxf-player::pipeline::run_with_timeout` übernommen —
+/// dieselbe Bug-Klasse gilt hier genauso: `teardown_branch` unten
+/// dokumentiert selbst, dass `set_state(Null)` ABSICHTLICH blockierend
+/// verwendet wird, bis GStreamers Streaming-Thread eines Elements
+/// tatsächlich gestoppt hat — steckt dieser Thread aus irgendeinem Grund
+/// fest (z. B. mitten in `gst_pad_push_event`, dieselbe Klasse wie der
+/// oben dokumentierte `queue<N>:src`-Fund), blockiert `set_state(Null)`
+/// dann potenziell für immer, was OHNE dieses Sicherheitsnetz den
+/// gesamten Pipeline-Kommando-Thread für immer lahmlegen würde). Bei
+/// Timeout wird der Hilfs-Thread NICHT abgebrochen (kein sicherer Weg,
+/// einen blockierten OS-/GStreamer-Thread von außen zu unterbrechen) —
+/// er läuft im Hintergrund weiter und wird beim nächsten Erfolg einfach
+/// fallengelassen; ein gelegentlicher Leck-Thread ist der klar kleinere
+/// Schaden gegenüber einem dauerhaft eingefrorenen Node.
+fn run_with_timeout<F: FnOnce() + Send + 'static>(timeout: Duration, f: F) -> bool {
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = done_tx.send(());
+    });
+    done_rx.recv_timeout(timeout).is_ok()
+}
+
 /// Entfernt die Elemente eines Zweigs (State Null + aus der Pipeline
 /// entfernen) — das dazugehörige isel-Sink-Pad bleibt bestehen (anders als
 /// C11s `remove_channel_branch`, das den Pad selbst freigibt), damit
@@ -925,6 +951,38 @@ fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
     // ein zusätzliches `drop()` wäre redundant, kein zweiter Cleanup-Pfad.
 }
 
+/// Baut `old` mit Timeout-Schutz ab (`run_with_timeout`, s. dortige
+/// Doku) und liefert den Pad zurück, auf dem der NÄCHSTE Zweig für
+/// `slot` aufgebaut werden soll — bei rechtzeitigem Teardown derselbe
+/// Pad wie zuvor, bei einem Timeout ein FRISCH angeforderter (Root-
+/// Cause-Fix 2026-09-03, docs/decisions.md Nachtrag 166, 1:1 aus
+/// `omp-mxf-player::pipeline::fresh_slot_pads`s Begründung übernommen):
+/// der alte Pad könnte sonst noch vom im Hintergrund weiterlaufenden,
+/// hängengebliebenen Teardown-Thread berührt werden — `apply_active`
+/// liest den Sink-Pad bereits IMMER dynamisch aus `branch.pad`, ein
+/// Wechsel auf einen neuen Pad braucht dadurch keine Änderung dort.
+/// `isel.request_pad_simple("sink_%u")` ist laut `gst-inspect-1.0
+/// input-selector` "On request", beliebig viele Pads über die
+/// anfänglichen zwei hinaus — kein Sondermechanismus nötig. Scheitert
+/// sogar DAS (sollte praktisch nie passieren), wird der alte Pad als
+/// letzter Ausweg wiederverwendet — ein danach fehlschlagender
+/// `link()`-Aufruf im nachfolgenden Branch-Aufbau landet ohnehin bei
+/// `replace_slot`s eigenem Fallback-auf-Leerlaufzweig.
+fn teardown_and_get_pad(pipeline: &gst::Pipeline, isel: &gst::Element, slot: Slot, kind: &str, old: Branch) -> gst::Pad {
+    let old_pad = old.pad.clone();
+    let pipeline_for_teardown = pipeline.clone();
+    let teardown_completed = run_with_timeout(Duration::from_secs(5), move || {
+        teardown_branch(&pipeline_for_teardown, old);
+    });
+    if teardown_completed {
+        return old_pad;
+    }
+    eprintln!(
+        "omp-player: teardown von Slot {slot:?} ({kind}) nach 5s abgebrochen (vermutlich GStreamer-Deadlock, docs/decisions.md Nachtrag 157/166) — fordere frischen isel-Pad an statt {slot:?} zu riskieren"
+    );
+    isel.request_pad_simple("sink_%u").unwrap_or(old_pad)
+}
+
 struct ActivePipeline {
     pipeline: gst::Pipeline,
     video_isel: Option<gst::Element>,
@@ -962,26 +1020,27 @@ impl Drop for ActivePipeline {
     }
 }
 
-fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<(), String> {
-    let old_video_pad = if active.video_isel.is_some() {
-        active.video_branches.remove(&slot).map(|old| {
-            let pad = old.pad.clone();
-            teardown_branch(&active.pipeline, old);
-            pad
-        })
-    } else {
-        None
-    };
-    let old_audio = active
-        .audio_branches
-        .remove(&slot)
-        .ok_or("replace_slot: audio branch missing")?;
-    let audio_pad = old_audio.pad.clone();
-    teardown_branch(&active.pipeline, old_audio);
-
+/// Enthält den eigentlichen Branch-Aufbau (unverändert aus der Vorher-
+/// Version von `replace_slot` übernommen) — als eigene Funktion, damit
+/// `replace_slot` den `Result` abfangen und bei JEDEM Fehlschlag (nicht
+/// nur beim Teardown-Timeout) einen Fallback einfügen kann, statt den
+/// betroffenen Slot per `?` dauerhaft ohne Branch zurückzulassen (Root-
+/// Cause-Fix 2026-09-03, docs/decisions.md Nachtrag 166 — dieselbe
+/// Kaskade wie in `omp-mxf-player::pipeline::replace_slot` live
+/// gefunden UND hier per Code-Lesen bestätigt: `video_branches`/
+/// `audio_branches` verlieren ihren Eintrag für `slot` schon beim
+/// `.remove()` oben in `replace_slot`, ein späterer `?`-Fehlschlag HIER
+/// erreicht das erneute `.insert()` nie).
+fn try_build_branches(
+    active: &mut ActivePipeline,
+    slot: Slot,
+    item: &Item,
+    video_pad: Option<gst::Pad>,
+    audio_pad: gst::Pad,
+) -> Result<(), String> {
     match &item.source {
         ItemSource::TestPattern { pattern, tone_freq } => {
-            if let Some(pad) = old_video_pad {
+            if let Some(pad) = video_pad {
                 let branch =
                     build_video_branch(&active.pipeline, pad, pattern, active.width, active.height)?;
                 active.video_branches.insert(slot, branch);
@@ -992,7 +1051,7 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
         ItemSource::File { uri } => {
             let (video_branch, audio_branch) = build_file_branches(
                 &active.pipeline,
-                old_video_pad,
+                video_pad,
                 audio_pad,
                 uri,
                 active.width,
@@ -1004,7 +1063,7 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
             active.audio_branches.insert(slot, audio_branch);
         }
         ItemSource::Live { video_flow_id, audio_flow_id } => {
-            if let Some(pad) = old_video_pad {
+            if let Some(pad) = video_pad {
                 let branch = match video_flow_id {
                     Some(flow_id) => build_live_video_branch(
                         &active.pipeline,
@@ -1031,6 +1090,64 @@ fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<
         }
     }
     Ok(())
+}
+
+fn replace_slot(active: &mut ActivePipeline, slot: Slot, item: &Item) -> Result<(), String> {
+    let old_video_pad = if let Some(isel) = active.video_isel.clone() {
+        active
+            .video_branches
+            .remove(&slot)
+            .map(|old| teardown_and_get_pad(&active.pipeline, &isel, slot, "Video", old))
+    } else {
+        None
+    };
+    let old_audio = active
+        .audio_branches
+        .remove(&slot)
+        .ok_or("replace_slot: audio branch missing")?;
+    let audio_isel = active.audio_isel.clone();
+    let audio_pad = teardown_and_get_pad(&active.pipeline, &audio_isel, slot, "Audio", old_audio);
+
+    let build_result = try_build_branches(active, slot, item, old_video_pad, audio_pad);
+    if let Err(e) = &build_result {
+        eprintln!(
+            "omp-player: Branch-Aufbau für Slot {slot:?} fehlgeschlagen ({e}) — fülle fehlende Zweige mit schwarzem/stummem Leerlauf auf, damit {slot:?} nicht dauerhaft ohne Zweig bleibt"
+        );
+        // Nur EINE der beiden Branch-Arten kann bereits erfolgreich
+        // eingefügt worden sein, bevor der Aufbau der anderen scheiterte
+        // (s. `try_build_branches`s Reihenfolge je `ItemSource`-Variante)
+        // — `contains_key` prüft das explizit, damit ein bereits
+        // erfolgreicher Zweig hier nicht überschrieben wird.
+        if let Some(isel) = active.video_isel.clone()
+            && !active.video_branches.contains_key(&slot)
+        {
+            match isel.request_pad_simple("sink_%u") {
+                Some(pad) => match build_video_branch(&active.pipeline, pad, EMPTY_PATTERN, active.width, active.height) {
+                    Ok(branch) => {
+                        active.video_branches.insert(slot, branch);
+                    }
+                    Err(fallback_err) => {
+                        eprintln!("omp-player: Video-Fallback für Slot {slot:?} schlug ebenfalls fehl: {fallback_err}")
+                    }
+                },
+                None => eprintln!("omp-player: frischer Video-Pad für Fallback (Slot {slot:?}) fehlgeschlagen"),
+            }
+        }
+        if !active.audio_branches.contains_key(&slot) {
+            match active.audio_isel.request_pad_simple("sink_%u") {
+                Some(pad) => match build_audio_branch(&active.pipeline, pad, EMPTY_TONE_FREQ) {
+                    Ok(branch) => {
+                        active.audio_branches.insert(slot, branch);
+                    }
+                    Err(fallback_err) => {
+                        eprintln!("omp-player: Audio-Fallback für Slot {slot:?} schlug ebenfalls fehl: {fallback_err}")
+                    }
+                },
+                None => eprintln!("omp-player: frischer Audio-Pad für Fallback (Slot {slot:?}) fehlgeschlagen"),
+            }
+        }
+    }
+    build_result
 }
 
 fn apply_active(active: &ActivePipeline, slot: Slot) {
