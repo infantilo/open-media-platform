@@ -19893,3 +19893,101 @@ sondern liefert nur einen funktionierenden Direktwiedergabe-Weg für den
 Kopie von `omp-mxf-player/src/presets.rs`), `nodes/Cargo.toml`
 (Workspace-Member ergänzt), `deploy/catalog.json` (neuer Katalog-
 Eintrag `omp-mxf-player-direct`).
+
+## 2026-09-03 (Nachtrag 165) — `omp-mxf-player`s Nachtrag-164-Root-Cause GEFUNDEN + BEHOBEN: gecute Zweige rasten nach `take()` in ~3x Echtzeit-Tempo durch die Datei statt real getaktet zu spielen, landen fast sofort auf EOS und schreiben danach nichts mehr — sieht bei jeder späteren Prüfung wie ein von Anfang an eingefrorener MXL-Head-Index aus. Separater, NICHT behobener Zweitfund: ein Race beim zweiten `cue()`-Zyklus (GStreamer promoviert neu hinzugefügte Branch-Elemente selbstständig Richtung PLAYING, bevor der explizite Paused-Preroll sie einholt)
+
+**Anlass:** Aufgriff des expliziten Session-TODOs aus Nachtrag 164
+("CPU-Baseline von `omp-mxf-player-direct` gegen `omp-mxf-player` bei
+äquivalenter Last vergleichen") — dabei mangels funktionierendem
+Vergleichsfall (`omp-mxf-player`s Pfad lieferte erneut nur ~1-14% CPU
+statt der für Echtzeit-Decode/Mix erwarteten Größenordnung, s.
+[[project_mxf_player_direct_cpu_baseline_todo_2026_09_02]] im
+Memory-System) old Nachtrag 164s offenen Punkt direkt weiterverfolgt,
+statt nur erneut zu dokumentieren, dass er offen ist.
+
+**Root Cause (verifiziert per `GST_DEBUG=basesink:6,appsink:5` an einem
+manuell gestarteten Diagnose-Prozess, dann am ECHTEN Orchestrator-Pfad
+bestätigt — dieselbe Zwei-Stufen-Methode wie Nachtrag 161/164):**
+`filesrc`/`mxfdemux`/`decodebin` sind KEINE Live-Quellen — anders als
+`build_empty_branch`s `videotestsrc`/`audiotestsrc` (beide
+`is-live=true`, zeitstempeln ihre Puffer dadurch automatisch relativ
+zur ECHTEN, seit Prozessstart durchgehend laufenden Pipeline-Clock)
+beginnt `mxfdemux`s Segment bei PTS≈0, bezogen auf die Dateiposition.
+Ein per `cue()` NACHTRÄGLICH in die längst laufende, gemeinsame
+Pipeline eingehängter Zweig hat dadurch eine Running-Time, die vom
+ersten Frame an weit in der Vergangenheit der tatsächlichen
+Pipeline-Running-Time liegt. Der `sync=true`-Appsink
+(`MxlVideoOutput::new_paced`/`MxlAudioOutput::new_paced`, Nachtrag 160)
+wartet für einen Puffer, dessen berechnete Running-Time bereits
+"überfällig" ist, NIE — er rendert sofort. Live per Debug-Log
+bestätigt: eine 10s-Testdatei durchläuft nach `take()` in ca. 3,3
+Echtzeit-Sekunden (Video-`appsink`s `got times start`-Werte springen
+beim Umschalten von der vorherigen Laufzeit zurück auf ~0 und steigen
+danach ca. 3x schneller als Echtzeit bis 10s/EOS). `mxl::write_loop`
+(`nodes/omp-mediaio/src/mxl.rs`) indiziert MXL-Grains dabei über die
+tatsächliche WANDUHR (`context.instance.get_current_index`, da für
+datei-decodierte Puffer kein `ReferenceTimestampMeta` anliegt) — der
+Head-Index selbst bleibt dadurch korrekt an der echten Uhrzeit
+verankert, aber weil der ganze Inhalt in Sekundenbruchteilen
+durchgereicht wird, ist die Datei oft schon fertig UND `write_loop`
+bereits wieder im (an sich funktionierenden) EOS-Leerlauf, bevor
+irgendjemand `mxl-info` das erste Mal prüft — sieht dann exakt wie
+Nachtrag 164s "NULL Bewegung von Anfang an" aus, ist aber tatsächlich
+"längst fertig, bevor hingeschaut wurde".
+
+**Erster Fixversuch (verworfen, live widerlegt):** `input-selector`s
+`sync-streams`-Property (Default `true`, laut
+`gst-inspect-1.0 input-selector`: "Synchronize inactive streams to the
+running time of the active stream or to the current clock") war in
+diesem Node seit dem allerersten Commit (2026-08-06, VOR `new_paced`)
+explizit auf `false` gesetzt — naheliegende erste Vermutung. Live
+getestet (auf `true` umgestellt, neu gebaut, identischer Debug-Lauf):
+KEINE Änderung, dieselben ~3,3s für die volle Datei. `sync-streams`
+regelt offenbar nur Inter-Pad-Segment-Konsistenz INNERHALB des
+`input-selector`, keine Laufzeit-Korrektur gegenüber der Pipeline-Uhr —
+dennoch beibehalten (`true` ist ohnehin der GStreamer-Default, keine
+Regression, s. Code-Kommentar in `pipeline.rs`).
+
+**Tatsächlicher Fix:** `gst::Pad::set_offset()` auf `video_tail_pad`
+und jedem Gruppen-`Terminal::tail_src_pad` in `build_mxf_branch`,
+gesetzt auf `pipeline.current_running_time()` — direkt NACHDEM der
+Zweig bestätigt PLAYING erreicht hat (unmittelbar vor `Ok(Branch {…})`).
+Genau das von GStreamer für "spät zu einer laufenden Pipeline
+hinzugefügte Quelle" vorgesehene Standardmuster: der Offset addiert
+sich zu jedem PTS/DTS, das anschließend durch diesen Pad läuft, womit
+der `sync=true`-Appsink wieder wie vorgesehen paced. Live über den
+ECHTEN Orchestrator-Pfad (`POST /api/v1/instances`, `POST .../methods/
+{append,cue,take}`, verifiziert per `mxl-info --domain /dev/shm/omp-mxl
+-f <flow>` im 2s-Takt) bestätigt: Video-Head-Index steigt in sauberen
+~51-52-Grain-Schritten je 2s (≈25fps), die parallel geprüfte
+Programmton-Gruppe im passenden ~48kHz-Takt, beide laufen synchron über
+die volle Dateidauer und frieren danach korrekt auf EOS ein (kein Bug —
+`mxl-info` zeigt für ein zu Ende gespieltes Item erwartungsgemäß keine
+weitere Bewegung). `cargo test -p omp-mxf-player` weiterhin grün (8/8,
+unverändert).
+
+**NICHT behoben, neuer Zweitfund (erweitert Nachtrag 164s Zyklus-2-
+Befund):** ein zweiter `cue()` auf denselben Node (ersetzt den jeweils
+NICHT on-air Slot) schlägt reproduzierbar fehl — zweimal live beobachtet,
+mit UNTERSCHIEDLICHEN Fehlermeldungen (`"teardown von Slot A nach 5s
+abgebrochen (vermutlich GStreamer-Deadlock, Nachtrag 157)"` bzw.
+`"videoscale4 meldet nach dem Warten Zustand Playing statt Paused"`),
+was auf eine echte Race statt eines deterministischen Bugs hindeutet.
+Arbeitshypothese (nicht verifiziert): `GstBin` promoviert ein per
+`pipeline.add()` neu hinzugefügtes Element automatisch Richtung des
+Bin-eigenen (hier: dauerhaft PLAYING) Zustands, BEVOR
+`build_mxf_branch`s expliziter `request_branch_paused()`-Aufruf (der
+genau das verhindern soll, s. dortige Doku) überhaupt läuft — ein
+Element wie `videoscale4`, das diese Auto-Promotion vor dem expliziten
+Paused-Request gewinnt, widerspricht danach `confirm_branch_state`s
+Erwartung. Betrifft NICHT den heute gefixten Pfad (Fehler tritt schon
+VOR dem neuen `set_offset`-Code auf, bereits beim Preroll des zweiten
+Zweigs) — deckt sich mit Nachtrag 164s ebenfalls beim zweiten Zyklus
+gefundenem `"filesrc1 … Paused statt Playing"`. Für eine künftige
+Sitzung offen; bis dahin ist nur der ERSTE `cue()`/`take()`-Zyklus pro
+Instanz verlässlich (deckt `omp-mxf-player-direct`-artige Einzel-Item-
+Wiedergabe ab, nicht aber echten Playlist-Betrieb mit vorausschauendem
+Cue).
+
+**Datei:** `nodes/omp-mxf-player/src/pipeline.rs`
+(`build`/`build_mxf_branch`, `sync-streams`+neuer `set_offset`-Block).

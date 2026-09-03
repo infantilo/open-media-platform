@@ -770,6 +770,42 @@ fn build_mxf_branch(
     request_branch_playing(&full)?;
     confirm_branch_state(&full, gst::State::Playing, gst::ClockTime::from_seconds(3))?;
 
+    // Root-Cause-Fix 2026-09-03 (docs/decisions.md): `filesrc`/`mxfdemux`/
+    // `decodebin` sind KEINE Live-Quellen — anders als `build_empty_branch`s
+    // `videotestsrc(is-live=true)`/`audiotestsrc(is-live=true)` (die ihre
+    // Puffer automatisch relativ zur ECHTEN Pipeline-Clock zeitstempeln,
+    // deshalb unbetroffen) beginnt `mxfdemux`s Segment bei PTS≈0, bezogen
+    // auf die Dateiposition — ohne Korrektur bedeutet das für einen Zweig,
+    // der erst NACH Prozessstart per `cue()` dynamisch in die längst
+    // laufende, gemeinsame Pipeline eingehängt wird: seine Running-Time
+    // (= PTS, da Segment-Start 0) liegt sofort weit in der Vergangenheit
+    // der tatsächlichen Pipeline-Running-Time (die seit Prozessstart
+    // kontinuierlich läuft). Der `sync=true`-Appsink (`new_paced`,
+    // Nachtrag 160) wartet dann NIE, weil jeder Puffer schon "überfällig"
+    // erscheint — live per `GST_DEBUG=basesink:6` bestätigt: eine 10s-Datei
+    // rennt nach `take()` in ~3.3 Echtzeit-Sekunden durch (statt real
+    // getaktet), landet auf EOS und schreibt danach keine weiteren MXL-
+    // Grains mehr — sieht bei jeder späteren `mxl-info`-Prüfung wie ein
+    // von Anfang an eingefrorener Head-Index aus. `sync-streams: true` am
+    // `input-selector` (naheliegender erster Versuch) behebt das NICHT
+    // (live getestet, unverändertes Rennen) — das ist reine Inter-Pad-
+    // Segment-Konsistenz des Selektors, keine Laufzeit-Korrektur. Die
+    // Pad-`offset`-Eigenschaft dagegen ist exakt für "spät zu einer
+    // laufenden Pipeline hinzugefügte Quelle" vorgesehen (GStreamer-
+    // Standardmuster): sie addiert sich zu jedem PTS/DTS, das anschließend
+    // durch DIESEN Pad läuft — auf dem eigenen Tail-Pad des Zweigs gesetzt
+    // (nach `sink_pad`, vor dem `isel`), gilt sie für alle nachfolgenden
+    // Puffer dieses Zweigs. `pipeline.current_running_time()` an GENAU
+    // dieser Stelle (Zweig gerade bestätigt PLAYING) ist die beste
+    // verfügbare Annäherung an "jetzt" — die Zeit zwischen hier und dem
+    // ersten tatsächlichen PTS=0-Puffer ist minimal (kein zusätzlicher
+    // Preroll mehr nötig, s. oben).
+    let running_time_offset = pipeline.current_running_time().unwrap_or(gst::ClockTime::ZERO).nseconds() as i64;
+    video_tail_pad.set_offset(running_time_offset);
+    for terminal in &group_terminals {
+        terminal.tail_src_pad.set_offset(running_time_offset);
+    }
+
     Ok(Branch {
         elements,
         video: Terminal { sink_pad: video_pad, tail_src_pad: video_tail_pad },
@@ -974,9 +1010,30 @@ fn apply_active(active: &ActivePipeline, slot: Slot) {
 fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<Event>) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
+    // `sync-streams: true` (Default, hier explizit — Root-Cause-Fix
+    // 2026-09-03, s. docs/decisions.md): mit `false` (Zustand seit dem
+    // allerersten Commit dieses Nodes, unverändert übernommen aus
+    // `omp-player`, das damals noch `MxlVideoOutput::new`/`sync=false`
+    // nutzte) bekommt ein gerade per `take()` aktiv geschalteter Zweig
+    // KEINE Laufzeit-Korrektur auf die bereits lange laufende,
+    // gemeinsame Pipeline-Clock — sein frisches, bei 0 beginnendes
+    // Segment gilt dadurch sofort als "längst überfällig" gegenüber der
+    // tatsächlichen Running-Time. Der `new_paced`-Appsink (`sync=true`,
+    // Nachtrag 160, 2026-08-21 — erst NACH dieser `sync-streams:false`-
+    // Zeile eingeführt, nie damit abgeglichen) wartet dann nie, sondern
+    // rendert jeden Puffer sofort: der ganze Clip rast in einem Bruchteil
+    // der echten Laufzeit durch (live per `GST_DEBUG=basesink:6`
+    // bestätigt: 10s-Datei komplett in ~3.3 Echtzeit-Sekunden), landet
+    // dann auf EOS und steht danach still — sieht bei jeder späteren
+    // `mxl-info`-Prüfung wie ein eingefrorener Head-Index aus, ist aber
+    // tatsächlich "schon fertig, bevor irgendwer hinschaute". `true`
+    // lässt `input-selector` das neu aktive Segment beim Umschalten
+    // selbst auf die aktuelle Running-Time ausrichten (GStreamer-eigene
+    // Dokumentation der Property), womit `sync=true` am Appsink wieder
+    // wie vorgesehen paced.
     let video_isel = gst::ElementFactory::make("input-selector")
         .name("video_isel")
-        .property("sync-streams", false)
+        .property("sync-streams", true)
         .build()
         .map_err(|e| format!("video input-selector: {e}"))?;
     pipeline.add(&video_isel).map_err(|e| format!("add video isel: {e}"))?;
@@ -985,7 +1042,7 @@ fn build(context: &Arc<MxlContext>, config: &Config, _event_tx: UnboundedSender<
     for group in &config.groups {
         let isel = gst::ElementFactory::make("input-selector")
             .name(format!("isel_{}", group.id))
-            .property("sync-streams", false)
+            .property("sync-streams", true)
             .build()
             .map_err(|e| format!("isel({}): {e}", group.id))?;
         pipeline.add(&isel).map_err(|e| format!("add isel({}): {e}", group.id))?;
