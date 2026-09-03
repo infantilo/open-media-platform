@@ -20467,3 +20467,78 @@ grün. Ursprüngliches Layout danach wiederhergestellt.
 
 **Datei:** `ui/graph/flow-canvas.ts` (`#assignMissingPositions`,
 `#pruneStalePositions`, `#pruneStaleHostViewPositions`).
+
+## 2026-09-03 (Nachtrag 172) — Nutzerauftrag: `omp-mxf-player-direct` (bisher rein automatisch, Autoplay einer einzigen `OMP_MXF_FILE` beim Start, keine Steuerung) bekommt ein UI zum Clip-Laden, Seeken, Play/Stop und Audio-Shuffle-Preset-Wechsel
+
+**Anlass:** "mxf player (direkt ohne playliste) braucht noch ein ui zum
+laden des clips, seeking, play, stop,..." + Nachtrag ("und audioshuffle
+selection"). Der Node war bislang bewusst diagnose-minimal (Nachtrag
+2026-09-02, s. `pipeline.rs`-Moduldoku): EIN fest verdrahteter Zweig,
+Datei aus `OMP_MXF_FILE`, `run()` baute den Zweig nur bei EOS automatisch
+neu auf, kein Kommando-Interface — `PlayerStore` hatte zwei Read-Only-
+Parameter (`file`, `status`) und keine Methoden.
+
+**Umsetzung — `pipeline.rs`:** `run()`s bisher blockierendes
+`cycle_done_rx.recv()` durch einen kommandogesteuerten `'outer`-Loop mit
+`recv_timeout(200ms)` ersetzt. Externe Kommandos (`Command::{Play, Stop,
+Load, SetPreset, Seek}`) und das interne "Zyklus zu Ende"-Signal
+(vormals ein eigener `cycle_done`-Kanal) laufen jetzt über EINEN
+gemeinsamen `LoopEvent`-Kanal (`CycleDone` | `Cmd(Command)`), damit ein
+einziger `recv_timeout` beides bedient UND gleichzeitig als Tick für
+Positions-/Dauer-Polling dient (identisches Muster wie `omp-mxf-player`s
+eigener Heartbeat-Tick). `Stop` versetzt den Node in echten Leerlauf
+(keine Pipeline aufgebaut, keine Ressourcen belegt) statt nur "still
+weiterlaufen zu lassen"; `Load`/`SetPreset` bauen den kompletten Zweig
+neu auf (derselbe, bereits mehrfach live verifizierte Weg wie der
+normale EOS-Loop-Zyklus — kein neuer, unabhängig zu verifizierender
+Codepfad, s. `omp-mxf-player-direct`s eigene Grundregel). `Seek` nutzt
+`omp-mxf-player`s bereits dokumentiertes Nachtrag-159-Muster
+(`seek_to`/Position-vor-nach-Vergleich `perform_seek`) 1:1 übernommen:
+schlägt der Seek fehl (mxfdemux-Pull-Task nach vorherigem EOS tot), baut
+`run()` den Zweig komplett neu auf und seekt danach erneut, statt für
+immer wirkungslos zu bleiben. `media_ready()` jetzt zusätzlich an
+`playing` gekoppelt (ohne dieses Gate bliebe es nach einem expliziten
+Stop fälschlich `true`, da die `flowed`-Flags absichtlich nie
+zurückgesetzt werden) und nutzt bei jedem Neuaufbau die AKTUELLEN
+`flowed`-Handles statt nur derer vom allerersten Zyklus.
+
+**`main.rs`:** `PlayerStore` bekommt `pipeline`/`media_dir`/
+`shuffle_presets`/`groups` statt der alten `file`/`status`-Felder;
+Read-Only-Parameter `positionMs`/`durationMs`/`audioPreset`/
+`mediaLibrary`/`programGroups`/`shufflePresets` (Muster 1:1 aus
+`omp-mxf-player` übernommen) sowie Methoden `play`/`stop`/`load`/`seek`/
+`setPreset` ergänzt. `extra_route` liefert jetzt ein eigenes
+`uibundle.rs`+`ui/bundle.js` (vereinfachter Nachbau von
+`omp-mxf-player/ui/bundle.js`: KEIN Playlist-/Cue-Take-Teil, da dieser
+Node immer nur EINEN aktiven Clip kennt — "load" wechselt ihn direkt,
+kein Vorbereiten eines zweiten während der erste läuft).
+
+**Live verifiziert** (echter Prozess über den Orchestrator gestartet,
+`POST /api/v1/instances`, Parameter/Methoden über die reale HTTP-API,
+Verifikation per `mxl-info`s Head-Index/`Active`-Flag statt der
+Positions-Anzeige): Autoplay beim Start unverändert bestätigt (Head
+Index advancing, `Active: true`), `stop` friert den Flow zuverlässig ein
+(Head Index über 2s stabil, `mxl-info --flow` danach sogar "Failed to
+create flow reader" — GENAU dasselbe Verhalten wie beim normalen
+EOS-Loop-Teardown, kein neues Randverhalten), `play` stellt den Flow
+zuverlässig wieder her, `seek` versetzt die Position korrekt, `setPreset`
+wechselt das Routing bei laufendem Flow ohne Unterbrechung des
+`media_ready`-Zustands, `load` startet dieselbe Datei sauber von vorn.
+**Ein falscher Alarm dabei aufgeklärt:** die erste Stop/Play-Prüfung
+schien den Video-Flow zu zeigen, der NIE lief (Head Index dauerhaft 0)
+— Ursache war NICHT der neue Code, sondern eine STALE, von einem
+längst toten Prozess dieser Sitzung übrig gebliebene `mxl-info`-Zeile
+mit demselben generischen Katalog-Label ("MXF-Player (Direkt, ohne
+Playlist)"); mit einem eindeutigen Instanz-Label neu verifiziert, floss
+der Flow von Anfang an einwandfrei — durch Vergleich mit dem
+ungeänderten Code (`git stash`) bestätigt, dass KEIN Regressionsrisiko
+bestand. UI-Bundle zusätzlich per echtem Chromium-Headless-CDP-Klicktest
+bestätigt (Panel mountet, zeigt Status/Datei/Scrub-Range korrekt, Play-/
+Stop-Buttons wechseln Zustand serverseitig UND in der Anzeige). `cargo
+test --workspace` weiter grün, Test-Instanz danach gelöscht.
+
+**Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`,
+`nodes/omp-mxf-player-direct/src/main.rs`,
+`nodes/omp-mxf-player-direct/src/uibundle.rs` (neu),
+`nodes/omp-mxf-player-direct/ui/manifest.json` (neu),
+`nodes/omp-mxf-player-direct/ui/bundle.js` (neu).

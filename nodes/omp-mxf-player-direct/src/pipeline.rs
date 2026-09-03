@@ -67,7 +67,7 @@
 //! neu auf (s. dortige Doku) — dieselben `flow_id`s bleiben über alle
 //! Zyklen gleich, ein Betrachter sieht denselben Flow einfach
 //! durchgehend weiterlaufen statt eines neuen pro Zyklus.
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use gst::prelude::*;
@@ -101,19 +101,107 @@ pub enum Event {
     Error(String),
 }
 
+/// Steuerkommandos für den UI-Auftrag 2026-09-03 ("mxf player (direkt
+/// ohne playliste) braucht noch ein ui zum laden des clips, seeking,
+/// play, stop... und audioshuffle selection"). Bewusst NUR diese fünf,
+/// KEIN Jog/Shuttle/Step wie bei `omp-mxf-player` (nicht angefordert,
+/// dieser Node bleibt "direkt"/minimal, s. Moduldoku oben) — Route über
+/// denselben `LoopEvent`-Kanal wie das interne Zyklusende, s. `run()`.
 #[derive(Clone)]
-pub struct PipelineHandle {
+pub enum Command {
+    Play,
+    Stop,
+    Load(String),
+    SetPreset(presets::AudioPreset),
+    Seek(u64),
+}
+
+/// Vereinigt externe Kommandos UND das interne "Zyklus zu Ende"-Signal
+/// (vormals ein eigener `cycle_done: Sender<()>`) in EINEM Kanal — `run()`
+/// kann so mit einem einzigen `recv_timeout` sowohl auf Bedienereingaben
+/// als auch auf EOS/Bus-Error reagieren, statt zwei Kanäle konkurrierend
+/// abfragen zu müssen.
+enum LoopEvent {
+    CycleDone,
+    Cmd(Command),
+}
+
+struct SharedState {
+    file_path: String,
+    preset_id: String,
+    playing: bool,
+    // Vom jeweils AKTUELLEN Baulauf (`build()`) übernommen — anders als
+    // eine feste Zuweisung nur beim allerersten Aufbau (das wäre nach
+    // einem `Load`/`SetPreset`-Neuaufbau bereits wieder veraltet).
     video_flowed: Arc<AtomicBool>,
     group_flowed: Vec<Arc<AtomicBool>>,
+}
+
+#[derive(Clone)]
+pub struct PipelineHandle {
+    events: std::sync::mpsc::Sender<LoopEvent>,
+    shared: Arc<Mutex<SharedState>>,
+    position_ms: Arc<AtomicI64>,
+    duration_ms: Arc<AtomicI64>,
 }
 
 impl PipelineHandle {
     /// "media-ready" (ARCHITECTURE.md §5 Punkt 6): Video- UND alle
     /// Gruppen-Ausgänge müssen jeweils mindestens einmal geflossen sein
     /// — identisches Prinzip wie `omp-mxf-player::PipelineHandle::
-    /// media_ready`.
+    /// media_ready`. Zusätzlich an `playing` gekoppelt (Nutzerauftrag
+    /// "stop"-Knopf, 2026-09-03): ohne dieses Gate bliebe `media_ready()`
+    /// nach einem expliziten Stop fälschlich `true` — die `flowed`-Flags
+    /// werden absichtlich NIE zurückgesetzt (s. `omp-mxf-player`-Vorbild,
+    /// "mindestens einmal geflossen"), ein bloßes Stoppen der Pipeline
+    /// ändert sie also nicht von sich aus.
     pub fn media_ready(&self) -> bool {
-        self.video_flowed.load(Ordering::Relaxed) && self.group_flowed.iter().all(|f| f.load(Ordering::Relaxed))
+        let s = self.shared.lock().expect("lock poisoned");
+        s.playing && s.video_flowed.load(Ordering::Relaxed) && s.group_flowed.iter().all(|f| f.load(Ordering::Relaxed))
+    }
+
+    pub fn play(&self) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::Play));
+    }
+
+    pub fn stop(&self) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::Stop));
+    }
+
+    /// Wechselt die abgespielte Datei — startet automatisch (kein
+    /// separates `play()` nötig), s. `run()`-Doku: dieser Node kennt
+    /// (anders als `omp-mxf-player`) kein Cue/Take, "eine neue Datei
+    /// laden" heißt hier direkt "sie jetzt zeigen".
+    pub fn load(&self, file_path: String) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::Load(file_path)));
+    }
+
+    pub fn set_preset(&self, preset: presets::AudioPreset) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::SetPreset(preset)));
+    }
+
+    pub fn seek(&self, position_ms: i64) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::Seek(position_ms.max(0) as u64)));
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.shared.lock().expect("lock poisoned").playing
+    }
+
+    pub fn current_file(&self) -> String {
+        self.shared.lock().expect("lock poisoned").file_path.clone()
+    }
+
+    pub fn current_preset_id(&self) -> String {
+        self.shared.lock().expect("lock poisoned").preset_id.clone()
+    }
+
+    pub fn position_ms(&self) -> i64 {
+        self.position_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn duration_ms(&self) -> i64 {
+        self.duration_ms.load(Ordering::Relaxed)
     }
 }
 
@@ -149,6 +237,9 @@ struct PendingAudio {
 
 pub struct ActivePipeline {
     _pipeline: gst::Pipeline,
+    // Für Seek (Nutzerauftrag 2026-09-03) — dieselbe `mxfdemux`-Instanz,
+    // auf der `filesrc ! mxfdemux` in `build()` unten aufsetzt.
+    demux: gst::Element,
     video_flowed: Arc<AtomicBool>,
     group_flowed: Vec<Arc<AtomicBool>>,
     // MÜSSEN für die Lebensdauer der Pipeline gehalten werden: beide
@@ -202,7 +293,7 @@ impl ActivePipeline {
 /// `Playing` für die gesamte Pipeline an — s. Moduldoku für die
 /// Begründung, warum hier (anders als `omp-mxf-player`) kein
 /// mehrphasiger Preroll-Tanz nötig ist.
-fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mpsc::Sender<()>) -> Result<ActivePipeline, String> {
+fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::Sender<LoopEvent>) -> Result<ActivePipeline, String> {
     let context = Arc::new(MxlContext::new(&config.domain)?);
     let pipeline = gst::Pipeline::new();
 
@@ -458,11 +549,11 @@ fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mps
             match msg.view() {
                 MessageView::Error(err) => {
                     let _ = tx_for_bus.send(Event::Error(format!("{} ({:?})", err.error(), err.debug())));
-                    let _ = cycle_done.send(());
+                    let _ = events.send(LoopEvent::CycleDone);
                     return;
                 }
                 MessageView::Eos(_) => {
-                    let _ = cycle_done.send(());
+                    let _ = events.send(LoopEvent::CycleDone);
                     return;
                 }
                 _ => {}
@@ -472,11 +563,54 @@ fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mps
 
     Ok(ActivePipeline {
         _pipeline: pipeline,
+        demux,
         video_flowed,
         group_flowed,
         _mxl_video_output: mxl_video_output,
         _mxl_group_outputs: mxl_group_outputs,
     })
+}
+
+fn query_position_ms(demux: &gst::Element) -> Option<i64> {
+    demux.query_position::<gst::ClockTime>().map(|t| t.mseconds() as i64)
+}
+
+fn query_duration_ms(demux: &gst::Element) -> Option<i64> {
+    demux.query_duration::<gst::ClockTime>().map(|t| t.mseconds() as i64)
+}
+
+/// S. `omp-mxf-player/src/pipeline.rs::seek_to` — wortgleich übernommen
+/// (identisches, dort bereits live verifiziertes Gotcha: ein bloßer
+/// `demux.seek()` kann `Ok(())` melden, obwohl `mxfdemux`s Pull-Task nach
+/// einem vorherigen echten Datei-EOS gar nicht mehr läuft; der explizite
+/// PAUSED→PLAYING-Zyklus zwingt GStreamer, den Task neu zu starten).
+fn seek_to(demux: &gst::Element, target_ms: u64) {
+    let _ = demux.seek(
+        1.0,
+        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+        gst::SeekType::Set,
+        gst::ClockTime::from_mseconds(target_ms),
+        gst::SeekType::None,
+        gst::ClockTime::NONE,
+    );
+    let _ = demux.set_state(gst::State::Paused);
+    let _ = demux.state(gst::ClockTime::from_mseconds(500));
+    let _ = demux.set_state(gst::State::Playing);
+}
+
+/// Wie `omp-mxf-player::seek_onair_with_revive`s Erkennungsteil (Nachtrag
+/// 159): Position vor/nach dem Seek vergleichen, `false` bedeutet
+/// "Task tot, `mxfdemux`-Pull-Task reagiert nicht mehr" — der Aufrufer in
+/// `run()` baut in diesem Fall den kompletten Zweig neu auf (dort, anders
+/// als bei `omp-mxf-player`, kein A/B-Slot-Ersatz nötig, s. Moduldoku).
+fn perform_seek(demux: &gst::Element, target_ms: u64) -> bool {
+    let before = query_position_ms(demux);
+    seek_to(demux, target_ms);
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    let after = query_position_ms(demux);
+    let seek_was_needed = before != Some(target_ms as i64);
+    let stuck = seek_was_needed && before.is_some() && after == before;
+    !stuck
 }
 
 /// Läuft in einer Endlosschleife: baut den Zweig, spielt ihn bis zu einem
@@ -492,6 +626,27 @@ fn build(config: &Config, tx: UnboundedSender<Event>, cycle_done: std::sync::mps
 /// — kompletter Neuaufbau ist derselbe, bereits als fehlerfrei bestätigte
 /// Weg wie der allererste Aufbau, kein zweiter, unabhängig zu
 /// verifizierender Codepfad.
+// Tick für Position/Dauer-Polling (`query_position_ms`/`query_duration_ms`)
+// zwischen zwei Kommandos/Zyklusenden — identisches Intervall wie
+// `omp-mxf-player::run()`s Heartbeat-Tick (dort 200ms, s. dortige Doku:
+// spürbar reaktionsschnell, ohne den Bus-Thread/`recv_timeout` unnötig zu
+// belasten).
+const TICK: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// Läuft in einer Endlosschleife, jetzt kommandogesteuert (Nutzerauftrag
+/// 2026-09-03: "mxf player... braucht noch ein ui zum laden des clips,
+/// seeking, play, stop... und audioshuffle selection") statt rein
+/// automatisch: baut den Zweig auf, spielt ihn bis zu einem echten EOS/
+/// Bus-Error, externen `Stop`/`Load`/`SetPreset`-Kommando ODER erfolglosem
+/// Seek-Revive-Versuch, baut ihn danach passend neu auf (oder geht in den
+/// Leerlauf, falls `Stop`) — dieselbe MXL-`flow_id` bleibt über JEDEN
+/// dieser Übergänge hinweg gleich (Video/Audio-Ausgänge sind fix ab
+/// `main.rs`s Sender-Registrierung), ein Betrachter (Multiviewer/Viewer)
+/// sieht denselben Flow einfach weiterlaufen bzw. kurz einfrieren statt
+/// eines komplett neuen. Autoplay beim Prozessstart bleibt erhalten (s.
+/// Moduldoku-Kopf) — `shared.playing` startet `true`, das UI muss also
+/// nicht extra "Play" drücken, nur um das an `OMP_MXF_FILE` übergebene
+/// Material überhaupt zu sehen.
 pub fn run(
     config: Config,
     tx: UnboundedSender<Event>,
@@ -504,10 +659,50 @@ pub fn run(
         return;
     }
 
+    let mut cfg = config;
+    let (event_tx, event_rx) = std::sync::mpsc::channel::<LoopEvent>();
+    let shared = Arc::new(Mutex::new(SharedState {
+        file_path: cfg.file_path.clone(),
+        preset_id: cfg.preset.id.clone(),
+        playing: true,
+        video_flowed: Arc::new(AtomicBool::new(false)),
+        group_flowed: Vec::new(),
+    }));
+    let position_ms = Arc::new(AtomicI64::new(0));
+    let duration_ms = Arc::new(AtomicI64::new(0));
     let mut ready = Some(ready);
-    loop {
-        let (cycle_done_tx, cycle_done_rx) = std::sync::mpsc::channel::<()>();
-        let active = match build(&config, tx.clone(), cycle_done_tx) {
+
+    'outer: loop {
+        if !shared.lock().expect("lock poisoned").playing {
+            position_ms.store(0, Ordering::Relaxed);
+            duration_ms.store(0, Ordering::Relaxed);
+            // Leerlauf nach `Stop`: KEINE Pipeline aufgebaut, keine
+            // Ressourcen belegt — wartet blockierend auf ein Kommando, das
+            // die Wiedergabe wieder aufnimmt.
+            match event_rx.recv() {
+                Ok(LoopEvent::Cmd(Command::Play)) => {
+                    shared.lock().expect("lock poisoned").playing = true;
+                }
+                Ok(LoopEvent::Cmd(Command::Load(file))) => {
+                    cfg.file_path = file.clone();
+                    let mut s = shared.lock().expect("lock poisoned");
+                    s.file_path = file;
+                    s.playing = true; // "Laden" heißt hier direkt "zeigen", s. Moduldoku/PipelineHandle::load.
+                }
+                Ok(LoopEvent::Cmd(Command::SetPreset(preset))) => {
+                    let mut s = shared.lock().expect("lock poisoned");
+                    s.preset_id = preset.id.clone();
+                    cfg.preset = preset;
+                    // Bleibt im Leerlauf — wirkt erst beim nächsten Play/Load.
+                }
+                Ok(LoopEvent::Cmd(Command::Stop)) | Ok(LoopEvent::Cmd(Command::Seek(_))) => {}
+                Ok(LoopEvent::CycleDone) => {}
+                Err(_) => return,
+            }
+            continue 'outer;
+        }
+
+        let mut active = match build(&cfg, tx.clone(), event_tx.clone()) {
             Ok(p) => p,
             Err(e) => {
                 let _ = tx.send(Event::Error(format!("build failed: {e}")));
@@ -520,25 +715,94 @@ pub fn run(
                 // registrierten Node abwürgen — kurz warten, erneut
                 // versuchen (z. B. transiente Ressourcenknappheit).
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                continue;
+                continue 'outer;
             }
         };
+        {
+            let mut s = shared.lock().expect("lock poisoned");
+            s.video_flowed = active.video_flowed.clone();
+            s.group_flowed = active.group_flowed.clone();
+        }
 
         if let Some(r) = ready.take() {
             let _ = r.send(Ok(PipelineHandle {
-                video_flowed: active.video_flowed.clone(),
-                group_flowed: active.group_flowed.clone(),
+                events: event_tx.clone(),
+                shared: shared.clone(),
+                position_ms: position_ms.clone(),
+                duration_ms: duration_ms.clone(),
             }));
         }
 
-        // Blockiert, bis DIESER Zyklus per Bus-Thread EOS oder einen
-        // Error meldet (s. build()) — danach explizit abbauen
-        // (`teardown()`, s. dortige Doku: ein bloßes `drop()` reicht
-        // NICHT, brachte die Pipeline nie auf NULL) und von vorn beginnen.
-        let _ = cycle_done_rx.recv();
-        active.teardown();
-        drop(active);
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Ein einziger `recv_timeout` bedient gleichzeitig: das natürliche
+        // Zyklusende (`LoopEvent::CycleDone`, per Bus-Thread aus `build()`),
+        // externe Kommandos UND das periodische Positions-/Dauer-Polling
+        // (Timeout-Fall unten) — s. `LoopEvent`-Doku oben zur Begründung
+        // des gemeinsamen Kanals.
+        loop {
+            match event_rx.recv_timeout(TICK) {
+                Ok(LoopEvent::CycleDone) => {
+                    active.teardown();
+                    drop(active);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    continue 'outer;
+                }
+                Ok(LoopEvent::Cmd(Command::Stop)) => {
+                    shared.lock().expect("lock poisoned").playing = false;
+                    active.teardown();
+                    drop(active);
+                    continue 'outer;
+                }
+                Ok(LoopEvent::Cmd(Command::Play)) => {} // Bereits aktiv — No-op.
+                Ok(LoopEvent::Cmd(Command::Load(file))) => {
+                    cfg.file_path = file.clone();
+                    shared.lock().expect("lock poisoned").file_path = file;
+                    active.teardown();
+                    drop(active);
+                    continue 'outer;
+                }
+                Ok(LoopEvent::Cmd(Command::SetPreset(preset))) => {
+                    shared.lock().expect("lock poisoned").preset_id = preset.id.clone();
+                    cfg.preset = preset;
+                    active.teardown();
+                    drop(active);
+                    continue 'outer;
+                }
+                Ok(LoopEvent::Cmd(Command::Seek(target_ms))) => {
+                    if !perform_seek(&active.demux, target_ms) {
+                        eprintln!(
+                            "omp-mxf-player-direct: Seek (Ziel {target_ms}ms) wirkungslos — mxfdemux-Task vermutlich nach EOS gestoppt, baue Zweig neu auf (s. omp-mxf-player Nachtrag 159)"
+                        );
+                        active.teardown();
+                        drop(active);
+                        match build(&cfg, tx.clone(), event_tx.clone()) {
+                            Ok(new_active) => {
+                                perform_seek(&new_active.demux, target_ms);
+                                {
+                                    let mut s = shared.lock().expect("lock poisoned");
+                                    s.video_flowed = new_active.video_flowed.clone();
+                                    s.group_flowed = new_active.group_flowed.clone();
+                                }
+                                active = new_active;
+                            }
+                            Err(e) => {
+                                let _ = tx.send(Event::Error(format!("Neuaufbau nach Seek fehlgeschlagen: {e}")));
+                                continue 'outer;
+                            }
+                        }
+                    }
+                    position_ms.store(target_ms as i64, Ordering::Relaxed);
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            }
+
+            if let Some(pos) = query_position_ms(&active.demux) {
+                position_ms.store(pos, Ordering::Relaxed);
+            }
+            if let Some(dur) = query_duration_ms(&active.demux) {
+                duration_ms.store(dur, Ordering::Relaxed);
+            }
+        }
     }
 }
 

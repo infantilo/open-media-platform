@@ -1,41 +1,113 @@
 //! omp-mxf-player-direct: minimale, playlist-lose MXF-Wiedergabe (kein
-//! `append`/`load`/`cue`/`take`, keine A/B-Slots) — spielt GENAU eine,
-//! über `OMP_MXF_FILE` vorgegebene Datei automatisch beim Prozessstart,
-//! Video UND Audio (alle Programmgruppen, Default-Preset "stereo").
-//! Diagnose-/Direkt-Geschwister von `omp-mxf-player`, s. `pipeline.rs`-
-//! Moduldoku für den Anlass (Nutzerauftrag 2026-09-02) und die genaue
-//! Abweichung vom dortigen `input-selector`/Cue-Take-Aufbau.
+//! `append`/`cue`/`take`, keine A/B-Slots) — spielt GENAU eine Datei,
+//! Video UND Audio (alle Programmgruppen). Diagnose-/Direkt-Geschwister
+//! von `omp-mxf-player`, s. `pipeline.rs`-Moduldoku für den Anlass
+//! (Nutzerauftrag 2026-09-02) und die genaue Abweichung vom dortigen
+//! `input-selector`/Cue-Take-Aufbau.
+//!
+//! **Steuer-UI** (`uibundle.rs`, Nutzerauftrag 2026-09-03: "mxf player
+//! (direkt ohne playliste) braucht noch ein ui zum laden des clips,
+//! seeking, play, stop... und audioshuffle selection") — `OMP_MXF_FILE`
+//! bleibt der Startwert (Autoplay beim Prozessstart, unverändert), das UI
+//! kann die Datei danach live wechseln (`load`), abspielen/anhalten
+//! (`play`/`stop`), innerhalb des Clips suchen (`seek`) und das
+//! Audio-Shuffle-Preset ändern (`setPreset`) — direkter, vereinfachter
+//! Nachbau von `omp-mxf-player/ui/bundle.js` (dieselbe generische
+//! Node-Proxy-API `/api/v1/nodes/<id>/methods/<name>`), OHNE dessen
+//! Playlist/Cue-Take-Mechanik (dieser Node hat nur EINEN aktiven Clip,
+//! kein Vorbereiten eines zweiten während der erste läuft).
 mod pipeline;
 mod presets;
+mod uibundle;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-use omp_node_sdk::{Descriptor, InvokeError, NodeConfig, ParamStore, ParamType, RawResponse, SenderSpec, SetError};
+use omp_node_sdk::{
+    Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
+};
 use pipeline::PipelineHandle;
 use serde_json::Value;
 
 struct PlayerStore {
-    file: String,
-    status: Mutex<String>,
+    pipeline: PipelineHandle,
+    media_dir: PathBuf,
+    shuffle_presets: Vec<presets::AudioPreset>,
+    groups: Vec<presets::ProgramGroup>,
 }
 
 impl ParamStore for PlayerStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            parameters: vec![
-                omp_node_sdk::ParamSpec { name: "file".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                omp_node_sdk::ParamSpec { name: "status".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-            ],
-            methods: vec![],
-            latency: None,
-        }
+        let parameters = vec![
+            ParamSpec { name: "file".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "status".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: "positionMs".to_string(),
+                kind: ParamType::Number,
+                unit: Some("ms".to_string()),
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "durationMs".to_string(),
+                kind: ParamType::Number,
+                unit: Some("ms".to_string()),
+                range: None,
+                readonly: true,
+            },
+            ParamSpec { name: "audioPreset".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Array [string] — Dateinamen direkt unter OMP_MEDIA_DIR
+            // (gleiches flache Muster wie omp-mxf-player::mediaLibrary).
+            ParamSpec { name: "mediaLibrary".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Array [{id,label,channels}] — die Programmgruppen.
+            ParamSpec { name: "programGroups".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            // JSON-Array [{id,label,routes}] — die Shuffle-Presets.
+            ParamSpec { name: "shufflePresets".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+        ];
+
+        let methods = vec![
+            MethodSpec { name: "play".to_string(), args: vec![] },
+            MethodSpec { name: "stop".to_string(), args: vec![] },
+            MethodSpec { name: "load".to_string(), args: vec![MethodArg { name: "file".to_string(), kind: ParamType::String }] },
+            MethodSpec {
+                name: "seek".to_string(),
+                args: vec![MethodArg { name: "positionMs".to_string(), kind: ParamType::Number }],
+            },
+            MethodSpec {
+                name: "setPreset".to_string(),
+                args: vec![MethodArg { name: "audioPreset".to_string(), kind: ParamType::String }],
+            },
+        ];
+
+        Descriptor { parameters, methods, latency: None }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
         match name {
-            "file" => Some(serde_json::json!(self.file)),
-            "status" => Some(serde_json::json!(self.status.lock().expect("lock poisoned").clone())),
+            "file" => Some(serde_json::json!(self.pipeline.current_file())),
+            "status" => Some(serde_json::json!(if self.pipeline.is_playing() { "playing" } else { "stopped" })),
+            "positionMs" => Some(serde_json::json!(self.pipeline.position_ms() as f64)),
+            "durationMs" => Some(serde_json::json!(self.pipeline.duration_ms() as f64)),
+            "audioPreset" => Some(serde_json::json!(self.pipeline.current_preset_id())),
+            "mediaLibrary" => {
+                let mut files: Vec<String> = std::fs::read_dir(&self.media_dir)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| entry.ok())
+                    .filter(|entry| entry.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .filter_map(|entry| entry.file_name().into_string().ok())
+                    .collect();
+                files.sort();
+                Some(serde_json::json!(files))
+            }
+            "programGroups" => Some(serde_json::json!(
+                self.groups.iter().map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels})).collect::<Vec<_>>()
+            )),
+            "shufflePresets" => Some(serde_json::json!(
+                self.shuffle_presets
+                    .iter()
+                    .map(|p| serde_json::json!({"id": p.id, "label": p.label, "routes": p.routes}))
+                    .collect::<Vec<_>>()
+            )),
             _ => None,
         }
     }
@@ -44,12 +116,39 @@ impl ParamStore for PlayerStore {
         Err(SetError::ReadOnly)
     }
 
-    fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+    fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        match name {
+            "play" => {
+                self.pipeline.play();
+                Ok(())
+            }
+            "stop" => {
+                self.pipeline.stop();
+                Ok(())
+            }
+            "load" => {
+                let file = args.get("file").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or(InvokeError::Unknown)?;
+                let abs = resolve_media_path(&self.media_dir, file).map_err(|_| InvokeError::Unknown)?;
+                self.pipeline.load(abs.to_string_lossy().to_string());
+                Ok(())
+            }
+            "seek" => {
+                let position_ms = args.get("positionMs").and_then(Value::as_f64).ok_or(InvokeError::Unknown)?;
+                self.pipeline.seek(position_ms as i64);
+                Ok(())
+            }
+            "setPreset" => {
+                let preset_id = args.get("audioPreset").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let preset = presets::find_preset(&self.shuffle_presets, preset_id).cloned().ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_preset(preset);
+                Ok(())
+            }
+            _ => Err(InvokeError::Unknown),
+        }
     }
 
-    fn extra_route(&self, _method: &str, _path: &str, _body: &[u8]) -> Option<RawResponse> {
-        None
+    fn extra_route(&self, method: &str, path: &str, _body: &[u8]) -> Option<RawResponse> {
+        uibundle::route(method, path)
     }
 }
 
@@ -58,8 +157,9 @@ fn env_or(key: &str, fallback: &str) -> String {
 }
 
 /// S. `omp-mxf-player::resolve_media_path` — identische Traversal-
-/// Absicherung, hier einmalig beim Start statt pro API-Aufruf (kein
-/// `append`, also kein wiederholter Bedarf).
+/// Absicherung. Ursprünglich nur beim Start verwendet, jetzt zusätzlich
+/// aus `invoke("load", ...)` heraus (Nutzerauftrag 2026-09-03: Datei
+/// live wechseln, relativ zu `OMP_MEDIA_DIR` oder absolut).
 fn resolve_media_path(media_dir: &std::path::Path, rel_or_abs: &str) -> Result<PathBuf, String> {
     let candidate = std::path::Path::new(rel_or_abs);
     if candidate.is_absolute() {
@@ -164,8 +264,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let store: std::sync::Arc<dyn ParamStore> = std::sync::Arc::new(PlayerStore {
-        file: file_path_str,
-        status: Mutex::new("playing".to_string()),
+        pipeline: pipeline_handle.clone(),
+        media_dir,
+        shuffle_presets: settings.presets,
+        groups: settings.groups,
     });
 
     let media_ready_pipeline = pipeline_handle.clone();
