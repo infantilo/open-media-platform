@@ -20746,3 +20746,76 @@ sauber von vorn auf `Playing` (unverändertes Verhalten). `cargo test
 --workspace` weiter grün, alle Test-Instanzen danach gelöscht.
 
 **Dateien:** `nodes/omp-mxf-player-direct/src/pipeline.rs`.
+
+## 2026-09-03 (Nachtrag 176) — Nutzerauftrag: "das UI des videomixer M/E muss viel professioneller werden. außerdem sehe ich im workflow bearbeiten keine möglichkeit die anzahl der mischerebenen einzustellen." — Mischerebenen-Feld im Text-Formular ergänzt, M/E-UI-Feinschliff
+
+**Mischerebenen im Workflow-Editor:** `role.MixerLevels` (Backend →
+`OMP_ME_LEVELS`, `orchestrator/internal/workflows/formats.go`) und das
+Feld im GRAFISCHEN Role-Designer (`ui/graph/role-designer.ts`,
+"Grafisch bearbeiten") existierten bereits vollständig — nur das
+schlichte Text-Formular hinter dem Knopf "Bearbeiten" (modalTitle exakt
+"Workflow bearbeiten", die vom Nutzer zitierte Stelle) hatte das Feld
+nie bekommen. Fix: `ui/shell/workflows-view.ts` — `Role`-Interface um
+`mixerLevels?: number` erweitert, Speicher-Payload entsprechend, ein
+`<input type="number" min="1" max="8">` je Rollen-Zeile, sichtbar NUR
+für `nodeType === "omp-video-mixer-me"` (`hidden`-Toggle im
+`typeSelect`-Change-Handler), gleicher Titel-Tooltip-Text wie im
+grafischen Designer. `ui/dist/shell.js` neu gebaut (`make ui`).
+
+**M/E-UI-Feinschliff (`nodes/omp-video-mixer-me/ui/bundle.js`):** reine
+CSS-/Struktur-Politur, KEINE Logik-/API-Änderung. Konkrete, per
+Screenshot (`Page.captureScreenshot`, echte 420px-Panel-Breite —
+Standard-Panelbreite aus `flow-canvas.ts::PANEL_WIDTH_DEFAULT`, NICHT
+die volle Testseiten-Breite, die zunächst ein irreführend leeres Bild
+lieferte) identifizierte Mängel behoben:
+- Bus-Tasten ("PGM 2" etc.) brachen bei 58px Breite in eine zweite
+  Zeile um — auf 68px verbreitert.
+- `<select>` (KEY/PIP/Quell-Picker) waren native, ungestylte Browser-
+  Dropdowns direkt neben den Metall-Tasten — jetzt gleiche Metall-
+  Gradient-Optik + eigener Pfeil-Icon per `background-image` (Custom-
+  Property-Tokens, kein neuer Kit-Baustein).
+- Kreuzschiene (PGM/PST/SRC) und Compositing-Reihen (DSK/PIP/KEY/PIP/
+  Rate) verschwammen optisch ineinander (nur `margin-top:4px`) — jetzt
+  per Trennlinie (`.fx-group`) sichtbar zwei Bereiche.
+- Leerer-SRC-Hinweistext saß inline neben der PST-BLK-Taste statt auf
+  eigener Zeile (`.bus-buttons p.empty { flex-basis:100% }`,
+  vereinheitlicht — vorher zwei verschiedene Ad-hoc-Hinweistext-Muster
+  im selben Bundle).
+- Angepinnte-Quellen-Chips und die "Ebenen"-Neustart-Zeile hatten
+  Inline-Styles statt Tokens — auf `.pin-chip`-Klasse bzw. dieselbe
+  Metall-Optik wie die Selects umgestellt.
+
+**Live gefundener, ECHTER Bug beim Redesign selbst (nicht Teil des
+Nutzerauftrags, aber ohne Live-Test unentdeckt geblieben):** eine
+zweite, separate `background-image:`-Deklaration für das Pfeil-Icon
+überschrieb den Metall-Gradient der ersten vollständig (dieselbe
+CSS-Eigenschaft zweimal in derselben Regel — nur der Rahmen blieb
+sichtbar, keine Konsolenfehler). Fix: beide Ebenen in EINER
+`background-image`-Deklaration (Komma-getrennte Layer). Ein ZWEITER,
+noch elementarerer Bug kam beim selben Redesign-Durchgang hinzu: ein im
+CSS-Kommentar verwendetes Backtick-Zeichen (`` ` ``) beendete das
+umschließende JS-Template-Literal (`style.textContent = \`...\`;`)
+vorzeitig — `bundle.js` selbst wurde dadurch zu ungültigem JavaScript
+(`SyntaxError: Unexpected identifier 'background'`, ERST beim
+Neuladen des Panels im Browser sichtbar, nicht durch bloßes CSS-Lesen).
+Beide Funde bestätigen erneut die Standardregel dieses Projekts, jede
+UI-Änderung tatsächlich im Browser zu laden statt sich auf Code-Review
+allein zu verlassen.
+
+**Live verifiziert** (echte Instanz über den disponiblen Test-Workflow
+TEST1 gestartet, `omp-video-mixer-me`-Binary neu gebaut + Rolle per
+`/roles/{role}/restart` neu gestartet, damit das ge-`include_str!`'te
+Bundle tatsächlich aktualisiert wird — ein bloßes Neuladen der
+Bundle-Quelldatei reicht NICHT, da sie zur Kompilierzeit eingebettet
+wird): Screenshot vor/nach zeigt den beschriebenen Effekt, ein CDP-
+Klicktest bestätigt "+"-Quellauswahl öffnet weiterhin korrekt gruppiert
+und `getComputedStyle` zeigt tatsächlich `hasGradient:true` für das
+KEY-Dropdown (vorher `false` — der oben beschriebene erste Bug). Text-
+Formular-Feld separat verifiziert (s. Nachtrag-Text oben zur selben
+Sitzung): Wert 2→3 gesetzt, gespeichert, per direktem
+`/api/v1/workflows`-Abruf bestätigt 3, danach auf den ursprünglichen
+Wert 2 zurückgesetzt. `cargo test --workspace` und `deno check
+ui/shell/workflows-view.ts` weiter grün, TEST1 danach wieder gestoppt.
+
+**Dateien:** `ui/shell/workflows-view.ts`, `ui/dist/shell.js` (Build-
+Artefakt, nicht versioniert), `nodes/omp-video-mixer-me/ui/bundle.js`.

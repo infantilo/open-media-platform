@@ -51,6 +51,7 @@ interface Role {
   affinityGroup?: string;
   redundancyGroup?: string;
   format?: string;
+  mixerLevels?: number;
 }
 
 // Standard-Format-Presets je Rolle: s. ROLE_FORMATS (ui/graph/roles.ts,
@@ -354,6 +355,7 @@ class WorkflowsView extends HTMLElement {
           affinityGroup: r.affinityGroup || undefined,
           redundancyGroup: r.redundancyGroup || undefined,
           format: r.format || undefined,
+          mixerLevels: r.mixerLevels || undefined,
         })),
         connections: this.#formConnections.filter((c) => c.fromRole && c.toRole),
         settings: Object.keys(settings).length > 0 ? settings : undefined,
@@ -1328,6 +1330,35 @@ class WorkflowsView extends HTMLElement {
         role.format = formatSelect.value || undefined;
       });
 
+      // mixerLevels (Nutzerfund 2026-09-03: "im workflow bearbeiten keine
+      // möglichkeit die anzahl der mischerebenen einzustellen") — dieses
+      // Text-Formular ("Bearbeiten") hatte das Feld nie bekommen, obwohl
+      // der grafische Role-Designer ("Grafisch bearbeiten", role-
+      // designer.ts) es bereits längst besitzt; Backend (role.MixerLevels
+      // → OMP_ME_LEVELS, s. orchestrator/internal/workflows/formats.go)
+      // war die ganze Zeit fertig. Gleiches Muster/gleicher Titeltext wie
+      // dort, nur als flaches `<input>` statt SVG-`foreignObject`. Nur für
+      // `omp-video-mixer-me` sichtbar — für jeden anderen Node-Typ
+      // bedeutungslos.
+      const mixerLevelsInput = document.createElement("input");
+      mixerLevelsInput.type = "number";
+      mixerLevelsInput.min = "1";
+      mixerLevelsInput.max = "8";
+      mixerLevelsInput.placeholder = "Ebenen: 1";
+      mixerLevelsInput.title =
+        "Anzahl unabhängiger M/E-Ebenen dieses Mixers, jede mit eigenem PGM-Ausgang (z. B. für einen Studio-Monitor unabhängig vom Sende-PGM) — leer/1 = Node-eigener Default, nur beim Start wirksam.";
+      mixerLevelsInput.style.cssText = "width:8%;";
+      mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
+      mixerLevelsInput.hidden = role.nodeType !== "omp-video-mixer-me";
+      mixerLevelsInput.addEventListener("change", () => {
+        const n = parseInt(mixerLevelsInput.value, 10);
+        role.mixerLevels = Number.isFinite(n) && n > 1 ? n : undefined;
+        mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
+      });
+      typeSelect.addEventListener("change", () => {
+        mixerLevelsInput.hidden = role.nodeType !== "omp-video-mixer-me";
+      });
+
       const removeBtn = document.createElement("button");
       removeBtn.textContent = "×";
       removeBtn.title = "Rolle entfernen";
@@ -1337,7 +1368,7 @@ class WorkflowsView extends HTMLElement {
         this.#render();
       });
 
-      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, formatSelect, removeBtn);
+      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, formatSelect, mixerLevelsInput, removeBtn);
       form.appendChild(roleRow);
     });
 

@@ -137,41 +137,100 @@ class OmpVideoMixerMePanel extends HTMLElement {
       }
       .console {
         display: grid;
-        grid-template-columns: 1fr 108px;
-        gap: var(--omp-space-2, 8px);
+        grid-template-columns: 1fr 116px;
+        gap: var(--omp-space-3, 12px);
       }
-      .buses { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-      .bus-row { display: flex; align-items: center; gap: 6px; }
+      .buses { display: flex; flex-direction: column; gap: var(--omp-space-3, 12px); min-width: 0; }
+      .bus-row { display: flex; align-items: flex-start; gap: 8px; }
       .bus-label {
-        width: 28px; flex-shrink: 0; font-size: var(--omp-font-size-xs, 11px);
+        width: 30px; flex-shrink: 0; padding-top: 8px; font-size: var(--omp-font-size-xs, 11px);
         color: var(--omp-text-dim, #9aa0a6); text-transform: uppercase; font-weight: 700;
+        letter-spacing: 0.04em;
       }
-      .bus-buttons { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
-      .bus-buttons omp-button { width: 58px; height: 36px; font-size: 10px; }
+      .bus-buttons { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 5px; min-width: 0; }
+      .bus-buttons omp-button {
+        width: 68px; height: 34px; font-size: 10px; line-height: 1.15;
+      }
       .bus-buttons .group-label {
-        flex-basis: 100%; font-size: 9px; text-transform: uppercase;
-        color: var(--omp-text-dim, #9aa0a6); margin: 2px 0 -2px;
+        flex-basis: 100%; font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+        text-transform: uppercase; color: var(--omp-text-dim, #9aa0a6);
+        margin: 6px 0 -1px; padding-left: 2px;
+        border-left: 2px solid var(--omp-border, #2e3338);
       }
       .bus-buttons .group-label:first-child { margin-top: 0; }
-      .fx-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
-      .fx-row omp-button { flex: 1; height: 34px; }
-      .keyer-row { display: flex; gap: 6px; margin-top: 4px; align-items: center; }
-      .keyer-row select {
-        flex: 1; height: 26px; font-size: 10px; border-radius: 4px;
-        background: var(--omp-bg-2, #1c1f22); color: var(--omp-text, #e8eaed);
-        border: 1px solid var(--omp-border, #2e3338);
+      .bus-buttons p.empty { flex-basis: 100%; margin: 2px 0 3px; }
+
+      /* Klare Untergruppierung innerhalb einer Bank (Nutzerauftrag
+         2026-09-03: "muss viel professioneller werden") — vorher
+         verschwammen Kreuzschiene (PGM/PST/SRC) und Compositing-Reihen
+         (DSK/PIP/KEY/PIP/Rate) optisch ineinander, nur durch
+         margin-top:4px getrennt. Eine dünne Trennlinie + Label macht aus
+         zwei fachlich unterschiedlichen Bereichen auch zwei sichtbare. */
+      .fx-group {
+        margin-top: var(--omp-space-1, 4px);
+        padding-top: var(--omp-space-2, 8px);
+        border-top: 1px solid var(--omp-border, #2e3338);
+        display: flex; flex-direction: column; gap: var(--omp-space-2, 8px);
       }
-      .rate-row { display: flex; gap: 4px; margin-top: 6px; }
+      .fx-row { display: flex; gap: 6px; align-items: center; }
+      .fx-row omp-button { flex: 1; height: 34px; }
+      .keyer-row { display: flex; gap: 8px; align-items: center; }
+
+      /* Ausgewachsene Metall-Optik für <select> statt des nackten
+         Browser-Standard-Dropdowns (bislang der mit Abstand größte Bruch
+         mit der Hardware-Pult-Anmutung der restigen Tasten). */
+      .keyer-row select, .add-picker {
+        min-width: 0; height: 34px; font-size: 10.5px;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        color: var(--omp-text, #e8eaed);
+        border: 1px solid var(--omp-metal-dark, #1a1c1f);
+        border-radius: var(--omp-radius, 6px);
+        padding: 0 24px 0 8px;
+        appearance: none; -webkit-appearance: none; cursor: pointer;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
+        /* Zwei Ebenen in EINER background-image-Deklaration (Pfeil-SVG
+           oben, Metall-Gradient darunter) — eine ZWEITE, separate
+           background-image-Zeile hätte die erste einfach überschrieben
+           (live gefundener Bug beim ersten Anlauf dieses Redesigns: die
+           Gradient-Fläche verschwand spurlos, nur appearance:none und
+           der Rahmen blieben sichtbar). */
+        background-image:
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6L9 0z' fill='%239aa0a6'/%3E%3C/svg%3E"),
+          linear-gradient(to bottom, var(--omp-metal-light, #3d434b) 0%, var(--omp-metal-mid, #2b2f34) 100%);
+        background-repeat: no-repeat, no-repeat;
+        background-position: right 8px center, center;
+      }
+      .keyer-row select { flex: 1; }
+      .keyer-row select:hover, .add-picker:hover { border-color: var(--omp-text-dim, #9aa0a6); }
+      .keyer-row select:focus, .add-picker:focus {
+        outline: 2px solid var(--omp-info, #4285f4); outline-offset: 1px;
+      }
+      .keyer-row select option, .add-picker option {
+        background: var(--omp-surface-raised, #22262b); color: var(--omp-text, #e8eaed);
+      }
+
+      .rate-row { display: flex; gap: 4px; }
       .rate-row omp-button { width: 34px; height: 26px; font-size: 10px; }
       .transition {
-        display: flex; flex-direction: column; align-items: center; gap: 8px;
-        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-2, 8px);
+        display: flex; flex-direction: column; align-items: center; gap: var(--omp-space-2, 8px);
+        border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-3, 12px);
       }
       .transition omp-button.cut { width: 100%; }
       .transition omp-button.auto { width: 100%; }
       .mix-wipe { display: flex; gap: 4px; width: 100%; }
       .mix-wipe omp-button { flex: 1; height: 26px; font-size: 10px; }
-      p.empty { font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6); margin: 4px 0 0; }
+      p.empty {
+        font-size: var(--omp-font-size-xs, 11px); font-style: italic;
+        color: var(--omp-text-dim, #9aa0a6); margin: 0;
+      }
+      .pin-chip {
+        display: inline-flex; align-items: center; gap: 3px; height: 34px;
+        padding: 0 4px 0 8px; font-size: 10px;
+        background: var(--omp-surface, #1a1d21);
+        border: 1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px);
+      }
+      .pin-chip .label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .pin-chip omp-button { width: 20px !important; height: 20px !important; font-size: 11px; padding: 0; }
       [disabled] { opacity: 0.4; }
     `;
 
@@ -401,7 +460,15 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const rateRow = document.createElement("div");
       rateRow.className = "rate-row";
 
-      buses.append(pgmRow, pstRow, srcRow, fxRow, keyerRow, pipRow, rateRow);
+      // Sichtbare Untergruppierung (s. Moduldoku/CSS oben): Kreuzschiene
+      // (PGM/PST/SRC) bleibt eine Gruppe, Compositing/Keyer/Rate eine
+      // zweite — eine Trennlinie macht den fachlichen Unterschied auch
+      // optisch sichtbar statt nur durch Abstand angedeutet.
+      const fxGroup = document.createElement("div");
+      fxGroup.className = "fx-group";
+      fxGroup.append(fxRow, keyerRow, pipRow, rateRow);
+
+      buses.append(pgmRow, pstRow, srcRow, fxGroup);
 
       const transition = document.createElement("div");
       transition.className = "transition";
@@ -535,7 +602,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       const addSourceBtn = document.createElement("omp-button");
       addSourceBtn.textContent = "+";
       addSourceBtn.title = "Quelle zur Kreuzschiene hinzufügen";
-      addSourceBtn.style.cssText = "width:28px !important; height:26px !important; font-size:14px; padding:0;";
+      addSourceBtn.style.cssText = "width:34px !important; height:34px !important; font-size:16px; padding:0;";
       let addPickerOpen = false;
       let latestInputs = [];
       let latestPinned = [];
@@ -553,7 +620,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
           .filter((i) => !latestPinned.includes(i.senderId))
           .map((i) => ({ label: i.label, senderId: i.senderId }));
         const picker = document.createElement("select");
-        picker.style.cssText = "height:26px; font-size:10px; border-radius:4px; background:var(--omp-bg-2, #1c1f22); color:var(--omp-text, #e8eaed); border:1px solid var(--omp-border, #2e3338);";
+        picker.className = "add-picker";
+        picker.style.width = "160px";
         buildGroupedOptions(picker, available, lastWorkflowOwnSenderIds, "Quelle wählen…");
         picker.addEventListener("change", async () => {
           if (picker.value) await call("crosspoint.pin", { senderId: picker.value });
@@ -636,9 +704,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (!addPickerOpen) {
           srcButtons.innerHTML = "";
           if (pinned.length === 0) {
-            const hint = document.createElement("span");
+            const hint = document.createElement("p");
+            hint.className = "empty";
             hint.textContent = "keine Quellen angeheftet";
-            hint.style.cssText = "color:var(--omp-text-dim, #9aa0a6);font-size:10px;align-self:center;";
             srcButtons.append(hint);
           }
           for (const senderId of pinned) {
@@ -652,15 +720,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
             // senderId bleibt übers Tooltip (`tag.title` unten) erreichbar.
             const label = input ? input.label : "unbekannt";
             const wrap = document.createElement("span");
-            wrap.style.cssText = "display:inline-flex; align-items:center; gap:2px;";
+            wrap.className = "pin-chip";
             const tag = document.createElement("span");
+            tag.className = "label";
             tag.textContent = label;
             tag.title = senderId;
-            tag.style.cssText = "font-size:10px; padding:2px 4px; border:1px solid var(--omp-border, #2e3338); border-radius:4px;";
             const removeBtn = document.createElement("omp-button");
             removeBtn.textContent = "×";
             removeBtn.title = "Quelle entfernen";
-            removeBtn.style.cssText = "width:18px !important; height:18px !important; font-size:10px; padding:0;";
             removeBtn.addEventListener("click", () => call("crosspoint.unpin", { senderId }));
             wrap.append(tag, removeBtn);
             srcButtons.append(wrap);
@@ -738,21 +805,26 @@ class OmpVideoMixerMePanel extends HTMLElement {
       levelsSection.setAttribute("label", "Mischerebenen");
 
       const row = document.createElement("div");
-      row.style.cssText = "display:flex;align-items:center;gap:6px;";
+      row.style.cssText = "display:flex;align-items:center;gap:var(--omp-space-2, 8px);flex-wrap:wrap;";
       const label = document.createElement("span");
-      label.textContent = "Ebenen:";
-      label.style.cssText = "font-size:11px;color:var(--omp-text-dim, #9aa0a6);";
+      label.textContent = "Ebenen";
+      label.style.cssText =
+        "font-size:var(--omp-font-size-xs, 11px);color:var(--omp-text-dim, #9aa0a6);" +
+        "text-transform:uppercase;letter-spacing:0.04em;font-weight:700;";
       const input = document.createElement("input");
       input.type = "number";
       input.min = "1";
       input.max = "8";
       input.value = String(levelCount);
       input.style.cssText =
-        "width:50px;height:24px;font-size:11px;border-radius:4px;" +
-        "background:var(--omp-bg-2, #1c1f22);color:var(--omp-text, #e8eaed);" +
-        "border:1px solid var(--omp-border, #2e3338);";
+        "width:52px;height:34px;font-size:12px;text-align:center;border-radius:var(--omp-radius, 6px);" +
+        "background:linear-gradient(to bottom, var(--omp-metal-light, #3d434b) 0%, var(--omp-metal-mid, #2b2f34) 100%);" +
+        "color:var(--omp-text, #e8eaed);border:1px solid var(--omp-metal-dark, #1a1c1f);" +
+        "box-shadow:0 1px 0 rgba(255,255,255,0.1) inset, 0 1px 2px rgba(0,0,0,0.4);box-sizing:border-box;";
       const applyBtn = document.createElement("omp-button");
-      applyBtn.textContent = "Übernehmen (Node neu starten)";
+      applyBtn.textContent = "Übernehmen";
+      applyBtn.title = "Node neu starten — kurz nicht erreichbar, zuvor aufgelegte Quellen werden danach automatisch wieder verbunden.";
+      applyBtn.style.cssText = "height:34px !important; padding:0 var(--omp-space-3, 12px) !important;";
 
       // Sendet `roleInfo.format` unverändert mit (s. Moduldoku oben) —
       // nur `mixerLevels` ist die eigentlich gewollte Änderung dieses
