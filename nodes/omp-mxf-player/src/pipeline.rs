@@ -354,6 +354,22 @@ fn stop_element_and_wait(el: &gst::Element) {
 /// Puffer geprerollt hat.
 fn request_branch_paused(elements: &[gst::Element]) -> Result<(), String> {
     for el in elements {
+        // `set_locked_state(false)` GENAU HIER, unmittelbar vor unserem
+        // eigenen `set_state(Paused)` (Root-Cause-Fix 2026-09-03, live
+        // gefunden bei einem zweiten `cue()` auf denselben Node, s.
+        // docs/decisions.md Nachtrag 165 Zweitfund): jedes Element dieses
+        // Zweigs wurde beim `build_mxf_branch`-eigenen `pipeline.add()`
+        // per `set_locked_state(true)` VOR `GstBin`s automatischer
+        // Zustands-Promotion abgeschirmt (die Kinder sonst sofort Richtung
+        // des durchgehend PLAYING laufenden `pipeline`-Zustands schiebt,
+        // BEVOR wir überhaupt hier ankommen — unter Last, z. B. während
+        // ein anderer Slot bereits aktiv decodiert, reproduzierbar
+        // GEWONNEN von `GstBin`, sichtbar als "Element meldet nach dem
+        // Warten Zustand Playing statt Paused"). Erst hier, direkt vor
+        // unserem eigenen expliziten `Paused`-Request, wird die Sperre
+        // wieder aufgehoben — `GstBin` bekommt so NIE eine Gelegenheit,
+        // dazwischenzufunken.
+        el.set_locked_state(false);
         el.set_state(gst::State::Paused)
             .map_err(|e| format!("set Paused ({}): {e}", el.name()))?;
     }
@@ -510,6 +526,14 @@ fn build_mxf_branch(
         .build()
         .map_err(|e| format!("filesrc: {e}"))?;
     let demux = gst::ElementFactory::make("mxfdemux").build().map_err(|e| format!("mxfdemux: {e}"))?;
+    // `set_locked_state(true)` VOR jedem `pipeline.add()` (Root-Cause-Fix
+    // 2026-09-03, s. `request_branch_paused`-Doku für die volle
+    // Begründung): verhindert, dass `GstBin` diesen Element schon beim
+    // `add()` selbst Richtung PLAYING promoviert, BEVOR der explizite
+    // Preroll unten überhaupt anfängt.
+    for el in [&filesrc, &demux] {
+        el.set_locked_state(true);
+    }
     pipeline
         .add(&filesrc)
         .and_then(|()| pipeline.add(&demux))
@@ -526,6 +550,9 @@ fn build_mxf_branch(
         .build()
         .map_err(|e| format!("capsfilter(video): {e}"))?;
     let vqueue = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue(video): {e}"))?;
+    for el in [&decodebin, &vconvert, &vscale, &vrate, &vcaps, &vqueue] {
+        el.set_locked_state(true);
+    }
     pipeline
         .add(&decodebin)
         .and_then(|()| pipeline.add(&vconvert))
@@ -560,6 +587,9 @@ fn build_mxf_branch(
     let interleave = gst::ElementFactory::make("interleave").build().map_err(|e| format!("interleave: {e}"))?;
     let aconvert = gst::ElementFactory::make("audioconvert").build().map_err(|e| format!("audioconvert(bridge): {e}"))?;
     let atee = gst::ElementFactory::make("tee").build().map_err(|e| format!("tee(audio): {e}"))?;
+    for el in [&interleave, &aconvert, &atee] {
+        el.set_locked_state(true);
+    }
     pipeline
         .add(&interleave)
         .and_then(|()| pipeline.add(&aconvert))
@@ -592,6 +622,9 @@ fn build_mxf_branch(
             .property("caps", group_audio_caps(group.channels))
             .build()
             .map_err(|e| format!("capsfilter({}): {e}", group.id))?;
+        for el in [&queue, &matrix, &caps] {
+            el.set_locked_state(true);
+        }
         pipeline
             .add(&queue)
             .and_then(|()| pipeline.add(&matrix))
@@ -708,6 +741,12 @@ fn build_mxf_branch(
                     continue;
                 }
             };
+            // S. `set_locked_state`-Kommentar oben in `build_mxf_branch` —
+            // dieselbe Race, hier zusätzlich relevant, weil dieser Handler
+            // im Streaming-Thread von `demux` läuft, der unter Last (z. B.
+            // ein zweiter `cue()`, während der bereits on-air Zweig aktiv
+            // decodiert) selbst Sekundenbruchteile verzögert sein kann.
+            queue.set_locked_state(true);
             if let Err(e) = pipeline_for_nmp.add(&queue) {
                 eprintln!("omp-mxf-player: add queue(track {rank}) failed: {e:?}");
                 continue;
@@ -719,6 +758,7 @@ fn build_mxf_branch(
             // PLAYING vorbeischleusen, am unten folgenden bestätigten
             // PAUSED-Preroll aller Zweig-Elemente vorbei. `request_branch_playing`
             // holt sie später gemeinsam mit allen anderen nach.
+            queue.set_locked_state(false);
             if let Err(e) = queue.set_state(gst::State::Paused) {
                 eprintln!("omp-mxf-player: set Paused (queue track {rank}) failed: {e:?}");
                 continue;
@@ -881,7 +921,32 @@ fn drain_interleave(demux: &gst::Element, interleave: &gst::Element, timeout: Du
         gst::PadProbeReturn::Ok
     });
 
-    let _ = demux.send_event(gst::event::Eos::new());
+    // `demux.send_event(Eos)` statt einzelner Pads (verworfen, Root-Cause-
+    // Fix 2026-09-03): `mxfdemux` betreibt nachweislich (live per `/proc/
+    // <pid>/task` UND per minimaler `gst-launch-1.0`-Reproduktion ganz
+    // OHNE diesen Node bestätigt, s. CPU-Baseline-Untersuchung derselben
+    // Sitzung) EINEN eigenen internen Thread JE Tonspur-Pad — im
+    // Widerspruch zu diesem Moduls ursprünglicher Annahme "EINE einzige
+    // interne Streaming-Schleife" oben. `gst_element_send_event()` auf
+    // das `demux`-Element selbst adressiert nachweislich nur EINEN
+    // internen Zustand/Pfad — bei 8 unabhängigen Track-Threads reicht das
+    // nicht zuverlässig zu JEDEM von ihnen durch, weshalb `interleave`s
+    // `GstCollectPads` auf das EOS eines Geschwister-Tracks warten kann,
+    // dessen eigener Thread von diesem einzelnen `send_event` nie
+    // erreicht wurde — exakt das seit Nachtrag 157 dokumentierte Muster
+    // ("kein EOS innerhalb Xs"). Fix: EOS einzeln an JEDEN Src-Pad von
+    // `demux` senden (`ElementExtManual::src_pads()`) — pro Pad, nicht
+    // pro Element, erreicht dadurch jeden der 8 Track-Threads einzeln.
+    // `push_event` statt `send_event`: `send_event` interpretiert ein
+    // SRC-Pad-Ziel als "erwartet ein UPSTREAM-Event" (GStreamer-Konvention
+    // für von der Anwendung eingespeiste Events) — bei einem DOWNSTREAM-
+    // Event wie EOS auf einem Src-Pad live per `GStreamer-WARNING
+    // "sending eos event in wrong direction"` bestätigt falsch;
+    // `push_event` ist die korrekte Funktion, um ein Event tatsächlich
+    // downstream durch einen Src-Pad zu schieben.
+    for pad in demux.src_pads() {
+        let _ = pad.push_event(gst::event::Eos::new());
+    }
 
     if rx.recv_timeout(timeout).is_err() {
         eprintln!(
@@ -964,38 +1029,123 @@ impl Drop for ActivePipeline {
     }
 }
 
+/// Fordert ein FRISCHES Paar `input-selector`-Sink-Pads für `slot` an
+/// (`sink_%u`, "On request" — beliebig viele über die anfänglichen zwei
+/// hinaus, s. `gst-inspect-1.0 input-selector`). `apply_active`/`take()`
+/// lesen den Sink-Pad IMMER dynamisch aus `active.branches[slot].video.
+/// sink_pad` (nie fest verdrahtet auf Pad-Index 0/1) — ein Wechsel auf
+/// einen neuen Pad braucht dadurch KEINE Änderung an `apply_active`/
+/// `take()`. Verwendet von `replace_slot` sowohl nach einem Teardown-
+/// Timeout als auch als Fallback nach einem gescheiterten Branch-Aufbau
+/// (s. dortige Doku) — in BEIDEN Fällen könnte der bisherige Pad noch an
+/// einen kaputten/verwaisten Zweig gebunden sein (Teardown hängt im
+/// Hintergrund weiter, oder der fehlgeschlagene Aufbau hat den Pad
+/// bereits verlinkt, bevor er später scheiterte), ein simples Wieder-
+/// verwenden würde dann mit "pad already linked" fehlschlagen.
+fn fresh_slot_pads(active: &ActivePipeline, slot: Slot) -> Result<(gst::Pad, Vec<gst::Pad>), String> {
+    let video_pad = active
+        .video_isel
+        .request_pad_simple("sink_%u")
+        .ok_or_else(|| format!("video isel: frischer Pad für Slot {slot:?} fehlgeschlagen"))?;
+    let mut group_pads = Vec::with_capacity(active.group_isels.len());
+    for (isel, group) in active.group_isels.iter().zip(active.groups.iter()) {
+        let pad = isel
+            .request_pad_simple("sink_%u")
+            .ok_or_else(|| format!("isel({}): frischer Pad für Slot {slot:?} fehlgeschlagen", group.id))?;
+        group_pads.push(pad);
+    }
+    Ok((video_pad, group_pads))
+}
+
 fn replace_slot(active: &mut ActivePipeline, slot: Slot, source: &ItemSource) -> Result<(), String> {
     let old = active.branches.remove(&slot).ok_or("replace_slot: branch missing")?;
-    let video_pad = old.video.sink_pad.clone();
-    let group_pads: Vec<gst::Pad> = old.groups.iter().map(|t| t.sink_pad.clone()).collect();
+    let old_video_pad = old.video.sink_pad.clone();
+    let old_group_pads: Vec<gst::Pad> = old.groups.iter().map(|t| t.sink_pad.clone()).collect();
     // `run_with_timeout` statt eines direkten Aufrufs (Nachtrag 157, s.
     // dortige Doku): ein hängender Teardown darf NIEMALS den gesamten
-    // Kommando-Thread mitreißen. Bei Timeout wird DIESER Cue-Versuch mit
-    // einer klaren Fehlermeldung abgebrochen (statt eines stillen
-    // Dauerhängers) — der betroffene Slot bleibt danach ohne Zweig
-    // (kein automatisches Selbstheilen, s. Doku), der ANDERE Slot und
-    // alle übrigen Kommandos (Seek/Shuttle/Take auf den bereits aktiven
-    // Zweig) bleiben aber uneingeschränkt bedienbar.
+    // Kommando-Thread mitreißen. Bei Timeout gab dieser Cue-Versuch bis
+    // 2026-09-03 komplett auf und ließ `slot` für den Rest der
+    // Prozesslaufzeit "ohne Zweig" — da `active.branches.remove()` oben
+    // den Eintrag schon entfernt hatte und dieser Pfad nie bis zum
+    // späteren `active.branches.insert()` kam, schlug JEDER folgende
+    // `cue()` auf `slot` sofort mit `"replace_slot: branch missing"` fehl
+    // (Live-Fund derselben Sitzung: einmal ausgelöst, kaskadiert das auf
+    // BEIDE Slots, weil `take()`/`apply_active` den Fehlschlag nicht
+    // sieht — `state.onair_slot`/`currentItemId` wechseln im Store
+    // trotzdem "erfolgreich" weiter, während real gar keine Zweige mehr
+    // existieren — ein einziger, seltener Timeout genügte, um den Node
+    // für den Rest seiner Laufzeit still komplett unbrauchbar zu machen,
+    // trotz durchgehend `{"ok":true}`-Antworten).
     let pipeline_for_teardown = active.pipeline.clone();
-    if !run_with_timeout(Duration::from_secs(5), move || {
+    let teardown_completed = run_with_timeout(Duration::from_secs(5), move || {
         teardown_branch(&pipeline_for_teardown, old);
-    }) {
-        return Err(format!(
-            "teardown von Slot {slot:?} nach 5s abgebrochen (vermutlich GStreamer-Deadlock, docs/decisions.md Nachtrag 157) — {slot:?} bleibt vorerst ohne Zweig"
-        ));
-    }
-
-    let branch = match source {
-        ItemSource::TestPattern => {
-            build_empty_branch(&active.pipeline, video_pad, group_pads, &active.groups, active.width, active.height)?
-        }
-        ItemSource::Mxf { path, preset_id } => {
-            let preset = presets::find_preset(&active.presets, preset_id).ok_or_else(|| format!("unknown preset: {preset_id}"))?;
-            build_mxf_branch(&active.pipeline, video_pad, group_pads, &active.groups, path, preset, active.width, active.height)?
-        }
+    });
+    // Root-Cause-Fix 2026-09-03: bei Timeout NICHT mehr aufgeben, sondern
+    // frische Pads anfordern (`fresh_slot_pads`) statt die alten,
+    // potenziell noch vom hängenden Teardown-Thread im Hintergrund
+    // berührten Pads wiederzuverwenden. Die alten Pads/Elemente bleiben
+    // bewusst verwaist zurück (derselbe bereits akzeptierte Kompromiss
+    // wie ein einzelner Leck-Thread, s. `run_with_timeout`-Doku) — der
+    // Hintergrund-Thread räumt sie auf, sobald/falls der Deadlock sich
+    // doch noch löst, sonst leckt exakt EIN `input-selector`-Pad
+    // dauerhaft, statt den ganzen Slot zu töten.
+    let (video_pad, group_pads) = if teardown_completed {
+        (old_video_pad, old_group_pads)
+    } else {
+        eprintln!(
+            "omp-mxf-player: teardown von Slot {slot:?} nach 5s abgebrochen (vermutlich GStreamer-Deadlock, docs/decisions.md Nachtrag 157) — fordere frische isel-Pads an statt {slot:?} dauerhaft ohne Zweig zu lassen"
+        );
+        fresh_slot_pads(active, slot)?
     };
-    active.branches.insert(slot, branch);
-    Ok(())
+
+    // Root-Cause-Fix 2026-09-03, Zweitfund: nicht nur ein hängender
+    // Teardown, sondern JEDER Fehlschlag von `build_mxf_branch` selbst
+    // (z. B. live beobachtet: "decodebin4 erreichte Paused nicht" oder
+    // "filesrc3 meldet ... Paused statt Playing" — dieselbe Klasse von
+    // GStreamer-Preroll-Races wie Nachtrag 164/165, unter Last durch den
+    // PARALLEL bereits aktiven anderen Slot ausgelöst) ließ `slot` bis
+    // hierhin GENAUSO dauerhaft "branch missing" zurück, weil die Funktion
+    // per `?` sofort zurückkehrte, bevor `active.branches.insert()`
+    // überhaupt erreicht wurde — identische Kaskade wie beim Teardown-
+    // Timeout, nur mit anderem Auslöser. Fix: bei JEDEM Fehlschlag hier
+    // auf den bewährten, simplen schwarz/stumm-Leerlaufzweig zurückfallen
+    // (frische Pads, s. `fresh_slot_pads`-Doku — der fehlgeschlagene
+    // Aufbau könnte den ursprünglichen Pad bereits verlinkt haben) und
+    // DIESEN erfolgreich einfügen — der Slot bleibt dadurch für den
+    // NÄCHSTEN `cue()` benutzbar, auch wenn DIESER eine Fehlermeldung
+    // zurückgibt (der Aufrufer/`run()` behandelt das unverändert als
+    // `Event::Error`, nur eben ohne den Slot dauerhaft zu verlieren).
+    let build_result = match source {
+        ItemSource::TestPattern => build_empty_branch(&active.pipeline, video_pad, group_pads, &active.groups, active.width, active.height),
+        ItemSource::Mxf { path, preset_id } => match presets::find_preset(&active.presets, preset_id) {
+            Some(preset) => build_mxf_branch(&active.pipeline, video_pad, group_pads, &active.groups, path, preset, active.width, active.height),
+            None => Err(format!("unknown preset: {preset_id}")),
+        },
+    };
+    match build_result {
+        Ok(branch) => {
+            active.branches.insert(slot, branch);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!(
+                "omp-mxf-player: Branch-Aufbau für Slot {slot:?} fehlgeschlagen ({e}) — falle auf schwarzen/stummen Leerlaufzweig zurück, damit {slot:?} nicht dauerhaft ohne Zweig bleibt"
+            );
+            let (fallback_video_pad, fallback_group_pads) = fresh_slot_pads(active, slot)
+                .map_err(|pad_err| format!("{e} (UND Fallback-Pad-Anforderung schlug ebenfalls fehl: {pad_err})"))?;
+            let fallback = build_empty_branch(
+                &active.pipeline,
+                fallback_video_pad,
+                fallback_group_pads,
+                &active.groups,
+                active.width,
+                active.height,
+            )
+            .map_err(|fallback_err| format!("{e} (UND Fallback auf Leerlaufzweig schlug ebenfalls fehl: {fallback_err})"))?;
+            active.branches.insert(slot, fallback);
+            Err(e)
+        }
+    }
 }
 
 fn apply_active(active: &ActivePipeline, slot: Slot) {

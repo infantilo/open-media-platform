@@ -19991,3 +19991,120 @@ Cue).
 
 **Datei:** `nodes/omp-mxf-player/src/pipeline.rs`
 (`build`/`build_mxf_branch`, `sync-streams`+neuer `set_offset`-Block).
+
+## 2026-09-03 (Nachtrag 166) — CPU-Baseline bestätigt inhärent (nicht behebbar ohne mxfdemux zu ersetzen); zweite, tiefere `omp-mxf-player`-Reliability-Runde: 3 zusätzliche Root Causes gefunden+behoben (GstBin-Auto-Promotion-Race, falsche EOS-Sende-Richtung, dauerhaft kaskadierender "branch missing"-Zustand nach JEDEM Cue-Fehlschlag)
+
+**CPU-Baseline (Nutzerauftrag "fix the cpu baseline"):** per minimaler,
+komplett von OpenMediaPlatform-Code unabhängiger `gst-launch-1.0
+filesrc ! mxfdemux ! (8× queue+fakesink) + decodebin`-Reproduktion
+bestätigt: `mxfdemux` selbst betreibt 8 eigene interne Threads (einer je
+Tonspur, alle per `/proc/<pid>/task` als `demux:sink` identifiziert —
+15-Zeichen-`TASK_COMM_LEN`-Trunkierung des tatsächlichen Namens, kein
+Bug im eigenen Rust-Code). Kombiniert mit echtem Software-Decode eines
+1920×1080/25fps/50-Mbit/s-4:2:2-MPEG-2-Videos ist der ~150-235%-CPU-
+Verbrauch beider Player-Nodes (Direct UND, seit Nachtrag 165 messbar,
+`omp-mxf-player` selbst während echter Wiedergabe — beide praktisch
+identisch) inhärente Arbeit, kein anwendungsseitiger Leerlauf. Nutzer
+entschied nach Vorlage der Optionen (Hardware-Decode/Thread-Tuning
+untersuchen vs. akzeptieren): akzeptieren, Aufwand stattdessen in
+Reliability stecken.
+
+**Reliability, drei weitere Live-Funde derselben Sitzung, alle in
+`replace_slot`/`build_mxf_branch`/`drain_interleave`:**
+
+1. **`GstBin`-Auto-Promotion-Race** (Root Cause von Nachtrag 164s
+   zweitem, bis dahin ungeklärtem Fund `"filesrc1 meldet ... Paused
+   statt Playing"`): jedes `pipeline.add(&element)` auf eine bereits
+   dauerhaft PLAYING laufende Pipeline stößt laut GStreamer-eigener
+   `GstBin`-Doku SOFORT einen asynchronen Übergang Richtung PLAYING an —
+   noch BEVOR `build_mxf_branch`s eigener, viel späterer expliziter
+   `request_branch_paused()`-Aufruf überhaupt läuft. Unter Last (z. B.
+   ein zweiter `cue()`, während der bereits aktive Slot mit >150% CPU
+   decodiert) gewinnt diese Auto-Promotion das Rennen zunehmend
+   zuverlässig. Fix: `gst::Element::set_locked_state(true)` auf JEDES
+   Element SOFORT nach dem Erzeugen, VOR jedem `pipeline.add()` (in
+   `build_mxf_branch` UND dem dynamischen Pro-Tonspur-Queue-Handler);
+   `set_locked_state(false)` erst unmittelbar vor dem eigenen expliziten
+   `set_state(Paused)` in `request_branch_paused` — `GstBin` bekommt so
+   nie eine Gelegenheit dazwischenzufunken.
+2. **`drain_interleave`s EOS-Injektion ging in die falsche Richtung.**
+   Live gefunden BEIM Testen von Fund 1 (`GStreamer-WARNING "pad
+   mxfdemux1:track_2 sending eos event in wrong direction"`):
+   `gst_element_send_event()`/`gst_pad_send_event()` auf einen SRC-Pad
+   erwartet laut GStreamer-Konvention ein UPSTREAM-Event — EOS ist aber
+   ein DOWNSTREAM-Event. Der bisherige `demux.send_event(Eos)` (ein
+   einzelner Aufruf auf das ganze Element) traf zusätzlich nur EINEN der
+   (s. CPU-Baseline oben) 8 internen Track-Threads zuverlässig. Fix:
+   EOS statt auf `demux` einzeln auf JEDEN von `demux.src_pads()` per
+   `pad.push_event()` (nicht `send_event()`) geschickt — erreicht
+   nachweislich jeden Track-Thread einzeln und in der richtigen
+   Richtung.
+3. **Der schwerwiegendste Fund: JEDER Fehlschlag von `replace_slot`
+   (nicht nur der bereits dokumentierte Teardown-Timeout) ließ `slot`
+   PERMANENT ohne Branch zurück** — `active.branches.remove(&slot)`
+   passiert ganz am Anfang der Funktion; schlägt irgendetwas DANACH fehl
+   (Teardown-Timeout, ODER — live beobachtet — `build_mxf_branch`s
+   eigener Preroll mit `"decodebin4 erreichte Paused nicht"`, dieselbe
+   Race-Klasse wie Fund 1 nur an einer Stelle, die `set_locked_state`
+   nicht abdeckt, z. B. `decodebin`s eigene interne Bin-Kinder), kehrt
+   die Funktion per `?` zurück, BEVOR `active.branches.insert()`
+   erreicht wird. JEDER folgende `cue()` auf denselben Slot schlägt dann
+   sofort mit `"replace_slot: branch missing"` fehl — UND weil
+   `take()`/`apply_active` das nicht sieht, wechselt `state.onair_slot`/
+   `currentItemId` im Store trotzdem scheinbar erfolgreich weiter,
+   während real gar keine Zweige mehr existieren. Live reproduziert: EIN
+   einziger, seltener Timeout/Preroll-Fehlschlag genügte, um den Node
+   für den Rest seiner Prozesslaufzeit STILL komplett unbrauchbar zu
+   machen — trotz durchgehend `{"ok":true}`-HTTP-Antworten (`cue()`/
+   `take()` sind fire-and-forget über einen Command-Channel, die HTTP-
+   Antwort bestätigt nur das erfolgreiche Einreihen, nie den
+   tatsächlichen Pipeline-Erfolg). **Fix, zweiteilig:**
+   - Bei Teardown-Timeout: statt aufzugeben, ein frisches Paar
+     `input-selector`-Sink-Pads anfordern (`sink_%u`, "On request" laut
+     `gst-inspect-1.0 input-selector` — beliebig viele über die
+     anfänglichen zwei hinaus) und DARAUF neu bauen, statt die alten,
+     potenziell noch vom hängenden Teardown-Thread im Hintergrund
+     berührten Pads wiederzuverwenden (`fresh_slot_pads`-Helper,
+     gemeinsam genutzt). `apply_active`/`take()` lesen den Sink-Pad
+     bereits IMMER dynamisch aus `branches[slot]` — keine Änderung dort
+     nötig.
+   - Bei JEDEM ANDEREN Branch-Aufbau-Fehlschlag: derselbe
+     `fresh_slot_pads`-Mechanismus, aber als Fallback auf den bewährten
+     schwarz/stumm-Leerlaufzweig (`build_empty_branch`) — der Slot
+     bleibt dadurch für den NÄCHSTEN `cue()` benutzbar, DIESER eine
+     Anfrage liefert weiterhin ehrlich einen Fehler zurück (kein
+     stilles Verschlucken), nur der interne Zustand verliert den Slot
+     nicht mehr dauerhaft.
+
+**Verifikation (echter Orchestrator-Pfad, nicht nur manueller Bypass):**
+91 `append`/`cue`/`take`-Zyklen ohne jede Pause zwischen den HTTP-
+Aufrufen (deutlich aggressiver als reales Bedienpult-Tempo) gegen eine
+frische Instanz gefeuert — 8 echte Teardown-Timeouts traten dabei auf
+(bestätigt Fund 3 ist kein theoretisches Konstrukt, sondern unter
+Stress regelmäßig real), ALLE 8 wurden per frischem Pad selbstständig
+geheilt, KEIN einziges `"branch missing"` mehr. `mxl-info`s Head-Index
+bestätigt nach dem gesamten Lauf weiterhin sauber steigend (~25fps) für
+ein neu gecutes Item — echte Wiedergabe, nicht nur HTTP-`{"ok":true}`.
+Vor Fund 3s Fix: derselbe Testaufbau kaskadierte typischerweise nach
+10-25 Zyklen in einen dauerhaft toten Zustand (beide Slots
+"branch missing"). `cargo test --workspace` (mit `source deploy/dev/
+mxl.env` im selben Aufruf) durchgehend grün, keine Regression in einem
+der anderen ~30 Node-Crates.
+
+**Bewusst NICHT behoben:** der Teardown-Deadlock selbst (Nachtrag 157s
+`GstCollectPads`-Fund) ist weiterhin ungelöst — Fund 3s Fix macht ihn
+nur harmlos (Slot bleibt benutzbar), statt ihn zu verhindern; ein Pad
+UND der zugehörige Hintergrund-Thread des betroffenen Zweigs leckt bei
+jedem echten Timeout dauerhaft weiter (derselbe bereits akzeptierte
+Kompromiss wie in Nachtrag 157 selbst dokumentiert). Bei sehr langer
+Laufzeit mit sehr vielen Cue/Take-Zyklen könnte das relevant werden —
+aktuell kein Mechanismus, der leck gewordene `input-selector`-Pads
+zählt oder meldet.
+
+**Datei:** `nodes/omp-mxf-player/src/pipeline.rs` (`build_mxf_branch`:
+`set_locked_state` an allen Element-Erzeugungsstellen inkl. Pro-Track-
+Queue-Handler; `request_branch_paused`: `set_locked_state(false)` vor
+`set_state(Paused)`; `drain_interleave`: `push_event` statt
+`send_event`, pro-Pad statt pro-Element; `replace_slot`: neuer
+`fresh_slot_pads`-Helper + Fallback-auf-Leerlaufzweig bei jedem
+Branch-Aufbau-Fehlschlag).
