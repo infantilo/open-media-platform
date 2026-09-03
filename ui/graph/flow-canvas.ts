@@ -1030,9 +1030,21 @@ export class FlowCanvas extends HTMLElement {
   // seit dem Viewport-Persistenz-Fix (2026-07-12) verzerren sie auch
   // `#fitViewportToPositions()`s Bounding-Box (Nutzerfund: Kacheln lagen
   // nach mehreren Sitzungen weit außerhalb des sichtbaren Bereichs).
+  // `workflowMemberIds` seit dem Nutzerfund 2026-09-03 (s. `#assign
+  // MissingPositions`-Doku) zusätzlich aus `validIds` AUSGESCHLOSSEN
+  // (nicht nur beim Neu-Vergeben, auch hier beim Aufräumen): ohne das
+  // wäre ein durch die verbleibende, kleine Backend-Timing-Lücke (s.
+  // `awaitRegistration`) einmal fälschlich vergebener Root-Positions-
+  // Eintrag für einen Workflow-Mitgliedsknoten PERMANENT — der Knoten
+  // bleibt ja ein gültiger `#graph.nodes`-Eintrag, nur eben keine
+  // eigene Root-Kachel mehr. Mit dem Ausschluss räumt sich ein solcher
+  // Ausrutscher spätestens im NÄCHSTEN `#fetchAndRender()`-Lauf von
+  // selbst wieder auf, statt für die Lebensdauer der Instanz stehen zu
+  // bleiben.
   #pruneStalePositions(): boolean {
+    const workflowMemberIds = this.#scope === null ? this.#allWorkflowMemberNodeIds() : new Set<string>();
     const validIds = new Set<string>([
-      ...this.#graph.nodes.map((n) => n.id),
+      ...this.#graph.nodes.map((n) => n.id).filter((id) => !workflowMemberIds.has(id)),
       ...Object.keys(this.#groupTree.groups),
       ...this.#workflowEditRolePlaceholderIds(),
       ...this.#allWorkflowTileIds(),
@@ -1053,10 +1065,17 @@ export class FlowCanvas extends HTMLElement {
   // #rootZoneTileIds-Doku) UND seit Kapitel 13 Teil 4 auch Workflow-
   // Kacheln-IDs (s. #arrangeIntoLanes), sonst wächst sie über viele
   // Sitzungen unbegrenzt mit längst entfernten Instanzen/aufgelösten
-  // Gruppen/Workflows weiter.
+  // Gruppen/Workflows weiter. `workflowMemberIds`-Ausschluss seit dem
+  // Nutzerfund 2026-09-03 — s. `#pruneStalePositions`-Doku, hier live
+  // reproduziert: `hostViewPositions` sammelte trotz Nachtrag 169/171s
+  // Backend-Timing-Fixes weiterhin Einträge für Workflow-Mitgliedsknoten
+  // an (per CDP-Test bestätigt), weil ein einmal in der kleinen
+  // verbleibenden Backend-Lücke zugewiesener Lane-Eintrag hier bisher
+  // NIE wieder aufgeräumt wurde.
   #pruneStaleHostViewPositions(): boolean {
+    const workflowMemberIds = this.#scope === null ? this.#allWorkflowMemberNodeIds() : new Set<string>();
     const validIds = new Set([
-      ...this.#graph.nodes.map((n) => n.id),
+      ...this.#graph.nodes.map((n) => n.id).filter((id) => !workflowMemberIds.has(id)),
       ...Object.keys(this.#groupTree.groups),
       ...this.#allWorkflowTileIds(),
     ]);
@@ -1109,9 +1128,27 @@ export class FlowCanvas extends HTMLElement {
   // wird (s. #fetchAndRender(): dort soll ein einziger, konsolidierter
   // Save nach Pruning + Default-Zuweisung + ggf. Viewport-Fit passieren,
   // nicht mehrere Zwischen-Saves mit noch unfertigem Zustand).
+  // Nutzerfund 2026-09-03 ("beim Workflow-Start werden die kollabierten
+  // Workflow-Kacheln nach unten verschoben"): `#itemsAtScope()` liefert
+  // (anders als `#buildTilesAtScope()`, das über `workflowMemberIds`
+  // exakt diese IDs herausfiltert, s. dortige Doku) ALLE Root-Node-IDs
+  // ungefiltert — auch die, die (sobald ihre Workflow-Rollenbindung beim
+  // Server ankommt, s. `awaitRegistration`) gar nie als eigene Kachel
+  // gerendert werden, weil `#buildTilesAtScope` sie ausblendet. Ohne
+  // diesen Schnitt verbrauchte ein gerade erst registrierter, aber noch
+  // ungebundener Workflow-Mitgliedsknoten trotzdem einen `nextIndex`-
+  // Slot in der Positions-Vergabe unten — beim ALLERERSTEN Start eines
+  // Workflows (noch keine gespeicherte Position für seine kollabierte
+  // Kachel) schob das die spätere `workflowTileId(wf.id)`-Zuweisung
+  // (Zeile unten, Teil derselben Schleife) sichtbar nach unten, obwohl
+  // der Mitgliedsknoten selbst nie als eigene Kachel erschien. Dieselbe
+  // `this.#scope === null`-Bedingung wie in `#buildTilesAtScope` — nur
+  // am Root gilt die Kollabierung, innerhalb einer B5-Gruppe bleiben
+  // Mitglieder normal sichtbar/positionierbar.
   #assignMissingPositions(save = true): boolean {
     let changed = false;
     const items = this.#itemsAtScope();
+    const workflowMemberIds = this.#scope === null ? this.#allWorkflowMemberNodeIds() : new Set<string>();
     // Index für defaultPosition() startet bei der Anzahl bereits
     // bekannter Positionen, nicht bei 0 innerhalb dieses Aufrufs: die
     // Reihenfolge von items.nodeIds folgt der Registry-Rückgabe (z. B.
@@ -1139,8 +1176,13 @@ export class FlowCanvas extends HTMLElement {
     }));
     for (
       const id of [
-        ...items.nodeIds,
-        ...items.groupIds,
+        ...items.nodeIds.filter((nodeId) => !workflowMemberIds.has(nodeId)),
+        // Dieselbe Ausnahme wie in `#buildTilesAtScope` für eine Gruppe,
+        // die zugleich eine Workflow-Definition ist — ihre kollabierte
+        // Darstellung ist die Workflow-Kachel unten, nicht die Gruppe
+        // selbst (sonst dieselbe Slot-Verschwendung wie oben, nur für
+        // Gruppen statt einzelne Knoten).
+        ...items.groupIds.filter((groupId) => !(this.#scope === null && this.#groupTree.groups[groupId]?.workflowId)),
         ...this.#workflowEditRolePlaceholderIds(),
         ...this.#allWorkflowTileIds(),
       ]

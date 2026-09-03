@@ -96,7 +96,24 @@ var controlPlaneNodeTypes = map[string]bool{
 // (gleiches Muster wie launcher.stopGracePeriod).
 var registrationTimeout = 20 * time.Second
 
-var registrationPollInterval = 300 * time.Millisecond
+// registryPollNowTimeout begrenzt einen einzelnen `RegistryPoller.
+// PollNow()`-Aufruf (`runStop`, s. dort) — bewusst eine eigene Konstante
+// statt an `registrationPollInterval` gekoppelt: Letztere ist eine reine
+// Poll-KADENZ (auch von Tests auf 10ms verkürzt, s. dortige Doku), hier
+// geht es um ein TIMEOUT-BUDGET für einen echten HTTP-Aufruf an die
+// NMOS-Registry, ein unabhängiger Belang.
+var registryPollNowTimeout = 2 * time.Second
+
+// Root-Cause-Fix 2026-09-03 (Nutzerfund, weiterhin sichtbares Flackern
+// trotz Nachtrag 169s Inkremental-Fix): von 300ms auf 100ms verkürzt —
+// verkleinert das verbleibende Zeitfenster, in dem ein bereits im
+// Node-Graphen sichtbarer, aber `awaitRegistration` noch nicht
+// aufgefallener Node ungebunden bleibt (der eigentliche verbliebene
+// Rest-Auslöser des Flackerns, s. `awaitRegistration`-Doku). Betrifft
+// zusätzlich `waitForCrosspointInput` (ein echter, aber rein lokaler
+// Node-eigener HTTP-Poll) — bei 20s `registrationTimeout` macht das aus
+// ~66 Anfragen ~200, für einen einzelnen Workflow-Start unbedenklich.
+var registrationPollInterval = 100 * time.Millisecond
 
 var (
 	// ErrValidation wird bei einer ungültigen Workflow-Definition
@@ -1761,7 +1778,7 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 			// bricht den Stop selbst nicht ab, der reguläre Takt holt es
 			// ohnehin nach.
 			if s.registryPoller != nil {
-				pollCtx, cancel := context.WithTimeout(context.Background(), registrationPollInterval*4)
+				pollCtx, cancel := context.WithTimeout(context.Background(), registryPollNowTimeout)
 				s.registryPoller.PollNow(pollCtx)
 				cancel()
 			}

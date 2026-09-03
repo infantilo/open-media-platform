@@ -20399,3 +20399,71 @@ künftige Sitzung festgehalten, falls `-race` je zum Standard wird.
 neues `RegistryPoller`-Interface + `SetRegistryPoller`),
 `orchestrator/internal/registry/poller.go` (`PollNow`, `pollMu`),
 `orchestrator/main.go` (`workflowSvc.SetRegistryPoller(poller)`).
+
+## 2026-09-03 (Nachtrag 171) — Nutzerfund: trotz Nachtrag 169/170 tauchen beim Workflow-Start weiterhin alle Nodes im Root-Fenster auf, wodurch die kollabierte Workflow-Kachel nach unten verschoben wird — echter, separater Frontend-Bug gefunden (Positions-Vergabe filtert Workflow-Mitglieder NICHT, anders als die Kachel-Darstellung selbst)
+
+**Root Cause:** `#buildTilesAtScope()` (die eigentliche Kachel-
+RENDERING-Funktion) filtert Workflow-Mitgliedsknoten bereits korrekt
+über `#allWorkflowMemberNodeIds()` heraus — insofern war Nachtrag
+169/170s Backend-Fix (Runtime-Bindung so schnell wie möglich
+persistieren) die richtige Maßnahme GEGEN das eigentliche Flackern.
+Aber `#assignMissingPositions()` (POSITIONS-VERGABE, läuft bei JEDEM
+`#fetchAndRender()`) nutzte `#itemsAtScope()` UNGEFILTERT — vergab also
+JEDEM neu im Graphen erschienenen Workflow-Mitgliedsknoten trotzdem
+einen `nextIndex`-Slot in der Root-Positions-Vergabe, auch wenn dieser
+Knoten NIE als eigene Kachel gerendert wurde. Beim ALLERERSTEN Start
+eines Workflows (noch keine gespeicherte Position für seine kollabierte
+Kachel) wurden diese "unsichtbaren" Slots trotzdem VOR der Workflow-
+Kachel selbst vergeben (Iterationsreihenfolge: erst `items.nodeIds`,
+`workflowTileId` kommt zuletzt) — die Kachel landete dadurch sichtbar
+weiter unten/rechts, obwohl ihre eigentlichen Mitgliedsknoten nie als
+Kacheln erschienen.
+
+**Zweiter, damit verwandter Fund beim Live-Verifizieren (CDP,
+`ui/graph/flow-canvas.ts` läuft NUR im Browser, nicht per API prüfbar):**
+selbst nach dem Fix von `#assignMissingPositions()` sammelte sich in
+`hostViewPositions` (das SEPARATE Positions-Set für die Host-Ansicht-
+Lanes, `#arrangeIntoLanes`) trotzdem ein Eintrag für jeden Workflow-
+Mitgliedsknoten an — Ursache: die verbleibende, kleine Backend-Timing-
+Lücke (ein Knoten kann für BIS ZU EINEN `awaitRegistration`-Poll-Tick im
+Graphen sichtbar sein, bevor seine Rollenbindung ankommt, s. Nachtrag
+169) reicht aus, dass `#rootZoneTileIds()` ihn EINMAL als "noch kein
+Workflow-Mitglied" einstuft und `#arrangeIntoLanes` ihm einen Lane-
+Platz zuweist — und `#pruneStaleHostViewPositions()`/
+`#pruneStalePositions()` räumten das NIE wieder auf, weil der Knoten ja
+weiterhin ein gültiger `#graph.nodes`-Eintrag bleibt (nur eben keine
+eigene Kachel mehr). Ein einziger unglücklich getimter Poll-Tick
+hinterließ dadurch einen PERMANENTEN verwaisten Eintrag.
+
+**Fix (3 Stellen, `ui/graph/flow-canvas.ts`):**
+- `#assignMissingPositions()`: `items.nodeIds`/`items.groupIds` werden
+  jetzt genau wie in `#buildTilesAtScope()` um `#allWorkflowMemberNode
+  Ids()` bzw. Gruppen mit `workflowId` bereinigt, bevor Positions-Slots
+  vergeben werden (nur am Root-Scope, `this.#scope === null`, exakt
+  dieselbe Bedingung wie dort).
+- `#pruneStalePositions()`/`#pruneStaleHostViewPositions()`: dieselbe
+  Bereinigung zusätzlich beim AUFRÄUMEN — ein durch die verbleibende
+  Backend-Timing-Lücke einmal fälschlich vergebener Eintrag für einen
+  Workflow-Mitgliedsknoten gilt jetzt als "ungültig" und wird im
+  NÄCHSTEN `#fetchAndRender()`-Lauf automatisch entfernt, statt für die
+  Lebensdauer der Instanz stehen zu bleiben.
+
+**Verifiziert (echter Browser via CDP, nicht nur API — dieser Bug lebt
+komplett im Frontend, per API-Polling allein unsichtbar):** Chromium
+headless über `chrome://devtools`-Protokoll gestartet, echtes Login
+(Token in `localStorage`), Flow Editor geladen, Layout-Positionen für
+den disponiblen Test-Workflow "TEST1" gezielt gelöscht (`PUT
+/api/v1/layouts/default`, simuliert einen NIE zuvor positionierten
+Workflow), dann `POST .../start` ausgelöst, 6s gewartet (Browser-Tab
+blieb per SSE verbunden und lief seinen normalen `#fetchAndRender()`-
+Zyklus), danach `GET /api/v1/layouts/default` geprüft. VOR dem Fix:
+`hostViewPositions` enthielt vier zusätzliche Einträge (die tatsächlichen
+`nodeId`s der vier Rollen) neben der Workflow-Kachel. NACH dem Fix:
+sowohl `positions` als auch `hostViewPositions` enthalten AUSSCHLIESSLICH
+den `workflow-tile:<id>`-Eintrag — kein einziger Mitgliedsknoten,
+keine verwaiste Gruppen-Position. `deno check ui/graph/flow-canvas.ts`
+sauber, `go test ./...` (unverändert vom Backend-Teil betroffen) weiter
+grün. Ursprüngliches Layout danach wiederhergestellt.
+
+**Datei:** `ui/graph/flow-canvas.ts` (`#assignMissingPositions`,
+`#pruneStalePositions`, `#pruneStaleHostViewPositions`).
