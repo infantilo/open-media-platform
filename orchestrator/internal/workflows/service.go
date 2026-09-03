@@ -122,6 +122,14 @@ type NodeLister interface {
 	List() []registry.NodeView
 }
 
+// RegistryPoller stößt außer der Reihe einen sofortigen Registry-Poll an
+// (implementiert von *registry.Poller, s. dortige `PollNow`-Doku) —
+// optional wie `resources`/`hostMetrics`/`ioPorts` (nil = kein Effekt,
+// s. `SetRegistryPoller`), damit Tests ohne echten Poller auskommen.
+type RegistryPoller interface {
+	PollNow(ctx context.Context)
+}
+
 // GraphService ist die von Service genutzte Teilmenge von *graph.Service.
 type GraphService interface {
 	Connect(ctx context.Context, fromSender, toReceiver string) error
@@ -288,6 +296,13 @@ type Service struct {
 	// eine deklarierte Hardware-Anforderung sonst unbemerkt ignoriert
 	// würde).
 	ioPorts IOPortClaimer
+	// registryPoller (Nutzerfund 2026-09-03) — s. SetRegistryPoller/
+	// RegistryPoller. Nil = `runStop` verlässt sich weiter allein auf den
+	// regulären `registry.PollInterval`-Takt (2s) für die Node-Graph-
+	// Aktualisierung nach einem Rollen-Stop — kein Crash, nur ein
+	// bisschen länger sichtbares Flackern im Flow-Editor (s. dortige Doku
+	// bei `runStop`).
+	registryPoller RegistryPoller
 }
 
 // SetIOPortClaimer verdrahtet den I/O-Port-Store nachträglich (main.go:
@@ -296,6 +311,13 @@ type Service struct {
 // I/O-Port-Store sinnvoll darauf verweisen kann).
 func (s *Service) SetIOPortClaimer(c IOPortClaimer) {
 	s.ioPorts = c
+}
+
+// SetRegistryPoller verdrahtet den echten `*registry.Poller` nachträglich
+// (main.go, gleiches Muster wie SetIOPortClaimer/SetHostMetrics) — s.
+// RegistryPoller-Doku und `runStop`.
+func (s *Service) SetRegistryPoller(p RegistryPoller) {
+	s.registryPoller = p
 }
 
 // NewService verbindet Postgres-Store, Node-Registry-Sicht, Graph-Service
@@ -1700,17 +1722,57 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 		}
 	}
 
+	// Root-Cause-Fix (Nutzerfund 2026-09-03, spiegelbildlich zu Nachtrag
+	// 169s Start-Fund): `wf.Runtime` wurde bis hierhin erst NACH dieser
+	// gesamten Schleife (`launcher.Stop` blockiert je Rolle, bis ihr
+	// Prozess tatsächlich beendet ist, s. `launcher.stopLocal`) AUF
+	// EINMAL für ALLE Rollen geleert und EIN abschließendes
+	// `"workflow.updated"` publiziert. Eine früh in dieser Schleife
+	// gestoppte Rolle war zu diesem Zeitpunkt schon Sekunden zuvor real
+	// beendet und im Node-Graphen längst deregistriert — die zuletzt
+	// gestoppte(n) Rolle(n) dagegen ggf. gerade erst, ihre Deregistrierung
+	// (`registry.Poller`, eigener `"node.removed"`-Event) noch nicht
+	// beim Flow-Editor angekommen. Räumte man ALLE Bindungen erst nach
+	// der langsamsten Rolle gemeinsam weg, verlor eine bereits Sekunden
+	// zuvor abgemeldete UND wieder frisch registrierte Rolle (Neustart
+	// derselben Instanz o. Ä.) — unwahrscheinlich hier, aber der eigentlich
+	// beobachtete Fall: die GERADE ERST gestoppten Rollen sind für den
+	// kurzen Rest dieses Laufs weiterhin im Graphen sichtbar, aber schon
+	// ungebunden, sobald IRGENDEINE andere Rolle (auch eine früher fertig
+	// gewordene) den finalen Batch-Clear auslöst — exakt das gemeldete
+	// Flackern. Fix: jede Rollen-Bindung sofort nach IHREM EIGENEN
+	// `launcher.Stop()` entfernen+persistieren+publizieren, nicht erst am
+	// Ende — dieselbe Inkremental-Logik wie beim Start (`awaitRegistration`).
 	var errs []string
 	for role, rt := range wf.Runtime {
-		if rt.InstanceID == "" {
-			continue
+		if rt.InstanceID != "" {
+			if err := s.launcher.Stop(rt.InstanceID); err != nil {
+				errs = append(errs, fmt.Sprintf("role %s: %v", role, err))
+			}
+			// Stößt den `registry.Store`-Snapshot (Node-Graph-Cache) sofort
+			// statt erst nach bis zu `registry.PollInterval` (2s) an —
+			// schließt den verbleibenden Rest der oben dokumentierten
+			// Flacker-Lücke: `launcher.Stop()` wartet zwar, bis der Prozess
+			// tatsächlich beendet ist, der interne Node-Snapshot hier
+			// bräuchte ohne diesen Stoß trotzdem bis zu 2s, um die
+			// (echte, beim Node-SDK-eigenen SIGTERM-Handler bereits
+			// erfolgte) Abmeldung nachzuvollziehen. Best effort — ein
+			// fehlender Poller (Tests) oder ein einzelner Poll-Fehlschlag
+			// bricht den Stop selbst nicht ab, der reguläre Takt holt es
+			// ohnehin nach.
+			if s.registryPoller != nil {
+				pollCtx, cancel := context.WithTimeout(context.Background(), registrationPollInterval*4)
+				s.registryPoller.PollNow(pollCtx)
+				cancel()
+			}
 		}
-		if err := s.launcher.Stop(rt.InstanceID); err != nil {
-			errs = append(errs, fmt.Sprintf("role %s: %v", role, err))
+		delete(wf.Runtime, role)
+		if err := s.store.UpdateRuntime(wf); err != nil {
+			slog.Warn("workflows: failed to persist incremental role stop", "id", wf.ID, "role", role, "error", err)
 		}
+		s.publish(wf)
 	}
 
-	wf.Runtime = map[string]RoleRuntime{}
 	if len(errs) > 0 {
 		wf.Status = StatusFailed
 		wf.Error = fmt.Sprintf("stop finished with errors: %v", errs)

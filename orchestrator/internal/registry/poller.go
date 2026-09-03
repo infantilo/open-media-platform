@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"reflect"
+	"sync"
 	"time"
 )
 
@@ -33,6 +34,14 @@ type Poller struct {
 	client   *Client
 	store    *Store
 	prevByID map[string]NodeView
+	// pollMu serialisiert `pollOnce`-Läufe (Root-Cause-Fix 2026-09-03,
+	// s. `PollNow`-Doku): `Run()`s eigener Ticker UND ein per `PollNow`
+	// außer der Reihe angestoßener Lauf dürften sich sonst über
+	// `prevByID` (unsynchronisierte Map, nur für EINEN gleichzeitigen
+	// Aufrufer gedacht) in die Quere kommen — ein klassischer Data Race,
+	// nicht nur theoretisch, da `PollNow` aus einer FREMDEN Goroutine
+	// (`workflows.Service.runStop`) kommt.
+	pollMu sync.Mutex
 
 	// OnChange wird bei jedem Poll für jeden hinzugekommenen, entfernten
 	// oder veränderten Node aufgerufen. Optional — nil bedeutet "kein
@@ -74,7 +83,23 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
+// PollNow stößt außerhalb des regulären `PollInterval`-Takts sofort
+// einen einzelnen Poll-Zyklus an (Nutzerfund 2026-09-03, `workflows.
+// Service.runStop`): ein per SIGTERM beendeter, sich selbst
+// abmeldender Node ist bei der ECHTEN NMOS-Registry oft sofort weg,
+// der interne `Store`-Snapshot hier bleibt aber bis zu `PollInterval`
+// (2s) stehen — genug Zeit, dass ein Workflow-Stop, der seine eigenen
+// Runtime-Bindungen (s. `workflows.Service.runStop`) schneller als das
+// aufräumt, den bereits ungebundenen, aber im Graphen noch nicht
+// verschwundenen Node kurz einzeln im Flow-Editor aufblitzen lässt.
+func (p *Poller) PollNow(ctx context.Context) {
+	p.pollOnce(ctx)
+}
+
 func (p *Poller) pollOnce(ctx context.Context) {
+	p.pollMu.Lock()
+	defer p.pollMu.Unlock()
+
 	start := time.Now()
 	nodes, err := p.client.FetchSnapshot(ctx)
 	p.store.SetPollDuration(time.Since(start))

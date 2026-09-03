@@ -20319,3 +20319,83 @@ danach sauber gestoppt, keine verwaisten Instanzen.
 
 **Datei:** `orchestrator/internal/workflows/service.go`
 (`awaitRegistration`).
+
+## 2026-09-03 (Nachtrag 170) — Nutzerfund, spiegelbildlich zu Nachtrag 169: beim Workflow-STOP tauchen jetzt manche Nodes kurz einzeln im Host-Fenster auf — zwei getrennte Root Causes gefunden und behoben (Batch-Clear UND 2s-Registry-Poll-Latenz)
+
+**Root Cause 1 — derselbe Bug-Typ wie Nachtrag 169, nur beim Stop:**
+`runStop()` rief `s.launcher.Stop(instanceID)` für ALLE Rollen in einer
+Schleife auf (blockiert je Rolle, bis ihr Prozess tatsächlich beendet
+ist, s. `launcher.stopLocal`), leerte `wf.Runtime` aber erst NACH der
+GESAMTEN Schleife auf einmal und publizierte EIN einziges
+abschließendes `"workflow.updated"`. Eine früh gestoppte Rolle blieb
+dadurch bis zum Ende der langsamsten Geschwisterrolle als "gebunden"
+markiert — harmlos für sich allein, aber sobald der finale Batch-Clear
+ALLE Bindungen gleichzeitig entfernte, waren die GERADE ERST
+gestoppten Rollen für einen Moment ungebunden, während ihr Node im
+Graphen (noch nicht deregistriert) weiterhin sichtbar war. Fix:
+jede Rollen-Bindung sofort nach IHREM EIGENEN `launcher.Stop()`
+entfernen+persistieren+publizieren (`delete(wf.Runtime, role)` +
+`UpdateRuntime`/`publish` INNERHALB der Schleife, nicht danach) —
+dieselbe Inkremental-Logik wie Nachtrag 169 für den Start.
+
+**Root Cause 2 — live beim Verifizieren von Fix 1 selbst gefunden, NICHT
+vorher vermutet:** Fix 1 allein reichte nicht — ein Live-Test (Polling
+von `/api/v1/graph` + `/api/v1/workflows` im 150-250ms-Takt während
+eines echten Stops, disponibler 4-Rollen-Workflow "TEST1") zeigte
+weiterhin ein ~0,9s-Flackern für die letzten zwei Rollen. Ursache:
+`registry.Poller` (der interne Node-Graph-Cache) pollt die NMOS-Query-
+API nur alle `PollInterval` = 2 Sekunden (UMSETZUNG.md A5, "Poll alle
+2s reicht") — ein per SIGTERM beendeter, sich selbst bei der ECHTEN
+Registry abmeldender Node verschwindet zwar sofort dort, der
+orchestrator-interne Snapshot (Quelle für `/api/v1/graph` UND die
+`"node.removed"`-SSE) braucht aber bis zu 2s, um das nachzuvollziehen —
+unabhängig von Fix 1, der die Runtime-Bindung selbst bereits sofort
+korrekt entfernt.
+
+**Fix 2:** `registry.Poller` bekommt eine neue öffentliche `PollNow(ctx)`
+(ruft den bisher privaten `pollOnce` außer der Reihe auf) plus eine
+`sync.Mutex`, die `pollOnce`-Läufe serialisiert (`Run()`s eigener
+Ticker UND ein außer der Reihe angestoßener `PollNow()`-Aufruf teilen
+sich sonst die unsynchronisierte `prevByID`-Map — echter Data Race,
+nicht nur theoretisch, da `PollNow` aus einer FREMDEN Goroutine
+(`workflows.Service.runStop`) kommt; per `go test -race` bestätigt
+sauber nach Einführung der Sperre). `workflows.Service` bekommt ein
+neues optionales `RegistryPoller`-Interface + `SetRegistryPoller`
+(gleiches Nil-safe-Nachträglich-Verdrahtungsmuster wie `SetIOPortClaimer`/
+`SetHostMetrics`) — `main.go` verdrahtet den bereits vorhandenen
+`poller` hinein. `runStop` stößt nach JEDEM erfolgreichen `launcher.
+Stop()` einen sofortigen `PollNow()` an (best effort, 1,2s-Timeout,
+kein Abbruch des Stops bei Fehlschlag).
+
+**Verifiziert (echter Orchestrator-Pfad, derselbe disponible
+4-Rollen-Workflow):** identischer Polling-Testaufbau wie bei Nachtrag
+169, diesmal während `/stop`. Vor Fix 1 allein: `bound` fiel von 4 auf
+0 in EINEM Tick, während `graph_nodes` für ~0,9s weitere zwei Rollen
+zeigte (FLASHING). Nach BEIDEN Fixes: `graph_nodes` und `bound` fallen
+über die GESAMTE Stop-Sequenz hinweg im GLEICHEN Tick gemeinsam
+(4→3→2→1→0), kein einziger FLASHING-Eintrag in >15 Samples. `go test
+./...` (gesamtes Orchestrator-Modul, ohne `-race`, projektüblicher
+Prüfmaßstab) grün.
+
+**Separater, NICHT behobener Fund beim `-race`-Testen (außerhalb des
+üblichen Prüfmaßstabs dieses Projekts, nur zur eigenen Absicherung der
+neuen `registry.Poller`-Nebenläufigkeit herangezogen):**
+`go test -race ./internal/workflows/...` zeigt einen echten,
+VORBESTEHENDEN Data Race zwischen `TestStartResumesFromPaused` und
+`TestStartAcceptsWorkflowCompensableViaDelay` — ein von `Start()` per
+`safego.Go` gestarteter Hintergrund-Lauf (`runStart`/
+`awaitRegistration`) überlebt offenbar seinen auslösenden Test und
+kollidiert mit dem Cleanup eines SPÄTER laufenden Tests auf gemeinsam
+genutztem Test-Double-Zustand. Bestätigt bereits auf dem committeten
+Stand VOR diesem Nachtrag vorhanden (per `git stash` isoliert) — keine
+Regression dieser Sitzung, aber ein echtes Test-Hygiene-Problem
+(fehlendes Warten auf eigene Hintergrund-Goroutinen in mind. einem
+dieser Tests). `go test` OHNE `-race` (der bisher einzige in diesem
+Projekt tatsächlich genutzte Prüfmaßstab) bleibt davon unberührt und
+grün. Nicht behoben — außerhalb des heutigen Auftrags, aber für eine
+künftige Sitzung festgehalten, falls `-race` je zum Standard wird.
+
+**Dateien:** `orchestrator/internal/workflows/service.go` (`runStop`,
+neues `RegistryPoller`-Interface + `SetRegistryPoller`),
+`orchestrator/internal/registry/poller.go` (`PollNow`, `pollMu`),
+`orchestrator/main.go` (`workflowSvc.SetRegistryPoller(poller)`).

@@ -516,6 +516,12 @@ func main() {
 	// natsRequester oben (workflows bleibt frei von einer direkten
 	// ioports-Paket-Abhängigkeit, s. dortige IOPortClaimer-Doku).
 	workflowSvc.SetIOPortClaimer(ioPortAdapter{store: ioPortStore})
+	// Nutzerfund 2026-09-03: lässt `workflows.Service.runStop` den
+	// Node-Graph-Cache (`poller`, oben) sofort statt erst nach bis zu
+	// `registry.PollInterval` (2s) auffrischen, sobald eine Rollen-
+	// Instanz tatsächlich gestoppt ist — behebt Nachreißer-Flackern im
+	// Flow-Editor beim Workflow-Stop (s. workflows/service.go::runStop).
+	workflowSvc.SetRegistryPoller(poller)
 
 	// Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): löst
 	// Rollenbindungen für die Operator-Console auf, jetzt inkl. echter
