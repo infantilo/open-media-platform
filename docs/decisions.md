@@ -20179,3 +20179,89 @@ einem `File`-Item, analog zu Nachtrag 165s Methode.
 
 **Datei:** `nodes/omp-player/src/pipeline.rs` (neu: `run_with_timeout`,
 `teardown_and_get_pad`, `try_build_branches`; `replace_slot` umgebaut).
+
+## 2026-09-03 (Nachtrag 168) — Nutzerauftrag: `omp-viewer`s MJPEG-Browser-Vorschau bekommt eine zur Laufzeit einstellbare Bildrate ("damit man auch ruckelfrei das Video kontrollieren kann"); Frage nach separatem Lowres-MXL-Flow für den Browser verneint (bestehende Preview-Pipeline SKALIERT bereits selbst herunter)
+
+**Analyse — kein neuer Lowres-MXL-Flow nötig:** der Browser kann
+ohnehin keine MXL-Flows konsumieren (nur HTTP/Bild-Daten) — `omp-viewer`
+skaliert für seine MJPEG-Vorschau schon seit C6 selbst auf 640×360
+herunter (`omp_mediaio::preview::build_mjpeg_branch`,
+`videoscale ! videorate ! capsfilter ! jpegenc`), das IST bereits der
+"Lowres für den Browser". Das eigentliche Problem: `PREVIEW_FPS` war
+mit `5` fest im Code verdrahtet (Konstante), UND der Browser pollte
+`/preview` unabhängig davon fest alle 500ms (2 Bilder/s) — beides ohne
+UI-Regler.
+
+**Fix:**
+- `nodes/omp-mediaio/src/preview.rs::build_mjpeg_branch` liefert jetzt
+  die sechs erzeugten Elemente zurück (`Result<Vec<gst::Element>, _>`
+  statt `Result<(), _>`) — nötig, damit ein Aufrufer den Zweig später
+  bei geänderter Bildrate sauber abbauen/neu aufbauen kann.
+  `omp-multiviewer`/`omp-multiviewer-custom` (bauen ihren Zweig nie neu
+  auf) ignorieren den Rückgabewert einfach, keine Änderung dort nötig.
+- `omp-viewer/src/pipeline.rs`: neuer schreibbarer Zustand
+  (`Arc<AtomicI32>`, Default `5`, Bereich `1..=30`) plus
+  `PipelineHandle::set_preview_fps()`/`preview_fps()`. Ein neues
+  `Command::SetPreviewFps` baut — bei aktiver Verbindung — NUR den
+  MJPEG-Zweig chirurgisch neu auf (`rebuild_mjpeg_branch`), nicht die
+  ganze Pipeline (kein IS-05-Reconnect-Overhead für einen reinen
+  FPS-Wechsel). `ActivePipeline` hält dafür jetzt zusätzlich `tee`
+  (Anknüpfpunkt) und `mjpeg_elements` (für den Abbau).
+- Neuer schreibbarer Parameter `previewFps` (`ParamType::Number`,
+  `range: 1..30`, `unit: "fps"`) in `main.rs`s `ViewerStore` — GET liest
+  `pipeline.preview_fps()`, PATCH ruft `pipeline.set_preview_fps()`.
+  Da `ParamType::Number` + `range` bereits generisch einen Slider im
+  Flow-Editor-Node-Inspector erzeugt (`ui/graph/controls.ts`), gibt es
+  DIESE Regelmöglichkeit "gratis" obendrauf — der eigentliche, für einen
+  Operator direkt neben dem Bild sichtbare Regler kam trotzdem händisch
+  ins Node-eigene Panel (s. u.), weil der generische Inspector an
+  anderer Stelle im UI sitzt.
+- `nodes/omp-viewer/ui/bundle.js`: neues `<select>` ("Bildrate", Presets
+  1/2/5/10/15/25 Bilder/s) direkt unter dem Vorschaubild. Ändert der
+  Operator die Auswahl, passiert ZWEIERLEI: `PATCH .../params/
+  previewFps` (Server-Encode-Takt) UND das eigene Poll-Intervall wird
+  neu berechnet (`Math.round(1000/fps)`, min. 20ms) — schneller pollen
+  als der Server encodiert brächte nichts (immer dasselbe letzte Bild).
+  Nebenbei behoben: ein bereits vorher bestehender Scope-Bug (`token`
+  war nur innerhalb `previewUrl()`s eigenem Closure deklariert, ein
+  zweiter, unabhängiger Verweis bei der `levelsUrl`-EventSource weiter
+  unten griff auf eine dort gar nicht existierende Variable zu — beim
+  ohnehin fälligen Umbau gleich mitgefunden und behoben).
+
+**Verifikations-Holzweg, für künftige Preview-Debugging-Sessions
+festgehalten:** ein erster Live-Test des Branch-Rebuilds gegen
+`omp-mxf-player-direct` als Quelle zeigte über mehrere FPS-Wechsel
+hinweg scheinbar komplett eingefrorene `/preview`-Antworten (exakt
+identischer MD5-Hash über mehrere Sekunden) — trotz augenscheinlich
+fehlerfreiem Zweigaufbau (`GST_DEBUG=GST_STATES:4`: alle Elemente inkl.
+`appsink` erreichen bestätigt PLAYING). Zwei Fixversuche am Rebuild
+selbst (bestätigtes NULL vor Unlink statt bloß angefordert; neuer Zweig
+zuerst aufgebaut, ALTER erst danach abgebaut, damit `tee`s Pad-Zahl nie
+auf null fällt) blieben beide wirkungslos gegen dasselbe Symptom.
+Root-Cause per temporärem Zähler direkt im `new_sample`-Callback
+zweifelsfrei gefunden: der Zweig feuerte die GANZE ZEIT korrekt mit der
+eingestellten Rate (z. B. 20,3/s bei `fps=20`) — das Einfrieren war ein
+Artefakt der TESTMETHODE (MD5-Diff toter Anzeige-Inhalte), nicht des
+Codes. `omp-mxf-player-direct` selbst zeigte im selben Zeitraum
+wiederholt `"omp-mediaio(mxl): reopen after FLOW_INVALID … retrying"` —
+ein bereits an anderer Stelle dokumentiertes, von diesem Zweig
+unabhängiges Problem dieser LOOPENDEN Testquelle. Umgestellt auf
+`omp-source` (stabile, nicht-loopende Testquelle) bestätigte den
+Rebuild sofort als korrekt funktionierend. **Lektion:** für Preview-/
+MJPEG-Verifikation künftig eine stabile Quelle verwenden UND bei
+Inhalts-Stillstand zuerst eine Callback-/Zähler-Instrumentierung statt
+reinem Bild-Diffing heranziehen, bevor man dem eigenen frisch
+geschriebenen Code die Schuld gibt.
+
+**Verifiziert (echter Orchestrator-Pfad):** Descriptor zeigt
+`previewFps` korrekt (`{"type":"number","range":{"min":1,"max":30}}`),
+`PATCH .../params/previewFps` ändert den Wert und liefert danach
+weiterhin gültige 640×360-JPEGs über den Orchestrator-Proxy
+(`GET .../stream/previewUrl`), keine neuen Fehler/Warnungen im Log.
+`cargo test --workspace` grün, `node --check` auf `bundle.js` sauber.
+
+**Dateien:** `nodes/omp-mediaio/src/preview.rs` (`build_mjpeg_branch`
+liefert Elemente zurück), `nodes/omp-viewer/src/pipeline.rs`
+(`PREVIEW_FPS_MIN/MAX`, `rebuild_mjpeg_branch`, `Command::
+SetPreviewFps`), `nodes/omp-viewer/src/main.rs` (`previewFps`-Param),
+`nodes/omp-viewer/ui/bundle.js` (Bildraten-Regler + `token`-Scope-Fix).

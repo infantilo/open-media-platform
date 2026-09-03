@@ -21,7 +21,7 @@ use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverReso
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, NodeHandle, ParamSpec, ParamStore,
-    ParamType, RawResponse, ReceiverSpec, SetError,
+    ParamType, RawResponse, Range, ReceiverSpec, SetError,
 };
 use serde_json::Value;
 
@@ -113,6 +113,12 @@ struct ViewerStore {
     levels_url: String,
     audio_inputs: Arc<Mutex<HashMap<String, AudioInputEntry>>>,
     commands: tokio::sync::mpsc::UnboundedSender<ViewerCommand>,
+    // Nutzerauftrag 2026-09-03 ("die fps ... einstellbar in der UI"):
+    // eigener geklonter Griff (nicht der in `ViewerControl` hinter
+    // `connection` versteckte) — `PipelineHandle` ist `Clone` (billiger
+    // `Arc`-Klon), `get`/`set` unten brauchen direkten Zugriff auf
+    // `preview_fps()`/`set_preview_fps()`.
+    pipeline: pipeline::PipelineHandle,
 }
 
 impl ParamStore for ViewerStore {
@@ -144,6 +150,26 @@ impl ParamStore for ViewerStore {
                     range: None,
                     readonly: true,
                 },
+                // Vorschau-Bildrate für den MJPEG-Browser-Stream
+                // (Nutzerauftrag 2026-09-03: "die fps ... einstellbar in
+                // der UI, damit man auch ruckelfrei das Video
+                // kontrollieren kann") — schreibbar, wirkt sofort auf den
+                // laufenden Zweig (`pipeline::rebuild_mjpeg_branch`),
+                // ohne die MXL-Quelle neu zu verbinden. `omp-viewer`s
+                // eigenes `<img>`-Polling (`ui/bundle.js`) übernimmt den
+                // Wert ebenfalls als eigenes Poll-Intervall — schneller
+                // pollen als der Server encodiert brächte nichts (immer
+                // dasselbe letzte Bild), s. dortigen Kommentar.
+                ParamSpec {
+                    name: "previewFps".to_string(),
+                    kind: ParamType::Number,
+                    unit: Some("fps".to_string()),
+                    range: Some(Range::Number {
+                        min: pipeline::PREVIEW_FPS_MIN as f64,
+                        max: pipeline::PREVIEW_FPS_MAX as f64,
+                    }),
+                    readonly: false,
+                },
                 // JSON-Array [{id,label}] — die aktuell angelegten
                 // Audio-Eingänge (2026-08-06, dynamische Eingangszahl).
                 ParamSpec {
@@ -173,6 +199,7 @@ impl ParamStore for ViewerStore {
                 *self.connected_flow_id.lock().expect("lock poisoned")
             )),
             "previewUrl" => Some(serde_json::json!(self.preview_url)),
+            "previewFps" => Some(serde_json::json!(self.pipeline.preview_fps())),
             "levelsUrl" => Some(serde_json::json!(self.levels_url)),
             "audioInputs" => Some(serde_json::json!(
                 self.audio_inputs
@@ -186,8 +213,17 @@ impl ParamStore for ViewerStore {
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        if name != "previewFps" {
+            return Err(SetError::ReadOnly);
+        }
+        // `PipelineHandle::set_preview_fps` klemmt selbst auf
+        // `PREVIEW_FPS_MIN..=PREVIEW_FPS_MAX` (s. dortige Doku) — hier
+        // nur der übliche JSON-Zahl-Parse, kein doppelter Bereichs-Check
+        // nötig.
+        let fps = value.as_f64().ok_or(SetError::Unknown)? as i32;
+        self.pipeline.set_preview_fps(fps);
+        Ok(())
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
@@ -384,6 +420,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     let media_ready_pipeline = pipeline_handle.clone();
+    // Für `ViewerStore` (previewFps get/set) — `pipeline_handle` selbst
+    // wandert unten in `ViewerControl`.
+    let store_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
     let connection = Arc::new(ReceiverConnection::new(
         receiver_id.clone(),
@@ -404,6 +443,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         levels_url,
         audio_inputs: audio_inputs.clone(),
         commands: commands_tx,
+        pipeline: store_pipeline,
     });
 
     let handle = omp_node_sdk::start(

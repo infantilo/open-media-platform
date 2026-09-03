@@ -32,6 +32,14 @@ class OmpViewerPanel extends HTMLElement {
         border: 1px solid #444;
       }
       p { font-size: 12px; color: #888; }
+      .fps-control {
+        display: flex; align-items: center; gap: 6px; margin-top: 6px;
+      }
+      .fps-control label { font-size: 11px; color: #aaa; }
+      .fps-control select {
+        background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
+        font-size: 11px; padding: 2px 4px;
+      }
       .audio-inputs { margin-top: 10px; }
       .audio-inputs h4 { margin: 0 0 6px 0; font-size: 12px; color: #aaa; font-weight: normal; }
       .input-row {
@@ -48,6 +56,33 @@ class OmpViewerPanel extends HTMLElement {
       }
     `;
 
+    // Einmal hier oben geholt (vormaliger Bug: `token` war nur INNERHALB
+    // von `previewUrl()`s eigenem Scope deklariert, ein zweiter, davon
+    // unabhängiger Verweis weiter unten bei `levelsUrl` griff auf eine
+    // dort gar nicht existierende Variable zu — per Lesen gefunden, beim
+    // FPS-Umbau gleich mitbehoben).
+    const token = localStorage.getItem("omp-auth-token");
+
+    const call = (method, body) =>
+      fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+      });
+
+    const setParam = (name, value) =>
+      fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+
+    const getParam = async (name) => {
+      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`);
+      if (!res.ok) return undefined;
+      return (await res.json()).value;
+    };
+
     const img = document.createElement("img");
     img.alt = "Vorschau";
     img.width = 320;
@@ -62,6 +97,28 @@ class OmpViewerPanel extends HTMLElement {
     const status = document.createElement("p");
     status.textContent = "lade Vorschau …";
 
+    // Vorschau-Bildrate (Nutzerauftrag 2026-09-03: "die fps ...
+    // einstellbar in der UI, damit man auch ruckelfrei das Video
+    // kontrollieren kann") — steuert ZWEI Dinge zugleich: den Server-
+    // seitigen MJPEG-Encode-Takt (`PATCH .../params/previewFps`,
+    // `pipeline::rebuild_mjpeg_branch`) UND das eigene Poll-Intervall
+    // hier (schneller pollen als der Server encodiert brächte nichts —
+    // immer dasselbe letzte Bild, s. `nodes/omp-mediaio/src/preview.rs`).
+    const fpsRow = document.createElement("div");
+    fpsRow.className = "fps-control";
+    const fpsLabel = document.createElement("label");
+    fpsLabel.textContent = "Bildrate";
+    fpsLabel.htmlFor = "fps-select";
+    const fpsSelect = document.createElement("select");
+    fpsSelect.id = "fps-select";
+    for (const fps of [1, 2, 5, 10, 15, 25]) {
+      const opt = document.createElement("option");
+      opt.value = String(fps);
+      opt.textContent = `${fps} Bilder/s`;
+      fpsSelect.appendChild(opt);
+    }
+    fpsRow.append(fpsLabel, fpsSelect);
+
     const audioSection = document.createElement("div");
     audioSection.className = "audio-inputs";
     const audioTitle = document.createElement("h4");
@@ -72,7 +129,7 @@ class OmpViewerPanel extends HTMLElement {
     addBtn.textContent = "+ Audio-Eingang";
     audioSection.append(audioTitle, rowsContainer, addBtn);
 
-    shadow.append(style, img, status, audioSection);
+    shadow.append(style, img, status, fpsRow, audioSection);
 
     // Bewusst per `style.display` statt `status.remove()` umgeschaltet
     // (vormaliger Bug: nach dem ersten erfolgreichen Frame war `status`
@@ -95,7 +152,6 @@ class OmpViewerPanel extends HTMLElement {
     // nicht mehr, weder hier noch in der Flow-Editor-Kachel-Vorschau,
     // `ui/graph/flow-canvas.ts`s `previewSnapshotUrl`).
     const previewUrl = () => {
-      const token = localStorage.getItem("omp-auth-token");
       const base = `/api/v1/nodes/${nodeId}/stream/previewUrl`;
       const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
       return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
@@ -108,23 +164,32 @@ class OmpViewerPanel extends HTMLElement {
     // einen bloß etwas langsamen (aber sonst intakten) Request ab, was
     // der Browser als `error` meldet, ununterscheidbar von einer echten
     // Verbindungsstörung.
-    this._previewInterval = setInterval(() => {
-      if (!img.complete) return;
-      img.src = previewUrl();
-    }, 500);
-
-    const call = (method, body) =>
-      fetch(`/api/v1/nodes/${nodeId}/methods/${method}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body || {}),
-      });
-
-    const getParam = async (name) => {
-      const res = await fetch(`/api/v1/nodes/${nodeId}/params/${encodeURIComponent(name)}`);
-      if (!res.ok) return undefined;
-      return (await res.json()).value;
+    let pollMs = 500;
+    const restartPolling = () => {
+      clearInterval(this._previewInterval);
+      this._previewInterval = setInterval(() => {
+        if (!img.complete) return;
+        img.src = previewUrl();
+      }, pollMs);
     };
+    restartPolling();
+
+    // Aktuellen Server-Wert beim Laden übernehmen (Select + eigenes
+    // Poll-Tempo) statt immer bei den festen 500ms zu bleiben — betrifft
+    // z. B. einen Reload derselben Node-Instanz, deren FPS zuvor schon
+    // geändert wurde.
+    getParam("previewFps").then((fps) => {
+      if (!fps) return;
+      fpsSelect.value = String(fps);
+      pollMs = Math.max(20, Math.round(1000 / fps));
+      restartPolling();
+    });
+    fpsSelect.addEventListener("change", () => {
+      const fps = Number(fpsSelect.value);
+      setParam("previewFps", fps);
+      pollMs = Math.max(20, Math.round(1000 / fps));
+      restartPolling();
+    });
 
     // id -> {row, meter}. Neu ankommende `inputId`s aus dem SSE-Strom,
     // die (noch) keine Zeile haben (Race zwischen `addAudioInput`-Antwort

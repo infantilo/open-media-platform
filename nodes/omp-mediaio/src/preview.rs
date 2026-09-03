@@ -134,6 +134,17 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
 /// komponierten Grid-Gesamtbild nutzen kann, statt ihn zu duplizieren.
 /// `upstream` muss bereits Teil von `pipeline` sein und eine `src`-Pad
 /// haben (z. B. ein `tee` oder — beim Multiviewer — ein `compositor`).
+///
+/// Liefert die sechs erzeugten Elemente in Verlinkungsreihenfolge zurück
+/// (Nutzerauftrag 2026-09-03, `omp-viewer`: FPS zur Laufzeit einstellbar
+/// machen) — ruft der Aufrufer das später erneut mit geänderten `fps`
+/// auf (z. B. weil ein Operator die Vorschau-Bildrate live ändert),
+/// braucht er diese Referenzen, um den ALTEN Zweig sauber abzubauen
+/// (`set_state(Null)` + Unlink + `pipeline.remove()`), bevor der neue
+/// entsteht — sonst blieben pro FPS-Wechsel verwaiste Elemente in der
+/// Pipeline zurück. Bestehende Aufrufer (`omp-multiviewer`,
+/// `omp-multiviewer-custom`), die den Zweig nie neu aufbauen, ignorieren
+/// den Rückgabewert einfach (`?;` allein, kein `#[must_use]` auf `Vec`).
 pub fn build_mjpeg_branch(
     pipeline: &gst::Pipeline,
     upstream: &gst::Element,
@@ -142,7 +153,7 @@ pub fn build_mjpeg_branch(
     height: u32,
     fps: i32,
     quality: i32,
-) -> Result<(), String> {
+) -> Result<Vec<gst::Element>, String> {
     let queue = gst::ElementFactory::make("queue")
         .build()
         .map_err(|e| format!("queue (mjpeg): {e}"))?;
@@ -204,5 +215,5 @@ pub fn build_mjpeg_branch(
             .build(),
     );
 
-    Ok(())
+    Ok(vec![queue, videoscale, videorate, caps, jpegenc, app_sink.upcast()])
 }
