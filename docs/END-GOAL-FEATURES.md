@@ -592,9 +592,22 @@ zu machen, ohne Treiber.
   CUT/AUTO, Keyer/DVE-Toggles im Hardware-Look auf K1-Tokens; SSE-Refresh.
   T-Bar rein visuell (animiert nur während autoTrans anhand eines
   Poll-Ticks — noch ohne Positions-Param).
-- **Teil 2 (Node + UI):** `transitionPosition` (readonly) +
-  `transRate` (rw) + `setTransitionPosition()` für den manuellen T-Bar;
-  Rate-Buttons.
+- **Teil 2 (Node + UI) — erledigt (2026-09-04):** `crosspoint.
+  transitionPosition` (readonly) + `crosspoint.transRate` (rw, bereits
+  seit Bug 4) + `crosspoint.setTransitionPosition(pos)` für den manuellen
+  T-Bar; Rate-Buttons (bereits seit Bug 4). Umsetzung: `pipeline.rs::
+  Command::SetTransitionPosition` (Compositor-Alpha direkt setzen, Commit
+  bei `pos>=1`, sauberer Abbruch bei `pos<=0`, dazwischen bewusst
+  gesperrt für CUT/AUTO — s. dortige Doku); UI-seitig sendet `<omp-fader>`
+  seinen `input`/`change`-Wert roh (ohne das gemeinsame `refresh()` je
+  Event, sonst ruckelt es) an die neue Methode. Gleichzeitig: die
+  Mehrebenen-Konsole wurde zu EINER durchgängigen Konsole verschmolzen
+  (keine Kartenrahmen mehr pro Bank), Quellen/DSK-Auswahl in einen
+  eigenen Dialog verschoben, und PIP hat jetzt einen visuellen
+  Editor + beliebig viele benannte Presets (`pip.savePreset`/
+  `deletePreset`/`applyPreset`) statt einer festen Box + einem Button —
+  Details/Motivation im Kopfkommentar von `nodes/omp-video-mixer-me/ui/
+  bundle.js`.
 - **Teil 3 (optional, jetzt eigenes Kapitel):** physische
   Stream-Deck-Anbindung — **siehe Kapitel 8 (K8)**, dort vollständig
   ausgearbeitet (WebHID, kein Treiber, `streamdeck.js`-Referenz aus

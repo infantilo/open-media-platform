@@ -1,7 +1,7 @@
 // Node-UI-Bundle des Bildmischers (UMSETZUNG.md C10/K3-Teil-1,
-// ARCHITECTURE.md §4.5, docs/END-GOAL-FEATURES.md §3.3/§3.4 Teil 1):
-// Hardware-Pult-Optik statt generischer Button-Liste — PGM/PST-
-// Doppelreihe, CUT/AUTO, Keyer/DVE als beleuchtete Tasten, alles auf
+// ARCHITECTURE.md §4.5, docs/END-GOAL-FEATURES.md §3.3/§3.4) — Hardware-
+// Pult-Optik statt generischer Button-Liste — PGM/PST-Doppelreihe,
+// CUT/AUTO, Keyer/PIP als beleuchtete Tasten, alles auf
 // ui/design-tokens.css + ui/kit (<omp-button>, geladen von der Shell,
 // s. ui/kit/index.ts). Gleiche generische Node-Proxy-API wie zuvor
 // (/api/v1/nodes/<id>/params/<name>, /methods/<name>) — reines
@@ -16,76 +16,88 @@
 // flow-canvas.ts#handleServerEvent) lösen ein sofortiges Refresh aus;
 // 2-s-Poll bleibt als Fallback (Verbindungsabbruch, verpasste Events).
 //
-// T-Bar (Teil 2: `crosspoint.transitionPosition`/`setTransitionPosition`
-// existieren noch nicht): rein kosmetisch, animiert nur während eines
-// Auto-Trans-Klicks, kein echtes Server-Feedback — die Dauer folgt aber
-// seit Bug 4 der echten `crosspoint.transRate` (nicht mehr einer festen
-// Heuristik), s. `animateTBar`/`RATES` unten. Wipe bleibt ausgegraut mit
-// Tooltip (außerhalb des aktuellen Scopes) statt weggelassen — "gehört
-// zur 'echtes Pult'-Anmutung" (§3.3); Rate-Wahl ist seit Bug 4
-// (`main.rs::crosspoint.setTransRate`, `pipeline.rs::frames_to_ms`) real.
-//
 // PGM-Reihe: Hot-Cut (K3-Teil-2, §3.5 offene Frage 1 entschieden
 // 2026-07-16 — Projektinhaber-Feedback). Ruft `crosspoint.take`
 // (Node-seitig neu), NICHT `crosspoint.select` — schaltet das Programm
 // direkt um, ohne die gestagte Preset-Auswahl anzurühren (die PST-Reihe
 // bleibt unverändert, s. `pipeline.rs::Command::Take`-Doku).
 //
-// Mehrere M/E-Ebenen (Nutzerwunsch 2026-08-14, Nachtrag: "die multiplen
-// Mischerebenen sollten im UI übereinander wie bei einem Hardware-
-// Bildmischer sein"): Ebenenzahl wird aus dem generischen
-// `GET .../descriptor` abgeleitet (höchster gefundene `levelN.`-Präfix
-// unter allen Param-/Methodennamen, main.rs::level_name präfigiert bei
-// `level_count>1` AUSNAHMSLOS jeden Namen). Statt eines Tab-Umschalters
-// baut `buildBank(level)` unten JE Ebene eine vollständige, unabhängige
-// Konsole (PGM/PST/SRC/Keyer/PIP/Transition) — alle Ebenen sind
-// gleichzeitig sichtbar, direkt übereinander gestapelt (eigene
-// `omp-panel-section` je Bank), wie mehrere physische M/E-Bänke.
+// Mehrere M/E-Ebenen (Nutzerwunsch 2026-08-14): Ebenenzahl wird aus dem
+// generischen `GET .../descriptor` abgeleitet (höchster gefundene
+// `levelN.`-Präfix unter allen Param-/Methodennamen, main.rs::level_name
+// präfigiert bei `level_count>1` AUSNAHMSLOS jeden Namen).
 //
-// Mastereben-Routing (Nachtrag 2026-08-14): die Mastereben (Ebene 1,
-// `level===0`) zeigt in PGM/PST zusätzlich feste, immer sichtbare
-// Tasten für die Ausgänge ALLER anderen Ebenen (analog zu einem
-// Hardware-Bildmischer, bei dem eine Sub-M/E-Bank fest als Quelle der
-// Master-Bank verdrahtet ist) — kein manuelles Anpinnen nötig, anders
-// als bei externen Quellen. Backend-seitig liefert `crosspoint.inputs`
-// seit main.rs's Nachtrag 2026-08-14 den eigenen PGM-Ausgang JEDER
-// anderen Ebene mit (nur die Selbstreferenz einer Ebene auf sich selbst
-// bleibt gesperrt) — dieses Bundle muss die "eigene Ausgänge"-Menge
-// daher selbst ermitteln (`graphContext()` unten, aus `/api/v1/graph`,
-// Zuordnung Sender→Ebene über das Label "PGM {n}" — NICHT über die
-// Array-Reihenfolge in `n.outputs`, die live nachweislich NICHT der
-// Registrierungsreihenfolge folgt (`graphContext()`-Doku unten) — und
-// nur in der Mastereben als feste Tasten
-// rendern (`renderBusRow`s `levelOutputSenderIds`-Parameter).
+// **Konsole verschmolzen (Nutzerauftrag 2026-09-04, "die einzelnen Reihen
+// an Buttons der Mischerebenen müssen unmittelbar übereinander sein"):**
+// vorher baute `buildBank(level)` je Ebene eine eigene `<omp-panel-
+// section>` mit eigenem Kartenrahmen/Kopfzeile — bei mehreren Ebenen sah
+// das wie N unabhängige Widgets aus, nicht wie ein durchgängiges
+// Hardware-Pult mit mehreren M/E-Bänken. Jetzt liefert `buildBank`
+// stattdessen ein Fragment (`bankRow`), das in EINE gemeinsame
+// `<omp-panel-section label="Video Mixer M/E">` gehängt wird
+// (`.console-list`); zwischen den Bänken nur eine dünne `border-top` +
+// eine schmale Ebenen-Nummer im linken Gutter (`.bank-gutter`), kein
+// Kartenrahmen/Padding pro Bank mehr. Bei `levelCount<=1` bleibt der
+// Gutter leer (kein Sonderfall-Code nötig, nur CSS/eine leere Zelle).
 //
-// Ebenenzahl live ändern (Nutzerwunsch 2026-08-24: "im laufenden Betrieb
-// im property panel, mit restart aber reconnect aller zuvor aufgelegten
-// quellen"): OMP_ME_LEVELS ist bei main.rs::main() fest für die
-// gesamte Prozess-Laufzeit — ein Ebenenwechsel braucht daher denselben
-// Restart-Mechanismus, den `flow-canvas.ts#buildRoleFormatSection` seit
-// 2026-07-29 für role.Format nutzt (POST .../roles/{role}/restart, s.
-// orchestrator/internal/workflows/service.go RestartRole-Doku): alte
-// Instanz stoppen, neue mit dem neuen OMP_ME_LEVELS starten, auf
-// Registrierung warten, alle Connections dieser Rolle neu anwenden (also
-// exakt "restart aber reconnect aller zuvor aufgelegten Quellen"). Da
-// dieser Node ein eigenes UI-Bundle hat, landet er NIE in
-// flow-canvas.ts' generischem Panel (`mountUIBundle` gewinnt, s. dortige
-// Doku) — die Ebenen-Sektion unten ist deshalb die einzige Stelle, an
-// der das für omp-video-mixer-me überhaupt zugänglich ist, und lebt
-// bewusst hier statt dort. `mixerLevels` ist server-seitig `*int` (nil
-// = unverändert lassen, s. handleRestartWorkflowRole-Doku) — `format`
-// dagegen bleibt ein normaler String, der bei JEDEM Restart-Aufruf
-// (unabhängig von der Quelle) übernommen wird, ein fehlendes Feld zählt
-// dort weiterhin als "auf Node-Standard zurücksetzen" (unverändertes
-// Verhalten der Format-Sektion in flow-canvas.ts). Diese Ebenen-Sektion
-// muss das aktuelle `format` deshalb selbst mitschicken (aus
-// `findRunningRole()` unten), sonst würde ein reiner Ebenenwechsel ein
-// separat gesetztes role.Format stillschweigend zurücksetzen.
+// **Quellen/DSK/PIP-Auswahl in Dialoge verschoben (Nutzerauftrag
+// 2026-09-04, "um neue Quellen hinzuzufügen... sollte es ein Tab/Menü/
+// Modal-Dialog geben"):** die frühere Inline-SRC-Reihe (+/×-Chips) und
+// das nackte DSK-`<select>` sind jetzt in einem Dialog
+// (`openSourcesModal`, Punkt "Quellen"-Taste je Bank) — das Hauptpanel
+// zeigt nur noch PGM/PST/DSK-Toggle/Rate/PIP-Presets/Transition, keine
+// dauerhaft sichtbaren Formularfelder mehr (kompakter + touch-tauglicher,
+// da weniger kleine Klickziele permanent im Weg stehen). `openModal()`
+// unten ist ein Node-lokales, eigenständiges Overlay (an `document.body`
+// gehängt, analog `ui/kit/omp-confirm.ts`, aber ohne eigenen `ui/kit`-
+// Export, da dieses Bundle bereits vollständig eigenständig ist).
+//
+// **PIP-Presets statt einem einzelnen PIP-Button (Nutzerauftrag
+// 2026-09-04):** PIP kannte bis hierhin genau eine feste Box (`PIP_BOX`)
+// + eine Quellauswahl + einen Ein/Aus-Button. Jetzt gibt es einen
+// visuellen Editor (`openPipEditor`, Drag-Move + Resize-Handle, exakt
+// dasselbe Interaktionsmuster wie `nodes/omp-multiviewer-custom/ui/
+// bundle.js#_onPipPointerDown/_onPointerMove/_onPointerUp`, hier nur mit
+// einer einzigen Box statt einer Liste) für Position/Größe/Quelle;
+// „Speichern" ruft die neue Methode `pip.savePreset` (main.rs) und
+// zeigt das Ergebnis sofort per `pip.applyPreset`. Je gespeichertem
+// Preset erscheint ein eigener „Mixer"-Button (`renderPipRow`),
+// Klick aktiviert es (`pip.applyPreset`) bzw. deaktiviert PIP bei
+// erneutem Klick auf das bereits aktive Preset (`pip.setEnabled`) —
+// exakt das Toggle-Verhalten des vormals einzelnen `pipBtn`. Alles
+// dynamisch: beliebig viele Presets, keine feste Obergrenze.
+//
+// **Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2, endlich
+// umgesetzt 2026-09-04, Nutzerauftrag "der Mixer Transition Fader lässt
+// sich nicht händisch bedienen"):** `tBar` (`<omp-fader>`) ist nicht mehr
+// `disabled`/`pointer-events:none` — sein `input`-Event (läuft während
+// des Drags) sendet die Position roh per `sendTransitionPosition()` an
+// die neue Node-Methode `crosspoint.setTransitionPosition` (main.rs/
+// pipeline.rs), OHNE über das gemeinsame `call()` (das nach jedem Aufruf
+// ein volles `refresh()` anstößt — bei pointermove-Takt würde das
+// spürbar ruckeln). `refresh()` selbst überschreibt `tBar.value` nur,
+// wenn gerade WEDER von Hand gezogen (`tBarDragging`) NOCH die
+// AUTO-Kosmetik-Animation aktiv ist (`tBarAnimation`, s. u.) — sonst
+// würde der 2-s-Poll den Wert unter dem Finger/der laufenden Animation
+// wegreißen. Rate-Wahl (6f/12f/25f/50f, seit Bug 4 real) unverändert.
+//
+// AUTO-Klick bleibt weiterhin rein client-seitig kosmetisch animiert
+// (`animateTBar`, folgt der echten `crosspoint.transRate`) — bewusst
+// KEIN server-getriebener Positions-Push während einer AUTO-Rampe für
+// andere, gleichzeitig zuschauende Browser-Tabs (Scope-Entscheidung,
+// s. `pipeline.rs`-Moduldoku zu `spawn_autotrans`); der neue readonly
+// Param `crosspoint.transitionPosition` dient nur als Ausgangswert beim
+// Laden/Reconnect (server setzt ihn nach Cut/Take/AutoTrans-Ende auf 0,
+// die "Ruheposition" für den nächsten manuellen Zug).
 const WIDTH = 640;
 const HEIGHT = 480;
-const PIP_BOX = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
-PIP_BOX.x = WIDTH - PIP_BOX.width - 16;
-PIP_BOX.y = HEIGHT - PIP_BOX.height - 16;
+// Default-Box für ein NEU angelegtes PIP-Preset (vormals die einzige,
+// feste `PIP_BOX`-Konstante) — der Editor erlaubt danach freies Ziehen.
+const PIP_BOX_DEFAULT = { width: Math.round(WIDTH / 3), height: Math.round(HEIGHT / 3) };
+PIP_BOX_DEFAULT.x = WIDTH - PIP_BOX_DEFAULT.width - 16;
+PIP_BOX_DEFAULT.y = HEIGHT - PIP_BOX_DEFAULT.height - 16;
+const PIP_MIN_SIZE = 32; // wie nodes/omp-multiviewer-custom/ui/bundle.js::MIN_PIP_SIZE, hier dupliziert (kein Framework-Zwang, s. Moduldoku).
+const PIP_EDITOR_WIDTH = 260; // skalierte Editor-Canvas-Breite im Modal, Höhe folgt aus WIDTH/HEIGHT-Verhältnis.
 
 // 1000ms Default (25 Frames @25fps) — überschrieben, sobald `refresh()`
 // die echte `crosspoint.transRate` gelesen hat (s. `currentTransRateMs`
@@ -97,6 +109,137 @@ const DEFAULT_AUTO_TRANS_VISUAL_MS = 1000;
 // Konstante (s. Moduldoku oben "kein Framework-Zwang"), daher hier
 // dupliziert statt importiert.
 const MS_PER_TRANS_FRAME = 40;
+
+function clamp(v, lo, hi) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+// Wie `nodes/omp-multiviewer-custom/ui/bundle.js::newPipId` — bewusst
+// KEIN `crypto.randomUUID()` (dieselbe Begründung dort: einfacher,
+// framework-freier Kollisions-arm genug für eine Handvoll Presets pro
+// Ebene, kein Secure-Context-Vorbehalt).
+function newPresetId() {
+  return "pip-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
+}
+
+// Gemeinsames Overlay-Modal (Nutzerauftrag 2026-09-04, s. Moduldoku) —
+// eigenständig, an `document.body` gehängt (analog `ui/kit/
+// omp-confirm.ts`, aber ohne eigenen `ui/kit`-Export). Schließen per
+// Hintergrund-Klick, Escape oder dem "Schließen"-Button; `opts.onClose`
+// läuft in jedem Fall genau einmal.
+function openModal(titleText, opts) {
+  opts = opts || {};
+  const overlay = document.createElement("div");
+  overlay.className = "omp-vmix-modal";
+  overlay.innerHTML = `
+    <style>
+      .omp-vmix-modal {
+        position: fixed; inset: 0; z-index: 1100;
+        display: flex; align-items: center; justify-content: center;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        font-size: var(--omp-font-size-sm, 12px);
+        color: var(--omp-text, #e8eaed);
+      }
+      .omp-vmix-modal .backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.55); }
+      .omp-vmix-modal .dialog {
+        position: relative; box-sizing: border-box;
+        background: var(--omp-surface, #1a1d21);
+        border: 1px solid var(--omp-border, #2e3338);
+        border-radius: var(--omp-radius, 6px);
+        padding: var(--omp-space-4, 16px);
+        width: min(92vw, 420px); max-height: 86vh; overflow-y: auto;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+        display: flex; flex-direction: column; gap: var(--omp-space-3, 12px);
+      }
+      .omp-vmix-modal h3 {
+        margin: 0; font-size: var(--omp-font-size-xs, 11px); font-weight: 700;
+        letter-spacing: 0.06em; text-transform: uppercase;
+        color: var(--omp-text-dim, #9aa0a6);
+      }
+      .omp-vmix-modal .field { display: flex; flex-direction: column; gap: 4px; }
+      .omp-vmix-modal .field label {
+        font-size: var(--omp-font-size-xs, 11px); color: var(--omp-text-dim, #9aa0a6);
+        text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+      }
+      .omp-vmix-modal select, .omp-vmix-modal input[type="text"] {
+        min-width: 0; height: 40px; font-size: 12px; box-sizing: border-box;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        color: var(--omp-text, #e8eaed);
+        background: linear-gradient(to bottom, var(--omp-metal-light, #3d434b) 0%, var(--omp-metal-mid, #2b2f34) 100%);
+        border: 1px solid var(--omp-metal-dark, #1a1c1f);
+        border-radius: var(--omp-radius, 6px);
+        padding: 0 10px;
+      }
+      .omp-vmix-modal select {
+        appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 26px;
+        background-image:
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6L9 0z' fill='%239aa0a6'/%3E%3C/svg%3E"),
+          linear-gradient(to bottom, var(--omp-metal-light, #3d434b) 0%, var(--omp-metal-mid, #2b2f34) 100%);
+        background-repeat: no-repeat, no-repeat;
+        background-position: right 8px center, center;
+      }
+      .omp-vmix-modal select option { background: var(--omp-surface-raised, #22262b); color: var(--omp-text, #e8eaed); }
+      .omp-vmix-modal .row { display: flex; gap: var(--omp-space-2, 8px); align-items: center; flex-wrap: wrap; }
+      .omp-vmix-modal .actions { display: flex; justify-content: flex-end; gap: var(--omp-space-2, 8px); margin-top: var(--omp-space-1, 4px); }
+      .omp-vmix-modal .actions omp-button { height: 40px; padding: 0 var(--omp-space-3, 12px) !important; width: auto !important; }
+      .omp-vmix-modal .actions .spacer { flex: 1; }
+      .omp-vmix-modal .list { display: flex; flex-direction: column; gap: 6px; }
+      .omp-vmix-modal .chip {
+        display: flex; align-items: center; gap: 8px; height: 40px;
+        padding: 0 4px 0 10px; background: var(--omp-surface-raised, #22262b);
+        border: 1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px);
+      }
+      .omp-vmix-modal .chip .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .omp-vmix-modal .chip omp-button { width: 32px !important; height: 32px !important; font-size: 13px; padding: 0; }
+      .omp-vmix-modal p.empty { font-size: var(--omp-font-size-xs, 11px); font-style: italic; color: var(--omp-text-dim, #9aa0a6); margin: 0; }
+
+      /* PIP-Editor: Drag-Box-Canvas, gleiches Muster wie
+         nodes/omp-multiviewer-custom/ui/bundle.js (dort ausführlicher
+         kommentiert), hier auf eine einzige Box vereinfacht. MUSS hier im
+         Modal-Overlay-Stylesheet stehen, nicht im Panel-Shadow-Root-Style
+         weiter oben — das Modal hängt an document.body, außerhalb der
+         Shadow-DOM-Grenze des Panels, dessen Style also gar nicht
+         erreicht (live gefunden: Canvas/Box blieben unsichtbar/ungestylt,
+         obwohl die Drag-Logik selbst schon funktionierte). */
+      .omp-vmix-modal .pip-editor-canvas-outer {
+        background: var(--omp-bg, #101214); border: 2px solid var(--omp-info, #4285f4);
+        border-radius: var(--omp-radius, 6px); padding: 4px; align-self: center;
+      }
+      .omp-vmix-modal .pip-editor-canvas {
+        position: relative; outline: 1px solid var(--omp-info, #4285f4);
+        background: repeating-conic-gradient(#1c1f23 0% 25%, #16181b 0% 50%) 0 0 / 16px 16px;
+        overflow: hidden; touch-action: none;
+      }
+      .omp-vmix-modal .pip-editor-box {
+        position: absolute; box-sizing: border-box; border: 2px solid var(--omp-preset, #43a047);
+        background: rgba(67, 160, 71, 0.25); cursor: move;
+      }
+      .omp-vmix-modal .pip-editor-resize {
+        position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
+        cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--omp-text-dim, #9aa0a6) 50%);
+        touch-action: none;
+      }
+    </style>
+    <div class="backdrop" part="backdrop"></div>
+    <div class="dialog" role="dialog" aria-label="${titleText}">
+      <h3>${titleText}</h3>
+      <div class="body"></div>
+    </div>
+  `;
+  const bodyEl = overlay.querySelector(".body");
+  const onKeyDown = (ev) => {
+    if (ev.key === "Escape") close();
+  };
+  const close = () => {
+    document.removeEventListener("keydown", onKeyDown);
+    overlay.remove();
+    if (opts.onClose) opts.onClose();
+  };
+  document.addEventListener("keydown", onKeyDown);
+  overlay.querySelector(".backdrop").addEventListener("click", close);
+  document.body.appendChild(overlay);
+  return { bodyEl, close };
+}
 
 class OmpVideoMixerMePanel extends HTMLElement {
   async connectedCallback() {
@@ -135,12 +278,19 @@ class OmpVideoMixerMePanel extends HTMLElement {
         color: var(--omp-text, #e8eaed);
         font-size: var(--omp-font-size-sm, 12px);
       }
-      .console {
-        display: grid;
-        grid-template-columns: 1fr 116px;
-        gap: var(--omp-space-3, 12px);
+      /* Konsole verschmolzen (s. Moduldoku): EINE Liste von Bank-Reihen
+         statt N einzelner Kartenwidgets. */
+      .console-list { display: flex; flex-direction: column; }
+      .bank-row { display: flex; gap: var(--omp-space-2, 8px); padding: var(--omp-space-2, 8px) 0; }
+      .bank-row + .bank-row { border-top: 1px solid var(--omp-border, #2e3338); margin-top: var(--omp-space-1, 4px); }
+      .bank-gutter {
+        width: 14px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+        font-size: 10px; font-weight: 700; color: var(--omp-text-dim, #9aa0a6);
       }
-      .buses { display: flex; flex-direction: column; gap: var(--omp-space-3, 12px); min-width: 0; }
+      .bank-content { flex: 1; min-width: 0; }
+
+      .console { display: grid; grid-template-columns: 1fr 116px; gap: var(--omp-space-3, 12px); }
+      .buses { display: flex; flex-direction: column; gap: var(--omp-space-2, 8px); min-width: 0; }
       .bus-row { display: flex; align-items: flex-start; gap: 8px; }
       .bus-label {
         width: 30px; flex-shrink: 0; padding-top: 8px; font-size: var(--omp-font-size-xs, 11px);
@@ -160,57 +310,36 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .bus-buttons .group-label:first-child { margin-top: 0; }
       .bus-buttons p.empty { flex-basis: 100%; margin: 2px 0 3px; }
 
-      /* Klare Untergruppierung innerhalb einer Bank (Nutzerauftrag
-         2026-09-03: "muss viel professioneller werden") — vorher
-         verschwammen Kreuzschiene (PGM/PST/SRC) und Compositing-Reihen
-         (DSK/PIP/KEY/PIP/Rate) optisch ineinander, nur durch
-         margin-top:4px getrennt. Eine dünne Trennlinie + Label macht aus
-         zwei fachlich unterschiedlichen Bereichen auch zwei sichtbare. */
-      .fx-group {
+      /* Kompakte Werkzeugleiste (Nutzerauftrag 2026-09-04: "kompakter,
+         touch-tauglicher") — ersetzt die frühere Inline-SRC-Reihe +
+         DSK-<select>: nur noch je ein Knopf für "Quellen" (öffnet den
+         Pin/Unpin+DSK-Dialog), der DSK-Toggle selbst, und die
+         Rate-Wahl. */
+      .toolbar-row {
         margin-top: var(--omp-space-1, 4px);
         padding-top: var(--omp-space-2, 8px);
         border-top: 1px solid var(--omp-border, #2e3338);
-        display: flex; flex-direction: column; gap: var(--omp-space-2, 8px);
+        display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
       }
-      .fx-row { display: flex; gap: 6px; align-items: center; }
-      .fx-row omp-button { flex: 1; height: 34px; }
-      .keyer-row { display: flex; gap: 8px; align-items: center; }
-
-      /* Ausgewachsene Metall-Optik für <select> statt des nackten
-         Browser-Standard-Dropdowns (bislang der mit Abstand größte Bruch
-         mit der Hardware-Pult-Anmutung der restigen Tasten). */
-      .keyer-row select, .add-picker {
-        min-width: 0; height: 34px; font-size: 10.5px;
-        font-family: var(--omp-font, system-ui, sans-serif);
-        color: var(--omp-text, #e8eaed);
-        border: 1px solid var(--omp-metal-dark, #1a1c1f);
-        border-radius: var(--omp-radius, 6px);
-        padding: 0 24px 0 8px;
-        appearance: none; -webkit-appearance: none; cursor: pointer;
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1) inset, 0 1px 2px rgba(0, 0, 0, 0.4);
-        /* Zwei Ebenen in EINER background-image-Deklaration (Pfeil-SVG
-           oben, Metall-Gradient darunter) — eine ZWEITE, separate
-           background-image-Zeile hätte die erste einfach überschrieben
-           (live gefundener Bug beim ersten Anlauf dieses Redesigns: die
-           Gradient-Fläche verschwand spurlos, nur appearance:none und
-           der Rahmen blieben sichtbar). */
-        background-image:
-          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6'%3E%3Cpath d='M0 0l4.5 6L9 0z' fill='%239aa0a6'/%3E%3C/svg%3E"),
-          linear-gradient(to bottom, var(--omp-metal-light, #3d434b) 0%, var(--omp-metal-mid, #2b2f34) 100%);
-        background-repeat: no-repeat, no-repeat;
-        background-position: right 8px center, center;
-      }
-      .keyer-row select { flex: 1; }
-      .keyer-row select:hover, .add-picker:hover { border-color: var(--omp-text-dim, #9aa0a6); }
-      .keyer-row select:focus, .add-picker:focus {
-        outline: 2px solid var(--omp-info, #4285f4); outline-offset: 1px;
-      }
-      .keyer-row select option, .add-picker option {
-        background: var(--omp-surface-raised, #22262b); color: var(--omp-text, #e8eaed);
-      }
-
+      .toolbar-row omp-button { height: 36px; }
+      .toolbar-row .sources-btn { padding: 0 var(--omp-space-3, 12px) !important; width: auto !important; font-size: 10px; }
+      .toolbar-row .dsk-btn { padding: 0 var(--omp-space-3, 12px) !important; width: auto !important; font-size: 10px; }
       .rate-row { display: flex; gap: 4px; }
-      .rate-row omp-button { width: 34px; height: 26px; font-size: 10px; }
+      .rate-row omp-button { width: 32px; height: 28px; font-size: 10px; }
+
+      /* Dynamische PIP-Preset-Reihe (Nutzerauftrag 2026-09-04, ersetzt
+         den vormals einzelnen PIP-Button) — je Preset ein "Mixer"-Knopf
+         + ein kleiner Stift zum Bearbeiten, plus "+" für ein neues. */
+      .pip-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+      .pip-chip { display: inline-flex; align-items: center; gap: 2px; }
+      .pip-chip omp-button.pip-name {
+        min-width: 60px; max-width: 120px; height: 36px; font-size: 10px;
+        padding: 0 8px !important; width: auto !important;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      }
+      .pip-chip omp-button.pip-edit { width: 26px !important; height: 26px !important; font-size: 11px; padding: 0; }
+      .pip-row omp-button.pip-add { width: 36px !important; height: 36px !important; font-size: 16px; padding: 0; }
+
       .transition {
         display: flex; flex-direction: column; align-items: center; gap: var(--omp-space-2, 8px);
         border-left: 1px solid var(--omp-border, #2e3338); padding-left: var(--omp-space-3, 12px);
@@ -224,13 +353,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
         color: var(--omp-text-dim, #9aa0a6); margin: 0;
       }
       .pin-chip {
-        display: inline-flex; align-items: center; gap: 3px; height: 34px;
-        padding: 0 4px 0 8px; font-size: 10px;
-        background: var(--omp-surface, #1a1d21);
+        display: inline-flex; align-items: center; gap: 3px; height: 40px;
+        padding: 0 4px 0 10px; font-size: 11px;
+        background: var(--omp-surface-raised, #22262b);
         border: 1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px);
       }
-      .pin-chip .label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .pin-chip omp-button { width: 20px !important; height: 20px !important; font-size: 11px; padding: 0; }
+      .pin-chip .label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .pin-chip omp-button { width: 32px !important; height: 32px !important; font-size: 13px; padding: 0; }
       [disabled] { opacity: 0.4; }
     `;
 
@@ -377,10 +506,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
     };
 
     // Baut EINE vollständige, unabhängige M/E-Bank für `level` (0-basiert)
-    // — eigene PGM/PST/SRC/Keyer/PIP/Transition-Konsole, exakt wie vor
-    // Teil 4 (dieselbe Optik/Verhalten bei `levelCount<=1`, dann
-    // unpräfigierte Param-/Methodennamen). Gibt `{ section, refresh }`
-    // zurück; `refresh` erwartet `workflowOwnSenderIds`/
+    // — eigene PGM/PST/Quellen/Keyer/PIP/Transition-Konsole. Gibt
+    // `{ bankRow, refresh }` zurück (`bankRow` ist ein Fragment, s.
+    // Moduldoku "Konsole verschmolzen" — kein eigenes `<omp-panel-
+    // section>` mehr); `refresh` erwartet `workflowOwnSenderIds`/
     // `otherLevelSenderIds` von außen (s. `graphContext()`), damit der
     // Graph/Workflows-Fetch nicht je Bank dupliziert wird.
     const buildBank = (level) => {
@@ -392,6 +521,26 @@ class OmpVideoMixerMePanel extends HTMLElement {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body || {}),
         }).then(() => refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds));
+
+      // Manueller T-Bar (s. Moduldoku): eigener, schlanker Aufruf OHNE
+      // automatisches `refresh()` danach — bei pointermove-Takt würde
+      // das gemeinsame `call()` das ganze Panel unnötig oft neu
+      // aufbauen und den Fader dabei sichtbar ruckeln lassen.
+      const sendTransitionPosition = (pos) =>
+        fetch(`/api/v1/nodes/${nodeId}/methods/${prefixed("crosspoint.setTransitionPosition")}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ position: pos }),
+        });
+
+      const bankRow = document.createElement("div");
+      bankRow.className = "bank-row";
+      const gutter = document.createElement("div");
+      gutter.className = "bank-gutter";
+      if (levelCount > 1) gutter.textContent = String(level + 1);
+      const content = document.createElement("div");
+      content.className = "bank-content";
+      bankRow.append(gutter, content);
 
       const console_ = document.createElement("div");
       console_.className = "console";
@@ -416,59 +565,33 @@ class OmpVideoMixerMePanel extends HTMLElement {
       pstButtons.className = "bus-buttons";
       pstRow.append(pstLabel, pstButtons);
 
-      // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22, Feinschliff zur
-      // Skalierungs-Review): PGM/PST legen nicht mehr automatisch jede
-      // entdeckte Quelle als Taste auf — stattdessen wählt der Operator per
-      // "+"-Button (gleiches Grundprinzip wie omp-audio-mixers "+ Kanal")
-      // dauerhafte, entfernbare Quellen aus. Backend-Zustand ist rein
-      // buchhalterisch (main.rs::pinned, s. dortige Moduldoku) — welche
-      // `senderId`s der Operator sich angelegt hat, unabhängig davon, ob sie
-      // gerade auf PGM/PST liegen.
-      const srcRow = document.createElement("div");
-      srcRow.className = "bus-row";
-      const srcLabel = document.createElement("span");
-      srcLabel.className = "bus-label";
-      srcLabel.textContent = "SRC";
-      const srcButtons = document.createElement("div");
-      srcButtons.className = "bus-buttons";
-      srcRow.append(srcLabel, srcButtons);
-
-      const fxRow = document.createElement("div");
-      fxRow.className = "fx-row";
-      const keyerRow = document.createElement("div");
-      keyerRow.className = "keyer-row";
-      const keyerSourceLabel = document.createElement("span");
-      keyerSourceLabel.className = "bus-label";
-      keyerSourceLabel.textContent = "KEY";
-      const keyerSourceSelect = document.createElement("select");
-      keyerRow.append(keyerSourceLabel, keyerSourceSelect);
-
-      // PIP-Quellauswahl (Nutzerwunsch 2026-07-22): PIP ist jetzt ein
-      // eigenständiger Compositor-Layer mit frei wählbarer Quelle, genau wie
-      // der DSK/KEY-Eingang oben — gleiches Dropdown-Muster, aber gespeist
-      // aus dem vollen `crosspoint.inputs`-Katalog (nicht der kuratierten
-      // SRC-Liste), da Kap. „wie bei DSK" ausdrücklich die ungefilterte,
-      // workflow-gruppierte Liste meint.
-      const pipRow = document.createElement("div");
-      pipRow.className = "keyer-row";
-      const pipSourceLabel = document.createElement("span");
-      pipSourceLabel.className = "bus-label";
-      pipSourceLabel.textContent = "PIP";
-      const pipSourceSelect = document.createElement("select");
-      pipRow.append(pipSourceLabel, pipSourceSelect);
-
+      // Kompakte Werkzeugleiste (s. Moduldoku "Quellen/DSK/PIP-Auswahl in
+      // Dialoge verschoben"): "Quellen"-Taste öffnet Pin/Unpin + DSK-Wahl,
+      // DSK-Toggle bleibt als Ein/Aus-Taste direkt sichtbar (kein Grund,
+      // die Häufigkeit "DSK an/aus" hinter einem Dialog zu verstecken),
+      // Rate-Wahl unverändert.
+      const toolbarRow = document.createElement("div");
+      toolbarRow.className = "toolbar-row";
+      const sourcesBtn = document.createElement("omp-button");
+      sourcesBtn.className = "sources-btn";
+      sourcesBtn.textContent = "Quellen";
+      sourcesBtn.title = "Quellen anpinnen/entfernen, DSK-Quelle wählen";
+      const keyerBtn = document.createElement("omp-button");
+      keyerBtn.className = "dsk-btn";
+      keyerBtn.textContent = "DSK";
+      keyerBtn.setAttribute("color", "onair");
       const rateRow = document.createElement("div");
       rateRow.className = "rate-row";
+      toolbarRow.append(sourcesBtn, keyerBtn, rateRow);
 
-      // Sichtbare Untergruppierung (s. Moduldoku/CSS oben): Kreuzschiene
-      // (PGM/PST/SRC) bleibt eine Gruppe, Compositing/Keyer/Rate eine
-      // zweite — eine Trennlinie macht den fachlichen Unterschied auch
-      // optisch sichtbar statt nur durch Abstand angedeutet.
-      const fxGroup = document.createElement("div");
-      fxGroup.className = "fx-group";
-      fxGroup.append(fxRow, keyerRow, pipRow, rateRow);
+      const pipRow = document.createElement("div");
+      pipRow.className = "pip-row";
+      const pipAddBtn = document.createElement("omp-button");
+      pipAddBtn.className = "pip-add";
+      pipAddBtn.textContent = "+";
+      pipAddBtn.title = "Neues PIP-Preset anlegen";
 
-      buses.append(pgmRow, pstRow, srcRow, fxGroup);
+      buses.append(pgmRow, pstRow, toolbarRow, pipRow);
 
       const transition = document.createElement("div");
       transition.className = "transition";
@@ -484,8 +607,6 @@ class OmpVideoMixerMePanel extends HTMLElement {
       tBar.setAttribute("min", "0");
       tBar.setAttribute("max", "1");
       tBar.setAttribute("value", "0");
-      tBar.setAttribute("disabled", "");
-      tBar.style.pointerEvents = "none";
       const mixWipe = document.createElement("div");
       mixWipe.className = "mix-wipe";
       const mixBtn = document.createElement("omp-button");
@@ -500,26 +621,31 @@ class OmpVideoMixerMePanel extends HTMLElement {
       transition.append(cutBtn, autoBtn, tBar, mixWipe);
 
       console_.append(buses, transition);
-
-      // K3/K4-Feinschliff (§12.3-Referenzvergleich, "Bildmeister"-Layout):
-      // eine gruppierte Sektion mit Kopfzeile um das ganze Pult — zwei
-      // verschachtelte Sektionen (Bus/Transition einzeln) sprengten im
-      // 280px-Parameter-Panel die verfügbare Breite (per Live-Test
-      // gefunden: Transition-Spalte fiel aus dem sichtbaren Bereich,
-      // Seite bekam einen ungewollten horizontalen Scrollbalken). Die
-      // bestehende `border-left` zwischen Bus und Transition bleibt als
-      // leichte interne Trennung.
-      const section = document.createElement("omp-panel-section");
-      section.setAttribute(
-        "label",
-        levelCount <= 1 ? "Video Mixer M/E" : level === 0 ? `M/E 1 (Master)` : `M/E ${level + 1}`,
-      );
-      section.append(console_);
+      content.append(console_);
 
       cutBtn.addEventListener("click", () => call("crosspoint.cut"));
       autoBtn.addEventListener("click", () => {
         call("crosspoint.autoTrans");
         animateTBar();
+      });
+
+      // Manueller T-Bar (s. Moduldoku): `tBarDragging` verhindert, dass
+      // `refresh()`s 2-s-Poll den Wert unter dem gerade ziehenden Finger
+      // wegreißt; `tBarAnimation` (unten) schützt zusätzlich während der
+      // rein kosmetischen AUTO-Animation.
+      let tBarDragging = false;
+      tBar.addEventListener("input", () => {
+        tBarDragging = true;
+        sendTransitionPosition(tBar.value);
+      });
+      tBar.addEventListener("change", () => {
+        // Letzter Wert nochmal senden (Pointer-Up kann exakt zwischen
+        // zwei `input`-Events liegen), danach erst wieder für
+        // Server-Updates öffnen.
+        sendTransitionPosition(tBar.value).finally(() => {
+          tBarDragging = false;
+          refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds);
+        });
       });
 
       // Bug 4: folgt seit `refresh()`s erstem erfolgreichen Poll der echten
@@ -559,85 +685,290 @@ class OmpVideoMixerMePanel extends HTMLElement {
         rateRow.append(btn);
       }
 
-      const keyerBtn = document.createElement("omp-button");
-      keyerBtn.textContent = "DSK";
-      keyerBtn.setAttribute("color", "onair");
       let keyerEnabled = false;
       keyerBtn.addEventListener("click", () => call("keyer.setEnabled", { enabled: !keyerEnabled }));
 
-      // Fill+Key-Quelle für den Keyer (z. B. `omp-ograf`, s. `pipeline.rs::
-      // DiscoveredKeyFill`-Doku) — leerer Wert = synthetische Test-
-      // Farbfläche (Default, kein echtes Downstream-Key).
-      keyerSourceSelect.addEventListener("change", () => call("keyer.setSource", { senderId: keyerSourceSelect.value }));
-
-      // PIP ist jetzt ein eigenständiger Compositor-Layer (main.rs::
-      // pip.setEnabled/pip.setSource, pipeline.rs `comp_pip_pad`/§Nachtrag
-      // "PIP als eigenständiger Layer") statt einer PGM-Verkleinerung übers
-      // DVE-Feld — `dve.setBox`/`dve.reset` positionieren nur noch diesen
-      // Layer innerhalb des Frames (feste Ecke, s. PIP_BOX oben), die
-      // Sichtbarkeit selbst hängt an `pipEnabled`.
-      const pipBtn = document.createElement("omp-button");
-      pipBtn.textContent = "PIP";
-      pipBtn.setAttribute("color", "preset");
-      let pipEnabled = false;
-      pipBtn.addEventListener("click", async () => {
-        if (pipEnabled) {
-          await call("pip.setEnabled", { enabled: false });
-        } else {
-          await call("dve.setBox", PIP_BOX);
-          await call("pip.setEnabled", { enabled: true });
-        }
-      });
-
-      fxRow.append(keyerBtn, pipBtn);
-
-      pipSourceSelect.addEventListener("change", () => call("pip.setSource", { senderId: pipSourceSelect.value }));
-
-      // Kuratierte Kreuzschiene: "+"-Button öffnet an Ort und Stelle ein
-      // workflow-gruppiertes Auswahl-Dropdown (gleiches Prinzip wie KEY/PIP),
-      // das nach Auswahl sofort `crosspoint.pin` aufruft und wieder zur
-      // "+"-Taste zurückkehrt. `addPickerOpen` verhindert, dass der laufende
-      // 2s-Poll das offene Dropdown währenddessen wegrendert (gleicher Schutz
-      // wie beim fokussierten KEY-/PIP-Select).
-      const addSourceBtn = document.createElement("omp-button");
-      addSourceBtn.textContent = "+";
-      addSourceBtn.title = "Quelle zur Kreuzschiene hinzufügen";
-      addSourceBtn.style.cssText = "width:34px !important; height:34px !important; font-size:16px; padding:0;";
-      let addPickerOpen = false;
+      // Laufender Stand für den "Quellen"-Dialog + den PIP-Editor —
+      // `refresh()` hält diese aktuell, die Dialoge lesen sie beim
+      // Öffnen (kein eigener Fetch nötig, gleicher Cache-Gedanke wie
+      // beim vormaligen Inline-"+"-Picker).
       let latestInputs = [];
       let latestPinned = [];
+      let latestKeyerInputs = [];
+      let latestKeyerSource = "";
+      let latestPipPresets = [];
+      let latestActivePipPresetId = "";
+      let latestPipEnabled = false;
       let lastWorkflowOwnSenderIds = new Set();
       let lastOtherLevelSenderIds = new Set();
 
-      const closeAddPicker = () => {
-        addPickerOpen = false;
-        refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds);
+      // "Quellen"-Dialog (Nutzerauftrag 2026-09-04, s. Moduldoku):
+      // ersetzt die frühere Inline-SRC-Reihe (+/×) + das nackte
+      // DSK-<select> — identische Logik, nur jetzt in einem Modal.
+      sourcesBtn.addEventListener("click", () => {
+        const { bodyEl } = openModal("Quellen & DSK");
+
+        const pinnedSection = document.createElement("div");
+        pinnedSection.className = "field";
+        const pinnedLabel = document.createElement("label");
+        pinnedLabel.textContent = "Angepinnte Quellen (PGM/PST-Kreuzschiene)";
+        const pinnedList = document.createElement("div");
+        pinnedList.className = "list";
+        pinnedSection.append(pinnedLabel, pinnedList);
+
+        const renderPinnedList = () => {
+          pinnedList.innerHTML = "";
+          if (latestPinned.length === 0) {
+            const hint = document.createElement("p");
+            hint.className = "empty";
+            hint.textContent = "keine Quellen angeheftet";
+            pinnedList.append(hint);
+          }
+          for (const senderId of latestPinned) {
+            const input = latestInputs.find((i) => i.senderId === senderId);
+            const chip = document.createElement("div");
+            chip.className = "chip";
+            const label = document.createElement("span");
+            label.className = "label";
+            label.textContent = input ? input.label : "unbekannt";
+            label.title = senderId;
+            const removeBtn = document.createElement("omp-button");
+            removeBtn.textContent = "×";
+            removeBtn.title = "Quelle entfernen";
+            removeBtn.addEventListener("click", async () => {
+              await call("crosspoint.unpin", { senderId });
+              latestPinned = latestPinned.filter((s) => s !== senderId);
+              renderPinnedList();
+            });
+            chip.append(label, removeBtn);
+            pinnedList.append(chip);
+          }
+          const addRow = document.createElement("div");
+          addRow.className = "row";
+          const available = latestInputs
+            .filter((i) => !latestPinned.includes(i.senderId))
+            .map((i) => ({ label: i.label, senderId: i.senderId }));
+          const picker = document.createElement("select");
+          buildGroupedOptions(picker, available, lastWorkflowOwnSenderIds, "Quelle hinzufügen…");
+          picker.addEventListener("change", async () => {
+            if (!picker.value) return;
+            await call("crosspoint.pin", { senderId: picker.value });
+            latestPinned = [...latestPinned, picker.value];
+            renderPinnedList();
+          });
+          addRow.append(picker);
+          pinnedList.append(addRow);
+        };
+        renderPinnedList();
+
+        const dskSection = document.createElement("div");
+        dskSection.className = "field";
+        const dskLabel = document.createElement("label");
+        dskLabel.textContent = "DSK-Quelle (Fill+Key)";
+        const dskSelect = document.createElement("select");
+        buildGroupedOptions(dskSelect, latestKeyerInputs, lastWorkflowOwnSenderIds, "Testfarbe");
+        dskSelect.value = latestKeyerSource;
+        dskSelect.addEventListener("change", () => {
+          call("keyer.setSource", { senderId: dskSelect.value });
+          latestKeyerSource = dskSelect.value;
+        });
+        dskSection.append(dskLabel, dskSelect);
+
+        bodyEl.append(pinnedSection, dskSection);
+      });
+
+      // PIP-Editor (Nutzerauftrag 2026-09-04, s. Moduldoku) — `preset`
+      // ist entweder ein bestehendes Preset (Bearbeiten) oder `null`
+      // (Neuanlage mit `PIP_BOX_DEFAULT`).
+      const openPipEditor = (preset) => {
+        const draft = preset
+          ? { id: preset.id, name: preset.name, senderId: preset.senderId || "", box: { ...preset.box } }
+          : {
+              id: newPresetId(),
+              name: `PIP ${latestPipPresets.length + 1}`,
+              senderId: "",
+              box: { ...PIP_BOX_DEFAULT },
+            };
+
+        // `onClose` (statt nur `close`s Aufrufer) fängt JEDEN Schließweg
+        // ab — Backdrop-Klick/Escape rufen intern `close()` selbst auf,
+        // "Abbrechen"/"Speichern"/"Löschen" unten rufen das zurückgegebene
+        // `close` — beide Wege müssen die window-Listener unten abräumen.
+        const { bodyEl, close } = openModal(preset ? "PIP-Preset bearbeiten" : "Neues PIP-Preset", {
+          onClose: () => cleanup(),
+        });
+
+        const nameField = document.createElement("div");
+        nameField.className = "field";
+        const nameLabel = document.createElement("label");
+        nameLabel.textContent = "Name";
+        const nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.value = draft.name;
+        nameInput.addEventListener("input", () => (draft.name = nameInput.value));
+        nameField.append(nameLabel, nameInput);
+
+        const sourceField = document.createElement("div");
+        sourceField.className = "field";
+        const sourceLabel = document.createElement("label");
+        sourceLabel.textContent = "Quelle";
+        const sourceSelect = document.createElement("select");
+        const pipInputEntries = latestInputs.map((i) => ({ label: i.label, senderId: i.senderId }));
+        buildGroupedOptions(sourceSelect, pipInputEntries, lastWorkflowOwnSenderIds, "Schwarz");
+        sourceSelect.value = draft.senderId;
+        sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
+        sourceField.append(sourceLabel, sourceSelect);
+
+        const editorField = document.createElement("div");
+        editorField.className = "field";
+        const editorLabel = document.createElement("label");
+        editorLabel.textContent = "Größe & Position (ziehen zum Verschieben, Ecke zum Skalieren)";
+        const canvasOuter = document.createElement("div");
+        canvasOuter.className = "pip-editor-canvas-outer";
+        const scale = PIP_EDITOR_WIDTH / WIDTH;
+        const editorHeight = Math.round(HEIGHT * scale);
+        const canvas = document.createElement("div");
+        canvas.className = "pip-editor-canvas";
+        canvas.style.width = `${PIP_EDITOR_WIDTH}px`;
+        canvas.style.height = `${editorHeight}px`;
+        const box = document.createElement("div");
+        box.className = "pip-editor-box";
+        const resizeHandle = document.createElement("div");
+        resizeHandle.className = "pip-editor-resize";
+        box.append(resizeHandle);
+        canvas.append(box);
+        canvasOuter.append(canvas);
+        editorField.append(editorLabel, canvasOuter);
+
+        const renderBox = () => {
+          box.style.left = `${Math.round(draft.box.x * scale)}px`;
+          box.style.top = `${Math.round(draft.box.y * scale)}px`;
+          box.style.width = `${Math.round(draft.box.width * scale)}px`;
+          box.style.height = `${Math.round(draft.box.height * scale)}px`;
+        };
+        renderBox();
+
+        // Drag/Resize — gleiches Muster wie
+        // nodes/omp-multiviewer-custom/ui/bundle.js#_onPipPointerDown/
+        // _onPointerMove/_onPointerUp (dort ausführlicher kommentiert),
+        // hier auf eine einzige Box vereinfacht; Listener nur, solange
+        // dieses Modal offen ist (`close()` unten räumt sie ab).
+        let drag = null;
+        const onPointerDown = (mode) => (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          drag = {
+            mode,
+            startScreenX: ev.clientX,
+            startScreenY: ev.clientY,
+            startX: draft.box.x,
+            startY: draft.box.y,
+            startWidth: draft.box.width,
+            startHeight: draft.box.height,
+          };
+        };
+        const onPointerMove = (ev) => {
+          if (!drag) return;
+          const dx = Math.round((ev.clientX - drag.startScreenX) / scale);
+          const dy = Math.round((ev.clientY - drag.startScreenY) / scale);
+          if (drag.mode === "move") {
+            draft.box.x = clamp(drag.startX + dx, 0, Math.max(0, WIDTH - draft.box.width));
+            draft.box.y = clamp(drag.startY + dy, 0, Math.max(0, HEIGHT - draft.box.height));
+          } else {
+            draft.box.width = clamp(drag.startWidth + dx, PIP_MIN_SIZE, WIDTH - draft.box.x);
+            draft.box.height = clamp(drag.startHeight + dy, PIP_MIN_SIZE, HEIGHT - draft.box.y);
+          }
+          renderBox();
+        };
+        const onPointerUp = () => {
+          drag = null;
+        };
+        box.addEventListener("pointerdown", onPointerDown("move"));
+        resizeHandle.addEventListener("pointerdown", onPointerDown("resize"));
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", onPointerUp);
+
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        if (preset) {
+          const deleteBtn = document.createElement("omp-button");
+          deleteBtn.textContent = "Löschen";
+          deleteBtn.addEventListener("click", async () => {
+            if (!confirm(`PIP-Preset "${preset.name}" wirklich löschen?`)) return;
+            await call("pip.deletePreset", { id: preset.id });
+            close();
+          });
+          actions.append(deleteBtn);
+        }
+        const spacer = document.createElement("div");
+        spacer.className = "spacer";
+        const cancelBtn = document.createElement("omp-button");
+        cancelBtn.textContent = "Abbrechen";
+        cancelBtn.addEventListener("click", close);
+        const saveBtn = document.createElement("omp-button");
+        saveBtn.textContent = "Speichern & Anzeigen";
+        saveBtn.addEventListener("click", async () => {
+          const name = draft.name.trim() || `PIP ${latestPipPresets.length + 1}`;
+          await call("pip.savePreset", {
+            id: draft.id,
+            name,
+            senderId: draft.senderId,
+            x: draft.box.x,
+            y: draft.box.y,
+            width: draft.box.width,
+            height: draft.box.height,
+          });
+          await call("pip.applyPreset", { id: draft.id });
+          close();
+        });
+        actions.append(spacer, cancelBtn, saveBtn);
+
+        bodyEl.append(nameField, sourceField, editorField, actions);
+
+        // Läuft über `openModal`s `onClose`-Hook oben, egal auf welchem
+        // Weg das Modal schließt (Backdrop/Escape/Abbrechen/Speichern/
+        // Löschen) — sonst blieben die window-Listener nach dem
+        // Schließen aktiv (Leck + Doppel-Drag beim nächsten Öffnen).
+        const cleanup = () => {
+          window.removeEventListener("pointermove", onPointerMove);
+          window.removeEventListener("pointerup", onPointerUp);
+        };
       };
 
-      addSourceBtn.addEventListener("click", () => {
-        addPickerOpen = true;
-        const available = latestInputs
-          .filter((i) => !latestPinned.includes(i.senderId))
-          .map((i) => ({ label: i.label, senderId: i.senderId }));
-        const picker = document.createElement("select");
-        picker.className = "add-picker";
-        picker.style.width = "160px";
-        buildGroupedOptions(picker, available, lastWorkflowOwnSenderIds, "Quelle wählen…");
-        picker.addEventListener("change", async () => {
-          if (picker.value) await call("crosspoint.pin", { senderId: picker.value });
-          closeAddPicker();
-        });
-        picker.addEventListener("blur", closeAddPicker);
-        srcButtons.replaceChild(picker, addSourceBtn);
-        picker.focus();
-      });
+      pipAddBtn.addEventListener("click", () => openPipEditor(null));
+
+      const renderPipRow = () => {
+        pipRow.innerHTML = "";
+        for (const preset of latestPipPresets) {
+          const chip = document.createElement("span");
+          chip.className = "pip-chip";
+          const nameBtn = document.createElement("omp-button");
+          nameBtn.className = "pip-name";
+          nameBtn.textContent = preset.name;
+          const isActive = latestPipEnabled && preset.id === latestActivePipPresetId;
+          nameBtn.active = isActive;
+          nameBtn.setAttribute("color", "preset");
+          nameBtn.addEventListener("click", () => {
+            if (isActive) call("pip.setEnabled", { enabled: false });
+            else call("pip.applyPreset", { id: preset.id });
+          });
+          const editBtn = document.createElement("omp-button");
+          editBtn.className = "pip-edit";
+          editBtn.textContent = "✎";
+          editBtn.title = "Preset bearbeiten";
+          editBtn.addEventListener("click", () => openPipEditor(preset));
+          chip.append(nameBtn, editBtn);
+          pipRow.append(chip);
+        }
+        pipRow.append(pipAddBtn);
+      };
 
       const refresh = async (workflowOwnSenderIds, otherLevelSenderIds) => {
         lastWorkflowOwnSenderIds = workflowOwnSenderIds;
         lastOtherLevelSenderIds = otherLevelSenderIds;
         const [
           inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
-          pipEnabledRes, pipSourceRes, pinnedRes, transRateRes,
+          pipEnabledRes, pipPresetsRes, pipActivePresetRes, pinnedRes, transRateRes, transitionPositionRes,
         ] = await Promise.all([
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.inputs")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.programInput")}`),
@@ -646,9 +977,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("keyer.inputs")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("keyer.source")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.enabled")}`),
-          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.source")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.presets")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("pip.activePresetId")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.pinnedSenderIds")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transRate")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transitionPosition")}`),
         ]);
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
         const inputs = (await inputsRes.json()).value || [];
@@ -657,83 +990,27 @@ class OmpVideoMixerMePanel extends HTMLElement {
         keyerEnabled = keyerRes.ok ? (await keyerRes.json()).value === true : false;
         const keyerInputs = keyerInputsRes.ok ? (await keyerInputsRes.json()).value || [] : [];
         const keyerSource = keyerSourceRes.ok ? (await keyerSourceRes.json()).value || "" : "";
-        pipEnabled = pipEnabledRes.ok ? (await pipEnabledRes.json()).value === true : false;
-        const pipSource = pipSourceRes.ok ? (await pipSourceRes.json()).value || "" : "";
+        latestPipEnabled = pipEnabledRes.ok ? (await pipEnabledRes.json()).value === true : false;
+        latestPipPresets = pipPresetsRes.ok ? (await pipPresetsRes.json()).value || [] : [];
+        latestActivePipPresetId = pipActivePresetRes.ok ? (await pipActivePresetRes.json()).value || "" : "";
         const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
         const transRateFrames = transRateRes.ok ? (await transRateRes.json()).value || 0 : 0;
+        const transitionPosition = transitionPositionRes.ok ? (await transitionPositionRes.json()).value || 0 : 0;
         if (transRateFrames > 0) {
           currentTransRateMs = transRateFrames * MS_PER_TRANS_FRAME;
           for (const [frames, btn] of rateButtons) btn.active = frames === transRateFrames;
         }
+        // Server-Rückstellung (s. Moduldoku "Manueller T-Bar") — nur
+        // übernehmen, wenn gerade WEDER von Hand gezogen NOCH die
+        // AUTO-Kosmetik-Animation läuft (sonst reißt der 2-s-Poll den
+        // sichtbaren Wert weg).
+        if (!tBarDragging && !tBarAnimation) tBar.value = transitionPosition;
         latestInputs = inputs;
         latestPinned = pinned;
+        latestKeyerInputs = keyerInputs;
+        latestKeyerSource = keyerSource;
 
-        // Dropdown nur neu bauen, wenn sich die Optionen tatsächlich
-        // geändert haben (sonst würde ein offenes Dropdown bei jedem
-        // 2s-Poll unter dem Cursor zuklappen) — Vergleich per JSON-String
-        // reicht hier, die Liste ist klein und ändert sich selten.
-        const keyerOptionsKey = JSON.stringify([...keyerInputs.map((k) => k.senderId), ...workflowOwnSenderIds]);
-        if (keyerSourceSelect.dataset.optionsKey !== keyerOptionsKey) {
-          keyerSourceSelect.dataset.optionsKey = keyerOptionsKey;
-          buildGroupedOptions(keyerSourceSelect, keyerInputs, workflowOwnSenderIds, "Testfarbe");
-        }
-        // Nutzerfund: dieser Wert wurde bisher bei jedem 2s-Poll
-        // bedingungslos überschrieben — eine gerade getroffene Auswahl
-        // wurde sichtbar wieder zurückgesetzt, sobald der Select den Fokus
-        // verliert (z. B. weil `change` zwar sofort serverseitig anwendet,
-        // aber ein zeitgleich schon laufender Poll noch den alten Wert
-        // zurückliefert). Gleicher Schutz wie bei den übrigen Feldern:
-        // während der Select fokussiert ist, nicht überschreiben.
-        if (keyerSourceSelect !== shadow.activeElement) keyerSourceSelect.value = keyerSource;
-
-        // PIP-Quelle: gleiches Muster wie KEY, aber gespeist aus dem vollen
-        // Quellkatalog (`inputs`), nicht `keyerInputs` — "wie bei DSK"
-        // bezieht sich auf die Gruppierung, nicht auf die Fill+Key-Liste.
-        const pipInputEntries = inputs.map((i) => ({ label: i.label, senderId: i.senderId }));
-        const pipOptionsKey = JSON.stringify([...pipInputEntries.map((e) => e.senderId), ...workflowOwnSenderIds]);
-        if (pipSourceSelect.dataset.optionsKey !== pipOptionsKey) {
-          pipSourceSelect.dataset.optionsKey = pipOptionsKey;
-          buildGroupedOptions(pipSourceSelect, pipInputEntries, workflowOwnSenderIds, "Schwarz");
-        }
-        if (pipSourceSelect !== shadow.activeElement) pipSourceSelect.value = pipSource;
-
-        // Kuratierte Kreuzschiene: SRC-Reihe zeigt die angepinnten Quellen
-        // (+ Entfernen-Taste) plus die "+"-Taste — außer der Add-Picker ist
-        // gerade offen (sonst würde der laufende Poll ihn wegrendern, bevor
-        // der Operator eine Auswahl treffen konnte).
-        if (!addPickerOpen) {
-          srcButtons.innerHTML = "";
-          if (pinned.length === 0) {
-            const hint = document.createElement("p");
-            hint.className = "empty";
-            hint.textContent = "keine Quellen angeheftet";
-            srcButtons.append(hint);
-          }
-          for (const senderId of pinned) {
-            const input = inputs.find((i) => i.senderId === senderId);
-            // Nutzerfund 2026-08-14: fiel bislang auf ein Präfix der rohen
-            // senderId zurück (z. B. "4749d606") — unübersichtlich, sah wie
-            // ein UI-Bug statt einer erklärten Quelle aus. Eine angepinnte
-            // Quelle, die gerade nicht im Discovery-Snapshot auftaucht
-            // (Neustart-Race, entfernt, …), hat schlicht keinen bekannten
-            // Namen mehr — das sagt die Taste jetzt auch so, volle
-            // senderId bleibt übers Tooltip (`tag.title` unten) erreichbar.
-            const label = input ? input.label : "unbekannt";
-            const wrap = document.createElement("span");
-            wrap.className = "pin-chip";
-            const tag = document.createElement("span");
-            tag.className = "label";
-            tag.textContent = label;
-            tag.title = senderId;
-            const removeBtn = document.createElement("omp-button");
-            removeBtn.textContent = "×";
-            removeBtn.title = "Quelle entfernen";
-            removeBtn.addEventListener("click", () => call("crosspoint.unpin", { senderId }));
-            wrap.append(tag, removeBtn);
-            srcButtons.append(wrap);
-          }
-          srcButtons.append(addSourceBtn);
-        }
+        renderPipRow();
 
         pgmButtons.innerHTML = "";
         pstButtons.innerHTML = "";
@@ -754,7 +1031,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (visibleInputs.length === 0) {
           const empty = document.createElement("p");
           empty.className = "empty";
-          empty.textContent = "keine Quellen angeheftet — über SRC „+“ hinzufügen";
+          empty.textContent = "keine Quellen angeheftet — über den Quellen-Dialog hinzufügen";
           pstButtons.append(empty);
         }
         const levelOutputSenderIds = level === 0 ? otherLevelSenderIds : undefined;
@@ -762,14 +1039,20 @@ class OmpVideoMixerMePanel extends HTMLElement {
         renderBusRow(call, pstButtons, entries, workflowOwnSenderIds, false, preset, "preset", levelOutputSenderIds);
 
         keyerBtn.active = keyerEnabled;
-        pipBtn.active = pipEnabled;
       };
 
-      return { section, refresh };
+      return { bankRow, refresh };
     };
 
     const banks = [];
     for (let level = 0; level < levelCount; level++) banks.push(buildBank(level));
+
+    const consoleList = document.createElement("div");
+    consoleList.className = "console-list";
+    for (const b of banks) consoleList.append(b.bankRow);
+    const consoleSection = document.createElement("omp-panel-section");
+    consoleSection.setAttribute("label", "Video Mixer M/E");
+    consoleSection.append(consoleList);
 
     // Ebenen-Restart-Sektion (s. Moduldoku oben zu "Ebenenzahl live
     // ändern") — ermittelt Workflow/Rolle/aktuelles Format über einen
@@ -868,7 +1151,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // `nodeIds:[nodeId]` auf genau diesen Node eingeschränkt). EIN
     // Preset-Satz für den ganzen Node (main.rs liefert bei
     // `level_count>1` automatisch ein `{levels:[...]}`-Array), nicht je
-    // Bank — bleibt daher außerhalb der Ebenen-Schleife oben.
+    // Bank — bleibt daher außerhalb der Ebenen-Schleife oben. Nimmt seit
+    // 2026-09-04 auch die PIP-Presets jeder Ebene mit (main.rs::
+    // capture_level_state).
     const presetSaveBtn = document.createElement("omp-button");
     presetSaveBtn.textContent = "Preset speichern";
     const presetList = document.createElement("div");
@@ -918,7 +1203,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
     shadow.append(
       style,
-      ...banks.map((b) => b.section),
+      consoleSection,
       ...(levelsSection ? [levelsSection] : []),
       presetSection,
     );

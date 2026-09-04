@@ -20819,3 +20819,113 @@ ui/shell/workflows-view.ts` weiter grün, TEST1 danach wieder gestoppt.
 
 **Dateien:** `ui/shell/workflows-view.ts`, `ui/dist/shell.js` (Build-
 Artefakt, nicht versioniert), `nodes/omp-video-mixer-me/ui/bundle.js`.
+
+## 2026-09-04 (Nachtrag 177) — Nutzerauftrag: "videomixer m/e ui muss professioneller werden" — Mehrebenen-Konsole verschmolzen, Quellen/DSK/PIP in Dialoge verschoben, manueller T-Bar (§3.4 Teil 2) umgesetzt, dynamische PIP-Presets statt einem einzelnen PIP-Button
+
+Fünf Teilaufträge in einer Sitzung, alle in `nodes/omp-video-mixer-me/`
+(`src/main.rs`, `src/pipeline.rs`, `ui/bundle.js`):
+
+**1. Konsole verschmolzen:** bei `level_count>1` baute `buildBank()`
+bisher je Ebene ein eigenes `<omp-panel-section>` (Kartenrahmen +
+Kopfzeile) — sah wie N unabhängige Widgets aus, nicht wie ein
+durchgängiges Hardware-Pult. Jetzt liefert `buildBank` ein Fragment
+(`bankRow`, `.bank-gutter` + `.bank-content`), alle Bänke hängen in
+EINER gemeinsamen `<omp-panel-section label="Video Mixer M/E">`,
+getrennt nur durch eine dünne `border-top` + Ebenen-Nummer im linken
+Gutter. Live per `descriptor`-Abruf bestätigt: ein `OMP_ME_LEVELS=2`-
+Node liefert weiterhin korrekt `level1.*`/`level2.*`-präfigierte
+Methoden — die Rendering-Logik hängt nur an dieser Präfix-Erkennung,
+nicht an Pipeline-Zustand.
+
+**2. Quellen/DSK/PIP-Auswahl in Dialoge:** die frühere Inline-SRC-Reihe
+(+/×-Chips) + das nackte DSK-`<select>` sind jetzt hinter einem neuen
+"Quellen"-Knopf (`openSourcesModal`-artiges Overlay, `openModal()`-
+Helper, Node-lokal, kein neuer `ui/kit`-Export — an `document.body`
+gehängt, Backdrop-Klick/Escape schließen, analog `ui/kit/
+omp-confirm.ts` aber ohne dessen Export). DSK-Toggle selbst blieb im
+Hauptpanel sichtbar (zu häufig gebraucht, um hinter einem Dialog zu
+verschwinden).
+
+**3. Manueller T-Bar (§3.3/§3.4 Teil 2, seit 2026-07-16 als offener
+Punkt dokumentiert):** neuer Pipeline-Command
+`Command::SetTransitionPosition(level, pos)` — Aufbau identisch zum
+Start von `AutoTrans` (isel(fg) sofort auf Preset schalten, OHNE
+sofortigen Programm-/Tally-Commit), jeder Aufruf setzt
+`comp_fg_pad.alpha=pos`/`comp_bg_pad.alpha=1-pos` direkt (kein
+Hintergrund-Thread wie bei `AutoTrans`, das UI liefert die
+Zwischenwerte bereits pointermove-getaktet). `pos<=0` bricht sauber ab
+(Programm unverändert, Sperre freigegeben), `pos>=1` committet
+(Tally, `isel_bg` mitgezogen, `crosspoint.transitionPosition` auf 0
+zurückgesetzt — "Ruheposition" für den nächsten Zug). Dazwischen bleibt
+CUT/AUTO bewusst gesperrt (gleiche `fading`-Sperre wie zwischen
+`AutoTrans`-Aufrufen) — echtes Hardware-Verhalten: ein mitten geparkter
+T-Bar blockiert andere Transition-Trigger. Unterscheidung "läuft gerade
+eine ECHTE `AutoTrans`-Rampe" vs. "das ist meine eigene, bereits
+laufende Drag-Session" über `JoinHandle::is_finished()` auf dem
+zuletzt gespeicherten Fade-Thread-Handle (der Slot wird sonst nie auf
+`None` zurückgesetzt, nur bei einem Voll-Rebuild) — `spawn_autotrans`
+räumt `fading` synchron als letzten Schritt auf, `is_finished()==true`
+garantiert also bereits `fading==false`, kein Race. Bewusst NICHT
+gebaut: server-getriebene Positions-Updates während einer AUTO-Rampe
+für andere, gleichzeitig zuschauende Browser-Tabs (`animateTBar` bleibt
+rein client-kosmetisch) — `transitionPosition` dient nur als
+Ausgangswert beim Laden/Reconnect.
+
+**4. Dynamische PIP-Presets statt einem einzelnen Button:** PIP kannte
+bisher genau eine feste Box (`PIP_BOX`-Konstante) + eine Quellauswahl +
+einen Ein/Aus-Button. Neu: `MixerStore::pip_presets` (`PerLevel<Vec<
+PipPreset>>`, reine Buchführung — KEINE eigene Pipeline-Mechanik,
+`pip.applyPreset` ruft nur nacheinander die bereits bestehenden
+`pip.setSource`/`dve.setBox`/`pip.setEnabled`-Pfade auf) + `pip.
+savePreset`/`deletePreset`/`applyPreset`. UI: visueller Box-Editor
+(Drag-Move + Resize-Handle auf einer skalierten Canvas, 1:1 dasselbe
+Interaktionsmuster wie `nodes/omp-multiviewer-custom/ui/bundle.js`,
+hier auf eine einzige Box vereinfacht) in einem Modal, "Speichern &
+Anzeigen" ruft `savePreset` dann sofort `applyPreset`. Je Preset ein
+eigener "Mixer"-Button in einer dynamischen Reihe (`renderPipRow`),
+Klick auf das bereits aktive Preset schaltet PIP aus (`pip.setEnabled
+(false)`, löscht dabei auch `active_pip_preset` — kein Button leuchtet
+danach fälschlich weiter). Node-weite Snapshots (`GET/POST /state`)
+nehmen die PIP-Presets jeder Ebene mit (`capture_level_state`/
+`restore_level_state` erweitert).
+
+**5. Kompakter/touch-tauglicher:** ergibt sich größtenteils aus 2 (Modals
+statt dauerhaft sichtbarer Formularfelder im Hauptpanel) + größere
+Touch-Ziele in den neuen Modals (40px statt 34px für Buttons/Selects/
+Inputs).
+
+**Live verifiziert — API-Ebene, nicht per Browser-Klicktest** (der
+erste Versuch, dies per Fork+CDP zu verifizieren, verirrte sich in eine
+sinnlose Sub-Delegation und wurde ohne Ergebnis abgebrochen — danach
+direkt per `curl` gegen den laufenden Dev-Stack, `admin`/`adminpass123`-
+Token): auf einer frischen `omp-video-mixer-me`-Instanz mit echten
+Quellen (`omp-source` ×2) Schritt für Schritt bestätigt — `crosspoint.
+setTransitionPosition` bei 0.5 lässt `programInput` unverändert
+(`transitionPosition` zeigt 0.5), ein `crosspoint.cut` währenddessen
+wird korrekt ignoriert (Sperre), Rückzug auf 0.0 setzt `programInput`
+unverändert UND gibt die Sperre wieder frei (folgender `cut` wirkt
+sofort), ein Zug auf 1.0 committet `programInput` auf den Preset-Wert
+und `transitionPosition` fällt auf 0 zurück. `pip.savePreset` →
+`pip.presets` zeigt den neuen Eintrag → `pip.applyPreset` setzt
+`pip.enabled`/`pip.activePresetId`/`dve.box` korrekt → `pip.setEnabled
+{enabled:false}` leert `activePresetId` → `pip.deletePreset` entfernt
+den Eintrag wieder. `level1.*`/`level2.*`-Präfigierung eines
+`OMP_ME_LEVELS=2`-Nodes im Descriptor bestätigt. Ein bereits laufender,
+über die "Ebenen"-Neustart-Funktion neu gestartete Testinstanz zeigte
+dabei einen NICHT reagierenden `crosspoint.take` (Pipeline-`active`
+vermutlich nie fertig aufgebaut) — reproduziert unabhängig von diesen
+Änderungen (auch unveränderte `crosspoint.take`-Methode betroffen), auf
+einer frisch angelegten Instanz nicht reproduzierbar — vermutlich ein
+vorbestehendes, vom Live-Ebenenwechsel-Neustart-Pfad verursachtes
+Problem, nicht root-gecauset, nicht Teil dieses Auftrags. `cargo build`/
+`cargo test`/`cargo clippy -p omp-video-mixer-me` grün (ein neuer
+`too_many_arguments`-Hinweis auf `spawn_autotrans` per `#[allow]`
+quittiert, gleiche Konvention wie andernorts in dieser Datei), `node
+--check` auf `bundle.js` grün. Kein Klick-Screenshot der verschmolzenen
+Mehrebenen-Konsole selbst gemacht (Zeitbudget) — Risiko dafür gering
+eingeschätzt (reine CSS-/DOM-Struktur ohne dynamische Logik, per
+Code-Review geprüft).
+
+**Dateien:** `nodes/omp-video-mixer-me/src/main.rs`, `src/pipeline.rs`,
+`ui/bundle.js`; `docs/END-GOAL-FEATURES.md` §3.4 (Teil 2 als erledigt
+markiert).

@@ -44,6 +44,25 @@ use omp_node_sdk::{
 use pipeline::{DEFAULT_TRANS_RATE_FRAMES, DiscoveredInput, DiscoveredKeyFill, DveBox};
 use serde_json::Value;
 
+/// PIP-Preset (`docs/END-GOAL-FEATURES.md` §3.4-Nachfolger, Nutzerauftrag
+/// 2026-09-04: "PIP-Editor... als PIP-Preset abspeichern... für jedes
+/// Preset einen 'Mixer'-Button"): reine `MixerStore`-Buchführung, KEINE
+/// eigene Pipeline-Mechanik — `pip.applyPreset` ruft nur nacheinander die
+/// bereits bestehenden `pip.setSource`/`dve.setBox`/`pip.setEnabled`-Pfade
+/// auf (s. `level_invoke`). `id` wird clientseitig erzeugt (`bundle.js`,
+/// `crypto.randomUUID()`) — der Server verwaltet nur eine Liste, kein
+/// eigenes ID-Schema nötig. Kein `serde::Serialize`-Derive (kein
+/// `serde`-Derive-Dependency in diesem Crate, s. Cargo.toml) — JSON wird
+/// wie überall sonst hier per `serde_json::json!` von Hand gebaut
+/// (`level_get`s "pip.presets"-Zweig).
+#[derive(Debug, Clone)]
+struct PipPreset {
+    id: String,
+    name: String,
+    sender_id: Option<String>,
+    box_: DveBox,
+}
+
 /// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
 /// identisch zu `omp-switcher::GROUPHINT_TAG`/`omp-multiviewer`, bewusst
 /// dupliziert (jeder Node ein eigenständiges Binary, s. dortige Doku).
@@ -104,6 +123,19 @@ struct MixerStore {
     /// eigentliche Umrechnung/Anwendung läuft über
     /// `pipeline::PipelineHandle::set_trans_rate`.
     trans_rate: PerLevel<i32>,
+    /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
+    /// Nutzerauftrag 2026-09-04): Live-Position 0..1, aktualisiert über
+    /// `pipeline::Event::TransitionPositionChanged` (s. `handle_events`)
+    /// — reiner Readback für ein neu ladendes/verbindendes UI, s.
+    /// `pipeline.rs`-Doku zur Ruheposition.
+    transition_position: PerLevel<f64>,
+    /// PIP-Presets (Nutzerauftrag 2026-09-04, s. `PipPreset`-Doku) —
+    /// je Ebene unabhängig, gleiches Muster wie `pinned`.
+    pip_presets: PerLevel<Vec<PipPreset>>,
+    /// Aktuell aktiviertes PIP-Preset dieser Ebene (`None` = PIP aus oder
+    /// zuletzt per Low-Level-Methode statt per Preset gesetzt) — nur für
+    /// die UI-Anzeige, welcher "Mixer"-Button gerade leuchten soll.
+    active_pip_preset: PerLevel<Option<String>>,
     pipeline: pipeline::PipelineHandle,
 }
 
@@ -340,6 +372,31 @@ fn level_param_specs(level_count: usize, level: usize) -> Vec<ParamSpec> {
             range: None,
             readonly: true,
         },
+        // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2):
+        // Live-Position 0..1, s. `MixerStore::transition_position`-Doku.
+        ParamSpec {
+            name: n("crosspoint.transitionPosition"),
+            kind: ParamType::Number,
+            unit: None,
+            range: None,
+            readonly: true,
+        },
+        // PIP-Presets (Nutzerauftrag 2026-09-04, s. `PipPreset`-Doku) —
+        // JSON-Array, gleiche Array-Ausnahme wie "crosspoint.inputs".
+        ParamSpec {
+            name: n("pip.presets"),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: true,
+        },
+        ParamSpec {
+            name: n("pip.activePresetId"),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: true,
+        },
     ]
 }
 
@@ -452,6 +509,35 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 kind: ParamType::Number,
             }],
         },
+        // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2).
+        MethodSpec {
+            name: n("crosspoint.setTransitionPosition"),
+            args: vec![MethodArg {
+                name: "position".to_string(),
+                kind: ParamType::Number,
+            }],
+        },
+        // PIP-Presets (Nutzerauftrag 2026-09-04, s. `PipPreset`-Doku).
+        MethodSpec {
+            name: n("pip.savePreset"),
+            args: vec![
+                MethodArg { name: "id".to_string(), kind: ParamType::String },
+                MethodArg { name: "name".to_string(), kind: ParamType::String },
+                MethodArg { name: "senderId".to_string(), kind: ParamType::String },
+                MethodArg { name: "x".to_string(), kind: ParamType::Number },
+                MethodArg { name: "y".to_string(), kind: ParamType::Number },
+                MethodArg { name: "width".to_string(), kind: ParamType::Number },
+                MethodArg { name: "height".to_string(), kind: ParamType::Number },
+            ],
+        },
+        MethodSpec {
+            name: n("pip.deletePreset"),
+            args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
+        },
+        MethodSpec {
+            name: n("pip.applyPreset"),
+            args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
+        },
     ]
 }
 
@@ -518,6 +604,26 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
         )),
         "crosspoint.transRate" => Some(serde_json::json!(
             *store.trans_rate[level].lock().expect("lock poisoned")
+        )),
+        "crosspoint.transitionPosition" => Some(serde_json::json!(
+            *store.transition_position[level].lock().expect("lock poisoned")
+        )),
+        "pip.presets" => {
+            let presets = store.pip_presets[level].lock().expect("lock poisoned");
+            Some(serde_json::json!(
+                presets
+                    .iter()
+                    .map(|p| serde_json::json!({
+                        "id": p.id,
+                        "name": p.name,
+                        "senderId": p.sender_id,
+                        "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
+                    }))
+                    .collect::<Vec<_>>()
+            ))
+        }
+        "pip.activePresetId" => Some(serde_json::json!(
+            store.active_pip_preset[level].lock().expect("lock poisoned").clone().unwrap_or_default()
         )),
         _ => None,
     }
@@ -612,6 +718,13 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         "pip.setEnabled" => {
             let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
             store.pipeline.set_pip_enabled(level, enabled);
+            // Ausschalten löscht immer das "aktive Preset" (Nutzerauftrag
+            // 2026-09-04) — kein Mixer-Button soll nach dem Ausschalten
+            // fälschlich noch als aktiv leuchten, egal ob PIP zuvor per
+            // Preset oder per Low-Level-`pip.setSource` gesetzt wurde.
+            if !enabled {
+                *store.active_pip_preset[level].lock().expect("lock poisoned") = None;
+            }
             Ok(())
         }
         "pip.setSource" => {
@@ -643,6 +756,74 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
             store.pinned[level].lock().expect("lock poisoned").retain(|s| s != sender_id);
             Ok(())
         }
+        // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2) — die
+        // eigentliche Logik (Ruheposition/Abbruch/Commit) lebt in
+        // `pipeline.rs::Command::SetTransitionPosition`, hier nur die
+        // Argument-Extraktion.
+        "crosspoint.setTransitionPosition" => {
+            let position = args
+                .get("position")
+                .and_then(Value::as_f64)
+                .filter(|v| v.is_finite())
+                .ok_or(InvokeError::Unknown)?;
+            store.pipeline.set_transition_position(level, position);
+            Ok(())
+        }
+        // PIP-Presets (Nutzerauftrag 2026-09-04, s. `PipPreset`-Doku) —
+        // reine Buchführung, keine Pipeline-Wirkung (die hat erst
+        // "pip.applyPreset" unten).
+        "pip.savePreset" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+            let name = args.get("name").and_then(Value::as_str).ok_or(InvokeError::Unknown)?.to_string();
+            let sender_id = args
+                .get("senderId")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            let box_ = DveBox {
+                x: json_number(args, "x")?,
+                y: json_number(args, "y")?,
+                width: json_number(args, "width")?,
+                height: json_number(args, "height")?,
+            };
+            let mut presets = store.pip_presets[level].lock().expect("lock poisoned");
+            match presets.iter_mut().find(|p| p.id == id) {
+                Some(existing) => {
+                    existing.name = name;
+                    existing.sender_id = sender_id;
+                    existing.box_ = box_;
+                }
+                None => presets.push(PipPreset { id, name, sender_id, box_ }),
+            }
+            Ok(())
+        }
+        "pip.deletePreset" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+            store.pip_presets[level].lock().expect("lock poisoned").retain(|p| p.id != id);
+            let mut active = store.active_pip_preset[level].lock().expect("lock poisoned");
+            if active.as_deref() == Some(id) {
+                *active = None;
+                drop(active);
+                store.pipeline.set_pip_enabled(level, false);
+            }
+            Ok(())
+        }
+        "pip.applyPreset" => {
+            let id = args.get("id").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+            let preset = store.pip_presets[level]
+                .lock()
+                .expect("lock poisoned")
+                .iter()
+                .find(|p| p.id == id)
+                .cloned()
+                .ok_or(InvokeError::Unknown)?;
+            *store.pip_source[level].lock().expect("lock poisoned") = preset.sender_id.clone();
+            store.pipeline.set_pip_source(level, preset.sender_id);
+            store.pipeline.set_dve_box(level, preset.box_);
+            store.pipeline.set_pip_enabled(level, true);
+            *store.active_pip_preset[level].lock().expect("lock poisoned") = Some(preset.id);
+            Ok(())
+        }
         _ => Err(InvokeError::Unknown),
     }
 }
@@ -667,6 +848,19 @@ impl MixerStore {
 
     fn capture_level_state(&self, level: usize) -> Value {
         let box_ = *self.dve_box[level].lock().expect("lock poisoned");
+        let pip_presets: Vec<Value> = self.pip_presets[level]
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "id": p.id,
+                    "name": p.name,
+                    "senderId": p.sender_id,
+                    "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
+                })
+            })
+            .collect();
         serde_json::json!({
             "programSenderId": self.program[level].lock().expect("lock poisoned").clone(),
             "presetSenderId": self.preset[level].lock().expect("lock poisoned").clone(),
@@ -677,6 +871,12 @@ impl MixerStore {
             "pipSourceSenderId": self.pip_source[level].lock().expect("lock poisoned").clone(),
             "pinnedSenderIds": self.pinned[level].lock().expect("lock poisoned").clone(),
             "transRateFrames": *self.trans_rate[level].lock().expect("lock poisoned"),
+            // PIP-Presets (Nutzerauftrag 2026-09-04): ein Mixer-Snapshot
+            // nimmt die selbst angelegten Presets mit, sonst würde ein
+            // Restore die "Mixer"-Buttons der UI wieder verschwinden
+            // lassen.
+            "pipPresets": pip_presets,
+            "activePipPresetId": self.active_pip_preset[level].lock().expect("lock poisoned").clone(),
         })
     }
 
@@ -739,6 +939,33 @@ impl MixerStore {
             let frames = frames as i32;
             *self.trans_rate[level].lock().expect("lock poisoned") = frames;
             self.pipeline.set_trans_rate(level, frames as u32);
+        }
+        // PIP-Presets (Nutzerauftrag 2026-09-04) — reine Buchführung wie
+        // "pinnedSenderIds" oben, keine Pipeline-Wirkung (die aktive
+        // Anzeige bleibt an `pipEnabled`/`pipSourceSenderId`/`dveBox`
+        // oben gebunden, exakt wie vor diesem Feature).
+        if let Some(presets) = doc.get("pipPresets").and_then(Value::as_array) {
+            let restored: Vec<PipPreset> = presets
+                .iter()
+                .filter_map(|p| {
+                    let id = p.get("id")?.as_str()?.to_string();
+                    let name = p.get("name")?.as_str().unwrap_or_default().to_string();
+                    let sender_id = p.get("senderId").and_then(Value::as_str).map(str::to_string);
+                    let b = p.get("box")?;
+                    let box_ = DveBox {
+                        x: b.get("x").and_then(Value::as_i64).unwrap_or(0) as i32,
+                        y: b.get("y").and_then(Value::as_i64).unwrap_or(0) as i32,
+                        width: b.get("width").and_then(Value::as_i64).unwrap_or(0) as i32,
+                        height: b.get("height").and_then(Value::as_i64).unwrap_or(0) as i32,
+                    };
+                    Some(PipPreset { id, name, sender_id, box_ })
+                })
+                .collect();
+            *self.pip_presets[level].lock().expect("lock poisoned") = restored;
+        }
+        if let Some(id) = doc.get("activePipPresetId").and_then(Value::as_str) {
+            *self.active_pip_preset[level].lock().expect("lock poisoned") =
+                if id.is_empty() { None } else { Some(id.to_string()) };
         }
     }
 }
@@ -819,6 +1046,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pinned: PerLevel<Vec<String>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
     let trans_rate: PerLevel<i32> =
         (0..level_count).map(|_| Arc::new(Mutex::new(DEFAULT_TRANS_RATE_FRAMES as i32))).collect();
+    let transition_position: PerLevel<f64> = (0..level_count).map(|_| Arc::new(Mutex::new(0.0))).collect();
+    let pip_presets: PerLevel<Vec<PipPreset>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
+    let active_pip_preset: PerLevel<Option<String>> =
+        (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
 
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
         inputs: inputs.clone(),
@@ -833,6 +1064,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pip_source: pip_source.clone(),
         pinned: pinned.clone(),
         trans_rate: trans_rate.clone(),
+        transition_position: transition_position.clone(),
+        pip_presets: pip_presets.clone(),
+        active_pip_preset: active_pip_preset.clone(),
         pipeline: pipeline_handle.clone(),
     });
 
@@ -911,6 +1145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         dve_box,
         keyer_enabled,
         pip_enabled,
+        transition_position,
     );
 
     tokio::select! {
@@ -979,6 +1214,7 @@ async fn handle_events(
     dve_box: PerLevel<DveBox>,
     keyer_enabled: PerLevel<bool>,
     pip_enabled: PerLevel<bool>,
+    transition_position: PerLevel<f64>,
 ) {
     while let Some(event) = rx.recv().await {
         match event {
@@ -1045,6 +1281,11 @@ async fn handle_events(
             pipeline::Event::PipChanged { level, enabled } => {
                 if let Some(e) = pip_enabled.get(level) {
                     *e.lock().expect("lock poisoned") = enabled;
+                }
+            }
+            pipeline::Event::TransitionPositionChanged { level, position } => {
+                if let Some(p) = transition_position.get(level) {
+                    *p.lock().expect("lock poisoned") = position;
                 }
             }
         }

@@ -248,6 +248,14 @@ pub enum Event {
         level: usize,
         box_: DveBox,
     },
+    /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
+    /// Nutzerauftrag 2026-09-04): Live-Position der laufenden/zuletzt
+    /// abgeschlossenen Transition, 0..1 — s. `Command::
+    /// SetTransitionPosition`-Doku für die Endpunkt-Semantik.
+    TransitionPositionChanged {
+        level: usize,
+        position: f64,
+    },
     KeyerChanged {
         level: usize,
         enabled: bool,
@@ -266,6 +274,10 @@ enum Command {
     Cut(usize),
     Take(usize, Option<String>),
     AutoTrans(usize),
+    /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2): `f64` ist
+    /// die Zielposition 0..1, s. `PipelineHandle::set_transition_position`-
+    /// Doku für die Endpunkt-Semantik (Abbruch bei <=0, Commit bei >=1).
+    SetTransitionPosition(usize, f64),
     SetDveBox(usize, DveBox),
     ResetDve(usize),
     SetKeyerEnabled(usize, bool),
@@ -351,6 +363,18 @@ impl PipelineHandle {
 
     pub fn auto_trans(&self, level: usize) {
         let _ = self.commands.send(Command::AutoTrans(level));
+    }
+
+    /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
+    /// Nutzerauftrag 2026-09-04 "der Mixer Transition Fader lässt sich
+    /// nicht händisch bedienen"): `pos` wird im Command-Verarbeiter auf
+    /// `[0,1]` geklemmt. Semantik siehe dortige Doku (`Command::
+    /// SetTransitionPosition`-Zweig in `run()`): `pos<=0` bricht sauber
+    /// ab (Programm unverändert), `0<pos<1` blendet live ohne zu
+    /// committen, `pos>=1` committet PGM genau wie das Ende von
+    /// `spawn_autotrans`.
+    pub fn set_transition_position(&self, level: usize, pos: f64) {
+        let _ = self.commands.send(Command::SetTransitionPosition(level, pos));
     }
 
     /// `crosspoint.setTransRate` (Bug 4): setzt die Rampendauer für die
@@ -1444,6 +1468,7 @@ fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool 
 /// Nach Ablauf: bg stumm schalten (alpha 0), `isel_bg` auf den neuen
 /// Programm-Eingang mitziehen (nächste Transition findet dort direkt ein
 /// laufendes Bild vor, kein kalter Wechsel).
+#[allow(clippy::too_many_arguments)]
 fn spawn_autotrans(
     fg_pad: gst::Pad,
     bg_pad: gst::Pad,
@@ -1451,6 +1476,14 @@ fn spawn_autotrans(
     bg_target_pad: gst::Pad,
     fading: Arc<AtomicBool>,
     duration_ms: u64,
+    // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2): am Ende
+    // der Rampe "retracted" der T-Bar auf Position 0 (s. `Command::
+    // SetTransitionPosition`-Doku "Ruheposition"), damit ein neu
+    // geladenes/verbundenes UI nach einem AUTO korrekt bei 0 startet statt
+    // fälschlich bei 1 zu verharren. Kein Zwischenschritt-Progress (bewusst
+    // nicht gebaut, s. Moduldoku/Plan) — ein einzelner Event am Ende reicht.
+    tx: UnboundedSender<Event>,
+    level: usize,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let steps = (duration_ms / STEP_MS).max(2);
@@ -1468,6 +1501,7 @@ fn spawn_autotrans(
         isel_bg.set_property("active-pad", &bg_target_pad);
 
         fading.store(false, Ordering::Release);
+        let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
     })
 }
 
@@ -1808,6 +1842,10 @@ pub fn run(
                         previous,
                         current: prog.clone(),
                     });
+                    // T-Bar "retracted" auf Ruheposition (s.
+                    // `spawn_autotrans`-Doku) — CUT ersetzt einen
+                    // eventuell mitten geparkten manuellen Zug.
+                    let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
                 }
             }
             Ok(Command::Take(level, sender_id)) => {
@@ -1832,6 +1870,7 @@ pub fn run(
                         previous,
                         current: prog.clone(),
                     });
+                    let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
                 }
             }
             Ok(Command::AutoTrans(level)) => {
@@ -1877,6 +1916,8 @@ pub fn run(
                         target_pad_bg,
                         fading_l.clone(),
                         rate.load(Ordering::Relaxed),
+                        tx.clone(),
+                        level,
                     );
                     *fade_thread_l.lock().expect("lock poisoned") = Some(handle);
                     let _ = tx.send(Event::ProgramChanged {
@@ -1884,6 +1925,85 @@ pub fn run(
                         previous,
                         current: prog.clone(),
                     });
+                }
+            }
+            // Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
+            // Nutzerauftrag 2026-09-04): synchron im Command-Thread statt
+            // per Hintergrund-Thread wie `AutoTrans` — jeder Aufruf setzt
+            // die Compositor-Alpha direkt, kein Ramping nötig (das UI
+            // liefert bereits die Zwischenwerte, pointermove-getaktet).
+            //
+            // `fading[level]` dient hier als reine "wird gerade manuell
+            // gezogen"-Markierung (identisches Feld wie bei AutoTrans, aber
+            // AutoTrans' eigener Thread ist die einzige andere Quelle, die
+            // es setzt/löscht) — `is_finished()` auf dem zuletzt
+            // gespeicherten Thread-Handle unterscheidet "eine ECHTE
+            // AUTO-Rampe läuft gerade" (blockieren) von "das ist meine
+            // eigene, bereits laufende Drag-Session" (fortsetzen): der
+            // Handle-Slot wird sonst nie auf `None` zurückgesetzt (nur bei
+            // einem Voll-Rebuild, `join_all_fades`), aber `spawn_autotrans`
+            // räumt `fading` synchron als LETZTEN Schritt vor seiner
+            // Rückkehr auf — `is_finished()==true` garantiert also bereits
+            // `fading==false` an dieser Stelle, kein Race.
+            Ok(Command::SetTransitionPosition(level, raw_pos)) => {
+                let pos = raw_pos.clamp(0.0, 1.0);
+                if let (Some(p), Some(prog), Some(pre), Some(fading_l), Some(fade_thread_l)) = (
+                    active.as_mut().and_then(|a| a.levels.get_mut(level)),
+                    program.get_mut(level),
+                    preset.get(level),
+                    fading.get(level),
+                    fade_threads.get(level),
+                ) {
+                    let auto_running = fade_thread_l
+                        .lock()
+                        .expect("lock poisoned")
+                        .as_ref()
+                        .is_some_and(|h| !h.is_finished());
+                    if auto_running {
+                        continue;
+                    }
+                    let dragging = fading_l.load(Ordering::Acquire);
+                    if !dragging {
+                        if pos <= 0.0 || pre == prog {
+                            // Ruheposition oder nichts zum Überblenden
+                            // (Preset == Programm, gleicher Guard wie
+                            // AutoTrans) — kein Effekt.
+                            continue;
+                        }
+                        // Start einer neuen Drag-Session — identischer
+                        // Aufbau wie der Beginn von `AutoTrans` (isel(fg)
+                        // sofort auf `pre` schalten, bg zeigt weiterhin das
+                        // alte Bild), nur OHNE sofortigen Programm-/
+                        // Tally-Commit (der folgt erst bei `pos>=1.0`
+                        // unten).
+                        p.comp_bg_pad.set_property("alpha", 1.0f64);
+                        p.comp_fg_pad.set_property("alpha", 0.0f64);
+                        switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
+                        fading_l.store(true, Ordering::Release);
+                    }
+                    p.comp_fg_pad.set_property("alpha", pos);
+                    p.comp_bg_pad.set_property("alpha", 1.0 - pos);
+                    if pos >= 1.0 {
+                        // Abschluss-Kommit (`docs/END-GOAL-FEATURES.md`
+                        // §3.4 Teil 2) — identisch zum Ende von
+                        // `spawn_autotrans`, inkl. T-Bar-Rückstellung auf
+                        // die Ruheposition 0 für den nächsten Zug.
+                        switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, pre);
+                        let previous = prog.clone();
+                        *prog = pre.clone();
+                        fading_l.store(false, Ordering::Release);
+                        let _ = tx.send(Event::ProgramChanged { level, previous, current: prog.clone() });
+                        let _ = tx.send(Event::TransitionPositionChanged { level, position: 0.0 });
+                    } else {
+                        if pos <= 0.0 {
+                            // Sauberer Abbruch: zurück auf 0 gezogen, bevor
+                            // der Endanschlag erreicht wurde — Programm
+                            // bleibt unverändert, Sperre wird wieder
+                            // freigegeben.
+                            fading_l.store(false, Ordering::Release);
+                        }
+                        let _ = tx.send(Event::TransitionPositionChanged { level, position: pos });
+                    }
                 }
             }
             Ok(Command::SetDveBox(level, box_)) => {
