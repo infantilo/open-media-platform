@@ -21311,3 +21311,76 @@ grün. Test-Instanzen + NATS-Subscriber + Chromium sauber gestoppt,
 
 **Dateien:** `nodes/omp-playout-automation/Cargo.toml`, `src/main.rs`,
 `ui/bundle.js`.
+
+## 2026-09-07 (Nachtrag 184) — Umsetzung Kapitel 6 Teil 4: Transitions (cut/mix) — Break/Auto-Return live als bereits fertig vorgefunden
+
+**Vor jedem Code nachgeschaut** (§0 Punkt 2/9), wie in Nachtrag 182/183
+schon zweimal geübt: die zwei Teile-4-Bausteine laut Plan waren
+"Transitions" UND "Break/Auto-Return". `ActiveCart::
+elapsed_before_interrupt_ms` (C18, bereits vorhanden, eigene Doku im
+Code) datiert `onair_since` beim `cart.return()` exakt um die vor dem
+Interrupt verstrichene Zeit zurück — genau die "Restdauer-Rechnung",
+die der Plan als offen auswies. **Stale Doku, nicht stale Code** —
+Plan korrigiert, kein zweiter Umsetzungsdurchlauf für etwas nötig, das
+schon lief.
+
+**Transitions, echte neue Arbeit:** neuer `Transition`-Enum
+(`Cut`/`Mix`) + `transition_rate_frames: Option<u32>` auf `ItemMeta`.
+`take_on_targets()` (bisher fest `crosspoint.select`+`crosspoint.cut`)
+verzweigt jetzt: `Cut` unverändert, `Mix` → optional
+`crosspoint.setTransRate` (nur falls eine Rate mitgegeben ist, sonst
+bleibt die zuletzt am Mixer gesetzte Rate stehen) gefolgt von
+`crosspoint.autoTrans` — beide Methoden bereits fertig in
+`omp-video-mixer-me` (K3-Teil-2), keine Mixer-Änderung nötig.
+
+**Bewusste Aufteilung der 8 `take_on_targets`-Aufrufstellen:** die
+FÜNF echten "dieses Rundown-Item auf Sendung nehmen"-Pfade
+(`do_take`/`do_fire_fixtime`/`do_next`/`do_next_live`/`do_advance`)
+befragen jetzt `item_transition()` (neue kleine Hilfsfunktion) und
+respektieren das Item-eigene `transition`-Feld. Die DREI
+Ausnahme-Pfade (`do_stop`, `cart.fire`, `cart.return`) übergeben
+weiterhin fest `(Transition::Cut, None)`, unabhängig vom
+Metadaten-Feld — Schwarzbild-Stop, Interrupt-Einsprung und Rückkehr
+aus einem Interrupt sollen immer sofort wirken, keine weiche Rampe.
+Neue leichtgewichtige `setTransition`-Methode (kein Player-/Mixer-
+Roundtrip, reine Metadaten-Änderung — gleiches Muster wie
+`setStartType`).
+
+**Ehrliche v1-Grenze bestätigt, nicht neu erfunden** (stand schon in
+§6.4, hier nur live nachvollzogen): mit nur einem Ziel-Player lösen
+sich `crosspoint.select` bei JEDEM Item-Wechsel auf denselben
+Mixer-Eingang auf — ein "Mix" zwischen zwei Items DESSELBEN Players
+ist deshalb strukturell kein sichtbares Quell-zu-Quell-Xfade, nur eine
+Preset/Programm-Rampe auf denselben Eingang. Für ein echtes Xfade
+bräuchte es zwei separate Player-Instanzen als Quellen am Mixer — nicht
+Teil dieser Sitzung, deckt sich mit der bereits dokumentierten Grenze.
+
+**Reorder-Fallstrick zum DRITTEN Mal proaktiv vermieden** (Nachtrag
+181-Lehre): `itemToLoadEntry()` bekam `transition`/
+`transitionRateFrames` direkt mit ergänzt, `do_load()`s `LoadItem`-
+Struct + positioneller Zip ebenso — noch vor jedem Live-Test.
+
+**Live-Verifikation gegen den echten Dev-Stack:** `setTransition`
+rundet-tript korrekt über `GET items`. Cut-Item genommen (Baseline),
+danach Mix-Item (50 Frames) gecued+genommen — beide Aufrufe ohne
+Fehler; Mixer-`crosspoint.transRate` wechselte nachweislich von 25
+(Default) auf 50, `crosspoint.transitionPosition` lief auf 0 zurück
+(abgeschlossene Rampe, `programInput` committet) — bestätigt, dass
+tatsächlich `setTransRate`+`autoTrans` statt `cut` liefen. Reorder-
+Test (simulierter `load()`-Aufruf mit frischen Item-IDs) bestätigte
+`transition`/`transitionRateFrames` überleben den Reorder **beim
+ersten Versuch**, kein Klicktest-Fund nötig diesmal. Per Chromium-
+Klicktest visuell bestätigt: ⇄/✂-Buttons korrekt eingefärbt/beschriftet
+pro Zeile, deckungsgleich mit dem API-Stand. Der interaktive
+Klick-auf-Umschalter-öffnet-`prompt()`-Ablauf selbst wurde NICHT
+erneut per Klick nachgestellt (ein Versuch dazu blieb ergebnislos,
+vermutlich ein Timing-/Koordinaten-Problem im Testrig, nicht im
+Bundle-Code) — verlässt sich stattdessen auf denselben, bereits in
+Nachtrag 181 (Start-Typ-Umschalter) erfolgreich per Klick geprüften
+`prompt()`-Mechanismus, hier nur mit anderem Text. `cargo build/test`
+(38/38, keine neuen Tests — `Transition::parse` ist trivial wie
+`StartType::parse`, dieselbe Nicht-Test-Entscheidung)/`clippy` grün,
+`node --check` grün. Test-Instanzen + Chromium sauber über die reguläre
+API gestoppt, `pgrep` bestätigt keine Waisenprozesse.
+
+**Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.

@@ -96,7 +96,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
          eines Icon-Overlays — bleibt so unabhaengig von der Quell-Icon-
          Spalte lesbar/erweiterbar (spaetere Trans-/Children-Badges-
          Spalten aus demselben §6.4-Absatz reihen sich hier gleich an). */
-      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 96px; }
+      /* Kapitel 6 Teil 4: Aktionen-Spalte von 96px auf 128px verbreitert,
+         damit der neue Transition-Umschalter (✂/⇄) neben Start-Typ/Cue/
+         Entfernen noch Platz hat, ohne die Buttons zu quetschen. */
+      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 128px; }
       .pl-hdr-row {
         display: grid; align-items: center; gap: 4px; padding: 2px 6px;
         font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: .04em;
@@ -118,6 +121,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
          bleiben, nicht nur am Umschalter-Icon. */
       .pl-row.fixtime-start { border-left: 3px solid #4a90d9; }
       .pl-row button.start-type-fixtime { background: #2a5a8f; border-color: #4a90d9; }
+      /* Kapitel 6 Teil 4: Grün statt Amber/Blau (Start-Typ-Farben), damit
+         beide Umschalter auch farblich klar getrennt bleiben. */
+      .pl-row button.transition-mix { background: #2e7d32; border-color: #4caf50; }
       .pl-row .pl-avail { text-align: center; color: #4caf50; }
       .pl-row .pl-avail.unavailable { color: #e05050; font-weight: bold; }
       .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
@@ -527,6 +533,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // ohne `fixtimeHms` hier würde jeder Reorder eine Fixzeit
       // verlieren, obwohl `do_load()` sie längst positionell zurückzippt.
       if (item.fixtimeHms) entry.fixtimeHms = item.fixtimeHms;
+      // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
+      if (item.transition) entry.transition = item.transition;
+      if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
       if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
@@ -621,6 +630,27 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }
         call("setStartType", body).then(poll);
       });
+      // Kapitel 6 Teil 4 (§6.4 "Take-Choreografie mit Transitions"):
+      // zweiter Umschalter, unabhängig vom Start-Typ — "cut" (Standard,
+      // wie bisher) oder "mix" (`crosspoint.autoTrans` am Ziel-Mixer statt
+      // `crosspoint.cut`, K3-Teil-2). Wechsel AUF "mix" fragt optional
+      // eine Rampendauer in Frames ab (leer/Abbrechen = die am Mixer
+      // aktuell gesetzte Rate unverändert lassen, kein PATCH).
+      const transitionBtn = document.createElement("button");
+      transitionBtn.addEventListener("click", () => {
+        const next = item.transition === "mix" ? "cut" : "mix";
+        const body = { itemId: item.id, transition: next };
+        if (next === "mix") {
+          const input = prompt(
+            "Rampendauer in Frames (1–250, leer = aktuelle Mixer-Rate unverändert lassen):",
+            item.transitionRateFrames != null ? String(item.transitionRateFrames) : ""
+          );
+          if (input === null) return;
+          const trimmed = input.trim();
+          if (trimmed) body.transitionRateFrames = Number(trimmed);
+        }
+        call("setTransition", body).then(poll);
+      });
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
       const removeBtn = document.createElement("button");
@@ -630,7 +660,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
         call("remove", { itemId: item.id }).then(poll);
       });
-      actionsEl.append(startTypeBtn, cueBtn, removeBtn);
+      actionsEl.append(startTypeBtn, transitionBtn, cueBtn, removeBtn);
 
       // Touch-Fund 2026-09-07 (Kapitel 6 Teil 1, unabhängig vom Touch-
       // Audit gefunden): natives HTML5-Drag&Drop (dragstart/dragover/drop)
@@ -678,7 +708,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       dragEl.addEventListener("pointercancel", endDrag);
 
       el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, availEl, actionsEl);
-      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, cueBtn, removeBtn };
+      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -940,6 +970,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.availEl.title = isAvailable
           ? "Quelle verfügbar"
           : "Quelle nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take wird verweigert";
+
+        // Kapitel 6 Teil 4: ✂ = Cut (Standard), ⇄ = Mix (`crosspoint.
+        // autoTrans` statt `crosspoint.cut` beim Take dieses Items).
+        const isMix = item.transition === "mix";
+        refs.transitionBtn.textContent = isMix ? "⇄" : "✂";
+        refs.transitionBtn.title = isMix
+          ? `Mix${item.transitionRateFrames ? ` (${item.transitionRateFrames} Frames)` : ""} — klicken für Cut`
+          : "Cut — klicken für Mix (Auto-Trans am Mixer)";
+        refs.transitionBtn.className = isMix ? "transition-mix" : "";
       }
 
       // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.

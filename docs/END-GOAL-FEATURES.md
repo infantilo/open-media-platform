@@ -1277,9 +1277,19 @@ im K1-Look —
   Scheibe:** der volle "Counter-Strip" (horizontale Leiste ALLER
   anstehenden Events, §6.4) — nur der EINE nächste Countdown wurde
   gebaut, kein Mehr-Event-Streifen.
-- **Teil 4 — Transitions + Break/Auto-Return:** Mix-Take über
-  K3-Teil-2-Params; Break-Leiste mit Return-Logik (C18-Cart-System
-  existiert schon, Restdauer-Auto-Return fehlt noch).
+- **Teil 4 — Transitions (erledigt, 2026-09-07, `docs/decisions.md`
+  Nachtrag 184):** `transition: cut|mix` pro Item, `mix` nutzt
+  `crosspoint.autoTrans`+optional `crosspoint.setTransRate`
+  (K3-Teil-2, bereits fertig) statt `crosspoint.cut`. Stop/Cart-
+  Interrupt/Cart-Return bleiben bewusst immer harter Cut (Doku an
+  `take_on_targets`-Aufrufstellen). **Ehrliche v1-Grenze bestätigt:**
+  Quelle und Ziel sind bei nur einem Ziel-Player immer derselbe
+  Mixer-Eingang — ein sichtbares Xfade braucht zwei Player-Instanzen
+  über den Mixer, nicht zwei Items DESSELBEN Players. **Break/Auto-
+  Return war beim Schreiben dieser Zeile bereits fertig** (stale
+  Doku-Korrektur: `ActiveCart::elapsed_before_interrupt_ms`, C18,
+  datiert onair_since beim Return zurück statt die Restdauer neu zu
+  erfinden — kein separater Umsetzungsschritt nötig gewesen).
 - **Teil 5 — Grafik-Children (K5 existiert bereits, kein Blocker
   mehr):** Children-Editor, Scheduling relativ Start/Ende,
   Variablen-Auflösung (`{{next:title}}`-Teilmenge) aus dem

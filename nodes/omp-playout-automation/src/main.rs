@@ -144,6 +144,37 @@ impl StartType {
     }
 }
 
+/// Kapitel 6 Teil 4 (`docs/END-GOAL-FEATURES.md` §6.4 "Take-Choreografie
+/// mit Transitions"): `Cut` ist die bisherige, einzige Take-Art
+/// (`crosspoint.select`+`crosspoint.cut`). `Mix` nutzt stattdessen
+/// `crosspoint.select`+`crosspoint.autoTrans` (K3-Teil-2, bereits
+/// fertig in `omp-video-mixer-me`) — ein echtes Audio/Video-Xfade
+/// zwischen zwei Clips DESSELBEN Players kann der A/B-Slot-Player nicht
+/// darstellen (ein Ausgang, harte `active-pad`-Umschaltung, s.
+/// `docs/END-GOAL-FEATURES.md` §6.4 "ehrliche v1-Grenze") — `Mix` wirkt
+/// deshalb nur sinnvoll, wenn Quelle und Ziel zwei VERSCHIEDENE
+/// Quellen am Mixer sind (z. B. Player + Live-Kamera, oder zwei
+/// Player-Instanzen). Bewusst NICHT hier erzwungen/geprüft — der
+/// Mixer führt die Rampe so oder so aus, ein "Xfade" auf denselben
+/// Eingang ist einfach optisch wirkungslos, kein Fehlerfall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum Transition {
+    #[default]
+    Cut,
+    Mix,
+}
+
+impl Transition {
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "cut" => Some(Self::Cut),
+            "mix" => Some(Self::Mix),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ItemMeta {
     label: String,
@@ -158,6 +189,15 @@ struct ItemMeta {
     /// eindeutig "noch nicht scharf" bleibt statt fälschlich auf
     /// Mitternacht zu feuern.
     fixtime_hms: Option<String>,
+    /// Kapitel 6 Teil 4: wie DIESES Item auf Sendung genommen wird,
+    /// s. `Transition`-Doku.
+    transition: Transition,
+    /// Nur bei `transition == Transition::Mix` ausgewertet — `None`
+    /// heißt "die am Mixer aktuell gesetzte `crosspoint.transRate`
+    /// unverändert lassen" (kein PATCH vor dem `autoTrans`), `Some(f)`
+    /// setzt sie vorher explizit (`crosspoint.setTransRate`,
+    /// 1..=250 Frames, Mixer-seitige Grenze).
+    transition_rate_frames: Option<u32>,
 }
 
 /// Rekonstruiert ein `ItemMeta` aus einem Item, wie es `omp-player`s
@@ -188,7 +228,15 @@ fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
     // Player kennt das Konzept nicht (Typdoku oben). Aufrufer, die einen
     // Wert haben (`do_append`s eigener Parameter, `do_load`s positionell
     // gezippte `LoadItem`s), überschreiben das Feld danach selbst.
-    Some(ItemMeta { label, media, duration_ms, start_type: StartType::default(), fixtime_hms: None })
+    Some(ItemMeta {
+        label,
+        media,
+        duration_ms,
+        start_type: StartType::default(),
+        fixtime_hms: None,
+        transition: Transition::default(),
+        transition_rate_frames: None,
+    })
 }
 
 /// Kapitel 6 Teil 2 (`docs/END-GOAL-FEATURES.md` §6.4, "Verfügbarkeits-
@@ -295,6 +343,10 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     v["startType"] = serde_json::json!(m.start_type);
     if let Some(hms) = &m.fixtime_hms {
         v["fixtimeHms"] = serde_json::json!(hms);
+    }
+    v["transition"] = serde_json::json!(m.transition);
+    if let Some(frames) = m.transition_rate_frames {
+        v["transitionRateFrames"] = serde_json::json!(frames);
     }
     v
 }
@@ -487,8 +539,9 @@ impl AutomationStore {
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let player_label = state.target_player_label.clone();
+        let (transition, rate_frames) = item_transition(&state, &item_id);
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
 
         state.playlist.take().map_err(|e| e.to_string())?;
         state.onair_since = Some(Instant::now());
@@ -552,8 +605,9 @@ impl AutomationStore {
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst")?;
         let player_label = state.target_player_label.clone();
+        let (transition, rate_frames) = item_transition(&state, &item_id);
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
         state.onair_since = Some(Instant::now());
         state.last_live_item_id = Some(item_id);
         Ok(())
@@ -599,8 +653,9 @@ impl AutomationStore {
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let player_label = state.target_player_label.clone();
+        let (transition, rate_frames) = item_transition(&state, item_id);
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, item_id, transition, rate_frames)?;
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
         state.playlist.take().map_err(|e| e.to_string())?;
@@ -635,8 +690,9 @@ impl AutomationStore {
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst")?;
         let player_label = state.target_player_label.clone();
+        let (transition, rate_frames) = item_transition(&state, &item_id);
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
         state.onair_since = Some(Instant::now());
         state.last_live_item_id = Some(item_id);
         Ok(())
@@ -677,8 +733,9 @@ impl AutomationStore {
             .clone()
             .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
         let player_label = state.target_player_label.clone();
+        let (transition, rate_frames) = item_transition(&state, &item_id);
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
 
         state.playlist.cue(target_index).map_err(|e| e.to_string())?;
         state.playlist.take().map_err(|e| e.to_string())?;
@@ -736,7 +793,10 @@ impl AutomationStore {
         let stop_item_id = fetch_new_item_id(&player, &known_before)
             .map_err(|e| format!("Neue Stop-Item-ID nicht lesbar: {e}"))?;
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &stop_item_id)?;
+        // Kapitel 6 Teil 4: Schwarzbild-Stop bleibt immer ein sofortiger
+        // Cut — ein Operator, der auf "Stop" drückt, erwartet sofortige
+        // Wirkung, keine Ramp-Down-Rampe.
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &stop_item_id, Transition::Cut, None)?;
 
         // Erst NACH dem Umschalten auf das neue Schwarzbild aufräumen: das
         // vorherige Stop-Item ist bis zu diesem Punkt noch on-air —
@@ -879,6 +939,14 @@ impl AutomationStore {
             start_type: StartType,
             #[serde(rename = "fixtimeHms", default)]
             fixtime_hms: Option<String>,
+            // Kapitel 6 Teil 4: dieselbe Reorder-Rettung wie oben bei
+            // `startType`/`fixtimeHms` (Nachtrag 181-Lehre) — ohne das
+            // würde jeder Reorder eine `mix`-Transition stillschweigend
+            // auf `cut` zurücksetzen.
+            #[serde(rename = "transition", default)]
+            transition: Transition,
+            #[serde(rename = "transitionRateFrames", default)]
+            transition_rate_frames: Option<u32>,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -919,6 +987,8 @@ impl AutomationStore {
             let load_item = load_items.get(i);
             meta.start_type = load_item.map(|li| li.start_type).unwrap_or_default();
             meta.fixtime_hms = load_item.and_then(|li| li.fixtime_hms.clone());
+            meta.transition = load_item.map(|li| li.transition).unwrap_or_default();
+            meta.transition_rate_frames = load_item.and_then(|li| li.transition_rate_frames);
             metadata.insert(id.clone(), meta);
             ids.push(id);
         }
@@ -1037,6 +1107,30 @@ impl AutomationStore {
         }
     }
 
+    /// Kapitel 6 Teil 4 (`docs/END-GOAL-FEATURES.md` §6.4 "Take-
+    /// Choreografie mit Transitions"): reine lokale Metadaten-Änderung
+    /// wie `do_set_start_type` — betrifft nur, WIE ein KÜNFTIGES Take
+    /// dieses Items am Mixer abläuft, nicht den aktuellen On-Air-Zustand
+    /// (kein sofortiger Mixer-Aufruf hier). `rate_frames`: `None` lässt
+    /// eine vorher gesetzte Rate unverändert (nicht auf den
+    /// Mixer-Default zurücksetzen).
+    fn do_set_transition(
+        &self,
+        item_id: &str,
+        transition: Transition,
+        rate_frames: Option<u32>,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        match state.metadata.get_mut(item_id) {
+            Some(meta) => {
+                meta.transition = transition;
+                meta.transition_rate_frames = rate_frames;
+                Ok(())
+            }
+            None => Err("unbekannte itemId".to_string()),
+        }
+    }
+
     /// Legt ein neues, wiederverwendbares Cart-/Interrupt-Asset an (rein
     /// lokal, kein Fernaufruf nötig — anders als `do_append` gibt es hier
     /// keinen Ziel-Player, dessen Item-IDs übernommen werden müssten, das
@@ -1061,9 +1155,14 @@ impl AutomationStore {
                 // `state.carts`-Vec, nur per explizitem `cart.fire`
                 // ausgelöst) — `startType` ist hier bedeutungslos, bleibt
                 // aber gesetzt, weil `ItemMeta` ein geteilter Typ ist
-                // (Doku oben).
+                // (Doku oben) — Carts feuern immer per `cart.fire`
+                // ausdrücklich mit hartem `Transition::Cut` (Doku dort),
+                // dieselbe "bedeutungslos, aber gesetzt"-Logik gilt daher
+                // auch für `transition`.
                 start_type: StartType::default(),
                 fixtime_hms: None,
+                transition: Transition::default(),
+                transition_rate_frames: None,
             },
         ));
         Ok(())
@@ -1143,7 +1242,11 @@ impl AutomationStore {
         let cart_item_id = fetch_new_item_id(&player, &known_before)
             .map_err(|e| format!("Neue Cart-Item-ID nicht lesbar: {e}"))?;
 
-        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &cart_item_id)?;
+        // Kapitel 6 Teil 4: ein Cart-Interrupt ist per Definition ein
+        // sofortiges Eingreifen (Blackclip, Standby, …) — immer harter
+        // Cut, unabhängig davon, was `transition` für dieses (synthetische
+        // Test-Muster-)Cart-Item ohnehin bedeutungslos trüge.
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &cart_item_id, Transition::Cut, None)?;
 
         state.active_cart = Some(ActiveCart {
             asset_id: asset_id.to_string(),
@@ -1183,7 +1286,11 @@ impl AutomationStore {
                 .mixer_node_id
                 .clone()
                 .ok_or("Ziel-Mixer nicht aufgelöst (Cart-Return)")?;
-            take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &restore_id)?;
+            // Kapitel 6 Teil 4: Return nach einem Interrupt bewusst immer
+            // ein harter Cut, unabhängig vom `transition`-Feld des
+            // wiederhergestellten Items — Vorhersagbarkeit nach einem
+            // Cart-Interrupt zählt hier mehr als eine weiche Rampe.
+            take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &restore_id, Transition::Cut, None)?;
             state.onair_since =
                 Some(Instant::now() - Duration::from_millis(active.elapsed_before_interrupt_ms as u64));
             state.last_live_item_id = Some(restore_id.clone());
@@ -1224,12 +1331,22 @@ impl AutomationStore {
 /// damit (über den bereits bestehenden Mechanismus in
 /// `omp-video-mixer-me`) das Tally-Event für die Kachel des Players aus —
 /// keine eigene Tally-Logik hier nötig.
+/// Kapitel 6 Teil 4: `transition`/`rate_frames` steuern nur noch den
+/// LETZTEN Schritt am Mixer (Cut vs. Mix) — Player-seitiges cue/take
+/// bleibt für beide Transition-Arten identisch, der Player kennt das
+/// Konzept nicht (dieselbe Trennung wie bei `StartType`). Aufrufer, die
+/// IMMER einen harten Cut wollen (Stop-Schwarzbild, Cart-Interrupt/
+/// -Return — Doku an deren jeweiligen Aufrufstellen), übergeben explizit
+/// `(Transition::Cut, None)` statt das Item-eigene `transition`-Feld zu
+/// befragen.
 fn take_on_targets(
     store: &AutomationStore,
     player_node_id: &str,
     mixer_node_id: &str,
     player_label: &str,
     item_id: &str,
+    transition: Transition,
+    rate_frames: Option<u32>,
 ) -> Result<(), String> {
     let player = store.proxy_client(player_node_id.to_string());
     let mixer = store.proxy_client(mixer_node_id.to_string());
@@ -1250,11 +1367,38 @@ fn take_on_targets(
     mixer
         .invoke("crosspoint.select", serde_json::json!({"senderId": sender_id}))
         .map_err(|e| format!("Mixer-crosspoint.select fehlgeschlagen: {e}"))?;
-    mixer
-        .invoke("crosspoint.cut", serde_json::json!({}))
-        .map_err(|e| format!("Mixer-crosspoint.cut fehlgeschlagen: {e}"))?;
+    match transition {
+        Transition::Cut => {
+            mixer
+                .invoke("crosspoint.cut", serde_json::json!({}))
+                .map_err(|e| format!("Mixer-crosspoint.cut fehlgeschlagen: {e}"))?;
+        }
+        Transition::Mix => {
+            if let Some(frames) = rate_frames {
+                mixer
+                    .invoke("crosspoint.setTransRate", serde_json::json!({"frames": frames}))
+                    .map_err(|e| format!("Mixer-crosspoint.setTransRate fehlgeschlagen: {e}"))?;
+            }
+            mixer
+                .invoke("crosspoint.autoTrans", serde_json::json!({}))
+                .map_err(|e| format!("Mixer-crosspoint.autoTrans fehlgeschlagen: {e}"))?;
+        }
+    }
 
     Ok(())
+}
+
+/// Kapitel 6 Teil 4: liest `transition`/`transition_rate_frames` aus
+/// `state.metadata` für `item_id` — Default `(Cut, None)`, falls das
+/// Item (noch) keine eigene Metadaten-Zeile hat (sollte für ein
+/// gerade aufgelöstes Rundown-Item nicht vorkommen, aber ein fehlender
+/// Eintrag ist kein Grund, den Take selbst scheitern zu lassen).
+fn item_transition(state: &AutomationState, item_id: &str) -> (Transition, Option<u32>) {
+    state
+        .metadata
+        .get(item_id)
+        .map(|m| (m.transition, m.transition_rate_frames))
+        .unwrap_or((Transition::Cut, None))
 }
 
 /// Liest `crosspoint.inputs` des Ziel-Mixers (bereits dessen eigene,
@@ -1510,6 +1654,25 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Kapitel 6 Teil 4: ebenfalls reine lokale Metadaten-Änderung
+            // (do_set_transition-Doku).
+            MethodSpec {
+                name: "setTransition".to_string(),
+                args: vec![
+                    MethodArg {
+                        name: "itemId".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "transition".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "transitionRateFrames".to_string(),
+                        kind: ParamType::Number,
+                    },
+                ],
+            },
             MethodSpec {
                 name: "take".to_string(),
                 args: vec![],
@@ -1711,6 +1874,20 @@ impl ParamStore for AutomationStore {
                     (Some(id), Some(st)) => self.do_set_start_type(id, st, fixtime_hms),
                     (None, _) => Err("itemId fehlt".to_string()),
                     (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
+                }
+            }
+            "setTransition" => {
+                let item_id = args.get("itemId").and_then(Value::as_str);
+                let transition = args.get("transition").and_then(Value::as_str).and_then(Transition::parse);
+                let rate_frames = args
+                    .get("transitionRateFrames")
+                    .and_then(Value::as_f64)
+                    .filter(|f| f.is_finite() && *f >= 1.0 && *f <= 250.0)
+                    .map(|f| f as u32);
+                match (item_id, transition) {
+                    (Some(id), Some(t)) => self.do_set_transition(id, t, rate_frames),
+                    (None, _) => Err("itemId fehlt".to_string()),
+                    (_, None) => Err("transition fehlt oder ungültig (cut|mix)".to_string()),
                 }
             }
             "cue" => match args.get("itemId").and_then(Value::as_str) {
@@ -2276,6 +2453,8 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
         }
     }
 
@@ -2286,6 +2465,8 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
         }
     }
 
@@ -2296,6 +2477,8 @@ mod availability_tests {
             duration_ms: 1000,
             start_type: StartType::Sequence,
             fixtime_hms: None,
+            transition: Transition::Cut,
+            transition_rate_frames: None,
         }
     }
 
