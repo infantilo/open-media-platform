@@ -20987,3 +20987,49 @@ gegen tatsächliches SSE-Timing gemessen wurde.
 
 **Dateien:** `ui/graph/flow-canvas.ts`.
 
+## 2026-09-07 (Nachtrag 179) — Nutzerauftrag: Go/No-Go-Spike für `docs/END-GOAL-FEATURES.md` §9.5 Teil 2 (WebRTC), im Zuge einer Anfrage nach "Handy als Kamera (mit Rückbild+Tally)/Viewer/Multiviewer ohne Softwareinstallation, im selben Netz, niedrigste Latenz"
+
+**Befund GStreamer-Seite (Zielsystem, per `gst-inspect-1.0` geprüft,
+nicht geraten):** `webrtcbin` vorhanden (`gst-plugins-bad` 1.22.0).
+`nice`-Plugin (ICE-Agent, von `webrtcbin` zwingend gebraucht) fehlte —
+`libnice10` (die reine Laufzeitbibliothek) war installiert, das
+GStreamer-Plugin-Paket `gstreamer1.0-nice` aber nicht; per
+`sudo apt-get install -y gstreamer1.0-nice` nachinstalliert (Debian-
+bookworm-Repo, kein Custom-Build nötig) — `gst-inspect-1.0 nice` zeigt
+jetzt `nicesrc`/`nicesink`. `dtlssrtpenc`/`dtlssrtpdec`, `srtpenc`/
+`srtpdec`, `rtpbin`, sowie Codec-Elemente `opusenc` (Audio) und
+`vp8enc`/`x264enc` (Video) alle vorhanden — vollständige Elementkette
+für eine `webrtcbin`-Sende-/Empfangspipeline ohne fehlende Abhängigkeit.
+
+**Befund Rust-Seite:** `gstreamer-webrtc`/`gstreamer-sdp` in Version
+0.25 (passend zum bereits gepinnten `gstreamer = "0.25.3"` in
+`nodes/omp-mediaio/Cargo.toml:10`) per `cargo add --dry-run` gegen
+crates.io aufgelöst — existieren, keine Versionskonflikte.
+
+**Signalisierung (§9.3s "ehrlicher Haken" — SSE ist Server→Client-only,
+ungeeignet für SDP-Offer/-Answer + ICE-Candidate-Austausch):** noch
+nicht gebaut. Empfehlung: WebSocket-Endpunkt direkt am Orchestrator
+(`orchestrator/internal/httpapi`), nicht ein eigener Signalisierungs-
+Dienst — teilt sich dieselbe mTLS-/Auth-Grenze wie die bestehende SSE-
+Route, kein zusätzlicher zu betreibender Prozess. Go-Standardbibliothek
+kann kein WebSocket (RFC 6455) — eine kleine, dedizierte Bibliothek ist
+hier gerechtfertigt (Minimal-Dependency-Regel, §0 Punkt 5), Projekt hat
+mit `hashicorp/raft`/`nats.go`/`pgx` bereits Präzedenzfälle für externe
+Go-Module. Für das interne mTLS-Netz ohne öffentliche Legs (§4.6)
+bestätigt §9.3 bereits: ICE kann auf reine Host-Candidates beschränkt
+bleiben, kein STUN/TURN nötig.
+
+**Ergebnis: GO**, keine harten Blocker gefunden. Nächster Schritt wäre
+`build_webrtc_branch` in `omp-mediaio::preview` (Ausgaberichtung, §9.5
+Teil 2) — die Kamera-Einspeiserichtung (Nutzeranfrage, noch nicht in
+§9 spezifiziert) nutzt dieselbe Signalisierungs-/ICE-Infrastruktur nur
+umgekehrt (`webrtcbin` kann ebenso empfangen wie senden), braucht aber
+einen eigenen Ingest-Pfad Richtung MXL statt `omp-mediaio::preview`s
+Ausgabepfad — als eigener Unterpunkt zu §9 zu ergänzen, nicht Teil
+dieser Sitzung (§0 Punkt 2, ein Schritt pro Sitzung). Tally ließe sich
+über den bestehenden `omp.tally.<id>`-SSE-Mechanismus abdecken,
+Rückbild v1 einfacher über einen zweiten MJPEG-`<img>` statt einer
+zweiten WebRTC-Spur.
+
+**Dateien:** keine Code-Änderung dieser Sitzung — nur
+`gstreamer1.0-nice` systemweit nachinstalliert (Dev-Maschine).
