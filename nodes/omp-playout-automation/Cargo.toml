@@ -7,6 +7,14 @@ edition = "2024"
 publish = false
 
 [dependencies]
+# Kapitel 6 Teil 3 (Fixtime-Scheduler, `docs/END-GOAL-FEATURES.md`
+# §6.4/§6.5): Minimal-Dependency-Regel (§0 Punkt 5) — std kann keine
+# zeitzonen-/DST-bewusste lokale Wanduhr-Zerlegung (Stunde/Minute/
+# Sekunde aus der Systemzeit), nur `chrono::Local::now()` ohne
+# eigenen `libc`-FFI-Umweg. `default-features = false` + nur `clock`/
+# `std`: kein `serde` (eigene JSON-Kodierung reicht für ein
+# `HH:MM:SS`-String-Feld), kein wasm-Zeug.
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 # Kein gstreamer/omp-mediaio: dieser Node hat bewusst keine eigene
 # Medienpipeline (UMSETZUNG.md C14/C15) — er ruft nur die IS-12/14-
 # Methoden von Ziel-Nodes (Player/Mixer) über deren eigene Descriptor-

@@ -82,6 +82,15 @@ const DISCOVERY_INTERVAL: Duration = Duration::from_secs(2);
 const ADVANCE_TICK: Duration = Duration::from_millis(200);
 const DEFAULT_PATTERN: &str = "smpte";
 const DEFAULT_DURATION_MS: u64 = 5000;
+/// Kapitel 6 Teil 3 (§6.4, PC-Vorbild `PRE_CUE_MS`=5000,
+/// `docs/decisions.md` Nachtrag 180): wie viele Sekunden vor der
+/// Fixzeit ein Item vorab gecued wird (Vorschau, kein Take).
+const FIXTIME_PRECUE_SECS: i64 = 5;
+/// PC-Vorbild: 30s Gnadenfenster. Danach gilt ein noch nicht
+/// gefeuertes Fixtime-Event als verpasst (`Skipped` + Alarm) statt
+/// verspätet doch noch zu feuern.
+const FIXTIME_GRACE_SECS: i64 = 30;
+const FIXTIME_TICK: Duration = Duration::from_secs(1);
 /// Deutlich unter `auth.ServiceTokenTTL` (24h, Orchestrator) — ein
 /// Refresh auf halber Laufzeit lässt reichlich Spielraum, falls der
 /// Orchestrator beim ersten Versuch kurz nicht erreichbar ist (nächster
@@ -106,15 +115,18 @@ enum ItemMedia {
 /// `do_append`/`do_load`-Doku. `Manual`: PIPELINE CONTROLLER hat dafür
 /// **kein** Vorbild (dort gibt es nur ein End-seitiges "Manual Hold",
 /// keinen Start-Gate — `docs/decisions.md` Nachtrag 180) — ein
-/// `manual`-Item nimmt weder am Sequenz-Vorrücken noch (später, Kapitel
-/// 6 Teil 3) an Fixzeit-Timern teil, sondern wird ausschließlich per
-/// explizitem Operator-Cue+Take scharf.
+/// `manual`-Item nimmt weder am Sequenz-Vorrücken noch an Fixzeit-
+/// Timern teil, sondern wird ausschließlich per explizitem
+/// Operator-Cue+Take scharf. `Fixtime` (Kapitel 6 Teil 3): feuert zur
+/// in `ItemMeta::fixtime_hms` hinterlegten Uhrzeit unabhängig vom
+/// Sequenz-Fortschritt (harter Unterbrecher), s. `fixtime_loop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 enum StartType {
     #[default]
     Sequence,
     Manual,
+    Fixtime,
 }
 
 impl StartType {
@@ -126,6 +138,7 @@ impl StartType {
         match s {
             "sequence" => Some(Self::Sequence),
             "manual" => Some(Self::Manual),
+            "fixtime" => Some(Self::Fixtime),
             _ => None,
         }
     }
@@ -137,6 +150,14 @@ struct ItemMeta {
     media: ItemMedia,
     duration_ms: u64,
     start_type: StartType,
+    /// Kapitel 6 Teil 3: nur bedeutungsvoll bei `start_type ==
+    /// StartType::Fixtime` — lokale Uhrzeit als "HH:MM:SS"
+    /// (`parse_hms_to_secs`), sonst `None`. Eigenes `Option` statt
+    /// eines leeren Strings, damit ein Item, das GERADE erst auf
+    /// `Fixtime` umgeschaltet wurde, aber noch keine Zeit gesetzt hat,
+    /// eindeutig "noch nicht scharf" bleibt statt fälschlich auf
+    /// Mitternacht zu feuern.
+    fixtime_hms: Option<String>,
 }
 
 /// Rekonstruiert ein `ItemMeta` aus einem Item, wie es `omp-player`s
@@ -167,7 +188,7 @@ fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
     // Player kennt das Konzept nicht (Typdoku oben). Aufrufer, die einen
     // Wert haben (`do_append`s eigener Parameter, `do_load`s positionell
     // gezippte `LoadItem`s), überschreiben das Feld danach selbst.
-    Some(ItemMeta { label, media, duration_ms, start_type: StartType::default() })
+    Some(ItemMeta { label, media, duration_ms, start_type: StartType::default(), fixtime_hms: None })
 }
 
 /// Kapitel 6 Teil 2 (`docs/END-GOAL-FEATURES.md` §6.4, "Verfügbarkeits-
@@ -189,6 +210,73 @@ fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: 
     }
 }
 
+/// Kapitel 6 Teil 3: "HH:MM:SS" (lokale Wanduhr, kein Datum) →
+/// Sekunden seit Mitternacht, oder `None` bei ungültigem Format/
+/// Wertebereich. Bewusst `i64` (nicht `u32`) — passt direkt in die
+/// Differenzrechnung in `fixtime_action` ohne Vorzeichen-Klimmzüge.
+fn parse_hms_to_secs(s: &str) -> Option<i64> {
+    let mut parts = s.trim().splitn(3, ':');
+    let h: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let sec: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None; // mehr als drei Teile
+    }
+    if !(0..24).contains(&h) || !(0..60).contains(&m) || !(0..60).contains(&sec) {
+        return None;
+    }
+    Some(h * 3600 + m * 60 + sec)
+}
+
+/// Lokale Wanduhr (nicht UTC — ein Operator tippt "14:00:00" im Sinne
+/// der Studio-Zeitzone, s. `Cargo.toml`s `chrono`-Begründung), Sekunden
+/// seit Mitternacht. **Bekannte Grenze:** reine Sekunden-seit-
+/// Mitternacht-Arithmetik kennt kein Datum — ein Fixtime-Event kurz vor
+/// Mitternacht kann bei einem Neustart/Reorder kurz nach Mitternacht
+/// fälschlich als "weit in der Zukunft" statt "gerade verpasst"
+/// erscheinen. Für die erste Ausbaustufe hingenommen (dieselbe
+/// Kern-Rundown-Länge wie C20s "rundown-lang, nicht tagelang"-Annahme),
+/// nicht stillschweigend als vollständig korrekt behauptet.
+fn seconds_since_midnight_local() -> i64 {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    now.hour() as i64 * 3600 + now.minute() as i64 * 60 + now.second() as i64
+}
+
+/// Kapitel 6 Teil 3: reine, seiteneffektfreie Entscheidungslogik —
+/// getrennt von der Uhr/dem State, damit sie ohne Zeit-Mocking testbar
+/// bleibt (gleiches Prinzip wie `Playlist::peek_next()`/
+/// `item_is_available()`). `already` ist der Vorzustand aus
+/// `AutomationState::fixtime_resolved`; `Fired`/`Skipped` sind
+/// Endzustände (kein weiterer Tick tut noch etwas).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixtimeAction {
+    None,
+    PreCue,
+    Fire,
+    Skip,
+}
+
+fn fixtime_action(now_secs: i64, target_secs: i64, already: Option<FixtimeResolution>) -> FixtimeAction {
+    if matches!(already, Some(FixtimeResolution::Fired) | Some(FixtimeResolution::Skipped)) {
+        return FixtimeAction::None;
+    }
+    let delta = now_secs - target_secs;
+    if delta < -FIXTIME_PRECUE_SECS {
+        FixtimeAction::None
+    } else if delta < 0 {
+        if already == Some(FixtimeResolution::PreCued) {
+            FixtimeAction::None
+        } else {
+            FixtimeAction::PreCue
+        }
+    } else if delta <= FIXTIME_GRACE_SECS {
+        FixtimeAction::Fire
+    } else {
+        FixtimeAction::Skip
+    }
+}
+
 /// Gegenstück zu `item_meta_from_player_json` für `get("items")`/
 /// `get("assets")` — dieselbe Feld-Shape wie `omp-player`s `items`
 /// (jeweils genau eines von `pattern`+`toneFrequency` / `file` / `senderId`).
@@ -205,6 +293,9 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     v["label"] = serde_json::json!(m.label);
     v["durationMs"] = serde_json::json!(m.duration_ms);
     v["startType"] = serde_json::json!(m.start_type);
+    if let Some(hms) = &m.fixtime_hms {
+        v["fixtimeHms"] = serde_json::json!(hms);
+    }
     v
 }
 
@@ -276,6 +367,21 @@ struct AutomationState {
     /// nicht für Carts geführt (die laufen neben der Hauptplaylist,
     /// haben keinen Platz in deren Zeitplan, s. `ActiveCart`-Doku).
     timeline: TimelineCache,
+    /// Kapitel 6 Teil 3 (`fixtime_loop`-Doku): pro Item-ID, ob/wie ihr
+    /// `Fixtime`-Ereignis heute schon abgearbeitet wurde — verhindert
+    /// wiederholtes Vor-Cuen/Feuern/Alarmieren bei jedem 1-Sekunden-Tick,
+    /// sobald einmal entschieden. An Item-IDs gebunden (nicht an
+    /// `fixtime_hms`-Werte), daher bei jedem `do_load()` geleert (dessen
+    /// eigene Doku).
+    fixtime_resolved: HashMap<String, FixtimeResolution>,
+}
+
+/// s. `AutomationState::fixtime_resolved`-Doku.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FixtimeResolution {
+    PreCued,
+    Fired,
+    Skipped,
 }
 
 /// Zustand eines gerade laufenden Cart-Interrupts (`ARCHITECTURE.md`
@@ -450,6 +556,56 @@ impl AutomationStore {
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id)?;
         state.onair_since = Some(Instant::now());
         state.last_live_item_id = Some(item_id);
+        Ok(())
+    }
+
+    /// Kapitel 6 Teil 3 (`docs/END-GOAL-FEATURES.md` §6.4, "harter
+    /// Unterbrecher"): Gegenstück zu `do_take`, aber ohne dessen
+    /// Vorbedingung "muss bereits gecued sein" — ein Fixtime-Event
+    /// springt die Sequenz-Cue-Position selbst dorthin (`cue()` VOR
+    /// `take()`), unabhängig davon, was gerade gecued/on-air war.
+    /// Aufgerufen von `fixtime_loop`, nicht direkt von außen erreichbar
+    /// (kein `invoke`-Dispatch-Zweig) — Fixtime ist ein reiner
+    /// Automatismus, kein manueller Bedienweg. Cart-Vorrang wie überall
+    /// sonst: der Aufrufer prüft das ohnehin schon VOR dem Aufruf (s.
+    /// `fixtime_loop`), hier trotzdem als zweite Sicherung (kein
+    /// Zeitfenster zwischen Prüfung und Aufruf, in dem ein Cart
+    /// unbemerkt scharf werden könnte).
+    fn do_fire_fixtime(&self, item_id: &str) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        if state.active_cart.is_some() {
+            return Err("Cart aktiv".to_string());
+        }
+        let index = state
+            .playlist
+            .index_of(item_id)
+            .ok_or("Fixtime-Item nicht mehr im Rundown".to_string())?;
+
+        if let Some(m) = state.metadata.get(item_id)
+            && !item_is_available(m, &state.media_library, &state.available_sources)
+        {
+            return Err(format!(
+                "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline)",
+                m.label
+            ));
+        }
+
+        let player_node_id = state
+            .player_node_id
+            .clone()
+            .ok_or("Ziel-Player nicht aufgelöst (targetPlayerLabel unbekannt/noch nicht gestartet)")?;
+        let mixer_node_id = state
+            .mixer_node_id
+            .clone()
+            .ok_or("Ziel-Mixer nicht aufgelöst (targetMixerLabel unbekannt/noch nicht gestartet)")?;
+        let player_label = state.target_player_label.clone();
+
+        take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, item_id)?;
+
+        state.playlist.cue(index).map_err(|e| e.to_string())?;
+        state.playlist.take().map_err(|e| e.to_string())?;
+        state.onair_since = Some(Instant::now());
+        state.last_live_item_id = Some(item_id.to_string());
         Ok(())
     }
 
@@ -721,6 +877,8 @@ impl AutomationStore {
             duration_ms: Option<u64>,
             #[serde(rename = "startType", default)]
             start_type: StartType,
+            #[serde(rename = "fixtimeHms", default)]
+            fixtime_hms: Option<String>,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -758,11 +916,23 @@ impl AutomationStore {
                 .ok_or("Player-Item ohne id")?
                 .to_string();
             let mut meta = item_meta_from_player_json(&it).ok_or("Player-Item unlesbar")?;
-            meta.start_type = load_items.get(i).map(|li| li.start_type).unwrap_or_default();
+            let load_item = load_items.get(i);
+            meta.start_type = load_item.map(|li| li.start_type).unwrap_or_default();
+            meta.fixtime_hms = load_item.and_then(|li| li.fixtime_hms.clone());
             metadata.insert(id.clone(), meta);
             ids.push(id);
         }
 
+        // Kapitel 6 Teil 3: `fixtime_resolved` ist an die (bei jedem
+        // `load()` frisch vergebenen) Item-IDs gebunden — ein Reorder
+        // erzeugt zwangsläufig neue IDs (Doku bei `load_items` oben),
+        // der alte Resolved-Zustand wäre ohnehin nicht mehr sinnvoll
+        // zuordenbar. Bewusst NICHT versucht, ihn wie `startType`
+        // positionell zu retten — ein Fixtime-Event, das VOR einem
+        // Reorder bereits gefeuert hat, feuert danach höchstens ein
+        // zweites Mal fälschlich (harmlos: derselbe Take wie eh schon
+        // aktiv), verpasst aber nie eins.
+        state.fixtime_resolved.clear();
         state.playlist.replace_all(ids);
         state.metadata = metadata;
         state.onair_since = None;
@@ -828,11 +998,39 @@ impl AutomationStore {
     /// `ui/bundle.js::reorderItems`-Doku) wäre hier unnötig teuer: `load()`
     /// setzt den Player unbedingt auf Schwarzbild zurück, nur um ein
     /// einzelnes Flag umzuschalten.
-    fn do_set_start_type(&self, item_id: &str, start_type: StartType) -> Result<(), String> {
+    /// `fixtime_hms` (Kapitel 6 Teil 3): nur bei `start_type ==
+    /// StartType::Fixtime` ausgewertet und validiert (`parse_hms_to_secs`)
+    /// — bei jedem anderen `start_type` wird das Feld auf `None`
+    /// zurückgesetzt, ein Item kann also nicht "heimlich" seine alte
+    /// Fixzeit behalten, nachdem es auf `sequence`/`manual`
+    /// zurückgeschaltet wurde. Ein Wechsel AUF `fixtime` OHNE gültige
+    /// Zeit wird abgelehnt (kein sinnvoller "Fixtime ohne Zeit"-Zustand,
+    /// `fixtime_loop` würde ihn ohnehin ignorieren, hier aber lieber ein
+    /// klarer Fehler als ein still wirkungsloses Item).
+    fn do_set_start_type(
+        &self,
+        item_id: &str,
+        start_type: StartType,
+        fixtime_hms: Option<String>,
+    ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
+        let resolved_fixtime = if start_type == StartType::Fixtime {
+            let hms = fixtime_hms.ok_or("fixtimeHms fehlt (Format HH:MM:SS)".to_string())?;
+            if parse_hms_to_secs(&hms).is_none() {
+                return Err(format!("fixtimeHms „{hms}\u{201c} ungültig (Format HH:MM:SS)"));
+            }
+            Some(hms)
+        } else {
+            None
+        };
         match state.metadata.get_mut(item_id) {
             Some(meta) => {
                 meta.start_type = start_type;
+                meta.fixtime_hms = resolved_fixtime;
+                // Ein manueller Rückstufungs-/Neuansetzungs-Wunsch des
+                // Operators soll sofort wieder feuern dürfen, nicht an
+                // einem alten Resolved-Zustand von vorher hängen bleiben.
+                state.fixtime_resolved.remove(item_id);
                 Ok(())
             }
             None => Err("unbekannte itemId".to_string()),
@@ -865,6 +1063,7 @@ impl AutomationStore {
                 // aber gesetzt, weil `ItemMeta` ein geteilter Typ ist
                 // (Doku oben).
                 start_type: StartType::default(),
+                fixtime_hms: None,
             },
         ));
         Ok(())
@@ -1302,6 +1501,13 @@ impl ParamStore for AutomationStore {
                         name: "startType".to_string(),
                         kind: ParamType::String,
                     },
+                    // Kapitel 6 Teil 3 — nur bei startType=="fixtime"
+                    // ausgewertet (do_set_start_type-Doku), Format
+                    // "HH:MM:SS".
+                    MethodArg {
+                        name: "fixtimeHms".to_string(),
+                        kind: ParamType::String,
+                    },
                 ],
             },
             MethodSpec {
@@ -1500,10 +1706,11 @@ impl ParamStore for AutomationStore {
             "setStartType" => {
                 let item_id = args.get("itemId").and_then(Value::as_str);
                 let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
+                let fixtime_hms = args.get("fixtimeHms").and_then(Value::as_str).map(str::to_string);
                 match (item_id, start_type) {
-                    (Some(id), Some(st)) => self.do_set_start_type(id, st),
+                    (Some(id), Some(st)) => self.do_set_start_type(id, st, fixtime_hms),
                     (None, _) => Err("itemId fehlt".to_string()),
-                    (_, None) => Err("startType fehlt oder ungültig (sequence|manual)".to_string()),
+                    (_, None) => Err("startType fehlt oder ungültig (sequence|manual|fixtime)".to_string()),
                 }
             }
             "cue" => match args.get("itemId").and_then(Value::as_str) {
@@ -1817,6 +2024,104 @@ async fn auto_advance_loop(
     }
 }
 
+/// Kapitel 6 Teil 3 (`docs/END-GOAL-FEATURES.md` §6.4/§6.5): eigener
+/// 1-Sekunden-Takt statt Wiederverwendung von `ADVANCE_TICK` (200ms,
+/// `auto_advance_loop`) — Wanduhr-Vergleiche brauchen keine
+/// Zehntelsekunden-Auflösung, ein eigener, gröberer Takt hält diese
+/// neue Logik außerdem vollständig getrennt vom bereits bewährten
+/// Advance-Pfad (kein Risiko, dort etwas zu verändern).
+async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<Event>) {
+    let mut interval = tokio::time::interval(FIXTIME_TICK);
+    loop {
+        interval.tick().await;
+        let now_secs = seconds_since_midnight_local();
+
+        // Entscheidungs-Schnappschuss bei kurz gehaltenem Lock — keine
+        // Fernaufrufe/`spawn_blocking`s, während die Sperre hält (gleiches
+        // Prinzip wie `auto_advance_loop` oben).
+        let (precue_ids, fire_ids, skip_infos): (Vec<String>, Vec<String>, Vec<(String, String)>) = {
+            let state = store.state.lock().expect("lock poisoned");
+            let live_ids: std::collections::HashSet<&String> = state.playlist.items().iter().collect();
+            let mut precue = Vec::new();
+            let mut fire = Vec::new();
+            let mut skip = Vec::new();
+            for (id, meta) in state.metadata.iter() {
+                if meta.start_type != StartType::Fixtime || !live_ids.contains(id) {
+                    continue;
+                }
+                let Some(target_secs) = meta.fixtime_hms.as_deref().and_then(parse_hms_to_secs) else {
+                    continue;
+                };
+                let already = state.fixtime_resolved.get(id).copied();
+                match fixtime_action(now_secs, target_secs, already) {
+                    FixtimeAction::None => {}
+                    FixtimeAction::PreCue => precue.push(id.clone()),
+                    FixtimeAction::Fire => fire.push(id.clone()),
+                    FixtimeAction::Skip => skip.push((id.clone(), meta.label.clone())),
+                }
+            }
+            (precue, fire, skip)
+        };
+
+        for id in precue_ids {
+            let store2 = store.clone();
+            let id2 = id.clone();
+            let result = tokio::task::spawn_blocking(move || store2.do_cue(&id2)).await;
+            match result {
+                Ok(Ok(())) => {
+                    store.state.lock().expect("lock poisoned").fixtime_resolved.insert(id, FixtimeResolution::PreCued);
+                }
+                Ok(Err(e)) => {
+                    let _ = events.send(Event::Error(format!("Fixtime-Vor-Cue fehlgeschlagen: {e}")));
+                }
+                Err(e) => {
+                    let _ = events.send(Event::Error(format!("Fixtime-Vor-Cue-Task abgestürzt: {e}")));
+                }
+            }
+        }
+
+        for id in fire_ids {
+            // Kein Feuern, solange ein Cart aktiv ist — innerhalb des
+            // Gnadenfensters beim nächsten Tick einfach erneut versuchen,
+            // statt den Interrupt-Kanal zu erzwingen (§6.4: Fixtime ist
+            // ein harter Unterbrecher der SEQUENZ, nicht des Cart-Kanals).
+            let cart_active = store.state.lock().expect("lock poisoned").active_cart.is_some();
+            if cart_active {
+                continue;
+            }
+            let store2 = store.clone();
+            let id2 = id.clone();
+            let result = tokio::task::spawn_blocking(move || store2.do_fire_fixtime(&id2)).await;
+            match result {
+                Ok(Ok(())) => {
+                    store.state.lock().expect("lock poisoned").fixtime_resolved.insert(id, FixtimeResolution::Fired);
+                }
+                Ok(Err(e)) => {
+                    // Kein sinnvoller Retry binnen der nächsten Sekunde
+                    // (z. B. fehlende Verfügbarkeit) — sofort als
+                    // übersprungen werten statt bis zum Ablauf des
+                    // Gnadenfensters stumm zu bleiben.
+                    store.state.lock().expect("lock poisoned").fixtime_resolved.insert(id.clone(), FixtimeResolution::Skipped);
+                    let _ = events.send(Event::Error(format!("Fixtime-Event „{id}\u{201c} übersprungen: {e}")));
+                }
+                Err(e) => {
+                    let _ = events.send(Event::Error(format!("Fixtime-Feuer-Task abgestürzt: {e}")));
+                }
+            }
+        }
+
+        if !skip_infos.is_empty() {
+            let mut state = store.state.lock().expect("lock poisoned");
+            for (id, label) in skip_infos {
+                state.fixtime_resolved.insert(id, FixtimeResolution::Skipped);
+                let _ = events.send(Event::Error(format!(
+                    "Fixtime-Event „{label}\u{201c} verpasst (Gnadenfenster {FIXTIME_GRACE_SECS}s überschritten) — übersprungen"
+                )));
+            }
+        }
+    }
+}
+
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
@@ -1884,6 +2189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         active_cart: None,
         stop_item_id: None,
         timeline: TimelineCache::new(),
+        fixtime_resolved: HashMap::new(),
     });
     let store = Arc::new(AutomationStore {
         state,
@@ -1921,6 +2227,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let advance_events = events_tx.clone();
     tokio::spawn(auto_advance_loop(store.clone(), advance_events));
+
+    let fixtime_events = events_tx.clone();
+    tokio::spawn(fixtime_loop(store.clone(), fixtime_events));
 
     // ARCHITECTURE.md §24.1: nur spawnen, wenn überhaupt ein Refresh
     // Sinn ergibt (Instanz-ID + Launch-Secret vorhanden) — ohne die
@@ -1966,6 +2275,7 @@ mod availability_tests {
             media: ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 440.0 },
             duration_ms: 1000,
             start_type: StartType::Sequence,
+            fixtime_hms: None,
         }
     }
 
@@ -1975,6 +2285,7 @@ mod availability_tests {
             media: ItemMedia::File { path: path.to_string() },
             duration_ms: 1000,
             start_type: StartType::Sequence,
+            fixtime_hms: None,
         }
     }
 
@@ -1984,6 +2295,7 @@ mod availability_tests {
             media: ItemMedia::Live { sender_id: sender_id.to_string() },
             duration_ms: 1000,
             start_type: StartType::Sequence,
+            fixtime_hms: None,
         }
     }
 
@@ -2004,5 +2316,78 @@ mod availability_tests {
         let sources = vec![serde_json::json!({"senderId": "sender-1", "label": "Cam 1"})];
         assert!(item_is_available(&live_item("sender-1"), &[], &sources));
         assert!(!item_is_available(&live_item("sender-2"), &[], &sources));
+    }
+}
+
+// Kapitel 6 Teil 3: `parse_hms_to_secs`/`fixtime_action` sind reine
+// Funktionen (keine Uhr, kein State) — direkt unit-testbar, gleiches
+// Prinzip wie oben.
+#[cfg(test)]
+mod fixtime_tests {
+    use super::*;
+
+    #[test]
+    fn parse_hms_accepts_valid_time() {
+        assert_eq!(parse_hms_to_secs("14:30:00"), Some(14 * 3600 + 30 * 60));
+        assert_eq!(parse_hms_to_secs("00:00:00"), Some(0));
+        assert_eq!(parse_hms_to_secs("23:59:59"), Some(23 * 3600 + 59 * 60 + 59));
+    }
+
+    #[test]
+    fn parse_hms_rejects_out_of_range_or_malformed() {
+        assert_eq!(parse_hms_to_secs("24:00:00"), None);
+        assert_eq!(parse_hms_to_secs("12:60:00"), None);
+        assert_eq!(parse_hms_to_secs("12:00:60"), None);
+        assert_eq!(parse_hms_to_secs("12:00"), None);
+        assert_eq!(parse_hms_to_secs("12:00:00:00"), None);
+        assert_eq!(parse_hms_to_secs("not-a-time"), None);
+        assert_eq!(parse_hms_to_secs(""), None);
+    }
+
+    #[test]
+    fn action_is_none_well_before_precue_window() {
+        // 10:00:00 Ziel, jetzt 09:00:00 — weit vor dem 5s-Vor-Cue-Fenster.
+        assert_eq!(fixtime_action(9 * 3600, 10 * 3600, None), FixtimeAction::None);
+    }
+
+    #[test]
+    fn action_precues_inside_the_precue_window_once() {
+        let target = 10 * 3600;
+        assert_eq!(fixtime_action(target - 3, target, None), FixtimeAction::PreCue);
+        // Schon vor-gecued — kein zweites Mal.
+        assert_eq!(
+            fixtime_action(target - 1, target, Some(FixtimeResolution::PreCued)),
+            FixtimeAction::None
+        );
+    }
+
+    #[test]
+    fn action_fires_exactly_at_target_and_within_grace() {
+        let target = 10 * 3600;
+        assert_eq!(fixtime_action(target, target, None), FixtimeAction::Fire);
+        assert_eq!(fixtime_action(target + FIXTIME_GRACE_SECS, target, None), FixtimeAction::Fire);
+        assert_eq!(
+            fixtime_action(target + 10, target, Some(FixtimeResolution::PreCued)),
+            FixtimeAction::Fire
+        );
+    }
+
+    #[test]
+    fn action_skips_once_grace_window_is_exceeded() {
+        let target = 10 * 3600;
+        assert_eq!(fixtime_action(target + FIXTIME_GRACE_SECS + 1, target, None), FixtimeAction::Skip);
+    }
+
+    #[test]
+    fn action_is_none_once_fired_or_skipped_regardless_of_time() {
+        let target = 10 * 3600;
+        assert_eq!(
+            fixtime_action(target + 1, target, Some(FixtimeResolution::Fired)),
+            FixtimeAction::None
+        );
+        assert_eq!(
+            fixtime_action(target + 1000, target, Some(FixtimeResolution::Skipped)),
+            FixtimeAction::None
+        );
     }
 }

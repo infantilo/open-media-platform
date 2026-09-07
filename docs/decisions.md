@@ -21229,3 +21229,85 @@ deckungsgleich mit dem API-Stand. Test-Instanzen über
 Waisenprozesse.
 
 **Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.
+
+## 2026-09-07 (Nachtrag 183) — Umsetzung Kapitel 6 Teil 3: Fixtime-Scheduler + Countdown (Nutzerauftrag "fahre fort")
+
+**Neuer dritter `StartType::Fixtime`** neben `Sequence`/`Manual`
+(Kapitel 1) — Item bekommt ein `fixtime_hms: Option<String>`
+("HH:MM:SS", lokale Wanduhr) und feuert eigenständig zur hinterlegten
+Zeit, unabhängig vom Sequenz-Fortschritt ("harter Unterbrecher", PC-
+Vorbild `PRE_CUE_MS`/Gnadenfenster s. §6.2/Nachtrag 180).
+
+**Neue Abhängigkeit `chrono`** (`default-features=false`, nur
+`clock`+`std`) — erste Ausnahme von "keine neuen Crates ohne Not" in
+diesem Node: std kann keine zeitzonen-/DST-bewusste lokale
+Wanduhr-Zerlegung (Stunde/Minute/Sekunde), nur über echte
+Kalenderlogik. Bewusst KEIN eigener `libc`-FFI-Umweg.
+
+**Architektur, reine Funktionen zuerst getestet (wie `peek_next`/
+`item_is_available`):** `parse_hms_to_secs()` + `fixtime_action(now,
+target, already)` (State-Maschine `None → PreCue → Fire`, oder `→
+Skip` bei Gnadenfenster-Überschreitung; `Fired`/`Skipped` sind
+Endzustände) sind reine, uhrzeitfreie Funktionen — 7 neue Unit-Tests.
+Konstanten: `FIXTIME_PRECUE_SECS=5`, `FIXTIME_GRACE_SECS=30` (beide
+PC-Werte übernommen), eigener 1-Sekunden-Takt (`fixtime_loop`,
+komplett getrennt vom bestehenden 200ms-`auto_advance_loop` — kein
+Risiko für den bereits bewährten Advance-Pfad). Pro Tick: Snapshot bei
+kurz gehaltenem Lock (keine Fernaufrufe während der Sperre, gleiches
+Prinzip wie `auto_advance_loop`), dann PreCue (`do_cue`)/Fire
+(`do_fire_fixtime`, neu — wie `do_take`, aber ohne dessen
+"muss bereits gecued sein"-Vorbedingung, springt die Cue-Position
+selbst dorthin)/Skip+Alarm getrennt abgearbeitet. Cart hat Vorrang: ein
+Fire wird bei aktivem Cart übersprungen und beim nächsten Tick
+innerhalb des Gnadenfensters einfach erneut versucht, statt den
+Interrupt-Kanal zu erzwingen. Verfügbarkeitsprüfung (Kapitel 2) auch
+hier: nicht verfügbar → sofort `Skipped`, kein Warten aufs
+Gnadenfenster.
+
+**Reorder-Fallstrick (Nachtrag 181-Lehre) diesmal PROAKTIV vermieden**,
+nicht erst per Klicktest gefunden: `itemToLoadEntry()` bekam
+`fixtimeHms` direkt mit `startType` zusammen ergänzt, bevor überhaupt
+live getestet wurde. `fixtime_resolved` selbst NICHT über einen
+Reorder gerettet (anders als `startType`) — an Item-IDs gebunden, die
+`load()` immer neu vergibt; bewusst hingenommen (schlimmstenfalls ein
+harmloses doppeltes Feuern, nie ein verpasstes Event, s. Code-Kommentar
+in `do_load`).
+
+**UI:** Start-Typ-Umschalter rotiert jetzt sequence→manual→fixtime→…,
+der Wechsel AUF fixtime fragt die Uhrzeit per `prompt()` ab (kein
+eigener Zeit-Editor-Dialog, Abbrechen lässt den Typ unverändert).
+Fixtime-Zeilen bekommen einen blauen Rand + ⏰-Button (Farbe bewusst
+anders als Manual-Starts Amber). Neue Kopfzeile-Zeile: Countdown zum
+chronologisch nächsten Fixtime-Item, rein clientseitig aus den
+gepollten Items berechnet (kennt den serverseitigen
+`fixtime_resolved`-Zustand nicht, zeigt einfach das nächste noch nicht
+erreichte Item — bewusste Vereinfachung, kein neuer Endpunkt).
+
+**Bekannte Grenze, offen dokumentiert statt verschwiegen:** reine
+Sekunden-seit-Mitternacht-Arithmetik kennt kein Datum — ein
+Fixtime-Event kurz vor Mitternacht kann bei einem Neustart/Reorder kurz
+nach Mitternacht falsch eingeordnet werden. Für die Rundown-Länge
+dieser Ausbaustufe (C20s "rundown-lang, nicht tagelang") hingenommen.
+
+**Live-Verifikation gegen den echten Dev-Stack (Player+Mixer+
+Automation, sekundengenau live mitverfolgt):** Fixtime auf 20s in der
+Zukunft gesetzt, während ein anderes Item lief — Vor-Cue exakt bei
+T-5s beobachtet (`cuedItemId` wechselt), harter Take exakt bei T
+(`currentItemId` wechselt, überschreibt das vorher laufende Item ohne
+es je gecued zu haben). Gnadenfenster-Skip getestet: Fixtime 60s/120s
+in der Vergangenheit gesetzt → korrekt NICHT genommen
+(`currentItemId` blieb leer). Alarm-Zustellung per `nats sub
+omp.alert.>` unabhängig verifiziert — echte NATS-Nachricht mit der
+erwarteten Skip-Meldung empfangen (Nebenfund: die Orchestrator-Seite
+abonniert `omp.alert.*` aktuell nirgends selbst — ein vorbestehender,
+nicht in dieser Sitzung verursachter Lücken-Fund, keine REST-„Alarme"-
+Ansicht dafür; nicht behoben, außerhalb des Auftrags). Per Chromium-
+Klicktest (gleicher CDP-Treiber wie Nachtrag 181/182) visuell
+bestätigt: Countdown-Zeile korrekt („⏰ 12:54:00 „Upcoming Show" in
+1:33"), alle Fixtime-Zeilen mit blauem Rand + ⏰-Badge, Sequence-Zeile
+unverändert. `cargo build/test`(38/38)/`clippy` grün, `node --check`
+grün. Test-Instanzen + NATS-Subscriber + Chromium sauber gestoppt,
+`pgrep` bestätigt keine Waisenprozesse.
+
+**Dateien:** `nodes/omp-playout-automation/Cargo.toml`, `src/main.rs`,
+`ui/bundle.js`.

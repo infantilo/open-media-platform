@@ -1267,9 +1267,16 @@ im K1-Look —
   eigener Schritt). Event-Editor-Seitendrawer (§6.4) nicht Teil dieser
   Scheibe — Add-Formular deckt "neue Items mit echter Quelle anlegen"
   bereits ab.
-- **Teil 3 — Fixtime-Scheduler + Counter-Strip:** Wall-Clock-Timer,
-  Grace-Regel, Countdown-UI, Alarm bei verpasster Zeit. Manual-Start-
-  Events (Teil 1) bleiben von diesem Scheduler unberührt.
+- **Teil 3 — Fixtime-Scheduler (erledigt, 2026-09-07, `docs/decisions.md`
+  Nachtrag 183):** Wall-Clock-Timer (eigener 1s-Takt), 5s-Pre-Cue,
+  30s-Gnadenfenster, Skip+NATS-Alarm bei verpasster Zeit, harter
+  Unterbrecher unabhängig vom Sequenz-Fortschritt. Countdown zum
+  nächsten Fixtime-Event in der Kopfzeile (vereinfacht: clientseitig
+  berechnet, kennt den Server-Resolved-Zustand nicht). Manual-Start-
+  Events (Teil 1) bleiben unberührt — bestätigt. **Nicht Teil dieser
+  Scheibe:** der volle "Counter-Strip" (horizontale Leiste ALLER
+  anstehenden Events, §6.4) — nur der EINE nächste Countdown wurde
+  gebaut, kein Mehr-Event-Streifen.
 - **Teil 4 — Transitions + Break/Auto-Return:** Mix-Take über
   K3-Teil-2-Params; Break-Leiste mit Return-Logik (C18-Cart-System
   existiert schon, Restdauer-Auto-Return fehlt noch).

@@ -49,6 +49,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; font-size: 12px; }
       .clock { font-family: "SF Mono", "Roboto Mono", monospace; font-size: 22px; font-weight: bold; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+      .next-fixtime { font-size: 12px; color: #4a90d9; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
       .targets { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
       .targets label { color: #999; display: flex; gap: 4px; align-items: center; }
       .targets select.target-select {
@@ -112,6 +113,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
          gecuetes Manual-Item bleibt so erkennbar amber-hinterlegt UND
          mit Rand markiert. */
       .pl-row.manual-start { border-left: 3px solid #d4a017; }
+      /* Kapitel 6 Teil 3: eigene Farbe (blau) statt Manual-Starts Amber,
+         damit die beiden Start-Typen auch am Zeilenrand unterscheidbar
+         bleiben, nicht nur am Umschalter-Icon. */
+      .pl-row.fixtime-start { border-left: 3px solid #4a90d9; }
+      .pl-row button.start-type-fixtime { background: #2a5a8f; border-color: #4a90d9; }
       .pl-row .pl-avail { text-align: center; color: #4caf50; }
       .pl-row .pl-avail.unavailable { color: #e05050; font-weight: bold; }
       .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
@@ -166,12 +172,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
 
     // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4 "Kopfzeile"):
-    // reine Wanduhr — kein Countdown zum nächsten Fixzeit-Event hier, das
-    // braucht erst den Fixzeit-Scheduler (Kapitel 6 Teil 3, noch nicht
-    // gebaut, s. `docs/decisions.md` Nachtrag 180). Aktualisiert sich im
-    // bestehenden 1-Sekunden-`poll()`-Takt statt eines eigenen Timers.
+    // reine Wanduhr, aktualisiert sich im bestehenden 1-Sekunden-
+    // `poll()`-Takt statt eines eigenen Timers.
     const clockEl = document.createElement("div");
     clockEl.className = "clock";
+
+    // Kapitel 6 Teil 3: Countdown zum chronologisch nächsten
+    // Fixtime-Event (Berechnung s. `poll()`) — der Fixzeit-Scheduler
+    // selbst existiert jetzt, s. `docs/decisions.md` Nachtrag 183.
+    const nextFixtimeEl = document.createElement("div");
+    nextFixtimeEl.className = "next-fixtime";
+    nextFixtimeEl.style.display = "none";
 
     const targetsRow = document.createElement("div");
     targetsRow.className = "targets";
@@ -370,7 +381,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
     cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
 
-    shadow.append(style, clockEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
+    shadow.append(style, clockEl, nextFixtimeEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
 
     // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
     // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
@@ -511,6 +522,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // trotz korrekter Backend-Logik — nur per Klicktest gefunden, nicht
       // durch API-Tests allein).
       const entry = { label: item.label, durationMs: item.durationMs, startType: item.startType || "sequence" };
+      // Kapitel 6 Teil 3: dieselbe Lücke wie oben bei `startType` (Nachtrag
+      // 181-Lehre angewendet, statt sie erneut per Klicktest zu finden) —
+      // ohne `fixtimeHms` hier würde jeder Reorder eine Fixzeit
+      // verlieren, obwohl `do_load()` sie längst positionell zurückzippt.
+      if (item.fixtimeHms) entry.fixtimeHms = item.fixtimeHms;
       if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
@@ -578,16 +594,32 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       const actionsEl = document.createElement("span");
       actionsEl.className = "pl-actions";
-      // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4, `startType`):
-      // Umschalter statt Dropdown — nur zwei Werte, ein Klick reicht.
-      // "sequence" (Standard) rückt beim Auto-Advance normal vor,
-      // "manual" bleibt bis zum expliziten Cue+Take stehen (main.rs::
-      // do_advance). Bewusst KEIN `load()`-Umweg (do_set_start_type-Doku:
-      // reiner lokaler Metadaten-Roundtrip, kein Schwarzbild-Nebeneffekt).
+      // Kapitel 6 Teil 1/3 (`docs/END-GOAL-FEATURES.md` §6.4, `startType`):
+      // Umschalter statt Dropdown/Radio-Gruppe — ein Klick rotiert
+      // sequence -> manual -> fixtime -> sequence. "sequence" (Standard)
+      // rückt beim Auto-Advance normal vor, "manual" bleibt bis zum
+      // expliziten Cue+Take stehen, "fixtime" feuert selbst zur
+      // hinterlegten Uhrzeit (main.rs::fixtime_loop) — unabhängig vom
+      // Sequenz-Fortschritt. Bewusst KEIN `load()`-Umweg
+      // (do_set_start_type-Doku: reiner lokaler Metadaten-Roundtrip,
+      // kein Schwarzbild-Nebeneffekt). Der Wechsel AUF "fixtime" braucht
+      // eine Uhrzeit — dafür reicht hier ein einfacher `prompt()` (kein
+      // eigener Zeit-Editor-Dialog, gleiches Minimal-Muster wie
+      // `#groupSelection` im Flow-Editor für Gruppennamen); Abbrechen
+      // lässt den `startType` unverändert.
       const startTypeBtn = document.createElement("button");
       startTypeBtn.addEventListener("click", () => {
-        const next = item.startType === "manual" ? "sequence" : "manual";
-        call("setStartType", { itemId: item.id, startType: next }).then(poll);
+        const order = ["sequence", "manual", "fixtime"];
+        const next = order[(order.indexOf(item.startType || "sequence") + 1) % order.length];
+        const body = { itemId: item.id, startType: next };
+        if (next === "fixtime") {
+          const input = prompt("Fixzeit (HH:MM:SS, lokale Uhrzeit):", item.fixtimeHms || "");
+          if (input === null) return;
+          const trimmed = input.trim();
+          if (!trimmed) return;
+          body.fixtimeHms = trimmed;
+        }
+        call("setStartType", body).then(poll);
       });
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
@@ -750,6 +782,37 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const currentIds = new Set(items.map((it) => it.id));
       lastItems = items;
 
+      // Kapitel 6 Teil 3 (§6.4 "Countdown zum nächsten Fixtime-Event"):
+      // rein clientseitig aus den ohnehin gepollten Items berechnet, kein
+      // eigener Endpunkt. Vereinfachung gegenüber dem Server: kennt
+      // NICHT, ob ein Item serverseitig schon `fixtime_resolved` ist
+      // (Vor-Cue/gefeuert/übersprungen) — zeigt einfach das
+      // chronologisch nächste `fixtime`-Item, dessen Uhrzeit noch nicht
+      // erreicht ist. Sekundengenau, aktualisiert sich im bestehenden
+      // 1-Sekunden-`poll()`-Takt wie die Uhr selbst.
+      const nowSecs = (() => {
+        const d = new Date();
+        return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+      })();
+      const upcoming = items
+        .filter((it) => it.startType === "fixtime" && it.fixtimeHms)
+        .map((it) => {
+          const [h, m, s] = it.fixtimeHms.split(":").map(Number);
+          return { label: it.label, hms: it.fixtimeHms, targetSecs: h * 3600 + m * 60 + s };
+        })
+        .filter((f) => Number.isFinite(f.targetSecs) && f.targetSecs >= nowSecs)
+        .sort((a, b) => a.targetSecs - b.targetSecs);
+      if (upcoming.length > 0) {
+        const next = upcoming[0];
+        const remain = next.targetSecs - nowSecs;
+        const mm = Math.floor(remain / 60);
+        const ss = remain % 60;
+        nextFixtimeEl.textContent = `⏰ ${next.hms} „${next.label}“ in ${mm}:${String(ss).padStart(2, "0")}`;
+        nextFixtimeEl.style.display = "";
+      } else {
+        nextFixtimeEl.style.display = "none";
+      }
+
       // Rundown-Echtmedien-Folgeschritt: Add-Formular-Selects aus dem
       // Ziel-Player-Spiegel befüllen.
       const availableSources = availableSourcesValue || [];
@@ -842,19 +905,31 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.dragEl.title = onAir ? "Reorder während laufender Sendung nicht möglich" : "Ziehen zum Umsortieren";
 
         const isManualStart = item.startType === "manual";
+        const isFixtimeStart = item.startType === "fixtime";
         refs.el.className =
-          `pl-row pl-grid-cols${isOnair ? " onair" : isCued ? " cued" : ""}${isManualStart ? " manual-start" : ""}`;
+          `pl-row pl-grid-cols${isOnair ? " onair" : isCued ? " cued" : ""}` +
+          `${isManualStart ? " manual-start" : ""}${isFixtimeStart ? " fixtime-start" : ""}`;
         refs.cueBtn.textContent = isCued ? "Gecued" : "Cue";
         refs.cueBtn.className = isCued ? "cue-active" : "";
         refs.cueBtn.disabled = isOnair;
         refs.removeBtn.disabled = isOnair || isCued;
-        // Kapitel 6 Teil 1: ✋ = wartet auf explizites Cue+Take (nimmt am
-        // Auto-Advance nicht teil), ⏭ = normale Sequenz-Position.
-        refs.startTypeBtn.textContent = isManualStart ? "✋" : "⏭";
-        refs.startTypeBtn.title = isManualStart
-          ? "Manueller Start — rückt beim Auto-Advance NICHT von selbst vor, klicken für Sequenz-Start"
-          : "Sequenz-Start — rückt beim Auto-Advance normal vor, klicken für manuellen Start";
-        refs.startTypeBtn.className = isManualStart ? "start-type-manual" : "";
+        // Kapitel 6 Teil 1/3: ✋ = wartet auf explizites Cue+Take (nimmt am
+        // Auto-Advance nicht teil), ⏰ = feuert selbst zur hinterlegten
+        // Uhrzeit (unabhängig von der Sequenz), ⏭ = normale
+        // Sequenz-Position.
+        if (isFixtimeStart) {
+          refs.startTypeBtn.textContent = "⏰";
+          refs.startTypeBtn.title = item.fixtimeHms
+            ? `Fixtime ${item.fixtimeHms} — feuert selbst zu dieser Uhrzeit, unabhängig von der Sequenz. Klicken für Sequenz-Start.`
+            : "Fixtime ohne gültige Uhrzeit — feuert nicht. Klicken für Sequenz-Start.";
+          refs.startTypeBtn.className = "start-type-fixtime";
+        } else {
+          refs.startTypeBtn.textContent = isManualStart ? "✋" : "⏭";
+          refs.startTypeBtn.title = isManualStart
+            ? "Manueller Start — rückt beim Auto-Advance NICHT von selbst vor, klicken für Fixtime-Start"
+            : "Sequenz-Start — rückt beim Auto-Advance normal vor, klicken für manuellen Start";
+          refs.startTypeBtn.className = isManualStart ? "start-type-manual" : "";
+        }
 
         // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeit (✓/✗)"): `available` fehlt
         // nur bei einem sehr alten, noch nicht neu gepollten Client-Stand
