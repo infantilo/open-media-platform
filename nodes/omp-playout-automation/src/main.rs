@@ -170,6 +170,25 @@ fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
     Some(ItemMeta { label, media, duration_ms, start_type: StartType::default() })
 }
 
+/// Kapitel 6 Teil 2 (`docs/END-GOAL-FEATURES.md` §6.4, "Verfügbarkeits-
+/// Absatz" — PC-Vorbild s. `docs/decisions.md` Nachtrag 180): Test-
+/// Muster sind synthetisch, immer verfügbar. Datei-/Live-Items
+/// spiegeln den zuletzt bekannten `media_library`/`available_sources`-
+/// Stand des Ziel-Players (`discovery_loop`-Doku, best effort, kein
+/// Extra-Poll nur für diese Prüfung) — bewusst KEIN eigener
+/// Backup-Verzeichnis-Mechanismus wie bei PC (`omp-media-library` ist
+/// ein zentraler, gepflegter Katalog, kein Dateisystem mit
+/// Ausweich-Ordnern, s. §6.4-Doku).
+fn item_is_available(m: &ItemMeta, media_library: &[String], available_sources: &[Value]) -> bool {
+    match &m.media {
+        ItemMedia::TestPattern { .. } => true,
+        ItemMedia::File { path } => media_library.iter().any(|f| f == path),
+        ItemMedia::Live { sender_id } => available_sources
+            .iter()
+            .any(|s| s.get("senderId").and_then(Value::as_str) == Some(sender_id.as_str())),
+    }
+}
+
 /// Gegenstück zu `item_meta_from_player_json` für `get("items")`/
 /// `get("assets")` — dieselbe Feld-Shape wie `omp-player`s `items`
 /// (jeweils genau eines von `pattern`+`toneFrequency` / `file` / `senderId`).
@@ -333,6 +352,25 @@ impl AutomationStore {
             .current_index()
             .ok_or("nichts gecued".to_string())?;
         let item_id = state.playlist.items()[index].clone();
+
+        // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeits-Absatz"): NUR bei Take
+        // blockierend geprüft, nicht bei Cue — Cuen bleibt harmlose
+        // Vorschau/Vorbereitung, auch für ein Item, dessen Quelle gerade
+        // fehlt (Operator soll das sehen können, ohne blockiert zu
+        // werden; dieselbe "Cue bleibt möglich"-Linie wie beim
+        // Manual-Start-Feld, Kapitel 6 Teil 1). `missingBehavior` bleibt
+        // v1 bewusst nur "block" — kein Auto-Skip/Idle-Fallback (PC-
+        // Vorbild s. Nachtrag 180): welches Item ein Auto-Advance
+        // stattdessen automatisch nehmen sollte, ist eine eigene, noch
+        // nicht getroffene Design-Entscheidung.
+        if let Some(m) = state.metadata.get(&item_id)
+            && !item_is_available(m, &state.media_library, &state.available_sources)
+        {
+            return Err(format!(
+                "„{}\u{201c} nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take verweigert",
+                m.label
+            ));
+        }
 
         let player_node_id = state
             .player_node_id
@@ -1337,7 +1375,12 @@ impl ParamStore for AutomationStore {
                     .playlist
                     .items()
                     .iter()
-                    .filter_map(|id| state.metadata.get(id).map(|m| item_meta_to_json(id, m)))
+                    .filter_map(|id| state.metadata.get(id).map(|m| {
+                        let mut v = item_meta_to_json(id, m);
+                        v["available"] =
+                            serde_json::json!(item_is_available(m, &state.media_library, &state.available_sources));
+                        v
+                    }))
                     .collect::<Vec<_>>()
             )),
             "currentItemId" => Some(serde_json::json!(current_or_cued_id(&state, true))),
@@ -1905,4 +1948,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+// Kapitel 6 Teil 2: erster Unit-Test-Block in `main.rs` überhaupt — der
+// Rest der Datei ist HTTP-/State-Orchestrierungs-Logik, nur live gegen
+// den echten Dev-Stack sinnvoll geprüft (s. docs/decisions.md Nachtrag
+// 181). `item_is_available` ist dagegen reine, seiteneffektfreie Logik
+// wie `Playlist::peek_next()` — dieselbe Isolations-Überlegung, hier
+// eben ohne ein eigenes Modul dafür anzulegen.
+#[cfg(test)]
+mod availability_tests {
+    use super::*;
+
+    fn pattern_item() -> ItemMeta {
+        ItemMeta {
+            label: "Pattern".to_string(),
+            media: ItemMedia::TestPattern { pattern: "smpte".to_string(), tone_frequency: 440.0 },
+            duration_ms: 1000,
+            start_type: StartType::Sequence,
+        }
+    }
+
+    fn file_item(path: &str) -> ItemMeta {
+        ItemMeta {
+            label: "File".to_string(),
+            media: ItemMedia::File { path: path.to_string() },
+            duration_ms: 1000,
+            start_type: StartType::Sequence,
+        }
+    }
+
+    fn live_item(sender_id: &str) -> ItemMeta {
+        ItemMeta {
+            label: "Live".to_string(),
+            media: ItemMedia::Live { sender_id: sender_id.to_string() },
+            duration_ms: 1000,
+            start_type: StartType::Sequence,
+        }
+    }
+
+    #[test]
+    fn test_pattern_is_always_available() {
+        assert!(item_is_available(&pattern_item(), &[], &[]));
+    }
+
+    #[test]
+    fn file_is_available_iff_listed_in_media_library() {
+        let media_library = vec!["clip.mp4".to_string()];
+        assert!(item_is_available(&file_item("clip.mp4"), &media_library, &[]));
+        assert!(!item_is_available(&file_item("missing.mp4"), &media_library, &[]));
+    }
+
+    #[test]
+    fn live_is_available_iff_sender_id_in_available_sources() {
+        let sources = vec![serde_json::json!({"senderId": "sender-1", "label": "Cam 1"})];
+        assert!(item_is_available(&live_item("sender-1"), &[], &sources));
+        assert!(!item_is_available(&live_item("sender-2"), &[], &sources));
+    }
 }

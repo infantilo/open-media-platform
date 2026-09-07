@@ -21169,3 +21169,63 @@ Chromium-Testprozess beendet, `pgrep` bestätigt keine Waisenprozesse.
 
 **Dateien:** `nodes/omp-playout-automation/src/main.rs`,
 `src/playlist.rs`, `ui/bundle.js`.
+
+## 2026-09-07 (Nachtrag 182) — Umsetzung Kapitel 6 Teil 2, verkleinert: Verfügbarkeits-Spalte + `missingBehavior` — "echte Clips + EOS" als echten Blocker erkannt und bewusst zurückgestellt
+
+**Scope-Korrektur VOR jedem Code:** `docs/END-GOAL-FEATURES.md` §6.5
+Teil 2 bündelte ursprünglich "echte Clips + EOS" + Verfügbarkeits-Spalte
++ As-Run-Log. Beim Nachlesen von `nodes/omp-player/src/pipeline.rs`
+(§0 Punkt 9, nicht raten) zeigte sich: `Event::ItemEnded`/`omp.player.
+<id>.itemEnded` existieren zwar, der zugehörige EOS-Probe ist aber
+bewusst DEAKTIVIERT — ein bereits früher per `gdb -batch -x "run\nbt
+full"` isolierter, reproduzierbarer GStreamer-Bug (Pad-Probe auf dem
+Queue-Src-Pad führt zu `gst_mini_object_unref`-Assertion, danach
+dauerhaft eingefrorener MXL-Sender). Mehrere Hypothesen bereits geprüft
+und verworfen (Pad-Unlink-Reihenfolge, Sync-Reihenfolge, `sync-streams`,
+Format-Mismatch, `decodebin3` vs. `decodebin2`) — kein neuer Ansatz in
+dieser Sitzung ersichtlich, der das ohne eigene Tiefenrecherche lösen
+würde. Diesen Bug "nebenbei" im Rahmen von Kapitel 6 Teil 2 fixen zu
+wollen wäre unverhältnismäßig (§0 Punkt 2) und ein Rückfall in
+Trial-and-Error genau dort, wo das Projekt es explizit vermeiden will.
+**Entscheidung: "echte Clips + EOS" bleibt zurückgestellt**, echte
+Datei-Wiedergabe funktioniert bereits heute korrekt über den
+bestehenden Timer-Pfad (Datei spielt nachweislich über die volle
+`duration_ms` bis zum MXL-Ausgang durch, laut `pipeline.rs`-Doku
+per `mxl-info` verifiziert) — nur die EOS-Präzision fehlt, kein
+Blackout/Funktionsausfall. As-Run-Log ebenfalls zurückgestellt: braucht
+einen neuen Orchestrator-Endpunkt (Postgres-Persistenz), ein größerer
+Sprung als die übrige Rust+JS-Arbeit dieser Sitzung, eigener Schritt.
+
+**Umgesetzt:** Verfügbarkeitsprüfung — `item_is_available()` (neu,
+`main.rs`, 3 neue Unit-Tests, erster Test-Block in `main.rs` überhaupt,
+da der Rest dort reine HTTP-/State-Orchestrierung ist) vergleicht
+Datei-/Live-Items gegen den ohnehin gespiegelten `media_library`/
+`available_sources`-Stand (`discovery_loop`, kein neuer Poll). Test-
+Muster sind immer verfügbar. `GET items` liefert jetzt ein `available`-
+Feld pro Zeile. **Bewusst NUR `do_take` blockiert** (nicht `do_cue`,
+gleiche "Cue bleibt harmlose Vorschau"-Linie wie bei Manual-Start in
+Teil 1) — `missingBehavior` bleibt v1 bewusst nur "block" statt PCs
+Skip-/Idle-Fallback-Kette (welches Item ein Auto-Advance stattdessen
+nehmen sollte, ist eine eigene, noch nicht getroffene Design-
+Entscheidung). UI: neue schmale Verfügbarkeits-Spalte (✓/✗) im Rundown,
+eigenes Grid-Template-Spalten-Update. **Backtick-Falle wieder vermieden**
+(s. `feedback_backtick_in_css_comment_breaks_template_literal`-
+Gedächtniseintrag): ein CSS-Kommentar mit Backtick-Markdown brach
+`node --check` sofort, direkt korrigiert (Backticks aus dem Kommentar
+entfernt), bevor weitergebaut wurde.
+
+**Live-Verifikation:** `cargo build/test`(31/31)/`clippy` grün. Live
+gegen den echten Dev-Stack: Item mit echter Datei → `available:true`;
+Live-Item mit erfundener `senderId` → `available:false`; echte Datei
+kopiert+angehängt (`available:true`), dann vom Datenträger gelöscht →
+nach einem Poll-Zyklus korrekt auf `available:false` gekippt. `cue`
+auf das jetzt fehlende Item erfolgreich (nicht blockiert), `take`
+darauf mit klarer deutscher Fehlermeldung abgelehnt (400,
+`currentItemId` blieb leer). Per Chromium-Klicktest (gleicher
+CDP-Treiber wie Nachtrag 181) visuell bestätigt: grünes ✓ für die
+verfügbare Datei, rotes ✗ für Dead-Live und die gelöschte Datei, exakt
+deckungsgleich mit dem API-Stand. Test-Instanzen über
+`DELETE /api/v1/instances/<id>` gestoppt, `pgrep` bestätigt keine
+Waisenprozesse.
+
+**Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.

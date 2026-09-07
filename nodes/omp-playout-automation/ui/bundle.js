@@ -90,7 +90,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       /* Listenansicht (PIPELINE-CONTROLLER-Parität, .pl-item/.pl-cell dort):
          Grid-Zeilen statt Karten — Drag-Handle, Nummer/Status, Quell-Icon,
          Titel, Dauer, Zeitplan, Rest+Fortschritt, Aktionen. */
-      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 96px; }
+      /* Kapitel 6 Teil 2 (docs/END-GOAL-FEATURES.md §6.4 "Verfuegbarkeit
+         (haken/kreuz)"): eine neue schmale Spalte vor den Aktionen statt
+         eines Icon-Overlays — bleibt so unabhaengig von der Quell-Icon-
+         Spalte lesbar/erweiterbar (spaetere Trans-/Children-Badges-
+         Spalten aus demselben §6.4-Absatz reihen sich hier gleich an). */
+      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 96px; }
       .pl-hdr-row {
         display: grid; align-items: center; gap: 4px; padding: 2px 6px;
         font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: .04em;
@@ -107,6 +112,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
          gecuetes Manual-Item bleibt so erkennbar amber-hinterlegt UND
          mit Rand markiert. */
       .pl-row.manual-start { border-left: 3px solid #d4a017; }
+      .pl-row .pl-avail { text-align: center; color: #4caf50; }
+      .pl-row .pl-avail.unavailable { color: #e05050; font-weight: bold; }
       .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
       .pl-row.drag-over { outline: 1px dashed #888; outline-offset: -1px; }
       .pl-row.dragging { opacity: 0.5; }
@@ -300,7 +307,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Spaltentitel über den Zeilen, gleiches Grid-Template wie .pl-row.
     const listHdr = document.createElement("div");
     listHdr.className = "pl-hdr-row pl-grid-cols";
-    for (const t of ["", "#", "", "Titel", "Dauer", "Zeit", "Rest", ""]) {
+    for (const t of ["", "#", "", "Titel", "Dauer", "Zeit", "Rest", "", ""]) {
       const cell = document.createElement("span");
       cell.textContent = t;
       listHdr.append(cell);
@@ -561,6 +568,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       remBar.append(remBarInner);
       remWrap.append(remTxt, remBar);
 
+      // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeit (✓/✗)"): spiegelt
+      // `item.available` (main.rs::item_is_available, gegen den
+      // zuletzt bekannten Media-Library-/Live-Quellen-Stand des
+      // Ziel-Players) — reine Anzeige hier, die eigentliche
+      // Durchsetzung (Take verweigern) sitzt serverseitig in `do_take`.
+      const availEl = document.createElement("span");
+      availEl.className = "pl-avail";
+
       const actionsEl = document.createElement("span");
       actionsEl.className = "pl-actions";
       // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4, `startType`):
@@ -630,8 +645,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       dragEl.addEventListener("pointerup", endDrag);
       dragEl.addEventListener("pointercancel", endDrag);
 
-      el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, actionsEl);
-      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, startTypeBtn, cueBtn, removeBtn };
+      el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, availEl, actionsEl);
+      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -840,6 +855,16 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           ? "Manueller Start — rückt beim Auto-Advance NICHT von selbst vor, klicken für Sequenz-Start"
           : "Sequenz-Start — rückt beim Auto-Advance normal vor, klicken für manuellen Start";
         refs.startTypeBtn.className = isManualStart ? "start-type-manual" : "";
+
+        // Kapitel 6 Teil 2 (§6.4 "Verfügbarkeit (✓/✗)"): `available` fehlt
+        // nur bei einem sehr alten, noch nicht neu gepollten Client-Stand
+        // (`??`-Fallback statt fälschlich "fehlt" zu zeigen).
+        const isAvailable = item.available ?? true;
+        refs.availEl.textContent = isAvailable ? "✓" : "✗";
+        refs.availEl.className = isAvailable ? "pl-avail" : "pl-avail unavailable";
+        refs.availEl.title = isAvailable
+          ? "Quelle verfügbar"
+          : "Quelle nicht verfügbar (Datei fehlt oder Live-Quelle offline) — Take wird verweigert";
       }
 
       // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.

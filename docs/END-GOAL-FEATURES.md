@@ -1247,11 +1247,26 @@ im K1-Look —
   Kopfzeile im K1-Look (Uhr, Countdown, großer NEXT/TAKE-Button —
   Mode-Badge/ON-AIR gibt es schon). Kein neuer Scheduler. (Unabhängig
   von K2 machbar — Testmuster-Items behalten `durationMs`.)
-- **Teil 2 — echte Clips + EOS + Verfügbarkeit:** Umstellung auf
-  K2-Player-Events (`itemEnded` statt reinem Timer; Timer bleibt
-  Fallback für Pattern-Items), Clip-Browser im Event-Editor (liest
-  `omp-media-library`), **Verfügbarkeits-Spalte + `missingBehavior`
-  (skip/idle-fallback) bei Cue/Take**, As-Run-Publikation.
+- **Teil 2 — echte Clips + EOS + Verfügbarkeit (teilweise erledigt,
+  2026-09-07, `docs/decisions.md` Nachtrag 182):**
+  **Verfügbarkeits-Spalte + `missingBehavior` erledigt** — `available`
+  pro Item (gegen `media_library`/`available_sources` gespiegelt),
+  Rundown-Spalte (✓/✗), `do_take` blockiert auf fehlender Quelle
+  (`missingBehavior` bewusst nur `block`, kein Skip-/Idle-Fallback wie
+  bei PC — offene Design-Frage, welches Item ein Auto-Advance
+  stattdessen nehmen sollte). **"Echte Clips" bereits vorher da**
+  (Clip-Browser im Add-Formular liest `omp-media-library` schon seit
+  vor dieser Sitzung). **Zurückgestellt:** Umstellung auf
+  K2-Player-Events (`itemEnded` statt reinem Timer) — blockiert auf
+  einem bereits isolierten, unresolved GStreamer-Freeze-Bug in
+  `omp-player`s EOS-Probe (`nodes/omp-player/src/pipeline.rs`s eigene
+  Doku, `gdb`-Backtrace bereits gemacht, mehrere Hypothesen verworfen);
+  echte Dateien spielen bereits heute korrekt über den bestehenden
+  Timer-Pfad, nur ohne EOS-Präzision. **As-Run-Publikation
+  zurückgestellt** (braucht neuen Orchestrator-Endpunkt/Postgres,
+  eigener Schritt). Event-Editor-Seitendrawer (§6.4) nicht Teil dieser
+  Scheibe — Add-Formular deckt "neue Items mit echter Quelle anlegen"
+  bereits ab.
 - **Teil 3 — Fixtime-Scheduler + Counter-Strip:** Wall-Clock-Timer,
   Grace-Regel, Countdown-UI, Alarm bei verpasster Zeit. Manual-Start-
   Events (Teil 1) bleiben von diesem Scheduler unberührt.
