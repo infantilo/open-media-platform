@@ -440,6 +440,12 @@ const GRAPH_REFRESH_EVENT_TYPES = new Set([
   // der Rahmen bis zum nächsten Node-Event (oder nie) veraltet.
   "workflow.updated",
 ]);
+// s. #graphRefreshTimer-Doku: knapp über dem Server-seitigen
+// `registrationPollInterval` (100ms, orchestrator/internal/workflows/
+// service.go), damit ein "node.added" gefolgt von einem
+// "workflow.updated" für dieselbe Instanz verlässlich in einen einzigen
+// Fetch/Render fällt.
+const GRAPH_REFRESH_DEBOUNCE_MS = 150;
 const TALLY_EVENT_PREFIX = "omp.tally.";
 const DRAG_THRESHOLD_PX = 3;
 
@@ -625,6 +631,22 @@ export class FlowCanvas extends HTMLElement {
   // Serialisiert #fetchAndRender()-Aufrufe (siehe #queueFetchAndRender).
   #renderQueue: Promise<void> = Promise.resolve();
   #viewportSaveTimer: ReturnType<typeof setTimeout> | undefined;
+  // Nutzerfund 2026-09-07: Bugfix Nachtrag 992ff (service.go) reduziert das
+  // Fenster, in dem `GET /api/v1/workflows` eine gerade registrierte
+  // Rollen-Node-ID noch nicht kennt, auf max. `registrationPollInterval`
+  // (100ms) — schließt es aber nicht vollständig. Innerhalb dieses
+  // Fensters feuert für dieselbe Instanz typischerweise ERST ein eigenes
+  // "node.added"-SSE-Event (Registry-Poller) und kurz danach ein separates
+  // "workflow.updated"-Event (Rollen-Bindung) — jedes löst bislang sofort
+  // sein eigenes #queueFetchAndRender() aus, wodurch der erste Fetch/Render
+  // den Node noch unfiltert als eigene Root-Kachel zeichnet (inkl.
+  // #arrangeIntoLanes-Reflow aller Host-Canvas-Nachbarn), bevor der zweite
+  // Fetch ihn Sekundenbruchteile später wieder in die kollabierte
+  // Workflow-Kachel einsortiert. #scheduleGraphRefresh() bündelt solche
+  // Event-Bursts stattdessen zu einem einzigen, um `#graphRefreshDebounceMs`
+  // verzögerten Fetch/Render — der Zwischenzustand wird dadurch nie
+  // gezeichnet, statt nur schneller wieder korrigiert.
+  #graphRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   // Bindung an den geteilten ConnectionMonitor (UMSETZUNG.md K1-Teil-1)
   // statt einer eigenen EventSource — s. #onSseMessage/connectedCallback.
   #onSseMessage = (ev: Event) => this.#handleServerEvent((ev as CustomEvent<string>).detail);
@@ -783,7 +805,7 @@ export class FlowCanvas extends HTMLElement {
     }
 
     if (GRAPH_REFRESH_EVENT_TYPES.has(parsed.type)) {
-      this.#queueFetchAndRender();
+      this.#scheduleGraphRefresh();
       return;
     }
 
@@ -1122,6 +1144,22 @@ export class FlowCanvas extends HTMLElement {
   #queueFetchAndRender(): Promise<void> {
     this.#renderQueue = this.#renderQueue.catch(() => {}).then(() => this.#fetchAndRender());
     return this.#renderQueue;
+  }
+
+  // Debounced Gegenstück zu #queueFetchAndRender() für SSE-getriebene
+  // Refreshes (s. #graphRefreshTimer-Doku) — bündelt einen Event-Burst
+  // (z. B. "node.added" + kurz danach "workflow.updated" derselben
+  // Instanz) zu einem einzigen Fetch/Render, statt den Zwischenzustand
+  // erst zu zeichnen und Sekundenbruchteile später zu korrigieren. Direkte
+  // Aufrufer (Nutzeraktionen wie enterWorkflowEditScope) wollen dagegen
+  // weiterhin sofort frische Daten und rufen bewusst #queueFetchAndRender()
+  // selbst auf, nicht diese Methode.
+  #scheduleGraphRefresh(): void {
+    if (this.#graphRefreshTimer !== undefined) clearTimeout(this.#graphRefreshTimer);
+    this.#graphRefreshTimer = setTimeout(() => {
+      this.#graphRefreshTimer = undefined;
+      this.#queueFetchAndRender();
+    }, GRAPH_REFRESH_DEBOUNCE_MS);
   }
 
   // `save=false` lässt den Aufrufer selbst entscheiden, wann gespeichert
@@ -1649,16 +1687,16 @@ export class FlowCanvas extends HTMLElement {
     this.#workflowEditId = workflowId;
     this.#connectFromRole = null;
     this.#selectedIds = new Set();
-    if (this.#isIdleWorkflow(wf)) {
-      this.#workflowEditDraft = structuredClone(wf.definition);
-    } else {
-      // Laufender Workflow: keine Vorlage nötig, s.
-      // #renderRunningWorkflowScope — jede Sitzung startet mit einer
-      // leeren Extra-Node-Menge.
-      this.#workflowEditDraft = null;
-      this.#workflowScopeExtraNodeIds = new Set();
-      this.#workflowScopePendingInstanceIds = new Set();
-    }
+    // Nutzerfund 2026-09-07: "neuer Node landet unzugeordnet im Root",
+    // solange der bearbeitete Workflow gestoppt/pausiert ist — anders als
+    // beim laufenden Workflow (s. #renderRunningWorkflowScope) parkte
+    // #renderWorkflowEditScope() neu gestartete Nodes bisher gar nicht,
+    // weil #workflowScopeExtraNodeIds/#workflowScopePendingInstanceIds nur
+    // im Live-Zweig zurückgesetzt wurden — jede Sitzung startet jetzt in
+    // BEIDEN Fällen mit einer leeren Extra-Node-Menge.
+    this.#workflowScopeExtraNodeIds = new Set();
+    this.#workflowScopePendingInstanceIds = new Set();
+    this.#workflowEditDraft = this.#isIdleWorkflow(wf) ? structuredClone(wf.definition) : null;
     this.#assignMissingPositions();
     this.#render();
   }
@@ -1810,6 +1848,18 @@ export class FlowCanvas extends HTMLElement {
       this.#render();
       return;
     }
+    // s. #startInstance/#workflowScopeExtraNodeIds-Doku ("Bug 2" oben,
+    // Nutzerfund 2026-09-07): löst #workflowScopePendingInstanceIds gegen
+    // #graph.nodes auf, genau wie #reconcileWorkflowScopePendingInstances
+    // es für den Live-Zweig bereits am Anfang jedes
+    // #renderRunningWorkflowScope()-Laufs tut.
+    this.#reconcileWorkflowScopePendingInstances();
+    // Gegenstück zu #renderRunningWorkflowScope()s eigenem Clear (dortige
+    // Doku) — nötig, seit hier unten auch echte Node-Kacheln (Extra-Nodes)
+    // #portLocation/#tileHeightById befüllen, sonst blieben Einträge einer
+    // inzwischen gestoppten Extra-Instanz stehen.
+    this.#portLocation.clear();
+    this.#tileHeightById.clear();
 
     const height = MIN_BODY_HEIGHT + HEADER_HEIGHT;
     for (const conn of draft.connections) {
@@ -1842,6 +1892,39 @@ export class FlowCanvas extends HTMLElement {
 
     for (const role of draft.roles) {
       this.#viewportGroup.appendChild(this.#renderEditableRoleTile(wf.id, role));
+    }
+
+    // Nutzerfund 2026-09-07 ("neuer Node im geöffneten Workflow landet
+    // unzugeordnet im Root"): während dieser Bearbeiten-Sitzung gestartete
+    // Nodes werden hier als ganz normale, echte Kacheln neben den
+    // synthetischen Rollen-Platzhaltern geparkt (analog zum Live-Zweig,
+    // #renderRunningWorkflowScope) — bewusst KEINE automatische Rollen-
+    // Bindung, die Zuordnung zu einer Rolle bleibt eine explizite
+    // Nutzeraktion. Position kommt aus dem normalen `this.#positions`-
+    // Eintrag des Nodes (als am Root noch unzugeordneter Node bereits von
+    // #assignMissingPositions vergeben, s. dortige `workflowMemberIds`-
+    // Ausnahme), nicht aus den synthetischen Platzhalter-Positionen oben.
+    for (const nodeId of this.#workflowScopeExtraNodeIds) {
+      const node = this.#graph.nodes.find((n) => n.id === nodeId);
+      if (!node) continue;
+      const tile: TileSpec = {
+        id: node.id,
+        label: node.label,
+        inputs: node.inputs,
+        outputs: node.outputs,
+        kind: "node",
+        health: node.health,
+        instanceId: node.instanceId,
+      };
+      const hasPreview = !!this.#hasPreviewById.get(tile.id);
+      this.#tileHeightById.set(tile.id, nodeHeight(tile.inputs.length, tile.outputs.length, hasPreview));
+      tile.inputs.forEach((p, i) =>
+        this.#portLocation.set(p.id, { tileId: tile.id, side: "input", index: i, count: tile.inputs.length })
+      );
+      tile.outputs.forEach((p, i) =>
+        this.#portLocation.set(p.id, { tileId: tile.id, side: "output", index: i, count: tile.outputs.length })
+      );
+      this.#viewportGroup.appendChild(this.#renderTile(tile));
     }
   }
 
@@ -5361,11 +5444,18 @@ export class FlowCanvas extends HTMLElement {
       // zugehörige Node-ID kennen wir erst, sobald sie in #graph.nodes
       // auftaucht (s. #reconcileWorkflowScopePendingInstances, am
       // Anfang jedes #renderRunningWorkflowScope()-Laufs aufgerufen).
+      //
+      // Nutzerfund 2026-09-07: dieselbe Parkung gilt jetzt auch, wenn der
+      // bearbeitete Workflow gerade gestoppt/pausiert ist — vorher griff
+      // die Bedingung nur beim LAUFENDEN Workflow (#isIdleWorkflow-
+      // Ausschluss), #renderWorkflowEditScope() parkt die aufgelöste
+      // Node-ID inzwischen genauso als Extra-Kachel neben den Rollen-
+      // Platzhaltern (s. dortige Doku).
       const scopedWf = this.#workflowEditId ? this.#workflows.find((w) => w.id === this.#workflowEditId) : undefined;
       // Sonst, falls stattdessen eine echte B5-Gruppe offen ist (s.
       // #groupScopePendingInstances-Doku): gleiches Prinzip, andere
       // Zielstruktur (#groupTree statt Workflow-Runtime).
-      if ((scopedWf && !this.#isIdleWorkflow(scopedWf)) || (!this.#workflowEditId && this.#scope !== null)) {
+      if (scopedWf || (!this.#workflowEditId && this.#scope !== null)) {
         const inst = (await res.json()) as { id: string };
         if (scopedWf) {
           this.#workflowScopePendingInstanceIds.add(inst.id);

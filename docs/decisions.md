@@ -20929,3 +20929,61 @@ Code-Review geprüft).
 **Dateien:** `nodes/omp-video-mixer-me/src/main.rs`, `src/pipeline.rs`,
 `ui/bundle.js`; `docs/END-GOAL-FEATURES.md` §3.4 (Teil 2 als erledigt
 markiert).
+
+## 2026-09-07 (Nachtrag 178) — Nutzerfund: zwei Flow-Editor-Bugs — (1) beim Workflow-Start/-Stop erscheinen Nodes kurz einzeln im Host-Canvas und verschieben dabei die Positionen anderer Nodes, bevor sie korrekt in die kollabierte Workflow-Kachel einsortiert werden; (2) ein im geöffneten (expandierten) Workflow gestarteter neuer Node landet unzugeordnet im Root statt im gerade offenen Workflow/der Gruppe
+
+**Bug 1 — Restfall von Nachtrag 171:** dort wurde bereits serverseitig
+gefixt, dass `awaitRegistration` (`orchestrator/internal/workflows/
+service.go:988-1030`) jede aufgelöste Rollen-`NodeID` sofort statt erst
+am Ende persistiert/publiziert — das Fenster schrumpfte von "mehrere
+Sekunden" auf max. `registrationPollInterval` (100ms). Dieses Restfenster
+ist strukturell nicht auf 0 zu bringen (Registry-Erkennung und
+Rollen-Bindung laufen auf getrennten Polling-Läufen), macht sich aber
+weiterhin sichtbar bemerkbar: `ui/graph/flow-canvas.ts`s
+`#handleServerEvent` löste bislang für JEDES einzelne
+"node.added"/"workflow.updated"-SSE-Event sofort einen eigenen
+`#fetchAndRender()`-Lauf aus (`GRAPH_REFRESH_EVENT_TYPES`-Zweig, alte
+Zeile 786) — der erste Lauf (ausgelöst vom "node.added") zeichnete den
+Node deshalb noch unfiltert als Root-Kachel, inkl. vollem
+`#arrangeIntoLanes`-Reflow aller Host-Canvas-Nachbarn, bevor der zweite
+Lauf (ausgelöst vom kurz danach folgenden "workflow.updated") ihn
+korrigierte. Fix: rein clientseitig, kein Backend-Eingriff nötig — neue
+`#scheduleGraphRefresh()` (debounced, `GRAPH_REFRESH_DEBOUNCE_MS = 150`,
+knapp über dem 100ms-Server-Fenster) bündelt einen Event-Burst zu einem
+einzigen Fetch/Render, der Zwischenzustand wird dadurch nie gezeichnet.
+Direkte Aufrufer (z. B. `enterWorkflowEditScope`) rufen weiterhin
+`#queueFetchAndRender()` unverändert direkt/undebounced auf.
+
+**Bug 2 — echte Lücke, nicht nur ein Zeitfenster:** die Live-Workflow-
+Ansicht (`#renderRunningWorkflowScope`) und echte B5-Gruppen
+(`#groupScopePendingInstances`) parkten einen währenddessen gestarteten
+Node bereits korrekt. Die Lücke war ausschließlich der Editor eines
+GESTOPPTEN/PAUSIERTEN Workflows (`#renderWorkflowEditScope`) — der
+zeigt bislang nur synthetische Rollen-Platzhalter-Kacheln
+(`pausedPlaceholderId`), kein Mechanismus parkte dort je einen echten
+neu gestarteten Node. Nutzerentscheidung (Rückfrage gestellt): als
+Extra-Kachel parken, analog zum Live-Zweig, KEINE automatische
+Rollen-Bindung. Umsetzung: `#startInstance`s Parkungs-Bedingung
+(vorher `scopedWf && !isIdleWorkflow(scopedWf)`) verlangt jetzt nur noch
+`scopedWf` — greift damit auch im Idle-Editor. `enterWorkflowEditScope`
+setzt `#workflowScopeExtraNodeIds`/`#workflowScopePendingInstanceIds`
+jetzt in BEIDEN Zweigen (vorher nur im Live-Zweig) beim Betreten zurück.
+`#renderWorkflowEditScope` löst `#reconcileWorkflowScopePendingInstances`
+jetzt selbst auf (wie der Live-Zweig es längst am Anfang jedes Laufs
+tut) und rendert die geparkten Extra-Nodes als ganz normale echte
+Kacheln (`#renderTile`, eigenes `#portLocation`/`#tileHeightById`-Clear
+davor) neben den Platzhaltern — Position kommt automatisch aus dem
+normalen `#assignMissingPositions()`-Root-Slot des Nodes, keine
+Sonderbehandlung nötig, da ein noch ungebundener Node ohnehin ein ganz
+normaler, unzugeordneter Root-Node ist.
+
+**Verifikation:** `deno check ui/graph/flow-canvas.ts` grün, `deno test
+ui/graph/` grün (71/71, unverändert — reiner Verhaltensfix, keine
+Testlücke für SSE-Timing/Render-Pfade vorhanden). Kein Browser-/CDP-Klicktest
+gemacht (Zeitbudget in dieser Sitzung nicht dafür verwendet) — vor
+vollem Vertrauen in Bug 1 insbesondere empfohlen, da die Debounce-Fensterbreite
+nur gegen den dokumentierten 100ms-Server-Wert kalkuliert, nicht live
+gegen tatsächliches SSE-Timing gemessen wurde.
+
+**Dateien:** `ui/graph/flow-canvas.ts`.
+
