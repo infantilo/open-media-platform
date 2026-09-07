@@ -139,6 +139,21 @@ impl Playlist {
         self.items.iter().position(|it| it == id)
     }
 
+    /// Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4, `startType:
+    /// manual`): rein lesende Vorschau auf die ID, die `advance()` als
+    /// Nächstes auf Sendung nehmen WÜRDE — dieselbe Index-Rechnung wie
+    /// dort, aber ohne jede Zustandsänderung. `main.rs`s `do_advance()`
+    /// nutzt das, um vor dem eigentlichen `advance()`-Aufruf zu prüfen,
+    /// ob das nächste Item `startType: manual` trägt (ein reines
+    /// Automation-Konzept, das dieses Modul bewusst nicht kennt, s.
+    /// Moduldoku oben) — dafür bewusst KEIN Prädikats-Parameter an
+    /// `advance()` selbst, um dessen Isolation/Testbarkeit nicht mit
+    /// einem Wissen über Item-Metadaten zu vermischen.
+    pub fn peek_next(&self) -> Option<&str> {
+        let next = self.current_index.map(|i| i + 1).unwrap_or(0);
+        self.items.get(next).map(String::as_str)
+    }
+
     /// Wählt `index` aus, ohne die Wiedergabe zu beeinflussen.
     pub fn cue(&mut self, index: usize) -> Result<(), PlaylistError> {
         if index >= self.items.len() {
@@ -347,6 +362,43 @@ mod tests {
         assert_eq!(p.items(), ["a", "b"]);
         assert_eq!(p.current_index(), Some(0));
         assert!(!p.on_air());
+    }
+
+    #[test]
+    fn peek_next_returns_id_after_current_without_mutating() {
+        let mut p = Playlist::new();
+        p.append("item1".to_string());
+        p.append("item2".to_string());
+        p.take().unwrap();
+        assert_eq!(p.peek_next(), Some("item2"));
+        // rein lesend — current_index/on_air unverändert
+        assert_eq!(p.current_index(), Some(0));
+        assert!(p.on_air());
+    }
+
+    #[test]
+    fn peek_next_is_none_past_last_item() {
+        let mut p = Playlist::new();
+        p.append("item1".to_string());
+        p.take().unwrap();
+        assert_eq!(p.peek_next(), None);
+    }
+
+    #[test]
+    fn peek_next_on_empty_playlist_is_none() {
+        let p = Playlist::new();
+        assert_eq!(p.peek_next(), None);
+    }
+
+    #[test]
+    fn peek_next_right_after_append_is_the_second_item() {
+        // `append()` cued bereits Index 0 (Moduldoku dort) — `peek_next()`
+        // zeigt deshalb konsequent auf das übernächste Item, nicht das
+        // gerade angehängte selbst.
+        let mut p = Playlist::new();
+        p.append("item1".to_string());
+        p.append("item2".to_string());
+        assert_eq!(p.peek_next(), Some("item2"));
     }
 
     #[test]

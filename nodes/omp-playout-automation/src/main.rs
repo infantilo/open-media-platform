@@ -73,6 +73,7 @@ use omp_node_sdk::{
 };
 use playlist::{Mode, Playlist};
 use remote::{OrchestratorAuth, ProxyClient};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use timeline::TimelineCache;
 use tokio::sync::mpsc;
@@ -98,11 +99,44 @@ enum ItemMedia {
     Live { sender_id: String },
 }
 
+/// Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4/§6.2b): rein
+/// automationsseitiges Konzept, das `omp-player` NICHT kennt (dessen
+/// `item_meta_from_player_json`-Quelle liefert das nicht) — deshalb
+/// separat gepflegt statt aus dem Player-Response abgeleitet, s.
+/// `do_append`/`do_load`-Doku. `Manual`: PIPELINE CONTROLLER hat dafür
+/// **kein** Vorbild (dort gibt es nur ein End-seitiges "Manual Hold",
+/// keinen Start-Gate — `docs/decisions.md` Nachtrag 180) — ein
+/// `manual`-Item nimmt weder am Sequenz-Vorrücken noch (später, Kapitel
+/// 6 Teil 3) an Fixzeit-Timern teil, sondern wird ausschließlich per
+/// explizitem Operator-Cue+Take scharf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+enum StartType {
+    #[default]
+    Sequence,
+    Manual,
+}
+
+impl StartType {
+    /// Für die generische Method-Arg-Extraktion (`invoke("append"/
+    /// "setStartType", …)`) — dieselbe String-Repräsentation wie der
+    /// `#[serde(rename_all = "lowercase")]`-Ableitung, nur ohne den
+    /// JSON-String-Umweg über `serde_json::from_value`.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "sequence" => Some(Self::Sequence),
+            "manual" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ItemMeta {
     label: String,
     media: ItemMedia,
     duration_ms: u64,
+    start_type: StartType,
 }
 
 /// Rekonstruiert ein `ItemMeta` aus einem Item, wie es `omp-player`s
@@ -129,7 +163,11 @@ fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
         let tone_frequency = v.get("toneFrequency").and_then(Value::as_f64).unwrap_or(0.0);
         ItemMedia::TestPattern { pattern, tone_frequency }
     };
-    Some(ItemMeta { label, media, duration_ms })
+    // `start_type` ist bewusst NICHT Teil dieser Rekonstruktion — der
+    // Player kennt das Konzept nicht (Typdoku oben). Aufrufer, die einen
+    // Wert haben (`do_append`s eigener Parameter, `do_load`s positionell
+    // gezippte `LoadItem`s), überschreiben das Feld danach selbst.
+    Some(ItemMeta { label, media, duration_ms, start_type: StartType::default() })
 }
 
 /// Gegenstück zu `item_meta_from_player_json` für `get("items")`/
@@ -147,6 +185,7 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     v["id"] = serde_json::json!(id);
     v["label"] = serde_json::json!(m.label);
     v["durationMs"] = serde_json::json!(m.duration_ms);
+    v["startType"] = serde_json::json!(m.start_type);
     v
 }
 
@@ -323,6 +362,34 @@ impl AutomationStore {
     /// angehalten) ein bewusst akzeptierter Kompromiss, kein Bug.
     fn do_advance(&self) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
+        // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4, `startType:
+        // manual`): VOR dem eigentlichen `advance()` prüfen, ob das
+        // nächste Item manuell startet — `playlist.rs` kennt Item-
+        // Metadaten bewusst nicht (Moduldoku dort), deshalb hier statt
+        // eines Prädikat-Parameters an `advance()` selbst. Im `Hold`-Modus
+        // erübrigt sich das: `advance()` rückt dort ohnehin nie automatisch
+        // vor, unabhängig vom `startType`.
+        if state.playlist.mode() != Mode::Hold
+            && let Some(next_id) = state.playlist.peek_next().map(str::to_string)
+        {
+            let is_manual = state
+                .metadata
+                .get(&next_id)
+                .map(|m| m.start_type == StartType::Manual)
+                .unwrap_or(false);
+            if is_manual {
+                // Cued, aber NICHT auf Sendung genommen — sichtbar als
+                // "als Nächstes fällig, wartet auf TAKE" statt einfach
+                // am Listenende zu verharren. Kein Remote-Aufruf: das
+                // aktuelle On-Air-Item beim Ziel-Player läuft unverändert
+                // weiter (kein EOS-Konzept, s. `take()`-Doku oben).
+                if let Some(index) = state.playlist.index_of(&next_id) {
+                    let _ = state.playlist.cue(index);
+                }
+                state.onair_since = None;
+                return Ok(());
+            }
+        }
         let Some(item_id) = state.playlist.advance() else {
             state.onair_since = None;
             // last_live_item_id bleibt bewusst unangetastet: der Player
@@ -513,6 +580,13 @@ impl AutomationStore {
     /// (`omp-player/src/main.rs::invoke("append")`) — ein Übernehmen des
     /// Roharguments würde den Auto-Advance-Timer (`auto_advance_loop`) auf
     /// eine falsche Dauer laufen lassen.
+    // Kapitel 6 Teil 1s `start_type`-Parameter drückt die Signatur auf 8
+    // Argumente — gleiche Konvention wie andernorts im Projekt (z. B.
+    // `omp-video-mixer-me::spawn_autotrans`, `docs/decisions.md`
+    // Nachtrag 177): `#[allow]` statt einer Parameter-Struct, die hier
+    // nur für einen einzigen Aufrufer (der `invoke("append", …)`-Zweig)
+    // zusätzliche Indirektion brächte.
+    #[allow(clippy::too_many_arguments)]
     fn do_append(
         &self,
         label: String,
@@ -521,6 +595,7 @@ impl AutomationStore {
         sender_id: Option<String>,
         tone_frequency: Option<f64>,
         duration_ms: Option<u64>,
+        start_type: Option<StartType>,
     ) -> Result<(), String> {
         let mut state = self.state.lock().expect("lock poisoned");
         let player_node_id = state
@@ -560,7 +635,8 @@ impl AutomationStore {
             .and_then(Value::as_str)
             .ok_or("Neues Player-Item ohne id")?
             .to_string();
-        let meta = item_meta_from_player_json(&new_item).ok_or("Neues Player-Item unlesbar")?;
+        let mut meta = item_meta_from_player_json(&new_item).ok_or("Neues Player-Item unlesbar")?;
+        meta.start_type = start_type.unwrap_or_default();
 
         state.playlist.append(new_id.clone());
         state.metadata.insert(new_id, meta);
@@ -571,12 +647,26 @@ impl AutomationStore {
     }
 
     fn do_load(&self, items_json: &str) -> Result<(), String> {
-        // Nur Form-Validierung vor dem Weiterreichen an den Player (dessen
+        // Form-Validierung vor dem Weiterreichen an den Player (dessen
         // `load()` dieselbe Form erwartet, `omp-player/src/main.rs`s
-        // `LoadItem`) — die Felder selbst werden hier nicht gebraucht,
-        // die maßgebliche Auswertung inkl. Defaults passiert im Player;
-        // die eigene Sicht wird danach aus dessen Antwort rekonstruiert
-        // (s. u.), nicht aus diesen Rohdaten.
+        // `LoadItem`) — die Player-relevanten Felder selbst werden hier
+        // nicht gebraucht, die maßgebliche Auswertung inkl. Defaults
+        // passiert im Player; die eigene Sicht wird danach aus dessen
+        // Antwort rekonstruiert (s. u.), nicht aus diesen Rohdaten.
+        // **Ausnahme: `startType`** (Kapitel 6 Teil 1) — ein rein
+        // automationsseitiges Feld, das der Player nicht kennt (und beim
+        // Weiterreichen des unveränderten `items_json` an ihn stillschweigend
+        // ignoriert, da sein eigenes `LoadItem` kein `deny_unknown_fields`
+        // setzt). Ohne diesen positionellen Zip würde JEDER `load()`-Aufruf
+        // (auch der reine Reorder aus dem UI, `ui/bundle.js::reorderItems`)
+        // alle `startType`-Werte auf `sequence` zurücksetzen, weil `load()`
+        // beim Player IMMER frische Item-IDs vergibt (`next_seq`, nie
+        // wiederverwendet) — die alte ID-Zuordnung wäre nach jedem Reorder
+        // verloren. Die UI schickt deshalb bei jedem `load()` (auch beim
+        // Reorder) den zuletzt bekannten `startType` pro Item mit, hier per
+        // Index mit der Player-Antwort gezippt (Reihenfolge bleibt über
+        // einen einzelnen `load()`-Aufruf hinweg stabil, `omp-player`s
+        // `main.rs`-Schleife baut `items` in exakt der Eingabereihenfolge).
         #[derive(serde::Deserialize)]
         #[allow(dead_code)]
         struct LoadItem {
@@ -591,8 +681,10 @@ impl AutomationStore {
             tone_frequency: Option<f64>,
             #[serde(rename = "durationMs", default)]
             duration_ms: Option<u64>,
+            #[serde(rename = "startType", default)]
+            start_type: StartType,
         }
-        serde_json::from_str::<Vec<LoadItem>>(items_json)
+        let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
 
         let mut state = self.state.lock().expect("lock poisoned");
@@ -615,15 +707,20 @@ impl AutomationStore {
             .map_err(|e| format!("Player-Items nach load nicht lesbar: {e}"))?;
         let items = items.as_array().cloned().unwrap_or_default();
 
+        // `items.len()` kann von `load_items.len()` abweichen, falls der
+        // Player selbst Einträge verwirft (z. B. eine unlesbare Datei,
+        // s. dessen `resolve_media_path`) — `.get(i)` statt Index-Panik,
+        // `unwrap_or_default()` (= `sequence`) für jeden ohne Entsprechung.
         let mut ids = Vec::with_capacity(items.len());
         let mut metadata = HashMap::with_capacity(items.len());
-        for it in items {
+        for (i, it) in items.into_iter().enumerate() {
             let id = it
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or("Player-Item ohne id")?
                 .to_string();
-            let meta = item_meta_from_player_json(&it).ok_or("Player-Item unlesbar")?;
+            let mut meta = item_meta_from_player_json(&it).ok_or("Player-Item unlesbar")?;
+            meta.start_type = load_items.get(i).map(|li| li.start_type).unwrap_or_default();
             metadata.insert(id.clone(), meta);
             ids.push(id);
         }
@@ -685,6 +782,25 @@ impl AutomationStore {
         Ok(())
     }
 
+    /// Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4): rein lokale
+    /// Metadaten-Änderung, bewusst OHNE jeden Player-Roundtrip — anders
+    /// als `do_cue`/`do_remove` betrifft `startType` nur, WIE dieser
+    /// Node selbst später auto-vorrückt (`do_advance`), nicht was der
+    /// Ziel-Player gerade zeigt. Ein `load()`-Umweg (wie beim Reorder,
+    /// `ui/bundle.js::reorderItems`-Doku) wäre hier unnötig teuer: `load()`
+    /// setzt den Player unbedingt auf Schwarzbild zurück, nur um ein
+    /// einzelnes Flag umzuschalten.
+    fn do_set_start_type(&self, item_id: &str, start_type: StartType) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        match state.metadata.get_mut(item_id) {
+            Some(meta) => {
+                meta.start_type = start_type;
+                Ok(())
+            }
+            None => Err("unbekannte itemId".to_string()),
+        }
+    }
+
     /// Legt ein neues, wiederverwendbares Cart-/Interrupt-Asset an (rein
     /// lokal, kein Fernaufruf nötig — anders als `do_append` gibt es hier
     /// keinen Ziel-Player, dessen Item-IDs übernommen werden müssten, das
@@ -705,6 +821,12 @@ impl AutomationStore {
                 label,
                 media: ItemMedia::TestPattern { pattern, tone_frequency },
                 duration_ms,
+                // Carts laufen nie durch `Playlist::advance()` (eigener
+                // `state.carts`-Vec, nur per explizitem `cart.fire`
+                // ausgelöst) — `startType` ist hier bedeutungslos, bleibt
+                // aber gesetzt, weil `ItemMeta` ein geteilter Typ ist
+                // (Doku oben).
+                start_type: StartType::default(),
             },
         ));
         Ok(())
@@ -1100,6 +1222,11 @@ impl ParamStore for AutomationStore {
                         name: "durationMs".to_string(),
                         kind: ParamType::Number,
                     },
+                    // Kapitel 6 Teil 1 — "sequence" (Default) oder "manual".
+                    MethodArg {
+                        name: "startType".to_string(),
+                        kind: ParamType::String,
+                    },
                 ],
             },
             MethodSpec {
@@ -1122,6 +1249,22 @@ impl ParamStore for AutomationStore {
                     name: "itemId".to_string(),
                     kind: ParamType::String,
                 }],
+            },
+            // Kapitel 6 Teil 1: reine lokale Metadaten-Änderung, KEIN
+            // Player-Roundtrip (s. `do_set_start_type`-Doku) — deshalb ein
+            // eigenes, leichtgewichtiges Method statt über `load()`.
+            MethodSpec {
+                name: "setStartType".to_string(),
+                args: vec![
+                    MethodArg {
+                        name: "itemId".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "startType".to_string(),
+                        kind: ParamType::String,
+                    },
+                ],
             },
             MethodSpec {
                 name: "take".to_string(),
@@ -1300,7 +1443,8 @@ impl ParamStore for AutomationStore {
                     .and_then(Value::as_f64)
                     .filter(|d| *d > 0.0)
                     .map(|d| d as u64);
-                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms)
+                let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
+                self.do_append(label, pattern, file, sender_id, tone_frequency, duration_ms, start_type)
             }
             "load" => {
                 let items_json = args.get("itemsJson").and_then(Value::as_str).unwrap_or("[]");
@@ -1310,6 +1454,15 @@ impl ParamStore for AutomationStore {
                 Some(id) => self.do_remove(id),
                 None => Err("itemId fehlt".to_string()),
             },
+            "setStartType" => {
+                let item_id = args.get("itemId").and_then(Value::as_str);
+                let start_type = args.get("startType").and_then(Value::as_str).and_then(StartType::parse);
+                match (item_id, start_type) {
+                    (Some(id), Some(st)) => self.do_set_start_type(id, st),
+                    (None, _) => Err("itemId fehlt".to_string()),
+                    (_, None) => Err("startType fehlt oder ungültig (sequence|manual)".to_string()),
+                }
+            }
             "cue" => match args.get("itemId").and_then(Value::as_str) {
                 Some(id) => self.do_cue(id),
                 None => Err("itemId fehlt".to_string()),

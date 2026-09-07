@@ -48,6 +48,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const style = document.createElement("style");
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; font-size: 12px; }
+      .clock { font-family: "SF Mono", "Roboto Mono", monospace; font-size: 22px; font-weight: bold; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
       .targets { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
       .targets label { color: #999; display: flex; gap: 4px; align-items: center; }
       .targets select.target-select {
@@ -101,8 +102,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       }
       .pl-row.onair { background: #16281a; }
       .pl-row.cued { background: #2a2210; }
+      /* Kapitel 6 Teil 1: linker Rand statt Hintergrundwechsel, damit sich
+         das mit onair/cued (Hintergrundfarbe) kombinieren lässt — ein
+         gecuetes Manual-Item bleibt so erkennbar amber-hinterlegt UND
+         mit Rand markiert. */
+      .pl-row.manual-start { border-left: 3px solid #d4a017; }
+      .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
       .pl-row.drag-over { outline: 1px dashed #888; outline-offset: -1px; }
-      .pl-row .pl-drag { cursor: grab; color: #666; text-align: center; }
+      .pl-row.dragging { opacity: 0.5; }
+      /* touch-action:none, s. Pointer-Event-Reorder-Doku unten: ohne das
+         hijackt der Browser das erste Touchmove auf dem Griff als
+         Seiten-Scroll statt es als Drag an uns weiterzugeben. */
+      .pl-row .pl-drag { cursor: grab; color: #666; text-align: center; touch-action: none; }
       .pl-row .pl-num { color: #888; font-variant-numeric: tabular-nums; text-align: right; }
       .pl-row .pl-icon { text-align: center; }
       .pl-row .pl-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -146,6 +157,14 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       clearTimeout(errorBannerTimer);
       errorBannerTimer = setTimeout(() => errorBanner.classList.remove("show"), 6000);
     };
+
+    // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4 "Kopfzeile"):
+    // reine Wanduhr — kein Countdown zum nächsten Fixzeit-Event hier, das
+    // braucht erst den Fixzeit-Scheduler (Kapitel 6 Teil 3, noch nicht
+    // gebaut, s. `docs/decisions.md` Nachtrag 180). Aktualisiert sich im
+    // bestehenden 1-Sekunden-`poll()`-Takt statt eines eigenen Timers.
+    const clockEl = document.createElement("div");
+    clockEl.className = "clock";
 
     const targetsRow = document.createElement("div");
     targetsRow.className = "targets";
@@ -344,7 +363,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     cartsEmpty.textContent = '"+ Cart" zum Anlegen eines Interrupt-Assets (Blackclip, Standby, …)';
     cartsSection.append(cartsHeading, activeCartBanner, cartAddRow, cartList, cartsEmpty);
 
-    shadow.append(style, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
+    shadow.append(style, clockEl, errorBanner, targetsRow, statusRow, progress, addRow, listHdr, list, empty, cartsSection);
 
     // Meldet fehlgeschlagene Methodenaufrufe sichtbar statt sie stillschweigend
     // zu verschlucken (`fetch()` lehnt nur bei Netzwerkfehlern ab, nicht bei
@@ -455,7 +474,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (entries.some((e) => e.value === prevValue)) selectEl.value = prevValue;
     };
 
-    // itemId -> { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, cueBtn, removeBtn }
+    // itemId -> { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, startTypeBtn, cueBtn, removeBtn }
     const itemEls = new Map();
 
     // Listenansicht-Folgeschritt: Icon je nach tatsächlich zugewiesener
@@ -476,7 +495,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     let lastItems = [];
     let dragSourceId = null;
     const itemToLoadEntry = (item) => {
-      const entry = { label: item.label, durationMs: item.durationMs };
+      // Kapitel 6 Teil 1: `startType` MUSS hier mit, sonst verliert jeder
+      // Reorder (der über `load()` läuft, s. `reorderItems`-Doku) still
+      // alle Manual-Start-Markierungen — `main.rs::do_load()` zippt
+      // `startType` positionell aus genau diesem Feld gegen die frischen
+      // Player-IDs zurück (Live-Fund 2026-09-07: ohne diese Zeile setzte
+      // ein echter Browser-Drag alle Items lautlos auf "sequence" zurück,
+      // trotz korrekter Backend-Logik — nur per Klicktest gefunden, nicht
+      // durch API-Tests allein).
+      const entry = { label: item.label, durationMs: item.durationMs, startType: item.startType || "sequence" };
       if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
@@ -536,6 +563,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
 
       const actionsEl = document.createElement("span");
       actionsEl.className = "pl-actions";
+      // Kapitel 6 Teil 1 (`docs/END-GOAL-FEATURES.md` §6.4, `startType`):
+      // Umschalter statt Dropdown — nur zwei Werte, ein Klick reicht.
+      // "sequence" (Standard) rückt beim Auto-Advance normal vor,
+      // "manual" bleibt bis zum expliziten Cue+Take stehen (main.rs::
+      // do_advance). Bewusst KEIN `load()`-Umweg (do_set_start_type-Doku:
+      // reiner lokaler Metadaten-Roundtrip, kein Schwarzbild-Nebeneffekt).
+      const startTypeBtn = document.createElement("button");
+      startTypeBtn.addEventListener("click", () => {
+        const next = item.startType === "manual" ? "sequence" : "manual";
+        call("setStartType", { itemId: item.id, startType: next }).then(poll);
+      });
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
       const removeBtn = document.createElement("button");
@@ -545,27 +583,55 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
         call("remove", { itemId: item.id }).then(poll);
       });
-      actionsEl.append(cueBtn, removeBtn);
+      actionsEl.append(startTypeBtn, cueBtn, removeBtn);
 
-      el.addEventListener("dragstart", (ev) => {
-        dragSourceId = item.id;
-        ev.dataTransfer.effectAllowed = "move";
-      });
-      el.addEventListener("dragover", (ev) => {
+      // Touch-Fund 2026-09-07 (Kapitel 6 Teil 1, unabhängig vom Touch-
+      // Audit gefunden): natives HTML5-Drag&Drop (dragstart/dragover/drop)
+      // feuert auf Touch-Geräten überhaupt nicht — das Reorder war dort
+      // komplett unerreichbar. Pointer-Events + `setPointerCapture` statt-
+      // dessen (gleiches Muster wie `ui/graph/flow-canvas.ts`/`ui/kit/
+      // omp-fader.ts`): der Zeiger bleibt am Griff "gebunden", auch wenn er
+      // während des Ziehens dessen Grenzen verlässt — funktioniert
+      // identisch mit Maus UND Finger, ohne Browser-Unterschiede.
+      // `shadow.elementFromPoint` statt `document.elementFromPoint`, weil
+      // dieses Bundle komplett innerhalb eines Shadow-Roots rendert (s.
+      // `attachShadow` oben) — `ShadowRoot` hat dafür eine eigene Methode.
+      let dragPointerId = null;
+      dragEl.addEventListener("pointerdown", (ev) => {
         if (!el.draggable) return;
         ev.preventDefault();
-        el.classList.add("drag-over");
+        dragSourceId = item.id;
+        dragPointerId = ev.pointerId;
+        dragEl.setPointerCapture(ev.pointerId);
+        el.classList.add("dragging");
       });
-      el.addEventListener("dragleave", () => el.classList.remove("drag-over"));
-      el.addEventListener("drop", (ev) => {
-        ev.preventDefault();
-        el.classList.remove("drag-over");
-        if (dragSourceId) reorderItems(dragSourceId, item.id);
+      const rowUnderPointer = (ev) => {
+        const under = shadow.elementFromPoint(ev.clientX, ev.clientY);
+        return under && under.closest(".pl-row");
+      };
+      dragEl.addEventListener("pointermove", (ev) => {
+        if (dragSourceId !== item.id || ev.pointerId !== dragPointerId) return;
+        for (const [, r] of itemEls) r.el.classList.remove("drag-over");
+        const row = rowUnderPointer(ev);
+        if (row && row !== el) row.classList.add("drag-over");
+      });
+      const endDrag = (ev) => {
+        if (dragSourceId !== item.id || ev.pointerId !== dragPointerId) return;
+        const row = rowUnderPointer(ev);
+        for (const [, r] of itemEls) r.el.classList.remove("drag-over");
+        el.classList.remove("dragging");
+        if (row && row !== el) {
+          const targetEntry = [...itemEls.entries()].find(([, r]) => r.el === row);
+          if (targetEntry) reorderItems(dragSourceId, targetEntry[0]);
+        }
         dragSourceId = null;
-      });
+        dragPointerId = null;
+      };
+      dragEl.addEventListener("pointerup", endDrag);
+      dragEl.addEventListener("pointercancel", endDrag);
 
       el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, actionsEl);
-      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, cueBtn, removeBtn };
+      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, startTypeBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -633,6 +699,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     };
 
     const poll = async () => {
+      clockEl.textContent = new Date().toLocaleTimeString("de-DE");
       const [
         itemsValue,
         currentItemId,
@@ -759,11 +826,20 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         refs.el.draggable = !onAir;
         refs.dragEl.title = onAir ? "Reorder während laufender Sendung nicht möglich" : "Ziehen zum Umsortieren";
 
-        refs.el.className = `pl-row pl-grid-cols${isOnair ? " onair" : isCued ? " cued" : ""}`;
+        const isManualStart = item.startType === "manual";
+        refs.el.className =
+          `pl-row pl-grid-cols${isOnair ? " onair" : isCued ? " cued" : ""}${isManualStart ? " manual-start" : ""}`;
         refs.cueBtn.textContent = isCued ? "Gecued" : "Cue";
         refs.cueBtn.className = isCued ? "cue-active" : "";
         refs.cueBtn.disabled = isOnair;
         refs.removeBtn.disabled = isOnair || isCued;
+        // Kapitel 6 Teil 1: ✋ = wartet auf explizites Cue+Take (nimmt am
+        // Auto-Advance nicht teil), ⏭ = normale Sequenz-Position.
+        refs.startTypeBtn.textContent = isManualStart ? "✋" : "⏭";
+        refs.startTypeBtn.title = isManualStart
+          ? "Manueller Start — rückt beim Auto-Advance NICHT von selbst vor, klicken für Sequenz-Start"
+          : "Sequenz-Start — rückt beim Auto-Advance normal vor, klicken für manuellen Start";
+        refs.startTypeBtn.className = isManualStart ? "start-type-manual" : "";
       }
 
       // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.

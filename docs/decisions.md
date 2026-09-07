@@ -21033,3 +21033,139 @@ zweiten WebRTC-Spur.
 
 **Dateien:** keine Code-Änderung dieser Sitzung — nur
 `gstreamer1.0-nice` systemweit nachinstalliert (Dev-Maschine).
+
+## 2026-09-07 (Nachtrag 180) — Nutzerauftrag: `omp-playout-automation` auf volle PIPELINE-CONTROLLER-Parität bringen (dynamische Playlist, Transitions, sequential/manual/fixtime Start, Medien-Validierung, Channel-Branding pro Output, OGraf als Grafik-Engine, MXF-Player als playlistloser Clip-Player) — DMF/MXL-basiert statt monolithisch
+
+**Kein neues Thema — trifft direkt `docs/END-GOAL-FEATURES.md` §6**,
+das genau diese Parität schon 2026-07-13 ff. spezifiziert hatte, aber
+nie über C14/C15/C18/C20 hinaus begonnen wurde (`UMSETZUNG.md`-Status-
+Checkliste hatte bis heute keinen "Kapitel 6 Teil …"-Eintrag). Statt
+blind loszubauen: §6 zuerst gegen die reale Codebase UND gegen
+PIPELINE CONTROLLER aktualisiert (§0 Punkt 9, nicht raten).
+
+**§6.1 (Ist-Zustand) war veraltet** — per direkter Code-Prüfung
+korrigiert: `main.rs` inzwischen 1755 statt der im Text stehenden
+~150 Zeilen (C18 Cart-/Interrupt-System mit `cart.define/remove/fire/
+return` bereits vollständig da, "Next Live"-Sprungfunktion), neues
+`timeline.rs` (C20, gefensterte Restdauer-Berechnung), `ui/bundle.js`
+812 statt 258 Zeilen (echte Spalten-Tabelle `pl-grid-cols`, Mode-
+Dropdown, ON-AIR-Badge, Cart-Leiste bereits vorhanden). Bestätigt
+weiterhin fehlend: Fixzeit-Scheduler (`main.rs:390`s eigener Kommentar
+sagt es explizit), Transitions außer Cut, Grafik-Children, As-Run-Log.
+Nebenfund: die bestehende Rundown-Reorder-Funktion nutzt natives
+HTML5-Drag&Drop (`ui/bundle.js:550–565`) — deckt sich mit dem
+unabhängig gefundenen Touch-Audit-Punkt 2 vom selben Tag.
+
+**Drei vom Nutzer genannte Punkte standen nicht in §6 — gezielt gegen
+PIPELINE CONTROLLER geprüft (Recherche-Agent, PC-Quelldateien mit
+Zeilenangaben, nicht geraten):**
+1. **"Manual Start"** — PC hat das NICHT als Start-Typ (nur
+   `sequence`/`fixtime`, `PlaylistEngine.js:395,507,561,1489`). Was PC
+   hat, ist `endType:'manual'` ("Manual Hold", pausiert NACH Event-Ende
+   bis Operator weiterschaltet) — die umgekehrte Richtung. Echte
+   OMP-Neuerfindung: dritter `startType`-Wert `manual`, Event bleibt
+   bis explizitem TAKE `pending`, nimmt an Sequenz-Vorrücken UND
+   Fixzeit-Timern nicht teil.
+2. **Medien-/Live-Verfügbarkeit** — PC hat ein ausgereiftes
+   Zwei-Schichten-System (`resolveFile()`/`_handleInvalidLiveSignal`
+   blockierend bei Cue/Play mit Backup-Verzeichnis-/Idle-Fallback-Kette,
+   plus eine on-demand `GET /api/playlist/availability`-Ampel-Spalte,
+   `PlaylistEngine.js:38–63,1300–1636`, `server.js:4318–4330`). OMP hat
+   die Grundlage (`omp-media-library`s echte `ffprobe`-Validierung)
+   bereits — reine Verdrahtungsarbeit in der Automation, kein neuer
+   Prüf-Mechanismus nötig.
+3. **Channel-Branding pro Output** — auch PC hat das NICHT wirklich:
+   ein einzelner geteilter `gdkpixbufoverlay` nach dem Compositor
+   (`MasterPipeline.js:285,983,1673–1710`), Playlist-/manuell-
+   gesteuert, nicht an einen Ausgang gebunden;
+   `OutputEngine.js` kennt "branding" gar nicht (`:5–27`). Für OMP
+   damit echte Neuentwicklung, NICHT Teil dieses Nodes — gehört
+   strukturell zum Ausgang/Workflow (K3-DSK oder permanenter
+   `omp-ograf`-Slot pro Output), als offene Frage 5 in §6.6 vermerkt.
+
+**§6.3/6.4/6.5 entsprechend erweitert:** Datenmodell bekommt
+`startType: sequence|fixtime|manual` + `availability`-Feld;
+Scheduler-Absatz um Manual-Start-Ausnahme ergänzt; neuer
+Verfügbarkeits-Absatz (Rundown-Badge + `missingBehavior`
+skip/idle-fallback bei Cue/Take); Phasenplan Teil 1 um Manual-Start +
+Touch-sicheres Pointer-Event-Reorder erweitert, Teil 2 um
+Verfügbarkeits-Spalte, neuer Teil 6 (Channel-Branding, bewusst nicht
+detailliert, siehe offene Frage 5) als Platzhalter für die separate
+Spezifikation.
+
+**Kein Code geschrieben diese Sitzung** — reine Plan-Aktualisierung
+(§0 Punkt 2/9: erst verstehen und dokumentieren, dann EINEN Schritt
+umsetzen; welcher Teil zuerst drankommt, dem Nutzer zur Entscheidung
+vorgelegt statt geraten).
+
+**Dateien:** `docs/END-GOAL-FEATURES.md` §6 (6.1 aktualisiert, neuer
+Abschnitt 6.2b, 6.3/6.4/6.5/6.6 erweitert).
+
+## 2026-09-07 (Nachtrag 181) — Umsetzung Kapitel 6 Teil 1 (Rundown-Fundament, Nutzerentscheidung nach Nachtrag 180: mit Teil 1 anfangen) + Live-Verifikation im echten Browser
+
+**Backend (`nodes/omp-playout-automation`):** neuer `StartType`-Enum
+(`sequence`/`manual`) auf `ItemMeta` — bewusst NICHT aus
+`item_meta_from_player_json` abgeleitet (der Player kennt das Konzept
+nicht), sondern von `do_append`/`do_load` separat gesetzt.
+`Playlist::peek_next()` (`playlist.rs`, rein lesend, 3 neue Tests) statt
+eines Prädikat-Parameters an `advance()` selbst — hält das Modul frei
+von Item-Metadaten-Wissen (eigene Modul-Doku dort). `do_advance()`
+prüft vor dem eigentlichen `advance()`, ob das nächste Item `manual`
+ist; falls ja: cued es (sichtbar als "als Nächstes fällig"), nimmt es
+aber NICHT auf Sendung, kein Remote-Aufruf. Neue leichtgewichtige
+`setStartType`-Methode (rein lokal, kein Player-Roundtrip, kein
+Schwarzbild-Nebeneffekt wie bei einem `load()`-Umweg). **Reorder-
+Fallstrick gelöst:** `load()` vergibt beim Player IMMER frische
+Item-IDs (`next_seq`, nie wiederverwendet) — jeder Reorder hätte sonst
+alle `startType`-Werte verloren. Der lokale `LoadItem`-Parser in
+`do_load` liest `startType` jetzt mit und zippt ihn POSITIONELL gegen
+die Player-Antwort (Reihenfolge bleibt über einen `load()`-Aufruf
+stabil, Player baut `items` in exakt der Eingabereihenfolge).
+
+**UI (`ui/bundle.js`):** natives HTML5-Drag&Drop (dragstart/dragover/
+drop, feuert auf Touch-Geräten gar nicht) ersetzt durch Pointer Events
++ `setPointerCapture` am Drag-Griff (gleiches Muster wie `ui/graph/
+flow-canvas.ts`/`ui/kit/omp-fader.ts`), `shadow.elementFromPoint` für
+die Zielzeile (Bundle rendert komplett in einem Shadow-Root). Neuer
+✋/⏭-Umschalter pro Zeile (`setStartType`), amber Rand für Manual-Items.
+Neue Wanduhr im Kopfbereich (kein Fixzeit-Countdown — Kapitel 6 Teil 3
+existiert noch nicht, ehrlich weggelassen statt vorgetäuscht).
+
+**Live-Verifikation (nicht nur API, echter Browser-Klicktest — Vorgabe
+des Nutzers):** `cargo build`/`cargo test` (28/28)/`cargo clippy` (ein
+einziges, VOR dieser Sitzung bestehendes `collapsible_if` unangetastet
+gelassen)/`node --check` zuerst grün. Danach live gegen den laufenden
+Dev-Stack (Orchestrator auf Port 8000, `admin`/`adminpass123`):
+`omp-player-video` + `omp-video-mixer-me` + eine frische
+`omp-playout-automation`-Instanz gestartet, Ziel-Labels gesetzt, drei
+Test-Items (`sequence`/`manual`/`sequence`) angehängt. Per direktem
+API-Aufruf bestätigt: `take` von Item 1 (3s) → nach Ablauf `cuedItemId`
+zeigt korrekt Item 2 (`manual`), `currentItemId` bleibt leer (NICHT
+automatisch genommen) → explizites `take` auf dem geparkten Manual-Item
+funktioniert weiterhin normal.
+
+**Per echtem Chromium-Klicktest** (hand-gebauter CDP-über-WebSocket-
+Treiber, `node`+`ws`, kein Browser-Automatisierungs-Tool in dieser
+Umgebung vorhanden — s. `feedback_cdp_browser_test_no_tool_available`-
+Gedächtniseintrag) gegen die echte Flow-Editor-Kachel: Klick auf den
+✋/⏭-Button einer Zeile schaltet sie live um; ein echter, per
+`Input.dispatchMouseEvent`-Sequenz simulierter Pointer-Drag vom
+Ziehgriff einer Zeile auf eine andere löste den Reorder korrekt aus
+(Reihenfolge exakt wie von `reorderItems`s Splice-Logik erwartet).
+**Dabei ein echter Bug gefunden, den die reinen API-Tests NICHT
+gefangen hätten:** `itemToLoadEntry()` in `ui/bundle.js` schickte
+`startType` beim Reorder gar nicht mit — jeder Browser-Drag setzte
+lautlos alle Items auf `sequence` zurück, obwohl die Backend-Logik
+(die ich per Hand-konstruiertem `load()`-Aufruf mit `startType` im
+Payload getestet hatte) korrekt war. Der Bug lag ausschließlich im
+Payload-Aufbau, nicht in der Zip-Logik. Fix: `startType` in
+`itemToLoadEntry` ergänzt, Binary neu gebaut (`include_str!` bettet
+`bundle.js` zur Compile-Zeit ein, Instanz-Neustart nötig), zweiter
+Klicktest bestätigt: alle drei Zeilen behalten ihre Manual-Markierung
+über den Reorder hinweg. Test-Instanzen danach über die reguläre
+`DELETE /api/v1/instances/<id>`-API gestoppt (keine `kill -9`, s.
+`feedback_launcher_sigkill_triggers_autorestart`-Gedächtniseintrag),
+Chromium-Testprozess beendet, `pgrep` bestätigt keine Waisenprozesse.
+
+**Dateien:** `nodes/omp-playout-automation/src/main.rs`,
+`src/playlist.rs`, `ui/bundle.js`.

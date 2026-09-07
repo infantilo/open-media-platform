@@ -1011,18 +1011,40 @@ Katalog-Kategorie `graphics` (§13.5).
 
 ### 6.1 Ist-Zustand in OMP
 
+**Aktualisiert 2026-09-07** — der ursprüngliche C14/C15-Schnappschuss
+unten war veraltet, seither ist über mehrere kleinere Aufträge (C18,
+C20, "Next Live") einiges dazugekommen, ohne dass ein formeller
+Kapitel-6-Teil je begonnen wurde (`UMSETZUNG.md`-Status-Checkliste hat
+bis heute keinen "Kapitel 6 Teil …"-Eintrag):
+
 `nodes/omp-playout-automation` (C14/C15, `docs/decisions.md`
 2026-07-13): dünner Sequenzer **ohne eigene Pipeline** — steuert einen
 `omp-player` (append/load/remove/cue/take) und einen
 `omp-video-mixer-me` (crosspoint.select/cut) über deren eigene
 IS-12/14-Methoden fern (`src/remote.rs`, direkte Node-HTTP; Ziel-Wahl
 über beschreibbare Parameter `targetPlayerLabel`/`targetMixerLabel`).
-Playlist = geordnete Item-IDs (`src/playlist.rs`, 318 Zeilen),
-Auto-Advance über einen 200-ms-Timer gegen `durationMs`
-(`main.rs:53–56`), weil der Player kein EOS kennt. Modi `auto`/`hold`.
-UI (`ui/bundle.js`, 258 Zeilen): Ziel-Labels, Verbunden-Badge,
-Item-Liste mit Cue/Take, Fortschrittsbalken. Items sind Testmuster
-(`pattern`/`toneFrequency`/`durationMs`).
+Playlist = geordnete Item-IDs (`src/playlist.rs`, inzwischen 360
+Zeilen), Auto-Advance über einen 200-ms-Timer gegen `durationMs`
+(weil der Player kein EOS kennt). Modi `auto`/`hold` (playlist-weit,
+kein Konzept auf Event-Ebene). `src/main.rs` ist inzwischen 1755
+Zeilen (C18 Cart-/Interrupt-Assets: `cart.define`/`remove`/`fire`/
+`return`, wiederherstellbarer Player-/Mixer-Zustand; "Next Live"-
+Sprungfunktion, die Live-Items überspringt bis zum nächsten). Neu
+dazugekommen ist `src/timeline.rs` (235 Zeilen, C20: gefensterte statt
+vollständig neu berechnete Zeitschätzung). **Kein** Fixzeit-/Zeitplan-
+Konzept (`main.rs:390`s eigener Kommentar bestätigt das explizit),
+**keine** Transitions außer hartem Cut, **keine** Grafik-Children,
+**kein** As-Run-Log.
+
+UI (`ui/bundle.js`, inzwischen 812 Zeilen statt der ursprünglichen
+258): schon eine echte spaltenbasierte Rundown-Tabelle (`pl-grid-cols`:
+Nummer/Icon/Titel/Dauer/Rest/Aktionen), Mode-Dropdown + ON-AIR/STANDBY-
+Badge, Cart-Leiste. Reorder läuft aber über natives HTML5-Drag&Drop
+(`dragstart`/`dragover`/`drop`, `ui/bundle.js:550–565`) — auf
+Touch-Geräten wirkungslos (unabhängig gefundener Touch-Audit-Punkt,
+2026-09-07, Punkt 2 der Prioritätenliste). Items sind weiterhin
+Testmuster (`pattern`/`toneFrequency`/`durationMs`), noch keine echten
+Clips aus der Media Library.
 
 Diese Architektur ist die **richtige** Basis für die Parität: PIPELINE
 CONTROLLERs `PlaylistEngine` ist ebenfalls ein Sequenzer über fremden
@@ -1049,6 +1071,64 @@ Klassifikation, Start-Typ, Transition, Children —
 ChannelBus-Cross-Channel-Trigger, Voiceover-Engine, Record-Engine,
 SCTE-35, Plugin-System.
 
+### 6.2b Drei vom Projektinhaber genannte Punkte, gezielt gegen PIPELINE CONTROLLER geprüft (2026-09-07)
+
+Nutzerauftrag nannte explizit "manual start", "media validation" und
+"channelbranding pro output" — keiner der drei stand im obigen 6.2-
+Inventar. Gezielt nachgeschlagen (nicht geraten, `UMSETZUNG.md` §0
+Punkt 9):
+
+**Manual Start — PC hat das NICHT, echte OMP-Neuerfindung:**
+`startType` ist in PIPELINE CONTROLLER überall nur `sequence`/`fixtime`
+(`PlaylistEngine.js:395,507,561,1489`; Event-Editor-Dropdown
+`ui.html:1138–1141` bietet nur diese zwei). Was existiert, ist
+**`endType: 'manual'`** ("Manual Hold", `ui.html:1146`,
+`PlaylistEngine.js:1601,1661–1665,1708–1710,1770–1772,2053`) — pausiert
+NACH Event-Ende, bis der Operator manuell weiterschaltet. Das ist die
+umgekehrte Richtung von dem, was der Nutzer meint (ein Event, das nie
+von selbst startet — weder per Sequenz-Kette noch per Fixzeit-Timer —
+sondern ausschließlich per explizitem Operator-TAKE). Es gibt einen
+toten Rest-Verweis auf `startType==='manual'` in einem reinen
+Playlist-Grid-Icon (`ui.html:13725`), dem aber nirgends ein Wert
+zugewiesen wird — kein echtes Feature, nur totes UI-Fragment.
+
+**Medien-/Live-Verfügbarkeit — PC hat ein ausgereiftes Zwei-Schichten-System:**
+1. **Bei Cue/Play (blockierend, pro Event):** `resolveFile()`
+   (`PlaylistEngine.js:38–63`) prüft `fs.existsSync()` vor jedem
+   Player-Event; bei Fehlschlag Rückfall auf konfigurierte
+   Backup-Verzeichnisse (`_resolveBackupFile`, `:1364`), sonst je nach
+   `missingBehavior` entweder Umschalten auf Idle-Quelle
+   (`idle-fallback`) oder `skipped` + `not-played{reason:'missing-media'}`
+   (`:1610–1636`). Für Live-Quellen analog:
+   `_handleInvalidLiveSignal` (`:1300–1323`) pollt
+   `master.getLiveSignalStatus(sourceId)` (echte DeckLink-Signalpräsenz,
+   `MasterPipeline.js:647`), gleiche Fallback-Kette bei fehlendem Signal.
+2. **Proaktiv/on-demand (Grid-Spalte, kein Dauerpoll):**
+   `GET /api/playlist/availability` (`server.js:4318–4330`) prüft die
+   GESAMTE Playliste gegen Haupt-/Backup-Verzeichnisse, Ampel-Anzeige
+   `M`/`B` pro Zeile (`ui.html:12758–12764`), nur bei aktivierter Spalte
+   geladen (`loadAvailability()`, `:2812,12750–12756`).
+
+**Channel-Branding pro Output — auch bei PC keine echte Pro-Output-Lösung:**
+PC hat nur EINEN Programm-Ausgang; "Branding" ist ein einzelnes,
+geteiltes `gdkpixbufoverlay`-Element nach dem Compositor
+(`MasterPipeline.js:285,983,1673–1710`), gesteuert entweder vom
+Playlist-Event-Feld `event.branding` (`ui.html:1167–1168`), manuell per
+API (`POST /api/branding/show|hide|set`), oder einem konfigurierbaren
+Default (`ui.html:1672–1673,7789–7800`) — bleibt bis zur nächsten
+Änderung bestehen, WIRKT dadurch stationsweit-persistent, ist aber
+inhaltlich an Playlist-Events/manuelle Kontrolle gekoppelt, nicht an
+einen Ausgang gebunden. `lib/OutputEngine.js` (Sekundär-Ausgänge:
+SRT/NDI/DeckLink etc.) kennt "branding" überhaupt nicht — jeder
+Zusatz-Ausgang wählt nur `source: 'clean'` (vor Grafik) oder PGM (nach
+Grafik, übernimmt was gerade gesetzt ist), keine Ausgang-eigene
+Overlay-Konfiguration (`OutputEngine.js:5–27`).
+
+**Konsequenz für OMP:** alle drei sind entweder eine echte
+OMP-Neuentwicklung (Manual Start, Channel-Branding-pro-Output) oder ein
+Portierungs-, kein Neuentwicklungs-Fall mit klarem PC-Vorbild
+(Medien-/Live-Verfügbarkeit) — unten in 6.3/6.4/6.5 integriert.
+
 ### 6.3 Ehrliche Scope-Übersetzung („alle Funktionen" nach Schichten)
 
 Volle wörtliche Parität schließt Subsysteme ein, die in OMP als
@@ -1063,25 +1143,29 @@ brechen. Übersetzung:
 | Sequenz/Fixtime/Jump/Skip/Hold/Loop/Idle | **hier**, Kern-Scope |
 | Transitions pro Event (cut/fade/xfade) | **hier** — als Aufruf-Choreografie von Mixer (`autoTrans`/`transRate`, K3-Teil-2) + Player-A/B-Slots |
 | Echte Clips, EOS-Advance, SOM/EOM | **K2** (`omp-player`); Automation konsumiert `itemEnded` |
-| Grafik-Child-Events, Variablen | **hier**, sobald **K5** existiert |
-| Asset-/Break-Panel mit Auto-Return | **hier** (reine Sequenzer-Logik) |
-| Counter-Strip, Event-Editor, Rundown-UI | **hier**, UI-Bundle |
+| Grafik-Child-Events, Variablen | **hier** — `omp-ograf` (K5) existiert bereits, kein Blocker mehr |
+| Asset-/Break-Panel mit Auto-Return | **hier**, größtenteils bereits da (C18 Cart-System) — Auto-Return-Restdauer-Rechnung fehlt noch |
+| Counter-Strip, Event-Editor, Rundown-UI | **hier**, UI-Bundle — Rundown-Tabelle/Mode/ON-AIR-Badge/Cart-Leiste schon vorhanden, Rest offen |
 | As-Run-Log | **hier** publizieren (NATS `omp.asrun.<id>`), Persistenz im Orchestrator/Postgres (kleiner additiver Endpunkt) |
 | Voiceover/Record/SCTE-35/Marina/ChannelBus/Plugins | **nicht hier** — je eigener Node/Trigger-Child-Typ, ausdrücklich späterer, separater Scope (Community-/P4-Linie) |
+| **Manual Start** (Nutzerauftrag 2026-09-07, kein PC-Vorbild, s. 6.2b) | **hier** — dritter `startType`-Wert, Event bleibt `pending` bis explizitem Operator-TAKE, nimmt weder an Sequenz-Vorrücken noch an Fixzeit-Timern teil |
+| **Medien-/Live-Verfügbarkeit** (Nutzerauftrag 2026-09-07, PC-Vorbild s. 6.2b) | **hier** (Rundown-Badge + Fallback-Verhalten) + **K2**/`omp-media-library` (liefert die eigentliche Existenz-/Health-Prüfung, bereits vorhanden — ffprobe-Validierung, `omp-media-library/src/main.rs:138,193,302`) |
+| **Channel-Branding pro Output** (Nutzerauftrag 2026-09-07, kein echtes PC-Vorbild, s. 6.2b) | **nicht hier** — gehört an den jeweiligen Ausgang (Mixer-DSK-Layer, K3, oder ein permanenter `omp-ograf`-Slot pro Output), nicht an die Playlist; Automation liefert höchstens Trigger-Hooks (z. B. "Event X blendet Bauchbinde Y ein"), der persistente Teil ist strukturell Output-/Workflow-Konfiguration, kein Playlist-Item |
 
 ### 6.4 Ziel-Design
 
 **Datenmodell (Item-Metadaten erweitern, `main.rs`-`ItemMeta` →
 Event):** `{id, label, source (K2: file/pattern), somMs/eomMs,
-durationMs (aus Probe), startType: sequence|fixtime, startTime
-("HH:MM:SS:FF"), transition: cut|mix, transitionRateFrames,
-children: [{type: "graphics", template, data, delayMs, durationMs,
-relativeTo: start|end}], state: pending|cued|onair|done|skipped}` —
-alles Descriptor-/Methoden-Ebene, Persistenz der Playlist als
-speicher-/ladbare Objekte (Vorschlag: Orchestrator-API
-`GET/PUT /api/v1/playlists/<name>` analog Layouts/D1-Postgres — die
-Automation lädt/sichert über den generischen Proxy; Alternative
-node-lokale Datei, siehe offene Frage 2).
+durationMs (aus Probe), startType: sequence|fixtime|manual, startTime
+("HH:MM:SS:FF", nur bei fixtime), transition: cut|mix,
+transitionRateFrames, children: [{type: "graphics", template, data,
+delayMs, durationMs, relativeTo: start|end}], availability:
+unknown|ok|missing (s. Verfügbarkeits-Absatz unten), state:
+pending|cued|onair|done|skipped}` — alles Descriptor-/Methoden-Ebene,
+Persistenz der Playlist als speicher-/ladbare Objekte (Vorschlag:
+Orchestrator-API `GET/PUT /api/v1/playlists/<name>` analog
+Layouts/D1-Postgres — die Automation lädt/sichert über den generischen
+Proxy; Alternative node-lokale Datei, siehe offene Frage 2).
 
 **Scheduler:** neben dem bestehenden Advance-Tick ein
 Wall-Clock-Zweig nach PIPELINE-CONTROLLER-Muster: beim Start/Ändern der
@@ -1089,6 +1173,32 @@ Liste für jedes `fixtime`-Event einen absoluten Timer registrieren
 (tokio `sleep_until`), Grace-Fenster konfigurierbar (Default 30 s),
 verpasste Zeiten → `skipped` + Alarm-Event. Fixtime feuert unabhängig
 vom Sequenz-Fortschritt (harter Unterbrecher mit Pre-Cue davor).
+
+**Manual Start (Nutzerauftrag 2026-09-07, s. 6.2b — kein PC-Vorbild,
+eigenes OMP-Konzept):** ein `manual`-Event nimmt an KEINEM der beiden
+Mechanismen oben teil — der Sequenz-Zeiger überspringt es beim
+automatischen Vorrücken (bleibt `pending`, blockiert die Liste nicht),
+kein Wall-Clock-Timer wird registriert. Es wird ausschließlich durch
+einen expliziten Operator-TAKE auf genau dieses Item scharf — danach
+läuft es wie jedes andere Event (Auto-Advance/EOS zum nächsten Item
+danach ganz normal). Praktisch: Cue bleibt wie heute möglich (zeigt
+Vorschau/bereitet vor), nur das automatische Auslösen entfällt.
+
+**Medien-/Live-Verfügbarkeit (Nutzerauftrag 2026-09-07, PC-Vorbild s.
+6.2b):** kein neuer Prüf-Mechanismus — `omp-media-library` prüft Dateien
+bereits real per `ffprobe` und entfernt verschwundene Einträge
+(`src/main.rs:138,193,302`); Live-Quellen haben ihren eigenen
+Registry-/NMOS-Gesundheitsstatus. `omp-playout-automation` fragt das
+nur ab, analog zu PCs zweischichtigem Modell: (1) **Rundown-Badge**
+(on-demand/beim Laden der Liste, keine Dauerpoll-Last) — grün/rot pro
+Zeile in einer neuen `Verfügbarkeit`-Spalte, wie PCs `M`/`B`-Ampel; (2)
+**Bei Cue/Take (blockierend):** fehlt die Quelle, greift dieselbe
+Fallback-Kette wie PC — konfigurierbares `missingBehavior`
+(`skip` mit Alarm-Event vs. `idle-fallback` auf eine Standardquelle),
+kein OMP-eigener Backup-Verzeichnis-Mechanismus nötig (K2/Media-Library
+kennt keine "Backup-Pfade"-Idee — bewusst NICHT 1:1 von PC übernommen,
+da die Media Library ohnehin ein zentraler, gepflegter Katalog ist,
+nicht ein Dateisystem mit Ausweich-Ordnern).
 
 **Take-Choreografie mit Transitions:** heute `select`+`cut`; neu pro
 Event: `cut` → wie heute; `mix` → `select`+`autoTrans` mit vorher per
@@ -1108,11 +1218,15 @@ im K1-Look —
   Taste, großer NEXT/TAKE-Button; darunter der **Counter-Strip**
   (horizontale Leiste der nächsten zeitgebundenen Events mit
   Live-Countdowns).
-- **Rundown-Tabelle** (statt heutiger Item-Kärtchen): Spalten
-  `# ・ Start (geplant/errechnet) ・ Titel ・ Dauer ・ Rest ・ Trans ・
-  Children-Badges (🎨 Grafik) ・ Status`; On-Air-Zeile rot hinterlegt
-  mit laufendem Fortschrittsbalken in der Zeile, gecuete Zeile amber
-  (Farb-Semantik = K1-Tokens, identisch zu K3/K4); Drag-Reorder;
+- **Rundown-Tabelle** (die heutige `pl-grid-cols`-Tabelle erweitern,
+  kein Neubau): Spalten `# ・ Start (geplant/errechnet) ・ Titel ・
+  Dauer ・ Rest ・ Trans ・ Children-Badges (🎨 Grafik) ・ Verfügbarkeit
+  (✓/✗) ・ Status`; On-Air-Zeile rot hinterlegt mit laufendem
+  Fortschrittsbalken in der Zeile, gecuete Zeile amber (Farb-Semantik =
+  K1-Tokens, identisch zu K3/K4); Drag-Reorder — **Touch-Fund
+  2026-09-07:** heutiges Reorder ist natives HTML5-Drag&Drop
+  (`ui/bundle.js:550–565`), auf Touch wirkungslos, hier auf Pointer
+  Events umzustellen (gleiches Muster wie `ui/graph/flow-canvas.ts`);
   Kontextmenü Cue/Skip/Delete/Jump.
 - **Event-Editor** als Seitendrawer (Klick auf Zeile): Quelle
   (Clip-Browser aus K2-`mediaLibrary`), SOM/EOM, Start-Typ + Zeitfeld,
@@ -1127,19 +1241,35 @@ im K1-Look —
 ### 6.5 Phasenplan
 
 - **Teil 1 — Rundown-Fundament:** erweitertes Event-Modell (Label,
-  Reorder/`move`, Zustände, `skip`, `jump`), Rundown-Tabelle + Kopfzeile
-  im K1-Look. Kein neuer Scheduler. (Unabhängig von K2 machbar —
-  Testmuster-Items behalten `durationMs`.)
-- **Teil 2 — echte Clips + EOS:** Umstellung auf K2-Player-Events
-  (`itemEnded` statt reinem Timer; Timer bleibt Fallback für
-  Pattern-Items), Clip-Browser im Event-Editor, As-Run-Publikation.
+  Reorder/`move`, Zustände, `skip`, `jump`, **neuer `startType:
+  manual`**), Rundown-Tabelle (Ausbau der bestehenden `pl-grid-cols`,
+  inkl. **Touch-sicherem Pointer-Event-Reorder statt HTML5-DnD**) +
+  Kopfzeile im K1-Look (Uhr, Countdown, großer NEXT/TAKE-Button —
+  Mode-Badge/ON-AIR gibt es schon). Kein neuer Scheduler. (Unabhängig
+  von K2 machbar — Testmuster-Items behalten `durationMs`.)
+- **Teil 2 — echte Clips + EOS + Verfügbarkeit:** Umstellung auf
+  K2-Player-Events (`itemEnded` statt reinem Timer; Timer bleibt
+  Fallback für Pattern-Items), Clip-Browser im Event-Editor (liest
+  `omp-media-library`), **Verfügbarkeits-Spalte + `missingBehavior`
+  (skip/idle-fallback) bei Cue/Take**, As-Run-Publikation.
 - **Teil 3 — Fixtime-Scheduler + Counter-Strip:** Wall-Clock-Timer,
-  Grace-Regel, Countdown-UI, Alarm bei verpasster Zeit.
+  Grace-Regel, Countdown-UI, Alarm bei verpasster Zeit. Manual-Start-
+  Events (Teil 1) bleiben von diesem Scheduler unberührt.
 - **Teil 4 — Transitions + Break/Auto-Return:** Mix-Take über
-  K3-Teil-2-Params; Break-Leiste mit Return-Logik.
-- **Teil 5 — Grafik-Children (nach K5):** Children-Editor,
-  Scheduling relativ Start/Ende, Variablen-Auflösung
-  (`{{next:title}}`-Teilmenge) aus dem Playlist-Kontext.
+  K3-Teil-2-Params; Break-Leiste mit Return-Logik (C18-Cart-System
+  existiert schon, Restdauer-Auto-Return fehlt noch).
+- **Teil 5 — Grafik-Children (K5 existiert bereits, kein Blocker
+  mehr):** Children-Editor, Scheduling relativ Start/Ende,
+  Variablen-Auflösung (`{{next:title}}`-Teilmenge) aus dem
+  Playlist-Kontext.
+- **Teil 6 — Channel-Branding pro Output (Nutzerauftrag 2026-09-07,
+  s. 6.2b — NICHT Teil dieses Nodes):** eigener Design-Schnitt, gehört
+  strukturell zum jeweiligen Ausgang/Workflow, nicht zur Playlist —
+  vermutlich ein permanenter `omp-ograf`-Slot pro Mixer-Output (K3-DSK-
+  Ebene) statt eines geteilten Overlays wie bei PC. Braucht eigene
+  Spezifikation (eigenes Unterkapitel oder Ergänzung in K3/K5), bevor
+  hier ein Phasenplan-Teil sinnvoll ist — bewusst nicht weiter
+  detailliert, bis das geklärt ist (s. 6.6 Frage 5).
 
 ### 6.6 Offene Fragen
 
@@ -1159,6 +1289,13 @@ im K1-Look —
    Multi-Kanal strukturell bereits ab. Reicht das als Antwort, oder ist
    ein kanalübergreifendes Dashboard (ChannelBus-Äquivalent) Teil des
    Zielbilds?
+5. **Channel-Branding pro Output (neu, 2026-09-07):** wo genau soll die
+   permanente Bug/Logo-Konfiguration sitzen — als neues Feld am
+   Mixer-Output/DSK (K3), als eigener „immer an"-`omp-ograf`-Modus pro
+   Workflow-Ausgang, oder als dritte, ganz neue Node-Art? Und: soll die
+   Playlist trotzdem einzelne Events erlauben, die Branding gezielt
+   AUS-/wechseln (z. B. für Werbeblöcke), oder bleibt es strikt
+   Playlist-unabhängig?
 
 ---
 
