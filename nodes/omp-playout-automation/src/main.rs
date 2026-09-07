@@ -91,6 +91,9 @@ const FIXTIME_PRECUE_SECS: i64 = 5;
 /// verspätet doch noch zu feuern.
 const FIXTIME_GRACE_SECS: i64 = 30;
 const FIXTIME_TICK: Duration = Duration::from_secs(1);
+/// Kapitel 6 Teil 5 — feiner als `FIXTIME_TICK`, gröber als
+/// `ADVANCE_TICK` (Begründung bei `graphics_loop`).
+const GRAPHICS_TICK: Duration = Duration::from_millis(250);
 /// Deutlich unter `auth.ServiceTokenTTL` (24h, Orchestrator) — ein
 /// Refresh auf halber Laufzeit lässt reichlich Spielraum, falls der
 /// Orchestrator beim ersten Versuch kurz nicht erreichbar ist (nächster
@@ -175,6 +178,43 @@ impl Transition {
     }
 }
 
+/// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4 "Grafik-Child-
+/// Events"): ein Kind-Ereignis ist relativ zum START oder ENDE des
+/// tragenden Rundown-Items terminiert — `End` ist nur sinnvoll, wenn das
+/// Item eine echte `duration_ms > 0` hat (Live-/manuell endlose Items
+/// kennen kein "Ende", `schedule_children` überspringt solche
+/// End-relativen Kinder dann mit einer Meldung statt sie nie feuern zu
+/// lassen, ohne dass der Operator erfährt, warum).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum RelativeTo {
+    Start,
+    End,
+}
+
+/// Ein Grafik-Kind-Ereignis (`docs/END-GOAL-FEATURES.md` §6.4) — zeigt
+/// `template_id` mit `data` am Ziel-`omp-ograf` (`targetGraphicsLabel`)
+/// für `duration_ms` (0 = bleibt stehen, bis das tragende Item endet
+/// oder der Kanal wechselt — kein eigenes `hide()` geplant) ab
+/// `delay_ms` relativ zu `relative_to`. `data` ist bewusst rohes JSON
+/// (nicht typisiert) — die Feldform hängt vom jeweiligen OGraf-Template-
+/// Schema ab, das dieser Node nicht kennt und nicht kennen muss
+/// (`omp-ograf::show` wendet es ohnehin nur als Override auf die
+/// Schema-Defaults an).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GraphicsChild {
+    #[serde(rename = "templateId")]
+    template_id: String,
+    #[serde(default)]
+    data: Value,
+    #[serde(rename = "delayMs", default)]
+    delay_ms: u64,
+    #[serde(rename = "durationMs", default)]
+    duration_ms: u64,
+    #[serde(rename = "relativeTo")]
+    relative_to: RelativeTo,
+}
+
 #[derive(Debug, Clone)]
 struct ItemMeta {
     label: String,
@@ -198,6 +238,8 @@ struct ItemMeta {
     /// setzt sie vorher explizit (`crosspoint.setTransRate`,
     /// 1..=250 Frames, Mixer-seitige Grenze).
     transition_rate_frames: Option<u32>,
+    /// Kapitel 6 Teil 5: Grafik-Kind-Ereignisse, s. `GraphicsChild`-Doku.
+    children: Vec<GraphicsChild>,
 }
 
 /// Rekonstruiert ein `ItemMeta` aus einem Item, wie es `omp-player`s
@@ -236,6 +278,7 @@ fn item_meta_from_player_json(v: &Value) -> Option<ItemMeta> {
         fixtime_hms: None,
         transition: Transition::default(),
         transition_rate_frames: None,
+        children: Vec::new(),
     })
 }
 
@@ -348,6 +391,9 @@ fn item_meta_to_json(id: &str, m: &ItemMeta) -> Value {
     if let Some(frames) = m.transition_rate_frames {
         v["transitionRateFrames"] = serde_json::json!(frames);
     }
+    if !m.children.is_empty() {
+        v["children"] = serde_json::json!(m.children);
+    }
     v
 }
 
@@ -426,6 +472,24 @@ struct AutomationState {
     /// `fixtime_hms`-Werte), daher bei jedem `do_load()` geleert (dessen
     /// eigene Doku).
     fixtime_resolved: HashMap<String, FixtimeResolution>,
+    /// Kapitel 6 Teil 5 (`graphics_loop`-Doku): Ziel-`omp-ograf` für
+    /// Grafik-Kind-Ereignisse — dasselbe dynamische Label-Muster wie
+    /// `target_player_label`/`target_mixer_label`, aber bewusst
+    /// OPTIONAL: ein Rundown ohne Grafik-Kinder braucht keinen
+    /// Grafik-Node, ein `do_take` scheitert deshalb NICHT, nur weil
+    /// `graphics_node_id` unaufgelöst ist (anders als beim
+    /// Player/Mixer) — erst `schedule_children` selbst meldet einen
+    /// Fehler, und auch dann nur, wenn das Item tatsächlich Kinder hat.
+    target_graphics_label: String,
+    graphics_node_id: Option<String>,
+    /// Erhöht sich bei JEDER On-Air-Änderung (alle 8 `take_on_targets`-
+    /// Aufrufstellen, auch die drei "immer harter Cut"-Ausnahmen) — ein
+    /// `ScheduledGraphicsEvent` mit einer älteren Epoche gilt als
+    /// storniert, ohne dass `graphics_schedule` aktiv durchsucht/
+    /// bereinigt werden muss (verhindert, dass ein End-relatives Kind
+    /// des VORHERIGEN On-Air-Items verspätet auf dem NEUEN Item auftaucht).
+    graphics_epoch: u64,
+    graphics_schedule: Vec<ScheduledGraphicsEvent>,
 }
 
 /// s. `AutomationState::fixtime_resolved`-Doku.
@@ -434,6 +498,20 @@ enum FixtimeResolution {
     PreCued,
     Fired,
     Skipped,
+}
+
+/// s. `AutomationState::graphics_epoch`-Doku.
+#[derive(Debug, Clone)]
+enum GraphicsAction {
+    Show { template_id: String, data: Value },
+    Hide,
+}
+
+#[derive(Debug, Clone)]
+struct ScheduledGraphicsEvent {
+    epoch: u64,
+    fire_at: Instant,
+    action: GraphicsAction,
 }
 
 /// Zustand eines gerade laufenden Cart-Interrupts (`ARCHITECTURE.md`
@@ -496,6 +574,56 @@ impl AutomationStore {
 }
 
 impl AutomationStore {
+    /// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4): an ALLEN
+    /// acht On-Air-Änderungs-Stellen aufgerufen (den fünf echten
+    /// "dieses Item auf Sendung nehmen"-Pfaden UND den drei "immer
+    /// harter Cut"-Ausnahmen, Doku bei `take_on_targets`) — erhöht
+    /// zuerst bedingungslos die Epoche (storniert dadurch jedes noch
+    /// ausstehende Grafik-Ereignis des VORHERIGEN On-Air-Items, auch
+    /// wenn das neue Item selbst gar keine Kinder hat, z. B. Stop/Cart),
+    /// und plant danach die Kinder des NEUEN Items (falls vorhanden —
+    /// Carts/das synthetische Stop-Item haben nie welche, dieser Zweig
+    /// ist für sie ein reines No-op nach dem Epochen-Sprung).
+    fn schedule_children(&self, state: &mut AutomationState, item_id: &str, onair_since: Instant) {
+        state.graphics_epoch += 1;
+        let epoch = state.graphics_epoch;
+        let Some(meta) = state.metadata.get(item_id) else { return };
+        if meta.children.is_empty() {
+            return;
+        }
+        let next_title = state
+            .playlist
+            .peek_next()
+            .and_then(|id| state.metadata.get(id))
+            .map(|m| m.label.clone());
+        let item_duration_ms = meta.duration_ms;
+        let item_label = meta.label.clone();
+        let children = meta.children.clone();
+        for child in &children {
+            let Some(offset_ms) = child_show_offset_ms(child, item_duration_ms) else {
+                self.report(format!(
+                    "Grafik-Kind „{}\u{201c} von „{item_label}\u{201c} übersprungen: End-relativ ohne feste Item-Dauer (oder Verzögerung länger als die Dauer)",
+                    child.template_id
+                ));
+                continue;
+            };
+            let fire_at = onair_since + Duration::from_millis(offset_ms);
+            let data = resolve_variables(&child.data, next_title.as_deref());
+            state.graphics_schedule.push(ScheduledGraphicsEvent {
+                epoch,
+                fire_at,
+                action: GraphicsAction::Show { template_id: child.template_id.clone(), data },
+            });
+            if child.duration_ms > 0 {
+                state.graphics_schedule.push(ScheduledGraphicsEvent {
+                    epoch,
+                    fire_at: fire_at + Duration::from_millis(child.duration_ms),
+                    action: GraphicsAction::Hide,
+                });
+            }
+        }
+    }
+
     /// Gemeinsame Logik für `invoke("take")` und den Auto-Advance-Timer:
     /// cued Item am Ziel-Player erneut cuen (idempotent, self-healing
     /// falls der Player zwischenzeitlich neu gestartet ist), dann
@@ -544,7 +672,9 @@ impl AutomationStore {
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
 
         state.playlist.take().map_err(|e| e.to_string())?;
-        state.onair_since = Some(Instant::now());
+        let onair_since = Instant::now();
+        state.onair_since = Some(onair_since);
+        self.schedule_children(&mut state, &item_id, onair_since);
         state.last_live_item_id = Some(item_id);
         Ok(())
     }
@@ -608,7 +738,9 @@ impl AutomationStore {
         let (transition, rate_frames) = item_transition(&state, &item_id);
 
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
-        state.onair_since = Some(Instant::now());
+        let onair_since = Instant::now();
+        state.onair_since = Some(onair_since);
+        self.schedule_children(&mut state, &item_id, onair_since);
         state.last_live_item_id = Some(item_id);
         Ok(())
     }
@@ -659,7 +791,9 @@ impl AutomationStore {
 
         state.playlist.cue(index).map_err(|e| e.to_string())?;
         state.playlist.take().map_err(|e| e.to_string())?;
-        state.onair_since = Some(Instant::now());
+        let onair_since = Instant::now();
+        state.onair_since = Some(onair_since);
+        self.schedule_children(&mut state, item_id, onair_since);
         state.last_live_item_id = Some(item_id.to_string());
         Ok(())
     }
@@ -693,7 +827,9 @@ impl AutomationStore {
         let (transition, rate_frames) = item_transition(&state, &item_id);
 
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &item_id, transition, rate_frames)?;
-        state.onair_since = Some(Instant::now());
+        let onair_since = Instant::now();
+        state.onair_since = Some(onair_since);
+        self.schedule_children(&mut state, &item_id, onair_since);
         state.last_live_item_id = Some(item_id);
         Ok(())
     }
@@ -739,7 +875,9 @@ impl AutomationStore {
 
         state.playlist.cue(target_index).map_err(|e| e.to_string())?;
         state.playlist.take().map_err(|e| e.to_string())?;
-        state.onair_since = Some(Instant::now());
+        let onair_since = Instant::now();
+        state.onair_since = Some(onair_since);
+        self.schedule_children(&mut state, &item_id, onair_since);
         state.last_live_item_id = Some(item_id);
         Ok(())
     }
@@ -797,6 +935,11 @@ impl AutomationStore {
         // Cut — ein Operator, der auf "Stop" drückt, erwartet sofortige
         // Wirkung, keine Ramp-Down-Rampe.
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &stop_item_id, Transition::Cut, None)?;
+        // Kapitel 6 Teil 5: das synthetische Schwarzbild-Item hat nie
+        // Kinder — dieser Aufruf storniert nur (Epochen-Sprung) noch
+        // ausstehende Grafik-Ereignisse des VORHERIGEN On-Air-Items,
+        // s. `schedule_children`-Doku.
+        self.schedule_children(&mut state, &stop_item_id, Instant::now());
 
         // Erst NACH dem Umschalten auf das neue Schwarzbild aufräumen: das
         // vorherige Stop-Item ist bis zu diesem Punkt noch on-air —
@@ -947,6 +1090,11 @@ impl AutomationStore {
             transition: Transition,
             #[serde(rename = "transitionRateFrames", default)]
             transition_rate_frames: Option<u32>,
+            // Kapitel 6 Teil 5: dieselbe Reorder-Rettung zum vierten Mal,
+            // diesmal proaktiv beim Schreiben ergänzt statt erst nach
+            // einem Live-Fund (Nachtrag 181-Lehre endgültig verinnerlicht).
+            #[serde(default)]
+            children: Vec<GraphicsChild>,
         }
         let load_items: Vec<LoadItem> = serde_json::from_str(items_json)
             .map_err(|e| format!("itemsJson ungültig: {e}"))?;
@@ -989,6 +1137,7 @@ impl AutomationStore {
             meta.fixtime_hms = load_item.and_then(|li| li.fixtime_hms.clone());
             meta.transition = load_item.map(|li| li.transition).unwrap_or_default();
             meta.transition_rate_frames = load_item.and_then(|li| li.transition_rate_frames);
+            meta.children = load_item.map(|li| li.children.clone()).unwrap_or_default();
             metadata.insert(id.clone(), meta);
             ids.push(id);
         }
@@ -1131,6 +1280,27 @@ impl AutomationStore {
         }
     }
 
+    /// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4 "Children-
+    /// Editor"): ersetzt die GESAMTE Kind-Liste eines Items — kein
+    /// Hinzufügen/Entfernen einzelner Kinder als eigenes Method (dieselbe
+    /// "ganzer Ersatz statt PATCH-per-Feld"-Linie wie beim generischen
+    /// Node-Katalog-Editor, `docs/END-GOAL-FEATURES.md` §17). Rein lokal
+    /// wie `do_set_start_type`/`do_set_transition`, kein Player-/Mixer-
+    /// Roundtrip — wirkt erst beim NÄCHSTEN Take dieses Items
+    /// (`schedule_children` liest die Liste dort neu), ein bereits
+    /// laufender On-Air-Zeitplan wird von einer Änderung hier nicht
+    /// rückwirkend angepasst.
+    fn do_set_children(&self, item_id: &str, children: Vec<GraphicsChild>) -> Result<(), String> {
+        let mut state = self.state.lock().expect("lock poisoned");
+        match state.metadata.get_mut(item_id) {
+            Some(meta) => {
+                meta.children = children;
+                Ok(())
+            }
+            None => Err("unbekannte itemId".to_string()),
+        }
+    }
+
     /// Legt ein neues, wiederverwendbares Cart-/Interrupt-Asset an (rein
     /// lokal, kein Fernaufruf nötig — anders als `do_append` gibt es hier
     /// keinen Ziel-Player, dessen Item-IDs übernommen werden müssten, das
@@ -1163,6 +1333,7 @@ impl AutomationStore {
                 fixtime_hms: None,
                 transition: Transition::default(),
                 transition_rate_frames: None,
+                children: Vec::new(),
             },
         ));
         Ok(())
@@ -1247,6 +1418,10 @@ impl AutomationStore {
         // Cut, unabhängig davon, was `transition` für dieses (synthetische
         // Test-Muster-)Cart-Item ohnehin bedeutungslos trüge.
         take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &cart_item_id, Transition::Cut, None)?;
+        // Kapitel 6 Teil 5: Cart-Assets haben nie Kinder (Doku oben) —
+        // storniert nur ausstehende Grafik-Ereignisse des unterbrochenen
+        // Hauptkanal-Items.
+        self.schedule_children(&mut state, &cart_item_id, Instant::now());
 
         state.active_cart = Some(ActiveCart {
             asset_id: asset_id.to_string(),
@@ -1291,8 +1466,19 @@ impl AutomationStore {
             // wiederhergestellten Items — Vorhersagbarkeit nach einem
             // Cart-Interrupt zählt hier mehr als eine weiche Rampe.
             take_on_targets(self, &player_node_id, &mixer_node_id, &player_label, &restore_id, Transition::Cut, None)?;
-            state.onair_since =
-                Some(Instant::now() - Duration::from_millis(active.elapsed_before_interrupt_ms as u64));
+            let restored_onair_since =
+                Instant::now() - Duration::from_millis(active.elapsed_before_interrupt_ms as u64);
+            state.onair_since = Some(restored_onair_since);
+            // Kapitel 6 Teil 5: dieselbe zurückdatierte `onair_since` wie
+            // oben (Restdauer-Prinzip, C18) — ein Kind, dessen Zeitfenster
+            // während des Interrupts bereits verstrichen wäre, feuert
+            // dadurch beim Return sofort (Show unmittelbar gefolgt von
+            // Hide, `graphics_loop` sortiert fällige Ereignisse vor dem
+            // Versand nach `fire_at`) statt entweder nie oder dauerhaft zu
+            // erscheinen — ein knappes, aber korrektes Verhalten für einen
+            // seltenen Randfall, kein perfekter "hat es schon gezeigt"-
+            // Zustand.
+            self.schedule_children(&mut state, &restore_id, restored_onair_since);
             state.last_live_item_id = Some(restore_id.clone());
             // Lokale Playlist-Buchführung nachziehen, falls sie durch ein
             // zwischenzeitliches Ende-der-Liste-`advance()` hinter die
@@ -1401,6 +1587,51 @@ fn item_transition(state: &AutomationState, item_id: &str) -> (Transition, Optio
         .unwrap_or((Transition::Cut, None))
 }
 
+/// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4 "Grafik-Child-
+/// Events... relativ zu Clip-Start ODER -Ende"): reine Zeit-Arithmetik,
+/// kein State/keine Uhr — testbar wie `fixtime_action`. Rechnet den
+/// Versatz (ms) zwischen dem On-Air-Beginn des tragenden Items und dem
+/// Anzeige-Zeitpunkt des Kinds aus. `item_duration_ms == 0` (endlos,
+/// Live-/manuelle Items) macht `RelativeTo::End` bedeutungslos — `None`
+/// statt eines erfundenen Zeitpunkts, ebenso bei einer `delay_ms` >
+/// `item_duration_ms` (End-relativ VOR dem Start wäre unsinnig).
+fn child_show_offset_ms(child: &GraphicsChild, item_duration_ms: u64) -> Option<u64> {
+    match child.relative_to {
+        RelativeTo::Start => Some(child.delay_ms),
+        RelativeTo::End => {
+            if item_duration_ms == 0 {
+                return None;
+            }
+            item_duration_ms.checked_sub(child.delay_ms)
+        }
+    }
+}
+
+/// Kapitel 6 Teil 5 (§6.4 "Variablen-Auflösung ({{next:title}}-
+/// Teilmenge)"): ersetzt `{{next:title}}` in allen String-Werten von
+/// `data` (rekursiv durch Objekte/Arrays) durch den Titel des
+/// chronologisch nächsten Rundown-Items — die einzige in dieser
+/// Ausbaustufe unterstützte Variable, bewusst keine generische
+/// Template-Engine. `next_title: None` (kein nächstes Item, z. B.
+/// letztes Item der Liste) ersetzt durch einen leeren String statt den
+/// Platzhalter unverändert stehen zu lassen (der wäre sonst sichtbar
+/// auf der Grafik, ein leeres Feld ist die unauffälligere Ausfallstufe).
+fn resolve_variables(data: &Value, next_title: Option<&str>) -> Value {
+    const VAR_NEXT_TITLE: &str = "{{next:title}}";
+    match data {
+        Value::String(s) if s.contains(VAR_NEXT_TITLE) => {
+            Value::String(s.replace(VAR_NEXT_TITLE, next_title.unwrap_or("")))
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| resolve_variables(v, next_title)).collect())
+        }
+        Value::Object(map) => Value::Object(
+            map.iter().map(|(k, v)| (k.clone(), resolve_variables(v, next_title))).collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
 /// Liest `crosspoint.inputs` des Ziel-Mixers (bereits dessen eigene,
 /// laufende IS-04-Discovery, §6.1/C10) und findet den Video-Sender des
 /// Ziel-Players über dessen Label-Präfix (`omp-node-sdk::node::start`
@@ -1500,6 +1731,14 @@ impl ParamStore for AutomationStore {
             },
             ParamSpec {
                 name: "targetMixerLabel".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: false,
+            },
+            // Kapitel 6 Teil 5 — optional, s. `target_graphics_label`-Doku.
+            ParamSpec {
+                name: "targetGraphicsLabel".to_string(),
                 kind: ParamType::String,
                 unit: None,
                 range: None,
@@ -1673,6 +1912,24 @@ impl ParamStore for AutomationStore {
                     },
                 ],
             },
+            // Kapitel 6 Teil 5: `childrenJson` ist JSON-kodiert (Array von
+            // `GraphicsChild`), gleiches Muster wie `load`s `itemsJson` —
+            // komplexe/verschachtelte Daten gehen in diesem SDK immer als
+            // JSON-String-Argument, nicht als eigener `ParamType`
+            // (do_set_children-Doku).
+            MethodSpec {
+                name: "setChildren".to_string(),
+                args: vec![
+                    MethodArg {
+                        name: "itemId".to_string(),
+                        kind: ParamType::String,
+                    },
+                    MethodArg {
+                        name: "childrenJson".to_string(),
+                        kind: ParamType::String,
+                    },
+                ],
+            },
             MethodSpec {
                 name: "take".to_string(),
                 args: vec![],
@@ -1760,6 +2017,7 @@ impl ParamStore for AutomationStore {
             })),
             "targetPlayerLabel" => Some(serde_json::json!(state.target_player_label)),
             "targetMixerLabel" => Some(serde_json::json!(state.target_mixer_label)),
+            "targetGraphicsLabel" => Some(serde_json::json!(state.target_graphics_label)),
             "connected" => Some(serde_json::json!(
                 state.player_node_id.is_some() && state.mixer_node_id.is_some()
             )),
@@ -1828,6 +2086,11 @@ impl ParamStore for AutomationStore {
                 state.mixer_node_id = None;
                 Ok(())
             }
+            "targetGraphicsLabel" => {
+                state.target_graphics_label = value.as_str().unwrap_or_default().to_string();
+                state.graphics_node_id = None;
+                Ok(())
+            }
             _ => Err(SetError::ReadOnly),
         }
     }
@@ -1890,6 +2153,18 @@ impl ParamStore for AutomationStore {
                     (_, None) => Err("transition fehlt oder ungültig (cut|mix)".to_string()),
                 }
             }
+            // IIFE-Closure statt der sonstigen Tupel-Match-Form (s.
+            // "setStartType"/"setTransition" oben) — hier zwei
+            // unabhängige Fehlerquellen (fehlende `itemId`, ungültiges
+            // `childrenJson`), `?` innerhalb der Closure bleibt lesbarer
+            // als eine dreiwertige Tupel-Verzweigung.
+            "setChildren" => (|| {
+                let item_id = args.get("itemId").and_then(Value::as_str).ok_or("itemId fehlt".to_string())?;
+                let children_json = args.get("childrenJson").and_then(Value::as_str).unwrap_or("[]");
+                let children: Vec<GraphicsChild> = serde_json::from_str(children_json)
+                    .map_err(|e| format!("childrenJson ungültig: {e}"))?;
+                self.do_set_children(item_id, children)
+            })(),
             "cue" => match args.get("itemId").and_then(Value::as_str) {
                 Some(id) => self.do_cue(id),
                 None => Err("itemId fehlt".to_string()),
@@ -2031,9 +2306,13 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
     let mut interval = tokio::time::interval(DISCOVERY_INTERVAL);
     loop {
         interval.tick().await;
-        let (player_label, mixer_label) = {
+        let (player_label, mixer_label, graphics_label) = {
             let state = store.state.lock().expect("lock poisoned");
-            (state.target_player_label.clone(), state.target_mixer_label.clone())
+            (
+                state.target_player_label.clone(),
+                state.target_mixer_label.clone(),
+                state.target_graphics_label.clone(),
+            )
         };
         let registry = store.registry.clone();
         let own_label = store.own_label.clone();
@@ -2041,14 +2320,25 @@ async fn discovery_loop(store: Arc<AutomationStore>) {
             (
                 remote::resolve_node_id_by_label(&registry, &player_label),
                 remote::resolve_node_id_by_label(&registry, &mixer_label),
+                // Kapitel 6 Teil 5: `resolve_node_id_by_label` gibt bei
+                // leerem Label ohnehin `None` zurück (eigener Guard dort)
+                // — der Kurzschluss hier spart nur den sonst unnötigen
+                // `list_nodes()`-Registry-Aufruf alle 2s im (erwartet
+                // häufigen) Fall "kein Grafik-Ziel konfiguriert".
+                if graphics_label.is_empty() {
+                    None
+                } else {
+                    remote::resolve_node_id_by_label(&registry, &graphics_label)
+                },
                 remote::list_node_labels(&registry, &own_label),
             )
         })
         .await;
-        if let Ok((player_node_id, mixer_node_id, discovered_labels)) = resolved {
+        if let Ok((player_node_id, mixer_node_id, graphics_node_id, discovered_labels)) = resolved {
             let mut state = store.state.lock().expect("lock poisoned");
             state.player_node_id = player_node_id;
             state.mixer_node_id = mixer_node_id;
+            state.graphics_node_id = graphics_node_id;
             state.discovered_labels = discovered_labels;
         }
 
@@ -2299,6 +2589,86 @@ async fn fixtime_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender
     }
 }
 
+/// Kapitel 6 Teil 5 (`docs/END-GOAL-FEATURES.md` §6.4/§6.5): eigener,
+/// von `auto_advance_loop`/`fixtime_loop` komplett getrennter Takt
+/// (gleiches "neue Planungs-Zuständigkeit bekommt einen eigenen Loop"-
+/// Prinzip wie bei Kapitel 6 Teil 3) — feiner als `fixtime_loop`s 1s
+/// (Grafikeinblendungen dürfen sichtbar präziser sein als eine
+/// Wanduhr-Minute), aber nicht so fein wie der 200ms-Advance-Tick
+/// (kein Zeitkritischer On-Air-Wechsel, nur ein Overlay).
+async fn graphics_loop(store: Arc<AutomationStore>, events: mpsc::UnboundedSender<Event>) {
+    let mut interval = tokio::time::interval(GRAPHICS_TICK);
+    loop {
+        interval.tick().await;
+        let now = Instant::now();
+
+        // Fällige Ereignisse aus der aktuellen Epoche einsammeln (nach
+        // `fire_at` sortiert — wichtig für den Cart-Return-Nachhol-Fall,
+        // s. dortige Doku: Show muss vor ihrem eigenen Hide versendet
+        // werden, auch wenn beide bereits überfällig sind), storniert
+        // (falsche Epoche) UND noch-nicht-fällige Einträge bleiben in
+        // `graphics_schedule` bzw. werden beim `retain` verworfen —
+        // dieselbe Drain-und-Prune-Bewegung in einem Schritt.
+        let (graphics_node_id, due) = {
+            let mut state = store.state.lock().expect("lock poisoned");
+            let current_epoch = state.graphics_epoch;
+            let mut due = Vec::new();
+            state.graphics_schedule.retain(|ev| {
+                if ev.epoch != current_epoch {
+                    return false; // storniert, verwerfen
+                }
+                if ev.fire_at <= now {
+                    due.push(ev.clone());
+                    false // fällig, aus der Warteschlange entfernen
+                } else {
+                    true // noch in der Zukunft, behalten
+                }
+            });
+            due.sort_by_key(|ev| ev.fire_at);
+            (state.graphics_node_id.clone(), due)
+        };
+        if due.is_empty() {
+            continue;
+        }
+        let Some(graphics_node_id) = graphics_node_id else {
+            // Kinder geplant, aber kein Ziel-`omp-ograf` (mehr) aufgelöst
+            // (z. B. `targetGraphicsLabel` nie/nicht mehr gültig) — einmal
+            // pro fälligem Ereignis melden statt still zu verwerfen.
+            let label = store.state.lock().expect("lock poisoned").target_graphics_label.clone();
+            for _ in &due {
+                store.report(format!(
+                    "Grafik-Ereignis nicht zustellbar: kein Ziel-omp-ograf aufgelöst (targetGraphicsLabel: „{label}\u{201c})"
+                ));
+            }
+            continue;
+        };
+
+        for ev in due {
+            let store2 = store.clone();
+            let node_id = graphics_node_id.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let graphics = store2.proxy_client(node_id);
+                match ev.action {
+                    GraphicsAction::Show { template_id, data } => {
+                        graphics.invoke("show", serde_json::json!({"templateId": template_id, "data": data}))
+                    }
+                    GraphicsAction::Hide => graphics.invoke("hide", serde_json::json!({})),
+                }
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let _ = events.send(Event::Error(format!("Grafik-Ereignis fehlgeschlagen: {e}")));
+                }
+                Err(e) => {
+                    let _ = events.send(Event::Error(format!("Grafik-Ereignis-Task abgestürzt: {e}")));
+                }
+            }
+        }
+    }
+}
+
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
@@ -2327,6 +2697,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // nötig).
     let initial_player_label = std::env::var("OMP_PLAYOUT_TARGET_PLAYER_LABEL").unwrap_or_default();
     let initial_mixer_label = std::env::var("OMP_PLAYOUT_TARGET_MIXER_LABEL").unwrap_or_default();
+    // Kapitel 6 Teil 5 — gleiches Muster, aber optional (Doku bei
+    // `AutomationState::target_graphics_label`).
+    let initial_graphics_label = std::env::var("OMP_PLAYOUT_TARGET_GRAPHICS_LABEL").unwrap_or_default();
 
     let registry = RegistryClient::new(registry_url.clone());
     let (events_tx, mut events_rx) = mpsc::unbounded_channel::<Event>();
@@ -2367,6 +2740,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         stop_item_id: None,
         timeline: TimelineCache::new(),
         fixtime_resolved: HashMap::new(),
+        target_graphics_label: initial_graphics_label,
+        graphics_node_id: None,
+        graphics_epoch: 0,
+        graphics_schedule: Vec::new(),
     });
     let store = Arc::new(AutomationStore {
         state,
@@ -2407,6 +2784,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let fixtime_events = events_tx.clone();
     tokio::spawn(fixtime_loop(store.clone(), fixtime_events));
+
+    let graphics_events = events_tx.clone();
+    tokio::spawn(graphics_loop(store.clone(), graphics_events));
 
     // ARCHITECTURE.md §24.1: nur spawnen, wenn überhaupt ein Refresh
     // Sinn ergibt (Instanz-ID + Launch-Secret vorhanden) — ohne die
@@ -2455,6 +2835,7 @@ mod availability_tests {
             fixtime_hms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
+            children: Vec::new(),
         }
     }
 
@@ -2467,6 +2848,7 @@ mod availability_tests {
             fixtime_hms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
+            children: Vec::new(),
         }
     }
 
@@ -2479,6 +2861,7 @@ mod availability_tests {
             fixtime_hms: None,
             transition: Transition::Cut,
             transition_rate_frames: None,
+            children: Vec::new(),
         }
     }
 
@@ -2572,5 +2955,85 @@ mod fixtime_tests {
             fixtime_action(target + 1000, target, Some(FixtimeResolution::Skipped)),
             FixtimeAction::None
         );
+    }
+}
+
+// Kapitel 6 Teil 5: `child_show_offset_ms`/`resolve_variables` sind
+// ebenfalls reine Funktionen (kein State/keine Uhr) — direkt
+// unit-testbar, gleiches Prinzip wie oben.
+#[cfg(test)]
+mod graphics_children_tests {
+    use super::*;
+
+    fn start_child(delay_ms: u64) -> GraphicsChild {
+        GraphicsChild {
+            template_id: "lower-third".to_string(),
+            data: Value::Null,
+            delay_ms,
+            duration_ms: 0,
+            relative_to: RelativeTo::Start,
+        }
+    }
+
+    fn end_child(delay_ms: u64) -> GraphicsChild {
+        GraphicsChild {
+            template_id: "lower-third".to_string(),
+            data: Value::Null,
+            delay_ms,
+            duration_ms: 0,
+            relative_to: RelativeTo::End,
+        }
+    }
+
+    #[test]
+    fn start_relative_offset_is_just_the_delay() {
+        assert_eq!(child_show_offset_ms(&start_child(3000), 10_000), Some(3000));
+        // Auch bei einem endlosen (Live-)Item unverändert — Start-relativ
+        // braucht keine bekannte Dauer.
+        assert_eq!(child_show_offset_ms(&start_child(3000), 0), Some(3000));
+    }
+
+    #[test]
+    fn end_relative_offset_is_duration_minus_delay() {
+        assert_eq!(child_show_offset_ms(&end_child(2000), 10_000), Some(8000));
+    }
+
+    #[test]
+    fn end_relative_on_unlimited_item_is_none() {
+        assert_eq!(child_show_offset_ms(&end_child(2000), 0), None);
+    }
+
+    #[test]
+    fn end_relative_delay_longer_than_duration_is_none() {
+        assert_eq!(child_show_offset_ms(&end_child(15_000), 10_000), None);
+    }
+
+    #[test]
+    fn resolve_variables_replaces_next_title_in_string_values() {
+        let data = serde_json::json!({"title": "Coming up: {{next:title}}", "subtitle": "static"});
+        let resolved = resolve_variables(&data, Some("Weather"));
+        assert_eq!(resolved["title"], "Coming up: Weather");
+        assert_eq!(resolved["subtitle"], "static");
+    }
+
+    #[test]
+    fn resolve_variables_without_a_next_item_substitutes_empty_string() {
+        let data = serde_json::json!({"title": "{{next:title}}"});
+        let resolved = resolve_variables(&data, None);
+        assert_eq!(resolved["title"], "");
+    }
+
+    #[test]
+    fn resolve_variables_recurses_into_nested_arrays_and_objects() {
+        let data = serde_json::json!({"items": [{"label": "Next: {{next:title}}"}]});
+        let resolved = resolve_variables(&data, Some("News"));
+        assert_eq!(resolved["items"][0]["label"], "Next: News");
+    }
+
+    #[test]
+    fn resolve_variables_leaves_non_matching_data_untouched() {
+        let data = serde_json::json!({"count": 5, "flag": true, "title": "Fixed Title"});
+        let resolved = resolve_variables(&data, Some("Ignored"));
+        assert_eq!(resolved, data);
     }
 }

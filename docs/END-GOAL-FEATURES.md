@@ -1290,10 +1290,16 @@ im K1-Look —
   Doku-Korrektur: `ActiveCart::elapsed_before_interrupt_ms`, C18,
   datiert onair_since beim Return zurück statt die Restdauer neu zu
   erfinden — kein separater Umsetzungsschritt nötig gewesen).
-- **Teil 5 — Grafik-Children (K5 existiert bereits, kein Blocker
-  mehr):** Children-Editor, Scheduling relativ Start/Ende,
-  Variablen-Auflösung (`{{next:title}}`-Teilmenge) aus dem
-  Playlist-Kontext.
+- **Teil 5 — Grafik-Children (erledigt, 2026-09-07, `docs/decisions.md`
+  Nachtrag 185):** drittes Ziel `targetGraphicsLabel` (optional,
+  `omp-ograf`), `GraphicsChild{templateId, data, delayMs, durationMs,
+  relativeTo}` auf jedem Item, Scheduling relativ Start/Ende über einen
+  eigenen 250ms-`graphics_loop` (Epochen-basierte Stornierung statt
+  aktiver Bereinigung), `{{next:title}}`-Variablen-Auflösung. Children-
+  Editor bewusst NICHT als mehrseitiges Formular (PC-Vorbild
+  `ui.html:8857`) — die gesamte Kind-Liste als rohes JSON-Array in
+  einem `prompt()`, gleiches Minimal-Muster wie Fixzeit/Rampendauer.
+  Sekundengenau live gegen einen echten `omp-ograf` verifiziert.
 - **Teil 6 — Channel-Branding pro Output (Nutzerauftrag 2026-09-07,
   s. 6.2b — NICHT Teil dieses Nodes):** eigener Design-Schnitt, gehört
   strukturell zum jeweiligen Ausgang/Workflow, nicht zur Playlist —

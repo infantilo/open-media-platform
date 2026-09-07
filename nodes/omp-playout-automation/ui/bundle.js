@@ -96,10 +96,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
          eines Icon-Overlays — bleibt so unabhaengig von der Quell-Icon-
          Spalte lesbar/erweiterbar (spaetere Trans-/Children-Badges-
          Spalten aus demselben §6.4-Absatz reihen sich hier gleich an). */
-      /* Kapitel 6 Teil 4: Aktionen-Spalte von 96px auf 128px verbreitert,
-         damit der neue Transition-Umschalter (✂/⇄) neben Start-Typ/Cue/
-         Entfernen noch Platz hat, ohne die Buttons zu quetschen. */
-      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 128px; }
+      /* Kapitel 6 Teil 4/5: Aktionen-Spalte von 96px über 128px auf 160px
+         verbreitert — jetzt fünf Buttons (Start-Typ, Transition, Grafik-
+         Kinder, Cue, Entfernen). */
+      .pl-grid-cols { grid-template-columns: 18px 24px 20px minmax(0, 1fr) 56px 92px 90px 20px 160px; }
       .pl-hdr-row {
         display: grid; align-items: center; gap: 4px; padding: 2px 6px;
         font-size: 9px; color: #888; text-transform: uppercase; letter-spacing: .04em;
@@ -124,6 +124,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       /* Kapitel 6 Teil 4: Grün statt Amber/Blau (Start-Typ-Farben), damit
          beide Umschalter auch farblich klar getrennt bleiben. */
       .pl-row button.transition-mix { background: #2e7d32; border-color: #4caf50; }
+      /* Kapitel 6 Teil 5: violett statt Grün/Amber/Blau — vierte, klar
+         unterscheidbare Umschalter-Farbe in derselben Aktionen-Spalte. */
+      .pl-row button.has-children { background: #6a3d9a; border-color: #9b59b6; }
       .pl-row .pl-avail { text-align: center; color: #4caf50; }
       .pl-row .pl-avail.unavailable { color: #e05050; font-weight: bold; }
       .pl-row button.start-type-manual { background: #b8860b; border-color: #d4a017; }
@@ -200,6 +203,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     playerLabelSelect.className = "target-select";
     const mixerLabelSelect = document.createElement("select");
     mixerLabelSelect.className = "target-select";
+    // Kapitel 6 Teil 5 (§6.4 "Grafik-Child-Events"): gleiches Muster wie
+    // Player/Mixer, aber bewusst OPTIONAL — "— wählen —" (leer) ist ein
+    // gültiger Dauerzustand für einen Rundown ohne Grafik-Kinder, kein
+    // "noch nicht konfiguriert"-Übergangszustand (main.rs::
+    // target_graphics_label-Doku).
+    const graphicsLabelSelect = document.createElement("select");
+    graphicsLabelSelect.className = "target-select";
     const connectedEl = document.createElement("span");
     connectedEl.className = "connected";
     connectedEl.textContent = "nicht verbunden";
@@ -207,7 +217,9 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     playerLabelWrap.append("Player: ", playerLabelSelect);
     const mixerLabelWrap = document.createElement("label");
     mixerLabelWrap.append("Mixer: ", mixerLabelSelect);
-    targetsRow.append(playerLabelWrap, mixerLabelWrap, connectedEl);
+    const graphicsLabelWrap = document.createElement("label");
+    graphicsLabelWrap.append("Grafik: ", graphicsLabelSelect);
+    targetsRow.append(playerLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl);
 
     const statusRow = document.createElement("div");
     statusRow.className = "status-row";
@@ -428,6 +440,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // kein separater Übernehmen-Schritt nötig.
     playerLabelSelect.addEventListener("change", () => setParam("targetPlayerLabel", playerLabelSelect.value));
     mixerLabelSelect.addEventListener("change", () => setParam("targetMixerLabel", mixerLabelSelect.value));
+    graphicsLabelSelect.addEventListener("change", () => setParam("targetGraphicsLabel", graphicsLabelSelect.value));
     modeSelect.addEventListener("change", () => setParam("mode", modeSelect.value));
 
     // Baut die Optionsliste eines Ziel-Selects neu auf, nur wenn sich die
@@ -536,6 +549,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // Kapitel 6 Teil 4: dieselbe Lücke ein drittes Mal proaktiv vermieden.
       if (item.transition) entry.transition = item.transition;
       if (item.transitionRateFrames != null) entry.transitionRateFrames = item.transitionRateFrames;
+      // Kapitel 6 Teil 5: dieselbe Lücke ein viertes Mal proaktiv vermieden.
+      if (item.children && item.children.length > 0) entry.children = item.children;
       if (item.senderId) entry.senderId = item.senderId;
       else if (item.file) entry.file = item.file;
       else {
@@ -651,6 +666,36 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         }
         call("setTransition", body).then(poll);
       });
+      // Kapitel 6 Teil 5 (§6.4 "Children-Editor"): bewusst KEIN
+      // Feld-für-Feld-Formular (Quelle/SOM/EOM/Delay/Dauer je Kind
+      // einzeln) — stattdessen die gesamte Kind-Liste als rohes JSON-
+      // Array zum Editieren, vorbefüllt mit dem aktuellen Stand.
+      // Deckungsgleiches Minimal-Muster wie schon bei Fixzeit/Rampendauer
+      // (ein `prompt()` statt eines eigenen Dialogs), hier nur mit einem
+      // ganzen Array statt eines einzelnen Werts — volle Ausdruckskraft
+      // (add/remove/edit jedes Feld jedes Kinds) ohne einen mehrseitigen
+      // Formular-Editor zu bauen.
+      const childrenBtn = document.createElement("button");
+      childrenBtn.addEventListener("click", () => {
+        const current = JSON.stringify(item.children || [], null, 0);
+        const input = prompt(
+          "Grafik-Kinder als JSON-Array bearbeiten (templateId, data, delayMs, durationMs, relativeTo: \"start\"|\"end\"):",
+          current
+        );
+        if (input === null) return;
+        let parsed;
+        try {
+          parsed = JSON.parse(input.trim() || "[]");
+        } catch (e) {
+          showError(`Ungültiges JSON: ${e}`);
+          return;
+        }
+        if (!Array.isArray(parsed)) {
+          showError("Grafik-Kinder müssen ein JSON-Array sein");
+          return;
+        }
+        call("setChildren", { itemId: item.id, childrenJson: JSON.stringify(parsed) }).then(poll);
+      });
       const cueBtn = document.createElement("button");
       cueBtn.addEventListener("click", () => call("cue", { itemId: item.id }).then(poll));
       const removeBtn = document.createElement("button");
@@ -660,7 +705,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         if (!(await confirmDialog(`„${item.label}" wirklich aus dem Rundown entfernen?`, "Entfernen"))) return;
         call("remove", { itemId: item.id }).then(poll);
       });
-      actionsEl.append(startTypeBtn, transitionBtn, cueBtn, removeBtn);
+      actionsEl.append(startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn);
 
       // Touch-Fund 2026-09-07 (Kapitel 6 Teil 1, unabhängig vom Touch-
       // Audit gefunden): natives HTML5-Drag&Drop (dragstart/dragover/drop)
@@ -708,7 +753,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       dragEl.addEventListener("pointercancel", endDrag);
 
       el.append(dragEl, numEl, iconEl, titleEl, durEl, timeEl, remWrap, availEl, actionsEl);
-      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, cueBtn, removeBtn };
+      return { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, availEl, startTypeBtn, transitionBtn, childrenBtn, cueBtn, removeBtn };
     };
 
     // Formatiert Millisekunden als mm:ss (Playlists dieses Nodes sind
@@ -790,6 +835,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         availableNodesValue,
         targetPlayerLabel,
         targetMixerLabel,
+        targetGraphicsLabel,
         mediaLibraryValue,
         availableSourcesValue,
       ] = await Promise.all([
@@ -805,6 +851,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("availableNodes"),
         getParam("targetPlayerLabel"),
         getParam("targetMixerLabel"),
+        getParam("targetGraphicsLabel"),
         getParam("mediaLibrary"),
         getParam("availableSources"),
       ]);
@@ -885,8 +932,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       const availableLabels = availableNodesValue || [];
       buildTargetOptions(playerLabelSelect, availableLabels, targetPlayerLabel);
       buildTargetOptions(mixerLabelSelect, availableLabels, targetMixerLabel);
+      buildTargetOptions(graphicsLabelSelect, availableLabels, targetGraphicsLabel);
       if (shadow.activeElement !== playerLabelSelect) playerLabelSelect.value = targetPlayerLabel || "";
       if (shadow.activeElement !== mixerLabelSelect) mixerLabelSelect.value = targetMixerLabel || "";
+      if (shadow.activeElement !== graphicsLabelSelect) graphicsLabelSelect.value = targetGraphicsLabel || "";
 
       if (mode) modeSelect.value = mode;
       progressBar.style.width = durationMs > 0 ? `${Math.min(100, (100 * (playheadMs || 0)) / durationMs)}%` : "0%";
@@ -979,6 +1028,17 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
           ? `Mix${item.transitionRateFrames ? ` (${item.transitionRateFrames} Frames)` : ""} — klicken für Cut`
           : "Cut — klicken für Mix (Auto-Trans am Mixer)";
         refs.transitionBtn.className = isMix ? "transition-mix" : "";
+
+        // Kapitel 6 Teil 5: 🎨 + Anzahl statt eines reinen Icons — die
+        // Anzahl ist die einzige "Vorschau" dieses Minimal-Editors, ohne
+        // die Liste selbst aufzuklappen.
+        const childCount = (item.children || []).length;
+        refs.childrenBtn.textContent = childCount > 0 ? `🎨 ${childCount}` : "🎨";
+        refs.childrenBtn.title =
+          childCount > 0
+            ? `${childCount} Grafik-Kind(er) — klicken zum Bearbeiten`
+            : "Keine Grafik-Kinder — klicken zum Hinzufügen";
+        refs.childrenBtn.className = childCount > 0 ? "has-children" : "";
       }
 
       // C18 (ARCHITECTURE.md §24.3): Cart-Liste + aktiv-Banner.

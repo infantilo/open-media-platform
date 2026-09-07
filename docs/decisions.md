@@ -21384,3 +21384,93 @@ Nachtrag 181 (Start-Typ-Umschalter) erfolgreich per Klick geprüften
 API gestoppt, `pgrep` bestätigt keine Waisenprozesse.
 
 **Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.
+
+## 2026-09-07 (Nachtrag 185) — Umsetzung Kapitel 6 Teil 5: Grafik-Child-Events über omp-ograf (Nutzerauftrag "fahre fort")
+
+**Größter Kapitel-6-Baustein bisher — echte Cross-Node-Integration**
+statt reiner State-Erweiterung wie Teil 1-4: erstmals ein DRITTES
+Ziel (`omp-ograf`, `targetGraphicsLabel`) neben Player/Mixer. Bewusst
+**optional** (anders als Player/Mixer): ein unaufgelöstes Grafik-Ziel
+lässt `do_take` NICHT scheitern — ein Rundown ohne Grafik-Kinder
+braucht keinen Grafik-Node.
+
+**Datenmodell:** `GraphicsChild { templateId, data (rohes JSON —
+Feldform hängt vom jeweiligen `omp-ograf`-Template-Schema ab, das
+dieser Node nicht kennen muss), delayMs, durationMs (0 = bleibt
+stehen), relativeTo: start|end }`, `Vec<GraphicsChild>` auf `ItemMeta`.
+
+**Scheduling — Epoche statt aktiver Bereinigung:** `AutomationState.
+graphics_epoch` erhöht sich bei JEDER der acht On-Air-Änderungs-Stellen
+(alle fünf echten Take-Pfade UND die drei "immer harter Cut"-
+Ausnahmen Stop/Cart-Fire/Cart-Return) — ein `ScheduledGraphicsEvent`
+mit alter Epoche gilt als storniert, `graphics_loop` verwirft es beim
+nächsten Tick, ohne aktiv nach dem VORHERIGEN On-Air-Item suchen zu
+müssen. `schedule_children()` (neue Methode, aufgerufen direkt nach
+jedem `onair_since`-Setzen) berechnet pro Kind Show-/Hide-Zeitpunkte
+über die reine Funktion `child_show_offset_ms()` (8 neue Tests) —
+End-relativ auf einem endlosen (Live-/manuellen) Item oder mit
+`delayMs` > `durationMs` liefert bewusst `None` statt eines erfundenen
+Zeitpunkts (gemeldet, nicht still verworfen).
+
+**Eigener `graphics_loop`, 250ms-Takt** — komplett getrennt von
+`auto_advance_loop` (200ms) und `fixtime_loop` (1s), gleiches "neue
+Planungs-Zuständigkeit bekommt einen eigenen Loop"-Prinzip wie Kapitel
+6 Teil 3. Sammelt fällige Ereignisse ein, sortiert nach `fire_at`
+(wichtig für den Cart-Return-Nachhol-Fall unten), verwirft stornierte
+im selben Durchlauf.
+
+**Variablen-Auflösung ({{next:title}}):** `resolve_variables()` (6
+neue Tests) ersetzt rekursiv in `data` — die einzige in dieser
+Ausbaustufe unterstützte Variable (§6.4-Vorgabe: "Teilmenge", keine
+generische Template-Engine), aufgelöst zum Schedule-Zeitpunkt gegen
+`Playlist::peek_next()`.
+
+**Cart-Return-Randfall bewusst entschieden, nicht übersehen:** die
+Restdauer-Logik (C18, `elapsed_before_interrupt_ms`) datiert
+`onair_since` beim Return zurück — dieselbe zurückdatierte Zeit für
+`schedule_children()` verwendet (Konsistenz mit dem "Restdauer"-Prinzip
+des Items selbst), was bedeutet: ein Kind, dessen Fenster während des
+Interrupts bereits verstrichen wäre, feuert beim Return sofort
+(Show unmittelbar gefolgt von Hide) statt entweder nie oder dauerhaft
+zu erscheinen — ein knapper, aber korrekter Kompromiss für einen
+seltenen Randfall, kein perfekter Zustand.
+
+**Neue Methode `setChildren`** (JSON-kodiertes Array, gleiches Muster
+wie `load`s `itemsJson` — komplexe Daten gehen in diesem SDK immer als
+JSON-String, kein eigener `ParamType`), rein lokal wie
+`setStartType`/`setTransition`. UI: **bewusst kein Feld-für-Feld-
+Formular** (PC-Vorbild `ui.html:8857`s Children-Editor) — die GESAMTE
+Kind-Liste als rohes JSON-Array in einem `prompt()`, vorbefüllt mit dem
+aktuellen Stand (volle Ausdruckskraft ohne mehrseitigen Formular-
+Editor, gleiches Minimal-Muster wie Fixzeit/Rampendauer). Neue
+`targetGraphicsLabel`-Auswahl in der Kopfzeile (optional, "— wählen —"
+ist ein gültiger Dauerzustand). 🎨-Badge mit Anzahl pro Rundown-Zeile.
+
+**Reorder-Fallstrick zum VIERTEN Mal proaktiv vermieden** (`children`
+in `itemToLoadEntry` sowie `do_load`s `LoadItem`+Zip von Anfang an
+mitgedacht) — die Nachtrag-181-Lehre ist jetzt vollständig
+verinnerlicht, kein einziger Live-Fund mehr in Teil 3/4/5 nötig
+gewesen, um sie zu entdecken.
+
+**Live-Verifikation gegen den echten Dev-Stack** (Player+Mixer+
+OGraf+Automation, vier echte Instanzen): `setChildren` rundtrippt über
+`GET items`. Take eines Items mit einem Start-relativen Kind
+(delay 3s, duration 4s, Titel mit `{{next:title}}`) UND einem
+End-relativen Kind (bei 600s-Item-Dauer auf delay=599s gesetzt, feuert
+also ~1s nach Take) — sekundengenau mitverfolgt: `omp-ograf`s
+`current`-Param wechselte von `null` auf `"hello-lower-third"` exakt
+im erwarteten ~1s-Fenster (End-relatives Kind), blieb während der
+Überschreibung durch das Start-relative Kind bei ~3s unverändert
+(gleiche Vorlage, nur andere Daten — am Templatenamen allein nicht
+unterscheidbar, aber exakt der erwartete Ablauf), fiel exakt im
+erwarteten ~7s-Fenster (3s+4s Dauer) auf `null` zurück. Fehlendes
+Grafik-Ziel separat getestet: `targetGraphicsLabel` geleert, `take`
+löste zwei erwartete NATS-Alarme aus (`nats sub` unabhängig bestätigt,
+ein Alarm pro fälligem Kind), keine falsche stille Verwerfung. Per
+Chromium-Klicktest bestätigt: `Grafik:`-Auswahl zeigt den aufgelösten
+Node-Namen, 🎨-Badges zeigen korrekte Kind-Anzahl pro Zeile ("🎨 2" vs.
+"🎨"). `cargo build/test`(46/46)/`clippy` grün, `node --check` grün.
+Test-Instanzen + Chromium sauber über die reguläre API gestoppt,
+`pgrep` bestätigt keine Waisenprozesse.
+
+**Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.
