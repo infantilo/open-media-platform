@@ -23,7 +23,6 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 // Rollen-Designer als Alternative zum Text-Formular unten.
 import "../graph/role-designer.ts";
 import type { RoleDesigner } from "../graph/role-designer.ts";
-import { ROLE_FORMATS } from "../graph/roles.ts";
 
 interface CatalogEntry {
   type: string;
@@ -320,8 +319,22 @@ class WorkflowsView extends HTMLElement {
   // Formular und Validierung — nur Methode/URL/Fehlertext unterscheiden
   // sich, je nachdem ob #editingId gesetzt ist.
   async #submitForm() {
+    // UX-Überarbeitung 2026-09-07: vorher `!this.#formName || roles.length
+    // === 0` — seit die Rollen-Zeilen aus diesem Formular entfernt sind
+    // (s. #renderForm-Doku, Rollen/Verbindungen jetzt ausschließlich im
+    // Rollen-Designer), hätte JEDER neue Workflow diesen Guard
+    // unweigerlich gerissen: `#formRoles` startet leer, es gibt hier
+    // keine UI mehr, die es füllen könnte. Das Backend lehnt einen
+    // Workflow ohne Rolle ohnehin mit einer klaren Meldung ab
+    // (`service.go`: "at least one role required") — dieser Fall
+    // erreicht jetzt bewusst den `!res.ok`-Zweig unten (echter Toast)
+    // statt hier lautlos (kein Toast!) zu verpuffen, wie es VOR dieser
+    // Überarbeitung bei einer leeren Rollen-Liste bereits der Fall war.
     const roles = this.#formRoles.filter((r) => r.name && r.nodeType);
-    if (!this.#formName || roles.length === 0) return;
+    if (!this.#formName) {
+      showToast("Workflow-Name ist erforderlich.");
+      return;
+    }
     const width = parseInt(this.#formWidth, 10);
     const height = parseInt(this.#formHeight, 10);
     const settings: Settings = {};
@@ -1057,23 +1070,27 @@ class WorkflowsView extends HTMLElement {
     designEditBtn.addEventListener("click", () => this.#openRoleDesigner(wf.id));
     actions.appendChild(designEditBtn);
 
-    // Bug 2 (2026-07-24): "im Floweditor weiterbearbeiten können (...) so
-    // wie in einer Gruppe" — dritte, eigenständige Alternative neben dem
-    // Text-Formular ("Bearbeiten") und dem separaten Vollbild-Designer
-    // ("Grafisch bearbeiten", s. #openRoleDesigner oben): navigiert
-    // stattdessen direkt in den Flow-Editor-Tab und öffnet dort den
-    // Workflow als eigenen, editierbaren Scope (ui/graph/flow-canvas.ts
-    // enterWorkflowEditScope) — bubbling CustomEvent statt direktem
-    // Import, damit workflows-view.ts nichts über den Flow-Editor wissen
-    // muss (gleiche lose Kopplung wie sonst zwischen den Tab-Views).
-    const editInFlowBtn = document.createElement("button");
-    editInFlowBtn.textContent = "Im Flow-Editor bearbeiten";
-    editInFlowBtn.disabled = !isIdle;
-    editInFlowBtn.title = isIdle ? "" : "Erst stoppen/pausieren, dann bearbeiten";
-    editInFlowBtn.addEventListener("click", () => {
-      this.dispatchEvent(new CustomEvent("open-workflow-in-editor", { detail: wf.id, bubbles: true }));
-    });
-    actions.appendChild(editInFlowBtn);
+    // UX-Überarbeitung 2026-09-07 (Nutzerauftrag "das UI für das
+    // Workflow bearbeiten... ist noch absolut nicht intuitiv"): bis
+    // hierhin gab es DREI Wege, dieselbe Rollen-/Verbindungs-Definition
+    // eines idle Workflows zu bearbeiten — dieses "Im Flow-Editor
+    // bearbeiten" (navigierte in `enterWorkflowEditScope`, das für einen
+    // idle Workflow laut eigener Doku dort NUR synthetische Rollen-
+    // Platzhalter zeigt — exakt dieselbe Aufgabe wie "Grafisch
+    // bearbeiten" unten, nur mit einer zweiten, unabhängig gebauten
+    // Canvas-Implementierung), "Grafisch bearbeiten"
+    // (`<omp-role-designer>`) und die (jetzt entfernte) Rollen-/
+    // Verbindungs-Sektion im Text-Formular oben. Alle drei waren
+    // `disabled = !isIdle` — identisch gegatet, kein funktionaler
+    // Unterschied für den Nutzer erkennbar. Entschieden: `<omp-role-
+    // designer>` bleibt der EINE Weg für die idle-Definition (zweckgebaut
+    // für genau das, s. dessen eigene Moduldoku "Endausbau"), dieser
+    // Button entfällt ersatzlos. `enterWorkflowEditScope`s ANDERER Zweig
+    // (echte laufende Nodes eines GESTARTETEN Workflows bearbeiten) bleibt
+    // unverändert über einen Doppelklick auf die Workflow-Kachel im
+    // Flow-Editor selbst erreichbar — dafür gab es ohnehin nie einen
+    // Knopf hier (dieser Button war laut `disabled`-Bedingung nie der
+    // Weg dorthin).
 
     const delBtn = document.createElement("button");
     delBtn.textContent = "Löschen";
@@ -1118,13 +1135,11 @@ class WorkflowsView extends HTMLElement {
 
     const modal = document.createElement("div");
     modal.className = "omp-modal";
-    // 880px statt der .omp-modal-Vorgabe (560px): die Rollen-Zeile hat
-    // sechs Nebeneinander-Felder (Name/Typ/Host/Affinität/Redundanz/
-    // Format) — bei 720px liefen Platzhaltertexte sichtbar ab
-    // (live per CDP entdeckt), 880px reicht auf einem normalen Monitor
-    // ohne unnötiges Umbrechen (flex-wrap bleibt als Fallback für
-    // schmalere Fenster erhalten).
-    modal.style.maxWidth = "880px";
+    // Die 880px-Verbreiterung (für die frühere sechsspaltige Rollen-
+    // Zeile) ist mit deren Entfernung 2026-09-07 hinfällig — das
+    // Formular enthält jetzt nur noch Name/Beschreibung, die
+    // Rollen/Verbindungen-Zusammenfassung und Zeitpläne, alles bei der
+    // .omp-modal-Vorgabe (560px) unproblematisch.
 
     const modalHeading = document.createElement("div");
     modalHeading.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-3);";
@@ -1220,223 +1235,46 @@ class WorkflowsView extends HTMLElement {
     metaRow.append(tagsInput, categorySelect);
     form.appendChild(metaRow);
 
-    const rolesHeading = document.createElement("div");
-    rolesHeading.textContent = "Rollen";
-    rolesHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
-    form.appendChild(rolesHeading);
-
-    this.#formRoles.forEach((role, i) => {
-      const roleRow = document.createElement("div");
-      roleRow.style.cssText = "display:flex;gap:4px;margin-bottom:4px;flex-wrap:wrap;";
-
-      const nameField = document.createElement("input");
-      nameField.placeholder = "Rollenname";
-      nameField.value = role.name;
-      nameField.style.cssText = "width:22%;";
-      nameField.addEventListener("input", () => {
-        role.name = nameField.value;
-      });
-      // "change" (nicht "input") löst zusätzlich ein Re-Render aus: die
-      // Verbindungs-Dropdowns und der "+ Verbindung"-Button-Disabled-
-      // Zustand hängen von den Rollennamen ab (s. #renderForm unten) und
-      // würden sonst veraltet bleiben, bis irgendein anderer Klick
-      // zufällig neu rendert — "input" bei jedem Tastendruck neu zu
-      // rendern würde dagegen den Cursor/Fokus mitten im Tippen verlieren.
-      nameField.addEventListener("change", () => this.#render());
-
-      const typeSelect = document.createElement("select");
-      typeSelect.style.cssText = "width:35%;";
-      const emptyOpt = document.createElement("option");
-      emptyOpt.value = "";
-      emptyOpt.textContent = "Node-Typ …";
-      typeSelect.appendChild(emptyOpt);
-      // Nutzerwunsch 2026-07-28: alphabetisch statt Katalog-Dateireihenfolge.
-      const sortedCatalog = this.#catalog.slice().sort((a, b) => a.label.localeCompare(b.label));
-      for (const entry of sortedCatalog) {
-        const opt = document.createElement("option");
-        opt.value = entry.type;
-        opt.textContent = entry.label;
-        if (entry.type === role.nodeType) opt.selected = true;
-        typeSelect.appendChild(opt);
-      }
-      typeSelect.addEventListener("change", () => {
-        role.nodeType = typeSelect.value;
-      });
-
-      // hostId (Nachtrag 99): nur noch Präferenz — Titel erklärt das,
-      // damit "(lokal)" nicht wie ein Zwang wirkt, den Auto-Place
-      // ignorieren könnte.
-      const hostSelect = document.createElement("select");
-      hostSelect.style.cssText = "width:18%;";
-      hostSelect.title = "Bevorzugter Host — reicht er nicht, platziert Auto-Place automatisch anderswo.";
-      const localOpt = document.createElement("option");
-      localOpt.value = "";
-      localOpt.textContent = "(lokal)";
-      hostSelect.appendChild(localOpt);
-      for (const host of this.#hosts) {
-        const opt = document.createElement("option");
-        opt.value = host.id;
-        opt.textContent = host.label;
-        if (host.id === role.hostId) opt.selected = true;
-        hostSelect.appendChild(opt);
-      }
-      hostSelect.addEventListener("change", () => {
-        role.hostId = hostSelect.value;
-      });
-
-      // affinityGroup/redundancyGroup (Nachtrag 99): freie Tags fürs
-      // Auto-Placement — Latenz-/DMA-Kopplung bzw. Redundanzpaare, s.
-      // Role-Doku oben. Freitext statt Dropdown: es gibt keinen
-      // Tag-Katalog, dieselbe Zurückhaltung wie bei den Sender-/
-      // Receiver-Labels der Connections unten.
-      const affinityInput = document.createElement("input");
-      affinityInput.placeholder = "Affinität (optional)";
-      affinityInput.title = "Rollen mit demselben Tag werden bevorzugt auf denselben Host gezogen.";
-      affinityInput.value = role.affinityGroup ?? "";
-      affinityInput.style.cssText = "width:15%;";
-      affinityInput.addEventListener("input", () => {
-        role.affinityGroup = affinityInput.value || undefined;
-      });
-
-      const redundancyInput = document.createElement("input");
-      redundancyInput.placeholder = "Redundanz (optional)";
-      redundancyInput.title = "Rollen mit demselben Tag werden bevorzugt AUSEINANDER gehalten (Redundanzpaare).";
-      redundancyInput.value = role.redundancyGroup ?? "";
-      redundancyInput.style.cssText = "width:15%;";
-      redundancyInput.addEventListener("input", () => {
-        role.redundancyGroup = redundancyInput.value || undefined;
-      });
-
-      // format (Nutzerwunsch 2026-07-28): pro Rolle wählbares Standard-
-      // Auflösung+Framerate-Preset — bewusst pro Rolle statt workflow-
-      // weit wie die bestehende Programm-Auflösung (Kapitel 15, s.
-      // Settings-Formular weiter unten): unterschiedliche Quellen im
-      // selben Workflow können unterschiedliche native Formate brauchen.
-      const formatSelect = document.createElement("select");
-      formatSelect.style.cssText = "width:15%;";
-      formatSelect.title = "Standard-Format dieser Rolle — leer lässt den Node bei seinem eigenen Default.";
-      const formatDefaultOpt = document.createElement("option");
-      formatDefaultOpt.value = "";
-      formatDefaultOpt.textContent = "Format: Node-Standard";
-      formatSelect.appendChild(formatDefaultOpt);
-      for (const name of ROLE_FORMATS) {
-        const opt = document.createElement("option");
-        opt.value = name;
-        opt.textContent = name;
-        if (name === role.format) opt.selected = true;
-        formatSelect.appendChild(opt);
-      }
-      formatSelect.addEventListener("change", () => {
-        role.format = formatSelect.value || undefined;
-      });
-
-      // mixerLevels (Nutzerfund 2026-09-03: "im workflow bearbeiten keine
-      // möglichkeit die anzahl der mischerebenen einzustellen") — dieses
-      // Text-Formular ("Bearbeiten") hatte das Feld nie bekommen, obwohl
-      // der grafische Role-Designer ("Grafisch bearbeiten", role-
-      // designer.ts) es bereits längst besitzt; Backend (role.MixerLevels
-      // → OMP_ME_LEVELS, s. orchestrator/internal/workflows/formats.go)
-      // war die ganze Zeit fertig. Gleiches Muster/gleicher Titeltext wie
-      // dort, nur als flaches `<input>` statt SVG-`foreignObject`. Nur für
-      // `omp-video-mixer-me` sichtbar — für jeden anderen Node-Typ
-      // bedeutungslos.
-      const mixerLevelsInput = document.createElement("input");
-      mixerLevelsInput.type = "number";
-      mixerLevelsInput.min = "1";
-      mixerLevelsInput.max = "8";
-      mixerLevelsInput.placeholder = "Ebenen: 1";
-      mixerLevelsInput.title =
-        "Anzahl unabhängiger M/E-Ebenen dieses Mixers, jede mit eigenem PGM-Ausgang (z. B. für einen Studio-Monitor unabhängig vom Sende-PGM) — leer/1 = Node-eigener Default, nur beim Start wirksam.";
-      mixerLevelsInput.style.cssText = "width:8%;";
-      mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
-      mixerLevelsInput.hidden = role.nodeType !== "omp-video-mixer-me";
-      mixerLevelsInput.addEventListener("change", () => {
-        const n = parseInt(mixerLevelsInput.value, 10);
-        role.mixerLevels = Number.isFinite(n) && n > 1 ? n : undefined;
-        mixerLevelsInput.value = role.mixerLevels ? String(role.mixerLevels) : "";
-      });
-      typeSelect.addEventListener("change", () => {
-        mixerLevelsInput.hidden = role.nodeType !== "omp-video-mixer-me";
-      });
-
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "×";
-      removeBtn.title = "Rolle entfernen";
-      removeBtn.style.cssText = "cursor:pointer;";
-      removeBtn.addEventListener("click", () => {
-        this.#formRoles.splice(i, 1);
-        this.#render();
-      });
-
-      roleRow.append(nameField, typeSelect, hostSelect, affinityInput, redundancyInput, formatSelect, mixerLevelsInput, removeBtn);
-      form.appendChild(roleRow);
+    // UX-Überarbeitung 2026-09-07 (Nutzerauftrag "das UI für das Workflow
+    // bearbeiten... ist noch absolut nicht intuitiv"): dieser komplette
+    // Block (vorher ~215 Zeilen, ein dichtes Sechs-Spalten-Gitter aus
+    // Name/Typ/Host/Affinität/Redundanz/Format PRO Rolle plus eine
+    // weitere Zeile pro Verbindung, alle Spalten ohne eigene Beschriftung
+    // außer der einen Section-Überschrift) entfernt — Rollen/
+    // Verbindungen werden jetzt AUSSCHLIESSLICH grafisch bearbeitet
+    // (`<omp-role-designer>`, "Grafisch bearbeiten"/"Grafisch entwerfen"
+    // auf der Karten-/Übersichtsebene). Vorher gab es DREI Wege, dieselbe
+    // Daten zu editieren (dieses Gitter, den Designer, UND "Im
+    // Flow-Editor bearbeiten" — letzterer ebenfalls entfernt, s.
+    // #renderWorkflowCard-Doku) — das war der Kern der Beschwerde, nicht
+    // eine einzelne unklare Beschriftung. `#formRoles`/`#formConnections`
+    // bleiben als reiner Datenträger bestehen (von `#editWorkflow()` aus
+    // der bestehenden Definition befüllt, hier nur noch gelesen für die
+    // Zusammenfassung unten) — ein Speichern aus DIESEM Formular sendet
+    // die vorhandene Definition dadurch unverändert mit, ändert sie aber
+    // nie mehr selbst (s. #submitForm-Doku zum jetzt entschärften
+    // Leer-Rollen-Guard).
+    const rolesSummary = document.createElement("div");
+    rolesSummary.style.cssText =
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px 10px;margin-bottom:8px;" +
+      "display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;";
+    const roleCount = this.#formRoles.filter((r) => r.name && r.nodeType).length;
+    const connCount = this.#formConnections.filter((c) => c.fromRole && c.toRole).length;
+    const summaryText = document.createElement("span");
+    summaryText.textContent =
+      roleCount > 0
+        ? `Rollen & Verbindungen: ${roleCount} Rolle(n), ${connCount} Verbindung(en)`
+        : "Rollen & Verbindungen: noch keine Rolle angelegt";
+    summaryText.style.color = "var(--omp-text-dim)";
+    const openDesignerBtn = document.createElement("button");
+    openDesignerBtn.textContent = "Grafisch bearbeiten →";
+    openDesignerBtn.addEventListener("click", () => {
+      const workflowId = this.#editingId;
+      this.#closeWorkflowForm();
+      this.#openRoleDesigner(workflowId);
     });
-
-    const addRoleBtn = document.createElement("button");
-    addRoleBtn.textContent = "+ Rolle";
-    addRoleBtn.style.cssText = "font-size:11px;cursor:pointer;margin-bottom:8px;";
-    addRoleBtn.addEventListener("click", () => {
-      this.#formRoles.push({ name: "", nodeType: "", hostId: "" });
-      this.#render();
-    });
-    form.appendChild(addRoleBtn);
-
-    const connHeading = document.createElement("div");
-    connHeading.textContent = "Verbindungen (Rolle → Rolle)";
-    connHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
-    form.appendChild(connHeading);
-
-    const roleNames = this.#formRoles.map((r) => r.name).filter(Boolean);
-
-    this.#formConnections.forEach((conn, i) => {
-      const connRow = document.createElement("div");
-      connRow.style.cssText = "display:flex;gap:4px;margin-bottom:4px;align-items:center;";
-
-      const fromSelect = this.#roleSelect(roleNames, conn.fromRole, (v) => (conn.fromRole = v));
-      // Kapitel 12 Teil 1: optionales Sender-Label — leer = erster Sender
-      // der Rolle (unverändertes Verhalten). Freitext statt Dropdown, s.
-      // Connection-Doku oben.
-      const fromSenderInput = document.createElement("input");
-      fromSenderInput.placeholder = "Sender-Label (optional)";
-      fromSenderInput.value = conn.fromSender ?? "";
-      fromSenderInput.style.cssText = "width:26%;";
-      fromSenderInput.addEventListener("input", () => {
-        conn.fromSender = fromSenderInput.value || undefined;
-      });
-
-      const arrow = document.createElement("span");
-      arrow.textContent = "→";
-      const toSelect = this.#roleSelect(roleNames, conn.toRole, (v) => (conn.toRole = v));
-
-      const toReceiverInput = document.createElement("input");
-      toReceiverInput.placeholder = "Receiver-Label (optional)";
-      toReceiverInput.value = conn.toReceiver ?? "";
-      toReceiverInput.style.cssText = "width:26%;";
-      toReceiverInput.addEventListener("input", () => {
-        conn.toReceiver = toReceiverInput.value || undefined;
-      });
-
-      const removeBtn = document.createElement("button");
-      removeBtn.textContent = "×";
-      removeBtn.style.cssText = "cursor:pointer;";
-      removeBtn.addEventListener("click", () => {
-        this.#formConnections.splice(i, 1);
-        this.#render();
-      });
-
-      connRow.append(fromSelect, fromSenderInput, arrow, toSelect, toReceiverInput, removeBtn);
-      form.appendChild(connRow);
-    });
-
-    const addConnBtn = document.createElement("button");
-    addConnBtn.textContent = "+ Verbindung";
-    addConnBtn.style.cssText = "font-size:11px;cursor:pointer;margin-bottom:8px;";
-    addConnBtn.disabled = roleNames.length < 2;
-    addConnBtn.addEventListener("click", () => {
-      this.#formConnections.push({ fromRole: "", toRole: "" });
-      this.#render();
-    });
-    form.appendChild(addConnBtn);
+    rolesSummary.append(summaryText, openDesignerBtn);
+    form.appendChild(rolesSummary);
 
     // Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): pro-Workflow
     // Programm-Auflösung, optional — leer gelassen behalten die Nodes
@@ -1535,23 +1373,6 @@ class WorkflowsView extends HTMLElement {
     form.appendChild(createBtn);
 
     return form;
-  }
-
-  #roleSelect(roleNames: string[], selected: string, onChange: (v: string) => void): HTMLSelectElement {
-    const select = document.createElement("select");
-    const emptyOpt = document.createElement("option");
-    emptyOpt.value = "";
-    emptyOpt.textContent = "Rolle …";
-    select.appendChild(emptyOpt);
-    for (const name of roleNames) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      if (name === selected) opt.selected = true;
-      select.appendChild(opt);
-    }
-    select.addEventListener("change", () => onChange(select.value));
-    return select;
   }
 
   // D7 Teil 2: eine Zeitplan-Zeile — Kind+Aktion immer, dazu je nach Kind

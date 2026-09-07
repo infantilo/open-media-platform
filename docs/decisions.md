@@ -21474,3 +21474,104 @@ Test-Instanzen + Chromium sauber über die reguläre API gestoppt,
 `pgrep` bestätigt keine Waisenprozesse.
 
 **Dateien:** `nodes/omp-playout-automation/src/main.rs`, `ui/bundle.js`.
+
+## 2026-09-07 (Nachtrag 186) — Workflow-Editor-UX überarbeitet (Nutzerauftrag "ist noch absolut nicht intuitiv") + Workflow "Playout" für den End-to-End-Test von Kapitel 6 Teil 1-5 angelegt
+
+**Ausgangslage:** vor der eigentlich gewünschten nächsten Aufgabe
+("erstelle einen Workflow für das Playout, damit ich das bisher
+Gemachte testen kann") forderte der Nutzer explizit erst die Behebung
+eines bestehenden UX-Problems: das Bearbeiten von Rollen/Verbindungen
+eines Workflows war über DREI unterschiedliche, gleichzeitig
+erreichbare Wege möglich — (1) ein dichtes Sechs-Spalten-Text-Gitter
+im "Bearbeiten"-Formular (`ui/shell/workflows-view.ts`, je Rolle Name/
+Typ/Host/Affinität/Redundanz/Format nebeneinander, keine
+Spaltenbeschriftung außer der Section-Überschrift), (2) der grafische
+`<omp-role-designer>` ("Grafisch bearbeiten"/"Grafisch entwerfen"),
+(3) "Im Flow-Editor bearbeiten" (öffnete denselben Workflow zusätzlich
+noch im normalen Flow-Editor). Alle drei identisch auf `isIdle`
+gegated, ohne jede funktionale Differenzierung — laut vorhandener
+Projektdoku (`docs/END-GOAL-FEATURES.md` §12.3g/§22.3) war (2) von
+Anfang an als der langfristige "Endausbau" gedacht, (1)/(3) historisch
+gewachsene Parallelpfade.
+
+**Fix — auf EINEN Weg konsolidiert:**
+- `ui/shell/workflows-view.ts`: `editInFlowBtn` ("Im Flow-Editor
+  bearbeiten") vollständig entfernt.
+- Das komplette Rollen/Verbindungen-Text-Gitter (~215 Zeilen,
+  `#roleSelect()`-Hilfsmethode inklusive, jetzt tot) durch einen
+  kompakten Zusammenfassungs-Block ersetzt ("Rollen & Verbindungen: N
+  Rolle(n), M Verbindung(en)" bzw. "noch keine Rolle angelegt" +
+  Button "Grafisch bearbeiten →", der das Text-Formular schließt und
+  `#openRoleDesigner()` öffnet). `#formRoles`/`#formConnections`
+  bleiben als reiner Datenträger bestehen (`#editWorkflow()` befüllt
+  sie weiter aus der vorhandenen Definition) — ein Speichern aus DIESEM
+  Formular sendet die vorhandene Rollen-/Verbindungsdefinition
+  unverändert mit, ändert sie aber nie mehr selbst. `modal.style.
+  maxWidth` von 880px (nur wegen der jetzt entfernten Sechs-Spalten-
+  Zeile nötig) zurück auf die `.omp-modal`-Vorgabe (560px). Toter
+  `ROLE_FORMATS`-Import entfernt.
+- **Echter, vorher übersehener Bug dabei gefunden und mitgefixt:**
+  `#submitForm()` brach bei `roles.length === 0` mit einem stillen
+  `return` ab — KEIN Toast, keine Fehlermeldung. Harmlos, solange das
+  Text-Gitter Rollen erzwang, aber mit dessen Entfernung wäre jedes
+  NEUE Workflow (immer 0 Rollen bei Formular-Start) beim ersten
+  "Anlegen"-Klick spurlos verpufft — ein Sackgassen-UI ohne jede
+  Rückmeldung. Fix: Guard prüft jetzt nur noch clientseitig den Namen
+  (mit Toast "Workflow-Name ist erforderlich."), die 0-Rollen-Prüfung
+  läuft über den bereits vorhandenen Backend-Fehler ("at least one role
+  required", `orchestrator/internal/workflows/service.go`) durch den
+  bestehenden `!res.ok`-Toast-Pfad — keine Logikverdopplung, nur eine
+  Verzögerung der Prüfung um einen Roundtrip.
+- Rollen-Kachel-Detailanzeige im grafischen Designer (Host/Format/
+  Standby/Placement immer alle sichtbar) bewusst NICHT in dieser
+  Sitzung hinter einem "Erweitert"-Umschalter versteckt — `TILE_HEIGHT`
+  ist eine feste Konstante, von der Anker-/Verbindungs-/Kollisions-
+  Geometrie an rund einem Dutzend Stellen abhängt; ein sauberes
+  Ein-/Ausklappen hätte diese Geometrie mit vertretbarem Risiko nicht
+  in derselben Sitzung neben dem eigentlich verlangten Playout-Workflow
+  geschafft. Zurückgestellt, kein Blocker für die Kernbeschwerde (drei
+  Wege → einer).
+
+**Live-Verifikation** (echter Chromium-Klicktest, `node`+`ws`-CDP-
+Treiber wie gehabt, `deno bundle` vor jedem Test neu gebaut —
+`Network.setCacheDisabled` nötig, der Browser cachte `/dist/shell.js`
+sonst am `Last-Modified`-Header vorbei): `deno check`/`deno test
+ui/shell/ ui/graph/` (92/92) grün. Neues Formular zeigt den
+Zusammenfassungs-Block statt des Gitters; leerer Name → Toast
+"Workflow-Name ist erforderlich.", Formular bleibt offen; Name gesetzt,
+0 Rollen, "Anlegen" → Backend-Fehlertext ("Rolle" im Body) sichtbar
+statt stillem Nichts-Passiert. Bestehenden Workflow TEST1 (4 Rollen)
+geöffnet: Zusammenfassung zeigt korrekt "4 Rolle(n), 0 Verbindung(en)",
+"Grafisch bearbeiten →" schließt das Text-Modal und öffnet den
+Designer mit vorbefülltem Namensfeld ("TEST1") und allen vier
+Bestandsrollen — Datenübergabe intakt, ohne TEST1 zu verändern
+(Designer über "Schließen" verlassen, nicht gespeichert).
+
+**Workflow "Playout" angelegt** (über den jetzt alleinigen grafischen
+Weg, damit dieser selbst gleich mitverifiziert wird): vier Rollen
+`omp-player-video` + `omp-video-mixer-me` + `omp-ograf` +
+`omp-playout-automation`, bewusst OHNE deklarierte Rolle→Rolle-
+Verbindungen — `omp-playout-automation` steuert Player/Mixer/Grafik
+rein über NATS-Label-Auflösung (`targetPlayerLabel`/`targetMixerLabel`/
+`targetGraphicsLabel`, `discovery_loop`), keine eigene Medienpipeline;
+`omp-video-mixer-me` discovert ALLE MXL-Sender im Domain selbst
+(`crosspoint.inputs`) statt sich auf deklarierte Workflow-Connections
+zu verlassen — bestätigt durch Live-Start: `crosspoint.inputs` listete
+nach dem Start automatisch "omp-player-video Sender 1", "omp-ograf
+Fill" und "omp-ograf Key" ohne jede manuelle Verkabelung.
+Workflow gestartet, alle vier Instanzen liefen sauber hoch (PIDs via
+`/api/v1/instances` bestätigt, keine Crash-Loops), Ziel-Labels per
+`PATCH /api/v1/nodes/{id}/params/targetPlayerLabel` usw. gesetzt,
+`connected`-Param der Automation-Instanz bestätigte `true` — die
+komplette Kette (Player → Mixer-Discovery, OGraf → Mixer-Keyer-
+Discovery, Automation → Player+Mixer via Label) ist damit vor der
+Übergabe an den Nutzer bereits einmal live durchgespielt. Danach über
+die reguläre `/stop`-API sauber gestoppt (0 verbleibende Instanzen),
+Workflow liegt jetzt "stopped" bereit, damit der Nutzer selbst die
+Kapitel-6-Funktionen (Rundown, Verfügbarkeit, Fixzeit, Transitions,
+Grafik-Kinder) durchtesten kann, bevor eine Entscheidung zu Kapitel 6
+Teil 6 (Channel-Branding) ansteht. Test-Chromium beendet, `pgrep`
+bestätigt keine Waisenprozesse.
+
+**Dateien:** `ui/shell/workflows-view.ts`; neuer Workflow "Playout"
+(orchestrator-DB, keine Code-Änderung).
