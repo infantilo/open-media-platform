@@ -576,11 +576,17 @@ class SchedulerView extends HTMLElement {
     timeLabel.textContent = `${bar.start ? fmtMinutes(bar.start.minutes) : "?"}–${bar.stop ? fmtMinutes(bar.stop.minutes) : "?"}`;
     el.appendChild(timeLabel);
 
+    // Touch-Fund 2026-09-07: `display:none` bis `pointerenter` machte den
+    // Button auf Touch-Geräten unerreichbar — dort feuert `pointerenter`
+    // (falls überhaupt) nicht zuverlässig vor einem Tap, der Button blieb
+    // unsichtbar genau dort, wo der Finger ihn treffen müsste. Jetzt immer
+    // im DOM/klickbar, nur die Deckkraft ändert sich auf Hover (Maus) —
+    // dieselbe "dezent, außer man braucht es"-Absicht ohne den Touch-Bruch.
     const delBtn = document.createElement("span");
     delBtn.textContent = "×";
     delBtn.style.cssText =
-      "position:absolute;right:1px;top:-1px;font-size:11px;color:var(--omp-text);cursor:pointer;display:none;" +
-      "background:rgba(0,0,0,0.4);border-radius:2px;padding:0 3px;line-height:1.3;";
+      "position:absolute;right:1px;top:-1px;font-size:11px;color:var(--omp-text);cursor:pointer;opacity:0.6;" +
+      "background:rgba(0,0,0,0.4);border-radius:2px;padding:0 3px;line-height:1.3;transition:opacity 0.1s;";
     delBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
     delBtn.addEventListener("click", (ev) => {
       ev.stopPropagation();
@@ -588,8 +594,8 @@ class SchedulerView extends HTMLElement {
       this.#deleteSchedules(wf, ids);
     });
     el.appendChild(delBtn);
-    el.addEventListener("pointerenter", () => (delBtn.style.display = "block"));
-    el.addEventListener("pointerleave", () => (delBtn.style.display = "none"));
+    el.addEventListener("pointerenter", () => (delBtn.style.opacity = "1"));
+    el.addEventListener("pointerleave", () => (delBtn.style.opacity = "0.6"));
 
     el.addEventListener("pointerdown", (ev) => this.#startDrag(ev, el, wf, bar, dateCount, totalMinutes, left, right));
     // Doppelklick: exakte HH:MM-Eingabe wie im alten Formular
