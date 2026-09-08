@@ -242,10 +242,18 @@ fn spawn_alpha_key_bridge(
             if bgra.len() < pixel_count * 4 {
                 continue; // unerwartet kleiner Puffer, überspringen
             }
-            let mut gray = vec![0u8; pixel_count];
-            for i in 0..pixel_count {
-                gray[i] = bgra[i * 4 + 3]; // Alpha-Byte (BGR**A**)
-            }
+            // Live gefunden (Nutzerauftrag "ograf burns cpu"): `vec![0u8;
+            // pixel_count]` nullt den kompletten Puffer VOR der
+            // Schleife, die ihn danach vollständig überschreibt — ein
+            // unnötiger zweiter Vollpuffer-Durchlauf bei 1280×720@25fps
+            // (~23 MB/s reiner Memset-Abfall). `Vec::with_capacity` +
+            // `extend` aus einem `chunks_exact(4)`-Iterator schreibt
+            // jedes Byte nur einmal und lässt LLVM die Bounds-Prüfung
+            // pro Element eliminieren (eine einzige Längenprüfung durch
+            // `chunks_exact` selbst statt einer pro Zugriff wie bei der
+            // vorherigen Index-Schleife `bgra[i * 4 + 3]`).
+            let mut gray = Vec::with_capacity(pixel_count);
+            gray.extend(bgra.chunks_exact(4).map(|px| px[3])); // Alpha-Byte (BGR**A**)
             let pts = buffer.pts();
             drop(map);
 
@@ -558,6 +566,28 @@ impl PipelineHandle {
     }
 }
 
+/// Nutzerauftrag "ograf burns cpu": `wpesrc`+`tee`+alle drei Branches
+/// (Fill/Key/Lowres) rendern/verteilen bislang UNBEDINGT mit voller
+/// Auflösung bei 25fps weiter, auch wenn nichts sichtbar ist (`show`/
+/// `hide` schalten bisher nur CSS auf der Seite um, s. Moduldoku)
+/// — live gemessen: dominiert von GStreamers eigenen `tee`/`queue`-
+/// Streaming-Threads, nicht von Node-eigenem Rust-Code. Fix: dieselbe
+/// zweistufige `set_state`+`state()`-Choreografie wie beim initialen
+/// Aufbau (s. `Pipeline::build`s ausführliche Doku zum `NO_PREROLL`-
+/// Fund) — `NO_PREROLL` ist für den live `wpesrc` bei JEDEM Übergang
+/// nach PAUSED der erwartete, korrekte `state()`-Erfolgswert, deshalb
+/// hier bewusst NUR `result.is_err()` geprüft, kein zusätzlicher
+/// `state == target`-Vergleich (der bei `NO_PREROLL` fälschlich
+/// anschlagen könnte).
+fn transition_pipeline(pipeline: &gst::Pipeline, target: gst::State, timeout_secs: u64) -> Result<(), String> {
+    pipeline.set_state(target).map_err(|e| format!("set_state({target:?}): {e}"))?;
+    let (result, _state, _pending) = pipeline.state(gst::ClockTime::from_seconds(timeout_secs));
+    if result.is_err() {
+        return Err(format!("Pipeline erreichte {target:?} nicht innerhalb {timeout_secs}s"));
+    }
+    Ok(())
+}
+
 fn show_js(template_id: &str, dir: &str, main: &str, data: &Value) -> String {
     format!(
         "window.omp.show({}, {}, {}, {})",
@@ -654,6 +684,17 @@ pub fn run(
     // `run-javascript` ist fire-and-forget, ein zu früher Aufruf ginge
     // sonst kommentarlos ins Leere (`window.omp` existiert noch nicht).
     let mut pending: Option<Command> = None;
+    // Nutzerauftrag "ograf burns cpu" (s. `transition_pipeline`-Doku):
+    // spiegelt den tatsächlichen Playing/Paused-Zustand der Pipeline,
+    // damit Show/Hide idempotent bleiben (ein zweites `hide()` in Folge
+    // pausiert nicht nochmal, ein `show()` ohne vorheriges `hide()`
+    // fasst den Playing-Zustand nicht unnötig an).
+    let mut rendering = true;
+    // Ob JEMALS ein `show()` reinkam — unterscheidet "nie etwas gezeigt,
+    // Startzustand ist bereits die Leerlauf-Seite, sofort pausierbar"
+    // von "nach echtem `show()` per `hide()` beendet, braucht erst noch
+    // einen Warte-Frame mit dem jetzt versteckten Zustand" (s. u.).
+    let mut ever_shown = false;
 
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
@@ -669,18 +710,52 @@ pub fn run(
 
         if let Some(command) = pending.take() {
             if pipeline.page_ready.load(Ordering::Relaxed) {
-                let code = match &command {
-                    Command::Show {
-                        template_id,
-                        dir,
-                        main,
-                        data,
-                    } => show_js(template_id, dir, main, data),
-                    Command::Hide => "window.omp.hide()".to_string(),
-                };
-                pipeline.run_javascript(&code);
+                match &command {
+                    Command::Show { template_id, dir, main, data } => {
+                        if !rendering {
+                            if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Playing, 5) {
+                                let _ = tx.send(Event::Error(format!("Playing vor Show fehlgeschlagen: {e}")));
+                            }
+                            rendering = true;
+                        }
+                        ever_shown = true;
+                        pipeline.run_javascript(&show_js(template_id, dir, main, data));
+                    }
+                    Command::Hide => {
+                        pipeline.run_javascript("window.omp.hide()");
+                        if rendering {
+                            // Gnadenfrist, damit `wpesrc` den jetzt
+                            // versteckten Zustand mindestens einmal
+                            // wirklich rendert und dieser Frame durch
+                            // Tee/alle Branches durchläuft, BEVOR wir
+                            // pausieren — sonst friert der MXL-Flow auf
+                            // dem letzten SICHTBAREN Bild ein statt auf
+                            // einem leeren/transparenten (deutlich mehr
+                            // als die üblichen ~40ms/Frame bei 25fps,
+                            // damit das unter Last/Konkurrenz zuverlässig
+                            // durchläuft).
+                            thread::sleep(Duration::from_millis(300));
+                            if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Paused, 5) {
+                                let _ = tx.send(Event::Error(format!("Paused nach Hide fehlgeschlagen: {e}")));
+                            } else {
+                                rendering = false;
+                            }
+                        }
+                    }
+                }
             } else {
                 pending = Some(command);
+            }
+        } else if rendering && !ever_shown && pipeline.page_ready.load(Ordering::Relaxed) {
+            // Nie etwas gezeigt worden — die Harness-Seite hat bereits
+            // ihren (leeren/transparenten) Startzustand gerendert
+            // (`page_ready`), kein Warte-Frame nötig wie bei `Hide`
+            // oben: der zuletzt geflossene Frame IST bereits der
+            // korrekte Leerlaufzustand.
+            if let Err(e) = transition_pipeline(&pipeline.pipeline, gst::State::Paused, 5) {
+                let _ = tx.send(Event::Error(format!("Initiales Pausieren fehlgeschlagen: {e}")));
+            } else {
+                rendering = false;
             }
         }
     }

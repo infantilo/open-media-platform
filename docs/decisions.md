@@ -21748,3 +21748,80 @@ Mal neu zu starten. Details/Workaround-Rezept:
 `~/.claude/projects/-home-infantilo-OpenMediaPlatform/memory/
 feedback_mixer_mxl_flow_snapshot_race.md` (Claude-Memory, nicht Teil
 dieses Repos).
+
+## 2026-09-08 (Nachtrag 188) — omp-ograf: CPU-Verbrauch im Leerlauf ~20x gesenkt (Nutzerauftrag "ograf burns cpu. fix that!")
+
+**Live gemessen** (laufende Instanz im "Playout"-Workflow, `current:
+null`, also nichts gezeigt): 216-242% CPU im Leerlauf. Diagnose per
+Thread-genauem `/proc/<pid>/task/*/stat`-Vergleich (nicht geraten):
+
+1. `spawn_alpha_key_bridge`s manuelle BGRA→GRAY8-Alpha-Extraktion
+   allozierte + nullte (`vec![0u8; pixel_count]`) jeden Frame einen
+   kompletten 1280×720-Puffer, DANACH erst vollständig überschrieben —
+   ein unnötiger zweiter Vollpuffer-Durchlauf bei 25fps. Gefixt:
+   `Vec::with_capacity` + `extend` aus einem `chunks_exact(4)`-Iterator,
+   jedes Byte nur einmal geschrieben.
+2. Per gezieltem Debug-vs.-Release-Vergleich (`cargo build --release`,
+   Thread-Zeiten vorher/nachher) bestätigt: der Rust-Anteil dieser
+   Schleife selbst litt massiv unter Debug-Build-Overhead (338→21
+   Jiffies/3s, ~16×) — aber die GESAMT-CPU änderte sich dadurch kaum,
+   weil GStreamers eigene `tee`/`queue`-Streaming-Threads (nicht
+   Node-Code) den Löwenanteil ausmachen: volle 1280×720-BGRA-Frames
+   (3,5 MB/Frame) werden UNBEDINGT durch vier `tee`-Zweige (Fill/Key/
+   Lowres/Alpha-Brücke) verteilt, 25× pro Sekunde, permanent — auch
+   wenn nichts sichtbar ist. `show`/`hide` schalteten bisher nur CSS
+   auf der gerenderten Seite um, die GStreamer-Pipeline lief immer
+   unverändert mit voller Last weiter.
+
+**Der eigentliche Fix:** die GANZE Pipeline pausieren, solange nichts
+gezeigt wird, und beim nächsten `show()` wieder auf Playing bringen —
+dieselbe zweistufige `set_state`+`state()`-Choreografie (inkl. dem
+bereits dokumentierten `NO_PREROLL`-Verhalten des live `wpesrc`s), die
+`Pipeline::build()` schon beim initialen Aufbau nutzt (neue
+`transition_pipeline()`-Hilfsfunktion, wiederverwendet statt neu
+erfunden). Zwei Fälle: (a) nie etwas gezeigt — sobald `page_ready`
+wahr ist (erster Frame hat den `tee` erreicht, ist bereits der
+korrekte Leerlaufzustand), sofort pausieren, kein Warte-Frame nötig;
+(b) `hide()` nach echtem `show()` — JS-`hide()` zuerst senden, 300ms
+Gnadenfrist abwarten (damit `wpesrc` den jetzt versteckten Zustand
+wirklich rendert und dieser Frame durch alle Branches durchläuft),
+DANN pausieren — ohne diese Frist fröre der MXL-Flow auf dem letzten
+SICHTBAREN statt einem leeren Bild ein.
+
+**Risikoabwägung vor der Umsetzung:** das Modul dokumentiert bereits
+einen früher hart gefundenen `wpesrc`-Fallstrick (braucht zwingend
+GMainLoop+Bus-Watch, sonst liefert es nach einer Handvoll Puffern gar
+nichts mehr) — bewusst NICHT angefasst (GMainLoop läuft unabhängig vom
+Pipeline-Zustand weiter). Zusätzlich per Code-Lesen bestätigt, dass ein
+bloßes `None` (kein `is_eos()`) im `write_loop` von `omp_mediaio::mxl`
+(Fill/Key/Lowres-Schreiber) bereits GÜNSTIG behandelt wird (einfaches
+`continue`, kein Spinnen) — ein pausierter, nicht produzierender Zweig
+war also schon vorher ein sicherer, anderswo im Projekt bereits
+bewährter Zustand (`omp-mxf-player-direct`s "Stop pausiert"-Muster),
+nicht neu erfunden.
+
+**Live verifiziert** (echte Instanz im Workflow, `mxl-info` + Viewer-
+Frame-Grabs, mehrere Show/Hide-Zyklen): Leerlauf-CPU 216-242% → 1-15%
+(~20×). `mxl-info` bestätigt den Fill-Flow während der Pause als
+`Active: true` mit eingefrorenem Head-Index (kein Absturz/Fehler, echte
+Pause). `show()` bringt die CPU zuverlässig zurück auf ~150% und
+liefert nachweislich echten, animierten Grafikinhalt (Frame-Grab zeigt
+z. B. das "background-digital-circuit"-Template live). `hide()` friert
+korrekt auf dem BEREITS versteckten (transparenten/schwarzen) Bild ein,
+nicht auf dem letzten sichtbaren Frame — über drei Zyklen hinweg
+reproduzierbar. `cargo build --workspace`/`test -p omp-ograf`/`clippy`
+grün (keine neuen Warnungen ggü. vorher).
+
+**Nebenbefund während der Verifikation, NICHT durch diese Änderung
+verursacht:** ein Rollen-Neustart von `omp-ograf` (`POST .../roles/
+omp-ograf/restart`) löste diesmal einen kompletten Stopp ALLER fünf
+Workflow-Instanzen aus (`status: failed`, `"launcher: unknown
+instance"` für `omp-ograf`+`omp-video-mixer-me`) — keine Panik/kein
+Fehler im neuen Code selbst im Log erkennbar, eher ein bestehender
+Bookkeeping-Fallstrick bei wiederholten Rollen-Neustarts über eine
+Sitzung hinweg (dieselben zwei Rollen wurden zuvor schon mehrfach
+neu gestartet). Workaround: Workflow einmal sauber stop+start,
+danach stabil. Nicht weiter root-verursacht — für künftige
+Rollen-Neustart-lastige Sitzungen im Hinterkopf behalten.
+
+**Dateien:** `nodes/omp-ograf/src/pipeline.rs`.
