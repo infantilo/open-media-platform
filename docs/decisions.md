@@ -21704,3 +21704,47 @@ Rundown-UI (Discovery ist bereits systemweit, nur UI-Anbindung offen).
 `src/main.rs`, `src/pipeline.rs`, `src/presets.rs`, `src/discovery.rs`),
 `nodes/Cargo.toml` (Workspace-Member), `deploy/catalog.json` (neuer
 Eintrag).
+
+**Nachtrag desselben Tages — Nutzerauftrag "zum testen passe den
+playout workflow an und starte ihn neu":** Workflow "Playout" auf zwei
+`omp-channel-player`-Rollen ("Kanal-Player A"/"Kanal-Player B") statt
+`omp-player-video` umgestellt (`omp-video-mixer-me`/`omp-ograf`/
+`omp-playout-automation` unverändert, Automation noch nicht auf zwei
+Ziele umgestellt — s. Teil 7). Dabei einen weiteren, echten Bug in
+`omp-video-mixer-me` gefunden (nicht in dieser Sitzung gefixt, nur
+operativ umgangen): der Mixer baut die `input-selector`-Eingangs-Branch
+für einen Crosspoint-Kandidaten nur EINMAL, im Moment der ERSTEN
+Discovery — existiert der MXL-Flow zu diesem Zeitpunkt noch nicht (bei
+`omp-channel-player` der Normalfall, da bewusst kein Autoplay,
+s. o.), meldet der Mixer einmalig `get_flow_def(...): Flow not found`
+und versucht es bei späteren Discovery-Zyklen NICHT erneut — selbst
+wenn der Flow Minuten später stabil läuft. Unabhängig per
+`gst-launch-1.0 mxlsrc ... ! fakesink` bestätigt: derselbe Flow, vom
+Mixer als "nicht gefunden" gemeldet, war für einen frisch gestarteten,
+separaten GStreamer-Prozess sofort (< 20ms) lesbar — der MXL-Flow
+selbst war die ganze Zeit gültig, nur der Mixer hatte ihn sich beim
+ersten (zu frühen) Blick dauerhaft als "fehlt" gemerkt. Workaround:
+Kanal-Player IMMER vor dem Mixer (neu)starten, `load()` abwarten/
+bestätigen (nicht nur auf `{"ok":true}` vertrauen), DANACH den Mixer
+(neu)starten (`POST .../roles/omp-video-mixer-me/restart`) — in dieser
+Reihenfolge lieferte `crosspoint.inputs` beide Sender fehlerfrei.
+
+**Damit live verifiziert, dass die Zwei-Player-Architektur einen ECHTEN
+Crossfade liefert** (nicht nur die strukturelle Voraussetzung dafür,
+s. o.): `crosspoint.select`+`setTransRate`+`autoTrans` zwischen Kanal A
+(SMPTE-Balken) und Kanal B (MXF-Clip) — ein Frame-Grab MITTEN in der
+Rampe zeigt beide Quellen sichtbar überblendet (SMPTE-Balken
+halbtransparent über dem MXF-Bild), `programInput` und ein weiterer
+Frame-Grab nach Rampenende bestätigen den sauberen Landepunkt auf
+Kanal B. Workflow läuft danach bereit für den Nutzer (fünf Instanzen:
+Kanal A/B, Mixer, OGraf, Automation), Automation ist für diesen Test
+nicht angesteuert (Teil 7 offen).
+
+**Nicht in dieser Sitzung gefixt:** die oben beschriebene Mixer-
+Discovery-Race selbst (nur operativ umgangen) — relevant für Teil 7,
+sobald die Automation im laufenden Betrieb wiederholt `load()` auf
+bereits laufende Kanal-Player-Instanzen anwendet, ohne den Mixer jedes
+Mal neu zu starten. Details/Workaround-Rezept:
+`~/.claude/projects/-home-infantilo-OpenMediaPlatform/memory/
+feedback_mixer_mxl_flow_snapshot_race.md` (Claude-Memory, nicht Teil
+dieses Repos).
