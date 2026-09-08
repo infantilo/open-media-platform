@@ -21575,3 +21575,132 @@ bestätigt keine Waisenprozesse.
 
 **Dateien:** `ui/shell/workflows-view.ts`; neuer Workflow "Playout"
 (orchestrator-DB, keine Code-Änderung).
+
+## 2026-09-08 (Nachtrag 187) — Kapitel 6 Teil 6: neuer Node `omp-channel-player` gegen einen live gefundenen, bisher unbekannten `omp-player`-Freeze-Bug + strukturelle "Mix ist immer ein No-Op"-Grenze
+
+**Anlass:** Nutzer testete den "Playout"-Workflow (clip→live→clip) live
+und berichtete, der Video-Mixer werde von der Automation sichtbar nicht
+gesteuert — PGM zeige immer nur den Clip.
+
+**Diagnose** (direkter API-Zugriff auf den echten laufenden Dev-Stack,
+`mxl-info`, Viewer-Frame-Grabs — kein Raten, §0 Punkt 9): zwei getrennte,
+unabhängige Befunde.
+
+1. `omp-playout-automation` selbst arbeitet korrekt — `currentItemId`
+   wechselt exakt pünktlich zwischen den drei Items, `crosspoint.select`+
+   `cut` läuft bei jedem Take. **Kein Automations-Bug.**
+2. `omp-player`s `input-selector`-Active-Pad-Umschaltung friert das
+   tatsächlich ausgegebene Bild nach dem ersten Take dauerhaft ein — der
+   MXL-Grain-Index des PGM-Flows lief laut `mxl-info` normal mit ~25fps
+   weiter (der `MxlVideoOutput`-Paced-Writer emittiert einfach weiter das
+   letzte erhaltene Bild), aber drei nacheinander per Viewer-Frame-Grab
+   gezogene Standbilder über zwei Item-Übergänge hinweg zeigten
+   bit-identisch dasselbe Bild. Orchestrator-Log zeigte bei jedem
+   Cue/Take ein `GStreamer-WARNING: Got data flow before segment event`
+   an den Ziel-Appsinks plus einmalig einen 5s-Teardown-Timeout
+   ("vermutlich GStreamer-Deadlock, Nachtrag 157/166"). **Neuer, bisher
+   NICHT dokumentierter Fund** — nicht identisch mit dem bereits
+   bekannten, deaktivierten `add_eos_probe`-Freeze
+   (`omp-player/src/pipeline.rs`, dort seit dem Rundown-Echtmedien-
+   Folgeschritt `#[allow(dead_code)]`, `docs/END-GOAL-FEATURES.md:1259-
+   1264`) — dieser hier tritt am AKTIVEN Active-Pad-Switching-Pfad selbst
+   auf, nicht an einem separaten, nirgends verdrahteten Probe.
+
+Unabhängig vom Freeze-Bug: `crosspoint.inputs` hatte am laufenden Mixer
+genau EINEN Eintrag (den einzigen Ziel-Player). `Transition::Mix`
+(Kapitel 6 Teil 4) ist unter einer Ein-Player-Architektur damit
+**strukturell wirkungslos**, nicht nur ein Symptom des Freeze-Bugs — im
+Code bereits dokumentiert (`omp-playout-automation/src/main.rs:150-
+162`) und im Zieldesign benannt (`docs/END-GOAL-FEATURES.md:1203-1211`,
+"ehrliche v1-Grenze: Xfade nur zwischen zwei Player-Instanzen").
+
+**Nutzerentscheidung:** statt den Freeze-Bug in `omp-player`s A/B-Isel
+zu jagen, direkt auf die im Zieldesign bereits vorgesehene
+Zwei-Player-Architektur umsteigen — behebt beide Befunde gleichzeitig.
+
+**Umgesetzt (nur der neue Node, noch NICHT in die Automation
+verdrahtet — Umfangsentscheidung §0 Punkt 2, der volle Umbau wäre kein
+prüfbarer Einzelschritt):** neuer Node `omp-channel-player`
+(`nodes/omp-channel-player/`) — einzweigiger, Isel-freier "Kanal"-Player.
+`load()` reißt den aktuellen Zweig komplett ab und baut den neuen direkt
+bis `Playing` neu auf, kein `input-selector`, kein Active-Pad-
+Umschalten — der Freeze-Bug kann hier strukturell nicht auftreten. Genau
+EIN Video- + EIN Audio-Sender (gleicher Kontrakt wie jeder andere
+Player-Node). Element-Konstruktion kopiert/angepasst (§0 Punkt 9, nicht
+neu hergeleitet): `TestPattern`/generische `File` (`uridecodebin`)/`Live`
+(`MxlVideoInput`/`MxlAudioInput`) aus `omp-player/src/pipeline.rs`;
+MXF-`File` (`filesrc`!`mxfdemux`, Multi-Mono-Audiogruppen-Interleave/
+"Audio-Shuffling") wortgleich aus `omp-mxf-player-direct/src/
+pipeline.rs` (dort selbst aus `omp-mxf-player`), auf EINE feste
+Ausgabegruppe (Programmton/Stereo-Preset) verengt statt aller fünf
+Gruppen als separate Sender. `presets.rs`/`discovery.rs` 1:1 aus
+`omp-mxf-player-direct` bzw. `omp-player` übernommen (bewusst
+projektweit duplizierte Module, s. dortige Moduldoku). Katalog-Eintrag
+`omp-channel-player` (kein Pflicht-Env, Inhalt kommt immer über
+`load()`).
+
+**Live gefundener und gefixter Bug, noch während der Verifikation
+dieses Nodes selbst:** `gst::Element::set_property_from_str("pattern",
+…)` panikt INTERN (kein per `?` fangbarer `Result`), wenn der
+übergebene Wert kein gültiger `videotestsrc`-Enum-Nick ist — ein
+Tippfehler im `pattern`-Argument von `invoke("load", …)` (getestet:
+`"ebu"` statt `"ebu-bars"`) riss den kompletten Pipeline-Thread mit
+runter, der Node blieb danach dauerhaft unbedienbar (kein
+Prozess-Crash, nur ein still gestorbener Thread). Betrifft in exakt
+derselben Form auch das bereits produktive `omp-player` (dessen
+`build_video_branch` ruft `set_property_from_str` mit demselben
+ungeprüften Nutzereingabe-Pfad auf) — dort NICHT mitgefixt (außerhalb
+des Auftrags dieser Sitzung), aber als offener Fund hier dokumentiert.
+Fix (nur in `omp-channel-player`): neue `set_enum_property_checked()`
+prüft den Wert vorab per `glib::EnumClass::value_by_nick()` und liefert
+bei Unbekanntem einen regulären `Err` statt den Prozess zu gefährden.
+
+**Live verifiziert** (zwei echte Instanzen über den echten Launcher
+gestartet, Viewer-Frame-Grabs + `mxl-info` — dieselbe Methode, mit der
+oben der `omp-player`-Freeze gefunden wurde): beide Instanzen erhielten
+korrekt je 1 Video-/1 Audio-Sender. `load({pattern:"smpte"})` →
+sichtbare SMPTE-Balken. `load({file:"ET270438.mxf"})` auf DERSELBEN
+Instanz → sichtbar ANDERER, echter Videoinhalt, `positionMs` lief in
+Echtzeit (0→2360ms über 4s), `durationMs` korrekt vorab-probet
+(10000ms). Rückwechsel auf `TestPattern` bewies, dass `load()`
+wiederholt und in beide Richtungen funktioniert (genau der Test, der
+den `omp-player`-Freeze entlarvt hatte) — kein Freeze reproduzierbar.
+Absichtlicher Fehlversuch (`pattern:"ebu"`) reproduzierte den Panic vor
+dem Fix; nach dem Fix lieferte derselbe Aufruf einen sauberen
+`Event::Error`-Log-Eintrag, der Node blieb bedienbar, ein
+darauffolgender gültiger `load()` funktionierte sofort wieder. Beide
+Video-Sender waren in der NMOS-Registry mit auflösbarem Video-Flow-
+Format sichtbar (`x-nmos:query/v1.3/senders`+`/flows`) — exakt der
+Filter, den `omp-video-mixer-me::discover()` für Crosspoint-Kandidaten
+anwendet, damit ist die Zwei-Input-Voraussetzung für Teil 7 belegt
+(kein separat gestarteter Mixer für diesen Nachweis nötig). `Live`
+(NMOS-Sender-ID) NICHT live getestet — keine Live-Quelle in dieser
+Umgebung verfügbar, Code 1:1 aus `omp-player`s bereits produktivem Pfad
+übernommen.
+
+**Nebenbefund, nicht Teil dieser Sitzung:** ein `make stop`/`make
+start`-Zyklus (nötig, damit der Orchestrator den neuen Katalog-Eintrag
+lädt — `LoadCatalog` liest `catalog.json` nur beim Start, kein
+Filewatch) beendete den laufenden `omp-video-mixer-me`-Prozess des
+"Playout"-Workflows (die anderen drei Instanzen — Player/OGraf/
+Automation — blieben online). Der Workflow braucht vor dem nächsten
+Test einen manuellen Neustart der Mixer-Rolle.
+
+`cargo build --workspace`/`cargo test -p omp-channel-player`(9/9)/
+`cargo clippy -p omp-channel-player -- -D warnings` grün.
+
+**Ausblick (nicht Teil dieser Sitzung):** Teil 7 — Automation-
+Retargeting (`targetPlayerALabel`/`targetPlayerBLabel`, `take_on_
+targets` alterniert zwei `omp-channel-player`-Instanzen, echter
+`crosspoint.select`+`cut`/`autoTrans` zwischen zwei verschiedenen
+Sendern; braucht eine Entscheidung, wo Item-Metadaten künftig herkommen,
+da `omp-channel-player` keine Mehr-Item-Liste zum Spiegeln mehr hat).
+Teil 8 — `omp-audio-mixer`-Verdrahtung für Audio-Follow-Video (laut
+Recherche ohne Code-Änderung möglich, Tally-Bus ist bereits pro-Sender-
+Knoten-adressiert). Teil 9 — Live-Quellen dynamisch/global im
+Rundown-UI (Discovery ist bereits systemweit, nur UI-Anbindung offen).
+
+**Dateien:** `nodes/omp-channel-player/` (neu: `Cargo.toml`,
+`src/main.rs`, `src/pipeline.rs`, `src/presets.rs`, `src/discovery.rs`),
+`nodes/Cargo.toml` (Workspace-Member), `deploy/catalog.json` (neuer
+Eintrag).

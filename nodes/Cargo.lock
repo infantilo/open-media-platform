@@ -1310,6 +1310,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-channel-player"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-pbutils",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "omp-decklink"
 version = "0.1.0"
 dependencies = [

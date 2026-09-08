@@ -1207,8 +1207,11 @@ zwischen zwei **Clips desselben Players** kann der A/B-Slot-Player
 nicht darstellen (ein Ausgang, harte `active-pad`-Umschaltung) —
 ehrliche v1-Grenze: Xfade nur zwischen **zwei Player-Instanzen** über
 den Mixer (Workflow mit Player A + Player B als getrennte Quellen,
-Automation alterniert die Ziele). Als spätere Vertiefung im Player
-(Compositor statt input-selector) notiert, nicht versprochen.
+Automation alterniert die Ziele). **Umgesetzt als Teil 6/7** (2026-09-08,
+`docs/decisions.md` Nachtrag 187): neuer, einzweigiger Node
+`omp-channel-player` statt einer Compositor-Vertiefung im bestehenden
+A/B-Slot-Player — Teil 6 (Node selbst) erledigt, Teil 7 (Automation
+alterniert zwei Instanzen davon) offen.
 
 **Operator-UI (Rundown, „ähnliches Interface"):** vollflächiges Panel
 im K1-Look —
@@ -1300,7 +1303,57 @@ im K1-Look —
   `ui.html:8857`) — die gesamte Kind-Liste als rohes JSON-Array in
   einem `prompt()`, gleiches Minimal-Muster wie Fixzeit/Rampendauer.
   Sekundengenau live gegen einen echten `omp-ograf` verifiziert.
-- **Teil 6 — Channel-Branding pro Output (Nutzerauftrag 2026-09-07,
+- **Teil 6 — neuer Node `omp-channel-player` gegen den `omp-player`-
+  Freeze-Bug + "Mix ist No-Op"-Grenze (erledigt, 2026-09-08,
+  `docs/decisions.md` Nachtrag 187):** Live-Diagnose beim Testen des
+  "Playout"-Workflows fand zwei getrennte Befunde: (1) `omp-player`s
+  `input-selector`-Active-Pad-Umschaltung friert das PGM-Bild nach dem
+  ersten Take dauerhaft ein (neuer, bisher unbekannter Fund, verschieden
+  vom bereits dokumentierten deaktivierten `add_eos_probe`-Freeze,
+  s. Teil 2 unten); (2) unabhängig davon ist `Transition::Mix` mit nur
+  einem Ziel-Player strukturell wirkungslos (`crosspoint.inputs` hat
+  immer nur einen Eintrag), nicht nur ein Symptom des Freeze-Bugs — die
+  "ehrliche v1-Grenze" unten ("Xfade nur zwischen zwei Player-
+  Instanzen") war das die ganze Zeit schon. Statt den Freeze-Bug zu
+  jagen: neuer, einzweigiger/Isel-freier Node `omp-channel-player`
+  (`nodes/omp-channel-player/`) — `load()` baut den Zweig komplett neu
+  statt Active-Pad umzuschalten, der Bug ist damit strukturell umgangen.
+  Genau EIN Video-/EIN Audio-Sender, gedacht als eine von zwei
+  physischen Quellen am Mixer-Crosspoint (Teil 7). Element-Konstruktion
+  aus `omp-player` (TestPattern/generische File/Live) und
+  `omp-mxf-player-direct` (MXF-Audio-Shuffle) kopiert/angepasst. Live
+  einen zweiten Bug gefunden+gefixt (`set_property_from_str` panikt bei
+  ungültigem Enum-Wert, riss den Pipeline-Thread mit runter — betrifft
+  `omp-player` in derselben Form, dort nicht mitgefixt). Live gegen den
+  echten Dev-Stack verifiziert (zwei Instanzen, `mxl-info`+Viewer-Frame-
+  Grabs): TestPattern/MXF-Wiedergabe korrekt+sichtbar unterschiedlich,
+  Echtzeit-Positionsfortschritt, wiederholte `load()`-Aufrufe ohne
+  Freeze, Panic-Fix reproduziert+verifiziert. **Noch NICHT in
+  `omp-playout-automation` verdrahtet** (Umfangsentscheidung, s. Teil 7).
+- **Teil 7 — Automation-Retargeting auf zwei Kanäle (offen):**
+  `targetPlayerLabel` → `targetPlayerALabel`/`targetPlayerBLabel`,
+  `take_on_targets` alterniert `load()` zwischen den zwei
+  `omp-channel-player`-Instanzen + echtes `crosspoint.select`+
+  `cut`/`autoTrans` zwischen zwei verschiedenen Sendern (erst DANN ist
+  `Transition::Mix` ein echtes, sichtbares Xfade). Braucht eine
+  Entscheidung, wo Item-Metadaten (Label/Dauer/Verfügbarkeit) künftig
+  herkommen, da `omp-channel-player` (anders als `omp-player`) keine
+  Mehr-Item-Liste zum Spiegeln mehr hat — Kandidat: Automation hält die
+  Liste selbst, Datei-Dauer/Verfügbarkeit kommt von `omp-media-library`
+  statt von einem Player gespiegelt (deckt sich mit dem oben skizzierten
+  Datenmodell, §6.4 "Persistenz der Playlist als speicher-/ladbare
+  Objekte").
+- **Teil 8 — `omp-audio-mixer`-Verdrahtung für Audio-Follow-Video
+  (offen):** zwei Kanalstreifen (je `omp-channel-player`-Instanz) — laut
+  Recherche (Nachtrag 187) ohne Code-Änderung an Mixer/Audio-Mixer
+  möglich (Tally-Bus ist bereits pro-Sender-Knoten-adressiert, reine
+  Workflow-/Kanal-Konfiguration).
+- **Teil 9 — Live-Quellen dynamisch/global im Rundown-UI (offen):**
+  Discovery ist bereits systemweit, nicht workflow-gescoped (jeder
+  Player/Kanal-Player pollt die komplette NMOS-Registry) — hier nur die
+  UI-Anbindung der (dann zwei) Kanal-Player-`availableSources`-Listen
+  konsistent im Event-Editor.
+- **Teil 10 — Channel-Branding pro Output (Nutzerauftrag 2026-09-07,
   s. 6.2b — NICHT Teil dieses Nodes):** eigener Design-Schnitt, gehört
   strukturell zum jeweiligen Ausgang/Workflow, nicht zur Playlist —
   vermutlich ein permanenter `omp-ograf`-Slot pro Mixer-Output (K3-DSK-

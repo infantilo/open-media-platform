@@ -103,6 +103,15 @@
     "expectedResources": "gering"
   },
   {
+    "type": "omp-channel-player",
+    "label": "Kanal-Player",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-channel-player"],
+    "env": {},
+    "description": "Kapitel 6 Teil 6: einzweigiger, Isel-freier Player ohne Playlist/Cue-Take — load() ersetzt den aktuellen Inhalt (Testbild/Datei inkl. MXF-Audio-Shuffle/Live-Quelle) sofort. Gedacht als EINE von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade (zweimal im selben Workflow als Player A/Player B).",
+    "expectedResources": "gering bis moderat (Datei-Decoding)"
+  },
+  {
     "type": "omp-multiviewer",
     "label": "Automatic Multiviewer",
     "runner": "process",

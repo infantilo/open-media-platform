@@ -13,6 +13,7 @@ members = [
     "omp-player",
     "omp-mxf-player",
     "omp-mxf-player-direct",
+    "omp-channel-player",
     "omp-multiviewer",
     "omp-multiviewer-custom",
     "omp-playout-automation",
