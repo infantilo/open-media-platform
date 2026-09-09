@@ -21952,3 +21952,60 @@ transports.go}`, `nodes/omp-node-sdk/src/{connection.rs,lib.rs,
 transports.rs}`, `nodes/{playout,omp-audio-monitor,omp-aes67-gateway,
 omp-2110-gateway,omp-fabrics-gateway,omp-scaler,omp-pipeline-controller,
 omp-recorder,omp-decklink}/src/main.rs`, `.github/workflows/ci.yml`.
+
+## 2026-09-09 (Nachtrag 192) — IS-05: single/senders+single/receivers-ID-Listing für alle Rust-Nodes (Nutzerauftrag "jetzt umsetzen" → "alles")
+
+**Ausgangspunkt:** Punkt 2 aus dem vorherigen Prioritätsscan — der Go-
+Mock-Node listet über `GET .../single/receivers/` die echten Receiver-
+IDs, kein Rust-Node konnte das (nur die einzelnen Sub-Ressourcen pro
+schon bekannter ID über `SenderConnection::handle`/
+`ReceiverConnection::handle`, plus seit Nachtrag 190 die node-globale
+Wurzel via `root_discovery`, aber nicht die dazwischenliegende
+ID-Auflistung selbst).
+
+**Umsetzung:** `SenderConnection`/`ReceiverConnection` bekommen einen
+`id()`-Accessor (bisher waren `sender_id`/`receiver_id` privat). Neue
+freie Funktion `connection::list_ids(method, path, kind, ids)` — node-
+global wie `root_discovery`, aber braucht die tatsächlichen IDs, deshalb
+getrennt. Verdrahtet in allen 9 Nodes: die 6 mit genau einer Connection
+(`playout`, `omp-audio-monitor`, `omp-aes67-gateway`,
+`omp-2110-gateway`, `omp-fabrics-gateway`, `omp-scaler`) reichen ein
+Ein-Element-Array durch, die 3 mit Video+Audio-Receiver-Paar
+(`omp-recorder`, `omp-decklink`, `omp-pipeline-controller`) ein
+Zwei-Element-Array. `playout`s Sender ist `Option`, deshalb dort ein
+leeres Array statt eines Panics, falls noch nicht konfiguriert —
+`list_ids` liefert dafür korrekt `[]` (200), nicht 404: der Pfad
+existiert am Node, nur die Ressource darunter (noch) nicht.
+
+Alle 9 Node-Typen sind reine Sender-XOR-Receiver-Nodes (kein Node dieses
+Projekts hält gleichzeitig einen Sender UND einen Receiver in derselben
+Instanz) — vor der Umsetzung an den tatsächlichen Feldtypen verifiziert
+(`grep` auf `SenderConnection`/`ReceiverConnection`-Felder in allen 9
+`main.rs`), nicht angenommen.
+
+**Verifiziert:** `cargo build`/`clippy` auf allen 9 Node-Crates + SDK,
+keine Warnungen. `cargo test -p omp-node-sdk`: 42 Tests grün, davon 4
+neu (`list_ids_lists_given_ids_per_version` — deckt 1-ID- UND 2-ID-Fall
+je Version ab, `list_ids_empty_ids_yields_empty_array_not_404`,
+`list_ids_ignores_unrelated_paths`, `sender_and_receiver_expose_their_id`).
+Live-getestet: `playout` (Ein-ID-Fall, `mxl.env`/`libmxl.so` hier nicht
+nötig, da RTP-Sender) und `omp-recorder` (Zwei-ID-Fall — brauchte
+zusätzlich `source deploy/dev/mxl.env` und `mkdir -p /dev/shm/omp-mxl`,
+beides dokumentierte Umgebungs-Gotchas, s.
+`feedback_omp_dev_environment_gotchas`) über echte curl-Aufrufe gegen
+`GET .../single/{senders,receivers}/` — liefert die tatsächlichen
+UUIDs, nicht nur Struktur.
+
+**Bewusst nicht umgesetzt:** kein CI-Smoke-Test für diese 9 Nodes — der
+Rust-Workspace ist seit der 2026-07-27-Entscheidung komplett aus der CI
+ausgeschlossen (hängt über `omp-mediaio` an `third_party/mxl`, das auf
+GitHub-Actions-Runnern fehlt; selbst ein isolierter `cargo test -p
+omp-node-sdk` scheitert dort schon beim Workspace-Manifest-Laden, nicht
+erst beim Build). Nutzer hat diese Option bewusst verworfen statt
+`third_party/mxl` für CI zu vendoren/stubben — bleibt bei lokaler
+Live-Verifikation vor jedem Commit.
+
+**Dateien:** `nodes/omp-node-sdk/src/connection.rs`, `nodes/{playout,
+omp-audio-monitor,omp-aes67-gateway,omp-2110-gateway,
+omp-fabrics-gateway,omp-scaler,omp-pipeline-controller,omp-recorder,
+omp-decklink}/src/main.rs`.

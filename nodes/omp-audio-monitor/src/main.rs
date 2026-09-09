@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::pcm_stream;
-use omp_node_sdk::connection::{root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
@@ -239,6 +239,9 @@ impl ParamStore for MonitorStore {
             body,
         };
         if let Some(resp) = root_discovery(method, path) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = list_ids(method, path, "receivers", &[self.connection.id()]) {
             return Some(to_raw(resp));
         }
         if let Some(resp) = self.connection.handle(method, path, body) {

@@ -125,6 +125,40 @@ pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Ve
     None
 }
 
+/// Bedient `GET /x-nmos/connection/{version}/single/{kind}/` — die
+/// ID-Auflistung, die die RAML (`ConnectionAPI.raml`) getrennt vom
+/// `single/`-Wurzel-Listing ([`root_discovery`]) vorsieht (Nachtrag 192:
+/// vorher hatte KEIN Rust-Node das, nur der Go-Mock-Node
+/// `nodes/mock/internal/connection/handler.go`). Node-global wie
+/// [`root_discovery`], aber braucht die tatsächlichen IDs — deshalb eine
+/// eigene Funktion statt Teil davon, jeder Node reicht seine eigene(n)
+/// ID(s) durch (meist eine, bei Video+Audio-Receiver-Paaren wie
+/// `omp-recorder`/`omp-decklink`/`omp-pipeline-controller` zwei). Ein
+/// leeres `ids` (z. B. `playout` ohne konfigurierten Sender) liefert
+/// korrekt `[]`, nicht 404 — derselbe Node hat den Pfad ja, nur (noch)
+/// keine Ressource darunter.
+pub fn list_ids(
+    method: &str,
+    path: &str,
+    kind: &str,
+    ids: &[&str],
+) -> Option<(u16, &'static str, Vec<u8>)> {
+    if method != "GET" {
+        return None;
+    }
+    for version in API_VERSIONS {
+        if path == format!("/x-nmos/connection/{version}/single/{kind}/") {
+            let listing: Vec<String> = ids.iter().map(|id| format!("{id}/")).collect();
+            return Some((
+                200,
+                "application/json",
+                serde_json::to_vec(&listing).unwrap_or_default(),
+            ));
+        }
+    }
+    None
+}
+
 /// Eine Transport-Parameter-"Leg" eines Senders (`sender_transport_params_
 /// rtp.json`) — hier immer genau ein Element (keine 2022-7-Redundanz).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -197,6 +231,13 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
             state: Mutex::new(SenderResource::default()),
             transport_urn: TRANSPORT_MXL,
         }
+    }
+
+    /// Die Sender-ID — für `single/senders/`-Listing (Nachtrag 192,
+    /// [`list_ids`]), das node-global ist und deshalb nicht selbst auf
+    /// `sender_id` zugreifen kann.
+    pub fn id(&self) -> &str {
+        &self.sender_id
     }
 
     /// Überschreibt die `transporttype/`-Antwort (Default: MXL, s.
@@ -376,6 +417,13 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             state: Mutex::new(ReceiverResource::default()),
             transport_urn: TRANSPORT_MXL,
         }
+    }
+
+    /// Die Receiver-ID — für `single/receivers/`-Listing (Nachtrag 192,
+    /// [`list_ids`]), das node-global ist und deshalb nicht selbst auf
+    /// `receiver_id` zugreifen kann.
+    pub fn id(&self) -> &str {
+        &self.receiver_id
     }
 
     /// s. [`SenderConnection::with_transport`].
@@ -659,5 +707,63 @@ mod tests {
         assert!(root_discovery("GET", "/x-nmos/connection/v1.1/single/receivers/recv-1/staged").is_none());
         assert!(root_discovery("POST", "/x-nmos/connection/").is_none());
         assert!(root_discovery("GET", "/x-nmos/connection/v1.3/").is_none());
+    }
+
+    /// Nachtrag 192: `single/receivers/`-Listing fehlte für alle
+    /// Rust-Nodes komplett — deckt eine ID (die Regel für die meisten
+    /// Nodes) und zwei IDs ab (Video+Audio-Receiver-Paare wie
+    /// `omp-recorder`/`omp-decklink`/`omp-pipeline-controller`).
+    #[test]
+    fn list_ids_lists_given_ids_per_version() {
+        for version in API_VERSIONS {
+            let (status, body) = body_str(list_ids(
+                "GET",
+                &format!("/x-nmos/connection/{version}/single/receivers/"),
+                "receivers",
+                &["recv-a"],
+            ));
+            assert_eq!(status, 200);
+            assert_eq!(body, r#"["recv-a/"]"#);
+
+            let (status, body) = body_str(list_ids(
+                "GET",
+                &format!("/x-nmos/connection/{version}/single/receivers/"),
+                "receivers",
+                &["recv-a", "recv-b"],
+            ));
+            assert_eq!(status, 200);
+            assert_eq!(body, r#"["recv-a/","recv-b/"]"#);
+        }
+    }
+
+    /// Ein Node ohne (noch) konfigurierten Sender (z. B. `playout` vor
+    /// dem ersten Setup) muss `[]` liefern, nicht 404 — der Pfad existiert,
+    /// nur die Ressource darunter fehlt (noch).
+    #[test]
+    fn list_ids_empty_ids_yields_empty_array_not_404() {
+        let (status, body) = body_str(list_ids(
+            "GET",
+            "/x-nmos/connection/v1.1/single/senders/",
+            "senders",
+            &[],
+        ));
+        assert_eq!(status, 200);
+        assert_eq!(body, "[]");
+    }
+
+    #[test]
+    fn list_ids_ignores_unrelated_paths() {
+        assert!(list_ids("POST", "/x-nmos/connection/v1.1/single/receivers/", "receivers", &["a"]).is_none());
+        assert!(list_ids("GET", "/x-nmos/connection/v1.1/single/receivers/x/", "receivers", &["a"]).is_none());
+        assert!(list_ids("GET", "/x-nmos/connection/v1.1/single/senders/", "receivers", &["a"]).is_none());
+    }
+
+    #[test]
+    fn sender_and_receiver_expose_their_id() {
+        let sender = SenderConnection::new("sender-42", NoopSenderControl, NoopSenderSdp);
+        assert_eq!(sender.id(), "sender-42");
+
+        let receiver = ReceiverConnection::new("recv-42", NoopReceiverControl);
+        assert_eq!(receiver.id(), "recv-42");
     }
 }

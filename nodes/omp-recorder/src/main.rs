@@ -11,7 +11,7 @@ mod pipeline;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use omp_node_sdk::connection::{root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
@@ -152,6 +152,14 @@ impl ParamStore for RecorderStore {
             body,
         };
         root_discovery(method, path)
+            .or_else(|| {
+                list_ids(
+                    method,
+                    path,
+                    "receivers",
+                    &[self.video_connection.id(), self.audio_connection.id()],
+                )
+            })
             .or_else(|| self.video_connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
             .map(to_raw)

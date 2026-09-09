@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::fabrics::Provider;
-use omp_node_sdk::connection::{root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -184,6 +184,7 @@ impl ParamStore for InitiatorStore {
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
         let to_raw = |(status, content_type, body)| omp_node_sdk::RawResponse { status, content_type, body };
         root_discovery(method, path)
+            .or_else(|| list_ids(method, path, "receivers", &[self.connection.id()]))
             .or_else(|| self.connection.handle(method, path, body))
             .map(to_raw)
     }
