@@ -22088,3 +22088,92 @@ stillschweigend zurückgerollt.
 **Dateien:** `nodes/mock/internal/connection/{sender.go,sender_test.go,
 handler.go,handler_test.go}`, `nodes/mock/main.go`,
 `.github/workflows/ci.yml`, `README.md`.
+
+## 2026-09-09 (Nachtrag 194) — IS-05: echte CI-Ergebnisse aus Nachtrag 193 ausgewertet, sieben reale Bugs gefunden+behoben
+
+**Kontext:** Nachtrag 193 endete mit "nicht verifizierbar in dieser
+Sitzung (kein Docker hier)". Der Nutzer bat, den Push auszuführen, damit
+die echte CI läuft — `gh run watch` + `gh run view --log-failed` zeigten
+das tatsächliche Ergebnis: **50 pass, 19 sonstige, 12 unerwartet
+fehlgeschlagen** (v1.1-Lauf; v1.2-Lauf brach danach ab, da der Job beim
+ersten roten Auswertungsschritt stoppte).
+
+**Root-Cause-Methode:** kein Raten — die AMWA-`nmos-testing`-Quellen
+(`GenericTest.py`, `Specification.py`, `IS0501Test.py`) direkt von GitHub
+geladen und gelesen. Zentrale Erkenntnis: `Specification.get_reads()`
+sortiert alle RAML-GET/OPTIONS-Ressourcen ALPHABETISCH nach Pfad
+(`sorted(resources, key=lambda x: x[0])`), nicht in RAML-Dateireihenfolge
+— das erlaubte, jeden `auto_connection_N`-Index exakt einer (Pfad,
+Methode)-Kombination aus `ConnectionAPI.raml` zuzuordnen (Zählung
+beginnt bei 3, da `auto_connection_1`/`_2` die zwei festen
+`do_test_base_path`-Checks sind, davor separat gezählt):
+
+- **`auto_connection_1`** = `GET /x-nmos` (node-globale API-Familien-
+  Liste) — fehlte komplett, unabhängig von Sendern/Receivern. Gefixt:
+  `nodes/mock/main.go` bekommt `GET /x-nmos` → `["connection/"]`.
+- **`auto_connection_3`** = `GET /x-nmos/connection/v1.1/` — "Response
+  schema validation error": `connectionapi-base.json`/
+  `examples/base-get-200.json` verlangen `["bulk/","single/"]`
+  (`minItems: 2`), die Antwort war `["single/"]` allein. Gefixt in Go
+  UND im Rust-SDK (`connection::root_discovery`, hatte denselben Bug,
+  auch wenn kein Rust-Node `bulk/` selbst implementiert — die
+  Diskrepanz "listet bulk/, implementiert es nicht" bleibt als
+  separater, hier nicht behobener Gap für die Rust-Seite).
+- **`auto_connection_4`** = `GET /x-nmos/connection/v1.1/bulk` (bare,
+  ohne Trailing-Slash) — 404: es gab GAR KEINEN `.../bulk/`-Handler
+  (nur `bulk/senders`+`bulk/receivers`), anders als bei `single/`, das
+  genau deshalb schon vorher über Gos automatischen Trailing-Slash-
+  Redirect funktionierte. Gefixt: `GET .../bulk/` → `["senders/",
+  "receivers/"]`.
+- **`auto_connection_5`/`_6`/`_13`/`_20`** = `OPTIONS` auf
+  `bulk/senders`, `bulk/receivers`, `single/receivers/{id}/staged`,
+  `single/senders/{id}/staged` — 405 statt 200/403: kein OPTIONS-Handler
+  registriert, Go liefert für einen nur-GET/PATCH-Pfad automatisch 405.
+  `_20` erschien NEU erst mit Nachtrag 193 (echter Sender), `_13` war
+  schon immer da (Receiver existierten schon vorher) — beide derselbe
+  Bugtyp. Gefixt: neue `corsPreflight`-Hilfsfunktion registriert
+  `OPTIONS` mit `Access-Control-Allow-Methods`/`-Headers`.
+- **`test_09_01`/`test_25`/`test_27`/`test_29`** (Python-Exception
+  `'NoneType' object has no attribute 'group'`) + **`test_41`**
+  (SDPoker, 13 konkrete Fehler: fehlendes `mediaclk`/`ts-refclk`,
+  Taktrate 25 statt 90000 Hz, fehlendes `fmtp` mit
+  sampling/depth/width/height/exactframerate/colorimetry/PM/SSN/TP) —
+  alle durch dieselbe Ursache: `senderSDP()` war zu minimal. Gefixt
+  gegen die echte AMWA-Referenz-SDP-Vorlage
+  (`nmos-testing/test_data/sdp/video.sdp`) statt geraten — vollständige
+  ST-2110-20-fmtp-Zeile, `ts-refclk`, `mediaclk`, 90000-Hz-Taktrate.
+  **Nebenbefund, NICHT hier gefixt:** `nodes/omp-mediaio/src/rtp.rs
+  RtpVideoOutput::sdp()` (die ECHTE, produktiv genutzte SDP für
+  `playout`) hat denselben Taktraten-Fehler (`raw/{framerate}` statt
+  `raw/90000`) UND fehlt `fmtp`/`mediaclk`/`ts-refclk` komplett — nie
+  vorher aufgefallen, weil IS-05-01 nie gegen einen echten Rust-Sender
+  lief. Echter, potenziell interoperabilitätsrelevanter Bug in
+  Produktionscode, absichtlich nicht in dieser Sitzung angefasst (nicht
+  angefragt, größerer Blast-Radius als der Mock-Node).
+
+**Verifiziert:** `go build`/`vet`/`test` (alle Pakete), `cargo build`+
+`cargo test -p omp-node-sdk` (12/12 `connection`-Tests, 2 Assertions an
+`["bulk/","single/"]` angepasst), `make check-ci` komplett grün (inkl.
+Deno). Live gegen einen frisch gestarteten Mock-Node (`-senders 1
+-receivers 1`) verifiziert: `GET /x-nmos`, Versions-Wurzel, `bulk`-
+Wurzel, `OPTIONS bulk/senders`, `OPTIONS .../staged`, PATCH→
+`/transportfile` (vollständige SDP mit allen geforderten Feldern) — alle
+sechs Fixes einzeln per curl bestätigt. Ein echter Go-`ServeMux`-
+Registrierungskonflikt dabei gefunden+gefixt: ein methodenloses
+`Handle("/x-nmos/connection/", ...)` UNTER einem methodenspezifischen
+`"GET /x-nmos/"`-Teilbaummuster paniert beim Programmstart (Go 1.22+
+verbietet diese Ambiguität) — gelöst, indem nur die tatsächlich
+getestete bare Form (`"GET /x-nmos"`, kein Trailing-Slash, kein
+Teilbaummuster) registriert wird.
+
+**Weiterhin offen:** ob DAMIT alle 7 `auto_connection_*` jetzt wirklich
+grün sind, ist erst mit dem NÄCHSTEN echten CI-Lauf sicher — diese
+Analyse ist präzise root-caused (RAML-Reihenfolge exakt nachvollzogen,
+keine Vermutung), aber ungetestet gegen die echte Schema-Validierung
+für Sonderfälle (z. B. ob `check_CORS`s Methodenliste für `staged`
+genau `GET, PATCH` erwartet oder eine andere Reihenfolge/Groß-
+Kleinschreibung voraussetzt).
+
+**Dateien:** `nodes/mock/main.go`, `nodes/mock/internal/connection/
+{handler.go,handler_test.go,sender.go}`, `nodes/omp-node-sdk/src/
+connection.rs`.

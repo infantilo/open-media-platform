@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -142,6 +143,26 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/", descriptor.Handler(store))
+	// Nachtrag 194: `GET /x-nmos` (die node-globale Liste der hier
+	// implementierten NMOS-API-Familien) fehlte komplett — live an
+	// AMWA-`auto_connection_1` gefunden ("Incorrect response code: 404"),
+	// der erste der beiden `basics()`-Basis-Discovery-Checks
+	// (`GenericTest.do_test_base_path`), unabhängig von Sendern/
+	// Receivern. Dieser Mock-Node implementiert nur die Connection-API
+	// selbst als HTTP-Server (IS-04 läuft als Registration-Client, keine
+	// eigene abfragbare Node-API-Oberfläche), daher nur `["connection/"]`.
+	// Nur die exakte, nicht auf "/" endende Form registriert (kein
+	// zusätzliches "GET /x-nmos/"): ein Go-1.22-`ServeMux` verbietet ein
+	// methodenloses `Handle("/x-nmos/connection/", ...)` UNTER einem
+	// methodenspezifischen `"GET /x-nmos/"`-Teilbaum-Muster (Panic bei
+	// Programmstart: "matches more methods ... but has a more specific
+	// path pattern", live gefunden) — die getestete Form ist ohnehin nur
+	// die bare "/x-nmos" (kein Trailing-Slash), s. o.
+	mux.HandleFunc("GET /x-nmos", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode([]string{"connection/"})
+	})
 	mux.Handle("/x-nmos/connection/", connection.Handler(receiverConnStore, senderConnStore))
 	if *uiBundle {
 		mux.Handle("/ui/", uibundle.Handler())

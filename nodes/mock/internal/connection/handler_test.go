@@ -76,7 +76,7 @@ func TestHandlerBaseDiscovery(t *testing.T) {
 		path string
 		want string
 	}{
-		{"/x-nmos/connection/v1.1/", `["single/"]`},
+		{"/x-nmos/connection/v1.1/", `["bulk/","single/"]`},
 		{"/x-nmos/connection/v1.1/single/", `["senders/","receivers/"]`},
 		{"/x-nmos/connection/v1.1/single/senders/", `[]`},
 		{"/x-nmos/connection/v1.1/single/receivers/", `["recv-1/","recv-2/"]`},
@@ -270,8 +270,8 @@ func TestHandlerServesV12AlongsideV11(t *testing.T) {
 		return rec
 	}
 
-	if rec := get("/x-nmos/connection/v1.2/"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `["single/"]` {
-		t.Fatalf("GET v1.2 root status=%d body=%s, want 200 [\"single/\"]", rec.Code, rec.Body.String())
+	if rec := get("/x-nmos/connection/v1.2/"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `["bulk/","single/"]` {
+		t.Fatalf("GET v1.2 root status=%d body=%s, want 200 [\"bulk/\",\"single/\"]", rec.Code, rec.Body.String())
 	}
 
 	body := `{"master_enable":true,"activation":{"mode":"activate_immediate"}}`

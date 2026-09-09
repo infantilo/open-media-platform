@@ -6,7 +6,27 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
+
+// corsPreflight registriert eine OPTIONS-Antwort für einen Pfad, der laut
+// RAML (`ConnectionAPI.raml`) CORS-Preflight unterstützen muss (dort als
+// `options:` mit Response 200/403 deklariert) — Go liefert für einen
+// nur-GET/PATCH-registrierten Pfad ohne diesen Handler automatisch 405,
+// nicht 200/403. Live an AMWA-`auto_connection_5`/`6`/`13`/`20` gefunden
+// (Nachtrag 194): `bulk/senders`, `bulk/receivers`,
+// `single/receivers/{id}/staged`, `single/senders/{id}/staged` fehlte
+// das alle. `methods` sind die anderen an diesem Pfad erlaubten Methoden
+// (ohne OPTIONS selbst) für `Access-Control-Allow-Methods` — das
+// AMWA-Tool prüft genau diesen Header gegen die RAML-deklarierten
+// Methoden dieses Pfads (`check_CORS`, `GenericTest.py`).
+func corsPreflight(mux *http.ServeMux, path string, methods []string) {
+	mux.HandleFunc("OPTIONS "+path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Methods", strings.Join(methods, ", "))
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.WriteHeader(http.StatusOK)
+	})
+}
 
 // Handler baut den HTTP-Handler für die IS-05-Connection-API-Pfade von
 // Receivern UND Sendern: GET/PATCH .../staged, GET .../active, plus die
@@ -95,18 +115,40 @@ func registerVersion(mux *http.ServeMux, store *ReceiverStore, senders *SenderSt
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
-		writeJSON(w, http.StatusOK, []string{"single/"})
+		// Nachtrag 194: `connectionapi-base.json`/`examples/base-get-200.json`
+		// (AMWA-TV/is-05 v1.1.2) verlangen BEIDE Einträge — live an
+		// AMWA-`auto_connection_3` gefunden ("Response schema validation
+		// error"): `["single/"]` allein erfüllt das Schema nicht
+		// (`minItems: 2`).
+		writeJSON(w, http.StatusOK, []string{"bulk/", "single/"})
+	})
+
+	// `GET .../bulk/` — Nachtrag 194: fehlte bisher komplett (nur
+	// `bulk/senders`+`bulk/receivers` waren registriert, nicht die
+	// Bulk-Wurzel selbst) — live an AMWA-`auto_connection_4` gefunden
+	// ("Incorrect response code: 404"), derselbe Bugtyp wie der schon
+	// gefixte `/x-nmos/connection/`-Wurzel-Fall (Nachtrag 190): das RAML
+	// deklariert den Pfad ohne Trailing-Slash ("/bulk"), das AMWA-Tool
+	// ruft ihn auch so ab — `net/http`s automatischer Trailing-Slash-
+	// Redirect (Subtree-Pattern) braucht dafür ÜBERHAUPT ein registriertes
+	// `.../bulk/`-Pattern zum Umleiten auf, das fehlte hier ganz (anders
+	// als bei `single/`, das genau deshalb schon vorher funktionierte).
+	mux.HandleFunc("GET "+base+"bulk/", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []string{"senders/", "receivers/"})
 	})
 
 	// `bulk/senders`+`bulk/receivers` sind laut RAML (`ConnectionAPI.raml`)
 	// feste Basis-Discovery-Pfade: GET liefert dort laut Spec immer 405
 	// (Method Not Allowed), nicht 404. Beide bekommen unten zusätzlich
-	// einen echten POST-Handler (seit Nachtrag 193 auch `bulk/senders`).
+	// einen echten POST-Handler (seit Nachtrag 193 auch `bulk/senders`)
+	// und einen echten OPTIONS-Preflight-Handler (s. `corsPreflight`).
 	bulkMethodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "GET not allowed on bulk resources")
 	}
 	mux.HandleFunc("GET "+base+"bulk/senders", bulkMethodNotAllowed)
 	mux.HandleFunc("GET "+base+"bulk/receivers", bulkMethodNotAllowed)
+	corsPreflight(mux, base+"bulk/senders", []string{"POST"})
+	corsPreflight(mux, base+"bulk/receivers", []string{"POST"})
 
 	mux.HandleFunc("GET "+base+"single/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []string{"senders/", "receivers/"})
@@ -169,6 +211,7 @@ func registerVersion(mux *http.ServeMux, store *ReceiverStore, senders *SenderSt
 	}
 	mux.HandleFunc("GET "+base+"single/receivers/{id}/staged", staged)
 	mux.HandleFunc("GET "+base+"single/receivers/{id}/staged/", staged)
+	corsPreflight(mux, base+"single/receivers/{id}/staged", []string{"GET", "PATCH"})
 
 	mux.HandleFunc("PATCH "+base+"single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -290,6 +333,7 @@ func registerSenderRoutes(mux *http.ServeMux, senders *SenderStore, base string)
 	}
 	mux.HandleFunc("GET "+base+"single/senders/{id}/staged", senderStaged)
 	mux.HandleFunc("GET "+base+"single/senders/{id}/staged/", senderStaged)
+	corsPreflight(mux, base+"single/senders/{id}/staged", []string{"GET", "PATCH"})
 
 	mux.HandleFunc("PATCH "+base+"single/senders/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)

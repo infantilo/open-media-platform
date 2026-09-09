@@ -220,11 +220,19 @@ func resolveSenderAutoValues(leg map[string]any) map[string]any {
 }
 
 // senderSDP baut die `.../transportfile`-Antwort aus einem aufgelösten
-// (nicht "auto") Transport-Parameter-Leg — dieselbe minimale, aber gültige
-// SDP-Struktur wie `nodes/omp-mediaio/src/rtp.rs RtpVideoOutput::sdp()`
-// (v=/o=/s=/c=/t=/m=/a=rtpmap), hier ohne echtes Medienformat (der
-// Mock-Node hat keine echte Payload) — genug für einen SDP-Parser, um
-// Zieladresse+Port zu extrahieren, was `auto_connection_*` braucht.
+// (nicht "auto") Transport-Parameter-Leg — ST 2110-20-konform, geprüft
+// gegen AMWA-TV/nmos-testing `test_data/sdp/video.sdp` (die Referenz-
+// SDP-Vorlage, die der echte SDPoker-Validator des AMWA-Testing-Tools
+// gegenprüft) statt geraten. Live an AMWA-`test_41`/`test_09_01`/
+// `test_25`/`test_27`/`test_29` gefunden (Nachtrag 194): eine frühere,
+// minimale Fassung ohne `a=fmtp`/`a=mediaclk`/`a=ts-refclk` und mit
+// Taktrate = Framerate statt der von RFC 4175/ST 2110-20 verlangten
+// 90000 Hz erzeugte 13 SDPoker-Fehler UND ließ
+// `IS05Utils.check_sdp_matches_params` mit einer unbehandelten
+// Python-Exception abstürzen (Regex auf ein nicht vorhandenes
+// `fmtp`-Feld). Feste Platzhalter-Bildmaße (640×480, wie
+// `nodes/omp-mediaio/src/rtp.rs WIDTH/HEIGHT`) — der Mock-Node hat kein
+// echtes Bildformat.
 func senderSDP(leg map[string]any) string {
 	host, _ := leg["destination_ip"].(string)
 	if host == "" {
@@ -241,7 +249,12 @@ func senderSDP(leg map[string]any) string {
 			"c=IN IP4 %s\r\n"+
 			"t=0 0\r\n"+
 			"m=video %d RTP/AVP 96\r\n"+
-			"a=rtpmap:96 raw/25\r\n",
+			"a=ts-refclk:ptp=IEEE1588-2008:EC-46-70-FF-FE-00-CE-DE:0\r\n"+
+			"a=mediaclk:direct=0\r\n"+
+			"a=rtpmap:96 raw/90000\r\n"+
+			"a=fmtp:96 sampling=YCbCr-4:2:2; width=640; height=480; depth=8; "+
+			"SSN=ST2110-20:2017; colorimetry=BT709; PM=2110GPM; TP=2110TPN; "+
+			"TCS=SDR; exactframerate=25\r\n",
 		host, host, port,
 	)
 }

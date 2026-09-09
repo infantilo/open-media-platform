@@ -90,7 +90,10 @@ fn strip_versioned_prefix<'a>(path: &'a str, kind: &str, id: &str) -> Option<&'a
 
 /// Bedient die node-globalen Wurzel-Discovery-Pfade der IS-05-
 /// Connection-API: `/x-nmos/connection/` (Versionsliste) sowie je
-/// [`API_VERSIONS`]-Eintrag `.../v1.x/` (`["single/"]`) und
+/// [`API_VERSIONS`]-Eintrag `.../v1.x/` (`["bulk/","single/"]`, exakt
+/// gegen `connectionapi-base.json`/`examples/base-get-200.json`
+/// geprüft — live an AMWA-`auto_connection_3` gefunden, Nachtrag 194:
+/// `["single/"]` allein erfüllt das Schema nicht, `minItems: 2`) und
 /// `.../v1.x/single/` (`["senders/","receivers/"]`, immer beide,
 /// unabhängig davon ob dieser Node tatsächlich Sender+Receiver hat —
 /// dieselbe RAML-Vorgabe, der auch das Go-Pendant folgt,
@@ -102,7 +105,10 @@ fn strip_versioned_prefix<'a>(path: &'a str, kind: &str, id: &str) -> Option<&'a
 /// `extra_route` auf (Nachtrag 190: vorher fehlte dieser Pfad für ALLE
 /// Rust-Nodes komplett, nicht erst seit v1.2 — der Go-Mock-Node hatte
 /// nur die versionierten Wurzeln, nicht den nackten `/x-nmos/connection/`
-/// selbst, s. docs/decisions.md).
+/// selbst, s. docs/decisions.md). Kein Rust-Node implementiert die
+/// `bulk/`-Endpoints selbst (nur der Go-Mock-Node, Nachtrag 193) — die
+/// Discovery-Antwort muss trotzdem `bulk/` listen (RAML-Vorgabe), das
+/// ist ein separater, hier nicht behobener Gap.
 pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Vec<u8>)> {
     if method != "GET" {
         return None;
@@ -112,7 +118,11 @@ pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Ve
     }
     for version in API_VERSIONS {
         if path == format!("/x-nmos/connection/{version}/") {
-            return Some((200, "application/json", br#"["single/"]"#.to_vec()));
+            return Some((
+                200,
+                "application/json",
+                br#"["bulk/","single/"]"#.to_vec(),
+            ));
         }
         if path == format!("/x-nmos/connection/{version}/single/") {
             return Some((
@@ -691,7 +701,7 @@ mod tests {
             let (status, body) =
                 body_str(root_discovery("GET", &format!("/x-nmos/connection/{version}/")));
             assert_eq!(status, 200);
-            assert_eq!(body, r#"["single/"]"#);
+            assert_eq!(body, r#"["bulk/","single/"]"#);
 
             let (status, body) = body_str(root_discovery(
                 "GET",
