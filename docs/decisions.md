@@ -22177,3 +22177,33 @@ Kleinschreibung voraussetzt).
 **Dateien:** `nodes/mock/main.go`, `nodes/mock/internal/connection/
 {handler.go,handler_test.go,sender.go}`, `nodes/omp-node-sdk/src/
 connection.rs`.
+
+## 2026-09-09 (Nachtrag 195) — IS-05: SDP `c=`-Zeile muss auf Medien-Ebene stehen, nicht Session-Ebene
+
+**Kontext:** Nachtrag 194s SDP-Fix reduzierte die CI-Fehler von 12 auf 4
+(50→58 pass) — `auto_connection_*` komplett grün, aber `test_09_01`/
+`test_25`/`test_27`/`test_29` (alle "'NoneType' object has no attribute
+'group'") blieben. Root-Cause (`IS05Utils.check_sdp_matches_params`,
+direkt aus dem AMWA-Quellcode gelesen, nicht geraten): die Funktion
+splittet den SDP-Body an `"m="` und sucht die `c=`-Zeile NUR innerhalb
+der so entstehenden Medien-Sektion (alles NACH `m=video ...`) — eine
+`c=`-Zeile VOR `m=` (Session-Ebene, wie in Nachtrag 194s Fassung) landet
+im verworfenen `sdp_global`-Teil, die Regex-Suche in der Medien-Sektion
+liefert `None`, `.group(1)` darauf crasht.
+
+**Fix:** `c=IN IP4 ...` in `senderSDP()` (`sender.go`) hinter `m=video
+...` verschoben, exakt wie im echten AMWA-Referenz-Template
+(`nmos-testing/test_data/sdp/video.sdp`, das denselben Aufbau hat) —
+beide Positionen sind gültiges SDP, aber nur die Medien-Ebene passt zu
+diesem konkreten Test. `fmt.Sprintf`-Argumentreihenfolge entsprechend
+angepasst (`host, port, host` statt `host, host, port`).
+
+**Verifiziert, dieses Mal VOR dem Push:** kompletter `IS05Utils.
+check_sdp_matches_params`-Regex-Ablauf in Python 1:1 gegen echte, live
+vom Mock-Node erzeugte SDP+`active`-JSON-Daten nachgestellt (nicht nur
+gelesen und für richtig gehalten) — alle Regex-Matches (`media_line`,
+`connection_line`) liefern die erwarteten Gruppen, keine `None`-Treffer,
+Ports/IPs stimmen mit `transport_params` überein. `go build`/`vet`/
+`test` grün.
+
+**Dateien:** `nodes/mock/internal/connection/sender.go`.

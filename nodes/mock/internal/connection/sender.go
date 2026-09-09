@@ -233,6 +233,16 @@ func resolveSenderAutoValues(leg map[string]any) map[string]any {
 // `fmtp`-Feld). Feste Platzhalter-Bildmaße (640×480, wie
 // `nodes/omp-mediaio/src/rtp.rs WIDTH/HEIGHT`) — der Mock-Node hat kein
 // echtes Bildformat.
+//
+// `c=` MUSS nach `m=` stehen (Medien-Ebene), nicht davor
+// (Session-Ebene) — beides ist gültiges SDP, aber
+// `IS05Utils.check_sdp_matches_params` splittet den Body an `"m="` und
+// sucht die `c=`-Zeile NUR in der Medien-Sektion danach; eine
+// Session-Ebene-`c=`-Zeile (wie in einer ersten Fassung dieser Funktion)
+// liefert dort `None` → `.group(1)` auf `None` → genau die live
+// gefundene `'NoneType' object has no attribute 'group'`-Exception
+// (`test_09_01`/`test_25`/`test_27`/`test_29`). Reihenfolge exakt wie im
+// echten AMWA-Referenz-Template (`nmos-testing/test_data/sdp/video.sdp`).
 func senderSDP(leg map[string]any) string {
 	host, _ := leg["destination_ip"].(string)
 	if host == "" {
@@ -246,16 +256,16 @@ func senderSDP(leg map[string]any) string {
 		"v=0\r\n"+
 			"o=- 0 0 IN IP4 %s\r\n"+
 			"s=OpenMediaPlatform Mock Sender\r\n"+
-			"c=IN IP4 %s\r\n"+
 			"t=0 0\r\n"+
 			"m=video %d RTP/AVP 96\r\n"+
+			"c=IN IP4 %s\r\n"+
 			"a=ts-refclk:ptp=IEEE1588-2008:EC-46-70-FF-FE-00-CE-DE:0\r\n"+
 			"a=mediaclk:direct=0\r\n"+
 			"a=rtpmap:96 raw/90000\r\n"+
 			"a=fmtp:96 sampling=YCbCr-4:2:2; width=640; height=480; depth=8; "+
 			"SSN=ST2110-20:2017; colorimetry=BT709; PM=2110GPM; TP=2110TPN; "+
 			"TCS=SDR; exactframerate=25\r\n",
-		host, host, port,
+		host, port, host,
 	)
 }
 
