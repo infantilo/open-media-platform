@@ -22207,3 +22207,36 @@ Ports/IPs stimmen mit `transport_params` überein. `go build`/`vet`/
 `test` grün.
 
 **Dateien:** `nodes/mock/internal/connection/sender.go`.
+
+## 2026-09-09 (Nachtrag 196) — Nebenbefund aus Nachtrag 194 gefixt: echte ST2110-SDP-Generatoren hatten denselben Bug (Nutzerauftrag "taktraten problem fixen")
+
+**Kontext:** Nachtrag 194 fand den Taktraten-Bug am Go-Mock-Node und
+flaggte als Nebenbefund, dass die ECHTE Playout-SDP
+(`nodes/omp-mediaio/src/rtp.rs RtpVideoOutput::sdp()`) denselben Fehler
+hat — nie aufgefallen, weil IS-05-01 nie gegen einen echten Rust-Sender
+lief. Beim Nachschauen zeigte sich: derselbe Bug steckt AUCH in
+`nodes/omp-mediaio/src/st2110.rs St2110VideoOutput::sdp()` (die
+"echte" ST-2110-Implementierung, Kapitel 19a) — beide gefixt, nicht nur
+die eine ursprünglich gefundene.
+
+**Fix (beide Funktionen identisch):** (1) `a=rtpmap`-Taktrate fest auf
+`90000` (RFC 4175/ST 2110-20 §7.1), vorher fälschlich die Framerate.
+(2) `c=`-Zeile nach `m=` verschoben (Medien- statt Session-Ebene) —
+derselbe `IS05Utils.check_sdp_matches_params`-Fallstrick wie beim
+Mock-Node (Nachtrag 195). (3) `a=fmtp` um `PM`/`SSN`/`TP`/`TCS` ergänzt
+(SDPoker-Pflichtfelder), `a=mediaclk`/`a=ts-refclk` (ST 2110-10 §8.1/8.2)
+neu hinzugefügt. `st2110.rs`s `colorimetry=BT601-5` unverändert
+gelassen (bereits vorhanden, nur ergänzt statt ersetzt).
+
+**Verifiziert:** zwei neue Regressionstests
+(`rtp::tests::sdp_is_st2110_20_conformant`,
+`st2110::tests::video_sdp_is_st2110_20_conformant`) — prüfen Taktrate
+90000 (nicht 25), `c=`-Position nach `m=`, Anwesenheit aller neuen
+Pflichtfelder. `cargo test -p omp-mediaio --lib`: 6 passed/1 ignored
+(unverändert + 2 neue), `cargo clippy -p omp-mediaio` sauber (ein
+Doc-Comment-Lint gefunden+gefixt: fehlende Leerzeile vor einem
+Absatz nach einer nummerierten Liste). Live gegen einen echten
+`playout`-Prozess bestätigt: `/transportfile` liefert jetzt
+`raw/90000`, `c=` nach `m=`, vollständiges `fmtp` inkl. `PM`/`SSN`/`TP`.
+
+**Dateien:** `nodes/omp-mediaio/src/{rtp.rs,st2110.rs}`.

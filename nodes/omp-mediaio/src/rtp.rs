@@ -144,17 +144,38 @@ impl RtpVideoOutput {
 
     /// SDP-Beschreibung des aktuellen Ziels/Formats (RFC 4175 / ST
     /// 2110-20-artig) — Inhalt von `.../transportfile` (IS-05).
+    ///
+    /// Zwei reale Bugs live am echten AMWA-IS-05-01-Tool-Lauf gefunden
+    /// (Nachtrag 194/195, docs/decisions.md) — nie vorher aufgefallen,
+    /// weil IS-05-01 nie gegen einen echten Rust-Sender lief, nur gegen
+    /// den Go-Mock-Node:
+    /// 1. `a=rtpmap`s Taktrate MUSS für RTP-Rohvideo laut RFC 4175/
+    ///    ST 2110-20 §7.1 fest 90000 Hz sein, nicht die Framerate — die
+    ///    Framerate steht separat in `a=fmtp`s `exactframerate`.
+    /// 2. `c=` muss NACH `m=` stehen (Medien-Ebene). Beide Positionen
+    ///    sind gültiges SDP, aber der AMWA-SDP-Parser
+    ///    (`IS05Utils.check_sdp_matches_params`) sucht `c=` nur in der
+    ///    Medien-Sektion — eine Session-Ebene-`c=`-Zeile davor liefert
+    ///    dort `None`, `.group()` darauf crasht mit einer unbehandelten
+    ///    Python-Exception.
+    ///
+    /// `a=fmtp` fehlten außerdem `colorimetry`/`PM`/`SSN`/`TP`
+    /// (SDPoker-Pflichtfelder), `a=mediaclk`/`a=ts-refclk` (ST 2110-10
+    /// §8.1/8.2) komplett.
     pub fn sdp(&self) -> String {
         let (host, port) = self.destination();
         format!(
             "v=0\r\n\
              o=- 0 0 IN IP4 {host}\r\n\
              s=OpenMediaPlatform Playout\r\n\
-             c=IN IP4 {host}\r\n\
              t=0 0\r\n\
              m=video {port} RTP/AVP 96\r\n\
-             a=rtpmap:96 raw/{num}\r\n\
+             c=IN IP4 {host}\r\n\
+             a=ts-refclk:ptp=IEEE1588-2008:EC-46-70-FF-FE-00-CE-DE:0\r\n\
+             a=mediaclk:direct=0\r\n\
+             a=rtpmap:96 raw/90000\r\n\
              a=fmtp:96 sampling=YCbCr-4:2:2; depth=8; width={WIDTH}; height={HEIGHT}; \
+             colorimetry=BT709; PM=2110GPM; SSN=ST2110-20:2017; TP=2110TPN; TCS=SDR; \
              exactframerate={num}/{den}\r\n",
             num = self.framerate_numerator,
             den = self.framerate_denominator,
@@ -175,5 +196,44 @@ impl Output for RtpVideoOutput {
 impl crate::MediaFlow for RtpVideoOutput {
     fn has_flowed(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Nachtrag 195/196: live am echten AMWA-IS-05-01-Tool-Lauf gefunden
+    /// (am Go-Mock-Node-Pendant, nie zuvor gegen einen echten Rust-Sender
+    /// getestet) — zwei reale Bugs, hier verankert: (1) die Taktrate für
+    /// RTP-Rohvideo muss 90000 Hz sein (RFC 4175/ST 2110-20), nicht die
+    /// Framerate. (2) `c=` muss NACH `m=` stehen (Medien-Ebene) —
+    /// `IS05Utils.check_sdp_matches_params` (AMWA-nmos-testing) sucht
+    /// die `c=`-Zeile nur innerhalb der Medien-Sektion, eine
+    /// Session-Ebene-Zeile davor crasht dort mit `NoneType.group()`.
+    #[test]
+    fn sdp_is_st2110_20_conformant() {
+        gst::init().expect("gst::init");
+        let pipeline = gst::Pipeline::new();
+        let src = gst::ElementFactory::make("videotestsrc").build().expect("videotestsrc");
+        pipeline.add(&src).expect("add videotestsrc");
+        let output = RtpVideoOutput::new(&pipeline, &src, "127.0.0.1", 52141, 25, 1)
+            .expect("RtpVideoOutput::new");
+        let sdp = output.sdp();
+
+        assert!(sdp.contains("a=rtpmap:96 raw/90000"), "sdp = {sdp}");
+        assert!(
+            !sdp.contains("a=rtpmap:96 raw/25"),
+            "clock rate must not be the framerate: sdp = {sdp}"
+        );
+        let m_index = sdp.find("m=video").expect("m=video line present");
+        let c_index = sdp.find("c=IN IP4").expect("c= line present");
+        assert!(
+            c_index > m_index,
+            "c= must come AFTER m= (media-level, not session-level): sdp = {sdp}"
+        );
+        for required in ["a=mediaclk:", "a=ts-refclk:", "PM=", "SSN=", "TP="] {
+            assert!(sdp.contains(required), "missing {required:?}: sdp = {sdp}");
+        }
     }
 }
