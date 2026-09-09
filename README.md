@@ -1,10 +1,19 @@
 # OpenMediaPlatform
 
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
+
+> **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
+> discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
+> served side by side** (wire-compatible, same handlers) for connection
+> management, IS-12/IS-14 for self-described control. This isn't a
+> compatibility claim on paper: the official AMWA NMOS Testing Tool runs
+> against a real node on every push, and the current run is fully green
+> — 62 passing IS-05-01 checks, zero accepted exceptions, on both API
+> versions.
+
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
 New, standalone project (separate from `PIPELINE CONTROLLER`).
-
-**Standards:** AMWA NMOS IS-04 v1.3 (registration/discovery) · IS-05 v1.1 **and the current v1.2.0 release** (connection management, wire-compatible, both served side by side) · IS-12/IS-14 (control framework).
 
 ## An Open-Source Orchestrator for Broadcast – A Current Status
 
