@@ -137,11 +137,12 @@ func main() {
 	}
 
 	store := descriptor.NewStore(*label)
-	connStore := connection.NewReceiverStore(receiverIDs)
+	receiverConnStore := connection.NewReceiverStore(receiverIDs)
+	senderConnStore := connection.NewSenderStore(senderIDs)
 
 	mux := http.NewServeMux()
 	mux.Handle("/", descriptor.Handler(store))
-	mux.Handle("/x-nmos/connection/", connection.Handler(connStore))
+	mux.Handle("/x-nmos/connection/", connection.Handler(receiverConnStore, senderConnStore))
 	if *uiBundle {
 		mux.Handle("/ui/", uibundle.Handler())
 	}

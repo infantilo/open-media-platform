@@ -10,7 +10,7 @@ import (
 
 func TestHandlerGetStagedAndActive(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/single/receivers/recv-1/staged", nil))
@@ -27,7 +27,7 @@ func TestHandlerGetStagedAndActive(t *testing.T) {
 
 func TestHandlerPatchStagedActivatesImmediately(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	body := `{"sender_id":"sender-1","master_enable":true,"activation":{"mode":"activate_immediate"}}`
 	rec := httptest.NewRecorder()
@@ -51,7 +51,7 @@ func TestHandlerPatchStagedActivatesImmediately(t *testing.T) {
 
 func TestHandlerUnknownReceiverReturns404(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/single/receivers/nope/staged", nil))
@@ -64,7 +64,7 @@ func TestHandlerUnknownReceiverReturns404(t *testing.T) {
 // 0 ausgeführten Tests abbrach (docs/decisions.md 2026-07-13).
 func TestHandlerBaseDiscovery(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1", "recv-2"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	get := func(path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -138,7 +138,7 @@ func TestHandlerBaseDiscovery(t *testing.T) {
 // Wurzel-Listing statt 404 ab.
 func TestHandlerRootDoesNotSwallowUnknownSubpaths(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/nonexistent-path", nil))
@@ -152,7 +152,7 @@ func TestHandlerRootDoesNotSwallowUnknownSubpaths(t *testing.T) {
 // beantworten (nicht 404, auch ohne echte Bulk-POST-Implementierung).
 func TestHandlerBulkGetIsMethodNotAllowed(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	for _, path := range []string{
 		"/x-nmos/connection/v1.1/bulk/senders",
@@ -172,7 +172,7 @@ func TestHandlerBulkGetIsMethodNotAllowed(t *testing.T) {
 // Fehlerantwort `application/json` nach `error-schema.json`.
 func TestHandlerErrorsAreJSON(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/single/receivers/nope/staged", nil))
@@ -193,7 +193,7 @@ func TestHandlerErrorsAreJSON(t *testing.T) {
 
 func TestHandlerTrailingSlashLeafPathsMatchBarePaths(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	get := func(path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -218,7 +218,7 @@ func TestHandlerTrailingSlashLeafPathsMatchBarePaths(t *testing.T) {
 // ausführen, nicht nur mit 200 antworten.
 func TestHandlerBulkReceiversPost(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	body := `[
 		{"id": "recv-1", "params": {"transport_params": [{"destination_port": 6000}]}},
@@ -262,7 +262,7 @@ func TestHandlerBulkReceiversPost(t *testing.T) {
 // Zustand über beide Versionspfade erreichbar ist.
 func TestHandlerServesV12AlongsideV11(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	get := func(path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -303,7 +303,7 @@ func TestHandlerServesV12AlongsideV11(t *testing.T) {
 // nur eine Ebene höher.
 func TestHandlerBareRootListsVersions(t *testing.T) {
 	store := NewReceiverStore([]string{"recv-1"})
-	h := Handler(store)
+	h := Handler(store, NewSenderStore(nil))
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/", nil))
@@ -318,5 +318,145 @@ func TestHandlerBareRootListsVersions(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/nonexistent", nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET unknown top-level subpath status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestHandlerSenderBaseDiscovery — Nachtrag 193: Sender-seitige
+// IS-05-Discovery, Pendant zu TestHandlerBaseDiscovery (Receiver). Deckt
+// `single/senders/`-Listing (echte IDs statt der vorherigen leeren
+// `[]`), Resource-Root, constraints, transporttype ab.
+func TestHandlerSenderBaseDiscovery(t *testing.T) {
+	receivers := NewReceiverStore(nil)
+	senders := NewSenderStore([]string{"send-1", "send-2"})
+	h := Handler(receivers, senders)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"/x-nmos/connection/v1.1/single/senders/", `["send-1/","send-2/"]`},
+		{"/x-nmos/connection/v1.1/single/senders/send-1/", `["constraints/","staged/","active/","transportfile/","transporttype/"]`},
+		{"/x-nmos/connection/v1.1/single/senders/send-1/transporttype", `"urn:x-nmos:transport:rtp"`},
+	}
+	for _, c := range cases {
+		rec := get(c.path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200 (body: %s)", c.path, rec.Code, rec.Body.String())
+		}
+		if got := strings.TrimSpace(rec.Body.String()); got != c.want {
+			t.Fatalf("GET %s body = %s, want %s", c.path, got, c.want)
+		}
+	}
+
+	rec := get("/x-nmos/connection/v1.1/single/senders/send-1/constraints")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET constraints status = %d, want 200", rec.Code)
+	}
+	var constraints []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &constraints); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if _, ok := constraints[0]["source_port"]; !ok {
+		t.Fatalf("sender constraints missing source_port key: %v", constraints[0])
+	}
+
+	for _, path := range []string{
+		"/x-nmos/connection/v1.1/single/senders/nope/",
+		"/x-nmos/connection/v1.1/single/senders/nope/constraints",
+		"/x-nmos/connection/v1.1/single/senders/nope/transporttype",
+		"/x-nmos/connection/v1.1/single/senders/nope/staged",
+		"/x-nmos/connection/v1.1/single/senders/nope/transportfile",
+	} {
+		if rec := get(path); rec.Code != http.StatusNotFound {
+			t.Fatalf("GET %s status = %d, want 404", path, rec.Code)
+		}
+	}
+}
+
+// TestHandlerSenderPatchStagedAndTransportFile — der eigentliche
+// End-to-End-Pfad, den `auto_connection_*` braucht (s. handler.go-
+// Moduldoku): PATCH staged mit Ziel, dann `active` UND `transportfile`
+// zeigen den aufgelösten Zustand.
+func TestHandlerSenderPatchStagedAndTransportFile(t *testing.T) {
+	senders := NewSenderStore([]string{"send-1"})
+	h := Handler(NewReceiverStore(nil), senders)
+
+	body := `{"receiver_id":"recv-1","master_enable":true,"activation":{"mode":"activate_immediate"},"transport_params":[{"destination_ip":"239.5.5.5","destination_port":6010}]}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/x-nmos/connection/v1.1/single/senders/send-1/staged", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/single/senders/send-1/active", nil))
+	var active SenderResource
+	if err := json.Unmarshal(rec.Body.Bytes(), &active); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if active.ReceiverID == nil || *active.ReceiverID != "recv-1" {
+		t.Fatalf("active.receiver_id = %v, want recv-1", active.ReceiverID)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/v1.1/single/senders/send-1/transportfile", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET transportfile status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/sdp" {
+		t.Fatalf("transportfile Content-Type = %q, want application/sdp", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "c=IN IP4 239.5.5.5") {
+		t.Fatalf("transportfile SDP missing resolved destination_ip: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "m=video 6010 RTP/AVP 96") {
+		t.Fatalf("transportfile SDP missing resolved destination_port: %s", rec.Body.String())
+	}
+}
+
+// TestHandlerBulkSendersPost — Pendant zu TestHandlerBulkReceiversPost:
+// `POST /bulk/senders` existierte vor Nachtrag 193 überhaupt nicht (GET
+// dort war der einzige registrierte Pfad, 405).
+func TestHandlerBulkSendersPost(t *testing.T) {
+	senders := NewSenderStore([]string{"send-1"})
+	h := Handler(NewReceiverStore(nil), senders)
+
+	body := `[
+		{"id": "send-1", "params": {"transport_params": [{"destination_port": 7000}]}},
+		{"id": "does-not-exist", "params": {"master_enable": true}},
+		{"id": "send-1", "params": {"bad": "data"}}
+	]`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x-nmos/connection/v1.1/bulk/senders", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST bulk/senders status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	var results []bulkResultItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &results); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("results len = %d, want 3", len(results))
+	}
+	if results[0].ID != "send-1" || results[0].Code != http.StatusOK {
+		t.Fatalf("results[0] = %+v, want {send-1, 200}", results[0])
+	}
+	if results[1].ID != "does-not-exist" || results[1].Code != http.StatusNotFound || results[1].Error == nil {
+		t.Fatalf("results[1] = %+v, want {does-not-exist, 404, error set}", results[1])
+	}
+	if results[2].Code != http.StatusBadRequest || results[2].Error == nil {
+		t.Fatalf("results[2] = %+v, want {400, error set} for the unknown field", results[2])
+	}
+
+	staged, _ := senders.Staged("send-1")
+	if staged.TransportParams[0]["destination_port"] != float64(7000) {
+		t.Fatalf("destination_port after bulk PATCH = %v, want 7000", staged.TransportParams[0]["destination_port"])
 	}
 }

@@ -8,16 +8,22 @@ import (
 	"net/http"
 )
 
-// Handler baut den HTTP-Handler für die IS-05-Connection-API-Pfade der
-// Receiver: GET/PATCH .../staged, GET .../active, plus die
-// Basis-Discovery-Pfade (Wurzel/single/receivers-Listing,
-// constraints/transporttype pro Receiver, UMSETZUNG.md D9) — Grundlage
+// Handler baut den HTTP-Handler für die IS-05-Connection-API-Pfade von
+// Receivern UND Sendern: GET/PATCH .../staged, GET .../active, plus die
+// Basis-Discovery-Pfade (Wurzel/single/{senders,receivers}-Listing,
+// constraints/transporttype pro Resource, UMSETZUNG.md D9) — Grundlage
 // für AMWA-IS-05-01-Konformitätstests, die vor D9 an den fehlenden
 // Discovery-Pfaden mit 0 ausgeführten Tests abbrachen (docs/decisions.md
 // 2026-07-13). Bulk-`POST /bulk/receivers` seit UMSETZUNG.md D11 echt
 // implementiert (live an AMWA-`test_37` gefunden) — dieselbe
-// `PatchStaged`-Logik wie das Einzel-PATCH, s. dort. Kein
-// `/bulk/senders`-POST (der Mock-Node hat nie eigene Sender, s. u.).
+// `PatchStaged`-Logik wie das Einzel-PATCH, s. dort. Sender-seitig war
+// dieser Mock-Node bis Nachtrag 193 bewusst unimplementiert ("rein
+// Receiver-seitig", Schritt B1) — Grund für die Ergänzung: AMWA
+// IS-05-01s `auto_connection_1/2/3/4/5/6/13` (UMSETZUNG.md D11) brauchen
+// einen echten, IS-04-registrierten Sender zum Verbinden, sonst bleiben
+// sie dauerhaft eine Ausnahme statt echter Konformität. Sender-Feldnamen
+// s. sender.go-Moduldoku (eigenständig gegen AMWA-TV/is-05 v1.1.2
+// geprüft, nicht vom Receiver-Pendant übernommen).
 // Bedient seit Nachtrag 189 sowohl `v1.1` als auch `v1.2` (s.
 // [apiVersions]) — v1.2.0 ist wire-kompatibel zu v1.1.x, daher dieselben
 // Handler für beide Versionspfade statt einer zweiten Implementierung.
@@ -43,7 +49,7 @@ import (
 // pflegen.
 var apiVersions = []string{"v1.1", "v1.2"}
 
-func Handler(store *ReceiverStore) http.Handler {
+func Handler(receivers *ReceiverStore, senders *SenderStore) http.Handler {
 	mux := http.NewServeMux()
 
 	// Nachtrag 190: der nackte `/x-nmos/connection/` (ohne Version) fehlte
@@ -65,13 +71,13 @@ func Handler(store *ReceiverStore) http.Handler {
 	})
 
 	for _, version := range apiVersions {
-		registerVersion(mux, store, version)
+		registerVersion(mux, receivers, senders, version)
 	}
 
 	return mux
 }
 
-func registerVersion(mux *http.ServeMux, store *ReceiverStore, version string) {
+func registerVersion(mux *http.ServeMux, store *ReceiverStore, senders *SenderStore, version string) {
 	base := "/x-nmos/connection/" + version + "/"
 
 	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
@@ -94,10 +100,8 @@ func registerVersion(mux *http.ServeMux, store *ReceiverStore, version string) {
 
 	// `bulk/senders`+`bulk/receivers` sind laut RAML (`ConnectionAPI.raml`)
 	// feste Basis-Discovery-Pfade: GET liefert dort laut Spec immer 405
-	// (Method Not Allowed), nicht 404. `bulk/senders` bleibt komplett
-	// ohne POST-Handler (Go liefert dafür automatisch 405 — korrekt,
-	// der Mock-Node hat nie eigene Sender). `bulk/receivers` bekommt
-	// unten zusätzlich einen echten POST-Handler.
+	// (Method Not Allowed), nicht 404. Beide bekommen unten zusätzlich
+	// einen echten POST-Handler (seit Nachtrag 193 auch `bulk/senders`).
 	bulkMethodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "GET not allowed on bulk resources")
 	}
@@ -109,7 +113,12 @@ func registerVersion(mux *http.ServeMux, store *ReceiverStore, version string) {
 	})
 
 	mux.HandleFunc("GET "+base+"single/senders/", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, []string{})
+		ids := senders.IDs()
+		listing := make([]string, len(ids))
+		for i, id := range ids {
+			listing[i] = id + "/"
+		}
+		writeJSON(w, http.StatusOK, listing)
 	})
 
 	mux.HandleFunc("GET "+base+"single/receivers/", func(w http.ResponseWriter, r *http.Request) {
@@ -233,6 +242,142 @@ func registerVersion(mux *http.ServeMux, store *ReceiverStore, version string) {
 	}
 	mux.HandleFunc("GET "+base+"single/receivers/{id}/active", active)
 	mux.HandleFunc("GET "+base+"single/receivers/{id}/active/", active)
+
+	registerSenderRoutes(mux, senders, base)
+}
+
+// registerSenderRoutes registriert die Sender-seitige IS-05-Connection-API
+// (Nachtrag 193) — Struktur bewusst parallel zu den Receiver-Routen oben,
+// aber eigenständig (andere Resource-Form, s. sender.go-Moduldoku), plus
+// `transportfile/`, das Receiver nicht haben.
+func registerSenderRoutes(mux *http.ServeMux, senders *SenderStore, base string) {
+	senderResourceRoot := func(w http.ResponseWriter, r *http.Request) {
+		if !senders.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, http.StatusOK, []string{"constraints/", "staged/", "active/", "transportfile/", "transporttype/"})
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/", senderResourceRoot)
+
+	senderConstraints := func(w http.ResponseWriter, r *http.Request) {
+		if !senders.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, http.StatusOK, SenderConstraints())
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/constraints", senderConstraints)
+	mux.HandleFunc("GET "+base+"single/senders/{id}/constraints/", senderConstraints)
+
+	senderTransportType := func(w http.ResponseWriter, r *http.Request) {
+		if !senders.Exists(r.PathValue("id")) {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, http.StatusOK, TransportType)
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/transporttype", senderTransportType)
+	mux.HandleFunc("GET "+base+"single/senders/{id}/transporttype/", senderTransportType)
+
+	senderStaged := func(w http.ResponseWriter, r *http.Request) {
+		res, ok := senders.Staged(r.PathValue("id"))
+		if !ok {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/staged", senderStaged)
+	mux.HandleFunc("GET "+base+"single/senders/{id}/staged/", senderStaged)
+
+	mux.HandleFunc("PATCH "+base+"single/senders/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "reading request body failed")
+			return
+		}
+
+		req, err := parseSenderPatchRequest(body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		res, status, ok := senders.PatchStaged(r.PathValue("id"), req)
+		if !ok {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, status, res)
+	})
+
+	senderActive := func(w http.ResponseWriter, r *http.Request) {
+		res, ok := senders.Active(r.PathValue("id"))
+		if !ok {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		writeJSON(w, http.StatusOK, res)
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/active", senderActive)
+	mux.HandleFunc("GET "+base+"single/senders/{id}/active/", senderActive)
+
+	// `.../transportfile` — RAML erlaubt 200 (SDP direkt)/307 (Redirect)/
+	// 404 (kein Transport-File nötig/Sender nicht konfiguriert). Dieser
+	// Mock liefert immer 200 mit einer aus dem aufgelösten `active`-Zustand
+	// gebauten SDP (s. `senderSDP`) — genug, damit `auto_connection_*` eine
+	// gültige Ziel-Adresse/Port daraus extrahieren kann.
+	senderTransportFile := func(w http.ResponseWriter, r *http.Request) {
+		sdp, ok := senders.TransportFile(r.PathValue("id"))
+		if !ok {
+			writeError(w, http.StatusNotFound, "unknown sender")
+			return
+		}
+		w.Header().Set("Content-Type", "application/sdp")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(sdp))
+	}
+	mux.HandleFunc("GET "+base+"single/senders/{id}/transportfile", senderTransportFile)
+	mux.HandleFunc("GET "+base+"single/senders/{id}/transportfile/", senderTransportFile)
+
+	// `POST /bulk/senders` — echte Bulk-Aktivierung, spiegelbildlich zu
+	// `POST /bulk/receivers` oben (dieselbe `bulkRequestItem`/
+	// `bulkResultItem`-Form, `bulk-sender-post-schema.json` ist
+	// strukturell identisch zu `bulk-receiver-post-schema.json`, nur mit
+	// `sender-stage-schema.json` statt `receiver-stage-schema.json` als
+	// `params`-Referenz).
+	mux.HandleFunc("POST "+base+"bulk/senders", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "reading request body failed")
+			return
+		}
+
+		var items []bulkRequestItem
+		if err := json.Unmarshal(body, &items); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+
+		results := make([]bulkResultItem, 0, len(items))
+		for _, item := range items {
+			req, err := parseSenderPatchRequest(item.Params)
+			if err != nil {
+				msg := err.Error()
+				results = append(results, bulkResultItem{ID: item.ID, Code: http.StatusBadRequest, Error: &msg})
+				continue
+			}
+			_, status, ok := senders.PatchStaged(item.ID, req)
+			if !ok {
+				msg := "unknown sender"
+				results = append(results, bulkResultItem{ID: item.ID, Code: http.StatusNotFound, Error: &msg})
+				continue
+			}
+			results = append(results, bulkResultItem{ID: item.ID, Code: status})
+		}
+		writeJSON(w, http.StatusOK, results)
+	})
 }
 
 // parsePatchRequest dekodiert+validiert einen PATCH-`staged`-Body —

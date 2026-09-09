@@ -299,7 +299,12 @@ adding the missing base-discovery endpoints and fixing real gaps it
 then surfaced (schema-incomplete default responses, PATCH accepting
 malformed bodies, a scheduled-activation TAI/UTC time bug), with every
 remaining accepted deviation named individually rather than skipped
-silently. Since Kapitel D10, a real Blackmagic DeckLink SDI/IP capture
+silently. The mock node also gained a real Sender-side IS-05 Connection
+API (staged/active/constraints/transporttype/transportfile, bulk POST),
+closing the one remaining exception group (`auto_connection_*`, which
+needs a real IS-04-registered sender to connect to) — CI now runs with
+zero accepted deviations for IS-05-01. Since Kapitel D10, a real
+Blackmagic DeckLink SDI/IP capture
 card can be bridged to/from MXL (`omp-decklink`, both directions).
 Since D12, the orchestrator itself runs as a Raft-consensus cluster —
 one or more instances, automatic leader election, and the critical

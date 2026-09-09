@@ -22009,3 +22009,82 @@ Live-Verifikation vor jedem Commit.
 omp-audio-monitor,omp-aes67-gateway,omp-2110-gateway,
 omp-fabrics-gateway,omp-scaler,omp-pipeline-controller,omp-recorder,
 omp-decklink}/src/main.rs`.
+
+## 2026-09-09 (Nachtrag 193) — IS-05: Sender-Test-Fixture für den Mock-Node, D11s letzte Ausnahmegruppe geschlossen (Nutzerauftrag "jetzt umsetzen" → "alles")
+
+**Ausgangspunkt:** Punkt 3 aus dem Prioritätsscan — `auto_connection_
+1/2/3/4/5/6/13` (AMWA IS-05-01) brauchen einen echten, IS-04-
+registrierten Sender zum Verbinden; der Mock-Node lief seit B1 bewusst
+nur Receiver-seitig (`-senders 0` in CI), D11 nannte einen eigenen
+Sender-Test-Fixture explizit "ein separater, größerer Schritt".
+
+**Feldnamen NICHT vom Receiver-Pendant übernommen/geraten (Projektregel
+§0.6)** — eigenständig gegen AMWA-TV/is-05 Branch v1.1.2 geprüft
+(`sender-stage-schema.json`, `sender-response-schema.json`,
+`sender_transport_params_rtp.json`, `activation-response-schema.json`,
+`examples/sender-get-200-uninit.json`, `sender-active-get-uninit.json`,
+`sender-constraints-get-200.json`, `ConnectionAPI.raml`). Wichtigste
+reale Unterschiede zum Receiver, die eine naive Kopie falsch gemacht
+hätte:
+- Sender-Resource hat KEIN `transport_file`-Feld — der Sender-
+  Transport-File ist ein eigener Endpunkt (`/transportfile`), nicht
+  Teil von staged/active (anders als bei Receivern).
+- Andere Transport-Parameter-Feldmenge: `source_ip`/`source_port`
+  (Quelladresse) statt `interface_ip`/`multicast_ip`
+  (Empfangsschnittstelle) — `additionalProperties: false`, ein
+  Receiver-Feld hier wäre ein echter Validierungsfehler gewesen.
+  Zusätzlich `fec_type`/`fec_block_width`/`fec_block_height`/
+  `fec1D_source_port`/`fec2D_source_port`/`rtcp_source_port`, die
+  `receiver_transport_params_rtp.json` nicht kennt — 19 statt 13 Felder.
+- `fec_destination_ip`/`rtcp_destination_ip`s "auto"-Auflösung folgt
+  dem Schema-FLIESSTEXT ("auto = destination_ip by default"), NICHT dem
+  auf den ersten Blick naheliegenden Wert aus dem AMWA-Referenzbeispiel
+  (`sender-active-get-uninit.json` zeigt dort zufällig denselben Wert
+  wie `source_ip` — vermutlich eine Inkonsistenz im Beispiel selbst,
+  der Fließtext ist die verlässlichere Quelle).
+
+**Umsetzung:** `nodes/mock/internal/connection/sender.go` (neu) —
+`SenderResource`/`SenderStore`/`SenderPatchRequest`/
+`OptionalReceiverID`/`resolveSenderAutoValues`/`senderSDP`, dieselbe
+Aktivierungs-Lebenszyklus-Logik (activate_immediate/scheduled_*, TAI/
+UTC-Konvertierung) wie `ReceiverStore`, aber eigenständig implementiert
+(anderer Zustandstyp). `handler.go`: `Handler`/`registerVersion` nehmen
+jetzt zusätzlich einen `*SenderStore`; neue `registerSenderRoutes`
+registriert `single/senders/{id}/{constraints,staged,active,
+transportfile,transporttype}` + echtes `single/senders/`-Listing +
+echtes `POST /bulk/senders` (vorher: leeres `[]`-Listing, GET-405-Stub
+ohne POST). `main.go`: `senderIDs` (schon vorher IS-04-registriert,
+aber ohne IS-05-Gegenstück) bekommen jetzt einen echten
+`connection.NewSenderStore`.
+
+`/transportfile` liefert immer 200 mit einer minimalen, aber gültigen
+SDP (v=/o=/s=/c=/t=/m=/a=rtpmap, gleiche Struktur wie
+`nodes/omp-mediaio/src/rtp.rs RtpVideoOutput::sdp()`) aus dem
+aufgelösten `active`-Zustand — RAML erlaubt hier auch 404
+("Sender nicht konfiguriert"), aber der Mock-Node hat keine echte
+Medien-Abhängigkeit, die das rechtfertigen würde.
+
+**Verifiziert:** `go build`/`go vet`/`go test` (alle Pakete inkl.
+orchestrator, tools/contract-check, tools/nmos-conformance-check) grün.
+32 Tests im `connection`-Paket (14 neu: Store-Lebenszyklus inkl.
+Scheduled-Activation+TAI-Offset, Constraints-Feldmenge, SDP-Erzeugung,
+Handler-Level-Discovery/PATCH/Bulk). Live-getestet: eigenständig
+gestarteter Mock-Node (`-senders 1 -receivers 1`), echte curl-Kette
+Discovery→Constraints→PATCH staged→active (alle `auto`-Werte korrekt
+aufgelöst, inkl. FEC/RTCP-Offsets)→`/transportfile` (SDP zeigt die
+tatsächlich gepatchte Zieladresse/-port).
+
+**Nicht verifizierbar in dieser Sitzung:** kein Docker in dieser
+Umgebung — die eigentliche Frage, ob `auto_connection_1/2/3/4/5/6/13`
+jetzt beim echten AMWA-Tool-Lauf grün werden, ist NICHT bestätigt.
+`.github/workflows/ci.yml` wurde entsprechend geändert (`-senders 1`,
+beide `--allow "auto_connection_*"`-Ausnahmelisten entfernt) — der
+nächste echte CI-Lauf ist der tatsächliche Test, nicht diese Sitzung.
+Genau dasselbe iterative Muster wie D9→D11 (Implementieren, gegen das
+echte Tool laufen lassen, reale Abweichungen einzeln nachtragen) —
+falls der CI-Lauf neue, echte Lücken findet, gehören die hierher, nicht
+stillschweigend zurückgerollt.
+
+**Dateien:** `nodes/mock/internal/connection/{sender.go,sender_test.go,
+handler.go,handler_test.go}`, `nodes/mock/main.go`,
+`.github/workflows/ci.yml`, `README.md`.

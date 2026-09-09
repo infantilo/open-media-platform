@@ -116,16 +116,17 @@ jobs:
 
       # Schritt D9 (UMSETZUNG.md): der Mock-Node selbst als IS-05-01-
       # Testziel — kein Registry-Umweg nötig, IS-05 läuft node-zu-node
-      # (orchestrator/internal/is05/client.go-Doc). `-senders 0`, weil
-      # der Mock-Node bewusst nur Receiver-seitig implementiert ist
-      # (Schritt B1) — die dadurch blockierten Sender-/Auto-Connection-
-      # Tests stehen einzeln in der Ausnahmeliste unten.
+      # (orchestrator/internal/is05/client.go-Doc). `-senders 1` seit
+      # Nachtrag 193 (vorher `-senders 0`, s. u.): echte Sender-seitige
+      # IS-05-Connection-API (nodes/mock/internal/connection/sender.go),
+      # damit `auto_connection_1/2/3/4/5/6/13` einen echten,
+      # IS-04-registrierten Sender zum Verbinden vorfinden.
       - name: Mock-Node für IS-05-01 starten
         run: |
           cd nodes/mock
           go build -o /tmp/omp-mock .
           OMP_REGISTRY_URL="http://localhost:8010" OMP_NATS_URL="nats://localhost:4222" \
-            /tmp/omp-mock -senders 0 -receivers 2 -port 9099 &
+            /tmp/omp-mock -senders 1 -receivers 2 -port 9099 &
           for i in $(seq 1 20); do
             curl -fs http://localhost:9099/x-nmos/connection/v1.1/ > /dev/null 2>&1 && break
             sleep 1
@@ -154,24 +155,18 @@ jobs:
       # gewordene reale Bugs gefunden+behoben ("auto"-Platzhalter
       # blieben unaufgelöst in /active; `activate_scheduled_absolute`
       # interpretierte `requested_time` als Unix- statt echter TAI-Zeit,
-      # ~37s Schaltsekunden-Versatz). Nur eine Ursachen-Gruppe bleibt:
-      #   auto_connection_1/2/3/4/5/6/13 — brauchen einen echten
-      #   IS-04-registrierten Sender zum Verbinden; der Mock-Node läuft
-      #   hier bewusst mit `-senders 0` (B1-Scope-Grenze, rein
-      #   Receiver-seitig) — ein eigener Sender-Test-Fixture wäre ein
-      #   separater, größerer Schritt für ausschließlich diese sieben
-      #   Tests.
+      # ~37s Schaltsekunden-Versatz). Die letzte Ursachen-Gruppe
+      # (auto_connection_1/2/3/4/5/6/13, fehlender Sender) ist seit
+      # Nachtrag 193 durch die neue Sender-Fixture geschlossen — KEINE
+      # Ausnahmen mehr in dieser Liste. Ungetestet gegen das echte
+      # AMWA-Tool (hier ohne Docker entwickelt, s. docs/decisions.md
+      # Nachtrag 193) — falls dieser Lauf hier neue, echte Abweichungen
+      # findet, gehören die (wie bei D9/D11) einzeln hierhin, nicht
+      # stillschweigend mit `|| true` verschluckt.
       - name: "Ergebnisse auswerten (IS-05-01: definierte Testliste grün, Abweichungen dokumentiert)"
         run: |
           cd tools/nmos-conformance-check
-          go run . --results ../../nmos-results/is0501.json \
-            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D11" \
-            --allow "auto_connection_2=s. auto_connection_1" \
-            --allow "auto_connection_3=s. auto_connection_1" \
-            --allow "auto_connection_4=s. auto_connection_1" \
-            --allow "auto_connection_5=s. auto_connection_1" \
-            --allow "auto_connection_6=s. auto_connection_1" \
-            --allow "auto_connection_13=s. auto_connection_1"
+          go run . --results ../../nmos-results/is0501.json
 
       # Nachtrag 189: AMWA-TV/is-05 Release v1.2.0 (Aug. 2024) ist
       # wire-kompatibel zu v1.1.x (einzige inhaltliche Änderung: weitere
@@ -180,9 +175,8 @@ jobs:
       # nur RTP + das proprietäre `urn:x-omp:transport:mxl` kennen). Der
       # bereits laufende Mock-Node bedient seither `/x-nmos/connection/
       # v1.2/` mit denselben Handlern wie v1.1 (kein Neustart nötig),
-      # daher hier derselbe Testlauf nur mit `--version v1.2` und
-      # derselben Ausnahmeliste — die Ursachen sind identisch (kein
-      # Sender-Fixture, s. oben).
+      # daher hier derselbe Testlauf nur mit `--version v1.2` — seit
+      # Nachtrag 193 ebenfalls ohne Ausnahmeliste (s. oben).
       - name: AMWA NMOS Testing Tool — IS-05-01 (Connection API) gegen v1.2 des Mock-Node ausführen
         run: |
           docker run --rm --network host \
@@ -196,14 +190,7 @@ jobs:
       - name: "Ergebnisse auswerten (IS-05-01 v1.2: definierte Testliste grün, Abweichungen dokumentiert)"
         run: |
           cd tools/nmos-conformance-check
-          go run . --results ../../nmos-results/is0501-v12.json \
-            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D11" \
-            --allow "auto_connection_2=s. auto_connection_1" \
-            --allow "auto_connection_3=s. auto_connection_1" \
-            --allow "auto_connection_4=s. auto_connection_1" \
-            --allow "auto_connection_5=s. auto_connection_1" \
-            --allow "auto_connection_6=s. auto_connection_1" \
-            --allow "auto_connection_13=s. auto_connection_1"
+          go run . --results ../../nmos-results/is0501-v12.json
 
       - name: Ergebnisse als Artefakt sichern
         if: always()
