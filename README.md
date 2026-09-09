@@ -4,6 +4,8 @@
 
 New, standalone project (separate from `PIPELINE CONTROLLER`).
 
+**Standards:** AMWA NMOS IS-04 v1.3 (registration/discovery) · IS-05 v1.1 **and the current v1.2.0 release** (connection management, wire-compatible, both served side by side) · IS-12/IS-14 (control framework).
+
 ## An Open-Source Orchestrator for Broadcast – A Current Status
 
 The goal is a proof of concept for a modular broadcast and streaming platform that adheres to open standards and brings modern software architectures to the broadcast world.
@@ -14,7 +16,7 @@ The architectural foundation is the EBU Dynamic Media Facility (DMF) model: Func
 
 For local, high-performance media exchange, MXL (Media Exchange Layer) is used. MXL enables zero-copy exchange of audio and video data between processes on the same host, thus replacing the traditional approach of unnecessarily transporting media streams over network stacks or proprietary interfaces. When multiple hosts are involved, communication takes place either via SMPTE ST 2110 (with an SRT gateway for contribution/distribution over lossy networks) or, as a zero-copy alternative, via MXL-native Fabrics — real remote memory access (RDMA) between two MXL domains on different hosts, verified live over a software transport, with a drop-in path to real RDMA hardware.
 
-The core of the system is an orchestrator developed in Go. It handles discovery, routing, and communication between the individual services. NATS is used as the event bus, while AMWA NMOS (IS-04 and IS-05) handles the automatic registration and routing of the components. This means the orchestrator doesn't have to rely on fixed device types or proprietary interfaces.
+The core of the system is an orchestrator developed in Go. It handles discovery, routing, and communication between the individual services. NATS is used as the event bus, while AMWA NMOS (IS-04 v1.3 and IS-05, both the v1.1.x line and the current v1.2.0 release) handles the automatic registration and routing of the components. This means the orchestrator doesn't have to rely on fixed device types or proprietary interfaces.
 
 **A note on scope:** the microservices listed below (`omp-source`,
 `omp-video-mixer-me`, `omp-player`, etc.) exist to demonstrate what the
@@ -78,13 +80,18 @@ are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 - EBU DMF-style service decomposition — a mixer, a player, a graphics
   engine, etc. are independent, self-describing processes, not modules
   inside a monolith.
-- AMWA NMOS IS-04/IS-05 for discovery and routing; IS-12/IS-14 for
+- AMWA NMOS IS-04 v1.3/IS-05 for discovery and routing; IS-12/IS-14 for
   self-described parameters and methods — the orchestrator never has
-  built-in knowledge of a specific node type. Conformance isn't just
+  built-in knowledge of a specific node type. IS-05 serves both the
+  v1.1.x line and the current **v1.2.0** release side by side (wire-
+  compatible, same handlers) so existing v1.1 controllers keep working
+  while new ones can already target v1.2. Conformance isn't just
   claimed: the official AMWA NMOS Testing Tool runs in CI on every push
-  against a real running registry (IS-04-02) and a real running node
-  (IS-05-01), with every accepted deviation individually named and
-  justified in the workflow file — no silent skips.
+  against a real running registry (IS-04-02) and a real running node,
+  for both IS-05-01 API versions, with every accepted deviation
+  individually named and justified in the workflow file — no silent
+  skips (and as of the latest pass, zero: all IS-05-01 exceptions,
+  including the ones that needed a real Sender fixture, are closed).
 - MXL zero-copy shared memory for same-host media exchange; SMPTE
   ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
   for cross-host exchange, including AES67 audio (Dante-compatible).
@@ -303,7 +310,15 @@ silently. The mock node also gained a real Sender-side IS-05 Connection
 API (staged/active/constraints/transporttype/transportfile, bulk POST),
 closing the one remaining exception group (`auto_connection_*`, which
 needs a real IS-04-registered sender to connect to) — CI now runs with
-zero accepted deviations for IS-05-01. Since Kapitel D10, a real
+zero accepted deviations for IS-05-01. The Connection API now also
+serves the current **AMWA IS-05 v1.2.0** release (Aug. 2024) side by
+side with v1.1.x — checked against the real v1.2.0 schemas/examples
+rather than assumed, with node-global version/bulk discovery and CORS
+preflight support added across all node implementations, Rust included
+(Go/mock-node side verified green against both API versions in CI;
+Rust nodes aren't part of the CI gate at all, verified locally instead —
+see `docs/decisions.md` Nachtrag 189–197 for the full trail). Since
+Kapitel D10, a real
 Blackmagic DeckLink SDI/IP capture
 card can be bridged to/from MXL (`omp-decklink`, both directions).
 Since D12, the orchestrator itself runs as a Raft-consensus cluster —
