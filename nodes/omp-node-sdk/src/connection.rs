@@ -169,6 +169,119 @@ pub fn list_ids(
     None
 }
 
+/// Bedient `GET /x-nmos/connection/{version}/bulk/` (`["senders/",
+/// "receivers/"]`, immer beide — dieselbe RAML-Vorgabe wie bei
+/// `single/`) und `GET .../bulk/{senders,receivers}` (405, RAML:
+/// "The API should actively return an HTTP 405 if a GET is called on
+/// the endpoint"). Nachtrag 197: [`root_discovery`] listet `"bulk/"`
+/// bereits seit Nachtrag 194 in der Versions-Wurzel, aber KEIN
+/// Rust-Node implementierte `bulk/` bisher tatsächlich — eine echte
+/// Diskrepanz zwischen Discovery-Antwort und Wirklichkeit, die dieser
+/// Nachtrag schließt.
+pub fn bulk_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Vec<u8>)> {
+    if method != "GET" {
+        return None;
+    }
+    for version in API_VERSIONS {
+        if path == format!("/x-nmos/connection/{version}/bulk/") {
+            return Some((
+                200,
+                "application/json",
+                br#"["senders/","receivers/"]"#.to_vec(),
+            ));
+        }
+        for kind in ["senders", "receivers"] {
+            if path == format!("/x-nmos/connection/{version}/bulk/{kind}") {
+                return Some((
+                    405,
+                    "application/json",
+                    br#"{"code":405,"error":"GET not allowed on bulk resources","debug":null}"#
+                        .to_vec(),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// CORS-Preflight für `bulk/{kind}` — s. [`SenderConnection::cors_methods`]
+/// für die Begründung (live an AMWA-`auto_connection_5`/`6` gefunden, am
+/// Go-Mock-Node-Pendant). `bulk/{kind}` erlaubt laut RAML nur `POST`.
+pub fn bulk_cors_methods(path: &str, kind: &str) -> Option<Vec<&'static str>> {
+    for version in API_VERSIONS {
+        if path == format!("/x-nmos/connection/{version}/bulk/{kind}") {
+            return Some(vec!["POST"]);
+        }
+    }
+    None
+}
+
+/// Bedient `POST /x-nmos/connection/{version}/bulk/{kind}` — jeder
+/// Rust-Node hat nur 1-2 eigene Sender-/Receiver-Instanzen, kein
+/// dynamisches Repository wie der Go-Mock-Node (`nodes/mock/internal/
+/// connection`), daher generisch über `patch_one` statt eines eigenen
+/// Stores: `patch_one(id, params)` liefert `Some(status)`, wenn `id` zu
+/// einer der eigenen Connections dieses Nodes gehört (ruft dann deren
+/// `patch_staged` auf), sonst `None` (→ 404 für diesen Bulk-Eintrag,
+/// dieselbe "kein Fehler, nur keine Ressource" Semantik wie
+/// [`list_ids`] bei einem leeren `ids`). `error`/`debug` in der
+/// `bulk-response-schema.json`-Antwort sind laut Schema optional
+/// (`omitempty`-Äquivalent) — hier bewusst weggelassen, `id`+`code`
+/// reichen zur Validierung.
+pub fn bulk_patch(
+    method: &str,
+    path: &str,
+    kind: &str,
+    body: &[u8],
+    patch_one: impl Fn(&str, &[u8]) -> Option<u16>,
+) -> Option<(u16, &'static str, Vec<u8>)> {
+    if method != "POST" {
+        return None;
+    }
+    if !API_VERSIONS
+        .iter()
+        .any(|version| path == format!("/x-nmos/connection/{version}/bulk/{kind}"))
+    {
+        return None;
+    }
+
+    #[derive(Deserialize)]
+    struct BulkItem {
+        id: String,
+        params: Value,
+    }
+    #[derive(Serialize)]
+    struct BulkResult {
+        id: String,
+        code: u16,
+    }
+
+    let items: Vec<BulkItem> = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(_) => {
+            return Some((
+                400,
+                "application/json",
+                br#"{"code":400,"error":"invalid JSON body","debug":null}"#.to_vec(),
+            ));
+        }
+    };
+
+    let results: Vec<BulkResult> = items
+        .into_iter()
+        .map(|item| {
+            let params = serde_json::to_vec(&item.params).unwrap_or_default();
+            let code = patch_one(&item.id, &params).unwrap_or(404);
+            BulkResult { id: item.id, code }
+        })
+        .collect();
+    Some((
+        200,
+        "application/json",
+        serde_json::to_vec(&results).unwrap_or_default(),
+    ))
+}
+
 /// Eine Transport-Parameter-"Leg" eines Senders (`sender_transport_params_
 /// rtp.json`) — hier immer genau ein Element (keine 2022-7-Redundanz).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -317,7 +430,22 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         }
     }
 
-    fn patch_staged(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+    /// CORS-Preflight für `.../staged` — Nachtrag 197: live an
+    /// AMWA-`auto_connection_20` gefunden (am Go-Mock-Node-Pendant,
+    /// Nachtrag 194), derselbe Bugtyp gilt hier: ohne expliziten
+    /// OPTIONS-Handler liefert ein nur-GET/PATCH-Pfad automatisch 405
+    /// statt der von der RAML geforderten 200/403. `None`, wenn `path`
+    /// nicht zu diesem Sender gehört.
+    pub fn cors_methods(&self, path: &str) -> Option<Vec<&'static str>> {
+        let sub = strip_versioned_prefix(path, "senders", &self.sender_id)?;
+        (sub == "staged").then(|| vec!["GET", "PATCH"])
+    }
+
+    /// Wendet einen PATCH-Body auf `staged` an — `pub` seit Nachtrag 197
+    /// (vorher privat, nur von [`Self::handle`] genutzt), damit
+    /// `bulk_patch` denselben Codepfad für `POST .../bulk/senders`
+    /// wiederverwenden kann statt einer zweiten PATCH-Implementierung.
+    pub fn patch_staged(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
         let Ok(patch) = serde_json::from_slice::<Value>(body) else {
             return (400, "text/plain", b"invalid JSON body".to_vec());
         };
@@ -492,7 +620,14 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
         }
     }
 
-    fn patch_staged(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
+    /// s. [`SenderConnection::cors_methods`].
+    pub fn cors_methods(&self, path: &str) -> Option<Vec<&'static str>> {
+        let sub = strip_versioned_prefix(path, "receivers", &self.receiver_id)?;
+        (sub == "staged").then(|| vec!["GET", "PATCH"])
+    }
+
+    /// s. [`SenderConnection::patch_staged`].
+    pub fn patch_staged(&self, body: &[u8]) -> (u16, &'static str, Vec<u8>) {
         let Ok(patch) = serde_json::from_slice::<Value>(body) else {
             return (400, "text/plain", b"invalid JSON body".to_vec());
         };
@@ -775,5 +910,88 @@ mod tests {
 
         let receiver = ReceiverConnection::new("recv-42", NoopReceiverControl);
         assert_eq!(receiver.id(), "recv-42");
+    }
+
+    /// Nachtrag 197: `bulk/` fehlte für alle Rust-Nodes komplett, obwohl
+    /// `root_discovery` schon seit Nachtrag 194 `"bulk/"` listet.
+    #[test]
+    fn bulk_discovery_lists_and_rejects_get_on_kinds() {
+        for version in API_VERSIONS {
+            let (status, body) =
+                body_str(bulk_discovery("GET", &format!("/x-nmos/connection/{version}/bulk/")));
+            assert_eq!(status, 200);
+            assert_eq!(body, r#"["senders/","receivers/"]"#);
+
+            for kind in ["senders", "receivers"] {
+                let (status, _) = body_str(bulk_discovery(
+                    "GET",
+                    &format!("/x-nmos/connection/{version}/bulk/{kind}"),
+                ));
+                assert_eq!(status, 405, "GET on bulk/{kind} must be 405 per RAML");
+            }
+        }
+    }
+
+    #[test]
+    fn bulk_discovery_ignores_unrelated_paths() {
+        assert!(bulk_discovery("POST", "/x-nmos/connection/v1.1/bulk/").is_none());
+        assert!(bulk_discovery("GET", "/x-nmos/connection/v1.1/single/senders/").is_none());
+    }
+
+    #[test]
+    fn bulk_cors_methods_allows_only_post() {
+        assert_eq!(
+            bulk_cors_methods("/x-nmos/connection/v1.1/bulk/senders", "senders"),
+            Some(vec!["POST"])
+        );
+        assert!(bulk_cors_methods("/x-nmos/connection/v1.1/bulk/senders", "receivers").is_none());
+    }
+
+    /// Nachtrag 197: `POST bulk/receivers` gegen eine echte
+    /// `ReceiverConnection` — ein Eintrag trifft die eigene ID (wendet
+    /// dieselbe `patch_staged`-Logik wie das Einzel-PATCH an), ein
+    /// zweiter trifft keine bekannte ID (→ 404, kein Fehler — dieselbe
+    /// "kein Fehler, nur keine Ressource"-Semantik wie bei
+    /// [`list_ids`]).
+    #[test]
+    fn bulk_patch_applies_to_own_id_and_404s_for_others() {
+        let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
+        let body = br#"[
+            {"id": "recv-1", "params": {"master_enable": true}},
+            {"id": "recv-other", "params": {"master_enable": true}}
+        ]"#;
+
+        let (status, resp_body) = body_str(bulk_patch(
+            "POST",
+            "/x-nmos/connection/v1.1/bulk/receivers",
+            "receivers",
+            body,
+            |id, params| (id == conn.id()).then(|| conn.patch_staged(params).0),
+        ));
+        assert_eq!(status, 200);
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&resp_body).unwrap();
+        assert_eq!(parsed[0]["id"], "recv-1");
+        assert_eq!(parsed[0]["code"], 200);
+        assert_eq!(parsed[1]["id"], "recv-other");
+        assert_eq!(parsed[1]["code"], 404);
+
+        let (_, active_body) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/receivers/recv-1/active",
+            b"",
+        ));
+        assert!(active_body.contains("\"master_enable\":true"), "active = {active_body}");
+    }
+
+    #[test]
+    fn bulk_patch_ignores_unrelated_paths() {
+        assert!(bulk_patch(
+            "GET",
+            "/x-nmos/connection/v1.1/bulk/receivers",
+            "receivers",
+            b"[]",
+            |_, _| None
+        )
+        .is_none());
     }
 }

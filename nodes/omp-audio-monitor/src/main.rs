@@ -38,7 +38,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::pcm_stream;
-use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{
+    bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
+    ReceiverControl, ReceiverResource,
+};
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
@@ -244,10 +247,28 @@ impl ParamStore for MonitorStore {
         if let Some(resp) = list_ids(method, path, "receivers", &[self.connection.id()]) {
             return Some(to_raw(resp));
         }
+        if let Some(resp) = bulk_discovery(method, path) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = bulk_patch(method, path, "receivers", body, |id, params| {
+            (self.connection.id() == id).then(|| self.connection.patch_staged(params).0)
+        }) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = bulk_patch(method, path, "senders", body, |_, _| None) {
+            return Some(to_raw(resp));
+        }
         if let Some(resp) = self.connection.handle(method, path, body) {
             return Some(to_raw(resp));
         }
         uibundle::route(method, path)
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.connection
+            .cors_methods(path)
+            .or_else(|| bulk_cors_methods(path, "senders"))
+            .or_else(|| bulk_cors_methods(path, "receivers"))
     }
 }
 

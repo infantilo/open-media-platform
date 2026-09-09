@@ -22240,3 +22240,80 @@ Absatz nach einer nummerierten Liste). Live gegen einen echten
 `raw/90000`, `c=` nach `m=`, vollständiges `fmtp` inkl. `PM`/`SSN`/`TP`.
 
 **Dateien:** `nodes/omp-mediaio/src/{rtp.rs,st2110.rs}`.
+
+## 2026-09-09 (Nachtrag 197) — IS-05: CORS + Bulk-Endpoints für alle 9 Rust-Nodes, letzte Discovery-Diskrepanz geschlossen (Nutzerauftrag "ja" auf "Bulk-Endpoints für die 9 Rust-Nodes nachziehen")
+
+**Ausgangspunkt:** `connection::root_discovery()` listet seit Nachtrag
+194 korrekt `["bulk/","single/"]` — aber KEIN Rust-Node implementierte
+`bulk/` tatsächlich. Beim Nachsehen zeigte sich ein größerer, vorher
+unbekannter Gap: der generische Rust-HTTP-Server
+(`nodes/omp-node-sdk/src/server.rs`) hatte überhaupt kein CORS
+(`Access-Control-Allow-Origin` fehlte für JEDE Antwort) — genau der
+Fehlertyp, den der Go-Mock-Node schon bei D9 hatte (elf AMWA-Tests
+schlugen deshalb fehl, bis `withCORS` das global fixte). Nutzer
+entschied sich nach Rückfrage bewusst für die vollständige Lösung
+statt nur die Discovery-Antwort zu korrigieren.
+
+**SDK-Umbau (`nodes/omp-node-sdk/src/server.rs`):**
+- `Access-Control-Allow-Origin: *` jetzt global in `handle()` auf JEDE
+  Antwort angewandt (eine Stelle statt ~50 einzelner `RawResponse`-
+  Konstruktionsstellen in UI-Bundle-Modulen anzufassen).
+- Neue `ParamStore::extra_options(&self, path) -> Option<Vec<&'static
+  str>>`-Methode (Default `None`, kein Pflichtpunkt für bestehende
+  Nodes) für CORS-Preflight — bewusst GETRENNT von `RawResponse` statt
+  eines neuen Feldes darauf: `RawResponse` wird an ~50 Stellen als
+  Struct-Literal ohne `..Default::default()` konstruiert, ein neues
+  Pflichtfeld hätte dort überall gebrochen, obwohl fast keine dieser
+  Stellen je CORS-Preflight braucht.
+- `route()` beantwortet `OPTIONS` direkt mit 200 +
+  `Access-Control-Allow-Methods`/`-Headers`, wenn `extra_options`
+  `Some` liefert — vor `extra_route`.
+
+**`nodes/omp-node-sdk/src/connection.rs`:**
+- `SenderConnection::patch_staged`/`ReceiverConnection::patch_staged`
+  von privat auf `pub` (vorher nur intern von `handle()` genutzt) —
+  `bulk_patch` braucht denselben Codepfad, keine zweite
+  PATCH-Implementierung.
+- Neue `cors_methods(&self, path)`-Methode auf beiden Connection-Typen
+  (`GET, PATCH` für `.../staged`).
+- Neue freie Funktionen: `bulk_discovery` (`GET bulk/` →
+  `["senders/","receivers/"]`, `GET bulk/{senders,receivers}` → 405 per
+  RAML), `bulk_cors_methods` (`POST` für `bulk/{kind}`), `bulk_patch`
+  (generisch über eine `patch_one(id, params) -> Option<status>`-
+  Closure — jeder Rust-Node hat nur 1-2 eigene Connections, kein
+  dynamisches Repository wie der Go-Mock-Node; ein Bulk-Eintrag, dessen
+  ID zu keiner eigenen Connection passt, liefert 404 für DIESEN
+  Eintrag, kein Fehler für den ganzen Request — dieselbe Semantik wie
+  ein leeres `list_ids`).
+
+**Verdrahtet in allen 9 Nodes** (`playout`, `omp-audio-monitor`,
+`omp-aes67-gateway`, `omp-2110-gateway`, `omp-fabrics-gateway`,
+`omp-scaler`, `omp-pipeline-controller`, `omp-recorder`,
+`omp-decklink`) — jeweils `extra_options` implementiert + `bulk_discovery`/
+`bulk_patch` (für BEIDE Kinds, auch das, was der Node nicht hat — RAML
+verlangt beide Basis-Pfade unabhängig davon, ob eine Kind besetzt ist,
+dieselbe Vollständigkeit wie beim Go-Mock-Node).
+
+**Verifiziert:** `cargo build`/`clippy` auf allen 9 Crates + SDK, keine
+Warnungen. `cargo test -p omp-node-sdk`: 47 Tests grün (5 neu:
+`bulk_discovery_lists_and_rejects_get_on_kinds`,
+`bulk_discovery_ignores_unrelated_paths`,
+`bulk_cors_methods_allows_only_post`,
+`bulk_patch_applies_to_own_id_and_404s_for_others`,
+`bulk_patch_ignores_unrelated_paths`). Live gegen zwei echte Prozesse
+bestätigt: `playout` (globaler CORS-Header auf `/descriptor.json`,
+`GET bulk/` → `["senders/","receivers/"]`, `GET bulk/senders` → 405,
+`OPTIONS bulk/senders` → 200 mit korrekten Headern, `POST bulk/senders`
+mit echter+unbekannter ID → `[{200},{404}]`, `OPTIONS .../staged` →
+`GET, PATCH`) und `omp-recorder` (Zwei-Connection-Fall: `POST
+bulk/receivers` mit beiden echten IDs → `[{200},{200}]`).
+
+**Bewusst nicht geprüft:** kein AMWA-Tool-Lauf gegen einen dieser
+Rust-Nodes (Rust ist strukturell aus CI ausgeschlossen, s.
+Nachtrag 192/193) — die Verifikation bleibt auf manuelle Live-Tests +
+Unit-Tests beschränkt.
+
+**Dateien:** `nodes/omp-node-sdk/src/{server.rs,connection.rs}`,
+`nodes/{playout,omp-audio-monitor,omp-aes67-gateway,
+omp-2110-gateway,omp-fabrics-gateway,omp-scaler,
+omp-pipeline-controller,omp-recorder,omp-decklink}/src/main.rs`.

@@ -20,7 +20,10 @@ use std::sync::{Arc, Mutex};
 use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::rtp::RtpVideoOutput;
-use omp_node_sdk::connection::{list_ids, root_discovery, SenderConnection, SenderControl, SenderResource, SenderSdp};
+use omp_node_sdk::connection::{
+    bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, SenderConnection,
+    SenderControl, SenderResource, SenderSdp,
+};
 use omp_node_sdk::is04::TRANSPORT_RTP;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
@@ -119,8 +122,30 @@ impl ParamStore for PlayoutStore {
         if let Some(resp) = list_ids(method, path, "senders", &ids) {
             return Some(to_raw(resp));
         }
+        if let Some(resp) = bulk_discovery(method, path) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = bulk_patch(method, path, "senders", body, |id, params| {
+            self.connection
+                .as_ref()
+                .filter(|c| c.id() == id)
+                .map(|c| c.patch_staged(params).0)
+        }) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = bulk_patch(method, path, "receivers", body, |_, _| None) {
+            return Some(to_raw(resp));
+        }
         let connection = self.connection.as_ref()?;
         connection.handle(method, path, body).map(to_raw)
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.connection
+            .as_ref()
+            .and_then(|c| c.cors_methods(path))
+            .or_else(|| bulk_cors_methods(path, "senders"))
+            .or_else(|| bulk_cors_methods(path, "receivers"))
     }
 }
 

@@ -11,7 +11,10 @@ mod pipeline;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{
+    bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
+    ReceiverControl, ReceiverResource,
+};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
@@ -160,9 +163,30 @@ impl ParamStore for RecorderStore {
                     &[self.video_connection.id(), self.audio_connection.id()],
                 )
             })
+            .or_else(|| bulk_discovery(method, path))
+            .or_else(|| {
+                bulk_patch(method, path, "receivers", body, |id, params| {
+                    if self.video_connection.id() == id {
+                        Some(self.video_connection.patch_staged(params).0)
+                    } else if self.audio_connection.id() == id {
+                        Some(self.audio_connection.patch_staged(params).0)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.video_connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
             .map(to_raw)
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.video_connection
+            .cors_methods(path)
+            .or_else(|| self.audio_connection.cors_methods(path))
+            .or_else(|| bulk_cors_methods(path, "senders"))
+            .or_else(|| bulk_cors_methods(path, "receivers"))
     }
 }
 

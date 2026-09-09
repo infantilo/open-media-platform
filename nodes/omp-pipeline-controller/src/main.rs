@@ -29,7 +29,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use livesource::{FlowKind, LiveSourceControl, SharedLiveSource};
-use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection};
+use omp_node_sdk::connection::{
+    bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
+};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -125,6 +127,26 @@ impl ParamStore for Store {
             let (status, content_type, body) = resp;
             return Some(RawResponse { status, content_type, body });
         }
+        if let Some(resp) = bulk_discovery(method, path) {
+            let (status, content_type, body) = resp;
+            return Some(RawResponse { status, content_type, body });
+        }
+        if let Some(resp) = bulk_patch(method, path, "receivers", body, |id, params| {
+            if self.video_connection.id() == id {
+                Some(self.video_connection.patch_staged(params).0)
+            } else if self.audio_connection.id() == id {
+                Some(self.audio_connection.patch_staged(params).0)
+            } else {
+                None
+            }
+        }) {
+            let (status, content_type, body) = resp;
+            return Some(RawResponse { status, content_type, body });
+        }
+        if let Some(resp) = bulk_patch(method, path, "senders", body, |_, _| None) {
+            let (status, content_type, body) = resp;
+            return Some(RawResponse { status, content_type, body });
+        }
         if let Some(resp) = self.video_connection.handle(method, path, body) {
             let (status, content_type, body) = resp;
             return Some(RawResponse { status, content_type, body });
@@ -137,6 +159,14 @@ impl ParamStore for Store {
             return Some(resp);
         }
         Some(proxy::proxy(&self.proxy_agent, &self.pc_base, method, path, body))
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.video_connection
+            .cors_methods(path)
+            .or_else(|| self.audio_connection.cors_methods(path))
+            .or_else(|| bulk_cors_methods(path, "senders"))
+            .or_else(|| bulk_cors_methods(path, "receivers"))
     }
 }
 

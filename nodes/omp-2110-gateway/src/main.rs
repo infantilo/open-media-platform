@@ -24,7 +24,10 @@ mod sdp;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use omp_node_sdk::connection::{list_ids, root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{
+    bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
+    ReceiverControl, ReceiverResource,
+};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -237,8 +240,22 @@ impl ParamStore for OutputStore {
         let to_raw = |(status, content_type, body)| omp_node_sdk::RawResponse { status, content_type, body };
         root_discovery(method, path)
             .or_else(|| list_ids(method, path, "receivers", &[self.connection.id()]))
+            .or_else(|| bulk_discovery(method, path))
+            .or_else(|| {
+                bulk_patch(method, path, "receivers", body, |id, params| {
+                    (self.connection.id() == id).then(|| self.connection.patch_staged(params).0)
+                })
+            })
+            .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.connection.handle(method, path, body))
             .map(to_raw)
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.connection
+            .cors_methods(path)
+            .or_else(|| bulk_cors_methods(path, "senders"))
+            .or_else(|| bulk_cors_methods(path, "receivers"))
     }
 }
 

@@ -74,6 +74,22 @@ pub trait ParamStore: Send + Sync + 'static {
         None
     }
 
+    /// CORS-Preflight (`OPTIONS`) für eine `extra_route`-Zusatzroute —
+    /// getrennt von `RawResponse` statt eines neuen Felds darauf
+    /// (Nachtrag 197): `RawResponse` wird an ~50 Stellen (v. a.
+    /// `uibundle.rs`-Module) als Struct-Literal ohne
+    /// `..Default::default()` konstruiert, ein neues Pflichtfeld hätte
+    /// dort überall gebrochen, obwohl keine dieser Stellen je CORS-
+    /// Preflight braucht. `Some(methods)` liefert die an `path` gültigen
+    /// Methoden (ohne `OPTIONS` selbst) für `Access-Control-Allow-
+    /// Methods` — `route()` beantwortet dann direkt mit 200 plus den
+    /// nötigen CORS-Headern, ohne `extra_route` zu erreichen. Default
+    /// `None`: kein Pflichtpunkt, bestehende Nodes brauchen keine
+    /// Änderung.
+    fn extra_options(&self, _path: &str) -> Option<Vec<&'static str>> {
+        None
+    }
+
     /// Optionale Plugin-Host-Erweiterung des Node-Contracts
     /// (`ARCHITECTURE.md` §24.4, `UMSETZUNG.md` C19, `crate::plugins`) —
     /// `Some(&registry)` exponiert automatisch `GET /plugins`/`PATCH
@@ -126,7 +142,18 @@ fn handle(mut request: Request, store: &Arc<dyn ParamStore>) {
     let mut body = Vec::new();
     let _ = request.as_reader().read_to_end(&mut body);
 
-    let response = route(&method, &url, &body, store);
+    // Nachtrag 197: `Access-Control-Allow-Origin` fehlte für JEDE
+    // Antwort dieses Servers komplett — genau der Bug, den der
+    // Go-Mock-Node schon bei D9 hatte (`nodes/mock/main.go withCORS`,
+    // live an elf AMWA-Tests gefunden) und der hier nie auffiel, weil
+    // IS-05-01 nie gegen einen echten Rust-Node lief. Global an dieser
+    // einen Stelle statt pro Response-Konstruktionsstelle (~50 über
+    // `RawResponse`-Literale verteilt, s. `uibundle.rs`-Module) —
+    // dieselbe "eine Middleware statt viele Handler" Begründung wie bei
+    // Go.
+    let response = route(&method, &url, &body, store).with_header(
+        Header::from_bytes(&b"Access-Control-Allow-Origin"[..], &b"*"[..]).expect("static header"),
+    );
     let _ = request.respond(response);
 }
 
@@ -213,6 +240,25 @@ fn route(method: &Method, url: &str, body: &[u8], store: &Arc<dyn ParamStore>) -
             registry.set_config(id, config);
         }
         return json_response(200, &registry.get(id).expect("checked above"));
+    }
+
+    if *method == Method::Options
+        && let Some(methods) = store.extra_options(url)
+    {
+        return Response::from_data(Vec::new())
+            .with_status_code(200)
+            .with_header(
+                Header::from_bytes(
+                    &b"Access-Control-Allow-Methods"[..],
+                    methods.join(", ").as_bytes(),
+                )
+                .expect("valid header value"),
+            )
+            .with_header(
+                Header::from_bytes(&b"Access-Control-Allow-Headers"[..], &b"Content-Type"[..])
+                    .expect("static header"),
+            )
+            .boxed();
     }
 
     if let Some(extra) = store.extra_route(method.as_str(), url, body) {
