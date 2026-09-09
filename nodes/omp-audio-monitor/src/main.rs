@@ -225,7 +225,7 @@ impl ParamStore for MonitorStore {
             "master_enable": !sender_id.is_empty(),
             "activation": {"mode": "activate_immediate"},
         });
-        let path = format!("/x-nmos/connection/v1.1/single/receivers/{}/staged", self.own_receiver_id);
+        let path = format!("/x-nmos/connection/v1.2/single/receivers/{}/staged", self.own_receiver_id);
         match self.connection.handle("PATCH", &path, &serde_json::to_vec(&body).unwrap_or_default()) {
             Some(_) => Ok(()),
             None => Err(InvokeError::Unknown),

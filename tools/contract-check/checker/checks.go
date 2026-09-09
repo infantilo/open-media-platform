@@ -307,7 +307,7 @@ func (c *Checker) CheckIS05(node is04Node) Result {
 }
 
 func (c *Checker) probeIS05(kind, id string) string {
-	reqURL := fmt.Sprintf("%s/x-nmos/connection/v1.1/single/%s/%s/staged", c.nodeURL, kind, id)
+	reqURL := fmt.Sprintf("%s/x-nmos/connection/v1.2/single/%s/%s/staged", c.nodeURL, kind, id)
 	resp, err := c.http.Get(reqURL)
 	if err != nil {
 		return "nicht erreichbar"

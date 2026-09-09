@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // klassisches Henne-Ei-Problem, gelöst über SenderSpec::id.
     let sender_id = omp_node_sdk::idgen::new_v4();
     let manifest_href = format!(
-        "http://{host}:{port}/x-nmos/connection/v1.1/single/senders/{sender_id}/transportfile"
+        "http://{host}:{port}/x-nmos/connection/v1.2/single/senders/{sender_id}/transportfile"
     );
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();

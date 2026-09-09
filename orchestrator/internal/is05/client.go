@@ -2,7 +2,10 @@
 // an (nicht die Registry — IS-05 läuft node-zu-node/controller-zu-node,
 // ohne zentrale Instanz). Feldnamen geprüft gegen AMWA-TV/is-05 (Branch
 // v1.1.x, APIs/schemas/receiver-*.json, sender-stage-schema.json,
-// activation-schema.json).
+// activation-schema.json). Spricht seit Nachtrag 191 `v1.2` an — v1.2.0
+// ist wire-kompatibel zu v1.1.x (docs/decisions.md Nachtrag 189), alle
+// Nodes bedienen beide Versionspfade identisch, daher kein Grund mehr,
+// weiterhin die ältere Version anzusprechen.
 package is05
 
 import (
@@ -36,7 +39,7 @@ func NewClient(httpClient *http.Client) *Client {
 
 // GetActive liest den active-Zustand eines Receivers.
 func (c *Client) GetActive(ctx context.Context, baseURL, receiverID string) (ActiveResource, error) {
-	url := fmt.Sprintf("%s/x-nmos/connection/v1.1/single/receivers/%s/active", baseURL, receiverID)
+	url := fmt.Sprintf("%s/x-nmos/connection/v1.2/single/receivers/%s/active", baseURL, receiverID)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -64,7 +67,7 @@ func (c *Client) GetActive(ctx context.Context, baseURL, receiverID string) (Act
 // einen Receiver, mit sofortiger Aktivierung
 // (activation.mode = "activate_immediate").
 func (c *Client) PatchStaged(ctx context.Context, baseURL, receiverID string, senderID *string, masterEnable bool) error {
-	url := fmt.Sprintf("%s/x-nmos/connection/v1.1/single/receivers/%s/staged", baseURL, receiverID)
+	url := fmt.Sprintf("%s/x-nmos/connection/v1.2/single/receivers/%s/staged", baseURL, receiverID)
 
 	body, err := json.Marshal(map[string]any{
 		"sender_id":     senderID,
@@ -102,7 +105,7 @@ func (c *Client) PatchStaged(ctx context.Context, baseURL, receiverID string, se
 // Mock-Node, der nur Receiver-seitig antwortet, Schritt A7/B1) — Aufrufer
 // behandeln einen Fehler hier als nicht fatal.
 func (c *Client) PatchSenderStaged(ctx context.Context, baseURL, senderID string, masterEnable bool) error {
-	url := fmt.Sprintf("%s/x-nmos/connection/v1.1/single/senders/%s/staged", baseURL, senderID)
+	url := fmt.Sprintf("%s/x-nmos/connection/v1.2/single/senders/%s/staged", baseURL, senderID)
 
 	body, err := json.Marshal(map[string]any{
 		"master_enable": masterEnable,
