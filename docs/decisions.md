@@ -21882,3 +21882,73 @@ weiteren Standard-Transporttyp).
 **Dateien:** `nodes/mock/internal/connection/handler.go`,
 `nodes/mock/internal/connection/handler_test.go`,
 `nodes/omp-node-sdk/src/connection.rs`, `.github/workflows/ci.yml`.
+
+## 2026-09-09 (Nachtrag 190) — IS-05: node-globaler Versions-Discovery-Root-Endpoint + NMOS-Transports-Parameter-Register (Nutzerauftrag "jetzt umsetzen" → "Beides")
+
+**Ausgangspunkt:** die zwei Punkte, die Nachtrag 189 bewusst offen gelassen
+hatte ("für dieses Projekt aktuell ohne praktischen Nutzen") — der Nutzer
+wollte beide trotzdem umgesetzt haben.
+
+**1. Versions-Discovery-Root-Endpoint.** Recherche vor der Umsetzung ergab
+einen größeren Bestandsbefund als erwartet: **kein** Rust-Node mit echten
+IS-05-Connections beantwortete `GET /x-nmos/connection/` — nicht nur v1.2
+fehlte, sondern der ganze node-globale Wurzel-Discovery-Pfad war für alle
+Rust-Nodes von Anfang an nie implementiert (die SDK-Doku in
+`connection.rs` sagte das auch explizit: "das ist node-global, nicht pro
+Sender/Receiver ... jeder Node verdrahtet das selbst"). Selbst der
+Go-Mock-Node hatte nur die versionierten Wurzeln (`.../v1.1/`, `.../v1.2/`),
+nicht den nackten `/x-nmos/connection/` selbst. Rückgefragt, wie weit das
+gehen soll (nur Mock, Mock+SDK-Funktion ungenutzt, oder Mock+SDK+alle 9
+echten IS-05-Nodes verdrahtet) — Antwort: alle 9.
+
+Umsetzung:
+- Go: `mux.HandleFunc("GET /x-nmos/connection/", ...)` in `Handler()`
+  (`nodes/mock/internal/connection/handler.go`), listet `apiVersions` mit
+  trailing `/`. Gleiches Exact-Path-Match-Muster wie die Versions-Wurzeln
+  (sonst würde die `ServeMux`-Teilbaum-Falle unbekannte Pfade fälschlich
+  mit 200 statt 404 beantworten, derselbe Bugtyp wie D9).
+- Rust: neue freie Funktion `connection::root_discovery(method, path)` im
+  SDK (`nodes/omp-node-sdk/src/connection.rs`) — node-global statt Methode
+  auf `SenderConnection`/`ReceiverConnection`, beantwortet
+  `/x-nmos/connection/`, `.../v1.x/`, `.../v1.x/single/`. Verdrahtet in
+  allen 9 main.rs-Dateien mit echten IS-05-Connections (`playout`,
+  `omp-audio-monitor`, `omp-aes67-gateway`, `omp-2110-gateway`,
+  `omp-fabrics-gateway`, `omp-scaler`, `omp-pipeline-controller`,
+  `omp-recorder`, `omp-decklink`) — jeweils ein zusätzlicher
+  `root_discovery(...)`-Aufruf am Anfang von `extra_route`, vor dem
+  jeweils node-eigenen `connection.handle(...)`.
+
+**2. NMOS-"Transports"-Parameter-Register.** Neue Tabelle (Go:
+`nodes/mock/internal/connection/transports.go`, Rust:
+`nodes/omp-node-sdk/src/transports.rs`) mit den vier von der AMWA-Registry
+aktuell geführten Standard-Einträgen (rtp/mqtt/websocket/dash) plus der
+projekteigenen proprietären `urn:x-omp:transport:mxl`-Erweiterung. Bewusst
+kein Auto-Fetch/Netzwerk-Zugriff auf die echte Registry (Minimal-
+Dependency-Regel) — eine statische Tabelle reicht, da sich der Registry-
+Inhalt nicht zur Laufzeit ändert und dieses Projekt ohnehin nur
+rtp+mxl aktiv nutzt. Real verdrahtet, nicht nur deklarativ: Go prüft per
+`init()`, dass `TransportType` (receiver.go) im Register steht (Panic bei
+Tippfehler statt stillem Fehlverhalten); Rust prüft dasselbe in
+`SenderConnection::with_transport`/`ReceiverConnection::with_transport`
+per `assert!` — beide schlagen beim Programmstart fehl, nicht erst beim
+nächsten AMWA-Testlauf.
+
+**Verifiziert:** `go test`/`go vet` (alle Pakete), `cargo build --workspace`
+(exit 0), `cargo test -p omp-node-sdk` (38 Tests inkl. 4 neuer:
+`root_discovery_lists_versions_and_single`,
+`root_discovery_ignores_unrelated_paths`, `transports::tests::
+knows_rtp_and_mxl`, `rejects_unknown_urn`), `cargo clippy` auf allen 9
+geänderten Node-Crates + SDK (keine Warnungen). Live-getestet: eigenständig
+gestarteter `playout`-Binary, echte curl-Aufrufe gegen
+`/x-nmos/connection/` (→ `["v1.1/","v1.2/"]`), `.../v1.1/` (→
+`["single/"]`), `.../v1.2/single/` (→ `["senders/","receivers/"]`).
+`nodes/omp-mediaio`-Testfehler im vollen Workspace-Lauf sind vorbestehend
+und umgebungsbedingt (`libmxl.so` nicht geladen, Shell ohne `mxl.env`
+gestartet, s. `feedback_omp_dev_environment_gotchas`) — nicht durch diese
+Änderung verursacht, `omp-mediaio` von dieser Änderung nicht berührt.
+
+**Dateien:** `nodes/mock/internal/connection/{handler.go,handler_test.go,
+transports.go}`, `nodes/omp-node-sdk/src/{connection.rs,lib.rs,
+transports.rs}`, `nodes/{playout,omp-audio-monitor,omp-aes67-gateway,
+omp-2110-gateway,omp-fabrics-gateway,omp-scaler,omp-pipeline-controller,
+omp-recorder,omp-decklink}/src/main.rs`, `.github/workflows/ci.yml`.

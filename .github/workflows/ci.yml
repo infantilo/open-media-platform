@@ -132,6 +132,7 @@ jobs:
           done
           curl -fs http://localhost:9099/x-nmos/connection/v1.1/ > /dev/null
           curl -fs http://localhost:9099/x-nmos/connection/v1.2/ > /dev/null
+          curl -fs http://localhost:9099/x-nmos/connection/ > /dev/null
 
       - name: AMWA NMOS Testing Tool — IS-05-01 (Connection API) gegen den Mock-Node ausführen
         run: |

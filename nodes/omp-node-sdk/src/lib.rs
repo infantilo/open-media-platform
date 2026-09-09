@@ -17,6 +17,7 @@ pub mod node;
 pub mod peer;
 pub mod plugins;
 pub mod server;
+pub mod transports;
 
 pub use descriptor::{
     Descriptor, LatencyInfo, LatencyRange, MethodArg, MethodSpec, ParamSpec, ParamType, Range,

@@ -88,6 +88,43 @@ fn strip_versioned_prefix<'a>(path: &'a str, kind: &str, id: &str) -> Option<&'a
     None
 }
 
+/// Bedient die node-globalen Wurzel-Discovery-Pfade der IS-05-
+/// Connection-API: `/x-nmos/connection/` (Versionsliste) sowie je
+/// [`API_VERSIONS`]-Eintrag `.../v1.x/` (`["single/"]`) und
+/// `.../v1.x/single/` (`["senders/","receivers/"]`, immer beide,
+/// unabhängig davon ob dieser Node tatsächlich Sender+Receiver hat —
+/// dieselbe RAML-Vorgabe, der auch das Go-Pendant folgt,
+/// `nodes/mock/internal/connection/handler.go`). Anders als die
+/// Sub-Ressourcen pro Sender/Receiver ([`SenderConnection::handle`]/
+/// [`ReceiverConnection::handle`]) ist das node-global, nicht pro
+/// Instanz, daher eine freie Funktion statt einer Methode — jeder Node
+/// mit echten IS-05-Connections ruft sie zusätzlich in seinem
+/// `extra_route` auf (Nachtrag 190: vorher fehlte dieser Pfad für ALLE
+/// Rust-Nodes komplett, nicht erst seit v1.2 — der Go-Mock-Node hatte
+/// nur die versionierten Wurzeln, nicht den nackten `/x-nmos/connection/`
+/// selbst, s. docs/decisions.md).
+pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Vec<u8>)> {
+    if method != "GET" {
+        return None;
+    }
+    if path == "/x-nmos/connection/" {
+        return Some((200, "application/json", br#"["v1.1/","v1.2/"]"#.to_vec()));
+    }
+    for version in API_VERSIONS {
+        if path == format!("/x-nmos/connection/{version}/") {
+            return Some((200, "application/json", br#"["single/"]"#.to_vec()));
+        }
+        if path == format!("/x-nmos/connection/{version}/single/") {
+            return Some((
+                200,
+                "application/json",
+                br#"["senders/","receivers/"]"#.to_vec(),
+            ));
+        }
+    }
+    None
+}
+
 /// Eine Transport-Parameter-"Leg" eines Senders (`sender_transport_params_
 /// rtp.json`) — hier immer genau ein Element (keine 2022-7-Redundanz).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -164,8 +201,15 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
 
     /// Überschreibt die `transporttype/`-Antwort (Default: MXL, s.
     /// [`Self::transport_urn`]-Doc) — für Sender, deren tatsächlicher
-    /// Transport nicht MXL ist (z. B. `is04::TRANSPORT_RTP`).
+    /// Transport nicht MXL ist (z. B. `is04::TRANSPORT_RTP`). Prüft gegen
+    /// [`crate::transports::TRANSPORTS`] (Nachtrag 190) — ein Tippfehler
+    /// hier fällt so beim Node-Start auf, nicht erst beim nächsten
+    /// AMWA-Testlauf.
     pub fn with_transport(mut self, transport_urn: &'static str) -> Self {
+        assert!(
+            crate::transports::is_known_transport(transport_urn),
+            "unbekannter Transport-Typ: {transport_urn}"
+        );
         self.transport_urn = transport_urn;
         self
     }
@@ -336,6 +380,10 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
 
     /// s. [`SenderConnection::with_transport`].
     pub fn with_transport(mut self, transport_urn: &'static str) -> Self {
+        assert!(
+            crate::transports::is_known_transport(transport_urn),
+            "unbekannter Transport-Typ: {transport_urn}"
+        );
         self.transport_urn = transport_urn;
         self
     }
@@ -580,5 +628,36 @@ mod tests {
             b"",
         ));
         assert_eq!(v11_active, v12_active);
+    }
+
+    /// Nachtrag 190: der node-globale Wurzel-Discovery-Pfad fehlte für
+    /// ALLE Rust-Nodes komplett (nicht nur für v1.2) — dieser Test deckt
+    /// die drei Ebenen ab, die `root_discovery` jetzt beantwortet.
+    #[test]
+    fn root_discovery_lists_versions_and_single() {
+        let (status, body) = body_str(root_discovery("GET", "/x-nmos/connection/"));
+        assert_eq!(status, 200);
+        assert_eq!(body, r#"["v1.1/","v1.2/"]"#);
+
+        for version in API_VERSIONS {
+            let (status, body) =
+                body_str(root_discovery("GET", &format!("/x-nmos/connection/{version}/")));
+            assert_eq!(status, 200);
+            assert_eq!(body, r#"["single/"]"#);
+
+            let (status, body) = body_str(root_discovery(
+                "GET",
+                &format!("/x-nmos/connection/{version}/single/"),
+            ));
+            assert_eq!(status, 200);
+            assert_eq!(body, r#"["senders/","receivers/"]"#);
+        }
+    }
+
+    #[test]
+    fn root_discovery_ignores_unrelated_paths() {
+        assert!(root_discovery("GET", "/x-nmos/connection/v1.1/single/receivers/recv-1/staged").is_none());
+        assert!(root_discovery("POST", "/x-nmos/connection/").is_none());
+        assert!(root_discovery("GET", "/x-nmos/connection/v1.3/").is_none());
     }
 }

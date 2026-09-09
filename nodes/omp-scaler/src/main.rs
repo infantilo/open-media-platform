@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -188,11 +188,14 @@ impl ParamStore for ScalerStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
-        self.connection.handle(method, path, body).map(|(status, content_type, body)| RawResponse {
+        let to_raw = |(status, content_type, body)| RawResponse {
             status,
             content_type,
             body,
-        })
+        };
+        root_discovery(method, path)
+            .or_else(|| self.connection.handle(method, path, body))
+            .map(to_raw)
     }
 }
 

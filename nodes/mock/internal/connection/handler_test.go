@@ -295,3 +295,28 @@ func TestHandlerServesV12AlongsideV11(t *testing.T) {
 		t.Fatalf("POST v1.2 bulk/receivers status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 }
+
+// TestHandlerBareRootListsVersions — Nachtrag 190: der nackte
+// `/x-nmos/connection/` (ohne Version) fehlte bisher komplett, obwohl die
+// IS-05-Spec dort die node-globale Versionsliste vorsieht. Prüft zusätzlich
+// dieselbe Teilbaum-Swallow-Falle wie `TestHandlerRootDoesNotSwallowUnknownSubpaths`,
+// nur eine Ebene höher.
+func TestHandlerBareRootListsVersions(t *testing.T) {
+	store := NewReceiverStore([]string{"recv-1"})
+	h := Handler(store)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET bare root status = %d, want 200", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `["v1.1/","v1.2/"]` {
+		t.Fatalf("GET bare root body = %s, want [\"v1.1/\",\"v1.2/\"]", got)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x-nmos/connection/nonexistent", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET unknown top-level subpath status = %d, want 404 (body: %s)", rec.Code, rec.Body.String())
+	}
+}

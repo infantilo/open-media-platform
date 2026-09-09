@@ -46,6 +46,24 @@ var apiVersions = []string{"v1.1", "v1.2"}
 func Handler(store *ReceiverStore) http.Handler {
 	mux := http.NewServeMux()
 
+	// Nachtrag 190: der nackte `/x-nmos/connection/` (ohne Version) fehlte
+	// bisher komplett — jede Version hatte nur ihre eigene Wurzel
+	// (`.../v1.1/`, `.../v1.2/`), nicht die node-globale Versionsliste, die
+	// die IS-05-Spec dafür vorsieht. Gleiches "exaktes Pfad-Match statt
+	// Teilbaum-Wildcard"-Muster wie bei den Versions-Wurzeln unten
+	// (dieselbe `ServeMux`-Falle, s. dortiger Kommentar).
+	mux.HandleFunc("GET /x-nmos/connection/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/x-nmos/connection/" {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		listing := make([]string, len(apiVersions))
+		for i, version := range apiVersions {
+			listing[i] = version + "/"
+		}
+		writeJSON(w, http.StatusOK, listing)
+	})
+
 	for _, version := range apiVersions {
 		registerVersion(mux, store, version)
 	}

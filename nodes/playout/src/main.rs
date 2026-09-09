@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use omp_mediaio::MediaFlow;
 use omp_mediaio::Output;
 use omp_mediaio::rtp::RtpVideoOutput;
-use omp_node_sdk::connection::{SenderConnection, SenderControl, SenderResource, SenderSdp};
+use omp_node_sdk::connection::{root_discovery, SenderConnection, SenderControl, SenderResource, SenderSdp};
 use omp_node_sdk::is04::TRANSPORT_RTP;
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType, RawResponse,
@@ -107,13 +107,16 @@ impl ParamStore for PlayoutStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
-        let connection = self.connection.as_ref()?;
-        let (status, content_type, body) = connection.handle(method, path, body)?;
-        Some(RawResponse {
+        let to_raw = |(status, content_type, body)| RawResponse {
             status,
             content_type,
             body,
-        })
+        };
+        if let Some(resp) = root_discovery(method, path) {
+            return Some(to_raw(resp));
+        }
+        let connection = self.connection.as_ref()?;
+        connection.handle(method, path, body).map(to_raw)
     }
 }
 

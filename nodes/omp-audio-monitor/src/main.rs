@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use omp_mediaio::pcm_stream;
-use omp_node_sdk::connection::{ReceiverConnection, ReceiverControl, ReceiverResource};
+use omp_node_sdk::connection::{root_discovery, ReceiverConnection, ReceiverControl, ReceiverResource};
 use omp_node_sdk::is04::{self, RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::{
     Descriptor, InvokeError, MethodArg, MethodSpec, NodeConfig, ParamSpec, ParamStore, ParamType,
@@ -233,12 +233,16 @@ impl ParamStore for MonitorStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
-        if let Some((status, content_type, body)) = self.connection.handle(method, path, body) {
-            return Some(RawResponse {
-                status,
-                content_type,
-                body,
-            });
+        let to_raw = |(status, content_type, body)| RawResponse {
+            status,
+            content_type,
+            body,
+        };
+        if let Some(resp) = root_discovery(method, path) {
+            return Some(to_raw(resp));
+        }
+        if let Some(resp) = self.connection.handle(method, path, body) {
+            return Some(to_raw(resp));
         }
         uibundle::route(method, path)
     }

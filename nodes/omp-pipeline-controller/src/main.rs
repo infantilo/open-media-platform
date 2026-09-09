@@ -29,7 +29,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use livesource::{FlowKind, LiveSourceControl, SharedLiveSource};
-use omp_node_sdk::connection::ReceiverConnection;
+use omp_node_sdk::connection::{root_discovery, ReceiverConnection};
 use omp_node_sdk::is04::{RegistryClient, TRANSPORT_MXL};
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -112,6 +112,10 @@ impl ParamStore for Store {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        if let Some(resp) = root_discovery(method, path) {
+            let (status, content_type, body) = resp;
+            return Some(RawResponse { status, content_type, body });
+        }
         if let Some(resp) = self.video_connection.handle(method, path, body) {
             let (status, content_type, body) = resp;
             return Some(RawResponse { status, content_type, body });
