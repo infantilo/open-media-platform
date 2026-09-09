@@ -131,6 +131,7 @@ jobs:
             sleep 1
           done
           curl -fs http://localhost:9099/x-nmos/connection/v1.1/ > /dev/null
+          curl -fs http://localhost:9099/x-nmos/connection/v1.2/ > /dev/null
 
       - name: AMWA NMOS Testing Tool — IS-05-01 (Connection API) gegen den Mock-Node ausführen
         run: |
@@ -163,6 +164,38 @@ jobs:
         run: |
           cd tools/nmos-conformance-check
           go run . --results ../../nmos-results/is0501.json \
+            --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D11" \
+            --allow "auto_connection_2=s. auto_connection_1" \
+            --allow "auto_connection_3=s. auto_connection_1" \
+            --allow "auto_connection_4=s. auto_connection_1" \
+            --allow "auto_connection_5=s. auto_connection_1" \
+            --allow "auto_connection_6=s. auto_connection_1" \
+            --allow "auto_connection_13=s. auto_connection_1"
+
+      # Nachtrag 189: AMWA-TV/is-05 Release v1.2.0 (Aug. 2024) ist
+      # wire-kompatibel zu v1.1.x (einzige inhaltliche Änderung: weitere
+      # Transport-Typen ab v1.2 über das NMOS-"Transports"-Parameter-
+      # Register statt fest in der Spec — für uns ohne Wirkung, da wir
+      # nur RTP + das proprietäre `urn:x-omp:transport:mxl` kennen). Der
+      # bereits laufende Mock-Node bedient seither `/x-nmos/connection/
+      # v1.2/` mit denselben Handlern wie v1.1 (kein Neustart nötig),
+      # daher hier derselbe Testlauf nur mit `--version v1.2` und
+      # derselben Ausnahmeliste — die Ursachen sind identisch (kein
+      # Sender-Fixture, s. oben).
+      - name: AMWA NMOS Testing Tool — IS-05-01 (Connection API) gegen v1.2 des Mock-Node ausführen
+        run: |
+          docker run --rm --network host \
+            -v "$PWD/nmos-results":/tmp/results \
+            --entrypoint python3 \
+            docker.io/amwa/nmos-testing:latest \
+            nmos-test.py suite IS-05-01 \
+              --host localhost --port 9099 --version v1.2 \
+              --selection all --output /tmp/results/is0501-v12.json || true
+
+      - name: "Ergebnisse auswerten (IS-05-01 v1.2: definierte Testliste grün, Abweichungen dokumentiert)"
+        run: |
+          cd tools/nmos-conformance-check
+          go run . --results ../../nmos-results/is0501-v12.json \
             --allow "auto_connection_1=braucht einen echten IS-04-registrierten Sender zum Verbinden — Mock-Node läuft mit -senders 0 (B1-Scope-Grenze), s. UMSETZUNG.md D11" \
             --allow "auto_connection_2=s. auto_connection_1" \
             --allow "auto_connection_3=s. auto_connection_1" \

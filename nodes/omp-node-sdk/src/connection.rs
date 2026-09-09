@@ -20,6 +20,11 @@
 //! Kennt kein HTTP — der Node verdrahtet die Pfade selbst über
 //! `ParamStore::extra_route` (`server::RawResponse`), damit dieses Modul
 //! transportunabhängig bleibt.
+//!
+//! Bedient seit Nachtrag 189 sowohl `/x-nmos/connection/v1.1/` als auch
+//! `/x-nmos/connection/v1.2/` (s. [`API_VERSIONS`]) — v1.2.0 ist
+//! wire-kompatibel zu v1.1.x, daher dieselben Handler für beide
+//! Versionspfade statt einer zweiten Implementierung.
 
 use std::sync::Mutex;
 
@@ -58,6 +63,29 @@ fn constraints_response() -> Vec<u8> {
 
 fn transport_type_response(transport_urn: &str) -> Vec<u8> {
     serde_json::to_vec(transport_urn).unwrap_or_default()
+}
+
+/// IS-05-Connection-API-Versionen, die [`SenderConnection`] und
+/// [`ReceiverConnection`] parallel bedienen (Nachtrag 189, Go-Pendant:
+/// `nodes/mock/internal/connection::apiVersions`). v1.2.0 ist
+/// wire-kompatibel zu v1.1.x (einzige inhaltliche Änderung: weitere
+/// Transport-Typen ab v1.2 über das NMOS-"Transports"-Parameter-Register
+/// statt fest in der Spec definiert) — deshalb dieselben Handler für
+/// beide Versionspfade statt einer zweiten Implementierung.
+const API_VERSIONS: [&str; 2] = ["v1.1", "v1.2"];
+
+/// Schneidet `/x-nmos/connection/{version}/single/{kind}/{id}/` von `path`
+/// ab, sofern `path` mit einer der [`API_VERSIONS`] beginnt — sonst
+/// `None`. Ein abschließendes "/" im Rest wird zusätzlich entfernt (s.
+/// [`SenderConnection::handle`]-Doc zum Trailing-Slash-Normalisieren).
+fn strip_versioned_prefix<'a>(path: &'a str, kind: &str, id: &str) -> Option<&'a str> {
+    for version in API_VERSIONS {
+        let prefix = format!("/x-nmos/connection/{version}/single/{kind}/{id}/");
+        if let Some(sub) = path.strip_prefix(&prefix) {
+            return Some(sub.strip_suffix('/').unwrap_or(sub));
+        }
+    }
+    None
 }
 
 /// Eine Transport-Parameter-"Leg" eines Senders (`sender_transport_params_
@@ -151,7 +179,6 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         path: &str,
         body: &[u8],
     ) -> Option<(u16, &'static str, Vec<u8>)> {
-        let prefix = format!("/x-nmos/connection/v1.1/single/senders/{}/", self.sender_id);
         // Leaf-Ressourcen (staged/active/constraints/transporttype/
         // transportfile) sind sowohl mit als auch ohne abschließendes "/"
         // erreichbar — das AMWA-IS-05-01-Testing-Tool ruft beide Formen ab
@@ -161,9 +188,9 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         // liefern) — anders als beim Go-Pendant (`nodes/mock`, dessen
         // `net/http`-Mux ein "/"-Teilbaummuster hätte, das denselben Fehler
         // aber in die andere Richtung machte: falscher Treffer statt keinem,
-        // dort separat gefixt, docs/decisions.md D9).
-        let sub = path.strip_prefix(&prefix)?;
-        let sub = sub.strip_suffix('/').unwrap_or(sub);
+        // dort separat gefixt, docs/decisions.md D9). Prüft seit Nachtrag
+        // 189 alle `API_VERSIONS`, nicht mehr nur v1.1.
+        let sub = strip_versioned_prefix(path, "senders", &self.sender_id)?;
 
         match (method, sub) {
             ("GET", "staged") | ("GET", "active") => {
@@ -321,10 +348,6 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
         path: &str,
         body: &[u8],
     ) -> Option<(u16, &'static str, Vec<u8>)> {
-        let prefix = format!(
-            "/x-nmos/connection/v1.1/single/receivers/{}/",
-            self.receiver_id
-        );
         // Leaf-Ressourcen (staged/active/constraints/transporttype/
         // transportfile) sind sowohl mit als auch ohne abschließendes "/"
         // erreichbar — das AMWA-IS-05-01-Testing-Tool ruft beide Formen ab
@@ -334,9 +357,9 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
         // liefern) — anders als beim Go-Pendant (`nodes/mock`, dessen
         // `net/http`-Mux ein "/"-Teilbaummuster hätte, das denselben Fehler
         // aber in die andere Richtung machte: falscher Treffer statt keinem,
-        // dort separat gefixt, docs/decisions.md D9).
-        let sub = path.strip_prefix(&prefix)?;
-        let sub = sub.strip_suffix('/').unwrap_or(sub);
+        // dort separat gefixt, docs/decisions.md D9). Prüft seit Nachtrag
+        // 189 alle `API_VERSIONS`, nicht mehr nur v1.1.
+        let sub = strip_versioned_prefix(path, "receivers", &self.receiver_id)?;
 
         match (method, sub) {
             ("GET", "staged") | ("GET", "active") => {
@@ -529,5 +552,33 @@ mod tests {
             ));
             assert_eq!(bare, slashed, "leaf {leaf} differs between bare/slashed path");
         }
+    }
+
+    /// Nachtrag 189: v1.2.0 ist wire-kompatibel zu v1.1.x — derselbe
+    /// Zustand muss über beide Versionspfade erreichbar sein (ein
+    /// `Mutex<...>` pro Connection, kein zweiter Zustand pro Version).
+    #[test]
+    fn v12_serves_same_state_as_v11() {
+        let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
+
+        let patch = br#"{"sender_id":"sender-1","master_enable":true,"activation":{"mode":"activate_immediate"}}"#;
+        let (status, _) = body_str(conn.handle(
+            "PATCH",
+            "/x-nmos/connection/v1.2/single/receivers/recv-1/staged",
+            patch,
+        ));
+        assert_eq!(status, 200);
+
+        let (_, v11_active) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/receivers/recv-1/active",
+            b"",
+        ));
+        let (_, v12_active) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.2/single/receivers/recv-1/active",
+            b"",
+        ));
+        assert_eq!(v11_active, v12_active);
     }
 }

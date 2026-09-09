@@ -253,3 +253,45 @@ func TestHandlerBulkReceiversPost(t *testing.T) {
 		t.Fatalf("destination_port after bulk PATCH = %v, want 6000 (real effect, not just a 200 stub)", staged.TransportParams[0]["destination_port"])
 	}
 }
+
+// TestHandlerServesV12AlongsideV11 — Nachtrag 189: AMWA-TV/is-05 v1.2.0 ist
+// wire-kompatibel zu v1.1.x, der Mock-Node bedient seither beide
+// Versionspfade mit denselben Handlern (s. `apiVersions`-Doc). Deckt
+// Discovery, GET/PATCH staged+active und Bulk-POST unter `v1.2` ab —
+// keine Doppelung der v1.1-Testfälle oben, nur der Nachweis, dass derselbe
+// Zustand über beide Versionspfade erreichbar ist.
+func TestHandlerServesV12AlongsideV11(t *testing.T) {
+	store := NewReceiverStore([]string{"recv-1"})
+	h := Handler(store)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec
+	}
+
+	if rec := get("/x-nmos/connection/v1.2/"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `["single/"]` {
+		t.Fatalf("GET v1.2 root status=%d body=%s, want 200 [\"single/\"]", rec.Code, rec.Body.String())
+	}
+
+	body := `{"master_enable":true,"activation":{"mode":"activate_immediate"}}`
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPatch, "/x-nmos/connection/v1.2/single/receivers/recv-1/staged", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH v1.2 staged status = %d, want 200", rec.Code)
+	}
+
+	// dieselbe Ressource muss über beide Versionspfade denselben Zustand
+	// liefern (ein `ReceiverStore`, kein zweiter Zustand pro Version).
+	v11Active := get("/x-nmos/connection/v1.1/single/receivers/recv-1/active")
+	v12Active := get("/x-nmos/connection/v1.2/single/receivers/recv-1/active")
+	if v11Active.Body.String() != v12Active.Body.String() {
+		t.Fatalf("v1.1 active = %s, v1.2 active = %s, want identical (shared state)", v11Active.Body.String(), v12Active.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/x-nmos/connection/v1.2/bulk/receivers", strings.NewReader(`[{"id":"recv-1","params":{"master_enable":false}}]`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST v1.2 bulk/receivers status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+}

@@ -18,6 +18,9 @@ import (
 // implementiert (live an AMWA-`test_37` gefunden) — dieselbe
 // `PatchStaged`-Logik wie das Einzel-PATCH, s. dort. Kein
 // `/bulk/senders`-POST (der Mock-Node hat nie eigene Sender, s. u.).
+// Bedient seit Nachtrag 189 sowohl `v1.1` als auch `v1.2` (s.
+// [apiVersions]) — v1.2.0 ist wire-kompatibel zu v1.1.x, daher dieselben
+// Handler für beide Versionspfade statt einer zweiten Implementierung.
 //
 // Jedes Leaf-Resource (constraints/staged/active/transporttype) wird
 // bewusst SOWOHL ohne als auch mit abschließendem "/" registriert: das
@@ -28,10 +31,32 @@ import (
 // Tool-Lauf gefunden: `test_12_02`/`test_16` schlugen mit `TypeError:
 // list indices must be integers` fehl, weil `GET .../active/` (mit
 // Slash) das Listing-Array statt der Active-Resource lieferte.
+// apiVersions sind die IS-05-Connection-API-Versionen, die dieser
+// Mock-Node parallel bedient: `v1.1` (bisheriger Stand) und `v1.2`
+// (AMWA-TV/is-05 Release v1.2.0, Aug. 2024). v1.2 ist gegenüber v1.1
+// abwärtskompatibel — die einzige inhaltliche Änderung ist, dass weitere
+// Transport-Typen ab v1.2 über das NMOS-"Transports"-Parameter-Register
+// statt fest in der Spec definiert werden; die hier implementierten
+// Pfade/Schemas (staged/active/constraints/transporttype/bulk) sind
+// identisch. Deshalb registriert jede Version dieselben Handler unter
+// ihrem eigenen Pfad-Prefix, statt zwei getrennte Implementierungen zu
+// pflegen.
+var apiVersions = []string{"v1.1", "v1.2"}
+
 func Handler(store *ReceiverStore) http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/", func(w http.ResponseWriter, r *http.Request) {
+	for _, version := range apiVersions {
+		registerVersion(mux, store, version)
+	}
+
+	return mux
+}
+
+func registerVersion(mux *http.ServeMux, store *ReceiverStore, version string) {
+	base := "/x-nmos/connection/" + version + "/"
+
+	mux.HandleFunc("GET "+base, func(w http.ResponseWriter, r *http.Request) {
 		// `net/http`s `ServeMux` behandelt ein auf "/" endendes Muster als
 		// Teilbaum-Wildcard: ohne diesen expliziten Pfad-Vergleich würde
 		// JEDER nicht anderweitig registrierte Unterpfad (z. B.
@@ -42,7 +67,7 @@ func Handler(store *ReceiverStore) http.Handler {
 		// `bulk/receivers`-Pfade, bekamen stattdessen 200 mit dem
 		// Wurzel-Listing-Body). Derselbe Bugtyp wie der bereits oben
 		// gefixte `{id}/`-Fall, hier eine Ebene höher.
-		if r.URL.Path != "/x-nmos/connection/v1.1/" {
+		if r.URL.Path != base {
 			writeError(w, http.StatusNotFound, "not found")
 			return
 		}
@@ -58,18 +83,18 @@ func Handler(store *ReceiverStore) http.Handler {
 	bulkMethodNotAllowed := func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "GET not allowed on bulk resources")
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/bulk/senders", bulkMethodNotAllowed)
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/bulk/receivers", bulkMethodNotAllowed)
+	mux.HandleFunc("GET "+base+"bulk/senders", bulkMethodNotAllowed)
+	mux.HandleFunc("GET "+base+"bulk/receivers", bulkMethodNotAllowed)
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+base+"single/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []string{"senders/", "receivers/"})
 	})
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/senders/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+base+"single/senders/", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []string{})
 	})
 
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET "+base+"single/receivers/", func(w http.ResponseWriter, r *http.Request) {
 		ids := store.IDs()
 		listing := make([]string, len(ids))
 		for i, id := range ids {
@@ -85,7 +110,7 @@ func Handler(store *ReceiverStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, []string{"constraints/", "staged/", "active/", "transporttype/"})
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/", resourceRoot)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/", resourceRoot)
 
 	constraints := func(w http.ResponseWriter, r *http.Request) {
 		if !store.Exists(r.PathValue("id")) {
@@ -94,8 +119,8 @@ func Handler(store *ReceiverStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, Constraints())
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/constraints", constraints)
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/constraints/", constraints)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/constraints", constraints)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/constraints/", constraints)
 
 	transportType := func(w http.ResponseWriter, r *http.Request) {
 		if !store.Exists(r.PathValue("id")) {
@@ -104,8 +129,8 @@ func Handler(store *ReceiverStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, TransportType)
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/transporttype", transportType)
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/transporttype/", transportType)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/transporttype", transportType)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/transporttype/", transportType)
 
 	staged := func(w http.ResponseWriter, r *http.Request) {
 		res, ok := store.Staged(r.PathValue("id"))
@@ -115,10 +140,10 @@ func Handler(store *ReceiverStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, res)
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged", staged)
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/staged/", staged)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/staged", staged)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/staged/", staged)
 
-	mux.HandleFunc("PATCH /x-nmos/connection/v1.1/single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PATCH "+base+"single/receivers/{id}/staged", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "reading request body failed")
@@ -148,7 +173,7 @@ func Handler(store *ReceiverStore) http.Handler {
 	// nie eigene Sender (s. Moduldoku), GET dort bleibt bei 405 (Go
 	// liefert das für POST auf einen nur-GET-registrierten Pfad
 	// automatisch), kein Testfall dieses Projekts braucht mehr.
-	mux.HandleFunc("POST /x-nmos/connection/v1.1/bulk/receivers", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST "+base+"bulk/receivers", func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "reading request body failed")
@@ -188,10 +213,8 @@ func Handler(store *ReceiverStore) http.Handler {
 		}
 		writeJSON(w, http.StatusOK, res)
 	}
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active", active)
-	mux.HandleFunc("GET /x-nmos/connection/v1.1/single/receivers/{id}/active/", active)
-
-	return mux
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/active", active)
+	mux.HandleFunc("GET "+base+"single/receivers/{id}/active/", active)
 }
 
 // parsePatchRequest dekodiert+validiert einen PATCH-`staged`-Body —

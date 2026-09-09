@@ -21825,3 +21825,60 @@ danach stabil. Nicht weiter root-verursacht — für künftige
 Rollen-Neustart-lastige Sitzungen im Hinterkopf behalten.
 
 **Dateien:** `nodes/omp-ograf/src/pipeline.rs`.
+
+## 2026-09-09 (Nachtrag 189) — AMWA-TV/is-05 v1.2.0: zusätzlich neben v1.1 bedient (Nutzerauftrag "es gibt eine neue AMWA IS-05 NMOS version release v1.2.0 ... mach das")
+
+**Ausgangsfrage:** ob die Plattform mit dem neuen IS-05-Release v1.2.0
+(AMWA-TV/is-05, Aug. 2024) kompatibel ist. Recherche (specs.amwa.tv,
+GitHub-Release, Upgrade-Path-Doku, nicht geraten) ergab: v1.2.0 ist
+gegenüber v1.1.x wire-kompatibel — die einzige inhaltliche Änderung ist,
+dass weitere Transport-Typen ab v1.2 über das NMOS-"Transports"-
+Parameter-Register nachgeladen werden, statt fest in der Spec zu stehen;
+zusätzlich empfiehlt v1.2 IS-04 v1.3+ (haben wir bereits, `is04.rs:105`).
+Vorher wurde IS-05 im ganzen Projekt ausschließlich als `v1.1` bedient
+(hartkodierter Pfad, kein Versions-Root-Listing, kein zweiter Server).
+
+**Umsetzung:** Mock-Node (`nodes/mock/internal/connection/handler.go`)
+und die generische Rust-SDK-Connection-API (`nodes/omp-node-sdk/src/
+connection.rs`, genutzt von allen Sender-/Receiver-seitigen Nodes)
+bedienen dieselben Handler jetzt zusätzlich unter `/x-nmos/connection/
+v1.2/` (Go: Registrierung in einer Schleife über `apiVersions =
+["v1.1", "v1.2"]`; Rust: `strip_versioned_prefix` prüft beide Pfade).
+Kein zweiter Zustand pro Version — ein `ReceiverStore`/`Mutex<...>`, über
+beide Pfade erreichbar (Test in beiden Sprachen: PATCH über v1.2,
+GET-Vergleich v1.1 vs. v1.2 liefert identischen Body). Clients
+(orchestrator/`internal/is05/client.go`, alle Node-eigenen Aufrufer wie
+`playout`/`omp-audio-monitor`) bleiben bewusst auf `v1.1` — das war die
+Aufgabe ("v1.2 zusätzlich zu v1.1"), kein Ersatz, kein Zwang für
+bestehende Aufrufer umzustellen.
+
+CI (`.github/workflows/ci.yml`) führt die AMWA-IS-05-01-Suite jetzt ein
+zweites Mal mit `--version v1.2` gegen denselben schon laufenden
+Mock-Node aus (kein zweiter Node-Start nötig, da derselbe Prozess beide
+Versionen bedient) — dieselbe Ausnahmeliste wie beim v1.1-Lauf (D11:
+`auto_connection_1/2/3/4/5/6/13`, alle wegen `-senders 0`), da die
+Ursache versionunabhängig ist.
+
+**Live verifiziert** (eigenständig gestarteter Mock-Node, `-senders 0
+-receivers 1`, echte curl-Aufrufe, nicht nur Unit-Tests): `GET .../v1.2/`
+→ `["single/"]`, `GET .../v1.2/single/receivers/` listet die echte ID,
+`GET .../v1.2/.../transporttype` → `"urn:x-nmos:transport:rtp"`, `PATCH
+.../v1.2/.../staged` mit `activation.mode=activate_immediate` löst
+echte Aktivierung aus, `GET .../v1.2/.../active` zeigt die aufgelösten
+`auto`-Transport-Parameter (Port 5004 etc.) — vollständiger
+Discovery→Stage→Activate-Zyklus über den neuen Pfad, nicht nur
+Struktur-Check. `go test`/`go vet` (`nodes/mock`, alle Pakete) und
+`cargo test -p omp-node-sdk` grün, inkl. zwei neuer Tests
+(`TestHandlerServesV12AlongsideV11`, `v12_serves_same_state_as_v11`).
+
+**Nicht umgesetzt (bewusst außerhalb des Auftrags):** kein
+`/x-nmos/connection/`-Wurzel-Endpoint, der verfügbare Versionen
+auflistet (AMWA-Testing-Tool wird ohnehin mit explizitem `--version`
+aufgerufen, kein Bedarf für Auto-Discovery in diesem Projekt) — und
+keine Transports-Parameter-Register-Abstraktion (wir kennen nur RTP +
+das proprietäre `urn:x-omp:transport:mxl`, kein Node braucht einen
+weiteren Standard-Transporttyp).
+
+**Dateien:** `nodes/mock/internal/connection/handler.go`,
+`nodes/mock/internal/connection/handler_test.go`,
+`nodes/omp-node-sdk/src/connection.rs`, `.github/workflows/ci.yml`.
