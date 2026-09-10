@@ -57,6 +57,14 @@ screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 (Both docs are in German — this README is the only English-language
 entry point so far.)
 
+## Demo
+
+[![Watch the demo video](docs/screenshots/flow-editor.png)](docs/demo/OpenMediaPlatform.mp4)
+
+_~5 min walkthrough of the UI in action — node catalog, Flow Editor
+wiring, multi-host operation, workflows. Click the image to play the
+video (opens GitHub's own player)._
+
 ## Screenshots
 
 ![Flow editor with running node instances](docs/screenshots/flow-editor.png)
