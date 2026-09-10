@@ -13,8 +13,6 @@
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
-
-
 New, standalone project (separate from `PIPELINE CONTROLLER`).
 
 ## An Open-Source Orchestrator for Broadcast – A Current Status
@@ -61,17 +59,12 @@ entry point so far.)
 
 ## Demo
 
-[![Watch the demo video](docs/screenshots/flow-editor.png)](docs/demo/OpenMediaPlatform.mp4)
-
-_~5 min walkthrough of the UI in action — node catalog, Flow Editor
-wiring, multi-host operation, workflows. Click the image to play the
-video (opens GitHub's own player)._
-
-## Screenshots
-
 https://github.com/user-attachments/assets/f347147b-6052-4a5c-af90-4a5c946592a1
 
+_~5 min walkthrough of the UI in action — node catalog, Flow Editor
+wiring, multi-host operation, workflows._
 
+## Screenshots
 
 ![Flow editor with running node instances](docs/screenshots/flow-editor.png)
 
