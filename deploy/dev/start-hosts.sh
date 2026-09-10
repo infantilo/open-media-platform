@@ -18,17 +18,33 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BIN="$ROOT_DIR/bin/omp-host-agent"
-CATALOG="/tmp/host-catalog.json"
+# Direkt deploy/catalog.json statt einer Kopie nach /tmp (Nutzerfund
+# 2026-09-10): host-agent/internal/catalog/catalog.go löst relative
+# Kommandopfade wie "../nodes/target/debug/omp-source" relativ zum
+# Verzeichnis der Katalog-DATEI auf, nicht zum cwd des Prozesses. Eine
+# Kopie nach /tmp/host-catalog.json verschob dieses Basisverzeichnis
+# nach /tmp, wodurch der Pfad auf /nodes/target/debug/omp-source zeigte
+# statt auf OpenMediaPlatform/nodes/target/debug/omp-source — jeder
+# Node-Start auf einem simulierten Host schlug mit "no such file or
+# directory" fehl. deploy/catalog.json ist ohnehin schon die Quelle der
+# Wahrheit für den Instanz-Launcher (make start setzt OMP_CATALOG_PATH
+# darauf); die Host-Agents lesen dieselbe Datei direkt statt einer
+# tmpfs-Kopie.
+CATALOG="$ROOT_DIR/deploy/catalog.json"
 
 mkdir -p "$ROOT_DIR/bin"
 
-# /tmp ist tmpfs und überlebt einen Neustart nicht (gleicher Grund wie
-# OMP_MXL_DOMAIN in start-omp.sh) — deploy/catalog.json ist bereits die
-# Quelle der Wahrheit für den Instanz-Launcher (make start setzt
-# OMP_CATALOG_PATH darauf), hier nur eine Kopie für die Host-Agents
-# (die ihren eigenen, host-lokalen Katalog-Pfad lesen, s. host-agent/
-# main.go OMP_HOST_AGENT_CATALOG_PATH).
-cp "$ROOT_DIR/deploy/catalog.json" "$CATALOG"
+# mxl.env (LD_LIBRARY_PATH für libmxl.so) muss VOR dem Start gesourct sein
+# — jeder von einem Host-Agent gestartete Node-Prozess erbt dessen
+# Environment, exakt wie beim Orchestrator selbst (siehe start-omp.sh).
+# Ohne das crash-loopen MXL-Nodes auf den simulierten Hosts mit "libmxl.so:
+# cannot open shared object file" (Nutzerfund 2026-09-10, beim Testen von
+# omp-source auf Regie-Host-B). Kein Fehler, falls die Datei fehlt.
+MXL_ENV_FILE="$ROOT_DIR/deploy/dev/mxl.env"
+if [ -f "$MXL_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$MXL_ENV_FILE"
+fi
 
 echo "==> Host-Agent-Binary bauen"
 ( cd "$ROOT_DIR/host-agent" && go build -o "$BIN" . )

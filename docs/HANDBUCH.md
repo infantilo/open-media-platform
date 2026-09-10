@@ -71,8 +71,10 @@ Neustarts hinweg — ein erneuter `make hosts`-Aufruf registriert wieder
 dieselben zwei Hosts (an die bestehende Zonen-Zuordnungen/Workflows
 anknüpfen), keine neuen. Idempotent: ein bereits laufender Agent wird
 übersprungen. Beide lesen denselben Katalog wie der Instanz-Launcher
-(`deploy/catalog.json`, nach `/tmp/host-catalog.json` kopiert, weil
-`/tmp` einen Neustart nicht übersteht).
+(`deploy/catalog.json` direkt — eine frühere Kopie nach
+`/tmp/host-catalog.json` verschob das Basisverzeichnis für relative
+Kommandopfade und ließ jeden Node-Start auf einem simulierten Host
+fehlschlagen, Nutzerfund 2026-09-10).
 
 ```sh
 deploy/dev/stop-hosts.sh   # stoppt beide wieder (state.json bleibt erhalten)
