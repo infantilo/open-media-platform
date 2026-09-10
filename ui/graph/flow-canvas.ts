@@ -2941,6 +2941,21 @@ export class FlowCanvas extends HTMLElement {
       };
     }
 
+    // Nutzerfund 2026-09-10: eine neue Gruppe mit Mitgliedern auf
+    // uneinheitlichen Hosts landet in der "mixed"-Lane (#zoneIdForGroup),
+    // aber die Mittelpunkt-Position oben ist der Durchschnitt der
+    // Mitglieder-LANE-Koordinaten (z. B. lokale + Regie-Host-B-Lane) und
+    // fällt damit fast nie in die tatsächliche "mixed"-Lane, die erst
+    // NACH allen Host-Lanes beginnt — die Kachel rendert dadurch
+    // irgendwo zwischen fremden Lanes und wirkt verschwunden, bis der
+    // nächste #fetchAndRender() (SSE-getrieben, kein Timer) sie über
+    // #arrangeIntoLanes neu einordnet. Dieselbe Klasse Bug wie beim
+    // Ziehen (s. #zoneIdForTileId-Doku), hier aber im Erzeugen selbst —
+    // sofort korrigieren statt auf den nächsten Refresh zu warten.
+    if (this.#hostViewEnabled && this.#scope === null) {
+      this.#arrangeIntoLanes(this.#rootZoneTiles());
+    }
+
     this.#selectedIds = new Set();
     this.#saveLayout();
     this.#render();
