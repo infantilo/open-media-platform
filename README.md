@@ -13,6 +13,8 @@
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
+
+
 New, standalone project (separate from `PIPELINE CONTROLLER`).
 
 ## An Open-Source Orchestrator for Broadcast – A Current Status
@@ -66,6 +68,8 @@ wiring, multi-host operation, workflows. Click the image to play the
 video (opens GitHub's own player)._
 
 ## Screenshots
+
+https://github.com/user-attachments/assets/f347147b-6052-4a5c-af90-4a5c946592a1
 
 
 
