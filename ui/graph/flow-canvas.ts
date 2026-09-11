@@ -4516,17 +4516,40 @@ export class FlowCanvas extends HTMLElement {
       this.#panelContent.appendChild(this.#buildMxfPlayerSettingsSection());
     }
 
+    // AMWA BCP-008 (Nutzerauftrag 2026-09-11 "führe das BCP.008 im
+    // readme noch wichtig an ... eigenes Statuspanel bauen"): erkannt
+    // wie beim MXF-Player-Sonderfall oben — über das Vorhandensein
+    // eines charakteristischen, node-typ-unabhängigen Param-Namens
+    // (`monitor.overallStatus`, den `omp_node_sdk::bcp008::Monitor`
+    // auf JEDEM Node setzt, der ihn einbindet), nicht über einen
+    // Node-"type"-Vergleich. Blendet die 18 rohen `monitor.*`-Zeilen
+    // aus der generischen Liste unten aus (s. `isBcp008Param` weiter
+    // unten) — die gruppierte, farbcodierte Darstellung hier ersetzt
+    // sie vollständig, statt sie nur zu ergänzen (anders als beim
+    // MXF-Sonderfall, wo die generische Liste weiterhin auch
+    // programGroups/shufflePresets zeigt).
+    const hasBcp008Monitor = descriptor.parameters.some((p) => p.name === "monitor.overallStatus");
+    if (hasBcp008Monitor) {
+      this.#panelContent.appendChild(await this.#buildBcp008Section(nodeId, descriptor));
+    }
+
     for (const param of descriptor.parameters) {
+      if (hasBcp008Monitor && isBcp008Param(param.name)) continue;
       const value = await this.#fetchParamValue(nodeId, param.name);
       this.#panelContent.appendChild(this.#buildParamRow(nodeId, param, value));
     }
 
-    if (descriptor.methods.length > 0) {
+    // `monitor.resetCountersAndMessages` bekommt schon einen eigenen
+    // Button im BCP-008-Abschnitt oben — hier nicht doppelt zeigen.
+    const remainingMethods = descriptor.methods.filter(
+      (m) => !(hasBcp008Monitor && m.name === "monitor.resetCountersAndMessages"),
+    );
+    if (remainingMethods.length > 0) {
       const hr = document.createElement("hr");
       hr.style.borderColor = "var(--omp-border)";
       this.#panelContent.appendChild(hr);
     }
-    for (const method of descriptor.methods) {
+    for (const method of remainingMethods) {
       const btn = document.createElement("button");
       btn.textContent = method.name;
       btn.style.cssText = "display:block;margin:6px 0;cursor:pointer;";
@@ -4666,6 +4689,161 @@ export class FlowCanvas extends HTMLElement {
     });
 
     wrapper.append(toggleBtn, body);
+    return wrapper;
+  }
+
+  // AMWA BCP-008 (`docs/decisions.md` BCP-008-Nachtrag, Nutzerwunsch
+  // 2026-09-11 "eigenes Statuspanel bauen"): gruppierte, farbcodierte
+  // Darstellung von Overall/Link/Sync/Connection-oder-Transmission/
+  // Stream-oder-Essenz statt der 18 rohen `monitor.*`-Zeilen aus der
+  // generischen Liste (die werden für Nodes mit BCP-008-Support
+  // deshalb oben per `isBcp008Param` ausgeblendet). Receiver- vs.
+  // Sender-Vokabular (`connectionStatus`/`streamStatus` vs.
+  // `transmissionStatus`/`essenceStatus`) wird am Vorhandensein von
+  // `monitor.transmissionStatus` erkannt, exakt wie `omp_node_sdk::
+  // bcp008::Monitor::activity_name`/`content_name` es serverseitig
+  // schon unterscheiden.
+  async #buildBcp008Section(nodeId: string, descriptor: Descriptor): Promise<HTMLElement> {
+    const isSender = descriptor.parameters.some((p) => p.name === "monitor.transmissionStatus");
+    const activityName = isSender ? "transmissionStatus" : "connectionStatus";
+    const contentName = isSender ? "essenceStatus" : "streamStatus";
+
+    const names = [
+      "monitor.overallStatus",
+      "monitor.overallStatusMessage",
+      "monitor.linkStatus",
+      "monitor.linkStatusMessage",
+      "monitor.externalSynchronizationStatus",
+      "monitor.externalSynchronizationStatusMessage",
+      "monitor.synchronizationSourceId",
+      `monitor.${activityName}`,
+      `monitor.${activityName}Message`,
+      `monitor.${contentName}`,
+      `monitor.${contentName}Message`,
+      "monitor.statusReportingDelay",
+      "monitor.autoResetCountersAndMessages",
+    ];
+    const entries = await Promise.all(
+      names.map(async (n) => [n, await this.#fetchParamValue(nodeId, n)] as const),
+    );
+    const values = Object.fromEntries(entries) as Record<string, unknown>;
+
+    const wrapper = document.createElement("div");
+    wrapper.setAttribute("data-role", "bcp008-section");
+    wrapper.style.cssText =
+      "margin:8px 0 14px 0;padding:8px;border:1px solid var(--omp-border,#444);border-radius:4px;";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:6px;font-weight:600;";
+    const overallStatus = String(values["monitor.overallStatus"] ?? "");
+    const overallDot = document.createElement("span");
+    overallDot.style.cssText =
+      `display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0;` +
+      `background:${bcp008StatusColor(overallStatus)};`;
+    const overallLabel = document.createElement("span");
+    overallLabel.textContent = `BCP-008: ${overallStatus || "–"}`;
+    heading.append(overallDot, overallLabel);
+    wrapper.appendChild(heading);
+
+    const overallMessage = values["monitor.overallStatusMessage"];
+    if (overallMessage) {
+      const msgEl = document.createElement("div");
+      msgEl.style.cssText = "font-size:11px;color:var(--omp-text-dim,#888);margin:0 0 8px 0;";
+      msgEl.textContent = String(overallMessage);
+      wrapper.appendChild(msgEl);
+    }
+
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;font-size:11px;";
+    const domainRows: Array<[string, string, string]> = [
+      ["Link", "monitor.linkStatus", "monitor.linkStatusMessage"],
+      ["Sync", "monitor.externalSynchronizationStatus", "monitor.externalSynchronizationStatusMessage"],
+      [isSender ? "Transmission" : "Connection", `monitor.${activityName}`, `monitor.${activityName}Message`],
+      [isSender ? "Essence" : "Stream", `monitor.${contentName}`, `monitor.${contentName}Message`],
+    ];
+    for (const [label, valueName, msgName] of domainRows) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;align-items:center;gap:5px;";
+      const status = String(values[valueName] ?? "");
+      const dot = document.createElement("span");
+      dot.style.cssText =
+        `display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;` +
+        `background:${bcp008StatusColor(status)};`;
+      const text = document.createElement("span");
+      text.textContent = `${label}: ${status || "–"}`;
+      const message = values[msgName];
+      if (message) row.title = String(message);
+      row.append(dot, text);
+      grid.appendChild(row);
+    }
+    wrapper.appendChild(grid);
+
+    const syncSource = values["monitor.synchronizationSourceId"];
+    if (syncSource) {
+      const syncRow = document.createElement("div");
+      syncRow.style.cssText = "font-size:11px;color:var(--omp-text-dim,#888);margin-top:6px;";
+      syncRow.textContent = `Sync-Quelle: ${syncSource}`;
+      wrapper.appendChild(syncRow);
+    }
+
+    const controls = document.createElement("div");
+    controls.style.cssText =
+      "display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11px;flex-wrap:wrap;";
+
+    const autoResetLabel = document.createElement("label");
+    autoResetLabel.style.cssText = "display:flex;align-items:center;gap:4px;cursor:pointer;";
+    const autoResetCheckbox = document.createElement("input");
+    autoResetCheckbox.type = "checkbox";
+    autoResetCheckbox.checked = values["monitor.autoResetCountersAndMessages"] === true;
+    autoResetCheckbox.addEventListener("change", async () => {
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/params/monitor.autoResetCountersAndMessages`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: autoResetCheckbox.checked }),
+      });
+      if (!res.ok) this.#showToast(`Auto-Reset ändern fehlgeschlagen: ${(await res.text()) || res.status}`);
+    });
+    autoResetLabel.append(autoResetCheckbox, document.createTextNode("Auto-Reset"));
+    controls.appendChild(autoResetLabel);
+
+    const delayLabel = document.createElement("label");
+    delayLabel.style.cssText = "display:flex;align-items:center;gap:4px;";
+    const delayInput = document.createElement("input");
+    delayInput.type = "number";
+    delayInput.min = "0";
+    delayInput.style.width = "64px";
+    delayInput.value = String(values["monitor.statusReportingDelay"] ?? "");
+    delayInput.addEventListener("change", async () => {
+      const res = await apiFetch(`/api/v1/nodes/${nodeId}/params/monitor.statusReportingDelay`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: Number(delayInput.value) || 0 }),
+      });
+      if (!res.ok) this.#showToast(`Delay ändern fehlgeschlagen: ${(await res.text()) || res.status}`);
+    });
+    delayLabel.append(document.createTextNode("Delay (ms)"), delayInput);
+    controls.appendChild(delayLabel);
+
+    const resetBtn = document.createElement("button");
+    resetBtn.textContent = "Zähler zurücksetzen";
+    resetBtn.style.cssText = "cursor:pointer;";
+    resetBtn.addEventListener("click", async () => {
+      try {
+        const res = await apiFetch(`/api/v1/nodes/${nodeId}/methods/monitor.resetCountersAndMessages`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          this.#showToast(`Reset fehlgeschlagen: ${(await res.text()) || res.status}`);
+          return;
+        }
+        await this.#renderGenericPanel(nodeId);
+      } catch (err) {
+        this.#showToast(`Reset fehlgeschlagen: ${err}`);
+      }
+    });
+    controls.appendChild(resetBtn);
+
+    wrapper.appendChild(controls);
     return wrapper;
   }
 
@@ -5722,6 +5900,38 @@ function healthColor(health: string): string {
     default:
       return "#e0a030";
   }
+}
+
+// AMWA BCP-008 (`docs/decisions.md` BCP-008-Nachtrag): deckt das
+// gesamte Vokabular aller vier Domains ab (Standard-Status, `link`s
+// AllUp/SomeDown/AllDown, `externalSynchronizationStatus`s NotUsed) —
+// funktional identische Stufen wie `omp_node_sdk::bcp008::HealthLevel`,
+// hier nur auf Farben statt Enum-Varianten abgebildet.
+function bcp008StatusColor(status: string): string {
+  switch (status) {
+    case "Healthy":
+    case "AllUp":
+      return "#4caf50";
+    case "PartiallyHealthy":
+    case "SomeDown":
+      return "#e0a030";
+    case "Unhealthy":
+    case "AllDown":
+      return "#e74c3c";
+    case "Inactive":
+    case "NotUsed":
+      return "#888";
+    default:
+      return "#555";
+  }
+}
+
+// Ob `name` zum BCP-008-Monitor gehört (`omp_node_sdk::bcp008::
+// Monitor::param_specs`s `monitor.`-Präfix) — für Nodes mit BCP-008-
+// Support werden diese Params aus der generischen Panel-Liste
+// ausgeblendet, `#buildBcp008Section` zeigt sie stattdessen gruppiert.
+function isBcp008Param(name: string): boolean {
+  return name.startsWith("monitor.");
 }
 
 // Port-Füllfarbe nach IS-04-Format-URN (unverändert aus dem Graph-API,

@@ -23411,3 +23411,59 @@ Channel-Player/Playout-Automation-Kapitel-6-Erwähnungen — das
 nachzuholen wäre ein eigener, hier nicht beauftragter Umfang).
 
 **Dateien:** `README.md`.
+
+## 2026-09-11 (Nachtrag 214) — Eigenes BCP-008-Statuspanel im Flow-Editor (Nutzerfrage "gibt es für BCP008 eine anzeige/dashboard?")
+
+**Kontext:** Direkte Fortsetzung von Nachtrag 207-213 — auf die Frage,
+ob es eine dedizierte BCP-008-Anzeige gibt, ehrlich verneint (bisher
+nur die generische, flache B6-Param-Liste) und auf Nutzerwunsch
+(AskUserQuestion) ein eigenes, gruppiertes Panel gebaut.
+
+**Erkennung wie beim bestehenden MXF-Player-Sonderfall** (`docs/
+decisions.md` 2026-08-06): über das Vorhandensein von
+`monitor.overallStatus` im Descriptor (node-typ-unabhängig, kein
+`type`-Vergleich — `GraphNode` kennt den Katalog-Typ ohnehin nicht).
+Anders als beim MXF-Sonderfall werden die 18 rohen `monitor.*`-Zeilen
+dabei aus der generischen Liste komplett AUSGEBLENDET (neue Funktion
+`isBcp008Param`), statt nur ergänzt — die gruppierte Darstellung
+ersetzt sie vollständig, weniger Redundanz/Scrollen im ohnehin schmalen
+Seitenpanel. Receiver- vs. Sender-Vokabular
+(`connectionStatus`/`streamStatus` vs. `transmissionStatus`/
+`essenceStatus`) wird am Vorhandensein von `monitor.transmissionStatus`
+erkannt — spiegelt serverseitig exakt `omp_node_sdk::bcp008::
+Monitor::activity_name`/`content_name`.
+
+**Neuer Abschnitt `#buildBcp008Section`** (`ui/graph/flow-canvas.ts`):
+Overall-Status als großer farbiger Punkt + Label oben (mit Meldung
+darunter, falls vorhanden), darunter ein 2×2-Raster der vier Domains
+(Link/Sync/Connection-oder-Transmission/Stream-oder-Essenz) mit je
+einem kleineren farbigen Punkt (Meldung als `title`-Tooltip), die
+Sync-Quelle als Zeile falls gesetzt, sowie Auto-Reset-Checkbox/Delay-
+Zahlenfeld (beide live per PATCH) und ein "Zähler zurücksetzen"-Button
+(POST `monitor.resetCountersAndMessages`, danach kompletter Panel-
+Reload wie bei jeder anderen Methode). Neue Modul-Funktion
+`bcp008StatusColor` deckt das VOLLSTÄNDIGE Vokabular aller vier
+Domains ab (`Healthy`/`AllUp`→grün, `PartiallyHealthy`/`SomeDown`→
+Amber, `Unhealthy`/`AllDown`→rot, `Inactive`/`NotUsed`→grau) —
+funktional dieselben Stufen wie `omp_node_sdk::bcp008::HealthLevel`,
+nur auf Farben statt Enum-Varianten abgebildet.
+
+**Live verifiziert (kein Raten, §0 Punkt 3):** `deno check`/`deno test
+ui/` (92/92) grün, `deno bundle` neu gebaut. Per echtem, hand-
+gerolltem CDP-Skript (kein Puppeteer in dieser Sandbox verfügbar,
+`feedback_cdp_browser_test_no_tool_available`) einen echten Klick
+(nicht nur `.click()`, sondern `Input.dispatchMouseEvent` press+release
+auf die tatsächlichen Bildschirmkoordinaten der Kachel) auf eine
+disponible Test-Workflow-Rolle (`omp-2110-gateway-ingest`, aus dem in
+Nachtrag 210 neu aufgenommenen Katalogeintrag — reine Software, kein
+Hardware-Blocker) ausgelöst: Panel öffnete sich, zeigte korrekt
+`BCP-008: Unhealthy` (rot, weil kein echtes 2110-Signal ankommt),
+`Link: AllUp` (grün), `Sync: NotUsed` (grau), `Connection: Healthy`
+(grün, optimistischer Tick), `Stream: Unhealthy` (rot, mit Tooltip
+"kein dekodiertes Videobild seit dem letzten Tick") — alle vier
+Domains unabhängig und korrekt gefärbt, keine rohen `monitor.*`-Zeilen
+mehr darunter. Test-Workflow danach gestoppt und gelöscht, Chromium-
+Prozess beendet.
+
+**Dateien:** `ui/graph/flow-canvas.ts`, `ui/dist/shell.js` (neu
+gebaut).
