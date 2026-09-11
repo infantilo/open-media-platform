@@ -22500,3 +22500,47 @@ danach vollständig über die Orchestrator-API entfernt.
 
 **Dateien:** `ui/graph/flow-canvas.ts`
 (`#arrangeIntoLanes`/`#handleServerEvent`).
+
+## 2026-09-11 (Nachtrag 201) — Rollen-Kacheln im laufenden Workflow lagen exakt übereinander (Nutzerreport "wenn du im floweditor in den workflow node doppelclicks dann siehst du darin die nodes überlappt")
+
+**Kontext:** Direkter Nutzerreport nach dem Start des echten
+"Playout"-Workflows — anderer Renderpfad als Nachtrag 200 (Host-Ansicht-
+Lanes): Doppelklick auf die kollabierte Workflow-Kachel ruft
+`enterWorkflowEditScope()` → bei einem LAUFENDEN Workflow
+`#renderRunningWorkflowScope()` (echte Runtime-Nodes, echte Ports).
+
+**Root Cause, live reproduziert (kein Raten):** `#renderTile()`
+positioniert jede Kachel über `this.#positions[tile.id] ?? {x:0,y:0}`.
+Die einzige Stelle, die fehlende Positionen zuweist
+(`#assignMissingPositions()`), schließt Workflow-Mitgliedsknoten am
+Root bewusst aus (`workflowMemberIds`-Filter — ihre kollabierte
+Darstellung ist die EINE Workflow-Kachel, s. Nutzerwunsch 2026-07-26).
+`#renderRunningWorkflowScope()` selbst rief nirgends eine eigene
+Positions-Zuweisung für seine eigenen Rollen-Nodes auf. Da jeder
+Workflow-Neustart neue Instanz-/Node-IDs erzeugt (kein stabiler Bezug
+über Neustarts hinweg), hatte KEINE der fünf Playout-Rollen-Nodes
+jemals eine gespeicherte Position — alle fielen auf denselben
+`{x:0,y:0}`-Fallback und lagen exakt übereinander. Per CDP-Skript am
+echten laufenden "Playout"-Workflow bestätigt: alle fünf
+`transform="translate(0,0)"` vor dem Fix.
+
+**Fix:** Kernlogik von `#assignMissingPositions()` (Kollisions-
+vermeidung über `findFreePosition`) in eine neue
+`#assignMissingPositionsForIds(ids)` ausgelagert, aufrufbar für eine
+beliebige ID-Liste statt nur `#itemsAtScope()`. `#renderRunningWorkflowScope()`
+ruft sie jetzt für genau ihre eigenen Rollen-Node-IDs auf, NACH dem
+Befüllen von `#tileHeightById` (reale statt geratene Kachelgrößen) und
+VOR dem eigentlichen Render-Durchlauf, speichert bei Änderung
+(`#saveLayout()`).
+
+**Live verifiziert** (echter laufender "Playout"-Workflow, nicht
+simuliert): vor dem Fix alle fünf Rollen-Kacheln bei `(0,0)`; nach dem
+Fix fünf klar getrennte Grid-Positionen, keine Überlappung. Zweiter
+Durchlauf nach komplettem Seiten-Reload zeigt BYTE-IDENTISCHE
+Positionen — bestätigt, dass die neu vergebenen Positionen tatsächlich
+serverseitig persistiert wurden, nicht nur clientseitig neu gewürfelt.
+`deno check`/`deno test ui/` (92/92) grün.
+
+**Dateien:** `ui/graph/flow-canvas.ts`
+(`#assignMissingPositions`/`#assignMissingPositionsForIds`/
+`#renderRunningWorkflowScope`).

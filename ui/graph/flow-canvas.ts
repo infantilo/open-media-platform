@@ -1198,9 +1198,36 @@ export class FlowCanvas extends HTMLElement {
   // am Root gilt die Kollabierung, innerhalb einer B5-Gruppe bleiben
   // Mitglieder normal sichtbar/positionierbar.
   #assignMissingPositions(save = true): boolean {
-    let changed = false;
     const items = this.#itemsAtScope();
     const workflowMemberIds = this.#scope === null ? this.#allWorkflowMemberNodeIds() : new Set<string>();
+    const changed = this.#assignMissingPositionsForIds([
+      ...items.nodeIds.filter((nodeId) => !workflowMemberIds.has(nodeId)),
+      // Dieselbe Ausnahme wie in `#buildTilesAtScope` für eine Gruppe,
+      // die zugleich eine Workflow-Definition ist — ihre kollabierte
+      // Darstellung ist die Workflow-Kachel unten, nicht die Gruppe
+      // selbst (sonst dieselbe Slot-Verschwendung wie oben, nur für
+      // Gruppen statt einzelne Knoten).
+      ...items.groupIds.filter((groupId) => !(this.#scope === null && this.#groupTree.groups[groupId]?.workflowId)),
+      ...this.#workflowEditRolePlaceholderIds(),
+      ...this.#allWorkflowTileIds(),
+    ]);
+    if (changed && save) this.#saveLayout();
+    return changed;
+  }
+
+  // Kern von #assignMissingPositions() (Kollisionsvermeidung per
+  // findFreePosition), aber gezielt für eine übergebene ID-Liste statt
+  // immer nur für #itemsAtScope() aufrufbar — s. #renderRunningWorkflowScope
+  // Live-Fund 2026-09-11 ("Nodes im laufenden Workflow überlappen beim
+  // Doppelklick"): dessen Rollen-Nodes sind über #assignMissingPositions()
+  // selbst NIE erreichbar, weil `workflowMemberIds` sie dort (§ oben:
+  // "kollabierte EINE Wurfklappe-Kachel am Root") absichtlich ausschließt
+  // — ohne einen eigenen Aufruf blieben frisch gestartete (neue Instanz-
+  // ID bei jedem Workflow-Neustart) Rollen-Nodes komplett ohne Position
+  // und landeten alle bei `#renderTile`s `{x:0,y:0}`-Fallback exakt
+  // übereinander.
+  #assignMissingPositionsForIds(ids: string[]): boolean {
+    let changed = false;
     // Index für defaultPosition() startet bei der Anzahl bereits
     // bekannter Positionen, nicht bei 0 innerhalb dieses Aufrufs: die
     // Reihenfolge von items.nodeIds folgt der Registry-Rückgabe (z. B.
@@ -1226,19 +1253,7 @@ export class FlowCanvas extends HTMLElement {
       width: NODE_WIDTH,
       height: this.#tileHeightById.get(id) ?? nodeHeight(0, 0),
     }));
-    for (
-      const id of [
-        ...items.nodeIds.filter((nodeId) => !workflowMemberIds.has(nodeId)),
-        // Dieselbe Ausnahme wie in `#buildTilesAtScope` für eine Gruppe,
-        // die zugleich eine Workflow-Definition ist — ihre kollabierte
-        // Darstellung ist die Workflow-Kachel unten, nicht die Gruppe
-        // selbst (sonst dieselbe Slot-Verschwendung wie oben, nur für
-        // Gruppen statt einzelne Knoten).
-        ...items.groupIds.filter((groupId) => !(this.#scope === null && this.#groupTree.groups[groupId]?.workflowId)),
-        ...this.#workflowEditRolePlaceholderIds(),
-        ...this.#allWorkflowTileIds(),
-      ]
-    ) {
+    for (const id of ids) {
       if (!this.#positions[id]) {
         const height = this.#tileHeightById.get(id) ?? nodeHeight(0, 0);
         const pos = findFreePosition(occupied, nextIndex, NODE_WIDTH, height);
@@ -1248,7 +1263,6 @@ export class FlowCanvas extends HTMLElement {
         changed = true;
       }
     }
-    if (changed && save) this.#saveLayout();
     return changed;
   }
 
@@ -1872,6 +1886,21 @@ export class FlowCanvas extends HTMLElement {
         this.#portLocation.set(p.id, { tileId: tile.id, side: "output", index: i, count: tile.outputs.length })
       );
     }
+
+    // Live-Fund 2026-09-11 (Nutzerreport: "im Workflow doppelclickt...
+    // siehst du darin die Nodes überlappt"): ein Rollen-Node bekommt bei
+    // JEDEM Workflow-Start eine neue Instanz-/Node-ID (kein stabiler
+    // Bezug über Neustarts hinweg) und ist über die normale
+    // #assignMissingPositions() nie erreichbar — die schließt Workflow-
+    // Mitgliedsknoten am Root bewusst aus (kollabierte EINE Kachel dort,
+    // s. dortige Doku). Ohne einen eigenen Aufruf hier blieb jeder
+    // frisch gestartete Rollen-Node komplett ohne gespeicherte Position
+    // und landete bei #renderTile()s `{x:0,y:0}`-Fallback exakt
+    // übereinander mit allen anderen. #tileHeightById ist an dieser
+    // Stelle bereits mit den echten Port-Höhen dieser Runde befüllt (s.
+    // Schleife oben), findFreePosition() bekommt also reale statt
+    // geratener Kachelgrößen.
+    if (this.#assignMissingPositionsForIds(tiles.map((t) => t.id))) this.#saveLayout();
 
     for (const tile of tiles) {
       this.#viewportGroup.appendChild(this.#renderTile(tile));
