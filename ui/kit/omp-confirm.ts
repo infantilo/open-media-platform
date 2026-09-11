@@ -15,7 +15,21 @@ TEMPLATE.innerHTML = `
     :host {
       position: fixed;
       inset: 0;
-      z-index: 1100;
+      /* Live-Fund 2026-09-11 (Nutzerreport: "sicherheits abfrage dialog
+         sieht man nicht, erst wenn man verlassen drückt"): der
+         grafische Rollen-Designer (ui/shell/workflows-view.ts
+         #openRoleDesigner) läuft als eigenes Vollbild-Overlay mit
+         z-index:2000 und undurchsichtigem Hintergrund — ein confirmDialog()
+         aus einer Aktion INNERHALB dieses Overlays (z. B. Node
+         entfernen) landete darunter und war bis zum Schließen des
+         Overlays unsichtbar, aber weiterhin bedienbar (Fokus/Enter
+         gingen an den unsichtbaren Dialog). Dasselbe Muster nutzen
+         ui/shell/auth.ts (Login-Overlay) und ui/shell/host-wizard.ts
+         (ebenfalls z-index:2000/1100). confirmDialog() ist als
+         universeller "wirklich sicher?"-Baustein gedacht, der IMMER
+         über jedem aufrufenden Overlay liegen muss — deshalb bewusst
+         höher als jeder bekannte Overlay-z-index in der Shell. */
+      z-index: 3000;
       display: flex;
       align-items: center;
       justify-content: center;

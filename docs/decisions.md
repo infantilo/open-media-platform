@@ -22544,3 +22544,51 @@ serverseitig persistiert wurden, nicht nur clientseitig neu gewürfelt.
 **Dateien:** `ui/graph/flow-canvas.ts`
 (`#assignMissingPositions`/`#assignMissingPositionsForIds`/
 `#renderRunningWorkflowScope`).
+
+## 2026-09-11 (Nachtrag 202) — Sicherheitsabfrage im grafischen Rollen-Designer unsichtbar (Nutzerreport "sieht man das sicherheits abfrage dialog nicht. erst wenn man verlassen drück tucht es auf. z-index?")
+
+**Kontext:** Nutzer hatte den Verdacht selbst schon korrekt benannt.
+Direkt am Code bestätigt, kein Raten: der grafische Rollen-Designer
+(`ui/shell/workflows-view.ts#openRoleDesigner`) läuft als eigenes
+Vollbild-Overlay (`position:fixed;inset:0;z-index:2000`,
+undurchsichtiger Hintergrund). `confirmDialog()`
+(`ui/kit/omp-confirm.ts`) — genutzt vom "×"-Node-Entfernen-Button
+(`role-designer.ts#removeRole`) — hatte nur `z-index:1100`, also
+niedriger als das Designer-Overlay. Der `<omp-confirm>`-Dialog rendert
+zwar (DOM-Element existiert, Fokus/Enter/Escape funktionieren bereits),
+aber optisch UNTER dem Overlay — für die Bedienperson unsichtbar,
+solange das Overlay offen ist. Klick auf "Verlassen" entfernt das
+Overlay-`div, wodurch der bereits die ganze Zeit vorhandene, nur
+verdeckte Dialog plötzlich sichtbar wird — exakt das gemeldete
+Verhalten.
+
+**Gleicher Fund, zusätzlich:** `showToast()` (`ui/kit/omp-toast.ts`,
+`z-index:1000`) hat dieselbe Schwäche — `role-designer.ts` ruft sie an
+mehreren Stellen (Speichern fehlgeschlagen, Namenskonflikt, ungültige
+Verbindung) ohne eigenes `host`-Argument, landet also ebenfalls
+unsichtbar unter dem Designer-Overlay und verschwindet nach 4s
+Auto-Dismiss ungesehen. Mitgefixt, gleiche Ursache.
+
+**Fix:** `<omp-confirm>` auf `z-index:3000`, `<omp-toast>` auf
+`z-index:2500` — beide damit über jedem bekannten Overlay in der Shell
+(Login-Overlay/Rollen-Designer-Overlay, je `z-index:2000`), Confirm
+bleibt über Toast, falls beide gleichzeitig offen sind. Beide Bausteine
+sind generische, immer-oben-sichtbare Modal-Grundbausteine — bewusst
+mit Marge nach oben gewählt statt nur knapp über 2000, damit ein
+künftiges Overlay mit ähnlichem Muster nicht dieselbe Kollision
+reproduziert.
+
+**Live verifiziert** (kein Raten, §0 Punkt 3): echte laufende
+Dev-Umgebung, `#openRoleDesigner`-Overlay 1:1 nachgebaut, "×" an einer
+echten Rollen-Kachel gedrückt. Vor dem alleinigen Zahlenvergleich
+zusätzlich mit `document.elementFromPoint()` an der Bestätigen-
+Button-Position geprüft, dass dort TATSÄCHLICH `<omp-confirm>` (nicht
+das Overlay) zuoberst liegt — echter Hit-Test, kein bloßer
+CSS-Wertevergleich. Danach den echten Button im Schatten-DOM geklickt:
+Rollenanzahl im Designer-Entwurf sank von 4 auf 3 — der Dialog ist
+nicht nur sichtbar, sondern auch weiterhin voll funktionsfähig. Entwurf
+bewusst nie gespeichert (kein "Speichern"-Klick) — per API bestätigt,
+dass der echte gespeicherte Workflow "new group" unverändert weiter 4
+Rollen hat. `deno check`/`deno test ui/` (92/92) grün.
+
+**Dateien:** `ui/kit/omp-confirm.ts`, `ui/kit/omp-toast.ts`.

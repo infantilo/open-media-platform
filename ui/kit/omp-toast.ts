@@ -20,7 +20,15 @@ TEMPLATE.innerHTML = `
       bottom: 16px;
       left: 50%;
       transform: translateX(-50%);
-      z-index: 1000;
+      /* Live-Fund 2026-09-11 (s. omp-confirm.ts, dieselbe Ursache):
+         showToast()-Aufrufer, die standardmäßig an document.body hängen
+         (z. B. role-designer.ts), können aus einem Vollbild-Overlay
+         (workflows-view.ts #openRoleDesigner, z-index:2000) heraus
+         aufgerufen werden — ein Toast unterhalb davon war unsichtbar,
+         verschwand aber trotzdem nach 4s ungesehen. Über dem höchsten
+         bekannten Overlay-z-index, aber unter omp-confirm (3000), falls
+         beide gleichzeitig offen sind. */
+      z-index: 2500;
       display: block;
     }
     div {
