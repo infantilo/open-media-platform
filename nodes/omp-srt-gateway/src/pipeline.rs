@@ -64,16 +64,20 @@ pub struct Config {
 /// abfragbar bleibt (ARCHITECTURE.md §5 Punkt 6, UMSETZUNG.md D5-prep-2);
 /// würde sonst mit dem Rückgabewert von `build_uplink`/`build_downlink`
 /// verworfen, obwohl die zugehörigen Pipeline-Elemente weiterlaufen.
+/// Trägt zusätzlich die `srtsink`/`srtsrc`-Elemente (+ bei Downlink den
+/// separaten `rtpjitterbuffer`) für den BCP-008-Monitor-Tick (`main.rs`,
+/// `docs/decisions.md` BCP-008-Nachtrag) — echte SRT-/RTP-Statistiken
+/// statt erfundener Werte.
 enum ActiveEndpoint {
-    Uplink(St2110VideoInput),
-    Downlink(St2110VideoOutput),
+    Uplink { input: St2110VideoInput, srtsink: gst::Element },
+    Downlink { output: St2110VideoOutput, srtsrc: gst::Element, jitterbuffer: gst::Element },
 }
 
 impl ActiveEndpoint {
     fn has_flowed(&self) -> bool {
         match self {
-            ActiveEndpoint::Uplink(input) => input.has_flowed(),
-            ActiveEndpoint::Downlink(output) => output.has_flowed(),
+            ActiveEndpoint::Uplink { input, .. } => input.has_flowed(),
+            ActiveEndpoint::Downlink { output, .. } => output.has_flowed(),
         }
     }
 }
@@ -81,6 +85,14 @@ impl ActiveEndpoint {
 pub struct PipelineHandle {
     pipeline: gst::Pipeline,
     endpoint: ActiveEndpoint,
+}
+
+fn u64_field(structure: &gst::Structure, name: &str) -> u64 {
+    structure.get::<u64>(name).unwrap_or(0)
+}
+
+fn i32_field(structure: &gst::Structure, name: &str) -> i32 {
+    structure.get::<i32>(name).unwrap_or(0)
 }
 
 impl PipelineHandle {
@@ -93,6 +105,56 @@ impl PipelineHandle {
     /// gesendet/empfangen hat.
     pub fn media_ready(&self) -> bool {
         self.endpoint.has_flowed()
+    }
+
+    /// Nur bei `Direction::Uplink` `Some` — echte SRT-Sendestatistik aus
+    /// `srtsink`s `stats`-Property (`bytes_sent_total`,
+    /// `packets_sent_lost`, `packets_retransmitted`; live per
+    /// `gst-inspect-1.0`/Testpipeline geprüfte Feldnamen des GStreamer-
+    /// SRT-Plugins, nicht geraten — die einzelnen Caller-Substrukturen
+    /// (`callers`-`GValueArray`, nur bei `srtsrc` im Listener-Modus
+    /// relevant) bleiben bewusst unberücksichtigt, s. `main.rs`s
+    /// Monitor-Tick-Doku zur Kosten/Nutzen-Abwägung).
+    pub fn srt_send_stats(&self) -> Option<(u64, i32, i32)> {
+        match &self.endpoint {
+            ActiveEndpoint::Uplink { srtsink, .. } => {
+                let stats = srtsink.property::<gst::Structure>("stats");
+                Some((
+                    u64_field(&stats, "bytes-sent-total"),
+                    i32_field(&stats, "packets-sent-lost"),
+                    i32_field(&stats, "packets-retransmitted"),
+                ))
+            }
+            ActiveEndpoint::Downlink { .. } => None,
+        }
+    }
+
+    /// Nur bei `Direction::Downlink` `Some` — `bytes-received-total` aus
+    /// `srtsrc`s `stats`-Property (Top-Level-Feld, s. `srt_send_stats`-
+    /// Doku zur bewusst ausgeklammerten Caller-Liste).
+    pub fn srt_receive_bytes_total(&self) -> Option<u64> {
+        match &self.endpoint {
+            ActiveEndpoint::Downlink { srtsrc, .. } => {
+                let stats = srtsrc.property::<gst::Structure>("stats");
+                Some(u64_field(&stats, "bytes-received-total"))
+            }
+            ActiveEndpoint::Uplink { .. } => None,
+        }
+    }
+
+    /// Der lokal (nicht über SRT) inspizierbare RTP-Jitterbuffer dieser
+    /// Richtung: bei Uplink der von `St2110VideoInput` (LAN-Empfang, vor
+    /// dem SRT-Versand — BCP-008 `essenceStatus`), bei Downlink der
+    /// separate, zwischen `srtsrc` und dem Depayloader sitzende (nach
+    /// dem SRT-Empfang, vor der lokalen 2110-Ausgabe — `connectionStatus`).
+    pub fn local_jitterbuffer_stats(&self) -> (u64, u64) {
+        match &self.endpoint {
+            ActiveEndpoint::Uplink { input, .. } => input.jitterbuffer_stats(),
+            ActiveEndpoint::Downlink { jitterbuffer, .. } => {
+                let stats = jitterbuffer.property::<gst::Structure>("stats");
+                (u64_field(&stats, "num-lost"), u64_field(&stats, "num-late"))
+            }
+        }
     }
 }
 
@@ -110,8 +172,14 @@ pub fn build(
     let pipeline = gst::Pipeline::new();
 
     let endpoint = match cfg.direction {
-        Direction::Uplink => ActiveEndpoint::Uplink(build_uplink(&pipeline, cfg)?),
-        Direction::Downlink => ActiveEndpoint::Downlink(build_downlink(&pipeline, cfg)?),
+        Direction::Uplink => {
+            let (input, srtsink) = build_uplink(&pipeline, cfg)?;
+            ActiveEndpoint::Uplink { input, srtsink }
+        }
+        Direction::Downlink => {
+            let (output, srtsrc, jitterbuffer) = build_downlink(&pipeline, cfg)?;
+            ActiveEndpoint::Downlink { output, srtsrc, jitterbuffer }
+        }
     };
 
     let bus = pipeline.bus().expect("pipeline always has a bus");
@@ -154,7 +222,7 @@ pub fn build(
     Ok(PipelineHandle { pipeline, endpoint })
 }
 
-fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoInput, String> {
+fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoInput, gst::Element), String> {
     let input = St2110VideoInput::new(
         pipeline,
         cfg.st2110_port,
@@ -180,10 +248,10 @@ fn build_uplink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoInp
     gst::Element::link_many([&input.tail, &payloader, &srtsink])
         .map_err(|e| format!("link uplink chain: {e}"))?;
 
-    Ok(input)
+    Ok((input, srtsink))
 }
 
-fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoOutput, String> {
+fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<(St2110VideoOutput, gst::Element, gst::Element), String> {
     let srtsrc = gst::ElementFactory::make("srtsrc")
         .property("uri", &cfg.srt_uri)
         .build()
@@ -215,5 +283,5 @@ fn build_downlink(pipeline: &gst::Pipeline, cfg: &Config) -> Result<St2110VideoO
     )?;
     output.set_active(true);
 
-    Ok(output)
+    Ok((output, srtsrc, jitterbuffer))
 }

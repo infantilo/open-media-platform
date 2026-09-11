@@ -23206,3 +23206,84 @@ und aufgeräumt (`feedback_make_stop_orphans_processes`-Muster). Der
 gestartet. `go build/vet/test ./...` (Orchestrator) grün.
 
 **Dateien:** `deploy/catalog.json`.
+
+## 2026-09-11 (Nachtrag 211) — NMOS BCP-008 auf `omp-srt-gateway` ausgeweitet, trotz fehlendem NMOS-Touchpoint (Nutzerauftrag "MXL-only nodes und srt gateway anpassen")
+
+**Kontext:** `omp-srt-gateway` wurde in Nachtrag 210 explizit als
+BCP-008-ungeeignet identifiziert (keine NMOS-Sender/Receiver-
+Registrierung) und auf Nutzerentscheidung übersprungen. Neuer,
+expliziter Nutzerauftrag verlangt jetzt trotzdem eine Anpassung —
+umgesetzt als generische `monitor.*`-Parameter OHNE echten NMOS-
+Touchpoint (dokumentierte, bewusste Abweichung von den anderen vier
+BCP-008-Nodes — nur über OMPs eigene Param-API abrufbar, nicht über
+echtes NMOS-BCP-008-Tooling auffindbar).
+
+**Strukturelle Besonderheit gegenüber den anderen Gateways:** jede
+Richtung (`Uplink`/`Downlink`) betreibt in EINEM Prozess sowohl eine
+Empfangs- als auch eine Sendeseite (Uplink: liest lokal 2110, sendet
+über SRT; Downlink: empfängt über SRT, schreibt lokal 2110) — anders
+als bei den anderen drei Gateways, wo Ingest/Output strikt getrennte
+Prozesse mit je EINER Rolle sind. Domain-Zuordnung deshalb bewusst
+nicht 1:1 übertragen: Uplink = `MonitorKind::Sender` (er sendet
+letztlich ins WAN) mit `essenceStatus` vom LOKALEN 2110-Empfangs-
+Jitterbuffer (ist der Inhalt gültig, den wir senden wollen?) und
+`transmissionStatus` von `srtsink`s echter SRT-Sendestatistik (kommt
+er beim Peer an?); Downlink = `MonitorKind::Receiver` mit
+`connectionStatus` vom lokalen RTP-Jitterbuffer NACH der SRT-
+Reassemblierung und `streamStatus` event-getrieben (gleiches Muster
+wie bei DeckLink/AES67).
+
+**Neue reale Signalquellen:**
+- `omp_mediaio::st2110::St2110VideoInput::jitterbuffer_stats()` schon
+  vorhanden (Nachtrag 207) — Uplinks lokaler 2110-Empfang.
+- Neuer, separater `rtpjitterbuffer` zwischen `srtsrc` und dem
+  Depayloader bei Downlink, jetzt als Feld in `ActiveEndpoint::
+  Downlink` gehalten (vorher nur eine lokale Variable in
+  `build_downlink`) — für `connectionStatus`.
+- `srtsink`/`srtsrc`s eigene `stats`-Property (echtes SRT-Plugin-
+  Feature, Feldnamen `bytes-sent-total`/`packets-sent-lost`/
+  `packets-retransmitted`/`bytes-received-total` live per Python/
+  GStreamer-Testpipeline verifiziert, NICHT geraten — `gst-inspect-1.0`
+  allein zeigt nur die Default-Werte, keine vollständige Feldliste).
+  **Bewusst ausgeklammert:** `srtsrc`s Empfangsstatistik steckt im
+  Listener-Modus in einer verschachtelten `callers`-`GValueArray` —
+  das Entpacken in Rust wäre unverhältnismäßiger Aufwand,
+  `linkStatus` nutzt stattdessen nur das flache Top-Level-Feld
+  `bytes-received-total`.
+
+**Live verifiziert — echter, spontan aufgetretener SRT-Verbindungs-
+abbruch, kein künstlich erzwungener Test:** Uplink (Caller) + Downlink
+(Listener) als eigenständige Prozesse, echter RTP/2110-Rohvideostrom
+per `gst-launch-1.0` in Uplinks Empfangsport gespeist. Per `GST_DEBUG=
+srtsink:6` bestätigt: die SRT-Verbindung baute sich zunächst echt auf
+(reale `bytes-sent`/`rtt-ms`-Werte), brach nach ~3.7s spontan ab
+("Error on SRT socket: Unknown or erroneous") und blieb trotz
+wiederholter automatischer Reconnect-Versuche der GStreamer-SRT-
+Implementierung in dieser Sandbox dauerhaft getrennt (Umgebungs-
+Eigenheit dieses SRT-Plugin-Builds, keine Ursache im OMP-Code).
+`monitor.linkStatus` zeigte in genau diesem Fenster korrekt `AllDown`,
+`overallStatus` entsprechend `Unhealthy`. Bei einem zweiten Lauf mit
+auf 100ms reduziertem `statusReportingDelay` (per `PATCH monitor.
+statusReportingDelay`) UMGEKEHRT bestätigt: `linkStatus` sprang
+korrekt auf `AllUp`, sobald echte Bytes flossen — `overallStatus`
+blieb dabei trotzdem `Unhealthy`, weil das LOKALE 2110-Empfangssignal
+(`essenceStatus`) unabhängig davon echten, andauernden Paketverlust
+zeigte (3961 verlorene Pakete, dieselbe Art Sandbox-Loopback-
+Überlastung bei unkomprimiertem Video wie beim ursprünglichen
+2110-Gateway-Test aus Nachtrag 207) — bestätigt, dass die vier Domains
+tatsächlich UNABHÄNGIG voneinander funktionieren und `overallStatus`
+korrekt den ungesündesten Wert übernimmt, nicht nur den zuletzt
+beobachteten. `resetCountersAndMessages` bestätigt: löscht Zähler/
+Meldung, ändert den echten, andauernden Unhealthy-Status nicht.
+
+`cargo build/test/clippy -D warnings` für `omp-srt-gateway` grün (3
+neue Unit-Tests, hardware-/pipeline-unabhängig gegen `GatewayStore`
+direkt). Test-Registrierungen danach explizit deregistriert.
+
+**Bewusst nicht Teil dieser Runde:** Katalogeintrag für `omp-srt-
+gateway` (fehlt weiterhin, wie schon vor dieser Runde — eigene, hier
+nicht beauftragte Entscheidung).
+
+**Dateien:** `nodes/omp-srt-gateway/src/main.rs`,
+`nodes/omp-srt-gateway/src/pipeline.rs`,
+`nodes/omp-srt-gateway/Cargo.toml`.
