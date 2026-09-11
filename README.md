@@ -1,15 +1,17 @@
 # OpenMediaPlatform
 
-[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
 
 > **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
 > discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
 > served side by side** (wire-compatible, same handlers) for connection
-> management, IS-12/IS-14 for self-described control. This isn't a
-> compatibility claim on paper: the official AMWA NMOS Testing Tool runs
-> against a real node on every push, and the current run is fully green
-> — 62 passing IS-05-01 checks, zero accepted exceptions, on both API
-> versions.
+> management, IS-12/IS-14 for self-described control, and BCP-008-01/02
+> for real receiver/sender health status (link, sync, connection/
+> transmission, stream/essence) on the network-facing nodes. This isn't
+> a compatibility claim on paper: the official AMWA NMOS Testing Tool
+> runs against a real node on every push, and the current run is fully
+> green — 62 passing IS-05-01 checks, zero accepted exceptions, on both
+> API versions.
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
@@ -111,6 +113,19 @@ are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 - MXL zero-copy shared memory for same-host media exchange; SMPTE
   ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
   for cross-host exchange, including AES67 audio (Dante-compatible).
+- **AMWA BCP-008-01/02 health monitoring**: real receiver/sender status
+  (link, external sync, connection/transmission, stream/essence, plus
+  an aggregated overall status) on every node that touches a real
+  network or hardware boundary — `omp-2110-gateway`, `omp-decklink`,
+  `omp-aes67-gateway`, `omp-srt-gateway` — backed by actual signals
+  (GStreamer `rtpjitterbuffer` packet-loss counters, PTP lock state,
+  DeckLink cable/format lock, real SRT connection statistics), not
+  synthetic placeholders; MXL-internal nodes (`omp-video-mixer-me`,
+  `omp-viewer`, `omp-recorder`) get the same status model applied to
+  "is this input's MXL flow actually readable" instead of link health.
+  Exposed as generic parameters (`monitor.*`), readable through the
+  same self-description mechanism as everything else — no separate
+  BCP-008 client needed to inspect it.
 - PostgreSQL-backed state (highly available via Patroni + etcd, no
   single-node database SPOF), mTLS between orchestrator and nodes, a
   local user/role model with audit log — no external directory server
@@ -358,7 +373,16 @@ datastore are all redundant now). Also added since then: a guided
 Host-Setup wizard (bare-metal/VM/AWS, in the Hosts tab) and a Cluster
 tab under Administration (Raft status, plus a guided join/leave for
 growing or shrinking the orchestrator cluster) — both flows existed as
-API-only since D6/D12, now they're a walkthrough in the UI.
+API-only since D6/D12, now they're a walkthrough in the UI. Most
+recently, AMWA BCP-008-01/02 receiver/sender status monitoring landed
+across every node with a real network/hardware boundary
+(`omp-2110-gateway`, `omp-decklink`, `omp-aes67-gateway`,
+`omp-srt-gateway`) plus the MXL-internal nodes that most benefit from
+knowing whether an input's flow is actually readable
+(`omp-video-mixer-me`, `omp-viewer`, `omp-recorder`) — real signals
+throughout (GStreamer jitterbuffer stats, PTP lock, DeckLink cable
+lock, SRT connection stats), exposed as generic `monitor.*` parameters
+on each node's self-description.
 
 Open: RDMA hardware integration (`verbs`/EFA providers, pending
 hardware procurement), an NDI gateway, proprietary Dante (Dante in

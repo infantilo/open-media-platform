@@ -23382,3 +23382,32 @@ Erfolgsmeldung.
 `nodes/omp-video-mixer-me/src/pipeline.rs`,
 `nodes/omp-mediaio/examples/mxl_late_flow_repro.rs` (neu),
 `nodes/omp-mediaio/examples/mxl_late_flow_writer.rs` (neu).
+
+## 2026-09-11 (Nachtrag 213) — BCP-008 im README hervorgehoben (Nutzerauftrag "führe das BCP.008 im readme noch wichtig an")
+
+**Kontext:** Direkte Fortsetzung von Nachtrag 207-212 (NMOS-BCP-008-
+Rollout) — der Nutzer bat darum, die neue BCP-008-Unterstützung auch
+im öffentlich sichtbaren `README.md` prominent zu nennen (bis dahin
+nur in `docs/decisions.md`/`UMSETZUNG.md` dokumentiert, für die
+externe Projektdarstellung unsichtbar).
+
+**Drei Stellen ergänzt, bestehendem Stil folgend:**
+- Neues Badge in der Kopfzeile neben den bestehenden IS-04/IS-05/
+  IS-12/IS-14-Badges, verlinkt auf `specs.amwa.tv/bcp-008-01/`.
+- Der einleitende "Standards-first"-Absatz erwähnt BCP-008-01/02 jetzt
+  mit auf.
+- Neuer eigener Punkt in "What's in the box" → "Standard-based core"
+  (welche Nodes, welche echten Signale, ehrlich benannt — keine
+  Behauptung eines vollständigen NMOS-BCP-008-Client-Ökosystems, nur
+  dass die Werte über denselben generischen Selbstbeschreibungs-
+  mechanismus abrufbar sind wie alles andere).
+- Ein Satz am Ende des fortlaufenden "Status"-Absatzes (gleiche Form
+  wie die bisherigen "Also added since then..."-Ergänzungen dort).
+
+**Bewusst NICHT gemacht:** keine vollständige Überarbeitung des
+"Status"-Abschnitts (der ist seit mehreren Kapiteln nicht mehr
+durchgängig aktuell gehalten — z. B. fehlen dort bereits Kapitel 19/
+Channel-Player/Playout-Automation-Kapitel-6-Erwähnungen — das
+nachzuholen wäre ein eigener, hier nicht beauftragter Umfang).
+
+**Dateien:** `README.md`.
