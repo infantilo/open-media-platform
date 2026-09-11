@@ -28,7 +28,7 @@ For local, high-performance media exchange, MXL (Media Exchange Layer) is used. 
 The core of the system is an orchestrator developed in Go. It handles discovery, routing, and communication between the individual services. NATS is used as the event bus, while AMWA NMOS (IS-04 v1.3 and IS-05, both the v1.1.x line and the current v1.2.0 release) handles the automatic registration and routing of the components. This means the orchestrator doesn't have to rely on fixed device types or proprietary interfaces.
 
 **A note on scope:** the microservices listed below (`omp-source`,
-`omp-video-mixer-me`, `omp-player`, etc.) exist to demonstrate what the
+`omp-video-mixer-me`, `omp-mxf-player`, etc.) exist to demonstrate what the
 orchestrator can actually coordinate end to end — they are reference
 implementations, not the product. The project's core focus, and where
 most of the engineering effort goes, is the orchestrator itself:
@@ -158,8 +158,10 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   picture-in-picture, downstream keyer)
 - **omp-audio-mixer** — digital audio mixer with parametric EQ,
   per-channel compressor, master limiter, and audio-follow-video
-- **omp-player** — video player and jingle player (cued playback, plus
-  live-MXL-source and real-file playlist items)
+- **omp-mxf-player** — MXF file player with program-group audio shuffle
+  (cued playback, plus live-MXL-source and real-file playlist items)
+- **omp-channel-player** — isel-free single-branch player for the
+  playout automation channels (load-only, no playlist/cue-take)
 - **omp-playout-automation** — playout automation (playlist-driven,
   Auto/Hold, Next/Next-Live/Stop, cart/interrupt assets; no pipeline of
   its own)

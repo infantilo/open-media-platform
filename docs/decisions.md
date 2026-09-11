@@ -22317,3 +22317,49 @@ Unit-Tests beschränkt.
 `nodes/{playout,omp-audio-monitor,omp-aes67-gateway,
 omp-2110-gateway,omp-fabrics-gateway,omp-scaler,
 omp-pipeline-controller,omp-recorder,omp-decklink}/src/main.rs`.
+
+## 2026-09-11 (Nachtrag 198) — omp-player entfernt, Automation-Zielplayer ist omp-mxf-player (Nutzerauftrag "entferne den omp-player, da wir ja zwei andere varianten davon haben")
+
+**Kontext:** `omp-player` (C12, Katalog-Typen `omp-player-video`/
+`omp-player-jingle`) hatte zwei unbehobene, dokumentierte Bugs
+(`input-selector`-Freeze nach erstem Take; EOS-Probe-Freeze bei echten
+Clip-Dateien) und wurde bereits in Kapitel 6 Teil 6 durch
+`omp-channel-player` als Mixer-Crosspoint-Quelle abgelöst. Vor dem
+Löschen Methodenverträge verglichen (nicht angenommen): `omp-
+playout-automation` fernsteuert seinen Zielplayer explizit über
+`append`/`load`/`remove`/`cue`/`take` (`main.rs`-Moduldoku). Davon
+implementiert `omp-channel-player` nur `load()` — die Retargeting-
+Arbeit dafür ist Kapitel 6 Teil 7-9, laut Status-Checkliste noch nicht
+begonnen. `omp-mxf-player` implementiert dagegen exakt denselben vollen
+Methodensatz (`append`/`load`/`remove`/`cue`/`take`/`items`/
+`mediaLibrary`) und ist als einziger der drei verbleibenden Player
+bereits live stress-getestet reliable (91-Zyklen-Test, 2026-09-03).
+Nutzerentscheidung: `omp-player` löschen, `omp-mxf-player` bleibt der
+für die Automation nutzbare Ersatz (Ziel-Auflösung über
+`targetPlayerLabel` ist bereits dynamisch/nicht hartkodiert — keine
+Code-Änderung an `omp-playout-automation` nötig), `omp-channel-player`
+bleibt unverändert für den Mixer-Crossfade-Anwendungsfall.
+
+**Umsetzung:** `nodes/omp-player/` komplett entfernt (`git rm -r`),
+aus `nodes/Cargo.toml`-Workspace-Mitgliedern entfernt, beide
+Katalogeinträge (`omp-player-video`, `omp-player-jingle`) aus
+`deploy/catalog.json` entfernt (JSON-Validität geprüft), README.md
+(Node-Liste + Scope-Hinweis) und `docs/HANDBUCH.md` (Node-Referenz-
+tabelle §9.1) auf die drei real vorhandenen Player-Nodes
+(`omp-mxf-player`, `omp-mxf-player-direct`, `omp-channel-player`)
+aktualisiert. Funktionale Code-Abhängigkeiten außerhalb von
+`nodes/omp-player/` gab es keine — alle übrigen Treffer über den
+gesamten Baum waren reine Kommentare/Moduldoku (per Grep bestätigt,
+nicht angenommen), daher unverändert gelassen.
+
+**Bewusst nicht geändert:** `ARCHITECTURE.md`, `UMSETZUNG.md`
+(Status-Checkliste/Kapitel-6-Phasenplan) und `docs/NODE-TUTORIAL.md`
+— dort ist `omp-player` Teil der historischen Architektur-/
+Umsetzungs-Erzählung (warum der Crate ursprünglich verallgemeinert
+wurde etc.), wird wie Git-Historie nicht rückwirkend umgeschrieben.
+
+**Verifiziert:** `cargo build --workspace --bins` (24 verbleibende
+Crates, ohne `omp-player`) baut sauber durch, keine Fehler.
+
+**Dateien:** `nodes/omp-player/` (gelöscht), `nodes/Cargo.toml`,
+`deploy/catalog.json`, `README.md`, `docs/HANDBUCH.md`.

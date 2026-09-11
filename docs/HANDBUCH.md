@@ -418,7 +418,9 @@ startbar ist.
 | **omp-switcher** | Einfacher Video-Umschalter zwischen automatisch entdeckten MXL-Quellen per Knopf — kein Programm-/Preset-Bus, kein Mischeffekt (funktionaler Vorläufer des Video Mixer M/E). |
 | **omp-video-mixer-me** | Vollwertiger M/E-Bildmischer: Programm-/Preset-Bus (Kreuzschiene), Cut/Auto-Transition, DVE-Kanal (PIP), Downstream-Keyer (DSK, Fill+Key), Tally-Signalisierung. Unterstützt seit D8 Teil 3 `setOutputDelay()` (Latenzbudget-Ausgleich, s. Abschnitt 9.7). |
 | **omp-audio-mixer** | Digitales Audiomischpult mit dynamischer Kanalanzahl, Gain/EQ (LO/MID/HIGH) und Kompressor pro Kanal, Master-Limiter, automatischem Audio-Follow-Video. |
-| **omp-player** | Datei-/Playlist-Player, cue/take-bedient. Zwei Katalog-Profile desselben Binaries: `omp-player-video` (Video inkl. Audio) und `omp-player-jingle` (nur Audio, für Jingles/Musik). Kann seit [C21] zusätzlich eine entdeckte Live-MXL-Quelle als Playlist-Item abspielen. |
+| **omp-mxf-player** | MXF-Datei-/Playlist-Player, cue/take-bedient (A/B-Slot), mit Programmgruppen-Audio-Shuffle. Kann zusätzlich eine entdeckte Live-MXL-Quelle als Playlist-Item abspielen. |
+| **omp-mxf-player-direct** | Diagnose-/Direkt-Variante von omp-mxf-player: kein A/B-Slot-Cue/Take, keine Playlist — spielt beim Start automatisch genau eine Datei direkt in die MXL-Ausgänge. |
+| **omp-channel-player** | Isel-freier, einzweigiger Player ohne Playlist/Cue-Take — `load()` ersetzt den aktuellen Inhalt sofort. Gedacht als eine von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade. |
 | **omp-multiviewer** | Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal. |
 | **omp-viewer** | Zeigt einen ausgewählten MXL-Videostream als MJPEG-Vorschau im Browser. |
 | **omp-playout-automation** | Automatisierte Playlist-Sequenzierung: steuert einen bereits laufenden Player und Bildmischer fern (Auto/Hold-Modus, Next/Next-Live/Stop, Cart-/Interrupt-Assets). Keine eigene Medienpipeline. |
