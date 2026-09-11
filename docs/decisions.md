@@ -23159,3 +23159,50 @@ MXL-internen Nodes, UI-Anzeige der `monitor.*`-Werte.
 `nodes/omp-aes67-gateway/src/pipeline.rs`,
 `nodes/omp-aes67-gateway/Cargo.toml`,
 `nodes/omp-mediaio/src/st2110.rs`.
+
+## 2026-09-11 (Nachtrag 210) — `omp-2110-gateway`/`omp-aes67-gateway` in den Node-Katalog aufgenommen (Nutzerauftrag "go on")
+
+**Kontext:** Bei der Suche nach dem nächsten BCP-008-Ziel
+(`omp-srt-gateway`) fiel auf, dass dieser Node gar keine NMOS-Sender/
+Receiver registriert (`senders: vec![]`, `receivers: vec![]`) — BCP-
+008s Grundannahme (Monitor hängt an einer echten NMOS-Resource) passt
+dort strukturell nicht. Auf Nutzerentscheidung hin (AskUserQuestion)
+übersprungen. Dabei fiel eine zweite, unabhängige Lücke auf: `omp-
+2110-gateway` und `omp-aes67-gateway` (beide seit Kapitel 19 Teil 1/3
+existent, seit Nachtrag 207/209 mit BCP-008-Unterstützung) fehlten
+komplett in `deploy/catalog.json` — anders als `omp-decklink` waren
+sie über die UI (Node-Katalog/Flow-Editor) bisher gar nicht platzierbar.
+Auf Nutzerwunsch geschlossen (eigenständige Aufgabe, keine BCP-008-
+Code-Änderung).
+
+**Vier neue Katalogeinträge (nicht zwei) — bewusste Abweichung vom
+`omp-decklink`-Muster:** `omp-decklink` hat nur EINEN Katalogeintrag
+(Default-Richtung "ingest"), weil die andere Richtung über den
+`requiredIoPort`-Mechanismus (physischer Port-Claim setzt
+`OMP_DECKLINK_DIRECTION` automatisch, §6.1/D13) erreichbar bleibt.
+`omp-2110-gateway`/`omp-aes67-gateway` haben KEINEN solchen
+automatischen Env-Mechanismus und die UI hat aktuell keinen generischen
+Weg, beliebige Env-Vars pro Rolle zu setzen (geprüft: `ui/graph/
+role-designer-logic.ts` kennt nur den `ioPortExtraEnv`-Spezialfall) —
+ein einziger Katalogeintrag mit festem Default hätte die jeweils
+ANDERE Richtung komplett unerreichbar gemacht. Deshalb je zwei
+Einträge (`omp-2110-gateway-ingest`/`-output`,
+`omp-aes67-gateway-sink`/`-source`), gleiches Binary, Richtung fest per
+`env`-Feld im Katalogeintrag gesetzt (Präzedenzfall für einen
+nicht-leeren `env`-Wert: `omp-mxf-player-direct`s `OMP_MXF_FILE`).
+`type` muss laut `catalog_store.go`-Kommentar ohnehin eindeutig sein,
+mehrere Typen auf dasselbe `command`-Binary sind strukturell erlaubt
+(nichts im Loader verlangt eine 1:1-Beziehung).
+
+**Live verifiziert:** `make stop`/`make start` (Orchestrator neu
+gestartet, `deploy/catalog.json` wird beim Start frisch gelesen), alle
+vier neuen Typen per `GET /api/v1/catalog` bestätigt gefunden. Dabei
+zwei echte, vom laufenden "Playout"-Workflow unabhängige verwaiste
+Prozesse (`omp-ograf`/`omp-playout-automation`, seit 11:45 verwaist —
+älter als der aktuelle Orchestrator-Lauf, keine neue Ursache) gefunden
+und aufgeräumt (`feedback_make_stop_orphans_processes`-Muster). Der
+"Playout"-Workflow selbst war bereits korrekt (nicht kaputt) im Status
+"stopped" — keine Daten verloren, bewusst NICHT automatisch neu
+gestartet. `go build/vet/test ./...` (Orchestrator) grün.
+
+**Dateien:** `deploy/catalog.json`.

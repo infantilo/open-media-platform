@@ -20,6 +20,44 @@
     "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
   },
   {
+    "type": "omp-2110-gateway-ingest",
+    "label": "ST 2110 Gateway (Ingest)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-2110-gateway"],
+    "env": { "OMP_2110_GATEWAY_DIRECTION": "ingest" },
+    "description": "Empfängt unkomprimiertes SMPTE-2110-20-Video per RTP-Multicast/-Unicast aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 1). Ziel/Quelle per OMP_2110_GATEWAY_LISTEN_PORT/_MULTICAST_GROUP oder direktem SDP (OMP_2110_GATEWAY_SDP/_SDP_FILE) konfiguriert, optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus (Link/Verbindung/Sync/Stream, `docs/decisions.md` BCP-008-Nachtrag) über die generischen monitor.*-Parameter.",
+    "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
+    "type": "omp-2110-gateway-output",
+    "label": "ST 2110 Gateway (Ausgabe)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-2110-gateway"],
+    "env": { "OMP_2110_GATEWAY_DIRECTION": "output" },
+    "description": "Sendet einen per Flow-Editor gewählten MXL-Video-Flow als unkomprimiertes SMPTE-2110-20 per RTP an einen festen Ziel-Endpunkt (OMP_2110_GATEWAY_DEST_HOST/_DEST_PORT, Kapitel 19 Teil 1) — Quellwahl per echtem IS-05-Receiver-PATCH (Drag&Drop), Ziel bleibt fest. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-02-Sendestatus über die generischen monitor.*-Parameter.",
+    "expectedResources": "moderat (unkomprimiertes Video, netzwerklastig)",
+    "latency": { "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 } }
+  },
+  {
+    "type": "omp-aes67-gateway-sink",
+    "label": "AES67 Gateway (Sink)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-aes67-gateway"],
+    "env": { "OMP_AES67_GATEWAY_DIRECTION": "sink" },
+    "description": "Empfängt AES67/RTP-Audio (Dante-Geräte im AES67-Modus, Ravenna/Lawo/Merging u. a.) aus dem LAN und speist es als MXL-Flow ein (Kapitel 19 Teil 3) — Audio-Pendant zum ST-2110-Gateway. Fremdströme per SAP-Discovery (OMP_AES67_GATEWAY_DISCOVER_NAME) oder direktem SDP/Einzel-Env-Vars gefunden. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-01-Empfangsstatus über die generischen monitor.*-Parameter.",
+    "expectedResources": "gering (Audio, geringe Bitrate)"
+  },
+  {
+    "type": "omp-aes67-gateway-source",
+    "label": "AES67 Gateway (Source)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-aes67-gateway"],
+    "env": { "OMP_AES67_GATEWAY_DIRECTION": "source" },
+    "description": "Sendet einen per Flow-Editor gewählten MXL-Audio-Flow als AES67/RTP an einen festen Ziel-Endpunkt (OMP_AES67_GATEWAY_DEST_HOST/_DEST_PORT) und announct ihn dauerhaft per SAP, damit Dante-/AES67-Controller ihn finden — Quellwahl per echtem IS-05-Receiver-PATCH, Ziel bleibt fest. Optional PTP-Zeitbasis per OMP_PTP_DOMAIN. Meldet AMWA-BCP-008-02-Sendestatus über die generischen monitor.*-Parameter.",
+    "expectedResources": "gering (Audio, geringe Bitrate)"
+  },
+  {
     "type": "omp-switcher",
     "label": "Switcher",
     "runner": "process",
