@@ -86,6 +86,18 @@ type Request struct {
 	// allowedExtraEnvKeys stehen, sonst lehnt start() die gesamte
 	// Anfrage ab (s. Feld-Kommentar dort).
 	ExtraEnv map[string]string `json:"extraEnv,omitempty"`
+	// LaunchSecret (ARCHITECTURE.md §24.1) — Live-Fund 2026-09-11 beim
+	// Verifizieren von Kapitel 6 Teil 7: bis hierhin bekam eine remote-
+	// host-gestartete Instanz weder dieses Secret noch
+	// OMP_ORCHESTRATOR_URL mit (dokumentierte Lücke, s. orchestrator/
+	// internal/launcher.Instance.LaunchSecret-Doku, "Remote-Host-Agent-
+	// Pfad bekommt das noch nicht mit") — jeder Fernaufruf eines
+	// gestarteten Control-Plane-Nodes (z. B. omp-playout-automation)
+	// schlug dadurch mit "kein Service-Token verfügbar" fehl, sobald er
+	// nicht auf dem Orchestrator-eigenen Host lief. Leer = Katalog-
+	// Einträge, die kein Service-Token brauchen (fast alle) — harmlos,
+	// kein Node liest eine ungenutzte Env-Variable.
+	LaunchSecret string `json:"launchSecret,omitempty"`
 }
 
 // Response ist die Antwort auf Request.
@@ -120,11 +132,12 @@ type runningInstance struct {
 // Executor führt Start-/Stop-Kommandos für die auf diesem Host lokal
 // laufenden Instanzen aus.
 type Executor struct {
-	catalog     []catalog.Entry
-	registryURL string
-	natsURL     string
-	hostID      string
-	nc          Publisher
+	catalog         []catalog.Entry
+	registryURL     string
+	natsURL         string
+	orchestratorURL string
+	hostID          string
+	nc              Publisher
 
 	mu        sync.Mutex
 	instances map[string]*runningInstance
@@ -149,15 +162,16 @@ type Executor struct {
 // docs/decisions.md D6 Teil 2). hostID/nc (S3) werden für
 // ExitEvent-Publishing gebraucht — nc darf nil sein (z. B. in Tests),
 // dann bleibt publishExit ein No-Op statt eine Nil-Pointer-Panik.
-func NewExecutor(cat []catalog.Entry, registryURL, natsURL, hostID string, nc Publisher) *Executor {
+func NewExecutor(cat []catalog.Entry, registryURL, natsURL, orchestratorURL, hostID string, nc Publisher) *Executor {
 	return &Executor{
-		catalog:     cat,
-		registryURL: registryURL,
-		natsURL:     natsURL,
-		hostID:      hostID,
-		nc:          nc,
-		instances:   map[string]*runningInstance{},
-		stopping:    map[string]bool{},
+		catalog:         cat,
+		registryURL:     registryURL,
+		natsURL:         natsURL,
+		orchestratorURL: orchestratorURL,
+		hostID:          hostID,
+		nc:              nc,
+		instances:       map[string]*runningInstance{},
+		stopping:        map[string]bool{},
 	}
 }
 
@@ -213,7 +227,7 @@ func (e *Executor) start(req Request) Response {
 
 	stderrTail := newTailBuffer(crashStderrLines)
 	cmd := exec.Command(entry.Command[0], entry.Command[1:]...)
-	cmd.Env = buildEnv(entry.Env, req.ExtraEnv, req.InstanceID, req.Label, e.registryURL, e.natsURL)
+	cmd.Env = buildEnv(entry.Env, req.ExtraEnv, req.InstanceID, req.Label, e.registryURL, e.natsURL, e.orchestratorURL, req.LaunchSecret)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = io.MultiWriter(os.Stderr, stderrTail)
 
@@ -336,7 +350,7 @@ func EncodeResponse(resp Response) []byte {
 // ist bereits gegen allowedExtraEnvKeys geprüft, bevor start() hierher
 // aufruft — buildEnv selbst kennt die Allowlist nicht, reine
 // Merge-Funktion.
-func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryURL, natsURL string) []string {
+func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryURL, natsURL, orchestratorURL, launchSecret string) []string {
 	merged := map[string]string{}
 	for _, kv := range os.Environ() {
 		for i := 0; i < len(kv); i++ {
@@ -357,6 +371,17 @@ func buildEnv(entryEnv, extraEnv map[string]string, instanceID, label, registryU
 	merged["OMP_PORT"] = "0"
 	merged["OMP_REGISTRY_URL"] = registryURL
 	merged["OMP_NATS_URL"] = natsURL
+	// OMP_ORCHESTRATOR_URL/OMP_LAUNCH_SECRET (ARCHITECTURE.md §24.1) —
+	// Live-Fund 2026-09-11 (Kapitel 6 Teil 7): fehlten hier bisher
+	// komplett, s. Request.LaunchSecret-Doku. Gleiche Konvention wie
+	// orchestrator/internal/launcher.buildEnv: URL immer gesetzt
+	// (harmlos ungenutzt für Nodes ohne Peer-Fernsteuerung), Secret nur
+	// bei tatsächlichem Bedarf (leer = weiterhin kein
+	// OMP_LAUNCH_SECRET im Kind-Prozess-Environment).
+	merged["OMP_ORCHESTRATOR_URL"] = orchestratorURL
+	if launchSecret != "" {
+		merged["OMP_LAUNCH_SECRET"] = launchSecret
+	}
 
 	env := make([]string, 0, len(merged))
 	for k, v := range merged {

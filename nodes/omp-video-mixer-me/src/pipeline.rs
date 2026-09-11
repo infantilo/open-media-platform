@@ -154,8 +154,27 @@ const OLD_WRITER_DRAIN: Duration = Duration::from_millis(300);
 /// Rebuild-Versuch statt — der Eingang blieb für die gesamte Lebensdauer
 /// der Pipeline dauerhaft schwarz, PGM sprang beim Auswählen auf BLK
 /// zurück. Fix unten: fehlende Eingänge werden jetzt unabhängig von der
-/// ID-Mengen-Änderung ein paar Mal auf dem Leerlauf-Tick erneut versucht.
-const MISSING_INPUT_RETRIES: u32 = 5;
+/// ID-Mengen-Änderung auf jedem Leerlauf-Tick erneut versucht.
+///
+/// Nachtrag (Kapitel 6 Teil 7 Live-Verifikation, Bug 2, 2026-09-11): ein
+/// zunächst hier eingebautes FESTES Retry-Budget (`MISSING_INPUT_RETRIES`,
+/// ~2.5s) reichte für diese ursprüngliche Diagnose (kurze Registrierungs-
+/// Race) aus, ist aber zu kurz für den viel häufigeren Fall bei
+/// `omp-channel-player`: dessen NMOS-Sender wird sofort beim Prozessstart
+/// registriert, sein MXL-Output-Flow (`MxlVideoOutput`) aber laut
+/// `pipeline::run()` erst beim ERSTEN `load()`-Aufruf tatsächlich angelegt
+/// (`create_flow_writer`) — bis dahin liefert `get_flow_def` dauerhaft
+/// "Flow not found". Liegt zwischen Workflow-Start und dem ersten
+/// `cue`/`take` (z. B. via `omp-playout-automation`) mehr als ~2.5s, lief
+/// das Budget aus, BEVOR der Flow existierte — der Eingang blieb bis zur
+/// nächsten echten Sender-ID-Mengenänderung dauerhaft schwarz, exakt das
+/// live beobachtete Symptom (`crosspoint.programInput` bleibt nach
+/// `cut`/`take`/`autoTrans` leer, `presetInput` aber korrekt). Live per
+/// `/proc/<pid>/fd` verifiziert: der Channel-Player öffnet vor dem ersten
+/// `load()` buchstäblich keine MXL-Dateien. Fix: kein festes Budget
+/// mehr — solange ein Eingang fehlt, wird auf JEDEM Leerlauf-Tick erneut
+/// versucht (kostet nur dann etwas, wenn tatsächlich ein Eingang fehlt),
+/// bis der Flow lesbar wird oder sich die Sender-ID-Menge ändert.
 
 pub struct Config {
     pub domain: String,
@@ -1553,14 +1572,15 @@ pub fn run(
     };
     let mut program: Vec<Option<String>> = vec![None; level_count];
     let mut preset: Vec<Option<String>> = vec![None; level_count];
-    // Startup-Race-Retry (s. `MISSING_INPUT_RETRIES`-Doku oben): Eingänge,
-    // die beim letzten Build keinen Pad bekamen, plus verbleibendes
-    // Retry-Budget. Wird nach jedem erfolgreichen Rebuild neu berechnet.
-    // Eine Ebene reicht als Referenz (s. `reapply_all_levels`-Doku: alle
-    // Ebenen teilen sich dieselben `SourceBranch`es, ein Eingang fehlt
-    // also für ALLE Ebenen gleichzeitig oder für keine).
+    // Missing-Input-Retry (s. Doku oben bei `OLD_WRITER_DRAIN`/Nachtrag
+    // Bug 2): Eingänge, die beim letzten Build keinen Pad bekamen — kein
+    // festes Budget mehr, es wird auf JEDEM Leerlauf-Tick erneut versucht,
+    // solange die Liste nicht leer ist. Wird nach jedem erfolgreichen
+    // Rebuild neu berechnet. Eine Ebene reicht als Referenz (s.
+    // `reapply_all_levels`-Doku: alle Ebenen teilen sich dieselben
+    // `SourceBranch`es, ein Eingang fehlt also für ALLE Ebenen gleichzeitig
+    // oder für keine).
     let mut missing_inputs: Vec<String> = Vec::new();
-    let mut missing_retries_left: u32 = 0;
     let mut dve_box: Vec<DveBox> = vec![DveBox::full_frame(config.width, config.height); level_count];
     let mut keyer_enabled: Vec<bool> = vec![false; level_count];
     let mut pip_enabled: Vec<bool> = vec![false; level_count];
@@ -1679,8 +1699,6 @@ pub fn run(
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
-                            missing_retries_left =
-                                if missing_inputs.is_empty() { 0 } else { MISSING_INPUT_RETRIES };
                             update_flowed(&flowed_slot, &p);
                             active = Some(p);
                         }
@@ -2045,18 +2063,21 @@ pub fn run(
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Startup-Race-Retry (s. `MISSING_INPUT_RETRIES`-Doku):
-                // ohne diesen Zweig bliebe ein beim letzten Build
-                // übersprungener Eingang bis zur nächsten echten Mengen-
-                // änderung dauerhaft schwarz — kein Wechsel der Eingangs-
-                // menge nötig hier, nur ein zweiter Versuch mit denselben
-                // `current_inputs`, nachdem der Flow inzwischen vermutlich
-                // lesbar geworden ist.
-                if !missing_inputs.is_empty()
-                    && missing_retries_left > 0
-                    && fading.iter().all(|f| !f.load(Ordering::Acquire))
-                {
-                    missing_retries_left -= 1;
+                // Missing-Input-Retry (s. Doku bei `OLD_WRITER_DRAIN`/
+                // Nachtrag Bug 2): ohne diesen Zweig bliebe ein beim
+                // letzten Build übersprungener Eingang bis zur nächsten
+                // echten Mengenänderung dauerhaft schwarz — kein Wechsel
+                // der Eingangsmenge nötig hier, nur ein erneuter Versuch
+                // mit denselben `current_inputs`, falls der Flow
+                // inzwischen lesbar geworden ist. Kein festes Budget mehr:
+                // ein `omp-channel-player` legt seinen MXL-Output-Flow
+                // erst beim ersten `load()` an, das kann beliebig lange
+                // nach der NMOS-Registrierung passieren (z. B. erst beim
+                // ersten `cue` via `omp-playout-automation`) — deshalb
+                // wird hier versucht, bis es klappt oder sich die
+                // Sender-ID-Menge ändert (dann übernimmt der `SetInputs`-
+                // Zweig oben).
+                if !missing_inputs.is_empty() && fading.iter().all(|f| !f.load(Ordering::Acquire)) {
                     join_all_fades(&fade_threads, &fading);
                     active = None;
                     std::thread::sleep(OLD_WRITER_DRAIN);
@@ -2071,9 +2092,6 @@ pub fn run(
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
-                            if missing_inputs.is_empty() {
-                                missing_retries_left = 0;
-                            }
                             update_flowed(&flowed_slot, &p);
                             active = Some(p);
                         }

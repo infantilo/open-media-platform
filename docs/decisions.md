@@ -22825,3 +22825,96 @@ Schritte.
 **Dateien:** `nodes/omp-playout-automation/src/main.rs`,
 `nodes/omp-playout-automation/ui/bundle.js`, `deploy/catalog.json`,
 `docs/HANDBUCH.md`.
+
+## 2026-09-11 (Nachtrag 206) — Zwei Bugfixe aus Nachtrag 205: Host-Agent `OMP_LAUNCH_SECRET`-Weiterleitung + Mixer "Flow not found" nach `crosspoint.cut` (Nutzerauftrag "fixe die zwei bugs")
+
+Beide in Nachtrag 205 nur dokumentierten, nicht behobenen Nebenfunde
+jetzt live gefixt und verifiziert.
+
+### Bug 1: Host-Agent vergisst `OMP_LAUNCH_SECRET`/`OMP_ORCHESTRATOR_URL` bei Remote-Instanzen
+
+**Root Cause:** `remoteCommand` (Draht-Format Orchestrator→Host-Agent,
+`orchestrator/internal/launcher/launcher.go`) trug nie ein
+Launch-Secret oder eine Orchestrator-URL; `host-agent`s eigenes
+`buildEnv` (`host-agent/internal/commands/commands.go`) setzte
+`OMP_ORCHESTRATOR_URL`/`OMP_LAUNCH_SECRET` gar nicht erst — beim
+lokalen Pfad (`startLocal`) passiert das seit langem korrekt, der
+Remote-Pfad (`startRemote`) hatte diese bereits als bekannte Lücke
+dokumentierte Parität nie bekommen.
+
+**Fix:**
+- `remoteCommand` (launcher.go) neues Feld `LaunchSecret`.
+- `startRemote()` erzeugt jetzt (wie `startLocal`) ein Secret per
+  `newInstanceID()`, reicht es im `remoteCommand` mit und setzt es auf
+  der zurückgegebenen `Instance`.
+- `HandleRemoteExit`s Auto-Restart-Pfad reicht das PERSISTIERTE Secret
+  der abgestürzten Instanz weiter (kein neues Secret bei Crash-Neustart
+  — gleiches Prinzip wie lokal).
+- `host-agent/internal/commands/commands.go`: `Executor` bekommt ein
+  `orchestratorURL`-Feld (`NewExecutor` neuer Parameter), `Request`
+  bekommt `LaunchSecret`, `buildEnv()` setzt `OMP_ORCHESTRATOR_URL`
+  unbedingt und `OMP_LAUNCH_SECRET` wenn vorhanden — 1:1 dieselbe
+  Logik wie der Orchestrator sie lokal schon hatte.
+- `host-agent/main.go`: übergibt die bereits geladene
+  `orchestratorURL` an `NewExecutor`.
+
+**Live verifiziert:** Orchestrator+Host-Agent neu gebaut, Playout mit
+aktiven simulierten Remote-Hosts (`make hosts`) neu gestartet, per
+`/proc/<pid>/environ` bestätigt, dass die remote gelaunchte
+`omp-playout-automation`-Instanz jetzt beide Variablen trägt, und ein
+echter `cue`-Aufruf über den Proxy (bis dahin mit "kein Service-Token
+verfügbar" gescheitert) erfolgreich `currentLabel` des Ziel-Kanal-
+Players setzte.
+
+### Bug 2: `crosspoint.programInput` bleibt nach `cut`/`take`/`autoTrans` leer
+
+**Root Cause (per `/proc/<pid>/fd`-Analyse gefunden, nicht geraten):**
+KEIN Readback-Bug — `switch_isel()` (`nodes/omp-video-mixer-me/src/
+pipeline.rs`) fällt korrekt auf Schwarz/`None` zurück, wenn der
+angeforderte Sender-Pad in `source_pads_fg` fehlt, weil sein MXL-Flow
+laut `get_flow_def` dauerhaft "Flow not found" liefert. Live per
+`/proc/<pid>/fd` bestätigt: `omp-channel-player` registriert seinen
+NMOS-Sender SOFORT beim Prozessstart, legt seinen tatsächlichen
+MXL-Output-Flow (`MxlVideoOutput::new_paced` → `create_flow_writer`)
+aber laut `pipeline::run()` (`nodes/omp-channel-player/src/pipeline.rs`)
+erst beim ERSTEN `load()`-Aufruf an — bis dahin hat der Prozess
+buchstäblich keine offenen Dateien unter `/dev/shm/omp-mxl`. Der
+Mixer besaß bereits einen Self-Heal-Mechanismus für genau diesen
+"Sender discoverbar, Flow noch nicht lesbar"-Fall (`MISSING_INPUT_
+RETRIES`, Nachtrag zu 2026-07-30), aber mit einem FESTEN Budget von 5
+Versuchen (~2.5s Leerlauf-Ticks). Liegt zwischen Workflow-Start und dem
+ersten `cue`/`take` (z. B. über `omp-playout-automation`, oder
+schlicht weil ein Bediener sich Zeit lässt) mehr als diese ~2.5s, lief
+das Budget aus BEVOR der Flow existierte — `inputs_changed()` vergleicht
+nur die Sender-ID-MENGE, die sich durch ein späteres `load()` nicht
+ändert, also fand nie wieder ein Rebuild-Versuch statt: der Eingang
+blieb für die gesamte Pipeline-Lebensdauer dauerhaft schwarz/`None`.
+
+**Fix (`nodes/omp-video-mixer-me/src/pipeline.rs`):** festes
+Retry-Budget (`MISSING_INPUT_RETRIES`/`missing_retries_left`) entfernt.
+Solange `missing_inputs` nicht leer ist, wird jetzt auf JEDEM
+Leerlauf-Tick (500ms + 300ms `OLD_WRITER_DRAIN`) unbegrenzt erneut
+versucht, bis der Flow lesbar wird oder sich die Sender-ID-Menge
+tatsächlich ändert (dann übernimmt wieder der reguläre `SetInputs`-
+Zweig). Kein Leerlauf-Overhead im Normalfall (der Zweig tut nichts,
+solange nichts fehlt).
+
+**Live verifiziert (exakter Wiederholungsfall des Originalbugs):**
+Playout-Workflow frisch neu gestartet (Kanal-Player A/B + Mixer
+gleichzeitig, KEIN `load()`), 37s gewartet (weit über das alte
+2.5s-Budget hinaus, log zeigt 48 aufeinanderfolgende "Flow not found"
+über exakt diesen Zeitraum), dann `load()` auf beide Kanal-Player
+geschickt — Mixer erholte sich automatisch, `crosspoint.select`+`cut`
+auf beide Sender bestätigte `crosspoint.programInput` korrekt gleich
+`presetInput` (vorher: leer). Danach keine weiteren "Flow not
+found"-Zeilen mehr im Log (Retry endet sauber, kein Dauerlauf). `cargo
+build`/`test -p omp-video-mixer-me` grün; `cargo clippy -D warnings`
+für diese Crate war bereits VOR dieser Änderung durch unabhängige,
+vorbestehende `collapsible_if`-Funde in `main.rs` blockiert (per `git
+stash` verifiziert — nicht durch diese Änderung verursacht, außerhalb
+des Bug-2-Scopes, nicht angefasst).
+
+**Dateien:** `orchestrator/internal/launcher/launcher.go`,
+`host-agent/internal/commands/commands.go`,
+`host-agent/internal/commands/commands_test.go`, `host-agent/main.go`,
+`nodes/omp-video-mixer-me/src/pipeline.rs`.

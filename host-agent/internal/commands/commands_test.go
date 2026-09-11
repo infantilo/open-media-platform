@@ -44,7 +44,7 @@ func (f *fakePublisher) last() (subject string, data []byte) {
 }
 
 func TestHandleUnknownAction(t *testing.T) {
-	e := NewExecutor(nil, "", "", "host-1", nil)
+	e := NewExecutor(nil, "", "", "", "host-1", nil)
 	resp := e.Handle(Request{Action: "explode"})
 	if resp.OK {
 		t.Fatalf("Handle() = %+v, want OK=false for unknown action", resp)
@@ -52,7 +52,7 @@ func TestHandleUnknownAction(t *testing.T) {
 }
 
 func TestStartUnknownType(t *testing.T) {
-	e := NewExecutor(nil, "", "", "host-1", nil)
+	e := NewExecutor(nil, "", "", "", "host-1", nil)
 	resp := e.Handle(Request{Action: "start", Type: "does-not-exist", InstanceID: "i1"})
 	if resp.OK {
 		t.Fatalf("Handle() = %+v, want OK=false for unknown catalog type", resp)
@@ -60,7 +60,7 @@ func TestStartUnknownType(t *testing.T) {
 }
 
 func TestStartMissingInstanceID(t *testing.T) {
-	e := NewExecutor([]catalog.Entry{{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}}}, "", "", "host-1", nil)
+	e := NewExecutor([]catalog.Entry{{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}}}, "", "", "", "host-1", nil)
 	resp := e.Handle(Request{Action: "start", Type: "sleeper"})
 	if resp.OK {
 		t.Fatalf("Handle() = %+v, want OK=false without instanceId", resp)
@@ -70,7 +70,7 @@ func TestStartMissingInstanceID(t *testing.T) {
 func TestStartAndStopRealProcess(t *testing.T) {
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "30"}},
-	}, "http://localhost:8010", "nats://localhost:4222", "host-1", nil)
+	}, "http://localhost:8010", "nats://localhost:4222", "http://localhost:8000", "host-1", nil)
 
 	startResp := e.Handle(Request{Action: "start", Type: "sleeper", InstanceID: "test-1", Label: "Sleeper"})
 	if !startResp.OK || startResp.PID == 0 {
@@ -96,7 +96,7 @@ func TestStartAndStopRealProcess(t *testing.T) {
 func TestInstancesSnapshot(t *testing.T) {
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "30"}},
-	}, "http://localhost:8010", "nats://localhost:4222", "host-1", nil)
+	}, "http://localhost:8010", "nats://localhost:4222", "http://localhost:8000", "host-1", nil)
 
 	if got := e.Instances(); len(got) != 0 {
 		t.Fatalf("Instances() vor dem Start = %+v, want empty", got)
@@ -123,7 +123,7 @@ func TestInstancesSnapshot(t *testing.T) {
 }
 
 func TestStopUnknownInstanceIsIdempotent(t *testing.T) {
-	e := NewExecutor(nil, "", "", "host-1", nil)
+	e := NewExecutor(nil, "", "", "", "host-1", nil)
 	resp := e.Handle(Request{Action: "stop", InstanceID: "does-not-exist"})
 	if !resp.OK {
 		t.Fatalf("stop Handle() = %+v, want OK=true (idempotent) for unknown instance", resp)
@@ -136,7 +136,7 @@ func TestStopUnknownInstanceIsIdempotent(t *testing.T) {
 func TestStartRejectsNonAllowlistedExtraEnvKey(t *testing.T) {
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}},
-	}, "", "", "host-1", nil)
+	}, "", "", "", "host-1", nil)
 
 	resp := e.Handle(Request{
 		Action:     "start",
@@ -154,7 +154,7 @@ func TestStartRejectsNonAllowlistedExtraEnvKey(t *testing.T) {
 func TestStartAllowsAllowlistedExtraEnvKeys(t *testing.T) {
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}},
-	}, "", "", "host-1", nil)
+	}, "", "", "", "host-1", nil)
 
 	resp := e.Handle(Request{
 		Action:     "start",
@@ -179,7 +179,7 @@ func TestStartAllowsAllowlistedExtraEnvKeys(t *testing.T) {
 func TestStartAllowsDecklinkIOPortExtraEnvKeys(t *testing.T) {
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "5"}},
-	}, "", "", "host-1", nil)
+	}, "", "", "", "host-1", nil)
 
 	resp := e.Handle(Request{
 		Action:     "start",
@@ -200,7 +200,7 @@ func TestUnexpectedExitPublishesExitEvent(t *testing.T) {
 	pub := &fakePublisher{}
 	e := NewExecutor([]catalog.Entry{
 		{Type: "quick-exit", Runner: catalog.RunnerProcess, Command: []string{"sh", "-c", "exit 3"}},
-	}, "", "", "host-42", pub)
+	}, "", "", "", "host-42", pub)
 
 	resp := e.Handle(Request{Action: "start", Type: "quick-exit", InstanceID: "test-crash"})
 	if !resp.OK {
@@ -235,7 +235,7 @@ func TestExpectedStopDoesNotPublishExitEvent(t *testing.T) {
 	pub := &fakePublisher{}
 	e := NewExecutor([]catalog.Entry{
 		{Type: "sleeper", Runner: catalog.RunnerProcess, Command: []string{"sleep", "30"}},
-	}, "", "", "host-42", pub)
+	}, "", "", "", "host-42", pub)
 
 	startResp := e.Handle(Request{Action: "start", Type: "sleeper", InstanceID: "test-stop"})
 	if !startResp.OK {

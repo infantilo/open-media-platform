@@ -167,10 +167,14 @@ type Instance struct {
 	// persistiert als versehentlich über die Instanzen-API exponiert),
 	// eine zu diesem Zeitpunkt schon laufende Instanz kann ihr Token
 	// dann erst mit ihrem eigenen nächsten Neustart wieder auffrischen.
-	// Nur für lokal gestartete Instanzen gesetzt (Prozess/Podman); der
-	// Remote-Host-Agent-Pfad (S3) bekommt das noch nicht mit, s.
-	// docs/decisions.md Nachtrag 81/C16 — dokumentierte Lücke, kein
-	// stillschweigend fehlender Fall.
+	// Für lokal gestartete Instanzen (Prozess/Podman) UND seit
+	// Nachtrag 205 (2026-09-11, Live-Fund beim Verifizieren von
+	// Kapitel 6 Teil 7) auch für remote-host-gestartete Instanzen
+	// gesetzt (`startRemote`/`remoteCommand.LaunchSecret`) — bis dahin
+	// bekam der Host-Agent-Pfad (S3) gar kein Secret, jeder Fernaufruf
+	// eines dort gestarteten Control-Plane-Nodes schlug deshalb fehl
+	// (docs/decisions.md Nachtrag 81/C16 nannte das als bekannte
+	// Lücke, jetzt geschlossen).
 	LaunchSecret string `json:"-"`
 	// CPUPercent/RSSBytes (Kapitel 14 Teil 2, docs/END-GOAL-
 	// FEATURES.md §14.3b): nur für lokal laufende Instanzen (HostID=="")
@@ -1192,13 +1196,24 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 	if label == "" {
 		label = fmt.Sprintf("%s (%s)", nodeType, id[:8])
 	}
+	// Live-Fund 2026-09-11 (Kapitel 6 Teil 7): dieselbe Secret-
+	// Erzeugung wie startLocal (s. dortige Doku) — bis hierhin bekam
+	// eine remote-host-gestartete Instanz gar kein Secret, jeder
+	// Fernaufruf eines Control-Plane-Nodes (z. B.
+	// omp-playout-automation) auf einem Host-Agent-Host schlug deshalb
+	// mit "kein Service-Token verfügbar" fehl.
+	launchSecret, err := newInstanceID()
+	if err != nil {
+		return Instance{}, fmt.Errorf("launcher: generate launch secret: %w", err)
+	}
 
 	resp, err := l.sendCommand(hostID, remoteCommand{
-		Action:     "start",
-		Type:       nodeType,
-		InstanceID: id,
-		Label:      label,
-		ExtraEnv:   extraEnv,
+		Action:       "start",
+		Type:         nodeType,
+		InstanceID:   id,
+		Label:        label,
+		ExtraEnv:     extraEnv,
+		LaunchSecret: launchSecret,
 	})
 	if err != nil {
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s: %w", hostID, err)
@@ -1207,7 +1222,7 @@ func (l *Launcher) startRemote(nodeType, hostID, customLabel string, extraEnv ma
 		return Instance{}, fmt.Errorf("launcher: remote start on host %s failed: %s", hostID, resp.Error)
 	}
 
-	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv}
+	inst := Instance{ID: id, Type: nodeType, Label: label, PID: resp.PID, HostID: hostID, ExtraEnv: extraEnv, LaunchSecret: launchSecret}
 	l.mu.Lock()
 	l.instances[id] = inst
 	if err := l.persistInstanceLocked(id); err != nil {
@@ -1229,6 +1244,13 @@ type remoteCommand struct {
 	InstanceID string            `json:"instanceId"`
 	Label      string            `json:"label,omitempty"`
 	ExtraEnv   map[string]string `json:"extraEnv,omitempty"`
+	// LaunchSecret (ARCHITECTURE.md §24.1) — Live-Fund 2026-09-11 beim
+	// Verifizieren von Kapitel 6 Teil 7: fehlte hier bisher komplett, s.
+	// Instance.LaunchSecret-Doku ("Remote-Host-Agent-Pfad bekommt das
+	// noch nicht mit"). host-agent/internal/commands.Request spiegelt
+	// dieses Feld (dieselbe bewusste Wire-Format-Duplikation wie der
+	// Rest von remoteCommand).
+	LaunchSecret string `json:"launchSecret,omitempty"`
 }
 
 type remoteResponse struct {
@@ -1345,6 +1367,11 @@ func (l *Launcher) HandleRemoteExit(hostID string, payload []byte) {
 		InstanceID: ev.InstanceID,
 		Label:      current.Label,
 		ExtraEnv:   current.ExtraEnv,
+		// Dieselbe Instanz-ID behält über einen Crash-Neustart hinweg
+		// auch dasselbe Secret (Live-Fund 2026-09-11, gleiches Prinzip
+		// wie beim lokalen Restart-Pfad, s. execEntry-Aufrufstelle
+		// oben im Datei/"LaunchSecret aus dem getrackten Zustand"-Doku).
+		LaunchSecret: current.LaunchSecret,
 	})
 	if err != nil || !resp.OK {
 		errMsg := resp.Error
