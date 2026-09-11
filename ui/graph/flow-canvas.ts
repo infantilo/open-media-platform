@@ -806,6 +806,20 @@ export class FlowCanvas extends HTMLElement {
 
     if (GRAPH_REFRESH_EVENT_TYPES.has(parsed.type)) {
       this.#scheduleGraphRefresh();
+      // Live-Fund 2026-09-11 (beim Verifizieren des #arrangeIntoLanes-
+      // Fixes oben): eine frisch erschienene Instanz braucht ihre
+      // Instanz→Host-Zuordnung (#paletteInstances) für die korrekte
+      // Zonen-Einordnung in der Host-Ansicht (#zoneIdForNodeId fällt
+      // ohne passenden #paletteInstances-Eintrag auf "local" zurück) —
+      // die füllt bisher nur #renderPalette(), ausgelöst beim Mount
+      // sowie bei den selteneren Events unten (host.registered,
+      // instance.crashed/-restarted). Der hier weitaus häufigere
+      // "node.added" löste bisher KEINEN Palette-Refresh aus: eine ganz
+      // normal gestartete Instanz landete dadurch live beobachtet
+      // dauerhaft in der "Orchestrator-Host (lokal)"-Lane statt ihrer
+      // echten Host-Zone, bis zufällig eines der anderen Events feuerte
+      // oder neu geladen wurde.
+      if (parsed.type === "node.added" && this.#hostViewEnabled) void this.#renderPalette();
       return;
     }
 
@@ -1525,41 +1539,78 @@ export class FlowCanvas extends HTMLElement {
         })),
         ...workflowEntries.filter((e) => e.zoneId === zone.id),
       ];
+      // Live-Fund 2026-09-11 (Nutzerreport: "bestehende Kacheln
+      // verschieben sich, wenn neue Nodes gestartet werden, und legen
+      // sich übereinander"): der frühere Ein-Durchlauf-Ansatz (Live-Fund
+      // 2026-08-14, s. Git-Historie) verwarf eine gemerkte Position,
+      // sobald irgendeine ANDERE Kachel — auch eine gerade erst neu
+      // erschienene — in DIESEM Durchlauf zufällig zuerst denselben
+      // Platz beanspruchte. `zoneEntries`-Reihenfolge ist instabil (s.
+      // #assignMissingPositions-Doku: Registry-Rückgabe nach letzter
+      // Aktivität sortiert, nicht nach Registrierungsreihenfolge) — bei
+      // jedem Poll (`#fetchAndRender`, läuft bei aktiver Host-Ansicht
+      // nach jedem Refresh) konnte so eine ANDERE, längst bestehende
+      // Kachel den "verworfen"-Fall treffen und sichtbar an eine neue
+      // Stapelposition springen, nur weil eine neu gestartete Instanz
+      // im selben Durchlauf zufällig zuerst verarbeitet wurde.
+      //
+      // Fix: zwei Durchgänge statt einem. Zuerst bekommen ALLE Kacheln
+      // mit einer in dieser Lane gültigen gemerkten Position ihren Platz
+      // reserviert — in einer von der Registry-Reihenfolge UNABHÄNGIGEN,
+      // stabilen Sortierung (nach gemerktem Y, dann ID), damit das
+      // Ergebnis bei gleichem gespeicherten Zustand immer identisch ist,
+      // egal in welcher Reihenfolge #fetchAndRender() die Kacheln diesmal
+      // zurückbekam. Erst danach bekommen Kacheln OHNE gültige gemerkte
+      // Position (wirklich neue) eine freie Lücke zwischen den bereits
+      // reservierten Plätzen zugewiesen — eine neue Kachel kann einer
+      // bestehenden ihren Platz damit nie mehr wegnehmen.
+      const GAP = HOST_ZONE_TILE_GAP;
+      const reserved: { y: number; height: number }[] = [];
+      const overlapsReserved = (candidateY: number, height: number) =>
+        reserved.some((r) => candidateY < r.y + r.height + GAP && candidateY + height + GAP > r.y);
+
+      const finalPos = new Map<string, Point>();
+      const rememberedCandidates = zoneEntries
+        .map((entry) => ({ entry, remembered: this.#hostViewPositions[entry.id] }))
+        .filter(({ remembered }) => !!remembered && remembered.x >= x - 1 && remembered.x < x + laneWidth)
+        .sort((a, b) => a.remembered!.y - b.remembered!.y || a.entry.id.localeCompare(b.entry.id));
+      for (const { entry, remembered } of rememberedCandidates) {
+        if (overlapsReserved(remembered!.y, entry.height)) continue;
+        finalPos.set(entry.id, remembered!);
+        reserved.push({ y: remembered!.y, height: entry.height });
+      }
+
+      // Freie Kacheln (kein oder ein in dieser Lane kollidierendes
+      // Erinnern) ebenfalls stabil nach ID sortiert — sonst könnten sich
+      // zwei gleichzeitig neu erschienene Kacheln je nach Registry-
+      // Reihenfolge noch untereinander die Stapelposition streitig
+      // machen (geringeres Problem als oben, aber derselbe Grund).
+      const freeEntries = zoneEntries.filter((e) => !finalPos.has(e.id)).sort((a, b) => a.id.localeCompare(b.id));
       let y = HOST_ZONE_HEADER_HEIGHT + HOST_ZONE_MARGIN;
-      // Live-Fund 2026-08-14 (Verifizieren von Bug 2 "allgemein Kacheln
-      // nicht überlappen lassen"): zwei kurz hintereinander gestartete
-      // Instanzen in derselben Zone landeten sichtbar exakt übereinander.
-      // Ursache: `remembered` galt bislang als gültig, sobald es nur in
-      // die eigene Lane fiel (x-Test) — unabhängig davon, ob eine ANDERE
-      // Kachel in DIESEM Durchlauf bereits denselben Platz bekommen hatte.
-      // Bei instabiler Registry-Reihenfolge (s. #assignMissingPositions-
-      // Doku: "nach letzter Aktivität sortiert, nicht nach
-      // Registrierungsreihenfolge") kann eine frisch erschienene Kachel
-      // mal vor, mal nach einer älteren mit gemerkter Position stehen —
-      // stand sie davor, bekam sie den Standard-Platz ganz oben, und die
-      // ältere Kachel beanspruchte denselben Platz per `remembered`
-      // erneut. `placed` verfolgt die in DIESEM Durchlauf tatsächlich
-      // belegten Bereiche; eine kollidierende `remembered`-Position wird
-      // verworfen (Kachel bekommt stattdessen den nächsten freien
-      // Standard-Platz), der Stapel-Cursor `y` folgt der tatsächlichen
-      // (nicht der hypothetischen Standard-)Position jeder Kachel.
-      const placed: { y: number; height: number }[] = [];
-      const overlapsPlaced = (candidateY: number, height: number) =>
-        placed.some((p) =>
-          candidateY < p.y + p.height + HOST_ZONE_TILE_GAP && candidateY + height + HOST_ZONE_TILE_GAP > p.y
-        );
+      for (const entry of freeEntries) {
+        let candidateY = y;
+        let blocked = true;
+        while (blocked) {
+          blocked = false;
+          for (const r of reserved) {
+            if (candidateY < r.y + r.height + GAP && candidateY + entry.height + GAP > r.y) {
+              candidateY = r.y + r.height + GAP;
+              blocked = true;
+            }
+          }
+        }
+        finalPos.set(entry.id, { x, y: candidateY });
+        reserved.push({ y: candidateY, height: entry.height });
+        y = candidateY + entry.height + GAP;
+      }
+
       for (const entry of zoneEntries) {
-        const remembered = this.#hostViewPositions[entry.id];
-        const rememberedInThisLane = !!remembered && remembered.x >= x - 1 && remembered.x < x + laneWidth &&
-          !overlapsPlaced(remembered.y, entry.height);
-        const pos = rememberedInThisLane ? remembered : { x, y };
+        const pos = finalPos.get(entry.id)!;
         if (!this.#positions[entry.id] || this.#positions[entry.id].x !== pos.x || this.#positions[entry.id].y !== pos.y) {
           this.#positions[entry.id] = pos;
           changed = true;
         }
-        if (!rememberedInThisLane) this.#hostViewPositions[entry.id] = pos;
-        placed.push({ y: pos.y, height: entry.height });
-        y = Math.max(y, pos.y + entry.height + HOST_ZONE_TILE_GAP);
+        this.#hostViewPositions[entry.id] = pos;
       }
     }
     return changed;

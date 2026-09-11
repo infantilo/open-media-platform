@@ -22439,3 +22439,64 @@ Anwendungsfall bereits vollständig ab, nur weniger entdeckbar.
 
 **Dateien:** `ui/graph/flow-canvas.ts`
 (`#openHostMigrateMenu`/`#confirmAndMigrateWorkflowRole`).
+
+## 2026-09-11 (Nachtrag 200) — Host-Ansicht: Kacheln springen/überlappen nicht mehr beim Start neuer Nodes (Nutzerreport "positionen der bestehenden nodes/groups/workflow kacheln verschoben werden... node kacheln übereinandergelegt")
+
+**Kontext:** Direkter Nutzerreport, kein Raten — zwei echte, im Code
+nachvollzogene Root Causes gefunden, beide in `#arrangeIntoLanes`
+(Host-Ansicht-Lane-Stapelung, läuft bei jedem `#fetchAndRender()`, also
+bei JEDEM Graph-Refresh, nicht nur beim Ein-/Ausschalten der
+Host-Ansicht selbst).
+
+**Fund 1 (Positionsinstabilität/Überlappung):** der bisherige
+Ein-Durchlauf-Algorithmus (selbst ein Live-Fund vom 2026-08-14, s.
+dortiger Kommentar) verwarf eine gemerkte Kachel-Position, sobald
+irgendeine ANDERE Kachel — auch eine gerade erst neu erschienene — in
+DIESEM Durchlauf zufällig zuerst denselben Platz beanspruchte.
+`zoneEntries`-Reihenfolge ist instabil (Registry-Rückgabe nach letzter
+Aktivität sortiert, nicht nach Registrierungsreihenfolge, s.
+`#assignMissingPositions`-Doku) — bei jedem Poll konnte dadurch eine
+ANDERE, längst bestehende Kachel den "verworfen"-Fall treffen und
+sichtbar springen, nur weil eine neu gestartete Instanz im selben
+Durchlauf zufällig zuerst verarbeitet wurde. Fix: zwei Durchgänge.
+Zuerst bekommen ALLE Kacheln mit gültiger gemerkter Position ihren
+Platz reserviert, in einer von der Registry-Reihenfolge UNABHÄNGIGEN,
+stabilen Sortierung (nach gemerktem Y, dann ID) — deterministisch
+unabhängig davon, in welcher Reihenfolge der Server die Kacheln diesmal
+zurückgab. Erst danach bekommen Kacheln OHNE gültige gemerkte Position
+(wirklich neue) eine freie Lücke — eine neue Kachel kann einer
+bestehenden ihren Platz damit strukturell nie mehr wegnehmen.
+
+**Fund 2 (neue Node landet dauerhaft in der falschen Zone):** beim
+Live-Verifizieren von Fund 1 (echte Zwei-Host-Dev-Umgebung, per
+CDP-Skript neue Instanzen gestartet) fiel eine neue, unabhängige
+Diskrepanz auf: `#zoneIdForNodeId` löst die Zone einer Kachel über
+`#paletteInstances` (Instanz→Host-Zuordnung) auf, NICHT über die
+Graph-Daten selbst. `#paletteInstances` füllt aber nur `#renderPalette()`
+— ausgelöst beim Mount sowie bei den SELTENEN SSE-Events
+`host.registered`/`instance.crashed`/`instance.restarted`. Der weitaus
+häufigere `node.added` (jede ganz normal gestartete Instanz) löste
+bisher KEINEN Palette-Refresh aus — eine neue Instanz landete dadurch
+reproduzierbar dauerhaft in der "Orchestrator-Host (lokal)"-Lane statt
+ihrer echten Host-Zone, bis zufällig eines der anderen Events feuerte
+oder die Seite neu geladen wurde (mit zwei echten Testinstanzen live
+reproduziert: eine blieb >15s in der falschen Zone hängen). Fix: bei
+`node.added` zusätzlich `#renderPalette()` anstoßen (nur wenn
+Host-Ansicht aktiv, gleiches Muster wie bei den drei bestehenden
+Triggern).
+
+**Live verifiziert** (echte Zwei-Host-Dev-Umgebung, `make hosts`,
+hand-gebautes CDP-Skript gegen echten headless Chromium, kein
+Puppeteer/Playwright verfügbar): fünf Baseline-Instanzen über beide
+Hosts gestartet, Positions-Snapshot genommen, danach live (Browser
+bleibt offen) weitere Instanzen gestartet und erneut fotografiert —
+VOR dem Fix landete eine neue Instanz reproduzierbar in der falschen
+Zone; NACH beiden Fixes: alle bereits vorhandenen Kacheln behielten in
+jedem Snapshot exakt dieselbe `transform`-Position (byte-identisch),
+neue Kacheln erschienen sofort (~3s) in der korrekten Host-Zone,
+korrekt unterhalb der letzten belegten Kachel gestapelt, keine
+Überlappung. `deno check`/`deno test ui/` (92/92) grün. Test-Instanzen
+danach vollständig über die Orchestrator-API entfernt.
+
+**Dateien:** `ui/graph/flow-canvas.ts`
+(`#arrangeIntoLanes`/`#handleServerEvent`).
