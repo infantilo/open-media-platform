@@ -243,6 +243,12 @@ impl crate::MediaFlow for St2110VideoOutput {
 pub struct St2110VideoInput {
     pub tail: gst::Element,
     flowed: Arc<AtomicBool>,
+    /// Für [`St2110VideoInput::jitterbuffer_stats`] (BCP-008-01
+    /// `connectionStatus`/`GetLostPacketCounters`/`GetLatePacketCounters`,
+    /// `docs/decisions.md` BCP-008-Nachtrag 2026-09-11) — echte, von
+    /// GStreamers `rtpjitterbuffer` gemessene Paketverlust-/Verspätungs-
+    /// Zähler statt eines erfundenen Werts.
+    jitterbuffer: gst::Element,
 }
 
 impl St2110VideoInput {
@@ -342,7 +348,22 @@ impl St2110VideoInput {
         Ok(St2110VideoInput {
             tail: videoconvert,
             flowed,
+            jitterbuffer,
         })
+    }
+
+    /// `(num_lost, num_late)` seit Pipeline-Start, direkt aus
+    /// `rtpjitterbuffer`s `stats`-Property (`GstStructure` mit
+    /// `guint64`-Feldern `num-lost`/`num-late`, per `gst-inspect-1.0
+    /// rtpjitterbuffer` bestätigt) — kumulativ, nicht seit dem letzten
+    /// Aufruf; Aufrufer bilden selbst die Differenz zum vorigen Wert,
+    /// falls sie einen Delta brauchen (s. `omp-2110-gateway`s
+    /// BCP-008-Monitor-Tick).
+    pub fn jitterbuffer_stats(&self) -> (u64, u64) {
+        let stats = self.jitterbuffer.property::<gst::Structure>("stats");
+        let lost = stats.get::<u64>("num-lost").unwrap_or(0);
+        let late = stats.get::<u64>("num-late").unwrap_or(0);
+        (lost, late)
     }
 }
 

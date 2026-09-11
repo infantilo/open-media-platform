@@ -22918,3 +22918,130 @@ des Bug-2-Scopes, nicht angefasst).
 `host-agent/internal/commands/commands.go`,
 `host-agent/internal/commands/commands_test.go`, `host-agent/main.go`,
 `nodes/omp-video-mixer-me/src/pipeline.rs`.
+
+## 2026-09-11 (Nachtrag 207) — NMOS BCP-008-01/02 (Receiver-/Sender-Status-Monitoring), Pilot auf `omp-2110-gateway` (Nutzerauftrag "wir brauchen NMOS BCP-008 kompatibilität/support")
+
+**Kontext:** Neue, bis dahin nicht gescopte Anforderung ("wir brauchen
+NMOS BCP-008 kompatibilität/support"), direkt nach den beiden
+Bugfixes aus Nachtrag 206 beauftragt. BCP-008 (`AMWA-TV/bcp-008-01`
+"NMOS Receiver Status Monitoring", `.../bcp-008-02` "NMOS Sender
+Status Monitoring", per WebSearch/WebFetch gegen `specs.amwa.tv`
+recherchiert, nicht geraten) definiert pro überwachtem NMOS-Receiver/
+-Sender vier Gesundheits-Domains (Link, externe Synchronisation, dazu
+Verbindung/Stream beim Receiver bzw. Transmission/Essenz beim Sender)
+plus einen kombinierten `overallStatus`, Transition-Zähler,
+Reset-Methode und eine `statusReportingDelay`-Entprellung (Verschlech-
+terung sofort, Erholung erst nach ununterbrochenem Anhalten des
+besseren Werts).
+
+**Entscheidung zum Objektmodell:** BCP-008 setzt ein echtes
+MS-05-02-Objektmodell voraus (`NcReceiverMonitor`/`NcSenderMonitor`,
+von `NcStatusMonitor`/`NcWorker`/`NcObject` abgeleitet). OMP hat das
+nicht — `ARCHITECTURE.md` §2 nennt IS-12/14 nur als Vorbild für den
+Hebel "selbstbeschreibende Parameter/Methoden", `omp-node-sdk::
+descriptor.rs` implementiert stattdessen ein flaches
+`GET/PATCH /params/<name>` + `POST /methods/<name>`-Schema. Bewusst
+KEIN eigener NcObject-Baum nachgebaut (unverhältnismäßiger Aufwand
+gegenüber dem Nutzen) — stattdessen die Spec-Absicht direkt auf dieses
+Schema abgebildet, gleiches Vorgehen wie beim Mixer (M/E-Ebenen als
+Namenspräfix statt eigene Objekte). Zweite Abweichung: BCP-008s drei
+Zähler-Methoden (`GetLostPacketCounters`/`GetLatePacketCounters`/
+`GetTransmissionErrorCounters`) sind in der Spec Methoden mit
+Rückgabewert — `ParamStore::invoke()` liefert hier aber nur
+`Result<(), InvokeError>`, keine Nutzdaten. Deshalb als READONLY-Params
+exponiert, nur `ResetCountersAndMessages` bleibt eine echte Methode.
+
+**Scope-Entscheidung (User gefragt, s. AskUserQuestion):** Pilot auf
+den beiden Netzwerk-Grenz-Rollen von `omp-2110-gateway` (Ingest =
+BCP-008-01-Receiver, Output = BCP-008-02-Sender) — dort sind Link-/
+Verbindungs-/Sync-Domains mit ECHTEN Signalen (GStreamer-`rtpjitter
+buffer`-Statistik, PTP-`is_synced()`) sinnvoll implementierbar, anders
+als bei rein MXL-internen Nodes (kein Netzwerk, keine Paketverlust-
+Semantik). `omp-decklink` (hat bereits ein `signal`-Bool für Kabel-
+Lock, künftiger `linkStatus`-Kandidat) und alle anderen Sender/
+Receiver-Nodes bewusst NICHT Teil dieser Runde — eigener Folgeschritt.
+
+**Neuer Baustein `nodes/omp-node-sdk/src/bcp008.rs`:**
+- `HealthLevel` (Neutral/Healthy/PartiallyHealthy/Unhealthy) als
+  gemeinsame interne Stufe für alle vier Domains — die Spec-Vokabulare
+  (`AllUp`/`Inactive`/`NotUsed`/...) sind reine Beschriftungen
+  (`label_standard`/`label_link`/`label_sync`).
+- `DebouncedDomain`: Entprellte Einzel-Domain — Verschlechterung immer
+  sofort (+Transition-Zähler), Erholung erst nach `statusReportingDelay`
+  UNUNTERBROCHEN gehaltenem besserem Wert (Spec-Wortlaut direkt
+  umgesetzt), `force()` für Aktivierung/Deaktivierung (umgeht die
+  Entprellung komplett, beides diskrete Zustandswechsel).
+- `Monitor`: bündelt vier Domains + Overall + Config
+  (`statusReportingDelay`, `autoResetCountersAndMessages`),
+  `activate()`/`deactivate()` setzen exakt die drei Spec-genannten
+  Domains (Verbindung/Transmission, Stream/Essenz, Overall) sofort auf
+  Healthy/Inactive — `link`/`sync` bleiben unberührt (haben keinen
+  Inactive-Zustand). `param_specs`/`get`/`set`/`method_specs`/`invoke`
+  je mit Namenspräfix (mehrere Monitore pro Node möglich, hier noch
+  nicht gebraucht). 11 Unit-Tests (Entprellung, Flattern-Reset,
+  Aktivierung/Deaktivierung, Overall-Aggregation, Receiver-vs-Sender-
+  Namen, Reset, Dispatch).
+
+**Neue reale Signalquelle `omp-mediaio::st2110::St2110VideoInput::
+jitterbuffer_stats()`:** liest `rtpjitterbuffer`s `stats`-Property
+(`num-lost`/`num-late`, `guint64`, per `gst-inspect-1.0` bestätigt) —
+echte, kumulative GStreamer-Zähler statt erfundener Werte.
+
+**Verdrahtung `omp-2110-gateway/src/main.rs`:** `IngestStore`
+(MonitorKind::Receiver, immer aktiv, `activate()` direkt nach
+Pipeline-Start) und `OutputStore`/`OutputControl` (MonitorKind::Sender,
+aktiv/inaktiv folgt der echten IS-05-Receiver-Verbindung —
+`activate()`/`deactivate()` in `OutputControl::apply()`). Je ein
+1s-Tick-Task (`spawn_ingest_monitor_tick`/`spawn_output_monitor_tick`)
+füttert `Monitor` mit echten Messwerten: `sync` aus `ptp_synced()`
+(`NotUsed`, wenn keine PTP-Domain konfiguriert), `connectionStatus`
+(Ingest) aus dem `num-lost`/`num-late`-Delta seit dem letzten Tick,
+`streamStatus`/`transmissionStatus`/`essenceStatus` aus `media_ready()`.
+**Ehrliche Grenze:** `linkStatus` bleibt statisch `AllUp` (kein echtes
+NIC-/PHY-Signal in dieser Umgebung verfügbar, dokumentiert statt
+geraten) und `GetTransmissionErrorCounters` (Output) liefert eine leere
+Zählerliste (kein Rückkanal von einem echten 2110-Empfänger vorhanden
+— Spec sanktioniert das explizit für "capability absent").
+
+**Live verifiziert (kein Raten, §0 Punkt 3):** drei eigenständige
+Prozesse standalone gestartet (`omp-channel-player` als echte MXL-
+Quelle, `omp-2110-gateway --direction=output` sendet echtes RTP/
+ST-2110-20 an `127.0.0.1:19500`, `--direction=ingest` empfängt dort),
+per echtem IS-05-PATCH (`PATCH .../receivers/<id>/staged`) verbunden.
+Ergebnis: Output zeigte `overallStatus=Healthy` durchgehend; Ingest
+zeigte real gemessenen Paketverlust auf dem Loopback dieser Sandbox
+(`num-lost` stieg kontinuierlich, ressourcenbedingt, kein Code-Bug —
+per wiederholtem Poll als ECHTE, andauernde Verschlechterung bestätigt,
+nicht einmalig) — `connectionStatus`/`overallStatus` sprangen
+korrekt sofort auf `Unhealthy`, `streamStatus` blieb `Healthy` (Depay-
+loader hatte einmal geflossen). `resetCountersAndMessages` per
+`POST /methods/monitor.resetCountersAndMessages` bestätigt: Zähler/
+Meldung auf 0/`null`, der reale `Unhealthy`-Status selbst blieb davon
+unverändert (Reset behebt nicht die Ursache). Receiver-Disconnect
+(`master_enable:false`) bestätigt: `overallStatus`/`transmissionStatus`/
+`essenceStatus` sofort `Inactive`, `linkStatus` unverändert `AllUp` —
+exakt die differenzierte Deaktivierungs-Regel der Spec. Test-
+Registrierungen danach explizit deregistriert (`DELETE .../resource/
+nodes/<id>`), keine Altlasten im Registry/`/dev/shm/omp-mxl`
+zurückgelassen.
+
+`cargo build --workspace --bins` grün; `cargo build/test/clippy -D
+warnings` für `omp-node-sdk`/`omp-mediaio`/`omp-2110-gateway` einzeln
+grün (69 Tests: 58 SDK inkl. 11 neue BCP-008-Tests, 6 mediaio, 3
+2110-gateway MXL/PTP-Feature-Tests brauchen `source deploy/dev/
+mxl.env`, sonst Umgebungsfehler statt Code-Fehler — nicht verwechseln).
+
+**Bewusst nicht Teil dieser Runde:** `omp-decklink` (zweiter, vom
+Nutzer im selben Auftrag genannter Pilot-Node — eigener Folgeschritt,
+`signal`-Bool dort ist der `linkStatus`-Kandidat), `omp-aes67-gateway`/
+`omp-srt-gateway` (gleiches Muster übertragbar, noch nicht gemacht),
+alle rein MXL-internen Sender/Receiver-Nodes (per Nutzerentscheidung
+auf später verschoben), sowie ein Aggregat-UI (Flow Editor/Node-Katalog
+zeigt die neuen `monitor.*`-Werte noch nirgends visuell an — bisher nur
+über die generische Param-API abrufbar).
+
+**Dateien:** `nodes/omp-node-sdk/src/bcp008.rs` (neu),
+`nodes/omp-node-sdk/src/lib.rs`, `nodes/omp-mediaio/src/st2110.rs`,
+`nodes/omp-2110-gateway/src/main.rs`,
+`nodes/omp-2110-gateway/src/pipeline.rs`,
+`nodes/omp-2110-gateway/Cargo.toml`.

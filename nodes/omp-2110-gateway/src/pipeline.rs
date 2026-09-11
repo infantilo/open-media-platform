@@ -66,7 +66,7 @@ pub struct IngestConfig {
 /// "media-ready"-Flag nach außen.
 pub struct IngestHandle {
     pipeline: gst::Pipeline,
-    _input: St2110VideoInput,
+    input: St2110VideoInput,
     _output: MxlVideoOutput,
     flowed: Arc<AtomicBool>,
     ptp_clock: Option<gstreamer_net::PtpClock>,
@@ -82,6 +82,13 @@ impl IngestHandle {
     /// stillschweigenden Annahme (gleiches Prinzip wie `media_ready`).
     pub fn ptp_synced(&self) -> Option<bool> {
         self.ptp_clock.as_ref().map(|c| c.is_synced())
+    }
+
+    /// S. `St2110VideoInput::jitterbuffer_stats`-Doku — echte, kumulative
+    /// Paketverlust-/Verspätungszähler für den BCP-008-Monitor-Tick
+    /// (`main.rs`).
+    pub fn jitterbuffer_stats(&self) -> (u64, u64) {
+        self.input.jitterbuffer_stats()
     }
 }
 
@@ -196,7 +203,7 @@ pub fn run_ingest(
 
     let _ = ready.send(Ok(IngestHandle {
         pipeline: pipeline.clone(),
-        _input: input,
+        input,
         _output: output,
         flowed,
         ptp_clock,

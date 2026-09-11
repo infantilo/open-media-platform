@@ -7,6 +7,7 @@
 //! kopierbarem Beispielcode — siehe `examples/hello_node.rs` für die
 //! minimale Nutzung.
 
+pub mod bcp008;
 pub mod connection;
 pub mod descriptor;
 pub mod health;
@@ -19,6 +20,7 @@ pub mod plugins;
 pub mod server;
 pub mod transports;
 
+pub use bcp008::{HealthLevel, Monitor, MonitorKind};
 pub use descriptor::{
     Descriptor, LatencyInfo, LatencyRange, MethodArg, MethodSpec, ParamSpec, ParamType, Range,
 };
