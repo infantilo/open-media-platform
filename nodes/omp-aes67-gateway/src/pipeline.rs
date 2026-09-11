@@ -53,7 +53,7 @@ pub struct SinkConfig {
 
 pub struct SinkHandle {
     pipeline: gst::Pipeline,
-    _input: St2110AudioInput,
+    input: St2110AudioInput,
     _output: MxlAudioOutput,
     flowed: Arc<AtomicBool>,
     ptp_clock: Option<gstreamer_net::PtpClock>,
@@ -67,6 +67,12 @@ impl SinkHandle {
     /// S. `omp-2110-gateway::pipeline::IngestHandle::ptp_synced`-Doku.
     pub fn ptp_synced(&self) -> Option<bool> {
         self.ptp_clock.as_ref().map(|c| c.is_synced())
+    }
+
+    /// S. `St2110AudioInput::jitterbuffer_stats`-Doku — für den
+    /// BCP-008-Monitor-Tick (`main.rs`).
+    pub fn jitterbuffer_stats(&self) -> (u64, u64) {
+        self.input.jitterbuffer_stats()
     }
 }
 
@@ -163,7 +169,7 @@ pub fn run_sink(
 
     let _ = ready.send(Ok(SinkHandle {
         pipeline: pipeline.clone(),
-        _input: input,
+        input,
         _output: output,
         flowed,
         ptp_clock,

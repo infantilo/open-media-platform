@@ -531,6 +531,10 @@ impl crate::MediaFlow for St2110AudioOutput {
 pub struct St2110AudioInput {
     pub tail: gst::Element,
     flowed: Arc<AtomicBool>,
+    /// S. `St2110VideoInput::jitterbuffer_stats`-Doku, identisches
+    /// Muster (BCP-008-01 `connectionStatus`, `docs/decisions.md`
+    /// BCP-008-Nachtrag).
+    jitterbuffer: gst::Element,
 }
 
 impl St2110AudioInput {
@@ -591,7 +595,16 @@ impl St2110AudioInput {
             gst::PadProbeReturn::Remove
         });
 
-        Ok(St2110AudioInput { tail: audioconvert, flowed })
+        Ok(St2110AudioInput { tail: audioconvert, flowed, jitterbuffer })
+    }
+
+    /// S. `St2110VideoInput::jitterbuffer_stats`-Doku, identisches
+    /// Verhalten (kumulativ seit Pipeline-Start).
+    pub fn jitterbuffer_stats(&self) -> (u64, u64) {
+        let stats = self.jitterbuffer.property::<gst::Structure>("stats");
+        let lost = stats.get::<u64>("num-lost").unwrap_or(0);
+        let late = stats.get::<u64>("num-late").unwrap_or(0);
+        (lost, late)
     }
 }
 

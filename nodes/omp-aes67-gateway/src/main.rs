@@ -69,21 +69,26 @@ struct SinkStore {
     discovered_via_sap: bool,
     ptp_domain: Option<u32>,
     pipeline: Arc<pipeline::SinkHandle>,
+    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    /// decisions.md` BCP-008-Nachtrag) — Sink empfängt echten AES67-
+    /// Traffic aus dem Netzwerk, ist also der "Receiver" dieses
+    /// Gateways (identisches Muster zu `omp-2110-gateway::IngestStore`,
+    /// Audio-Pendant). Immer aktiv, `monitor.activate()` direkt nach
+    /// Pipeline-Start.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for SinkStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            latency: None,
-            parameters: vec![
-                ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "flowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "listenEndpoint".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "discoveredViaSap".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
-                ParamSpec { name: "ptpSynced".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
-            ],
-            methods: vec![],
-        }
+        let mut parameters = vec![
+            ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "flowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "listenEndpoint".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "discoveredViaSap".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ptpSynced".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -99,16 +104,30 @@ impl ParamStore for SinkStore {
                 Some(_) => Some(serde_json::json!(self.pipeline.ptp_synced().unwrap_or(false))),
                 None => Some(Value::Null),
             },
-            _ => None,
+            _ => self.monitor.get("monitor", name, None, || {
+                let (lost, late) = self.pipeline.jitterbuffer_stats();
+                vec![
+                    ("num-lost".to_string(), "RTP-Pakete, laut rtpjitterbuffer verloren".to_string(), lost as i64),
+                    ("num-late".to_string(), "RTP-Pakete, laut rtpjitterbuffer zu spät angekommen".to_string(), late as i64),
+                ]
+            }),
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
-    fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+    fn invoke(&self, name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        if self.monitor.invoke("monitor", name) {
+            Ok(())
+        } else {
+            Err(InvokeError::Unknown)
+        }
     }
 }
 
@@ -118,6 +137,8 @@ struct SourceControl {
     registry: RegistryClient,
     pipeline: pipeline::SourcePipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
+    /// S. `SourceStore::monitor`-Doku.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ReceiverControl for SourceControl {
@@ -128,6 +149,7 @@ impl ReceiverControl for SourceControl {
                     Some(flow_id) => {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
                         self.pipeline.connect(flow_id);
+                        self.monitor.activate();
                     }
                     None => eprintln!("omp-aes67-gateway: sender {sender_id} has no flow_id"),
                 },
@@ -136,6 +158,7 @@ impl ReceiverControl for SourceControl {
             _ => {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
                 self.pipeline.disconnect();
+                self.monitor.deactivate();
             }
         }
     }
@@ -148,20 +171,24 @@ struct SourceStore {
     connection: Arc<ReceiverConnection<SourceControl>>,
     ptp_domain: Option<u32>,
     pipeline: pipeline::SourcePipelineHandle,
+    /// AMWA BCP-008-02 (NMOS Sender Status Monitoring) — Source sendet
+    /// echten AES67-Traffic ins Netzwerk, ist also der "Sender" dieses
+    /// Gateways. Aktiv/inaktiv folgt der IS-05-Receiver-Verbindung (s.
+    /// `SourceControl::apply`), nicht dem Prozess-Lebenszyklus (der
+    /// SAP-Announcer läuft unabhängig davon weiter, s. Moduldoku).
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for SourceStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            latency: None,
-            parameters: vec![
-                ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "connectedFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "destinationEndpoint".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
-                ParamSpec { name: "ptpSynced".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
-            ],
-            methods: vec![],
-        }
+        let mut parameters = vec![
+            ParamSpec { name: "direction".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "connectedFlowId".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "destinationEndpoint".to_string(), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec { name: "ptpSynced".to_string(), kind: ParamType::Boolean, unit: None, range: None, readonly: true },
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -175,16 +202,26 @@ impl ParamStore for SourceStore {
                 Some(_) => Some(serde_json::json!(self.pipeline.ptp_synced().unwrap_or(false))),
                 None => Some(Value::Null),
             },
-            _ => None,
+            // Kein Rückkanal von einem echten AES67-Empfänger — leere
+            // Zählerliste (s. `omp-2110-gateway::OutputStore::get`).
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
-    fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+    fn invoke(&self, name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        if self.monitor.invoke("monitor", name) {
+            Ok(())
+        } else {
+            Err(InvokeError::Unknown)
+        }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
@@ -368,6 +405,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let pipeline_handle = Arc::new(pipeline_handle);
             let media_ready_pipeline = pipeline_handle.clone();
 
+            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+            // Sink ist immer aktiv (kein Enable/Disable-Konzept, wie
+            // `omp-2110-gateway`s Ingest).
+            monitor.activate();
+            spawn_sink_monitor_tick(monitor.clone(), pipeline_handle.clone());
+
             let store: Arc<dyn ParamStore> = Arc::new(SinkStore {
                 flow_id: flow_id.clone(),
                 listen_port,
@@ -375,6 +418,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 discovered_via_sap,
                 ptp_domain,
                 pipeline: pipeline_handle,
+                monitor: monitor.clone(),
             });
 
             let handle = omp_node_sdk::start(
@@ -407,7 +451,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Nachtrag 130/131).
             handle.register_worker("pipeline", pipeline_heartbeat);
 
-            run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, None).await;
+            run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, None, monitor).await;
         }
         Direction::Source => {
             let destination_host = env_or("OMP_AES67_GATEWAY_DEST_HOST", "239.5.5.6");
@@ -464,12 +508,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let ptp_pipeline = pipeline_handle.clone();
             let receiver_id = omp_node_sdk::idgen::new_v4();
             let connected_flow_id = Arc::new(Mutex::new(String::new()));
+            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
+            // Startzustand `Inactive` — `SourceControl::apply`
+            // übernimmt `activate()`/`deactivate()` beim echten IS-05-
+            // Connect/Disconnect (unabhängig vom SAP-Announcer, s.
+            // `SourceStore::monitor`-Doku).
+            monitor.deactivate();
+            spawn_source_monitor_tick(monitor.clone(), pipeline_handle.clone());
             let connection = Arc::new(ReceiverConnection::new(
                 receiver_id.clone(),
                 SourceControl {
                     registry: RegistryClient::new(registry_url.clone()),
                     pipeline: pipeline_handle,
                     connected_flow_id: connected_flow_id.clone(),
+                    monitor: monitor.clone(),
                 },
             ));
 
@@ -480,6 +532,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 connection,
                 ptp_domain,
                 pipeline: ptp_pipeline,
+                monitor: monitor.clone(),
             });
 
             let handle = omp_node_sdk::start(
@@ -508,11 +561,88 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             handle.register_worker("pipeline", pipeline_heartbeat);
             handle.register_worker("sap-announcer", sap_announcer.heartbeat_handle());
 
-            run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, Some(sap_announcer)).await;
+            run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, Some(sap_announcer), monitor).await;
         }
     }
 
     Ok(())
+}
+
+/// BCP-008-Tick für die Sink-Richtung (`omp_node_sdk::MonitorKind::
+/// Receiver`) — s. `omp-2110-gateway::main::spawn_ingest_monitor_tick`-
+/// Doku (identische Begründung/Kadenz, Audio- statt Video-Pendant).
+/// `connectionStatus`s Verschlechterung kommt zusätzlich event-getrieben
+/// aus `run_event_loop`s `Event::Error`-Zweig (kein doppeltes GStreamer-
+/// Bus-Polling nötig, s. `omp-decklink::main::spawn_decklink_monitor_
+/// tick`-Doku zur selben Überlegung) — der Tick selbst pusht hier nur
+/// den optimistischen Healthy-Wert.
+fn spawn_sink_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: Arc<pipeline::SinkHandle>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        let (mut prev_lost, mut prev_late) = pipeline.jitterbuffer_stats();
+        loop {
+            ticker.tick().await;
+            let delay = monitor.status_reporting_delay();
+
+            let sync_level = match pipeline.ptp_synced() {
+                Some(true) => omp_node_sdk::HealthLevel::Healthy,
+                Some(false) => omp_node_sdk::HealthLevel::Unhealthy,
+                None => omp_node_sdk::HealthLevel::Neutral,
+            };
+            monitor.sync.observe(sync_level, delay, Some("PTP nicht synchronisiert"));
+
+            let (lost, late) = pipeline.jitterbuffer_stats();
+            let (delta_lost, delta_late) = (lost.saturating_sub(prev_lost), late.saturating_sub(prev_late));
+            prev_lost = lost;
+            prev_late = late;
+            let connection_level = if delta_lost > 0 {
+                omp_node_sdk::HealthLevel::Unhealthy
+            } else if delta_late > 0 {
+                omp_node_sdk::HealthLevel::PartiallyHealthy
+            } else {
+                omp_node_sdk::HealthLevel::Healthy
+            };
+            monitor.activity.observe(
+                connection_level,
+                delay,
+                Some(&format!("rtpjitterbuffer meldet {delta_lost} verlorene/{delta_late} verspätete Pakete seit dem letzten Tick")),
+            );
+
+            let stream_level =
+                if pipeline.media_ready() { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+            monitor.content.observe(stream_level, delay, Some("kein dekodierbarer Audiostrom seit dem letzten Tick"));
+        }
+    });
+}
+
+/// BCP-008-Tick für die Source-Richtung (`omp_node_sdk::MonitorKind::
+/// Sender`) — s. `spawn_sink_monitor_tick`-Doku. Kein Paketverlust-
+/// Signal auf der Senderseite verfügbar (kein Rückkanal von einem
+/// echten AES67-Empfänger) — `transmissionStatus`/`essenceStatus`
+/// stützen sich deshalb, wie beim 2110-Gateway, auf `media_ready()`.
+fn spawn_source_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: pipeline::SourcePipelineHandle) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            let delay = monitor.status_reporting_delay();
+
+            let sync_level = match pipeline.ptp_synced() {
+                Some(true) => omp_node_sdk::HealthLevel::Healthy,
+                Some(false) => omp_node_sdk::HealthLevel::Unhealthy,
+                None => omp_node_sdk::HealthLevel::Neutral,
+            };
+            monitor.sync.observe(sync_level, delay, Some("PTP nicht synchronisiert"));
+
+            if monitor.overall() == omp_node_sdk::HealthLevel::Neutral {
+                continue;
+            }
+            let level =
+                if pipeline.media_ready() { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+            monitor.activity.observe(level, delay, Some("keine Samples an den AES67-Ausgang seit dem letzten Tick"));
+            monitor.content.observe(level, delay, Some("keine gültige Essenz seit dem letzten Tick"));
+        }
+    });
 }
 
 async fn run_event_loop(
@@ -525,12 +655,20 @@ async fn run_event_loop(
     // durchgereicht statt lokal in `main` gehalten und implizit vor
     // Ablauf dieser Funktion gedroppt.
     _sap_announcer: Option<sap::Announcer>,
+    monitor: Arc<omp_node_sdk::Monitor>,
 ) {
     let events = async {
         while let Some(event) = events_rx.recv().await {
             match event {
                 pipeline::Event::Error(message) => {
                     eprintln!("omp-aes67-gateway: pipeline error: {message}");
+                    // Sofortige Verschlechterung, solange verbunden (s.
+                    // `spawn_sink_monitor_tick`-Doku) — für Sink immer
+                    // wahr (immer aktiv), für Source nur bei
+                    // bestehender IS-05-Verbindung.
+                    if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
+                        monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, monitor.status_reporting_delay(), Some(&message));
+                    }
                     handle.publish_alert(message).await;
                 }
             }

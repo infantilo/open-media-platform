@@ -23101,3 +23101,61 @@ der vom Nutzer in Nachtrag 207 festgelegte Zwei-Node-Pilot
 
 **Dateien:** `nodes/omp-decklink/src/main.rs`,
 `nodes/omp-decklink/Cargo.toml`.
+
+## 2026-09-11 (Nachtrag 209) — NMOS BCP-008-01/02 auf `omp-aes67-gateway` ausgeweitet (Nutzerauftrag "proceed")
+
+**Kontext:** Direkte Fortsetzung von Nachtrag 207/208 — nach Abschluss
+des ursprünglich vom Nutzer festgelegten Zwei-Node-Pilots (2110-Gateway
++ DeckLink) bat der Nutzer knapp um Fortsetzung ("proceed"); als
+nächstes naheliegendstes Ziel gewählt: `omp-aes67-gateway`, das
+Audio-Pendant zu `omp-2110-gateway` mit fast identischer Struktur
+(Sink = AES67→MXL = BCP-008-01-Receiver, Source = MXL→AES67 =
+BCP-008-02-Sender, `SourceControl` löst `activate()`/`deactivate()`
+beim echten IS-05-Connect/Disconnect aus — unabhängig vom SAP-
+Announcer, der laut bestehender Moduldoku dauerhaft weiterläuft).
+
+**Neue reale Signalquelle `omp_mediaio::st2110::St2110AudioInput::
+jitterbuffer_stats()`** (identisches Muster zu `St2110VideoInput`,
+Nachtrag 207) — für `connectionStatus`.
+
+**Eine Verfeinerung gegenüber Nachtrag 207/208:** `connectionStatus`/
+`transmissionStatus`s Verschlechterung kommt hier zusätzlich event-
+getrieben aus dem bereits vorhandenen, gemeinsamen `run_event_loop`s
+`Event::Error`-Zweig (wie bei `omp-decklink`, Nachtrag 208) — der
+1s-Tick pusht nur noch den optimistischen Healthy-Wert plus die reinen
+Zähler-Deltas für die Nachrichtentexte. `externalSynchronizationStatus`
+aus `ptp_synced()` (wie beim 2110-Gateway, dieser Node hat PTP-
+Unterstützung). `linkStatus` bleibt für beide Richtungen `AllUp`
+(kein NIC-Signal, wie beim 2110-Gateway — `omp-aes67-gateway` hat
+anders als `omp-decklink` kein physisches Kabel-Lock-Äquivalent).
+
+**Live verifiziert (echter RTP/AES67-Loopback, wie Nachtrag 207):**
+`omp-channel-player` als echte MXL-Audio-Quelle, `omp-aes67-gateway
+--direction=source` sendet echtes RTP/AES67 (L24, 48kHz, 2ch) an
+`127.0.0.1:19600`, `--direction=sink` empfängt dort, per echtem
+IS-05-PATCH verbunden (erster Verbindungsversuch traf versehentlich
+den VIDEO- statt den AUDIO-Sender des Channel-Players — eigener
+Bedienfehler, keine Code-Auffälligkeit, sofort an der treffenden
+Fehlermeldung "sample_rate.numerator fehlt" erkannt und mit der
+richtigen Sender-ID korrigiert). Ergebnis: beide Seiten durchgehend
+`overallStatus=Healthy`, `num-lost`/`num-late` blieben bei 0 (AES67s
+deutlich geringere Bitrate gegenüber unkomprimiertem ST-2110-Video
+bleibt auf dem Sandbox-Loopback unproblematisch — anders als beim
+2110-Gateway-Test in Nachtrag 207, wo echter Paketverlust auftrat).
+`resetCountersAndMessages` und Receiver-Disconnect (→ sofort
+`Inactive`, `linkStatus` bleibt `AllUp`) beide bestätigt. Test-
+Registrierungen danach explizit deregistriert.
+
+`cargo build --workspace --bins` grün; `build/test/clippy -D warnings`
+für `omp-aes67-gateway`/`omp-mediaio` einzeln grün (8 aes67-gateway-
+Tests unverändert, 6 mediaio-Tests unverändert — kein neuer Testfall
+nötig, `jitterbuffer_stats()` teilt sich denselben, bereits getesteten
+GStreamer-Property-Zugriffspfad wie die Video-Variante).
+
+**Bewusst nicht Teil dieser Runde:** `omp-srt-gateway`, alle
+MXL-internen Nodes, UI-Anzeige der `monitor.*`-Werte.
+
+**Dateien:** `nodes/omp-aes67-gateway/src/main.rs`,
+`nodes/omp-aes67-gateway/src/pipeline.rs`,
+`nodes/omp-aes67-gateway/Cargo.toml`,
+`nodes/omp-mediaio/src/st2110.rs`.
