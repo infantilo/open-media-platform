@@ -23467,3 +23467,51 @@ Prozess beendet.
 
 **Dateien:** `ui/graph/flow-canvas.ts`, `ui/dist/shell.js` (neu
 gebaut).
+
+## 2026-09-11 (Nachtrag 215) — Rollenbindungen aus beiden Blickrichtungen bedienbar (Nutzerauftrag "um die rollen bindung ... möchte ich es aus beiden richtungen können")
+
+**Kontext:** Nutzerauftrag: Rollenbindungen (wer darf was) sollen aus
+BEIDEN Richtungen bedienbar sein — Node auswählen → zugriffsberechtigte
+Nutzer sehen/zuweisen, UND Nutzer auswählen → seine Nodes sehen/
+zuweisen. Bisher ging nur Richtung 1 (Anlage-Formular: erst Nutzername,
+dann Node/Rolle; Anzeige: eine flache, nach Nutzer sortierte Tabelle).
+
+**Recherche (Fork) ergab: reine UI-Lücke, kein Backend-/API-Eingriff
+nötig.** `Binding{ID, Subject, WorkflowID, NodeID, Verb}` in Postgres
+und `GET /api/v1/admin/role-bindings` liefern bereits eine
+richtungsneutrale flache Liste — jede Zeile trägt Subject UND NodeID
+gleichberechtigt, keine serverseitige Filterung/Asymmetrie. `#createBinding()`
+(`ui/shell/admin-view.ts`) nimmt dieselben drei Werte unabhängig von
+der Eingabereihenfolge entgegen.
+
+**Zwei unabhängige, rein clientseitige Ergänzungen in
+`ui/shell/admin-view.ts`:**
+- **Anzeige-Umschalter** ("Nach Nutzer" / "Nach Node/Rolle", neues
+  Feld `#bindingsGroupBy`) über der Bindungsliste: gruppiert dieselben
+  `#bindings` clientseitig entweder nach `subject` oder nach
+  `workflowId::nodeId` (neue Methoden `#renderBindingsBySubject`/
+  `#renderBindingsByNode`/`#renderBindingGroup`, letztere für beide
+  Richtungen gemeinsam genutzt — nur die erste Spalte unterscheidet
+  sich). Ersetzt die alte flache Tabelle (`#renderBindingRow` entfernt,
+  vollständig durch `#renderBindingGroup` abgedeckt).
+- **Anlage-Formular-Umschalter** ("Nutzer → Node" / "Node → Nutzer",
+  neues Feld `#newBindingDirection`) im bestehenden `+ Neue
+  Bindung`-Formular: vertauscht nur die Feldreihenfolge (Node-Auswahl
+  zuerst vs. Nutzername zuerst) — `#createBinding()` selbst unverändert,
+  da es ohnehin richtungsneutral ist. Zusätzlich: Nutzername-Feld
+  bekommt jetzt ein `<datalist>` mit den vorhandenen `#users`
+  (praktisch für beide Richtungen, da das Formular schon vollen
+  Nutzer-Datenzugriff hat).
+
+**Live verifiziert per echtem CDP-Klick** (`Input.dispatchMouseEvent`
+press+release auf reale Bildschirmkoordinaten, gegen die echte laufende
+Admin-Oberfläche mit 24 real vorhandenen Bindungen): Umschalten auf
+"Nach Node/Rolle" gruppierte korrekt in "Alle Nodes"/"Playout (ganzer
+Workflow)" (exakt `#scopeLabel`-Werte als Überschriften, mit den
+jeweiligen Nutzern darunter); Umschalten des Anlage-Formulars auf
+"Node → Nutzer" vertauschte die Feldreihenfolge sichtbar
+(Workflow-Select/Node-Input zuerst, dann Nutzername). `deno check`/
+`deno test ui/` (92/92) grün, `deno bundle` neu gebaut.
+
+**Dateien:** `ui/shell/admin-view.ts`, `ui/dist/shell.js` (neu
+gebaut).

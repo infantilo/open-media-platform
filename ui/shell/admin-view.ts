@@ -189,6 +189,15 @@ class AdminView extends HTMLElement {
   // Verhalten), sonst die Workflow-ID — schaltet das Node-ID-Feld unten
   // von "Instanz-ID" auf "Rollenname" um.
   #newWorkflowId = "";
+  // Nutzerwunsch 2026-09-11: Rollenbindungen aus beiden Richtungen
+  // bedienbar machen. Backend/API sind bereits richtungsneutral (jede
+  // Bindung trägt Subject UND NodeID gleichermaßen) — reine UI-Ergänzung:
+  // #bindingsGroupBy steuert die Anzeige (Liste gruppiert nach Nutzer
+  // ODER nach Node/Rolle), #newBindingDirection nur die Feld-Reihenfolge
+  // im Anlage-Formular (Nutzer zuerst vs. Node zuerst) — #createBinding
+  // selbst ist davon unabhängig, s. dort.
+  #bindingsGroupBy: "subject" | "node" = "subject";
+  #newBindingDirection: "userFirst" | "nodeFirst" = "userFirst";
   #auditPollHandle: number | undefined;
 
   // §17 Teil 4/5 Import/Export-UI (Nutzerwunsch: "node/microservice
@@ -1155,10 +1164,15 @@ class AdminView extends HTMLElement {
 
     const heading = document.createElement("div");
     heading.style.cssText =
-      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;gap:8px;";
     const title = document.createElement("span");
     title.className = "omp-h1";
     title.textContent = `Rollenbindungen (${this.#bindings.length})`;
+
+    const right = document.createElement("div");
+    right.style.cssText = "display:flex;gap:8px;align-items:center;";
+    right.appendChild(this.#renderBindingsGroupToggle());
+
     const newBtn = document.createElement("button");
     newBtn.textContent = this.#showBindingForm ? "Abbrechen" : "+ Neue Bindung";
     newBtn.style.cssText = "font-size:11px;cursor:pointer;";
@@ -1166,7 +1180,9 @@ class AdminView extends HTMLElement {
       this.#showBindingForm = !this.#showBindingForm;
       this.#render();
     });
-    heading.append(title, newBtn);
+    right.appendChild(newBtn);
+
+    heading.append(title, right);
     section.appendChild(heading);
 
     if (this.#showBindingForm) {
@@ -1182,40 +1198,182 @@ class AdminView extends HTMLElement {
     }
 
     if (this.#bindings.length > 0) {
-      const table = document.createElement("table");
-      table.style.cssText = "border-collapse:collapse;width:100%;";
-      const thead = document.createElement("thead");
-      thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
-        <th style="padding:2px 8px;">Nutzer</th>
-        <th style="padding:2px 8px;">Bereich</th>
-        <th style="padding:2px 8px;">Recht</th>
-        <th style="padding:2px 8px;"></th>
-      </tr>`;
-      table.appendChild(thead);
-      const tbody = document.createElement("tbody");
-      for (const b of this.#bindings) {
-        tbody.appendChild(this.#renderBindingRow(b));
-      }
-      table.appendChild(tbody);
-      section.appendChild(table);
+      section.appendChild(
+        this.#bindingsGroupBy === "node" ? this.#renderBindingsByNode() : this.#renderBindingsBySubject(),
+      );
     }
 
     return section;
   }
 
+  // Nutzerwunsch 2026-09-11 (§12.3e-Folge): Umschalter zwischen "Nach
+  // Nutzer" (Standard, entspricht dem bisherigen Verhalten) und "Nach
+  // Node/Rolle" — dieselben #bindings, nur anders gruppiert, kein
+  // Reload nötig.
+  #renderBindingsGroupToggle(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
+    const options: { value: "subject" | "node"; label: string }[] = [
+      { value: "subject", label: "Nach Nutzer" },
+      { value: "node", label: "Nach Node/Rolle" },
+    ];
+    for (const opt of options) {
+      const btn = document.createElement("button");
+      btn.textContent = opt.label;
+      const active = this.#bindingsGroupBy === opt.value;
+      btn.style.cssText =
+        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
+        (active
+          ? "background:var(--omp-surface-raised);color:var(--omp-text);"
+          : "background:transparent;color:var(--omp-text-dim);");
+      btn.addEventListener("click", () => {
+        if (this.#bindingsGroupBy === opt.value) return;
+        this.#bindingsGroupBy = opt.value;
+        this.#render();
+      });
+      wrap.appendChild(btn);
+    }
+    return wrap;
+  }
+
+  // Gruppiert nach Nutzer: pro Nutzer eine Überschrift, darunter alle
+  // Bereiche/Rechte, die dieser Nutzer hat — Blickrichtung "Nutzer
+  // auswählen, dann sehen/zuweisen, worauf er zugreifen darf".
+  #renderBindingsBySubject(): HTMLElement {
+    const wrap = document.createElement("div");
+    const bySubject = new Map<string, RoleBinding[]>();
+    for (const b of this.#bindings) {
+      if (!bySubject.has(b.subject)) bySubject.set(b.subject, []);
+      bySubject.get(b.subject)!.push(b);
+    }
+    const subjects = [...bySubject.keys()].sort((a, b) => a.localeCompare(b));
+    for (const subject of subjects) {
+      wrap.appendChild(this.#renderBindingGroup(subject, bySubject.get(subject)!, "scope"));
+    }
+    return wrap;
+  }
+
+  // Gruppiert nach Node/Rolle: pro Node (bzw. Workflow→Rolle) eine
+  // Überschrift, darunter alle Nutzer mit Zugriff darauf — Blickrichtung
+  // "Node auswählen, dann sehen/zuweisen, welche Nutzer zugreifen dürfen"
+  // (bisher fehlende Richtung, Nutzerwunsch 2026-09-11).
+  #renderBindingsByNode(): HTMLElement {
+    const wrap = document.createElement("div");
+    const byScope = new Map<string, RoleBinding[]>();
+    for (const b of this.#bindings) {
+      const key = `${b.workflowId ?? ""}::${b.nodeId}`;
+      if (!byScope.has(key)) byScope.set(key, []);
+      byScope.get(key)!.push(b);
+    }
+    const keys = [...byScope.keys()].sort((a, b) =>
+      this.#scopeLabel(byScope.get(a)![0]).localeCompare(this.#scopeLabel(byScope.get(b)![0])),
+    );
+    for (const key of keys) {
+      const group = byScope.get(key)!;
+      wrap.appendChild(this.#renderBindingGroup(this.#scopeLabel(group[0]), group, "subject"));
+    }
+    return wrap;
+  }
+
+  // columnKind bestimmt nur, welches Feld in der ersten Spalte steht
+  // (das jeweils NICHT in der Gruppenüberschrift stehende) — Rest der
+  // Zeile (Recht, Löschen-Button) ist in beiden Blickrichtungen gleich.
+  #renderBindingGroup(headerLabel: string, bindings: RoleBinding[], columnKind: "scope" | "subject"): HTMLElement {
+    const box = document.createElement("div");
+    box.style.cssText = "margin-bottom:10px;";
+
+    const header = document.createElement("div");
+    header.textContent = headerLabel;
+    header.style.cssText = "font-weight:600;margin-bottom:2px;";
+    box.appendChild(header);
+
+    const table = document.createElement("table");
+    table.style.cssText = "border-collapse:collapse;width:100%;margin-bottom:4px;";
+    const tbody = document.createElement("tbody");
+    for (const b of bindings) {
+      const tr = document.createElement("tr");
+
+      const labelTd = document.createElement("td");
+      labelTd.style.cssText = "padding:2px 8px 2px 16px;color:var(--omp-text-dim);";
+      labelTd.textContent = columnKind === "scope" ? this.#scopeLabel(b) : b.subject;
+      tr.appendChild(labelTd);
+
+      const verbTd = document.createElement("td");
+      verbTd.style.cssText = "padding:2px 8px;";
+      verbTd.textContent = VERB_LABEL[b.verb] ?? b.verb;
+      tr.appendChild(verbTd);
+
+      const actionsTd = document.createElement("td");
+      actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Löschen";
+      delBtn.className = "omp-btn-danger";
+      delBtn.style.cssText = "font-size:11px;";
+      delBtn.addEventListener("click", () => this.#deleteBinding(b));
+      actionsTd.appendChild(delBtn);
+      tr.appendChild(actionsTd);
+
+      tbody.appendChild(tr);
+    }
+    table.appendChild(tbody);
+    box.appendChild(table);
+    return box;
+  }
+
   #renderBindingForm(): HTMLElement {
+    const wrap = document.createElement("div");
+
+    // Nutzerwunsch 2026-09-11: Anlage-Formular aus beiden Richtungen
+    // bedienbar — reine Feld-Reihenfolge, #createBinding() selbst nimmt
+    // in jeder Reihenfolge dieselben drei Werte (subject/scope/verb)
+    // entgegen, s. dort.
+    const dirToggle = document.createElement("div");
+    dirToggle.style.cssText = "display:flex;gap:0;margin-bottom:6px;width:fit-content;" +
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
+    const dirOptions: { value: "userFirst" | "nodeFirst"; label: string }[] = [
+      { value: "userFirst", label: "Nutzer → Node" },
+      { value: "nodeFirst", label: "Node → Nutzer" },
+    ];
+    for (const opt of dirOptions) {
+      const btn = document.createElement("button");
+      btn.textContent = opt.label;
+      const active = this.#newBindingDirection === opt.value;
+      btn.style.cssText =
+        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
+        (active
+          ? "background:var(--omp-surface-raised);color:var(--omp-text);"
+          : "background:transparent;color:var(--omp-text-dim);");
+      btn.addEventListener("click", () => {
+        if (this.#newBindingDirection === opt.value) return;
+        this.#newBindingDirection = opt.value;
+        this.#render();
+      });
+      dirToggle.appendChild(btn);
+    }
+    wrap.appendChild(dirToggle);
+
     const form = document.createElement("div");
     form.style.cssText =
       "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px;" +
       "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+    wrap.appendChild(form);
 
+    const subjectDatalistId = "omp-admin-user-datalist";
     const subjectInput = document.createElement("input");
     subjectInput.placeholder = "Nutzername";
     subjectInput.value = this.#newSubject;
+    subjectInput.setAttribute("list", subjectDatalistId);
     subjectInput.style.cssText = "flex:1;min-width:100px;";
     subjectInput.addEventListener("input", () => {
       this.#newSubject = subjectInput.value;
     });
+    const subjectDatalist = document.createElement("datalist");
+    subjectDatalist.id = subjectDatalistId;
+    for (const u of this.#users) {
+      const opt = document.createElement("option");
+      opt.value = u.username;
+      subjectDatalist.appendChild(opt);
+    }
 
     // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — "(Global)" ist das
     // unveränderte Vor-Kapitel-12-Teil-4-Verhalten (Node-ID/Instanz-ID
@@ -1294,39 +1452,12 @@ class AdminView extends HTMLElement {
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => this.#createBinding());
 
-    form.append(subjectInput, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
-    return form;
-  }
-
-  #renderBindingRow(b: RoleBinding): HTMLElement {
-    const tr = document.createElement("tr");
-
-    const subjectTd = document.createElement("td");
-    subjectTd.style.cssText = "padding:2px 8px;";
-    subjectTd.textContent = b.subject;
-    tr.appendChild(subjectTd);
-
-    const scopeTd = document.createElement("td");
-    scopeTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
-    scopeTd.textContent = this.#scopeLabel(b);
-    tr.appendChild(scopeTd);
-
-    const verbTd = document.createElement("td");
-    verbTd.style.cssText = "padding:2px 8px;";
-    verbTd.textContent = VERB_LABEL[b.verb] ?? b.verb;
-    tr.appendChild(verbTd);
-
-    const actionsTd = document.createElement("td");
-    actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
-    const delBtn = document.createElement("button");
-    delBtn.textContent = "Löschen";
-    delBtn.className = "omp-btn-danger";
-    delBtn.style.cssText = "font-size:11px;";
-    delBtn.addEventListener("click", () => this.#deleteBinding(b));
-    actionsTd.appendChild(delBtn);
-    tr.appendChild(actionsTd);
-
-    return tr;
+    if (this.#newBindingDirection === "nodeFirst") {
+      form.append(workflowSelect, nodeInput, datalist, subjectInput, subjectDatalist, verbSelect, createBtn);
+    } else {
+      form.append(subjectInput, subjectDatalist, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
+    }
+    return wrap;
   }
 
   #nodeLabel(nodeId: string): string {
