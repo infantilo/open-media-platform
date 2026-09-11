@@ -199,8 +199,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // DSK aus einer Discovery-Liste wählen statt den exakten Node-Label-
     // Text selbst eintippen zu müssen (main.rs::AutomationState::
     // discovered_labels/availableNodes-Param, remote::list_node_labels).
-    const playerLabelSelect = document.createElement("select");
-    playerLabelSelect.className = "target-select";
+    // Kapitel 6 Teil 7: zwei Kanal-Ziele (A/B) statt eines — dieselbe
+    // Auswahl-Logik, nur zweimal (echtes Xfade braucht zwei physisch
+    // getrennte omp-channel-player-Instanzen am Mixer-Crosspoint).
+    const playerALabelSelect = document.createElement("select");
+    playerALabelSelect.className = "target-select";
+    const playerBLabelSelect = document.createElement("select");
+    playerBLabelSelect.className = "target-select";
     const mixerLabelSelect = document.createElement("select");
     mixerLabelSelect.className = "target-select";
     // Kapitel 6 Teil 5 (§6.4 "Grafik-Child-Events"): gleiches Muster wie
@@ -213,13 +218,15 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     const connectedEl = document.createElement("span");
     connectedEl.className = "connected";
     connectedEl.textContent = "nicht verbunden";
-    const playerLabelWrap = document.createElement("label");
-    playerLabelWrap.append("Player: ", playerLabelSelect);
+    const playerALabelWrap = document.createElement("label");
+    playerALabelWrap.append("Kanal A: ", playerALabelSelect);
+    const playerBLabelWrap = document.createElement("label");
+    playerBLabelWrap.append("Kanal B: ", playerBLabelSelect);
     const mixerLabelWrap = document.createElement("label");
     mixerLabelWrap.append("Mixer: ", mixerLabelSelect);
     const graphicsLabelWrap = document.createElement("label");
     graphicsLabelWrap.append("Grafik: ", graphicsLabelSelect);
-    targetsRow.append(playerLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl);
+    targetsRow.append(playerALabelWrap, playerBLabelWrap, mixerLabelWrap, graphicsLabelWrap, connectedEl);
 
     const statusRow = document.createElement("div");
     statusRow.className = "status-row";
@@ -438,7 +445,8 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
     // Sofort-Anwenden bei Auswahl, gleiches Muster wie
     // `omp-video-mixer-me`s DSK-Quellauswahl (`keyerSourceSelect`) —
     // kein separater Übernehmen-Schritt nötig.
-    playerLabelSelect.addEventListener("change", () => setParam("targetPlayerLabel", playerLabelSelect.value));
+    playerALabelSelect.addEventListener("change", () => setParam("targetPlayerALabel", playerALabelSelect.value));
+    playerBLabelSelect.addEventListener("change", () => setParam("targetPlayerBLabel", playerBLabelSelect.value));
     mixerLabelSelect.addEventListener("change", () => setParam("targetMixerLabel", mixerLabelSelect.value));
     graphicsLabelSelect.addEventListener("change", () => setParam("targetGraphicsLabel", graphicsLabelSelect.value));
     modeSelect.addEventListener("change", () => setParam("mode", modeSelect.value));
@@ -833,9 +841,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         assetsValue,
         activeCartId,
         availableNodesValue,
-        targetPlayerLabel,
+        targetPlayerALabel,
+        targetPlayerBLabel,
         targetMixerLabel,
         targetGraphicsLabel,
+        liveChannel,
         mediaLibraryValue,
         availableSourcesValue,
       ] = await Promise.all([
@@ -849,9 +859,11 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
         getParam("assets"),
         getParam("activeCartId"),
         getParam("availableNodes"),
-        getParam("targetPlayerLabel"),
+        getParam("targetPlayerALabel"),
+        getParam("targetPlayerBLabel"),
         getParam("targetMixerLabel"),
         getParam("targetGraphicsLabel"),
+        getParam("liveChannel"),
         getParam("mediaLibrary"),
         getParam("availableSources"),
       ]);
@@ -913,7 +925,13 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       modeBadge.textContent = onAir ? "ON AIR" : "STANDBY";
       modeBadge.className = onAir ? "mode-badge onair" : "mode-badge";
       takeBtn.disabled = !cuedItemId;
-      connectedEl.textContent = connected ? "verbunden" : "nicht verbunden";
+      // Kapitel 6 Teil 7: zeigt zusätzlich, welcher Kanal gerade live ist
+      // (reine Anzeige — der Kanalwechsel läuft ausschließlich über
+      // take()/advance(), nicht über einen Bedienknopf hier).
+      const liveChannelLabel = liveChannel === "b" ? "B" : "A";
+      connectedEl.textContent = connected
+        ? `verbunden (Kanal ${liveChannelLabel} live)`
+        : "nicht verbunden";
       connectedEl.className = connected ? "connected ok" : "connected";
 
       // Listenansicht-Folgeschritt: Next/Next-Live-Verfügbarkeit
@@ -930,10 +948,12 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       nextLiveBtn.disabled = !hasNextLive;
 
       const availableLabels = availableNodesValue || [];
-      buildTargetOptions(playerLabelSelect, availableLabels, targetPlayerLabel);
+      buildTargetOptions(playerALabelSelect, availableLabels, targetPlayerALabel);
+      buildTargetOptions(playerBLabelSelect, availableLabels, targetPlayerBLabel);
       buildTargetOptions(mixerLabelSelect, availableLabels, targetMixerLabel);
       buildTargetOptions(graphicsLabelSelect, availableLabels, targetGraphicsLabel);
-      if (shadow.activeElement !== playerLabelSelect) playerLabelSelect.value = targetPlayerLabel || "";
+      if (shadow.activeElement !== playerALabelSelect) playerALabelSelect.value = targetPlayerALabel || "";
+      if (shadow.activeElement !== playerBLabelSelect) playerBLabelSelect.value = targetPlayerBLabel || "";
       if (shadow.activeElement !== mixerLabelSelect) mixerLabelSelect.value = targetMixerLabel || "";
       if (shadow.activeElement !== graphicsLabelSelect) graphicsLabelSelect.value = targetGraphicsLabel || "";
 

@@ -423,7 +423,7 @@ startbar ist.
 | **omp-channel-player** | Isel-freier, einzweigiger Player ohne Playlist/Cue-Take — `load()` ersetzt den aktuellen Inhalt sofort. Gedacht als eine von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade. |
 | **omp-multiviewer** | Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal. |
 | **omp-viewer** | Zeigt einen ausgewählten MXL-Videostream als MJPEG-Vorschau im Browser. |
-| **omp-playout-automation** | Automatisierte Playlist-Sequenzierung: steuert einen bereits laufenden Player und Bildmischer fern (Auto/Hold-Modus, Next/Next-Live/Stop, Cart-/Interrupt-Assets). Keine eigene Medienpipeline. |
+| **omp-playout-automation** | Automatisierte Playlist-Sequenzierung: steuert zwei omp-channel-player-Kanäle (A/B) und einen Bildmischer fern (Auto/Hold-Modus, Next/Next-Live/Stop, Cart-/Interrupt-Assets), echtes Xfade zwischen den beiden Kanälen. Keine eigene Medienpipeline. |
 | **omp-ograf** | Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. |
 | **omp-media-library** | Datei-Katalog mit technischen Metadaten (`ffprobe`) und Mark-In/Out-Segmenten. Keine eigene Medienpipeline. |
 | **omp-recorder** | Nimmt eine per Kreuzschiene angeschlossene MXL-Quelle (Video/Audio) als Matroska-Datei auf (`record.start`/`record.stop`). Ausschließlich MXL als Eingang, keine Capture-Karte. „Warm, unabonniert" bis zum Start — keine Lese-Pipeline im Leerlauf. |

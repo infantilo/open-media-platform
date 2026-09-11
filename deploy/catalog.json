@@ -117,7 +117,7 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-playout-automation"],
     "env": {},
-    "description": "Automatisierte Playlist-Sequenzierung: steuert einen bereits laufenden Player und Bildmischer fern. Keine eigene Medienpipeline.",
+    "description": "Automatisierte Playlist-Sequenzierung: steuert zwei omp-channel-player-Kanäle (A/B) und einen Bildmischer fern, echtes Xfade zwischen den Kanälen. Keine eigene Medienpipeline.",
     "expectedResources": "sehr gering (keine Medienverarbeitung)"
   },
   {

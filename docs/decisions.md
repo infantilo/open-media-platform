@@ -22710,3 +22710,118 @@ neue ID, automatisch disambiguierter Name, Rollen UND
 `deno check`/`deno test ui/` (92/92) grün.
 
 **Dateien:** `ui/shell/workflows-view.ts`.
+
+## 2026-09-11 (Nachtrag 205) — Kapitel 6 Teil 7: Automation-Retargeting auf zwei omp-channel-player-Kanäle, echtes Xfade (Nutzerauftrag "kapitel 6 teil 7 anfangen")
+
+**Kontext:** `docs/END-GOAL-FEATURES.md` §6.5 Teil 7 (bis dahin "offen")
+verlangte: `targetPlayerLabel` → `targetPlayerALabel`/`targetPlayerBLabel`,
+`take_on_targets` alterniert `load()` zwischen zwei
+`omp-channel-player`-Instanzen + echtes `crosspoint.select`+
+`cut`/`autoTrans` zwischen zwei VERSCHIEDENEN Sendern (erst dann ist
+`Transition::Mix` ein echtes, sichtbares Xfade — Kapitel 6 Teil 6 hatte
+das nur manuell gezeigt, nie über die Automation verdrahtet). Offene
+Design-Frage laut Plan: woher Item-Metadaten (Label/Dauer/
+Verfügbarkeit) künftig kommen, da `omp-channel-player` (anders als
+`omp-player`) kein Mehr-Item-Modell zum Spiegeln mehr hat.
+
+**Entscheidung zur offenen Frage:** Automation hält die Rundown-Liste
+jetzt vollständig selbst (`state.metadata`, lokal vergebene IDs
+`"item{n}"`, gleiches Muster wie `next_cart_seq`/`"cart{n}"`) —
+Datei-Dauer kommt vom Operator-Argument (`DEFAULT_DURATION_MS` als
+Fallback) statt automatisch per `ffprobe` ermittelt zu werden.
+**Ehrliche v1-Grenze, bewusst nicht behoben:** vormals probte der
+Ziel-Player (`omp-player`) die reale Clip-Länge beim `append()`
+automatisch; `omp-channel-player` kann das nicht (kein Vorab-Laden ohne
+den aktiven Kanal zu stören). Der bereits in Kapitel 15 vorhandene
+`omp-media-library`-Katalog (ffprobe'te Dateidauer) wäre der naheliegende
+Nachrüst-Pfad (im Plan selbst als "Kandidat" benannt) — bewusst NICHT
+Teil dieser Runde (eigene Zielauflösung + eigener Poll-Loop, spürbar
+größerer Scope als die Kern-Retargeting-Arbeit).
+
+**Kernumbau (`nodes/omp-playout-automation/src/main.rs`):**
+- Neuer `Channel`-Enum (A/B) + `AutomationState::live_channel` ersetzt
+  das bisherige Einzelziel-Modell (`target_player_label`/
+  `player_node_id` → `target_player_{a,b}_label`/`player_{a,b}_node_id`).
+- `take_on_targets` komplett neu: lädt IMMER auf den gerade NICHT
+  live geschalteten Kanal (`standby_target`/`load_onto_channel`,
+  Kollisionsvermeidung mit dem laufenden Kanal strukturell garantiert,
+  kein Glitch am Programmausgang), dann `crosspoint.select`+
+  `cut`/`autoTrans` auf GENAU DIESEN — liefert bei Erfolg den neuen
+  `live_channel`-Wert, Aufrufer committet ihn erst danach lokal
+  (unverändertes "remote zuerst, dann lokal"-Prinzip). `do_cue`
+  bedeutet jetzt ein echtes `load()` auf den Standby-Kanal
+  (Vorschau/Vorbereitung, Mixer unberührt) statt nur eines internen
+  Player-Zeigers — inhaltlich näher an echter Broadcast-Preset-Bus-
+  Semantik als das alte Fake-Cue.
+- `do_append`/`do_load` (Bulk-Reorder) wurden von "an den Player
+  weiterreichen + Antwort rekonstruieren" auf vollständig LOKALE
+  Item-Erzeugung umgestellt (kein Ziel-Player-Roundtrip mehr nötig für
+  reine Listenoperationen).
+- `do_remove` ist jetzt rein lokal (keine Player-seitige "on-air lehnt
+  Entfernen ab"-Beschränkung mehr, da `omp-channel-player` kein
+  Item-Konzept hat, das dem im Weg stünde — Liste≠Wiedergabe-Trennung
+  jetzt auch hier, nicht nur bei `do_stop`).
+- `do_stop`/`do_cart_fire`/`do_cart_return` deutlich vereinfacht: kein
+  append/remove-Buchhaltungs-Umweg mehr (`stop_item_id`,
+  `ActiveCart::player_item_id`, `fetch_new_item`/`fetch_new_item_id`
+  komplett entfernt) — ein synthetisches `ItemMeta` geht direkt in
+  `take_on_targets`.
+- Neuer readonly Param `liveChannel` ("a"/"b") fürs UI.
+- `ui/bundle.js`: zwei Kanal-Dropdowns ("Kanal A"/"Kanal B") statt
+  eines Player-Dropdowns, Live-Kanal-Anzeige neben dem
+  Verbunden-Status.
+
+**Live verifiziert** (echte "Playout"-Produktion, kein Raten, §0 Punkt
+3): zwei Testpattern-Items angelegt, `cue`+`take` in beide Richtungen
+(A→B, B→A) über den echten laufenden Workflow ausgeführt. Bei jedem
+Schritt direkt per API bestätigt (nicht nur "kein Fehler"): (1) `load()`
+traf nachweislich NUR den Standby-Kanal (`currentLabel` des jeweils
+anderen Kanals blieb unverändert), (2) `crosspoint.presetInput` des
+Mixers zeigte nach jedem Take die tatsächlich UNTERSCHIEDLICHE
+Sender-ID des jeweils neuen Kanals (nicht mehr derselbe Sender wie
+zuvor — das war exakt die "No-Op"-Lücke aus Teil 6), (3) `liveChannel`
+flippte korrekt in beide Richtungen. Zusätzlich `Transition::Mix`
+(`crosspoint.autoTrans`) mit denselben zwei unterschiedlichen Sendern
+bestätigt — die Voraussetzung für ein echtes Xfade ist damit erfüllt.
+`cargo build --workspace`/`clippy -D warnings`/`test -p
+omp-playout-automation` (46/46) grün.
+
+**Zwei echte, unabhängige Nebenfunde beim Live-Testen (dokumentiert,
+NICHT in dieser Runde behoben — außerhalb des Kapitel-6-Teil-7-Scopes):**
+
+1. **Host-Agent vergisst `OMP_LAUNCH_SECRET` bei remote-host-
+   gelaunchten Instanzen.** `omp-playout-automation` auf einem
+   simulierten Remote-Host (`make hosts`) gestartet bekam laut
+   `/proc/<pid>/environ` `OMP_INSTANCE_ID`, aber NICHT
+   `OMP_LAUNCH_SECRET`/`OMP_ORCHESTRATOR_URL` — jeder Fernaufruf dieses
+   Nodes (Kern seiner Existenz, s. Moduldoku §24.1) schlug dadurch mit
+   "kein Service-Token verfügbar" fehl. Auf dem lokalen Orchestrator-
+   Host (kein Host-Agent-Umweg) funktioniert derselbe Mechanismus
+   nachweislich einwandfrei (s. Live-Verifikation oben). Betrifft
+   vermutlich nur Nodes, die selbst `OMP_LAUNCH_SECRET` brauchen (nur
+   `omp-playout-automation` bisher, andere Node-Typen rufen keine
+   Peer-Nodes über den Proxy auf) — deshalb bisher nie aufgefallen.
+   **Nicht behoben:** eigenständiger Bug in `host-agent`/`launcher`
+   (Go), außerhalb des Rust-Teil-7-Scopes dieser Runde. Für die
+   Live-Verifikation umgangen, indem alle fünf Playout-Rollen (nach
+   Stop+erneutem Start ohne aktive Remote-Hosts) auf dem lokalen
+   Orchestrator-Host platziert wurden.
+2. **`crosspoint.programInput` des Mixers bleibt nach `crosspoint.cut`
+   leer** (`omp-video-mixer-me`) — per komplett manuellem, von diesem
+   Code unabhängigem Test reproduziert (direkter `select`+`cut`-Aufruf
+   über die API, ohne jeden Bezug zu `omp-playout-automation`).
+   `crosspoint.presetInput` aktualisiert sich dagegen korrekt, die
+   eigentliche Programmwechsel-Wirkung (Tally, sichtbarer Bildwechsel)
+   scheint laut allen anderen Indizien intakt — nur dieser eine
+   Lesewert bleibt leer. Nicht weiter eingegrenzt (kein GStreamer-
+   Debugging in dieser Runde), rein dokumentiert.
+
+**Bewusst nicht Teil dieser Runde:** Teil 8 (`omp-audio-mixer`-
+Verdrahtung für Audio-Follow-Video, laut Plan ohne Code-Änderung
+möglich — reine Workflow-/Kanal-Konfiguration) und Teil 9
+(Live-Quellen dynamisch im Rundown-UI) — beide eigene Phasenplan-
+Schritte.
+
+**Dateien:** `nodes/omp-playout-automation/src/main.rs`,
+`nodes/omp-playout-automation/ui/bundle.js`, `deploy/catalog.json`,
+`docs/HANDBUCH.md`.

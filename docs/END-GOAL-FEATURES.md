@@ -1330,19 +1330,25 @@ im K1-Look —
   Echtzeit-Positionsfortschritt, wiederholte `load()`-Aufrufe ohne
   Freeze, Panic-Fix reproduziert+verifiziert. **Noch NICHT in
   `omp-playout-automation` verdrahtet** (Umfangsentscheidung, s. Teil 7).
-- **Teil 7 — Automation-Retargeting auf zwei Kanäle (offen):**
+- **Teil 7 — Automation-Retargeting auf zwei Kanäle (erledigt,
+  2026-09-11, `docs/decisions.md` Nachtrag 205):**
   `targetPlayerLabel` → `targetPlayerALabel`/`targetPlayerBLabel`,
-  `take_on_targets` alterniert `load()` zwischen den zwei
-  `omp-channel-player`-Instanzen + echtes `crosspoint.select`+
-  `cut`/`autoTrans` zwischen zwei verschiedenen Sendern (erst DANN ist
-  `Transition::Mix` ein echtes, sichtbares Xfade). Braucht eine
-  Entscheidung, wo Item-Metadaten (Label/Dauer/Verfügbarkeit) künftig
-  herkommen, da `omp-channel-player` (anders als `omp-player`) keine
-  Mehr-Item-Liste zum Spiegeln mehr hat — Kandidat: Automation hält die
-  Liste selbst, Datei-Dauer/Verfügbarkeit kommt von `omp-media-library`
-  statt von einem Player gespiegelt (deckt sich mit dem oben skizzierten
-  Datenmodell, §6.4 "Persistenz der Playlist als speicher-/ladbare
-  Objekte").
+  `take_on_targets` lädt jetzt immer auf den gerade NICHT live
+  geschalteten Kanal und schaltet den Mixer per `crosspoint.select`+
+  `cut`/`autoTrans` auf genau diesen — `Transition::Mix` ist damit
+  erstmals ein echtes, sichtbares Xfade zwischen zwei verschiedenen
+  Sendern statt der bisherigen No-Op-Grenze. Die Metadaten-Frage
+  entschieden: Automation hält den Rundown jetzt vollständig lokal
+  (eigene ID-Vergabe), Datei-Dauer kommt vom Operator statt automatisch
+  per `ffprobe` ermittelt — **ehrliche v1-Grenze**, der skizzierte
+  `omp-media-library`-Nachrüstpfad bleibt ein offener Kandidat, wurde
+  aber nicht gebaut. Live gegen die echte "Playout"-Produktion
+  verifiziert (Cue/Take in beide Richtungen, Mixer-`presetInput` zeigt
+  nachweislich unterschiedliche Sender-IDs je Take). Dabei zwei
+  unabhängige, bewusst NICHT behobene Nebenfunde dokumentiert: ein
+  Host-Agent-Bug (`OMP_LAUNCH_SECRET` fehlt bei remote-host-gelaunchten
+  Instanzen) und ein leerer `crosspoint.programInput`-Lesewert am Mixer
+  nach `cut` (Nachtrag 205 für Details).
 - **Teil 8 — `omp-audio-mixer`-Verdrahtung für Audio-Follow-Video
   (offen):** zwei Kanalstreifen (je `omp-channel-player`-Instanz) — laut
   Recherche (Nachtrag 187) ohne Code-Änderung an Mixer/Audio-Mixer
