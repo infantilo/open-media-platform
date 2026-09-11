@@ -52,7 +52,7 @@ import {
 } from "./controls.ts";
 import { mountUIBundle } from "../shell/ui-bundle.ts";
 import { apiFetch, connectionMonitor } from "../shell/connection.ts";
-import { ROLE_FORMATS, uniqueRoleName } from "./roles.ts";
+import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
 
@@ -4586,7 +4586,7 @@ export class FlowCanvas extends HTMLElement {
     defaultOpt.value = "";
     defaultOpt.textContent = "Node-Standard";
     select.appendChild(defaultOpt);
-    for (const name of ROLE_FORMATS) {
+    for (const name of STANDARD_FORMATS) {
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -823,16 +822,17 @@ func (s *Service) runStart(wf Workflow, ioAssignments map[string]ioPortAssignmen
 	defer cancel()
 
 	// Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c): Workflow-Settings
-	// wie die Programm-Auflösung wandern als extraEnv in jeden lokalen
+	// wie das Programm-Format wandern als extraEnv in jeden lokalen
 	// Rollen-Start (s. launcher.Launcher.Start-Doku zur Remote-
-	// Einschränkung). 0 = nicht gesetzt, Node behält ihren eigenen
-	// Default — kein OMP_WIDTH/OMP_HEIGHT für Workflows ohne Settings.
+	// Einschränkung). Leer = nicht gesetzt, Node behält ihren eigenen
+	// Default — kein OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_* für Workflows
+	// ohne Settings. Nutzt seit 2026-09-11 dieselbe formatExtraEnv()
+	// wie Role.Format (s. Settings.ProgramFormat-Doku in types.go) —
+	// liefert damit erstmals auch die Framerate mit, nicht nur die
+	// Auflösung.
 	extraEnv := map[string]string{}
-	if wf.Definition.Settings.ProgramWidth > 0 {
-		extraEnv["OMP_WIDTH"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramWidth), 10)
-	}
-	if wf.Definition.Settings.ProgramHeight > 0 {
-		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
+	for k, v := range formatExtraEnv(wf.Definition.Settings.ProgramFormat) {
+		extraEnv[k] = v
 	}
 
 	// Nachtrag 99: Ausgangs-Belegung aus ALLEN ANDEREN Workflows (jetzt
@@ -1354,11 +1354,8 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 	}
 
 	extraEnv := map[string]string{}
-	if wf.Definition.Settings.ProgramWidth > 0 {
-		extraEnv["OMP_WIDTH"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramWidth), 10)
-	}
-	if wf.Definition.Settings.ProgramHeight > 0 {
-		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
+	for k, v := range formatExtraEnv(wf.Definition.Settings.ProgramFormat) {
+		extraEnv[k] = v
 	}
 	// S. runStart-Aufrufstelle/roleExtraEnv-Doku: role.Format +
 	// role.MixerLevels (Nutzerwunsch 2026-08-14) additiv gemergt.
@@ -1827,6 +1824,11 @@ func findByInstanceID(nodes []registry.NodeView, instanceID string) (registry.No
 func validate(def Definition) error {
 	if len(def.Roles) == 0 {
 		return fmt.Errorf("%w: at least one role required", ErrValidation)
+	}
+	if def.Settings.ProgramFormat != "" {
+		if _, ok := standardFormats[def.Settings.ProgramFormat]; !ok {
+			return fmt.Errorf("%w: settings reference unknown format %q (not one of %v)", ErrValidation, def.Settings.ProgramFormat, StandardFormatNames())
+		}
 	}
 	nodeTypeByRole := map[string]string{}
 	for _, r := range def.Roles {

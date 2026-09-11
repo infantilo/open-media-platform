@@ -18,14 +18,18 @@ export function uniqueRoleName(nodeType: string, used: Set<string>): string {
   return `${nodeType}-${i}`;
 }
 
-// Standard-Format-Presets je Rolle (Nutzerwunsch 2026-07-28) — geteilt
-// zwischen dem Text-Formular (ui/shell/workflows-view.ts) und dem
-// grafischen Role-Designer (ui/graph/role-designer.ts), damit beide
-// Dropdowns bei einer künftigen Preset-Änderung nicht auseinanderlaufen
-// können. Muss exakt die Namen aus
+// Standard-Auflösung+Framerate-Presets (Nutzerwunsch 2026-07-28, erneut
+// 2026-09-11: "elegantere Lösung mit einer global definierbaren
+// Dropdown statt Breite/Höhe") — EINE gemeinsame Liste für jede Stelle,
+// an der ein Format wählbar ist: das grafische Role-Designer-Dropdown
+// (ui/graph/role-designer.ts, pro Rolle), das Root-Kachel-Kontextmenü
+// (ui/graph/flow-canvas.ts) und das Workflow-Einstellungen-Formular
+// (ui/shell/workflows-view.ts, workflow-weit statt pro Rolle) — damit
+// keine drei Dropdowns bei einer künftigen Preset-Änderung
+// auseinanderlaufen können. Muss exakt die Namen aus
 // orchestrator/internal/workflows/formats.go spiegeln (einzige Quelle
 // der Wahrheit bleibt dort, validate() lehnt jeden anderen Namen ab).
-export const ROLE_FORMATS = [
+export const STANDARD_FORMATS = [
   "480p25", "480p29.97",
   "576p25", "576p50",
   "720p25", "720p29.97", "720p50", "720p59.94", "720p60",

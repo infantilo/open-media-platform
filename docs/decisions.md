@@ -22592,3 +22592,82 @@ dass der echte gespeicherte Workflow "new group" unverändert weiter 4
 Rollen hat. `deno check`/`deno test ui/` (92/92) grün.
 
 **Dateien:** `ui/kit/omp-confirm.ts`, `ui/kit/omp-toast.ts`.
+
+## 2026-09-11 (Nachtrag 203) — Workflow-Programm-Auflösung auf benanntes Format-Dropdown umgestellt, Framerate-Lücke geschlossen (Nutzerwunsch "elegantere Lösung mit einer global definierbaren Dropdown statt Breite/Höhe, Framerate fehlt auch")
+
+**Kontext:** Das Projekt hatte bereits GENAU den vom Nutzer gewünschten
+Mechanismus — `Role.Format` (pro Rolle wählbares benanntes Preset wie
+"1080p50", `orchestrator/internal/workflows/formats.go`,
+`StandardFormatNames()`, geteilt zwischen grafischem Role-Designer und
+— bisher nur behauptet, nicht tatsächlich — dem Text-Formular) — aber
+NICHT für die workflow-weite "Programm-Auflösung"
+(`Settings.ProgramWidth`/`ProgramHeight`, Kapitel 15 §15.3c): zwei
+getrennte, unbeschriftete Zahlenfelder ganz ohne Framerate-Bezug. Der
+Nutzer hatte den fehlenden Framerate-Bezug korrekt bemerkt — real, nicht
+nur kosmetisch: `formatExtraEnv()` liefert für ein `Role.Format` bereits
+`OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN`, die workflow-weite Einstellung
+lieferte nie mehr als `OMP_WIDTH`/`OMP_HEIGHT`.
+
+**Backend (`orchestrator/internal/workflows/`):**
+`Settings.ProgramWidth`/`ProgramHeight uint32` → `Settings.ProgramFormat
+string` (json `programFormat`), dieselbe Preset-Liste/Validierung wie
+`Role.Format` (`standardFormats`/`StandardFormatNames()` in
+`validate()`). Die drei Stellen, die zuvor `OMP_WIDTH`/`OMP_HEIGHT`
+manuell aus den Rohwerten bauten (`service.go` runStart/RestartRole,
+`migration.go` executeMigration), nutzen jetzt dieselbe
+`formatExtraEnv()` wie `Role.Format` — liefert automatisch auch
+`OMP_FRAMERATE_NUM`/`OMP_FRAMERATE_DEN` mit, ohne dass die drei
+Aufrufstellen das einzeln nachbauen mussten. `strconv`-Import in beiden
+Dateien entfernt (nicht mehr gebraucht). `TestStartPassesResolutionSettingsAsExtraEnv`
+aktualisiert (Format "720p60" statt Rohwerte, prüft jetzt zusätzlich
+`OMP_FRAMERATE_NUM`/`_DEN`).
+
+**Frontend:** `ROLE_FORMATS` (`ui/graph/roles.ts`) in `STANDARD_FORMATS`
+umbenannt (dient jetzt drei Stellen statt einer: Role-Designer-Dropdown,
+Root-Kachel-Kontextmenü, NEU das Workflow-Einstellungen-Formular) —
+mechanisches sed-Rename in `role-designer.ts`/`flow-canvas.ts`.
+`ui/shell/workflows-view.ts`: die zwei `<input type="number">`
+("Breite"/"Höhe") durch ein einzelnes `<select>` ersetzt, exakt
+dasselbe Optionsmuster wie der Role-Designer-Format-Dropdown ("Format:
+Node-Standard" → hier "Node-Standard (kein Programm-Format)" + alle
+`STANDARD_FORMATS`-Namen). `#formWidth`/`#formHeight` → ein
+`#formProgramFormat`-Feld, Listen-Badge zeigt jetzt den Formatnamen
+statt "1280×720".
+
+**Live verifiziert** (echte Dev-Umgebung, hand-gebautes CDP-Skript):
+Dropdown im echten Workflow-Bearbeiten-Formular geöffnet, "1080p50"
+gewählt, gespeichert — per API bestätigt, `settings.programFormat`
+korrekt persistiert; Formular erneut geöffnet zeigt die Auswahl
+vorbelegt (echtes Roundtrip); Listen-Badge zeigt "1080p50". `go build/
+vet/test ./...` (Workflows-Paket + Gesamt-Suite) grün, `deno check`/
+`deno test ui/` (92/92) grün.
+
+**Eigener Fehler live gefunden UND korrigiert (Transparenz-Pflicht):**
+ein zu grober DOM-Selektor im allerersten Test-Skript-Durchlauf
+(`row.querySelector('button')` auf einem zu weit gefassten
+Container-Div) traf zweimal versehentlich den ECHTEN, laufenden
+"Playout"-Workflow des Nutzers statt des beabsichtigten
+Wegwerf-Testziels — fügte ihm eine fremde `omp-viewer`-Rolle sowie
+`programFormat` hinzu. Zusätzlich beendete der für den Go-Rebuild nötige
+Orchestrator-Neustart (`make stop`/`make start`) dessen laufende
+Node-Prozesse (Status fiel auf "stopped", `GET /api/v1/instances`
+zeigte 0 laufende Instanzen, keine verwaisten Prozesse gefunden).
+Sofort nach Entdeckung behoben: Definition per PUT exakt auf den
+zuvor per GET gesicherten Fünf-Rollen-Stand zurückgesetzt (kein
+`omp-viewer`, keine `settings`), Workflow erneut gestartet — läuft
+wieder mit allen fünf Rollen. Das ebenfalls betroffene
+Wegwerf-Testziel "new group" auf sein Vorher-`settings`-`{}`
+zurückgesetzt (Rollen/Connections dort unverändert geblieben).
+
+**Bewusst nicht Teil dieser Runde:** kein DB-Migrationsskript für
+`programWidth`/`programHeight` in bereits gespeicherten
+Workflow-Definitionen — keiner der beiden aktuell existierenden
+Workflows nutzte das Feld vor dieser Änderung (per API geprüft), reiner
+JSON-Feld-Rename ohne SQL-Schema-Bezug (Definition liegt als JSON-Blob).
+`docs/END-GOAL-FEATURES.md` §15.4s historische "✅ erledigt
+2026-07-17"-Notiz bewusst nicht rückwirkend umgeschrieben (wie
+`ARCHITECTURE.md`/`UMSETZUNG.md`-Historie sonst auch).
+
+**Dateien:** `orchestrator/internal/workflows/{types,service,migration,
+formats,latencybudget,service_test}.go`, `ui/graph/{roles,role-designer,
+flow-canvas}.ts`, `ui/shell/workflows-view.ts`.

@@ -38,7 +38,7 @@ import {
   type Viewport,
   zoomAt,
 } from "./geometry.ts";
-import { ROLE_FORMATS, uniqueRoleName } from "./roles.ts";
+import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import {
   addConnection,
   type DraftConnection,
@@ -972,7 +972,7 @@ export class RoleDesigner extends HTMLElement {
     formatDefaultOpt.value = "";
     formatDefaultOpt.textContent = "Format: Node-Standard";
     formatSelect.appendChild(formatDefaultOpt);
-    for (const name of ROLE_FORMATS) {
+    for (const name of STANDARD_FORMATS) {
       const opt = document.createElement("option");
       opt.value = name;
       opt.textContent = name;

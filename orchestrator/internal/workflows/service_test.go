@@ -891,10 +891,12 @@ func TestCreateRejectsMultipleConnectionsToSameCrosspointTarget(t *testing.T) {
 }
 
 // TestStartPassesResolutionSettingsAsExtraEnv ist die Kern-Verifikation
-// für Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17): eine
-// gesetzte Workflow-Auflösung landet als OMP_WIDTH/OMP_HEIGHT-extraEnv
-// bei jedem Rollen-Start. Ein Workflow OHNE Settings darf dagegen kein
-// extraEnv erzeugen (0 = Node behält ihren eigenen Default).
+// für Kapitel 15 (docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17, seit
+// 2026-09-11 auf das benannte Settings.ProgramFormat-Preset umgestellt,
+// s. formats.go): ein gesetztes Workflow-Format landet als
+// OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN-extraEnv bei
+// jedem Rollen-Start. Ein Workflow OHNE Settings darf dagegen kein
+// extraEnv erzeugen (leer = Node behält ihren eigenen Default).
 func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 	original, originalPoll := registrationTimeout, registrationPollInterval
 	registrationTimeout = 200 * time.Millisecond
@@ -908,7 +910,7 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 
 	def := Definition{
 		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
-		Settings: Settings{ProgramWidth: 1280, ProgramHeight: 720},
+		Settings: Settings{ProgramFormat: "720p60"},
 	}
 	wf, err := svc.Create("hires", def, nil)
 	if err != nil {
@@ -932,8 +934,8 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 	l.mu.Lock()
 	env := l.lastExtraEnv["omp-source"]
 	l.mu.Unlock()
-	if env["OMP_WIDTH"] != "1280" || env["OMP_HEIGHT"] != "720" {
-		t.Fatalf("extraEnv = %+v, want OMP_WIDTH=1280 OMP_HEIGHT=720", env)
+	if env["OMP_WIDTH"] != "1280" || env["OMP_HEIGHT"] != "720" || env["OMP_FRAMERATE_NUM"] != "60" || env["OMP_FRAMERATE_DEN"] != "1" {
+		t.Fatalf("extraEnv = %+v, want OMP_WIDTH=1280 OMP_HEIGHT=720 OMP_FRAMERATE_NUM=60 OMP_FRAMERATE_DEN=1", env)
 	}
 
 	// Zweiter Workflow ohne Settings: kein extraEnv-Eintrag für die Auflösung.

@@ -32,7 +32,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 
@@ -502,11 +501,8 @@ func (s *Service) executeMigration(workflowID, role, oldInstanceID, targetHostID
 	})
 
 	extraEnv := map[string]string{}
-	if wf.Definition.Settings.ProgramWidth > 0 {
-		extraEnv["OMP_WIDTH"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramWidth), 10)
-	}
-	if wf.Definition.Settings.ProgramHeight > 0 {
-		extraEnv["OMP_HEIGHT"] = strconv.FormatUint(uint64(wf.Definition.Settings.ProgramHeight), 10)
+	for k, v := range formatExtraEnv(wf.Definition.Settings.ProgramFormat) {
+		extraEnv[k] = v
 	}
 	roleEnv := extraEnv
 	if roleFormatEnv := formatExtraEnv(roleDef.Format); roleFormatEnv != nil {

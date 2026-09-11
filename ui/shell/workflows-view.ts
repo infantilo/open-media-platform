@@ -23,6 +23,7 @@ import { confirmDialog } from "../kit/omp-confirm.ts";
 // Rollen-Designer als Alternative zum Text-Formular unten.
 import "../graph/role-designer.ts";
 import type { RoleDesigner } from "../graph/role-designer.ts";
+import { STANDARD_FORMATS } from "../graph/roles.ts";
 
 interface CatalogEntry {
   type: string;
@@ -53,10 +54,6 @@ interface Role {
   mixerLevels?: number;
 }
 
-// Standard-Format-Presets je Rolle: s. ROLE_FORMATS (ui/graph/roles.ts,
-// geteilt mit dem grafischen Role-Designer). Leer = Node-eigener
-// Default, unverändertes Verhalten.
-
 // Kapitel 12 Teil 1 (docs/END-GOAL-FEATURES.md §12.3a): fromSender/
 // toReceiver sind optionale IS-04-Port-Labels — leer = Kompatibilitäts-
 // Fallback auf den jeweils ersten Sender/Receiver der Rolle (Backend-
@@ -72,13 +69,16 @@ interface Connection {
 }
 
 // Settings (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17):
-// pro Workflow konfigurierbare, node-übergreifende Werte — aktuell die
-// Programm-Auflösung sowie (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2) die
-// Stop-Sicherheitsabfrage. 0/undefined = Node behält ihren eigenen
+// pro Workflow konfigurierbare, node-übergreifende Werte — aktuell das
+// Programm-Format sowie (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2) die
+// Stop-Sicherheitsabfrage. Leer/undefined = Node behält ihren eigenen
 // Default (heute meist 640×480 fest verdrahtet).
 interface Settings {
-  programWidth?: number;
-  programHeight?: number;
+  // programFormat (Nutzerwunsch 2026-09-11, vormals zwei getrennte
+  // Rohwerte programWidth/programHeight ohne Framerate-Bezug):
+  // benanntes Preset aus STANDARD_FORMATS (ui/graph/roles.ts), exakt
+  // wie Role.format — s. dortige Doku.
+  programFormat?: string;
   confirmStop?: boolean;
   // targetLatencyFrames (D8 Teil 2, ARCHITECTURE.md §15.1 Punkt 2):
   // Latenzbudget in Video-Frames — 0/undefined = nicht gesetzt (kein
@@ -230,14 +230,13 @@ class WorkflowsView extends HTMLElement {
   #formCategory = "";
   // Kapitel 15: leer gelassen = kein settings-Feld im Request, Nodes
   // laufen mit ihrem eigenen Default (keine erzwungene Auflösung).
-  #formWidth = "";
-  #formHeight = "";
+  #formProgramFormat = "";
   // D7 Teil 2 (ARCHITECTURE.md §6.2 Punkt 1/2).
   #formSchedules: Schedule[] = [];
   #formConfirmStop = false;
   // D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): leer = kein
   // targetLatencyFrames im Request, gleiche Konvention wie
-  // #formWidth/#formHeight oben.
+  // #formProgramFormat oben.
   #formTargetLatencyFrames = "";
   #showForm = false;
   // Kapitel 12 Teil 1 (PUT /api/v1/workflows/{id}, §22.3 Punkt 2): gesetzt
@@ -335,11 +334,8 @@ class WorkflowsView extends HTMLElement {
       showToast("Workflow-Name ist erforderlich.");
       return;
     }
-    const width = parseInt(this.#formWidth, 10);
-    const height = parseInt(this.#formHeight, 10);
     const settings: Settings = {};
-    if (Number.isFinite(width) && width > 0) settings.programWidth = width;
-    if (Number.isFinite(height) && height > 0) settings.programHeight = height;
+    if (this.#formProgramFormat) settings.programFormat = this.#formProgramFormat;
     if (this.#formConfirmStop) settings.confirmStop = true;
     const targetLatencyFrames = parseInt(this.#formTargetLatencyFrames, 10);
     if (Number.isFinite(targetLatencyFrames) && targetLatencyFrames > 0) {
@@ -410,8 +406,7 @@ class WorkflowsView extends HTMLElement {
     this.#formName = "";
     this.#formRoles = [{ name: "", nodeType: "", hostId: "" }];
     this.#formConnections = [];
-    this.#formWidth = "";
-    this.#formHeight = "";
+    this.#formProgramFormat = "";
     this.#formSchedules = [];
     this.#formConfirmStop = false;
     this.#formTargetLatencyFrames = "";
@@ -429,8 +424,7 @@ class WorkflowsView extends HTMLElement {
     this.#formName = wf.name;
     this.#formRoles = wf.definition.roles.map((r) => ({ ...r, hostId: r.hostId ?? "" }));
     this.#formConnections = wf.definition.connections.map((c) => ({ ...c }));
-    this.#formWidth = wf.definition.settings?.programWidth ? String(wf.definition.settings.programWidth) : "";
-    this.#formHeight = wf.definition.settings?.programHeight ? String(wf.definition.settings.programHeight) : "";
+    this.#formProgramFormat = wf.definition.settings?.programFormat ?? "";
     this.#formConfirmStop = wf.definition.settings?.confirmStop ?? false;
     this.#formTargetLatencyFrames = wf.definition.settings?.targetLatencyFrames
       ? String(wf.definition.settings.targetLatencyFrames)
@@ -990,10 +984,10 @@ class WorkflowsView extends HTMLElement {
     // Kapitel 15: nur anzeigen, wenn tatsächlich gesetzt — die meisten
     // Workflows laufen weiterhin mit den Node-eigenen Defaults.
     const settings = wf.definition.settings;
-    if (settings?.programWidth && settings?.programHeight) {
+    if (settings?.programFormat) {
       const res = document.createElement("div");
       res.style.cssText = "color:var(--omp-text-dim);font-size:11px;margin-top:2px;";
-      res.textContent = `${settings.programWidth}×${settings.programHeight}`;
+      res.textContent = settings.programFormat;
       row.appendChild(res);
     }
 
@@ -1280,32 +1274,38 @@ class WorkflowsView extends HTMLElement {
     // Programm-Auflösung, optional — leer gelassen behalten die Nodes
     // ihren eigenen Default.
     const settingsHeading = document.createElement("div");
-    settingsHeading.textContent = "Auflösung (optional)";
+    settingsHeading.textContent = "Programm-Format (optional)";
     settingsHeading.style.cssText = "color:var(--omp-text-dim);margin-bottom:2px;";
     form.appendChild(settingsHeading);
 
+    // Nutzerwunsch 2026-09-11 ("elegantere Lösung mit einer global
+    // definierbaren Dropdown statt Breite/Höhe, Framerate fehlt auch"):
+    // eine benannte Auflösung+Framerate-Preset-Auswahl statt zweier
+    // Zahlenfelder ohne Framerate-Bezug — dieselbe STANDARD_FORMATS-
+    // Liste und dasselbe Optionsmuster wie der Format-Dropdown im
+    // grafischen Role-Designer (ui/graph/role-designer.ts), damit
+    // beide nie auseinanderlaufen (einzige Quelle der Wahrheit bleibt
+    // orchestrator/internal/workflows/formats.go).
     const settingsRow = document.createElement("div");
     settingsRow.style.cssText = "display:flex;gap:4px;align-items:center;margin-bottom:8px;";
-    const widthInput = document.createElement("input");
-    widthInput.type = "number";
-    widthInput.placeholder = "Breite (z. B. 1280)";
-    widthInput.value = this.#formWidth;
-    widthInput.style.cssText = "width:45%;";
-    widthInput.addEventListener("input", () => {
-      this.#formWidth = widthInput.value;
+    const formatSelect = document.createElement("select");
+    formatSelect.title = "Programm-Format des Workflows — leer lässt jeden Node bei seinem eigenen Default.";
+    formatSelect.style.cssText = "width:100%;";
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "Node-Standard (kein Programm-Format)";
+    formatSelect.appendChild(defaultOpt);
+    for (const name of STANDARD_FORMATS) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === this.#formProgramFormat) opt.selected = true;
+      formatSelect.appendChild(opt);
+    }
+    formatSelect.addEventListener("change", () => {
+      this.#formProgramFormat = formatSelect.value;
     });
-    const xLabel = document.createElement("span");
-    xLabel.textContent = "×";
-    xLabel.style.cssText = "color:var(--omp-text-dim);";
-    const heightInput = document.createElement("input");
-    heightInput.type = "number";
-    heightInput.placeholder = "Höhe (z. B. 720)";
-    heightInput.value = this.#formHeight;
-    heightInput.style.cssText = "width:45%;";
-    heightInput.addEventListener("input", () => {
-      this.#formHeight = heightInput.value;
-    });
-    settingsRow.append(widthInput, xLabel, heightInput);
+    settingsRow.appendChild(formatSelect);
     form.appendChild(settingsRow);
 
     // D8 Teil 2 (ARCHITECTURE.md §15.1 Punkt 2): Latenzbudget, optional —

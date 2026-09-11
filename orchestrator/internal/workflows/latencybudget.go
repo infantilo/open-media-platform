@@ -155,7 +155,7 @@ func walkLatencyPath(
 // checkLatencyBudget prüft Definition.Settings.TargetLatencyFrames gegen
 // alle Pfade im Verbindungs-Template (D8 Teil 2). target==0 bedeutet
 // "nicht gesetzt" — keine Prüfung, exakt das Verhalten vor diesem Feld
-// (gleiche 0-Konvention wie ProgramWidth/-Height). Liefert nil, wenn
+// (gleiche Leer/0-Konvention wie ProgramFormat). Liefert nil, wenn
 // kein Pfad das Budget verletzt und keine Rolle unbekannte Latenz hat.
 func checkLatencyBudget(def Definition, catalog []launcher.CatalogEntry) error {
 	target := def.Settings.TargetLatencyFrames

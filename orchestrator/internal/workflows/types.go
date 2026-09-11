@@ -70,8 +70,7 @@ type Role struct {
 	// Framerate-Preset für diese Rolle (s. formats.go,
 	// StandardFormatNames) — leer = Node-eigener Default (unverändertes
 	// Verhalten). Bewusst pro Rolle statt workflow-weit wie Settings.
-	// ProgramWidth/-Height (Kapitel 15): verschiedene Quellen im selben
-	// Workflow können unterschiedliche native Formate brauchen, ein
+	// ProgramFormat (Kapitel 15): verschiedene Quellen im selben
 	// Scaler-/Framerate-Converter-Node gleicht Unterschiede bei Bedarf
 	// aus. Wirkt nur beim Start (kein Live-Wechsel — ein Auflösungs-
 	// wechsel braucht einen MXL-Flow-Neuaufbau, gleiche Einschränkung
@@ -228,13 +227,23 @@ type Connection struct {
 // Werte (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c, 2026-07-17
 // Nutzerfeedback "generell müssen wir pro Workflow Settings haben,
 // welche Auflösung dieser haben soll") — additiv, kein Node-Contract-
-// Thema. 0 = Node-eigener Default (heute 640×480 in den meisten
+// Thema. Leer/0 = Node-eigener Default (heute 640×480 in den meisten
 // Katalog-Nodes fest verdrahtet, s. runStart) statt eines erzwungenen
 // Werts, damit ein Workflow ohne Settings sich exakt wie vor diesem
 // Feld verhält.
 type Settings struct {
-	ProgramWidth  uint32 `json:"programWidth,omitempty"`
-	ProgramHeight uint32 `json:"programHeight,omitempty"`
+	// ProgramFormat (Nutzerwunsch 2026-09-11: "elegantere Lösung mit
+	// einer global definierbaren Dropdown statt Breite/Höhe, Framerate
+	// fehlt auch" — vormals zwei getrennte Rohwerte ProgramWidth/
+	// ProgramHeight ohne jeden Framerate-Bezug). Benanntes Standard-
+	// Auflösung+Framerate-Preset wie Role.Format (s. formats.go,
+	// StandardFormatNames, dieselbe einzige Quelle der Wahrheit) — leer
+	// = Node-eigener Default (unverändertes Verhalten). runStart/
+	// migration.go übersetzen es über formatExtraEnv() in
+	// OMP_WIDTH/OMP_HEIGHT/OMP_FRAMERATE_NUM/OMP_FRAMERATE_DEN — Nodes
+	// bekommen die Framerate der Workflow-weiten Einstellung damit zum
+	// ersten Mal überhaupt mit, nicht nur die Auflösung.
+	ProgramFormat string `json:"programFormat,omitempty"`
 	// ConfirmStop (D7 Teil 2, ARCHITECTURE.md §6.2 Punkt 2): wenn gesetzt,
 	// verlangt Stop() ein explizites confirm=true (zweistufig — ein Stop
 	// ohne Bestätigung wird mit ErrConfirmationRequired abgelehnt, die UI
@@ -250,7 +259,7 @@ type Settings struct {
 	// kann (ehrliche Ablehnung statt stillem Kürzer-Start, dieselbe
 	// Haltung wie beim I/O-Karten-Fall §6.1). 0 = nicht gesetzt (kein
 	// Check, unverändertes Verhalten) — gleiche Konvention wie
-	// ProgramWidth/-Height oben. Bewusst nur Video-Frames in dieser
+	// ProgramFormat oben. Bewusst nur Video-Frames in dieser
 	// Scheibe: Audio-/Daten-Pfade sind laut Plan D8 Teil 4 (§15.1 Punkt 5:
 	// "kein Kopieren des Video-Frame-Budgets").
 	TargetLatencyFrames uint32 `json:"targetLatencyFrames,omitempty"`

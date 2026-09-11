@@ -8,8 +8,10 @@ import (
 // (Nutzerwunsch 2026-07-28: "test sources brauchen einstellbares Format,
 // Standardformate vorgeben, 1080p50 im Endausbau am wichtigsten, jetzt
 // minimalstes Format wegen schwacher CPU") — pro Rolle wählbar (s.
-// Role.Format), nicht workflow-weit wie die bestehende Settings.Program-
-// Width/-Height (Kapitel 15): unterschiedliche Quellen im selben
+// Role.Format), nicht workflow-weit wie die bestehende Settings.
+// ProgramFormat (Kapitel 15, seit 2026-09-11 selbst auch ein
+// benanntes Preset aus genau dieser Liste statt getrennter
+// Breite/Höhe-Rohwerte): unterschiedliche Quellen im selben
 // Workflow können unterschiedliche native Formate haben, ein
 // Scaler-/Framerate-Converter-Node gleicht Unterschiede zwischen ihnen
 // bei Bedarf aus (separater Node-Typ, nicht Teil dieser Datei).
