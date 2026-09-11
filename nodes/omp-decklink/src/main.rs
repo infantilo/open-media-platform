@@ -21,9 +21,9 @@
 mod pipeline;
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_node_sdk::connection::{
     bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
@@ -59,10 +59,70 @@ struct IngestStore {
     mode: String,
     audio_channels: u32,
     signal: Arc<AtomicBool>,
+    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    /// decisions.md` BCP-008-Nachtrag): Ingest empfängt echtes SDI/IP-
+    /// Signal über die Karte, ist also der "Receiver" dieser Instanz.
+    /// Immer aktiv (keine Enable/Disable-Semantik wie bei Output),
+    /// `monitor.activate()` direkt nach dem Pipeline-Start.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for IngestStore {
     fn descriptor(&self) -> Descriptor {
+        let mut parameters = vec![
+            ParamSpec {
+                name: "direction".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "signal".to_string(),
+                kind: ParamType::Boolean,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "deviceNumber".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "mode".to_string(),
+                kind: ParamType::Enum,
+                unit: None,
+                range: Some(Range::Enum {
+                    values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
+                }),
+                readonly: true,
+            },
+            ParamSpec {
+                name: "audioChannels".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "flowId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "audioFlowId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
         Descriptor {
             // Eine Hardware-Erfassung setzt selbst den Ursprung, wie
             // omp-source (dortige Begründung 1:1 übernommen) — keine
@@ -73,60 +133,8 @@ impl ParamStore for IngestStore {
                 data: None,
                 supports_delay_compensation: false,
             }),
-            parameters: vec![
-                ParamSpec {
-                    name: "direction".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "signal".to_string(),
-                    kind: ParamType::Boolean,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "deviceNumber".to_string(),
-                    kind: ParamType::Number,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "mode".to_string(),
-                    kind: ParamType::Enum,
-                    unit: None,
-                    range: Some(Range::Enum {
-                        values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
-                    }),
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "audioChannels".to_string(),
-                    kind: ParamType::Number,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "flowId".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "audioFlowId".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-            ],
-            methods: vec![],
+            parameters,
+            methods: self.monitor.method_specs("monitor"),
         }
     }
 
@@ -139,20 +147,31 @@ impl ParamStore for IngestStore {
             "audioChannels" => Some(serde_json::json!(self.audio_channels)),
             "flowId" => Some(serde_json::json!(self.flow_id)),
             "audioFlowId" => Some(serde_json::json!(self.audio_flow_id)),
-            _ => None,
+            // Keine Paketverlust-Erkennung auf SDI/IP-Hardware-Ebene
+            // verfügbar (anders als `omp-2110-gateway`s `rtpjitter
+            // buffer`) — leere Zählerliste statt erfundener Werte.
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::Unknown)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::Unknown),
+        }
     }
 
     fn invoke(
         &self,
-        _name: &str,
+        name: &str,
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        if self.monitor.invoke("monitor", name) {
+            Ok(())
+        } else {
+            Err(InvokeError::Unknown)
+        }
     }
 }
 
@@ -170,6 +189,12 @@ struct OutputControl {
     pipeline: pipeline::OutputPipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
     is_video: bool,
+    /// S. `OutputStore::monitor`-Doku. Nur die Video-`OutputControl`
+    /// ruft `activate()`/`deactivate()` — Video ist die Anker-
+    /// Verbindung (Moduldoku oben: ohne sie baut `build_output` gar
+    /// keine Pipeline), Audio kann unabhängig kommen/gehen, ohne den
+    /// Aktivitätszustand des Senders selbst zu ändern.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ReceiverControl for OutputControl {
@@ -181,6 +206,7 @@ impl ReceiverControl for OutputControl {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
                         if self.is_video {
                             self.pipeline.connect_video(flow_id);
+                            self.monitor.activate();
                         } else {
                             self.pipeline.connect_audio(flow_id);
                         }
@@ -193,6 +219,7 @@ impl ReceiverControl for OutputControl {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
                 if self.is_video {
                     self.pipeline.disconnect_video();
+                    self.monitor.deactivate();
                 } else {
                     self.pipeline.disconnect_audio();
                 }
@@ -209,60 +236,64 @@ struct OutputStore {
     connected_audio_flow_id: Arc<Mutex<String>>,
     video_connection: Arc<ReceiverConnection<OutputControl>>,
     audio_connection: Arc<ReceiverConnection<OutputControl>>,
+    /// AMWA BCP-008-02 (NMOS Sender Status Monitoring) — Output sendet
+    /// echtes SDI/IP-Signal über die Karte, ist also der "Sender"
+    /// dieser Instanz. Aktiv/inaktiv folgt der Video-Receiver-
+    /// Verbindung (s. `OutputControl::apply`), nicht dem Prozess-
+    /// Lebenszyklus.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for OutputStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            latency: None,
-            parameters: vec![
-                ParamSpec {
-                    name: "direction".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "deviceNumber".to_string(),
-                    kind: ParamType::Number,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "mode".to_string(),
-                    kind: ParamType::Enum,
-                    unit: None,
-                    range: Some(Range::Enum {
-                        values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
-                    }),
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "audioChannels".to_string(),
-                    kind: ParamType::Number,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "connectedVideoFlowId".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "connectedAudioFlowId".to_string(),
-                    kind: ParamType::String,
-                    unit: None,
-                    range: None,
-                    readonly: true,
-                },
-            ],
-            methods: vec![],
-        }
+        let mut parameters = vec![
+            ParamSpec {
+                name: "direction".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "deviceNumber".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "mode".to_string(),
+                kind: ParamType::Enum,
+                unit: None,
+                range: Some(Range::Enum {
+                    values: pipeline::SUPPORTED_MODES.iter().map(|m| m.to_string()).collect(),
+                }),
+                readonly: true,
+            },
+            ParamSpec {
+                name: "audioChannels".to_string(),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "connectedVideoFlowId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: "connectedAudioFlowId".to_string(),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        Descriptor { latency: None, parameters, methods: self.monitor.method_specs("monitor") }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -277,20 +308,30 @@ impl ParamStore for OutputStore {
             "connectedAudioFlowId" => Some(serde_json::json!(
                 *self.connected_audio_flow_id.lock().expect("lock poisoned")
             )),
-            _ => None,
+            // Kein Rückkanal von einem echten SDI-/IP-Empfänger — leere
+            // Zählerliste statt erfundener Werte (s. `IngestStore::get`).
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
     fn invoke(
         &self,
-        _name: &str,
+        name: &str,
         _args: &serde_json::Map<String, Value>,
     ) -> Result<(), InvokeError> {
-        Err(InvokeError::Unknown)
+        if self.monitor.invoke("monitor", name) {
+            Ok(())
+        } else {
+            Err(InvokeError::Unknown)
+        }
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
@@ -329,6 +370,66 @@ impl ParamStore for OutputStore {
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
     }
+}
+
+/// BCP-008-Tick für die Ingest-Richtung (`omp_node_sdk::MonitorKind::
+/// Receiver`) — s. `omp-2110-gateway::main::spawn_ingest_monitor_tick`-
+/// Doku (gleiche Kadenz/Begründung). `link`/`streamStatus` stützen sich
+/// hier auf `signal` (`decklinkvideosrc`s echtes Kabel-/Format-Lock-
+/// Signal, bereits vom Event-Loop aktuell gehalten, s. `Event::
+/// SignalChanged`) — anders als bei `omp-2110-gateway` gibt es hier
+/// tatsächlich ein physisches Link-Signal, kein `AllUp`-Dauerzustand.
+/// `connectionStatus` bekommt hier nur den optimistischen Healthy-Tick;
+/// die Verschlechterung kommt event-getrieben direkt aus dem
+/// `Event::Error`-Zweig der aufrufenden `main()` (kein GStreamer-Bus-
+/// Doppel-Poll nötig). `externalSynchronizationStatus` bleibt dauerhaft
+/// `NotUsed` (kein PTP-/Genlock-Signal in diesem Node verfügbar) — dafür
+/// bewusst kein `observe()`-Aufruf hier, `Monitor::new` startet ihn
+/// bereits neutral.
+fn spawn_decklink_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, signal: Arc<AtomicBool>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            let delay = monitor.status_reporting_delay();
+            let level = if signal.load(Ordering::Relaxed) {
+                omp_node_sdk::HealthLevel::Healthy
+            } else {
+                omp_node_sdk::HealthLevel::Unhealthy
+            };
+            monitor.link.observe(level, delay, Some("kein Eingangssignal (decklinkvideosrc::signal=false)"));
+            monitor.content.observe(level, delay, Some("kein Eingangssignal, kein dekodierbarer Stream"));
+            monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+        }
+    });
+}
+
+/// BCP-008-Tick für die Output-Richtung (`omp_node_sdk::MonitorKind::
+/// Sender`) — s. `spawn_decklink_monitor_tick`-Doku. Kein physisches
+/// Link-Readback auf der Ausgangsseite dieser Karte verfügbar (anders
+/// als `signal` bei Ingest) — `linkStatus` bleibt deshalb dauerhaft auf
+/// seinem `Monitor::new`-Startwert `AllUp` (ehrliche Grenze, s.
+/// `docs/decisions.md` BCP-008-Nachtrag, gleiche Einschränkung wie bei
+/// `omp-2110-gateway`s Output-Richtung). Nur relevant, solange verbunden
+/// (`monitor.overall() == Neutral` prüft das, s. dortige Doku).
+fn spawn_output_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: pipeline::OutputPipelineHandle) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            if monitor.overall() == omp_node_sdk::HealthLevel::Neutral {
+                continue;
+            }
+            let delay = monitor.status_reporting_delay();
+            let level = if pipeline.media_ready() {
+                omp_node_sdk::HealthLevel::Healthy
+            } else {
+                omp_node_sdk::HealthLevel::Unhealthy
+            };
+            monitor.content.observe(level, delay, Some("keine Bilder an die Karte seit dem letzten Tick"));
+            monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+        }
+    });
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -403,6 +504,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let media_ready_pipeline = pipeline_handle.clone();
             let signal = Arc::new(AtomicBool::new(pipeline_handle.signal()));
 
+            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+            // Ingest ist immer aktiv (keine Enable/Disable-Semantik,
+            // anders als Output) — sofort aktivieren.
+            monitor.activate();
+            spawn_decklink_monitor_tick(monitor.clone(), signal.clone());
+
             let store: Arc<dyn ParamStore> = Arc::new(IngestStore {
                 flow_id: flow_id.clone(),
                 audio_flow_id: audio_flow_id.clone(),
@@ -410,6 +517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 mode: mode.clone(),
                 audio_channels,
                 signal: signal.clone(),
+                monitor: monitor.clone(),
             });
 
             let handle = omp_node_sdk::start(
@@ -464,6 +572,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     match event {
                         pipeline::Event::Error(message) => {
                             eprintln!("omp-decklink: pipeline error: {message}");
+                            // Sofortige Verschlechterung (s.
+                            // `spawn_decklink_monitor_tick`-Doku) — der
+                            // Tick pusht danach weiter optimistisch
+                            // Healthy, `DebouncedDomain` entscheidet
+                            // selbst, ob/wann das als Erholung zählt.
+                            monitor.activity.observe(
+                                omp_node_sdk::HealthLevel::Unhealthy,
+                                monitor.status_reporting_delay(),
+                                Some(&message),
+                            );
                             handle.publish_alert(message).await;
                         }
                         pipeline::Event::SignalChanged(ok) => {
@@ -529,6 +647,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let connected_video_flow_id = Arc::new(Mutex::new(String::new()));
             let connected_audio_flow_id = Arc::new(Mutex::new(String::new()));
 
+            let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
+            // Startzustand `Inactive` (noch kein Video-Connect erfolgt)
+            // — `OutputControl::apply` übernimmt `activate()`/
+            // `deactivate()` bei jedem echten Video-Connect/-Disconnect.
+            monitor.deactivate();
+            spawn_output_monitor_tick(monitor.clone(), pipeline_handle.clone());
+
             let video_connection = Arc::new(ReceiverConnection::new(
                 video_receiver_id.clone(),
                 OutputControl {
@@ -536,6 +661,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     pipeline: pipeline_handle.clone(),
                     connected_flow_id: connected_video_flow_id.clone(),
                     is_video: true,
+                    monitor: monitor.clone(),
                 },
             ));
             let audio_connection = Arc::new(ReceiverConnection::new(
@@ -545,6 +671,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     pipeline: pipeline_handle.clone(),
                     connected_flow_id: connected_audio_flow_id.clone(),
                     is_video: false,
+                    monitor: monitor.clone(),
                 },
             ));
 
@@ -557,6 +684,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 connected_audio_flow_id,
                 video_connection,
                 audio_connection,
+                monitor: monitor.clone(),
             });
 
             let handle = omp_node_sdk::start(
@@ -597,6 +725,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     match event {
                         pipeline::Event::Error(message) => {
                             eprintln!("omp-decklink: pipeline error: {message}");
+                            // S. `spawn_decklink_monitor_tick`-Doku —
+                            // nur relevant, solange verbunden, sonst hat
+                            // `deactivate()` `activity` schon auf
+                            // `Inactive` gesetzt und ein `observe()` hier
+                            // würde das unnötig überschreiben.
+                            if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
+                                monitor.activity.observe(
+                                    omp_node_sdk::HealthLevel::Unhealthy,
+                                    monitor.status_reporting_delay(),
+                                    Some(&message),
+                                );
+                            }
                             handle.publish_alert(message).await;
                         }
                         pipeline::Event::SignalChanged(_) => {
@@ -623,4 +763,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod bcp008_tests {
+    use super::*;
+
+    // `IngestStore` braucht keine echte Hardware/Pipeline (alle Felder
+    // sind einfache Werte/Handles) — deshalb hier direkt gegen sie
+    // getestet, ohne ein echtes DeckLink-Gerät zu brauchen (in dieser
+    // Sandbox sowieso nicht vorhanden, s. `docs/decisions.md`
+    // BCP-008-Nachtrag: "ohne Hardware getestet", gleiche Grenze wie
+    // beim ursprünglichen D10-Teil-1/2). `OutputStore` teilt sich
+    // dieselbe `Monitor`-Dispatch-Logik (`monitor.get`/`set`/`invoke`),
+    // ein zweiter Test dafür wäre redundant.
+    fn store() -> IngestStore {
+        IngestStore {
+            flow_id: "flow-1".to_string(),
+            audio_flow_id: "flow-2".to_string(),
+            device_number: 0,
+            mode: "1080p25".to_string(),
+            audio_channels: 2,
+            signal: Arc::new(AtomicBool::new(true)),
+            monitor: Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver)),
+        }
+    }
+
+    #[test]
+    fn descriptor_includes_bcp008_monitor_params_and_methods() {
+        let d = store().descriptor();
+        let names: Vec<&str> = d.parameters.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"monitor.overallStatus"));
+        assert!(names.contains(&"monitor.connectionStatus"), "receiver-side wire name expected");
+        assert!(names.contains(&"monitor.streamStatus"));
+        assert!(names.contains(&"monitor.linkStatus"));
+        assert!(names.contains(&"monitor.statusReportingDelay"));
+        assert_eq!(d.methods.len(), 1);
+        assert_eq!(d.methods[0].name, "monitor.resetCountersAndMessages");
+    }
+
+    #[test]
+    fn get_dispatches_monitor_params_alongside_own_params() {
+        let s = store();
+        assert_eq!(s.get("signal"), Some(serde_json::json!(true)));
+        s.monitor.activate();
+        assert_eq!(s.get("monitor.overallStatus"), Some(serde_json::json!("Healthy")));
+        assert_eq!(s.get("monitor.lostPacketCounters"), Some(serde_json::json!([])));
+    }
+
+    #[test]
+    fn set_writes_through_to_monitor_config() {
+        let s = store();
+        assert!(s.set("monitor.statusReportingDelay", serde_json::json!(5000)).is_ok());
+        assert_eq!(s.monitor.status_reporting_delay(), Duration::from_millis(5000));
+        assert!(matches!(s.set("monitor.overallStatus", serde_json::json!("Healthy")), Err(SetError::Unknown)));
+    }
+
+    #[test]
+    fn invoke_reset_clears_monitor_counters() {
+        let s = store();
+        s.monitor.link.observe(omp_node_sdk::HealthLevel::Unhealthy, Duration::ZERO, Some("no cable"));
+        assert_eq!(s.monitor.link.transition_counter(), 1);
+        assert!(s.invoke("monitor.resetCountersAndMessages", &serde_json::Map::new()).is_ok());
+        assert_eq!(s.monitor.link.transition_counter(), 0);
+        assert!(matches!(s.invoke("unknownMethod", &serde_json::Map::new()), Err(InvokeError::Unknown)));
+    }
 }

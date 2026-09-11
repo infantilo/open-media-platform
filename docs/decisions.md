@@ -23045,3 +23045,59 @@ zeigt die neuen `monitor.*`-Werte noch nirgends visuell an — bisher nur
 `nodes/omp-2110-gateway/src/main.rs`,
 `nodes/omp-2110-gateway/src/pipeline.rs`,
 `nodes/omp-2110-gateway/Cargo.toml`.
+
+## 2026-09-11 (Nachtrag 208) — NMOS BCP-008-01/02 auf `omp-decklink` ausgeweitet (Nutzerauftrag "extend BCP-008")
+
+**Kontext:** Direkte Fortsetzung von Nachtrag 207 — `omp-decklink` war
+dort der zweite, vom Nutzer explizit genannte, aber noch offene
+Pilot-Node. Gleiches Muster wie beim 2110-Gateway: Ingest (Karte →
+MXL) = BCP-008-01-Receiver-Monitor, Output (MXL → Karte) =
+BCP-008-02-Sender-Monitor, `OutputControl`s Video-Zweig (nicht Audio —
+"Video ist die Anker-Verbindung", bestehende Moduldoku) löst
+`activate()`/`deactivate()` aus.
+
+**Echte Signale, diesmal sogar reicher als beim 2110-Gateway:**
+`decklinkvideosrc`s `signal`-Property (echtes Kabel-/Format-Lock der
+Hardware, bereits vorher als eigener `signal`-Param exponiert, jetzt
+zusätzlich für `linkStatus`/`streamStatus` wiederverwendet — Ingest
+hat damit als einziger BCP-008-Node bisher ein ECHTES physisches
+Link-Signal, kein `AllUp`-Dauerzustand wie beim 2110-Gateway).
+`connectionStatus`/`transmissionStatus` event-getrieben: der
+GStreamer-Bus-Fehler-Zweig, den beide Richtungen schon vorher besaßen
+(`Event::Error`), pusht jetzt zusätzlich sofort `Unhealthy` in
+`monitor.activity` — kein doppeltes Bus-Polling nötig (anders als beim
+2110-Gateway wäre ein zweiter, konkurrierender `bus.timed_pop_filtered`
+-Aufruf aus einem separaten Tick-Task hier eine echte Race gewesen, da
+GStreamer-Bus-Konsum destruktiv ist). `essenceStatus` (Output) aus dem
+bereits vorhandenen `media_ready()`. **Ehrliche Grenze wie beim
+2110-Gateway:** kein PTP/Genlock-Signal in diesem Node — `external
+SynchronizationStatus` bleibt für BEIDE Richtungen dauerhaft `NotUsed`
+(`Monitor::new`s Neutral-Startwert, bewusst nie `observe()`t). Output
+hat kein physisches Link-Readback (SDI-Ausgänge liefern keine
+"Kabel dran?"-Rückmeldung) — `linkStatus` bleibt dort `AllUp`.
+
+**Verifikation — ehrlich eingeschränkt, wie schon bei D10 Teil 1/2
+("ohne Hardware getestet", `pipeline.rs`-Kommentar):** in dieser
+Sandbox ist zwar das `decklink`-GStreamer-Plugin installiert
+(`gst-inspect-1.0 decklinkvideosrc` findet es), aber keine echte
+Blackmagic-Karte — ein Start scheitert deshalb strukturell schon vor
+dem `PLAYING`-Übergang ("device-number=0 nicht erreichbar"), lange
+bevor `IngestStore`/`Monitor` überhaupt konstruiert werden. Ein echter
+End-to-End-Livetest wie beim 2110-Gateway (echter RTP-Loopback) ist
+hier also nicht möglich. Stattdessen: `IngestStore` (alle Felder
+hardware-unabhängige Werte/Handles) direkt per 4 neuen Unit-Tests
+gegen die volle `ParamStore`-Implementierung geprüft (Descriptor
+enthält `monitor.*`-Params+Methode, `get`/`set`/`invoke` dispatchen
+korrekt in `Monitor` durch, Reset funktioniert) — `OutputStore` teilt
+sich dieselbe `Monitor`-Dispatch-Logik, kein separater Test nötig.
+`cargo build --workspace --bins` + `build/test/clippy -D warnings` für
+`omp-decklink` einzeln grün (7 Tests, davon 4 neu).
+
+**Bewusst nicht Teil dieser Runde:** `omp-aes67-gateway`/
+`omp-srt-gateway` (gleiches übertragbares Muster, noch nicht gemacht),
+alle MXL-internen Nodes, UI-Anzeige der `monitor.*`-Werte. Damit ist
+der vom Nutzer in Nachtrag 207 festgelegte Zwei-Node-Pilot
+(2110-Gateway + DeckLink) vollständig.
+
+**Dateien:** `nodes/omp-decklink/src/main.rs`,
+`nodes/omp-decklink/Cargo.toml`.
