@@ -22671,3 +22671,42 @@ JSON-Feld-Rename ohne SQL-Schema-Bezug (Definition liegt als JSON-Blob).
 **Dateien:** `orchestrator/internal/workflows/{types,service,migration,
 formats,latencybudget,service_test}.go`, `ui/graph/{roles,role-designer,
 flow-canvas}.ts`, `ui/shell/workflows-view.ts`.
+
+## 2026-09-11 (Nachtrag 204) — Ein-Klick "Duplizieren" für Workflows (Nutzerfrage "Möglichkeit, einen Workflow zu 'clonen'... zweiter Regieplatz mit derselben Config. geht das?")
+
+**Kontext:** War über den bestehenden Export/Import-Weg (Kapitel 12
+Teil 3, §12.3d) bereits funktional möglich — Export lädt die Definition
+als JSON-Datei herunter, Import derselben Datei legt einen neuen,
+gestoppten Workflow mit identischer Definition an (Namenskollision löst
+`Service.Import` bereits selbst über `uniqueWorkflowName` auf). Nur der
+Datei-Umweg (Download + erneuter Upload) war für den genannten
+Anwendungsfall ("zweiter Regieplatz mit derselben Config") unnötig
+umständlich. Nutzerentscheidung nach Rückfrage: echten
+Ein-Klick-Button bauen.
+
+**Umsetzung:** Neue `#duplicateWorkflow(wf)` in
+`ui/shell/workflows-view.ts` verkettet GET `/workflows/{id}/export` +
+POST `/workflows/import` intern (kein Blob/`<a download>`, keine
+Datei-Auswahl) — reine Wiederverwendung der bereits vorhandenen,
+bewährten Backend-Endpunkte, keine Backend-Änderung nötig. Bewusst OHNE
+Rollenbindungen (gleicher Default wie ein Export ohne die "inkl.
+Rollenbindungen"-Option) — ein Klon ist erst mal nur dieselbe
+Definition, keine automatisch geerbten Bedienrechte. Neuer
+"Duplizieren"-Button neben "Exportieren" in jeder Workflow-Zeile, in
+jedem Zustand aktiv (wie Export selbst — beschreibt die Definition,
+nicht den Laufzeitzustand).
+
+**Live verifiziert** (kein Raten): eigens benannter, eindeutiger
+Wegwerf-Workflow (`zzz-duplicate-test-source`, nicht "Playout"/"new
+group" — nach dem Vorfall in Nachtrag 203 diesmal bewusst mit
+kollisionsfreiem Namen und einem präzisen, auf genau 8 Zeilen-eigene
+Buttons geprüften DOM-Selektor, um eine erneute Fehltreffer-Gefahr
+strukturell auszuschließen). Klick auf "Duplizieren" → Toast „Workflow
+als 'zzz-duplicate-test-source (2)' dupliziert." → per API bestätigt:
+neue ID, automatisch disambiguierter Name, Rollen UND
+`settings.programFormat` (mit dem Nachtrag-203-Feature gesetzt) 1:1
+übernommen, Status `stopped`. Beide Test-Workflows danach gelöscht,
+"Playout" (läuft) und "new group" per API als unberührt bestätigt.
+`deno check`/`deno test ui/` (92/92) grün.
+
+**Dateien:** `ui/shell/workflows-view.ts`.

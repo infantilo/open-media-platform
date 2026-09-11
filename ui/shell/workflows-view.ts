@@ -521,6 +521,43 @@ class WorkflowsView extends HTMLElement {
     }
   }
 
+  // Nutzerwunsch 2026-09-11 ("Möglichkeit, einen Workflow zu 'clonen'
+  // — ein Workflow wäre z. B. ein Regieplatz, zweiter Regieplatz mit
+  // derselben Config"): GET export + POST import intern verkettet,
+  // ohne den Umweg über eine heruntergeladene/wieder hochgeladene
+  // Datei (#exportWorkflow/#importWorkflowFile). Bewusst OHNE
+  // Rollenbindungen (gleicher Default wie ein Export ohne die "inkl.
+  // Rollenbindungen"-Option, s. #exportWithBindings) — ein Klon soll
+  // erst mal nur dieselbe Definition sein, nicht automatisch dieselben
+  // Bedienrechte erben. workflows.Service.Import löst eine
+  // Namenskollision bereits selbst auf (uniqueWorkflowName), kein
+  // eigener Vorab-Check hier nötig.
+  async #duplicateWorkflow(wf: Workflow) {
+    try {
+      const res = await apiFetch(`/api/v1/workflows/${wf.id}/export`);
+      if (!res.ok) {
+        showToast(`Duplizieren fehlgeschlagen: ${await res.text()}`);
+        return;
+      }
+      const exported = (await res.json()) as ExportedWorkflow;
+      const importRes = await apiFetch("/api/v1/workflows/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(exported),
+      });
+      if (!importRes.ok) {
+        showToast(`Duplizieren fehlgeschlagen: ${await importRes.text()}`);
+        return;
+      }
+      const created = (await importRes.json()) as Workflow;
+      showToast(`Workflow als „${created.name}" dupliziert.`);
+    } catch (err) {
+      showToast(`Duplizieren fehlgeschlagen: ${err}`);
+      return;
+    }
+    await this.#poll();
+  }
+
   // Kapitel 12 Teil 3 (§12.3d): liest die vom Nutzer gewählte Datei,
   // schickt sie unverändert an POST /api/v1/workflows/import — die
   // eigentliche Validierung (Katalog-Abgleich, Namenskollision) macht
@@ -1100,6 +1137,18 @@ class WorkflowsView extends HTMLElement {
     exportBtn.textContent = "Exportieren";
     exportBtn.addEventListener("click", () => this.#exportWorkflow(wf));
     actions.appendChild(exportBtn);
+
+    // Nutzerwunsch 2026-09-11 ("Möglichkeit, einen Workflow zu 'clonen'
+    // — zweiter Regieplatz mit derselben Config"): der Export→Import-
+    // Weg konnte das bereits, aber nur über Datei-Download+erneuten
+    // Upload. Ein-Klick-Duplizieren (#duplicateWorkflow) verkettet
+    // beide API-Aufrufe intern, ohne Datei-Umweg — in jedem Zustand
+    // möglich wie Export selbst (Definition, nicht Laufzeitzustand).
+    const duplicateBtn = document.createElement("button");
+    duplicateBtn.textContent = "Duplizieren";
+    duplicateBtn.title = "Legt eine Kopie dieses Workflows an (gestoppt, neuer Name).";
+    duplicateBtn.addEventListener("click", () => this.#duplicateWorkflow(wf));
+    actions.appendChild(duplicateBtn);
 
     row.appendChild(actions);
     return row;
