@@ -13,6 +13,7 @@ mod uibundle;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_mediaio::levels;
 use omp_mediaio::mxl::MxlContext;
@@ -34,6 +35,8 @@ struct ViewerControl {
     registry: RegistryClient,
     pipeline: pipeline::PipelineHandle,
     connected_flow_id: Arc<Mutex<String>>,
+    /// S. `ViewerStore::monitor`-Doku.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ReceiverControl for ViewerControl {
@@ -44,6 +47,7 @@ impl ReceiverControl for ViewerControl {
                     Some(flow_id) => {
                         *self.connected_flow_id.lock().expect("lock poisoned") = flow_id.clone();
                         self.pipeline.connect(flow_id, sender.label);
+                        self.monitor.activate();
                     }
                     None => eprintln!("omp-viewer: sender {sender_id} has no flow_id"),
                 },
@@ -52,6 +56,7 @@ impl ReceiverControl for ViewerControl {
             _ => {
                 *self.connected_flow_id.lock().expect("lock poisoned") = String::new();
                 self.pipeline.disconnect();
+                self.monitor.deactivate();
             }
         }
     }
@@ -119,13 +124,19 @@ struct ViewerStore {
     // `Arc`-Klon), `get`/`set` unten brauchen direkten Zugriff auf
     // `preview_fps()`/`set_preview_fps()`.
     pipeline: pipeline::PipelineHandle,
+    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    /// decisions.md` BCP-008-Nachtrag) — Viewer empfängt genau EINEN
+    /// primären Video-Flow (per `ViewerControl::apply`), das ist die
+    /// überwachte Anker-Verbindung. Die dynamischen Audio-Eingänge
+    /// (`AudioInputEntry`) bleiben bewusst außerhalb dieses ersten
+    /// Durchgangs — variable Anzahl, eigener Monitor pro Eingang wäre
+    /// eigener Scope.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for ViewerStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            latency: None,
-            parameters: vec![
+        let mut parameters = vec![
                 ParamSpec {
                     name: "connectedFlowId".to_string(),
                     kind: ParamType::String,
@@ -179,8 +190,9 @@ impl ParamStore for ViewerStore {
                     range: None,
                     readonly: true,
                 },
-            ],
-            methods: vec![
+            ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        let mut methods = vec![
                 MethodSpec {
                     name: "addAudioInput".to_string(),
                     args: vec![MethodArg { name: "label".to_string(), kind: ParamType::String }],
@@ -189,8 +201,9 @@ impl ParamStore for ViewerStore {
                     name: "removeAudioInput".to_string(),
                     args: vec![MethodArg { name: "id".to_string(), kind: ParamType::String }],
                 },
-            ],
-        }
+            ];
+        methods.extend(self.monitor.method_specs("monitor"));
+        Descriptor { latency: None, parameters, methods }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
@@ -209,21 +222,25 @@ impl ParamStore for ViewerStore {
                     .map(|(id, entry)| serde_json::json!({"id": id, "label": entry.label}))
                     .collect::<Vec<_>>()
             )),
-            _ => None,
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
     fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
-        if name != "previewFps" {
-            return Err(SetError::ReadOnly);
+        if name == "previewFps" {
+            // `PipelineHandle::set_preview_fps` klemmt selbst auf
+            // `PREVIEW_FPS_MIN..=PREVIEW_FPS_MAX` (s. dortige Doku) —
+            // hier nur der übliche JSON-Zahl-Parse, kein doppelter
+            // Bereichs-Check nötig.
+            let fps = value.as_f64().ok_or(SetError::Unknown)? as i32;
+            self.pipeline.set_preview_fps(fps);
+            return Ok(());
         }
-        // `PipelineHandle::set_preview_fps` klemmt selbst auf
-        // `PREVIEW_FPS_MIN..=PREVIEW_FPS_MAX` (s. dortige Doku) — hier
-        // nur der übliche JSON-Zahl-Parse, kein doppelter Bereichs-Check
-        // nötig.
-        let fps = value.as_f64().ok_or(SetError::Unknown)? as i32;
-        self.pipeline.set_preview_fps(fps);
-        Ok(())
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
@@ -244,7 +261,13 @@ impl ParamStore for ViewerStore {
                     .send(ViewerCommand::RemoveAudioInput { id })
                     .map_err(|_| InvokeError::Unknown)
             }
-            _ => Err(InvokeError::Unknown),
+            _ => {
+                if self.monitor.invoke("monitor", name) {
+                    Ok(())
+                } else {
+                    Err(InvokeError::Unknown)
+                }
+            }
         }
     }
 
@@ -323,6 +346,34 @@ async fn audio_input_worker(
 
 fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
+}
+
+/// BCP-008-Tick (`MonitorKind::Receiver`) — 1s-Kadenz, gleiche
+/// Begründung wie bei den Gateway-Nodes. `streamStatus` aus
+/// `media_ready()` (anders als bei `omp-decklink`/`omp-aes67-gateway`
+/// hier tatsächlich ein Dauersignal, kein "einmal wahr, bleibt wahr" —
+/// `connect()`/`disconnect()` setzen das Flag laut `pipeline.rs`-Doku
+/// bei JEDEM Quellwechsel zurück). `connectionStatus` bekommt nur den
+/// optimistischen Healthy-Tick, die Verschlechterung kommt event-
+/// getrieben aus dem `Event::Error`-Zweig (fehlgeschlagener Connect).
+/// `linkStatus`/`externalSynchronizationStatus`: kein Konzept hier
+/// (kein Netzwerk/keine PTP-Anbindung), bleiben auf ihren `Monitor::
+/// new`-Startwerten.
+fn spawn_viewer_monitor_tick(monitor: Arc<omp_node_sdk::Monitor>, pipeline: pipeline::PipelineHandle) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(1));
+        loop {
+            ticker.tick().await;
+            if monitor.overall() == omp_node_sdk::HealthLevel::Neutral {
+                continue;
+            }
+            let delay = monitor.status_reporting_delay();
+            let level =
+                if pipeline.media_ready() { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+            monitor.content.observe(level, delay, Some("kein Video-Buffer von der verbundenen Quelle seit dem letzten Tick"));
+            monitor.activity.observe(omp_node_sdk::HealthLevel::Healthy, delay, None);
+        }
+    });
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -424,12 +475,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // wandert unten in `ViewerControl`.
     let store_pipeline = pipeline_handle.clone();
     let connected_flow_id = Arc::new(Mutex::new(String::new()));
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+    // Startzustand `Inactive` — noch kein IS-05-Connect erfolgt.
+    monitor.deactivate();
+    spawn_viewer_monitor_tick(monitor.clone(), pipeline_handle.clone());
     let connection = Arc::new(ReceiverConnection::new(
         receiver_id.clone(),
         ViewerControl {
             registry: RegistryClient::new(registry_url.clone()),
             pipeline: pipeline_handle,
             connected_flow_id: connected_flow_id.clone(),
+            monitor: monitor.clone(),
         },
     ));
 
@@ -444,6 +500,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         audio_inputs: audio_inputs.clone(),
         commands: commands_tx,
         pipeline: store_pipeline,
+        monitor: monitor.clone(),
     });
 
     let handle = omp_node_sdk::start(
@@ -532,6 +589,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             match event {
                 pipeline::Event::Error(message) => {
                     eprintln!("omp-viewer: pipeline error: {message}");
+                    // Sofortige Verschlechterung, solange verbunden (s.
+                    // `spawn_viewer_monitor_tick`-Doku) — z. B. ein
+                    // fehlgeschlagener Connect ("Flow not found").
+                    if monitor.overall() != omp_node_sdk::HealthLevel::Neutral {
+                        let delay = monitor.status_reporting_delay();
+                        monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&message));
+                    }
                     handle.publish_alert(message).await;
                 }
             }

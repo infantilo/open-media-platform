@@ -63,60 +63,79 @@ struct RecorderStore {
     pipeline: pipeline::PipelineHandle,
     video_connection: Arc<ReceiverConnection<RecorderReceiverControl>>,
     audio_connection: Arc<ReceiverConnection<RecorderReceiverControl>>,
+    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    /// decisions.md` BCP-008-Nachtrag) — Rekorder empfängt Inhalt zum
+    /// Aufzeichnen, ist also der "Receiver". Anders als bei den
+    /// Gateway-Nodes gibt es hier keinen kontinuierlich pollbaren
+    /// Jitterbuffer — `record.start`/`record.stop` (Aufnahme-
+    /// Lebenszyklus, nicht der IS-05-Verbindungsstatus) treiben
+    /// `activate()`/`deactivate()` direkt in `invoke()`; ein Fehlschlag
+    /// (Start scheitert, oder eine laufende Aufnahme bricht ab, s.
+    /// `pipeline::Event::Warning`-Zweig unten) setzt `activity`/
+    /// `content` sofort auf `Unhealthy`, OHNE zu deaktivieren — ein
+    /// Abbruch ist kein sauberer Stopp, Betreiber sollen das als
+    /// Störung sehen, nicht als neutrales `Inactive`.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 impl ParamStore for RecorderStore {
     fn descriptor(&self) -> Descriptor {
-        Descriptor {
-            latency: None,
-            parameters: vec![
-                ParamSpec {
-                    name: "record.status".to_string(),
-                    kind: ParamType::Enum,
-                    unit: None,
-                    range: Some(Range::Enum {
-                        values: vec![
-                            "idle".to_string(),
-                            "recording".to_string(),
-                            "error".to_string(),
-                        ],
-                    }),
-                    readonly: true,
-                },
-                ParamSpec {
-                    name: "record.durationMs".to_string(),
-                    kind: ParamType::Number,
-                    unit: Some("ms".to_string()),
-                    range: None,
-                    readonly: true,
-                },
-            ],
-            methods: vec![
-                MethodSpec {
-                    name: "record.start".to_string(),
-                    args: vec![MethodArg {
-                        name: "fileName".to_string(),
-                        kind: ParamType::String,
-                    }],
-                },
-                MethodSpec {
-                    name: "record.stop".to_string(),
-                    args: vec![],
-                },
-            ],
-        }
+        let mut parameters = vec![
+            ParamSpec {
+                name: "record.status".to_string(),
+                kind: ParamType::Enum,
+                unit: None,
+                range: Some(Range::Enum {
+                    values: vec![
+                        "idle".to_string(),
+                        "recording".to_string(),
+                        "error".to_string(),
+                    ],
+                }),
+                readonly: true,
+            },
+            ParamSpec {
+                name: "record.durationMs".to_string(),
+                kind: ParamType::Number,
+                unit: Some("ms".to_string()),
+                range: None,
+                readonly: true,
+            },
+        ];
+        parameters.extend(self.monitor.param_specs("monitor"));
+        let mut methods = vec![
+            MethodSpec {
+                name: "record.start".to_string(),
+                args: vec![MethodArg {
+                    name: "fileName".to_string(),
+                    kind: ParamType::String,
+                }],
+            },
+            MethodSpec {
+                name: "record.stop".to_string(),
+                args: vec![],
+            },
+        ];
+        methods.extend(self.monitor.method_specs("monitor"));
+        Descriptor { latency: None, parameters, methods }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
         match name {
             "record.status" => Some(serde_json::json!(self.pipeline.status().as_str())),
             "record.durationMs" => Some(serde_json::json!(self.pipeline.duration_ms())),
-            _ => None,
+            // Keine Zähler-Quelle hier — leere Liste statt erfundener
+            // Werte (s. `omp-srt-gateway::GatewayStore::get`).
+            _ => self.monitor.get("monitor", name, None, Vec::new),
         }
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
     /// Geschäftslogik-Fehler (z. B. "keine Quelle verbunden") können hier
@@ -133,18 +152,37 @@ impl ParamStore for RecorderStore {
                     .get("fileName")
                     .and_then(Value::as_str)
                     .ok_or(InvokeError::Unknown)?;
-                self.pipeline
-                    .start_recording(file_name.to_string())
-                    .map_err(|e| {
+                match self.pipeline.start_recording(file_name.to_string()) {
+                    Ok(()) => {
+                        self.monitor.activate();
+                        Ok(())
+                    }
+                    Err(e) => {
                         eprintln!("omp-recorder: record.start failed: {e}");
-                        InvokeError::Unknown
-                    })
+                        let delay = self.monitor.status_reporting_delay();
+                        self.monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&e));
+                        self.monitor.content.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&e));
+                        Err(InvokeError::Unknown)
+                    }
+                }
             }
-            "record.stop" => self.pipeline.stop_recording().map_err(|e| {
-                eprintln!("omp-recorder: record.stop failed: {e}");
-                InvokeError::Unknown
-            }),
-            _ => Err(InvokeError::Unknown),
+            "record.stop" => match self.pipeline.stop_recording() {
+                Ok(()) => {
+                    self.monitor.deactivate();
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("omp-recorder: record.stop failed: {e}");
+                    Err(InvokeError::Unknown)
+                }
+            },
+            _ => {
+                if self.monitor.invoke("monitor", name) {
+                    Ok(())
+                } else {
+                    Err(InvokeError::Unknown)
+                }
+            }
         }
     }
 
@@ -257,10 +295,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     ));
 
     let media_ready_pipeline = pipeline_handle.clone();
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+    // Startzustand `Inactive` — kein `record.start` bisher.
+    monitor.deactivate();
     let store: Arc<dyn ParamStore> = Arc::new(RecorderStore {
         pipeline: pipeline_handle,
         video_connection,
         audio_connection,
+        monitor: monitor.clone(),
     });
 
     let handle = omp_node_sdk::start(
@@ -307,6 +349,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             match event {
                 pipeline::Event::Warning(message) => {
                     eprintln!("omp-recorder: {message}");
+                    // Abgebrochene Aufnahme (s. `RecorderStore::monitor`-
+                    // Doku): sofort Unhealthy, kein `deactivate()` — ein
+                    // Abbruch ist keine saubere Deaktivierung.
+                    let delay = monitor.status_reporting_delay();
+                    monitor.activity.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&message));
+                    monitor.content.observe(omp_node_sdk::HealthLevel::Unhealthy, delay, Some(&message));
                     handle.publish_alert(message).await;
                 }
             }

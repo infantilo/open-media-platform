@@ -23287,3 +23287,98 @@ nicht beauftragte Entscheidung).
 **Dateien:** `nodes/omp-srt-gateway/src/main.rs`,
 `nodes/omp-srt-gateway/src/pipeline.rs`,
 `nodes/omp-srt-gateway/Cargo.toml`.
+
+## 2026-09-11 (Nachtrag 212) — NMOS BCP-008 auf MXL-interne Nodes ausgeweitet (`omp-recorder`, `omp-viewer`, `omp-video-mixer-me`) — echter, ungeklärter Mixer-Befund (Nutzerauftrag "MXL-only nodes und srt gateway anpassen")
+
+**Kontext:** Für MXL-interne Nodes (kein Netzwerk/keine Hardware) gibt
+es kein echtes `linkStatus`/Paketverlust-Signal — aber ein echtes,
+wertvolles Signal existiert: ob ein fremder MXL-Sender-Flow tatsächlich
+lesbar ist ("Flow not found", genau das war Bug 2 aus Nachtrag 206).
+Auf Nutzerentscheidung (AskUserQuestion): `omp-video-mixer-me`
+(direkter Bezug zu Bug 2) plus die beiden einfachen Ein-Input-
+Empfänger `omp-viewer`/`omp-recorder`.
+
+**`omp-recorder`:** kein kontinuierlich pollbarer Jitterbuffer hier —
+`record.start`/`record.stop` (Aufnahme-Lebenszyklus, nicht der IS-05-
+Verbindungsstatus) treiben `activate()`/`deactivate()` direkt in
+`invoke()`. Ein fehlgeschlagener Start ODER ein Abbruch während der
+Aufnahme (`pipeline::Event::Warning`) setzt `activity`/`content`
+sofort `Unhealthy`, OHNE zu deaktivieren — ein Abbruch ist keine
+saubere Deaktivierung, Betreiber sollen das als Störung sehen.
+
+**`omp-viewer`:** `ViewerControl::apply` (Video-Receiver, die primäre
+Anker-Verbindung — die dynamischen Audio-Eingänge bleiben bewusst
+außerhalb dieser Runde) löst `activate()`/`deactivate()` aus. 1s-Tick
+liest `media_ready()` für `streamStatus` — anders als bei `omp-
+decklink`/`omp-aes67-gateway` hier tatsächlich ein Dauersignal, kein
+"einmal wahr, bleibt wahr" (`connect()`/`disconnect()` setzen das Flag
+bei JEDEM Quellwechsel zurück, `pipeline.rs`-Doku). `connectionStatus`
+event-getrieben aus dem bereits vorhandenen `Event::Error`-Zweig
+(fehlgeschlagener Connect). **Live verifiziert, klarer Erfolg:**
+`Inactive` vor Connect, `Healthy` nach Connect auf eine bereits
+laufende Quelle, `Inactive` nach Disconnect — alle drei Zustände exakt
+wie erwartet.
+
+**`omp-video-mixer-me`:** EIN aggregierter, informeller Monitor
+(`MonitorKind::Receiver`, kein echter NMOS-Touchpoint — die
+Crosspoint-Eingänge sind fremde Sender) für den GANZEN Mixer statt je
+M/E-Ebene. `connectionStatus` wird direkt an den beiden Stellen
+gefüttert, an denen `missing_input_ids()` (Bug-2-Fix, Nachtrag 206)
+ohnehin schon berechnet wird — kein separater Tick-Task nötig.
+
+**Live-Befund, DEGRADATION vollständig bestätigt, RECOVERY diesmal
+NICHT reproduzierbar (ehrlich dokumentiert statt behauptet):**
+mehrfach, mit komplett geleertem `/dev/shm/omp-mxl` und frisch
+deregistrierten NMOS-Ressourcen, exakt denselben Ablauf wie bei der
+Nachtrag-206-Verifikation nachgestellt (`omp-channel-player` +
+`omp-video-mixer-me` standalone, Quelle registriert BEVOR `load()`
+läuft). `monitor.connectionStatus`/`overallStatus` zeigten dabei
+KORREKT `Unhealthy` mit der exakt richtigen Sender-ID und Meldung,
+solange der Flow fehlte — die Kernaussage der Erweiterung ("dieses
+Signal hätte Bug 2 sofort sichtbar gemacht") ist damit bestätigt.
+Anders als in Nachtrag 206 dokumentiert erholte sich `connectionStatus`
+in DREI unabhängigen, sauberen Standalone-Wiederholungen dieses Mals
+aber NICHT innerhalb von bis zu 75s nach `load()`, obwohl der Flow
+nachweislich existierte (per `mxl-info` UND per offenem File-Descriptor
+der Quelle bestätigt) und der Retry-Zweig nachweislich weiterlief
+(identische Log-Zeile alle ~800ms). Gezielt mit zwei neuen, minimalen
+GStreamer-freien Repro-Werkzeugen (`nodes/omp-mediaio/examples/
+mxl_late_flow_repro.rs`/`mxl_late_flow_writer.rs`, im Repo belassen wie
+die bestehenden `mxl_reopen_repro`/`mxl_concurrent_reader_repro`)
+geprüft, ob eine VOR Flow-Existenz geöffnete `MxlInstance` denselben
+Flow später über `get_flow_def()`/`create_flow_reader()` findet — auch
+MIT einer eigenen, parallel offenen Writer-Flow auf derselben Instanz
+(mirrort den Mixer, der sein eigenes PGM schreibt UND fremde Eingänge
+liest): beide Varianten funktionierten in diesem minimalen Aufbau auf
+Anhieb einwandfrei. Die reale Diskrepanz beim echten Mixer-Prozess
+bleibt damit UNGEKLÄRT — `libmxl.so` selbst zeigt in Isolation kein
+"vor Flow-Existenz geöffnet"-Problem, die Ursache liegt vermutlich in
+einer Kombination, die dieses einfache Werkzeug nicht abbildet
+(viele parallele GStreamer-Threads, wiederholtes Drop/Neubau von
+`MxlVideoInput` im Retry-Takt, oder etwas Drittes). **Nicht
+weiterverfolgt in dieser Runde** (Umfang deutlich über "BCP-008 auf
+MXL-Nodes ausweiten" hinaus) — eigener, dedizierter Debugging-Schritt
+nötig, bevor Nachtrag 206s Recovery-Behauptung als abschließend
+bestätigt gelten kann.
+
+`cargo build --workspace --bins` grün; `build/test` für `omp-recorder`/
+`omp-viewer`/`omp-video-mixer-me` einzeln grün (`clippy -D warnings`
+für `omp-viewer` durch einen unabhängigen, vorbestehenden Fund in
+`omp-mediaio::preview` blockiert — `Broadcaster::new()` ohne `Default`-
+Impl, nur unter dem `preview`-Feature sichtbar, per `git stash`
+bestätigt vorbestehend, gleiches Vorgehen wie beim vorbestehenden
+Mixer-`main.rs`-Fund aus Nachtrag 206 — nicht angefasst; `omp-video-
+mixer-me`s Clippy-Blocker aus Nachtrag 206 besteht unverändert weiter).
+Alle Live-Test-Registrierungen/-Prozesse danach aufgeräumt.
+
+**Damit ist der vom Nutzer beauftragte Umfang ("MXL-only nodes und srt
+gateway anpassen") inhaltlich erledigt** — mit einem offen
+dokumentierten, echten Nebenfund statt einer beschönigten
+Erfolgsmeldung.
+
+**Dateien:** `nodes/omp-recorder/src/main.rs`,
+`nodes/omp-viewer/src/main.rs`, `nodes/omp-viewer/Cargo.toml`,
+`nodes/omp-video-mixer-me/src/main.rs`,
+`nodes/omp-video-mixer-me/src/pipeline.rs`,
+`nodes/omp-mediaio/examples/mxl_late_flow_repro.rs` (neu),
+`nodes/omp-mediaio/examples/mxl_late_flow_writer.rs` (neu).

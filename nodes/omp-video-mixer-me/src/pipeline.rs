@@ -1017,6 +1017,20 @@ fn missing_input_ids(inputs: &[DiscoveredInput], pads: &HashMap<String, gst::Pad
         .collect()
 }
 
+/// Füttert `monitor.activity` (BCP-008-01 `connectionStatus`, s.
+/// `run()`s Monitor-Doku) direkt aus `missing_input_ids()`s Ergebnis —
+/// an beiden Stellen aufgerufen, an denen die Hauptschleife das ohnehin
+/// schon berechnet.
+fn report_missing_inputs(monitor: &omp_node_sdk::Monitor, missing: &[String]) {
+    let delay = monitor.status_reporting_delay();
+    let level = if missing.is_empty() { omp_node_sdk::HealthLevel::Healthy } else { omp_node_sdk::HealthLevel::Unhealthy };
+    monitor.activity.observe(
+        level,
+        delay,
+        Some(&format!("{} Crosspoint-Eingang/-Eingänge nicht lesbar (Flow not found): {missing:?}", missing.len())),
+    );
+}
+
 fn apply_dve_box(pad: &gst::Pad, box_: &DveBox) {
     pad.set_property("xpos", box_.x);
     pad.set_property("ypos", box_.y);
@@ -1531,6 +1545,15 @@ pub fn run(
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<PipelineHandle, String>>,
     heartbeat: Arc<AtomicU64>,
+    // AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    // decisions.md` BCP-008-Nachtrag) — informell wie bei `omp-srt-
+    // gateway` (kein echter NMOS-Touchpoint: die Crosspoint-Eingänge
+    // sind fremde Sender, keine eigenen Receiver dieses Nodes).
+    // `connectionStatus` wird direkt an den beiden Stellen gefüttert,
+    // an denen `missing_input_ids()` ohnehin schon berechnet wird (s.
+    // unten) — kein separater Tick-Task nötig, dieser Thread pollt
+    // bereits alle 500ms.
+    monitor: Arc<omp_node_sdk::Monitor>,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -1538,6 +1561,8 @@ pub fn run(
         let _ = ready.send(Err(msg));
         return;
     }
+    // Mixer läuft immer (kein Enable/Disable-Konzept) — sofort aktiv.
+    monitor.activate();
 
     let context = match MxlContext::new(&config.domain) {
         Ok(c) => Arc::new(c),
@@ -1699,6 +1724,7 @@ pub fn run(
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
+                            report_missing_inputs(&monitor, &missing_inputs);
                             update_flowed(&flowed_slot, &p);
                             active = Some(p);
                         }
@@ -2092,6 +2118,7 @@ pub fn run(
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
+                            report_missing_inputs(&monitor, &missing_inputs);
                             update_flowed(&flowed_slot, &p);
                             active = Some(p);
                         }

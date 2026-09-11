@@ -137,6 +137,16 @@ struct MixerStore {
     /// die UI-Anzeige, welcher "Mixer"-Button gerade leuchten soll.
     active_pip_preset: PerLevel<Option<String>>,
     pipeline: pipeline::PipelineHandle,
+    /// AMWA BCP-008-01 (NMOS Receiver Status Monitoring, `docs/
+    /// decisions.md` BCP-008-Nachtrag) — informell wie bei `omp-srt-
+    /// gateway`: die Crosspoint-Eingänge sind fremde NMOS-Sender, keine
+    /// eigenen Receiver dieses Nodes, also kein echter Touchpoint.
+    /// EIN aggregierter Monitor für den gesamten Mixer (nicht je
+    /// M/E-Ebene) — `connectionStatus` spiegelt direkt `pipeline.rs`s
+    /// `missing_input_ids()` (genau das Signal, das Bug 2/Nachtrag 206
+    /// sofort sichtbar gemacht hätte). Bewusst top-level statt
+    /// `level_name`-präfigiert, gleiche Einordnung wie `setOutputDelay`.
+    monitor: Arc<omp_node_sdk::Monitor>,
 }
 
 /// Anzahl M/E-Ebenen dieses `MixerStore` — jedes `PerLevel`-Feld hat
@@ -212,6 +222,7 @@ impl ParamStore for MixerStore {
             }),
             parameters: (0..level_count(self))
                 .flat_map(|level| level_param_specs(level_count(self), level))
+                .chain(self.monitor.param_specs("monitor"))
                 .collect(),
             methods: (0..level_count(self))
                 .flat_map(|level| level_method_specs(level_count(self), level))
@@ -230,19 +241,27 @@ impl ParamStore for MixerStore {
                         kind: ParamType::Number,
                     }],
                 }))
+                .chain(self.monitor.method_specs("monitor"))
                 .collect(),
         }
     }
 
     fn get(&self, name: &str) -> Option<Value> {
-        level_get(self, name)
+        level_get(self, name).or_else(|| self.monitor.get("monitor", name, None, Vec::new))
     }
 
-    fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
-        Err(SetError::ReadOnly)
+    fn set(&self, name: &str, value: Value) -> Result<(), SetError> {
+        match self.monitor.set("monitor", name, &value) {
+            Some(true) => Ok(()),
+            Some(false) => Err(SetError::Unknown),
+            None => Err(SetError::ReadOnly),
+        }
     }
 
     fn invoke(&self, name: &str, args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        if self.monitor.invoke("monitor", name) {
+            return Ok(());
+        }
         level_invoke(self, name, args)
     }
 
@@ -1017,8 +1036,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
     let pipeline_heartbeat_thread = pipeline_heartbeat.clone();
+    let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver));
+    let monitor_for_pipeline = monitor.clone();
     let pipeline_thread = std::thread::spawn(move || {
-        pipeline::run(pipeline_config, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread)
+        pipeline::run(pipeline_config, tx, pipeline_shutdown, ready_tx, pipeline_heartbeat_thread, monitor_for_pipeline)
     });
 
     let pipeline_handle = match ready_rx.await {
@@ -1068,6 +1089,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pip_presets: pip_presets.clone(),
         active_pip_preset: active_pip_preset.clone(),
         pipeline: pipeline_handle.clone(),
+        monitor: monitor.clone(),
     });
 
     // Port-Label "PGM"/"PGM {n}" (Nutzerfund 2026-07-16, §22 Flow-Editor-
