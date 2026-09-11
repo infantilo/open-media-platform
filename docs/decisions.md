@@ -22363,3 +22363,79 @@ Crates, ohne `omp-player`) baut sauber durch, keine Fehler.
 
 **Dateien:** `nodes/omp-player/` (gelöscht), `nodes/Cargo.toml`,
 `deploy/catalog.json`, `README.md`, `docs/HANDBUCH.md`.
+
+## 2026-09-11 (Nachtrag 199) — Workflow-Rollen-Migration in der Flow-Editor-UI (Nutzerauftrag "starte mit workflow role migration in ui und playout automation kapitel 6")
+
+**Kontext:** README nannte "Workflow-role migration has no drag-to-move
+UI yet" als bekannte Lücke — das Backend
+(`POST /workflows/{id}/roles/{role}/migrate`, Kapitel 13 Teil 3,
+`workflow_handlers.go`) war seit Längerem fertig. Vor dem Bauen einer
+neuen UI-Interaktion erst die bestehende Instanz-Migrations-UI gelesen
+(nicht angenommen): eigenständige Instanzen werden seit einem
+Nutzerfund 2026-08-14 NICHT mehr per Drag über Zonengrenzen migriert
+(Tile blieb dabei in der eigenen Zonen-Box hängen, "hüpfte" nicht mehr
+darüber hinaus) — die Ersatzlösung ist ein Rechtsklick-Kontextmenü mit
+allen anderen echten Hosts (`#openHostMigrateMenu`). Genau dieser Code
+hatte für Workflow-Rollen-Kacheln bereits einen erkannten, aber
+blockierten Zweig: `#workflowRoleForNodeId(tileId)` erkennt die
+Rollenbindung korrekt, zeigte bisher aber nur einen "noch nicht
+unterstützt"-Toast.
+
+**Erreichbarkeit bereits vorhanden, ungenutzt:** Rollen-gebundene
+Node-Kacheln sind am Root normalerweise zu EINER kollabierten
+Workflow-Kachel zusammengefasst (`#renderWorkflowTiles`,
+Nutzerwunsch 2026-07-26). Die bereits existierende Workflow-Filter-
+Ansicht der App-Bar (`setWorkflowFilter`, App-Bar-Dropdown) umgeht das
+gezielt (`#buildTilesForWorkflowFilter`) — dort erscheinen einzelne
+Rollen-Nodes mit echter `instanceId` als normale Kacheln, der
+Rechtsklick-Handler (Bedingung `tile.instanceId && hostViewEnabled &&
+scope===null`) greift dort unverändert. Kein neuer Einstiegspunkt
+nötig, nur der blockierende Zweig musste ersetzt werden.
+
+**Umsetzung:** `#openHostMigrateMenu` verzweigt jetzt: mit
+Rollenbindung ruft die Host-Auswahl `#confirmAndMigrateWorkflowRole()`
+(neu) statt `#confirmAndMigrateInstance()` — ruft denselben Host-Zonen-
+Filter/dieselbe Popover-Mechanik auf, aber POSTet gegen
+`/workflows/{id}/roles/{role}/migrate` (Body `{targetHostId}`,
+gleiche Konvention wie überall: leer/fehlend = lokal) statt
+`/instances/{id}/migrate`. Bestätigungstext an den tatsächlichen
+Make-before-Break-Ablauf angepasst (neue Instanz zuerst, Zustand/
+Verbindungen übernehmen, danach erst die alte stoppen — nicht "wird
+gestoppt und neu gestartet" wie bei der einfachen Instanz-Migration).
+
+**Live verifiziert** (kein Raten, §0 Punkt 3): echte Dev-Umgebung
+(`make up`+`make start`+`make hosts`, zwei simulierte Hosts
+Regie-Host-A/-B), Wegwerf-Workflow mit einer `omp-media-library`-Rolle
+(keine eigene Medienpipeline, damit unabhängig von GStreamer-Verhalten
+testbar) fest auf Regie-Host-A gestartet. Per hand-gebautem CDP-
+Skript (kein Puppeteer/Playwright in dieser Sandbox, s. bereits
+dokumentierte Einschränkung) gegen einen echten headless Chromium:
+Workflow-Filter gesetzt, Host-Ansicht aktiv, Rechtsklick auf die
+Rollen-Kachel öffnete das Menü mit allen drei anderen Zonen
+(lokal/Regie-Host-B/Regie-Host-A-Altregistrierung) — NICHT mehr der
+alte Toast —, Klick auf "Regie-Host-B" zeigte den korrekten
+rollenspezifischen Bestätigungstext, nach Bestätigen kein Fehler-Toast.
+Per Orchestrator-API nachgeprüft: `runtime.medialib.hostId` wechselte
+tatsächlich von Regie-Host-A auf Regie-Host-B (neue `instanceId`/
+`nodeId`, Status blieb `started`) — echter Make-before-Break-Umzug,
+nicht nur ein UI-Erfolgssignal. Erste Testrunde ohne ausreichende
+Wartezeit zeigte einen echten, unabhängigen Timing-Fund (kein Bug
+dieser Änderung): `#paletteHosts` füllt sich asynchron beim
+Canvas-Mount — ein Rechtsklick unmittelbar nach Workflow-Filter-Wechsel
+kann bei noch leerem `#paletteHosts` nur die statische "lokal"-Zone
+zeigen; nach realistischer Wartezeit (~4s) korrekt. Kein Code-Fix
+nötig (kein neuer Fehlerzustand, dieselbe Race existiert bereits
+identisch beim Instanz-Migrations-Pfad), nur dokumentiert.
+Wegwerf-Workflow danach gestoppt+gelöscht (kein Rest in der Dev-DB).
+`deno check`/`deno test ui/` (92/92) grün.
+
+**Bewusst nicht Teil dieser Runde:** kein neues UI-Element für den
+Fall "Workflow läuft NICHT über die Filter-Ansicht" (die kollabierte
+Root-Workflow-Kachel selbst bekommt weiterhin kein eigenes
+Rollen-Migrations-Menü) — das wäre eine zusätzliche, eigenständige
+Interaktion (z. B. zweistufiges Menü: Rolle wählen → Host wählen) und
+damit ein größerer, separater Schritt; die Filter-Ansicht deckt den
+Anwendungsfall bereits vollständig ab, nur weniger entdeckbar.
+
+**Dateien:** `ui/graph/flow-canvas.ts`
+(`#openHostMigrateMenu`/`#confirmAndMigrateWorkflowRole`).

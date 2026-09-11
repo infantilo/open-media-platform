@@ -3963,10 +3963,18 @@ export class FlowCanvas extends HTMLElement {
 
   // Kapitel 13 Teil 3 (§13.4: "Umzug"), Umsetzung seit Bug 1 (2026-08-14)
   // per Rechtsklick statt Drag (s. #clampToOwnZone-Doku) — Rechtsklick auf
-  // eine eigenständige (nicht Workflow-gebundene) Instanz-Kachel in der
-  // Host-Ansicht öffnet ein Kontextmenü mit allen anderen echten Hosts,
-  // Auswahl ruft dieselbe #confirmAndMigrateInstance() wie zuvor der
-  // Drag-Pfad.
+  // eine Instanz-Kachel in der Host-Ansicht öffnet ein Kontextmenü mit
+  // allen anderen echten Hosts. Für eine eigenständige Instanz ruft die
+  // Auswahl #confirmAndMigrateInstance() (wie zuvor der Drag-Pfad); für
+  // eine Workflow-Rollen-Kachel (nur über die Workflow-Filter-Ansicht in
+  // der App-Bar sichtbar, s. #buildTilesForWorkflowFilter — am Root sind
+  // Rollen-Nodes sonst zu EINER Workflow-Kachel kollabiert,
+  // #renderWorkflowTiles) stattdessen #confirmAndMigrateWorkflowRole()
+  // gegen den seit Kapitel 13 Teil 3 fertigen Rollen-Migrate-Endpunkt
+  // (`POST /workflows/{id}/roles/{role}/migrate`, s. dortige Backend-
+  // Doku in workflow_handlers.go) — bis hierhin (2026-09-11) blockierte
+  // ein Toast diesen Zweig als "noch nicht unterstützt", obwohl das
+  // Backend bereits fertig war.
   #openHostMigrateMenu(ev: MouseEvent, tileId: string) {
     // Räumt einen etwaigen noch offenen Menü-Zustand (samt seines
     // outsideClick-Listeners) VOR dem Neuaufbau auf — nicht danach: sonst
@@ -3979,13 +3987,7 @@ export class FlowCanvas extends HTMLElement {
     const node = this.#graph.nodes.find((n) => n.id === tileId);
     if (!node || !node.instanceId) return;
     const instanceId = node.instanceId;
-
-    if (this.#workflowRoleForNodeId(tileId)) {
-      this.#showToast(
-        `„${node.label}" gehört zu einem laufenden Workflow — Rollen-Umzug ist noch nicht unterstützt.`,
-      );
-      return;
-    }
+    const roleBinding = this.#workflowRoleForNodeId(tileId);
 
     const currentZone = this.#zoneIdForNodeId(tileId);
     const targets = this.#hostZones(this.#rootZoneTiles()).filter(
@@ -4008,7 +4010,11 @@ export class FlowCanvas extends HTMLElement {
       item.addEventListener("mouseleave", () => (item.style.background = "none"));
       item.addEventListener("click", () => {
         this.#closeHostMigrateMenu();
-        void this.#confirmAndMigrateInstance(instanceId, node.label, zone.id);
+        if (roleBinding) {
+          void this.#confirmAndMigrateWorkflowRole(roleBinding.workflowId, roleBinding.role, node.label, zone.id);
+        } else {
+          void this.#confirmAndMigrateInstance(instanceId, node.label, zone.id);
+        }
       });
       this.#hostMigrateMenu.appendChild(item);
     }
@@ -4070,6 +4076,38 @@ export class FlowCanvas extends HTMLElement {
       }
     } catch (err) {
       this.#showToast(`Umzug fehlgeschlagen: ${err}`);
+    }
+  }
+
+  // Rollen-Pendant zu #confirmAndMigrateInstance: statt der Instanz-ID
+  // geht workflowId+role an den Kapitel-13-Teil-3-Backend-Endpunkt
+  // (`Service.MigrateRole`), der intern denselben Make-before-Break-
+  // Umzug wie D6 Teil 4 fährt (neue Instanz am Zielhost, Bedienzustand/
+  // Connections übernehmen, ERST DANACH die alte stoppen) statt eines
+  // einfachen Stop/Start — Bestätigungstext entsprechend angepasst.
+  async #confirmAndMigrateWorkflowRole(workflowId: string, role: string, nodeLabel: string, targetZoneId: string) {
+    const targetLabel = this.#hostZones(this.#rootZoneTiles()).find((z) => z.id === targetZoneId)?.label ?? targetZoneId;
+    const confirmed = await confirmDialog(
+      `Rolle „${nodeLabel}" nach „${targetLabel}" verschieben? Eine neue Instanz startet dort, Bedienzustand/Verbindungen werden übernommen — erst danach wird die alte Instanz gestoppt.`,
+      { confirmLabel: "Verschieben" },
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await apiFetch(
+        `/api/v1/workflows/${encodeURIComponent(workflowId)}/roles/${encodeURIComponent(role)}/migrate`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ targetHostId: targetZoneId === "local" ? "" : targetZoneId }),
+        },
+      );
+      if (!res.ok) {
+        const text = await res.text();
+        this.#showToast(`Rollen-Umzug fehlgeschlagen: ${text || res.status}`);
+      }
+    } catch (err) {
+      this.#showToast(`Rollen-Umzug fehlgeschlagen: ${err}`);
     }
   }
 
