@@ -4005,6 +4005,36 @@ D12–D15):
 
 ### 25.3 Diagnose-Cockpit (neuer Administration-Sub-Tab)
 
+**Status (2026-09-13, UMSETZUNG.md D20):** Umgesetzt — neuer "Diagnose"-
+Sub-Tab in `ui/shell/admin-view.ts` (Live-Tabelle über `GET
+/api/v1/logs`, SSE-Refresh auf `log.appended`, drei Filter Trace-ID/
+Node-ID/Level, Klick auf eine Trace-Zelle filtert direkt auf diesen
+Trace — macht aus der Live-Tabelle bei Bedarf die Trace-Waterfall,
+ohne eine eigene Zeitleisten-Grafik zu brauchen: der Server liefert die
+Zeilen bereits chronologisch sortiert). `ui/shell/app-shell.ts` fängt
+ein bubblendes `"omp-view-trace"`-Event ab und wechselt zum Diagnose-
+Tab mit vorbelegtem Trace-Filter (`AdminView.showTrace`, gleiches
+Cross-Tab-Muster wie das bestehende `"open-workflow-in-editor"`-Event).
+`ui/graph/flow-canvas.ts` löst dieses Event aus einem "Diagnose
+öffnen"-Button im Fehler-Toast eines fehlgeschlagenen IS-05-Connect/
+Disconnect aus (`X-OMP-Trace-Id`, seit D19 immer im Response-Header,
+Erfolg UND Fehler) — genau die Nutzeranforderung "wenn IS-05
+fehlschlägt". **Kreativ-Zusatz umgesetzt:** derselbe Klick färbt
+zusätzlich (10s, klingt von selbst ab) im laufenden Flow-Editor-
+Graphen genau die Kacheln ein, deren Node-ID in einer Log-Zeile dieses
+Trace auftaucht (`#traceHighlightNodeIds`, höchste Rendering-Priorität
+— auch über Auswahl/Tally) — der "Blast-Radius" direkt in der
+vertrauten Landkarte der Facility, nicht nur als Tabelle. Live per
+echtem CDP-Klick verifiziert (Administration → Diagnose öffnen, echter
+`nats pub` auf `omp.logs.*` erscheint per SSE ohne Reload, Klick auf
+eine Trace-Zelle setzt den Filter korrekt, das reale
+`"omp-view-trace"`-Event schaltet den Tab um und befüllt den Filter);
+die Flow-Editor-Toast-Auslösestelle selbst (identischer, bereits
+etablierter `dispatchEvent`-Aufruf wie beim Workflow-Editor-Sprung) nur
+per Typecheck/Code-Review, nicht per echtem Drag-Connect-Fehlschlag,
+geprüft — dafür fehlte eine laufende Node-Instanz mit echten Ports in
+dieser Sitzung, s. `docs/decisions.md` Nachtrag 221.
+
 Gleiches Muster wie die bestehenden Sub-Tabs (Nutzer/Rollenbindungen/
 Node-Katalog/Audit-Log/Cluster, §12/§19.3):
 

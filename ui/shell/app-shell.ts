@@ -112,6 +112,21 @@ class AppShell extends HTMLElement {
     const canvas = this.#contentEl.querySelector("omp-flow-canvas") as FlowCanvas | null;
     void canvas?.enterWorkflowEditScope(workflowId);
   };
+  // ARCHITECTURE.md §25.1/§25.3 (UMSETZUNG.md D20): flow-canvas.ts feuert
+  // dieses Event (bubbles:true), wenn der Nutzer nach einem
+  // fehlgeschlagenen IS-05-Connect/Disconnect auf "Diagnose öffnen"
+  // klickt — die trace_id steckt bereits im X-OMP-Trace-Id-Response-
+  // Header dieses Aufrufs. Gleiches Cross-Tab-Muster wie
+  // #onOpenWorkflowInEditor oben. Kein Effekt, falls der Administration-
+  // Tab nie gemountet wurde (Nicht-Admin, s. #loadAdminTab) —
+  // #switchTab("admin") ist dann ein No-Op, GET /api/v1/logs wäre für
+  // diesen Nutzer ohnehin admin-gated abgewiesen worden.
+  #onViewTrace = (ev: Event) => {
+    const traceId = (ev as CustomEvent<string>).detail;
+    this.#switchTab("admin");
+    const admin = this.#contentEl.querySelector("omp-admin-view") as (HTMLElement & { showTrace(traceId: string): void }) | null;
+    admin?.showTrace(traceId);
+  };
   #onSseMessage = (ev: Event) => {
     let parsed: { type: string };
     try {
@@ -134,6 +149,7 @@ class AppShell extends HTMLElement {
     // reicht, da keine Shadow-DOM-Grenze zwischen workflows-view.ts und
     // hier liegt (kein composed:true nötig).
     this.#contentEl.addEventListener("open-workflow-in-editor", this.#onOpenWorkflowInEditor);
+    this.#contentEl.addEventListener("omp-view-trace", this.#onViewTrace);
 
     this.#lastState = connectionMonitor.state;
     connectionMonitor.addEventListener("statechange", this.#onStateChange);
@@ -164,6 +180,7 @@ class AppShell extends HTMLElement {
     connectionMonitor.removeEventListener("statechange", this.#onStateChange);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
     this.#contentEl.removeEventListener("open-workflow-in-editor", this.#onOpenWorkflowInEditor);
+    this.#contentEl.removeEventListener("omp-view-trace", this.#onViewTrace);
     clearInterval(this.#countdownHandle);
   }
 

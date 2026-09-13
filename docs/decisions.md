@@ -24025,3 +24025,84 @@ C).
 `orchestrator/internal/config/config.go`,
 `orchestrator/internal/config/config_test.go`, `orchestrator/main.go`,
 `ARCHITECTURE.md`.
+
+## 2026-09-13 (Nachtrag 221) — Zentralisierte Observability Teil 2: Diagnose-Cockpit im Flow Editor (ARCHITECTURE.md §25.3, UMSETZUNG.md D20)
+
+**Kontext:** Direkter Nutzerauftrag "jetzt Teil 2, das Diagnose-Cockpit
+im Flow Editor bauen" im Anschluss an Nachtrag 220. Vor der Umsetzung
+die bestehenden UI-Muster gelesen statt geraten: `ui/shell/
+admin-view.ts`s Audit-Log-Sub-Tab (Sub-Tab-Leiste, SSE-first mit
+Poll-Fallback, Cursor-Pagination) als direkte Vorlage für den neuen
+Diagnose-Tab; `ui/shell/app-shell.ts`s bestehendes
+`"open-workflow-in-editor"`-Cross-Tab-Event (workflows-view.ts →
+app-shell.ts → `FlowCanvas.enterWorkflowEditScope`) als Vorlage für das
+neue `"omp-view-trace"`-Event; `TileSpec.id` gegen den echten
+Graph-Aufbau (`#rootZoneTiles`) verifiziert, um sicherzugehen, dass
+`tile.id` tatsächlich dieselbe IS-04-Node-ID ist wie `logbus.
+Entry.nodeId` (D19) — sonst hätte die Blast-Radius-Markierung nie
+etwas gefunden.
+
+**Umsetzung, drei Dateien:**
+- **`ui/shell/admin-view.ts`**: neuer Sub-Tab "Diagnose" — `LogEntry`-
+  Interface (Wire-Format identisch zu `logbus.Entry`), `#loadLogs`/
+  `#loadMoreLogs` (gleiche Cursor-Pagination wie `#loadAudit`/
+  `#loadMoreAudit`), SSE-Refresh auf das seit D19 bereits (aber bis
+  jetzt ungenutzt) gesendete `"log.appended"`-Event, Filterformular
+  (Trace-ID/Node-ID/Level) + Klick auf eine Trace-Zelle pivotiert
+  direkt auf diesen Trace. Neue öffentliche Methode `showTrace(traceId)`
+  — von app-shell.ts nach einem `"omp-view-trace"`-Event aufgerufen.
+  Eine gesetzte Filterkombination unterdrückt bewusst den automatischen
+  SSE-Refresh (aktiv gesetzte Nutzerabsicht, ein Live-Refresh würde sie
+  sonst mit der ungefilterten neuesten Seite überschreiben).
+- **`ui/shell/app-shell.ts`**: `#onViewTrace`-Handler (identisches
+  Cross-Tab-Muster wie `#onOpenWorkflowInEditor`) — wechselt zum
+  Administration-Tab und ruft `AdminView.showTrace(traceId)` auf dem
+  frisch gemounteten Element auf. Kein Effekt für Nicht-Admins
+  (`#switchTab("admin")` ist dann ein No-Op, da der Admin-Tab nie
+  gepusht wurde, s. `#loadAdminTab`).
+- **`ui/graph/flow-canvas.ts`**: `#showToast` bekam einen optionalen
+  `action`-Parameter (Klick-Button neben der Meldung) — alle ~30
+  bestehenden Aufrufstellen bleiben unverändert gültig. Neue
+  `#traceToastAction(response)` liest `X-OMP-Trace-Id` aus dem
+  Response-Header (seit D19 immer gesetzt, Erfolg UND Fehler) und baut
+  daraus einen "Diagnose öffnen"-Button für `#createEdge`/`#removeEdge`s
+  Fehlerpfade — genau die Nutzeranforderung "wenn IS-05 fehlschlägt".
+  **Kreativ-Zusatz "Blast-Radius-Overlay":** derselbe Klick löst
+  zusätzlich `#highlightTrace(traceId)` aus (`GET /api/v1/logs?
+  traceId=…`, sammelt alle `nodeId`s der Zeilen), `#renderTile` färbt
+  die betroffenen Kacheln mit höchster Priorität (auch über Auswahl/
+  Tally-Färbung) hell-cyan ein, klingt nach 10s automatisch wieder ab.
+
+**Live verifiziert per echtem CDP-Klick** (hand-rolled CDP-über-
+WebSocket-Skript, `Input.dispatchMouseEvent`, kein `.click()` — kein
+Browser-Automatisierungs-Tool in dieser Umgebung verfügbar, gleiches
+Vorgehen wie in früheren Sitzungen dokumentiert): echter Login als
+`admin`, echter Klick auf "Administration", echter Klick auf
+"Diagnose" — Filterformular + Leerzustand korrekt gerendert. Ein
+echter `nats pub` auf `omp.logs.test-node-ui` erschien nachweislich
+OHNE Seiten-Reload (SSE `log.appended`-Push). Ein echter Klick auf die
+gerenderte Trace-Zelle setzte das Trace-ID-Filterfeld nachweislich auf
+den vollen Wert und zeigte den "Filter zurücksetzen"-Button. Das
+tatsächliche `"omp-view-trace"`-Event (byte-identisch zu dem, das
+`flow-canvas.ts` bei einem Toast-Klick auslösen würde) wurde direkt per
+`dispatchEvent` von einem echten Nachfahren-Element aus abgesetzt —
+`app-shell.ts`s echter `#onViewTrace`-Handler reagierte korrekt
+(Tab-Wechsel + Filter-Übernahme bestätigt). **Bewusst nicht live
+getestet:** die eine `dispatchEvent`-Aufrufstelle in `flow-canvas.ts`
+selbst (identischer, bereits an anderer Stelle im selben Modul
+etablierter Musteraufruf) — ein echter fehlschlagender Drag-Connect
+hätte eine laufende Node-Instanz mit registrierten Ports gebraucht, die
+in dieser Sitzung nicht aufgesetzt war; per `deno check`/`deno test
+ui/` (92/92) stattdessen abgesichert. `deno bundle` neu gebaut. Alle
+Testdaten (Log-Zeilen) danach aus der Dev-Postgres entfernt, Chromium/
+Test-Orchestrator-Prozess sauber beendet.
+
+**Bewusst nicht Teil dieser Runde:** ein echter End-zu-Ende-Test des
+Toast-Buttons gegen eine wirklich fehlschlagende IS-05-Verbindung
+(s. o.); Health-Übergänge/Alerts bekommen noch keine trace_id (nur
+IS-05-Connect/Disconnect und der generische Node-Proxy tun das seit
+D19); node-seitige Log-Emission weiterhin offen.
+
+**Dateien:** `ui/shell/admin-view.ts`, `ui/shell/app-shell.ts`,
+`ui/graph/flow-canvas.ts`, `ui/dist/shell.js` (neu gebaut),
+`ARCHITECTURE.md`.

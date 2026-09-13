@@ -539,6 +539,8 @@ export class FlowCanvas extends HTMLElement {
   // Bearbeiten-Modus, deren Name gerade per Doppelklick umbenannt wird.
   #editingWorkflowRoleName: string | null = null;
   #tally: Record<string, boolean> = {};
+  // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — s. #highlightTrace-Doku.
+  #traceHighlightNodeIds: Set<string> | null = null;
   #drag: DragState | null = null;
   #rubberBand: SVGPathElement | null = null;
   #selectionRect: SVGRectElement | null = null;
@@ -3401,6 +3403,12 @@ export class FlowCanvas extends HTMLElement {
     const selected = this.#selectedIds.has(tile.id);
     const onTally = this.#tally[tile.id] === true;
     const isGroup = tile.kind === "group";
+    // ARCHITECTURE.md §25.3 (UMSETZUNG.md D20) — "Blast-Radius"-
+    // Hervorhebung hat höchste Priorität (auch über Auswahl/Tally): sie
+    // ist eine bewusst vom Admin angeforderte Diagnose-Ansicht, kein
+    // Dauerzustand, soll also nicht von anderen Färbungen verdeckt
+    // werden, solange sie aktiv ist (10s, s. #highlightTrace).
+    const traceHighlighted = this.#traceHighlightNodeIds?.has(tile.id) === true;
 
     const g = document.createElementNS(SVG_NS, "g");
     g.setAttribute("data-role", isGroup ? "group-tile" : "node");
@@ -3414,9 +3422,24 @@ export class FlowCanvas extends HTMLElement {
     body.setAttribute("fill", onTally ? "#8b1a1a" : isGroup ? "#2d3a4d" : "#2d2d2d");
     body.setAttribute(
       "stroke",
-      selected ? "#ffcc00" : onTally ? "#ff3b3b" : tile.isStandby ? "#e0a020" : isGroup ? "#5b9bd5" : healthColor(tile.health),
+      traceHighlighted
+        ? "#00e5ff"
+        : selected
+          ? "#ffcc00"
+          : onTally
+            ? "#ff3b3b"
+            : tile.isStandby
+              ? "#e0a020"
+              : isGroup
+                ? "#5b9bd5"
+                : healthColor(tile.health),
     );
-    body.setAttribute("stroke-width", selected || onTally ? "3" : "2");
+    body.setAttribute("stroke-width", traceHighlighted ? "4" : selected || onTally ? "3" : "2");
+    if (traceHighlighted) {
+      const traceTitle = document.createElementNS(SVG_NS, "title");
+      traceTitle.textContent = "Teil des gerade angezeigten Traces (Diagnose-Cockpit, ARCHITECTURE.md §25.3).";
+      g.appendChild(traceTitle);
+    }
     if (selected) {
       body.setAttribute("stroke-dasharray", "6 3");
     } else if (tile.isStandby) {
@@ -4327,6 +4350,24 @@ export class FlowCanvas extends HTMLElement {
     this.#createEdge(fromPortId, toPortId);
   }
 
+  // ARCHITECTURE.md §25.1/§25.3 (UMSETZUNG.md D20): der Orchestrator
+  // trägt die trace_id einer IS-05-Graph-Operation seit D19 immer im
+  // Response-Header X-OMP-Trace-Id, Erfolg UND Fehler (s. httpapi/
+  // graph_handlers.go). Ein "Diagnose öffnen"-Toast-Button ist damit
+  // ohne jede zusätzliche Anfrage möglich — genau die vom Nutzer
+  // benannte Anforderung "wenn z. B. IS-05 fehlschlägt" konkret bedient.
+  #traceToastAction(response: Response): { label: string; onClick: () => void } | undefined {
+    const traceId = response.headers.get("X-OMP-Trace-Id");
+    if (!traceId) return undefined;
+    return {
+      label: "Diagnose öffnen",
+      onClick: () => {
+        this.dispatchEvent(new CustomEvent("omp-view-trace", { detail: traceId, bubbles: true, composed: true }));
+        void this.#highlightTrace(traceId);
+      },
+    };
+  }
+
   async #createEdge(fromSender: string, toReceiver: string) {
     try {
       const response = await apiFetch("/api/v1/graph/edges", {
@@ -4336,7 +4377,7 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!response.ok) {
         const text = await response.text();
-        this.#showToast(`Verbindung fehlgeschlagen: ${text || response.status}`);
+        this.#showToast(`Verbindung fehlgeschlagen: ${text || response.status}`, this.#traceToastAction(response));
         return;
       }
       await this.#queueFetchAndRender();
@@ -4358,7 +4399,7 @@ export class FlowCanvas extends HTMLElement {
       });
       if (!response.ok) {
         const text = await response.text();
-        this.#showToast(`Trennen fehlgeschlagen: ${text || response.status}`);
+        this.#showToast(`Trennen fehlgeschlagen: ${text || response.status}`, this.#traceToastAction(response));
         return;
       }
       this.#selectedEdgeId = null;
@@ -5837,17 +5878,70 @@ export class FlowCanvas extends HTMLElement {
     }
   }
 
-  #showToast(message: string) {
+  // action (ARCHITECTURE.md §25.1/§25.3, UMSETZUNG.md D20) — optionaler
+  // Klick-Button neben der Meldung, bislang genutzt für "Diagnose
+  // öffnen" bei einer fehlgeschlagenen IS-05-Operation (#createEdge/
+  // #removeEdge). Optionaler Parameter statt einer zweiten Methode:
+  // alle ~30 bestehenden Aufrufstellen bleiben unverändert gültig.
+  #showToast(message: string, action?: { label: string; onClick: () => void }) {
     const toast = document.createElement("div");
-    toast.textContent = message;
     toast.setAttribute("data-role", "toast");
     toast.style.cssText =
       "position:fixed;bottom:16px;left:50%;transform:translateX(-50%);" +
+      "display:flex;align-items:center;gap:var(--omp-space-3);" +
       "background:var(--omp-error);color:#fff;padding:var(--omp-space-2) var(--omp-space-4);" +
       "border-radius:var(--omp-radius);font-family:var(--omp-font);font-size:var(--omp-font-size-md);" +
       "z-index:1000;opacity:0.95;";
+    const text = document.createElement("span");
+    text.textContent = message;
+    toast.appendChild(text);
+    if (action) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = action.label;
+      btn.style.cssText =
+        "background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.4);" +
+        "border-radius:var(--omp-radius);padding:2px 10px;font-size:var(--omp-font-size-sm);" +
+        "font-family:var(--omp-font);cursor:pointer;white-space:nowrap;";
+      btn.addEventListener("click", () => {
+        action.onClick();
+        toast.remove();
+      });
+      toast.appendChild(btn);
+    }
     this.appendChild(toast);
-    setTimeout(() => toast.remove(), 4000);
+    // Ein Toast mit Aktion bleibt länger stehen (8s statt 4s) — die
+    // reine Fehlermeldung liest sich in einem Blick, "erst lesen, dann
+    // ggf. klicken" braucht mehr Zeit, bevor er von selbst verschwindet.
+    setTimeout(() => toast.remove(), action ? 8000 : 4000);
+  }
+
+  // ARCHITECTURE.md §25.1/§25.3 (UMSETZUNG.md D20) — Kreativ-Zusatz
+  // "Blast-Radius-Overlay": markiert genau die Kacheln, deren Node-ID in
+  // mindestens einer Log-Zeile dieses Trace auftaucht, direkt im
+  // laufenden Graphen (statt nur in einer Tabelle im Diagnose-Tab) —
+  // der Admin sieht sofort, welcher Teil der Facility tatsächlich
+  // betroffen war. Klingt nach 10s selbst wieder ab (kein manuelles
+  // Aufräumen nötig, keine Dauermarkierung, die veraltet aussehen
+  // könnte). Zusätzlich zum bestehenden "omp-view-trace"-Event (öffnet
+  // das Diagnose-Cockpit) — beides passiert parallel, nicht alternativ.
+  async #highlightTrace(traceId: string) {
+    try {
+      const res = await apiFetch(`/api/v1/logs?traceId=${encodeURIComponent(traceId)}`);
+      if (!res.ok) return;
+      const entries: { nodeId?: string }[] = await res.json();
+      const nodeIds = new Set(entries.map((e) => e.nodeId).filter((id): id is string => !!id));
+      if (nodeIds.size === 0) return;
+      this.#traceHighlightNodeIds = nodeIds;
+      this.#render();
+      setTimeout(() => {
+        this.#traceHighlightNodeIds = null;
+        this.#render();
+      }, 10000);
+    } catch {
+      // Rein visueller Zusatz — ein Fehlschlag hier darf die eigentliche
+      // Trace-Navigation (omp-view-trace, bereits ausgelöst) nicht stören.
+    }
   }
 }
 
