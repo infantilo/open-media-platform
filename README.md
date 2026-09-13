@@ -129,7 +129,10 @@ are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 - PostgreSQL-backed state (highly available via Patroni + etcd, no
   single-node database SPOF), mTLS between orchestrator and nodes, a
   local user/role model with audit log — no external directory server
-  required.
+  required. The NMOS Registry (IS-04/05 Query/Registration API) can
+  also be run over AMWA BCP-003-01 transport TLS (`make
+  nmos-registry-tls-up`) instead of plaintext HTTP — opt-in, same as
+  mTLS.
 - The orchestrator itself runs as a Raft-consensus cluster (one or more
   instances, automatic leader election/failover) and the NATS event bus
   is clustered too — no single point of failure anywhere in the control

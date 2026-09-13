@@ -23515,3 +23515,116 @@ jeweiligen Nutzern darunter); Umschalten des Anlage-Formulars auf
 
 **Dateien:** `ui/shell/admin-view.ts`, `ui/dist/shell.js` (neu
 gebaut).
+
+## 2026-09-13 (Nachtrag 216) — AMWA BCP-003-01: NMOS-Registry-Transport-TLS (Nutzerauftrag "security dann audio" im Anschluss an eine externe API/Protokoll-Konformitäts-Analyse)
+
+**Kontext:** Externe Analyse benannte zwei vermeintliche NMOS-Lücken:
+IS-08 (Audio-Kanal-Mapping) und BCP-003 ("mTLS allein reicht oft nicht,
+BCP-003 definiert TLS + strukturierte Tokens"). Per `AskUserQuestion`
+priorisiert: Security zuerst, Audio (IS-08) danach in einer eigenen
+Sitzung (UMSETZUNG.md §0 Punkt 2: ein Schritt pro Sitzung).
+
+**Bestandsaufnahme vor der Umsetzung (nicht geraten, s. UMSETZUNG.md §0
+Punkt 6):** BCP-003 zerfällt tatsächlich in zwei unabhängige Teile.
+BCP-003-02 (OAuth2-Autorisierung) war bereits über IS-10/§12 (D3 Teil 2,
+2026-07-14) abgedeckt — die Analyse hatte hier nichts Neues gefunden.
+BCP-003-01 (Transport-TLS für NMOS-APIs) dagegen war eine echte,
+unbenannte Lücke: `orchestrator/main.go`s D3-Kommentar hatte die
+Registry-Verbindung explizit als "bewusst außerhalb dieses Schritts"
+markiert, `deploy/quadlets/omp-nmos-registry.container`/`Makefile`s
+`up`-Target starteten `rhastie/nmos-cpp` durchgehend ohne jede
+TLS-Option — Klartext-HTTP für IS-04-Discovery/-Registration/-Query,
+unabhängig vom `OMP_MTLS_ENABLED`-Schalter (der deckt nur
+Orchestrator↔Node ab). Spezifikation an der Quelle nachgelesen
+(`specs.amwa.tv/bcp-003-01`, `Secure_Communication.html`) statt
+geraten: TLS ≥1.2 Pflicht, konkrete Cipher-Suiten, Server MUSS
+Klartext-HTTP ablehnen, X.509-v3-Zertifikate, Clients MÜSSEN das
+Server-Zertifikat gegen eine installierte Root-CA verifizieren. Für
+die konkrete `nmos-cpp`-Konfiguration zusätzlich `nmos/settings.h` und
+`nmos/certificate_handlers.{h,cpp}` direkt aus dem `sony/nmos-cpp`-
+Quellcode gelesen (`server_secure`/`ca_certificate_file`/
+`server_certificates[].{key_algorithm,private_key_file,
+certificate_chain_file}`, `key_algorithm` akzeptiert nur `"RSA"` oder
+`"ECDSA"`; `http_port` bleibt derselbe Port, keine separate
+`https_port`).
+
+**Umsetzung, additiv/opt-in wie mTLS (D3), Default unverändert
+Klartext:**
+- `orchestrator/internal/mtls`: neue `TrustedCAConfig(enabled bool,
+  caFile string) (*tls.Config, error)` — bewusst NICHT dieselbe
+  Funktion wie `ClientTLSConfig` (die verlangt ein eigenes
+  Client-Zertifikat, mTLS): BCP-003-01 verlangt nur server-seitiges
+  TLS, die Registry-APIs prüfen keine Client-Zertifikate. Vier neue
+  Tests (disabled→nil, lädt CA-Pool ohne Certificates-Feld, invalide
+  CA-Datei→Fehler).
+- `orchestrator/internal/config`: neue Felder `RegistryTLSEnabled`
+  (`OMP_REGISTRY_TLS_ENABLED`, Default aus) /`RegistryTLSCAFile`
+  (`OMP_REGISTRY_TLS_CA_FILE`, Default derselbe step-ca-Root wie
+  `MTLSCAFile` — dieselbe Dev-CA stellt beide Zertifikate aus).
+- `orchestrator/main.go`: neuer `registryHTTPClient` (gleiches
+  Dial-/ResponseHeader-Timeout-Muster wie der bestehende
+  `nodeHTTPClient`) über `mtls.TrustedCAConfig(cfg.RegistryTLSEnabled,
+  cfg.RegistryTLSCAFile)`, ersetzt den bisherigen `nil`-Client im
+  Registry-Poller (`registry.NewClient(cfg.RegistryURL,
+  registryHTTPClient)`) — bei `RegistryURL=http://…` bleibt
+  `TLSClientConfig` unbenutzt (Go ignoriert es für Klartext-Requests),
+  Default-Verhalten exakt unverändert. Der veraltete D3-Kommentar ("die
+  Registry-Verbindung bleibt bewusst außerhalb dieses Schritts") auf
+  den jetzigen Stand korrigiert statt stehen gelassen.
+- `deploy/nmos/registry-tls.json` (neu, `registry.json` unverändert als
+  Klartext-Default für `make up` erhalten): `server_secure`/
+  `client_secure`/`validate_certificates: true`, `ca_certificate_file`/
+  `server_certificates` zeigen auf `/home/certs/…` (neues Volume).
+  `Makefile`: `mtls-issue-certs` stellt jetzt zusätzlich ein
+  `nmos-registry`-Zertifikat aus (dritter Aufruf von
+  `mtls-issue-cert.sh`, wiederverwendet dieselbe step-ca); neue Ziele
+  `nmos-registry-tls-up`/`-down` tauschen den laufenden
+  `omp-nmos-registry`-Container gegen dieselbe Registry mit
+  `registry-tls.json` + Zertifikats-Volume aus (gleicher Container-
+  Name — Orchestrator/Nodes sehen weiterhin "die eine NMOS-Registry",
+  nur über `https://` statt `http://`) bzw. wieder zurück.
+- `ARCHITECTURE.md` §4.6, `README.md` um den neuen Status ergänzt.
+
+**Live verifiziert (nicht nur Unit-Tests):** `make mtls-up` +
+`make mtls-issue-certs` (drei echte step-ca-ausgestellte Zertifikate,
+`nmos-registry.crt` bestätigt per `openssl x509` als ECDSA/P-256 —
+passt zu `"key_algorithm": "ECDSA"` in `registry-tls.json`),
+`make nmos-registry-tls-up` — Container-Log bestätigt `"server_secure":
+true"` geladen, `"Ready for connections"`. Drei reale `curl`-Proben
+gegen denselben Port 8010: mit `--cacert root_ca.crt` liefert die
+Query-API ihr normales JSON; ohne CA-Vertrauen bricht der TLS-Handshake
+mit "unable to get local issuer certificate" ab (Zertifikatsprüfung
+funktioniert echt, kein Blindvertrauen); ein reiner Klartext-`curl`
+gegen denselben Port bekommt "Empty reply from server" (BCP-003-01
+Punkt 13, "Server MUSS Klartext-HTTP ablehnen", strukturell erfüllt,
+weil `server_secure` denselben Port vollständig auf TLS umstellt statt
+parallel Klartext zu bedienen). Zusätzlich ein eigens für diesen Lauf
+geschriebener Wegwerf-Test in `internal/registry` (danach wieder
+entfernt, nicht Teil der Suite) rief exakt den in `main.go` verdrahteten
+Pfad (`mtls.TrustedCAConfig` → `http.Client` → `registry.Client.
+FetchSnapshot`) gegen die echte laufende Registry auf — lieferte
+erfolgreich die reale Node-Liste über HTTPS zurück. Ein zuvor bereits
+vorhandener, nie gestarteter (`Status: Created`) `omp-nmos-registry`-
+Alt-Container wurde vor diesem Lauf entfernt (keine Daten, gleicher
+Befund wie schon einmal bei einem verwaisten `omp-step-ca`-Container,
+s. Nachtrag 117) — sonst hätte `podman run --name omp-nmos-registry`
+mit einem Namenskonflikt fehlgeschlagen. Nach der Verifikation wieder
+sauber zurückgebaut (`make nmos-registry-tls-down`), `step-ca` bleibt
+wie bei D3 dauerhaft laufen (`.run/step-ca` persistiert über Neustarts).
+`go build`/`go vet`/`go test ./...` (gesamtes `orchestrator`-Modul)
+grün.
+
+**Bewusst nicht Teil dieser Runde:** Mutual-TLS Orchestrator↔Registry
+(BCP-003-01 verlangt das nicht, nur Server-TLS), TLS-Terminierung der
+Node-eigenen NMOS-APIs (Rust-SDK/`tiny_http`, dieselbe seit D3
+dokumentierte Lücke), OCSP-Stapling (`step-ca`-Dev-Zertifikate tragen
+keine OCSP-URI, führt zu einer harmlosen, nicht-fatalen Log-Zeile —
+für Produktion mit echter PKI ein separates Thema), IS-08 (Audio-
+Kanal-Mapping, laut Nutzerpriorisierung eigene Folgesitzung).
+
+**Dateien:** `orchestrator/internal/mtls/mtls.go`,
+`orchestrator/internal/mtls/mtls_test.go`,
+`orchestrator/internal/config/config.go`,
+`orchestrator/internal/config/config_test.go`, `orchestrator/main.go`,
+`deploy/nmos/registry-tls.json` (neu), `Makefile`, `ARCHITECTURE.md`,
+`README.md`.

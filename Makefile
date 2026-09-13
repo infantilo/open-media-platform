@@ -1,4 +1,4 @@
-.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs backup restore proxy-up proxy-down soak
+.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent supervisor
 
@@ -344,12 +344,45 @@ mtls-down:
 	-podman stop omp-step-ca
 	-podman rm omp-step-ca
 
-# Stellt Dev-Zertifikate für Orchestrator + Mock-Node aus (braucht
-# 'make mtls-up' zuerst). Danach: OMP_MTLS_ENABLED=true beim Start beider
-# Prozesse setzen (deploy/dev/mtls-issue-cert.sh dokumentiert die Pfade).
+# Stellt Dev-Zertifikate für Orchestrator + Mock-Node + NMOS-Registry aus
+# (braucht 'make mtls-up' zuerst). Danach: OMP_MTLS_ENABLED=true beim
+# Start beider Prozesse setzen (deploy/dev/mtls-issue-cert.sh dokumentiert
+# die Pfade); für die Registry-TLS-Strecke (BCP-003-01, UMSETZUNG.md D16)
+# zusätzlich 'make nmos-registry-tls-up' + OMP_REGISTRY_TLS_ENABLED=true
+# + OMP_REGISTRY_URL=https://localhost:8010 beim Orchestrator.
 mtls-issue-certs:
 	@./deploy/dev/mtls-issue-cert.sh orchestrator .run/mtls/orchestrator.crt .run/mtls/orchestrator.key
 	@./deploy/dev/mtls-issue-cert.sh mock-node .run/mtls/mock-node.crt .run/mtls/mock-node.key localhost 127.0.0.1
+	@./deploy/dev/mtls-issue-cert.sh nmos-registry .run/mtls/nmos-registry.crt .run/mtls/nmos-registry.key localhost 127.0.0.1
+
+# NMOS-Registry mit BCP-003-01-Transport-TLS statt Klartext (UMSETZUNG.md
+# D16) — bewusst NICHT Teil von `make up`, gleiches Opt-in-Muster wie
+# mtls-up: der normale Dev-Workflow (Klartext-Registry, s. `up`-Target)
+# bleibt unverändert. Braucht 'make mtls-up' + 'make mtls-issue-certs'
+# zuerst (liefert .run/mtls/nmos-registry.{crt,key} + root_ca.crt). Ersetzt
+# den laufenden omp-nmos-registry-Container durch dieselbe Registry mit
+# deploy/nmos/registry-tls.json (server_secure/ca_certificate_file/
+# server_certificates, s. dort) statt registry.json — derselbe Container-
+# Name, damit Orchestrator/Nodes unverändert "die NMOS-Registry" sehen,
+# nur über https:// statt http:// erreichbar.
+nmos-registry-tls-up:
+	@[ -f .run/mtls/nmos-registry.crt ] || (echo "Registry-Zertifikat fehlt — zuerst 'make mtls-up' und 'make mtls-issue-certs' ausführen." >&2; exit 1)
+	-podman stop omp-nmos-registry
+	-podman rm omp-nmos-registry
+	podman run -d --name omp-nmos-registry --restart=always \
+		-p 8010:8010 -p 8011:8011 \
+		-v $(CURDIR)/deploy/nmos/registry-tls.json:/home/registry.json:ro,Z \
+		-v $(CURDIR)/.run/mtls:/home/certs:ro,Z \
+		-e RUN_NODE=FALSE \
+		docker.io/rhastie/nmos-cpp:latest
+	@echo "NMOS-Registry jetzt per BCP-003-01-TLS erreichbar: https://localhost:8010 (Root-CA: .run/mtls/root_ca.crt)"
+
+# Zurück zur Klartext-Registry (registry.json) — gleicher Container-Name,
+# einfach per 'make up' erneut mit der alten Konfiguration gestartet.
+nmos-registry-tls-down:
+	-podman stop omp-nmos-registry
+	-podman rm omp-nmos-registry
+	@echo "Klartext-Registry wieder mit 'make up' starten."
 
 # Caddy-Reverse-Proxy mit TLS-Terminierung (S7, docs/REVIEW-2026-07-17-
 # SKALIERUNG-24-7.md) — bewusst NICHT Teil von `make up`: Remote-Zugriff

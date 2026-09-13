@@ -1,0 +1,19 @@
+{
+  "pri": 100,
+  "logging_level": 0,
+  "http_port": 8010,
+  "query_ws_port": 8011,
+  "label": "omp-registry",
+  "registration_expiry_interval": 60,
+  "server_secure": true,
+  "client_secure": true,
+  "validate_certificates": true,
+  "ca_certificate_file": "/home/certs/root_ca.crt",
+  "server_certificates": [
+    {
+      "key_algorithm": "ECDSA",
+      "private_key_file": "/home/certs/nmos-registry.key",
+      "certificate_chain_file": "/home/certs/nmos-registry.crt"
+    }
+  ]
+}

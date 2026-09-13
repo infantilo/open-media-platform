@@ -223,6 +223,25 @@ Smallstep CA (step-ca, ein Go-Binary) als interne CA für mTLS zwischen
 Orchestrator und Nodes + NMOS IS-10 OAuth2 für Nutzer/externe Clients. Von
 Tag 1, nicht nachrüsten (Retrofit in Broadcast-Netzen ist teuer).
 
+**Status (2026-09-13, UMSETZUNG.md D16):** AMWA BCP-003 zerfällt in zwei
+unabhängige Teile, die zuvor unterschiedlich weit abgedeckt waren:
+BCP-003-02 (OAuth2-Autorisierung) ist über IS-10/§12 bereits seit D3
+umgesetzt; BCP-003-01 (Transport-TLS für NMOS-APIs selbst — Registry
+eingeschlossen) war es nicht — die NMOS-Registry (nmos-cpp) lief bis
+D16 durchgehend als Klartext-HTTP, auch mit `OMP_MTLS_ENABLED=true`
+(D3 deckte explizit nur Orchestrator↔Node ab, nicht Orchestrator↔
+Registry). D16 schließt genau diese Lücke: die Registry kann jetzt
+optional mit BCP-003-01-konformem Server-TLS betrieben werden (TLS
+≥1.2, X.509-Zertifikate von derselben step-ca wie die mTLS-Strecke),
+`mtls.TrustedCAConfig` verifiziert das Registry-Zertifikat orchestrator-
+seitig ohne eigenes Client-Zertifikat zu verlangen (Registry-APIs
+prüfen keine Client-Zertifikate, anders als mTLS). Opt-in wie mTLS
+(`OMP_REGISTRY_TLS_ENABLED`, Default aus) — der unveränderte
+Klartext-Dev-Workflow (`make up`) bleibt der Default. Mutual-TLS
+zwischen Orchestrator und Registry sowie Absicherung der Node-
+eigenen NMOS-APIs (Rust-SDK, `tiny_http`) bleiben offener Restscope,
+gleiches Muster wie bereits bei D3 für die Node-Seite dokumentiert.
+
 ## 5. Node-Contract (Plugin-Modell)
 
 Jeder Node — intern oder Drittanbieter — MUSS:

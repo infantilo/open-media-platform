@@ -149,3 +149,42 @@ func TestServerTLSConfigMissingCertFileErrors(t *testing.T) {
 		t.Fatal("ServerTLSConfig() error = nil, want error for missing cert file")
 	}
 }
+
+func TestTrustedCAConfigDisabledReturnsNil(t *testing.T) {
+	got, err := TrustedCAConfig(false, "")
+	if err != nil {
+		t.Fatalf("TrustedCAConfig() error = %v, want nil", err)
+	}
+	if got != nil {
+		t.Errorf("TrustedCAConfig() = %v, want nil when disabled", got)
+	}
+}
+
+func TestTrustedCAConfigLoadsCAPoolWithoutClientCert(t *testing.T) {
+	certPEM, keyPEM := generateSelfSignedCert(t)
+	_, _, caFile := writeTempFiles(t, certPEM, keyPEM)
+
+	got, err := TrustedCAConfig(true, caFile)
+	if err != nil {
+		t.Fatalf("TrustedCAConfig() error = %v", err)
+	}
+	if got.RootCAs == nil {
+		t.Error("RootCAs is nil, want populated pool")
+	}
+	if len(got.Certificates) != 0 {
+		t.Errorf("Certificates = %d entries, want 0 — TrustedCAConfig must not require a client cert", len(got.Certificates))
+	}
+}
+
+func TestTrustedCAConfigInvalidCAFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	badCA := filepath.Join(dir, "bad-ca.pem")
+	if err := os.WriteFile(badCA, []byte("not a cert"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := TrustedCAConfig(true, badCA)
+	if err == nil {
+		t.Fatal("TrustedCAConfig() error = nil, want error for invalid CA file")
+	}
+}

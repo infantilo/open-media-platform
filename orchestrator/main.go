@@ -271,10 +271,11 @@ func main() {
 	// Zertifikat bei aktiviertem mTLS ist ein harter Fehler (ähnlich
 	// Postgres oben): mit OMP_MTLS_ENABLED=true, aber kaputter Cert-
 	// Konfiguration still auf Klartext zurückzufallen wäre die
-	// gefährlichere Variante (sieht sicher aus, ist es nicht) — der
-	// Registry-Poller (unten) betrifft die NMOS-Registry, nicht "unsere"
-	// Nodes, bleibt bewusst außerhalb dieses Schritts (docs/decisions.md
-	// D3).
+	// gefährlichere Variante (sieht sicher aus, ist es nicht). Die
+	// NMOS-Registry-Verbindung (Poller unten) war hier bei D3 bewusst
+	// ausgeklammert — seit UMSETZUNG.md D16 eigenständig über
+	// cfg.RegistryTLSEnabled/mtls.TrustedCAConfig abgedeckt (AMWA
+	// BCP-003-01), s. dort.
 	nodeTLSConfig, err := mtls.ClientTLSConfig(mtls.Config{
 		Enabled:  cfg.MTLSEnabled,
 		CertFile: cfg.MTLSCertFile,
@@ -349,10 +350,32 @@ func main() {
 	}()
 	slog.Info("cluster started", "node_id", cfg.ClusterNodeID, "raft_addr", cfg.ClusterRaftAddr, "founding_peers", len(clusterFoundingPeers), "skip_bootstrap", cfg.ClusterJoin)
 
+	// NMOS-Registry-TLS (AMWA BCP-003-01, UMSETZUNG.md D16) — eigener
+	// Opt-in-Schalter statt cfg.MTLSEnabled mitzubenutzen: die Registry-
+	// Verbindung ist reines Server-TLS (Query-/Registration-API prüft
+	// keine Client-Zertifikate), kein eigenes Orchestrator-Zertifikat
+	// nötig, s. mtls.TrustedCAConfig. Bei RegistryURL=http://... bleibt
+	// registryTLSConfig ungenutzt (Go's http.Transport ignoriert
+	// TLSClientConfig für Klartext-Requests) — Default-Verhalten
+	// unverändert, solange OMP_REGISTRY_TLS_ENABLED nicht gesetzt ist.
+	registryTLSConfig, err := mtls.TrustedCAConfig(cfg.RegistryTLSEnabled, cfg.RegistryTLSCAFile)
+	if err != nil {
+		slog.Error("registry tls config failed", "error", err)
+		os.Exit(1)
+	}
+	registryHTTPClient := &http.Client{Transport: &http.Transport{
+		TLSClientConfig:       registryTLSConfig,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 5 * time.Second,
+	}}
+	if registryTLSConfig != nil {
+		slog.Info("tls enabled for orchestrator-to-registry requests")
+	}
+
 	store := registry.NewStore()
 	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
 
-	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, nil), store)
+	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, registryHTTPClient), store)
 	poller.HealthTracker = healthTracker
 	poller.HealthStaleAfter = healthStaleAfter
 	poller.OnChange = func(eventType string, node registry.NodeView) {

@@ -82,6 +82,19 @@ type Config struct {
 	MTLSCertFile string
 	MTLSKeyFile  string
 	MTLSCAFile   string
+	// RegistryTLSEnabled schaltet TLS-Verifikation für die Verbindung
+	// Orchestrator→NMOS-Registry ein (AMWA BCP-003-01, UMSETZUNG.md D16)
+	// — unabhängig von MTLSEnabled (das betrifft nur Orchestrator↔Node,
+	// s. Kommentar in main.go zu D3: die Registry-Verbindung war dort
+	// bewusst ausgeklammert). Default **aus**, additiv wie MTLSEnabled:
+	// ohne OMP_REGISTRY_TLS_ENABLED bleibt RegistryURL unverändert
+	// Klartext-HTTP. Kein eigenes Client-Zertifikat nötig (anders als
+	// MTLSEnabled/mTLS) — BCP-003-01 verlangt server-seitiges TLS für
+	// NMOS-APIs, keine gegenseitige Authentifizierung; RegistryTLSCAFile
+	// reused denselben step-ca-Root wie MTLSCAFile, weil dieselbe
+	// Dev-CA beide Zertifikate ausstellt (deploy/dev/mtls-issue-cert.sh).
+	RegistryTLSEnabled bool
+	RegistryTLSCAFile  string
 	// JWTSecret ist ein direkt gesetztes HMAC-Secret für die
 	// Token-Signierung (UMSETZUNG.md D3 Teil 2) — für echte Deployments,
 	// die ein Secret aus einer eigenen Verwaltung (Vault, K8s-Secret, …)
@@ -163,7 +176,8 @@ type Config struct {
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
 // OMP_ORCHESTRATOR_URL, OMP_REGISTRY_URL, OMP_NATS_URL, OMP_UI_DIR,
-// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_AUTH_JWT_*,
+// OMP_CATALOG_PATH, OMP_POSTGRES_URL, OMP_MTLS_*, OMP_REGISTRY_TLS_*
+// (ARCHITECTURE.md §4.6, UMSETZUNG.md D16), OMP_AUTH_JWT_*,
 // OMP_PLACEMENT_*, OMP_AUDIT_RETENTION_DAYS, OMP_BACKUP_DIR/
 // OMP_POSTGRES_PATRONI_NODES/OMP_BACKUP_KEEP und OMP_NODE_ID/
 // OMP_RAFT_LISTEN/OMP_RAFT_DATA_DIR/OMP_CLUSTER_PEERS/OMP_CLUSTER_JOIN
@@ -173,6 +187,7 @@ type Config struct {
 // relativ zum orchestrator/-Arbeitsverzeichnis).
 func Load() Config {
 	mtlsEnabled, _ := strconv.ParseBool(getEnv("OMP_MTLS_ENABLED", "false"))
+	registryTLSEnabled, _ := strconv.ParseBool(getEnv("OMP_REGISTRY_TLS_ENABLED", "false"))
 	// ClusterNodeID zuerst aufgelöst, weil ClusterDataDirs Default davon
 	// abhängt (../data/raft/<nodeID> statt eines von OMP_NODE_ID
 	// unabhängigen fixen Pfades — sonst würden zwei Instanzen mit
@@ -182,19 +197,21 @@ func Load() Config {
 	clusterNodeID := getEnv("OMP_NODE_ID", "node-1")
 	clusterJoin, _ := strconv.ParseBool(getEnv("OMP_CLUSTER_JOIN", "false"))
 	return Config{
-		Listen:          getEnv("OMP_LISTEN", ":8000"),
-		OrchestratorURL: getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
-		RegistryURL:     getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
-		NatsURL:         getEnv("OMP_NATS_URL", defaultNatsURL),
-		UIDir:           getEnv("OMP_UI_DIR", "../ui"),
-		CatalogPath:     getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
-		PostgresURL:     getEnv("OMP_POSTGRES_URL", defaultPostgresURL),
-		MTLSEnabled:     mtlsEnabled,
-		MTLSCertFile:    getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
-		MTLSKeyFile:     getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
-		MTLSCAFile:      getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
-		JWTSecret:       getEnv("OMP_AUTH_JWT_SECRET", ""),
-		JWTSecretFile:   getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
+		Listen:             getEnv("OMP_LISTEN", ":8000"),
+		OrchestratorURL:    getEnv("OMP_ORCHESTRATOR_URL", "http://localhost:8000"),
+		RegistryURL:        getEnv("OMP_REGISTRY_URL", "http://localhost:8010"),
+		NatsURL:            getEnv("OMP_NATS_URL", defaultNatsURL),
+		UIDir:              getEnv("OMP_UI_DIR", "../ui"),
+		CatalogPath:        getEnv("OMP_CATALOG_PATH", "../deploy/catalog.json"),
+		PostgresURL:        getEnv("OMP_POSTGRES_URL", defaultPostgresURL),
+		MTLSEnabled:        mtlsEnabled,
+		MTLSCertFile:       getEnv("OMP_MTLS_CERT_FILE", "../.run/mtls/orchestrator.crt"),
+		MTLSKeyFile:        getEnv("OMP_MTLS_KEY_FILE", "../.run/mtls/orchestrator.key"),
+		MTLSCAFile:         getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		RegistryTLSEnabled: registryTLSEnabled,
+		RegistryTLSCAFile:  getEnv("OMP_REGISTRY_TLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		JWTSecret:          getEnv("OMP_AUTH_JWT_SECRET", ""),
+		JWTSecretFile:      getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
 		// Defaults spiegeln placement.DefaultThresholds (bewusst hier
 		// dupliziert statt importiert, config bleibt frei von
 		// Business-Logik-Abhängigkeiten, gleiches Muster wie die
@@ -210,7 +227,7 @@ func Load() Config {
 		// Placement-Defaults oben — config bleibt frei von
 		// Business-Logik-Abhängigkeiten).
 		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
-		BackupDir: getEnv("OMP_BACKUP_DIR", "../.backups"),
+		BackupDir:          getEnv("OMP_BACKUP_DIR", "../.backups"),
 		PatroniNodes: getEnv("OMP_POSTGRES_PATRONI_NODES",
 			"omp-patroni-1=http://127.0.0.1:8008,omp-patroni-2=http://127.0.0.1:8018,omp-patroni-3=http://127.0.0.1:8028"),
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier

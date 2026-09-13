@@ -99,6 +99,29 @@ func ServerTLSConfig(cfg Config) (*tls.Config, error) {
 	}, nil
 }
 
+// TrustedCAConfig baut die *tls.Config für einen http.Client, der nur das
+// Server-Zertifikat der Gegenstelle gegen den CA-Pool verifiziert — kein
+// eigenes Client-Zertifikat (anders als ClientTLSConfig/mTLS: AMWA
+// BCP-003-01, UMSETZUNG.md D16, verlangt server-seitiges TLS für
+// NMOS-APIs wie die Registry, keine gegenseitige Authentifizierung).
+// Liefert (nil, nil), wenn enabled false ist — derselbe additive
+// Opt-in-Stil wie ClientTLSConfig/ServerTLSConfig.
+func TrustedCAConfig(enabled bool, caFile string) (*tls.Config, error) {
+	if !enabled {
+		return nil, nil
+	}
+
+	caPool, err := loadCAPool(caFile)
+	if err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		RootCAs:    caPool,
+		MinVersion: tls.VersionTLS12,
+	}, nil
+}
+
 func loadCAPool(caFile string) (*x509.CertPool, error) {
 	pem, err := os.ReadFile(caFile)
 	if err != nil {
