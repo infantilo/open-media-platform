@@ -20,11 +20,14 @@
 
 mod pipeline;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use omp_node_sdk::channelmapping::{
+    Channel, ChannelMapApply, ChannelMapping, InputSpec, MapEntry, OutputSpec, CONTROL_TYPE as CM_CONTROL_TYPE,
+};
 use omp_node_sdk::connection::{
     bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
     ReceiverControl, ReceiverResource,
@@ -48,11 +51,40 @@ fn env_or(key: &str, fallback: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| fallback.to_string())
 }
 
+/// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `omp-aes67-gateway::main::
+/// generic_channels`-Doku (bewusst dupliziert, gleiche Begründung).
+fn generic_channels(count: u32) -> Vec<Channel> {
+    (1..=count.max(1)).map(|n| Channel { label: format!("Channel {n}") }).collect()
+}
+
+/// S. `omp-aes67-gateway::main::SinkMatrixApply`-Doku.
+struct IngestMatrixApply(pipeline::IngestHandle);
+impl ChannelMapApply for IngestMatrixApply {
+    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
+        self.0.set_channel_map(map);
+    }
+}
+
+/// S. `omp-aes67-gateway::main::SourceMatrixApply`-Doku.
+struct OutputMatrixApply(pipeline::OutputPipelineHandle);
+impl ChannelMapApply for OutputMatrixApply {
+    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
+        self.0.set_channel_map(map.clone());
+    }
+}
+
 // ---------------------------------------------------------------------
 // Ingest (Teil 1)
 // ---------------------------------------------------------------------
 
-struct IngestStore {
+/// Generisch über den `ChannelMapApply`-Typ (`UMSETZUNG.md` D18) — nicht
+/// weil es je eine zweite Produktions-Implementierung bräuchte (`main()`
+/// nutzt immer `IngestMatrixApply`), sondern damit der bestehende
+/// `bcp008_tests::store()`-Testaufbau ohne echtes GStreamer/Hardware
+/// auskommt (`IngestHandle`s Felder sind absichtlich `pipeline.rs`-
+/// privat, ein Test-Dummy dafür würde diese Kapselung durchbrechen; ein
+/// `NoopApply`-Test-Double braucht dagegen kein GStreamer).
+struct IngestStore<A: ChannelMapApply> {
     flow_id: String,
     audio_flow_id: String,
     device_number: i32,
@@ -65,9 +97,11 @@ struct IngestStore {
     /// Immer aktiv (keine Enable/Disable-Semantik wie bei Output),
     /// `monitor.activate()` direkt nach dem Pipeline-Start.
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// AMWA IS-08 (`UMSETZUNG.md` D18).
+    channel_mapping: Arc<ChannelMapping<A>>,
 }
 
-impl ParamStore for IngestStore {
+impl<A: ChannelMapApply> ParamStore for IngestStore<A> {
     fn descriptor(&self) -> Descriptor {
         let mut parameters = vec![
             ParamSpec {
@@ -173,6 +207,16 @@ impl ParamStore for IngestStore {
             Err(InvokeError::Unknown)
         }
     }
+
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        self.channel_mapping
+            .handle(method, path, body)
+            .map(|(status, content_type, body)| RawResponse { status, content_type, body })
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.channel_mapping.cors_methods(path)
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -242,6 +286,8 @@ struct OutputStore {
     /// Verbindung (s. `OutputControl::apply`), nicht dem Prozess-
     /// Lebenszyklus.
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// AMWA IS-08 (`UMSETZUNG.md` D18).
+    channel_mapping: Arc<ChannelMapping<OutputMatrixApply>>,
 }
 
 impl ParamStore for OutputStore {
@@ -360,6 +406,7 @@ impl ParamStore for OutputStore {
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.video_connection.handle(method, path, body))
             .or_else(|| self.audio_connection.handle(method, path, body))
+            .or_else(|| self.channel_mapping.handle(method, path, body))
             .map(to_raw)
     }
 
@@ -369,6 +416,7 @@ impl ParamStore for OutputStore {
             .or_else(|| self.audio_connection.cors_methods(path))
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
+            .or_else(|| self.channel_mapping.cors_methods(path))
     }
 }
 
@@ -469,6 +517,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             // Flow-UUID == MXL-flow-id-Konvention (`UMSETZUNG.md` C4).
             let flow_id = omp_node_sdk::idgen::new_v4();
             let audio_flow_id = omp_node_sdk::idgen::new_v4();
+            // S. `omp-aes67-gateway::main`-Pendant-Kommentar (`UMSETZUNG.md`
+            // D17/D18): sowohl `FlowSpec::Audio` als auch `ChannelMapping`s
+            // `OutputSpec::source_id` brauchen dieselbe, tatsächlich
+            // registrierte Source-UUID.
+            let audio_source_id = omp_node_sdk::idgen::new_v4();
+            let control_host = host.clone();
 
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
             let pipeline_config = pipeline::IngestConfig {
@@ -510,6 +564,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             monitor.activate();
             spawn_decklink_monitor_tick(monitor.clone(), signal.clone());
 
+            // AMWA IS-08 (`UMSETZUNG.md` D18): "sdi-in" bündelt die
+            // eingebetteten SDI-Audiokanäle (kein IS-04-Receiver dafür
+            // registriert, s. `receivers: vec![]` unten — reine
+            // Hardware-Erfassung, `parent` bleibt null/null), "mxl-
+            // audio-out" die des ausgehenden MXL-Audio-Senders
+            // (`source_id` = die oben vorab generierte Source-UUID).
+            let channel_mapping = Arc::new(ChannelMapping::new(
+                vec![InputSpec {
+                    id: "sdi-in".to_string(),
+                    name: "SDI Embedded Audio".to_string(),
+                    description: "Eingebettete SDI-Audiokanäle der DeckLink-Karte".to_string(),
+                    channels: generic_channels(audio_channels),
+                    parent_id: None,
+                    parent_type: None,
+                    reordering: true,
+                    block_size: 1,
+                }],
+                vec![OutputSpec {
+                    id: "mxl-audio-out".to_string(),
+                    name: "MXL Audio Output".to_string(),
+                    description: "Ausgehender MXL-Audio-Flow".to_string(),
+                    channels: generic_channels(audio_channels),
+                    source_id: Some(audio_source_id.clone()),
+                    routable_inputs: Some(vec![Some("sdi-in".to_string()), None]),
+                }],
+                IngestMatrixApply(pipeline_handle.clone()),
+            ));
+
             let store: Arc<dyn ParamStore> = Arc::new(IngestStore {
                 flow_id: flow_id.clone(),
                 audio_flow_id: audio_flow_id.clone(),
@@ -518,6 +600,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 audio_channels,
                 signal: signal.clone(),
                 monitor: monitor.clone(),
+                channel_mapping,
             });
 
             let handle = omp_node_sdk::start(
@@ -548,7 +631,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 channel_count: audio_channels,
                                 media_type: "audio/float32".to_string(),
                                 bit_depth: 32,
-                                source_id: None,
+                                source_id: Some(audio_source_id),
                             }),
                             ..Default::default()
                         },
@@ -565,6 +648,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 store,
             )
             .await?;
+
+            // AMWA IS-08 (`UMSETZUNG.md` D18) — kündigt die Channel-
+            // Mapping-API im IS-04-Device an, erst nach `start()` möglich
+            // (`handle.port` steht erst nach dem tatsächlichen Binden
+            // fest, s. `omp-aes67-gateway::main`-Pendant-Kommentar).
+            if let Err(e) = handle
+                .add_device_control(serde_json::json!({
+                    "type": CM_CONTROL_TYPE,
+                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
+                }))
+                .await
+            {
+                eprintln!("omp-decklink: announcing channelmapping control failed: {e}");
+            }
 
             handle.register_worker("pipeline", pipeline_heartbeat);
 
@@ -616,6 +713,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let _ = pipeline_thread.join();
         }
         Direction::Output => {
+            let control_host = host.clone();
             let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
             let pipeline_config = pipeline::OutputConfig {
                 domain,
@@ -676,6 +774,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 },
             ));
 
+            // AMWA IS-08 (`UMSETZUNG.md` D18): "mxl-audio-in" hängt am
+            // tatsächlich registrierten IS-04-Audio-Receiver (`parent`,
+            // s. `docs/Interoperability - NMOS IS-04.md`-Pflicht),
+            // "sdi-out" hat KEINE Source (`source_id: None` — die SDI-
+            // Karte ist ein physischer Ausgang, keine NMOS-Ressource).
+            let channel_mapping = Arc::new(ChannelMapping::new(
+                vec![InputSpec {
+                    id: "mxl-audio-in".to_string(),
+                    name: "MXL Audio Input".to_string(),
+                    description: "Ausgewählte MXL-Audioquelle".to_string(),
+                    channels: generic_channels(audio_channels),
+                    parent_id: Some(audio_receiver_id.clone()),
+                    parent_type: Some("receiver"),
+                    reordering: true,
+                    block_size: 1,
+                }],
+                vec![OutputSpec {
+                    id: "sdi-out".to_string(),
+                    name: "SDI Embedded Audio Output".to_string(),
+                    description: "Eingebettete SDI-Audiokanäle der DeckLink-Karte".to_string(),
+                    channels: generic_channels(audio_channels),
+                    source_id: None,
+                    routable_inputs: Some(vec![Some("mxl-audio-in".to_string()), None]),
+                }],
+                OutputMatrixApply(pipeline_handle.clone()),
+            ));
+
             let media_ready_pipeline = pipeline_handle.clone();
             let store: Arc<dyn ParamStore> = Arc::new(OutputStore {
                 device_number,
@@ -686,6 +811,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 video_connection,
                 audio_connection,
                 monitor: monitor.clone(),
+                channel_mapping,
             });
 
             let handle = omp_node_sdk::start(
@@ -718,6 +844,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 store,
             )
             .await?;
+
+            // AMWA IS-08 (`UMSETZUNG.md` D18) — s. Ingest-Zweig-Kommentar.
+            if let Err(e) = handle
+                .add_device_control(serde_json::json!({
+                    "type": CM_CONTROL_TYPE,
+                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
+                }))
+                .await
+            {
+                eprintln!("omp-decklink: announcing channelmapping control failed: {e}");
+            }
 
             handle.register_worker("pipeline", pipeline_heartbeat);
 
@@ -778,7 +915,17 @@ mod bcp008_tests {
     // beim ursprünglichen D10-Teil-1/2). `OutputStore` teilt sich
     // dieselbe `Monitor`-Dispatch-Logik (`monitor.get`/`set`/`invoke`),
     // ein zweiter Test dafür wäre redundant.
-    fn store() -> IngestStore {
+    //
+    // `IngestStore` ist seit `UMSETZUNG.md` D18 generisch über den
+    // `ChannelMapApply`-Typ (s. dortige Struct-Doku) — genau damit dieser
+    // Test-Aufbau ohne echtes GStreamer auskommt: `NoopApply` ist ein
+    // reines Test-Double, kein `pipeline::IngestHandle` nötig.
+    struct NoopApply;
+    impl ChannelMapApply for NoopApply {
+        fn apply(&self, _output_id: &str, _map: &BTreeMap<u32, MapEntry>) {}
+    }
+
+    fn store() -> IngestStore<NoopApply> {
         IngestStore {
             flow_id: "flow-1".to_string(),
             audio_flow_id: "flow-2".to_string(),
@@ -787,6 +934,7 @@ mod bcp008_tests {
             audio_channels: 2,
             signal: Arc::new(AtomicBool::new(true)),
             monitor: Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Receiver)),
+            channel_mapping: Arc::new(ChannelMapping::new(vec![], vec![], NoopApply)),
         }
     }
 

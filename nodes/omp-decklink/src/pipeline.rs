@@ -37,18 +37,56 @@
 //! channels` wird deshalb VOR dem Pipeline-Aufbau validiert (`PipelineError`
 //! statt eines stillen Fallbacks).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlAudioInput, MxlAudioOutput, MxlContext, MxlVideoInput, MxlVideoOutput};
+use omp_node_sdk::channelmapping::MapEntry;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
 pub const SAMPLE_RATE: u32 = 48000;
+
+/// `channels`-große Diagonalmatrix — s. `omp-aes67-gateway::pipeline`-
+/// Pendant (`UMSETZUNG.md` D17/D18) für die ausführliche Begründung;
+/// hier bewusst dupliziert statt geteilt (eigenständiges Crate, gleiche
+/// Duplikations-Konvention wie `mtls`/`connection`-Module).
+fn identity_matrix_value(channels: i32) -> gst::Array {
+    gst::Array::new((0..channels).map(|out_ch| {
+        gst::Array::new((0..channels).map(move |in_ch| if in_ch == out_ch { 1.0_f64 } else { 0.0_f64 }))
+    }))
+}
+
+/// S. `omp-aes67-gateway::pipeline::matrix_value_from_map`-Doku — dieser
+/// Node hat pro Richtung ebenfalls immer genau EINEN Input (embedded
+/// SDI-Audio bzw. die eine gewählte MXL-Quelle), dieselbe Vereinfachung
+/// gilt unverändert.
+fn matrix_value_from_map(channels: i32, map: &BTreeMap<u32, MapEntry>) -> gst::Array {
+    gst::Array::new((0..channels as u32).map(|out_ch| {
+        let source_channel = map.get(&out_ch).and_then(|e| if e.input.is_some() { e.channel_index } else { None });
+        gst::Array::new(
+            (0..channels as u32).map(move |in_ch| if Some(in_ch) == source_channel { 1.0_f64 } else { 0.0_f64 }),
+        )
+    }))
+}
+
+fn build_channel_matrix(pipeline: &gst::Pipeline, upstream: &gst::Element, channels: i32) -> Result<gst::Element, String> {
+    let mixmatrix = gst::ElementFactory::make("audiomixmatrix")
+        .property("in-channels", channels as u32)
+        .property("out-channels", channels as u32)
+        .property("matrix", identity_matrix_value(channels))
+        .build()
+        .map_err(|e| format!("audiomixmatrix: {e}"))?;
+    pipeline.add(&mixmatrix).map_err(|e| format!("add audiomixmatrix: {e}"))?;
+    upstream.link(&mixmatrix).map_err(|e| format!("link to audiomixmatrix: {e}"))?;
+    Ok(mixmatrix)
+}
 
 /// Ein Eintrag von `decklinkvideosrc`s `mode`-GEnum (`gst-inspect-1.0
 /// decklinkvideosrc`) mit der zugehörigen Auflösung/Framerate — nur die
@@ -119,6 +157,7 @@ struct Pipeline {
     video_flowed: Arc<AtomicBool>,
     _mxl_output: MxlVideoOutput,
     _mxl_audio_output: MxlAudioOutput,
+    mixmatrix: gst::Element,
 }
 
 impl Pipeline {
@@ -199,9 +238,16 @@ impl Pipeline {
         gst::Element::link_many([&decklinkaudiosrc, &audioconvert, &audio_queue])
             .map_err(|e| PipelineError(format!("link audio chain: {e}")))?;
 
+        // AMWA IS-08 (`UMSETZUNG.md` D18) — erlaubt einem externen
+        // Controller, die eingebetteten SDI-Audiokanäle live umzusortieren/
+        // stummzuschalten (z. B. "Embedded-Kanal 3+4 auf Programmton"),
+        // ohne die Pipeline neu aufzubauen.
+        let mixmatrix = build_channel_matrix(&pipeline, &audio_queue, config.audio_channels as i32)
+            .map_err(PipelineError)?;
+
         let mxl_audio_output = MxlAudioOutput::new(
             &pipeline,
-            &audio_queue,
+            &mixmatrix,
             mxl_context,
             &config.audio_flow_id,
             &config.label,
@@ -243,6 +289,7 @@ impl Pipeline {
             video_flowed,
             _mxl_output: mxl_output,
             _mxl_audio_output: mxl_audio_output,
+            mixmatrix,
         })
     }
 
@@ -279,6 +326,8 @@ impl Pipeline {
 pub struct IngestHandle {
     decklinkvideosrc: gst::Element,
     video_flowed: Arc<AtomicBool>,
+    mixmatrix: gst::Element,
+    audio_channels: u32,
 }
 
 impl IngestHandle {
@@ -290,6 +339,13 @@ impl IngestHandle {
 
     pub fn signal(&self) -> bool {
         self.decklinkvideosrc.property::<bool>("signal")
+    }
+
+    /// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `omp-aes67-gateway::pipeline::
+    /// SinkHandle::set_channel_map`-Doku (identisches Muster: live
+    /// `g_object_set` während `PLAYING`, kein Rebuild).
+    pub fn set_channel_map(&self, map: &BTreeMap<u32, MapEntry>) {
+        self.mixmatrix.set_property("matrix", matrix_value_from_map(self.audio_channels as i32, map));
     }
 }
 
@@ -312,6 +368,8 @@ pub fn run_ingest(
     let _ = ready.send(Ok(IngestHandle {
         decklinkvideosrc: pipeline.decklinkvideosrc.clone(),
         video_flowed: pipeline.video_flowed.clone(),
+        mixmatrix: pipeline.mixmatrix.clone(),
+        audio_channels: config.audio_channels,
     }));
 
     let mut last_signal = pipeline.signal();
@@ -380,6 +438,11 @@ struct ActiveOutputPipeline {
     pipeline: gst::Pipeline,
     _video_input: MxlVideoInput,
     _audio_input: Option<MxlAudioInput>,
+    /// AMWA IS-08 (`UMSETZUNG.md` D18) — geleert bei `Drop`, s.
+    /// `omp-aes67-gateway::pipeline::ActiveSourcePipeline`-Pendant für
+    /// die ausführliche Begründung (dieselbe Rebuild-bei-Connect-
+    /// Problematik).
+    mixmatrix_cell: Arc<Mutex<Option<gst::Element>>>,
 }
 
 impl Drop for ActiveOutputPipeline {
@@ -389,10 +452,12 @@ impl Drop for ActiveOutputPipeline {
         // diese Pipeline bei jedem Connect/Disconnect komplett neu
         // aufgebaut wird (kein einzelner Fehlerpfad wie bei der
         // Ingest-Seite).
+        *self.mixmatrix_cell.lock().expect("lock poisoned") = None;
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_output(
     context: &Arc<MxlContext>,
     video_flow_id: &str,
@@ -400,6 +465,8 @@ fn build_output(
     device_number: i32,
     mode: &str,
     audio_channels: u32,
+    desired_map: &Arc<Mutex<BTreeMap<u32, MapEntry>>>,
+    mixmatrix_cell: &Arc<Mutex<Option<gst::Element>>>,
 ) -> Result<ActiveOutputPipeline, String> {
     let mode_info = mode_info(mode).ok_or_else(|| {
         format!("unbekannter/nicht unterstützter DeckLink-Modus {mode:?} (unterstützt: {SUPPORTED_MODES:?})")
@@ -510,13 +577,28 @@ fn build_output(
                 .build()
                 .map_err(|e| format!("decklinkaudiosink: {e}"))?;
 
+            // AMWA IS-08 (`UMSETZUNG.md` D18) — zwischen MXL-Eingang und
+            // SDI-Ausgang eingefügt, damit ein Reconnect (diese Pipeline
+            // wird bei JEDEM Connect/Disconnect neu gebaut) die zuletzt
+            // aktivierte Map wieder anwendet statt stillschweigend auf
+            // die Identität zurückzufallen (`desired_map`, geteilt mit
+            // `OutputPipelineHandle::set_channel_map`).
+            let mixmatrix = build_channel_matrix(&pipeline, &input.tail, audio_channels as i32)?;
+            {
+                let desired = desired_map.lock().expect("lock poisoned");
+                if !desired.is_empty() {
+                    mixmatrix.set_property("matrix", matrix_value_from_map(audio_channels as i32, &desired));
+                }
+            }
+            *mixmatrix_cell.lock().expect("lock poisoned") = Some(mixmatrix.clone());
+
             pipeline
                 .add(&audioconvert)
                 .and_then(|()| pipeline.add(&audioresample))
                 .and_then(|()| pipeline.add(&audio_caps))
                 .and_then(|()| pipeline.add(&decklinkaudiosink))
                 .map_err(|e| format!("add audio output elements: {e}"))?;
-            gst::Element::link_many([&input.tail, &audioconvert, &audioresample, &audio_caps, &decklinkaudiosink])
+            gst::Element::link_many([&mixmatrix, &audioconvert, &audioresample, &audio_caps, &decklinkaudiosink])
                 .map_err(|e| format!("link audio output chain: {e}"))?;
 
             Some(input)
@@ -536,7 +618,12 @@ fn build_output(
         ));
     }
 
-    Ok(ActiveOutputPipeline { pipeline, _video_input: video_input, _audio_input: audio_input })
+    Ok(ActiveOutputPipeline {
+        pipeline,
+        _video_input: video_input,
+        _audio_input: audio_input,
+        mixmatrix_cell: mixmatrix_cell.clone(),
+    })
 }
 
 /// Griff für den async Node-Lifecycle (gleiches Muster wie
@@ -547,6 +634,10 @@ fn build_output(
 pub struct OutputPipelineHandle {
     commands: std::sync::mpsc::Sender<Command>,
     flowed: Arc<AtomicBool>,
+    audio_channels: u32,
+    /// AMWA IS-08 (`UMSETZUNG.md` D18) — s. `build_output`-Doku.
+    desired_map: Arc<Mutex<BTreeMap<u32, MapEntry>>>,
+    mixmatrix: Arc<Mutex<Option<gst::Element>>>,
 }
 
 impl OutputPipelineHandle {
@@ -568,6 +659,17 @@ impl OutputPipelineHandle {
 
     pub fn media_ready(&self) -> bool {
         self.flowed.load(Ordering::Relaxed)
+    }
+
+    /// S. `IngestHandle::set_channel_map`-Doku — hier zusätzlich über
+    /// Connect/Disconnect hinweg gemerkt (`desired_map`), weil die
+    /// gesamte Ausgabe-Pipeline bei jedem Connect/Disconnect neu gebaut
+    /// wird (Moduldoku oben).
+    pub fn set_channel_map(&self, map: BTreeMap<u32, MapEntry>) {
+        if let Some(element) = &*self.mixmatrix.lock().expect("lock poisoned") {
+            element.set_property("matrix", matrix_value_from_map(self.audio_channels as i32, &map));
+        }
+        *self.desired_map.lock().expect("lock poisoned") = map;
     }
 }
 
@@ -599,7 +701,15 @@ pub fn run_output(
 
     let (commands_tx, commands_rx) = std::sync::mpsc::channel::<Command>();
     let flowed = Arc::new(AtomicBool::new(false));
-    let _ = ready.send(Ok(OutputPipelineHandle { commands: commands_tx, flowed: flowed.clone() }));
+    let desired_map = Arc::new(Mutex::new(BTreeMap::new()));
+    let mixmatrix_cell = Arc::new(Mutex::new(None));
+    let _ = ready.send(Ok(OutputPipelineHandle {
+        commands: commands_tx,
+        flowed: flowed.clone(),
+        audio_channels: config.audio_channels,
+        desired_map: desired_map.clone(),
+        mixmatrix: mixmatrix_cell.clone(),
+    }));
 
     let mut video_flow_id: Option<String> = None;
     let mut audio_flow_id: Option<String> = None;
@@ -622,7 +732,16 @@ pub fn run_output(
             // Audio verbunden ist.
             return;
         };
-        match build_output(&context, video_flow_id, audio.as_deref(), config.device_number, &config.mode, config.audio_channels) {
+        match build_output(
+            &context,
+            video_flow_id,
+            audio.as_deref(),
+            config.device_number,
+            &config.mode,
+            config.audio_channels,
+            &desired_map,
+            &mixmatrix_cell,
+        ) {
             Ok(p) => *active = Some(p),
             Err(e) => {
                 let _ = tx.send(Event::Error(format!("DeckLink-Ausgang: {e}")));

@@ -1685,9 +1685,12 @@ der sich Community-Beiträge orientieren, nicht die Umsetzung selbst.
 
 ### 13.2 Audiomischpult: dynamische Kanalzahl, Audio-Follow-Video über den bestehenden Tally-Bus
 
-**Status (2026-09-13, UMSETZUNG.md D17):** AMWA IS-08 (Audio Channel
-Mapping, s. Standard-Tabelle §2) umgesetzt — aber bewusst auf
-`omp-aes67-gateway` (§19.3c), nicht `omp-audio-mixer`: IS-08 modelliert
+**Status (2026-09-13, UMSETZUNG.md D17/D18):** AMWA IS-08 (Audio Channel
+Mapping, s. Standard-Tabelle §2) umgesetzt auf `omp-aes67-gateway`
+(D17) und `omp-decklink` (D18, embedded SDI-Audio-Kanäle — z. B.
+"Embedded-Kanal 3+4 auf Programmton" per Standard-API statt
+Hersteller-Software) — beides Gateways/Karten mit reinem
+Kanal-Durchreich-Pfad, nicht `omp-audio-mixer`: IS-08 modelliert
 eine reine 1:1-Routing-Matrix (jeder Output-Kanal bekommt höchstens
 EINEN Input-Kanal zugewiesen, kein gewichtetes Summieren), genau das
 Modell eines Gateways/einer Patchbay — nicht eines Mischpults, dessen

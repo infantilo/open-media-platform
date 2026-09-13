@@ -169,7 +169,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   video-anchored with an independent optional audio leg); SDI and IP
   cards are addressed identically in software — a DeckLink IP card's
   network-side configuration (multicast/PTP/SDP) lives entirely in
-  Blackmagic's own driver, outside NMOS's reach
+  Blackmagic's own driver, outside NMOS's reach; also exposes AMWA NMOS
+  IS-08 for its embedded SDI audio channels (e.g. remap embedded
+  channels 3+4 onto program audio via the standard API)
 - **omp-switcher** — simple video switcher between auto-discovered
   sources (no program/preset bus)
 - **omp-video-mixer-me** — video mixer (1 M/E with cut, crossfade,

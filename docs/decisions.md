@@ -23765,3 +23765,69 @@ Rückschritt).
 `omp-audio-mixer`, `omp-channel-player`, `omp-decklink`, `omp-mxf-
 player`, `omp-mxf-player-direct`, `omp-pipeline-controller`,
 `omp-source`), `ARCHITECTURE.md`.
+
+## 2026-09-13 (Nachtrag 218) — AMWA IS-08 auf `omp-decklink` ausgeweitet (Nutzerauftrag "jetzt IS-08" im Anschluss an Nachtrag 217)
+
+**Kontext:** Zweiter IS-08-Kandidat aus der Nachtrag-217-Liste
+("weitere Kandidaten-Nodes: `omp-decklink`-Audio-Embed/De-Embed,
+`omp-2110-gateway`"). `omp-decklink`s eingebettetes SDI-Audio
+(`decklinkaudiosrc`/`decklinkaudiosink`, fester Kanal-Enum {2,8,16}
+laut D10) ist ein noch realistischerer IS-08-Anwendungsfall als AES67:
+ein Sendezentrum braucht regelmäßig "welcher der bis zu 16 embedded
+SDI-Kanäle landet auf welchem MXL-Kanal" — bisher nur über eine feste
+1:1-Zuordnung möglich.
+
+**Umsetzung:** Reine Wiederverwendung des in Nachtrag 217 gebauten
+generischen `omp_node_sdk::channelmapping`-Moduls — keine SDK-Änderung
+nötig. `nodes/omp-decklink/src/pipeline.rs`: dieselben drei
+`audiomixmatrix`-Hilfsfunktionen (`identity_matrix_value`/
+`matrix_value_from_map`/`build_channel_matrix`) bewusst dupliziert
+(eigenständiges Crate, gleiche Duplikations-Konvention wie `mtls`/
+`connection`) statt geteilt. Ingest-Richtung: Matrix zwischen
+`decklinkaudiosrc`-Kette und `MxlAudioOutput` (Pipeline lebt für die
+gesamte Prozesslaufzeit, wie bei `omp-aes67-gateway`s Sink). Output-
+Richtung: Matrix zwischen `MxlAudioInput` und `decklinkaudiosink`-Kette
+— hier baut `run_output` die GESAMTE Pipeline (Video UND Audio
+gemeinsam) bei jedem Video- ODER Audio-Connect/Disconnect neu (anders
+als bei `omp-aes67-gateway`, wo nur Audio betroffen ist); dieselbe
+`desired_map`/`mixmatrix_cell`-Zelle wie beim AES67-Source-Pendant
+verhindert denselben Rebuild-Reset-Bug. `nodes/omp-decklink/src/
+main.rs`: `IngestStore` wurde generisch über den `ChannelMapApply`-Typ
+(`IngestStore<A>`) gemacht — NICHT weil eine zweite Produktions-
+Implementierung gebraucht würde, sondern damit der bereits bestehende
+`bcp008_tests::store()`-Testaufbau (bewusst ohne echtes GStreamer/
+Hardware, s. dortiger Kommentar) mit einem trivialen `NoopApply`-Test-
+Double weiterhin auskommt, statt die private Kapselung von
+`pipeline::IngestHandle` für einen Test-Dummy aufzubrechen.
+IS-08-Modell: Ingest — Input "sdi-in" (embedded SDI, kein IS-04-
+Receiver, `parent` null/null), Output "mxl-audio-out" (`source_id` =
+echte Audio-Source-UUID). Output-Richtung — Input "mxl-audio-in"
+(`parent` = echter Audio-Receiver), Output "sdi-out" (`source_id:
+None`, physischer Kartenausgang). `Device.controls` kündigt
+`urn:x-nmos:control:cm-ctrl/v1.0` mit der echten Port-Adresse an, wie
+bei D17.
+
+**Live verifiziert:** `cargo build/clippy -D warnings/test` für
+`omp-decklink` grün (7 Tests, alle vorbestehenden `bcp008_tests` liefen
+nach der Generic-Umstellung unverändert grün); zusätzlich das GESAMTE
+Rust-Workspace (`cargo build/test --workspace`, alle 25 Crates) erneut
+grün — bestätigt, dass die `IngestStore`-Generic-Umstellung keine
+andere Aufrufstelle betraf (sie ist ausschließlich `omp-decklink`-
+intern). Kein neuer Live-GStreamer-Test nötig — der zugrundeliegende
+`audiomixmatrix`-Live-Property-Mechanismus wurde bereits in Nachtrag
+217 real gegen eine laufende Pipeline bestätigt, dieselbe
+`build_channel_matrix`/`matrix_value_from_map`-Logik wird hier nur
+mit einer anderen GStreamer-Quelle/-Senke wiederverwendet. Derselbe
+Voll-Workspace-Testlauf-Nebenbefund wie in Nachtrag 217
+(`omp-mediaio::mxl`-Tests scheitern ohne gesourctes `deploy/dev/
+mxl.env` — reines Umgebungsartefakt, `git diff` bestätigt `omp-mediaio`
+unberührt) trat identisch wieder auf, nicht erneut untersucht (bereits
+als bekanntes Nicht-Problem dokumentiert).
+
+**Bewusst nicht Teil dieser Runde:** `omp-2110-gateway` (dritter
+D17-Kandidat, reines Video — IS-08 gilt nur Audio, daher fraglich ob
+überhaupt anwendbar, nicht geprüft), interlaced SDI-Modi (bereits seit
+D10 offen), zeitgesteuerte Aktivierung (gleiche Grenze wie D17).
+
+**Dateien:** `nodes/omp-decklink/src/main.rs`,
+`nodes/omp-decklink/src/pipeline.rs`, `ARCHITECTURE.md`.
