@@ -129,6 +129,14 @@ type Config struct {
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
 	// Löschung (s. audit.Store.PurgeOlderThan).
 	AuditRetentionDays int
+	// LogRetentionHours ist die Aufbewahrungsdauer des zentralen
+	// Log-Kanals (ARCHITECTURE.md §25.2, UMSETZUNG.md D19) — deutlich
+	// kürzer bemessen als AuditRetentionDays (Stunden statt Tage): das
+	// Log-Volumen liegt um Größenordnungen höher, für eine
+	// Störungsanalyse reichen wenige Tage. Gleiche Semantik wie
+	// AuditRetentionDays (<= 0 deaktiviert die Löschung), zusätzlich der
+	// JetStream-Stream-MaxAge (logbus.NewPublisher).
+	LogRetentionHours int
 	// BackupDir/PatroniNodes/BackupKeep (Nutzerwunsch 2026-08-13: Backup
 	// über das Browser-UI) — spiegeln exakt deploy/dev/backup-omp.shs
 	// BACKUP_DIR/BACKUP_KEEP, beide Wege teilen sich denselben Ordner und
@@ -227,6 +235,7 @@ func Load() Config {
 		// Placement-Defaults oben — config bleibt frei von
 		// Business-Logik-Abhängigkeiten).
 		AuditRetentionDays: getEnvInt("OMP_AUDIT_RETENTION_DAYS", 90),
+		LogRetentionHours:  getEnvInt("OMP_LOG_RETENTION_HOURS", 72),
 		BackupDir:          getEnv("OMP_BACKUP_DIR", "../.backups"),
 		PatroniNodes: getEnv("OMP_POSTGRES_PATRONI_NODES",
 			"omp-patroni-1=http://127.0.0.1:8008,omp-patroni-2=http://127.0.0.1:8018,omp-patroni-3=http://127.0.0.1:8028"),

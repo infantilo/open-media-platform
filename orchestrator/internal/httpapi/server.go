@@ -214,7 +214,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger) http.Handler {
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
@@ -252,22 +252,22 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	mux.HandleFunc("GET /api/v1/nodes", g.requireAuth(handleNodes(nodes)))
 	mux.HandleFunc("GET /api/v1/events", g.requireAuth(handleEvents(events)))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json")))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}")))
-	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}")))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/descriptor", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/descriptor.json", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/params/{name}", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/params/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/params/{name}", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/methods/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/methods/{name}", nodeLogs)))
 	// Plugin-Host (ARCHITECTURE.md §24.4, UMSETZUNG.md C19) — reine
 	// Routenregistrierung, keine neue Proxy-Logik: derselbe generische
 	// handleNodeProxy wie bei params/methods, gleiche Auth-Abstufung
 	// (lesen = requireAuth, schreiben = requireVerbOnNode VerbOperate).
-	mux.HandleFunc("GET /api/v1/nodes/{id}/plugins", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/plugins")))
-	mux.HandleFunc("PATCH /api/v1/nodes/{id}/plugins/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/plugins/{name}")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/plugins", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/plugins", nodeLogs)))
+	mux.HandleFunc("PATCH /api/v1/nodes/{id}/plugins/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/plugins/{name}", nodeLogs)))
 	// Gefensterte Timeline-Anfrage (C20, ARCHITECTURE.md §24.5) — view-
 	// artig wie params/plugins GET, reine Registrierung, keine neue
 	// Proxy-Logik (Query-String-Weiterleitung in proxy.go ergänzt).
-	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window")))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json")))
-	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js", nodeLogs)))
 	// Node-eigener Vollzustand (`GET`/`POST /state`, bisher NUR vom
 	// Snapshot-Service serverseitig direkt gegen node.APIBaseURL genutzt,
 	// s. internal/snapshots/nodeclient.go) — Nutzerauftrag 2026-08-20
@@ -278,8 +278,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// generische `handleNodeProxy`-Maschinerie/Auth-Abstufung wie
 	// params/plugins oben (lesen = requireAuth, schreiben =
 	// requireVerbOnNode VerbOperate).
-	mux.HandleFunc("GET /api/v1/nodes/{id}/state", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/state")))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/state", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/state")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/state", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/state", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/state", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/state", nodeLogs)))
 	// Benannte Node-eigene Layouts (Nutzerauftrag 2026-08-20:
 	// "mehrere layouts pro multiviewer anlegbar/aufrufbar machen") —
 	// bislang nur von omp-multiviewer-custom implementiert, aber wie
@@ -289,10 +289,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// `/api/v1/layouts/{name}` (Flow-Editor-Kachelpositionen,
 	// layouts.Store) — unterschiedlicher Pfad-Präfix (`/nodes/{id}/`),
 	// unterschiedlicher Anwendungsfall.
-	mux.HandleFunc("GET /api/v1/nodes/{id}/layouts", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/layouts")))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts")))
-	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts/{name}/apply", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}/apply")))
-	mux.HandleFunc("DELETE /api/v1/nodes/{id}/layouts/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}")))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/layouts", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/layouts", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts/{name}/apply", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}/apply", nodeLogs)))
+	mux.HandleFunc("DELETE /api/v1/nodes/{id}/layouts/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
@@ -326,6 +326,10 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))
 	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore)))
 	mux.HandleFunc("GET /api/v1/admin/audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListAuditLog(auditReader)))
+	// ARCHITECTURE.md §25.2/§25.3 (UMSETZUNG.md D19) — zentraler
+	// Log-Kanal, gleiches Admin-Gate wie das Audit-Log (Log-Zeilen legen
+	// node-/host-übergreifende Betriebsdetails offen).
+	mux.HandleFunc("GET /api/v1/logs", g.requireVerbGlobal(authz.VerbAdmin, handleListLogs(logReader)))
 	// Nutzerwunsch 2026-08-13: Backup/Restore über das Browser-UI.
 	// VerbAdmin (nicht Configure) — gleiche Einstufung wie Rollenbindungen/
 	// Bootstrap-Tokens, ein vollständiger DB-Dump ist mindestens so

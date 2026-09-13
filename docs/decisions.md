@@ -23894,3 +23894,134 @@ Architektur-Entwurf, Umsetzungsreihenfolge/Scope-Schnitt (z. B. erst
 25.1+25.2 ohne Cockpit-UI) mit dem Nutzer bei Umsetzungsbeginn klären.
 
 **Dateien:** `ARCHITECTURE.md` (§25, neu).
+
+## 2026-09-13 (Nachtrag 220) — Zentralisierte Observability Teil 1: Trace-Kontext + zentraler Log-Kanal (ARCHITECTURE.md §25.1/§25.2, UMSETZUNG.md D19)
+
+**Kontext:** Direkter Nutzerauftrag im Anschluss an Nachtrag 219
+("Technologie-Option festlegen, dann Teil 1 umsetzen") — Option A
+(nur vorhandene Infrastruktur) bzw. deren identischer erster
+Umsetzungsschritt unter Option C (Option Cs OTLP-Export-Zusatzpfad ist
+ein späteres Increment, für "Teil 1" macht die Wahl A/C keinen
+Unterschied). Vor der Umsetzung eine gezielte Recherche (Fork) über
+die exakten Integrationspunkte durchgeführt statt zu raten: IS-05-
+Client (`internal/is05/client.go`), generischer Node-Proxy
+(`internal/httpapi/proxy.go`), NATS/JetStream-Nutzung (bis dahin
+komplett ungenutzt, bestätigt per `grep`), Migrations-/Store-
+Konvention (`internal/audit` als Vorlage), Raft-Leader-Gating
+(`runWhileLeader`), bestehende `slog`-Aufrufstellen rund um IS-05/
+Proxy.
+
+**Umsetzung, zwei neue Pakete + gezielte Verdrahtung:**
+- **`internal/tracing`** (neu): `trace_id`/`span_id` (16 Zufallsbytes
+  hex, gleiche Konvention wie `workflows.newID` — kein UUID-Format
+  nötig), `Ensure`/`NewSpan`/`WithTrace`/`TraceID`/`SpanID`,
+  `SetHeaders`/`FromRequest` für die HTTP-Header `X-OMP-Trace-Id`/
+  `X-OMP-Span-Id`. Bewusst ein eigenes schmales Schema statt vollem
+  W3C-Trace-Context (der Zusatznutzen läge in Fremd-OTel-Interop, s.
+  §25.4 Option C, nicht Teil dieser Runde). 9 neue Unit-Tests.
+- **`internal/is05/client.go`**: alle drei Methoden
+  (`GetActive`/`PatchStaged`/`PatchSenderStaged`) setzen die Trace-
+  Header auf jeder ausgehenden Anfrage (`tracing.SetHeaders`). 4 neue
+  Tests gegen einen echten `httptest.Server`.
+- **`internal/graph`**: `Connect`/`Disconnect` beginnen einen Trace
+  (`tracing.Ensure`), tragen ihn durch beide IS-05-Aufrufe UND
+  veröffentlichen bei einem Fehlschlag eine korrelierte Log-Zeile
+  (neues `LogPublisher`-Interface, additiv wie `EventPublisher`) — der
+  primäre `PatchStaged`-Fehlschlag hatte bisher GAR KEIN Server-Log
+  (nur die bereits bestehenden Best-Effort-`PatchSenderStaged`-
+  Fehlschläge waren `slog.Warn`, jetzt zusätzlich auch dort
+  veröffentlicht). `NewService` bekam ein viertes Argument — 20
+  bestehende Testaufrufstellen mechanisch um `nil` ergänzt, 2 neue
+  Tests belegen, dass die veröffentlichte trace_id tatsächlich
+  dieselbe ist, die auch am (fehlgeschlagenen) PATCH gehangen hätte.
+- **`internal/httpapi`**: `handleNodeProxy` (der generische A8-Proxy,
+  15 Registrierungen in `server.go`) setzt/liest denselben Trace-Header
+  und veröffentlicht bei `client.Do`-Fehlschlag eine Log-Zeile — echte,
+  zuvor bestehende Lücke geschlossen (der Proxy hatte bislang KEINEN
+  einzigen `slog`-Aufruf, ein fehlgeschlagener Node-Aufruf war rein
+  clientseitig als HTTP-Fehler sichtbar). `handlePostGraphEdge`/
+  `handleDeleteGraphEdge` setzen den Trace als Response-Header (Erfolg
+  UND Fehler) — bewusst additiv per Header statt das bestehende
+  Klartext-Fehler-Body-Format (`writeGraphError`) zu ändern. Neues `GET
+  /api/v1/logs` (admin-gated wie das Audit-Log), `LogReader`-Interface.
+  `NewHandler` bekam zwei neue Argumente (`logReader`, `nodeLogs`) — 63
+  Testaufrufstellen in `server_test.go` mechanisch ergänzt (gleiches
+  Muster wie zuvor bei `ioPortStore`). 11 neue Tests
+  (`log_handlers_test.go`, `proxy_test.go`, `graph_handlers_test.go`).
+- **`internal/logbus`** (neu): `Entry`, `Publisher` (JetStream-Stream
+  `OMP_LOGS`, `Subjects: ["omp.logs.>"]`, `Replicas: 3` — dieselbe
+  Replikationstiefe wie der NATS-Cluster selbst), `Store` (Postgres-
+  Projektion, `logs`-Tabelle, `Query`/`PurgeOlderThan`/`RunRetention` —
+  identisches Muster wie `internal/audit`), `RunProjector` (Durable-
+  JetStream-Pull-Consumer, Raft-Leader-gegatet über das bestehende
+  `runWhileLeader`, docs/decisions.md Nachtrag 149). Neue Migration
+  `0016_logs.sql`. Neuer Config-Wert `OMP_LOG_RETENTION_HOURS` (Default
+  72 — bewusst Stunden statt Tage wie bei Audit: Log-Volumen liegt um
+  Größenordnungen höher). **Echter Bug live gefunden+behoben**:
+  `Store.Insert` übernahm `Entry.OccurredAt` ungeprüft — ein Aufrufer
+  (hier: der eigene Test), der das Feld nicht setzt, hätte eine
+  Log-Zeile mit Go-Zeitnullwert (Jahr 1) geschrieben, die der nächste
+  Retention-Lauf sofort mitgelöscht hätte; ein echter Testlauf gegen
+  die reale (isolierte) Postgres-Testdatenbank deckte das auf
+  (`PurgeOlderThan(72) deleted = 2, want 1`), nicht durch bloßes
+  Nachdenken. Fix: `IsZero()`-Fallback auf `time.Now()`. 5 neue Tests
+  gegen `dbtest.Open` (echte Postgres, keine Mocks).
+- **`main.go`**: `logbus.NewPublisher`/`NewStore` direkt nach der
+  Postgres-Migration konstruiert (Beobachtbarkeit ist nicht kritischer
+  Pfad — ein Fehler beim JetStream-Stream-Setup degradiert auf einen
+  stillen No-Op-Publisher statt den Prozess abzubrechen, gleiche
+  "best-effort"-Linie wie der NATS-Connect selbst), in `graph.NewService`
+  und `httpapi.NewHandler` verdrahtet, `logStore.RunRetention` und ein
+  neuer `runWhileLeader(ctx, clusterNode, logbus.RunProjector(...))`-
+  Hintergrund-Task gestartet.
+
+**Live verifiziert (nicht nur Unit-Tests):** `make up` (echter
+3-Knoten-NATS-Cluster, D14) + `make postgres-up` (echter Patroni/etcd-
+Cluster, D15), echter Orchestrator-Binary-Lauf dagegen. `curl
+localhost:8222/jsz?streams=true` bestätigte, dass der Stream `OMP_LOGS`
+TATSÄCHLICH als replizierter JetStream-Cluster-Stream angelegt wurde
+(`"replicas": 3`, eigene `raft_group`, `"leader": "omp-nats-3"`) — die
+zentrale, vorher unbestätigte Architekturannahme dieses gesamten
+Kapitels ("die drei bereits geclusterten `-js`-NATS-Knoten bilden
+automatisch auch einen JetStream-Cluster") war real, nicht nur eine
+Hoffnung. Ein direkt per `nats pub` auf `omp.logs.test-node-1`
+veröffentlichter Eintrag erschien nachweislich (über den echten, im
+laufenden Leader aktiven Projektor) in der echten Postgres-Tabelle und
+war über `GET /api/v1/logs?traceId=…` mit echtem Admin-Bearer-Token
+sofort abrufbar. Ein echter `POST /api/v1/graph/edges` gegen eine
+nicht existierende Receiver-ID lieferte einen echten 404 MIT
+`X-Omp-Trace-Id`-Header — der Header erscheint also tatsächlich auch im
+Fehlerfall, nicht nur bei Erfolg. Testdaten danach aus der echten
+Dev-Postgres entfernt (`DELETE FROM logs WHERE trace_id = …`), Test-
+Binary/-Prozess sauber beendet. `go build/vet/test ./...` (gesamtes
+Orchestrator-Modul, inkl. echter Postgres-DB-Tests) grün.
+
+**Bewusst nicht Teil dieser Runde:** §25.3 (Diagnose-Cockpit-UI,
+Trace-Waterfall, Blast-Radius-Overlay im Flow Editor) — `GET
+/api/v1/logs` ist die Rohdaten-API dafür, aber unbedient (curl/
+künftiges UI); node-seitige Log-Emission (Rust-SDK/Go-Mock-Node lesen
+die Trace-Header noch nicht, veröffentlichen keine eigenen Log-
+Zeilen) — bewusst Orchestrator-only diese Runde; `handleNodeStreamProxy`
+(Preview-/Levels-Streams) bekam keine Trace-/Log-Verdrahtung (deutlich
+seltenerer Fehlerfall, geringerer Nutzen als der generische Proxy);
+zeitgesteuerte/geplante Aktivierungs-Traces; OTLP-Export (§25.4 Option
+C).
+
+**Dateien:** `orchestrator/internal/tracing/` (neu),
+`orchestrator/internal/logbus/` (neu),
+`orchestrator/internal/db/migrations/0016_logs.sql` (neu),
+`orchestrator/internal/is05/client.go`,
+`orchestrator/internal/is05/client_test.go` (neu),
+`orchestrator/internal/graph/graph.go`,
+`orchestrator/internal/graph/graph_test.go`,
+`orchestrator/internal/httpapi/proxy.go`,
+`orchestrator/internal/httpapi/proxy_test.go` (neu),
+`orchestrator/internal/httpapi/graph_handlers.go`,
+`orchestrator/internal/httpapi/graph_handlers_test.go` (neu),
+`orchestrator/internal/httpapi/log_handlers.go` (neu),
+`orchestrator/internal/httpapi/log_handlers_test.go` (neu),
+`orchestrator/internal/httpapi/server.go`,
+`orchestrator/internal/httpapi/server_test.go`,
+`orchestrator/internal/config/config.go`,
+`orchestrator/internal/config/config_test.go`, `orchestrator/main.go`,
+`ARCHITECTURE.md`.

@@ -3907,7 +3907,31 @@ sichtbar, nächster `scan()`/Watch-Zyklus holt sie ab). Katalog-
 mit `ffprobe` auf Dauer/Codec geprüft, taucht nach `omp-media-library`-
 Scan im Katalog auf. **Phase:** C22.
 
-## 25. Zentralisierte Observability: Logs, Distributed Tracing, Diagnose-Cockpit (geplant, 2026-09-13)
+## 25. Zentralisierte Observability: Logs, Distributed Tracing, Diagnose-Cockpit (Teil 1 umgesetzt, 2026-09-13, UMSETZUNG.md D19)
+
+**Status (2026-09-13):** §25.1 (Trace-Kontext) und §25.2 (zentraler
+Log-Kanal, Backend) sind umgesetzt und live gegen den echten,
+geclusterten NATS-JetStream-Cluster (D14) verifiziert — Option A aus
+§25.4 (nur vorhandene Infrastruktur), als eingebauter Default, wie
+empfohlen. §25.3 (Diagnose-Cockpit-UI, Trace-Waterfall, Blast-Radius-
+Overlay im Flow Editor) ist bewusst **nicht** Teil dieser Runde —
+`GET /api/v1/logs` ist die Rohdaten-API dafür, aber es gibt noch keine
+Oberfläche darüber (curl/zukünftiges UI). Konkret umgesetzt:
+`internal/tracing` (trace_id/span_id, `X-OMP-Trace-Id`/`X-OMP-Span-Id`,
+`orchestrator/is05.Client` sowie der generische Node-Proxy
+`handleNodeProxy` und `graph.Service.Connect`/`Disconnect` tragen sie
+durch); `internal/logbus` (JetStream-Stream `OMP_LOGS`, Postgres-
+Projektion `logs`-Tabelle, Raft-Leader-gegateter Projektor, `GET
+/api/v1/logs?traceId=&nodeId=&hostId=&level=&before=&limit=`, admin-
+gated wie das Audit-Log). Live bestätigt: der 3-Knoten-NATS-Cluster
+bildet tatsächlich einen replizierten JetStream-Cluster (`num_replicas:
+3`, `raft_group`) — die zuvor unbestätigte Kernannahme dieses Kapitels
+war real, nicht nur eine Hoffnung; ein direkt auf den Stream
+veröffentlichter Eintrag erschien nachweislich über den echten
+Projektor in Postgres und war über `GET /api/v1/logs?traceId=…` sofort
+abrufbar; ein echter fehlgeschlagener `POST /api/v1/graph/edges`-Aufruf
+gegen den laufenden Orchestrator lieferte den `X-OMP-Trace-Id`-Header
+auch im 404-Fehlerfall. Details: `docs/decisions.md` Nachtrag 220.
 
 **Anforderung (Nutzerauftrag 2026-09-13):** "perfekte Observability und
 Systemtransparenz — zentralisiertes Log auch bei Multi-Host, Distributed

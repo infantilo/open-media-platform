@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
 
 // handleGraph liefert GET /api/v1/graph (UMSETZUNG.md B1).
@@ -17,6 +18,15 @@ func handleGraph(svc GraphService) http.HandlerFunc {
 
 // handlePostGraphEdge liefert POST /api/v1/graph/edges: {"from":
 // "<senderId>", "to": "<receiverId>"} → IS-05-PATCH auf den Receiver.
+//
+// ARCHITECTURE.md §25.1 (UMSETZUNG.md D19): der Trace beginnt hier, am
+// Einstiegspunkt der eigentlichen Nutzeraktion (Flow-Editor-Drag), und
+// wird als Response-Header zurückgegeben — sowohl bei Erfolg als auch
+// bei Fehler, ohne das bestehende Fehler-Body-Format (writeGraphError,
+// reiner Text) zu ändern. Ein Admin, der einen fehlgeschlagenen
+// Verbindungsversuch sieht, kann die trace_id direkt aus den
+// Browser-Devtools ins Diagnose-Cockpit (§25.3, GET /api/v1/logs)
+// übernehmen.
 func handlePostGraphEdge(svc GraphService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -28,7 +38,9 @@ func handlePostGraphEdge(svc GraphService) http.HandlerFunc {
 			return
 		}
 
-		if err := svc.Connect(r.Context(), body.From, body.To); err != nil {
+		ctx := tracing.FromRequest(r)
+		w.Header().Set(tracing.HeaderTraceID, tracing.TraceID(ctx))
+		if err := svc.Connect(ctx, body.From, body.To); err != nil {
 			writeGraphError(w, err)
 			return
 		}
@@ -37,10 +49,13 @@ func handlePostGraphEdge(svc GraphService) http.HandlerFunc {
 }
 
 // handleDeleteGraphEdge liefert DELETE /api/v1/graph/edges/<id> (id ==
-// Receiver-ID, siehe graph.Edge).
+// Receiver-ID, siehe graph.Edge). S. handlePostGraphEdge-Doku zum
+// Trace-Header.
 func handleDeleteGraphEdge(svc GraphService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.Disconnect(r.Context(), r.PathValue("id")); err != nil {
+		ctx := tracing.FromRequest(r)
+		w.Header().Set(tracing.HeaderTraceID, tracing.TraceID(ctx))
+		if err := svc.Disconnect(ctx, r.PathValue("id")); err != nil {
 			writeGraphError(w, err)
 			return
 		}

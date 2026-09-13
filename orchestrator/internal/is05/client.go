@@ -14,6 +14,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
 
 // ActiveResource ist die für den Graph-Endpunkt relevante Teilmenge des
@@ -45,6 +47,10 @@ func (c *Client) GetActive(ctx context.Context, baseURL, receiverID string) (Act
 	if err != nil {
 		return ActiveResource{}, err
 	}
+	// ARCHITECTURE.md §25.1: trägt einen laufenden Trace weiter (oder
+	// beginnt einen neuen), damit ein fehlschlagender IS-05-Aufruf im
+	// Diagnose-Cockpit mit dem auslösenden Vorgang korreliert werden kann.
+	tracing.SetHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -83,6 +89,7 @@ func (c *Client) PatchStaged(ctx context.Context, baseURL, receiverID string, se
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	tracing.SetHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -120,6 +127,7 @@ func (c *Client) PatchSenderStaged(ctx context.Context, baseURL, senderID string
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	tracing.SetHeaders(req, ctx)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

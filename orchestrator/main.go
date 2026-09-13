@@ -31,6 +31,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
@@ -266,6 +267,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Zentraler Log-Kanal (ARCHITECTURE.md §25.2, UMSETZUNG.md D19) —
+	// baut auf dem bereits laufenden NATS-JetStream-Cluster auf (D14),
+	// keine neue Infrastruktur. Beobachtbarkeit ist nicht kritischer
+	// Pfad (anders als mTLS oben): ein Fehler beim Stream-Setup
+	// degradiert auf einen stillen No-Op-Publisher statt den gesamten
+	// Prozess abzubrechen — dieselbe "best-effort"-Linie wie der
+	// NATS-Connect oben (nc == nil).
+	logPublisher, err := logbus.NewPublisher(ctx, nc, cfg.LogRetentionHours)
+	if err != nil {
+		slog.Error("logbus publisher setup failed, continuing without centralized logging", "error", err)
+		logPublisher = &logbus.Publisher{}
+	}
+	logStore := logbus.NewStore(database, hub)
+	go logStore.RunRetention(ctx, cfg.LogRetentionHours)
+
 	// mTLS Orchestrator↔Nodes (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) —
 	// opt-in über cfg.MTLSEnabled, Default aus. Ein nicht erreichbares
 	// Zertifikat bei aktiviertem mTLS ist ein harter Fehler (ähnlich
@@ -373,7 +389,7 @@ func main() {
 	}
 
 	store := registry.NewStore()
-	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub)
+	graphSvc := graph.NewService(store, is05.NewClient(nodeHTTPClient), hub, logPublisher)
 
 	poller := registry.NewPoller(registry.NewClient(cfg.RegistryURL, registryHTTPClient), store)
 	poller.HealthTracker = healthTracker
@@ -599,10 +615,20 @@ func main() {
 	// Auswertung wiederholen.
 	go runWhileLeader(ctx, clusterNode, workflowScheduler.Run)
 
+	// Log-Projektor (ARCHITECTURE.md §25.2, UMSETZUNG.md D19) — Raft-
+	// Leader-gegated wie placementEngine.Run oben (docs/decisions.md
+	// Nachtrag 149: ohne Gating würde jede Cluster-Instanz unabhängig
+	// dieselben JetStream-Zeilen projizieren). Durable-Consumer-Name
+	// (logbus.RunProjector-Doku) übersteht einen Leader-Wechsel ohne
+	// Datenverlust/-Duplikate.
+	go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
+		logbus.RunProjector(ctx, nc, logStore)
+	})
+
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore)
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher)
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

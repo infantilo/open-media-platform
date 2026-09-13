@@ -16,6 +16,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("OMP_REGISTRY_TLS_ENABLED", "")
 	t.Setenv("OMP_REGISTRY_TLS_CA_FILE", "")
 	t.Setenv("OMP_AUDIT_RETENTION_DAYS", "")
+	t.Setenv("OMP_LOG_RETENTION_HOURS", "")
 
 	cfg := Load()
 
@@ -55,6 +56,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RegistryTLSCAFile != "../.run/mtls/root_ca.crt" {
 		t.Errorf("RegistryTLSCAFile = %q, want %q", cfg.RegistryTLSCAFile, "../.run/mtls/root_ca.crt")
 	}
+	if cfg.LogRetentionHours != 72 {
+		t.Errorf("LogRetentionHours = %d, want 72", cfg.LogRetentionHours)
+	}
 	if cfg.AuditRetentionDays != 90 {
 		t.Errorf("AuditRetentionDays = %d, want 90", cfg.AuditRetentionDays)
 	}
@@ -74,6 +78,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("OMP_REGISTRY_TLS_ENABLED", "true")
 	t.Setenv("OMP_REGISTRY_TLS_CA_FILE", "/srv/omp/mtls/registry-ca.crt")
 	t.Setenv("OMP_AUDIT_RETENTION_DAYS", "30")
+	t.Setenv("OMP_LOG_RETENTION_HOURS", "48")
 
 	cfg := Load()
 
@@ -115,5 +120,8 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.AuditRetentionDays != 30 {
 		t.Errorf("AuditRetentionDays = %d, want 30", cfg.AuditRetentionDays)
+	}
+	if cfg.LogRetentionHours != 48 {
+		t.Errorf("LogRetentionHours = %d, want 48", cfg.LogRetentionHours)
 	}
 }

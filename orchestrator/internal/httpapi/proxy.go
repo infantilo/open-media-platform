@@ -1,11 +1,26 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
+
+// NodeCallLogger veröffentlicht eine strukturierte Log-Zeile auf den
+// zentralen Log-Kanal (ARCHITECTURE.md §25.2, implementiert von
+// *logbus.Publisher) — hier zum ersten Mal genutzt, um eine bislang
+// bestehende echte Lücke zu schließen: ein fehlschlagender generischer
+// Node-Proxy-Aufruf (A8) landete bisher NUR als HTTP-Fehlerantwort beim
+// Browser, nirgends serverseitig geloggt. Optional (darf nil sein).
+type NodeCallLogger interface {
+	Publish(ctx context.Context, e logbus.Entry)
+}
 
 // handleNodeProxy baut einen reinen HTTP-Proxy-Handler für einen
 // Node-eigenen Self-Describe-Pfad (descriptor.json, params/<name>,
@@ -16,12 +31,16 @@ import (
 // keine Node-Typ-Kenntnis (UMSETZUNG.md A8, ARCHITECTURE.md §2/§11.1).
 // client ist der (ggf. mTLS-fähige, UMSETZUNG.md D3) HTTP-Client für
 // Node-Aufrufe — nil bedeutet http.DefaultClient (unverändertes
-// Verhalten ohne mTLS).
-func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string) http.HandlerFunc {
+// Verhalten ohne mTLS). logs ist der ARCHITECTURE.md-§25.2-Log-Kanal —
+// nil bedeutet stiller No-Op (unverändertes Verhalten ohne D19).
+func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string, logs NodeCallLogger) http.HandlerFunc {
 	if client == nil {
 		client = http.DefaultClient
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := tracing.FromRequest(r)
+		w.Header().Set(tracing.HeaderTraceID, tracing.TraceID(ctx))
+
 		node, ok := nodes.Get(r.PathValue("id"))
 		if !ok {
 			http.Error(w, "unknown node", http.StatusNotFound)
@@ -49,7 +68,7 @@ func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string)
 			target += "?" + r.URL.RawQuery
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+		req, err := http.NewRequestWithContext(ctx, r.Method, target, r.Body)
 		if err != nil {
 			http.Error(w, "failed to build proxy request", http.StatusInternalServerError)
 			return
@@ -57,9 +76,18 @@ func handleNodeProxy(nodes NodeLister, client *http.Client, pathTemplate string)
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			req.Header.Set("Content-Type", ct)
 		}
+		tracing.SetHeaders(req, ctx)
 
 		resp, err := client.Do(req)
 		if err != nil {
+			if logs != nil {
+				logs.Publish(ctx, logbus.Entry{
+					Level:   "error",
+					Message: fmt.Sprintf("node proxy call failed (%s %s): %v", r.Method, path, err),
+					NodeID:  node.ID,
+					Source:  "orchestrator",
+				})
+			}
 			http.Error(w, "node unreachable: "+err.Error(), http.StatusBadGateway)
 			return
 		}

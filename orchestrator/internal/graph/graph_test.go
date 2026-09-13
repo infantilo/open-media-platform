@@ -3,14 +3,32 @@ package graph
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
 
 func strPtr(s string) *string { return &s }
+
+// fakeLogPublisher — Test-Double für LogPublisher (ARCHITECTURE.md
+// §25.1/§25.2): erfasst jeden veröffentlichten Eintrag samt des dabei
+// aus ctx gelesenen Trace, um zu prüfen, dass eine fehlgeschlagene
+// IS-05-Operation tatsächlich korreliert (nicht bloß irgendeine
+// trace_id, sondern dieselbe, die auch am ausgehenden PATCH hing).
+type fakeLogPublisher struct {
+	entries []logbus.Entry
+	traces  []string
+}
+
+func (f *fakeLogPublisher) Publish(ctx context.Context, e logbus.Entry) {
+	f.entries = append(f.entries, e)
+	f.traces = append(f.traces, tracing.TraceID(ctx))
+}
 
 func TestBuildNodesMapsPortsAndHealth(t *testing.T) {
 	views := []registry.NodeView{{
@@ -92,6 +110,10 @@ type fakeIS05Client struct {
 	// senderErr lässt PatchSenderStaged für die angegebene Sender-ID
 	// fehlschlagen — simuliert einen Node ohne Sender-Connection-API.
 	senderErr map[string]bool
+	// receiverErr lässt PatchStaged für die angegebene Receiver-ID
+	// fehlschlagen — ARCHITECTURE.md §25.1: der primäre Fehlerfall, den
+	// der zentrale Log-Kanal sichtbar machen soll.
+	receiverErr map[string]bool
 	// getActiveCalls zählt GetActive-Aufrufe — Grundlage für S1-Tests,
 	// die belegen, dass Graph() nach dem initialen Cache-Aufbau keine
 	// weiteren IS-05-Roundtrips mehr auslöst.
@@ -107,6 +129,7 @@ func newFakeIS05Client() *fakeIS05Client {
 		}{},
 		senderPatched: map[string]bool{},
 		senderErr:     map[string]bool{},
+		receiverErr:   map[string]bool{},
 	}
 }
 
@@ -116,6 +139,9 @@ func (f *fakeIS05Client) GetActive(ctx context.Context, baseURL, receiverID stri
 }
 
 func (f *fakeIS05Client) PatchStaged(ctx context.Context, baseURL, receiverID string, senderID *string, masterEnable bool) error {
+	if f.receiverErr[receiverID] {
+		return fmt.Errorf("fake: receiver %s unreachable", receiverID)
+	}
 	f.patched[receiverID] = struct {
 		senderID     *string
 		masterEnable bool
@@ -144,7 +170,7 @@ func TestServiceGraphIncludesActiveEdges(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background()) // S1: Graph() liest den Cache, nicht mehr live
 	g := svc.Graph(context.Background())
 
@@ -163,7 +189,7 @@ func TestServiceGraphOmitsInactiveReceivers(t *testing.T) {
 	}}
 	client := newFakeIS05Client()
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 	g := svc.Graph(context.Background())
 
@@ -178,7 +204,7 @@ func TestServiceConnectPatchesReceiver(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 
 	if err := svc.Connect(context.Background(), "send-1", "recv-1"); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -190,8 +216,73 @@ func TestServiceConnectPatchesReceiver(t *testing.T) {
 	}
 }
 
+// TestServiceConnectPublishesLogOnPatchStagedFailure — ARCHITECTURE.md
+// §25.1/§25.2 (UMSETZUNG.md D19): der primäre "wenn IS-05 fehlschlägt"
+// Fall — bislang gab es dafür keinerlei serverseitiges Log. Prüft nicht
+// nur, dass etwas veröffentlicht wird, sondern dass es dieselbe trace_id
+// trägt, die auch der (hier fehlgeschlagene) ausgehende PATCH gesehen
+// hätte — genau die Korrelation, die das Diagnose-Cockpit (§25.3)
+// braucht, um von einem Fehler direkt zur Ursache zu springen.
+func TestServiceConnectPublishesLogOnPatchStagedFailure(t *testing.T) {
+	views := []registry.NodeView{{
+		ID: "node-1", APIBaseURL: "http://mock:9001",
+		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
+	}}
+	client := newFakeIS05Client()
+	client.receiverErr["recv-1"] = true
+	logs := &fakeLogPublisher{}
+	svc := NewService(fakeNodeLister{views}, client, nil, logs)
+
+	err := svc.Connect(context.Background(), "send-1", "recv-1")
+	if err == nil {
+		t.Fatal("Connect() error = nil, want the injected PatchStaged failure")
+	}
+
+	if len(logs.entries) != 1 {
+		t.Fatalf("logs.entries = %+v, want exactly one published entry", logs.entries)
+	}
+	entry := logs.entries[0]
+	if entry.Level != "error" {
+		t.Errorf("Level = %q, want %q", entry.Level, "error")
+	}
+	if entry.NodeID != "node-1" {
+		t.Errorf("NodeID = %q, want %q", entry.NodeID, "node-1")
+	}
+	if !strings.Contains(entry.Message, "PatchStaged") {
+		t.Errorf("Message = %q, want it to mention PatchStaged", entry.Message)
+	}
+	if logs.traces[0] == "" {
+		t.Error("published entry carries no trace_id in ctx — Connect must call tracing.Ensure before failing")
+	}
+}
+
+// TestServiceConnectPublishesLogOnSenderPatchFailure covers the
+// existing best-effort sender-side failure path (previously only
+// slog.Warn, now also correlated via the central log channel).
+func TestServiceConnectPublishesLogOnSenderPatchFailure(t *testing.T) {
+	views := []registry.NodeView{
+		{ID: "node-1", APIBaseURL: "http://mock:9001", Receivers: []registry.ReceiverView{{ID: "recv-1"}}},
+		{ID: "node-2", APIBaseURL: "http://mock:9002", Senders: []registry.SenderView{{ID: "send-A"}}},
+	}
+	client := newFakeIS05Client()
+	client.senderErr["send-A"] = true
+	logs := &fakeLogPublisher{}
+	svc := NewService(fakeNodeLister{views}, client, nil, logs)
+
+	if err := svc.Connect(context.Background(), "send-A", "recv-1"); err != nil {
+		t.Fatalf("Connect() error = %v, want the best-effort sender failure to not fail Connect itself", err)
+	}
+
+	if len(logs.entries) != 1 || logs.entries[0].Level != "warn" {
+		t.Fatalf("logs.entries = %+v, want exactly one warn-level entry", logs.entries)
+	}
+	if logs.entries[0].NodeID != "node-2" {
+		t.Errorf("NodeID = %q, want %q (the sender's node)", logs.entries[0].NodeID, "node-2")
+	}
+}
+
 func TestServiceConnectUnknownReceiverReturnsError(t *testing.T) {
-	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), nil)
+	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), nil, nil)
 	if err := svc.Connect(context.Background(), "send-1", "does-not-exist"); err != ErrUnknownReceiver {
 		t.Fatalf("Connect() error = %v, want ErrUnknownReceiver", err)
 	}
@@ -203,7 +294,7 @@ func TestServiceConnectRejectsSelfLoop(t *testing.T) {
 		Senders:   []registry.SenderView{{ID: "send-A"}},
 		Receivers: []registry.ReceiverView{{ID: "recv-A"}},
 	}}
-	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), nil)
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), nil, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-A"); err != ErrRoutingLoop {
 		t.Fatalf("Connect() error = %v, want ErrRoutingLoop", err)
@@ -218,7 +309,7 @@ func TestServiceConnectRejectsTwoNodeLoop(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // bestehend: A -> B
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background()) // A -> B muss im Cache stehen, damit die Schleifenprüfung sie sieht
 
 	// B -> A würde die Schleife A -> B -> A schließen.
@@ -236,7 +327,7 @@ func TestServiceConnectAllowsChainWithoutLoop(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 
 	if err := svc.Connect(context.Background(), "send-B", "recv-C"); err != nil { // B -> C, keine Schleife
@@ -254,7 +345,7 @@ func TestServiceConnectRejectsThreeNodeLoop(t *testing.T) {
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true} // A -> B
 	client.active["recv-C"] = is05.ActiveResource{SenderID: strPtr("send-B"), MasterEnable: true} // B -> C
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 
 	// C -> A würde A -> B -> C -> A schließen.
@@ -269,7 +360,7 @@ func TestServiceDisconnectPatchesReceiverWithNilSender(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 
 	if err := svc.Disconnect(context.Background(), "recv-1"); err != nil {
 		t.Fatalf("Disconnect() error = %v", err)
@@ -287,7 +378,7 @@ func TestServiceConnectAlsoEnablesSender(t *testing.T) {
 		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
 	}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -305,7 +396,7 @@ func TestServiceConnectSucceedsEvenIfSenderHasNoConnectionAPI(t *testing.T) {
 	}
 	client := newFakeIS05Client()
 	client.senderErr["send-A"] = true
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
 		t.Fatalf("Connect() error = %v, want nil (sender-side failure must not be fatal)", err)
@@ -324,7 +415,7 @@ func TestServiceDisconnectAlsoDisablesPreviousSender(t *testing.T) {
 	}
 	client := newFakeIS05Client()
 	client.active["recv-B"] = is05.ActiveResource{SenderID: strPtr("send-A"), MasterEnable: true}
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background()) // Disconnect liest den vorherigen Sender jetzt aus dem Cache
 
 	if err := svc.Disconnect(context.Background(), "recv-B"); err != nil {
@@ -348,7 +439,7 @@ func TestServiceConnectPublishesEdgeAddedEvent(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	pub := &fakeEventPublisher{}
-	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub)
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub, nil)
 
 	if err := svc.Connect(context.Background(), "send-1", "recv-1"); err != nil {
 		t.Fatalf("Connect() error = %v", err)
@@ -365,7 +456,7 @@ func TestServiceDisconnectPublishesEdgeRemovedEvent(t *testing.T) {
 		Receivers: []registry.ReceiverView{{ID: "recv-1"}},
 	}}
 	pub := &fakeEventPublisher{}
-	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub)
+	svc := NewService(fakeNodeLister{views}, newFakeIS05Client(), pub, nil)
 
 	if err := svc.Disconnect(context.Background(), "recv-1"); err != nil {
 		t.Fatalf("Disconnect() error = %v", err)
@@ -378,7 +469,7 @@ func TestServiceDisconnectPublishesEdgeRemovedEvent(t *testing.T) {
 
 func TestServiceConnectErrorDoesNotPublish(t *testing.T) {
 	pub := &fakeEventPublisher{}
-	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), pub)
+	svc := NewService(fakeNodeLister{nil}, newFakeIS05Client(), pub, nil)
 
 	if err := svc.Connect(context.Background(), "send-1", "does-not-exist"); err != ErrUnknownReceiver {
 		t.Fatalf("Connect() error = %v, want ErrUnknownReceiver", err)
@@ -398,7 +489,7 @@ func TestGraphDoesNotCallIS05PerRequest(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 	callsAfterReconcile := client.getActiveCalls
 
@@ -420,7 +511,7 @@ func TestHandleNodeEventRemovedDeletesEdges(t *testing.T) {
 	client := newFakeIS05Client()
 	client.active["recv-1"] = is05.ActiveResource{SenderID: strPtr("send-1"), MasterEnable: true}
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 
 	if g := svc.Graph(context.Background()); len(g.Edges) != 1 {
@@ -448,7 +539,7 @@ func TestHandleNodeEventAddedPopulatesEdgesWithoutFullReconcile(t *testing.T) {
 
 	// Cache noch nie befüllt (kein reconcileOnce) — HandleNodeEvent muss
 	// trotzdem nur den neuen Node abfragen, nicht existingNode.
-	svc := NewService(fakeNodeLister{[]registry.NodeView{existingNode, newNode}}, client, nil)
+	svc := NewService(fakeNodeLister{[]registry.NodeView{existingNode, newNode}}, client, nil, nil)
 	svc.HandleNodeEvent(context.Background(), "node.added", newNode)
 
 	g := svc.Graph(context.Background())
@@ -467,7 +558,7 @@ func TestReconcileOnceCatchesExternallyMadeConnection(t *testing.T) {
 	}}
 	client := newFakeIS05Client()
 
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 	svc.reconcileOnce(context.Background())
 	if g := svc.Graph(context.Background()); len(g.Edges) != 0 {
 		t.Fatalf("edges before external change = %+v, want none", g.Edges)
@@ -491,7 +582,7 @@ func TestDisconnectReadsPreviousSenderFromCacheNotIS05(t *testing.T) {
 		{ID: "node-B", APIBaseURL: "http://b", Receivers: []registry.ReceiverView{{ID: "recv-B"}}},
 	}
 	client := newFakeIS05Client()
-	svc := NewService(fakeNodeLister{views}, client, nil)
+	svc := NewService(fakeNodeLister{views}, client, nil, nil)
 
 	if err := svc.Connect(context.Background(), "send-A", "recv-B"); err != nil {
 		t.Fatalf("Connect() error = %v", err)

@@ -8,14 +8,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/is05"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
 
 // ReconcileInterval ist der Abstand zwischen zwei vollen Edge-Cache-
@@ -110,6 +113,16 @@ type EventPublisher interface {
 	Broadcast(sse.Event)
 }
 
+// LogPublisher veröffentlicht eine strukturierte Log-Zeile auf den
+// zentralen Log-Kanal (ARCHITECTURE.md §25.2, implementiert von
+// *logbus.Publisher) — trägt bei einem fehlschlagenden IS-05-Aufruf die
+// trace_id aus ctx, damit die Ursache im Diagnose-Cockpit (§25.3)
+// hostübergreifend nachvollziehbar bleibt. Optional (darf nil sein, z. B.
+// in Tests) — gleiches additives Muster wie EventPublisher.
+type LogPublisher interface {
+	Publish(ctx context.Context, e logbus.Entry)
+}
+
 // Service baut den Graphen und führt IS-05-Verbindungsänderungen aus.
 //
 // Edges werden in edges gecacht (S1): GET /api/v1/graph liest nur noch
@@ -125,15 +138,27 @@ type Service struct {
 	nodes  NodeLister
 	is05   is05Client
 	events EventPublisher
+	logs   LogPublisher
 
 	mu    sync.RWMutex
 	edges map[string]Edge // Schlüssel: Receiver-ID == Edge-ID
 }
 
 // NewService verbindet einen NodeLister mit einem IS-05-Client und
-// (optional, darf nil sein) einem EventPublisher für Live-Updates.
-func NewService(nodes NodeLister, client is05Client, events EventPublisher) *Service {
-	return &Service{nodes: nodes, is05: client, events: events, edges: map[string]Edge{}}
+// (optional, darf nil sein) einem EventPublisher für Live-Updates sowie
+// einem LogPublisher für den zentralen Log-Kanal (ARCHITECTURE.md
+// §25.2, UMSETZUNG.md D19).
+func NewService(nodes NodeLister, client is05Client, events EventPublisher, logs LogPublisher) *Service {
+	return &Service{nodes: nodes, is05: client, events: events, logs: logs, edges: map[string]Edge{}}
+}
+
+// publishLog — s. LogPublisher-Doku. Stiller No-Op ohne konfigurierten
+// LogPublisher (additiv, gleiche Linie wie publish()/EventPublisher).
+func (s *Service) publishLog(ctx context.Context, level, message, nodeID string) {
+	if s.logs == nil {
+		return
+	}
+	s.logs.Publish(ctx, logbus.Entry{Level: level, Message: message, NodeID: nodeID, Source: "orchestrator"})
 }
 
 // Run füllt den Edge-Cache initial und hält ihn danach per periodischem
@@ -295,6 +320,11 @@ func (s *Service) Graph(ctx context.Context) Graph {
 // Verbindung nicht ab, da nicht jeder Node eine eigene Sender-seitige
 // Connection-API implementiert (z. B. der Mock-Node, Schritt A7/B1).
 func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) error {
+	// ARCHITECTURE.md §25.1: ein Trace beginnt hier, falls der Aufrufer
+	// (z. B. handlePostGraphEdge) noch keinen mitgebracht hat — dieselbe
+	// trace_id trägt sowohl den ausgehenden IS-05-PATCH (is05.Client
+	// liest sie aus ctx) als auch jede hier veröffentlichte Log-Zeile.
+	ctx = tracing.Ensure(ctx)
 	views := s.nodes.List()
 
 	receiverNode, ok := findNodeByReceiver(views, toReceiver)
@@ -318,6 +348,7 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 
 	sender := fromSender
 	if err := s.is05.PatchStaged(ctx, receiverNode.APIBaseURL, toReceiver, &sender, true); err != nil {
+		s.publishLog(ctx, "error", fmt.Sprintf("is05 PatchStaged failed: %v", err), receiverNode.ID)
 		return err
 	}
 
@@ -325,6 +356,9 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 		if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, fromSender, true); err != nil {
 			slog.Warn("is05 PatchSenderStaged failed (node may not implement a sender-side connection API)",
 				"sender", fromSender, "error", err)
+			s.publishLog(ctx, "warn",
+				fmt.Sprintf("is05 PatchSenderStaged failed (node may not implement a sender-side connection API): %v", err),
+				senderNode.ID)
 		}
 	}
 
@@ -337,6 +371,8 @@ func (s *Service) Connect(ctx context.Context, fromSender, toReceiver string) er
 // /api/v1/graph/edges/<id>. Schaltet (best-effort, siehe Connect) auch
 // den zuvor verbundenen Sender wieder ab.
 func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
+	// S. Connect-Kommentar zum selben tracing.Ensure-Aufruf.
+	ctx = tracing.Ensure(ctx)
 	views := s.nodes.List()
 
 	node, ok := findNodeByReceiver(views, receiverID)
@@ -353,6 +389,7 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 	}
 
 	if err := s.is05.PatchStaged(ctx, node.APIBaseURL, receiverID, nil, false); err != nil {
+		s.publishLog(ctx, "error", fmt.Sprintf("is05 PatchStaged (disconnect) failed: %v", err), node.ID)
 		return err
 	}
 
@@ -361,6 +398,9 @@ func (s *Service) Disconnect(ctx context.Context, receiverID string) error {
 			if err := s.is05.PatchSenderStaged(ctx, senderNode.APIBaseURL, previousSenderID, false); err != nil {
 				slog.Warn("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API)",
 					"sender", previousSenderID, "error", err)
+				s.publishLog(ctx, "warn",
+					fmt.Sprintf("is05 PatchSenderStaged failed on disconnect (node may not implement a sender-side connection API): %v", err),
+					senderNode.ID)
 			}
 		}
 	}
