@@ -24211,3 +24211,96 @@ für später vorgemerkt, nicht Teil dieses Fixes.
 
 **Dateien:** `nodes/omp-video-mixer-me/src/pipeline.rs`,
 `nodes/omp-video-mixer-me/src/main.rs`.
+
+## 2026-09-13 (Nachtrag 223) — D21: AMWA IS-08 auf `omp-2110-gateway` — erst Audio-Ingest/-Output nachgerüstet (Nutzerauftrag "fang mit omp-2110-gateway an")
+
+**Ausgangslage geklärt, bevor implementiert wurde:** `omp-2110-gateway`
+war seit Nachtrag 46 explizit "Video-only... Audio-Ingest/-Output folgt
+als eigener Schritt, sobald ein konkreter Bedarf für synchronisierten
+Video+Audio-Gateway-Betrieb besteht" — IS-08 braucht aber einen echten
+Audio-Signalweg, um Kanäle darauf umzurouten. Per `AskUserQuestion`
+bestätigt: erst den Audio-Signalweg nachrüsten (wiederverwendet
+`omp-mediaio::st2110::{St2110AudioInput, St2110AudioOutput}`, bereits
+von `omp-aes67-gateway` genutzt — kein neuer C++/GStreamer-Code nötig),
+dann IS-08 obendrauf — dieselbe Reihenfolge wie D17/D18.
+
+**Architekturentscheidung, je Richtung bewusst unterschiedlich
+gekoppelt** (`pipeline.rs`-Moduldoku):
+- **Ingest:** Video- und Audio-Zweig teilen sich EIN `gst::Pipeline`-
+  Objekt (wie `omp-decklink::pipeline::run_ingest`s Video+Audio-
+  Branches) — beide sind "einmal konfiguriert, dauerhaft aktiv", ein
+  gemeinsamer PTP-Clock-Apply auf dieselbe Pipeline ist ohnehin die
+  korrekte Semantik für "synchronisiert".
+- **Output:** Video (unverändert) und Audio (neu) bleiben ZWEI
+  unabhängige `gst::Pipeline`-Objekte mit eigenem Connect/Disconnect-
+  Lebenszyklus (wie `omp-aes67-gateway::pipeline::run_source`) —
+  bewusst NICHT `omp-decklink`s "Video als Anker-Verbindung"-Modell
+  übernommen: eine einzelne SDI-Ausgangskarte kann physisch nicht "nur
+  Ton, kein Bild" senden, ein ST2110-Netzwerkausgang aber schon (echtes,
+  eigenständiges Deployment-Szenario, z. B. ein reiner Audio-Embedder/
+  -De-Embedder) — "Video als Anker" hätte hier eine Hardware-
+  Beschränkung erfunden, die es nicht gibt.
+
+**Konfiguration:** exakt dasselbe Zwei-Wege-Muster wie Video
+(`OMP_2110_GATEWAY_AUDIO_SDP`/`_AUDIO_SDP_FILE` vor den einzelnen
+`OMP_2110_GATEWAY_AUDIO_*`-Vars), bewusst OHNE SAP (anders als
+`omp-aes67-gateway` — reines ST2110, keine Dante-/AES67-Discovery-
+Erwartung). `sdp.rs` bekam `parse_audio_sdp`/`ParsedAudioSdp` 1:1 nach
+dem Vorbild von `omp-aes67-gateway::sdp` (identisches
+`a=rtpmap:96 L24/<rate>/<channels>`-Feldformat, ST2110-30 und AES67
+teilen sich diese Konvention).
+
+**IS-08:** `identity_matrix_value`/`matrix_value_from_map`/
+`build_channel_matrix`-Trio 1:1 aus `omp-aes67-gateway::pipeline`
+übernommen (bewusst dupliziert, jeder Gateway-Node bleibt ein
+unabhängiges Binary, gleiches Prinzip wie schon bei `is_multicast`).
+Ingest registriert "2110-audio-in"/"mxl-audio-out" (kein NMOS-Receiver
+für den reinen Netzwerk-Empfang, `parent` null/null — identisches
+Muster zu `omp-decklink`s "sdi-in"), Output "mxl-audio-in"
+(`parent` = echter Audio-Receiver) /"2110-audio-out" (`source_id: None`
+— physischer Netzwerk-Ausgang, keine NMOS-Ressource).
+
+**BCP-008 (D21-Erweiterung, kein neuer Monitor):** beide Richtungen
+behalten EINEN gemeinsamen Monitor für Video+Audio (`omp-decklink`s
+bereits etabliertes "ein Monitor pro Richtung"-Muster, spec-genauer
+wäre ein zweiter Monitor pro NMOS-Ressource, aber Konsistenz mit D18
+gewählt) — Ingest verknüpft `content` jetzt per UND (beide Essenzen
+müssen fließen) und summiert Verlust-/Verspätungszähler für `activity`;
+Output rührt `activate()`/`deactivate()` weiterhin NUR von Video her
+(Audio bleibt additiv, ein reines Video-Setup ohne je verbundenes Audio
+wird nicht fälschlich als "Audio fehlt" degradiert — geprüft über
+`connected_audio_flow_id`).
+
+**Live Ende-zu-Ende gegen echten ST2110/RTP-Traffic verifiziert** (zwei
+eigenständige Testinstanzen, echte Registry/NATS, kein Mock): `gst-
+launch-1.0` sendete echtes `audiotestsrc`-Sinus-Signal per `rtpL24pay`
+an den Ingest-Audio-Port — `mxl-info` bestätigte einen wachsenden
+Head-Index auf dem neuen MXL-Audio-Flow; ein zusätzlich gesendeter
+`videotestsrc`-Strom (`rtpvrawpay`, YCbCr-4:2:2) ließ `monitor.
+overallStatus` nachweislich erst NACH beiden Essenzen von Unhealthy auf
+Healthy kippen (`streamStatusMessage` zeigte die erwartete UND-Logik).
+IS-08 auf der Ingest-Seite: `GET /x-nmos/channelmapping/v1.0/io` zeigte
+die korrekten Input-/Output-Definitionen, ein echter
+`POST .../map/activations/` (Kanaltausch 0↔1) wurde übernommen und war
+per `GET .../map/active/` abfragbar. Output-Seite: echte IS-05-PATCH
+auf den neu registrierten Audio-Receiver (`/x-nmos/connection/v1.2/
+single/receivers/{id}/staged`, `sender_id` = die reale, von der Ingest-
+Instanz über die echte NMOS-Registry aufgelöste Audio-Sender-ID) verband
+eine echte MXL-Quelle — ein per `select()`-basiertem Rohsocket-Probe
+gezähltes reales UDP/RTP-Aufkommen (4981 Pakete/5s, konsistent mit
+L24-`ptime:1ms`) bestätigte tatsächlich ausgehenden 2110-30-Traffic,
+IS-08-Aktivierung auf dieser Seite ebenso per echtem
+Aktivierungs-Roundtrip bestätigt. `cargo build --workspace --bins`,
+`cargo test -p omp-2110-gateway`, `cargo clippy -p omp-2110-gateway -D
+warnings` sauber. Alle Testprozesse/-Streams danach beendet,
+verwaiste MXL-Test-Flows per `mxl-info -g` eingesammelt.
+
+**Bewusst nicht Teil dieser Runde:** zeitgesteuerte IS-08-Aktivierung
+(gleiche Scope-Grenze wie D17/D18); ein zweiter, ressourcengenauer
+BCP-008-Monitor pro Essenz statt des einen kombinierten (s. o.);
+tatsächliche Multicast-SAP-Discovery für Audio (bewusst nicht wie
+`omp-aes67-gateway`, reines ST2110 hat keine SAP-Erwartung).
+
+**Dateien:** `nodes/omp-2110-gateway/src/pipeline.rs`,
+`nodes/omp-2110-gateway/src/main.rs`, `nodes/omp-2110-gateway/src/sdp.rs`,
+`ARCHITECTURE.md`.
