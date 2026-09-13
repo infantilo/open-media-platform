@@ -248,6 +248,16 @@ impl Default for DveBox {
 
 pub enum Event {
     Error(String),
+    /// Positives Gegenstück zu `Error` für den Missing-Input-Retry
+    /// (Nachtrag 2026-09-13, Root-Cause-Session "mixer recovery bug"):
+    /// der Retry-Erfolg selbst wurde bisher NIRGENDS geloggt — nur der
+    /// letzte Fehlschlag blieb für den Rest der Pipeline-Lebensdauer als
+    /// letzte Zeile im rohen stdout-Log stehen (BCP-008-Status im
+    /// Diagnose-Cockpit räumt korrekt auf, s. `report_missing_inputs`,
+    /// aber ein Operator, der nur `docker logs`/rohes stdout beobachtet,
+    /// hielt die Pipeline deshalb für dauerhaft hängen, obwohl PGM längst
+    /// wieder lief — live per `mxl-info` widerlegt, s. `docs/decisions.md`).
+    Info(String),
     /// Programm hat wirklich umgeschaltet (nach `cut()` sofort, nach
     /// `autoTrans()` bei Transitionsbeginn — Tally soll im selben Moment
     /// rot werden, in dem der Operator die Aktion auslöst, nicht erst
@@ -2113,11 +2123,29 @@ pub fn run(
                                 let _ = tx.send(Event::Error(w));
                             }
                             reapply_all_levels(&p, &mut program, &dve_box, &keyer_enabled, &pip_enabled, &tx);
-                            missing_inputs = p
+                            let still_missing = p
                                 .levels
                                 .first()
                                 .map(|l| missing_input_ids(&current_inputs, &l.source_pads_fg))
                                 .unwrap_or_default();
+                            // s. `Event::Info`-Doku: der Gegenpart zur
+                            // "übersprungen"-Warnung fehlte bisher komplett
+                            // — ohne dies sah ein auf rohes stdout
+                            // schauender Operator nach einem erfolgreichen
+                            // Retry nie einen Hinweis, dass der Eingang
+                            // wieder lebt (letzte Log-Zeile blieb für den
+                            // Rest der Pipeline-Lebensdauer der Fehler).
+                            for id in &missing_inputs {
+                                if !still_missing.contains(id) {
+                                    if let Some(input) = current_inputs.iter().find(|i| &i.sender_id == id) {
+                                        let _ = tx.send(Event::Info(format!(
+                                            "input {} ({}) wieder verfügbar (Flow jetzt lesbar)",
+                                            input.sender_id, input.label
+                                        )));
+                                    }
+                                }
+                            }
+                            missing_inputs = still_missing;
                             report_missing_inputs(&monitor, &missing_inputs);
                             update_flowed(&flowed_slot, &p);
                             active = Some(p);

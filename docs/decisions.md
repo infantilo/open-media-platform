@@ -24106,3 +24106,108 @@ D19); node-seitige Log-Emission weiterhin offen.
 **Dateien:** `ui/shell/admin-view.ts`, `ui/shell/app-shell.ts`,
 `ui/graph/flow-canvas.ts`, `ui/dist/shell.js` (neu gebaut),
 `ARCHITECTURE.md`.
+
+## 2026-09-13 (Nachtrag 222) — Mixer-Recovery-Bug root-caused: kein Logik-Bug, sondern fehlendes Recovery-Log (Nutzerauftrag "mixer recovery bug jetzt angehen")
+
+**Ausgangslage:** `feedback_mixer_recovery_unreproducible_2026_09_11.md`
+(Nachtrag 212) hatte den in Nachtrag 206 behaupteten "Mixer erholt sich
+automatisch"-Fix widersprochen — 3 saubere Standalone-Tests sahen den
+Mixer nach 75+s dauerhaft bei "Flow not found" hängen. Auftrag dieser
+Sitzung: den Widerspruch am ECHTEN Orchestrator (nicht an isolierten
+Testprogrammen) auflösen.
+
+**Reproduktion am echten "Playout"-Workflow:** `Kanal-Player A`/`B`
+gezielt per `DELETE /api/v1/instances/{id}` +
+`POST /workflows/{id}/roles/{role}/restart` + `POST .../methods/load`
+neu gestartet, während der Mixer durchgehend lief — genau das laut
+Nachtrag-212-Notiz fehlende Szenario ("the one candidate I haven't
+controlled for"). Ergebnis bestätigte den Widerspruch zunächst: das
+rohe stdout-Log zeigte über Minuten hinweg ausschließlich
+"Flow not found" für exakt die Sender-IDs der neu gestarteten Player,
+obwohl `mxl-info -f <flow>` und ein direktes `cat flow_def.json`
+denselben Flow durchgehend als vorhanden bestätigten.
+
+**Root-Cause-Suche, Sackgassen zuerst ausgeschlossen** (Belege statt
+Vermutung, `UMSETZUNG.md` §0 Punkt 9):
+- Keine Caching-Schicht irgendwo im Pfad — weder in
+  `omp-mediaio::MxlContext`/`MxlVideoInput` (Rust) noch in
+  `FlowManager::getFlowDef()` (C++, frischer `ifstream`-Open pro
+  Aufruf) noch im `mxlGetFlowDef`-C-API-Wrapper (`flow.cpp`): einzige
+  Fehlerquelle für `MXL_ERR_FLOW_NOT_FOUND` ist ein `ENOENT` aus genau
+  diesem `ifstream`/`exists()`-Check, kein State dazwischen.
+- `/proc/<mixer-pid>/fd` zeigte während einer laufenden
+  "Flow not found"-Phase bereits VOLLSTÄNDIG geöffnete Reader-FDs
+  (`data`, `grains/data.0-4`, `access`) für genau den angeblich
+  fehlenden Flow — der Build war also längst intern erfolgreich, nur
+  ohne jede Erfolgsmeldung im Log.
+- `strace` (frisch installiert, `ptrace_scope` erzwang `sudo`) auf den
+  echten Mixer-Prozess während einer kontrollierten Reproduktion
+  (`Kanal-Player A` gezielt neu gestartet, `strace` VOR `load()`
+  gestartet) zeigte den tatsächlichen Mechanismus glasklar: genau EIN
+  `openat(...flow_def.json...) = -1 ENOENT` (Flow existierte zu dem
+  Zeitpunkt tatsächlich noch nicht — `load()` legt ihn erst an), danach
+  **ein einziger weiterer Versuch ~3,6s später, der sofort erfolgreich
+  war** (`open = 22`, gefolgt vom vollständigen Aufbau aller
+  Grain-/Access-FDs). Kein Retry-Sturm, keine wiederholten
+  Fehlschläge gegen einen längst existierenden Flow.
+
+**Tatsächliche Root Cause:** Der Retry-Mechanismus selbst (Nachtrag
+206) funktioniert korrekt und zügig. Der scheinbare "hängt dauerhaft"-
+Befund in Nachtrag 212 UND am Anfang dieser Sitzung entstand aus zwei
+unabhängigen Beobachtungslücken, nicht aus einem Logikfehler:
+1. **Erfolg wurde nie geloggt** — nur der Fehlschlag-Zweig
+   (`build_one_input` → `warnings` → `Event::Error`) schreibt eine
+   Log-Zeile; der Erfolgs-Zweig aktualisierte zwar korrekt
+   `missing_inputs` und darüber den BCP-008-Status (`monitor.activity`
+   räumt sich via `report_missing_inputs` bereits richtig auf — das
+   Diagnose-Cockpit aus Nachtrag 220/221 zeigte vermutlich schon die
+   ganze Zeit korrekt "Healthy"), aber die letzte Zeile im rohen
+   stdout-Log blieb für den Rest der Prozesslaufzeit der alte Fehler
+   stehen. Ein auf rohes Log schauender Mensch (Standalone-Test-Skript
+   ODER ich am Sitzungsanfang) hält das fälschlich für "hängt".
+2. **Variable, teils lange Recovery-Latenz** durch die Schreiber-Seite:
+   `omp-channel-player` legt seinen MXL-Output-Flow erst beim ersten
+   `load()` an (bereits in Nachtrag 206 dokumentiert) — WIE LANGE das
+   nach einem Workflow-Kaltstart dauert, hängt von CPU-Kontention durch
+   konkurrierende GStreamer-Debug-Builds ab (in einem frühen Test
+   dieser Sitzung, direkt nach einem kompletten Workflow-Neustart mit
+   beiden Playern gleichzeitig kaltstartend, dauerte es geschätzt
+   40-150s bis zum ersten erfolgreichen Read; im strace-verifizierten
+   Einzel-Rollen-Neustart-Test waren es nur ~3,6s). Kein Bug im Mixer,
+   sondern echte Startlatenz der Schreiber-Seite unter Last — 75s
+   Wartezeit in den Standalone-Tests aus Nachtrag 212 war schlicht zu
+   kurz für den ungünstigen Fall.
+
+**Fix (gezielt, kein Logik-Umbau):** neue `pipeline::Event::Info`-
+Variante als positives Gegenstück zu `Event::Error`, in `main.rs` als
+`"omp-video-mixer-me: pipeline info: …"` (statt `pipeline error:`)
+geloggt und ebenfalls über `handle.publish_alert()` an den zentralen
+Log-Kanal (Nachtrag 220) durchgereicht. Im Retry-Erfolgszweig der
+Hauptschleife (`pipeline.rs`, Timeout-Arm) wird jetzt vor dem
+Überschreiben von `missing_inputs` die Differenz zur neu berechneten
+Menge gebildet — für jede ID, die vorher fehlte und jetzt einen Pad
+hat, eine `Event::Info("input {sender_id} ({label}) wieder verfügbar
+(Flow jetzt lesbar)")`-Zeile gesendet.
+
+**Live verifiziert am echten Orchestrator:** nach dem Fix `Kanal-Player
+A`-Instanz erneut gelöscht + Rolle neu gestartet + `load()` — Log zeigt
+jetzt exakt eine `"Flow not found"`-Warnung gefolgt von der neuen
+`"input … wieder verfügbar (Flow jetzt lesbar)"`-Info-Zeile, danach
+Ruhe; `mxl-info -l` bestätigt den Mixer-PGM-Ausgang weiterhin aktiv
+(Head-Index wächst mit 25fps). Kein Logikfehler mehr offen — Nachtrag
+212 ist damit geschlossen (Ursache war Beobachtungslücke, nicht der in
+Nachtrag 206 gebaute Mechanismus).
+
+**Bewusst nicht Teil dieser Runde:** die variable Schreiber-seitige
+Startlatenz selbst (40-150s im ungünstigen Fall) ist reine
+Debug-Build-/CPU-Kontentions-Charakteristik dieser Entwicklungsumgebung,
+kein Produktionsverhalten, das sich lohnt, künstlich zu optimieren; der
+gefundene FD-Leak (`_1c3ff7df.../access` u. a. blieben nach jedem
+Voll-Rebuild als "(deleted)"-FDs offen — je 4 pro Zyklus, ~187
+akkumuliert über eine der langen Reproduktionen) ist real, aber ein
+separates Ressourcen-Hygiene-Thema (harmlos innerhalb der
+Prozesslaufzeit, tmpfs wird beim nächsten Neustart ohnehin geräumt) —
+für später vorgemerkt, nicht Teil dieses Fixes.
+
+**Dateien:** `nodes/omp-video-mixer-me/src/pipeline.rs`,
+`nodes/omp-video-mixer-me/src/main.rs`.

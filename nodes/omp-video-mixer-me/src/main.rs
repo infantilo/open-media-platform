@@ -1244,6 +1244,10 @@ async fn handle_events(
                 eprintln!("omp-video-mixer-me: pipeline error: {message}");
                 handle.publish_alert(message).await;
             }
+            pipeline::Event::Info(message) => {
+                println!("omp-video-mixer-me: pipeline info: {message}");
+                handle.publish_alert(message).await;
+            }
             pipeline::Event::ProgramChanged { level, previous, current } => {
                 let Some(program_l) = program.get(level) else { continue };
                 *program_l.lock().expect("lock poisoned") = current.clone();
