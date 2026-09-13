@@ -198,8 +198,10 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   workflow's declared output-delay compensation (see Status)
 - **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
   AES67 audio gateways for inter-site contribution with foreign
-  equipment; `omp-aes67-gateway` also exposes AMWA NMOS IS-08 (Audio
-  Channel Mapping) so an external controller can re-route/mute its
+  equipment; `omp-2110-gateway` also carries an independent ST 2110-30
+  audio ingest/output path alongside its video (its own MXL flow, own
+  NMOS sender/receiver), and both nodes expose AMWA NMOS IS-08 (Audio
+  Channel Mapping) so an external controller can re-route/mute their
   channels live, not just view them
 - **omp-srt-gateway** — ST 2110 ⇄ SRT gateway for contribution over
   lossy WANs
@@ -223,6 +225,16 @@ node has to satisfy.
 
 **Reliability & operations**
 
+- Centralized observability: every IS-05 connect/disconnect and every
+  request through the generic node proxy carries a trace ID (returned
+  as an `X-OMP-Trace-Id` response header, success and failure alike),
+  logged into a single, Raft/JetStream-replicated log channel — no
+  per-host log-scraping across a multi-host deployment. A "Diagnose"
+  tab in the Flow Editor tails that log live (SSE, filterable by trace
+  ID/node/level), turns a failed connection's toast into a one-click
+  jump straight to its trace, and — on that same click — briefly
+  highlights every graph tile touched by that trace, so an operator
+  sees the blast radius of a failure, not just an error string.
 - Automatic process restart with a crash-loop brake; a metrics
   endpoint; an operations view with running instances (CPU/RAM per
   process), host resource history, and collected alarms.
@@ -390,6 +402,21 @@ knowing whether an input's flow is actually readable
 throughout (GStreamer jitterbuffer stats, PTP lock, DeckLink cable
 lock, SRT connection stats), exposed as generic `monitor.*` parameters
 on each node's self-description.
+
+Since D16, the NMOS Registry can run over AMWA BCP-003-01 transport TLS
+instead of plaintext HTTP (opt-in, `make nmos-registry-tls-up`, same
+model as orchestrator↔node mTLS). Since D17/D18/D21, AMWA NMOS IS-08
+(Audio Channel Mapping) is live on all three gateway/card nodes that
+carry an independent audio path (`omp-aes67-gateway`, `omp-decklink`'s
+embedded SDI audio, and `omp-2110-gateway`'s new ST 2110-30 audio
+ingest/output) — a real `audiomixmatrix` routed live via the standard
+`/x-nmos/channelmapping/v1.0/` API, not just a status readout. Since
+D19/D20, a centralized observability system ties it all together: a
+trace ID follows every IS-05 connect/disconnect and generic-proxy
+request end to end, landing in one replicated log channel instead of
+scattered per-process stdout, surfaced through a "Diagnose" tab in the
+Flow Editor with live tailing, trace pivoting, and a graph overlay that
+highlights every tile a failing trace actually touched.
 
 Open: RDMA hardware integration (`verbs`/EFA providers, pending
 hardware procurement), an NDI gateway, proprietary Dante (Dante in
