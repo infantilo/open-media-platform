@@ -322,6 +322,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 channel_count: group.channels,
                 media_type: "audio/float32".to_string(),
                 bit_depth: 32,
+                source_id: None,
             }),
             label: Some(format!("{label} {}", group.label)),
             ..Default::default()

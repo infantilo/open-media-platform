@@ -1685,6 +1685,26 @@ der sich Community-Beiträge orientieren, nicht die Umsetzung selbst.
 
 ### 13.2 Audiomischpult: dynamische Kanalzahl, Audio-Follow-Video über den bestehenden Tally-Bus
 
+**Status (2026-09-13, UMSETZUNG.md D17):** AMWA IS-08 (Audio Channel
+Mapping, s. Standard-Tabelle §2) umgesetzt — aber bewusst auf
+`omp-aes67-gateway` (§19.3c), nicht `omp-audio-mixer`: IS-08 modelliert
+eine reine 1:1-Routing-Matrix (jeder Output-Kanal bekommt höchstens
+EINEN Input-Kanal zugewiesen, kein gewichtetes Summieren), genau das
+Modell eines Gateways/einer Patchbay — nicht eines Mischpults, dessen
+Kernfunktion gerade das gewichtete Summieren mehrerer Kanäle ist (s.
+Begründung oben: "Aux-Sends brauchen gekoppelten ... Zugriff", nicht
+"genau ein Kanal pro Ausgang"). `omp-aes67-gateway` bekommt pro
+Richtung einen generischen `/x-nmos/channelmapping/v1.0/`-Endpunkt
+(`omp_node_sdk::channelmapping`, node-typ-unabhängig wiederverwendbar)
+und steuert eine echte `audiomixmatrix`-GStreamer-Matrix live
+(kein Pipeline-Rebuild, `g_object_set` während `PLAYING`) — ein externer
+IS-08-Controller kann also tatsächlich Kanäle vertauschen/stummschalten,
+nicht nur eine API vorspiegeln. Zeitgesteuerte Aktivierung
+(`activate_scheduled_*`) bewusst nicht Teil dieser Runde (gleiche
+Scope-Grenze wie die IS-05-Connection-API des Rust-SDK, die ebenfalls
+nur sofortige Aktivierung kennt). `omp-audio-mixer` bleibt ohne IS-08 —
+kein Rückschritt, das Modell passt dort schlicht nicht.
+
 **Entschieden:** Analog zu 13.1 ein Node/Microservice pro Konsolen-Instanz,
 aus demselben Grund (Aux-Sends brauchen gekoppelten Post-Fader-Zugriff auf
 alle Kanalzüge gleichzeitig, EQ/Dynamik-Kette ist pro Kanal ein

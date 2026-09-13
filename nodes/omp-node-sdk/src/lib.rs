@@ -8,6 +8,7 @@
 //! minimale Nutzung.
 
 pub mod bcp008;
+pub mod channelmapping;
 pub mod connection;
 pub mod descriptor;
 pub mod health;

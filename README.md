@@ -1,6 +1,6 @@
 # OpenMediaPlatform
 
-[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
 
 > **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
 > discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
@@ -196,7 +196,9 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   workflow's declared output-delay compensation (see Status)
 - **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
   AES67 audio gateways for inter-site contribution with foreign
-  equipment
+  equipment; `omp-aes67-gateway` also exposes AMWA NMOS IS-08 (Audio
+  Channel Mapping) so an external controller can re-route/mute its
+  channels live, not just view them
 - **omp-srt-gateway** — ST 2110 ⇄ SRT gateway for contribution over
   lossy WANs
 - **omp-fabrics-gateway** — **remote memory access between hosts**:

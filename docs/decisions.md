@@ -23628,3 +23628,140 @@ Kanal-Mapping, laut Nutzerpriorisierung eigene Folgesitzung).
 `orchestrator/internal/config/config_test.go`, `orchestrator/main.go`,
 `deploy/nmos/registry-tls.json` (neu), `Makefile`, `ARCHITECTURE.md`,
 `README.md`.
+
+## 2026-09-13 (Nachtrag 217) — AMWA IS-08: Audio Channel Mapping auf `omp-aes67-gateway` (Nutzerauftrag "fang mit IS-08 an", direkte Fortsetzung von Nachtrag 216)
+
+**Kontext:** Zweiter Teil derselben externen API/Protokoll-Analyse
+(Nachtrag 216) — IS-08 (Audio-Kanal-Mapping) wurde für
+`omp-audio-mixer`/AES67-Gateways als fehlend benannt. Vor der Umsetzung
+per Architektur-Lektüre geklärt, WELCHER Node tatsächlich passt:
+`ARCHITECTURE.md` §13.2 legt für `omp-audio-mixer` explizit gekoppelten,
+gewichteten Mehrkanal-Zugriff fest (Aux-Sends, EQ/Dynamik) — IS-08
+modelliert dagegen laut Spec (`AMWA-TV/is-08`, Branch `v1.0.x`,
+`docs/Overview.html`: "Where a given Input is routable to a given
+Output, it MUST be possible to route any of the Input's channels to any
+channel of the Output") eine reine 1:1-Routing-Matrix, kein gewichtetes
+Summieren — genau das Modell von `omp-aes67-gateway` (AES67 ⇄ MXL,
+bisher fester Kanal-Durchreich-Pfad ohne jede Umsortierungsmöglichkeit),
+nicht des Mischpults. `omp-audio-mixer` bewusst NICHT angefasst.
+
+**Recherche vor der Umsetzung (§0 Punkt 6, nicht geraten):**
+`AMWA-TV/is-08` (`v1.0.x`) komplett gelesen — `APIs/
+ChannelMappingAPI.raml` (alle Endpunkt-Pfade), alle `APIs/schemas/
+*.json`, mehrere reale `examples/*.json`. Dabei einen echten
+Schema-Fehler in der Spec selbst gefunden: `map-activations-post-
+request-schema.json` nennt das Aktionsfeld `"action:"` (mit
+Doppelpunkt) statt `"action"` — jedes einzelne reale Beispiel
+(`examples/map/map-activations-post.json` u. a.) verwendet durchgehend
+`"action"` ohne Doppelpunkt. Umsetzung folgt den Beispielen, nicht dem
+kaputten Schema (dieselbe Lektion wie bei den AMWA-IS-05-Pitfalls,
+D11: am echten Beispiel/Testcode verifizieren, nicht an der Dokument-
+Prosa). Für die tatsächliche `audiomixmatrix`-GStreamer-Umsetzung
+zusätzlich `gst-inspect-1.0 audiomixmatrix` (Version 1.22.0, bereits
+auf der Dev-Maschine installiert, `gst-plugins-bad`) und den
+`gstreamer-rs`-Quellcode (`~/.cargo/registry`, Version 0.25.3,
+`gst::Array`) gelesen statt eine API-Form zu raten.
+
+**Umsetzung, zwei Teile:**
+
+1. **Neues generisches SDK-Modul `omp_node_sdk::channelmapping`**
+   (`nodes/omp-node-sdk/src/channelmapping.rs`, kennt kein HTTP — der
+   Node verdrahtet `handle()`/`cors_methods()` selbst über
+   `ParamStore::extra_route`/`extra_options`, exakt dasselbe Muster wie
+   das bestehende `crate::connection` für IS-05). Vollständige
+   `/x-nmos/channelmapping/v1.0/`-Baumstruktur (`inputs/`, `outputs/`,
+   `map/active[/​{outputId}]`, `map/activations[/{id}]`, `io`) gegen
+   die echten AMWA-Schemas/Beispiele gebaut, inkl. Validierung vor
+   Anwendung (unbekannter Input/Output, Kanalindex außerhalb des
+   Bereichs, nicht routbarer Input → 400, nichts wird teilweise
+   angewendet). Neuer `ChannelMapApply`-Trait (Pendant zu
+   `connection::ReceiverControl`) benachrichtigt den Node bei jeder
+   tatsächlichen Aktivierung. **Bewusst nicht Teil dieser Runde:**
+   zeitgesteuerte Aktivierung (`activate_scheduled_absolute/relative`)
+   — liefert sauber benannte 400-Fehler statt sie stillschweigend zu
+   ignorieren; dieselbe Scope-Grenze trägt bereits die IS-05-Connection-
+   API des Rust-SDK (`connection::Activation` kennt ebenfalls nur
+   `mode`/`requested_time`, keinen echten Scheduler — nur der Go-Mock-
+   Node hat seit D11 einen echten TAI-Timer). 10 neue Unit-Tests
+   (Identitäts-Default, Aktivierung, Ablehnungsfälle, CORS, `io`-Form).
+   Zwei kleine additive SDK-Erweiterungen dafür: `node::FlowSpec::Audio`
+   bekommt ein neues `source_id: Option<String>`-Feld (Henne-Ei-Problem
+   wie bei `SenderSpec::id` — die IS-08-`OutputSpec::source_id` MUSS
+   mit der tatsächlich registrierten Source-UUID übereinstimmen, `docs/
+   Interoperability - NMOS IS-04.md`; alle 8 bestehenden Aufrufstellen
+   in anderen Node-Crates um `source_id: None` ergänzt, unverändertes
+   Verhalten); `NodeHandle::add_device_control`/`NodeHandle.port` (neu)
+   — additiv wie `add_receiver`/`remove_receiver`, bewusst KEIN neues
+   `NodeConfig`-Feld (hätte alle ~24 `NodeConfig{...}`-Aufrufstellen
+   betroffen, obwohl nur ein einziger Node das braucht).
+
+2. **`omp-aes67-gateway`-Integration** (beide Richtungen). Pro Richtung
+   ein `audiomixmatrix`-Element (`gst-plugins-bad`, Matrix-Property live
+   während `PLAYING` änderbar) zwischen Input- und Output-Stufe
+   eingefügt (`build_channel_matrix`), Default = Diagonalmatrix
+   (unverändertes Durchreichen wie bisher). Sink (AES67→MXL): Input
+   "aes67-in" (kein IS-04-Receiver dafür registriert, `parent` null/
+   null wie im AMWA-Beispiel "Stereo Input 1"), Output "mxl-out"
+   (`source_id` = dieselbe UUID wie der tatsächlich registrierte
+   MXL-Sender, s. o.). Source (MXL→AES67): Input "mxl-in" (`parent` =
+   der echte IS-04-Receiver dieses Gateways), Output "aes67-out"
+   (`source_id: None` — der AES67-Netzwerk-Zielendpunkt ist keine
+   NMOS-Ressource, s. Spec: "or consumed elsewhere"). Echter, live
+   gefundener Zusatzfall bei der Source-Richtung: die Pipeline wird bei
+   JEDEM IS-05-Connect/Disconnect neu gebaut (bestehendes Verhalten) —
+   ohne Gegenmaßnahme hätte ein Reconnect nach einer IS-08-Aktivierung
+   die Map stillschweigend auf die Identität zurückgesetzt. Behoben
+   durch eine geteilte `desired_map`-Zelle (`Arc<Mutex<...>>`, gleiches
+   Muster wie das bereits bestehende `ptp_synced` für dieselbe
+   Rebuild-Problematik), die `build_source` bei jedem (Re-)Aufbau
+   zuerst liest, statt hart die Identität anzunehmen. `Device.controls`
+   kündigt `urn:x-nmos:control:cm-ctrl/v1.0` mit der ECHTEN Port-Adresse
+   an (`NodeHandle.port`, wichtig für den Instanz-Launcher-Fall mit
+   `NodeConfig::port == 0`).
+
+**Live verifiziert (nicht nur Unit-Tests):** `cargo build/clippy -D
+warnings/test` über das GESAMTE Rust-Workspace (alle 25 Node-Crates)
+grün — bestätigt, dass die additiven SDK-Änderungen (`FlowSpec::Audio`,
+`NodeHandle`) keinen der anderen 23 Node-Typen gebrochen haben. Eine
+eigens dafür geschriebene, eigenständige `gstreamer-rs`-Wegwerf-Probe
+(kein OMP-Code, danach gelöscht) hat den GENAU von `pipeline.rs`
+verwendeten Mechanismus gegen eine echte, laufende GStreamer-Pipeline
+bestätigt: zwei `audiotestsrc`s (Kanal 0 = 1000-Hz-Sinus, Kanal 1 =
+Stille) durch eine `audiomixmatrix` mit Identitätsmatrix, `level`
+misst Kanal 0 laut (-1,9 dB) und Kanal 1 still (-350 dB); nach einem
+`set_property("matrix", …)`-Aufruf WÄHREND `PLAYING` (exakt der in
+`SinkHandle::set_channel_map`/`SourcePipelineHandle::set_channel_map`
+verwendete Aufruf) tauschen die gemessenen Pegel tatsächlich die Seite
+(Kanal 0 still, Kanal 1 laut) — kein Pipeline-Neuaufbau nötig, die
+Kernannahme des gesamten Ansatzes damit real bestätigt statt nur
+kompiliert. Ein `openssl`/`gst-inspect-1.0 audiomixmatrix`-Check
+bestätigte vorab Property-Namen/-Typen. Ein Nebenbefund beim
+Voll-Workspace-Testlauf (`omp-mediaio::mxl::tests::*` 5 Fehlschläge)
+als Umgebungsartefakt identifiziert und widerlegt: `libmxl.so` fehlte
+im `LD_LIBRARY_PATH` dieser Shell (`deploy/dev/mxl.env` nicht
+gesourct) — nach `source deploy/dev/mxl.env` liefen alle 15 Tests
+fehlerfrei; `git diff` bestätigt zusätzlich, dass `omp-mediaio` von
+diesem Schritt gar nicht berührt wurde. **Bewusst nicht live
+gefahren:** ein vollständiger Ende-zu-Ende-Lauf des echten
+`omp-aes67-gateway`-Binaries gegen eine echte Registry/NATS mit
+synthetischem AES67-Sender (hätte zusätzliche Infrastruktur gebraucht,
+die GStreamer-Kernmechanik selbst — die einzige echte technische
+Unsicherheit dieses Schritts — ist damit trotzdem real, nicht nur
+kompiliert, verifiziert). `ARCHITECTURE.md` §13.2 um den neuen Status
+ergänzt (inkl. expliziter Abgrenzung, warum `omp-audio-mixer` bewusst
+NICHT angefasst wurde).
+
+**Bewusst nicht Teil dieser Runde:** zeitgesteuerte IS-08-Aktivierung
+(s. o.), IS-08 auf weiteren Kandidaten-Nodes (`omp-decklink`-Audio-
+Embed/De-Embed, `omp-2110-gateway`, jeweils eigene künftige Schritte),
+`omp-audio-mixer` (architektonisch bewusst ausgenommen, kein
+Rückschritt).
+
+**Dateien:** `nodes/omp-node-sdk/src/channelmapping.rs` (neu),
+`nodes/omp-node-sdk/src/lib.rs`, `nodes/omp-node-sdk/src/node.rs`,
+`nodes/omp-aes67-gateway/src/main.rs`,
+`nodes/omp-aes67-gateway/src/pipeline.rs`, acht weitere Node-Crates
+(`source_id: None`-Ergänzung an bestehenden `FlowSpec::Audio`-Stellen:
+`omp-audio-mixer`, `omp-channel-player`, `omp-decklink`, `omp-mxf-
+player`, `omp-mxf-player-direct`, `omp-pipeline-controller`,
+`omp-source`), `ARCHITECTURE.md`.

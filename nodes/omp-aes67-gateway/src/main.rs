@@ -25,10 +25,14 @@ mod pipeline;
 mod sap;
 mod sdp;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use omp_node_sdk::channelmapping::{
+    Channel, ChannelMapApply, ChannelMapping, InputSpec, MapEntry, OutputSpec, CONTROL_TYPE as CM_CONTROL_TYPE,
+};
 use omp_node_sdk::connection::{
     bulk_cors_methods, bulk_discovery, bulk_patch, list_ids, root_discovery, ReceiverConnection,
     ReceiverControl, ReceiverResource,
@@ -40,6 +44,31 @@ use omp_node_sdk::{
 };
 use pipeline::{SinkConfig, SourceConfig};
 use serde_json::Value;
+
+/// Generische Kanal-Labels für IS-08-Inputs/Outputs (`UMSETZUNG.md`
+/// D17) — bewusst dieselbe "Channel N"-Konvention wie
+/// `is04::Source::new_audio` (nicht von dort importiert: unabhängige,
+/// kleine Formatierung, kein Grund für eine Modul-Kopplung nur dafür).
+fn generic_channels(count: i32) -> Vec<Channel> {
+    (1..=count.max(1)).map(|n| Channel { label: format!("Channel {n}") }).collect()
+}
+
+/// NMOS IS-08 (`UMSETZUNG.md` D17) — steuert `audiomixmatrix` in der
+/// Sink-Pipeline (AES67 → MXL) live neu.
+struct SinkMatrixApply(Arc<pipeline::SinkHandle>);
+impl ChannelMapApply for SinkMatrixApply {
+    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
+        self.0.set_channel_map(map);
+    }
+}
+
+/// S. `SinkMatrixApply`-Doku — Source-Pipeline-Pendant (MXL → AES67).
+struct SourceMatrixApply(pipeline::SourcePipelineHandle);
+impl ChannelMapApply for SourceMatrixApply {
+    fn apply(&self, _output_id: &str, map: &BTreeMap<u32, MapEntry>) {
+        self.0.set_channel_map(map.clone());
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -76,6 +105,8 @@ struct SinkStore {
     /// Audio-Pendant). Immer aktiv, `monitor.activate()` direkt nach
     /// Pipeline-Start.
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// AMWA IS-08 (`UMSETZUNG.md` D17).
+    channel_mapping: Arc<ChannelMapping<SinkMatrixApply>>,
 }
 
 impl ParamStore for SinkStore {
@@ -129,6 +160,16 @@ impl ParamStore for SinkStore {
             Err(InvokeError::Unknown)
         }
     }
+
+    fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<omp_node_sdk::RawResponse> {
+        self.channel_mapping
+            .handle(method, path, body)
+            .map(|(status, content_type, body)| omp_node_sdk::RawResponse { status, content_type, body })
+    }
+
+    fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        self.channel_mapping.cors_methods(path)
+    }
 }
 
 /// Setzt IS-05-PATCHes (Quellwahl) auf die Source-Pipeline um — gleiches
@@ -177,6 +218,8 @@ struct SourceStore {
     /// `SourceControl::apply`), nicht dem Prozess-Lebenszyklus (der
     /// SAP-Announcer läuft unabhängig davon weiter, s. Moduldoku).
     monitor: Arc<omp_node_sdk::Monitor>,
+    /// AMWA IS-08 (`UMSETZUNG.md` D17).
+    channel_mapping: Arc<ChannelMapping<SourceMatrixApply>>,
 }
 
 impl ParamStore for SourceStore {
@@ -236,6 +279,7 @@ impl ParamStore for SourceStore {
             })
             .or_else(|| bulk_patch(method, path, "senders", body, |_, _| None))
             .or_else(|| self.connection.handle(method, path, body))
+            .or_else(|| self.channel_mapping.handle(method, path, body))
             .map(to_raw)
     }
 
@@ -244,6 +288,7 @@ impl ParamStore for SourceStore {
             .cors_methods(path)
             .or_else(|| bulk_cors_methods(path, "senders"))
             .or_else(|| bulk_cors_methods(path, "receivers"))
+            .or_else(|| self.channel_mapping.cors_methods(path))
     }
 }
 
@@ -370,6 +415,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let SinkParams { listen_port, multicast_group, sample_rate, channels, discovered_via_sap } =
                 resolve_sink_params()?;
             let flow_id = omp_node_sdk::idgen::new_v4();
+            // Vorab generiert (statt `node.rs::start()` selbst eine
+            // UUID würfeln zu lassen), weil sowohl `FlowSpec::Audio`
+            // (unten) als auch `ChannelMapping`s `OutputSpec::source_id`
+            // dieselbe, tatsächlich registrierte Source-UUID brauchen
+            // (`UMSETZUNG.md` D17, `docs/Interoperability - NMOS
+            // IS-04.md`: "MUST match those used in a corresponding
+            // IS-04 implementation").
+            let audio_source_id = omp_node_sdk::idgen::new_v4();
+            let control_host = host.clone();
 
             let cfg = SinkConfig {
                 domain,
@@ -411,6 +465,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             monitor.activate();
             spawn_sink_monitor_tick(monitor.clone(), pipeline_handle.clone());
 
+            // AMWA IS-08 (`UMSETZUNG.md` D17): "aes67-in" bündelt die
+            // eingehenden AES67-Kanäle (kein IS-04-Receiver dafür
+            // registriert, s. `receivers: vec![]` unten — reiner
+            // Netzwerk-Zufluss, `parent` bleibt entsprechend null/null
+            // wie im AMWA-Beispiel für "Stereo Input 1"), "mxl-out"
+            // die des ausgehenden MXL-Senders (`source_id` = die oben
+            // vorab generierte Source-UUID).
+            let channel_mapping = Arc::new(ChannelMapping::new(
+                vec![InputSpec {
+                    id: "aes67-in".to_string(),
+                    name: "AES67 Input".to_string(),
+                    description: "Eingehender AES67/RTP-Multicast-Strom".to_string(),
+                    channels: generic_channels(channels),
+                    parent_id: None,
+                    parent_type: None,
+                    reordering: true,
+                    block_size: 1,
+                }],
+                vec![OutputSpec {
+                    id: "mxl-out".to_string(),
+                    name: "MXL Output".to_string(),
+                    description: "Ausgehender MXL-Flow".to_string(),
+                    channels: generic_channels(channels),
+                    source_id: Some(audio_source_id.clone()),
+                    routable_inputs: Some(vec![Some("aes67-in".to_string()), None]),
+                }],
+                SinkMatrixApply(pipeline_handle.clone()),
+            ));
+
             let store: Arc<dyn ParamStore> = Arc::new(SinkStore {
                 flow_id: flow_id.clone(),
                 listen_port,
@@ -419,6 +502,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ptp_domain,
                 pipeline: pipeline_handle,
                 monitor: monitor.clone(),
+                channel_mapping,
             });
 
             let handle = omp_node_sdk::start(
@@ -436,6 +520,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             channel_count: channels as u32,
                             media_type: "audio/float32".to_string(),
                             bit_depth: 32,
+                            source_id: Some(audio_source_id),
                         }),
                         ..Default::default()
                     }],
@@ -447,6 +532,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .await?;
 
+            // AMWA IS-08 (`UMSETZUNG.md` D17): kündigt die Channel-
+            // Mapping-API im IS-04-Device an (`docs/Interoperability -
+            // NMOS IS-04.md`) — erst jetzt möglich, weil `handle.port`
+            // erst nach dem tatsächlichen Binden feststeht (Launcher-
+            // Betrieb: `NodeConfig::port == 0`, s. `node.rs::start`-Doku).
+            if let Err(e) = handle
+                .add_device_control(serde_json::json!({
+                    "type": CM_CONTROL_TYPE,
+                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
+                }))
+                .await
+            {
+                eprintln!("omp-aes67-gateway: announcing channelmapping control failed: {e}");
+            }
+
             // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
             // Nachtrag 130/131).
             handle.register_worker("pipeline", pipeline_heartbeat);
@@ -454,6 +554,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             run_event_loop(handle, &mut events_rx, shutdown, pipeline_thread, None, monitor).await;
         }
         Direction::Source => {
+            let control_host = host.clone();
             let destination_host = env_or("OMP_AES67_GATEWAY_DEST_HOST", "239.5.5.6");
             let destination_port: u16 = env_or("OMP_AES67_GATEWAY_DEST_PORT", "6100").parse()?;
             let sample_rate: i32 = env_or("OMP_AES67_GATEWAY_SAMPLE_RATE", "48000").parse()?;
@@ -506,6 +607,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
             let media_ready_pipeline = pipeline_handle.clone();
             let ptp_pipeline = pipeline_handle.clone();
+            let channel_mapping_pipeline = pipeline_handle.clone();
             let receiver_id = omp_node_sdk::idgen::new_v4();
             let connected_flow_id = Arc::new(Mutex::new(String::new()));
             let monitor = Arc::new(omp_node_sdk::Monitor::new(omp_node_sdk::MonitorKind::Sender));
@@ -525,6 +627,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 },
             ));
 
+            // AMWA IS-08 (`UMSETZUNG.md` D17): "mxl-in" hängt am
+            // tatsächlich registrierten IS-04-Receiver (`parent`, s.
+            // `docs/Interoperability - NMOS IS-04.md`-Pflicht oben),
+            // "aes67-out" hat KEINE Source (`source_id: None` — der
+            // AES67-Zielendpunkt ist reiner Netzwerk-/"physischer"
+            // Ausgang, keine NMOS-Ressource, s. Moduldoku
+            // `channelmapping`: "or consumed elsewhere").
+            let channel_mapping = Arc::new(ChannelMapping::new(
+                vec![InputSpec {
+                    id: "mxl-in".to_string(),
+                    name: "MXL Input".to_string(),
+                    description: "Ausgewählte MXL-Quelle".to_string(),
+                    channels: generic_channels(channels),
+                    parent_id: Some(receiver_id.clone()),
+                    parent_type: Some("receiver"),
+                    reordering: true,
+                    block_size: 1,
+                }],
+                vec![OutputSpec {
+                    id: "aes67-out".to_string(),
+                    name: "AES67 Output".to_string(),
+                    description: "Ausgehender AES67/RTP-Multicast-Strom".to_string(),
+                    channels: generic_channels(channels),
+                    source_id: None,
+                    routable_inputs: Some(vec![Some("mxl-in".to_string()), None]),
+                }],
+                SourceMatrixApply(channel_mapping_pipeline),
+            ));
+
             let store: Arc<dyn ParamStore> = Arc::new(SourceStore {
                 destination_host,
                 destination_port,
@@ -533,6 +664,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 ptp_domain,
                 pipeline: ptp_pipeline,
                 monitor: monitor.clone(),
+                channel_mapping,
             });
 
             let handle = omp_node_sdk::start(
@@ -555,6 +687,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 store,
             )
             .await?;
+
+            // AMWA IS-08 (`UMSETZUNG.md` D17) — s. Sink-Zweig-Kommentar.
+            if let Err(e) = handle
+                .add_device_control(serde_json::json!({
+                    "type": CM_CONTROL_TYPE,
+                    "href": format!("http://{control_host}:{}/x-nmos/channelmapping/v1.0/", handle.port),
+                }))
+                .await
+            {
+                eprintln!("omp-aes67-gateway: announcing channelmapping control failed: {e}");
+            }
 
             // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
             // Nachtrag 130/131).

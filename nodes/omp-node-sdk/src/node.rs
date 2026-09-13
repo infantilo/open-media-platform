@@ -17,6 +17,8 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::Value;
+
 use crate::health;
 use crate::is04::{
     self, AudioFlow, Device, Flow, FlowResource, HeartbeatError, INSTANCE_TAG, NodeResource,
@@ -116,6 +118,15 @@ pub enum FlowSpec {
         channel_count: u32,
         media_type: String,
         bit_depth: u32,
+        /// Wie `id`, aber für die zugehörige IS-04-Source statt den Flow
+        /// (`UMSETZUNG.md` D17): ein Node, der die Source-UUID vorab
+        /// kennen muss (z. B. für `channelmapping::OutputSpec::
+        /// source_id`, das mit der tatsächlich registrierten Source
+        /// übereinstimmen MUSS, `docs/Interoperability - NMOS
+        /// IS-04.md`), gibt sie selbst vor statt sie generieren zu
+        /// lassen — gleiches Henne-Ei-Muster wie `SenderSpec::id`.
+        /// `None` verhält sich unverändert wie bisher (neue UUID).
+        source_id: Option<String>,
     },
 }
 
@@ -204,6 +215,13 @@ struct RegisteredReceivers {
 #[derive(Clone)]
 pub struct NodeHandle {
     pub node_id: String,
+    /// Der tatsächlich gebundene Port (`UMSETZUNG.md` D17) — bei
+    /// `NodeConfig::port == 0` (Instanz-Launcher, s. `start()`-Doku
+    /// unten) vom OS zugewiesen und daher erst NACH dem Binden bekannt.
+    /// Erste Nutzung: `omp-aes67-gateway` kündigt seine IS-08-Channel-
+    /// Mapping-API mit dem echten Port an (`add_device_control`), nicht
+    /// dem ggf. bedeutungslosen `NodeConfig::port` von 0.
+    pub port: u16,
     publisher: Option<Arc<health::Publisher>>,
     registry: RegistryClient,
     label: String,
@@ -381,6 +399,41 @@ impl NodeHandle {
 
         Ok(())
     }
+
+    /// Ergänzt das Device um einen weiteren `controls[]`-Eintrag **nach**
+    /// `start()` (`UMSETZUNG.md` D17, erste Nutzung: `omp-aes67-gateway`
+    /// kündigt seine IS-08-Channel-Mapping-API an, sobald sie unter der
+    /// tatsächlich gebundenen Port/Adresse feststeht). Bewusst additiv
+    /// wie `add_receiver`/`remove_receiver`, keine Änderung an
+    /// `NodeConfig` nötig (das hätte alle ~24 Rust-Node-Aufrufstellen von
+    /// `NodeConfig { .. }` betroffen, obwohl nur ein einzelner Node
+    /// diesen Schritt braucht). Idempotent bzgl. `control_type` — ein
+    /// zweiter Aufruf mit demselben `"type"` ersetzt den vorherigen
+    /// Eintrag statt ihn zu duplizieren (ein Node kündigt seine eigene
+    /// Control-API üblicherweise genau einmal pro Prozesslauf an, aber
+    /// ein versehentlicher zweiter Aufruf soll die Registry-Ressource
+    /// nicht mit doppelten Einträgen kaputt machen).
+    pub async fn add_device_control(&self, control: Value) -> Result<(), BoxError> {
+        let control_type = control.get("type").cloned();
+        let device_snapshot = {
+            let mut shared = self.shared_receivers.lock().expect("lock poisoned");
+            if control_type.is_some() {
+                shared.device.controls.retain(|c| c.get("type") != control_type.as_ref());
+            }
+            shared.device.controls.push(control);
+            shared.device.version = is04::now_version();
+            shared.device.clone()
+        };
+
+        let registry = self.registry.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), BoxError> {
+            registry.register("device", &device_snapshot)?;
+            Ok(())
+        })
+        .await??;
+
+        Ok(())
+    }
 }
 
 /// Baut IS-04-Resources, registriert sie, startet den Descriptor-Server und
@@ -444,7 +497,10 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
                 sender.transport = transport.clone();
             }
             if let Some(flow_spec) = &spec.flow {
-                let source_id = crate::idgen::new_v4();
+                let source_id = match flow_spec {
+                    FlowSpec::Audio { source_id: Some(id), .. } => id.clone(),
+                    _ => crate::idgen::new_v4(),
+                };
                 let flow_id = flow_spec
                     .id()
                     .clone()
@@ -554,6 +610,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
 
     let handle = NodeHandle {
         node_id: node_id.clone(),
+        port: actual_port,
         publisher: publisher.clone(),
         registry: registry.clone(),
         label: config.label.clone(),
