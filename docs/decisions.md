@@ -23831,3 +23831,66 @@ D10 offen), zeitgesteuerte Aktivierung (gleiche Grenze wie D17).
 
 **Dateien:** `nodes/omp-decklink/src/main.rs`,
 `nodes/omp-decklink/src/pipeline.rs`, `ARCHITECTURE.md`.
+
+## 2026-09-13 (Nachtrag 219) — Architektur-Entscheidung: Zentralisierte Observability (Logs/Distributed Tracing/Diagnose-Cockpit), ARCHITECTURE.md §25 (Nutzerauftrag "perfekte Observability ... kreativer Ansatz gefragt")
+
+**Kontext:** Nutzerauftrag direkt im Anschluss an D18: "überlege dir
+etwas zur perfekten observability und systemtranzparenz (zentralisiertes
+log auch bei multihost, distributed tracing wenn zb io-05 fehl schlägt.
+der admin muss ein perfektes zentralisiertes kreatives tool haben stets
+den überblick zu haben fehler super leicht analysieren zu können.
+kreativer ansatz gefragt." — reine Architektur-/Konzeptarbeit diese
+Runde, keine Implementierung (Umfang zu groß für eine Sitzung, §0
+Punkt 2).
+
+**Bestandsaufnahme vor dem Entwurf:** §17 (Monitoring-Vertiefung) und
+§12 Punkt 4 (Audit-Log) beantworten "lebt ein Node?" und "wer hat was
+geändert?" bereits. Die tatsächliche Lücke ist eine dritte, im
+Störungsfall entscheidende Frage: "was geschah WÄHREND einer einzelnen,
+mehrere Nodes/Hosts übergreifenden Operation, in welcher Reihenfolge,
+warum?" — dafür existiert heute nichts (verstreute Prozess-Logs pro
+Host, kein gemeinsamer Korrelationsschlüssel). Genau diese Lücke füllt
+das neue Kapitel, bewusst nicht als weitere Monitoring-Tiefe
+dupliziert.
+
+**Entwurf (§25, drei Teile + Kreativ-Zusatz):**
+1. Trace-Kontext (`trace_id`/`span_id`, eigenes schmales Schema statt
+   voller W3C-Trace-Context) durch HTTP-Header auf jedem Orchestrator→
+   Node-Aufruf (Proxy/IS-05/IS-08), vom Node-SDK an eigene Alerts/
+   Health-Events/künftige Log-Zeilen weitergereicht.
+2. Zentraler Log-Kanal — bewusst OHNE neuen Baustein: der bereits seit
+   D14 laufende 3-Knoten-NATS-Cluster hat JetStream (`-js`) schon an
+   Bord, bisher nur für unpersistiertes Pub/Sub genutzt. Ein neuer
+   JetStream-Stream `OMP_LOGS` + ein Raft-Leader-gegateter Orchestrator-
+   Konsument, der eine Postgres-Projektion schreibt — identisches
+   Muster wie `audit.Store` (Tabelle, Retention-Job,
+   `EventPublisher.Broadcast`), keine neue Architektur-Idee.
+3. Diagnose-Cockpit als neuer Administration-Sub-Tab (gleiches Muster
+   wie Nutzer/Rollenbindungen/Node-Katalog/Audit-Log/Cluster): Live-
+   Log-Tail per SSE (bestehender `sse.Hub`, neuer Event-Typ), Trace-
+   Waterfall, automatische "Trace ansehen"-Links von Audit-Einträgen/
+   BCP-008-Verschlechterungen/Alerts aus.
+   **Kreativer Zusatz:** ein ausgewählter Trace färbt im bestehenden
+   Flow-Editor-Graphen (SVG-Canvas, derselbe Overlay-Mechanismus wie
+   das B4-Tally-Färben) genau die tatsächlich betroffenen Kacheln/
+   Kanten ein — der Admin sieht den Störungsradius direkt in der
+   vertrauten "Landkarte" der Facility statt in einer weiteren
+   generischen Tabelle.
+
+**Drei Technologie-Optionen dokumentiert, C empfohlen:** (A) nur
+vorhandene Infrastruktur (JetStream+Postgres+eigenes Cockpit, kein
+neuer SPOF/Betriebsaufwand); (B) voller externer Stack (OpenTelemetry
+Collector+Loki/Tempo+Grafana, mächtiger aber eigener HA-Bedarf); (C,
+empfohlen) A als eingebauter Default, zusätzlich ein optionaler OTLP-
+Export-Pfad für Betreiber mit eigenem Grafana/Datadog/Splunk — reiner
+Zusatzpfad, ändert nichts an A. Empfehlung folgt derselben Linie wie
+D12–D15 ("kein neuer Single Point of Failure", externe Standard-Tools
+nur wenn die Fehlerklasse es rechtfertigt) plus Interop-Option für
+professionelle Sendezentren, die bereits eigene Observability-Stacks
+betreiben.
+
+**Bewusst nicht Teil dieser Runde:** jede Implementierung — reiner
+Architektur-Entwurf, Umsetzungsreihenfolge/Scope-Schnitt (z. B. erst
+25.1+25.2 ohne Cockpit-UI) mit dem Nutzer bei Umsetzungsbeginn klären.
+
+**Dateien:** `ARCHITECTURE.md` (§25, neu).

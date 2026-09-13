@@ -3906,3 +3906,135 @@ sichtbar, nächster `scan()`/Watch-Zyklus holt sie ab). Katalog-
 `omp-recorder` verkabelt, `record.start`/`stop`, resultierende Datei
 mit `ffprobe` auf Dauer/Codec geprüft, taucht nach `omp-media-library`-
 Scan im Katalog auf. **Phase:** C22.
+
+## 25. Zentralisierte Observability: Logs, Distributed Tracing, Diagnose-Cockpit (geplant, 2026-09-13)
+
+**Anforderung (Nutzerauftrag 2026-09-13):** "perfekte Observability und
+Systemtransparenz — zentralisiertes Log auch bei Multi-Host, Distributed
+Tracing wenn z. B. IS-05 fehlschlägt. Der Admin muss ein perfektes
+zentralisiertes, kreatives Tool haben, stets den Überblick zu haben,
+Fehler super leicht analysieren zu können."
+
+**Einordnung — was schon da ist, was fehlt:** §17 (Monitoring-Vertiefung)
+und §12 Punkt 4 (Audit-Log) beantworten bereits "lebt ein Node?" und "wer
+hat wann was geändert?". Was fehlt, ist die dritte Frage, die im
+Störungsfall am meisten zählt: **"was ist WÄHREND einer einzelnen,
+über mehrere Nodes/Hosts laufenden Operation tatsächlich passiert, in
+welcher Reihenfolge, und warum?"** — heute nur mühsam rekonstruierbar
+(verstreute `stdout`/`journalctl` pro Host-Prozess, keine gemeinsame
+Korrelation zwischen "Operator zieht eine Verbindung im Flow Editor" →
+"Orchestrator PATCHt Sender X" → "PATCHt Receiver Y" → "Y meldet
+Fehler"). Genau diese Lücke füllt dieses Kapitel — bewusst **keine**
+weitere Monitoring-Tiefe (das ist §17), sondern Ursachenanalyse über
+Nodes/Hosts hinweg.
+
+### 25.1 Trace-Kontext: eine Korrelations-ID durch die ganze Kette
+
+Jede Operation, die der Orchestrator anstößt und die mehr als einen
+Node berührt (IS-05-Connect/Disconnect, Workflow-Start/-Stop, Placement-
+Migration, Scheduler-Feuerung, eine per UI ausgelöste Methode über den
+generischen Node-Proxy A8) bekommt bei ihrer Auslösung eine `trace_id`
+(UUID) + fortlaufende `span_id`s für jeden Teilschritt — bewusst ein
+eigenes, minimales Schema statt vollem W3C-Trace-Context (der Nutzen
+läge in Interop mit fremden OTel-Tools, s. §25.4 Option C, dafür reicht
+ein schmalerer eigener Header, solange OMP selbst der einzige
+Konsument ist). Durchreichung:
+
+- HTTP-Header `X-OMP-Trace-Id`/`X-OMP-Span-Id` auf jedem Proxy-/IS-05-/
+  IS-08-Aufruf, den der Orchestrator im Namen einer Operation an einen
+  Node richtet.
+- `omp_node_sdk::server` (Rust) liest die Header serverseitig und hängt
+  sie an jedes dadurch ausgelöste Ereignis an: eigene Alerts
+  (`NodeHandle::publish_alert`), Health-Übergänge, künftig auch an die
+  in §25.2 neu eingeführten strukturierten Log-Zeilen. Gleiche Ergänzung
+  im Go-Mock-Node.
+- Auch eine rein node-lokale, vom Operator direkt ausgelöste Aktion
+  (z. B. "Cut" am Mixer) läuft über denselben Proxy-Pfad und bekommt
+  dieselbe Behandlung — kein Sonderfall "nur bei Multi-Node-Aktionen".
+
+### 25.2 Zentraler Log-Kanal auf bereits vorhandener Infrastruktur
+
+**Bewusst kein neues Subsystem:** Der 3-Knoten-NATS-Cluster läuft bereits
+mit JetStream (`-js`, D14) — bisher nur für reines, unpersistiertes
+Pub/Sub genutzt. JetStreams Persistenz+Replikation ist ungenutztes
+Potenzial genau für diesen Zweck, ohne einen weiteren Baustein mit
+eigenem HA-Bedarf einzuführen (dieselbe "kein neuer SPOF"-Linie wie
+D12–D15):
+
+1. Jeder Node/Host-Agent/Orchestrator veröffentlicht strukturierte
+   Log-Zeilen (JSON: `level`, `message`, `trace_id`, `span_id`,
+   `node_id`, `host_id`, `timestamp`) auf `omp.logs.<node_id>`,
+   gebunden an einen neuen JetStream-Stream `OMP_LOGS` mit
+   konfigurierbarer Aufbewahrung (`OMP_LOG_RETENTION_HOURS`, gleiches
+   Prinzip wie `AuditRetentionDays`).
+2. Ein neuer, kleiner Konsument im Orchestrator (kein eigener Prozess —
+   ein weiterer Hintergrund-Task wie `placementEngine.Run`, D12-Teil-3-
+   Aktiv/Passiv-gegatet, damit nur der Raft-Leader konsumiert) schreibt
+   eine kompakte Projektion nach Postgres (bereits HA via Patroni,
+   D15) — exakt dasselbe Muster wie `audit.Store` (Tabelle, Retention-
+   Job, `EventPublisher.Broadcast` für Live-Updates), nur eine weitere
+   Instanz eines bereits etablierten Bausteins, keine neue Architektur-
+   Idee.
+3. `GET /api/v1/logs?traceId=…&nodeId=…&hostId=…&level=…&since=…` —
+   gleiche Rollen-/Auth-Gate wie jeder andere schreibende/lesende
+   Endpunkt (§12).
+
+### 25.3 Diagnose-Cockpit (neuer Administration-Sub-Tab)
+
+Gleiches Muster wie die bestehenden Sub-Tabs (Nutzer/Rollenbindungen/
+Node-Katalog/Audit-Log/Cluster, §12/§19.3):
+
+- **Live-Log-Tail** über alle Hosts/Nodes, filterbar (Host/Node/
+  Workflow/Level/Volltext), per SSE (`sse.Hub` wiederverwendet, neuer
+  Event-Typ `log`) — kein Reload, kein zweiter Live-Kanal.
+- **Trace-Waterfall**: `trace_id` eingeben oder per Klick erreichen —
+  zeitlich sortierte Ansicht aller Spans/Log-Zeilen/Health-Übergänge
+  einer einzelnen Operation, hostübergreifend.
+- **Automatische Verlinkung**: jeder Audit-Log-Eintrag (§12 Punkt 4),
+  jede BCP-008-Health-Verschlechterung (bereits gebaut, s. Nachtrag
+  207–212/214) und jeder `omp.alert.*` bekommt, wo eine `trace_id`
+  vorhanden ist, einen "Trace ansehen"-Link — schließt genau die vom
+  Nutzer benannte Lücke ("wenn IS-05 fehlschlägt, muss der Admin sofort
+  tief reingehen können").
+
+**Kreativer Zusatz — Blast-Radius-Overlay im Flow Editor:** Ein
+ausgewählter Trace färbt im bestehenden Graph-Canvas (§4.5a, SVG,
+gleicher Overlay-Mechanismus wie das Tally-/Health-Färben aus B4) genau
+die Kacheln/Kanten ein, die diese eine Operation tatsächlich berührt
+hat. Der Admin sieht nicht nur eine Log-Tabelle, sondern **direkt im
+vertrauten Graphen**, welcher Teil der Facility betroffen war — nutzt
+die visuelle Eigenheit der Plattform (der Graph ist bereits die
+"Landkarte" der Facility) statt eine weitere generische Tabellen-UI zu
+bauen.
+
+### 25.4 Technologie-Optionen
+
+- **Option A (empfohlen als Basis):** ausschließlich bereits
+  vorhandene Infrastruktur (§25.1–25.3) — JetStream + Postgres-
+  Projektion + eigenes Cockpit. Kein neuer Betriebsaufwand, kein neuer
+  SPOF, sofort einsatzbereit ohne externe Abhängigkeit.
+- **Option B:** vollwertiger externer Observability-Stack (OpenTelemetry
+  Collector + Loki/Tempo + Grafana) — Industriestandard, mächtiger
+  (PromQL, fertige Dashboards, native Instrumentierung für Fremd-/
+  Community-Nodes, die bereits OTel sprechen), aber neue Komponenten
+  mit eigenem HA-Bedarf und Betriebsaufwand, den ein kleines Team
+  zusätzlich tragen müsste.
+- **Option C (empfohlene Erweiterung, additiv):** Option A bleibt der
+  eingebaute Default (zero-config, immer vorhanden); zusätzlich ein
+  optionaler OTLP-Exporter, der dieselben Traces/Logs im
+  OpenTelemetry-Format an einen vom Betreiber selbst bereitgestellten
+  Collector spiegelt — für Sendezentren, die bereits Grafana/Datadog/
+  Splunk im Haus haben, ohne dass OMP diese Komponenten selbst
+  mitbetreiben/absichern muss. Reiner Zusatzpfad, ändert nichts an
+  Option A.
+
+**Standards-Abdeckung:** keine NMOS-Norm (rein OMP-intern); Option C
+wäre CNCF OpenTelemetry (OTLP), ein De-facto-Standard aber keine AMWA-
+Spec. **Testbarkeit:** vollständig auf der Single-Host-Dev-Maschine
+(mehrere Prozesse simulieren "Multi-Host" bereits heute, wie bei jedem
+anderen Schritt dieses Dokuments) — eine absichtlich fehlschlagende
+IS-05-PATCH-Kette muss sich im Cockpit als ein zusammenhängender Trace
+mit erkennbarem Fehlerpunkt zeigen. **Phase:** eigener künftiger
+Schritt (Umfang zu groß für eine Sitzung, §0 Punkt 2) — Umsetzungsreihen-
+folge/Scope-Schnitt (z. B. erst 25.1+25.2 ohne Cockpit-UI, dann 25.3)
+bei Beginn der Umsetzung mit dem Nutzer klären.
