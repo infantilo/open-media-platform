@@ -55,6 +55,14 @@ import { apiFetch, connectionMonitor } from "../shell/connection.ts";
 import { STANDARD_FORMATS, uniqueRoleName } from "./roles.ts";
 import { renameRole } from "./role-designer-logic.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import {
+  bcp008ParamNames,
+  bcp008StatusColor,
+  bcp008Vocabulary,
+  hasBcp008Monitor as hasBcp008MonitorParam,
+  isBcp008Param,
+  isBcp008Sender,
+} from "./bcp008.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYOUT_NAME = "default";
@@ -4569,7 +4577,7 @@ export class FlowCanvas extends HTMLElement {
     // sie vollständig, statt sie nur zu ergänzen (anders als beim
     // MXF-Sonderfall, wo die generische Liste weiterhin auch
     // programGroups/shufflePresets zeigt).
-    const hasBcp008Monitor = descriptor.parameters.some((p) => p.name === "monitor.overallStatus");
+    const hasBcp008Monitor = hasBcp008MonitorParam(descriptor);
     if (hasBcp008Monitor) {
       this.#panelContent.appendChild(await this.#buildBcp008Section(nodeId, descriptor));
     }
@@ -4745,25 +4753,11 @@ export class FlowCanvas extends HTMLElement {
   // bcp008::Monitor::activity_name`/`content_name` es serverseitig
   // schon unterscheiden.
   async #buildBcp008Section(nodeId: string, descriptor: Descriptor): Promise<HTMLElement> {
-    const isSender = descriptor.parameters.some((p) => p.name === "monitor.transmissionStatus");
-    const activityName = isSender ? "transmissionStatus" : "connectionStatus";
-    const contentName = isSender ? "essenceStatus" : "streamStatus";
+    const isSender = isBcp008Sender(descriptor);
+    const vocab = bcp008Vocabulary(isSender);
+    const { activityName, contentName } = vocab;
 
-    const names = [
-      "monitor.overallStatus",
-      "monitor.overallStatusMessage",
-      "monitor.linkStatus",
-      "monitor.linkStatusMessage",
-      "monitor.externalSynchronizationStatus",
-      "monitor.externalSynchronizationStatusMessage",
-      "monitor.synchronizationSourceId",
-      `monitor.${activityName}`,
-      `monitor.${activityName}Message`,
-      `monitor.${contentName}`,
-      `monitor.${contentName}Message`,
-      "monitor.statusReportingDelay",
-      "monitor.autoResetCountersAndMessages",
-    ];
+    const names = bcp008ParamNames(vocab);
     const entries = await Promise.all(
       names.map(async (n) => [n, await this.#fetchParamValue(nodeId, n)] as const),
     );
@@ -5994,38 +5988,6 @@ function healthColor(health: string): string {
     default:
       return "#e0a030";
   }
-}
-
-// AMWA BCP-008 (`docs/decisions.md` BCP-008-Nachtrag): deckt das
-// gesamte Vokabular aller vier Domains ab (Standard-Status, `link`s
-// AllUp/SomeDown/AllDown, `externalSynchronizationStatus`s NotUsed) —
-// funktional identische Stufen wie `omp_node_sdk::bcp008::HealthLevel`,
-// hier nur auf Farben statt Enum-Varianten abgebildet.
-function bcp008StatusColor(status: string): string {
-  switch (status) {
-    case "Healthy":
-    case "AllUp":
-      return "#4caf50";
-    case "PartiallyHealthy":
-    case "SomeDown":
-      return "#e0a030";
-    case "Unhealthy":
-    case "AllDown":
-      return "#e74c3c";
-    case "Inactive":
-    case "NotUsed":
-      return "#888";
-    default:
-      return "#555";
-  }
-}
-
-// Ob `name` zum BCP-008-Monitor gehört (`omp_node_sdk::bcp008::
-// Monitor::param_specs`s `monitor.`-Präfix) — für Nodes mit BCP-008-
-// Support werden diese Params aus der generischen Panel-Liste
-// ausgeblendet, `#buildBcp008Section` zeigt sie stattdessen gruppiert.
-function isBcp008Param(name: string): boolean {
-  return name.startsWith("monitor.");
 }
 
 // Port-Füllfarbe nach IS-04-Format-URN (unverändert aus dem Graph-API,

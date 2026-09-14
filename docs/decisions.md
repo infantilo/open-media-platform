@@ -24304,3 +24304,97 @@ tatsächliche Multicast-SAP-Discovery für Audio (bewusst nicht wie
 **Dateien:** `nodes/omp-2110-gateway/src/pipeline.rs`,
 `nodes/omp-2110-gateway/src/main.rs`, `nodes/omp-2110-gateway/src/sdp.rs`,
 `ARCHITECTURE.md`.
+
+## 2026-09-14 (Nachtrag 224) — BCP-008 Fleet-Dashboard: neuer "Health"-Tab (Nutzerauftrag "ein Dashboard, das alle BCP008 Daten intuitiv und fancy darstellen kann")
+
+**Einordnung gegen das bestehende Statuspanel (Nachtrag 214) geklärt,
+bevor implementiert wurde:** `ui/graph/flow-canvas.ts`s
+`#buildBcp008Section` zeigt BCP-008-Status bereits gruppiert/farbcodiert
+an — aber immer nur für EINEN Node, nur sichtbar wenn dessen Kachel-
+Panel im Flow-Editor offen ist, und nur innerhalb des gerade gewählten
+Workflow-Filters. Per `AskUserQuestion` bestätigt: der Nutzerwunsch ist
+eine systemweite Fleet-Übersicht über ALLE BCP-008-fähigen Instanzen
+gleichzeitig, unabhängig von Workflow-Zuordnung — neuer Top-Level-Tab
+"Health" (`ui/shell/health-view.ts`, `<omp-health-view>`), additiv zum
+bestehenden Panel, keine Ablösung.
+
+**Geteilte Helfer ausgelagert statt dupliziert:** `bcp008StatusColor`/
+`isBcp008Param`/die Receiver-vs-Sender-Vokabularerkennung lebten bisher
+nur in `flow-canvas.ts`. Neues `ui/graph/bcp008.ts` bündelt sie
+(`bcp008StatusColor`, `isBcp008Param`, `hasBcp008Monitor`,
+`isBcp008Sender`, `bcp008Vocabulary`, `bcp008ParamNames`) — beide
+Konsumenten (Statuspanel UND Fleet-Dashboard) nutzen jetzt exakt
+dieselbe Farbzuordnung/denselben Param-Namensvokabular statt zweier
+Kopien, die hätten auseinanderlaufen können. `flow-canvas.ts`s
+`#buildBcp008Section` wurde entsprechend umgestellt (Verhalten
+unverändert, nur Quelle der Helfer).
+
+**Live-Fund beim Verifizieren (wäre sonst ein stiller Laufzeitfehler
+gewesen):** ein erster Entwurf nutzte die `launcher.Instance.id`
+(aus `GET /api/v1/instances`) direkt als `nodeId` für die
+`GET /api/v1/nodes/{id}/...`-Proxy-Aufrufe — das ist FALSCH: der
+generische Node-Proxy erwartet die NMOS-Node-ID (`graph.Node.ID`), eine
+andere ID als die Launcher-Instanz-ID. Per echtem `curl` gegen eine live
+gestartete `omp-2110-gateway-ingest`-Instanz bestätigt: derselbe Aufruf
+mit der Instanz-ID lieferte `"unknown node"`, mit der (über
+`GET /api/v1/graph`s `nodes[].instanceId`-Feld aufgelösten) echten
+Graph-Node-ID lieferte er den erwarteten `monitor.overallStatus`-Wert.
+`ui/graph/flow-canvas.ts` hatte dieses Problem nie, weil es
+ausschließlich mit bereits aus dem Graphen geladenen Node-IDs arbeitet
+— `health-view.ts` musste diese Brücke (`#nodeIdByInstance`, aus
+`GET /api/v1/graph` aufgebaut) erst selbst bauen, da es (anders als der
+Flow-Editor) von der Instanzliste ausgeht, um auch Instanzen zu erfassen,
+die gerade nicht im aktuell gewählten Workflow-Filter sichtbar wären.
+
+**Architektur:** kein neuer Backend-Endpunkt — reiner Konsument von
+`GET /api/v1/instances`, `GET /api/v1/hosts`, `GET /api/v1/graph`
+(Struktur, SSE-first wie `alarm-view.ts`: `node.added`/`node.removed`/
+`instance.crashed`/`-restarted`/`host.registered`/`lost-events` lösen
+sofortigen Refresh aus, 30s-Poll-Fallback) sowie den bereits bestehenden
+`GET /api/v1/nodes/{id}/descriptor`+`/params/{name}`+
+`POST .../methods/monitor.resetCountersAndMessages` (Werte, eigener
+4s-Poll-Takt — kein SSE-Event existiert für "ein `monitor.*`-Wert hat
+sich geändert", die 1s-Health-Übergänge in
+`omp_node_sdk::bcp008::Monitor` sind rein node-lokal). Descriptor-Fetch
+(teuer, klassifiziert Receiver-/Sender-Vokabular) läuft nur einmal pro
+neu erschienener Instanz (`#vocabCache`), nicht bei jedem Werte-Poll.
+
+**UI:** vier Stat-Kacheln (Healthy/Partially Healthy/Unhealthy/Inactive-
+Zählung) oben, darunter ein `.omp-card-grid` mit einer Karte pro Node
+(Label, Typ-/Host-Badge, großer Overall-Status mit Farbpunkt — pulsiert
+via des bereits vorhandenen `@keyframes omp-pulse` bei Unhealthy, wie
+das Disconnected-Banner in `app-shell.ts` —, 2×2-Domain-Grid, "Zähler
+zurücksetzen"-Button). Kritischster Zustand zuerst sortiert (gleiches
+Prinzip wie `alarm-view.ts`s Severity-Sortierung). Ausschließlich
+bestehende, projektweite Design-Tokens/-Klassen (`ui/design-tokens.css`)
+wiederverwendet, keine neue visuelle Sprache eingeführt.
+
+**Verifiziert:** `deno check` (health-view.ts, bcp008.ts, app-shell.ts,
+flow-canvas.ts, shell.ts) grün; `deno test ui/` weiterhin 92/92 grün
+(keine bestehenden Tests durch die bcp008.ts-Auslagerung gebrochen).
+Live gegen den echten, per `make start` gestarteten Orchestrator +
+eine echte `omp-2110-gateway-ingest`-Instanz (kein Mock) verifiziert:
+per Login-Token authentifizierter CDP-Klick (hand-rolled CDP-über-
+WebSocket, kein `chromium-cli`/Puppeteer in dieser Sandbox verfügbar)
+auf den neuen "Health"-Tab-Button zeigte nach dem ersten Poll-Zyklus
+korrekt "1 Unhealthy" (unverbundener Ingest ohne Signal — echter
+Zustand, kein Fake), Domain-Grid zeigte `Link: AllUp`/`Sync: NotUsed`/
+`Connection: Healthy`/`Stream: Unhealthy` exakt wie die Rohwerte per
+direktem `curl` gegen `GET /api/v1/nodes/{graphNodeId}/params/
+monitor.*`. Reset-Button-Zielendpunkt (`POST .../methods/monitor.
+resetCountersAndMessages`) separat per `curl` bestätigt (200 OK).
+Screenshot geprüft (Tab-Leiste/Stat-Kacheln/Karte visuell konsistent
+mit dem übrigen Studio-Dark-Design). Test-Instanz danach gestoppt.
+
+**Bewusst nicht Teil dieser Runde:** Deep-Link von einer Health-Karte
+zurück in die Flow-Editor-Kachel/das Statuspanel des jeweiligen Nodes
+(`#openParameterPanel` verlangt aktuell, dass der Node bereits im
+geladenen Graphen des aktiven Workflow-Filters sichtbar ist — ein
+zuverlässiger Cross-Tab-Sprung bräuchte zusätzlich das Setzen des
+richtigen Workflow-Filters, eigener Scope); ein neues SSE-Event für
+Live-Push von `monitor.*`-Wertänderungen (aktuell bewusst Polling,
+s. o.); die Auswertung `→ Messgerät-Node` (zweiter Teil des
+Nutzerauftrags, eigene Sitzung).
+
+**Dateien:** `ui/shell/health-view.ts` (neu), `ui/graph/bcp008.ts`
+(neu), `ui/graph/flow-canvas.ts`, `ui/shell/app-shell.ts`.

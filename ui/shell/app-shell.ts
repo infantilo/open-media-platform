@@ -13,12 +13,13 @@ import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./instances-view.ts";
 import "./alarm-view.ts";
+import "./health-view.ts";
 import "./scheduler-view.ts";
 import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "scheduler" | "admin";
+type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -37,6 +38,11 @@ const BASE_TABS: TabDef[] = [
   // §17 Teil 3 (docs/END-GOAL-FEATURES.md, 2026-07-17): genereller
   // Alarm-View, fünfter Tab neben Flow-Editor/Workflows/Hosts/Instanzen.
   { id: "alarms", label: "Alarme", element: "omp-alarm-view" },
+  // Nutzerauftrag 2026-09-14 ("BCP008 Dashboard"): systemweite Fleet-
+  // Übersicht über alle BCP-008-fähigen Instanzen gleichzeitig — anders
+  // als das bestehende Statuspanel im Flow-Editor (EIN Node, Nachtrag
+  // 214), s. ui/shell/health-view.ts.
+  { id: "health", label: "Health", element: "omp-health-view" },
   // Nachtrag 97 Folgearbeit (2026-07-27): workflow-übergreifende
   // Zeitplan-Übersicht/-Bearbeitung, sichtbar für alle wie der
   // Workflows-Tab selbst — kein eigenes Client-Gating, das zugrunde
