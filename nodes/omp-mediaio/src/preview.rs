@@ -37,6 +37,12 @@ pub struct Broadcaster {
     last_frame: Mutex<Option<Frame>>,
 }
 
+impl Default for Broadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Broadcaster {
     pub fn new() -> Self {
         Broadcaster {

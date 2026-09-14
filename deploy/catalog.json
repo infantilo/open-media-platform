@@ -76,6 +76,15 @@
     "expectedResources": "gering"
   },
   {
+    "type": "omp-scope",
+    "label": "Messgerät (Scope)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-scope"],
+    "env": {},
+    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop) und Audio (Peak/RMS-Pegel, EBU-R128-Lautheit) plus gemessene Metadaten — kein Ausgang, reines Analysegerät.",
+    "expectedResources": "gering"
+  },
+  {
     "type": "omp-video-mixer-me",
     "label": "Video Mixer M/E",
     "runner": "process",

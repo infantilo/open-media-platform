@@ -24398,3 +24398,131 @@ Nutzerauftrags, eigene Sitzung).
 
 **Dateien:** `ui/shell/health-view.ts` (neu), `ui/graph/bcp008.ts`
 (neu), `ui/graph/flow-canvas.ts`, `ui/shell/app-shell.ts`.
+
+## 2026-09-14 (Nachtrag 225) — Messgerät-Node `omp-scope`: Waveform/Vektorskop + Audio-Pegel/EBU-R128-Lautheit + Metadaten
+
+**Zweiter Teil desselben Nutzerauftrags** wie Nachtrag 224 ("ein
+modernstes und kreatives intuitives Messgerät ... um Video, Audio und
+Daten messtechnisch zu analysieren"). Architektur vorab per
+`AskUserQuestion` geklärt: alle drei Messbereiche (Video-Scopes, Audio-
+Pegel+Lautheit, Metadaten) in einem Node, als passiver Tap (wie
+`omp-viewer`, kein Sender) auf zwei unabhängige, optionale IS-05-
+Receiver.
+
+**Video (`video_pipeline.rs` + `scope_image.rs`):** kombiniertes Bild
+aus Luma-Waveform (links) + Cb/Cr-Vektorskop (rechts, mit Graticule-
+Kreis/Fadenkreuz) — reine, GStreamer-freie Pixel-Mathematik in
+`scope_image.rs` (6 `cargo test`-Fälle ohne Hardware/Pipeline), über
+`omp_mediaio::preview::build_mjpeg_branch` (dieselbe JPEG-über-HTTP-
+Infrastruktur wie `omp-viewer`) gestreamt. Analyse läuft auf einer
+festen, günstigen Auflösung (320×180@8fps statt Sendebildrate) — die
+`MxlVideoInput`-eigene videoconvert/videoscale/videorate-Kette (`.tail`)
+übernimmt die Skalierung/Drosselung allein über Caps-Verhandlung, kein
+zusätzliches Element nötig. **Bewusst kein rotiertes SMPTE-Graticule
+mit R/G/B/Cy/Mg/Ye-Zielboxen** — reines, unrotiertes Cb/Cr-
+Streudiagramm, ehrlich als solches benannt statt ein kalibriertes
+Referenzgerät vorzutäuschen.
+
+**Audio (`audio_pipeline.rs`):** Peak/RMS über ein `level`-Element
+(1:1 `omp-viewer::audio_meters`s bewährtes Muster übernommen, inkl.
+`appsink` statt `fakesink` — dort schon als Ursache eines MXL-Reader-
+Thread-Hangs dokumentiert) über denselben `/levels`-SSE-Kanal wie
+`omp-viewer`. Echte EBU-R128-Lautheit (Momentary/Short-term/
+Integrated/Range) über die neue Abhängigkeit `ebur128` (reines Rust,
+kein C-Build — von Sebastian Dröge, demselben Maintainer wie
+`gstreamer-rs`, exakt der Algorithmus, den `gst-plugins-rs`s eigenes
+`ebur128`-Element nutzt). Kein GStreamer-`ebur128`-Element in dieser
+Umgebung installiert (per `gst-inspect-1.0` geprüft) — ein von Hand
+geschriebener K-Weighting-/Gating-Filter wäre für eine Broadcast-
+Messgröße ein unnötiges Fehlerrisiko gegenüber der geprüften
+Bibliothek (Minimal-Dependency-Regel bewusst so ausgelegt, nicht
+umgangen).
+
+**Daten:** technische Ist-Werte aus tatsächlich verhandelten Caps
+(Auflösung/Framerate/Abtastrate/Kanalzahl) statt aus dem MXL-`flow_def`
+geraten, plus eine echte gemessene Eingangsbildrate (Zähler-Probe,
+analog `omp-source::pipeline::Event::Fps`).
+
+**Zwei echte, live gefundene Bugs — beide per echtem CDP-Test entdeckt,
+keiner am Schreibtisch vorhergesehen:**
+
+1. **Video-Pipeline hing dauerhaft in PAUSED, ohne jeden Fehler.**
+   `pipeline.state()` zeigte `(Ok(Async), Paused, Playing)` auch nach
+   Sekunden — kein Buffer erreichte je den Analyse-Appsink. Ursache: die
+   Pipeline enthält ZWEI unabhängige Live-Quellen (`MxlVideoInput`s
+   `appsrc` UND das node-eigene `scope_src` für das synthetisierte
+   Ausgabebild) — der Analyse-Appsink nahm ohne `async=false` am
+   normalen Preroll-Protokoll teil, was den PAUSED→PLAYING-Übergang der
+   GESAMTEN Pipeline blockierte, solange der zweite, zu diesem
+   Zeitpunkt noch ungespeiste `scope_src`-Zweig seinen eigenen Preroll
+   nicht abschließen konnte. Gefunden per hinzugefügtem Bus-Error-
+   Watcher (der aber NICHTS zeigte — kein GStreamer-Fehler, reines
+   Protokoll-Hängen) + expliziten `pipeline.state()`-Debug-Ausgaben
+   nach `set_state(Playing)`. Fix: `async=false` auf dem Analyse-
+   Appsink (gleiches Muster wie `omp-viewer::audio_meters::
+   build_branch`s Level-Appsink, dort schon korrekt gesetzt). Live
+   danach bestätigt: Frames fließen durchgehend bei den erwarteten
+   8fps.
+2. **"Auflösung" zeigte immer 320×180, unabhängig von der echten
+   Quelle** — ein erster Entwurf las Breite/Höhe/Framerate aus den
+   NEGOTIATED Caps des Analyse-Appsinks, die durch Konstruktion IMMER
+   exakt die selbst erzwungenen Analyse-Ziel-Caps zeigen (kein
+   Messwert, nur ein Echo der eigenen Konfiguration) — analog dem
+   `videoMeasuredFps`-Fund unten, aber unabhängig davon zusätzlich
+   übersehen. Per echtem CDP-Test entdeckt (Panel zeigte "320×180" für
+   eine tatsächlich 640×480 große `omp-source`-Testquelle). Fix: Breite/
+   Höhe/Framerate stattdessen sofort nach dem Connect aus der `caps`-
+   Property von `input.elements[0]` (der rohen `appsrc` in
+   `MxlVideoInput`, VOR jeder Analyse-Skalierung) gelesen — echte
+   deklarierte Quellwerte. Dieselbe Klasse Fehler wie
+   `videoMeasuredFps` (dort schon beim ersten Entwurf korrekt auf
+   `input.elements[0]` statt `.tail` gelegt, s. Code-Kommentar dort) —
+   hier zunächst übersehen, weil der Wert aus einer anderen Quelle
+   (Appsink-Caps statt Pad-Probe) kam.
+
+**`ParamStore::get`-Konvention beachtet (aus Nachtrag 224 bereits
+bekannt):** `None` bedeutet "unbekannter Parameter" (→ HTTP 404), nicht
+"Wert noch nicht gemessen" — alle noch fehlenden Messwerte liefern
+`Some(Value::Null)` statt `None`.
+
+**Verifiziert:** `cargo build --workspace --bins`, `cargo clippy -p
+omp-scope -D warnings`, `cargo test -p omp-scope` (6 neue Tests) grün;
+`node --check` auf `ui/bundle.js` grün. Live gegen den echten,
+laufenden Orchestrator + eine echte `omp-source`-Testinstanz (SMPTE-
+artiges Testbild + Sinuston, 640×480@25fps/48kHz-Stereo) verifiziert:
+IS-05-Connect für Video UND Audio über echte `graph/edges`-Aufrufe,
+`monitor`-freie Descriptor-Werte per echtem `curl` UND per echtem,
+programmatischem Mount des Node-UI-Bundles im Browser (`mountUIBundle`-
+Pfad direkt nachgebildet, da ein Klick auf die Kachel im Flow-Editor-
+Canvas an der SVG-Pan/Zoom-Geometrie scheiterte, s. u.) bestätigt:
+Panel zeigte echte LUFS-Werte (-11,2 Momentary/Short-term/Integrated),
+echte Metadaten (640×480, 25/1 Soll- UND 25,0 gemessene fps, 48000 Hz/2
+Kanäle), echtes Quell-Label. Das per Orchestrator-Proxy abgerufene
+JPEG (`GET .../stream/previewUrl`) zeigte visuell ein plausibles
+Waveform/Vektorskop-Bild (horizontale Bänder + sechseckige
+Farbbalken-Punktwolke, exakt das für ein SMPTE-artiges Testsignal zu
+erwartende Muster). **Ein Flow-Editor-Kachel-Klick per echtem CDP-
+Klick (Input.dispatchMouseEvent) blieb ohne Erfolg** (traf teils die
+Katalog-Seitenleiste statt die Kachel — dabei versehentlich eine
+`omp-aes67-gateway-source`-Instanz gestartet, sofort wieder gelöscht —
+teils leeren Canvas nach Host-Ansicht-Umschaltung/"Alle einpassen") —
+bewusst nicht weiterverfolgt (SVG-Pan/Zoom-Koordinaten treffen war
+hier der Flaschenhals, nicht der Node-Code selbst), stattdessen der
+echte Produktionscode-Pfad (`mountUIBundle`) direkt im Browser
+nachgebildet, was denselben Manifest-/Bundle-Ladepfad UND dieselbe
+Custom-Element-Registrierung abdeckt, die ein echter Klick ebenfalls
+durchliefe. Alle Testinstanzen danach gestoppt, Chromium beendet.
+
+**Bewusst nicht Teil dieser Runde:** AMWA-BCP-008-Monitor (reiner
+Analyse-Tap, kein Sender/Receiver im Signalweg-Sinn); rotiertes SMPTE-
+Vektorskop-Graticule; gegatete gesonderte gerichtsfeste
+Integrated-Loudness-Dokumentation über das von `ebur128` gelieferte
+hinaus; Deep-Link von einer künftigen Health-Dashboard-Karte (Nachtrag
+224) zu diesem Node (gleiche Scope-Grenze wie dort).
+
+**Dateien:** `nodes/omp-scope/` (neu: `Cargo.toml`, `src/main.rs`,
+`src/video_pipeline.rs`, `src/audio_pipeline.rs`, `src/scope_image.rs`,
+`src/uibundle.rs`, `ui/manifest.json`, `ui/bundle.js`),
+`nodes/Cargo.toml`, `deploy/catalog.json`, `nodes/omp-mediaio/src/
+preview.rs` (Nebenfund: fehlendes `impl Default for Broadcaster`,
+`clippy::new_without_default` — trivial, sicher, mit erledigt).

@@ -1,0 +1,36 @@
+[package]
+name = "omp-scope"
+version = "0.1.0"
+edition = "2024"
+# Projektlizenz noch nicht entschieden (docs/decisions.md, Schritt C1) —
+# publish=false wie bei den übrigen Nodes.
+publish = false
+
+[dependencies]
+gstreamer = "0.25.3"
+gstreamer-app = "0.25"
+# Für stride-korrekten Rohpixel-Zugriff (Lesen des Analyse-Frames,
+# Schreiben des synthetisierten Scope-Bildes) — dieser Node ist der
+# erste im Workspace, der tatsächlich rohe I420-Ebenen anfasst (alle
+# anderen bleiben deklarativ innerhalb von GStreamer-Elementen, z. B.
+# `compositor` bei `omp-video-mixer-me`, oder reichen Buffer nur
+# byteweise 1:1 durch wie `preview::build_mjpeg_branch`); Handrechnung
+# von Stride/Padding wäre hier ein echtes Bug-Risiko, die offizielle
+# GStreamer-Rust-Schwester-Kiste zu `gstreamer-app` macht es korrekt.
+gstreamer-video = "0.25"
+omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl", "preview", "levels"] }
+omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt", "macros", "signal", "sync", "time"] }
+# EBU-R128-Lautheit (Nutzerauftrag "Pegel + Lautheit"): kein GStreamer-
+# `ebur128`-Element in dieser Umgebung installiert (per `gst-inspect-1.0`
+# geprüft, nur `level` für Peak/RMS vorhanden) — Minimal-Dependency-Regel
+# (`UMSETZUNG.md` §0 Punkt 5) hier bewusst NICHT "Standardbibliothek
+# reicht", sondern "ein von Hand geschriebener K-Weighting-/Gating-Filter
+# nach ITU-R BS.1770 wäre für eine Broadcast-Messgröße ein unnötiges
+# Fehlerrisiko gegenüber einer geprüften Implementierung". Dieser Crate
+# ist reines Rust (keine C-Abhängigkeit, `cargo fetch` bestätigt: nur
+# `dasp_sample`/`dasp_frame`/`bitflags` als Unterabhängigkeiten), von
+# Sebastian Dröge (gstreamer-rs-Maintainer) — derselbe Algorithmus, den
+# `gst-plugins-rs`s eigenes `ebur128`-Element nutzt.
+ebur128 = "0.1"

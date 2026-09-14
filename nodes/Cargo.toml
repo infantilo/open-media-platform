@@ -26,4 +26,5 @@ members = [
     "omp-scaler",
     "omp-audio-monitor",
     "omp-pipeline-controller",
+    "omp-scope",
 ]
