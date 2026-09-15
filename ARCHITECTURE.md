@@ -929,7 +929,7 @@ gleiches Prinzip wie beim Cloud-Gateway).
      aktiv gepflegt Stand 2026 — passt sprachlich direkt in unseren
      Rust-Node-Stack, §4.1a) kapselt die GStreamer-Seite. **Lizenz-
      Ausnahme bewusst benannt:** die zugrundeliegende NDI-Laufzeit-
-     Bibliothek selbst ist proprietär (Vizrt/NewTek-SDK) — eine gezielte,
+     Bibliothek selbst ist ein proprietäres Closed-Source-SDK — eine gezielte,
      isolierte Ausnahme von der Apache/MIT/BSD/LGPL-Linie aus §8,
      beschränkt auf genau die optionalen NDI-Gateway-Nodes (Cargo-Feature
      `ndi`, Default aus, kein Kern-Dependency — gleiches Muster wie `mxl`).
@@ -953,8 +953,8 @@ gleiches Prinzip wie beim Cloud-Gateway).
    Fremdprotokoll-Netzsegments, ausgedrückt als gewöhnlicher
    Platzierungs-Hinweis-Tag (§6.1 Punkt 2), keine neue Mechanik.
 
-**Standards-Abdeckung:** RTSP = IETF RFC 2326/7826 (offen); NDI =
-proprietäres Protokoll (Vizrt), hier nur als Fremdformat gebrückt wie
+**Standards-Abdeckung:** RTSP = IETF RFC 2326/7826 (offen); NDI = ein
+proprietäres Protokoll, hier nur als Fremdformat gebrückt wie
 SRT/RIST. **Testbarkeit:** RTSP vollständig auf der Dev-Maschine
 (ffmpeg/`rtsp-server`-Loopback); NDI nur mit vorhandener NDI-Laufzeit
 testbar — CI-Build ohne NDI-SDK überspringt das Feature (gleiches Muster
@@ -1254,13 +1254,15 @@ MXL-Timing-Vorziehung, docs/decisions.md 2026-07-09).
 Kurz: **ST 2110/NMOS/IPMX-Ebene funktioniert heute schon mit Kaufprodukten,
 MXL-Ebene ist im Aufbau, IS-12/14 ist dünn verbreitet.**
 
-- **ST 2110 + NMOS IS-04/05 + IPMX:** reif, breite Vendor-Basis. Matrox
-  ConvertIP/DSX/Avio2 sind explizit standardbasiert interop-fähig. Unser
+- **ST 2110 + NMOS IS-04/05 + IPMX:** reif, breite Vendor-Basis. Mehrere
+  etablierte Broadcast-Hardware-Hersteller bieten bereits explizit
+  standardbasiert interop-fähige ST-2110-Produkte an. Unser
   Orchestrator kann solche Geräte heute schon per NMOS discovern/verbinden —
   kein Warten auf MXL nötig für die Basis-Interop.
-- **MXL:** Spec v1.0 erst März 2026 veröffentlicht. Tiger-Team/Treiber:
-  Matrox, Lawo, Riedel, Intel, NVIDIA + Broadcaster (BBC, CBC,
-  France TV, Bell Media, SVT, RTÉ, VRT). Einzelne Tiger-Team-Produkte werben
+- **MXL:** Spec v1.0 erst März 2026 veröffentlicht. Getragen von einem
+  Tiger-Team aus mehreren großen Broadcast-Hardware-/Chip-Herstellern
+  sowie mehreren großen Rundfunkanstalten (BBC, CBC, France TV, Bell
+  Media, SVT, RTÉ, VRT). Einzelne Tiger-Team-Produkte werben
   bereits explizit mit "MXL-kompatibel" — direkter Bezugspunkt zur
   Nutzeranfrage. Erwartung laut Branchenpresse:
   2026 erste MXL-fähige Produkte/Trials, kein breiter Serienstand. Fazit:
@@ -1281,7 +1283,6 @@ Sources:
 - [DMF and MXL in practice — SVG Europe](https://www.svgeurope.org/blog/headlines/dmf-and-mxl-in-practice-which-vendors-are-adopting-it-and-how-fast-is-the-ecosystem-maturing/)
 - [MXL skipped the standards process — NewscastStudio](https://www.newscaststudio.com/2026/06/04/mxl-skipped-the-standards-process-and-that-may-need-to-change/)
 - [The Media Exchange Layer's role in software-defined production — NewscastStudio](https://www.newscaststudio.com/2026/06/04/industry-insights-the-media-exchange-layers-role-in-software-defined-production/)
-- [Matrox Video details the benefits of the ConvertIP Series — TPi](https://www.tpimagazine.com/matrox-video-details-the-benefits-of-the-convertip-series/)
 - [MXL Touts True IP Interoperability — TV News Check](https://tvnewscheck.com/tech/article/mxl-touts-true-ip-interoperability/)
 - [AMWA MS-05-02 NMOS Control Framework](https://specs.amwa.tv/ms-05-02/)
 
@@ -1293,21 +1294,22 @@ Konkrete Maßnahmen gegen "an der Marktentwicklung vorbei bauen":
    direkt — ein internes `omp-mediaio`-SDK abstrahiert MXL/2110/SRT. Wenn
    sich die junge MXL-Spec (v1.0 erst 03/2026) ändert, wird nur an einer
    Stelle nachgezogen, nicht in jedem Node.
-2. **MXL-Tiger-Team = 5 Großvendoren** (Matrox, Lawo, Riedel,
-   Intel, NVIDIA) — Risiko, dass die Spec Richtung deren proprietärer
+2. **MXL-Tiger-Team = eine kleine Gruppe großer Branchenanbieter** —
+   Risiko, dass die Spec Richtung deren proprietärer
    Produkte drifted. Gegenmaßnahme: **DMF-
    Prinzipien + NMOS bleiben der vendor-neutrale Anker** (EBU-getrieben,
    breiter abgestützt); MXL wird als austauschbare Transport-Implementierung
    behandelt, nicht als Kernabhängigkeit (siehe Punkt 1).
 3. **IPMX** (AIMS Alliance, ST-2110-basiert, HDCP/Pro-AV-fähig) gewinnt Boden
-   bei Matrox und Pro-AV-Crossover-Geräten. Format-Converter-Node ist der
+   bei Pro-AV-Crossover-Geräten. Format-Converter-Node ist der
    natürliche IPMX-Touchpoint am Facility-Rand — beim Bau dieses Node-Typs
    IPMX von Anfang an mitdenken, nicht nachrüsten.
-4. **NVIDIA-Präsenz im Tiger-Team (Rivermax/Holoscan for Media)** macht
-   GPU-Pfade zur Markterwartung für High-End-Nodes (DVE, Formatkonvertierung,
+4. **Ein GPU-Hersteller sitzt im Tiger-Team** (proprietäre RDMA-/
+   Medien-Beschleunigungs-SDKs) und macht GPU-Pfade damit zur
+   Markterwartung für High-End-Nodes (DVE, Formatkonvertierung,
    AI). RDMA/GPUDirect bleibt optionaler Tier (siehe §6) — bewusst KEIN
-   NVIDIA-SDK im Kern verdrahten, sonst entsteht der Vendor-Lock, den wir
-   vermeiden wollen.
+   herstellerspezifisches GPU-SDK im Kern verdrahten, sonst entsteht der
+   Vendor-Lock, den wir vermeiden wollen.
 5. **IS-12/14-Adoption ist dünn** — Marktrichtung könnte sich zu einem
    einfacheren Control-Modell verschieben. Eigenes Descriptor-Format so
    bauen, dass es auf IS-12/14 mapped, aber nicht stur daran hängt.

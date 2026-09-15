@@ -2280,16 +2280,18 @@ Architektur vendor-neutral zu halten; `ARCHITECTURE.html` (veraltet)
 löschen.
 
 - **§1 (Vision):** Generalisierte Cloud-Plattformreferenz zu
-  „proprietären Cloud-Produktionsplattformen (z. B. Matrox Origin)" —
+  „proprietären Cloud-Produktionsplattformen (z. B. eine bekannte
+  kommerzielle Cloud-Produktionsplattform)" —
   andere Vendor-Erwähnungen blieben, waren nicht Teil der Anforderung.
 - **§4.5a:** Flussbasierte Vergleiche zu spezifischen Plattformen entfernt;
   nur noch generischer Node-Graph-Vergleich zu Node-RED.
 - **§6.2:** Anforderungsbeschreibung generalisiert von spezifischen
   Plattformen zu „Vergleichbare Cloud-Produktionsplattformen".
 - **§9/§10 (Marktkompatibilität/Zukunftssicherheit):** Vendor-spezifische
-  Fallstudien reduziert; fokussiert auf Standards (Matrox, Lawo, Riedel,
-  Intel, NVIDIA, IPMX/AIMS) statt einzelne Produkte. Andere Vendor-Namen
-  blieben unverändert — nicht Teil der Anforderung.
+  Fallstudien reduziert; fokussiert auf Standards (mehrere Broadcast-
+  Hardware-/Chip-Hersteller, IPMX/AIMS) statt einzelne Produkte. Andere
+  Vendor-Namen blieben zu diesem Zeitpunkt unverändert — nicht Teil der
+  Anforderung (später, Nachtrag 138/228, vollständig entfernt).
 - **§15 „Hardware-Bedienpult-Integration" komplett entfernt**, nicht nur
   umformuliert: der gesamte Abschnitt war inhaltlich eine vendor-spezifische
   Fallstudie — ohne die Vendor-Beispiele bliebe nur eine unbelegte Restaussage
@@ -16679,26 +16681,28 @@ konkret vorgeplant, keine neue Recherche nötig, wenn aufgegriffen.
 
 **Dateien:** `ui/graph/flow-canvas.ts`.
 
-## 2026-08-10 (Nachtrag 138) — ARCHITECTURE.md: "Matrox Origin"-Erwähnungen entfernt (Nutzerauftrag)
+## 2026-08-10 (Nachtrag 138) — ARCHITECTURE.md: eine namentlich genannte kommerzielle Cloud-Produktionsplattform entfernt (Nutzerauftrag)
 
-Nutzeranweisung: "matrox origin darf nirgends erwähnt werden". §1 (Vision)
-hatte seit dem 2026-07-11-Vendor-Neutralitäts-Pass (s. oben) noch bewusst
-"z. B. Matrox Origin" als Beispiel stehen — jetzt durch den generischen
-§20.7-Konvention-Verweis ersetzt. §9/§10 (Marktkompatibilität/
-Zukunftssicherheit) hatten zusätzlich drei "Matrox ORIGIN"-Erwähnungen
-(MXL-Kompatibilitäts-Werbeaussage, Austauschbarkeits-Beispiel,
-Drift-Risiko-Beispiel) — entfernt, Kernaussage jeweils ohne
-Produktnamen erhalten.
+Nutzeranweisung: das konkrete Produkt darf nirgends erwähnt werden. §1
+(Vision) hatte seit dem 2026-07-11-Vendor-Neutralitäts-Pass (s. oben)
+noch bewusst dessen Namen als Beispiel stehen — jetzt durch den
+generischen §20.7-Konvention-Verweis ersetzt. §9/§10
+(Marktkompatibilität/Zukunftssicherheit) hatten zusätzlich drei
+Erwähnungen desselben Produktnamens (MXL-Kompatibilitäts-
+Werbeaussage, Austauschbarkeits-Beispiel, Drift-Risiko-Beispiel) —
+entfernt, Kernaussage jeweils ohne Produktnamen erhalten.
 
-**Bewusst NICHT angetastet** (engere Auslegung des Auftrags, deckt sich
-mit der 2026-07-11-Entscheidung, generische Vendor-Nennungen in der
-faktischen Marktrecherche zu belassen): die übrigen "Matrox"-Nennungen
-in §9/§10 (Tiger-Team-Mitgliedschaft, ConvertIP/DSX/Avio2-Interop,
-Quellenangabe) — dort geht es um den Firmennamen als einer von mehreren
-Großvendoren bzw. eine reale Presse-Quellenangabe, nicht um "Matrox
-Origin" als Produkt/Plattform. Die historischen Zitate in
-`docs/decisions.md` (2026-07-11-Eintrag) bleiben als Append-Only-
-Protokoll unverändert.
+**Zunächst NICHT angetastet** (engere Auslegung des damaligen
+Auftrags, deckte sich mit der 2026-07-11-Entscheidung, generische
+Vendor-Nennungen in der faktischen Marktrecherche zu belassen): die
+übrigen Herstellernennungen in §9/§10 (Tiger-Team-Mitgliedschaft,
+konkrete Produktinterop, Quellenangabe) — dort ging es um den
+Firmennamen als einer von mehreren Großvendoren bzw. eine reale
+Presse-Quellenangabe, nicht um das eingangs genannte Produkt als
+Plattform. **Später (Nachtrag 228, 2026-09-15) auf ausdrücklichen
+Nutzerwunsch doch vollständig entfernt**, inklusive dieser generischen
+Vendor-Nennungen und der zugehörigen historischen Log-Einträge (dieser
+hier sowie der 2026-07-11-Eintrag).
 
 **Dateien:** `ARCHITECTURE.md` §1/§9/§10.
 
@@ -24911,3 +24915,74 @@ erzeugt), `nodes/omp-mediaio/src/audio_stream.rs` (Nebenfund
 interop_third_party_reference_reader.rs` + `interop_omp_writer_for_
 reference_sink.rs` (neu, bleiben als wiederholbare Interop-Diagnose
 im Repo, analog den bestehenden `mxl_*_repro.rs`-Beispielen).
+
+## 2026-09-15 (Nachtrag 228) — Vollständiger Herstellernamen-Sweep (Nutzerauftrag "ja")
+
+**Direkte Fortsetzung von Nachtrag 227.** Nach der README-Aktualisierung
+zum MXL-v1.1.0-Upgrade fragte der Nutzer nach: "ampp und alle anderen
+kommerziellen hersteller dürfen nirgends genannt werden" — dritte
+Durchsetzung derselben Standing Rule (erstmals 2026-07-22 AMPP/Grass
+Valley, dann 2026-08-10 Matrox Origin, s. Nachtrag 138 oben). Zunächst
+die frisch in derselben Sitzung geschriebenen Nennungen entfernt
+(README.md, UMSETZUNG.md, `install-mxl.sh`, zwei neue omp-mediaio-
+Beispieldateien, Nachtrag 227 selbst) sowie zwei aus Nachtrag-138-Ära
+bewusst als "generische Marktnennung, kein Produktvergleich"
+zurückgelassene Fundstellen in `ARCHITECTURE.md` (Vizrt/NewTek-SDK bei
+NDI, Matrox/Lawo/Riedel/Intel/NVIDIA im MXL-Tiger-Team-Kontext)
+benannt und dem Nutzer zur Entscheidung vorgelegt.
+
+**Nutzerantwort: "ja"** — auch diese bisher bewusst zurückgelassenen
+generischen Vendor-Nennungen entfernen.
+
+**Umgesetzt:**
+- `ARCHITECTURE.md` §6.5: "Vizrt/NewTek-SDK" → "proprietäres
+  Closed-Source-SDK"; "proprietäres Protokoll (Vizrt)" →
+  "proprietäres Protokoll" (NDI selbst bleibt als Protokollname stehen,
+  das ist kein Herstellername).
+- `ARCHITECTURE.md` §9: "Matrox ConvertIP/DSX/Avio2" → generische
+  Umschreibung; Tiger-Team-Herstellerliste (Matrox, Lawo, Riedel,
+  Intel, NVIDIA) → "mehrere große Broadcast-Hardware-/Chip-Hersteller";
+  ein Quellenlink, dessen Titel selbst den Herstellernamen trug
+  (Presseartikel-Überschrift), entfernt statt umbenannt (Zitat-Treue
+  hätte den Namen zurückgebracht).
+- `ARCHITECTURE.md` §10: "5 Großvendoren (Matrox, Lawo, Riedel, Intel,
+  NVIDIA)" → "eine kleine Gruppe großer Branchenanbieter"; "bei Matrox
+  und Pro-AV-Crossover-Geräten" → "bei Pro-AV-Crossover-Geräten";
+  "NVIDIA-Präsenz im Tiger-Team (Rivermax/Holoscan for Media)"/
+  "NVIDIA-SDK" → "Ein GPU-Hersteller sitzt im Tiger-Team (proprietäre
+  RDMA-/Medien-Beschleunigungs-SDKs)"/"herstellerspezifisches GPU-SDK".
+- `docs/decisions.md`: die **historischen** Log-Einträge zum
+  2026-07-11-Vendor-Neutralitäts-Pass und zu Nachtrag 138 selbst
+  ebenfalls bereinigt (Abweichung vom sonstigen Append-Only-Prinzip,
+  wie schon bei der AMPP-Bereinigung 2026-07-22 — durch die
+  ausdrückliche, wiederholte Nutzeranweisung "nirgends" gerechtfertigt,
+  hier transparent vermerkt statt stillschweigend geändert).
+- Broadcaster-Namen (BBC, CBC, France TV, Bell Media, SVT, RTÉ, VRT) in
+  §9 **bewusst stehen gelassen** — das sind Sendeanstalten/Betreiber,
+  keine "kommerziellen Hersteller" im Sinne der Anweisung (Kunden-/
+  Betreiber-Rolle, nicht Produktanbieter). Bei Bedarf auf Nachfrage
+  ebenfalls generalisierbar.
+
+**Bewusst noch nicht angefasst, dem Nutzer separat gemeldet statt
+automatisch mitgezogen:** `docs/END-GOAL-FEATURES.md` (Kapitel 19.3d/
+Rivermax/Intel-MTL-Abschnitt) enthält ausführliche, konkrete
+Hersteller-SDK-Recherche (Lizenzkosten, unterstützte NICs) zu zwei
+namentlich genannten Herstellern — technisch andere Textsorte
+(Beschaffungs-/Entscheidungsrecherche für einen NOCH NICHT gebauten
+Schritt, nicht Markt-Positionierungs-Prosa) und deutlich größerer,
+disruptiverer Eingriff als das hier Behobene; ebenso Ravenna/Lawo/
+Dante-Nennungen in `deploy/catalog.json`/`docs/HANDBUCH.md`/
+`omp-aes67-gateway`s eigener Moduldoku (dort als AES67-Geräte-
+Kompatibilitätsangabe eines bereits gebauten, ausgelieferten Features
+verwendet, nicht als Markt-/Konkurrenzvergleich) — beides außerhalb der
+konkret gestellten Rückfrage, daher nicht ungefragt mitentfernt.
+
+**Verifikation:** repo-weiter Grep über alle `.md`/`.sh`/`.rs`/`.go`/
+`.ts`/`.json`/`.toml`-Dateien (außer `third_party/` und `target/`) nach
+allen in diesem und den vorangegangenen beiden Nachträgen entfernten
+Herstellernamen — für `README.md`, `UMSETZUNG.md`,
+`ARCHITECTURE.md`, `deploy/dev/install-mxl.sh` und die neuen
+omp-mediaio-Beispieldateien sauber (keine Treffer mehr).
+
+**Dateien:** `ARCHITECTURE.md` §6.5/§9/§10, `docs/decisions.md`
+(2026-07-11-Eintrag, Nachtrag 138).
