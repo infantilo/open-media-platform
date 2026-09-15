@@ -30,7 +30,10 @@
 //! `ebur128` bereits gelieferte hinaus.
 
 mod audio_pipeline;
+mod flowmeta;
+mod qc;
 mod scope_image;
+mod timing;
 mod uibundle;
 mod video_pipeline;
 
@@ -117,6 +120,17 @@ struct ScopeStore {
     video_format: Arc<Mutex<Option<video_pipeline::Event>>>,
     video_measured_fps: Arc<Mutex<f64>>,
     audio_handle: audio_pipeline::AudioHandle,
+    video_measurements: video_pipeline::Measurements,
+    audio_measurements: audio_pipeline::Measurements,
+}
+
+impl ScopeStore {
+    /// A/V-Versatz aus den beiden geglätteten Transportlatenzen
+    /// (s. `timing`-Moduldoku). `None`, solange nicht BEIDE Flows
+    /// fließen — ein Lipsync-Wert aus nur einem Flow wäre erfunden.
+    fn av_offset_ms(&self) -> Option<f64> {
+        timing::av_offset_ms(&self.video_measurements.timing(), &self.audio_measurements.timing())
+    }
 }
 
 impl ParamStore for ScopeStore {
@@ -135,7 +149,32 @@ impl ParamStore for ScopeStore {
             range: None,
             readonly: true,
         };
-        let parameters = vec![
+        let readonly_bool = |name: &str| ParamSpec {
+            name: name.to_string(),
+            kind: ParamType::Boolean,
+            unit: None,
+            range: None,
+            readonly: true,
+        };
+        // Pro getapptem Flow dieselben acht Zeitmessgrößen — als
+        // Schleife statt 16-mal ausgeschrieben, damit eine spätere
+        // neunte nicht an einer der beiden Stellen vergessen wird.
+        let timing_params = |prefix: &str| -> Vec<ParamSpec> {
+            let ms = |suffix: &str| readonly_number(&format!("{prefix}{suffix}"), Some("ms"));
+            vec![
+                ms("TransportLatencyMs"),
+                ms("TransportLatencyAvgMs"),
+                ms("TransportLatencyMinMs"),
+                ms("TransportLatencyMaxMs"),
+                ms("LatencyJitterMs"),
+                ms("GrainCadenceMs"),
+                ms("GrainCadenceNominalMs"),
+                readonly_number(&format!("{prefix}GrainsSeen"), None),
+                readonly_number(&format!("{prefix}GrainsDropped"), None),
+                readonly_number(&format!("{prefix}Discontinuities"), None),
+            ]
+        };
+        let mut parameters = vec![
             readonly_string("previewUrl"),
             readonly_string("levelsUrl"),
             readonly_string("videoConnectedFlowId"),
@@ -152,7 +191,41 @@ impl ParamStore for ScopeStore {
             readonly_number("loudnessShortTermLufs", Some("LUFS")),
             readonly_number("loudnessIntegratedLufs", Some("LUFS")),
             readonly_number("loudnessRangeLu", Some("LU")),
+            readonly_number("loudnessTruePeakDbtp", Some("dBTP")),
+            readonly_number("audioBlockPeakDbfs", Some("dBFS")),
+            readonly_string("loudnessR128Verdict"),
+            // --- A/V-Timing (Lipsync) ---
+            readonly_number("avOffsetMs", Some("ms")),
+            readonly_number("avOffsetFrames", Some("Bilder")),
+            readonly_string("avSyncVerdict"),
+            readonly_string("avSourceGroupMatch"),
+            // --- MXL-Flow-Deklaration (Video) ---
+            readonly_string("videoFlowMediaType"),
+            readonly_string("videoFlowGrainRate"),
+            readonly_string("videoFlowColorspace"),
+            readonly_string("videoFlowInterlaceMode"),
+            readonly_number("videoFlowBitDepth", Some("bit")),
+            readonly_number("videoFlowGrainBytes", Some("B")),
+            readonly_number("videoFlowBitrateMbps", Some("Mbit/s")),
+            readonly_string("videoFlowGroupHint"),
+            // --- MXL-Flow-Deklaration (Audio) ---
+            readonly_string("audioFlowMediaType"),
+            readonly_number("audioFlowSampleRate", Some("Hz")),
+            readonly_number("audioFlowChannelCount", None),
+            readonly_number("audioFlowBitrateMbps", Some("Mbit/s")),
+            readonly_string("audioFlowGroupHint"),
+            // --- QC-Alarme ---
+            readonly_bool("videoBlackDetected"),
+            readonly_number("videoBlackSeconds", Some("s")),
+            readonly_bool("videoFreezeDetected"),
+            readonly_number("videoFreezeSeconds", Some("s")),
+            readonly_number("videoMeanLumaPercent", Some("%")),
+            readonly_number("videoFrameDifference", None),
+            readonly_bool("audioSilenceDetected"),
+            readonly_number("audioSilenceSeconds", Some("s")),
         ];
+        parameters.extend(timing_params("video"));
+        parameters.extend(timing_params("audio"));
         Descriptor { latency: None, parameters, methods: vec![] }
     }
 
@@ -185,7 +258,60 @@ impl ParamStore for ScopeStore {
             "loudnessShortTermLufs" => Some(opt_f64_json(self.audio_handle.loudness().short_term_lufs)),
             "loudnessIntegratedLufs" => Some(opt_f64_json(self.audio_handle.loudness().integrated_lufs)),
             "loudnessRangeLu" => Some(opt_f64_json(self.audio_handle.loudness().range_lu)),
-            _ => None,
+            "loudnessTruePeakDbtp" => Some(opt_f64_json(self.audio_handle.loudness().true_peak_dbtp)),
+            "audioBlockPeakDbfs" => Some(opt_f64_json(self.audio_handle.loudness().block_peak_dbfs)),
+            "loudnessR128Verdict" => {
+                let loudness = self.audio_handle.loudness();
+                Some(serde_json::json!(qc::r128_verdict(loudness.integrated_lufs, loudness.true_peak_dbtp).as_str()))
+            }
+
+            // --- A/V-Timing (Lipsync) ---
+            "avOffsetMs" => Some(opt_f64_json(self.av_offset_ms())),
+            "avOffsetFrames" => Some(opt_f64_json(timing::av_offset_frames(
+                self.av_offset_ms(),
+                self.video_measurements.timing().nominal_cadence_ms,
+            ))),
+            "avSyncVerdict" => Some(serde_json::json!(timing::sync_verdict(self.av_offset_ms()).as_str())),
+            "avSourceGroupMatch" => Some(serde_json::json!(
+                match flowmeta::same_group(&self.video_measurements.flow(), &self.audio_measurements.flow()) {
+                    Some(true) => "dieselbe Quelle",
+                    Some(false) => "verschiedene Quellen",
+                    None => "unbekannt",
+                }
+            )),
+
+            // --- MXL-Flow-Deklaration ---
+            "videoFlowMediaType" => Some(opt_string_json(self.video_measurements.flow().media_type)),
+            "videoFlowGrainRate" => {
+                Some(opt_string_json(self.video_measurements.flow().grain_rate.map(|(n, d)| format!("{n}/{d}"))))
+            }
+            "videoFlowColorspace" => Some(opt_string_json(self.video_measurements.flow().colorspace)),
+            "videoFlowInterlaceMode" => Some(opt_string_json(self.video_measurements.flow().interlace_mode)),
+            "videoFlowBitDepth" => Some(opt_u64_json(self.video_measurements.flow().bit_depth)),
+            "videoFlowGrainBytes" => Some(opt_u64_json(self.video_measurements.flow().grain_bytes)),
+            "videoFlowBitrateMbps" => Some(opt_f64_json(flowmeta::video_bitrate_mbps(&self.video_measurements.flow()))),
+            "videoFlowGroupHint" => Some(opt_string_json(self.video_measurements.flow().grouphint)),
+            "audioFlowMediaType" => Some(opt_string_json(self.audio_measurements.flow().media_type)),
+            "audioFlowSampleRate" => Some(opt_u64_json(self.audio_measurements.flow().sample_rate)),
+            "audioFlowChannelCount" => Some(opt_u64_json(self.audio_measurements.flow().channel_count)),
+            "audioFlowBitrateMbps" => Some(opt_f64_json(flowmeta::audio_bitrate_mbps(&self.audio_measurements.flow()))),
+            "audioFlowGroupHint" => Some(opt_string_json(self.audio_measurements.flow().grouphint)),
+
+            // --- QC-Alarme ---
+            "videoBlackDetected" => Some(serde_json::json!(self.video_measurements.qc().black)),
+            "videoBlackSeconds" => Some(opt_f64_json(self.video_measurements.qc().black_seconds)),
+            "videoFreezeDetected" => Some(serde_json::json!(self.video_measurements.qc().freeze)),
+            "videoFreezeSeconds" => Some(opt_f64_json(self.video_measurements.qc().freeze_seconds)),
+            "videoMeanLumaPercent" => Some(opt_f64_json(self.video_measurements.qc().mean_luma_percent)),
+            "videoFrameDifference" => Some(opt_f64_json(self.video_measurements.qc().frame_diff)),
+            "audioSilenceDetected" => Some(serde_json::json!(self.audio_measurements.qc().silence)),
+            "audioSilenceSeconds" => Some(opt_f64_json(self.audio_measurements.qc().silence_seconds)),
+
+            // Die pro Flow identischen Zeitmessgrößen (`video…`/`audio…`)
+            // werden aus EINER Tabelle bedient — s. `timing_params` im
+            // Descriptor, das dieselbe Namensliste erzeugt.
+            _ => timing_field(name, "video", &self.video_measurements.timing())
+                .or_else(|| timing_field(name, "audio", &self.audio_measurements.timing())),
         }
     }
 
@@ -198,6 +324,37 @@ impl ParamStore for ScopeStore {
     }
 
     fn extra_route(&self, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+        // Sammel-Endpunkt für das eigene UI-Panel. Grund: dieser Node
+        // hat über 50 Messparameter, und ein Panel, das sie einzeln per
+        // `GET /params/<name>` durch den Orchestrator-Proxy holt,
+        // erzeugt pro Sekunde über 50 HTTP-Anfragen — für eine Anzeige,
+        // die ein Mensch abliest, absurd. Die Einzelparameter bleiben
+        // dabei unangetastet (IS-12/IS-14-Selbstbeschreibung, Workflow-
+        // Snapshots und jeder fremde Controller nutzen weiter den
+        // Standardweg); dieser Endpunkt ist reine Transport-Ökonomie,
+        // KEIN zweiter Wahrheitsort: er wird unten aus genau denselben
+        // `descriptor()`/`get()`-Aufrufen erzeugt, kann also gar nicht
+        // von den Einzelwerten abweichen.
+        //
+        // **Kein atomarer Schnappschuss:** jeder `get()` nimmt sein Lock
+        // einzeln, zwei Werte im selben Objekt können also aus
+        // Messzeitpunkten wenige Mikrosekunden auseinander stammen. Für
+        // eine Ableseanzeige irrelevant; für eine spätere Messwert-
+        // AUFZEICHNUNG wäre es das nicht — dann bräuchte es einen
+        // gemeinsamen Schnappschuss unter einem Lock.
+        if method == "GET" && path.split('?').next() == Some("/measurements") {
+            let mut values = serde_json::Map::new();
+            for spec in self.descriptor().parameters {
+                if let Some(value) = self.get(&spec.name) {
+                    values.insert(spec.name, value);
+                }
+            }
+            return Some(RawResponse {
+                status: 200,
+                content_type: "application/json",
+                body: serde_json::to_vec(&Value::Object(values)).unwrap_or_else(|_| b"{}".to_vec()),
+            });
+        }
         if let Some((status, content_type, body)) = self.video_connection.handle(method, path, body) {
             return Some(RawResponse { status, content_type, body });
         }
@@ -210,6 +367,36 @@ impl ParamStore for ScopeStore {
 
 fn opt_u32_json(v: Option<u32>) -> Value {
     v.map(|v| serde_json::json!(v)).unwrap_or(Value::Null)
+}
+
+fn opt_u64_json(v: Option<u64>) -> Value {
+    v.map(|v| serde_json::json!(v)).unwrap_or(Value::Null)
+}
+
+fn opt_string_json(v: Option<String>) -> Value {
+    v.map(|v| serde_json::json!(v)).unwrap_or(Value::Null)
+}
+
+/// Bedient `<prefix>TransportLatencyMs` & Co. aus einem
+/// `TimingSnapshot`. `None` heißt hier "dieser Name gehört nicht zu
+/// diesem Präfix" (der Aufrufer probiert dann das andere) — NICHT "Wert
+/// fehlt"; fehlende Messwerte kommen als `Some(Value::Null)` zurück,
+/// s. die `ParamStore::get`-Konvention weiter oben.
+fn timing_field(name: &str, prefix: &str, snapshot: &timing::TimingSnapshot) -> Option<Value> {
+    let suffix = name.strip_prefix(prefix)?;
+    Some(match suffix {
+        "TransportLatencyMs" => opt_f64_json(snapshot.latency_ms),
+        "TransportLatencyAvgMs" => opt_f64_json(snapshot.latency_avg_ms),
+        "TransportLatencyMinMs" => opt_f64_json(snapshot.latency_min_ms),
+        "TransportLatencyMaxMs" => opt_f64_json(snapshot.latency_max_ms),
+        "LatencyJitterMs" => opt_f64_json(snapshot.jitter_ms),
+        "GrainCadenceMs" => opt_f64_json(snapshot.cadence_ms),
+        "GrainCadenceNominalMs" => opt_f64_json(snapshot.nominal_cadence_ms),
+        "GrainsSeen" => serde_json::json!(snapshot.grains),
+        "GrainsDropped" => serde_json::json!(snapshot.dropped),
+        "Discontinuities" => serde_json::json!(snapshot.discontinuities),
+        _ => return None,
+    })
 }
 
 /// `serde_json::json!` würde ein NaN/Infinity (z. B. -inf LUFS bei
@@ -283,8 +470,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let video_context = mxl_context.clone();
     let video_broadcaster = broadcaster.clone();
     let video_shutdown_thread = video_shutdown.clone();
+    let video_measurements = video_pipeline::Measurements::default();
+    let video_measurements_thread = video_measurements.clone();
     let video_thread = std::thread::spawn(move || {
-        video_pipeline::run(video_context, video_broadcaster, video_tx, video_shutdown_thread, video_ready_tx, video_heartbeat_thread)
+        video_pipeline::run(
+            video_context,
+            video_broadcaster,
+            video_tx,
+            video_shutdown_thread,
+            video_ready_tx,
+            video_heartbeat_thread,
+            video_measurements_thread,
+        )
     });
     let video_handle = match video_ready_rx.await {
         Ok(Ok(h)) => h,
@@ -302,7 +499,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let audio_heartbeat_thread = audio_heartbeat.clone();
     let audio_context = mxl_context.clone();
     let audio_shutdown_thread = audio_shutdown.clone();
-    let audio_thread = std::thread::spawn(move || audio_pipeline::run(audio_context, audio_tx, audio_shutdown_thread, audio_ready_tx, audio_heartbeat_thread));
+    let audio_measurements = audio_pipeline::Measurements::default();
+    let audio_measurements_thread = audio_measurements.clone();
+    let audio_thread = std::thread::spawn(move || {
+        audio_pipeline::run(audio_context, audio_tx, audio_shutdown_thread, audio_ready_tx, audio_heartbeat_thread, audio_measurements_thread)
+    });
     let audio_handle = match audio_ready_rx.await {
         Ok(Ok(h)) => h,
         Ok(Err(e)) => {
@@ -383,6 +584,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         video_format,
         video_measured_fps,
         audio_handle: audio_handle.clone(),
+        video_measurements,
+        audio_measurements,
     });
 
     let handle = omp_node_sdk::start(

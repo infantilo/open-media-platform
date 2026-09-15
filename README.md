@@ -87,6 +87,15 @@ hosts, not a same-host zero-copy MXL flow._
 _An operator's console: every node UI it's entitled to operate, live,
 side by side — no flow editor, no catalog, nothing to misconfigure._
 
+![The measurement node: waveform/vectorscope, A/V timing against the EBU R 37 window, held signal alarms, EBU R 128 loudness with true peak](docs/screenshots/scope-messgeraet.png)
+
+_The `omp-scope` measurement tap: lip-sync computed from the MXL grain
+origin timestamps of the two flows (not from arrival times), scored
+against the EBU R 37 window; held black/freeze/silence alarms; EBU R 128
+loudness with ITU-R BS.1770 true peak. Further down the same panel:
+per-flow transport latency, delay variation, cadence and dropped-grain
+counters, next to what the writer actually declares about the flow._
+
 More screens (login, instances, workflows, scheduler, alarms,
 administration, cluster, hosts, the host-setup wizard, grouped tiles)
 are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
@@ -196,6 +205,13 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
 - **omp-scaler** — scales/converts a connected MXL video source to a
   fixed target format; also one of two nodes that can absorb a
   workflow's declared output-delay compensation (see Status)
+- **omp-scope** — a passive measurement tap (taps a video and/or an
+  audio flow, sends nothing itself): waveform/vectorscope, EBU R 128
+  loudness with ITU-R BS.1770 true peak, held black/freeze/silence
+  alarms, and **A/V timing derived from the MXL grain origin
+  timestamps** — per-flow transport latency, delay variation, measured
+  vs. nominal cadence, dropped-grain and reader-restart counters, and
+  the resulting lip-sync offset judged against EBU R 37 (see below)
 - **omp-2110-gateway** / **omp-aes67-gateway** — native ST 2110 video /
   AES67 audio gateways for inter-site contribution with foreign
   equipment; `omp-2110-gateway` also carries an independent ST 2110-30
@@ -256,6 +272,32 @@ node has to satisfy.
 - Login-based user/role accounts (local, no external directory server
   required) gate who can wire the graph, launch instances, or
   administer hosts; every write access is captured in an audit log.
+- **Measurement you can act on, not just monitoring.** Every MXL read
+  path already carries the origin timestamp the *writer* stamped onto a
+  grain (`timestamp/x-mxl-tai`). `omp-scope` reads it and turns it into
+  real numbers: transport latency (`mxlGetTime()` minus grain origin,
+  both from the same clock), its peak-to-peak variation, measured
+  against nominal cadence, dropped grains — and, across a video and an
+  audio flow, the **lip-sync offset**, because the difference of the two
+  latencies cancels the unknown clock offset and doesn't require the two
+  flows to be sampled at the same instant. It is judged against EBU
+  R 37 (sound may lead picture by at most 40 ms and lag by at most
+  60 ms — deliberately asymmetric, because the standard is).
+
+  This paid for itself on the first run. Pointed at a plain test
+  source, it measured that this project's own MXL writers drift against
+  the MXL clock: video stamps its grains about four frames into the
+  *future*, audio falls progressively behind. Both numbers were then
+  confirmed independently by MXL's own `mxl-info` tool (audio: scope
+  +408 ms vs. `mxl-info` +406 ms). That is not a new bug — it is the
+  first actual measurement of a simplification `MxlVideoOutput` has
+  documented since day one ("index initialised once, incremented
+  freely, no drift correction … a production source should switch to
+  the PTS-based method *if drift is observed*"). Nothing sounds wrong
+  today, because no consumer in OMP plays out by TAI stamp; it is a
+  latent defect that surfaces the moment one does. Fixing it belongs in
+  the writer path and is its own step — the measuring device that can
+  prove it is the prerequisite.
 
 ## What OpenMediaPlatform does **not** do
 
@@ -278,6 +320,19 @@ Being upfront about the current edges, not just the highlights:
   drag. Only standalone (non-workflow) node instances can be moved
   today via drag-and-drop; migrating a workflow role needs the API
   directly for now.
+- **MXL writer timestamps drift against the MXL clock.** Measured, not
+  suspected: `omp-scope` (plus MXL's own `mxl-info` as an independent
+  check) shows the video writer stamping grains roughly four frames
+  ahead of the clock and the audio writer falling progressively behind,
+  so the A/V offset *as the timestamps describe it* is large and grows.
+  Nothing misbehaves audibly today — every consumer here plays out by
+  arrival time, not by TAI stamp — but a standards-facing consumer
+  would be misled. The cause is the documented simplification in the
+  MXL write path (grain index initialised once, then free-running, with
+  no drift correction); the fix belongs there and hasn't been made yet.
+  Related: OMP's own flow definitions use each flow's own ID as the
+  NMOS grouphint group name, so a source's video and audio flows never
+  share a group, which is exactly what that tag is for.
 - **No independent security audit.** Auth, mTLS, and audit logging
   exist and are exercised by the test suite, but there has been no
   external penetration test or formal security review.
@@ -418,8 +473,19 @@ scattered per-process stdout, surfaced through a "Diagnose" tab in the
 Flow Editor with live tailing, trace pivoting, and a graph overlay that
 highlights every tile a failing trace actually touched.
 
-Open: RDMA hardware integration (`verbs`/EFA providers, pending
-hardware procurement), an NDI gateway, proprietary Dante (Dante in
+Most recently, the measurement node `omp-scope` grew from a picture-and-
+level scope into a timing instrument: per-flow MXL transport latency,
+delay variation, cadence and dropped-grain counters read from the grain
+origin timestamps, lip-sync scored against EBU R 37, the writer's own
+flow declaration shown next to the measured reality, held black/freeze/
+silence alarms, and ITU-R BS.1770 true peak with an EBU R 128 compliance
+verdict — which immediately surfaced a real, independently confirmed
+clock-drift defect in this project's own MXL writers (see "What
+OpenMediaPlatform does not do").
+
+Open: the MXL writer clock drift and grouphint gap that `omp-scope`
+just made measurable, RDMA hardware integration (`verbs`/EFA providers,
+pending hardware procurement), an NDI gateway, proprietary Dante (Dante in
 AES67 mode already runs via `omp-aes67-gateway`), and a drag-to-move UI
 for the already-built workflow-role migration backend — the flow
 editor now at least places a running workflow's tile in its correct

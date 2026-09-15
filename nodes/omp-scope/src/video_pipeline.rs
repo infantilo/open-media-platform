@@ -19,9 +19,9 @@
 //! Caps-Verhandlung zieht die Skalierung/Ratenanpassung automatisch
 //! durch die bereits vorhandene Kette durch.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use gstreamer as gst;
@@ -33,7 +33,10 @@ use omp_mediaio::preview::{self, Broadcaster};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
+use crate::flowmeta::{self, VideoFlowMeta};
+use crate::qc::{VideoQc, VideoQcSnapshot};
 use crate::scope_image::{self, ANALYSIS_HEIGHT, OUTPUT_HEIGHT, OUTPUT_WIDTH, WAVEFORM_WIDTH};
+use crate::timing::{FlowTiming, TimingSnapshot};
 
 /// Analyse-/Ausgabe-Bildrate — ein Messgerät muss nicht sendebildrate-
 /// flüssig sein (anders als `omp-viewer`s Bedienbild), 8fps ist für ein
@@ -68,6 +71,41 @@ pub enum Event {
 enum Command {
     Connect(String, String),
     Disconnect,
+}
+
+/// Alle laufend fortgeschriebenen Messwerte des Videozweigs, geteilt
+/// zwischen GStreamer-Streaming-Thread (schreibt) und HTTP-Thread
+/// (liest). Bewusst EIN Bündel statt drei einzeln durchgereichter Arcs
+/// — jede neue Messgröße käme sonst als weiterer Parameter durch
+/// `run`/`build` hindurch.
+#[derive(Clone, Default)]
+pub struct Measurements {
+    timing: Arc<Mutex<FlowTiming>>,
+    qc: Arc<Mutex<VideoQc>>,
+    flow: Arc<Mutex<VideoFlowMeta>>,
+}
+
+impl Measurements {
+    pub fn timing(&self) -> TimingSnapshot {
+        self.timing.lock().expect("lock poisoned").snapshot()
+    }
+
+    pub fn qc(&self) -> VideoQcSnapshot {
+        self.qc.lock().expect("lock poisoned").snapshot()
+    }
+
+    pub fn flow(&self) -> VideoFlowMeta {
+        self.flow.lock().expect("lock poisoned").clone()
+    }
+
+    /// Bei jedem Quellwechsel: kompletter Neuanfang. Messwerte der
+    /// VORIGEN Quelle an einer neuen weiterzuzeigen wäre eine
+    /// Falschaussage (s. `FlowTiming::reset`).
+    fn reset(&self) {
+        self.timing.lock().expect("lock poisoned").reset();
+        self.qc.lock().expect("lock poisoned").reset();
+        *self.flow.lock().expect("lock poisoned") = VideoFlowMeta::default();
+    }
 }
 
 #[derive(Clone)]
@@ -141,7 +179,7 @@ fn copy_plane(frame: &mut gst_video::VideoFrame<gst_video::video_frame::Writable
 /// berechnet daraus das Ausgabebild — `None`, falls Caps/Puffer (noch)
 /// nicht vorliegen (z. B. der allererste Sample vor abgeschlossener
 /// Verhandlung).
-fn render_from_sample(sample: &gst::Sample) -> Option<scope_image::Image> {
+fn render_from_sample(sample: &gst::Sample) -> Option<(scope_image::Image, Vec<u8>)> {
     let caps = sample.caps()?;
     let info = gst_video::VideoInfo::from_caps(caps).ok()?;
     let buffer = sample.buffer()?;
@@ -165,7 +203,11 @@ fn render_from_sample(sample: &gst::Sample) -> Option<scope_image::Image> {
     let u = read_plane(1, WAVEFORM_WIDTH / 2, ANALYSIS_HEIGHT / 2);
     let v = read_plane(2, WAVEFORM_WIDTH / 2, ANALYSIS_HEIGHT / 2);
 
-    Some(scope_image::render(&y, &u, &v))
+    // Das Luma-Plane wird zusätzlich zurückgegeben: die QC-Messung
+    // (Schwarz-/Standbild) rechnet auf demselben bereits skalierten
+    // Analysebild weiter, statt eine zweite Skalierkette zu betreiben.
+    let image = scope_image::render(&y, &u, &v);
+    Some((image, y))
 }
 
 fn build(
@@ -174,10 +216,33 @@ fn build(
     broadcaster: &Arc<Broadcaster>,
     flowed: Arc<AtomicBool>,
     tx: UnboundedSender<Event>,
+    measurements: &Measurements,
 ) -> Result<ActivePipeline, String> {
     let pipeline = gst::Pipeline::new();
 
     let input = MxlVideoInput::new(&pipeline, context.clone(), flow_id)?;
+
+    // Essenz-Deklaration direkt aus der MXL-Domain (s. `flowmeta`-
+    // Moduldoku: das, was der SCHREIBER behauptet — bewusst getrennt von
+    // den weiter unten gemessenen Ist-Werten gehalten). Schlägt das
+    // fehl, läuft alles andere weiter: ein fehlendes `flow_def` macht
+    // das Messgerät nicht nutzlos.
+    match context.flow_def(flow_id) {
+        Ok(json) => {
+            let meta = flowmeta::parse_video(&json);
+            if let Some((numerator, denominator)) = meta.grain_rate
+                && numerator > 0
+            {
+                measurements
+                    .timing
+                    .lock()
+                    .expect("lock poisoned")
+                    .set_nominal_period_ns((1_000_000_000u64 * denominator).div_ceil(numerator));
+            }
+            *measurements.flow.lock().expect("lock poisoned") = meta;
+        }
+        Err(e) => eprintln!("omp-scope: flow_def({flow_id}) unavailable: {e}"),
+    }
 
     // Echte Quellauflösung/-framerate SOFORT nach dem Connect (nicht aus
     // dem Analyse-Appsink, s. `Event::SourceFormat`-Doku) — `input.
@@ -218,8 +283,29 @@ fn build(
     let frame_count = Arc::new(AtomicU64::new(0));
     let frame_count_probe = frame_count.clone();
     let raw_src_pad = input.elements[0].static_pad("src").expect("input appsrc has a src pad");
-    raw_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, _info| {
+    // Derselbe Probe misst zusätzlich die Transportlatenz: hier, am
+    // rohen `appsrc`, tragen die Puffer noch die von `omp_mediaio::mxl`s
+    // Lesepfad angehängte `timestamp/x-mxl-tai`-Meta mit dem
+    // Ursprungs-Zeitstempel des Grains (s. `timing`-Moduldoku).
+    // Absichtlich VOR videoconvert/videoscale/videorate — eine
+    // GStreamer-Transformation ist nicht verpflichtet, fremde Metas
+    // weiterzureichen, und die Analyse-Drosselung auf `ANALYSIS_FPS`
+    // würde die Kadenzmessung ohnehin auf die eigene Konfiguration
+    // verfälschen (derselbe Fehler, der bei `videoMeasuredFps` schon
+    // einmal drohte).
+    let timing_probe = measurements.timing.clone();
+    let timing_context = context.clone();
+    raw_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
         frame_count_probe.fetch_add(1, Ordering::Relaxed);
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data
+            && let Some(meta) = buffer.meta::<gst::ReferenceTimestampMeta>()
+            && meta.reference().structure(0).is_some_and(|s| s.name() == omp_mediaio::mxl::TAI_REFERENCE_CAPS_NAME)
+        {
+            timing_probe
+                .lock()
+                .expect("lock poisoned")
+                .observe(meta.timestamp().nseconds(), timing_context.now_ns());
+        }
         gst::PadProbeReturn::Ok
     });
     {
@@ -296,14 +382,17 @@ fn build(
 
     let app_sink: gst_app::AppSink = analysis_sink.dynamic_cast().map_err(|_| "appsink: cast to AppSink failed".to_string())?;
     let app_src: gst_app::AppSrc = scope_src.dynamic_cast().map_err(|_| "appsrc: cast to AppSrc failed".to_string())?;
+    let qc = measurements.qc.clone();
+    let qc_context = context.clone();
     app_sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
                 let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
-                if let Some(image) = render_from_sample(&sample)
-                    && let Ok(out_buffer) = build_output_buffer(&output_info, &image)
-                {
-                    let _ = app_src.push_buffer(out_buffer);
+                if let Some((image, luma)) = render_from_sample(&sample) {
+                    qc.lock().expect("lock poisoned").observe(&luma, qc_context.now_ns());
+                    if let Ok(out_buffer) = build_output_buffer(&output_info, &image) {
+                        let _ = app_src.push_buffer(out_buffer);
+                    }
                 }
                 Ok(gst::FlowSuccess::Ok)
             })
@@ -315,6 +404,7 @@ fn build(
     Ok(ActivePipeline { pipeline, _input: input })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     context: Arc<MxlContext>,
     broadcaster: Arc<Broadcaster>,
@@ -322,6 +412,7 @@ pub fn run(
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<PipelineHandle, String>>,
     heartbeat: Arc<AtomicU64>,
+    measurements: Measurements,
 ) {
     if let Err(e) = gst::init() {
         let msg = format!("gst init failed: {e}");
@@ -343,7 +434,8 @@ pub fn run(
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Command::Connect(flow_id, _label)) => {
                 active = None;
-                match build(&context, &flow_id, &broadcaster, flowed.clone(), tx.clone()) {
+                measurements.reset();
+                match build(&context, &flow_id, &broadcaster, flowed.clone(), tx.clone(), &measurements) {
                     Ok(p) => active = Some(p),
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("connect {flow_id} failed: {e}")));
@@ -352,6 +444,7 @@ pub fn run(
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                measurements.reset();
                 broadcaster.reset();
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}

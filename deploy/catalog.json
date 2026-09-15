@@ -81,7 +81,7 @@
     "runner": "process",
     "command": ["../nodes/target/debug/omp-scope"],
     "env": {},
-    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop) und Audio (Peak/RMS-Pegel, EBU-R128-Lautheit) plus gemessene Metadaten — kein Ausgang, reines Analysegerät.",
+    "description": "Passiver Mess-Tap für Video (Waveform/Vektorskop, Schwarzbild-/Standbild-Erkennung), Audio (Peak/RMS, EBU-R128-Lautheit, True Peak nach BS.1770, Stille-Erkennung) und MXL-Timing (Transportlatenz/Jitter/Kadenz aus den Grain-Ursprungszeitstempeln, A/V-Versatz nach EBU R 37) plus die Flow-Deklaration aus der MXL-Domain — kein Ausgang, reines Analysegerät.",
     "expectedResources": "gering"
   },
   {

@@ -266,6 +266,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// artig wie params/plugins GET, reine Registrierung, keine neue
 	// Proxy-Logik (Query-String-Weiterleitung in proxy.go ergänzt).
 	mux.HandleFunc("GET /api/v1/nodes/{id}/timeline/window", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/timeline/window", nodeLogs)))
+	// Sammel-Messwerte eines Messgeraet-Nodes (omp-scope, Nachtrag 226) —
+	// wie timeline/window daruber nur eine Routenregistrierung auf
+	// denselben generischen handleNodeProxy, keine neue Proxy-Logik und
+	// keine Sonderbehandlung fuer einen Node-Typ: Nodes ohne diesen
+	// Endpunkt antworten schlicht mit 404 aus dem Node selbst. Lesend,
+	// daher requireAuth wie params-GET.
+	mux.HandleFunc("GET /api/v1/nodes/{id}/measurements", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/measurements", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/manifest.json", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/manifest.json", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/ui/bundle.js", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/ui/bundle.js", nodeLogs)))
 	// Node-eigener Vollzustand (`GET`/`POST /state`, bisher NUR vom

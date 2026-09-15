@@ -24526,3 +24526,229 @@ hinaus; Deep-Link von einer künftigen Health-Dashboard-Karte (Nachtrag
 `nodes/Cargo.toml`, `deploy/catalog.json`, `nodes/omp-mediaio/src/
 preview.rs` (Nebenfund: fehlendes `impl Default for Broadcaster`,
 `clippy::new_without_default` — trivial, sicher, mit erledigt).
+
+## 2026-09-15 (Nachtrag 226) — `omp-scope` wird ein Timing-Messgerät: MXL-Transportlatenz, Lipsync aus Ursprungszeitstempeln, Flow-Deklaration, QC-Alarme, True Peak
+
+**Nutzerauftrag:** „können wir das messgerät node auch nutzen, um MXL-
+spezifische messungen zu machen und audio/video timing latenz zu messen
+(lipsync, und oder source timestamp vergleichen? oder was anderes
+kreatives). selbständig machen und verbessern, dann readme und git
+startseite anpassen, eventuell screenshots der neuen funktionen".
+
+**Lesart der Aufgabe (dokumentiert, weil sie eine Entscheidung ist):**
+der Auftrag schrieb „MXF spezifische messungen". Gemeint sein kann nur
+**MXL** — `omp-scope` ist ein passiver Tap auf MXL-Flows, sieht also nie
+einen MXF-Container; MXF-Messungen wären ein Datei-Analyse-Node mit ganz
+anderer Form. Alles Übrige des Auftrags (Timing/Latenz/Lipsync/
+Source-Timestamps) ergibt an einem MXL-Tap unmittelbar Sinn, MXF dort
+gar keinen. Entsprechend umgesetzt und hier festgehalten, statt
+stillschweigend das eine für das andere zu halten.
+
+### Woher die Messgröße kommt (der eigentliche Kern)
+
+`omp_mediaio::mxl` hängt seit ARCHITECTURE.md §15 Punkt 4 an **jeden**
+gelesenen Puffer — Video wie Audio — eine `GstReferenceTimestampMeta`
+mit den Caps `timestamp/x-mxl-tai`: darin steht
+`mxlIndexToTimestamp(grain_index)`, also die Zeit, für die der
+**Schreiber** diesen Grain deklariert hat. Bisher wurde diese Meta nur
+weitergereicht (damit ein Schreibpfad den Ursprung kennt), nie
+ausgewertet. Genau das leistet jetzt `nodes/omp-scope/src/timing.rs`:
+
+```text
+Transportlatenz = MxlContext::now_ns()  −  Grain-TAI
+```
+
+Beide Werte stammen aus derselben MXL-Zeitquelle (`mxlGetTime()` bzw.
+`mxlIndexToTimestamp()`), nicht aus `SystemTime` (andere Epoche: UTC
+statt TAI) und nicht aus GStreamer-PTS (die MXL-Lesepfade setzen
+`do-timestamp=true`, deren PTS ist damit die lokale ANKUNFTSzeit und
+enthält gar keine Ursprungsinformation mehr).
+
+**Lipsync** ist die Differenz dieser beiden Latenzen — dabei kürzt sich
+die (konstante, unbekannte) Uhrendifferenz weg, und die beiden Flows
+müssen nicht im selben Moment abgetastet werden:
+
+```text
+Δ = (Ankunft_V − Ursprung_V) − (Ankunft_A − Ursprung_A)
+```
+
+Δ > 0 = Ton eilt dem Bild voraus, Δ < 0 = Ton hinkt nach. Bewertet
+gegen **EBU R 37** (Ton höchstens 40 ms vor, höchstens 60 ms nach dem
+Bild — bewusst asymmetrisch, weil die Norm es ist, nicht als selbst
+gewähltes Toleranzband).
+
+### Was dabei gemessen wurde — zwei echte Plattform-Befunde
+
+Die neue Messung hat sofort zwei Dinge sichtbar gemacht, die vorher
+niemand sehen konnte. Beide sind **unabhängig mit MXLs eigenem
+Werkzeug `mxl-info` gegengeprüft** (kein Zirkelschluss über den eigenen
+Code):
+
+1. **Die MXL-Schreiber der Plattform driften gegen die MXL-Uhr, in
+   beide Richtungen.** Gegen eine einzige `omp-source`-Instanz
+   (640×480@25fps + 48-kHz-Stereo) gemessen:
+   - Video: Latenz konstant **≈ −170 ms** (negativ!) — der Schreiber
+     stempelt Grains rund vier Bilder in die *Zukunft*. `mxl-info -f
+     <video-flow>` meldet dafür selbst „Latency (grains, ms): **-4,
+     -152.3**".
+   - Audio: Latenz **positiv und wachsend** — über eine Messreihe
+     52 → 124 → 196 → 290 → 408 ms. `mxl-info` meldet zum selben
+     Zeitpunkt **+406.0 ms** (Abweichung zur Scope-Messung: 2 ms).
+
+   Das ist kein neuer Bug, sondern die erstmals *gemessene* Auswirkung
+   einer seit jeher dokumentierten Vereinfachung: `MxlVideoOutput`s
+   Struct-Doku sagt wörtlich, der Grain-Index werde einmalig aus
+   `get_current_index()` initialisiert und danach pro Sample um 1 erhöht
+   — „ohne Selbstkorrektur bei Drift/Aussetzern … eine spätere
+   produktionsnahe Quelle sollte auf das PTS-basierte Verfahren
+   wechseln, **falls Drift beobachtet wird**". Die Drift ist hiermit
+   beobachtet.
+
+2. **Folge davon: der aus den Zeitstempeln gemessene A/V-Versatz ist
+   groß und nicht konstant** (in der Messreihe von −296 ms auf −579 ms
+   gewachsen). Hörbar ist das heute nicht, weil in OMP kein Konsument
+   nach TAI-Stempel ausspielt (überall `do-timestamp=true` =
+   Ankunftszeit) — es ist ein latenter Defekt, der genau dann zuschlägt,
+   wenn erstmals jemand die Stempel ernst nimmt (ST 2110/PTP-Ausgabe,
+   fremde Empfänger).
+
+**Bewusst NICHT in dieser Sitzung gefixt.** Die Korrektur gehört in den
+Schreibpfad (`MxlVideoOutput`/`MxlAudioOutput`, PTS→Index statt freiem
+Hochzählen) und beträfe jeden MXL-schreibenden Node — ein eigener
+Schritt mit eigener Verifikation, kein Nebenprodukt einer
+Messgerät-Erweiterung (`UMSETZUNG.md` §0 Punkt 2). Das Messgerät, das
+den Fehler jetzt nachweisen kann, ist die Voraussetzung dafür, ihn
+überhaupt sauber fixen zu können.
+
+3. **Nebenbefund NMOS-Grouphint:** die neue Anzeige „gehören die beiden
+   getappten Flows zur selben Quelle?" meldet für OMP-eigene Quellen
+   systematisch „verschiedene Quellgruppen". Ursache ist echt und liegt
+   nicht in der Messung: `omp_mediaio::mxl::video_flow_def`/
+   `audio_flow_def` setzen als Gruppennamen die **jeweilige Flow-ID**
+   (der Kommentar dort sagt: „wir haben v0 nur Video, daher Flow-ID als
+   eindeutiger Gruppenname") — Video und Audio derselben Quelle landen
+   damit nie in derselben Gruppe, obwohl genau das der Zweck des Tags
+   ist. Im UI daher als **Warn-** statt Fehlerstil dargestellt, mit dem
+   Grund im Tooltip; Fix ebenfalls Schreibpfad-Thema, also eigener
+   Schritt.
+
+### Was sonst neu ist
+
+- **`timing.rs`** — pro getapptem Flow: Latenz (Ist/geglättet/Min/Max),
+  Jitter als Spitze-zu-Spitze-Schwankung der Latenz im gleitenden
+  2-s-Fenster (Delay-Variation, auf Grains statt RTP-Paketen),
+  gemessene Ist-Kadenz gegen die Soll-Kadenz aus der Flow-Rate,
+  Lifetime-Zähler für ausgelassene Grains (Lücke > 1,5 × Soll — 1,5 und
+  nicht 2,0, weil bei genau einem fehlenden Grain die Lücke exakt
+  2 × Soll beträgt und der häufigste Fall sonst unerkannt bliebe) und
+  für Rückwärts-/Reset-Sprünge des Ursprungszeitstempels (MXL-Reader-
+  Neuaufsetzer nach `OutOfRangeTooLate`/`FLOW_INVALID`).
+- **`flowmeta.rs`** — die **Deklaration** des Flows aus der MXL-Domain
+  selbst (`mxlGetFlowDef`, dafür `MxlContext::flow_def` neu öffentlich):
+  Media-Type, Grain-/Abtastrate, Bittiefe, Farbraum, Interlace-Modus,
+  Grouphint, plus rechnerische Grain-Größe und Shared-Memory-Datenrate
+  (v210-Packungsregel: Zeile auf Vielfache von 128 Byte aufgerundet;
+  sonst Summe über die deklarierten Komponenten). Bewusst getrennt vom
+  gemessenen Ist geführt und im UI auch so benannt — erst die Differenz
+  aus „was der Schreiber behauptet" und „was ankommt" entlarvt einen
+  falsch deklarierten Flow.
+- **`qc.rs`** — Schwarzbild, Standbild (Freeze) und Stille als
+  *gehaltene* Bedingungen (1 s / 2 s / 2 s), gerechnet auf demselben
+  bereits heruntergerechneten Analysebild wie Waveform/Vektorskop (also
+  ohne zweite Dekodier-/Skalierkette) bzw. auf `ebur128`s
+  Blockspitzenpegel. Die Haltezeit ist der Punkt: ohne sie wäre jeder
+  Schnitt ein Falschalarm. Schwarzbild verlangt Mittel- **und**
+  Spitzenwert unter der Schwelle, sonst würde ein dunkles Bild mit
+  heller Bauchbinde fälschlich zählen.
+- **True Peak (dBTP) nach ITU-R BS.1770** (`Mode::TRUE_PEAK` in
+  `ebur128`, 4-fache Überabtastung) plus eine R-128-Konformitätsampel
+  (−23 ±0,5 LUFS und ≤ −1 dBTP, Lautheitsfehler schlägt True-Peak-
+  Fehler, weil erst gepegelt und dann limitiert wird). Der reine
+  Abtastwert-Spitzenpegel läge systematisch zu niedrig und übersähe
+  Übersteuerungen, die im Wandler sehr wohl auftreten.
+
+### Ein neuer Sammel-Endpunkt statt 50 Einzelabfragen
+
+Der Node beschreibt jetzt **64 Parameter**. Ein Panel, das die einzeln
+per `GET /params/<name>` durch den Orchestrator-Proxy holt, erzeugt pro
+Sekunde und geöffnetem Panel über 50 HTTP-Anfragen. Neu daher `GET
+/measurements` am Node (`extra_route`) und eine Routenregistrierung im
+Orchestrator — **exakt dasselbe Muster wie `timeline/window`**: eine
+Zeile auf denselben generischen `handleNodeProxy`, keine neue
+Proxy-Logik, keine Sonderbehandlung eines Node-Typs (Nodes ohne diesen
+Endpunkt antworten mit 404 aus dem Node selbst), lesend also
+`requireAuth` wie params-GET.
+
+Wichtig: **kein zweiter Wahrheitsort.** Die Antwort wird im Node aus
+genau denselben `descriptor()`/`get()`-Aufrufen erzeugt wie die
+Einzelparameter, kann also nicht von ihnen abweichen. Die
+Einzelparameter bleiben unangetastet (IS-12/IS-14-Selbstbeschreibung,
+Workflow-Snapshots, fremde Controller). Dokumentierte Einschränkung: es
+ist **kein atomarer** Schnappschuss (jeder `get()` nimmt sein Lock
+einzeln) — für eine Ableseanzeige irrelevant, für eine spätere
+Messwert-Aufzeichnung nicht.
+
+### Beim Bauen gefundener eigener Fehler
+
+`video_pipeline::Measurements` leitet sein `Default` ab — und damit
+hätte auch `qc::VideoQc` seines abgeleitet, dessen `Condition`-Felder
+dann `hold_ns = 0` gehabt hätten: **die gesamte Entprellung wäre
+ausgehebelt gewesen**, jedes einzelne dunkle Bild sofort ein
+Schwarzbild-Alarm. Behoben durch explizite `Default`-Implementierungen
+für `VideoQc`/`AudioQc` mit einem Kommentar, der genau das festhält.
+
+### Verifikation
+
+`cargo build -p omp-scope`, `cargo clippy -p omp-scope --all-targets -D
+warnings`, `cargo clippy -p omp-mediaio --lib -D warnings`, `cargo test
+-p omp-scope` (**29 Tests**, davon 23 neu in `timing`/`qc`/`flowmeta` —
+alle ohne GStreamer/Hardware), `go build ./...`, `node --check` auf
+`ui/bundle.js`: grün. (`cargo clippy -p omp-mediaio --all-targets`
+meldet einen **vorbestehenden** `explicit_counter_loop` in einem
+Testfall in `mxl.rs` — nicht von dieser Sitzung berührt, daher nicht
+mitgeändert.)
+
+Live gegen den echten, per `make start` gestarteten Orchestrator und
+eine echte `omp-source`-Instanz verifiziert, diesmal **mit einem echten
+Kachel-Klick im Flow-Editor** (anders als in Nachtrag 225, wo das an
+der SVG-Pan/Zoom-Geometrie scheiterte): statt Bildschirmkoordinaten zu
+treffen, wird das `<g>`-Element der Kachel per `textContent` gesucht und
+ein echtes `pointerdown`/`pointerup`-Paar darauf bzw. auf dem SVG
+abgesetzt — derselbe Weg, den `#onTilePointerDown`/`#onPointerUp`
+ohnehin nehmen. Damit mountete das Panel real im echten Flow-Editor.
+Gemessen bestätigt:
+
+- **QC live ausgelöst und wieder gelöscht:** Quellmuster auf `black`
+  → Schwarzbild UND Standbild nach ihren Haltezeiten rot (mittleres
+  Luma 6,27 % = exakt 16/255 Studio-Schwarz, Bilddifferenz 0,00);
+  Muster auf `ball` → beide Alarme sofort weg (Bilddifferenz 1,6).
+- **Stille live ausgelöst:** ein zusätzlich gestarteter
+  `omp-audio-mixer` als Quelle, dessen Kanal per
+  `channel.ch1.setMute` stummgeschaltet — Alarm kippte nach der
+  2-s-Haltezeit auf `true`, `audioSilenceSeconds` zählte ab dem ersten
+  stillen Block. Dabei gleich mitbekommen, dass digitale Stille
+  (Pegel exakt 0 → −∞ dBFS → kein gültiger JSON-Zahlwert → `null`)
+  im Panel überall „–" anzeigte, als wäre die Messung ausgefallen —
+  ausgerechnet dann, wenn sie am eindeutigsten ist. Behoben: fließen
+  Grains, wird `null` als **−∞** dargestellt.
+- Drei Screenshots aufgenommen (`docs/screenshots/scope-messgeraet.png`,
+  `scope-mxl-timing.png`, `scope-qc-alarme.png`, je 1600×1000 wie die
+  übrigen).
+
+Alle Testinstanzen danach gestoppt, Chromium beendet.
+
+**Bewusst nicht Teil dieser Runde:** der Schreibpfad-Fix für die oben
+gemessene Index-Drift und für den Grouphint (beides eigene Schritte,
+s. o.); ein Alarm-/Ereignis-Kanal, der die QC-Befunde in den zentralen
+Alarme-Tab meldet (der Node ist weiterhin ein reines Anzeigegerät);
+Aufzeichnung/Verlaufsgrafik der Messwerte über die Zeit; BCP-008 auf
+diesem Node (unverändert: reiner Analyse-Tap, kein Signalweg-Element).
+
+**Dateien:** `nodes/omp-scope/src/{timing,qc,flowmeta}.rs` (neu),
+`nodes/omp-scope/src/{main,video_pipeline,audio_pipeline}.rs`,
+`nodes/omp-scope/ui/bundle.js`, `nodes/omp-mediaio/src/mxl.rs`
+(`MxlContext::now_ns`/`::flow_def` und `TAI_REFERENCE_CAPS_NAME` neu
+öffentlich), `orchestrator/internal/httpapi/server.go` (eine Route),
+`deploy/catalog.json`, `README.md`, `docs/HANDBUCH.md`,
+`docs/BENUTZERHANDBUCH.md`, `docs/screenshots/scope-*.png`,
+`UMSETZUNG.md`.

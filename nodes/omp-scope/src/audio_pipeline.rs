@@ -32,6 +32,10 @@ use omp_mediaio::mxl::{MxlAudioInput, MxlContext};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 
+use crate::flowmeta::{self, AudioFlowMeta};
+use crate::qc::{self, AudioQc, AudioQcSnapshot};
+use crate::timing::{FlowTiming, TimingSnapshot};
+
 pub const METER_INPUT_ID: &str = "audio";
 const LEVEL_INTERVAL_NS: u64 = 50_000_000;
 
@@ -41,6 +45,15 @@ pub struct LoudnessSnapshot {
     pub short_term_lufs: Option<f64>,
     pub integrated_lufs: Option<f64>,
     pub range_lu: Option<f64>,
+    /// True Peak nach ITU-R BS.1770 (4-fach überabgetastet, also der
+    /// Pegel, den ein D/A-Wandler oder ein datenreduzierender Codec
+    /// tatsächlich sieht — NICHT der reine Abtastwert-Spitzenpegel).
+    /// Höchstwert seit Verbindungsaufbau, denn genau darum geht es bei
+    /// der EBU-R-128-Grenze von −1 dBTP.
+    pub true_peak_dbtp: Option<f64>,
+    /// True Peak nur des zuletzt verarbeiteten Blocks — Grundlage der
+    /// Stille-Erkennung (s. `qc::AudioQc::observe`).
+    pub block_peak_dbfs: Option<f64>,
     pub sample_rate: Option<u32>,
     pub channels: Option<u32>,
 }
@@ -52,6 +65,34 @@ pub enum Event {
 enum Command {
     Connect(String),
     Disconnect,
+}
+
+/// Gegenstück zu `video_pipeline::Measurements` für den Audiozweig.
+#[derive(Clone, Default)]
+pub struct Measurements {
+    timing: Arc<Mutex<FlowTiming>>,
+    qc: Arc<Mutex<AudioQc>>,
+    flow: Arc<Mutex<AudioFlowMeta>>,
+}
+
+impl Measurements {
+    pub fn timing(&self) -> TimingSnapshot {
+        self.timing.lock().expect("lock poisoned").snapshot()
+    }
+
+    pub fn qc(&self) -> AudioQcSnapshot {
+        self.qc.lock().expect("lock poisoned").snapshot()
+    }
+
+    pub fn flow(&self) -> AudioFlowMeta {
+        self.flow.lock().expect("lock poisoned").clone()
+    }
+
+    fn reset(&self) {
+        self.timing.lock().expect("lock poisoned").reset();
+        self.qc.lock().expect("lock poisoned").reset();
+        *self.flow.lock().expect("lock poisoned") = AudioFlowMeta::default();
+    }
 }
 
 #[derive(Clone)]
@@ -106,9 +147,51 @@ fn build(
     tx: UnboundedSender<Event>,
     loudness: Arc<Mutex<LoudnessSnapshot>>,
     flowed: Arc<AtomicBool>,
+    measurements: &Measurements,
 ) -> Result<ActiveBranch, String> {
     let pipeline = gst::Pipeline::new();
     let input = MxlAudioInput::new(&pipeline, context.clone(), flow_id)?;
+
+    // Essenz-Deklaration aus der MXL-Domain (s. `video_pipeline::build`
+    // für die Begründung, warum die Deklaration getrennt vom Ist-Wert
+    // geführt wird).
+    match context.flow_def(flow_id) {
+        Ok(json) => {
+            let meta = flowmeta::parse_audio(&json);
+            if let Some(rate) = meta.sample_rate.filter(|r| *r > 0) {
+                // `MxlAudioInput`s Lesepfad holt feste 10-ms-Batches
+                // (`batch_size = sample_rate / 100`) — das ist die
+                // Soll-Kadenz dieses Taps, nicht die Abtastperiode.
+                let batch = (rate / 100).max(1);
+                measurements
+                    .timing
+                    .lock()
+                    .expect("lock poisoned")
+                    .set_nominal_period_ns(batch * 1_000_000_000 / rate);
+            }
+            *measurements.flow.lock().expect("lock poisoned") = meta;
+        }
+        Err(e) => eprintln!("omp-scope: audio flow_def({flow_id}) unavailable: {e}"),
+    }
+
+    // Transportlatenz/Kadenz am rohen `appsrc` (gleiche Begründung wie
+    // im Videozweig: nur dort trägt der Puffer noch die
+    // `timestamp/x-mxl-tai`-Meta des MXL-Lesepfads).
+    let timing_probe = measurements.timing.clone();
+    let timing_context = context.clone();
+    let raw_src_pad = input.elements[0].static_pad("src").expect("input appsrc has a src pad");
+    raw_src_pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        if let Some(gst::PadProbeData::Buffer(buffer)) = &info.data
+            && let Some(meta) = buffer.meta::<gst::ReferenceTimestampMeta>()
+            && meta.reference().structure(0).is_some_and(|s| s.name() == omp_mediaio::mxl::TAI_REFERENCE_CAPS_NAME)
+        {
+            timing_probe
+                .lock()
+                .expect("lock poisoned")
+                .observe(meta.timestamp().nseconds(), timing_context.now_ns());
+        }
+        gst::PadProbeReturn::Ok
+    });
 
     let flowed_probe = flowed.clone();
     let tail_src_pad = input.tail.static_pad("src").expect("tail has a src pad");
@@ -184,6 +267,8 @@ fn build(
 
     let ebur_app_sink: gst_app::AppSink = ebur_sink.dynamic_cast().map_err(|_| "ebur128 appsink cast failed".to_string())?;
     let mut meter: Option<EbuR128> = None;
+    let audio_qc = measurements.qc.clone();
+    let qc_context = context.clone();
     ebur_app_sink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_sample(move |sink| {
@@ -196,7 +281,14 @@ fn build(
                     return Ok(gst::FlowSuccess::Ok);
                 };
                 if meter.is_none() {
-                    match EbuR128::new(channels_val as u32, rate_val as u32, Mode::M | Mode::S | Mode::I | Mode::LRA) {
+                    // `Mode::TRUE_PEAK` zusätzlich: ITU-R BS.1770 misst
+                    // den True Peak über eine 4-fache Überabtastung —
+                    // der Wert, auf den sich EBU R 128s Grenze von
+                    // −1 dBTP bezieht. Der reine Abtastwert-Spitzenpegel
+                    // (`SAMPLE_PEAK`) läge hier systematisch zu niedrig
+                    // und würde eine Übersteuerung übersehen, die nach
+                    // der Rekonstruktion im Wandler sehr wohl auftritt.
+                    match EbuR128::new(channels_val as u32, rate_val as u32, Mode::M | Mode::S | Mode::I | Mode::LRA | Mode::TRUE_PEAK) {
                         Ok(m) => meter = Some(m),
                         Err(e) => {
                             eprintln!("omp-scope: ebur128 init failed (channels={channels_val}, rate={rate_val}): {e:?}");
@@ -221,11 +313,25 @@ fn build(
                 }
                 if let Some(m) = meter.as_mut() {
                     let _ = m.add_frames_f32(&samples);
+                    // Über alle Kanäle maximieren: R 128s True-Peak-
+                    // Grenze gilt pro Kanal, verletzt ist sie also,
+                    // sobald EIN Kanal sie reißt.
+                    let peak_over_channels = |f: &dyn Fn(u32) -> Option<f64>| -> Option<f64> {
+                        (0..channels_val as u32).filter_map(f).fold(None, |acc: Option<f64>, v| Some(acc.map_or(v, |a: f64| a.max(v))))
+                    };
+                    let session_peak = peak_over_channels(&|ch| m.true_peak(ch).ok());
+                    let block_peak = peak_over_channels(&|ch| m.prev_true_peak(ch).ok());
+                    let block_peak_dbfs = block_peak.map(qc::linear_to_dbfs);
+                    if let Some(db) = block_peak_dbfs {
+                        audio_qc.lock().expect("lock poisoned").observe(db, qc_context.now_ns());
+                    }
                     let mut snap = loudness.lock().expect("lock poisoned");
                     snap.momentary_lufs = m.loudness_momentary().ok();
                     snap.short_term_lufs = m.loudness_shortterm().ok();
                     snap.integrated_lufs = m.loudness_global().ok();
                     snap.range_lu = m.loudness_range().ok();
+                    snap.true_peak_dbtp = session_peak.map(qc::linear_to_dbfs);
+                    snap.block_peak_dbfs = block_peak_dbfs;
                 }
                 Ok(gst::FlowSuccess::Ok)
             })
@@ -279,6 +385,7 @@ pub fn run(
     shutdown: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<AudioHandle, String>>,
     heartbeat: Arc<AtomicU64>,
+    measurements: Measurements,
 ) {
     if gst::init().is_err() {
         let _ = ready.send(Err("gst init failed (audio)".to_string()));
@@ -300,7 +407,8 @@ pub fn run(
             Ok(Command::Connect(flow_id)) => {
                 active = None;
                 *loudness.lock().expect("lock poisoned") = LoudnessSnapshot::default();
-                match build(&context, &flow_id, tx.clone(), loudness.clone(), flowed.clone()) {
+                measurements.reset();
+                match build(&context, &flow_id, tx.clone(), loudness.clone(), flowed.clone(), &measurements) {
                     Ok(branch) => active = Some(branch),
                     Err(e) => eprintln!("omp-scope: audio connect {flow_id} failed: {e}"),
                 }
@@ -308,6 +416,7 @@ pub fn run(
             Ok(Command::Disconnect) => {
                 active = None;
                 *loudness.lock().expect("lock poisoned") = LoudnessSnapshot::default();
+                measurements.reset();
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

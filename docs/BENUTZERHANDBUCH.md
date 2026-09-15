@@ -454,7 +454,58 @@ passend für einen reinen Live-Schaltplatz ohne Bandmaterial; ist eine
 zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
 
-## 10. Weiterführende Dokumente
+## 10. Messgerät (Scope)
+
+Der Node-Typ **Messgerät (Scope)** (`omp-scope`) ist ein passives
+Messgerät: er hängt sich an einen Video- und/oder einen Audio-Flow, ohne
+selbst etwas zu senden. Sie starten ihn wie jeden anderen Node aus dem
+Katalog und ziehen im Flow Editor eine Verbindung von der Quelle auf
+seinen Video- bzw. Audio-Eingang — beide Eingänge sind unabhängig, einer
+allein reicht. Ein Klick auf die Kachel öffnet das Messpanel.
+
+![Messgerät: Waveform/Vektorskop, A/V-Timing (Lipsync) und die Signalüberwachung](screenshots/scope-messgeraet.png)
+
+Von oben nach unten:
+
+- **Messbild** — Luma-Waveform (links) und Cb/Cr-Vektorskop (rechts).
+- **A/V-Timing (Lipsync)** — der Versatz zwischen Bild und Ton in
+  Millisekunden und in Bildern, gerechnet aus den Ursprungszeitstempeln,
+  die die Quelle den MXL-Grains mitgibt (nicht aus Ankunftszeiten). Der
+  grüne Bereich der Skala ist das nach **EBU R 37** zulässige Fenster:
+  der Ton darf dem Bild höchstens 40 ms vorauseilen und höchstens 60 ms
+  nachhinken. Ein positiver Wert heißt „Ton eilt vor", ein negativer
+  „Ton hinkt nach".
+- **Signalüberwachung** — Schwarzbild, Standbild und Stille. Alle drei
+  schlagen erst an, wenn der Zustand ununterbrochen anhält (1 s bzw.
+  2 s); ein einzelnes schwarzes Bild zwischen zwei Schnitten ist kein
+  Alarm. Die Kachel zeigt zusätzlich, seit wann der Zustand anliegt.
+- **Audio-Pegel und Lautheit** — Peak/RMS sowie EBU R 128
+  (Momentary/Short-term/Integrated/Range), True Peak in dBTP nach
+  ITU-R BS.1770 und eine Ampel, ob das Programm die R-128-Vorgaben
+  einhält (−23 ±0,5 LUFS, True Peak höchstens −1 dBTP).
+
+![Messgerät: MXL-Transportmessung und die Flow-Deklaration des Schreibers](screenshots/scope-mxl-timing.png)
+
+- **MXL-Transport** — je Flow die gemessene Latenz (aktuell, Mittel,
+  Min/Max), der Jitter als Spitze-zu-Spitze-Schwankung dieser Latenz,
+  die gemessene Kadenz gegen den Sollwert sowie Zähler für ausgelassene
+  Grains und für Neuaufsetzer des Lesers. **Ein negativer Latenzwert ist
+  kein Anzeigefehler:** er bedeutet, dass die Quelle ihre Grains mit
+  einem Zeitstempel in der Zukunft versieht.
+- **MXL-Flow** — was der Schreiber über seinen Flow *deklariert*
+  (Media-Type, Rate, Bittiefe, Farbraum, Abtastraster, Grain-Größe,
+  Datenrate, NMOS-Grouphint). Bewusst getrennt von den gemessenen
+  Werten darunter: erst der Vergleich beider deckt einen falsch
+  deklarierten Flow auf.
+- **Gemessene Werte** — Quelle, Auflösung, Soll- und Ist-Bildrate,
+  mittleres Luma, Bilddifferenz, Abtastrate, Kanalzahl.
+
+Schlägt die Signalüberwachung an, färbt sich die betroffene Kachel rot
+und nennt die Dauer:
+
+![Messgerät: Schwarzbild- und Standbild-Alarm nach Ablauf der Haltezeit](screenshots/scope-qc-alarme.png)
+
+## 11. Weiterführende Dokumente
 
 - [`HANDBUCH.md`](HANDBUCH.md) — Installation, `make`-Targets,
   Troubleshooting, mTLS/Backup/Soak-Betrieb.

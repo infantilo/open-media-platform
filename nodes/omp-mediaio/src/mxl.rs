@@ -33,8 +33,10 @@ use crate::Output;
 /// anderen Gründen tragen könnte. Video und Audio teilen sich denselben
 /// Namen — die Meta selbst trägt keine Formatinformation, die ist über
 /// den jeweiligen Flow/Node ohnehin bekannt.
-fn tai_reference_caps() -> gst::Caps {
-    gst::Caps::new_empty_simple("timestamp/x-mxl-tai")
+pub const TAI_REFERENCE_CAPS_NAME: &str = "timestamp/x-mxl-tai";
+
+pub fn tai_reference_caps() -> gst::Caps {
+    gst::Caps::new_empty_simple(TAI_REFERENCE_CAPS_NAME)
 }
 
 /// Geladene MXL-API + geöffnete Instanz für eine Domain (Shared-Memory-
@@ -56,6 +58,33 @@ impl MxlContext {
         let instance =
             mxl::MxlInstance::new(api, domain, "").map_err(|e| format!("MXL-Instanz: {e}"))?;
         Ok(MxlContext { instance })
+    }
+
+    /// Aktuelle MXL-Zeit in Nanosekunden — **dieselbe Epoche**, aus der
+    /// auch die an Lesepfad-Puffern haengende [`tai_reference_caps`]-Meta
+    /// stammt (beides geht auf `mxlGetTime()`/`mxlIndexToTimestamp()` in
+    /// `third_party/mxl/lib/include/mxl/time.h` zurueck). Genau deshalb
+    /// ist `now_ns() - <Grain-TAI>` eine echte Messung des Grain-Alters
+    /// am Tap und keine Schaetzung ueber die lokale Systemuhr, deren
+    /// Epoche (UTC statt TAI) um die Schaltsekunden-Differenz daneben
+    /// laege. Genutzt von `omp-scope`s Transport-Latenz-/Lipsync-Messung
+    /// (`nodes/omp-scope/src/timing.rs`).
+    pub fn now_ns(&self) -> u64 {
+        self.instance.get_time()
+    }
+
+    /// Roh-JSON der `flow_def` eines Flows, wie der SCHREIBER sie in der
+    /// Domain deklariert hat (`mxlGetFlowDef`). Bisher nur intern von
+    /// [`MxlVideoInput::new`]/[`MxlAudioInput::new`] genutzt, um Caps
+    /// aufzubauen; oeffentlich, damit ein Messgeraet dieselben Angaben
+    /// auch ANZEIGEN kann, ohne sie aus verhandelten GStreamer-Caps
+    /// zurueckzurechnen (die durch die eigene Konvertierungskette
+    /// veraendert sein koennen — s. `omp-scope`s `videoWidth`-Bugfund,
+    /// docs/decisions.md Nachtrag 225).
+    pub fn flow_def(&self, flow_id: &str) -> Result<String, String> {
+        self.instance
+            .get_flow_def(flow_id)
+            .map_err(|e| format!("get_flow_def({flow_id}): {e}"))
     }
 }
 
