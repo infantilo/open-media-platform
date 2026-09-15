@@ -1,6 +1,7 @@
 //! **DMF/MXL-Interop-Test** (Nutzerauftrag 2026-09-15, im Anschluss an
-//! die IBC-2026-Recherche zu Qvest/Grass Valley/Ross u. a.: "können wir
-//! kommerzielle MXL-Microservices von Drittanbietern nutzen?"): weist
+//! die Recherche zu einer herstellerübergreifenden DMF/MXL-Interop-
+//! Demo auf der IBC 2026: "können wir kommerzielle MXL-Microservices
+//! von Drittanbietern nutzen?"): weist
 //! nach, dass OMPs eigener Produktions-Lesepfad (`MxlVideoInput`/
 //! `MxlAudioInput`, exakt derselbe Code, den jeder MXL-lesende OMP-Node
 //! nutzt) Grains lesen kann, die **NICHT** von OMP geschrieben wurden —
@@ -10,8 +11,8 @@
 //! dieselbe MXL-Domain/-Bibliothek.
 //!
 //! Das ist der zweitbeste verfügbare Stand-in für "ein echtes
-//! Drittanbieter-Produkt" (EVS/Grass Valley/Ross/Vizrt-Binaries liegen
-//! hier nicht vor): zwei komplett unabhängige Code-Pfade — OMPs
+//! Drittanbieter-Produkt" (Hersteller-Binaries liegen hier nicht vor):
+//! zwei komplett unabhängige Code-Pfade — OMPs
 //! Rust-`mxl`/`mxl-sys`-Bindung hier, das MXL-Projekt-eigene C++
 //! `mxl-gst-testsrc` dort —, die beide direkt gegen dieselbe offene
 //! `libmxl.so`/Domain-Struktur bauen, genau wie es ein

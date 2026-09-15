@@ -119,9 +119,18 @@ are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
   individually named and justified in the workflow file — no silent
   skips (and as of the latest pass, zero: all IS-05-01 exceptions,
   including the ones that needed a real Sender fixture, are closed).
-- MXL zero-copy shared memory for same-host media exchange; SMPTE
-  ST 2110 (+ SRT gateway for lossy WANs) or MXL-native Fabrics (RDMA)
-  for cross-host exchange, including AES67 audio (Dante-compatible).
+- MXL zero-copy shared memory for same-host media exchange, on the
+  current stable MXL release; SMPTE ST 2110 (+ SRT gateway for lossy
+  WANs) or MXL-native Fabrics (RDMA) for cross-host exchange,
+  including AES67 audio (Dante-compatible). Because MXL is an open
+  format shared by the whole software-defined-production ecosystem
+  (not an OMP-specific transport), interoperability was verified
+  directly: OMP's own read/write path was run against the MXL
+  project's independent reference tools on the same shared-memory
+  domain — in both directions, including full pixel-level playback —
+  confirming a third-party media function speaking the same open MXL
+  format could exchange a flow with an OMP node with no gateway in
+  between.
 - **AMWA BCP-008-01/02 health monitoring**: real receiver/sender status
   (link, external sync, connection/transmission, stream/essence, plus
   an aggregated overall status) on every node that touches a real
@@ -481,7 +490,10 @@ flow declaration shown next to the measured reality, held black/freeze/
 silence alarms, and ITU-R BS.1770 true peak with an EBU R 128 compliance
 verdict — which immediately surfaced a real, independently confirmed
 clock-drift defect in this project's own MXL writers (see "What
-OpenMediaPlatform does not do").
+OpenMediaPlatform does not do"). The MXL core itself was also brought
+up to the current stable release, and interoperability against the MXL
+project's own independent reference tooling was verified directly, in
+both directions and down to actual pixels — see the MXL bullet above.
 
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,

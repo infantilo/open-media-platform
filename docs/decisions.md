@@ -24766,11 +24766,12 @@ bitte", (2) "ist v1.1.0-beta1 die aktuellste [MXL-Version]?".
 2026-09-09 der neueste Tag — zwei Zwischenschritte nach dem bisher
 gepinnten `v1.1.0-beta-1` (2026-06-09): `v1.1.0-rc1` (2026-08-05),
 dann `v1.1.0-beta-1` → `v1.0.2` (Patch-Release auf dem alten `v1.0.x`-
-Zweig, 2026-08-11) → `v1.1.0` (2026-09-09). Genau diese GA-Version ist
-es auch, die Grass Valley auf der IBC 2026 als "native MXL v1.1
-support" zeigt (s. vorangegangene Recherche im selben Gespräch) —
-OMPs bisheriger Beta-Pin war also bereits zwei Releases hinter dem,
-was die Industrie gerade als "MXL v1.1" demonstriert.
+Zweig, 2026-08-11) → `v1.1.0` (2026-09-09). Genau diese GA-Version war
+es auch, die auf der IBC 2026 in einer herstellerübergreifenden
+DMF/MXL-Interop-Demo bereits im Einsatz war (s. vorangegangene
+Recherche im selben Gespräch) — OMPs bisheriger Beta-Pin war also
+bereits zwei Releases hinter dem, was die Industrie gerade als
+"MXL v1.1" demonstriert.
 
 ### Upgrade durchgeführt (nicht nur beantwortet)
 
@@ -24839,8 +24840,8 @@ Anwendung, nicht von Hand geschrieben) und per `git apply --check
 
 ### Frage 1: der eigentliche Interop-Test
 
-**Ansatz:** echte Dritthersteller-Binaries (EVS/Grass Valley/Ross/
-Vizrt) liegen hier nicht vor. Der beste verfügbare Stand-in: zwei
+**Ansatz:** echte Dritthersteller-Binaries liegen hier nicht vor. Der
+beste verfügbare Stand-in: zwei
 komplett unabhängige Code-Pfade, die beide direkt gegen dieselbe
 offene `libmxl.so`/Domain-Struktur bauen, genau wie es ein
 Hersteller-Produkt mit "nativer MXL-Unterstützung" auch täte — OMPs
@@ -24887,15 +24888,17 @@ Pixel-Ebene.
 **Ergebnis:** beide Richtungen funktionieren, mit der offenen `mxl`/
 `mxl-sys`-Bibliothek (jetzt auf demselben GA-Stand `v1.1.0`, den die
 IBC-2026-Interop-Demo referenziert) als gemeinsamem Nenner — genau das
-Muster, das laut Ross Video ("shared memory rather than traditional
-streaming") und Qvest auch die reale Mehrhersteller-Interop auf der
-Messe trägt. Ein kommerzieller MXL-Microservice, der dieselbe
-Domain-Struktur/Bibliotheksversion spricht, könnte nach diesem Befund
-ohne Gateway direkt mit einem OMP-Node einen Flow austauschen.
+Muster ("shared memory rather than traditional streaming"), das laut
+den öffentlichen Ankündigungen zu dieser Demo auch die reale
+Mehrhersteller-Interop auf der Messe trägt. Ein kommerzieller MXL-
+Microservice, der dieselbe Domain-Struktur/Bibliotheksversion spricht,
+könnte nach diesem Befund ohne Gateway direkt mit einem OMP-Node
+einen Flow austauschen.
 **Bewusst nicht geprüft (kein Zugriff):** ein echtes Hersteller-
-Binary; die proprietären Steuerschichten der Hersteller (AMPP OS,
-Catena/DashBoard, DataMiner xOps) — nur der reine MXL-Flow-Austausch
-plus die bereits vorhandene NMOS-IS-04/05-Discovery wurden geprüft.
+Binary; die proprietären Steuerschichten der jeweiligen Hersteller
+(eigene Orchestrierungs-/Kontrollplattformen) — nur der reine
+MXL-Flow-Austausch plus die bereits vorhandene NMOS-IS-04/05-
+Discovery wurden geprüft.
 
 **Aufräumen:** beide Test-Prozesse beendet, isolierte Testdomain
 gelöscht, `/dev/shm/omp-mxl` (Dev-Domain) danach unverändert bei
