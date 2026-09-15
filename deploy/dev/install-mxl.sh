@@ -27,6 +27,19 @@
 # einen echten Flow, mxl-info bestätigt) gegen die bestehenden
 # MXL-Pfade abgesichert, nicht nur den neuen Fabrics-Pfad.
 #
+# v1.1.0-beta-1 → v1.1.0 (docs/decisions.md Nachtrag 227, 2026-09-15) —
+# Nutzeranlass: DMF/MXL-Interop auf der IBC 2026 (Qvest/Grass
+# Valley/Ross u. a., "native MXL v1.1"-Support) zeigte, dass die
+# Industrie inzwischen auf der stabilen v1.1.0-GA läuft, nicht mehr auf
+# dem Beta-Tag von Nachtrag 42. `deploy/dev/mxl-patches/0001-…diff`
+# neu gegen v1.1.0 portiert (Rust-Seite: `gst-mxl-rs/src/mxlsink/
+# {imp.rs,state.rs}` haben sich strukturell verschoben — Bug 1 der
+# beiden ursprünglichen Fixes, die set_caps-Idempotenz, ist in v1.1.0
+# SELBST korrekt behoben und daher aus dem Patch entfernt; Bug 2, der
+# DOMAIN_LOCK gegen die GC/create_flow_writer-Race, bleibt offen und
+# wurde neu eingehängt). C++-Seite (`FlowManager.cpp`) unverändert
+# übernehmbar — Datei zwischen den Tags nicht angefasst.
+#
 # OMP-eigene Patches (deploy/dev/mxl-patches/, docs/decisions.md
 # Nachtrag 116): third_party/mxl ist komplett gitignored — ein
 # `git checkout $MXL_VERSION` (unten) auf einen bewegten/neuen Tag
@@ -37,7 +50,7 @@
 # statt die Fixes nur lokal unversioniert im Checkout zu belassen.
 set -euo pipefail
 
-MXL_VERSION="v1.1.0-beta-1"
+MXL_VERSION="v1.1.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MXL_SRC_DIR="${MXL_SRC_DIR:-$ROOT_DIR/third_party/mxl}"

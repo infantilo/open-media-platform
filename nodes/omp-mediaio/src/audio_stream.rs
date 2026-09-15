@@ -40,6 +40,12 @@ pub struct Broadcaster {
     clients: Mutex<Vec<Client>>,
 }
 
+impl Default for Broadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Broadcaster {
     pub fn new() -> Self {
         Broadcaster {

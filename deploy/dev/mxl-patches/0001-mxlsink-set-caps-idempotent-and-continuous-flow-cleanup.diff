@@ -104,52 +104,18 @@ index 8e54324..b045ea8 100644
      }
  
 diff --git a/rust/gst-mxl-rs/src/mxlsink/imp.rs b/rust/gst-mxl-rs/src/mxlsink/imp.rs
-index 814962f..f33a084 100644
+index 12181b8..812ba4c 100644
 --- a/rust/gst-mxl-rs/src/mxlsink/imp.rs
 +++ b/rust/gst-mxl-rs/src/mxlsink/imp.rs
-@@ -37,6 +37,7 @@ use crate::mxlsink::state::State;
+@@ -39,6 +39,7 @@ use crate::mxlsink::state::State;
  use crate::mxlsink::state::init_state_with_audio;
  use crate::mxlsink::state::init_state_with_data;
  use crate::mxlsink::state::init_state_with_video;
 +use crate::mxlsink::state::lock_domain_ops;
- use crate::mxlsink::{render_audio, render_data, render_video};
+ use crate::mxlsink::{render_continuous, render_discrete};
  
  pub(crate) static CAT: LazyLock<gst::DebugCategory> = LazyLock::new(|| {
-@@ -375,6 +376,33 @@ impl BaseSinkImpl for MxlSink {
-             .as_mut()
-             .ok_or(gst::loggable_error!(CAT, "Failed to get state",))?;
- 
-+        // Live found (not assumed): GStreamer can legally call set_caps()
-+        // more than once on the SAME pad for the SAME flow-id — a
-+        // renegotiation once upstream elements (audioconvert/audioresample
-+        // here) settle on concrete caps, observed reliably for the audio
-+        // branch of a video+audio mxlsink pair under heavy concurrent
-+        // pipeline-construction load, never for video (its caps are fully
-+        // fixed — width/height/framerate/v210 — from the very first
-+        // negotiation, nothing left to renegotiate). Before this guard,
-+        // EVERY set_caps call unconditionally tried to create a FRESH MXL
-+        // flow writer for the same flow-id — the second call always failed
-+        // ("the UUID belongs to a flow with another active writer", since
-+        // the first writer from the first set_caps call was still active
-+        // and perfectly valid), and gst-mxl-rs turned that into a fatal
-+        // element error that killed the whole pipeline, even though the
-+        // flow was already being written correctly. Idempotent no-op if
-+        // this element already owns a writer of the matching kind — the
-+        // existing writer keeps running, no data loss/gap.
-+        if state.video.is_some() || state.audio.is_some() || state.data.is_some() {
-+            gst::info!(
-+                CAT,
-+                imp = self,
-+                "set_caps called again with an active writer already present — \
-+                 treating as a caps renegotiation, keeping the existing MXL writer"
-+            );
-+            return Ok(());
-+        }
-+
-         let settings = self
-             .settings
-             .lock()
-@@ -453,8 +481,24 @@ fn init_mxl_instance(
+@@ -509,8 +510,24 @@ fn init_mxl_instance(
      // Best-effort: reclaim any flow directories left behind by a writer that
      // exited or crashed before its destructors ran. Long-running processes
      // get a fresh GC pass every time an element opens an instance.
@@ -177,49 +143,63 @@ index 814962f..f33a084 100644
  
      Ok(mxl_instance)
 diff --git a/rust/gst-mxl-rs/src/mxlsink/state.rs b/rust/gst-mxl-rs/src/mxlsink/state.rs
-index d4ddac3..4826029 100644
+index fc333bd..2d4182b 100644
 --- a/rust/gst-mxl-rs/src/mxlsink/state.rs
 +++ b/rust/gst-mxl-rs/src/mxlsink/state.rs
-@@ -5,7 +5,7 @@ use std::{
-     collections::HashMap,
-     process,
-     str::FromStr,
--    sync::{Arc, Condvar, Mutex},
-+    sync::{Arc, Condvar, LazyLock, Mutex},
-     thread,
- };
+@@ -1,7 +1,12 @@
+ // SPDX-FileCopyrightText: 2025-2026 Contributors to the Media eXchange Layer project.
+ // SPDX-License-Identifier: Apache-2.0
  
-@@ -35,6 +35,41 @@ pub(crate) const DEFAULT_FLOW_ID: &str = "";
+-use std::{collections::HashMap, process, str::FromStr};
++use std::{
++    collections::HashMap,
++    process,
++    str::FromStr,
++    sync::{LazyLock, Mutex},
++};
+ 
+ use crate::mxlsink::imp::CAT;
+ use gst::StructureRef;
+@@ -24,6 +29,50 @@ pub(crate) const DEFAULT_FLOW_ID: &str = "";
  pub(crate) const DEFAULT_DOMAIN: &str = "";
- const MAX_CHANNEL_SIZE: usize = 50;
+ pub(crate) const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
  
-+/// Process-wide lock serializing every MXL domain-mutating operation across
-+/// ALL `mxlsink` instances in this process (`Instance::garbage_collect_flows`
-+/// AND `Instance::create_flow_writer`, both below and in `imp.rs::start`).
++/// OMP-Patch (Nachtrag 116, erneut Nachtrag 227 gegen v1.1.0 portiert):
++/// Prozessweiter Lock, der JEDE domain-verändernde MXL-Operation über ALLE
++/// `mxlsink`-Instanzen dieses Prozesses serialisiert
++/// (`Instance::garbage_collect_flows` in `imp.rs` UND
++/// `Instance::create_flow_writer` unten).
 +///
-+/// Root cause (found live, not assumed): a pipeline with two `mxlsink`
-+/// elements writing to the SAME domain under DIFFERENT flow-ids (e.g. a
-+/// video+audio branch pair, PIPELINE CONTROLLER's `mxl` output type,
-+/// `deploy/pipeline-controller/patches/0001-mxl-output.diff`) intermittently
-+/// failed with "the UUID belongs to a flow with another active writer" on
-+/// ONE of the two branches — reproducible under heavy concurrent pipeline
-+/// construction (many other pipelines starting at the same time), never
-+/// reproducible in an isolated two-element pipeline. `Instance::_mutex`
-+/// (`lib/internal/src/Instance.cpp`, `createFlowWriter`) only serializes
-+/// calls against the SAME `Instance` — each `mxlsink` element owns its OWN
-+/// `MxlInstance` (`init_mxl_instance`, `imp.rs`), so two SIBLING elements'
-+/// `garbage_collect_flows()`/`create_flow_writer()` calls are NOT
-+/// synchronized against each other by that mutex. `garbage_collect_flows()`
-+/// scans the WHOLE domain directory and reclaims any `*.mxl-flow` whose
-+/// data file is not currently flock'd — if it runs (from one sibling's
-+/// `start()`) in the narrow window between another sibling's flow directory
-+/// being created and its flock being acquired (`create_flow_writer()`), the
-+/// not-yet-locked, freshly-created flow looks orphaned and the two race.
-+/// Fix: never let a GC pass and a flow-writer creation from this process
-+/// overlap, regardless of which `MxlInstance`/UUID is involved — a single
-+/// process-wide lock is sufficient (MXL flow creation/GC is not a
-+/// steady-state hot path, only happens once per element start, so the
-+/// serialization cost is negligible).
++/// Root Cause (live gefunden, nicht angenommen): eine Pipeline mit zwei
++/// `mxlsink`-Elementen, die in DIESELBE Domain unter VERSCHIEDENEN
++/// Flow-IDs schreiben (z. B. ein Video+Audio-Zweigpaar, PIPELINE
++/// CONTROLLERs `mxl`-Ausgangstyp), scheiterte intermittierend mit "the
++/// UUID belongs to a flow with another active writer" auf EINEM der
++/// beiden Zweige — reproduzierbar unter starker gleichzeitiger
++/// Pipeline-Aufbaulast, nie in einer isolierten Zwei-Element-Pipeline.
++/// `Instance::_mutex` (`lib/internal/src/Instance.cpp`,
++/// `createFlowWriter`) serialisiert nur Aufrufe gegen DIESELBE
++/// `Instance` — jedes `mxlsink`-Element besitzt seine EIGENE
++/// `MxlInstance` (`init_mxl_instance`, `imp.rs`), zwei GESCHWISTER-
++/// Elemente sind über diesen Mutex also NICHT gegeneinander
++/// synchronisiert. `garbage_collect_flows()` scannt das GESAMTE
++/// Domain-Verzeichnis und reklamiert jedes `*.mxl-flow`, dessen
++/// Datendatei gerade nicht geflockt ist — läuft es (aus dem `start()`
++/// eines Geschwisters) im schmalen Fenster zwischen dem Anlegen des
++/// Flow-Verzeichnisses eines anderen Geschwisters und dessen
++/// Flock-Erwerb (`create_flow_writer()`), sieht der noch ungeflockte,
++/// frisch angelegte Flow verwaist aus, und beide laufen sich in die
++/// Quere. Fix: eine GC-Runde und eine Flow-Writer-Erstellung aus diesem
++/// Prozess dürfen sich nie überlappen, unabhängig davon, welche
++/// `MxlInstance`/UUID beteiligt ist — ein einzelner prozessweiter Lock
++/// reicht (Flow-Anlage/GC ist kein Hot-Path, passiert nur einmal pro
++/// Element-Start, die Serialisierungskosten sind vernachlässigbar).
++///
++/// **Bewusst NICHT mehr Teil dieses Patches (anders als Nachtrag 116):**
++/// die frühere `set_caps`-Idempotenz-Ergänzung — v1.1.0 implementiert das
++/// jetzt selbst, korrekter sogar (vergleicht `flow_def` statt jeden
++/// Re-Aufruf blind als No-Op zu behandeln, s. `RE_SET_CAPS_NO_CHANGE`
++/// unten in `init_state_with_video`/`init_state_with_audio`).
 +static DOMAIN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 +
 +/// RAII-Guard-Handle für `DOMAIN_LOCK` — `imp.rs` braucht ihn für
@@ -230,8 +210,8 @@ index d4ddac3..4826029 100644
 +
  #[derive(Debug, Clone)]
  pub(crate) struct Settings {
-     pub flow_id: String,
-@@ -204,14 +239,21 @@ pub(crate) fn init_state_with_video(
+     /// UUID of the MXL flow.
+@@ -280,14 +329,20 @@ pub(crate) fn init_state_with_video(
      };
      let instance = &state.instance;
  
@@ -246,8 +226,7 @@ index d4ddac3..4826029 100644
 +    let (flow_writer, flow, is_created) = {
 +        // s. DOMAIN_LOCK-Doku: darf mit keiner GC-Runde eines Geschwister-
 +        // mxlsink im selben Prozess überlappen — Lock nur für diesen einen
-+        // Aufruf, nicht für die restliche Funktion (Thread-Spawn etc.
-+        // braucht keine Domain-Exklusivität mehr).
++        // Aufruf, nicht für die restliche Funktion.
 +        let _domain_lock = lock_domain_ops();
 +        instance
 +            .create_flow_writer(
@@ -261,7 +240,7 @@ index d4ddac3..4826029 100644
      if !is_created {
          return Err(gst::loggable_error!(
              CAT,
-@@ -291,15 +333,19 @@ pub(crate) fn init_state_with_audio(
+@@ -362,15 +417,19 @@ pub(crate) fn init_state_with_audio(
          details: FlowDefDetails::Audio(flow_def_details.clone()),
      };
  
@@ -287,10 +266,10 @@ index d4ddac3..4826029 100644
 +            )
 +            .map_err(|e| gst::loggable_error!(CAT, "Failed to create flow writer: {}", e))?
 +    };
-     let writer = Some(
-         flow_writer
-             .to_samples_writer()
-@@ -380,14 +426,18 @@ pub(crate) fn init_state_with_data(
+     if !is_created {
+         return Err(gst::loggable_error!(
+             CAT,
+@@ -448,14 +507,18 @@ pub(crate) fn init_state_with_data(
      };
      let instance = &state.instance;
  

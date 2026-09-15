@@ -24752,3 +24752,159 @@ diesem Node (unverändert: reiner Analyse-Tap, kein Signalweg-Element).
 `deploy/catalog.json`, `README.md`, `docs/HANDBUCH.md`,
 `docs/BENUTZERHANDBUCH.md`, `docs/screenshots/scope-*.png`,
 `UMSETZUNG.md`.
+
+## 2026-09-15 (Nachtrag 227) — MXL v1.1.0-beta-1 → v1.1.0 (GA), plus DMF/MXL-Interop-Test gegen die unabhängigen C++-Referenzwerkzeuge
+
+**Nutzeranlass:** zwei Rückfragen zur vorangegangenen DMF/MXL-IBC-2026-
+Recherche (README/HANDBUCH-Update im selben Gespräch): (1) "können wir
+kommerzielle MXL-Microservices von Drittanbietern nutzen? teste das
+bitte", (2) "ist v1.1.0-beta1 die aktuellste [MXL-Version]?".
+
+### Frage 2 zuerst: nein, v1.1.0-beta-1 ist NICHT mehr aktuell
+
+`gh release list --repo dmf-mxl/mxl`: **v1.1.0** (GA) ist seit
+2026-09-09 der neueste Tag — zwei Zwischenschritte nach dem bisher
+gepinnten `v1.1.0-beta-1` (2026-06-09): `v1.1.0-rc1` (2026-08-05),
+dann `v1.1.0-beta-1` → `v1.0.2` (Patch-Release auf dem alten `v1.0.x`-
+Zweig, 2026-08-11) → `v1.1.0` (2026-09-09). Genau diese GA-Version ist
+es auch, die Grass Valley auf der IBC 2026 als "native MXL v1.1
+support" zeigt (s. vorangegangene Recherche im selben Gespräch) —
+OMPs bisheriger Beta-Pin war also bereits zwei Releases hinter dem,
+was die Industrie gerade als "MXL v1.1" demonstriert.
+
+### Upgrade durchgeführt (nicht nur beantwortet)
+
+`deploy/dev/install-mxl.sh`: `MXL_VERSION` auf `v1.1.0` gehoben.
+
+**Patch-Neuportierung nötig** (`deploy/dev/mxl-patches/0001-…diff`,
+docs/decisions.md Nachtrag 116/58): `git apply --check` schlug für
+`rust/gst-mxl-rs/src/mxlsink/{imp.rs,state.rs}` fehl — beide Dateien
+haben sich zwischen Beta und GA strukturell verschoben (u. a.
+`render_video`/`render_audio`/`render_data` zu `render_discrete`/
+`render_continuous` vereinheitlicht, `State` auf ein `FlowState`-Enum
+umgebaut). `lib/internal/src/FlowManager.cpp` (der C++-Teil des
+Patches) war dagegen zwischen den Tags **unverändert** — `git apply`
+lief dort unangetastet durch.
+
+Beim Neuportieren der Rust-Seite eine echte, gute Überraschung
+gefunden: **einer der beiden ursprünglichen Nachtrag-116-Bugfixes ist
+in v1.1.0 vom Upstream-Projekt selbst korrekt behoben** — die
+`set_caps`-Idempotenz. `init_state_with_video`/`init_state_with_audio`
+vergleichen jetzt den `flow_def` gegen den vorhandenen `FlowState` und
+behandeln einen unveränderten Re-Aufruf als No-Op (`RE_SET_CAPS_
+NO_CHANGE`), einen tatsächlichen Format-/Medientyp-Wechsel dagegen
+korrekt als Fehler — genauer als OMPs ursprünglicher Patch, der JEDEN
+Re-Aufruf bei vorhandenem Writer blind als No-Op behandelte. Dieser
+Teil des Patches wurde daher ersatzlos gestrichen, nicht neu portiert.
+
+Der **zweite** Bugfix (`DOMAIN_LOCK`: `garbage_collect_flows()` und
+`create_flow_writer()` dürfen sich über Geschwister-`mxlsink`-
+Instanzen im selben Prozess nie überlappen, sonst reklamiert eine GC-
+Runde einen gerade erst angelegten, noch ungeflockten Flow eines
+anderen Elements als verwaist) ist in v1.1.0 weiterhin **nicht**
+behoben — unverändert neu eingehängt (gleicher `LazyLock<Mutex<()>>`-
+Mechanismus wie zuvor, an den drei `create_flow_writer`-Aufrufstellen
+plus dem `garbage_collect_flows()`-Aufruf in `init_mxl_instance`, mit
+derselben ausführlichen Root-Cause-Doku wie im Original). Patch aus
+dem tatsächlichen Arbeitsverzeichnis-Diff neu erzeugt (`git diff` nach
+Anwendung, nicht von Hand geschrieben) und per `git apply --check
+--reverse` auf Idempotenz geprüft.
+
+**Verifikation (empirisch, nicht nur "baut"):**
+- C++-Kern + Tools: `cmake --build build/Linux-GCC-Release` grün,
+  `mxl-info --version` bestätigt `1.1.0-+0 g8f3f1096e804` (exakt der
+  GA-Commit).
+- Rust-Workspace: `cargo clean -p mxl-sys -p mxl` (erzwingt frisches
+  Bindgen gegen die neuen C-Header — der schärfste ABI-Regressionstest)
+  + `cargo build --workspace --bins` — alle ~25 Nodes bauen sauber
+  gegen v1.1.0, kein einziger C-API-Bruch.
+- `cargo test -p omp-mediaio --lib`: 6/7 grün (1 `ignored`, wie immer).
+- `cargo clippy -p omp-mediaio --lib --examples --all-features -D
+  warnings` / `-p omp-scope --all-targets -D warnings`: grün (dabei
+  einen vorbestehenden, unabhängigen `clippy::new_without_default` in
+  `audio_stream::Broadcaster` nebenbei mitgefixt — derselbe Fund/Fix wie
+  bei `preview::Broadcaster` in Nachtrag 225, gleiches Muster,
+  gleiche Begründung). **Nicht mitgefixt:** `cargo clippy --workspace
+  -D warnings` zeigt zusätzlich ~30 vorbestehende `collapsible_if`-
+  u. ä.-Lints in mehreren, von dieser Sitzung nicht berührten Nodes
+  (`omp-mxf-player(-direct)`, `omp-ograf`, `omp-video-mixer-me`) —
+  erkennbar unabhängig vom MXL-Bump (reine Stil-Lints, u. a. `if`-
+  `let_chains`-Kollabierung), nicht Teil dieses Auftrags, hier nur
+  vermerkt statt automatisch mit angefasst.
+- Live-Regression gegen die ECHTE, laufende Dev-Domain (`/dev/shm/
+  omp-mxl`, per `make start` gestarteter Orchestrator, unverändert
+  weiterlaufend): frisch gestartete `omp-source`-Instanz schreibt
+  aktiv (`mxl-info -f <flow>` zeigt wachsenden Head-Index), Instanz
+  danach sauber gestoppt.
+
+### Frage 1: der eigentliche Interop-Test
+
+**Ansatz:** echte Dritthersteller-Binaries (EVS/Grass Valley/Ross/
+Vizrt) liegen hier nicht vor. Der beste verfügbare Stand-in: zwei
+komplett unabhängige Code-Pfade, die beide direkt gegen dieselbe
+offene `libmxl.so`/Domain-Struktur bauen, genau wie es ein
+Hersteller-Produkt mit "nativer MXL-Unterstützung" auch täte — OMPs
+eigener Rust-Produktions-Lesepfad (`omp_mediaio::mxl::MxlVideoInput`,
+derselbe Code, den JEDER MXL-lesende OMP-Node nutzt) gegen die im
+`dmf-mxl/mxl`-Repo selbst mitgelieferten, unabhängigen C++-
+Referenzwerkzeuge (`tools/mxl-gst/{testsrc,sink}.cpp`, `tools/mxl-
+info`) — kein OMP-Code auf der jeweils anderen Seite. Test lief auf
+einer eigenen, isolierten Domain (`/dev/shm/omp-mxl-interop-test`),
+NICHT auf der laufenden Dev-Domain, um den Live-Betrieb nicht zu
+stören; danach vollständig aufgeräumt.
+
+**Richtung A — fremd geschrieben, OMP liest** (neues Beispiel
+`nodes/omp-mediaio/examples/interop_third_party_reference_reader.rs`):
+`mxl-gst-testsrc` (unabhängiges C++-Werkzeug) schreibt einen echten
+1920×1080@29.97-SMPTE-Flow. OMPs `MxlVideoInput` öffnet exakt diesen
+Flow über dessen fremd erzeugte `flow_def` und liest ihn — **Erfolg**:
+30 Bilder über den echten Produktionslesepfad empfangen, korrekte
+Auflösung aus den fremden Caps gelesen.
+
+**Richtung B — OMP schreibt, fremd liest** (neues Beispiel
+`interop_omp_writer_for_reference_sink.rs`): `MxlVideoOutput` (derselbe
+Code wie `omp-source`) schreibt einen 1920×1080@29.97-`videotestsrc`-
+Flow. **Ein echter, live gefundener Fehler im eigenen Testtreiber**
+unterwegs: der erste Versuch blieb dauerhaft bei `head_index=0`
+hängen, ohne jeden Fehler — `MxlVideoOutput` baut sein internes
+`valve`-Element bewusst GESCHLOSSEN auf (`drop=true`, `mxl.rs`s
+Dokumentation zu Nodes wie `omp-ograf`, die einen Ausgang vorbereiten,
+aber erst über IS-05/`Output::set_active` scharfschalten wollen) —
+mein Testtreiber hatte diesen Aufruf schlicht vergessen. Nach Ergänzen
+von `output.set_active(true)`: `mxl-info -f <flow>` zeigt einen
+wachsenden Head-Index. Danach die unabhängigen C++-Werkzeuge
+gegengeprüft: `mxl-info` bestätigt Metadaten/Timing; `mxl-gst-sink`
+(reine Pixel-Ebene, Video) fand und begann den Flow zu lesen (sichtbar
+an echten PTS-Nachführungen), scheiterte aber zunächst an
+`autovideosink` ohne X-Server (`XIO: fatal IO error 110 … on X server
+":0"`, dasselbe Klasse Sandbox-Limit wie `UMSETZUNG.md` §0 Punkt 7)
+— unter `xvfb-run -a` (virtueller X-Server, bereits auf der Maschine
+vorhanden) lief derselbe Aufruf 8 s durch, ohne Absturz, mit
+durchgehend echten Grain-Timing-Nachführungen ("Video latency increase
+detected") statt einem einzelnen Fehlschlag — **Erfolg** auch auf
+Pixel-Ebene.
+
+**Ergebnis:** beide Richtungen funktionieren, mit der offenen `mxl`/
+`mxl-sys`-Bibliothek (jetzt auf demselben GA-Stand `v1.1.0`, den die
+IBC-2026-Interop-Demo referenziert) als gemeinsamem Nenner — genau das
+Muster, das laut Ross Video ("shared memory rather than traditional
+streaming") und Qvest auch die reale Mehrhersteller-Interop auf der
+Messe trägt. Ein kommerzieller MXL-Microservice, der dieselbe
+Domain-Struktur/Bibliotheksversion spricht, könnte nach diesem Befund
+ohne Gateway direkt mit einem OMP-Node einen Flow austauschen.
+**Bewusst nicht geprüft (kein Zugriff):** ein echtes Hersteller-
+Binary; die proprietären Steuerschichten der Hersteller (AMPP OS,
+Catena/DashBoard, DataMiner xOps) — nur der reine MXL-Flow-Austausch
+plus die bereits vorhandene NMOS-IS-04/05-Discovery wurden geprüft.
+
+**Aufräumen:** beide Test-Prozesse beendet, isolierte Testdomain
+gelöscht, `/dev/shm/omp-mxl` (Dev-Domain) danach unverändert bei
+demselben Stand wie zuvor.
+
+**Dateien:** `deploy/dev/install-mxl.sh` (Version + Historie-
+Kommentar), `deploy/dev/mxl-patches/0001-…diff` (neu gegen v1.1.0
+erzeugt), `nodes/omp-mediaio/src/audio_stream.rs` (Nebenfund
+`Default`-Impl), `nodes/omp-mediaio/examples/
+interop_third_party_reference_reader.rs` + `interop_omp_writer_for_
+reference_sink.rs` (neu, bleiben als wiederholbare Interop-Diagnose
+im Repo, analog den bestehenden `mxl_*_repro.rs`-Beispielen).
