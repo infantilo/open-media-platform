@@ -74,6 +74,16 @@ ignore = [
     #{ id = "RUSTSEC-0000-0000", reason = "you can specify a reason the advisory is ignored" },
     #"a-crate-that-is-yanked@0.1.1", # you can also ignore yanked crate versions if you wish
     #{ crate = "a-crate-that-is-yanked@0.1.1", reason = "you can specify why you are ignoring the yanked crate" },
+    # BEFRISTET (docs/decisions.md Nachtrag 234, 2026-09-17): rustls
+    # TLS-1.3-Handshake-Bug (transitiv über async-nats -> tokio-rustls).
+    # Der von der Advisory selbst genannte Fix (>=0.23.45) ist auf
+    # crates.io noch nicht veröffentlicht — `cargo update -p rustls`
+    # bringt aktuell nur 0.23.43, das höchste tatsächlich existierende
+    # Release. Kein Versionskonflikt unsererseits, nur "Fix existiert
+    # upstream noch nicht". ENTFERNEN, sobald rustls >=0.23.45
+    # verfügbar ist (`cargo info rustls` prüfen, dann `cargo update -p
+    # rustls` erneut versuchen).
+    { id = "RUSTSEC-2026-0285", reason = "rustls fix (>=0.23.45) noch nicht auf crates.io veröffentlicht, s. docs/decisions.md Nachtrag 234 — befristet, bei Verfügbarkeit entfernen" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.

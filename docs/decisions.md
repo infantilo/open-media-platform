@@ -25459,3 +25459,24 @@ erneut versuchen, bis 0.23.45 (oder neuer) verfügbar ist. Keine dieser
 Optionen wurde umgesetzt, da nicht angefragt.
 
 **Dateien:** `nodes/Cargo.lock`.
+
+## 2026-09-17 (Nachtrag 235) — Option 1 aus Nachtrag 234 umgesetzt: befristeter `deny.toml`-Ignore für RUSTSEC-2026-0285
+
+**Nutzerauftrag:** "setz den befristeten deny.toml-Ignore-Eintrag für
+RUSTSEC-2026-0285" — explizite Entscheidung für Option 1 der in
+Nachtrag 234 vorgelegten drei Optionen.
+
+**Umgesetzt:** `nodes/deny.toml`, `[advisories].ignore`, per
+`{ id = "...", reason = "..." }`-Form (nicht nur die bloße ID-Zeichenkette)
+— Begründung nennt explizit, dass der Fix upstream noch nicht existiert,
+verweist auf diesen Log-Eintrag und trägt eine ausdrückliche
+"ENTFERNEN, sobald verfügbar"-Anweisung direkt im Kommentar, damit ein
+künftiger Blick in die Datei nicht raten muss, ob der Eintrag noch
+gebraucht wird.
+
+**Verifikation:** `cargo deny check` (alle vier Prüfungen) läuft jetzt
+wieder vollständig grün (`advisories ok, bans ok, licenses ok, sources
+ok`) — vorher `advisories FAILED` trotz bereits aktualisiertem chacha20
+(Nachtrag 234).
+
+**Dateien:** `nodes/deny.toml`.
