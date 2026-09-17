@@ -119,9 +119,33 @@ loudness with ITU-R BS.1770 true peak. Further down the same panel:
 per-flow transport latency, delay variation, cadence and dropped-grain
 counters, next to what the writer actually declares about the flow._
 
-More screens (login, instances, workflows, scheduler, alarms,
-administration, cluster, hosts, the host-setup wizard, grouped tiles)
-are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
+### More screens
+
+<table>
+<tr>
+<td width="33%"><img src="docs/screenshots/scope-mxl-timing.png" width="260"><br><sub><code>omp-scope</code>: per-flow MXL transport latency, delay variation, cadence and dropped-grain counters, next to the writer's own flow declaration</sub></td>
+<td width="33%"><img src="docs/screenshots/scope-qc-alarme.png" width="260"><br><sub><code>omp-scope</code>: held black/freeze/silence QC alarms — debounced, not a false alarm on every cut</sub></td>
+<td width="33%"><img src="docs/screenshots/hosts.png" width="260"><br><sub>Host list: CPU/RAM/network telemetry per host, online status, sparkline history</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/host-wizard.png" width="260"><br><sub>Guided host onboarding — bare-metal, VM or AWS</sub></td>
+<td width="33%"><img src="docs/screenshots/cluster.png" width="260"><br><sub>Raft cluster status, guided join/leave for growing or shrinking the orchestrator cluster</sub></td>
+<td width="33%"><img src="docs/screenshots/instanzen.png" width="260"><br><sub>Running instances: CPU/RAM per process, across all hosts</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/workflows.png" width="260"><br><sub>Workflow management — presets, snapshots, running state</sub></td>
+<td width="33%"><img src="docs/screenshots/scheduler.png" width="260"><br><sub>Time-driven start/stop scheduling — day/week/month view, drag-to-move/resize</sub></td>
+<td width="33%"><img src="docs/screenshots/gruppen.png" width="260"><br><sub>Grouped/nested tiles in the flow editor</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/alarme.png" width="260"><br><sub>Collected alarms across the whole fleet</sub></td>
+<td width="33%"><img src="docs/screenshots/administration.png" width="260"><br><sub>Administration: users, role bindings, node catalog, audit log</sub></td>
+<td width="33%"><img src="docs/screenshots/login.png" width="260"><br><sub>Login — local user/role model with audit log</sub></td>
+</tr>
+</table>
+
+Full walkthroughs and context for every screen above are in
+[`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 
 ## What's in the box
 
