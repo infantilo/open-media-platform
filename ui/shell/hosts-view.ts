@@ -29,12 +29,25 @@ interface NetMetrics {
   linkMbps?: number;
 }
 
+// gpuMetrics fehlt (statt eines Nullwert-Objekts), wenn der Host-Agent
+// keinen GPU-Index für die Telemetrie konfiguriert hat
+// (host-agent/internal/telemetry.GpuSample-Doku, Nutzerauftrag
+// 2026-09-17) — kein stiller "0%", der wie eine echte Leerlauf-Messung
+// aussähe.
+interface GpuMetrics {
+  index: number;
+  utilizationPercent: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+}
+
 interface HostMetrics {
   cpuPercent: number;
   memUsedBytes: number;
   memTotalBytes: number;
   receivedAt: string;
   net?: NetMetrics;
+  gpu?: GpuMetrics;
 }
 
 interface HostEntry {
@@ -80,6 +93,10 @@ interface PlacementAdvice {
   // Link-Kapazität meldet (orchestrator/internal/placement.Advice.
   // NetPercent-Doku, Nutzerauftrag 2026-09-02).
   netPercent?: number;
+  // gpuPercent fehlt, wenn dieser Host keinen GPU-Index konfiguriert hat
+  // (orchestrator/internal/placement.Advice.GpuPercent-Doku,
+  // Nutzerauftrag 2026-09-17).
+  gpuPercent?: number;
   instanceIds: string[];
   suggestedHostId?: string;
   suggestedHostLabel?: string;
@@ -128,7 +145,7 @@ function secondsUntil(deadlineAt: string): number {
 // — generisch übersetzt statt fest verdrahteter Kombinationen (gleiches
 // Muster wie alarm-view.ts' reasonLabel), sonst müsste jede neue
 // Kombination hier extra nachgezogen werden.
-const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz" };
+const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz", gpu: "GPU" };
 
 function reasonLabel(reason: string): string {
   return reason
@@ -151,6 +168,13 @@ function formatNetRate(net: NetMetrics): string {
   if (!net.linkMbps) return base;
   const percent = ((rxMbps + txMbps) / net.linkMbps) * 100;
   return `${base} (${percent.toFixed(0)}%)`;
+}
+
+// formatGpuUsage zeigt Auslastung% + VRAM-Belegung (Nutzerauftrag
+// 2026-09-17) — kein Link-Kapazitäts-Sonderfall wie bei formatNetRate,
+// nvidia-smi liefert utilization.gpu bereits als Prozentwert.
+function formatGpuUsage(gpu: GpuMetrics): string {
+  return `${gpu.utilizationPercent.toFixed(0)}% (${formatBytes(gpu.memUsedBytes)} / ${formatBytes(gpu.memTotalBytes)})`;
 }
 
 // Sparkline für CPU% der letzten Stunde (Kapitel 14 Teil 1) — feste
@@ -344,6 +368,7 @@ class HostsView extends HTMLElement {
         const cpu = m ? `${m.cpuPercent.toFixed(0)}%` : "–";
         const mem = m ? `${formatBytes(m.memUsedBytes)} / ${formatBytes(m.memTotalBytes)}` : "–";
         const net = m?.net ? formatNetRate(m.net) : "–";
+        const gpu = m?.gpu ? formatGpuUsage(m.gpu) : "–";
         const seen = m ? new Date(m.receivedAt).toLocaleTimeString() : "nie";
         const win = history.get(h.id);
         const cpuValues = win?.samples?.map((s) => s.cpuPercent) ?? [];
@@ -358,6 +383,7 @@ class HostsView extends HTMLElement {
           <td style="padding:2px 8px;">${cpu}</td>
           <td style="padding:2px 8px;">${mem}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${net}</td>
+          <td style="padding:2px 8px;white-space:nowrap;">${gpu}</td>
           <td style="padding:2px 8px;">${spark}</td>
           <td style="padding:2px 8px;white-space:nowrap;">${minAvgMax}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${seen}</td>
@@ -371,8 +397,9 @@ class HostsView extends HTMLElement {
           ? `Vorschlag: <strong>${escapeHtml(a.suggestedHostLabel ?? a.suggestedHostId)}</strong>`
           : `<span style="color:var(--omp-cue);">kein Ausweichhost frei</span>`;
         const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
+        const gpuPart = a.gpuPercent !== undefined ? ` / GPU ${a.gpuPercent.toFixed(0)}%` : "";
         return `<div style="padding:var(--omp-space-2);margin-bottom:var(--omp-space-1);background:rgba(239,83,80,0.15);border:1px solid var(--omp-error);border-radius:var(--omp-radius);">
-          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}),
+          <strong>${escapeHtml(a.hostLabel)}</strong> überlastet (Grund: ${reasonLabel(a.reason)}, CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}${gpuPart}),
           ${a.instanceIds.length} Instanz(en) betroffen — ${target}
         </div>`;
       })
@@ -415,6 +442,7 @@ class HostsView extends HTMLElement {
                 <th style="padding:2px 8px;">CPU</th>
                 <th style="padding:2px 8px;">RAM</th>
                 <th style="padding:2px 8px;">Netz</th>
+                <th style="padding:2px 8px;">GPU</th>
                 <th style="padding:2px 8px;">Verlauf (1h)</th>
                 <th style="padding:2px 8px;">Min/Ø/Max CPU</th>
                 <th style="padding:2px 8px;">Zuletzt gesehen</th>

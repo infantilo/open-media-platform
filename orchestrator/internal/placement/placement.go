@@ -13,12 +13,12 @@
 //
 // Ebenfalls bewusst nicht in dieser Runde: I/O-Karten-Claim/Release
 // (§6.1 Erweiterung 2026-07-10 — braucht ein noch nicht existierendes
-// Geräte-Inventar), GPU-Telemetrie (§18.4: herstellerspezifisch),
-// Cloud-Kostenfaktor (§6.1 Punkt 4). NIC-Bandbreite dagegen ist seit
-// 2026-09-02 Teil der Bewertung (s. Thresholds.NetPercent,
-// netUtilizationPercent) — dieselbe kontinuierlich-teilbare
-// Ressourcenklasse wie CPU/RAM, keine diskret-exklusive wie ein
-// I/O-Karten-Port. Das Kernpaket ist bewusst
+// Geräte-Inventar), Cloud-Kostenfaktor (§6.1 Punkt 4). NIC-Bandbreite ist
+// seit 2026-09-02 Teil der Bewertung (s. Thresholds.NetPercent,
+// netUtilizationPercent), GPU-Auslastung seit 2026-09-17 (s.
+// Thresholds.GpuPercent, gpuUtilizationPercent) — dieselbe
+// kontinuierlich-teilbare Ressourcenklasse wie CPU/RAM, keine
+// diskret-exklusive wie ein I/O-Karten-Port. Das Kernpaket ist bewusst
 // host-klassen-unwissend (§6.1 Erweiterung 2026-07-13 Punkt 1: "ein
 // Metrik-Schema, drei Quellen, ein Bus") — es liest ausschließlich
 // hosts.Tracker, unabhängig davon, ob die Telemetrie von einem
@@ -113,31 +113,44 @@ type EventPublisher interface {
 // (s. scoreHost/netUtilizationPercent) — ein Host ohne diese Angabe
 // bleibt für die Netz-Dimension fail-open, exakt wie fehlende Telemetrie
 // insgesamt.
+//
+// GpuPercent/HealthyGpuPercent (Nutzerauftrag 2026-09-17, "GPU-
+// Telemetrie im Placement jetzt umsetzen"): dieselbe Rolle, gegen die
+// per Host-Agent gemessene GPU-Auslastung (s. hosts.GpuMetrics). Nur
+// wirksam, wenn ein Host überhaupt einen GPU-Index konfiguriert hat (s.
+// gpuUtilizationPercent) — ein Host ohne GPU-Telemetrie bleibt für die
+// GPU-Dimension fail-open, exakt wie Netz.
 type Thresholds struct {
 	CPUPercent        float64
 	MemPercent        float64
 	NetPercent        float64
+	GpuPercent        float64
 	HealthyCPUPercent float64
 	HealthyMemPercent float64
 	HealthyNetPercent float64
+	HealthyGpuPercent float64
 }
 
 // DefaultThresholds sind die Dev-Defaults (config.Load) — 85%/90% Alarm,
 // 60%/70% "gilt als Ausweichziel geeignet". Großzügig genug, um auf
 // einer Single-Host-Dev-Maschine mit fingierten Metriken beide Fälle
 // (Alarm mit und ohne verfügbaren Ausweichhost) gezielt provozieren zu
-// können. NetPercent/HealthyNetPercent spiegeln bewusst dieselben Zahlen
-// wie CPUPercent/HealthyCPUPercent — keine belastbare eigene Empirie für
-// einen abweichenden NIC-Schwellwert vorhanden, s. Thresholds-Doku;
-// beide über OMP_PLACEMENT_NET_THRESHOLD/
-// OMP_PLACEMENT_HEALTHY_NET_THRESHOLD justierbar (config.Load).
+// können. NetPercent/HealthyNetPercent und GpuPercent/HealthyGpuPercent
+// spiegeln bewusst dieselben Zahlen wie CPUPercent/HealthyCPUPercent —
+// keine belastbare eigene Empirie für einen abweichenden NIC-/GPU-
+// Schwellwert vorhanden, s. Thresholds-Doku; alle vier über
+// OMP_PLACEMENT_NET_THRESHOLD/OMP_PLACEMENT_HEALTHY_NET_THRESHOLD/
+// OMP_PLACEMENT_GPU_THRESHOLD/OMP_PLACEMENT_HEALTHY_GPU_THRESHOLD
+// justierbar (config.Load).
 var DefaultThresholds = Thresholds{
 	CPUPercent:        85,
 	MemPercent:        90,
 	NetPercent:        85,
+	GpuPercent:        85,
 	HealthyCPUPercent: 60,
 	HealthyMemPercent: 70,
 	HealthyNetPercent: 60,
+	HealthyGpuPercent: 60,
 }
 
 // Advice ist der aktuelle Alarm+Vorschlag für genau einen überlasteten
@@ -155,7 +168,11 @@ type Advice struct {
 	// NetPercent ist nil, wenn dieser Host keine NIC-Auslastung mit
 	// bekannter Link-Kapazität meldet (s. netUtilizationPercent) — kein
 	// stiller 0-Wert, der wie "gemessen und leer" aussähe.
-	NetPercent         *float64  `json:"netPercent,omitempty"`
+	NetPercent *float64 `json:"netPercent,omitempty"`
+	// GpuPercent ist nil, wenn dieser Host keinen GPU-Index für die
+	// Telemetrie konfiguriert hat (s. gpuUtilizationPercent) — kein
+	// stiller 0-Wert, exakt wie NetPercent oben.
+	GpuPercent         *float64  `json:"gpuPercent,omitempty"`
 	InstanceIDs        []string  `json:"instanceIds"`
 	SuggestedHostID    string    `json:"suggestedHostId,omitempty"`
 	SuggestedHostLabel string    `json:"suggestedHostLabel,omitempty"`
@@ -295,6 +312,9 @@ type hostScore struct {
 	// netPercent s. netUtilizationPercent-Doku: nil, wenn für diesen Host
 	// keine NIC-Auslastung mit bekannter Link-Kapazität vorliegt.
 	netPercent *float64
+	// gpuPercent s. gpuUtilizationPercent-Doku: nil, wenn für diesen Host
+	// kein GPU-Index konfiguriert ist.
+	gpuPercent *float64
 	hasMetrics bool
 	ok         bool
 	reason     string
@@ -314,6 +334,19 @@ func netUtilizationPercent(m hosts.Metrics) *float64 {
 	}
 	usedMbps := (m.Net.RxBytesPerSec + m.Net.TxBytesPerSec) * 8 / 1_000_000
 	p := usedMbps / m.Net.LinkMbps * 100
+	return &p
+}
+
+// gpuUtilizationPercent liest die GPU-Auslastung direkt aus m.Gpu — nil,
+// wenn der Host-Agent keinen GPU-Index konfiguriert hat (s.
+// hosts.GpuMetrics-Doku). Anders als netUtilizationPercent keine eigene
+// Berechnung nötig: nvidia-smis utilization.gpu ist bereits ein
+// Prozentwert. Kein Rateversuch, gleiches fail-open-Prinzip wie Netz.
+func gpuUtilizationPercent(m hosts.Metrics) *float64 {
+	if m.Gpu == nil {
+		return nil
+	}
+	p := m.Gpu.UtilizationPercent
 	return &p
 }
 
@@ -365,11 +398,12 @@ func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot)
 			memPercent += float64(extraLoad.RSSAvg) / float64(m.MemTotalBytes) * 100
 		}
 	}
-	// Kein Profil-/ExtraLoad-Zuschlag für Netz wie bei CPU/RAM oben: es
-	// gibt noch keine gemessene Pro-Node-Typ-Bandbreitenschätzung
-	// (dokumentierte Folgearbeit, gleiche Grenze wie der
+	// Kein Profil-/ExtraLoad-Zuschlag für Netz/GPU wie bei CPU/RAM oben:
+	// es gibt noch keine gemessene Pro-Node-Typ-Bandbreiten-/GPU-
+	// Schätzung (dokumentierte Folgearbeit, gleiche Grenze wie der
 	// ExpectedResources-Freitext im Node-Katalog).
 	netPercent := netUtilizationPercent(m)
+	gpuPercent := gpuUtilizationPercent(m)
 
 	type overage struct {
 		over  bool
@@ -383,6 +417,9 @@ func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot)
 	if netPercent != nil {
 		overages = append(overages, overage{*netPercent >= e.thresholds.NetPercent, "Netz", *netPercent})
 	}
+	if gpuPercent != nil {
+		overages = append(overages, overage{*gpuPercent >= e.thresholds.GpuPercent, "GPU", *gpuPercent})
+	}
 	var over []string
 	for _, o := range overages {
 		if o.over {
@@ -390,9 +427,9 @@ func (e *Engine) scoreHost(hostID, nodeType string, extraLoad profiles.Snapshot)
 		}
 	}
 	if len(over) == 0 {
-		return hostScore{cpuPercent, memPercent, netPercent, true, true, ""}
+		return hostScore{cpuPercent, memPercent, netPercent, gpuPercent, true, true, ""}
 	}
-	return hostScore{cpuPercent, memPercent, netPercent, true, false,
+	return hostScore{cpuPercent, memPercent, netPercent, gpuPercent, true, false,
 		fmt.Sprintf("%s über dem Schwellwert (inkl. erwartetem Bedarf von %s)", strings.Join(over, " / "), nodeType)}
 }
 
@@ -432,6 +469,15 @@ type PlacementResult struct {
 // mit gemessener, aber niedriger Auslastung, gleiche fail-open-Haltung
 // wie beim übrigen Metriken-Handling in diesem Paket.
 func netPercentOrZero(p *float64) float64 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+// gpuPercentOrZero s. netPercentOrZero-Doku — dasselbe Prinzip für die
+// GPU-Dimension.
+func gpuPercentOrZero(p *float64) float64 {
 	if p == nil {
 		return 0
 	}
@@ -548,7 +594,10 @@ func (e *Engine) SelectHost(req PlacementRequest, occ Occupancy) PlacementResult
 			if c.score.hasMetrics && (!best.score.hasMetrics || c.score.cpuPercent < best.score.cpuPercent ||
 				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent < best.score.memPercent) ||
 				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent == best.score.memPercent &&
-					netPercentOrZero(c.score.netPercent) < netPercentOrZero(best.score.netPercent))) {
+					netPercentOrZero(c.score.netPercent) < netPercentOrZero(best.score.netPercent)) ||
+				(c.score.cpuPercent == best.score.cpuPercent && c.score.memPercent == best.score.memPercent &&
+					netPercentOrZero(c.score.netPercent) == netPercentOrZero(best.score.netPercent) &&
+					gpuPercentOrZero(c.score.gpuPercent) < gpuPercentOrZero(best.score.gpuPercent))) {
 				best = c
 			}
 		}
@@ -620,6 +669,8 @@ type scored struct {
 	memPercent float64
 	// netPercent s. netUtilizationPercent-Doku.
 	netPercent *float64
+	// gpuPercent s. gpuUtilizationPercent-Doku.
+	gpuPercent *float64
 }
 
 func (e *Engine) evaluateOnce() {
@@ -655,7 +706,11 @@ func (e *Engine) evaluateOnce() {
 		if m.MemTotalBytes > 0 {
 			memPercent = float64(m.MemUsedBytes) / float64(m.MemTotalBytes) * 100
 		}
-		withMetrics = append(withMetrics, scored{host: h, m: m, memPercent: memPercent, netPercent: netUtilizationPercent(m)})
+		withMetrics = append(withMetrics, scored{
+			host: h, m: m, memPercent: memPercent,
+			netPercent: netUtilizationPercent(m),
+			gpuPercent: gpuUtilizationPercent(m),
+		})
 	}
 
 	next := map[string]Advice{}
@@ -668,7 +723,8 @@ func (e *Engine) evaluateOnce() {
 		overCPU := s.m.CPUPercent >= e.thresholds.CPUPercent
 		overMem := s.memPercent >= e.thresholds.MemPercent
 		overNet := s.netPercent != nil && *s.netPercent >= e.thresholds.NetPercent
-		if !overCPU && !overMem && !overNet {
+		overGpu := s.gpuPercent != nil && *s.gpuPercent >= e.thresholds.GpuPercent
+		if !overCPU && !overMem && !overNet && !overGpu {
 			continue
 		}
 		var reasonParts []string
@@ -680,6 +736,9 @@ func (e *Engine) evaluateOnce() {
 		}
 		if overNet {
 			reasonParts = append(reasonParts, "net")
+		}
+		if overGpu {
+			reasonParts = append(reasonParts, "gpu")
 		}
 		reason := strings.Join(reasonParts, "+")
 
@@ -700,6 +759,7 @@ func (e *Engine) evaluateOnce() {
 			CPUPercent:  s.m.CPUPercent,
 			MemPercent:  s.memPercent,
 			NetPercent:  s.netPercent,
+			GpuPercent:  s.gpuPercent,
 			InstanceIDs: instanceIDs,
 			DetectedAt:  detectedAt,
 		}
@@ -737,13 +797,20 @@ func (e *Engine) healthiestAlternative(candidates []scored, excludeID string) (s
 		if c.netPercent != nil && *c.netPercent > e.thresholds.HealthyNetPercent {
 			continue
 		}
+		if c.gpuPercent != nil && *c.gpuPercent > e.thresholds.HealthyGpuPercent {
+			continue
+		}
 		if !found ||
 			c.m.CPUPercent < best.m.CPUPercent ||
 			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent < best.memPercent) ||
 			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent &&
 				netPercentOrZero(c.netPercent) < netPercentOrZero(best.netPercent)) ||
 			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent &&
-				netPercentOrZero(c.netPercent) == netPercentOrZero(best.netPercent) && c.host.ID < best.host.ID) {
+				netPercentOrZero(c.netPercent) == netPercentOrZero(best.netPercent) &&
+				gpuPercentOrZero(c.gpuPercent) < gpuPercentOrZero(best.gpuPercent)) ||
+			(c.m.CPUPercent == best.m.CPUPercent && c.memPercent == best.memPercent &&
+				netPercentOrZero(c.netPercent) == netPercentOrZero(best.netPercent) &&
+				gpuPercentOrZero(c.gpuPercent) == gpuPercentOrZero(best.gpuPercent) && c.host.ID < best.host.ID) {
 			best = c
 			found = true
 		}

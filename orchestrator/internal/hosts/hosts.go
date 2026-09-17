@@ -8,12 +8,12 @@
 // docs/decisions.md D6 Teil 1): mTLS-Zertifikatsausstellung über step-ca
 // für den Host-Agent (§18.3 Punkt 3 — der Bootstrap-Token selbst bleibt
 // die Zugriffskontrolle, mTLS folgt später, gleicher opt-in-Zustand wie
-// der Rest des Stacks vor/ohne D3 Teil 1), GPU-Telemetrie und
-// I/O-Karten-Inventar (herstellerspezifisch, §18.4: "Eigenrecherche bei
-// der D6-Umsetzung"), der Kommandokanal für Remote-Start/-Stop (§18.5)
-// und die Placement-Engine (§6.1) — dieser Schritt macht Hosts nur
-// sichtbar, noch nicht zu Platzierungszielen nutzbar. NIC-Telemetrie kam
-// 2026-09-02 dazu (s. Metrics.Net) — GPU bleibt offen.
+// der Rest des Stacks vor/ohne D3 Teil 1), I/O-Karten-Inventar
+// (herstellerspezifisch, §18.4: "Eigenrecherche bei der D6-Umsetzung"),
+// der Kommandokanal für Remote-Start/-Stop (§18.5) und die Placement-
+// Engine (§6.1) — dieser Schritt macht Hosts nur sichtbar, noch nicht zu
+// Platzierungszielen nutzbar. NIC-Telemetrie kam 2026-09-02 dazu (s.
+// Metrics.Net), GPU-Telemetrie 2026-09-17 (s. Metrics.Gpu).
 package hosts
 
 import (
@@ -30,9 +30,9 @@ type Host struct {
 }
 
 // Metrics ist die zuletzt über NATS empfangene Telemetrie eines Hosts —
-// CPU/RAM seit D6 Teil 1, Netzwerk-Durchsatz/-Kapazität seit 2026-09-02
-// (§6.1 Punkt 1 nennt außerdem GPU, weiterhin herstellerspezifische
-// dokumentierte Folgearbeit).
+// CPU/RAM seit D6 Teil 1, Netzwerk-Durchsatz/-Kapazität seit 2026-09-02,
+// GPU-Auslastung/-Speicher seit 2026-09-17 (§6.1 Punkt 1 nannte GPU von
+// Anfang an, herstellerspezifisch, s. Metrics.Gpu-Doku).
 type Metrics struct {
 	CPUPercent    float64   `json:"cpuPercent"`
 	MemUsedBytes  uint64    `json:"memUsedBytes"`
@@ -50,6 +50,20 @@ type Metrics struct {
 	// host-agent/internal/telemetry.NetSample (gleiche bewusste kleine
 	// Wire-Format-Duplikation wie InstanceMetrics/InstanceSample).
 	Net *NetMetrics `json:"net,omitempty"`
+	// Gpu ist nil, wenn der Host-Agent keinen GPU-Index für die
+	// Telemetrie konfiguriert hat (OMP_HOST_AGENT_GPU_INDEX) ODER
+	// `nvidia-smi` dort nichts liefern konnte — Spiegelbild von
+	// host-agent/internal/telemetry.GpuSample.
+	Gpu *GpuMetrics `json:"gpu,omitempty"`
+}
+
+// GpuMetrics ist die zuletzt gemessene Auslastungs-/Speicher-
+// Momentaufnahme der per Host-Agent konfigurierten GPU.
+type GpuMetrics struct {
+	Index              int     `json:"index"`
+	UtilizationPercent float64 `json:"utilizationPercent"`
+	MemUsedBytes       uint64  `json:"memUsedBytes"`
+	MemTotalBytes      uint64  `json:"memTotalBytes"`
 }
 
 // NetMetrics ist die zuletzt gemessene Netzwerk-Durchsatz-/Kapazitäts-

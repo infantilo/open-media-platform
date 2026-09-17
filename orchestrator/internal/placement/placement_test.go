@@ -53,8 +53,8 @@ func (f fakeProfiles) Get(_ context.Context, nodeType, hostID string) (profiles.
 
 func testThresholds() Thresholds {
 	return Thresholds{
-		CPUPercent: 85, MemPercent: 90, NetPercent: 85,
-		HealthyCPUPercent: 60, HealthyMemPercent: 70, HealthyNetPercent: 60,
+		CPUPercent: 85, MemPercent: 90, NetPercent: 85, GpuPercent: 85,
+		HealthyCPUPercent: 60, HealthyMemPercent: 70, HealthyNetPercent: 60, HealthyGpuPercent: 60,
 	}
 }
 
@@ -186,6 +186,73 @@ func TestEvaluateOnceSkipsNetOverloadedHostAsSuggestion(t *testing.T) {
 	}
 	if got[0].SuggestedHostID != "" {
 		t.Errorf("SuggestedHostID = %q, want empty (h2's NIC is over the healthy threshold)", got[0].SuggestedHostID)
+	}
+}
+
+// TestEvaluateOnceAdviceForGpuOverload (Nutzerauftrag 2026-09-17, "GPU-
+// Telemetrie im Placement jetzt umsetzen"): h1 ist bei CPU/RAM/Netz
+// unauffällig, aber die GPU ist zu 95% ausgelastet — muss denselben
+// Alarm+Vorschlag-Weg wie ein CPU-Überlast auslösen.
+func TestEvaluateOnceAdviceForGpuOverload(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{
+		{ID: "h1", Label: "Host 1"},
+		{ID: "h2", Label: "Host 2"},
+	}}
+	mr := fakeMetrics{
+		"h1": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Gpu: &hosts.GpuMetrics{Index: 0, UtilizationPercent: 95, MemUsedBytes: 3900, MemTotalBytes: 4000},
+		},
+		"h2": {CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000}, // gesund, keine GPU konfiguriert
+	}
+	il := fakeInstances{instances: []launcher.Instance{{ID: "i1", HostID: "h1"}}}
+
+	e := NewEngine(hl, mr, il, nil, testThresholds(), nil)
+	e.evaluateOnce()
+
+	got := e.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %+v, want exactly one advice", got)
+	}
+	a := got[0]
+	if a.Reason != "gpu" {
+		t.Errorf("Reason = %q, want gpu", a.Reason)
+	}
+	if a.GpuPercent == nil || *a.GpuPercent < 85 {
+		t.Errorf("GpuPercent = %v, want a pointer to a value >= 85", a.GpuPercent)
+	}
+	if a.SuggestedHostID != "h2" {
+		t.Errorf("SuggestedHostID = %q, want h2", a.SuggestedHostID)
+	}
+}
+
+// TestEvaluateOnceSkipsGpuOverloadedHostAsSuggestion: h2 ist bei
+// CPU/RAM/Netz gesund, aber seine GPU liegt über HealthyGpuPercent —
+// darf NICHT als Ausweichziel für den überlasteten h1 vorgeschlagen
+// werden.
+func TestEvaluateOnceSkipsGpuOverloadedHostAsSuggestion(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{
+		{ID: "h1", Label: "Host 1"},
+		{ID: "h2", Label: "Host 2"},
+	}}
+	mr := fakeMetrics{
+		"h1": {CPUPercent: 95, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		"h2": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Gpu: &hosts.GpuMetrics{Index: 0, UtilizationPercent: 95, MemUsedBytes: 3900, MemTotalBytes: 4000}, // über HealthyGpuPercent (60)
+		},
+	}
+	il := fakeInstances{instances: []launcher.Instance{{ID: "i1", HostID: "h1"}}}
+
+	e := NewEngine(hl, mr, il, nil, testThresholds(), nil)
+	e.evaluateOnce()
+
+	got := e.List()
+	if len(got) != 1 {
+		t.Fatalf("List() = %+v, want exactly one advice", got)
+	}
+	if got[0].SuggestedHostID != "" {
+		t.Errorf("SuggestedHostID = %q, want empty (h2's GPU is over the healthy threshold)", got[0].SuggestedHostID)
 	}
 }
 
@@ -363,6 +430,24 @@ func TestCheckHostOKWhenNetLinkSpeedUnknown(t *testing.T) {
 	}
 }
 
+// TestCheckHostRejectsOverGpuThreshold (Nutzerauftrag 2026-09-17): 95%
+// GPU-Auslastung liegt über der 85%-Schwelle.
+func TestCheckHostRejectsOverGpuThreshold(t *testing.T) {
+	mr := fakeMetrics{"h1": {
+		CPUPercent: 10, MemUsedBytes: 1000, MemTotalBytes: 4000,
+		Gpu: &hosts.GpuMetrics{Index: 0, UtilizationPercent: 95, MemUsedBytes: 3900, MemTotalBytes: 4000},
+	}}
+	e := NewEngine(fakeHosts{}, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	reason, ok := e.CheckHost("h1", "omp-video-mixer-me")
+	if ok || reason == "" {
+		t.Fatalf("CheckHost() = (%q, %v), want a non-empty rejection reason (gpu over threshold)", reason, ok)
+	}
+	if !strings.Contains(reason, "GPU") {
+		t.Errorf("reason = %q, want it to mention GPU", reason)
+	}
+}
+
 func TestCheckHostOKWhenNoTelemetrySeen(t *testing.T) {
 	e := NewEngine(fakeHosts{}, fakeMetrics{}, fakeInstances{}, nil, testThresholds(), nil)
 
@@ -490,6 +575,29 @@ func TestSelectHostNetPercentBreaksCPUMemTie(t *testing.T) {
 	result := e.SelectHost(PlacementRequest{NodeType: "omp-source"}, Occupancy{})
 	if result.HostID != "h2" {
 		t.Fatalf("SelectHost().HostID = %q, want %q (lower NIC utilization at equal CPU/RAM)", result.HostID, "h2")
+	}
+}
+
+// TestSelectHostGpuPercentBreaksNetTie (Nutzerauftrag 2026-09-17): h1
+// und h2 sind bei CPU/RAM/Netz exakt gleichauf — ohne Präferenz muss der
+// mit der niedrigeren GPU-Auslastung gewinnen.
+func TestSelectHostGpuPercentBreaksNetTie(t *testing.T) {
+	hl := fakeHosts{hosts: []hosts.Host{{ID: "h1", Label: "Host 1"}, {ID: "h2", Label: "Host 2"}}}
+	mr := fakeMetrics{
+		"h1": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Gpu: &hosts.GpuMetrics{Index: 0, UtilizationPercent: 40, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		},
+		"h2": {
+			CPUPercent: 20, MemUsedBytes: 1000, MemTotalBytes: 4000,
+			Gpu: &hosts.GpuMetrics{Index: 0, UtilizationPercent: 10, MemUsedBytes: 1000, MemTotalBytes: 4000},
+		},
+	}
+	e := NewEngine(hl, mr, fakeInstances{}, nil, testThresholds(), nil)
+
+	result := e.SelectHost(PlacementRequest{NodeType: "omp-source"}, Occupancy{})
+	if result.HostID != "h2" {
+		t.Fatalf("SelectHost().HostID = %q, want %q (lower GPU utilization at equal CPU/RAM/Net)", result.HostID, "h2")
 	}
 }
 

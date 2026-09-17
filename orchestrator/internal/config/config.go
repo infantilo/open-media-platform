@@ -124,6 +124,14 @@ type Config struct {
 	// konfiguriertes Netz-Interface (OMP_HOST_AGENT_NET_IFACE).
 	PlacementNetThreshold        float64
 	PlacementHealthyNetThreshold float64
+	// PlacementGpuThreshold/PlacementHealthyGpuThreshold (Nutzerauftrag
+	// 2026-09-17, "GPU-Telemetrie im Placement jetzt umsetzen"): dieselbe
+	// Rolle wie die Net-Variante oben, nur gegen die per Host-Agent
+	// gemessene GPU-Auslastung (s. placement.Thresholds.GpuPercent-Doku)
+	// — wirkungslos auf Hosts ohne konfigurierten GPU-Index
+	// (OMP_HOST_AGENT_GPU_INDEX).
+	PlacementGpuThreshold        float64
+	PlacementHealthyGpuThreshold float64
 	// AuditRetentionDays ist die Aufbewahrungsdauer des Audit-Logs (S5,
 	// docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — audit.Store.RunRetention
 	// löscht täglich Zeilen, die älter sind. <= 0 deaktiviert die
@@ -230,6 +238,8 @@ func Load() Config {
 		PlacementHealthyMemThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_MEM_THRESHOLD", 70),
 		PlacementNetThreshold:        getEnvFloat("OMP_PLACEMENT_NET_THRESHOLD", 85),
 		PlacementHealthyNetThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_NET_THRESHOLD", 60),
+		PlacementGpuThreshold:        getEnvFloat("OMP_PLACEMENT_GPU_THRESHOLD", 85),
+		PlacementHealthyGpuThreshold: getEnvFloat("OMP_PLACEMENT_HEALTHY_GPU_THRESHOLD", 60),
 		// Default spiegelt audit.DefaultRetentionDays (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-Defaults oben — config bleibt frei von

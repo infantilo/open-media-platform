@@ -21,12 +21,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -66,6 +68,20 @@ func main() {
 	// telemetry.NetSample-Doku. Leer = Netz-Telemetrie deaktiviert
 	// (Sample.Net bleibt nil), unverändertes Verhalten gegenüber vorher.
 	netIface := envOr("OMP_HOST_AGENT_NET_IFACE", "")
+	// GPU-Index für die Auslastungs-/Speicher-Telemetrie (Nutzerauftrag
+	// 2026-09-17, "GPU-Telemetrie im Placement jetzt umsetzen") — bewusst
+	// kein Default/Auto-Erkennung, s. telemetry.GpuSample-Doku. Leer =
+	// GPU-Telemetrie deaktiviert (gpuIndex bleibt -1, Sample.Gpu bleibt
+	// nil), gleiches Muster wie netIface.
+	gpuIndex := -1
+	if v := envOr("OMP_HOST_AGENT_GPU_INDEX", ""); v != "" {
+		parsed, err := strconv.Atoi(v)
+		if err != nil {
+			slog.Error("invalid OMP_HOST_AGENT_GPU_INDEX", "value", v, "error", err)
+			os.Exit(1)
+		}
+		gpuIndex = parsed
+	}
 	telemetryInterval := 5 * time.Second
 
 	cat, err := catalog.Load(catalogPath)
@@ -163,6 +179,11 @@ func main() {
 	} else {
 		slog.Info("network bandwidth telemetry disabled (OMP_HOST_AGENT_NET_IFACE unset)")
 	}
+	if gpuIndex >= 0 {
+		slog.Info("gpu telemetry enabled", "index", gpuIndex)
+	} else {
+		slog.Info("gpu telemetry disabled (OMP_HOST_AGENT_GPU_INDEX unset)")
+	}
 
 	// Kapitel 14 Teil 2 (docs/END-GOAL-FEATURES.md §14.3b): additive
 	// Pro-Instanz-Messung im selben Tick-Takt wie die Host-Telemetrie —
@@ -180,6 +201,18 @@ func main() {
 		if err != nil {
 			slog.Warn("telemetry sample failed", "error", err)
 			continue
+		}
+
+		if gpuIndex >= 0 {
+			// Eigener, kurzer Timeout statt telemetryInterval: TakeGPU
+			// braucht (anders als Take()) kein Sleep-Fenster, ein
+			// hängendes nvidia-smi soll trotzdem nicht den Tick blockieren
+			// (s. TakeGPU-Doku).
+			gpuCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if gpu, ok := telemetry.TakeGPU(gpuCtx, gpuIndex); ok {
+				sample.Gpu = &gpu
+			}
+			cancel()
 		}
 
 		running := executor.Instances()

@@ -529,9 +529,11 @@ func main() {
 		CPUPercent:        cfg.PlacementCPUThreshold,
 		MemPercent:        cfg.PlacementMemThreshold,
 		NetPercent:        cfg.PlacementNetThreshold,
+		GpuPercent:        cfg.PlacementGpuThreshold,
 		HealthyCPUPercent: cfg.PlacementHealthyCPUThreshold,
 		HealthyMemPercent: cfg.PlacementHealthyMemThreshold,
 		HealthyNetPercent: cfg.PlacementHealthyNetThreshold,
+		HealthyGpuPercent: cfg.PlacementHealthyGpuThreshold,
 	}
 	placementEngine := placement.NewEngine(hostStore, hostMetricsTracker, launcherSvc, hub, placementThresholds, profileStore)
 	// D12 Teil 3: nur die aktuelle Leader-Instanz wertet aus/löst

@@ -35,24 +35,36 @@ const (
 )
 
 var (
-	admissionSchemaOnce sync.Once
-	admissionSchemaVal  *jsonschema.Schema
-	admissionSchemaErr  error
+	admissionSchemaOnce     sync.Once
+	admissionSchemaVal      *jsonschema.Schema
+	admissionMxlSenderVal   *jsonschema.Schema
+	admissionMxlReceiverVal *jsonschema.Schema
+	admissionSchemaErr      error
 )
 
-// loadAdmissionSchema kompiliert docs/descriptor-v0.schema.json genau
-// einmal pro Orchestrator-Prozess (gleiche Datei, gleiches Schema wie
-// `make contract`, s. checker.DefaultSchemaPath) — ein Import ist ein
-// seltener, bewusster Vorgang, für den ein einmaliges Kompilieren pro
-// Prozesslaufzeit unproblematisch ist; wiederholtes Neukompilieren pro
-// Import wäre unnötige Arbeit ohne Nutzen (das Schema ändert sich nicht
-// zur Laufzeit).
-func loadAdmissionSchema() (*jsonschema.Schema, error) {
+// loadAdmissionSchema kompiliert docs/descriptor-v0.schema.json sowie
+// (seit docs/decisions.md Nachtrag 230) die beiden BCP-007-03-MXL-
+// Transport-Schemas genau einmal pro Orchestrator-Prozess (gleiche
+// Dateien wie `make contract`, s. checker.DefaultSchemaPath/
+// DefaultMxlSenderTransportSchemaPath/DefaultMxlReceiverTransportSchemaPath)
+// — ein Import ist ein seltener, bewusster Vorgang, für den ein
+// einmaliges Kompilieren pro Prozesslaufzeit unproblematisch ist;
+// wiederholtes Neukompilieren pro Import wäre unnötige Arbeit ohne
+// Nutzen (die Schemas ändern sich nicht zur Laufzeit).
+func loadAdmissionSchema() (*jsonschema.Schema, *jsonschema.Schema, *jsonschema.Schema, error) {
 	admissionSchemaOnce.Do(func() {
 		compiler := jsonschema.NewCompiler()
 		admissionSchemaVal, admissionSchemaErr = compiler.Compile(checker.DefaultSchemaPath())
+		if admissionSchemaErr != nil {
+			return
+		}
+		admissionMxlSenderVal, admissionSchemaErr = compiler.Compile(checker.DefaultMxlSenderTransportSchemaPath())
+		if admissionSchemaErr != nil {
+			return
+		}
+		admissionMxlReceiverVal, admissionSchemaErr = compiler.Compile(checker.DefaultMxlReceiverTransportSchemaPath())
 	})
-	return admissionSchemaVal, admissionSchemaErr
+	return admissionSchemaVal, admissionMxlSenderVal, admissionMxlReceiverVal, admissionSchemaErr
 }
 
 // ErrAdmissionCheckFailed wird von ImportCatalogEntry geliefert, wenn
@@ -85,7 +97,7 @@ func (e *ErrAdmissionCheckFailed) Error() string {
 // Container-Images vorgesehen (§17.3d), es gibt also keinen
 // "Prozess-Import"-Fall, für den dieser Check etwas anderes tun müsste.
 func runAdmissionCheck(entry CatalogEntry, registryURL, natsURL string) ([]checker.Result, error) {
-	schema, err := loadAdmissionSchema()
+	schema, mxlSenderSchema, mxlReceiverSchema, err := loadAdmissionSchema()
 	if err != nil {
 		return nil, fmt.Errorf("launcher: admission check: descriptor schema not compilable: %w", err)
 	}
@@ -120,7 +132,7 @@ func runAdmissionCheck(entry CatalogEntry, registryURL, natsURL string) ([]check
 		return nil, fmt.Errorf("launcher: admission check: candidate never became reachable at %s: %w", nodeURL, err)
 	}
 
-	return runContractCheckUntilRegistered(ctx, client, nodeURL, registryURL, schema), nil
+	return runContractCheckUntilRegistered(ctx, client, nodeURL, registryURL, schema, mxlSenderSchema, mxlReceiverSchema), nil
 }
 
 // runContractCheckUntilRegistered ruft checker.Run wiederholt auf, bis
@@ -140,12 +152,12 @@ func runAdmissionCheck(entry CatalogEntry, registryURL, natsURL string) ([]check
 // Registrierung PASS ist, zählt das Gesamtergebnis dieses Durchlaufs
 // (auch wenn andere Checks dort FAIL sind — das sind dann echte
 // Contract-Verstöße, keine Zeitartefakte mehr).
-func runContractCheckUntilRegistered(ctx context.Context, client *http.Client, nodeURL, registryURL string, schema *jsonschema.Schema) []checker.Result {
+func runContractCheckUntilRegistered(ctx context.Context, client *http.Client, nodeURL, registryURL string, schema, mxlSenderSchema, mxlReceiverSchema *jsonschema.Schema) []checker.Result {
 	ticker := time.NewTicker(admissionPollInterval)
 	defer ticker.Stop()
 
 	for {
-		results := checker.Run(client, nodeURL, registryURL, schema)
+		results := checker.Run(client, nodeURL, registryURL, schema, mxlSenderSchema, mxlReceiverSchema)
 		registered := true
 		for _, r := range results {
 			if r.Name == "IS-04-Registrierung" && r.Status == checker.StatusFail {

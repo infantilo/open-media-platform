@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"context"
 	"net"
 	"os"
 	"testing"
@@ -110,6 +111,54 @@ func TestTakeWithUnknownNetIface(t *testing.T) {
 	}
 	if sample.Net != nil {
 		t.Errorf("Net = %+v, want nil (Interface existiert nicht)", sample.Net)
+	}
+}
+
+// TestParseNvidiaSmiOutput prüft die reine String-Verarbeitung anhand
+// einer echten `nvidia-smi --format=csv,noheader,nounits`-Beispielzeile
+// (Format aus der nvidia-smi-Dokumentation) — kein echtes GPU-Gerät
+// nötig, s. parseNvidiaSmiOutput-Doku.
+func TestParseNvidiaSmiOutput(t *testing.T) {
+	sample, err := parseNvidiaSmiOutput(0, "37, 2048, 8192\n")
+	if err != nil {
+		t.Fatalf("parseNvidiaSmiOutput() error = %v", err)
+	}
+	if sample.Index != 0 {
+		t.Errorf("Index = %d, want 0", sample.Index)
+	}
+	if sample.UtilizationPercent != 37 {
+		t.Errorf("UtilizationPercent = %v, want 37", sample.UtilizationPercent)
+	}
+	wantUsed := uint64(2048) * 1024 * 1024
+	wantTotal := uint64(8192) * 1024 * 1024
+	if sample.MemUsedBytes != wantUsed {
+		t.Errorf("MemUsedBytes = %d, want %d", sample.MemUsedBytes, wantUsed)
+	}
+	if sample.MemTotalBytes != wantTotal {
+		t.Errorf("MemTotalBytes = %d, want %d", sample.MemTotalBytes, wantTotal)
+	}
+}
+
+// TestParseNvidiaSmiOutputMalformed prüft, dass unerwartete Ausgaben
+// (z. B. eine Fehlermeldung statt CSV-Daten) einen Fehler statt eines
+// stillen Null-Werts liefern.
+func TestParseNvidiaSmiOutputMalformed(t *testing.T) {
+	if _, err := parseNvidiaSmiOutput(0, "No devices were found\n"); err == nil {
+		t.Error("parseNvidiaSmiOutput() error = nil, want an error for malformed output")
+	}
+}
+
+// TestTakeGPUWithoutNvidiaSmi prüft die Nachsichts-Linie aus der
+// TakeGPU-Doku gegen einen garantiert nicht existenten GPU-Index (kein
+// Gerät hat Index -1) statt die Abwesenheit der nvidia-smi-Binary selbst
+// anzunehmen — diese Sandbox hat zwar kein GPU-Gerät (UMSETZUNG.md §0
+// Punkt 7), aber ob `nvidia-smi` überhaupt installiert ist, ist eine vom
+// eigentlichen Testzweck unabhängige Umgebungseigenschaft.
+func TestTakeGPUWithoutNvidiaSmi(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, ok := TakeGPU(ctx, -1); ok {
+		t.Error("TakeGPU() ok = true, want false (Index -1 existiert nie)")
 	}
 }
 

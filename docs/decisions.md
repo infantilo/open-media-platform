@@ -25305,3 +25305,106 @@ Fabrics-Konsumenten außerhalb von OMP treffen — eigene Entscheidung des
 Nutzers, ob das gemeldet werden soll).
 
 **Dateien:** `nodes/omp-mediaio/src/fabrics.rs`, `ARCHITECTURE.md` §6.6.
+
+## 2026-09-17 (Nachtrag 233) — GPU-Telemetrie in der Placement-Engine (Punkt 4 der Qvest-Gap-Analyse)
+
+**Nutzerauftrag:** "GPU-Telemetrie im Placement jetzt umsetzen" — der
+letzte in ARCHITECTURE.md §6.1 seit D6/D7 als offen dokumentierte
+Punkt aus der Qvest-Gap-Analyse, neben NIC-Bandbreite (2026-09-02) die
+vierte kontinuierlich-teilbare Ressourcendimension.
+
+**Design 1:1 am NIC-Präzedenzfall gespiegelt** (`Thresholds.NetPercent`/
+`netUtilizationPercent`, 2026-09-02): explizit konfigurierter Index
+(`OMP_HOST_AGENT_GPU_INDEX`) statt automatischer Erkennung — ein Host
+mit mehreren GPUs (z. B. eine für Anzeige-Ausgabe, eine dediziert für
+KI-/Grafik-Workloads) hat keine automatisch "richtige" Wahl, exakt
+dieselbe Begründung wie bei `OMP_HOST_AGENT_NET_IFACE`. Leer/kein Wert
+= GPU-Telemetrie deaktiviert (fail-open), gleiches Prinzip überall.
+
+**Herstellerspezifisch, wie von Anfang an dokumentiert** (ARCHITECTURE.md
+§18.4, `hosts.go`-Paketkommentar): kein generisches `/proc`-Äquivalent
+für GPU-Auslastung existiert. `nvidia-smi --query-gpu=utilization.gpu,
+memory.used,memory.total --format=csv,noheader,nounits -i <index>` als
+Standardwerkzeug für NVIDIA-GPUs (per `exec.CommandContext`, gleiches
+Muster wie `orchestrator/internal/backup`s `pg_dump`-Aufruf — kein neuer
+Go-Dependency). Anders als NIC-Durchsatz keine Zwei-Zeitpunkt-
+Differenzmessung nötig: `utilization.gpu` ist bereits eine
+treiberseitig gemittelte Momentanauslastung, `TakeGPU()` bekommt deshalb
+bewusst eine andere Form als `Take()` (kein gemeinsames Sleep-Fenster,
+eigener kurzer Timeout statt Blockieren des Telemetrie-Ticks). AMD/Intel
+bleiben dokumentierte Folgearbeit — kein vergleichbares
+Kommandozeilen-Standardwerkzeug angebunden.
+
+**Umgesetzt, alle vier Schichten:**
+- `host-agent/internal/telemetry`: `GpuSample` (Index/Auslastung%/VRAM
+  used+total), `queryNvidiaSmi`/`parseNvidiaSmiOutput` (Parsing als
+  eigene, reine Funktion ausgelagert — testbar ohne echte GPU/Binary),
+  `TakeGPU(ctx, index) (GpuSample, bool)`.
+- `host-agent/main.go`: `OMP_HOST_AGENT_GPU_INDEX` (Default: deaktiviert),
+  eigener 2s-Timeout pro Tick für `TakeGPU`, additiv in `sample.Gpu`.
+- `orchestrator/internal/hosts`: `GpuMetrics`, `Metrics.Gpu` — braucht
+  keine `Tracker.Touch`-Änderung (json.Unmarshal befüllt es automatisch,
+  identisches Muster wie `Net`/`Instances` schon vorher dokumentierten).
+- `orchestrator/internal/placement`: `Thresholds.GpuPercent`/
+  `HealthyGpuPercent`, `gpuUtilizationPercent()`, `hostScore`/`scored`/
+  `Advice` um `gpuPercent`/`GpuPercent` erweitert, in `scoreHost`/
+  `evaluateOnce`/`healthiestAlternative`/`SelectHost`s `pick()` an
+  exakt denselben Stellen eingehängt wie Netz zuvor (inkl. Tie-Break-
+  Reihenfolge CPU→RAM→Netz→GPU→HostID). `config.Load`:
+  `OMP_PLACEMENT_GPU_THRESHOLD`/`OMP_PLACEMENT_HEALTHY_GPU_THRESHOLD`
+  (Default je 85/60, wie bei Netz).
+- `ui/shell/hosts-view.ts`: eigene GPU-Spalte (Auslastung% + VRAM,
+  `formatGpuUsage`) und Alarm-Banner-Anteil, `REASON_TOKEN_LABEL`
+  um `gpu: "GPU"` ergänzt — `GET /api/v1/hosts` liefert `metrics.gpu`
+  bereits automatisch mit (kein neuer Backend-Endpunkt nötig, JSON-Feld
+  einfach additiv).
+- 7 neue Go-Tests (3 Parsing/TakeGPU in `telemetry_test.go`, 4 in
+  `placement_test.go`: Alarm-Auslösung, Ausschluss als überlasteter
+  Vorschlagskandidat, `CheckHost`-Ablehnung, `SelectHost`-Tie-Break) —
+  jeweils direkte Spiegelbilder der bestehenden Netz-Tests.
+
+**Nebenbei gefundener und behobener echter Bug (unabhängig von GPU):**
+`go build ./...` im Orchestrator schlug fehl —
+`orchestrator/internal/launcher/admission.go` rief noch
+`checker.Run(client, nodeURL, registryURL, schema)` mit der alten
+4-Parameter-Signatur auf, obwohl `tools/contract-check/checker.Run` seit
+Nachtrag 230 (BCP-007-03-Schema-Check) zwei zusätzliche Schema-Parameter
+braucht — ein in jener Sitzung übersehener Aufrufer (`go build`/`test`
+liefen dort nur innerhalb von `tools/contract-check`, nicht für den
+gesamten Orchestrator, der dieses Paket als Bibliothek importiert, s.
+dessen Kopfkommentar). `loadAdmissionSchema()` kompiliert jetzt alle drei
+Schemas (Descriptor + beide MXL-Transport-Schemas) einmalig, Aufrufer
+entsprechend angepasst. Erst durch das `go build ./...` dieser Sitzung
+gefunden — ein Hinweis, künftig auch bei einer scheinbar in sich
+geschlossenen Änderung den ganzen Workspace zu bauen, nicht nur das
+direkt geänderte Modul.
+
+**Verifikation:** `go build/vet/test ./...` für `host-agent` und
+`orchestrator` (alle Pakete, inkl. `internal/placement`/`internal/
+launcher`/`internal/config`/`internal/hosts`) grün. `deno check`/`deno
+test ui/` (92/92) grün. Kein `nvidia-smi` in dieser Sandbox verfügbar
+(kein GPU-Gerät, UMSETZUNG.md §0 Punkt 7) — `TakeGPU`s Fehlerpfad
+(fehlende Binary/ungültiger Index) ist die tatsächlich testbare Realität
+hier, exakt wie bei RDMA-Hardware an anderer Stelle dokumentiert;
+`parseNvidiaSmiOutput` ist unabhängig davon mit echten
+nvidia-smi-CSV-Beispielzeilen getestet. `cargo deny check advisories`
+(Rust-Workspace, unabhängig von dieser Änderung) meldet eine neue
+RUSTSEC-Advisory gegen eine bereits gepinnte `rustls`-Transitiv-
+Abhängigkeit von `async-nats` sowie eine zurückgezogene `chacha20`-
+Version — vorbestehend (Cargo.lock zuletzt am 2026-09-14 geändert, vor
+dieser Sitzung), keine Rust-Datei dieser Runde angefasst; separat zu
+entscheiden, nicht Teil dieses Schritts.
+
+**Bewusst nicht Teil:** AMD-ROCm/Intel-GPU-Unterstützung (kein
+Standardwerkzeug angebunden), Pro-Node-Typ-GPU-Bedarfsschätzung (wie
+bei Netz: kein Profil-/ExtraLoad-Zuschlag für die GPU-Dimension, gleiche
+Grenze wie der `ExpectedResources`-Freitext im Node-Katalog), Cloud-
+Kostenfaktor (weiterhin die letzte offene §6.1-Dimension).
+
+**Dateien:** `host-agent/internal/telemetry/{telemetry.go,
+telemetry_test.go}`, `host-agent/main.go`,
+`orchestrator/internal/hosts/hosts.go`,
+`orchestrator/internal/placement/{placement.go,placement_test.go}`,
+`orchestrator/internal/config/config.go`, `orchestrator/main.go`,
+`orchestrator/internal/launcher/admission.go`, `ui/shell/hosts-view.ts`,
+`ARCHITECTURE.md` §6.1.

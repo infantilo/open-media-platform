@@ -305,9 +305,20 @@ die Placement-Engine wertet sie als dritte kontinuierlich-teilbare
 Ressourcendimension neben CPU/RAM (`Thresholds.NetPercent`,
 `internal/placement.netUtilizationPercent`) — fail-open, wenn kein
 Interface konfiguriert ist oder der Treiber keine Link-Geschwindigkeit
-meldet. **Weiterhin offen:** GPU-Telemetrie, Cloud-Kostenfaktor — genau
-die in D6/D7 dokumentierten Scope-Grenzen, unverändert durch D6 Teil
-4/D13.
+meldet. **GPU-Telemetrie seit 2026-09-17 umgesetzt** (Nutzerauftrag "GPU-
+Telemetrie im Placement jetzt umsetzen"): Host-Agent misst Auslastung/
+VRAM einer explizit konfigurierten GPU über `nvidia-smi`
+(`OMP_HOST_AGENT_GPU_INDEX`, `host-agent/internal/telemetry.GpuSample`
+— herstellerspezifisch, kein generisches /proc-Äquivalent existiert wie
+bei CPU/RAM/Netz), die Placement-Engine wertet sie als vierte
+kontinuierlich-teilbare Dimension (`Thresholds.GpuPercent`,
+`internal/placement.gpuUtilizationPercent`) — fail-open, wenn kein Index
+konfiguriert ist oder `nvidia-smi` fehlschlägt; sichtbar in `GET
+/api/v1/hosts` und im Hosts-Tab (eigene Spalte + Alarm-Banner-Anteil,
+gleiches Muster wie Netz). **Weiterhin offen:** Cloud-Kostenfaktor —
+genau die in D6/D7 dokumentierte Scope-Grenze, unverändert durch D6 Teil
+4/D13; AMD-/Intel-GPUs sind dokumentierte Folgearbeit (kein
+`nvidia-smi`-Äquivalent angebunden).
 
 **Anforderung:** Der Orchestrator soll die Ressourcenlast (CPU/RAM/GPU/NIC)
 jedes Hosts/jeder VM kontinuierlich kennen und, bevor eine überlastete

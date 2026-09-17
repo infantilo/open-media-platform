@@ -2,15 +2,18 @@
 // ARCHITECTURE.md §18.4: "Wie gemessen wird, ist zum
 // Umsetzungszeitpunkt zu verifizieren, nicht zu raten". CPU/RAM seit
 // D6 Teil 1, Netzwerk-Durchsatz/-Kapazität seit 2026-09-02 (Nutzerauftrag
-// "netzwerkbandbreite ... auch relevant"; s. NetSample-Doku) — GPU bleibt
-// herstellerspezifisch und weiterhin als Folgearbeit dokumentiert
-// (docs/decisions.md).
+// "netzwerkbandbreite ... auch relevant"; s. NetSample-Doku), GPU seit
+// 2026-09-17 (Nutzerauftrag "GPU-Telemetrie im Placement jetzt
+// umsetzen"; s. GpuSample-Doku) — herstellerspezifisch (NVIDIA/
+// `nvidia-smi`), kein generisches /proc-Äquivalent existiert.
 package telemetry
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +36,11 @@ type Sample struct {
 	// gemessen", nicht "0 Bandbreite" (gleiche Ehrlichkeitslinie wie
 	// ProfileResponse.known=false in orchestrator/internal/profiles).
 	Net *NetSample `json:"net,omitempty"`
+	// Gpu ist nil, wenn OMP_HOST_AGENT_GPU_INDEX nicht gesetzt ist ODER
+	// `nvidia-smi` sie nicht liefern konnte (s. TakeGPU) — kein
+	// konfigurierter/erreichbarer Index bedeutet "nicht gemessen", nicht
+	// "0% Auslastung" (gleiche Ehrlichkeitslinie wie Net oben).
+	Gpu *GpuSample `json:"gpu,omitempty"`
 }
 
 // NetSample ist die zuletzt gemessene Durchsatz-/Kapazitäts-
@@ -56,6 +64,97 @@ type NetSample struct {
 	// virtuelle/Bridge-Interfaces); dann bleibt nur der Rohdurchsatz oben
 	// aussagekräftig, kein Auslastungs-%.
 	LinkMbps float64 `json:"linkMbps,omitempty"`
+}
+
+// GpuSample ist die zuletzt gemessene Auslastungs-/Speicher-
+// Momentaufnahme GENAU EINER, per OMP_HOST_AGENT_GPU_INDEX explizit
+// benannten GPU (ARCHITECTURE.md §6.1: GPU-Auslastung ist wie CPU/RAM/
+// NIC eine kontinuierliche, teilbare Ressource, keine diskret-exklusive
+// wie ein I/O-Karten-Port). Bewusst explizit konfiguriert statt
+// automatisch erkannt/ausgewählt — dasselbe Prinzip wie
+// OMP_HOST_AGENT_NET_IFACE (s. NetSample-Doku): ein Host mit mehreren
+// GPUs (z. B. eine für Anzeige-Ausgabe, eine dediziert für KI-/Grafik-
+// Workloads) hat keine automatisch "richtige" Wahl. Herstellerspezifisch
+// (`nvidia-smi`, s. queryNvidiaSmi) — ARCHITECTURE.md §18.4 nannte GPU-
+// Telemetrie von Anfang an als herstellerspezifisch und deshalb offen;
+// kein generisches /proc-Äquivalent existiert wie bei CPU/RAM/Net.
+// Andere Hersteller (AMD ROCm, Intel) sind dokumentierte Folgearbeit.
+type GpuSample struct {
+	Index int `json:"index"`
+	// UtilizationPercent kommt direkt von nvidia-smi (`utilization.gpu`)
+	// — anders als NetSample braucht das keine Zwei-Zeitpunkt-
+	// Differenzmessung, der Treiber liefert bereits eine gemittelte
+	// Momentanauslastung.
+	UtilizationPercent float64 `json:"utilizationPercent"`
+	MemUsedBytes       uint64  `json:"memUsedBytes"`
+	MemTotalBytes      uint64  `json:"memTotalBytes"`
+}
+
+// queryNvidiaSmi liest Auslastung/Speicher für genau eine GPU über
+// `nvidia-smi --query-gpu=... --format=csv,noheader,nounits -i <index>`
+// — das Standard-Werkzeug für NVIDIA-GPUs (s. GpuSample-Doku, kein
+// generisches /proc-Äquivalent existiert). ctx begrenzt eine
+// hängende/fehlende Binary auf einen Timeout statt den Telemetrie-Tick
+// zu blockieren (s. TakeGPU-Aufrufstelle in main.go).
+func queryNvidiaSmi(ctx context.Context, index int) (GpuSample, error) {
+	cmd := exec.CommandContext(ctx, "nvidia-smi",
+		"--query-gpu=utilization.gpu,memory.used,memory.total",
+		"--format=csv,noheader,nounits",
+		"-i", strconv.Itoa(index),
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return GpuSample{}, fmt.Errorf("telemetry: nvidia-smi: %w", err)
+	}
+	return parseNvidiaSmiOutput(index, string(out))
+}
+
+// parseNvidiaSmiOutput parst eine einzelne CSV-Zeile im Format
+// "<utilization%>, <memory.used MiB>, <memory.total MiB>" (nvidia-smis
+// `--format=csv,noheader,nounits`) — als eigene, von exec.Command
+// getrennte Funktion, damit dieser Teil ohne echte GPU/nvidia-smi-Binary
+// testbar ist (reine String-Verarbeitung, feste Fixture-Zeilen).
+func parseNvidiaSmiOutput(index int, out string) (GpuSample, error) {
+	fields := strings.Split(strings.TrimSpace(out), ",")
+	if len(fields) != 3 {
+		return GpuSample{}, fmt.Errorf("telemetry: unexpected nvidia-smi output: %q", out)
+	}
+	util, err := strconv.ParseFloat(strings.TrimSpace(fields[0]), 64)
+	if err != nil {
+		return GpuSample{}, fmt.Errorf("telemetry: parse nvidia-smi utilization.gpu: %w", err)
+	}
+	memUsedMiB, err := strconv.ParseFloat(strings.TrimSpace(fields[1]), 64)
+	if err != nil {
+		return GpuSample{}, fmt.Errorf("telemetry: parse nvidia-smi memory.used: %w", err)
+	}
+	memTotalMiB, err := strconv.ParseFloat(strings.TrimSpace(fields[2]), 64)
+	if err != nil {
+		return GpuSample{}, fmt.Errorf("telemetry: parse nvidia-smi memory.total: %w", err)
+	}
+	const bytesPerMiB = 1024 * 1024
+	return GpuSample{
+		Index:              index,
+		UtilizationPercent: util,
+		MemUsedBytes:       uint64(memUsedMiB * bytesPerMiB),
+		MemTotalBytes:      uint64(memTotalMiB * bytesPerMiB),
+	}, nil
+}
+
+// TakeGPU misst die aktuelle Auslastung/Speichernutzung der per index
+// benannten GPU (s. GpuSample-Doku). Anders als Take() (CPU/Net) braucht
+// das keine Zwei-Zeitpunkt-Differenzmessung über ein Sleep-Fenster —
+// nvidia-smis utilization.gpu ist bereits eine treiberseitig gemittelte
+// Momentanauslastung, ein zusätzlicher Sleep würde nur den Telemetrie-
+// Tick unnötig verlängern. ok=false heißt "keine gemessene
+// Momentaufnahme" (nvidia-smi fehlt/Index existiert nicht/Timeout) — der
+// Aufrufer behandelt das als "GPU-Telemetrie nicht verfügbar", nicht als
+// 0% Auslastung (gleiche Ehrlichkeitslinie wie NetSample).
+func TakeGPU(ctx context.Context, index int) (GpuSample, bool) {
+	sample, err := queryNvidiaSmi(ctx, index)
+	if err != nil {
+		return GpuSample{}, false
+	}
+	return sample, true
 }
 
 // InstanceSample ist die Pro-Instanz-Telemetrie einer vom Host-Agent
