@@ -1,17 +1,22 @@
 # OpenMediaPlatform
 
-[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--007--03%20(MXL)-1f6feb)](https://specs.amwa.tv/bcp-007-03/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
 
 > **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
 > discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
 > served side by side** (wire-compatible, same handlers) for connection
-> management, IS-12/IS-14 for self-described control, and BCP-008-01/02
+> management, IS-12/IS-14 for self-described control, BCP-008-01/02
 > for real receiver/sender health status (link, sync, connection/
-> transmission, stream/essence) on the network-facing nodes. This isn't
+> transmission, stream/essence) on the network-facing nodes, and
+> **BCP-007-03** for standardized IS-05 connection management of MXL
+> flows (`urn:x-nmos:transport:mxl`, real `mxl_domain_id`/`mxl_flow_id`
+> transport parameters, not a proprietary transport string). This isn't
 > a compatibility claim on paper: the official AMWA NMOS Testing Tool
 > runs against a real node on every push, and the current run is fully
 > green — 62 passing IS-05-01 checks, zero accepted exceptions, on both
-> API versions.
+> API versions; BCP-007-03 (too new to have an official AMWA test suite
+> yet) is checked by our own schema-conformance tool instead, against
+> the real published JSON schemas.
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
@@ -130,7 +135,11 @@ are in [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
   domain — in both directions, including full pixel-level playback —
   confirming a third-party media function speaking the same open MXL
   format could exchange a flow with an OMP node with no gateway in
-  between.
+  between. IS-05 connection management for MXL flows now speaks the
+  standardized **AMWA BCP-007-03** transport (`urn:x-nmos:transport:mxl`,
+  real `mxl_domain_id`/`mxl_flow_id` parameters) instead of a proprietary
+  transport string — a foreign, spec-compliant controller can address an
+  OMP MXL sender/receiver as such, not just OMP's own orchestrator.
 - **AMWA BCP-008-01/02 health monitoring**: real receiver/sender status
   (link, external sync, connection/transmission, stream/essence, plus
   an aggregated overall status) on every node that touches a real
@@ -494,6 +503,25 @@ OpenMediaPlatform does not do"). The MXL core itself was also brought
 up to the current stable release, and interoperability against the MXL
 project's own independent reference tooling was verified directly, in
 both directions and down to actual pixels — see the MXL bullet above.
+
+Most recently, the MXL transport moved from a proprietary
+`urn:x-omp:transport:mxl` to the now-standardized **AMWA BCP-007-03
+v1.0.0** transport (`urn:x-nmos:transport:mxl`, real
+`mxl_domain_id`/`mxl_flow_id` IS-05 transport parameters instead of
+transport-mismatched leftover RTP fields) — the gap a competing
+multi-vendor DMF interop showcase at IBC 2026 would otherwise have
+exposed immediately. Since the official AMWA NMOS Testing Tool has no
+BCP-007-03 suite yet (the spec is from August 2026), our own
+`contract-check` tool gained a schema-conformance check against the
+real published JSON schemas instead, live-verified against two
+IS-05-connected node instances. Checking that fix's blast radius also
+led to actually rebuilding MXL-native Fabrics with the RDMA feature
+flag on against the current MXL release, which surfaced (and fixed) a
+real regression: current MXL now requires an explicit transfer
+capability on fabrics setup that this project's fabrics wrapper never
+set, silently working only by the old library's lack of validation —
+re-verified live with a real one-sided RDMA write between two MXL
+domains, RDMA-hardware-free.
 
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,
