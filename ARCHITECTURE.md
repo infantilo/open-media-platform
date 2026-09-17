@@ -996,6 +996,25 @@ Mehr-Host-Verifikation, braucht einen zweiten physischen Host), Teil 4
 automatische Placement-Auswahl Fabrics vs. ST2110/SRT, Katalog-Eintrag
 für den Gateway (bisher nur von Hand startbar).
 
+**Nachtrag 2026-09-17 (Qvest-Gap-Analyse-Rückfrage "können wir
+mxl-fabrics auch?"):** kurz missverständlich als offene
+"Migrationsentscheidung eigener Relay vs. MXLs natives `mxl-fabrics`"
+dargestellt — das ist bereits seit der Grundsatzentscheidung oben
+(2026-07-17) keine offene Frage: `omp-fabrics-gateway` **ist** ein
+direkter Konsument der vendorten `mxl-fabrics`-Bibliothek
+(`third_party/mxl/lib/fabrics/ofi/`), kein separater Nachbau. Der
+tatsächlich neue, bisher ungeprüfte Punkt: der MXL-v1.1.0-GA-Upgrade
+(`docs/decisions.md` Nachtrag 227) wurde mit dem CMake-Default
+`MXL_ENABLE_FABRICS_OFI=OFF` gebaut/verifiziert — ob die vendorte
+Fabrics-Bibliothek unter v1.1.0 mit `=ON` weiterhin sauber baut und
+`omp-fabrics-gateway` unverändert funktioniert, ist seit dem Upgrade
+**nicht** erneut geprüft worden. Vorgemerkt als eigener künftiger
+Schritt: `cmake --build` mit `MXL_ENABLE_FABRICS_OFI=ON` gegen die
+v1.1.0-Bäume, `cargo build/test -p omp-fabrics-gateway`, plus ein
+`tcp`-Provider-Loopback-Test wie beim ursprünglichen Kapitel-16-Nachweis
+— erst danach zählt "mxl-fabrics funktioniert unter v1.1.0" wieder als
+bestätigt statt nur angenommen.
+
 **Hardware-Ausblick (2026-07-17 entschieden):** echte RoCEv2-Hardware
 für den Regelbetrieb ist **fest eingeplant**, nicht optional — der
 TCP-Provider ist ausdrücklich nur die Übergangslösung für Hosts/Phasen

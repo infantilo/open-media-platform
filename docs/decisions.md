@@ -25178,3 +25178,35 @@ beide Testinstanzen danach beendet.
 **Dateien:** `docs/bcp-007-03/{sender,receiver}_transport_params_mxl.
 schema.json` (neu), `tools/contract-check/checker/{bcp007_03.go (neu),
 schema.go,checks.go,checks_test.go}`, `tools/contract-check/main.go`.
+
+## 2026-09-17 (Nachtrag 231) — Richtigstellung: keine "mxl-fabrics vs. eigener Relay"-Entscheidung offen, aber ein echter Prüfpunkt gefunden
+
+**Anlass:** Nutzerfrage "mxl fabric? können wir das auch?" im
+Anschluss an die Qvest-Gap-Analyse — dort als offene
+Migrationsentscheidung dargestellt ("eigener `omp-fabrics-gateway`
+gegen MXLs jetzt natives `mxl-fabrics`"). Nutzer bestätigte
+("ja"), das als nächsten Schritt vorzumerken; vor dem Vormerken
+`ARCHITECTURE.md` §6.6 tatsächlich gelesen statt aus der vorigen
+Gap-Analyse-Recherche weiterzutragen — dabei die eigene Fehleinschätzung
+gefunden.
+
+**Richtigstellung:** §6.6 (Grundsatzentscheidung bereits 2026-07-17) legt
+fest, dass `omp-fabrics-gateway` direkt die vendorte
+`third_party/mxl/lib/fabrics/ofi/`-Bibliothek nutzt — das IST bereits
+"mxl-fabrics", kein eigener Nachbau, der zur Diskussion stünde. Es gibt
+also keine Migrationsentscheidung zu treffen; das war ein Fehlschluss
+aus der vorigen, nur sekundärquellen-basierten IBC-Recherche (die
+"mxl-fabrics" als neues v1.1.0-Feature einordnete, ohne die eigene
+Architekturdoku dagegenzuprüfen).
+
+**Tatsächlich neuer, echter Punkt:** der MXL-v1.1.0-GA-Upgrade
+(Nachtrag 227) wurde mit `MXL_ENABLE_FABRICS_OFI=OFF` (CMake-Default)
+gebaut — die Fabrics-Bibliothek wurde bei diesem Upgrade nicht
+mitgetestet. Ob sie unter v1.1.0 mit `=ON` weiterhin baut und
+`omp-fabrics-gateway` unverändert funktioniert, ist offen. In
+`ARCHITECTURE.md` §6.6 als eigener künftiger Prüfschritt vermerkt
+(`cmake --build` mit dem Flag an, `cargo build/test -p
+omp-fabrics-gateway`, `tcp`-Provider-Loopback-Nachweis wie beim
+ursprünglichen Kapitel-16-Test).
+
+**Dateien:** `ARCHITECTURE.md` §6.6.
