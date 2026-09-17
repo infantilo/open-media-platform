@@ -25210,3 +25210,98 @@ omp-fabrics-gateway`, `tcp`-Provider-Loopback-Nachweis wie beim
 ursprünglichen Kapitel-16-Test).
 
 **Dateien:** `ARCHITECTURE.md` §6.6.
+
+## 2026-09-17 (Nachtrag 232) — mxl-fabrics unter v1.1.0 GA nachgeprüft: ein echter Regressions-Bug gefunden und behoben
+
+**Nutzerauftrag:** "den fabrics-gateway build mit MXL_ENABLE_FABRICS_OFI=ON
+jetzt prüfen" — direkte Umsetzung des in Nachtrag 231/`ARCHITECTURE.md`
+§6.6 vorgemerkten Prüfpunkts.
+
+**Ausgangslage geklärt, bevor gebaut wurde:** die CMake-Cache-Datei
+(`third_party/mxl/build/Linux-GCC-Release/CMakeCache.txt`) hatte
+`MXL_ENABLE_FABRICS_OFI=ON` bereits aus einer früheren Sitzung
+persistiert (CMake-Presets überschreiben eine manuell gesetzte
+Cache-Variable nicht automatisch) — `libmxl-fabrics.so.1.1` existierte
+also schon, mit Zeitstempel exakt aus dem Nachtrag-227-Build-Lauf. Um
+jede Zweideutigkeit auszuschließen, trotzdem explizit neu konfiguriert
+(`cmake --preset Linux-GCC-Release -DMXL_ENABLE_FABRICS_OFI=ON`) und
+komplett neu gebaut (39/39 Targets, inkl. `mxl-fabrics-tests`,
+`mxl-fabrics-demo`, `mxl-fabrics-info`) — sauber, eine harmlose,
+unabhängige Compiler-Warnung in `looping_filesrc.cpp` (nicht
+fabrics-bezogen).
+
+**Native C++-Testsuite (`mxl-fabrics-tests`, korrekt aus ihrem
+Arbeitsverzeichnis gestartet — sonst `Failed to open file: ../data/
+v210_flow.json`):** 9/10 Testfälle grün (33020/33021 Assertions),
+darunter echte V210-Video-Slice-Transfers über den `tcp`-Provider. Der
+eine Ausreißer ("Fabrics: Transfer Sample with flows / RDM /
+non-blocking") schlug nur im Volldurchlauf mit SIGSEGV fehl (`shm`-Log
+zeigte "Overwriting shm from dead process" — Hinweis auf einen
+Cross-Test-Ressourcen-Leak zwischen Testfällen), lief isoliert zweimal
+sauber durch (56/56 Assertions je Lauf) — als Upstream-Bulk-Run-Flake
+eingeordnet, nicht weiterverfolgt (fremder Testcode, nicht OMPs).
+
+**Echter, reproduzierbarer Bug in OMPs eigenem Rust-Code gefunden:**
+`cargo test -p omp-mediaio --lib --features mxl,fabrics,preview --
+fabrics` schlug fehl: `mxlFabricsTargetSetup`/`-InitiatorSetup`
+lieferten "Unsupported provider constraints: Missing transfer
+capability. Need either SEND_RECEIVE or REMOTE_WRITE" (MXL-Status 8).
+Root Cause im echten `fabrics.h`-Header nachgelesen (Regel §0.6, nicht
+geraten): `mxlFabricsInterfaceCaps.flags` muss beim Setup jetzt
+mindestens eine Transfer-Capability tragen — laut Header-Kommentar eine
+Anforderung, die zuvor unvalidiert war. `omp_mediaio::fabrics::
+endpoint_config()` baute `caps` bisher komplett über `Default` (also
+`flags=0`) — funktionierte bis unmittelbar vor der v1.1.0-GA-
+Fertigstellung, bricht jetzt. Fix: neue Konstante
+`FABRICS_IFACE_CAP_REMOTE_WRITE` (`MXL_FABRICS_FLAG(1)` = `1 << 1`, von
+Hand nachgebildet wie schon `FABRICS_API_VERSION` — bindgen zieht das
+freistehende C-Enum nicht, da das Struct-Feld als `uint64_t` deklariert
+ist), gesetzt in `caps.flags`; `caps.version` zusätzlich explizit
+gesetzt (vorher zufällig korrekt durch `Default`); `maxMessageSize`
+bewusst bei `0` belassen (Header: "currently not enforced ... but
+callers should initialize this field ... in a future version" — kein
+bekannter korrekter Wert ohne eigene Provider-Recherche, nicht geraten).
+
+**Zweiter, während der Live-Verifikation aufgetretener Fehler war ein
+eigener Testaufbau-Fehler, kein Bug:** beim ersten Live-Verbindungs-
+versuch zwischen zwei echten `omp-fabrics-gateway`-Instanzen lieferte
+die Initiator-Seite "Remote target does not have bounce buffer info
+required for sample egress protocol." — Root-Cause-Suche im
+Fabrics-Quellcode (`Protocol.cpp`: `selectEgressProtocol` wählt
+`RMASampleEgressProtocolTemplate` nur für `DataLayout::Continuous`,
+also Audio) zeigte, dass der per IS-05-`sender_id`-PATCH ausgewählte
+Sender tatsächlich `omp-source`s AUDIO-Sender war (`registry`-Antwort
+listet mehrere Sender pro Node, das erste Namens-Match war zufällig der
+Audio-Sender) — mit dem korrekten Video-Sender verbunden, funktionierte
+es beim ersten Versuch. Festgehalten, weil zunächst wie ein zweiter
+echter Regressions-Bug aussah; explizit verifiziert (Sender-Liste +
+`format`-Feld gegen die Registry geprüft), bevor weiter in
+Upstream-Code gesucht wurde.
+
+**Live-Ende-zu-Ende-Nachweis (Kapitel-16-Äquivalent):** zwei echte
+`omp-fabrics-gateway`-Prozesse (Target auf `/dev/shm/omp-mxl`, Initiator
+auf einer zweiten, frischen Domain `/dev/shm/omp-mxl-fabrics-b`) plus
+ein echter `omp-source` als lokale Video-Quelle für den Initiator, per
+echtem IS-05-Receiver-PATCH verbunden (`sender_id`+
+`activate_immediate`) — `mxl-info` auf der Zielseite zeigte den
+Head-Index von `44741855826` auf `44741855876` in 2 Sekunden wachsen
+(exakt 25fps, die konfigurierte Quell-Framerate), `Active: true`. Alle
+Testprozesse/-Domains danach beendet/entfernt.
+
+**Verifikation:** `cargo build --workspace --bins` grün. `cargo test -p
+omp-mediaio --lib --features mxl,fabrics,preview` 16/16 grün (3 bewusst
+`ignored`, davon eine — der Live-Nachweis läuft ohnehin bereits ohne
+sie). `cargo clippy -p omp-mediaio --lib --features mxl,fabrics,preview
+-D warnings` und `-p omp-fabrics-gateway --all-targets -D warnings`
+beide grün.
+
+**Bewusst nicht Teil:** der SIGSEGV-Flake in der nativen
+`mxl-fabrics-tests`-Suite (fremder Code, isoliert reproduzierbar grün);
+`verbs`/`efa` mit echter RoCEv2-Hardware (weiterhin wie in §6.6 benannt
+offen); ein Upstream-Bugreport bei `dmf-mxl/mxl` für die neue, in
+`fabrics.h` zwar dokumentierte, aber nirgends im Repo als
+Breaking-Change vermerkte Capability-Pflicht (könnte andere
+Fabrics-Konsumenten außerhalb von OMP treffen — eigene Entscheidung des
+Nutzers, ob das gemeldet werden soll).
+
+**Dateien:** `nodes/omp-mediaio/src/fabrics.rs`, `ARCHITECTURE.md` §6.6.

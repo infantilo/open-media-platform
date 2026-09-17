@@ -90,6 +90,26 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 /// freistehenden Makros mehr automatisch mit.
 const FABRICS_API_VERSION: i32 = 0;
 
+/// `MXL_FABRICS_IFACE_CAP_REMOTE_WRITE` aus `mxl/fabrics.h`
+/// (`mxlFabricsInterfaceCapFlags`, `MXL_FABRICS_FLAG(1)` = `1 << 1`) —
+/// wie [`FABRICS_API_VERSION`] von Hand nachgebildet statt per bindgen
+/// gezogen: das `flags`-Feld von `mxlFabricsInterfaceCaps` ist als
+/// `uint64_t` deklariert, nicht als der Enum-Typ selbst, `build.rs`s
+/// `.allowlist_function`-Einschränkung zieht das frei stehende Enum
+/// daher nicht mit (s. `FABRICS_API_VERSION`-Doc zum selben Muster).
+///
+/// Bis MXL v1.1.0-beta-1 (Nachtrag 42) sowie darüber hinaus bis
+/// unmittelbar vor v1.1.0 GA (Nachtrag 227) genügte ein komplett
+/// genullter `caps`-Wert — mit dem echten `MXL_ENABLE_FABRICS_OFI=ON`-
+/// Rebuild gegen v1.1.0 GA (docs/decisions.md Nachtrag 232) schlägt
+/// `mxlFabricsTargetSetup`/`-InitiatorSetup` jetzt mit Status 8
+/// ("Unsupported provider constraints: Missing transfer capability")
+/// fehl: laut `fabrics.h`-Doku muss beim Setup jetzt mindestens eine
+/// Transfer-Capability (REMOTE_WRITE oder SEND_RECEIVE) gesetzt sein —
+/// vorher unvalidiert, jetzt eine echte, neu durchgesetzte Anforderung.
+/// REMOTE_WRITE ist laut Header aktuell die einzig implementierte.
+const FABRICS_IFACE_CAP_REMOTE_WRITE: u64 = 1 << 1;
+
 /// Provider-Auswahl (`mxlFabricsProvider`) — eigenes Rust-Enum statt der
 /// C-API-String-Helfer (`mxlFabricsProviderFromString`), da der Aufrufer
 /// hier ohnehin typisiert entscheidet, kein CLI-Parsing.
@@ -144,7 +164,18 @@ fn endpoint_config(provider: Provider, node: &str, service: &str) -> (sys::Fabri
     let config = sys::FabricsInterfaceConfig {
         version: FABRICS_API_VERSION,
         provider: provider.to_sys(),
-        caps: sys::FabricsInterfaceCaps::default(),
+        caps: sys::FabricsInterfaceCaps {
+            version: FABRICS_API_VERSION,
+            flags: FABRICS_IFACE_CAP_REMOTE_WRITE,
+            // `maxMessageSize`: laut fabrics.h "currently not enforced
+            // by setup functions, but callers should initialize this
+            // field to a valid value as it will be required in a
+            // future version" — kein bekannter korrekter Wert ohne
+            // eigene Recherche zu tatsächlichen Provider-Limits, daher
+            // bewusst nicht geraten (Arbeitsregel §0.6/§0.9), bleibt 0
+            // bis dieser künftige Bedarf konkret wird.
+            maxMessageSize: 0,
+        },
         address: sys::FabricsEndpointAddress { node: node_c.as_ptr(), service: service_c.as_ptr() },
         attr: std::ptr::null(),
     };

@@ -1015,6 +1015,27 @@ v1.1.0-Bäume, `cargo build/test -p omp-fabrics-gateway`, plus ein
 — erst danach zählt "mxl-fabrics funktioniert unter v1.1.0" wieder als
 bestätigt statt nur angenommen.
 
+**Nachprüfung 2026-09-17 (`docs/decisions.md` Nachtrag 232): durchgeführt,
+ein echter Bug gefunden und behoben.** `cmake --build` mit
+`MXL_ENABLE_FABRICS_OFI=ON` gegen den v1.1.0-Baum lief zunächst durch,
+`cargo test -p omp-mediaio --lib --features fabrics` (der reale
+Zwei-Domain-Transfer-Test) schlug jedoch fehl: `mxlFabricsTargetSetup`
+lieferte "Unsupported provider constraints: Missing transfer
+capability" — v1.1.0 GA erzwingt jetzt normativ mindestens eine
+Transfer-Capability (`REMOTE_WRITE`/`SEND_RECEIVE`) in
+`mxlFabricsInterfaceCaps.flags` (laut `fabrics.h`-Doku eine neue
+Anforderung; vorher genügte ein genullter Wert). `omp_mediaio::fabrics`
+hatte dieses Feld nie gesetzt (`FabricsInterfaceCaps::default()`) — mit
+`MXL_FABRICS_IFACE_CAP_REMOTE_WRITE` explizit gesetzt läuft derselbe
+Test wieder grün. Live End-zu-Ende gegen zwei echte
+`omp-fabrics-gateway`-Instanzen (Target+Initiator, zwei getrennte
+`/dev/shm`-Domains) bestätigt: echter, per IS-05-PATCH hergestellter
+One-Sided-RDMA-Write über den `tcp`-Provider, `mxl-info` zeigte einen
+kontinuierlich mit der Quell-Framerate wachsenden Head-Index auf der
+Zielseite. `cargo build --workspace`/`test -p omp-mediaio`/`clippy -p
+omp-mediaio -p omp-fabrics-gateway -D warnings` grün. "mxl-fabrics
+funktioniert unter v1.1.0" gilt damit wieder als bestätigt.
+
 **Hardware-Ausblick (2026-07-17 entschieden):** echte RoCEv2-Hardware
 für den Regelbetrieb ist **fest eingeplant**, nicht optional — der
 TCP-Provider ist ausdrücklich nur die Übergangslösung für Hosts/Phasen
