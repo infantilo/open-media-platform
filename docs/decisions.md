@@ -25408,3 +25408,54 @@ telemetry_test.go}`, `host-agent/main.go`,
 `orchestrator/internal/config/config.go`, `orchestrator/main.go`,
 `orchestrator/internal/launcher/admission.go`, `ui/shell/hosts-view.ts`,
 `ARCHITECTURE.md` §6.1.
+
+## 2026-09-17 (Nachtrag 234) — `cargo update -p rustls -p chacha20`: chacha20-Yank behoben, rustls-Advisory bleibt offen (kein Fix veröffentlicht)
+
+**Nutzerauftrag:** direkte Reaktion auf die in Nachtrag 233 gemeldete,
+vorbestehende `cargo deny check advisories`-FAILED-Meldung.
+
+**Ergebnis, ehrlich getrennt nach den beiden Paketen:**
+- **chacha20 0.10.1 → 0.10.2**: behoben. Die zurückgezogene ("yanked")
+  Version ist weg, die entsprechende Warnung verschwindet vollständig
+  aus `cargo deny check`.
+- **rustls 0.23.41 → 0.23.43**: **nicht** behoben, weil die von der
+  Advisory (RUSTSEC-2026-0285, GHSA-2mjx-qc3c-rqvc) genannte Lösung
+  "Upgrade to >=0.23.45" auf crates.io schlicht **noch nicht existiert**
+  — `cargo info rustls` bestätigt: aktuell veröffentlicht ist 0.23.43
+  (nächste sichtbare Version ist 0.24.0-dev.1, ein Pre-Release, keine
+  gültige Lösung). `cargo update -p tokio-rustls` (0.26.4 → 0.26.5,
+  versucht in der Annahme, eine neuere tokio-rustls könnte eine engere
+  rustls-Anforderung erzwingen) ändert daran nichts — die Advisory bleibt
+  nach `cargo deny check advisories` weiterhin ein FAIL. Kein
+  Versionskonflikt/keine falsche Range in diesem Projekt, sondern
+  schlicht: der Fix ist upstream (rustls-Projekt) noch nicht
+  veröffentlicht.
+- Die Schwachstelle selbst (TLS-1.3-Handshake-Nachrichten über
+  Verschlüsselungsstufen-Grenzen hinweg akzeptiert) betrifft laut
+  Advisory nur die Verbindungsterminierung bei einem bereits
+  authentifizierten Handshake, kein Zugriffsschutzbruch — trotzdem eine
+  echte, offiziell erfasste CVE-äquivalente Lücke (GO-2026-4340/
+  CVE-2025-61730 ist dasselbe Bugmuster in Go).
+
+**Verifikation:** `cargo build --workspace --bins` (alle ~25 Nodes)
+grün. `cargo test -p omp-node-sdk` (74/74), `-p omp-mxf-player -p
+omp-pipeline-controller -p omp-playout-automation` (46/46) grün —
+stellvertretend für die Crates mit direktem `async-nats`/`ureq`-Bezug
+zum aktualisierten TLS-Stack. `cargo clippy -p omp-node-sdk
+--all-targets -D warnings` grün. `cargo deny check`: `bans`/`licenses`/
+`sources` weiterhin ok, `advisories` weiterhin FAILED (nur noch die eine
+rustls-Zeile, die chacha20-Yank-Warnung ist weg).
+
+**Bewusst nicht Teil dieser Runde (Entscheidung liegt beim Nutzer, nicht
+einseitig getroffen):** kein `deny.toml`-Ignore-Eintrag für
+RUSTSEC-2026-0285 gesetzt — das würde die Warnung unterdrücken, nicht
+beheben, und ist eine Sicherheits-Policy-Entscheidung. Optionen, falls
+`make check` bis zum Upstream-Fix wieder grün laufen soll: (1) einen
+befristeten `[advisories] ignore = ["RUSTSEC-2026-0285"]`-Eintrag mit
+Kommentar/Erinnerung, ihn nach dem rustls-Release wieder zu entfernen;
+(2) `cargo deny check advisories` vorerst aus der lokalen/CI-Prüfkette
+nehmen; (3) einfach abwarten und regelmäßig `cargo update -p rustls`
+erneut versuchen, bis 0.23.45 (oder neuer) verfügbar ist. Keine dieser
+Optionen wurde umgesetzt, da nicht angefragt.
+
+**Dateien:** `nodes/Cargo.lock`.
