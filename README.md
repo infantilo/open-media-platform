@@ -1,6 +1,6 @@
 # OpenMediaPlatform
 
-[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--007--03%20(MXL)-1f6feb)](https://specs.amwa.tv/bcp-007-03/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml)
+[![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--04%20v1.3-1f6feb)](https://specs.amwa.tv/is-04/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--05%20v1.1%20%2B%20v1.2.0-1f6feb)](https://specs.amwa.tv/is-05/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--12%20%2F%20IS--14-1f6feb)](https://specs.amwa.tv/ms-05-02/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-IS--08-1f6feb)](https://specs.amwa.tv/is-08/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--003--01-1f6feb)](https://specs.amwa.tv/bcp-003-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--008-1f6feb)](https://specs.amwa.tv/bcp-008-01/) [![AMWA NMOS](https://img.shields.io/badge/AMWA%20NMOS-BCP--007--03%20(MXL)-1f6feb)](https://specs.amwa.tv/bcp-007-03/) [![CI](https://img.shields.io/badge/AMWA%20conformance-verified%20in%20CI-2ea043)](.github/workflows/ci.yml) [![SMPTE](https://img.shields.io/badge/SMPTE-ST%202110--20%2F30-6e40c9)](https://www.smpte.org/standards) [![AES67](https://img.shields.io/badge/AES67-Dante%20compatible-6e40c9)](https://en.wikipedia.org/wiki/AES67) [![EBU](https://img.shields.io/badge/EBU-R37%20%2B%20R128%2FBS.1770-6e40c9)](https://tech.ebu.ch/loudness)
 
 > **Standards-first:** built directly on AMWA NMOS — IS-04 v1.3 for
 > discovery/registration, **IS-05 v1.1 and the current v1.2.0 release
@@ -17,6 +17,24 @@
 > API versions; BCP-007-03 (too new to have an official AMWA test suite
 > yet) is checked by our own schema-conformance tool instead, against
 > the real published JSON schemas.
+
+### Standards conformance — verified, not just claimed
+
+| Standard | What it covers here | Verified by |
+|---|---|---|
+| AMWA NMOS IS-04 v1.3 | Discovery & registration | Official AMWA NMOS Testing Tool, in CI on every push |
+| AMWA NMOS IS-05 v1.1 + v1.2.0 | Connection management, both API versions served side by side | Official AMWA NMOS Testing Tool — 62/62 checks, zero accepted exceptions |
+| AMWA NMOS IS-08 | Audio channel mapping | Real `audiomixmatrix` routing over the standard API, round-trip live-verified |
+| AMWA NMOS IS-12 / IS-14 | Self-described control (no built-in node-type knowledge) | Every node self-describes; new node types integrate with zero orchestrator changes |
+| AMWA BCP-003-01 | Secure transport for the NMOS control plane | Registry over TLS, opt-in, same model as orchestrator↔node mTLS |
+| AMWA BCP-007-03 | MXL as a standardized NMOS transport, not a proprietary one | Own schema-conformance tool against the real published JSON schemas (spec too new for an official AMWA suite yet) |
+| AMWA BCP-008-01/02 | Receiver/sender health status | Real signals (GStreamer jitterbuffer stats, PTP lock, DeckLink cable lock, SRT stats), live-verified |
+| MXL (Media eXchange Layer) | Zero-copy local media exchange | Read/write path run against MXL's own independent reference tools, both directions, down to actual pixels |
+| SMPTE ST 2110-20/30 | Video/audio over IP | Conformant SDP, live-verified against real RTP traffic |
+| AES67 (Dante-compatible) | Audio interop over IP | SAP discovery, live-verified |
+| PTP (IEEE 1588) | Network timebase for the 2110 paths | Opt-in domain, verified live-synchronized across two network namespaces |
+| EBU R 37 | A/V lip-sync tolerance window | `omp-scope` measures real signals and scores them against it live |
+| EBU R 128 / ITU-R BS.1770 | Loudness & true peak | `omp-scope` computes both and gives a live compliance verdict |
 
 ![OpenMediaPlatform Hero](./OpenMediaPlatform%20Hero.png)
 
