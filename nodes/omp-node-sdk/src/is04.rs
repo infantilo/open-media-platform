@@ -28,10 +28,13 @@ pub const FORMAT_VIDEO: &str = "urn:x-nmos:format:video";
 pub const FORMAT_AUDIO: &str = "urn:x-nmos:format:audio";
 
 /// Transport-URN für MXL-Zero-Copy-Sender/-Receiver (`UMSETZUNG.md` C4).
-/// `x-omp`, weil MXL (Stand v1.0.1) keine eigene registrierte NMOS-
-/// Transport-URN hat — Migrationspunkt, falls AMWA/EBU später eine
-/// Standard-URN definieren.
-pub const TRANSPORT_MXL: &str = "urn:x-omp:transport:mxl";
+/// Seit AMWA BCP-007-03 v1.0.0 (2026-08-21, "NMOS Support for MXL") die
+/// standardisierte URN statt der früheren projekteigenen
+/// `urn:x-omp:transport:mxl` — genau der in der alten Doku vorgemerkte
+/// Migrationspunkt. `sender_transport_params_mxl`/
+/// `receiver_transport_params_mxl` (`mxl_domain_id`/`mxl_flow_id`) s.
+/// [`crate::connection`].
+pub const TRANSPORT_MXL: &str = "urn:x-nmos:transport:mxl";
 
 /// IS-04-Node-Tag-Name, den der Instanz-Launcher-korrelierte Node-Wert
 /// trägt (`UMSETZUNG.md` C8) — Wert ist `OMP_INSTANCE_ID`, Schlüssel

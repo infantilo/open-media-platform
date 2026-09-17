@@ -5,11 +5,12 @@ package connection
 // IS-05 v1.2.0 die kanonische Quelle für Transport-Typ-URNs, statt fest
 // in der Spec definiert (docs/decisions.md Nachtrag 189). Transports
 // bildet die vier von der Registry aktuell geführten Standard-Einträge
-// ab, plus die projekteigene proprietäre MXL-Erweiterung
-// (`urn:x-omp:transport:mxl`, s. Rust-Pendant `is04::TRANSPORT_MXL`).
-// Kein Node dieses Projekts braucht mqtt/websocket/dash aktiv — diese
-// Tabelle ist die eine Stelle, an der ein künftiger echter Bedarf
-// ergänzt würde, statt an verstreuten String-Literalen.
+// ab, plus die seit AMWA BCP-007-03 v1.0.0 standardisierte MXL-URN
+// (`urn:x-nmos:transport:mxl`, s. Rust-Pendant `is04::TRANSPORT_MXL` —
+// vorher projekteigenes `urn:x-omp:transport:mxl`). Kein Node dieses
+// Projekts braucht mqtt/websocket/dash aktiv — diese Tabelle ist die
+// eine Stelle, an der ein künftiger echter Bedarf ergänzt würde, statt
+// an verstreuten String-Literalen.
 type Transport struct {
 	URN        string
 	Label      string
@@ -21,7 +22,7 @@ var Transports = []Transport{
 	{URN: "urn:x-nmos:transport:mqtt", Label: "MQTT"},
 	{URN: "urn:x-nmos:transport:websocket", Label: "Websocket"},
 	{URN: "urn:x-nmos:transport:dash", Label: "DASH"},
-	{URN: "urn:x-omp:transport:mxl", Label: "MXL (OMP-proprietär)"},
+	{URN: "urn:x-nmos:transport:mxl", Label: "MXL (AMWA BCP-007-03)"},
 }
 
 // IsKnownTransport prüft, ob urn im Register steht — eine Validierungs-

@@ -93,8 +93,9 @@ const HOST_ONLINE_THRESHOLD_MS = 15000;
 // Transport-URN-Wert wie nodes/omp-node-sdk/src/is04.rs::TRANSPORT_MXL
 // (keine gemeinsame Konstante über die Sprachgrenze hinweg möglich) —
 // Grundlage der Kanten-Klassifizierung über Host-Zonengrenzen (§13.3:
-// "MXL ist host-lokal").
-const TRANSPORT_MXL = "urn:x-omp:transport:mxl";
+// "MXL ist host-lokal"). Seit AMWA BCP-007-03 v1.0.0 die standardisierte
+// URN (vorher projekteigenes `urn:x-omp:transport:mxl`).
+const TRANSPORT_MXL = "urn:x-nmos:transport:mxl";
 const MXL_ZONE_WARNING_TITLE =
   "MXL ist host-lokal — für Hostgrenzen ST-2110/SRT-Gateway (D4) einsetzen";
 

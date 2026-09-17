@@ -24986,3 +24986,119 @@ omp-mediaio-Beispieldateien sauber (keine Treffer mehr).
 
 **Dateien:** `ARCHITECTURE.md` §6.5/§9/§10, `docs/decisions.md`
 (2026-07-11-Eintrag, Nachtrag 138).
+
+## 2026-09-17 (Nachtrag 229) — MXL-Transport auf AMWA BCP-007-03 v1.0.0 umgestellt (Punkt 1 der Qvest-Gap-Analyse)
+
+**Nutzeranlass:** Fortsetzung der DMF/MXL-Standards-Recherche (Nachtrag
+227/228-Umfeld): "recherchiere aktuellste Normen... was müssen wir noch
+implementieren, damit wir besser sind als das Qvest-Demo" identifizierte
+BCP-007-03 v1.0.0 (2026-08-21, "NMOS Support for MXL") als seit
+`is04.rs`s eigener Migrationsnotiz (`TRANSPORT_MXL`-Doc, "Migrationspunkt,
+falls AMWA/EBU später eine Standard-URN definieren") erwarteten,
+inzwischen eingetretenen Fall. Konkreter Befund: **jeder** OMP-MXL-
+Sender/-Receiver meldete bisher `urn:x-omp:transport:mxl` (proprietär)
+UND lieferte unter diesem Transport RTP-geformte `transport_params`
+(`destination_ip`/`destination_port`/`rtp_enabled`) — ein fremder,
+BCP-007-03-konformer Controller (z. B. Skyline DataMiner xOps im
+Qvest-Showcase) hätte OMPs MXL-Endpunkte weder als solche erkannt noch
+sinnvoll damit interagieren können. Nutzerauftrag: "Punkt 1 ... sowie
+Punkt 2 ... gleich umsetzen" — dieser Eintrag deckt Punkt 1.
+
+**Spec exakt nachgeschlagen** (Regel §0.6), nicht geraten: BCP-007-03
+v1.0.0 via `specs.amwa.tv/bcp-007-03` + die konkreten JSON-Schema-Dateien
+`sender_transport_params_mxl.json`/`receiver_transport_params_mxl.json`
+abgerufen. Kern: Transport-URN `urn:x-nmos:transport:mxl`; beide
+Richtungen kennen genau `mxl_domain_id` + `mxl_flow_id`
+(`additionalProperties: false`); beide Felder akzeptieren `null` oder
+eine kanonische UUID; `mxl_domain_id` akzeptiert zusätzlich das Literal
+`"auto"` bei BEIDEN Richtungen, `mxl_flow_id` akzeptiert `"auto"` NUR
+beim Sender ("The literal auto is not used for this parameter" beim
+Receiver).
+
+**Umgesetzt (`nodes/omp-node-sdk`):**
+- `is04::TRANSPORT_MXL` → `"urn:x-nmos:transport:mxl"` (vorher
+  `urn:x-omp:transport:mxl`).
+- `connection.rs`: `SenderResource::transport_params` von
+  `Vec<TransportParams>` (fest RTP-geformt) auf `Vec<Value>`
+  umgestellt — wie schon immer bei `ReceiverResource`, da ein einzelner
+  Rust-Typ RTP- und MXL-Legs nicht beide korrekt abbilden kann. Neue
+  `default_leg(transport_urn, is_sender)` baut das transport-abhängige
+  Default-Leg: MXL-Sender defaultet auf `{"mxl_domain_id":"auto",
+  "mxl_flow_id":"auto"}` — kein Platzhalter, sondern exakt der von der
+  Spec für "Sender kann ohne Controller-Vorgabe auflösen, z. B. bei nur
+  einem Flow" vorgesehene Fall, der auf jeden OMP-Sender zutrifft (fest
+  einem Flow zugeordnet). MXL-Receiver defaultet auf
+  `{"mxl_domain_id":"auto","mxl_flow_id":null}` (Spec-MUST: kein `auto`
+  bei `mxl_flow_id`). `with_transport()` setzt das Default-Leg jetzt
+  beim Transport-Wechsel neu (vorher blieb der ursprüngliche
+  `SenderResource::default()`-RTP-Leg auch nach einem MXL-Default
+  bestehen — der eigentliche, hier behobene strukturelle Bug: MXL ist
+  der `SenderConnection::new`-Default, aber der RTP-Leg wurde
+  unabhängig vom Transport IMMER als Erstzustand gesetzt).
+- `constraints_response()`/`unconstrained_mxl_leg()`: liefert jetzt
+  `{"mxl_domain_id":{},"mxl_flow_id":{}}` für MXL-Connections statt des
+  RTP-13-Felder-Legs.
+- `merge_leg()`: generischer PATCH-Merge über `known_leg_keys(transport_
+  urn)` statt der bisherigen, nur für RTP-Felder hartkodierten
+  Sender-Logik — Receiver-`patch_staged` merged `transport_params`
+  jetzt überhaupt zum ersten Mal (vorher komplett ignoriert, nur
+  `sender_id`/`master_enable`/`activation` wurden übernommen). Normative
+  MUSS-Regel eingebaut: ein PATCH mit `mxl_flow_id:"auto"` auf einen
+  MXL-Receiver wird mit 400 abgelehnt.
+- `transports.rs`: Label "MXL (OMP-proprietär)" → "MXL (AMWA
+  BCP-007-03)".
+- 8 neue Unit-Tests (Default-Shapes beider Richtungen, Constraints-Shape,
+  PATCH-Merge inkl. der 400-Ablehnung), 2 bestehende auf die neue URN
+  aktualisiert.
+
+**Bewusst nicht Teil dieser Runde** (Scope-Grenze, damit "ein Schritt"
+nicht ausufert — für eine spätere Sitzung vorgemerkt): die tatsächliche
+Flow-Auflösung in `ReceiverControl::apply()`-Implementierungen
+(`omp-viewer`/`omp-recorder`/`omp-aes67-gateway`/... — ca. 10 Stellen)
+liest weiterhin nur `sender_id` und löst darüber über die eigene
+NMOS-Registry auf (funktioniert für den eigenen Orchestrator
+unverändert), NICHT die jetzt korrekt transportierten `mxl_flow_id`/
+`mxl_domain_id`-Werte selbst. Für einen fremden Controller, der NUR
+über `transport_params` verbindet (ohne zusätzlich `sender_id` zu
+patchen), hätte das noch keine Wirkung — dieselbe "ehrlich benannte
+Lücke statt stillschweigend angenommen"-Praxis wie bei `linkStatus:
+AllUp` (BCP-008). Auch nicht Teil: eine `SenderConnection`, die den
+tatsächlichen (nicht-"auto") Flow-UUID selbst kennt (bräuchte
+Durchreichen der IS-04-`flow_id` in jeden `SenderConnection::new`-
+Aufruf, ca. 20 Nodes) — `"auto"` ist spec-konform und für den
+Ein-Flow-pro-Sender-Fall dieses Projekts sachlich richtig, macht diese
+Änderung unnötig für diesen Schritt.
+
+**Weitere geänderte Stellen** (reine Konstanten-/Label-Parität, keine
+Verhaltensänderung — der Go-Mock-Node registriert nie einen echten
+MXL-Sender, nur die Lookup-Tabelle musste mitziehen):
+`nodes/mock/internal/connection/transports.go`, `ui/graph/flow-canvas.ts`
+(`TRANSPORT_MXL`-Konstante, reine Host-Zonen-Kantenklassifizierung),
+`orchestrator/internal/registry/types.go` (Kommentar).
+
+**Verifikation:**
+- `cargo build --workspace --bins`: alle ~25 Nodes grün (bestätigt: kein
+  externer Aufrufer außer `nodes/playout` griff typisiert auf
+  `TransportParams` zu — dort auf JSON-`Value`-Zugriff umgestellt).
+- `cargo test -p omp-node-sdk`: 74/74 grün. `cargo clippy -p
+  omp-node-sdk -p playout --all-targets -D warnings`: grün.
+- `cargo test --workspace` / `clippy --workspace`: die einzigen
+  Fehlschläge liegen in `omp-mediaio` (fehlendes `libmxl.so` ohne
+  `source deploy/dev/mxl.env`, sowie ein vorbestehender
+  `clippy::explicit_counter_loop` in `mxl.rs:2373`, Datei von dieser
+  Änderung nicht berührt) — nach `source deploy/dev/mxl.env` liefen
+  `omp-mediaio`/`omp-scope` u. a. bereits vor dieser Änderung sauber
+  (Nachtrag 227), hier nicht erneut angefasst.
+- `go build/vet/test ./...` für `orchestrator` und `nodes/mock`: grün,
+  bis auf zwei als Sandbox-Flakes identifizierte Tests
+  (`TestRestartRoleCapturesAndRestoresNodeState`,
+  `TestLauncherStopSendsSigkillIfSigtermIgnored`) — beide in Paketen,
+  die dieser Schritt nicht berührt (`workflows`/`launcher`), letzterer
+  isoliert 3/3 grün nachgestellt.
+- `deno check ui/**/*.ts` (mit `shopt -s globstar`) + `deno test ui/`:
+  92/92 grün.
+
+**Dateien:** `nodes/omp-node-sdk/src/{is04.rs,transports.rs,
+connection.rs}`, `nodes/playout/src/main.rs`,
+`nodes/mock/internal/connection/transports.go`,
+`ui/graph/flow-canvas.ts`, `orchestrator/internal/registry/types.go`.

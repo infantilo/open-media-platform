@@ -57,8 +57,88 @@ fn unconstrained_rtp_leg() -> Value {
     })
 }
 
-fn constraints_response() -> Vec<u8> {
-    serde_json::to_vec(&vec![unconstrained_rtp_leg()]).unwrap_or_default()
+/// s. [`unconstrained_rtp_leg`] — MXL-Pendant. Feldnamen exakt aus AMWA
+/// BCP-007-03 v1.0.0, `sender_transport_params_mxl.json`/
+/// `receiver_transport_params_mxl.json` (identische Property-Namen für
+/// beide Richtungen). `{}` = unconstrained, da kein OMP-Node eine engere
+/// Domain-/Flow-ID-Auswahl anbietet als "alles erlaubt".
+fn unconstrained_mxl_leg() -> Value {
+    serde_json::json!({
+        "mxl_domain_id": {},
+        "mxl_flow_id": {},
+    })
+}
+
+/// Die Property-Namen des einen Legs, die ein PATCH auf `transport_params`
+/// für `transport_urn` übernehmen darf — alles andere im PATCH-Body wird
+/// ignoriert (kein `additionalProperties`-Fehler, nur stilles Weglassen,
+/// gleiche Großzügigkeit wie beim bisherigen RTP-Pfad). MXL-Feldnamen aus
+/// BCP-007-03 v1.0.0 (s. [`unconstrained_mxl_leg`]-Doc).
+fn known_leg_keys(transport_urn: &str) -> &'static [&'static str] {
+    if transport_urn == TRANSPORT_MXL {
+        &["mxl_domain_id", "mxl_flow_id"]
+    } else {
+        &["destination_ip", "destination_port", "rtp_enabled"]
+    }
+}
+
+fn constraints_response(transport_urn: &str) -> Vec<u8> {
+    let leg = if transport_urn == TRANSPORT_MXL {
+        unconstrained_mxl_leg()
+    } else {
+        unconstrained_rtp_leg()
+    };
+    serde_json::to_vec(&vec![leg]).unwrap_or_default()
+}
+
+/// Default-Leg für ein neues [`SenderConnection`]/[`ReceiverConnection`]
+/// mit `transport_urn`, ersetzt bei jedem `with_transport`-Aufruf den
+/// vorherigen Default (s. dortige Doku). MXL: `"auto"` ist hier kein
+/// Platzhalter, sondern die von BCP-007-03 selbst vorgesehene Bedeutung
+/// ("Sender kann den Flow ohne Controller-Vorgabe auflösen, z. B. wenn
+/// nur ein MXL-Flow zutrifft") — genau der Fall bei jedem OMP-Sender, der
+/// fest einem einzigen MXL-Flow zugeordnet ist. Für Receiver ist `"auto"`
+/// laut Spec NUR für `mxl_domain_id` erlaubt, `mxl_flow_id` MUSS bis zu
+/// einer echten Verbindung `null` bleiben (`receiver_transport_params_mxl.
+/// json`, "The literal auto is not used for this parameter").
+fn default_leg(transport_urn: &str, is_sender: bool) -> Value {
+    if transport_urn == TRANSPORT_MXL {
+        if is_sender {
+            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": "auto"})
+        } else {
+            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": Value::Null})
+        }
+    } else if is_sender {
+        serde_json::to_value(TransportParams::default()).unwrap_or_default()
+    } else {
+        Value::Object(serde_json::Map::new())
+    }
+}
+
+/// Merged die bekannten Keys von `patch` (falls vorhanden) in `leg` — s.
+/// [`known_leg_keys`]. Gibt `Err(())` zurück, wenn der PATCH gegen eine
+/// normative BCP-007-03-Regel verstößt (aktuell: MXL-Receiver darf
+/// `mxl_flow_id` nie auf `"auto"` setzen), damit der Aufrufer mit 400
+/// statt stillem Akzeptieren reagieren kann.
+fn merge_leg(leg: &mut Value, patch: &Value, transport_urn: &str, is_sender: bool) -> Result<(), ()> {
+    let Some(patch_obj) = patch.as_object() else {
+        return Ok(());
+    };
+    if transport_urn == TRANSPORT_MXL
+        && !is_sender
+        && patch_obj.get("mxl_flow_id").and_then(Value::as_str) == Some("auto")
+    {
+        return Err(());
+    }
+    let Some(leg_obj) = leg.as_object_mut() else {
+        return Ok(());
+    };
+    for key in known_leg_keys(transport_urn) {
+        if let Some(v) = patch_obj.get(*key) {
+            leg_obj.insert((*key).to_string(), v.clone());
+        }
+    }
+    Ok(())
 }
 
 fn transport_type_response(transport_urn: &str) -> Vec<u8> {
@@ -298,24 +378,17 @@ pub struct Activation {
 }
 
 /// `staged`/`active`-Repräsentation eines Senders
-/// (`sender-stage-schema.json`).
+/// (`sender-stage-schema.json`). `transport_params` ist seit BCP-007-03
+/// generisches JSON (wie schon immer bei [`ReceiverResource`]) statt des
+/// früher fest RTP-geformten [`TransportParams`] — das Leg-Format hängt
+/// vom gewählten Transport ab (RTP vs. MXL, s. [`default_leg`]), ein
+/// einzelner Rust-Typ könnte das nicht beide korrekt abbilden.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SenderResource {
     pub receiver_id: Option<String>,
     pub master_enable: bool,
     pub activation: Activation,
-    pub transport_params: Vec<TransportParams>,
-}
-
-impl Default for SenderResource {
-    fn default() -> Self {
-        SenderResource {
-            receiver_id: None,
-            master_enable: false,
-            activation: Activation::default(),
-            transport_params: vec![TransportParams::default()],
-        }
-    }
+    pub transport_params: Vec<Value>,
 }
 
 /// Reagiert auf Zustandsänderungen einer IS-05-Sender-Connection (z. B.
@@ -347,12 +420,18 @@ pub struct SenderConnection<C, S> {
 
 impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
     pub fn new(sender_id: impl Into<String>, control: C, sdp: S) -> Self {
+        let transport_urn = TRANSPORT_MXL;
         SenderConnection {
             sender_id: sender_id.into(),
             control,
             sdp,
-            state: Mutex::new(SenderResource::default()),
-            transport_urn: TRANSPORT_MXL,
+            state: Mutex::new(SenderResource {
+                receiver_id: None,
+                master_enable: false,
+                activation: Activation::default(),
+                transport_params: vec![default_leg(transport_urn, true)],
+            }),
+            transport_urn,
         }
     }
 
@@ -375,6 +454,13 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
             "unbekannter Transport-Typ: {transport_urn}"
         );
         self.transport_urn = transport_urn;
+        // Der Default-Leg hängt vom Transport ab (RTP- vs. MXL-Feldnamen,
+        // s. `default_leg`-Doc) — ohne diesen Reset behielte ein
+        // `with_transport`-Aufruf nach `new()` (Default MXL) fälschlich
+        // den MXL-Leg, obwohl `transporttype/` schon RTP meldet (oder
+        // umgekehrt).
+        self.state.get_mut().expect("lock poisoned").transport_params =
+            vec![default_leg(transport_urn, true)];
         self
     }
 
@@ -420,7 +506,9 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
                 br#"["constraints/","staged/","active/","transportfile/","transporttype/"]"#
                     .to_vec(),
             )),
-            ("GET", "constraints") => Some((200, "application/json", constraints_response())),
+            ("GET", "constraints") => {
+                Some((200, "application/json", constraints_response(self.transport_urn)))
+            }
             ("GET", "transporttype") => Some((
                 200,
                 "application/json",
@@ -466,17 +554,15 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         }
         if let Some(params) = patch.get("transport_params").and_then(Value::as_array)
             && let Some(first) = params.first()
+            && let Some(leg) = state.transport_params.first_mut()
+            && merge_leg(leg, first, self.transport_urn, true).is_err()
         {
-            let leg = &mut state.transport_params[0];
-            if let Some(ip) = first.get("destination_ip").and_then(Value::as_str) {
-                leg.destination_ip = Some(ip.to_string());
-            }
-            if let Some(port) = first.get("destination_port").and_then(Value::as_u64) {
-                leg.destination_port = Some(port as u16);
-            }
-            if let Some(enabled) = first.get("rtp_enabled").and_then(Value::as_bool) {
-                leg.rtp_enabled = enabled;
-            }
+            return (
+                400,
+                "application/json",
+                br#"{"code":400,"error":"invalid transport_params for this transport","debug":null}"#
+                    .to_vec(),
+            );
         }
 
         self.control.apply(&state);
@@ -514,18 +600,6 @@ pub struct ReceiverResource {
     pub transport_params: Vec<Value>,
 }
 
-impl Default for ReceiverResource {
-    fn default() -> Self {
-        ReceiverResource {
-            sender_id: None,
-            master_enable: false,
-            activation: Activation::default(),
-            transport_file: ReceiverTransportFile::default(),
-            transport_params: vec![Value::Object(serde_json::Map::new())],
-        }
-    }
-}
-
 /// Reagiert auf Zustandsänderungen einer IS-05-Receiver-Connection (z. B.
 /// `omp-viewer`s Quellwahl, `UMSETZUNG.md` C6: `sender_id` auflösen und die
 /// Pipeline neu aufbauen). Node-spezifisch, eine Implementierung pro
@@ -549,11 +623,18 @@ pub struct ReceiverConnection<C> {
 
 impl<C: ReceiverControl> ReceiverConnection<C> {
     pub fn new(receiver_id: impl Into<String>, control: C) -> Self {
+        let transport_urn = TRANSPORT_MXL;
         ReceiverConnection {
             receiver_id: receiver_id.into(),
             control,
-            state: Mutex::new(ReceiverResource::default()),
-            transport_urn: TRANSPORT_MXL,
+            state: Mutex::new(ReceiverResource {
+                sender_id: None,
+                master_enable: false,
+                activation: Activation::default(),
+                transport_file: ReceiverTransportFile::default(),
+                transport_params: vec![default_leg(transport_urn, false)],
+            }),
+            transport_urn,
         }
     }
 
@@ -571,6 +652,8 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             "unbekannter Transport-Typ: {transport_urn}"
         );
         self.transport_urn = transport_urn;
+        self.state.get_mut().expect("lock poisoned").transport_params =
+            vec![default_leg(transport_urn, false)];
         self
     }
 
@@ -610,7 +693,9 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
                 "application/json",
                 br#"["constraints/","staged/","active/","transporttype/"]"#.to_vec(),
             )),
-            ("GET", "constraints") => Some((200, "application/json", constraints_response())),
+            ("GET", "constraints") => {
+                Some((200, "application/json", constraints_response(self.transport_urn)))
+            }
             ("GET", "transporttype") => Some((
                 200,
                 "application/json",
@@ -645,6 +730,18 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             && let Ok(activation) = serde_json::from_value(activation.clone())
         {
             state.activation = activation;
+        }
+        if let Some(params) = patch.get("transport_params").and_then(Value::as_array)
+            && let Some(first) = params.first()
+            && let Some(leg) = state.transport_params.first_mut()
+            && merge_leg(leg, first, self.transport_urn, false).is_err()
+        {
+            return (
+                400,
+                "application/json",
+                br#"{"code":400,"error":"invalid transport_params for this transport","debug":null}"#
+                    .to_vec(),
+            );
         }
 
         self.control.apply(&state);
@@ -725,7 +822,67 @@ mod tests {
             "/x-nmos/connection/v1.1/single/senders/sender-1/transporttype",
             b"",
         ));
-        assert_eq!(body, r#""urn:x-omp:transport:mxl""#);
+        assert_eq!(body, r#""urn:x-nmos:transport:mxl""#);
+    }
+
+    /// BCP-007-03 v1.0.0: `mxl_domain_id`/`mxl_flow_id` statt der früher
+    /// (fälschlich) immer RTP-geformten `transport_params` — "auto" ist
+    /// hier der von der Spec vorgesehene Default für einen Sender mit
+    /// genau einem fest zugeordneten Flow, kein Platzhalter.
+    #[test]
+    fn sender_mxl_default_transport_params_are_bcp_007_03_shaped() {
+        let conn = SenderConnection::new("sender-1", NoopSenderControl, NoopSenderSdp);
+        let (_, body) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/senders/sender-1/staged",
+            b"",
+        ));
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed["transport_params"][0],
+            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": "auto"})
+        );
+    }
+
+    /// s. `sender_mxl_default_transport_params_are_bcp_007_03_shaped` —
+    /// Constraints-Pendant, muss die MXL-Property-Namen listen statt der
+    /// RTP-Legs.
+    #[test]
+    fn sender_mxl_constraints_are_bcp_007_03_shaped() {
+        let conn = SenderConnection::new("sender-1", NoopSenderControl, NoopSenderSdp);
+        let (_, body) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/senders/sender-1/constraints",
+            b"",
+        ));
+        let parsed: Vec<Value> = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed[0],
+            serde_json::json!({"mxl_domain_id": {}, "mxl_flow_id": {}})
+        );
+    }
+
+    /// Ein Controller darf einem MXL-Sender einen konkreten Flow/Domain
+    /// zuweisen (z. B. bei mehreren Flows pro Sender in einer künftigen
+    /// Erweiterung) — der PATCH muss ankommen, nicht nur der `"auto"`-
+    /// Default.
+    #[test]
+    fn sender_mxl_transport_params_patch_is_applied() {
+        let conn = SenderConnection::new("sender-1", NoopSenderControl, NoopSenderSdp);
+        let patch = br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
+        let (status, body) = body_str(conn.handle(
+            "PATCH",
+            "/x-nmos/connection/v1.1/single/senders/sender-1/staged",
+            patch,
+        ));
+        assert_eq!(status, 200);
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed["transport_params"][0]["mxl_flow_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        // mxl_domain_id blieb unberührt vom Patch (Merge, kein Replace).
+        assert_eq!(parsed["transport_params"][0]["mxl_domain_id"], "auto");
     }
 
     #[test]
@@ -749,7 +906,59 @@ mod tests {
             b"",
         ));
         assert_eq!(status, 200);
-        assert_eq!(body, r#""urn:x-omp:transport:mxl""#);
+        assert_eq!(body, r#""urn:x-nmos:transport:mxl""#);
+    }
+
+    /// Receiver-Pendant zu `sender_mxl_default_transport_params_are_bcp_
+    /// 007_03_shaped` — `mxl_flow_id` bleibt hier `null` (Spec: "auto" ist
+    /// für Receiver nur bei `mxl_domain_id` erlaubt, s. `default_leg`-Doc).
+    #[test]
+    fn receiver_mxl_default_transport_params_are_bcp_007_03_shaped() {
+        let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
+        let (_, body) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/receivers/recv-1/staged",
+            b"",
+        ));
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed["transport_params"][0],
+            serde_json::json!({"mxl_domain_id": "auto", "mxl_flow_id": Value::Null})
+        );
+    }
+
+    /// Normative BCP-007-03-Regel ("The literal auto is not used for this
+    /// parameter", `receiver_transport_params_mxl.json`): ein Receiver
+    /// MUSS `mxl_flow_id: "auto"` ablehnen, anders als beim Sender.
+    #[test]
+    fn receiver_mxl_flow_id_auto_is_rejected() {
+        let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
+        let patch = br#"{"transport_params":[{"mxl_flow_id":"auto"}]}"#;
+        let (status, _) = body_str(conn.handle(
+            "PATCH",
+            "/x-nmos/connection/v1.1/single/receivers/recv-1/staged",
+            patch,
+        ));
+        assert_eq!(status, 400);
+    }
+
+    /// Ein Controller patcht `mxl_flow_id` auf eine konkrete UUID (z. B.
+    /// nachdem er sie selbst über IS-04 aufgelöst hat) — muss ankommen.
+    #[test]
+    fn receiver_mxl_flow_id_uuid_patch_is_applied() {
+        let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
+        let patch = br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
+        let (status, body) = body_str(conn.handle(
+            "PATCH",
+            "/x-nmos/connection/v1.1/single/receivers/recv-1/staged",
+            patch,
+        ));
+        assert_eq!(status, 200);
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            parsed["transport_params"][0]["mxl_flow_id"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[test]

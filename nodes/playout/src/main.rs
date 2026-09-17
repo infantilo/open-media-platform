@@ -39,9 +39,12 @@ struct RtpControl {
 impl SenderControl for RtpControl {
     fn apply(&self, resource: &SenderResource) {
         if let Some(leg) = resource.transport_params.first()
-            && let (Some(ip), Some(port)) = (&leg.destination_ip, leg.destination_port)
+            && let (Some(ip), Some(port)) = (
+                leg.get("destination_ip").and_then(Value::as_str),
+                leg.get("destination_port").and_then(Value::as_u64),
+            )
         {
-            self.output.set_destination(ip, port);
+            self.output.set_destination(ip, port as u16);
         }
         self.output.set_active(resource.master_enable);
     }

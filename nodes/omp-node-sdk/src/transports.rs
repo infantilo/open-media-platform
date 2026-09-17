@@ -40,7 +40,7 @@ pub const TRANSPORTS: &[TransportEntry] = &[
     },
     TransportEntry {
         urn: TRANSPORT_MXL,
-        label: "MXL (OMP-proprietär)",
+        label: "MXL (AMWA BCP-007-03)",
         deprecated: false,
     },
 ];
