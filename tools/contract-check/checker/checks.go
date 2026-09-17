@@ -61,8 +61,10 @@ type Checker struct {
 
 // Run führt den vollständigen Node-Contract-Check aus (ARCHITECTURE.md
 // §5): IS-04-Registrierung, Descriptor-Schema, Param-Roundtrip,
-// UI-Manifest (optional), IS-05 (informativ, siehe CheckIS05).
-func Run(client *http.Client, nodeURL, registryURL string, schema *jsonschema.Schema) []Result {
+// UI-Manifest (optional), IS-05 (informativ, siehe CheckIS05),
+// BCP-007-03-MXL-Transport-Schema (informativ, siehe
+// CheckBcp00703Transports).
+func Run(client *http.Client, nodeURL, registryURL string, schema, mxlSenderSchema, mxlReceiverSchema *jsonschema.Schema) []Result {
 	c := &Checker{
 		http:     client,
 		nodeURL:  strings.TrimRight(nodeURL, "/"),
@@ -88,8 +90,10 @@ func Run(client *http.Client, nodeURL, registryURL string, schema *jsonschema.Sc
 
 	if regResult.Status == StatusPass {
 		results = append(results, c.CheckIS05(node))
+		results = append(results, c.CheckBcp00703Transports(node, mxlSenderSchema, mxlReceiverSchema))
 	} else {
 		results = append(results, Result{"IS-05 (informativ)", StatusSkip, "übersprungen (Node nicht in Registry gefunden)"})
+		results = append(results, Result{"BCP-007-03 (MXL-Transport)", StatusSkip, "übersprungen (Node nicht in Registry gefunden)"})
 	}
 
 	return results

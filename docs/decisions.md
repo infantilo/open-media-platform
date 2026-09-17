@@ -25102,3 +25102,79 @@ MXL-Sender, nur die Lookup-Tabelle musste mitziehen):
 connection.rs}`, `nodes/playout/src/main.rs`,
 `nodes/mock/internal/connection/transports.go`,
 `ui/graph/flow-canvas.ts`, `orchestrator/internal/registry/types.go`.
+
+## 2026-09-17 (Nachtrag 230) — BCP-007-03-Schema-Konformitätscheck in `contract-check` (Punkt 2 der Qvest-Gap-Analyse)
+
+**Direkte Fortsetzung von Nachtrag 229.** Vor der Umsetzung per
+`AskUserQuestion` geklärt: das offizielle AMWA-`nmos-testing`-Tool
+(`docker.io/amwa/nmos-testing`, bereits in der CI für IS-04/IS-05/
+BCP-008 im Einsatz) hat **keine** Test-Suite für BCP-007-03 — verifiziert
+gegen die Suite-Liste im README des `AMWA-TV/nmos-testing`-Repos (IS-04
+bis IS-14, BCP-002/003/004/006/008, aber kein BCP-007). Sehr neue Spec
+(v1.0.0, erst 2026-08-21) — nachvollziehbar, aber ein echter Blocker für
+"Testing Tool Coverage" im ursprünglich gemeinten Sinn. Nutzerentscheidung
+auf drei vorgelegten Optionen: **"Eigener Schema-Konformitätstest"**
+(gegenüber "nur beobachten" und "beides").
+
+**Umsetzung:** die beiden echten BCP-007-03-v1.0.0-Schemas
+(`sender_transport_params_mxl.json`/`receiver_transport_params_mxl.json`)
+byte-genau per `curl` von `specs.amwa.tv` geladen (nicht aus der
+LLM-Zusammenfassung der vorigen Recherche rekonstruiert — Regel §0.6),
+liegen jetzt unter `docs/bcp-007-03/*.schema.json`. Neuer Check
+`CheckBcp00703Transports` im bereits existierenden `tools/contract-check`
+(nicht neu gebaut — dasselbe Werkzeug, das schon den Node-Contract prüft,
+nutzt bereits `github.com/santhosh-tekuri/jsonschema/v6` für das
+Descriptor-Schema, hier wiederverwendet statt einer zweiten
+Schema-Validierungs-Bibliothek/Sprache): für jeden Sender/Receiver eines
+Nodes, dessen `transporttype` `urn:x-nmos:transport:mxl` meldet, wird
+`staged.transport_params[0]` gegen das jeweilige echte Schema validiert
+— PASS/FAIL/SKIP nach demselben "informativ pro Port"-Muster wie
+`CheckIS05`, aber (anders als `CheckIS05`) mit echtem FAIL bei
+Schema-Verletzung, kein reines Beobachten.
+
+**Live-Fund beim Verifizieren, kein Fake-Artefakt:** von allen
+Rust-Nodes im gesamten Repo implementiert **einzig `nodes/playout`**
+überhaupt `SenderConnection` — mit RTP, nicht MXL (Grund: seit dem
+2026-07-07-B1-Scope-Schnitt werden IS-05-Verbindungen im gesamten
+Projekt ausschließlich über den RECEIVER gesteuert, PATCH auf einen
+Sender ist architektonisch nie vorgesehen; ein MXL-Sender hat als
+Zero-Copy-Shared-Memory-Quelle ohnehin kein "Ziel", das ein Controller
+setzen müsste). Ein Live-Test von `CheckBcp00703Transports` gegen einen
+echten `omp-source`-Sender liefert deshalb korrekt SKIP ("kein
+Sender/Receiver mit MXL-Transport gefunden" — genauer: `CheckIS05`
+meldet für dieselben Sender bereits "nicht implementiert", der neue
+Check übernimmt dieselbe ehrliche Einordnung). Für einen echten
+PASS-Nachweis stattdessen ein zweiter, real verbundener Knoten
+verwendet: `omp-source` (Sender) + `omp-viewer` (Receiver), per echtem
+IS-05-PATCH auf den Receiver verbunden (`sender_id` + `master_enable`) —
+`GET staged` zeigte danach live `{"mxl_domain_id":"auto",
+"mxl_flow_id":null}` (spec-korrekt: `mxl_flow_id` bleibt beim Receiver
+`null`, bis der Node selbst den passenden Flow auflöst), `contract-check`
+gegen die laufende `omp-viewer`-Instanz: **`BCP-007-03 (MXL-Transport):
+PASS`**. Zum Gegenprobe-Nachweis, dass der Check tatsächlich Zähne hat,
+zusätzlich zwei neue Unit-Tests, die exakt den vor Nachtrag 229
+bestehenden Bug nachstellen (`TestBcp00703TransportsFailsForRtpShapedLeg`
+füttert einen als MXL deklarierten Port mit `destination_ip`/
+`destination_port`/`rtp_enabled` — muss FAIL liefern, tut es).
+
+**Bewusst nicht Teil dieser Runde:** CI-Verdrahtung (ein neuer
+GitHub-Actions-Job bräuchte einen echten, MXL-fähigen Rust-Node inkl.
+laufender MXL-Domain — andere Job-Form als der bestehende
+`amwa-nmos-testing`-Job, der nur den transport-losen Go-Mock-Node
+braucht; `contract-check` selbst läuft bisher ohnehin nur manuell über
+`make contract`, nicht automatisiert). Ebenfalls nicht angefasst: die
+oben gefundene Lücke, dass MXL-Sender-Rollen gar keine IS-05-Connection-
+Endpunkte exponieren — architektonisch plausibel (s. o.), aber eine
+echte NMOS-Konformitätslücke gegenüber einem Controller, der (wie von
+BCP-007-03 vorgesehen) auch Sender-seitig patchen wollte; eigener,
+separat zu entscheidender künftiger Schritt.
+
+**Verifikation:** `go build/vet/test ./...` für `tools/contract-check`
+grün (7/7 Tests, 2 neu). Live gegen eine echte, per `make up`
+gestartete `nmos-cpp`-Registry + zwei manuell gestartete Rust-Node-
+Instanzen (`omp-source`, `omp-viewer`) verifiziert wie oben beschrieben;
+beide Testinstanzen danach beendet.
+
+**Dateien:** `docs/bcp-007-03/{sender,receiver}_transport_params_mxl.
+schema.json` (neu), `tools/contract-check/checker/{bcp007_03.go (neu),
+schema.go,checks.go,checks_test.go}`, `tools/contract-check/main.go`.

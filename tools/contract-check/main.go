@@ -44,9 +44,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "contract-check: Schema docs/descriptor-v0.schema.json nicht kompilierbar: %v\n", err)
 		os.Exit(2)
 	}
+	mxlSenderSchema, err := compiler.Compile(checker.DefaultMxlSenderTransportSchemaPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "contract-check: BCP-007-03-Sender-Schema nicht kompilierbar: %v\n", err)
+		os.Exit(2)
+	}
+	mxlReceiverSchema, err := compiler.Compile(checker.DefaultMxlReceiverTransportSchemaPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "contract-check: BCP-007-03-Receiver-Schema nicht kompilierbar: %v\n", err)
+		os.Exit(2)
+	}
 
 	client := &http.Client{Timeout: 5 * time.Second}
-	results := checker.Run(client, nodeURL, registryURL, schema)
+	results := checker.Run(client, nodeURL, registryURL, schema, mxlSenderSchema, mxlReceiverSchema)
 
 	failed := false
 	for _, r := range results {
