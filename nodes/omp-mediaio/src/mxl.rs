@@ -155,15 +155,25 @@ fn video_caps(
 /// capsfilter(v210, fix WxH@fps) ! valve ! appsink`, dahinter ein Thread,
 /// der Samples zieht und als Grains in den Flow schreibt.
 ///
-/// **Vereinfachung ggü. `tools/mxl-gst/testsrc.cpp` (dokumentiert, nicht
-/// geraten):** kein TAI-System-Clock-Alignment der Pipeline, keine
-/// PTS-zu-Index-Umrechnung. Stattdessen wird der Grain-Index einmalig bei
-/// der ersten Sample per `get_current_index()` initialisiert und danach
-/// pro Sample um 1 erhöht — korrekt, solange Samples ungefähr im
-/// konfigurierten Takt ankommen (gegeben bei `videotestsrc`/`videorate`),
-/// aber ohne Selbstkorrektur bei Drift/Aussetzern. Reicht für die
-/// Test-Trias (C5–C7); eine spätere produktionsnahe Quelle sollte auf das
-/// PTS-basierte Verfahren wechseln, falls Drift beobachtet wird.
+/// **Index-Herkunft (s. `compute_write_index`, D8 Teil 3):** trägt ein
+/// durchgereichter Puffer eine TAI-Ursprungszeit (`ReferenceTimestampMeta`
+/// eines vorgelagerten MXL-Lesepfads), wird DIESE in einen Index
+/// umgerechnet; sonst wird bei JEDEM Sample frisch gegen
+/// `get_current_index()` gerechnet — **kein** einmaliger Anker mit
+/// nachfolgendem freiem Hochzählen. Dieser Kommentar behauptete das bis
+/// 2026-09-18 fälschlich noch (Stand vor dem D8-Teil-3-Refactor vom
+/// 2026-08-03, nie nachgezogen) — genau dieser veraltete Text wurde in
+/// docs/decisions.md Nachtrag 226 als Erklärung für den dort gemessenen
+/// „~4 Bilder voraus"-Befund zitiert, obwohl der Code zu diesem Zeitpunkt
+/// bereits selbstkorrigierend war. Ein gezielter Isolationstest
+/// (`videotestsrc` direkt in `MxlVideoOutput`, mit temporärer
+/// Instrumentierung "deklarierter TAI-Index minus `MxlContext::now_ns()`")
+/// zeigt für den ursprungslosen Fall nur ein Rauschen von wenigen ms, kein
+/// konstanter oder wachsender Versatz — die tatsächliche Ursache des
+/// Nachtrag-226-Befunds liegt also nicht (mehr) hier; `MxlAudioOutput`
+/// hatte dagegen bis 2026-09-18 tatsächlich den beschriebenen
+/// Freilauf-Bug (s. dortige Doku in `write_audio_loop`), das erklärt die
+/// dort gemessene wachsende Audio-Drift.
 pub struct MxlVideoOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
@@ -989,7 +999,6 @@ fn write_audio_loop(
     heartbeat: &Arc<AtomicU64>,
 ) {
     let reference_caps = tai_reference_caps();
-    let mut index: Option<u64> = None;
     let mut last_written: Option<u64> = None;
     // S. `write_loop`-Kommentar (Nachtrag 161).
     let mut consecutive_eos_polls: u32 = 0;
@@ -1031,7 +1040,18 @@ fn write_audio_loop(
         let bytes_per_channel = bytes.len() / channels.max(1);
 
         // Gleiches Ursprungs-Index-Prinzip wie im Video-Schreibpfad
-        // (`write_loop`) — s. Kommentar dort.
+        // (`write_loop`) — s. Kommentar dort. Anders als eine frühere
+        // Fassung (bis 2026-09-18) wird die Wallclock-Position im
+        // ursprungslosen Fall bei JEDEM Batch neu gelesen, nicht nur beim
+        // allerersten: die alte Fassung initialisierte `index` einmalig
+        // aus `get_current_index()` und zählte ihn danach nur noch um
+        // `batch_size` hoch — exakt die in ARCHITECTURE.md §15/docs/
+        // decisions.md Nachtrag 226 gemessene, wachsende Audio-Drift
+        // (52 → 408 ms in einer Messreihe), weil kleine Abweichungen
+        // zwischen der angenommenen Batch-Kadenz und der echten Wallclock
+        // sich über die Zeit ungebremst aufsummierten. `max(last +
+        // batch_size)` schützt weiterhin vor Rückwärtssprüngen, exakt wie
+        // im Origin-Zweig.
         let origin_index =
             origin_index_from_buffer(context, buffer, &reference_caps, sample_rate);
         let this_index = match origin_index {
@@ -1039,7 +1059,13 @@ fn write_audio_loop(
                 Some(last) => origin.max(last + batch_size),
                 None => origin,
             },
-            None => *index.get_or_insert_with(|| context.instance.get_current_index(sample_rate)),
+            None => {
+                let now_index = context.instance.get_current_index(sample_rate);
+                match last_written {
+                    Some(last) => now_index.max(last + batch_size),
+                    None => now_index,
+                }
+            }
         };
 
         match samples_writer.open_samples(this_index, batch_size as usize) {
@@ -1068,7 +1094,6 @@ fn write_audio_loop(
         }
 
         last_written = Some(this_index);
-        index = Some(this_index + batch_size);
     }
 }
 
@@ -2121,6 +2146,52 @@ mod tests {
             received.load(Ordering::Relaxed) > 0,
             "expected at least one buffer to arrive at the reader's fakesink via MXL"
         );
+    }
+
+    /// Bisher gab es keinen einzigen Test, der `MxlAudioOutput` real über
+    /// eine GStreamer-Pipeline schreiben lässt (2026-09-18, beim Fixen der
+    /// in Nachtrag 226 gemessenen Audio-Index-Drift aufgefallen — s.
+    /// Kommentar in `write_audio_loop`). Nachgezogen als einfacher
+    /// Fluss-Regressionstest, analog zu `write_then_read_loopback`.
+    #[test]
+    fn audio_output_flows() {
+        gst::init().expect("gst::init");
+        let domain = std::env::temp_dir().join("omp-mxl-test-audio-flow");
+        let _ = std::fs::remove_dir_all(&domain);
+        std::fs::create_dir_all(&domain).expect("create test domain dir");
+        let domain = domain.to_string_lossy().to_string();
+
+        let write_context = Arc::new(MxlContext::new(&domain).expect("MxlContext::new (writer)"));
+        let write_pipeline = gst::Pipeline::new();
+        let audiotestsrc = gst::ElementFactory::make("audiotestsrc")
+            .property("is-live", true)
+            .property("num-buffers", 100i32)
+            .build()
+            .expect("audiotestsrc");
+        write_pipeline.add(&audiotestsrc).expect("add audiotestsrc");
+
+        let output = MxlAudioOutput::new(
+            &write_pipeline,
+            &audiotestsrc,
+            write_context,
+            "6f2a9c1e-6b7d-4a3a-9c1e-6b7d4a3a9c2f",
+            "omp-mediaio audio flow test",
+            48000,
+            2,
+        )
+        .expect("MxlAudioOutput::new");
+        output.set_active(true);
+        let flowed = output.flowed_handle();
+
+        write_pipeline
+            .set_state(gst::State::Playing)
+            .expect("write pipeline playing");
+        std::thread::sleep(Duration::from_secs(2));
+        write_pipeline
+            .set_state(gst::State::Null)
+            .expect("write pipeline null");
+
+        assert!(flowed.load(Ordering::Relaxed), "expected MxlAudioOutput to have written at least one batch");
     }
 
     /// Regressionstest für den echten Produktionspfad (`MxlVideoInput::new`

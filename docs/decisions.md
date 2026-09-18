@@ -25480,3 +25480,76 @@ ok`) — vorher `advisories FAILED` trotz bereits aktualisiertem chacha20
 (Nachtrag 234).
 
 **Dateien:** `nodes/deny.toml`.
+
+## 2026-09-18 (Nachtrag 236) — Nachtrag-226-Index-Drift: Audio-Freilauf-Bug real und gefixt, Video-Befund isoliert NICHT reproduzierbar
+
+**Nutzerauftrag:** „fixe den Bug der Toleranzgrenze (4 Bilder voraus)
+den du zuletzt gefunden hast" — bezieht sich auf den in Nachtrag 226
+gemessenen, aber bewusst nicht gefixten MXL-Schreibpfad-Befund (Video
+konstant ~4 Bilder/~170 ms voraus, Audio wachsend 52→408 ms).
+
+**Erster Schritt: nicht blind patchen, sondern isoliert nachmessen.**
+Nachtrag 226 zitierte als Erklärung wörtlich `MxlVideoOutput`s
+Struct-Doku („Grain-Index einmalig aus `get_current_index()`
+initialisiert, danach pro Sample um 1 erhöht, keine Selbstkorrektur").
+Diese Doku war zum Messzeitpunkt bereits **veraltet**: `write_loop`
+berechnet den Index im ursprungslosen Fall seit `compute_write_index`
+(D8 Teil 3, Commit 3dfc2b0, 2026-08-03 — sechs Wochen vor Nachtrag 226)
+bei JEDEM Sample frisch gegen `get_current_index()`, nicht nur einmalig
+— per Test (`compute_write_index_no_origin_reads_delay_and_wallclock_
+every_call`) bereits abgesichert. Nachtrag 226 hat den Code an dieser
+Stelle nicht erneut geprüft, sondern den alten Kommentar für bare Münze
+genommen.
+
+Mit temporärer Instrumentierung (deklarierter TAI-Index eines
+geschriebenen Grains minus `MxlContext::now_ns()` im selben Prozess,
+`videotestsrc` direkt in `MxlVideoOutput`, kein Umweg über `omp-source`/
+Orchestrator) zeigt der Video-Schreibpfad **kein** konstantes oder
+wachsendes Voraus-Stempeln — nur ein Rauschen von ±5–9 ms über mehrere
+zehn Sekunden, sowohl bei kurzen (50 Frames) als auch längeren (250
+Frames) Läufen. Der in Nachtrag 226 gemessene „~4 Bilder voraus"-Befund
+für Video ist damit im Schreibpfad selbst **nicht reproduzierbar** —
+seine tatsächliche Ursache liegt vermutlich in `omp-scope`s eigener
+Tap-/Analysepipeline oder in der Messmethode von `mxl-info` selbst, ist
+mit dieser Sitzung aber NICHT geklärt (kein Ratespiel: dafür fehlt eine
+gezielte Nachmessung gegen den echten, laufenden `omp-scope`, die diese
+Sitzung bewusst nicht mehr unternommen hat, um nicht am eigentlich
+bereits korrekten Schreibpfad herumzudoktern).
+
+**Audio dagegen hatte den Bug wirklich, unverändert bis heute:**
+`write_audio_loop`s ursprungsloser Zweig initialisierte `index` einmalig
+per `get_or_insert_with(|| get_current_index())` und zählte ihn danach
+NUR NOCH um `batch_size` hoch — `get_or_insert_with` ruft die Closure ab
+dem zweiten Aufruf nie wieder auf. Das ist ein echter, unbegrenzter
+Freilauf ohne jede Rückkopplung zur Wallclock, exakt die Ursache der in
+Nachtrag 226 gemessenen wachsenden Drift (52→408 ms). Fix: der
+ursprungslose Zweig berechnet jetzt bei jedem Batch frisch gegen
+`get_current_index()`, mit demselben `max(letzter + batch_size)`-Schutz
+gegen Rückwärtssprünge wie der Origin-Zweig — strukturell identisch zu
+`compute_write_index`s bereits korrektem Video-Verfahren, nur mit
+`batch_size` statt `1` als Schrittweite (Audio schreibt in Blöcken, s.
+`audiobuffersplit`-Doku am Struct).
+
+**Nebenbefund:** für `MxlAudioOutput` gab es bisher überhaupt keinen
+Test, der real über eine GStreamer-Pipeline schreibt (anders als Video
+mit `write_then_read_loopback`). Nachgezogen: `audio_output_flows`
+(schreibt 100 `audiotestsrc`-Puffer, prüft `flowed_handle()`).
+
+**Bewusst offen gelassen:** der Video-„4 Bilder"-Befund selbst (siehe
+oben — Ursache nicht im Schreibpfad, weitere Suche bräuchte einen
+laufenden `omp-scope`/`mxl-info` gegen echten `omp-source`, wie in
+Nachtrag 226); der NMOS-Grouphint-Nebenbefund aus Nachtrag 226
+(Video/Audio-Flow-IDs als Gruppenname statt gemeinsamer Quellgruppe).
+Die veraltete Struct-Doku an `MxlVideoOutput` wurde korrigiert, damit
+sich der Nachtrag-226-Fehlschluss nicht wiederholt.
+
+**Verifikation:** `cargo build -p omp-mediaio --features mxl`, `cargo
+clippy -p omp-mediaio --lib --features mxl -- -D warnings` (grün);
+`cargo clippy -p omp-mediaio --all-targets --features mxl -- -D
+warnings` zeigt weiterhin nur den bereits in Nachtrag 226 als
+vorbestehend/unberührt dokumentierten `explicit_counter_loop`-Fund in
+einem Testfall, nicht von dieser Änderung neu eingeführt; `cargo test -p
+omp-mediaio --features mxl` (18 Tests, davon `audio_output_flows` neu):
+16 grün, 2 bewusst `#[ignore]`t (unverändert vorbestehend).
+
+**Dateien:** `nodes/omp-mediaio/src/mxl.rs`.
