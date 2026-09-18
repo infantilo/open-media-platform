@@ -1,6 +1,6 @@
 --- a/server.js
 +++ b/server.js
-@@ -2721,6 +2721,11 @@
+@@ -2891,6 +2891,11 @@
        deviceNumber: o.deviceNumber != null ? parseInt(o.deviceNumber) : null,
        decklinkMode: o.decklinkMode || '1080p25',
        decklinkAudio: o.decklinkAudio !== false,
@@ -9,6 +9,6 @@
 +      mxlAudioFlowId:  o.mxlAudioFlowId || '',
 +      mxlFrameRateNum: o.mxlFrameRateNum != null ? parseInt(o.mxlFrameRateNum) : 0,
 +      mxlFrameRateDen: o.mxlFrameRateDen != null ? parseInt(o.mxlFrameRateDen) : 0,
-     }));
-     _settings.extraOutputs = outputs;
-     saveSettings(_settings);
+       // ST2110 (Intel MTL/E810): dev-Bindung aus der geteilten _settings.st2110
+       // stempeln (EIN MTL-Kontext pro Prozess, siehe scripts/install-mtl.sh) —
+       // wie gstSrc bei Live-Quellen wird das beim Speichern aufgelöst, nicht zur

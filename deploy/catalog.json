@@ -203,5 +203,20 @@
     "description": "Skaliert/konvertiert eine per Drag & Drop angeschlossene MXL-Videoquelle auf ein fest konfiguriertes Zielformat (Rollen-Format, s. Workflow-Einstellungen) und schreibt sie als zweiten MXL-Flow zurück — gleicht Auflösungs-/Framerate-Unterschiede zwischen Quellen und Zielen aus.",
     "expectedResources": "gering, wächst mit Zielauflösung",
     "latency": { "video": { "minLatencyFrames": 1, "maxLatencyFrames": 1 }, "supportsDelayCompensation": true }
+  },
+  {
+    "type": "omp-pipeline-controller",
+    "label": "Pipeline Controller",
+    "runner": "podman",
+    "image": "localhost/omp-pipeline-controller:latest",
+    "env": {},
+    "mxlAccess": true,
+    "extraPort": true,
+    "description": "Bettet PIPELINE CONTROLLER (eigenständiges, produktiv gelaufenes Broadcast-Playout-System) als OMP-Node ein — komplettes Web-UI + REST-API laufen unverändert im Container, das Bedienpanel zeigt es als <iframe>. Registriert zwei NMOS-Sender (Programm-Video/-Audio) und zwei Receiver für echte MXL-Ein-/Ausgänge im DMF-Verbund; per IS-05-Connect verkabelte Live-Quellen werden automatisch in PIPELINE CONTROLLERs eigene Live-Quellen-Liste eingetragen. Keine eigenen OMP-Play/Stop/Cue-Methoden — Playlist/Grafik/Player/Assets/Voiceover/Record bleiben ausschließlich über PIPELINE CONTROLLERs eigenes UI bedient.",
+    "expectedResources": "moderat bis hoch (eigener Node.js-Prozess inkl. GStreamer-Pipelines im Container)",
+    "latency": {
+      "video": { "minLatencyFrames": 0, "maxLatencyFrames": 0 },
+      "audio": { "minLatencyFrames": 0, "maxLatencyFrames": 0 }
+    }
   }
 ]
