@@ -25553,3 +25553,78 @@ omp-mediaio --features mxl` (18 Tests, davon `audio_output_flows` neu):
 16 grün, 2 bewusst `#[ignore]`t (unverändert vorbestehend).
 
 **Dateien:** `nodes/omp-mediaio/src/mxl.rs`.
+
+## 2026-09-18 (Nachtrag 237) — Video-Befund aus Nachtrag 236 live root-caused: Ratschen-Vorsprung ohne Rückfall, jetzt gecappt
+
+**Nutzerauftrag:** „investigate the video finding live with omp-scope",
+danach „fix it: cap the ratchet, resync when it drifts too far".
+
+**Live-Aufbau:** `omp-source` + `omp-scope` direkt gestartet (kein
+`omp-node-sdk`-Launcher nötig — beide brauchen nur Registry/NATS aus
+`make up`+`make start`, keinen vollen Workflow), Verbindung direkt über
+`omp-scope`s eigene IS-05-Connection-API gesetzt (`PATCH .../staged` mit
+`sender_id`+`transport_params.mxl_flow_id`), ohne Umweg über den
+Flow-Editor. Gemessen über `omp-scope`s `/measurements` UND unabhängig
+per `mxl-info` gegen dieselbe Flow-ID — wie in Nachtrag 226.
+
+**Befund reproduziert, aber anders als erwartet:** kein fester
+Start-Offset, sondern ein langsames Kriechen. Ein frisch gestarteter
+Schreiber begann exakt im Takt (0/±1 Grain Rauschen, deckt sich mit dem
+Isolationstest aus Nachtrag 236) und driftete über ~90s gewöhnlichen
+Betriebs (Orchestrator+NATS+Postgres-HA liefen nebenher, kein
+zusätzlicher Lastgenerator) auf −2 Grains. Ursache: der
+Monotonie-Schutz in `compute_write_index` (`max(wallclock, letzter+
+step)`) ist ein REINER Ratschen-Vorsprung — jeder Scheduling-Stocker
+(GStreamer-Preroll, Caps-Verhandlung, gewöhnliche Thread-Scheduling-
+Jitter unter Systemlast) lässt mehrere Samples kurz hintereinander
+ankommen, während die Wallclock kaum voranschreitet; jedes davon bekommt
+trotzdem einen neuen, um `step` höheren Index — der Boden wandert dabei
+vor die Wallclock und fällt von dort NIE wieder zurück, weil der Schutz
+nur `max` kennt, keine Gegenrichtung.
+
+**Warum nicht einfach rückwärts springen:** geprüft und verworfen.
+`PosixDiscreteFlowWriter::open()` (third_party/mxl/lib/internal/src/
+PosixDiscreteFlowWriter.cpp) berechnet `skippedCount = in_index -
+_lastCommittedIndex - 1` ohne Vorzeichenprüfung — ein `in_index` unter
+dem bereits committeten Stand erzeugt dort einen `u64`-Unterlauf und
+invalidiert (nach Clamp auf `grainCount`) den GESAMTEN Ring als
+Kollateralschaden. `commit()` setzt `headIndex` außerdem bedingungslos
+auf den neuen Wert, liefe bei einem Rückwärtsschreiben also selbst
+rückwärts — wovon `PosixDiscreteFlowReader`s eigene
+`OutOfRangeTooLate`/`OutOfRangeTooEarly`-Bereichsprüfungen nicht
+ausgehen. Ein Rückwärtssprung ist in der vendorten Bibliothek also nicht
+bloß unschön, sondern aktiv gefährlich.
+
+**Fix:** `compute_write_index` (jetzt gemeinsam für Video und Audio
+genutzt, mit neuem `step`-Parameter statt fest `1`/`batch_size` je
+zweimal dupliziert) verwirft im wallclock-basierten Zweig das aktuelle
+Sample (`None` statt eines Index), sobald `letzter + step` die
+Wallclock um mehr als `MAX_RATCHET_AHEAD_STEPS` (= 2 Schritte)
+übersteigt — `last_written` bleibt dabei unverändert, die Wallclock holt
+im echten 1:1-Realzeittakt von selbst wieder auf, ohne dass je ein Index
+kleiner als `last_written` an `open_grain`/`open_samples` geht. Der
+Origin-Zweig (durchgereichte TAI-Herkunftszeit) bleibt bewusst ungecapt
+— ein dort zurückfallender Wert ist eine Operator-Aktion (kleineres
+`setOutputDelay`), keine Clock-Drift, s. bestehende Doku dort.
+
+**Live-Verifikation nach dem Fix** (frische Binaries, dieselbe
+Umgebung, dieselbe Messmethode, ~96s Laufzeit, video UND audio):
+- Video: `omp-scope` pendelt stabil um −25 bis −35 ms, `mxl-info`
+  zwischen 0 und −1 Grain — erreicht nie wieder die −2 Grains von vorher
+  im selben Zeitfenster. `videoGrainsDropped` wächst nur langsam (2→8
+  über 96s, <0,4 % der Grains).
+- Audio: `audioTransportLatencyMs` bleibt flach bei ~5–20 ms (Mittel
+  ~15 ms) über 96s — keine Spur der in Nachtrag 226 gemessenen
+  wachsenden Drift (52→408 ms) mehr, `audioGrainsDropped` bleibt
+  einstellig.
+
+**Verifikation:** `cargo build`/`clippy --lib -D warnings`/`test -p
+omp-mediaio --features mxl` (21 Tests: 19 grün, 2 bewusst `#[ignore]`t,
+6 neue/geänderte `compute_write_index`-Tests für Cap/Drop/Recovery/
+Step-Parameter); `clippy --all-targets` zeigt weiterhin nur den bereits
+in Nachtrag 226/236 dokumentierten, vorbestehenden
+`explicit_counter_loop`-Fund. Zusätzlich der obige echte Live-Test gegen
+laufenden Orchestrator/`omp-source`/`omp-scope`, danach Prozesse
+gestoppt und `/dev/shm/omp-mxl` geleert.
+
+**Dateien:** `nodes/omp-mediaio/src/mxl.rs`.

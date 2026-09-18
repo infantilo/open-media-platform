@@ -174,6 +174,19 @@ fn video_caps(
 /// hatte dagegen bis 2026-09-18 tatsächlich den beschriebenen
 /// Freilauf-Bug (s. dortige Doku in `write_audio_loop`), das erklärt die
 /// dort gemessene wachsende Audio-Drift.
+///
+/// **Nachtrag (2026-09-18, docs/decisions.md Nachtrag 237):** live gegen
+/// einen echten `omp-source` mit `omp-scope`/`mxl-info` nachgemessen —
+/// der Video-Befund reproduzierte sich doch, nur nicht als fester
+/// Startwert, sondern als langsames Kriechen (ein frischer Schreiber
+/// begann im Takt und driftete über ~90s auf −2 Grains). Ursache war der
+/// Monotonie-Schutz in `compute_write_index` selbst: er kann den
+/// Ratschen-Boden nur vorwärts schieben (jeder Scheduling-Stocker
+/// verschiebt ihn ein Stück vor die Wallclock), aber nie wieder
+/// zurückfallen lassen. Gefixt über `MAX_RATCHET_AHEAD_STEPS` (s. dort)
+/// — derselbe Mechanismus wie `MxlAudioOutput`s Freilauf-Bug, nur
+/// milder, weil hier ohnehin jeder Aufruf frisch gegen die Wallclock
+/// rechnet.
 pub struct MxlVideoOutput {
     valve: gst::Element,
     running: Arc<AtomicBool>,
@@ -466,10 +479,47 @@ impl MxlVideoOutput {
     }
 }
 
-/// Berechnet den für einen Buffer zu schreibenden Grain-Index (D8 Teil 3,
-/// ARCHITECTURE.md §15.1 Punkt 3/4: Ausgangs-Grain(N) = Eingangs-Grain(N)
-/// plus D) — aus `write_loop` extrahiert für isolierte Testbarkeit ohne
-/// echte GStreamer-Pipeline/MXL-Domain.
+/// Wie viele Schritte (1 Grain bei Video, `batch_size` Samples bei Audio)
+/// der Monotonie-Schutz in `compute_write_index`s ursprungslosem
+/// (wallclock-basiertem) Zweig maximal vor die echte Wallclock vorauseilen
+/// darf, bevor statt eines weiteren Vorwärts-Ratschens das aktuelle Sample
+/// verworfen wird (docs/decisions.md Nachtrag 237, live gefunden mit
+/// `omp-scope`/`mxl-info` gegen einen echten `omp-source`: ein frisch
+/// gestarteter Schreiber begann im Takt, driftete über ~90s gewöhnlichen
+/// Betriebs aber auf −2 Grains — kein einzelner großer Aussetzer, sondern
+/// viele kleine Scheduling-Stocker, von denen JEDER den Ratschen-Boden
+/// `letzter + step` ein Stück vor die Wallclock schiebt, ohne dass er von
+/// dort je wieder zurückfällt).
+///
+/// **Warum verwerfen statt rückwärts springen:** ein Rückwärtssprung wäre
+/// die naheliegendere "Resync"-Idee, ist in der vendorten MXL-Bibliothek
+/// aber aktiv gefährlich, nicht bloß unschön: `PosixDiscreteFlowWriter::
+/// open()` (third_party/mxl/lib/internal/src/PosixDiscreteFlowWriter.cpp)
+/// berechnet beim Öffnen eines Index `skippedCount = in_index -
+/// _lastCommittedIndex - 1` OHNE Vorzeichenprüfung — ein `in_index`
+/// UNTER dem bereits committeten Stand unterläuft dabei einem
+/// `u64`-Unterlauf und invalidiert (`invalidatedCount = min(skippedCount,
+/// grainCount)`, danach clamped auf die volle Ringgröße) im Ergebnis den
+/// GESAMTEN Ring als Kollateralschaden, nicht nur die übersprungenen
+/// Grains. `commit()` setzt außerdem `headIndex` bedingungslos auf
+/// `_currentIndex`, liefe also bei einem Rückwärtsschreiben ebenfalls
+/// rückwärts — wovon `PosixDiscreteFlowReader`s eigene Bereichsprüfungen
+/// (`OutOfRangeTooLate`/`OutOfRangeTooEarly`) ausdrücklich NICHT ausgehen.
+/// Die einzig sichere Korrektur ist deshalb Anhalten (dieses Sample
+/// verwerfen, `last_written` unverändert lassen) statt Zurückspringen —
+/// die Wallclock holt den Ratschen-Boden dann von selbst im echten
+/// 1:1-Realzeittakt wieder ein, ohne dass der Schreibpfad je einen Index
+/// kleiner als `last_written` an `open_grain`/`open_samples` übergibt.
+const MAX_RATCHET_AHEAD_STEPS: u64 = 2;
+
+/// Berechnet den für einen Buffer zu schreibenden Grain-/Sample-Index (D8
+/// Teil 3, ARCHITECTURE.md §15.1 Punkt 3/4: Ausgangs-Grain(N) =
+/// Eingangs-Grain(N) plus D) — aus `write_loop`/`write_audio_loop`
+/// extrahiert für isolierte Testbarkeit ohne echte GStreamer-Pipeline/
+/// MXL-Domain. `step` ist die pro Aufruf erwartete Fortschrittsgröße (1
+/// Grain bei Video, `batch_size` Samples bei Audio) — dieselbe Funktion
+/// bedient beide Schreibpfade, statt die Ratschen-/Cap-Logik zweimal
+/// leicht unterschiedlich zu pflegen.
 ///
 /// Ursprungs-Index bevorzugen, falls ein durchgereichter Node (z. B.
 /// `omp-scaler`) die TAI-Herkunftszeit als Meta trägt (ARCHITECTURE.md §15
@@ -486,25 +536,50 @@ impl MxlVideoOutput {
 /// zu kennen), zu diesem Zeitpunkt hat ein Node wie der Mixer (der
 /// "immer etwas produziert", auch ohne Eingang) oft schon Frames
 /// geschrieben — der eingefrorene Zähler hätte das Delay dann NIE mehr
-/// angewendet. `max(candidate, letzter+1)` schützt weiterhin vor
+/// angewendet. `max(candidate, letzter+step)` schützt weiterhin vor
 /// Rückwärtssprüngen (z. B. durch von `videorate` duplizierte Buffer mit
 /// identischer Meta, oder einen zwischenzeitlich VERKLEINERTEN Delay-
 /// Wert — Letzteres bewusst in Kauf genommen: ein Delay lässt sich live
-/// erhöhen, aber nicht unter den bereits geschriebenen Stand senken,
-/// ohne Rückwärtssprünge zu riskieren).
+/// erhöhen, aber nicht unter den bereits geschriebenen Stand senken, ohne
+/// Rückwärtssprünge zu riskieren) — das gilt unverändert und OHNE Cap im
+/// Origin-Zweig, weil ein dort zurückfallender Wert eine bewusste
+/// Operator-Aktion ist, keine Clock-Drift.
+///
+/// Im ursprungslosen (wallclock-basierten) Zweig greift zusätzlich
+/// `MAX_RATCHET_AHEAD_STEPS`: eilt `letzter + step` der aktuellen
+/// Wallclock um mehr als das Cap voraus, liefert diese Funktion `None`
+/// (Sample verwerfen, `last_written` bleibt stehen) statt den
+/// Ratschen-Boden weiter zu bedienen — verhindert genau die in Nachtrag
+/// 237 gemessene, unbegrenzte Vorauseilung.
 fn compute_write_index(
     origin_index: Option<u64>,
     last_written: Option<u64>,
     delay: u64,
+    step: u64,
     now: impl FnOnce() -> u64,
-) -> u64 {
-    let candidate = match origin_index {
-        Some(origin) => origin + delay,
-        None => now() + delay,
-    };
-    match last_written {
-        Some(last) => candidate.max(last + 1),
-        None => candidate,
+) -> Option<u64> {
+    match origin_index {
+        Some(origin) => {
+            let candidate = origin + delay;
+            Some(match last_written {
+                Some(last) => candidate.max(last + step),
+                None => candidate,
+            })
+        }
+        None => {
+            let candidate = now() + delay;
+            match last_written {
+                Some(last) => {
+                    let floor = last + step;
+                    if floor > candidate + MAX_RATCHET_AHEAD_STEPS {
+                        None
+                    } else {
+                        Some(candidate.max(floor))
+                    }
+                }
+                None => Some(candidate),
+            }
+        }
     }
 }
 
@@ -638,9 +713,16 @@ fn write_loop(
 
         let delay = output_delay.load(Ordering::Relaxed);
         let origin_index = origin_index_from_buffer(context, buffer, &reference_caps, grain_rate);
-        let this_index = compute_write_index(origin_index, last_written, delay, || {
+        let Some(this_index) = compute_write_index(origin_index, last_written, delay, 1, || {
             context.instance.get_current_index(grain_rate)
-        });
+        }) else {
+            // Ratschen-Boden eilt der Wallclock um mehr als
+            // `MAX_RATCHET_AHEAD_STEPS` voraus (s. dortige Doku) — dieses
+            // Sample verwerfen statt den Vorsprung weiter zu vergrößern,
+            // `last_written` bleibt unverändert, die Wallclock holt von
+            // selbst auf.
+            continue;
+        };
 
         match grain_writer.open_grain(this_index) {
             Ok(mut access) => {
@@ -1039,33 +1121,17 @@ fn write_audio_loop(
         let bytes = map.as_slice();
         let bytes_per_channel = bytes.len() / channels.max(1);
 
-        // Gleiches Ursprungs-Index-Prinzip wie im Video-Schreibpfad
-        // (`write_loop`) — s. Kommentar dort. Anders als eine frühere
-        // Fassung (bis 2026-09-18) wird die Wallclock-Position im
-        // ursprungslosen Fall bei JEDEM Batch neu gelesen, nicht nur beim
-        // allerersten: die alte Fassung initialisierte `index` einmalig
-        // aus `get_current_index()` und zählte ihn danach nur noch um
-        // `batch_size` hoch — exakt die in ARCHITECTURE.md §15/docs/
-        // decisions.md Nachtrag 226 gemessene, wachsende Audio-Drift
-        // (52 → 408 ms in einer Messreihe), weil kleine Abweichungen
-        // zwischen der angenommenen Batch-Kadenz und der echten Wallclock
-        // sich über die Zeit ungebremst aufsummierten. `max(last +
-        // batch_size)` schützt weiterhin vor Rückwärtssprüngen, exakt wie
-        // im Origin-Zweig.
+        // Gleiches Prinzip wie im Video-Schreibpfad (`write_loop`), über
+        // dieselbe `compute_write_index` (s. dortige Doku für die
+        // Ratschen-Cap/Nachtrag-226-Audio-Freilauf-Historie) — `step` ist
+        // hier `batch_size` statt `1`, Audio kennt (noch) kein
+        // `output_delay`, daher fest `0`.
         let origin_index =
             origin_index_from_buffer(context, buffer, &reference_caps, sample_rate);
-        let this_index = match origin_index {
-            Some(origin) => match last_written {
-                Some(last) => origin.max(last + batch_size),
-                None => origin,
-            },
-            None => {
-                let now_index = context.instance.get_current_index(sample_rate);
-                match last_written {
-                    Some(last) => now_index.max(last + batch_size),
-                    None => now_index,
-                }
-            }
+        let Some(this_index) = compute_write_index(origin_index, last_written, 0, batch_size, || {
+            context.instance.get_current_index(sample_rate)
+        }) else {
+            continue;
         };
 
         match samples_writer.open_samples(this_index, batch_size as usize) {
@@ -2011,29 +2077,33 @@ mod tests {
     #[test]
     fn compute_write_index_adds_delay_to_origin() {
         let now_called = std::cell::Cell::new(false);
-        let index = compute_write_index(Some(1000), None, 3, || {
+        let index = compute_write_index(Some(1000), None, 3, 1, || {
             now_called.set(true);
             0
         });
-        assert_eq!(index, 1003, "origin + delay, exakt nach §15.1 Punkt 4");
+        assert_eq!(index, Some(1003), "origin + delay, exakt nach §15.1 Punkt 4");
         assert!(!now_called.get(), "now()-Closure darf bei vorhandenem Origin nicht laufen");
     }
 
     #[test]
     fn compute_write_index_zero_delay_is_a_no_op() {
-        let index = compute_write_index(Some(1000), None, 0, || 0);
-        assert_eq!(index, 1000, "unverändertes Verhalten ohne gesetztes Delay");
+        let index = compute_write_index(Some(1000), None, 0, 1, || 0);
+        assert_eq!(index, Some(1000), "unverändertes Verhalten ohne gesetztes Delay");
     }
 
     #[test]
     fn compute_write_index_origin_with_delay_still_monotonic() {
         // last_written liegt bereits VOR origin+delay -> origin+delay gewinnt.
-        let index = compute_write_index(Some(1000), Some(1001), 3, || 0);
-        assert_eq!(index, 1003);
+        let index = compute_write_index(Some(1000), Some(1001), 3, 1, || 0);
+        assert_eq!(index, Some(1003));
         // last_written liegt NACH origin+delay (z. B. ein vorheriger, größerer
-        // Delay-Wert) -> Monotonie-Schutz greift, kein Rückwärtssprung.
-        let index = compute_write_index(Some(1000), Some(1010), 3, || 0);
-        assert_eq!(index, 1011, "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen");
+        // Delay-Wert) -> Monotonie-Schutz greift, kein Rückwärtssprung. Der
+        // Origin-Zweig kennt KEIN `MAX_RATCHET_AHEAD_STEPS`-Cap (s. Doku:
+        // ein zurückfallender Origin ist eine bewusste Operator-Aktion,
+        // keine Clock-Drift) — auch ein Abstand, der im wallclock-basierten
+        // Zweig verworfen würde, wird hier weiterhin bedient.
+        let index = compute_write_index(Some(1000), Some(1010), 3, 1, || 0);
+        assert_eq!(index, Some(1011), "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen, ungecapped");
     }
 
     #[test]
@@ -2046,22 +2116,64 @@ mod tests {
         // weil der Orchestrator setOutputDelay erst NACH awaitRegistration
         // aufrufen kann, ein Node wie der Mixer aber ggf. schon vorher
         // Frames schreibt (s. compute_write_index-Doku).
-        let index = compute_write_index(None, None, 5, || 2000);
-        assert_eq!(index, 2005);
+        let index = compute_write_index(None, None, 5, 1, || 2000);
+        assert_eq!(index, Some(2005));
         // Folgeaufruf mit geändertem Delay UND fortgeschrittener Wallclock
-        // -> beide werden neu gelesen, nicht eingefroren.
-        let index = compute_write_index(None, Some(2005), 9, || 2001);
-        assert_eq!(index, 2010, "wallclock (2001) + neues delay (9), nicht der alte Anker");
+        // -> beide werden neu gelesen, nicht eingefroren. Wallclock+delay
+        // liegt hier VOR dem Ratschen-Boden, das Cap greift also gar nicht
+        // erst (candidate gewinnt sowieso).
+        let index = compute_write_index(None, Some(2005), 9, 1, || 2001);
+        assert_eq!(index, Some(2010), "wallclock (2001) + neues delay (9), nicht der alte Anker");
     }
 
     #[test]
-    fn compute_write_index_no_origin_monotonic_guard_when_wallclock_lags_behind() {
-        // Ein zwischenzeitlich VERKLEINERTER Delay-Wert (oder eine Wallclock-
-        // Messung, die kurzzeitig hinter dem zuletzt geschriebenen Index
-        // zurückfällt) darf keinen Rückwärtssprung erzeugen — dieselbe
-        // max(candidate, letzter+1)-Regel wie im Origin-Fall.
-        let index = compute_write_index(None, Some(2010), 0, || 2001);
-        assert_eq!(index, 2011, "max(wallclock+delay, letzter+1) schützt vor Rückwärtssprüngen");
+    fn compute_write_index_no_origin_monotonic_guard_within_cap_still_advances() {
+        // Ratschen-Boden liegt nur 1 Schritt vor der Wallclock (innerhalb
+        // von MAX_RATCHET_AHEAD_STEPS=2) -> weiterhin normal bedient, kein
+        // Verwerfen bei jedem kleinen, harmlosen Vorsprung.
+        let index = compute_write_index(None, Some(2010), 0, 1, || 2010);
+        assert_eq!(index, Some(2011), "max(wallclock+delay, letzter+1) innerhalb des Caps");
+    }
+
+    #[test]
+    fn compute_write_index_no_origin_drops_sample_when_ratchet_drifted_too_far() {
+        // Nachtrag 237 (2026-09-18, live mit omp-scope/mxl-info gefunden):
+        // der Ratschen-Boden (letzter+step) kann durch Scheduling-Stocker
+        // vor die Wallclock geschoben werden und fiel bisher NIE wieder
+        // zurück -- hier liegt er 9 vor der Wallclock, klar über dem Cap
+        // von 2. Erwartung: `None` (Sample verwerfen), NICHT einfach der
+        // alte Ratschen-Wert 2011 wie vor dem Fix.
+        let index = compute_write_index(None, Some(2010), 0, 1, || 2001);
+        assert_eq!(
+            index, None,
+            "Vorsprung von 9 > Cap 2 -> verwerfen statt Ratschen-Boden weiter zu bedienen"
+        );
+    }
+
+    #[test]
+    fn compute_write_index_no_origin_recovers_once_wallclock_catches_up() {
+        // Anschluss an den vorigen Test: der Aufrufer lässt `last_written`
+        // nach einem `None` unverändert (s. `write_loop`/`write_audio_loop`
+        // — `continue` ohne `last_written`-Update). Holt die Wallclock
+        // wieder bis auf das Cap auf, läuft das Schreiben ohne
+        // Rückwärtssprung von selbst weiter.
+        let index = compute_write_index(None, Some(2010), 0, 1, || 2009);
+        assert_eq!(index, Some(2011), "Vorsprung wieder innerhalb des Caps -> normales Ratschen");
+    }
+
+    #[test]
+    fn compute_write_index_step_parameter_covers_audio_batches() {
+        // `step` ist `batch_size` im Audio-Schreibpfad (`write_audio_loop`),
+        // nicht `1` wie bei Video — dieselbe Cap-Logik muss dafür
+        // unverändert funktionieren, nur mit größerer Schrittweite.
+        let index = compute_write_index(None, Some(1000), 0, 480, || 1480);
+        assert_eq!(index, Some(1480), "Wallclock exakt im Takt -> kein Ratschen nötig");
+
+        let index = compute_write_index(None, Some(1480), 0, 480, || 900);
+        assert_eq!(
+            index, None,
+            "Wallclock weit hinter dem Ratschen-Boden -> verwerfen, exakt wie bei Video"
+        );
     }
 
     #[test]
