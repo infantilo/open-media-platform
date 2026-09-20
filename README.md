@@ -288,6 +288,16 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   provider (no RDMA hardware required to test); `verbs`/`efa` providers
   for real RoCEv2 hardware are a drop-in config change, hardware
   procurement pending.
+- **omp-pipeline-controller** — embeds `PIPELINE CONTROLLER` (a
+  separate, previously production-run broadcast playout system) as an
+  OMP node: its full web UI and REST API run unmodified in the
+  container, shown via `<iframe>` in the operate panel. Registers two
+  NMOS senders (program video/audio) and two receivers for real MXL
+  I/O in the DMF fabric — live sources wired in via IS-05 connect are
+  added to PIPELINE CONTROLLER's own live-source list automatically.
+  No native OMP play/stop/cue methods of its own — playlist,
+  graphics, player, assets, voiceover, and record stay exclusively on
+  PIPELINE CONTROLLER's own UI.
 
 All components run as independent services and can be started,
 stopped, or extended independently — either locally via the built-in
