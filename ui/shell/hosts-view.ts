@@ -116,6 +116,18 @@ interface PendingMigration {
 
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 
+// Nutzerauftrag 2026-09-21 ("hosts-view.ts auch mit Online/Offline-
+// Anzeige ergänzen"): gleicher Schwellwert wie flow-canvas.ts'
+// HOST_ONLINE_THRESHOLD_MS (bewusst dupliziert statt geteilt, s.
+// Moduldoku oben) — ein Host gilt als online, wenn seine letzte
+// Telemetrie nicht älter als das Dreifache des Host-Agent-Sende-
+// Intervalls (5s) ist.
+const HOST_ONLINE_THRESHOLD_MS = 15000;
+
+function isHostOnline(metrics?: HostMetrics): boolean {
+  return !!metrics && Date.now() - Date.parse(metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
+}
+
 const HOST_METRICS_SUBJECT_PREFIX = "omp.host.";
 const HOST_METRICS_SUBJECT_SUFFIX = ".metrics";
 
@@ -365,6 +377,7 @@ class HostsView extends HTMLElement {
     const rows = hosts
       .map((h) => {
         const m = h.metrics;
+        const online = isHostOnline(m);
         const cpu = m ? `${m.cpuPercent.toFixed(0)}%` : "–";
         const mem = m ? `${formatBytes(m.memUsedBytes)} / ${formatBytes(m.memTotalBytes)}` : "–";
         const net = m?.net ? formatNetRate(m.net) : "–";
@@ -377,7 +390,24 @@ class HostsView extends HTMLElement {
           win && win.summary.sampleCount > 0
             ? formatMinAvgMax(win.summary.cpuMin, win.summary.cpuAvg, win.summary.cpuMax)
             : `<span style="color:var(--omp-text-dim);">–</span>`;
-        return `<tr>
+        // Nutzerauftrag 2026-09-21: Online/Offline muss auch hier auf
+        // den ersten Blick erkennbar sein, nicht erst über den rohen
+        // "Zuletzt gesehen"-Zeitstempel erschlossen werden — Punkt +
+        // Text statt reiner Farbe (Tooltip trägt den genauen Zeitpunkt
+        // bzw. "keine Telemetrie" bei einem frisch registrierten Host).
+        const statusTitle = online
+          ? "Host online"
+          : m
+            ? `Host offline — zuletzt gesehen ${new Date(m.receivedAt).toLocaleTimeString()}`
+            : "Host offline — keine Telemetrie empfangen";
+        const status = `<span title="${escapeHtml(statusTitle)}" style="display:inline-flex;align-items:center;gap:5px;white-space:nowrap;color:${
+          online ? "inherit" : "#e05252"
+        };">
+          <span style="color:${online ? "#4caf50" : "#e05252"};font-size:11px;line-height:1;">●</span>${online ? "Online" : "Offline"}
+        </span>`;
+        const rowTint = online ? "" : "background:rgba(224,82,82,0.08);";
+        return `<tr style="${rowTint}">
+          <td style="padding:2px 8px;">${status}</td>
           <td style="padding:2px 8px;">${escapeHtml(h.label)}</td>
           <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(h.hostname)}</td>
           <td style="padding:2px 8px;">${cpu}</td>
@@ -437,6 +467,7 @@ class HostsView extends HTMLElement {
           ? `<div class="omp-empty">Noch kein Host registriert.</div>`
           : `<table style="border-collapse:collapse;width:100%;">
               <thead><tr style="color:var(--omp-text-dim);text-align:left;">
+                <th style="padding:2px 8px;">Status</th>
                 <th style="padding:2px 8px;">Label</th>
                 <th style="padding:2px 8px;">Hostname</th>
                 <th style="padding:2px 8px;">CPU</th>
