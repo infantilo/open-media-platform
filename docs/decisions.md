@@ -25703,3 +25703,39 @@ Registry-Eintrag ohne Telemetrie → Warnung. Per CDP-Screenshot bestätigt.
 **Dateien:** `host-agent/main.go`, `host-agent/internal/telemetry/telemetry.go`,
 `orchestrator/main.go`, `orchestrator/internal/hosts/{hosts.go,tracker_test.go}`,
 `ui/shell/{alarms.ts,alert-bar.ts,alarm-view.ts,app-shell.ts}`.
+
+## 2026-09-21 (Nachtrag 240) — Smartphone als Kamera/Monitor (Ultra-Low-Latency): Entscheidung + Plan, noch nicht implementiert
+
+**Nutzerauftrag:** Smartphone als Kamera- und Monitor-Node mit
+(ultra-)niedriger Latenz. **Entschieden (Nutzerantwort):** Transport
+WebRTC (WHIP/WHEP), beide Richtungen, Kamera zuerst.
+
+**Machbarkeitsbefund (2026-09-21, lokale GStreamer-Installation):**
+`webrtcbin`, `vp8enc`/`x264enc`, `rtpvp8pay`/`rtph264pay`, `opusenc` sind
+vorhanden; die gst-plugins-rs-Elemente `whipserversrc`/`whepserversink`/
+`whipclientsink`/`webrtcsink` sind es **nicht**. Die WHIP/WHEP-HTTP-
+Signalisierung (POST SDP-Offer → 201 + SDP-Answer + `Location`, DELETE zum
+Beenden) wird daher selbst um `webrtcbin` gebaut, statt ein Plugin
+nachzuinstallieren.
+
+**Randbedingung HTTPS:** `getUserMedia` (Handy-Kamera) läuft im Browser
+nur in einem Secure Context. Der Node braucht also HTTPS-Zugriff; der
+vorhandene Caddy-Proxy (`make proxy-up`, `https://…:8443`) kann das
+liefern, das Handy muss dessen (lokale) CA/Zertifikat akzeptieren. Vor
+Schritt 1 klären, ob Caddy vom WLAN aus erreichbar ist.
+
+**Plan (ein Schritt je Sitzung, jeweils live verifizieren):**
+1. `omp-webrtc-gateway` (Rust, neuer Node), Richtung **Kamera**: WHIP-
+   Endpunkt, `webrtcbin` → Decoder → MXL-Video-/Audio-Flow (Muster:
+   `omp-source`/`omp-2110-gateway-ingest`), Test zuerst mit `gst-launch`-
+   WebRTC-Client statt Handy, Latenz messen.
+2. Handy-Webseite (vom Node ausgeliefert): `getUserMedia` → WHIP, Kamera-
+   Auswahl, Bildrate/Auflösung; NMOS-Sender/BCP-008 wie andere Gateways.
+3. Richtung **Monitor**: WHEP-Endpunkt, MXL-Flow → Encoder (`vp8enc`/
+   `x264enc`, zerolatency) → `webrtcbin`; Handy-Seite zum Ansehen.
+4. Katalog-Eintrag, Node-UI-Bundle, Reconnect/Alarm bei Verbindungsabbruch
+   (Verbindung zum Alarm-Footer, s. Nachtrag 239), Latenz-Doku.
+
+**Offen (bewusst nicht geraten):** Codec (VP8 vs. H.264 — H.264 ist auf
+Handys hardwarebeschleunigt, VP8 braucht keine Lizenz), TURN/STUN (im
+LAN nicht nötig, im WAN ja), Audio-Pfad (Opus ↔ MXL-Audio).
