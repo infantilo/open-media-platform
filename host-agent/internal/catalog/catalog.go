@@ -31,9 +31,19 @@ import (
 	"strings"
 )
 
-// RunnerProcess ist der einzige aktuell unterstützte Runner (lokaler
-// Subprozess, os/exec) — s. orchestrator/internal/launcher/catalog.go.
-const RunnerProcess = "process"
+// RunnerProcess ist der einzige vom Host-Agent tatsächlich ausführbare
+// Runner (lokaler Subprozess, os/exec, s. commands.go). RunnerPodman
+// ist hier nur zum Laden/Validieren bekannt, nicht zum Ausführen — ein
+// eingehendes Start-Kommando für einen solchen Eintrag schlägt in
+// commands.go bewusst mit "unsupported runner" fehl. Ohne diesen Fall
+// würde Load() an jedem gemeinsam mit dem Orchestrator genutzten
+// deploy/catalog.json scheitern, sobald dort ein
+// `runner:"podman"`-Eintrag (Image statt Command, s.
+// orchestrator/internal/launcher/catalog.go) auftaucht.
+const (
+	RunnerProcess = "process"
+	RunnerPodman  = "podman"
+)
 
 // Entry ist ein auf diesem Host startbarer Node-Typ.
 type Entry struct {
@@ -41,6 +51,7 @@ type Entry struct {
 	Label   string            `json:"label"`
 	Runner  string            `json:"runner"`
 	Command []string          `json:"command"`
+	Image   string            `json:"image,omitempty"`
 	Env     map[string]string `json:"env"`
 }
 
@@ -72,12 +83,19 @@ func Load(path string) ([]Entry, error) {
 		if entries[i].Type == "" {
 			return nil, fmt.Errorf("catalog: entry %d has no type", i)
 		}
-		if len(entries[i].Command) == 0 {
-			return nil, fmt.Errorf("catalog: entry %q has an empty command", entries[i].Type)
-		}
-		cmdPath := entries[i].Command[0]
-		if strings.ContainsRune(cmdPath, '/') && !filepath.IsAbs(cmdPath) {
-			entries[i].Command[0] = filepath.Join(catalogDir, cmdPath)
+		switch entries[i].Runner {
+		case RunnerPodman:
+			if entries[i].Image == "" {
+				return nil, fmt.Errorf("catalog: entry %q (runner podman) has no image", entries[i].Type)
+			}
+		default:
+			if len(entries[i].Command) == 0 {
+				return nil, fmt.Errorf("catalog: entry %q has an empty command", entries[i].Type)
+			}
+			cmdPath := entries[i].Command[0]
+			if strings.ContainsRune(cmdPath, '/') && !filepath.IsAbs(cmdPath) {
+				entries[i].Command[0] = filepath.Join(catalogDir, cmdPath)
+			}
 		}
 	}
 
