@@ -101,13 +101,22 @@ mod tests {
 
     #[test]
     fn deterministic_v4_is_stable_per_seed() {
-        assert_eq!(deterministic_v4("workflow-1|source-a"), deterministic_v4("workflow-1|source-a"));
+        assert_eq!(
+            deterministic_v4("workflow-1|source-a"),
+            deterministic_v4("workflow-1|source-a")
+        );
     }
 
     #[test]
     fn deterministic_v4_differs_per_seed() {
-        assert_ne!(deterministic_v4("workflow-1|source-a"), deterministic_v4("workflow-1|source-b"));
-        assert_ne!(deterministic_v4("workflow-1|source-a"), deterministic_v4("workflow-2|source-a"));
+        assert_ne!(
+            deterministic_v4("workflow-1|source-a"),
+            deterministic_v4("workflow-1|source-b")
+        );
+        assert_ne!(
+            deterministic_v4("workflow-1|source-a"),
+            deterministic_v4("workflow-2|source-a")
+        );
     }
 
     #[test]

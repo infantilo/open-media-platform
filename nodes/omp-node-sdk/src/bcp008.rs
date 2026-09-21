@@ -36,8 +36,8 @@
 //! verdrahten, [`Monitor::method_specs`]/[`Monitor::invoke`] entsprechend
 //! in `invoke()`.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -295,10 +295,15 @@ impl Monitor {
         if self.activity.level() == HealthLevel::Neutral {
             return HealthLevel::Neutral;
         }
-        [self.link.level(), self.sync.level(), self.activity.level(), self.content.level()]
-            .into_iter()
-            .max()
-            .unwrap_or(HealthLevel::Healthy)
+        [
+            self.link.level(),
+            self.sync.level(),
+            self.activity.level(),
+            self.content.level(),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(HealthLevel::Healthy)
     }
 
     pub fn reset_counters_and_messages(&self) {
@@ -336,17 +341,46 @@ impl Monitor {
             })
         };
         vec![
-            ParamSpec { name: n("overallStatus"), kind: ParamType::Enum, unit: None, range: standard_range(), readonly: true },
-            ParamSpec { name: n("overallStatusMessage"), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n("overallStatus"),
+                kind: ParamType::Enum,
+                unit: None,
+                range: standard_range(),
+                readonly: true,
+            },
+            ParamSpec {
+                name: n("overallStatusMessage"),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n("linkStatus"),
                 kind: ParamType::Enum,
                 unit: None,
-                range: Some(Range::Enum { values: ["AllUp", "SomeDown", "AllDown"].iter().map(|s| s.to_string()).collect() }),
+                range: Some(Range::Enum {
+                    values: ["AllUp", "SomeDown", "AllDown"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                }),
                 readonly: true,
             },
-            ParamSpec { name: n("linkStatusMessage"), kind: ParamType::String, unit: None, range: None, readonly: true },
-            ParamSpec { name: n("linkStatusTransitionCounter"), kind: ParamType::Number, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n("linkStatusMessage"),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
+            ParamSpec {
+                name: n("linkStatusTransitionCounter"),
+                kind: ParamType::Number,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n(self.activity_name()),
                 kind: ParamType::Enum,
@@ -354,7 +388,13 @@ impl Monitor {
                 range: standard_range(),
                 readonly: true,
             },
-            ParamSpec { name: n(&format!("{}Message", self.activity_name())), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n(&format!("{}Message", self.activity_name())),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n(&format!("{}TransitionCounter", self.activity_name())),
                 kind: ParamType::Number,
@@ -366,10 +406,21 @@ impl Monitor {
                 name: n("externalSynchronizationStatus"),
                 kind: ParamType::Enum,
                 unit: None,
-                range: Some(Range::Enum { values: ["NotUsed", "Healthy", "PartiallyHealthy", "Unhealthy"].iter().map(|s| s.to_string()).collect() }),
+                range: Some(Range::Enum {
+                    values: ["NotUsed", "Healthy", "PartiallyHealthy", "Unhealthy"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                }),
                 readonly: true,
             },
-            ParamSpec { name: n("externalSynchronizationStatusMessage"), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n("externalSynchronizationStatusMessage"),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n("externalSynchronizationStatusTransitionCounter"),
                 kind: ParamType::Number,
@@ -377,7 +428,13 @@ impl Monitor {
                 range: None,
                 readonly: true,
             },
-            ParamSpec { name: n("synchronizationSourceId"), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n("synchronizationSourceId"),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n(self.content_name()),
                 kind: ParamType::Enum,
@@ -385,7 +442,13 @@ impl Monitor {
                 range: standard_range(),
                 readonly: true,
             },
-            ParamSpec { name: n(&format!("{}Message", self.content_name())), kind: ParamType::String, unit: None, range: None, readonly: true },
+            ParamSpec {
+                name: n(&format!("{}Message", self.content_name())),
+                kind: ParamType::String,
+                unit: None,
+                range: None,
+                readonly: true,
+            },
             ParamSpec {
                 name: n(&format!("{}TransitionCounter", self.content_name())),
                 kind: ParamType::Number,
@@ -393,8 +456,20 @@ impl Monitor {
                 range: None,
                 readonly: true,
             },
-            ParamSpec { name: n("statusReportingDelay"), kind: ParamType::Number, unit: Some("ms".to_string()), range: None, readonly: false },
-            ParamSpec { name: n("autoResetCountersAndMessages"), kind: ParamType::Boolean, unit: None, range: None, readonly: false },
+            ParamSpec {
+                name: n("statusReportingDelay"),
+                kind: ParamType::Number,
+                unit: Some("ms".to_string()),
+                range: None,
+                readonly: false,
+            },
+            ParamSpec {
+                name: n("autoResetCountersAndMessages"),
+                kind: ParamType::Boolean,
+                unit: None,
+                range: None,
+                readonly: false,
+            },
         ]
     }
 
@@ -402,7 +477,10 @@ impl Monitor {
     /// `resetCountersAndMessages` (s. Moduldoku: die drei Counter-
     /// Getter sind hier Params, keine Methoden).
     pub fn method_specs(&self, prefix: &str) -> Vec<MethodSpec> {
-        vec![MethodSpec { name: format!("{prefix}.resetCountersAndMessages"), args: vec![] }]
+        vec![MethodSpec {
+            name: format!("{prefix}.resetCountersAndMessages"),
+            args: vec![],
+        }]
     }
 
     /// Dispatcht `POST /methods/<prefix>.resetCountersAndMessages`. `Ok(false)`,
@@ -434,22 +512,44 @@ impl Monitor {
         let content_name = self.content_name();
         Some(match suffix {
             "overallStatus" => Value::from(label_standard(self.overall())),
-            "overallStatusMessage" => self.overall_message.lock().expect("lock poisoned").clone().map(Value::from).unwrap_or(Value::Null),
+            "overallStatusMessage" => self
+                .overall_message
+                .lock()
+                .expect("lock poisoned")
+                .clone()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
             "linkStatus" => Value::from(label_link(self.link.level())),
             "linkStatusMessage" => self.link.message().map(Value::from).unwrap_or(Value::Null),
             "linkStatusTransitionCounter" => Value::from(self.link.transition_counter()),
             "externalSynchronizationStatus" => Value::from(label_sync(self.sync.level())),
-            "externalSynchronizationStatusMessage" => self.sync.message().map(Value::from).unwrap_or(Value::Null),
-            "externalSynchronizationStatusTransitionCounter" => Value::from(self.sync.transition_counter()),
+            "externalSynchronizationStatusMessage" => {
+                self.sync.message().map(Value::from).unwrap_or(Value::Null)
+            }
+            "externalSynchronizationStatusTransitionCounter" => {
+                Value::from(self.sync.transition_counter())
+            }
             "synchronizationSourceId" => sync_source_id.map(Value::from).unwrap_or(Value::Null),
             "statusReportingDelay" => Value::from(self.status_reporting_delay().as_millis() as u64),
             "autoResetCountersAndMessages" => Value::from(self.auto_reset_counters_and_messages()),
             s if s == activity_name => Value::from(label_standard(self.activity.level())),
-            s if s == format!("{activity_name}Message") => self.activity.message().map(Value::from).unwrap_or(Value::Null),
-            s if s == format!("{activity_name}TransitionCounter") => Value::from(self.activity.transition_counter()),
+            s if s == format!("{activity_name}Message") => self
+                .activity
+                .message()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+            s if s == format!("{activity_name}TransitionCounter") => {
+                Value::from(self.activity.transition_counter())
+            }
             s if s == content_name => Value::from(label_standard(self.content.level())),
-            s if s == format!("{content_name}Message") => self.content.message().map(Value::from).unwrap_or(Value::Null),
-            s if s == format!("{content_name}TransitionCounter") => Value::from(self.content.transition_counter()),
+            s if s == format!("{content_name}Message") => self
+                .content
+                .message()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+            s if s == format!("{content_name}TransitionCounter") => {
+                Value::from(self.content.transition_counter())
+            }
             "lostPacketCounters" | "latePacketCounters" | "transmissionErrorCounters" => {
                 serde_json::json!(
                     counters()
@@ -490,7 +590,11 @@ mod tests {
     #[test]
     fn degradation_applies_immediately() {
         let d = DebouncedDomain::new(HealthLevel::Healthy);
-        d.observe(HealthLevel::Unhealthy, Duration::from_secs(3), Some("lost sync"));
+        d.observe(
+            HealthLevel::Unhealthy,
+            Duration::from_secs(3),
+            Some("lost sync"),
+        );
         assert_eq!(d.level(), HealthLevel::Unhealthy);
         assert_eq!(d.transition_counter(), 1);
         assert_eq!(d.message(), Some("lost sync".to_string()));
@@ -501,10 +605,22 @@ mod tests {
         let d = DebouncedDomain::new(HealthLevel::Unhealthy);
         // Ein einziger guter Messwert reicht nicht.
         d.observe(HealthLevel::Healthy, Duration::from_millis(50), None);
-        assert_eq!(d.level(), HealthLevel::Unhealthy, "recovery must not apply before the delay elapses");
+        assert_eq!(
+            d.level(),
+            HealthLevel::Unhealthy,
+            "recovery must not apply before the delay elapses"
+        );
         std::thread::sleep(Duration::from_millis(60));
-        d.observe(HealthLevel::Healthy, Duration::from_millis(50), Some("was unhealthy"));
-        assert_eq!(d.level(), HealthLevel::Healthy, "recovery must apply once sustained past the delay");
+        d.observe(
+            HealthLevel::Healthy,
+            Duration::from_millis(50),
+            Some("was unhealthy"),
+        );
+        assert_eq!(
+            d.level(),
+            HealthLevel::Healthy,
+            "recovery must apply once sustained past the delay"
+        );
         assert_eq!(d.message().unwrap(), "Previously: was unhealthy");
     }
 
@@ -515,7 +631,11 @@ mod tests {
         std::thread::sleep(Duration::from_millis(30));
         // Zurück zu Unhealthy vor Ablauf der Verzögerung — sofortige,
         // erneute Verschlechterung, UND der Erholungs-Timer verfällt.
-        d.observe(HealthLevel::Unhealthy, Duration::from_millis(50), Some("flapped"));
+        d.observe(
+            HealthLevel::Unhealthy,
+            Duration::from_millis(50),
+            Some("flapped"),
+        );
         assert_eq!(d.level(), HealthLevel::Unhealthy);
         std::thread::sleep(Duration::from_millis(60));
         d.observe(HealthLevel::Healthy, Duration::from_millis(50), None);
@@ -535,7 +655,8 @@ mod tests {
     #[test]
     fn activate_forces_activity_and_content_to_healthy_but_leaves_link_and_sync() {
         let m = Monitor::new(MonitorKind::Receiver);
-        m.link.observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
+        m.link
+            .observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
         m.deactivate();
         assert_eq!(m.activity.level(), HealthLevel::Neutral);
         assert_eq!(m.content.level(), HealthLevel::Neutral);
@@ -549,7 +670,8 @@ mod tests {
     #[test]
     fn overall_is_inactive_when_deactivated_regardless_of_link_or_sync() {
         let m = Monitor::new(MonitorKind::Sender);
-        m.link.observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
+        m.link
+            .observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
         m.deactivate();
         assert_eq!(m.overall(), HealthLevel::Neutral);
     }
@@ -559,9 +681,11 @@ mod tests {
         let m = Monitor::new(MonitorKind::Receiver);
         m.activate();
         assert_eq!(m.overall(), HealthLevel::Healthy);
-        m.sync.observe(HealthLevel::PartiallyHealthy, Duration::from_secs(3), None);
+        m.sync
+            .observe(HealthLevel::PartiallyHealthy, Duration::from_secs(3), None);
         assert_eq!(m.overall(), HealthLevel::PartiallyHealthy);
-        m.activity.observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
+        m.activity
+            .observe(HealthLevel::Unhealthy, Duration::from_secs(3), None);
         assert_eq!(m.overall(), HealthLevel::Unhealthy);
     }
 
@@ -569,8 +693,16 @@ mod tests {
     fn receiver_vs_sender_use_different_wire_names() {
         let r = Monitor::new(MonitorKind::Receiver);
         let s = Monitor::new(MonitorKind::Sender);
-        let r_names: Vec<String> = r.param_specs("monitor").into_iter().map(|p| p.name).collect();
-        let s_names: Vec<String> = s.param_specs("monitor").into_iter().map(|p| p.name).collect();
+        let r_names: Vec<String> = r
+            .param_specs("monitor")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        let s_names: Vec<String> = s
+            .param_specs("monitor")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
         assert!(r_names.contains(&"monitor.connectionStatus".to_string()));
         assert!(r_names.contains(&"monitor.streamStatus".to_string()));
         assert!(s_names.contains(&"monitor.transmissionStatus".to_string()));
@@ -580,7 +712,11 @@ mod tests {
     #[test]
     fn reset_clears_counters_and_messages() {
         let m = Monitor::new(MonitorKind::Receiver);
-        m.link.observe(HealthLevel::Unhealthy, Duration::from_secs(3), Some("cable pulled"));
+        m.link.observe(
+            HealthLevel::Unhealthy,
+            Duration::from_secs(3),
+            Some("cable pulled"),
+        );
         assert_eq!(m.link.transition_counter(), 1);
         m.reset_counters_and_messages();
         assert_eq!(m.link.transition_counter(), 0);
@@ -593,18 +729,49 @@ mod tests {
     fn get_dispatches_known_and_rejects_unknown_suffixes() {
         let m = Monitor::new(MonitorKind::Receiver);
         m.activate();
-        assert_eq!(m.get("monitor", "monitor.overallStatus", None, Vec::new), Some(Value::from("Healthy")));
-        assert_eq!(m.get("monitor", "monitor.doesNotExist", None, Vec::new), None);
-        assert_eq!(m.get("other.overallStatus", "monitor.overallStatus", None, Vec::new), None);
+        assert_eq!(
+            m.get("monitor", "monitor.overallStatus", None, Vec::new),
+            Some(Value::from("Healthy"))
+        );
+        assert_eq!(
+            m.get("monitor", "monitor.doesNotExist", None, Vec::new),
+            None
+        );
+        assert_eq!(
+            m.get(
+                "other.overallStatus",
+                "monitor.overallStatus",
+                None,
+                Vec::new
+            ),
+            None
+        );
     }
 
     #[test]
     fn set_accepts_only_the_two_writable_config_properties() {
         let m = Monitor::new(MonitorKind::Receiver);
-        assert_eq!(m.set("monitor", "monitor.statusReportingDelay", &Value::from(5000)), Some(true));
+        assert_eq!(
+            m.set(
+                "monitor",
+                "monitor.statusReportingDelay",
+                &Value::from(5000)
+            ),
+            Some(true)
+        );
         assert_eq!(m.status_reporting_delay(), Duration::from_millis(5000));
-        assert_eq!(m.set("monitor", "monitor.autoResetCountersAndMessages", &Value::from(false)), Some(true));
+        assert_eq!(
+            m.set(
+                "monitor",
+                "monitor.autoResetCountersAndMessages",
+                &Value::from(false)
+            ),
+            Some(true)
+        );
         assert!(!m.auto_reset_counters_and_messages());
-        assert_eq!(m.set("monitor", "monitor.overallStatus", &Value::from("Healthy")), None);
+        assert_eq!(
+            m.set("monitor", "monitor.overallStatus", &Value::from("Healthy")),
+            None
+        );
     }
 }

@@ -122,12 +122,18 @@ struct State {
 /// TAI-UTC-Versatz beim Zurückrechnen, den dieses Modul mangels
 /// Scheduling-Unterstützung gar nicht parst).
 fn now_tai_string() -> String {
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     format!("{}:{}", now.as_secs(), now.subsec_nanos())
 }
 
 fn json_response(status: u16, value: &impl Serialize) -> Option<(u16, &'static str, Vec<u8>)> {
-    Some((status, "application/json", serde_json::to_vec(value).unwrap_or_default()))
+    Some((
+        status,
+        "application/json",
+        serde_json::to_vec(value).unwrap_or_default(),
+    ))
 }
 
 fn error_response(status: u16, message: &str) -> Option<(u16, &'static str, Vec<u8>)> {
@@ -180,8 +186,10 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
     pub fn new(inputs: Vec<InputSpec>, outputs: Vec<OutputSpec>, apply: A) -> Self {
         let input_order: Vec<String> = inputs.iter().map(|i| i.id.clone()).collect();
         let output_order: Vec<String> = outputs.iter().map(|o| o.id.clone()).collect();
-        let inputs: HashMap<String, InputSpec> = inputs.into_iter().map(|i| (i.id.clone(), i)).collect();
-        let outputs_map: HashMap<String, OutputSpec> = outputs.into_iter().map(|o| (o.id.clone(), o)).collect();
+        let inputs: HashMap<String, InputSpec> =
+            inputs.into_iter().map(|i| (i.id.clone(), i)).collect();
+        let outputs_map: HashMap<String, OutputSpec> =
+            outputs.into_iter().map(|o| (o.id.clone(), o)).collect();
 
         let mut map: BTreeMap<String, BTreeMap<u32, MapEntry>> = BTreeMap::new();
         for output_id in &output_order {
@@ -191,9 +199,10 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
             for (i, _channel) in output.channels.iter().enumerate() {
                 let i = i as u32;
                 let entry = match source {
-                    Some(input) if (i as usize) < input.channels.len() => {
-                        MapEntry { input: Some(input.id.clone()), channel_index: Some(i) }
-                    }
+                    Some(input) if (i as usize) < input.channels.len() => MapEntry {
+                        input: Some(input.id.clone()),
+                        channel_index: Some(i),
+                    },
                     _ => MapEntry::default(),
                 };
                 entries.insert(i, entry);
@@ -210,7 +219,11 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
             outputs: outputs_map,
             input_order,
             output_order,
-            state: Mutex::new(State { activation: ActivationInfo::default(), map, next_activation_id: 1 }),
+            state: Mutex::new(State {
+                activation: ActivationInfo::default(),
+                map,
+                next_activation_id: 1,
+            }),
             apply,
         }
     }
@@ -269,23 +282,40 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
 
     /// Bearbeitet eine Anfrage, falls `path` unter das Channel-Mapping-
     /// API-Präfix dieses Nodes fällt — `None` sonst.
-    pub fn handle(&self, method: &str, path: &str, body: &[u8]) -> Option<(u16, &'static str, Vec<u8>)> {
+    pub fn handle(
+        &self,
+        method: &str,
+        path: &str,
+        body: &[u8],
+    ) -> Option<(u16, &'static str, Vec<u8>)> {
         let sub = strip_prefix(path)?;
         let mut parts = sub.splitn(3, '/');
-        match (method, parts.next().unwrap_or(""), parts.next(), parts.next()) {
+        match (
+            method,
+            parts.next().unwrap_or(""),
+            parts.next(),
+            parts.next(),
+        ) {
             ("GET", "", None, None) => json_response(200, &["inputs/", "outputs/", "map/", "io/"]),
             ("GET", "inputs", None, None) => {
-                let listing: Vec<String> = self.input_order.iter().map(|id| format!("{id}/")).collect();
+                let listing: Vec<String> =
+                    self.input_order.iter().map(|id| format!("{id}/")).collect();
                 json_response(200, &listing)
             }
             ("GET", "outputs", None, None) => {
-                let listing: Vec<String> = self.output_order.iter().map(|id| format!("{id}/")).collect();
+                let listing: Vec<String> = self
+                    .output_order
+                    .iter()
+                    .map(|id| format!("{id}/"))
+                    .collect();
                 json_response(200, &listing)
             }
             ("GET", "io", None, None) => json_response(200, &self.io_response()),
             ("GET", "map", None, None) => json_response(200, &["activations/", "active/"]),
             ("GET", "map", Some("active"), None) => self.get_map_active(),
-            ("GET", "map", Some("active"), Some(output_id)) => self.get_map_active_output(output_id),
+            ("GET", "map", Some("active"), Some(output_id)) => {
+                self.get_map_active_output(output_id)
+            }
             ("GET", "map", Some("activations"), None) => {
                 json_response(200, &serde_json::Map::<String, Value>::new())
             }
@@ -322,12 +352,17 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
     fn get_input(&self, id: &str, leaf: Option<&str>) -> Option<(u16, &'static str, Vec<u8>)> {
         let input = self.inputs.get(id)?;
         match leaf {
-            None | Some("") => json_response(200, &["properties/", "parent/", "channels/", "caps/"]),
-            Some("properties") => {
-                json_response(200, &serde_json::json!({"name": input.name, "description": input.description}))
+            None | Some("") => {
+                json_response(200, &["properties/", "parent/", "channels/", "caps/"])
             }
+            Some("properties") => json_response(
+                200,
+                &serde_json::json!({"name": input.name, "description": input.description}),
+            ),
             Some("parent") => json_response(200, &self.input_parent_response(input)),
-            Some("channels") => Some((200, "application/json", self.input_channels_response(input))),
+            Some("channels") => {
+                Some((200, "application/json", self.input_channels_response(input)))
+            }
             Some("caps") => json_response(200, &self.input_caps_response(input)),
             _ => None,
         }
@@ -336,10 +371,13 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
     fn get_output(&self, id: &str, leaf: Option<&str>) -> Option<(u16, &'static str, Vec<u8>)> {
         let output = self.outputs.get(id)?;
         match leaf {
-            None | Some("") => json_response(200, &["properties/", "sourceid/", "channels/", "caps/"]),
-            Some("properties") => {
-                json_response(200, &serde_json::json!({"name": output.name, "description": output.description}))
+            None | Some("") => {
+                json_response(200, &["properties/", "sourceid/", "channels/", "caps/"])
             }
+            Some("properties") => json_response(
+                200,
+                &serde_json::json!({"name": output.name, "description": output.description}),
+            ),
             Some("sourceid") => json_response(200, &output.source_id),
             Some("channels") => json_response(200, &output.channels),
             Some("caps") => json_response(200, &self.output_caps_response(output)),
@@ -349,7 +387,10 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
 
     fn get_map_active(&self) -> Option<(u16, &'static str, Vec<u8>)> {
         let state = self.state.lock().expect("lock poisoned");
-        json_response(200, &serde_json::json!({"activation": state.activation, "map": state.map}))
+        json_response(
+            200,
+            &serde_json::json!({"activation": state.activation, "map": state.map}),
+        )
     }
 
     fn get_map_active_output(&self, output_id: &str) -> Option<(u16, &'static str, Vec<u8>)> {
@@ -360,7 +401,10 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
         let entries = state.map.get(output_id).cloned().unwrap_or_default();
         let mut one = BTreeMap::new();
         one.insert(output_id.to_string(), entries);
-        json_response(200, &serde_json::json!({"activation": state.activation, "map": one}))
+        json_response(
+            200,
+            &serde_json::json!({"activation": state.activation, "map": one}),
+        )
     }
 
     /// `POST map/activations` — nur `activate_immediate` (Moduldoku).
@@ -398,30 +442,48 @@ impl<A: ChannelMapApply> ChannelMapping<A> {
             };
             for (channel_index_str, entry) in channels {
                 let Ok(channel_index) = channel_index_str.parse::<u32>() else {
-                    return error_response(400, &format!("invalid channel index: {channel_index_str}"));
+                    return error_response(
+                        400,
+                        &format!("invalid channel index: {channel_index_str}"),
+                    );
                 };
                 if channel_index as usize >= output.channels.len() {
-                    return error_response(400, &format!("channel index out of range: {channel_index}"));
+                    return error_response(
+                        400,
+                        &format!("channel index out of range: {channel_index}"),
+                    );
                 }
                 if entry.input.is_some() != entry.channel_index.is_some() {
-                    return error_response(400, "input and channel_index must both be null or both be set");
+                    return error_response(
+                        400,
+                        "input and channel_index must both be null or both be set",
+                    );
                 }
                 if let Some(input_id) = &entry.input {
                     let Some(input) = self.inputs.get(input_id) else {
                         return error_response(400, &format!("unknown input: {input_id}"));
                     };
                     if let Some(allowed) = &output.routable_inputs
-                        && !allowed.iter().any(|a| a.as_deref() == Some(input_id.as_str()))
+                        && !allowed
+                            .iter()
+                            .any(|a| a.as_deref() == Some(input_id.as_str()))
                     {
-                        return error_response(400, &format!("input {input_id} is not routable to {output_id}"));
+                        return error_response(
+                            400,
+                            &format!("input {input_id} is not routable to {output_id}"),
+                        );
                     }
-                    if entry.channel_index.expect("checked above") as usize >= input.channels.len() {
+                    if entry.channel_index.expect("checked above") as usize >= input.channels.len()
+                    {
                         return error_response(400, "channel_index out of range for input");
                     }
                 } else if let Some(allowed) = &output.routable_inputs
                     && !allowed.iter().any(|a| a.is_none())
                 {
-                    return error_response(400, &format!("output {output_id} does not allow unrouted channels"));
+                    return error_response(
+                        400,
+                        &format!("output {output_id} does not allow unrouted channels"),
+                    );
                 }
             }
         }
@@ -466,17 +528,29 @@ mod tests {
     }
     impl RecordingApply {
         fn new() -> Self {
-            RecordingApply { calls: Mutex::new(Vec::new()) }
+            RecordingApply {
+                calls: Mutex::new(Vec::new()),
+            }
         }
     }
     impl ChannelMapApply for RecordingApply {
         fn apply(&self, output_id: &str, map: &BTreeMap<u32, MapEntry>) {
-            self.calls.lock().expect("lock poisoned").push((output_id.to_string(), map.clone()));
+            self.calls
+                .lock()
+                .expect("lock poisoned")
+                .push((output_id.to_string(), map.clone()));
         }
     }
 
     fn two_channel(label_prefix: &str) -> Vec<Channel> {
-        vec![Channel { label: format!("{label_prefix} 1") }, Channel { label: format!("{label_prefix} 2") }]
+        vec![
+            Channel {
+                label: format!("{label_prefix} 1"),
+            },
+            Channel {
+                label: format!("{label_prefix} 2"),
+            },
+        ]
     }
 
     fn gateway_fixture() -> ChannelMapping<RecordingApply> {
@@ -525,7 +599,8 @@ mod tests {
     #[test]
     fn identity_default_map_and_initial_apply() {
         let cm = gateway_fixture();
-        let (status, body) = body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/active", b""));
+        let (status, body) =
+            body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/active", b""));
         assert_eq!(status, 200);
         let parsed: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(parsed["map"]["mxl-out"]["0"]["input"], "aes67-in");
@@ -539,7 +614,10 @@ mod tests {
         let calls = cm.apply.calls.lock().expect("lock poisoned");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "mxl-out");
-        assert_eq!(calls[0].1.get(&0).unwrap().input.as_deref(), Some("aes67-in"));
+        assert_eq!(
+            calls[0].1.get(&0).unwrap().input.as_deref(),
+            Some("aes67-in")
+        );
     }
 
     #[test]
@@ -560,7 +638,8 @@ mod tests {
         assert_eq!(entry["activation"]["mode"], "activate_immediate");
         assert!(!entry["activation"]["activation_time"].is_null());
 
-        let (_, active_body) = body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/active", b""));
+        let (_, active_body) =
+            body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/active", b""));
         let active: Value = serde_json::from_str(&active_body).unwrap();
         assert_eq!(active["map"]["mxl-out"]["0"]["channel_index"], 1);
         assert_eq!(active["map"]["mxl-out"]["1"]["channel_index"], 0);
@@ -577,7 +656,8 @@ mod tests {
     fn scheduled_activation_rejected() {
         let cm = gateway_fixture();
         let body = br#"{"activation": {"mode": "activate_scheduled_absolute", "requested_time": "1:0"}, "action": {}}"#;
-        let (status, _) = body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
+        let (status, _) =
+            body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
         assert_eq!(status, 400);
     }
 
@@ -585,7 +665,8 @@ mod tests {
     fn unroutable_input_rejected() {
         let cm = gateway_fixture();
         let body = br#"{"activation": {"mode": "activate_immediate"}, "action": {"mxl-out": {"0": {"input": "nope", "channel_index": 0}}}}"#;
-        let (status, _) = body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
+        let (status, _) =
+            body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
         assert_eq!(status, 400);
 
         // Nichts darf angewendet worden sein (Validierung vor Anwendung).
@@ -597,7 +678,8 @@ mod tests {
     fn unrouted_entry_allowed_when_routable_inputs_lists_null() {
         let cm = gateway_fixture();
         let body = br#"{"activation": {"mode": "activate_immediate"}, "action": {"mxl-out": {"0": {"input": null, "channel_index": null}}}}"#;
-        let (status, _) = body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
+        let (status, _) =
+            body_str(cm.handle("POST", "/x-nmos/channelmapping/v1.0/map/activations", body));
         assert_eq!(status, 200);
     }
 
@@ -607,9 +689,18 @@ mod tests {
         let (status, body) = body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/io", b""));
         assert_eq!(status, 200);
         let parsed: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(parsed["inputs"]["aes67-in"]["channels"][0]["label"], "Channel 1");
-        assert_eq!(parsed["outputs"]["mxl-out"]["source_id"], "11111111-1111-1111-8111-111111111111");
-        assert_eq!(parsed["outputs"]["mxl-out"]["caps"]["routable_inputs"][0], "aes67-in");
+        assert_eq!(
+            parsed["inputs"]["aes67-in"]["channels"][0]["label"],
+            "Channel 1"
+        );
+        assert_eq!(
+            parsed["outputs"]["mxl-out"]["source_id"],
+            "11111111-1111-1111-8111-111111111111"
+        );
+        assert_eq!(
+            parsed["outputs"]["mxl-out"]["caps"]["routable_inputs"][0],
+            "aes67-in"
+        );
         assert!(parsed["outputs"]["mxl-out"]["caps"]["routable_inputs"][1].is_null());
     }
 
@@ -624,29 +715,39 @@ mod tests {
             cm.cors_methods("/x-nmos/channelmapping/v1.0/map/activations/1"),
             Some(vec!["GET", "DELETE"])
         );
-        assert_eq!(cm.cors_methods("/x-nmos/channelmapping/v1.0/inputs/aes67-in"), None);
+        assert_eq!(
+            cm.cors_methods("/x-nmos/channelmapping/v1.0/inputs/aes67-in"),
+            None
+        );
     }
 
     #[test]
     fn unknown_output_in_map_active_output_is_404() {
         let cm = gateway_fixture();
-        let (status, _) =
-            body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/active/does-not-exist", b""));
+        let (status, _) = body_str(cm.handle(
+            "GET",
+            "/x-nmos/channelmapping/v1.0/map/active/does-not-exist",
+            b"",
+        ));
         assert_eq!(status, 404);
     }
 
     #[test]
     fn no_pending_activations_ever() {
         let cm = gateway_fixture();
-        let (status, body) = body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/activations", b""));
+        let (status, body) =
+            body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/activations", b""));
         assert_eq!(status, 200);
         assert_eq!(body, "{}");
 
         let (status, _) =
             body_str(cm.handle("GET", "/x-nmos/channelmapping/v1.0/map/activations/1", b""));
         assert_eq!(status, 404);
-        let (status, _) =
-            body_str(cm.handle("DELETE", "/x-nmos/channelmapping/v1.0/map/activations/1", b""));
+        let (status, _) = body_str(cm.handle(
+            "DELETE",
+            "/x-nmos/channelmapping/v1.0/map/activations/1",
+            b"",
+        ));
         assert_eq!(status, 404);
     }
 }

@@ -120,7 +120,12 @@ fn default_leg(transport_urn: &str, is_sender: bool) -> Value {
 /// normative BCP-007-03-Regel verstößt (aktuell: MXL-Receiver darf
 /// `mxl_flow_id` nie auf `"auto"` setzen), damit der Aufrufer mit 400
 /// statt stillem Akzeptieren reagieren kann.
-fn merge_leg(leg: &mut Value, patch: &Value, transport_urn: &str, is_sender: bool) -> Result<(), ()> {
+fn merge_leg(
+    leg: &mut Value,
+    patch: &Value,
+    transport_urn: &str,
+    is_sender: bool,
+) -> Result<(), ()> {
     let Some(patch_obj) = patch.as_object() else {
         return Ok(());
     };
@@ -198,11 +203,7 @@ pub fn root_discovery(method: &str, path: &str) -> Option<(u16, &'static str, Ve
     }
     for version in API_VERSIONS {
         if path == format!("/x-nmos/connection/{version}/") {
-            return Some((
-                200,
-                "application/json",
-                br#"["bulk/","single/"]"#.to_vec(),
-            ));
+            return Some((200, "application/json", br#"["bulk/","single/"]"#.to_vec()));
         }
         if path == format!("/x-nmos/connection/{version}/single/") {
             return Some((
@@ -459,8 +460,10 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
         // `with_transport`-Aufruf nach `new()` (Default MXL) fälschlich
         // den MXL-Leg, obwohl `transporttype/` schon RTP meldet (oder
         // umgekehrt).
-        self.state.get_mut().expect("lock poisoned").transport_params =
-            vec![default_leg(transport_urn, true)];
+        self.state
+            .get_mut()
+            .expect("lock poisoned")
+            .transport_params = vec![default_leg(transport_urn, true)];
         self
     }
 
@@ -506,9 +509,11 @@ impl<C: SenderControl, S: SenderSdp> SenderConnection<C, S> {
                 br#"["constraints/","staged/","active/","transportfile/","transporttype/"]"#
                     .to_vec(),
             )),
-            ("GET", "constraints") => {
-                Some((200, "application/json", constraints_response(self.transport_urn)))
-            }
+            ("GET", "constraints") => Some((
+                200,
+                "application/json",
+                constraints_response(self.transport_urn),
+            )),
             ("GET", "transporttype") => Some((
                 200,
                 "application/json",
@@ -652,8 +657,10 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
             "unbekannter Transport-Typ: {transport_urn}"
         );
         self.transport_urn = transport_urn;
-        self.state.get_mut().expect("lock poisoned").transport_params =
-            vec![default_leg(transport_urn, false)];
+        self.state
+            .get_mut()
+            .expect("lock poisoned")
+            .transport_params = vec![default_leg(transport_urn, false)];
         self
     }
 
@@ -693,9 +700,11 @@ impl<C: ReceiverControl> ReceiverConnection<C> {
                 "application/json",
                 br#"["constraints/","staged/","active/","transporttype/"]"#.to_vec(),
             )),
-            ("GET", "constraints") => {
-                Some((200, "application/json", constraints_response(self.transport_urn)))
-            }
+            ("GET", "constraints") => Some((
+                200,
+                "application/json",
+                constraints_response(self.transport_urn),
+            )),
             ("GET", "transporttype") => Some((
                 200,
                 "application/json",
@@ -787,8 +796,11 @@ mod tests {
         let conn = SenderConnection::new("sender-1", NoopSenderControl, NoopSenderSdp)
             .with_transport(TRANSPORT_RTP);
 
-        let (status, body) =
-            body_str(conn.handle("GET", "/x-nmos/connection/v1.1/single/senders/sender-1/", b""));
+        let (status, body) = body_str(conn.handle(
+            "GET",
+            "/x-nmos/connection/v1.1/single/senders/sender-1/",
+            b"",
+        ));
         assert_eq!(status, 200);
         assert_eq!(
             body,
@@ -869,7 +881,8 @@ mod tests {
     #[test]
     fn sender_mxl_transport_params_patch_is_applied() {
         let conn = SenderConnection::new("sender-1", NoopSenderControl, NoopSenderSdp);
-        let patch = br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
+        let patch =
+            br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
         let (status, body) = body_str(conn.handle(
             "PATCH",
             "/x-nmos/connection/v1.1/single/senders/sender-1/staged",
@@ -947,7 +960,8 @@ mod tests {
     #[test]
     fn receiver_mxl_flow_id_uuid_patch_is_applied() {
         let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
-        let patch = br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
+        let patch =
+            br#"{"transport_params":[{"mxl_flow_id":"550e8400-e29b-41d4-a716-446655440000"}]}"#;
         let (status, body) = body_str(conn.handle(
             "PATCH",
             "/x-nmos/connection/v1.1/single/receivers/recv-1/staged",
@@ -964,20 +978,22 @@ mod tests {
     #[test]
     fn unknown_path_returns_none() {
         let conn = ReceiverConnection::new("recv-1", NoopReceiverControl);
-        assert!(conn
-            .handle(
+        assert!(
+            conn.handle(
                 "GET",
                 "/x-nmos/connection/v1.1/single/receivers/recv-1/bogus",
                 b""
             )
-            .is_none());
-        assert!(conn
-            .handle(
+            .is_none()
+        );
+        assert!(
+            conn.handle(
                 "GET",
                 "/x-nmos/connection/v1.1/single/receivers/other-id/staged",
                 b""
             )
-            .is_none());
+            .is_none()
+        );
     }
 
     /// Live am echten AMWA-IS-05-01-Tool-Lauf gefunden (`UMSETZUNG.md` D9,
@@ -1000,7 +1016,10 @@ mod tests {
                 &format!("/x-nmos/connection/v1.1/single/receivers/recv-1/{leaf}/"),
                 b"",
             ));
-            assert_eq!(bare, slashed, "leaf {leaf} differs between bare/slashed path");
+            assert_eq!(
+                bare, slashed,
+                "leaf {leaf} differs between bare/slashed path"
+            );
         }
     }
 
@@ -1042,8 +1061,10 @@ mod tests {
         assert_eq!(body, r#"["v1.1/","v1.2/"]"#);
 
         for version in API_VERSIONS {
-            let (status, body) =
-                body_str(root_discovery("GET", &format!("/x-nmos/connection/{version}/")));
+            let (status, body) = body_str(root_discovery(
+                "GET",
+                &format!("/x-nmos/connection/{version}/"),
+            ));
             assert_eq!(status, 200);
             assert_eq!(body, r#"["bulk/","single/"]"#);
 
@@ -1058,7 +1079,13 @@ mod tests {
 
     #[test]
     fn root_discovery_ignores_unrelated_paths() {
-        assert!(root_discovery("GET", "/x-nmos/connection/v1.1/single/receivers/recv-1/staged").is_none());
+        assert!(
+            root_discovery(
+                "GET",
+                "/x-nmos/connection/v1.1/single/receivers/recv-1/staged"
+            )
+            .is_none()
+        );
         assert!(root_discovery("POST", "/x-nmos/connection/").is_none());
         assert!(root_discovery("GET", "/x-nmos/connection/v1.3/").is_none());
     }
@@ -1107,9 +1134,33 @@ mod tests {
 
     #[test]
     fn list_ids_ignores_unrelated_paths() {
-        assert!(list_ids("POST", "/x-nmos/connection/v1.1/single/receivers/", "receivers", &["a"]).is_none());
-        assert!(list_ids("GET", "/x-nmos/connection/v1.1/single/receivers/x/", "receivers", &["a"]).is_none());
-        assert!(list_ids("GET", "/x-nmos/connection/v1.1/single/senders/", "receivers", &["a"]).is_none());
+        assert!(
+            list_ids(
+                "POST",
+                "/x-nmos/connection/v1.1/single/receivers/",
+                "receivers",
+                &["a"]
+            )
+            .is_none()
+        );
+        assert!(
+            list_ids(
+                "GET",
+                "/x-nmos/connection/v1.1/single/receivers/x/",
+                "receivers",
+                &["a"]
+            )
+            .is_none()
+        );
+        assert!(
+            list_ids(
+                "GET",
+                "/x-nmos/connection/v1.1/single/senders/",
+                "receivers",
+                &["a"]
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1126,8 +1177,10 @@ mod tests {
     #[test]
     fn bulk_discovery_lists_and_rejects_get_on_kinds() {
         for version in API_VERSIONS {
-            let (status, body) =
-                body_str(bulk_discovery("GET", &format!("/x-nmos/connection/{version}/bulk/")));
+            let (status, body) = body_str(bulk_discovery(
+                "GET",
+                &format!("/x-nmos/connection/{version}/bulk/"),
+            ));
             assert_eq!(status, 200);
             assert_eq!(body, r#"["senders/","receivers/"]"#);
 
@@ -1189,18 +1242,23 @@ mod tests {
             "/x-nmos/connection/v1.1/single/receivers/recv-1/active",
             b"",
         ));
-        assert!(active_body.contains("\"master_enable\":true"), "active = {active_body}");
+        assert!(
+            active_body.contains("\"master_enable\":true"),
+            "active = {active_body}"
+        );
     }
 
     #[test]
     fn bulk_patch_ignores_unrelated_paths() {
-        assert!(bulk_patch(
-            "GET",
-            "/x-nmos/connection/v1.1/bulk/receivers",
-            "receivers",
-            b"[]",
-            |_, _| None
-        )
-        .is_none());
+        assert!(
+            bulk_patch(
+                "GET",
+                "/x-nmos/connection/v1.1/bulk/receivers",
+                "receivers",
+                b"[]",
+                |_, _| None
+            )
+            .is_none()
+        );
     }
 }

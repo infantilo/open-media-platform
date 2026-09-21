@@ -150,7 +150,10 @@ impl NatsTlsConfig {
 /// nicht anbietet, unerreichbar; die eigentliche Durchsetzung "muss
 /// TLS sein" passiert serverseitig über `--tlsverify`, s. `make
 /// nats-tls-up`).
-fn apply_tls(mut opts: async_nats::ConnectOptions, tls: &NatsTlsConfig) -> async_nats::ConnectOptions {
+fn apply_tls(
+    mut opts: async_nats::ConnectOptions,
+    tls: &NatsTlsConfig,
+) -> async_nats::ConnectOptions {
     if let Some(ca) = &tls.ca_file {
         opts = opts.add_root_certificates(ca.into());
     }
@@ -229,7 +232,11 @@ impl Publisher {
     /// `omp.player.<node_id>.itemEnded` und wartet auf `flush()` — ein
     /// EOS ist wie ein Tally-Wechsel ein diskretes, zeitkritisches
     /// Ereignis (s. `publish_tally`), keine periodische Aktualisierung.
-    pub async fn publish_item_ended(&self, node_id: &str, item_id: &str) -> Result<(), PublishError> {
+    pub async fn publish_item_ended(
+        &self,
+        node_id: &str,
+        item_id: &str,
+    ) -> Result<(), PublishError> {
         let subject = format!("omp.player.{node_id}.itemEnded");
         let payload = serde_json::to_vec(&ItemEnded {
             item_id: item_id.to_string(),
@@ -251,7 +258,10 @@ impl Publisher {
 /// vom `Publisher` (den `NodeHandle` intern für Health/Alert/Tally-Publish
 /// hält) — Abonnieren ist ein grundsätzlich anderer Nutzungspfad
 /// (Empfangs- statt Sende-Richtung) und nicht jeder Node braucht ihn.
-pub async fn subscribe_tally(url: &str, tls: &NatsTlsConfig) -> Result<TallySubscription, SubscribeError> {
+pub async fn subscribe_tally(
+    url: &str,
+    tls: &NatsTlsConfig,
+) -> Result<TallySubscription, SubscribeError> {
     let opts = apply_tls(
         async_nats::ConnectOptions::new()
             .retry_on_initial_connect()

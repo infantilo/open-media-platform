@@ -25629,19 +25629,37 @@ gestoppt und `/dev/shm/omp-mxl` geleert.
 
 **Dateien:** `nodes/omp-mediaio/src/mxl.rs`.
 
-## 2026-09-21 (Nachtrag 238) — Registrierungs-Race (Nutzerfund 2026-08-12): Heartbeat-Loop registriert verschwundene Sender neu
+## 2026-09-21 (Nachtrag 238) — "Registrierungs-Race" (Nutzerfund 2026-08-12) war das IS-04-Query-Paging-Limit; Heartbeat-Re-Registrierung (09f4549) zurückgenommen
 
-Die NMOS-Registry kann unter gleichzeitiger Registrierungslast eine
-Sender-Registrierung annehmen und intern verlieren, ohne dass Node/Device
-oder die Heartbeat betroffen sind — der bestehende `NotRegistered`-Pfad
-greift dann nicht. **Fix:** `heartbeat_loop` in
-`nodes/omp-node-sdk/src/node.rs` prüft nach jedem erfolgreichen Heartbeat
-per `check_missing_senders` (Sammel-`list_senders`, dieselbe Abfrage wie
-Graph-Builder/Mixer-Discovery) und ruft bei fehlenden Sendern
-`register_with_retry` erneut auf. Listing-Fehler bleiben folgenlos.
+**Live-Test der ersten Fix-Hypothese widerlegte sie.** Commit 09f4549
+(Heartbeat prüft per `list_senders` auf fehlende Sender und
+registriert neu) meldete im Live-Test mit dem Wegwerf-Workflow
+`race-repro-scratch` (4× `omp-source`, je 3 Sender = 12) dauerhaft
+„Sender vanished" — obwohl die Registry jede Neuregistrierung als
+`unchanged sender` quittierte und `GET .../senders/<id>` 200 lieferte.
 
-**Verifikation:** `cargo clippy -p omp-node-sdk --lib -D warnings` sauber,
-`cargo test -p omp-node-sdk` 74/74 grün. **Nicht** erneut live gegen zwei
-gleichzeitig startende `omp-source`-Rollen verifiziert — das steht aus.
+**Root Cause:** nmos-cpp pagniert die Query-API mit Default
+`paging.limit=10`. Jede Sammel-Abfrage (`GET .../senders`) liefert nur 10
+Ressourcen (Header `X-Paging-Limit: 10`, `Link: rel="next"`), welche
+fehlen, wechselt von Abfrage zu Abfrage (Sortierung nach Update-Zeit).
+Kein Client in OMP setzte `paging.limit` oder folgte `Link`. Sobald mehr
+als 10 Sender/Nodes/… registriert sind, sehen Orchestrator-Graph,
+Mixer-/Switcher-Discovery usw. also eine zufällige Teilmenge — das
+war der „Registrierungs-Race"; die Sender waren nie verloren.
 
-**Dateien:** `nodes/omp-node-sdk/src/node.rs`.
+**Fix:** `orchestrator/internal/registry/client.go` (`getJSON` fragt mit
+`paging.limit=100` und folgt `rel="next"` bis zur leeren Seite) und
+`nodes/omp-node-sdk/src/is04.rs` (`list_paged` für `list_senders`/
+`list_nodes`, `next_link`-Parser). Die Heartbeat-Änderung aus 09f4549 ist
+zurückgenommen (hätte bei >10 Sendern dauerhaft Re-Registrierungs-
+Stürme erzeugt). Neue Tests: Go `TestGetJSONFollowsPagingLinks`, Rust
+`next_link_tests`.
+
+**Verifikation:** `go test ./internal/registry`, `cargo clippy --lib -D
+warnings`, `cargo test -p omp-node-sdk` (75 grün). Live: gleicher
+Workflow, Registry 12 Sender, Orchestrator-`/api/v1/nodes` zeigt
+src-a/b/c/d je 3 Sender (vorher je Abfrage nur 10 der 12 sichtbar).
+`tools/contract-check/checker/is04.go` und die Go-Unit-Tests anderer
+Pakete wurden nicht angefasst/geprüft; Aufrufer außerhalb dieser beiden
+Clients (UI, weitere Nodes) nicht auf Direktabfragen der Query-API
+durchsucht.

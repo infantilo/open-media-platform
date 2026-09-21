@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 )
 
 // Client fragt die Standard-IS-04-Query-API einer NMOS-Registry ab. Er
@@ -131,23 +133,64 @@ func hasSenderOrReceiverFor(view NodeView, deviceID string) bool {
 	return false
 }
 
+// getJSON liest eine IS-04-Query-Collection vollständig. Die Query-API
+// pagniert (nmos-cpp-Default: paging.limit=10, live gefunden 2026-09-21:
+// bei 12 Sendern lieferte eine einzelne Abfrage nur 10, welche zwei
+// fehlten, wechselte von Abfrage zu Abfrage) — deshalb wird mit
+// paging.limit=100 gefragt und dem `rel="next"`-Link bis zur leeren Seite
+// gefolgt.
 func (c *Client) getJSON(ctx context.Context, resource string, dst any) error {
-	url := fmt.Sprintf("%s/x-nmos/query/v1.3/%s", c.baseURL, resource)
+	sep := "?"
+	if strings.Contains(resource, "?") {
+		sep = "&"
+	}
+	url := fmt.Sprintf("%s/x-nmos/query/v1.3/%s%spaging.limit=100", c.baseURL, resource, sep)
+	var all []json.RawMessage
+	for page := 0; url != "" && page < 1000; page++ {
+		items, next, err := c.getPage(ctx, url)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			break
+		}
+		all = append(all, items...)
+		url = next
+	}
+	if all == nil {
+		all = []json.RawMessage{}
+	}
+	b, err := json.Marshal(all)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, dst)
+}
+
+var linkNextRe = regexp.MustCompile(`<([^>]+)>\s*;\s*rel="next"`)
+
+func (c *Client) getPage(ctx context.Context, url string) ([]json.RawMessage, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
-
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return nil, "", err
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
+		return nil, "", fmt.Errorf("unexpected status %d from %s", resp.StatusCode, url)
 	}
-	return json.NewDecoder(resp.Body).Decode(dst)
+	var items []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
+		return nil, "", err
+	}
+	next := ""
+	if m := linkNextRe.FindStringSubmatch(resp.Header.Get("Link")); m != nil {
+		next = m[1]
+	}
+	return items, next, nil
 }
 
 // buildSnapshot ordnet die flachen IS-04-Listen den jeweiligen Nodes zu.

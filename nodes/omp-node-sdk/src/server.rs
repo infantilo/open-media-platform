@@ -309,7 +309,11 @@ mod tests {
 
     impl ParamStore for FakeStore {
         fn descriptor(&self) -> Descriptor {
-            Descriptor { parameters: vec![], methods: vec![], latency: None }
+            Descriptor {
+                parameters: vec![],
+                methods: vec![],
+                latency: None,
+            }
         }
         fn get(&self, _name: &str) -> Option<Value> {
             None
@@ -317,7 +321,11 @@ mod tests {
         fn set(&self, _name: &str, _value: Value) -> Result<(), SetError> {
             Err(SetError::Unknown)
         }
-        fn invoke(&self, _name: &str, _args: &serde_json::Map<String, Value>) -> Result<(), InvokeError> {
+        fn invoke(
+            &self,
+            _name: &str,
+            _args: &serde_json::Map<String, Value>,
+        ) -> Result<(), InvokeError> {
             Err(InvokeError::Unknown)
         }
         fn plugins(&self) -> Option<&PluginRegistry> {
@@ -332,7 +340,9 @@ mod tests {
     fn body_of(resp: ResponseBox) -> (u16, Value) {
         let status = resp.status_code().0;
         let mut buf = Vec::new();
-        resp.into_reader().read_to_end(&mut buf).expect("read response body");
+        resp.into_reader()
+            .read_to_end(&mut buf)
+            .expect("read response body");
         let value = serde_json::from_slice(&buf).unwrap_or(Value::Null);
         (status, value)
     }
@@ -344,7 +354,9 @@ mod tests {
     fn store_with_plugins() -> Arc<dyn ParamStore> {
         let registry = PluginRegistry::new();
         registry.register("scte35", "SCTE-35", serde_json::json!({"pid": 500}));
-        Arc::new(FakeStore { registry: Some(registry) })
+        Arc::new(FakeStore {
+            registry: Some(registry),
+        })
     }
 
     #[test]
@@ -378,15 +390,28 @@ mod tests {
     #[test]
     fn patch_plugin_partial_body_only_touches_given_fields() {
         let store = store_with_plugins();
-        let (_, first) = body_of(route(&Method::Patch, "/plugins/scte35", br#"{"enabled":true}"#, &store));
+        let (_, first) = body_of(route(
+            &Method::Patch,
+            "/plugins/scte35",
+            br#"{"enabled":true}"#,
+            &store,
+        ));
         assert_eq!(first["enabled"], true);
-        assert_eq!(first["config"]["pid"], 500, "config untouched by an enabled-only PATCH");
+        assert_eq!(
+            first["config"]["pid"], 500,
+            "config untouched by an enabled-only PATCH"
+        );
     }
 
     #[test]
     fn patch_unknown_plugin_is_404() {
         let store = store_with_plugins();
-        let (status, _) = body_of(route(&Method::Patch, "/plugins/does-not-exist", b"{}", &store));
+        let (status, _) = body_of(route(
+            &Method::Patch,
+            "/plugins/does-not-exist",
+            b"{}",
+            &store,
+        ));
         assert_eq!(status, 404);
     }
 
@@ -400,7 +425,12 @@ mod tests {
     #[test]
     fn patch_plugin_invalid_json_is_400() {
         let store = store_with_plugins();
-        let (status, _) = body_of(route(&Method::Patch, "/plugins/scte35", b"not json", &store));
+        let (status, _) = body_of(route(
+            &Method::Patch,
+            "/plugins/scte35",
+            b"not json",
+            &store,
+        ));
         assert_eq!(status, 400);
     }
 }

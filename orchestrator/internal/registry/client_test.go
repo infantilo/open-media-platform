@@ -119,11 +119,11 @@ func TestFetchSnapshotFillsDeviceMissingFromBulkSendersList(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":"node-1","label":"Mixer"}]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/devices":
 			_, _ = w.Write([]byte(`[{"id":"dev-1","label":"Mixer Device","node_id":"node-1"}]`))
-		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "":
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "paging.limit=100":
 			// Bulk-Liste lässt den Sender dieses Device bewusst aus (der
 			// live beobachtete Bug) — leer statt des echten Eintrags.
 			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1":
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1&paging.limit=100":
 			_, _ = w.Write([]byte(`[{"id":"send-1","label":"PGM","device_id":"dev-1","flow_id":"flow-1"}]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
 			_, _ = w.Write([]byte(`[]`))
@@ -164,9 +164,9 @@ func TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"id":"node-1","label":"Source"}]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/devices":
 			_, _ = w.Write([]byte(`[{"id":"dev-1","label":"Source Device","node_id":"node-1"}]`))
-		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "":
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "paging.limit=100":
 			_, _ = w.Write([]byte(`[{"id":"send-1","label":"Sender 1","device_id":"dev-1"}]`))
-		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1":
+		case r.URL.Path == "/x-nmos/query/v1.3/senders" && r.URL.RawQuery == "device_id=dev-1&paging.limit=100":
 			scopedQueryCount++
 			_, _ = w.Write([]byte(`[]`))
 		case r.URL.Path == "/x-nmos/query/v1.3/receivers":
@@ -190,5 +190,36 @@ func TestFetchSnapshotDoesNotQueryDevicesAlreadyInBulkResult(t *testing.T) {
 	}
 	if scopedQueryCount != 0 {
 		t.Errorf("device-scoped sender query ran %d times, want 0 (device already had a bulk sender)", scopedQueryCount)
+	}
+}
+
+// TestGetJSONFollowsPagingLinks: nmos-cpp liefert standardmäßig nur 10
+// Ressourcen pro Abfrage (live 2026-09-21: 12 Sender, je Abfrage fehlten
+// zwei) — getJSON muss dem rel="next"-Link bis zur leeren Seite folgen.
+func TestGetJSONFollowsPagingLinks(t *testing.T) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("paging.since") {
+		case "":
+			w.Header().Set("Link", `<`+srv.URL+`/x-nmos/query/v1.3/senders?paging.limit=100&paging.since=1>; rel="next"`)
+			_, _ = w.Write([]byte(`[{"id":"a"},{"id":"b"}]`))
+		case "1":
+			w.Header().Set("Link", `<`+srv.URL+`/x-nmos/query/v1.3/senders?paging.limit=100&paging.since=2>; rel="next"`)
+			_, _ = w.Write([]byte(`[{"id":"c"}]`))
+		default:
+			_, _ = w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+
+	var got []struct {
+		ID string `json:"id"`
+	}
+	if err := NewClient(srv.URL, nil).getJSON(context.Background(), "senders", &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d items, want 3 across pages: %+v", len(got), got)
 	}
 }

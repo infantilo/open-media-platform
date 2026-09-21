@@ -67,7 +67,12 @@ impl PluginRegistry {
         let id = id.into();
         let mut plugins = self.plugins.lock().expect("lock poisoned");
         plugins.retain(|p| p.id != id);
-        plugins.push(PluginInfo { id, label: label.into(), enabled: false, config: default_config });
+        plugins.push(PluginInfo {
+            id,
+            label: label.into(),
+            enabled: false,
+            config: default_config,
+        });
     }
 
     pub fn list(&self) -> Vec<PluginInfo> {
@@ -75,7 +80,12 @@ impl PluginRegistry {
     }
 
     pub fn get(&self, id: &str) -> Option<PluginInfo> {
-        self.plugins.lock().expect("lock poisoned").iter().find(|p| p.id == id).cloned()
+        self.plugins
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .find(|p| p.id == id)
+            .cloned()
     }
 
     /// Liefert `true`, wenn ein Plugin mit dieser ID existiert (auch wenn
@@ -120,9 +130,13 @@ impl PluginRegistry {
     /// Plugin ohne Snapshot-Eintrag bleibt bei seinem `register()`-
     /// Default (kein rückwirkendes "alles war mal deaktiviert").
     pub fn restore(&self, doc: &Value) {
-        let Some(entries) = doc.as_array() else { return };
+        let Some(entries) = doc.as_array() else {
+            return;
+        };
         for entry in entries {
-            let Some(id) = entry.get("id").and_then(Value::as_str) else { continue };
+            let Some(id) = entry.get("id").and_then(Value::as_str) else {
+                continue;
+            };
             if let Some(enabled) = entry.get("enabled").and_then(Value::as_bool) {
                 self.set_enabled(id, enabled);
             }
@@ -167,7 +181,10 @@ mod tests {
         let list = reg.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].label, "X v2");
-        assert!(!list[0].enabled, "re-registering resets to the safe default");
+        assert!(
+            !list[0].enabled,
+            "re-registering resets to the safe default"
+        );
     }
 
     #[test]
@@ -181,7 +198,10 @@ mod tests {
         let reg = PluginRegistry::new();
         reg.register("x", "X", serde_json::json!({}));
         assert!(reg.set_config("x", serde_json::json!({"level": 3})));
-        assert_eq!(reg.get("x").unwrap().config, serde_json::json!({"level": 3}));
+        assert_eq!(
+            reg.get("x").unwrap().config,
+            serde_json::json!({"level": 3})
+        );
     }
 
     #[test]

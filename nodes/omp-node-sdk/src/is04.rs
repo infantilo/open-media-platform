@@ -695,6 +695,47 @@ impl RegistryClient {
         }
     }
 
+    /// Liest eine IS-04-Query-Collection vollständig. nmos-cpp pagniert
+    /// (Default `paging.limit=10`, live gefunden 2026-09-21: bei 12
+    /// Sendern lieferte jede Einzelabfrage nur 10, welche zwei fehlten,
+    /// wechselte) — deshalb `paging.limit=100` und dem `rel="next"`-Link
+    /// bis zur leeren Seite folgen.
+    fn list_paged<T: serde::de::DeserializeOwned>(
+        &self,
+        resource: &str,
+    ) -> Result<Vec<T>, QueryError> {
+        let mut url = format!(
+            "{}/x-nmos/query/v1.3/{resource}?paging.limit=100",
+            self.base_url
+        );
+        let mut all: Vec<T> = Vec::new();
+        for _ in 0..1000 {
+            let mut resp = match ureq::get(&url).call() {
+                Ok(r) => r,
+                Err(ureq::Error::StatusCode(code)) => return Err(QueryError::Status(code)),
+                Err(e) => return Err(QueryError::Request(e.to_string())),
+            };
+            let next = resp
+                .headers()
+                .get("Link")
+                .and_then(|v| v.to_str().ok())
+                .and_then(next_link);
+            let page: Vec<T> = resp
+                .body_mut()
+                .read_json()
+                .map_err(|e| QueryError::Request(e.to_string()))?;
+            if page.is_empty() {
+                break;
+            }
+            all.extend(page);
+            match next {
+                Some(n) => url = n,
+                None => break,
+            }
+        }
+        Ok(all)
+    }
+
     /// Listet alle bei der Registry registrierten Sender (`GET
     /// .../senders`, dieselbe Query-API wie `get_sender`) — Grundlage für
     /// `omp-switcher`s reine IS-04-Discovery (`UMSETZUNG.md` C7, gleicher
@@ -702,15 +743,7 @@ impl RegistryClient {
     /// aber ohne Node-/Device-Join: der Switcher braucht pro Sender nur
     /// `id`/`label`/`transport`/`flow_id`, kein Graph-Modell).
     pub fn list_senders(&self) -> Result<Vec<Sender>, QueryError> {
-        let url = format!("{}/x-nmos/query/v1.3/senders", self.base_url);
-        match ureq::get(&url).call() {
-            Ok(mut resp) => resp
-                .body_mut()
-                .read_json::<Vec<Sender>>()
-                .map_err(|e| QueryError::Request(e.to_string())),
-            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
-            Err(e) => Err(QueryError::Request(e.to_string())),
-        }
+        self.list_paged("senders")
     }
 
     /// Listet alle bei der Registry registrierten Nodes (`GET .../nodes`,
@@ -720,15 +753,7 @@ impl RegistryClient {
     /// löst seine konfigurierten `targetPlayerLabel`/`targetMixerLabel`
     /// damit zu einem `href` auf, statt Adressen hartzukodieren).
     pub fn list_nodes(&self) -> Result<Vec<NodeResource>, QueryError> {
-        let url = format!("{}/x-nmos/query/v1.3/nodes", self.base_url);
-        match ureq::get(&url).call() {
-            Ok(mut resp) => resp
-                .body_mut()
-                .read_json::<Vec<NodeResource>>()
-                .map_err(|e| QueryError::Request(e.to_string())),
-            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
-            Err(e) => Err(QueryError::Request(e.to_string())),
-        }
+        self.list_paged("nodes")
     }
 
     /// Meldet eine Node explizit bei der Registry ab (`DELETE
@@ -789,5 +814,33 @@ impl RegistryClient {
             Err(ureq::Error::StatusCode(code)) => Err(HeartbeatError::Status(code)),
             Err(e) => Err(HeartbeatError::Request(e.to_string())),
         }
+    }
+}
+
+/// Zieht die `rel="next"`-URL aus einem HTTP-`Link`-Header.
+fn next_link(header: &str) -> Option<String> {
+    header.split(',').find_map(|part| {
+        let (url, rel) = part.split_once(';')?;
+        if rel.trim().trim_start_matches("rel=").trim_matches('"') != "next" {
+            return None;
+        }
+        Some(
+            url.trim()
+                .trim_start_matches('<')
+                .trim_end_matches('>')
+                .to_string(),
+        )
+    })
+}
+
+#[cfg(test)]
+mod next_link_tests {
+    use super::next_link;
+
+    #[test]
+    fn picks_next_among_several_rels() {
+        let h = r#"<http://r/q?since=1>; rel="prev", <http://r/q?since=9>; rel="next", <http://r/q>; rel="first""#;
+        assert_eq!(next_link(h).as_deref(), Some("http://r/q?since=9"));
+        assert_eq!(next_link(r#"<http://r/q>; rel="first""#), None);
     }
 }
