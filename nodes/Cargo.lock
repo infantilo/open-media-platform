@@ -648,7 +648,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
  "windows-sys 0.61.2",
 ]
 
@@ -692,7 +692,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "030967459f9f676851872c6304adea7825c6d462ec9b72554c733cf0c5952233"
 dependencies = [
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -709,7 +709,7 @@ checksum = "22a861859b887a79cf461359c192c97a57d8fb0229dd291232e57aa11f6fa72c"
 dependencies = [
  "glib-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -762,7 +762,7 @@ dependencies = [
  "gstreamer-base-sys",
  "gstreamer-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -791,7 +791,7 @@ dependencies = [
  "gstreamer-base-sys",
  "gstreamer-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -818,7 +818,7 @@ dependencies = [
  "gobject-sys",
  "gstreamer-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -843,7 +843,7 @@ dependencies = [
  "glib-sys",
  "gstreamer-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -873,7 +873,30 @@ dependencies = [
  "gstreamer-sys",
  "gstreamer-video-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
+]
+
+[[package]]
+name = "gstreamer-sdp"
+version = "0.25.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a7859290ba340f1bd45d4bc0ada958700e9d3b1a522b456fd7ee88da468cd13"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-sdp-sys",
+]
+
+[[package]]
+name = "gstreamer-sdp-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e5afafebe4a135392ec2455144cec78821681e007cb9b19c071a4c86b218f64"
+dependencies = [
+ "glib-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps 9.0.0",
 ]
 
 [[package]]
@@ -886,7 +909,7 @@ dependencies = [
  "glib-sys",
  "gobject-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
 ]
 
 [[package]]
@@ -916,7 +939,33 @@ dependencies = [
  "gstreamer-base-sys",
  "gstreamer-sys",
  "libc",
- "system-deps",
+ "system-deps 7.0.8",
+]
+
+[[package]]
+name = "gstreamer-webrtc"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de524e63b32f3f478b9f718ef6895bd50a1bb1d1d4d7c2134f0a30f36d046157"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-sdp",
+ "gstreamer-webrtc-sys",
+ "libc",
+]
+
+[[package]]
+name = "gstreamer-webrtc-sys"
+version = "0.25.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf77b07fd279bf060d938c7024c8a152a566b4b5e9ff401c7ba890d278a47d1b"
+dependencies = [
+ "glib-sys",
+ "gstreamer-sdp-sys",
+ "gstreamer-sys",
+ "libc",
+ "system-deps 9.0.0",
 ]
 
 [[package]]
@@ -1594,6 +1643,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "omp-webrtc-gateway"
+version = "0.1.0"
+dependencies = [
+ "gstreamer",
+ "gstreamer-sdp",
+ "gstreamer-webrtc",
+ "omp-mediaio",
+ "omp-node-sdk",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1673,9 +1735,9 @@ dependencies = [
 
 [[package]]
 name = "pkg-config"
-version = "0.3.33"
+version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "playout"
@@ -2158,6 +2220,19 @@ name = "system-deps"
 version = "7.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "396a35feb67335377e0251fcbc1092fc85c484bd4e3a7a54319399da127796e7"
+dependencies = [
+ "cfg-expr",
+ "heck",
+ "pkg-config",
+ "toml",
+ "version-compare",
+]
+
+[[package]]
+name = "system-deps"
+version = "9.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a0dae2cbca1f0ff93795713cfe0a4c02f760e3c0b8ae2ab4ec4045808ff429f"
 dependencies = [
  "cfg-expr",
  "heck",

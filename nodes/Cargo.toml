@@ -27,4 +27,5 @@ members = [
     "omp-audio-monitor",
     "omp-pipeline-controller",
     "omp-scope",
+    "omp-webrtc-gateway",
 ]

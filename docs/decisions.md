@@ -25739,3 +25739,73 @@ Schritt 1 klären, ob Caddy vom WLAN aus erreichbar ist.
 **Offen (bewusst nicht geraten):** Codec (VP8 vs. H.264 — H.264 ist auf
 Handys hardwarebeschleunigt, VP8 braucht keine Lizenz), TURN/STUN (im
 LAN nicht nötig, im WAN ja), Audio-Pfad (Opus ↔ MXL-Audio).
+
+## 2026-09-21 (Nachtrag 241) — Smartphone-WebRTC-Node, Schritt 1: `omp-webrtc-gateway` (Kamera → MXL, WHIP, H.264 + Opus)
+
+**Umgesetzt:** neuer Node `nodes/omp-webrtc-gateway` (Rust). Ein Browser
+(hier: headless Chromium mit Fake-Kamera als Handy-Ersatz) sendet per
+WHIP (`POST /whip`, SDP-Offer → `201` + SDP-Answer, `DELETE /whip`
+beendet) Video H.264 + Audio Opus; der Node dekodiert und schreibt in
+zwei MXL-Flows (Video 1280×720@25 Default, Audio 48 kHz/2ch float32),
+die als NMOS-Sender registriert sind. `GET /whip-test.html` liefert eine
+minimale Sendeseite (Verifikationswerkzeug; die eigentliche Handy-Seite
+ist Schritt 2). Parameter (read-only): `flowId`, `audioFlowId`,
+`whipEndpoint`, `connectionState`, `sessionActive`, `latencyMs`
+(`OMP_WEBRTC_LATENCY_MS`, Default 40 = webrtcbin-Jitterbuffer).
+
+**Architektur:** EINE dauerhafte Pipeline (MXL-Ausgänge + je ein
+`identity` als Andockpunkt), pro WHIP-Sitzung wird ein `webrtcbin` samt
+Depayloader/Decoder zur laufenden Pipeline hinzugefügt und beim
+Beenden/Ersetzen wieder entfernt — die MXL-Flows bleiben bestehen (kein
+Flow-Neuaufbau bei jedem Reconnect; der Flow-Fehlerfall aus Nachtrag 222
+„Mixer sieht Flow nicht" wird so vermieden). Eine Kamera je Node, eine
+neue Sitzung ersetzt die alte.
+
+**Live gefundene Fallstricke (alle drei kosteten Zeit):**
+1. `webrtcbin` 1.22 legt Transceiver bei einem Remote-Offer erst beim
+   Answer an — Codec-Wünsche müssen per `add-transceiver` (Recvonly, mit
+   H264-/OPUS-Caps) VOR `set-remote-description` gesetzt werden, sonst
+   greift `codec-preferences` ins Leere.
+2. **Die Pipeline blieb in READY** (Symptom: Verbindung „connected", aber
+   nie ein `pad-added`, im Log `rtpsource: cannot get current
+   running_time`): ohne eingehende Daten prerollt der Audio-Appsink aus
+   `omp-mediaio` (bewusst `async`) nie → ASYNC-Zustandswechsel hängt,
+   keine Clock, Jitterbuffer gibt nichts aus. Fix: im Node alle Appsinks
+   der Pipeline auf `async=false` (die gemeinsame Bibliothek blieb
+   unverändert). `async-handling` auf der Pipeline allein reichte nicht.
+3. Testmethodik: `pgrep -x <name>` matcht den auf 15 Zeichen gekürzten
+   Prozessnamen (`omp-webrtc-gate`), mit dem vollen Namen trifft es
+   nichts — mehrere „Neustarts" liefen deshalb nie, der Port war belegt,
+   und ein alter Build beantwortete alle Tests.
+
+**Systemabhängigkeit:** die Rust-Crates `gstreamer-webrtc`/`gstreamer-sdp`
+brauchen `libgstreamer-plugins-bad1.0-dev` (pkg-config
+`gstreamer-webrtc-1.0`); auf dieser Maschine per `apt` nachinstalliert
+(zog u. a. `libopencv-dev` als Abhängigkeit mit). Für neue Dev-Maschinen
+in die Setup-Doku aufnehmen.
+
+**Verifikation (live, Chromium-Fake-Kamera):** Verbindung `connected`,
+H.264 + Opus ausgehandelt (Answer geprüft); Video-Flow schreibt ~25
+Grains/s (`mxl-info` Head-Index), Audio-Flow ~48 000 Samples/s; zweite
+Sitzung ersetzt die erste, derselbe Flow läuft weiter; `DELETE /whip`
+setzt `connectionState` auf `none` und stoppt die Schreibvorgänge.
+`cargo clippy -D warnings` sauber.
+
+**Nicht verifiziert / offen:**
+- **Bildinhalt** des MXL-Flows nicht visuell geprüft (nur, dass Grains
+  geschrieben werden und der Decoder Puffer liefert).
+- **Latenz nur receiverseitig konfiguriert** (Jitterbuffer 40 ms), nicht
+  Ende-zu-Ende gemessen — das braucht eine echte Kamera-/Handy-Strecke
+  bzw. ein Zeitstempel-Testbild und gehört in Schritt 2/4.
+- Kein echtes Handy, kein HTTPS (Kamera-Zugriff im Browser braucht es,
+  `localhost` gilt als sicher — Schritt 2).
+- Nicht im Orchestrator-Katalog (kein Workflow-Start dieses Nodes), kein
+  BCP-008-Monitor, kein Alarm bei Verbindungsabbruch (Schritt 4);
+  `POST /whip` ist unauthentifiziert; kein `Location`-Header (RawResponse
+  kennt keine Zusatz-Header), daher nur eine Sitzung adressierbar;
+  Pipeline-Liveness-Heartbeat läuft über den Bus-Wächter-Thread, nicht
+  über den MXL-Schreiber.
+- Kein Test im Repo für die Signalisierung (getestet nur live).
+
+**Dateien:** `nodes/omp-webrtc-gateway/{Cargo.toml,src/main.rs,src/pipeline.rs,src/test.html}`,
+`nodes/Cargo.toml` (Workspace-Mitglied), `nodes/Cargo.lock`.
