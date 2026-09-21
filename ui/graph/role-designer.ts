@@ -111,9 +111,59 @@ interface CatalogEntry {
   label: string;
 }
 
+// Nutzerauftrag 2026-09-21 ("role-designer.ts Host-Selects auch damit
+// ergänzen"): gleiches Wire-Format wie flow-canvas.ts' eigene (bewusst
+// duplizierte, s. dortige Moduldoku) HostMetrics-Deklaration.
+interface HostMetrics {
+  cpuPercent: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  receivedAt: string;
+}
+
 interface HostEntry {
   id: string;
   label: string;
+  metrics?: HostMetrics;
+}
+
+// Gleicher Schwellwert wie flow-canvas.ts'/hosts-view.ts'
+// HOST_ONLINE_THRESHOLD_MS: ein Host gilt als online, wenn seine letzte
+// Telemetrie nicht älter als das Dreifache des Host-Agent-Sende-
+// Intervalls (5s) ist.
+const HOST_ONLINE_THRESHOLD_MS = 15000;
+
+function isHostOnline(metrics?: HostMetrics): boolean {
+  return !!metrics && Date.now() - Date.parse(metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
+}
+
+// Baut Label-Präfix + Options-Farbe/Tooltip für einen Host-Options-
+// Eintrag — von beiden Host-Selects (Toolbar-#hostPreference und
+// per-Rolle) genutzt, damit online/offline an beiden Stellen gleich
+// aussieht.
+function hostOptionStatus(host: HostEntry): { online: boolean; prefix: string; color: string; title: string } {
+  const online = isHostOnline(host.metrics);
+  return {
+    online,
+    prefix: online ? "● " : "○ ",
+    color: online ? "" : "#e05252",
+    title: online
+      ? "Host online"
+      : host.metrics
+        ? `Host offline — zuletzt gesehen ${new Date(host.metrics.receivedAt).toLocaleTimeString()}`
+        : "Host offline — keine Telemetrie empfangen",
+  };
+}
+
+// Färbt das GESCHLOSSENE <select> selbst rot ein, wenn der aktuell
+// gewählte Host offline ist — der Options-Präfix oben ist nur beim
+// Aufklappen sichtbar (gleiches Muster wie flow-canvas.ts'
+// #renderPaletteList).
+function applyHostSelectStatus(select: HTMLSelectElement, hosts: HostEntry[]) {
+  const selected = hosts.find((h) => h.id === select.value);
+  const offline = !!selected && !isHostOnline(selected.metrics);
+  select.style.color = offline ? "#e05252" : "";
+  select.style.borderColor = offline ? "#c0392b" : "";
 }
 
 // Wire-Format identisch zu workflows.Workflow (nur die für den Designer
@@ -325,6 +375,15 @@ export class RoleDesigner extends HTMLElement {
       if (hostsRes.ok) this.#hosts = await hostsRes.json();
       this.#renderToolbar();
       this.#renderPalette();
+      // Bug (gefunden bei Nutzerauftrag 2026-09-21, "role-designer.ts
+      // Host-Selects auch damit ergänzen"): ohne diesen Re-Render blieb
+      // #render() beim ersten synchronen Aufruf in connectedCallback()
+      // (VOR Abschluss dieses Fetches) auf #hosts=[] eingefroren — jeder
+      // Rollen-Host-Select zeigte dauerhaft nur "(lokal)", ein bereits
+      // gesetzter, real registrierter hostId erschien fälschlich als
+      // "nicht registriert", bis irgendeine andere Mutation (Rolle
+      // hinzufügen, Ziehen, Undo) zufällig einen Re-Render auslöste.
+      this.#render();
     } catch {
       // Katalog/Hosts optional für die Palette — "+ Rolle" bleibt ohne
       // sie funktionslos (leere Auswahl), kein harter Fehler.
@@ -520,12 +579,17 @@ export class RoleDesigner extends HTMLElement {
     for (const host of this.#hosts) {
       const opt = document.createElement("option");
       opt.value = host.id;
-      opt.textContent = host.label;
+      const status = hostOptionStatus(host);
+      opt.textContent = `${status.prefix}${host.label}`;
+      opt.style.color = status.color;
+      opt.title = status.title;
       hostSelect.appendChild(opt);
     }
     hostSelect.value = this.#hostPreference;
+    applyHostSelectStatus(hostSelect, this.#hosts);
     hostSelect.addEventListener("change", () => {
       this.#hostPreference = hostSelect.value;
+      applyHostSelectStatus(hostSelect, this.#hosts);
     });
     this.#toolbar.appendChild(hostSelect);
 
@@ -932,7 +996,10 @@ export class RoleDesigner extends HTMLElement {
     for (const host of this.#hosts) {
       const opt = document.createElement("option");
       opt.value = host.id;
-      opt.textContent = `Host: ${host.label}`;
+      const status = hostOptionStatus(host);
+      opt.textContent = `Host: ${status.prefix}${host.label}`;
+      opt.style.color = status.color;
+      opt.title = status.title;
       if (host.id === role.hostId) opt.selected = true;
       hostSelect.appendChild(opt);
     }
@@ -947,9 +1014,11 @@ export class RoleDesigner extends HTMLElement {
       unknownOpt.selected = true;
       hostSelect.appendChild(unknownOpt);
     }
+    applyHostSelectStatus(hostSelect, this.#hosts);
     hostSelect.addEventListener("change", () => {
       this.#pushUndo();
       role.hostId = hostSelect.value || undefined;
+      applyHostSelectStatus(hostSelect, this.#hosts);
     });
     hostObject.appendChild(hostSelect);
     g.appendChild(hostObject);
