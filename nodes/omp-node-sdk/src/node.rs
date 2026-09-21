@@ -732,7 +732,36 @@ async fn heartbeat_loop(
             (shared.device.clone(), shared.receivers.clone())
         };
         match heartbeat_result {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                // Live reproduziert 2026-09-21 (Nutzerfund 2026-08-12,
+                // docs/decisions.md: "zwei omp-source ... Registrierungs-
+                // Race"): unter gleichzeitiger Registrierungslast mehrerer
+                // Nodes (mehrere Rollen desselben Workflow-Starts) kann die
+                // NMOS-Registry eine Sender-Registrierung annehmen — kein
+                // Fehler an register_with_retry, ein normales Info-Log auf
+                // der Registry-Seite — sie aber intern verlieren, OHNE dass
+                // die Node-Heartbeat selbst betroffen ist (Node/Device und
+                // die übrigen Sender bleiben unversehrt, nur einer fehlt).
+                // Der NotRegistered-Reregistrierungs-Pfad unten greift hier
+                // also nicht (der Node IST registriert). check_missing_
+                // senders schließt genau diese Lücke.
+                if let Some(missing) = check_missing_senders(&registry, &senders).await {
+                    eprintln!(
+                        "omp-node-sdk: {} sender(s) vanished from the registry, re-registering: {missing:?}",
+                        missing.len()
+                    );
+                    register_with_retry(
+                        &registry,
+                        &node_res,
+                        &device_snapshot,
+                        &sources,
+                        &flows,
+                        &senders,
+                        &receivers_snapshot,
+                    )
+                    .await;
+                }
+            }
             Ok(Err(HeartbeatError::NotRegistered)) => {
                 register_with_retry(
                     &registry,
@@ -780,6 +809,38 @@ async fn heartbeat_loop(
             }
         }
     }
+}
+
+/// Prüft, ob jeder eigene Sender in der Sender-**Liste** (`GET
+/// .../senders`, `RegistryClient::list_senders`) auftaucht. Bewusst NICHT
+/// per-ID-`GET .../senders/<id>` (`get_sender`) geprüft — live gegen den
+/// tatsächlich reproduzierten Bug getestet (docs/decisions.md
+/// 2026-08-12/2026-09-21) und dabei den ersten Entwurf (per-ID-Check)
+/// widerlegt: ein per-ID-`GET` auf einen laut Liste "verschwundenen"
+/// Sender liefert weiterhin ein vollständiges 200-Ergebnis — die
+/// Ressource selbst ist in der Registry also gar nicht verloren, nur
+/// die Sender-**Sammel**-Abfrage (`GET .../senders` ohne ID) listet sie
+/// unter gleichzeitiger Registrierungslast nicht mit auf. Da der
+/// Orchestrator selbst (`internal/registry/client.go`) sowie jeder
+/// andere Sender-Auflösungspfad im System (Graph-Builder, Mixer-
+/// Discovery, IS-05-Receiver-PATCH) genau diese Sammel-Abfrage nutzt,
+/// ist ein Sender aus deren Sicht exakt dann "weg", wenn er hier fehlt —
+/// unabhängig davon, was ein per-ID-`GET` sagt. Liefert `None`, solange
+/// alle da sind (Normalfall). Ein Fehler beim Listen selbst (Netzwerk-
+/// Blip, 5xx) bleibt für diesen Tick folgenlos statt als "alle fehlen"
+/// gewertet zu werden — sonst würde eine kurze Registry-Unerreichbarkeit
+/// unnötige volle Re-Registrierungs-Stürme auslösen, wo ein einfacher
+/// nächster Heartbeat-Tick reicht.
+async fn check_missing_senders(registry: &RegistryClient, senders: &[Sender]) -> Option<Vec<String>> {
+    let registry = registry.clone();
+    let want_ids: Vec<String> = senders.iter().map(|s| s.id.clone()).collect();
+    let listed = tokio::task::spawn_blocking(move || registry.list_senders()).await;
+    let present: std::collections::HashSet<String> = match listed {
+        Ok(Ok(all)) => all.into_iter().map(|s| s.id).collect(),
+        Ok(Err(_)) | Err(_) => return None,
+    };
+    let missing: Vec<String> = want_ids.into_iter().filter(|id| !present.contains(id)).collect();
+    if missing.is_empty() { None } else { Some(missing) }
 }
 
 /// Registriert Node, Device und alle Senders/Receivers; wiederholt bei

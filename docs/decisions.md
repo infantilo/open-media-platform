@@ -25628,3 +25628,20 @@ laufenden Orchestrator/`omp-source`/`omp-scope`, danach Prozesse
 gestoppt und `/dev/shm/omp-mxl` geleert.
 
 **Dateien:** `nodes/omp-mediaio/src/mxl.rs`.
+
+## 2026-09-21 (Nachtrag 238) — Registrierungs-Race (Nutzerfund 2026-08-12): Heartbeat-Loop registriert verschwundene Sender neu
+
+Die NMOS-Registry kann unter gleichzeitiger Registrierungslast eine
+Sender-Registrierung annehmen und intern verlieren, ohne dass Node/Device
+oder die Heartbeat betroffen sind — der bestehende `NotRegistered`-Pfad
+greift dann nicht. **Fix:** `heartbeat_loop` in
+`nodes/omp-node-sdk/src/node.rs` prüft nach jedem erfolgreichen Heartbeat
+per `check_missing_senders` (Sammel-`list_senders`, dieselbe Abfrage wie
+Graph-Builder/Mixer-Discovery) und ruft bei fehlenden Sendern
+`register_with_retry` erneut auf. Listing-Fehler bleiben folgenlos.
+
+**Verifikation:** `cargo clippy -p omp-node-sdk --lib -D warnings` sauber,
+`cargo test -p omp-node-sdk` 74/74 grün. **Nicht** erneut live gegen zwei
+gleichzeitig startende `omp-source`-Rollen verifiziert — das steht aus.
+
+**Dateien:** `nodes/omp-node-sdk/src/node.rs`.
