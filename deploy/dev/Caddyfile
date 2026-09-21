@@ -49,6 +49,11 @@ localhost:8443 {
 	reverse_proxy 127.0.0.1:9440 {
 		flush_interval -1
 	}
+	# Ohne laufenden Node liefert Caddy sonst einen LEEREN 502 (weiße Seite).
+	handle_errors {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "Kamera-Node nicht erreichbar (Port 9440). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
+	}
 }
 
 # Smartphone-Monitor (omp-webrtc-gateway mit OMP_WEBRTC_GATEWAY_DIRECTION=monitor,
@@ -58,5 +63,10 @@ localhost:8443 {
 	tls internal
 	reverse_proxy 127.0.0.1:9442 {
 		flush_interval -1
+	}
+	# Ohne laufenden Node liefert Caddy sonst einen LEEREN 502 (weiße Seite).
+	handle_errors {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "Monitor-Node nicht erreichbar (Port 9442). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
 	}
 }
