@@ -3056,7 +3056,17 @@ ebenfalls eine eigene Sitzung bekam):
    Netzsegmentierungs-Thema, nicht primär ein Authentifizierungs-Thema)
    oder ob echtes Client-Zertifikat-mTLS gebraucht wird, ist noch nicht
    entschieden. Zertifikatsverteilung an jede Node-Instanz ebenfalls
-   noch offen. host-agent↔Orchestrator bleibt bis dahin unverschlüsselt
+   noch offen — und hier schwerer als beim NATS-Client-Zertifikat oben:
+   ein Node-SERVER-Zertifikat braucht ein SAN, das zur tatsächlich
+   erreichbaren Adresse dieses konkreten Hosts passt (s.
+   `deploy/dev/mtls-issue-cert.sh`-Doku, "Server-Hostname-Verifikation")
+   — ein einziges geteiltes Zertifikat wie bei nats-client funktioniert
+   hier nur für den Ein-Host-Dev-Fall (SAN "localhost 127.0.0.1"), nicht
+   für echte Remote-Hosts über host-agent. Bräuchte entweder Wildcard-/
+   Multi-SAN-Zertifikate pro Host (ausgestellt beim host-agent-Bootstrap,
+   s. §18.3 Punkt 3 — dort ebenfalls noch nicht umgesetzt) oder
+   Ein-SAN-pro-Node-Zertifikate zur Startzeit vom Launcher/host-agent
+   angefordert. host-agent↔Orchestrator bleibt bis dahin unverschlüsselt
    (einziger Schutz: ein Einmal-Bootstrap-Token) — beide Zustände sind
    an anderer Stelle bereits als bewusste Entscheidungen dokumentiert
    (§18.3, `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
