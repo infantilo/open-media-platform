@@ -44,7 +44,10 @@ localhost:8443 {
 # die IP oder den mDNS-Namen, sonst passt der SAN des internen Zertifikats
 # nicht). Das Handy muss die Caddy-Root-CA akzeptieren:
 # .run/caddy/pki/authorities/local/root.crt (s. docs/HANDBUCH.md).
-{$OMP_PUBLIC_HOST:localhost}:9441 {
+# Auch unter localhost/penguin.linux.test/127.0.0.1 erreichbar (ChromeOS
+# leitet Container-Ports auf localhost weiter): Caddy antwortet bei einem
+# NICHT konfigurierten Hostnamen sonst mit leerem 200 (weiße Seite).
+{$OMP_PUBLIC_HOST:localhost}:9441, localhost:9441, penguin.linux.test:9441, 127.0.0.1:9441 {
 	tls internal
 	reverse_proxy 127.0.0.1:9440 {
 		flush_interval -1
@@ -59,7 +62,10 @@ localhost:8443 {
 # Smartphone-Monitor (omp-webrtc-gateway mit OMP_WEBRTC_GATEWAY_DIRECTION=monitor,
 # Nachtrag 243): Node fest auf OMP_PORT=9442, HTTPS auf 9443. Gleiche
 # Hinweise wie beim Kamera-Block oben (OMP_PUBLIC_HOST, Root-CA am Handy).
-{$OMP_PUBLIC_HOST:localhost}:9443 {
+# Auch unter localhost/penguin.linux.test/127.0.0.1 erreichbar (ChromeOS
+# leitet Container-Ports auf localhost weiter): Caddy antwortet bei einem
+# NICHT konfigurierten Hostnamen sonst mit leerem 200 (weiße Seite).
+{$OMP_PUBLIC_HOST:localhost}:9443, localhost:9443, penguin.linux.test:9443, 127.0.0.1:9443 {
 	tls internal
 	reverse_proxy 127.0.0.1:9442 {
 		flush_interval -1
