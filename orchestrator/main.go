@@ -258,7 +258,7 @@ func main() {
 		// Kapitel 14 Teil 1: dieselbe geparste Metrics erneut aus dem
 		// Tracker lesen statt den Payload ein zweites Mal zu parsen —
 		// Touch() hat ihn gerade validiert und mit ReceivedAt versehen.
-		if m, ok := hostMetricsTracker.Get(hostID); ok {
+		if m, ok := hostMetricsTracker.Get(hostID); ok && !m.Goodbye {
 			hostHistory.Record(hostID, m)
 		}
 	}, natsTLSConfig)

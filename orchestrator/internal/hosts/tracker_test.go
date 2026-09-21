@@ -36,3 +36,17 @@ func TestTrackerTouchInvalidPayload(t *testing.T) {
 		t.Fatalf("Get() ok = true, want false after a failed Touch()")
 	}
 }
+
+func TestTrackerKeepsGoodbyeFlag(t *testing.T) {
+	tr := NewTracker()
+	if !tr.Touch("h1", []byte(`{"goodbye":true}`)) {
+		t.Fatal("Touch rejected goodbye payload")
+	}
+	if m, ok := tr.Get("h1"); !ok || !m.Goodbye {
+		t.Fatalf("Goodbye not kept: %+v ok=%v", m, ok)
+	}
+	tr.Touch("h1", []byte(`{"cpuPercent":1}`))
+	if m, _ := tr.Get("h1"); m.Goodbye {
+		t.Fatal("Goodbye must clear once the host reports again")
+	}
+}

@@ -13,6 +13,7 @@ import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./instances-view.ts";
 import "./alarm-view.ts";
+import "./alert-bar.ts";
 import "./health-view.ts";
 import "./scheduler-view.ts";
 import "./admin-view.ts";
@@ -286,7 +287,12 @@ class AppShell extends HTMLElement {
     content.setAttribute("data-role", "app-content");
     content.style.cssText = "flex:1 1 auto;min-height:0;position:relative;background:var(--omp-bg);";
 
-    this.replaceChildren(bar, banner, content);
+    // Globale Alarmleiste (Footer, Nutzerauftrag 2026-09-21) — auf jedem
+    // Tab sichtbar, blendet sich ohne Alarme selbst aus.
+    const alertBar = document.createElement("omp-alert-bar");
+    alertBar.addEventListener("omp-open-alarms", () => this.#switchTab("alarms"));
+
+    this.replaceChildren(bar, banner, content, alertBar);
     this.#bannerEl = banner;
     this.#contentEl = content;
   }

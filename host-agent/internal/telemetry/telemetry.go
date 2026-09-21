@@ -41,6 +41,13 @@ type Sample struct {
 	// konfigurierter/erreichbarer Index bedeutet "nicht gemessen", nicht
 	// "0% Auslastung" (gleiche Ehrlichkeitslinie wie Net oben).
 	Gpu *GpuSample `json:"gpu,omitempty"`
+	// Goodbye markiert die letzte Nachricht eines Host-Agents, der per
+	// SIGTERM/SIGINT ABSICHTLICH beendet wird (Nutzerauftrag 2026-09-21:
+	// ein Host, der ohne manuelles Beenden offline geht, ist ein
+	// kritischer Alarm — ein absichtlich beendeter nicht). Absturz,
+	// SIGKILL und Netzausfall senden es nicht; die übrigen Felder sind
+	// in dieser Nachricht bedeutungslos (Nullwerte).
+	Goodbye bool `json:"goodbye,omitempty"`
 }
 
 // NetSample ist die zuletzt gemessene Durchsatz-/Kapazitäts-

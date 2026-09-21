@@ -31,8 +31,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -246,7 +248,26 @@ func main() {
 
 	ticker := time.NewTicker(telemetryInterval)
 	defer ticker.Stop()
-	for range ticker.C {
+	// Absichtliches Beenden (SIGTERM/SIGINT) meldet sich per Goodbye-
+	// Nachricht ab, damit der Orchestrator es von einem Absturz/
+	// Netzausfall unterscheiden kann (telemetry.Sample.Goodbye).
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		select {
+		case <-ticker.C:
+		case sig := <-sigCh:
+			slog.Info("shutdown requested, sending goodbye", "signal", sig.String())
+			if payload, err := json.Marshal(telemetry.Sample{Goodbye: true}); err == nil {
+				if err := nc.Publish(subject, payload); err != nil {
+					slog.Warn("goodbye publish failed", "error", err)
+				}
+			}
+			if err := nc.FlushTimeout(2 * time.Second); err != nil {
+				slog.Warn("goodbye flush failed", "error", err)
+			}
+			return
+		}
 		// Take() blockiert kurz zur CPU%-Messung (s. telemetry.Take) —
 		// bewusst deutlich kürzer als telemetryInterval, damit der
 		// Tick-Takt nicht spürbar driftet.

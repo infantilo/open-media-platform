@@ -25663,3 +25663,43 @@ src-a/b/c/d je 3 Sender (vorher je Abfrage nur 10 der 12 sichtbar).
 Pakete wurden nicht angefasst/geprüft; Aufrufer außerhalb dieser beiden
 Clients (UI, weitere Nodes) nicht auf Direktabfragen der Query-API
 durchsucht.
+
+## 2026-09-21 (Nachtrag 239) — Offline-Hosts als kritischer Alarm + globale Alarmleiste (Footer)
+
+**Nutzerauftrag:** Ein Host, der offline geht, ohne absichtlich beendet
+worden zu sein, ist extrem kritisch und muss in einer globalen Alarmleiste
+(Footer) erscheinen.
+
+**Unterscheidung „absichtlich" vs. „unerwartet":** Der Host-Agent fängt
+SIGTERM/SIGINT ab und sendet als letzte Telemetrie `{"goodbye":true}`
+(`telemetry.Sample.Goodbye`, Orchestrator-Spiegel `hosts.Metrics.Goodbye`).
+Absturz, SIGKILL und Netzausfall senden es nicht. Die Goodbye-Nachricht
+wird nicht in die Metrik-Historie geschrieben.
+
+**Alarmregeln** (`ui/shell/alarms.ts`, gemeinsame Quelle für Alarme-Tab
+und Footer): Host offline (>15 s ohne Telemetrie) ohne Goodbye →
+**kritisch**; mit Goodbye → kein Alarm; nie Telemetrie seit
+Orchestrator-Start → **Warnung** (Tracker ist In-Memory: „unerwartet"
+ist dort nicht belegbar, z. B. verwaister DB-Eintrag oder Host, der vor
+einem Orchestrator-Neustart beendet wurde).
+
+**Footer:** neues `<omp-alert-bar>` (`ui/shell/alert-bar.ts`) am Ende der
+App-Shell, auf jedem Tab sichtbar, nur bei anstehenden Alarmen, kritisch
+pulsierend, Klick öffnet den Alarme-Tab. Poll alle 5 s (Offline entsteht
+zeitbasiert, kein SSE-Event) plus die bestehenden SSE-Trigger.
+
+**Bekannte Grenzen:** Goodbye wird nicht persistiert — nach einem
+Orchestrator-Neustart erscheint ein zuvor absichtlich beendeter Host als
+Warnung (nicht kritisch). Die Alarmleiste gibt es nur in der App-Shell,
+nicht in der separaten Console (`/console`). Kein Quittieren/Ausblenden
+einzelner Alarme.
+
+**Verifikation:** `go test ./internal/hosts` (neuer Test), `go vet
+host-agent`, `deno check`. Live (zwei simulierte Host-Agents, `make
+hosts`): SIGKILL auf Regie-Host-B → Footer „1 kritisch … OFFLINE —
+unerwartet ausgefallen"; SIGTERM auf Regie-Host-A → kein Alarm; alter
+Registry-Eintrag ohne Telemetrie → Warnung. Per CDP-Screenshot bestätigt.
+
+**Dateien:** `host-agent/main.go`, `host-agent/internal/telemetry/telemetry.go`,
+`orchestrator/main.go`, `orchestrator/internal/hosts/{hosts.go,tracker_test.go}`,
+`ui/shell/{alarms.ts,alert-bar.ts,alarm-view.ts,app-shell.ts}`.

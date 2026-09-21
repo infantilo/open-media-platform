@@ -21,138 +21,12 @@
 // zusätzliche zentrale Überblick über alle Alarmarten zusammen, keine
 // Ablösung der bestehenden Einzelanzeigen (docs/decisions.md,
 // 2026-07-17 Nachtrag 5, Abwägung dokumentiert).
-import { apiFetch, connectionMonitor } from "./connection.ts";
-
-interface LauncherInstance {
-  id: string;
-  type: string;
-  label: string;
-  crashed?: boolean;
-  crashMessage?: string;
-  restartCount?: number;
-}
-
-interface PlacementAdvice {
-  hostId: string;
-  hostLabel: string;
-  reason: string;
-  cpuPercent: number;
-  memPercent: number;
-  // netPercent fehlt (statt 0), wenn dieser Host keine NIC-Auslastung mit
-  // bekannter Link-Kapazität meldet (orchestrator/internal/placement.
-  // Advice.NetPercent-Doku, Nutzerauftrag 2026-09-02) — kein stiller
-  // 0-Wert, der wie "gemessen und leer" aussähe.
-  netPercent?: number;
-  instanceIds: string[];
-  suggestedHostId?: string;
-  suggestedHostLabel?: string;
-  detectedAt: string;
-}
-
-interface Workflow {
-  id: string;
-  name: string;
-  status: string;
-  error?: string;
-}
-
-type Severity = "critical" | "warning";
-
-interface Alarm {
-  severity: Severity;
-  source: string; // Kurzes Kategorie-Label, z. B. "Instanz", "Host", "Workflow"
-  title: string;
-  detail: string;
-}
-
-const SEVERITY_COLOR: Record<Severity, string> = {
-  critical: "var(--omp-error)",
-  warning: "var(--omp-cue)",
-};
-
-const SEVERITY_LABEL: Record<Severity, string> = {
-  critical: "Kritisch",
-  warning: "Warnung",
-};
+import { connectionMonitor } from "./connection.ts";
+import { fetchAlarms, REFRESH_EVENT_TYPES, SEVERITY_COLOR, SEVERITY_LABEL } from "./alarms.ts";
+import type { Alarm } from "./alarms.ts";
 
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 
-const REFRESH_EVENT_TYPES = new Set([
-  "instance.crashed",
-  "instance.restarted",
-  "placement.advice",
-  "workflow.updated",
-  "lost-events",
-]);
-
-// Nutzerauftrag 2026-09-02 ("netzwerkbandbreite ... auch relevant"):
-// "reason" kommt vom Backend als "+"-verbundene Liste über- schwellener
-// Dimensionen (placement.evaluateOnce) — generisch übersetzt statt fest
-// verdrahteter Kombinationen, sonst müsste jede neue Kombination (jetzt:
-// net, cpu+net, mem+net, cpu+mem+net) hier extra nachgezogen werden.
-const REASON_TOKEN_LABEL: Record<string, string> = { cpu: "CPU", mem: "RAM", net: "Netz" };
-
-function reasonLabel(reason: string): string {
-  return reason
-    .split("+")
-    .map((token) => REASON_TOKEN_LABEL[token] ?? token)
-    .join("+");
-}
-
-function buildAlarms(instances: LauncherInstance[], advice: PlacementAdvice[], workflows: Workflow[]): Alarm[] {
-  const alarms: Alarm[] = [];
-
-  for (const inst of instances) {
-    if (inst.crashed) {
-      alarms.push({
-        severity: "critical",
-        source: "Instanz",
-        title: inst.label,
-        detail: inst.crashMessage || "Prozess abgestürzt",
-      });
-    } else if (inst.restartCount) {
-      // Läuft gerade wieder, aber ist bereits mindestens einmal
-      // automatisch neu gestartet worden (K7-Teil-1) — eine flatternde
-      // Instanz ist ein eigener Alarm-würdiger Zustand, kein "ist ja
-      // wieder online" (§7.2-Prinzip).
-      alarms.push({
-        severity: "warning",
-        source: "Instanz",
-        title: inst.label,
-        detail: `${inst.restartCount}× automatisch neu gestartet`,
-      });
-    }
-  }
-
-  for (const a of advice) {
-    const target = a.suggestedHostId
-      ? `Ausweichhost: ${a.suggestedHostLabel ?? a.suggestedHostId}`
-      : "kein Ausweichhost frei";
-    const netPart = a.netPercent !== undefined ? ` / Netz ${a.netPercent.toFixed(0)}%` : "";
-    alarms.push({
-      severity: "warning",
-      source: "Host",
-      title: a.hostLabel,
-      detail: `überlastet (${reasonLabel(a.reason)}: CPU ${a.cpuPercent.toFixed(0)}% / RAM ${a.memPercent.toFixed(0)}%${netPart}), ${a.instanceIds.length} Instanz(en) betroffen — ${target}`,
-    });
-  }
-
-  for (const wf of workflows) {
-    if (wf.status === "failed") {
-      alarms.push({
-        severity: "critical",
-        source: "Workflow",
-        title: wf.name,
-        detail: wf.error || "gestartet fehlgeschlagen",
-      });
-    }
-  }
-
-  // Kritisch vor Warnung, sonst stabile Eingabereihenfolge (kein
-  // zusätzliches Sortierkriterium nötig — die drei Quellen liefern
-  // bereits eine für sich sinnvolle Reihenfolge).
-  return alarms.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
-}
 
 class AlarmView extends HTMLElement {
   #pollHandle: number | undefined;
@@ -185,15 +59,7 @@ class AlarmView extends HTMLElement {
 
   async #poll() {
     try {
-      const [instancesRes, adviceRes, workflowsRes] = await Promise.all([
-        apiFetch("/api/v1/instances"),
-        apiFetch("/api/v1/placement/advice"),
-        apiFetch("/api/v1/workflows"),
-      ]);
-      const instances = instancesRes.ok ? ((await instancesRes.json()) as LauncherInstance[]) : [];
-      const advice = adviceRes.ok ? ((await adviceRes.json()) as PlacementAdvice[]) : [];
-      const workflows = workflowsRes.ok ? ((await workflowsRes.json()) as Workflow[]) : [];
-      this.#render(buildAlarms(instances, advice, workflows));
+      this.#render(await fetchAlarms());
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }

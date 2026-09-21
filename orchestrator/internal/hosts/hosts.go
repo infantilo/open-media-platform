@@ -55,6 +55,11 @@ type Metrics struct {
 	// `nvidia-smi` dort nichts liefern konnte — Spiegelbild von
 	// host-agent/internal/telemetry.GpuSample.
 	Gpu *GpuMetrics `json:"gpu,omitempty"`
+	// Goodbye: der Host-Agent hat sich per SIGTERM/SIGINT absichtlich
+	// abgemeldet (Spiegelbild von host-agent/internal/telemetry.Sample.
+	// Goodbye). Ein danach ausbleibender Telemetrie-Strom ist kein Alarm;
+	// ein Ausbleiben OHNE dieses Flag ist ein kritischer Alarm.
+	Goodbye bool `json:"goodbye,omitempty"`
 }
 
 // GpuMetrics ist die zuletzt gemessene Auslastungs-/Speicher-
