@@ -8,7 +8,7 @@
 // (kein SSE-Event beim Ausbleiben von Telemetrie).
 import { connectionMonitor } from "./connection.ts";
 import { fetchAlarms, REFRESH_EVENT_TYPES, SEVERITY_COLOR } from "./alarms.ts";
-import type { Alarm } from "./alarms.ts";
+import type { AlarmState } from "./alarms.ts";
 
 const POLL_INTERVAL_MS = 5000;
 const MAX_LISTED = 3;
@@ -53,36 +53,56 @@ class AlertBar extends HTMLElement {
     }
   }
 
-  #render(alarms: Alarm[]) {
-    if (alarms.length === 0) {
+  // Nachtrag 243: nur AKTIVE (weder quittierte noch maskierte) Alarme
+  // färben/pulsieren die Leiste. Quittierte bleiben sichtbar, aber
+  // gedämpft; maskierte erscheinen nur als dezente Zahl. Sind alle
+  // Alarme maskiert, verschwindet die Leiste ganz.
+  #render(alarms: AlarmState[]) {
+    const active = alarms.filter((a) => !a.ack);
+    const acked = alarms.filter((a) => a.ack?.mode === "ack");
+    const maskedCount = alarms.filter((a) => a.ack?.mode === "mask").length;
+    if (active.length === 0 && acked.length === 0) {
       this.style.display = "none";
       this.replaceChildren();
       return;
     }
-    const critical = alarms.filter((a) => a.severity === "critical");
+    const critical = active.filter((a) => a.severity === "critical");
+    const quiet = active.length === 0;
     const worst = critical.length > 0 ? "critical" : "warning";
-    const color = SEVERITY_COLOR[worst];
+    const bg = quiet ? "var(--omp-surface-raised)" : SEVERITY_COLOR[worst];
     this.style.cssText =
       "display:flex;align-items:center;gap:var(--omp-space-3);flex:0 0 auto;cursor:pointer;" +
       "padding:var(--omp-space-1) var(--omp-space-3);font-family:var(--omp-font);" +
-      `font-size:var(--omp-font-size-sm);font-weight:600;color:#fff;background:${color};` +
-      (worst === "critical" ? "animation:omp-pulse 1.2s ease-in-out infinite;" : "");
+      `font-size:var(--omp-font-size-sm);font-weight:600;color:${quiet ? "var(--omp-text-dim)" : "#fff"};background:${bg};` +
+      (quiet ? "border-top:1px solid var(--omp-border);" : "") +
+      (!quiet && worst === "critical" ? "animation:omp-pulse 1.2s ease-in-out infinite;" : "");
     this.title = "Klicken: Alarme-Tab öffnen";
 
+    const parts: string[] = [];
+    if (critical.length > 0) parts.push(`${critical.length} kritisch`);
+    if (active.length > critical.length) parts.push(`${active.length - critical.length} Warnung(en)`);
     const summary = document.createElement("span");
     summary.style.whiteSpace = "nowrap";
-    summary.textContent =
-      `⚠ ${critical.length > 0 ? `${critical.length} kritisch` : ""}` +
-      `${critical.length > 0 && alarms.length > critical.length ? ", " : ""}` +
-      `${alarms.length > critical.length ? `${alarms.length - critical.length} Warnung(en)` : ""}`;
+    summary.textContent = quiet ? `✓ ${acked.length} quittiert` : `⚠ ${parts.join(", ")}`;
 
     const list = document.createElement("span");
-    list.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;";
-    const shown = alarms.slice(0, MAX_LISTED).map((a) => `${a.source} ${a.title}: ${a.detail}`);
-    const more = alarms.length > MAX_LISTED ? ` (+${alarms.length - MAX_LISTED} weitere)` : "";
+    list.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;flex:1 1 auto;";
+    const shownAlarms = active.length > 0 ? active : acked;
+    const shown = shownAlarms.slice(0, MAX_LISTED).map((a) => `${a.source} ${a.title}: ${a.detail}`);
+    const more = shownAlarms.length > MAX_LISTED ? ` (+${shownAlarms.length - MAX_LISTED} weitere)` : "";
     list.textContent = shown.join("  •  ") + more;
 
-    this.replaceChildren(summary, list);
+    const extras: string[] = [];
+    if (!quiet && acked.length > 0) extras.push(`${acked.length} quittiert`);
+    if (maskedCount > 0) extras.push(`${maskedCount} maskiert`);
+    const children: HTMLElement[] = [summary, list];
+    if (extras.length > 0) {
+      const note = document.createElement("span");
+      note.style.cssText = "white-space:nowrap;font-weight:400;opacity:0.75;font-size:var(--omp-font-size-xs);";
+      note.textContent = extras.join(" · ");
+      children.push(note);
+    }
+    this.replaceChildren(...children);
   }
 }
 

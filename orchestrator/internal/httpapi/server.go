@@ -214,7 +214,11 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger, opts ...HandlerOption) http.Handler {
+	var options handlerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	g := &authGate{auth: authSvc, authz: authzStore, audit: auditLogger, nodes: nodes, workflows: workflowSvc}
 
 	// Kapitel 13 Teil 3 (docs/END-GOAL-FEATURES.md §13.4) — braucht
@@ -241,6 +245,16 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
 	// erwartete Absicherung, nicht Anwendungs-Auth) — s. metrics.go.
 	mux.HandleFunc("GET /metrics", handleMetrics(nodes, events, launcherSvc, reqCounters))
+
+	// Nachtrag 243: geteilter Quittier-/Maskierstand der Alarme. Lesen für
+	// jeden authentifizierten Nutzer, Ändern braucht "operate" (globaler
+	// Verb wie Start/Stop-nahe Bedienung; der Audit-Eintrag entsteht in
+	// requireVerbGlobal).
+	if options.alarmAcks != nil {
+		mux.HandleFunc("GET /api/v1/alarms/acks", g.requireAuth(handleListAlarmAcks(options.alarmAcks)))
+		mux.HandleFunc("PUT /api/v1/alarms/acks", g.requireVerbGlobal(authz.VerbOperate, handlePutAlarmAck(options.alarmAcks, events)))
+		mux.HandleFunc("DELETE /api/v1/alarms/acks", g.requireVerbGlobal(authz.VerbOperate, handleDeleteAlarmAck(options.alarmAcks, events)))
+	}
 
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout))
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))

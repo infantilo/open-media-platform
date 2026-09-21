@@ -25883,3 +25883,72 @@ setzt `connectionState` auf `none` und stoppt die Schreibvorgänge.
 
 **Dateien:** `nodes/omp-webrtc-gateway/{Cargo.toml,src/main.rs,src/pipeline.rs,src/camera.html}`,
 `nodes/Cargo.lock`, `deploy/dev/Caddyfile`, `Makefile`.
+
+## 2026-09-21 (Nachtrag 243) — Alarme quittierbar und maskierbar (Fingerprint-basiert, serverseitig geteilt)
+
+**Nutzerauftrag:** Alarme müssen quittierbar und/oder maskierbar sein —
+„markierbar bis Wiederauftreten oder Statusänderung".
+
+**Modell:** Jeder Alarm hat einen stabilen `key` (Objekt: `host:<id>:offline`,
+`instance:<id>:crashed|restarted`, `placement:<hostId>`, `workflow:<id>:failed`)
+und einen `fingerprint` (konkreter Zustand: Host = Severity + letztes
+Lebenszeichen; Instanz = crashMessage + restartCount; Placement = Grund +
+betroffene Instanzen; Workflow = Fehlertext + `updatedAt`). Eine Quittierung/
+Maskierung gilt nur, solange Key **und** Fingerprint übereinstimmen und sie
+nicht abgelaufen ist — kehrt ein Host zurück und fällt erneut aus, eskaliert
+warning→critical oder stürzt eine Instanz erneut ab, ändert sich der
+Fingerprint und der Alarm ist automatisch wieder laut, ohne dass die
+Zwischenphase beobachtet werden müsste.
+
+**Zwei Modi:** *Quittieren* = gesehen; Alarm bleibt sichtbar (Alarme-Tab
+„Quittiert", Footer gedämpft), pulsiert/zählt aber nicht mehr als laut.
+*Maskieren* = ausgeblendet aus Footer/Zähler (nur dezent „N maskiert"),
+im Alarme-Tab einklappbar unter „Maskiert" sichtbar und mit „Wiederherstellen"
+zurückholbar; Dauer wählbar (bis Änderung / 1 h / 8 h). Optionaler Kommentar.
+Sind alle Alarme maskiert, verschwindet der Footer ganz; nur quittierte →
+ruhige graue Leiste „✓ N quittiert".
+
+**Persistenz/API (Postgres, Muster wie layouts/audit):** Migration
+`0017_alarm_acks.sql`, Paket `orchestrator/internal/alarmacks` (Store),
+Handler `httpapi/alarm_handlers.go`: `GET /api/v1/alarms/acks` (auth),
+`PUT` und `DELETE ?key=…` (Verb `operate`, global; Nutzername + Zeitstempel
+stehen im Eintrag, Audit-Eintrag entsteht über `requireVerbGlobal`).
+Änderungen senden das SSE-Event `alarm.ack.changed` (in `REFRESH_EVENT_TYPES`),
+Footer und Tab aktualisieren sofort. `NewHandler` bekam dafür ein variadisches
+`opts ...HandlerOption` (`WithAlarmAckStore`), damit die ~25 bestehenden
+Testaufrufer unverändert bleiben. Aufräumen: `List()` löscht abgelaufene
+Einträge und solche älter als 30 Tage.
+
+**Live gefundener Designfehler (behoben):** die ersten Buttons adressierten
+den Alarm per Array-Index in `#states`; ein Refresh zwischen Rendern und
+Klick hätte den falschen Alarm quittieren können. Jetzt tragen die Zeilen
+Key + Fingerprint (URL-kodiert) im DOM — quittiert wird exakt der Zustand,
+den der Nutzer sah. Im ersten Klicktest gab es außerdem einen zusätzlichen,
+nicht erklärten `PUT` (Maskierung eines anderen Alarms, 2 s nach meinem
+Klick, im Audit-Log sichtbar); mit dem korrigierten Code trat er in einem
+Wiederholungslauf nicht mehr auf (genau ein `PUT`), die Ursache ist aber
+nicht bewiesen.
+
+**Verifikation:** `go test ./internal/httpapi ./internal/alarmacks` (Store-
+Tests gegen die abgeleitete `_test`-DB via `dbtest.Open`, nie die Dev-DB);
+`deno test ui/shell/alarms_test.ts` (5 Tests: Fingerprint-Semantik,
+Ablauf, Eskalation); `deno check`. Live per echtem CDP-Klick (zwei simulierte
+Host-Agents, SIGKILL auf Host-B): Quittieren mit Kommentar → Footer nicht
+mehr pulsierend, „1 quittiert"; Wiederherstellen → wieder kritisch und
+pulsierend; Maskieren (1 h) → Footer „1 maskiert", Tab „Maskiert (1)" mit
+Wer/Wann/Bis; Host-B kam zurück und fiel erneut aus → eine Maskierung mit
+dem alten Fingerprint wurde ignoriert, Footer wieder kritisch.
+
+**Nicht getestet / offen:** Rechteprüfung mit einem Nutzer OHNE `operate`
+(nur Unit-Test des Handlers, nicht der Middleware live; die UI zeigt bei
+Ablehnung eine Fehlermeldung); Mehrbenutzer-Synchronisation über zwei
+Browser gleichzeitig (SSE-Event ist verdrahtet, nicht mit zwei Clients
+geprüft); Ack-Einträge für längst verschwundene Alarme bleiben bis zum
+Ablauf/30 Tagen stehen (kein Abgleich mit aktiven Alarmen, weil diese in
+der UI abgeleitet werden); die Console (`/console`) hat weiterhin keine
+Alarmleiste.
+
+**Dateien:** `orchestrator/internal/alarmacks/{store.go,store_test.go}`,
+`orchestrator/internal/db/migrations/0017_alarm_acks.sql`,
+`orchestrator/internal/httpapi/{alarm_handlers.go,alarm_handlers_test.go,server.go}`,
+`orchestrator/main.go`, `ui/shell/{alarms.ts,alarms_test.ts,alarm-view.ts,alert-bar.ts}`.
