@@ -89,6 +89,15 @@ const HOST_ZONE_MARGIN = 24;
 // NATS-Zyklen nicht sofort als offline zu werten, aber knapp genug,
 // dass ein tatsächlich abgeschalteter Host zeitnah als offline zeigt.
 const HOST_ONLINE_THRESHOLD_MS = 15000;
+// Nutzerauftrag 2026-09-21 ("aktueller Status ... muss sowohl im
+// floweditor in den einzelnen host bordern, als auch in den source
+// dropdowns beim starten eines microservices deutlich sichtbar sein"):
+// eine einzige Online-Prüfung für #buildHostZoneLayer (Zonen-Rahmen)
+// UND #renderPaletteList (Zielhost-Dropdown), statt die
+// HOST_ONLINE_THRESHOLD_MS-Vergleichslogik zweimal zu duplizieren.
+function isHostOnline(metrics?: HostMetrics): boolean {
+  return !!metrics && Date.now() - Date.parse(metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
+}
 // Kapitel 13 Teil 2 (docs/END-GOAL-FEATURES.md §13.4): identischer
 // Transport-URN-Wert wie nodes/omp-node-sdk/src/is04.rs::TRANSPORT_MXL
 // (keine gemeinsame Konstante über die Sprachgrenze hinweg möglich) —
@@ -3265,6 +3274,15 @@ export class FlowCanvas extends HTMLElement {
       g.setAttribute("data-host-id", zone.id);
       g.setAttribute("transform", `translate(${x},0)`);
 
+      // Nutzerauftrag 2026-09-21: der Zonen-Rahmen selbst (nicht nur der
+      // kleine Kopf-Punkt weiter unten) muss einen offline-Host deutlich
+      // zeigen — sonst fällt der Status erst beim genauen Hinsehen im
+      // Kopf auf. "local"/"unassigned"/"mixed" sind keine echten Hosts
+      // (s. Doku beim Punkt weiter unten) und bleiben daher immer im
+      // neutralen Rahmen.
+      const isRealHost = zone.id !== "local" && zone.id !== "unassigned" && zone.id !== "mixed";
+      const hostOnline = !isRealHost || isHostOnline(zone.metrics);
+
       const rect = document.createElementNS(SVG_NS, "rect");
       rect.setAttribute("x", "0");
       rect.setAttribute("y", "0");
@@ -3272,8 +3290,8 @@ export class FlowCanvas extends HTMLElement {
       rect.setAttribute("height", String(bottom));
       rect.setAttribute("rx", "6");
       rect.setAttribute("fill", "#26282b");
-      rect.setAttribute("stroke", "#3a3d42");
-      rect.setAttribute("stroke-width", "1");
+      rect.setAttribute("stroke", hostOnline ? "#3a3d42" : "#c0392b");
+      rect.setAttribute("stroke-width", hostOnline ? "1" : "2");
       g.appendChild(rect);
 
       const header = document.createElementNS(SVG_NS, "rect");
@@ -3282,7 +3300,7 @@ export class FlowCanvas extends HTMLElement {
       header.setAttribute("width", String(laneWidth));
       header.setAttribute("height", String(HOST_ZONE_HEADER_HEIGHT));
       header.setAttribute("rx", "6");
-      header.setAttribute("fill", "#2f3237");
+      header.setAttribute("fill", hostOnline ? "#2f3237" : "#3a2323");
       g.appendChild(header);
 
       // Online-Punkt (§13.3) nur für echte Hosts (Metriken kommen per
@@ -3290,17 +3308,26 @@ export class FlowCanvas extends HTMLElement {
       // lokale Zone hat keinen eigenen Host-Agent (der Orchestrator
       // selbst registriert sich nie als Host, s. §13.1), "Unzugeordnet"
       // und "Gruppen über mehrere Hosts" (Nutzerfund 2026-08-12) sind
-      // beide keine echten Hosts, also kein Punkt für alle drei.
+      // beide keine echten Hosts, also kein Punkt für alle drei. Offline
+      // ist jetzt Rot statt dem vorherigen neutralen Grau (Nutzerauftrag
+      // 2026-09-21: reines Grau fiel gegen den dunklen Zonen-Hintergrund
+      // kaum auf und war von "keine Metriken empfangen" nicht zu
+      // unterscheiden).
       let labelX = 10;
-      if (zone.id !== "local" && zone.id !== "unassigned" && zone.id !== "mixed") {
-        const online = !!zone.metrics &&
-          Date.now() - Date.parse(zone.metrics.receivedAt) < HOST_ONLINE_THRESHOLD_MS;
+      if (isRealHost) {
         const dot = document.createElementNS(SVG_NS, "text");
         dot.setAttribute("x", "10");
         dot.setAttribute("y", "18");
-        dot.setAttribute("fill", online ? "#4caf50" : "#777");
+        dot.setAttribute("fill", hostOnline ? "#4caf50" : "#e05252");
         dot.setAttribute("font-size", "12");
         dot.textContent = "●";
+        const dotTitle = document.createElementNS(SVG_NS, "title");
+        dotTitle.textContent = hostOnline
+          ? "Host online"
+          : zone.metrics
+            ? `Host offline — zuletzt gesehen ${new Date(zone.metrics.receivedAt).toLocaleTimeString()}`
+            : "Host offline — keine Telemetrie empfangen";
+        dot.appendChild(dotTitle);
         g.appendChild(dot);
         labelX = 22;
       }
@@ -3318,7 +3345,22 @@ export class FlowCanvas extends HTMLElement {
       }
       g.appendChild(label);
 
-      if (zone.metrics && !collapsed) {
+      // Nutzerauftrag 2026-09-21: ein offline echter Host zeigt hier
+      // "Offline" statt (veralteter oder fehlender) CPU/RAM-Zahlen —
+      // sonst blieb die Zeile bei einem Host, der noch nie Telemetrie
+      // gesendet hat, einfach leer und der Status war nur am kleinen
+      // Kopf-Punkt erkennbar.
+      if (isRealHost && !hostOnline && !collapsed) {
+        const offlineText = document.createElementNS(SVG_NS, "text");
+        offlineText.setAttribute("x", String(labelX));
+        offlineText.setAttribute("y", "34");
+        offlineText.setAttribute("fill", "#e05252");
+        offlineText.setAttribute("font-size", "10");
+        offlineText.textContent = zone.metrics
+          ? `Offline · zuletzt ${new Date(zone.metrics.receivedAt).toLocaleTimeString()}`
+          : "Offline · keine Telemetrie";
+        g.appendChild(offlineText);
+      } else if (zone.metrics && !collapsed) {
         const metricsText = document.createElementNS(SVG_NS, "text");
         metricsText.setAttribute("x", String(labelX));
         metricsText.setAttribute("y", "34");
@@ -5532,9 +5574,33 @@ export class FlowCanvas extends HTMLElement {
         for (const host of hosts) {
           const opt = document.createElement("option");
           opt.value = host.id;
-          opt.textContent = host.label;
+          // Nutzerauftrag 2026-09-21: der Host-Status muss auch hier
+          // direkt sichtbar sein, nicht erst nach einem Umweg über die
+          // Host-Ansicht des Flow-Editors — Text-Präfix statt reiner
+          // Punktfarbe, weil <option>-Styling browserabhängig ist und
+          // beim geschlossenen <select> ohnehin nicht mitgerendert wird.
+          const online = isHostOnline(host.metrics);
+          opt.textContent = online ? `● ${host.label}` : `○ ${host.label} (offline)`;
+          opt.style.color = online ? "" : "#e05252";
+          opt.title = online
+            ? "Host online"
+            : host.metrics
+              ? `Host offline — zuletzt gesehen ${new Date(host.metrics.receivedAt).toLocaleTimeString()}`
+              : "Host offline — keine Telemetrie empfangen";
           hostSelect.appendChild(opt);
         }
+        // Status auch am GESCHLOSSENEN Dropdown erkennbar machen (der
+        // Options-Präfix oben ist nur beim Aufklappen sichtbar) — greift
+        // sowohl initial (Default bleibt "(lokal)", also nie offline) als
+        // auch nach jeder manuellen Auswahl.
+        const applyHostSelectStyle = () => {
+          const selected = hosts.find((h) => h.id === hostSelect!.value);
+          const offline = !!selected && !isHostOnline(selected.metrics);
+          hostSelect!.style.color = offline ? "#e05252" : "";
+          hostSelect!.style.borderColor = offline ? "#c0392b" : "";
+        };
+        hostSelect.addEventListener("change", applyHostSelectStyle);
+        applyHostSelectStyle();
         row.appendChild(hostSelect);
       }
 
