@@ -5,6 +5,7 @@
 package eventbus
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"log/slog"
 	"strings"
@@ -40,9 +41,13 @@ const (
 // initial nicht erreichbares NATS ist nicht fatal (RetryOnFailedConnect):
 // der Orchestrator läuft weiter und verbindet sich, sobald NATS
 // erreichbar ist — konsistent mit der Resilienz-Linie aus
-// internal/registry.Poller.
-func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetrics func(hostID string, payload []byte)) (*nats.Conn, error) {
-	nc, err := nats.Connect(url,
+// internal/registry.Poller. tlsConfig darf nil sein (Klartext-Default,
+// ARCHITECTURE.md §20.4: OMP_NATS_TLS_ENABLED bleibt aus) — nur bei
+// gesetztem Config wird nats.Secure() der Options-Liste hinzugefügt,
+// damit ein weiterhin auf Klartext laufender NATS-Server (der normale
+// Dev-Fall) unverändert funktioniert.
+func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetrics func(hostID string, payload []byte), tlsConfig *tls.Config) (*nats.Conn, error) {
+	opts := []nats.Option{
 		nats.Name("openmediaplatform-orchestrator"),
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
@@ -52,7 +57,11 @@ func Connect(url string, hub *sse.Hub, onHealth func(nodeID string), onHostMetri
 		nats.ReconnectHandler(func(nc *nats.Conn) {
 			slog.Info("nats reconnected", "url", nc.ConnectedUrl())
 		}),
-	)
+	}
+	if tlsConfig != nil {
+		opts = append(opts, nats.Secure(tlsConfig))
+	}
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -234,6 +234,22 @@ func main() {
 	hostMetricsTracker := hosts.NewTracker()
 	hostHistory := hosts.NewHistory()
 
+	// ARCHITECTURE.md §20.4 Restlücke "NATS-Verschlüsselung" — eigenes
+	// Zertifikat (nats-client.{crt,key}, s. `make nats-tls-up`-Doku im
+	// Makefile), NICHT cfg.MTLSCertFile (andere Gegenstelle/SANs).
+	// natsTLSConfig bleibt nil, solange OMP_NATS_TLS_ENABLED aus ist —
+	// eventbus.Connect() nutzt dann unverändert Klartext.
+	natsTLSConfig, err := mtls.ClientTLSConfig(mtls.Config{
+		Enabled:  cfg.NatsTLSEnabled,
+		CertFile: cfg.NatsTLSCertFile,
+		KeyFile:  cfg.NatsTLSKeyFile,
+		CAFile:   cfg.NatsTLSCAFile,
+	})
+	if err != nil {
+		slog.Error("nats tls config failed", "error", err)
+		os.Exit(1)
+	}
+
 	nc, err := eventbus.Connect(cfg.NatsURL, hub, healthTracker.Touch, func(hostID string, payload []byte) {
 		if !hostMetricsTracker.Touch(hostID, payload) {
 			slog.Warn("host metrics payload not parsable, dropped", "host_id", hostID)
@@ -245,7 +261,7 @@ func main() {
 		if m, ok := hostMetricsTracker.Get(hostID); ok {
 			hostHistory.Record(hostID, m)
 		}
-	})
+	}, natsTLSConfig)
 	if err != nil {
 		slog.Error("nats connect failed, continuing without event bus", "error", err)
 	} else {

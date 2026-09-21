@@ -9,19 +9,23 @@
 // **Scope-Entscheidungen** (dokumentiert, s. docs/decisions.md D6 Teil
 // 1/2): kein mTLS-Zertifikats-Bootstrap über step-ca (§18.3 Punkt 3) —
 // das Bootstrap-Token bleibt die Zugriffskontrolle für die
-// Registrierung; Telemetrie **und** Kommandokanal laufen danach
-// unverschlüsselt/unsigniert über NATS, wie der bestehende
-// Node-Health-Kanal (gleicher Sicherheitsstand wie der Rest des Stacks
-// ohne aktiviertes mTLS). Die eigentliche Sicherheitsgrenze für den
+// Registrierung. Die eigentliche Sicherheitsgrenze für den
 // Kommandokanal ist der **agent-lokale Katalog** (internal/catalog):
 // ein Start-Kommando kann nur einen dort freigegebenen Node-Typ
 // auslösen, nie einen beliebigen Befehl — dieselbe Grenze wie beim
 // lokalen Orchestrator-Launcher (C8), nur pro Host statt zentral.
+//
+// Telemetrie/Kommandokanal (NATS) selbst können seit ARCHITECTURE.md
+// §20.4 optional per mTLS verschlüsselt werden (OMP_NATS_TLS_ENABLED,
+// s. loadNatsTLSConfig unten + `make nats-tls-up`) — Default weiterhin
+// **aus** (Klartext wie zuvor), additiv wie überall sonst im Projekt.
 package main
 
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -52,6 +56,46 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// loadNatsTLSConfig baut die *tls.Config für eine mTLS-gesicherte
+// NATS-Verbindung (ARCHITECTURE.md §20.4 Restlücke "NATS-
+// Verschlüsselung") — liefert (nil, nil), solange
+// OMP_NATS_TLS_ENABLED nicht gesetzt ist, dann verbindet nats.Connect
+// unten unverändert per Klartext. Eigene, kleine Kopie von
+// orchestrator/internal/mtls.ClientTLSConfig statt eines Imports über
+// die Modulgrenze hinweg (host-agent ist ein eigenständiges Go-Modul,
+// gleiches "bewusste Duplikation"-Muster wie defaultNatsURL oben und
+// wie orchestrator/internal/mtls' eigene Moduldoku es für den
+// Node-seitigen Fall bereits beschreibt). Zertifikat ist bewusst EIN
+// geteiltes "nats-client"-Zertifikat für Orchestrator/host-agent/jede
+// Rust-Node-Instanz (Scope-Vereinfachung, keine echte Pro-Instanz-
+// Identität), nicht ein host-agent-eigenes.
+func loadNatsTLSConfig() (*tls.Config, error) {
+	if enabled, _ := strconv.ParseBool(envOr("OMP_NATS_TLS_ENABLED", "false")); !enabled {
+		return nil, nil
+	}
+	certFile := envOr("OMP_NATS_TLS_CERT_FILE", "../.run/mtls/nats-client.crt")
+	keyFile := envOr("OMP_NATS_TLS_KEY_FILE", "../.run/mtls/nats-client.key")
+	caFile := envOr("OMP_NATS_TLS_CA_FILE", "../.run/mtls/root_ca.crt")
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("nats tls: load client cert/key: %w", err)
+	}
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("nats tls: read CA file: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("nats tls: no valid certificates found in %s", caFile)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		RootCAs:      caPool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 func main() {
@@ -139,11 +183,20 @@ func main() {
 		slog.Info("already registered, resuming telemetry", "host_id", st.HostID, "label", st.Label)
 	}
 
-	nc, err := nats.Connect(natsURL,
+	natsTLSConfig, err := loadNatsTLSConfig()
+	if err != nil {
+		slog.Error("nats tls config failed", "error", err)
+		os.Exit(1)
+	}
+	natsOpts := []nats.Option{
 		nats.Name("omp-host-agent"),
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1),
-	)
+	}
+	if natsTLSConfig != nil {
+		natsOpts = append(natsOpts, nats.Secure(natsTLSConfig))
+	}
+	nc, err := nats.Connect(natsURL, natsOpts...)
 	if err != nil {
 		slog.Error("nats connect failed", "error", err)
 		os.Exit(1)

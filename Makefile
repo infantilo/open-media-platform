@@ -1,4 +1,4 @@
-.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down backup restore proxy-up proxy-down soak
+.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent supervisor
 
@@ -354,6 +354,8 @@ mtls-issue-certs:
 	@./deploy/dev/mtls-issue-cert.sh orchestrator .run/mtls/orchestrator.crt .run/mtls/orchestrator.key
 	@./deploy/dev/mtls-issue-cert.sh mock-node .run/mtls/mock-node.crt .run/mtls/mock-node.key localhost 127.0.0.1
 	@./deploy/dev/mtls-issue-cert.sh nmos-registry .run/mtls/nmos-registry.crt .run/mtls/nmos-registry.key localhost 127.0.0.1
+	@./deploy/dev/mtls-issue-cert.sh nats-server .run/mtls/nats-server.crt .run/mtls/nats-server.key localhost 127.0.0.1
+	@./deploy/dev/mtls-issue-cert.sh nats-client .run/mtls/nats-client.crt .run/mtls/nats-client.key
 
 # NMOS-Registry mit BCP-003-01-Transport-TLS statt Klartext (UMSETZUNG.md
 # D16) — bewusst NICHT Teil von `make up`, gleiches Opt-in-Muster wie
@@ -383,6 +385,53 @@ nmos-registry-tls-down:
 	-podman stop omp-nmos-registry
 	-podman rm omp-nmos-registry
 	@echo "Klartext-Registry wieder mit 'make up' starten."
+
+# NATS mit Client-TLS (mTLS, ARCHITECTURE.md §20.4 Restlücke "NATS-
+# Verschlüsselung") statt Klartext — gleiches Opt-in-Muster wie
+# nmos-registry-tls-up: der normale Dev-Workflow ('make up', Klartext)
+# bleibt unverändert. Braucht 'make mtls-up' + 'make mtls-issue-certs'
+# zuerst (liefert .run/mtls/nats-{server,client}.{crt,key} +
+# root_ca.crt). Nur der CLIENT-Port (4222/4223/4224) bekommt TLS —
+# `--tls`/`--tlsverify` ohne zusätzliche `cluster: {tls: ...}`-Config
+# lässt die Drei-Knoten-Cluster-Routen (6222-6224, `--cluster`/
+# `--routes`) unverändert Klartext; Cluster-Route-TLS ist eine eigene,
+# hier bewusst nicht mitgelöste Entscheidung (die drei Knoten laufen
+# ohnehin alle auf demselben Host über 127.0.0.1, kein Netzwerk-Hop).
+# `--tlsverify` verlangt zusätzlich ein gültiges Client-Zertifikat (also
+# echtes mTLS, nicht nur Server-TLS) — Orchestrator/host-agent/jede
+# Rust-Node-Instanz nutzen dafür EIN gemeinsames `nats-client`-
+# Zertifikat (Scope-Vereinfachung: eine geteilte Fleet-Identität statt
+# echter Pro-Instanz-Zertifikate, s. ARCHITECTURE.md §20.4).
+nats-tls-up:
+	@[ -f .run/mtls/nats-server.crt ] || (echo "NATS-Zertifikat fehlt — zuerst 'make mtls-up' und 'make mtls-issue-certs' ausführen." >&2; exit 1)
+	-podman stop omp-nats-1 omp-nats-2 omp-nats-3
+	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
+	podman run -d --name omp-nats-1 --restart=always --network=host \
+		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
+		docker.io/library/nats:latest -js --server_name omp-nats-1 -p 4222 -m 8222 \
+		--cluster_name OMP --cluster nats://127.0.0.1:6222 \
+		--routes nats://127.0.0.1:6223,nats://127.0.0.1:6224 \
+		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
+	podman run -d --name omp-nats-2 --restart=always --network=host \
+		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
+		docker.io/library/nats:latest -js --server_name omp-nats-2 -p 4223 -m 8223 \
+		--cluster_name OMP --cluster nats://127.0.0.1:6223 \
+		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6224 \
+		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
+	podman run -d --name omp-nats-3 --restart=always --network=host \
+		-v $(CURDIR)/.run/mtls:/certs:ro,Z \
+		docker.io/library/nats:latest -js --server_name omp-nats-3 -p 4224 -m 8224 \
+		--cluster_name OMP --cluster nats://127.0.0.1:6224 \
+		--routes nats://127.0.0.1:6222,nats://127.0.0.1:6223 \
+		--tls --tlscert=/certs/nats-server.crt --tlskey=/certs/nats-server.key --tlscacert=/certs/root_ca.crt --tlsverify
+	@echo "NATS jetzt per mTLS erreichbar (4222-4224). Orchestrator/host-agent/Nodes brauchen OMP_NATS_TLS_ENABLED=true + _CERT_FILE/_KEY_FILE/_CA_FILE (s. ARCHITECTURE.md §20.4)."
+
+# Zurück zu Klartext-NATS — gleiche Container-Namen, per 'make up'
+# erneut ohne TLS-Flags gestartet.
+nats-tls-down:
+	-podman stop omp-nats-1 omp-nats-2 omp-nats-3
+	-podman rm omp-nats-1 omp-nats-2 omp-nats-3
+	@echo "Klartext-NATS wieder mit 'make up' starten."
 
 # Caddy-Reverse-Proxy mit TLS-Terminierung (S7, docs/REVIEW-2026-07-17-
 # SKALIERUNG-24-7.md) — bewusst NICHT Teil von `make up`: Remote-Zugriff

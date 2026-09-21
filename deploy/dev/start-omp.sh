@@ -96,6 +96,13 @@ export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
 export OMP_MTLS_CERT_FILE="${OMP_MTLS_CERT_FILE:-$ROOT_DIR/.run/mtls/orchestrator.crt}"
 export OMP_MTLS_KEY_FILE="${OMP_MTLS_KEY_FILE:-$ROOT_DIR/.run/mtls/orchestrator.key}"
 export OMP_MTLS_CA_FILE="${OMP_MTLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
+# NATS-TLS (ARCHITECTURE.md §20.4) ist per Default ebenfalls aus (OMP_NATS_
+# TLS_ENABLED unten nur gesetzt, falls schon in der aufrufenden Shell
+# exportiert), gleiches Muster wie OMP_MTLS_* oben — eigenes Zertifikat
+# (nats-client statt orchestrator), andere Gegenstelle (`make nats-tls-up`).
+export OMP_NATS_TLS_CERT_FILE="${OMP_NATS_TLS_CERT_FILE:-$ROOT_DIR/.run/mtls/nats-client.crt}"
+export OMP_NATS_TLS_KEY_FILE="${OMP_NATS_TLS_KEY_FILE:-$ROOT_DIR/.run/mtls/nats-client.key}"
+export OMP_NATS_TLS_CA_FILE="${OMP_NATS_TLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
 # >> statt > (Nutzerfund 2026-08-24, Debugging-Sitzung zu einem
 # Multiviewer-Bug): ein einfaches `>` leert die Log-Datei bei JEDEM
 # `make start` komplett — verlor dabei wiederholt die einzige Spur eines

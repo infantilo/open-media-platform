@@ -95,6 +95,25 @@ type Config struct {
 	// Dev-CA beide Zertifikate ausstellt (deploy/dev/mtls-issue-cert.sh).
 	RegistryTLSEnabled bool
 	RegistryTLSCAFile  string
+	// NatsTLSEnabled schaltet mTLS für die NATS-Verbindung
+	// (Orchestrator→Event-Bus) ein (ARCHITECTURE.md §20.4 Restlücke
+	// "NATS-Verschlüsselung") — unabhängig von MTLSEnabled (andere
+	// Strecke, anderes Zertifikat, andere `make nats-tls-up`-
+	// Gegenstelle). Default **aus**, additiv wie MTLSEnabled/
+	// RegistryTLSEnabled: ohne OMP_NATS_TLS_ENABLED bleibt NatsURL
+	// unverändert Klartext, auch wenn ein `tls://`-Schema drinsteht.
+	// Echtes mTLS (nicht nur Server-TLS wie bei RegistryTLSEnabled),
+	// weil der NATS-Server per `--tlsverify` (s. `make nats-tls-up`)
+	// ein Client-Zertifikat verlangt — NatsTLSCertFile/-KeyFile sind
+	// bewusst EIN geteiltes "nats-client"-Zertifikat für Orchestrator/
+	// host-agent/jede Rust-Node-Instanz (Scope-Vereinfachung, keine
+	// echte Pro-Instanz-Identität, s. deploy/dev/mtls-issue-cert.sh-
+	// Aufruf in `make mtls-issue-certs`), nicht das eigene
+	// MTLSCertFile-Zertifikat (andere Gegenstelle, andere SANs).
+	NatsTLSEnabled  bool
+	NatsTLSCertFile string
+	NatsTLSKeyFile  string
+	NatsTLSCAFile   string
 	// JWTSecret ist ein direkt gesetztes HMAC-Secret für die
 	// Token-Signierung (UMSETZUNG.md D3 Teil 2) — für echte Deployments,
 	// die ein Secret aus einer eigenen Verwaltung (Vault, K8s-Secret, …)
@@ -204,6 +223,7 @@ type Config struct {
 func Load() Config {
 	mtlsEnabled, _ := strconv.ParseBool(getEnv("OMP_MTLS_ENABLED", "false"))
 	registryTLSEnabled, _ := strconv.ParseBool(getEnv("OMP_REGISTRY_TLS_ENABLED", "false"))
+	natsTLSEnabled, _ := strconv.ParseBool(getEnv("OMP_NATS_TLS_ENABLED", "false"))
 	// ClusterNodeID zuerst aufgelöst, weil ClusterDataDirs Default davon
 	// abhängt (../data/raft/<nodeID> statt eines von OMP_NODE_ID
 	// unabhängigen fixen Pfades — sonst würden zwei Instanzen mit
@@ -226,6 +246,10 @@ func Load() Config {
 		MTLSCAFile:         getEnv("OMP_MTLS_CA_FILE", "../.run/mtls/root_ca.crt"),
 		RegistryTLSEnabled: registryTLSEnabled,
 		RegistryTLSCAFile:  getEnv("OMP_REGISTRY_TLS_CA_FILE", "../.run/mtls/root_ca.crt"),
+		NatsTLSEnabled:     natsTLSEnabled,
+		NatsTLSCertFile:    getEnv("OMP_NATS_TLS_CERT_FILE", "../.run/mtls/nats-client.crt"),
+		NatsTLSKeyFile:     getEnv("OMP_NATS_TLS_KEY_FILE", "../.run/mtls/nats-client.key"),
+		NatsTLSCAFile:      getEnv("OMP_NATS_TLS_CA_FILE", "../.run/mtls/root_ca.crt"),
 		JWTSecret:          getEnv("OMP_AUTH_JWT_SECRET", ""),
 		JWTSecretFile:      getEnv("OMP_AUTH_JWT_SECRET_FILE", "../data/auth-jwt-secret"),
 		// Defaults spiegeln placement.DefaultThresholds (bewusst hier

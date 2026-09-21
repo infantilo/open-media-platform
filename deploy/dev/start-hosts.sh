@@ -58,6 +58,16 @@ HOSTS=(
   "host2:Regie-Host-B"
 )
 
+# NATS-TLS (ARCHITECTURE.md §20.4) ist per Default aus (OMP_NATS_TLS_
+# ENABLED unten nur gesetzt, falls schon in der aufrufenden Shell
+# exportiert), gleiches Muster wie start-omp.sh's OMP_MTLS_*/OMP_NATS_
+# TLS_*-Block — die Pfad-Variablen selbst müssen trotzdem immer absolut
+# sein (host-agent läuft, wie der Orchestrator, mit ROOT_DIR als cwd,
+# nicht host-agent/, s. host-agent/main.go loadNatsTLSConfig-Defaults).
+export OMP_NATS_TLS_CERT_FILE="${OMP_NATS_TLS_CERT_FILE:-$ROOT_DIR/.run/mtls/nats-client.crt}"
+export OMP_NATS_TLS_KEY_FILE="${OMP_NATS_TLS_KEY_FILE:-$ROOT_DIR/.run/mtls/nats-client.key}"
+export OMP_NATS_TLS_CA_FILE="${OMP_NATS_TLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
+
 for entry in "${HOSTS[@]}"; do
   dir="${entry%%:*}"
   label="${entry#*:}"

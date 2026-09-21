@@ -591,7 +591,8 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     .await;
     eprintln!("omp-node-sdk: node registered: {node_id}");
 
-    let publisher = match health::Publisher::connect(&config.nats_url).await {
+    let nats_tls = health::NatsTlsConfig::from_env();
+    let publisher = match health::Publisher::connect(&config.nats_url, &nats_tls).await {
         Ok(p) => Some(Arc::new(p)),
         Err(e) => {
             eprintln!(

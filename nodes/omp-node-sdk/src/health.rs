@@ -109,6 +109,58 @@ fn parse_server_addrs(url: &str) -> Vec<String> {
         .collect()
 }
 
+/// Optionale mTLS-Konfiguration für die NATS-Verbindung
+/// (`ARCHITECTURE.md` §20.4 Restlücke "mTLS für die zehn echten
+/// Rust-Node-Typen") — `None`-Felder lassen `apply_tls` unten die
+/// jeweilige `async-nats`-Option einfach weg, kein Feld ist Pflicht.
+/// Erwartet EIN geteiltes "nats-client"-Zertifikat für jede
+/// Rust-Node-Instanz (Scope-Vereinfachung, keine echte Pro-Instanz-
+/// Identität, s. `deploy/dev/mtls-issue-cert.sh`-Aufruf in
+/// `make mtls-issue-certs` und dieselbe Doku in
+/// `orchestrator/internal/config`/`host-agent/main.go`).
+#[derive(Debug, Clone, Default)]
+pub struct NatsTlsConfig {
+    pub cert_file: Option<String>,
+    pub key_file: Option<String>,
+    pub ca_file: Option<String>,
+}
+
+impl NatsTlsConfig {
+    /// Liest `OMP_NATS_TLS_CERT_FILE`/`_KEY_FILE`/`_CA_FILE` — alle drei
+    /// leer/unbesetzt ist der Default (Klartext-NATS, unverändertes
+    /// Verhalten). `OMP_NATS_TLS_ENABLED` selbst wird hier NICHT
+    /// geprüft: `apply_tls` aktiviert TLS bereits automatisch, sobald
+    /// mindestens ein Pfad gesetzt ist — ein eigenes Enabled-Flag wäre
+    /// hier redundant (anders als in Go, wo `mtls.Config.Enabled` auch
+    /// den Fall "Datei-Pfade gesetzt, aber bewusst deaktiviert" abdeckt;
+    /// für den Rust-SDK-Fall reicht "keine Pfade gesetzt" als Aus-
+    /// Zustand, ein Node hat keinen eigenen Config-Mechanismus dafür).
+    pub fn from_env() -> Self {
+        NatsTlsConfig {
+            cert_file: std::env::var("OMP_NATS_TLS_CERT_FILE").ok(),
+            key_file: std::env::var("OMP_NATS_TLS_KEY_FILE").ok(),
+            ca_file: std::env::var("OMP_NATS_TLS_CA_FILE").ok(),
+        }
+    }
+}
+
+/// Wendet `tls` auf `opts` an — nur die tatsächlich gesetzten Felder,
+/// `require_tls(true)` nur, wenn mindestens ein Client-Zertifikat
+/// konfiguriert ist (sonst bliebe ein NATS-Server, der TLS selbst gar
+/// nicht anbietet, unerreichbar; die eigentliche Durchsetzung "muss
+/// TLS sein" passiert serverseitig über `--tlsverify`, s. `make
+/// nats-tls-up`).
+fn apply_tls(mut opts: async_nats::ConnectOptions, tls: &NatsTlsConfig) -> async_nats::ConnectOptions {
+    if let Some(ca) = &tls.ca_file {
+        opts = opts.add_root_certificates(ca.into());
+    }
+    if let (Some(cert), Some(key)) = (&tls.cert_file, &tls.key_file) {
+        opts = opts.add_client_certificate(cert.into(), key.into());
+        opts = opts.require_tls(true);
+    }
+    opts
+}
+
 impl Publisher {
     /// Stellt die Verbindung her. Ein initial nicht erreichbares NATS ist
     /// nicht fatal (`retry_on_initial_connect` + unbegrenzte Reconnects) —
@@ -117,13 +169,15 @@ impl Publisher {
     /// Server-Adressen sein (s. `parse_server_addrs`) — der Client wählt
     /// dann selbst einen erreichbaren Server und failt automatisch auf
     /// einen anderen um, falls der verbundene Server ausfällt.
-    pub async fn connect(url: &str) -> Result<Self, async_nats::ConnectError> {
-        let client = async_nats::ConnectOptions::new()
-            .retry_on_initial_connect()
-            .max_reconnects(None)
-            .name("omp-node-sdk")
-            .connect(parse_server_addrs(url))
-            .await?;
+    pub async fn connect(url: &str, tls: &NatsTlsConfig) -> Result<Self, async_nats::ConnectError> {
+        let opts = apply_tls(
+            async_nats::ConnectOptions::new()
+                .retry_on_initial_connect()
+                .max_reconnects(None)
+                .name("omp-node-sdk"),
+            tls,
+        );
+        let client = opts.connect(parse_server_addrs(url)).await?;
         Ok(Publisher { client })
     }
 
@@ -197,11 +251,15 @@ impl Publisher {
 /// vom `Publisher` (den `NodeHandle` intern für Health/Alert/Tally-Publish
 /// hält) — Abonnieren ist ein grundsätzlich anderer Nutzungspfad
 /// (Empfangs- statt Sende-Richtung) und nicht jeder Node braucht ihn.
-pub async fn subscribe_tally(url: &str) -> Result<TallySubscription, SubscribeError> {
-    let client = async_nats::ConnectOptions::new()
-        .retry_on_initial_connect()
-        .max_reconnects(None)
-        .name("omp-node-sdk-tally-sub")
+pub async fn subscribe_tally(url: &str, tls: &NatsTlsConfig) -> Result<TallySubscription, SubscribeError> {
+    let opts = apply_tls(
+        async_nats::ConnectOptions::new()
+            .retry_on_initial_connect()
+            .max_reconnects(None)
+            .name("omp-node-sdk-tally-sub"),
+        tls,
+    );
+    let client = opts
         .connect(parse_server_addrs(url))
         .await
         .map_err(SubscribeError::Connect)?;

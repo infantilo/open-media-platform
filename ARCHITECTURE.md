@@ -3021,27 +3021,45 @@ ebenfalls eine eigene Sitzung bekam):
   zusätzlich zur jetzt vorhandenen Revocation) — eigenständiges
   Vorhaben, würde den Blast-Radius eines Leaks weiter verkleinern, löst
   aber ein anderes Problem als Revocation.
-- **NATS-Verschlüsselung (host-agent/Nodes↔Orchestrator).** Client-
-   seitig überraschend klein — sowohl der Go-Orchestrator
-   (`eventbus.Connect`) als auch alle zehn Rust-Node-Typen (über
-   `omp-node-sdk::health.rs`, zwei Aufrufstellen in einer Datei) laufen
-   durch zentrale Verbindungsfunktionen. Der eigentliche Aufwand liegt
-   server-seitig: der NATS-Container läuft aktuell als reiner `podman
-   run` ohne TLS-Konfiguration — bräuchte eine Server-Config
-   (Cert/Key/CA, ließe sich vom bestehenden step-ca-Setup mitnutzen)
-   und sorgfältige Live-Verifikation, dass die gesamte Flotte
-   (Orchestrator, host-agent, jede laufende Node-Instanz) unter beiden
-   Modi verbindet — das ist der Event-Bus, an dem Health/Events/Alarme
-   für das gesamte System hängen.
-- **mTLS für die zehn echten Rust-Node-Typen (HTTP).** Bleibt groß:
-   `tiny_http` (die von `omp-node-sdk` genutzte HTTP-Server-Bibliothek)
-   unterstützt kein TLS — bräuchte entweder eine neue TLS-fähige
-   HTTP-Server-Bibliothek im SDK oder einen Terminierungs-Wrapper, plus
-   Zertifikatsverteilung an jede Node-Instanz. host-agent↔Orchestrator
-   bleibt bis dahin ebenfalls unverschlüsselt (einziger Schutz: ein
-   Einmal-Bootstrap-Token) — beide Zustände sind an anderer Stelle
-   bereits als bewusste Entscheidungen dokumentiert (§18.3,
-   `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
+- **NATS-Verschlüsselung (host-agent/Nodes↔Orchestrator) — erledigt
+   (2026-09-21), opt-in.** `make nats-tls-up` startet den Drei-Knoten-
+   Cluster mit `--tls --tlsverify` auf dem CLIENT-Port (4222-4224,
+   echtes mTLS, ein geteiltes `nats-client`-Zertifikat für
+   Orchestrator/host-agent/jede Rust-Node-Instanz — Scope-
+   Vereinfachung, keine Pro-Instanz-Identität), `make mtls-issue-certs`
+   liefert das Server- (`nats-server.{crt,key}`) und das Client-
+   Zertifikat vom bestehenden step-ca. Go-Seite: `OMP_NATS_TLS_ENABLED`
+   + `_CERT_FILE`/`_KEY_FILE`/`_CA_FILE` (Orchestrator `internal/
+   config`, host-agent eigene kleine Kopie derselben Ladefunktion,
+   Modulgrenze). Rust-Seite: `omp-node-sdk::health::NatsTlsConfig`
+   (dieselben drei Env-Vars), zentral in `node.rs`s einzigem
+   `Publisher::connect`-Aufrufort gelesen — kein Node-Typ musste dafür
+   einzeln angefasst werden (nur die zwei `subscribe_tally`-Aufrufer,
+   `omp-audio-mixer`/`omp-multiviewer-custom`, brauchten je eine
+   Zeile). Default weiterhin **aus** (Klartext), additiv wie jeder
+   andere TLS-Schalter im Projekt. Bewusst NICHT Teil: TLS auf den
+   Cluster-Routen (6222-6224) — alle drei Knoten laufen ohnehin auf
+   demselben Host über 127.0.0.1, kein Netzwerk-Hop dazwischen; eigene
+   Entscheidung, falls das je relevant wird.
+- **mTLS für die zehn echten Rust-Node-Typen (HTTP) — weiterhin offen,
+   aber kleiner als hier bisher dokumentiert.** Korrektur: `tiny_http`
+   0.12 (bereits im Einsatz) unterstützt Server-TLS entgegen der
+   bisherigen Einschätzung sehr wohl, über das optionale
+   `ssl-rustls`-Cargo-Feature (`Server::https`/`SslConfig`) — keine
+   neue HTTP-Bibliothek nötig. Liefert aber NUR Server-TLS
+   (Verschlüsselung), kein eingebautes Client-Zertifikat-Verlangen —
+   echtes mTLS (der Node verlangt ein gültiges Client-Zertifikat vom
+   Aufrufer) bräuchte einen eigenen rustls-Akzeptor statt `tiny_http`s
+   vereinfachtem `SslConfig`. Ob dafür reine Server-TLS-Verschlüsselung
+   bereits ausreicht (der generische Proxy-Pfad bleibt ohnehin die
+   sanktionierte Zugriffsroute, ein direkter Node-Port-Zugriff ist ein
+   Netzsegmentierungs-Thema, nicht primär ein Authentifizierungs-Thema)
+   oder ob echtes Client-Zertifikat-mTLS gebraucht wird, ist noch nicht
+   entschieden. Zertifikatsverteilung an jede Node-Instanz ebenfalls
+   noch offen. host-agent↔Orchestrator bleibt bis dahin unverschlüsselt
+   (einziger Schutz: ein Einmal-Bootstrap-Token) — beide Zustände sind
+   an anderer Stelle bereits als bewusste Entscheidungen dokumentiert
+   (§18.3, `docs/decisions.md` D3 Teil 1/D6 Teil 1), nicht übersehen.
 
 ### 20.5 Control-Plane-HA — bereits abgedeckt
 

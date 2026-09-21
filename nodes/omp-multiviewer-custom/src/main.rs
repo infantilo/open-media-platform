@@ -717,7 +717,7 @@ async fn discovery_loop(
 /// Quelle zeigen (z. B. Übersicht + Detail derselben Kamera), beide
 /// sollen tally-fähig sein.
 async fn tally_loop(nats_url: String, pipeline: PipelineHandle, pip_node_ids: Arc<Mutex<HashMap<String, String>>>) {
-    let mut subscription = match health::subscribe_tally(&nats_url).await {
+    let mut subscription = match health::subscribe_tally(&nats_url, &health::NatsTlsConfig::from_env()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("omp-multiviewer-custom: tally subscribe failed, Tally-Anzeige inaktiv: {e}");

@@ -1258,7 +1258,7 @@ async fn audio_follow_video_loop(
     channels: Arc<Mutex<Vec<ChannelState>>>,
     pipeline: PipelineHandle,
 ) {
-    let mut subscription = match health::subscribe_tally(&nats_url).await {
+    let mut subscription = match health::subscribe_tally(&nats_url, &health::NatsTlsConfig::from_env()).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("omp-audio-mixer: tally subscribe failed, Audio-Follow-Video inaktiv: {e}");
