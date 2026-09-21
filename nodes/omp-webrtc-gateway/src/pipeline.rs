@@ -13,13 +13,15 @@
 //! installiert sind. Nicht-Trickle: die Antwort enthält alle lokalen
 //! ICE-Kandidaten (im LAN nach Millisekunden fertig).
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_sdp as gst_sdp;
+use gstreamer_video as gst_video;
+use gstreamer_video::prelude::*;
 use gstreamer_webrtc as gst_webrtc;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
@@ -45,6 +47,135 @@ pub struct Config {
     pub latency_ms: u32,
 }
 
+// ---------------------------------------------------------------------
+// Latenzmessung (Schritt 2): Zeitstempel-Streifen im Bild
+// ---------------------------------------------------------------------
+
+/// Anzahl Zellen des Zeitstempel-Streifens: 1 Marker (immer hell) + 44 Bit
+/// Server-Epoch-Millisekunden + 4 Bit Prüfsumme (Summe der 11 Nibbles
+/// mod 16). Die Sendeseite (`camera.html`) zeichnet den Streifen über die
+/// volle Bildbreite in die oberste 1/40 der Bildhöhe; weil er relativ zur
+/// Bildgröße gezeichnet wird, übersteht er eine vom Browser verkleinerte
+/// Auflösung.
+const STRIP_CELLS: usize = 49;
+const STRIP_HEIGHT_DIVISOR: usize = 40;
+
+/// Liest den Zeitstempel-Streifen aus der Luma-Ebene eines Bildes. `None`,
+/// wenn Marker oder Prüfsumme nicht stimmen (kein Streifen im Bild oder
+/// von der Kompression zerstört).
+fn decode_timestamp_strip(luma: &[u8], stride: usize, width: usize, height: usize) -> Option<u64> {
+    if width < STRIP_CELLS * 2 || height < STRIP_HEIGHT_DIVISOR {
+        return None;
+    }
+    let y0 = (height / STRIP_HEIGHT_DIVISOR / 2).max(1);
+    let cell_w = width as f64 / STRIP_CELLS as f64;
+    let half = ((cell_w / 4.0) as usize).max(1);
+    let mut bits = [false; STRIP_CELLS];
+    for (i, bit) in bits.iter_mut().enumerate() {
+        let cx = ((i as f64 + 0.5) * cell_w) as usize;
+        let (mut sum, mut n) = (0u32, 0u32);
+        for y in y0.saturating_sub(1)..=(y0 + 1).min(height - 1) {
+            for x in cx.saturating_sub(half)..=(cx + half).min(width - 1) {
+                sum += u32::from(*luma.get(y * stride + x)?);
+                n += 1;
+            }
+        }
+        // Schwelle mittig zwischen Schwarz (16) und Weiß (235), Limited Range.
+        *bit = sum / n.max(1) > 126;
+    }
+    if !bits[0] {
+        return None;
+    }
+    let ts = bits[1..45]
+        .iter()
+        .fold(0u64, |acc, b| (acc << 1) | u64::from(*b));
+    let chk = bits[45..49]
+        .iter()
+        .fold(0u64, |acc, b| (acc << 1) | u64::from(*b));
+    let nibble_sum: u64 = (0..11).map(|k| (ts >> (4 * k)) & 0xf).sum();
+    (nibble_sum % 16 == chk).then_some(ts)
+}
+
+const LATENCY_WINDOW: usize = 50;
+/// Ohne neue Messung länger als so lange → Wert gilt als veraltet (`null`).
+const LATENCY_STALE: Duration = Duration::from_secs(3);
+
+/// Gleitendes Fenster der zuletzt gemessenen Glas-zu-Glas-Latenzen (ms).
+#[derive(Default)]
+pub struct LatencyStats {
+    inner: Mutex<LatencyInner>,
+}
+
+#[derive(Default)]
+struct LatencyInner {
+    window: VecDeque<f64>,
+    last_at: Option<Instant>,
+}
+
+impl LatencyStats {
+    fn record(&self, ms: f64) {
+        let mut g = self.inner.lock().expect("lock poisoned");
+        if g.window.len() == LATENCY_WINDOW {
+            g.window.pop_front();
+        }
+        g.window.push_back(ms);
+        g.last_at = Some(Instant::now());
+    }
+
+    /// (Mittel, Letzter, Maximum) über das Fenster; `None`, wenn keine
+    /// frische Messung vorliegt.
+    pub fn snapshot(&self) -> Option<(f64, f64, f64)> {
+        let g = self.inner.lock().expect("lock poisoned");
+        if g.last_at?.elapsed() > LATENCY_STALE || g.window.is_empty() {
+            return None;
+        }
+        let avg = g.window.iter().sum::<f64>() / g.window.len() as f64;
+        let max = g.window.iter().cloned().fold(f64::MIN, f64::max);
+        Some((avg, *g.window.back()?, max))
+    }
+}
+
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Server-Uhrzeit für die Uhrenabgleich-Route der Sendeseite.
+pub fn server_epoch_ms() -> u64 {
+    now_epoch_ms()
+}
+
+fn install_latency_probe(decoder_src: &gst::Pad, stats: Arc<LatencyStats>) {
+    decoder_src.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
+        let Some(buffer) = info.buffer() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let Some(caps) = pad.current_caps() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let Ok(vinfo) = gst_video::VideoInfo::from_caps(&caps) else {
+            return gst::PadProbeReturn::Ok;
+        };
+        if let Ok(frame) = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &vinfo)
+            && let Ok(luma) = frame.plane_data(0)
+            && let Some(ts) = decode_timestamp_strip(
+                luma,
+                frame.plane_stride()[0] as usize,
+                vinfo.width() as usize,
+                vinfo.height() as usize,
+            )
+        {
+            let lat = now_epoch_ms() as f64 - ts as f64;
+            if lat.abs() < 60_000.0 {
+                stats.record(lat);
+            }
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
+
 /// Ein laufender WHIP-Peer: sein `webrtcbin` plus alle für ihn zur
 /// Pipeline hinzugefügten Elemente (zum sauberen Entfernen).
 struct Session {
@@ -63,6 +194,7 @@ pub struct Gateway {
     latency_ms: u32,
     pub heartbeat: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
+    latency: Arc<LatencyStats>,
 }
 
 impl Gateway {
@@ -161,6 +293,7 @@ impl Gateway {
             latency_ms: config.latency_ms,
             heartbeat,
             shutdown,
+            latency: Arc::new(LatencyStats::default()),
         }))
     }
 
@@ -170,6 +303,10 @@ impl Gateway {
 
     pub fn connection_state(&self) -> String {
         self.connection_state.lock().expect("lock poisoned").clone()
+    }
+
+    pub fn latency_stats(&self) -> Option<(f64, f64, f64)> {
+        self.latency.snapshot()
     }
 
     pub fn latency_ms(&self) -> u32 {
@@ -220,13 +357,19 @@ impl Gateway {
             let video_tail = self.video_tail.clone();
             let audio_tail = self.audio_tail.clone();
             let elements = elements.clone();
+            let latency = self.latency.clone();
             webrtcbin.connect_pad_added(move |_, pad| {
                 if pad.direction() != gst::PadDirection::Src {
                     return;
                 }
-                if let Err(e) =
-                    attach_receive_chain(&pipeline, pad, &video_tail, &audio_tail, &elements)
-                {
+                if let Err(e) = attach_receive_chain(
+                    &pipeline,
+                    pad,
+                    &video_tail,
+                    &audio_tail,
+                    &elements,
+                    &latency,
+                ) {
                     eprintln!("omp-webrtc-gateway: receive chain failed: {e}");
                 }
             });
@@ -357,6 +500,7 @@ fn attach_receive_chain(
     video_tail: &gst::Element,
     audio_tail: &gst::Element,
     elements: &Arc<Mutex<Vec<gst::Element>>>,
+    latency: &Arc<LatencyStats>,
 ) -> Result<(), String> {
     let caps = pad.current_caps().unwrap_or_else(|| pad.query_caps(None));
     let structure = caps.structure(0).ok_or("pad without caps")?;
@@ -407,6 +551,69 @@ fn attach_receive_chain(
         .ok_or("depay without sink pad")?;
     pad.link(&first_sink)
         .map_err(|e| format!("link pad: {e:?}"))?;
+    if media == "video"
+        && let Some(src) = chain.last().and_then(|d| d.static_pad("src"))
+    {
+        install_latency_probe(&src, latency.clone());
+    }
     elements.lock().expect("lock poisoned").extend(chain);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Zeichnet einen Streifen wie `camera.html` (Luma 16/235) in ein Bild.
+    fn draw_strip(width: usize, height: usize, ts: u64) -> Vec<u8> {
+        let mut luma = vec![100u8; width * height];
+        let nibble_sum: u64 = (0..11).map(|k| (ts >> (4 * k)) & 0xf).sum();
+        let mut bits = vec![true];
+        bits.extend((0..44).rev().map(|i| (ts >> i) & 1 == 1));
+        bits.extend((0..4).rev().map(|i| ((nibble_sum % 16) >> i) & 1 == 1));
+        let cell_w = width as f64 / STRIP_CELLS as f64;
+        for y in 0..height / STRIP_HEIGHT_DIVISOR {
+            for x in 0..width {
+                let cell = ((x as f64 / cell_w) as usize).min(STRIP_CELLS - 1);
+                luma[y * width + x] = if bits[cell] { 235 } else { 16 };
+            }
+        }
+        luma
+    }
+
+    #[test]
+    fn strip_roundtrips_at_several_resolutions() {
+        let ts = 1_790_000_123_456u64;
+        for (w, h) in [(1280, 720), (640, 360), (1920, 1080), (960, 540)] {
+            let luma = draw_strip(w, h, ts);
+            assert_eq!(decode_timestamp_strip(&luma, w, w, h), Some(ts), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn strip_rejects_missing_or_corrupt_pattern() {
+        let flat = vec![100u8; 1280 * 720];
+        assert_eq!(decode_timestamp_strip(&flat, 1280, 1280, 720), None);
+        let mut luma = draw_strip(1280, 720, 1_790_000_123_456);
+        // Ein Datenbit (Zelle 10) komplett kippen → Prüfsumme muss anschlagen.
+        let cell_w = 1280.0 / STRIP_CELLS as f64;
+        let (x0, x1) = ((10.0 * cell_w) as usize + 1, (11.0 * cell_w) as usize - 1);
+        let flipped = if luma[(x0 + x1) / 2] == 235 { 16 } else { 235 };
+        for y in 0..720 / STRIP_HEIGHT_DIVISOR {
+            for x in x0..x1 {
+                luma[y * 1280 + x] = flipped;
+            }
+        }
+        assert_eq!(decode_timestamp_strip(&luma, 1280, 1280, 720), None);
+    }
+
+    #[test]
+    fn stats_window_reports_avg_last_max() {
+        let s = LatencyStats::default();
+        assert!(s.snapshot().is_none());
+        for v in [10.0, 20.0, 30.0] {
+            s.record(v);
+        }
+        assert_eq!(s.snapshot(), Some((20.0, 30.0, 30.0)));
+    }
 }

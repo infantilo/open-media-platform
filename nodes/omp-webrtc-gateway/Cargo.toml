@@ -12,6 +12,7 @@ gstreamer = "0.25.3"
 # (pkg-config gstreamer-webrtc-1.0/gstreamer-sdp-1.0), s. docs/decisions.md
 # Nachtrag 241.
 gstreamer-sdp = "0.25"
+gstreamer-video = "0.25"
 gstreamer-webrtc = "0.25"
 omp-mediaio = { version = "0.1.0", path = "../omp-mediaio", features = ["mxl"] }
 omp-node-sdk = { version = "0.1.0", path = "../omp-node-sdk" }

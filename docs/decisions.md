@@ -25809,3 +25809,77 @@ setzt `connectionState` auf `none` und stoppt die Schreibvorgänge.
 
 **Dateien:** `nodes/omp-webrtc-gateway/{Cargo.toml,src/main.rs,src/pipeline.rs,src/test.html}`,
 `nodes/Cargo.toml` (Workspace-Mitglied), `nodes/Cargo.lock`.
+
+## 2026-09-21 (Nachtrag 242) — Smartphone-WebRTC-Node, Schritt 2: Handy-Sendeseite, HTTPS, Latenzmessung
+
+**Umgesetzt (`omp-webrtc-gateway`, Fortsetzung von Nachtrag 241):**
+- **Handy-Sendeseite** `GET /` (`src/camera.html`, Alias
+  `/whip-test.html`): mobiles Layout, Kameraauswahl, Auflösung/Bildrate,
+  Ton an/aus, H.264 bevorzugt, `maxBitrate` 6 Mbit/s, `maintain-framerate`,
+  Wake-Lock (Bildschirm bleibt an), Statusanzeige. Keine App, keine
+  Installation — reine Browserseite mit `getUserMedia` + WebRTC (Hardware-
+  Encoder des Handys). WebAssembly bringt hier weder Latenz noch
+  Installationsvorteil (Encoder läuft nativ im Browser).
+- **Glas→Decoder-Latenzmessung** (Checkbox „Latenz messen"): die Seite
+  gleicht ihre Uhr per `GET /clock` gegen die Server-Uhr ab (10 Proben,
+  kleinste RTT gewinnt, Messfehler ≈ ±RTT/2 wird angezeigt), zeichnet
+  Kamerabild + einen Zeitstempel-Streifen (1 Marker + 44 Bit Server-ms + 4
+  Bit Prüfsumme, obere 1/40 der Bildhöhe, relativ zur Bildgröße) auf eine
+  Canvas und sendet deren Track. Der Node liest den Streifen per Pad-Probe
+  direkt hinter dem H.264-Decoder aus (`gstreamer-video`,
+  `decode_timestamp_strip`) und stellt `e2eLatencyMs` (Ø über 50 Bilder),
+  `e2eLatencyLastMs`, `e2eLatencyMaxMs` bereit (`null` ohne frische
+  Messung, >3 s alt). Umbenannt: der Jitterbuffer-Parameter heißt jetzt
+  `jitterbufferMs` (war `latencyMs`, hätte mit der Messung kollidiert).
+- **HTTPS** über den vorhandenen Caddy-Proxy: neuer Block in
+  `deploy/dev/Caddyfile` (`{$OMP_PUBLIC_HOST:localhost}:9441` →
+  `127.0.0.1:9440`), `make proxy-up` reicht `OMP_PUBLIC_HOST` durch. Der
+  Node muss dafür mit festem `OMP_PORT=9440` laufen (der Launcher vergibt
+  sonst dynamische Ports, die ein statischer Proxy nicht kennt).
+
+**Verifikation (live, Chromium mit Fake-Kamera):**
+- Über `http://127.0.0.1:9440/` und über `https://100.115.92.203:9441/`
+  (Caddy, `tls internal`, IP-SAN) verbindet die Seite, `isSecureContext`
+  true, WHIP durch den Proxy funktioniert, Messwerte laufen.
+- **Messung validiert:** künstlicher Versatz des gezeichneten Zeitstempels
+  um 100 ms hebt den gemessenen Median von 11 auf 115 ms, Zurücknehmen
+  bringt ihn auf 19 ms. Stationärer Loopback-Wert 11–25 ms (nach einer
+  Einschwingphase von ~5 s mit Werten bis mehrere 100 ms). Ausreißer bis
+  mehrere Sekunden traten auf, während parallel gebaut/getestet wurde —
+  Rechner nicht ruhig, deshalb kein belastbarer Ausreißer-Befund.
+- `curl --cacert <Caddy-Root>` verifiziert das Zertifikat (`verify=0`);
+  Unit-Tests für Streifen-Codec (mehrere Auflösungen, Prüfsumme) und
+  Fenster-Statistik grün, `clippy -D warnings` sauber.
+
+**Live gefundene Fallstricke:**
+- Der **Jitterbuffer-Wert (`OMP_WEBRTC_LATENCY_MS`) veränderte den
+  gemessenen Median NICHT** (10/40/200 ms lieferten alle ~12–25 ms).
+  Auf Loopback ohne Jitter hält der Jitterbuffer offenbar nichts zurück;
+  unter echtem WLAN-Jitter wird er relevant — ungeprüft. Also NICHT davon
+  ausgehen, dass Absenken des Werts hier Latenz spart, bevor es mit einem
+  echten Handy gemessen ist.
+- Der persistierte Caddy-CA-Ordner (`.run/caddy`) hatte ein abgelaufenes
+  Zwischenzertifikat; Caddy erneuerte es beim Start, stellte das erste
+  Blattzertifikat aber noch mit dem alten aus (Blatt „ablaufend vor
+  Beginn", `curl verify=10`). `podman restart omp-caddy` behebt es.
+  Zwischenzertifikate leben nur 7 Tage.
+
+**Grenzen / Offen (ehrlich):**
+- **Kein echtes Handy getestet** (Sandbox-Netz), nur Chromium mit
+  Fake-Kamera. Ob dein Handy die Caddy-Root-CA akzeptiert, ist offen:
+  `.run/caddy/caddy/pki/authorities/local/root.crt` auf das Handy
+  bringen und als vertrauenswürdig installieren (oder die Zertifikats-
+  warnung einmalig akzeptieren — `getUserMedia` funktioniert danach in
+  gängigen Browsern).
+- Die Messung deckt **nicht** die Kamera-Aufnahme (~1–2 Frames vor dem
+  Canvas-Zeichnen), den Canvas-Umweg (nur im Messmodus) und das
+  MXL-Schreiben (~1 Frame) ab — sie misst „gezeichnet → dekodiert". Die
+  echte Glas-zu-Glas-Zahl liegt darüber. Ohne Messmodus geht der
+  Kameratrack direkt an den Encoder (geringste Latenz).
+- Keine Monitor-Richtung (WHEP), kein Katalog-Eintrag, keine
+  Authentifizierung von `POST /whip`, kein Alarm bei Verbindungsabbruch
+  (Schritte 3/4). `OMP_PUBLIC_HOST` muss zur erreichbaren IP/zum Namen
+  passen, sonst passt der Zertifikats-SAN nicht.
+
+**Dateien:** `nodes/omp-webrtc-gateway/{Cargo.toml,src/main.rs,src/pipeline.rs,src/camera.html}`,
+`nodes/Cargo.lock`, `deploy/dev/Caddyfile`, `Makefile`.

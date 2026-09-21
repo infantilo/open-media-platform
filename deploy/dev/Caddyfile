@@ -35,3 +35,18 @@ localhost:8443 {
 		flush_interval -1
 	}
 }
+
+# Smartphone-Kamera (omp-webrtc-gateway, Nachtrag 242): `getUserMedia` läuft
+# im Handy-Browser nur über HTTPS. Feste Node-Portnummer 9440 (OMP_PORT beim
+# Start des Gateways setzen — der Launcher vergibt sonst dynamische Ports,
+# die ein statischer Proxy nicht kennen kann). Hostname/IP, unter der das
+# Handy den Rechner erreicht, per OMP_PUBLIC_HOST (Default localhost; im LAN
+# die IP oder den mDNS-Namen, sonst passt der SAN des internen Zertifikats
+# nicht). Das Handy muss die Caddy-Root-CA akzeptieren:
+# .run/caddy/pki/authorities/local/root.crt (s. docs/HANDBUCH.md).
+{$OMP_PUBLIC_HOST:localhost}:9441 {
+	tls internal
+	reverse_proxy 127.0.0.1:9440 {
+		flush_interval -1
+	}
+}

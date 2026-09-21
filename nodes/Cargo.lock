@@ -1648,6 +1648,7 @@ version = "0.1.0"
 dependencies = [
  "gstreamer",
  "gstreamer-sdp",
+ "gstreamer-video",
  "gstreamer-webrtc",
  "omp-mediaio",
  "omp-node-sdk",

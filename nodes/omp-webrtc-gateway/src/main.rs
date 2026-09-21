@@ -8,8 +8,9 @@
 //!   Eine laufende Sitzung wird ersetzt (eine Kamera je Node).
 //! - `DELETE /whip` — Sitzung beenden (kein sitzungsspezifisches
 //!   `Location`-Ziel, weil `RawResponse` keine Zusatz-Header kennt).
-//! - `GET /whip-test.html` — minimale Sendeseite (Browser-Kamera → WHIP),
-//!   zugleich Verifikationswerkzeug für Schritt 1.
+//! - `GET /` (= `/camera.html`, Alias `/whip-test.html`) — Handy-Sendeseite
+//!   (Kamera → WHIP, Kameraauswahl, Latenzmessung).
+//! - `GET /clock` — Server-Uhrzeit für den Uhrenabgleich der Latenzmessung.
 
 mod pipeline;
 
@@ -23,13 +24,19 @@ use omp_node_sdk::{
 };
 use serde_json::Value;
 
-const TEST_PAGE: &str = include_str!("test.html");
+const CAMERA_PAGE: &str = include_str!("camera.html");
 
 fn env_or(key: &str, fallback: &str) -> String {
     match std::env::var(key) {
         Ok(v) if !v.is_empty() => v,
         _ => fallback.to_string(),
     }
+}
+
+fn latency_value(v: Option<f64>) -> Value {
+    v.map_or(Value::Null, |ms| {
+        serde_json::json!((ms * 10.0).round() / 10.0)
+    })
 }
 
 struct Store {
@@ -55,7 +62,14 @@ impl ParamStore for Store {
                 ro("whipEndpoint", ParamType::String),
                 ro("connectionState", ParamType::String),
                 ro("sessionActive", ParamType::Boolean),
-                ro("latencyMs", ParamType::Number),
+                ro("jitterbufferMs", ParamType::Number),
+                // Glas-zu-Glas-Messung (Sendeseite im Messmodus), null ohne
+                // frische Messung; Endpunkt: Zeitstempel-Zeichnung im Bild
+                // bis direkt hinter den Decoder (ohne Kamera-Aufnahme und
+                // MXL-Schreiben, s. pipeline.rs / Nachtrag 242).
+                ro("e2eLatencyMs", ParamType::Number),
+                ro("e2eLatencyLastMs", ParamType::Number),
+                ro("e2eLatencyMaxMs", ParamType::Number),
             ],
             methods: vec![],
         }
@@ -70,7 +84,16 @@ impl ParamStore for Store {
             "sessionActive" => Some(serde_json::json!(
                 self.gateway.connection_state() == "connected"
             )),
-            "latencyMs" => Some(serde_json::json!(self.gateway.latency_ms())),
+            "jitterbufferMs" => Some(serde_json::json!(self.gateway.latency_ms())),
+            "e2eLatencyMs" => Some(latency_value(
+                self.gateway.latency_stats().map(|(avg, _, _)| avg),
+            )),
+            "e2eLatencyLastMs" => Some(latency_value(
+                self.gateway.latency_stats().map(|(_, last, _)| last),
+            )),
+            "e2eLatencyMaxMs" => Some(latency_value(
+                self.gateway.latency_stats().map(|(_, _, max)| max),
+            )),
             _ => None,
         }
     }
@@ -98,10 +121,20 @@ impl ParamStore for Store {
             body: body.into_bytes(),
         };
         match (method, path) {
-            ("GET", "/whip-test.html") => Some(RawResponse {
+            // Handy-Sendeseite (`/whip-test.html` bleibt als Alias aus Schritt 1).
+            ("GET", "/" | "/camera.html" | "/whip-test.html") => Some(RawResponse {
                 status: 200,
                 content_type: "text/html; charset=utf-8",
-                body: TEST_PAGE.as_bytes().to_vec(),
+                body: CAMERA_PAGE.as_bytes().to_vec(),
+            }),
+            // Uhrenabgleich für die Latenzmessung: die Seite schätzt daraus
+            // ihren Versatz zur Server-Uhr (NTP-artig, kleinste RTT gewinnt).
+            ("GET", "/clock") => Some(RawResponse {
+                status: 200,
+                content_type: "application/json",
+                body: serde_json::json!({"ms": pipeline::server_epoch_ms()})
+                    .to_string()
+                    .into_bytes(),
             }),
             ("POST", "/whip") => {
                 let Ok(offer) = std::str::from_utf8(body) else {
