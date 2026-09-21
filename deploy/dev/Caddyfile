@@ -76,3 +76,21 @@ localhost:8443 {
 		respond "Monitor-Node nicht erreichbar (Port 9442). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
 	}
 }
+
+# Auffang-Blöcke: das Handy ruft die Seite unter der WLAN-IP des GASTGEBERS
+# auf (Portweiterleitung) — diese Adresse trägt die Anfrage als Host-Header,
+# und Caddy kennt sie nicht (der Container sieht nur seine eigene IP). Ohne
+# diese Blöcke antwortet Caddy mit leerem 200 (weiße Seite). TLS bedient
+# weiterhin der Zertifikatsteil der Blöcke oben (Auswahl ohne SNI über die
+# lokale Adresse).
+:9441 {
+	reverse_proxy 127.0.0.1:9440 {
+		flush_interval -1
+	}
+}
+
+:9443 {
+	reverse_proxy 127.0.0.1:9442 {
+		flush_interval -1
+	}
+}
