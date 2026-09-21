@@ -382,6 +382,7 @@ impl Gateway {
             });
         }
 
+        crate::ice::configure(&webrtcbin);
         self.pipeline
             .add(&webrtcbin)
             .map_err(|e| format!("pipeline add webrtcbin: {e}"))?;
@@ -393,7 +394,8 @@ impl Gateway {
             elements,
         });
 
-        let result = negotiate(&webrtcbin, offer, &media_kinds);
+        let result = negotiate(&webrtcbin, offer, &media_kinds)
+            .map(|sdp| crate::ice::rewrite_candidates(&sdp));
         if result.is_err() {
             self.teardown();
         }

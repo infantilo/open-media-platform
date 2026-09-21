@@ -26029,3 +26029,40 @@ Payload-Type-Extraktion.
 
 **Dateien:** `nodes/omp-webrtc-gateway/src/{monitor.rs,monitor.html,main.rs,camera.html}`,
 `deploy/dev/Caddyfile`.
+
+## 2026-09-21 (Nachtrag 245) — Handy-Test: ICE hinter NAT (ChromeOS-Linux-Container) + Startskript
+
+**Befund:** Der Entwicklungsrechner ist der ChromeOS-Linux-Container
+`penguin` (Interface `eth0` = `100.115.92.203/28`, Kernel `cros-kernel`,
+`/dev/.cros_milestone`). Dieses Netz ist nur dem ChromeOS-Gastgeber
+sichtbar, nicht dem WLAN — ein Handy erreicht weder die HTTPS-Seiten noch,
+schwerwiegender, die WebRTC-Medien: `webrtcbin` meldet dem Browser als ICE-
+Kandidaten nur die Container-Adressen.
+
+**Umgesetzt (`nodes/omp-webrtc-gateway/src/ice.rs`, beide Richtungen):**
+- `OMP_WEBRTC_ICE_PORT=<port>`: libnice (`ice-agent`:`min-/max-rtp-port`)
+  bindet genau einen UDP-Port (BUNDLE + rtcp-mux → ein Port je Sitzung),
+  ICE-TCP aus — der Port lässt sich am Gastgeber weiterleiten.
+- `OMP_WEBRTC_PUBLIC_IP=<ip>`: in der SDP-Antwort bleiben nur IPv4-UDP-Host-
+  Kandidaten, deren Adresse durch die von außen erreichbare ersetzt wird
+  (TCP/IPv6/Link-Local entfallen). Ohne beide Variablen unverändert.
+- `deploy/dev/start-webrtc-phone.sh`: startet Kamera (9440, ICE-UDP 9450) und
+  Monitor (9442, ICE-UDP 9452), Caddy (HTTPS 9441/9443), verbindet per IS-05
+  Kamera→Monitor; wählt die NEUESTE Binärdatei (release/debug) — ein älterer
+  Release-Build neben einem frischen Debug-Build blieb sonst unbemerkt aktiv
+  (kostete hier einen Testlauf).
+
+**Für den Handy-Test hinter ChromeOS nötig:** `OMP_PUBLIC_HOST` = WLAN-IP des
+Chromebooks (Einstellungen → Netzwerk → WLAN) und Portweiterleitung dorthin
+(Einstellungen → Erweitert → Entwickler → Linux-Entwicklungsumgebung →
+Portweiterleitung): TCP 9441, TCP 9443, UDP 9450, UDP 9452.
+
+**Verifikation:** Unit-Tests für die Kandidaten-Umschreibung; live in der
+Sandbox (Host=Container-IP): Antwort enthält genau einen Kandidaten mit Port
+9450, UDP-Socket auf 9450, Verbindung `connected`. **Nicht getestet:** der
+eigentliche NAT-/Portweiterleitungspfad (Handy ↔ ChromeOS-Gastgeber), da in
+dieser Umgebung kein zweites Gerät existiert. Ob die ChromeOS-Weiterleitung
+UDP für Antworten mit der Container-Quelladresse sauber zurückgibt, ist
+ungeprüft. Alternative, falls es hakt: der Container hat eine globale IPv6-
+Adresse — vom Handy per IPv6 evtl. direkt erreichbar (ungetestet, wird von
+der Kandidaten-Umschreibung derzeit verworfen).

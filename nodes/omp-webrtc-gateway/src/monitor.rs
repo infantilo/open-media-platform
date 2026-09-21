@@ -294,6 +294,7 @@ impl Monitor {
             .property_from_str("bundle-policy", "max-bundle")
             .build()
             .map_err(|e| format!("webrtcbin: {e}"))?;
+        crate::ice::configure(&webrtcbin);
         self.pipeline
             .add(&webrtcbin)
             .map_err(|e| format!("add webrtcbin: {e}"))?;
@@ -313,7 +314,9 @@ impl Monitor {
             tee_pads: Vec::new(),
         });
 
-        let result = self.negotiate(&webrtcbin, offer, offer_sdp, &media_kinds);
+        let result = self
+            .negotiate(&webrtcbin, offer, offer_sdp, &media_kinds)
+            .map(|sdp| crate::ice::rewrite_candidates(&sdp));
         if result.is_err() {
             self.teardown();
         }

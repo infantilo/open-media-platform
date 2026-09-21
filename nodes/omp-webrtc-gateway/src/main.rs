@@ -17,6 +17,7 @@
 //! `POST /whep` / `DELETE /whep` bedient den Zuschauer, `GET /` liefert die
 //! Monitor-Seite (`monitor.html`).
 
+mod ice;
 mod monitor;
 mod pipeline;
 
