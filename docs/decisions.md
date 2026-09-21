@@ -25952,3 +25952,80 @@ Alarmleiste.
 `orchestrator/internal/db/migrations/0017_alarm_acks.sql`,
 `orchestrator/internal/httpapi/{alarm_handlers.go,alarm_handlers_test.go,server.go}`,
 `orchestrator/main.go`, `ui/shell/{alarms.ts,alarms_test.ts,alarm-view.ts,alert-bar.ts}`.
+
+## 2026-09-21 (Nachtrag 244) — Smartphone-WebRTC-Node, Schritt 3: Monitor-Richtung (MXL → Handy, WHEP)
+
+**Umgesetzt (`omp-webrtc-gateway`, `OMP_WEBRTC_GATEWAY_DIRECTION=monitor`,
+Default-Port 9442):** zwei IS-05-Receiver (Video, Audio; Muster
+`omp-2110-gateway`-Output) wählen die MXL-Quelle; `POST /whep` (SDP-Offer
+des Browsers → `201` + Answer), `DELETE /whep`, `GET /` = `monitor.html`
+(Handy-Zuschauerseite: Ansehen/Stopp/Ton, Verbindungs-/Auflösungsanzeige,
+`jitterBufferTarget=0`, optionale Latenzmessung), `GET /clock`. Codec
+H.264 (`x264enc`, zerolatency, ultrafast, 4 Mbit/s, `OMP_WEBRTC_BITRATE_KBPS`)
++ Opus (10-ms-Frames). Parameter (read-only): `direction`, `whepEndpoint`,
+`connectionState`, `sessionActive`, `videoFlowId`, `audioFlowId`,
+`videoFlowing`, `audioFlowing`, `bitrateKbps`. Caddy-Block HTTPS 9443 → 9442.
+
+**Architektur:** EINE dauerhafte Pipeline (`monitor.rs`): die per IS-05
+gewählten `MxlVideoInput`/`MxlAudioInput` hängen an je einem `identity` →
+`tee` → Dummy-Zweig (`queue leaky → fakesink`); die WHEP-Sitzung hängt ihren
+Zweig (`tee → queue → Konverter → x264enc/opusenc → RTP-Payloader →
+webrtcbin`) an und baut ihn wieder ab. Quellwechsel (chirurgisch, Muster
+`omp-switcher`) und Sitzungen sind unabhängig.
+
+**Live gefundene Fallstricke (webrtcbin 1.22, sendender Answerer):**
+1. Ohne `async=false` auf allen Appsinks/Fakesinks bleibt die Pipeline ohne
+   Preroll in READY (s. Nachtrag 241) — hier per `fakesink async=false`.
+2. **Pads müssen mit explizitem Namen `sink_<mline>` UND Caps angefordert
+   werden, zusätzlich zu `add-transceiver`** (beides VOR
+   `set-remote-description`). Nur `add-transceiver` + `request_pad_simple`
+   erzeugte zusätzliche, nie ausgehandelte Transceiver (mline −1), deren Pads
+   für immer geblockt blieben (jede Stufe sah genau 1 Buffer, dann Stillstand;
+   Diagnose per Pad-`is_blocked` + Transceiver-Auflistung). Nur Pads mit
+   Caps (ohne `add-transceiver`) machte die Video-m-Line `inactive`.
+3. Der Payloader meldet `profile-level-id`/`sprop-parameter-sets` des x264-
+   Streams (42c01f); webrtcbin gleicht das exakt mit den Browser-Profilen ab
+   und ließ Video sonst unbeantwortet. Fix: diese Felder per Pad-Probe aus dem
+   Caps-Event streichen (SPS/PPS kommen inline, `config-interval=-1`).
+4. WHEP-Sender senden keine `msid`: `e.streams` ist im Browser leer — die
+   Seite sammelt die Tracks selbst in einem `MediaStream`.
+5. Testmethodik: Headless-Chromium drosselt den Kamera-Tab, sobald das CDP-
+   Skript endet (Canvas-Frames bleiben aus, `videorate` dupliziert das letzte
+   Bild, der Zeitstempel altert scheinbar 1 s/s). Chromium mit
+   `--disable-background-timer-throttling --disable-renderer-backgrounding
+   --disable-backgrounding-occluded-windows` starten und den MXL-Head-Index
+   prüfen, bevor man Latenzen deutet. Die Kamera-Seite zeichnet im Messmodus
+   jetzt per Timer (feste Bildrate) statt per Video-Callback.
+6. `pgrep -x` mit gekürztem Prozessnamen/`ss ... pid=` statt Muster in der
+   eigenen Kommandozeile nutzen (Prozessname 15 Zeichen, sonst killt man die
+   eigene Shell oder gar nichts).
+
+**Verifikation (live, Chromium):** Video 1280×720 + Audio kommen im
+Browser an (`inbound-rtp`), mehrere Sitzungen nacheinander, Quellwechsel per
+IS-05 (`videoFlowing`/`audioFlowing` true), mit steady Quelle `omp-source`
+und mit der Kamera. `clippy -D warnings` sauber, Unit-Test für die
+Payload-Type-Extraktion.
+
+**NICHT belastbar / offen (ehrlich):**
+- **Latenz Kamera→Monitor nicht ermittelt.** Im Browser gemessen 0,2 s bis
+  >30 s, stark schwankend, teils wachsend; vor dem Encoder im Monitor-Node
+  stabil ~145 ms (Kamera→MXL→Monitor bis Encoder). Die Sandbox ist dafür
+  ungeeignet: zwei software-kodierende/-dekodierende Chromium-Instanzen, x264
+  und beide Nodes auf einer Maschine (Monitor-Node Debug 79 % CPU, Release
+  48 %, weiter mehrere Sekunden im Browser, dazu 377 verlorene Videopakete
+  auf Loopback). Ein echter Wert braucht ein echtes Handy und einen ruhigen
+  Rechner.
+- **Encoder-Bitrate wird nicht eingehalten** (gemessen ~7–10 Mbit/s bei
+  Ziel 4 Mbit/s, ohne VBV/`vbv-buf-capacity`) — ungelöst.
+- **Anlaufverhalten:** das Bild erscheint teils erst nach Sekunden
+  (erster IDR geht vor dem Verbindungsaufbau verloren; `key-int-max` = 2 s,
+  Abhängigkeit von PLI unbestätigt). Sitzung 3 einer Serie hatte einmal kein
+  Audio in den Statistiken (nicht reproduziert).
+- Kein Monitor-BCP-008, kein Katalog-Eintrag/Workflow-Start, keine
+  Authentifizierung von `POST /whep`, kein Alarm bei Verbindungsabbruch
+  (Schritt 4), nur ein Zuschauer je Node (neue Sitzung ersetzt die alte).
+- Kamera/Monitor zusammen als IS-05-Kette über den Orchestrator (statt
+  direkter PATCHes) nicht getestet.
+
+**Dateien:** `nodes/omp-webrtc-gateway/src/{monitor.rs,monitor.html,main.rs,camera.html}`,
+`deploy/dev/Caddyfile`.

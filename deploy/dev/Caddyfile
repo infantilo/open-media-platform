@@ -50,3 +50,13 @@ localhost:8443 {
 		flush_interval -1
 	}
 }
+
+# Smartphone-Monitor (omp-webrtc-gateway mit OMP_WEBRTC_GATEWAY_DIRECTION=monitor,
+# Nachtrag 243): Node fest auf OMP_PORT=9442, HTTPS auf 9443. Gleiche
+# Hinweise wie beim Kamera-Block oben (OMP_PUBLIC_HOST, Root-CA am Handy).
+{$OMP_PUBLIC_HOST:localhost}:9443 {
+	tls internal
+	reverse_proxy 127.0.0.1:9442 {
+		flush_interval -1
+	}
+}

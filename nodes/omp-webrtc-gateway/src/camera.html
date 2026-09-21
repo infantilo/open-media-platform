@@ -150,11 +150,17 @@ async function start() {
       const src = document.createElement('video');
       src.muted = true; src.playsInline = true; src.srcObject = camStream; await src.play();
       drawing = true;
+      // Feste Bildrate per Timer (mit Drift-Ausgleich) statt an die Frames
+      // des Kameratracks gekoppelt: der Kameratrack liefert je nach Gerät
+      // unregelmäßig, das ergäbe Lücken im MXL-Flow (Latenzsprünge).
+      const period = 1000 / fps;
+      let next = performance.now();
       const tick = () => {
         if (!drawing) return;
         ctx.drawImage(src, 0, 0, cv.width, cv.height);
         drawStrip(ctx, cv.width, cv.height);
-        if (src.requestVideoFrameCallback) src.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+        next += period;
+        setTimeout(tick, Math.max(0, next - performance.now()));
       };
       tick();
       sendStream = new MediaStream([...cv.captureStream(fps).getVideoTracks(), ...camStream.getAudioTracks()]);
