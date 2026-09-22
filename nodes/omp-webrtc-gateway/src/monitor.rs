@@ -511,26 +511,6 @@ impl Monitor {
                 .property("bframes", 0u32)
                 .build()
                 .map_err(|e| format!("x264enc: {e}"))?,
-            // x264enc hat keine eigene "profile"-Eigenschaft — das Profil
-            // wird ausschließlich über die abwärts geforderten Caps
-            // bestimmt. Ohne diesen Filter entscheidet libx264 selbst
-            // (typischerweise High, mit CABAC) — das kollidierte live mit
-            // einem strikten Decoder, der nach dem ersten (noch
-            // dekodierbaren) Keyframe an einer CABAC-codierten Folgeframe
-            // hängen blieb ("ein Bild, dann Stall", nicht reproduzierbar
-            // mit dem toleranten Software-Decoder headless Chromes).
-            // Constrained Baseline (kein CABAC, keine B-Frames — Letzteres
-            // ohnehin per `bframes=0` erzwungen) ist die am breitesten
-            // unterstützte Wahl, gerade für Hardware-Decoder auf Handys.
-            gst::ElementFactory::make("capsfilter")
-                .property(
-                    "caps",
-                    gst::Caps::builder("video/x-h264")
-                        .field("profile", "constrained-baseline")
-                        .build(),
-                )
-                .build()
-                .map_err(|e| format!("h264 profile capsfilter: {e}"))?,
             gst::ElementFactory::make("rtph264pay")
                 .property("pt", pt)
                 .property("config-interval", -1i32)
@@ -543,9 +523,20 @@ impl Monitor {
         // (42e01f/42001f/...) und ließ die Video-m-Line sonst
         // unbeantwortet (Transceiver ohne Treffer, kein RTP). SPS/PPS
         // kommen ohnehin inline (`config-interval=-1`), also die Felder
-        // aus dem Caps-Event streichen — das encodierte Profil selbst
-        // ist seit obigem Capsfilter unabhängig davon immer Constrained
-        // Baseline, das Streichen betrifft nur die SDP-Ankündigung.
+        // aus dem Caps-Event streichen.
+        //
+        // NICHT versuchen, das x264enc-Profil per zusätzlichem Capsfilter
+        // (z. B. `video/x-h264,profile=constrained-baseline`) VOR
+        // rtph264pay festzulegen (live gefunden, Nachtrag 248/249): in
+        // dieser Architektur wird die Kette live an eine bereits
+        // PLAYING-Pipeline angehängt (`sync_state_with_parent()`, kein
+        // NULL→PAUSED→PLAYING-Durchlauf von Anfang an) — der zusätzliche
+        // harte Caps-Zwang blockiert dort die Caps-Aushandlung komplett:
+        // die Sitzung verhandelt ICE/DTLS normal (`connected`), sendet
+        // aber danach dauerhaft NULL RTP-Pakete (kein einziges
+        // `inbound-rtp` in `pc.getStats()`). Isoliert per `gst-launch`
+        // (statischer Pipeline-Aufbau) funktioniert derselbe Capsfilter
+        // einwandfrei — das Problem ist spezifisch für den Live-Anbau.
         if let Some(pad) = chain.last().and_then(|p| p.static_pad("src")) {
             pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, |_, info| {
                 if let Some(gst::PadProbeData::Event(ev)) = &info.data

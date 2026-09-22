@@ -26228,3 +26228,45 @@ Constrained Baseline, exakt der bereits in Nachtrag 244 erwähnte Wert
 `whip_offer`/`teardown`) gegen gleichzeitige Aufrufe serialisieren.
 
 **Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.
+
+## 2026-09-22 (Nachtrag 249) — Korrektur zu Nachtrag 248: der "Fix" war die eigentliche Ursache
+
+**Befund:** Der in Nachtrag 248 beschriebene Capsfilter
+(`video/x-h264,profile=constrained-baseline` zwischen `x264enc` und
+`rtph264pay`) hat das "1 Bild, dann Stall"-Problem NICHT behoben, sondern
+eine neue, schlimmere Regression verursacht: nach Neustart mit diesem Fix
+lieferte JEDE Monitor-Sitzung — auch headless gegen eine unveränderte,
+frische Testkamera, ganz ohne reales Gerät — dauerhaft NULL RTP-Pakete
+(`pc.getStats()`: `connectionState: connected`, ICE/DTLS `connected`,
+aber kein einziger `inbound-rtp`-Eintrag, nur ~1,5 KB reine Handshake-
+Bytes). Per A/B-Test bestätigt: derselbe Build MIT Capsfilter → 0 Pakete;
+Capsfilter entfernt, sonst identischer Code → sauberer Stream
+(`framesDecoded` wächst kontinuierlich). Isoliert per `gst-launch`
+(statischer Pipeline-Aufbau NULL→PAUSED→PLAYING) hatte derselbe Capsfilter
+in Nachtrag 248 einwandfrei funktioniert — das Problem tritt spezifisch
+auf, wenn die Kette live an eine bereits PLAYING-Pipeline angehängt wird
+(`sync_state_with_parent()`, das hier verwendete Muster für Session-
+Auf-/Abbau ohne Neustart der Basis-Pipeline). Vermutlich ein
+Caps-Aushandlungs-Deadlock, der plausibel auch die in Nachtrag 247
+beobachteten, stundenlangen `"pipeline"`-Liveness-Degraded-Meldungen
+erklärt (derselbe Prozess, derselbe Zeitraum) — ein Deadlock in der
+Caps-Aushandlung könnte denselben Stream-Lock blockieren, den auch der
+Bus-Watcher-Thread für `timed_pop_filtered` braucht.
+
+**Fix:** Capsfilter wieder entfernt (`nodes/omp-webrtc-gateway/src/monitor.rs`,
+`attach_video_branch`), Kommentar an der bestehenden Profil-Streichung
+(Nachtrag 244) um eine explizite Warnung ergänzt, dasselbe nicht erneut zu
+versuchen. `cargo test`/`clippy -D warnings` sauber. Live erneut per
+A/B-Vergleich (headless, gleicher Prozess, gleiche Kamera) verifiziert.
+
+**Offene Frage, nicht mehr verfolgt:** ob das ursprüngliche, in Nachtrag
+248 vermutete CABAC/Profil-Mismatch-Problem real war oder nicht, bleibt
+unklar — das Problem trat seither nicht mehr reproduzierbar auf (auch ohne
+den Capsfilter), weder headless noch am echten Gerät. Falls es wiederkehrt:
+NICHT denselben Capsfilter-Ansatz wiederholen, sondern das Profil vor dem
+Verbinden der Kette an die Pipeline festlegen (z. B. Caps direkt am
+x264enc-Element vorverhandeln, bevor es `sync_state_with_parent()`
+durchläuft), oder x264encs `option-string`-Eigenschaft für `profile=`
+probieren.
+
+**Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.
