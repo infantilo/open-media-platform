@@ -1,0 +1,456 @@
+package asset
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
+)
+
+// ErrNotFound wird geliefert, wenn keine Zeile mit der gegebenen ID
+// existiert (gleiche Konvention wie process.ErrNotFound/workflows.ErrNotFound).
+var ErrNotFound = errors.New("asset: not found")
+
+// ErrConcurrentModification — s. process.ErrConcurrentModification
+// (identisches CAS-Muster auf row_version).
+var ErrConcurrentModification = errors.New("asset: concurrent modification")
+
+// Store persistiert die Asset-Domäne in Postgres
+// (db/migrations/0019_assets.sql).
+type Store struct {
+	db *sql.DB
+}
+
+// NewStore erstellt einen Store auf der gegebenen, bereits migrierten
+// Datenbankverbindung.
+func NewStore(database *sql.DB) *Store {
+	return &Store{db: database}
+}
+
+func newID() (string, error) {
+	id := tracing.NewID()
+	if id == "" {
+		return "", fmt.Errorf("asset: id generation failed")
+	}
+	return id, nil
+}
+
+// ---- Asset -----------------------------------------------
+
+func marshalMetadata(m Metadata) ([]byte, error) {
+	return json.Marshal(m)
+}
+
+func unmarshalMetadata(raw []byte) (Metadata, error) {
+	var m Metadata
+	if len(raw) == 0 {
+		return m, nil
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return Metadata{}, err
+	}
+	return m, nil
+}
+
+func scanAsset(row interface{ Scan(...any) error }) (Asset, error) {
+	var a Asset
+	var currentVersionID sql.NullString
+	var metadataRaw []byte
+	err := row.Scan(&a.ID, &a.Type, &a.Title, &a.Description, &a.Status, &currentVersionID,
+		&metadataRaw, &a.CreatedBy, &a.UpdatedBy, &a.RowVersion, &a.CreatedAt, &a.UpdatedAt)
+	if err != nil {
+		return Asset{}, err
+	}
+	a.CurrentVersionID = currentVersionID.String
+	metadata, err := unmarshalMetadata(metadataRaw)
+	if err != nil {
+		return Asset{}, fmt.Errorf("asset: decode metadata: %w", err)
+	}
+	a.Metadata = metadata
+	return a, nil
+}
+
+const assetSelectColumns = `id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at`
+
+// CreateAsset legt ein neues Asset im Status "ingesting" an (B8: Start
+// des Lifecycles), ohne current_version_id (die erste AssetVersion muss
+// erst angelegt und veröffentlicht werden, s. PublishVersion).
+func (s *Store) CreateAsset(assetType, title, description, createdBy string) (Asset, error) {
+	if assetType == "" || title == "" {
+		return Asset{}, fmt.Errorf("asset: type and title are required")
+	}
+	id, err := newID()
+	if err != nil {
+		return Asset{}, err
+	}
+	metadataRaw, err := marshalMetadata(Metadata{})
+	if err != nil {
+		return Asset{}, err
+	}
+	now := time.Now().UTC()
+	a := Asset{
+		ID: id, Type: assetType, Title: title, Description: description,
+		Status: StatusIngesting, CreatedBy: createdBy, UpdatedBy: createdBy,
+		RowVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO assets (id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, 1, $9, $9)
+	`, a.ID, a.Type, a.Title, a.Description, a.Status, metadataRaw, a.CreatedBy, a.UpdatedBy, a.CreatedAt)
+	if err != nil {
+		return Asset{}, err
+	}
+	return a, nil
+}
+
+// GetAsset liest ein einzelnes Asset.
+func (s *Store) GetAsset(id string) (Asset, error) {
+	row := s.db.QueryRow(`SELECT `+assetSelectColumns+` FROM assets WHERE id = $1`, id)
+	a, err := scanAsset(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Asset{}, ErrNotFound
+	}
+	return a, err
+}
+
+// AssetFilter grenzt ListAssets ein — jedes nicht-leere Feld ist ein
+// zusätzliches UND-Kriterium (gleiches Muster wie process.ExecutionFilter).
+type AssetFilter struct {
+	Type   string
+	Status string
+}
+
+// ListAssets liefert Assets nach Filter, neueste zuerst.
+func (s *Store) ListAssets(f AssetFilter) ([]Asset, error) {
+	query := `SELECT ` + assetSelectColumns + ` FROM assets WHERE 1=1`
+	var args []any
+	add := func(col, val string) {
+		if val == "" {
+			return
+		}
+		args = append(args, val)
+		query += fmt.Sprintf(" AND %s = $%d", col, len(args))
+	}
+	add("type", f.Type)
+	add("status", f.Status)
+	query += " ORDER BY created_at DESC"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Asset{}
+	for rows.Next() {
+		a, err := scanAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// UpdateAssetStatus validiert den Übergang (LifecycleTransitions) und
+// schreibt ihn per CAS auf row_version (A3-Äquivalent für Assets).
+func (s *Store) UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (Asset, error) {
+	current, err := s.GetAsset(id)
+	if err != nil {
+		return Asset{}, err
+	}
+	if err := LifecycleTransitions.Validate(current.Status, newStatus); err != nil {
+		return Asset{}, err
+	}
+	res, err := s.db.Exec(`
+		UPDATE assets SET status = $3, updated_by = $4, row_version = row_version + 1, updated_at = now()
+		WHERE id = $1 AND row_version = $2
+	`, id, expectedRowVersion, newStatus, updatedBy)
+	if err != nil {
+		return Asset{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Asset{}, ErrConcurrentModification
+	}
+	return s.GetAsset(id)
+}
+
+// UpdateAssetMetadata ersetzt den kompletten Metadata-Block (CAS wie
+// UpdateAssetStatus) — kein partielles Merge je Kategorie in dieser
+// Phase (kein Aufrufer bräuchte es heute, B7/Schema-Validierung ist
+// ohnehin zurückgestellt, s. Moduldoku).
+func (s *Store) UpdateAssetMetadata(id string, expectedRowVersion int, metadata Metadata, updatedBy string) (Asset, error) {
+	raw, err := marshalMetadata(metadata)
+	if err != nil {
+		return Asset{}, err
+	}
+	res, err := s.db.Exec(`
+		UPDATE assets SET metadata = $3, updated_by = $4, row_version = row_version + 1, updated_at = now()
+		WHERE id = $1 AND row_version = $2
+	`, id, expectedRowVersion, raw, updatedBy)
+	if err != nil {
+		return Asset{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Asset{}, ErrConcurrentModification
+	}
+	return s.GetAsset(id)
+}
+
+// ---- AssetVersion -----------------------------------------------
+
+func scanVersion(row interface{ Scan(...any) error }) (AssetVersion, error) {
+	var v AssetVersion
+	var parentVersionID sql.NullString
+	err := row.Scan(&v.ID, &v.AssetID, &v.VersionNumber, &parentVersionID, &v.Status, &v.ChangeReason, &v.CreatedBy, &v.CreatedAt)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	v.ParentVersionID = parentVersionID.String
+	return v, nil
+}
+
+const versionSelectColumns = `id, asset_id, version_number, parent_version_id, status, change_reason, created_by, created_at`
+
+// CreateVersion legt eine neue, draft-Version für ein Asset an —
+// version_number ist die nächste freie Nummer, atomar bestimmt über
+// eine `SELECT … FOR UPDATE` auf die assets-Zeile (gleiches Muster wie
+// process.Store.CreateVersion).
+func (s *Store) CreateVersion(assetID, parentVersionID, changeReason, createdBy string) (AssetVersion, error) {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var exists string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM assets WHERE id = $1 FOR UPDATE`, assetID).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AssetVersion{}, ErrNotFound
+		}
+		return AssetVersion{}, err
+	}
+
+	var nextVersion int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version_number), 0) + 1 FROM asset_versions WHERE asset_id = $1`, assetID).Scan(&nextVersion); err != nil {
+		return AssetVersion{}, err
+	}
+
+	id, err := newID()
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	v := AssetVersion{
+		ID: id, AssetID: assetID, VersionNumber: nextVersion, ParentVersionID: parentVersionID,
+		Status: VersionStatusDraft, ChangeReason: changeReason, CreatedBy: createdBy, CreatedAt: time.Now().UTC(),
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO asset_versions (id, asset_id, version_number, parent_version_id, status, change_reason, created_by, created_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
+	`, v.ID, v.AssetID, v.VersionNumber, v.ParentVersionID, v.Status, v.ChangeReason, v.CreatedBy, v.CreatedAt); err != nil {
+		return AssetVersion{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return AssetVersion{}, err
+	}
+	return v, nil
+}
+
+// GetVersion liest eine einzelne AssetVersion.
+func (s *Store) GetVersion(id string) (AssetVersion, error) {
+	row := s.db.QueryRow(`SELECT `+versionSelectColumns+` FROM asset_versions WHERE id = $1`, id)
+	v, err := scanVersion(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return AssetVersion{}, ErrNotFound
+	}
+	return v, err
+}
+
+// ListVersions liefert alle Versionen eines Assets, neueste zuerst.
+func (s *Store) ListVersions(assetID string) ([]AssetVersion, error) {
+	rows, err := s.db.Query(`SELECT `+versionSelectColumns+` FROM asset_versions WHERE asset_id = $1 ORDER BY version_number DESC`, assetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []AssetVersion{}
+	for rows.Next() {
+		v, err := scanVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// PublishVersion macht eine Draft-Version unveränderlich (B3) und setzt
+// sie zugleich als current_version_id des zugehörigen Assets — beides
+// atomar in einer Transaktion (ein Leser darf nie eine "published"-
+// Version sehen, die noch nicht die aktuelle Version ihres Assets ist,
+// oder umgekehrt).
+func (s *Store) PublishVersion(id string) (AssetVersion, error) {
+	current, err := s.GetVersion(id)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	if err := VersionTransitions.Validate(current.Status, VersionStatusPublished); err != nil {
+		return AssetVersion{}, err
+	}
+
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `UPDATE asset_versions SET status = $3 WHERE id = $1 AND status = $2`, id, current.Status, VersionStatusPublished)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return AssetVersion{}, ErrConcurrentModification
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE assets SET current_version_id = $2, row_version = row_version + 1, updated_at = now() WHERE id = $1`, current.AssetID, id); err != nil {
+		return AssetVersion{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return AssetVersion{}, err
+	}
+	return s.GetVersion(id)
+}
+
+// ArchiveVersion.
+func (s *Store) ArchiveVersion(id string) (AssetVersion, error) {
+	current, err := s.GetVersion(id)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	if err := VersionTransitions.Validate(current.Status, VersionStatusArchived); err != nil {
+		return AssetVersion{}, err
+	}
+	res, err := s.db.Exec(`UPDATE asset_versions SET status = $3 WHERE id = $1 AND status = $2`, id, current.Status, VersionStatusArchived)
+	if err != nil {
+		return AssetVersion{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return AssetVersion{}, ErrConcurrentModification
+	}
+	return s.GetVersion(id)
+}
+
+// ---- Representation -----------------------------------------------
+
+func scanRepresentation(row interface{ Scan(...any) error }) (Representation, error) {
+	var r Representation
+	var width, height, sampleRate, channels sql.NullInt64
+	var frameRate sql.NullFloat64
+	var bitrate, sizeBytes sql.NullInt64
+	err := row.Scan(&r.ID, &r.AssetVersionID, &r.Type, &r.Storage.Provider, &r.Storage.URI,
+		&r.Format, &r.Codec, &r.Container, &width, &height, &frameRate, &sampleRate, &channels,
+		&bitrate, &sizeBytes, &r.Checksum, &r.CreatedAt)
+	if err != nil {
+		return Representation{}, err
+	}
+	if width.Valid {
+		v := int(width.Int64)
+		r.Width = &v
+	}
+	if height.Valid {
+		v := int(height.Int64)
+		r.Height = &v
+	}
+	if frameRate.Valid {
+		v := frameRate.Float64
+		r.FrameRate = &v
+	}
+	if sampleRate.Valid {
+		v := int(sampleRate.Int64)
+		r.SampleRate = &v
+	}
+	if channels.Valid {
+		v := int(channels.Int64)
+		r.Channels = &v
+	}
+	if bitrate.Valid {
+		v := bitrate.Int64
+		r.Bitrate = &v
+	}
+	if sizeBytes.Valid {
+		v := sizeBytes.Int64
+		r.SizeBytes = &v
+	}
+	return r, nil
+}
+
+const representationSelectColumns = `id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at`
+
+// CreateRepresentation legt eine neue Representation unter einer
+// AssetVersion an. AssetVersionID/Type/Storage sind Pflichtfelder, alle
+// technischen Felder optional (B4: "Nur tatsächlich relevante Felder
+// verwenden" — nicht jede Representation hat z. B. eine Framerate).
+func (s *Store) CreateRepresentation(r Representation) (Representation, error) {
+	if r.AssetVersionID == "" || r.Type == "" || r.Storage.Provider == "" || r.Storage.URI == "" {
+		return Representation{}, fmt.Errorf("asset: assetVersionId, type and storage (provider+uri) are required")
+	}
+	id, err := newID()
+	if err != nil {
+		return Representation{}, err
+	}
+	r.ID = id
+	r.CreatedAt = time.Now().UTC()
+	_, err = s.db.Exec(`
+		INSERT INTO representations (id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`, r.ID, r.AssetVersionID, r.Type, r.Storage.Provider, r.Storage.URI, r.Format, r.Codec, r.Container,
+		r.Width, r.Height, r.FrameRate, r.SampleRate, r.Channels, r.Bitrate, r.SizeBytes, r.Checksum, r.CreatedAt)
+	if err != nil {
+		return Representation{}, err
+	}
+	return r, nil
+}
+
+// GetRepresentation liest eine einzelne Representation.
+func (s *Store) GetRepresentation(id string) (Representation, error) {
+	row := s.db.QueryRow(`SELECT `+representationSelectColumns+` FROM representations WHERE id = $1`, id)
+	r, err := scanRepresentation(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Representation{}, ErrNotFound
+	}
+	return r, err
+}
+
+// ListRepresentations liefert alle Representations einer AssetVersion.
+func (s *Store) ListRepresentations(assetVersionID string) ([]Representation, error) {
+	rows, err := s.db.Query(`SELECT `+representationSelectColumns+` FROM representations WHERE asset_version_id = $1 ORDER BY created_at ASC`, assetVersionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Representation{}
+	for rows.Next() {
+		r, err := scanRepresentation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteRepresentation entfernt eine Representation — idempotent, kein
+// Fehler, wenn sie nicht (mehr) existiert (gleiches Muster wie
+// workflows.Store.Delete).
+func (s *Store) DeleteRepresentation(id string) error {
+	_, err := s.db.Exec(`DELETE FROM representations WHERE id = $1`, id)
+	return err
+}

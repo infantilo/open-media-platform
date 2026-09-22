@@ -26633,3 +26633,95 @@ Vorbild, daher bewusst nicht stillschweigend entschieden; (4) JetStream
 vs. Outbox, vertagt. Vollständige Tabelle (reuse/extend/refactor/new für
 A1-A10/B1-B16) in UMSETZUNG.md §6b, nicht hier dupliziert. Kein Code
 geschrieben, Vorgabe der Aufgabenstellung eingehalten.
+
+**Nachtrag (direkt danach):** Nutzer bestätigt beide empfohlenen
+Optionen aus 21.4 — Namensraum "Process" (nicht zweites "Workflow") und
+Asset-Domäne im Orchestrator (nicht in `omp-media-library`). UMSETZUNG.md
+§6b entsprechend aktualisiert (commit 0f29ca3), legt Paketname/
+Tabellen-Ownership für Phase 2 fest.
+
+## 2026-09-22 (Nachtrag 258) — Kapitel 21 Phase 2: Domain Model + Persistenz (Process-Engine + Asset/Content)
+
+**Nutzerauftrag:** "fang mit Phase 2 an" — direkte Fortsetzung von
+Nachtrag 257 nach Bestätigung der beiden Namensraum-/Ownership-
+Entscheidungen. Aufgabenstellung verlangt für Phase 2: "Implementiere
+zuerst: Asset, AssetVersion, Representation, Metadata,
+WorkflowDefinition, WorkflowVersion, WorkflowExecution,
+WorkflowStepExecution, HumanTask inklusive Persistence und
+Migrationen" — genau dieser Umfang wurde geliefert, bewusst NICHT mehr
+(keine Runtime/Execution-Logik, keine API/UI, kein B1-Vollmodell über
+die genannten vier Entitäten hinaus).
+
+Zwei neue Go-Pakete: `orchestrator/internal/process`
+(ProcessDefinition/ProcessVersion/ProcessExecution/
+ProcessStepExecution/HumanTask, bewusst getrennt von
+`internal/workflows` wie in Nachtrag 257 entschieden) und
+`orchestrator/internal/asset` (Asset/AssetVersion/Representation/
+Metadata). Beide nutzen ein neues, gemeinsames Hilfspaket
+`internal/statemachine` (explizite (from,to)-Übergangstabellen statt
+verstreuter if/else, B8 wörtlich) — die Abstraktion ist durch echte
+Zweitnutzung gerechtfertigt (Asset-Lifecycle UND Process-/Step-
+Ausführungsstatus), nicht spekulativ vorab gebaut. Migrationen
+`0018_process.sql`/`0019_assets.sql`, bestehende Konvention
+(`NNNN_name.sql`, automatischer `embed.FS`-Scan, `schema_migrations`-
+Tracking) unverändert übernommen. `assets.current_version_id ↔
+asset_versions.id` ist ein echter Zirkelbezug zwischen zwei Tabellen —
+aufgelöst per nachträglichem `ALTER TABLE assets ADD CONSTRAINT …`
+nach Anlage von `asset_versions`.
+
+Bewusste Design-Entscheidung gegen das bestehende `workflows`-Blob-
+Muster (ein JSONB-Blob pro Aggregat, 0004_workflows.sql): Executions/
+StepExecutions/HumanTasks sind hier normalisiert relational statt
+verschachtelt, weil sie unabhängig gelistet/gefiltert werden müssen
+(laufende Executions, Tasks je Assignee, Historie je Execution — A9s
+`GET .../history`/`GET .../tasks`), was ein Blob-Scan nicht leisten
+könnte — nur der Schritt-Graph selbst (Definition.Steps/Triggers)
+bleibt JSONB, weil er immer als Ganzes gelesen/versioniert wird.
+
+**Zwei echte Bugs per Test gegen die echte, laufende Dev-Postgres
+gefunden und gefixt** (isolierte `_test`-Datenbank via `dbtest.Open`,
+Nachtrag 108 — nie die App-Datenbank selbst):
+
+1. `UpdateExecutionStatus`/`UpdateStepExecutionStatus` nutzten anfangs
+   `statemachine.Machine.IsTerminal(newStatus)`, um zu entscheiden, ob
+   `completed_at` gesetzt wird. Für `failed` lieferte das fälschlich
+   `false` — `failed` hat in `ExecutionTransitions`/
+   `StepExecutionTransitions` weiterhin einen gültigen Folgeübergang
+   (`-> compensating` bzw. bei Schritten zusätzlich `-> pending` für
+   einen Retry), ist also GRAPHISCH nicht terminal, obwohl der gerade
+   laufende Versuch in diesem Moment sehr wohl beendet ist.
+   `IsTerminal` beantwortet "kann sich das je wieder ändern", nicht
+   "ist der aktuelle Lauf gerade zu Ende" — zwei verschiedene Fragen.
+   Behoben durch eine explizit vom Übergangsgraphen entkoppelte
+   `isRunEndStatus`-Liste (`process/types.go`), mit Kommentar, warum
+   sie sich bewusst von `IsTerminal` unterscheidet.
+2. Ein Test verglich JSONB-Roundtrip-Output per exaktem Byte-String-
+   Vergleich (`{"result":"ok"}`) — Postgres normalisiert beim
+   Roundtrip Whitespace (`{"result": "ok"}`, Leerzeichen nach dem
+   Doppelpunkt), kein Store-Fehler. Test auf semantischen Vergleich
+   (`json.Unmarshal` beider Seiten) umgestellt.
+
+Beide Funde wären mit reiner Mock-/In-Memory-Testabdeckung nicht
+aufgefallen — bestätigt erneut den Grundsatz aus
+[[feedback_verify_fix_before_reporting_success]] (hier: "verifiziere
+gegen die echte Infrastruktur, nicht nur die Kompilierbarkeit").
+
+**Verifikation:** `go build ./...` sauber; `go vet ./...` für das
+gesamte Orchestrator-Modul sauber; `gofmt -l` sauber für die neuen
+Pakete (drei vorbestehende, von dieser Änderung nicht berührte
+Formatierungsabweichungen in `internal/httpapi` ignoriert — nicht Teil
+dieser Änderung, nicht angefasst); `go test ./...` für das komplette
+Orchestrator-Modul grün, alle 34 Pakete inkl. der beiden neuen (u. a.
+`internal/launcher` 42s, `internal/workflows` weiterhin grün — keine
+Regression durch die neuen Pakete). 8 neue `statemachine`-Tests, 9 neue
+`process`-Store-Tests + 10 `Definition.Validate()`-Tests, 8 neue
+`asset`-Store-Tests — alle real gegen Postgres, kein Mock. Bewusst
+NICHT Teil dieser Runde: HTTP-API-Handler, UI, `main.go`-Verdrahtung
+(Migrationen laufen automatisch über den bestehenden `embed.FS`-Scan,
+unabhängig davon ob das Go-Paket irgendwo importiert wird — API-
+Anbindung ist laut Aufgabenstellung selbst Phase 5), Ausführungslogik/
+Runtime (Retry-Ausführung, Condition-Auswertung, Event-Abonnements,
+Recovery nach Prozess-Neustart — Phase 3), B1s volle
+Core-Content-Model-Liste über Asset/AssetVersion/Representation/
+Metadata hinaus, B7 (MetadataSchema-Validierung). Details:
+UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 2").
