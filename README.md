@@ -227,6 +227,35 @@ Full walkthroughs and context for every screen above are in
   guided move (stop, start on the target host, best-effort reconnect
   of its existing connections) after a confirmation dialog.
 
+**Business process engine & asset catalog**
+
+Deliberately a *second*, separate concept from the "workflow" objects
+above (which are node-role deployment bundles, i.e. a control-room
+setup) — a business-process/task-graph engine in the BPMN sense:
+definitions, versions with an immutable-once-published lifecycle, and executions
+that survive an orchestrator restart mid-run (crash-recovery is a
+tested requirement, not an afterthought). The step vocabulary covers
+task, media function (drives any self-described node method through
+the same IS-12/14 contract the Flow Editor uses), service call,
+allow-listed shell script (`ffmpeg`/`ffprobe` auto-detected on the
+host, nothing else runs unless explicitly allow-listed), condition/
+branch (a sandboxed expression language, no host access), parallel/
+join, wait/timer, human task/approval (assign, claim, decide, with
+optimistic-concurrency-safe state), notification, subworkflow, and
+compensation. Domain events (e.g. an asset becoming ready) can start a
+process automatically — delivered at-least-once via a Postgres
+outbox written atomically with the state change, relayed through
+clustered NATS JetStream, so a crashed relay never silently drops an
+event. A visual, drag-and-drop step-graph editor (reusing the same
+`ui/graph` pan/zoom/connect primitives as the Flow Editor and the
+graphical workflow designer, on a genuine business-process graph
+instead of a live NMOS wiring view) sits next to a plain HTTP API —
+both produce the identical JSON. Alongside it, an asset/content domain
+model (assets, versions, representations, free-form metadata
+categories, an explicit ingest→…→published→archived lifecycle state
+machine) gives the process engine something real to operate on,
+storage-provider-agnostic by design.
+
 **Microservices** (demonstration nodes, not the focus — see the note
 above) — each an independent process that self-registers via NMOS,
 with its own UI and self-described parameters (full list with
@@ -575,13 +604,26 @@ set, silently working only by the old library's lack of validation —
 re-verified live with a real one-sided RDMA write between two MXL
 domains, RDMA-hardware-free.
 
+Most recently, Kapitel 21 added the business-process engine and
+asset/content domain model described above (definitions/versions/
+crash-recoverable executions, the full BPMN-style step vocabulary,
+reliable domain-event triggers via a Postgres outbox + clustered NATS
+JetStream, an HTTP API for both domains, and a visual drag-and-drop
+step-graph editor reusing the Flow Editor's own `ui/graph` primitives)
+— live-verified end to end against the real running orchestrator at
+every step, including a real browser click-through of the visual
+editor (genuine CDP-driven mouse drags, not just API calls) that
+created a step graph, connected it, and ran it to completion.
+
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,
 pending hardware procurement), an NDI gateway, proprietary Dante (Dante in
-AES67 mode already runs via `omp-aes67-gateway`), and a drag-to-move UI
-for the already-built workflow-role migration backend — the flow
+AES67 mode already runs via `omp-aes67-gateway`), a drag-to-move UI
+for the already-built workflow-role migration backend (the flow
 editor now at least places a running workflow's tile in its correct
-host zone (see "What OpenMediaPlatform does not do" above).
+host zone, see "What OpenMediaPlatform does not do" above), and a UI
+for the new asset/content domain (its HTTP API is complete, no
+dedicated tab yet).
 
 ## License
 
