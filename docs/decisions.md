@@ -26476,3 +26476,53 @@ bereits sehr langen Sitzung.
 
 **Dateien dieser Sitzung:** keine (Diagnose-Code + Jitterbuffer-Testwert
 wieder vollständig entfernt, `git diff` gegen den letzten Commit leer).
+
+## 2026-09-22 (Nachtrag 255) — Fixversuch für Nachtrag 254 (Burst-Read-Pacing) verworfen
+
+**Umgesetzt:** `read_loop`/`read_audio_loop` (`omp-mediaio/src/mxl.rs`)
+um eine reine Erfolgspfad-Drosselung auf die nominelle Grain-/Batch-
+Periode ergänzt (`next_due: Option<Instant>`, per `thread::sleep`
+gewartet, wenn ein Grain schneller als die nominelle Periode nach dem
+vorherigen verfügbar wurde) — bewusst OHNE die PTS-Vergabe
+(`do-timestamp=true`) oder irgendeinen der bereits sorgfältig gehärteten
+Fehler-/Backoff-Zweige anzufassen (Grund: Nachtrag 2026-07-12 zu §15
+lehnt reine Index-Zeitstempel explizit ab, "kein Drift-Schutz"). Defensiv
+gegen ein degeneriertes `Rational` (`numerator ≤ 0`) abgesichert
+(`Duration::from_secs_f64` würde sonst bei Division durch 0 paniken).
+
+**Verifikation vor dem Live-Test (alle grün):** `cargo build`/`clippy -D
+warnings`/`cargo test` für `omp-mediaio` sauber (Beispielbinaries mit
+vorbestehenden, unabhängigen `mxl`-Crate-Fehlern per `git stash`-Vergleich
+als bereits vor dieser Änderung kaputt verifiziert). Gesamter Workspace-
+Build (`cargo build --workspace`) sauber. Headless-Test (Fake-Kamera,
+liefert naturgemäß perfekt gleichmäßig getaktete Frames) zeigt keine
+Regression — kann den eigentlich zu behebenden Effekt aber auch nicht
+auslösen/bestätigen, da er nur mit unregelmäßigem Timing echter
+Kamera-Hardware auftritt.
+
+**Live-Ergebnis: Regression.** Erste Verbindung nach einem frischen
+Neustart (nur ~100s alt, deutlich zu früh für die bekannte
+Session-Churn-Degradation aus Nachtrag 247/252) zeigte sofort schwarzes
+Bild — reproduzierbar unmittelbar nach dem Fix, nicht danach untersucht
+(sofort verworfen statt weiter zu raten, s. u.). Exakter Mechanismus NICHT
+root-caused — die Logik hält bei Nachlese-Prüfung stand (Tabellen-
+Durchrechnung mehrerer Szenarien ergab keinen offensichtlichen Fehler),
+der tatsächliche Fehler liegt also entweder in einer Interaktion mit
+Live-Kamera-Timing, die sich der reinen Codelese entzieht, oder an einer
+Stelle, die hier nicht bedacht wurde.
+
+**Zurückgesetzt** (`git checkout -- nodes/omp-mediaio/src/mxl.rs`),
+Nodes neu gebaut+gestartet, zurück auf bekanntem Ausgangszustand.
+
+**Lektion:** dieser Fix bestand JEDE automatisierte Prüfung (Build,
+Clippy, Unit-Tests, Workspace-Build, Headless-Funktionstest) und schlug
+trotzdem beim ersten echten Live-Test fehl — bei geteilter, timing-
+sensitiver Infrastruktur mit einer Abhängigkeit von echtem, nicht in
+dieser Sandbox reproduzierbarem Hardware-Timing reichen diese
+Prüfungen nicht aus, um Vertrauen vor dem Live-Test zu rechtfertigen.
+Für einen erneuten Versuch: Live-Instrumentierung (wie in Nachtrag 254,
+direkt in `read_loop`) VOR dem eigentlichen Fix-Versuch aufsetzen, damit
+ein fehlgeschlagener Versuch sofort erklärbar ist statt nur "hat nicht
+funktioniert, warum unklar".
+
+**Dateien:** keine (vollständig zurückgesetzt).
