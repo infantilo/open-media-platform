@@ -26270,3 +26270,60 @@ durchläuft), oder x264encs `option-string`-Eigenschaft für `profile=`
 probieren.
 
 **Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.
+
+## 2026-09-22 (Nachtrag 250) — Retourbild "1 Bild dann Stall": echte Ursache gefunden und gefixt
+
+**Root Cause:** `add_chain()` (`monitor.rs`) fordert von `tee` einen neuen
+Pad an und verlinkt ihn SOFORT mit der neuen Zweig-Kette — die Elemente
+der Kette werden aber erst DANACH per `sync_state_with_parent()` von NULL
+nach PLAYING gebracht. Der `tee` schiebt Puffer auf seinem eigenen
+Streaming-Thread, sobald der Pad verlinkt ist — in diesem Fenster (Link
+existiert, Kette noch nicht PLAYING) kann der erste (oder mehrere) echte
+Videopuffer gegen noch nicht bereite Elemente laufen und geht ohne
+GStreamer-Fehlermeldung verloren. Klassischer, in GStreamers eigener
+Doku beschriebener Fallstrick ("Dynamically Changing the Pipeline"): ein
+neu anzuhängender Zweig muss über einen BLOCK-Pad-Probe auf dem
+`tee`-Pad geschützt werden, bevor er verlinkt wird, und erst nach
+bestätigtem PLAYING wieder freigegeben werden.
+
+**Warum das so lange nicht auffiel:** Das Zeitfenster ist extrem kurz
+(µs-Bereich, GStreamer-Zustandswechsel für ein paar einfache Elemente
+sind sehr schnell) — headless Chromium (softwaregebunden, Verbindung
+über Loopback, keine echte Netzwerklatenz) hat das Fenster in praktisch
+allen Tests dieser Sitzung "verpasst" (Verbindung/erste Anfrage nach dem
+Fenster). Ein echter Browser über einen echten Netzwerkpfad (andere
+ICE-/DTLS-Timing-Charakteristik) trifft das Fenster reproduzierbar.
+Gefunden erst durch GStreamer-Debug-Tracing (`GST_DEBUG=GST_STATES:5,
+GST_PADS:5/7`, zwei separate Neustarts mit steigender Detailtiefe) einer
+realen fehlgeschlagenen Sitzung — die vorherigen Ansätze (SDP-Vergleich,
+Paketzähler, MTU/Netzwerk-Check, x264enc-Profil aus Nachtrag 248/249)
+waren alle plausible, aber falsche Spuren, per harten Belegen (nicht nur
+Vermutung) einzeln ausgeschlossen.
+
+**Fix (`add_chain`):** `tee.request_pad_simple()` → sofort
+`BLOCK | BUFFER | BUFFER_LIST`-Probe auf den neuen Pad → Kette bauen,
+verlinken, `sync_state_with_parent()` für alle neuen Elemente →
+`remove_probe()`. Kein Sonderfall mehr für Video vs. Audio nötig
+(`add_chain` wird für beide genutzt).
+
+**Verifikation:**
+- `cargo test`/`clippy -D warnings` sauber.
+- A/B per headless Chromium (Fix rein/raus, sonst identischer Prozess,
+  identische Testkamera): beide Varianten zeigen ein SEPARATES,
+  bereits aus Nachtrag 247 bekanntes Problem (wiederholte automatisierte
+  Reconnects hintereinander degradieren irgendwann — mit Fix hielt es
+  2 Runden durch, ohne Fix nur 1; nicht schlimmer als vorher, aber auch
+  nicht das hier behobene Problem — siehe „Weiterhin offen" unten).
+- **Live am echten Gerät bestätigt** (Nutzer): Video braucht nach dem
+  Verbinden kurz Anlaufzeit (Keyframe/Jitterbuffer-Aufbau), läuft danach
+  durchgehend — das ist normales WebRTC-Verhalten, kein Stall mehr.
+
+**Weiterhin offen (aus Nachtrag 247, unverändert, nicht Ursache des
+heutigen Fixes):** `whep_offer`/`teardown` (`monitor.rs`) und
+`whip_offer`/`teardown` (`main.rs`) gegen gleichzeitige/schnell
+aufeinanderfolgende Aufrufe serialisieren — per A/B-Test heute erneut
+bestätigt, dass viele automatisierte Reconnects hintereinander
+(schneller als ein Mensch klickt) irgendwann eine Sitzung ohne
+RTP-Ausgabe produzieren, unabhängig vom heutigen Fix.
+
+**Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.

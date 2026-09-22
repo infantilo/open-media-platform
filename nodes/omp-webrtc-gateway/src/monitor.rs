@@ -435,12 +435,33 @@ impl Monitor {
         rtp_caps: &gst::Caps,
         mline: usize,
     ) -> Result<(), String> {
+        let tee_pad = tee.request_pad_simple("src_%u").ok_or("tee request pad")?;
+        // BLOCKEN, bevor der Pad überhaupt verlinkt wird (live gefunden,
+        // Nachtrag 250 — GStreamers dokumentiertes Muster für
+        // "Dynamically Changing the Pipeline"): der tee schiebt Puffer auf
+        // seinem eigenen Streaming-Thread, sobald der Pad verlinkt ist —
+        // ohne diesen Block kann das passieren, WÄHREND die neue Kette
+        // unten noch von NULL nach PLAYING wechselt. Die ersten (oder
+        // alle) Puffer laufen dann gegen noch nicht bereite Elemente ins
+        // Leere, ohne GStreamer-Fehler: ICE/DTLS verhandeln normal
+        // (`connected`), aber es fließt dauerhaft kein einziges RTP-Paket
+        // — reproduzierbar speziell mit echten Browsern (andere
+        // SDP-Form/Timing als das schlanke Test-Chromium), nicht mit
+        // headless Chromium alleine.
+        let block_id = tee_pad
+            .add_probe(
+                gst::PadProbeType::BLOCK
+                    | gst::PadProbeType::BUFFER
+                    | gst::PadProbeType::BUFFER_LIST,
+                |_, _| gst::PadProbeReturn::Ok,
+            )
+            .ok_or("tee pad block probe")?;
+
         let refs: Vec<&gst::Element> = chain.iter().collect();
         self.pipeline
             .add_many(refs.iter().copied())
             .map_err(|e| format!("add chain: {e}"))?;
         gst::Element::link_many(refs.iter().copied()).map_err(|e| format!("link chain: {e}"))?;
-        let tee_pad = tee.request_pad_simple("src_%u").ok_or("tee request pad")?;
         tee_pad
             .link(&chain[0].static_pad("sink").ok_or("chain sink pad")?)
             .map_err(|e| format!("link tee: {e:?}"))?;
@@ -466,6 +487,7 @@ impl Monitor {
             el.sync_state_with_parent()
                 .map_err(|e| format!("sync chain: {e}"))?;
         }
+        tee_pad.remove_probe(block_id);
         let mut guard = self.session.lock().expect("lock poisoned");
         let session = guard.as_mut().ok_or("session vanished")?;
         session.elements.extend(chain.iter().cloned());
