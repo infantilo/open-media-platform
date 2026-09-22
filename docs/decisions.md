@@ -26382,3 +26382,38 @@ weiterhin unbekannt — nächster sinnvoller Schritt wäre GST_DEBUG-Tracing
 (wie in Nachtrag 250) über mehrere Reconnect-Runden hinweg, nicht nur
 über eine einzelne Sitzung, um zu sehen, was sich zwischen einer
 funktionierenden und der ersten fehlschlagenden Runde unterscheidet.
+
+## 2026-09-22 (Nachtrag 253) — Neuer Hinweis für später: Bild rast anfangs, Ton klingt wie Roboterstimme
+
+**Nutzer-Beobachtung (noch nicht untersucht, für nächste Sitzung
+vorgemerkt):** nach dem Verbinden des Monitors zeigen die Browser-Stats
+in den ersten ~10 Sekunden eine Bildrate deutlich über der echten Quelle
+(>77 fps statt ~25 fps), bevor sie sich auf den realen Wert einpendelt.
+Gleichzeitig klingt der Ton im Browser unsynchron/verzerrt ("wie eine
+Roboterstimme").
+
+**Arbeitshypothese (nicht verifiziert):** klassisches Muster für eine
+Clock-/Timestamp-Referenz, die beim `sync_state_with_parent()` einer neu
+an die laufende Pipeline angehängten Zweig-Kette nicht sauber auf die
+Pipeline-eigene Laufzeit-Uhr bezogen ist — die neuen Elemente
+interpretieren dann einen (scheinbaren) Rückstand und spielen ihn
+beschleunigt ab, bis die tatsächliche Aufnahmezeit erreicht ist (Video:
+sichtbar als zu hohe fps; Audio: hörbar als Tonhöhenverschiebung/
+"Roboterstimme" — derselbe Effekt, nur akustisch). Verwandt mit, aber
+nicht identisch zu, dem in Nachtrag 250 gefixten tee-Pad-Race — dort ging
+es um verlorene Puffer, hier vermutlich um eine falsche Zeitbasis bei
+sonst korrekt fließenden Puffern.
+
+**Nächster Schritt (nicht heute):** GST_DEBUG-Tracing (Muster wie
+Nachtrag 250, diesmal mit Fokus auf `GST_BUFFER`/PTS-Werte oder
+`base-time`-Properties der neu erzeugten Elemente `queue2`/`x264enc0`/
+`rtph264pay0` direkt nach dem Verbinden) einer echten Sitzung, verglichen
+mit den PTS-Werten am `tee`-Ausgang zur selben Zeit. Ansatzpunkt im Code:
+`add_chain()`/`attach_video_branch()`/`attach_audio_branch()` in
+`monitor.rs` — evtl. fehlt ein explizites `element.set_base_time(...)`
+oder ein Zurücksetzen der Segment-Zeitbasis für die neuen Elemente.
+
+**Nebenaufräumung dieser Sitzung:** riesige `GST_DEBUG_FILE`-Mitschnitte
+aus Nachtrag 250 (`.run/webrtc/monitor-gst*.log`, zusammen ~510 MB)
+gelöscht — Inhalt bereits vollständig in Nachtrag 250 ausgewertet und
+dokumentiert.
