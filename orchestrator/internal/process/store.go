@@ -22,6 +22,14 @@ var ErrNotFound = errors.New("process: not found")
 // entscheidet dann, ob ein erneuter Versuch sinnvoll ist.
 var ErrConcurrentModification = errors.New("process: concurrent modification")
 
+// ErrValidation kennzeichnet fehlerhafte AUFRUFER-Eingaben (ungültige
+// Definition.Validate()-Graphen, fehlende Pflichtfelder) — im
+// Unterschied zu einem internen/DB-Fehler per errors.Is unterscheidbar,
+// Grundlage für die HTTP-API (Phase 5 Teil 2): so eingeordnete Fehler
+// werden dort als 400 statt 500 gemeldet, gleiche Konvention wie
+// workflows.ErrValidation.
+var ErrValidation = errors.New("process: validation failed")
+
 // Store persistiert die Prozess-Engine-Domäne in Postgres
 // (db/migrations/0018_process.sql).
 type Store struct {
@@ -51,7 +59,7 @@ func newID() (string, error) {
 // CreateDefinition legt eine neue ProcessDefinition an.
 func (s *Store) CreateDefinition(name, description, category, createdBy string) (ProcessDefinition, error) {
 	if name == "" {
-		return ProcessDefinition{}, fmt.Errorf("process: name is required")
+		return ProcessDefinition{}, fmt.Errorf("%w: name is required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
@@ -113,7 +121,7 @@ func (s *Store) ListDefinitions() ([]ProcessDefinition, error) {
 // eine neue Version zu erzwingen.
 func (s *Store) UpdateDefinitionMeta(id, name, description, category string) (ProcessDefinition, error) {
 	if name == "" {
-		return ProcessDefinition{}, fmt.Errorf("process: name is required")
+		return ProcessDefinition{}, fmt.Errorf("%w: name is required", ErrValidation)
 	}
 	res, err := s.db.Exec(`
 		UPDATE process_definitions SET name = $2, description = $3, category = $4, updated_at = now()
@@ -330,7 +338,7 @@ type CreateExecutionParams struct {
 // CreateExecution legt eine neue ProcessExecution im Status "pending" an.
 func (s *Store) CreateExecution(p CreateExecutionParams) (ProcessExecution, error) {
 	if p.ProcessDefinitionID == "" || p.ProcessVersionID == "" {
-		return ProcessExecution{}, fmt.Errorf("process: processDefinitionId and processVersionId are required")
+		return ProcessExecution{}, fmt.Errorf("%w: processDefinitionId and processVersionId are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
@@ -494,7 +502,7 @@ const stepExecutionSelectColumns = `id, process_execution_id, step_id, step_type
 // "pending", Attempt 1 an.
 func (s *Store) CreateStepExecution(processExecutionID, stepID string, stepType StepType, input json.RawMessage) (ProcessStepExecution, error) {
 	if processExecutionID == "" || stepID == "" {
-		return ProcessStepExecution{}, fmt.Errorf("process: processExecutionId and stepId are required")
+		return ProcessStepExecution{}, fmt.Errorf("%w: processExecutionId and stepId are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
@@ -541,7 +549,7 @@ func (s *Store) GetStepExecution(id string) (ProcessStepExecution, error) {
 // führen lassen könnte.
 func (s *Store) GetOrCreateStepExecution(processExecutionID, stepID string, stepType StepType, input json.RawMessage) (ProcessStepExecution, error) {
 	if processExecutionID == "" || stepID == "" {
-		return ProcessStepExecution{}, fmt.Errorf("process: processExecutionId and stepId are required")
+		return ProcessStepExecution{}, fmt.Errorf("%w: processExecutionId and stepId are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
@@ -733,7 +741,7 @@ type CreateHumanTaskParams struct {
 // CreateHumanTask legt einen neuen HumanTask im Status "pending" an.
 func (s *Store) CreateHumanTask(p CreateHumanTaskParams) (HumanTask, error) {
 	if p.ProcessExecutionID == "" || p.Title == "" {
-		return HumanTask{}, fmt.Errorf("process: processExecutionId and title are required")
+		return HumanTask{}, fmt.Errorf("%w: processExecutionId and title are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {

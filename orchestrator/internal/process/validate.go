@@ -9,50 +9,52 @@ import "fmt"
 // Condition-Expression syntaktisch gültig macht). Wird vor jedem
 // Anlegen einer ProcessVersion aufgerufen (Store.CreateVersion) —
 // Korrektheit vor der Persistenz prüfen, nicht erst beim ersten
-// Ausführungsversuch scheitern lassen.
+// Ausführungsversuch scheitern lassen. Jeder Fehler ist über
+// ErrValidation identifizierbar (errors.Is) — Grundlage für die
+// HTTP-API (Phase 5 Teil 2), die daraus 400 statt 500 macht.
 func (d Definition) Validate() error {
 	if len(d.Steps) == 0 {
-		return fmt.Errorf("process: definition has no steps")
+		return fmt.Errorf("%w: definition has no steps", ErrValidation)
 	}
 	if d.StartStepID == "" {
-		return fmt.Errorf("process: startStepId is required")
+		return fmt.Errorf("%w: startStepId is required", ErrValidation)
 	}
 
 	ids := make(map[string]struct{}, len(d.Steps))
 	for _, s := range d.Steps {
 		if s.ID == "" {
-			return fmt.Errorf("process: step with empty id")
+			return fmt.Errorf("%w: step with empty id", ErrValidation)
 		}
 		if _, dup := ids[s.ID]; dup {
-			return fmt.Errorf("process: duplicate step id %q", s.ID)
+			return fmt.Errorf("%w: duplicate step id %q", ErrValidation, s.ID)
 		}
 		if s.Type == "" {
-			return fmt.Errorf("process: step %q has no type", s.ID)
+			return fmt.Errorf("%w: step %q has no type", ErrValidation, s.ID)
 		}
 		ids[s.ID] = struct{}{}
 	}
 
 	if _, ok := ids[d.StartStepID]; !ok {
-		return fmt.Errorf("process: startStepId %q references unknown step", d.StartStepID)
+		return fmt.Errorf("%w: startStepId %q references unknown step", ErrValidation, d.StartStepID)
 	}
 
 	hasPredecessor := make(map[string]bool, len(d.Steps))
 	for _, s := range d.Steps {
 		for _, next := range s.Next {
 			if _, ok := ids[next]; !ok {
-				return fmt.Errorf("process: step %q references unknown next step %q", s.ID, next)
+				return fmt.Errorf("%w: step %q references unknown next step %q", ErrValidation, s.ID, next)
 			}
 			hasPredecessor[next] = true
 		}
 		for label, target := range s.Branches {
 			if _, ok := ids[target]; !ok {
-				return fmt.Errorf("process: step %q branch %q references unknown step %q", s.ID, label, target)
+				return fmt.Errorf("%w: step %q branch %q references unknown step %q", ErrValidation, s.ID, label, target)
 			}
 			hasPredecessor[target] = true
 		}
 		if s.CompensationStepID != "" {
 			if _, ok := ids[s.CompensationStepID]; !ok {
-				return fmt.Errorf("process: step %q compensationStepId references unknown step %q", s.ID, s.CompensationStepID)
+				return fmt.Errorf("%w: step %q compensationStepId references unknown step %q", ErrValidation, s.ID, s.CompensationStepID)
 			}
 			// CompensationStepID ist bewusst KEIN normaler Graph-Vorgänger
 			// (ein Kompensationsschritt wird nur bei Fehlschlag erreicht,
@@ -82,7 +84,7 @@ func (d Definition) Validate() error {
 			continue
 		}
 		if !hasPredecessor[s.ID] {
-			return fmt.Errorf("process: step %q is unreachable (no predecessor and not the start step)", s.ID)
+			return fmt.Errorf("%w: step %q is unreachable (no predecessor and not the start step)", ErrValidation, s.ID)
 		}
 	}
 

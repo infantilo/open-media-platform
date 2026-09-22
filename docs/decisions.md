@@ -27294,6 +27294,29 @@ Dev-NATS-Cluster aufgeräumt (`t.Cleanup`-DeleteStream-Aufrufe laufen
 nie, wenn der Testprozess per `-timeout` hart beendet wird, statt
 regulär durchzulaufen).
 
+**KORREKTUR (nächste Sitzung, Phase 5 Teil 2, s. dortiger Nachtrag):**
+die obige "dritte, bibliotheksinterne nats.go-Ebene"-Vermutung war
+NICHT die eigentliche Ursache — echte Ursache gefunden und per
+kontrolliertem Experiment bestätigt: der Hang trat reproduzierbar bei
+JEDEM vollen `internal/process`-Paketlauf auf, SOLANGE verwaiste
+`TEST_TRIGGER_*`/`TEST_OUTBOX_*`-Streams aus vorangegangenen
+abgebrochenen Läufen auf dem Dev-NATS-Cluster lagen (jeder Hang
+hinterlässt selbst wieder neue verwaiste Streams — ein sich selbst
+verstärkender Kreislauf über viele Testläufe dieser langen Sitzung).
+Nach vollständigem Aufräumen aller `TEST_*`-Streams lief derselbe volle
+Paketlauf sofort wieder sauber durch (12,4s, kein Hang) — zweifelsfrei
+reproduziert (hängend mit Altlast, sauber ohne). Vermutete Mechanik:
+wachsende JetStream-Meta-Cluster-Last (viele verwaiste Streams samt
+angehängter durabler Consumer) verlangsamt eine Konsumenten-Operation
+(Erstellen/Stop) im neuen Testlauf über eine interne nats.go-Zeitgrenze
+hinaus — kein Bug in `TriggerListener`/unserem Code, aber auch keine
+zufällige Bibliotheksinstabilität, sondern eine direkte Folge der
+eigenen, wegen `-timeout`-Abbrüchen liegen gebliebenen Test-Altlasten.
+**Praktische Konsequenz für künftige Sitzungen:** hängt
+`go test ./internal/process/...` (oder `internal/outbox/...`) wieder,
+zuerst `nats stream ls` prüfen und jeden `TEST_*`-Stream löschen, bevor
+irgendeine Code-Ursache vermutet wird — das behebt es zuverlässig.
+
 **Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber (3
 vorbestehende, unberührte `httpapi`-Formatierungsabweichungen
 ignoriert, s. bereits Nachtrag 258). Volle Modul-Suite (`go test
@@ -27301,3 +27324,115 @@ ignoriert, s. bereits Nachtrag 258). Volle Modul-Suite (`go test
 eigene Sitzung — Asset-Domain-API + Process-Domain-API, dann
 `asset.NewStore` in main.go nachreichen). Details: UMSETZUNG.md §7
 (Status-Checkliste, Eintrag "Kapitel 21 Phase 5 Teil 1").
+
+## 2026-09-22 (Nachtrag 264) — Kapitel 21 Phase 5 Teil 2: HTTP-API für die Process Engine
+
+**Nutzerauftrag:** "fahre fort", direkt im Anschluss an Phase 5 Teil 1.
+Liefert den ersten echten API-Aufrufer für `internal/process` — bisher
+konnte niemand (außer Tests) eine `ProcessDefinition` anlegen oder eine
+Execution starten.
+
+**Namensraum wie in Phase 1 entschieden** (UMSETZUNG.md §6b, disjunkt
+von `/api/v1/workflows`): `/api/v1/process-definitions`,
+`/api/v1/process-versions`, `/api/v1/process-executions`,
+`/api/v1/human-tasks`. 22 neue Routen in neuer Datei
+`orchestrator/internal/httpapi/process_handlers.go`, Muster 1:1 an
+`workflow_handlers.go` gespiegelt: dünne Handler (Decode → Service-
+Aufruf → `writeJSON`/`writeProcessError`), keine Geschäftslogik im
+HTTP-Layer.
+
+**Zwei neue Interfaces statt eines** (`server.go`): `ProcessStoreService`
+(Lese-/Metadaten-Operationen, von `*process.Store` erfüllt) und
+`ProcessEngineService` (Start/Cancel/Pause/Resume/CompleteHumanTask,
+von `*process.Engine` erfüllt) — Store und Engine sind zwei
+unterschiedliche konkrete Typen in `internal/process`, ein einzelnes
+Interface hätte keinen von beiden vollständig fassen können, ohne
+entweder eine künstliche Fassade in `internal/process` einzuführen
+(unnötige Abstraktion für einen einzigen Aufrufer) oder Store-Methoden
+in Engine zu duplizieren.
+
+**Verb-Einstufung** (gleiche Denkweise wie bei `/api/v1/workflows`):
+Definition/Version ANLEGEN ist `configure` (Entwurfszeit, noch keine
+Wirkung). Version VERÖFFENTLICHEN und JEDE Execution-Aktion
+(Start/Cancel/Pause/Resume) ist `admin` — ab Veröffentlichung ist eine
+Version tatsächlich startbar, und ein Start kann über ServiceCall/
+MediaFunction/Script echte externe HTTP-/Node-/Kommandowirkung
+entfalten (B14, dieselbe SSRF-ähnliche Fläche wie in Nachtrag 262/263
+dokumentiert) — dieselbe erhöhte Schwelle wie Workflow-Start/-Stop.
+HumanTask zuweisen/entscheiden ist `operate` — eine Bedienhandlung an
+einem bereits laufenden Prozess, keine Konfigurations- oder
+Verwaltungshandlung.
+
+**Zwei neue Fehler-Sentinels in `internal/process`** (schließt eine
+Lücke aus Phase 2/3: `Definition.Validate()` und mehrere Pflichtfeld-
+Prüfungen lieferten bis jetzt nur unstrukturierte `fmt.Errorf`-Strings,
+von einem internen/DB-Fehler nicht per `errors.Is` unterscheidbar —
+ohne diese Unterscheidung hätte `writeProcessError` JEDEN Validierungs-
+fehler als 500 statt 400 melden müssen, was für eine interaktive API
+falsch gewesen wäre):
+- `ErrValidation` — jetzt von `Definition.Validate()` (alle zehn
+  Rückgabestellen) sowie den Pflichtfeld-Prüfungen in
+  `CreateDefinition`/`UpdateDefinitionMeta`/`CreateExecution`/
+  `CreateStepExecution` (beide Stellen)/`CreateHumanTask` gewrappt.
+- `ErrVersionNotPublished` — ersetzt `Engine.Start()`s bisherige, nicht
+  unterscheidbare "version is not published"-Fehlermeldung.
+
+**Ein echter Bug im Wrapping-Vorgang selbst gefunden+behoben, bevor er
+committet wurde:** ein erster Versuch, alle `validate.go`-Fehler per
+Skript umzubauen, hängte den `ErrValidation`-Sentinel bei jedem
+mehrargumentigen `fmt.Errorf`-Aufruf ans ENDE der Argumentliste statt
+direkt hinter den Format-String (`fmt.Errorf("%w: step %q", s.ID,
+ErrValidation)` statt korrekt `fmt.Errorf("%w: step %q", ErrValidation,
+s.ID)`) — `%w` verzehrt immer den ERSTEN Format-Arg wie jeder andere
+Verb auch; die fehlerhafte Reihenfolge hätte falsche Werte in mehrere
+Fehlermeldungen eingesetzt (eine Node-ID/Schritt-ID wäre dort
+erschienen, wo der Sentinel-Fehler stehen sollte, und umgekehrt).
+`go vet`s Printf-Checker fing das zuverlässig ab (keine manuelle
+Durchsicht nötig, um es zu finden) — alle zehn Stellen von Hand
+korrigiert (Sentinel-Argument an erste Position), erneut `go vet`
+sauber.
+
+`writeProcessError` meldet `ErrConcurrentModification`/
+`ErrVersionNotPublished`/`statemachine.ErrInvalidTransition` bewusst
+EINHEITLICH als 409 (eine verletzte Zustands-Vorbedingung, kein
+fehlerhaft geformter Request — der Aufrufer soll den aktuellen Stand
+per GET neu lesen und entscheiden, ob ein erneuter Versuch sinnvoll
+ist, nicht blind wiederholen), `ErrValidation` als 400, `ErrNotFound`
+als 404 — gleiches Muster wie `writeWorkflowError`.
+
+`internal/asset` weiterhin NICHT verdrahtet (main.go unverändert seit
+Nachtrag 263) — die Asset-Domain-API ist Phase 5 Teil 3, eine eigene
+Sitzung; erst dort bekommt `asset.NewStore` seinen ersten Aufrufer.
+
+**Live Ende-zu-Ende gegen den echten laufenden Orchestrator verifiziert**
+(Nutzer hat einem weiteren Neustart des produktiven Prozesses
+zugestimmt): Login als `admin` (Dev-Bootstrap-Zugang) → echtes
+Bearer-Token. Zyklus 1 (Wait-Schritt): Definition anlegen → Version
+anlegen (Status "draft") → Start GEGEN DIE DRAFT-VERSION schlägt
+korrekt mit 409 fehl → Publish → Start → Engine treibt den Wait-Schritt
+tatsächlich bis "completed" (Postgres-Persistenz, kein Mock, per
+`GET /api/v1/process-executions/{id}/steps` nachgewiesen). Zyklus 2
+(HumanTask-Schritt): Execution startet, Engine legt real einen
+HumanTask an; `POST .../assign` setzt NUR den Assignee, Status bleibt
+"pending" (kein Bug — `Store.AssignHumanTask` transitioniert bewusst
+nicht, s. dortige Implementierung; per Live-Test entdeckt statt
+angenommen, ein erster `complete`-Versuch mit `status=approved` schlug
+entsprechend korrekt mit "statemachine: invalid transition: pending ->
+approved" fehl); zwei separate `complete`-Aufrufe (`claimed`, dann
+`approved`, jeweils mit dem per Server zurückgelieferten
+`rowVersion` — A3 optimistic concurrency live bestätigt) bringen die
+wartende Execution korrekt zu "completed", Output enthält den
+kompletten HumanTask. Zusätzlich verifiziert: `POST .../cancel` auf
+einen `pending`-Lauf → "cancelled"; `PUT /api/v1/process-definitions/
+{id}` ändert Metadaten; ein Request ohne `Authorization`-Header liefert
+401. Bootlog nach dem gesamten Testlauf ohne eine einzige neue Fehler-/
+Warn-Zeile.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber. 2
+neue Sentinel-Tests (`TestValidateErrorsAreErrValidation`,
+`TestEngineStartRejectsUnpublishedVersion`), volle Modul-Suite
+(`go test ./...`, alle 34 Pakete) grün — nachdem die in der
+vorstehenden Korrektur beschriebenen verwaisten `TEST_*`-JetStream-
+Streams aufgeräumt waren (ohne Aufräumen hätte auch dieser Lauf
+gehangen, s. o.). Details: UMSETZUNG.md §7 (Status-Checkliste, Eintrag
+"Kapitel 21 Phase 5 Teil 2").

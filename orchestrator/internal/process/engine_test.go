@@ -174,6 +174,29 @@ func TestEngineNoExecutorRegisteredFailsHonestly(t *testing.T) {
 	}
 }
 
+// TestEngineStartRejectsUnpublishedVersion (Phase 5 Teil 2): die
+// HTTP-API verlässt sich auf errors.Is(err, ErrVersionNotPublished), um
+// 409 statt 500 zu melden.
+func TestEngineStartRejectsUnpublishedVersion(t *testing.T) {
+	engine, store := testEngine(t)
+	pd, err := store.CreateDefinition("Test Process", "", "", "tester")
+	if err != nil {
+		t.Fatalf("CreateDefinition() error = %v", err)
+	}
+	v, err := store.CreateVersion(pd.ID, Definition{
+		StartStepID: "a",
+		Steps:       []Step{{ID: "a", Type: StepTypeTask}},
+	}, "tester")
+	if err != nil {
+		t.Fatalf("CreateVersion() error = %v", err)
+	}
+
+	_, err = engine.Start(CreateExecutionParams{ProcessDefinitionID: pd.ID, ProcessVersionID: v.ID, CreatedBy: "tester"})
+	if !errors.Is(err, ErrVersionNotPublished) {
+		t.Fatalf("Start() error = %v, want errors.Is(err, ErrVersionNotPublished) (version is still draft)", err)
+	}
+}
+
 // ---- Parallel/Join -----------------------------------------------
 
 func TestEngineParallelFanOutJoin(t *testing.T) {

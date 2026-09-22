@@ -42,6 +42,14 @@ import (
 // Projekt priorisiert).
 const DefaultPollInterval = 2 * time.Second
 
+// ErrVersionNotPublished wird von Engine.Start geliefert, wenn
+// CreateExecutionParams.ProcessVersionID auf eine noch nicht (oder
+// nicht mehr) veröffentlichte ProcessVersion verweist (A7) — per
+// errors.Is unterscheidbar von einem internen Fehler, Grundlage für
+// die HTTP-API (Phase 5 Teil 2): meldet 409 statt 500 (ein Zustands-
+// Vorbedingungs-Verstoß, nicht eine fehlerhafte Anfrageform).
+var ErrVersionNotPublished = errors.New("process: version is not published")
+
 // Engine treibt ProcessExecutions durch ihren Schritt-Graphen. Ein
 // Engine-Wert ist an einen Store (und damit eine Datenbank) gebunden;
 // mehrere Orchestrator-Instanzen dürfen denselben Store mit je einer
@@ -139,7 +147,7 @@ func (e *Engine) Start(params CreateExecutionParams) (ProcessExecution, error) {
 		return ProcessExecution{}, err
 	}
 	if version.Status != VersionStatusPublished {
-		return ProcessExecution{}, fmt.Errorf("process: version %s is not published (status=%s)", version.ID, version.Status)
+		return ProcessExecution{}, fmt.Errorf("%w: version %s is not published (status=%s)", ErrVersionNotPublished, version.ID, version.Status)
 	}
 	exec, err := e.store.CreateExecution(params)
 	if err != nil {

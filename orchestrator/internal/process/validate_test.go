@@ -1,6 +1,9 @@
 package process
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func validDefinition() Definition {
 	return Definition{
@@ -114,5 +117,15 @@ func TestValidateAllowsCompensationStepWithoutOtherPredecessor(t *testing.T) {
 	}}
 	if err := d.Validate(); err != nil {
 		t.Fatalf("Validate() error = %v, want nil (compensation steps are reachable only via CompensationStepID)", err)
+	}
+}
+
+// TestValidateErrorsAreErrValidation (Phase 5 Teil 2): jeder Validate()-
+// Fehler muss per errors.Is als ErrValidation erkennbar sein — die
+// HTTP-API verlässt sich darauf, um 400 statt 500 zu melden.
+func TestValidateErrorsAreErrValidation(t *testing.T) {
+	err := (Definition{}).Validate()
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("Validate() error = %v, want errors.Is(err, ErrValidation)", err)
 	}
 }

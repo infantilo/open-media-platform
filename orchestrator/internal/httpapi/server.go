@@ -18,6 +18,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
@@ -172,6 +173,48 @@ type WorkflowService interface {
 	CancelMigration(workflowID, role string) error
 }
 
+// ProcessStoreService liefert Lese-/Verwaltungs-Operationen auf Process-
+// Definitionen/-Versionen/-Executions/-HumanTasks (implementiert von
+// *process.Store, Kapitel 21 Phase 5 Teil 2) — bewusst getrennt von
+// ProcessEngineService (unten): Store und Engine sind zwei
+// unterschiedliche konkrete Typen in internal/process, ein einzelnes
+// Interface könnte nicht beide gleichzeitig fassen.
+type ProcessStoreService interface {
+	CreateDefinition(name, description, category, createdBy string) (process.ProcessDefinition, error)
+	GetDefinition(id string) (process.ProcessDefinition, error)
+	ListDefinitions() ([]process.ProcessDefinition, error)
+	UpdateDefinitionMeta(id, name, description, category string) (process.ProcessDefinition, error)
+
+	CreateVersion(processDefinitionID string, definition process.Definition, createdBy string) (process.ProcessVersion, error)
+	GetVersion(id string) (process.ProcessVersion, error)
+	ListVersions(processDefinitionID string) ([]process.ProcessVersion, error)
+	PublishVersion(id string) (process.ProcessVersion, error)
+	DeprecateVersion(id string) (process.ProcessVersion, error)
+	ArchiveVersion(id string) (process.ProcessVersion, error)
+
+	GetExecution(id string) (process.ProcessExecution, error)
+	ListExecutions(f process.ExecutionFilter) ([]process.ProcessExecution, error)
+	ListStepExecutions(processExecutionID string) ([]process.ProcessStepExecution, error)
+
+	ListHumanTasksByExecution(processExecutionID string) ([]process.HumanTask, error)
+	ListHumanTasksByAssignee(assignee string) ([]process.HumanTask, error)
+	GetHumanTask(id string) (process.HumanTask, error)
+	AssignHumanTask(id, assignee string) (process.HumanTask, error)
+}
+
+// ProcessEngineService startet/steuert ProcessExecutions (implementiert
+// von *process.Engine, Kapitel 21 Phase 5 Teil 2). Start kann echte
+// externe Wirkung entfalten, sobald die gestartete Version ServiceCall/
+// MediaFunction/Script-Schritte enthält (B14, s. docs/decisions.md
+// Nachtrag 262/263) — daher VerbAdmin unten, nicht VerbConfigure.
+type ProcessEngineService interface {
+	Start(params process.CreateExecutionParams) (process.ProcessExecution, error)
+	Cancel(executionID string) (process.ProcessExecution, error)
+	Pause(executionID string) (process.ProcessExecution, error)
+	Resume(executionID string) (process.ProcessExecution, error)
+	CompleteHumanTask(humanTaskID string, expectedRowVersion int, status, decision, comment string) (process.HumanTask, error)
+}
+
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
 // (implementiert von *consoles.Resolver, UMSETZUNG.md C13) — eine
 // vereinfachte Rollen-Stub-Prüfung, echte Durchsetzung folgt mit D3.
@@ -214,7 +257,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger, opts ...HandlerOption) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger, processStore ProcessStoreService, processEngine ProcessEngineService, opts ...HandlerOption) http.Handler {
 	var options handlerOptions
 	for _, opt := range opts {
 		opt(&options)
@@ -413,6 +456,44 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// dieselbe Schwelle wie Import, das ebenfalls VerbConfigure verlangt.
 	mux.HandleFunc("GET /api/v1/workflows/{id}/export", g.requireVerbGlobal(authz.VerbConfigure, handleExportWorkflow(workflowSvc)))
 	mux.HandleFunc("POST /api/v1/workflows/import", g.requireVerbGlobal(authz.VerbConfigure, handleImportWorkflow(workflowSvc)))
+
+	// Process Engine (Kapitel 21 Phase 5 Teil 2, ARCHITECTURE.md
+	// Domain-Trennung Process/Workflow, UMSETZUNG.md §6b/21.2) — eigener
+	// Namensraum disjunkt von /api/v1/workflows (s. dortige
+	// Namenskollisions-Entscheidung). Definieren (Definition/Version
+	// anlegen/Metadaten ändern) ist "configure" wie Graph-Kanten/
+	// Layouts/Snapshots. Veröffentlichen einer Version UND jede
+	// Execution-Aktion sind "admin": ab Veröffentlichung ist eine
+	// Version tatsächlich startbar, und ein Start kann über ServiceCall/
+	// MediaFunction/Script echte externe Wirkung entfalten (B14, s.
+	// docs/decisions.md Nachtrag 262/263 — dieselbe erhöhte Schwelle wie
+	// Workflow-Start/-Stop). HumanTask-Aktionen (zuweisen/entscheiden)
+	// sind "operate" — eine Bedienhandlung an einem laufenden Prozess,
+	// keine Konfigurations- oder Admin-Handlung.
+	mux.HandleFunc("GET /api/v1/process-definitions", g.requireAuth(handleListProcessDefinitions(processStore)))
+	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore)))
+	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))
+	mux.HandleFunc("PUT /api/v1/process-definitions/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateProcessDefinition(processStore)))
+	mux.HandleFunc("GET /api/v1/process-definitions/{id}/versions", g.requireAuth(handleListProcessVersions(processStore)))
+	mux.HandleFunc("POST /api/v1/process-definitions/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessVersion(processStore)))
+	mux.HandleFunc("GET /api/v1/process-versions/{id}", g.requireAuth(handleGetProcessVersion(processStore)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/publish", g.requireVerbGlobal(authz.VerbAdmin, handlePublishProcessVersion(processStore)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/deprecate", g.requireVerbGlobal(authz.VerbAdmin, handleDeprecateProcessVersion(processStore)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/archive", g.requireVerbGlobal(authz.VerbAdmin, handleArchiveProcessVersion(processStore)))
+
+	mux.HandleFunc("GET /api/v1/process-executions", g.requireAuth(handleListProcessExecutions(processStore)))
+	mux.HandleFunc("POST /api/v1/process-executions", g.requireVerbGlobal(authz.VerbAdmin, handleStartProcessExecution(processEngine)))
+	mux.HandleFunc("GET /api/v1/process-executions/{id}", g.requireAuth(handleGetProcessExecution(processStore)))
+	mux.HandleFunc("GET /api/v1/process-executions/{id}/steps", g.requireAuth(handleListProcessStepExecutions(processStore)))
+	mux.HandleFunc("GET /api/v1/process-executions/{id}/human-tasks", g.requireAuth(handleListHumanTasksByExecution(processStore)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelProcessExecution(processEngine)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseProcessExecution(processEngine)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/resume", g.requireVerbGlobal(authz.VerbAdmin, handleResumeProcessExecution(processEngine)))
+
+	mux.HandleFunc("GET /api/v1/human-tasks", g.requireAuth(handleListHumanTasksByAssignee(processStore)))
+	mux.HandleFunc("GET /api/v1/human-tasks/{id}", g.requireAuth(handleGetHumanTask(processStore)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return countRequests(reqCounters, noStoreForAPI(mux))
