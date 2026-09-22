@@ -26417,3 +26417,62 @@ oder ein Zurücksetzen der Segment-Zeitbasis für die neuen Elemente.
 aus Nachtrag 250 (`.run/webrtc/monitor-gst*.log`, zusammen ~510 MB)
 gelöscht — Inhalt bereits vollständig in Nachtrag 250 ausgewertet und
 dokumentiert.
+
+## 2026-09-22 (Nachtrag 254) — Clock/PTS-Verdacht (Nachtrag 253) mit Messdaten unterlegt, Ursache im geteilten MXL-Reader vermutet, NICHT gefixt
+
+**Live vermessen** (temporäre Pad-Probe, PTS vs. echte Wanduhrzeit direkt
+nach dem Verbinden, `monitor.rs::add_chain`, wieder entfernt — kein Fund
+im Code belassen): zwischen dem 1./2. Puffer im neu angehängten Video-
+Zweig lag eine ECHTE, gemessene Lücke von ~12 Sekunden Wanduhrzeit
+(nicht nur ein PTS-Rechenfehler — die `eprintln!`-Zeilen selbst lagen
+12s auseinander). Danach folgt eine Aufholphase mit PTS-Zuwachs schneller
+als Wanduhrzeit (mal ~1:1, mal ~2:1), bevor es sich einpendelt. Gleiches
+Muster im Audio-Zweig, dort deutlich feinkörniger (~kleine Bursts über
+mehrere hundert ms). Nutzer bestätigt: reproduzierbar auch mit
+entspanntem `jitterBufferTarget` (60ms statt 0, Testcode wieder entfernt
+— kein Effekt, „identisches Verhalten"), UND es ist kein einmaliger
+Anlauf-Effekt: hält über die ganze Sitzung an (oszillierende fps,
+wiederholtes ~500ms-„Zurückspringen" im Bild, Jitterbuffer im Browser
+wächst auf ~800ms).
+
+**Wahrscheinlichster Ursprung:** `omp-mediaio::mxl::read_loop`
+(`MxlVideoInput`/`MxlAudioInput`, geteilte Infrastruktur, von vielen
+Node-Typen genutzt) — ein Non-Blocking-Poll (`get_grain_non_blocking`,
+5ms Backoff bei `OutOfRangeTooEarly`) OHNE jede Drosselung im
+Erfolgspfad: `index += 1`, sofort erneut versuchen, kein Sleep. Werden
+zwischen zwei 5ms-Polls mehrere Grains gleichzeitig sichtbar (z. B. durch
+Schreib-Jitter auf der Kamera-Seite oder MXL-interne Batch-Commit-
+Sichtbarkeit, vgl. bereits bekannter `OutOfRangeTooLate`-Fallstrick
+weiter oben in derselben Datei), liest die Schleife sie im Eiltempo
+hintereinander — `do-timestamp=true` auf dem `appsrc` vergibt dabei PTS
+nach WANDUHRZEIT beim Push, nicht nach MXL-Grain-Index, was diese
+Bursts als "korrekte", aber zeitlich gestauchte Bilder weiterreicht.
+NICHT verifiziert (nur Plausibilitätsargument aus Codelese, keine
+zusätzliche Live-Messung IN `read_loop` selbst).
+
+**Bewusst NICHT gefixt in dieser Sitzung:** `read_loop` ist geteilter,
+bereits mehrfach vorsichtig gegen subtile Races gehärteter Code (s.
+Kommentare dort zu `OutOfRangeTooLate`-Busy-Loop, `FLOW_INVALID`-
+Reader-Cache u. a.) — von vielen anderen Node-Typen genutzt, nicht nur
+`omp-webrtc-gateway`. Eine Änderung hier verdient eine eigene,
+fokussierte Sitzung mit derselben Sorgfalt (Live-Messung direkt in der
+Schleife, nicht nur am Ausgang), nicht einen Schnellschuss am Ende einer
+bereits sehr langen Sitzung.
+
+**Für die nächste Sitzung zu diesem Thema:**
+1. Temporäre Instrumentierung DIREKT in `read_loop` (nicht erst am
+   `add_chain`-Ausgang): pro Erfolgspfad-Iteration `index`, `Instant::now()`
+   und die Anzahl SOFORT AUFEINANDERFOLGENDER Erfolge ohne
+   `OutOfRangeTooEarly`-Backoff dazwischen loggen — zeigt direkt, ob/wie
+   oft "Burst-Lesen mehrerer Grains ohne Pause" tatsächlich auftritt.
+2. Falls bestätigt: Drosselung im Erfolgspfad erwägen (z. B. nach jedem
+   gelesenen Grain bis zum nominell erwarteten nächsten Zeitpunkt wie
+   `1/grain_rate` warten, statt sofort erneut zu pollen) — sorgfältig
+   gegen die bekannten, bereits gefixten Races in dieser Funktion prüfen
+   (nicht deren Fixes versehentlich rückgängig machen).
+3. Die ~12s-Anfangslücke separat betrachten — evtl. eigene Ursache
+   (Verbindungsaufbau-Timing) statt derselben Burst-Read-Ursache wie die
+   fortlaufenden kleineren Sprünge.
+
+**Dateien dieser Sitzung:** keine (Diagnose-Code + Jitterbuffer-Testwert
+wieder vollständig entfernt, `git diff` gegen den letzten Commit leer).
