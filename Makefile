@@ -453,11 +453,12 @@ proxy-up:
 			--network=host \
 			-e OMP_PUBLIC_HOST=$${OMP_PUBLIC_HOST:-localhost} \
 			-v $(CURDIR)/deploy/dev/Caddyfile:/etc/caddy/Caddyfile:ro,Z \
+			-v $(CURDIR)/deploy/dev/webrtc-static:/srv/webrtc-static:ro,Z \
 			-v $(CURDIR)/.run/caddy:/data \
 			docker.io/library/caddy:latest; \
 	fi
 	@echo "Reverse-Proxy bereit: https://localhost:8443 (selbstsigniertes Caddy-Zertifikat, s. docs/HANDBUCH.md)"
-	@echo "Handy-Kamera (omp-webrtc-gateway auf OMP_PORT=9440): https://$${OMP_PUBLIC_HOST:-localhost}:9441"
+	@echo "Handy Kamera+Monitor kombiniert (omp-webrtc-gateway, Nachtrag 246): https://$${OMP_PUBLIC_HOST:-localhost}:9441"
 
 proxy-down:
 	-podman stop omp-caddy

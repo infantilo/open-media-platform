@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Handy-Test für omp-webrtc-gateway (Nachtrag 240–244): startet Kamera-Node
-# (9440) und Monitor-Node (9442), Caddy-HTTPS (9441/9443) und verbindet per
-# IS-05 die Kamera mit dem Monitor.
+# Handy-Test für omp-webrtc-gateway (Nachtrag 240–246): startet Kamera-Node
+# (9440) und Monitor-Node (9442), Caddy-HTTPS (kombinierte Kamera+Monitor-
+# Seite, EIN Ursprung auf 9441, Nachtrag 246) und verbindet per IS-05 die
+# Kamera mit dem Monitor.
 #
 #   OMP_PUBLIC_HOST=<von außen erreichbare IP des Rechners> deploy/dev/start-webrtc-phone.sh [start|wire|stop]
 #
@@ -10,7 +11,7 @@
 # GASTGEBERS (bei ChromeOS: Einstellungen → Netzwerk → WLAN → IP-Adresse), und
 # folgende Ports müssen dorthin weitergeleitet werden (ChromeOS: Einstellungen
 # → Erweitert → Entwickler → Linux-Entwicklungsumgebung → Portweiterleitung):
-#   TCP 9441 (Kamera-HTTPS), TCP 9443 (Monitor-HTTPS),
+#   TCP 9441 (kombinierte HTTPS-Seite),
 #   UDP 9450 (Kamera-Medien), UDP 9452 (Monitor-Medien).
 # Die Medien-Ports und die zu meldende Adresse setzt dieses Skript per
 # OMP_WEBRTC_ICE_PORT / OMP_WEBRTC_PUBLIC_IP (s. nodes/omp-webrtc-gateway/src/ice.rs).
@@ -58,7 +59,12 @@ esac
 # shellcheck disable=SC1091
 source "$ROOT/deploy/dev/mxl.env"
 stop_nodes
-rm -rf /dev/shm/omp-mxl/* 2>/dev/null || true
+# /dev/shm/omp-mxl ist tmpfs — nach einem Neustart des Rechners/Containers
+# weg, nicht nur leer (anders als start-omp.sh, das dies schon selbst tut,
+# läuft dieses Skript unabhängig davon). Ohne mkdir bricht die MXL-Instanz
+# mit "Domain path is not a directory" ab (live gefunden).
+mkdir -p "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"
+rm -rf "${OMP_MXL_DOMAIN:-/dev/shm/omp-mxl}"/* 2>/dev/null || true
 OMP_WEBRTC_PUBLIC_IP="${OMP_WEBRTC_PUBLIC_IP:-$HOST}" OMP_WEBRTC_ICE_PORT=9450 OMP_LABEL="Handy-Kamera" OMP_HOST=127.0.0.1 OMP_PORT=9440 setsid "$BIN" > "$RUN/camera.log" 2>&1 < /dev/null &
 OMP_WEBRTC_PUBLIC_IP="${OMP_WEBRTC_PUBLIC_IP:-$HOST}" OMP_WEBRTC_ICE_PORT=9452 OMP_WEBRTC_GATEWAY_DIRECTION=monitor OMP_LABEL="Handy-Monitor" OMP_HOST=127.0.0.1 OMP_PORT=9442 setsid "$BIN" > "$RUN/monitor.log" 2>&1 < /dev/null &
 wait_http http://127.0.0.1:9440/clock && wait_http http://127.0.0.1:9442/clock
@@ -76,10 +82,9 @@ podman restart omp-caddy >/dev/null   # lädt die Caddyfile neu, erneuert Zertif
 cat <<MSG
 
 Bereit. Auf dem Handy (gleiches WLAN) öffnen:
-  Kamera  (Handy -> OMP):  https://$HOST:9441
-  Monitor (OMP -> Handy):  https://$HOST:9443
+  Kamera + Monitor (kombiniert):  https://$HOST:9441
 Portweiterleitung nötig, falls der Rechner hinter NAT liegt (s. Kopf dieses Skripts):
-  TCP 9441, TCP 9443, UDP 9450, UDP 9452  ->  $HOST
+  TCP 9441, UDP 9450, UDP 9452  ->  $HOST
 Root-CA für das Handy (einmal installieren, sonst Zertifikatswarnung bestätigen):
   $ROOT/.run/caddy/caddy/pki/authorities/local/root.crt
 Logs: $RUN/camera.log, $RUN/monitor.log   Stoppen: $0 stop

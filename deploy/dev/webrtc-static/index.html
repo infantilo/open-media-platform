@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#121212">
+<title>OMP Handy</title>
+<style>
+  :root { color-scheme: dark; --bg:#121212; --surface:#1e1e1e; --text:#eaeaea; --dim:#9a9a9a;
+          --ok:#4caf50; --err:#ef5350; --warn:#fb8c00; --accent:#4c8dff; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:var(--bg);
+         color:var(--text); font:16px/1.4 system-ui,sans-serif; max-width:960px; margin-inline:auto; }
+  h1 { font-size:18px; margin:4px 0; }
+  h2 { font-size:15px; margin:0 0 8px; color:var(--dim); font-weight:600; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:8px; }
+  .toggles { display:flex; gap:14px; }
+  .toggles label { display:flex; align-items:center; gap:6px; font-size:14px; }
+  .toggles input { width:20px; height:20px; }
+  /* Standard: untereinander (Handy-Hochformat). Ab genug Breite (Tablet/
+     Querformat/Desktop-Test) nebeneinander, wenn beide Panels sichtbar sind. */
+  .panels { display:flex; flex-direction:column; gap:20px; }
+  @media (min-width: 800px) {
+    .panels:has(.panel:not(.hidden)) { display:grid; grid-template-columns: 1fr 1fr; align-items:start; }
+    .panels:has(.panel.hidden) { display:flex; }
+  }
+  .panel.hidden { display:none; }
+  /* Ohne min-width:0 zwingt der <video>-Ersatzelement-Inhalt (native
+     Auflösung, z. B. 1280 px) die Grid-Spalte über ihre 1fr-Breite hinaus
+     ("Grid Blowout") — live gefunden: sobald die Kamera lief, sprengte das
+     Video die Spalte und der Monitor rutschte aus dem sichtbaren Bereich. */
+  .panel { min-width: 0; }
+  .preview, .screen { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
+  video { width:100%; height:100%; object-fit:contain; display:block; }
+  .badge { position:absolute; top:8px; left:8px; padding:2px 10px; border-radius:12px; font-size:13px;
+           font-weight:600; background:#000a; }
+  .badge.live { color:#fff; background:var(--err); }
+  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  label.field { display:flex; flex-direction:column; gap:2px; font-size:13px; color:var(--dim); flex:1 1 120px; }
+  select, button { font:inherit; padding:10px; border-radius:8px; border:1px solid #444; background:var(--surface);
+                   color:var(--text); min-height:44px; }
+  button { flex:1; font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.stop { background:var(--err); border-color:var(--err); color:#fff; }
+  button:disabled { opacity:.45; }
+  .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; flex:1 1 100%; }
+  .check input { width:22px; height:22px; }
+  .stats { margin-top:12px; padding:10px 12px; background:var(--surface); border-radius:8px; font-size:14px; }
+  .stats b { font-size:22px; font-variant-numeric:tabular-nums; }
+  .dim { color:var(--dim); }
+  .log { margin-top:8px; font:12px ui-monospace,monospace; color:var(--dim); white-space:pre-wrap; max-height:8em; overflow:auto; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <h1>OMP Handy</h1>
+  <div class="toggles">
+    <label><input type="checkbox" id="toggleCam" checked> Kamera</label>
+    <label><input type="checkbox" id="toggleMon" checked> Monitor</label>
+  </div>
+</div>
+
+<div class="panels">
+
+<section class="panel" id="camPanel">
+  <h2>Kamera senden</h2>
+  <div class="preview">
+    <video id="cam-preview" autoplay muted playsinline></video>
+    <span id="cam-badge" class="badge">Bereit</span>
+  </div>
+  <div class="row">
+    <label class="field">Kamera <select id="cam-camera"></select></label>
+    <label class="field">Auflösung
+      <select id="cam-res">
+        <option value="640x360">640×360</option>
+        <option value="1280x720" selected>1280×720</option>
+        <option value="1920x1080">1920×1080</option>
+      </select>
+    </label>
+    <label class="field">Bildrate
+      <select id="cam-fps"><option>25</option><option selected>30</option><option>50</option><option>60</option></select>
+    </label>
+  </div>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="cam-audio" checked> Ton senden</label>
+    <label class="check"><input type="checkbox" id="cam-measure"> Latenz messen (Zeitstempel im Bild)</label>
+  </div>
+  <div class="row">
+    <button id="cam-start" class="primary">Senden</button>
+    <button id="cam-stop" class="stop" disabled>Stopp</button>
+  </div>
+  <div class="stats">
+    <div>Verbindung: <b id="cam-conn">–</b></div>
+    <div id="cam-latRow" hidden>Latenz Glas→Decoder: <b id="cam-lat">–</b> ms
+      <span class="dim">(Ø · max <span id="cam-latMax">–</span> ms)</span></div>
+    <div class="dim" id="cam-clockInfo"></div>
+  </div>
+  <div class="log" id="cam-log"></div>
+</section>
+
+<section class="panel" id="monPanel">
+  <h2>Monitor ansehen</h2>
+  <div class="screen">
+    <video id="mon-v" autoplay muted playsinline></video>
+    <span id="mon-badge" class="badge">Bereit</span>
+  </div>
+  <div class="row">
+    <button id="mon-start" class="primary">Ansehen</button>
+    <button id="mon-stop" class="stop" disabled>Stopp</button>
+    <button id="mon-unmute" disabled>Ton an</button>
+  </div>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="mon-measure"> Latenz messen (Quelle mit Zeitstempel-Streifen, z. B. Kamera im Messmodus)</label>
+  </div>
+  <div class="stats">
+    <div>Verbindung: <b id="mon-conn">–</b> · <span id="mon-res" class="dim">–</span></div>
+    <div id="mon-latRow" hidden>Latenz Kamera→Monitor: <b id="mon-lat">–</b> ms
+      <span class="dim">(Ø · min <span id="mon-latMin">–</span> · max <span id="mon-latMax">–</span> ms · <span id="mon-latN">0</span> Bilder)</span></div>
+    <div class="dim" id="mon-clockInfo"></div>
+  </div>
+  <div class="log" id="mon-log"></div>
+</section>
+
+</div>
+
+<script>
+// Kombinierte Kamera+Monitor-Seite (Nachtrag 246): zwei unabhängige
+// WebRTC-Sitzungen (Kamera per WHIP, Monitor per WHEP) gegen ZWEI
+// Node-Prozesse, die über einen Caddy-Ursprung unter den Präfixen /cam
+// bzw. /mon erreichbar sind (deploy/dev/Caddyfile, handle_path schneidet
+// den Präfix ab, bevor er an den jeweiligen Node weitergereicht wird —
+// beide Node-eigenen Seiten camera.html/monitor.html erwarten ihre
+// Endpunkte an der eigenen Wurzel). Die Kamera- und Monitor-Logik ist
+// bewusst 1:1 aus camera.html/monitor.html übernommen (nur Element-IDs
+// mit cam-/mon- präfixiert und Fetch-Pfade auf /cam bzw. /mon
+// umgestellt), nicht neu geschrieben — beide Implementierungen sind
+// live verifiziert (Nachtrag 241-244) und sollen es bleiben.
+const $ = (id) => document.getElementById(id);
+
+function initCamera() {
+  const base = '/cam';
+  const log = (t) => { const l = $('cam-log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
+  let pc = null, camStream = null, sendStream = null, wakeLock = null, drawing = false, pollTimer = null;
+  let clockOffset = 0;
+
+  async function syncClock() {
+    let best = null;
+    for (let i = 0; i < 10; i++) {
+      const t0 = performance.now();
+      const r = await fetch(base + '/clock', { cache: 'no-store' });
+      const s = await r.json();
+      const rtt = performance.now() - t0;
+      const off = s.ms - (Date.now() - rtt / 2);
+      if (!best || rtt < best.rtt) best = { rtt, off };
+    }
+    clockOffset = best.off;
+    $('cam-clockInfo').textContent = `Uhrenversatz ${best.off.toFixed(1)} ms (RTT ${best.rtt.toFixed(1)} ms) — Messfehler ≈ ±${(best.rtt / 2).toFixed(1)} ms`;
+  }
+
+  function drawStrip(ctx, w, h) {
+    const ts = Math.round(Date.now() + clockOffset);
+    const bits = [1];
+    for (let i = 43; i >= 0; i--) bits.push(Math.floor(ts / 2 ** i) % 2);
+    let sum = 0;
+    for (let k = 0; k < 11; k++) sum += Math.floor(ts / 16 ** k) % 16;
+    const chk = sum % 16;
+    for (let i = 3; i >= 0; i--) bits.push((chk >> i) & 1);
+    const cw = w / 49, sh = Math.ceil(h / 40);
+    for (let i = 0; i < 49; i++) {
+      ctx.fillStyle = bits[i] ? '#fff' : '#000';
+      ctx.fillRect(Math.floor(i * cw), 0, Math.ceil(cw), sh);
+    }
+  }
+
+  async function listCameras() {
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const sel = $('cam-camera');
+    const cur = sel.value;
+    sel.innerHTML = '';
+    devs.forEach((d, i) => sel.add(new Option(d.label || 'Kamera ' + (i + 1), d.deviceId)));
+    if (cur) sel.value = cur;
+  }
+
+  async function openCamera() {
+    const [w, h] = $('cam-res').value.split('x').map(Number);
+    const fps = Number($('cam-fps').value);
+    const video = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
+    if ($('cam-camera').value) video.deviceId = { exact: $('cam-camera').value };
+    else video.facingMode = 'environment';
+    camStream = await navigator.mediaDevices.getUserMedia({ video, audio: $('cam-audio').checked });
+    await listCameras();
+    $('cam-preview').srcObject = camStream;
+    const t = camStream.getVideoTracks()[0];
+    if (t) { t.contentHint = 'motion'; log('Kamera: ' + t.label + ' ' + JSON.stringify(t.getSettings())); }
+    return { w, h, fps };
+  }
+
+  async function start() {
+    if (!window.isSecureContext) { log('FEHLER: Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).'); return; }
+    $('cam-start').disabled = true;
+    try {
+      const { fps } = await openCamera();
+      const measure = $('cam-measure').checked;
+      sendStream = camStream;
+      if (measure) {
+        await syncClock();
+        const vs = camStream.getVideoTracks()[0].getSettings();
+        const cv = document.createElement('canvas');
+        cv.width = vs.width; cv.height = vs.height;
+        const ctx = cv.getContext('2d');
+        const src = document.createElement('video');
+        src.muted = true; src.playsInline = true; src.srcObject = camStream; await src.play();
+        drawing = true;
+        const period = 1000 / fps;
+        let next = performance.now();
+        const tick = () => {
+          if (!drawing) return;
+          ctx.drawImage(src, 0, 0, cv.width, cv.height);
+          drawStrip(ctx, cv.width, cv.height);
+          next += period;
+          setTimeout(tick, Math.max(0, next - performance.now()));
+        };
+        tick();
+        sendStream = new MediaStream([...cv.captureStream(fps).getVideoTracks(), ...camStream.getAudioTracks()]);
+      }
+      await connect(sendStream);
+      $('cam-stop').disabled = false;
+      $('cam-latRow').hidden = !measure;
+      try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
+      pollTimer = setInterval(pollStats, 500);
+    } catch (e) {
+      log('FEHLER: ' + (e.message || e));
+      await stop(true);
+    }
+  }
+
+  async function connect(stream) {
+    pc = new RTCPeerConnection({ iceServers: [] });
+    for (const t of stream.getTracks()) pc.addTrack(t, stream);
+    const caps = RTCRtpSender.getCapabilities('video').codecs;
+    const h264 = caps.filter((c) => c.mimeType === 'video/H264');
+    const vt = pc.getTransceivers().find((t) => t.sender.track && t.sender.track.kind === 'video');
+    if (h264.length && vt) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
+    else log('WARNUNG: kein H.264 im Browser verfügbar');
+    pc.onconnectionstatechange = () => { $('cam-conn').textContent = pc.connectionState; setBadge(); };
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
+      pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
+    const res = await fetch(base + '/whip', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+    const text = await res.text();
+    if (res.status !== 201) throw new Error('WHIP ' + res.status + ': ' + text);
+    await pc.setRemoteDescription({ type: 'answer', sdp: text });
+    const sender = vt && vt.sender;
+    if (sender) {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate = 6_000_000;
+      p.degradationPreference = 'maintain-framerate';
+      try { await sender.setParameters(p); } catch (_) {}
+    }
+    log('WHIP verbunden');
+  }
+
+  function setBadge() {
+    const b = $('cam-badge');
+    const live = pc && pc.connectionState === 'connected';
+    b.textContent = live ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
+    b.className = 'badge' + (live ? ' live' : '');
+  }
+
+  async function pollStats() {
+    try {
+      const g = async (n) => (await (await fetch(base + '/params/' + n, { cache: 'no-store' })).json()).value;
+      if (!$('cam-latRow').hidden) {
+        const [avg, max] = await Promise.all([g('e2eLatencyMs'), g('e2eLatencyMaxMs')]);
+        $('cam-lat').textContent = avg == null ? '–' : avg.toFixed(0);
+        $('cam-latMax').textContent = max == null ? '–' : max.toFixed(0);
+      }
+    } catch (_) {}
+  }
+
+  async function stop(quiet) {
+    drawing = false;
+    clearInterval(pollTimer);
+    try { await fetch(base + '/whip', { method: 'DELETE' }); } catch (_) {}
+    if (pc) { pc.close(); pc = null; }
+    for (const s of [camStream, sendStream]) s && s.getTracks().forEach((t) => t.stop());
+    camStream = sendStream = null;
+    try { await wakeLock?.release(); } catch (_) {}
+    $('cam-start').disabled = false; $('cam-stop').disabled = true;
+    $('cam-conn').textContent = '–'; setBadge();
+    if (!quiet) log('gestoppt');
+  }
+
+  $('cam-start').onclick = start;
+  $('cam-stop').onclick = () => stop(false);
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && pc) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {} }
+  });
+  if (!window.isSecureContext) log('Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).');
+  navigator.mediaDevices?.enumerateDevices().then(listCameras).catch(() => {});
+}
+
+function initMonitor() {
+  const base = '/mon';
+  const log = (t) => { const l = $('mon-log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
+  let pc = null, clockOffset = 0, measuring = false, samples = [], statsTimer = null;
+
+  async function syncClock() {
+    let best = null;
+    for (let i = 0; i < 10; i++) {
+      const t0 = performance.now();
+      const s = await (await fetch(base + '/clock', { cache: 'no-store' })).json();
+      const rtt = performance.now() - t0;
+      const off = s.ms - (Date.now() - rtt / 2);
+      if (!best || rtt < best.rtt) best = { rtt, off };
+    }
+    clockOffset = best.off;
+    $('mon-clockInfo').textContent = `Uhrenversatz ${best.off.toFixed(1)} ms (RTT ${best.rtt.toFixed(1)} ms) — Messfehler ≈ ±${(best.rtt / 2).toFixed(1)} ms`;
+  }
+
+  const strip = document.createElement('canvas');
+  strip.width = 49 * 8; strip.height = 8;
+  const sctx = strip.getContext('2d', { willReadFrequently: true });
+  function readStrip(v) {
+    sctx.drawImage(v, 0, 0, v.videoWidth, Math.max(1, v.videoHeight / 40), 0, 0, strip.width, strip.height);
+    const row = sctx.getImageData(0, 4, strip.width, 1).data;
+    const bits = [];
+    for (let i = 0; i < 49; i++) bits.push(row[(i * 8 + 4) * 4] > 127 ? 1 : 0);
+    if (!bits[0]) return null;
+    let ts = 0;
+    for (let i = 1; i <= 44; i++) ts = ts * 2 + bits[i];
+    let sum = 0;
+    for (let k = 0; k < 11; k++) sum += Math.floor(ts / 16 ** k) % 16;
+    const chk = (bits[45] << 3) | (bits[46] << 2) | (bits[47] << 1) | bits[48];
+    return sum % 16 === chk ? ts : null;
+  }
+
+  function measureLoop(v) {
+    if (!measuring) return;
+    const tick = () => {
+      if (!measuring) return;
+      const ts = readStrip(v);
+      if (ts !== null) {
+        const lat = Date.now() + clockOffset - ts;
+        if (Math.abs(lat) < 60000) {
+          samples.push(lat); if (samples.length > 50) samples.shift();
+          const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+          $('mon-lat').textContent = avg.toFixed(0);
+          $('mon-latMin').textContent = Math.min(...samples).toFixed(0);
+          $('mon-latMax').textContent = Math.max(...samples).toFixed(0);
+          $('mon-latN').textContent = samples.length;
+        }
+      }
+      if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  async function start() {
+    $('mon-start').disabled = true;
+    try {
+      pc = new RTCPeerConnection({ iceServers: [] });
+      pc.addTransceiver('video', { direction: 'recvonly' });
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+      const caps = RTCRtpReceiver.getCapabilities('video').codecs;
+      const h264 = caps.filter((c) => c.mimeType === 'video/H264');
+      const vt = pc.getTransceivers()[0];
+      if (h264.length) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
+      for (const t of pc.getTransceivers()) {
+        try { t.receiver.jitterBufferTarget = 0; } catch (_) {}
+        try { t.receiver.playoutDelayHint = 0; } catch (_) {}
+      }
+      const ms = new MediaStream();
+      $('mon-v').srcObject = ms;
+      pc.ontrack = (e) => { ms.addTrack(e.track); log('Track: ' + e.track.kind); };
+      pc.onconnectionstatechange = () => { $('mon-conn').textContent = pc.connectionState; setBadge(); };
+      await pc.setLocalDescription(await pc.createOffer());
+      await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
+        pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
+      const res = await fetch(base + '/whep', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+      const text = await res.text();
+      if (res.status !== 201) throw new Error('WHEP ' + res.status + ': ' + text);
+      await pc.setRemoteDescription({ type: 'answer', sdp: text });
+      $('mon-stop').disabled = false; $('mon-unmute').disabled = false;
+      if ($('mon-measure').checked) {
+        await syncClock();
+        $('mon-latRow').hidden = false;
+        samples = []; measuring = true;
+        const v = $('mon-v');
+        const go = () => measureLoop(v);
+        if (v.readyState >= 2) go(); else v.addEventListener('loadeddata', go, { once: true });
+      }
+      statsTimer = setInterval(showStats, 1000);
+      log('WHEP verbunden');
+    } catch (e) {
+      log('FEHLER: ' + (e.message || e));
+      await stop(true);
+    }
+  }
+
+  async function showStats() {
+    if (!pc) return;
+    const stats = await pc.getStats();
+    stats.forEach((r) => {
+      if (r.type === 'inbound-rtp' && r.kind === 'video') {
+        $('mon-res').textContent = `${r.frameWidth || '?'}×${r.frameHeight || '?'} @ ${r.framesPerSecond ?? '?'} fps`
+          + (r.jitterBufferDelay && r.jitterBufferEmittedCount ? ` · Jitterbuffer ${(1000 * r.jitterBufferDelay / r.jitterBufferEmittedCount).toFixed(0)} ms` : '');
+      }
+    });
+  }
+
+  function setBadge() {
+    const live = pc && pc.connectionState === 'connected';
+    $('mon-badge').textContent = live ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
+    $('mon-badge').className = 'badge' + (live ? ' live' : '');
+  }
+
+  async function stop(quiet) {
+    measuring = false; clearInterval(statsTimer);
+    try { await fetch(base + '/whep', { method: 'DELETE' }); } catch (_) {}
+    if (pc) { pc.close(); pc = null; }
+    $('mon-v').srcObject = null;
+    $('mon-start').disabled = false; $('mon-stop').disabled = true; $('mon-unmute').disabled = true;
+    $('mon-conn').textContent = '–'; setBadge();
+    if (!quiet) log('gestoppt');
+  }
+
+  $('mon-start').onclick = start;
+  $('mon-stop').onclick = () => stop(false);
+  $('mon-unmute').onclick = () => { const v = $('mon-v'); v.muted = !v.muted; $('mon-unmute').textContent = v.muted ? 'Ton an' : 'Ton aus'; };
+}
+
+// Sichtbarkeit umschalten (immer beides oder wahlweise eins) — läuft
+// unabhängig von Start/Stop weiter, wenn ein Panel nur ausgeblendet wird.
+$('toggleCam').onchange = () => $('camPanel').classList.toggle('hidden', !$('toggleCam').checked);
+$('toggleMon').onchange = () => $('monPanel').classList.toggle('hidden', !$('toggleMon').checked);
+
+initCamera();
+initMonitor();
+</script>
+</body>
+</html>

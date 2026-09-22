@@ -36,61 +36,61 @@ localhost:8443 {
 	}
 }
 
-# Smartphone-Kamera (omp-webrtc-gateway, Nachtrag 242): `getUserMedia` läuft
-# im Handy-Browser nur über HTTPS. Feste Node-Portnummer 9440 (OMP_PORT beim
-# Start des Gateways setzen — der Launcher vergibt sonst dynamische Ports,
-# die ein statischer Proxy nicht kennen kann). Hostname/IP, unter der das
-# Handy den Rechner erreicht, per OMP_PUBLIC_HOST (Default localhost; im LAN
-# die IP oder den mDNS-Namen, sonst passt der SAN des internen Zertifikats
+# Smartphone Kamera+Monitor, KOMBINIERT in einer Seite/einem Ursprung
+# (Nachtrag 246; vorher zwei getrennte Ports/Seiten, Nachtrag 242/243).
+# `getUserMedia` läuft im Handy-Browser nur über HTTPS. Die beiden
+# Node-Prozesse laufen weiter getrennt auf festen Ports (Kamera OMP_PORT=9440,
+# Monitor OMP_WEBRTC_GATEWAY_DIRECTION=monitor OMP_PORT=9442 — der Launcher
+# vergibt sonst dynamische Ports, die ein statischer Proxy nicht kennen
+# kann), aber EIN Caddy-Ursprung (TCP 9441) reicht: `/` liefert die
+# kombinierte Seite (deploy/dev/webrtc-static/index.html, per Volume ins
+# Caddy-Image gemountet, s. Makefile `proxy-up`), `/cam/*` und `/mon/*`
+# werden (Präfix abgeschnitten, `handle_path`) an Kamera- bzw.
+# Monitor-Node weitergereicht — beide Nodes kennen ihre Endpunkte
+# (`/whip`, `/whep`, `/clock`, `/params/…`) nur an der eigenen Wurzel,
+# daher IMMER über die Präfixe gehen, nie direkt auf 9440/9442 von
+# außen. Ein TCP-Port statt zwei vereinfacht auch die Portweiterleitung
+# hinter NAT (Nachtrag 245). Hostname/IP, unter der das Handy den
+# Rechner erreicht, per OMP_PUBLIC_HOST (Default localhost; im LAN die
+# IP oder den mDNS-Namen, sonst passt der SAN des internen Zertifikats
 # nicht). Das Handy muss die Caddy-Root-CA akzeptieren:
 # .run/caddy/pki/authorities/local/root.crt (s. docs/HANDBUCH.md).
 # Auch unter localhost/penguin.linux.test/127.0.0.1 erreichbar (ChromeOS
 # leitet Container-Ports auf localhost weiter): Caddy antwortet bei einem
 # NICHT konfigurierten Hostnamen sonst mit leerem 200 (weiße Seite).
+(webrtc_combined) {
+	handle_path /cam/* {
+		reverse_proxy 127.0.0.1:9440 {
+			flush_interval -1
+		}
+	}
+	handle_path /mon/* {
+		reverse_proxy 127.0.0.1:9442 {
+			flush_interval -1
+		}
+	}
+	handle {
+		root * /srv/webrtc-static
+		file_server
+	}
+}
+
 {$OMP_PUBLIC_HOST:localhost}:9441, localhost:9441, penguin.linux.test:9441, 127.0.0.1:9441 {
 	tls internal
-	reverse_proxy 127.0.0.1:9440 {
-		flush_interval -1
-	}
+	import webrtc_combined
 	# Ohne laufenden Node liefert Caddy sonst einen LEEREN 502 (weiße Seite).
 	handle_errors {
 		header Content-Type "text/plain; charset=utf-8"
-		respond "Kamera-Node nicht erreichbar (Port 9440). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
+		respond "Node nicht erreichbar unter {http.request.uri.path} (Kamera=9440, Monitor=9442). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
 	}
 }
 
-# Smartphone-Monitor (omp-webrtc-gateway mit OMP_WEBRTC_GATEWAY_DIRECTION=monitor,
-# Nachtrag 243): Node fest auf OMP_PORT=9442, HTTPS auf 9443. Gleiche
-# Hinweise wie beim Kamera-Block oben (OMP_PUBLIC_HOST, Root-CA am Handy).
-# Auch unter localhost/penguin.linux.test/127.0.0.1 erreichbar (ChromeOS
-# leitet Container-Ports auf localhost weiter): Caddy antwortet bei einem
-# NICHT konfigurierten Hostnamen sonst mit leerem 200 (weiße Seite).
-{$OMP_PUBLIC_HOST:localhost}:9443, localhost:9443, penguin.linux.test:9443, 127.0.0.1:9443 {
-	tls internal
-	reverse_proxy 127.0.0.1:9442 {
-		flush_interval -1
-	}
-	# Ohne laufenden Node liefert Caddy sonst einen LEEREN 502 (weiße Seite).
-	handle_errors {
-		header Content-Type "text/plain; charset=utf-8"
-		respond "Monitor-Node nicht erreichbar (Port 9442). Starten mit: OMP_PUBLIC_HOST=<IP> deploy/dev/start-webrtc-phone.sh" 503
-	}
-}
-
-# Auffang-Blöcke: das Handy ruft die Seite unter der WLAN-IP des GASTGEBERS
+# Auffang-Block: das Handy ruft die Seite unter der WLAN-IP des GASTGEBERS
 # auf (Portweiterleitung) — diese Adresse trägt die Anfrage als Host-Header,
 # und Caddy kennt sie nicht (der Container sieht nur seine eigene IP). Ohne
-# diese Blöcke antwortet Caddy mit leerem 200 (weiße Seite). TLS bedient
-# weiterhin der Zertifikatsteil der Blöcke oben (Auswahl ohne SNI über die
+# diesen Block antwortet Caddy mit leerem 200 (weiße Seite). TLS bedient
+# weiterhin der Zertifikatsteil des Blocks oben (Auswahl ohne SNI über die
 # lokale Adresse).
 :9441 {
-	reverse_proxy 127.0.0.1:9440 {
-		flush_interval -1
-	}
-}
-
-:9443 {
-	reverse_proxy 127.0.0.1:9442 {
-		flush_interval -1
-	}
+	import webrtc_combined
 }

@@ -26066,3 +26066,75 @@ UDP für Antworten mit der Container-Quelladresse sauber zurückgibt, ist
 ungeprüft. Alternative, falls es hakt: der Container hat eine globale IPv6-
 Adresse — vom Handy per IPv6 evtl. direkt erreichbar (ungetestet, wird von
 der Kandidaten-Umschreibung derzeit verworfen).
+
+## 2026-09-22 (Nachtrag 246) — Smartphone-WebRTC-Node: Kamera+Monitor kombiniert in einer Seite
+
+**Nutzerauftrag (Fortsetzung von Nachtrag 240–245):** Kamera und Monitor
+sollen im Handy-Browser immer gleichzeitig in EINER Seite verfügbar sein —
+man sieht beides, oder wahlweise nur eines von beiden.
+
+**Umgesetzt:** neue statische Seite `deploy/dev/webrtc-static/index.html`
+(kein neuer Node, kein Rust-Code nötig): übernimmt die Sende-/Empfangslogik
+aus `camera.html`/`monitor.html` unverändert (nur Element-IDs `cam-`/`mon-`
+präfixiert, Fetch-Pfade auf `/cam` bzw. `/mon` umgestellt), zwei
+unabhängige WebRTC-Sitzungen nebeneinander (Grid ab 800px Breite, sonst
+untereinander), zwei Checkboxen oben blenden je ein Panel rein visuell
+ein/aus (die WebRTC-Sitzung läuft im Hintergrund weiter, nur die Anzeige
+wird umgeschaltet).
+
+**Routing:** `deploy/dev/Caddyfile` bekommt EINEN kombinierten Ursprung
+(weiterhin Port 9441, Block `9443` entfällt): `/` liefert die neue Seite
+(Volume-Mount `deploy/dev/webrtc-static` → `/srv/webrtc-static` im
+Caddy-Container, `Makefile` `proxy-up`), `/cam/*` und `/mon/*` werden per
+`handle_path` (Präfix abgeschnitten) an die weiterhin getrennt laufenden
+Node-Prozesse (Kamera 9440, Monitor 9442) weitergereicht — beide Nodes
+kennen ihre Endpunkte (`/whip`, `/whep`, `/clock`, `/params/…`) nur an der
+eigenen Wurzel. Ein `(webrtc_combined)`-Snippet vermeidet Duplikation
+zwischen dem benannten Host-Block und dem IP-Auffangblock. Ein TCP-Port
+statt zwei vereinfacht die Portweiterleitung hinter NAT (Nachtrag 245).
+`deploy/dev/start-webrtc-phone.sh` entsprechend angepasst (Meldungen,
+Portliste).
+
+**Live gefundene Fallstricke:**
+1. `/dev/shm/omp-mxl` ist tmpfs und war nach einem Neustart schlicht weg
+   (nicht nur leer) — das Skript nahm die vorhandene Verzeichnisstruktur
+   an (`rm -rf .../* `) und scheiterte mit „Domain path is not a
+   directory". `start-omp.sh` macht das `mkdir -p` schon selbst, dieses
+   Skript lief bisher nur zufällig direkt danach. Fix: `mkdir -p` vor dem
+   `rm -rf` ergänzt.
+2. **CSS-Grid-„Blowout" durch das `<video>`-Ersatzelement:** ohne
+   `min-width:0` auf dem Grid-/Flex-Item (`.panel`) zwingt die native
+   Video-Auflösung (1280 px) die Spalte über ihre `1fr`-Breite hinaus,
+   sobald ein echter MediaStream läuft (bei einer bloß layouteten, noch
+   leeren `<video>` unsichtbar) — der zweite Panel rutschte dann aus dem
+   sichtbaren Bereich. Klassischer, dokumentierter Grid/Flex-Fallstrick
+   bei Ersatzelementen; per Live-Screenshot-Vergleich (vor/nach Kamera-
+   Start) gefunden, nicht nur aus der Spec hergeleitet.
+3. Ein separates, per Kopie in derselben JS-Task synchron ausgelöstes
+   Starten BEIDER Sitzungen (`cam-start` und `mon-start` unmittelbar
+   nacheinander ohne Event-Loop-Umlauf dazwischen) erzeugte im headless
+   Chromium mit zwei parallelen `--use-fake-device-for-media-stream`-
+   Strömen einen einmaligen Mess-/Rendering-Ausreißer bei
+   `getBoundingClientRect()` (Breite im vierstelligen Bereich statt 454px,
+   nur unmittelbar danach, nicht dauerhaft). Mit realistischem zeitlichen
+   Abstand zwischen den Klicks (wie ein Mensch ihn immer hat) oder auch
+   nach ausreichender Wartezeit trat das nicht mehr auf — vermutlich ein
+   Headless-/Fake-Device-Kompositor-Artefakt zweier gleichzeitiger
+   synthetischer Kameraströme, kein Layoutfehler der Seite (mit echtem
+   Kamera-Feed am Handy nicht zu erwarten). Nicht weiterverfolgt, da nicht
+   reproduzierbar von einer echten Nutzeraktion aus.
+
+**Verifikation (live, Chromium mit Fake-Kamera, echte NMOS-Kette Kamera→
+Monitor per IS-05 verdrahtet):** `curl` bestätigt `/`, `/cam/clock`,
+`/mon/clock`, `/cam/params/…` über den EINEN Ursprung (9441). Beide
+Sitzungen laufen gleichzeitig von derselben Seite aus (`connectionState`
+beider `connected`, Monitor zeigt reale Auflösung/Framerate der
+Kamera-Sitzung). Grid-Layout live vermessen (`getBoundingClientRect`):
+beide Panels exakt nebeneinander (454px/454px) bei ≥800px Breite, auch
+während beide Sitzungen aktiv sind. Checkboxen blenden ihr Panel korrekt
+ein/aus, ohne die jeweils andere Sitzung zu beeinflussen. Offen (Schritt 4,
+weiterhin unverändert aus Nachtrag 240): Katalog-Eintrag, Node-UI-Bundle,
+Reconnect/Alarm bei Verbindungsabbruch, Auth für `/whip`/`/whep`.
+
+**Dateien:** `deploy/dev/webrtc-static/index.html` (neu), `deploy/dev/Caddyfile`,
+`deploy/dev/start-webrtc-phone.sh`, `Makefile` (`proxy-up`-Mount).
