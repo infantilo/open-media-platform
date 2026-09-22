@@ -26526,3 +26526,41 @@ ein fehlgeschlagener Versuch sofort erklärbar ist statt nur "hat nicht
 funktioniert, warum unklar".
 
 **Dateien:** keine (vollständig zurückgesetzt).
+
+## 2026-09-22 (Nachtrag 256) — Bestätigt: Clock/PTS-Bug weiterhin offen (Priorität HOCH, macht Feature unbenutzbar), verfeinerte Fix-Idee für später
+
+**Bestätigt vom Nutzer:** identisches Verhalten nach dem Revert aus
+Nachtrag 255 — kein Rest des verworfenen Fixversuchs im Code, der Bug
+ist der ursprüngliche aus Nachtrag 254, weiterhin ungelöst. **Priorität
+hoch** — macht die kombinierte Kamera+Monitor-Seite in der Praxis
+unbenutzbar. Nicht sofort weiterverfolgt (Nutzerwunsch: "als ausstehend
+merken").
+
+**Verfeinerte Fix-Idee (nicht umgesetzt, nicht verifiziert):** statt
+Index-basierter PTS-Neuberechnung (Nachtrag 2026-07-12 zu §15 lehnt das
+wegen fehlendem Drift-Schutz ab) oder reiner Erfolgspfad-Drosselung
+(Nachtrag 255, live gescheitert) die bereits vorhandene, korrekte
+Ursprungs-Zeitmarke nutzen: `read_loop`/`read_audio_loop` hängen schon
+heute den TAI-Ursprungszeitstempel als `GstReferenceTimestampMeta` an
+jeden Puffer (Nachtrag 2026-07-12, für §15/Redundanz gebaut) — genutzt
+wird er aber nur als Zusatzinformation, NICHT als tatsächliches
+GStreamer-`PTS` (das bleibt `do-timestamp=true`, also Wanduhrzeit beim
+Push). Idee: in `MxlVideoInput`/`MxlAudioInput`s Lesepfad `do-timestamp`
+NICHT die PTS bestimmen lassen, sondern die bereits vorhandene,
+monotone, driftgeschützte Ursprungszeit selbst als PTS setzen (relativ
+zur Pipeline-Basiszeit verrechnet). Das ist kein neuer Mechanismus,
+sondern Wiederverwendung des bestehenden, für genau diese Problemklasse
+gebauten (§15) Ursprungszeitstempels — dadurch bleibt die Pufferzustellung
+zwar möglicherweise weiterhin unregelmäßig getaktet, die DEKLARIERTE
+Zeit pro Bild ist aber unabhängig davon korrekt, wodurch nachgelagerte
+Jitterbuffer (Browser-seitig) die Unregelmäßigkeit wie vorgesehen
+auffangen können sollten. Betrifft nur den `omp-webrtc-gateway`-Konsum-
+pfad, nicht `do-timestamp`/PTS-Verhalten anderer `MxlVideoInput`/
+`MxlAudioInput`-Nutzer — sorgfältig prüfen, ob eine Umstellung dort
+etwas anderes bricht (z. B. den in Nachtrag 2026-07-12 beschriebenen
+Schreibpfad-Mechanismus, der `origin_index_from_buffer` aus derselben
+Meta liest).
+
+**Für die nächste Sitzung zu diesem Thema:** ZUERST Live-Instrumentierung
+(Nachtrag 255s Lektion), dann diesen verfeinerten Ansatz probieren, nicht
+wieder reine Read-Loop-Drosselung.
