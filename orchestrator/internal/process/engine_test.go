@@ -231,6 +231,221 @@ func TestEngineParallelFanOutJoin(t *testing.T) {
 	}
 }
 
+// ---- Condition/Branch (A5) -----------------------------------------------
+
+func TestEngineConditionRoutesOnExpressionResult(t *testing.T) {
+	engine, store := testEngine(t)
+	cfg := mustMarshal(t, conditionConfig{Expression: "input.asset.duration > 30", TrueLabel: "valid", FalseLabel: "invalid"})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "validate",
+		Steps: []Step{
+			{ID: "validate", Type: StepTypeCondition, Config: cfg, Branches: map[string]string{
+				"valid":   "transcode",
+				"invalid": "review",
+			}},
+			{ID: "transcode", Type: StepTypeTask},
+			{ID: "review", Type: StepTypeTask},
+		},
+	})
+	engine.Register(StepTypeTask, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}))
+
+	exec, err := engine.Start(CreateExecutionParams{
+		ProcessDefinitionID: v.ProcessDefinitionID, ProcessVersionID: v.ID, CreatedBy: "tester",
+		Input: json.RawMessage(`{"asset":{"duration":45}}`),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompleted, StatusFailed)
+	if final.Status != StatusCompleted {
+		t.Fatalf("execution status = %s, want completed (error=%q)", final.Status, final.Error)
+	}
+	steps, err := store.ListStepExecutions(exec.ID)
+	if err != nil {
+		t.Fatalf("ListStepExecutions() error = %v", err)
+	}
+	ran := map[string]bool{}
+	for _, s := range steps {
+		ran[s.StepID] = true
+	}
+	if !ran["transcode"] {
+		t.Errorf("expected 'transcode' to run (duration 45 > 30 -> valid), steps=%v", ran)
+	}
+	if ran["review"] {
+		t.Errorf("did NOT expect 'review' to run (condition was true), steps=%v", ran)
+	}
+}
+
+func TestEngineConditionRoutesToFalseBranch(t *testing.T) {
+	engine, store := testEngine(t)
+	cfg := mustMarshal(t, conditionConfig{Expression: "input.asset.duration > 30", TrueLabel: "valid", FalseLabel: "invalid"})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "validate",
+		Steps: []Step{
+			{ID: "validate", Type: StepTypeCondition, Config: cfg, Branches: map[string]string{
+				"valid":   "transcode",
+				"invalid": "review",
+			}},
+			{ID: "transcode", Type: StepTypeTask},
+			{ID: "review", Type: StepTypeTask},
+		},
+	})
+	engine.Register(StepTypeTask, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		return json.RawMessage(`{}`), nil
+	}))
+
+	exec, err := engine.Start(CreateExecutionParams{
+		ProcessDefinitionID: v.ProcessDefinitionID, ProcessVersionID: v.ID, CreatedBy: "tester",
+		Input: json.RawMessage(`{"asset":{"duration":10}}`),
+	})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompleted, StatusFailed)
+	if final.Status != StatusCompleted {
+		t.Fatalf("execution status = %s, want completed (error=%q)", final.Status, final.Error)
+	}
+	steps, err := store.ListStepExecutions(exec.ID)
+	if err != nil {
+		t.Fatalf("ListStepExecutions() error = %v", err)
+	}
+	ran := map[string]bool{}
+	for _, s := range steps {
+		ran[s.StepID] = true
+	}
+	if !ran["review"] {
+		t.Errorf("expected 'review' to run (duration 10 <= 30 -> invalid), steps=%v", ran)
+	}
+	if ran["transcode"] {
+		t.Errorf("did NOT expect 'transcode' to run (condition was false), steps=%v", ran)
+	}
+}
+
+func TestEngineConditionInvalidExpressionFailsHonestly(t *testing.T) {
+	engine, store := testEngine(t)
+	cfg := mustMarshal(t, conditionConfig{Expression: "input.asset.duration >>> 30"})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "validate",
+		Steps:       []Step{{ID: "validate", Type: StepTypeCondition, Config: cfg}},
+	})
+
+	exec, err := engine.Start(CreateExecutionParams{ProcessDefinitionID: v.ProcessDefinitionID, ProcessVersionID: v.ID, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompleted, StatusFailed)
+	if final.Status != StatusFailed {
+		t.Fatalf("execution status = %s, want failed (invalid expression syntax)", final.Status)
+	}
+}
+
+func TestEngineBranchPicksFirstMatchingCase(t *testing.T) {
+	engine, store := testEngine(t)
+	cfg := mustMarshal(t, branchConfig{
+		Cases: []branchCase{
+			{Expression: `outputs.qc.score >= 0.95`, Label: "excellent"},
+			{Expression: `outputs.qc.score >= 0.8`, Label: "acceptable"},
+		},
+		DefaultLabel: "reject",
+	})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "qc",
+		Steps: []Step{
+			{ID: "qc", Type: StepTypeTask, Next: []string{"grade"}},
+			{ID: "grade", Type: StepTypeBranch, Config: cfg, Branches: map[string]string{
+				"excellent":  "publish",
+				"acceptable": "review",
+				"reject":     "rework",
+			}},
+			{ID: "publish", Type: StepTypeTask},
+			{ID: "review", Type: StepTypeTask},
+			{ID: "rework", Type: StepTypeTask},
+		},
+	})
+	engine.Register(StepTypeTask, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		if step.ID == "qc" {
+			return json.RawMessage(`{"score":0.88}`), nil
+		}
+		return json.RawMessage(`{}`), nil
+	}))
+
+	exec, err := engine.Start(CreateExecutionParams{ProcessDefinitionID: v.ProcessDefinitionID, ProcessVersionID: v.ID, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompleted, StatusFailed)
+	if final.Status != StatusCompleted {
+		t.Fatalf("execution status = %s, want completed (error=%q)", final.Status, final.Error)
+	}
+	steps, err := store.ListStepExecutions(exec.ID)
+	if err != nil {
+		t.Fatalf("ListStepExecutions() error = %v", err)
+	}
+	ran := map[string]bool{}
+	for _, s := range steps {
+		ran[s.StepID] = true
+	}
+	if !ran["review"] {
+		t.Errorf("expected 'review' to run (score 0.88 matches 'acceptable', not 'excellent'), steps=%v", ran)
+	}
+	if ran["publish"] || ran["rework"] {
+		t.Errorf("expected exactly one branch target ('review') to run, steps=%v", ran)
+	}
+}
+
+func TestEngineBranchFallsBackToDefaultLabel(t *testing.T) {
+	engine, store := testEngine(t)
+	cfg := mustMarshal(t, branchConfig{
+		Cases:        []branchCase{{Expression: `outputs.qc.score >= 0.95`, Label: "excellent"}},
+		DefaultLabel: "reject",
+	})
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "qc",
+		Steps: []Step{
+			{ID: "qc", Type: StepTypeTask, Next: []string{"grade"}},
+			{ID: "grade", Type: StepTypeBranch, Config: cfg, Branches: map[string]string{
+				"excellent": "publish",
+				"reject":    "rework",
+			}},
+			{ID: "publish", Type: StepTypeTask},
+			{ID: "rework", Type: StepTypeTask},
+		},
+	})
+	engine.Register(StepTypeTask, StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		if step.ID == "qc" {
+			return json.RawMessage(`{"score":0.2}`), nil
+		}
+		return json.RawMessage(`{}`), nil
+	}))
+
+	exec, err := engine.Start(CreateExecutionParams{ProcessDefinitionID: v.ProcessDefinitionID, ProcessVersionID: v.ID, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompleted, StatusFailed)
+	if final.Status != StatusCompleted {
+		t.Fatalf("execution status = %s, want completed (error=%q)", final.Status, final.Error)
+	}
+	steps, err := store.ListStepExecutions(exec.ID)
+	if err != nil {
+		t.Fatalf("ListStepExecutions() error = %v", err)
+	}
+	ran := map[string]bool{}
+	for _, s := range steps {
+		ran[s.StepID] = true
+	}
+	if !ran["rework"] {
+		t.Errorf("expected 'rework' to run (score 0.2 matches no case -> defaultLabel 'reject'), steps=%v", ran)
+	}
+}
+
 // ---- HumanTask mit entscheidungsbasiertem Branching -----------------------------------------------
 
 func TestEngineHumanTaskWaitsThenRoutesByDecision(t *testing.T) {
@@ -460,7 +675,16 @@ func TestEngineCompensationRunsAfterFailure(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 
-	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompensated, StatusFailed)
+	// Bewusst NUR StatusCompensated erwarten, nicht zusätzlich
+	// StatusFailed: "failed" ist hier ein gewollter, kurzlebiger
+	// Zwischenzustand (finalize() schreibt erst "failed", danach sofort
+	// "compensating", s. engine.go) — ein Poll, der GENAU in dieses
+	// Mikrosekundenfenster fällt, hätte mit "failed" in der Warteliste
+	// fälschlich vorzeitig abgebrochen (per Stresstest gefunden: ein
+	// scheinbar flakiger Testfehlschlag, der in Wahrheit keiner war —
+	// die Engine kompensierte tatsächlich immer korrekt, nur dieser
+	// Test-Helper akzeptierte den Zwischenzustand als Endergebnis).
+	final := awaitExecutionStatus(t, store, exec.ID, 2*time.Second, StatusCompensated)
 	if final.Status != StatusCompensated {
 		t.Fatalf("execution status = %s, want compensated (error=%q)", final.Status, final.Error)
 	}
@@ -665,6 +889,30 @@ func (p *spyPublisher) has(prefix string) bool {
 	return false
 }
 
+// awaitPublished pollt, bis publisher ein Subject mit prefix gesehen hat.
+// Nötig, weil das Publizieren (engine.go publishExecutionEvent) im
+// selben Goroutine-Ablauf ERST NACH dem DB-Schreiben auf "completed"
+// passiert — ein Test, der nur einmalig direkt nach
+// awaitExecutionStatus(...StatusCompleted...) prüft, kann in genau das
+// Zeitfenster zwischen beiden fallen (gleiche Fehlerklasse wie bei
+// TestEngineCompensationRunsAfterFailure, s. docs/decisions.md
+// Nachtrag 260 — ein per Stresstest gefundener, zu ungeduldiger
+// Test-Check, keine Race in der Engine selbst).
+func awaitPublished(t *testing.T, publisher *spyPublisher, prefix string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if publisher.has(prefix) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	publisher.mu.Lock()
+	got := append([]string(nil), publisher.subjects...)
+	publisher.mu.Unlock()
+	t.Fatalf("no published subject with prefix %q within %s, got %v", prefix, timeout, got)
+}
+
 func TestEngineNotificationAndExecutionCompletedEventsPublish(t *testing.T) {
 	publisher := &spyPublisher{}
 	engine, store := testEngine(t, WithEventPublisher(publisher))
@@ -685,10 +933,6 @@ func TestEngineNotificationAndExecutionCompletedEventsPublish(t *testing.T) {
 		t.Fatalf("execution status = %s, want completed (error=%q)", final.Status, final.Error)
 	}
 
-	if !publisher.has("omp.asset.created") {
-		t.Errorf("notification step did not publish to omp.asset.created, got %v", publisher.subjects)
-	}
-	if !publisher.has("omp.process." + exec.ID + ".completed") {
-		t.Errorf("execution completion event not published, got %v", publisher.subjects)
-	}
+	awaitPublished(t, publisher, "omp.asset.created", time.Second)
+	awaitPublished(t, publisher, "omp.process."+exec.ID+".completed", time.Second)
 }

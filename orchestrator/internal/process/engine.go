@@ -1,21 +1,22 @@
-// Runtime der Prozess-Engine (Kapitel 21 Phase 3 Teil 1, UMSETZUNG.md
-// §6b/21.3 A2/A3/A4/A8-Teilmenge): execution/state machine/retry/
-// timeout/recovery/idempotency, wie von der Aufgabenstellung für
-// Phase 3 verlangt.
+// Runtime der Prozess-Engine (Kapitel 21 Phase 3, UMSETZUNG.md §6b/21.3
+// A2/A3/A4/A5/A8-Teilmenge): execution/state machine/retry/timeout/
+// recovery/idempotency (Teil 1) + Condition/Branch über eine sichere
+// Expression Language (A5, Teil 2, s. expr.go), wie von der
+// Aufgabenstellung für Phase 3 verlangt.
 //
 // Bewusst NICHT Teil dieser Runde (s. executors.go für die
-// Begründungen je Typ): Condition/Branch-Auswertung über eine
-// Expression Language (A5, braucht eine neue, sicher sandboxte
-// Abhängigkeit — eigene Sitzung), Loop (Abbruchbedingung braucht
-// ebenfalls A5), EventTrigger als Schritt-Typ (A8s Zuverlässigkeits-
-// Frage — JetStream vs. Postgres-Outbox — ist laut Kapitel-21-Phase-1-
-// Analyse noch offen, ein fire-and-forget-EventTrigger wäre eine
-// stille Korrektheitslücke), Task/MediaFunction/ServiceCall/Script
-// (echte externe Integration, Phase 4). "workflow -> event" (A8, die
-// andere Richtung: die Engine BENACHRICHTIGT über eigene
-// Zustandsänderungen) ist dagegen umgesetzt — bewusst mit derselben
-// fire-and-forget-Ehrlichkeit wie der Rest von internal/eventbus, kein
-// Zustellversprechen.
+// Begründungen je Typ): Loop (eine Abbruchbedingung ALLEIN reicht nicht
+// — echte Loop-Semantik braucht Iterationszustand über den bestehenden
+// "eine Zeile pro Schritt und Execution"-Entwurf hinaus, eigene
+// Design-Sitzung statt einer Notlösung), EventTrigger als Schritt-Typ
+// (A8s Zuverlässigkeits-Frage — JetStream vs. Postgres-Outbox — ist laut
+// Kapitel-21-Phase-1-Analyse noch offen, ein fire-and-forget-
+// EventTrigger wäre eine stille Korrektheitslücke), Task/MediaFunction/
+// ServiceCall/Script (echte externe Integration, Phase 4). "workflow ->
+// event" (A8, die andere Richtung: die Engine BENACHRICHTIGT über
+// eigene Zustandsänderungen) ist dagegen umgesetzt — bewusst mit
+// derselben fire-and-forget-Ehrlichkeit wie der Rest von
+// internal/eventbus, kein Zustellversprechen.
 package process
 
 import (
@@ -101,6 +102,22 @@ func NewEngine(store *Store, opts ...EngineOption) *Engine {
 	e.executors[StepTypeApproval] = newHumanTaskExecutor(store)
 	e.executors[StepTypeSubworkflow] = newSubworkflowExecutor(store, e.drive)
 	e.executors[StepTypeNotification] = newNotificationExecutor(e.events)
+
+	// Condition/Branch (A5, Phase 3 Teil 2): der Evaluator ist zustandslos
+	// und deterministisch aufbaubar — ein Fehler hier wäre ein
+	// Programmierfehler (z. B. eine ungültige Umgebungs-Deklaration in
+	// expr.go), kein Laufzeitzustand. NewEvaluator() liefert heute nie
+	// einen Fehler (s. dortige Doku), der Check bleibt trotzdem bewusst
+	// bestehen statt eines "kann nicht fehlschlagen"-Kommentars ohne
+	// Absicherung — falls sich das mit einer künftigen expr-lang-Version
+	// ändert, fallen Condition/Branch ehrlich mit ErrNoExecutorRegistered
+	// aus, statt mit einem Nil-Pointer-Panic.
+	if eval, err := NewEvaluator(); err == nil {
+		e.executors[StepTypeCondition] = newConditionExecutor(eval)
+		e.executors[StepTypeBranch] = newBranchExecutor(eval)
+	} else {
+		slog.Error("process: engine: failed to initialize expression evaluator, Condition/Branch steps will fail", "error", err)
+	}
 
 	return e
 }
@@ -268,7 +285,8 @@ func (e *Engine) run(ctx context.Context, executionID string) {
 		}
 	}()
 	for {
-		if ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
+			slog.Info("process: engine: run loop exiting, context done", "execution", executionID, "reason", err)
 			return
 		}
 
@@ -280,6 +298,7 @@ func (e *Engine) run(ctx context.Context, executionID string) {
 
 		switch exec.Status {
 		case StatusCompleted, StatusFailed, StatusCancelled, StatusCompensated:
+			slog.Info("process: engine: run loop reached terminal status", "execution", executionID, "status", exec.Status, "rowVersion", exec.RowVersion, "error", exec.Error)
 			return
 		case StatusPaused:
 			return
@@ -584,6 +603,7 @@ func (e *Engine) finalize(exec ProcessExecution, byID map[string]ProcessStepExec
 				// Ein anderer Aufrufer hat den Status bereits verändert
 				// (z. B. ein Cancel) — kein Grund mehr, selbst auf
 				// "compensating" zu bestehen.
+				slog.Warn("process: engine: compensating transition aborted, status changed underneath", "execution", exec.ID, "attempt", attempt, "observedStatus", current.Status, "observedRowVersion", current.RowVersion)
 				return false, nil
 			}
 		}

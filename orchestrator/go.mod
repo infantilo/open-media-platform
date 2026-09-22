@@ -3,6 +3,7 @@ module github.com/infantilo/openmediaplatform/orchestrator
 go 1.26.4
 
 require (
+	github.com/expr-lang/expr v1.17.8
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/jackc/pgx/v5 v5.10.0

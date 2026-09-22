@@ -26810,6 +26810,13 @@ einem wartenden HumanTask hängengebliebene Execution korrekt wieder ab
 und führt sie nach der (erst NACH dem simulierten Neustart
 eintreffenden) menschlichen Entscheidung korrekt zu Ende.
 
+**KORRIGIERT, siehe Nachtrag 260:** Die hier vermutete DSN-
+Charakteristik war nur ein Teilbefund (ein tatsächlich totes
+Cluster-Mitglied wurde gefunden+behoben) — die tatsächliche Ursache der
+verbleibenden Testflakiness war ein zu ungeduldiger Test-Helfer, keine
+Postgres-/pgx-Eigenheit. Ursprünglicher (teilweise überholter) Text
+bleibt unten stehen, s. Nachtrag 260 für die Richtigstellung.
+
 **Wichtiger Infrastruktur-Befund, kein Code-Bug:** Bei intensivem
 Stresstesten (>150 Wiederholungen in mehreren Runden) zeigte sich eine
 seltene, aber reale Resttest-Flakiness spezifisch bei Verwendung der
@@ -26851,3 +26858,122 @@ Executor-Ehrlichkeit) plus 2 neue `Definition.Validate()`-Tests
 (Erreichbarkeit), alle real gegen Postgres, kein Mock. Kein API-/UI-
 Code, keine `main.go`-Verdrahtung (Phase 5). Details: UMSETZUNG.md §7
 (Status-Checkliste, Eintrag "Kapitel 21 Phase 3 Teil 1").
+
+## 2026-09-22 (Nachtrag 260) — Kapitel 21 Phase 3 Teil 2: Expression Language (A5) + KORREKTUR zu Nachtrag 259 (echte Ursache der Testflakiness gefunden)
+
+**Nutzerauftrag:** "fahre fort" — direkte Fortsetzung von Nachtrag 259.
+
+**Teil 1 — A5 Expression Language:** Neue Datei
+`orchestrator/internal/process/expr.go`. Erste Wahl war `cel-go`
+(Googles Common Expression Language) — bei der tatsächlichen Einbindung
+zeigte sich aber, dass es wegen seiner optionalen Protobuf-Typ-
+Integration einen erheblichen Abhängigkeitsbaum mitzieht
+(`google.golang.org/protobuf`, `google.golang.org/genproto`, ein
+ANTLR-Parsergenerator, ein YAML-Paket) — passt nicht zur wiederholt
+betonten Minimal-Dependency-Linie (ARCHITECTURE.md §4.1a), obwohl hier
+nur einfache Ausdrücke gegen dynamische JSON-Daten ausgewertet werden.
+Stattdessen `expr-lang/expr` gewählt: **keine einzige externe
+Abhängigkeit** (reiner Go-Stdlib-Code, `go.sum`-Diff nur zwei Zeilen),
+dieselbe Sicherheitseigenschaft (wertet nur gegen die explizit
+übergebene Variablen-Map aus, keine Host-Funktionen ohne explizite
+Registrierung — per Test nachgewiesen, `expr_test.go`
+`TestEvaluatorHasNoHostAccess`, nicht nur behauptet). Drei feste
+Top-Level-Variablen (`input`/`outputs`/`workflow`) statt beliebiger zur
+Laufzeit erratener Bezeichner — die Aufgabenstellungs-Beispiele
+("asset.duration > 30") werden zu "input.asset.duration > 30" bzw.
+"outputs.qc.score >= 0.95", dieselbe Ausdruckskraft mit von Anfang an
+bekannter, sicherer Variablenmenge.
+
+`Condition`- und `Branch`-Executors (`executors.go`) nutzen den
+Evaluator und geben ihr Ergebnis als `{"decision": "<label>"}` zurück —
+dieselbe generische `resolveSuccessors`/Branches-Mechanik, die bereits
+für HumanTask/Approval-Entscheidungen existierte (Teil 1), übernimmt
+die Weiterleitung, ganz ohne neuen Sonderfall in der Engine. Condition
+= ein Ausdruck, zwei Ziele (TrueLabel/FalseLabel, Default "true"/
+"false"); Branch = mehrere Fälle der Reihe nach geprüft, erster Treffer
+gewinnt, optionales DefaultLabel. Bewusst weiterhin NICHT umgesetzt:
+Loop (Abbruchbedingung allein reicht nicht — echte Loop-Semantik
+bräuchte Iterationszustand über den bestehenden „eine Zeile pro Schritt
+und Execution"-Entwurf hinaus, eigene Design-Sitzung statt Notlösung).
+
+**Teil 2 — KORREKTUR zu Nachtrag 259:** Beim erneuten Verifizieren
+(Vollständiger `go test ./...`) trat `TestEngineCompensationRunsAfterFailure`
+erneut vereinzelt fehlschlagend auf. Root-Cause-Suche ergab ZWEI
+unabhängige Funde, von denen nur einer die eigentliche Ursache war:
+
+1. **Echter, aber NICHT ursächlicher Nebenbefund:** `omp-patroni-3`
+   (dritter Knoten der `DEV_POSTGRES_URL`) lief seit dem 21. August
+   nicht mehr (`pg_hba.conf` leer/0 Bytes, Postgres-Start schlug fehl)
+   — auf Nutzerbestätigung per `patronictl reinit omp-postgres
+   omp-patroni-3` behoben, Cluster jetzt wieder vollständig gesund
+   (3/3 Knoten `streaming`, kein Lag). Diese Reparatur war für sich
+   genommen sinnvoll (ein totes Cluster-Mitglied ist nie wünschenswert),
+   behob aber die Testflakiness NICHT vollständig (~10 % Restrate blieb
+   bei erneutem Stresstest bestehen) — die in Nachtrag 259
+   dokumentierte Vermutung ("Mehr-Host-DSN-Charakteristik") war damit
+   nur eine Teilerklärung, keine vollständige.
+2. **Tatsächliche Ursache, per gezielter Low-Overhead-Diagnose
+   gefunden** (nicht per Vermutung): `awaitExecutionStatus` (Test-Helfer,
+   `engine_test.go`) akzeptierte `StatusFailed` UND `StatusCompensated`
+   als Grund für einen vorzeitigen Poll-Abbruch. Für
+   `TestEngineCompensationRunsAfterFailure` ist "failed" aber ein
+   GEWOLLTER, kurzlebiger Zwischenzustand — `finalize()` schreibt
+   bei einem kompensierbaren Fehlschlag erst "failed", UNMITTELBAR
+   danach "compensating" (zwei separate, aufeinanderfolgende
+   Datenbank-Schreibvorgänge, s. Kapitel-21-Phase-3-Teil-1-Design). Ein
+   Poll (alle 10 ms), der GENAU in das Mikrosekundenfenster zwischen
+   diesen beiden Schreibvorgängen fiel, sah "failed" und brach —
+   entsprechend der (für ANDERE Tests korrekten) Helfer-Logik —
+   fälschlich sofort ab, statt auf "compensated" weiterzuwarten. Die
+   Engine selbst kompensierte in Wahrheit bei JEDEM Lauf korrekt — der
+   scheinbare Bug war ein zu großzügiger Akzeptanzbereich im Test-Helfer,
+   nicht in der Engine. Behoben: `TestEngineCompensationRunsAfterFailure`
+   wartet jetzt ausschließlich auf `StatusCompensated` (kein
+   `StatusFailed` mehr in der Warteliste) — ein echtes Steckenbleiben
+   würde jetzt stattdessen als Timeout mit aussagekräftigem
+   "last status"-Diagnosetext auffallen, nicht als stiller
+   Fehlalarm.
+
+   Wie gefunden: mehrere Runden Low-Overhead-Instrumentierung (erst
+   teure `slog`-Aufrufe im heißen Pfad, die das Timing genug
+   verschoben, um den Fehler zu VERDECKEN statt zu zeigen — daraus
+   gelernt: Instrumentierung, die selbst nennenswerte Zeit kostet,
+   verändert bei einem eng getakteten Rennlauf-Fenster das Ergebnis,
+   nicht nur die Sichtbarkeit; ein `context.Context`-Cancel-Log mit
+   Stack-Trace-Erfassung nur im (seltenen) tatsächlichen Abbruchfall
+   kostete dagegen im Erfolgsfall nichts und war reproduzierbar). Der
+   scheinbare Beweis "context canceled" aus einem früheren
+   Diagnoseversuch entpuppte sich rückblickend als reine Folge des
+   BEREITS fehlgeschlagenen Tests (dessen `t.Cleanup(engine.Shutdown)`
+   bricht den noch laufenden Treiber-Zyklus danach regulär ab) — nicht
+   als dessen Ursache; ein Interpretationsfehler in einem früheren
+   Diagnoseschritt dieser Sitzung, hier richtiggestellt.
+
+**Nebenbei zwei dauerhafte, sinnvolle Beobachtbarkeits-Logs im
+Erfolgspfad belassen** (aus der Diagnose entstanden, nicht wieder
+entfernt, da echter B15-Mehrwert): `run()` loggt jetzt (Info-Level) den
+Grund eines Kontextabbruchs sowie jeden erreichten Endzustand einer
+Execution (Status/Fehlertext) — vorher unsichtbar.
+
+**Nachtrag, gleiche Sitzung:** Der erste 60er-Stresstest nach der
+Kompensations-Testkorrektur zeigte noch 2/60 Fehlschläge — diesmal bei
+`TestEngineNotificationAndExecutionCompletedEventsPublish`
+("execution completion event not published"). Exakt dieselbe
+Fehlerklasse: `publishExecutionEvent` (das `omp.process.<id>.completed`-
+Ereignis) wird im Engine-Goroutine ERST NACH dem DB-Schreiben auf
+"completed" aufgerufen — ein Test, der den Publisher nur EINMALIG
+direkt nach `awaitExecutionStatus(...StatusCompleted...)` prüfte, konnte
+in das Zeitfenster dazwischen fallen. Behoben durch einen neuen
+`awaitPublished`-Poll-Helfer (analog `awaitExecutionStatus`) statt eines
+einmaligen Checks. Nach BEIDEN Testkorrekturen: zwei unabhängige
+Stressläufe (`go test ./internal/process/...`, 40 bzw. weitere
+Wiederholungen) **0/40 bzw. 0/weitere Fehlschläge** — die Engine selbst
+war in keinem der beiden Fälle je fehlerhaft, beide waren zu ungeduldige
+Test-Assertions gegen asynchron sichtbare Nebenwirkungen.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber,
+5 neue Condition/Branch-Engine-Tests + 6 neue Evaluator-Tests
+(inkl. des Host-Zugriffs-Sicherheitsnachweises) + 1 neuer
+`awaitPublished`-Helfer, alle grün. Zwei unabhängige Stressläufe des
+gesamten `internal/process`-Pakets nach beiden Korrekturen ohne
+Fehlschlag (40/40 im letzten Lauf).

@@ -337,3 +337,100 @@ func newNotificationExecutor(publisher EventPublisher) StepExecutor {
 		return json.RawMessage(`{}`), nil
 	})
 }
+
+// ---- Condition/Branch (A5, Kapitel 21 Phase 3 Teil 2) -----------------------------------------------
+
+// decisionOutput ist die einheitliche Output-Form von Condition/Branch/
+// HumanTask/Approval — resolveSuccessors (engine.go) liest daraus
+// ausschließlich das "decision"-Feld, alles andere ist informativ.
+type decisionOutput struct {
+	Decision string `json:"decision"`
+	Result   *bool  `json:"result,omitempty"`
+}
+
+// conditionConfig ist Step.Config für Condition: ein einzelner boolescher
+// Ausdruck (A5), TrueLabel/FalseLabel wählen das Branches-Ziel (Default
+// "true"/"false" — passend zu einer Definition, die Branches gar nicht
+// umbenennt).
+type conditionConfig struct {
+	Expression string `json:"expression"`
+	TrueLabel  string `json:"trueLabel,omitempty"`
+	FalseLabel string `json:"falseLabel,omitempty"`
+}
+
+// newConditionExecutor liefert den Executor für Condition-Schritte
+// (A1/A5). Das Ergebnis ist KEIN Next-Fan-out, sondern eine Branches-
+// Entscheidung wie bei HumanTask/Approval — dieselbe generische
+// resolveSuccessors-Logik (engine.go) wählt anhand von output.decision
+// genau EIN Branches-Ziel, ganz ohne Sonderfall-Code für Condition.
+func newConditionExecutor(eval *Evaluator) StepExecutor {
+	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		var cfg conditionConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.Expression == "" {
+			return nil, fmt.Errorf("process: step %q: invalid condition config (expression required)", step.ID)
+		}
+		result, err := eval.EvalBool(cfg.Expression, exprVars(ec))
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: %w", step.ID, err)
+		}
+		trueLabel := cfg.TrueLabel
+		if trueLabel == "" {
+			trueLabel = "true"
+		}
+		falseLabel := cfg.FalseLabel
+		if falseLabel == "" {
+			falseLabel = "false"
+		}
+		decision := falseLabel
+		if result {
+			decision = trueLabel
+		}
+		return json.Marshal(decisionOutput{Decision: decision, Result: &result})
+	})
+}
+
+// branchCase ist ein einzelner Fall eines Branch-Schritts — Ausdrücke
+// werden der Reihe nach ausgewertet, der ERSTE zutreffende gewinnt
+// (klassische switch/case-Semantik, nicht "alle passenden").
+type branchCase struct {
+	Expression string `json:"expression"`
+	Label      string `json:"label"`
+}
+
+// branchConfig ist Step.Config für Branch: mehrere Fälle + optionales
+// Default-Label, falls keiner zutrifft.
+type branchConfig struct {
+	Cases        []branchCase `json:"cases"`
+	DefaultLabel string       `json:"defaultLabel,omitempty"`
+}
+
+// newBranchExecutor liefert den Executor für Branch-Schritte (A1/A5) —
+// der mehrwertige Bruder von Condition (mehr als zwei mögliche Ziele
+// statt nur true/false). Kein zutreffender Fall UND kein DefaultLabel
+// ist ein ehrlicher Fehler (kein stiller Stillstand — ein Branch ohne
+// erreichbares Ziel ist ein Definitionsfehler, kein Laufzeit-Normalfall).
+func newBranchExecutor(eval *Evaluator) StepExecutor {
+	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		var cfg branchConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil || len(cfg.Cases) == 0 {
+			return nil, fmt.Errorf("process: step %q: invalid branch config (at least one case required)", step.ID)
+		}
+		vars := exprVars(ec)
+		for _, c := range cfg.Cases {
+			if c.Label == "" {
+				return nil, fmt.Errorf("process: step %q: branch case with empty label", step.ID)
+			}
+			ok, err := eval.EvalBool(c.Expression, vars)
+			if err != nil {
+				return nil, fmt.Errorf("process: step %q: case %q: %w", step.ID, c.Label, err)
+			}
+			if ok {
+				return json.Marshal(decisionOutput{Decision: c.Label})
+			}
+		}
+		if cfg.DefaultLabel == "" {
+			return nil, fmt.Errorf("process: step %q: no branch case matched and no defaultLabel configured", step.ID)
+		}
+		return json.Marshal(decisionOutput{Decision: cfg.DefaultLabel})
+	})
+}
