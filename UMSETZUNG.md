@@ -2962,18 +2962,18 @@ Entscheidung 2.
 ### 21.4 Offene Entscheidungen vor Phase 2 (§0 Punkt 8: Optionen nennen, Nutzer entscheidet)
 
 1. **Namensraum „Process" statt zweitem „Workflow"** (s. 21.2) —
-   Empfehlung: annehmen (vermeidet Verwechslung/Merge-Konflikte mit
-   dem produktiven Regieplatz-Workflow). Alternative: bestehendes
-   Konzept umbenennen (höheres Risiko, kein fachlicher Gewinn) oder
-   beide „Workflow" nennen und nur über den API-Pfad unterscheiden
-   (mehr Verwechslungsgefahr im UI/Code, nicht empfohlen).
+   **Nutzerentscheidung 2026-09-22: „Process" (empfohlene Option)
+   bestätigt.** Neue Domäne heißt `internal/process`
+   (ProcessDefinition/ProcessVersion/ProcessExecution/
+   ProcessStepExecution/HumanTask), eigener API-Namensraum
+   (`/api/v1/process-definitions`, `/api/v1/process-executions`,
+   `/api/v1/human-tasks`), `internal/workflows` bleibt unangetastet.
+   UI-Text darf weiterhin „Workflow" sagen (Operator-Vokabular).
 2. **Asset-Domäne im Orchestrator statt in `omp-media-library`**
-   (s. 21.2) — Empfehlung: annehmen; `omp-media-library` wird
+   (s. 21.2) — **Nutzerentscheidung 2026-09-22: Orchestrator
+   (empfohlene Option) bestätigt.** `omp-media-library` wird
    perspektivisch ein dünner ffprobe-Scan-Client der neuen
-   Orchestrator-API statt eigener Datenhalter. Alternative: Asset-Domäne
-   direkt in `omp-media-library` (Rust+eigene Postgres-Anbindung) —
-   würde eine zweite, zum Orchestrator parallele Datenbank-Anbindung
-   einführen (widerspricht „keine unnötige Service-/System-Vermehrung").
+   Orchestrator-API statt eigener Datenhalter.
 3. **Kein Blockly/kein JS-Framework für den Prozess-Editor** — die
    Aufgabenstellung nennt Blockly ausdrücklich als Vorbild. Empfehlung:
    eigener, an `ui/graph`-Primitiven orientierter Block-Editor (konsistent
