@@ -26327,3 +26327,36 @@ bestätigt, dass viele automatisierte Reconnects hintereinander
 RTP-Ausgabe produzieren, unabhängig vom heutigen Fix.
 
 **Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.
+
+## 2026-09-22 (Nachtrag 251) — Ruckler im Retourbild bei 25 fps: Kamera-Hardware, kein Pipeline-Bug
+
+**Befund:** Ruckler/Sprünge im Retourbild treten laut Nutzer nur auf,
+wenn die Kamera-Seite explizit auf 25 fps gestellt wird (Standard ist
+30 fps). Ursache vermutlich NICHT im Gateway: 25 fps ist bei den
+allermeisten Kamera-/Webcam-Sensoren kein natives Bildratenprofil
+(üblich sind 30/60), `getUserMedia({frameRate:{ideal:25}})` zwingt
+Browser/Treiber dann zu einer internen, unregelmäßigen Bildreduktion
+(z. B. 1 von 6 Bildern bei einer 30fps-Kamera) — das passiert VOR der
+Übertragung, nicht reparierbar in diesem Node. Der MXL-Ausgang der
+Kamera-Seite schreibt mit fester, konfigurierter Rate (`OMP_FRAMERATE_NUM/
+_DEN`, Default 25/1, s. `main.rs`) nach tatsächlicher Ankunftszeit; eine
+unregelmäßig getaktete Quelle passt schlechter in dieses feste Raster als
+eine gleichmäßig getaktete (auch wenn deren nomineller Wert vom
+MXL-Flow-Wert abweicht).
+
+**Nicht live verifiziert** (kein Zugriff auf echte Kamera-Hardware in
+dieser Umgebung, headless Fake-Device liefert immer gleichmäßig getaktete
+Frames unabhängig von der gewählten Rate — reproduziert das Problem
+nicht). Plausibilitätsargument, keine bewiesene Ursache.
+
+**Sofortmaßnahme:** Hinweis in `deploy/dev/webrtc-static/index.html`
+ergänzt (erscheint nur bei ausgewählten 25 fps): 30 fps verwenden, falls
+verfügbar. Kein Code-Fix am Gateway.
+
+**Falls es wiederkehrt (auch bei anderen Bildraten/Geräten):** Erwägen,
+den Kamera-Empfangszweig (`pipeline.rs`, `attach_receive_chain`) um ein
+`videorate`-Element mit toleranter Pufferung zu ergänzen, das unregelmäßig
+getaktete Eingaben vor dem Schreiben in den MXL-Flow glättet, statt sich
+auf reine Ankunftszeit-Pacing zu verlassen.
+
+**Dateien:** `deploy/dev/webrtc-static/index.html`.

@@ -81,6 +81,13 @@
       <select id="cam-fps"><option>25</option><option selected>30</option><option>50</option><option>60</option></select>
     </label>
   </div>
+  <div class="row" id="fps25Hint" hidden>
+    <span class="dim" style="font-size:13px">⚠ 25 fps ist bei den meisten Kameras kein natives Bildratenprofil —
+      das Gerät lässt dann selbst unregelmäßig Bilder aus (z. B. 1 von 6 bei
+      einer 30fps-Kamera), was im Retourbild als Ruckler/Sprünge sichtbar
+      wird. Nicht behebbar in dieser Seite (passiert vor der Übertragung) —
+      30 fps verwenden, falls verfügbar.</span>
+  </div>
   <div class="row">
     <label class="check"><input type="checkbox" id="cam-audio" checked> Ton senden</label>
     <label class="check"><input type="checkbox" id="cam-measure"> Latenz messen (Zeitstempel im Bild)</label>
@@ -299,6 +306,9 @@ function initCamera() {
   });
   if (!window.isSecureContext) log('Hinweis: Kamera-Zugriff braucht HTTPS (oder localhost).');
   navigator.mediaDevices?.enumerateDevices().then(listCameras).catch(() => {});
+  const updateFpsHint = () => { $('fps25Hint').hidden = $('cam-fps').value !== '25'; };
+  $('cam-fps').onchange = updateFpsHint;
+  updateFpsHint();
 }
 
 function initMonitor() {
