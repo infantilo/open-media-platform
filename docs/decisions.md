@@ -27534,3 +27534,86 @@ Publication/Package), B7 (MetadataSchema/-Field/-Value-Validierung),
 B14 (granulare Autorisierungsfeinheit über die heutige
 configure/operate/admin-Einstufung hinaus). Details: UMSETZUNG.md §7
 (Status-Checkliste, Eintrag "Kapitel 21 Phase 5 Teil 3").
+
+## 2026-09-22 (Nachtrag 266) — Kapitel 21 Phase 6 Teil 1: Process-Tab in der Orchestrator-UI
+
+**Nutzerauftrag:** "fahre fort", direkt im Anschluss an Phase 5 Teil 3.
+Da "fahre fort" die zuvor offen gestellte Design-Frage 3 aus Phase 1
+nicht implizit beantwortete, wurde sie per `AskUserQuestion` explizit
+erneut gestellt (§0 Punkt 8: "Optionen+Empfehlung, kein Alleingang" bei
+offenen Entscheidungen gilt auch nach einem knappen "fahre fort", das
+sich erkennbar auf die allgemeine Sitzungsfortsetzung bezieht, nicht
+auf eine ungelesene spezifische Rückfrage). **Ergebnis: eigener Editor
+auf `ui/graph`-Basis (empfohlene Option) bestätigt, kein Blockly** —
+UMSETZUNG.md §6b Entscheidung 3 entsprechend aktualisiert.
+
+**Neuer Tab "Prozesse"** (`ui/shell/process-view.ts`): registriert in
+`app-shell.ts` zwischen Workflows und Hosts, disjunkt vom bestehenden
+Workflow-Tab (gleiche Namenskollisions-Trennung wie im Backend seit
+Phase 1). Master-Detail-Layout, Muster an `instances-view.ts`
+(Poll+SSE-Fallback, `apiFetch`, `escapeHtml`) und `workflows-view.ts`
+(Modal-Formulare, `.omp-modal-overlay`/`.omp-card`/`.omp-badge`-
+Klassen aus `design-tokens.css`) gespiegelt — keine neue
+Abhängigkeit, kein neues Interaktionsmuster im UI-Code.
+
+**Funktionsumfang:** Definitionsliste mit "+ Neu"-Modal; pro
+ausgewählter Definition eine Versionstabelle (Status-Badge,
+Veröffentlichen/Deprecaten/Archivieren je nach aktuellem Status, "+
+Neue Version"-Modal) und eine Executions-Tabelle (Starten pro
+veröffentlichter Version, Abbrechen/Pausieren/Fortsetzen je nach
+Status, Klick auf eine Zeile lädt Schritte + zugehörige HumanTasks);
+ein separates "Meine Human Tasks"-Panel (gefiltert auf
+`whoami().username`) mit Für-mich-beanspruchen/Genehmigen/Ablehnen/
+Änderungen-anfordern. "Für mich beanspruchen" macht bewusst ZWEI
+Server-Aufrufe hintereinander (assign, dann complete mit
+status=claimed) — spiegelt exakt die Zwei-Schritte-Domänen-Semantik
+aus Phase 5 Teil 2 (Zuweisung ≠ aktive Übernahme, s. dortige Doku zu
+`Store.AssignHumanTask`), keine UI-seitige Abkürzung, die die Domäne
+nicht kennt.
+
+**Bewusste Scope-Grenze, im Code dokumentiert:** der Schritt-Graph
+(`Definition.steps`) wird noch als rohes JSON in einem `<textarea>`
+bearbeitet (mit Beispiel-Vorbelegung), NICHT im für Phase 6 Teil 2
+geplanten visuellen Drag&Drop-Editor. Das macht den kompletten
+Phase-2-5-Backend-Umfang sofort nutzbar/testbar, ohne auf den größeren,
+eigenständigen visuellen-Editor-Arbeitsblock zu warten — der ersetzt
+später nur dieses eine `<textarea>`, alle übrigen Teile der Datei
+bleiben unverändert (Definitions-/Executions-/HumanTask-Verwaltung ist
+vom Editor-Ansatz unabhängig).
+
+**Live-Verifikation per echtem Browser-Klicktest** (Projektregel "UI
+click-test, not just API", s. bestehende Feedback-Memory) — kein
+Browser-Automatisierungswerkzeug in dieser Umgebung verfügbar (weder
+Selenium noch ein Python-Websocket-Paket installierbar, kein `pip`),
+daher ein minimaler, reiner-Stdlib CDP-Client selbst geschrieben
+(`socket` + manuelles RFC6455-WebSocket-Framing + JSON-RPC über
+`Runtime.evaluate`) gegen ein headless `chromium --remote-debugging-
+port=9222`. Durchgespielt: Login (echter `POST /api/v1/auth/login`,
+Token in `localStorage`) → Tab-Klick auf "Prozesse" → "+ Neu"-Modal
+ausgefüllt (echte `input`-Events, kein `.value =` ohne Event) und
+abgeschickt → Definitionsliste aktualisiert sich mit dem neuen Eintrag
+→ Definition ausgewählt → "+ Neue Version" mit der Beispiel-JSON
+abgeschickt → "Veröffentlichen" geklickt, Status-Badge wechselt live
+auf "published" → "Starten" geklickt → Execution-Zeile erscheint,
+angeklickt → Schritt-Status zeigt zunächst "running", nach Ablauf der
+5s-Wait-Konfiguration per direktem `GET /api/v1/process-executions`
+bestätigt "completed". Zweiter Durchlauf mit einer HumanTask-Version:
+Execution gestartet → Execution-Zeile geklickt → HumanTask erscheint
+in der Detail-Ansicht als "pending" → "Für mich beanspruchen"
+geklickt → Status wechselt auf "claimed", Entscheidungs-Buttons
+erscheinen → `window.prompt` per `Runtime.evaluate` gestubbt (headless
+Chrome kann native `prompt()`-Dialoge nicht anzeigen/bedienen, der
+Stub liefert sofort einen festen Kommentartext zurück) → "Genehmigen"
+geklickt → per direktem API-Read (nicht nur DOM-Text) bestätigt: die
+Execution lief bis "completed", Output enthält
+`decision:"approved"`/den gestubbten Kommentar korrekt. Keine
+JavaScript-Fehler während des gesamten Durchlaufs (`window.onerror`/
+`unhandledrejection`-Sammler nach jedem Schritt geprüft, durchgehend
+leer).
+
+**Verifikation:** `deno check ui/shell/process-view.ts ui/shell/
+app-shell.ts` sauber, `deno test ui/` weiterhin 97/97 grün (keine
+Regression in bestehenden Views), `deno bundle` erfolgreich (38 statt
+37 Module — bestätigt, dass `process-view.ts` tatsächlich eingebunden
+wurde). Details: UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel
+21 Phase 6 Teil 1").

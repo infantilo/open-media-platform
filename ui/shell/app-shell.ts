@@ -11,6 +11,7 @@ import "../graph/flow-canvas.ts";
 import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
+import "./process-view.ts";
 import "./instances-view.ts";
 import "./alarm-view.ts";
 import "./alert-bar.ts";
@@ -20,7 +21,7 @@ import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
+type TabId = "flow" | "workflows" | "process" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -31,6 +32,10 @@ interface TabDef {
 const BASE_TABS: TabDef[] = [
   { id: "flow", label: "Flow Editor", element: "omp-flow-canvas" },
   { id: "workflows", label: "Workflows", element: "omp-workflows-view" },
+  // Kapitel 21 Phase 6 Teil 1: Business-Prozess-Engine (Definitions/
+  // Versions/Executions/HumanTasks) — disjunkt vom Workflow-Tab, s.
+  // UMSETZUNG.md §6b/21.2 Namenskollisions-Entscheidung.
+  { id: "process", label: "Prozesse", element: "omp-process-view" },
   { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
   // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
   // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer
