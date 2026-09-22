@@ -26977,3 +26977,98 @@ Test-Assertions gegen asynchron sichtbare Nebenwirkungen.
 `awaitPublished`-Helfer, alle grün. Zwei unabhängige Stressläufe des
 gesamten `internal/process`-Pakets nach beiden Korrekturen ohne
 Fehlschlag (40/40 im letzten Lauf).
+
+## 2026-09-22 (Nachtrag 261) — Kapitel 21 Phase 4 Teil 1: Event-Zuverlässigkeit (A8/B9) — Postgres-Outbox + NATS JetStream
+
+**Nutzerauftrag:** direkte Fortsetzung nach Nachtrag 260. Für den
+Einstieg in Phase 4 ("Integration: Asset Events ↔ Workflow Engine ↔
+Media Functions ↔ MXL/NMOS") musste zuerst die seit Kapitel-21-Phase-1
+offene Zuverlässigkeitsfrage (JetStream vs. Postgres-Outbox, s.
+Nachtrag 257 Punkt 4) geklärt werden — vom Nutzer nach kurzer
+Gegenüberstellung als **Kombination beider** entschieden: Outbox für
+die Schreibseite (Atomarität), JetStream für die Zustellseite
+(Durabilität/Fan-out). Faktencheck vorab bestätigt: der NATS-Cluster
+läuft bereits seit D14 mit `-js` (JetStream aktiv, 3 Knoten), bisher im
+Go-Code ungenutzt — reine, bereits vorhandene Infrastruktur.
+
+**Neues Paket `orchestrator/internal/outbox`** (Migration
+`0021_outbox_events.sql`): `Store.Enqueue(tx, subject, payload,
+dedupKey)` nimmt bewusst ein `*sql.Tx` — der Aufrufer MUSS es innerhalb
+seiner eigenen State-Change-Transaktion aufrufen, sonst ist die
+Atomaritäts-Garantie wertlos (per Test bewiesen: ein Rollback der
+begleitenden Transaktion macht das Event nie sichtbar,
+`TestEnqueueRolledBackTransactionNeverPersists`). `Relay` liest
+unversendete Zeilen (Polling, dasselbe DB-zustandsgetriebene
+Entwurfsmuster wie `internal/process.Engine`) und veröffentlicht sie zu
+JetStream — ein Event gilt erst nach bestätigtem `PubAck` als versendet
+(`MarkDispatched`), ein einzelner Publish-Fehler blockiert nicht den
+restlichen Batch (Retry beim nächsten Zyklus). `EnsureStream` legt
+Streams idempotent an. **Keine neue Abhängigkeit** — `jetstream` ist
+Teil des bereits vorhandenen `nats.go`-Moduls (`go mod tidy` bestätigt:
+kein Diff).
+
+**Asset-Domäne an Outbox angebunden** (B9): `asset.Store` bekommt eine
+optionale `WithOutbox(ob *outbox.Store)`-Option (nil-sicher, exakt
+unverändertes Verhalten ohne sie — alte Tests laufen unverändert
+grün). `CreateAsset`/`UpdateAssetStatus`/`UpdateAssetMetadata`/
+`CreateVersion`/`PublishVersion` wurden auf explizite Transaktionen
+umgestellt (zwei davon waren es für ihre eigene Atomarität ohnehin
+schon) und veröffentlichen ihr Domain-Event ATOMAR mit dem State-Change
+("omp.asset.<id>.<created|status|metadata_updated|version_created|
+version_published>", dieselbe Subject-Konvention wie
+`process.publishExecutionEvent`). Per Test bewiesen, nicht nur
+behauptet: ein fehlschlagender State-Change (CAS-Konflikt) erzeugt NIE
+ein Event (`TestOutboxEventRolledBackOnConcurrentModification`).
+
+**Konsumentenseite: `process.TriggerListener`** (A8 "event -> workflow
+trigger", die bisher fehlende Richtung — "workflow -> event" existierte
+schon seit Phase 3 Teil 1). Hält für jede VERÖFFENTLICHTE ProcessVersion
+mit `Definition.Triggers` einen durablen JetStream-Consumer aufrecht
+(periodischer `Sync()`, Default 30s — neu veröffentlichte/deprecatete
+Trigger werden ohne Neustart erkannt) und startet bei jeder passenden
+Nachricht eine neue `ProcessExecution`. Idempotent gegen
+Mehrfachzustellung (JetStream ist at-least-once, nie exactly-once):
+die `CorrelationID` der gestarteten Execution wird deterministisch aus
+(ProcessVersion, Stream-Sequenznummer) abgeleitet — vor jedem Start
+prüft der Handler, ob dafür schon eine Execution existiert, exakt
+dasselbe Muster wie der Subworkflow-Executor aus Phase 3 Teil 1.
+Bewusst NICHT Teil dieser Runde: `StepTypeEventTrigger` als Schritt
+INNERHALB eines bereits laufenden Graphen (wartet mitten im Ablauf auf
+ein Ereignis) — das hier Gebaute deckt nur die Definitions-Ebene ab
+("dieses Ereignis startet einen NEUEN Lauf").
+
+**Ein echter Deadlock per Test gefunden und behoben:** `TriggerListener.
+Stop()` brach ursprünglich nur den Sync-Schleifen-Kontext ab, nicht die
+EINZELNEN, in `Sync()` separat erzeugten Consumer-Kontexte
+(`context.Background()`-Kinder, bewusst nicht vom Schleifen-Kontext
+abgeleitet, damit `Sync()` einzelne Consumer gezielt stoppen kann, ohne
+alles zu beenden) — ein Test hing bis zum 30s-Timeout genau in diesem
+`Stop()`-Aufruf. Behoben: `Stop()` bricht jetzt explizit auch alle noch
+aktiven Consumer-Kontexte ab.
+
+**Ein nicht reproduzierbarer Einzel-Hang beobachtet, nicht ursächlich
+geklärt:** ein erster `go test ./...`-Lauf (versehentlich ohne
+`-timeout`-Flag, daher Gos 10-Minuten-Default) hing exakt 600s mit
+NATS/JetStream-internen Goroutinen (`pullConsumer.Consume`,
+`waitForMsgs`) im Wartezustand. Zwei anschließende, unabhängige
+Wiederholungen desselben `go test ./...` (explizit mit kurzem Timeout)
+liefen beide vollständig sauber durch (u. a. `internal/process` 11-12s
+statt Hänger). Sowohl der isolierte `internal/process`-Paketlauf als
+auch zwei volle Modul-Läufe reproduzierten den Hänger NICHT — vermutlich
+eine einmalige Ressourcenüberlastung von NATS/Postgres nach den vielen
+vorangegangenen Stresstest-Runden dieser Sitzung, keine bestätigte
+Code-Ursache. Als offene Beobachtung festgehalten (nicht verschwiegen)
+statt als "behoben" behauptet — falls sich das wiederholt, zuerst
+`internal/process`/`internal/outbox` isoliert gegenprüfen (wie hier),
+bevor an der TriggerListener-Logik selbst gesucht wird.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber,
+`go mod tidy` ohne Diff (keine neue Abhängigkeit). 6 neue
+`outbox`-Tests (Enqueue/Rollback-Atomarität/Idempotenz/Relay gegen
+echtes JetStream) + 3 neue `asset`-Outbox-Integrationstests + 2 neue
+`TriggerListener`-Tests (echter End-to-Ende-Nachweis: JetStream-
+Publish → Consumer → neue Execution → Ausführung bis "completed";
+Idempotenz-Nachweis), alle real gegen Postgres und den echten,
+laufenden Dev-NATS-Cluster (kein Mock). Zwei unabhängige volle
+`go test ./...`-Läufe grün. Details: UMSETZUNG.md §7 (Status-
+Checkliste, Eintrag "Kapitel 21 Phase 4 Teil 1").

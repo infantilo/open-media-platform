@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/tracing"
 )
 
@@ -20,15 +21,59 @@ var ErrNotFound = errors.New("asset: not found")
 var ErrConcurrentModification = errors.New("asset: concurrent modification")
 
 // Store persistiert die Asset-Domäne in Postgres
-// (db/migrations/0019_assets.sql).
+// (db/migrations/0019_assets.sql). outbox ist optional (nil-sicher,
+// gleiches Muster wie process.EventPublisher) — gesetzt, veröffentlicht
+// jede Lifecycle-relevante Methode ihr Domain-Event ATOMAR in derselben
+// Transaktion wie den State-Change (B9, Kapitel 21 Phase 4 Teil 1,
+// UMSETZUNG.md §6b/21.4 Punkt 4 — Outbox+JetStream, vom Nutzer
+// entschieden). Ohne outbox (z. B. in älteren Tests) verhalten sich
+// alle Methoden exakt wie vor dieser Änderung.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	outbox *outbox.Store
+}
+
+// StoreOption konfiguriert einen neuen Store.
+type StoreOption func(*Store)
+
+// WithOutbox aktiviert das Veröffentlichen von Domain-Events (B9) für
+// diesen Store.
+func WithOutbox(ob *outbox.Store) StoreOption {
+	return func(s *Store) { s.outbox = ob }
 }
 
 // NewStore erstellt einen Store auf der gegebenen, bereits migrierten
 // Datenbankverbindung.
-func NewStore(database *sql.DB) *Store {
-	return &Store{db: database}
+func NewStore(database *sql.DB, opts ...StoreOption) *Store {
+	s := &Store{db: database}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// eventSubject baut den Outbox-Subject für ein Asset-Domain-Event —
+// "omp.asset.<id>.<event>", dieselbe Konvention wie
+// process.publishExecutionEvent ("omp.process.<id>.<status>"), damit
+// beide Domänen über denselben Subject-Namensraum konsistent
+// durchsuchbar/abonnierbar bleiben.
+func eventSubject(assetID, event string) string {
+	return "omp.asset." + assetID + "." + event
+}
+
+// enqueueEvent veröffentlicht ein Asset-Domain-Event innerhalb der
+// gegebenen Transaktion — no-op (kein Fehler), wenn kein outbox.Store
+// konfiguriert ist (s. Store-Doku).
+func (s *Store) enqueueEvent(tx *sql.Tx, assetID, event string, payload any) error {
+	if s.outbox == nil {
+		return nil
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("asset: marshal event payload: %w", err)
+	}
+	_, err = s.outbox.Enqueue(tx, eventSubject(assetID, event), raw, "")
+	return err
 }
 
 func newID() (string, error) {
@@ -97,11 +142,24 @@ func (s *Store) CreateAsset(assetType, title, description, createdBy string) (As
 		Status: StatusIngesting, CreatedBy: createdBy, UpdatedBy: createdBy,
 		RowVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	_, err = s.db.Exec(`
+
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Asset{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO assets (id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, 1, $9, $9)
-	`, a.ID, a.Type, a.Title, a.Description, a.Status, metadataRaw, a.CreatedBy, a.UpdatedBy, a.CreatedAt)
-	if err != nil {
+	`, a.ID, a.Type, a.Title, a.Description, a.Status, metadataRaw, a.CreatedBy, a.UpdatedBy, a.CreatedAt); err != nil {
+		return Asset{}, err
+	}
+	if err := s.enqueueEvent(tx, a.ID, "created", a); err != nil {
+		return Asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return Asset{}, err
 	}
 	return a, nil
@@ -157,7 +215,10 @@ func (s *Store) ListAssets(f AssetFilter) ([]Asset, error) {
 }
 
 // UpdateAssetStatus validiert den Übergang (LifecycleTransitions) und
-// schreibt ihn per CAS auf row_version (A3-Äquivalent für Assets).
+// schreibt ihn per CAS auf row_version (A3-Äquivalent für Assets) —
+// veröffentlicht dabei atomar das zugehörige Domain-Event
+// ("omp.asset.<id>.<newStatus>", B9), wenn ein outbox.Store konfiguriert
+// ist.
 func (s *Store) UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (Asset, error) {
 	current, err := s.GetAsset(id)
 	if err != nil {
@@ -166,7 +227,15 @@ func (s *Store) UpdateAssetStatus(id string, expectedRowVersion int, newStatus, 
 	if err := LifecycleTransitions.Validate(current.Status, newStatus); err != nil {
 		return Asset{}, err
 	}
-	res, err := s.db.Exec(`
+
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Asset{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE assets SET status = $3, updated_by = $4, row_version = row_version + 1, updated_at = now()
 		WHERE id = $1 AND row_version = $2
 	`, id, expectedRowVersion, newStatus, updatedBy)
@@ -176,19 +245,34 @@ func (s *Store) UpdateAssetStatus(id string, expectedRowVersion int, newStatus, 
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Asset{}, ErrConcurrentModification
 	}
+	if err := s.enqueueEvent(tx, id, newStatus, map[string]string{"assetId": id, "status": newStatus, "updatedBy": updatedBy}); err != nil {
+		return Asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Asset{}, err
+	}
 	return s.GetAsset(id)
 }
 
 // UpdateAssetMetadata ersetzt den kompletten Metadata-Block (CAS wie
 // UpdateAssetStatus) — kein partielles Merge je Kategorie in dieser
 // Phase (kein Aufrufer bräuchte es heute, B7/Schema-Validierung ist
-// ohnehin zurückgestellt, s. Moduldoku).
+// ohnehin zurückgestellt, s. Moduldoku). Veröffentlicht atomar
+// "omp.asset.<id>.metadata_updated" (B9: "AssetMetadataUpdated").
 func (s *Store) UpdateAssetMetadata(id string, expectedRowVersion int, metadata Metadata, updatedBy string) (Asset, error) {
 	raw, err := marshalMetadata(metadata)
 	if err != nil {
 		return Asset{}, err
 	}
-	res, err := s.db.Exec(`
+
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Asset{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.ExecContext(ctx, `
 		UPDATE assets SET metadata = $3, updated_by = $4, row_version = row_version + 1, updated_at = now()
 		WHERE id = $1 AND row_version = $2
 	`, id, expectedRowVersion, raw, updatedBy)
@@ -197,6 +281,12 @@ func (s *Store) UpdateAssetMetadata(id string, expectedRowVersion int, metadata 
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return Asset{}, ErrConcurrentModification
+	}
+	if err := s.enqueueEvent(tx, id, "metadata_updated", map[string]string{"assetId": id, "updatedBy": updatedBy}); err != nil {
+		return Asset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Asset{}, err
 	}
 	return s.GetAsset(id)
 }
@@ -253,6 +343,9 @@ func (s *Store) CreateVersion(assetID, parentVersionID, changeReason, createdBy 
 		INSERT INTO asset_versions (id, asset_id, version_number, parent_version_id, status, change_reason, created_by, created_at)
 		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
 	`, v.ID, v.AssetID, v.VersionNumber, v.ParentVersionID, v.Status, v.ChangeReason, v.CreatedBy, v.CreatedAt); err != nil {
+		return AssetVersion{}, err
+	}
+	if err := s.enqueueEvent(tx, assetID, "version_created", v); err != nil {
 		return AssetVersion{}, err
 	}
 
@@ -320,6 +413,9 @@ func (s *Store) PublishVersion(id string) (AssetVersion, error) {
 		return AssetVersion{}, ErrConcurrentModification
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE assets SET current_version_id = $2, row_version = row_version + 1, updated_at = now() WHERE id = $1`, current.AssetID, id); err != nil {
+		return AssetVersion{}, err
+	}
+	if err := s.enqueueEvent(tx, current.AssetID, "version_published", map[string]any{"assetId": current.AssetID, "assetVersionId": id, "versionNumber": current.VersionNumber}); err != nil {
 		return AssetVersion{}, err
 	}
 	if err := tx.Commit(); err != nil {
