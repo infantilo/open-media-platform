@@ -17,6 +17,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alarmacks"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
@@ -698,19 +699,15 @@ func main() {
 	// Model): verdrahtet die seit Phase 2-4 nur intern getesteten Pakete
 	// internal/process/internal/outbox tatsächlich in den laufenden
 	// Orchestrator — vorher lief keine Zeile davon außerhalb von Tests.
-	// internal/asset (asset.NewStore) wird bewusst ERST in Phase 5 Teil 2
-	// konstruiert: ohne eine HTTP-API, die seine Methoden aufruft, hätte
-	// ein hier angelegter Store keinen einzigen Aufrufer (Go: "declared
-	// and not used") — tote Verdrahtung wäre schlechter als ehrliches
-	// Aufschieben. outboxStore/processEngine dagegen haben schon jetzt
-	// echten Nutzen (Relay kann ab sofort alles zustellen, was künftige
-	// Aufrufer einreihen; Engine kann ab sofort alles ausführen, was
-	// künftige Aufrufer anlegen) — keine weitere main.go-Änderung nötig,
-	// sobald Teil 2 die API ergänzt. Noch OHNE HTTP-API (Teil 2, eigene
-	// Sitzung) — dieser Teil macht B16 ("Prozess killen, neu starten,
-	// Workflow läuft korrekt weiter") im echten Betrieb möglich, sobald
-	// Teil 2 einen Weg liefert, überhaupt eine Execution anzulegen.
+	// internal/asset (asset.NewStore) wurde in Phase 5 Teil 1 bewusst
+	// NICHT konstruiert (kein Aufrufer ohne HTTP-API, s. Nachtrag 263) —
+	// jetzt, mit der Asset-API aus Phase 5 Teil 3, hat es einen echten
+	// Aufrufer und wird hier gebaut. `WithOutbox(outboxStore)` aktiviert
+	// B9 (Asset-Domain-Events, bereits seit Phase 4 Teil 1 im Store
+	// vorbereitet, bis jetzt aber nie tatsächlich ausgelöst, weil nie ein
+	// Aufrufer CreateAsset/UpdateAssetStatus/... rief).
 	outboxStore := outbox.NewStore(database)
+	assetStore := asset.NewStore(database, asset.WithOutbox(outboxStore))
 	processStore := process.NewStore(database)
 	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
 	// (subject string, payload []byte) error) — "workflow -> event"
@@ -776,7 +773,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

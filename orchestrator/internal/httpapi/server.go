@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
@@ -215,6 +216,29 @@ type ProcessEngineService interface {
 	CompleteHumanTask(humanTaskID string, expectedRowVersion int, status, decision, comment string) (process.HumanTask, error)
 }
 
+// AssetService verwaltet die Asset/Content-Domäne (implementiert von
+// *asset.Store, Kapitel 21 Phase 5 Teil 3) — anders als Process ein
+// einzelnes Interface, weil es nur einen konkreten Typ (*asset.Store)
+// gibt, keine getrennte Engine.
+type AssetService interface {
+	CreateAsset(assetType, title, description, createdBy string) (asset.Asset, error)
+	GetAsset(id string) (asset.Asset, error)
+	ListAssets(f asset.AssetFilter) ([]asset.Asset, error)
+	UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (asset.Asset, error)
+	UpdateAssetMetadata(id string, expectedRowVersion int, metadata asset.Metadata, updatedBy string) (asset.Asset, error)
+
+	CreateVersion(assetID, parentVersionID, changeReason, createdBy string) (asset.AssetVersion, error)
+	GetVersion(id string) (asset.AssetVersion, error)
+	ListVersions(assetID string) ([]asset.AssetVersion, error)
+	PublishVersion(id string) (asset.AssetVersion, error)
+	ArchiveVersion(id string) (asset.AssetVersion, error)
+
+	CreateRepresentation(r asset.Representation) (asset.Representation, error)
+	GetRepresentation(id string) (asset.Representation, error)
+	ListRepresentations(assetVersionID string) ([]asset.Representation, error)
+	DeleteRepresentation(id string) error
+}
+
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
 // (implementiert von *consoles.Resolver, UMSETZUNG.md C13) — eine
 // vereinfachte Rollen-Stub-Prüfung, echte Durchsetzung folgt mit D3.
@@ -257,7 +281,7 @@ func nodeInfosFrom(nodes NodeLister) []consoles.NodeInfo {
 // administrative Rolle"). Solange kein Nutzer existiert, bypassed
 // authGate jede Prüfung (Bootstrap-Modus) — unverändertes Verhalten
 // gegenüber vor D3 Teil 2.
-func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger, processStore ProcessStoreService, processEngine ProcessEngineService, opts ...HandlerOption) http.Handler {
+func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, graphSvc GraphService, layoutStore LayoutStore, snapshotSvc SnapshotService, launcherSvc LauncherService, consoleResolver ConsoleResolver, nodeClient *http.Client, authSvc AuthService, authzStore AuthzChecker, auditLogger AuditLogger, auditReader AuditReader, hostRegistry HostRegistry, hostMetrics HostMetricsReader, hostHistory HostHistoryReader, workflowSvc WorkflowService, placementAdvisor PlacementAdvisor, profileStore ProfileReader, placementThresholds placement.Thresholds, nodeSettingsStore NodeSettingsStore, backupSvc BackupService, supervisorClient SupervisorClient, clusterSvc ClusterService, ioPortStore IOPortInventoryStore, logReader LogReader, nodeLogs NodeCallLogger, processStore ProcessStoreService, processEngine ProcessEngineService, assetSvc AssetService, opts ...HandlerOption) http.Handler {
 	var options handlerOptions
 	for _, opt := range opts {
 		opt(&options)
@@ -494,6 +518,30 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/human-tasks/{id}", g.requireAuth(handleGetHumanTask(processStore)))
 	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore)))
 	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine)))
+
+	// Asset/Content-Domäne (Kapitel 21 Phase 5 Teil 3, ARCHITECTURE.md
+	// Domain-Trennung Asset/Process). Anlegen (Asset/Version/
+	// Representation) ist "configure" (wie Process-Definitionen/
+	// -Versionen — Katalog-Pflege, kein Sofortwirkungs-Risiko wie bei
+	// Process-Execution-Start). Status-/Metadaten-Änderungen an einem
+	// BESTEHENDEN Asset (Lifecycle-Fortschritt: ingesting -> … ->
+	// published, B8) sind "operate" — eine redaktionelle Bedienhandlung
+	// an existierendem Content, dieselbe Einstufung wie HumanTask-
+	// Zuweisen/Entscheiden, nicht Konfiguration des Systems selbst.
+	mux.HandleFunc("GET /api/v1/assets", g.requireAuth(handleListAssets(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc)))
+	mux.HandleFunc("GET /api/v1/assets/{id}", g.requireAuth(handleGetAsset(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc)))
+	mux.HandleFunc("PUT /api/v1/assets/{id}/metadata", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetMetadata(assetSvc)))
+	mux.HandleFunc("GET /api/v1/assets/{id}/versions", g.requireAuth(handleListAssetVersions(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAssetVersion(assetSvc)))
+	mux.HandleFunc("GET /api/v1/asset-versions/{id}", g.requireAuth(handleGetAssetVersion(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/publish", g.requireVerbGlobal(authz.VerbConfigure, handlePublishAssetVersion(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/archive", g.requireVerbGlobal(authz.VerbConfigure, handleArchiveAssetVersion(assetSvc)))
+	mux.HandleFunc("GET /api/v1/asset-versions/{id}/representations", g.requireAuth(handleListRepresentations(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/representations", g.requireVerbGlobal(authz.VerbConfigure, handleCreateRepresentation(assetSvc)))
+	mux.HandleFunc("GET /api/v1/representations/{id}", g.requireAuth(handleGetRepresentation(assetSvc)))
+	mux.HandleFunc("DELETE /api/v1/representations/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteRepresentation(assetSvc)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return countRequests(reqCounters, noStoreForAPI(mux))

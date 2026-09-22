@@ -2,6 +2,7 @@ package asset
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
@@ -329,7 +330,19 @@ func TestCreateRepresentationRequiresStorage(t *testing.T) {
 	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
 	v, _ := s.CreateVersion(a.ID, "", "", "alice")
 
-	if _, err := s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "master"}); err == nil {
-		t.Fatalf("CreateRepresentation() without storage error = nil, want error")
+	_, err := s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "master"})
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateRepresentation() without storage error = %v, want errors.Is(err, ErrValidation)", err)
+	}
+}
+
+// TestCreateAssetMissingFieldsIsErrValidation (Phase 5 Teil 3): die
+// HTTP-API verlässt sich auf errors.Is(err, ErrValidation), um 400
+// statt 500 zu melden.
+func TestCreateAssetMissingFieldsIsErrValidation(t *testing.T) {
+	s := NewStore(testDB(t))
+	_, err := s.CreateAsset("", "", "", "alice")
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("CreateAsset() error = %v, want errors.Is(err, ErrValidation)", err)
 	}
 }

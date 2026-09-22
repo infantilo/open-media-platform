@@ -27436,3 +27436,101 @@ vorstehenden Korrektur beschriebenen verwaisten `TEST_*`-JetStream-
 Streams aufgeräumt waren (ohne Aufräumen hätte auch dieser Lauf
 gehangen, s. o.). Details: UMSETZUNG.md §7 (Status-Checkliste, Eintrag
 "Kapitel 21 Phase 5 Teil 2").
+
+## 2026-09-22 (Nachtrag 265) — Kapitel 21 Phase 5 Teil 3: HTTP-API für die Asset/Content-Domäne
+
+**Nutzerauftrag:** "fahre fort", direkt im Anschluss an Phase 5 Teil 2.
+Liefert den ersten echten Aufrufer für `internal/asset` — seit Phase 2
+(Domain Model) und Phase 4 Teil 1 (Outbox-Anbindung, B9) existierte der
+Store, aber ohne main.go-Verdrahtung (bewusst aufgeschoben, s. Nachtrag
+263) hatte niemand je `CreateAsset` o. ä. aufgerufen.
+
+**Namensraum, neu entschieden** (Phase 1 hatte für Assets noch keinen
+dokumentiert, nur für Process): `/api/v1/assets`,
+`/api/v1/asset-versions`, `/api/v1/representations` — spiegelt exakt
+dasselbe Muster wie der in Phase 1 für Process entschiedene Namensraum
+(Ressourcen-Plural, Sub-Ressourcen über eigene Top-Level-ID statt
+verschachtelter Pfade, sobald sie eine eigene, häufig direkt
+adressierte Identität haben). 14 neue Routen in neuer Datei
+`orchestrator/internal/httpapi/asset_handlers.go`, Muster 1:1 an
+`process_handlers.go`/`workflow_handlers.go` gespiegelt.
+
+**Ein Interface statt zwei** (anders als bei Process in Phase 5 Teil 2):
+`AssetService` — es gibt nur einen konkreten Typ, `*asset.Store`, keine
+getrennte Engine (Asset hat keine eigene Ausführungs-Laufzeit, nur
+Zustand+Lifecycle).
+
+**Verb-Einstufung:** Asset/Version/Representation ANLEGEN ist
+`configure` (Katalog-Pflege, kein Sofortwirkungsrisiko wie ein
+Process-Start über ServiceCall/MediaFunction/Script). Status-Übergang
+(B8-Lifecycle: ingesting → … → published) und Metadaten-Änderung an
+einem BESTEHENDEN Asset sind `operate` — eine redaktionelle
+Bedienhandlung an existierendem Content (ein Redakteur, der ein
+Ready-Asset zur Review schickt oder freigibt), keine
+Konfigurationshandlung des Systems selbst; dieselbe Einstufung wie
+HumanTask zuweisen/entscheiden in Phase 5 Teil 2.
+
+**Neuer `asset.ErrValidation`-Sentinel** (analog zu
+`process.ErrValidation` aus Nachtrag 264) — wrappt die beiden
+bisherigen unstrukturierten `fmt.Errorf`-Pflichtfeld-Fehler in
+`CreateAsset` ("type and title are required") und
+`CreateRepresentation` ("assetVersionId, type and storage ... are
+required"). `writeAssetError` mappt sie auf 400, `ErrNotFound` auf 404,
+`ErrConcurrentModification`/`statemachine.ErrInvalidTransition`
+einheitlich auf 409 — identisches Schema wie `writeProcessError`.
+
+**main.go**: `assetStore := asset.NewStore(database,
+asset.WithOutbox(outboxStore))` direkt neben der bestehenden
+`outboxStore`/`processStore`-Konstruktion (Phase 5 Teil 1) ergänzt,
+kein weiterer Leader-Gating-Bedarf (Asset hat keinen eigenen
+Hintergrund-Loop, nur CRUD über die HTTP-API) — `WithOutbox` wird damit
+zum ERSTEN MAL in Produktion tatsächlich ausgelöst, nicht nur in
+Tests.
+
+**Live Ende-zu-Ende gegen den echten laufenden Orchestrator verifiziert**
+(dritter Neustart dieser Sitzungsreihe, erneut mit Nutzerzustimmung):
+Asset anlegen → Version anlegen (draft) → Publish → per `GET
+/api/v1/assets/{id}` bestätigt, dass `currentVersionId` ATOMAR mit dem
+Publish gesetzt wurde (dieselbe Ein-Transaktion-Garantie wie in Phase 2
+dokumentiert, jetzt erstmals über echten HTTP-Aufruf statt nur im
+Store-Test bewiesen) → Representation anlegen (mit Breite/Höhe/Format)
+→ Listen bestätigt einen Eintrag → Status-Übergang `ingesting →
+registered` korrekt → ein absichtlich ÜBERSPRINGENDER Übergang
+(`registered → published`, überspringt `processing`/`ready`/
+`in_review`/`approved`) liefert korrekt 409 statt den Sprung
+stillschweigend zuzulassen → Metadaten-Update (komplette Ersetzung,
+wie dokumentiert) → gefilterte Liste `?type=VIDEO` findet das Asset →
+Representation löschen liefert `{"ok":true}`, ein zweites Löschen
+derselben ID bleibt ebenfalls `{"ok":true}` (Idempotenz bestätigt) →
+ein Request ohne `Authorization`-Header liefert 401.
+
+**Erstmals bestätigt, dass B9 tatsächlich Nachrichten zustellt** (nicht
+nur, dass die Infrastruktur dafür korrekt aufgesetzt ist, wie noch in
+Phase 5 Teil 1 mit einem leeren `OMP_EVENTS`): `nats stream info
+OMP_EVENTS` zeigte nach dem Testlauf eine reale, von Null verschiedene
+Nachrichtenzahl — der komplette Pfad Store → Outbox-Enqueue-in-
+derselben-Transaktion → Relay-Dispatch → JetStream-Publish funktioniert
+nachweislich im echten Betrieb, nicht nur in der isolierten Test-DB.
+
+Bootlog nach dem gesamten Testlauf ohne eine einzige neue Fehler-/
+Warn-Zeile.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber. 2
+Sentinel-Tests (`TestCreateRepresentationRequiresStorage` von einem
+reinen `err == nil`-Check auf `errors.Is(err, ErrValidation)`
+umgestellt, neu `TestCreateAssetMissingFieldsIsErrValidation`), volle
+Modul-Suite (`go test ./...`, alle 34 Pakete) grün.
+
+**Damit ist Kapitel 21s Backend vollständig**: Domain Model (Phase 2),
+Runtime (Phase 3), Event-Zuverlässigkeit + externe Integration (Phase
+4), main.go-Verdrahtung + HTTP-API für beide Domänen (Phase 5 Teil
+1-3). Offen bleibt UI (braucht Nutzerentscheidung zu Design-Frage 3 aus
+Phase 1: Prozess-Editor kein Blockly, eigener Editor auf `ui/graph`-
+Basis) sowie die bereits mehrfach dokumentierten, bewusst
+zurückgestellten Einzelpunkte: `StepTypeLoop` (eigene Design-Sitzung),
+`StepTypeEventTrigger` als Schritt innerhalb eines laufenden Graphen,
+B1-Vollmodell (ContentObject/Collection/Sequence/Segment/Marker/
+Publication/Package), B7 (MetadataSchema/-Field/-Value-Validierung),
+B14 (granulare Autorisierungsfeinheit über die heutige
+configure/operate/admin-Einstufung hinaus). Details: UMSETZUNG.md §7
+(Status-Checkliste, Eintrag "Kapitel 21 Phase 5 Teil 3").

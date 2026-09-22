@@ -20,6 +20,13 @@ var ErrNotFound = errors.New("asset: not found")
 // (identisches CAS-Muster auf row_version).
 var ErrConcurrentModification = errors.New("asset: concurrent modification")
 
+// ErrValidation kennzeichnet fehlerhafte AUFRUFER-Eingaben (fehlende
+// Pflichtfelder) — per errors.Is von einem internen/DB-Fehler
+// unterscheidbar, Grundlage für die HTTP-API (Phase 5 Teil 3): so
+// eingeordnete Fehler werden dort als 400 statt 500 gemeldet, gleiche
+// Konvention wie process.ErrValidation.
+var ErrValidation = errors.New("asset: validation failed")
+
 // Store persistiert die Asset-Domäne in Postgres
 // (db/migrations/0019_assets.sql). outbox ist optional (nil-sicher,
 // gleiches Muster wie process.EventPublisher) — gesetzt, veröffentlicht
@@ -126,7 +133,7 @@ const assetSelectColumns = `id, type, title, description, status, current_versio
 // erst angelegt und veröffentlicht werden, s. PublishVersion).
 func (s *Store) CreateAsset(assetType, title, description, createdBy string) (Asset, error) {
 	if assetType == "" || title == "" {
-		return Asset{}, fmt.Errorf("asset: type and title are required")
+		return Asset{}, fmt.Errorf("%w: type and title are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
@@ -495,7 +502,7 @@ const representationSelectColumns = `id, asset_version_id, type, storage_provide
 // verwenden" — nicht jede Representation hat z. B. eine Framerate).
 func (s *Store) CreateRepresentation(r Representation) (Representation, error) {
 	if r.AssetVersionID == "" || r.Type == "" || r.Storage.Provider == "" || r.Storage.URI == "" {
-		return Representation{}, fmt.Errorf("asset: assetVersionId, type and storage (provider+uri) are required")
+		return Representation{}, fmt.Errorf("%w: assetVersionId, type and storage (provider+uri) are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
