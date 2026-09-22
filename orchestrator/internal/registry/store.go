@@ -54,6 +54,28 @@ func (s *Store) Get(id string) (NodeView, bool) {
 	return NodeView{}, false
 }
 
+// GetByInstanceID liefert den Node, dessen "urn:x-omp:instance"-Tag
+// (NodeView.InstanceID) instanceID entspricht — anders als Get() (NMOS-
+// Node-ID, ändert sich bei jedem Prozessstart ohne stabilen Seed) ist
+// die Instanz-ID über einen Neustart hinweg stabil (Launcher-vergeben,
+// UMSETZUNG.md C8). Grundlage für Kapitel 21 Phase 4 Teil 2
+// (internal/process: MediaFunction-Schritte referenzieren eine Instanz,
+// nicht eine flüchtige Node-ID) — dasselbe Auflösungsbedürfnis, das
+// internal/workflows bisher nur workflow-intern über Role-Namen löst.
+func (s *Store) GetByInstanceID(instanceID string) (NodeView, bool) {
+	if instanceID == "" {
+		return NodeView{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.nodes {
+		if n.InstanceID == instanceID {
+			return n, true
+		}
+	}
+	return NodeView{}, false
+}
+
 // SetPollDuration wird vom Poller nach jedem abgeschlossenen (auch
 // fehlgeschlagenen) Poll aufgerufen (S8).
 func (s *Store) SetPollDuration(d time.Duration) {

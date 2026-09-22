@@ -27072,3 +27072,110 @@ Idempotenz-Nachweis), alle real gegen Postgres und den echten,
 laufenden Dev-NATS-Cluster (kein Mock). Zwei unabhängige volle
 `go test ./...`-Läufe grün. Details: UMSETZUNG.md §7 (Status-
 Checkliste, Eintrag "Kapitel 21 Phase 4 Teil 1").
+
+## 2026-09-22 (Nachtrag 262) — Kapitel 21 Phase 4 Teil 2: echte externe Integrations-Schritte (A1) — ServiceCall/MediaFunction/Script
+
+**Nutzerauftrag:** "fahre fort", direkt im Anschluss an Phase 4 Teil 1.
+Phase 3 Teil 1 hatte Task/MediaFunction/ServiceCall/Script bewusst
+unregistriert gelassen ("echte externe Integration, Phase 4") — diese
+Runde liefert drei der vier nach.
+
+**Reihenfolge der Recherche (Projektgrundsatz "kein Raten" — erst
+lesen, dann schreiben):** zuerst `nodes/omp-node-sdk/src/server.rs`s
+`route()`-Funktion gelesen, um das TATSÄCHLICHE Node-HTTP-Contract-
+Wire-Protokoll zu kennen (`GET /descriptor.json`, `GET`/`PATCH
+/params/<name>`, `POST /methods/<name>` mit JSON-Objekt-Body →
+`{"ok":true}`/404/400), dann `internal/workflows/nodeclient.go` als
+bereits bewährtes Muster für denselben Aufruf gelesen, dann
+`internal/registry/store.go`/`types.go` geprüft — `Store.Get(id)`
+kennt nur die flüchtige NMOS-Node-ID, keine stabile Instanz-Auflösung.
+
+**Drei neue Executors in `orchestrator/internal/process/executors.go`,
+keiner automatisch in `NewEngine` registriert** (anders als die rein
+strukturellen Typen aus Phase 3 Teil 1) — sie brauchen echte, erst zur
+Laufzeit bekannte Infrastruktur (HTTP-Client, Registry-Store, Allow-
+Liste), `Register()` ist dafür der bereits bestehende, vorgesehene
+Erweiterungspunkt:
+
+- **ServiceCall** — generischer HTTP-Aufruf gegen JEDEN Dienst (Config:
+  `method`/`url`/`headers`/`body`/`timeoutSeconds`, Output:
+  `{status, body}`). Antwortkörper auf 1 MiB begrenzt (ein Schritt-
+  Output ist kein Medien-Transport). Nicht-2xx-Status lässt den
+  Schritt ehrlich fehlschlagen statt den Fehler zu verschlucken —
+  bleibt über A4-Retry (`Step.Retry`) wiederholbar, falls konfiguriert.
+
+- **MediaFunction** — neue Datei `nodeclient.go`: `NodeResolver`-
+  Interface löst eine STABILE, vom Launcher vergebene Instanz-ID
+  (`registry.NodeView.InstanceID`, überlebt einen Node-Neustart) auf
+  die aktuell erreichbare Basis-URL auf; dafür `registry.Store` additiv
+  um `GetByInstanceID(instanceID)` ergänzt (2 neue Tests:
+  `TestStoreGetByInstanceIDFindsByInstanceTag`,
+  `TestStoreGetByInstanceIDUnknownOrEmptyReturnsFalse` — Letzterer
+  prüft explizit, dass ein leeres Instanz-Tag NIE einen Node ohne
+  Instanz-Tag matched). `methodInvoker`/`httpMethodInvoker` ruft
+  `POST <baseURL>/methods/<name>` — bewusst UNABHÄNGIG von
+  `internal/workflows/nodeclient.go` neu implementiert statt
+  importiert: die beiden Domänen (`internal/process` vs.
+  `internal/workflows`) bleiben laut der in Phase 1 getroffenen
+  Namensraum-Entscheidung entkoppelt, auch wenn sie zufällig denselben
+  Node-HTTP-Standard sprechen — kein Zyklus, keine künstliche
+  Kopplung nur um ~30 Zeilen Duplikation zu sparen. Instanz
+  offline/unbekannt → ehrlicher Fehlschlag statt stillem No-op (ein
+  Node kann zwischen zwei Retry-Versuchen durchaus wieder online
+  kommen).
+
+- **Script** — allow-listete Kommandoausführung
+  (`newScriptExecutor(allowedCommands map[string]string, eval)`):
+  `Config.Command` MUSS ein Schlüssel der übergebenen Allow-Liste sein
+  (Name → echter, absoluter Programmpfad) — dasselbe Sicherheitsmuster
+  wie `internal/launcher`s bereits etablierte "Katalog statt beliebiger
+  Kommandos"-Grenze; ein leeres `allowedCommands` lässt JEDEN Script-
+  Schritt ehrlich scheitern statt heimlich PATH-Lookups zu erlauben —
+  main.go (Phase 5) entscheidet bewusst, was erlaubt ist (Aufgaben-
+  Zusatzwunsch: "Datei-Workflows nach Möglichkeit auf ffmpeg
+  aufbauen", z. B. `{"ffprobe": "/usr/bin/ffprobe"}`). Argumente
+  unterstützen `${expr-lang-Ausdruck}`-Templating gegen denselben
+  `input`/`outputs`/`workflow`-Kontext wie Condition/Branch — dafür
+  `Evaluator` (expr.go) um eine generische, typlose `Eval()`-Methode
+  ergänzt, `EvalBool` ruft sie jetzt intern auf statt eine zweite
+  Kompilierungs-/Auswertungslogik zu duplizieren (kleiner, bewusst in
+  Kauf genommener Tradeoff: `expr.AsBool()`-Kompilezeit-Hinweis geht
+  dabei verloren). Stdout/Stderr je auf 1 MiB gekappt
+  (`limitedWriter`, Schutz vor einem außer Kontrolle geratenen Prozess
+  mit Endlos-Logging — der Prozess selbst läuft davon unbeeinflusst
+  weiter, nur die Mitschrift wird gekappt, kein I/O-Fehler). Timeout
+  via `context.WithTimeout` (Default 5 Minuten). Nicht-Null-Exitcode
+  lässt den Schritt fehlschlagen, Stderr (gekürzt auf 500 Zeichen)
+  steht in der Fehlermeldung, damit ein Fehlschlag nicht kontextlos
+  ist.
+
+**`StepTypeTask` bewusst weiterhin unregistriert/undefiniert** — nach
+Rücksprache mit der eigenen Aufgabenstellung genuin unklar, welche
+Semantik über die bereits existierenden spezifischeren Typen
+(ServiceCall/MediaFunction/Script/HumanTask/...) hinaus gemeint wäre;
+Projektgrundsatz "kein Raten" wiegt hier schwerer als Vollständigkeit
+der 17er-Liste um jeden Preis.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber.
+9 neue Tests in neuer Datei `executors_test.go`:
+- 2 ServiceCall-Ende-zu-Ende (Erfolg inkl. Header/Body-Weiterreichung,
+  Nicht-2xx-Fehlerfall) gegen einen echten `httptest.Server`, 1
+  ServiceCall-Unit-Test (fehlende URL wird abgelehnt).
+- 2 MediaFunction-Ende-zu-Ende (Erfolg mit Pfad-/Body-Nachweis gegen
+  einen echten `httptest.Server`, unbekannte Instanz schlägt ehrlich
+  fehl) — `NodeResolver` hier als Test-Double (`fakeNodeResolver`)
+  eingesetzt, da in dieser Umgebung kein echter, laufender OMP-Node
+  zur Verfügung steht; die reale `RegistryNodeResolver`-Kopplung ist
+  bereits separat über die neuen `registry`-Store-Tests bewiesen.
+- 4 Script-Ende-zu-Ende: erlaubtes Kommando mit Argument-Templating aus
+  `input` (`/bin/echo`), Allow-Liste-Ablehnung (`rm` nicht gelistet),
+  Exitcode-Fehlschlag (`/bin/false`), Timeout (`/bin/sleep 5` mit
+  1s-Limit) — alle gegen echte Prozesse, kein Mock.
+
+Volle `internal/process`-Suite grün (15,7s), volle Modul-Suite
+(`go test ./...`, alle 34 Pakete inkl. `internal/cluster` 23,9s und
+`internal/launcher` 38,5s) grün mit explizitem `-timeout`-Flag — kein
+Wiederauftreten des in Nachtrag 261 beobachteten, damals unbestätigten
+Einzel-Hangs. Kein API-/UI-Code (Phase 5, weiterhin offen). Details:
+UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 4 Teil
+2").

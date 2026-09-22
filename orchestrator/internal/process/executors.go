@@ -1,11 +1,16 @@
 package process
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
+	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -433,4 +438,297 @@ func newBranchExecutor(eval *Evaluator) StepExecutor {
 		}
 		return json.Marshal(decisionOutput{Decision: cfg.DefaultLabel})
 	})
+}
+
+// ---- ServiceCall (A1, Kapitel 21 Phase 4 Teil 2) -----------------------------------------------
+
+// serviceCallConfig ist Step.Config für ServiceCall — ein generischer
+// HTTP-Aufruf gegen JEDEN Dienst (einen OMP-Node über dessen Standard-
+// HTTP-API, oder einen echten externen Dienst). Bewusst kein
+// Sonderwissen über OMP-Nodes hier (das ist MediaFunction, s. u.) —
+// ServiceCall ist der allgemeinste der vier A1-Integrations-Schritt-
+// Typen.
+type serviceCallConfig struct {
+	Method         string            `json:"method,omitempty"` // Default GET
+	URL            string            `json:"url"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	Body           json.RawMessage   `json:"body,omitempty"`
+	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
+}
+
+// serviceCallOutput ist der Output eines ServiceCall-Schritts.
+type serviceCallOutput struct {
+	Status int             `json:"status"`
+	Body   json.RawMessage `json:"body,omitempty"`
+}
+
+const defaultServiceCallTimeout = 30 * time.Second
+
+// newServiceCallExecutor liefert den Executor für ServiceCall-Schritte.
+// httpClient darf nil sein (http.DefaultClient). Bewusst NICHT
+// automatisch in NewEngine registriert (anders als die rein
+// strukturellen Typen aus Phase 3 Teil 1) — ServiceCall braucht echte
+// Netzinfrastruktur (ggf. mTLS-Client, UMSETZUNG.md D3), die erst der
+// Aufrufer (main.go, Phase 5, oder ein Test) kennt; Register() ist der
+// dafür vorgesehene Erweiterungspunkt (s. engine.go).
+//
+// Sicherheitshinweis (B14, noch offen aus Kapitel-21-Phase-1): wer eine
+// ProcessDefinition mit einem ServiceCall-Schritt veröffentlichen darf,
+// bestimmt implizit, welche internen/externen HTTP-Ziele der
+// Orchestrator-Prozess erreichen kann (SSRF-ähnliche Fläche) — ohne
+// granulare Autorisierung ist das bewusst dieselbe Vertrauensannahme
+// wie bei internal/workflows' bestehenden Node-Aufrufen (nur
+// authentifizierte, mit configure/admin-Verb ausgestattete Nutzer
+// dürfen Definitionen anlegen, sobald die Phase-5-API das durchsetzt).
+func newServiceCallExecutor(httpClient *http.Client) StepExecutor {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		var cfg serviceCallConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.URL == "" {
+			return nil, fmt.Errorf("process: step %q: invalid service call config (url required)", step.ID)
+		}
+		method := cfg.Method
+		if method == "" {
+			method = http.MethodGet
+		}
+		timeout := defaultServiceCallTimeout
+		if cfg.TimeoutSeconds > 0 {
+			timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+		}
+		reqCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		var bodyReader io.Reader
+		if len(cfg.Body) > 0 {
+			bodyReader = bytes.NewReader(cfg.Body)
+		}
+		req, err := http.NewRequestWithContext(reqCtx, method, cfg.URL, bodyReader)
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: build request: %w", step.ID, err)
+		}
+		if len(cfg.Body) > 0 {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		for k, v := range cfg.Headers {
+			req.Header.Set(k, v)
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: service call: %w", step.ID, err)
+		}
+		defer resp.Body.Close()
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1 MiB — ein Schritt-Output ist kein Medien-Transport
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: read response: %w", step.ID, err)
+		}
+		out := serviceCallOutput{Status: resp.StatusCode}
+		if json.Valid(respBody) {
+			out.Body = respBody
+		} else if len(respBody) > 0 {
+			marshaled, _ := json.Marshal(string(respBody))
+			out.Body = marshaled
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			raw, _ := json.Marshal(out)
+			return raw, fmt.Errorf("process: step %q: service call returned status %d", step.ID, resp.StatusCode)
+		}
+		return json.Marshal(out)
+	})
+}
+
+// ---- MediaFunction (A1, Kapitel 21 Phase 4 Teil 2) -----------------------------------------------
+
+// mediaFunctionConfig ist Step.Config für MediaFunction: ruft eine
+// selbstbeschriebene Methode (IS-12/14-inspiriertes Node-Contract-
+// Muster, ARCHITECTURE.md §2/§5) einer LAUFENDEN OMP-Node-Instanz auf —
+// z. B. "record.start" auf einem omp-recorder, "show" auf einem
+// omp-ograf. InstanceID ist die stabile, vom Launcher vergebene
+// Instanz-ID (registry.NodeView.InstanceID, UMSETZUNG.md C8) — NICHT
+// die bei jedem Prozessstart neue NMOS-Node-ID.
+type mediaFunctionConfig struct {
+	InstanceID string          `json:"instanceId"`
+	Method     string          `json:"method"`
+	Args       json.RawMessage `json:"args,omitempty"`
+}
+
+// newMediaFunctionExecutor liefert den Executor für MediaFunction-
+// Schritte — löst InstanceID über resolver zur aktuell erreichbaren
+// Node-Basis-URL auf (nodeclient.go) und ruft dort die Methode über den
+// generischen Node-Contract-Pfad auf (`POST /methods/<name>`, exakt
+// dasselbe Wire-Protokoll wie internal/workflows' Crosspoint-Aufrufe
+// und nodes/omp-node-sdk/src/server.rs route()). Bewusst NICHT
+// automatisch registriert (s. newServiceCallExecutor-Doku) — braucht
+// einen echten NodeResolver (main.go, Phase 5).
+//
+// Ist die Instanz gerade nicht online/registriert, scheitert der
+// Schritt ehrlich (ErrConcurrentModification-artig retrybar über A4,
+// falls Step.Retry gesetzt ist) statt eines stillen No-op — ein Node
+// kann durchaus zwischen zwei Retry-Versuchen wieder online kommen.
+func newMediaFunctionExecutor(resolver NodeResolver, invoker methodInvoker) StepExecutor {
+	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		var cfg mediaFunctionConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.InstanceID == "" || cfg.Method == "" {
+			return nil, fmt.Errorf("process: step %q: invalid media function config (instanceId and method required)", step.ID)
+		}
+		baseURL, ok := resolver.ResolveAPIBaseURL(cfg.InstanceID)
+		if !ok {
+			return nil, fmt.Errorf("process: step %q: media function instance %q not found or offline", step.ID, cfg.InstanceID)
+		}
+		out, err := invoker.Invoke(ctx, baseURL, cfg.Method, cfg.Args)
+		if err != nil {
+			return nil, fmt.Errorf("process: step %q: %w", step.ID, err)
+		}
+		return out, nil
+	})
+}
+
+// ---- Script (A1, Kapitel 21 Phase 4 Teil 2) -----------------------------------------------
+
+// scriptConfig ist Step.Config für Script. Command MUSS ein Schlüssel
+// der dem Executor übergebenen Allow-Liste sein (s. newScriptExecutor-
+// Doku) — NIE ein roher Pfad/beliebiges Programm. Args-Einträge, die
+// exakt der Form "${<expr-lang-Ausdruck>}" entsprechen, werden gegen
+// denselben Kontext ausgewertet wie Condition/Branch (input/outputs/
+// workflow, s. expr.go) und durch ihren Stringwert ersetzt — erlaubt
+// z. B. den von einem vorherigen Schritt gelieferten Dateipfad an
+// ffmpeg/ffprobe durchzureichen, ohne einen zweiten Templating-
+// Mechanismus zu erfinden.
+type scriptConfig struct {
+	Command        string   `json:"command"`
+	Args           []string `json:"args,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+}
+
+// scriptOutput ist der Output eines Script-Schritts.
+type scriptOutput struct {
+	ExitCode int    `json:"exitCode"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
+}
+
+const defaultScriptTimeout = 5 * time.Minute
+const maxScriptOutputBytes = 1 << 20 // 1 MiB je Strom — ein Steuerungs-Output, kein Mediencontainer
+
+// newScriptExecutor liefert den Executor für Script-Schritte —
+// Aufgabenstellungs-Zusatzwunsch: "Datei-Workflows nach Möglichkeit auf
+// ffmpeg aufbauen". allowedCommands bildet einen im Graphen
+// referenzierbaren Namen (Config.Command) auf den TATSÄCHLICHEN,
+// absoluten Programmpfad ab — dieselbe Sicherheitsgrenze wie
+// internal/launchers "Katalog statt beliebiger Kommandos" (UMSETZUNG.md
+// §6.2: "der Orchestrator startet NUR Katalog-Einträge, keine freien
+// Kommandos"). Ein leeres allowedCommands macht JEDEN Script-Schritt
+// ehrlich fehlschlagen statt heimlich Programme aus dem PATH zu
+// akzeptieren — main.go (Phase 5) entscheidet bewusst, was erlaubt ist
+// (z. B. {"ffprobe": "/usr/bin/ffprobe", "ffmpeg": "/usr/bin/ffmpeg"}).
+func newScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepExecutor {
+	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
+		var cfg scriptConfig
+		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.Command == "" {
+			return nil, fmt.Errorf("process: step %q: invalid script config (command required)", step.ID)
+		}
+		binary, ok := allowedCommands[cfg.Command]
+		if !ok {
+			return nil, fmt.Errorf("process: step %q: command %q is not in the allow-list", step.ID, cfg.Command)
+		}
+
+		vars := exprVars(ec)
+		args := make([]string, len(cfg.Args))
+		for i, a := range cfg.Args {
+			resolved, err := resolveScriptArg(eval, vars, a)
+			if err != nil {
+				return nil, fmt.Errorf("process: step %q: resolve arg %d: %w", step.ID, i, err)
+			}
+			args[i] = resolved
+		}
+
+		timeout := defaultScriptTimeout
+		if cfg.TimeoutSeconds > 0 {
+			timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+		}
+		runCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		cmd := exec.CommandContext(runCtx, binary, args...)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &limitedWriter{w: &stdout, max: maxScriptOutputBytes}
+		cmd.Stderr = &limitedWriter{w: &stderr, max: maxScriptOutputBytes}
+		runErr := cmd.Run()
+
+		out := scriptOutput{
+			ExitCode: cmd.ProcessState.ExitCode(),
+			Stdout:   stdout.String(),
+			Stderr:   stderr.String(),
+		}
+		raw, marshalErr := json.Marshal(out)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("process: step %q: marshal script output: %w", step.ID, marshalErr)
+		}
+		if runErr != nil {
+			// raw wird bewusst NICHT zurückgegeben (StepExecutor-Vertrag:
+			// bei Fehler ist der zweite Rückgabewert maßgeblich) — Stdout/
+			// Stderr stehen aber vollständig in der Fehlermeldung, damit
+			// ein Fehlschlag nicht kontextlos ist.
+			return nil, fmt.Errorf("process: step %q: command %q failed: %w (stderr: %s)", step.ID, cfg.Command, runErr, truncate(out.Stderr, 500))
+		}
+		return raw, nil
+	})
+}
+
+// resolveScriptArg löst ein einzelnes Script-Argument auf — s.
+// scriptConfig-Doku.
+func resolveScriptArg(eval *Evaluator, vars map[string]any, arg string) (string, error) {
+	if !strings.HasPrefix(arg, "${") || !strings.HasSuffix(arg, "}") {
+		return arg, nil
+	}
+	expression := arg[2 : len(arg)-1]
+	val, err := eval.Eval(expression, vars)
+	if err != nil {
+		return "", err
+	}
+	if s, ok := val.(string); ok {
+		return s, nil
+	}
+	return fmt.Sprint(val), nil
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
+// limitedWriter begrenzt, wie viel Stdout/Stderr eines Script-Schritts
+// im Speicher gehalten wird — ein außer Kontrolle geratener Prozess
+// (Endlosschleife mit Logging) darf den Orchestrator nicht durch
+// unbegrenztes Puffer-Wachstum gefährden. Überschüssige Bytes werden
+// stillschweigend verworfen (der Prozess selbst läuft unbeeinflusst
+// weiter/wird per Timeout beendet, s. TimeoutSeconds) — kein Fehler,
+// nur eine Kappung der PROTOKOLLIERUNG.
+type limitedWriter struct {
+	w   io.Writer
+	max int
+	n   int
+}
+
+func (lw *limitedWriter) Write(p []byte) (int, error) {
+	if lw.n < lw.max {
+		remaining := lw.max - lw.n
+		chunk := p
+		if len(chunk) > remaining {
+			chunk = chunk[:remaining]
+		}
+		written, err := lw.w.Write(chunk)
+		lw.n += written
+		if err != nil {
+			return written, err
+		}
+	}
+	// Immer die VOLLE Länge von p melden (io.Writer-Vertrag) — der
+	// Prozess selbst darf durch die Kappung nicht mit einem I/O-Fehler
+	// abbrechen, nur die Mitschrift wird gekappt.
+	return len(p), nil
 }

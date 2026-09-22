@@ -69,19 +69,32 @@ func NewEvaluator() (*Evaluator, error) {
 // werden nicht mit hoher Frequenz wiederholt ausgewertet, ein Cache wäre
 // verfrühte Optimierung ohne belegten Bedarf).
 func (e *Evaluator) EvalBool(expression string, vars map[string]any) (bool, error) {
-	program, err := expr.Compile(expression, expr.AsBool(), expr.Env(vars))
+	out, err := e.Eval(expression, vars)
 	if err != nil {
-		return false, fmt.Errorf("process: compile expression %q: %w", expression, err)
-	}
-	out, err := expr.Run(program, vars)
-	if err != nil {
-		return false, fmt.Errorf("process: evaluate expression %q: %w", expression, err)
+		return false, err
 	}
 	b, ok := out.(bool)
 	if !ok {
 		return false, fmt.Errorf("process: expression %q did not evaluate to a boolean (got %T)", expression, out)
 	}
 	return b, nil
+}
+
+// Eval kompiliert expression und wertet sie gegen vars aus, ohne einen
+// bestimmten Ergebnistyp zu erzwingen — Grundlage für Script-Argument-
+// Templating (executors.go: newScriptExecutor), das denselben Evaluator
+// wiederverwendet statt einen zweiten, eigenen Templating-Mechanismus
+// zu erfinden.
+func (e *Evaluator) Eval(expression string, vars map[string]any) (any, error) {
+	program, err := expr.Compile(expression, expr.Env(vars))
+	if err != nil {
+		return nil, fmt.Errorf("process: compile expression %q: %w", expression, err)
+	}
+	out, err := expr.Run(program, vars)
+	if err != nil {
+		return nil, fmt.Errorf("process: evaluate expression %q: %w", expression, err)
+	}
+	return out, nil
 }
 
 // exprVars baut die drei deklarierten Top-Level-Variablen (s. Evaluator-

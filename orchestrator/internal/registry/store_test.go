@@ -52,3 +52,29 @@ func TestStoreGetUnknownIDReturnsFalse(t *testing.T) {
 		t.Error("Get(unknown) ok = true, want false")
 	}
 }
+
+func TestStoreGetByInstanceIDFindsByInstanceTag(t *testing.T) {
+	s := NewStore()
+	s.Set([]NodeView{
+		{ID: "node-1", InstanceID: "inst-a"},
+		{ID: "node-2", InstanceID: "inst-b"},
+		{ID: "node-3"}, // kein Instanz-Tag
+	})
+
+	got, ok := s.GetByInstanceID("inst-b")
+	if !ok || got.ID != "node-2" {
+		t.Errorf("GetByInstanceID(inst-b) = %+v, %v; want node-2, true", got, ok)
+	}
+}
+
+func TestStoreGetByInstanceIDUnknownOrEmptyReturnsFalse(t *testing.T) {
+	s := NewStore()
+	s.Set([]NodeView{{ID: "node-1", InstanceID: "inst-a"}, {ID: "node-2"}})
+
+	if _, ok := s.GetByInstanceID("does-not-exist"); ok {
+		t.Error("GetByInstanceID(unknown) ok = true, want false")
+	}
+	if _, ok := s.GetByInstanceID(""); ok {
+		t.Error("GetByInstanceID(\"\") ok = true, want false (an empty instance tag must never match a node without one)")
+	}
+}
