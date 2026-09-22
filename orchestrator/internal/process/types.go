@@ -171,6 +171,15 @@ var StepExecutionTransitions = statemachine.New([][2]string{
 	{StatusRunning, StatusWaiting},
 	{StatusWaiting, StatusRunning},
 	{StatusRunning, StatusCompleted},
+	// Waiting->Completed kam erst mit der Runtime (Kapitel 21 Phase 3
+	// Teil 1) dazu, per Test gefunden: ein HumanTask-/Approval-/
+	// Subworkflow-Schritt bleibt "waiting", solange die externe
+	// Voraussetzung (Entscheidung, Kind-Execution) offen ist — sobald sie
+	// erfüllt ist, schließt der Schritt direkt AUS "waiting" heraus ab,
+	// ohne den Umweg über "running" (der Executor liefert beim nächsten
+	// Poll einfach ein Ergebnis statt erneut ErrStepWaiting, s.
+	// engine.go runStep).
+	{StatusWaiting, StatusCompleted},
 	{StatusRunning, StatusFailed},
 	{StatusWaiting, StatusFailed},
 	{StatusRunning, StatusCancelled},
@@ -180,10 +189,15 @@ var StepExecutionTransitions = statemachine.New([][2]string{
 	{StatusFailed, StatusCompensating},
 	{StatusCompensating, StatusCompensated},
 	{StatusCompensating, StatusFailed},
-	// Retry (A4): ein fehlgeschlagener Schritt kann erneut laufen, ohne
-	// eine neue StepExecution-Zeile anzulegen — Attempt zählt hoch
-	// (Store.IncrementAttempt), Status kehrt nach Pending zurück.
+	// Retry (A4): ein fehlgeschlagener ODER per Timeout abgebrochener
+	// Schritt kann erneut laufen, ohne eine neue StepExecution-Zeile
+	// anzulegen — Attempt zählt hoch (Store.RetryStepExecution), Status
+	// kehrt nach Pending zurück. TimedOut->Pending kam erst mit der
+	// Runtime (Kapitel 21 Phase 3 Teil 1) dazu: A4 zählt "timeout"
+	// ausdrücklich neben Retry/Backoff als unterstützte Fehlerstrategie
+	// auf, Phase 2 hatte diese Kante beim ersten Entwurf übersehen.
 	{StatusFailed, StatusPending},
+	{StatusTimedOut, StatusPending},
 })
 
 // runEndStatuses sind die Status-Werte, bei denen ein einzelner

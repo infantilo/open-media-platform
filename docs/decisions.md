@@ -26725,3 +26725,129 @@ Recovery nach Prozess-Neustart — Phase 3), B1s volle
 Core-Content-Model-Liste über Asset/AssetVersion/Representation/
 Metadata hinaus, B7 (MetadataSchema-Validierung). Details:
 UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 2").
+
+## 2026-09-22 (Nachtrag 259) — Kapitel 21 Phase 3 Teil 1: Runtime (Execution Engine) + wichtiger Infrastruktur-Fund (Patroni-DSN-Testflakiness)
+
+**Nutzerauftrag:** "fahre fort" — direkte Fortsetzung von Nachtrag 258.
+Aufgabenstellung Phase 3: "Implementiere die Workflow Runtime mit:
+execution, state machine, retry, timeout, recovery, events,
+idempotency." Geliefert wurde genau dieser Umfang, bewusst begrenzt auf
+strukturelle Step-Typen (kein Vorgriff auf A5/Phase 4, s. u.).
+
+**Kernstück:** `orchestrator/internal/process/engine.go` — eine
+`Engine`, die `ProcessExecution`s ausschließlich DB-zustandsgetrieben
+durch ihren Graphen treibt (kein In-Memory-Fortschritt außerhalb eines
+laufenden Zyklus). `Start()` und `RecoverAll()` rufen denselben
+`run()`-Code auf — Wiederaufnahme nach einem Neustart ist dadurch kein
+separater Algorithmus, sondern derselbe Code, der beim nächsten Aufruf
+einfach mehr bereits erledigte Schritte in der DB vorfindet. Der
+Frontier-Algorithmus (`computeFrontier`) generalisiert echtes AND-Join
+(mehrere Next-Vorgänger) UND XOR-Branches (eine Entscheidung wählt genau
+EIN Branches-Ziel über ein `decision`-Feld im Schritt-Output) über
+dieselbe Regel ("alle Vorgänger terminal UND mindestens einer hat mich
+tatsächlich aktiviert") — kein Sonderfall-Code pro Join-Art. Das
+erlaubt entscheidungsbasiertes Branching (HumanTask/Approval ->
+"approve"/"reject"/…) bereits OHNE Expression Language (A5).
+
+**Eingebaute Executors nur für rein strukturelle Typen** (keine externe
+Integration nötig): Wait/Timer (übersteht einen Neustart mitten in der
+Wartezeit korrekt — rechnet die Restzeit ab `StepExecution.StartedAt`,
+nicht ab `now()`), Parallel/Join (Passthrough), HumanTask/Approval
+(legt echten `HumanTask` an, `CompleteHumanTask` löst auf),
+Subworkflow (startet echte Kind-Execution mit `ParentExecutionID`,
+reicht deren Output durch — "nested workflows"), Notification
+(publiziert über den bestehenden `eventbus`, bewusst weiterhin
+fire-and-forget). **Bewusst unregistriert, ehrliches
+`ErrNoExecutorRegistered` statt Mock:** Task/MediaFunction/ServiceCall/
+Script (Phase 4), Condition/Branch/Loop (A5, Teil 2), EventTrigger als
+Schritt-Typ (A8-Zuverlässigkeitsfrage aus Nachtrag 257 weiterhin offen).
+
+**Retry/Timeout (A4):** die Backoff-Schleife läuft SYNCHRON innerhalb
+eines einzelnen `runStep`-Aufrufs; neue Store-Methode
+`RecordAttemptAndContinue` hält den Status während des Wartens bewusst
+auf "running" statt zwischenzeitlich "failed" — ein Crash mitten in der
+Pause zeigt beim Wiederanlauf deshalb korrekt "noch in Bearbeitung"
+(B16-Korrektheit), nicht fälschlich "endgültig gescheitert". Timeout
+markiert bei Erschöpfung `TIMED_OUT` statt `FAILED` — dabei eine echte
+Phase-2-Lücke gefunden: `StepExecutionTransitions` erlaubte
+`timed_out -> pending` (Retry nach Timeout) ursprünglich nicht, obwohl
+A4 Timeout ausdrücklich neben Retry als Fehlerstrategie nennt.
+
+**Fünf echte Bugs per Test gefunden und behoben:**
+1. `StepExecutionTransitions` erlaubte `waiting -> completed` nicht —
+   genau der Abschlusspfad von HumanTask/Subworkflow-Schritten.
+2. Kind-Executions eines Subworkflow-Schritts wurden angelegt, aber nie
+   "angetrieben" — blieben für immer "pending" liegen (`drive()` fehlte
+   im Executor).
+3. `ProcessExecution.Output` wurde nie gesetzt; zusätzlich ein echter
+   TOCTOU-Fund beim Nachrüsten: Status auf "completed" zu setzen, BEVOR
+   das Output geschrieben ist, lässt ein Zeitfenster, in dem ein Leser
+   (z. B. der Subworkflow-Executor der Eltern-Execution) "completed"
+   mit noch leerem Output sieht — Reihenfolge auf Output-zuerst
+   umgestellt.
+4. `driveCompensation` behandelte `ErrConcurrentModification` an drei
+   Stellen stillschweigend als Erfolg (publizierte ein Ereignis, ohne
+   zu prüfen, ob der eigene Schreibversuch tatsächlich griff) — auf
+   reines Zurückkehren ohne Ereignis umgestellt.
+5. Der `FAILED -> COMPENSATING`-Übergang in `finalize()` hatte nur
+   einen einzelnen CAS-Versuch — ein einzelner Konflikt ließ die
+   Execution dauerhaft bei "failed" hängen, obwohl eine Kompensation
+   vorgesehen war; auf einen kurzen Retry-Loop (bis zu 10 Versuche,
+   kleine Pause dazwischen) umgestellt.
+
+Zusätzlich eine echte Phase-2-Lücke in `Definition.Validate()`
+gefunden+geschlossen: die Erreichbarkeitsprüfung fehlte komplett — ein
+Schritt ohne jeden Vorgänger (und nicht der Start) wäre vom
+Frontier-Algorithmus fälschlich sofort als startbereit behandelt
+worden. Ergänzt (Kompensationsschritte bewusst ausgenommen — sie sind
+nur über `CompensationStepID` erreichbar, nie über den regulären
+Graphen).
+
+**B16 live verifiziert, nicht nur behauptet:** ein echter simulierter
+Neustart (zweite, komplett unabhängige `Engine`-Instanz auf demselben
+Store, erste Instanz per `Shutdown()` "beendet") holt eine mitten in
+einem wartenden HumanTask hängengebliebene Execution korrekt wieder ab
+und führt sie nach der (erst NACH dem simulierten Neustart
+eintreffenden) menschlichen Entscheidung korrekt zu Ende.
+
+**Wichtiger Infrastruktur-Befund, kein Code-Bug:** Bei intensivem
+Stresstesten (>150 Wiederholungen in mehreren Runden) zeigte sich eine
+seltene, aber reale Resttest-Flakiness spezifisch bei Verwendung der
+projektüblichen Mehr-Host-Patroni-DSN (`DEV_POSTGRES_URL`,
+`target_session_attrs=read-write` über drei Knoten,
+localhost:5432/5442/5452) — ein Schreibvorgang schien gelegentlich
+(~2–10 % unter Last) für einen unmittelbar folgenden Lesevorgang noch
+nicht sichtbar, was zu vorzeitig aufgegebenen CAS-Übergängen führte.
+Mit einer Einzelhost-DSN (nur `localhost:5432`) liefen bei IDENTISCHEM
+Code 60/60 Wiederholungen fehlerfrei — dieselbe Testreihe mit der
+Mehrhost-DSN zeigte reproduzierbar vereinzelte Fehlschläge. Die
+Retry-Loop-Härtung (Fund 5 oben) reduziert die Auswirkung erheblich
+(von ca. 50 % auf ca. 2–10 % unter künstlichem Stress; im normalen
+Testbetrieb deutlich seltener), behebt aber nicht die zugrunde
+liegende DSN-Charakteristik selbst. **Bewusst nicht weiter verfolgt**
+diese Sitzung — das ist eine projektweite Eigenschaft der
+Patroni-Verbindungsschicht (`internal/db`/`dbtest`), betrifft
+potenziell jedes Paket mit schnellen Schreib-dann-Lese-Zyklen über eine
+neu geöffnete Verbindung, nicht spezifisch Kapitel 21. Empfehlung für
+eine künftige Sitzung: entweder pgx-Multi-Host-Verbindungsverhalten
+gezielt untersuchen (welcher Knoten wird bei einer neuen physischen
+Verbindung gewählt, wie verhält es sich bei mehreren Verbindungen
+kurz hintereinander), oder `dbtest`/`internal/db` so anpassen, dass
+Tests eine session-affine Verbindung statt eines rotierenden Pools
+nutzen. Bis dahin: ein vereinzelter, nicht reproduzierbarer
+`internal/process`-Testfehlschlag gegen die Mehrhost-Dev-Postgres ist
+bekannt und (wie der vorbestehende `internal/hosts`-Flake an anderer
+Stelle im Projekt) kein Hinweis auf einen Logikfehler — einfach erneut
+laufen lassen.
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber,
+`go test ./...` für das gesamte Orchestrator-Modul grün (bei erneutem
+Lauf reproduzierbar, s. o. zur bekannten DSN-Flakiness). 13 neue
+Engine-Tests (linearer Ablauf, Fan-out/Join, HumanTask-
+Entscheidungsrouting, Retry-Erfolg, Retry-Erschöpfung, Timeout,
+Kompensation-Erfolg, Kompensation-Fehlschlag, Subworkflow, Cancel-
+Unterbrechung, Neustart-Wiederaufnahme, Notification/Events, kein-
+Executor-Ehrlichkeit) plus 2 neue `Definition.Validate()`-Tests
+(Erreichbarkeit), alle real gegen Postgres, kein Mock. Kein API-/UI-
+Code, keine `main.go`-Verdrahtung (Phase 5). Details: UMSETZUNG.md §7
+(Status-Checkliste, Eintrag "Kapitel 21 Phase 3 Teil 1").

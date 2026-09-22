@@ -96,3 +96,23 @@ func TestValidateRejectsDanglingCompensation(t *testing.T) {
 		t.Fatalf("Validate() error = nil, want error for dangling compensation reference")
 	}
 }
+
+func TestValidateRejectsUnreachableStep(t *testing.T) {
+	d := Definition{StartStepID: "a", Steps: []Step{
+		{ID: "a", Type: StepTypeTask},
+		{ID: "orphan", Type: StepTypeTask}, // kein Next/Branches zeigt hierher
+	}}
+	if err := d.Validate(); err == nil {
+		t.Fatalf("Validate() error = nil, want error for unreachable step")
+	}
+}
+
+func TestValidateAllowsCompensationStepWithoutOtherPredecessor(t *testing.T) {
+	d := Definition{StartStepID: "a", Steps: []Step{
+		{ID: "a", Type: StepTypeTask, CompensationStepID: "rollback"},
+		{ID: "rollback", Type: StepTypeCompensation},
+	}}
+	if err := d.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil (compensation steps are reachable only via CompensationStepID)", err)
+	}
+}

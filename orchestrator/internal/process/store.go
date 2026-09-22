@@ -529,6 +529,37 @@ func (s *Store) GetStepExecution(id string) (ProcessStepExecution, error) {
 	return e, err
 }
 
+// GetOrCreateStepExecution legt eine StepExecution im Status "pending"
+// an oder liefert die bereits existierende Zeile zurück, falls schon
+// eine für (processExecutionID, stepID) existiert — atomar per `INSERT
+// … ON CONFLICT … DO UPDATE … RETURNING` (No-op-Update-Trick, damit
+// RETURNING auch im Konfliktfall die vorhandene Zeile liefert), gestützt
+// auf die Unique-Constraint aus 0020_process_step_executions_unique.sql.
+// Einziger Aufrufer ist die Runtime (engine.go) — ersetzt dort ein
+// racy Check-dann-Insert, das zwei gleichzeitige Engine-Polls (z. B.
+// während RecoverAll nach einem Neustart) sonst zu doppelten Zeilen
+// führen lassen könnte.
+func (s *Store) GetOrCreateStepExecution(processExecutionID, stepID string, stepType StepType, input json.RawMessage) (ProcessStepExecution, error) {
+	if processExecutionID == "" || stepID == "" {
+		return ProcessStepExecution{}, fmt.Errorf("process: processExecutionId and stepId are required")
+	}
+	id, err := newID()
+	if err != nil {
+		return ProcessStepExecution{}, err
+	}
+	if input == nil {
+		input = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC()
+	row := s.db.QueryRow(`
+		INSERT INTO process_step_executions (id, process_execution_id, step_id, step_type, status, attempt, input, output, error, row_version, started_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'pending', 1, $5, '{}', '', 1, $6, $6)
+		ON CONFLICT (process_execution_id, step_id) DO UPDATE SET step_id = EXCLUDED.step_id
+		RETURNING `+stepExecutionSelectColumns+`
+	`, id, processExecutionID, stepID, string(stepType), []byte(input), now)
+	return scanStepExecution(row)
+}
+
 // ListStepExecutions liefert alle Schrittläufe einer Execution in
 // Startreihenfolge — die Ausführungshistorie (A9: "GET .../history").
 func (s *Store) ListStepExecutions(processExecutionID string) ([]ProcessStepExecution, error) {
@@ -600,10 +631,16 @@ func (s *Store) SetStepExecutionOutput(id string, expectedRowVersion int, output
 }
 
 // RetryStepExecution führt den in StepExecutionTransitions vorgesehenen
-// failed->pending-Übergang aus UND zählt Attempt hoch, atomar in einem
-// UPDATE (A4: "Ein Step darf bei einem Retry keine unkontrollierten
-// Duplikate erzeugen" — dieselbe Zeile, kein neuer Datensatz je Versuch,
-// s. Moduldoku bei ProcessStepExecution).
+// failed/timed_out->pending-Übergang aus UND zählt Attempt hoch, atomar
+// in einem UPDATE (A4: "Ein Step darf bei einem Retry keine
+// unkontrollierten Duplikate erzeugen" — dieselbe Zeile, kein neuer
+// Datensatz je Versuch, s. Moduldoku bei ProcessStepExecution).
+//
+// Für EXTERNES/manuelles Wiederholen eines bereits terminal
+// gescheiterten Schritts (künftige Phase-5-API). Die Runtime selbst
+// (engine.go) nutzt für ihre EIGENE automatische Backoff-Schleife
+// bewusst NICHT diese Methode, sondern RecordAttemptAndContinue (s. u.)
+// — s. dortige Begründung (Crash-während-Backoff-Korrektheit).
 func (s *Store) RetryStepExecution(id string, expectedRowVersion int) (ProcessStepExecution, error) {
 	current, err := s.GetStepExecution(id)
 	if err != nil {
@@ -616,6 +653,34 @@ func (s *Store) RetryStepExecution(id string, expectedRowVersion int) (ProcessSt
 		UPDATE process_step_executions SET status = $3, attempt = attempt + 1, error = '', row_version = row_version + 1, updated_at = now(), completed_at = NULL
 		WHERE id = $1 AND row_version = $2
 	`, id, expectedRowVersion, StatusPending)
+	if err != nil {
+		return ProcessStepExecution{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ProcessStepExecution{}, ErrConcurrentModification
+	}
+	return s.GetStepExecution(id)
+}
+
+// RecordAttemptAndContinue erhöht Attempt und speichert eine
+// Zwischenfehlermeldung, OHNE den Status zu ändern (bleibt "running") —
+// für die runtime-eigene automatische Retry-Schleife (engine.go)
+// zwischen zwei Versuchen DESSELBEN Backoff-Zyklus. Bewusst NICHT über
+// "failed"/"timed_out": ein Prozess-Crash mitten in der Backoff-Pause
+// (B16: "Prozess killen, neu starten, Workflow läuft korrekt weiter")
+// darf den Schritt beim Wiederanlauf nicht fälschlich als endgültig
+// gescheitert erscheinen lassen — `computeFrontier`/`finalize` (s.
+// engine.go) behandeln "running" weiterhin als aktiv/in Bearbeitung,
+// nicht als abgeschlossen. Nur bei tatsächlich erschöpften Versuchen
+// schreibt die Runtime am Ende wirklich "failed"/"timed_out"
+// (UpdateStepExecutionStatus). WHERE status='running' ist eine
+// zusätzliche Absicherung (kein Aufruf gegen eine Zeile, die
+// zwischenzeitlich z. B. abgebrochen wurde).
+func (s *Store) RecordAttemptAndContinue(id string, expectedRowVersion int, lastError string) (ProcessStepExecution, error) {
+	res, err := s.db.Exec(`
+		UPDATE process_step_executions SET attempt = attempt + 1, error = $3, row_version = row_version + 1, updated_at = now()
+		WHERE id = $1 AND row_version = $2 AND status = $4
+	`, id, expectedRowVersion, lastError, StatusRunning)
 	if err != nil {
 		return ProcessStepExecution{}, err
 	}
@@ -708,6 +773,22 @@ func (s *Store) GetHumanTask(id string) (HumanTask, error) {
 // "GET .../tasks").
 func (s *Store) ListHumanTasksByExecution(processExecutionID string) ([]HumanTask, error) {
 	return s.queryHumanTasks(`process_execution_id = $1`, processExecutionID, `created_at ASC`)
+}
+
+// GetHumanTaskByStepExecution liefert den (höchstens einen) HumanTask
+// zu einer StepExecution — Grundlage für die idempotente Poll-Logik der
+// Runtime (Kapitel 21 Phase 3 Teil 1, engine.go): bevor ein
+// HumanTask/Approval-Schritt einen neuen Task anlegt, prüft er erst, ob
+// bereits einer existiert (z. B. nach einem Neustart mitten im Warten),
+// statt bei jedem Poll blind einen weiteren anzulegen. ErrNotFound, wenn
+// (noch) keiner existiert.
+func (s *Store) GetHumanTaskByStepExecution(stepExecutionID string) (HumanTask, error) {
+	row := s.db.QueryRow(`SELECT `+humanTaskSelectColumns+` FROM human_tasks WHERE step_execution_id = $1`, stepExecutionID)
+	t, err := scanHumanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return HumanTask{}, ErrNotFound
+	}
+	return t, err
 }
 
 // ListHumanTasksByAssignee liefert alle Tasks eines Assignees, offene
