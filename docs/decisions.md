@@ -27179,3 +27179,125 @@ Wiederauftreten des in Nachtrag 261 beobachteten, damals unbestätigten
 Einzel-Hangs. Kein API-/UI-Code (Phase 5, weiterhin offen). Details:
 UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 4 Teil
 2").
+
+## 2026-09-22 (Nachtrag 263) — Kapitel 21 Phase 5 Teil 1: Runtime-Verdrahtung (Process Engine + Outbox-Relay + TriggerListener) in main.go
+
+**Nutzerauftrag:** "proceed", direkt im Anschluss an Phase 4 Teil 2.
+Bis zu diesem Punkt liefen `internal/process`/`internal/asset`/
+`internal/outbox` ausschließlich in Tests — main.go kannte keines der
+drei Pakete. Dieser Teil ändert das für Process/Outbox (Asset bewusst
+noch nicht, s. u.).
+
+**JetStream-Stream `OMP_EVENTS`:** neuer, gemeinsamer Stream für
+Process-/Asset-Domain-Events (`Subjects: ["omp.asset.>",
+"omp.process.>"]`, `MaxAge: 30 Tage`, `Replicas: 3`, `FileStorage`) —
+gleiches Grundmuster wie `logbus.StreamName` (OMP_LOGS), aber ein
+eigener Stream statt eines pauschalen "omp.>": ein Alles-Stream hätte
+sich mit OMP_LOGS' und den Host-Metrics-Subjects unnötig überschnitten
+(dieselben Nachrichten wären doppelt gespeichert worden). Setup-Aufruf
+(`outbox.EnsureStream`, idempotent) läuft UNGEGATET auf jeder
+Cluster-Instanz — dieselbe Linie wie der bestehende OMP_LOGS-Stream-
+Setup-Code, kein Leader-Gating nötig für eine reine
+Create-or-Update-Operation. `nc == nil` (NATS unerreichbar) degradiert
+wie der Rest der Datei: `processJS` bleibt `nil`, Relay/TriggerListener
+werden dann gar nicht erst gestartet, State-Changes selbst
+funktionieren unverändert (asset-seitig erst ab Phase 5 Teil 2
+relevant, s. u.).
+
+**Engine-Konfiguration:** `process.NewEngine(processStore,
+process.WithEventPublisher(nc))` — `nc` selbst erfüllt
+`process.EventPublisher` (`Publish(subject string, payload []byte)
+error`), "workflow -> event" bleibt bewusst fire-and-forget wie der
+Rest von `internal/eventbus`, kein Outbox-Umweg für diese Richtung
+(nur B9 Asset-Events nutzen die Outbox, s. Nachtrag 261). Registriert
+sofort: `ServiceCall`/`MediaFunction` (brauchen nur `nodeHTTPClient`/
+`registry.Store`, keine Sicherheitsentscheidung) und `Script` mit einer
+Allow-Liste, die per `exec.LookPath("ffmpeg")`/`exec.LookPath
+("ffprobe")` ERMITTELT wird — nicht geraten (Projektgrundsatz "kein
+Raten"): ein auf dem jeweiligen Host nicht installiertes Programm
+bleibt schlicht draußen, referenzierende Script-Schritte scheitern dann
+ehrlich mit "nicht in der Allow-Liste". Beide Programme sind auf der
+aktuellen Entwicklungsmaschine vorhanden (`/usr/bin/ffmpeg`,
+`/usr/bin/ffprobe`, FFmpeg 5.1.9) — direkt verifiziert, nicht
+angenommen.
+
+**Export der Phase-4-Teil-2-Konstruktoren:** main.go konnte
+`newServiceCallExecutor`/`newScriptExecutor`/`newMediaFunctionExecutor`
+nicht aufrufen — alle drei waren paketintern (Kleinbuchstabe), passend
+für die reinen In-Package-Tests aus Phase 4 Teil 2, aber nicht für
+main.go als externen Aufrufer. `NewServiceCallExecutor`/
+`NewScriptExecutor` wurden umbenannt (ihre Signaturen brauchten ohnehin
+nur exportierte Typen). `newMediaFunctionExecutor` blieb paketintern
+(nimmt das unexportierte `methodInvoker`-Interface als Testnaht für
+`fakeNodeResolver`-Tests) — stattdessen ein neuer, schlanker
+`NewMediaFunctionExecutor(resolver NodeResolver, httpClient
+*http.Client) StepExecutor`, der intern `newHTTPMethodInvoker`
+verdrahtet, ohne main.go die interne Invoker-Abstraktion aufzudrängen.
+
+**Leader-Gating (D12 Teil 3):** `RecoverAll()`+`Shutdown()`,
+`outbox.Relay.Run`, `process.TriggerListener.Start()`/`Stop()` laufen
+alle über das bestehende `runWhileLeader`-Muster — dieselbe
+Mehrfacharbeits-Vermeidung wie `placementEngine.Run`/
+`workflowScheduler.Run`. Für Engine/TriggerListener (die kein
+einzelnes `Run(ctx)` haben, sondern ein Start-jetzt/Stop-später-API)
+je ein kleiner Adapter: `func(leaderCtx) { X.Start(); <-leaderCtx.
+Done(); X.Stop() }` (Engine analog mit `RecoverAll()`/`Shutdown()`).
+`Relay.Run(ctx)` passt bereits direkt in die `func(context.Context)`-
+Signatur, kein Adapter nötig.
+
+**`internal/asset` bewusst NOCH NICHT verdrahtet:** ein hier
+konstruierter `asset.Store` hätte ohne eine HTTP-API, die seine
+Methoden aufruft, keinen einzigen Aufrufer — Go verweigert das als
+unbenutzte Variable, und selbst wenn es kompilieren würde, wäre es tote
+Verdrahtung (kein Aufrufer bedeutet: B9-Events feuern nie, unabhängig
+davon, ob der Store existiert). `outboxStore`/`processEngine` dagegen
+haben schon jetzt echten Nutzen: der Relay kann ab sofort alles
+zustellen, was künftige Aufrufer einreihen, die Engine alles ausführen,
+was künftige Aufrufer anlegen — keine weitere main.go-Änderung nötig,
+sobald Phase 5 Teil 2 die HTTP-API ergänzt (auch für den Asset-Store).
+
+**Live-Verifikation gegen den echten laufenden Orchestrator** (Nutzer
+hat einem Neustart des produktiven Prozesses per Rückfrage
+ausdrücklich zugestimmt, da ein laufender, evtl. genutzter Prozess
+betroffen war): `make stop` (nur Orchestrator, Container/Postgres
+unangetastet) → `make start` (baut UI+Binary, startet neu, wartet auf
+`/healthz`) → sauberer Bootlog, keine neuen `process:`/`outbox:`-
+Fehler-/Warn-Zeilen, `GET /healthz` → `{"status":"ok"}`,
+`OMP_EVENTS`-Stream über die NATS-Monitoring-API (`GET :8222/jsz?
+streams=true`) bestätigt vorhanden und leer (erwartet — noch kein
+Aufrufer, s. o.).
+
+**Nebenbefund (kein Regressions-Bug, aber jetzt erstmals reproduzierbar
+statt nur einmalig beobachtet):** `go test ./internal/process/...`
+hing bei einem von mehreren Läufen dieser Sitzung exakt beim
+`TriggerListener`-Testteardown fest (Goroutine-Dump zeigte
+`consumeCtx.Stop()`-interne nats.go-Pull-Consumer-Goroutinen, die nach
+einem vorangegangenen, stressigen Testlauf nicht mehr zurückkehrten);
+in Isolation liefen dieselben zwei Tests danach mehrfach sauber und
+schnell (0,3-0,6s). Bestätigt den in Nachtrag 261 dokumentierten,
+damals einmaligen und unbestätigten Verdacht — jetzt mit klarerer
+Lokalisierung (spezifisch `TriggerListener`-Teardown, nicht irgendwo
+im gesamten Paket) und einer plausiblen Erklärung: dritte, bibliotheks-
+interne nats.go-Ebene (nicht unser Code) unter Ressourcen-Last aus
+vorangegangenen Testläufen. Kein Produktionsrisiko für main.go: anders
+als ein Test (dessen `t.Cleanup` synchron auf `Stop()`/`Shutdown()`
+wartet) wartet `runWhileLeader` NICHT auf die Rückkehr der von ihm
+gestarteten Funktion (`go fn(loopCtx)`, s. `startLeaderSession`) — ein
+hängendes `Stop()` würde beim Prozess-Exit lediglich eine Goroutine
+leaken, die Go beim Beenden von `main()` ohnehin verwirft, nicht den
+Shutdown-Pfad blockieren. Root Cause bewusst nicht weiterverfolgt
+(dieselbe "nicht jede Flakiness bis zum Letzten jagen"-Linie wie
+Nachtrag 260s Lehre, hier zusätzlich gerechtfertigt durch die fehlende
+Produktionsrelevanz). 19 aus vorangegangenen, abgebrochenen Testläufen
+verwaiste `TEST_OUTBOX_*`/`TEST_TRIGGER_*`-JetStream-Streams auf dem
+Dev-NATS-Cluster aufgeräumt (`t.Cleanup`-DeleteStream-Aufrufe laufen
+nie, wenn der Testprozess per `-timeout` hart beendet wird, statt
+regulär durchzulaufen).
+
+**Verifikation:** `go build ./...`/`go vet ./...`/`gofmt -l` sauber (3
+vorbestehende, unberührte `httpapi`-Formatierungsabweichungen
+ignoriert, s. bereits Nachtrag 258). Volle Modul-Suite (`go test
+./...`, alle 34 Pakete) grün. Kein HTTP-API-/UI-Code (Phase 5 Teil 2,
+eigene Sitzung — Asset-Domain-API + Process-Domain-API, dann
+`asset.NewStore` in main.go nachreichen). Details: UMSETZUNG.md §7
+(Status-Checkliste, Eintrag "Kapitel 21 Phase 5 Teil 1").

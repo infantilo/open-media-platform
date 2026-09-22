@@ -464,7 +464,8 @@ type serviceCallOutput struct {
 
 const defaultServiceCallTimeout = 30 * time.Second
 
-// newServiceCallExecutor liefert den Executor für ServiceCall-Schritte.
+// NewServiceCallExecutor liefert den Executor für ServiceCall-Schritte —
+// exportiert, main.go (Phase 5) registriert ihn per Engine.Register.
 // httpClient darf nil sein (http.DefaultClient). Bewusst NICHT
 // automatisch in NewEngine registriert (anders als die rein
 // strukturellen Typen aus Phase 3 Teil 1) — ServiceCall braucht echte
@@ -480,7 +481,7 @@ const defaultServiceCallTimeout = 30 * time.Second
 // wie bei internal/workflows' bestehenden Node-Aufrufen (nur
 // authentifizierte, mit configure/admin-Verb ausgestattete Nutzer
 // dürfen Definitionen anlegen, sobald die Phase-5-API das durchsetzt).
-func newServiceCallExecutor(httpClient *http.Client) StepExecutor {
+func NewServiceCallExecutor(httpClient *http.Client) StepExecutor {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -560,8 +561,11 @@ type mediaFunctionConfig struct {
 // generischen Node-Contract-Pfad auf (`POST /methods/<name>`, exakt
 // dasselbe Wire-Protokoll wie internal/workflows' Crosspoint-Aufrufe
 // und nodes/omp-node-sdk/src/server.rs route()). Bewusst NICHT
-// automatisch registriert (s. newServiceCallExecutor-Doku) — braucht
-// einen echten NodeResolver (main.go, Phase 5).
+// automatisch registriert (s. NewServiceCallExecutor-Doku) — braucht
+// einen echten NodeResolver (main.go, Phase 5). Nimmt bewusst das
+// unexportierte methodInvoker-Interface (statt direkt *http.Client) als
+// Testnaht — s. NewMediaFunctionExecutor für den exportierten
+// Regelfall-Konstruktor mit echtem HTTP-Invoker.
 //
 // Ist die Instanz gerade nicht online/registriert, scheitert der
 // Schritt ehrlich (ErrConcurrentModification-artig retrybar über A4,
@@ -583,6 +587,14 @@ func newMediaFunctionExecutor(resolver NodeResolver, invoker methodInvoker) Step
 		}
 		return out, nil
 	})
+}
+
+// NewMediaFunctionExecutor ist der exportierte Regelfall-Konstruktor —
+// main.go (Phase 5) registriert ihn per Engine.Register, ohne das
+// unexportierte methodInvoker-Interface (Testnaht, s. o.) selbst kennen
+// zu müssen. httpClient darf nil sein (http.DefaultClient).
+func NewMediaFunctionExecutor(resolver NodeResolver, httpClient *http.Client) StepExecutor {
+	return newMediaFunctionExecutor(resolver, newHTTPMethodInvoker(httpClient))
 }
 
 // ---- Script (A1, Kapitel 21 Phase 4 Teil 2) -----------------------------------------------
@@ -612,7 +624,8 @@ type scriptOutput struct {
 const defaultScriptTimeout = 5 * time.Minute
 const maxScriptOutputBytes = 1 << 20 // 1 MiB je Strom — ein Steuerungs-Output, kein Mediencontainer
 
-// newScriptExecutor liefert den Executor für Script-Schritte —
+// NewScriptExecutor liefert den Executor für Script-Schritte —
+// exportiert, main.go (Phase 5) registriert ihn per Engine.Register.
 // Aufgabenstellungs-Zusatzwunsch: "Datei-Workflows nach Möglichkeit auf
 // ffmpeg aufbauen". allowedCommands bildet einen im Graphen
 // referenzierbaren Namen (Config.Command) auf den TATSÄCHLICHEN,
@@ -621,9 +634,10 @@ const maxScriptOutputBytes = 1 << 20 // 1 MiB je Strom — ein Steuerungs-Output
 // §6.2: "der Orchestrator startet NUR Katalog-Einträge, keine freien
 // Kommandos"). Ein leeres allowedCommands macht JEDEN Script-Schritt
 // ehrlich fehlschlagen statt heimlich Programme aus dem PATH zu
-// akzeptieren — main.go (Phase 5) entscheidet bewusst, was erlaubt ist
-// (z. B. {"ffprobe": "/usr/bin/ffprobe", "ffmpeg": "/usr/bin/ffmpeg"}).
-func newScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepExecutor {
+// akzeptieren — main.go entscheidet bewusst, was erlaubt ist, per
+// exec.LookPath ermittelt statt geraten (z. B. {"ffprobe": "/usr/bin/
+// ffprobe", "ffmpeg": "/usr/bin/ffmpeg"}, falls auf dem Host installiert).
+func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepExecutor {
 	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
 		var cfg scriptConfig
 		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.Command == "" {

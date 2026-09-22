@@ -7,12 +7,14 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/alarmacks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
@@ -34,7 +36,9 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/profiles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
@@ -124,6 +128,22 @@ func hostIDFromEventsSubject(subject string) (string, bool) {
 // Entscheidungsschleifen übernimmt, als die Schleifen selbst ohnehin
 // zum Reagieren bräuchten.
 const leaderPollInterval = 2 * time.Second
+
+// processEventsStreamName/processEventsRetention (Kapitel 21 Phase 5
+// Teil 1, A8/B9): EIN gemeinsamer JetStream-Stream für alle Domain-
+// Events der Process-/Asset-Domäne (heute: B9 Asset-Lifecycle-Events
+// über internal/outbox) — gleiches "ein Stream pro Zuverlässigkeits-
+// Zweck"-Muster wie logbus.StreamName (OMP_LOGS), aber bewusst NICHT
+// über dasselbe "omp.>" wie ein hypothetischer Alles-Stream: würde sich
+// mit OMP_LOGS/Host-Metrics-Subjects unnötig überschneiden (doppelte
+// Speicherung derselben Nachrichten in zwei Streams). 30 Tage statt
+// logbus' 72h-Default: Domain-Events (Asset-Lifecycle, künftige
+// Workflow-Trigger) sind niedriges Volumen mit potenziell länger
+// nötiger Nachvollziehbarkeit, kein Log-Volumen-Problem.
+const (
+	processEventsStreamName = "OMP_EVENTS"
+	processEventsRetention  = 30 * 24 * time.Hour
+)
 
 // runWhileLeader startet fn (typischerweise ein Run(ctx)-Hintergrund-
 // Loop wie placement.Engine.Run/workflows.Scheduler.Run/
@@ -298,6 +318,36 @@ func main() {
 	}
 	logStore := logbus.NewStore(database, hub)
 	go logStore.RunRetention(ctx, cfg.LogRetentionHours)
+
+	// Kapitel 21 Phase 5 Teil 1 (A8/B9): JetStream-Stream für die
+	// Process-/Asset-Domain-Events (s. processEventsStreamName-Doku
+	// oben) — Setup läuft auf JEDER Instanz (CreateOrUpdateStream ist
+	// idempotent, gleiche Linie wie logbus' Stream-Setup oben, kein
+	// Leader-Gating nötig). nc == nil degradiert wie der Rest dieser
+	// Datei: processJS bleibt nil, asset.Store.enqueueEvent bleibt
+	// nil-sicher (State-Changes funktionieren unverändert, nur ohne
+	// Event-Zustellung), Outbox-Relay/TriggerListener werden unten gar
+	// nicht erst gestartet.
+	var processJS jetstream.JetStream
+	if nc != nil {
+		processJS, err = jetstream.New(nc)
+		if err != nil {
+			slog.Error("process: jetstream init failed, continuing without domain event delivery", "error", err)
+			processJS = nil
+		} else if _, err := outbox.EnsureStream(ctx, processJS, jetstream.StreamConfig{
+			Name:     processEventsStreamName,
+			Subjects: []string{"omp.asset.>", "omp.process.>"},
+			MaxAge:   processEventsRetention,
+			Storage:  jetstream.FileStorage,
+			// Gleiche Replikationstiefe wie OMP_LOGS/der 3-Knoten-NATS-
+			// Cluster selbst (D14) — Domain-Events überleben denselben
+			// Knotenausfall wie der Rest der Control-Plane.
+			Replicas: 3,
+		}); err != nil {
+			slog.Error("process: jetstream stream setup failed, continuing without domain event delivery", "error", err)
+			processJS = nil
+		}
+	}
 
 	// mTLS Orchestrator↔Nodes (UMSETZUNG.md D3, ARCHITECTURE.md §4.6) —
 	// opt-in über cfg.MTLSEnabled, Default aus. Ein nicht erreichbares
@@ -643,6 +693,85 @@ func main() {
 	go runWhileLeader(ctx, clusterNode, func(ctx context.Context) {
 		logbus.RunProjector(ctx, nc, logStore)
 	})
+
+	// Kapitel 21 Phase 5 Teil 1 (Workflow Engine + Asset/Content Domain
+	// Model): verdrahtet die seit Phase 2-4 nur intern getesteten Pakete
+	// internal/process/internal/outbox tatsächlich in den laufenden
+	// Orchestrator — vorher lief keine Zeile davon außerhalb von Tests.
+	// internal/asset (asset.NewStore) wird bewusst ERST in Phase 5 Teil 2
+	// konstruiert: ohne eine HTTP-API, die seine Methoden aufruft, hätte
+	// ein hier angelegter Store keinen einzigen Aufrufer (Go: "declared
+	// and not used") — tote Verdrahtung wäre schlechter als ehrliches
+	// Aufschieben. outboxStore/processEngine dagegen haben schon jetzt
+	// echten Nutzen (Relay kann ab sofort alles zustellen, was künftige
+	// Aufrufer einreihen; Engine kann ab sofort alles ausführen, was
+	// künftige Aufrufer anlegen) — keine weitere main.go-Änderung nötig,
+	// sobald Teil 2 die API ergänzt. Noch OHNE HTTP-API (Teil 2, eigene
+	// Sitzung) — dieser Teil macht B16 ("Prozess killen, neu starten,
+	// Workflow läuft korrekt weiter") im echten Betrieb möglich, sobald
+	// Teil 2 einen Weg liefert, überhaupt eine Execution anzulegen.
+	outboxStore := outbox.NewStore(database)
+	processStore := process.NewStore(database)
+	// EventPublisher = nc direkt (erfüllt process.EventPublisher: Publish
+	// (subject string, payload []byte) error) — "workflow -> event"
+	// bleibt bewusst fire-and-forget wie der Rest von internal/eventbus,
+	// s. engine.go-Moduldoku; kein Outbox-Umweg für diese Richtung.
+	processEngine := process.NewEngine(processStore, process.WithEventPublisher(nc))
+	// MediaFunction/ServiceCall brauchen keine zusätzliche Sicherheits-
+	// entscheidung (HTTP-Client + registry.Store genügen) — anders als
+	// Script (s. u.), daher immer registriert.
+	processEngine.Register(process.StepTypeServiceCall, process.NewServiceCallExecutor(nodeHTTPClient))
+	processEngine.Register(process.StepTypeMediaFunction, process.NewMediaFunctionExecutor(process.NewRegistryNodeResolver(store), nodeHTTPClient))
+	// Script (Aufgaben-Zusatzwunsch "Datei-Workflows nach Möglichkeit auf
+	// ffmpeg aufbauen"): die Allow-Liste wird per exec.LookPath ERMITTELT,
+	// nicht geraten (kein Raten, s. CLAUDE.md/UMSETZUNG.md §0) — ein auf
+	// diesem Host nicht installiertes Programm bleibt draußen, Script-
+	// Schritte, die es referenzieren, scheitern dann ehrlich mit "nicht
+	// in der Allow-Liste" statt eines Pfad-Ratespiels.
+	scriptAllowList := map[string]string{}
+	for _, name := range []string{"ffmpeg", "ffprobe"} {
+		if path, err := exec.LookPath(name); err == nil {
+			scriptAllowList[name] = path
+		} else {
+			slog.Warn("process: script executor: command not found, Script-Schritte dafür bleiben abgelehnt", "command", name)
+		}
+	}
+	if scriptEval, err := process.NewEvaluator(); err == nil {
+		processEngine.Register(process.StepTypeScript, process.NewScriptExecutor(scriptAllowList, scriptEval))
+	} else {
+		slog.Error("process: script executor: evaluator init failed, Script-Schritte bleiben unregistriert", "error", err)
+	}
+
+	// D12 Teil 3: gleiches Leader-Gating wie placementEngine.Run/
+	// workflowScheduler.Run oben — RecoverAll() unabhängig auf jeder
+	// Instanz aufzurufen wäre harmlos (CAS-Schutz, s. Engine-Doku), aber
+	// sinnlose Mehrfacharbeit; nur der Leader treibt Executions aktiv an.
+	// Engine.Shutdown() beim Führungsverlust statt nur RecoverAll()
+	// einmalig: eine Instanz, die die Führung verliert, darf ihre eigenen
+	// aktiven Zyklen nicht unbeaufsichtigt weiterlaufen lassen (der neue
+	// Leader startet sie über sein eigenes RecoverAll() ohnehin neu).
+	go runWhileLeader(ctx, clusterNode, func(leaderCtx context.Context) {
+		if err := processEngine.RecoverAll(); err != nil {
+			slog.Error("process: recover all executions failed", "error", err)
+		}
+		<-leaderCtx.Done()
+		processEngine.Shutdown()
+	})
+	// Outbox-Relay/TriggerListener bleiben aus, wenn kein JetStream
+	// erreichbar ist (processJS == nil, s. o.) — Asset-State-Changes und
+	// Prozess-Ausführung selbst funktionieren unverändert weiter, nur
+	// ohne Event-Zustellung bzw. Event-getriebenen Prozessstart.
+	if processJS != nil {
+		outboxRelay := outbox.NewRelay(outboxStore, processJS)
+		go runWhileLeader(ctx, clusterNode, outboxRelay.Run)
+
+		triggerListener := process.NewTriggerListener(processStore, processEngine, processJS, processEventsStreamName)
+		go runWhileLeader(ctx, clusterNode, func(leaderCtx context.Context) {
+			triggerListener.Start()
+			<-leaderCtx.Done()
+			triggerListener.Stop()
+		})
+	}
 
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)

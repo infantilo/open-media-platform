@@ -26,7 +26,7 @@ func TestEngineServiceCallInvokesRealHTTPServerAndCapturesResponse(t *testing.T)
 	t.Cleanup(srv.Close)
 
 	engine, store := testEngine(t)
-	engine.Register(StepTypeServiceCall, newServiceCallExecutor(nil))
+	engine.Register(StepTypeServiceCall, NewServiceCallExecutor(nil))
 
 	cfg := mustMarshal(t, serviceCallConfig{
 		Method:  http.MethodPost,
@@ -73,7 +73,7 @@ func TestEngineServiceCallNonSuccessStatusFailsTheStep(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	engine, store := testEngine(t)
-	engine.Register(StepTypeServiceCall, newServiceCallExecutor(nil))
+	engine.Register(StepTypeServiceCall, NewServiceCallExecutor(nil))
 
 	cfg := mustMarshal(t, serviceCallConfig{URL: srv.URL})
 	_, v := publishedVersion(t, store, Definition{
@@ -93,7 +93,7 @@ func TestEngineServiceCallNonSuccessStatusFailsTheStep(t *testing.T) {
 }
 
 func TestNewServiceCallExecutorRejectsMissingURL(t *testing.T) {
-	ex := newServiceCallExecutor(nil)
+	ex := NewServiceCallExecutor(nil)
 	ec := ExecutionCtx{Execution: ProcessExecution{}, StepExec: ProcessStepExecution{Attempt: 1}}
 	_, err := ex.Execute(context.Background(), ec, Step{ID: "call", Type: StepTypeServiceCall, Config: json.RawMessage(`{}`)})
 	if err == nil {
@@ -186,7 +186,7 @@ func TestEngineScriptRunsAllowedCommandWithTemplatedArgs(t *testing.T) {
 		t.Fatalf("NewEvaluator() error = %v", err)
 	}
 	engine, store := testEngine(t)
-	engine.Register(StepTypeScript, newScriptExecutor(map[string]string{"echo": "/bin/echo"}, eval))
+	engine.Register(StepTypeScript, NewScriptExecutor(map[string]string{"echo": "/bin/echo"}, eval))
 
 	cfg := mustMarshal(t, scriptConfig{Command: "echo", Args: []string{"${input.asset.name}", "fixed-arg"}})
 	_, v := publishedVersion(t, store, Definition{
@@ -228,7 +228,7 @@ func TestEngineScriptRejectsCommandOutsideAllowList(t *testing.T) {
 		t.Fatalf("NewEvaluator() error = %v", err)
 	}
 	engine, store := testEngine(t)
-	engine.Register(StepTypeScript, newScriptExecutor(map[string]string{"echo": "/bin/echo"}, eval))
+	engine.Register(StepTypeScript, NewScriptExecutor(map[string]string{"echo": "/bin/echo"}, eval))
 
 	cfg := mustMarshal(t, scriptConfig{Command: "rm", Args: []string{"-rf", "/"}})
 	_, v := publishedVersion(t, store, Definition{
@@ -253,7 +253,7 @@ func TestEngineScriptNonZeroExitFailsTheStep(t *testing.T) {
 		t.Fatalf("NewEvaluator() error = %v", err)
 	}
 	engine, store := testEngine(t)
-	engine.Register(StepTypeScript, newScriptExecutor(map[string]string{"false": "/bin/false"}, eval))
+	engine.Register(StepTypeScript, NewScriptExecutor(map[string]string{"false": "/bin/false"}, eval))
 
 	cfg := mustMarshal(t, scriptConfig{Command: "false"})
 	_, v := publishedVersion(t, store, Definition{
@@ -278,7 +278,7 @@ func TestEngineScriptTimeoutFailsTheStep(t *testing.T) {
 		t.Fatalf("NewEvaluator() error = %v", err)
 	}
 	engine, store := testEngine(t)
-	engine.Register(StepTypeScript, newScriptExecutor(map[string]string{"sleep": "/bin/sleep"}, eval))
+	engine.Register(StepTypeScript, NewScriptExecutor(map[string]string{"sleep": "/bin/sleep"}, eval))
 
 	cfg := mustMarshal(t, scriptConfig{Command: "sleep", Args: []string{"5"}, TimeoutSeconds: 1})
 	_, v := publishedVersion(t, store, Definition{
