@@ -2748,6 +2748,251 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 
 ---
 
+## 6b. Kapitel 21 — Workflow Engine + Asset/Content Domain Model
+
+Externe Aufgabenstellung des Nutzers (2026-09-22, Datei außerhalb des
+Repos: `~/Aufgabe Workflow und Asset.txt`, ~19 KB): OMP von einem primär
+technischen DMF/NMOS/MXL-Orchestrator zu einer professionellen "Media
+Operations Platform" weiterentwickeln — Teil A: generische, persistente
+Workflow-Runtime (Task/Condition/Branch/Parallel/Join/Human-Task/
+Approval/Subworkflow, Retry/Timeout/Recovery, Versionierung,
+Event-getrieben); Teil B: echtes Asset/Content-Domänenmodell
+(ContentObject/Asset/AssetVersion/Essence/Representation/Derivative/
+Collection/…, Versionierung, Storage-Abstraktion, Lifecycle, Events,
+Search), eng mit der Workflow-Runtime integriert. Vorgabe der
+Aufgabenstellung: Phase 1 ist **reine Analyse** (reuse/extend/refactor/
+new, kein Code) — dieser Abschnitt liefert genau das.
+
+### 21.1 Bestandsaufnahme (existing)
+
+**Services/Prozesse:** Go-Orchestrator (`orchestrator/`, ein Binary,
+Postgres+NATS), ~25 Rust-Nodes (`nodes/*`, GStreamer-Medienpfad, je
+eigener Prozess), Web-UI-Shell (`ui/`, vanilla TS/ESM, kein Framework/
+npm-Build), `host-agent`, `supervisor`. Kein API-Gateway/BFF (§4.1).
+
+**Bestehendes „Workflow"-Konzept (orchestrator/internal/workflows,
+D7 Teil 1+2, ~9400 Zeilen inkl. Tests):** **zentraler Befund — es ist
+kein Task-/Schritt-Graph, sondern ein Deployment-Bündel.** `Workflow`
+= `{ID, Name, Definition{Roles[], Connections[], Settings, Schedules[],
+Title/Description/Tags/Category}, Status, Runtime map[role]RoleRuntime}`
+(types.go). `Role` ist eine benötigte **Node-Rolle** (NodeType,
+Host-Präferenz, Affinity/Redundancy-Tags, IOPort-Anforderung) — kein
+Task/Condition/Branch. `Connection` ist Rolle→Rolle-**Verkabelung**
+(löst sich zu IS-05 auf), kein Kontrollfluss. `Status` kennt
+`stopped/starting/started/stopping/failed/paused/pausing` — ein reiner
+Prozess-Bündel-Lifecycle, keine Schritt-für-Schritt-Ausführungshistorie.
+`Schedule` ist Start/Stop-Zeitsteuerung (once/daily/weekly), keine
+Event-Trigger-Semantik. Persistenz: Postgres seit D1 (`store.go`),
+JSONB-Partial-Updates statt Get-then-Put (D7-Teil-2-Nachtrag, echter
+Blind-Overwrite-Race live gefunden+gefixt — **relevantes Muster für
+A3s "optimistic concurrency"-Anforderung**). Es existiert bereits ein
+Zustands-Capture/Restore-Mechanismus für laufende Node-Parameter
+(`state.go`, Sender-ID-Aliasing über Neustart hinweg) — konzeptionell
+verwandt, aber node-Bedienzustand, nicht Workflow-Ausführungszustand.
+**Konsequenz: der neue Aufgabentyp (Business-Prozess-Workflow) braucht
+eine eigene Domäne, nicht eine Erweiterung dieses Pakets** — s. 21.2.
+
+**Event-/NATS-Infrastruktur (`orchestrator/internal/eventbus`,
+ARCHITECTURE.md §4.2):** ein Go-NATS-Client, EIN Subject-Filter
+(`omp.>`), reines Broadcast-an-SSE-Hub (`eventbus.Connect`) — **kein
+JetStream, keine Persistenz, kein Store-and-forward.** Viele bestehende
+Events sind reine Trigger ohne Nutzlast (Client refetcht per REST, z. B.
+`audit.appended`), nicht Domain-Events mit Payload-Schema. Kein
+Correlation-/Causation-ID-Konzept auf Event-Ebene (wohl aber auf
+HTTP-Ebene, s. `tracing` unten). **A8/B9 brauchen daher eine echte
+Erweiterung, kein reines Draufsatteln** — ein bei NATS-Disconnect
+verlorener „AssetCreated"-Trigger darf einen Workflow nicht für immer
+unausgelöst lassen (Correctness-Priorität!); zu klären in Phase 3:
+JetStream (Persistenz im Bus selbst) vs. Postgres-Outbox-Pattern
+(Ausführung schreibt ausstehende Events transaktional mit ihrem
+eigenen State-Change, ein Publisher liest sie asynchron nach) — beides
+mit bestehender Infrastruktur (NATS bzw. Postgres) umsetzbar, kein
+neuer Fremd-Dienst nötig.
+
+**Audit (`orchestrator/internal/audit`, §12 Punkt 4):** eine flache
+Tabelle `audit_log(username, method, path, node_id, status)` —
+HTTP-Request-Log-Schema (Muster aus PIPELINE CONTROLLER übernommen),
+kein generisches Actor/Timestamp/Object/Action-Domain-Audit. „Asset
+created"/„Approval granted" passt nicht sauber in (Method,Path).
+**B13 extend, nicht reuse 1:1** — eigene, additive Domain-Audit-Tabelle
+im selben Paket/Store-Stil (best-effort Log, SSE-Broadcast-Trigger wie
+heute), HTTP-Audit bleibt unangetastet.
+
+**Authz (`orchestrator/internal/authz`, §12):** Rechte-Tripel
+(Subject, Scope, Verb), Verb-Hierarchie `view<operate<configure<admin`
+(`Verb.Covers`). Scope ist heute entweder eine Node-Instanz-ID, ein
+stabiler Workflow-Rollenname (Kapitel 12 Teil 4) oder `AnyNode`("*").
+**Keine tenant/organization/asset/collection-Dimension.** B14 verlangt
+genau diese Dimensionen zusätzlich — Erweiterung des `Binding`-Typs um
+weitere optionale Scope-Felder (ähnliches additive Muster wie
+`WorkflowID` in Kapitel 12 Teil 4), Verb-Hierarchie bleibt reuse.
+
+**Tracing (`orchestrator/internal/tracing`, §25.1):** existiert
+bereits — `trace_id`/`span_id` als eigenes schmales Schema (kein volles
+W3C-Trace-Context), über HTTP-Header Orchestrator→Node getragen.
+**B15 (Observability): größtenteils reuse** — für Workflow-Executions
+zusätzlich: `trace_id` als Spalte in der neuen Execution-Tabelle
+persistieren, `slog`-Strukturlogging-Konvention (bereits überall
+verwendet, key=value) fortsetzen, `internal/logbus` (zentraler
+Log-Ringpuffer/Projector) für Ausführungs-Logs mitnutzen statt neu zu
+bauen.
+
+**DB-Migrationen (`orchestrator/internal/db/migrations`):** 17
+sequenziell nummerierte `NNNN_name.sql`-Dateien, eigenes
+`schema_migrations`-Tracking (Erwähnung §17 Teil 5). Etabliertes,
+reuse-fähiges Muster — neue Tabellen (Asset/ProcessDefinition/
+ProcessExecution/HumanTask/…) folgen als `0018_…`ff.
+
+**Asset-/Media-Konzept (`nodes/omp-media-library`, C17, 662 Zeilen
+Rust):** ein reiner Control-Plane-Node, **kein Postgres, keine
+Persistenz über einen Prozessneustart hinaus** — scannt `OMP_MEDIA_DIR`
+bei jedem `scan()`-Aufruf neu, hält `Vec<CatalogEntry>` nur im RAM
+(`Mutex<LibraryState>`). `CatalogEntry{fileName, filePath, durationMs,
+video, audio[], segments[]}` — ein flaches technisches Dateikatalog-
+Schema, keine Versionierung, kein Lifecycle, keine Storage-Abstraktion
+(rohe lokale Pfade), keine Collections/Beziehungen, keine Events, keine
+Suche über den In-Memory-Scan hinaus. Nutzt `ffprobe` per
+`std::process::Command` (Metadaten-Extraktion — **reuse-fähiges
+Muster**, kein `ffmpeg`-Encode/Convert-Pfad vorhanden). **Fast
+vollständig B1-B12 = NEW** — der Node liefert nur einen wertvollen
+Ausschnitt (ffprobe-Scan-Pattern), ist aber architektonisch die falsche
+Stelle für das neue Domänenmodell (s. 21.2).
+
+**UI-Editor-Landschaft (`ui/graph/*`, `ui/shell/*`):**
+`flow-canvas.ts` (~2400 Zeilen) ist die **live NMOS-IS-04/05-
+Verkabelungs-Projektion** (§4.5a) — Kacheln=Registry-Resources,
+Kanten=IS-05-Connections, kein eigenes Datenmodell. `role-designer.ts`
+(Kapitel 12 Teil 6) ist ein **zweites** DOM-bindendes Element auf
+derselben, bewusst herausgelösten reinen Koordinaten-/Kompatibilitäts-/
+Gruppierungslogik (`geometry.ts`/`compatibility.ts`/`groups.ts`, DOM-
+frei, `deno test`-geprüft) — zeigt Rollen+Rolle→Rolle-
+Verbindungstemplate des bestehenden Workflow-Objekts, **kein**
+Task-/Bedingungs-/Branch-Editor. **Präzedenzfall genau für A10**: ein
+dritter Editor (Prozess-Schritt-Graph mit Condition/Branch/Parallel/
+Human-Task-Kacheln) kann dieselbe geteilte Koordinatenlogik
+wiederverwenden — neues DOM-Element, kein neues Zeichensystem. Kein
+Blockly, kein Node-basiertes JS-Framework irgendwo im Projekt (§4.5:
+bewusst „kein Framework-Zwang", React Flow für flow-canvas explizit
+verworfen) — s. offene Entscheidung 3 unten.
+
+**Expression Language:** kein `cel-go`/`expr-lang`/`govaluate`/
+ähnliches im `go.mod`. A5 braucht eine echte neue Abhängigkeit —
+Minimal-Dependency-Regel (§0 Punkt 5) verlangt vorherige Begründung,
+hier vorgemerkt für Phase 3 (nicht Teil von Phase 1/2).
+
+**Storage-Abstraktion:** nur als Zukunftsplan in ARCHITECTURE.md §4.4
+dokumentiert (Postgres für Metadaten, MinIO/S3-kompatibel „spätere
+Phase" für Assets) — kein einziger Storage-Provider-Trait/Interface im
+Code. B5 = vollständig NEW, aber deckungsgleich mit einer bereits
+länger geplanten, noch nicht eingelösten Architektur-Entscheidung.
+
+### 21.2 Zentrale Weichenstellung: Namenskollision „Workflow"
+
+Das bestehende `Workflow`-Objekt (Deployment-Bündel aus Node-Rollen,
+Operator-Begriff „Regieplatz", §6.2) und der in der neuen Aufgabe
+gemeinte „Workflow" (Business-Prozess-Schritt-Graph, BPMN-artig) sind
+**fachlich völlig verschiedene Konzepte, die zufällig denselben Namen
+tragen** — dieselbe Fallstrick-Klasse wie bereits einmal dokumentiert
+(`Role` vs. authz-Rollen, types.go Kommentar „Namenskollision im
+Konzeptpapier"). Empfehlung (DDD-Trennung laut Aufgabenstellung selbst
+verlangt, „keine unnötigen Breaking Changes"):
+
+- Bestehendes Paket `orchestrator/internal/workflows` samt API
+  (`/api/v1/workflows`) **unverändert lassen** — 9400 Zeilen,
+  produktiv, hoch verzahnt mit Placement/Scheduler/Failover/IO-Ports;
+  ein Rename wäre reines Verletzungsrisiko ohne fachlichen Gewinn.
+- Neue Domäne unter eigenem Namen **„Process"** (nicht „Workflow2"
+  o. ä.): Go-Paket `orchestrator/internal/process` (ProcessDefinition/
+  ProcessVersion/ProcessExecution/ProcessStepExecution/HumanTask),
+  eigener API-Pfad `/api/v1/process-definitions`,
+  `/api/v1/process-executions`, `/api/v1/human-tasks` (disjunkt von
+  `/api/v1/workflows`, folgt sonst 1:1 dem in der Aufgabendatei
+  skizzierten Muster). Operator-/UI-Text kann weiterhin „Workflow"
+  sagen (deckt sich mit der Aufgabenstellung und dem Nutzer-Vokabular)
+  — nur die Code-/API-Ebene bleibt eindeutig.
+- **Diese Namensentscheidung ist eine offene Frage an den Nutzer**,
+  keine stillschweigend getroffene — s. Entscheidung 1 unten.
+
+Zweite Weichenstellung: das neue Asset-Domänenmodell gehört **in den
+Orchestrator** (wo Postgres/Authz/Audit/Tracing bereits leben und wo
+Process-Executions ohnehin Assets referenzieren müssen), **nicht** in
+den bestehenden `nodes/omp-media-library`-Rust-Prozess (der hat keine
+Postgres-Anbindung und ist bewusst ein einfacher Control-Plane-Node).
+`omp-media-library` bliebe als dünner ffprobe-Scanner bestehen bzw.
+würde zu einem Aufrufer/Client der neuen Orchestrator-API — s.
+Entscheidung 2.
+
+### 21.3 Einordnung je Unterpunkt (reuse/extend/refactor/new)
+
+**Teil A — Workflow Engine**
+
+| # | Thema | Einordnung | Begründung (kurz) |
+|---|---|---|---|
+| A1 | Workflow Definition (Node-/Step-Typen) | **new** | kein Schritt-Graph-Typsystem vorhanden (21.1/21.2) |
+| A2 | Workflow Runtime (Instance/Execution/StepExecution/State) | **new**, extend-Muster übernehmen | neue Domäne `internal/process`; Postgres-Store-Stil, JSONB-Partial-Update-Muster aus D7-Teil-2 reuse |
+| A3 | Persistenz (durable/idempotent/optimistic concurrency/recovery) | **new Tabellen, reuse Infra** | Postgres (`internal/db`), `internal/dbtest`-Testisolation reuse |
+| A4 | Retry/Backoff/Circuit Breaker | **new** | kein generisches Retry-Framework; K7-Teil-1-Crash-Loop-Bremse nur als Stil-Vorbild, nicht wiederverwendbar |
+| A5 | Conditions/Expressions | **new** (+ neue Abhängigkeit) | kein CEL/expr-lib im Projekt, Minimal-Dependency-Begründung nötig |
+| A6 | Human Tasks | **new**, extend authz/audit | neue Entität; Zuweisung/Entscheidung nutzt erweiterten authz-Scope + neues Audit |
+| A7 | Workflow-Versionierung (draft/published/deprecated/archived) | **new Tabellen, reuse Muster** | strukturelles Vorbild: §17-Teil-5-Katalog-Versionierung (composite key, `ErrXAmbiguous`) |
+| A8 | Event-driven Execution | **extend** (mit Vorbehalt) | bestehender NATS-Bus ist fire-and-forget — Zuverlässigkeits-Lücke muss in Phase 3 architektonisch geschlossen werden (JetStream vs. Outbox), nicht einfach draufsatteln |
+| A9 | Workflow API | **extend** (Paketmuster), **new** Pfade | folgt `httpapi`-Handler-Konvention 1:1, eigener Pfad-Namensraum (21.2) |
+| A10 | Workflow UI (Editor) | **extend** (geteilte Graph-Logik), **new** Editor-Element | drittes `ui/graph`-DOM-Element wie `role-designer.ts`-Präzedenzfall |
+
+**Teil B — Asset/Content Model**
+
+| # | Thema | Einordnung | Begründung (kurz) |
+|---|---|---|---|
+| B1 | Core Content Model | **new** | `omp-media-library` hat kein Domänenmodell dieser Tiefe |
+| B2 | Asset | **new**, im Orchestrator (nicht im Rust-Node, s. 21.2) | Postgres/Authz/Audit-Anbindung nötig |
+| B3 | Versionierung | **new Tabellen, reuse Muster** | wie A7, §17-Teil-5-Vorbild |
+| B4 | Essence/Representation/Derivative | **new** | nichts Vergleichbares vorhanden |
+| B5 | Storage-Abstraktion | **new**, deckungsgleich mit geplanter Architektur | ARCHITECTURE.md §4.4 sieht MinIO/S3 bereits vor, nur nie gebaut |
+| B6/B7 | Metadata/-Schema | **new** | `CatalogEntry` ist zu flach (keine Custom-Schemas/Versionierung) |
+| B8 | Lifecycle-State-Machine | **new**, mit gemeinsamer Abstraktion | kleine geteilte `internal/statemachine`-Hilfe für Asset- UND ProcessExecution-Übergänge rechtfertigt sich durch echte Doppelnutzung (kein Premature-Abstraction-Verstoß) |
+| B9 | Asset Events | **extend** eventbus (mit A8-Vorbehalt) | neue `omp.asset.*`-Subjects, gleiche Zuverlässigkeitsfrage wie A8 |
+| B10 | Asset↔Workflow-Integration | **new** | Verknüpfungstabellen (Execution-Input/Output→AssetVersion) |
+| B11 | Search | **new Code, reuse Infra** | Postgres `tsvector`/GIN-Index statt neuer Suchtechnologie (Aufgabenstellung verlangt explizit „keine unnötige zusätzliche Datenbank") |
+| B12 | Collections/Beziehungen | **new** | nichts vorhanden |
+| B13 | Audit | **extend** (additive Domain-Tabelle) | bestehendes `audit_log`-Schema ist HTTP-Log-förmig, nicht Domain-Event-förmig |
+| B14 | Security (tenant/org/…) | **extend** authz.Binding | Verb-Hierarchie reuse, Scope-Dimensionen additiv erweitern |
+| B15 | Observability | **reuse** (trace_id/span_id, slog, logbus) | bereits vorhanden, nur konsequent mitnutzen |
+| B16 | Tests | **new Suiten, reuse Muster** | `internal/dbtest`-Isolation, K7/D12-Failure-Test-Kultur als Vorbild |
+
+### 21.4 Offene Entscheidungen vor Phase 2 (§0 Punkt 8: Optionen nennen, Nutzer entscheidet)
+
+1. **Namensraum „Process" statt zweitem „Workflow"** (s. 21.2) —
+   Empfehlung: annehmen (vermeidet Verwechslung/Merge-Konflikte mit
+   dem produktiven Regieplatz-Workflow). Alternative: bestehendes
+   Konzept umbenennen (höheres Risiko, kein fachlicher Gewinn) oder
+   beide „Workflow" nennen und nur über den API-Pfad unterscheiden
+   (mehr Verwechslungsgefahr im UI/Code, nicht empfohlen).
+2. **Asset-Domäne im Orchestrator statt in `omp-media-library`**
+   (s. 21.2) — Empfehlung: annehmen; `omp-media-library` wird
+   perspektivisch ein dünner ffprobe-Scan-Client der neuen
+   Orchestrator-API statt eigener Datenhalter. Alternative: Asset-Domäne
+   direkt in `omp-media-library` (Rust+eigene Postgres-Anbindung) —
+   würde eine zweite, zum Orchestrator parallele Datenbank-Anbindung
+   einführen (widerspricht „keine unnötige Service-/System-Vermehrung").
+3. **Kein Blockly/kein JS-Framework für den Prozess-Editor** — die
+   Aufgabenstellung nennt Blockly ausdrücklich als Vorbild. Empfehlung:
+   eigener, an `ui/graph`-Primitiven orientierter Block-Editor (konsistent
+   mit dem projektweiten Zero-Framework/Zero-npm-Grundsatz,
+   ARCHITECTURE.md §4.5). Alternative: echtes Blockly einbinden (npm/CDN-
+   Abhängigkeit, bricht mit der bisherigen Linie, aber schnellerer
+   Einstieg für Nicht-Techniker-UX). Nutzerentscheidung nötig, bevor A10
+   in Phase 5 gebaut wird — betrifft Phase 1 nicht blockierend.
+4. **A8/B9 Zuverlässigkeit: JetStream vs. Postgres-Outbox** — noch
+   nicht zu entscheiden (Phase 3-Thema), hier nur als bekannte Lücke
+   dokumentiert, damit Phase 2s Tabellendesign (Execution-Tabelle mit
+   `trace_id`/optionalem Outbox-Feld) sie nicht verbaut.
+
+Punkt 1 und 2 sollten vor Beginn von Phase 2 (Domain Model) geklärt
+sein, da sie Paketname/Tabellen-Ownership festlegen; Punkt 3/4 können
+parallel zu Phase 2 offenbleiben.
+
+---
+
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
 
 | Schritt | Status | Commit | Datum |
@@ -2954,3 +3199,4 @@ dortige Diagnose eine **Fehldiagnose** war — voller Befund in
 | mxl-fabrics unter MXL v1.1.0 GA nachgeprüft: ein echter Regressions-Bug gefunden+behoben | erledigt | Nutzerauftrag "den fabrics-gateway build mit MXL_ENABLE_FABRICS_OFI=ON jetzt prüfen" — direkte Umsetzung des in ARCHITECTURE.md §6.6/Nachtrag 231 vorgemerkten Prüfpunkts. `cmake --build` mit dem Flag explizit gegen den v1.1.0-Baum neu konfiguriert+gebaut (39/39 Targets grün); native `mxl-fabrics-tests` 9/10 grün (der eine Ausreißer ein isoliert reproduzierbar sauberer Upstream-Bulk-Run-Flake). **Echter Bug gefunden:** `mxlFabricsTargetSetup`/`-InitiatorSetup` schlugen mit "Missing transfer capability" fehl — `fabrics.h` erzwingt seit v1.1.0 GA normativ mindestens eine Transfer-Capability in `mxlFabricsInterfaceCaps.flags`, `omp_mediaio::fabrics::endpoint_config()` ließ dieses Feld bisher komplett genullt. Fix: `MXL_FABRICS_IFACE_CAP_REMOTE_WRITE` explizit gesetzt (von Hand nachgebildet wie `FABRICS_API_VERSION`, bindgen zieht das freistehende C-Enum nicht). Ein zweiter, zunächst wie ein weiterer Bug aussehender Fehler ("bounce buffer info required for sample egress protocol") entpuppte sich nach Root-Cause-Suche im Fabrics-Quellcode als eigener Testaufbau-Fehler (versehentlich an omp-sources Audio- statt Video-Sender verbunden) — mit dem richtigen Sender lief es beim ersten Versuch. Live-Ende-zu-Ende-Nachweis (Kapitel-16-Äquivalent): zwei echte `omp-fabrics-gateway`-Instanzen (Target+Initiator, zwei getrennte Domains) + echter `omp-source`, per IS-05-PATCH verbunden — `mxl-info` zeigte den Head-Index korrekt mit 25fps wachsen. `cargo build --workspace`/`test -p omp-mediaio` (16/16)/`clippy -p omp-mediaio -p omp-fabrics-gateway -D warnings` grün. Details: `docs/decisions.md` Nachtrag 232. | 2026-09-17 |
 | GPU-Telemetrie in der Placement-Engine (Punkt 4 der Qvest-Gap-Analyse) | erledigt | Nutzerauftrag "GPU-Telemetrie im Placement jetzt umsetzen" — letzter offener Punkt aus ARCHITECTURE.md §6.1 neben NIC-Bandbreite (2026-09-02). Design 1:1 am NIC-Präzedenzfall gespiegelt: `OMP_HOST_AGENT_GPU_INDEX` explizit konfiguriert statt automatisch erkannt (mehrere GPUs pro Host haben keine automatisch richtige Wahl), fail-open wenn nicht gesetzt/nvidia-smi fehlschlägt. Herstellerspezifisch wie von Anfang an dokumentiert (kein `/proc`-Äquivalent) — `nvidia-smi --query-gpu=... --format=csv` per `exec.CommandContext` (kein neuer Go-Dependency), `TakeGPU()` braucht anders als `Take()` keine Zwei-Zeitpunkt-Differenzmessung (utilization.gpu ist bereits eine Momentanauslastung). Alle vier Schichten: `host-agent/internal/telemetry` (`GpuSample`/`TakeGPU`), `host-agent/main.go` (Env-Var+Ticker-Integration), `orchestrator/internal/hosts` (`GpuMetrics`, keine `Tracker.Touch`-Änderung nötig), `orchestrator/internal/placement` (`Thresholds.GpuPercent`/`HealthyGpuPercent`, `gpuUtilizationPercent`, überall an denselben Stellen wie Netz eingehängt inkl. Tie-Break-Reihenfolge), `orchestrator/internal/config` (zwei neue Env-Vars), `ui/shell/hosts-view.ts` (eigene Spalte+Alarm-Banner-Anteil, `GET /api/v1/hosts` liefert `metrics.gpu` automatisch mit). 7 neue Tests (3 Parsing/TakeGPU, 4 Placement-Spiegelbilder der Netz-Tests). **Nebenbei gefundener echter Bug behoben:** `go build ./...` im Orchestrator schlug fehl — `internal/launcher/admission.go` rief `checker.Run` noch mit der alten 4-Parameter-Signatur auf, ein in der Nachtrag-230-Sitzung übersehener Aufrufer (dort nur `tools/contract-check` einzeln gebaut, nicht der ganze Workspace). `go build/vet/test ./...` für `host-agent`+`orchestrator` grün, `deno check`/`deno test ui/` (92/92) grün. `cargo deny check advisories` meldet eine vorbestehende, unabhängige RUSTSEC-Advisory (Cargo.lock vom 2026-09-14, vor dieser Sitzung) — separat zu entscheiden. Details: `docs/decisions.md` Nachtrag 233. | 2026-09-17 |
 | ARCHITECTURE.md §20.4 Restlücke "NATS-Verschlüsselung" — erledigt, opt-in mTLS | erledigt | Nutzerauftrag "Punkt 2" (mTLS Rust-Nodes/NATS-Verschlüsselung, die beiden 2026-08-10 zurückgestellten Restlücken). `make nats-tls-up` startet den Drei-Knoten-Cluster mit `--tls --tlsverify` auf dem Client-Port (4222-4224, Cluster-Routen 6222-6224 bewusst unangetastet — alle drei Knoten laufen ohnehin über 127.0.0.1); `make mtls-issue-certs` liefert `nats-server`/`nats-client` vom bestehenden step-ca. Echtes mTLS (nicht nur Server-TLS): EIN geteiltes `nats-client`-Zertifikat für Orchestrator/host-agent/jede Rust-Node-Instanz (Scope-Vereinfachung, keine Pro-Instanz-Identität). Go: `OMP_NATS_TLS_ENABLED`+`_CERT_FILE`/`_KEY_FILE`/`_CA_FILE`, `eventbus.Connect` nimmt jetzt einen optionalen `*tls.Config` (nil = Klartext, unverändert), host-agent eigene kleine Kopie derselben Ladefunktion (Modulgrenze, gleiches Muster wie `defaultNatsURL`). Rust: neues `health::NatsTlsConfig` (`async-nats`s `add_root_certificates`/`add_client_certificate`/`require_tls` unterstützen bereits volles mTLS), zentral an `node.rs`s einzigem `Publisher::connect`-Aufrufort gelesen — kein einzelner Node-Typ musste angefasst werden, nur die zwei `subscribe_tally`-Aufrufer (`omp-audio-mixer`/`omp-multiviewer-custom`) brauchten je eine Zeile. **Korrektur einer veralteten Architektur-Aussage dabei gefunden:** `tiny_http` 0.12 (bereits im Einsatz) unterstützt entgegen der bisherigen §20.4-Notiz sehr wohl Server-TLS (`ssl-rustls`-Feature) — macht die verbleibende "mTLS für die zehn Rust-Node-Typen (HTTP)"-Lücke kleiner als dokumentiert, aber weiterhin offen (kein eingebautes Client-Zertifikat-Verlangen in `tiny_http`, echtes Client-Cert-mTLS bräuchte einen eigenen rustls-Akzeptor — noch nicht entschieden, ob reine Server-TLS-Verschlüsselung hier schon reicht). Live Ende-zu-Ende verifiziert: NATS mit `--tlsverify` gestartet, ein noch plaintext-konfigurierter Orchestrator wurde nachweislich mit "TLS handshake error: remote error: tls: bad certificate" abgewiesen (Server-Log); danach Orchestrator mit den neuen Env-Vars neu gestartet — sauberer Connect, kein Disconnect-Log mehr, aktive JetStream-Leader-Wahl; ein echter `omp-source`-Node (geerbte TLS-Env vom Launcher) zeigte über `GET /api/v1/graph` `"health":"ok"` — Beweis, dass sowohl Go- als auch Rust-Client-Verbindung durchs mTLS-Handshake kamen. Danach bewusst zurück auf den Klartext-Dev-Default (`make nats-tls-down`), Default bleibt aus. `go build/vet/test` (orchestrator+host-agent) grün, `cargo build --workspace --bins`/`test -p omp-node-sdk` (74/74)/`clippy -p omp-node-sdk -p omp-audio-mixer -p omp-multiviewer-custom --all-targets -D warnings` grün. | 2026-09-21 |
+| Kapitel 21 Phase 1 (Workflow Engine + Asset/Content Domain Model — Analyse, kein Code) | erledigt | Nutzerauftrag "starte mit workflow/Asset phase 1" — externe Aufgabenstellung `~/Aufgabe Workflow und Asset.txt` (2026-09-22), Vorgabe der Aufgabe selbst: Phase 1 ist reine Bestandsaufnahme, kein Code. Vollständige Ist-Analyse in UMSETZUNG.md §6b (Kapitel 21) dokumentiert: bestehendes `internal/workflows` (D7) ist ein Deployment-Bündel aus Node-Rollen, KEIN Task-/Schritt-Graph — zentrale Namenskollision mit dem neu geforderten Business-Prozess-"Workflow" identifiziert und Trennung empfohlen (neue Domäne `internal/process`, eigener API-Namensraum, bestehendes Paket unangetastet). `nodes/omp-media-library` (C17) hat kein Postgres/keine Versionierung/kein Lifecycle — nur ffprobe-Scan-Pattern wiederverwendbar, neues Asset-Domänenmodell empfohlen im Orchestrator (nicht im Rust-Node) anzusiedeln. Bestehende Infrastruktur geprüft und je Punkt eingeordnet: `eventbus` (NATS, kein JetStream, fire-and-forget — Zuverlässigkeitslücke für A8/B9 dokumentiert, nicht verschwiegen), `audit` (HTTP-Log-Schema, braucht additive Domain-Tabelle für B13), `authz` (Verb-Hierarchie reuse, Scope-Dimensionen für B14 erweitern), `tracing`/`logbus` (trace_id/span_id + Strukturlogging bereits vorhanden, B15 größtenteils reuse), `internal/db/migrations`-Konvention, `internal/dbtest`-Testisolation, §17-Teil-5-Versionierungsmuster als Vorbild für A7/B3. Kompakte reuse/extend/refactor/new-Tabelle für alle A1-A10/B1-B16 erstellt. Vier offene Entscheidungen für den Nutzer vor Phase 2 benannt (§0 Punkt 8: Optionen+Empfehlung, kein Alleingang): (1) Namensraum "Process" statt zweitem "Workflow", (2) Asset-Domäne im Orchestrator statt in `omp-media-library`, (3) kein Blockly/JS-Framework für den Prozess-Editor trotz Aufgaben-Vorbild (Zero-Framework-Linie), (4) JetStream-vs-Outbox-Frage für Phase 3 vorgemerkt. Kein Code geschrieben (Vorgabe eingehalten). Details: `docs/decisions.md` Nachtrag 257. | 2026-09-22 |

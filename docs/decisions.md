@@ -26564,3 +26564,72 @@ Meta liest).
 **Für die nächste Sitzung zu diesem Thema:** ZUERST Live-Instrumentierung
 (Nachtrag 255s Lektion), dann diesen verfeinerten Ansatz probieren, nicht
 wieder reine Read-Loop-Drosselung.
+
+**Nachtrag (direkt danach, Nutzer):** Nutzer meldet dasselbe Freeze/
+Stall-Verhalten auch in der Kette Handy-Kamera → Switcher → Viewer, nicht
+nur im WebRTC-Retourbild — spricht gegen eine WebRTC-lokale Ursache und
+für ein systemweites Zeitbasis-Problem im DMF/MXL-Verbund. Nutzer-
+Direktive: durchgehende, konsistente Zeitbasis im gesamten Verbund ist
+oberste Prämisse; PTP folgt später, ein praktikabler, stabiler Fallback
+ist jetzt zuerst gefragt. Vertagt auf eine eigene künftige Sitzung
+(Nutzer hat diese Sitzung stattdessen mit Kapitel 21 begonnen, s. u.).
+Vollständig in Memory festgehalten (`project_webrtc_phone_gateway_2026_09_21.md`,
+Nachtrag 257 dort).
+
+## 2026-09-22 (Nachtrag 257) — Kapitel 21 Phase 1: Workflow Engine + Asset/Content Domain Model — Bestandsaufnahme
+
+**Nutzerauftrag:** "starte mit workflow/Asset phase 1" — externe
+Aufgabenstellung `~/Aufgabe Workflow und Asset.txt` (2026-09-22, nicht
+Teil des Repos): OMP soll eine professionelle, persistente Workflow-
+Engine (Teil A: Task/Condition/Branch/Parallel/Join/Human-Task/
+Approval/Subworkflow, Retry/Recovery, Versionierung, Event-getrieben)
+und ein professionelles Asset/Content-Domänenmodell (Teil B:
+ContentObject/Asset/AssetVersion/Essence/Representation/Derivative/
+Collection/…, Versionierung, Storage-Abstraktion, Lifecycle, Events,
+Search) bekommen, eng integriert. Die Aufgabenstellung selbst verlangt
+für Phase 1 ausdrücklich **nur Analyse, keinen Code** — genau das wurde
+diese Sitzung geliefert, vollständig dokumentiert in `UMSETZUNG.md`
+§6b (Kapitel 21).
+
+**Wichtigster Befund:** das bestehende `orchestrator/internal/workflows`
+(D7, ~9400 Zeilen) ist ein Deployment-**Bündel** aus Node-**Rollen**
+plus Rolle→Rolle-Verkabelung und Start/Stop-Zeitsteuerung — kein
+Task-/Schritt-Ausführungsgraph. Der neu geforderte "Workflow"-Begriff
+(Business-Prozess) trifft denselben Namen wie ein bereits bestehendes,
+grundverschiedenes, produktives Konzept — dieselbe Namenskollisions-
+Falle wie seinerzeit bei `Role` (types.go). Empfehlung: neue Domäne
+unter eigenem Paketnamen `internal/process` mit eigenem API-Namensraum
+(`/api/v1/process-definitions` etc.), bestehendes `internal/workflows`
+bleibt vollständig unangetastet (keine unnötigen Breaking Changes).
+Zweiter Befund: `nodes/omp-media-library` (C17) hat keine Postgres-
+Anbindung, keine Versionierung, keinen Lifecycle, keine Storage-
+Abstraktion — nur der `ffprobe`-Scan ist wiederverwendbar. Empfehlung:
+das neue Asset-Domänenmodell im Orchestrator ansiedeln (wo Postgres/
+Authz/Audit/Tracing bereits leben und wo Process-Executions ohnehin
+Assets referenzieren müssen), `omp-media-library` bliebe langfristig
+ein dünner Scan-Client davon.
+
+Bestehende, für Phase 2+ wiederverwendbare Infrastruktur identifiziert:
+Postgres-Migrationskonvention (`internal/db/migrations`, 17 Dateien),
+Testisolation (`internal/dbtest`), Versionierungsmuster (§17 Teil 5:
+composite key + `ErrXAmbiguous`, Vorbild für A7/B3), Tracing (`trace_id`/
+`span_id` bereits vorhanden, B15 größtenteils reuse), `logbus`/`slog`.
+Echte Lücke identifiziert statt verschwiegen: `eventbus` (NATS) ist
+reines Broadcast/fire-and-forget ohne JetStream-Persistenz — für A8/B9
+(zuverlässige Event-getriebene Ausführung) architektonisch nicht
+ausreichend, Klärung (JetStream vs. Postgres-Outbox) auf Phase 3
+vertagt, aber in Phase-2-Tabellendesign vorgemerkt (offene Entscheidung
+4). Kein CEL/expr-lib im `go.mod` — A5 (Expressions) braucht eine echte
+neue Abhängigkeit, Minimal-Dependency-Begründung folgt in Phase 3.
+
+Vier offene Entscheidungen für den Nutzer vor Phase 2 formuliert (§0
+Punkt 8: 2-3 Optionen + Empfehlung, Nutzer entscheidet): (1) Namensraum
+"Process" (empfohlen) vs. Umbenennung des Bestehenden vs. beide
+"Workflow" nennen; (2) Asset-Domäne im Orchestrator (empfohlen) vs. in
+`omp-media-library`; (3) kein Blockly/JS-Framework (empfohlen, folgt der
+bestehenden Zero-Framework-Linie) vs. echtes Blockly trotz Abweichung
+von dieser Linie — die Aufgabenstellung nennt Blockly ausdrücklich als
+Vorbild, daher bewusst nicht stillschweigend entschieden; (4) JetStream
+vs. Outbox, vertagt. Vollständige Tabelle (reuse/extend/refactor/new für
+A1-A10/B1-B16) in UMSETZUNG.md §6b, nicht hier dupliziert. Kein Code
+geschrieben, Vorgabe der Aufgabenstellung eingehalten.
