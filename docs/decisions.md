@@ -26360,3 +26360,25 @@ getaktete Eingaben vor dem Schreiben in den MXL-Flow glättet, statt sich
 auf reine Ankunftszeit-Pacing zu verlassen.
 
 **Dateien:** `deploy/dev/webrtc-static/index.html`.
+
+## 2026-09-22 (Nachtrag 252) — Session-Churn-Degradation: ein Fixversuch verworfen (kein Fund)
+
+Getestete Hypothese für das aus Nachtrag 247 bekannte, weiterhin offene
+Problem (viele Reconnects hintereinander degradieren irgendwann auf 0
+gesendete RTP-Pakete): `teardown()` löst `webrtcbin.set_state(Null)` nur
+AUS, wartet aber nicht auf den tatsächlichen Abschluss — bei einem
+festen ICE-Port (`ice.rs`) könnte eine unmittelbar folgende neue Sitzung
+das noch nicht freigegebene UDP-Socket des alten Agenten treffen.
+
+**Ergebnis: Hypothese falsch.** Fix (`webrtcbin.state(2s)` nach
+`set_state(Null)` in `monitor.rs` UND `pipeline.rs`) per selbem
+A/B-Stresstest wie in Nachtrag 250 geprüft — degradierte weiterhin ab
+Runde 1 (eher schlechter als besser). Wieder entfernt, keine
+unbestätigte Änderung im Code belassen (s. `docs/decisions.md`-Prinzip
+und [[feedback_verify_fix_before_reporting_success]]-Lektion).
+
+**Für später:** die eigentliche Ursache der Session-Churn-Degradation ist
+weiterhin unbekannt — nächster sinnvoller Schritt wäre GST_DEBUG-Tracing
+(wie in Nachtrag 250) über mehrere Reconnect-Runden hinweg, nicht nur
+über eine einzelne Sitzung, um zu sehen, was sich zwischen einer
+funktionierenden und der ersten fehlschlagenden Runde unterscheidet.
