@@ -26138,3 +26138,93 @@ Reconnect/Alarm bei Verbindungsabbruch, Auth für `/whip`/`/whep`.
 
 **Dateien:** `deploy/dev/webrtc-static/index.html` (neu), `deploy/dev/Caddyfile`,
 `deploy/dev/start-webrtc-phone.sh`, `Makefile` (`proxy-up`-Mount).
+
+## 2026-09-22 (Nachtrag 247) — Retourbild am Handy schwarz: root-caused (verstopfter Monitor-Prozess, kein Code-Bug)
+
+**Symptom (Nutzer-Report):** Nach einer Weile Handy-Test war das Retourbild
+(Monitor-Panel, eigene Kamera über MXL zurückgespiegelt) erst beeinträchtigt,
+dann dauerhaft schwarz — auch nach Neu-Laden der Seite auf dem Chromebook.
+
+**Diagnose (live, ohne zu raten):**
+1. `mxl-info` auf dem Kamera-Flow zeigte kontinuierlich frische Grains
+   (Head-Index lief weiter). Ein Frame direkt aus dem Flow gezogen
+   (`gst-launch-1.0 mxlsrc ... ! pngenc ! filesink`, GST_PLUGIN_PATH auf
+   `third_party/mxl/rust/target/debug/libgstmxl.so`) zeigte ein sauberes,
+   unbeschädigtes Bild — die Kamera-Decodierung war zu keinem Zeitpunkt das
+   Problem.
+2. `pc.getStats()` einer headless-Testsitzung gegen den (zu diesem
+   Zeitpunkt schon länger laufenden) Monitor-Node zeigte `connectionState:
+   connected`, ICE/DTLS `connected`, aber nur ~1,5 KB/7 Pakete insgesamt
+   (reine STUN/DTLS-Handshake-Bytes) — keine einzige `inbound-rtp`-Stat für
+   Video oder Audio. Die Sitzung war also am Transport erfolgreich
+   ausgehandelt, aber der Server sendete de facto NULL Medien-Pakete.
+3. Kontrollversuch nach einem Neustart der beiden Node-Prozesse: 3
+   aufeinanderfolgende WHEP-Verbindungen (1. Verbindung + 2 Reconnects)
+   liefen alle sauber (`framesDecoded` wächst, echtes Bild, keine
+   Nullwerte) — Reconnects sind demnach grundsätzlich NICHT kaputt.
+
+**Schluss:** kein Logik-Fehler im Reconnect-Pfad selbst, sondern ein
+Prozess geriet in einen verstopften Zustand, in dem neue WHEP-Sitzungen
+zwar sauber verhandeln, aber keine RTP-Pakete mehr senden — plausibelste
+Ursache: die vielen, teils überlappenden automatisierten Testverbindungen
+dieser Sitzung (mehrere headless-Chromium-Tabs gegen denselben Node kurz
+hintereinander/parallel) haben eine Pad-/Tee-Buchführung im laufenden
+GStreamer-Pipeline-Prozess durcheinandergebracht (`teardown()` und
+`whep_offer()` sind nicht gegeneinander serialisiert — ein `whep_offer()`
+während eines noch laufenden `teardown()` einer vorherigen automatisierten
+Testsitzung ist der wahrscheinlichste Auslöser). Nicht abschließend im Code
+lokalisiert (kein reproduzierbarer Minimalfall ohne die Test-Last), daher
+kein Codefix in dieser Sitzung — nur der Neustart als Sofortmaßnahme.
+Für später vorgemerkt: `whep_offer`/`teardown` in `monitor.rs` (und analog
+`whip_offer`/`teardown` in `main.rs`) gegen gleichzeitige Aufrufe
+serialisieren (z. B. ein Sitzungs-Mutex über die gesamte Auf-/Abbau-Dauer
+statt nur um die einzelnen Datenstrukturzugriffe), damit sich Reconnects
+nie überlappen können.
+
+**Sofortmaßnahme:** beide Node-Prozesse neu gestartet
+(`deploy/dev/start-webrtc-phone.sh`), IS-05 neu verdrahtet. Handy/Chromebook
+müssen die Seite neu laden, um eine frische Sitzung zu bekommen.
+
+**Nebenbefund:** eigene Testmethodik korrigiert — künftig nach
+Testverbindungen die Sitzung serverseitig sauber beenden (`DELETE
+/cam/whip` bzw. `/mon/whep`) statt nur den Browser zu killen, und keine
+mehreren headless-Tabs gegen denselben Node gleichzeitig offen lassen.
+
+## 2026-09-22 (Nachtrag 248) — Retourbild nach 1. Bild eingefroren: x264enc-Profil nicht festgelegt (echter Bug, gefixt)
+
+**Symptom (nach dem Neustart aus Nachtrag 247):** Monitor zeigte jetzt ein
+einzelnes Bild, dann Stillstand — reproduzierbar am echten Gerät
+(Chromebook-Browser), aber NICHT in zwei 16-sekündigen headless-
+Kontrolltests gegen exakt dieselbe Adresse (`127.0.0.1:9441` und
+`100.115.92.203:9441`) bei laufender, unverändert echter Kamera — dort lief
+das Bild beide Male durchgehend ohne `freezeCount`/`framesDropped`.
+
+**Root Cause:** `x264enc` hat keine eigene "profile"-Eigenschaft — das
+Profil ergibt sich ausschließlich aus den abwärts geforderten Caps. Ohne
+Capsfilter entscheidet libx264 selbst (typischerweise High-Profile, mit
+CABAC). Der Payloader-Pad-Probe (Nachtrag 244) streicht `profile-level-id`/
+`sprop-parameter-sets`/`profile` bewusst aus der SDP-Ankündigung, damit die
+Aushandlung mit dem Browser-Offer nicht scheitert — das bedeutet aber auch,
+dass NICHTS mehr garantiert, welches Profil tatsächlich im Bitstream
+steckt. Ein Decoder, der das erste (meist noch robust dekodierbare)
+Keyframe verkraftet, aber an einer CABAC-codierten Folgeframe hängen
+bleibt, zeigt genau "ein Bild, dann Stall" — der tolerante Software-Decoder
+in headless Chrome (`decoderImplementation: FFmpeg`, aus einem `pc.getStats()`-
+Dump dieser Sitzung) übersteht das, ein strengerer/hardwarenaher Decoder
+auf dem echten Gerät nicht zwangsläufig.
+
+**Fix (`nodes/omp-webrtc-gateway/src/monitor.rs`, `attach_video_branch`):**
+Capsfilter `video/x-h264,profile=constrained-baseline` zwischen `x264enc`
+und `rtph264pay` eingefügt (kein CABAC, keine B-Frames — Letzteres ohnehin
+schon per `bframes=0` erzwungen) — die am breitesten unterstützte Wahl,
+gerade für Hardware-Decoder auf Handys. Per direkter SPS-Byte-Analyse
+verifiziert (`gst-launch-1.0 x264enc ... ! video/x-h264,profile=
+constrained-baseline ! h264parse ! filesink`, NAL-Header von Hand geparst):
+`profile_idc=0x42` (Baseline) mit `constraint_set1=1` → tatsächlich
+Constrained Baseline, exakt der bereits in Nachtrag 244 erwähnte Wert
+`42c01f`. `cargo test`/`cargo clippy -D warnings` weiterhin sauber.
+
+**Weiterhin offen (aus Nachtrag 247):** `whep_offer`/`teardown` (und
+`whip_offer`/`teardown`) gegen gleichzeitige Aufrufe serialisieren.
+
+**Dateien:** `nodes/omp-webrtc-gateway/src/monitor.rs`.
