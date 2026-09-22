@@ -1,26 +1,23 @@
-// <omp-process-view> — Kapitel 21 Phase 6 Teil 1: UI für die neue
-// Process-Engine-Domäne (Definitions/Versions/Executions/HumanTasks,
-// disjunkt vom bestehenden Workflow-Tab — s. UMSETZUNG.md §6b/21.2
-// Namenskollisions-Entscheidung, "Process" ist der Business-Prozess-
-// Schritt-Graph, "Workflow" bleibt das Node-Rollen-Deployment-Bündel).
+// <omp-process-view> — Kapitel 21 Phase 6: UI für die neue Process-
+// Engine-Domäne (Definitions/Versions/Executions/HumanTasks, disjunkt
+// vom bestehenden Workflow-Tab — s. UMSETZUNG.md §6b/21.2 Namens-
+// kollisions-Entscheidung, "Process" ist der Business-Prozess-Schritt-
+// Graph, "Workflow" bleibt das Node-Rollen-Deployment-Bündel).
 // Konsumiert ausschließlich die in Kapitel 21 Phase 5 Teil 2 gebaute
 // HTTP-API (/api/v1/process-*, /api/v1/human-tasks).
 //
-// Bewusste Scope-Grenze dieser Runde (Nutzerentscheidung 2026-09-22,
-// UMSETZUNG.md §6b Entscheidung 3: eigener Editor auf ui/graph-Basis,
-// kein Blockly): der Schritt-Graph (Definition.steps) wird hier noch
-// als rohes JSON in einem <textarea> bearbeitet, NICHT im geplanten
-// visuellen Drag&Drop-Editor (der die geteilten geometry.ts/
-// compatibility.ts-Primitiven aus ui/graph wiederverwenden soll, s.
-// UMSETZUNG.md §6b 21.1 "Präzedenzfall genau für A10") — dieser Teil
-// macht zunächst das komplette Backend aus Phase 2-5 in der UI nutzbar
-// und testbar; der visuelle Editor ersetzt dann nur das JSON-<textarea>
-// in #renderVersionFormModal, alle übrigen Teile dieser Datei bleiben
-// unverändert. Gleiches Muster wie scheduler-view.ts, das ebenfalls
-// eine bestehende API-Form (hier: Definition.steps) direktmanipuliert.
+// Der Schritt-Graph (Definition.steps) wird seit Phase 6 Teil 2 über
+// <omp-process-editor> bearbeitet (Nutzerentscheidung 2026-09-22,
+// UMSETZUNG.md §6b Entscheidung 3: eigener visueller Editor auf
+// ui/graph-Basis, kein Blockly) — ein rohes JSON-<textarea> war Teil 1s
+// bewusst dokumentierte Übergangslösung, s. dortiger docs/decisions.md-
+// Nachtrag 266, jetzt ersetzt.
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import "../graph/process-editor.ts";
+import type { DraftDefinition } from "../graph/process-editor-logic.ts";
+import type { ProcessEditor } from "../graph/process-editor.ts";
 
 // Wire-Formate identisch zu internal/process (orchestrator/internal/
 // process/types.go) — eigene, lokale Deklaration statt eines Imports,
@@ -122,13 +119,6 @@ const TASK_BADGE: Record<string, string> = {
   delegated: "omp-badge-info",
 };
 
-const EXAMPLE_STEP_GRAPH = `{
-  "startStepId": "wait",
-  "steps": [
-    { "id": "wait", "type": "wait", "config": { "seconds": 5 } }
-  ]
-}`;
-
 const REFRESH_EVENT_TYPES = new Set(["lost-events"]);
 const POLL_FALLBACK_INTERVAL_MS = 15000;
 
@@ -159,7 +149,6 @@ class ProcessView extends HTMLElement {
   #username = "";
 
   #showDefForm = false;
-  #showVersionForm = false;
   #showStartForm = false;
   #startVersionId = "";
 
@@ -278,14 +267,26 @@ class ProcessView extends HTMLElement {
     showToast("Prozess-Definition angelegt.", { variant: "info" });
   }
 
-  async #createVersion(defId: string, stepGraphText: string, changeReason: string) {
-    let definition: unknown;
-    try {
-      definition = JSON.parse(stepGraphText);
-    } catch (err) {
-      showToast(`Ungültiges JSON: ${err instanceof Error ? err.message : String(err)}`, { variant: "error" });
-      return;
-    }
+  // Öffnet den visuellen Schritt-Graph-Editor als Vollbild-Overlay —
+  // gleiches Einhänge-Muster wie workflows-view.ts#openRoleDesigner
+  // (der dokumentierte Präzedenzfall für einen ui/graph-basierten
+  // Editor außerhalb von flow-canvas.ts): eigenes Element direkt an
+  // document.body, kein zusätzliches umschließendes .omp-modal (der
+  // Editor bringt seine eigene Vollbild-Toolbar samt Speichern/
+  // Abbrechen mit, s. process-editor.ts).
+  #openVersionEditor(defId: string) {
+    const editor = document.createElement("omp-process-editor") as ProcessEditor;
+    document.body.appendChild(editor);
+    editor.open(null);
+
+    const close = () => editor.remove();
+    editor.addEventListener("process-editor-cancel", close);
+    editor.addEventListener("process-editor-save", () => {
+      void this.#createVersion(defId, editor.getDefinition(), editor.getChangeReason(), close);
+    });
+  }
+
+  async #createVersion(defId: string, definition: DraftDefinition, changeReason: string, onSuccess: () => void) {
     const res = await apiFetch(`/api/v1/process-definitions/${defId}/versions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -295,7 +296,7 @@ class ProcessView extends HTMLElement {
       showToast(`Version anlegen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
       return;
     }
-    this.#showVersionForm = false;
+    onSuccess();
     await this.#loadVersionsAndExecutions(defId);
     this.#render();
     showToast(`Version angelegt${changeReason ? ` (${changeReason})` : ""}.`, { variant: "info" });
@@ -399,7 +400,6 @@ class ProcessView extends HTMLElement {
 
     if (this.#myTasks.length > 0) this.appendChild(this.#renderMyTasks());
     if (this.#showDefForm) this.appendChild(this.#renderDefFormModal());
-    if (this.#showVersionForm && this.#selectedDefId) this.appendChild(this.#renderVersionFormModal(this.#selectedDefId));
     if (this.#showStartForm && this.#selectedDefId) this.appendChild(this.#renderStartFormModal(this.#selectedDefId));
   }
 
@@ -487,8 +487,7 @@ class ProcessView extends HTMLElement {
     const newVersionBtn = document.createElement("button");
     newVersionBtn.textContent = "+ Neue Version";
     newVersionBtn.addEventListener("click", () => {
-      this.#showVersionForm = true;
-      this.#render();
+      if (this.#selectedDefId) this.#openVersionEditor(this.#selectedDefId);
     });
     heading.appendChild(newVersionBtn);
     section.appendChild(heading);
@@ -785,61 +784,6 @@ class ProcessView extends HTMLElement {
       }
     });
     queueMicrotask(() => nameInput.focus());
-    return overlay;
-  }
-
-  #renderVersionFormModal(defId: string): HTMLElement {
-    const overlay = document.createElement("div");
-    overlay.className = "omp-modal-overlay";
-    const modal = document.createElement("div");
-    modal.className = "omp-modal";
-    modal.style.maxWidth = "720px";
-
-    const title = document.createElement("div");
-    title.className = "omp-h1";
-    title.textContent = "Neue Version";
-    modal.appendChild(title);
-
-    const hint = document.createElement("div");
-    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0;";
-    hint.textContent = "Schritt-Graph als JSON (startStepId + steps[]) — der visuelle Editor folgt in Phase 6 Teil 2.";
-    modal.appendChild(hint);
-
-    const reasonInput = document.createElement("input");
-    reasonInput.placeholder = "Änderungsgrund (optional)";
-    reasonInput.style.cssText = "width:100%;margin-bottom:6px;box-sizing:border-box;";
-    modal.appendChild(reasonInput);
-
-    const jsonArea = document.createElement("textarea");
-    jsonArea.value = EXAMPLE_STEP_GRAPH;
-    jsonArea.rows = 14;
-    jsonArea.style.cssText =
-      "width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);" +
-      "resize:vertical;margin-bottom:var(--omp-space-3);";
-    modal.appendChild(jsonArea);
-
-    const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
-    cancelBtn.addEventListener("click", () => {
-      this.#showVersionForm = false;
-      this.#render();
-    });
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = "Anlegen";
-    saveBtn.addEventListener("click", () => void this.#createVersion(defId, jsonArea.value, reasonInput.value.trim()));
-    actions.append(cancelBtn, saveBtn);
-    modal.appendChild(actions);
-
-    overlay.appendChild(modal);
-    overlay.addEventListener("click", (ev) => {
-      if (ev.target === overlay) {
-        this.#showVersionForm = false;
-        this.#render();
-      }
-    });
     return overlay;
   }
 

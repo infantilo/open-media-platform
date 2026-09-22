@@ -27617,3 +27617,146 @@ Regression in bestehenden Views), `deno bundle` erfolgreich (38 statt
 37 Module — bestätigt, dass `process-view.ts` tatsächlich eingebunden
 wurde). Details: UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel
 21 Phase 6 Teil 1").
+
+## 2026-09-22 (Nachtrag 267) — Kapitel 21 Phase 6 Teil 2: visueller Drag&Drop-Schritt-Graph-Editor
+
+**Nutzerauftrag:** "fahre fort", direkt im Anschluss an Phase 6 Teil 1.
+Löst die dort bewusst dokumentierte Übergangslösung (rohes JSON-
+`<textarea>` für `Definition.steps`) ein — Phase 1 hatte `role-
+designer.ts` bereits explizit als "Präzedenzfall genau für A10"
+identifiziert (UMSETZUNG.md §6b 21.1): ein zweiter, abstrakter Knoten+
+Kanten-Graph-Editor (Rollen+Rolle→Rolle-Templates) auf denselben
+DOM-freien `ui/graph`-Primitiven wie der Live-NMOS-Flow-Editor, aber
+mit eigener, kleinerer Interaktionslogik statt einer gemeinsamen
+Basisklasse mit `flow-canvas.ts`.
+
+**Zwei neue Dateien, gleiches Trennungsmuster wie
+`role-designer.ts`/`role-designer-logic.ts`:**
+
+- `ui/graph/process-editor-logic.ts` (DOM-frei, `deno test`-geprüft,
+  16 neue Tests): `DraftStep`/`DraftDefinition` spiegeln
+  `orchestrator/internal/process/types.go` `Step`/`Definition` 1:1 im
+  JSON-Wire-Format (identische Feldnamen: `id`/`type`/`name`/`config`/
+  `next`/`branches`/`retry`/`timeoutSeconds`/`compensationStepId`) —
+  der Editor produziert am Ende exakt das JSON, das
+  `Definition.Validate()`/`Store.CreateVersion` erwartet, ohne
+  Transformationsschritt. Funktionen: `addStep` (macht den ersten
+  Schritt automatisch zum Start, sonst wäre ein frischer Graph sofort
+  ungültig), `removeStep`/`renameStepId` (räumen JEDE next-/branches-/
+  compensationStepId-/startStepId-Referenz mit auf — ein
+  Definitions-Torso wäre sonst die Folge, exakt dasselbe Muster wie
+  `role-designer-logic.ts#removeRole`/`#renameRole` für Rollennamen
+  statt Schritt-IDs), `addNextConnection` (lehnt Selbstschleifen/exakte
+  Duplikate ab), `addBranchConnection` (lehnt leeres Label/
+  Selbstschleifen ab, erlaubt bewusst das Überschreiben desselben
+  Labels — `branches` ist eine Map, ein zweiter Aufruf mit gleichem
+  Label ersetzt ohnehin nur das Ziel), `setStartStep`/
+  `setCompensationStep`/`updateStepFields`.
+- `ui/graph/process-editor.ts` (`<omp-process-editor>`): Custom
+  Element, Pointer-Interaktionsmuster (Pan/Zoom/Kachel-verschieben/
+  vom-Ausgangs-Anker-ziehen-zum-Verbinden/Kante-oder-×-anklicken-zum-
+  Entfernen) bewusst 1:1 von `role-designer.ts` gespiegelt — dieselbe
+  Begründung wie dort für dessen eigene, kleinere Kopie statt einer
+  dritten gemeinsamen Basisklasse (die Zustandsmaschine unterscheidet
+  sich genug: next- vs. branch- vs. compensation-Kanten statt eines
+  einzigen Verbindungstyps).
+
+**Wiederverwendet `geometry.ts` UNVERÄNDERT** (Pan/Zoom via
+`screenToWorld`/`worldToScreen`/`zoomAt`, `NODE_WIDTH`/`HEADER_HEIGHT`
+für die Kachel-Geometrie, `arrangeByFlow` für den "Auto-Anordnen"-
+Knopf — dieselbe layer-basierte Links-nach-rechts-Topologie-Anordnung,
+die für NMOS-Signalfluss gebaut wurde, passt unverändert auf einen
+Schritt-Graphen, da beides strukturell ein gerichteter Graph mit
+Quellen/Senken ist).
+
+**Kantentyp-Entscheidung nach dem Ziehen:** ein Ausgangs-Anker pro
+Kachel kann beliebig viele Kanten tragen (Next erlaubt AND-Fan-out,
+Branches mehrere benannte Fälle — exakt wie
+`process.Engine.computeFrontier`/`resolveSuccessors` es erwarten).
+Nach dem Ablegen einer gezogenen Verbindung entscheidet ein kleines
+Modal zwischen "Direkt (Next)" (blau, durchgezogen) und "Bedingt
+(Branch)" mit Label-Textfeld (orange, gestrichelt, Label als
+Kantenbeschriftung). `compensationStepId` ist bewusst KEINE Zieh-Kante
+— die Domäne behandelt sie explizit getrennt vom normalen Graph-
+Vorgänger-Pfad (`orchestrator/internal/process/validate.go`:
+Kompensationsschritte sind nur über `compensationStepId` erreichbar,
+nie über den regulären Next/Branches-Pfad) — stattdessen ein Dropdown
+im Konfigurations-Modal je Kachel, visuell nur als rot-gepunktete
+Linie zur Einordnung mitgezeichnet, nicht als interaktive Kante.
+
+**Bewusste Scope-Grenze:** die GRAPH-STRUKTUR (welche Schritte, wie
+verbunden, welcher Start) ist vollständig visuell — die pro-Schritt-
+Feinkonfiguration (Config/Retry) bleibt ein kleineres, in sich
+geschlossenes JSON-Feld im Konfigurations-Modal je Kachel. Eine
+eigene, reichhaltige Formular-UI für jeden der 17 Schritt-Typen (mit
+jeweils komplett anderer Config-Form: `wait.config.seconds` vs.
+`service_call.config.{method,url,headers,...}` vs. …) wäre eine
+eigene, deutlich größere Design-Sitzung wert gewesen — dasselbe
+Verhältnis wie `role-designer.ts`, das Rollen-Topologie visuell macht,
+aber Titel/Beschreibung/Tags im bestehenden Text-Formular belässt.
+
+**`ui/shell/process-view.ts` vereinfacht:** `#renderVersionFormModal`/
+`#showVersionForm`/`EXAMPLE_STEP_GRAPH` entfernt. "+ Neue Version"
+öffnet jetzt `<omp-process-editor>` als Vollbild-Overlay — gleiches
+Einhänge-Muster wie `workflows-view.ts#openRoleDesigner` (eigenes
+Element direkt an `document.body`, kein zusätzliches umschließendes
+`.omp-modal`, da der Editor seine eigene Vollbild-Toolbar samt
+Speichern/Abbrechen mitbringt). Der Editor trägt sein eigenes
+`changeReason`-Textfeld in der Toolbar (eine Stelle für die gesamte
+Versions-Erstellung statt eines zusätzlichen äußeren Formulars).
+`#createVersion` nimmt jetzt eine strukturierte `DraftDefinition`
+(vom Editor über `getDefinition()` gelesen) statt eines rohen
+JSON-Strings entgegen — kein `JSON.parse` mehr in `process-view.ts`.
+
+**Live per echtem Browser-Interaktionstest verifiziert** — diesmal mit
+ECHTEN synthetischen Maus-Events über CDP `Input.dispatchMouseEvent`
+statt reiner DOM-`element.click()`/`dispatchEvent`-Aufrufe wie in
+Phase 6 Teil 1: ein per `element.dispatchEvent(new PointerEvent(...))`
+ausgelöster `pointerdown` hat keinen vom Browser selbst als "aktiv"
+verfolgten Zeiger, `setPointerCapture()` (das der Editor beim
+Kachel-/Verbindungs-Ziehen aufruft, exakt wie `role-designer.ts`)
+würde dagegen werfen — echte Maus-Input-Simulation über Chromes
+Input-Pipeline (`Input.dispatchMouseEvent` mit `mousePressed`/
+`mouseMoved`/`mouseReleased`) erzeugt einen echten, vom Browser
+verfolgten Zeiger und umgeht das, exakt wie Puppeteer/Playwright
+Drag-Gesten intern implementieren. Durchgespielt: zwei Schritte per
+Paletten-Klick angelegt → ECHTER Ziehen-Vorgang vom Ausgangs-Anker zur
+Zielkachel (Koordinaten aus echten `getBoundingClientRect()`-Werten
+der beteiligten SVG-Elemente berechnet, nicht angenommen) öffnet das
+Kantentyp-Modal → "Direkt (Next)" gewählt → Kante gezeichnet (per
+DOM-Zählung bestätigt) → Start-Schritt umgeschaltet, Toolbar-Text
+aktualisiert sich live → Konfigurations-Modal geöffnet, Config-JSON
+gesetzt, übernommen → "Speichern" geklickt → Version erfolgreich
+angelegt (Toast, Editor schließt, neue Version erscheint in der
+Tabelle mit korrektem Start-Schritt).
+
+**Eine echte Backend-Validierungsablehnung dabei absichtlich provoziert
+und richtig eingeordnet statt als Bug missverstanden:** ein separater
+Testlauf verband zwei Schritte per Next-Kante und verschob DANACH den
+Start-Schritt auf den zweiten — der ursprüngliche erste Schritt wurde
+dadurch unerreichbar (kein Vorgänger mehr, nicht mehr Start).
+`Definition.Validate()` lehnte das beim Speichern korrekt mit 400/
+`ErrValidation` ab (per direktem `curl`-Nachbau desselben Payloads
+gegenverifiziert: exakt dieselbe Fehlermeldung). Ein erster
+Beobachtungsversuch hatte den Fehler-Toast schlicht verpasst (4s-
+Standarddauer, Prüfung kam Sekunden zu spät) und dadurch fälschlich
+nach einem UI-Bug ausgesehen — ein gezielter zweiter Testlauf mit
+sofortiger Prüfung direkt nach dem Klick bestätigte: Toast erscheint,
+Editor bleibt offen, keine ungültige Version wird angelegt. Kein Fund,
+korrektes Verhalten auf beiden Seiten (Backend-Ablehnung UND
+UI-Fehleranzeige).
+
+Zusätzlich verifiziert: "Auto-Anordnen" (drei unverbundene Schritte
+korrekt neu positioniert, per Vergleich der `transform`-Attribute vor/
+nach bestätigt) und "Abbrechen" (schließt den Editor ohne zu
+speichern, keine Version wird angelegt). Keine JavaScript-Fehler
+während des gesamten, mehrteiligen Testlaufs (`window.onerror`/
+`unhandledrejection`-Sammler nach jedem Schritt geprüft, durchgehend
+leer).
+
+**Verifikation:** `deno check` sauber, `deno test ui/` 113/113 grün
+(97 bestehende + 16 neue `process-editor-logic_test.ts`-Tests, keine
+Regression), `deno bundle` erfolgreich (40 statt 38 Module — bestätigt,
+dass beide neuen Dateien tatsächlich eingebunden wurden). Details:
+UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 6 Teil
+2").
