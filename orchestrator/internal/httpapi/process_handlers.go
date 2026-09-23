@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/statemachine"
 )
@@ -362,15 +363,47 @@ func handleGetHumanTask(svc ProcessStoreService) http.HandlerFunc {
 	}
 }
 
+// callerMayActOnHumanTask ist die Freigabe-Regel für assign/complete
+// (Kapitel 21 B14, live gefunden+gefixt in Nachtrag 274: beide
+// Endpunkte prüften bislang nur das GLOBALE VerbOperate, nicht ob der
+// Aufrufer tatsächlich currentAssignee ist — jeder Operate-Nutzer
+// konnte fremde Human-Tasks zuweisen/entscheiden). Ein noch
+// UNZUGEWIESENER Task (currentAssignee == "") bleibt weiterhin für
+// jeden Operate-Nutzer offen (Pool-/Rollen-Task, "Für mich
+// beanspruchen" — genau der Weg, über den `assignee` erst gesetzt
+// wird, s. ui/shell/process-view.ts #claimTask). Ist bereits jemand
+// zugewiesen, darf NUR dieser Nutzer selbst handeln (Entscheiden,
+// Freigeben/Weiterreichen über `assign` an jemand anderen) — oder ein
+// Admin als Eskalations-/Vertretungsweg. Keine authz.Binding-
+// Erweiterung nötig (das größere B14-Thema bleibt offen): reiner
+// Datenvergleich gegen das ohnehin schon geladene HumanTask.
+func callerMayActOnHumanTask(r *http.Request, authzStore AuthzChecker, currentAssignee string) bool {
+	actor := actorFromRequest(r)
+	if currentAssignee == "" || currentAssignee == actor {
+		return true
+	}
+	isAdmin, err := authzStore.Check(actor, authz.AnyNode, authz.VerbAdmin)
+	return err == nil && isAdmin
+}
+
 // handleAssignHumanTask liefert POST /api/v1/human-tasks/{id}/assign:
 // {"assignee": "..."} (pending -> claimed, A6).
-func handleAssignHumanTask(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleAssignHumanTask(svc ProcessStoreService, authzStore AuthzChecker, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Assignee string `json:"assignee"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		current, err := svc.GetHumanTask(r.PathValue("id"))
+		if err != nil {
+			writeProcessError(w, err)
+			return
+		}
+		if !callerMayActOnHumanTask(r, authzStore, current.Assignee) {
+			http.Error(w, "not assigned to this human task", http.StatusForbidden)
 			return
 		}
 		task, err := svc.AssignHumanTask(r.PathValue("id"), body.Assignee)
@@ -391,8 +424,10 @@ func handleAssignHumanTask(svc ProcessStoreService, domainAudit DomainAuditLogge
 // expectedRowVersion, A6). Die Engine (nicht der Store direkt)
 // entscheidet, weil ein abgeschlossener HumanTask/Approval-Schritt den
 // wartenden Ausführungszyklus wieder anstößt (s.
-// Engine.CompleteHumanTask-Doku).
-func handleCompleteHumanTask(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
+// Engine.CompleteHumanTask-Doku). svc wird NUR für die
+// Assignee-Freigabeprüfung gebraucht (callerMayActOnHumanTask), die
+// eigentliche Mutation bleibt bei engine.
+func handleCompleteHumanTask(engine ProcessEngineService, svc ProcessStoreService, authzStore AuthzChecker, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ExpectedRowVersion int    `json:"expectedRowVersion"`
@@ -402,6 +437,15 @@ func handleCompleteHumanTask(engine ProcessEngineService, domainAudit DomainAudi
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		current, err := svc.GetHumanTask(r.PathValue("id"))
+		if err != nil {
+			writeProcessError(w, err)
+			return
+		}
+		if !callerMayActOnHumanTask(r, authzStore, current.Assignee) {
+			http.Error(w, "not assigned to this human task", http.StatusForbidden)
 			return
 		}
 		task, err := engine.CompleteHumanTask(r.PathValue("id"), body.ExpectedRowVersion, body.Status, body.Decision, body.Comment)

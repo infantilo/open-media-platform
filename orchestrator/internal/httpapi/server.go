@@ -525,8 +525,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	mux.HandleFunc("GET /api/v1/human-tasks", g.requireAuth(handleListHumanTasksByAssignee(processStore)))
 	mux.HandleFunc("GET /api/v1/human-tasks/{id}", g.requireAuth(handleGetHumanTask(processStore)))
-	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore, options.domainAudit)))
-	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore, authzStore, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine, processStore, authzStore, options.domainAudit)))
 
 	// Asset/Content-Domäne (Kapitel 21 Phase 5 Teil 3, ARCHITECTURE.md
 	// Domain-Trennung Asset/Process). Anlegen (Asset/Version/

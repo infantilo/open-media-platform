@@ -28385,3 +28385,59 @@ B11 (Volltextsuche via `tsvector`/GIN statt der heutigen `LIKE`-Suche),
 B5 (Storage-Abstraktion — `asset.StorageLocation` existiert als
 minimaler Typ bereits, echter S3/MinIO-Provider fehlt noch und bräuchte
 zuerst eine Nutzerentscheidung zu neuer Infrastruktur, s. 21.4-Muster).
+
+## 2026-09-23 (Nachtrag 275) — Kapitel 21 B14: Human-Task-Assignee-Lücke gefixt (aus Nachtrag 274)
+
+Nutzerauftrag "fix and proceed", direkt im Anschluss an Nachtrag 274:
+behebt den dort live gefundenen, aber bewusst nicht gefixten Autorisierungs-
+Bug, bevor die Kapitel-21-B-Liste weitergeht.
+
+**Bug (bestätigt, nicht nur vermutet):** `POST /api/v1/human-tasks/{id}/
+assign` und `.../complete` prüften nur das GLOBALE `VerbOperate`, nicht
+ob der Aufrufer tatsächlich `task.Assignee` ist. Jeder Nutzer mit
+Operate-Recht konnte fremde Human-Tasks zuweisen/entscheiden.
+
+**Fix:** neue Freigabe-Regel `callerMayActOnHumanTask(r, authzStore,
+currentAssignee)` in `process_handlers.go` — reiner Datenvergleich
+gegen das bereits geladene `HumanTask.Assignee`, KEINE
+`authz.Binding`-Schema-Erweiterung nötig (das größere B14-Thema
+tenant/org/asset-Scope bleibt offen, hier nur der konkret gefundene
+Assignee-Fall):
+- unzugewiesener Task (`Assignee == ""`) bleibt für jeden Operate-
+  Nutzer offen — Pool-/Rollen-Task, genau der Weg, über den `assignee`
+  per „Für mich beanspruchen" erst gesetzt wird
+  (`ui/shell/process-view.ts#claimTask`: `assign(self)` dann
+  `complete("claimed")`, live im Quelltext nachgelesen statt geraten).
+- bereits zugewiesener Task: nur dieser Assignee selbst (Entscheiden,
+  oder Weiterreichen an jemand anderen über `assign`) oder ein Admin
+  (`authzStore.Check(actor, authz.AnyNode, authz.VerbAdmin)`,
+  Eskalations-/Vertretungsweg) dürfen handeln — sonst 403.
+`handleAssignHumanTask`/`handleCompleteHumanTask` laden dafür jetzt
+zuerst den aktuellen Task (`svc.GetHumanTask`), bevor sie mutieren.
+
+**Tests:** 8 neue Fälle in `internal/httpapi/process_handlers_test.go`
+(neue Fake-Doubles `fakeHumanTaskStore`/`fakeHumanTaskEngine`, da für
+Process/Asset-Handler bislang KEINE Unit-Tests existierten — nur Live-
+Verifikation laut Nachtrag 264/265): unzugewiesen→jeder darf claimen,
+fremd zugewiesen→403, aktueller Assignee darf weiterreichen, Admin darf
+übersteuern, gleiche vier Fälle für complete. Volle Go-Suite weiterhin
+34/34 Pakete grün, `gofmt`/`go vet` sauber.
+
+**Live verifiziert gegen die echte Dev-Instanz** (`make stop`+`make
+start`): echten Prozess mit `human_task`-Schritt (`assignee:
+"bob-b14-test"`) angelegt+veröffentlicht+gestartet, zwei echte Test-
+Nutzer angelegt (`eve-b14-test`, `bob-b14-test`, beide mit globalem
+Operate-Recht). `eve` versucht, Bobs Task zu entscheiden → **403** ("not
+assigned to this human task"). `bob` (der echte Assignee) claimt seinen
+eigenen Task → **200**, Status wechselt korrekt auf "claimed", Domain-
+Audit-Eintrag (Nachtrag 274) zeigt `actor: bob-b14-test`. `admin`
+übersteuert denselben Task danach (Eskalationsweg) → **200**. Alle drei
+Fälle genau wie vom Code-Review erwartet. Test-Nutzer+Rollenbindungen
+danach wieder gelöscht (echte Konten mit Passwörtern, anders als die
+üblicherweise stehengelassenen Test-Prozessdefinitionen/-Assets); die
+Test-Prozessdefinition "B14-Live-Test" bleibt wie gewohnt stehen.
+
+**Bewusst NICHT Teil dieses Fixes:** das größere B14-Thema (tenant/
+organization/asset/collection-Scope-Dimensionen in `authz.Binding`,
+s. 21.3) bleibt offen — dieser Fix schließt nur die konkret gefundene
+Assignee-Lücke, keine strukturelle authz-Erweiterung.
