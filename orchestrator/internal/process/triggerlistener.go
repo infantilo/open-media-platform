@@ -48,6 +48,15 @@ type TriggerListener struct {
 	done     chan struct{}
 	active   map[string]context.CancelFunc // Schlüssel: ProcessVersionID + "#" + Trigger-Index
 	activeWG sync.WaitGroup
+	// stopped wird von Stop() unter mu gesetzt und von Sync() unter mu
+	// geprüft, bevor es Consumer startet — s. Stop()-Doku zum Rennen.
+	stopped bool
+
+	// syncBeforeApply ist ein reiner Test-Einhängepunkt (nil in
+	// Produktion): läuft in Sync() zwischen dem (ungesperrten) Lesen der
+	// Definitionen und dem Anwenden unter mu — genau das Fenster, in dem
+	// ein paralleles Stop() früher einen Deadlock auslöste.
+	syncBeforeApply func()
 }
 
 // TriggerListenerOption konfiguriert einen neuen TriggerListener.
@@ -88,6 +97,7 @@ func (tl *TriggerListener) Start() {
 	tl.mu.Lock()
 	tl.cancel = cancel
 	tl.done = make(chan struct{})
+	tl.stopped = false
 	tl.mu.Unlock()
 
 	go func() {
@@ -118,6 +128,20 @@ func (tl *TriggerListener) Stop() {
 	// runConsumer() für immer auf <-ctx.Done() (echter, per Test
 	// gefundener Deadlock einer früheren Fassung — der Testlauf hing
 	// bis zum Timeout in genau diesem Stop()-Aufruf).
+	//
+	// Zweites, per Stack-Dump eines hängenden Testlaufs gefundenes
+	// Rennen (docs/decisions.md Nachtrag 269): liest Sync() gerade
+	// ungesperrt die Definitionen, während Stop() hier die aktiven
+	// Consumer abbricht, fand Sync() danach eine LEERE active-Map vor und
+	// startete die Consumer neu — mit einem Kontext, den niemand mehr
+	// abbricht. activeWG.Wait() unten blockierte dann für immer; in
+	// Produktion (Stop() bei Leader-Verlust, main.go) liefe der
+	// verwaiste Consumer zudem auf einem Nicht-Leader weiter. stopped
+	// (unter mu gesetzt, in Sync() unter mu geprüft) schließt das
+	// Fenster: Sync() wendet entweder VOR diesem Block an (dann bricht
+	// Stop() die neuen Consumer hier mit ab) oder danach (dann startet
+	// es nichts mehr).
+	tl.stopped = true
 	for key, consumerCancel := range tl.active {
 		consumerCancel()
 		delete(tl.active, key)
@@ -169,8 +193,15 @@ func (tl *TriggerListener) Sync(ctx context.Context) error {
 		}
 	}
 
+	if tl.syncBeforeApply != nil {
+		tl.syncBeforeApply()
+	}
+
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
+	if tl.stopped {
+		return nil
+	}
 
 	for key, w := range wanted {
 		if _, ok := tl.active[key]; ok {

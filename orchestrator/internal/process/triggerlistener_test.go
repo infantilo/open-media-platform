@@ -104,7 +104,12 @@ func TestTriggerListenerStartsExecutionOnMatchingEvent(t *testing.T) {
 func TestTriggerListenerIsIdempotentAgainstRedelivery(t *testing.T) {
 	engine, store := testEngine(t)
 	js, closeNC := testJetStream(t)
-	defer closeNC()
+	// t.Cleanup statt defer: defer liefe VOR den t.Cleanup-Funktionen,
+	// das DeleteStream unten träfe eine schon geschlossene Verbindung
+	// ("nats: connection closed", per `_ =` verschluckt) und ließe den
+	// TEST_*-Stream auf dem Dev-Cluster liegen — solche Reste häuften
+	// sich über Läufe an (s. docs/decisions.md Nachtrag 269).
+	t.Cleanup(closeNC)
 
 	streamName := "TEST_TRIGGER_" + mustNewTestID(t)
 	subject := "omp.test.trigger." + streamName + ".created"
@@ -196,4 +201,76 @@ func mustNewTestID(t *testing.T) string {
 		t.Fatalf("newID() error = %v", err)
 	}
 	return id
+}
+
+// Regressionstest (docs/decisions.md Nachtrag 269): ein Stop(), das genau
+// zwischen dem ungesperrten Definitions-Lesen und dem Anwenden eines
+// Sync() landet, darf weder hängen noch einen verwaisten Consumer
+// hinterlassen. Deterministisch über den syncBeforeApply-Einhängepunkt
+// statt über Timing-Glück.
+func TestTriggerListenerStopDuringSyncDoesNotLeakConsumer(t *testing.T) {
+	engine, store := testEngine(t)
+	js, closeNC := testJetStream(t)
+	t.Cleanup(closeNC)
+
+	streamName := "TEST_TRIGGER_" + mustNewTestID(t)
+	subject := "omp.test.trigger." + streamName + ".created"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:     streamName,
+		Subjects: []string{"omp.test.trigger." + streamName + ".>"},
+		MaxAge:   time.Minute,
+	})
+	cancel()
+	if err != nil {
+		t.Fatalf("CreateOrUpdateStream() error = %v", err)
+	}
+	t.Cleanup(func() { _ = js.DeleteStream(context.Background(), streamName) })
+
+	_, v := publishedVersion(t, store, Definition{
+		StartStepID: "noop",
+		Steps:       []Step{{ID: "noop", Type: StepTypeTask, Config: mustMarshal(t, notificationConfig{Subject: "noop"})}},
+		Triggers:    []EventTrigger{{Subject: subject}},
+	})
+
+	// Langes Intervall: nur der initiale Sync der Schleife läuft, der
+	// zweite kommt gezielt vom Test.
+	listener := NewTriggerListener(store, engine, js, streamName, WithTriggerSyncInterval(time.Hour))
+	listener.Start()
+	waitForConsumerActive(t, listener, v.ID, 3*time.Second)
+
+	stopReturned := make(chan struct{})
+	listener.syncBeforeApply = func() {
+		go func() {
+			listener.Stop()
+			close(stopReturned)
+		}()
+		// Warten, bis Stop() die aktiven Consumer abgeräumt und mu wieder
+		// freigegeben hat — erst DANN darf Sync() anwenden (das Rennen).
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			listener.mu.Lock()
+			n := len(listener.active)
+			listener.mu.Unlock()
+			if n == 0 {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if err := listener.Sync(context.Background()); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+
+	select {
+	case <-stopReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() did not return — Sync() restarted a consumer after Stop() cleared them")
+	}
+	listener.mu.Lock()
+	n := len(listener.active)
+	listener.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("active consumers after Stop() = %d, want 0", n)
+	}
 }

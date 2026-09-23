@@ -44,7 +44,12 @@ func uniqueStreamName(t *testing.T) string {
 
 func TestRelayPublishesAndMarksDispatched(t *testing.T) {
 	js, closeNC := testJetStream(t)
-	defer closeNC()
+	// t.Cleanup statt defer: defer liefe VOR den t.Cleanup-Funktionen,
+	// das DeleteStream unten träfe eine schon geschlossene Verbindung
+	// ("nats: connection closed", per `_ =` verschluckt) und ließe den
+	// TEST_*-Stream auf dem Dev-Cluster liegen — solche Reste häuften
+	// sich über Läufe an (s. docs/decisions.md Nachtrag 269).
+	t.Cleanup(closeNC)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -118,7 +123,12 @@ func TestRelayIsResilientToUnreachableJetStreamThenRecovers(t *testing.T) {
 	// NICHT als dispatched markieren — er muss beim nächsten Zyklus
 	// erneut versucht werden (kein stiller Datenverlust).
 	js, closeNC := testJetStream(t)
-	defer closeNC()
+	// t.Cleanup statt defer: defer liefe VOR den t.Cleanup-Funktionen,
+	// das DeleteStream unten träfe eine schon geschlossene Verbindung
+	// ("nats: connection closed", per `_ =` verschluckt) und ließe den
+	// TEST_*-Stream auf dem Dev-Cluster liegen — solche Reste häuften
+	// sich über Läufe an (s. docs/decisions.md Nachtrag 269).
+	t.Cleanup(closeNC)
 	// Kurzes Timeout bewusst: ein Publish ohne registrierten Stream für
 	// das Subject blockiert bis zum Kontext-Timeout (kein sofortiger
 	// "stream not found"-Fehler bei diesem JetStream-Server) — 2s reichen
@@ -157,7 +167,12 @@ func TestRelayIsResilientToUnreachableJetStreamThenRecovers(t *testing.T) {
 
 func TestRelayStartStop(t *testing.T) {
 	js, closeNC := testJetStream(t)
-	defer closeNC()
+	// t.Cleanup statt defer: defer liefe VOR den t.Cleanup-Funktionen,
+	// das DeleteStream unten träfe eine schon geschlossene Verbindung
+	// ("nats: connection closed", per `_ =` verschluckt) und ließe den
+	// TEST_*-Stream auf dem Dev-Cluster liegen — solche Reste häuften
+	// sich über Läufe an (s. docs/decisions.md Nachtrag 269).
+	t.Cleanup(closeNC)
 
 	streamName := uniqueStreamName(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
