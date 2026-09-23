@@ -39,6 +39,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/objectstore"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
@@ -575,6 +576,32 @@ func main() {
 	// Nutzerentscheidung 2026-09-23: generische Link-API).
 	assetLinkStore := assetlinks.NewStore(database)
 
+	// MinIO/S3-Objektspeicher (Kapitel 21 B5, Nachtrag 280,
+	// Nutzerentscheidung 2026-09-23: echte MinIO/S3-Anbindung statt der
+	// schlankeren Referenz-Abstraktion). Additiv wie mTLS: leeres
+	// OMP_MINIO_ENDPOINT lässt objStoreSvc als nil-Interface, die
+	// Presigned-URL-Endpunkte antworten dann 503 statt zu crashen (s.
+	// httpapi.handleCreateUploadURL-Doku). Verbindungsfehler beim Start
+	// (z. B. MinIO nicht erreichbar) sind bewusst NICHT fatal — anders
+	// als Postgres/NATS ist Objektspeicher (noch) keine für den Rest des
+	// Orchestrators notwendige Abhängigkeit.
+	var objStoreSvc httpapi.ObjectStoreService
+	if cfg.MinioEndpoint != "" {
+		objStore, err := objectstore.NewClient(ctx, objectstore.Config{
+			Endpoint:  cfg.MinioEndpoint,
+			AccessKey: cfg.MinioAccessKey,
+			SecretKey: cfg.MinioSecretKey,
+			Bucket:    cfg.MinioBucket,
+			UseSSL:    cfg.MinioUseSSL,
+		})
+		if err != nil {
+			slog.Warn("objectstore: setup failed, upload/download URLs stay disabled", "error", err)
+		} else {
+			objStoreSvc = objStore
+			slog.Info("objectstore: connected", "endpoint", cfg.MinioEndpoint, "bucket", cfg.MinioBucket)
+		}
+	}
+
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
 
@@ -789,7 +816,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithObjectStore(objStoreSvc))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

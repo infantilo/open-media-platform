@@ -590,6 +590,17 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/asset-versions/{id}/representations", g.requireVerbGlobal(authz.VerbConfigure, handleCreateRepresentation(assetSvc)))
 	mux.HandleFunc("GET /api/v1/representations/{id}", g.requireAuth(handleGetRepresentation(assetSvc)))
 	mux.HandleFunc("DELETE /api/v1/representations/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteRepresentation(assetSvc)))
+	// Presigned-Upload-/Download-URLs (Kapitel 21 B5, Nachtrag 280,
+	// Nutzerentscheidung 2026-09-23: echte MinIO/S3-Anbindung). Beide
+	// Handler antworten 503, solange `options.objectStore` nil ist (kein
+	// konfiguriertes MinIO) — kein separater "ist aktiv"-Registrierungs-
+	// Zweig nötig wie bei den anderen optionalen Routen, weil dieser
+	// Zustand hier eine ehrliche, für den Aufrufer sichtbare Antwort
+	// verdient, kein stilles 404. Hochladen ist "configure" (legt neuen
+	// Speicherplatz an, wie Representation anlegen), Herunterladen
+	// lesend.
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/upload-url", g.requireVerbGlobal(authz.VerbConfigure, handleCreateUploadURL(assetSvc, options.objectStore)))
+	mux.HandleFunc("GET /api/v1/representations/{id}/download-url", g.requireAuth(handleCreateDownloadURL(assetSvc, options.objectStore)))
 
 	// Collections/Beziehungen (Kapitel 21 B12, Nachtrag 276). Anlegen/
 	// Umbenennen/Löschen einer Collection ist "configure" (Katalog-

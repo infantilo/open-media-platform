@@ -28,6 +28,7 @@ type handlerOptions struct {
 	domainAudit    DomainAuditLogger
 	domainAuditR   DomainAuditReader
 	assetLinks     AssetLinkService
+	objectStore    ObjectStoreService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
@@ -50,6 +51,16 @@ func WithDomainAudit(logger DomainAuditLogger, reader DomainAuditReader) Handler
 // Muster wie WithAlarmAckStore/WithDomainAudit.
 func WithAssetLinks(svc AssetLinkService) HandlerOption {
 	return func(o *handlerOptions) { o.assetLinks = svc }
+}
+
+// WithObjectStore aktiviert Presigned-Upload-/Download-URLs für die
+// Asset-Domäne (Kapitel 21 B5, Nachtrag 280) — gleiches optionales
+// Muster wie die anderen With*-Optionen. Fehlt die Option (kein
+// konfiguriertes MinIO/S3, s. objectstore-Paketdoku), bleiben die
+// Endpunkte inaktiv statt mit nil-Panic zu crashen — die Handler prüfen
+// `store == nil` selbst und antworten 503.
+func WithObjectStore(svc ObjectStoreService) HandlerOption {
+	return func(o *handlerOptions) { o.objectStore = svc }
 }
 
 const alarmAckChangedEvent = "alarm.ack.changed"

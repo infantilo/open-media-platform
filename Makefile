@@ -284,6 +284,7 @@ status:
 	done
 	@podman container exists omp-step-ca && echo "step-ca: läuft" || echo "step-ca: gestoppt (optional, siehe 'make mtls-up')"
 	@podman container exists omp-caddy && echo "Caddy-Reverse-Proxy: läuft, https://localhost:8443" || echo "Caddy-Reverse-Proxy: gestoppt (optional, siehe 'make proxy-up')"
+	@podman container exists omp-minio && echo "MinIO: läuft, http://localhost:9000 (Konsole :9001)" || echo "MinIO: gestoppt (optional, siehe 'make minio-up')"
 	@if [ -f .run/supervisor.pid ] && kill -0 "$$(cat .run/supervisor.pid)" 2>/dev/null; then \
 		echo "Supervisor (Backup/Restore): läuft (PID $$(cat .run/supervisor.pid))"; \
 	else \
@@ -463,6 +464,36 @@ proxy-up:
 proxy-down:
 	-podman stop omp-caddy
 	-podman rm omp-caddy
+
+# MinIO (S3-kompatible Storage-Abstraktion, Kapitel 21 B5 — Nutzer-
+# entscheidung 2026-09-23, UMSETZUNG.md 21.5: echte MinIO/S3-Anbindung
+# statt der schlankeren Referenz-Abstraktion). Eigenes Opt-in-Target
+# wie mtls-up/proxy-up, NICHT Teil von `up`: nicht jede Sitzung braucht
+# Storage-Uploads, kein unnötiger Container standardmäßig. Standard-
+# MinIO-Ports 9000 (S3-API)/9001 (Web-Konsole) — beide frei, kein
+# Konflikt mit dem restigen Dev-Stack geprüft. `.run/minio-data`
+# persistiert Objekte über Neustarts hinweg (gleiches Muster wie
+# `.run/caddy`/`.run/step-ca`). `quay.io/minio/minio`, NICHT
+# `docker.io/minio/minio` — live gefunden: Letzteres verlangt inzwischen
+# eine Docker-Hub-Anmeldung ("denied: requested access... unauthorized"),
+# `quay.io` ist MinIOs eigener, frei erreichbarer Distributionsweg.
+minio-up:
+	@mkdir -p .run/minio-data
+	@if podman container exists omp-minio; then \
+		podman start omp-minio; \
+	else \
+		podman run -d --name omp-minio --restart=always --network=host \
+			-e MINIO_ROOT_USER=omp-minio-dev \
+			-e MINIO_ROOT_PASSWORD=omp-minio-dev-pass \
+			-v $(CURDIR)/.run/minio-data:/data:Z \
+			quay.io/minio/minio:latest server /data --address :9000 --console-address :9001; \
+	fi
+	@echo "MinIO bereit: S3-API http://127.0.0.1:9000, Konsole http://127.0.0.1:9001"
+	@echo "Dev-Zugangsdaten (NUR Dev, s. docs/HANDBUCH.md): omp-minio-dev / omp-minio-dev-pass"
+
+minio-down:
+	-podman stop omp-minio
+	-podman rm omp-minio
 
 # S8 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md) — startet den Stack
 # (falls nicht bereits gestartet) + 2 Test-Nodes, sammelt /metrics alle

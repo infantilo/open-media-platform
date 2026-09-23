@@ -28681,3 +28681,68 @@ Browser-Szenario nachgestellt** (nicht nur am Unit-Test): `curl` ohne
 SVG; derselbe Aufruf ganz ohne jeden Token weiterhin korrekt `401`
 (Zugriffsschranke aus Nachtrag 278 bleibt intakt). Test-Instanz danach
 gestoppt.
+
+## 2026-09-23 (Nachtrag 280) — Kapitel 21 B5: echte MinIO/S3-Anbindung
+
+Nutzerauftrag "proceed B5,B14" nach den in 21.5 getroffenen
+Entscheidungen. B5 zuerst (kleiner + weniger sicherheitskritisch als
+die B14-Analyse unten).
+
+**Infrastruktur:** neues Opt-in-Makefile-Target `make minio-up`/
+`minio-down` (wie `mtls-up`/`proxy-up` — NICHT Teil von `up`, kein
+unnötiger Container standardmäßig). `quay.io/minio/minio`, NICHT
+`docker.io/minio/minio` — live gefunden: Letzteres verlangt inzwischen
+eine Docker-Hub-Anmeldung ("denied: requested access... unauthorized"),
+`quay.io` ist MinIOs eigener, frei erreichbarer Distributionsweg.
+Standard-Ports 9000 (S3-API)/9001 (Konsole), beide frei (geprüft gegen
+den laufenden Dev-Stack).
+
+**Neues Paket `internal/objectstore`:** wrappt den offiziellen
+`minio-go/v7`-Client (S3-kompatibel, funktioniert unverändert gegen
+echtes AWS S3, nicht nur MinIO). **Bewusst nur Presigned URLs, kein
+Byte-Proxy durch den Orchestrator** — Media-Dateien können groß sein,
+sie durch den Orchestrator-Prozess zu schleusen würde dessen Speicher/
+Bandbreite unnötig belasten (Correctness/Reliability vor Convenience,
+Prioritätenliste der Aufgabenstellung). Der Client lädt DIREKT gegen
+MinIO/S3 hoch/herunter, der Orchestrator erzeugt nur die zeitlich
+begrenzte (15 Minuten), signierte URL. `Key()`/`URIFor()`/`KeyFromURI()`
+bauen bzw. lesen einen nach Asset/Version namensraumigen Objekt-
+Schlüssel (`assets/<assetId>/versions/<versionId>/<zufall>-<dateiname>`),
+URI-Schema `s3://<bucket>/<key>` — providerneutral, identisch für MinIO
+und echtes AWS S3.
+
+**Additiv wie mTLS:** leeres `OMP_MINIO_ENDPOINT` lässt das Feature
+komplett deaktiviert (kein impliziter Zwang, MinIO zu betreiben) — die
+neuen Endpunkte antworten dann ehrlich 503 statt zu crashen oder ein
+Feature vorzutäuschen, das nicht existiert.
+
+**Neue HTTP-Endpunkte** (`httpapi.WithObjectStore`-Option, gleiches
+Muster wie `WithAssetLinks`/`WithDomainAudit`): `POST /api/v1/
+asset-versions/{id}/upload-url` liefert eine Presigned-PUT-URL +
+die fertige `storage`-Angabe für den anschließenden `POST .../
+representations`-Aufruf (B4) — dieser Endpunkt legt selbst noch keine
+Representation an, der Aufrufer kennt die technischen Details (Auflösung/
+Codec) erst nach dem Upload. `GET /api/v1/representations/{id}/
+download-url` liefert eine Presigned-GET-URL für eine bestehende
+Representation — lehnt Nicht-Objektspeicher-Provider (z. B.
+"filesystem") mit 400 ab, kein stiller Fehlschlag.
+
+**Verifikation:** 5 neue Tests in `internal/objectstore` — KEIN Mock,
+echte Round-Trips gegen die per `OMP_MINIO_ENDPOINT` konfigurierte
+MinIO-Instanz (Muster wie `internal/dbtest`: `t.Skip`, wenn die
+Umgebungsvariable fehlt), inkl. eines echten HTTP-PUT über die
+Presigned-URL und eines echten HTTP-GET zurück. Volle Go-Suite weiterhin
+grün (36 Pakete jetzt). **Live gegen die echte Dev-Instanz mit echtem
+MinIO verifiziert:** Asset+Version angelegt, Upload-URL angefordert,
+echte Datei per `curl -X PUT` gegen MinIO hochgeladen, Representation
+mit der resultierenden `s3://`-URI angelegt, Download-URL angefordert,
+Datei per `curl` zurückgeholt — Inhalt `diff`-identisch. Negativ-Pfade
+bestätigt: Representation mit Provider "filesystem" → 400 bei
+Download-URL; Orchestrator ganz ohne `OMP_MINIO_ENDPOINT` gestartet →
+503 statt Absturz.
+
+**Offen für eine spätere Sitzung:** Aufräumen des zugehörigen Objekts
+bei `DELETE /representations/{id}` (aktuell verwaist das S3-Objekt,
+wenn die Representation-Zeile gelöscht wird — kein Datenverlustrisiko,
+nur unnötig belegter Speicherplatz, bewusst nicht in dieser Runde
+mitgezogen).
