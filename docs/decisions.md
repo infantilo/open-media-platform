@@ -28644,3 +28644,40 @@ ungültigem SDP-Testinhalt, nicht mehr an Auth); QR-Endpunkt liefert
 echtes, wohlgeformtes SVG; UI-Bundle über den Proxy erreichbar;
 Widerrufen macht `/whip` sofort wieder 401. Test-Instanz danach
 gestoppt.
+
+## 2026-09-23 (Nachtrag 279) — Fix: QR-Code der Einladungsoberfläche war ein kaputtes Bild
+
+Nutzerfund direkt nach Nachtrag 278: der QR-Code in der neuen
+Bedienoberfläche zeigte nur ein kaputtes Bild-Icon.
+
+**Root Cause (bereits bekannte, dokumentierte Codebase-Falle — beim
+Bauen von Nachtrag 278 nicht mitgezogen):** `<img src=...>` ist eine
+native Browser-API, kein `fetch()` — der globale, patchende
+`fetch()`-Wrapper aus `ui/shell/auth.ts`, der sonst jedem Request
+automatisch den `Authorization`-Header mitgibt, greift dafür nicht.
+Exakt derselbe, bereits für die MJPEG-Vorschau gelöste Fall
+(`ui/shell/node-preview.ts`, `flow-canvas.ts`) — nur beim neuen
+`/invites/qr`-Endpunkt aus Nachtrag 278 nicht mit demselben Muster
+versehen.
+
+**Fix, zwei Seiten (identisches Muster wie beim Stream-Proxy):**
+1. Orchestrator: `/invites/qr` zur expliziten
+   `queryTokenAllowedPath`-Allowlist ergänzt (`auth_middleware.go`) —
+   akzeptiert dort `?access_token=` als Ersatz für den
+   `Authorization`-Header, NUR für diese eine Route (Sicherheits-
+   Härtung 2026-08-10 bleibt in Kraft: kein pauschaler Fallback für
+   alle Endpunkte).
+2. Node-UI-Bundle (`ui/bundle.js`): liest denselben `localStorage`-
+   Schlüssel (`omp-auth-token`) wie `node-preview.ts` und hängt ihn als
+   `&access_token=` an die QR-Bild-URL.
+
+**Verifikation:** neuer Testfall in der bestehenden
+`TestBearerTokenQueryParamAllowlist` (inkl. eines Gegenbeispiels: das
+schreibende `/invites` selbst bleibt bewusst NICHT in der Allowlist —
+das läuft über echten `fetch()` mit Header, braucht den Fallback nicht).
+Volle Go-Suite weiterhin 35/35 Pakete grün. **Live am exakten
+Browser-Szenario nachgestellt** (nicht nur am Unit-Test): `curl` ohne
+`Authorization`-Header, nur `?access_token=` — jetzt `200` mit echtem
+SVG; derselbe Aufruf ganz ohne jeden Token weiterhin korrekt `401`
+(Zugriffsschranke aus Nachtrag 278 bleibt intakt). Test-Instanz danach
+gestoppt.

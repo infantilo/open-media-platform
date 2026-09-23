@@ -98,7 +98,7 @@ func TestRequireAuthAcceptsQueryParamTokenForSSE(t *testing.T) {
 
 // TestBearerTokenQueryParamAllowlist (Sicherheits-Härtung 2026-08-10,
 // ARCHITECTURE.md §20.4): der ?access_token=-Fallback darf NUR für die
-// drei dokumentierten Browser-API-ohne-eigene-Header-Routen greifen
+// dokumentierten Browser-API-ohne-eigene-Header-Routen greifen
 // (queryTokenAllowedPath), nicht für jeden beliebigen Endpunkt — sonst
 // vergrößert sich die Token-Leck-Fläche (Browser-Historie/Server-Logs)
 // unnötig auf alle anderen, auch schreibenden Endpunkte.
@@ -111,7 +111,15 @@ func TestBearerTokenQueryParamAllowlist(t *testing.T) {
 		{"/api/v1/nodes/inst-1/ui/bundle.js", true},
 		{"/api/v1/nodes/inst-1/stream/previewUrl", true},
 		{"/api/v1/nodes/inst-1/stream/levelsUrl", true},
-		// nicht erlaubt: alles andere, auch innerhalb von /api/v1/nodes/.
+		// omp-webrtc-gateway-Bedienoberfläche (Nachtrag 278/live gefundener
+		// Nachtrag: der QR-Code lief als kaputtes Bild, weil <img> hier
+		// zunächst fehlte).
+		{"/api/v1/nodes/inst-1/invites/qr", true},
+		// nicht erlaubt: alles andere, auch innerhalb von /api/v1/nodes/ —
+		// insbesondere NICHT /invites selbst (Anlegen/Widerrufen läuft
+		// über echten fetch() mit Authorization-Header, braucht den
+		// Fallback nicht und soll ihn auch nicht bekommen).
+		{"/api/v1/nodes/inst-1/invites", false},
 		{"/api/v1/instances", false},
 		{"/api/v1/nodes/inst-1/params/gain", false},
 		{"/api/v1/admin/audit-log", false},

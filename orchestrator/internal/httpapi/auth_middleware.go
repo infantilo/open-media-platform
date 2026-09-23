@@ -97,6 +97,11 @@ type authGate struct {
 //     ui/shell/ui-bundle.ts).
 //   - GET /api/v1/nodes/<id>/stream/<name> (Node-Stream-Proxy, K4 —
 //     MJPEG-Vorschau/Level-SSE je nach Stream-Typ, aus demselben Grund).
+//   - GET /api/v1/nodes/<id>/invites/qr (omp-webrtc-gateway-Bedienober-
+//     fläche, Nachtrag 278: QR-Code als <img src=...>, live gefunden —
+//     "kaputtes Bild"-Symptom war exakt dieselbe fehlende
+//     Authorization-Header-Fähigkeit von <img> wie beim Stream-Proxy
+//     oben, nur beim Schreiben dieser neuen Route nicht mitgezogen).
 //
 // Explizite Allowlist statt Header-Heuristik (z. B. `Accept: text/
 // event-stream`): eine Heuristik hätte den import()-Fall übersehen
@@ -111,7 +116,7 @@ func queryTokenAllowedPath(path string) bool {
 	if !strings.HasPrefix(path, "/api/v1/nodes/") {
 		return false
 	}
-	return strings.HasSuffix(path, "/ui/bundle.js") || strings.Contains(path, "/stream/")
+	return strings.HasSuffix(path, "/ui/bundle.js") || strings.Contains(path, "/stream/") || strings.HasSuffix(path, "/invites/qr")
 }
 
 // bearerToken liest das Token aus dem Authorization-Header oder,

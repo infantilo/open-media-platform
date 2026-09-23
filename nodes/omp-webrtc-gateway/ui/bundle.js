@@ -72,6 +72,22 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
 
     const api = (path, opts) => fetch(`/api/v1/nodes/${nodeId}${path}`, opts);
 
+    // <img>-Tags können keinen Authorization-Header setzen (native
+    // Browser-API, kein `fetch()` — der globale, patchende fetch()-
+    // Wrapper aus ui/shell/auth.ts greift hier nicht). Der QR-Code lief
+    // deshalb live als "kaputtes Bild" — derselbe, bereits bekannte
+    // Fall wie die MJPEG-Vorschau (`ui/shell/node-preview.ts`), Fix
+    // ebenso: Token separat aus demselben localStorage-Schlüssel lesen
+    // und als `?access_token=` anhängen (Orchestrator akzeptiert das
+    // nur für eine explizite Allowlist inkl. `/invites/qr`, s.
+    // auth_middleware.go).
+    const STREAM_TOKEN_KEY = "omp-auth-token";
+    const qrImageUrl = (data) => {
+      const token = localStorage.getItem(STREAM_TOKEN_KEY);
+      const base = `/api/v1/nodes/${nodeId}/invites/qr?data=${encodeURIComponent(data)}`;
+      return token ? `${base}&access_token=${encodeURIComponent(token)}` : base;
+    };
+
     const showError = (msg) => {
       errorEl.textContent = msg || "";
       errorEl.className = msg ? "error" : "";
@@ -119,7 +135,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         const qr = document.createElement("div");
         qr.className = "qr";
         const img = document.createElement("img");
-        img.src = `/api/v1/nodes/${nodeId}/invites/qr?data=${encodeURIComponent(link)}`;
+        img.src = qrImageUrl(link);
         img.alt = "QR-Code";
         qr.append(img);
 
