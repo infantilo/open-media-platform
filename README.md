@@ -253,14 +253,23 @@ instead of a live NMOS wiring view) sits next to a plain HTTP API —
 both produce the identical JSON. Alongside it, an asset/content domain
 model (assets, versions, representations, free-form metadata
 categories, an explicit ingest→…→published→archived lifecycle state
-machine) gives the process engine something real to operate on,
-storage-provider-agnostic by design. Its own "Assets" tab offers
-search/filter, lifecycle transitions (only those the backend state
-machine actually allows — the UI reads them from the server rather
-than keeping its own copy), a key/value metadata editor that keeps
-non-string values intact, and versions with their technical
-representations; a published version is enforced immutable on the
-server, not just hidden in the UI.
+machine, plus collections and typed asset-to-asset relationships such
+as `derived_from`/`version_of`) gives the process engine something
+real to operate on. Storage is provider-agnostic by design and backed
+by a real implementation, not just a placeholder: representations get
+presigned upload/download URLs against an actual S3-compatible store
+(MinIO), so media bytes move directly between client and object store,
+never proxied through the orchestrator. A process execution can link
+to the specific asset version it produced or consumed (a generic,
+process/asset-agnostic link record, not a special case in either
+domain), and every asset/process state change is additionally captured
+in its own business-level audit trail, separate from the general
+request audit log. Its own "Assets" tab offers search/filter, lifecycle
+transitions (only those the backend state machine actually allows —
+the UI reads them from the server rather than keeping its own copy), a
+key/value metadata editor that keeps non-string values intact, and
+versions with their technical representations; a published version is
+enforced immutable on the server, not just hidden in the UI.
 
 **Microservices** (demonstration nodes, not the focus — see the note
 above) — each an independent process that self-registers via NMOS,
@@ -316,6 +325,16 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   channels live, not just view them
 - **omp-srt-gateway** — ST 2110 ⇄ SRT gateway for contribution over
   lossy WANs
+- **omp-webrtc-gateway** — WebRTC (WHIP/WHEP) bridge for ordinary phone
+  cameras and phone/browser monitors to join the MXL fabric with zero
+  install, catalog entries for both directions
+  (`omp-webrtc-gateway-camera` ingest, `omp-webrtc-gateway-monitor`
+  playout). Connecting is invitation-only by design (a phone's browser
+  is by definition on the open internet-facing side): an operator
+  issues time-scoped invitation links/QR codes from the node's own UI,
+  and WHIP/WHEP requests without a valid, unexpired invitation token
+  are rejected outright — there is no way to join by guessing or
+  scanning the endpoint URL alone.
 - **omp-fabrics-gateway** — **remote memory access between hosts**:
   MXL-native Fabrics (libfabric/RDMA) instead of a network-stack hop —
   zero-copy, one-sided RDMA writes of a full MXL flow into another
@@ -377,6 +396,15 @@ node has to satisfy.
 - Login-based user/role accounts (local, no external directory server
   required) gate who can wire the graph, launch instances, or
   administer hosts; every write access is captured in an audit log.
+  Multi-organization access scoping sits on top: each user belongs to
+  one organization, and workflows/process definitions/assets/
+  collections carry an owner organization — a user only sees and can
+  act on their own organization's objects (cross-organization access
+  returns a plain not-found, not a permission error, so it doesn't even
+  leak that the object exists). Node/instance infrastructure itself
+  stays shared across organizations by design, same as the rest of the
+  control plane — this is access scoping for a multi-team/multi-client
+  install, not a hard per-tenant data silo.
 - **Measurement you can act on, not just monitoring.** Every MXL read
   path already carries the origin timestamp the *writer* stamped onto a
   grain (`timestamp/x-mxl-tai`). `omp-scope` reads it and turns it into
@@ -622,6 +650,25 @@ editor (genuine CDP-driven mouse drags, not just API calls) that
 created a step graph, connected it, and ran it to completion. The
 "Assets" tab followed, along with editing an existing process version
 in the visual editor.
+
+Most recently, the asset/content domain model grew collections and
+typed asset-to-asset relationships, a generic link between a process
+execution and the specific asset version it produced/consumed, its own
+business-level audit trail separate from the general request audit
+log, and real MinIO/S3-backed storage for representations via
+presigned upload/download URLs (media bytes never proxy through the
+orchestrator). `omp-webrtc-gateway` landed as a new microservice pair
+(camera/monitor) so an ordinary phone browser can join the MXL fabric
+over WHIP/WHEP with zero install — gated by operator-issued, time-
+scoped invitation links/QR codes rather than a bare, guessable
+endpoint. Most recently of all, the platform gained multi-organization
+access scoping (Kapitel 21 B14): each user belongs to one organization,
+workflows/process definitions/assets/collections carry an owner
+organization, and every read/write on someone else's organization's
+object returns a plain not-found rather than a permission error or any
+other sign the object exists — live-verified with two real
+organizations and confirmed non-disruptive to all pre-existing,
+organization-less data (grandfathered into a default organization).
 
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,
