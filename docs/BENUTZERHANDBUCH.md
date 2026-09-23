@@ -281,14 +281,20 @@ bewusst ein anderes Konzept als die **Workflows** aus Abschnitt 4 (dort:
 Node-Verkabelung eines Regieplatzes). Links die Prozess-Definitionen,
 rechts deren Versionen, Ausführungen und offene Aufgaben.
 
+![Prozesse: Definitionsliste links, Versionen und Ausführungen rechts](screenshots/prozesse.png)
+
 - **„+ Neu"** legt eine Definition an (nur Name/Beschreibung).
 - **„+ Neue Version"** öffnet den grafischen Editor. Links stehen die
   **Bausteine**, gruppiert nach Aktionen (Node-Funktion, Web-Aufruf,
   Datei-Werkzeug ffmpeg/ffprobe, Benachrichtigung, Unterprozess),
   Menschen (Aufgabe für Person, Freigabe) und Ablauf (Wenn … dann,
-  Verteiler, Parallel/Zusammenführen, Warten). Bausteine, die dieser
-  Server nicht ausführen kann, stehen eingeklappt unter „Nicht
-  verfügbar“. Ein Baustein wird per Klick oder Ziehen hinzugefügt.
+  Verteiler, Parallel aufteilen/Zusammenführen, Warten, Timer).
+  Bausteine, die dieser Server nicht ausführen kann, stehen eingeklappt
+  unter „Nicht verfügbar“. Ein Baustein wird per Klick oder Ziehen
+  hinzugefügt.
+
+![Prozess-Editor: Datei-Werkzeug → Bedingung → Benachrichtigung/Warten, mit Ja-/Nein-Verzweigung und Auslöser](screenshots/prozess-editor.png)
+
 - **Doppelklick auf eine Kachel** öffnet ein Formular für genau diesen
   Schritt-Typ, ohne JSON: z. B. beim Datei-Werkzeug eine Vorlage
   („Technische Metadaten auslesen“, „Proxy erzeugen“, „Vorschaubild“,
@@ -333,6 +339,8 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 Der Reiter **Assets** verwaltet Medien-Assets samt Metadaten,
 Versionen und technischen Dateien (Representations):
 
+![Assets: Liste links, Detail rechts mit Status-Knöpfen und Versionen](screenshots/assets.png)
+
 - Links die Asset-Liste mit Suche (Titel/Beschreibung/Typ) und Filtern
   nach Typ und Status; gelöschte Assets sind ausgeblendet, bis
   „Gelöschte anzeigen" aktiv ist. **„+ Neu"** legt ein Asset an (Titel,
@@ -356,8 +364,12 @@ Versionen und technischen Dateien (Representations):
   Speicherort und Technik wie 1920×1080 · 25 fps). Representations lassen
   sich nur an einem **Entwurf** hinzufügen oder entfernen;
   **„Veröffentlichen"** macht die Version unveränderlich und zur
-  aktuellen Version des Assets (★). Für geänderte Dateien danach eine
+  aktuellen Version des Assets (★, „veröffentlicht und damit
+  unveränderlich" im Representations-Panel, ohne „Entfernen"-Knöpfe).
+  Für geänderte Dateien danach eine
   neue Version anlegen.
+
+![Asset-Versionen: Entwurf v2 mit editierbarer Representation neben veröffentlichtem, unveränderlichem v1](screenshots/asset-versionen.png)
 
 ## 6. Alarme
 
