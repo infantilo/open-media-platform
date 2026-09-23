@@ -173,3 +173,31 @@ type Representation struct {
 	Checksum       string          `json:"checksum,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 }
+
+// Collection gruppiert Assets (B12, Kapitel 21 Teil B, Nachtrag 276) —
+// z. B. "alle Assets einer Sendung", "Kampagnen-Material Q3". Bewusst
+// eine flache, ungeschachtelte Liste (kein Collection-in-Collection) —
+// weder die Aufgabenstellung noch ein bisher beobachteter Bedarf
+// verlangt Verschachtelung; s. db/migrations/0023_asset_collections.sql.
+type Collection struct {
+	ID          string    `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description,omitempty"`
+	CreatedBy   string    `json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// AssetRelationship ist eine gerichtete, typisierte Beziehung zwischen
+// zwei Assets (B12: "derived_from/version_of/part_of/…"). Type ist
+// bewusst freier Text, keine Go-Enum (gleiche Linie wie Asset.Type,
+// s. dortige Doku) — die Aufgabenstellung nennt nur Beispiele, keine
+// abschließende Liste.
+type AssetRelationship struct {
+	ID          string    `json:"id"`
+	FromAssetID string    `json:"fromAssetId"`
+	ToAssetID   string    `json:"toAssetId"`
+	Type        string    `json:"type"`
+	CreatedBy   string    `json:"createdBy"`
+	CreatedAt   time.Time `json:"createdAt"`
+}

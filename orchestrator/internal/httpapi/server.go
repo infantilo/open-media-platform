@@ -238,6 +238,20 @@ type AssetService interface {
 	GetRepresentation(id string) (asset.Representation, error)
 	ListRepresentations(assetVersionID string) ([]asset.Representation, error)
 	DeleteRepresentation(id string) error
+
+	// B12 (Kapitel 21 Teil B, Nachtrag 276): Collections/Beziehungen.
+	CreateCollection(title, description, createdBy string) (asset.Collection, error)
+	GetCollection(id string) (asset.Collection, error)
+	ListCollections() ([]asset.Collection, error)
+	UpdateCollectionMeta(id, title, description string) (asset.Collection, error)
+	DeleteCollection(id string) error
+	AddCollectionMember(collectionID, assetID string) error
+	RemoveCollectionMember(collectionID, assetID string) error
+	ListCollectionMembers(collectionID string) ([]string, error)
+
+	CreateRelationship(fromAssetID, toAssetID, relType, createdBy string) (asset.AssetRelationship, error)
+	ListRelationships(assetID string) ([]asset.AssetRelationship, error)
+	DeleteRelationship(id string) error
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -552,6 +566,25 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/asset-versions/{id}/representations", g.requireVerbGlobal(authz.VerbConfigure, handleCreateRepresentation(assetSvc)))
 	mux.HandleFunc("GET /api/v1/representations/{id}", g.requireAuth(handleGetRepresentation(assetSvc)))
 	mux.HandleFunc("DELETE /api/v1/representations/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteRepresentation(assetSvc)))
+
+	// Collections/Beziehungen (Kapitel 21 B12, Nachtrag 276). Anlegen/
+	// Umbenennen/Löschen einer Collection ist "configure" (Katalog-
+	// Pflege, wie Asset-/Prozess-Definitionen anlegen) — Mitgliedschaft
+	// pflegen und Beziehungen zwischen bestehenden Assets setzen sind
+	// "operate" (redaktionelle Bedienhandlung an existierendem Content,
+	// gleiche Einstufung wie Asset-Status-Änderungen).
+	mux.HandleFunc("GET /api/v1/collections", g.requireAuth(handleListCollections(assetSvc)))
+	mux.HandleFunc("POST /api/v1/collections", g.requireVerbGlobal(authz.VerbConfigure, handleCreateCollection(assetSvc, options.domainAudit)))
+	mux.HandleFunc("GET /api/v1/collections/{id}", g.requireAuth(handleGetCollection(assetSvc)))
+	mux.HandleFunc("PUT /api/v1/collections/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateCollection(assetSvc, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/collections/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteCollection(assetSvc, options.domainAudit)))
+	mux.HandleFunc("GET /api/v1/collections/{id}/members", g.requireAuth(handleListCollectionMembers(assetSvc)))
+	mux.HandleFunc("POST /api/v1/collections/{id}/members", g.requireVerbGlobal(authz.VerbOperate, handleAddCollectionMember(assetSvc, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/collections/{id}/members/{assetId}", g.requireVerbGlobal(authz.VerbOperate, handleRemoveCollectionMember(assetSvc, options.domainAudit)))
+
+	mux.HandleFunc("GET /api/v1/assets/{id}/relationships", g.requireAuth(handleListAssetRelationships(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-relationships", g.requireVerbGlobal(authz.VerbOperate, handleCreateRelationship(assetSvc, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/asset-relationships/{id}", g.requireVerbGlobal(authz.VerbOperate, handleDeleteRelationship(assetSvc, options.domainAudit)))
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return countRequests(reqCounters, noStoreForAPI(mux))

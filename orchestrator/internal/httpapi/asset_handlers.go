@@ -301,3 +301,196 @@ func writeAssetError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
+
+// ---- Collection (B12) -----------------------------------------------------------------------------
+
+// handleCreateCollection liefert POST /api/v1/collections: {"title":
+// "...", "description": "..."}.
+func handleCreateCollection(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		createdBy := actorFromRequest(r)
+		c, err := svc.CreateCollection(body.Title, body.Description, createdBy)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, createdBy, "collection", c.ID, "created", map[string]any{"title": c.Title})
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+// handleListCollections liefert GET /api/v1/collections.
+func handleListCollections(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := svc.ListCollections()
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}
+}
+
+// handleGetCollection liefert GET /api/v1/collections/{id}.
+func handleGetCollection(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := svc.GetCollection(r.PathValue("id"))
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+// handleUpdateCollection liefert PUT /api/v1/collections/{id}:
+// {"title": "...", "description": "..."} — nur Metadaten, die
+// Mitgliederliste läuft über die members-Endpunkte unten.
+func handleUpdateCollection(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Title       string `json:"title"`
+			Description string `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		c, err := svc.UpdateCollectionMeta(r.PathValue("id"), body.Title, body.Description)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "collection", c.ID, "updated", map[string]any{"title": c.Title})
+		writeJSON(w, http.StatusOK, c)
+	}
+}
+
+// handleDeleteCollection liefert DELETE /api/v1/collections/{id} —
+// idempotent, entfernt nur die Gruppierung, die Assets selbst bleiben
+// unangetastet (s. Store.DeleteCollection-Doku).
+func handleDeleteCollection(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DeleteCollection(id); err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "collection", id, "deleted", nil)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handleListCollectionMembers liefert GET
+// /api/v1/collections/{id}/members — die Asset-IDs, nicht die vollen
+// Asset-Objekte (dieselbe schlanke Linie wie andere ID-Listen in diesem
+// Paket, z. B. Rollenbindungen) — die UI löst einzelne Assets bei
+// Bedarf über GET /api/v1/assets/{id} auf.
+func handleListCollectionMembers(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		members, err := svc.ListCollectionMembers(r.PathValue("id"))
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, members)
+	}
+}
+
+// handleAddCollectionMember liefert POST
+// /api/v1/collections/{id}/members: {"assetId": "..."}.
+func handleAddCollectionMember(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			AssetID string `json:"assetId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.AssetID == "" {
+			http.Error(w, "assetId required", http.StatusBadRequest)
+			return
+		}
+		collectionID := r.PathValue("id")
+		if err := svc.AddCollectionMember(collectionID, body.AssetID); err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "collection", collectionID, "member_added", map[string]any{"assetId": body.AssetID})
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// handleRemoveCollectionMember liefert DELETE
+// /api/v1/collections/{id}/members/{assetId}.
+func handleRemoveCollectionMember(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		collectionID := r.PathValue("id")
+		assetID := r.PathValue("assetId")
+		if err := svc.RemoveCollectionMember(collectionID, assetID); err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "collection", collectionID, "member_removed", map[string]any{"assetId": assetID})
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}
+
+// ---- AssetRelationship (B12) -----------------------------------------------------------------------
+
+// handleCreateRelationship liefert POST /api/v1/asset-relationships:
+// {"fromAssetId": "...", "toAssetId": "...", "type": "derived_from"|...}.
+func handleCreateRelationship(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			FromAssetID string `json:"fromAssetId"`
+			ToAssetID   string `json:"toAssetId"`
+			Type        string `json:"type"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		createdBy := actorFromRequest(r)
+		rel, err := svc.CreateRelationship(body.FromAssetID, body.ToAssetID, body.Type, createdBy)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, createdBy, "asset_relationship", rel.ID, "created", map[string]any{"fromAssetId": rel.FromAssetID, "toAssetId": rel.ToAssetID, "type": rel.Type})
+		writeJSON(w, http.StatusOK, rel)
+	}
+}
+
+// handleListAssetRelationships liefert GET
+// /api/v1/assets/{id}/relationships — beide Richtungen, s.
+// Store.ListRelationships-Doku.
+func handleListAssetRelationships(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		list, err := svc.ListRelationships(r.PathValue("id"))
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	}
+}
+
+// handleDeleteRelationship liefert DELETE
+// /api/v1/asset-relationships/{id} — idempotent.
+func handleDeleteRelationship(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if err := svc.DeleteRelationship(id); err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "asset_relationship", id, "deleted", nil)
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	}
+}

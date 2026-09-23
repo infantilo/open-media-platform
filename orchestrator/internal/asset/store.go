@@ -616,3 +616,199 @@ func (s *Store) DeleteRepresentation(id string) error {
 	}
 	return tx.Commit()
 }
+
+// ---- Collection (B12) ----------------------------------------------
+
+// CreateCollection legt eine neue, leere Collection an.
+func (s *Store) CreateCollection(title, description, createdBy string) (Collection, error) {
+	if title == "" {
+		return Collection{}, fmt.Errorf("%w: title is required", ErrValidation)
+	}
+	id, err := newID()
+	if err != nil {
+		return Collection{}, err
+	}
+	now := time.Now().UTC()
+	c := Collection{ID: id, Title: title, Description: description, CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now}
+	_, err = s.db.Exec(`
+		INSERT INTO collections (id, title, description, created_by, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, c.ID, c.Title, c.Description, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
+	if err != nil {
+		return Collection{}, err
+	}
+	return c, nil
+}
+
+func scanCollection(row interface{ Scan(...any) error }) (Collection, error) {
+	var c Collection
+	err := row.Scan(&c.ID, &c.Title, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+	return c, err
+}
+
+const collectionSelectColumns = `id, title, description, created_by, created_at, updated_at`
+
+// GetCollection liefert eine einzelne Collection.
+func (s *Store) GetCollection(id string) (Collection, error) {
+	row := s.db.QueryRow(`SELECT `+collectionSelectColumns+` FROM collections WHERE id = $1`, id)
+	c, err := scanCollection(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Collection{}, ErrNotFound
+	}
+	return c, err
+}
+
+// ListCollections liefert alle Collections, neueste zuerst.
+func (s *Store) ListCollections() ([]Collection, error) {
+	rows, err := s.db.Query(`SELECT ` + collectionSelectColumns + ` FROM collections ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Collection{}
+	for rows.Next() {
+		c, err := scanCollection(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpdateCollectionMeta ändert Titel/Beschreibung — die Mitgliederliste
+// wird über AddCollectionMember/RemoveCollectionMember gepflegt, nicht
+// hier (gleiche Trennung wie Definition-Metadaten vs. Versionen in
+// internal/process).
+func (s *Store) UpdateCollectionMeta(id, title, description string) (Collection, error) {
+	if title == "" {
+		return Collection{}, fmt.Errorf("%w: title is required", ErrValidation)
+	}
+	res, err := s.db.Exec(`UPDATE collections SET title = $2, description = $3, updated_at = now() WHERE id = $1`, id, title, description)
+	if err != nil {
+		return Collection{}, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return Collection{}, ErrNotFound
+	}
+	return s.GetCollection(id)
+}
+
+// DeleteCollection entfernt eine Collection samt Mitgliedschaften
+// (ON DELETE CASCADE, s. Migration) — idempotent, kein Fehler, wenn sie
+// nicht (mehr) existiert. Die Assets selbst bleiben unangetastet, nur
+// die Gruppierung verschwindet.
+func (s *Store) DeleteCollection(id string) error {
+	_, err := s.db.Exec(`DELETE FROM collections WHERE id = $1`, id)
+	return err
+}
+
+// AddCollectionMember nimmt ein Asset in eine Collection auf —
+// idempotent (erneutes Hinzufügen desselben Assets ändert nichts, kein
+// Fehler).
+func (s *Store) AddCollectionMember(collectionID, assetID string) error {
+	_, err := s.db.Exec(`
+		INSERT INTO collection_members (collection_id, asset_id) VALUES ($1, $2)
+		ON CONFLICT (collection_id, asset_id) DO NOTHING
+	`, collectionID, assetID)
+	return err
+}
+
+// RemoveCollectionMember entfernt ein Asset aus einer Collection —
+// idempotent.
+func (s *Store) RemoveCollectionMember(collectionID, assetID string) error {
+	_, err := s.db.Exec(`DELETE FROM collection_members WHERE collection_id = $1 AND asset_id = $2`, collectionID, assetID)
+	return err
+}
+
+// ListCollectionMembers liefert die Asset-IDs einer Collection, neueste
+// Mitgliedschaft zuerst.
+func (s *Store) ListCollectionMembers(collectionID string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT asset_id FROM collection_members WHERE collection_id = $1 ORDER BY added_at DESC`, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var assetID string
+		if err := rows.Scan(&assetID); err != nil {
+			return nil, err
+		}
+		out = append(out, assetID)
+	}
+	return out, rows.Err()
+}
+
+// ---- AssetRelationship (B12) -----------------------------------------
+
+// CreateRelationship legt eine gerichtete Beziehung zwischen zwei
+// Assets an — idempotent bezüglich derselben (from,to,type)-Kombination
+// (UNIQUE-Constraint in der Migration, s. dortige Doku): ein erneuter
+// Aufruf liefert die bereits bestehende Zeile statt eines Konflikts,
+// da eine wiederholte Feststellung derselben Beziehung kein Fehler ist.
+func (s *Store) CreateRelationship(fromAssetID, toAssetID, relType, createdBy string) (AssetRelationship, error) {
+	if fromAssetID == "" || toAssetID == "" || relType == "" {
+		return AssetRelationship{}, fmt.Errorf("%w: fromAssetId, toAssetId and type are required", ErrValidation)
+	}
+	if fromAssetID == toAssetID {
+		return AssetRelationship{}, fmt.Errorf("%w: an asset cannot relate to itself", ErrValidation)
+	}
+	id, err := newID()
+	if err != nil {
+		return AssetRelationship{}, err
+	}
+	rel := AssetRelationship{ID: id, FromAssetID: fromAssetID, ToAssetID: toAssetID, Type: relType, CreatedBy: createdBy, CreatedAt: time.Now().UTC()}
+	_, err = s.db.Exec(`
+		INSERT INTO asset_relationships (id, from_asset_id, to_asset_id, type, created_by, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (from_asset_id, to_asset_id, type) DO NOTHING
+	`, rel.ID, rel.FromAssetID, rel.ToAssetID, rel.Type, rel.CreatedBy, rel.CreatedAt)
+	if err != nil {
+		return AssetRelationship{}, err
+	}
+	row := s.db.QueryRow(`SELECT `+relationshipSelectColumns+` FROM asset_relationships WHERE from_asset_id = $1 AND to_asset_id = $2 AND type = $3`,
+		fromAssetID, toAssetID, relType)
+	return scanRelationship(row)
+}
+
+func scanRelationship(row interface{ Scan(...any) error }) (AssetRelationship, error) {
+	var r AssetRelationship
+	err := row.Scan(&r.ID, &r.FromAssetID, &r.ToAssetID, &r.Type, &r.CreatedBy, &r.CreatedAt)
+	return r, err
+}
+
+const relationshipSelectColumns = `id, from_asset_id, to_asset_id, type, created_by, created_at`
+
+// ListRelationships liefert alle Beziehungen, an denen assetID beteiligt
+// ist — ausgehend UND eingehend (z. B. "wovon stammt dieses Asset ab"
+// UND "was stammt von diesem Asset ab"), da beide Richtungen für ein
+// Asset-Detailpanel relevant sind.
+func (s *Store) ListRelationships(assetID string) ([]AssetRelationship, error) {
+	rows, err := s.db.Query(`
+		SELECT `+relationshipSelectColumns+` FROM asset_relationships
+		WHERE from_asset_id = $1 OR to_asset_id = $1 ORDER BY created_at DESC
+	`, assetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []AssetRelationship{}
+	for rows.Next() {
+		r, err := scanRelationship(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DeleteRelationship entfernt eine Beziehung — idempotent.
+func (s *Store) DeleteRelationship(id string) error {
+	_, err := s.db.Exec(`DELETE FROM asset_relationships WHERE id = $1`, id)
+	return err
+}

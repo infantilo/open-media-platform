@@ -28441,3 +28441,69 @@ Test-Prozessdefinition "B14-Live-Test" bleibt wie gewohnt stehen.
 organization/asset/collection-Scope-Dimensionen in `authz.Binding`,
 s. 21.3) bleibt offen — dieser Fix schließt nur die konkret gefundene
 Assignee-Lücke, keine strukturelle authz-Erweiterung.
+
+## 2026-09-23 (Nachtrag 276) — Kapitel 21 B12: Collections/Beziehungen für die Asset-Domäne
+
+Fortsetzung von Nachtrag 275 ("fix and proceed" — der Fix aus 275 war
+bereits committet, dies ist der "proceed"-Teil: nächster offener Punkt
+aus 21.3, B10 bewusst zurückgestellt, s. u.).
+
+**Warum B12 vor B10:** B10 (Asset↔Workflow-Integration,
+Execution-Input/Output→AssetVersion-Verknüpfung) hat echte
+Design-Unschärfe — wie genau ein Process-Schritt eine konkrete
+AssetVersion "berührt" (automatisch aus jedem Executor? nur über einen
+neuen, expliziten Schritt-Typ? über eine generische, von jedem Schritt
+aufrufbare Link-API?) ist nicht aus dem Code ablesbar und verdient eine
+eigene Entscheidung, nicht eine Annahme im Vorbeigehen. B12 dagegen ist
+in sich geschlossen (keine neue Integration in `internal/process`
+nötig) und der Modul-Kommentar in `0019_assets.sql` hatte Collections
+bereits explizit auf "später" vertagt — klar abgegrenzter nächster
+Schritt.
+
+**Neue Migration `0023_asset_collections.sql`:** `collections` (Titel/
+Beschreibung/Ersteller, keine Verschachtelung — weder verlangt noch
+bisher gebraucht), `collection_members` (m:n Asset↔Collection, `ON
+DELETE CASCADE` auf beide Seiten), `asset_relationships` (gerichtete,
+typisierte Kante zwischen zwei Assets — `type` bewusst freier Text wie
+`Asset.Type`, keine Enum; `UNIQUE(from,to,type)` macht ein erneutes
+Anlegen derselben Beziehung zu einem No-Op statt einem Konflikt).
+
+**`internal/asset`:** neue Typen `Collection`/`AssetRelationship`,
+Store-Methoden im bestehenden Stil (`newID()`, `ErrValidation` für
+Pflichtfelder, idempotente Deletes). `ListRelationships(assetID)`
+liefert BEIDE Richtungen (eingehend+ausgehend) — für ein künftiges
+Asset-Detailpanel sind "wovon stammt das ab" und "was stammt davon ab"
+gleich relevant. 5 neue Store-Tests (CRUD, Mitgliedschaft inkl.
+Cascade-Verhalten bei Asset-Löschung, Beziehungs-Idempotenz,
+Validierung inkl. Selbstbezug-Ablehnung).
+
+**HTTP-API:** `GET/POST /api/v1/collections`, `GET/PUT/DELETE .../{id}`,
+`GET/POST /api/v1/collections/{id}/members`, `DELETE .../{id}/members/
+{assetId}`, `GET /api/v1/assets/{id}/relationships`, `POST /api/v1/
+asset-relationships`, `DELETE .../{id}`. Verben: Collection anlegen/
+umbenennen/löschen = configure (Katalog-Pflege), Mitgliedschaft/
+Beziehungen pflegen = operate (redaktionelle Handlung an bestehendem
+Content, gleiche Einstufung wie Asset-Statuswechsel). Alle Mutationen
+protokollieren ins Domain-Audit (Nachtrag 274) — kostenlos mitgenommen,
+da `httpapi.WithDomainAudit` bereits verdrahtet ist.
+
+**Verifikation:** `go build`/`go vet`/`gofmt` sauber, volle Go-Suite
+weiterhin 34/34 Pakete grün (5 neue Store-Tests). **Live gegen die neu
+gestartete Dev-Instanz** (`make stop`+`make start`): Collection
+angelegt, zwei Assets hinzugefügt, Beziehung `derived_from` zwischen
+ihnen angelegt und von BEIDEN Seiten abgefragt, Domain-Audit-Trail
+korrekt (`created`/`member_added` × 2), danach Mitglied entfernt,
+Beziehung gelöscht, Collection gelöscht (mit korrektem 404 danach) —
+jeder Endpunkt einzeln über echte curl-Aufrufe bestätigt, nicht nur per
+Unit-Test. Test-Assets ("B12-Master"/"B12-Proxy") bewusst stehen
+gelassen (klar benannt), die Test-Collection selbst wurde im Zuge der
+Verifikation wieder gelöscht.
+
+**Weiterhin offen (Kapitel 21 Teil B, Priorität):** B10 (Asset↔Workflow-
+Verknüpfung, braucht zuerst eine Design-Entscheidung, s. o.), B11
+(echte Volltextsuche via `tsvector`/GIN statt der heutigen `LIKE`-Suche),
+B5 (Storage-Abstraktion — `asset.StorageLocation` existiert bereits
+minimal, ein echter S3/MinIO-Provider braucht zuerst eine
+Nutzerentscheidung zu neuer Infrastruktur). UI-Anbindung für B12/B13
+(Administration-/Assets-Tab) weiterhin nicht Teil dieser Sitzungen —
+reine Backend-Lieferung.
