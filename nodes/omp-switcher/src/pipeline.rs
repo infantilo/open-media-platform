@@ -276,7 +276,19 @@ fn build_branch(
     width: u32,
     height: u32,
 ) -> Result<InputBranch, String> {
-    let mxl_input = MxlVideoInput::new(pipeline, context.clone(), read_flow_id)
+    // `new_unsynced()` statt `new()` (`docs/decisions.md` Nachtrag 272):
+    // dieser Zweig verlinkt `mxl_input.tail` erst unten (nach dem
+    // Erstellen von `videoconvert`/.../`caps`) extern weiter — mit dem
+    // einphasigen `new()` zog dessen interne Kette schon VOR dieser
+    // Verlinkung auf den Zustand der Eltern-Pipeline hoch (nötig für den
+    // Hot-Swap-Fall unten), was im WHEP-Monitor reproduzierbar zu einem
+    // permanenten `not-linked` führte (appsrc-Task stirbt, bevor die
+    // externe Verlinkung existiert). Dieser Aufrufer sync't `mxl_input`
+    // deshalb jetzt explizit über `activate()`, GEMEINSAM mit den
+    // eigenen `branch_elements`, erst NACH der vollständigen Verlinkung
+    // unten (bislang unbestätigt, ob dieser Aufrufer den Bug je
+    // tatsächlich auslöste — vorsorglich mitgefixt, s. dortige Doku).
+    let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), read_flow_id)
         .map_err(|e| format!("MxlVideoInput({sender_id}): {e}"))?;
 
     let videoconvert = match gst::ElementFactory::make("videoconvert")
@@ -353,6 +365,14 @@ fn build_branch(
             remove_mxl_video_input(pipeline, mxl_input);
             return Err(format!("sync_state_with_parent (input {pad_index}): {e}"));
         }
+    }
+    // `mxl_input`s eigene interne Kette (`appsrc`/.../`videorate`) erst
+    // JETZT hochziehen, nachdem sie vollständig extern verlinkt ist
+    // (s. Kommentar oben, Nachtrag 272).
+    if let Err(e) = mxl_input.activate() {
+        remove_elements(pipeline, &branch_elements);
+        remove_mxl_video_input(pipeline, mxl_input);
+        return Err(e);
     }
 
     Ok(InputBranch {

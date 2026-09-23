@@ -28205,3 +28205,95 @@ Punkt aus Nachtrag 271 bleibt zusätzlich offen).
 Chromium-Instanzen beendet, `/dev/shm/omp-mxl` geleert, Orchestrator/
 NATS/Registry/Postgres unangetastet weitergelaufen. Keine Code-Änderung
 in dieser Sitzung — nur diese Dokumentation.
+
+## 2026-09-23 (Nachtrag 273) — Zeitbasis-Bug: Hot-Swap-Race in `MxlVideoInput`/`MxlAudioInput` gefixt, live an allen betroffenen Aufrufern verifiziert
+
+Fortsetzung von Nachtrag 272 (Root Cause gefunden, damals bewusst NICHT
+gefixt). Fix jetzt umgesetzt, dazu **alle** ~25 Aufrufer von
+`MxlVideoInput::new`/`MxlAudioInput::new` systematisch klassifiziert
+(nicht nur die drei ursprünglich vermuteten) statt zu raten.
+
+**Fix in `omp-mediaio::mxl`:** `new()` wird zu `new_unsynced()` +
+`activate()` aufgespalten — `new_unsynced()` baut/verlinkt die interne
+Kette (`appsrc`→...→`tail`), lässt sie aber in `NULL`/`READY`;
+`activate()` zieht sie erst auf den Zustand der Eltern-Pipeline hoch.
+`new()` selbst bleibt ein dünner Wrapper (`new_unsynced()` +
+`activate()`), unverändertes Verhalten für jeden "Erstaufbau"-Aufrufer
+— keine der bestehenden ~15 "sicheren" Aufrufer (jeder baut seine
+eigene, noch nicht `PLAYING`e `gst::Pipeline` frisch, s. u.) musste
+angefasst werden. Fehler in `activate()` innerhalb von `new()` räumen
+jetzt genauso auf wie der alte `cleanup_partial()` (sonst derselbe
+Registry-Geist-OOM wie Nachtrag 51/58, nur über einen neuen Pfad).
+
+**Systematische Klassifikation aller Aufrufer** (`grep -rn
+"MxlVideoInput::new\|MxlAudioInput::new"`, jeder einzeln gelesen, nicht
+nur die drei aus Nachtrag 272 vermuteten):
+
+*Hot-Swap-Aufrufer (Elemente kommen in eine bereits `PLAYING`-Pipeline,
+Fix angewendet):*
+- `omp-webrtc-gateway::monitor::connect_video`/`connect_audio`
+  (bestätigter Fund aus Nachtrag 272) — auf `new_unsynced` + externes
+  `link()` + `activate()` umgestellt, mit Aufräumen bei Fehlschlag
+  jedes Schritts.
+- `omp-switcher::pipeline::build_branch` (`swap_input_resolution`s
+  Kette) — dieselbe Umstellung; der bestehende
+  `sync_state_with_parent()`-Sammellauf für die eigenen Branch-Elemente
+  ruft jetzt zusätzlich `mxl_input.activate()`, NACH der vollständigen
+  Verlinkung.
+- `omp-audio-mixer::pipeline::add_channel_branch` (`ChannelSource::
+  External`) — nur `new`→`new_unsynced` geändert, der bereits
+  bestehende `sync_state_with_parent()`-Sammellauf deckte
+  `input.elements` schon mit ab (nur zur falschen Zeit — vor statt nach
+  der Fix-Analyse war dort fälschlich angenommen, das Element sei
+  "bereits synchronisiert").
+- `omp-viewer::audio_meters::build_branch` (Mehrkanal-VU-Meter, jeder
+  Zweig ab dem zweiten hängt per `AddInput` in eine bereits laufende
+  Pipeline) — **live gefunden beim systematischen Durchgehen, NICHT
+  vorher vermutet:** identischer Bug, gleicher Fix (`new_unsynced` +
+  erweiterter Sammel-Sync-Lauf inklusive `input.elements`).
+
+*Geprüft und SICHER (jede `MxlVideoInput::new`/`MxlAudioInput::new`
+liegt in einer Funktion, die selbst `let pipeline = gst::Pipeline::
+new()` aufruft — die ganze Bin transitioniert erst später gemeinsam auf
+`PLAYING`, kein Hot-Swap-Fenster), NICHT angefasst:* `omp-video-mixer-
+me` (frühere Hot-Swap-Maschinerie 2026-07-23 ersatzlos entfernt, jeder
+`SetInputs`-Rebuild baut komplett neu), `omp-multiviewer`,
+`omp-multiviewer-custom`, `omp-viewer::pipeline` (Video), `omp-2110-
+gateway`, `omp-scaler`, `omp-recorder`, `omp-aes67-gateway`, `omp-audio-
+monitor`, `omp-decklink`, `omp-channel-player`, `omp-scope` (Video+
+Audio).
+
+**Verifikation (live, nicht nur `cargo test`):**
+1. `cargo build --release --workspace` + `cargo test --release
+   --workspace` (Feature `mxl`): 0 Fehler, `omp-mediaio` 26/26 (4
+   `#[ignore]`d), gesamter Workspace grün. `cargo clippy --workspace`:
+   keine neuen Warnungen in den fünf geänderten Dateien.
+2. Genau derselbe Repro wie Nachtrag 272 (headless Chromium, Handy-
+   Kamera → `omp-webrtc-gateway` WHIP → MXL → WHEP-Monitor, neuer
+   Index-Zeitbasis-Modus): jetzt **>1100 dekodierte Video-Frames in
+   15s, 0 Paketverlust, 0 Freezes** (`pc.getStats()`), 0 `not-linked`
+   im Log — vorher reproduzierbar 0 Video-RTP.
+3. `omp-switcher`: derselbe Repro über den Switcher (`timebase_probe`)
+   weiterhin 0 Stalls/0 Index-Lücken; zusätzlich 5× `select()` in
+   schneller Folge (Branch-Rebuild-Stress) — weiterhin 0 `not-linked`,
+   0 Stalls.
+4. **Ehrlich dokumentierter Nebenbefund, NICHT Teil dieses Fixes:** 5×
+   automatisiertes Stop/Start des WHEP-Monitors in schneller Folge
+   (1,5 s Abstand, schneller als ein Mensch klickt) degradierte die
+   Sitzung auf `pc.getStats()` ohne jeden `inbound-rtp`-Eintrag, OBWOHL
+   der Node selbst `connectionState=connected`,
+   `videoFlowing`/`audioFlowing=true` und 0 `not-linked` meldete — exakt
+   das bereits als offen dokumentierte, andersartige "Session-Churn"-
+   Verhalten aus Nachtrag 247/252 (Ursache dort weiterhin unbekannt,
+   ein früherer Fixversuch dort live widerlegt). Ein einzelner,
+   menschlich getakteter Reconnect danach lief wieder sauber (>800
+   Frames, wachsende Paketzahlen). Nicht mit Nachtrag 272/273 verwechseln
+   — andere Fehlerklasse, anderer (noch unbekannter) Mechanismus.
+
+**Aufräumen:** alle Test-Node-Prozesse/Chromium-Instanzen beendet,
+`/dev/shm/omp-mxl` geleert, Registry leer. Commit enthält nur die fünf
+Rust-Dateien, keine Testwerkzeuge (die lagen im Scratch-Verzeichnis).
+
+**Weiterhin offen (aus Nachtrag 271/272, unverändert):** echte
+Handy-Bestätigung (Nutzer hat noch nicht getestet); Session-Churn-
+Degradation (Nachtrag 247/252, andere Ursache als dieser Fix).

@@ -207,11 +207,30 @@ impl Monitor {
 
     pub fn connect_video(&self, flow_id: &str) -> Result<(), String> {
         self.disconnect_video();
-        let input = MxlVideoInput::new(&self.pipeline, self.context.clone(), flow_id)?;
-        input
-            .tail
-            .link(&self.video_mid)
-            .map_err(|e| format!("link video input: {e}"))?;
+        // `new_unsynced()` + extern verlinken + `activate()`, NICHT das
+        // einphasige `new()` (`docs/decisions.md` Nachtrag 272): dieser
+        // Aufrufer verlinkt `tail` erst NACH dem Bau extern an
+        // `video_mid` — mit `new()` konnte `appsrc`s eigener, durch die
+        // PLAYING-Aktivierung sofort gestarteter Streaming-Task in genau
+        // diesem Zeitfenster bereits zu pushen beginnen, BEVOR die
+        // Verlinkung existierte ("not-linked", Task stirbt dauerhaft,
+        // 0 Video-RTP am WHEP-Monitor — live reproduziert und
+        // root-caused).
+        let input = MxlVideoInput::new_unsynced(&self.pipeline, self.context.clone(), flow_id)?;
+        let cleanup = |input: &MxlVideoInput| {
+            for el in &input.elements {
+                let _ = el.set_state(gst::State::Null);
+                let _ = self.pipeline.remove(el);
+            }
+        };
+        if let Err(e) = input.tail.link(&self.video_mid) {
+            cleanup(&input);
+            return Err(format!("link video input: {e:?}"));
+        }
+        if let Err(e) = input.activate() {
+            cleanup(&input);
+            return Err(e);
+        }
         self.video_flowed.store(false, Ordering::Relaxed);
         *self.video_input.lock().expect("lock poisoned") = Some(input);
         Ok(())
@@ -233,11 +252,27 @@ impl Monitor {
 
     pub fn connect_audio(&self, flow_id: &str) -> Result<(), String> {
         self.disconnect_audio();
-        let input = MxlAudioInput::new(&self.pipeline, self.context.clone(), flow_id)?;
-        input
-            .tail
-            .link(&self.audio_mid)
-            .map_err(|e| format!("link audio input: {e}"))?;
+        // S. `connect_video`-Kommentar (identischer Race, Nachtrag 272).
+        // Audio traf den Bug in den Live-Tests nicht reproduzierbar (viel
+        // kleinere interne Kette, `appsrc`+`audioconvert`), ist aber
+        // strukturell demselben Zeitfenster ausgesetzt — hier aus
+        // Konsistenz mitgefixt, nicht weil live ein Fehlschlag beobachtet
+        // wurde.
+        let input = MxlAudioInput::new_unsynced(&self.pipeline, self.context.clone(), flow_id)?;
+        let cleanup = |input: &MxlAudioInput| {
+            for el in &input.elements {
+                let _ = el.set_state(gst::State::Null);
+                let _ = self.pipeline.remove(el);
+            }
+        };
+        if let Err(e) = input.tail.link(&self.audio_mid) {
+            cleanup(&input);
+            return Err(format!("link audio input: {e:?}"));
+        }
+        if let Err(e) = input.activate() {
+            cleanup(&input);
+            return Err(e);
+        }
         self.audio_flowed.store(false, Ordering::Relaxed);
         *self.audio_input.lock().expect("lock poisoned") = Some(input);
         Ok(())

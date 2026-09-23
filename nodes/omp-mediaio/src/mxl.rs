@@ -1343,7 +1343,60 @@ pub struct MxlVideoInput {
 }
 
 impl MxlVideoInput {
+    /// Baut die interne Lesekette, verlinkt sie intern UND zieht sie
+    /// sofort auf den Zustand der Eltern-Pipeline hoch (`activate()`
+    /// unten, s. dortige Doku). Für einen chirurgischen Hot-Swap in eine
+    /// bereits `PLAYING`-Pipeline (der Aufrufer verlinkt `tail` danach
+    /// selbst extern) **NICHT** diese Funktion verwenden, sondern
+    /// [`Self::new_unsynced`] + eigene externe Verlinkung + `activate()`
+    /// — s. dortige Doku (`docs/decisions.md` Nachtrag 272).
     pub fn new(
+        pipeline: &gst::Pipeline,
+        context: Arc<MxlContext>,
+        flow_id: &str,
+    ) -> Result<Self, String> {
+        let input = Self::new_unsynced(pipeline, context, flow_id)?;
+        if let Err(e) = input.activate() {
+            // Gleicher Aufräum-Zwang wie `new_unsynced`s `cleanup_partial`
+            // (Nachtrag 51/58 OOM-Bug) — `input.elements` sind zu diesem
+            // Zeitpunkt bereits zur Pipeline hinzugefügt.
+            for el in &input.elements {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+            return Err(e);
+        }
+        Ok(input)
+    }
+
+    /// Wie [`Self::new`], aber OHNE die interne Kette
+    /// (`appsrc`/`videoconvert`/`videoscale`/`videorate`) auf den
+    /// Zustand der Eltern-Pipeline zu ziehen — der Aufrufer MUSS `tail`
+    /// erst vollständig extern verlinken (und, falls er selbst weitere
+    /// Elemente dazwischenhängt, auch DIESE) und ERST DANACH
+    /// [`Self::activate`] aufrufen.
+    ///
+    /// **Live gefundener Bug (`docs/decisions.md` Nachtrag 272):** die
+    /// alte, einphasige `new()` zog die interne Kette schon VOR der
+    /// Rückgabe auf `PLAYING` hoch (nötig, damit zur Laufzeit
+    /// hinzugefügte Elemente nicht für immer in `NULL` hängen bleiben,
+    /// s. `activate()`-Doku) — bei einem Aufrufer, der `tail` ERST NACH
+    /// `new()`s Rückkehr extern verlinkt (`omp-webrtc-gateway::monitor`,
+    /// strukturell auch `omp-switcher`/`omp-video-mixer-me`/
+    /// `omp-audio-mixer`), konnte `appsrc`s eigener, durch die PLAYING-
+    /// Aktivierung sofort gestarteter Streaming-Task in diesem
+    /// Zeitfenster bereits zu pushen beginnen, BEVOR die externe
+    /// Verlinkung existierte: `gst_base_src_loop` meldet dann
+    /// `not-linked` und stellt den Task DAUERHAFT ein, sobald ein
+    /// echter Datenpuffer (nicht nur ein Sticky-Event) auf den noch
+    /// unverlinkten Pad trifft — reproduzierbar am `omp-webrtc-gateway`-
+    /// WHEP-Monitor (0 Video-RTP), live per `GST_DEBUG=appsrc:6,
+    /// GST_PADS:5,basesrc:5` bestätigt. Gleicher Grundmechanismus wie
+    /// der bereits gefixte Tee-Pad-Race (Nachtrag 250), nur auf der
+    /// Lese- statt der Sende-Seite. Zwei-Phasen-Aufteilung ist der
+    /// GStreamer-eigene Weg ("Dynamically Changing the Pipeline": erst
+    /// verlinken, dann auf den Ziel-Zustand ziehen).
+    pub fn new_unsynced(
         pipeline: &gst::Pipeline,
         context: Arc<MxlContext>,
         flow_id: &str,
@@ -1502,23 +1555,11 @@ impl MxlVideoInput {
         // `omp-video-mixer-me`) wird dadurch nicht verdeckt, nur nicht
         // durch einen übereifrigen, selbst fehleranfälligen Warte-Fix
         // ersetzt.
-        const STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
-        for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
-            if let Err(e) = el.sync_state_with_parent() {
-                cleanup_partial();
-                return Err(format!("sync_state_with_parent (MxlVideoInput): {e}"));
-            }
-        }
-        for el in [&appsrc, &videoconvert, &videoscale, &videorate] {
-            let (result, state, pending) = el.state(STATE_CHANGE_TIMEOUT);
-            if result.is_err() {
-                eprintln!(
-                    "omp-mediaio(mxl): MxlVideoInput: {} not settled within {STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
-                    el.name()
-                );
-            }
-        }
-
+        // Zustand der Eltern-Pipeline (`sync_state_with_parent()`) wird
+        // bewusst NICHT hier gezogen, s. Moduldoku oben — das macht
+        // `new()` (Einphasen-Fall) unmittelbar danach, bzw. ruft der
+        // Hot-Swap-Aufrufer selbst über [`Self::activate`] auf, NACHDEM
+        // `tail` extern verlinkt ist.
         let reader = match context.instance.create_flow_reader(flow_id) {
             Ok(r) => r,
             Err(e) => {
@@ -1573,6 +1614,40 @@ impl MxlVideoInput {
             flowed,
             heartbeat,
         })
+    }
+
+    /// Zieht die vier internen Elemente (`appsrc`/`videoconvert`/
+    /// `videoscale`/`videorate`) auf den Zustand der Eltern-Pipeline
+    /// hoch — nötig, weil neu zu einer bereits `PLAYING`-Pipeline
+    /// hinzugefügte Elemente sonst für immer in `NULL` hängen bleiben
+    /// (Kapitel 15 Teil 3, s. Struct-Doku). Von [`Self::new`] sofort
+    /// nach dem Bau aufgerufen; ein Aufrufer von [`Self::new_unsynced`]
+    /// MUSS diese Methode selbst aufrufen, aber ERST NACHDEM `tail`
+    /// (und jede eigene, dazwischenhängende Kette) vollständig extern
+    /// verlinkt ist — sonst derselbe `not-linked`-Bug wie Nachtrag 272
+    /// (s. dortige Doku bei `new_unsynced`).
+    ///
+    /// `sync_state_with_parent()` ALLEIN reicht dabei nicht (GStreamer
+    /// darf `ASYNC` antworten) — ein kurzer, nicht-fataler
+    /// `Element::state()`-Blick gibt dem Übergang eine knappe Chance,
+    /// bewusst ohne hartes Timeout-Warten (s. ausführliche Doku bei
+    /// `new_unsynced`/`docs/decisions.md` Nachtrag 58).
+    pub fn activate(&self) -> Result<(), String> {
+        const STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
+        for el in &self.elements {
+            el.sync_state_with_parent()
+                .map_err(|e| format!("sync_state_with_parent (MxlVideoInput): {e}"))?;
+        }
+        for el in &self.elements {
+            let (result, state, pending) = el.state(STATE_CHANGE_TIMEOUT);
+            if result.is_err() {
+                eprintln!(
+                    "omp-mediaio(mxl): MxlVideoInput: {} not settled within {STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
+                    el.name()
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1936,7 +2011,26 @@ pub struct MxlAudioInput {
 }
 
 impl MxlAudioInput {
+    /// S. `MxlVideoInput::new`-Doku (identisches Muster). Für einen
+    /// chirurgischen Hot-Swap in eine bereits `PLAYING`-Pipeline NICHT
+    /// diese Funktion verwenden, sondern [`Self::new_unsynced`] +
+    /// eigene externe Verlinkung + `activate()` (`docs/decisions.md`
+    /// Nachtrag 272).
     pub fn new(pipeline: &gst::Pipeline, context: Arc<MxlContext>, flow_id: &str) -> Result<Self, String> {
+        let input = Self::new_unsynced(pipeline, context, flow_id)?;
+        if let Err(e) = input.activate() {
+            for el in &input.elements {
+                let _ = el.set_state(gst::State::Null);
+                let _ = pipeline.remove(el);
+            }
+            return Err(e);
+        }
+        Ok(input)
+    }
+
+    /// S. `MxlVideoInput::new_unsynced`-Doku (identisches Muster/Bug,
+    /// Nachtrag 272).
+    pub fn new_unsynced(pipeline: &gst::Pipeline, context: Arc<MxlContext>, flow_id: &str) -> Result<Self, String> {
         let flow_def_json = context
             .instance
             .get_flow_def(flow_id)
@@ -2011,35 +2105,11 @@ impl MxlAudioInput {
         // trifft hier sogar noch direkter zu, da `omp-audio-mixer`
         // Kanal-Zweige laut Struct-Doku oben ohnehin **chirurgisch** aus
         // einer bereits laufenden Pipeline entfernt/hinzufügt (C11), nie
-        // nur beim Erstaufbau. Ohne `sync_state_with_parent` bliebe jeder
-        // zur Laufzeit hinzugefügte Audio-Kanal-Zweig in `NULL` hängen —
-        // sein `appsrc` würde nie tatsächlich Daten fließen lassen,
-        // `read_audio_loop` unten aber trotzdem unbeirrt weiter in dessen
-        // unbegrenzte interne Warteschlange schreiben.
-        // `sync_state_with_parent()` allein reicht nicht — s. die
-        // ausführliche Doku bei `MxlVideoInput::new` (identischer Bug,
-        // gleicher Fix: kurzer, NICHT-fataler `Element::state()`-Blick
-        // statt eines harten, langen Timeouts — Letzteres addierte sich
-        // bei mehreren nacheinander angelegten Readern zu spürbarer
-        // Verzögerung und machte einen bestehenden Test flakiger, s.
-        // dortige Doku).
-        const AUDIO_STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
-        for el in [&appsrc, &convert] {
-            if let Err(e) = el.sync_state_with_parent() {
-                cleanup_partial();
-                return Err(format!("sync_state_with_parent (MxlAudioInput): {e}"));
-            }
-        }
-        for el in [&appsrc, &convert] {
-            let (result, state, pending) = el.state(AUDIO_STATE_CHANGE_TIMEOUT);
-            if result.is_err() {
-                eprintln!(
-                    "omp-mediaio(mxl): MxlAudioInput: {} not settled within {AUDIO_STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
-                    el.name()
-                );
-            }
-        }
-
+        // nur beim Erstaufbau. Das Hochziehen auf den Zustand der
+        // Eltern-Pipeline (früher hier inline, s. `git blame`) sitzt
+        // jetzt in `activate()` (Nachtrag 272) — bewusst NICHT hier,
+        // s. `MxlVideoInput::new_unsynced`-Doku (identischer Bug: ein
+        // sofort startender `appsrc`-Task vor der externen Verlinkung).
         let reader = match context.instance.create_flow_reader(flow_id) {
             Ok(r) => r,
             Err(e) => {
@@ -2096,6 +2166,25 @@ impl MxlAudioInput {
             flowed,
             heartbeat,
         })
+    }
+
+    /// S. `MxlVideoInput::activate`-Doku (identisches Muster).
+    pub fn activate(&self) -> Result<(), String> {
+        const AUDIO_STATE_CHANGE_TIMEOUT: gst::ClockTime = gst::ClockTime::from_mseconds(100);
+        for el in &self.elements {
+            el.sync_state_with_parent()
+                .map_err(|e| format!("sync_state_with_parent (MxlAudioInput): {e}"))?;
+        }
+        for el in &self.elements {
+            let (result, state, pending) = el.state(AUDIO_STATE_CHANGE_TIMEOUT);
+            if result.is_err() {
+                eprintln!(
+                    "omp-mediaio(mxl): MxlAudioInput: {} not settled within {AUDIO_STATE_CHANGE_TIMEOUT} (state={state:?}, pending={pending:?}) — continuing anyway",
+                    el.name()
+                );
+            }
+        }
+        Ok(())
     }
 }
 

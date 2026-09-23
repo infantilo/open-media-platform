@@ -141,7 +141,17 @@ fn teardown_branch(pipeline: &gst::Pipeline, branch: Branch) {
 }
 
 fn build_branch(pipeline: &gst::Pipeline, context: &Arc<MxlContext>, flow_id: &str, input_id: &str) -> Result<Branch, String> {
-    let input = MxlAudioInput::new(pipeline, context.clone(), flow_id)?;
+    // `new_unsynced()` statt `new()` (`docs/decisions.md` Nachtrag 272):
+    // `input.tail` wird erst unten extern an `level`/`sink` verlinkt —
+    // jeder Zweig ab dem zweiten hängt hier in eine bereits PLAYING
+    // Pipeline (s. `pipeline_started` in `run()` unten). Mit dem
+    // einphasigen `new()` zog dessen interne Kette schon VOR dieser
+    // Verlinkung auf PLAYING hoch, was am WHEP-Monitor (strukturell
+    // identischer Fall) reproduzierbar zu dauerhaftem `not-linked`
+    // führte. Der bestehende `sync_state_with_parent()`-Lauf unten deckt
+    // `input.elements` jetzt mit ab (erweitert), kein separater
+    // `activate()`-Aufruf nötig.
+    let input = MxlAudioInput::new_unsynced(pipeline, context.clone(), flow_id)?;
     let level = gst::ElementFactory::make("level")
         .name(format!("level-{input_id}"))
         .property("interval", LEVEL_INTERVAL_NS)
@@ -188,16 +198,16 @@ fn build_branch(pipeline: &gst::Pipeline, context: &Arc<MxlContext>, flow_id: &s
         .map_err(|e| format!("add meter branch ({input_id}): {e}"))?;
     gst::Element::link_many([&input.tail, &level, &sink]).map_err(|e| format!("link meter branch ({input_id}): {e}"))?;
 
-    for el in [&level, &sink] {
+    // `input.elements` (`appsrc`/`audioconvert`) MUSS hier mit hochgezogen
+    // werden — mit `new_unsynced()` sind sie noch in `NULL`/`READY`
+    // hängengeblieben, s. Kommentar oben.
+    for el in input.elements.iter().chain([&level, &sink]) {
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (meter {input_id}): {e}"))?;
     }
 
-    // `MxlAudioInput` selbst besteht aus `appsrc`+`audioconvert` (bereits
-    // beim Konstruktor auf den Pipeline-Zustand synchronisiert, s.
-    // dortige Doku) — dessen Elemente hier mit einsammeln, damit
-    // `teardown_branch` sie mit abbaut (sonst Leck bei jedem
-    // `removeAudioInput`).
+    // Dessen Elemente hier mit einsammeln, damit `teardown_branch` sie
+    // mit abbaut (sonst Leck bei jedem `removeAudioInput`).
     let mut elements = input.elements.clone();
     elements.push(level);
     elements.push(sink);

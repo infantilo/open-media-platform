@@ -369,7 +369,19 @@ fn add_channel_branch(
             (src.clone(), vec![src], None)
         }
         ChannelSource::External { flow_id } => {
-            let input = MxlAudioInput::new(&active.pipeline, context.clone(), flow_id)
+            // `new_unsynced()` statt `new()` (`docs/decisions.md`
+            // Nachtrag 272): dieser chirurgische Hot-Swap in die bereits
+            // laufende Pipeline verlinkt `tail` erst unten (über `convert`
+            // bis zu `audiomixer`s Sink-Pad) weiter — mit dem einphasigen
+            // `new()` zog dessen interne Kette schon VOR dieser
+            // Verlinkung auf den Zustand der Eltern-Pipeline hoch, was am
+            // WHEP-Monitor (strukturell identischer Fall) reproduzierbar
+            // zu einem permanenten `not-linked` führte. Der bestehende
+            // `sync_state_with_parent()`-Sammellauf weiter unten (nach
+            // vollständiger Verlinkung bis zu den Mixer-Pads) deckt
+            // `input.elements` bereits mit ab — kein separater
+            // `activate()`-Aufruf nötig.
+            let input = MxlAudioInput::new_unsynced(&active.pipeline, context.clone(), flow_id)
                 .map_err(|e| format!("MxlAudioInput ({id}, flow {flow_id}): {e}"))?;
             (input.tail.clone(), input.elements.clone(), Some(input))
         }
