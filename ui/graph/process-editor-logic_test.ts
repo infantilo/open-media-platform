@@ -179,3 +179,12 @@ Deno.test("updateStepFields merges only the given fields, leaving graph edges un
   assertEquals(a.timeoutSeconds, 30);
   assertEquals(a.next, ["b"]);
 });
+
+Deno.test("graph edits preserve pass-through triggers (editing an existing version must not drop them)", () => {
+  const triggers = [{ subject: "omp.asset.created" }];
+  let def: DraftDefinition = { steps: [{ id: "a", type: "wait" }], startStepId: "a", triggers };
+  def = addStep(def, "b", "wait");
+  def = renameStepId(def, "b", "c").def;
+  def = removeStep(def, "c");
+  assertEquals(def.triggers, triggers);
+});

@@ -274,10 +274,15 @@ class ProcessView extends HTMLElement {
   // document.body, kein zusätzliches umschließendes .omp-modal (der
   // Editor bringt seine eigene Vollbild-Toolbar samt Speichern/
   // Abbrechen mit, s. process-editor.ts).
-  #openVersionEditor(defId: string) {
+  //
+  // base != null: "Bearbeiten" einer bestehenden Version — veröffentlichte
+  // Versionen sind unveränderlich (A7), ein Draft hat ebenfalls keinen
+  // Update-Endpunkt; Bearbeiten heißt daher immer "neue Draft-Version auf
+  // Basis von vN", nie Überschreiben.
+  #openVersionEditor(defId: string, base: ProcessVersion | null = null) {
     const editor = document.createElement("omp-process-editor") as ProcessEditor;
     document.body.appendChild(editor);
-    editor.open(null);
+    editor.open(base ? (base.definition as DraftDefinition) : null);
 
     const close = () => editor.remove();
     editor.addEventListener("process-editor-cancel", close);
@@ -517,6 +522,13 @@ class ProcessView extends HTMLElement {
       `;
       const actionsTd = document.createElement("td");
       actionsTd.style.cssText = "padding:2px 8px;display:flex;gap:4px;";
+      const editBtn = document.createElement("button");
+      editBtn.textContent = "Bearbeiten";
+      editBtn.title = `Öffnet v${v.versionNumber} im grafischen Editor — Speichern legt eine neue Draft-Version an`;
+      editBtn.addEventListener("click", () => {
+        if (this.#selectedDefId) this.#openVersionEditor(this.#selectedDefId, v);
+      });
+      actionsTd.appendChild(editBtn);
       if (v.status === "draft") {
         const publishBtn = document.createElement("button");
         publishBtn.textContent = "Veröffentlichen";

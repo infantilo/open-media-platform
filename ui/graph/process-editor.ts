@@ -168,7 +168,9 @@ export class ProcessEditor extends HTMLElement {
   // #renderToolbar) statt eines separaten Formulars in ui/shell/
   // process-view.ts — eine Stelle für die gesamte Versions-Erstellung.
   open(definition: DraftDefinition | null) {
-    this.#def = definition ? { steps: definition.steps.map((s) => ({ ...s })), startStepId: definition.startStepId } : { steps: [], startStepId: "" };
+    this.#def = definition
+      ? { ...definition, steps: definition.steps.map((s) => ({ ...s })) }
+      : { steps: [], startStepId: "" };
     this.#positions = {};
     this.#def.steps.forEach((s, i) => {
       this.#positions[s.id] = { x: (i % 4) * 220 + 40, y: Math.floor(i / 4) * 160 + 40 };
@@ -176,7 +178,12 @@ export class ProcessEditor extends HTMLElement {
     this.#changeReason = "";
     this.#editingId = null;
     this.#renderToolbar();
-    this.#render();
+    // Positionen sind nicht Teil des Wire-Formats (Definition kennt
+    // keine Layout-Daten) — eine geladene Version wird daher nach dem
+    // Kantenfluss angeordnet statt im reinen Raster, sonst läse sich
+    // ein bestehender Graph beim Bearbeiten wie Kraut und Rüben.
+    if (this.#def.steps.length > 0) this.#autoArrange();
+    else this.#render();
   }
 
   // Wird vom Aufrufer (process-view.ts) beim Speichern gelesen — der

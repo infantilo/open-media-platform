@@ -27760,3 +27760,42 @@ Regression), `deno bundle` erfolgreich (40 statt 38 Module — bestätigt,
 dass beide neuen Dateien tatsächlich eingebunden wurden). Details:
 UMSETZUNG.md §7 (Status-Checkliste, Eintrag "Kapitel 21 Phase 6 Teil
 2").
+
+## 2026-09-23 (Nachtrag 268) — Prozess-Editor: bestehende Version bearbeiten ("Bearbeiten"-Button)
+
+Nutzerfrage "wie editiere ich prozesse? wo ist der ui/editor dazu?"
+deckte eine echte Lücke aus Phase 6 Teil 2 auf: `<omp-process-editor>`
+konnte zwar per `open(definition)` eine bestehende Definition laden,
+`process-view.ts` rief ihn aber ausschließlich über "+ Neue Version"
+mit `open(null)` auf — ein bestehender Schritt-Graph war im UI weder
+ansehbar noch als Basis bearbeitbar, jede Änderung hieß "von vorn
+zeichnen".
+
+**Fix:** jede Versionszeile hat jetzt einen "Bearbeiten"-Button, der
+den Editor mit genau dieser Version öffnet; Speichern legt — wie bisher
+— eine NEUE Draft-Version an (`POST .../versions`). Bewusst kein
+Überschreiben: veröffentlichte Versionen sind per A7 unveränderlich,
+und auch für Drafts existiert kein Update-Endpunkt; "Bearbeiten" heißt
+im gesamten Modell "neue Version auf Basis von vN".
+
+**Zweiter, dabei gefundener Bug (latent, erst durch das Laden
+bestehender Versionen erreichbar):** `DraftDefinition` kannte nur
+`steps`/`startStepId`, `open()` sowie `addStep`/`removeStep`/
+`renameStepId` bauten das Objekt jeweils neu ohne Spread auf — die
+Event-`triggers` (A8) einer geladenen Version wären beim Speichern
+stillschweigend verloren gegangen, die neue Version hätte nie mehr
+automatisch gestartet. Jetzt `triggers?: unknown[]` als durchgereichtes
+Feld (der Editor bearbeitet Trigger selbst noch nicht, sie referenzieren
+keine Schritt-IDs) und `{ ...def, ... }` in allen drei Funktionen; neuer
+Regressionstest in `process-editor-logic_test.ts`. Zusätzlich ordnet
+`open()` eine geladene Version per `arrangeByFlow` an (Positionen sind
+nicht Teil des Wire-Formats), statt im reinen 4er-Raster.
+
+**Verifikation:** `deno check` sauber, `deno test ui/` 114/114, `deno
+bundle` ok. Live per echtem CDP-Mausklick (`Input.dispatchMouseEvent`)
+gegen den laufenden Orchestrator: Definition "Edit-Button Test" mit v1
+(2 Schritte + 1 Trigger) per API angelegt → Prozesse-Tab → Definition
+→ "Bearbeiten" an v1 → Editor zeigt "2 Schritte — Start: a" mit exakt
+v1s Definition inkl. Trigger → Speichern → UI listet v2/v1, per API
+gegengeprüft: v2 ist byte-gleich zu v1 inkl. `triggers`. Keine
+JS-Fehler.

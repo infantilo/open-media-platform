@@ -37,6 +37,11 @@ export interface DraftStep {
 export interface DraftDefinition {
   steps: DraftStep[];
   startStepId: string;
+  // Event-Trigger (A8) referenzieren keine Schritt-IDs — der Editor
+  // bearbeitet sie (noch) nicht, reicht sie aber unverändert durch,
+  // damit "Version als Basis bearbeiten" einen bestehenden Trigger
+  // nicht stillschweigend verliert.
+  triggers?: unknown[];
 }
 
 // Die kanonische Liste aller 17 Step-Typen aus der Aufgabenstellung
@@ -86,7 +91,7 @@ export function addStep(def: DraftDefinition, id: string, type: string): DraftDe
   // ungültig (Definition.Validate() verlangt startStepId), ohne dass
   // der Nutzer das beim Anlegen des ersten Blocks schon wissen müsste.
   const startStepId = def.startStepId || id;
-  return { steps, startStepId };
+  return { ...def, steps, startStepId };
 }
 
 // removeStep: entfernt einen Schritt und jede Referenz auf ihn — eine
@@ -105,7 +110,7 @@ export function removeStep(def: DraftDefinition, id: string): DraftDefinition {
       return { ...s, next, branches, compensationStepId };
     });
   const startStepId = def.startStepId === id ? "" : def.startStepId;
-  return { steps, startStepId };
+  return { ...def, steps, startStepId };
 }
 
 // renameStepId: aktualisiert jede next-/branches-/compensationStepId-/
@@ -133,7 +138,7 @@ export function renameStepId(
     return { ...renamed, next, branches, compensationStepId };
   });
   const startStepId = def.startStepId === oldId ? trimmed : def.startStepId;
-  return { def: { steps, startStepId }, ok: true };
+  return { def: { ...def, steps, startStepId }, ok: true };
 }
 
 // addNextConnection: unbedingte Kante (AND-Fan-out-fähig, s.
