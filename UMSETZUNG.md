@@ -2993,6 +2993,40 @@ Punkt 1 und 2 sollten vor Beginn von Phase 2 (Domain Model) geklärt
 sein, da sie Paketname/Tabellen-Ownership festlegen; Punkt 3/4 können
 parallel zu Phase 2 offenbleiben.
 
+### 21.5 Entscheidungen zu B10/B5/B14 (2026-09-23, Nachtrag 276 Folge)
+
+Nach B12/B13/B14-Assignee-Fix (Nachtrag 274-276) drei verbliebene
+offene Punkte per `AskUserQuestion` entschieden (§0 Punkt 8):
+
+1. **B10 (Asset↔Workflow-Verknüpfung): generische Link-API.**
+   `POST /api/v1/process-executions/{id}/asset-links
+   {assetVersionId, role: "input"|"output"}` — jeder Schritt/Aufrufer
+   verlinkt explizit, kein Raten anhand von JSON-Feldern, keine
+   Editor-UI-Änderung nötig. Kleinster Umbau der drei Optionen.
+2. **B5 (Storage-Abstraktion): echte MinIO/S3-Anbindung.** Nutzer hat
+   sich GEGEN die schlankere Referenz-Abstraktion entschieden — neuer
+   MinIO-Container im Dev-Stack + echter S3-kompatibler Client +
+   Upload-/Download-Endpunkte. Größer als B10, neue Infrastruktur +
+   neue Abhängigkeit, aber vom Nutzer bewusst gewählt.
+3. **B14 (breiter): volle Mandantenfähigkeit (Tenant/Organization).**
+   Nutzer hat sich für den vollen ursprünglichen Aufgabenumfang
+   entschieden, nicht die begrenzte Asset-/Collection-Scope-Erweiterung.
+   **Mit Abstand der größte der drei Punkte** — betrifft praktisch jede
+   bestehende Domäne (jeder heutige `authz.Check`/`CheckWorkflow`-Aufruf
+   müsste org-bewusst werden) und ist sicherheitskritisch (ein halbfertig
+   org-gescopter Zugriff sieht funktionsfähig aus, kann aber
+   Mandanten-übergreifend Daten offenlegen). Bekommt deshalb — genau wie
+   Kapitel 21 selbst — **zuerst eine eigene Analyse-Phase (kein Code)**,
+   bevor irgendein sicherheitsrelevanter Pfad angefasst wird: welche
+   bestehenden Entitäten/Endpunkte brauchen einen Org-Scope, wie wird ein
+   Nutzer einer Organisation zugeordnet (1:n oder m:n?), was passiert mit
+   bereits bestehenden, org-losen Bindings/Workflows/Assets bei der
+   Migration, wie verhält sich `AnyNode`/globale Bindings künftig
+   gegenüber Org-Grenzen. Umsetzungsreihenfolge (dieser Nachtrag,
+   Priorität): B10 (klein, sofort) → B5 Infra-Phase (MinIO-Container,
+   sofort) → B14-Analyse (sofort, noch kein Code) → B5 restliche Phasen
+   und B14-Implementierung als eigene, spätere Schritte.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3219,3 +3253,4 @@ parallel zu Phase 2 offenbleiben.
 | Kapitel 21 Teil B13 (fachliches Domain-Audit für Process-/Asset-Domäne, Nachtrag 274) | erledigt | Nutzerauftrag "proceed" — nächster offener Punkt aus 21.3 (Teil A vollständig seit Nachtrag 270). Neues additives Paket `orchestrator/internal/domainaudit` (Actor/ObjectType/ObjectID/Action/Details, `ListByObject` für Objekt-Historie, gleicher Store-Stil wie `internal/audit`), Migration `0022_domain_audit.sql`, `httpapi.WithDomainAudit`-Option (kein Aufblähen der `NewHandler`-Parameterliste). 8 Mutationsstellen protokollieren jetzt (Process-Definition/-Version/-Execution/HumanTask, Asset/AssetVersion), neuer Endpunkt `GET /api/v1/domain-audit-log` (admin-only, Cursor-Pagination + Objekt-Filter). 7 neue Tests grün, volle Go-Suite 34/34 Pakete. Live gegen die neu gestartete Dev-Instanz verifiziert (`make stop`+`make start`, nur Orchestrator-Prozess): Migration lief durch, Create/Status-Change erzeugen sofort korrekte Einträge. Live gefunden, NICHT gefixt (gehört zu B14): `human-tasks/{id}/assign`+`/complete` prüfen nur globales `VerbOperate`, nicht ob der Aufrufer `task.Assignee` ist. UI-Anbindung (Administration-Tab) bewusst nicht Teil dieser Sitzung. OFFEN: B14 (Assignee-Scope-Lücke dringendster Teil), B10/B11/B12/B5. | 2026-09-23 |
 | Kapitel 21 B14: Human-Task-Assignee-Autorisierungslücke gefixt (Nachtrag 275) | erledigt | Nutzerauftrag "fix and proceed" — behebt den in Nachtrag 274 live gefundenen Bug: `human-tasks/{id}/assign`+`/complete` prüften nur globales `VerbOperate`, nicht `task.Assignee`. Neue Regel `callerMayActOnHumanTask` (reiner Datenvergleich, keine `authz.Binding`-Erweiterung): unzugewiesener Task bleibt für jeden Operate-Nutzer offen (Pool-/Claim-Fall, `ui/shell/process-view.ts#claimTask` gegengelesen), zugewiesener Task nur für den Assignee selbst oder einen Admin (Eskalationsweg). 8 neue Tests (erste Unit-Tests für die Process-Handler überhaupt, neue Fakes `fakeHumanTaskStore`/`fakeHumanTaskEngine`), Suite weiter 34/34 grün. **Live gegen echte Dev-Instanz mit zwei echten Test-Nutzern verifiziert:** fremder Operate-Nutzer → 403 beim Versuch, Bobs Task zu entscheiden; Bob selbst → 200 (claim funktioniert, korrekter Domain-Audit-Eintrag); Admin-Override → 200. Test-Nutzer+Rollenbindungen danach gelöscht (echte Konten, anders als Test-Prozessdaten). Größeres B14-Thema (tenant/org/asset-Scope-Dimensionen) bleibt offen. | 2026-09-23 |
 | Kapitel 21 B12: Collections/Beziehungen für die Asset-Domäne (Nachtrag 276) | erledigt | Nutzerauftrag "fix and proceed" (proceed-Teil, nach dem B14-Fix). Neue Migration `0023_asset_collections.sql` (`collections`+`collection_members` m:n, `asset_relationships` gerichtet/typisiert, `type` frei wie `Asset.Type`). Neue Typen+Store-Methoden in `internal/asset` (5 neue Tests: CRUD, Mitgliedschaft inkl. Cascade, Beziehungs-Idempotenz, Validierung). HTTP-API: `/api/v1/collections`(+`/members`), `/api/v1/assets/{id}/relationships`, `/api/v1/asset-relationships` — alle Mutationen protokollieren automatisch ins Domain-Audit (Nachtrag 274). B10 bewusst zurückgestellt (echte Design-Unschärfe, wie ein Process-Schritt eine AssetVersion "berührt" — verdient eigene Entscheidung). Suite weiter 34/34 grün. **Live gegen echte Dev-Instanz verifiziert:** Collection+2 Assets+Beziehung angelegt, von beiden Seiten abgefragt, Audit-Trail korrekt, danach Mitglied/Beziehung/Collection wieder gelöscht (inkl. korrektem 404). OFFEN: B10, B11 (Volltextsuche), B5 (Storage, braucht Infra-Entscheidung), UI-Anbindung. | 2026-09-23 |
+| Kapitel 21 B10: Asset↔Workflow-Verknüpfung (Nachtrag 277) | erledigt | Nutzerauftrag "lass uns die ausständigen Entscheidungen jetzt treffen" — Entscheidung 21.5: generische Link-API. Neues Paket `internal/assetlinks` (weder in `internal/process` noch `internal/asset` — beide Domänen bleiben getrennt), Migration `0024_asset_links.sql` (`process_execution_asset_links`, echte FKs auf beide Tabellen, `role` frei wie "input"/"output"). HTTP-API über `httpapi.WithAssetLinks`-Option: `POST/GET .../process-executions/{id}/asset-links`, `GET .../asset-versions/{id}/links`, `DELETE .../asset-links/{id}` — protokolliert automatisch ins Domain-Audit. 6 neue Tests (inkl. echter FK-Verletzung bei erfundener ID). Suite jetzt 35/35 grün. **Live verifiziert:** echte Asset-Version + Execution verlinkt, von beiden Seiten abgefragt, unbekannte ID liefert 400, Link gelöscht. Damit Kapitel 21 Teil B im ohne B5/B14-Vollausbau möglichen Umfang fertig; B11 als kleinerer Rest offen. | 2026-09-23 |

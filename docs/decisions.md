@@ -28507,3 +28507,47 @@ minimal, ein echter S3/MinIO-Provider braucht zuerst eine
 Nutzerentscheidung zu neuer Infrastruktur). UI-Anbindung für B12/B13
 (Administration-/Assets-Tab) weiterhin nicht Teil dieser Sitzungen —
 reine Backend-Lieferung.
+
+## 2026-09-23 (Nachtrag 277) — Kapitel 21 B10: Asset↔Workflow-Verknüpfung (generische Link-API)
+
+Nutzerentscheidung 2026-09-23 (UMSETZUNG.md 21.5, per `AskUserQuestion`):
+generische Link-API statt automatischer Erkennung oder eines neuen
+Prozess-Schritt-Typs.
+
+**Neues, eigenständiges Paket `internal/assetlinks`** (nicht Teil von
+`internal/process` oder `internal/asset` — beide Domänen bleiben laut
+21.2 strikt getrennt, kein Cross-Package-Import; referenziert beide
+Tabellen nur per Fremdschlüssel, gleiches additive Muster wie
+`internal/domainaudit`). Neue Migration `0024_asset_links.sql`:
+`process_execution_asset_links(id, process_execution_id →
+process_executions, asset_version_id → asset_versions, role, created_at)`,
+`role` bewusst frei (TEXT ohne Enum, wie `Asset.Type`/
+`AssetRelationship.Type`) — laut Aufgabe "input"/"output", ein
+künftiger dritter Wert soll keine Migration brauchen. `UNIQUE(execution,
+version,role)` macht ein wiederholtes Verlinken (z. B. nach einem
+Schritt-Retry, A4) zum No-Op statt zum Konflikt.
+
+**HTTP-API** (`httpapi.WithAssetLinks`-Option, gleiches optionale Muster
+wie `WithAlarmAckStore`/`WithDomainAudit` — kein weiterer Eingriff in
+`NewHandler`s Positionsparameterliste): `POST/GET
+/api/v1/process-executions/{id}/asset-links`, `GET
+/api/v1/asset-versions/{id}/links` (Rückverfolgung), `DELETE
+/api/v1/asset-links/{id}`. "operate"-Verb (gleiche Einstufung wie
+Execution-Aktionen/Asset-Beziehungen). Jede Mutation protokolliert
+automatisch ins Domain-Audit (Nachtrag 274).
+
+**Verifikation:** 6 neue Tests in `internal/assetlinks` (inkl. eines
+Tests, der eine echte Fremdschlüssel-Verletzung bei erfundener
+Execution-/Version-ID erwartet — der eigentliche Witz dieses Pakets
+gegenüber einem bloßen String-Verweis). Volle Go-Suite jetzt 35/35
+Pakete grün, `go vet`/`gofmt` sauber. **Live gegen die neu gestartete
+Dev-Instanz**: echte Asset-Version + echte Process-Execution angelegt,
+als "output" verlinkt, von beiden Seiten korrekt abgefragt, unbekannte
+Asset-Version-ID liefert korrekt 400 (nicht 500), Link wieder gelöscht.
+
+Mit B10/B12/B13/B14(-Assignee-Fix) ist Kapitel 21 Teil B jetzt in dem
+Umfang umgesetzt, der ohne die beiden großen, bewusst zurückgestellten
+Punkte (B5 volle MinIO/S3-Anbindung, B14 volle Mandantenfähigkeit —
+beide vom Nutzer am 2026-09-23 so entschieden, s. UMSETZUNG.md 21.5)
+möglich ist. B11 (Volltextsuche) bleibt als kleinerer, nicht
+entscheidungsbedürftiger Rest offen.

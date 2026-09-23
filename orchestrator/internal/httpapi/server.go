@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/assetlinks"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
@@ -252,6 +253,19 @@ type AssetService interface {
 	CreateRelationship(fromAssetID, toAssetID, relType, createdBy string) (asset.AssetRelationship, error)
 	ListRelationships(assetID string) ([]asset.AssetRelationship, error)
 	DeleteRelationship(id string) error
+}
+
+// AssetLinkService verknüpft ProcessExecutions mit AssetVersions
+// (implementiert von *assetlinks.Store, Kapitel 21 B10, Nachtrag 277)
+// — eigenes Interface statt Erweiterung von ProcessStoreService/
+// AssetService, da es bewusst KEINER der beiden Domänen gehört (21.2:
+// process/asset bleiben getrennt, dieses Paket referenziert beide nur
+// per Fremdschlüssel).
+type AssetLinkService interface {
+	CreateLink(processExecutionID, assetVersionID, role string) (assetlinks.Link, error)
+	ListByExecution(processExecutionID string) ([]assetlinks.Link, error)
+	ListByAssetVersion(assetVersionID string) ([]assetlinks.Link, error)
+	DeleteLink(id string) error
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -585,6 +599,19 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/assets/{id}/relationships", g.requireAuth(handleListAssetRelationships(assetSvc)))
 	mux.HandleFunc("POST /api/v1/asset-relationships", g.requireVerbGlobal(authz.VerbOperate, handleCreateRelationship(assetSvc, options.domainAudit)))
 	mux.HandleFunc("DELETE /api/v1/asset-relationships/{id}", g.requireVerbGlobal(authz.VerbOperate, handleDeleteRelationship(assetSvc, options.domainAudit)))
+
+	// Kapitel 21 B10 (Nachtrag 277) — generische Link-API statt
+	// automatischer Erkennung oder neuem Schritt-Typ (Nutzerentscheidung
+	// 2026-09-23, UMSETZUNG.md 21.5). Optional wie /api/v1/alarms/acks:
+	// fehlt WithAssetLinks, bleiben die Endpunkte inaktiv. Verlinken ist
+	// "operate" (gleiche Einstufung wie Execution-Aktionen/Asset-
+	// Beziehungen), nicht "configure".
+	if options.assetLinks != nil {
+		mux.HandleFunc("GET /api/v1/process-executions/{id}/asset-links", g.requireAuth(handleListAssetLinksByExecution(options.assetLinks)))
+		mux.HandleFunc("POST /api/v1/process-executions/{id}/asset-links", g.requireVerbGlobal(authz.VerbOperate, handleCreateAssetLink(options.assetLinks, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/asset-versions/{id}/links", g.requireAuth(handleListAssetLinksByVersion(options.assetLinks)))
+		mux.HandleFunc("DELETE /api/v1/asset-links/{id}", g.requireVerbGlobal(authz.VerbOperate, handleDeleteAssetLink(options.assetLinks, options.domainAudit)))
+	}
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))
 	return countRequests(reqCounters, noStoreForAPI(mux))

@@ -27,6 +27,7 @@ type handlerOptions struct {
 	scriptCommands []string
 	domainAudit    DomainAuditLogger
 	domainAuditR   DomainAuditReader
+	assetLinks     AssetLinkService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
@@ -42,6 +43,13 @@ func WithAlarmAckStore(s AlarmAckStore) HandlerOption {
 // Mutationsstellen No-Ops (nil-Check dort), der Endpunkt ist inaktiv.
 func WithDomainAudit(logger DomainAuditLogger, reader DomainAuditReader) HandlerOption {
 	return func(o *handlerOptions) { o.domainAudit = logger; o.domainAuditR = reader }
+}
+
+// WithAssetLinks aktiviert das Verknüpfen von ProcessExecutions mit
+// AssetVersions (Kapitel 21 B10, Nachtrag 277) — gleiches optionales
+// Muster wie WithAlarmAckStore/WithDomainAudit.
+func WithAssetLinks(svc AssetLinkService) HandlerOption {
+	return func(o *handlerOptions) { o.assetLinks = svc }
 }
 
 const alarmAckChangedEvent = "alarm.ack.changed"
