@@ -273,6 +273,64 @@ stoppt den echten Workflow zur eingetragenen Uhrzeit, auch unbeaufsichtigt
 — zum Ausprobieren einen eigens dafür angelegten, unwichtigen Workflow
 verwenden, nicht einen produktiv genutzten Regieplatz.
 
+## 5a. Prozesse
+
+Der Reiter **Prozesse** ist die Business-Prozess-Engine (Ablaufgraph aus
+Schritten wie Genehmigung, Service-Aufruf, ffmpeg-Skript, Bedingung) —
+bewusst ein anderes Konzept als die **Workflows** aus Abschnitt 4 (dort:
+Node-Verkabelung eines Regieplatzes). Links die Prozess-Definitionen,
+rechts deren Versionen, Ausführungen und offene Aufgaben.
+
+- **„+ Neu"** legt eine Definition an (nur Name/Beschreibung).
+- **„+ Neue Version"** öffnet den grafischen Editor mit leerem Graphen:
+  Schritt-Typen aus der Palette ziehen, vom Ausgangs-Anker eines Schritts
+  zum nächsten ziehen, um sie zu verbinden (Kantentyp „weiter" oder
+  benannter Zweig), Doppelklick/„Konfigurieren" für die
+  Schritt-Einstellungen, **Speichern** legt die Version an.
+- **Einen bestehenden Prozess bearbeiten:** in der Versionstabelle
+  **„Bearbeiten"** an der gewünschten Version — der Editor öffnet mit
+  genau diesem Graphen, **Speichern** legt daraus eine **neue**
+  Entwurfs-Version an. Eine Version selbst wird nie überschrieben:
+  veröffentlichte Versionen sind unveränderlich, laufende und frühere
+  Ausführungen bleiben so nachvollziehbar.
+- **„Veröffentlichen"** macht einen Entwurf startbar, **„Starten"** an
+  einer veröffentlichten Version startet eine Ausführung (optional mit
+  JSON-Eingabe). Ausführungen lassen sich pausieren, fortsetzen und
+  abbrechen; ihre Schritte und Genehmigungs-Aufgaben erscheinen darunter
+  („Für mich beanspruchen" → „Genehmigen"/„Ablehnen"/„Änderungen
+  anfordern").
+
+## 5b. Assets
+
+Der Reiter **Assets** verwaltet Medien-Assets samt Metadaten,
+Versionen und technischen Dateien (Representations):
+
+- Links die Asset-Liste mit Suche (Titel/Beschreibung/Typ) und Filtern
+  nach Typ und Status; gelöschte Assets sind ausgeblendet, bis
+  „Gelöschte anzeigen" aktiv ist. **„+ Neu"** legt ein Asset an (Titel,
+  frei wählbarer Typ wie `video`/`audio`, Beschreibung) — es startet im
+  Status „Eingang".
+- **Status ändern:** die Knöpfe unter dem Titel bieten nur die Übergänge
+  an, die der Lebenszyklus vom aktuellen Status aus erlaubt (Eingang →
+  Registriert → In Verarbeitung → Bereit → In Prüfung → Freigegeben →
+  Veröffentlicht → Archiviert, plus Rückwege, „Abgelaufen" und
+  „Gelöscht"). „Gelöscht" ist ein Endzustand und fragt vorher nach.
+- **Metadaten → „Bearbeiten"** öffnet ein Formular mit Feldname/Wert je
+  Kategorie (Beschreibend, Redaktionell, Technisch, Eigene Felder,
+  KI-generiert, System). Strukturierte Werte (Zahlen, Listen) erscheinen
+  als JSON in Monospace-Schrift und bleiben beim Speichern Zahl bzw.
+  Liste. Hat jemand anderes das Asset währenddessen geändert, lehnt der
+  Server das Speichern ab, das Formular schließt sich mit Hinweis — neu
+  öffnen, damit nichts Fremdes überschrieben wird.
+- **Versionen:** „+ Neue Version" legt einen Entwurf an (optional auf
+  Basis einer früheren Version, mit Änderungsgrund). Eine Zeile anklicken
+  zeigt deren **Representations** (z. B. Master, Proxy, Thumbnail mit
+  Speicherort und Technik wie 1920×1080 · 25 fps). Representations lassen
+  sich nur an einem **Entwurf** hinzufügen oder entfernen;
+  **„Veröffentlichen"** macht die Version unveränderlich und zur
+  aktuellen Version des Assets (★). Für geänderte Dateien danach eine
+  neue Version anlegen.
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative

@@ -11,6 +11,22 @@ import (
 
 // ---- Asset --------------------------------------------------------------------------------------
 
+// handleAssetLifecycle liefert GET /api/v1/asset-lifecycle: die
+// erlaubten Asset- (B8) und AssetVersion-Übergänge (B3) als from ->
+// Ziel-Liste, direkt aus asset.LifecycleTransitions/VersionTransitions —
+// die UI zeigt damit nur tatsächlich erlaubte Übergänge an, ohne den
+// Zustandsgraphen im Frontend zu duplizieren. Statisch, braucht keinen
+// Store.
+func handleAssetLifecycle() http.HandlerFunc {
+	body := map[string]map[string][]string{
+		"asset":   asset.LifecycleTransitions.Graph(),
+		"version": asset.VersionTransitions.Graph(),
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, body)
+	}
+}
+
 // handleListAssets liefert GET /api/v1/assets — Filter über
 // Query-Parameter (beide optional, kombinierbar): ?type=&status=.
 func handleListAssets(svc AssetService) http.HandlerFunc {
@@ -274,7 +290,7 @@ func writeAssetError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 	case errors.Is(err, asset.ErrValidation):
 		http.Error(w, err.Error(), http.StatusBadRequest)
-	case errors.Is(err, asset.ErrConcurrentModification), errors.Is(err, statemachine.ErrInvalidTransition):
+	case errors.Is(err, asset.ErrConcurrentModification), errors.Is(err, asset.ErrVersionImmutable), errors.Is(err, statemachine.ErrInvalidTransition):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -27799,3 +27799,91 @@ gegen den laufenden Orchestrator: Definition "Edit-Button Test" mit v1
 v1s Definition inkl. Trigger → Speichern → UI listet v2/v1, per API
 gegengeprüft: v2 ist byte-gleich zu v1 inkl. `triggers`. Keine
 JS-Fehler.
+
+## 2026-09-23 (Nachtrag 269) — Kapitel 21 Phase 6 Teil 3: Assets-Tab; B3-Lücke (Representations an veröffentlichten Versionen) geschlossen; TriggerListener-Stop-Rennen + Test-Stream-Leck behoben
+
+Nutzerauftrag "danach starte mit assets-tab" (nach Nachtrag 268).
+
+**Assets-Tab (`ui/shell/asset-view.ts` + DOM-freies
+`asset-view-logic.ts`, 6 neue Tests).** Master-Detail wie
+`process-view.ts`: Liste mit Suche/Typ-/Status-Filter ("Gelöschte
+anzeigen" separat, `deleted` ist ein B8-Endzustand, der Datensatz
+bleibt), Detail mit Lifecycle-Buttons, Metadaten, Versionen,
+Representations. Drei bewusste Abweichungen vom Process-Tab-Muster:
+
+1. **Kein zweiter Zustandsgraph im Frontend.** Neuer Endpunkt
+   `GET /api/v1/asset-lifecycle` liefert `asset.LifecycleTransitions`/
+   `VersionTransitions` über das neue `statemachine.Machine.Graph()`
+   (sortierte Kopie, +1 Test). Die UI bietet genau die erlaubten
+   Übergänge an; eine Kopie im TS wäre bei der nächsten Graph-Änderung
+   stillschweigend auseinandergelaufen.
+2. **Persistentes Grundgerüst statt Voll-Rerender.** Der 15s-Poll
+   rendert nur Liste und Detail neu; Filterleiste und Modals bleiben
+   bestehen. (Beobachtung, nicht geändert: `process-view.ts` rendert bei
+   jedem Poll alles inkl. offener Modals neu, halb eingegebene
+   Formulardaten gehen dort verloren. Eigener kleiner Folgepunkt.)
+3. **Metadaten als Schlüssel/Wert-Formular statt JSON-Textfeld**
+   (Zielgruppe laut Aufgabe auch Nicht-Techniker). Nicht-String-Werte
+   bleiben als JSON bearbeitbar und behalten ihren Typ; neue Felder
+   sind immer Strings (ein Wert "2024" wird nicht zur Zahl). CAS-
+   Konflikt (409) schließt das Formular mit Hinweis, statt mit veralteter
+   rowVersion endlos zu scheitern oder fremde Änderungen zu überschreiben.
+
+**B3-Lücke im Backend (beim UI-Bau gefunden).** Die Aufgabenstellung sagt
+wörtlich: "Eine veröffentlichte Version darf nicht still verändert
+werden". `CreateRepresentation`/`DeleteRepresentation` prüften den
+Versionsstatus aber gar nicht: Master einer veröffentlichten Version
+ließen sich löschen, ohne Event. Jetzt sperrt `lockDraftVersion()` die
+Versionszeile `FOR UPDATE` in derselben Transaktion und liefert
+`ErrVersionImmutable` (HTTP 409), wenn sie kein Draft ist. Die Sperre
+schließt das Rennen mit einem parallelen `PublishVersion` (dessen
+`UPDATE … WHERE status='draft'` wartet auf sie bzw. umgekehrt).
+Nebeneffekt: eine unbekannte Versions-ID liefert jetzt 404 statt einer
+FK-Verletzung als 500. +2 DB-Tests.
+
+**TriggerListener: echtes Stop()-Rennen (Produktionscode).** Beim
+Voll-Testlauf hing `internal/process` erneut. Diesmal gab es VOR dem
+Lauf keine `TEST_*`-Reste. Die Korrektur zu Nachtrag 263 ("verwaiste
+Streams sind die Ursache") war also nur die halbe Wahrheit. Der
+Go-Stack-Dump eines hängenden Laufs zeigte `Stop()` in
+`activeWG.Wait()` und `runConsumer` auf `<-ctx.Done()`
+(triggerlistener.go:221). Ursache: `Sync()` liest die Definitionen
+ungesperrt; landet `Stop()` in diesem Fenster, räumt es `active` ab.
+`Sync()` findet danach eine leere Map und startet die Consumer mit einem
+Kontext neu, den niemand mehr abbricht. Folge: Stop() hängt für immer,
+oder (wenn Wait() vor dem Add() lief) ein verwaister Consumer läuft
+weiter. Letzteres heißt in Produktion (Stop() bei Leader-Verlust über
+`runWhileLeader`): Trigger-Verarbeitung auf einem Nicht-Leader. Fix: das
+Flag `stopped` wird in Stop() unter `mu` gesetzt und in Sync() unter `mu`
+geprüft. Regressionstest `TestTriggerListenerStopDuringSyncDoesNotLeakConsumer`
+ist deterministisch über den Test-Einhängepunkt `syncBeforeApply` (nil in
+Produktion), statt auf Timing-Glück zu bauen. Ohne Fix schlägt er fehl
+("active consumers after Stop() = 1"), mit Fix ist er grün, auch unter `-race`.
+
+**Test-Stream-Leck (Ursache der sich anhäufenden `TEST_*`-Streams).**
+In 3 Outbox-Tests und 1 Trigger-Test lief `defer closeNC()` VOR den
+`t.Cleanup(DeleteStream)`-Funktionen. `DeleteStream` traf eine
+geschlossene Verbindung ("nats: connection closed", per `_ =`
+verschluckt), und JEDER Lauf, auch ein erfolgreicher, ließ Streams
+liegen (per temporärem Log belegt). Jetzt `t.Cleanup(closeNC)`, zuerst
+registriert, läuft also zuletzt.
+
+**Verifikation:** `go vet ./...` sauber; `internal/process` 20× in Folge
+ohne Fehlschlag (vorher hing etwa jeder zweite Lauf), danach 0
+`TEST_*`-Reste. Voller Orchestrator-Lauf mit DB 2× (35 Pakete): Lauf 2
+komplett grün. Lauf 1 hatte einen Fehlschlag in
+`internal/workflows.TestRestartRoleCapturesAndRestoresNodeState`
+(unberührtes Paket, isoliert 40/40 grün, 2s-Deadline unter voller
+Parallel-Last), dokumentiert, nicht geändert. `deno check`, `deno test
+ui/` 120/120, `deno bundle` (42 Module). **Live** (Orchestrator-Neustart
+mit Nutzerzustimmung) per CDP mit echten Maus- und Tastatur-Events in 9
+Szenarien: Anlegen → Auto-Auswahl; Status-Buttons = Backend-Graph
+(`registered`/`deleted` ab `ingesting`); Metadaten-Speichern mit
+erhaltenem Zahlentyp; CAS-Konflikt (Parallel-Änderung per API → Toast,
+Modal zu, Fremdänderung erhalten); Version anlegen; Representation mit
+abgefangener ungültiger Zahl; Veröffentlichen mit Bestätigung →
+`currentVersionId` gesetzt, UI-Unveränderlich-Hinweis, API lehnt
+Delete/Add mit 409 ab; Suchfeld behält Fokus über einen 15s-Poll;
+Löschen mit Bestätigung → ausgeblendet. Keine JS-Fehler. Testdaten-Reste
+in der Dev-Postgres (keine Delete-Endpunkte): 2 Assets "CDP Asset Test …"
+(Status gelöscht), Prozess-Definition "Edit-Button Test" (2 Draft-Versionen).

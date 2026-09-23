@@ -15,6 +15,7 @@ package statemachine
 import (
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // ErrInvalidTransition wird von Validate zurückgegeben, wenn der Übergang
@@ -64,4 +65,22 @@ func (m *Machine) Validate(from, to string) error {
 // — z. B. COMPLETED/CANCELLED/DELETED, je nach Domäne).
 func (m *Machine) IsTerminal(state string) bool {
 	return len(m.allowed[state]) == 0
+}
+
+// Graph liefert den kompletten Zustandsgraphen als from -> sortierte
+// Ziel-Liste — für Aufrufer außerhalb von Go (UI), die erlaubte
+// Übergänge anzeigen wollen, ohne die Erlaubt-Liste zu duplizieren
+// (eine zweite Kopie im Frontend würde bei der nächsten Änderung
+// stillschweigend auseinanderlaufen). Liefert eine frische Kopie.
+func (m *Machine) Graph() map[string][]string {
+	out := make(map[string][]string, len(m.allowed))
+	for from, tos := range m.allowed {
+		list := make([]string, 0, len(tos))
+		for to := range tos {
+			list = append(list, to)
+		}
+		sort.Strings(list)
+		out[from] = list
+	}
+	return out
 }

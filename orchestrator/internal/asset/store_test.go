@@ -346,3 +346,45 @@ func TestCreateAssetMissingFieldsIsErrValidation(t *testing.T) {
 		t.Fatalf("CreateAsset() error = %v, want errors.Is(err, ErrValidation)", err)
 	}
 }
+
+// B3: "Eine veröffentlichte Version darf nicht still verändert werden" —
+// Representations sind nur an Drafts änderbar.
+func TestRepresentationsImmutableOncePublished(t *testing.T) {
+	s := NewStore(testDB(t))
+	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	v, _ := s.CreateVersion(a.ID, "", "", "alice")
+	master, err := s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "master", Storage: StorageLocation{Provider: "filesystem", URI: "/m.mov"}})
+	if err != nil {
+		t.Fatalf("CreateRepresentation() on draft error = %v", err)
+	}
+	if _, err := s.PublishVersion(v.ID); err != nil {
+		t.Fatalf("PublishVersion() error = %v", err)
+	}
+
+	_, err = s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "proxy", Storage: StorageLocation{Provider: "filesystem", URI: "/p.mp4"}})
+	if !errors.Is(err, ErrVersionImmutable) {
+		t.Fatalf("CreateRepresentation() on published error = %v, want ErrVersionImmutable", err)
+	}
+	if err := s.DeleteRepresentation(master.ID); !errors.Is(err, ErrVersionImmutable) {
+		t.Fatalf("DeleteRepresentation() on published error = %v, want ErrVersionImmutable", err)
+	}
+	list, _ := s.ListRepresentations(v.ID)
+	if len(list) != 1 || list[0].ID != master.ID {
+		t.Fatalf("representations of published version changed: %+v", list)
+	}
+
+	if _, err := s.ArchiveVersion(v.ID); err != nil {
+		t.Fatalf("ArchiveVersion() error = %v", err)
+	}
+	if err := s.DeleteRepresentation(master.ID); !errors.Is(err, ErrVersionImmutable) {
+		t.Fatalf("DeleteRepresentation() on archived error = %v, want ErrVersionImmutable", err)
+	}
+}
+
+func TestCreateRepresentationUnknownVersionIsNotFound(t *testing.T) {
+	s := NewStore(testDB(t))
+	_, err := s.CreateRepresentation(Representation{AssetVersionID: "nope", Type: "master", Storage: StorageLocation{Provider: "filesystem", URI: "/m.mov"}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("CreateRepresentation() unknown version error = %v, want ErrNotFound", err)
+	}
+}

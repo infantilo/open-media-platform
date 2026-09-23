@@ -254,7 +254,13 @@ both produce the identical JSON. Alongside it, an asset/content domain
 model (assets, versions, representations, free-form metadata
 categories, an explicit ingest→…→published→archived lifecycle state
 machine) gives the process engine something real to operate on,
-storage-provider-agnostic by design.
+storage-provider-agnostic by design. Its own "Assets" tab offers
+search/filter, lifecycle transitions (only those the backend state
+machine actually allows — the UI reads them from the server rather
+than keeping its own copy), a key/value metadata editor that keeps
+non-string values intact, and versions with their technical
+representations; a published version is enforced immutable on the
+server, not just hidden in the UI.
 
 **Microservices** (demonstration nodes, not the focus — see the note
 above) — each an independent process that self-registers via NMOS,
@@ -613,7 +619,9 @@ step-graph editor reusing the Flow Editor's own `ui/graph` primitives)
 — live-verified end to end against the real running orchestrator at
 every step, including a real browser click-through of the visual
 editor (genuine CDP-driven mouse drags, not just API calls) that
-created a step graph, connected it, and ran it to completion.
+created a step graph, connected it, and ran it to completion. The
+"Assets" tab followed, along with editing an existing process version
+in the visual editor.
 
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,
@@ -621,9 +629,7 @@ pending hardware procurement), an NDI gateway, proprietary Dante (Dante in
 AES67 mode already runs via `omp-aes67-gateway`), a drag-to-move UI
 for the already-built workflow-role migration backend (the flow
 editor now at least places a running workflow's tile in its correct
-host zone, see "What OpenMediaPlatform does not do" above), and a UI
-for the new asset/content domain (its HTTP API is complete, no
-dedicated tab yet).
+host zone, see "What OpenMediaPlatform does not do" above).
 
 ## License
 

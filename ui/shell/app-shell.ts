@@ -12,6 +12,7 @@ import type { FlowCanvas } from "../graph/flow-canvas.ts";
 import "./hosts-view.ts";
 import "./workflows-view.ts";
 import "./process-view.ts";
+import "./asset-view.ts";
 import "./instances-view.ts";
 import "./alarm-view.ts";
 import "./alert-bar.ts";
@@ -21,7 +22,7 @@ import "./admin-view.ts";
 import { apiFetch, type ConnectionChangeDetail, type ConnectionState, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 
-type TabId = "flow" | "workflows" | "process" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
+type TabId = "flow" | "workflows" | "process" | "assets" | "hosts" | "instances" | "alarms" | "health" | "scheduler" | "admin";
 
 interface TabDef {
   id: TabId;
@@ -36,6 +37,10 @@ const BASE_TABS: TabDef[] = [
   // Versions/Executions/HumanTasks) — disjunkt vom Workflow-Tab, s.
   // UMSETZUNG.md §6b/21.2 Namenskollisions-Entscheidung.
   { id: "process", label: "Prozesse", element: "omp-process-view" },
+  // Kapitel 21 Phase 6 Teil 3: Asset/Content-Domäne (Assets/Lifecycle/
+  // Metadaten/Versionen/Representations), direkt neben "Prozesse" —
+  // beide Domänen gehören laut Aufgabenstellung eng zusammen.
+  { id: "assets", label: "Assets", element: "omp-asset-view" },
   { id: "hosts", label: "Hosts", element: "omp-hosts-view" },
   // §17 Teil 2 (docs/END-GOAL-FEATURES.md, 2026-07-19): "Laufende
   // Instanzen"-Tab — baut auf Kapitel 14 (Ressourcenwerte), kein neuer

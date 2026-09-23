@@ -528,6 +528,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// published, B8) sind "operate" — eine redaktionelle Bedienhandlung
 	// an existierendem Content, dieselbe Einstufung wie HumanTask-
 	// Zuweisen/Entscheiden, nicht Konfiguration des Systems selbst.
+	mux.HandleFunc("GET /api/v1/asset-lifecycle", g.requireAuth(handleAssetLifecycle()))
 	mux.HandleFunc("GET /api/v1/assets", g.requireAuth(handleListAssets(assetSvc)))
 	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc)))
 	mux.HandleFunc("GET /api/v1/assets/{id}", g.requireAuth(handleGetAsset(assetSvc)))

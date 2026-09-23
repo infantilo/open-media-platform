@@ -27,6 +27,12 @@ var ErrConcurrentModification = errors.New("asset: concurrent modification")
 // Konvention wie process.ErrValidation.
 var ErrValidation = errors.New("asset: validation failed")
 
+// ErrVersionImmutable: Representation-Änderung (Anlegen/Löschen) an
+// einer nicht mehr im Draft befindlichen AssetVersion. B3 wörtlich:
+// "Eine veröffentlichte Version darf nicht still verändert werden" —
+// neue/andere Representations brauchen eine neue Version.
+var ErrVersionImmutable = errors.New("asset: version is not a draft, representations are immutable")
+
 // Store persistiert die Asset-Domäne in Postgres
 // (db/migrations/0019_assets.sql). outbox ist optional (nil-sicher,
 // gleiches Muster wie process.EventPublisher) — gesetzt, veröffentlicht
@@ -510,7 +516,17 @@ func (s *Store) CreateRepresentation(r Representation) (Representation, error) {
 	}
 	r.ID = id
 	r.CreatedAt = time.Now().UTC()
-	_, err = s.db.Exec(`
+
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Representation{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := lockDraftVersion(ctx, tx, r.AssetVersionID); err != nil {
+		return Representation{}, err
+	}
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO representations (id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`, r.ID, r.AssetVersionID, r.Type, r.Storage.Provider, r.Storage.URI, r.Format, r.Codec, r.Container,
@@ -518,7 +534,31 @@ func (s *Store) CreateRepresentation(r Representation) (Representation, error) {
 	if err != nil {
 		return Representation{}, err
 	}
+	if err := tx.Commit(); err != nil {
+		return Representation{}, err
+	}
 	return r, nil
+}
+
+// lockDraftVersion sperrt die AssetVersion-Zeile (FOR UPDATE) und
+// liefert ErrVersionImmutable, wenn sie kein Draft mehr ist (B3). Die
+// Zeilensperre schließt das Rennen mit einem parallelen PublishVersion
+// (dessen `UPDATE … WHERE status = 'draft'` wartet auf diese Sperre bzw.
+// umgekehrt): eine Representation landet entweder noch VOR dem Publish
+// in der Version oder wird danach abgelehnt — nie still hinterher.
+func lockDraftVersion(ctx context.Context, tx *sql.Tx, versionID string) error {
+	var status string
+	err := tx.QueryRowContext(ctx, `SELECT status FROM asset_versions WHERE id = $1 FOR UPDATE`, versionID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if status != VersionStatusDraft {
+		return fmt.Errorf("%w (status %q)", ErrVersionImmutable, status)
+	}
+	return nil
 }
 
 // GetRepresentation liest eine einzelne Representation.
@@ -554,6 +594,25 @@ func (s *Store) ListRepresentations(assetVersionID string) ([]Representation, er
 // Fehler, wenn sie nicht (mehr) existiert (gleiches Muster wie
 // workflows.Store.Delete).
 func (s *Store) DeleteRepresentation(id string) error {
-	_, err := s.db.Exec(`DELETE FROM representations WHERE id = $1`, id)
-	return err
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var versionID string
+	err = tx.QueryRowContext(ctx, `SELECT asset_version_id FROM representations WHERE id = $1`, id).Scan(&versionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // idempotent: schon weg
+	}
+	if err != nil {
+		return err
+	}
+	if err := lockDraftVersion(ctx, tx, versionID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM representations WHERE id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

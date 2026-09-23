@@ -48,3 +48,18 @@ func TestSameStateNotImplicitlyAllowed(t *testing.T) {
 		t.Errorf("Allowed(a, a) = true, want false — self-loops must be listed explicitly, not assumed")
 	}
 }
+
+func TestGraph(t *testing.T) {
+	m := New([][2]string{{"a", "c"}, {"a", "b"}, {"b", "c"}})
+	g := m.Graph()
+	if len(g) != 2 || len(g["a"]) != 2 || g["a"][0] != "b" || g["a"][1] != "c" || g["b"][0] != "c" {
+		t.Fatalf("unexpected graph: %v", g)
+	}
+	if _, ok := g["c"]; ok {
+		t.Fatalf("terminal state must not appear as a key: %v", g)
+	}
+	g["a"][0] = "mutated"
+	if m.Graph()["a"][0] != "b" {
+		t.Fatal("Graph must return a copy")
+	}
+}
