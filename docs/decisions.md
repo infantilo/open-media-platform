@@ -28088,3 +28088,120 @@ neuen Modus stabil bei 0/−1 Grains zur Quelle.
 **Verifikation:** `cargo test --workspace` 263/263 grün; `omp-mediaio`
 Unit-Tests inkl. 6 neuer `timebase`-Tests und angepasster
 `compute_write_index`-Tests; Clippy ohne neue Warnungen.
+
+## 2026-09-23 (Nachtrag 272) — Zeitbasis-Bug: Switcher-Pfad live bestätigt; NEUE Video-Regression im WHEP-Monitor gefunden+root-caused (noch NICHT gefixt)
+
+Fortsetzung von Nachtrag 271 ("fahre fort"), erster Teil des dort offen
+gelassenen NEXT-Punkts: Live-Test des Handy/WebRTC-Pfads ohne echtes
+Handy (headless Chromium, `--use-fake-device-for-media-stream`, CDP-
+Steuerung wie in [[feedback-cdp-browser-test-no-tool-available]]
+beschrieben — kein Puppeteer/MCP-Tool vorhanden).
+
+**Aufbau:** `omp-webrtc-gateway` Kamera (9440) + Monitor (9442) +
+`omp-switcher` (9350) manuell gestartet (Release-Build, vorher neu
+gebaut — der vorhandene Release-Build war älter als commit c918fee),
+IS-05 direkt per `curl` verdrahtet (Kamera → Switcher-Auswahl UND
+Kamera → Monitor-Receiver, beides parallel). Headless-Kamera-Tab klickt
+„Senden" (WHIP), verifiziert per `pc.getStats()` echte ausgehende
+Video-RTP (H.264, OpenH264-Encoder, reale Framezahlen).
+
+**Teil 1 — Switcher-Pfad: BESTÄTIGT GESUND.** `timebase_probe` gegen den
+Switcher-Ausgang (der die Handy-Kamera als aktiven Eingang liest) über
+15s: 0 Stalls, 0 Index-Lücken, 326 gerenderte Grains. Die ~20%
+Wiederholungen sind KEIN Bug, sondern die erwartete 30-fps-Kamera- zu
+25-fps-Switcher-Ausgabe-Diskrepanz (`FRAMERATE_NUMERATOR`/
+`_DENOMINATOR` in `omp-switcher/src/pipeline.rs`, PAL-Standard,
+Kamera-Default ist 30 fps). Der Handy-Kamera-Zweig der neuen
+Zeitbasis funktioniert damit über eine echte (wenn auch headless)
+WebRTC-Quelle nachweislich wie im Harness.
+
+**Teil 2 — WHEP-Monitor: NEUE Regression gefunden.** Der Handy-Monitor
+(WHEP, MXL → Browser) empfängt in einem sauberen, einmaligen Testlauf
+(kein Session-Churn, s. u.) über 15-20s **0 Video-RTP-Pakete** —
+`pc.getStats()` im Browser zeigt für `inbound-rtp`/video überhaupt
+keinen Eintrag, während Audio im selben Peer-Connection normal läuft
+(>1000 Pakete, 0 Verlust). Reproduziert 2/2 sauber. **A/B mit
+`OMP_MXL_TIMEBASE=arrival` bestätigt: Video läuft dort einwandfrei**
+(>700 dekodierte Frames in 15s, Keyframes, wachsende Paketzahlen) — die
+Regression ist spezifisch an den neuen Index-Zeitbasis-Modus aus
+Nachtrag 271 gebunden, NICHT am WHEP-Code selbst (der ist unverändert
+seit dem live bestätigten Fix in commit 234ba58).
+
+**Root Cause (per `GST_DEBUG=appsrc:6,GST_PADS:5,basesrc:5` live
+bestätigt, nicht geraten):** `omp-mediaio::mxl::MxlVideoInput::new()`
+baut die interne Lesekette (`appsrc`→`videoconvert`→`videoscale`→
+`videorate`) und ruft `sync_state_with_parent()` auf allen vier
+Elementen SELBST auf, BEVOR die Funktion zurückkehrt — notwendig, weil
+neu zu einer bereits `PLAYING`-Pipeline hinzugefügte Elemente sonst für
+immer in `NULL` hängen bleiben (s. bestehende Moduldoku, Kapitel 15
+Teil 3). `omp-webrtc-gateway::monitor::Monitor::connect_video()`
+verlinkt `input.tail` (= `videorate`) danach ERST im nächsten Statement
+an `self.video_mid`. In diesem winzigen Zeitfenster kann `appsrc`s
+eigener Streaming-Task (durch den `sync_state_with_parent()`-Aufruf
+selbst ausgelöst, PAUSED→PLAYING) bereits zu pushen beginnen — Log
+zeigt `videorate0:src`: „Dropping event stream-start/caps because pad
+is not linked" nur Millisekunden nach der Aktivierung, gefolgt von
+einem fatalen `not-linked`-Fehler auf `appsrc0` selbst (`gst_base_src_loop`
+stoppt den Task dauerhaft, sobald ein echter Datenpuffer statt nur ein
+Sticky-Event auf einen unverlinkten Pad trifft). Derselbe
+Grundmechanismus wie der bereits gefixte Tee-Pad-Race (Nachtrag 250),
+nur auf der Lese- statt der Sende-Seite, und strukturell identisch zum
+Verlinkungsmuster in `omp-switcher::pipeline::build_branch` (dort
+ebenfalls `MxlVideoInput::new()` gefolgt von einem unmittelbaren
+externen `link_many`).
+
+**Warum trifft es den WHEP-Monitor reproduzierbar, den Switcher in
+diesem Testlauf aber nicht?** NICHT abschließend geklärt — ehrlich
+offen gelassen statt spekulativ behauptet. Mögliche Faktoren (keiner
+verifiziert): das größere `appsrc`-`max-buffers` im neuen Modus (40 vs.
+5, s. `mxl.rs`-Kommentar zu Nachtrag 271) könnte `read_loop` schneller
+zum ersten echten Puffer kommen lassen als im alten Modus; das
+Zeitfenster zwischen `MxlVideoInput::new()`-Rückgabe und dem externen
+`link()`-Aufruf ist beim Switcher (unmittelbar im selben Ausdruck)
+minimal kleiner als bei `connect_video()` (ein Store-Zugriff mehr
+dazwischen) — reine Vermutung, nicht gemessen. Der Switcher-Testlauf
+war außerdem nur EIN Durchlauf; ohne Wiederholung ist nicht
+ausgeschlossen, dass er denselben Race nur diesmal gewonnen hat.
+
+**Betroffene Aufrufer (Umfang für den Fix, noch nicht geprüft welche
+davon zusätzlichen eigenen Schutz haben):** `MxlVideoInput`/
+`MxlAudioInput::new()` werden von ~15 Node-Crates aufgerufen (`grep -rn
+"MxlVideoInput::new\|MxlAudioInput::new"`). Für die MEISTEN ist der
+Aufruf Teil des Erstaufbaus VOR dem ersten `pipeline.set_state(Playing)`
+— dort harmlos, weil die ganze Bin gemeinsam hochfährt (s. bestehende
+Moduldoku). Betroffen ist NUR der „chirurgische Hot-Swap in eine bereits
+laufende Pipeline"-Fall: bestätigt `omp-webrtc-gateway::monitor`
+(IS-05-Receiver-Aktivierung), mit strukturell identischem Muster auch
+`omp-switcher` (Eingangswahl) und `omp-video-mixer-me`/`omp-audio-mixer`
+(Auflösungs-Hot-Swap) — diese drei sind noch NICHT einzeln auf denselben
+Race geprüft.
+
+**NICHT gefixt in dieser Sitzung** (bewusst, s.
+[[feedback-autonomous-phase-continuation]] Punkt 2 — der Fix betrifft
+geteilten `omp-mediaio`-Code mit ~15 Aufrufern, ein hastiger Fix ohne
+Raum für erneute Live-Verifikation an ALLEN Hot-Swap-Aufrufern wäre
+genau der in Nachtrag 255 als Fehler erkannte Ablauf). Sauberster Fix
+laut GStreamer-eigenem Muster ("Dynamically Changing the Pipeline"):
+extern verlinken, BEVOR die neuen Elemente auf `PLAYING` gezogen werden
+— erfordert eine API-Änderung an `MxlVideoInput::new()`/
+`MxlAudioInput::new()` (z. B. Aufbau/Verlinkung und `sync_state`
+trennen, Aufrufer verlinkt dazwischen), betrifft potenziell alle
+Hot-Swap-Aufrufer.
+
+**Workaround bis zum Fix:** `OMP_MXL_TIMEBASE=arrival` für
+`omp-webrtc-gateway` (alte Zeitbasis, kein Index-Modus) — bekannte
+Kosten: die in Nachtrag 253-256 gefundenen Standbilder/Rücksprünge/
+"Roboterstimme" kommen damit zurück. Keine echte Lösung, nur Rückweg.
+
+**Nächste Sitzung:** (1) `omp-switcher`/`omp-video-mixer-me`/
+`omp-audio-mixer` gezielt auf denselben Race prüfen (wiederholte
+Hot-Swap-Läufe, nicht nur ein Durchlauf). (2) Fix in `omp-mediaio`
+(Verlinkung vor `sync_state_with_parent()`), dann JEDEN betroffenen
+Aufrufer gegen die reale Hot-Swap-Situation erneut live verifizieren
+(nicht nur `cargo test`). (3) Erst danach: echter Handy-Test (dieser
+Punkt aus Nachtrag 271 bleibt zusätzlich offen).
+
+**Aufräumen:** alle Test-Node-Prozesse (Kamera/Monitor/Switcher) und
+Chromium-Instanzen beendet, `/dev/shm/omp-mxl` geleert, Orchestrator/
+NATS/Registry/Postgres unangetastet weitergelaufen. Keine Code-Änderung
+in dieser Sitzung — nur diese Dokumentation.
