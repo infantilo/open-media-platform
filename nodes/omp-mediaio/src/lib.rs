@@ -21,6 +21,7 @@ pub mod st2110;
 
 #[cfg(feature = "mxl")]
 pub mod mxl;
+pub mod timebase;
 
 #[cfg(feature = "fabrics")]
 pub mod fabrics;

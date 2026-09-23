@@ -505,10 +505,11 @@ fn swap_input_resolution(
     old_branch: InputBranch,
 ) -> Result<InputBranch, Box<(String, Option<InputBranch>)>> {
     let (unblocked_tx, unblocked_rx) = std::sync::mpsc::sync_channel::<()>(1);
-    let task = Mutex::new(Some(unblocked_tx));
+    let task = Arc::new(Mutex::new(Some(unblocked_tx)));
+    let task_cb = task.clone();
 
     let probe_id = isel_sink_pad.add_probe(gst::PadProbeType::BLOCK_DOWNSTREAM, move |pad, _info| {
-        let Some(unblocked_tx) = task.lock().expect("lock poisoned").take() else {
+        let Some(unblocked_tx) = task_cb.lock().expect("lock poisoned").take() else {
             return gst::PadProbeReturn::Remove;
         };
         if let Some(peer) = pad.peer() {
@@ -524,10 +525,25 @@ fn swap_input_resolution(
 
     if unblocked_rx.recv_timeout(SWAP_BLOCK_TIMEOUT).is_err() {
         // Der Probe hat nie ausgelöst — der alte Zweig liefert
-        // vermutlich gerade keine Puffer (s. Funktionsdoku). Nichts
-        // wurde bislang verändert: `old_branch` unangetastet
-        // zurückgeben, statt ihn stillschweigend zu verwerfen.
-        return Err(Box::new(("Timeout beim Warten auf den blockierten Pad-Unlink".to_string(), Some(old_branch))));
+        // vermutlich gerade keine Puffer (s. Funktionsdoku). Probe jetzt
+        // ENTFERNEN und den Callback entwerten (Nachtrag 271, live
+        // gefunden): früher blieb er installiert — kam später doch ein
+        // Puffer, entlinkte der Callback den Pad nachträglich, während
+        // der Aufrufer `old_branch` für verbunden hielt. War es der
+        // aktive Eingang, lieferte `isel` danach NICHTS mehr und der
+        // ganze Switcher-Ausgang fror dauerhaft ein.
+        let callback_already_ran = task.lock().expect("lock poisoned").take().is_none();
+        if let Some(id) = probe_id {
+            isel_sink_pad.remove_probe(id);
+        }
+        if !callback_already_ran {
+            // Nichts wurde verändert: `old_branch` unangetastet
+            // zurückgeben, statt ihn stillschweigend zu verwerfen.
+            return Err(Box::new(("Timeout beim Warten auf den blockierten Pad-Unlink".to_string(), Some(old_branch))));
+        }
+        // Wettlauf: der Callback hat genau jetzt doch noch entlinkt —
+        // dann ganz normal mit dem Umbau weitermachen.
+        let _ = unblocked_rx.recv_timeout(Duration::from_millis(100));
     }
 
     // Ab hier: Pad ist entlinkt und (per `PadProbeReturn::Remove` im

@@ -27986,3 +27986,105 @@ Fehlschläge auf, alle root-caused:
 **Verifikation:** `go vet ./...`; `internal/workflows` 20× in Folge grün;
 Voll-Suite mit DB **3× in Folge 35/35 grün**, 0 `TEST_*`-Reste; `deno
 test ui/` 128/128; `deno bundle` 44 Module.
+
+## 2026-09-23 (Nachtrag 271) — Zeitbasis-Bug (Nachtrag 253-257): Medienzeit = Grain-Index auf TAI; drei weitere Ursachen gefunden; Switcher-Freeze nach Swap-Timeout behoben — ZWISCHENSTAND (Pause auf Nutzerwunsch)
+
+Nutzerauftrag "fix timebase bug" (PRIORITÄT HOCH; Direktive 2026-09-22:
+durchgehende, konsistente Zeitbasis im DMF/MXL-Verbund).
+
+**Vorgehen: zuerst reproduzierbare Messung, dann Fix** (Lehre aus Nachtrag
+255). Neue Werkzeuge in `nodes/omp-mediaio/examples/`:
+- `timebase_harness` (Video): Schreiber bekommt Bilder mit Handy/WebRTC-
+  artiger Ankunft (30 fps in 25-fps-Flow, Netz-Stau alle 300 ms, optional
+  700-ms-Aussetzer), PTS = Aufnahmezeit; Leser `MxlVideoInput` → `appsink
+  sync=true` wie ein Viewer. Die Bildnummer steckt im Luma, dadurch sind
+  Rücksprünge und Wiederholungen messbar. Optional Roh-Leser über libmxl
+  (`HARNESS_RAW`) und Durchreich-Hop wie ein Switcher (`HARNESS_HOP`).
+- `timebase_audio_harness`: 48-kHz-Rampe, Sample-Kontinuität/PTS-Lücken.
+- `timebase_probe`: Sonde für LIVE-Flows (nur lesend).
+Alles läuft in eigener MXL-Domain, außer der Sonde (liest nur).
+
+**Reproduziert ohne Handy** (alter Code): Szenario "phone" 42-47
+Standbilder >120 ms in 20 s (6,2-6,8 s Standzeit), 30-44 Rücksprünge
+(veraltete Bilder), Render-Intervall p95 144 ms; selbst der Idealfall
+nicht sauber. **Audio im Idealfall bereits kaputt: ~965 Sample-Sprünge,
+~257 000 Rückschritte, ~600 PTS-Lücken/Überlappungen in 15 s** — die
+gemeldete "Roboterstimme".
+
+**Ursachen und Fixes (alle per Harness-Messung belegt, nicht geraten):**
+1. **Leser stempelte die Ankunftszeit als PTS** (`appsrc do-timestamp`):
+   Bursts wurden zu Bursts am Bildschirm, Audio-Sinks regelten ständig
+   nach. Neu: PTS = TAI(Grain-Index) → Pipeline-Laufzeit + adaptive Latenz
+   (`timebase::LatencyTracker`, Jitterbuffer-Prinzip: wächst bei
+   wiederholter Verspätung, schrumpft frühestens nach 30 s Reserve um eine
+   Periode). Die Umrechnung ist uhrunabhängig (Monotonic/TAI/`PtpClock`),
+   PTP ersetzt später nur die TAI-Quelle.
+2. **Schreiber stempelte die Abholzeit als Index** (Wallclock beim Pull):
+   aufgestaute bzw. übersprungene Indizes. Neu: Index aus dem PTS (über
+   Pipeline-Uhr → TAI), Plausibilitätsfenster (1 s voraus/10 s zurück, sonst
+   Wallclock wie bisher) und Kontinuitäts-Einrasten auf `last+step`
+   (µs-Rauschen an Grain-/Sample-Grenzen erzeugte sonst Lücken bzw.
+   Audio-Knacken).
+3. **libmxl liefert bei übersprungenem Index das ALTE Bild aus dem
+   Ringslot** (`getGrainImpl` prüft nur Vollständigkeit, nicht den Index,
+   s. `third_party/mxl/.../PosixDiscreteFlowReader.cpp`). Der Leser prüft
+   jetzt `grain.index` und überspringt veraltete Slots.
+4. **Schreib-Appsink verwarf Bilder bei Bursts** (Video `max-buffers=2`,
+   Audio 4, `drop=true`): `videorate` liefert nach einem Stau mehrere
+   Slots auf einmal. Neu Video 8, Audio 50 (Audio-Blöcke sind ~2 kB).
+5. **Lese-`appsrc` fasste faktisch 1 Bild**: `max-bytes` (Default 200 000 B)
+   griff zusätzlich zu `max-buffers` (ein 320×180-v210-Bild hat 161 kB).
+   Mit Latenz L verwarf die Leaky-Queue neue Bilder. Neu `max-bytes=0`,
+   `max-buffers` 40 (Video) bzw. 120 (Audio), weiterhin harte Grenze.
+6. **Origin-Zweig von `compute_write_index` ohne Cap** (live gemessen, auch
+   im ALTEN Modus): ein omp-switcher schrieb dauerhaft +33 bis +100 Grains
+   (1,3-4 s) VOR seiner Quelle, Leser bei "jetzt" bekamen TooLate/nichts.
+   Jetzt gilt derselbe Cap (2 Schritte) wie im Wallclock-Zweig. Der Test
+   dokumentiert die bewusste Abkehr von der früheren "ungecapped"-
+   Entscheidung: ein verkleinerter Delay führt jetzt zu einem kurzen
+   Standbild statt zu bleibendem Vorlauf.
+7. **Wallclock-Cap zählte in Indizes statt Schritten**: bei Audio (Schritt
+   480) nur 2 SAMPLES groß — schon ~1 ms Abhol-Jitter verwarf einen
+   10-ms-Block. Jetzt `* step`.
+8. **omp-switcher: Freeze nach Swap-Timeout** (vorbestehend, auch im
+   Orchestrator-Log von früher belegt): bei Timeout blieb der Block-Probe
+   installiert und entlinkte den Pad nachträglich → der Ausgang fror
+   dauerhaft ein. Deterministisch reproduziert (Quelle per SIGSTOP
+   angehalten → `select` → SIGCONT): ohne Fix 0 Grains/12 s (2×), mit Fix
+   297 Grains, 0 Standbilder (2×). Fix: Probe entfernen und Callback
+   atomar entwerten, Wettlauf abgefangen.
+
+**Ergebnis Harness (neuer Modus):** Video "phone": 0 Standbilder, 0
+Rücksprünge, 5 Wiederholungen (nur die Latenz-Anpassung beim Start),
+Render p95 ~48 ms, max ~60 ms. "gaps": nur die 2 simulierten
+700-ms-Aussetzer bleiben sichtbar (dort fehlt das Bild wirklich). Audio:
+14 von 15 Läufen völlig sauber (0 Sprünge, 0 Rückschritte).
+Umschalter `OMP_MXL_TIMEBASE=arrival` stellt das alte Verhalten ohne
+Neubau wieder her (A/B, Notfall-Rückweg).
+
+**Preis:** im Idealfall ~40-60 ms mehr Latenz (143-171 ms statt ~107 ms
+Aufnahme→Darstellung im Harness), weil das Bild zu seiner Medienzeit statt
+bei Ankunft gezeigt wird.
+
+**Live (echter Orchestrator, omp-source → omp-switcher):** Quell-Flow über
+die Sonde perfekt (0 Standbilder, 0 Wiederholungen, 0 Lücken); Switcher im
+neuen Modus stabil bei 0/−1 Grains zur Quelle.
+
+**Offen / ehrlich festgehalten:**
+- Live-Test des ursprünglich gemeldeten Pfads (Handy/WebRTC → MXL →
+  Switcher → Viewer bzw. WHEP-Retourbild) steht NOCH AUS — nächste Sitzung,
+  Endbestätigung braucht das echte Handy des Nutzers.
+  `start-webrtc-phone.sh` leert die gesamte MXL-Domain (`rm -rf`) — für den
+  Test bewusst noch nicht ausgeführt.
+- Swap-Timeouts im Switcher traten im neuen Modus in 3 von 25 Starts auf,
+  im alten in 0 von 10 (Hinweis, kein Beweis). Durch Fix 8 sind sie jetzt
+  folgenlos (Eingang bleibt in Lowres, nächstes `select` versucht erneut).
+- Audio: ein einzelner Null-Block (10 ms Stille) in 1 von ~17 Läufen, nicht
+  reproduzierbar, Schreiber-Instrumentierung zeigte in 14 Folgeläufen keine
+  Lücke.
+- Leser-Latenz startet bei jedem neuen Reader neu (kurze Anpassung in den
+  ersten Sekunden: 1-4 PTS-Lücken).
+
+**Verifikation:** `cargo test --workspace` 263/263 grün; `omp-mediaio`
+Unit-Tests inkl. 6 neuer `timebase`-Tests und angepasster
+`compute_write_index`-Tests; Clippy ohne neue Warnungen.

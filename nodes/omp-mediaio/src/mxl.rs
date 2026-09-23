@@ -134,6 +134,16 @@ fn video_flow_def(
     .to_string()
 }
 
+/// Zeitbasis-Schalter (docs/decisions.md Nachtrag 271): `true` (Default)
+/// = Medienzeit aus dem Grain-Index (Lesen) bzw. aus dem PTS (Schreiben),
+/// s. `crate::timebase`. `OMP_MXL_TIMEBASE=arrival` stellt das frühere
+/// Ankunftszeit-Verhalten (`do-timestamp`/Wallclock-beim-Abholen) wieder
+/// her — für A/B-Messungen und als Notfall-Rückweg, ohne Neubau.
+pub fn index_timebase_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("OMP_MXL_TIMEBASE").map(|v| v != "arrival").unwrap_or(true))
+}
+
 fn video_caps(
     width: u32,
     height: u32,
@@ -365,10 +375,18 @@ impl MxlVideoOutput {
                 .build()
                 .map_err(|e| format!("appsink: {e}"))?
         } else {
+            // max-buffers 8 statt 2 (Nachtrag 271, per Harness gemessen):
+            // nach einem Netz-Stau liefert `videorate` die aufgelaufenen
+            // Takt-Slots in einem Rutsch (3-4 Bilder in Mikrosekunden);
+            // bei 2 verwarf der Appsink die ältesten, bevor `write_loop`
+            // sie abholte — eine Lücke im Grain-Index, beim Leser als
+            // wiederholtes Bild sichtbar. 8 Bilder decken ~320 ms Stau
+            // bei 25 fps; `drop=true` bleibt als Schutz gegen einen
+            // hängenden Schreib-Thread (Pipeline darf nie blockieren).
             gst::ElementFactory::make("appsink")
                 .property("sync", false)
                 .property("async", false)
-                .property("max-buffers", 2u32)
+                .property("max-buffers", 8u32)
                 .property("drop", true)
                 .build()
                 .map_err(|e| format!("appsink: {e}"))?
@@ -560,18 +578,38 @@ fn compute_write_index(
 ) -> Option<u64> {
     match origin_index {
         Some(origin) => {
+            // Cap auch im Origin-Zweig (Nachtrag 271, live gemessen): ohne
+            // ihn schob jedes Bild, das schneller als Echtzeit ankam
+            // (Anlauf, Umschalten, `videorate`-Duplikate mit derselben
+            // Ursprungs-Meta), den Schreib-Index DAUERHAFT in die Zukunft
+            // — ein omp-switcher schrieb +33 bis +100 Grains (1,3-4 s) vor
+            // seiner Quelle, Leser bei "jetzt" bekamen TooLate/nichts.
+            // Ein verkleinerter Delay führt jetzt zu einem kurzen
+            // Standbild (Samples verwerfen, bis der Ursprung aufholt)
+            // statt zu einem bleibenden Vorlauf.
             let candidate = origin + delay;
-            Some(match last_written {
-                Some(last) => candidate.max(last + step),
-                None => candidate,
-            })
+            match last_written {
+                Some(last) => {
+                    let floor = last + step;
+                    if floor > candidate + MAX_RATCHET_AHEAD_STEPS * step {
+                        None
+                    } else {
+                        Some(candidate.max(floor))
+                    }
+                }
+                None => Some(candidate),
+            }
         }
         None => {
             let candidate = now() + delay;
             match last_written {
                 Some(last) => {
                     let floor = last + step;
-                    if floor > candidate + MAX_RATCHET_AHEAD_STEPS {
+                    // `* step` (Nachtrag 271): der Cap zählt in SCHRITTEN, nicht
+                    // in Indizes — bei Audio (step = 480 Samples) war er sonst
+                    // 2 SAMPLES groß, und schon ~1 ms Abhol-Jitter der Wallclock
+                    // verwarf einen ganzen 10-ms-Block (Knacken).
+                    if floor > candidate + MAX_RATCHET_AHEAD_STEPS * step {
                         None
                     } else {
                         Some(candidate.max(floor))
@@ -581,6 +619,56 @@ fn compute_write_index(
             }
         }
     }
+}
+
+/// Grenzen, innerhalb derer ein PTS-abgeleiteter Schreib-Index als
+/// Echtzeit gilt (s. `crate::timebase::plausible_index`): bis 1 s voraus
+/// (z. B. Leser-Latenz eines vorgelagerten Hops im PTS), bis 10 s zurück.
+/// In Grains bei 25 fps; bei anderen Raten nur großzügiger/strenger, nie
+/// sicherheitsrelevant (Rückfall ist der bisherige Wallclock-Index).
+const PTS_INDEX_MAX_AHEAD: u64 = 25;
+const PTS_INDEX_MAX_BEHIND: u64 = 250;
+
+/// Schreib-Index aus dem PTS eines Samples: Segment → Laufzeit → über den
+/// aktuellen Abstand Pipeline-Uhr↔TAI nach TAI → Grain-/Sample-Index,
+/// mit Kontinuitäts-Einrasten auf `last + step` (s.
+/// `crate::timebase::continues`). `None` = kein verwertbarer PTS (oder
+/// unplausibel weit von der Wallclock entfernt) → Aufrufer nimmt die
+/// Wallclock wie bisher.
+#[allow(clippy::too_many_arguments)]
+fn pts_index(
+    context: &Arc<MxlContext>,
+    element: &impl IsA<gst::Element>,
+    sample: &gst::Sample,
+    rate: &mxl_sys::Rational,
+    last_written: Option<u64>,
+    step: u64,
+    max_ahead: u64,
+    max_behind: u64,
+) -> Option<u64> {
+    let buffer = sample.buffer()?;
+    let pts = buffer.pts()?;
+    let segment = sample.segment()?.downcast_ref::<gst::format::Time>()?;
+    let running = segment.to_running_time(pts)?;
+    let clock = element.clock()?;
+    let base = element.base_time()?;
+    let tai_now = context.instance.get_time();
+    let tai = crate::timebase::running_to_tai(running.nseconds(), base.nseconds(), clock.time().nseconds(), tai_now)?;
+    let candidate = context.instance.timestamp_to_index(tai, rate).ok()?;
+    let now_index = context.instance.get_current_index(rate);
+    if !crate::timebase::plausible_index(candidate, now_index, max_ahead, max_behind) {
+        return None;
+    }
+    if let Some(last) = last_written {
+        let expected = last + step;
+        if let (Ok(expected_tai), Ok(next_tai)) =
+            (context.instance.index_to_timestamp(expected, rate), context.instance.index_to_timestamp(expected + step, rate))
+            && crate::timebase::continues(tai, expected_tai, next_tai.saturating_sub(expected_tai) / 2)
+        {
+            return Some(expected);
+        }
+    }
+    Some(candidate)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -714,7 +802,15 @@ fn write_loop(
         let delay = output_delay.load(Ordering::Relaxed);
         let origin_index = origin_index_from_buffer(context, buffer, &reference_caps, grain_rate);
         let Some(this_index) = compute_write_index(origin_index, last_written, delay, 1, || {
-            context.instance.get_current_index(grain_rate)
+            // Zeitbasis (Nachtrag 271): ohne durchgereichten Ursprung den
+            // Index aus dem PTS des Bildes ableiten (Aufnahme-/Erzeugungs-
+            // zeit), nicht aus dem Moment des Abholens — sonst bekommen
+            // stoßweise ankommende Bilder (WebRTC/Netz) aufgestaute bzw.
+            // übersprungene Indizes. Unplausibler PTS → wie bisher Wallclock.
+            index_timebase_enabled()
+                .then(|| pts_index(context, app_sink, &sample, grain_rate, last_written, 1, PTS_INDEX_MAX_AHEAD, PTS_INDEX_MAX_BEHIND))
+                .flatten()
+                .unwrap_or_else(|| context.instance.get_current_index(grain_rate))
         }) else {
             // Ratschen-Boden eilt der Wallclock um mehr als
             // `MAX_RATCHET_AHEAD_STEPS` voraus (s. dortige Doku) — dieses
@@ -958,9 +1054,16 @@ impl MxlAudioOutput {
         // unangetastet auf dem Standard `true` — dieser Appsink hatte nie
         // ein explizites `async=false`, der K5-Teil-1-Fund betraf nur den
         // Video-Zweig).
+        // max-buffers 50 (500 ms) statt 4 (Nachtrag 271, per Audio-Harness
+        // gemessen): nach einem Netz-Stau kommen ~12 Blöcke à 10 ms auf
+        // einmal; bei 4 verwarf der Appsink die ältesten, bevor
+        // `write_audio_loop` sie abholte — Lücken im Sample-Index, beim
+        // Leser als veraltete Ringpuffer-Daten hörbar (Knacken). Ein Block
+        // hat ~2 kB je Kanal, der Puffer kostet praktisch nichts;
+        // `drop=true` bleibt als Schutz gegen einen hängenden Schreib-Thread.
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", paced)
-            .property("max-buffers", 4u32)
+            .property("max-buffers", 50u32)
             .property("drop", true)
             .build()
             .map_err(|e| format!("appsink: {e}"))?;
@@ -1129,7 +1232,13 @@ fn write_audio_loop(
         let origin_index =
             origin_index_from_buffer(context, buffer, &reference_caps, sample_rate);
         let Some(this_index) = compute_write_index(origin_index, last_written, 0, batch_size, || {
-            context.instance.get_current_index(sample_rate)
+            // Zeitbasis (Nachtrag 271), wie write_loop: Sample-Index aus dem
+            // PTS (1 s voraus / 10 s zurück plausibel), sonst Wallclock.
+            let rate_hz = (sample_rate.numerator / sample_rate.denominator.max(1)).max(1) as u64;
+            index_timebase_enabled()
+                .then(|| pts_index(context, app_sink, &sample, sample_rate, last_written, batch_size, rate_hz, rate_hz * 10))
+                .flatten()
+                .unwrap_or_else(|| context.instance.get_current_index(sample_rate))
         }) else {
             continue;
         };
@@ -1261,7 +1370,9 @@ impl MxlVideoInput {
         let appsrc = gst::ElementFactory::make("appsrc")
             .property("format", gst::Format::Time)
             .property("is-live", true)
-            .property("do-timestamp", true)
+            // Zeitbasis (Nachtrag 271): PTS kommt aus dem Grain-Index
+            // (read_loop), nicht aus dem Ankunftsmoment.
+            .property("do-timestamp", !index_timebase_enabled())
             .property(
                 "caps",
                 video_caps(
@@ -1295,7 +1406,20 @@ impl MxlVideoInput {
             // ein hängender Weiterleitungs-Task verliert im schlimmsten
             // Fall nur Bilder, nie mehr unbegrenzt Speicher.
             .property_from_str("leaky-type", "upstream")
-            .property("max-buffers", 5u64)
+            // Zeitbasis (Nachtrag 271): ein Grain wartet jetzt bis zu L
+            // (adaptive Leselatenz, max. 1 s) auf seine Render-Zeit — die
+            // Warteschlange muss diese Latenz fassen, sonst verwirft der
+            // Leaky-`appsrc` NEUE Bilder (per Harness gemessen: bei L≈7
+            // Perioden und früher max-buffers=5 ein wiederholtes Bild
+            // alle ~200 ms). 1 s bei 30 fps + Reserve; bleibt eine harte
+            // Obergrenze gegen unbegrenztes Wachstum (Nachtrag 58).
+            .property("max-buffers", if index_timebase_enabled() { 40u64 } else { 5u64 })
+            // …und `max-bytes` (Default 200 000 B) darf NICHT zusätzlich
+            // greifen: schon ein 320×180-v210-Bild hat 161 kB, die Leaky-
+            // Queue fasste damit faktisch EIN Bild und verwarf bei jeder
+            // Latenz > 1 Periode neue Bilder (Harness: 202 von 250 Grains
+            // kamen aus dem appsrc). Grenze ist allein `max-buffers`.
+            .property("max-bytes", if index_timebase_enabled() { 0u64 } else { 200_000u64 })
             .build()
             .map_err(|e| format!("appsrc: {e}"))?;
         let videoconvert = gst::ElementFactory::make("videoconvert")
@@ -1452,6 +1576,56 @@ impl MxlVideoInput {
     }
 }
 
+enum IndexPts {
+    Push(u64),
+    Skip,
+    NotPlaying,
+}
+
+/// PTS eines gelesenen Grains aus seinem Index (Nachtrag 271, s.
+/// `crate::timebase`): Pipeline-Laufzeit von TAI(index) plus adaptiver
+/// Latenz. Misst dabei den Verzug (Ankunft − TAI(index)) für den
+/// `LatencyTracker`. `Skip` = dieses Grain nicht ausgeben (Latenz wurde
+/// um eine Periode verkleinert, oder der PTS wäre nicht monoton).
+fn index_pts(
+    context: &Arc<MxlContext>,
+    element: &impl IsA<gst::Element>,
+    rate: &mxl_sys::Rational,
+    index: u64,
+    period_ns: u64,
+    latency: &mut Option<crate::timebase::LatencyTracker>,
+    last_pts: &mut Option<u64>,
+) -> IndexPts {
+    use crate::timebase::{tai_to_running, LatencyChange, LatencyTracker};
+    let (Some(clock), Some(base)) = (element.clock(), element.base_time()) else {
+        return IndexPts::NotPlaying;
+    };
+    let Ok(index_tai) = context.instance.index_to_timestamp(index, rate) else {
+        return IndexPts::Skip;
+    };
+    let tai_now = context.instance.get_time();
+    let clock_now = clock.time().nseconds();
+    let lag = tai_now as i64 - index_tai as i64;
+    let tracker = latency.get_or_insert_with(|| {
+        // Startwert: aktueller Verzug + eine halbe Periode Reserve (dieselbe
+        // Regel wie LatencyTracker::needed_periods), min. 1, max. 1 s.
+        let initial = if lag > 0 { (lag as u64 + period_ns / 2).div_ceil(period_ns) } else { 1 };
+        let max = (1_000_000_000 / period_ns).max(2);
+        LatencyTracker::new(period_ns, initial, 1, max)
+    });
+    if tracker.observe(lag) == LatencyChange::Shrink {
+        return IndexPts::Skip;
+    }
+    let Some(pts) = tai_to_running(index_tai, base.nseconds(), clock_now, tai_now, tracker.latency_ns()) else {
+        return IndexPts::Skip;
+    };
+    if last_pts.is_some_and(|last| pts <= last) {
+        return IndexPts::Skip;
+    }
+    *last_pts = Some(pts);
+    IndexPts::Push(pts)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_loop(
     context: &Arc<MxlContext>,
@@ -1468,11 +1642,51 @@ fn read_loop(
     // `Option`, nicht der nackte `GrainReader` (s. `FLOW_INVALID`-Zweig
     // unten für den Grund) — außerhalb dieses einen Zweigs immer `Some`.
     let mut grain_reader = Some(grain_reader);
+    let timebase = index_timebase_enabled();
+    let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
+    let mut latency: Option<crate::timebase::LatencyTracker> = None;
+    let mut last_pts: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
+                // Veralteter Ringpuffer-Slot (Nachtrag 271): libmxl prüft
+                // in `getGrainImpl` nur, ob der Slot vollständig ist, NICHT
+                // ob er wirklich das angefragte Grain enthält. Hat der
+                // Schreiber diesen Index übersprungen, liegt dort noch ein
+                // ÄLTERES Bild — früher ausgegeben (sichtbar als
+                // Rücksprung im Bild). Überspringen: der PTS-Abstand lässt
+                // `videorate` das letzte Bild wiederholen.
+                if grain.index != index {
+                    if grain.index < index {
+                        index += 1;
+                    } else {
+                        index = context.instance.get_current_index(grain_rate);
+                    }
+                    continue;
+                }
+                let pts = if timebase {
+                    match index_pts(context, app_src, grain_rate, index, period_ns, &mut latency, &mut last_pts) {
+                        IndexPts::Push(pts) => Some(pts),
+                        IndexPts::Skip => {
+                            index += 1;
+                            continue;
+                        }
+                        IndexPts::NotPlaying => {
+                            // Pipeline noch nicht PLAYING (keine Uhr/
+                            // base_time) — kurz warten, gleiches Grain erneut.
+                            thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let mut buffer = gst::Buffer::from_slice(grain.payload.to_vec());
+                if let (Some(pts), Some(b)) = (pts, buffer.get_mut()) {
+                    b.set_pts(gst::ClockTime::from_nseconds(pts));
+                    b.set_duration(gst::ClockTime::from_nseconds(period_ns));
+                }
                 // Ursprungs-Zeitstempel als Referenz-Meta anhängen
                 // (ARCHITECTURE.md §15 Punkt 4) — `do-timestamp=true`
                 // oben bleibt unverändert (PTS/Pipeline-Verhalten
@@ -1754,13 +1968,19 @@ impl MxlAudioInput {
         let appsrc = gst::ElementFactory::make("appsrc")
             .property("format", gst::Format::Time)
             .property("is-live", true)
-            .property("do-timestamp", true)
+            // Zeitbasis (Nachtrag 271): PTS aus dem Sample-Index
+            // (read_audio_loop). Arrival-Zeitstempel ließen die Audio-Sinks
+            // ständig nachregeln/resyncen ("Roboterstimme", Nachtrag 253).
+            .property("do-timestamp", !index_timebase_enabled())
             .property("caps", audio_caps(sample_rate, channel_count, "interleaved"))
             // Gleicher live gefundener OOM-Bug wie `MxlVideoInput::new` —
             // s. dortige ausführliche Doku, `docs/decisions.md` Nachtrag
             // 58.
             .property_from_str("leaky-type", "upstream")
-            .property("max-buffers", 5u64)
+            // Muss die adaptive Leselatenz (bis 1 s = 100 Batches à 10 ms)
+            // fassen, s. MxlVideoInput; max-bytes allein begrenzt nicht.
+            .property("max-buffers", if index_timebase_enabled() { 120u64 } else { 5u64 })
+            .property("max-bytes", if index_timebase_enabled() { 0u64 } else { 200_000u64 })
             .build()
             .map_err(|e| format!("appsrc: {e}"))?;
         let convert = gst::ElementFactory::make("audioconvert")
@@ -1934,11 +2154,34 @@ fn read_audio_loop(
     // `Option`, gleicher Grund wie in `read_loop` (s. dortiger
     // `FLOW_INVALID`-Zweig) — außerhalb dieses einen Zweigs immer `Some`.
     let mut samples_reader = Some(samples_reader);
+    let timebase = index_timebase_enabled();
+    let batch_ns = (batch_size * 1_000_000_000 * sample_rate.denominator.max(1) as u64) / sample_rate.numerator.max(1) as u64;
+    let mut latency: Option<crate::timebase::LatencyTracker> = None;
+    let mut last_pts: Option<u64> = None;
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         match samples_reader.as_ref().expect("samples_reader is Some outside the FLOW_INVALID branch").get_samples_non_blocking(index, batch_size as usize) {
             Ok(data) => {
+                let pts = if timebase {
+                    match index_pts(context, app_src, sample_rate, index, batch_ns, &mut latency, &mut last_pts) {
+                        IndexPts::Push(pts) => Some(pts),
+                        IndexPts::Skip => {
+                            index += batch_size;
+                            continue;
+                        }
+                        IndexPts::NotPlaying => {
+                            thread::sleep(Duration::from_millis(5));
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
                 let mut buffer = gst::Buffer::from_slice(interleave_samples(&data));
+                if let (Some(pts), Some(b)) = (pts, buffer.get_mut()) {
+                    b.set_pts(gst::ClockTime::from_nseconds(pts));
+                    b.set_duration(gst::ClockTime::from_nseconds(batch_ns));
+                }
                 // Ursprungs-Zeitstempel des Batch-Starts als Referenz-Meta
                 // (gleiches Prinzip wie im Video-Lesepfad, `read_loop`).
                 if let Ok(ts_ns) = context.instance.index_to_timestamp(index, sample_rate)
@@ -2096,14 +2339,18 @@ mod tests {
         // last_written liegt bereits VOR origin+delay -> origin+delay gewinnt.
         let index = compute_write_index(Some(1000), Some(1001), 3, 1, || 0);
         assert_eq!(index, Some(1003));
-        // last_written liegt NACH origin+delay (z. B. ein vorheriger, größerer
-        // Delay-Wert) -> Monotonie-Schutz greift, kein Rückwärtssprung. Der
-        // Origin-Zweig kennt KEIN `MAX_RATCHET_AHEAD_STEPS`-Cap (s. Doku:
-        // ein zurückfallender Origin ist eine bewusste Operator-Aktion,
-        // keine Clock-Drift) — auch ein Abstand, der im wallclock-basierten
-        // Zweig verworfen würde, wird hier weiterhin bedient.
+        // last_written knapp NACH origin+delay (innerhalb des Caps) ->
+        // Monotonie-Schutz greift, kein Rückwärtssprung.
+        let index = compute_write_index(Some(1000), Some(1003), 3, 1, || 0);
+        assert_eq!(index, Some(1004), "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen");
+        // Weit davor (z. B. Delay live verkleinert, oder Bilder schneller als
+        // Echtzeit) -> Sample verwerfen statt dauerhaft in die Zukunft zu
+        // schreiben (Nachtrag 271, live: omp-switcher +33..+100 Grains).
         let index = compute_write_index(Some(1000), Some(1010), 3, 1, || 0);
-        assert_eq!(index, Some(1011), "max(origin+delay, letzter+1) schützt vor Rückwärtssprüngen, ungecapped");
+        assert_eq!(index, None, "Origin-Zweig ist jetzt ebenfalls gecapped");
+        // Audio: Cap in Batches.
+        assert_eq!(compute_write_index(Some(48_000), Some(48_000 + 480 * 3), 0, 480, || 0), None);
+        assert_eq!(compute_write_index(Some(48_000), Some(48_000), 0, 480, || 0), Some(48_480));
     }
 
     #[test]
@@ -2168,6 +2415,12 @@ mod tests {
         // unverändert funktionieren, nur mit größerer Schrittweite.
         let index = compute_write_index(None, Some(1000), 0, 480, || 1480);
         assert_eq!(index, Some(1480), "Wallclock exakt im Takt -> kein Ratschen nötig");
+
+        // Wallclock ~1,7 ms (80 Samples) hinter dem Boden: normaler Abhol-
+        // Jitter, KEIN Verwerfen (früher: Cap in Samples statt Batches,
+        // verwarf hier einen ganzen Block, Nachtrag 271).
+        let index = compute_write_index(None, Some(1000), 0, 480, || 1400);
+        assert_eq!(index, Some(1480), "Jitter innerhalb von 2 Batches wird bedient");
 
         let index = compute_write_index(None, Some(1480), 0, 480, || 900);
         assert_eq!(
