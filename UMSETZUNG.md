@@ -3027,6 +3027,104 @@ offene Punkte per `AskUserQuestion` entschieden (§0 Punkt 8):
    sofort) → B14-Analyse (sofort, noch kein Code) → B5 restliche Phasen
    und B14-Implementierung als eigene, spätere Schritte.
 
+### 21.6 B14-Analyse: Mandantenfähigkeit (Tenant/Organization) — reine Bestandsaufnahme, KEIN Code (2026-09-23, Nachtrag 281)
+
+Nutzerauftrag "proceed B5,B14", nach B5 (Nachtrag 280). Gleiche
+Disziplin wie Kapitel 21 selbst: Phase 1 ist Analyse, kein Code, bevor
+irgendein sicherheitsrelevanter Pfad angefasst wird (s. 21.5-Begründung:
+ein halbfertig org-gescopter Zugriff sieht funktionsfähig aus, kann aber
+Mandanten-übergreifend Daten offenlegen).
+
+**Bestandsaufnahme (Code gelesen, nicht angenommen):**
+
+- `authz.Binding{Subject, WorkflowID, NodeID, Verb}` — ZWEI orthogonale
+  Scope-Dimensionen (Node ODER Workflow-Rolle), KEINE dritte für
+  Organisation/Mandant/Asset/Collection. `Check(subject, nodeID,
+  minVerb)`/`CheckWorkflow(subject, workflowID, role, minVerb)` sind die
+  einzigen zwei Prüf-Einstiegspunkte im ganzen Orchestrator.
+- `auth.User`/`auth.Principal` — `{ID, Username, PasswordHash,
+  CreatedAt, SessionsEpoch}` bzw. `{UserID, Username, Epoch}`. **Kein
+  Organisations-/Mandanten-Feld irgendwo.**
+- Umfang der Verwendung: **89 Treffer** für
+  `Check|requireVerbGlobal|requireVerbOnNode|requireVerbOnWorkflow`
+  allein in `internal/httpapi/server.go` — praktisch jeder schreibende
+  UND die meisten lesenden Endpunkte hängen an dieser Prüfkette.
+- Keine Fachtabelle (workflows/process_definitions/assets/collections/
+  hosts/...) trägt heute eine Mandanten-Spalte — Daten sind
+  organisationslos, nur der ZUGRIFF wird heute schon differenziert
+  (global/Node/Workflow).
+
+**Kernfrage, die noch NICHT beantwortet ist (entscheidet die
+Umbaugröße um Größenordnungen):** meint "Mandantenfähigkeit" hier
+
+  **(A) reine Zugriffs-Scope-Erweiterung** — `authz.Binding` bekommt
+  eine dritte, optionale `OrgID`-Dimension (analog zum bestehenden
+  `WorkflowID`-Muster aus Kapitel 12 Teil 4), Daten selbst bleiben in
+  gemeinsamen Tabellen liegen, nur SICHTBARKEIT/BERECHTIGUNG wird
+  zusätzlich nach Organisation gefiltert. Kleinerer, aber immer noch
+  substantieller Umbau (die 89 Aufrufstellen + jede Domäne, die
+  Bindings interpretiert).
+
+  **(B) echte Daten-Isolation** — JEDE Zeile in JEDER Fachtabelle trägt
+  eine `org_id`, jede Abfrage filtert zwingend danach, ein Mandant kann
+  strukturell nie Daten eines anderen sehen, selbst wenn eine
+  Autorisierungsprüfung fehlerhaft wäre (Defense in Depth). Deutlich
+  größerer Umbau: jede Migration, jeder Store, jede Query in
+  workflows/process/asset/hosts/... betroffen — nicht mehr nur
+  Autorisierung, sondern das Datenmodell selbst.
+
+Die ursprüngliche Aufgabenstellung nennt als Audit-/Sicherheits-
+Dimensionen "tenant/org/user/role/asset/collection/workflow/action" —
+das liest sich eher wie (A) (Zugriffs-/Audit-Scope, dieselbe Ebene wie
+die bereits existierenden `WorkflowID`/`NodeID`-Bindings), nicht
+zwingend wie eine physische Daten-Trennung. **Trotzdem eine echte
+Entscheidung, keine Annahme im Vorbeigehen** — (A) und (B) sind
+grundverschieden große Vorhaben.
+
+**Weitere, von (A)/(B) unabhängige offene Fragen:**
+
+- **Mitgliedschaft:** genau EINE Organisation pro Nutzer (einfach, ein
+  `users.org_id`-Feld) oder viele-zu-viele (ein Nutzer kann in mehreren
+  Organisationen aktiv sein, braucht dann eine "aktive Organisation"
+  pro Sitzung, ähnlich einem Konto-Umschalter)?
+- **Migration bestehender, heute organisationsloser Daten:** alle
+  bestehenden Nutzer/Bindings/Workflows/Assets automatisch einer
+  einzigen, impliziten "Default-Organisation" zuordnen (empfohlen —
+  kein Bruch des heutigen Single-Tenant-Verhaltens, bis bewusst eine
+  zweite Organisation angelegt wird) oder etwas anderes?
+- **Globale Bindings (`AnyNode`/kein Workflow-Scope) künftig:** bleiben
+  sie wörtlich global (über ALLE Organisationen hinweg — ein Admin
+  sieht alles) oder werden sie implizit "organisationsweit" (gilt nur
+  innerhalb der eigenen Organisation)? Wirkt sich direkt auf jeden
+  bestehenden Admin-Nutzer aus.
+
+**Vorläufiger Phasenplan** (Reihenfolge, keine Größenschätzung ohne
+die obigen Entscheidungen sinnvoll möglich):
+
+1. Phase 2 (Domain Model): neue `organizations`-Tabelle,
+   Mitgliedschaftsmodell laut Entscheidung oben, Migration bestehender
+   Daten in eine Default-Organisation.
+2. Phase 3: `authz.Binding` um die dritte Scope-Dimension erweitern
+   (falls (A)) bzw. jede Fachtabelle um `org_id` erweitern (falls (B)),
+   `Check`/`CheckWorkflow`-Signaturen entsprechend anpassen — betrifft
+   alle 89 Aufrufstellen, jede einzeln zu prüfen, nicht pauschal zu
+   ersetzen (manche sind heute bewusst global/AnyNode und müssen es
+   laut obiger Entscheidung bleiben).
+3. Phase 4: HTTP-Middleware injiziert die Organisation des Principals
+   in jede Anfrage (gleiches Muster wie `WorkflowRoleFinder` heute).
+4. Phase 5 (nur falls (B)): Migration jeder betroffenen Fachtabelle +
+   Store-Methode um `org_id`-Filterung, mit vollem Live-Regressionstest
+   pro Domäne (nicht nur Unit-Tests — genau die in 21.5 benannte
+   Gefahr eines "sieht fertig aus, leckt aber Daten").
+5. Phase 6: UI (Organisationsverwaltung, Nutzer-Zuordnung, Umschalten
+   der aktiven Organisation falls viele-zu-viele).
+
+**Bewusst NICHT Teil dieser Sitzung:** jeder Code, jede Migration —
+reine Bestandsaufnahme + Entscheidungsvorlage, exakt wie Kapitel 21
+Phase 1 selbst. Die drei oben benannten Entscheidungen (Scope-only vs.
+Daten-Isolation, Mitgliedschaftsmodell, globale Bindings künftig)
+sollten vor Phase 2 geklärt sein.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3257,3 +3355,4 @@ offene Punkte per `AskUserQuestion` entschieden (§0 Punkt 8):
 | omp-webrtc-gateway: Node-Katalog, Bedienoberfläche, Einladungspflicht (Nachtrag 278) | erledigt | Nutzerauftrag "nebenbei" (Sicherheitsanforderung explizit genannt). Live bestätigte Lücke: `/whip`/`/whep` nahmen bislang jede Verbindung ohne jede Prüfung an. Neues Modul `invite.rs` (In-Memory-Einladungs-Tokens, sicher per Default — leerer Satz lehnt alles ab), `?token=` als Query-Parameter (extra_route hat keinen Header-Zugriff). QR-Codes serverseitig (`qrcode`-Kiste, `default-features=false`, 0 transitive Abhängigkeiten, SVG selbst gebaut statt npm/CDN im Frontend). Neues Node-UI-Bundle (`uibundle.rs`+`ui/`) für beide Richtungen: Einladungen anlegen/auflisten/widerrufen, QR/Link, editierbare Basis-URL (NAT-Fall). Vier neue Orchestrator-Proxy-Routen (`handleNodeProxy`-Muster). Zwei neue Katalog-Einträge (`omp-webrtc-gateway-camera`/`-monitor`). "Port ändern" ehrlich eingeordnet: läuft wie bei jedem anderen Node-Typ über die generische Start-Umgebung, kein Sondermechanismus. 10 neue Rust-Tests, `cargo test`/`clippy` sauber. **Live verifiziert:** echte Katalog-Instanz gestartet, `/whip` ohne Token → 401, mit gültigem Einladungs-Token → kommt durch die Schranke, QR-Endpunkt liefert echtes SVG, UI-Bundle über den Proxy erreichbar, Widerrufen → sofort wieder 401. | 2026-09-23 |
 | Fix: QR-Code war ein kaputtes Bild (Nachtrag 279) | erledigt | Nutzerfund direkt nach Nachtrag 278. Root Cause: `<img>` kann keinen `Authorization`-Header setzen (native Browser-API, umgeht den gepatchten `fetch()`-Wrapper) — bereits bekannte, für die MJPEG-Vorschau gelöste Falle (`ui/shell/node-preview.ts`), bei `/invites/qr` nicht mitgezogen. Fix: `/invites/qr` zur `queryTokenAllowedPath`-Allowlist ergänzt (`auth_middleware.go`), Node-UI-Bundle hängt `access_token` aus `localStorage`(`omp-auth-token`) an die Bild-URL. Neuer Testfall inkl. Gegenbeispiel (schreibendes `/invites` bleibt bewusst NICHT in der Allowlist). Suite 35/35 grün. **Live exakt am Browser-Szenario nachgestellt:** `curl` ohne Header, nur `?access_token=` → jetzt 200 mit echtem SVG; ganz ohne Token weiterhin 401. | 2026-09-23 |
 | Kapitel 21 B5: echte MinIO/S3-Anbindung (Nachtrag 280) | erledigt | Nutzerauftrag "proceed B5,B14" — Entscheidung 21.5: volle MinIO/S3-Anbindung. Neues Opt-in-Makefile-Target `minio-up`/`minio-down` (`quay.io/minio/minio`, NICHT `docker.io` — live gefunden: Letzteres verlangt inzwischen Docker-Hub-Login). Neues Paket `internal/objectstore` (offizieller `minio-go/v7`-Client) — bewusst NUR Presigned URLs, kein Byte-Proxy durch den Orchestrator (Correctness/Reliability vor Convenience). Additiv wie mTLS: leeres `OMP_MINIO_ENDPOINT` deaktiviert das Feature ehrlich (503), kein Zwang. Neue Endpunkte `POST /api/v1/asset-versions/{id}/upload-url`, `GET /api/v1/representations/{id}/download-url`. 5 neue Tests — KEIN Mock, echte Round-Trips gegen eine laufende MinIO-Instanz (Muster wie `dbtest`). Suite jetzt 36 Pakete grün. **Live gegen echtes MinIO verifiziert:** Datei per `curl PUT` über die Presigned-URL hochgeladen, Representation angelegt, per `curl GET` über die Download-URL zurückgeholt, Inhalt `diff`-identisch; Provider "filesystem" → 400; ohne `OMP_MINIO_ENDPOINT` → 503 statt Absturz. OFFEN: Objekt-Aufräumen bei Representation-Löschung (kein Datenverlust, nur verwaister Speicherplatz). | 2026-09-23 |
+| Kapitel 21 B14: Analyse-Phase Mandantenfähigkeit, KEIN Code (Nachtrag 281) | teilweise | Nutzerauftrag "proceed B5,B14", B14-Teil. Gleiche Disziplin wie Kapitel 21 selbst: Analyse zuerst, sicherheitskritisch (89 Treffer der Verb-Prüfkette allein in `server.go`, `authz.Binding` hat heute 2 Scope-Dimensionen, keine Org, `auth.User` kein Org-Feld). Zentrale offene Frage (Größenordnung des Umbaus): (A) reine Zugriffs-Scope-Erweiterung vs. (B) echte Daten-Isolation. Vollständige Bestandsaufnahme + Phasenplan in §21.6. Drei Entscheidungen per `AskUserQuestion` vorgelegt. OFFEN: Antworten, danach Phase 2 (Domain Model). | 2026-09-23 |

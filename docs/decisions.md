@@ -28746,3 +28746,32 @@ bei `DELETE /representations/{id}` (aktuell verwaist das S3-Objekt,
 wenn die Representation-Zeile gelöscht wird — kein Datenverlustrisiko,
 nur unnötig belegter Speicherplatz, bewusst nicht in dieser Runde
 mitgezogen).
+
+## 2026-09-23 (Nachtrag 281) — Kapitel 21 B14: Analyse-Phase (Mandantenfähigkeit), KEIN Code
+
+Fortsetzung von Nachtrag 280 ("proceed B5,B14", B5-Teil). B14 ist mit
+Abstand der größte der drei am 2026-09-23 getroffenen Entscheidungen
+(21.5) und sicherheitskritisch — bekommt deshalb, wie Kapitel 21 selbst,
+zuerst eine reine Analyse-Phase statt eines Code-Versuchs auf Verdacht.
+
+**Bestandsaufnahme:** `authz.Binding` kennt heute zwei orthogonale
+Scope-Dimensionen (Node ODER Workflow-Rolle), keine dritte für
+Organisation. `auth.User`/`auth.Principal` haben kein Organisations-
+Feld. 89 Treffer für die Verb-Prüfkette allein in `server.go` — praktisch
+jeder Endpunkt betroffen. Keine Fachtabelle trägt eine Mandanten-Spalte.
+
+**Zentrale, noch offene Frage:** meint "Mandantenfähigkeit" (A) eine
+reine Zugriffs-Scope-Erweiterung (dritte `OrgID`-Dimension in
+`authz.Binding`, analog zum bestehenden `WorkflowID`-Muster, Daten
+bleiben gemeinsam) oder (B) echte Daten-Isolation (jede Zeile in jeder
+Tabelle trägt `org_id`, jede Query filtert zwingend danach)? Beide sind
+grundverschieden große Vorhaben — die Aufgabenstellung liest sich eher
+nach (A), aber das ist eine echte Entscheidung, keine Annahme.
+
+Vollständige Analyse inkl. Phasenplan und zwei weiterer offener Fragen
+(Mitgliedschaftsmodell, Verhalten globaler Bindings künftig) in
+`UMSETZUNG.md` §21.6. Drei Entscheidungen dem Nutzer per
+`AskUserQuestion` vorgelegt (§0 Punkt 8) — Ergebnis folgt in einem
+eigenen Nachtrag, sobald beantwortet.
+
+**Bewusst NICHT Teil dieser Sitzung:** jeglicher Code/Migration.
