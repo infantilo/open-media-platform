@@ -1,9 +1,12 @@
 package dbtest
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDeriveTestDSNAppendsSuffixToDatabaseNameOnly(t *testing.T) {
-	testDSN, dbName, err := deriveTestDSN("postgres://omp:omp@localhost:5432/omp?sslmode=disable")
+	testDSN, dbName, err := deriveTestDSN("postgres://omp:omp@localhost:5432/omp?sslmode=disable", "")
 	if err != nil {
 		t.Fatalf("deriveTestDSN() error = %v", err)
 	}
@@ -17,7 +20,7 @@ func TestDeriveTestDSNAppendsSuffixToDatabaseNameOnly(t *testing.T) {
 }
 
 func TestDeriveTestDSNRejectsDSNWithoutDatabaseName(t *testing.T) {
-	if _, _, err := deriveTestDSN("postgres://omp:omp@localhost:5432/"); err == nil {
+	if _, _, err := deriveTestDSN("postgres://omp:omp@localhost:5432/", ""); err == nil {
 		t.Fatal("deriveTestDSN() error = nil, want an error for a DSN without a database name")
 	}
 }
@@ -37,12 +40,18 @@ func TestOpenNeverTouchesTheOriginalDatabase(t *testing.T) {
 	if currentDB == "omp" {
 		t.Fatalf("Open() connected to the real dev database %q — this is exactly the incident this package prevents", currentDB)
 	}
-	if !hasTestSuffix(currentDB) {
-		t.Fatalf("current_database() = %q, want a name ending in _test", currentDB)
+	// Seit Nachtrag 270 "<db>_test_<paket>" (hier: omp_test_dbtest).
+	if !strings.Contains(currentDB, "_test") {
+		t.Fatalf("current_database() = %q, want an isolated <db>_test… database", currentDB)
 	}
 }
 
-func hasTestSuffix(name string) bool {
-	const suffix = "_test"
-	return len(name) > len(suffix) && name[len(name)-len(suffix):] == suffix
+func TestDeriveTestDSNPerPackageDatabase(t *testing.T) {
+	_, dbName, err := deriveTestDSN("postgres://omp:omp@localhost:5432/omp?sslmode=disable", testPackageName("/tmp/go-build123/b001/outbox.test"))
+	if err != nil || dbName != "omp_test_outbox" {
+		t.Fatalf("dbName = %q, %v; want omp_test_outbox", dbName, err)
+	}
+	if got := testPackageName("/x/My-Pkg.v2.test"); got != "my_pkg_v2" {
+		t.Fatalf("testPackageName = %q, want my_pkg_v2", got)
+	}
 }

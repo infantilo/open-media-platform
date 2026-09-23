@@ -175,6 +175,24 @@ type methodCall struct {
 // — sammelt Crosspoint-Methodenaufrufe statt echter HTTP-Requests
 // (docs/decisions.md 2026-07-18: Crosspoint-Zielrollen ohne
 // IS-04-Receiver).
+// waitForConnectCalls wartet, bis der Fake mindestens n Connect-Aufrufe
+// gesehen hat (max. 2s). Nötig nach jedem Poll auf Runtime-NodeID: die
+// Registrierung persistiert NodeID als Zwischen-Commit VOR dem Reconnect
+// (awaitRegistration/promoteStandby), NodeID garantiert den Reconnect
+// also nicht (Nachtrag 270).
+func waitForConnectCalls(g *fakeGraph, n int) {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		g.mu.Lock()
+		got := len(g.calls)
+		g.mu.Unlock()
+		if got >= n {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 type fakeMethodInvoker struct {
 	mu     sync.Mutex
 	calls  []methodCall
@@ -1117,6 +1135,7 @@ func TestInstanceRestartedRewiresAffectedRole(t *testing.T) {
 		t.Fatalf("Runtime[\"src\"].NodeID = %q, want it updated to node-src-2 after the restart", wfAfter.Runtime["src"].NodeID)
 	}
 
+	waitForConnectCalls(g, 2)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.calls) != 2 {
@@ -1257,6 +1276,7 @@ func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
 		t.Errorf("new instance extraEnv = %+v, want 1920x1080@50 from the 1080p50 preset", env)
 	}
 
+	waitForConnectCalls(g, 2)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.calls) != 2 {
@@ -1366,9 +1386,21 @@ func TestRestartRoleCapturesAndRestoresNodeState(t *testing.T) {
 	}
 
 	// restoreOneRoleState läuft asynchron innerhalb von runRestartRole,
-	// nach awaitRegistration aber noch vor dem finalen wf-Commit oben —
-	// zum Zeitpunkt, an dem NodeID bereits node-mv-2 zeigt, muss der POST
-	// also längst passiert sein.
+	// NACH awaitRegistration — und awaitRegistration persistiert NodeID
+	// bereits selbst (Zwischen-Commit, service.go). Die oben gepollte
+	// NodeID garantiert den POST also NICHT (frühere Annahme hier war
+	// falsch, sporadischer Fehlschlag unter Voll-Last, Nachtrag 270) —
+	// auf den POST selbst warten.
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(postedBodies)
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(postedBodies) == 0 {

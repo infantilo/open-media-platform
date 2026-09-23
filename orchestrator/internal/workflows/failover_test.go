@@ -174,6 +174,12 @@ func TestInstanceGaveUpPromotesStandby(t *testing.T) {
 		t.Errorf("Runtime[\"active\"].NodeID = %q, want node-standby", after.Runtime["active"].NodeID)
 	}
 
+	// promoteStandby committet die neue Zuordnung bewusst VOR dem
+	// Reconnect (s. failover.go "Übernahme SOFORT committen") — die oben
+	// gepollte InstanceID ist also ein Zwischenzustand, der Reconnect kann
+	// noch laufen. Auf ihn selbst warten statt ihn sofort vorauszusetzen
+	// (sporadischer Fehlschlag unter Voll-Last, Nachtrag 270).
+	waitForConnectCalls(g, 2)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.calls) != 2 {

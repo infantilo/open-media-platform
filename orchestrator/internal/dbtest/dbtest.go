@@ -22,6 +22,15 @@
 // nicht existiert) — Tests dürfen darin beliebig aggressiv aufräumen
 // (volle Tabellen leeren), OHNE JE die App-Datenbank zu berühren, ganz
 // gleich, welche DSN übergeben wird.
+//
+// Seit Nachtrag 270 zusätzlich JE TESTPAKET eine eigene Datenbank
+// ("<db>_test_<paket>", Paketname aus dem Testbinary abgeleitet): `go
+// test ./...` führt Pakete parallel aus, und eine gemeinsame
+// "<db>_test" ließ Pakete gegenseitig in dieselben Tabellen greifen — der
+// Outbox-Relay-Test versendete dabei Events des Asset-Pakets (teils in
+// den ECHTEN OMP_EVENTS-Stream des Dev-Clusters), Asset-Tests löschten
+// per DELETE FROM outbox_events die Events des Outbox-Pakets. Mehrere
+// sporadische Fehlschläge im Voll-Lauf gingen darauf zurück.
 package dbtest
 
 import (
@@ -30,8 +39,10 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -45,6 +56,12 @@ import (
 // Ausgang von CREATE DATABASE bei jedem Testlauf außer dem allerersten.
 const postgresDuplicateDatabase = "42P04"
 
+// postgresObjectInUse (55006): CREATE DATABASE kopiert template1 und
+// scheitert, solange eine andere Sitzung — etwa das parallel startende
+// Testbinary eines anderen Pakets beim eigenen CREATE DATABASE — gerade
+// darauf zugreift. Vorübergehend, daher kurz wiederholen.
+const postgresObjectInUse = "55006"
+
 // Open liefert eine migrierte Verbindung zur isolierten Testdatenbank,
 // abgeleitet von OMP_POSTGRES_URL (Datenbankname + "_test"). Bricht den
 // Test per t.Skip ab, wenn OMP_POSTGRES_URL nicht gesetzt ist oder
@@ -57,7 +74,7 @@ func Open(t *testing.T) *sql.DB {
 		t.Skip("OMP_POSTGRES_URL nicht gesetzt — DB-Test übersprungen (kein impliziter Fallback, s. docs/decisions.md Nachtrag 108)")
 	}
 
-	testDSN, testDBName, err := deriveTestDSN(dsn)
+	testDSN, testDBName, err := deriveTestDSN(dsn, testPackageName(os.Args[0]))
 	if err != nil {
 		t.Fatalf("dbtest: DSN nicht verwertbar: %v", err)
 	}
@@ -76,10 +93,32 @@ func Open(t *testing.T) *sql.DB {
 	return database
 }
 
-// deriveTestDSN hängt "_test" an den Datenbanknamen aus dsn an — alles
-// andere (Host/Port/Nutzer/Passwort/Query-Parameter) bleibt unverändert,
-// damit lokale wie CI-DSNs ohne weitere Konfiguration funktionieren.
-func deriveTestDSN(dsn string) (testDSN, dbName string, err error) {
+// testPackageName leitet aus dem Pfad des Testbinaries ("…/outbox.test")
+// einen als Datenbanknamen-Suffix tauglichen Paketnamen ab ("outbox") —
+// nur [a-z0-9_], leer, wenn nichts Verwertbares übrig bleibt.
+func testPackageName(binary string) string {
+	base := strings.TrimSuffix(strings.ToLower(filepath.Base(binary)), ".test")
+	var b strings.Builder
+	for _, r := range base {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
+			b.WriteRune(r)
+		case r == '-' || r == '.':
+			b.WriteRune('_')
+		}
+	}
+	name := b.String()
+	if len(name) > 40 { // Postgres-Bezeichner max. 63 Zeichen inkl. "<db>_test_"
+		name = name[:40]
+	}
+	return name
+}
+
+// deriveTestDSN hängt "_test" (und, falls gesetzt, "_<pkg>") an den
+// Datenbanknamen aus dsn an — alles andere (Host/Port/Nutzer/Passwort/
+// Query-Parameter) bleibt unverändert, damit lokale wie CI-DSNs ohne
+// weitere Konfiguration funktionieren.
+func deriveTestDSN(dsn, pkg string) (testDSN, dbName string, err error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return "", "", fmt.Errorf("parse: %w", err)
@@ -89,6 +128,9 @@ func deriveTestDSN(dsn string) (testDSN, dbName string, err error) {
 		return "", "", fmt.Errorf("DSN ohne Datenbankname: %s", dsn)
 	}
 	dbName = original + "_test"
+	if pkg != "" {
+		dbName += "_" + pkg
+	}
 	derived := *u
 	derived.Path = "/" + dbName
 	return derived.String(), dbName, nil
@@ -107,13 +149,19 @@ func ensureDatabaseExists(originalDSN, testDBName string) error {
 	}
 	defer admin.Close()
 
-	_, err = admin.Exec(fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{testDBName}.Sanitize()))
-	if err == nil {
-		return nil
+	for attempt := 0; ; attempt++ {
+		_, err = admin.Exec(fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{testDBName}.Sanitize()))
+		if err == nil {
+			return nil
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == postgresDuplicateDatabase {
+			return nil
+		}
+		if errors.As(err, &pgErr) && pgErr.Code == postgresObjectInUse && attempt < 50 {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		return err
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == postgresDuplicateDatabase {
-		return nil
-	}
-	return err
 }

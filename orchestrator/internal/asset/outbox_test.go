@@ -1,6 +1,7 @@
 package asset
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
@@ -11,30 +12,19 @@ import (
 // der B9-Integration (kein outbox_events-Schreibzugriff).
 func TestStoreWithoutOutboxOptionPublishesNothing(t *testing.T) {
 	db := testDB(t)
-	if _, err := db.Exec(`DELETE FROM outbox_events`); err != nil {
-		t.Fatalf("cleanup outbox_events: %v", err)
-	}
 	s := NewStore(db)
 
-	if _, err := s.CreateAsset("VIDEO", "Clip", "", "alice"); err != nil {
+	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
-
-	ob := outbox.NewStore(db)
-	undispatched, err := ob.Undispatched(10)
-	if err != nil {
-		t.Fatalf("Undispatched() error = %v", err)
-	}
-	if len(undispatched) != 0 {
-		t.Fatalf("Undispatched() = %+v, want none (no outbox.Store configured)", undispatched)
+	if got := assetEventSubjects(t, db, a.ID); len(got) != 0 {
+		t.Fatalf("outbox events for asset = %v, want none (no outbox.Store configured)", got)
 	}
 }
 
 func TestStoreWithOutboxPublishesLifecycleEvents(t *testing.T) {
 	db := testDB(t)
-	if _, err := db.Exec(`DELETE FROM outbox_events`); err != nil {
-		t.Fatalf("cleanup outbox_events: %v", err)
-	}
 	ob := outbox.NewStore(db)
 	s := NewStore(db, WithOutbox(ob))
 
@@ -57,10 +47,7 @@ func TestStoreWithOutboxPublishesLifecycleEvents(t *testing.T) {
 		t.Fatalf("PublishVersion() error = %v", err)
 	}
 
-	undispatched, err := ob.Undispatched(20)
-	if err != nil {
-		t.Fatalf("Undispatched() error = %v", err)
-	}
+	subjects := assetEventSubjects(t, db, a.ID)
 
 	wantSubjects := []string{
 		eventSubject(a.ID, "created"),
@@ -70,16 +57,16 @@ func TestStoreWithOutboxPublishesLifecycleEvents(t *testing.T) {
 		eventSubject(a.ID, "version_published"),
 	}
 	got := map[string]bool{}
-	for _, e := range undispatched {
-		got[e.Subject] = true
+	for _, subj := range subjects {
+		got[subj] = true
 	}
 	for _, want := range wantSubjects {
 		if !got[want] {
-			t.Errorf("missing outbox event with subject %q, got subjects %v", want, subjectsOf(undispatched))
+			t.Errorf("missing outbox event with subject %q, got subjects %v", want, subjects)
 		}
 	}
-	if len(undispatched) != len(wantSubjects) {
-		t.Errorf("Undispatched() = %d events, want exactly %d: %v", len(undispatched), len(wantSubjects), subjectsOf(undispatched))
+	if len(subjects) != len(wantSubjects) {
+		t.Errorf("outbox events for asset = %d, want exactly %d: %v", len(subjects), len(wantSubjects), subjects)
 	}
 }
 
@@ -88,9 +75,6 @@ func TestStoreWithOutboxPublishesLifecycleEvents(t *testing.T) {
 // selbst fehl (hier: CAS-Konflikt), darf NIE ein Event dafür entstehen.
 func TestOutboxEventRolledBackOnConcurrentModification(t *testing.T) {
 	db := testDB(t)
-	if _, err := db.Exec(`DELETE FROM outbox_events`); err != nil {
-		t.Fatalf("cleanup outbox_events: %v", err)
-	}
 	ob := outbox.NewStore(db)
 	s := NewStore(db, WithOutbox(ob))
 
@@ -105,19 +89,32 @@ func TestOutboxEventRolledBackOnConcurrentModification(t *testing.T) {
 		t.Fatalf("UpdateAssetStatus() with stale rowVersion error = %v, want ErrConcurrentModification", err)
 	}
 
-	undispatched, err := ob.Undispatched(10)
-	if err != nil {
-		t.Fatalf("Undispatched() error = %v", err)
-	}
-	if len(undispatched) != 1 || undispatched[0].Subject != eventSubject(a.ID, "created") {
-		t.Fatalf("Undispatched() = %v, want only the 'created' event from CreateAsset (the failed UpdateAssetStatus must not have enqueued anything)", subjectsOf(undispatched))
+	if subjects := assetEventSubjects(t, db, a.ID); len(subjects) != 1 || subjects[0] != eventSubject(a.ID, "created") {
+		t.Fatalf("outbox events for asset = %v, want only the 'created' event from CreateAsset (the failed UpdateAssetStatus must not have enqueued anything)", subjects)
 	}
 }
 
-func subjectsOf(events []outbox.Event) []string {
-	out := make([]string, len(events))
-	for i, e := range events {
-		out[i] = e.Subject
+// assetEventSubjects liest die Outbox-Events GENAU dieses Assets —
+// unabhängig davon, ob sie schon versendet wurden. Alle Pakete teilen
+// sich eine Testdatenbank (internal/dbtest) und `go test ./...` läuft
+// paketparallel: der Relay-Test in internal/outbox versendet dabei ALLE
+// offenen Events der Tabelle, auch die dieses Pakets. Die früheren
+// Prüfungen über Undispatched() plus ein globales DELETE FROM
+// outbox_events waren deshalb in beide Richtungen flaky (Nachtrag 270).
+func assetEventSubjects(t *testing.T, db *sql.DB, assetID string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT subject FROM outbox_events WHERE subject LIKE $1 ORDER BY created_at, id`, "omp.asset."+assetID+".%")
+	if err != nil {
+		t.Fatalf("query outbox_events: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var subj string
+		if err := rows.Scan(&subj); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		out = append(out, subj)
 	}
 	return out
 }
