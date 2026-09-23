@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 )
@@ -136,6 +137,22 @@ func NewEngine(store *Store, opts ...EngineOption) *Engine {
 // (Condition/Branch, sobald A5 steht).
 func (e *Engine) Register(t StepType, ex StepExecutor) {
 	e.executors[t] = ex
+}
+
+// StepTypes liefert alle Step-Typen, für die aktuell ein Executor
+// registriert ist (sortiert) — für die UI (GET /api/v1/process-
+// capabilities, Nachtrag 270): ein Schritt-Typ ohne Executor lässt sich
+// zwar modellieren (Definition.Validate prüft nur Struktur), scheitert
+// aber zur Laufzeit mit ErrNoExecutorRegistered; der Editor soll das
+// VOR dem Veröffentlichen sichtbar machen. Nur nach dem Start-Setup
+// (Register) aufrufen — die Map ist danach unveränderlich.
+func (e *Engine) StepTypes() []StepType {
+	out := make([]StepType, 0, len(e.executors))
+	for t := range e.executors {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // Start legt eine neue ProcessExecution an (muss auf eine

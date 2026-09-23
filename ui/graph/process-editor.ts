@@ -58,6 +58,19 @@ import {
 } from "./process-editor-logic.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { apiFetch } from "../shell/connection.ts";
+import {
+  branchLabelsFor,
+  DECISION_LABELS,
+  missingConfig,
+  type OutputField,
+  STEP_TYPE_INFO,
+  stepTypeLabel,
+  triggerKindForSubject,
+  type TriggerKind,
+  triggerKinds,
+} from "./process-step-config-logic.ts";
+import { decisionLabel, openStepConfigModal } from "./process-step-config.ts";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const DRAG_THRESHOLD_PX = 3;
@@ -65,27 +78,28 @@ const TYPE_ROW_HEIGHT = 18;
 const ACTIONS_ROW_HEIGHT = 22;
 const TILE_HEIGHT = HEADER_HEIGHT + TYPE_ROW_HEIGHT + ACTIONS_ROW_HEIGHT;
 
-// Menschenlesbare Labels für die Palette — Reihenfolge folgt der
-// Aufgabenstellung (strukturell zuerst, dann Integration, dann
-// Kontrollfluss, dann Mensch-im-Prozess/Sonstiges).
-const STEP_TYPE_LABELS: Record<string, string> = {
-  task: "Task",
-  media_function: "Media Function",
-  service_call: "Service Call",
-  script: "Script",
-  condition: "Condition",
-  branch: "Branch",
-  parallel: "Parallel",
-  join: "Join",
-  loop: "Loop",
-  wait: "Wait",
-  timer: "Timer",
-  human_task: "Human Task",
-  approval: "Approval",
-  notification: "Notification",
-  event_trigger: "Event Trigger",
-  subworkflow: "Subworkflow",
-  compensation: "Compensation",
+// Menschenlesbare Namen/Beschreibungen je Typ: STEP_TYPE_INFO in
+// process-step-config-logic.ts (Nachtrag 270 — vorher englische
+// Fachbegriffe wie "Service Call"/"Condition").
+const PALETTE_GROUPS: { id: "action" | "flow" | "human"; label: string }[] = [
+  { id: "action", label: "Aktionen" },
+  { id: "human", label: "Menschen" },
+  { id: "flow", label: "Ablauf" },
+];
+
+// Asset-Status für Auslöser "Asset wechselt auf …" — Fallback, falls
+// GET /api/v1/asset-lifecycle nicht erreichbar ist.
+const ASSET_STATUS_LABEL: Record<string, string> = {
+  ingesting: "Eingang",
+  registered: "Registriert",
+  processing: "In Verarbeitung",
+  ready: "Bereit",
+  in_review: "In Prüfung",
+  approved: "Freigegeben",
+  published: "Veröffentlicht",
+  archived: "Archiviert",
+  expired: "Abgelaufen",
+  deleted: "Gelöscht",
 };
 
 type DragState =
@@ -106,6 +120,11 @@ export class ProcessEditor extends HTMLElement {
   #changeReason = "";
   #drag: DragState | null = null;
   #editingId: string | null = null;
+  // GET /api/v1/process-capabilities: null = (noch) unbekannt → alle
+  // Typen anbieten, nichts als "nicht ausführbar" markieren.
+  #executable: Set<string> | null = null;
+  #scriptCommands: string[] = [];
+  #assetStatuses: string[] = Object.keys(ASSET_STATUS_LABEL);
 
   #svg!: SVGSVGElement;
   #viewportGroup!: SVGGElement;
@@ -160,6 +179,50 @@ export class ProcessEditor extends HTMLElement {
     this.#renderToolbar();
     this.#renderPalette();
     this.#render();
+    void this.#loadCapabilities();
+  }
+
+  async #loadCapabilities() {
+    try {
+      const [capRes, lcRes] = await Promise.all([apiFetch("/api/v1/process-capabilities"), apiFetch("/api/v1/asset-lifecycle")]);
+      if (capRes.ok) {
+        const caps = (await capRes.json()) as { stepTypes: string[]; scriptCommands: string[] };
+        this.#executable = new Set(caps.stepTypes ?? []);
+        this.#scriptCommands = caps.scriptCommands ?? [];
+      }
+      if (lcRes.ok) {
+        const lc = (await lcRes.json()) as { asset: Record<string, string[]> };
+        const all = new Set<string>(Object.keys(lc.asset));
+        for (const tos of Object.values(lc.asset)) for (const t of tos) all.add(t);
+        const order = Object.keys(ASSET_STATUS_LABEL);
+        this.#assetStatuses = [...all].sort((a, b) => (order.indexOf(a) + 1 || 99) - (order.indexOf(b) + 1 || 99));
+      }
+    } catch {
+      // Editor bleibt voll benutzbar, nur ohne Ausführbarkeits-Hinweise.
+    }
+    this.#renderPalette();
+    this.#renderToolbar();
+    this.#render();
+  }
+
+  #isExecutable(type: string): boolean {
+    return this.#executable === null || this.#executable.has(type);
+  }
+
+  #triggerKinds(): TriggerKind[] {
+    return triggerKinds(this.#assetStatuses, (st) => ASSET_STATUS_LABEL[st] ?? st);
+  }
+
+  // Felder, die die konfigurierten Auslöser als Start-Eingabe liefern
+  // (für den Variablen-Picker: input.*).
+  #triggerFields(): OutputField[] {
+    const kinds = this.#triggerKinds();
+    const out: OutputField[] = [];
+    for (const t of (this.#def.triggers ?? []) as { subject?: string }[]) {
+      const k = triggerKindForSubject(kinds, t.subject ?? "");
+      if (k) out.push(...k.inputFields);
+    }
+    return out;
   }
 
   // Öffnet den Editor mit einer bestehenden Definition (Bearbeiten) oder
@@ -251,16 +314,26 @@ export class ProcessEditor extends HTMLElement {
 
   #renderToolbar() {
     this.#toolbar.replaceChildren();
+    // Knöpfe nie umbrechen; der lange Hinweistext wird stattdessen gekürzt.
+    const nowrap = (b: HTMLElement) => (b.style.whiteSpace = "nowrap");
 
     const title = document.createElement("span");
-    title.style.cssText = "font-weight:600;";
-    title.textContent = "Schritt-Graph";
+    title.style.cssText = "font-weight:600;white-space:nowrap;";
+    title.textContent = "Prozess-Ablauf";
     this.#toolbar.appendChild(title);
 
     const stats = document.createElement("span");
-    stats.style.cssText = "color:#999;";
-    stats.textContent = `${this.#def.steps.length} Schritte — Start: ${this.#def.startStepId || "(keiner)"}`;
+    stats.style.cssText = "color:#999;white-space:nowrap;";
+    stats.textContent = `${this.#def.steps.length} Schritte`;
     this.#toolbar.appendChild(stats);
+
+    const trigBtn = document.createElement("button");
+    const nTrig = (this.#def.triggers ?? []).length;
+    trigBtn.textContent = nTrig ? `⚡ Auslöser (${nTrig})` : "⚡ Auslöser: nur manuell";
+    trigBtn.title = "Festlegen, bei welchem Ereignis der Prozess automatisch startet";
+    trigBtn.setAttribute("data-role", "process-editor-triggers");
+    trigBtn.addEventListener("click", () => this.#openTriggersModal());
+    this.#toolbar.appendChild(trigBtn);
 
     const arrangeBtn = document.createElement("button");
     arrangeBtn.textContent = "Auto-Anordnen";
@@ -276,15 +349,11 @@ export class ProcessEditor extends HTMLElement {
     });
     this.#toolbar.appendChild(reasonInput);
 
-    const spacer = document.createElement("span");
-    spacer.style.flex = "1";
-    this.#toolbar.appendChild(spacer);
-
     const hint = document.createElement("span");
-    hint.style.cssText = "color:#999;";
+    hint.style.cssText = "color:#999;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     hint.textContent =
-      "Ziehen: verschieben · vom Kreis rechts auf eine Kachel ziehen: verbinden · " +
-      "Kante/✕ anklicken: entfernen · ✎ oder Doppelklick auf die ID: umbenennen · ⚙: konfigurieren";
+      "Doppelklick auf eine Kachel: einstellen · vom Kreis rechts auf eine Kachel ziehen: verbinden · " +
+      "Verbindung anklicken: entfernen";
     this.#toolbar.appendChild(hint);
 
     const saveBtn = document.createElement("button");
@@ -298,32 +367,63 @@ export class ProcessEditor extends HTMLElement {
     closeBtn.textContent = "Abbrechen";
     closeBtn.addEventListener("click", () => this.dispatchEvent(new CustomEvent("process-editor-cancel")));
     this.#toolbar.appendChild(closeBtn);
+    this.#toolbar.querySelectorAll("button").forEach((b) => nowrap(b as HTMLElement));
+    hint.title = hint.textContent ?? "";
   }
 
   #renderPalette() {
     this.#palette.replaceChildren();
 
     const heading = document.createElement("div");
-    heading.textContent = "Schritt-Typen";
-    heading.style.cssText = "font-size:12px;font-weight:600;margin-bottom:6px;";
+    heading.textContent = "Bausteine";
+    heading.style.cssText = "font-size:12px;font-weight:600;margin-bottom:2px;";
     this.#palette.appendChild(heading);
+    const sub = document.createElement("div");
+    sub.textContent = "Klicken oder auf die Fläche ziehen.";
+    sub.style.cssText = "font-size:10px;color:#999;margin-bottom:6px;";
+    this.#palette.appendChild(sub);
 
-    for (const type of STEP_TYPES) {
+    const makeItem = (type: string, enabled: boolean) => {
+      const info = STEP_TYPE_INFO[type];
       const item = document.createElement("div");
       item.setAttribute("data-role", "process-editor-palette-item");
       item.setAttribute("data-step-type", type);
-      item.draggable = true;
-      item.textContent = `+ ${STEP_TYPE_LABELS[type] ?? type}`;
-      item.title = "Auf die Fläche ziehen für eine bestimmte Position, oder klicken für die Standardposition.";
+      item.textContent = `+ ${stepTypeLabel(type)}`;
+      item.title = enabled ? (info?.help ?? "") : `${info?.help ?? ""} Auf diesem Server nicht ausführbar — ein Prozess mit diesem Baustein würde beim Erreichen des Schritts fehlschlagen.`;
       item.style.cssText =
-        "padding:4px 6px;margin-bottom:4px;border:1px solid #444;border-radius:3px;cursor:grab;" +
-        "background:#2a2a2a;color:#ddd;font-size:11px;user-select:none;";
-      item.addEventListener("dragstart", (ev) => {
-        ev.dataTransfer?.setData("text/plain", type);
-        if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "copy";
-      });
-      item.addEventListener("click", () => this.#addStepAt(type));
-      this.#palette.appendChild(item);
+        "padding:4px 6px;margin-bottom:4px;border:1px solid #444;border-radius:3px;" +
+        "background:#2a2a2a;font-size:11px;user-select:none;" +
+        (enabled ? "cursor:grab;color:#ddd;" : "cursor:not-allowed;color:#777;border-style:dashed;");
+      if (enabled) {
+        item.draggable = true;
+        item.addEventListener("dragstart", (ev) => {
+          ev.dataTransfer?.setData("text/plain", type);
+          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "copy";
+        });
+        item.addEventListener("click", () => this.#addStepAt(type));
+      }
+      return item;
+    };
+
+    for (const group of PALETTE_GROUPS) {
+      const types = STEP_TYPES.filter((t) => (STEP_TYPE_INFO[t]?.group ?? "action") === group.id && this.#isExecutable(t));
+      if (types.length === 0) continue;
+      const gh = document.createElement("div");
+      gh.textContent = group.label;
+      gh.style.cssText = "font-size:10px;color:#999;text-transform:uppercase;letter-spacing:0.04em;margin:8px 0 4px;";
+      this.#palette.appendChild(gh);
+      for (const t of types) this.#palette.appendChild(makeItem(t, true));
+    }
+    const unavailable = STEP_TYPES.filter((t) => !this.#isExecutable(t));
+    if (unavailable.length) {
+      const det = document.createElement("details");
+      det.style.cssText = "margin-top:10px;";
+      const sum = document.createElement("summary");
+      sum.textContent = `Nicht verfügbar (${unavailable.length})`;
+      sum.style.cssText = "font-size:10px;color:#999;cursor:pointer;";
+      det.appendChild(sum);
+      for (const t of unavailable) det.appendChild(makeItem(t, false));
+      this.#palette.appendChild(det);
     }
   }
 
@@ -427,7 +527,7 @@ export class ProcessEditor extends HTMLElement {
       label.setAttribute("font-size", "10");
       label.setAttribute("text-anchor", "middle");
       label.style.pointerEvents = "none";
-      label.textContent = edge.label;
+      label.textContent = DECISION_LABELS[edge.label] ?? edge.label;
       g.appendChild(label);
     }
 
@@ -466,6 +566,10 @@ export class ProcessEditor extends HTMLElement {
     body.setAttribute("stroke-width", isStart ? "3" : "2");
     body.style.cursor = "move";
     body.addEventListener("pointerdown", (ev) => this.#onTilePointerDown(ev, step.id));
+    body.addEventListener("dblclick", (ev) => {
+      ev.stopPropagation();
+      this.#openConfigModal(step.id);
+    });
     g.appendChild(body);
 
     if (this.#editingId === step.id) {
@@ -476,7 +580,15 @@ export class ProcessEditor extends HTMLElement {
       idText.setAttribute("y", String(HEADER_HEIGHT / 2 + 4));
       idText.setAttribute("fill", isStart ? "#e0c05b" : "#f0f0f0");
       idText.setAttribute("font-size", "12");
-      idText.textContent = (isStart ? "★ " : "") + step.id;
+      // Auf die Breite bis zu den Kachel-Icons kürzen (★ braucht Platz),
+      // voller Name + ID als Tooltip.
+      const full = step.name || step.id;
+      const max = isStart ? 13 : 15;
+      const shown = full.length > max ? full.slice(0, max - 1) + "…" : full;
+      idText.textContent = (isStart ? "★ " : "") + shown;
+      const tip = document.createElementNS(SVG_NS, "title");
+      tip.textContent = step.name ? `${step.name} (ID: ${step.id})` : step.id;
+      idText.appendChild(tip);
       idText.style.cursor = "text";
       idText.addEventListener("pointerdown", (ev) => ev.stopPropagation());
       idText.addEventListener("dblclick", (ev) => {
@@ -533,9 +645,13 @@ export class ProcessEditor extends HTMLElement {
     const typeText = document.createElementNS(SVG_NS, "text");
     typeText.setAttribute("x", "6");
     typeText.setAttribute("y", String(HEADER_HEIGHT + 13));
-    typeText.setAttribute("fill", "#999");
     typeText.setAttribute("font-size", "10");
-    typeText.textContent = STEP_TYPE_LABELS[step.type] ?? step.type;
+    // Warnung direkt auf der Kachel statt erst beim Ausführen: nicht
+    // ausführbarer Typ (rot) oder fehlende Pflichtangabe (orange).
+    const problem = !this.#isExecutable(step.type) ? "nicht ausführbar" : missingConfig(step);
+    typeText.setAttribute("fill", problem ? (this.#isExecutable(step.type) ? "#e0a75b" : "#e06b5b") : "#999");
+    typeText.setAttribute("data-role", "process-step-status");
+    typeText.textContent = problem ? `⚠ ${stepTypeLabel(step.type)}: ${problem}` : stepTypeLabel(step.type);
     typeText.style.pointerEvents = "none";
     g.appendChild(typeText);
 
@@ -620,117 +736,122 @@ export class ProcessEditor extends HTMLElement {
   // ---- Konfigurations-Modal (Name/Config/Retry/Timeout/Compensation) ----------------------
 
   #openConfigModal(id: string) {
-    const step = this.#def.steps.find((s) => s.id === id);
-    if (!step) return;
+    openStepConfigModal(
+      this,
+      { def: this.#def, stepId: id, scriptCommands: this.#scriptCommands, triggerFields: this.#triggerFields() },
+      (r) => {
+        this.#def = updateStepFields(this.#def, id, {
+          name: r.name,
+          config: r.config,
+          retry: r.retry,
+          timeoutSeconds: r.timeoutSeconds,
+        });
+        this.#def = setCompensationStep(this.#def, id, r.compensationStepId);
+        this.#render();
+      },
+    );
+  }
 
+  // Auslöser (A8): wann startet der Prozess automatisch? Formular statt
+  // JSON — Asset-Ereignisse als Auswahl, eigenes Subject nur unter
+  // "Erweitert". Ein Filter-Ausdruck wird bewusst NICHT angeboten: das
+  // Backend (triggerlistener.go) wertet EventTrigger.Filter noch nicht
+  // aus, ein Feld dafür würde eine Wirkung versprechen, die es nicht gibt.
+  #openTriggersModal() {
+    const kinds = this.#triggerKinds();
+    const triggers = ((this.#def.triggers ?? []) as { subject?: string }[]).map((t) => ({ ...t }));
     const overlay = document.createElement("div");
     overlay.className = "omp-modal-overlay";
     overlay.style.zIndex = "2100";
     const modal = document.createElement("div");
     modal.className = "omp-modal";
     modal.style.maxWidth = "560px";
+    modal.setAttribute("data-role", "triggers-modal");
+    modal.innerHTML = `<div class="omp-h1">Automatisch starten, wenn …</div>
+      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0 8px;">
+        Ohne Auslöser startet der Prozess nur manuell („Starten“). Die Daten des Ereignisses stehen den Schritten als Start-Eingabe zur Verfügung (z. B. die Asset-ID).
+        Auslöser wirken erst, wenn die Version veröffentlicht ist.</div>`;
+    const list = document.createElement("div");
+    modal.appendChild(list);
 
-    modal.innerHTML = `<div class="omp-h1" style="margin-bottom:8px;">Schritt "${escapeHtml(id)}" konfigurieren</div>
-      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:8px;">Typ: ${escapeHtml(STEP_TYPE_LABELS[step.type] ?? step.type)}</div>`;
+    const render = () => {
+      list.replaceChildren();
+      if (triggers.length === 0) {
+        const e = document.createElement("div");
+        e.className = "omp-empty";
+        e.textContent = "Kein Auslöser — nur manueller Start.";
+        list.appendChild(e);
+      }
+      triggers.forEach((t, idx) => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;gap:4px;margin-top:4px;align-items:center;";
+        const sel = document.createElement("select");
+        sel.name = "trigger-kind";
+        sel.style.cssText = "flex:1;min-width:0;";
+        for (const k of kinds) sel.appendChild(new Option(k.label, k.subject));
+        const known = triggerKindForSubject(kinds, t.subject ?? "");
+        const custom = document.createElement("input");
+        custom.name = "trigger-subject";
+        custom.placeholder = "eigenes Subject, z. B. omp.process.x.fertig";
+        custom.style.cssText = "flex:1;min-width:0;font-family:ui-monospace,monospace;";
+        sel.appendChild(new Option("Eigenes Ereignis (erweitert) …", "__custom"));
+        sel.value = known ? known.subject : "__custom";
+        custom.value = known ? "" : t.subject ?? "";
+        custom.style.display = known ? "none" : "block";
+        sel.addEventListener("change", () => {
+          if (sel.value === "__custom") {
+            custom.style.display = "block";
+            t.subject = custom.value;
+          } else {
+            custom.style.display = "none";
+            t.subject = sel.value;
+          }
+        });
+        custom.addEventListener("input", () => (t.subject = custom.value.trim()));
+        const rm = document.createElement("button");
+        rm.textContent = "✕";
+        rm.addEventListener("click", () => {
+          triggers.splice(idx, 1);
+          render();
+        });
+        row.append(sel, custom, rm);
+        list.appendChild(row);
+      });
+    };
+    render();
 
-    const nameInput = document.createElement("input");
-    nameInput.placeholder = "Anzeigename (optional)";
-    nameInput.value = step.name ?? "";
-    nameInput.style.cssText = "width:100%;margin-bottom:6px;box-sizing:border-box;";
-    modal.appendChild(nameInput);
-
-    const configLabel = document.createElement("div");
-    configLabel.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin-bottom:2px;";
-    configLabel.textContent = "Config (JSON, typspezifisch — z. B. {\"seconds\":5} bei wait)";
-    modal.appendChild(configLabel);
-    const configArea = document.createElement("textarea");
-    configArea.rows = 5;
-    configArea.value = step.config !== undefined ? JSON.stringify(step.config, null, 2) : "";
-    configArea.style.cssText =
-      "width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);" +
-      "resize:vertical;margin-bottom:6px;";
-    modal.appendChild(configArea);
-
-    const row = document.createElement("div");
-    row.style.cssText = "display:flex;gap:8px;margin-bottom:6px;";
-    const timeoutInput = document.createElement("input");
-    timeoutInput.type = "number";
-    timeoutInput.placeholder = "Timeout (Sekunden, optional)";
-    timeoutInput.value = step.timeoutSeconds ? String(step.timeoutSeconds) : "";
-    timeoutInput.style.cssText = "width:50%;";
-    row.appendChild(timeoutInput);
-
-    const compensationSelect = document.createElement("select");
-    compensationSelect.style.cssText = "width:50%;";
-    const noneOpt = document.createElement("option");
-    noneOpt.value = "";
-    noneOpt.textContent = "Kompensation: keine";
-    compensationSelect.appendChild(noneOpt);
-    for (const other of this.#def.steps) {
-      if (other.id === id) continue;
-      const opt = document.createElement("option");
-      opt.value = other.id;
-      opt.textContent = `Kompensation: ${other.id}`;
-      if (other.id === step.compensationStepId) opt.selected = true;
-      compensationSelect.appendChild(opt);
-    }
-    row.appendChild(compensationSelect);
-    modal.appendChild(row);
-
-    const retryLabel = document.createElement("div");
-    retryLabel.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin-bottom:2px;";
-    retryLabel.textContent = 'Retry (JSON, optional — z. B. {"maxAttempts":3,"backoff":"exponential","initialDelay":"2s"})';
-    modal.appendChild(retryLabel);
-    const retryArea = document.createElement("textarea");
-    retryArea.rows = 3;
-    retryArea.value = step.retry ? JSON.stringify(step.retry, null, 2) : "";
-    retryArea.style.cssText =
-      "width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);" +
-      "resize:vertical;margin-bottom:10px;";
-    modal.appendChild(retryArea);
+    const add = document.createElement("button");
+    add.textContent = "+ Auslöser";
+    add.setAttribute("data-role", "trigger-add");
+    add.style.marginTop = "6px";
+    add.addEventListener("click", () => {
+      triggers.push({ subject: kinds[0]?.subject ?? "" });
+      render();
+    });
+    modal.appendChild(add);
 
     const actions = document.createElement("div");
-    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.textContent = "Abbrechen";
-    cancelBtn.addEventListener("click", () => overlay.remove());
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "omp-btn-primary";
-    saveBtn.textContent = "Übernehmen";
-    saveBtn.addEventListener("click", () => {
-      let config: unknown;
-      if (configArea.value.trim()) {
-        try {
-          config = JSON.parse(configArea.value);
-        } catch (err) {
-          showToast(`Ungültiges Config-JSON: ${err instanceof Error ? err.message : String(err)}`, { variant: "error" });
-          return;
-        }
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;";
+    const cancel = document.createElement("button");
+    cancel.textContent = "Abbrechen";
+    cancel.addEventListener("click", () => overlay.remove());
+    const ok = document.createElement("button");
+    ok.className = "omp-btn-primary";
+    ok.textContent = "Übernehmen";
+    ok.setAttribute("data-role", "triggers-apply");
+    ok.addEventListener("click", () => {
+      if (triggers.some((t) => !t.subject)) {
+        showToast("Jeder Auslöser braucht ein Ereignis.", { variant: "error" });
+        return;
       }
-      let retry;
-      if (retryArea.value.trim()) {
-        try {
-          retry = JSON.parse(retryArea.value);
-        } catch (err) {
-          showToast(`Ungültiges Retry-JSON: ${err instanceof Error ? err.message : String(err)}`, { variant: "error" });
-          return;
-        }
-      }
-      this.#def = updateStepFields(this.#def, id, {
-        name: nameInput.value.trim() || undefined,
-        config,
-        retry,
-        timeoutSeconds: timeoutInput.value ? Number(timeoutInput.value) : undefined,
-      });
-      this.#def = setCompensationStep(this.#def, id, compensationSelect.value || undefined);
+      this.#def = { ...this.#def, triggers: triggers.length ? triggers : undefined };
       overlay.remove();
-      this.#render();
+      this.#renderToolbar();
     });
-    actions.append(cancelBtn, saveBtn);
+    actions.append(cancel, ok);
     modal.appendChild(actions);
-
     overlay.appendChild(modal);
-    overlay.addEventListener("click", (ev) => {
+    overlay.addEventListener("mousedown", (ev) => {
       if (ev.target === overlay) overlay.remove();
     });
     this.appendChild(overlay);
@@ -739,56 +860,92 @@ export class ProcessEditor extends HTMLElement {
   // Kleines Modal nach dem Ablegen einer gezogenen Verbindung: Next
   // (unbedingt) oder Branch (mit Label) — s. Moduldoku oben.
   #openEdgeKindModal(fromId: string, toId: string) {
+    const fromStep = this.#def.steps.find((s) => s.id === fromId);
+    const toStep = this.#def.steps.find((s) => s.id === toId);
+    const labels = branchLabelsFor(fromStep);
+    const used = new Set(Object.keys(fromStep?.branches ?? {}));
     const overlay = document.createElement("div");
     overlay.className = "omp-modal-overlay";
     overlay.style.zIndex = "2100";
     const modal = document.createElement("div");
     modal.className = "omp-modal";
-    modal.style.maxWidth = "360px";
-    modal.innerHTML = `<div class="omp-h1" style="margin-bottom:8px;">Verbindung ${escapeHtml(fromId)} → ${escapeHtml(toId)}</div>`;
+    modal.style.maxWidth = "420px";
+    modal.setAttribute("data-role", "edge-kind-modal");
+    modal.innerHTML = `<div class="omp-h1" style="margin-bottom:8px;">${escapeHtml(fromStep?.name || fromId)} → ${escapeHtml(toStep?.name || toId)}</div>`;
+
+    const close = () => overlay.remove();
+    const addBranch = (label: string) => {
+      const result = addBranchConnection(this.#def, fromId, label, toId);
+      if (!result.ok) {
+        showToast("Bitte einen Namen für den Weg angeben.", { variant: "error" });
+        return;
+      }
+      this.#def = result.def;
+      close();
+      this.#render();
+    };
+
+    // Schritte mit Ergebnis-Wegen (Wenn/Verteiler/Freigabe): die Wege,
+    // die der Schritt WIRKLICH liefert, als Knöpfe — ein frei getippter,
+    // nie gelieferter Name würde den Ablauf an dieser Stelle still enden
+    // lassen.
+    if (labels.length) {
+      const hint = document.createElement("div");
+      hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
+      hint.textContent = "Welcher Weg führt hierher?";
+      modal.appendChild(hint);
+      for (const l of labels) {
+        const b = document.createElement("button");
+        b.className = used.has(l) ? "" : "omp-btn-primary";
+        b.style.cssText = "display:block;width:100%;margin-bottom:4px;text-align:left;";
+        b.textContent = decisionLabel(l) + (used.has(l) ? " — ersetzt bestehende Verbindung" : "");
+        b.setAttribute("data-branch-label", l);
+        b.addEventListener("click", () => addBranch(l));
+        modal.appendChild(b);
+      }
+    }
 
     const nextBtn = document.createElement("button");
-    nextBtn.className = "omp-btn-primary";
-    nextBtn.textContent = "Direkt (Next)";
-    nextBtn.style.marginRight = "8px";
+    nextBtn.className = labels.length ? "" : "omp-btn-primary";
+    nextBtn.style.cssText = "display:block;width:100%;margin-top:6px;text-align:left;";
+    nextBtn.setAttribute("data-role", "edge-next");
+    nextBtn.textContent = labels.length ? "Immer (unabhängig vom Ergebnis)" : "Danach weiter mit diesem Schritt";
     nextBtn.addEventListener("click", () => {
       const result = addNextConnection(this.#def, fromId, toId);
-      if (!result.ok) showToast("Diese Next-Verbindung besteht bereits.", { variant: "error" });
+      if (!result.ok) showToast("Diese Verbindung besteht bereits.", { variant: "error" });
       else this.#def = result.def;
-      overlay.remove();
+      close();
       this.#render();
     });
     modal.appendChild(nextBtn);
 
+    const adv = document.createElement("details");
+    adv.style.cssText = "margin-top:10px;";
+    const sum = document.createElement("summary");
+    sum.style.cssText = "cursor:pointer;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+    sum.textContent = "Erweitert: eigener Weg-Name";
+    adv.appendChild(sum);
     const branchRow = document.createElement("div");
-    branchRow.style.cssText = "display:flex;gap:6px;margin-top:10px;";
+    branchRow.style.cssText = "display:flex;gap:6px;margin-top:6px;";
     const labelInput = document.createElement("input");
-    labelInput.placeholder = "Branch-Label (z. B. valid)";
+    labelInput.placeholder = "Weg-Name";
     labelInput.style.cssText = "flex:1;";
     const branchBtn = document.createElement("button");
-    branchBtn.textContent = "Bedingt (Branch)";
-    branchBtn.addEventListener("click", () => {
-      const result = addBranchConnection(this.#def, fromId, labelInput.value, toId);
-      if (!result.ok) {
-        showToast("Label erforderlich für eine Branch-Verbindung.", { variant: "error" });
-        return;
-      }
-      this.#def = result.def;
-      overlay.remove();
-      this.#render();
-    });
+    branchBtn.textContent = "Verbinden";
+    branchBtn.addEventListener("click", () => addBranch(labelInput.value));
     branchRow.append(labelInput, branchBtn);
-    modal.appendChild(branchRow);
+    adv.appendChild(branchRow);
+    modal.appendChild(adv);
 
     const cancelBtn = document.createElement("button");
     cancelBtn.textContent = "Abbrechen";
     cancelBtn.style.cssText = "display:block;margin-top:12px;";
-    cancelBtn.addEventListener("click", () => overlay.remove());
+    cancelBtn.addEventListener("click", close);
     modal.appendChild(cancelBtn);
 
     overlay.appendChild(modal);
     overlay.addEventListener("click", (ev) => {
-      if (ev.target === overlay) overlay.remove();
+      if (ev.target === overlay) close();
     });
     this.appendChild(overlay);
   }

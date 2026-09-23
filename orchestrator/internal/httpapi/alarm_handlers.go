@@ -23,7 +23,8 @@ type AlarmAckStore interface {
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	alarmAcks AlarmAckStore
+	alarmAcks      AlarmAckStore
+	scriptCommands []string
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.

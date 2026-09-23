@@ -186,6 +186,11 @@ class ProcessView extends HTMLElement {
     if (this.#selectedDefId) await this.#loadVersionsAndExecutions(this.#selectedDefId);
     if (this.#selectedExecId) await this.#loadExecutionDetail(this.#selectedExecId);
     await this.#loadMyTasks();
+    // Offenes Formular (neue Definition/Start-Eingabe) nicht per Poll
+    // neu aufbauen — #render() erzeugt die Modals leer neu, halb
+    // Eingetipptes ginge verloren (Nachtrag 269/270). Die frischen Daten
+    // erscheinen mit dem nächsten Render nach dem Schließen.
+    if (this.#showDefForm || this.#showStartForm) return;
     this.#render();
   }
 

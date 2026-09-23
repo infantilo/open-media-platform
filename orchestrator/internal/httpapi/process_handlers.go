@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/statemachine"
@@ -424,5 +425,28 @@ func writeProcessError(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// WithScriptCommands meldet die Namen der Script-Allow-Liste (main.go,
+// per exec.LookPath ermittelt) für GET /api/v1/process-capabilities —
+// nur Namen, nie Pfade.
+func WithScriptCommands(names []string) HandlerOption {
+	return func(o *handlerOptions) { o.scriptCommands = names }
+}
+
+// handleProcessCapabilities liefert GET /api/v1/process-capabilities:
+// welche Step-Typen tatsächlich einen Executor haben und welche Script-
+// Kommandos erlaubt sind (Nachtrag 270) — der grafische Editor markiert
+// damit nicht ausführbare Typen und bietet Kommandos als Auswahl statt
+// als Freitext an.
+func handleProcessCapabilities(engine ProcessEngineService, scriptCommands []string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cmds := append([]string{}, scriptCommands...)
+		sort.Strings(cmds)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"stepTypes":      engine.StepTypes(),
+			"scriptCommands": cmds,
+		})
 	}
 }

@@ -733,6 +733,10 @@ func main() {
 			slog.Warn("process: script executor: command not found, Script-Schritte dafür bleiben abgelehnt", "command", name)
 		}
 	}
+	scriptCommandNames := make([]string, 0, len(scriptAllowList))
+	for name := range scriptAllowList {
+		scriptCommandNames = append(scriptCommandNames, name)
+	}
 	if scriptEval, err := process.NewEvaluator(); err == nil {
 		processEngine.Register(process.StepTypeScript, process.NewScriptExecutor(scriptAllowList, scriptEval))
 	} else {
@@ -773,7 +777,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

@@ -296,3 +296,48 @@ func TestEngineScriptTimeoutFailsTheStep(t *testing.T) {
 		t.Fatalf("execution status = %s, want failed (1s timeout on a 5s sleep)", final.Status)
 	}
 }
+
+// ---- interpolate (Nachtrag 270) ---------------------------------------------------------------
+
+func TestInterpolateEmbeddedWholeAndEdgeCases(t *testing.T) {
+	eval, _ := NewEvaluator()
+	vars := map[string]any{
+		"input":   map[string]any{"id": "a1", "n": 3},
+		"outputs": map[string]any{"probe": map[string]any{"path": "/m/x.mxf"}},
+	}
+	cases := []struct{ in, want string }{
+		{"plain", "plain"},
+		{"${outputs.probe.path}", "/m/x.mxf"},
+		{"/out/${input.id}.mp4", "/out/a1.mp4"},
+		{"${input.id}-${input.n + 1}", "a1-4"},
+		{`${ {"k": "v}"}.k }`, "v}"}, // "}" in String und Map-Literal
+		{"no vars $HOME {x}", "no vars $HOME {x}"},
+	}
+	for _, c := range cases {
+		got, err := interpolate(eval, vars, c.in)
+		if err != nil || got != c.want {
+			t.Errorf("interpolate(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+	if _, err := interpolate(eval, vars, "/out/${input.id.mp4"); err == nil {
+		t.Error("interpolate(unterminated) error = nil, want error")
+	}
+}
+
+func TestServiceCallInterpolatesURLAndHeaders(t *testing.T) {
+	var gotPath, gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotHeader = r.URL.Path, r.Header.Get("X-Asset")
+		w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	ex := NewServiceCallExecutor(nil)
+	ec := ExecutionCtx{Execution: ProcessExecution{Input: json.RawMessage(`{"assetId":"a42"}`)}, StepExec: ProcessStepExecution{Attempt: 1}}
+	cfg, _ := json.Marshal(serviceCallConfig{URL: srv.URL + "/assets/${input.assetId}", Headers: map[string]string{"X-Asset": "id=${input.assetId}"}})
+	if _, err := ex.Execute(context.Background(), ec, Step{ID: "call", Type: StepTypeServiceCall, Config: cfg}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotPath != "/assets/a42" || gotHeader != "id=a42" {
+		t.Fatalf("path/header = %q/%q, want /assets/a42 / id=a42", gotPath, gotHeader)
+	}
+}

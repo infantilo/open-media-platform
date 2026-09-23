@@ -282,11 +282,39 @@ Node-Verkabelung eines Regieplatzes). Links die Prozess-Definitionen,
 rechts deren Versionen, Ausführungen und offene Aufgaben.
 
 - **„+ Neu"** legt eine Definition an (nur Name/Beschreibung).
-- **„+ Neue Version"** öffnet den grafischen Editor mit leerem Graphen:
-  Schritt-Typen aus der Palette ziehen, vom Ausgangs-Anker eines Schritts
-  zum nächsten ziehen, um sie zu verbinden (Kantentyp „weiter" oder
-  benannter Zweig), Doppelklick/„Konfigurieren" für die
-  Schritt-Einstellungen, **Speichern** legt die Version an.
+- **„+ Neue Version"** öffnet den grafischen Editor. Links stehen die
+  **Bausteine**, gruppiert nach Aktionen (Node-Funktion, Web-Aufruf,
+  Datei-Werkzeug ffmpeg/ffprobe, Benachrichtigung, Unterprozess),
+  Menschen (Aufgabe für Person, Freigabe) und Ablauf (Wenn … dann,
+  Verteiler, Parallel/Zusammenführen, Warten). Bausteine, die dieser
+  Server nicht ausführen kann, stehen eingeklappt unter „Nicht
+  verfügbar“. Ein Baustein wird per Klick oder Ziehen hinzugefügt.
+- **Doppelklick auf eine Kachel** öffnet ein Formular für genau diesen
+  Schritt-Typ, ohne JSON: z. B. beim Datei-Werkzeug eine Vorlage
+  („Technische Metadaten auslesen“, „Proxy erzeugen“, „Vorschaubild“,
+  „Tonspur als WAV“), bei „Wenn … dann“ eine Regel aus
+  *Wert · Vergleich · Wert*, bei der Node-Funktion die laufenden
+  Microservices und ihre Funktionen als Auswahl. Fehlt eine
+  Pflichtangabe, zeigt die Kachel „⚠ … fehlt“.
+- **„{x} Variable“** neben Textfeldern setzt Werte aus dem Prozesslauf
+  ein: Felder der Start-Eingabe/des auslösenden Ereignisses (z. B.
+  Asset-ID), Ergebnisse vorheriger Schritte (z. B. „Ausgabe (stdout)“
+  von „Metadaten lesen“) und Angaben zum Prozesslauf. Angeboten werden
+  nur Schritte, die vor diesem Schritt garantiert gelaufen sind.
+- **Verbinden:** vom Kreis rechts an einer Kachel auf die nächste Kachel
+  ziehen. Bei „Wenn … dann“, „Verteiler“ und „Freigabe“ fragt der
+  Editor, welcher Weg dorthin führt (z. B. „Ja“/„Nein“ oder
+  „freigegeben“/„abgelehnt“/„Änderungen angefordert“).
+- **„Wenn etwas schiefgeht“** (im selben Formular): automatisch
+  wiederholen (Anzahl, Pause, zunehmender Abstand), maximale Laufzeit und
+  ein Schritt, der die Wirkung bei einem späteren Fehler rückgängig macht.
+- **„⚡ Auslöser“** (Werkzeugleiste): den Prozess automatisch starten,
+  z. B. wenn ein Asset angelegt wird oder auf „Bereit“ wechselt. Die
+  Daten des Ereignisses stehen dann als Start-Eingabe zur Verfügung.
+  Auslöser wirken erst ab dem Veröffentlichen der Version.
+- **„Erweitert: Einstellungen als JSON“** am Ende jedes Formulars ist
+  nur noch für Sonderfälle gedacht.
+- **Speichern** legt die Version als Entwurf an.
 - **Einen bestehenden Prozess bearbeiten:** in der Versionstabelle
   **„Bearbeiten"** an der gewünschten Version — der Editor öffnet mit
   genau diesem Graphen, **Speichern** legt daraus eine **neue**

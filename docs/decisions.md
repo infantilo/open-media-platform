@@ -27887,3 +27887,102 @@ Delete/Add mit 409 ab; Suchfeld behält Fokus über einen 15s-Poll;
 Löschen mit Bestätigung → ausgeblendet. Keine JS-Fehler. Testdaten-Reste
 in der Dev-Postgres (keine Delete-Endpunkte): 2 Assets "CDP Asset Test …"
 (Status gelöscht), Prozess-Definition "Edit-Button Test" (2 Draft-Versionen).
+
+## 2026-09-23 (Nachtrag 270) — Prozess-Editor ohne JSON (Formulare je Schritt-Typ, Variablen-Picker, Regel-Baukasten, Auslöser); Test-Isolation je Paket; vier Test-Flakes root-caused
+
+Nutzerauftrag: "der prozess editor ist noch nicht intuitiv. normale
+user sind mit der eingabe von JSON überfordert … der user weiß ja
+nicht, welche variablen oder werte er hier überhaupt eingeben kann.
+dann fahre fort mit den offenen punkten".
+
+**Teil 1 — Editor.** Neues `ui/graph/process-step-config.ts` (Dialog)
+plus das DOM-freie `process-step-config-logic.ts` (8 Tests). Je Schritt-Typ
+gibt es ein Formular statt des Config-JSON-Felds: Warten (Dauer + Einheit),
+Aufgabe/Freigabe (Titel/Zuständig mit Nutzer-Vorschlägen/Priorität),
+Wenn…dann und Verteiler (Regel-Baukasten *Wert · Vergleich · Wert*,
+Freitext-Ausdruck nur als "erweitert"), Web-Aufruf (Methode/URL/Header/
+Daten), Datei-Werkzeug (Werkzeug aus der Server-Allow-Liste, 4 ffmpeg/
+ffprobe-Vorlagen, Argumente zeilenweise), Node-Funktion (laufende
+Instanzen aus `/api/v1/nodes`, Methoden und Argumentfelder aus dem echten
+Descriptor), Unterprozess (Definition/Version als Auswahl) und
+Benachrichtigung. Die Wiederholung (Versuche/Pause/Verdoppeln),
+Zeitlimit und Kompensation stehen im selben Dialog. JSON bleibt als
+zugeklappter Bereich "Erweitert"; solange er offen ist, gilt das JSON
+ausdrücklich (kein stilles Zusammenführen). Unbekannte Config-Felder
+bleiben beim Speichern über das Formular erhalten.
+
+Der **Variablen-Picker** ist aus dem Graphen abgeleitet
+(`ancestorsOf`): angeboten werden nur Schritte, von denen aus der
+aktuelle Schritt erreichbar ist, mit den Ausgabefeldern, die ihr
+Executor tatsächlich liefert, dazu die Payload-Felder der konfigurierten
+Auslöser als `input.*` und `workflow.*`. Schritt-IDs, die keine
+Bezeichner sind, bekommen die Klammer-Syntax. Der **Verbindungs-Dialog**
+bietet genau die Weg-Namen an, die der Quellschritt liefert
+(`branchLabelsFor`: true/false bzw. eigene Labels, Fall-Labels,
+approved/rejected/changes_requested). Ein frei getippter, nie gelieferter
+Name hätte den Ablauf still enden lassen. Die **Palette** ist gruppiert
+und verständlich benannt; nicht ausführbare Typen stehen unter "Nicht
+verfügbar". Die **Kacheln** zeigen den Anzeigenamen und "⚠ … fehlt" bzw.
+"nicht ausführbar". **"⚡ Auslöser"** bietet Asset-Ereignisse
+(angelegt/Status/Metadaten/Version) als Auswahl mit Platzhalter-Subject
+`omp.asset.*.<event>`. Ein Filter-Feld wird bewusst NICHT angeboten,
+weil `EventTrigger.Filter` im Backend nicht ausgewertet wird.
+
+Backend dafür: `GET /api/v1/process-capabilities` (`Engine.StepTypes()`
++ Script-Allow-Liste über `httpapi.WithScriptCommands`, nur Namen).
+`interpolate()` ersetzt `${…}` jetzt auch **eingebettet**
+("/out/${input.id}.mp4") in Script-Argumenten sowie in **URL und Headern**
+von Web-Aufrufen. Vorher ging nur ein ganzes Argument, und im Web-Aufruf
+gar nichts; ein Picker, der an der Cursorposition einfügt, hätte also die
+Hälfte seiner Einfügungen still als Literal belassen. `}` in Strings/
+Map-Literalen wird korrekt übersprungen, ein offenes `${` ist ein Fehler.
+Ein Go-Test belegt, dass die vom Baukasten erzeugten Ausdrucksformen
+(`contains`, `startsWith`, `outputs["a-b"]`) von expr-lang akzeptiert werden.
+
+Nebenbei ist der offene Punkt aus Nachtrag 269 erledigt: `process-view.ts`
+baut offene Formulare beim 15s-Poll nicht mehr leer neu auf.
+
+**Live verifiziert** (Neustart mit Nutzerzustimmung, echte CDP-Maus- und
+Tastatur-Events): Ein Prozess wurde nur über Formulare gebaut
+(ffprobe-Vorlage, Pfad per Variablen-Picker → Regel "Exit-Code ist gleich
+0" → Ja: Benachrichtigung / Nein: Warten 1 s, Auslöser "Asset wechselt
+auf Bereit"). Das gespeicherte JSON entspricht exakt der Erwartung. Ein
+echter Lauf mit ffprobe auf einer echten MP4 (Pfad mit Leerzeichen)
+ergab h264 1280×720 und nahm den Ja-Weg. Der Auslöser wurde Ende-zu-Ende
+geprüft: ein Asset → ready startete den Prozess mit
+`{assetId,status,updatedBy}` als Eingabe; die Testversion ist danach
+deprecated. Node-Funktion gegen eine echte `omp-recorder`-Instanz:
+Methoden `record.start/stop/…` aus dem Descriptor, Argumentfeld
+`fileName`. Beim Bearbeiten wird die Konfiguration korrekt vorbefüllt,
+auch die Regel im Baukasten. **Live gefunden und behoben:**
+"Übernehmen" lag bei langen Formularen außerhalb des sichtbaren
+Bereichs (die Knopfleiste ist jetzt sticky). Außerdem überlagerten lange
+Namen die Kachel-Icons, und die Werkzeugleiste brach um.
+
+**Teil 2 — Test-Isolation.** Beim Voll-Lauf traten weitere sporadische
+Fehlschläge auf, alle root-caused:
+1. **Gemeinsame Testdatenbank für alle Pakete.** `go test ./...` läuft
+   paketparallel. Der Outbox-Relay-Test versendete dabei die Events des
+   Asset-Pakets, teils in den ECHTEN `OMP_EVENTS`-Stream des Dev-Clusters
+   (wo sie echte Auslöser hätten feuern können). Die Asset-Tests löschten
+   per `DELETE FROM outbox_events` die des Outbox-Pakets. Jetzt legt
+   `dbtest.Open` je Paket eine eigene Datenbank `<db>_test_<paket>` an
+   (Name aus dem Testbinary; Retry bei 55006 "template1 in use" für
+   paralleles CREATE DATABASE). Die Asset-Outbox-Tests prüfen jetzt nur
+   noch die Events ihres eigenen Assets.
+2. **Sechs Pakete** (`layouts`, `authz`, `hosts`, `profiles`, `audit`,
+   `auth`) umgingen `dbtest` und schrieben in die ECHTE Dev-Datenbank.
+   Sie löschten zwar nur eigene Zeilen, aber die Isolationszusage aus dem
+   Vorfall 2026-08-07 galt für sie nicht. Jetzt nutzen auch sie `dbtest.Open`.
+3. **`workflows`: 4 Tests** pollten auf einen Zwischen-Commit (Runtime-
+   InstanceID/NodeID, der bewusst VOR Reconnect/State-Restore persistiert
+   wird: `promoteStandby`, `awaitRegistration`) und setzten den
+   Seiteneffekt sofort voraus. Zwei davon waren sichtbar flaky
+   (`TestRestartRoleCapturesAndRestoresNodeState` aus Nachtrag 269,
+   `TestInstanceGaveUpPromotesStandby`), zwei latent. Jetzt warten sie auf
+   den Seiteneffekt selbst (`waitForConnectCalls`). Das ist dieselbe
+   Fehlerklasse wie beim Patroni-Befund.
+
+**Verifikation:** `go vet ./...`; `internal/workflows` 20× in Folge grün;
+Voll-Suite mit DB **3× in Folge 35/35 grün**, 0 `TEST_*`-Reste; `deno
+test ui/` 128/128; `deno bundle` 44 Module.

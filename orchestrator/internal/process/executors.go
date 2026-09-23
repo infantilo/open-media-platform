@@ -481,14 +481,31 @@ const defaultServiceCallTimeout = 30 * time.Second
 // wie bei internal/workflows' bestehenden Node-Aufrufen (nur
 // authentifizierte, mit configure/admin-Verb ausgestattete Nutzer
 // dürfen Definitionen anlegen, sobald die Phase-5-API das durchsetzt).
+//
+// URL und Header-Werte dürfen "${…}"-Variablen enthalten (s. interpolate,
+// Nachtrag 270) — z. B. ".../assets/${input.assetId}".
 func NewServiceCallExecutor(httpClient *http.Client) StepExecutor {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
+	eval, _ := NewEvaluator()
 	return StepExecutorFunc(func(ctx context.Context, ec ExecutionCtx, step Step) (json.RawMessage, error) {
 		var cfg serviceCallConfig
 		if err := json.Unmarshal(step.Config, &cfg); err != nil || cfg.URL == "" {
 			return nil, fmt.Errorf("process: step %q: invalid service call config (url required)", step.ID)
+		}
+		if strings.Contains(cfg.URL, "${") || headersContainVars(cfg.Headers) {
+			vars := exprVars(ec)
+			u, err := interpolate(eval, vars, cfg.URL)
+			if err != nil {
+				return nil, fmt.Errorf("process: step %q: resolve url: %w", step.ID, err)
+			}
+			cfg.URL = u
+			for k, v := range cfg.Headers {
+				if cfg.Headers[k], err = interpolate(eval, vars, v); err != nil {
+					return nil, fmt.Errorf("process: step %q: resolve header %q: %w", step.ID, k, err)
+				}
+			}
 		}
 		method := cfg.Method
 		if method == "" {
@@ -602,7 +619,8 @@ func NewMediaFunctionExecutor(resolver NodeResolver, httpClient *http.Client) St
 // scriptConfig ist Step.Config für Script. Command MUSS ein Schlüssel
 // der dem Executor übergebenen Allow-Liste sein (s. newScriptExecutor-
 // Doku) — NIE ein roher Pfad/beliebiges Programm. Args-Einträge, die
-// exakt der Form "${<expr-lang-Ausdruck>}" entsprechen, werden gegen
+// "${<expr-lang-Ausdruck>}" enthalten (ganz oder eingebettet, s.
+// interpolate), werden gegen
 // denselben Kontext ausgewertet wie Condition/Branch (input/outputs/
 // workflow, s. expr.go) und durch ihren Stringwert ersetzt — erlaubt
 // z. B. den von einem vorherigen Schritt gelieferten Dateipfad an
@@ -694,18 +712,76 @@ func NewScriptExecutor(allowedCommands map[string]string, eval *Evaluator) StepE
 // resolveScriptArg löst ein einzelnes Script-Argument auf — s.
 // scriptConfig-Doku.
 func resolveScriptArg(eval *Evaluator, vars map[string]any, arg string) (string, error) {
-	if !strings.HasPrefix(arg, "${") || !strings.HasSuffix(arg, "}") {
-		return arg, nil
-	}
-	expression := arg[2 : len(arg)-1]
-	val, err := eval.Eval(expression, vars)
-	if err != nil {
-		return "", err
-	}
-	if s, ok := val.(string); ok {
+	return interpolate(eval, vars, arg)
+}
+
+// interpolate ersetzt jedes "${<expr-lang-Ausdruck>}" in s durch den
+// Stringwert des gegen vars ausgewerteten Ausdrucks — sowohl als ganzes
+// Argument ("${input.path}") als auch eingebettet ("/out/${input.id}.mp4",
+// seit Nachtrag 270: der grafische Editor bietet einen Variablen-Picker,
+// der an der Cursorposition einfügt; ein nur-ganzes-Argument-Templating
+// hätte die Hälfte seiner Einfügungen still als Literal belassen). Ein
+// "}" innerhalb eines Ausdrucks (Map-Literal, String) wird über
+// Klammertiefe und Anführungszeichen korrekt übersprungen. Ein nicht
+// geschlossenes "${" ist ein ehrlicher Fehler statt eines stillen Literals.
+// Kein Shell im Spiel (exec ohne sh -c, HTTP-URL-Bau) — eingesetzte Werte
+// können keine zusätzlichen Argumente oder Kommandos erzeugen.
+func interpolate(eval *Evaluator, vars map[string]any, s string) (string, error) {
+	if !strings.Contains(s, "${") {
 		return s, nil
 	}
-	return fmt.Sprint(val), nil
+	var b strings.Builder
+	for {
+		start := strings.Index(s, "${")
+		if start < 0 {
+			b.WriteString(s)
+			return b.String(), nil
+		}
+		b.WriteString(s[:start])
+		end := matchExprEnd(s, start+2)
+		if end < 0 {
+			return "", fmt.Errorf("process: unterminated ${ in %q", s)
+		}
+		val, err := eval.Eval(s[start+2:end], vars)
+		if err != nil {
+			return "", err
+		}
+		if str, ok := val.(string); ok {
+			b.WriteString(str)
+		} else {
+			b.WriteString(fmt.Sprint(val))
+		}
+		s = s[end+1:]
+	}
+}
+
+// matchExprEnd liefert den Index der schließenden "}" eines bei from
+// beginnenden Ausdrucks (Klammertiefe + String-Literale berücksichtigt),
+// -1 wenn keine existiert.
+func matchExprEnd(s string, from int) int {
+	depth := 0
+	var quote byte
+	for i := from; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote != 0:
+			if c == '\\' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'' || c == '`':
+			quote = c
+		case c == '{':
+			depth++
+		case c == '}':
+			if depth == 0 {
+				return i
+			}
+			depth--
+		}
+	}
+	return -1
 }
 
 func truncate(s string, n int) string {
@@ -745,4 +821,13 @@ func (lw *limitedWriter) Write(p []byte) (int, error) {
 	// Prozess selbst darf durch die Kappung nicht mit einem I/O-Fehler
 	// abbrechen, nur die Mitschrift wird gekappt.
 	return len(p), nil
+}
+
+func headersContainVars(h map[string]string) bool {
+	for _, v := range h {
+		if strings.Contains(v, "${") {
+			return true
+		}
+	}
+	return false
 }

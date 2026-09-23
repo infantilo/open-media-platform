@@ -214,6 +214,7 @@ type ProcessEngineService interface {
 	Pause(executionID string) (process.ProcessExecution, error)
 	Resume(executionID string) (process.ProcessExecution, error)
 	CompleteHumanTask(humanTaskID string, expectedRowVersion int, status, decision, comment string) (process.HumanTask, error)
+	StepTypes() []process.StepType
 }
 
 // AssetService verwaltet die Asset/Content-Domäne (implementiert von
@@ -494,6 +495,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Workflow-Start/-Stop). HumanTask-Aktionen (zuweisen/entscheiden)
 	// sind "operate" — eine Bedienhandlung an einem laufenden Prozess,
 	// keine Konfigurations- oder Admin-Handlung.
+	mux.HandleFunc("GET /api/v1/process-capabilities", g.requireAuth(handleProcessCapabilities(processEngine, options.scriptCommands)))
 	mux.HandleFunc("GET /api/v1/process-definitions", g.requireAuth(handleListProcessDefinitions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))
