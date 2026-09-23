@@ -28297,3 +28297,91 @@ Rust-Dateien, keine Testwerkzeuge (die lagen im Scratch-Verzeichnis).
 **Weiterhin offen (aus Nachtrag 271/272, unverändert):** echte
 Handy-Bestätigung (Nutzer hat noch nicht getestet); Session-Churn-
 Degradation (Nachtrag 247/252, andere Ursache als dieser Fix).
+
+## 2026-09-23 (Nachtrag 274) — Kapitel 21 B13: fachliches Domain-Audit für Process-/Asset-Domäne
+
+Fortsetzung der Kapitel-21-Arbeit ("proceed"), nächster offener Punkt
+aus 21.3 (Teil A vollständig erledigt seit Nachtrag 270, Teil B ab hier
+fortgesetzt). Vorab live geprüft (nicht angenommen): `process_handlers.go`/
+`asset_handlers.go` riefen bislang NIRGENDS `audit.*` auf — jede
+Prozess-/Asset-Mutation lief bis hierhin nur durchs generische HTTP-
+Audit (`audit_log`: Methode/Pfad/Status), exakt die in 21.1 diagnostizierte
+Lücke ("'Asset created'/'Approval granted' passt nicht sauber in
+(Method,Path)").
+
+**Neues Paket `orchestrator/internal/domainaudit`** (additiv zu
+`internal/audit`, nicht dessen Erweiterung — eigenes Schema
+Actor/ObjectType/ObjectID/Action/Details statt
+Username/Method/Path/Status): gleicher Store-/Log-/List-/Retention-Stil
+wie `internal/audit` (bewusst Muster-Reuse, nicht Code-Reuse — andere
+Tabelle). Neue Migration `0022_domain_audit.sql`
+(`domain_audit_log`, Index auf `occurred_at` und auf
+`(object_type, object_id, id DESC)` für ein künftiges Objekt-Historie-
+Panel). Zusätzlich `ListByObject` (nicht im `audit`-Vorbild vorhanden)
+für genau dieses Panel. `Log()` best-effort wie beim Vorbild — ein
+Schreibfehler darf die bereits ausgeführte fachliche Aktion nicht
+rückwirkend scheitern lassen. 7 neue Tests (Log/List, nil-Details,
+ListByObject-Filterung, SSE-Broadcast, Cursor-Pagination, Retention ×2),
+alle grün gegen die isolierte `dbtest`-Datenbank.
+
+**Verdrahtung** (`httpapi.WithDomainAudit`, gleiches optionales
+`HandlerOption`-Muster wie `WithAlarmAckStore` — kein Aufblähen der
+ohnehin sehr langen `NewHandler`-Positionsparameterliste, bestehende
+Testaufrufer bleiben unverändert kompilierbar, Domain-Audit ist ohne
+die Option ein reines No-Op statt eines nil-Panics). Acht Mutations-
+stellen protokollieren jetzt, mit dem authentifizierten Principal als
+`actor` (`principalFromContext`, nicht aus dem Body — kein Vortäuschen
+fremder Urheberschaft, gleiches Prinzip wie `updatedBy` bei
+`handleUpdateAssetStatus`):
+
+- Prozess: `process_definition.created`, `process_version.published`/
+  `.deprecated`/`.archived`, `process_execution.started`/`.cancelled`,
+  `human_task.assigned`/`.completed` (Details: Status/Entscheidung/
+  Kommentar).
+- Asset: `asset.created`, `asset.status_changed`, `asset_version.created`/
+  `.published`/`.archived`.
+
+Neuer Endpunkt `GET /api/v1/domain-audit-log?before=&limit=` (Cursor-
+Pagination wie das bestehende HTTP-Audit) bzw. mit
+`?objectType=&objectId=` die Historie EINES Objekts — admin-only
+(gleicher Schutz wie `/api/v1/admin/audit-log`).
+
+**Live verifiziert gegen die echte, neu gestartete Dev-Instanz**
+(`make stop` + `make start` — nur der Orchestrator-Prozess, Container
+liefen weiter, s. Konvention): Migration lief beim Start sauber durch,
+`GET /api/v1/domain-audit-log` initial `[]`. Danach `POST
+/api/v1/process-definitions` → sofort ein `created`-Eintrag mit
+korrektem `actor`/`details.name`. `POST /api/v1/assets` +
+anschließendes `POST .../status` → zwei Einträge, per
+`?objectType=asset&objectId=...` korrekt gefiltert und neueste-zuerst.
+Testdaten ("Domain-Audit-Test"-Prozessdefinition, "B13-Live-Test-Asset")
+bewusst in der Dev-Instanz belassen, klar benannt.
+
+**Verifikation:** `go build ./...`, `go vet ./...`, `gofmt -l` (keine
+neuen Treffer in den geänderten Dateien — 3 vorbestehende, unberührte
+Dateien sind bereits vor dieser Sitzung nicht formatiert). Volle
+Go-Suite (`OMP_POSTGRES_URL` mit `target_session_attrs=read-write`
+gegen den Patroni-Cluster) 34/34 Pakete grün, inkl. `httpapi` (baut
+gegen die echten Interfaces) und dem neuen `domainaudit`-Paket.
+
+**Bewusst NICHT Teil dieser Sitzung (Scope-Grenze):**
+- **UI-Anbindung** (Administration-Tab zeigt bislang nur das HTTP-Audit,
+  Abschnitt 7 im Handbuch) — reine Backend-Lieferung diese Sitzung,
+  Frontend-Panel folgt separat.
+- **Live gefunden, aber nicht behoben (gehört zu B14, nicht B13):**
+  `POST /api/v1/human-tasks/{id}/assign` und `.../complete` prüfen
+  NUR den globalen `VerbOperate`, NICHT ob der Aufrufer tatsächlich
+  `task.Assignee` ist — jeder Nutzer mit globalem Operate-Recht kann
+  aktuell jede fremde Human-Task zuweisen/entscheiden. Genau die in
+  21.3 für B14 vorgemerkte Lücke ("Keine tenant/organization/asset/
+  collection-Dimension … Erweiterung des Binding-Typs"), hier nur
+  bestätigt, nicht gefixt — eigenständiger, größerer Umbau
+  (`authz.Binding`-Scope-Erweiterung).
+
+**Nächste Sitzung (Kapitel 21 Teil B, nach Priorität):** B14
+(Assignee-Scope-Lücke oben ist der dringendste Teil davon), B10
+(Asset↔Workflow-Verknüpfungstabellen), B12 (Collections/Beziehungen),
+B11 (Volltextsuche via `tsvector`/GIN statt der heutigen `LIKE`-Suche),
+B5 (Storage-Abstraktion — `asset.StorageLocation` existiert als
+minimaler Typ bereits, echter S3/MinIO-Provider fehlt noch und bräuchte
+zuerst eine Nutzerentscheidung zu neuer Infrastruktur, s. 21.4-Muster).

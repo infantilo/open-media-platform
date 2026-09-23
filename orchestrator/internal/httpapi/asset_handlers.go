@@ -44,7 +44,7 @@ func handleListAssets(svc AssetService) http.HandlerFunc {
 // handleCreateAsset liefert POST /api/v1/assets: {"type": "...",
 // "title": "...", "description": "..."} — legt das Asset im Status
 // "ingesting" an (B8, Start des Lifecycles).
-func handleCreateAsset(svc AssetService) http.HandlerFunc {
+func handleCreateAsset(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Type        string `json:"type"`
@@ -64,6 +64,7 @@ func handleCreateAsset(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, createdBy, "asset", a.ID, "created", map[string]any{"type": a.Type, "title": a.Title})
 		writeJSON(w, http.StatusOK, a)
 	}
 }
@@ -85,7 +86,7 @@ func handleGetAsset(svc AssetService) http.HandlerFunc {
 // LifecycleTransitions-Zielzustand (B8, A3 optimistic concurrency über
 // expectedRowVersion). updatedBy kommt aus dem authentifizierten
 // Principal, nicht aus dem Body (kein Vortäuschen fremder Urheberschaft).
-func handleUpdateAssetStatus(svc AssetService) http.HandlerFunc {
+func handleUpdateAssetStatus(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ExpectedRowVersion int    `json:"expectedRowVersion"`
@@ -104,6 +105,7 @@ func handleUpdateAssetStatus(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, updatedBy, "asset", a.ID, "status_changed", map[string]any{"to": a.Status})
 		writeJSON(w, http.StatusOK, a)
 	}
 }
@@ -155,7 +157,7 @@ func handleListAssetVersions(svc AssetService) http.HandlerFunc {
 // (parentVersionId leer = keine Vorgängerversion). Neue Versionen
 // starten immer im Status "draft" (B3) — erst
 // handlePublishAssetVersion setzt sie als current_version_id.
-func handleCreateAssetVersion(svc AssetService) http.HandlerFunc {
+func handleCreateAssetVersion(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ParentVersionID string `json:"parentVersionId"`
@@ -176,6 +178,7 @@ func handleCreateAssetVersion(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, createdBy, "asset_version", v.ID, "created", map[string]any{"assetId": v.AssetID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }
@@ -195,26 +198,28 @@ func handleGetAssetVersion(svc AssetService) http.HandlerFunc {
 // handlePublishAssetVersion liefert POST
 // /api/v1/asset-versions/{id}/publish (B3: draft -> published,
 // unveränderlich ab hier, wird atomar zu assets.current_version_id).
-func handlePublishAssetVersion(svc AssetService) http.HandlerFunc {
+func handlePublishAssetVersion(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.PublishVersion(r.PathValue("id"))
 		if err != nil {
 			writeAssetError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "asset_version", v.ID, "published", map[string]any{"assetId": v.AssetID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }
 
 // handleArchiveAssetVersion liefert POST
 // /api/v1/asset-versions/{id}/archive.
-func handleArchiveAssetVersion(svc AssetService) http.HandlerFunc {
+func handleArchiveAssetVersion(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.ArchiveVersion(r.PathValue("id"))
 		if err != nil {
 			writeAssetError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "asset_version", v.ID, "archived", map[string]any{"assetId": v.AssetID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }

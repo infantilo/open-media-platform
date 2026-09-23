@@ -38,7 +38,7 @@ func handleGetProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 
 // handleCreateProcessDefinition liefert POST /api/v1/process-definitions:
 // {"name": "...", "description": "...", "category": "..."}.
-func handleCreateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
+func handleCreateProcessDefinition(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Name        string `json:"name"`
@@ -58,6 +58,7 @@ func handleCreateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, createdBy, "process_definition", pd.ID, "created", map[string]any{"name": pd.Name})
 		writeJSON(w, http.StatusOK, pd)
 	}
 }
@@ -142,39 +143,42 @@ func handleGetProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 // handlePublishProcessVersion liefert POST
 // /api/v1/process-versions/{id}/publish (A7: draft -> published, macht
 // die Version über POST /api/v1/process-executions startbar).
-func handlePublishProcessVersion(svc ProcessStoreService) http.HandlerFunc {
+func handlePublishProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.PublishVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "process_version", v.ID, "published", map[string]any{"processDefinitionId": v.ProcessDefinitionID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }
 
 // handleDeprecateProcessVersion liefert POST
 // /api/v1/process-versions/{id}/deprecate.
-func handleDeprecateProcessVersion(svc ProcessStoreService) http.HandlerFunc {
+func handleDeprecateProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.DeprecateVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "process_version", v.ID, "deprecated", map[string]any{"processDefinitionId": v.ProcessDefinitionID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }
 
 // handleArchiveProcessVersion liefert POST
 // /api/v1/process-versions/{id}/archive.
-func handleArchiveProcessVersion(svc ProcessStoreService) http.HandlerFunc {
+func handleArchiveProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.ArchiveVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "process_version", v.ID, "archived", map[string]any{"processDefinitionId": v.ProcessDefinitionID, "versionNumber": v.VersionNumber})
 		writeJSON(w, http.StatusOK, v)
 	}
 }
@@ -206,7 +210,7 @@ func handleListProcessExecutions(svc ProcessStoreService) http.HandlerFunc {
 // "correlationId": "...", "causationId": "...", "parentExecutionId":
 // "...", "traceId": "...", "input": {...}}. correlationId leer = wird
 // auf die neue Execution-ID gesetzt (s. Store.CreateExecution-Doku).
-func handleStartProcessExecution(engine ProcessEngineService) http.HandlerFunc {
+func handleStartProcessExecution(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ProcessDefinitionID string          `json:"processDefinitionId"`
@@ -239,6 +243,7 @@ func handleStartProcessExecution(engine ProcessEngineService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, createdBy, "process_execution", exec.ID, "started", map[string]any{"processDefinitionId": exec.ProcessDefinitionID, "processVersionId": exec.ProcessVersionID, "correlationId": exec.CorrelationID})
 		writeJSON(w, http.StatusOK, exec)
 	}
 }
@@ -270,13 +275,14 @@ func handleListProcessStepExecutions(svc ProcessStoreService) http.HandlerFunc {
 
 // handleCancelProcessExecution liefert POST
 // /api/v1/process-executions/{id}/cancel.
-func handleCancelProcessExecution(engine ProcessEngineService) http.HandlerFunc {
+func handleCancelProcessExecution(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		exec, err := engine.Cancel(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "process_execution", exec.ID, "cancelled", nil)
 		writeJSON(w, http.StatusOK, exec)
 	}
 }
@@ -358,7 +364,7 @@ func handleGetHumanTask(svc ProcessStoreService) http.HandlerFunc {
 
 // handleAssignHumanTask liefert POST /api/v1/human-tasks/{id}/assign:
 // {"assignee": "..."} (pending -> claimed, A6).
-func handleAssignHumanTask(svc ProcessStoreService) http.HandlerFunc {
+func handleAssignHumanTask(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Assignee string `json:"assignee"`
@@ -372,6 +378,7 @@ func handleAssignHumanTask(svc ProcessStoreService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "human_task", task.ID, "assigned", map[string]any{"assignee": task.Assignee})
 		writeJSON(w, http.StatusOK, task)
 	}
 }
@@ -385,7 +392,7 @@ func handleAssignHumanTask(svc ProcessStoreService) http.HandlerFunc {
 // entscheidet, weil ein abgeschlossener HumanTask/Approval-Schritt den
 // wartenden Ausführungszyklus wieder anstößt (s.
 // Engine.CompleteHumanTask-Doku).
-func handleCompleteHumanTask(engine ProcessEngineService) http.HandlerFunc {
+func handleCompleteHumanTask(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ExpectedRowVersion int    `json:"expectedRowVersion"`
@@ -402,6 +409,7 @@ func handleCompleteHumanTask(engine ProcessEngineService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "human_task", task.ID, "completed", map[string]any{"status": task.Status, "decision": task.Decision, "comment": task.Comment})
 		writeJSON(w, http.StatusOK, task)
 	}
 }

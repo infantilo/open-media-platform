@@ -26,6 +26,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/config"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/consoles"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/domainaudit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
@@ -562,6 +563,12 @@ func main() {
 	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
 	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
 	go auditStore.RunRetention(ctx, cfg.AuditRetentionDays)
+	// Fachliches Domain-Audit (Kapitel 21 B13), additiv zu auditStore oben
+	// — s. internal/domainaudit-Paketdoku. Teilt sich cfg.AuditRetentionDays
+	// (kein eigener Konfigurationswert: reine Verdopplung ohne fachlichen
+	// Unterschied zwischen den beiden Aufbewahrungsfristen).
+	domainAuditStore := domainaudit.NewStore(database, hub)
+	go domainAuditStore.RunRetention(ctx, cfg.AuditRetentionDays)
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	hostStore := hosts.NewStore(database)
@@ -777,7 +784,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

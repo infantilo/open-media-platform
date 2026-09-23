@@ -25,11 +25,23 @@ type HandlerOption func(*handlerOptions)
 type handlerOptions struct {
 	alarmAcks      AlarmAckStore
 	scriptCommands []string
+	domainAudit    DomainAuditLogger
+	domainAuditR   DomainAuditReader
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
 func WithAlarmAckStore(s AlarmAckStore) HandlerOption {
 	return func(o *handlerOptions) { o.alarmAcks = s }
+}
+
+// WithDomainAudit aktiviert das fachliche Domain-Audit (Kapitel 21, B13:
+// GET /api/v1/domain-audit-log) und die Protokollierung an den
+// Process-/Asset-Mutationsstellen in process_handlers.go/
+// asset_handlers.go. Optional wie WithAlarmAckStore — fehlt die Option
+// (z. B. in bestehenden Tests), bleiben Log-Aufrufe an den
+// Mutationsstellen No-Ops (nil-Check dort), der Endpunkt ist inaktiv.
+func WithDomainAudit(logger DomainAuditLogger, reader DomainAuditReader) HandlerOption {
+	return func(o *handlerOptions) { o.domainAudit = logger; o.domainAuditR = reader }
 }
 
 const alarmAckChangedEvent = "alarm.ack.changed"

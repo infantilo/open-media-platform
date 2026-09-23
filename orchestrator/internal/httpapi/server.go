@@ -415,6 +415,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))
 	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore)))
 	mux.HandleFunc("GET /api/v1/admin/audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListAuditLog(auditReader)))
+	// Kapitel 21 B13 — fachliches Gegenstück zum HTTP-Audit oben, s.
+	// domain_audit_handlers.go. Optional wie /api/v1/alarms/acks: fehlt
+	// WithDomainAudit (z. B. in bestehenden Tests), bleibt der Endpunkt
+	// inaktiv statt mit nil-Reader zu crashen.
+	if options.domainAuditR != nil {
+		mux.HandleFunc("GET /api/v1/domain-audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListDomainAuditLog(options.domainAuditR)))
+	}
 	// ARCHITECTURE.md §25.2/§25.3 (UMSETZUNG.md D19) — zentraler
 	// Log-Kanal, gleiches Admin-Gate wie das Audit-Log (Log-Zeilen legen
 	// node-/host-übergreifende Betriebsdetails offen).
@@ -497,29 +504,29 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// keine Konfigurations- oder Admin-Handlung.
 	mux.HandleFunc("GET /api/v1/process-capabilities", g.requireAuth(handleProcessCapabilities(processEngine, options.scriptCommands)))
 	mux.HandleFunc("GET /api/v1/process-definitions", g.requireAuth(handleListProcessDefinitions(processStore)))
-	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore)))
+	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))
 	mux.HandleFunc("PUT /api/v1/process-definitions/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateProcessDefinition(processStore)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}/versions", g.requireAuth(handleListProcessVersions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessVersion(processStore)))
 	mux.HandleFunc("GET /api/v1/process-versions/{id}", g.requireAuth(handleGetProcessVersion(processStore)))
-	mux.HandleFunc("POST /api/v1/process-versions/{id}/publish", g.requireVerbGlobal(authz.VerbAdmin, handlePublishProcessVersion(processStore)))
-	mux.HandleFunc("POST /api/v1/process-versions/{id}/deprecate", g.requireVerbGlobal(authz.VerbAdmin, handleDeprecateProcessVersion(processStore)))
-	mux.HandleFunc("POST /api/v1/process-versions/{id}/archive", g.requireVerbGlobal(authz.VerbAdmin, handleArchiveProcessVersion(processStore)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/publish", g.requireVerbGlobal(authz.VerbAdmin, handlePublishProcessVersion(processStore, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/deprecate", g.requireVerbGlobal(authz.VerbAdmin, handleDeprecateProcessVersion(processStore, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/process-versions/{id}/archive", g.requireVerbGlobal(authz.VerbAdmin, handleArchiveProcessVersion(processStore, options.domainAudit)))
 
 	mux.HandleFunc("GET /api/v1/process-executions", g.requireAuth(handleListProcessExecutions(processStore)))
-	mux.HandleFunc("POST /api/v1/process-executions", g.requireVerbGlobal(authz.VerbAdmin, handleStartProcessExecution(processEngine)))
+	mux.HandleFunc("POST /api/v1/process-executions", g.requireVerbGlobal(authz.VerbAdmin, handleStartProcessExecution(processEngine, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}", g.requireAuth(handleGetProcessExecution(processStore)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}/steps", g.requireAuth(handleListProcessStepExecutions(processStore)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}/human-tasks", g.requireAuth(handleListHumanTasksByExecution(processStore)))
-	mux.HandleFunc("POST /api/v1/process-executions/{id}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelProcessExecution(processEngine)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelProcessExecution(processEngine, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/process-executions/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseProcessExecution(processEngine)))
 	mux.HandleFunc("POST /api/v1/process-executions/{id}/resume", g.requireVerbGlobal(authz.VerbAdmin, handleResumeProcessExecution(processEngine)))
 
 	mux.HandleFunc("GET /api/v1/human-tasks", g.requireAuth(handleListHumanTasksByAssignee(processStore)))
 	mux.HandleFunc("GET /api/v1/human-tasks/{id}", g.requireAuth(handleGetHumanTask(processStore)))
-	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore)))
-	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/assign", g.requireVerbGlobal(authz.VerbOperate, handleAssignHumanTask(processStore, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/human-tasks/{id}/complete", g.requireVerbGlobal(authz.VerbOperate, handleCompleteHumanTask(processEngine, options.domainAudit)))
 
 	// Asset/Content-Domäne (Kapitel 21 Phase 5 Teil 3, ARCHITECTURE.md
 	// Domain-Trennung Asset/Process). Anlegen (Asset/Version/
@@ -532,15 +539,15 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Zuweisen/Entscheiden, nicht Konfiguration des Systems selbst.
 	mux.HandleFunc("GET /api/v1/asset-lifecycle", g.requireAuth(handleAssetLifecycle()))
 	mux.HandleFunc("GET /api/v1/assets", g.requireAuth(handleListAssets(assetSvc)))
-	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/assets/{id}", g.requireAuth(handleGetAsset(assetSvc)))
-	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc, options.domainAudit)))
 	mux.HandleFunc("PUT /api/v1/assets/{id}/metadata", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetMetadata(assetSvc)))
 	mux.HandleFunc("GET /api/v1/assets/{id}/versions", g.requireAuth(handleListAssetVersions(assetSvc)))
-	mux.HandleFunc("POST /api/v1/assets/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAssetVersion(assetSvc)))
+	mux.HandleFunc("POST /api/v1/assets/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAssetVersion(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/asset-versions/{id}", g.requireAuth(handleGetAssetVersion(assetSvc)))
-	mux.HandleFunc("POST /api/v1/asset-versions/{id}/publish", g.requireVerbGlobal(authz.VerbConfigure, handlePublishAssetVersion(assetSvc)))
-	mux.HandleFunc("POST /api/v1/asset-versions/{id}/archive", g.requireVerbGlobal(authz.VerbConfigure, handleArchiveAssetVersion(assetSvc)))
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/publish", g.requireVerbGlobal(authz.VerbConfigure, handlePublishAssetVersion(assetSvc, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/asset-versions/{id}/archive", g.requireVerbGlobal(authz.VerbConfigure, handleArchiveAssetVersion(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/asset-versions/{id}/representations", g.requireAuth(handleListRepresentations(assetSvc)))
 	mux.HandleFunc("POST /api/v1/asset-versions/{id}/representations", g.requireVerbGlobal(authz.VerbConfigure, handleCreateRepresentation(assetSvc)))
 	mux.HandleFunc("GET /api/v1/representations/{id}", g.requireAuth(handleGetRepresentation(assetSvc)))
