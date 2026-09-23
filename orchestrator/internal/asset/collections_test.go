@@ -28,7 +28,7 @@ func testCollectionsDB(t *testing.T) *sql.DB {
 func TestCollectionCreateGetListUpdateDelete(t *testing.T) {
 	s := NewStore(testCollectionsDB(t))
 
-	c, err := s.CreateCollection("Kampagne Q3", "Werbematerial", "alice")
+	c, err := s.CreateCollection("Kampagne Q3", "Werbematerial", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateCollection() error = %v", err)
 	}
@@ -80,7 +80,7 @@ func TestCollectionCreateGetListUpdateDelete(t *testing.T) {
 
 func TestCreateCollectionRequiresTitle(t *testing.T) {
 	s := NewStore(testCollectionsDB(t))
-	if _, err := s.CreateCollection("", "desc", "alice"); !errors.Is(err, ErrValidation) {
+	if _, err := s.CreateCollection("", "desc", "alice", ""); !errors.Is(err, ErrValidation) {
 		t.Errorf("CreateCollection(title=\"\") error = %v, want ErrValidation", err)
 	}
 }
@@ -88,15 +88,15 @@ func TestCreateCollectionRequiresTitle(t *testing.T) {
 func TestCollectionMembership(t *testing.T) {
 	s := NewStore(testCollectionsDB(t))
 
-	c, err := s.CreateCollection("Sendung 42", "", "alice")
+	c, err := s.CreateCollection("Sendung 42", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateCollection() error = %v", err)
 	}
-	a1, err := s.CreateAsset("VIDEO", "Clip 1", "", "alice")
+	a1, err := s.CreateAsset("VIDEO", "Clip 1", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset(1) error = %v", err)
 	}
-	a2, err := s.CreateAsset("VIDEO", "Clip 2", "", "alice")
+	a2, err := s.CreateAsset("VIDEO", "Clip 2", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset(2) error = %v", err)
 	}
@@ -152,11 +152,11 @@ func TestCollectionMembership(t *testing.T) {
 func TestAssetRelationships(t *testing.T) {
 	s := NewStore(testCollectionsDB(t))
 
-	master, err := s.CreateAsset("VIDEO", "Master", "", "alice")
+	master, err := s.CreateAsset("VIDEO", "Master", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset(master) error = %v", err)
 	}
-	proxy, err := s.CreateAsset("VIDEO", "Proxy", "", "alice")
+	proxy, err := s.CreateAsset("VIDEO", "Proxy", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset(proxy) error = %v", err)
 	}
@@ -214,7 +214,7 @@ func TestAssetRelationships(t *testing.T) {
 
 func TestCreateRelationshipRejectsSelfAndMissingFields(t *testing.T) {
 	s := NewStore(testCollectionsDB(t))
-	a, err := s.CreateAsset("VIDEO", "Solo", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Solo", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}

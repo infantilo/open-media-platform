@@ -35,7 +35,7 @@ func setupMigrationWorkflow(t *testing.T, escalation string, windowSeconds int) 
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "active"}},
 	}
-	created, err := svc.Create("regie", def, nil)
+	created, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

@@ -135,7 +135,7 @@ func TestStartClaimsIOPortForRequiredRole(t *testing.T) {
 	svc.SetIOPortClaimer(ioPorts)
 
 	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -175,7 +175,7 @@ func TestStartRejectsWhenNoMatchingIOPortAvailable(t *testing.T) {
 	svc.SetIOPortClaimer(ioPorts)
 
 	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestStartRejectsWhenIOPortRequiredButNoClaimerConfigured(t *testing.T) {
 	// stillschweigend ignoriert werden.
 
 	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -234,7 +234,7 @@ func TestStartRollsBackPartialClaimsWhenALaterRoleCannotBeSatisfied(t *testing.T
 		{Name: "ingest-a", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
 		{Name: "ingest-b", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}},
 	}}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -262,7 +262,7 @@ func TestStopReleasesIOPortClaim(t *testing.T) {
 	svc.SetIOPortClaimer(ioPorts)
 
 	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -309,7 +309,7 @@ func setupIOPortMigrationWorkflow(t *testing.T, ioPorts *fakeIOPortClaimer) (svc
 	svc.SetIOPortClaimer(ioPorts)
 
 	def := Definition{Roles: []Role{{Name: "ingest", NodeType: "omp-decklink", HostID: "host-1", RequiredIOPort: &IOPortRequirement{CardType: "decklink", Direction: "in"}}}}
-	created, err := svc.Create("wf", def, nil)
+	created, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

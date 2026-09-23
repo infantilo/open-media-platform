@@ -395,7 +395,7 @@ func (f fakeAuthSvc) Login(ctx context.Context, username, password string) (stri
 	return f.loginToken, f.loginExpires, f.loginErr
 }
 
-func (f fakeAuthSvc) CreateUser(ctx context.Context, username, password string) (auth.User, error) {
+func (f fakeAuthSvc) CreateUser(ctx context.Context, username, password, orgID string) (auth.User, error) {
 	return f.createdUser, f.createErr
 }
 
@@ -541,7 +541,7 @@ type fakeWorkflowService struct {
 	importErr      error
 }
 
-func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error) {
+func (f fakeWorkflowService) Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime, ownerOrgID string) (workflows.Workflow, error) {
 	return f.created, f.createErr
 }
 
@@ -577,7 +577,7 @@ func (f fakeWorkflowService) Export(id string, includeBindings bool) (workflows.
 	return f.exported, f.exportErr
 }
 
-func (f fakeWorkflowService) Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error) {
+func (f fakeWorkflowService) Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error) {
 	return f.imported, f.importErr
 }
 

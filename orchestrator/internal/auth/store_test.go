@@ -35,7 +35,7 @@ func TestStoreCreateAndByUsername(t *testing.T) {
 	username := "test-store-create-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username) })
 
-	created, err := store.Create(ctx, username, "hash-value")
+	created, err := store.Create(ctx, username, "hash-value", "default")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -59,10 +59,10 @@ func TestStoreCreateDuplicateUsernameFails(t *testing.T) {
 	username := "test-store-dup-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username) })
 
-	if _, err := store.Create(ctx, username, "hash-a"); err != nil {
+	if _, err := store.Create(ctx, username, "hash-a", "default"); err != nil {
 		t.Fatalf("first Create() error = %v", err)
 	}
-	if _, err := store.Create(ctx, username, "hash-b"); err != ErrUserExists {
+	if _, err := store.Create(ctx, username, "hash-b", "default"); err != ErrUserExists {
 		t.Fatalf("second Create() error = %v, want ErrUserExists", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestStoreRevokeSessionsIncrementsEpoch(t *testing.T) {
 	username := "test-store-revoke-" + mustNewID(t)
 	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username) })
 
-	created, err := store.Create(ctx, username, "hash-value")
+	created, err := store.Create(ctx, username, "hash-value", "default")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

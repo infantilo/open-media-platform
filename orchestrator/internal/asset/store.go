@@ -119,7 +119,7 @@ func scanAsset(row interface{ Scan(...any) error }) (Asset, error) {
 	var currentVersionID sql.NullString
 	var metadataRaw []byte
 	err := row.Scan(&a.ID, &a.Type, &a.Title, &a.Description, &a.Status, &currentVersionID,
-		&metadataRaw, &a.CreatedBy, &a.UpdatedBy, &a.RowVersion, &a.CreatedAt, &a.UpdatedAt)
+		&metadataRaw, &a.CreatedBy, &a.UpdatedBy, &a.RowVersion, &a.CreatedAt, &a.UpdatedAt, &a.OwnerOrgID)
 	if err != nil {
 		return Asset{}, err
 	}
@@ -132,18 +132,27 @@ func scanAsset(row interface{ Scan(...any) error }) (Asset, error) {
 	return a, nil
 }
 
-const assetSelectColumns = `id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at`
+const assetSelectColumns = `id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at, owner_org_id`
+
+// defaultOrgID spiegelt organizations.DefaultOrgID — s.
+// process.defaultOrgID/httpapi.defaultOrgID für dieselbe bewusste
+// Duplikations-Linie (Kapitel 21 B14, Nachtrag 283).
+const defaultOrgID = "default"
 
 // CreateAsset legt ein neues Asset im Status "ingesting" an (B8: Start
 // des Lifecycles), ohne current_version_id (die erste AssetVersion muss
-// erst angelegt und veröffentlicht werden, s. PublishVersion).
-func (s *Store) CreateAsset(assetType, title, description, createdBy string) (Asset, error) {
+// erst angelegt und veröffentlicht werden, s. PublishVersion). ownerOrgID
+// leer = Default-Organisation (Kapitel 21 B14).
+func (s *Store) CreateAsset(assetType, title, description, createdBy, ownerOrgID string) (Asset, error) {
 	if assetType == "" || title == "" {
 		return Asset{}, fmt.Errorf("%w: type and title are required", ErrValidation)
 	}
 	id, err := newID()
 	if err != nil {
 		return Asset{}, err
+	}
+	if ownerOrgID == "" {
+		ownerOrgID = defaultOrgID
 	}
 	metadataRaw, err := marshalMetadata(Metadata{})
 	if err != nil {
@@ -153,7 +162,7 @@ func (s *Store) CreateAsset(assetType, title, description, createdBy string) (As
 	a := Asset{
 		ID: id, Type: assetType, Title: title, Description: description,
 		Status: StatusIngesting, CreatedBy: createdBy, UpdatedBy: createdBy,
-		RowVersion: 1, CreatedAt: now, UpdatedAt: now,
+		RowVersion: 1, CreatedAt: now, UpdatedAt: now, OwnerOrgID: ownerOrgID,
 	}
 
 	ctx := context.Background()
@@ -164,9 +173,9 @@ func (s *Store) CreateAsset(assetType, title, description, createdBy string) (As
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO assets (id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, 1, $9, $9)
-	`, a.ID, a.Type, a.Title, a.Description, a.Status, metadataRaw, a.CreatedBy, a.UpdatedBy, a.CreatedAt); err != nil {
+		INSERT INTO assets (id, type, title, description, status, current_version_id, metadata, created_by, updated_by, row_version, created_at, updated_at, owner_org_id)
+		VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, 1, $9, $9, $10)
+	`, a.ID, a.Type, a.Title, a.Description, a.Status, metadataRaw, a.CreatedBy, a.UpdatedBy, a.CreatedAt, a.OwnerOrgID); err != nil {
 		return Asset{}, err
 	}
 	if err := s.enqueueEvent(tx, a.ID, "created", a); err != nil {
@@ -619,8 +628,9 @@ func (s *Store) DeleteRepresentation(id string) error {
 
 // ---- Collection (B12) ----------------------------------------------
 
-// CreateCollection legt eine neue, leere Collection an.
-func (s *Store) CreateCollection(title, description, createdBy string) (Collection, error) {
+// CreateCollection legt eine neue, leere Collection an. ownerOrgID leer
+// = Default-Organisation (Kapitel 21 B14).
+func (s *Store) CreateCollection(title, description, createdBy, ownerOrgID string) (Collection, error) {
 	if title == "" {
 		return Collection{}, fmt.Errorf("%w: title is required", ErrValidation)
 	}
@@ -628,12 +638,15 @@ func (s *Store) CreateCollection(title, description, createdBy string) (Collecti
 	if err != nil {
 		return Collection{}, err
 	}
+	if ownerOrgID == "" {
+		ownerOrgID = defaultOrgID
+	}
 	now := time.Now().UTC()
-	c := Collection{ID: id, Title: title, Description: description, CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now}
+	c := Collection{ID: id, Title: title, Description: description, CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now, OwnerOrgID: ownerOrgID}
 	_, err = s.db.Exec(`
-		INSERT INTO collections (id, title, description, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, c.ID, c.Title, c.Description, c.CreatedBy, c.CreatedAt, c.UpdatedAt)
+		INSERT INTO collections (id, title, description, created_by, created_at, updated_at, owner_org_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, c.ID, c.Title, c.Description, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.OwnerOrgID)
 	if err != nil {
 		return Collection{}, err
 	}
@@ -642,11 +655,11 @@ func (s *Store) CreateCollection(title, description, createdBy string) (Collecti
 
 func scanCollection(row interface{ Scan(...any) error }) (Collection, error) {
 	var c Collection
-	err := row.Scan(&c.ID, &c.Title, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+	err := row.Scan(&c.ID, &c.Title, &c.Description, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.OwnerOrgID)
 	return c, err
 }
 
-const collectionSelectColumns = `id, title, description, created_by, created_at, updated_at`
+const collectionSelectColumns = `id, title, description, created_by, created_at, updated_at, owner_org_id`
 
 // GetCollection liefert eine einzelne Collection.
 func (s *Store) GetCollection(id string) (Collection, error) {

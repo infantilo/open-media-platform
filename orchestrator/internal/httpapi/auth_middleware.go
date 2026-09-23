@@ -17,7 +17,8 @@ type AuthService interface {
 	UserCount(ctx context.Context) (int, error)
 	Authenticate(ctx context.Context, token string) (auth.Principal, error)
 	Login(ctx context.Context, username, password string) (token string, expiresAt time.Time, err error)
-	CreateUser(ctx context.Context, username, password string) (auth.User, error)
+	// orgID leer = Default-Organisation (Kapitel 21 B14, Nachtrag 283).
+	CreateUser(ctx context.Context, username, password, orgID string) (auth.User, error)
 	ListUsers(ctx context.Context) ([]auth.User, error)
 	DeleteUser(ctx context.Context, username string) error
 	SetPassword(ctx context.Context, username, password string) error

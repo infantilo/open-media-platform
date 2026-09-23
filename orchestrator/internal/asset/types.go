@@ -125,6 +125,9 @@ type Asset struct {
 	RowVersion       int       `json:"rowVersion"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`
+	// OwnerOrgID (Kapitel 21 B14, Nachtrag 283) — s. dortige Doku in
+	// process.ProcessDefinition, identisches Muster.
+	OwnerOrgID string `json:"ownerOrgId,omitempty"`
 }
 
 // AssetVersion (B3).
@@ -186,6 +189,8 @@ type Collection struct {
 	CreatedBy   string    `json:"createdBy"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	// OwnerOrgID (Kapitel 21 B14, Nachtrag 283) — s. Asset.OwnerOrgID.
+	OwnerOrgID string `json:"ownerOrgId,omitempty"`
 }
 
 // AssetRelationship ist eine gerichtete, typisierte Beziehung zwischen

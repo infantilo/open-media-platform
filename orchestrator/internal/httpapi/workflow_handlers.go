@@ -17,7 +17,14 @@ func handleListWorkflows(svc WorkflowService) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		// Kapitel 21 B14: nur die eigene Organisation, s. org_enforcement.go.
+		visible := make([]workflows.Workflow, 0, len(list))
+		for _, wf := range list {
+			if orgMatches(r, wf.OwnerOrgID) {
+				visible = append(visible, wf)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
 	}
 }
 
@@ -29,8 +36,30 @@ func handleGetWorkflow(svc WorkflowService) http.HandlerFunc {
 			writeWorkflowError(w, err)
 			return
 		}
+		if !orgMatches(r, wf.OwnerOrgID) {
+			writeOrgNotFound(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, wf)
 	}
+}
+
+// workflowOrgGuard liest den aktuellen Workflow und lehnt mit 404 ab,
+// wenn er einer fremden Organisation gehört (Kapitel 21 B14) — vor
+// JEDER ID-gescopten Mutation aufgerufen (Update/Delete/Start/Stop/…),
+// damit ein Aufrufer nicht allein durch Erraten/Kennen einer fremden ID
+// überhaupt einen Seiteneffekt auslösen kann.
+func workflowOrgGuard(w http.ResponseWriter, r *http.Request, svc WorkflowService, id string) bool {
+	wf, err := svc.Get(id)
+	if err != nil {
+		writeWorkflowError(w, err)
+		return false
+	}
+	if !orgMatches(r, wf.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return false
+	}
+	return true
 }
 
 // handleCreateWorkflow liefert POST /api/v1/workflows:
@@ -51,7 +80,7 @@ func handleCreateWorkflow(svc WorkflowService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		wf, err := svc.Create(body.Name, body.Definition, body.AdoptRuntime)
+		wf, err := svc.Create(body.Name, body.Definition, body.AdoptRuntime, callerOrgID(r))
 		if err != nil {
 			writeWorkflowError(w, err)
 			return
@@ -73,7 +102,11 @@ func handleUpdateWorkflow(svc WorkflowService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		wf, err := svc.Update(r.PathValue("id"), body.Name, body.Definition)
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		wf, err := svc.Update(id, body.Name, body.Definition)
 		if err != nil {
 			writeWorkflowError(w, err)
 			return
@@ -86,7 +119,11 @@ func handleUpdateWorkflow(svc WorkflowService) http.HandlerFunc {
 // Zustand "stopped" (s. workflows.Service.Delete).
 func handleDeleteWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.Delete(r.PathValue("id")); err != nil {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
+		if err := svc.Delete(id); err != nil {
 			writeWorkflowError(w, err)
 			return
 		}
@@ -102,6 +139,9 @@ func handleDeleteWorkflow(svc WorkflowService) http.HandlerFunc {
 func handleStartWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		if err := svc.Start(r.Context(), id); err != nil {
 			writeWorkflowError(w, err)
 			return
@@ -125,6 +165,9 @@ func handleStartWorkflow(svc WorkflowService) http.HandlerFunc {
 func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		var body struct {
 			Confirm bool `json:"confirm"`
 		}
@@ -168,6 +211,9 @@ func handleStopWorkflow(svc WorkflowService) http.HandlerFunc {
 func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		role := r.PathValue("role")
 		var body struct {
 			Format      string `json:"format"`
@@ -202,6 +248,9 @@ func handleRestartWorkflowRole(svc WorkflowService) http.HandlerFunc {
 func handleMigrateWorkflowRole(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		role := r.PathValue("role")
 		var body struct {
 			TargetHostID string `json:"targetHostId"`
@@ -232,6 +281,9 @@ func handleMigrateWorkflowRole(svc WorkflowService) http.HandlerFunc {
 func handlePauseWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		var body struct {
 			Confirm bool `json:"confirm"`
 		}
@@ -262,8 +314,12 @@ func handlePauseWorkflow(svc WorkflowService) http.HandlerFunc {
 // unverändert ohne Nutzerdaten bleibt.
 func handleExportWorkflow(svc WorkflowService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !workflowOrgGuard(w, r, svc, id) {
+			return
+		}
 		includeBindings := r.URL.Query().Get("includeBindings") == "true"
-		exported, err := svc.Export(r.PathValue("id"), includeBindings)
+		exported, err := svc.Export(id, includeBindings)
 		if err != nil {
 			writeWorkflowError(w, err)
 			return
@@ -283,7 +339,7 @@ func handleImportWorkflow(svc WorkflowService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		wf, err := svc.Import(body)
+		wf, err := svc.Import(body, callerOrgID(r))
 		if err != nil {
 			writeWorkflowError(w, err)
 			return

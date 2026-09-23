@@ -14,7 +14,7 @@ func TestStoreWithoutOutboxOptionPublishesNothing(t *testing.T) {
 	db := testDB(t)
 	s := NewStore(db)
 
-	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -28,7 +28,7 @@ func TestStoreWithOutboxPublishesLifecycleEvents(t *testing.T) {
 	ob := outbox.NewStore(db)
 	s := NewStore(db, WithOutbox(ob))
 
-	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestOutboxEventRolledBackOnConcurrentModification(t *testing.T) {
 	ob := outbox.NewStore(db)
 	s := NewStore(db, WithOutbox(ob))
 
-	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}

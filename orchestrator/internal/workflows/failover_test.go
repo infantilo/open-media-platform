@@ -63,7 +63,7 @@ func setupRedundantWorkflow(t *testing.T) (svc *Service, nodes *fakeNodeLister, 
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "active"}},
 	}
-	created, err := svc.Create("regie", def, nil)
+	created, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -333,7 +333,7 @@ func TestCreateRejectsInvalidStandbyFor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := svc.Create("wf-"+tc.name, tc.def, nil); err == nil {
+			if _, err := svc.Create("wf-"+tc.name, tc.def, nil, ""); err == nil {
 				t.Fatalf("Create() error = nil, want ErrValidation")
 			}
 		})
@@ -346,7 +346,7 @@ func TestCreateAcceptsValidStandbyFor(t *testing.T) {
 		{Name: "active", NodeType: "omp-viewer"},
 		{Name: "standby", NodeType: "omp-viewer", StandbyFor: "active"},
 	}}
-	wf, err := svc.Create("wf-valid-standby", def, nil)
+	wf, err := svc.Create("wf-valid-standby", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

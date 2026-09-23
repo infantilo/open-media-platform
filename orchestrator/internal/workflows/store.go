@@ -29,10 +29,23 @@ func (s *Store) Put(wf Workflow) error {
 		return err
 	}
 	_, err = s.db.Exec(`
-		INSERT INTO workflows (id, status, updated_at, data) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at, data = EXCLUDED.data
-	`, wf.ID, wf.Status, wf.UpdatedAt, data)
+		INSERT INTO workflows (id, status, updated_at, data, owner_org_id) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, updated_at = EXCLUDED.updated_at, data = EXCLUDED.data, owner_org_id = EXCLUDED.owner_org_id
+	`, wf.ID, wf.Status, wf.UpdatedAt, data, ownerOrgIDOrDefault(wf.OwnerOrgID))
 	return err
+}
+
+// ownerOrgIDOrDefault spiegelt organizations.DefaultOrgID (bewusst
+// dupliziert statt importiert, gleiches Muster wie auth.Service.
+// DefaultOrgID — vermeidet einen Paket-Zyklus für eine einzelne
+// Konstante). Ein leerer Wert entsteht bei jedem Workflow, der vor
+// Kapitel 21 B14 angelegt wurde bzw. dessen Aufrufer (noch) kein OrgID
+// mitgibt.
+func ownerOrgIDOrDefault(id string) string {
+	if id == "" {
+		return "default"
+	}
+	return id
 }
 
 // Get liest einen einzelnen Workflow.

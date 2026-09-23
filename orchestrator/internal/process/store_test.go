@@ -32,7 +32,7 @@ func testDB(t *testing.T) *sql.DB {
 func TestDefinitionCreateGetList(t *testing.T) {
 	s := NewStore(testDB(t))
 
-	pd, err := s.CreateDefinition("Ingest Review", "desc", "media", "alice")
+	pd, err := s.CreateDefinition("Ingest Review", "desc", "media", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}
@@ -66,7 +66,7 @@ func TestDefinitionGetUnknownReturnsNotFound(t *testing.T) {
 
 func TestVersionCreateAutoIncrementsAndRejectsInvalidDefinition(t *testing.T) {
 	s := NewStore(testDB(t))
-	pd, err := s.CreateDefinition("QC Flow", "", "", "alice")
+	pd, err := s.CreateDefinition("QC Flow", "", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}
@@ -119,7 +119,7 @@ func TestVersionCreateAutoIncrementsAndRejectsInvalidDefinition(t *testing.T) {
 
 func TestVersionLifecycleTransitions(t *testing.T) {
 	s := NewStore(testDB(t))
-	pd, _ := s.CreateDefinition("Approval Flow", "", "", "alice")
+	pd, _ := s.CreateDefinition("Approval Flow", "", "", "alice", "")
 	v, err := s.CreateVersion(pd.ID, validDefinition(), "alice")
 	if err != nil {
 		t.Fatalf("CreateVersion() error = %v", err)
@@ -162,7 +162,7 @@ func TestVersionLifecycleTransitions(t *testing.T) {
 
 func createPublishedVersion(t *testing.T, s *Store) (ProcessDefinition, ProcessVersion) {
 	t.Helper()
-	pd, err := s.CreateDefinition("Exec Flow", "", "", "alice")
+	pd, err := s.CreateDefinition("Exec Flow", "", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}

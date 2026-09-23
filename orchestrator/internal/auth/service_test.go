@@ -20,7 +20,7 @@ func TestServiceAuthenticateAcceptsFreshToken(t *testing.T) {
 	username := "test-svc-fresh-" + mustNewID(t)
 	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
 
-	if _, err := svc.CreateUser(ctx, username, "supersecret1"); err != nil {
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
 	token, _, err := svc.Login(ctx, username, "supersecret1")
@@ -48,7 +48,7 @@ func TestServiceAuthenticateRejectsTokenIssuedBeforeRevocation(t *testing.T) {
 	username := "test-svc-revoke-" + mustNewID(t)
 	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
 
-	if _, err := svc.CreateUser(ctx, username, "supersecret1"); err != nil {
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
 	token, _, err := svc.Login(ctx, username, "supersecret1")
@@ -78,7 +78,7 @@ func TestServiceAuthenticateNewLoginAfterRevocationSucceeds(t *testing.T) {
 	username := "test-svc-relogin-" + mustNewID(t)
 	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
 
-	if _, err := svc.CreateUser(ctx, username, "supersecret1"); err != nil {
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
 	if err := svc.RevokeSessions(ctx, username); err != nil {
@@ -103,7 +103,7 @@ func TestServiceSetPasswordRevokesExistingSessions(t *testing.T) {
 	username := "test-svc-pwchange-" + mustNewID(t)
 	t.Cleanup(func() { _ = svc.DeleteUser(ctx, username) })
 
-	if _, err := svc.CreateUser(ctx, username, "supersecret1"); err != nil {
+	if _, err := svc.CreateUser(ctx, username, "supersecret1", ""); err != nil {
 		t.Fatalf("CreateUser() error = %v", err)
 	}
 	token, _, err := svc.Login(ctx, username, "supersecret1")

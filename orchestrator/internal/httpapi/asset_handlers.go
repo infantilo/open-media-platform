@@ -37,7 +37,14 @@ func handleListAssets(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		// Kapitel 21 B14: nur die eigene Organisation, s. org_enforcement.go.
+		visible := make([]asset.Asset, 0, len(list))
+		for _, a := range list {
+			if orgMatches(r, a.OwnerOrgID) {
+				visible = append(visible, a)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
 	}
 }
 
@@ -59,7 +66,7 @@ func handleCreateAsset(svc AssetService, domainAudit DomainAuditLogger) http.Han
 		if p, ok := principalFromContext(r); ok {
 			createdBy = p.Username
 		}
-		a, err := svc.CreateAsset(body.Type, body.Title, body.Description, createdBy)
+		a, err := svc.CreateAsset(body.Type, body.Title, body.Description, createdBy, callerOrgID(r))
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -77,8 +84,28 @@ func handleGetAsset(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		if !orgMatches(r, a.OwnerOrgID) {
+			writeOrgNotFound(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, a)
 	}
+}
+
+// assetOrgGuard liest das Asset und lehnt mit 404 ab, wenn es einer
+// fremden Organisation gehört (Kapitel 21 B14) — s. workflowOrgGuard
+// in workflow_handlers.go, identisches Muster.
+func assetOrgGuard(w http.ResponseWriter, r *http.Request, svc AssetService, id string) (asset.Asset, bool) {
+	a, err := svc.GetAsset(id)
+	if err != nil {
+		writeAssetError(w, err)
+		return asset.Asset{}, false
+	}
+	if !orgMatches(r, a.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return asset.Asset{}, false
+	}
+	return a, true
 }
 
 // handleUpdateAssetStatus liefert POST /api/v1/assets/{id}/status:
@@ -96,11 +123,15 @@ func handleUpdateAssetStatus(svc AssetService, domainAudit DomainAuditLogger) ht
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		id := r.PathValue("id")
+		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+			return
+		}
 		updatedBy := ""
 		if p, ok := principalFromContext(r); ok {
 			updatedBy = p.Username
 		}
-		a, err := svc.UpdateAssetStatus(r.PathValue("id"), body.ExpectedRowVersion, body.Status, updatedBy)
+		a, err := svc.UpdateAssetStatus(id, body.ExpectedRowVersion, body.Status, updatedBy)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -125,11 +156,15 @@ func handleUpdateAssetMetadata(svc AssetService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		id := r.PathValue("id")
+		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+			return
+		}
 		updatedBy := ""
 		if p, ok := principalFromContext(r); ok {
 			updatedBy = p.Username
 		}
-		a, err := svc.UpdateAssetMetadata(r.PathValue("id"), body.ExpectedRowVersion, body.Metadata, updatedBy)
+		a, err := svc.UpdateAssetMetadata(id, body.ExpectedRowVersion, body.Metadata, updatedBy)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -143,13 +178,39 @@ func handleUpdateAssetMetadata(svc AssetService) http.HandlerFunc {
 // handleListAssetVersions liefert GET /api/v1/assets/{id}/versions.
 func handleListAssetVersions(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.ListVersions(r.PathValue("id"))
+		id := r.PathValue("id")
+		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+			return
+		}
+		list, err := svc.ListVersions(id)
 		if err != nil {
 			writeAssetError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, list)
 	}
+}
+
+// assetVersionOrgGuard (Kapitel 21 B14) — AssetVersion trägt selbst
+// kein OwnerOrgID (s. Definition/Version-Doku in process_handlers.go
+// für dieselbe "derive via parent"-Linie): Organisation ergibt sich
+// über das referenzierte Asset.
+func assetVersionOrgGuard(w http.ResponseWriter, r *http.Request, svc AssetService, id string) (asset.AssetVersion, bool) {
+	v, err := svc.GetVersion(id)
+	if err != nil {
+		writeAssetError(w, err)
+		return asset.AssetVersion{}, false
+	}
+	a, err := svc.GetAsset(v.AssetID)
+	if err != nil {
+		writeAssetError(w, err)
+		return asset.AssetVersion{}, false
+	}
+	if !orgMatches(r, a.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return asset.AssetVersion{}, false
+	}
+	return v, true
 }
 
 // handleCreateAssetVersion liefert POST /api/v1/assets/{id}/versions:
@@ -169,11 +230,15 @@ func handleCreateAssetVersion(svc AssetService, domainAudit DomainAuditLogger) h
 				return
 			}
 		}
+		id := r.PathValue("id")
+		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+			return
+		}
 		createdBy := ""
 		if p, ok := principalFromContext(r); ok {
 			createdBy = p.Username
 		}
-		v, err := svc.CreateVersion(r.PathValue("id"), body.ParentVersionID, body.ChangeReason, createdBy)
+		v, err := svc.CreateVersion(id, body.ParentVersionID, body.ChangeReason, createdBy)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -186,9 +251,8 @@ func handleCreateAssetVersion(svc AssetService, domainAudit DomainAuditLogger) h
 // handleGetAssetVersion liefert GET /api/v1/asset-versions/{id}.
 func handleGetAssetVersion(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		v, err := svc.GetVersion(r.PathValue("id"))
-		if err != nil {
-			writeAssetError(w, err)
+		v, ok := assetVersionOrgGuard(w, r, svc, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, v)
@@ -200,6 +264,9 @@ func handleGetAssetVersion(svc AssetService) http.HandlerFunc {
 // unveränderlich ab hier, wird atomar zu assets.current_version_id).
 func handlePublishAssetVersion(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := assetVersionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		v, err := svc.PublishVersion(r.PathValue("id"))
 		if err != nil {
 			writeAssetError(w, err)
@@ -214,6 +281,9 @@ func handlePublishAssetVersion(svc AssetService, domainAudit DomainAuditLogger) 
 // /api/v1/asset-versions/{id}/archive.
 func handleArchiveAssetVersion(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := assetVersionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		v, err := svc.ArchiveVersion(r.PathValue("id"))
 		if err != nil {
 			writeAssetError(w, err)
@@ -230,7 +300,11 @@ func handleArchiveAssetVersion(svc AssetService, domainAudit DomainAuditLogger) 
 // /api/v1/asset-versions/{id}/representations.
 func handleListRepresentations(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.ListRepresentations(r.PathValue("id"))
+		id := r.PathValue("id")
+		if _, ok := assetVersionOrgGuard(w, r, svc, id); !ok {
+			return
+		}
+		list, err := svc.ListRepresentations(id)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -253,6 +327,9 @@ func handleCreateRepresentation(svc AssetService) http.HandlerFunc {
 			return
 		}
 		rep.AssetVersionID = r.PathValue("id")
+		if _, ok := assetVersionOrgGuard(w, r, svc, rep.AssetVersionID); !ok {
+			return
+		}
 		created, err := svc.CreateRepresentation(rep)
 		if err != nil {
 			writeAssetError(w, err)
@@ -270,6 +347,9 @@ func handleGetRepresentation(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		if _, ok := assetVersionOrgGuard(w, r, svc, rep.AssetVersionID); !ok {
+			return
+		}
 		writeJSON(w, http.StatusOK, rep)
 	}
 }
@@ -279,7 +359,21 @@ func handleGetRepresentation(svc AssetService) http.HandlerFunc {
 // asset.Store.DeleteRepresentation-Doku).
 func handleDeleteRepresentation(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if err := svc.DeleteRepresentation(r.PathValue("id")); err != nil {
+		id := r.PathValue("id")
+		// Org-Check nur, wenn die Representation noch existiert — DELETE
+		// bleibt idempotent (s. Store.DeleteRepresentation-Doku): ein
+		// zweiter Aufruf auf eine bereits verschwundene ID darf nicht durch
+		// den neuen Org-Guard zu einem 404 werden, wo vorher ein stilles
+		// "ok" stand.
+		if rep, err := svc.GetRepresentation(id); err == nil {
+			if _, ok := assetVersionOrgGuard(w, r, svc, rep.AssetVersionID); !ok {
+				return
+			}
+		} else if !errors.Is(err, asset.ErrNotFound) {
+			writeAssetError(w, err)
+			return
+		}
+		if err := svc.DeleteRepresentation(id); err != nil {
 			writeAssetError(w, err)
 			return
 		}
@@ -317,7 +411,7 @@ func handleCreateCollection(svc AssetService, domainAudit DomainAuditLogger) htt
 			return
 		}
 		createdBy := actorFromRequest(r)
-		c, err := svc.CreateCollection(body.Title, body.Description, createdBy)
+		c, err := svc.CreateCollection(body.Title, body.Description, createdBy, callerOrgID(r))
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -335,7 +429,14 @@ func handleListCollections(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		// Kapitel 21 B14: nur die eigene Organisation, s. org_enforcement.go.
+		visible := make([]asset.Collection, 0, len(list))
+		for _, c := range list {
+			if orgMatches(r, c.OwnerOrgID) {
+				visible = append(visible, c)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
 	}
 }
 
@@ -347,8 +448,27 @@ func handleGetCollection(svc AssetService) http.HandlerFunc {
 			writeAssetError(w, err)
 			return
 		}
+		if !orgMatches(r, c.OwnerOrgID) {
+			writeOrgNotFound(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, c)
 	}
+}
+
+// collectionOrgGuard liest die Collection und lehnt mit 404 ab, wenn sie
+// einer fremden Organisation gehört (Kapitel 21 B14).
+func collectionOrgGuard(w http.ResponseWriter, r *http.Request, svc AssetService, id string) (asset.Collection, bool) {
+	c, err := svc.GetCollection(id)
+	if err != nil {
+		writeAssetError(w, err)
+		return asset.Collection{}, false
+	}
+	if !orgMatches(r, c.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return asset.Collection{}, false
+	}
+	return c, true
 }
 
 // handleUpdateCollection liefert PUT /api/v1/collections/{id}:
@@ -364,7 +484,11 @@ func handleUpdateCollection(svc AssetService, domainAudit DomainAuditLogger) htt
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		c, err := svc.UpdateCollectionMeta(r.PathValue("id"), body.Title, body.Description)
+		id := r.PathValue("id")
+		if _, ok := collectionOrgGuard(w, r, svc, id); !ok {
+			return
+		}
+		c, err := svc.UpdateCollectionMeta(id, body.Title, body.Description)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -380,6 +504,18 @@ func handleUpdateCollection(svc AssetService, domainAudit DomainAuditLogger) htt
 func handleDeleteCollection(svc AssetService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
+		// Org-Check nur, wenn die Collection noch existiert — DELETE bleibt
+		// idempotent (s. Store.DeleteCollection-Doku), s. gleiches Muster
+		// bei handleDeleteRepresentation.
+		if c, err := svc.GetCollection(id); err == nil {
+			if !orgMatches(r, c.OwnerOrgID) {
+				writeOrgNotFound(w)
+				return
+			}
+		} else if !errors.Is(err, asset.ErrNotFound) {
+			writeAssetError(w, err)
+			return
+		}
 		if err := svc.DeleteCollection(id); err != nil {
 			writeAssetError(w, err)
 			return
@@ -396,7 +532,11 @@ func handleDeleteCollection(svc AssetService, domainAudit DomainAuditLogger) htt
 // Bedarf über GET /api/v1/assets/{id} auf.
 func handleListCollectionMembers(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		members, err := svc.ListCollectionMembers(r.PathValue("id"))
+		id := r.PathValue("id")
+		if _, ok := collectionOrgGuard(w, r, svc, id); !ok {
+			return
+		}
+		members, err := svc.ListCollectionMembers(id)
 		if err != nil {
 			writeAssetError(w, err)
 			return
@@ -417,6 +557,12 @@ func handleAddCollectionMember(svc AssetService, domainAudit DomainAuditLogger) 
 			return
 		}
 		collectionID := r.PathValue("id")
+		if _, ok := collectionOrgGuard(w, r, svc, collectionID); !ok {
+			return
+		}
+		if _, ok := assetOrgGuard(w, r, svc, body.AssetID); !ok {
+			return
+		}
 		if err := svc.AddCollectionMember(collectionID, body.AssetID); err != nil {
 			writeAssetError(w, err)
 			return
@@ -432,6 +578,18 @@ func handleRemoveCollectionMember(svc AssetService, domainAudit DomainAuditLogge
 	return func(w http.ResponseWriter, r *http.Request) {
 		collectionID := r.PathValue("id")
 		assetID := r.PathValue("assetId")
+		// Org-Check nur, wenn die Collection noch existiert — bleibt
+		// idempotent wie zuvor (s. Store.RemoveCollectionMember-Doku),
+		// gleiches Muster wie handleDeleteRepresentation.
+		if c, err := svc.GetCollection(collectionID); err == nil {
+			if !orgMatches(r, c.OwnerOrgID) {
+				writeOrgNotFound(w)
+				return
+			}
+		} else if !errors.Is(err, asset.ErrNotFound) {
+			writeAssetError(w, err)
+			return
+		}
 		if err := svc.RemoveCollectionMember(collectionID, assetID); err != nil {
 			writeAssetError(w, err)
 			return
@@ -456,6 +614,12 @@ func handleCreateRelationship(svc AssetService, domainAudit DomainAuditLogger) h
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
+		if _, ok := assetOrgGuard(w, r, svc, body.FromAssetID); !ok {
+			return
+		}
+		if _, ok := assetOrgGuard(w, r, svc, body.ToAssetID); !ok {
+			return
+		}
 		createdBy := actorFromRequest(r)
 		rel, err := svc.CreateRelationship(body.FromAssetID, body.ToAssetID, body.Type, createdBy)
 		if err != nil {
@@ -472,7 +636,11 @@ func handleCreateRelationship(svc AssetService, domainAudit DomainAuditLogger) h
 // Store.ListRelationships-Doku.
 func handleListAssetRelationships(svc AssetService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.ListRelationships(r.PathValue("id"))
+		id := r.PathValue("id")
+		if _, ok := assetOrgGuard(w, r, svc, id); !ok {
+			return
+		}
+		list, err := svc.ListRelationships(id)
 		if err != nil {
 			writeAssetError(w, err)
 			return

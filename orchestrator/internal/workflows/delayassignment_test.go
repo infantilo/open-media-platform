@@ -169,7 +169,7 @@ func TestStartAcceptsWorkflowCompensableViaDelay(t *testing.T) {
 		// Minimum ist 2 (1+1), s2 ist delay-fähig -> 3 muss akzeptiert werden.
 		Settings: Settings{TargetLatencyFrames: 3},
 	}
-	wf, err := svc.Create("compensable", def, nil)
+	wf, err := svc.Create("compensable", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

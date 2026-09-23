@@ -57,7 +57,7 @@ func newID() (string, error) {
 // ---- ProcessDefinition -----------------------------------------------
 
 // CreateDefinition legt eine neue ProcessDefinition an.
-func (s *Store) CreateDefinition(name, description, category, createdBy string) (ProcessDefinition, error) {
+func (s *Store) CreateDefinition(name, description, category, createdBy, ownerOrgID string) (ProcessDefinition, error) {
 	if name == "" {
 		return ProcessDefinition{}, fmt.Errorf("%w: name is required", ErrValidation)
 	}
@@ -65,30 +65,40 @@ func (s *Store) CreateDefinition(name, description, category, createdBy string) 
 	if err != nil {
 		return ProcessDefinition{}, err
 	}
+	if ownerOrgID == "" {
+		ownerOrgID = defaultOrgID
+	}
 	now := time.Now().UTC()
 	pd := ProcessDefinition{
 		ID: id, Name: name, Description: description, Category: category,
-		CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now,
+		CreatedBy: createdBy, CreatedAt: now, UpdatedAt: now, OwnerOrgID: ownerOrgID,
 	}
 	_, err = s.db.Exec(`
-		INSERT INTO process_definitions (id, name, description, category, created_by, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, pd.ID, pd.Name, pd.Description, pd.Category, pd.CreatedBy, pd.CreatedAt, pd.UpdatedAt)
+		INSERT INTO process_definitions (id, name, description, category, created_by, created_at, updated_at, owner_org_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, pd.ID, pd.Name, pd.Description, pd.Category, pd.CreatedBy, pd.CreatedAt, pd.UpdatedAt, pd.OwnerOrgID)
 	if err != nil {
 		return ProcessDefinition{}, err
 	}
 	return pd, nil
 }
 
+// defaultOrgID spiegelt organizations.DefaultOrgID — s.
+// workflows.ownerOrgIDOrDefault/httpapi.defaultOrgID für dieselbe
+// bewusste Duplikations-Linie.
+const defaultOrgID = "default"
+
 func scanDefinition(row interface{ Scan(...any) error }) (ProcessDefinition, error) {
 	var pd ProcessDefinition
-	err := row.Scan(&pd.ID, &pd.Name, &pd.Description, &pd.Category, &pd.CreatedBy, &pd.CreatedAt, &pd.UpdatedAt)
+	err := row.Scan(&pd.ID, &pd.Name, &pd.Description, &pd.Category, &pd.CreatedBy, &pd.CreatedAt, &pd.UpdatedAt, &pd.OwnerOrgID)
 	return pd, err
 }
 
+const definitionSelectColumns = `id, name, description, category, created_by, created_at, updated_at, owner_org_id`
+
 // GetDefinition liest eine einzelne ProcessDefinition.
 func (s *Store) GetDefinition(id string) (ProcessDefinition, error) {
-	row := s.db.QueryRow(`SELECT id, name, description, category, created_by, created_at, updated_at FROM process_definitions WHERE id = $1`, id)
+	row := s.db.QueryRow(`SELECT `+definitionSelectColumns+` FROM process_definitions WHERE id = $1`, id)
 	pd, err := scanDefinition(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProcessDefinition{}, ErrNotFound
@@ -98,7 +108,7 @@ func (s *Store) GetDefinition(id string) (ProcessDefinition, error) {
 
 // ListDefinitions liefert alle ProcessDefinitions, neueste zuerst.
 func (s *Store) ListDefinitions() ([]ProcessDefinition, error) {
-	rows, err := s.db.Query(`SELECT id, name, description, category, created_by, created_at, updated_at FROM process_definitions ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`SELECT ` + definitionSelectColumns + ` FROM process_definitions ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}

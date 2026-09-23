@@ -21,7 +21,14 @@ func handleListProcessDefinitions(svc ProcessStoreService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, list)
+		// Kapitel 21 B14: nur die eigene Organisation, s. org_enforcement.go.
+		visible := make([]process.ProcessDefinition, 0, len(list))
+		for _, pd := range list {
+			if orgMatches(r, pd.OwnerOrgID) {
+				visible = append(visible, pd)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
 	}
 }
 
@@ -33,8 +40,89 @@ func handleGetProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 			writeProcessError(w, err)
 			return
 		}
+		if !orgMatches(r, pd.OwnerOrgID) {
+			writeOrgNotFound(w)
+			return
+		}
 		writeJSON(w, http.StatusOK, pd)
 	}
+}
+
+// processDefinitionOrgGuard liest die ProcessDefinition und lehnt mit
+// 404 ab, wenn sie einer fremden Organisation gehört (Kapitel 21 B14)
+// — s. workflowOrgGuard in workflow_handlers.go, identisches Muster.
+func processDefinitionOrgGuard(w http.ResponseWriter, r *http.Request, svc ProcessStoreService, id string) bool {
+	pd, err := svc.GetDefinition(id)
+	if err != nil {
+		writeProcessError(w, err)
+		return false
+	}
+	if !orgMatches(r, pd.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return false
+	}
+	return true
+}
+
+// processVersionOrgGuard/processExecutionOrgGuard/humanTaskOrgGuard
+// (Kapitel 21 B14, UMSETZUNG.md §21.6 Phase 3: "nested/derived
+// entities... derive org via parent") — ProcessVersion/ProcessExecution/
+// HumanTask tragen selbst KEIN OwnerOrgID (bewusste Entscheidung, s.
+// dortige Doku): die zugehörige Organisation ergibt sich über die
+// Elternkette bis zur ProcessDefinition, die einzige Stelle mit einem
+// echten OwnerOrgID-Feld in dieser Domäne.
+func processVersionOrgGuard(w http.ResponseWriter, r *http.Request, svc ProcessStoreService, id string) (process.ProcessVersion, bool) {
+	v, err := svc.GetVersion(id)
+	if err != nil {
+		writeProcessError(w, err)
+		return process.ProcessVersion{}, false
+	}
+	pd, err := svc.GetDefinition(v.ProcessDefinitionID)
+	if err != nil {
+		writeProcessError(w, err)
+		return process.ProcessVersion{}, false
+	}
+	if !orgMatches(r, pd.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return process.ProcessVersion{}, false
+	}
+	return v, true
+}
+
+func processExecutionOrgGuard(w http.ResponseWriter, r *http.Request, svc ProcessStoreService, id string) (process.ProcessExecution, bool) {
+	exec, err := svc.GetExecution(id)
+	if err != nil {
+		writeProcessError(w, err)
+		return process.ProcessExecution{}, false
+	}
+	pd, err := svc.GetDefinition(exec.ProcessDefinitionID)
+	if err != nil {
+		writeProcessError(w, err)
+		return process.ProcessExecution{}, false
+	}
+	if !orgMatches(r, pd.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return process.ProcessExecution{}, false
+	}
+	return exec, true
+}
+
+func humanTaskOrgGuard(w http.ResponseWriter, r *http.Request, svc ProcessStoreService, task process.HumanTask) bool {
+	exec, err := svc.GetExecution(task.ProcessExecutionID)
+	if err != nil {
+		writeProcessError(w, err)
+		return false
+	}
+	pd, err := svc.GetDefinition(exec.ProcessDefinitionID)
+	if err != nil {
+		writeProcessError(w, err)
+		return false
+	}
+	if !orgMatches(r, pd.OwnerOrgID) {
+		writeOrgNotFound(w)
+		return false
+	}
+	return true
 }
 
 // handleCreateProcessDefinition liefert POST /api/v1/process-definitions:
@@ -54,7 +142,7 @@ func handleCreateProcessDefinition(svc ProcessStoreService, domainAudit DomainAu
 		if p, ok := principalFromContext(r); ok {
 			createdBy = p.Username
 		}
-		pd, err := svc.CreateDefinition(body.Name, body.Description, body.Category, createdBy)
+		pd, err := svc.CreateDefinition(body.Name, body.Description, body.Category, createdBy, callerOrgID(r))
 		if err != nil {
 			writeProcessError(w, err)
 			return
@@ -79,7 +167,11 @@ func handleUpdateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
 			return
 		}
-		pd, err := svc.UpdateDefinitionMeta(r.PathValue("id"), body.Name, body.Description, body.Category)
+		id := r.PathValue("id")
+		if !processDefinitionOrgGuard(w, r, svc, id) {
+			return
+		}
+		pd, err := svc.UpdateDefinitionMeta(id, body.Name, body.Description, body.Category)
 		if err != nil {
 			writeProcessError(w, err)
 			return
@@ -94,7 +186,11 @@ func handleUpdateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 // /api/v1/process-definitions/{id}/versions.
 func handleListProcessVersions(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list, err := svc.ListVersions(r.PathValue("id"))
+		id := r.PathValue("id")
+		if !processDefinitionOrgGuard(w, r, svc, id) {
+			return
+		}
+		list, err := svc.ListVersions(id)
 		if err != nil {
 			writeProcessError(w, err)
 			return
@@ -111,6 +207,10 @@ func handleListProcessVersions(svc ProcessStoreService) http.HandlerFunc {
 // /api/v1/process-executions startbar.
 func handleCreateProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if !processDefinitionOrgGuard(w, r, svc, id) {
+			return
+		}
 		var def process.Definition
 		if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
@@ -120,7 +220,7 @@ func handleCreateProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 		if p, ok := principalFromContext(r); ok {
 			createdBy = p.Username
 		}
-		v, err := svc.CreateVersion(r.PathValue("id"), def, createdBy)
+		v, err := svc.CreateVersion(id, def, createdBy)
 		if err != nil {
 			writeProcessError(w, err)
 			return
@@ -132,9 +232,8 @@ func handleCreateProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 // handleGetProcessVersion liefert GET /api/v1/process-versions/{id}.
 func handleGetProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		v, err := svc.GetVersion(r.PathValue("id"))
-		if err != nil {
-			writeProcessError(w, err)
+		v, ok := processVersionOrgGuard(w, r, svc, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, v)
@@ -146,6 +245,9 @@ func handleGetProcessVersion(svc ProcessStoreService) http.HandlerFunc {
 // die Version über POST /api/v1/process-executions startbar).
 func handlePublishProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processVersionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		v, err := svc.PublishVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -160,6 +262,9 @@ func handlePublishProcessVersion(svc ProcessStoreService, domainAudit DomainAudi
 // /api/v1/process-versions/{id}/deprecate.
 func handleDeprecateProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processVersionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		v, err := svc.DeprecateVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -174,6 +279,9 @@ func handleDeprecateProcessVersion(svc ProcessStoreService, domainAudit DomainAu
 // /api/v1/process-versions/{id}/archive.
 func handleArchiveProcessVersion(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processVersionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		v, err := svc.ArchiveVersion(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -192,8 +300,12 @@ func handleArchiveProcessVersion(svc ProcessStoreService, domainAudit DomainAudi
 func handleListProcessExecutions(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		defID := q.Get("processDefinitionId")
+		if defID != "" && !processDefinitionOrgGuard(w, r, svc, defID) {
+			return
+		}
 		list, err := svc.ListExecutions(process.ExecutionFilter{
-			ProcessDefinitionID: q.Get("processDefinitionId"),
+			ProcessDefinitionID: defID,
 			Status:              q.Get("status"),
 			CorrelationID:       q.Get("correlationId"),
 			ParentExecutionID:   q.Get("parentExecutionId"),
@@ -201,6 +313,28 @@ func handleListProcessExecutions(svc ProcessStoreService) http.HandlerFunc {
 		if err != nil {
 			writeProcessError(w, err)
 			return
+		}
+		// Kapitel 21 B14: ohne processDefinitionId-Filter (der Guard oben
+		// deckt den gefilterten Fall bereits ab) muss jede Execution einzeln
+		// über ihre Definition geprüft werden — einmal alle Definitionen
+		// geladen statt pro Execution eine eigene GetDefinition-Anfrage.
+		if defID == "" {
+			defs, err := svc.ListDefinitions()
+			if err != nil {
+				writeProcessError(w, err)
+				return
+			}
+			orgByDef := make(map[string]string, len(defs))
+			for _, d := range defs {
+				orgByDef[d.ID] = d.OwnerOrgID
+			}
+			visible := make([]process.ProcessExecution, 0, len(list))
+			for _, exec := range list {
+				if orgMatches(r, orgByDef[exec.ProcessDefinitionID]) {
+					visible = append(visible, exec)
+				}
+			}
+			list = visible
 		}
 		writeJSON(w, http.StatusOK, list)
 	}
@@ -211,7 +345,7 @@ func handleListProcessExecutions(svc ProcessStoreService) http.HandlerFunc {
 // "correlationId": "...", "causationId": "...", "parentExecutionId":
 // "...", "traceId": "...", "input": {...}}. correlationId leer = wird
 // auf die neue Execution-ID gesetzt (s. Store.CreateExecution-Doku).
-func handleStartProcessExecution(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleStartProcessExecution(engine ProcessEngineService, svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ProcessDefinitionID string          `json:"processDefinitionId"`
@@ -224,6 +358,9 @@ func handleStartProcessExecution(engine ProcessEngineService, domainAudit Domain
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !processDefinitionOrgGuard(w, r, svc, body.ProcessDefinitionID) {
 			return
 		}
 		createdBy := ""
@@ -252,9 +389,8 @@ func handleStartProcessExecution(engine ProcessEngineService, domainAudit Domain
 // handleGetProcessExecution liefert GET /api/v1/process-executions/{id}.
 func handleGetProcessExecution(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		exec, err := svc.GetExecution(r.PathValue("id"))
-		if err != nil {
-			writeProcessError(w, err)
+		exec, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		writeJSON(w, http.StatusOK, exec)
@@ -265,6 +401,9 @@ func handleGetProcessExecution(svc ProcessStoreService) http.HandlerFunc {
 // /api/v1/process-executions/{id}/steps.
 func handleListProcessStepExecutions(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		steps, err := svc.ListStepExecutions(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -276,8 +415,11 @@ func handleListProcessStepExecutions(svc ProcessStoreService) http.HandlerFunc {
 
 // handleCancelProcessExecution liefert POST
 // /api/v1/process-executions/{id}/cancel.
-func handleCancelProcessExecution(engine ProcessEngineService, domainAudit DomainAuditLogger) http.HandlerFunc {
+func handleCancelProcessExecution(engine ProcessEngineService, svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		exec, err := engine.Cancel(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -290,8 +432,11 @@ func handleCancelProcessExecution(engine ProcessEngineService, domainAudit Domai
 
 // handlePauseProcessExecution liefert POST
 // /api/v1/process-executions/{id}/pause.
-func handlePauseProcessExecution(engine ProcessEngineService) http.HandlerFunc {
+func handlePauseProcessExecution(engine ProcessEngineService, svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		exec, err := engine.Pause(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -303,8 +448,11 @@ func handlePauseProcessExecution(engine ProcessEngineService) http.HandlerFunc {
 
 // handleResumeProcessExecution liefert POST
 // /api/v1/process-executions/{id}/resume.
-func handleResumeProcessExecution(engine ProcessEngineService) http.HandlerFunc {
+func handleResumeProcessExecution(engine ProcessEngineService, svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		exec, err := engine.Resume(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -320,6 +468,9 @@ func handleResumeProcessExecution(engine ProcessEngineService) http.HandlerFunc 
 // /api/v1/process-executions/{id}/human-tasks.
 func handleListHumanTasksByExecution(svc ProcessStoreService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := processExecutionOrgGuard(w, r, svc, r.PathValue("id")); !ok {
+			return
+		}
 		list, err := svc.ListHumanTasksByExecution(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
@@ -357,6 +508,9 @@ func handleGetHumanTask(svc ProcessStoreService) http.HandlerFunc {
 		task, err := svc.GetHumanTask(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
+			return
+		}
+		if !humanTaskOrgGuard(w, r, svc, task) {
 			return
 		}
 		writeJSON(w, http.StatusOK, task)
@@ -402,6 +556,9 @@ func handleAssignHumanTask(svc ProcessStoreService, authzStore AuthzChecker, dom
 			writeProcessError(w, err)
 			return
 		}
+		if !humanTaskOrgGuard(w, r, svc, current) {
+			return
+		}
 		if !callerMayActOnHumanTask(r, authzStore, current.Assignee) {
 			http.Error(w, "not assigned to this human task", http.StatusForbidden)
 			return
@@ -442,6 +599,9 @@ func handleCompleteHumanTask(engine ProcessEngineService, svc ProcessStoreServic
 		current, err := svc.GetHumanTask(r.PathValue("id"))
 		if err != nil {
 			writeProcessError(w, err)
+			return
+		}
+		if !humanTaskOrgGuard(w, r, svc, current) {
 			return
 		}
 		if !callerMayActOnHumanTask(r, authzStore, current.Assignee) {

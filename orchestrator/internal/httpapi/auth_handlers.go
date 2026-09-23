@@ -115,6 +115,10 @@ func handleWhoami(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc
 type createUserRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	// OrgID (Kapitel 21 B14, Nachtrag 283) — leer = Default-
+	// Organisation (organizations.DefaultOrgID). Ein Admin kann hier
+	// gezielt eine andere, bereits angelegte Organisation angeben.
+	OrgID string `json:"orgId"`
 }
 
 // handleCreateUser ist POST /api/v1/auth/users. Ob der Aufruf
@@ -139,7 +143,9 @@ func handleCreateUser(authSvc AuthService, bindings AuthzChecker) http.HandlerFu
 		}
 		isFirstUser := count == 0
 
-		u, err := authSvc.CreateUser(r.Context(), req.Username, req.Password)
+		// req.OrgID leer -> auth.Service.CreateUser füllt selbst den
+		// Default (auth.DefaultOrgID), s. dortige Doku.
+		u, err := authSvc.CreateUser(r.Context(), req.Username, req.Password, req.OrgID)
 		if err != nil {
 			if errors.Is(err, auth.ErrUserExists) {
 				http.Error(w, "username already exists", http.StatusConflict)

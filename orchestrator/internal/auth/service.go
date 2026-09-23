@@ -29,13 +29,27 @@ func (s *Service) UserCount(ctx context.Context) (int, error) {
 	return s.store.Count(ctx)
 }
 
-// CreateUser hasht password und legt den Nutzer an.
-func (s *Service) CreateUser(ctx context.Context, username, password string) (User, error) {
+// DefaultOrgID spiegelt organizations.DefaultOrgID (bewusst dupliziert
+// statt importiert — dieses Paket kennt internal/organizations sonst
+// nicht, gleiches Muster wie die Placement-/Audit-Default-Duplikation
+// in internal/config). Der Default lebt HIER (nicht nur beim HTTP-
+// Handler), damit JEDER Aufrufer von CreateUser (auch künftige, nicht
+// nur httpapi.handleCreateUser) automatisch einen gültigen
+// Fremdschlüssel-Wert bekommt, ohne sich selbst daran erinnern zu
+// müssen.
+const DefaultOrgID = "default"
+
+// CreateUser hasht password und legt den Nutzer an. orgID leer =
+// Default-Organisation (s. DefaultOrgID, Kapitel 21 B14).
+func (s *Service) CreateUser(ctx context.Context, username, password, orgID string) (User, error) {
 	hash, err := HashPassword(password)
 	if err != nil {
 		return User{}, err
 	}
-	return s.store.Create(ctx, username, hash)
+	if orgID == "" {
+		orgID = DefaultOrgID
+	}
+	return s.store.Create(ctx, username, hash, orgID)
 }
 
 // ListUsers liefert alle Nutzer (Administration-Tab, Kapitel 11 Teil 1).
@@ -84,7 +98,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (token s
 	if !ok || !VerifyPassword(u.PasswordHash, password) {
 		return "", time.Time{}, ErrInvalidCredentials
 	}
-	return s.signer.issue(Principal{UserID: u.ID, Username: u.Username, Epoch: u.SessionsEpoch}, time.Now())
+	return s.signer.issue(Principal{UserID: u.ID, Username: u.Username, Epoch: u.SessionsEpoch, OrgID: u.OrgID}, time.Now())
 }
 
 // Authenticate verifiziert ein Bearer-Token und liefert den Principal.
@@ -111,6 +125,13 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Principal, er
 	}
 	if ok && p.Epoch != u.SessionsEpoch {
 		return Principal{}, ErrTokenRevoked
+	}
+	if ok {
+		// OrgID kommt bewusst NICHT aus dem Token (s. Principal-Doku in
+		// auth.go) — frisch aus der DB, damit ein Organisationswechsel
+		// sofort wirkt. Service-Prinzipale (ok=false) bleiben ohne OrgID,
+		// s. dortigen Kommentar.
+		p.OrgID = u.OrgID
 	}
 	return p, nil
 }

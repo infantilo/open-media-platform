@@ -28,7 +28,7 @@ func testDB(t *testing.T) *sql.DB {
 func TestAssetCreateGetList(t *testing.T) {
 	s := NewStore(testDB(t))
 
-	a, err := s.CreateAsset("VIDEO", "Interview Master", "desc", "alice")
+	a, err := s.CreateAsset("VIDEO", "Interview Master", "desc", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestAssetGetUnknownReturnsNotFound(t *testing.T) {
 
 func TestAssetLifecycleTransitionsAndOptimisticConcurrency(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -117,7 +117,7 @@ func TestAssetLifecycleTransitionsAndOptimisticConcurrency(t *testing.T) {
 
 func TestAssetMetadataUpdate(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, err := s.CreateAsset("IMAGE", "Poster", "", "alice")
+	a, err := s.CreateAsset("IMAGE", "Poster", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -147,7 +147,7 @@ func TestAssetMetadataUpdate(t *testing.T) {
 
 func TestVersionCreateAutoIncrementsAndPublishSetsCurrentVersion(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, err := s.CreateAsset("VIDEO", "Interview", "", "alice")
+	a, err := s.CreateAsset("VIDEO", "Interview", "", "alice", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}
@@ -225,7 +225,7 @@ func TestVersionCreateAutoIncrementsAndPublishSetsCurrentVersion(t *testing.T) {
 
 func TestArchiveVersion(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	v, err := s.CreateVersion(a.ID, "", "", "alice")
 	if err != nil {
 		t.Fatalf("CreateVersion() error = %v", err)
@@ -246,7 +246,7 @@ func TestArchiveVersion(t *testing.T) {
 
 func TestRepresentationCreateListDelete(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	v, err := s.CreateVersion(a.ID, "", "", "alice")
 	if err != nil {
 		t.Fatalf("CreateVersion() error = %v", err)
@@ -327,7 +327,7 @@ func TestRepresentationCreateListDelete(t *testing.T) {
 
 func TestCreateRepresentationRequiresStorage(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	v, _ := s.CreateVersion(a.ID, "", "", "alice")
 
 	_, err := s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "master"})
@@ -341,7 +341,7 @@ func TestCreateRepresentationRequiresStorage(t *testing.T) {
 // statt 500 zu melden.
 func TestCreateAssetMissingFieldsIsErrValidation(t *testing.T) {
 	s := NewStore(testDB(t))
-	_, err := s.CreateAsset("", "", "", "alice")
+	_, err := s.CreateAsset("", "", "", "alice", "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("CreateAsset() error = %v, want errors.Is(err, ErrValidation)", err)
 	}
@@ -351,7 +351,7 @@ func TestCreateAssetMissingFieldsIsErrValidation(t *testing.T) {
 // Representations sind nur an Drafts änderbar.
 func TestRepresentationsImmutableOncePublished(t *testing.T) {
 	s := NewStore(testDB(t))
-	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice")
+	a, _ := s.CreateAsset("VIDEO", "Clip", "", "alice", "")
 	v, _ := s.CreateVersion(a.ID, "", "", "alice")
 	master, err := s.CreateRepresentation(Representation{AssetVersionID: v.ID, Type: "master", Storage: StorageLocation{Provider: "filesystem", URI: "/m.mov"}})
 	if err != nil {

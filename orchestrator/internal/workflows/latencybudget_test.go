@@ -191,7 +191,7 @@ func TestStartRejectsWorkflowWithInsufficientLatencyBudget(t *testing.T) {
 		Connections: []Connection{{FromRole: "s1", ToRole: "s2"}},
 		Settings:    Settings{TargetLatencyFrames: 1},
 	}
-	wf, err := svc.Create("too-tight", def, nil)
+	wf, err := svc.Create("too-tight", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

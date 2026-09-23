@@ -41,14 +41,19 @@ func (s *Store) Count(ctx context.Context) (int, error) {
 }
 
 // Create legt einen neuen Nutzer mit bereits gehashtem Passwort an.
-func (s *Store) Create(ctx context.Context, username, passwordHash string) (User, error) {
+// orgID leer = Default-Organisation (organizations.DefaultOrgID,
+// Kapitel 21 B14, Nachtrag 283) — dieses Paket importiert
+// internal/organizations bewusst nicht (vermeidet einen Zyklus/eine
+// unnötige Kopplung für eine einzelne Konstante), der Aufrufer
+// (httpapi.handleCreateUser) füllt den Default-Wert.
+func (s *Store) Create(ctx context.Context, username, passwordHash, orgID string) (User, error) {
 	id, err := newID()
 	if err != nil {
 		return User{}, err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)`,
-		id, username, passwordHash)
+		`INSERT INTO users (id, username, password_hash, org_id) VALUES ($1, $2, $3, $4)`,
+		id, username, passwordHash, orgID)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return User{}, ErrUserExists
@@ -74,8 +79,8 @@ func (s *Store) ByUsername(ctx context.Context, username string) (User, bool, er
 func (s *Store) byUsername(ctx context.Context, username string) (User, error) {
 	var u User
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, created_at, sessions_epoch FROM users WHERE username = $1`, username,
-	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt, &u.SessionsEpoch)
+		`SELECT id, username, password_hash, created_at, sessions_epoch, org_id FROM users WHERE username = $1`, username,
+	).Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt, &u.SessionsEpoch, &u.OrgID)
 	return u, err
 }
 
@@ -83,7 +88,7 @@ func (s *Store) byUsername(ctx context.Context, username string) (User, error) {
 // (Kapitel 11 Teil 1, docs/END-GOAL-FEATURES.md §11.4).
 func (s *Store) List(ctx context.Context) ([]User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, created_at FROM users ORDER BY username`)
+		`SELECT id, username, password_hash, created_at, org_id FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +97,7 @@ func (s *Store) List(ctx context.Context) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.CreatedAt, &u.OrgID); err != nil {
 			return nil, err
 		}
 		users = append(users, u)

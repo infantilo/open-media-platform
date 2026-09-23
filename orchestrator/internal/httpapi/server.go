@@ -19,6 +19,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/instancemigrate"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/process"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
@@ -141,7 +142,7 @@ type InstanceMigrator interface {
 // Start/-Stop aus (implementiert von *workflows.Service,
 // ARCHITECTURE.md §6.2, UMSETZUNG.md D7 Teil 1).
 type WorkflowService interface {
-	Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime) (workflows.Workflow, error)
+	Create(name string, def workflows.Definition, adopt map[string]workflows.RoleRuntime, ownerOrgID string) (workflows.Workflow, error)
 	List() ([]workflows.Workflow, error)
 	Get(id string) (workflows.Workflow, error)
 	Update(id, name string, def workflows.Definition) (workflows.Workflow, error)
@@ -162,7 +163,7 @@ type WorkflowService interface {
 	MigrateRole(ctx context.Context, id, role, targetHostID string) error
 	Pause(ctx context.Context, id string, confirm bool) error
 	Export(id string, includeBindings bool) (workflows.ExportedWorkflow, error)
-	Import(exported workflows.ExportedWorkflow) (workflows.Workflow, error)
+	Import(exported workflows.ExportedWorkflow, ownerOrgID string) (workflows.Workflow, error)
 	// FindRoleForNode (Kapitel 12 Teil 4) — s. WorkflowRoleFinder in
 	// auth_middleware.go, dieselbe Methode, hier Teil der ohnehin
 	// injizierten WorkflowService-Implementierung.
@@ -182,7 +183,7 @@ type WorkflowService interface {
 // unterschiedliche konkrete Typen in internal/process, ein einzelnes
 // Interface könnte nicht beide gleichzeitig fassen.
 type ProcessStoreService interface {
-	CreateDefinition(name, description, category, createdBy string) (process.ProcessDefinition, error)
+	CreateDefinition(name, description, category, createdBy, ownerOrgID string) (process.ProcessDefinition, error)
 	GetDefinition(id string) (process.ProcessDefinition, error)
 	ListDefinitions() ([]process.ProcessDefinition, error)
 	UpdateDefinitionMeta(id, name, description, category string) (process.ProcessDefinition, error)
@@ -223,7 +224,7 @@ type ProcessEngineService interface {
 // einzelnes Interface, weil es nur einen konkreten Typ (*asset.Store)
 // gibt, keine getrennte Engine.
 type AssetService interface {
-	CreateAsset(assetType, title, description, createdBy string) (asset.Asset, error)
+	CreateAsset(assetType, title, description, createdBy, ownerOrgID string) (asset.Asset, error)
 	GetAsset(id string) (asset.Asset, error)
 	ListAssets(f asset.AssetFilter) ([]asset.Asset, error)
 	UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (asset.Asset, error)
@@ -241,7 +242,7 @@ type AssetService interface {
 	DeleteRepresentation(id string) error
 
 	// B12 (Kapitel 21 Teil B, Nachtrag 276): Collections/Beziehungen.
-	CreateCollection(title, description, createdBy string) (asset.Collection, error)
+	CreateCollection(title, description, createdBy, ownerOrgID string) (asset.Collection, error)
 	GetCollection(id string) (asset.Collection, error)
 	ListCollections() ([]asset.Collection, error)
 	UpdateCollectionMeta(id, title, description string) (asset.Collection, error)
@@ -266,6 +267,15 @@ type AssetLinkService interface {
 	ListByExecution(processExecutionID string) ([]assetlinks.Link, error)
 	ListByAssetVersion(assetVersionID string) ([]assetlinks.Link, error)
 	DeleteLink(id string) error
+}
+
+// OrganizationService verwaltet Organisationen (implementiert von
+// *organizations.Store, Kapitel 21 B14, Nachtrag 283).
+type OrganizationService interface {
+	Create(name string) (organizations.Organization, error)
+	Get(id string) (organizations.Organization, error)
+	List() ([]organizations.Organization, error)
+	Delete(id string) error
 }
 
 // ConsoleResolver löst Rollenbindungen zu Konsolen-Einträgen auf
@@ -553,13 +563,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/process-versions/{id}/archive", g.requireVerbGlobal(authz.VerbAdmin, handleArchiveProcessVersion(processStore, options.domainAudit)))
 
 	mux.HandleFunc("GET /api/v1/process-executions", g.requireAuth(handleListProcessExecutions(processStore)))
-	mux.HandleFunc("POST /api/v1/process-executions", g.requireVerbGlobal(authz.VerbAdmin, handleStartProcessExecution(processEngine, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/process-executions", g.requireVerbGlobal(authz.VerbAdmin, handleStartProcessExecution(processEngine, processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}", g.requireAuth(handleGetProcessExecution(processStore)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}/steps", g.requireAuth(handleListProcessStepExecutions(processStore)))
 	mux.HandleFunc("GET /api/v1/process-executions/{id}/human-tasks", g.requireAuth(handleListHumanTasksByExecution(processStore)))
-	mux.HandleFunc("POST /api/v1/process-executions/{id}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelProcessExecution(processEngine, options.domainAudit)))
-	mux.HandleFunc("POST /api/v1/process-executions/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseProcessExecution(processEngine)))
-	mux.HandleFunc("POST /api/v1/process-executions/{id}/resume", g.requireVerbGlobal(authz.VerbAdmin, handleResumeProcessExecution(processEngine)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/cancel", g.requireVerbGlobal(authz.VerbAdmin, handleCancelProcessExecution(processEngine, processStore, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/pause", g.requireVerbGlobal(authz.VerbAdmin, handlePauseProcessExecution(processEngine, processStore)))
+	mux.HandleFunc("POST /api/v1/process-executions/{id}/resume", g.requireVerbGlobal(authz.VerbAdmin, handleResumeProcessExecution(processEngine, processStore)))
 
 	mux.HandleFunc("GET /api/v1/human-tasks", g.requireAuth(handleListHumanTasksByAssignee(processStore)))
 	mux.HandleFunc("GET /api/v1/human-tasks/{id}", g.requireAuth(handleGetHumanTask(processStore)))
@@ -632,6 +642,18 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("POST /api/v1/process-executions/{id}/asset-links", g.requireVerbGlobal(authz.VerbOperate, handleCreateAssetLink(options.assetLinks, options.domainAudit)))
 		mux.HandleFunc("GET /api/v1/asset-versions/{id}/links", g.requireAuth(handleListAssetLinksByVersion(options.assetLinks)))
 		mux.HandleFunc("DELETE /api/v1/asset-links/{id}", g.requireVerbGlobal(authz.VerbOperate, handleDeleteAssetLink(options.assetLinks, options.domainAudit)))
+	}
+
+	// Organisations-Verwaltung (Kapitel 21 B14, Nachtrag 283) — global
+	// gescopt (VerbAdmin, s. organization_handlers.go-Doku), optional wie
+	// /api/v1/alarms/acks: fehlt WithOrganizations, bleiben die Endpunkte
+	// inaktiv, das Org-Scoping der übrigen Domänen (orgMatches) bleibt
+	// unabhängig davon aktiv.
+	if options.organizations != nil {
+		mux.HandleFunc("GET /api/v1/organizations", g.requireVerbGlobal(authz.VerbAdmin, handleListOrganizations(options.organizations)))
+		mux.HandleFunc("POST /api/v1/organizations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateOrganization(options.organizations, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/organizations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleGetOrganization(options.organizations)))
+		mux.HandleFunc("DELETE /api/v1/organizations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteOrganization(options.organizations, options.domainAudit)))
 	}
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))

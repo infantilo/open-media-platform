@@ -373,7 +373,7 @@ func waitForStatus(t *testing.T, svc *Service, id, status string) Workflow {
 
 func TestCreateRejectsEmptyRoles(t *testing.T) {
 	svc := &Service{store: newFakeStore()}
-	_, err := svc.Create("empty", Definition{}, nil)
+	_, err := svc.Create("empty", Definition{}, nil, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
@@ -385,7 +385,7 @@ func TestCreateRejectsUnknownConnectionRole(t *testing.T) {
 		Roles:       []Role{{Name: "src", NodeType: "omp-source"}},
 		Connections: []Connection{{FromRole: "src", ToRole: "does-not-exist"}},
 	}
-	_, err := svc.Create("bad", def, nil)
+	_, err := svc.Create("bad", def, nil, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
@@ -394,7 +394,7 @@ func TestCreateRejectsUnknownConnectionRole(t *testing.T) {
 func TestCreateAndListRoundTrip(t *testing.T) {
 	svc := &Service{store: newFakeStore()}
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
-	wf, err := svc.Create("my workflow", def, nil)
+	wf, err := svc.Create("my workflow", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -422,7 +422,7 @@ func TestCreateWithFullAdoptionStartsImmediately(t *testing.T) {
 		"src":   {InstanceID: "src-instance-1", NodeID: "src-node-1"},
 		"mixer": {InstanceID: "mixer-instance-1", NodeID: "mixer-node-1"},
 	}
-	wf, err := svc.Create("adopted", def, adopt)
+	wf, err := svc.Create("adopted", def, adopt, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -450,7 +450,7 @@ func TestCreateRejectsPartialAdoption(t *testing.T) {
 	}}
 	// Nur "src" abgedeckt, "mixer" fehlt.
 	adopt := map[string]RoleRuntime{"src": {InstanceID: "src-instance-1", NodeID: "src-node-1"}}
-	_, err := svc.Create("partial", def, adopt)
+	_, err := svc.Create("partial", def, adopt, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
@@ -460,7 +460,7 @@ func TestCreateRejectsAdoptionForUnknownRole(t *testing.T) {
 	svc := &Service{store: newFakeStore()}
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
 	adopt := map[string]RoleRuntime{"does-not-exist": {InstanceID: "x", NodeID: "y"}}
-	_, err := svc.Create("bad-adopt", def, adopt)
+	_, err := svc.Create("bad-adopt", def, adopt, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
@@ -469,7 +469,7 @@ func TestCreateRejectsAdoptionForUnknownRole(t *testing.T) {
 func TestDeleteRequiresStopped(t *testing.T) {
 	store := newFakeStore()
 	svc := &Service{store: store}
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	running := wf
 	running.Status = StatusStarted
@@ -498,7 +498,7 @@ func TestCreatePublishesWorkflowUpdated(t *testing.T) {
 	pub := &fakeEventPublisher{}
 	svc := &Service{store: newFakeStore(), events: pub}
 
-	if _, err := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil); err != nil {
+	if _, err := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, ""); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
@@ -511,7 +511,7 @@ func TestCreatePublishesWorkflowUpdated(t *testing.T) {
 func TestDeletePublishesWorkflowUpdated(t *testing.T) {
 	store := newFakeStore()
 	svc := &Service{store: store}
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	pub := &fakeEventPublisher{}
 	svc.events = pub
@@ -542,7 +542,7 @@ func TestStartProvisionsRolesAndConnectsOnRegistration(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -607,7 +607,7 @@ func TestStartProvisionsServiceBindingForControlPlaneRole(t *testing.T) {
 			{Name: "automation", NodeType: "omp-playout-automation"},
 		},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -657,7 +657,7 @@ func TestStartResolvesConnectionByLabel(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "src", FromSender: "Audio", ToRole: "view"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -717,7 +717,7 @@ func TestStartResolvesCrosspointConnectionViaMethodInvoke(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "cam1", ToRole: "mix"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -799,7 +799,7 @@ func TestStartFailsWhenCrosspointInputNeverAppears(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "cam1", ToRole: "mix"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -856,7 +856,7 @@ func TestStartFailsWhenTargetHasNoReceiverAndNoCrosspointMapping(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "mv"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -902,7 +902,7 @@ func TestCreateRejectsMultipleConnectionsToSameCrosspointTarget(t *testing.T) {
 			{FromRole: "cam2", ToRole: "mix"},
 		},
 	}
-	_, err := svc.Create("regie", def, nil)
+	_, err := svc.Create("regie", def, nil, "")
 	if !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
@@ -930,7 +930,7 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
 		Settings: Settings{ProgramFormat: "720p60"},
 	}
-	wf, err := svc.Create("hires", def, nil)
+	wf, err := svc.Create("hires", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -958,7 +958,7 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 
 	// Zweiter Workflow ohne Settings: kein extraEnv-Eintrag für die Auflösung.
 	def2 := Definition{Roles: []Role{{Name: "src", NodeType: "omp-viewer"}}}
-	wf2, err := svc.Create("no-settings", def2, nil)
+	wf2, err := svc.Create("no-settings", def2, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -993,7 +993,7 @@ func TestStartPassesResolutionSettingsAsExtraEnv(t *testing.T) {
 func TestCreateRejectsUnknownFormat(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source", Format: "4k-does-not-exist"}}}
-	if _, err := svc.Create("regie", def, nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Create("regie", def, nil, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
@@ -1020,7 +1020,7 @@ func TestStartAppliesPerRoleFormatIndependently(t *testing.T) {
 		{Name: "cheap", NodeType: "omp-source", Format: "480p25"},
 		{Name: "flagship", NodeType: "omp-viewer", Format: "1080p50"},
 	}}
-	wf, err := svc.Create("mixed-formats", def, nil)
+	wf, err := svc.Create("mixed-formats", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1078,7 +1078,7 @@ func TestInstanceRestartedRewiresAffectedRole(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1191,7 +1191,7 @@ func TestRestartRoleAppliesNewFormatAndReconnects(t *testing.T) {
 		},
 		Connections: []Connection{{FromRole: "src", ToRole: "scaler"}},
 	}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1327,7 +1327,7 @@ func TestRestartRoleCapturesAndRestoresNodeState(t *testing.T) {
 	svc := &Service{store: newFakeStore(), nodes: nodes, graph: g, launcher: l, migrations: newMigrationState(), httpClient: http.DefaultClient}
 
 	def := Definition{Roles: []Role{{Name: "mv", NodeType: "omp-multiviewer-custom"}}}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1414,7 +1414,7 @@ func TestRestartRoleCapturesAndRestoresNodeState(t *testing.T) {
 func TestRestartRoleRejectsUnknownFormat(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 	def := Definition{Roles: []Role{{Name: "scaler", NodeType: "omp-scaler"}}}
-	wf, _ := svc.Create("wf", def, nil)
+	wf, _ := svc.Create("wf", def, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	started.Runtime = map[string]RoleRuntime{"scaler": {InstanceID: "inst-1", NodeID: "node-1"}}
@@ -1431,7 +1431,7 @@ func TestRestartRoleRejectsUnknownFormat(t *testing.T) {
 func TestRestartRoleRequiresStartedWorkflow(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 	def := Definition{Roles: []Role{{Name: "scaler", NodeType: "omp-scaler"}}}
-	wf, _ := svc.Create("wf", def, nil) // stays "stopped"
+	wf, _ := svc.Create("wf", def, nil, "") // stays "stopped"
 
 	err := svc.RestartRole(context.Background(), wf.ID, "scaler", "1080p50", nil)
 	if !errors.Is(err, ErrNotRunning) {
@@ -1461,7 +1461,7 @@ func TestRestartRoleMixerLevelsIndependentOfFormat(t *testing.T) {
 	svc := newTestService(newFakeStore(), nodes, g, l)
 
 	def := Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}
-	wf, err := svc.Create("regie", def, nil)
+	wf, err := svc.Create("regie", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1557,7 +1557,7 @@ func TestStartFailsWhenRegistrationTimesOut(t *testing.T) {
 	defer func() { registrationTimeout, registrationPollInterval = original, originalPoll }()
 
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	if err := svc.Start(context.Background(), wf.ID); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -1571,7 +1571,7 @@ func TestStartFailsWhenRegistrationTimesOut(t *testing.T) {
 
 func TestStartFailsWhenLauncherErrors(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{startErr: errors.New("boom")})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	if err := svc.Start(context.Background(), wf.ID); err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -1590,7 +1590,7 @@ func TestStopStopsAllRunningRoles(t *testing.T) {
 	wf, _ := svc.Create("wf", Definition{Roles: []Role{
 		{Name: "src", NodeType: "omp-source"},
 		{Name: "view", NodeType: "omp-viewer"},
-	}}, nil)
+	}}, nil, "")
 	running := wf
 	running.Status = StatusStarted
 	running.Runtime = map[string]RoleRuntime{
@@ -1618,7 +1618,7 @@ func TestStopStopsAllRunningRoles(t *testing.T) {
 func TestStopRequiresRunning(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	if err := svc.Stop(context.Background(), wf.ID, false); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Stop() error = %v, want ErrNotRunning", err)
@@ -1634,7 +1634,7 @@ func TestStopRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
 		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
 		Settings: Settings{ConfirmStop: true},
 	}
-	wf, _ := svc.Create("wf", def, nil)
+	wf, _ := svc.Create("wf", def, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	store.Put(started)
@@ -1658,7 +1658,7 @@ func TestStopRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
 func TestStopWithoutConfirmStopSettingIgnoresConfirmFlag(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	store.Put(started)
@@ -1711,7 +1711,7 @@ func TestStartFallsBackToAlternativeHostWhenPreferredIsOverloaded(t *testing.T) 
 	}
 
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source", HostID: "host-1"}}}
-	wf, _ := svc.Create("wf", def, nil)
+	wf, _ := svc.Create("wf", def, nil, "")
 
 	// Nachtrag 99: Start() schlägt nicht mehr wegen Ressourcenüberlastung
 	// fehl — es findet immer einen Host (hier: den simulierten Ausweich-
@@ -1750,7 +1750,7 @@ func TestStartIgnoresResourceCheckForLocalRoles(t *testing.T) {
 	svc.resources = &fakeResourcePrecheck{deniedHosts: map[string]string{"": "sollte nie geprüft werden"}}
 
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
-	wf, _ := svc.Create("wf", def, nil)
+	wf, _ := svc.Create("wf", def, nil, "")
 
 	if err := svc.Start(context.Background(), wf.ID); err != nil {
 		t.Fatalf("Start() error = %v, want nil (local role must not be resource-checked)", err)
@@ -1765,7 +1765,7 @@ func TestCreateRejectsScheduleWithUnknownKind(t *testing.T) {
 		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
 		Schedules: []Schedule{{ID: "s1", Kind: "monthly", Action: ScheduleActionStart}},
 	}
-	if _, err := svc.Create("wf", def, nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Create("wf", def, nil, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
@@ -1776,7 +1776,7 @@ func TestCreateRejectsOnceScheduleWithoutAt(t *testing.T) {
 		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
 		Schedules: []Schedule{{ID: "s1", Kind: ScheduleOnce, Action: ScheduleActionStart}},
 	}
-	if _, err := svc.Create("wf", def, nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Create("wf", def, nil, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
@@ -1787,7 +1787,7 @@ func TestCreateRejectsDailyScheduleWithInvalidTimeOfDay(t *testing.T) {
 		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
 		Schedules: []Schedule{{ID: "s1", Kind: ScheduleDaily, Action: ScheduleActionStart, TimeOfDay: "25:00"}},
 	}
-	if _, err := svc.Create("wf", def, nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Create("wf", def, nil, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
@@ -1798,7 +1798,7 @@ func TestCreateRejectsWeeklyScheduleWithoutWeekday(t *testing.T) {
 		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
 		Schedules: []Schedule{{ID: "s1", Kind: ScheduleWeekly, Action: ScheduleActionStart, TimeOfDay: "08:00"}},
 	}
-	if _, err := svc.Create("wf", def, nil); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Create("wf", def, nil, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Create() error = %v, want ErrValidation", err)
 	}
 }
@@ -1815,7 +1815,7 @@ func TestCreateAcceptsValidSchedules(t *testing.T) {
 			{ID: "s3", Kind: ScheduleWeekly, Action: ScheduleActionStart, TimeOfDay: "08:00", Weekday: &weekday},
 		},
 	}
-	if _, err := svc.Create("wf", def, nil); err != nil {
+	if _, err := svc.Create("wf", def, nil, ""); err != nil {
 		t.Fatalf("Create() error = %v, want nil", err)
 	}
 }
@@ -1827,7 +1827,7 @@ func TestPauseStopsRunningRolesAndLandsInPaused(t *testing.T) {
 	l := &fakeLauncher{}
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, l)
 
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	running := wf
 	running.Status = StatusStarted
 	running.Runtime = map[string]RoleRuntime{"src": {InstanceID: "inst-src", NodeID: "node-src"}}
@@ -1851,7 +1851,7 @@ func TestPauseStopsRunningRolesAndLandsInPaused(t *testing.T) {
 
 func TestPauseRequiresRunning(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 
 	if err := svc.Pause(context.Background(), wf.ID, false); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("Pause() error = %v, want ErrNotRunning", err)
@@ -1865,7 +1865,7 @@ func TestPauseRequiresConfirmationWhenConfirmStopSet(t *testing.T) {
 		Roles:    []Role{{Name: "src", NodeType: "omp-source"}},
 		Settings: Settings{ConfirmStop: true},
 	}
-	wf, _ := svc.Create("wf", def, nil)
+	wf, _ := svc.Create("wf", def, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	store.Put(started)
@@ -1889,7 +1889,7 @@ func TestStartResumesFromPaused(t *testing.T) {
 	l := &fakeLauncher{}
 	svc := newTestService(store, nodes, &fakeGraph{}, l)
 
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	paused := wf
 	paused.Status = StatusPaused
 	store.Put(paused)
@@ -1919,7 +1919,7 @@ func TestStartResumesFromPaused(t *testing.T) {
 func TestDeleteAllowsPaused(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	paused := wf
 	paused.Status = StatusPaused
 	store.Put(paused)
@@ -1932,7 +1932,7 @@ func TestDeleteAllowsPaused(t *testing.T) {
 func TestUpdateAllowsPaused(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	paused := wf
 	paused.Status = StatusPaused
 	store.Put(paused)
@@ -1949,7 +1949,7 @@ func TestUpdateAllowsPaused(t *testing.T) {
 func TestUpdateAllowsStarted(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	store.Put(started)
@@ -1967,7 +1967,7 @@ func TestExportRoundTripsDefinition(t *testing.T) {
 		Roles:       []Role{{Name: "src", NodeType: "omp-source"}, {Name: "view", NodeType: "omp-viewer"}},
 		Connections: []Connection{{FromRole: "src", ToRole: "view"}},
 	}
-	wf, err := svc.Create("Regieplatz 1", def, nil)
+	wf, err := svc.Create("Regieplatz 1", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -1998,7 +1998,7 @@ func TestExportUnknownWorkflowReturnsNotFound(t *testing.T) {
 func TestExportOmitsBindingsByDefault(t *testing.T) {
 	az := &fakeAuthzBinder{}
 	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{}, authz: az}
-	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -2029,7 +2029,7 @@ func TestExportOmitsBindingsByDefault(t *testing.T) {
 func TestDeleteCascadesRoleBindings(t *testing.T) {
 	az := &fakeAuthzBinder{}
 	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: &fakeLauncher{}, authz: az}
-	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -2064,7 +2064,7 @@ func TestImportRestoresBindingsFromExport(t *testing.T) {
 	l := &fakeLauncher{catalog: []launcher.CatalogEntry{{Type: "omp-video-mixer-me"}}}
 	svc := &Service{store: newFakeStore(), nodes: &fakeNodeLister{}, graph: &fakeGraph{}, launcher: l, authz: az}
 
-	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil)
+	wf, err := svc.Create("Regieplatz 1", Definition{Roles: []Role{{Name: "mixer", NodeType: "omp-video-mixer-me"}}}, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -2080,7 +2080,7 @@ func TestImportRestoresBindingsFromExport(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	reimported, err := svc.Import(exported)
+	reimported, err := svc.Import(exported, "")
 	if err != nil {
 		t.Fatalf("Import() error = %v", err)
 	}
@@ -2108,7 +2108,7 @@ func TestImportRejectsUnknownNodeType(t *testing.T) {
 			Roles: []Role{{Name: "gone", NodeType: "omp-does-not-exist"}},
 		},
 	}
-	if _, err := svc.Import(exported); !errors.Is(err, ErrValidation) {
+	if _, err := svc.Import(exported, ""); !errors.Is(err, ErrValidation) {
 		t.Fatalf("Import() error = %v, want ErrValidation (unknown catalog type must not create an import torso)", err)
 	}
 }
@@ -2122,7 +2122,7 @@ func TestImportCreatesStoppedWorkflow(t *testing.T) {
 		Name:       "Imported Regieplatz",
 		Definition: Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}},
 	}
-	wf, err := svc.Import(exported)
+	wf, err := svc.Import(exported, "")
 	if err != nil {
 		t.Fatalf("Import() error = %v", err)
 	}
@@ -2136,11 +2136,11 @@ func TestImportDedupesNameCollisionWithSuffix(t *testing.T) {
 	svc := newTestService(newFakeStore(), &fakeNodeLister{}, &fakeGraph{}, l)
 
 	def := Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}
-	if _, err := svc.Create("Regieplatz 1", def, nil); err != nil {
+	if _, err := svc.Create("Regieplatz 1", def, nil, ""); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	imported, err := svc.Import(ExportedWorkflow{Version: 1, Name: "Regieplatz 1", Definition: def})
+	imported, err := svc.Import(ExportedWorkflow{Version: 1, Name: "Regieplatz 1", Definition: def}, "")
 	if err != nil {
 		t.Fatalf("Import() error = %v", err)
 	}
@@ -2158,7 +2158,7 @@ func TestFindRoleForNodeReturnsWorkflowAndRole(t *testing.T) {
 	wf, _ := svc.Create("Regieplatz 1", Definition{Roles: []Role{
 		{Name: "mixer", NodeType: "omp-video-mixer-me"},
 		{Name: "audio", NodeType: "omp-audio-mixer"},
-	}}, nil)
+	}}, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	started.Runtime = map[string]RoleRuntime{
@@ -2177,7 +2177,7 @@ func TestFindRoleForNodeNotFoundForUnknownNode(t *testing.T) {
 	store := newFakeStore()
 	svc := newTestService(store, &fakeNodeLister{}, &fakeGraph{}, &fakeLauncher{})
 
-	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil)
+	wf, _ := svc.Create("wf", Definition{Roles: []Role{{Name: "src", NodeType: "omp-source"}}}, nil, "")
 	started := wf
 	started.Status = StatusStarted
 	started.Runtime = map[string]RoleRuntime{"src": {InstanceID: "inst-src", NodeID: "node-src"}}

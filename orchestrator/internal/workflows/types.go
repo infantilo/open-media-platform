@@ -419,4 +419,11 @@ type Workflow struct {
 	Runtime    map[string]RoleRuntime `json:"runtime,omitempty"`
 	CreatedAt  time.Time              `json:"createdAt"`
 	UpdatedAt  time.Time              `json:"updatedAt"`
+	// OwnerOrgID (Kapitel 21 B14, Nachtrag 283) — s.
+	// process.ProcessDefinition.OwnerOrgID für die volle Doku desselben
+	// Musters. Bewusst Teil des JSON-Blobs UND einer echten Spalte
+	// (owner_org_id, s. store.go Put/Get/List) — gleicher Grund wie
+	// bei Status/UpdatedAt (Migration 0004: Spalten existieren, wo
+	// gefiltert/sortiert wird).
+	OwnerOrgID string `json:"ownerOrgId,omitempty"`
 }

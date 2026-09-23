@@ -21,7 +21,7 @@ type fakeHumanTaskStore struct {
 	assignCalled bool
 }
 
-func (f *fakeHumanTaskStore) CreateDefinition(name, description, category, createdBy string) (process.ProcessDefinition, error) {
+func (f *fakeHumanTaskStore) CreateDefinition(name, description, category, createdBy, ownerOrgID string) (process.ProcessDefinition, error) {
 	return process.ProcessDefinition{}, nil
 }
 func (f *fakeHumanTaskStore) GetDefinition(id string) (process.ProcessDefinition, error) {

@@ -368,7 +368,10 @@ func NewService(store *Store, nodes NodeLister, graphSvc GraphService, l Launche
 // (ErrValidation) statt einen Workflow in einem widersprüchlichen
 // Zwischenzustand anzulegen — leer/nil bedeutet unverändertes
 // Alt-Verhalten (immer "stopped", keine Runtime).
-func (s *Service) Create(name string, def Definition, adopt map[string]RoleRuntime) (Workflow, error) {
+// ownerOrgID (Kapitel 21 B14, Nachtrag 283): leer = Default-Organisation
+// (ownerOrgIDOrDefault in store.go), gleiche Konvention wie
+// auth.Service.CreateUser.
+func (s *Service) Create(name string, def Definition, adopt map[string]RoleRuntime, ownerOrgID string) (Workflow, error) {
 	if err := validate(def); err != nil {
 		return Workflow{}, err
 	}
@@ -400,6 +403,7 @@ func (s *Service) Create(name string, def Definition, adopt map[string]RoleRunti
 		Status:     StatusStopped,
 		CreatedAt:  now,
 		UpdatedAt:  now,
+		OwnerOrgID: ownerOrgIDOrDefault(ownerOrgID),
 	}
 	if len(adopt) > 0 {
 		wf.Runtime = adopt
@@ -532,7 +536,7 @@ func (s *Service) Export(id string, includeBindings bool) (ExportedWorkflow, err
 // Namenskollision bekommt einen Suffix statt den Import abzulehnen
 // ("Suffix oder Fehler" — Suffix gewählt: ein Import soll nicht daran
 // scheitern, dass zufällig schon ein gleichnamiger Workflow existiert).
-func (s *Service) Import(exported ExportedWorkflow) (Workflow, error) {
+func (s *Service) Import(exported ExportedWorkflow, ownerOrgID string) (Workflow, error) {
 	known := map[string]bool{}
 	for _, entry := range s.launcher.Catalog() {
 		known[entry.Type] = true
@@ -549,7 +553,7 @@ func (s *Service) Import(exported ExportedWorkflow) (Workflow, error) {
 	}
 	name := uniqueWorkflowName(exported.Name, existing)
 
-	wf, err := s.Create(name, exported.Definition, nil)
+	wf, err := s.Create(name, exported.Definition, nil, ownerOrgID)
 	if err != nil {
 		return Workflow{}, err
 	}

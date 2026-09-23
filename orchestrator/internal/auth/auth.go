@@ -34,15 +34,26 @@ type User struct {
 	// Zeitstempel-Auflösung (s. Migrations-Kommentar für den Grund,
 	// warum kein Zeitstempel-Vergleich verwendet wird).
 	SessionsEpoch int64
+	// OrgID (Kapitel 21 B14, Nachtrag 283) — die Organisation dieses
+	// Nutzers (UMSETZUNG.md §21.6: eine Organisation pro Nutzer, kein
+	// viele-zu-viele-Modell). Default "default" für jeden vor B14
+	// bestehenden Nutzer (s. db/migrations/0025_organizations.sql).
+	OrgID string
 }
 
 // Principal ist die aus einem verifizierten Token gewonnene Identität —
 // bewusst schmaler als User (kein PasswordHash), das ist alles, was
 // Handler/Middleware nach der Authentifizierung noch brauchen. Epoch
 // wird nur intern von Service.Authenticate für den Revocation-Abgleich
-// genutzt (s. User.SessionsEpoch).
+// genutzt (s. User.SessionsEpoch). OrgID wird — wie die Autorisierung
+// selbst (s. jwt.go-Moduldoku: "matcht ausschließlich über sein
+// Username-Feld... live gegen role_bindings") — bewusst NICHT im Token
+// mitgeführt, sondern von Service.Authenticate bei JEDER Prüfung frisch
+// aus der DB gelesen: ein Organisationswechsel wirkt sofort, nicht erst
+// nach einem erneuten Login.
 type Principal struct {
 	UserID   string
 	Username string
 	Epoch    int64
+	OrgID    string
 }

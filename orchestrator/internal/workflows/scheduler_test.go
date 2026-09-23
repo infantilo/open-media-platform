@@ -293,7 +293,7 @@ func TestSchedulerLastFiredAtSurvivesConcurrentRunStart(t *testing.T) {
 		Roles:     []Role{{Name: "src", NodeType: "omp-source"}},
 		Schedules: []Schedule{{ID: "s1", Kind: ScheduleOnce, Action: ScheduleActionStart, At: &fireAt}},
 	}
-	wf, err := svc.Create("wf", def, nil)
+	wf, err := svc.Create("wf", def, nil, "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

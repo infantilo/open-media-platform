@@ -28803,3 +28803,96 @@ dieser Größe (Migration + `authz`-Kernänderung + Middleware-Retrofit)
 verdient eine eigene Sitzung mit voller Live-Verifikation (echte zweite
 Organisation, Kreuz-Zugriff live als verweigert bestätigt — nicht nur
 Unit-Tests), nicht einen Anhang an eine bereits sehr große Sitzung.
+
+## 2026-09-23 (Nachtrag 283) — Kapitel 21 B14: Mandantenfähigkeit implementiert + live verifiziert
+
+Nutzerauftrag "start B14 implementation" — expliziter Auftrag, die in
+Nachtrag 282 bewusst zurückgestellte Implementierung jetzt doch in
+dieser Sitzung zu machen. Umsetzung folgt exakt dem in §21.6
+festgelegten Phasenplan.
+
+**Migration `0025_organizations.sql`:** neue Tabelle `organizations`
+(`id`/`name`/`created_at`), Default-Zeile `id='default'`. `users` bekommt
+`org_id` (NOT NULL DEFAULT 'default', FK). `workflows`/
+`process_definitions`/`assets`/`collections` bekommen `owner_org_id`
+(gleiches Muster) + Index. `role_bindings` bewusst UNVERÄNDERT (s.
+Nachtrag 282-Auflösung).
+
+**Neues Paket `internal/organizations`:** `Store` mit Create/Get/List/
+Delete. Delete lehnt die Default-Organisation ab
+(`ErrDefaultOrgImmutable`) und liefert einen echten Fremdschlüssel-
+Fehler, solange noch Mitglieder/Fachobjekte existieren (bewusst KEINE
+Kaskade). 5 neue Tests inkl. echtem FK-Verstoß-Test gegen dbtest.
+
+**`internal/auth` retrofitted:** `User`/`Principal` bekommen `OrgID`.
+Wie bei `SessionsEpoch` bewusst NICHT im JWT eingebettet — `Authenticate`
+liest `OrgID` bei jedem Request frisch aus der DB (Kommentar in
+`auth.go` erklärt explizit, warum: ein Organisationswechsel muss sofort
+wirken, nicht erst nach Re-Login). `CreateUser` bekommt `orgID`-Parameter
+mit Default-Fallback (`DefaultOrgID = "default"`).
+
+**Domain-Objekte:** `Workflow`/`ProcessDefinition`/`Asset`/`Collection`
+bekommen `OwnerOrgID`. `Create*`-Methoden bekommen einen `ownerOrgID`-
+Parameter (leer = Default-Organisation). Nested/derived Entitäten
+(ProcessVersion/-Execution/HumanTask, AssetVersion/Representation,
+Collection-Members, AssetRelationship) bekommen bewusst KEIN eigenes
+Feld — ihre Organisation ergibt sich über die Elternkette (s.
+`processVersionOrgGuard`/`processExecutionOrgGuard`/`humanTaskOrgGuard`/
+`assetVersionOrgGuard` in `httpapi`), exakt wie in §21.6 geplant.
+
+**HTTP-Durchsetzung (`internal/httpapi/org_enforcement.go`):** ein
+gemeinsames, kleines Modul statt vier Mal derselben Logik. `orgMatches`
+lässt zwei Aufrufer-Klassen bewusst ohne jede Org-Einschränkung durch:
+Bootstrap-Bypass (kein Nutzer angelegt) und Service-Token-Prinzipale
+(Node→Orchestrator, kein `OrgID`) — dieselbe "geteilte Infrastruktur"-
+Linie wie bei Node-/Instanz-Ressourcen. List-Endpunkte filtern (App-
+seitig, kein SQL-Filter — bei der erwarteten Größenordnung unkritisch);
+Get/Update/Delete/Start/Stop/Migrate/Publish/… lehnen mit **404, nicht
+403** ab (kein Cross-Org-Existence-Leak, s. `writeOrgNotFound`-Doku).
+Jede WORKFLOW-Aktion (auch Start/Stop/Restart-Role/Migrate-Role/Pause/
+Export) ist jetzt org-gescopt, nicht nur CRUD — ein Aufrufer kann nicht
+einmal einen Seiteneffekt auf einer fremden Workflow-ID auslösen, nur
+weil er sie kennt/errät. Bei drei bereits idempotenten Löschpfaden
+(Representation/Collection/CollectionMember-Delete) wurde der Org-Check
+bewusst NUR ausgeführt, wenn die Ressource noch existiert — sonst hätte
+der neue Guard eine bestehende Idempotenz-Garantie gebrochen (ein
+zweiter DELETE-Aufruf auf eine bereits verschwundene ID hätte plötzlich
+404 statt weiterhin "ok" geliefert).
+
+**Neue Organisations-Verwaltung** (`organization_handlers.go`, `GET/
+POST /api/v1/organizations`, `GET/DELETE /api/v1/organizations/{id}`) —
+bewusst GLOBAL gescopt (`VerbAdmin`, kein `orgMatches`): eine
+Organisation anzulegen/löschen ist per Definition organisations-
+übergreifend, es gibt keine "eigene Organisation", innerhalb derer das
+sinnvoll wäre. Optional wie `WithAlarmAckStore` (`WithOrganizations`).
+
+**Bewusste Lücken (dokumentiert, nicht übersehen):**
+- `GET /api/v1/human-tasks?assignee=` bleibt ungefiltert (Org-Check
+  würde einen zweiten Join pro Zeile kosten; das Ergebnis ist ohnehin
+  schon durch den Assignee-Namen stark eingeschränkt, geringes Risiko).
+- `DELETE /api/v1/asset-relationships/{id}` bleibt ungefiltert (kein
+  `GetRelationship`-Store-Methode vorhanden, hätte eine neue Schnittstelle
+  gebraucht — unverändertes Verhalten ggü. vor B14, keine Regression).
+- Kein Cross-Org-Superadmin-Bypass: ein Nutzer mit globalem `VerbAdmin`
+  ist trotzdem auf seine eigene Organisation beschränkt (live gefunden
+  beim Aufräumen der Testdaten — `admin`/Default-Org konnte den Test-
+  Workflow der Test-Organisation nicht per API löschen). Konsistent mit
+  Entscheidung 1 (reines Zugriffs-Scoping, ein Nutzer=eine Organisation)
+  und mit der Organisations-Verwaltung selbst (die IST bereits admin-
+  global) — aber ein echter Cross-Org-Support-/Ops-Zugriff für
+  Administratoren ist NICHT gebaut. Falls künftig gebraucht: eigener,
+  bewusster Folge-Schritt, kein stillschweigendes Nachrüsten.
+
+**Live verifiziert (echte zweite Organisation, nicht nur Unit-Tests):**
+neue Organisation angelegt, neuen Nutzer darin angelegt, je einen
+Workflow/Asset/ProcessDefinition/Collection in beiden Organisationen
+angelegt. Bestätigt: Liste zeigt nur die eigene Organisation; GET/
+Start auf eine fremde ID → 404 (nicht 403); Bestandsdaten der Default-
+Organisation (alle vor B14 angelegten Workflows/Assets) bleiben für
+`admin` unverändert sichtbar (Migrations-Backfill funktioniert). Danach
+vollständig aufgeräumt (Testnutzer/-bindung über die API, Test-
+Workflow/-Asset/-Organisation direkt per SQL gegen den echten Patroni-
+Leader — die API selbst verweigerte das erwartungsgemäß, s. o.).
+
+Vollständige Testsuite (`go test -count=1 ./...`, alle 38 Pakete)
+grün, keine Regression.

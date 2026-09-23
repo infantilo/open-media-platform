@@ -278,6 +278,13 @@ type ProcessDefinition struct {
 	CreatedBy   string    `json:"createdBy"`
 	CreatedAt   time.Time `json:"createdAt"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	// OwnerOrgID (Kapitel 21 B14, Nachtrag 283): die Organisation, der
+	// diese Definition gehört — Zugriffs-Scoping, keine physische
+	// Datentrennung (s. UMSETZUNG.md §21.6). Enforcement liegt am
+	// HTTP-Handler (org_enforcement.go), nicht hier im Store: interne
+	// Aufrufer (z. B. process.Engine, die per ID auf eine bereits
+	// bekannte Definition zugreift) brauchen ungefilterten Zugriff.
+	OwnerOrgID string `json:"ownerOrgId,omitempty"`
 }
 
 // ProcessVersion ist ein konkreter, ab Publish unveränderlicher

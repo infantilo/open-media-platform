@@ -38,7 +38,7 @@ func testDB(t *testing.T) *sql.DB {
 func seedExecution(t *testing.T, database *sql.DB) process.ProcessExecution {
 	t.Helper()
 	ps := process.NewStore(database)
-	pd, err := ps.CreateDefinition("assetlinks test", "", "", "tester")
+	pd, err := ps.CreateDefinition("assetlinks test", "", "", "tester", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}
@@ -62,7 +62,7 @@ func seedExecution(t *testing.T, database *sql.DB) process.ProcessExecution {
 func seedAssetVersion(t *testing.T, database *sql.DB) asset.AssetVersion {
 	t.Helper()
 	as := asset.NewStore(database)
-	a, err := as.CreateAsset("video", "assetlinks test asset", "", "tester")
+	a, err := as.CreateAsset("video", "assetlinks test asset", "", "tester", "")
 	if err != nil {
 		t.Fatalf("CreateAsset() error = %v", err)
 	}

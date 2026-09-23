@@ -29,6 +29,7 @@ type handlerOptions struct {
 	domainAuditR   DomainAuditReader
 	assetLinks     AssetLinkService
 	objectStore    ObjectStoreService
+	organizations  OrganizationService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
@@ -61,6 +62,17 @@ func WithAssetLinks(svc AssetLinkService) HandlerOption {
 // `store == nil` selbst und antworten 503.
 func WithObjectStore(svc ObjectStoreService) HandlerOption {
 	return func(o *handlerOptions) { o.objectStore = svc }
+}
+
+// WithOrganizations aktiviert die Organisations-Verwaltung
+// (/api/v1/organizations, Kapitel 21 B14, Nachtrag 283) — gleiches
+// optionales Muster wie die anderen With*-Optionen. Fehlt die Option
+// (z. B. in bestehenden Tests), bleiben die Endpunkte inaktiv (404 über
+// den ungeroutet bleibenden Pfad), das Org-Scoping der übrigen Domänen
+// (orgMatches in org_enforcement.go) ist davon unabhängig und bleibt
+// aktiv.
+func WithOrganizations(svc OrganizationService) HandlerOption {
+	return func(o *handlerOptions) { o.organizations = svc }
 }
 
 const alarmAckChangedEvent = "alarm.ack.changed"

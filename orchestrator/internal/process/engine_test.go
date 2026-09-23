@@ -29,7 +29,7 @@ func testEngine(t *testing.T, opts ...EngineOption) (*Engine, *Store) {
 // auf veröffentlichte Versionen verweisen.
 func publishedVersion(t *testing.T, store *Store, def Definition) (ProcessDefinition, ProcessVersion) {
 	t.Helper()
-	pd, err := store.CreateDefinition("Test Process", "", "", "tester")
+	pd, err := store.CreateDefinition("Test Process", "", "", "tester", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}
@@ -179,7 +179,7 @@ func TestEngineNoExecutorRegisteredFailsHonestly(t *testing.T) {
 // 409 statt 500 zu melden.
 func TestEngineStartRejectsUnpublishedVersion(t *testing.T) {
 	engine, store := testEngine(t)
-	pd, err := store.CreateDefinition("Test Process", "", "", "tester")
+	pd, err := store.CreateDefinition("Test Process", "", "", "tester", "")
 	if err != nil {
 		t.Fatalf("CreateDefinition() error = %v", err)
 	}
