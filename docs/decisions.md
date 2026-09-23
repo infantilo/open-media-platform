@@ -28775,3 +28775,31 @@ Vollständige Analyse inkl. Phasenplan und zwei weiterer offener Fragen
 eigenen Nachtrag, sobald beantwortet.
 
 **Bewusst NICHT Teil dieser Sitzung:** jeglicher Code/Migration.
+
+## 2026-09-23 (Nachtrag 282) — Kapitel 21 B14: drei Entscheidungen getroffen, EIN weiterer Designpunkt gefunden — Implementierung bewusst zurückgestellt
+
+Fortsetzung von Nachtrag 281. Die drei per `AskUserQuestion` gestellten
+Fragen wurden alle mit der empfohlenen Option beantwortet:
+1. (A) reine Zugriffs-Scope-Erweiterung, keine echte Daten-Isolation.
+2. Eine Organisation pro Nutzer (`users.org_id`).
+3. Globale Bindings werden organisationsweit statt wörtlich global.
+
+**Beim Ausformulieren zu einem konkreten Phase-2-Zuschnitt gefunden
+(nicht geraten, hier benannt statt stillschweigend entschieden):**
+"nur Zugriffs-Scope" setzt voraus, dass zumindest die vom Nutzer
+angelegten Fachobjekte (Workflows/Prozess-Definitionen/Assets/
+Collections) irgendeine Organisationszugehörigkeit tragen — sonst wäre
+eine organisationsweite Bindung bedeutungslos. Konservative, aus den
+drei bereits getroffenen Entscheidungen folgende Auflösung (Details in
+`UMSETZUNG.md` §21.6): `role_bindings` bekommt KEINE eigene `org_id`
+(bei 1 Org/Nutzer per Join ableitbar, keine Drift-Gefahr), persistente
+Fachobjekte bekommen eine schlanke `owner_org_id`, Node-/Instanz-
+Ressourcen bewusst NICHT (geteilte Infrastruktur, kein Fachobjekt).
+
+**Implementierung bewusst NICHT Teil dieser Sitzung** — diese Sitzung
+hat bereits B10/B12/B13/B5 sowie den kompletten Nachtrag-278/279-
+Katalog+Sicherheits-Umbau geliefert; ein sicherheitskritischer Umbau
+dieser Größe (Migration + `authz`-Kernänderung + Middleware-Retrofit)
+verdient eine eigene Sitzung mit voller Live-Verifikation (echte zweite
+Organisation, Kreuz-Zugriff live als verweigert bestätigt — nicht nur
+Unit-Tests), nicht einen Anhang an eine bereits sehr große Sitzung.

@@ -3125,6 +3125,55 @@ Phase 1 selbst. Die drei oben benannten Entscheidungen (Scope-only vs.
 Daten-Isolation, Mitgliedschaftsmodell, globale Bindings künftig)
 sollten vor Phase 2 geklärt sein.
 
+**Nutzerentscheidungen 2026-09-23 (Nachtrag 282, per `AskUserQuestion`,
+jeweils die empfohlene Option bestätigt):**
+1. **(A) Zugriffs-Scope-Erweiterung**, keine echte Daten-Isolation.
+2. **Eine Organisation pro Nutzer** (`users.org_id`, keine viele-zu-
+   viele-Mitgliedschaft, kein Umschalter für eine "aktive Organisation").
+3. **Globale Bindings werden organisationsweit** — ein Admin sieht/
+   verwaltet künftig alles INNERHALB seiner Organisation, nicht mehr
+   automatisch andere Organisationen.
+
+**Beim Ausformulieren dieser Entscheidungen zu einem Umsetzungsplan
+gefundene, noch offene Anschlussfrage (kein Rateversuch, hier bewusst
+benannt statt stillschweigend entschieden):** (A) "nur Zugriffs-Scope,
+Daten bleiben gemeinsam" setzt voraus, dass "alles innerhalb meiner
+Organisation" überhaupt etwas bedeutet — das braucht, dass zumindest
+die tatsächlich vom Nutzer angelegten Fachobjekte (Workflows, Prozess-
+Definitionen, Assets/Collections) irgendeine Organisationszugehörigkeit
+tragen, auch wenn das keine vollständige Daten-Isolation (B) ist. Ohne
+das wäre eine organisationsweite Bindung bedeutungslos (matcht nichts
+oder alles unabhängig von der Organisation). **Empfohlene, konservative
+Auflösung** (folgt direkt aus den drei bereits getroffenen
+Entscheidungen, keine neue strategische Weichenstellung, daher hier
+begründet festgelegt statt erneut nachgefragt):
+- `role_bindings` bekommt KEINE eigene `org_id`-Spalte — bei "eine
+  Organisation pro Nutzer" ist die Organisation einer Bindung immer
+  exakt die des `subject`-Nutzers, per Join ableitbar. Eine zusätzliche
+  Spalte wäre reine Duplikation mit Drift-Risiko (Nutzer wechselt die
+  Organisation, alte Bindungen zeigen die falsche).
+- **Persistente, vom Nutzer angelegte Fachobjekte bekommen eine
+  schlanke `owner_org_id`-Spalte** (Workflows, Prozess-Definitionen,
+  Assets, Collections) — befüllt aus der Organisation des anlegenden
+  Nutzers, rein für Sichtbarkeits-/Verwaltungsfilterung (B14-Frage 1),
+  KEINE Query-seitige Zwangsfilterung überall (das wäre (B)).
+- **Node-/Instanz-Ressourcen (Launcher-Instanzen) bekommen bewusst
+  KEINE Organisationszugehörigkeit** — sie sind eher geteilte
+  Infrastruktur (analog Rechenknoten in einem Cluster) als persistente,
+  einer Organisation "gehörende" Fachdaten; welche Workflows/Assets
+  darauf laufen, ist bereits über deren eigene `owner_org_id` gescopt.
+
+Phasenplan (oben) bleibt gültig, jetzt mit diesem präziseren Phase-
+2-Zuschnitt. **Weiterhin bewusst NICHT Teil dieser Sitzung:** die
+eigentliche Implementierung (Migration/`authz`-Umbau/Middleware) —
+diese Sitzung hat bereits B10/B12/B13/B5 sowie den Nachtrag-278/279-
+Katalog+Sicherheits-Umbau geliefert; ein derart sicherheitskritischer
+Umbau verdient eine eigene, nicht an eine ohnehin schon große Sitzung
+angehängte Umsetzung mit voller Live-Verifikation (echte zweite
+Organisation anlegen, Kreuz-Zugriff live als verweigert bestätigen —
+nicht nur Unit-Tests, exakt die in 21.5 benannte Gefahr eines "sieht
+fertig aus, leckt aber Daten").
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3356,3 +3405,4 @@ sollten vor Phase 2 geklärt sein.
 | Fix: QR-Code war ein kaputtes Bild (Nachtrag 279) | erledigt | Nutzerfund direkt nach Nachtrag 278. Root Cause: `<img>` kann keinen `Authorization`-Header setzen (native Browser-API, umgeht den gepatchten `fetch()`-Wrapper) — bereits bekannte, für die MJPEG-Vorschau gelöste Falle (`ui/shell/node-preview.ts`), bei `/invites/qr` nicht mitgezogen. Fix: `/invites/qr` zur `queryTokenAllowedPath`-Allowlist ergänzt (`auth_middleware.go`), Node-UI-Bundle hängt `access_token` aus `localStorage`(`omp-auth-token`) an die Bild-URL. Neuer Testfall inkl. Gegenbeispiel (schreibendes `/invites` bleibt bewusst NICHT in der Allowlist). Suite 35/35 grün. **Live exakt am Browser-Szenario nachgestellt:** `curl` ohne Header, nur `?access_token=` → jetzt 200 mit echtem SVG; ganz ohne Token weiterhin 401. | 2026-09-23 |
 | Kapitel 21 B5: echte MinIO/S3-Anbindung (Nachtrag 280) | erledigt | Nutzerauftrag "proceed B5,B14" — Entscheidung 21.5: volle MinIO/S3-Anbindung. Neues Opt-in-Makefile-Target `minio-up`/`minio-down` (`quay.io/minio/minio`, NICHT `docker.io` — live gefunden: Letzteres verlangt inzwischen Docker-Hub-Login). Neues Paket `internal/objectstore` (offizieller `minio-go/v7`-Client) — bewusst NUR Presigned URLs, kein Byte-Proxy durch den Orchestrator (Correctness/Reliability vor Convenience). Additiv wie mTLS: leeres `OMP_MINIO_ENDPOINT` deaktiviert das Feature ehrlich (503), kein Zwang. Neue Endpunkte `POST /api/v1/asset-versions/{id}/upload-url`, `GET /api/v1/representations/{id}/download-url`. 5 neue Tests — KEIN Mock, echte Round-Trips gegen eine laufende MinIO-Instanz (Muster wie `dbtest`). Suite jetzt 36 Pakete grün. **Live gegen echtes MinIO verifiziert:** Datei per `curl PUT` über die Presigned-URL hochgeladen, Representation angelegt, per `curl GET` über die Download-URL zurückgeholt, Inhalt `diff`-identisch; Provider "filesystem" → 400; ohne `OMP_MINIO_ENDPOINT` → 503 statt Absturz. OFFEN: Objekt-Aufräumen bei Representation-Löschung (kein Datenverlust, nur verwaister Speicherplatz). | 2026-09-23 |
 | Kapitel 21 B14: Analyse-Phase Mandantenfähigkeit, KEIN Code (Nachtrag 281) | teilweise | Nutzerauftrag "proceed B5,B14", B14-Teil. Gleiche Disziplin wie Kapitel 21 selbst: Analyse zuerst, sicherheitskritisch (89 Treffer der Verb-Prüfkette allein in `server.go`, `authz.Binding` hat heute 2 Scope-Dimensionen, keine Org, `auth.User` kein Org-Feld). Zentrale offene Frage (Größenordnung des Umbaus): (A) reine Zugriffs-Scope-Erweiterung vs. (B) echte Daten-Isolation. Vollständige Bestandsaufnahme + Phasenplan in §21.6. Drei Entscheidungen per `AskUserQuestion` vorgelegt. OFFEN: Antworten, danach Phase 2 (Domain Model). | 2026-09-23 |
+| Kapitel 21 B14: drei Entscheidungen getroffen, ein weiterer Designpunkt gefunden (Nachtrag 282) | teilweise | Alle drei Fragen mit der empfohlenen Option beantwortet: (A) Zugriffs-Scope statt Daten-Isolation, eine Organisation pro Nutzer, globale Bindings werden organisationsweit. Beim Ausformulieren gefunden: "nur Zugriffs-Scope" braucht trotzdem eine schlanke `owner_org_id` an den vom Nutzer angelegten Fachobjekten (Workflows/Prozess-Definitionen/Assets/Collections), sonst wäre eine organisationsweite Bindung bedeutungslos — `role_bindings` selbst bekommt KEINE eigene Spalte (bei 1 Org/Nutzer per Join ableitbar), Node-/Instanz-Ressourcen bewusst NICHT (geteilte Infrastruktur). Vollständiger präzisierter Phasenplan in §21.6. Implementierung bewusst NICHT Teil dieser (bereits sehr großen) Sitzung — verdient eine eigene Sitzung mit voller Live-Verifikation (echte zweite Organisation, Kreuz-Zugriff live verweigert). | 2026-09-23 |
