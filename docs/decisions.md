@@ -28551,3 +28551,96 @@ Punkte (B5 volle MinIO/S3-Anbindung, B14 volle Mandantenfähigkeit —
 beide vom Nutzer am 2026-09-23 so entschieden, s. UMSETZUNG.md 21.5)
 möglich ist. B11 (Volltextsuche) bleibt als kleinerer, nicht
 entscheidungsbedürftiger Rest offen.
+
+## 2026-09-23 (Nachtrag 278) — omp-webrtc-gateway: Node-Katalog, Bedienoberfläche, Einladungspflicht ("security!")
+
+Nutzerauftrag "nebenbei" (während der Kapitel-21-B10-Arbeit): Handy-
+Kamera/-Monitor waren im Node-Katalog nicht sichtbar (nie eingetragen,
+seit Nachtrag 240 nur manuell per Prozessstart getestet), brauchten
+eine Bedienoberfläche (u. a. Port ändern, Einladungslinks/QR-Codes) und
+— explizit als Sicherheitsanforderung benannt — eine Zugriffsschranke:
+"nur mit diesen darf sich jemand verbinden".
+
+**Live gefundene, bestätigte Sicherheitslücke (nicht nur vermutet):**
+`/whip`/`/whep` nahmen bislang JEDE Verbindung an, die den Node-Port
+erreichte — kein Auth-Mechanismus überhaupt. Wer die URL/den Port kannte
+(z. B. nach einer für das Handy eingerichteten Portweiterleitung ins
+Internet, s. Nachtrag 240/244), konnte ohne jede Prüfung Kamera-Video
+einspeisen bzw. den Monitor-Stream abgreifen.
+
+**Neues Modul `invite.rs`:** In-Memory-Satz aus Einladungs-Tokens
+(128-Bit-Zufall über `omp_node_sdk::idgen::new_v4`, KEINE Persistenz
+über einen Neustart hinaus — bewusst: ein frisch gestarteter Node hat
+noch keine gültige Einladung). `/whip`+`/whep` (POST UND DELETE)
+verlangen jetzt `?token=<Token>` als Query-Parameter auf dem Pfad
+selbst — NICHT als `Authorization`-Header, weil
+`ParamStore::extra_route` keinen Header-Zugriff hat (bewusst kein
+SDK-weiter Signatur-Umbau für diesen einen Node-Typ; Query-Parameter-
+Tokens sind in diesem Codebase bereits etabliert, s. `uibundle.rs`s
+"der Orchestrator hängt `?access_token=` an"). **Sicher per Default:**
+ein leerer Einladungssatz lehnt JEDEN Verbindungsversuch ab, kein
+stiller Rückfall aufs alte, offene Verhalten.
+
+**QR-Codes serverseitig statt einer neuen Frontend-Abhängigkeit:**
+neue, minimale Abhängigkeit `qrcode = "0.14.1"` (`default-features =
+false` — `cargo tree` bestätigt NULL transitive Abhängigkeiten mit
+dieser Einstellung), SVG von Hand aus den rohen QR-Modulen gebaut statt
+über das `svg`-Feature der Kiste (Minimal-Dependency-Regel, §0 Punkt
+5) — vermeidet jede npm-/CDN-Abhängigkeit im ansonsten Zero-npm-
+Frontend (`ARCHITECTURE.md` §4.5). Live gefundener Rust-Stolperstein:
+`fill="#ffffff"` in einem `r#"…"#`-Raw-String bildet `"#` (die
+Raw-String-Endesequenz) und bricht die Kompilierung ab — auf normale,
+escapte Strings umgestellt.
+
+**Neues Node-UI-Bundle** (`ui/manifest.json`+`ui/bundle.js`, Rust-Pendant
+`uibundle.rs` — identisches Muster wie `omp-switcher`, EIN Bundle für
+beide Richtungen, da Einladungsverwaltung auf beiden Seiten identisch
+ist): Einladungen anlegen (mit optionalem Label)/auflisten/widerrufen,
+je Zeile QR-Code + "Link kopieren". Editierbare Basis-URL-Zeile,
+vorbefüllt aus `api_base_url` (GET `/api/v1/nodes`, dieselbe Adresse,
+mit der sich der Node bei der Registry angemeldet hat) — das Handy lädt
+`camera.html`/`monitor.html` weiterhin DIREKT vom Node (eigener Port,
+nicht über den Orchestrator), bei NAT/Portweiterleitung kennt nur der
+Bediener die tatsächlich erreichbare Adresse, daher editierbar statt
+fest.
+
+**`camera.html`/`monitor.html`:** lesen `token` aus `location.search`,
+hängen ihn an `/whip`/`/whep` an; ohne Token gar nicht erst versuchen zu
+verbinden (klare Fehlermeldung statt einer verwirrenden 401 nach
+Kamera-Freigabe).
+
+**Orchestrator-Seite:** vier neue Proxy-Routen (`GET/POST/DELETE
+/api/v1/nodes/{id}/invites`, `GET .../invites/qr`) über den bestehenden
+generischen `handleNodeProxy` (kein Node-Typ-Wissen im Orchestrator,
+gleiches Muster wie `/state`/`/layouts`) — Anlegen/Widerrufen ist
+"operate", Auflisten/QR-Rendern lesend.
+
+**Node-Katalog** (`deploy/catalog.json`): zwei neue Einträge
+`omp-webrtc-gateway-camera`/`-monitor` (Muster wie die 2110-/AES67-
+Gateway-Richtungs-Aufteilung, `OMP_WEBRTC_GATEWAY_DIRECTION` per `env`).
+
+**"Port ändern" — ehrlich eingeordnet, nicht stillschweigend
+angenommen:** der ICE-Port (`OMP_WEBRTC_ICE_PORT`) wird beim Start
+einmalig gebunden, ein laufender Node kann ihn nicht live wechseln —
+dafür gibt es in diesem Codebase bei KEINEM Node-Typ einen eigenen
+Mechanismus (Gerätenummer/Richtung/Port aller anderen Nodes laufen
+ebenfalls nur über die generische "zusätzliche Startumgebung" im
+Instanz-Start-Dialog, nicht über eine Node-eigene UI). Dieselbe Route
+gilt hier: Port/`OMP_WEBRTC_PUBLIC_IP` beim Start über dieses Feld
+setzen, jetzt überhaupt erst möglich, weil der Katalog-Eintrag
+existiert. Das neue UI-Bundle deckt stattdessen den tatsächlich neuen
+Teil ab: Einladungslinks/QR-Codes.
+
+**Verifikation:** 10 neue Rust-Unit-Tests in `invite.rs` (Store-
+Verhalten, Query-Parsing, Prozent-Decoding, SVG-Struktur, Routen-
+Zusammenspiel), `cargo test`/`cargo clippy -p omp-webrtc-gateway`
+sauber (16/16, keine neuen Warnungen). **Live gegen die echte, neu
+gestartete Dev-Instanz** (Orchestrator + eine echte, per Katalog
+gestartete Kamera-Instanz): `/whip` direkt (ohne Orchestrator-Umweg,
+wie ein echtes Handy) ohne Token → 401; Einladung über den neuen
+Orchestrator-Proxy angelegt; `/whip` mit gültigem Token → kommt durch
+die Zugriffsschranke (scheitert danach erwartungsgemäß an bewusst
+ungültigem SDP-Testinhalt, nicht mehr an Auth); QR-Endpunkt liefert
+echtes, wohlgeformtes SVG; UI-Bundle über den Proxy erreichbar;
+Widerrufen macht `/whip` sofort wieder 401. Test-Instanz danach
+gestoppt.

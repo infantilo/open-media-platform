@@ -411,6 +411,16 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/nodes/{id}/layouts/{name}/apply", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}/apply", nodeLogs)))
 	mux.HandleFunc("DELETE /api/v1/nodes/{id}/layouts/{name}", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/layouts/{name}", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/nodes/{id}/stream/{name}", g.requireAuth(handleNodeStreamProxy(nodes, nodeClient)))
+	// Einladungs-Tokens für `omp-webrtc-gateway`s `/whip`/`/whep`
+	// (Nutzerwunsch 2026-09-23, "security!") — wie /state/layouts oben
+	// generisch über handleNodeProxy geroutet (kein Node-Typ-Wissen im
+	// Orchestrator), Tokens selbst kennt/prüft nur der Node. Anlegen/
+	// Widerrufen ist "operate" (erteilt/entzieht tatsächlichen
+	// Verbindungszugriff), Auflisten/QR-Rendern ist lesend.
+	mux.HandleFunc("GET /api/v1/nodes/{id}/invites", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/invites", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
+	mux.HandleFunc("DELETE /api/v1/nodes/{id}/invites", g.requireVerbOnNode(authz.VerbOperate, handleNodeProxy(nodes, nodeClient, "/invites", nodeLogs)))
+	mux.HandleFunc("GET /api/v1/nodes/{id}/invites/qr", g.requireAuth(handleNodeProxy(nodes, nodeClient, "/invites/qr", nodeLogs)))
 	mux.HandleFunc("GET /api/v1/graph", g.requireAuth(handleGraph(graphSvc)))
 	mux.HandleFunc("POST /api/v1/graph/edges", g.requireVerbGlobal(authz.VerbConfigure, handlePostGraphEdge(graphSvc)))
 	mux.HandleFunc("DELETE /api/v1/graph/edges/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteGraphEdge(graphSvc)))

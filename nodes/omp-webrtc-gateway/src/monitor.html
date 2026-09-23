@@ -59,6 +59,12 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const log = (t) => { const l = $('log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
+
+// Einladungs-Token (Nutzerwunsch 2026-09-23, "security!") — s.
+// camera.html-Kommentar (identisches Muster).
+const inviteToken = new URLSearchParams(location.search).get('token') || '';
+const whepUrl = '/whep' + (inviteToken ? '?token=' + encodeURIComponent(inviteToken) : '');
+
 let pc = null, clockOffset = 0, measuring = false, samples = [], statsTimer = null;
 
 async function syncClock() {
@@ -114,6 +120,10 @@ function measureLoop(v) {
 }
 
 async function start() {
+  if (!inviteToken) {
+    log('FEHLER: kein Einladungslink — diese Seite ohne gültigen Link (mit "?token=…") geöffnet. Bitte den Link/QR-Code vom Bediener verwenden.');
+    return;
+  }
   $('start').disabled = true;
   try {
     pc = new RTCPeerConnection({ iceServers: [] });
@@ -136,7 +146,7 @@ async function start() {
     await pc.setLocalDescription(await pc.createOffer());
     await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
       pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
-    const res = await fetch('/whep', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+    const res = await fetch(whepUrl, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
     const text = await res.text();
     if (res.status !== 201) throw new Error('WHEP ' + res.status + ': ' + text);
     await pc.setRemoteDescription({ type: 'answer', sdp: text });
@@ -176,7 +186,7 @@ function setBadge() {
 
 async function stop(quiet) {
   measuring = false; clearInterval(statsTimer);
-  try { await fetch('/whep', { method: 'DELETE' }); } catch (_) {}
+  try { await fetch(whepUrl, { method: 'DELETE' }); } catch (_) {}
   if (pc) { pc.close(); pc = null; }
   $('v').srcObject = null;
   $('start').disabled = false; $('stop').disabled = true; $('unmute').disabled = true;

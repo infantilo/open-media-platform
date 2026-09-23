@@ -18,8 +18,10 @@
 //! Monitor-Seite (`monitor.html`).
 
 mod ice;
+mod invite;
 mod monitor;
 mod pipeline;
+mod uibundle;
 
 use std::sync::{Arc, Mutex};
 
@@ -55,6 +57,7 @@ struct CameraStore {
     flow_id: String,
     audio_flow_id: String,
     gateway: Arc<pipeline::Gateway>,
+    invites: Arc<invite::InviteStore>,
 }
 
 impl ParamStore for CameraStore {
@@ -134,7 +137,13 @@ impl ParamStore for CameraStore {
             content_type: "text/plain",
             body: body.into_bytes(),
         };
-        match (method, path) {
+        // `path` trägt einen eventuellen Query-String mit (`/whip?token=…`,
+        // `tiny_http::Request::url()`) — für den Routenvergleich unten
+        // ausblenden, s. `uibundle.rs`-Vorbild ("der Orchestrator hängt
+        // `?access_token=` an"). Der volle `path` bleibt für
+        // `invite::token_from_query` erhalten.
+        let bare_path = path.split('?').next().unwrap_or(path);
+        match (method, bare_path) {
             // Handy-Sendeseite (`/whip-test.html` bleibt als Alias aus Schritt 1).
             ("GET", "/" | "/camera.html" | "/whip-test.html") => Some(RawResponse {
                 status: 200,
@@ -150,6 +159,12 @@ impl ParamStore for CameraStore {
                     .to_string()
                     .into_bytes(),
             }),
+            (_, "/whip") if !self.invites.is_valid(invite::token_from_query(path)) => {
+                // Einladungspflicht (Nutzerwunsch 2026-09-23, "security!")
+                // — s. invite.rs-Moduldoku: kein Fallback auf das alte,
+                // offene Verhalten, auch nicht bei leerem Einladungssatz.
+                Some(text(401, "missing or invalid invite token".to_string()))
+            }
             ("POST", "/whip") => {
                 let Ok(offer) = std::str::from_utf8(body) else {
                     return Some(text(400, "offer is not UTF-8".to_string()));
@@ -170,12 +185,15 @@ impl ParamStore for CameraStore {
                 self.gateway.teardown();
                 Some(text(200, "ok".to_string()))
             }
-            _ => None,
+            _ => invite::route(&self.invites, method, path, body).or_else(|| uibundle::route(method, bare_path)),
         }
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
-        (path == "/whip").then(|| vec!["POST", "DELETE"])
+        // CORS-Preflight spiegelt die echte Ziel-URL inkl. Query-String
+        // (der Browser hängt `?token=…` an dieselbe Anfrage) — hier
+        // ebenfalls ausblenden.
+        (path.split('?').next().unwrap_or(path) == "/whip").then(|| vec!["POST", "DELETE"])
     }
 }
 
@@ -265,6 +283,7 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         flow_id: flow_id.clone(),
         audio_flow_id: audio_flow_id.clone(),
         gateway: gateway.clone(),
+        invites: Arc::new(invite::InviteStore::new()),
     });
 
     let handle = omp_node_sdk::start(
@@ -405,6 +424,7 @@ struct MonitorStore {
     audio_connection: Arc<ReceiverConnection<AudioControl>>,
     connected_video: Arc<Mutex<String>>,
     connected_audio: Arc<Mutex<String>>,
+    invites: Arc<invite::InviteStore>,
 }
 
 impl ParamStore for MonitorStore {
@@ -478,7 +498,11 @@ impl ParamStore for MonitorStore {
             content_type: "text/plain",
             body: body.into_bytes(),
         };
-        let page = match (method, path) {
+        // s. CameraStore::extra_route-Kommentar: `path` trägt einen
+        // eventuellen Query-String mit, für den Routenvergleich hier
+        // ausgeblendet.
+        let bare_path = path.split('?').next().unwrap_or(path);
+        let page = match (method, bare_path) {
             ("GET", "/" | "/monitor.html") => Some(RawResponse {
                 status: 200,
                 content_type: "text/html; charset=utf-8",
@@ -491,6 +515,11 @@ impl ParamStore for MonitorStore {
                     .to_string()
                     .into_bytes(),
             }),
+            (_, "/whep") if !self.invites.is_valid(invite::token_from_query(path)) => {
+                // Einladungspflicht (Nutzerwunsch 2026-09-23, "security!")
+                // — s. invite.rs-Moduldoku.
+                Some(text(401, "missing or invalid invite token".to_string()))
+            }
             ("POST", "/whep") => Some(match std::str::from_utf8(body) {
                 Err(_) => text(400, "offer is not UTF-8".to_string()),
                 Ok(offer) => match self.monitor.whep_offer(offer) {
@@ -509,7 +538,7 @@ impl ParamStore for MonitorStore {
                 self.monitor.teardown();
                 Some(text(200, "ok".to_string()))
             }
-            _ => None,
+            _ => invite::route(&self.invites, method, path, body).or_else(|| uibundle::route(method, bare_path)),
         };
         if page.is_some() {
             return page;
@@ -547,6 +576,8 @@ impl ParamStore for MonitorStore {
     }
 
     fn extra_options(&self, path: &str) -> Option<Vec<&'static str>> {
+        // s. CameraStore::extra_options-Kommentar.
+        let path = path.split('?').next().unwrap_or(path);
         if path == "/whep" {
             return Some(vec!["POST", "DELETE"]);
         }
@@ -621,6 +652,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         audio_connection,
         connected_video,
         connected_audio,
+        invites: Arc::new(invite::InviteStore::new()),
     });
 
     let handle = omp_node_sdk::start(

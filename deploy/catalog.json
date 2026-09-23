@@ -58,6 +58,24 @@
     "expectedResources": "gering (Audio, geringe Bitrate)"
   },
   {
+    "type": "omp-webrtc-gateway-camera",
+    "label": "WebRTC-Gateway (Handy-Kamera)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-webrtc-gateway"],
+    "env": {},
+    "description": "Nimmt die Kamera eines Handys per WebRTC (WHIP, H.264+Opus) entgegen und speist sie als MXL-Flow ein (Nachtrag 240 ff.) — Handy öffnet die vom Node selbst ausgelieferte Sendeseite direkt (eigener Port, NICHT über den Orchestrator). Braucht mindestens eine aktive Einladung (Bedienoberfläche dieses Node-Typs: Link/QR-Code erzeugen) — ohne gültiges `?token=` aus einem Einladungslink nimmt der Node keine Verbindung an (Nutzerwunsch 2026-09-23, \"security!\"). Bei NAT/Portweiterleitung fürs Handy übers Internet: OMP_WEBRTC_PUBLIC_IP/OMP_WEBRTC_ICE_PORT per zusätzlicher Startumgebung setzen (s. docs/decisions.md Nachtrag 240/244).",
+    "expectedResources": "gering bis moderat (H.264-Hardware-Decoding im Handy, WebRTC-Signalisierung im Node)"
+  },
+  {
+    "type": "omp-webrtc-gateway-monitor",
+    "label": "WebRTC-Gateway (Handy-Monitor)",
+    "runner": "process",
+    "command": ["../nodes/target/debug/omp-webrtc-gateway"],
+    "env": { "OMP_WEBRTC_GATEWAY_DIRECTION": "monitor" },
+    "description": "Sendet einen per Flow-Editor gewählten MXL-Flow per WebRTC (WHEP) an ein Handy (Nachtrag 240 ff., Retourbild/Regie-Monitor) — Quellwahl per echtem IS-05-Receiver-PATCH (Drag&Drop, Video+Audio getrennt). Gleiche Einladungspflicht wie die Kamera-Richtung (Bedienoberfläche/`?token=`, \"security!\"). Bei NAT/Portweiterleitung: OMP_WEBRTC_PUBLIC_IP/OMP_WEBRTC_ICE_PORT per zusätzlicher Startumgebung setzen.",
+    "expectedResources": "gering bis moderat (H.264-Encoding im Node, Wiedergabe im Handy-Browser)"
+  },
+  {
     "type": "omp-switcher",
     "label": "Switcher",
     "runner": "process",
