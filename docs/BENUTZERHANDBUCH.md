@@ -371,6 +371,40 @@ Versionen und technischen Dateien (Representations):
 
 ![Asset-Versionen: Entwurf v2 mit editierbarer Representation neben veröffentlichtem, unveränderlichem v1](screenshots/asset-versionen.png)
 
+### 5b.1 Dateien von lokalen Hosts oder einem Netzlaufwerk (z. B. Isilon) hinzufügen
+
+„+ Representation" trägt **keine Datei hoch** — Feld „Speicher"
+(`filesystem`/`s3`/`http`, frei wählbar) plus „Pfad/URI" registrieren
+nur einen **Verweis** darauf, wo die Datei bereits liegt (reine
+Katalog-/Such-Metadaten, es werden keine Bytes bewegt). Ein echter
+Browser-Datei-Upload über die konfigurierten S3/MinIO-Speicher-Backends
+(Administration → Storage) ist backend-seitig vorbereitet, aber noch
+nicht an dieses Formular angebunden.
+
+Was eine Mediendatei tatsächlich **abspielbar** macht, ist davon
+unabhängig: Playout-Nodes (Kanal-Player, MXF-Player, …) lesen ihre
+Datei direkt vom Dateisystem des Hosts, auf dem ihr Prozess läuft —
+über `OMP_MEDIA_DIR` (Vorgabe `data/media`, relative Pfade bleiben
+darauf beschränkt) oder einen absoluten Pfad ohne Einschränkung.
+Daraus ergibt sich:
+
+- **Datei liegt auf demselben Rechner wie dieser Node** (z. B. euer
+  Laptop, wenn Node und Browser dort laufen): ein ganz normaler
+  absoluter Pfad reicht, auch außerhalb des Projektverzeichnisses.
+- **Netzlaufwerk/NAS wie eine Isilon:** muss auf dem Host, der den
+  Node-Prozess ausführt, selbst gemountet sein (NFS/SMB, außerhalb von
+  OMPs Verantwortung) — danach ist es für den Node ein ganz normaler
+  lokaler Pfad.
+- Der Node-Typ `omp-media-library` scannt ein Verzeichnis
+  (`OMP_MEDIA_DIR`) automatisch, liest technische Metadaten per
+  `ffprobe` aus (Dauer, Codec, Auflösung, Mark-In/Out) und ist der
+  vorgesehene Weg, ein Verzeichnis oder Netzlaufwerk als durchsuchbare
+  Bibliothek einzubinden — unabhängig vom Asset-Katalog oben.
+- Bietet eure Isilon (neuere OneFS-Versionen) ein S3-kompatibles
+  Protokoll an, lässt sie sich wie MinIO im Administration-Tab unter
+  „Storage" als eigenes Backend eintragen — auch das aktuell nur als
+  Backend, noch ohne Browser-Upload-Knopf im Assets-Tab.
+
 ## 6. Alarme
 
 Der Reiter **Alarme** sammelt an einer Stelle, was operative
@@ -500,7 +534,10 @@ Rollenbindungen), landet nach dem Anmelden nicht im Flow Editor,
 sondern direkt auf einer **Operator-Konsole** — einer reinen
 Bedienoberfläche ohne Graph, Katalog oder Verkabelungsmöglichkeit. Sind
 einem Nutzer mehrere Workflows zugewiesen, wählt er zunächst aus einer
-Kachel-Liste den gewünschten Regieplatz.
+Kachel-Liste den gewünschten Regieplatz — jede Kachel nennt den
+Workflow-Namen und die Anzahl der darin zugewiesenen Rollen:
+
+![Regieplatz wählen: zwei zugewiesene Workflows als Kacheln](screenshots/regieplatz-auswahl.png)
 
 Sobald einem Operator **mehr als eine** Rolle in einem Workflow zusteht,
 zeigt die Konsole alle zugewiesenen Node-Oberflächen gleichzeitig als
@@ -551,6 +588,22 @@ passend für einen reinen Live-Schaltplatz ohne Bandmaterial; ist eine
 `omp-playout-automation`-Rolle Teil des Workflows und dem Operator
 zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
+
+### 9.1 Regieplatz wechseln (Home-Button)
+
+Ist ein Operator mehreren Workflows zugewiesen, zeigt das
+Nutzer-Widget unten rechts (neben „Abmelden") zusätzlich einen
+**„🏠 Regieplatz wechseln"**-Button, solange man sich innerhalb eines
+einzelnen Regieplatzes befindet — ein Klick führt zurück zur
+Kachel-Auswahl von oben, ohne sich neu anmelden zu müssen:
+
+![Regieplatz-Konsole mit "🏠 Regieplatz wechseln"-Button im Nutzer-Widget unten rechts](screenshots/regieplatz-wechseln.png)
+
+Der Button erscheint gezielt nur dort, wo es tatsächlich etwas zum
+Zurückspringen gibt: ein Operator mit nur einem zugewiesenen Workflow
+bekommt ihn nicht (es gäbe keine Kachel-Auswahl, zu der man wechseln
+könnte), ein Nutzer mit Konfigurations-/Admin-Recht ebenfalls nicht (er
+arbeitet im Flow Editor, nicht auf einem Regieplatz).
 
 ## 10. Messgerät (Scope)
 

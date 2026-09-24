@@ -201,10 +201,18 @@ function watchConsoleEntries(
   window.setInterval(() => void refresh(), CONSOLE_POLL_FALLBACK_INTERVAL_MS);
 }
 
-async function renderShell(root: HTMLElement, username: string | null) {
+async function renderShell(root: HTMLElement, username: string | null): Promise<string | undefined> {
   const kioskMatch = KIOSK_ROUTE.exec(location.pathname);
   const workflowMatch = kioskMatch ? null : WORKFLOW_CONSOLE_ROUTE.exec(location.pathname);
   const { hasEngineeringAccess, hasOperateBindings, consoles } = await fetchConsoles();
+  // Nutzerwunsch 2026-09-24 ("Home-Button ... um wieder dorthin zu
+  // navigieren"): "dorthin" ist renderWorkflowPicker unten — die gibt es
+  // nur für einen reinen Operator mit >1 zugewiesenem Workflow.
+  // workflowIds hier hochgezogen (statt nur lokal im else-Zweig unten,
+  // wie vor diesem Schritt), weil auch die Kiosk-Route (/console/<wf>/
+  // <role>) wissen muss, ob ein Zurück-Ziel existiert.
+  const workflowIds = [...new Set(consoles.map((c) => c.workflowId))];
+  let homeHref: string | undefined;
 
   if (kioskMatch) {
     const [, , nodeRoleId] = kioskMatch;
@@ -213,6 +221,7 @@ async function renderShell(root: HTMLElement, username: string | null) {
     root.replaceChildren(view);
     await view.setEntries(selectEntries(consoles), nodeRoleId);
     watchConsoleEntries(view, selectEntries, nodeRoleId);
+    if (workflowIds.length > 1) homeHref = "/";
   } else if (hasEngineeringAccess || (!hasOperateBindings && consoles.length === 0)) {
     // Kein Rollenbindungs-Treffer überhaupt (typischerweise: noch keine
     // Rollenbindungen angelegt) fällt bewusst auf Engineering zurück —
@@ -242,7 +251,6 @@ async function renderShell(root: HTMLElement, username: string | null) {
     // Tab-Leiste". Filterung rein clientseitig (§12 Punkt 3: die
     // Durchsetzung selbst ist längst im Orchestrator passiert —
     // `consoles` enthält ohnehin nur bereits autorisierte Einträge).
-    const workflowIds = [...new Set(consoles.map((c) => c.workflowId))];
     const scoped = workflowMatch ? consoles.filter((c) => c.workflowId === workflowMatch[1]) : [];
 
     if (workflowMatch && scoped.length > 0) {
@@ -251,6 +259,7 @@ async function renderShell(root: HTMLElement, username: string | null) {
       root.replaceChildren(host);
       await host.setEntries(selectEntries(consoles));
       watchConsoleEntries(host, selectEntries);
+      if (workflowIds.length > 1) homeHref = "/";
     } else if (workflowIds.length <= 1) {
       // Genau ein (oder gar kein) Workflow unter den zugewiesenen
       // Rollen — die Auswahl-Kachel wäre ein unnötiger Umweg zu genau
@@ -272,8 +281,9 @@ async function renderShell(root: HTMLElement, username: string | null) {
   }
 
   if (username) {
-    document.body.appendChild(buildUserWidget(username));
+    document.body.appendChild(buildUserWidget(username, homeHref));
   }
+  return homeHref;
 }
 
 // Bugfix 2026-07-27: eigener Leerzustand für einen reinen Operator mit
@@ -364,12 +374,12 @@ async function boot() {
 
   if (authRequired && !authenticated) {
     showLoginOverlay(root, () => {
-      renderShell(root, null).then(() => {
+      renderShell(root, null).then((homeHref) => {
         // Nutzername erst nach dem Login bekannt — ein zweiter,
         // günstiger whoami()-Aufruf statt den Login-Response-Body
         // durchzureichen, hält showLoginOverlay von Shell-Kenntnis frei.
         whoami().then(({ username }) => {
-          if (username) document.body.appendChild(buildUserWidget(username));
+          if (username) document.body.appendChild(buildUserWidget(username, homeHref));
         });
       });
     });
