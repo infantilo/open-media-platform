@@ -187,6 +187,65 @@ func TestStoreCheckDoesNotLeakIntoWorkflowScope(t *testing.T) {
 	}
 }
 
+// TestCheckResolvesGroupMembership belegt gruppenbasierte Rechte-
+// verwaltung (Nutzerauftrag 2026-09-24): eine Bindung mit
+// subject_type='group' muss für jedes Mitglied der Gruppe wirken, für
+// einen Nicht-Mitglied-Nutzer NICHT. Echte users/groups/group_members-
+// Zeilen statt eines Mocks (gleiche Linie wie der Rest dieses Pakets).
+func TestCheckResolvesGroupMembership(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+
+	username := "test-authz-groupmember-" + mustNewID(t)
+	outsider := "test-authz-outsider-" + mustNewID(t)
+	groupID := "test-group-" + mustNewID(t)
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, groupID)
+		_, _ = database.Exec(`DELETE FROM groups WHERE id = $1`, groupID)
+		_, _ = database.Exec(`DELETE FROM users WHERE username IN ($1, $2)`, username, outsider)
+	})
+	if _, err := database.Exec(`INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')`, mustNewID(t), username); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'x')`, mustNewID(t), outsider); err != nil {
+		t.Fatalf("seed outsider user: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO groups (id, name, created_by) VALUES ($1, $2, 'alice')`, groupID, groupID); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+	if _, err := database.Exec(`INSERT INTO group_members (group_id, username) VALUES ($1, $2)`, groupID, username); err != nil {
+		t.Fatalf("seed group member: %v", err)
+	}
+
+	binding, err := store.CreateGroupBinding(groupID, "", "inst-mixer", VerbOperate)
+	if err != nil {
+		t.Fatalf("CreateGroupBinding() error = %v", err)
+	}
+	if binding.SubjectType != SubjectTypeGroup || binding.Subject != groupID {
+		t.Fatalf("CreateGroupBinding() = %+v, want SubjectType=group, Subject=%s", binding, groupID)
+	}
+
+	if ok, err := store.Check(username, "inst-mixer", VerbOperate); err != nil || !ok {
+		t.Errorf("Check(group member) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, err := store.Check(outsider, "inst-mixer", VerbOperate); err != nil || ok {
+		t.Errorf("Check(non-member) = (%v, %v), want (false, nil)", ok, err)
+	}
+
+	// Gleiches für den Workflow-gescopten Pfad.
+	wfBinding, err := store.CreateGroupBinding(groupID, "wf-1", "bildmischer", VerbConfigure)
+	if err != nil {
+		t.Fatalf("CreateGroupBinding() (workflow) error = %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(wfBinding.ID) })
+	if ok, err := store.CheckWorkflow(username, "wf-1", "bildmischer", VerbConfigure); err != nil || !ok {
+		t.Errorf("CheckWorkflow(group member) = (%v, %v), want (true, nil)", ok, err)
+	}
+	if ok, err := store.CheckWorkflow(outsider, "wf-1", "bildmischer", VerbConfigure); err != nil || ok {
+		t.Errorf("CheckWorkflow(non-member) = (%v, %v), want (false, nil)", ok, err)
+	}
+}
+
 func mustNewID(t *testing.T) string {
 	t.Helper()
 	id, err := newID()

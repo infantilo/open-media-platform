@@ -110,7 +110,7 @@ func TestHandleListUsersMarksGlobalAdmins(t *testing.T) {
 	}}
 
 	rec := httptest.NewRecorder()
-	handleListUsers(authSvc, authzStore)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/users", nil))
+	handleListUsers(authSvc, authzStore, nil)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/auth/users", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -140,7 +140,7 @@ func TestHandleDeleteUserBlocksLastAdminDeletingSelf(t *testing.T) {
 	req.SetPathValue("name", "alice")
 	req = withPrincipal(req, "alice")
 	rec := httptest.NewRecorder()
-	handleDeleteUser(authSvc, authzStore)(rec, req)
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (last admin self-delete)", rec.Code)
@@ -158,7 +158,7 @@ func TestHandleDeleteUserAllowsSelfDeleteWhenNotLastAdmin(t *testing.T) {
 	req.SetPathValue("name", "alice")
 	req = withPrincipal(req, "alice")
 	rec := httptest.NewRecorder()
-	handleDeleteUser(authSvc, authzStore)(rec, req)
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (another admin remains)", rec.Code)
@@ -175,7 +175,7 @@ func TestHandleDeleteUserAllowsAdminDeletingOtherUser(t *testing.T) {
 	req.SetPathValue("name", "bob")
 	req = withPrincipal(req, "alice")
 	rec := httptest.NewRecorder()
-	handleDeleteUser(authSvc, authzStore)(rec, req)
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (deleting someone else is fine)", rec.Code)
@@ -189,7 +189,7 @@ func TestHandleDeleteUserNotFound(t *testing.T) {
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/users/ghost", nil)
 	req.SetPathValue("name", "ghost")
 	rec := httptest.NewRecorder()
-	handleDeleteUser(authSvc, authzStore)(rec, req)
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
@@ -205,7 +205,7 @@ func TestHandleDeleteRoleBindingBlocksLastAdminRemovingOwnBinding(t *testing.T) 
 	req.SetPathValue("id", "b1")
 	req = withPrincipal(req, "alice")
 	rec := httptest.NewRecorder()
-	handleDeleteRoleBinding(authzStore)(rec, req)
+	handleDeleteRoleBinding(authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (last admin removing own binding)", rec.Code)
@@ -222,7 +222,7 @@ func TestHandleDeleteRoleBindingAllowsRemovingOtherSubjectsBinding(t *testing.T)
 	req.SetPathValue("id", "b2")
 	req = withPrincipal(req, "alice")
 	rec := httptest.NewRecorder()
-	handleDeleteRoleBinding(authzStore)(rec, req)
+	handleDeleteRoleBinding(authzStore, nil)(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204 (removing someone else's binding is fine)", rec.Code)

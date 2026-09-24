@@ -29172,3 +29172,102 @@ Browser-Konsolenfehler. Alle Testdaten anschließend aufgeräumt.
 `go test -count=1 ./...` (39/39 Pakete, neues `internal/storagebackends`
 inklusive echter MinIO-Integrationstests), `deno check`/`test ui/`
 (128/128) grün.
+
+## 2026-09-24 (Nachtrag 287) — Gruppenbasierte Rechteverwaltung + OMP_STORAGE_SECRET_KEY dauerhaft persistiert
+
+Nutzerauftrag: "ja schlüssel dauerhaft speichern. dann gruppen basierte
+rechteverwaltung. (ist dann 'Organisation' noch nötig?)" — Folge-Schritt
+der Architektur-Rückfrage vom Nachtrag 286.
+
+**OMP_STORAGE_SECRET_KEY dauerhaft:** `deploy/dev/start-omp.sh` erzeugt
+jetzt (gleiches Muster wie `mxl.env`) beim ersten Start automatisch
+`deploy/dev/storage-secret.env` (per `openssl rand -base64 32`,
+`.gitignore`t — echtes Geheimnis, nie committen) und sourct sie danach
+bei jedem Start. Live verifiziert: `make stop && make start` OHNE
+manuelles Exportieren behält denselben Schlüssel (per `/proc/<pid>/
+environ` bestätigt), das Feature bleibt aktiviert.
+
+**Ist "Organisation" neben Gruppen noch nötig? Ja — beide lösen
+unabhängige Probleme:**
+- **Organisation** (B14): reine Sichtbarkeits-/Mandanten-Grenze — WELCHE
+  Objekte sieht ein Nutzer überhaupt (Workflows/Assets/Prozesse/
+  Collections), durchgesetzt über `OwnerOrgID` + `orgMatches()` in
+  `org_enforcement.go`, komplett unabhängig von `authz.Binding`.
+- **Gruppe** (neu): reine Rechte-Bündelung — WELCHE Verben hat ein
+  Nutzer, über `role_bindings` statt Einzelbindungen.
+
+  Eine Organisation bestimmt also, WAS ein Nutzer überhaupt sehen kann;
+  eine Gruppe bestimmt, WAS er innerhalb dessen darf. Ein Nutzer kann in
+  einer Organisation UND in mehreren Gruppen gleichzeitig sein — beide
+  Mechanismen bleiben unabhängig nebeneinander bestehen, keiner ersetzt
+  den anderen.
+
+**Design (zwei Entscheidungen bereits in der vorherigen Sitzung
+getroffen, hier umgesetzt):** Gruppen als neuer `authz.Binding`-
+Subject-Typ (`subject_type` Spalte, "user" Default/unverändert oder
+"group") statt Ersatz für Einzelbindungen — genau die Form, die eine
+spätere Windows-Active-Directory-Anbindung braucht (AD synchronisiert
+Gruppenmitgliedschaft, nie Einzelrechte; ein AD-Sync würde künftig nur
+`group_members` befüllen, nie `role_bindings` selbst anfassen).
+
+**Migration `0028_groups.sql`:** `groups`-Tabelle, `group_members`
+(echter Fremdschlüssel auf `users(username)` UND `groups(id)`, beide
+`ON DELETE CASCADE` — anders als `role_bindings.subject`, das je nach
+`subject_type` Nutzername/Gruppen-ID/Instanz-ID trägt und deshalb
+keinen Fremdschlüssel haben kann, s. Migrations-Kommentar).
+`role_bindings.subject_type` (Default `'user'`, jede Bestandszeile
+bleibt unverändert wirksam).
+
+**`internal/authz`:** `Store.Create` bleibt für die drei bestehenden
+Aufrufer (launcher_handlers.go/auth_handlers.go/workflows/service.go)
+unverändert — neue `CreateGroupBinding(groupID, ...)`-Methode statt
+eines weiteren Parameters, kein Blast-Radius auf gruppenunabhängige
+Aufrufer. `Check`/`CheckWorkflow` lösen jetzt EITHER eine direkte
+Nutzer-Bindung ODER eine Gruppen-Bindung auf, deren Gruppe den Nutzer
+als Mitglied führt (`group_members`-Subquery).
+
+**Neues Paket `internal/groups`:** CRUD + Mitgliederverwaltung.
+`Delete(id, cascadeBindings)` — bewusst ANDERS als bei Storage-
+Backends/Organisationen: eine verwaiste Gruppen-Bindung ist ungefährlich
+(wird beim nächsten `Check()` einfach wirkungslos, kein stiller
+Datenzugriffsverlust wie bei einer verwaisten Datei-Referenz), Kaskade
+ist deshalb sicher und Standardfall (Nutzerauftrag: "volle Kontrolle
+ohne Umweg über zwei Tabs"), statt wie bei Dateien hart zu blockieren.
+
+**Live-gefundene und geschlossene Sicherheitslücke (kein Nutzerfund,
+selbst beim Testen entdeckt):** die "letzter-Admin"-Selbstschutzprüfung
+(§11.4b, bisher nur in `handleDeleteUser`/`handleDeleteRoleBinding`)
+erfasste Gruppen-Admin-Bindungen nicht — ein Nutzer, dessen EINZIGES
+globales Admin-Recht über eine Gruppe kam, hätte sich durch Löschen
+DIESER GRUPPE genauso aussperren können wie zuvor durch Löschen der
+einzelnen Bindung, ohne dass die bestehende Prüfung das bemerkt hätte.
+`globalAdminSubjects` löst jetzt Gruppen-Bindungen zu ihren
+Mitgliedern auf (überall dort verwendet), und `handleDeleteGroup`
+bekam eine eigene, gleichwertige Sperre für den Kaskaden-Lösch-Pfad —
+mit drei gezielten Tests abgesichert (Sperre greift für den einzigen
+Admin, greift NICHT bei einem zweiten Admin, greift NICHT für ein
+Nicht-Mitglied dieser Gruppe).
+
+**UI (`admin-view.ts`):** neuer Sub-Tab "Gruppen" (Liste, Anlegen,
+Bearbeiten, Löschen mit zweistufigem Kaskaden-Dialog bei noch
+bestehenden Bindungen, Mitglieder-Panel zum Auf-/Zuklappen unter jeder
+Zeile). "Rollenbindungen"-Anlage-Formular bekam einen Nutzer/Gruppe-
+Umschalter (Freitext-Nutzername mit Vorschlagsliste vs. Auswahl aus
+den geladenen Gruppen) und einen 👥-Präfix in der Bindungsliste, der
+Gruppen-Bindungen auf einen Blick von Einzelbindungen unterscheidet.
+
+**Live verifiziert (echte Dev-Instanz, CDP + curl):** Gruppe angelegt,
+Mitglied (`operator1`) hinzugefügt, Rollenbindung "Gruppe → Alle Nodes
+→ Konfigurieren" über den neuen UI-Umschalter angelegt — anschließend
+als `operator1` selbst eingeloggt: `PUT /api/v1/layouts/…` (braucht
+`configure` global) schlägt VOR der Gruppenbindung fehl, gelingt
+DANACH, schlägt nach Entfernen aus der Gruppe wieder fehl (403) — der
+komplette Gewähren-und-Widerrufen-Kreislauf über reine
+Gruppenmitgliedschaft, nicht nur behauptet. `go test -count=1 ./...`
+(40/40 Pakete, neues `internal/groups` + drei neue Selbstschutz-Tests
+in `internal/httpapi`), `deno check`/`test ui/` (128/128) grün.
+
+**Nebeneffekt der Live-Verifikation:** `operator1`s Passwort musste per
+Admin-Reset gesetzt werden (unbekannt, keine dokumentierte Dev-
+Fixture wie `admin`/`adminpass123`) — dem Nutzer mitgeteilt, kein
+stilles Vorgehen.

@@ -30,6 +30,7 @@ type handlerOptions struct {
 	assetLinks      AssetLinkService
 	storageBackends StorageBackendService
 	organizations   OrganizationService
+	groups          GroupService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
@@ -76,6 +77,16 @@ func WithStorageBackends(svc StorageBackendService) HandlerOption {
 // aktiv.
 func WithOrganizations(svc OrganizationService) HandlerOption {
 	return func(o *handlerOptions) { o.organizations = svc }
+}
+
+// WithGroups aktiviert die Gruppenverwaltung (/api/v1/groups, Nutzer-
+// auftrag 2026-09-24: gruppenbasierte Rechteverwaltung) UND die
+// gruppenbewusste Auflösung in globalAdminSubjects (handleListUsers/
+// handleDeleteUser/handleDeleteRoleBinding) — fehlt die Option, bleiben
+// die Endpunkte inaktiv und die Selbstschutz-/isAdmin-Prüfungen
+// beschränken sich auf direkte Bindungen (unverändertes Verhalten).
+func WithGroups(svc GroupService) HandlerOption {
+	return func(o *handlerOptions) { o.groups = svc }
 }
 
 const alarmAckChangedEvent = "alarm.ack.changed"

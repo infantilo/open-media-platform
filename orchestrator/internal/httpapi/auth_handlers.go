@@ -184,18 +184,39 @@ type userResponse struct {
 // handleListUsers als auch für die Selbstschutz-Prüfung in
 // handleDeleteUser/handleDeleteRoleBinding (§11.4b: "Der letzte
 // verbleibende Admin darf sich nicht selbst löschen/degradieren").
-func globalAdminSubjects(bindings []authz.Binding) map[string]bool {
+// groupSvc darf nil sein (Gruppen-Feature nicht verdrahtet, z. B. in
+// Tests) — dann bleibt das Verhalten auf direkte Bindungen beschränkt.
+// Wichtig, damit die "letzter Admin"-Selbstschutzprüfung unten korrekt
+// bleibt, sobald ein Admin-Recht NUR über eine Gruppe kommt (Nutzer-
+// auftrag 2026-09-24: gruppenbasierte Rechteverwaltung) — sonst könnte
+// sich so ein Nutzer versehentlich aussperren, ohne dass die Prüfung
+// es bemerkt.
+func globalAdminSubjects(bindings []authz.Binding, groupSvc GroupService) map[string]bool {
 	admins := make(map[string]bool)
 	for _, b := range bindings {
-		if b.NodeID == authz.AnyNode && b.Verb == authz.VerbAdmin {
-			admins[b.Subject] = true
+		if b.NodeID != authz.AnyNode || b.Verb != authz.VerbAdmin {
+			continue
 		}
+		if b.SubjectType == authz.SubjectTypeGroup {
+			if groupSvc == nil {
+				continue
+			}
+			members, err := groupSvc.ListMembers(b.Subject)
+			if err != nil {
+				continue
+			}
+			for _, m := range members {
+				admins[m] = true
+			}
+			continue
+		}
+		admins[b.Subject] = true
 	}
 	return admins
 }
 
 // handleListUsers ist GET /api/v1/auth/users — admin-only (server.go).
-func handleListUsers(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc {
+func handleListUsers(authSvc AuthService, authzStore AuthzChecker, groupSvc GroupService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		users, err := authSvc.ListUsers(r.Context())
 		if err != nil {
@@ -207,7 +228,7 @@ func handleListUsers(authSvc AuthService, authzStore AuthzChecker) http.HandlerF
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		admins := globalAdminSubjects(bindings)
+		admins := globalAdminSubjects(bindings, groupSvc)
 		out := make([]userResponse, len(users))
 		for i, u := range users {
 			out[i] = userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, IsAdmin: admins[u.Username], OrgID: u.OrgID}
@@ -222,7 +243,7 @@ func handleListUsers(authSvc AuthService, authzStore AuthzChecker) http.HandlerF
 // letzte Admin versehentlich aussperren, ohne Henne-Ei-Ausweg (derselbe
 // Bootstrap-Mechanismus in handleCreateUser greift nur beim allerersten
 // Nutzer, nicht danach).
-func handleDeleteUser(authSvc AuthService, authzStore AuthzChecker) http.HandlerFunc {
+func handleDeleteUser(authSvc AuthService, authzStore AuthzChecker, groupSvc GroupService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if p, ok := principalFromContext(r); ok && p.Username == name {
@@ -231,7 +252,7 @@ func handleDeleteUser(authSvc AuthService, authzStore AuthzChecker) http.Handler
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			admins := globalAdminSubjects(bindings)
+			admins := globalAdminSubjects(bindings, groupSvc)
 			if admins[name] && len(admins) == 1 {
 				http.Error(w, "cannot delete the last remaining admin", http.StatusConflict)
 				return
@@ -334,6 +355,11 @@ func handleRevokeSessions(authSvc AuthService) http.HandlerFunc {
 
 type roleBindingRequest struct {
 	Subject string `json:"subject"`
+	// SubjectType (Nutzerauftrag 2026-09-24: gruppenbasierte Rechte-
+	// verwaltung) — "" oder "user" (Default, unverändertes Verhalten:
+	// subject ist ein Nutzername) oder "group" (subject ist eine
+	// groups.id).
+	SubjectType string `json:"subjectType"`
 	// WorkflowID (Kapitel 12 Teil 4, §12.3e) — leer = globale/Node-
 	// gescopte Bindung (unverändert), gesetzt = Workflow-Scope; NodeID
 	// ist dann ein Rollenname statt einer Instanz-ID (s. authz.Binding-
@@ -344,11 +370,20 @@ type roleBindingRequest struct {
 }
 
 type roleBindingResponse struct {
-	ID         string `json:"id"`
-	Subject    string `json:"subject"`
-	WorkflowID string `json:"workflowId,omitempty"`
-	NodeID     string `json:"nodeId"`
-	Verb       string `json:"verb"`
+	ID          string `json:"id"`
+	Subject     string `json:"subject"`
+	SubjectType string `json:"subjectType"`
+	WorkflowID  string `json:"workflowId,omitempty"`
+	NodeID      string `json:"nodeId"`
+	Verb        string `json:"verb"`
+}
+
+func toRoleBindingResponse(b authz.Binding) roleBindingResponse {
+	subjectType := b.SubjectType
+	if subjectType == "" {
+		subjectType = authz.SubjectTypeUser
+	}
+	return roleBindingResponse{ID: b.ID, Subject: b.Subject, SubjectType: subjectType, WorkflowID: b.WorkflowID, NodeID: b.NodeID, Verb: string(b.Verb)}
 }
 
 var validVerbs = map[string]authz.Verb{
@@ -370,7 +405,7 @@ func handleListRoleBindings(store AuthzChecker) http.HandlerFunc {
 		}
 		out := make([]roleBindingResponse, len(bindings))
 		for i, b := range bindings {
-			out[i] = roleBindingResponse{ID: b.ID, Subject: b.Subject, WorkflowID: b.WorkflowID, NodeID: b.NodeID, Verb: string(b.Verb)}
+			out[i] = toRoleBindingResponse(b)
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -388,12 +423,18 @@ func handleCreateRoleBinding(store AuthzChecker) http.HandlerFunc {
 			http.Error(w, "invalid verb (want view|operate|configure|admin)", http.StatusBadRequest)
 			return
 		}
-		b, err := store.Create(req.Subject, req.WorkflowID, req.NodeID, verb)
+		var b authz.Binding
+		var err error
+		if req.SubjectType == authz.SubjectTypeGroup {
+			b, err = store.CreateGroupBinding(req.Subject, req.WorkflowID, req.NodeID, verb)
+		} else {
+			b, err = store.Create(req.Subject, req.WorkflowID, req.NodeID, verb)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		writeJSON(w, http.StatusCreated, roleBindingResponse{ID: b.ID, Subject: b.Subject, WorkflowID: b.WorkflowID, NodeID: b.NodeID, Verb: string(b.Verb)})
+		writeJSON(w, http.StatusCreated, toRoleBindingResponse(b))
 	}
 }
 
@@ -401,7 +442,7 @@ func handleCreateRoleBinding(store AuthzChecker) http.HandlerFunc {
 // admin-only (server.go). Selbstschutz analog handleDeleteUser: die
 // eigene "*"-admin-Bindung zu entfernen, während man der einzige globale
 // Admin ist, wird abgewiesen (§11.4b "…nicht selbst löschen/degradieren").
-func handleDeleteRoleBinding(store AuthzChecker) http.HandlerFunc {
+func handleDeleteRoleBinding(store AuthzChecker, groupSvc GroupService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		if p, ok := principalFromContext(r); ok {
@@ -410,9 +451,28 @@ func handleDeleteRoleBinding(store AuthzChecker) http.HandlerFunc {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			admins := globalAdminSubjects(bindings)
+			admins := globalAdminSubjects(bindings, groupSvc)
 			for _, b := range bindings {
-				if b.ID == id && b.Subject == p.Username && b.NodeID == authz.AnyNode && b.Verb == authz.VerbAdmin && len(admins) == 1 {
+				if b.ID != id || b.NodeID != authz.AnyNode || b.Verb != authz.VerbAdmin {
+					continue
+				}
+				// Direkte Bindung des anfragenden Nutzers ODER eine
+				// Gruppen-Bindung, in der er Mitglied ist (Nutzerauftrag
+				// 2026-09-24: gruppenbasierte Rechteverwaltung — sonst
+				// könnte man sich über das Löschen einer Gruppen-Bindung
+				// genauso aussperren wie über eine direkte).
+				affectsSelf := b.SubjectType != authz.SubjectTypeGroup && b.Subject == p.Username
+				if !affectsSelf && b.SubjectType == authz.SubjectTypeGroup && groupSvc != nil {
+					if members, err := groupSvc.ListMembers(b.Subject); err == nil {
+						for _, m := range members {
+							if m == p.Username {
+								affectsSelf = true
+								break
+							}
+						}
+					}
+				}
+				if affectsSelf && len(admins) == 1 {
 					http.Error(w, "cannot remove your own last remaining admin binding", http.StatusConflict)
 					return
 				}

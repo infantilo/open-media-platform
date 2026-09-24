@@ -451,6 +451,10 @@ func (f fakeAuthzSvc) Create(subject, workflowID, nodeID string, verb authz.Verb
 	return f.created, f.createErr
 }
 
+func (f fakeAuthzSvc) CreateGroupBinding(groupID, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error) {
+	return f.created, f.createErr
+}
+
 func (f fakeAuthzSvc) Delete(id string) error { return f.deleteErr }
 
 // fakeAuditSvc implementiert sowohl AuditLogger als auch AuditReader —

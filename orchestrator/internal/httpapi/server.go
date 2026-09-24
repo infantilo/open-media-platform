@@ -369,8 +369,8 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin(authSvc, auditLogger, loginLockout))
 	mux.HandleFunc("GET /api/v1/auth/whoami", handleWhoami(authSvc, authzStore))
 	mux.HandleFunc("POST /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleCreateUser(authSvc, authzStore)))
-	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore)))
-	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUser(authSvc, authzStore)))
+	mux.HandleFunc("GET /api/v1/auth/users", g.requireVerbGlobal(authz.VerbAdmin, handleListUsers(authSvc, authzStore, options.groups)))
+	mux.HandleFunc("DELETE /api/v1/auth/users/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUser(authSvc, authzStore, options.groups)))
 	mux.HandleFunc("PUT /api/v1/auth/users/{name}/password", g.requireVerbGlobal(authz.VerbAdmin, handleResetPassword(authSvc)))
 	mux.HandleFunc("PUT /api/v1/auth/users/{name}/org", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateUserOrg(authSvc)))
 	mux.HandleFunc("POST /api/v1/auth/users/{name}/revoke-sessions", g.requireVerbGlobal(authz.VerbAdmin, handleRevokeSessions(authSvc)))
@@ -466,7 +466,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	mux.HandleFunc("GET /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleListRoleBindings(authzStore)))
 	mux.HandleFunc("POST /api/v1/admin/role-bindings", g.requireVerbGlobal(authz.VerbAdmin, handleCreateRoleBinding(authzStore)))
-	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore)))
+	mux.HandleFunc("DELETE /api/v1/admin/role-bindings/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteRoleBinding(authzStore, options.groups)))
 	mux.HandleFunc("GET /api/v1/admin/audit-log", g.requireVerbGlobal(authz.VerbAdmin, handleListAuditLog(auditReader)))
 	// Kapitel 21 B13 — fachliches Gegenstück zum HTTP-Audit oben, s.
 	// domain_audit_handlers.go. Optional wie /api/v1/alarms/acks: fehlt
@@ -685,6 +685,21 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 		mux.HandleFunc("POST /api/v1/organizations", g.requireVerbGlobal(authz.VerbAdmin, handleCreateOrganization(options.organizations, options.domainAudit)))
 		mux.HandleFunc("GET /api/v1/organizations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleGetOrganization(options.organizations)))
 		mux.HandleFunc("DELETE /api/v1/organizations/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteOrganization(options.organizations, options.domainAudit)))
+	}
+
+	// Gruppenverwaltung (Nutzerauftrag 2026-09-24: gruppenbasierte
+	// Rechteverwaltung, auch als Vorbereitung für eine spätere Windows-
+	// Active-Directory-Anbindung) — global VerbAdmin, dieselbe Stufe wie
+	// Rollenbindungen/Organisationen/Nutzerverwaltung selbst.
+	if options.groups != nil {
+		mux.HandleFunc("GET /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleListGroups(options.groups)))
+		mux.HandleFunc("POST /api/v1/groups", g.requireVerbGlobal(authz.VerbAdmin, handleCreateGroup(options.groups, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleGetGroup(options.groups)))
+		mux.HandleFunc("PUT /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleUpdateGroup(options.groups, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/groups/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteGroup(options.groups, authzStore, options.domainAudit)))
+		mux.HandleFunc("GET /api/v1/groups/{id}/members", g.requireVerbGlobal(authz.VerbAdmin, handleListGroupMembers(options.groups)))
+		mux.HandleFunc("POST /api/v1/groups/{id}/members", g.requireVerbGlobal(authz.VerbAdmin, handleAddGroupMember(options.groups, options.domainAudit)))
+		mux.HandleFunc("DELETE /api/v1/groups/{id}/members/{username}", g.requireVerbGlobal(authz.VerbAdmin, handleRemoveGroupMember(options.groups, options.domainAudit)))
 	}
 
 	mux.Handle("/", spaFallback(cfg.UIDir, http.FileServer(http.Dir(cfg.UIDir))))

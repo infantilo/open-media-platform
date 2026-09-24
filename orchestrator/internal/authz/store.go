@@ -21,7 +21,7 @@ func NewStore(db *sql.DB) *Store {
 // selbst pro Nutzer filtert (gleiches Zugriffsmuster wie zuvor gegen die
 // komplette role-bindings.json), sowie von einer künftigen Admin-Auflistung.
 func (s *Store) Load() ([]Binding, error) {
-	rows, err := s.db.Query(`SELECT id, subject, workflow_id, node_id, verb FROM role_bindings ORDER BY subject, workflow_id, node_id`)
+	rows, err := s.db.Query(`SELECT id, subject, subject_type, workflow_id, node_id, verb FROM role_bindings ORDER BY subject, workflow_id, node_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -30,7 +30,7 @@ func (s *Store) Load() ([]Binding, error) {
 	var bindings []Binding
 	for rows.Next() {
 		var b Binding
-		if err := rows.Scan(&b.ID, &b.Subject, &b.WorkflowID, &b.NodeID, &b.Verb); err != nil {
+		if err := rows.Scan(&b.ID, &b.Subject, &b.SubjectType, &b.WorkflowID, &b.NodeID, &b.Verb); err != nil {
 			return nil, err
 		}
 		bindings = append(bindings, b)
@@ -38,22 +38,38 @@ func (s *Store) Load() ([]Binding, error) {
 	return bindings, rows.Err()
 }
 
-// Create legt eine neue Rollenbindung an. workflowID leer = globale/
-// Node-gescopte Bindung (unverändertes Vor-Kapitel-12-Teil-4-Verhalten);
-// gesetzt = Workflow-Scope, nodeID ist dann ein Rollenname statt einer
-// Instanz-ID (s. Binding-Doku in authz.go).
+// Create legt eine neue Rollenbindung mit Subject-Typ "user" an (alle
+// bisherigen Aufrufer — Nutzernamen, aber auch Service-Token-Subjects
+// wie Instanz-IDs, s. Binding.SubjectType-Doku) — workflowID leer =
+// globale/Node-gescopte Bindung (unverändertes Vor-Kapitel-12-Teil-4-
+// Verhalten); gesetzt = Workflow-Scope, nodeID ist dann ein Rollenname
+// statt einer Instanz-ID (s. Binding-Doku in authz.go).
 func (s *Store) Create(subject, workflowID, nodeID string, verb Verb) (Binding, error) {
+	return s.create(SubjectTypeUser, subject, workflowID, nodeID, verb)
+}
+
+// CreateGroupBinding legt eine Bindung an, deren Subject eine
+// groups.id ist (Nutzerauftrag 2026-09-24: gruppenbasierte Rechte-
+// verwaltung) — eigene Methode statt eines weiteren Create()-Parameters,
+// damit die drei bestehenden, gruppenunabhängigen Aufrufer (launcher_
+// handlers.go/auth_handlers.go/workflows/service.go) unverändert
+// bleiben.
+func (s *Store) CreateGroupBinding(groupID, workflowID, nodeID string, verb Verb) (Binding, error) {
+	return s.create(SubjectTypeGroup, groupID, workflowID, nodeID, verb)
+}
+
+func (s *Store) create(subjectType, subject, workflowID, nodeID string, verb Verb) (Binding, error) {
 	id, err := newID()
 	if err != nil {
 		return Binding{}, err
 	}
 	_, err = s.db.Exec(
-		`INSERT INTO role_bindings (id, subject, workflow_id, node_id, verb) VALUES ($1, $2, $3, $4, $5)`,
-		id, subject, workflowID, nodeID, verb)
+		`INSERT INTO role_bindings (id, subject, subject_type, workflow_id, node_id, verb) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, subject, subjectType, workflowID, nodeID, verb)
 	if err != nil {
 		return Binding{}, err
 	}
-	return Binding{ID: id, Subject: subject, WorkflowID: workflowID, NodeID: nodeID, Verb: verb}, nil
+	return Binding{ID: id, Subject: subject, SubjectType: subjectType, WorkflowID: workflowID, NodeID: nodeID, Verb: verb}, nil
 }
 
 // Delete entfernt eine Rollenbindung. Kein Fehler, wenn id nicht
@@ -69,7 +85,7 @@ func (s *Store) Delete(id string) error {
 // Bindungen mitexportiert werden sollen (opt-in, s. dortige Doku).
 func (s *Store) LoadByWorkflow(workflowID string) ([]Binding, error) {
 	rows, err := s.db.Query(
-		`SELECT id, subject, workflow_id, node_id, verb FROM role_bindings WHERE workflow_id = $1 ORDER BY subject, node_id`,
+		`SELECT id, subject, subject_type, workflow_id, node_id, verb FROM role_bindings WHERE workflow_id = $1 ORDER BY subject, node_id`,
 		workflowID)
 	if err != nil {
 		return nil, err
@@ -79,7 +95,7 @@ func (s *Store) LoadByWorkflow(workflowID string) ([]Binding, error) {
 	var bindings []Binding
 	for rows.Next() {
 		var b Binding
-		if err := rows.Scan(&b.ID, &b.Subject, &b.WorkflowID, &b.NodeID, &b.Verb); err != nil {
+		if err := rows.Scan(&b.ID, &b.Subject, &b.SubjectType, &b.WorkflowID, &b.NodeID, &b.Verb); err != nil {
 			return nil, err
 		}
 		bindings = append(bindings, b)
@@ -99,17 +115,23 @@ func (s *Store) DeleteByWorkflow(workflowID string) error {
 	return err
 }
 
-// Check prüft, ob subject mindestens minVerb auf nodeID hat (direkte
-// Bindung oder eine "*"-Bindung) — die pro-Request genutzte Prüfung der
-// Middleware (internal/httpapi), als eigene, gescopte Query statt über
-// Load() plus Go-seitigem Filtern, weil sie auf jedem proxierten
+// Check prüft, ob subject mindestens minVerb auf nodeID hat — entweder
+// über eine direkte Nutzer-Bindung (subject_type='user') ODER über eine
+// Gruppen-Bindung (subject_type='group'), deren Gruppe subject als
+// Mitglied führt (group_members, Nutzerauftrag 2026-09-24:
+// gruppenbasierte Rechteverwaltung) — die pro-Request genutzte Prüfung
+// der Middleware (internal/httpapi), als eigene, gescopte Query statt
+// über Load() plus Go-seitigem Filtern, weil sie auf jedem proxierten
 // API-Aufruf läuft. Bewusst nur workflow_id = "" (globale/Node-gescopte
 // Bindungen, s. Binding-Doku) — Workflow-gescopte Bindungen prüft
 // CheckWorkflow, damit ein zufällig gleichlautender Rollenname nie mit
 // einer Instanz-/Node-ID kollidiert.
 func (s *Store) Check(subject, nodeID string, minVerb Verb) (bool, error) {
 	rows, err := s.db.Query(
-		`SELECT verb FROM role_bindings WHERE subject = $1 AND workflow_id = '' AND (node_id = $2 OR node_id = $3)`,
+		`SELECT verb FROM role_bindings
+		 WHERE workflow_id = '' AND (node_id = $2 OR node_id = $3)
+		   AND ((subject_type = 'user' AND subject = $1)
+		     OR (subject_type = 'group' AND subject IN (SELECT group_id FROM group_members WHERE username = $1)))`,
 		subject, nodeID, AnyNode)
 	if err != nil {
 		return false, err
@@ -136,7 +158,10 @@ func (s *Store) Check(subject, nodeID string, minVerb Verb) (bool, error) {
 // "nodeID" (Instanz-ID vs. Rollenname) und dürfen sich nie kreuzen.
 func (s *Store) CheckWorkflow(subject, workflowID, role string, minVerb Verb) (bool, error) {
 	rows, err := s.db.Query(
-		`SELECT verb FROM role_bindings WHERE subject = $1 AND workflow_id = $2 AND (node_id = $3 OR node_id = $4)`,
+		`SELECT verb FROM role_bindings
+		 WHERE workflow_id = $2 AND (node_id = $3 OR node_id = $4)
+		   AND ((subject_type = 'user' AND subject = $1)
+		     OR (subject_type = 'group' AND subject IN (SELECT group_id FROM group_members WHERE username = $1)))`,
 		subject, workflowID, role, AnyNode)
 	if err != nil {
 		return false, err

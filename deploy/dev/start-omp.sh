@@ -32,6 +32,30 @@ if [ -f "$MXL_ENV_FILE" ]; then
   source "$MXL_ENV_FILE"
 fi
 
+# OMP_STORAGE_SECRET_KEY (Kapitel 21, Nutzerauftrag 2026-09-24: super-
+# admin-verwaltete Storage-Backends, Nachtrag 286) — verschlüsselt die
+# S3/MinIO-Zugangsdaten der Backends in Postgres, muss deshalb bei
+# JEDEM Start identisch sein (ein neu generierter Schlüssel macht
+# vorhandene Backend-Secrets unentschlüsselbar). Gleiches Muster wie
+# mxl.env oben: einmalig automatisch erzeugt (falls noch nicht
+# vorhanden) statt eines manuellen Schritts, den man vergisst — anders
+# als mxl.env aber ein echtes Geheimnis, deshalb NICHT von
+# install-mxl.sh-artigem Tooling, sondern hier direkt per `openssl rand`,
+# und in .gitignore (s. dort) statt versehentlich committet zu werden.
+STORAGE_SECRET_FILE="$ROOT_DIR/deploy/dev/storage-secret.env"
+if [ ! -f "$STORAGE_SECRET_FILE" ]; then
+  echo "==> Erzeuge OMP_STORAGE_SECRET_KEY (einmalig, für Storage-Backends)"
+  {
+    echo "# Auto-generiert von start-omp.sh — NICHT committen (s. .gitignore)."
+    echo "# Verschlüsselt die Zugangsdaten der Storage-Backends in Postgres."
+    echo "# Ändern/Löschen macht bestehende Backend-Secrets unentschlüsselbar —"
+    echo "# vorher in Administration > Storage prüfen, ob welche existieren."
+    echo "export OMP_STORAGE_SECRET_KEY=\"$(openssl rand -base64 32)\""
+  } > "$STORAGE_SECRET_FILE"
+fi
+# shellcheck disable=SC1090
+source "$STORAGE_SECRET_FILE"
+
 # /dev/shm ist tmpfs und überlebt einen Neustart/eine Bereinigung nicht
 # (docs/decisions.md, 2026-07-17) — ohne dieses Verzeichnis schlägt jeder
 # MXL-Node-Start mit "Domain path is not a directory" fehl, bis jemand es

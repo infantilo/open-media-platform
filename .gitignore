@@ -27,6 +27,10 @@ build/
 /third_party/mxl/
 /deploy/dev/mxl.env
 
+# Storage-Backend-Masterschlüssel (Nachtrag 286) — echtes Geheimnis,
+# auto-generiert von deploy/dev/start-omp.sh, nie committen.
+/deploy/dev/storage-secret.env
+
 # libfabric: geklonter/gebauter C-Kern für Kapitel 16 Teil 0 (MXL-native
 # Fabrics-Spike, docs/decisions.md Nachtrag 41/42) — Debians libfabric-dev
 # (1.17) ist zu alt für MXLs vendorten Fabrics-Code (braucht 2.x), lokal

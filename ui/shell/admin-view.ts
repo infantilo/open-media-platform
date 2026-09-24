@@ -36,12 +36,27 @@ interface UserEntry {
 interface RoleBinding {
   id: string;
   subject: string;
+  // subjectType (Nutzerauftrag 2026-09-24: gruppenbasierte Rechte-
+  // verwaltung) — "user" (subject ist ein Nutzername) oder "group"
+  // (subject ist eine Gruppen-ID).
+  subjectType: "user" | "group";
   // Kapitel 12 Teil 4 (docs/END-GOAL-FEATURES.md §12.3e): leer = global/
   // Node-gescoped (unverändert); gesetzt = Workflow-Scope, nodeId ist
   // dann ein Rollenname statt einer Instanz-ID.
   workflowId?: string;
   nodeId: string;
   verb: string;
+}
+
+// Group — Wire-Format identisch zu groups.Group (Nutzerauftrag
+// 2026-09-24: gruppenbasierte Rechteverwaltung).
+interface Group {
+  id: string;
+  name: string;
+  description?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // WorkflowSummary — nur die für den Scope-Selector nötigen Felder.
@@ -218,10 +233,11 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "organizations" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "cluster";
+type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
+  { id: "groups", label: "Gruppen" },
   { id: "bindings", label: "Rollenbindungen" },
   { id: "catalog", label: "Node-Katalog" },
   { id: "storage", label: "Storage" },
@@ -298,8 +314,21 @@ class AdminView extends HTMLElement {
   #storageTestMessage = "";
   #storageFormError = "";
 
+  // Gruppen (Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung).
+  #groups: Group[] = [];
+  #showGroupForm = false;
+  #newGroupName = "";
+  #newGroupDescription = "";
+  #editingGroup: Group | null = null;
+  #selectedGroupId: string | null = null;
+  #groupMembers: string[] = [];
+  #newGroupMemberUsername = "";
+
   #showBindingForm = false;
   #newSubject = "";
+  // subjectType des Anlage-Formulars — "user" (Default, Freitext-
+  // Nutzername) oder "group" (Auswahl aus #groups).
+  #newSubjectType: "user" | "group" = "user";
   #newNodeId = "*";
   #newVerb = "operate";
   // Kapitel 12 Teil 4: "" = global/Node-gescoped (unverändertes
@@ -388,6 +417,7 @@ class AdminView extends HTMLElement {
     this.#render();
     this.#loadUsers();
     this.#loadOrganizations();
+    this.#loadGroups();
     this.#loadStorageBackends();
     this.#loadBindings();
     this.#loadAudit();
@@ -512,6 +542,135 @@ class AdminView extends HTMLElement {
     this.#error = "";
     this.#orgChangeTarget = null;
     await this.#loadUsers();
+  }
+
+  // ---- Gruppen (Nutzerauftrag 2026-09-24) --------------------------------------------------------
+
+  async #loadGroups() {
+    try {
+      const res = await apiFetch("/api/v1/groups");
+      if (res.ok) {
+        this.#groups = await res.json();
+        this.#render();
+      }
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — nächstes gezieltes Neuladen holt es auf.
+    }
+  }
+
+  async #loadGroupMembers(groupId: string) {
+    try {
+      const res = await apiFetch(`/api/v1/groups/${groupId}/members`);
+      if (res.ok) this.#groupMembers = await res.json();
+      this.#render();
+    } catch {
+      // s.o.
+    }
+  }
+
+  #selectGroup(groupId: string) {
+    this.#selectedGroupId = groupId;
+    this.#groupMembers = [];
+    this.#render();
+    void this.#loadGroupMembers(groupId);
+  }
+
+  async #createGroup() {
+    if (!this.#newGroupName.trim()) return;
+    const res = await apiFetch("/api/v1/groups", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: this.#newGroupName.trim(), description: this.#newGroupDescription.trim() }),
+    });
+    if (!res.ok) {
+      this.#error = `Gruppe anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#newGroupName = "";
+    this.#newGroupDescription = "";
+    this.#showGroupForm = false;
+    await this.#loadGroups();
+  }
+
+  async #updateGroup(group: Group, name: string, description: string) {
+    const res = await apiFetch(`/api/v1/groups/${group.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim(), description: description.trim() }),
+    });
+    if (!res.ok) {
+      this.#error = `Gruppe speichern fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#editingGroup = null;
+    await this.#loadGroups();
+  }
+
+  // Erster Versuch ohne Kaskade — zeigt bei bestehenden Rollenbindungen
+  // eine konkrete Fehlermeldung mit Anzahl (Backend-Guard). Erst nach
+  // expliziter Rückfrage per confirmDialog wird mit ?cascade=true erneut
+  // versucht (Nutzerauftrag: "protection guards... with warnings").
+  async #deleteGroup(group: Group) {
+    if (!(await confirmDialog(`Gruppe "${group.name}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
+    const res = await apiFetch(`/api/v1/groups/${group.id}`, { method: "DELETE" });
+    if (res.ok) {
+      this.#error = "";
+      if (this.#selectedGroupId === group.id) this.#selectedGroupId = null;
+      await this.#loadGroups();
+      return;
+    }
+    const text = await res.text();
+    if (res.status === 409) {
+      const cascade = await confirmDialog(
+        `${text} Rollenbindungen dieser Gruppe jetzt mit entfernen und die Gruppe trotzdem löschen?`,
+        { confirmLabel: "Gruppe + Bindungen löschen" },
+      );
+      if (!cascade) return;
+      const res2 = await apiFetch(`/api/v1/groups/${group.id}?cascade=true`, { method: "DELETE" });
+      if (!res2.ok) {
+        this.#error = `Löschen fehlgeschlagen: ${await res2.text()}`;
+        this.#render();
+        return;
+      }
+      this.#error = "";
+      if (this.#selectedGroupId === group.id) this.#selectedGroupId = null;
+      await this.#loadGroups();
+      return;
+    }
+    this.#error = `Löschen fehlgeschlagen: ${text}`;
+    this.#render();
+  }
+
+  async #addGroupMember(groupId: string, username: string) {
+    if (!username.trim()) return;
+    const res = await apiFetch(`/api/v1/groups/${groupId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: username.trim() }),
+    });
+    if (!res.ok) {
+      this.#error = `Mitglied hinzufügen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#newGroupMemberUsername = "";
+    await this.#loadGroupMembers(groupId);
+  }
+
+  async #removeGroupMember(groupId: string, username: string) {
+    const res = await apiFetch(`/api/v1/groups/${groupId}/members/${encodeURIComponent(username)}`, { method: "DELETE" });
+    if (!res.ok) {
+      this.#error = `Mitglied entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    await this.#loadGroupMembers(groupId);
   }
 
   // ---- Storage-Backends (Nutzerauftrag 2026-09-24) ----------------------------------------------
@@ -910,6 +1069,7 @@ class AdminView extends HTMLElement {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subject: this.#newSubject,
+        subjectType: this.#newSubjectType,
         workflowId: this.#newWorkflowId || undefined,
         nodeId: this.#newNodeId,
         verb: this.#newVerb,
@@ -934,7 +1094,7 @@ class AdminView extends HTMLElement {
     // ohne Rückfrage. Gleiches Confirm-Muster wie #deleteUser.
     const label = this.#scopeLabel(binding);
     if (
-      !(await confirmDialog(`Rollenbindung "${binding.subject}" → ${label} (${VERB_LABEL[binding.verb] ?? binding.verb}) wirklich löschen?`, {
+      !(await confirmDialog(`Rollenbindung "${this.#subjectLabel(binding)}" → ${label} (${VERB_LABEL[binding.verb] ?? binding.verb}) wirklich löschen?`, {
         confirmLabel: "Löschen",
       }))
     ) {
@@ -1381,6 +1541,9 @@ class AdminView extends HTMLElement {
         break;
       case "organizations":
         this.appendChild(this.#renderOrganizationsSection());
+        break;
+      case "groups":
+        this.appendChild(this.#renderGroupsSection());
         break;
       case "bindings":
         this.appendChild(this.#renderBindingsSection());
@@ -2040,6 +2203,225 @@ class AdminView extends HTMLElement {
     return form;
   }
 
+  // Gruppen (Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung,
+  // auch als Vorbereitung für eine spätere Windows-Active-Directory-
+  // Anbindung). Gleiche flache Tabellen-Form wie Organisationen/
+  // Storage-Backends (kein Split-Pane wie asset-view.ts — konsistent
+  // mit dem Rest dieser Datei): eine Zeile pro Gruppe, "Mitglieder"
+  // klappt ein Panel darunter auf statt in eine separate Ansicht zu
+  // wechseln.
+  #renderGroupsSection(): HTMLElement {
+    const section = document.createElement("div");
+    section.style.cssText = "margin-bottom:var(--omp-space-4);";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+    const title = document.createElement("span");
+    title.className = "omp-h1";
+    title.textContent = `Gruppen (${this.#groups.length})`;
+    const newBtn = document.createElement("button");
+    newBtn.textContent = this.#showGroupForm ? "Abbrechen" : "+ Neue Gruppe";
+    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    newBtn.addEventListener("click", () => {
+      this.#showGroupForm = !this.#showGroupForm;
+      this.#render();
+    });
+    heading.append(title, newBtn);
+    section.appendChild(heading);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      "Bündelt Rechte für mehrere Nutzer: eine Rollenbindung auf eine Gruppe gilt für alle ihre Mitglieder. " +
+      'Trennt sich klar von "Organisationen" — die steuern Sichtbarkeit (wer sieht welche Workflows/Assets), ' +
+      "Gruppen steuern Rechte (wer darf was); beides bleibt unabhängig nebeneinander bestehen.";
+    section.appendChild(hint);
+
+    if (this.#showGroupForm) {
+      section.appendChild(this.#renderGroupCreateForm());
+    }
+
+    if (this.#groups.length === 0 && !this.#showGroupForm) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);";
+      empty.textContent = 'Noch keine Gruppe angelegt — mit "+ Neue Gruppe" die erste anlegen.';
+      section.appendChild(empty);
+      return section;
+    }
+
+    for (const g of this.#groups) {
+      section.appendChild(this.#renderGroupRow(g));
+    }
+
+    return section;
+  }
+
+  #renderGroupCreateForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.style.cssText =
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px;" +
+      "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+
+    const nameInput = document.createElement("input");
+    nameInput.placeholder = "Name der Gruppe";
+    nameInput.autocomplete = "off";
+    nameInput.value = this.#newGroupName;
+    nameInput.style.cssText = "flex:1;min-width:140px;";
+    nameInput.addEventListener("input", () => {
+      this.#newGroupName = nameInput.value;
+    });
+
+    const descInput = document.createElement("input");
+    descInput.placeholder = "Beschreibung (optional)";
+    descInput.autocomplete = "off";
+    descInput.value = this.#newGroupDescription;
+    descInput.style.cssText = "flex:2;min-width:180px;";
+    descInput.addEventListener("input", () => {
+      this.#newGroupDescription = descInput.value;
+    });
+    descInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") void this.#createGroup();
+    });
+
+    const createBtn = document.createElement("button");
+    createBtn.textContent = "Anlegen";
+    createBtn.style.cssText = "cursor:pointer;";
+    createBtn.addEventListener("click", () => void this.#createGroup());
+
+    form.append(nameInput, descInput, createBtn);
+    queueMicrotask(() => nameInput.focus());
+    return form;
+  }
+
+  #renderGroupRow(g: Group): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "border-bottom:1px solid var(--omp-border);padding:6px 0;";
+
+    const isEditing = this.#editingGroup?.id === g.id;
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;justify-content:space-between;align-items:center;gap:8px;";
+
+    if (isEditing) {
+      const nameInput = document.createElement("input");
+      nameInput.value = g.name;
+      nameInput.style.cssText = "flex:1;min-width:140px;";
+      const descInput = document.createElement("input");
+      descInput.value = g.description ?? "";
+      descInput.placeholder = "Beschreibung";
+      descInput.style.cssText = "flex:2;min-width:180px;";
+      const left = document.createElement("div");
+      left.style.cssText = "display:flex;gap:6px;flex:1;";
+      left.append(nameInput, descInput);
+
+      const saveBtn = document.createElement("button");
+      saveBtn.textContent = "Speichern";
+      saveBtn.style.cssText = "font-size:11px;cursor:pointer;";
+      saveBtn.addEventListener("click", () => void this.#updateGroup(g, nameInput.value, descInput.value));
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "×";
+      cancelBtn.style.cssText = "cursor:pointer;";
+      cancelBtn.addEventListener("click", () => {
+        this.#editingGroup = null;
+        this.#render();
+      });
+      row.append(left, saveBtn, cancelBtn);
+      wrap.appendChild(row);
+      queueMicrotask(() => nameInput.focus());
+      return wrap;
+    }
+
+    const info = document.createElement("div");
+    info.innerHTML = `<span style="font-weight:600;">${escapeHtml(g.name)}</span>` +
+      (g.description ? ` <span style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">— ${escapeHtml(g.description)}</span>` : "");
+    row.appendChild(info);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;gap:4px;flex-shrink:0;";
+    const membersBtn = document.createElement("button");
+    membersBtn.textContent = this.#selectedGroupId === g.id ? "Mitglieder ▲" : "Mitglieder ▼";
+    membersBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    membersBtn.addEventListener("click", () => {
+      if (this.#selectedGroupId === g.id) {
+        this.#selectedGroupId = null;
+        this.#render();
+      } else {
+        this.#selectGroup(g.id);
+      }
+    });
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "Bearbeiten";
+    editBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    editBtn.addEventListener("click", () => {
+      this.#editingGroup = g;
+      this.#render();
+    });
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Löschen";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
+    delBtn.addEventListener("click", () => void this.#deleteGroup(g));
+    actions.append(membersBtn, editBtn, delBtn);
+    row.appendChild(actions);
+    wrap.appendChild(row);
+
+    if (this.#selectedGroupId === g.id) {
+      wrap.appendChild(this.#renderGroupMembersPanel(g));
+    }
+
+    return wrap;
+  }
+
+  #renderGroupMembersPanel(g: Group): HTMLElement {
+    const panel = document.createElement("div");
+    panel.style.cssText = "margin:8px 0 4px 16px;padding:8px;border-left:2px solid var(--omp-border);";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin-bottom:4px;";
+    heading.textContent = `Mitglieder (${this.#groupMembers.length})`;
+    panel.appendChild(heading);
+
+    if (this.#groupMembers.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
+      empty.textContent = "Noch kein Mitglied.";
+      panel.appendChild(empty);
+    } else {
+      for (const username of this.#groupMembers) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:2px 0;";
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = username;
+        const rmBtn = document.createElement("button");
+        rmBtn.textContent = "Entfernen";
+        rmBtn.style.cssText = "font-size:11px;cursor:pointer;";
+        rmBtn.addEventListener("click", () => void this.#removeGroupMember(g.id, username));
+        row.append(nameSpan, rmBtn);
+        panel.appendChild(row);
+      }
+    }
+
+    const addRow = document.createElement("div");
+    addRow.style.cssText = "display:flex;gap:6px;margin-top:6px;";
+    const userInput = document.createElement("input");
+    userInput.placeholder = "Nutzername";
+    userInput.value = this.#newGroupMemberUsername;
+    userInput.style.cssText = "font-size:11px;flex:1;min-width:100px;";
+    userInput.addEventListener("input", () => {
+      this.#newGroupMemberUsername = userInput.value;
+    });
+    userInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") void this.#addGroupMember(g.id, userInput.value);
+    });
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Hinzufügen";
+    addBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    addBtn.addEventListener("click", () => void this.#addGroupMember(g.id, userInput.value));
+    addRow.append(userInput, addBtn);
+    panel.appendChild(addRow);
+
+    return panel;
+  }
+
   #renderBindingsSection(): HTMLElement {
     const section = document.createElement("div");
     section.style.cssText = "margin-bottom:var(--omp-space-4);";
@@ -2121,16 +2503,30 @@ class AdminView extends HTMLElement {
   // Gruppiert nach Nutzer: pro Nutzer eine Überschrift, darunter alle
   // Bereiche/Rechte, die dieser Nutzer hat — Blickrichtung "Nutzer
   // auswählen, dann sehen/zuweisen, worauf er zugreifen darf".
+  // subjectLabel löst eine Gruppen-ID zu ihrem Namen auf (Nutzerauftrag
+  // 2026-09-24: gruppenbasierte Rechteverwaltung) — fällt auf die rohe
+  // ID zurück, falls #groups noch nicht geladen ist oder die Gruppe
+  // zwischenzeitlich gelöscht wurde. "👥 " -Präfix macht auf einen
+  // Blick sichtbar, dass es sich um eine Gruppe handelt, nicht um einen
+  // einzelnen Nutzer.
+  #subjectLabel(b: RoleBinding): string {
+    if (b.subjectType !== "group") return b.subject;
+    const name = this.#groups.find((g) => g.id === b.subject)?.name ?? b.subject;
+    return `👥 ${name}`;
+  }
+
   #renderBindingsBySubject(): HTMLElement {
     const wrap = document.createElement("div");
-    const bySubject = new Map<string, RoleBinding[]>();
+    const bySubject = new Map<string, { label: string; bindings: RoleBinding[] }>();
     for (const b of this.#bindings) {
-      if (!bySubject.has(b.subject)) bySubject.set(b.subject, []);
-      bySubject.get(b.subject)!.push(b);
+      const key = `${b.subjectType}:${b.subject}`;
+      if (!bySubject.has(key)) bySubject.set(key, { label: this.#subjectLabel(b), bindings: [] });
+      bySubject.get(key)!.bindings.push(b);
     }
-    const subjects = [...bySubject.keys()].sort((a, b) => a.localeCompare(b));
-    for (const subject of subjects) {
-      wrap.appendChild(this.#renderBindingGroup(subject, bySubject.get(subject)!, "scope"));
+    const keys = [...bySubject.keys()].sort((a, b) => bySubject.get(a)!.label.localeCompare(bySubject.get(b)!.label));
+    for (const key of keys) {
+      const entry = bySubject.get(key)!;
+      wrap.appendChild(this.#renderBindingGroup(entry.label, entry.bindings, "scope"));
     }
     return wrap;
   }
@@ -2177,7 +2573,7 @@ class AdminView extends HTMLElement {
 
       const labelTd = document.createElement("td");
       labelTd.style.cssText = "padding:2px 8px 2px 16px;color:var(--omp-text-dim);";
-      labelTd.textContent = columnKind === "scope" ? this.#scopeLabel(b) : b.subject;
+      labelTd.textContent = columnKind === "scope" ? this.#scopeLabel(b) : this.#subjectLabel(b);
       tr.appendChild(labelTd);
 
       const verbTd = document.createElement("td");
@@ -2240,6 +2636,31 @@ class AdminView extends HTMLElement {
       "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
     wrap.appendChild(form);
 
+    // Subject-Typ-Umschalter (Nutzerauftrag 2026-09-24: gruppenbasierte
+    // Rechteverwaltung) — "Nutzer" (unverändertes Freitext-Verhalten mit
+    // Vorschlagsliste) oder "Gruppe" (Auswahl aus #groups statt Freitext,
+    // eine erfundene Gruppen-ID ergäbe keine wirksame Bindung).
+    const typeToggle = document.createElement("div");
+    typeToggle.style.cssText = "display:flex;gap:0;width:fit-content;" +
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
+    for (const opt of [{ value: "user" as const, label: "Nutzer" }, { value: "group" as const, label: "Gruppe" }]) {
+      const btn = document.createElement("button");
+      btn.textContent = opt.label;
+      const active = this.#newSubjectType === opt.value;
+      btn.style.cssText =
+        "font-size:11px;cursor:pointer;border:none;border-radius:0;padding:4px 8px;" +
+        (active ? "background:var(--omp-surface-raised);color:var(--omp-text);" : "background:transparent;color:var(--omp-text-dim);");
+      btn.addEventListener("click", () => {
+        if (this.#newSubjectType === opt.value) return;
+        this.#newSubjectType = opt.value;
+        this.#newSubject = "";
+        this.#render();
+      });
+      typeToggle.appendChild(btn);
+    }
+    wrap.insertBefore(typeToggle, form);
+    typeToggle.style.marginBottom = "6px";
+
     const subjectDatalistId = "omp-admin-user-datalist";
     const subjectInput = document.createElement("input");
     subjectInput.placeholder = "Nutzername";
@@ -2256,6 +2677,28 @@ class AdminView extends HTMLElement {
       opt.value = u.username;
       subjectDatalist.appendChild(opt);
     }
+
+    const groupSelect = document.createElement("select");
+    groupSelect.style.cssText = "flex:1;min-width:100px;";
+    const noGroupOpt = document.createElement("option");
+    noGroupOpt.value = "";
+    noGroupOpt.textContent = this.#groups.length ? "– Gruppe wählen –" : "– keine Gruppe vorhanden –";
+    groupSelect.appendChild(noGroupOpt);
+    for (const grp of this.#groups) {
+      const opt = document.createElement("option");
+      opt.value = grp.id;
+      opt.textContent = grp.name;
+      if (grp.id === this.#newSubject) opt.selected = true;
+      groupSelect.appendChild(opt);
+    }
+    groupSelect.addEventListener("change", () => {
+      this.#newSubject = groupSelect.value;
+    });
+
+    // subjectField: je nach Typ entweder [Freitext-Input + Datalist]
+    // oder [Auswahl-Select] — an derselben Stelle im Formular eingesetzt,
+    // egal in welcher Richtung (userFirst/nodeFirst, s. o.).
+    const subjectField: HTMLElement[] = this.#newSubjectType === "group" ? [groupSelect] : [subjectInput, subjectDatalist];
 
     // Kapitel 12 Teil 4 (§12.3e): Scope-Auswahl — "(Global)" ist das
     // unveränderte Vor-Kapitel-12-Teil-4-Verhalten (Node-ID/Instanz-ID
@@ -2335,9 +2778,9 @@ class AdminView extends HTMLElement {
     createBtn.addEventListener("click", () => this.#createBinding());
 
     if (this.#newBindingDirection === "nodeFirst") {
-      form.append(workflowSelect, nodeInput, datalist, subjectInput, subjectDatalist, verbSelect, createBtn);
+      form.append(workflowSelect, nodeInput, datalist, ...subjectField, verbSelect, createBtn);
     } else {
-      form.append(subjectInput, subjectDatalist, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
+      form.append(...subjectField, workflowSelect, nodeInput, datalist, verbSelect, createBtn);
     }
     return wrap;
   }

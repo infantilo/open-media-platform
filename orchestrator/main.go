@@ -30,6 +30,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/domainaudit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/groups"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/hosts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/httpapi"
@@ -564,6 +565,11 @@ func main() {
 	authzStore := authz.NewStore(database)
 	// Kapitel 21 B14 (Nachtrag 283) — s. internal/organizations-Paketdoku.
 	orgStore := organizations.NewStore(database)
+	// Nutzerauftrag 2026-09-24: gruppenbasierte Rechteverwaltung — s.
+	// internal/groups-Paketdoku. Unconditional wie orgStore (kein Env-
+	// Var-Gate wie bei den Storage-Backends, da Gruppen kein Secret
+	// verschlüsseln und keine externe Infrastruktur brauchen).
+	groupStore := groups.NewStore(database)
 	auditStore := audit.NewStore(database, hub)
 	// S5 (docs/REVIEW-2026-07-17-SKALIERUNG-24-7.md): Startup- + täglicher
 	// Retention-Lauf, löscht Audit-Zeilen älter als cfg.AuditRetentionDays.
@@ -856,7 +862,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

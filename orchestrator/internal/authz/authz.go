@@ -67,7 +67,19 @@ type Binding struct {
 	WorkflowID string
 	NodeID     string
 	Verb       Verb
+	// SubjectType (Nutzerauftrag 2026-09-24: gruppenbasierte Rechte-
+	// verwaltung) — "user" (Default, unverändertes Verhalten: Subject
+	// ist ein Nutzername oder ein Service-Token-Subject wie eine
+	// Instanz-ID) oder "group" (Subject ist eine groups.id, s.
+	// internal/groups). Check/CheckWorkflow lösen "group" über die
+	// Mitgliedschaft des anfragenden Nutzers auf.
+	SubjectType string
 }
+
+const (
+	SubjectTypeUser  = "user"
+	SubjectTypeGroup = "group"
+)
 
 // AnyNode ist der NodeID-Wert für eine Bindung, die für alle Nodes gilt.
 const AnyNode = "*"

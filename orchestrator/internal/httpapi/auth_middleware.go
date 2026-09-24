@@ -42,6 +42,9 @@ type AuthzChecker interface {
 	CheckWorkflow(subject, workflowID, role string, minVerb authz.Verb) (bool, error)
 	Load() ([]authz.Binding, error)
 	Create(subject, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
+	// CreateGroupBinding (Nutzerauftrag 2026-09-24: gruppenbasierte
+	// Rechteverwaltung) — s. authz.Store.CreateGroupBinding-Doku.
+	CreateGroupBinding(groupID, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
 	Delete(id string) error
 }
 
