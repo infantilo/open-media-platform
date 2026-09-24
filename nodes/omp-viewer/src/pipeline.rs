@@ -170,6 +170,24 @@ impl Drop for ActivePipeline {
 /// bereits für echte Bugs nötig war (s. Kommentare unten), auch ohne
 /// dass hier zweifelsfrei bewiesen ist, dass sie für DIESEN Zweig
 /// zwingend erforderlich sind.
+///
+/// **Echter Freeze-Bug gefunden und gefixt (2026-09-24, Nutzermeldung
+/// "ändern der framerate bei viewer führt zu freeze; man muss die
+/// Verbindung trennen und neu herstellen"):** anders als der Stolperstein
+/// oben (der eine LOOPENDE Testquelle betraf, keine dieser Funktion) war
+/// dieser real — `preview::build_mjpeg_branch` verlinkte den neuen Zweig
+/// bislang SOFORT mit `active.tee` (bereits PLAYING, schiebt Puffer auf
+/// seinem eigenen Streaming-Thread), `sync_state_with_parent()` lief erst
+/// DANACH in der jetzt entfernten Schleife unten — dasselbe, in
+/// `omp-webrtc-gateway/src/monitor.rs` (docs/decisions.md Nachtrag 250)
+/// bereits dokumentierte und gefixte "tee-Pad-Race beim Live-Anhaengen".
+/// Ein Flow-Fehler der noch nicht bereiten `queue` lief über die
+/// GEMEINSAME Sink-Chain-Funktion des `tee` bis in den Hauptpfad zurück
+/// (den eigentlichen Zufluss vom Switcher) und fror die gesamte Pipeline
+/// ein — nur ein voller Neuaufbau (Verbindung trennen/neu herstellen)
+/// erholte sich davon. Fix jetzt IN `build_mjpeg_branch` selbst (Block-
+/// Pad-Probe vor dem Verlinken, `sync_state_with_parent()` vor dem
+/// Entblocken) — die Schleife hier ist damit überflüssig geworden.
 fn rebuild_mjpeg_branch(active: &mut ActivePipeline, broadcaster: &Arc<Broadcaster>, fps: i32) -> Result<(), String> {
     let new_elements = preview::build_mjpeg_branch(
         &active.pipeline,
@@ -180,12 +198,35 @@ fn rebuild_mjpeg_branch(active: &mut ActivePipeline, broadcaster: &Arc<Broadcast
         fps,
         PREVIEW_JPEG_QUALITY,
     )?;
-    for el in &new_elements {
-        el.sync_state_with_parent()
-            .map_err(|e| format!("sync_state_with_parent (mjpeg fps change, {}): {e}", el.name()))?;
-    }
 
     let old_elements = std::mem::replace(&mut active.mjpeg_elements, new_elements);
+
+    // Alten tee-Pad BLOCKIEREN, BEVOR die alte Kette Richtung NULL geht
+    // (2026-09-24, defensives Gegenstück zum obigen Fix — der schützt nur
+    // das ANHÄNGEN des neuen Zweigs, nicht das ABHÄNGEN des alten): der
+    // `tee` ist zu diesem Zeitpunkt bereits mit dem NEUEN Zweig verlinkt
+    // und läuft weiter PLAYING — ohne diesen Block schiebt er auf seinem
+    // Streaming-Thread weiter Puffer in die alte Kette, WÄHREND
+    // `set_state(Null)` sie unten gerade herunterfährt. Für EINEN
+    // einzelnen `previewFps`-Wechsel reichte der obige Fix bereits aus
+    // (live per `/preview`-MD5 gegen eine echte, sich bewegende
+    // Testquelle bestätigt) — dieser Block hier ist dieselbe Vorsicht
+    // fürs Abhängen, konnte für sich allein aber den Freeze bei ZWEI
+    // `previewFps`-Wechseln innerhalb von ~300ms NICHT beheben. Die
+    // tatsächliche Ursache dafür war eine dritte, unabhängige Lücke —
+    // der nie abgeholte GStreamer-Bus dieser Pipeline —, gefixt in
+    // `preview::build_mjpeg_branch` (s. dortige Doku für die volle
+    // Diagnose per Live-Instrumentierung).
+    let old_tee_link = old_elements.first().and_then(|first| {
+        let sink_pad = first.static_pad("sink")?;
+        let tee_pad = sink_pad.peer()?;
+        let block_id = tee_pad.add_probe(
+            gst::PadProbeType::BLOCK | gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
+            |_, _| gst::PadProbeReturn::Ok,
+        )?;
+        Some((sink_pad, tee_pad, block_id))
+    });
+
     for el in &old_elements {
         let _ = el.set_state(gst::State::Null);
     }
@@ -202,11 +243,9 @@ fn rebuild_mjpeg_branch(active: &mut ActivePipeline, broadcaster: &Arc<Broadcast
             );
         }
     }
-    if let Some(first) = old_elements.first()
-        && let Some(sink_pad) = first.static_pad("sink")
-        && let Some(tee_pad) = sink_pad.peer()
-    {
+    if let Some((sink_pad, tee_pad, block_id)) = old_tee_link {
         let _ = tee_pad.unlink(&sink_pad);
+        tee_pad.remove_probe(block_id);
         active.tee.release_request_pad(&tee_pad);
     }
     for el in &old_elements {
@@ -350,6 +389,12 @@ pub fn run(
     }));
 
     let mut active: Option<ActivePipeline> = None;
+    // Ein per `try_recv()` beim Bündeln (s. `SetPreviewFps`-Zweig unten)
+    // vorgezogenes Nicht-`SetPreviewFps`-Kommando — wird in der NÄCHSTEN
+    // Schleifeniteration zuerst verarbeitet, damit die Reihenfolge
+    // relativ zu einem dazwischenkommenden Connect/Disconnect erhalten
+    // bleibt.
+    let mut pending: Option<Command> = None;
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -357,7 +402,11 @@ pub fn run(
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
-        match commands_rx.recv_timeout(Duration::from_millis(500)) {
+        let command = match pending.take() {
+            Some(cmd) => Ok(cmd),
+            None => commands_rx.recv_timeout(Duration::from_millis(500)),
+        };
+        match command {
             Ok(Command::Connect(flow_id, label)) => {
                 // Alte Pipeline zuerst abbauen (Drop stoppt Reader-Thread
                 // + setzt State Null), bevor die neue denselben
@@ -387,7 +436,27 @@ pub fn run(
             // gibt es nichts umzubauen, `PipelineHandle::set_preview_fps`
             // hat den neuen Wert im gemeinsamen `Arc<AtomicI32>` bereits
             // hinterlegt, der nächste `connect()` liest ihn ohnehin.
-            Ok(Command::SetPreviewFps(fps)) => {
+            Ok(Command::SetPreviewFps(mut fps)) => {
+                // Aufeinanderfolgende SetPreviewFps-Kommandos bündeln
+                // (2026-09-24): nur der LETZTE angeforderte Wert zählt
+                // ohnehin, ältere sind sofort überholt — es gibt also
+                // keinen Grund, für einen schnell gezogenen Bildrate-
+                // Regler mehrere Live-Pipeline-Neuaufbauten hintereinander
+                // zu versuchen (unnötige Arbeit, auch wenn der Bus-Drain-
+                // Fix in `preview::build_mjpeg_branch` die eigentliche
+                // Freeze-Ursache dafür bereits behebt). Ein
+                // dazwischenliegendes Connect/Disconnect wird NICHT
+                // verworfen, sondern für die nächste Schleifeniteration
+                // vorgemerkt (`pending`).
+                while let Ok(next) = commands_rx.try_recv() {
+                    match next {
+                        Command::SetPreviewFps(newer) => fps = newer,
+                        other => {
+                            pending = Some(other);
+                            break;
+                        }
+                    }
+                }
                 if let Some(active) = active.as_mut()
                     && let Err(e) = rebuild_mjpeg_branch(active, &broadcaster, fps)
                 {
