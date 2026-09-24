@@ -137,6 +137,36 @@ löschen, Audit-Log einsehen. Der letzte verbleibende Admin kann sich
 dort nicht selbst löschen oder entrechten (Selbstschutz gegen
 versehentliches Aussperren).
 
+### 3.1 Rechte-Modell: vier Begriffe, vier verschiedene Fragen
+
+Der Administration-Tab hat vier Unteransichten, die sich auf den ersten
+Blick überschneiden können — sie beantworten aber vier unterschiedliche
+Fragen und bleiben bewusst unabhängig nebeneinander bestehen:
+
+| Begriff | Beantwortet | Unteransicht |
+|---|---|---|
+| **Nutzer** | Wer kann sich anmelden? | Nutzer |
+| **Organisation** | Welche Workflows/Assets sieht ein Nutzer überhaupt (Mandanten-/Sichtbarkeitsgrenze)? | Organisationen |
+| **Gruppe** | Rechte-Bündel für mehrere Nutzer gleichzeitig (z. B. für eine spätere AD-Anbindung, die Gruppenmitgliedschaft synchronisiert, keine Einzelrechte) | Gruppen |
+| **Rollenbindung** | Die eigentliche Berechtigung: Subjekt (Nutzer **oder** Gruppe) × Bereich (Node/`"*"`/Workflow-Rolle) × Verb | Rollenbindungen |
+
+Eine Rollenbindung ist also der einzige Ort, an dem tatsächlich Rechte
+vergeben werden — sowohl direkt an einen Nutzer als auch indirekt über
+eine Gruppe, deren Mitglied er ist. Organisation ist davon komplett
+unabhängig: Sie schränkt ein, was ein Nutzer überhaupt sehen kann,
+unabhängig davon, was seine Rollenbindungen ihm erlauben würden.
+
+**Um herauszufinden, was ein bestimmter Nutzer insgesamt darf** (direkt
+zugewiesene Rollenbindungen **plus** alle über seine Gruppenmitgliedschaften
+geerbten), nicht selbst zwischen den Unteransichten hin- und
+herspringen und im Kopf zusammenrechnen — stattdessen im Tab **Nutzer**
+bei der jeweiligen Person auf **„Rechte"** klicken: Das Panel listet
+direkte Bindungen und jede Gruppe mit ihren Bindungen an einem Ort auf
+(inkl. Löschen-Button, falls dort etwas entfernt werden soll). Ebenso
+zeigt der Tab **Gruppen** bei einer Gruppe unter „Mitglieder" direkt
+auch „Rechte dieser Gruppe" — auch das erspart den Umweg über
+Rollenbindungen, nur um zu sehen, was eine Gruppe überhaupt gewährt.
+
 **Passwort vergessen, kein zweiter Admin übrig?** Es gibt keine
 CLI-Passwort-Reset-Funktion — stattdessen den Nutzer aus der
 Datenbank entfernen, das versetzt das System zurück in den

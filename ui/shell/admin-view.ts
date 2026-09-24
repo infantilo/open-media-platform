@@ -295,6 +295,18 @@ class AdminView extends HTMLElement {
   #showOrgForm = false;
   #newOrgName = "";
   #orgChangeTarget: string | null = null;
+  // Rechte-Übersicht je Nutzer (Nutzerfund 2026-09-24: "rollenbindung,
+  // gruppen (in rollenbindung), gruppen und organisation... extrem
+  // unübersichtlich... es muss immer klar sichtbar sein welcher user
+  // welche rechte hat") — #rightsExpandedUsername ist wie
+  // #selectedGroupId ein einzelner Toggle-Zustand (kein Set: es soll
+  // immer nur ein Panel gleichzeitig offen sein, damit die Seite nicht
+  // ausufert), #renderUserRightsPanel löst ihn zu direkten UND über
+  // Gruppenmitgliedschaft geerbten Bindungen auf. #allGroupMembers cacht
+  // die Mitgliederlisten ALLER Gruppen (nicht nur der in der
+  // Gruppen-Unteransicht gerade aufgeklappten), s. #loadAllGroupMembers.
+  #rightsExpandedUsername: string | null = null;
+  #allGroupMembers: Map<string, string[]> = new Map();
 
   // Storage-Backends (Nutzerauftrag 2026-09-24). Formularwerte liegen
   // bewusst als eigene Instanzfelder vor (nicht in einem lokalen
@@ -552,10 +564,35 @@ class AdminView extends HTMLElement {
       if (res.ok) {
         this.#groups = await res.json();
         this.#render();
+        void this.#loadAllGroupMembers();
       }
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächstes gezieltes Neuladen holt es auf.
     }
+  }
+
+  // Lädt die Mitgliederliste JEDER Gruppe einmal im Hintergrund (nicht nur
+  // der gerade in der Gruppen-Unteransicht aufgeklappten) — die
+  // Rechte-Übersicht je Nutzer (#renderUserRightsPanel) muss für JEDEN
+  // Nutzer wissen können, in welchen Gruppen er Mitglied ist, ohne dass
+  // jede Nutzer-Zeile das einzeln nachladen müsste. Gruppenzahl ist im
+  // Admin-Kontext klein genug, ein paralleler Fetch aller Mitgliederlisten
+  // fällt nicht ins Gewicht (kein serverseitiges GroupsForUser-Äquivalent
+  // über HTTP vorhanden, s. groups.Store.GroupsForUser-Doku — nur
+  // service-intern genutzt).
+  async #loadAllGroupMembers() {
+    const entries = await Promise.all(
+      this.#groups.map(async (g): Promise<[string, string[]]> => {
+        try {
+          const res = await apiFetch(`/api/v1/groups/${g.id}/members`);
+          return [g.id, res.ok ? await res.json() : []];
+        } catch {
+          return [g.id, []];
+        }
+      }),
+    );
+    this.#allGroupMembers = new Map(entries);
+    this.#render();
   }
 
   async #loadGroupMembers(groupId: string) {
@@ -660,6 +697,7 @@ class AdminView extends HTMLElement {
     this.#error = "";
     this.#newGroupMemberUsername = "";
     await this.#loadGroupMembers(groupId);
+    void this.#loadAllGroupMembers();
   }
 
   async #removeGroupMember(groupId: string, username: string) {
@@ -671,6 +709,7 @@ class AdminView extends HTMLElement {
     }
     this.#error = "";
     await this.#loadGroupMembers(groupId);
+    void this.#loadAllGroupMembers();
   }
 
   // ---- Storage-Backends (Nutzerauftrag 2026-09-24) ----------------------------------------------
@@ -1613,6 +1652,18 @@ class AdminView extends HTMLElement {
     heading.append(title, newBtn);
     section.appendChild(heading);
 
+    // Nutzerfund 2026-09-24 ("es muss immer klar sichtbar sein welcher
+    // user welche rechte hat"): zeigt auf einen Blick, wo diese Ansicht
+    // hinführt, statt dass man erst "Rollenbindungen"/"Gruppen" einzeln
+    // durchsuchen und im Kopf zusammenrechnen muss.
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      '"Rechte" bei einem Nutzer zeigt ALLE seine Rechte an einem Ort: direkt zugewiesene ' +
+      "Rollenbindungen UND über Gruppenmitgliedschaft geerbte — Rollenbindungen/Gruppen/" +
+      "Organisation bleiben die Verwaltungs-Werkzeuge, diese Ansicht hier ist die Antwort.";
+    section.appendChild(hint);
+
     if (this.#showUserForm) {
       section.appendChild(this.#renderUserForm());
     }
@@ -1643,9 +1694,87 @@ class AdminView extends HTMLElement {
       }
       table.appendChild(tbody);
       section.appendChild(table);
+
+      const expanded = this.#users.find((u) => u.username === this.#rightsExpandedUsername);
+      if (expanded) section.appendChild(this.#renderUserRightsPanel(expanded));
     }
 
     return section;
+  }
+
+  // Alle Gruppen, in denen username Mitglied ist — löst #allGroupMembers
+  // (Cache aller Gruppen-Mitgliederlisten) gegen #groups auf.
+  #userGroups(username: string): Group[] {
+    return this.#groups.filter((g) => (this.#allGroupMembers.get(g.id) ?? []).includes(username));
+  }
+
+  // Alle Rollenbindungen, deren Subjekt diese eine Gruppe ist — Gegenstück
+  // zu #userDirectBindings, beide zusammen ergeben die vollständigen
+  // effektiven Rechte eines Nutzers (s. #renderUserRightsPanel).
+  #groupBindings(groupId: string): RoleBinding[] {
+    return this.#bindings.filter((b) => b.subjectType === "group" && b.subject === groupId);
+  }
+
+  #userDirectBindings(username: string): RoleBinding[] {
+    return this.#bindings.filter((b) => b.subjectType === "user" && b.subject === username);
+  }
+
+  // Rechte-Übersicht (Nutzerfund 2026-09-24): fasst zusammen, was heute
+  // auf drei Unteransichten verteilt ist (Rollenbindungen nach Nutzer,
+  // Rollenbindungen nach Gruppe, Gruppenmitgliedschaft) — direkte
+  // Bindungen UND alle über Gruppenmitgliedschaft geerbten, mit
+  // funktionierendem Löschen-Button (reuse #renderBindingGroup), damit
+  // diese Ansicht nicht nur informiert, sondern auch der Ort ist, an dem
+  // man ein überflüssiges Recht gleich entfernen kann.
+  #renderUserRightsPanel(u: UserEntry): HTMLElement {
+    const panel = document.createElement("div");
+    panel.style.cssText =
+      "margin:4px 0 var(--omp-space-3) 0;padding:10px 12px;border:1px solid var(--omp-border);" +
+      "border-radius:var(--omp-radius);background:var(--omp-surface-raised);";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "font-weight:600;margin-bottom:6px;";
+    heading.textContent = `Rechte von ${u.username}`;
+    panel.appendChild(heading);
+
+    if (u.isAdmin) {
+      const note = document.createElement("div");
+      note.style.cssText = "color:var(--omp-preset);font-size:var(--omp-font-size-xs);margin-bottom:6px;";
+      note.textContent = "Globaler Admin — hat automatisch alle Rechte auf alles, unabhängig von Bindungen/Gruppen unten.";
+      panel.appendChild(note);
+    }
+
+    const direct = this.#userDirectBindings(u.username);
+    if (direct.length > 0) {
+      panel.appendChild(this.#renderBindingGroup("Direkt zugewiesen", direct, "scope"));
+    }
+
+    const groups = this.#userGroups(u.username);
+    let anyGroupRights = false;
+    for (const g of groups) {
+      const bindings = this.#groupBindings(g.id);
+      if (bindings.length === 0) continue;
+      anyGroupRights = true;
+      panel.appendChild(this.#renderBindingGroup(`Über Gruppe "${g.name}"`, bindings, "scope"));
+    }
+
+    if (groups.length > 0 && !anyGroupRights) {
+      const note = document.createElement("div");
+      note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:4px;";
+      note.textContent = `Mitglied in ${groups.map((g) => g.name).join(", ")} — diese Gruppe(n) haben aber (noch) keine eigenen Rechte.`;
+      panel.appendChild(note);
+    }
+
+    if (!u.isAdmin && direct.length === 0 && !anyGroupRights) {
+      const note = document.createElement("div");
+      note.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+      note.textContent =
+        "Keine Rechte — dieser Nutzer kann sich anmelden, aber nichts sehen oder bedienen, " +
+        'bis er direkt oder über eine Gruppe eine Rollenbindung bekommt ("+ Neue Bindung" unten bei Rollenbindungen).';
+      panel.appendChild(note);
+    }
+
+    return panel;
   }
 
   #renderUserForm(): HTMLElement {
@@ -1811,6 +1940,16 @@ class AdminView extends HTMLElement {
       return tr;
     }
 
+    const rightsBtn = document.createElement("button");
+    const rightsOpen = this.#rightsExpandedUsername === u.username;
+    rightsBtn.textContent = rightsOpen ? "Rechte ▲" : "Rechte ▼";
+    rightsBtn.title = "Alle Rechte dieses Nutzers anzeigen — direkt zugewiesen UND über Gruppenmitgliedschaft geerbt";
+    rightsBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
+    rightsBtn.addEventListener("click", () => {
+      this.#rightsExpandedUsername = rightsOpen ? null : u.username;
+      this.#render();
+    });
+
     const resetBtn = document.createElement("button");
     resetBtn.textContent = "Passwort";
     resetBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
@@ -1827,7 +1966,7 @@ class AdminView extends HTMLElement {
     delBtn.style.cssText = "font-size:11px;";
     delBtn.addEventListener("click", () => this.#deleteUser(u.username));
 
-    actionsTd.append(resetBtn, delBtn);
+    actionsTd.append(rightsBtn, resetBtn, delBtn);
     tr.appendChild(actionsTd);
     return tr;
   }
@@ -2419,6 +2558,27 @@ class AdminView extends HTMLElement {
     addRow.append(userInput, addBtn);
     panel.appendChild(addRow);
 
+    // Nutzerfund 2026-09-24: die Rechte einer Gruppe direkt hier zeigen,
+    // statt dass man dafür in den Rollenbindungen-Tab wechseln und dort
+    // per Auge nach "👥 <dieser Gruppenname>" suchen muss — derselbe
+    // Reuse von #renderBindingGroup wie in #renderUserRightsPanel, inkl.
+    // funktionierendem Löschen-Button.
+    const groupBindings = this.#groupBindings(g.id);
+    if (groupBindings.length === 0) {
+      const rightsHeading = document.createElement("div");
+      rightsHeading.style.cssText = "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);margin:10px 0 4px;";
+      rightsHeading.textContent = "Rechte dieser Gruppe";
+      panel.appendChild(rightsHeading);
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+      empty.textContent = 'Noch keine — unten bei "Rollenbindungen" mit Subjekt-Typ "Gruppe" anlegen.';
+      panel.appendChild(empty);
+    } else {
+      const rightsBox = this.#renderBindingGroup("Rechte dieser Gruppe", groupBindings, "scope");
+      rightsBox.style.marginTop = "10px";
+      panel.appendChild(rightsBox);
+    }
+
     return panel;
   }
 
@@ -2448,6 +2608,18 @@ class AdminView extends HTMLElement {
 
     heading.append(title, right);
     section.appendChild(heading);
+
+    // Nutzerfund 2026-09-24: dieser Tab bleibt das rohe CRUD-Werkzeug
+    // (jede einzelne Bindung anlegen/löschen) — für "was hat Nutzer X
+    // insgesamt" (inkl. über Gruppen geerbt) verweist der Hinweis gezielt
+    // auf die neue, zusammenfassende Ansicht statt dass man hier selbst
+    // Nutzer- und Gruppen-Bindungen im Kopf zusammenrechnen muss.
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      'Einzelne Bindungen anlegen/löschen (Subjekt: Nutzer ODER Gruppe). Für "was darf Nutzer X ' +
+      'insgesamt" (direkt + über alle Gruppen) im Tab "Nutzer" bei der Person auf "Rechte" klicken.';
+    section.appendChild(hint);
 
     if (this.#showBindingForm) {
       section.appendChild(this.#renderBindingForm());
