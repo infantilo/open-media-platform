@@ -200,6 +200,11 @@ type AuthzBinder interface {
 	// Workflows verwaisungsfrei mit auf.
 	LoadByWorkflow(workflowID string) ([]authz.Binding, error)
 	DeleteByWorkflow(workflowID string) error
+	// DeleteInstanceBinding räumt die Bindung einer einzelnen Instanz auf,
+	// sobald sie gestoppt oder durch eine neue ersetzt wird (runStop,
+	// runRestartRole) — Gegenstück zum Create()-Aufruf in runStart, s.
+	// authz.Store.DeleteInstanceBinding-Doku.
+	DeleteInstanceBinding(instanceID, workflowID string) error
 }
 
 type workflowStore interface {
@@ -1355,6 +1360,14 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 		if err := s.launcher.Stop(oldRuntime.InstanceID); err != nil {
 			slog.Warn("workflows: RestartRole: stop old instance failed", "workflow", wf.ID, "role", roleName, "error", err)
 		}
+		// Root-Cause-Fix (Nutzerfund 2026-09-24, s. runStop-Doku): sonst
+		// bleibt die Service-Token-Bindung der alten Instanz verwaist
+		// liegen, bis irgendwann der ganze Workflow gelöscht wird.
+		if s.authz != nil {
+			if err := s.authz.DeleteInstanceBinding(oldRuntime.InstanceID, wf.ID); err != nil {
+				slog.Warn("workflows: RestartRole: failed to clean up old instance role binding", "workflow", wf.ID, "role", roleName, "instance", oldRuntime.InstanceID, "error", err)
+			}
+		}
 	}
 
 	extraEnv := map[string]string{}
@@ -1391,6 +1404,16 @@ func (s *Service) runRestartRole(wf Workflow, roleName string) {
 		return
 	}
 	wf.Runtime[roleName] = RoleRuntime{InstanceID: inst.ID, HostID: resolvedHostID}
+	// Spiegelbildlich zu runStart: die neue Instanz braucht ihre eigene
+	// Service-Token-Bindung, sonst verliert ein neugestarteter Control-
+	// Plane-Node (s. controlPlaneNodeTypes) nach RestartRole seinen Zugriff
+	// auf den generischen Proxy (die alte Bindung wurde oben gerade gezielt
+	// entfernt, sie zeigte auf die jetzt gestoppte Instanz-ID).
+	if s.authz != nil && controlPlaneNodeTypes[role.NodeType] {
+		if _, err := s.authz.Create(inst.ID, wf.ID, authz.AnyNode, authz.VerbOperate); err != nil {
+			slog.Warn("workflows: RestartRole: failed to provision service-token role binding", "workflow", wf.ID, "role", roleName, "instance", inst.ID, "error", err)
+		}
+	}
 	if err := s.store.UpdateRuntime(wf); err != nil {
 		slog.Warn("workflows: RestartRole: persist intermediate state failed", "workflow", wf.ID, "role", roleName, "error", err)
 	}
@@ -1766,6 +1789,17 @@ func (s *Service) runStop(wf Workflow, targetStatus string) {
 		if rt.InstanceID != "" {
 			if err := s.launcher.Stop(rt.InstanceID); err != nil {
 				errs = append(errs, fmt.Sprintf("role %s: %v", role, err))
+			}
+			// Root-Cause-Fix (Nutzerfund 2026-09-24): die Service-Token-
+			// Bindung dieser Instanz (falls sie eine Control-Plane-Rolle
+			// war, s. runStart) muss mit ihr sterben — sonst sammelt sich
+			// bei jedem Start/Stop-Zyklus eine weitere verwaiste Bindung
+			// an, die nur ein kompletter Workflow-Delete (DeleteByWorkflow)
+			// je aufräumt. Best effort wie das Provisionieren in runStart.
+			if s.authz != nil {
+				if err := s.authz.DeleteInstanceBinding(rt.InstanceID, wf.ID); err != nil {
+					slog.Warn("workflows: failed to clean up instance role binding", "workflow", wf.ID, "role", role, "instance", rt.InstanceID, "error", err)
+				}
 			}
 			// Stößt den `registry.Store`-Snapshot (Node-Graph-Cache) sofort
 			// statt erst nach bis zu `registry.PollInterval` (2s) an —

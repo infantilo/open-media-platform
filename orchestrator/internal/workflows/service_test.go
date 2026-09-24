@@ -346,6 +346,23 @@ func (f *fakeAuthzBinder) DeleteByWorkflow(workflowID string) error {
 	return nil
 }
 
+// DeleteInstanceBinding (Nutzerfund 2026-09-24, Gegenstück zu Create in
+// runStart/runRestartRole) — gleiches In-Memory-Muster wie DeleteByWorkflow
+// oben, nur zusätzlich auf subject+nodeID+verb gefiltert.
+func (f *fakeAuthzBinder) DeleteInstanceBinding(instanceID, workflowID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	kept := f.created[:0]
+	for _, b := range f.created {
+		if b.Subject == instanceID && b.WorkflowID == workflowID && b.NodeID == authz.AnyNode && b.Verb == authz.VerbOperate {
+			continue
+		}
+		kept = append(kept, b)
+	}
+	f.created = kept
+	return nil
+}
+
 // newTestService baut einen Service direkt per Struct-Literal statt über
 // NewService (das eine konkrete *Store, keine Fakes, erwartet) — gleiches
 // Muster wie internal/snapshots.newTestService.

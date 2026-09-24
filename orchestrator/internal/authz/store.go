@@ -115,6 +115,26 @@ func (s *Store) DeleteByWorkflow(workflowID string) error {
 	return err
 }
 
+// DeleteInstanceBinding entfernt die Service-Token-Bindung einer einzelnen
+// Instanz — Gegenstück zu Create(instanceID, workflowID, AnyNode, VerbOperate)
+// in workflows.Service.runStart/runRestartRole (ARCHITECTURE.md §24.1).
+// Anders als DeleteByWorkflow (räumt nur beim endgültigen Löschen des ganzen
+// Workflows auf) wird das hier bei JEDEM Stop/Neustart einer Control-Plane-
+// Rolle aufgerufen (Nutzerfund 2026-09-24: 25 verwaiste Bindungen sammelten
+// sich über wiederholte Start/Stop-Zyklen an, weil eine gestoppte/ersetzte
+// Instanz ihre Bindung sonst nur beim Löschen des kompletten Workflows
+// verlor). Exakter Vier-Spalten-Match statt eines bloßen subject-Filters,
+// damit ein (extrem unwahrscheinlich) gleichlautender Nutzername nie eine
+// echte Bindung trifft — subject ist sonst polymorph (Nutzername/Gruppen-ID/
+// Instanz-ID, s. Binding-Doku), hier grenzen workflowID+nodeID+verb den
+// Treffer auf exakt das Muster ein, das Create() für diesen Zweck anlegt.
+func (s *Store) DeleteInstanceBinding(instanceID, workflowID string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM role_bindings WHERE subject = $1 AND subject_type = 'user' AND workflow_id = $2 AND node_id = $3 AND verb = $4`,
+		instanceID, workflowID, AnyNode, VerbOperate)
+	return err
+}
+
 // Check prüft, ob subject mindestens minVerb auf nodeID hat — entweder
 // über eine direkte Nutzer-Bindung (subject_type='user') ODER über eine
 // Gruppen-Bindung (subject_type='group'), deren Gruppe subject als
