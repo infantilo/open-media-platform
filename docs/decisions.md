@@ -29062,3 +29062,113 @@ Details in beiden Fällen: kein API-Vertragsbruch, reine Ergänzung/
 Layout-Fix. Kapitel 21 (Workflow Engine + Asset/Content Domain Model)
 ist damit inhaltlich vollständig abgeschlossen (Teil A + Teil B,
 inklusive B5/B10/B11/B12/B14-Vollausbau).
+
+## 2026-09-24 (Nachtrag 286) — Super-admin-verwaltete Storage-Backends: live hinzufügbar/entfernbar, keine hidden configs
+
+Nutzerauftrag im Anschluss an eine Architektur-Rückfrage (wo Prozesse/
+Assets gehostet sind, wo Asset-Dateien tatsächlich liegen): "asset
+folder should be able to be dynamically added/removed without the need
+of restart the whole orchestrator. only super admins may config this.
+in general i dont like 'hidden' configs at all. the super admin needs
+to have full control (with warnings, protection guards, hints,
+wizards) and full overview." Löst B5s einzelnes, fest über
+OMP_MINIO_*-Umgebungsvariablen konfiguriertes Objektspeicher-Setup ab
+(Nachtrag 280) — baut auf derselben `internal/objectstore`-Grundlage
+(minio-go, Presigned-URLs, kein Byte-Proxy) auf, aber jetzt als
+verwaltete Registry statt eines einzigen Compile-Time-Werts.
+
+**Vorab per `AskUserQuestion` zwei Design-Entscheidungen geklärt** (§0
+Punkt 8): (1) mehrere Storage-Backends gleichzeitig aktiv statt einer
+einzelnen austauschbaren Instanz — empfohlene Option, vom Nutzer
+bestätigt; (2) Zugangsdaten serverseitig verschlüsselt (AES-256-GCM,
+Go-Standardbibliothek) statt Klartext — ebenfalls bestätigt.
+
+**Neues Paket `internal/storagebackends`:** `Backend` (secret-frei nach
+außen, nur `hasSecret`-Flag), `Store` mit Create/Get/List/UpdateMeta/
+UpdateStatus/Delete/TestConnection/Resolve. Der eigentliche "kein
+Neustart nötig"-Mechanismus: `Store` hält neben der Postgres-Verbindung
+einen Live-Cache bereits verbundener `objectstore.Client`-Instanzen
+(`map[string]*objectstore.Client`, mutex-geschützt) — Create/UpdateMeta
+verbinden SOFORT und legen den Client synchron in den Cache,
+`Resolve()` verbindet bei einem Cache-Miss (z. B. nach einem
+Orchestrator-Neustart) lazy nach. Sowohl `Create` als auch `UpdateMeta`
+verbinden VOR dem Schreiben — ein nicht erreichbares Backend wird nie
+persistiert (der zentrale "protection guard").
+
+**Secrets:** `crypto.go`, AES-256-GCM mit `OMP_STORAGE_SECRET_KEY`
+(Base64, 32 Rohbytes) als Masterschlüssel — bewusst KEINE neue
+Abhängigkeit (Go-Standardbibliothek reicht, Minimal-Dependency-Regel
+§0 Punkt 5). Dieser EINE Wert bleibt zwangsläufig außerhalb der UI (er
+verschlüsselt die übrigen Geheimnisse, kann sich also nicht selbst dort
+verwalten — wie bei jedem Secret-Management-System), alles darüber
+hinaus ist vollständig UI-verwaltet. Ein gesetzter, aber ungültiger
+Schlüssel ist beim Start fatal (deutet auf einen Tippfehler hin), ein
+schlicht fehlender ist es nicht (additiv wie mTLS/MinIO bisher).
+
+**Migration `0027_storage_backends.sql`:** neue Tabelle
+`storage_backends`, `representations` bekommt `storage_backend_id`
+(Fremdschlüssel OHNE `ON DELETE CASCADE` — der Standard-Fremdschlüssel-
+Schutz blockiert ein `DELETE` auf ein noch referenziertes Backend
+automatisch, derselbe bewährte Mechanismus wie
+`organizations.Store.Delete`, Nachtrag 283). Der HTTP-Handler zählt
+Referenzen VOR dem Löschversuch (`CountRepresentations`) für eine
+konkrete Meldung ("wird noch von 3 Dateien verwendet") statt nur des
+rohen Fremdschlüssel-Fehlers.
+
+**Lifecycle-Zwischenschritt:** `active` (nimmt neue Uploads an) →
+`deprecated` (liefert bestehende Dateien weiter aus, keine neuen mehr)
+→erst dann hartes Löschen (blockiert, solange noch referenziert) — der
+im Nutzerauftrag verlangte abgestufte "protection guard" vor einem
+irreversiblen Schritt.
+
+**HTTP-API** (`internal/httpapi/storage_backend_handlers.go`, alle
+global `VerbAdmin` — "super admin" in diesem System ist exakt diese
+höchste, bereits für Organisationen/Nutzerverwaltung genutzte Stufe,
+keine neue Rollenebene nötig): CRUD + `POST .../test` (Wizard-
+Verbindungstest OHNE zu persistieren) + `.../deprecate`+`.../reactivate`.
+`objectstore_handlers.go` umgeschrieben: Upload-/Download-URLs wählen
+jetzt ein Backend per ID (`StorageBackendService.Resolve`) statt einer
+einzigen globalen Instanz; `asset.Representation` bekommt
+`StorageBackendID` (leer bei älteren/manuellen Einträgen ohne echten
+Objektspeicher-Upload, unverändertes B4-Verhalten bleibt möglich).
+
+**main.go:** einmalige Migrations-Komfortfunktion — ein bestehendes
+Dev-Setup mit alten `OMP_MINIO_*`-Variablen, aber noch ohne
+registriertes Backend, bekommt beim ersten Start mit gesetztem
+`OMP_STORAGE_SECRET_KEY` automatisch einen sichtbaren, voll
+bedienbaren Eintrag dafür ("kein hidden config mehr", exakt der
+Nutzerauftrag) statt eines weiterhin unsichtbaren Fallbacks. `WarmAll`
+verbindet beim Start alle bestehenden Backends vor (best effort, ein
+einzelnes nicht erreichbares blockiert den Start nicht), ein klarer
+Log-Eintrag (`"storage backends: enabled", "count", N`) bestätigt den
+aktiven Zustand — kein stilles Feature.
+
+**UI (`admin-view.ts`, neuer Sub-Tab "Storage"):** volle Übersichts-
+Tabelle (Name/Endpoint/Bucket/Access-Key/SSL/Status/Angelegt), Wizard
+als einseitiges Formular mit "Verbindung testen"-Schritt (Ergebnis
+direkt im Formular, ✓/✗ + Meldung), Bearbeiten (Secret Key bewusst LEER
+vorbefüllt, nie ein Klartext-Roundtrip eines bereits gespeicherten
+Geheimnisses), Deaktivieren/Reaktivieren, Entfernen mit `confirmDialog`.
+**Der zentrale UI-seitige "protection guard":** Abschicken ohne
+erfolgreichen letzten Verbindungstest löst eine explizite Rückfrage aus
+("Die Verbindung wurde noch nicht getestet. Trotzdem speichern?"/"…ist
+fehlgeschlagen…") — jede inhaltliche Formularänderung entwertet einen
+bisherigen Test-Erfolg automatisch (bezieht sich sonst auf nicht mehr
+aktuelle Werte). Ist das Feature serverseitig nicht aktiviert (kein
+`OMP_STORAGE_SECRET_KEY`), zeigt der Tab einen erklärenden Hinweis
+inkl. Erzeugungsbefehl (`openssl rand -base64 32`) statt sich einfach
+zu verstecken — auch dieser Zustand ist "kein hidden config".
+
+**Live verifiziert (echte Dev-MinIO, `make minio-up`, CDP):** Backend
+angelegt (Verbindungstest zeigt "✓ Verbindung erfolgreich", live gegen
+echtes MinIO), erscheint sofort in der Tabelle; Deaktivieren/
+Reaktivieren-Toggle bestätigt; Bearbeiten-Formular korrekt vorbefüllt
+(Secret Key leer); der Untested-Save-Guard erscheint tatsächlich als
+Rückfrage-Dialog; ein echtes Asset+Version+Representation mit
+`storageBackendId` angelegt, Löschversuch des referenzierten Backends
+korrekt mit "wird noch von 1 Datei verwendet" blockiert — danach
+Representation zuerst gelöscht, Backend-Löschung klappt. Keine
+Browser-Konsolenfehler. Alle Testdaten anschließend aufgeräumt.
+`go test -count=1 ./...` (39/39 Pakete, neues `internal/storagebackends`
+inklusive echter MinIO-Integrationstests), `deno check`/`test ui/`
+(128/128) grün.

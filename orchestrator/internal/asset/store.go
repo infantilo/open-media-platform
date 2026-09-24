@@ -511,12 +511,14 @@ func scanRepresentation(row interface{ Scan(...any) error }) (Representation, er
 	var width, height, sampleRate, channels sql.NullInt64
 	var frameRate sql.NullFloat64
 	var bitrate, sizeBytes sql.NullInt64
+	var storageBackendID sql.NullString
 	err := row.Scan(&r.ID, &r.AssetVersionID, &r.Type, &r.Storage.Provider, &r.Storage.URI,
 		&r.Format, &r.Codec, &r.Container, &width, &height, &frameRate, &sampleRate, &channels,
-		&bitrate, &sizeBytes, &r.Checksum, &r.CreatedAt)
+		&bitrate, &sizeBytes, &r.Checksum, &r.CreatedAt, &storageBackendID)
 	if err != nil {
 		return Representation{}, err
 	}
+	r.StorageBackendID = storageBackendID.String
 	if width.Valid {
 		v := int(width.Int64)
 		r.Width = &v
@@ -548,7 +550,7 @@ func scanRepresentation(row interface{ Scan(...any) error }) (Representation, er
 	return r, nil
 }
 
-const representationSelectColumns = `id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at`
+const representationSelectColumns = `id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at, storage_backend_id`
 
 // CreateRepresentation legt eine neue Representation unter einer
 // AssetVersion an. AssetVersionID/Type/Storage sind Pflichtfelder, alle
@@ -574,11 +576,15 @@ func (s *Store) CreateRepresentation(r Representation) (Representation, error) {
 	if err := lockDraftVersion(ctx, tx, r.AssetVersionID); err != nil {
 		return Representation{}, err
 	}
+	var storageBackendID sql.NullString
+	if r.StorageBackendID != "" {
+		storageBackendID = sql.NullString{String: r.StorageBackendID, Valid: true}
+	}
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO representations (id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		INSERT INTO representations (id, asset_version_id, type, storage_provider, uri, format, codec, container, width, height, frame_rate, sample_rate, channels, bitrate, size_bytes, checksum, created_at, storage_backend_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`, r.ID, r.AssetVersionID, r.Type, r.Storage.Provider, r.Storage.URI, r.Format, r.Codec, r.Container,
-		r.Width, r.Height, r.FrameRate, r.SampleRate, r.Channels, r.Bitrate, r.SizeBytes, r.Checksum, r.CreatedAt)
+		r.Width, r.Height, r.FrameRate, r.SampleRate, r.Channels, r.Bitrate, r.SizeBytes, r.Checksum, r.CreatedAt, storageBackendID)
 	if err != nil {
 		return Representation{}, err
 	}

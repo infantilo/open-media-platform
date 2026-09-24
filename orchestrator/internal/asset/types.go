@@ -175,6 +175,13 @@ type Representation struct {
 	SizeBytes      *int64          `json:"sizeBytes,omitempty"`
 	Checksum       string          `json:"checksum,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
+	// StorageBackendID (Nutzerauftrag 2026-09-24: super-admin-verwaltete
+	// Storage-Backends, s. internal/storagebackends-Paketdoku) — welches
+	// registrierte Backend diese Datei tatsächlich hält. Leer bei
+	// manuell/frei eingetragenen Representations ohne echten
+	// Objektspeicher-Upload (z. B. ein reiner Dateipfad-Verweis, das
+	// bisherige B4-Verhalten bleibt unverändert möglich).
+	StorageBackendID string `json:"storageBackendId,omitempty"`
 }
 
 // Collection gruppiert Assets (B12, Kapitel 21 Teil B, Nachtrag 276) —

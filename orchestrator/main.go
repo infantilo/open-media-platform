@@ -39,7 +39,6 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/layouts"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/logbus"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/mtls"
-	"github.com/infantilo/openmediaplatform/orchestrator/internal/objectstore"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/organizations"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/placement"
@@ -48,6 +47,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/registry"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/snapshots"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/sse"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/storagebackends"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/supervisorclient"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 )
@@ -579,30 +579,67 @@ func main() {
 	// Nutzerentscheidung 2026-09-23: generische Link-API).
 	assetLinkStore := assetlinks.NewStore(database)
 
-	// MinIO/S3-Objektspeicher (Kapitel 21 B5, Nachtrag 280,
-	// Nutzerentscheidung 2026-09-23: echte MinIO/S3-Anbindung statt der
-	// schlankeren Referenz-Abstraktion). Additiv wie mTLS: leeres
-	// OMP_MINIO_ENDPOINT lässt objStoreSvc als nil-Interface, die
-	// Presigned-URL-Endpunkte antworten dann 503 statt zu crashen (s.
-	// httpapi.handleCreateUploadURL-Doku). Verbindungsfehler beim Start
-	// (z. B. MinIO nicht erreichbar) sind bewusst NICHT fatal — anders
-	// als Postgres/NATS ist Objektspeicher (noch) keine für den Rest des
-	// Orchestrators notwendige Abhängigkeit.
-	var objStoreSvc httpapi.ObjectStoreService
-	if cfg.MinioEndpoint != "" {
-		objStore, err := objectstore.NewClient(ctx, objectstore.Config{
-			Endpoint:  cfg.MinioEndpoint,
-			AccessKey: cfg.MinioAccessKey,
-			SecretKey: cfg.MinioSecretKey,
-			Bucket:    cfg.MinioBucket,
-			UseSSL:    cfg.MinioUseSSL,
-		})
+	// Storage-Backend-Registry (Nutzerauftrag 2026-09-24: super-admin-
+	// verwaltete, live hinzufügbare/entfernbare S3/MinIO-Ziele — löst
+	// Kapitel 21 B5s einzelnes, fest über OMP_MINIO_* konfiguriertes
+	// objectstore.Client ab, Nachtrag 280/285). Additiv wie mTLS: leerer
+	// OMP_STORAGE_SECRET_KEY lässt storageBackendStore als nil-Interface,
+	// sowohl die Verwaltungs- als auch die Presigned-URL-Endpunkte
+	// antworten dann 503/404 statt zu crashen. Ein GESETZTER, aber
+	// ungültiger Schlüssel (falsche Länge/Kodierung) ist dagegen fatal —
+	// anders als "Feature nicht konfiguriert" deutet das auf einen
+	// Tippfehler hin, den ein Admin sofort sehen soll, nicht erst beim
+	// ersten fehlschlagenden Backend-Zugriff.
+	// storageBackendSvc bleibt bewusst ein Interface-Wert (nicht der
+	// konkrete *storagebackends.Store), obwohl storageBackendStore unten
+	// selbst schon der konkrete Typ ist — ein nil *storagebackends.Store
+	// in ein Interface eingepackt wäre NICHT `== nil` (klassische Go-
+	// Falle), server.go's `if options.storageBackends != nil` würde dann
+	// fälschlich "aktiv" sehen, obwohl gar kein Store existiert. Diese
+	// Variable wird nur zugewiesen, wenn wirklich ein Store entstand.
+	var storageBackendSvc httpapi.StorageBackendService
+	var storageBackendStore *storagebackends.Store
+	if cfg.StorageSecretKey != "" {
+		var err error
+		storageBackendStore, err = storagebackends.NewStore(database, cfg.StorageSecretKey)
 		if err != nil {
-			slog.Warn("objectstore: setup failed, upload/download URLs stay disabled", "error", err)
-		} else {
-			objStoreSvc = objStore
-			slog.Info("objectstore: connected", "endpoint", cfg.MinioEndpoint, "bucket", cfg.MinioBucket)
+			slog.Error("storage backends: invalid OMP_STORAGE_SECRET_KEY", "error", err)
+			os.Exit(1)
 		}
+
+		// Einmalige Migrations-Komfortfunktion: ein bestehendes Dev-Setup
+		// mit den alten OMP_MINIO_*-Variablen, aber noch ohne ein einziges
+		// registriertes Backend, bekommt automatisch einen sichtbaren,
+		// voll bedienbaren Eintrag dafür — kein "hidden config" mehr (s.
+		// Nutzerauftrag), sondern ab dem ersten Start in der UI (Admin-
+		// istration > Storage) sichtbar und danach normal editierbar/
+		// löschbar wie jedes andere Backend.
+		if existing, err := storageBackendStore.List(); err == nil && len(existing) == 0 && cfg.MinioEndpoint != "" {
+			seedInput := storagebackends.Input{
+				Name: "Default (aus OMP_MINIO_* migriert)", Provider: "minio",
+				Endpoint: cfg.MinioEndpoint, Bucket: cfg.MinioBucket,
+				AccessKey: cfg.MinioAccessKey, SecretKey: cfg.MinioSecretKey, UseSSL: cfg.MinioUseSSL,
+			}
+			if seeded, err := storageBackendStore.Create(ctx, seedInput, "system"); err != nil {
+				slog.Warn("storage backends: could not auto-migrate legacy OMP_MINIO_* config", "error", err)
+			} else {
+				slog.Info("storage backends: auto-migrated legacy OMP_MINIO_* config into a visible backend",
+					"id", seeded.ID, "name", seeded.Name, "hint", "safe to remove OMP_MINIO_* once confirmed working in Administration > Storage")
+			}
+		}
+
+		activeCount := 0
+		if failed, err := storageBackendStore.WarmAll(ctx); err != nil {
+			slog.Warn("storage backends: could not list backends to pre-warm", "error", err)
+		} else if len(failed) > 0 {
+			slog.Warn("storage backends: some backends are currently unreachable (will retry lazily on first use)", "backends", failed)
+		} else if all, err := storageBackendStore.List(); err == nil {
+			activeCount = len(all)
+		}
+		slog.Info("storage backends: enabled", "count", activeCount)
+		storageBackendSvc = storageBackendStore
+	} else {
+		slog.Info("storage backends: disabled (OMP_STORAGE_SECRET_KEY unset) — set it to a base64-encoded 32-byte key to enable Administration > Storage")
 	}
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
@@ -819,7 +856,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithObjectStore(objStoreSvc), httpapi.WithOrganizations(orgStore))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

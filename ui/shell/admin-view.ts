@@ -21,6 +21,7 @@
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { getToken, login } from "./auth.ts";
 import { confirmDialog } from "../kit/omp-confirm.ts";
+import { showToast } from "../kit/omp-toast.ts";
 
 interface UserEntry {
   id: string;
@@ -86,6 +87,38 @@ interface Organization {
   id: string;
   name: string;
   createdAt: string;
+}
+
+// StorageBackend — Wire-Format identisch zu storagebackends.Backend
+// (Nutzerauftrag 2026-09-24: super-admin-verwaltete, live hinzufügbare/
+// entfernbare Asset-Speicherorte). secretKey selbst kommt NIE vom
+// Server zurück (s. hasSecret).
+interface StorageBackend {
+  id: string;
+  name: string;
+  provider: string;
+  endpoint: string;
+  bucket: string;
+  accessKey: string;
+  useSsl: boolean;
+  hasSecret: boolean;
+  status: "active" | "deprecated";
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Formular-Rohwerte des Storage-Backend-Wizards (Create UND Update
+// teilen sich diese Form) — secretKey ist ein Klartext-Eingabewert nur
+// während der Bearbeitung, nie ein Feld von StorageBackend selbst.
+interface StorageBackendFormValues {
+  name: string;
+  provider: string;
+  endpoint: string;
+  bucket: string;
+  accessKey: string;
+  secretKey: string;
+  useSsl: boolean;
 }
 
 // ClusterStatus/ClusterPeer — Wire-Format identisch zu
@@ -185,12 +218,13 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "organizations" | "bindings" | "catalog" | "audit" | "diagnose" | "backup" | "cluster";
+type AdminTabId = "users" | "organizations" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
   { id: "bindings", label: "Rollenbindungen" },
   { id: "catalog", label: "Node-Katalog" },
+  { id: "storage", label: "Storage" },
   { id: "audit", label: "Audit-Log" },
   { id: "diagnose", label: "Diagnose" },
   { id: "backup", label: "Backup/Restore" },
@@ -245,6 +279,25 @@ class AdminView extends HTMLElement {
   #showOrgForm = false;
   #newOrgName = "";
   #orgChangeTarget: string | null = null;
+
+  // Storage-Backends (Nutzerauftrag 2026-09-24). Formularwerte liegen
+  // bewusst als eigene Instanzfelder vor (nicht in einem lokalen
+  // Closure-Objekt) — #render() baut bei jeder Zustandsänderung (z. B.
+  // dem Verbindungstest) das komplette Formular neu auf, gleiches
+  // Muster wie #newUsername/#newOrgName: Texteingaben aktualisieren nur
+  // das Feld (kein #render()-Aufruf pro Tastendruck, sonst Fokusverlust
+  // bei jedem Zeichen), erst eine strukturelle Aktion (Test-Button,
+  // Abschicken, Formular öffnen/schließen) rendert neu — und liest dann
+  // den zuletzt getippten Wert aus genau diesen Feldern.
+  #storageBackends: StorageBackend[] = [];
+  #storageFeatureDisabled = false;
+  #showStorageForm = false;
+  #editingStorageBackend: StorageBackend | null = null;
+  #storageForm: StorageBackendFormValues = { name: "", provider: "minio", endpoint: "", bucket: "", accessKey: "", secretKey: "", useSsl: false };
+  #storageTestState: "idle" | "testing" | "ok" | "failed" = "idle";
+  #storageTestMessage = "";
+  #storageFormError = "";
+
   #showBindingForm = false;
   #newSubject = "";
   #newNodeId = "*";
@@ -335,6 +388,7 @@ class AdminView extends HTMLElement {
     this.#render();
     this.#loadUsers();
     this.#loadOrganizations();
+    this.#loadStorageBackends();
     this.#loadBindings();
     this.#loadAudit();
     this.#loadLogs();
@@ -458,6 +512,171 @@ class AdminView extends HTMLElement {
     this.#error = "";
     this.#orgChangeTarget = null;
     await this.#loadUsers();
+  }
+
+  // ---- Storage-Backends (Nutzerauftrag 2026-09-24) ----------------------------------------------
+
+  async #loadStorageBackends() {
+    try {
+      const res = await apiFetch("/api/v1/storage-backends");
+      if (res.status === 404 || res.status === 503) {
+        // Feature serverseitig nicht aktiviert (kein OMP_STORAGE_SECRET_KEY)
+        // — kein Fehler, sondern ein eigener, erklärender Zustand (s.
+        // #renderStorageSection): "nicht konfiguriert", nicht "kaputt".
+        this.#storageFeatureDisabled = true;
+        this.#storageBackends = [];
+        this.#render();
+        return;
+      }
+      this.#storageFeatureDisabled = false;
+      if (res.ok) this.#storageBackends = await res.json();
+      this.#render();
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — nächstes gezieltes Neuladen holt es auf.
+    }
+  }
+
+  // secretKey leer bei Update heißt "unverändert lassen" (Backend-
+  // Vertrag, s. storagebackends.Store.UpdateMeta-Doku) — Create UND
+  // Update senden trotzdem denselben, getrimmten Payload aus
+  // #storageForm.
+  #storageFormPayload() {
+    const f = this.#storageForm;
+    return {
+      name: f.name.trim(), provider: f.provider.trim(), endpoint: f.endpoint.trim(),
+      bucket: f.bucket.trim(), accessKey: f.accessKey.trim(), secretKey: f.secretKey,
+      useSsl: f.useSsl,
+    };
+  }
+
+  async #testStorageConnection() {
+    this.#storageTestState = "testing";
+    this.#storageTestMessage = "";
+    this.#render();
+    const res = await apiFetch("/api/v1/storage-backends/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(this.#storageFormPayload()),
+    });
+    if (res.ok) {
+      this.#storageTestState = "ok";
+      this.#storageTestMessage = "Verbindung erfolgreich.";
+    } else {
+      this.#storageTestState = "failed";
+      this.#storageTestMessage = await res.text();
+    }
+    this.#render();
+  }
+
+  // Zentraler Absende-Pfad für "Anlegen"/"Speichern" — der eigentliche
+  // "protection guard" aus dem Nutzerauftrag: ungetestet oder mit
+  // fehlgeschlagenem letzten Test abschicken verlangt eine bewusste
+  // Bestätigung (gleiches confirmDialog-Muster wie jede andere
+  // gefährliche Aktion in diesem Projekt), statt eine kaputte
+  // Konfiguration stillschweigend zu übernehmen.
+  async #submitStorageForm() {
+    if (this.#storageTestState !== "ok") {
+      const proceed = await confirmDialog(
+        this.#storageTestState === "failed"
+          ? "Der letzte Verbindungstest ist fehlgeschlagen. Trotzdem speichern?"
+          : "Die Verbindung wurde noch nicht getestet. Trotzdem speichern?",
+        { confirmLabel: "Trotzdem speichern" },
+      );
+      if (!proceed) return;
+    }
+    if (this.#editingStorageBackend) {
+      await this.#updateStorageBackend(this.#editingStorageBackend.id);
+    } else {
+      await this.#createStorageBackend();
+    }
+  }
+
+  async #createStorageBackend(): Promise<boolean> {
+    const res = await apiFetch("/api/v1/storage-backends", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(this.#storageFormPayload()),
+    });
+    if (!res.ok) {
+      this.#storageFormError = `Anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return false;
+    }
+    this.#storageFormError = "";
+    this.#showStorageForm = false;
+    await this.#loadStorageBackends();
+    showToast("Storage-Backend angelegt.", { variant: "info" });
+    return true;
+  }
+
+  async #updateStorageBackend(id: string): Promise<boolean> {
+    const res = await apiFetch(`/api/v1/storage-backends/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(this.#storageFormPayload()),
+    });
+    if (!res.ok) {
+      this.#storageFormError = `Speichern fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return false;
+    }
+    this.#storageFormError = "";
+    this.#showStorageForm = false;
+    this.#editingStorageBackend = null;
+    await this.#loadStorageBackends();
+    showToast("Storage-Backend aktualisiert.", { variant: "info" });
+    return true;
+  }
+
+  async #setStorageBackendLifecycle(backend: StorageBackend, toStatus: "deprecated" | "active") {
+    const action = toStatus === "deprecated" ? "deprecate" : "reactivate";
+    const res = await apiFetch(`/api/v1/storage-backends/${backend.id}/${action}`, { method: "POST" });
+    if (!res.ok) {
+      this.#error = `${toStatus === "deprecated" ? "Deaktivieren" : "Reaktivieren"} fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    await this.#loadStorageBackends();
+  }
+
+  async #deleteStorageBackend(backend: StorageBackend) {
+    const ok = await confirmDialog(
+      `Storage-Backend "${backend.name}" (${backend.endpoint}/${backend.bucket}) wirklich entfernen? ` +
+        "Dateien, die bereits dort liegen, werden dadurch NICHT gelöscht — nur die Verwaltung dieses Ziels hier.",
+      { confirmLabel: "Entfernen" },
+    );
+    if (!ok) return;
+    const res = await apiFetch(`/api/v1/storage-backends/${backend.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      this.#error = `Entfernen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    await this.#loadStorageBackends();
+  }
+
+  // backend == null: neues Backend anlegen (leeres Formular); sonst:
+  // bestehendes bearbeiten (Felder vorbefüllt, Secret Key bewusst LEER
+  // — s. #storageFormPayload-Doku, nie ein Klartext-Roundtrip eines
+  // bereits gespeicherten Secrets).
+  #openStorageForm(backend: StorageBackend | null) {
+    this.#editingStorageBackend = backend;
+    this.#storageForm = backend
+      ? { name: backend.name, provider: backend.provider, endpoint: backend.endpoint, bucket: backend.bucket, accessKey: backend.accessKey, secretKey: "", useSsl: backend.useSsl }
+      : { name: "", provider: "minio", endpoint: "", bucket: "", accessKey: "", secretKey: "", useSsl: false };
+    this.#storageTestState = "idle";
+    this.#storageTestMessage = "";
+    this.#storageFormError = "";
+    this.#showStorageForm = true;
+    this.#render();
+  }
+
+  #closeStorageForm() {
+    this.#showStorageForm = false;
+    this.#editingStorageBackend = null;
+    this.#render();
   }
 
   async #loadUsers() {
@@ -1169,6 +1388,9 @@ class AdminView extends HTMLElement {
       case "catalog":
         this.appendChild(this.#renderCatalogSection());
         break;
+      case "storage":
+        this.appendChild(this.#renderStorageSection());
+        break;
       case "audit":
         this.appendChild(this.#renderAuditSection());
         break;
@@ -1555,6 +1777,266 @@ class AdminView extends HTMLElement {
 
     form.append(nameInput, createBtn);
     queueMicrotask(() => nameInput.focus());
+    return form;
+  }
+
+  // Storage-Backends (Nutzerauftrag 2026-09-24: "asset folder should be
+  // able to be dynamically added/removed without the need of restart...
+  // only super admins may config this... i dont like hidden configs at
+  // all... full control (with warnings, protection guards, hints,
+  // wizards) and full overview"). Gleiche Sub-Tab-Form wie die anderen
+  // Abschnitte (Titel+Zähler, "+ Neu"-Formular, Tabelle) — der
+  // erklärende Hinweistext ist hier bewusst länger, da diese Funktion
+  // ein serverseitiges Vorabgesetztes voraussetzt (OMP_STORAGE_SECRET_KEY),
+  // das die UI selbst nicht setzen kann (s. #storageFeatureDisabled).
+  #renderStorageSection(): HTMLElement {
+    const section = document.createElement("div");
+    section.style.cssText = "margin-bottom:var(--omp-space-4);";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+    const title = document.createElement("span");
+    title.className = "omp-h1";
+    title.textContent = `Storage-Backends (${this.#storageBackends.length})`;
+    const newBtn = document.createElement("button");
+    newBtn.textContent = this.#showStorageForm ? "Abbrechen" : "+ Neues Backend";
+    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    newBtn.addEventListener("click", () => {
+      if (this.#showStorageForm) this.#closeStorageForm();
+      else this.#openStorageForm(null);
+    });
+    heading.append(title, newBtn);
+    section.appendChild(heading);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      "Bestimmt, wo Asset-Dateien tatsächlich liegen (S3/MinIO). Mehrere Backends können gleichzeitig aktiv sein, " +
+      "Hinzufügen/Entfernen wirkt sofort, kein Neustart nötig. Nur Super-Admins (globales Admin-Recht) sehen diesen Tab.";
+    section.appendChild(hint);
+
+    if (this.#storageFeatureDisabled) {
+      const info = document.createElement("div");
+      info.style.cssText =
+        "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:var(--omp-space-3);" +
+        "color:var(--omp-text-dim);font-size:var(--omp-font-size-sm);";
+      info.innerHTML = `
+        <div style="font-weight:600;color:var(--omp-text);margin-bottom:4px;">Noch nicht aktiviert</div>
+        <div>Diese Funktion braucht serverseitig <code>OMP_STORAGE_SECRET_KEY</code> — einen Base64-kodierten
+        32-Byte-Schlüssel, mit dem die Zugangsdaten der Backends verschlüsselt in der Datenbank abgelegt werden.
+        Dieser eine Schlüssel muss aus Sicherheitsgründen außerhalb der UI gesetzt werden (er verschlüsselt die
+        übrigen Geheimnisse, kann sich also nicht selbst verwalten) — alles Weitere läuft danach vollständig hier.</div>
+        <div style="margin-top:8px;">Erzeugen, z. B.: <code>openssl rand -base64 32</code>, dann als Umgebungsvariable
+        setzen und den Orchestrator neu starten.</div>
+      `;
+      section.appendChild(info);
+      return section;
+    }
+
+    if (this.#showStorageForm) {
+      section.appendChild(this.#renderStorageForm());
+    }
+
+    if (this.#storageBackends.length === 0 && !this.#showStorageForm) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);";
+      empty.textContent = 'Noch kein Storage-Backend angelegt — mit "+ Neues Backend" das erste anlegen.';
+      section.appendChild(empty);
+      return section;
+    }
+
+    if (this.#storageBackends.length > 0) {
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;width:100%;";
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
+        <th style="padding:2px 8px;">Name</th>
+        <th style="padding:2px 8px;">Endpoint</th>
+        <th style="padding:2px 8px;">Bucket</th>
+        <th style="padding:2px 8px;">Access Key</th>
+        <th style="padding:2px 8px;">SSL</th>
+        <th style="padding:2px 8px;">Status</th>
+        <th style="padding:2px 8px;">Angelegt</th>
+        <th style="padding:2px 8px;"></th>
+      </tr>`;
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const b of this.#storageBackends) {
+        tbody.appendChild(this.#renderStorageRow(b));
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+    }
+
+    return section;
+  }
+
+  #renderStorageRow(b: StorageBackend): HTMLElement {
+    const tr = document.createElement("tr");
+    const statusBadge = b.status === "active"
+      ? `<span style="color:var(--omp-preset);font-size:11px;font-weight:600;">aktiv</span>`
+      : `<span style="color:var(--omp-text-dim);font-size:11px;">deaktiviert</span>`;
+    tr.innerHTML = `
+      <td style="padding:2px 8px;font-weight:600;">${escapeHtml(b.name)}</td>
+      <td style="padding:2px 8px;color:var(--omp-text-dim);word-break:break-all;">${escapeHtml(b.endpoint)}</td>
+      <td style="padding:2px 8px;">${escapeHtml(b.bucket)}</td>
+      <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(b.accessKey)}</td>
+      <td style="padding:2px 8px;">${b.useSsl ? "ja" : "nein"}</td>
+      <td style="padding:2px 8px;">${statusBadge}</td>
+      <td style="padding:2px 8px;color:var(--omp-text-dim);">${escapeHtml(b.createdBy)}, ${new Date(b.createdAt).toLocaleDateString()}</td>
+    `;
+    const actionsTd = document.createElement("td");
+    actionsTd.style.cssText = "padding:2px 8px;text-align:right;white-space:nowrap;";
+
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "Bearbeiten";
+    editBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
+    editBtn.addEventListener("click", () => this.#openStorageForm(b));
+    actionsTd.appendChild(editBtn);
+
+    const lifecycleBtn = document.createElement("button");
+    lifecycleBtn.textContent = b.status === "active" ? "Deaktivieren" : "Reaktivieren";
+    lifecycleBtn.title = b.status === "active"
+      ? "Nimmt keine neuen Uploads mehr an, liefert bestehende Dateien weiter aus"
+      : "Nimmt wieder neue Uploads an";
+    lifecycleBtn.style.cssText = "font-size:11px;cursor:pointer;margin-right:4px;";
+    lifecycleBtn.addEventListener("click", () => void this.#setStorageBackendLifecycle(b, b.status === "active" ? "deprecated" : "active"));
+    actionsTd.appendChild(lifecycleBtn);
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Entfernen";
+    delBtn.className = "omp-btn-danger";
+    delBtn.style.cssText = "font-size:11px;";
+    delBtn.addEventListener("click", () => void this.#deleteStorageBackend(b));
+    actionsTd.appendChild(delBtn);
+
+    tr.appendChild(actionsTd);
+    return tr;
+  }
+
+  // Der Wizard: alle Felder auf einer Seite (kein mehrseitiger Stepper
+  // nötig, um "Schritte" zu erfüllen) + ein "Verbindung testen"-Schritt
+  // VOR dem Speichern mit sichtbarem Ergebnis direkt im Formular.
+  #renderStorageForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.style.cssText =
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:var(--omp-space-3);" +
+      "margin-bottom:var(--omp-space-2);max-width:640px;";
+
+    if (!document.getElementById("omp-storage-provider-suggestions")) {
+      const dl = document.createElement("datalist");
+      dl.id = "omp-storage-provider-suggestions";
+      for (const v of ["minio", "s3"]) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        dl.appendChild(opt);
+      }
+      document.body.appendChild(dl);
+    }
+
+    const grid = document.createElement("div");
+    grid.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:8px;";
+
+    const field = (labelText: string, input: HTMLElement) => {
+      const wrap = document.createElement("label");
+      wrap.style.cssText = "display:flex;flex-direction:column;gap:2px;";
+      const l = document.createElement("span");
+      l.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+      l.textContent = labelText;
+      wrap.append(l, input);
+      return wrap;
+    };
+    const textInput = (value: string, placeholder: string, onInput: (v: string) => void, opts: { type?: string; list?: string } = {}) => {
+      const i = document.createElement("input");
+      i.type = opts.type ?? "text";
+      i.placeholder = placeholder;
+      i.value = value;
+      i.autocomplete = "off";
+      if (opts.list) i.setAttribute("list", opts.list);
+      i.style.cssText = "width:100%;box-sizing:border-box;";
+      i.addEventListener("input", () => onInput(i.value));
+      return i;
+    };
+
+    const f = this.#storageForm;
+    const invalidateTest = () => {
+      // Jede inhaltliche Änderung entwertet ein bisheriges "Verbindung
+      // erfolgreich" — der Test bezieht sich sonst auf Werte, die nicht
+      // mehr aktuell sind (echter, kleiner "protection guard").
+      if (this.#storageTestState !== "idle") {
+        this.#storageTestState = "idle";
+        this.#storageTestMessage = "";
+      }
+    };
+
+    grid.append(
+      field("Name *", textInput(f.name, "z. B. Primärer Media-Bucket", (v) => { f.name = v; invalidateTest(); })),
+      field("Provider *", textInput(f.provider, "minio / s3", (v) => { f.provider = v; invalidateTest(); }, { list: "omp-storage-provider-suggestions" })),
+      field("Endpoint *", textInput(f.endpoint, "z. B. 127.0.0.1:9000", (v) => { f.endpoint = v; invalidateTest(); })),
+      field("Bucket *", textInput(f.bucket, "z. B. omp-assets", (v) => { f.bucket = v; invalidateTest(); })),
+      field("Access Key *", textInput(f.accessKey, "", (v) => { f.accessKey = v; invalidateTest(); })),
+      field("Secret Key" + (this.#editingStorageBackend ? " (leer = unverändert)" : " *"),
+        textInput(f.secretKey, this.#editingStorageBackend ? "unverändert lassen" : "", (v) => { f.secretKey = v; invalidateTest(); }, { type: "password" })),
+    );
+    form.appendChild(grid);
+
+    const sslLabel = document.createElement("label");
+    sslLabel.style.cssText = "display:flex;align-items:center;gap:6px;margin-top:8px;color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);";
+    const sslCb = document.createElement("input");
+    sslCb.type = "checkbox";
+    sslCb.checked = f.useSsl;
+    sslCb.addEventListener("change", () => { f.useSsl = sslCb.checked; invalidateTest(); });
+    sslLabel.append(sslCb, document.createTextNode("TLS/SSL verwenden"));
+    form.appendChild(sslLabel);
+
+    const testRow = document.createElement("div");
+    testRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:12px;";
+    const testBtn = document.createElement("button");
+    testBtn.textContent = this.#storageTestState === "testing" ? "Testet…" : "Verbindung testen";
+    testBtn.disabled = this.#storageTestState === "testing";
+    testBtn.style.cssText = "cursor:pointer;";
+    testBtn.addEventListener("click", () => void this.#testStorageConnection());
+    testRow.appendChild(testBtn);
+    if (this.#storageTestMessage) {
+      const msg = document.createElement("span");
+      msg.style.cssText = `font-size:var(--omp-font-size-xs);color:${this.#storageTestState === "ok" ? "var(--omp-preset)" : "var(--omp-error)"};`;
+      msg.textContent = (this.#storageTestState === "ok" ? "✓ " : "✗ ") + this.#storageTestMessage;
+      testRow.appendChild(msg);
+    }
+    form.appendChild(testRow);
+
+    if (this.#storageFormError) {
+      const err = document.createElement("div");
+      err.style.cssText = "color:var(--omp-error);font-size:var(--omp-font-size-xs);margin-top:8px;white-space:pre-wrap;";
+      err.textContent = this.#storageFormError;
+      form.appendChild(err);
+    }
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:12px;";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.style.cssText = "cursor:pointer;";
+    cancelBtn.addEventListener("click", () => this.#closeStorageForm());
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "omp-btn-primary";
+    saveBtn.textContent = this.#editingStorageBackend ? "Speichern" : "Anlegen";
+    saveBtn.addEventListener("click", () => {
+      if (!f.name.trim() || !f.provider.trim() || !f.endpoint.trim() || !f.bucket.trim() || !f.accessKey.trim()) {
+        this.#storageFormError = "Name, Provider, Endpoint, Bucket und Access Key sind erforderlich.";
+        this.#render();
+        return;
+      }
+      if (!this.#editingStorageBackend && !f.secretKey) {
+        this.#storageFormError = "Secret Key ist beim Anlegen erforderlich.";
+        this.#render();
+        return;
+      }
+      void this.#submitStorageForm();
+    });
+    actions.append(cancelBtn, saveBtn);
+    form.appendChild(actions);
+
     return form;
   }
 

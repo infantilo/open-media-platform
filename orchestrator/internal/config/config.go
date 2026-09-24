@@ -217,6 +217,18 @@ type Config struct {
 	MinioSecretKey string
 	MinioBucket    string
 	MinioUseSSL    bool
+
+	// StorageSecretKey (Kapitel 21, Nutzerauftrag 2026-09-24: super-
+	// admin-verwaltete Storage-Backends, live hinzufügbar/entfernbar
+	// ohne Neustart) — Base64-kodierter AES-256-Masterschlüssel, mit dem
+	// internal/storagebackends die S3-Secret-Keys der einzelnen
+	// Backends verschlüsselt in Postgres ablegt. Leer heißt "Feature
+	// deaktiviert" (gleiche additive Linie wie MinioEndpoint) — dieser
+	// EINE Wert bleibt bewusst außerhalb der UI (er verschlüsselt die
+	// Backend-Secrets selbst, kann sich also nicht selbst dort
+	// verwalten, wie bei jedem Secret-Management-System), alles darüber
+	// hinaus ist voll UI-verwaltet, keine weiteren versteckten Configs.
+	StorageSecretKey string
 }
 
 // Load liest die Konfiguration aus den Umgebungsvariablen OMP_LISTEN,
@@ -303,11 +315,12 @@ func Load() Config {
 		// Defaults passen zu `make minio-up` (s. Makefile) — ein Dev-
 		// Setup, das MinIO per Makefile startet, braucht dafür keine
 		// zusätzliche OMP_MINIO_*-Konfiguration.
-		MinioEndpoint:  getEnv("OMP_MINIO_ENDPOINT", ""),
-		MinioAccessKey: getEnv("OMP_MINIO_ACCESS_KEY", "omp-minio-dev"),
-		MinioSecretKey: getEnv("OMP_MINIO_SECRET_KEY", "omp-minio-dev-pass"),
-		MinioBucket:    getEnv("OMP_MINIO_BUCKET", "omp-assets"),
-		MinioUseSSL:    minioUseSSL,
+		MinioEndpoint:    getEnv("OMP_MINIO_ENDPOINT", ""),
+		MinioAccessKey:   getEnv("OMP_MINIO_ACCESS_KEY", "omp-minio-dev"),
+		MinioSecretKey:   getEnv("OMP_MINIO_SECRET_KEY", "omp-minio-dev-pass"),
+		MinioBucket:      getEnv("OMP_MINIO_BUCKET", "omp-assets"),
+		MinioUseSSL:      minioUseSSL,
+		StorageSecretKey: getEnv("OMP_STORAGE_SECRET_KEY", ""),
 	}
 }
 

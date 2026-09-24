@@ -23,13 +23,13 @@ type AlarmAckStore interface {
 type HandlerOption func(*handlerOptions)
 
 type handlerOptions struct {
-	alarmAcks      AlarmAckStore
-	scriptCommands []string
-	domainAudit    DomainAuditLogger
-	domainAuditR   DomainAuditReader
-	assetLinks     AssetLinkService
-	objectStore    ObjectStoreService
-	organizations  OrganizationService
+	alarmAcks       AlarmAckStore
+	scriptCommands  []string
+	domainAudit     DomainAuditLogger
+	domainAuditR    DomainAuditReader
+	assetLinks      AssetLinkService
+	storageBackends StorageBackendService
+	organizations   OrganizationService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
@@ -54,14 +54,17 @@ func WithAssetLinks(svc AssetLinkService) HandlerOption {
 	return func(o *handlerOptions) { o.assetLinks = svc }
 }
 
-// WithObjectStore aktiviert Presigned-Upload-/Download-URLs für die
-// Asset-Domäne (Kapitel 21 B5, Nachtrag 280) — gleiches optionales
-// Muster wie die anderen With*-Optionen. Fehlt die Option (kein
-// konfiguriertes MinIO/S3, s. objectstore-Paketdoku), bleiben die
-// Endpunkte inaktiv statt mit nil-Panic zu crashen — die Handler prüfen
-// `store == nil` selbst und antworten 503.
-func WithObjectStore(svc ObjectStoreService) HandlerOption {
-	return func(o *handlerOptions) { o.objectStore = svc }
+// WithStorageBackends aktiviert die super-admin-verwaltete Storage-
+// Backend-Registry (Nutzerauftrag 2026-09-24, löst Kapitel 21 B5s
+// einzelnes, fest über OMP_MINIO_* konfiguriertes WithObjectStore ab) —
+// sowohl die Verwaltungs-Endpunkte (/api/v1/storage-backends) als auch
+// die Presigned-Upload-/Download-URLs, die jetzt ein Backend per ID
+// wählen statt einer einzigen globalen Instanz. Fehlt die Option (kein
+// OMP_STORAGE_SECRET_KEY gesetzt), bleiben beide Endpunkt-Gruppen
+// inaktiv statt mit nil-Panic zu crashen — die Handler prüfen
+// `backends == nil` selbst und antworten 503.
+func WithStorageBackends(svc StorageBackendService) HandlerOption {
+	return func(o *handlerOptions) { o.storageBackends = svc }
 }
 
 // WithOrganizations aktiviert die Organisations-Verwaltung
