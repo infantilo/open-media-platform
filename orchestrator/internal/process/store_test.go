@@ -57,6 +57,51 @@ func TestDefinitionCreateGetList(t *testing.T) {
 	}
 }
 
+// TestListDefinitionsLatestVersionStatus belegt Nachtrag 284 (UI-
+// Anbindung: Prozessliste soll nach Status sortier-/filterbar sein):
+// ListDefinitions muss den Status der JÜNGSTEN Version liefern (nicht
+// irgendeiner), und "" ohne jede Version. GetDefinition (Einzelabruf)
+// bleibt bewusst unverändert ohne dieses Feld, s. dortige Doku.
+func TestListDefinitionsLatestVersionStatus(t *testing.T) {
+	s := NewStore(testDB(t))
+
+	withoutVersion, err := s.CreateDefinition("No Version Yet", "", "", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateDefinition() error = %v", err)
+	}
+	withVersions, err := s.CreateDefinition("Has Versions", "", "", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateDefinition() error = %v", err)
+	}
+	v1, err := s.CreateVersion(withVersions.ID, validDefinition(), "alice")
+	if err != nil {
+		t.Fatalf("CreateVersion() error = %v", err)
+	}
+	if _, err := s.PublishVersion(v1.ID); err != nil {
+		t.Fatalf("PublishVersion() error = %v", err)
+	}
+	// Neuere, zweite Version bleibt Entwurf — die Liste muss DEREN
+	// Status zeigen, nicht den der bereits veröffentlichten v1.
+	if _, err := s.CreateVersion(withVersions.ID, validDefinition(), "alice"); err != nil {
+		t.Fatalf("CreateVersion() (v2) error = %v", err)
+	}
+
+	list, err := s.ListDefinitions()
+	if err != nil {
+		t.Fatalf("ListDefinitions() error = %v", err)
+	}
+	byID := make(map[string]ProcessDefinition, len(list))
+	for _, pd := range list {
+		byID[pd.ID] = pd
+	}
+	if got := byID[withoutVersion.ID].LatestVersionStatus; got != "" {
+		t.Errorf("LatestVersionStatus without any version = %q, want empty", got)
+	}
+	if got := byID[withVersions.ID].LatestVersionStatus; got != VersionStatusDraft {
+		t.Errorf("LatestVersionStatus with v1=published, v2=draft = %q, want %q (the newer version)", got, VersionStatusDraft)
+	}
+}
+
 func TestDefinitionGetUnknownReturnsNotFound(t *testing.T) {
 	s := NewStore(testDB(t))
 	if _, err := s.GetDefinition("does-not-exist"); err != ErrNotFound {

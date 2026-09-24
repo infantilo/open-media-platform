@@ -27,6 +27,9 @@ interface UserEntry {
   username: string;
   createdAt: string;
   isAdmin: boolean;
+  // orgId (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — Wire-Format
+  // identisch zu httpapi.userResponse.
+  orgId: string;
 }
 
 interface RoleBinding {
@@ -75,6 +78,14 @@ interface NodeEntry {
   id: string;
   label: string;
   instanceId?: string;
+}
+
+// Organization — Wire-Format identisch zu organizations.Organization
+// (Kapitel 21 B14, Nachtrag 283/284).
+interface Organization {
+  id: string;
+  name: string;
+  createdAt: string;
 }
 
 // ClusterStatus/ClusterPeer — Wire-Format identisch zu
@@ -174,9 +185,10 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "bindings" | "catalog" | "audit" | "diagnose" | "backup" | "cluster";
+type AdminTabId = "users" | "organizations" | "bindings" | "catalog" | "audit" | "diagnose" | "backup" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
+  { id: "organizations", label: "Organisationen" },
   { id: "bindings", label: "Rollenbindungen" },
   { id: "catalog", label: "Node-Katalog" },
   { id: "audit", label: "Audit-Log" },
@@ -223,8 +235,16 @@ class AdminView extends HTMLElement {
   #showUserForm = false;
   #newUsername = "";
   #newPassword = "";
+  #newUserOrgId = "";
   #resetTarget: string | null = null;
   #resetPassword = "";
+  // Organisationen (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — gleiches
+  // Muster wie #resetTarget/#resetPassword: #orgChangeTarget != null
+  // schaltet die betroffene Nutzer-Zeile auf ein Inline-Auswahlfeld um.
+  #organizations: Organization[] = [];
+  #showOrgForm = false;
+  #newOrgName = "";
+  #orgChangeTarget: string | null = null;
   #showBindingForm = false;
   #newSubject = "";
   #newNodeId = "*";
@@ -314,6 +334,7 @@ class AdminView extends HTMLElement {
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
     this.#render();
     this.#loadUsers();
+    this.#loadOrganizations();
     this.#loadBindings();
     this.#loadAudit();
     this.#loadLogs();
@@ -369,6 +390,75 @@ class AdminView extends HTMLElement {
       this.#loadLogs();
     }
   };
+
+  async #loadOrganizations() {
+    try {
+      const res = await apiFetch("/api/v1/organizations");
+      if (res.ok) {
+        this.#organizations = await res.json();
+        this.#render();
+      }
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — nächstes gezieltes Neuladen holt es auf.
+    }
+  }
+
+  async #createOrganization() {
+    if (!this.#newOrgName.trim()) return;
+    const res = await apiFetch("/api/v1/organizations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: this.#newOrgName.trim() }),
+    });
+    if (!res.ok) {
+      this.#error = `Organisation anlegen fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#newOrgName = "";
+    this.#showOrgForm = false;
+    await this.#loadOrganizations();
+  }
+
+  // 409 heißt hier immer entweder "Default-Organisation" (unlöschbar,
+  // s. organizations.Store.Delete-Doku) oder "hat noch Mitglieder/
+  // Fachobjekte" (bewusst keine Kaskade) — beides braucht eine für
+  // Nicht-Techniker verständliche Erklärung statt des rohen Backend-Texts.
+  async #deleteOrganization(org: Organization) {
+    if (!(await confirmDialog(`Organisation "${org.name}" wirklich löschen?`, { confirmLabel: "Löschen" }))) return;
+    const res = await apiFetch(`/api/v1/organizations/${encodeURIComponent(org.id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      const text = await res.text();
+      if (res.status === 409 && text.includes("cannot be deleted")) {
+        this.#error = `"${org.name}" ist die Standard-Organisation und kann nicht gelöscht werden.`;
+      } else if (res.status === 409) {
+        this.#error = `"${org.name}" hat noch Nutzer oder Objekte (Workflows/Assets/…) — erst diese verschieben oder entfernen.`;
+      } else {
+        this.#error = `Löschen fehlgeschlagen: ${text}`;
+      }
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    await this.#loadOrganizations();
+  }
+
+  async #changeUserOrg(username: string, orgId: string) {
+    const res = await apiFetch(`/api/v1/auth/users/${encodeURIComponent(username)}/org`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orgId }),
+    });
+    if (!res.ok) {
+      this.#error = `Organisation ändern fehlgeschlagen: ${await res.text()}`;
+      this.#render();
+      return;
+    }
+    this.#error = "";
+    this.#orgChangeTarget = null;
+    await this.#loadUsers();
+  }
 
   async #loadUsers() {
     try {
@@ -527,7 +617,7 @@ class AdminView extends HTMLElement {
     const res = await apiFetch("/api/v1/auth/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ username, password, orgId: this.#newUserOrgId || undefined }),
     });
     if (!res.ok) {
       this.#error = `Nutzer anlegen fehlgeschlagen: ${await res.text()}`;
@@ -537,6 +627,7 @@ class AdminView extends HTMLElement {
     this.#error = "";
     this.#newUsername = "";
     this.#newPassword = "";
+    this.#newUserOrgId = "";
     this.#showUserForm = false;
 
     // Bootstrap-Fall (Kapitel 11 Teil 1, §11.4): kein Token im Speicher
@@ -1069,6 +1160,9 @@ class AdminView extends HTMLElement {
       case "users":
         this.appendChild(this.#renderUsersSection());
         break;
+      case "organizations":
+        this.appendChild(this.#renderOrganizationsSection());
+        break;
       case "bindings":
         this.appendChild(this.#renderBindingsSection());
         break;
@@ -1153,6 +1247,7 @@ class AdminView extends HTMLElement {
       thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
         <th style="padding:2px 8px;">Nutzername</th>
         <th style="padding:2px 8px;">Angelegt</th>
+        <th style="padding:2px 8px;">Organisation</th>
         <th style="padding:2px 8px;">Rolle</th>
         <th style="padding:2px 8px;"></th>
       </tr>`;
@@ -1196,13 +1291,43 @@ class AdminView extends HTMLElement {
       if (ev.key === "Enter") this.#createUser();
     });
 
+    const orgSelect = this.#renderOrgSelect(this.#newUserOrgId, (value) => {
+      this.#newUserOrgId = value;
+    });
+    orgSelect.style.cssText = "flex:1;min-width:100px;";
+
     const createBtn = document.createElement("button");
     createBtn.textContent = "Anlegen";
     createBtn.style.cssText = "cursor:pointer;";
     createBtn.addEventListener("click", () => this.#createUser());
 
-    form.append(userInput, passInput, createBtn);
+    form.append(userInput, passInput, orgSelect, createBtn);
     return form;
+  }
+
+  // Gemeinsamer Organisations-Auswahl-Helfer für Anlage-Formular UND
+  // Inline-"Organisation ändern" (#renderUserRow) — "" ist immer die
+  // Default-Organisation (s. auth.Service.CreateUser/UpdateUserOrg-
+  // Doku), nicht irgendein Sonderwert.
+  #renderOrgSelect(value: string, onChange: (value: string) => void): HTMLSelectElement {
+    const select = document.createElement("select");
+    for (const org of this.#organizations) {
+      const opt = document.createElement("option");
+      opt.value = org.id;
+      opt.textContent = org.id === "default" ? `${org.name} (Standard)` : org.name;
+      select.appendChild(opt);
+    }
+    select.value = value || "default";
+    select.addEventListener("change", () => onChange(select.value === "default" ? "" : select.value));
+    return select;
+  }
+
+  // Name statt roher ID anzeigen — fällt auf die ID selbst zurück, falls
+  // #organizations noch nicht geladen ist (kurzes Zeitfenster beim
+  // ersten Render).
+  #orgName(orgId: string): string {
+    const id = orgId || "default";
+    return this.#organizations.find((o) => o.id === id)?.name ?? id;
   }
 
   #renderUserRow(u: UserEntry): HTMLElement {
@@ -1218,6 +1343,39 @@ class AdminView extends HTMLElement {
     createdTd.style.cssText = "padding:2px 8px;color:var(--omp-text-dim);";
     createdTd.textContent = new Date(u.createdAt).toLocaleString();
     tr.appendChild(createdTd);
+
+    const orgTd = document.createElement("td");
+    orgTd.style.cssText = "padding:2px 8px;";
+    if (this.#orgChangeTarget === u.username) {
+      const select = this.#renderOrgSelect(u.orgId, () => {});
+      select.style.cssText = "font-size:11px;";
+      const confirmBtn = document.createElement("button");
+      confirmBtn.textContent = "OK";
+      confirmBtn.style.cssText = "font-size:11px;cursor:pointer;margin-left:4px;";
+      confirmBtn.addEventListener("click", () => void this.#changeUserOrg(u.username, select.value === "default" ? "" : select.value));
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "×";
+      cancelBtn.style.cssText = "cursor:pointer;margin-left:2px;";
+      cancelBtn.addEventListener("click", () => {
+        this.#orgChangeTarget = null;
+        this.#render();
+      });
+      orgTd.append(select, confirmBtn, cancelBtn);
+    } else {
+      const nameSpan = document.createElement("span");
+      nameSpan.textContent = this.#orgName(u.orgId);
+      const changeBtn = document.createElement("button");
+      changeBtn.textContent = "ändern";
+      changeBtn.title = "Organisation dieses Nutzers ändern";
+      changeBtn.style.cssText = "font-size:11px;cursor:pointer;margin-left:6px;";
+      changeBtn.addEventListener("click", () => {
+        this.#orgChangeTarget = u.username;
+        this.#resetTarget = null;
+        this.#render();
+      });
+      orgTd.append(nameSpan, changeBtn);
+    }
+    tr.appendChild(orgTd);
 
     const roleTd = document.createElement("td");
     roleTd.style.cssText = "padding:2px 8px;";
@@ -1274,6 +1432,7 @@ class AdminView extends HTMLElement {
     resetBtn.addEventListener("click", () => {
       this.#resetTarget = u.username;
       this.#resetPassword = "";
+      this.#orgChangeTarget = null;
       this.#render();
     });
 
@@ -1286,6 +1445,117 @@ class AdminView extends HTMLElement {
     actionsTd.append(resetBtn, delBtn);
     tr.appendChild(actionsTd);
     return tr;
+  }
+
+  // Organisationen (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — gleiche
+  // Sub-Tab-Form wie #renderUsersSection (Titel+Zähler, "+ Neu"-Formular,
+  // Tabelle). Zielgruppe: ein Admin, der noch nie mit Mandantenfähigkeit
+  // gearbeitet hat — daher der erklärende Hinweistext statt vorauszusetzen,
+  // dass "Organisation" selbsterklärend ist.
+  #renderOrganizationsSection(): HTMLElement {
+    const section = document.createElement("div");
+    section.style.cssText = "margin-bottom:var(--omp-space-4);";
+
+    const heading = document.createElement("div");
+    heading.style.cssText =
+      "margin-bottom:var(--omp-space-3);display:flex;justify-content:space-between;align-items:center;";
+    const title = document.createElement("span");
+    title.className = "omp-h1";
+    title.textContent = `Organisationen (${this.#organizations.length})`;
+    const newBtn = document.createElement("button");
+    newBtn.textContent = this.#showOrgForm ? "Abbrechen" : "+ Neue Organisation";
+    newBtn.style.cssText = "font-size:11px;cursor:pointer;";
+    newBtn.addEventListener("click", () => {
+      this.#showOrgForm = !this.#showOrgForm;
+      this.#render();
+    });
+    heading.append(title, newBtn);
+    section.appendChild(heading);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-bottom:var(--omp-space-2);";
+    hint.textContent =
+      "Eine Organisation trennt Sichtbarkeit: Nutzer sehen nur Workflows/Assets/Prozesse ihrer eigenen Organisation. " +
+      'Jeder Nutzer gehört genau einer Organisation an (änderbar im Tab "Nutzer").';
+    section.appendChild(hint);
+
+    if (this.#showOrgForm) {
+      section.appendChild(this.#renderOrgForm());
+    }
+
+    if (this.#organizations.length === 0 && !this.#showOrgForm) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);";
+      empty.textContent = "Noch keine Organisation geladen.";
+      section.appendChild(empty);
+      return section;
+    }
+
+    if (this.#organizations.length > 0) {
+      const table = document.createElement("table");
+      table.style.cssText = "border-collapse:collapse;width:100%;";
+      const thead = document.createElement("thead");
+      thead.innerHTML = `<tr style="color:var(--omp-text-dim);text-align:left;">
+        <th style="padding:2px 8px;">Name</th>
+        <th style="padding:2px 8px;">ID</th>
+        <th style="padding:2px 8px;">Angelegt</th>
+        <th style="padding:2px 8px;"></th>
+      </tr>`;
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const org of this.#organizations) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td style="padding:2px 8px;">${org.id === "default" ? `${escapeHtml(org.name)} <span style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">(Standard)</span>` : escapeHtml(org.name)}</td>
+          <td style="padding:2px 8px;color:var(--omp-text-dim);font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);">${escapeHtml(org.id)}</td>
+          <td style="padding:2px 8px;color:var(--omp-text-dim);">${new Date(org.createdAt).toLocaleString()}</td>
+        `;
+        const actionsTd = document.createElement("td");
+        actionsTd.style.cssText = "padding:2px 8px;text-align:right;";
+        if (org.id !== "default") {
+          const delBtn = document.createElement("button");
+          delBtn.textContent = "Löschen";
+          delBtn.className = "omp-btn-danger";
+          delBtn.style.cssText = "font-size:11px;";
+          delBtn.addEventListener("click", () => void this.#deleteOrganization(org));
+          actionsTd.appendChild(delBtn);
+        }
+        tr.appendChild(actionsTd);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      section.appendChild(table);
+    }
+
+    return section;
+  }
+
+  #renderOrgForm(): HTMLElement {
+    const form = document.createElement("div");
+    form.style.cssText =
+      "border:1px solid var(--omp-border);border-radius:var(--omp-radius);padding:8px;" +
+      "margin-bottom:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;";
+
+    const nameInput = document.createElement("input");
+    nameInput.placeholder = "Name der Organisation";
+    nameInput.autocomplete = "off";
+    nameInput.value = this.#newOrgName;
+    nameInput.style.cssText = "flex:1;min-width:160px;";
+    nameInput.addEventListener("input", () => {
+      this.#newOrgName = nameInput.value;
+    });
+    nameInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") void this.#createOrganization();
+    });
+
+    const createBtn = document.createElement("button");
+    createBtn.textContent = "Anlegen";
+    createBtn.style.cssText = "cursor:pointer;";
+    createBtn.addEventListener("click", () => void this.#createOrganization());
+
+    form.append(nameInput, createBtn);
+    queueMicrotask(() => nameInput.focus());
+    return form;
   }
 
   #renderBindingsSection(): HTMLElement {

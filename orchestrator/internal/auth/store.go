@@ -141,6 +141,29 @@ func (s *Store) SetPasswordHash(ctx context.Context, username, hash string) erro
 	return nil
 }
 
+// UpdateOrg (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) versetzt einen
+// bestehenden Nutzer in eine andere Organisation — bisher nur bei der
+// Anlage setzbar (Create), s. dortige Doku. Wirkt sofort (OrgID kommt
+// nie aus dem Token, s. Service.Authenticate), kein RevokeSessions
+// nötig wie beim Passwort-Reset. Ein Fremdschlüssel-Verstoß (orgID
+// existiert nicht) kommt unverändert als *pgconn.PgError beim Aufrufer
+// an (gleiche Linie wie organizations.Store.Delete) — dieses Paket
+// kennt internal/organizations bewusst nicht, s. Create-Doku.
+func (s *Store) UpdateOrg(ctx context.Context, username, orgID string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE users SET org_id = $1 WHERE username = $2`, orgID, username)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // RevokeSessions (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md §20.4)
 // erhöht sessions_epoch um 1 — jedes zuvor mit dem alten Epoch-Wert
 // ausgestellte Token dieses Nutzers gilt ab sofort als ungültig (s.

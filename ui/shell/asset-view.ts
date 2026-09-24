@@ -36,6 +36,41 @@ import {
 
 const POLL_INTERVAL_MS = 15000;
 
+// Collection/AssetRelationship/AssetLink — Wire-Formate identisch zu
+// internal/asset.Collection/AssetRelationship bzw. internal/
+// assetlinks.Link (Kapitel 21 B12/B10 UI-Anbindung, Nachtrag 284).
+// Lokale Deklaration statt eines Imports aus asset-view-logic.ts —
+// diese drei brauchen (anders als Asset/AssetVersion/Representation)
+// keine geteilte Filter-/Formular-Logik, gleiches Muster wie
+// process-view.ts' AssetLink-Deklaration.
+interface Collection {
+  id: string;
+  title: string;
+  description?: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface AssetRelationship {
+  id: string;
+  fromAssetId: string;
+  toAssetId: string;
+  type: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+interface AssetLink {
+  id: string;
+  processExecutionId: string;
+  assetVersionId: string;
+  role: string;
+  createdAt: string;
+}
+
+const RELATIONSHIP_TYPE_SUGGESTIONS = ["derived_from", "version_of", "part_of", "references"];
+
 const STATUS_BADGE: Record<string, string> = {
   ingesting: "omp-badge-cue",
   registered: "omp-badge-cue",
@@ -100,13 +135,30 @@ class AssetView extends HTMLElement {
   #versions: AssetVersion[] = [];
   #selectedVersionId: string | null = null;
   #reps: Representation[] = [];
+  #relationships: AssetRelationship[] = [];
+  #versionLinks: AssetLink[] = [];
   #filter: AssetFilter = { query: "", type: "", status: "", showDeleted: false };
+
+  // Collections (Kapitel 21 B12 UI-Anbindung, Nachtrag 284) — geteilte
+  // Ansicht mit Assets statt eines eigenen Tabs: #viewMode schaltet
+  // Liste UND Detailbereich um, #listEl/#detailEl bleiben dieselben
+  // Container (kein zweiter #build()-Zweig nötig).
+  #viewMode: "assets" | "collections" = "assets";
+  #collections: Collection[] = [];
+  #selectedCollectionId: string | null = null;
+  #collectionMembers: Asset[] = [];
+  #showCollectionForm = false;
+  #editingCollection: Collection | null = null;
 
   #listEl!: HTMLElement;
   #detailEl!: HTMLElement;
   #countEl!: HTMLElement;
   #typeSelect!: HTMLSelectElement;
   #statusSelect!: HTMLSelectElement;
+  #filterBarEl!: HTMLElement;
+  #assetsModeBtn!: HTMLButtonElement;
+  #collectionsModeBtn!: HTMLButtonElement;
+  #newBtn!: HTMLButtonElement;
   #modal: HTMLElement | null = null;
   #pollHandle: number | undefined;
   #built = false;
@@ -143,7 +195,14 @@ class AssetView extends HTMLElement {
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
     }
+    try {
+      const res = await apiFetch("/api/v1/collections");
+      if (res.ok) this.#collections = (await res.json()) ?? [];
+    } catch {
+      // s.o.
+    }
     if (this.#selectedId) await this.#loadDetail(this.#selectedId);
+    if (this.#selectedCollectionId) await this.#loadCollectionMembers(this.#selectedCollectionId);
     this.#renderList();
     this.#renderDetail();
   }
@@ -154,6 +213,12 @@ class AssetView extends HTMLElement {
       this.#versions = res.ok ? (await res.json()) ?? [] : [];
     } catch {
       return;
+    }
+    try {
+      const res = await apiFetch(`/api/v1/assets/${assetId}/relationships`);
+      this.#relationships = res.ok ? (await res.json()) ?? [] : [];
+    } catch {
+      // s.o.
     }
     // Ausgewählte Version halten, sonst aktuelle (veröffentlichte),
     // sonst neueste — damit Representations sofort sichtbar sind.
@@ -169,8 +234,39 @@ class AssetView extends HTMLElement {
       } catch {
         // s.o.
       }
+      try {
+        const res = await apiFetch(`/api/v1/asset-versions/${this.#selectedVersionId}/links`);
+        this.#versionLinks = res.ok ? (await res.json()) ?? [] : [];
+      } catch {
+        // s.o.
+      }
     } else {
       this.#reps = [];
+      this.#versionLinks = [];
+    }
+  }
+
+  async #loadCollections() {
+    try {
+      const res = await apiFetch("/api/v1/collections");
+      if (res.ok) this.#collections = (await res.json()) ?? [];
+      this.#renderList();
+    } catch {
+      // s.o.
+    }
+  }
+
+  // Mitglieder als volle Asset-Objekte statt nur IDs (Backend liefert
+  // bewusst nur IDs, s. handleListCollectionMembers-Doku) — #assets ist
+  // bereits vollständig geladen (kein Filter server-seitig), ein Lookup
+  // reicht, kein zweiter Roundtrip pro Mitglied nötig.
+  async #loadCollectionMembers(collectionId: string) {
+    try {
+      const res = await apiFetch(`/api/v1/collections/${collectionId}/members`);
+      const ids: string[] = res.ok ? ((await res.json()) ?? []) : [];
+      this.#collectionMembers = ids.map((id) => this.#assets.find((a) => a.id === id)).filter((a): a is Asset => !!a);
+    } catch {
+      // s.o.
     }
   }
 
@@ -179,6 +275,8 @@ class AssetView extends HTMLElement {
     this.#selectedVersionId = null;
     this.#versions = [];
     this.#reps = [];
+    this.#relationships = [];
+    this.#versionLinks = [];
     this.#renderList();
     this.#renderDetail();
     // Volle Aktualisierung statt nur Detail: die Liste liefert auch die
@@ -336,6 +434,136 @@ class AssetView extends HTMLElement {
     await this.#refresh();
   }
 
+  // ---- Collections (B12) ------------------------------------------------------------------------
+
+  async #selectCollection(id: string) {
+    this.#selectedCollectionId = id;
+    this.#collectionMembers = [];
+    this.#renderList();
+    this.#renderDetail();
+    await this.#loadCollectionMembers(id);
+    this.#renderDetail();
+  }
+
+  async #createCollection(title: string, description: string): Promise<boolean> {
+    const res = await apiFetch("/api/v1/collections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, description }),
+    });
+    if (!res.ok) {
+      showToast(`Collection anlegen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return false;
+    }
+    const created = (await res.json()) as Collection;
+    await this.#loadCollections();
+    this.#selectedCollectionId = created.id;
+    this.#renderList();
+    this.#renderDetail();
+    showToast(`Collection „${created.title}“ angelegt.`, { variant: "info" });
+    return true;
+  }
+
+  async #updateCollection(collection: Collection, title: string, description: string): Promise<boolean> {
+    const res = await apiFetch(`/api/v1/collections/${collection.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, description }),
+    });
+    if (!res.ok) {
+      showToast(`Speichern fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return false;
+    }
+    await this.#loadCollections();
+    this.#renderList();
+    this.#renderDetail();
+    showToast("Collection aktualisiert.", { variant: "info" });
+    return true;
+  }
+
+  async #deleteCollection(collection: Collection) {
+    const ok = await confirmDialog(`Collection „${collection.title}“ löschen? Die enthaltenen Assets bleiben unverändert erhalten.`, {
+      confirmLabel: "Löschen",
+    });
+    if (!ok) return;
+    const res = await apiFetch(`/api/v1/collections/${collection.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Löschen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    if (this.#selectedCollectionId === collection.id) this.#selectedCollectionId = null;
+    await this.#loadCollections();
+    this.#renderList();
+    this.#renderDetail();
+  }
+
+  async #addCollectionMember(collectionId: string, assetId: string) {
+    const res = await apiFetch(`/api/v1/collections/${collectionId}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetId }),
+    });
+    if (!res.ok) {
+      showToast(`Hinzufügen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    await this.#loadCollectionMembers(collectionId);
+    this.#renderDetail();
+  }
+
+  async #removeCollectionMember(collectionId: string, assetId: string) {
+    const res = await apiFetch(`/api/v1/collections/${collectionId}/members/${assetId}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Entfernen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    await this.#loadCollectionMembers(collectionId);
+    this.#renderDetail();
+  }
+
+  // ---- Beziehungen (B12) ------------------------------------------------------------------------
+
+  async #createRelationship(fromAssetId: string, toAssetId: string, type: string): Promise<boolean> {
+    const res = await apiFetch("/api/v1/asset-relationships", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fromAssetId, toAssetId, type }),
+    });
+    if (!res.ok) {
+      showToast(`Beziehung anlegen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return false;
+    }
+    showToast("Beziehung angelegt.", { variant: "info" });
+    await this.#refresh();
+    return true;
+  }
+
+  async #deleteRelationship(rel: AssetRelationship) {
+    const ok = await confirmDialog("Diese Beziehung entfernen?", { confirmLabel: "Entfernen" });
+    if (!ok) return;
+    const res = await apiFetch(`/api/v1/asset-relationships/${rel.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Entfernen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    await this.#refresh();
+  }
+
+  // ---- Asset-Links / verknüpfte Prozessläufe (B10) -----------------------------------------------
+  // Anlegen passiert bewusst NICHT hier — process-view.ts' Execution-
+  // Detail ist der natürliche Ort dafür (dort ist die Execution bereits
+  // ausgewählt, hier müsste man sie erst suchen), s. dortige
+  // #renderAssetLinksSection-Doku. Diese Ansicht zeigt nur, entfernt
+  // aber auch (harmlos, DELETE ist idempotent/eigenständig).
+  async #deleteAssetLink(link: AssetLink) {
+    const res = await apiFetch(`/api/v1/asset-links/${link.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Entfernen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    await this.#refresh();
+  }
+
   // ---- Grundgerüst (einmalig) ------------------------------------------------------------------
 
   #build() {
@@ -346,18 +574,24 @@ class AssetView extends HTMLElement {
     const left = document.createElement("div");
     left.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-2);min-height:0;";
 
+    left.appendChild(this.#buildModeToggle());
+
     const heading = document.createElement("div");
     heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
     this.#countEl = document.createElement("span");
     this.#countEl.className = "omp-h1";
-    const newBtn = document.createElement("button");
-    newBtn.className = "omp-btn-primary";
-    newBtn.textContent = "+ Neu";
-    newBtn.setAttribute("data-role", "asset-new");
-    newBtn.addEventListener("click", () => this.#openCreateModal());
-    heading.append(this.#countEl, newBtn);
+    this.#newBtn = document.createElement("button");
+    this.#newBtn.className = "omp-btn-primary";
+    this.#newBtn.textContent = "+ Neu";
+    this.#newBtn.setAttribute("data-role", "asset-new");
+    this.#newBtn.addEventListener("click", () => {
+      if (this.#viewMode === "assets") this.#openCreateModal();
+      else this.#openCollectionModal(null);
+    });
+    heading.append(this.#countEl, this.#newBtn);
     left.appendChild(heading);
-    left.appendChild(this.#buildFilterBar());
+    this.#filterBarEl = this.#buildFilterBar();
+    left.appendChild(this.#filterBarEl);
 
     this.#listEl = document.createElement("div");
     this.#listEl.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-2);min-height:0;overflow-y:auto;";
@@ -368,6 +602,53 @@ class AssetView extends HTMLElement {
 
     layout.append(left, this.#detailEl);
     this.appendChild(layout);
+    this.#applyViewModeStyles();
+  }
+
+  // Umschalter Assets/Collections — zwei persistente Buttons (kein
+  // Rebuild bei jedem Klick, gleiches Rechtfertigungs-Muster wie
+  // #listEl/#detailEl: nur Textfelder brauchen Fokus-Stabilität, Buttons
+  // nicht, aber eine feste Referenz hält den Code hier einfacher als ein
+  // vollständiger Sub-Tab-Bar-Rebuild wie in admin-view.ts).
+  #buildModeToggle(): HTMLElement {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex;border:1px solid var(--omp-border);border-radius:var(--omp-radius);overflow:hidden;";
+    this.#assetsModeBtn = document.createElement("button");
+    this.#assetsModeBtn.type = "button";
+    this.#assetsModeBtn.textContent = "Assets";
+    this.#collectionsModeBtn = document.createElement("button");
+    this.#collectionsModeBtn.type = "button";
+    this.#collectionsModeBtn.textContent = "Collections";
+    this.#assetsModeBtn.addEventListener("click", () => this.#setViewMode("assets"));
+    this.#collectionsModeBtn.addEventListener("click", () => this.#setViewMode("collections"));
+    wrap.append(this.#assetsModeBtn, this.#collectionsModeBtn);
+    // #applyViewModeStyles() NICHT hier aufrufen — sie liest #filterBarEl/
+    // #newBtn, die erst später in #build() zugewiesen werden (echter
+    // Bug live gefunden: "Cannot read properties of undefined" beim
+    // ersten Öffnen des Assets-Tabs). #build() ruft sie stattdessen
+    // einmal ganz am Ende auf, wenn alle Felder gesetzt sind.
+    return wrap;
+  }
+
+  #applyViewModeStyles() {
+    const base = "flex:1;border:none;padding:6px 8px;font-family:var(--omp-font);font-size:var(--omp-font-size-sm);cursor:pointer;";
+    const active = "background:var(--omp-surface-raised);color:var(--omp-text);font-weight:600;";
+    const inactive = "background:transparent;color:var(--omp-text-dim);";
+    this.#assetsModeBtn.style.cssText = base + (this.#viewMode === "assets" ? active : inactive);
+    this.#collectionsModeBtn.style.cssText = base + (this.#viewMode === "collections" ? active : inactive);
+    this.#filterBarEl.style.display = this.#viewMode === "assets" ? "" : "none";
+    this.#newBtn.textContent = this.#viewMode === "assets" ? "+ Neu" : "+ Neue Collection";
+  }
+
+  #setViewMode(mode: "assets" | "collections") {
+    if (this.#viewMode === mode) return;
+    this.#viewMode = mode;
+    this.#selectedId = null;
+    this.#selectedCollectionId = null;
+    this.#applyViewModeStyles();
+    if (mode === "collections" && this.#collections.length === 0) void this.#loadCollections();
+    this.#renderList();
+    this.#renderDetail();
   }
 
   #buildFilterBar(): HTMLElement {
@@ -453,6 +734,10 @@ class AssetView extends HTMLElement {
   // ---- Liste -----------------------------------------------------------------------------------
 
   #renderList() {
+    if (this.#viewMode === "collections") {
+      this.#renderCollectionList();
+      return;
+    }
     this.#syncFilterOptions();
     const visible = filterAssets(this.#assets, this.#filter);
     this.#countEl.textContent = visible.length === this.#assets.length
@@ -492,9 +777,38 @@ class AssetView extends HTMLElement {
     }
   }
 
+  #renderCollectionList() {
+    this.#countEl.textContent = `Collections (${this.#collections.length})`;
+    this.#listEl.replaceChildren();
+
+    if (this.#collections.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = 'Noch keine Collection angelegt — mit „+ Neue Collection" die erste anlegen.';
+      this.#listEl.appendChild(empty);
+      return;
+    }
+
+    for (const c of this.#collections) {
+      const card = document.createElement("div");
+      card.className = "omp-card-compact";
+      card.style.cssText = "cursor:pointer;" + (c.id === this.#selectedCollectionId ? "border-color:var(--omp-info);" : "");
+      card.innerHTML = `
+        <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.title)}</div>
+        ${c.description ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:2px;">${escapeHtml(c.description)}</div>` : ""}
+      `;
+      card.addEventListener("click", () => void this.#selectCollection(c.id));
+      this.#listEl.appendChild(card);
+    }
+  }
+
   // ---- Detail ----------------------------------------------------------------------------------
 
   #renderDetail() {
+    if (this.#viewMode === "collections") {
+      this.#renderCollectionDetail();
+      return;
+    }
     this.#detailEl.replaceChildren();
     const asset = this.#assets.find((a) => a.id === this.#selectedId);
     if (!asset) {
@@ -509,7 +823,152 @@ class AssetView extends HTMLElement {
       this.#renderMetadata(asset),
       this.#renderVersions(asset),
       this.#renderRepresentations(),
+      this.#renderVersionLinks(),
+      this.#renderRelationships(asset),
     );
+  }
+
+  #renderCollectionDetail() {
+    this.#detailEl.replaceChildren();
+    const collection = this.#collections.find((c) => c.id === this.#selectedCollectionId);
+    if (!collection) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = 'Links eine Collection auswählen oder mit „+ Neue Collection" anlegen.';
+      this.#detailEl.appendChild(empty);
+      return;
+    }
+
+    const header = document.createElement("div");
+    header.className = "omp-card";
+    header.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+        <div class="omp-h1">${escapeHtml(collection.title)}</div>
+      </div>
+      <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:4px;">
+        Angelegt von ${escapeHtml(collection.createdBy)} am ${fmtTime(collection.createdAt)}
+      </div>
+      ${collection.description ? `<div style="margin-top:var(--omp-space-2);">${escapeHtml(collection.description)}</div>` : ""}
+    `;
+    const actionsRow = document.createElement("div");
+    actionsRow.style.cssText = "display:flex;gap:8px;margin-top:var(--omp-space-2);";
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "Bearbeiten";
+    editBtn.addEventListener("click", () => this.#openCollectionModal(collection));
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Löschen";
+    delBtn.className = "omp-btn-danger";
+    delBtn.addEventListener("click", () => void this.#deleteCollection(collection));
+    actionsRow.append(editBtn, delBtn);
+    header.appendChild(actionsRow);
+    this.#detailEl.appendChild(header);
+
+    const membersCard = document.createElement("div");
+    membersCard.className = "omp-card";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
+    head.innerHTML = `<span style="font-weight:600;">Mitglieder (${this.#collectionMembers.length})</span>`;
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Asset hinzufügen";
+    addBtn.addEventListener("click", () => this.#openAddMemberModal(collection));
+    head.appendChild(addBtn);
+    membersCard.appendChild(head);
+
+    if (this.#collectionMembers.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Noch kein Asset in dieser Collection.";
+      membersCard.appendChild(empty);
+    } else {
+      for (const a of this.#collectionMembers) {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px solid var(--omp-border);gap:8px;";
+        const left = document.createElement("span");
+        left.innerHTML = `${escapeHtml(a.title)} <span style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">(${escapeHtml(a.type)})</span>`;
+        const removeBtn = document.createElement("button");
+        removeBtn.textContent = "Entfernen";
+        removeBtn.addEventListener("click", () => void this.#removeCollectionMember(collection.id, a.id));
+        row.append(left, removeBtn);
+        membersCard.appendChild(row);
+      }
+    }
+    this.#detailEl.appendChild(membersCard);
+  }
+
+  // Beziehungen (B12) — beide Richtungen (fromAssetId/toAssetId können
+  // dieses Asset sein, s. handleListAssetRelationships-Doku), Pfeil zeigt
+  // die tatsächliche Richtung statt sie zu verschleiern.
+  #renderRelationships(asset: Asset): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "omp-card";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
+    head.innerHTML = `<span style="font-weight:600;">Beziehungen (${this.#relationships.length})</span>`;
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Beziehung";
+    addBtn.addEventListener("click", () => this.#openCreateRelationshipModal(asset));
+    head.appendChild(addBtn);
+    card.appendChild(head);
+
+    if (this.#relationships.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Keine Beziehung zu anderen Assets (z. B. „abgeleitet von“, „Teil von“).";
+      card.appendChild(empty);
+      return card;
+    }
+
+    for (const rel of this.#relationships) {
+      const outgoing = rel.fromAssetId === asset.id;
+      const otherId = outgoing ? rel.toAssetId : rel.fromAssetId;
+      const other = this.#assets.find((a) => a.id === otherId);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px solid var(--omp-border);gap:8px;";
+      const left = document.createElement("span");
+      left.innerHTML = `${outgoing ? "→" : "←"} <span style="color:var(--omp-text-dim);">${escapeHtml(rel.type)}</span> ${escapeHtml(other?.title ?? otherId)}`;
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Entfernen";
+      delBtn.addEventListener("click", () => void this.#deleteRelationship(rel));
+      row.append(left, delBtn);
+      card.appendChild(row);
+    }
+    return card;
+  }
+
+  // Verknüpfte Prozessläufe (B10) — read-only bis auf "Entfernen":
+  // Anlegen passiert in process-view.ts' Execution-Detail (s. dortige
+  // Doku), hier nur Sichtbarkeit + Aufräumen.
+  #renderVersionLinks(): HTMLElement {
+    const card = document.createElement("div");
+    card.className = "omp-card";
+    const version = this.#versions.find((v) => v.id === this.#selectedVersionId);
+    card.innerHTML = `<div style="font-weight:600;margin-bottom:var(--omp-space-2);">Verknüpfte Prozessläufe${version ? ` von v${version.versionNumber}` : ""} (${this.#versionLinks.length})</div>`;
+    if (!version) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Zuerst eine Version auswählen.";
+      card.appendChild(empty);
+      return card;
+    }
+    if (this.#versionLinks.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Kein Prozesslauf verknüpft. Verknüpfen geschieht im Prozesse-Tab an der jeweiligen Execution.";
+      card.appendChild(empty);
+      return card;
+    }
+    for (const link of this.#versionLinks) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px solid var(--omp-border);gap:8px;";
+      const left = document.createElement("span");
+      left.innerHTML = `${badge(link.role, link.role === "input" ? "omp-badge-info" : "omp-badge-running")} <span style="font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);" title="${escapeHtml(link.processExecutionId)}">${escapeHtml(link.processExecutionId.slice(0, 8))}…</span>`;
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Entfernen";
+      delBtn.addEventListener("click", () => void this.#deleteAssetLink(link));
+      row.append(left, delBtn);
+      card.appendChild(row);
+    }
+    return card;
   }
 
   #renderHeader(asset: Asset): HTMLElement {
@@ -834,6 +1293,114 @@ class AssetView extends HTMLElement {
         void this.#guard(btn, () => this.#createAsset(type.value.trim(), title.value.trim(), desc.value.trim()), close);
       });
       queueMicrotask(() => title.focus());
+    });
+  }
+
+  // collection == null: anlegen; sonst: bestehende Collection bearbeiten
+  // (Titel/Beschreibung — Mitgliederliste läuft über die Members-
+  // Endpunkte, s. #openAddMemberModal).
+  #openCollectionModal(collection: Collection | null) {
+    this.#openModal(collection ? "Collection bearbeiten" : "Neue Collection", (modal, close) => {
+      const title = this.#input("title", { placeholder: "Titel", value: collection?.title });
+      const desc = document.createElement("textarea");
+      desc.name = "description";
+      desc.rows = 3;
+      desc.value = collection?.description ?? "";
+      desc.style.cssText = "width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;";
+      modal.append(this.#field("Titel *", title), this.#field("Beschreibung", desc));
+      this.#actions(modal, close, collection ? "Speichern" : "Anlegen", (btn) => {
+        if (!title.value.trim()) {
+          showToast("Titel ist erforderlich.", { variant: "error" });
+          return;
+        }
+        void this.#guard(
+          btn,
+          () =>
+            collection
+              ? this.#updateCollection(collection, title.value.trim(), desc.value.trim())
+              : this.#createCollection(title.value.trim(), desc.value.trim()),
+          close,
+        );
+      });
+      queueMicrotask(() => title.focus());
+    });
+  }
+
+  #openAddMemberModal(collection: Collection) {
+    this.#openModal(`Asset zu „${collection.title}“ hinzufügen`, (modal, close) => {
+      const memberIds = new Set(this.#collectionMembers.map((a) => a.id));
+      const select = document.createElement("select");
+      select.style.cssText = "width:100%;";
+      const candidates = this.#assets.filter((a) => !memberIds.has(a.id));
+      if (candidates.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "– kein weiteres Asset verfügbar –";
+        select.appendChild(opt);
+      } else {
+        for (const a of candidates) {
+          const opt = document.createElement("option");
+          opt.value = a.id;
+          opt.textContent = `${a.title} (${a.type})`;
+          select.appendChild(opt);
+        }
+      }
+      modal.append(this.#field("Asset", select));
+      this.#actions(modal, close, "Hinzufügen", (btn) => {
+        if (!select.value) {
+          showToast("Kein Asset ausgewählt.", { variant: "error" });
+          return;
+        }
+        void this.#guard(
+          btn,
+          async () => {
+            await this.#addCollectionMember(collection.id, select.value);
+            return true;
+          },
+          close,
+        );
+      });
+    });
+  }
+
+  #openCreateRelationshipModal(asset: Asset) {
+    ensureDatalist("omp-relationship-type-suggestions", RELATIONSHIP_TYPE_SUGGESTIONS);
+    this.#openModal(`Beziehung von „${asset.title}“`, (modal, close) => {
+      const direction = document.createElement("select");
+      direction.style.cssText = "width:100%;";
+      const outOpt = document.createElement("option");
+      outOpt.value = "out";
+      outOpt.textContent = `${asset.title} → …`;
+      const inOpt = document.createElement("option");
+      inOpt.value = "in";
+      inOpt.textContent = `… → ${asset.title}`;
+      direction.append(outOpt, inOpt);
+
+      const targetSelect = document.createElement("select");
+      targetSelect.style.cssText = "width:100%;";
+      for (const a of this.#assets.filter((a) => a.id !== asset.id)) {
+        const opt = document.createElement("option");
+        opt.value = a.id;
+        opt.textContent = `${a.title} (${a.type})`;
+        targetSelect.appendChild(opt);
+      }
+
+      const type = this.#input("type", { placeholder: "z. B. derived_from", list: "omp-relationship-type-suggestions" });
+
+      modal.append(
+        this.#field("Richtung", direction),
+        this.#field("Anderes Asset *", targetSelect),
+        this.#field("Art der Beziehung *", type, "Freier Wert — Vorschläge per Pfeiltaste."),
+      );
+      this.#actions(modal, close, "Anlegen", (btn) => {
+        if (!targetSelect.value || !type.value.trim()) {
+          showToast("Anderes Asset und Art der Beziehung sind erforderlich.", { variant: "error" });
+          return;
+        }
+        const fromId = direction.value === "out" ? asset.id : targetSelect.value;
+        const toId = direction.value === "out" ? targetSelect.value : asset.id;
+        void this.#guard(btn, () => this.#createRelationship(fromId, toId, type.value.trim()), close);
+      });
     });
   }
 

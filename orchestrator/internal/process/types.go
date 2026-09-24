@@ -285,6 +285,15 @@ type ProcessDefinition struct {
 	// Aufrufer (z. B. process.Engine, die per ID auf eine bereits
 	// bekannte Definition zugreift) brauchen ungefilterten Zugriff.
 	OwnerOrgID string `json:"ownerOrgId,omitempty"`
+	// LatestVersionStatus (Kapitel 21 UI-Anbindung, Nachtrag 284) — Status
+	// (draft/published/deprecated/archived) der jüngsten ProcessVersion
+	// dieser Definition, leer ohne jede Version. Nur von ListDefinitions
+	// befüllt (s. dortige Doku) — ein reines Anzeige-/Sortierfeld für die
+	// Prozessliste, kein Store-Feld dieser Tabelle selbst (Versionen
+	// bleiben die alleinige Quelle der Wahrheit für ihren eigenen
+	// Status). GetDefinition liefert es bewusst NICHT mit (unnötiger
+	// JOIN für den heißen Einzelabruf-Pfad, z. B. in engine.go).
+	LatestVersionStatus string `json:"latestVersionStatus,omitempty"`
 }
 
 // ProcessVersion ist ein konkreter, ab Publish unveränderlicher

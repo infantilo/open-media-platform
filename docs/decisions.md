@@ -28896,3 +28896,110 @@ Leader — die API selbst verweigerte das erwartungsgemäß, s. o.).
 
 Vollständige Testsuite (`go test -count=1 ./...`, alle 38 Pakete)
 grün, keine Regression.
+
+## 2026-09-24 (Nachtrag 284) — UI-Anbindung für Organisationen/Collections/Beziehungen/Asset-Links + Prozessliste durchsuchbar/sortierbar
+
+Nutzerauftrag: "zuerst UI Anbindung, dann B11. Außerdem muss Prozess
+liste (linkes sidepanel) durchsuchbar und sortierbar sein nach
+name/datum/user/status... achte bei allen UIs darauf dass sie
+professionell aber auch extrem leicht zu verstehen/bedienen sind."
+Schließt die in Nachtrag 277/281-283 offen gelassene UI-Lücke für
+B14 (Organisationen), B12 (Collections/Beziehungen) und B10 (Asset-
+Links) — bislang existierten nur die HTTP-APIs.
+
+**Backend-Ergänzungen (klein, aber nötig, um die UI vollständig zu
+machen — kein reines Frontend-Ticket):**
+- `userResponse` (auth_handlers.go) bekommt `orgId` — bisher server-
+  seitig gepflegt (org_enforcement.go), aber nie an den Client
+  zurückgegeben; die Administration-Ansicht konnte sonst nicht zeigen,
+  welcher Organisation ein Nutzer angehört.
+- Neu `PUT /api/v1/auth/users/{name}/org` (`internal/auth`:
+  `Store.UpdateOrg`/`Service.UpdateUserOrg`, admin-only) — bisher ließ
+  sich die Organisation eines Nutzers nur bei dessen Anlage setzen
+  (`createUserRequest.OrgID` existierte schon), nie danach ändern.
+  Wirkt sofort (OrgID kommt nie aus dem Token, s. bestehende Doku in
+  `auth.go`).
+- `process.Store.ListDefinitions()` liefert neu `latestVersionStatus`
+  (LEFT JOIN LATERAL auf die jüngste `process_versions`-Zeile je
+  Definition) — Grundlage für die "Status"-Sortierung der Prozessliste,
+  ohne einen N+1-Abruf pro Definition im Client zu brauchen.
+  `GetDefinition` (Einzelabruf, z. B. in `engine.go`) bekommt das Feld
+  bewusst NICHT (unnötiger JOIN auf dem heißen Pfad).
+- Neue Tests: `TestStoreUpdateOrg`/`-UnknownUserReturnsNotFound`/
+  `-UnknownOrgFails` (`internal/auth`), `TestHandleUpdateUserOrg*`
+  (`internal/httpapi`), `TestListDefinitionsLatestVersionStatus`
+  (`internal/process`, belegt: neueste Version zählt, nicht irgendeine).
+
+**Administration-Tab (`admin-view.ts`):** neuer Sub-Tab
+"Organisationen" (zwischen Nutzer/Rollenbindungen) — Liste, Anlegen,
+Löschen. 409-Fehler werden in verständliche deutsche Sätze übersetzt
+("ist die Standard-Organisation und kann nicht gelöscht werden" bzw.
+"hat noch Nutzer oder Objekte … erst diese verschieben oder
+entfernen") statt des rohen Backend-Texts — Zielgruppe laut
+Nutzerauftrag "extrem leicht zu verstehen". Nutzer-Tabelle bekommt eine
+neue Spalte "Organisation" mit Inline-"ändern"-Auswahl (gleiches
+Editier-Muster wie der bestehende Passwort-Reset), Anlage-Formular
+bekommt eine Organisations-Auswahl.
+
+**Assets-Tab (`asset-view.ts`):** neuer Assets/Collections-Umschalter
+über der Liste (zwei feste Buttons, kein Rebuild pro Klick) — teilt
+sich `#listEl`/`#detailEl` mit der bestehenden Asset-Ansicht statt
+eines zweiten `#build()`-Zweigs. Collections: Liste, Anlegen,
+Bearbeiten (Titel/Beschreibung), Löschen, Mitglieder anzeigen/
+hinzufügen/entfernen (Asset-Picker aus der bereits geladenen
+`#assets`-Liste, kein zusätzlicher Roundtrip). Asset-Detail bekommt
+zwei neue Karten: "Beziehungen" (beide Richtungen, Pfeil zeigt die
+echte Richtung, Anlegen über Richtungs-/Ziel-/Typ-Auswahl) und
+"Verknüpfte Prozessläufe" (read-only bis auf Entfernen — Anlegen
+passiert bewusst in `process-view.ts`, s. u., nicht hier verdoppelt).
+
+**Prozesse-Tab (`process-view.ts`):**
+1. Linkes Seitenpanel bekommt ein Suchfeld (Name/Kategorie/
+   Beschreibung/Nutzer) + Sortierung (Zuletzt geändert/Name/Angelegt
+   von/Status) — Nutzerauftrag wörtlich umgesetzt. Dafür musste die
+   Datei von "komplettes `replaceChildren()` bei jedem `#render()`"
+   (bisheriges Muster) auf einen einmalig gebauten, stabilen
+   DOM-Rahmen umgestellt werden (`#build()`/`#defListEl`/`#detailEl`,
+   analog zu `asset-view.ts`) — sonst hätte das Suchfeld nach jedem
+   Tastendruck (und beim 15s-Poll) den Fokus verloren, weil ein neues
+   `<input>`-Element entstanden wäre. Live per echter Zeichen-für-
+   Zeichen-Eingabe verifiziert: Fokus UND DOM-Knoten-Identität bleiben
+   über alle 8 Tastendrücke hinweg stabil.
+2. Execution-Detail bekommt eine neue Karte "Verknüpfte Assets" (B10):
+   Liste + Entfernen + "+ Asset verknüpfen" (Asset- dann Versions-
+   Auswahl, beide erst bei Bedarf nachgeladen, dann Rolle input/
+   output). Label-Auflösung (assetVersionId -> "Titel vN") über einen
+   kleinen Cache, zwei GETs je neuer Verknüpfung, best effort (bei
+   Fehlschlag bleibt die rohe ID sichtbar, kein Fehler-Toast für eine
+   reine Anzeigehilfe).
+
+**Live-gefundener+gefixter Bug (nicht nur behauptet):** `asset-view.ts`
+warf beim ersten Öffnen des Assets-Tabs `TypeError: Cannot read
+properties of undefined (reading 'style')` — `#buildModeToggle()` rief
+`#applyViewModeStyles()` auf, bevor `#filterBarEl`/`#newBtn` weiter
+unten in `#build()` überhaupt zugewiesen waren. Per echtem CDP-
+Klicktest (nicht nur Typprüfung) gefunden, behoben durch einen
+einzigen `#applyViewModeStyles()`-Aufruf ganz am Ende von `#build()`.
+
+**Live verifiziert (echte Dev-Instanz, `make ui` + einmaliger
+Orchestrator-Neustart für die neuen Go-Routen, danach nur noch
+`make ui` + Reload):** Chromium headless per hand-gerolltem CDP-
+Skript (kein MCP/Puppeteer in dieser Sitzung verfügbar, s.
+[[feedback_cdp_browser_test_no_tool_available]]) — Organisation
+angelegt, Nutzer testweise umgehängt, Löschen einer noch belegten
+Organisation zeigt die übersetzte Fehlermeldung, Löschen nach dem
+Zurückhängen klappt; Collection angelegt+Mitglied hinzugefügt;
+Beziehung zwischen zwei Test-Assets angelegt (Pfeilrichtung korrekt);
+Asset-Link von einer echten Execution (`B10-Live-Test`) zu einer
+echten AssetVersion angelegt und auf der Asset-Seite spiegelbildlich
+sichtbar; Sortierung der Prozessliste nach Status gruppiert echte
+Einträge korrekt (leer→draft→published→deprecated). Keine
+Browser-Konsolenfehler in der finalen Runde. Alle Testdaten danach
+über die echte API wieder aufgeräumt (Link/Beziehung/Collection
+gelöscht, zwei Test-Assets auf Status "deleted" transitioniert — kein
+Hard-Delete für Assets vorgesehen, s. Lifecycle-Zustandsgraph).
+`deno check`/`deno test ui/` (128/128) und `go test -count=1 ./...`
+(38/38 Pakete, echte Mehr-Host-Patroni-DSN) grün.
+
+**Offen:** B11 (Volltextsuche) bleibt der letzte Punkt aus Kapitel 21
+Teil B — als Nächstes geplant, s. UMSETZUNG.md-Statuszeile.

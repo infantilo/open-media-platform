@@ -84,6 +84,16 @@ func (s *Service) SetPassword(ctx context.Context, username, password string) er
 	return s.store.RevokeSessions(ctx, username)
 }
 
+// UpdateUserOrg versetzt einen bestehenden Nutzer in eine andere
+// Organisation (Kapitel 21 B14 UI-Anbindung, Nachtrag 284). orgID leer
+// = Default-Organisation, gleiche Konvention wie CreateUser.
+func (s *Service) UpdateUserOrg(ctx context.Context, username, orgID string) error {
+	if orgID == "" {
+		orgID = DefaultOrgID
+	}
+	return s.store.UpdateOrg(ctx, username, orgID)
+}
+
 // Login prüft Nutzername/Passwort und stellt bei Erfolg ein Token aus.
 // Bettet den aktuellen SessionsEpoch des Nutzers fest ins Token ein (s.
 // Service.Authenticate) — ein Login, das unmittelbar nach einem

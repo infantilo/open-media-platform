@@ -255,6 +255,45 @@ func TestHandleResetPasswordSucceeds(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateUserOrgSucceeds(t *testing.T) {
+	authSvc := fakeAuthSvc{}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/users/alice/org", strings.NewReader(`{"orgId":"org-2"}`))
+	req.SetPathValue("name", "alice")
+	rec := httptest.NewRecorder()
+	handleUpdateUserOrg(authSvc)(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+}
+
+func TestHandleUpdateUserOrgUnknownUserReturnsNotFound(t *testing.T) {
+	authSvc := fakeAuthSvc{updateOrgErr: auth.ErrUserNotFound}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/users/ghost/org", strings.NewReader(`{"orgId":"org-2"}`))
+	req.SetPathValue("name", "ghost")
+	rec := httptest.NewRecorder()
+	handleUpdateUserOrg(authSvc)(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleUpdateUserOrgInvalidBodyReturnsBadRequest(t *testing.T) {
+	authSvc := fakeAuthSvc{}
+
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/auth/users/alice/org", strings.NewReader(`not-json`))
+	req.SetPathValue("name", "alice")
+	rec := httptest.NewRecorder()
+	handleUpdateUserOrg(authSvc)(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestHandleWhoamiBootstrapReportsIsAdminTrue(t *testing.T) {
 	authSvc := fakeAuthSvc{userCount: 0}
 	authzStore := fakeAuthzSvc{}

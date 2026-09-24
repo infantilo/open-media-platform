@@ -30,6 +30,11 @@ interface ProcessDefinition {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  // latestVersionStatus (Kapitel 21 UI-Anbindung, Nachtrag 284) — Status
+  // der jüngsten Version dieser Definition, "" ohne jede Version. Nur
+  // von GET /api/v1/process-definitions befüllt (internal/process.
+  // Store.ListDefinitions-Doku).
+  latestVersionStatus?: string;
 }
 
 interface ProcessVersion {
@@ -87,6 +92,19 @@ interface HumanTask {
   completedAt?: string;
 }
 
+// AssetLink — Wire-Format identisch zu internal/assetlinks.Link
+// (Kapitel 21 B10 UI-Anbindung, Nachtrag 284): verknüpft diese
+// Execution mit einer AssetVersion aus der Asset-Domäne (omp-asset-
+// view.ts) — "input" (gelesen) oder "output" (erzeugt), frei wie im
+// Backend (keine Go-Enum).
+interface AssetLink {
+  id: string;
+  processExecutionId: string;
+  assetVersionId: string;
+  role: string;
+  createdAt: string;
+}
+
 const EXEC_BADGE: Record<string, string> = {
   completed: "omp-badge-running",
   running: "omp-badge-info",
@@ -122,6 +140,21 @@ const TASK_BADGE: Record<string, string> = {
 const REFRESH_EVENT_TYPES = new Set(["lost-events"]);
 const POLL_FALLBACK_INTERVAL_MS = 15000;
 
+// Sortierkriterien der Prozessliste im linken Seitenpanel (Nutzerwunsch
+// 2026-09-24: "durchsuchbar und sortierbar nach name/datum/user/status").
+// "status" sortiert nach dem Status der jüngsten Version
+// (latestVersionStatus, s. ProcessDefinition-Doku) — eine Definition
+// ohne jede Version gilt dabei als "vor draft" (frisch angelegt, noch
+// nichts zu tun).
+type DefSort = "updated" | "name" | "user" | "status";
+const DEF_SORT_LABEL: Record<DefSort, string> = {
+  updated: "Zuletzt geändert",
+  name: "Name",
+  user: "Angelegt von",
+  status: "Status",
+};
+const DEF_STATUS_ORDER = ["", "draft", "published", "deprecated", "archived"];
+
 function escapeHtml(s: string): string {
   const div = document.createElement("div");
   div.textContent = s;
@@ -145,12 +178,43 @@ class ProcessView extends HTMLElement {
   #selectedExecId: string | null = null;
   #steps: ProcessStepExecution[] = [];
   #execTasks: HumanTask[] = [];
+  // Asset-Verknüpfungen (Kapitel 21 B10 UI-Anbindung, Nachtrag 284) —
+  // der lokale Lesbarkeits-Cache löst assetVersionId einmalig zu
+  // "Titel vN" auf (zwei zusätzliche GET je neuer Verknüpfung, s.
+  // #resolveAssetLinkLabels), damit die Liste nicht nur rohe UUIDs
+  // zeigt. Bleibt über #selectExecution-Wechsel hinweg bestehen (kleine,
+  // harmlose Wiederverwendung bei wiederholt besuchten Executions).
+  #assetLinks: AssetLink[] = [];
+  #assetLinkLabelCache = new Map<string, string>();
+  #showLinkForm = false;
+  #linkExecId: string | null = null;
+  #linkAssetOptions: { id: string; title: string }[] = [];
+  #linkVersionOptions: { id: string; versionNumber: number; status: string }[] = [];
+  #linkSelectedAssetId = "";
+  #linkSelectedVersionId = "";
+  #linkRole: "input" | "output" = "output";
   #myTasks: HumanTask[] = [];
   #username = "";
 
   #showDefForm = false;
   #showStartForm = false;
   #startVersionId = "";
+
+  // Prozessliste: Suche + Sortierung (Nutzerwunsch 2026-09-24) — rein
+  // clientseitig über die bereits geladenen #definitions, kein
+  // Server-Roundtrip (gleiche Linie wie asset-view.ts' Filterleiste).
+  #defSearch = "";
+  #defSort: DefSort = "updated";
+
+  // Gebaut einmalig in #build() statt bei jedem #render() neu erzeugt —
+  // sonst verlöre das Suchfeld bei jedem Tastendruck (und beim 15s-
+  // Poll) den Fokus, weil ein neues <input>-Element entstünde (gleiches
+  // Muster wie asset-view.ts' #listEl/#detailEl-Trennung).
+  #built = false;
+  #defCountEl!: HTMLElement;
+  #defListEl!: HTMLElement;
+  #detailEl!: HTMLElement;
+  #extrasEl!: HTMLElement;
 
   #pollHandle: number | undefined;
   #onSseMessage = (ev: Event) => {
@@ -168,6 +232,7 @@ class ProcessView extends HTMLElement {
       "display:block;background:var(--omp-bg);font-family:var(--omp-font);" +
       "font-size:var(--omp-font-size-sm);color:var(--omp-text);padding:var(--omp-space-3);" +
       "box-sizing:border-box;width:100%;height:100%;overflow-y:auto;";
+    if (!this.#built) this.#build();
     void whoami().then((w) => {
       this.#username = w.username ?? "";
     });
@@ -190,7 +255,7 @@ class ProcessView extends HTMLElement {
     // neu aufbauen — #render() erzeugt die Modals leer neu, halb
     // Eingetipptes ginge verloren (Nachtrag 269/270). Die frischen Daten
     // erscheinen mit dem nächsten Render nach dem Schließen.
-    if (this.#showDefForm || this.#showStartForm) return;
+    if (this.#showDefForm || this.#showStartForm || this.#showLinkForm) return;
     this.#render();
   }
 
@@ -218,15 +283,40 @@ class ProcessView extends HTMLElement {
 
   async #loadExecutionDetail(execId: string) {
     try {
-      const [sRes, tRes] = await Promise.all([
+      const [sRes, tRes, lRes] = await Promise.all([
         apiFetch(`/api/v1/process-executions/${execId}/steps`),
         apiFetch(`/api/v1/process-executions/${execId}/human-tasks`),
+        apiFetch(`/api/v1/process-executions/${execId}/asset-links`),
       ]);
       this.#steps = sRes.ok ? await sRes.json() : [];
       this.#execTasks = tRes.ok ? await tRes.json() : [];
+      this.#assetLinks = lRes.ok ? await lRes.json() : [];
+      void this.#resolveAssetLinkLabels();
     } catch {
       // s.o.
     }
+  }
+
+  // Löst assetVersionId -> "Titel vN" für die Anzeige auf (zwei GETs je
+  // neuer, noch unbekannter Verknüpfung) — best effort: schlägt eine
+  // Auflösung fehl (z. B. Asset inzwischen gelöscht), zeigt die Zeile
+  // die rohe ID, kein Fehler-Toast für eine reine Anzeige-Hilfe.
+  async #resolveAssetLinkLabels() {
+    const missing = this.#assetLinks.filter((l) => !this.#assetLinkLabelCache.has(l.assetVersionId));
+    if (missing.length === 0) return;
+    for (const link of missing) {
+      try {
+        const vRes = await apiFetch(`/api/v1/asset-versions/${link.assetVersionId}`);
+        if (!vRes.ok) continue;
+        const version = (await vRes.json()) as { assetId: string; versionNumber: number };
+        const aRes = await apiFetch(`/api/v1/assets/${version.assetId}`);
+        const title = aRes.ok ? ((await aRes.json()) as { title: string }).title : version.assetId;
+        this.#assetLinkLabelCache.set(link.assetVersionId, `${title} v${version.versionNumber}`);
+      } catch {
+        // s.o.
+      }
+    }
+    this.#render();
   }
 
   async #loadMyTasks() {
@@ -358,6 +448,71 @@ class ProcessView extends HTMLElement {
     this.#render();
   }
 
+  // Öffnet das "Asset verknüpfen"-Formular — lädt die Asset-Liste erst
+  // hier (nicht dauerhaft vorgehalten): process-view.ts brauchte bisher
+  // nie die Asset-Domäne, ein einmaliger Abruf bei Bedarf bleibt
+  // konsistent mit dem Rest der Datei (kein Dauer-Polling einer fremden
+  // Domäne).
+  async #openLinkForm(execId: string) {
+    this.#showLinkForm = true;
+    this.#linkExecId = execId;
+    this.#linkSelectedAssetId = "";
+    this.#linkSelectedVersionId = "";
+    this.#linkVersionOptions = [];
+    this.#linkRole = "output";
+    this.#render();
+    try {
+      const res = await apiFetch("/api/v1/assets");
+      const assets: { id: string; title: string }[] = res.ok ? await res.json() : [];
+      this.#linkAssetOptions = assets.map((a) => ({ id: a.id, title: a.title }));
+    } catch {
+      this.#linkAssetOptions = [];
+    }
+    this.#render();
+  }
+
+  async #selectLinkAsset(assetId: string) {
+    this.#linkSelectedAssetId = assetId;
+    this.#linkSelectedVersionId = "";
+    this.#linkVersionOptions = [];
+    this.#render();
+    if (!assetId) return;
+    try {
+      const res = await apiFetch(`/api/v1/assets/${assetId}/versions`);
+      this.#linkVersionOptions = res.ok ? await res.json() : [];
+    } catch {
+      this.#linkVersionOptions = [];
+    }
+    this.#render();
+  }
+
+  async #createAssetLink(execId: string, assetVersionId: string, role: string) {
+    const res = await apiFetch(`/api/v1/process-executions/${execId}/asset-links`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetVersionId, role }),
+    });
+    if (!res.ok) {
+      showToast(`Verknüpfen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    this.#showLinkForm = false;
+    this.#linkExecId = null;
+    await this.#loadExecutionDetail(execId);
+    this.#render();
+    showToast("Asset verknüpft.", { variant: "info" });
+  }
+
+  async #deleteAssetLink(link: AssetLink) {
+    const res = await apiFetch(`/api/v1/asset-links/${link.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Entfernen fehlgeschlagen: ${await res.text()}`, { variant: "error" });
+      return;
+    }
+    if (this.#selectedExecId) await this.#loadExecutionDetail(this.#selectedExecId);
+    this.#render();
+  }
+
   // "Für mich beanspruchen": setzt Assignee (POST .../assign ändert NUR
   // den Assignee, KEINEN Status, s. process.Store.AssignHumanTask-Doku)
   // und transitioniert danach explizit pending -> claimed — zwei
@@ -397,31 +552,22 @@ class ProcessView extends HTMLElement {
 
   // ---- Rendering -------------------------------------------------------------------------------
 
-  #render() {
-    this.replaceChildren();
-
+  // Einmalig aufgebautes Grundgerüst — Suchfeld/Sortier-Auswahl müssen
+  // über #render()-Aufrufe hinweg stabile DOM-Knoten bleiben (Fokus/
+  // Tastatureingabe), gleiches Muster wie asset-view.ts' #build()/
+  // #listEl/#detailEl.
+  #build() {
+    this.#built = true;
     const layout = document.createElement("div");
     layout.style.cssText = "display:grid;grid-template-columns:280px 1fr;gap:var(--omp-space-3);height:100%;";
 
-    layout.appendChild(this.#renderDefinitionList());
-    layout.appendChild(this.#renderDetail());
-
-    this.appendChild(layout);
-
-    if (this.#myTasks.length > 0) this.appendChild(this.#renderMyTasks());
-    if (this.#showDefForm) this.appendChild(this.#renderDefFormModal());
-    if (this.#showStartForm && this.#selectedDefId) this.appendChild(this.#renderStartFormModal(this.#selectedDefId));
-  }
-
-  #renderDefinitionList(): HTMLElement {
     const col = document.createElement("div");
     col.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-2);min-height:0;overflow-y:auto;";
 
     const heading = document.createElement("div");
     heading.style.cssText = "display:flex;justify-content:space-between;align-items:center;";
-    const title = document.createElement("span");
-    title.className = "omp-h1";
-    title.textContent = `Prozesse (${this.#definitions.length})`;
+    this.#defCountEl = document.createElement("span");
+    this.#defCountEl.className = "omp-h1";
     const newBtn = document.createElement("button");
     newBtn.className = "omp-btn-primary";
     newBtn.textContent = "+ Neu";
@@ -429,29 +575,156 @@ class ProcessView extends HTMLElement {
       this.#showDefForm = true;
       this.#render();
     });
-    heading.append(title, newBtn);
+    heading.append(this.#defCountEl, newBtn);
     col.appendChild(heading);
+    col.appendChild(this.#buildDefFilterBar());
+
+    this.#defListEl = document.createElement("div");
+    this.#defListEl.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-2);";
+    col.appendChild(this.#defListEl);
+
+    this.#detailEl = document.createElement("div");
+    this.#detailEl.style.cssText = "display:flex;flex-direction:column;gap:var(--omp-space-3);min-height:0;overflow-y:auto;";
+
+    layout.append(col, this.#detailEl);
+    this.appendChild(layout);
+
+    this.#extrasEl = document.createElement("div");
+    this.appendChild(this.#extrasEl);
+  }
+
+  // Suche (Name/Kategorie/Beschreibung/Nutzer) + Sortierung — Zielgruppe
+  // laut Aufgabenstellung auch Nicht-Techniker, daher ausgeschriebene
+  // Sortier-Labels statt Spaltenköpfen zum Anklicken (gleiche Linie wie
+  // asset-view.ts' Filterleiste, kein zusätzliches Bedienkonzept).
+  #buildDefFilterBar(): HTMLElement {
+    const bar = document.createElement("div");
+    bar.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+
+    const searchWrap = document.createElement("span");
+    searchWrap.className = "omp-search-wrap";
+    searchWrap.style.cssText = "display:block;";
+    const search = document.createElement("input");
+    search.className = "omp-search-input";
+    search.type = "search";
+    search.placeholder = "Suche (Name, Kategorie, Beschreibung, Nutzer) …";
+    search.style.cssText = "width:100%;box-sizing:border-box;";
+    search.addEventListener("input", () => {
+      this.#defSearch = search.value;
+      this.#renderDefinitionList();
+    });
+    searchWrap.appendChild(search);
+    bar.appendChild(searchWrap);
+
+    const sortRow = document.createElement("div");
+    sortRow.style.cssText = "display:flex;align-items:center;gap:6px;";
+    const sortLabel = document.createElement("span");
+    sortLabel.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);white-space:nowrap;";
+    sortLabel.textContent = "Sortieren:";
+    const sortSelect = document.createElement("select");
+    sortSelect.style.cssText = "flex:1;min-width:0;";
+    for (const [value, label] of Object.entries(DEF_SORT_LABEL) as [DefSort, string][]) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      sortSelect.appendChild(opt);
+    }
+    sortSelect.value = this.#defSort;
+    sortSelect.addEventListener("change", () => {
+      this.#defSort = sortSelect.value as DefSort;
+      this.#renderDefinitionList();
+    });
+    sortRow.append(sortLabel, sortSelect);
+    bar.appendChild(sortRow);
+
+    return bar;
+  }
+
+  #filteredSortedDefinitions(): ProcessDefinition[] {
+    const q = this.#defSearch.trim().toLowerCase();
+    const list = q
+      ? this.#definitions.filter(
+          (d) =>
+            d.name.toLowerCase().includes(q) ||
+            (d.category ?? "").toLowerCase().includes(q) ||
+            (d.description ?? "").toLowerCase().includes(q) ||
+            d.createdBy.toLowerCase().includes(q),
+        )
+      : [...this.#definitions];
+
+    switch (this.#defSort) {
+      case "name":
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        break;
+      case "user":
+        list.sort((a, b) => a.createdBy.localeCompare(b.createdBy) || a.name.localeCompare(b.name));
+        break;
+      case "status":
+        list.sort((a, b) => {
+          const ai = DEF_STATUS_ORDER.indexOf(a.latestVersionStatus ?? "");
+          const bi = DEF_STATUS_ORDER.indexOf(b.latestVersionStatus ?? "");
+          return ai - bi || a.name.localeCompare(b.name);
+        });
+        break;
+      case "updated":
+      default:
+        list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+        break;
+    }
+    return list;
+  }
+
+  #render() {
+    this.#renderDefinitionList();
+    this.#detailEl.replaceChildren(this.#renderDetail());
+
+    this.#extrasEl.replaceChildren();
+    if (this.#myTasks.length > 0) this.#extrasEl.appendChild(this.#renderMyTasks());
+    if (this.#showDefForm) this.#extrasEl.appendChild(this.#renderDefFormModal());
+    if (this.#showStartForm && this.#selectedDefId) this.#extrasEl.appendChild(this.#renderStartFormModal(this.#selectedDefId));
+    if (this.#showLinkForm && this.#linkExecId) this.#extrasEl.appendChild(this.#renderLinkFormModal(this.#linkExecId));
+  }
+
+  #renderDefinitionList() {
+    const visible = this.#filteredSortedDefinitions();
+    this.#defCountEl.textContent =
+      visible.length === this.#definitions.length
+        ? `Prozesse (${this.#definitions.length})`
+        : `Prozesse (${visible.length} von ${this.#definitions.length})`;
+
+    this.#defListEl.replaceChildren();
 
     if (this.#definitions.length === 0) {
       const empty = document.createElement("div");
       empty.className = "omp-empty";
       empty.textContent = "Noch keine Prozess-Definition angelegt.";
-      col.appendChild(empty);
+      this.#defListEl.appendChild(empty);
+      return;
+    }
+    if (visible.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Kein Prozess passt zum Filter.";
+      this.#defListEl.appendChild(empty);
+      return;
     }
 
-    for (const def of this.#definitions) {
+    for (const def of visible) {
       const card = document.createElement("div");
       card.className = "omp-card-compact";
       card.style.cssText = "cursor:pointer;" + (def.id === this.#selectedDefId ? "border-color:var(--omp-info);" : "");
       card.innerHTML = `
-        <div style="font-weight:600;">${escapeHtml(def.name)}</div>
+        <div style="display:flex;justify-content:space-between;gap:6px;align-items:baseline;">
+          <span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(def.name)}</span>
+          ${def.latestVersionStatus ? badge(def.latestVersionStatus, VERSION_BADGE[def.latestVersionStatus] ?? "") : ""}
+        </div>
         ${def.category ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);">${escapeHtml(def.category)}</div>` : ""}
         ${def.description ? `<div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:2px;">${escapeHtml(def.description)}</div>` : ""}
+        <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:2px;">${escapeHtml(def.createdBy)} · ${fmtTime(def.updatedAt)}</div>
       `;
       card.addEventListener("click", () => this.#selectDefinition(def.id));
-      col.appendChild(card);
+      this.#defListEl.appendChild(card);
     }
-    return col;
   }
 
   #renderDetail(): HTMLElement {
@@ -482,7 +755,10 @@ class ProcessView extends HTMLElement {
     wrap.appendChild(this.#renderVersionsSection());
     wrap.appendChild(this.#renderExecutionsSection());
 
-    if (this.#selectedExecId) wrap.appendChild(this.#renderExecutionDetail());
+    if (this.#selectedExecId) {
+      wrap.appendChild(this.#renderExecutionDetail());
+      wrap.appendChild(this.#renderAssetLinksSection(this.#selectedExecId));
+    }
 
     return wrap;
   }
@@ -678,6 +954,150 @@ class ProcessView extends HTMLElement {
     }
 
     return section;
+  }
+
+  // Verknüpfte Assets (Kapitel 21 B10 UI-Anbindung, Nachtrag 284) —
+  // eigene Karte statt Teil von #renderExecutionDetail: andere Domäne
+  // (internal/assetlinks referenziert internal/asset, nicht internal/
+  // process), verdient einen eigenen sichtbaren Abschnitt statt in den
+  // Schritten mitzulaufen.
+  #renderAssetLinksSection(execId: string): HTMLElement {
+    const section = document.createElement("div");
+    section.className = "omp-card";
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--omp-space-2);";
+    head.innerHTML = `<span style="font-weight:600;">Verknüpfte Assets (${this.#assetLinks.length})</span>`;
+    const addBtn = document.createElement("button");
+    addBtn.textContent = "+ Asset verknüpfen";
+    addBtn.addEventListener("click", () => void this.#openLinkForm(execId));
+    head.appendChild(addBtn);
+    section.appendChild(head);
+
+    if (this.#assetLinks.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "omp-empty";
+      empty.textContent = "Keine Asset-Version verknüpft — z. B. eine Datei, die dieser Lauf gelesen oder erzeugt hat.";
+      section.appendChild(empty);
+      return section;
+    }
+
+    for (const link of this.#assetLinks) {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;justify-content:space-between;align-items:center;padding:4px;border-bottom:1px solid var(--omp-border);gap:8px;";
+      const label = this.#assetLinkLabelCache.get(link.assetVersionId) ?? link.assetVersionId;
+      const left = document.createElement("span");
+      left.innerHTML = `${badge(link.role, link.role === "input" ? "omp-badge-info" : "omp-badge-running")} ${escapeHtml(label)}`;
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Entfernen";
+      delBtn.addEventListener("click", () => void this.#deleteAssetLink(link));
+      row.append(left, delBtn);
+      section.appendChild(row);
+    }
+    return section;
+  }
+
+  #renderLinkFormModal(execId: string): HTMLElement {
+    const overlay = document.createElement("div");
+    overlay.className = "omp-modal-overlay";
+    const modal = document.createElement("div");
+    modal.className = "omp-modal";
+
+    const title = document.createElement("div");
+    title.className = "omp-h1";
+    title.textContent = "Asset verknüpfen";
+    modal.appendChild(title);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin:4px 0 var(--omp-space-2);";
+    hint.textContent = "Verknüpft eine Asset-Version mit dieser Execution — z. B. eine Datei, die dieser Lauf gelesen (Input) oder erzeugt (Output) hat.";
+    modal.appendChild(hint);
+
+    const assetSelect = document.createElement("select");
+    assetSelect.style.cssText = "width:100%;margin-bottom:var(--omp-space-2);";
+    const noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = this.#linkAssetOptions.length ? "– Asset wählen –" : "– lädt … –";
+    assetSelect.appendChild(noneOpt);
+    for (const a of this.#linkAssetOptions) {
+      const opt = document.createElement("option");
+      opt.value = a.id;
+      opt.textContent = a.title;
+      assetSelect.appendChild(opt);
+    }
+    assetSelect.value = this.#linkSelectedAssetId;
+    assetSelect.addEventListener("change", () => void this.#selectLinkAsset(assetSelect.value));
+    modal.appendChild(assetSelect);
+
+    const versionSelect = document.createElement("select");
+    versionSelect.style.cssText = "width:100%;margin-bottom:var(--omp-space-2);";
+    if (this.#linkVersionOptions.length === 0) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = this.#linkSelectedAssetId ? "– keine Version vorhanden –" : "– zuerst ein Asset wählen –";
+      versionSelect.appendChild(opt);
+    } else {
+      for (const v of this.#linkVersionOptions) {
+        const opt = document.createElement("option");
+        opt.value = v.id;
+        opt.textContent = `v${v.versionNumber} (${v.status})`;
+        versionSelect.appendChild(opt);
+      }
+    }
+    versionSelect.value = this.#linkSelectedVersionId;
+    versionSelect.addEventListener("change", () => {
+      this.#linkSelectedVersionId = versionSelect.value;
+    });
+    modal.appendChild(versionSelect);
+
+    const roleSelect = document.createElement("select");
+    roleSelect.style.cssText = "width:100%;margin-bottom:var(--omp-space-3);";
+    const roleOptions: [string, string][] = [
+      ["output", "Output — von diesem Lauf erzeugt"],
+      ["input", "Input — von diesem Lauf gelesen"],
+    ];
+    for (const [value, label] of roleOptions) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      roleSelect.appendChild(opt);
+    }
+    roleSelect.value = this.#linkRole;
+    roleSelect.addEventListener("change", () => {
+      this.#linkRole = roleSelect.value as "input" | "output";
+    });
+    modal.appendChild(roleSelect);
+
+    const actions = document.createElement("div");
+    actions.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Abbrechen";
+    cancelBtn.addEventListener("click", () => {
+      this.#showLinkForm = false;
+      this.#linkExecId = null;
+      this.#render();
+    });
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "omp-btn-primary";
+    saveBtn.textContent = "Verknüpfen";
+    saveBtn.addEventListener("click", () => {
+      if (!this.#linkSelectedVersionId) {
+        showToast("Bitte ein Asset und eine Version wählen.", { variant: "error" });
+        return;
+      }
+      void this.#createAssetLink(execId, this.#linkSelectedVersionId, this.#linkRole);
+    });
+    actions.append(cancelBtn, saveBtn);
+    modal.appendChild(actions);
+
+    overlay.appendChild(modal);
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) {
+        this.#showLinkForm = false;
+        this.#linkExecId = null;
+        this.#render();
+      }
+    });
+    return overlay;
   }
 
   #renderMyTasks(): HTMLElement {

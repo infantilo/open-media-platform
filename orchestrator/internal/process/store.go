@@ -106,9 +106,26 @@ func (s *Store) GetDefinition(id string) (ProcessDefinition, error) {
 	return pd, err
 }
 
-// ListDefinitions liefert alle ProcessDefinitions, neueste zuerst.
+// ListDefinitions liefert alle ProcessDefinitions, neueste zuerst,
+// inklusive LatestVersionStatus (Kapitel 21 UI-Anbindung, Nachtrag
+// 284) — die Prozessliste im Flow-Editor-Seitenpanel soll nach Status
+// sortier-/filterbar sein, ohne dafür pro Definition einen eigenen
+// Versionen-Abruf zu brauchen (N+1). LEFT JOIN LATERAL statt eines
+// Subquery-Felds: liefert genau die jüngste Version (ORDER BY
+// version_number DESC LIMIT 1) je Definition, NULL bei keiner Version
+// (COALESCE zu "" für den Go-String).
 func (s *Store) ListDefinitions() ([]ProcessDefinition, error) {
-	rows, err := s.db.Query(`SELECT ` + definitionSelectColumns + ` FROM process_definitions ORDER BY created_at DESC`)
+	rows, err := s.db.Query(`
+		SELECT d.id, d.name, d.description, d.category, d.created_by, d.created_at, d.updated_at, d.owner_org_id,
+			COALESCE(v.status, '')
+		FROM process_definitions d
+		LEFT JOIN LATERAL (
+			SELECT status FROM process_versions
+			WHERE process_definition_id = d.id
+			ORDER BY version_number DESC LIMIT 1
+		) v ON true
+		ORDER BY d.created_at DESC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -116,8 +133,8 @@ func (s *Store) ListDefinitions() ([]ProcessDefinition, error) {
 
 	out := []ProcessDefinition{}
 	for rows.Next() {
-		pd, err := scanDefinition(rows)
-		if err != nil {
+		var pd ProcessDefinition
+		if err := rows.Scan(&pd.ID, &pd.Name, &pd.Description, &pd.Category, &pd.CreatedBy, &pd.CreatedAt, &pd.UpdatedAt, &pd.OwnerOrgID, &pd.LatestVersionStatus); err != nil {
 			return nil, err
 		}
 		out = append(out, pd)

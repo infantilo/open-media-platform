@@ -10,6 +10,8 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/audit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/auth"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/authz"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // AuditReader liest protokollierte Zugriffe (implementiert von
@@ -170,6 +172,11 @@ type userResponse struct {
 	Username  string    `json:"username"`
 	CreatedAt time.Time `json:"createdAt"`
 	IsAdmin   bool      `json:"isAdmin"`
+	// OrgID (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — bisher nur
+	// serverseitig gepflegt (org_enforcement.go), aber nie an die UI
+	// zurückgegeben; ohne dieses Feld konnte die Administration-Ansicht
+	// nicht zeigen/bedienen, welcher Organisation ein Nutzer angehört.
+	OrgID string `json:"orgId"`
 }
 
 // globalAdminSubjects liefert die Menge der Subjects mit einer
@@ -203,7 +210,7 @@ func handleListUsers(authSvc AuthService, authzStore AuthzChecker) http.HandlerF
 		admins := globalAdminSubjects(bindings)
 		out := make([]userResponse, len(users))
 		for i, u := range users {
-			out[i] = userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, IsAdmin: admins[u.Username]}
+			out[i] = userResponse{ID: u.ID, Username: u.Username, CreatedAt: u.CreatedAt, IsAdmin: admins[u.Username], OrgID: u.OrgID}
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
@@ -259,6 +266,42 @@ func handleResetPassword(authSvc AuthService) http.HandlerFunc {
 		if err := authSvc.SetPassword(r.Context(), r.PathValue("name"), req.Password); err != nil {
 			if errors.Is(err, auth.ErrUserNotFound) {
 				http.Error(w, "user not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+type updateUserOrgRequest struct {
+	OrgID string `json:"orgId"`
+}
+
+// handleUpdateUserOrg ist PUT /api/v1/auth/users/{name}/org — admin-only
+// (server.go), Kapitel 21 B14 UI-Anbindung (Nachtrag 284): bisher ließ
+// sich die Organisation eines Nutzers nur bei dessen Anlage setzen
+// (createUserRequest.OrgID), nie danach ändern. orgId leer = Default-
+// Organisation (auth.Service.UpdateUserOrg-Doku). Wirkt sofort, kein
+// Re-Login nötig (OrgID kommt nie aus dem Token).
+func handleUpdateUserOrg(authSvc AuthService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req updateUserOrgRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if err := authSvc.UpdateUserOrg(r.Context(), r.PathValue("name"), req.OrgID); err != nil {
+			if errors.Is(err, auth.ErrUserNotFound) {
+				http.Error(w, "user not found", http.StatusNotFound)
+				return
+			}
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+				// Fremdschlüssel-Verstoß — orgId existiert nicht (gleiche
+				// Übersetzung wie writeOrganizationError).
+				http.Error(w, "organization does not exist", http.StatusBadRequest)
 				return
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)

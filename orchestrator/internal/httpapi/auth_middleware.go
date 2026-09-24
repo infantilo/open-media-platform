@@ -22,6 +22,9 @@ type AuthService interface {
 	ListUsers(ctx context.Context) ([]auth.User, error)
 	DeleteUser(ctx context.Context, username string) error
 	SetPassword(ctx context.Context, username, password string) error
+	// UpdateUserOrg (Kapitel 21 B14 UI-Anbindung, Nachtrag 284) — s.
+	// handleUpdateUserOrg.
+	UpdateUserOrg(ctx context.Context, username, orgID string) error
 	// RevokeSessions (Sicherheits-Härtung 2026-08-10, ARCHITECTURE.md
 	// §20.4) — s. handleRevokeSessions.
 	RevokeSessions(ctx context.Context, username string) error

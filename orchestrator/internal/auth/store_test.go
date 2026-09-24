@@ -128,6 +128,63 @@ func TestStoreRevokeSessionsUnknownUserReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestStoreUpdateOrg(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	ctx := context.Background()
+	username := "test-store-updateorg-" + mustNewID(t)
+	orgID := "test-org-" + mustNewID(t)
+	t.Cleanup(func() {
+		_, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username)
+		_, _ = database.Exec(`DELETE FROM organizations WHERE id = $1`, orgID)
+	})
+	if _, err := database.Exec(`INSERT INTO organizations (id, name) VALUES ($1, $2)`, orgID, "Test Org"); err != nil {
+		t.Fatalf("seed organization: %v", err)
+	}
+
+	if _, err := store.Create(ctx, username, "hash-value", "default"); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := store.UpdateOrg(ctx, username, orgID); err != nil {
+		t.Fatalf("UpdateOrg() error = %v", err)
+	}
+	got, ok, err := store.ByUsername(ctx, username)
+	if err != nil || !ok {
+		t.Fatalf("ByUsername() = (ok=%v, err=%v)", ok, err)
+	}
+	if got.OrgID != orgID {
+		t.Fatalf("OrgID = %q after UpdateOrg(), want %q", got.OrgID, orgID)
+	}
+}
+
+func TestStoreUpdateOrgUnknownUserReturnsNotFound(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	if err := store.UpdateOrg(context.Background(), "does-not-exist-"+mustNewID(t), "default"); err != ErrUserNotFound {
+		t.Fatalf("UpdateOrg() error = %v, want ErrUserNotFound", err)
+	}
+}
+
+// TestStoreUpdateOrgUnknownOrgFails belegt, dass ein erfundenes orgID
+// den Fremdschlüssel auf organizations verletzt statt still zu
+// akzeptieren (httpapi.handleUpdateUserOrg übersetzt das in 400, s.
+// dortige Doku) — kein Freitext-Feld, sondern eine echte Beziehung.
+func TestStoreUpdateOrgUnknownOrgFails(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	ctx := context.Background()
+	username := "test-store-updateorg-badorg-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM users WHERE username = $1`, username) })
+	if _, err := store.Create(ctx, username, "hash-value", "default"); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	if err := store.UpdateOrg(ctx, username, "does-not-exist-"+mustNewID(t)); err == nil {
+		t.Fatal("UpdateOrg() with unknown orgID = nil error, want a foreign key violation")
+	}
+}
+
 func mustNewID(t *testing.T) string {
 	t.Helper()
 	id, err := newID()

@@ -379,6 +379,7 @@ type fakeAuthSvc struct {
 	listErr         error
 	deleteErr       error
 	setPasswordErr  error
+	updateOrgErr    error
 	revokeErr       error
 	serviceToken    string
 	serviceExpires  time.Time
@@ -409,6 +410,10 @@ func (f fakeAuthSvc) DeleteUser(ctx context.Context, username string) error {
 
 func (f fakeAuthSvc) SetPassword(ctx context.Context, username, password string) error {
 	return f.setPasswordErr
+}
+
+func (f fakeAuthSvc) UpdateUserOrg(ctx context.Context, username, orgID string) error {
+	return f.updateOrgErr
 }
 
 func (f fakeAuthSvc) RevokeSessions(ctx context.Context, username string) error {
