@@ -301,7 +301,7 @@ function renderNoActiveConsole(root: HTMLElement) {
     "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:16px;box-sizing:border-box;padding:24px;text-align:center;";
 
   const heading = document.createElement("h1");
-  heading.textContent = "Kein aktiver Regieplatz";
+  heading.textContent = "Kein aktiver Workflow";
   heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
   container.appendChild(heading);
 
@@ -334,7 +334,7 @@ function renderWorkflowPicker(root: HTMLElement, consoles: ConsoleEntry[], workf
     "width:100%;height:100%;background:#181818;color:#eee;font-family:sans-serif;gap:20px;box-sizing:border-box;padding:24px;";
 
   const heading = document.createElement("h1");
-  heading.textContent = "Regieplatz wählen";
+  heading.textContent = "Workflow wählen";
   heading.style.cssText = "font-size:20px;font-weight:600;margin:0;";
   container.appendChild(heading);
 

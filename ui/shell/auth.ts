@@ -155,9 +155,12 @@ const USER_WIDGET_GAP_PX = 6;
 // homeHref (Nutzerwunsch 2026-09-24: "wenn ein Operator mehrere
 // Workflows/Prozesse bedienen darf, muss er ... einen Home-Button
 // haben, um wieder dorthin zu navigieren" — "dorthin" = die
-// Regieplatz-Auswahl aus Kapitel 12 Teil 5, s. shell.ts#renderWorkflowPicker):
+// Workflow-Auswahl aus Kapitel 12 Teil 5, s. shell.ts#renderWorkflowPicker.
+// Bewusst "Workflow" statt "Regieplatz" in Label/Tooltip — Nutzerfund
+// 2026-09-24: "es sind nicht immer Regieplätze", der Begriff passt nur
+// für Live-Schaltplätze, nicht für jeden Operator-Anwendungsfall):
 // nur gesetzt, wenn shell.ts ermittelt hat, dass für DIESEN Nutzer
-// gerade eine Regieplatz-Auswahl existiert, zu der es sich lohnt
+// gerade eine Workflow-Auswahl existiert, zu der es sich lohnt
 // zurückzuspringen (reiner Operator, >1 zugewiesener Workflow, aktuell
 // innerhalb einer einzelnen Konsole) — ein Admin/Engineering-Nutzer
 // oder ein Operator mit nur einem Workflow bekommt keinen Button ohne
@@ -180,8 +183,8 @@ export function buildUserWidget(username: string, homeHref?: string): HTMLElemen
   if (homeHref) {
     const homeLink = document.createElement("a");
     homeLink.href = homeHref;
-    homeLink.textContent = "🏠 Regieplatz wechseln";
-    homeLink.title = "Zurück zur Regieplatz-Auswahl";
+    homeLink.textContent = "🏠 Workflow wechseln";
+    homeLink.title = "Zurück zur Workflow-Auswahl";
     homeLink.style.cssText =
       "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);text-decoration:none;" +
       "color:var(--omp-text);border:1px solid var(--omp-border);border-radius:var(--omp-radius);";

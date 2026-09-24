@@ -534,10 +534,10 @@ Rollenbindungen), landet nach dem Anmelden nicht im Flow Editor,
 sondern direkt auf einer **Operator-Konsole** — einer reinen
 Bedienoberfläche ohne Graph, Katalog oder Verkabelungsmöglichkeit. Sind
 einem Nutzer mehrere Workflows zugewiesen, wählt er zunächst aus einer
-Kachel-Liste den gewünschten Regieplatz — jede Kachel nennt den
+Kachel-Liste den gewünschten Workflow — jede Kachel nennt den
 Workflow-Namen und die Anzahl der darin zugewiesenen Rollen:
 
-![Regieplatz wählen: zwei zugewiesene Workflows als Kacheln](screenshots/regieplatz-auswahl.png)
+![Workflow wählen: zwei zugewiesene Workflows als Kacheln](screenshots/regieplatz-auswahl.png)
 
 Sobald einem Operator **mehr als eine** Rolle in einem Workflow zusteht,
 zeigt die Konsole alle zugewiesenen Node-Oberflächen gleichzeitig als
@@ -589,15 +589,17 @@ passend für einen reinen Live-Schaltplatz ohne Bandmaterial; ist eine
 zugewiesen, erscheint zusätzlich deren Playlist-Oberfläche als eigene
 Kachel.
 
-### 9.1 Regieplatz wechseln (Home-Button)
+### 9.1 Workflow wechseln (Home-Button)
 
 Ist ein Operator mehreren Workflows zugewiesen, zeigt das
 Nutzer-Widget unten rechts (neben „Abmelden") zusätzlich einen
-**„🏠 Regieplatz wechseln"**-Button, solange man sich innerhalb eines
-einzelnen Regieplatzes befindet — ein Klick führt zurück zur
-Kachel-Auswahl von oben, ohne sich neu anmelden zu müssen:
+**„🏠 Workflow wechseln"**-Button, solange man sich innerhalb einer
+einzelnen Konsole befindet — ein Klick führt zurück zur Kachel-Auswahl
+von oben, ohne sich neu anmelden zu müssen. Bewusst „Workflow" statt
+„Regieplatz" im Button: das trifft auch dann, wenn ein zugewiesener
+Workflow kein klassischer Live-Schaltplatz ist.
 
-![Regieplatz-Konsole mit "🏠 Regieplatz wechseln"-Button im Nutzer-Widget unten rechts](screenshots/regieplatz-wechseln.png)
+![Konsole mit "🏠 Workflow wechseln"-Button im Nutzer-Widget unten rechts](screenshots/regieplatz-wechseln.png)
 
 Der Button erscheint gezielt nur dort, wo es tatsächlich etwas zum
 Zurückspringen gibt: ein Operator mit nur einem zugewiesenen Workflow
