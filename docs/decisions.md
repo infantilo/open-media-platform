@@ -29003,3 +29003,62 @@ Hard-Delete für Assets vorgesehen, s. Lifecycle-Zustandsgraph).
 
 **Offen:** B11 (Volltextsuche) bleibt der letzte Punkt aus Kapitel 21
 Teil B — als Nächstes geplant, s. UMSETZUNG.md-Statuszeile.
+
+## 2026-09-24 (Nachtrag 285) — B11: Asset-Volltextsuche (tsvector/GIN) + Fix: Alarmleiste überlappte den Nutzer-Widget
+
+Nutzerauftrag "proceed B11" + Nebenbefund "alarm footer wird von
+'angemeldet als ...' und Abmeldebutton überlappt". Schließt Kapitel 21
+Teil B vollständig ab (letzter offener Punkt aus §21.3/Nachtrag 277/284).
+
+**B11 (Volltextsuche):** Migration `0026_asset_search.sql` — generierte
+Spalte `assets.search_vector tsvector` (`GENERATED ALWAYS ... STORED`,
+bleibt automatisch konsistent, kein Trigger nötig) + GIN-Index.
+Gewichtung A=Titel, B=Typ, C=Beschreibung, D=Metadaten (`metadata::text`)
+— ein Titeltreffer rankt höher als ein zufälliger Metadaten-Treffer.
+`'simple'`-Textsuchkonfiguration bewusst statt `'german'`/`'english'`:
+Asset-Titel sind sprachlich gemischter Freitext, ein falscher
+Sprach-Stemmer würde eher Treffer verschlucken als finden (§0 Punkt 6-
+Analogie: nicht raten). Neue `Store.SearchAssets(query)`
+(`websearch_to_tsquery`, versteht rohen Nutzer-Freitext robust ohne
+Syntaxfehler bei Sonderzeichen), neuer Endpunkt `GET /api/v1/assets/
+search?q=...` (org-gefiltert wie `ListAssets`, leeres `q` liefert `[]`
+statt 400 — das Suchfeld darf beim Leeren keinen Fehler-Toast auslösen).
+
+**UI (`asset-view.ts`):** Suchfeld liefert weiterhin sofortiges Feedback
+über den bestehenden Client-Substring-Vorfilter, ersetzt es aber nach
+250ms Debounce durch das echte, nach Relevanz sortierte Backend-Ergebnis
+— Typ-/Status-/"Gelöschte anzeigen"-Filter bleiben als zusätzliche
+UND-Kriterien on top wirksam (`filterAssets` mit neutralisiertem
+`query`, wenn Suchergebnisse vorliegen). Verworfene verspätete Antworten
+bei zwischenzeitlich geändertem Suchtext (kein Aufblitzen veralteter
+Treffer).
+
+**Live verifiziert (echte Dev-Instanz, CDP):** Asset mit eigenem
+Metadatenfeld (`droneCallsign: Quetzalcoatlus7`) angelegt — Suche nach
+genau diesem Metadatenwert findet das Asset (**das konnte die alte
+Substring-Suche NIE**, sie prüfte nur Titel/Beschreibung/Typ), Suche
+nach einem im Titel enthaltenen Wort findet es ebenfalls, Leeren des
+Suchfelds fällt korrekt auf die volle Client-Liste zurück. Store-Tests
+belegen zusätzlich die Rangfolge (Titeltreffer vor Beschreibungstreffer
+bei gleichem Suchwort) und Typ-Treffer. `go test ./...` 38/38 Pakete,
+`deno check`/`test ui/` 128/128 grün.
+
+**Nebenbefund behoben: Alarmleiste (`<omp-alert-bar>`, Footer,
+Nutzerauftrag 2026-09-21) überlappte das "Angemeldet als …"/Abmelden-
+Widget** — beide sitzen unabhängig voneinander in der unteren rechten
+Bildschirmecke (Widget `position:fixed`, Alarmleiste ein normaler, aber
+dynamisch ein-/ausblendender Footer-Block der App-Shell). Bewusst KEINE
+feste Kopplung zwischen `auth.ts` und `alert-bar.ts`/`app-shell.ts`
+eingeführt (`auth.ts` wird auch von `console-view.ts`/`console-board.ts`
+genutzt, die gar keine Alarmleiste kennen) — stattdessen beobachtet das
+Widget per `ResizeObserver` die tatsächliche Höhe eines evtl.
+vorhandenen `<omp-alert-bar>`-Elements und weicht automatisch nach oben
+aus, egal ob/wann sich die Leiste ein-/ausblendet oder ihre Höhe ändert.
+Live per CDP verifiziert: `getBoundingClientRect()` beider Elemente
+überschneiden sich nicht mehr (vorher direkt übereinander in derselben
+Bildschirmecke).
+
+Details in beiden Fällen: kein API-Vertragsbruch, reine Ergänzung/
+Layout-Fix. Kapitel 21 (Workflow Engine + Asset/Content Domain Model)
+ist damit inhaltlich vollständig abgeschlossen (Teil A + Teil B,
+inklusive B5/B10/B11/B12/B14-Vollausbau).

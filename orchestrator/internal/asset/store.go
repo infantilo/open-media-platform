@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/outbox"
@@ -220,6 +221,44 @@ func (s *Store) ListAssets(f AssetFilter) ([]Asset, error) {
 	query += " ORDER BY created_at DESC"
 
 	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Asset{}
+	for rows.Next() {
+		a, err := scanAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SearchAssets liefert Assets, deren search_vector (0026_asset_search.sql
+// — Titel/Typ/Beschreibung/Metadaten, generiert+GIN-indiziert) zur
+// Suchanfrage passt (B11, Kapitel 21 Teil B, letzter offener Punkt aus
+// §21.3). websearch_to_tsquery statt to_tsquery: versteht rohen
+// Nutzer-Freitext (Anführungszeichen für Phrasen, "-" zum Ausschließen,
+// "or") robust, ohne bei Sonderzeichen einen Syntaxfehler zu werfen —
+// genau die Eingabeform, die ein Suchfeld in der UI liefert. Ergebnis
+// nach Relevanz sortiert (ts_rank, absteigend), Gleichstand nach
+// created_at wie ListAssets. Eine leere Anfrage liefert bewusst KEINE
+// Ergebnisse (ErrValidation) statt "alles" — der Aufrufer (Handler)
+// soll bei leerem q auf ListAssets zurückfallen, nicht zwei
+// unterschiedliche Bedeutungen in einen Endpunkt packen.
+func (s *Store) SearchAssets(query string) ([]Asset, error) {
+	if strings.TrimSpace(query) == "" {
+		return nil, fmt.Errorf("%w: query is required", ErrValidation)
+	}
+	rows, err := s.db.Query(`
+		SELECT `+assetSelectColumns+`
+		FROM assets, websearch_to_tsquery('simple', $1) AS q
+		WHERE search_vector @@ q
+		ORDER BY ts_rank(search_vector, q) DESC, created_at DESC
+	`, query)
 	if err != nil {
 		return nil, err
 	}

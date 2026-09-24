@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/asset"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/statemachine"
@@ -38,6 +39,37 @@ func handleListAssets(svc AssetService) http.HandlerFunc {
 			return
 		}
 		// Kapitel 21 B14: nur die eigene Organisation, s. org_enforcement.go.
+		visible := make([]asset.Asset, 0, len(list))
+		for _, a := range list {
+			if orgMatches(r, a.OwnerOrgID) {
+				visible = append(visible, a)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
+	}
+}
+
+// handleSearchAssets liefert GET /api/v1/assets/search?q=... — echte
+// Postgres-Volltextsuche (B11, s. asset.Store.SearchAssets-Doku) statt
+// der bisherigen reinen Client-Substring-Suche. Ein leeres/fehlendes q
+// liefert bewusst eine leere Liste (nicht 400) — ein Suchfeld, das beim
+// Leeren zwischenzeitlich einen Request mit leerem q abfeuert, soll
+// keinen Fehler-Toast auslösen, die UI fällt bei leerem q ohnehin auf
+// GET /api/v1/assets zurück (s. asset-view.ts).
+func handleSearchAssets(svc AssetService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query().Get("q")
+		if strings.TrimSpace(q) == "" {
+			writeJSON(w, http.StatusOK, []asset.Asset{})
+			return
+		}
+		list, err := svc.SearchAssets(q)
+		if err != nil {
+			writeAssetError(w, err)
+			return
+		}
+		// Kapitel 21 B14: nur die eigene Organisation, gleiches Muster wie
+		// handleListAssets.
 		visible := make([]asset.Asset, 0, len(list))
 		for _, a := range list {
 			if orgMatches(r, a.OwnerOrgID) {

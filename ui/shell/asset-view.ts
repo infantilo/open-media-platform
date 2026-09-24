@@ -138,6 +138,14 @@ class AssetView extends HTMLElement {
   #relationships: AssetRelationship[] = [];
   #versionLinks: AssetLink[] = [];
   #filter: AssetFilter = { query: "", type: "", status: "", showDeleted: false };
+  // Volltextsuche (B11, Kapitel 21 Teil B, Nachtrag 284) — null = keine
+  // Suche aktiv (Liste zeigt #assets client-gefiltert wie bisher,
+  // unverändertes Verhalten). Nicht-null = Ergebnis von GET /api/v1/
+  // assets/search, bereits nach Relevanz sortiert; #filter.query wird
+  // dann NICHT mehr zusätzlich client-seitig angewendet (s. #renderList),
+  // Typ/Status/"Gelöschte anzeigen" bleiben on top wirksam.
+  #searchResults: Asset[] | null = null;
+  #searchDebounce: number | undefined;
 
   // Collections (Kapitel 21 B12 UI-Anbindung, Nachtrag 284) — geteilte
   // Ansicht mit Assets statt eines eigenen Tabs: #viewMode schaltet
@@ -205,6 +213,25 @@ class AssetView extends HTMLElement {
     if (this.#selectedCollectionId) await this.#loadCollectionMembers(this.#selectedCollectionId);
     this.#renderList();
     this.#renderDetail();
+  }
+
+  // B11 — echte Postgres-Volltextsuche statt reinem Client-Substring
+  // (asset-view-logic.ts filterAssets bleibt als Vorfilter/Typ-Status-
+  // Filter bestehen, s. #renderList). Verwirft ein verspätet
+  // eintreffendes Ergebnis, falls der Suchtext sich zwischenzeitlich
+  // schon wieder geändert hat (kein Aufblitzen veralteter Treffer).
+  async #runSearch(q: string) {
+    try {
+      const res = await apiFetch(`/api/v1/assets/search?q=${encodeURIComponent(q)}`);
+      if (!res.ok) return;
+      const results: Asset[] = (await res.json()) ?? [];
+      if (this.#filter.query.trim() !== q) return;
+      this.#searchResults = results;
+      this.#renderList();
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — der Client-Substring-
+      // Vorfilter bleibt sichtbar, nächste Eingabe versucht es erneut.
+    }
   }
 
   async #loadDetail(assetId: string) {
@@ -661,11 +688,22 @@ class AssetView extends HTMLElement {
     const search = document.createElement("input");
     search.className = "omp-search-input";
     search.type = "search";
-    search.placeholder = "Suche (Titel, Beschreibung, Typ) …";
+    search.placeholder = "Suche (Titel, Beschreibung, Typ, Metadaten) …";
     search.style.cssText = "width:100%;box-sizing:border-box;";
     search.addEventListener("input", () => {
       this.#filter.query = search.value;
+      // Sofortiges Feedback aus dem bereits geladenen #assets (client-
+      // seitiger Substring-Vorfilter, wie bisher), dann — nach kurzer
+      // Verzögerung gegen einen Request pro Tastendruck — die echte
+      // Volltextsuche (B11), die deren Ergebnis ersetzt (Relevanz-
+      // Ranking + Metadaten-Treffer, die die reine Substring-Suche nie
+      // finden konnte).
+      this.#searchResults = null;
       this.#renderList();
+      if (this.#searchDebounce !== undefined) window.clearTimeout(this.#searchDebounce);
+      const q = search.value.trim();
+      if (!q) return;
+      this.#searchDebounce = window.setTimeout(() => void this.#runSearch(q), 250);
     });
     searchWrap.appendChild(search);
     bar.appendChild(searchWrap);
@@ -739,7 +777,12 @@ class AssetView extends HTMLElement {
       return;
     }
     this.#syncFilterOptions();
-    const visible = filterAssets(this.#assets, this.#filter);
+    // #searchResults != null: die echte Volltextsuche (B11) hat bereits
+    // nach Relevanz gefiltert/sortiert — #filter.query hier NICHT noch
+    // einmal per Substring anwenden (Ranking-Reihenfolge bliebe erhalten,
+    // Typ/Status/showDeleted bleiben als zusätzliche UND-Kriterien aktiv).
+    const source = this.#searchResults ?? this.#assets;
+    const visible = filterAssets(source, this.#searchResults ? { ...this.#filter, query: "" } : this.#filter);
     this.#countEl.textContent = visible.length === this.#assets.length
       ? `Assets (${this.#assets.length})`
       : `Assets (${visible.length} von ${this.#assets.length})`;

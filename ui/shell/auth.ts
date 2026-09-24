@@ -136,9 +136,22 @@ export function showLoginOverlay(root: HTMLElement, onSuccess: () => void) {
   userInput.focus();
 }
 
+const USER_WIDGET_GAP_PX = 6;
+
 // buildUserWidget zeigt den angemeldeten Nutzer + Abmelden-Button — nur
 // aufgerufen, wenn authRequired true ist (s. shell.ts), damit der
 // Bootstrap-/Dev-Modus ohne angelegte Nutzer optisch unverändert bleibt.
+//
+// Nutzerreport 2026-09-24: überlappte die globale Alarmleiste
+// (<omp-alert-bar>, alert-bar.ts) — beide sitzen unabhängig voneinander
+// in der unteren rechten Bildschirmecke (Widget `position:fixed`,
+// Alarmleiste ein normaler, aber dynamisch ein-/ausblendender
+// Footer-Block in der App-Shell). Bewusst KEINE feste Kopplung
+// zwischen den beiden Dateien (auth.ts wird auch von console-view.ts/
+// console-board.ts genutzt, die gar keine Alarmleiste haben) — stattdessen
+// beobachtet dieses Widget per ResizeObserver die tatsächliche Höhe
+// eines evtl. vorhandenen <omp-alert-bar>-Elements und weicht ihr
+// automatisch nach oben aus, egal ob/wann sie sich ein-/ausblendet.
 export function buildUserWidget(username: string): HTMLElement {
   const widget = document.createElement("div");
   widget.style.cssText =
@@ -146,7 +159,8 @@ export function buildUserWidget(username: string): HTMLElement {
     "font-family:var(--omp-font);font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);" +
     "background:var(--omp-surface);padding:var(--omp-space-1) var(--omp-space-2);" +
     "border-radius:var(--omp-radius);border:1px solid var(--omp-border);" +
-    "display:flex;gap:var(--omp-space-2);align-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);";
+    "display:flex;gap:var(--omp-space-2);align-items:center;box-shadow:0 2px 8px rgba(0,0,0,0.3);" +
+    "transition:bottom 0.15s ease;";
   const label = document.createElement("span");
   label.textContent = `Angemeldet als ${username}`;
   const logoutButton = document.createElement("button");
@@ -154,5 +168,16 @@ export function buildUserWidget(username: string): HTMLElement {
   logoutButton.style.cssText = "font-size:var(--omp-font-size-xs);padding:2px var(--omp-space-2);";
   logoutButton.addEventListener("click", logout);
   widget.append(label, logoutButton);
+
+  const alertBar = document.querySelector("omp-alert-bar");
+  if (alertBar) {
+    const observer = new ResizeObserver(([entry]) => {
+      const barHeight = entry.contentRect.height;
+      widget.style.bottom =
+        barHeight > 0 ? `calc(var(--omp-space-2) + ${barHeight + USER_WIDGET_GAP_PX}px)` : "var(--omp-space-2)";
+    });
+    observer.observe(alertBar);
+  }
+
   return widget;
 }

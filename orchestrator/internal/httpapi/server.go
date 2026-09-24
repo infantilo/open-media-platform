@@ -227,6 +227,9 @@ type AssetService interface {
 	CreateAsset(assetType, title, description, createdBy, ownerOrgID string) (asset.Asset, error)
 	GetAsset(id string) (asset.Asset, error)
 	ListAssets(f asset.AssetFilter) ([]asset.Asset, error)
+	// SearchAssets (B11, Kapitel 21 Teil B, Nachtrag 284) — s.
+	// asset.Store.SearchAssets-Doku.
+	SearchAssets(query string) ([]asset.Asset, error)
 	UpdateAssetStatus(id string, expectedRowVersion int, newStatus, updatedBy string) (asset.Asset, error)
 	UpdateAssetMetadata(id string, expectedRowVersion int, metadata asset.Metadata, updatedBy string) (asset.Asset, error)
 
@@ -588,6 +591,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// Zuweisen/Entscheiden, nicht Konfiguration des Systems selbst.
 	mux.HandleFunc("GET /api/v1/asset-lifecycle", g.requireAuth(handleAssetLifecycle()))
 	mux.HandleFunc("GET /api/v1/assets", g.requireAuth(handleListAssets(assetSvc)))
+	// B11 (Kapitel 21 Teil B, Nachtrag 284) — "search" ist ein Literal-
+	// Segment und gewinnt automatisch gegen das wildcard {id} unten
+	// (Go 1.22+-ServeMux-Regel "literal schlägt Wildcard"), Reihenfolge
+	// der Registrierung ist daher irrelevant.
+	mux.HandleFunc("GET /api/v1/assets/search", g.requireAuth(handleSearchAssets(assetSvc)))
 	mux.HandleFunc("POST /api/v1/assets", g.requireVerbGlobal(authz.VerbConfigure, handleCreateAsset(assetSvc, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/assets/{id}", g.requireAuth(handleGetAsset(assetSvc)))
 	mux.HandleFunc("POST /api/v1/assets/{id}/status", g.requireVerbGlobal(authz.VerbOperate, handleUpdateAssetStatus(assetSvc, options.domainAudit)))

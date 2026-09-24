@@ -64,6 +64,82 @@ func TestAssetCreateGetList(t *testing.T) {
 	}
 }
 
+// TestSearchAssetsMatchesTitleTypeDescriptionAndMetadataRankedByRelevance
+// belegt B11 (Kapitel 21 Teil B, Nachtrag 284): echte Volltextsuche
+// über search_vector (0026_asset_search.sql), nicht nur Titel-Substring.
+// Ein Treffer im Titel (Gewicht A) muss vor einem gleichwertigen Treffer
+// nur in der Beschreibung (Gewicht C) ranken.
+func TestSearchAssetsMatchesTitleTypeDescriptionAndMetadataRankedByRelevance(t *testing.T) {
+	s := NewStore(testDB(t))
+
+	titleHit, err := s.CreateAsset("VIDEO", "Nightfall Interview", "generic clip", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateAsset() error = %v", err)
+	}
+	descHit, err := s.CreateAsset("VIDEO", "Generic clip", "features a nightfall scene", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateAsset() error = %v", err)
+	}
+	if _, err := s.CreateAsset("AUDIO", "Unrelated", "nothing here", "alice", ""); err != nil {
+		t.Fatalf("CreateAsset() error = %v", err)
+	}
+
+	results, err := s.SearchAssets("nightfall")
+	if err != nil {
+		t.Fatalf("SearchAssets() error = %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("SearchAssets(nightfall) = %d results, want 2: %+v", len(results), results)
+	}
+	if results[0].ID != titleHit.ID || results[1].ID != descHit.ID {
+		t.Fatalf("SearchAssets(nightfall) order = [%s, %s], want title hit first (%s) then description hit (%s)",
+			results[0].ID, results[1].ID, titleHit.ID, descHit.ID)
+	}
+
+	// Typ-Treffer (Gewicht B).
+	byType, err := s.SearchAssets("audio")
+	if err != nil {
+		t.Fatalf("SearchAssets() error = %v", err)
+	}
+	if len(byType) != 1 || byType[0].Title != "Unrelated" {
+		t.Fatalf("SearchAssets(audio) = %+v, want the AUDIO asset", byType)
+	}
+
+	// Metadaten-Treffer (Gewicht D) — filterAssets (Client-Substring)
+	// konnte das bisher NIE finden, genau die B11-Lücke.
+	metaHit, err := s.CreateAsset("IMAGE", "Some Frame", "", "alice", "")
+	if err != nil {
+		t.Fatalf("CreateAsset() error = %v", err)
+	}
+	if _, err := s.UpdateAssetMetadata(metaHit.ID, metaHit.RowVersion, Metadata{
+		Custom: map[string]any{"location": "Kaiserschmarrnalm"},
+	}, "alice"); err != nil {
+		t.Fatalf("UpdateAssetMetadata() error = %v", err)
+	}
+	byMeta, err := s.SearchAssets("Kaiserschmarrnalm")
+	if err != nil {
+		t.Fatalf("SearchAssets() error = %v", err)
+	}
+	if len(byMeta) != 1 || byMeta[0].ID != metaHit.ID {
+		t.Fatalf("SearchAssets(Kaiserschmarrnalm) = %+v, want only the metadata-matching asset", byMeta)
+	}
+
+	none, err := s.SearchAssets("nonexistentxyz")
+	if err != nil {
+		t.Fatalf("SearchAssets() error = %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("SearchAssets(nonexistentxyz) = %d results, want 0", len(none))
+	}
+}
+
+func TestSearchAssetsEmptyQueryIsValidationError(t *testing.T) {
+	s := NewStore(testDB(t))
+	if _, err := s.SearchAssets("   "); !errors.Is(err, ErrValidation) {
+		t.Fatalf("SearchAssets(whitespace) error = %v, want ErrValidation", err)
+	}
+}
+
 func TestAssetGetUnknownReturnsNotFound(t *testing.T) {
 	s := NewStore(testDB(t))
 	if _, err := s.GetAsset("does-not-exist"); err != ErrNotFound {
