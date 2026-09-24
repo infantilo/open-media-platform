@@ -142,38 +142,30 @@ pub fn spawn(addr: &str, broadcaster: Arc<Broadcaster>, heartbeat: Arc<AtomicU64
 /// haben (z. B. ein `tee` oder — beim Multiviewer — ein `compositor`).
 ///
 /// Liefert die sechs erzeugten Elemente in Verlinkungsreihenfolge zurück
-/// (Nutzerauftrag 2026-09-03, `omp-viewer`: FPS zur Laufzeit einstellbar
-/// machen) — ruft der Aufrufer das später erneut mit geänderten `fps`
-/// auf (z. B. weil ein Operator die Vorschau-Bildrate live ändert),
-/// braucht er diese Referenzen, um den ALTEN Zweig sauber abzubauen
-/// (`set_state(Null)` + Unlink + `pipeline.remove()`), bevor der neue
-/// entsteht — sonst blieben pro FPS-Wechsel verwaiste Elemente in der
-/// Pipeline zurück. Bestehende Aufrufer (`omp-multiviewer`,
-/// `omp-multiviewer-custom`), die den Zweig nie neu aufbauen, ignorieren
-/// den Rückgabewert einfach (`?;` allein, kein `#[must_use]` auf `Vec`).
+/// — `omp-viewer` (einziger Aufrufer, der sie über den Aufbau hinaus
+/// braucht) hält sich das `capsfilter` (Index 3), um `previewFps`-
+/// Wechsel später per `caps`-Property live umzusetzen, OHNE diese
+/// Funktion je ein zweites Mal für denselben `upstream` aufzurufen (s.
+/// `omp-viewer::pipeline::rebuild_mjpeg_branch`-Doku für die Root-
+/// Cause-Analyse, warum wiederholtes Ab-/Wiederaufbauen ein `tee`-Pad-
+/// Race auslöste, das die Vorschau reproduzierbar dauerhaft einfrieren
+/// ließ). Bestehende Aufrufer (`omp-multiviewer`, `omp-multiviewer-
+/// custom`), die den Zweig nie neu aufbauen, ignorieren den
+/// Rückgabewert einfach (`?;` allein, kein `#[must_use]` auf `Vec`).
 ///
-/// **`upstream`-Pad wird BLOCKIERT verlinkt, dann werden die neuen
-/// Elemente auf den Elternzustand synchronisiert, erst danach wird
-/// entblockt** (Nutzerauftrag: "ändern der framerate bei viewer führt zu
-/// freeze"). Root Cause live gefunden, identisch zum bereits
-/// dokumentierten Fallstrick in `omp-webrtc-gateway/src/monitor.rs`
-/// (docs/decisions.md Nachtrag 250, "Retourbild-Stall"): wird ein neuer
-/// Zweig an ein bereits PLAYING `upstream`-Element (typischerweise ein
-/// `tee`, s. `omp-viewer::pipeline::rebuild_mjpeg_branch`) verlinkt,
-/// BEVOR seine Elemente PLAYING erreicht haben, schiebt `upstream` auf
-/// seinem eigenen Streaming-Thread sofort Puffer in die neue Kette. Ein
-/// `queue` im Zustand NULL/READY beantwortet den ersten `chain()`-Aufruf
-/// mit einem Flow-Fehler statt ihn zu puffern — dieser Fehler läuft bei
-/// einem `tee` (anders als bei einem einzelnen Sink) bis in dessen
-/// GEMEINSAME Sink-Chain-Funktion zurück und reißt damit ALLE Zweige mit
-/// (auch den eigentlichen Ausgabepfad, hier: den Zufluss vom
-/// Switcher/`MxlVideoInput`) — die gesamte Pipeline friert bis zu einem
-/// vollständigen Neuaufbau (Verbindung trennen/neu herstellen) ein, ohne
-/// GStreamer-Fehlermeldung. `upstream` ist bei den bisherigen NICHT-
-/// dynamischen Aufrufern (`omp-multiviewer(-custom)`, `omp-scope`, sowie
-/// `omp-viewer`s eigener initialer `build()`) noch nicht PLAYING, wenn
-/// diese Funktion läuft — der Block/Unblock-Umweg ist dort ein
-/// No-Op-Sicherheitsnetz, kein Verhaltensunterschied.
+/// `upstream`-Pad wird BLOCKIERT verlinkt, die neuen Elemente werden
+/// auf den Elternzustand synchronisiert, erst danach wird entblockt —
+/// dasselbe dokumentierte Grundmuster wie in
+/// `omp-webrtc-gateway/src/monitor.rs` (docs/decisions.md Nachtrag
+/// 250, "Retourbild-Stall") für den Fall, dass `upstream` beim Aufruf
+/// bereits PLAYING ist (sonst könnte `upstream` auf seinem eigenen
+/// Streaming-Thread Puffer in die neue, noch nicht bereite Kette
+/// schieben — bei einem `tee` liefe der resultierende Flow-Fehler bis
+/// in dessen gemeinsame Sink-Chain-Funktion zurück und risse ALLE
+/// Zweige mit). Bei allen AKTUELLEN Aufrufern (`omp-multiviewer(-
+/// custom)`, `omp-scope`, `omp-viewer`s einmaliger initialer `build()`)
+/// ist `upstream` beim Aufruf noch nicht PLAYING — der Block/Unblock-
+/// Umweg ist dort ein reines No-Op-Sicherheitsnetz.
 pub fn build_mjpeg_branch(
     pipeline: &gst::Pipeline,
     upstream: &gst::Element,
@@ -233,6 +225,10 @@ pub fn build_mjpeg_branch(
         .static_pad("src")
         .or_else(|| upstream.request_pad_simple("src_%u"))
         .ok_or_else(|| "upstream: no free src pad".to_string())?;
+    // Ein frisch angeforderter Pad ist nicht zwingend bereits aktiv
+    // (bei einem statischen Pad ein No-Op) — kostet nichts, macht das
+    // spätere Verlinken robuster.
+    let _ = upstream_pad.set_active(true);
     let block_id = upstream_pad
         .add_probe(
             gst::PadProbeType::BLOCK | gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
@@ -270,35 +266,21 @@ pub fn build_mjpeg_branch(
         el.sync_state_with_parent()
             .map_err(|e| format!("sync_state_with_parent (mjpeg branch, {}): {e}", el.name()))?;
     }
-    // Block ERST JETZT lösen (Puffer dürfen jetzt fließen) — `appsink`
-    // braucht einen echten Puffer, um seinen ASYNC READY→PAUSED-Übergang
-    // (Preroll) überhaupt abschließen zu können; `pipeline.state()`
-    // direkt danach kann sonst gar nichts auflösen (s. u.).
+    // Block ERST JETZT lösen (Puffer dürfen jetzt fließen) — bei den
+    // aktuellen Aufrufern (s. Funktionsdoku) ist `upstream` noch nicht
+    // PLAYING, wenn diese Funktion läuft, macht `remove_probe` hier ein
+    // No-Op; bleibt trotzdem die korrekte Reihenfolge, falls ein
+    // künftiger Aufrufer diese Funktion doch einmal gegen ein bereits
+    // laufendes `upstream` aufruft.
     upstream_pad.remove_probe(block_id);
-    // Aggregierten Pipeline-Zustand JETZT auflösen lassen (statt nur den
-    // der einzelnen Kinder oben) — root-ursächlich gefundenes Problem
-    // (2026-09-24, letzter Teil desselben Freeze-Bugs, live per
-    // Instrumentierung bewiesen): `appsink`s READY→PAUSED ist wegen
-    // Preroll ASYNC; bleibt dieser Vorgang bei einer SPÄTEREN, schnell
-    // aufeinanderfolgenden Zweig-Erstellung noch offen, liefert die
-    // `gst::Pipeline` (anders als deren Kinder einzeln) für IHREN eigenen
-    // Zielzustand weiterhin PAUSED statt PLAYING — jede künftige
-    // `sync_state_with_parent()` einer neuen Kette bekommt dann nie mehr
-    // PLAYING, ohne jede Fehlermeldung. `pipeline.state()` (mit Timeout)
-    // ist die von GStreamer selbst vorgesehene Synchronisationsstelle
-    // dafür (intern über die Eltern-Kind-Zustandsverwaltung des Bins) —
-    // MUSS aber NACH dem Entblocken oben stehen, sonst kann `appsink`
-    // mangels Puffer nie preroll'en und der Aufruf verstreicht wirkungslos
-    // bis zum Timeout (live als Regression gefunden: mit `pipeline.
-    // state()` VOR dem Entblocken fror bereits der ALLERERSTE
-    // `previewFps`-Wechsel die Vorschau ein, nicht erst der zweite). Live
-    // verifiziert (nach der Korrektur): zwei `previewFps`-Wechsel
-    // innerhalb von ~300ms (z. B. schnelles Ziehen am Bildrate-Regler)
-    // froren die Vorschau trotz der beiden Block-Pad-Probe-Fixes oben
-    // dauerhaft ein; mit diesem expliziten Warten (in dieser Reihenfolge)
-    // nicht mehr (per `/preview`-MD5 gegen eine echte, sich bewegende
-    // Testquelle über mehrere aufeinanderfolgende Wechsel hinweg
-    // verifiziert).
+    // Aggregierten Pipeline-Zustand auflösen lassen (statt nur den der
+    // einzelnen Kinder oben) — bei den aktuellen Aufrufern (Pipeline
+    // noch NULL/gerade erst im Aufbau) löst das praktisch sofort auf.
+    // NICHT geeignet, um wiederholte Live-Neuverlinkungen an ein
+    // bereits PLAYING `upstream` "nachträglich" zuverlässig
+    // abzuschließen — das genau war der (falsche) Ansatz, den
+    // `omp-viewer::pipeline::rebuild_mjpeg_branch` früher verfolgte; die
+    // dortige Doku hält die volle Root-Cause-Analyse fest (2026-09-24).
     let _ = pipeline.state(gst::ClockTime::from_mseconds(500));
 
     Ok(vec![queue, videoscale, videorate, caps, jpegenc, appsink])

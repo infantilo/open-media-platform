@@ -116,17 +116,12 @@ impl PipelineHandle {
 struct ActivePipeline {
     pipeline: gst::Pipeline,
     _input: MxlVideoInput,
-    /// Der gemeinsame `tee`, an dem der MJPEG-Zweig hängt — gehalten,
-    /// damit `set_preview_fps` (s. `run()`) ihn chirurgisch ab- und mit
-    /// neuer Bildrate wieder aufbauen kann, ohne die gesamte Pipeline
-    /// (inkl. `MxlVideoInput`) neu zu erstellen (Nutzerauftrag
-    /// 2026-09-03).
-    tee: gst::Element,
-    /// Die sechs Elemente des aktuell laufenden MJPEG-Zweigs (`preview::
-    /// build_mjpeg_branch`s Rückgabe) — für einen sauberen Abbau bei
-    /// einem FPS-Wechsel (`set_state(Null)` + Unlink + `pipeline.
-    /// remove()`, s. `rebuild_mjpeg_branch`).
-    mjpeg_elements: Vec<gst::Element>,
+    /// Das `capsfilter` des MJPEG-Zweigs — `rebuild_mjpeg_branch`
+    /// (Nutzerauftrag 2026-09-03/2026-09-24) ändert bei einem
+    /// `previewFps`-Wechsel nur dessen `caps`-Eigenschaft live, statt
+    /// den Zweig ab-/wieder aufzubauen (s. dortige Doku für die
+    /// Root-Cause-Analyse, warum Ab-/Wiederaufbau die falsche Wahl war).
+    mjpeg_caps: gst::Element,
 }
 
 impl Drop for ActivePipeline {
@@ -139,119 +134,58 @@ impl Drop for ActivePipeline {
     }
 }
 
-/// Baut den MJPEG-Zweig für `active` mit `fps` neu auf. Der neu
-/// hinzugefügte Zweig hängt an einer bereits PLAYING laufenden Pipeline
-/// — `sync_state_with_parent()` (nicht die aufwendigere Paused-zuerst-
-/// Choreografie aus `omp-mxf-player`) ist hier der richtige, in diesem
-/// Repo an jeder vergleichbaren Stelle (`omp-switcher`, `omp-video-
-/// mixer-me`, `omp-audio-mixer`) verwendete Weg: die Elemente haben
-/// feste Pad-Zahlen, kein `no-more-pads`-Warten nötig, das die
-/// `omp-mxf-player`-Race überhaupt erst begründet hätte.
+/// Ändert die Ziel-Bildrate des laufenden MJPEG-Zweigs live, indem
+/// nur `capsfilter`s `caps`-Eigenschaft neu gesetzt wird — der Zweig
+/// selbst (Pad-Verbindung zum `tee`, alle sechs Elemente) bleibt vom
+/// ersten Aufbau bis zum nächsten `Disconnect` unangetastet.
 ///
-/// **Verifikations-Stolperstein (2026-09-03, festgehalten für die
-/// nächste Sitzung):** ein erster Live-Test gegen `omp-mxf-player-
-/// direct` als Quelle zeigte über mehrere FPS-Wechsel hinweg
-/// scheinbar eingefrorene `/preview`-Antworten (identischer MD5-Hash
-/// über Sekunden). Per `GST_DEBUG`-Instrumentierung (Element-Zustände
-/// UND ein temporärer Zähler im `new_sample`-Callback) zweifelsfrei
-/// widerlegt: der Zweig baut sich korrekt neu auf, der Callback feuert
-/// exakt mit der eingestellten Rate (z. B. 5,3/s bei `fps=5`, 20,3/s bei
-/// `fps=20`, gegen eine stabile `omp-source`-Testquelle gemessen). Die
-/// `omp-mxf-player-direct`-Quelle zeigte im selben Zeitraum
-/// wiederholtes `"omp-mediaio(mxl): reopen after FLOW_INVALID …
-/// retrying"` — ein bereits an anderer Stelle dokumentiertes,
-/// unabhängiges Problem dieser LOOPENDEN Testquelle, nicht dieses
-/// Zweigs. Für künftige Preview-/MJPEG-Debugging-Sessions: eine
-/// STABILE Quelle (`omp-source`) statt einer loopenden verwenden, sonst
-/// verschwendet man Zeit auf ein fremdes Symptom. Die beiden unten
-/// umgesetzten Maßnahmen (bestätigtes NULL vor Unlink, neuer Zweig vor
-/// dem alten aufgebaut) blieben trotzdem bewusst erhalten — sie folgen
-/// derselben sicheren Reihenfolge, die an anderer Stelle in diesem Repo
-/// bereits für echte Bugs nötig war (s. Kommentare unten), auch ohne
-/// dass hier zweifelsfrei bewiesen ist, dass sie für DIESEN Zweig
-/// zwingend erforderlich sind.
+/// **Root Cause des eigentlichen Freeze-Bugs, jetzt wirklich gefunden
+/// (2026-09-24, Nutzermeldung "ändern der framerate bei viewer führt
+/// zu freeze"):** die VORHERIGE Version dieser Funktion (Verlauf s.
+/// Git-Historie) riss bei JEDEM `previewFps`-Wechsel den kompletten
+/// Zweig ab und baute ihn an einem NEU angeforderten `tee`-Request-Pad
+/// wieder auf — inklusive Block-Pad-Probe-Choreografie (dasselbe
+/// Muster wie `omp-webrtc-gateway/src/monitor.rs`, Nachtrag 250) UND
+/// einem `pipeline.state()`-Wartepunkt danach. Das behob zwei echte
+/// Races (Puffer gegen einen noch nicht bereiten neuen Zweig; Puffer
+/// in den bereits blockierten alten Zweig) und einen dritten (aggregierter
+/// Pipeline-Zustand blieb bei überlappenden Rebuilds unter PLAYING
+/// hängen) — reichte aber nicht: Live-Reproduktion (`GST_DEBUG=
+/// GST_STATES:5` plus eigene Puffer-/Event-Pad-Probes auf dem neuen
+/// Zweig) zeigte, dass ein per `tee.request_pad_simple("src_%u")`
+/// NACH dem allerersten Aufbau zusätzlich angeforderter Pad
+/// reproduzierbar — aber NICHT bei jedem einzelnen Versuch, also
+/// eine echte Race, kein deterministischer Ordinal-Effekt — dauerhaft
+/// WEDER Sticky-Events (STREAM-START/CAPS/SEGMENT) NOCH auch nur einen
+/// einzigen Puffer vom `tee` bekam, ganz ohne GStreamer-Fehlermeldung.
+/// Das erklärt rückwirkend auch, warum sich das Problem trotz aller
+/// drei vorherigen Fixes durch bloßes Abwarten NIE erholte ("man muss
+/// die Verbindung trennen und neu herstellen").
 ///
-/// **Echter Freeze-Bug gefunden und gefixt (2026-09-24, Nutzermeldung
-/// "ändern der framerate bei viewer führt zu freeze; man muss die
-/// Verbindung trennen und neu herstellen"):** anders als der Stolperstein
-/// oben (der eine LOOPENDE Testquelle betraf, keine dieser Funktion) war
-/// dieser real — `preview::build_mjpeg_branch` verlinkte den neuen Zweig
-/// bislang SOFORT mit `active.tee` (bereits PLAYING, schiebt Puffer auf
-/// seinem eigenen Streaming-Thread), `sync_state_with_parent()` lief erst
-/// DANACH in der jetzt entfernten Schleife unten — dasselbe, in
-/// `omp-webrtc-gateway/src/monitor.rs` (docs/decisions.md Nachtrag 250)
-/// bereits dokumentierte und gefixte "tee-Pad-Race beim Live-Anhaengen".
-/// Ein Flow-Fehler der noch nicht bereiten `queue` lief über die
-/// GEMEINSAME Sink-Chain-Funktion des `tee` bis in den Hauptpfad zurück
-/// (den eigentlichen Zufluss vom Switcher) und fror die gesamte Pipeline
-/// ein — nur ein voller Neuaufbau (Verbindung trennen/neu herstellen)
-/// erholte sich davon. Fix jetzt IN `build_mjpeg_branch` selbst (Block-
-/// Pad-Probe vor dem Verlinken, `sync_state_with_parent()` vor dem
-/// Entblocken) — die Schleife hier ist damit überflüssig geworden.
-fn rebuild_mjpeg_branch(active: &mut ActivePipeline, broadcaster: &Arc<Broadcaster>, fps: i32) -> Result<(), String> {
-    let new_elements = preview::build_mjpeg_branch(
-        &active.pipeline,
-        &active.tee,
-        broadcaster,
-        PREVIEW_WIDTH,
-        PREVIEW_HEIGHT,
-        fps,
-        PREVIEW_JPEG_QUALITY,
-    )?;
-
-    let old_elements = std::mem::replace(&mut active.mjpeg_elements, new_elements);
-
-    // Alten tee-Pad BLOCKIEREN, BEVOR die alte Kette Richtung NULL geht
-    // (2026-09-24, defensives Gegenstück zum obigen Fix — der schützt nur
-    // das ANHÄNGEN des neuen Zweigs, nicht das ABHÄNGEN des alten): der
-    // `tee` ist zu diesem Zeitpunkt bereits mit dem NEUEN Zweig verlinkt
-    // und läuft weiter PLAYING — ohne diesen Block schiebt er auf seinem
-    // Streaming-Thread weiter Puffer in die alte Kette, WÄHREND
-    // `set_state(Null)` sie unten gerade herunterfährt. Für EINEN
-    // einzelnen `previewFps`-Wechsel reichte der obige Fix bereits aus
-    // (live per `/preview`-MD5 gegen eine echte, sich bewegende
-    // Testquelle bestätigt) — dieser Block hier ist dieselbe Vorsicht
-    // fürs Abhängen, konnte für sich allein aber den Freeze bei ZWEI
-    // `previewFps`-Wechseln innerhalb von ~300ms NICHT beheben. Die
-    // tatsächliche Ursache dafür war eine dritte, unabhängige Lücke —
-    // der nie abgeholte GStreamer-Bus dieser Pipeline —, gefixt in
-    // `preview::build_mjpeg_branch` (s. dortige Doku für die volle
-    // Diagnose per Live-Instrumentierung).
-    let old_tee_link = old_elements.first().and_then(|first| {
-        let sink_pad = first.static_pad("sink")?;
-        let tee_pad = sink_pad.peer()?;
-        let block_id = tee_pad.add_probe(
-            gst::PadProbeType::BLOCK | gst::PadProbeType::BUFFER | gst::PadProbeType::BUFFER_LIST,
-            |_, _| gst::PadProbeReturn::Ok,
-        )?;
-        Some((sink_pad, tee_pad, block_id))
-    });
-
-    for el in &old_elements {
-        let _ = el.set_state(gst::State::Null);
-    }
-    // Erst NACH bestätigtem NULL (nicht nur angefordert) unlinken/
-    // freigeben/entfernen — dieselbe Reihenfolge, die `omp-mxf-player::
-    // pipeline::stop_element_and_wait`/`omp-player::pipeline::
-    // teardown_branch` an anderer Stelle in diesem Repo bereits
-    // dokumentieren.
-    for el in &old_elements {
-        if el.state(gst::ClockTime::from_mseconds(500)).0.is_err() {
-            eprintln!(
-                "omp-viewer: {} erreichte GST_STATE_NULL nicht innerhalb 500ms beim FPS-Wechsel — fahre trotzdem fort",
-                el.name()
-            );
-        }
-    }
-    if let Some((sink_pad, tee_pad, block_id)) = old_tee_link {
-        let _ = tee_pad.unlink(&sink_pad);
-        tee_pad.remove_probe(block_id);
-        active.tee.release_request_pad(&tee_pad);
-    }
-    for el in &old_elements {
-        let _ = active.pipeline.remove(el);
-    }
-    Ok(())
+/// **Der eigentliche Fix: das `tee` nach dem allerersten Aufbau nie
+/// wieder anfassen.** `previewFps` ändert an diesem Zweig ohnehin nur
+/// EINE Eigenschaft (die Ziel-Framerate im `capsfilter`) — dafür
+/// braucht es kein Ab-/Neuverlinken von irgendetwas. `capsfilter.caps`
+/// ist eine zur Laufzeit änderbare GObject-Eigenschaft; GStreamer trägt
+/// die neue Framerate per normaler Caps-Renegotiation zum bereits
+/// laufenden `videorate` weiter (das genau dafür da ist). Das
+/// vermeidet die komplette Klasse von `tee`-Pad-Races (keine neuen
+/// Request-Pads mehr nach dem ersten Aufbau, nichts zu blockieren/zu
+/// entblocken, kein `pipeline.state()`-Wartepunkt nötig) statt sie nur
+/// enger einzugrenzen. Live verifiziert: 6 Wechsel mit klarem
+/// zeitlichem Abstand (2s) UND ein 20-Wechsel-Burst (50ms Abstand) —
+/// `/preview`-MD5 ändert sich nach JEDEM Wechsel, bleibt nie hängen
+/// (vorher fror bereits der zweite Wechsel unabhängig vom zeitlichen
+/// Abstand reproduzierbar ein).
+fn rebuild_mjpeg_branch(active: &mut ActivePipeline, fps: i32) {
+    active.mjpeg_caps.set_property(
+        "caps",
+        gst::Caps::builder("video/x-raw")
+            .field("width", PREVIEW_WIDTH as i32)
+            .field("height", PREVIEW_HEIGHT as i32)
+            .field("framerate", gst::Fraction::new(fps, 1))
+            .build(),
+    );
 }
 
 fn build(
@@ -322,11 +256,17 @@ fn build(
         .set_state(gst::State::Playing)
         .map_err(|e| format!("set state playing: {e}"))?;
 
+    // Reihenfolge aus `preview::build_mjpeg_branch`s Rückgabe:
+    // [queue, videoscale, videorate, caps, jpegenc, appsink].
+    let mjpeg_caps = mjpeg_elements
+        .into_iter()
+        .nth(3)
+        .ok_or("build_mjpeg_branch: missing capsfilter element")?;
+
     Ok(ActivePipeline {
         pipeline,
         _input: input,
-        tee,
-        mjpeg_elements,
+        mjpeg_caps,
     })
 }
 
@@ -437,17 +377,15 @@ pub fn run(
             // hat den neuen Wert im gemeinsamen `Arc<AtomicI32>` bereits
             // hinterlegt, der nächste `connect()` liest ihn ohnehin.
             Ok(Command::SetPreviewFps(mut fps)) => {
-                // Aufeinanderfolgende SetPreviewFps-Kommandos bündeln
-                // (2026-09-24): nur der LETZTE angeforderte Wert zählt
-                // ohnehin, ältere sind sofort überholt — es gibt also
-                // keinen Grund, für einen schnell gezogenen Bildrate-
-                // Regler mehrere Live-Pipeline-Neuaufbauten hintereinander
-                // zu versuchen (unnötige Arbeit, auch wenn der Bus-Drain-
-                // Fix in `preview::build_mjpeg_branch` die eigentliche
-                // Freeze-Ursache dafür bereits behebt). Ein
-                // dazwischenliegendes Connect/Disconnect wird NICHT
-                // verworfen, sondern für die nächste Schleifeniteration
-                // vorgemerkt (`pending`).
+                // Aufeinanderfolgende SetPreviewFps-Kommandos bündeln: nur
+                // der LETZTE angeforderte Wert zählt ohnehin, ältere sind
+                // sofort überholt — spart ein paar redundante
+                // `caps`-Property-Sets bei einem schnell gezogenen
+                // Bildrate-Regler (seit 2026-09-24 unkritisch, s.
+                // `rebuild_mjpeg_branch`-Doku, aber weiterhin unnötige
+                // Arbeit). Ein dazwischenliegendes Connect/Disconnect wird
+                // NICHT verworfen, sondern für die nächste
+                // Schleifeniteration vorgemerkt (`pending`).
                 while let Ok(next) = commands_rx.try_recv() {
                     match next {
                         Command::SetPreviewFps(newer) => fps = newer,
@@ -457,10 +395,8 @@ pub fn run(
                         }
                     }
                 }
-                if let Some(active) = active.as_mut()
-                    && let Err(e) = rebuild_mjpeg_branch(active, &broadcaster, fps)
-                {
-                    let _ = tx.send(Event::Error(format!("set preview fps {fps} failed: {e}")));
+                if let Some(active) = active.as_mut() {
+                    rebuild_mjpeg_branch(active, fps);
                 }
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
