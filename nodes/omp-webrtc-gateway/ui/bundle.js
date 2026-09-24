@@ -14,6 +14,31 @@
 // Portweiterleitung (s. docs/decisions.md Nachtrag 240 ff.,
 // `OMP_PUBLIC_HOST`) kennt nur der Bediener die tatsächlich von
 // außen erreichbare Adresse.
+//
+// Retourbild-Pairing (Nutzerwunsch 2026-09-24, "Handy-Kamera hat kein
+// Retourbild/Monitor mehr"): eine per Einladungslink invite-token-
+// Sicherheit (2026-09-23) hat `omp-webrtc-gateway` in zwei unabhängige
+// Node-Instanzen aufgeteilt (Kamera-/Monitor-Richtung, je eigene
+// `InviteStore`, je eigenes Panel). Auf einer KAMERA-Instanz zeigt
+// dieses Panel deshalb zusätzlich einen "Retourbild-Node"-Auswähler:
+// beim Anlegen einer neuen Einladung wird — falls gewählt — ZUSÄTZLICH
+// eine Einladung auf der ausgewählten Monitor-Instanz erzeugt und mit
+// der Kamera-Einladung zu EINEM gemeinsamen Link/QR-Code verschmolzen
+// (`?token=<cam>&monitorBase=<url>&monitorToken=<mon>`), den
+// `camera.html` dann für eine zweite, direkte WHEP-Verbindung zur
+// Monitor-Instanz nutzt (deren Node-HTTP-Server sendet immer
+// `Access-Control-Allow-Origin: *`, s. omp-node-sdk/src/server.rs
+// Nachtrag 197 — kein Backend-Änderungsbedarf für die eigentliche
+// Retour-Verbindung, nur für die Einladungs-Erzeugung/-Paarung hier).
+//
+// Die Paarung (welcher Kamera-Token gehört zu welchem Monitor-Token)
+// existiert serverseitig NICHT (jede InviteStore kennt nur ihre eigenen
+// Tokens) — sie wird bewusst NUR clientseitig in `localStorage` dieses
+// Browsers gehalten (gleiche Kategorie wie der Stream-Token unten:
+// reine Bedienoberflächen-Bequemlichkeit, kein Sicherheitsmerkmal). Ein
+// anderer Browser/Bediener sieht die Kamera-Einladung dann als
+// unpaarte, retourbild-lose Einladung — funktional noch korrekt (WHIP
+// tut weiterhin was es soll), nur ohne den zusammengesetzten Link.
 class OmpWebrtcGatewayPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
@@ -23,9 +48,9 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; font-size: 13px; }
       label { display: block; margin-bottom: 8px; }
-      input[type="text"] {
+      input[type="text"], select {
         width: 100%; box-sizing: border-box; padding: 4px 6px; margin-top: 2px;
-        background: #222; color: #eee; border: 1px solid #555; border-radius: 4px;
+        background: #222; color: #eee; border: 1px solid #555; border-radius: 4px; font: inherit;
       }
       button {
         cursor: pointer; padding: 5px 10px; border: 1px solid #555;
@@ -33,6 +58,8 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       }
       button:hover { background: #333; }
       button.danger:hover { background: #5c1a1a; border-color: #a33; }
+      .retour-row { margin: 0 0 10px; }
+      .retour-row .hint { color: #888; font-size: 11px; margin-top: 2px; }
       .add-row { display: flex; gap: 6px; margin: 8px 0 10px; }
       .add-row input { flex: 1; margin-top: 0; }
       ul { list-style: none; margin: 0; padding: 0; }
@@ -46,6 +73,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       .meta .label { font-weight: 600; }
       .meta .label:empty::before { content: "(ohne Bezeichnung)"; color: #888; font-weight: normal; }
       .meta .time { color: #888; font-size: 11px; }
+      .meta .retour { color: #4c8dff; font-size: 11px; }
       .actions { display: flex; gap: 4px; flex: none; }
       p.empty { color: #888; margin: 8px 0; }
       p.error { color: #e57373; margin: 6px 0; }
@@ -56,6 +84,12 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       <label>Basis-URL fürs Handy
         <input type="text" id="base-url" placeholder="https://192.168.1.5:9441">
       </label>
+      <div class="retour-row" id="retour-row" hidden>
+        <label>Retourbild-Node (optional)
+          <select id="retour-node"><option value="">Kein Retourbild</option></select>
+        </label>
+        <div class="hint">Wird mitgewählt, erzeugt "Neue Einladung" zusätzlich eine Einladung auf dieser Monitor-Instanz und verschmilzt beide zu EINEM Link/QR-Code fürs Handy (Kamera senden + Retourbild ansehen).</div>
+      </div>
       <div class="add-row">
         <input type="text" id="new-label" placeholder="Bezeichnung (optional, z. B. „Kamera Regie 1“)">
         <button id="add">+ Neue Einladung</button>
@@ -69,6 +103,8 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     const newLabelInput = root.querySelector("#new-label");
     const errorEl = root.querySelector("#error");
     const listEl = root.querySelector("#list");
+    const retourRow = root.querySelector("#retour-row");
+    const retourSelect = root.querySelector("#retour-node");
 
     const api = (path, opts) => fetch(`/api/v1/nodes/${nodeId}${path}`, opts);
 
@@ -88,6 +124,32 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       return token ? `${base}&access_token=${encodeURIComponent(token)}` : base;
     };
 
+    // Kamera<->Monitor-Paarung rein clientseitig (s. Kommentar oben am
+    // Custom Element) — Schlüssel ist der Kamera-Token, global
+    // eindeutig genug (128-Bit-UUID), daher EIN gemeinsamer
+    // localStorage-Schlüssel für alle Panel-Instanzen dieses Browsers.
+    const PAIR_STORE_KEY = "omp-webrtc-retour-pairs";
+    const loadPairs = () => {
+      try {
+        const raw = JSON.parse(localStorage.getItem(PAIR_STORE_KEY) || "[]");
+        return Array.isArray(raw) ? raw : [];
+      } catch {
+        return [];
+      }
+    };
+    const savePairs = (pairs) => {
+      try {
+        localStorage.setItem(PAIR_STORE_KEY, JSON.stringify(pairs));
+      } catch {
+        // localStorage kann fehlen/blockiert sein (privater Modus u. ä.)
+        // — die Paarung ist reine Bedienbequemlichkeit, kein Grund das
+        // Panel zu blockieren.
+      }
+    };
+    const findPair = (token) => loadPairs().find((p) => p.token === token);
+    const addPair = (pair) => savePairs([...loadPairs(), pair]);
+    const removePair = (token) => savePairs(loadPairs().filter((p) => p.token !== token));
+
     const showError = (msg) => {
       errorEl.textContent = msg || "";
       errorEl.className = msg ? "error" : "";
@@ -97,26 +159,56 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
     // wieder überschreiben — sonst würde jeder Poll eine Bediener-
     // Korrektur (NAT-Adresse) stillschweigend zurücksetzen.
     let baseUrlSeeded = false;
-    const seedBaseUrl = async () => {
+    const seedBaseUrl = async (nodes) => {
       if (baseUrlSeeded) return;
-      try {
-        const res = await fetch("/api/v1/nodes");
-        if (!res.ok) return;
-        const nodes = await res.json();
-        const self = nodes.find((n) => n.id === nodeId);
-        if (self && self.api_base_url) {
-          baseUrlInput.value = self.api_base_url;
-          baseUrlSeeded = true;
-        }
-      } catch {
-        // Netzwerkfehler beim Vorbefüllen ist kein Grund, die
-        // Bedienoberfläche zu blockieren — Feld bleibt leer/editierbar.
+      const self = nodes.find((n) => n.id === nodeId);
+      if (self && self.api_base_url) {
+        baseUrlInput.value = self.api_base_url;
+        baseUrlSeeded = true;
       }
+    };
+
+    // Eigenen Instanz-Typ + online Monitor-Kandidaten auflösen (nur
+    // relevant für die Retourbild-Paarung, s. Modul-Kommentar): GET
+    // /api/v1/nodes liefert je Node dessen `instance_id`
+    // (urn:x-omp:instance-Tag), GET /api/v1/instances dazu den
+    // Katalog-`type` ("omp-webrtc-gateway-camera"/"-monitor",
+    // deploy/catalog.json) — erst die Kreuzreferenz beider sagt, ob
+    // DIESE Node-Instanz eine Kamera ist und welche Monitor-Instanzen
+    // gerade online sind.
+    let monitorCandidates = [];
+    const updateRetourPicker = (nodes, instances) => {
+      const self = nodes.find((n) => n.id === nodeId);
+      const selfInstance = self && self.instance_id ? instances.find((i) => i.id === self.instance_id) : null;
+      const isCamera = selfInstance && selfInstance.type === "omp-webrtc-gateway-camera";
+      retourRow.hidden = !isCamera;
+      if (!isCamera) {
+        monitorCandidates = [];
+        return;
+      }
+      monitorCandidates = instances
+        .filter((i) => i.type === "omp-webrtc-gateway-monitor")
+        .map((i) => {
+          const node = nodes.find((n) => n.instance_id === i.id && n.online && n.api_base_url);
+          return node ? { nodeId: node.id, label: i.label || node.label || node.id, baseUrl: node.api_base_url } : null;
+        })
+        .filter(Boolean);
+
+      const prevValue = retourSelect.value;
+      retourSelect.innerHTML = "";
+      retourSelect.add(new Option("Kein Retourbild", ""));
+      for (const c of monitorCandidates) retourSelect.add(new Option(c.label, c.nodeId));
+      if (monitorCandidates.some((c) => c.nodeId === prevValue)) retourSelect.value = prevValue;
     };
 
     const inviteLink = (token) => {
       const base = baseUrlInput.value.trim().replace(/\/+$/, "");
-      return `${base}/?token=${encodeURIComponent(token)}`;
+      let url = `${base}/?token=${encodeURIComponent(token)}`;
+      const pair = findPair(token);
+      if (pair) {
+        url += `&monitorBase=${encodeURIComponent(pair.monitorBase)}&monitorToken=${encodeURIComponent(pair.monitorToken)}`;
+      }
+      return url;
     };
 
     const render = (invites) => {
@@ -130,6 +222,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       }
       for (const invite of invites) {
         const link = inviteLink(invite.token);
+        const pair = findPair(invite.token);
         const li = document.createElement("li");
 
         const qr = document.createElement("div");
@@ -148,6 +241,12 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         timeDiv.className = "time";
         timeDiv.textContent = new Date(invite.createdAtMs).toLocaleString();
         meta.append(labelDiv, timeDiv);
+        if (pair) {
+          const retourDiv = document.createElement("div");
+          retourDiv.className = "retour";
+          retourDiv.textContent = "+ Retourbild";
+          meta.append(retourDiv);
+        }
 
         const actions = document.createElement("div");
         actions.className = "actions";
@@ -175,13 +274,23 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
 
     const refresh = async () => {
       try {
-        const res = await api("/invites");
-        if (!res.ok) {
-          showError(`Einladungen laden fehlgeschlagen (${res.status})`);
+        const [invitesRes, nodesRes, instancesRes] = await Promise.all([
+          api("/invites"),
+          fetch("/api/v1/nodes"),
+          fetch("/api/v1/instances"),
+        ]);
+        if (!invitesRes.ok) {
+          showError(`Einladungen laden fehlgeschlagen (${invitesRes.status})`);
           return;
         }
+        if (nodesRes.ok && instancesRes.ok) {
+          const nodes = await nodesRes.json();
+          const instances = await instancesRes.json();
+          await seedBaseUrl(nodes);
+          updateRetourPicker(nodes, instances);
+        }
         showError("");
-        render(await res.json());
+        render(await invitesRes.json());
       } catch (e) {
         showError("Einladungen laden fehlgeschlagen: " + e);
       }
@@ -198,6 +307,37 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
         showError(`Einladung anlegen fehlgeschlagen (${res.status})`);
         return;
       }
+      const invite = await res.json();
+
+      const retourNodeId = retourSelect.value;
+      if (retourNodeId) {
+        const candidate = monitorCandidates.find((c) => c.nodeId === retourNodeId);
+        if (candidate) {
+          try {
+            const monRes = await fetch(`/api/v1/nodes/${retourNodeId}/invites`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ label: label ? `${label} (Retour)` : "Retour" }),
+            });
+            if (monRes.ok) {
+              const monInvite = await monRes.json();
+              addPair({
+                token: invite.token,
+                monitorNodeId: retourNodeId,
+                monitorBase: candidate.baseUrl,
+                monitorToken: monInvite.token,
+              });
+            } else {
+              showError(
+                `Retourbild-Einladung auf "${candidate.label}" fehlgeschlagen (${monRes.status}) — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.`
+              );
+            }
+          } catch (e) {
+            showError("Retourbild-Einladung fehlgeschlagen: " + e + " — Kamera-Einladung wurde trotzdem angelegt, nur ohne Retourbild.");
+          }
+        }
+      }
+
       newLabelInput.value = "";
       await refresh();
     };
@@ -207,6 +347,20 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       if (!res.ok) {
         showError(`Widerrufen fehlgeschlagen (${res.status})`);
         return;
+      }
+      const pair = findPair(token);
+      if (pair) {
+        try {
+          await fetch(`/api/v1/nodes/${pair.monitorNodeId}/invites?token=${encodeURIComponent(pair.monitorToken)}`, {
+            method: "DELETE",
+          });
+        } catch {
+          // Best effort — eine verwaiste Retour-Einladung auf der
+          // Monitor-Instanz ist kein Grund, den Widerruf der
+          // Kamera-Seite zu blockieren (sie läuft ohnehin nur bis zum
+          // nächsten Node-Neustart, s. invite.rs-Moduldoku).
+        }
+        removePair(token);
       }
       await refresh();
     };
@@ -223,7 +377,7 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       refresh();
     });
 
-    seedBaseUrl().then(refresh);
+    refresh();
     const poll = setInterval(refresh, 5000);
     this._cleanup = () => clearInterval(poll);
   }

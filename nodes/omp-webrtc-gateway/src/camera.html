@@ -9,67 +9,114 @@
   :root { color-scheme: dark; --bg:#121212; --surface:#1e1e1e; --text:#eaeaea; --dim:#9a9a9a;
           --ok:#4caf50; --err:#ef5350; --warn:#fb8c00; --accent:#4c8dff; }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body { margin:0; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:var(--bg);
-         color:var(--text); font:16px/1.4 system-ui,sans-serif; max-width:640px; margin-inline:auto; }
+         color:var(--text); font:16px/1.4 system-ui,sans-serif; max-width:640px; margin-inline:auto;
+         display:flex; flex-direction:column; min-height:100%; }
   h1 { font-size:18px; margin:4px 0 12px; }
-  .preview { position:relative; background:#000; border-radius:8px; overflow:hidden; aspect-ratio:16/9; }
-  video { width:100%; height:100%; object-fit:contain; display:block; }
-  .badge { position:absolute; top:8px; left:8px; padding:2px 10px; border-radius:12px; font-size:13px;
-           font-weight:600; background:#000a; }
-  .badge.live { color:#fff; background:var(--err); }
-  .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
-  label { display:flex; flex-direction:column; gap:2px; font-size:13px; color:var(--dim); flex:1 1 130px; }
   select, button { font:inherit; padding:10px; border-radius:8px; border:1px solid #444; background:var(--surface);
                    color:var(--text); min-height:44px; }
-  button { flex:1; font-weight:600; }
+  button { font-weight:600; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button.stop { background:var(--err); border-color:var(--err); color:#fff; }
   button:disabled { opacity:.45; }
-  .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; }
-  .check input { width:22px; height:22px; }
-  .stats { margin-top:12px; padding:10px 12px; background:var(--surface); border-radius:8px; font-size:14px; }
-  .stats b { font-size:26px; font-variant-numeric:tabular-nums; }
   .dim { color:var(--dim); }
+
+  /* ---- Vor dem Verbinden / nach dem Trennen: NUR Konfiguration + großer Verbinden-Button ---- */
+  #setup .row { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  #setup label { display:flex; flex-direction:column; gap:2px; font-size:13px; color:var(--dim); flex:1 1 130px; }
+  #setup .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; flex:1 1 100%; }
+  #setup .check input { width:22px; height:22px; }
+  #setup #start { width:100%; margin-top:16px; font-size:17px; padding:16px; }
+
+  /* ---- Nach dem Verbinden: Kachel-Ansicht (Kamera + Retourbild) ---- */
+  #live { display:none; flex-direction:column; flex:1; min-height:0; }
+  #live.active { display:flex; }
+  #tiles { position:relative; flex:1; min-height:0; display:flex; gap:4px; background:#000; border-radius:8px; overflow:hidden; }
+  #tiles.single { aspect-ratio:16/9; flex:none; }
+  .tile { position:relative; background:#000; overflow:hidden; }
+  .tile video { width:100%; height:100%; object-fit:contain; display:block; }
+  #tiles:not(.single) .tile { flex:1 1 50%; aspect-ratio:auto; }
+  /* Getippte Kachel groß, andere als PIP-Overlay unten rechts (aus dem Flex-Fluss genommen). */
+  #tiles.cam-large .tile[data-role="cam"] { flex:1 1 100%; }
+  #tiles.cam-large .tile[data-role="retour"],
+  #tiles.retour-large .tile[data-role="cam"] {
+    position:absolute; right:8px; bottom:8px; width:32%; aspect-ratio:16/9;
+    border:2px solid #444; border-radius:6px; z-index:2; box-shadow:0 2px 8px #000a;
+  }
+  #tiles.retour-large .tile[data-role="retour"] { flex:1 1 100%; }
+  .badge { position:absolute; top:8px; left:8px; padding:2px 10px; border-radius:12px; font-size:13px;
+           font-weight:600; background:#000a; pointer-events:none; }
+  .badge.live { color:#fff; background:var(--err); }
+  .tile-label { position:absolute; bottom:6px; left:8px; font-size:11px; color:#fff; background:#000a;
+                padding:1px 8px; border-radius:10px; pointer-events:none; }
+
+  #live .row { display:flex; gap:8px; margin-top:10px; }
+  #live .row > button { flex:1; }
+
+  /* ---- Status/Log: eingeklappt, per kleinem Button erreichbar ---- */
+  #statusPanel { display:none; margin-top:10px; }
+  #statusPanel.open { display:block; }
+  .stats { padding:10px 12px; background:var(--surface); border-radius:8px; font-size:14px; }
+  .stats b { font-size:26px; font-variant-numeric:tabular-nums; }
   #log { margin-top:8px; font:12px ui-monospace,monospace; color:var(--dim); white-space:pre-wrap; max-height:8em; overflow:auto; }
 </style>
 </head>
 <body>
 <h1>OMP Kamera</h1>
 
-<div class="preview">
-  <video id="preview" autoplay muted playsinline></video>
-  <span id="badge" class="badge">Bereit</span>
+<!-- Vor dem Verbinden / nach dem Trennen: nur Konfiguration, kein Videobild sichtbar (Nutzerauftrag 2026-09-24). -->
+<div id="setup">
+  <div class="row">
+    <label>Kamera <select id="camera"></select></label>
+    <label>Auflösung
+      <select id="res">
+        <option value="640x360">640×360</option>
+        <option value="1280x720" selected>1280×720</option>
+        <option value="1920x1080">1920×1080</option>
+      </select>
+    </label>
+    <label>Bildrate
+      <select id="fps"><option>25</option><option selected>30</option><option>50</option><option>60</option></select>
+    </label>
+  </div>
+  <div class="row">
+    <label class="check"><input type="checkbox" id="audio" checked> Ton senden</label>
+    <label class="check"><input type="checkbox" id="measure"> Latenz messen (Zeitstempel im Bild)</label>
+  </div>
+  <button id="start" class="primary">Verbinden</button>
+  <p class="dim" id="setupHint" style="font-size:13px;"></p>
 </div>
 
-<div class="row">
-  <label>Kamera <select id="camera"></select></label>
-  <label>Auflösung
-    <select id="res">
-      <option value="640x360">640×360</option>
-      <option value="1280x720" selected>1280×720</option>
-      <option value="1920x1080">1920×1080</option>
-    </select>
-  </label>
-  <label>Bildrate
-    <select id="fps"><option>25</option><option selected>30</option><option>50</option><option>60</option></select>
-  </label>
+<!-- Nach dem Verbinden: Kamera + Retourbild halb/halb, Tap zum Vergrößern (Nutzerauftrag 2026-09-24). -->
+<div id="live">
+  <div id="tiles" class="single">
+    <div class="tile" data-role="cam">
+      <video id="preview" autoplay muted playsinline></video>
+      <span id="camBadge" class="badge">Bereit</span>
+      <span class="tile-label" id="camLabel" hidden>Kamera</span>
+    </div>
+    <div class="tile" data-role="retour" id="retourTile" hidden>
+      <video id="retourVideo" autoplay playsinline></video>
+      <span id="retourBadge" class="badge">–</span>
+      <span class="tile-label">Retourbild</span>
+    </div>
+  </div>
+  <div class="row">
+    <button id="stop" class="stop">Verbindung trennen</button>
+    <button id="toggleStatus">Status</button>
+  </div>
+  <div id="statusPanel">
+    <div class="stats" id="stats">
+      <div>Verbindung Kamera: <b id="conn" style="font-size:inherit">–</b></div>
+      <div id="retourConnRow" hidden>Verbindung Retourbild: <b id="retourConn" style="font-size:inherit">–</b></div>
+      <div id="latRow" hidden>Latenz Glas→Decoder: <b id="lat">–</b> ms
+        <span class="dim">(Ø · max <span id="latMax">–</span> ms)</span></div>
+      <div class="dim" id="clockInfo"></div>
+    </div>
+    <div id="log"></div>
+  </div>
 </div>
-<div class="row">
-  <label class="check"><input type="checkbox" id="audio" checked> Ton senden</label>
-  <label class="check"><input type="checkbox" id="measure"> Latenz messen (Zeitstempel im Bild)</label>
-</div>
-<div class="row">
-  <button id="start" class="primary">Senden</button>
-  <button id="stop" class="stop" disabled>Stopp</button>
-</div>
-
-<div class="stats" id="stats">
-  <div>Verbindung: <b id="conn" style="font-size:inherit">–</b></div>
-  <div id="latRow" hidden>Latenz Glas→Decoder: <b id="lat">–</b> ms
-    <span class="dim">(Ø · max <span id="latMax">–</span> ms)</span></div>
-  <div class="dim" id="clockInfo"></div>
-</div>
-<div id="log"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -79,11 +126,27 @@ const log = (t) => { const l = $('log'); l.textContent = new Date().toLocaleTime
 // gültigem `?token=` aus einem Einladungslink nimmt der Node `/whip`
 // überhaupt an (s. invite.rs) — ohne Token gar nicht erst versuchen,
 // klare Fehlermeldung statt einer verwirrenden 401 nach Kamerastart.
-const inviteToken = new URLSearchParams(location.search).get('token') || '';
+const params = new URLSearchParams(location.search);
+const inviteToken = params.get('token') || '';
 const whipUrl = '/whip' + (inviteToken ? '?token=' + encodeURIComponent(inviteToken) : '');
 
+// Retourbild-Paarung (Nutzerwunsch 2026-09-24): ein kombinierter
+// Einladungslink trägt zusätzlich die Basis-URL + den Token der
+// gepaarten Monitor-Node-Instanz (s. ui/bundle.js-Moduldoku) — fehlen
+// sie, läuft diese Seite unverändert als reine Kamera ohne Retourbild
+// (Rückwärtskompatibilität zu älteren, unpaarten Einladungslinks).
+const monitorBase = (params.get('monitorBase') || '').trim().replace(/\/+$/, '');
+const monitorToken = params.get('monitorToken') || '';
+const hasRetour = !!(monitorBase && monitorToken);
+const whepUrl = hasRetour ? monitorBase + '/whep?token=' + encodeURIComponent(monitorToken) : '';
+
 let pc = null, camStream = null, sendStream = null, wakeLock = null, drawing = false, pollTimer = null;
+let retourPc = null;
 let clockOffset = 0;
+
+$('setupHint').textContent = hasRetour
+  ? 'Diese Einladung bringt auch ein Retourbild mit — nach dem Verbinden erscheinen Kamera- und Retourbild nebeneinander.'
+  : '';
 
 // ---- Uhrenabgleich (Messmodus): Versatz Handy-Uhr -> Server-Uhr, kleinste RTT gewinnt ----
 async function syncClock() {
@@ -139,6 +202,22 @@ async function openCamera() {
   return { w, h, fps };
 }
 
+// ---- Kachel-Layout: 'split' (halb/halb, Standard), 'cam-large', 'retour-large' (Nutzerauftrag: Tap zum Vergrößern) ----
+function setLayout(mode) {
+  const tiles = $('tiles');
+  tiles.classList.remove('cam-large', 'retour-large');
+  if (mode === 'cam-large') tiles.classList.add('cam-large');
+  else if (mode === 'retour-large') tiles.classList.add('retour-large');
+}
+function onTileTap(role) {
+  if (!hasRetour) return; // ohne Retourbild gibt es nichts zu vergrößern/PIPen
+  const tiles = $('tiles');
+  const current = tiles.classList.contains('cam-large') ? 'cam-large'
+    : tiles.classList.contains('retour-large') ? 'retour-large' : 'split';
+  const tapped = role === 'cam' ? 'cam-large' : 'retour-large';
+  setLayout(current === tapped ? 'split' : tapped);
+}
+
 async function start() {
   if (!window.isSecureContext) { log('FEHLER: Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).'); return; }
   if (!inviteToken) {
@@ -177,7 +256,19 @@ async function start() {
       sendStream = new MediaStream([...cv.captureStream(fps).getVideoTracks(), ...camStream.getAudioTracks()]);
     }
     await connect(sendStream);
-    $('stop').disabled = false;
+    if (hasRetour) {
+      // Retourbild-Verbindung ist ein reiner Zusatznutzen — ein Fehler
+      // hier darf die bereits laufende Kamera-Sendung nicht abbrechen,
+      // daher eigenes try/catch statt im selben Ablauf wie oben.
+      try { await connectRetour(); } catch (e) { log('Retourbild-FEHLER: ' + (e.message || e)); }
+    }
+    $('setup').style.display = 'none';
+    $('live').classList.add('active');
+    $('tiles').classList.toggle('single', !hasRetour);
+    $('retourTile').hidden = !hasRetour;
+    $('retourConnRow').hidden = !hasRetour;
+    $('camLabel').hidden = !hasRetour; // nur bei zwei Kacheln braucht es Beschriftung, sonst eindeutig
+    setLayout('split');
     $('latRow').hidden = !measure;
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
     pollTimer = setInterval(pollStats, 500);
@@ -196,7 +287,7 @@ async function connect(stream) {
   const vt = pc.getTransceivers().find((t) => t.sender.track && t.sender.track.kind === 'video');
   if (h264.length && vt) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
   else log('WARNUNG: kein H.264 im Browser verfügbar');
-  pc.onconnectionstatechange = () => { $('conn').textContent = pc.connectionState; setBadge(); };
+  pc.onconnectionstatechange = () => { $('conn').textContent = pc.connectionState; setBadges(); };
   await pc.setLocalDescription(await pc.createOffer());
   await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
     pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
@@ -216,11 +307,47 @@ async function connect(stream) {
   log('WHIP verbunden');
 }
 
-function setBadge() {
-  const b = $('badge');
-  const live = pc && pc.connectionState === 'connected';
-  b.textContent = live ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
-  b.className = 'badge' + (live ? ' live' : '');
+// ---- Retourbild: direkte WHEP-Verbindung zur gepaarten Monitor-Node-Instanz ----
+// (identisches Protokoll wie monitor.html — hier eingebettet statt einer
+// zweiten Seite, weil Nutzerauftrag 2026-09-24 EIN kombiniertes Erlebnis
+// verlangt: "Kamerabild UND Retourbild ... nicht zwei separate Links").
+async function connectRetour() {
+  retourPc = new RTCPeerConnection({ iceServers: [] });
+  retourPc.addTransceiver('video', { direction: 'recvonly' });
+  retourPc.addTransceiver('audio', { direction: 'recvonly' });
+  const caps = RTCRtpReceiver.getCapabilities('video').codecs;
+  const h264 = caps.filter((c) => c.mimeType === 'video/H264');
+  const vt = retourPc.getTransceivers()[0];
+  if (h264.length) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
+  for (const t of retourPc.getTransceivers()) {
+    try { t.receiver.jitterBufferTarget = 0; } catch (_) {}
+    try { t.receiver.playoutDelayHint = 0; } catch (_) {}
+  }
+  const ms = new MediaStream();
+  $('retourVideo').srcObject = ms;
+  retourPc.ontrack = (e) => { ms.addTrack(e.track); log('Retourbild-Track: ' + e.track.kind); };
+  retourPc.onconnectionstatechange = () => { $('retourConn').textContent = retourPc.connectionState; setBadges(); };
+  await retourPc.setLocalDescription(await retourPc.createOffer());
+  await new Promise((r) => { if (retourPc.iceGatheringState === 'complete') r(); else
+    retourPc.onicegatheringstatechange = () => retourPc.iceGatheringState === 'complete' && r(); });
+  const res = await fetch(whepUrl, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: retourPc.localDescription.sdp });
+  const text = await res.text();
+  if (res.status !== 201) throw new Error('WHEP ' + res.status + ': ' + text);
+  await retourPc.setRemoteDescription({ type: 'answer', sdp: text });
+  log('Retourbild (WHEP) verbunden');
+}
+
+function setBadges() {
+  const camBadge = $('camBadge');
+  const camLive = pc && pc.connectionState === 'connected';
+  camBadge.textContent = camLive ? 'LIVE' : (pc ? pc.connectionState : 'Bereit');
+  camBadge.className = 'badge' + (camLive ? ' live' : '');
+  if (hasRetour) {
+    const retourBadge = $('retourBadge');
+    const retourLive = retourPc && retourPc.connectionState === 'connected';
+    retourBadge.textContent = retourLive ? 'LIVE' : (retourPc ? retourPc.connectionState : '–');
+    retourBadge.className = 'badge' + (retourLive ? ' live' : '');
+  }
 }
 
 async function pollStats() {
@@ -239,16 +366,25 @@ async function stop(quiet) {
   clearInterval(pollTimer);
   try { await fetch(whipUrl, { method: 'DELETE' }); } catch (_) {}
   if (pc) { pc.close(); pc = null; }
+  if (retourPc) { retourPc.close(); retourPc = null; }
+  $('retourVideo').srcObject = null;
   for (const s of [camStream, sendStream]) s && s.getTracks().forEach((t) => t.stop());
   camStream = sendStream = null;
   try { await wakeLock?.release(); } catch (_) {}
-  $('start').disabled = false; $('stop').disabled = true;
-  $('conn').textContent = '–'; setBadge();
+  $('live').classList.remove('active');
+  $('statusPanel').classList.remove('open');
+  setLayout('split');
+  $('setup').style.display = '';
+  $('start').disabled = false;
+  $('conn').textContent = '–'; $('retourConn').textContent = '–'; setBadges();
   if (!quiet) log('gestoppt');
 }
 
 $('start').onclick = start;
 $('stop').onclick = () => stop(false);
+$('toggleStatus').onclick = () => $('statusPanel').classList.toggle('open');
+$('tiles').querySelector('[data-role="cam"]').addEventListener('click', () => onTileTap('cam'));
+$('retourTile').addEventListener('click', () => onTileTap('retour'));
 document.addEventListener('visibilitychange', async () => {
   // Wake-Lock geht beim Wechsel in den Hintergrund verloren.
   if (document.visibilityState === 'visible' && pc) { try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {} }
