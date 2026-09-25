@@ -404,6 +404,228 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
   },
 ];
 
+// ---- ffmpeg-Assistent (UMSETZUNG.md Kapitel 22, W2) --------------------------------------------
+//
+// Baukasten-Prinzip (22.2): die Formulare unten bilden allgemeine
+// ffmpeg-Bausteine ab (Container/Codec wählen, AVOptions mit Hilfetext
+// statt Freitext, wiederholbare Tonspur-Gruppen) — KEIN
+// szenario-spezifischer Sonderpfad. "Mehrspur-Container bauen" deckt
+// das Nutzerbeispiel ("MXF mit 8 Tonspuren + TTS-Kennungen je Spur")
+// bereits vollständig ab, ohne dass MXF hier irgendwo als Sonderfall
+// vorkommt — nur eine von vielen möglichen Container-Wahlen.
+//
+// Die tatsächlichen Optionswerte/-listen kommen zur Laufzeit von
+// `/api/v1/tools/ffmpeg/...` (orchestrator/internal/ffmpegtools, W1) —
+// hier nur die reine, DOM-freie Umsetzung "AVOption → Formularfeld-Art"
+// und "ausgefüllte Werte → ffmpeg-Argumente".
+
+// `id` verdoppelt bewusst als Diskriminator (kein separates `kind`-Feld)
+// — die DOM-Seite (process-step-config.ts) schaltet direkt per `id`
+// auf den passenden Unterformular-Baustein.
+export interface ScriptIntent {
+  id: "probe" | "thumbnail" | "convert" | "extract_audio" | "multitrack";
+  label: string;
+  help: string;
+}
+
+export const SCRIPT_INTENTS: ScriptIntent[] = [
+  { id: "probe", label: "Technische Metadaten auslesen", help: "Liefert Codec, Auflösung, Dauer usw. als JSON im Ergebnis-Feld „Ausgabe (stdout)“." },
+  { id: "thumbnail", label: "Vorschaubild erzeugen", help: "Einzelbild aus einem Video, z. B. für eine Vorschaukachel." },
+  { id: "convert", label: "Format/Codec konvertieren", help: "Container, Video-/Audio-Codec und deren Einstellungen frei wählen — mit echten erlaubten Werten und Hilfetexten von diesem Server." },
+  { id: "extract_audio", label: "Tonspur extrahieren", help: "Nur den Ton einer Datei speichern, mit frei wählbarem Audio-Codec." },
+  {
+    id: "multitrack",
+    label: "Mehrspur-Container bauen",
+    help: "Mehrere Dateien (z. B. je eine Sprachfassung) zu EINER Ausgabedatei mit mehreren Tonspuren zusammenführen — Container, Codec und Titel/Sprache je Spur frei wählbar.",
+  },
+];
+
+export function scriptIntentById(id: string): ScriptIntent | undefined {
+  return SCRIPT_INTENTS.find((i) => i.id === id);
+}
+
+// ---- ffmpeg-Introspektionsdaten (Formen von orchestrator/internal/ffmpegtools) -----------------
+
+export interface FFCodecEntry {
+  name: string;
+  description: string;
+  mediaType: "video" | "audio" | "subtitle" | "";
+  flags: string;
+}
+
+export interface FFFormatEntry {
+  name: string;
+  description: string;
+  demuxing: boolean;
+  muxing: boolean;
+}
+
+export interface FFOptionChoice {
+  name: string;
+  value?: string;
+  description?: string;
+}
+
+export interface FFOption {
+  name: string;
+  type: string;
+  flags: string;
+  description?: string;
+  default?: string;
+  min?: string;
+  max?: string;
+  choices?: FFOptionChoice[];
+}
+
+export interface FFDetail {
+  name: string;
+  description?: string;
+  options: FFOption[];
+}
+
+// ---- AVOption → Formularfeld-Art ---------------------------------------------------------------
+
+export type OptionControlKind = "select" | "checkbox" | "number" | "text";
+
+// `flags`-Typ-Optionen (Bitmasken, z. B. "+global_header") lassen sich
+// KOMBINIEREN ("+"-getrennt) — dafür passt kein exklusives <select>,
+// bleibt bewusst Freitext (die Choices erscheinen trotzdem als
+// Hilfetext, s. optionHelpText).
+export function ffOptionControlKind(opt: FFOption): OptionControlKind {
+  if (opt.choices && opt.choices.length > 0 && opt.type !== "flags") return "select";
+  if (opt.type === "boolean") return "checkbox";
+  if (opt.type === "int" || opt.type === "int64" || opt.type === "float" || opt.type === "double" || opt.type === "rational") return "number";
+  return "text";
+}
+
+// Zusammengesetzter Hilfetext: Beschreibung + Bereich + Default + (bei
+// `flags`-Optionen) die möglichen Werte, da dort kein <select> hilft.
+export function optionHelpText(opt: FFOption): string {
+  const parts: string[] = [];
+  if (opt.description) parts.push(opt.description);
+  if (opt.min || opt.max) parts.push(`Bereich: ${opt.min ?? "…"} bis ${opt.max ?? "…"}`);
+  if (opt.default) parts.push(`Standard: ${opt.default}`);
+  if (opt.type === "flags" && opt.choices?.length) {
+    parts.push(`Mögliche Werte (kombinierbar mit "+", z. B. ${opt.choices[0].name}+${opt.choices[1]?.name ?? opt.choices[0].name}): ${opt.choices.map((c) => c.name).join(", ")}`);
+  }
+  return parts.join(" — ");
+}
+
+// ---- Ausgefüllte Optionswerte → ffmpeg-Argumente -----------------------------------------------
+//
+// Leer gelassene Felder werden ÜBERSPRUNGEN (kein `-name ""`) — ein
+// Wizard-Nutzer, der ein Feld nicht anfasst, bekommt ffmpegs eigenen
+// Standardwert, nicht einen künstlich erzwungenen.
+
+export function optionEntriesToArgs(entries: Record<string, string>): string[] {
+  const args: string[] = [];
+  for (const [name, value] of Object.entries(entries)) {
+    if (value === "") continue;
+    args.push(name, value);
+  }
+  return args;
+}
+
+export interface ConvertInput {
+  inputPath: string;
+  outputPath: string;
+  format?: string;
+  videoCodec?: string;
+  videoOptions?: Record<string, string>;
+  audioCodec?: string;
+  audioOptions?: Record<string, string>;
+}
+
+export function buildConvertArgs(input: ConvertInput): string[] {
+  const args = ["-y", "-i", input.inputPath];
+  if (input.videoCodec) args.push("-c:v", input.videoCodec);
+  args.push(...optionEntriesToArgs(input.videoOptions ?? {}));
+  if (input.audioCodec) args.push("-c:a", input.audioCodec);
+  args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  if (input.format) args.push("-f", input.format);
+  args.push(input.outputPath);
+  return args;
+}
+
+export interface ExtractAudioInput {
+  inputPath: string;
+  outputPath: string;
+  audioCodec?: string;
+  audioOptions?: Record<string, string>;
+}
+
+export function buildExtractAudioArgs(input: ExtractAudioInput): string[] {
+  const args = ["-y", "-i", input.inputPath, "-vn"];
+  if (input.audioCodec) args.push("-c:a", input.audioCodec);
+  args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  args.push(input.outputPath);
+  return args;
+}
+
+// "Technische Metadaten auslesen"/"Vorschaubild erzeugen" brauchen keine
+// ffmpeg-Introspektion (ffprobes JSON-Ausgabe bzw. ein Einzelbild sind
+// immer dieselben paar Flags) — trotzdem eigene, strukturierte Felder
+// statt freier Argumentliste, damit auch diese beiden Fälle im
+// Assistenten (nicht nur im Erweitert-Modus) bedienbar sind.
+export interface ProbeInput {
+  inputPath: string;
+}
+
+export function buildProbeArgs(input: ProbeInput): string[] {
+  return ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", input.inputPath];
+}
+
+export interface ThumbnailInput {
+  inputPath: string;
+  outputPath: string;
+  atTime: string;
+  widthPixels: number;
+}
+
+export function buildThumbnailArgs(input: ThumbnailInput): string[] {
+  return ["-y", "-ss", input.atTime, "-i", input.inputPath, "-frames:v", "1", "-vf", `scale=${input.widthPixels}:-2`, input.outputPath];
+}
+
+// Eine Tonspur der Mehrspur-Gruppe — bewusst NUR Codec+Titel+Sprache
+// (kein volles AVOptions-Panel je Spur, das würde bei z. B. 8 Spuren
+// den Assistenten sprengen); tiefere Codec-Einstellungen bleiben "Format
+// konvertieren" bzw. dem Erweitert-Modus vorbehalten.
+export interface MultitrackTrack {
+  inputPath: string;
+  codec?: string;
+  language?: string;
+  title?: string;
+}
+
+export interface MultitrackInput {
+  outputPath: string;
+  format?: string;
+  muxerOptions?: Record<string, string>;
+  includeVideo?: boolean; // Bildspur aus der ERSTEN Eingabe unverändert übernehmen (-c:v copy)
+  tracks: MultitrackTrack[];
+}
+
+// Jede Spur kommt aus einer EIGENEN Eingabedatei (z. B. acht separate
+// Sprachfassungen) statt aus mehreren Kanälen einer einzigen Datei —
+// deckt das Nutzerbeispiel direkt ab, ohne einen Sonderfall für "eine
+// Mehrkanaldatei aufteilen" zu brauchen (der ließe sich bei Bedarf
+// später als zusätzliche Track-Quellart ergänzen, s. UMSETZUNG.md W4).
+export function buildMultitrackArgs(input: MultitrackInput): string[] {
+  const args: string[] = ["-y"];
+  for (const t of input.tracks) args.push("-i", t.inputPath);
+  if (input.includeVideo) args.push("-map", "0:v", "-c:v", "copy");
+  input.tracks.forEach((_, i) => args.push("-map", `${i}:a`));
+  input.tracks.forEach((t, i) => {
+    if (t.codec) args.push(`-c:a:${i}`, t.codec);
+    if (t.title) args.push(`-metadata:s:a:${i}`, `title=${t.title}`);
+    if (t.language) args.push(`-metadata:s:a:${i}`, `language=${t.language}`);
+  });
+  args.push(...optionEntriesToArgs(input.muxerOptions ?? {}));
+  if (input.format) args.push("-f", input.format);
+  args.push(input.outputPath);
+  return args;
+}
+
 // ---- Schlüssel/Wert-Objekte (Header, Payload, Eingaben) ---------------------------------------
 
 // flatStringObject: nur wenn ALLE Werte Strings sind, lässt sich ein

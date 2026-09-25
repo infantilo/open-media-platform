@@ -3373,6 +3373,63 @@ gelieferten Optionen inkl. Hilfetext, erzeugte `args` laufen als
 `script`-Schritt tatsächlich durch (echter ffmpeg-Aufruf, Ausgabedatei
 per `ffprobe` gegengeprüft).
 
+**Status 2026-09-25: erledigt + live verifiziert.** Fünf Aufgaben
+(„Aufgabe"-Auswahl): Metadaten auslesen/Vorschaubild (strukturierte
+Felder statt fixer Vorlage, aber ohne W1-Introspektion — brauchen
+keine), Format/Codec konvertieren, Tonspur extrahieren,
+**Mehrspur-Container bauen** (die Baukasten-Ausdruckskraft-Probe aus
+22.2 — jede Tonspur eine eigene Quelldatei mit frei wählbarem
+Codec/Titel/Sprache, Container per echter Muxer-Liste inkl. dessen
+AVOptions z. B. `-signal_standard`). „Erweitert (Rohargumente)" bleibt
+unverändert als Fallback — Default-Modus ist „Assistent" für neue,
+„Erweitert" für bereits konfigurierte Schritte (kein stilles
+Reinterpretieren bestehender Konfiguration).
+
+Neue reine Bausteine in `process-step-config-logic.ts`
+(`buildConvertArgs`/`buildExtractAudioArgs`/`buildMultitrackArgs`/
+`buildProbeArgs`/`buildThumbnailArgs`, `ffOptionControlKind`,
+`optionHelpText`) + 19 `deno test`-Fälle; DOM-Seite in
+`process-step-config.ts` (`ffmpegOptionsList`/`codecPicker`/
+`formatPicker` + fünf `buildScriptWizard*`-Formulare) holt Listen/
+Details live von den W1-Endpunkten (modul-weiter Cache, ein Request pro
+Encoder/Filter-Namen unabhängig davon, wie oft er im selben
+Dialog-Aufruf gebraucht wird).
+
+Live per echter CDP-Session durch die TATSÄCHLICHE Shell-UI verifiziert
+(nicht isoliert gemountet): Prozess-Definition angelegt, grafischen
+Editor geöffnet, `script`-Schritt per Palette hinzugefügt,
+Konfigurationsdialog per Doppelklick geöffnet, auf „Mehrspur-Container
+bauen" umgeschaltet — echte Formatliste (184 Muxer, `mxf` darunter) und
+echte Muxer-AVOptions (`-signal_standard`) geladen, zweite Tonspur
+per „+ weitere Tonspur" hinzugefügt, Live-Vorschau zeigte exakt die
+erwarteten Argumente, „Übernehmen" + „Speichern" persistierten via der
+echten Prozess-API `command`/`args` unverändert korrekt (per
+`GET .../process-definitions/{id}/versions` gegengeprüft).
+
+**Live-Fund beim Ausführen des erzeugten Befehls (kein Raten):** eine
+reine Audio-„MXF-Datei" scheitert an ffmpegs eigenem OP1a-Muxer
+(„there must be exactly one video stream and it must be the first
+one"); `mxf_opatom` erlaubt nur EINE Spur pro Datei (Einzel-Essenz-
+Prinzip, kein Mehrspur-Container). Mit einer Bildspur (dafür existiert
+der Assistent-Schalter „Bildspur … übernehmen") läuft `-f mxf`
+anstandslos durch. **Zweiter, wichtigerer Fund:** ffmpegs MXF-Muxer
+schreibt `-metadata:s:a:N title=…`/`language=…` gar nicht in den
+Container (mit `ffprobe` gegengeprüft: Tags nach dem Mux komplett
+verschwunden) — bei Matroska (Kontrollprobe, identischer Aufruf bis auf
+den Container) blieben dieselben Tags dagegen korrekt erhalten, der
+Mechanismus in `buildMultitrackArgs` ist also nachweislich richtig,
+die Lücke liegt allein in ffmpegs `mxf`-Muxer. Erklärt im Nachhinein,
+warum die Referenz-Anwendung (`~/index.html`) zusätzlich BMXlib nutzte
+(professionelle Mehrspur-MXF-Autorenschaft mit Track-Metadaten ist mit
+ffmpeg allein nicht vollständig erreichbar) — als Kandidat für einen
+künftigen, expliziten Schritt vorgemerkt (nicht Teil von W1–W4), falls
+echte Broadcast-MXF-Metadaten je gebraucht werden; ändert nichts an der
+22.2-Entscheidung, dass das MXF-Beispiel nur Maßstab war.
+
+`deno check`/`deno test` für alle betroffenen Dateien + den
+importierenden `process-editor.ts`/`shell.ts` grün, `deno bundle`
+erfolgreich.
+
 #### W3 — Visueller Filter-Graph-Builder
 
 **Ziel:** `-vf`/`-af`/`-filter_complex`-Ketten (inkl. Verzweigungen/
@@ -3660,3 +3717,4 @@ Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
 | Fix: Thumbnail-Flicker (video-mixer-me/switcher) + hängender "Trennen"-Button nach Server-Disconnect (Nachtrag 295) | erledigt | Zwei aus dem Dogfooding von Nachtrag 291/294 gefundene Bugs. Root Cause 1: `refresh()`/`renderBusRow()` rissen bei jedem 2s-Poll die komplette Knopfreihe ab und bauten sie neu, wodurch jedes Vorschaubild-`<img>` zerstört und leer neu erzeugt wurde. Fix: Wiederverwendung bestehender `<omp-button>`-Knoten per `senderId`-Diff (`updateBusButton`/`updateInputButton`), nur `img.src` wird erneuert — der Browser zeigt währenddessen von selbst das alte Bild. Root Cause 2: `camera.html`s `onconnectionstatechange` rief `stop()` nie bei einem server-seitigen Disconnect auf, nur bei eigenem Klick. Fix: reagiert jetzt selbst auf `failed`/`closed` (sofort) und `disconnected` (4s Kulanzfrist gegen kurze Netz-Hänger). Live per echter CDP-Session verifiziert: dieselben `<img>`-DOM-Knoten überleben ≥3 reale Poll-Zyklen unverändert (Marker-Attribut-Test) bei weiterhin aktualisiertem `img.src`; echte WebRTC-Verbindung (Fake-Kamera-Device) + echter Revoke über die Orchestrator-API zeigt automatischen UI-Rücksprung auf "Verbinden" nach ~10s. Stolperstein: laufende Node-Instanzen serven `ui/bundle.js`/`camera.html` per `include_str!` compile-time-eingebettet — Fix erst nach `cargo build`+Neustart der Testinstanz sichtbar (s. Memory `feedback_include_str_requires_rebuild_to_test_ui_changes`). `cargo test -p omp-webrtc-gateway` grün. Commit `9d0decc`. | 2026-09-25 |
 | Kapitel 22 (FFmpeg/FFprobe-Assistent): Zielbild + Phasenplan W1–W4 festgelegt, KEIN Code (Nachtrag 296) | erledigt | Nutzerauftrag: geführte Wizard-/Filter-Builder-Bedienung für ffmpeg/ffprobe statt roher CLI-Argumente, Referenz war ein älteres NW.js-Projekt des Nutzers (dynamische ffmpeg-Hilfetext-Introspektion + Blockly). Bestandsaufnahme: bestehender `script`-Workflow-Schritt (Allow-Liste `orchestrator/main.go`, Executor `internal/process/executors.go`) + heutige starre `SCRIPT_TEMPLATES`/Rohargument-Liste (`ui/graph/process-step-config.ts`) sind der Erweiterungspunkt, kein neuer Node nötig. Nutzerentscheidungen: Reihenfolge Introspektion(W1)→Formular-Wizard(W2)→Filter-Graph-Builder(W3, auf bestehendem `flow-canvas.ts`-Koordinatenmuster statt Blockly)→Verallgemeinerungs-Härtetest(W4); der genannte "MXF mit 8 Tonspuren+TTS-Kennungen"-Fall ist ausdrücklich Maßstab für Baukasten-Ausdruckskraft, keine zu bauende Einzelfunktion; lokaler-LLM-Ausblick nur als Zukunftsnotiz (`ARCHITECTURE.md` §26.5), keine Implementierung. Details/Phasenplan: `ARCHITECTURE.md` §26, hier Kapitel 22. | 2026-09-25 |
 | Kapitel 22 W1: FFmpeg/FFprobe-Introspektion im Orchestrator | erledigt | Neues Paket `orchestrator/internal/ffmpegtools` — Token-basiertes (nicht spaltenpositionsbasiertes) Parsen von `-encoders`/`-decoders`/`-formats`/`-pix_fmts`/`-filters` + `-h encoder\|decoder\|muxer\|demuxer\|filter=X` (inkl. Enum-Unterzeilen, `(from A to B)`/`(default X)`). Scope-Schnitt gegenüber Plan: `-h full` (globale CLI-Flags) bewusst ausgelassen — kleiner stabiler Flag-Satz, der eigentlich große/wertvolle Teil (hunderte codec-/filter-/muxer-spezifische AVOptions) ist voll abgedeckt. Live gefundener Stolperstein: ffmpeg polstert Namen nur bis zu einer Mindestbreite, ein langer Enum-Name (`autovariance-biased`) überschreitet sie — token-basiertes Parsing übersteht das, eine spaltenpositionsbasierte Regex hätte falsch geparst (als Testfall festgehalten). Neue Routen `GET /api/v1/tools/ffmpeg/{capabilities,encoders,decoders,formats,pix-fmts,filters,{kind}/{name}}` (`WithFFmpegTools`-Option, gleiches Muster wie `WithScriptCommands`), gespeist aus derselben `exec.LookPath`-Allow-Liste wie der `script`-Workflow-Schritt. Live gegen neu gebauten+gestarteten Orchestrator verifiziert: 217 Encoder/407 Formate/527 Filter/206 Pixelformate, `filter/scale` (38 Optionen), `encoder/libx264` (47 Optionen inkl. `-aq-mode`-Enum), `muxer/mxf` (`-signal_standard` mit allen 7 SMPTE/BT-Werten — genau das MXF-Beispielszenario aus 22.2). Ungültige Kategorie → 400, ohne Token → 401. `go build`/`vet`/`test ./...` für den ganzen `orchestrator`-Modulbaum grün. | 2026-09-25 |
+| Kapitel 22 W2: geführter ffmpeg-Formular-Wizard für `script`-Schritte | erledigt | Fünf Aufgaben ersetzen/erweitern die vier starren `SCRIPT_TEMPLATES`: Metadaten auslesen, Vorschaubild, Format/Codec konvertieren, Tonspur extrahieren, **Mehrspur-Container bauen** (Baukasten-Probe aus 22.2 — je Tonspur eigene Quelldatei + frei wählbarer Codec/Titel/Sprache, Container per echter Muxer-Liste inkl. AVOptions). „Erweitert (Rohargumente)" bleibt unverändert als Fallback. Neue reine Bausteine (`buildConvertArgs`/`buildExtractAudioArgs`/`buildMultitrackArgs`/`buildProbeArgs`/`buildThumbnailArgs`, 19 `deno test`-Fälle) + DOM-Seite (`ffmpegOptionsList`/`codecPicker`/`formatPicker`), gespeist von den W1-Endpunkten. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert (Prozess anlegen → Editor öffnen → script-Schritt → Assistent → Mehrspur-Container → echte Formate/Muxer-Optionen geladen → zweite Spur hinzugefügt → Vorschau korrekt → Übernehmen+Speichern persistierte über die echte API korrekt). Live-Fund beim tatsächlichen Ausführen des erzeugten Befehls: reines Audio-„MXF" scheitert an ffmpegs OP1a-Muxer (braucht zwingend eine Bildspur — dafür existiert der „Bildspur übernehmen"-Schalter), `mxf_opatom` erlaubt nur eine Spur pro Datei, und ffmpegs MXF-Muxer schreibt `-metadata:s:a:N`-Tags gar nicht in den Container (mit Matroska als Kontrollprobe bestätigt: derselbe Mechanismus funktioniert dort korrekt — die Lücke liegt allein in ffmpegs MXF-Implementierung, nicht im Wizard); erklärt rückblickend, warum die Referenz-App zusätzlich BMXlib nutzte. `deno check`/`deno test`/`deno bundle` grün. | 2026-09-25 |

@@ -17,15 +17,27 @@ import { apiFetch } from "../shell/connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import type { DraftDefinition, DraftStep, RetryPolicy } from "./process-editor-logic.ts";
 import {
+  buildConvertArgs,
+  buildExtractAudioArgs,
+  buildMultitrackArgs,
+  buildProbeArgs,
+  buildThumbnailArgs,
   DECISION_LABELS,
+  ffOptionControlKind,
+  type FFCodecEntry,
+  type FFDetail,
+  type FFFormatEntry,
+  type FFOption,
   flatStringObject,
   formatGoDuration,
   insertionText,
+  optionHelpText,
   pairsToObject,
   parseGoDuration,
   parseRule,
   RULE_OPERATORS,
   ruleToExpression,
+  SCRIPT_INTENTS,
   SCRIPT_TEMPLATES,
   splitSeconds,
   STEP_TYPE_INFO,
@@ -549,23 +561,398 @@ function buildServiceCall(cfg: Record<string, unknown>, vars: VariableOption[]):
   };
 }
 
+// ---- ffmpeg-Assistent (UMSETZUNG.md Kapitel 22, W2) --------------------------------------------
+//
+// Ersetzt/erweitert die bisherige "eine Vorlage + rohe Argumentliste"-
+// Ansicht um einen Assistenten, der ECHTE, auf diesem Server per W1
+// (`orchestrator/internal/ffmpegtools`) introspizierte Encoder/Formate/
+// AVOptions samt Hilfetext zeigt, statt dass der Nutzer die ffmpeg-CLI
+// auswendig kennen muss. "Erweitert (Rohargumente)" bleibt unverändert
+// als Experten-/Fallback-Pfad erhalten ("nicht raten"-Prinzip, s.
+// CLAUDE.md/UMSETZUNG.md §0) — wer will, tippt weiterhin freie Flags.
+
+const ffmpegListCache = new Map<string, Promise<unknown[]>>();
+function fetchFFmpegList<T>(which: string): Promise<T[]> {
+  if (!ffmpegListCache.has(which)) {
+    ffmpegListCache.set(
+      which,
+      (async () => {
+        try {
+          const res = await apiFetch(`/api/v1/tools/ffmpeg/${which}`);
+          return res.ok ? await res.json() : [];
+        } catch {
+          return [];
+        }
+      })(),
+    );
+  }
+  return ffmpegListCache.get(which)! as Promise<T[]>;
+}
+
+const ffmpegDetailCache = new Map<string, Promise<FFDetail | null>>();
+function fetchFFmpegDetail(kind: string, name: string): Promise<FFDetail | null> {
+  const key = `${kind}/${name}`;
+  if (!ffmpegDetailCache.has(key)) {
+    ffmpegDetailCache.set(
+      key,
+      (async () => {
+        try {
+          const res = await apiFetch(`/api/v1/tools/ffmpeg/${kind}/${encodeURIComponent(name)}`);
+          return res.ok ? await res.json() : null;
+        } catch {
+          return null;
+        }
+      })(),
+    );
+  }
+  return ffmpegDetailCache.get(key)!;
+}
+
+// Rendert die AVOptions eines Encoders/Muxers als Formularfelder (Art
+// je Typ, s. ffOptionControlKind — bool als Ja/Nein-<select>, gleiches
+// Muster wie buildMediaFunctions boolesche Node-Argumente). Suchfeld
+// erst ab zweistelliger Optionsanzahl (z. B. libx264 hat ~47) — bei
+// wenigen Optionen wäre es nur Ballast.
+function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOptions(options: FFOption[], initialValues: Record<string, string>): void; read(): Record<string, string> } {
+  const el = h("div", "margin-top:4px;");
+  const search = textInput("", "Optionen durchsuchen …");
+  search.style.display = "none";
+  const list = h("div", "max-height:340px;overflow:auto;margin-top:4px;");
+  el.append(search, list);
+  let fields: { row: HTMLElement; searchText: string; name: string; read(): string }[] = [];
+
+  const applyFilter = () => {
+    const q = search.value.trim().toLowerCase();
+    for (const f of fields) f.row.style.display = !q || f.searchText.includes(q) ? "" : "none";
+  };
+  search.addEventListener("input", applyFilter);
+
+  return {
+    el,
+    setOptions(options, initialValues) {
+      list.replaceChildren();
+      fields = [];
+      search.style.display = options.length > 12 ? "" : "none";
+      search.value = "";
+      for (const opt of options) {
+        const kind = ffOptionControlKind(opt);
+        const initial = initialValues[opt.name] ?? "";
+        let control: HTMLElement;
+        let read: () => string;
+        if (kind === "select") {
+          const s = select(
+            [{ value: "", label: "– ffmpeg-Standard –" }, ...(opt.choices ?? []).map((c) => ({ value: c.value || c.name, label: c.description ? `${c.name} — ${c.description}` : c.name }))],
+            initial,
+          );
+          control = s;
+          read = () => s.value;
+        } else if (kind === "checkbox") {
+          const s = select([{ value: "", label: "– ffmpeg-Standard –" }, { value: "true", label: "ja" }, { value: "false", label: "nein" }], initial);
+          control = s;
+          read = () => s.value;
+        } else if (kind === "number") {
+          const i = textInput(initial, opt.default ? `Standard: ${opt.default}` : "");
+          i.inputMode = "decimal";
+          control = i;
+          read = () => i.value.trim();
+        } else {
+          const t = templateInput(initial, opt.default ? `Standard: ${opt.default}` : "", vars);
+          control = t.el;
+          read = () => t.input.value.trim();
+        }
+        const row = field(opt.name, control, optionHelpText(opt));
+        list.appendChild(row);
+        fields.push({ row, name: opt.name, searchText: (opt.name + " " + (opt.description ?? "")).toLowerCase(), read });
+      }
+      applyFilter();
+    },
+    read: () => Object.fromEntries(fields.map((f) => [f.name, f.read()])),
+  };
+}
+
+function codecPicker(mediaType: "video" | "audio", vars: VariableOption[]): { el: HTMLElement; read(): { codec: string; options: Record<string, string> } } {
+  const wrap = h("div", "");
+  const sel = select([{ value: "", label: "lade Codecs …" }], "");
+  const panel = ffmpegOptionsList(vars);
+  wrap.append(sel, panel.el);
+  const loadDetail = async () => {
+    if (!sel.value) {
+      panel.setOptions([], {});
+      return;
+    }
+    const detail = await fetchFFmpegDetail("encoder", sel.value);
+    panel.setOptions(detail?.options ?? [], {});
+  };
+  (async () => {
+    const list = await fetchFFmpegList<FFCodecEntry>("encoders");
+    const filtered = list.filter((c) => c.mediaType === mediaType);
+    sel.replaceChildren(new Option("– ffmpeg-Standard für den Container –", ""));
+    for (const c of filtered) sel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
+  })();
+  sel.addEventListener("change", () => void loadDetail());
+  return { el: wrap, read: () => ({ codec: sel.value, options: panel.read() }) };
+}
+
+function formatPicker(vars: VariableOption[], withOptions: boolean): { el: HTMLElement; read(): { format: string; options: Record<string, string> } } {
+  const wrap = h("div", "");
+  const sel = select([{ value: "", label: "lade Container …" }], "");
+  const panel = withOptions ? ffmpegOptionsList(vars) : null;
+  wrap.append(sel);
+  if (panel) wrap.append(panel.el);
+  const loadDetail = async () => {
+    if (!panel) return;
+    if (!sel.value) {
+      panel.setOptions([], {});
+      return;
+    }
+    const detail = await fetchFFmpegDetail("muxer", sel.value);
+    panel.setOptions(detail?.options ?? [], {});
+  };
+  (async () => {
+    const list = await fetchFFmpegList<FFFormatEntry>("formats");
+    const muxers = list.filter((f) => f.muxing);
+    sel.replaceChildren(new Option("– aus der Dateiendung ableiten –", ""));
+    for (const f of muxers) sel.appendChild(new Option(`${f.name} — ${f.description}`, f.name));
+  })();
+  sel.addEventListener("change", () => void loadDetail());
+  return { el: wrap, read: () => ({ format: sel.value, options: panel ? panel.read() : {} }) };
+}
+
+type ScriptCompileResult = { ok: true; command: string; args: string[] } | { ok: false; error: string };
+interface ScriptWizardForm {
+  el: HTMLElement;
+  read(): ScriptCompileResult;
+}
+
+function buildScriptWizardProbe(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const input = templateInput("${input.path}", "${input.path}", vars);
+  el.appendChild(field("Zu prüfende Datei", input.el, undefined, true));
+  return {
+    el,
+    read: () => {
+      const p = input.input.value.trim();
+      if (!p) return { ok: false, error: "Zu prüfende Datei fehlt." };
+      return { ok: true, command: "ffprobe", args: buildProbeArgs({ inputPath: p }) };
+    },
+  };
+}
+
+function buildScriptWizardThumbnail(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const input = templateInput("${input.path}", "${input.path}", vars);
+  const output = templateInput("${input.thumbnailPath}", "${input.thumbnailPath}", vars);
+  const at = textInput("00:00:05", "hh:mm:ss");
+  const width = textInput("480", "Pixel");
+  width.inputMode = "numeric";
+  el.append(
+    field("Eingabedatei", input.el, undefined, true),
+    field("Ausgabedatei (Bild)", output.el, undefined, true),
+    field("Zeitpunkt im Video", at, "hh:mm:ss, z. B. 00:00:05."),
+    field("Breite in Pixeln", width, "Höhe wird proportional berechnet."),
+  );
+  return {
+    el,
+    read: () => {
+      const p = input.input.value.trim();
+      const o = output.input.value.trim();
+      const w = Number(width.value);
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: "Breite: keine gültige Zahl." };
+      return { ok: true, command: "ffmpeg", args: buildThumbnailArgs({ inputPath: p, outputPath: o, atTime: at.value.trim() || "00:00:05", widthPixels: w }) };
+    },
+  };
+}
+
+function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const input = templateInput("${input.path}", "${input.path}", vars);
+  const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
+  const fmt = formatPicker(vars, false);
+  const video = codecPicker("video", vars);
+  const audio = codecPicker("audio", vars);
+  el.append(
+    field("Eingabedatei", input.el, undefined, true),
+    field("Ausgabedatei", output.el, undefined, true),
+    field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
+    section("Video"),
+    field("Video-Codec", video.el, "Leer = ffmpeg-Standard für den Container."),
+    section("Audio"),
+    field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für den Container."),
+  );
+  return {
+    el,
+    read: () => {
+      const p = input.input.value.trim();
+      const o = output.input.value.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const v = video.read();
+      const a = audio.read();
+      const f = fmt.read();
+      return {
+        ok: true,
+        command: "ffmpeg",
+        args: buildConvertArgs({
+          inputPath: p,
+          outputPath: o,
+          format: f.format || undefined,
+          videoCodec: v.codec || undefined,
+          videoOptions: v.options,
+          audioCodec: a.codec || undefined,
+          audioOptions: a.options,
+        }),
+      };
+    },
+  };
+}
+
+function buildScriptWizardExtractAudio(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const input = templateInput("${input.path}", "${input.path}", vars);
+  const output = templateInput("${input.audioPath}", "${input.audioPath}", vars);
+  const audio = codecPicker("audio", vars);
+  el.append(
+    field("Eingabedatei", input.el, undefined, true),
+    field("Ausgabedatei", output.el, undefined, true),
+    field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für die gewählte Dateiendung."),
+  );
+  return {
+    el,
+    read: () => {
+      const p = input.input.value.trim();
+      const o = output.input.value.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const a = audio.read();
+      return { ok: true, command: "ffmpeg", args: buildExtractAudioArgs({ inputPath: p, outputPath: o, audioCodec: a.codec || undefined, audioOptions: a.options }) };
+    },
+  };
+}
+
+// Baukasten-Baustein für Mehrspur-Container (UMSETZUNG.md 22.2) — jede
+// Spur kommt aus einer EIGENEN Quelldatei (z. B. acht Sprachfassungen),
+// bewusst nur Codec+Titel+Sprache je Spur (kein volles AVOptions-Panel
+// je Spur, das würde bei vielen Spuren den Assistenten sprengen; tiefere
+// Codec-Einstellungen bleiben "Format konvertieren"/Erweitert-Modus
+// vorbehalten). Deckt das Nutzerbeispiel ("MXF mit 8 Tonspuren + TTS-
+// Kennungen je Spur") vollständig ab, ohne dass MXF hier je erwähnt wird
+// — nur eine von vielen wählbaren Container-Optionen.
+function buildScriptWizardMultitrack(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
+  const fmt = formatPicker(vars, true);
+  const includeVideo = h("input");
+  includeVideo.type = "checkbox";
+  const includeVideoLabel = h("label", "display:flex;align-items:center;gap:4px;margin-top:6px;");
+  includeVideoLabel.append(includeVideo, document.createTextNode("Bildspur unverändert aus der ersten Spur übernehmen"));
+
+  interface TrackRow {
+    box: HTMLElement;
+    heading: HTMLElement;
+    pathInput: HTMLInputElement;
+    codecSel: HTMLSelectElement;
+    lang: HTMLInputElement;
+    title: HTMLInputElement;
+  }
+  const rows: TrackRow[] = [];
+  const list = h("div", "");
+  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Tonspur ${i + 1}`));
+  const addTrack = () => {
+    const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
+    const heading = h("div", "font-weight:600;", `Tonspur ${rows.length + 1}`);
+    const path = templateInput("", "${input.path} oder ein eigener Pfad", vars);
+    const codecSel = select([{ value: "", label: "lade Audio-Codecs …" }], "");
+    (async () => {
+      const codecs = await fetchFFmpegList<FFCodecEntry>("encoders");
+      const audioCodecs = codecs.filter((c) => c.mediaType === "audio");
+      codecSel.replaceChildren(new Option("– ffmpeg-Standard –", ""));
+      for (const c of audioCodecs) codecSel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
+    })();
+    const lang = textInput("", "z. B. deu, eng (ISO-639-2)");
+    const title = textInput("", "z. B. Deutsch");
+    const rm = h("button", "margin-top:4px;", "Spur entfernen");
+    rm.type = "button";
+    const entry: TrackRow = { box, heading, pathInput: path.input, codecSel, lang, title };
+    rm.addEventListener("click", () => {
+      rows.splice(rows.indexOf(entry), 1);
+      box.remove();
+      renumber();
+    });
+    box.append(
+      heading,
+      field("Quelldatei", path.el, undefined, true),
+      field("Audio-Codec", codecSel),
+      field("Sprache", lang, "ISO-639-2-Kürzel — erscheint als Sprachkennung der Spur."),
+      field("Titel/Kennung", title, "Erscheint als Titel der Spur, z. B. der Name der Sprachfassung."),
+      rm,
+    );
+    rows.push(entry);
+    list.appendChild(box);
+  };
+  addTrack();
+  const addBtn = h("button", "margin-top:6px;", "+ weitere Tonspur");
+  addBtn.type = "button";
+  addBtn.addEventListener("click", addTrack);
+
+  el.append(
+    field("Ausgabedatei", output.el, undefined, true),
+    field("Container", fmt.el, "Bestimmt Dateiendung/Struktur, z. B. mxf, mov, mkv.", true),
+    includeVideoLabel,
+    h("div", HELP_CSS + "margin-top:8px;", "Jede Tonspur kommt aus einer eigenen Quelldatei — z. B. je eine Sprachfassung."),
+    list,
+    addBtn,
+  );
+  return {
+    el,
+    read: () => {
+      const o = output.input.value.trim();
+      if (!o) return { ok: false, error: "Ausgabedatei fehlt." };
+      if (rows.length === 0) return { ok: false, error: "Mindestens eine Tonspur ist nötig." };
+      for (const r of rows) {
+        if (!r.pathInput.value.trim()) return { ok: false, error: "Jede Tonspur braucht eine Quelldatei." };
+      }
+      const f = fmt.read();
+      return {
+        ok: true,
+        command: "ffmpeg",
+        args: buildMultitrackArgs({
+          outputPath: o,
+          format: f.format || undefined,
+          muxerOptions: f.options,
+          includeVideo: includeVideo.checked,
+          tracks: rows.map((r) => ({
+            inputPath: r.pathInput.value.trim(),
+            codec: r.codecSel.value || undefined,
+            language: r.lang.value.trim() || undefined,
+            title: r.title.value.trim() || undefined,
+          })),
+        }),
+      };
+    },
+  };
+}
+
 function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], commands: string[]): FormPart {
   const el = h("div", "");
+  const hasFFmpeg = commands.includes("ffmpeg");
+  const hasFFprobe = commands.includes("ffprobe");
+  let mode: "wizard" | "advanced" = cfg.command ? "advanced" : "wizard";
+
+  // ---- Erweitert (Rohargumente) — unverändert gegenüber vorher, bleibt
+  // der garantierte Experten-/Fallback-Weg. ----------------------------
+  const advancedWrap = h("div", "");
   const current = String(cfg.command ?? "");
   const cmdOpts = [{ value: "", label: "– Werkzeug wählen –" }, ...commands.map((c) => ({ value: c, label: c }))];
   if (current && !commands.includes(current)) cmdOpts.push({ value: current, label: `${current} (auf diesem Server nicht verfügbar!)` });
   const cmd = select(cmdOpts, current, "command");
-
   const tpl = select(
     [{ value: "", label: "– Vorlage übernehmen (optional) –" }, ...SCRIPT_TEMPLATES.filter((t) => commands.includes(t.command)).map((t) => ({ value: t.id, label: t.label }))],
     "",
     "template",
   );
   const tplHelp = h("span", HELP_CSS);
-
   const argsList = h("div", "");
   const argInputs: HTMLInputElement[] = [];
-  const addArg = (v = "", after?: HTMLElement) => {
+  const addArg = (v = "") => {
     const line = h("div", "display:grid;grid-template-columns:1fr auto auto;gap:4px;margin-top:4px;");
     const i = textInput(v, "Argument", "arg");
     i.style.fontFamily = "ui-monospace,monospace";
@@ -577,8 +964,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       line.remove();
     });
     line.append(i, variableButton(vars, "template", () => i), rm);
-    if (after) after.after(line);
-    else argsList.appendChild(line);
+    argsList.appendChild(line);
   };
   const setArgs = (args: string[]) => {
     argInputs.length = 0;
@@ -605,24 +991,99 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     const parts = line.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
     for (const p of parts) addArg(p.replace(/^["']|["']$/g, ""));
   });
-  const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
-  el.append(
+  advancedWrap.append(
     field("Werkzeug", cmd, commands.length ? `Auf diesem Server freigegeben: ${commands.join(", ")}.` : "Auf diesem Server ist kein Werkzeug freigegeben.", true),
     field("Vorlage", tpl),
     tplHelp,
     field("Argumente", argsList, "Je Zeile ein Argument — Leerzeichen innerhalb einer Zeile bleiben erhalten (kein Anführungszeichen-Problem)."),
     addBtn,
     pasteBtn,
-    field("Zeitlimit", timeout.el, "Leer = 5 Minuten."),
   );
+
+  // ---- Assistent (aus W1 gespeist) ------------------------------------
+  const wizardWrap = h("div", "");
+  const intentOptions = SCRIPT_INTENTS.filter((i) => (i.id === "probe" ? hasFFprobe : hasFFmpeg));
+  const intentSel = select(intentOptions.map((i) => ({ value: i.id, label: i.label })), intentOptions[0]?.id ?? "");
+  const intentHelp = h("div", HELP_CSS + "margin-top:2px;");
+  const dynamicArea = h("div", "");
+  let activeForm: ScriptWizardForm | null = null;
+  const previewLabel = h("div", HELP_CSS + "font-weight:600;margin-top:8px;", "Erzeugte Argumente (Vorschau):");
+  const preview = h("pre", "background:var(--omp-surface-raised);padding:6px;border-radius:4px;font-size:var(--omp-font-size-xs);white-space:pre-wrap;word-break:break-all;margin-top:2px;");
+  const updatePreview = () => {
+    if (!activeForm) return;
+    const r = activeForm.read();
+    preview.textContent = r.ok ? `${r.command} ${r.args.join(" ")}` : `(${r.error})`;
+  };
+  const renderIntent = () => {
+    dynamicArea.replaceChildren();
+    const intent = SCRIPT_INTENTS.find((i) => i.id === intentSel.value);
+    intentHelp.textContent = intent?.help ?? "";
+    switch (intentSel.value) {
+      case "probe":
+        activeForm = buildScriptWizardProbe(vars);
+        break;
+      case "thumbnail":
+        activeForm = buildScriptWizardThumbnail(vars);
+        break;
+      case "convert":
+        activeForm = buildScriptWizardConvert(vars);
+        break;
+      case "extract_audio":
+        activeForm = buildScriptWizardExtractAudio(vars);
+        break;
+      case "multitrack":
+        activeForm = buildScriptWizardMultitrack(vars);
+        break;
+      default:
+        activeForm = null;
+    }
+    if (activeForm) dynamicArea.appendChild(activeForm.el);
+    updatePreview();
+  };
+  intentSel.addEventListener("change", renderIntent);
+  dynamicArea.addEventListener("input", updatePreview);
+  dynamicArea.addEventListener("change", updatePreview);
+  if (intentOptions.length === 0) {
+    wizardWrap.appendChild(h("div", HELP_CSS + "margin-top:8px;", "Auf diesem Server ist weder ffmpeg noch ffprobe freigegeben — der Assistent braucht mindestens eines von beiden."));
+  } else {
+    wizardWrap.append(field("Aufgabe", intentSel), intentHelp, dynamicArea, previewLabel, preview);
+    renderIntent();
+  }
+
+  // ---- Moduswechsel -----------------------------------------------------
+  const modeToggle = h("button", "margin-top:10px;");
+  modeToggle.type = "button";
+  const syncMode = () => {
+    wizardWrap.style.display = mode === "wizard" ? "block" : "none";
+    advancedWrap.style.display = mode === "advanced" ? "block" : "none";
+    modeToggle.textContent = mode === "wizard" ? "Stattdessen rohe Argumente eingeben (Experten-Modus)" : "Stattdessen den Assistenten verwenden";
+  };
+  modeToggle.addEventListener("click", () => {
+    mode = mode === "wizard" ? "advanced" : "wizard";
+    syncMode();
+  });
+  if (intentOptions.length === 0) mode = "advanced";
+  syncMode();
+
+  const timeout = durationInput(typeof cfg.timeoutSeconds === "number" ? cfg.timeoutSeconds : undefined);
+  el.append(wizardWrap, advancedWrap, modeToggle, field("Zeitlimit", timeout.el, "Leer = 5 Minuten."));
+
   return {
     el,
     read: () => {
-      if (!cmd.value) return { ok: false, error: "Werkzeug fehlt." };
       const t = timeout.read();
       if (t === null) return { ok: false, error: "Zeitlimit: keine gültige Zahl." };
-      const out = { ...cfg, command: cmd.value };
-      setOrDelete(out, "args", argInputs.map((i) => i.value).filter((v) => v !== ""));
+      if (mode === "advanced") {
+        if (!cmd.value) return { ok: false, error: "Werkzeug fehlt." };
+        const out = { ...cfg, command: cmd.value };
+        setOrDelete(out, "args", argInputs.map((i) => i.value).filter((v) => v !== ""));
+        setOrDelete(out, "timeoutSeconds", t);
+        return { ok: true, config: out };
+      }
+      if (!activeForm) return { ok: false, error: "Aufgabe wählen." };
+      const r = activeForm.read();
+      if (!r.ok) return { ok: false, error: r.error };
+      const out = { ...cfg, command: r.command, args: r.args };
       setOrDelete(out, "timeoutSeconds", t);
       return { ok: true, config: out };
     },
