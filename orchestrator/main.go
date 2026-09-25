@@ -29,6 +29,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/db"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/domainaudit"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/eventbus"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/ffmpegtools"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/graph"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/groups"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/health"
@@ -822,6 +823,12 @@ func main() {
 	for name := range scriptAllowList {
 		scriptCommandNames = append(scriptCommandNames, name)
 	}
+	// UMSETZUNG.md Kapitel 22 (W1): dieselbe Allow-Liste wie oben liefert
+	// gleich den ffmpeg-Pfad für die Introspektion mit — kein zweites
+	// exec.LookPath, kein zweites Sicherheitsmodell. scriptAllowList["ffmpeg"]
+	// ist "" (Go-Zero-Wert), wenn ffmpeg auf diesem Host fehlt;
+	// ffmpegtools.Store bleibt dann nutzbar, meldet aber Available()==false.
+	ffmpegToolsStore := ffmpegtools.NewStore(scriptAllowList["ffmpeg"])
 	if scriptEval, err := process.NewEvaluator(); err == nil {
 		processEngine.Register(process.StepTypeScript, process.NewScriptExecutor(scriptAllowList, scriptEval))
 	} else {
@@ -862,7 +869,7 @@ func main() {
 	backupSvc := backup.NewService(backup.ParsePatroniNodes(cfg.PatroniNodes), cfg.BackupDir, cfg.BackupKeep)
 	supervisorClient := supervisorclient.New(cfg.SupervisorURL)
 
-	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore))
+	handler := httpapi.NewHandler(cfg, store, hub, graphSvc, layoutStore, snapshotSvc, launcherSvc, consoleResolver, nodeHTTPClient, authSvc, authzStore, auditStore, auditStore, hostStore, hostMetricsTracker, hostHistory, workflowSvc, placementEngine, profileStore, placementThresholds, nodeSettingsStore, backupSvc, supervisorClient, clusterNode, ioPortStore, logStore, logPublisher, processStore, processEngine, assetStore, httpapi.WithAlarmAckStore(alarmacks.NewStore(database)), httpapi.WithScriptCommands(scriptCommandNames), httpapi.WithFFmpegTools(ffmpegToolsStore), httpapi.WithDomainAudit(domainAuditStore, domainAuditStore), httpapi.WithAssetLinks(assetLinkStore), httpapi.WithStorageBackends(storageBackendSvc), httpapi.WithOrganizations(orgStore), httpapi.WithGroups(groupStore))
 
 	slog.Info("starting orchestrator",
 		"listen", cfg.Listen,

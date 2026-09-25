@@ -556,6 +556,16 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	// sind "operate" — eine Bedienhandlung an einem laufenden Prozess,
 	// keine Konfigurations- oder Admin-Handlung.
 	mux.HandleFunc("GET /api/v1/process-capabilities", g.requireAuth(handleProcessCapabilities(processEngine, options.scriptCommands)))
+	// UMSETZUNG.md Kapitel 22 (W1): Introspektion statt roher CLI-
+	// Argumente für den `script`-Schritt — reines Leseangebot, daher
+	// requireAuth wie process-capabilities (keine "operate"-Handlung).
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/capabilities", g.requireAuth(handleFFmpegCapabilities(options.ffmpegTools)))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/encoders", g.requireAuth(handleFFmpegList(options.ffmpegTools, "encoders")))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/decoders", g.requireAuth(handleFFmpegList(options.ffmpegTools, "decoders")))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/formats", g.requireAuth(handleFFmpegList(options.ffmpegTools, "formats")))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/pix-fmts", g.requireAuth(handleFFmpegList(options.ffmpegTools, "pix-fmts")))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/filters", g.requireAuth(handleFFmpegList(options.ffmpegTools, "filters")))
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/{kind}/{name}", g.requireAuth(handleFFmpegDetail(options.ffmpegTools)))
 	mux.HandleFunc("GET /api/v1/process-definitions", g.requireAuth(handleListProcessDefinitions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))

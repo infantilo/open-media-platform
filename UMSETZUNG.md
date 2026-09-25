@@ -3303,6 +3303,54 @@ jq` liefert eine echte, mit `ffmpeg -encoders` übereinstimmende Liste;
 `scale`-Filter. Go-Unit-Tests parsen fest eingebettete Beispiel-Outputs
 (kein Live-ffmpeg-Zwang in CI).
 
+**Status 2026-09-25: erledigt + live verifiziert.** Ein Scope-Schnitt
+gegenüber der obigen Anweisung, beim Schreiben anhand echter
+`ffmpeg`-Ausgabe (5.1.9) gefunden: `-h full` (globale CLI-Flags wie
+`-ar`/`-r`/`-ss`) bewusst NICHT geparst — das ist ein separates, viel
+unregelmäßiger formatiertes Beast (viele Sonder-Abschnitte je
+Muxer-/Demuxer-Kategorie in der `-h full`-Ausgabe) mit vergleichsweise
+kleinem Ertrag, da es sich um einen kleinen, stabilen Satz allgemein
+bekannter Flags handelt — der eigentlich wertvolle, tatsächlich riesige
+Teil (hunderte Encoder-/Filter-/Muxer-spezifische AVOptions) ist
+vollständig abgedeckt. Bei Bedarf später nachziehbar, keine
+Architekturänderung nötig.
+
+Neues Paket `orchestrator/internal/ffmpegtools` (`types.go`/`parse.go`/
+`store.go`) — Token-basiertes Parsing (`strings.Fields`, nicht
+spaltenpositionsbasiert) für `-encoders`/`-decoders`/`-formats`/
+`-pix_fmts`/`-filters` sowie für `-h encoder=X`/`-h decoder=X`/
+`-h muxer=X`/`-h demuxer=X`/`-h filter=X` (inkl. eingerückter
+Enum-Unterzeilen, `(from A to B)`/`(default X)`-Extraktion). Live an
+echter `ffmpeg 5.1.9`-Ausgabe geprüft (nicht geraten) — dabei einen
+echten Stolperstein gefunden: ffmpeg polstert Namen nur bis zu einer
+MINDESTBREITE, ein langer Enum-Name wie `autovariance-biased`
+überschreitet sie und rückt die restliche Zeile näher zusammen
+(`autovariance-biased 3            E..V....... …`, nur ein Leerzeichen
+statt der sonst üblichen Auffüllung) — eine spaltenpositionsbasierte
+Regex hätte das falsch geparst; der token-basierte Ansatz (Flags-Token
+per Zeichensatz erkennen, alles davor/danach ist Name/Wert/
+Beschreibung) übersteht das unverändert korrekt, live als Testfall
+verifiziert.
+
+`WithFFmpegTools`-`HandlerOption` (gleiches Muster wie
+`WithScriptCommands`) + Routen `GET /api/v1/tools/ffmpeg/
+{capabilities,encoders,decoders,formats,pix-fmts,filters,{kind}/{name}}`
+in `internal/httpapi`, gespeist aus main.go per `scriptAllowList["ffmpeg"]`
+(exakt derselbe per `exec.LookPath` ermittelte Pfad wie der
+`script`-Workflow-Schritt — kein zweites Sicherheitsmodell). Live gegen
+den echten, neu gebauten+gestarteten Orchestrator verifiziert: 217
+Encoder (`libx264` korrekt als Video erkannt), 407 Formate (`mxf` mit
+Demuxing+Muxing), 527 Filter, 206 Pixelformate; `GET .../filter/scale`
+liefert 38 Optionen inkl. `in_color_matrix`-Enum-Werten; `GET
+.../encoder/libx264` liefert 47 Optionen inkl. `-aq-mode`s vier
+Enum-Werten (der `autovariance-biased`-Fall live bestätigt korrekt);
+`GET .../muxer/mxf` liefert `-signal_standard` mit allen sieben
+SMPTE/BT-Enum-Werten — genau die Art Parameter, die das
+MXF-Mehrspur-Beispielszenario (22.2) später braucht. Ungültige Kategorie
+→ 400, kein Bearer-Token → 401. `go build ./...`/`go vet ./...`/
+`go test ./...` für den gesamten `orchestrator`-Modulbaum grün (keine
+Regression in bestehenden Paketen).
+
 #### W2 — Geführter Formular-Wizard für `script`-Schritte
 
 **Ziel:** `SCRIPT_TEMPLATES` (heute 4 feste Einträge) wird zu einem
@@ -3611,3 +3659,4 @@ Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
 | Bugliste #6: Switcher-UI auf Mixer-Niveau gehoben + optionale Vorschaubilder + `omp-source` erster vorschaubild-fähiger Switcher-Eingang (Nachtrag 294) | erledigt | Nutzerauftrag "jetzt #6 und #7". Per Headless-Chromium/CDP-Screenshot-Vergleich (nicht geraten) bestätigt: `omp-video-mixer-me` nutzt bereits `<omp-button>`/Design-Tokens (bereits professionell), `omp-switcher` hatte rohe ungestylte `<button>`-Elemente mit Ad-hoc-Farben — genau dieser Kontrast war die "kindliche Lösung". Fix 1: Switcher komplett auf das bewährte Mixer-Design umgestellt (`<omp-button>`, `color="onair"`, Design-Tokens). Fix 2: optionaler "Vorschaubilder"-Umschalter (localStorage-gemerkt) in BEIDEN Bundles — 16:9-Live-Vorschaubild je Quelle, sauberer "kein Bild"-Fallback ohne verfügbaren `previewUrl`-Stream, BLK bleibt immer die Text-Pille. Fix 3: `omp-source` (häufigste Testquelle) bekommt einen vierten `tee`-Zweig für MJPEG-Vorschau (`omp_mediaio::preview::build_mjpeg_branch`, gleiches Muster wie `omp-viewer`) + `previewUrl`-Parameter — ohne diesen Schritt hätte Fix 2 immer "kein Bild" gezeigt (die vier bisherigen `preview`-fähigen Nodes sind reine Empfänger, nie Switcher-Eingänge). Live verifiziert: echtes 320×180-JPEG von `omp-source` (Bearer-Header UND `?access_token=`-Query-Param, exakt der `<img>`-Tag-Weg), echte Switcher-Instanz entdeckte die Quelle korrekt, beide UI-Bundles im Test-Harness mit echtem `<omp-button>` gerendert (mit/ohne Vorschaubilder). Noch offen: Vorschaubild-Support für weitere Eingangs-Node-Typen (mxf-player/decklink/channel-player). `cargo build --workspace` + Clippy sauber. Details `docs/decisions.md` Nachtrag 294. | 2026-09-25 |
 | Fix: Thumbnail-Flicker (video-mixer-me/switcher) + hängender "Trennen"-Button nach Server-Disconnect (Nachtrag 295) | erledigt | Zwei aus dem Dogfooding von Nachtrag 291/294 gefundene Bugs. Root Cause 1: `refresh()`/`renderBusRow()` rissen bei jedem 2s-Poll die komplette Knopfreihe ab und bauten sie neu, wodurch jedes Vorschaubild-`<img>` zerstört und leer neu erzeugt wurde. Fix: Wiederverwendung bestehender `<omp-button>`-Knoten per `senderId`-Diff (`updateBusButton`/`updateInputButton`), nur `img.src` wird erneuert — der Browser zeigt währenddessen von selbst das alte Bild. Root Cause 2: `camera.html`s `onconnectionstatechange` rief `stop()` nie bei einem server-seitigen Disconnect auf, nur bei eigenem Klick. Fix: reagiert jetzt selbst auf `failed`/`closed` (sofort) und `disconnected` (4s Kulanzfrist gegen kurze Netz-Hänger). Live per echter CDP-Session verifiziert: dieselben `<img>`-DOM-Knoten überleben ≥3 reale Poll-Zyklen unverändert (Marker-Attribut-Test) bei weiterhin aktualisiertem `img.src`; echte WebRTC-Verbindung (Fake-Kamera-Device) + echter Revoke über die Orchestrator-API zeigt automatischen UI-Rücksprung auf "Verbinden" nach ~10s. Stolperstein: laufende Node-Instanzen serven `ui/bundle.js`/`camera.html` per `include_str!` compile-time-eingebettet — Fix erst nach `cargo build`+Neustart der Testinstanz sichtbar (s. Memory `feedback_include_str_requires_rebuild_to_test_ui_changes`). `cargo test -p omp-webrtc-gateway` grün. Commit `9d0decc`. | 2026-09-25 |
 | Kapitel 22 (FFmpeg/FFprobe-Assistent): Zielbild + Phasenplan W1–W4 festgelegt, KEIN Code (Nachtrag 296) | erledigt | Nutzerauftrag: geführte Wizard-/Filter-Builder-Bedienung für ffmpeg/ffprobe statt roher CLI-Argumente, Referenz war ein älteres NW.js-Projekt des Nutzers (dynamische ffmpeg-Hilfetext-Introspektion + Blockly). Bestandsaufnahme: bestehender `script`-Workflow-Schritt (Allow-Liste `orchestrator/main.go`, Executor `internal/process/executors.go`) + heutige starre `SCRIPT_TEMPLATES`/Rohargument-Liste (`ui/graph/process-step-config.ts`) sind der Erweiterungspunkt, kein neuer Node nötig. Nutzerentscheidungen: Reihenfolge Introspektion(W1)→Formular-Wizard(W2)→Filter-Graph-Builder(W3, auf bestehendem `flow-canvas.ts`-Koordinatenmuster statt Blockly)→Verallgemeinerungs-Härtetest(W4); der genannte "MXF mit 8 Tonspuren+TTS-Kennungen"-Fall ist ausdrücklich Maßstab für Baukasten-Ausdruckskraft, keine zu bauende Einzelfunktion; lokaler-LLM-Ausblick nur als Zukunftsnotiz (`ARCHITECTURE.md` §26.5), keine Implementierung. Details/Phasenplan: `ARCHITECTURE.md` §26, hier Kapitel 22. | 2026-09-25 |
+| Kapitel 22 W1: FFmpeg/FFprobe-Introspektion im Orchestrator | erledigt | Neues Paket `orchestrator/internal/ffmpegtools` — Token-basiertes (nicht spaltenpositionsbasiertes) Parsen von `-encoders`/`-decoders`/`-formats`/`-pix_fmts`/`-filters` + `-h encoder\|decoder\|muxer\|demuxer\|filter=X` (inkl. Enum-Unterzeilen, `(from A to B)`/`(default X)`). Scope-Schnitt gegenüber Plan: `-h full` (globale CLI-Flags) bewusst ausgelassen — kleiner stabiler Flag-Satz, der eigentlich große/wertvolle Teil (hunderte codec-/filter-/muxer-spezifische AVOptions) ist voll abgedeckt. Live gefundener Stolperstein: ffmpeg polstert Namen nur bis zu einer Mindestbreite, ein langer Enum-Name (`autovariance-biased`) überschreitet sie — token-basiertes Parsing übersteht das, eine spaltenpositionsbasierte Regex hätte falsch geparst (als Testfall festgehalten). Neue Routen `GET /api/v1/tools/ffmpeg/{capabilities,encoders,decoders,formats,pix-fmts,filters,{kind}/{name}}` (`WithFFmpegTools`-Option, gleiches Muster wie `WithScriptCommands`), gespeist aus derselben `exec.LookPath`-Allow-Liste wie der `script`-Workflow-Schritt. Live gegen neu gebauten+gestarteten Orchestrator verifiziert: 217 Encoder/407 Formate/527 Filter/206 Pixelformate, `filter/scale` (38 Optionen), `encoder/libx264` (47 Optionen inkl. `-aq-mode`-Enum), `muxer/mxf` (`-signal_standard` mit allen 7 SMPTE/BT-Werten — genau das MXF-Beispielszenario aus 22.2). Ungültige Kategorie → 400, ohne Token → 401. `go build`/`vet`/`test ./...` für den ganzen `orchestrator`-Modulbaum grün. | 2026-09-25 |

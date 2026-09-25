@@ -31,6 +31,7 @@ type handlerOptions struct {
 	storageBackends StorageBackendService
 	organizations   OrganizationService
 	groups          GroupService
+	ffmpegTools     FFmpegToolsService
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.
