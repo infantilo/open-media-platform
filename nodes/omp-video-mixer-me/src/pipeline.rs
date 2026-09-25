@@ -186,6 +186,10 @@ pub struct Config {
     pub label: String,
     pub width: u32,
     pub height: u32,
+    /// Bugliste 2026-09-25 #7: einmal beim Node-Start ermittelt
+    /// (`omp_mediaio::hwaccel::HwAccel::probe()` in `main.rs`), hier nur
+    /// durchgereicht — kein wiederholter Selbsttest pro Pipeline-Aufbau.
+    pub hwaccel: omp_mediaio::hwaccel::HwAccel,
 }
 
 #[derive(Debug, Clone)]
@@ -576,6 +580,7 @@ fn build_normalized_branch(
     name_suffix: &str,
     width: u32,
     height: u32,
+    hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<(gst::Element, Vec<gst::Element>), String> {
     // `queue` zwischen `tail` und der Konvertierungskette: ohne ein
     // pufferndes Element hier beantwortet keins der nachgelagerten
@@ -599,12 +604,20 @@ fn build_normalized_branch(
         .property("max-size-time", 0u64)
         .build()
         .map_err(|e| format!("queue ({name_suffix}): {e}"))?;
-    let videoconvert = gst::ElementFactory::make("videoconvert")
-        .build()
-        .map_err(|e| format!("videoconvert ({name_suffix}): {e}"))?;
-    let videoscale = gst::ElementFactory::make("videoscale")
-        .build()
-        .map_err(|e| format!("videoscale ({name_suffix}): {e}"))?;
+    pipeline.add(&queue).map_err(|e| format!("add branch elements ({name_suffix}): {e}"))?;
+    gst::Element::link(tail, &queue).map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
+
+    // Bugliste 2026-09-25 #7: Format+Größe per GPU (`vaapipostproc`),
+    // wenn auf diesem Host per Selbsttest nachgewiesen nutzbar (s.
+    // `omp_mediaio::hwaccel`-Moduldoku — reine Existenzprüfung wäre hier
+    // unsicher gewesen, live gefunden per SEGFAULT auf virtio-gpu/virgl),
+    // sonst unverändert `videoconvert ! videoscale`. OHNE Framerate in
+    // diesen Ziel-Caps — die übernimmt weiterhin ausschließlich das
+    // nachfolgende `videorate` (kein GPU-Äquivalent dafür im Einsatz).
+    let format_size_caps = gst::Caps::builder("video/x-raw").field("format", "RGBA").field("width", width as i32).field("height", height as i32).build();
+    let (convert_scale_tail, mut elements) =
+        omp_mediaio::hwaccel::build_convert_scale(pipeline, &queue, name_suffix, &format_size_caps, hwaccel)?;
+
     let videorate = gst::ElementFactory::make("videorate")
         .build()
         .map_err(|e| format!("videorate ({name_suffix}): {e}"))?;
@@ -612,18 +625,16 @@ fn build_normalized_branch(
         .property("caps", rgba_caps(width, height))
         .build()
         .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
-
     pipeline
-        .add(&queue)
-        .and_then(|()| pipeline.add(&videoconvert))
-        .and_then(|()| pipeline.add(&videoscale))
-        .and_then(|()| pipeline.add(&videorate))
+        .add(&videorate)
         .and_then(|()| pipeline.add(&caps))
         .map_err(|e| format!("add branch elements ({name_suffix}): {e}"))?;
-    gst::Element::link_many([tail, &queue, &videoconvert, &videoscale, &videorate, &caps])
-        .map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
+    gst::Element::link_many([&convert_scale_tail, &videorate, &caps]).map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
 
-    Ok((caps.clone(), vec![queue, videoconvert, videoscale, videorate, caps]))
+    elements.insert(0, queue);
+    elements.push(videorate);
+    elements.push(caps.clone());
+    Ok((caps, elements))
 }
 
 /// Vereinfachte Variante von `build_normalized_branch` für rein
@@ -765,6 +776,7 @@ struct SourceTap {
 /// Verwaisungs-Schutz wie überall sonst in diesem Modul.
 /// `sync_state_with_parent` ist beim Erstaufbau (Pipeline wechselt erst
 /// danach auf `PLAYING`) ein No-Op.
+#[allow(clippy::too_many_arguments)]
 fn build_source_branch(
     pipeline: &gst::Pipeline,
     context: &Arc<MxlContext>,
@@ -773,10 +785,11 @@ fn build_source_branch(
     name_suffix: &str,
     width: u32,
     height: u32,
+    hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<SourceBranch, String> {
     let mxl_input = MxlVideoInput::new(pipeline, context.clone(), read_flow_id)
         .map_err(|e| format!("MxlVideoInput({name_suffix}, {sender_id}): {e}"))?;
-    let (_, elements) = match build_normalized_branch(pipeline, &mxl_input.tail, name_suffix, width, height) {
+    let (_, elements) = match build_normalized_branch(pipeline, &mxl_input.tail, name_suffix, width, height, hwaccel) {
         Ok(r) => r,
         Err(e) => {
             remove_mxl_video_input(pipeline, mxl_input);
@@ -934,6 +947,7 @@ fn build_one_input(
     pad_index: usize,
     width: u32,
     height: u32,
+    hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<(Vec<gst::Pad>, Vec<gst::Pad>, SourceBranch), String> {
     let mut branch = build_source_branch(
         pipeline,
@@ -943,6 +957,7 @@ fn build_one_input(
         &format!("input-{pad_index}"),
         width,
         height,
+        hwaccel,
     )?;
 
     // Rollback-Hilfe: alle bereits erfolgreich angeforderten (isel, pad)
@@ -1124,12 +1139,13 @@ fn build_pip_tail(
     pip_source_input: Option<&DiscoveredInput>,
     width: u32,
     height: u32,
+    hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<(gst::Element, Option<MxlVideoInput>), String> {
     match pip_source_input {
         Some(input) => {
             let mxl_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
                 .map_err(|e| format!("MxlVideoInput(pip, {}): {e}", input.sender_id))?;
-            let (caps, _elements) = build_normalized_branch(pipeline, &mxl_input.tail, "pip", width, height)?;
+            let (caps, _elements) = build_normalized_branch(pipeline, &mxl_input.tail, "pip", width, height, hwaccel)?;
             Ok((caps, Some(mxl_input)))
         }
         None => {
@@ -1372,7 +1388,7 @@ fn build(
         let (keyer_caps, keyer_keyfill) = match keyer_source_input {
             Some(kf) => {
                 let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
-                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height)?;
+                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height, config.hwaccel)?;
                 (caps, Some((fill_input, key_input)))
             }
             None => {
@@ -1424,7 +1440,7 @@ fn build(
         //    traf).
         let pip_source_input = pip_sources[level_idx].as_ref().and_then(|id| inputs.iter().find(|i| &i.sender_id == id));
         let (pip_caps, pip_input) =
-            build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height)?;
+            build_pip_tail(&pipeline, context, pip_source_input, config.width, config.height, config.hwaccel)?;
         let comp_pip_pad = comp
             .request_pad_simple("sink_3")
             .ok_or_else(|| format!("comp: request sink_3 (pip) failed (level {level_idx})"))?;
@@ -1495,7 +1511,7 @@ fn build(
     let mut warnings = Vec::new();
     for (i, input) in inputs.iter().enumerate() {
         let pad_index = i + 1;
-        match build_one_input(&pipeline, context, &isels, &isel_bgs, input, pad_index, config.width, config.height) {
+        match build_one_input(&pipeline, context, &isels, &isel_bgs, input, pad_index, config.width, config.height, config.hwaccel) {
             Ok((fg_pads, bg_pads, branch)) => {
                 for (level_idx, pad) in fg_pads.into_iter().enumerate() {
                     source_pads_fg[level_idx].insert(input.sender_id.clone(), pad);

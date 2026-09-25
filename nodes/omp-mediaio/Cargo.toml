@@ -6,6 +6,17 @@ edition = "2024"
 # publish=false wie bei omp-node-sdk.
 publish = false
 
+# Bugliste 2026-09-25 #7 / `hwaccel`-Modul: eigenständiges Selbsttest-
+# Binary statt eines In-Process-Funktionsaufrufs, damit ein Absturz des
+# geprüften GPU-Elements (live gefunden: `vaapipostproc` auf virtio-gpu/
+# virgl) nie den aufrufenden Node-Prozess mitreißt — s. `src/bin/
+# hwaccel_selftest.rs`-Moduldoku. Landet dank Standard-Cargo-Layout
+# automatisch neben jedem Node-Binary im selben `target/<profile>`-
+# Verzeichnis, `hwaccel::probe()` findet es relativ zu `current_exe()`.
+[[bin]]
+name = "omp-mediaio-hwaccel-selftest"
+path = "src/bin/hwaccel_selftest.rs"
+
 [dependencies]
 gstreamer = "0.25.3"
 gstreamer-app = { version = "0.25", optional = true }

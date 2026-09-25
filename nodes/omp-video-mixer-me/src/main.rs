@@ -1026,12 +1026,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    // Bugliste 2026-09-25 #7: einmal beim Start ermittelt (kostet bis zu
+    // 5s Selbsttest, s. `omp_mediaio::hwaccel`-Moduldoku für den Grund,
+    // warum das kein bloßer `ElementFactory::find`-Check ist), nicht pro
+    // Pipeline-Neuaufbau.
+    let hwaccel = omp_mediaio::hwaccel::HwAccel::probe();
+
     let pipeline_config = pipeline::Config {
         domain,
         flow_ids: flow_ids.clone(),
         label: label.clone(),
         width,
         height,
+        hwaccel,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));

@@ -29638,3 +29638,111 @@ selbst als nicht prioritär markiert), #6 (Switcher/Mixer-UI-Redesign),
 src/camera.html` (`#setupError`, `showConnectError`,
 `friendlyConnectError`), `nodes/omp-webrtc-gateway/ui/bundle.js`
 (`revoke()`).
+
+## 2026-09-25 (Nachtrag 292) — Bugliste #7: GPU-Erkennung für GStreamer-Pipelines — mit einem live gefundenen Absturz-Risiko, das die naive Umsetzung verhindert hätte
+
+Nutzerauftrag "jetzt #6 und #7" — dieser Nachtrag deckt #7 ab (#6 folgt
+separat). Zitat: "all unsere gstreamer basierten pipelines müssen beim
+start des nodes schauen, ob auf dem host eine gpu zur verfügung steht
+und wenn ja dann jeweils die gpu nutzen, sonst fallback auf ohne
+gpu-basierte elemente."
+
+**Kritischer Live-Fund, BEVOR irgendein Code geschrieben wurde** (auf
+ausdrücklichen Wunsch des Nutzers trotzdem mit vollem Selbsttest-Ansatz
+umgesetzt, s. u.): eine naive `gst::ElementFactory::find("vaapipostproc")`-
+Prüfung wäre auf DIESEM Host (virtio-gpu/virgl-Treiber, `vainfo`:
+"Mesa Gallium driver ... for virgl", nur `VAProfileNone:
+VAEntrypointVideoProc` unterstützt — typisch für Entwicklungsumgebungen
+wie Crostini) aktiv falsch gewesen: `gstreamer1.0-vaapi` installiert
+(zu Testzwecken, `sudo apt-get install`), `vaapipostproc`/`vaapisink`
+laden anstandslos und verhandeln Caps korrekt — SEGFAULTEN aber
+zuverlässig, sobald tatsächlich eine echte Formatkonvertierung
+(I420→RGBA) ODER eine Skalierung verlangt wird (per `gst-launch-1.0`
+mehrfach reproduziert; reines Passthrough — identisches Format UND
+identische Größe — läuft dagegen einwandfrei, hätte den Fund also mit
+einem zu einfachen Test verpasst). Eine reine Existenzprüfung hätte
+also GENAU auf dieser, keineswegs exotischen Entwicklungsumgebungs-
+Klasse jede damit gebaute Pipeline beim Start zum Absturz gebracht.
+
+**Deshalb: `omp_mediaio::hwaccel`, ein echter Funktionstest statt einer
+Existenzprüfung.** Neues, eigenständiges Helfer-Binary `omp-mediaio-
+hwaccel-selftest` (`nodes/omp-mediaio/src/bin/hwaccel_selftest.rs`)
+baut+startet die exakt zu prüfende Mini-Pipeline (`videotestsrc
+num-buffers=2` I420 640×480 → `vaapipostproc` → RGBA 320×240 →
+`fakesink` — bewusst ANDERES Format UND ANDERE Größe, nicht Passthrough)
+in einem EIGENEN Prozess. `hwaccel::HwAccel::probe()` (aufgerufen genau
+einmal beim Node-Start) startet dieses Helfer-Binary (gefunden relativ
+zu `current_exe()` — landet dank Standard-Cargo-Layout automatisch
+neben jedem Node-Binary im selben `target/<profile>`-Verzeichnis) mit
+5s-Timeout; `true` NUR bei sauberem Exit 0. Ein Absturz ODER ein
+Hängenbleiben (live beobachtet: `gst-launch-1.0`s eigener Absturz-
+Handler "spinnt" nach SIGSEGV statt sofort zu beenden — unser eigenes
+Helfer-Binary crasht dagegen sauber und sofort, exit 139, kein Timeout
+nötig) gilt als "nicht nutzbar", niemals als Fehler, der den Node selbst
+stören dürfte. `hwaccel::build_convert_scale()` baut darauf aufbauend
+einen Konvertierungs-/Skalierungs-Zweig: `vaapipostproc`, wenn nachgewiesen
+nutzbar, sonst unverändert `videoconvert ! videoscale`.
+
+**Live verifiziert (drei Ebenen):**
+1. Der Absturz selbst: `gst-launch-1.0`-Pipeline mit echter Konvertierung
+   ODER Skalierung durch `vaapipostproc` segfaultet reproduzierbar; reine
+   Formatänderung UND reine Größenänderung wurden EINZELN geprüft — beide
+   crashen unabhängig voneinander, nicht nur in Kombination.
+2. Das Helfer-Binary reproduziert denselben Absturz isoliert (`./omp-
+   mediaio-hwaccel-selftest vaapipostproc` → Exit 139, SIGSEGV) — bestätigt,
+   dass der Selbsttest den echten Fund tatsächlich abbildet.
+3. `HwAccel::probe()` end-to-end (kleines Testprogramm neben dem echten
+   Helfer-Binary in `target/debug/` platziert, exakt wie ein echter Node
+   es vorfände): `video_convert_scale_available() == false`, Exit 0 —
+   der Absturz des Kandidaten blieb vollständig im Subprozess, der
+   aufrufende Prozess lief unbeeinträchtigt weiter und traf die korrekte
+   Fallback-Entscheidung.
+
+**Ausgerollt auf `omp-video-mixer-me`** (`build_normalized_branch`,
+`Config.hwaccel` von `main.rs` über `build_source_branch`/
+`build_one_input`/`build_pip_tail`/den Keyer-Zweig durchgereicht) — auf
+diesem Host bewirkungslos (Selbsttest liefert `false`, identisches
+Software-Verhalten wie vor diesem Nachtrag), aber der GPU-Zweig selbst
+ist jetzt Teil des Codes und aktiviert sich automatisch, sobald
+`HwAccel::probe()` auf einem Host mit tatsächlich funktionierendem
+`vaapipostproc` `true` liefert. Live verifiziert: Instanz über den
+Orchestrator gestartet, Registrierung < 1s (kein Warten auf den
+Selbsttest-Timeout, da der Absturz sofort passiert statt zu hängen),
+`monitor.overallStatus`→`Healthy`, echter Viewer angeschlossen → echtes
+640×360-JPEG-PGM-Bild (identisch zum vorherigen Verhalten, keine
+Regression).
+
+**Bewusst NICHT ausgerollt in dieser Runde:**
+- `omp-switcher` — dieselben `videoconvert`/`videoscale`-Elemente sind
+  dort NAMENTLICH in `InputBranch` gehalten und werden vom Highres/
+  Lowres-Hot-Swap-Mechanismus (`swap_input_resolution`) direkt
+  referenziert/manipuliert — exakt dieselbe bereits als fragil bekannte
+  Stelle, die schon bei Nachtrag 289 bewusst nicht angefasst wurde
+  (Pad-Block-Choreografie, deren Interaktion mit einem ausgetauschten
+  GPU-Element eine eigene, dedizierte Untersuchung bräuchte statt einer
+  Mitnahme hier).
+- Alle übrigen ~15 GStreamer-Nodes mit eigenen `videoconvert`/
+  `videoscale`-Zubringern (`omp-multiviewer(-custom)`, `omp-viewer`,
+  `omp-scaler`, `omp-decklink`, `omp-2110-gateway`, `omp-aes67-gateway`,
+  `omp-webrtc-gateway`, `omp-channel-player`, `omp-mxf-player(-direct)`,
+  `omp-recorder`, `omp-audio-mixer`, `omp-scope`, `omp-ograf`, ...) —
+  derselbe mechanische Umbau wie bei `omp-video-mixer-me`, aber bewusst
+  nicht in dieser Sitzung durchgeführt (Umfang, Zeitbudget). Die sichere
+  Infrastruktur (`omp_mediaio::hwaccel`) steht jetzt bereit, weitere
+  Nodes können denselben Umbau wie hier dokumentiert nachziehen.
+- H.264-Encode/-Decode-Beschleunigung (`vaapih264enc`/`vaapih264dec`,
+  NVENC/NVDEC): auf diesem Host GAR NICHT verfügbar (nur `VAEntrypoint
+  VideoProc`, kein Encode/Decode-Profil im installierten VA-Treiber) —
+  könnte mit demselben Selbsttest-Muster ergänzt werden, sobald ein Host
+  mit echter Codec-Beschleunigung zum Testen zur Verfügung steht; hier
+  nicht blind implementiert, weil unverifizierbar.
+
+`cargo build --workspace --bins` grün, `cargo test -p omp-mediaio`
+(4 neue `hwaccel`-Tests) + `cargo test -p omp-video-mixer-me` grün,
+Clippy für beide Pakete sauber (keine neuen Fundstellen ggü. der
+bekannten, vorbestehenden Baseline).
+
+**Dateien:** `nodes/omp-mediaio/Cargo.toml` (`[[bin]]`), `nodes/omp-
+mediaio/src/bin/hwaccel_selftest.rs` (neu), `nodes/omp-mediaio/src/
+hwaccel.rs` (neu), `nodes/omp-mediaio/src/lib.rs` (`pub mod hwaccel`),
+`nodes/omp-video-mixer-me/src/pipeline.rs`+`src/main.rs`.

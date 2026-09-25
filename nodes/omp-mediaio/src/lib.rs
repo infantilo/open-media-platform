@@ -18,6 +18,7 @@
 
 pub mod rtp;
 pub mod st2110;
+pub mod hwaccel;
 
 #[cfg(feature = "mxl")]
 pub mod mxl;
