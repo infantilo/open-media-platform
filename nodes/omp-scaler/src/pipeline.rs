@@ -212,6 +212,11 @@ pub fn run(
     }));
 
     let mut active: Option<ActivePipeline> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): merkt sich die zuletzt gewünschte,
+    // noch nicht erfolgreich verbundene Quelle für den Timeout-Retry
+    // unten.
+    let mut retry_target: Option<String> = None;
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -226,17 +231,30 @@ pub fn run(
                 // MxlContext für einen neuen Reader/Writer nutzt.
                 active = None;
                 match build(&context, &source_flow_id, &config, flowed.clone(), output_delay.clone()) {
-                    Ok(p) => active = Some(p),
+                    Ok(p) => {
+                        active = Some(p);
+                        retry_target = None;
+                    }
                     Err(e) => {
                         let _ =
                             tx.send(Event::Error(format!("connect {source_flow_id} failed: {e}")));
+                        retry_target = Some(source_flow_id);
                     }
                 }
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                retry_target = None;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Some(source_flow_id) = retry_target.clone()
+                    && let Ok(p) = build(&context, &source_flow_id, &config, flowed.clone(), output_delay.clone())
+                {
+                    active = Some(p);
+                    retry_target = None;
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

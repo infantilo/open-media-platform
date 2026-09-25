@@ -398,6 +398,11 @@ pub fn run(
     let _ = ready.send(Ok(AudioHandle { commands: commands_tx, loudness: loudness.clone(), flowed: flowed.clone() }));
 
     let mut active: Option<ActiveBranch> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): merkt sich die zuletzt gewünschte,
+    // noch nicht erfolgreich verbundene Quelle für den Timeout-Retry
+    // unten.
+    let mut retry_target: Option<String> = None;
     loop {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
@@ -409,16 +414,34 @@ pub fn run(
                 *loudness.lock().expect("lock poisoned") = LoudnessSnapshot::default();
                 measurements.reset();
                 match build(&context, &flow_id, tx.clone(), loudness.clone(), flowed.clone(), &measurements) {
-                    Ok(branch) => active = Some(branch),
-                    Err(e) => eprintln!("omp-scope: audio connect {flow_id} failed: {e}"),
+                    Ok(branch) => {
+                        active = Some(branch);
+                        retry_target = None;
+                    }
+                    Err(e) => {
+                        eprintln!("omp-scope: audio connect {flow_id} failed: {e}");
+                        retry_target = Some(flow_id);
+                    }
                 }
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                retry_target = None;
                 *loudness.lock().expect("lock poisoned") = LoudnessSnapshot::default();
                 measurements.reset();
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Some(flow_id) = retry_target.clone()
+                {
+                    *loudness.lock().expect("lock poisoned") = LoudnessSnapshot::default();
+                    measurements.reset();
+                    if let Ok(branch) = build(&context, &flow_id, tx.clone(), loudness.clone(), flowed.clone(), &measurements) {
+                        active = Some(branch);
+                        retry_target = None;
+                    }
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

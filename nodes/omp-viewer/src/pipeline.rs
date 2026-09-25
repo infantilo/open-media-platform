@@ -335,6 +335,20 @@ pub fn run(
     // relativ zu einem dazwischenkommenden Connect/Disconnect erhalten
     // bleibt.
     let mut pending: Option<Command> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3: `build()` schlägt fehl,
+    // wenn der `flow_id`-MXL-Flow der Quelle im Moment des `Connect`
+    // noch nicht existiert (Quelle erzeugt, aber noch kein Video
+    // geladen/abgespielt) — bisher OHNE Retry, die Pipeline blieb dann
+    // dauerhaft `None`, selbst nachdem die Quelle später zu schreiben
+    // begann; nur ein manuelles Trennen+Neuverbinden (erneutes
+    // `Command::Connect`) stieß einen neuen Versuch an. Gleiches Muster
+    // wie das bereits (mit eigenem, dediziertem Retry-Mechanismus)
+    // behandelte `missing_input_ids()` bei `omp-video-mixer-me` — hier
+    // als einfacher "letzter fehlgeschlagener Connect"-Merker, der bei
+    // jedem 500ms-Tick der ohnehin laufenden Kommando-Schleife erneut
+    // versucht wird, bis er entweder erfolgreich ist oder durch einen
+    // neuen `Connect`/`Disconnect` ersetzt wird.
+    let mut retry_target: Option<(String, String)> = None;
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -361,14 +375,19 @@ pub fn run(
                     flowed.clone(),
                     preview_fps.load(Ordering::Relaxed),
                 ) {
-                    Ok(p) => active = Some(p),
+                    Ok(p) => {
+                        active = Some(p);
+                        retry_target = None;
+                    }
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("connect {flow_id} failed: {e}")));
+                        retry_target = Some((flow_id, label));
                     }
                 }
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                retry_target = None;
                 broadcaster.reset();
             }
             // Nutzerauftrag 2026-09-03: wirkt nur, wenn gerade eine Quelle
@@ -399,7 +418,31 @@ pub fn run(
                     rebuild_mjpeg_branch(active, fps);
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Automatischer Reconnect-Versuch (s. `retry_target`-Doku
+                // oben): kein neues Event pro Versuch — die erste
+                // Fehlermeldung wurde bereits beim ursprünglichen
+                // `Connect` gemeldet, weitere gleiche Meldungen alle
+                // 500ms wären reines Alert-Spam. `spawn_viewer_monitor_
+                // tick` (main.rs) erholt den BCP-008-Status ohnehin
+                // automatisch, sobald `flowed` durch die Pad-Probe in
+                // `build()` wahr wird.
+                if active.is_none()
+                    && let Some((flow_id, label)) = retry_target.clone()
+                    && let Ok(p) = build(
+                        &context,
+                        &flow_id,
+                        &label,
+                        &broadcaster,
+                        config.sink_element.as_deref(),
+                        flowed.clone(),
+                        preview_fps.load(Ordering::Relaxed),
+                    )
+                {
+                    active = Some(p);
+                    retry_target = None;
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

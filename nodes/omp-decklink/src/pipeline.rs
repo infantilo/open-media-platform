@@ -719,7 +719,8 @@ pub fn run_output(
                    audio: &Option<String>,
                    active: &mut Option<ActiveOutputPipeline>,
                    flowed: &Arc<AtomicBool>,
-                   tx: &UnboundedSender<Event>| {
+                   tx: &UnboundedSender<Event>,
+                   silent: bool| {
         // Alte Pipeline zuerst abbauen (Drop stoppt die MXL-Reader-
         // Threads + setzt State Null), bevor eine neue denselben
         // MxlContext für neue Reader nutzt (identische Reihenfolge-
@@ -744,7 +745,14 @@ pub fn run_output(
         ) {
             Ok(p) => *active = Some(p),
             Err(e) => {
-                let _ = tx.send(Event::Error(format!("DeckLink-Ausgang: {e}")));
+                // `silent`: der periodische Reconnect-Retry (Bugliste
+                // 2026-09-25 #3, s. unten) ruft dies alle 500ms auf, bis
+                // die Quelle existiert — ohne `silent` würde das denselben
+                // Fehler-Alert alle 500ms neu auslösen, statt nur einmal
+                // beim ursprünglichen Connect.
+                if !silent {
+                    let _ = tx.send(Event::Error(format!("DeckLink-Ausgang: {e}")));
+                }
             }
         }
     };
@@ -787,21 +795,34 @@ pub fn run_output(
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(Command::ConnectVideo(flow_id)) => {
                 video_flow_id = Some(flow_id);
-                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx, false);
             }
             Ok(Command::DisconnectVideo) => {
                 video_flow_id = None;
-                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx, false);
             }
             Ok(Command::ConnectAudio(flow_id)) => {
                 audio_flow_id = Some(flow_id);
-                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx, false);
             }
             Ok(Command::DisconnectAudio) => {
                 audio_flow_id = None;
-                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx);
+                rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx, false);
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+            // `omp-viewer::pipeline::run`): `video_flow_id`/`audio_flow_id`
+            // können bereits gesetzt sein, während der zugehörige MXL-Flow
+            // noch nicht existiert (Quelle erzeugt, aber noch nichts
+            // geschrieben) — `rebuild()` schlägt dann fehl und `active`
+            // blieb bisher dauerhaft `None`, ohne dass ein weiteres
+            // Connect-Kommando ankommt. Deshalb hier zusätzlich bei jedem
+            // 500ms-Tick erneut versuchen, solange eine Video-Quelle
+            // gewünscht, aber keine Pipeline aktiv ist.
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none() && video_flow_id.is_some() {
+                    rebuild(&video_flow_id, &audio_flow_id, &mut active, &flowed, &tx, true);
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

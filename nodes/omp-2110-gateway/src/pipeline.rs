@@ -538,6 +538,11 @@ pub fn run_output(
     }));
 
     let mut active: Option<ActiveOutputPipeline> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): merkt sich die zuletzt gewünschte,
+    // noch nicht erfolgreich verbundene Quelle für den Timeout-Retry
+    // unten.
+    let mut retry_target: Option<String> = None;
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -564,16 +569,41 @@ pub fn run_output(
                     config.ptp_domain,
                     &ptp_synced,
                 ) {
-                    Ok(p) => active = Some(p),
+                    Ok(p) => {
+                        active = Some(p);
+                        retry_target = None;
+                    }
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("connect {flow_id} failed: {e}")));
+                        retry_target = Some(flow_id);
                     }
                 }
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                retry_target = None;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Some(flow_id) = retry_target.clone()
+                    && let Ok(p) = build_output(
+                        &context,
+                        &flow_id,
+                        &config.destination_host,
+                        config.destination_port,
+                        config.width,
+                        config.height,
+                        config.framerate_numerator,
+                        config.framerate_denominator,
+                        flowed.clone(),
+                        config.ptp_domain,
+                        &ptp_synced,
+                    )
+                {
+                    active = Some(p);
+                    retry_target = None;
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -768,6 +798,11 @@ pub fn run_audio_output(
     }));
 
     let mut active: Option<ActiveAudioOutputPipeline> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): merkt sich die zuletzt gewünschte,
+    // noch nicht erfolgreich verbundene Quelle für den Timeout-Retry
+    // unten.
+    let mut retry_target: Option<String> = None;
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -791,16 +826,41 @@ pub fn run_audio_output(
                     &desired_map,
                     &mixmatrix_cell,
                 ) {
-                    Ok(p) => active = Some(p),
+                    Ok(p) => {
+                        active = Some(p);
+                        retry_target = None;
+                    }
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("audio connect {flow_id} failed: {e}")));
+                        retry_target = Some(flow_id);
                     }
                 }
             }
             Ok(AudioCommand::Disconnect) => {
                 active = None;
+                retry_target = None;
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Some(flow_id) = retry_target.clone()
+                    && let Ok(p) = build_audio_output(
+                        &context,
+                        &flow_id,
+                        &config.destination_host,
+                        config.destination_port,
+                        config.sample_rate,
+                        config.channels,
+                        flowed.clone(),
+                        config.ptp_domain,
+                        &ptp_synced,
+                        &desired_map,
+                        &mixmatrix_cell,
+                    )
+                {
+                    active = Some(p);
+                    retry_target = None;
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

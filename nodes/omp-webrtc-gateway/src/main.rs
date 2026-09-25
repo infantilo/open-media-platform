@@ -24,6 +24,7 @@ mod pipeline;
 mod uibundle;
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use omp_node_sdk::connection::{
     ReceiverConnection, ReceiverControl, ReceiverResource, bulk_cors_methods, bulk_discovery,
@@ -355,10 +356,25 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
 /// IS-05-Quellwahl für den Video-Receiver (Muster `omp-2110-gateway`
 /// `OutputControl`, hier ohne Pipeline-Neuaufbau: die dauerhafte
 /// Monitor-Pipeline tauscht nur die Quelle aus).
+// Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+// `omp-viewer::pipeline::run`): `connect_video`/`connect_audio` schlagen
+// fehl, wenn der `flow_id`-MXL-Flow der Quelle im Moment des IS-05-
+// `apply()` noch nicht existiert (Kamera/Player erzeugt, aber noch nichts
+// aufgenommen/geladen) — bisher OHNE Retry, nur `eprintln!` und
+// dauerhaft leeres `connected`. Anders als bei `omp-viewer` gibt es hier
+// keinen bestehenden Kommando-Loop mit periodischem Tick, an den sich
+// ein Retry anhängen ließe (`apply()` ist ein synchroner, einmaliger
+// Trait-Aufruf) — `pending` merkt sich stattdessen die zuletzt
+// gewünschte, noch nicht erfolgreich verbundene `flow_id`, ein neuer,
+// dedizierter Tokio-Interval-Task (`spawn_video_reconnect_task`/
+// `spawn_audio_reconnect_task`, s. `main()`) versucht sie alle 500ms
+// erneut, bis sie entweder verbindet oder durch ein neues `apply()`
+// ersetzt/gelöscht wird.
 struct VideoControl {
     registry: RegistryClient,
     monitor: Arc<monitor::Monitor>,
     connected: Arc<Mutex<String>>,
+    pending: Arc<Mutex<Option<String>>>,
 }
 
 impl ReceiverControl for VideoControl {
@@ -367,9 +383,13 @@ impl ReceiverControl for VideoControl {
             (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
                 Ok(sender) => match sender.flow_id {
                     Some(flow_id) => match self.monitor.connect_video(&flow_id) {
-                        Ok(()) => *self.connected.lock().expect("lock poisoned") = flow_id,
+                        Ok(()) => {
+                            *self.connected.lock().expect("lock poisoned") = flow_id;
+                            *self.pending.lock().expect("lock poisoned") = None;
+                        }
                         Err(e) => {
-                            eprintln!("omp-webrtc-gateway: connect video {flow_id} failed: {e}")
+                            eprintln!("omp-webrtc-gateway: connect video {flow_id} failed: {e}");
+                            *self.pending.lock().expect("lock poisoned") = Some(flow_id);
                         }
                     },
                     None => eprintln!("omp-webrtc-gateway: sender {sender_id} has no flow_id"),
@@ -378,6 +398,7 @@ impl ReceiverControl for VideoControl {
             },
             _ => {
                 self.connected.lock().expect("lock poisoned").clear();
+                *self.pending.lock().expect("lock poisoned") = None;
                 self.monitor.disconnect_video();
             }
         }
@@ -389,6 +410,7 @@ struct AudioControl {
     registry: RegistryClient,
     monitor: Arc<monitor::Monitor>,
     connected: Arc<Mutex<String>>,
+    pending: Arc<Mutex<Option<String>>>,
 }
 
 impl ReceiverControl for AudioControl {
@@ -397,9 +419,13 @@ impl ReceiverControl for AudioControl {
             (Some(sender_id), true) => match self.registry.get_sender(sender_id) {
                 Ok(sender) => match sender.flow_id {
                     Some(flow_id) => match self.monitor.connect_audio(&flow_id) {
-                        Ok(()) => *self.connected.lock().expect("lock poisoned") = flow_id,
+                        Ok(()) => {
+                            *self.connected.lock().expect("lock poisoned") = flow_id;
+                            *self.pending.lock().expect("lock poisoned") = None;
+                        }
                         Err(e) => {
-                            eprintln!("omp-webrtc-gateway: connect audio {flow_id} failed: {e}")
+                            eprintln!("omp-webrtc-gateway: connect audio {flow_id} failed: {e}");
+                            *self.pending.lock().expect("lock poisoned") = Some(flow_id);
                         }
                     },
                     None => {
@@ -412,10 +438,48 @@ impl ReceiverControl for AudioControl {
             },
             _ => {
                 self.connected.lock().expect("lock poisoned").clear();
+                *self.pending.lock().expect("lock poisoned") = None;
                 self.monitor.disconnect_audio();
             }
         }
     }
+}
+
+/// Retry-Task zu `VideoControl`/`AudioControl`s `pending`-Feld (s. dortige
+/// Doku): versucht alle 500ms erneut, sobald ein `apply()` fehlgeschlagen
+/// ist — bricht selbst NICHT ab, `pending` wird durch das nächste
+/// erfolgreiche/abgebrochene `apply()` ohnehin ersetzt/gelöscht.
+fn spawn_video_reconnect_task(monitor: Arc<monitor::Monitor>, connected: Arc<Mutex<String>>, pending: Arc<Mutex<Option<String>>>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            ticker.tick().await;
+            let flow_id = pending.lock().expect("lock poisoned").clone();
+            if let Some(flow_id) = flow_id
+                && monitor.connect_video(&flow_id).is_ok()
+            {
+                *connected.lock().expect("lock poisoned") = flow_id;
+                *pending.lock().expect("lock poisoned") = None;
+            }
+        }
+    });
+}
+
+/// Audio-Pendant zu [`spawn_video_reconnect_task`].
+fn spawn_audio_reconnect_task(monitor: Arc<monitor::Monitor>, connected: Arc<Mutex<String>>, pending: Arc<Mutex<Option<String>>>) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_millis(500));
+        loop {
+            ticker.tick().await;
+            let flow_id = pending.lock().expect("lock poisoned").clone();
+            if let Some(flow_id) = flow_id
+                && monitor.connect_audio(&flow_id).is_ok()
+            {
+                *connected.lock().expect("lock poisoned") = flow_id;
+                *pending.lock().expect("lock poisoned") = None;
+            }
+        }
+    });
 }
 
 struct MonitorStore {
@@ -629,12 +693,17 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
     let audio_receiver_id = omp_node_sdk::idgen::new_v4();
     let connected_video = Arc::new(Mutex::new(String::new()));
     let connected_audio = Arc::new(Mutex::new(String::new()));
+    let pending_video = Arc::new(Mutex::new(None));
+    let pending_audio = Arc::new(Mutex::new(None));
+    spawn_video_reconnect_task(monitor.clone(), connected_video.clone(), pending_video.clone());
+    spawn_audio_reconnect_task(monitor.clone(), connected_audio.clone(), pending_audio.clone());
     let video_connection = Arc::new(ReceiverConnection::new(
         video_receiver_id.clone(),
         VideoControl {
             registry: registry.clone(),
             monitor: monitor.clone(),
             connected: connected_video.clone(),
+            pending: pending_video,
         },
     ));
     let audio_connection = Arc::new(ReceiverConnection::new(
@@ -643,6 +712,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
             registry,
             monitor: monitor.clone(),
             connected: connected_audio.clone(),
+            pending: pending_audio,
         },
     ));
 

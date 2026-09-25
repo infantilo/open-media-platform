@@ -276,6 +276,14 @@ pub fn run(
     let mut branches: HashMap<String, Branch> = HashMap::new();
     let mut debug_element_msgs: u64 = 0;
     let mut debug_last_report = std::time::Instant::now();
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`/`omp-audio-mixer::pipeline::run`):
+    // `build_branch` schlägt fehl, wenn der externe MXL-Flow im Moment
+    // von `AddInput` noch nicht existiert — bisher OHNE Retry, der
+    // Meter-Eingang blieb dann dauerhaft ohne Zweig. `pending_inputs`
+    // merkt sich die gewünschte, noch nicht erfolgreich gebaute
+    // `(input_id, flow_id)`-Zuordnung für den Timeout-Retry unten.
+    let mut pending_inputs: HashMap<String, String> = HashMap::new();
 
     loop {
         outer_heartbeat.fetch_add(1, Ordering::Relaxed);
@@ -290,6 +298,7 @@ pub fn run(
                 }
                 match build_branch(&pipeline, &context, &flow_id, &input_id) {
                     Ok(branch) => {
+                        pending_inputs.remove(&input_id);
                         node.register_worker(reader_worker_name(&input_id), branch.heartbeat.clone());
                         branches.insert(input_id.clone(), branch);
                         if !pipeline_started {
@@ -311,16 +320,40 @@ pub fn run(
                         // erprobte `addChannel`-Muster von
                         // `omp-audio-mixer`.
                     }
-                    Err(e) => eprintln!("omp-viewer: audio meter input {input_id} failed: {e}"),
+                    Err(e) => {
+                        eprintln!("omp-viewer: audio meter input {input_id} failed: {e}");
+                        pending_inputs.insert(input_id, flow_id);
+                    }
                 }
             }
             Ok(Command::RemoveInput { input_id }) => {
+                pending_inputs.remove(&input_id);
                 if let Some(branch) = branches.remove(&input_id) {
                     node.unregister_worker(&reader_worker_name(&input_id));
                     teardown_branch(&pipeline, branch);
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if !pending_inputs.is_empty() {
+                    let retry: Vec<(String, String)> =
+                        pending_inputs.iter().map(|(id, flow)| (id.clone(), flow.clone())).collect();
+                    for (input_id, flow_id) in retry {
+                        if let Ok(branch) = build_branch(&pipeline, &context, &flow_id, &input_id) {
+                            pending_inputs.remove(&input_id);
+                            node.register_worker(reader_worker_name(&input_id), branch.heartbeat.clone());
+                            branches.insert(input_id, branch);
+                            if !pipeline_started {
+                                match pipeline.set_state(gst::State::Playing) {
+                                    Ok(_) => pipeline_started = true,
+                                    Err(e) => eprintln!(
+                                        "omp-viewer: audio meter pipeline: initial set Playing failed: {e}"
+                                    ),
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
 

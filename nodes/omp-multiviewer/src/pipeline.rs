@@ -336,7 +336,25 @@ pub fn run(
                     }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+            // `omp-viewer::pipeline::run`): eine Quelle kann bereits
+            // entdeckt/registriert sein, BEVOR ihr MXL-Flow tatsächlich
+            // existiert (Player erzeugt, noch nichts geladen/abgespielt) —
+            // `build()` schlägt dann für die GESAMTE Kachel-Pipeline fehl.
+            // Bisher blieb `active` dauerhaft `None`, weil `inputs_changed`
+            // beim NÄCHSTEN identischen `SetInputs` (Discovery meldet
+            // unverändert alle 2s erneut) `false` liefert — ein Retry kam
+            // so NIE zustande, auch nachdem die Quelle später zu schreiben
+            // begann. Deshalb hier zusätzlich bei jedem 500ms-Tick erneut
+            // versuchen, solange keine aktive Pipeline steht.
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Ok(p) = build(&context, &broadcaster, &current_inputs)
+                {
+                    *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
+                    active = Some(p);
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

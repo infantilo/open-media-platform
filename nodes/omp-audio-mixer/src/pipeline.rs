@@ -747,6 +747,17 @@ pub fn run(
 
     let bus = active.pipeline.bus().expect("pipeline always has a bus");
 
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): `add_channel_branch` schlägt fehl,
+    // wenn der externe MXL-Flow im Moment von `AddChannel`/
+    // `SetChannelSource` noch nicht existiert (Quelle erzeugt, aber noch
+    // nichts geschrieben) — bisher OHNE Retry, der Kanal blieb dann
+    // dauerhaft ohne Zweig in `active.channels`, selbst nachdem die
+    // Quelle später zu schreiben begann. `pending_channels` merkt sich
+    // die gewünschte, noch nicht erfolgreich gebaute `(id, source)`-
+    // Zuordnung für den Timeout-Retry unten.
+    let mut pending_channels: HashMap<String, ChannelSource> = HashMap::new();
+
     loop {
         // omp_node_sdk::liveness::LivenessMonitor (docs/decisions.md
         // Nachtrag 130/131).
@@ -761,22 +772,36 @@ pub fn run(
         // dafür zu brauchen.
         match commands_rx.recv_timeout(Duration::from_millis(50)) {
             Ok(Command::AddChannel { id, source }) => {
-                if let Err(e) = add_channel_branch(&mut active, &context, &id, &source) {
-                    let _ = tx.send(Event::Error(format!("addChannel({id}) failed: {e}")));
+                match add_channel_branch(&mut active, &context, &id, &source) {
+                    Ok(()) => {
+                        pending_channels.remove(&id);
+                    }
+                    Err(e) => {
+                        let _ = tx.send(Event::Error(format!("addChannel({id}) failed: {e}")));
+                        pending_channels.insert(id, source);
+                    }
                 }
             }
             Ok(Command::RemoveChannel(id)) => {
+                pending_channels.remove(&id);
                 remove_channel_branch(&mut active, &id);
             }
             Ok(Command::SetChannelSource { id, source }) => {
-                // Nur ersetzen, wenn der Kanal (noch) existiert — ein
-                // `removeChannel` kurz zuvor darf hier keinen neuen Zweig
-                // ohne zugehörigen Kanal-Zustand in `main.rs` entstehen
-                // lassen.
-                if active.channels.contains_key(&id) {
+                // Nur ersetzen, wenn der Kanal (noch) existiert ODER
+                // bereits als `pending` (fehlgeschlagen, wartet auf Retry)
+                // gemerkt ist — ein `removeChannel` kurz zuvor darf hier
+                // keinen neuen Zweig ohne zugehörigen Kanal-Zustand in
+                // `main.rs` entstehen lassen.
+                if active.channels.contains_key(&id) || pending_channels.contains_key(&id) {
                     remove_channel_branch(&mut active, &id);
-                    if let Err(e) = add_channel_branch(&mut active, &context, &id, &source) {
-                        let _ = tx.send(Event::Error(format!("setSource({id}) failed: {e}")));
+                    match add_channel_branch(&mut active, &context, &id, &source) {
+                        Ok(()) => {
+                            pending_channels.remove(&id);
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Event::Error(format!("setSource({id}) failed: {e}")));
+                            pending_channels.insert(id, source);
+                        }
                     }
                 }
             }
@@ -820,7 +845,19 @@ pub fn run(
                     recompute_master_pfl_gain(&active);
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if !pending_channels.is_empty() {
+                    let retry: Vec<(String, ChannelSource)> = pending_channels
+                        .iter()
+                        .map(|(id, source)| (id.clone(), source.clone()))
+                        .collect();
+                    for (id, source) in retry {
+                        if add_channel_branch(&mut active, &context, &id, &source).is_ok() {
+                            pending_channels.remove(&id);
+                        }
+                    }
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
 

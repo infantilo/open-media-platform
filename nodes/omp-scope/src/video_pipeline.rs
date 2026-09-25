@@ -426,28 +426,48 @@ pub fn run(
     let _ = ready.send(Ok(PipelineHandle { commands: commands_tx, flowed: flowed.clone() }));
 
     let mut active: Option<ActivePipeline> = None;
+    // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+    // `omp-viewer::pipeline::run`): merkt sich die zuletzt gewünschte,
+    // noch nicht erfolgreich verbundene Quelle für den Timeout-Retry
+    // unten.
+    let mut retry_target: Option<(String, String)> = None;
     loop {
         heartbeat.fetch_add(1, Ordering::Relaxed);
         if shutdown.load(Ordering::Relaxed) {
             break;
         }
         match commands_rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(Command::Connect(flow_id, _label)) => {
+            Ok(Command::Connect(flow_id, label)) => {
                 active = None;
                 measurements.reset();
                 match build(&context, &flow_id, &broadcaster, flowed.clone(), tx.clone(), &measurements) {
-                    Ok(p) => active = Some(p),
+                    Ok(p) => {
+                        active = Some(p);
+                        retry_target = None;
+                    }
                     Err(e) => {
                         let _ = tx.send(Event::Error(format!("connect {flow_id} failed: {e}")));
+                        retry_target = Some((flow_id, label));
                     }
                 }
             }
             Ok(Command::Disconnect) => {
                 active = None;
+                retry_target = None;
                 measurements.reset();
                 broadcaster.reset();
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Some((flow_id, _label)) = retry_target.clone()
+                {
+                    measurements.reset();
+                    if let Ok(p) = build(&context, &flow_id, &broadcaster, flowed.clone(), tx.clone(), &measurements) {
+                        active = Some(p);
+                        retry_target = None;
+                    }
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
 

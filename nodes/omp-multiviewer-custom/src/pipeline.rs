@@ -621,7 +621,23 @@ pub fn run(
                     }
                 }
             }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            // Root-Cause-Fund Bugliste 2026-09-25 #3 (gleiches Muster wie
+            // `omp-viewer`/`omp-multiviewer::pipeline::run`): eine PIP-
+            // Quelle kann bereits im Layout stehen, BEVOR ihr MXL-Flow
+            // existiert — `build()` schlägt dann fehl und `active` blieb
+            // bisher dauerhaft `None`, weil ein erneutes, IDENTISCHES
+            // `SetLayout` (`new_layout == current_layout`) nie einen neuen
+            // Versuch auslöst. Deshalb hier zusätzlich bei jedem 500ms-Tick
+            // erneut versuchen, solange keine aktive Pipeline steht.
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if active.is_none()
+                    && let Ok(p) = build(&config, &context, &broadcaster, &current_layout)
+                {
+                    *flowed_slot.lock().expect("lock poisoned") = p.flowed.clone();
+                    *tally_borders_slot.lock().expect("lock poisoned") = p.tally_borders.clone();
+                    active = Some(p);
+                }
+            }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }

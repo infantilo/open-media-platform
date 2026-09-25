@@ -29332,3 +29332,123 @@ keine manuelle Nacharbeit nötig).
 könnte auch bei Gruppen-Löschung auftreten, falls dort je ein
 analoger Pfad fehlt — `handleDeleteGroup` wurde in dieser Session
 NICHT geprüft (Scope: nur der dokumentierte User-Delete-Fund).
+
+## 2026-09-25 (Nachtrag 289) — Root-Cause "Viewer zeigt dauerhaft 'nicht verbunden'" gefunden + für elf Nodes gefixt, live verifiziert
+
+Nutzerauftrag: externe `bugliste 25.09.2026.txt` (oberhalb des
+Projektverzeichnisses) gelesen, Punkt 3 zuerst bearbeitet (Nutzerwahl per
+Rückfrage) — Zitat: "wenn ein mxf player (direkt ohne playliste) direkt
+nach dem erzeugen ohne eine video datei geladen zu haben auf einen
+viewer connected wird, dann zeigt der viewer weiterhin 'nicht
+verbunden'. wird ein video abgespielt und die verbindung ... gelöscht
+und neu verbunden sieht man das video ... gemeinsame root cause?".
+
+**Root Cause gefunden, ANDERS als die in Nachtrag 212 dokumentierte,
+bis heute ungeklärte `omp-video-mixer-me`-Diskrepanz** (die bleibt
+weiterhin offen, s. u.): ein IS-05-`Connect` kann eintreffen, BEVOR der
+gewählte Sender tatsächlich zu schreiben begonnen hat (Player erzeugt,
+NMOS-Sender+Registry-Eintrag existiert bereits, der zugehörige MXL-Flow
+aber erst ab `play()`/erstem Frame). `MxlVideoInput::new`/
+`MxlAudioInput::new` schlagen dann einmalig fehl (`get_flow_def` findet
+den Flow nicht) — und in JEDEM der betroffenen Nodes gab es dafür KEINEN
+Retry: der Kommando-Loop verarbeitete den fehlgeschlagenen `Connect`
+einmal, meldete `Event::Error`, und blieb danach dauerhaft ohne aktive
+Pipeline, VÖLLIG UNABHÄNGIG davon, ob die Quelle Sekunden später zu
+schreiben begann. Bei `omp-multiviewer`/`omp-multiviewer-custom` sogar
+strukturell schlimmer: Discovery meldet dieselbe Quellenmenge alle 2s
+erneut, ein `inputs_changed`/Layout-Vergleich unterdrückt bewusst
+redundante Rebuilds — ein einmal fehlgeschlagener Rebuild wurde dadurch
+NIE erneut versucht, auch nicht Minuten später.
+
+**Fix (identisches Muster in allen elf Dateien): der zuletzt gewünschte,
+aber fehlgeschlagene Verbindungswunsch wird gemerkt und beim nächsten
+ohnehin bereits laufenden Kommando-Loop-Tick (500ms bzw. 50ms/200ms bei
+`omp-audio-mixer`/`omp-viewer::audio_meters`) automatisch erneut
+versucht, bis er entweder gelingt oder durch ein neues Kommando
+ersetzt/gelöscht wird** — kein neuer Thread, keine neue Poll-Schleife,
+nur der bereits vorhandene Tick bekommt eine zusätzliche Aufgabe. Kein
+wiederholtes `Event::Error`/Alert-Spam pro Versuch (nur beim
+ursprünglichen `Connect` einmal gemeldet) — bei `omp-decklink`, wo
+`rebuild()` bereits geteilt für vier Kommandos genutzt wird, dafür ein
+neuer `silent: bool`-Parameter.
+
+Betroffene Dateien:
+- `nodes/omp-viewer/src/pipeline.rs` (Video, `retry_target`)
+- `nodes/omp-viewer/src/audio_meters.rs` (dynamische Audio-Eingänge,
+  `pending_inputs`-Map — gleiches Muster wie `omp-audio-mixer`)
+- `nodes/omp-multiviewer/src/pipeline.rs` (Kachel-Grid, Retry trotz
+  `inputs_changed`-Gate)
+- `nodes/omp-multiviewer-custom/src/pipeline.rs` (PIP-Layout, Retry
+  trotz Layout-Vergleich)
+- `nodes/omp-scaler/src/pipeline.rs`
+- `nodes/omp-audio-monitor/src/pipeline.rs`
+- `nodes/omp-scope/src/video_pipeline.rs` + `src/audio_pipeline.rs`
+- `nodes/omp-decklink/src/pipeline.rs` (Ausgangsrichtung, `rebuild()`
+  bekommt `silent`-Parameter)
+- `nodes/omp-aes67-gateway/src/pipeline.rs` (`run_source`)
+- `nodes/omp-2110-gateway/src/pipeline.rs` (`run_output` +
+  `run_audio_output`)
+- `nodes/omp-audio-mixer/src/pipeline.rs` (`AddChannel`/
+  `SetChannelSource`, `pending_channels`-Map)
+- `nodes/omp-webrtc-gateway/src/main.rs` (Handy-Monitor/Retourbild,
+  Bug-3-Beispiel des Nutzers — andere Architektur als die übrigen: kein
+  bestehender Kommando-Loop-Tick, `apply()` ist ein einmaliger,
+  synchroner Trait-Aufruf, deshalb zwei neue dedizierte
+  Tokio-Interval-Tasks `spawn_video_reconnect_task`/
+  `spawn_audio_reconnect_task`, alle 500ms, gegen ein neues `pending`-
+  Feld auf `VideoControl`/`AudioControl`)
+
+**Bewusst NICHT angefasst (gleiche Bug-Klasse, andere Architektur,
+Risiko einer unfertigen Änderung an einer bereits live laufenden
+Verbindungslogik):**
+- `omp-video-mixer-me` — hat SEIT Nachtrag 206/212 bereits einen
+  eigenen `missing_input_ids()`-Retry, der aber laut Nachtrag 212 selbst
+  bei nachweislich existierendem Flow nicht zuverlässig erholt (eigene,
+  bis heute ungeklärte Diskrepanz — vermutlich verwandt, aber NICHT
+  identisch mit diesem Fund, da dort bereits retried wird). Nicht
+  erneut untersucht in dieser Runde.
+- `omp-switcher` — dieselbe `inputs_changed`-Gate-Schwäche wie bei
+  `omp-multiviewer` bestätigt (kein Retry bei identisch erneut
+  gemeldeten Quellen), aber NICHT gefixt: die Pad-Block-Hot-Swap-/
+  Highres-Lowres-Umschaltlogik (`swap_input_resolution`) macht einen
+  blinden Rebuild-Retry riskanter als bei den reinen Anzeige-Nodes —
+  verdient einen eigenen, dedizierten Schritt mit eigener Live-
+  Verifikation statt einer Mitnahme hier.
+- `omp-channel-player`s `Item::Live`-Zweig (externe MXL-Quelle als
+  Playlist-Element) hat dieselbe Schwäche (`Load`/`CycleDone` retried
+  nicht), aber geringere Praxisrelevanz (selten genutzter Zweig
+  innerhalb der Playlist-Engine) und ein bereits komplexes
+  Scheduling/Cycle-Timing — nicht in dieser Runde angefasst.
+- `omp-recorder`/`AudioInputControl` (Recorder-Aufnahme-Start) NICHT
+  betroffen: `record.start` ist ein synchroner Request/Reply-Aufruf, ein
+  fehlender Flow liefert bereits heute einen sofortigen, expliziten
+  Fehler an den Aufrufer zurück (kein stiller Hänger).
+
+**Live verifiziert (End-to-End, exakt der vom Nutzer beschriebene
+Ablauf, orchestrator-gesteuert über echte Prozesse, nicht isoliert):**
+`omp-mxf-player-direct` (`OMP_MXF_FILE` per Default gesetzt, aber KEIN
+Autoplay) + `omp-viewer` lokal über den Orchestrator gestartet
+(`POST /api/v1/instances`), IS-05-`PATCH .../receivers/{id}/staged`
+auf den Video-Sender des Players GESETZT, BEVOR `play` aufgerufen
+wurde — `GET .../stream/previewUrl` lieferte danach wie erwartet `503`
+(keine Pipeline, Flow existiert noch nicht). Danach `POST
+.../methods/play` auf dem Player aufgerufen, OHNE die Viewer-Verbindung
+anzufassen: `previewUrl` lieferte binnen einer Tick-Periode (< 1s) ein
+echtes 640×360-JPEG-Frame (visuell bestätigt, Testbild mit Label
+"BugTest Player Programm"/"LENA LORENZ") — vorher (ohne diesen Fix)
+wäre das dauerhaft bei `503` hängen geblieben. Test-Instanzen danach
+sauber über die Orchestrator-API gelöscht.
+
+`cargo build --workspace --bins` grün, `cargo test` für alle elf
+geänderten Pakete grün (keine Regressionen in bestehenden Tests).
+Keine neuen dedizierten Unit-Tests für die Retry-Pfade selbst (reine
+Zustandsmaschinen-Änderung im bereits bestehenden Kommando-Loop, ohne
+neue öffentliche API-Fläche) — stattdessen der oben beschriebene reale
+End-to-End-Live-Test.
+
+**Noch offen, nicht Teil dieses Fixes:** die übrigen sechs Punkte der
+Bugliste (`bugliste 25.09.2026.txt` #1/#2/#4/#5/#6/#7 — Handy-Cam-
+Verbindungstrennung bei Widerruf, Fehleranzeige beim Verbinden,
+Source-Node-CPU, Video-Mixer-CPU, Switcher/Mixer-UI-Redesign,
+GPU-Fallback) sowie die drei oben genannten bewusst ausgesparten Nodes
+derselben Root-Cause-Klasse.
