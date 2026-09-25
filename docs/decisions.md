@@ -29452,3 +29452,98 @@ Verbindungstrennung bei Widerruf, Fehleranzeige beim Verbinden,
 Source-Node-CPU, Video-Mixer-CPU, Switcher/Mixer-UI-Redesign,
 GPU-Fallback) sowie die drei oben genannten bewusst ausgesparten Nodes
 derselben Root-Cause-Klasse.
+
+## 2026-09-25 (Nachtrag 290) — `omp-video-mixer-me` CPU von ~110-120% auf ~55-58% halbiert (Bugliste #5), zwei echte Root Causes gefunden
+
+Nutzerauftrag "fahre fort" — nächster vom Nutzer selbst als "wichtig und
+prioritär" markierter Punkt aus `bugliste 25.09.2026.txt` (#5:
+"videomixer m/e braucht 130% CPU selbst wenn er nur schwarz als Quelle
+hat"). Live nachgemessen (Orchestrator-gestartete Standardinstanz, keine
+Crosspoint-Quellen verbunden, `/proc/<pid>/stat` vor/nach über 10s-
+Fenster, zusätzlich Per-Thread-Aufschlüsselung über `/proc/<pid>/task/*/
+stat`): **~103-119% CPU bestätigt** (Debug- UND Release-Build praktisch
+identisch — GStreamer-Plugins sind bereits fertig optimierte System-
+Bibliotheken, das Rust-Build-Profil betrifft hier nicht den dominanten
+Kostenanteil; Vermutung "nur ein Debug-Build-Artefakt" damit widerlegt,
+nicht angenommen).
+
+**Root Cause 1 (Hauptanteil, per Thread-Aufschlüsselung gefunden — zwei
+einzelne Queue-Threads bei je ~22-26% CPU, dazu ein `appsrc0`-Thread,
+obwohl 0 externe Quellen verbunden waren):** `main.rs::discover()`
+schließt seit Nachtrag 2026-08-14 (Mastereben-Routing) den EIGENEN PGM-
+Ausgang bewusst NICHT mehr aus der allgemeinen Eingangs-Erkennung aus
+(nur `discover_keyfill` filtert weiterhin) — Selbstreferenz wird laut
+Kommentar dort "erst beim Lesen gefiltert" (`level_get`s
+"crosspoint.inputs", blendet die eigene ID nur aus der UI-Liste aus).
+Genau diese Design-Entscheidung greift aber WÖRTLICH auch bei genau
+EINER Ebene (`level_count == 1`, laut Moduldoku der Standardfall) — dort
+gibt es gar keine "andere Ebene", die den eigenen Sender sinnvoll lesen
+könnte: der Mixer entdeckt sich selbst im NMOS-Registry (sein eigener
+"PGM"-Sender), `build()`s "ein Zweig pro entdeckter Quelle" öffnet dafür
+einen VOLLEN, dauerhaft aktiven `MxlVideoInput`-Reader (`appsrc`) +
+Konvertierungskette + `tee` — ein reiner Selbstleser, der wegen der API-
+seitigen Ausblendung NIE auswählbar ist und NIE einen Zweck erfüllt.
+**Fix:** `discover()` schließt `own_sender_ids` jetzt zusätzlich aus der
+allgemeinen `discovered`-Liste aus, aber NUR wenn `own_sender_ids.len()
+<= 1` (echte Mastereben-Konfigurationen mit mehreren Ebenen bleiben
+unverändert — dort bleibt die Sichtbarkeit fremder eigener Ausgänge
+nötig). `level_get`s bestehender Selbstreferenz-Filter wird dadurch zum
+No-Op im Ein-Ebenen-Fall (identisches UI-Verhalten, per Code-Lesen
+bestätigt) statt entfernt zu werden — kein Verhaltensrisiko für den
+Mehr-Ebenen-Fall.
+
+**Root Cause 2 (zweiter, kleinerer Anteil):** `compositor` hat pro Ebene
+IMMER vier verbundene Sink-Pads (fg/bg/Keyer/PIP, Architekturentscheidung
+2026-07-22 "PIP als eigenständiger Layer") — auch ohne gewählte Quelle,
+Keyer oder PIP laufen bg/Keyer/PIP als volle Zubringer-Zweige mit
+`alpha=0` durch (unsichtbar, aber weiterhin JEDEN Frame real gerendert/
+konvertiert/geblendet — `alpha=0` überspringt beim `compositor` keine
+Arbeit). Diese drei plus der fg-Schwarz-Zweig sind aber SYNTHETISCH
+(`videotestsrc` schwarz/Farbfläche) — im Unterschied zu einer echten
+externen Quelle unbekannten Formats bestimmen wir deren Format selbst,
+die volle `videoconvert`/`videoscale`/`videorate`-Kette aus
+`build_normalized_branch` "konvertiert" dort nur identisches Format in
+identisches Format. **Fix:** neue, schlankere `build_synthetic_branch`
+(nur `queue` + `capsfilter` mit exakten Ziel-`caps`) für alle vier
+synthetischen Zubringer (fg-schwarz, bg-schwarz, Keyer-Farbfläche, PIP-
+schwarz); echte externe Quellen (Fill+Key, echtes PIP-Bild) behalten die
+volle `build_normalized_branch`-Kette, da dort tatsächlich unbekanntes
+Format/Auflösung konvertiert werden muss.
+
+**Bewusst NICHT versucht:** ein dynamisches Ab-/Wiederanhängen der
+`comp`-Sink-Pads je nach Bedarf (bg/Keyer/PIP nur bei tatsächlicher
+Nutzung verbinden) wäre dieselbe Klasse Pad-Hot-Swap, die in Kapitel 15
+Teil 3 (Rest 2) bereits einen dauerhaften Freeze verursacht hat und
+deshalb bewusst zurückgebaut wurde (s. Moduldoku `pipeline.rs`) — hier
+nicht erneut riskiert. Der nach beiden Fixes verbleibende Anteil (`comp_
+l0:src` allein ~29% CPU laut finaler Thread-Aufschlüsselung, plus vier
+weiterhin echt laufende `videotestsrc`-Generatoren) ist der GENUINE Preis
+eines Compositors, der vier Ebenen pro Frame blendet — architektureigen,
+kein Bug.
+
+**Live verifiziert (drei Messreihen, jeweils Orchestrator-gestartete
+Standardinstanz, 0 Crosspoint-Quellen, `/proc`-basiert, kein isoliertes
+`gst-launch`):**
+- Baseline (unverändert): ~103-119% CPU, 29 Threads, davon 2 Queue-
+  Threads + 1 `appsrc` mit auffällig hoher Einzellast.
+- Nach Fix 1 (Selbstreferenz-Ausschluss) + Fix 2 (schlankere synthetische
+  Zweige) zusammen: ~55-58% CPU, 24 Threads, KEIN `appsrc`-Thread mehr,
+  nur noch 4 statt 7 `queue`-Threads. `comp_l0:src` bleibt größter
+  Einzelposten (~29%), erwartungsgemäß (Root Cause 2 reduziert dessen
+  Zubringerkosten, ersetzt den Compositor selbst aber nicht).
+
+`cargo build --workspace --bins` grün, `cargo clippy -p omp-video-mixer-
+me -D warnings` unverändert bei denselben 8 vorbestehenden Fundstellen
+(per `git stash`-Vergleich bestätigt vorbestehend, identisch zu Nachtrag
+206/212s dokumentiertem Clippy-Blocker — nicht angefasst), `cargo test -p
+omp-video-mixer-me` grün (3/3, unverändert).
+
+**Noch offen, nicht Teil dieses Fixes:** die übrigen fünf Punkte der
+Bugliste (#1/#2/#4/#6/#7). Kein neuer dedizierter Unit-Test (reine
+Pipeline-Graph-/Discovery-Änderung ohne neue öffentliche API-Fläche,
+Live-Messung wie oben ist der aussagekräftigere Nachweis für einen CPU-
+Fund).
+
+**Dateien:** `nodes/omp-video-mixer-me/src/main.rs` (`discover()`),
+`nodes/omp-video-mixer-me/src/pipeline.rs` (`build_synthetic_branch`
+neu, vier Aufrufstellen umgestellt).

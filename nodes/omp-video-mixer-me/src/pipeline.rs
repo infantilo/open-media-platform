@@ -626,6 +626,65 @@ fn build_normalized_branch(
     Ok((caps.clone(), vec![queue, videoconvert, videoscale, videorate, caps]))
 }
 
+/// Vereinfachte Variante von `build_normalized_branch` für rein
+/// synthetische Quellen (`videotestsrc` schwarz/Farbfläche als Fallback für
+/// bg/Keyer/PIP, s. `build()`/`build_pip_tail`) — anders als bei einer
+/// echten externen Quelle unbekannten Formats/unbekannter Auflösung
+/// bestimmen wir das Format hier selbst: `videotestsrc` liefert jedes
+/// angeforderte `video/x-raw`-Format/Auflösung/Framerate direkt, ein
+/// `capsfilter` reicht, `videoconvert`/`videoscale`/`videorate` sind reine
+/// Verschwendung. `queue` bleibt (gleicher Grund wie dort: `compositor`
+/// braucht ein puffendes Element für seine Latenz-Query, reine
+/// `GstBaseTransform`s wie `capsfilter` reichen die Query unverändert
+/// durch).
+///
+/// **Root-Cause-Fund Bugliste 2026-09-25 #5** ("Video-Mixer M/E braucht
+/// 130% CPU selbst wenn er nur schwarz als Quelle hat"): der `compositor`
+/// hat pro Ebene IMMER vier verbundene Sink-Pads (fg/bg/Keyer/PIP,
+/// `build()`-Doku "PIP als eigenständiger Layer") — auch ohne gewählte
+/// Quelle, Keyer oder PIP laufen bg/Keyer/PIP als volle, dauerhaft aktive
+/// Zubringer-Zweige mit, nur mit `alpha=0` (unsichtbar, aber weiterhin
+/// jeden Frame reell gerendert/konvertiert/geblendet — `alpha=0` überspringt
+/// beim `compositor` keine Arbeit, s. GStreamer-Doku). Ein dynamisches
+/// Ab-/Wiederanhängen dieser Pads je nach Bedarf wäre dieselbe Klasse
+/// Pad-Hot-Swap, die in Kapitel 15 Teil 3 (Rest 2, s. Moduldoku oben)
+/// bereits einen dauerhaften Freeze verursacht hat und deshalb bewusst
+/// zurückgebaut wurde — hier daher NICHT erneut versucht. Stattdessen: die
+/// vier IMMER laufenden synthetischen Zubringer (fg-schwarz, bg-schwarz,
+/// Keyer-Farbfläche, PIP-schwarz) bekommen diese schlankere Kette statt
+/// der vollen `build_normalized_branch`, die für sie ohnehin nichts zu tun
+/// hatte außer identisches Format in identisches Format zu "konvertieren".
+/// Reale externe Quellen (angeschlossene Sender, Fill+Key, echtes PIP-
+/// Bild) behalten weiterhin die volle `build_normalized_branch`-Kette,
+/// deren Konvertierung dort tatsächlich gebraucht wird.
+fn build_synthetic_branch(
+    pipeline: &gst::Pipeline,
+    tail: &gst::Element,
+    name_suffix: &str,
+    width: u32,
+    height: u32,
+) -> Result<(gst::Element, Vec<gst::Element>), String> {
+    let queue = gst::ElementFactory::make("queue")
+        .property_from_str("leaky", "downstream")
+        .property("max-size-buffers", 3u32)
+        .property("max-size-bytes", 0u32)
+        .property("max-size-time", 0u64)
+        .build()
+        .map_err(|e| format!("queue ({name_suffix}): {e}"))?;
+    let caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", rgba_caps(width, height))
+        .build()
+        .map_err(|e| format!("capsfilter ({name_suffix}): {e}"))?;
+
+    pipeline
+        .add(&queue)
+        .and_then(|()| pipeline.add(&caps))
+        .map_err(|e| format!("add branch elements ({name_suffix}): {e}"))?;
+    gst::Element::link_many([tail, &queue, &caps]).map_err(|e| format!("link branch ({name_suffix}): {e}"))?;
+
+    Ok((caps.clone(), vec![queue, caps]))
+}
+
 /// Entfernt zuvor per `pipeline.add()` hinzugefügte Elemente wieder
 /// (`Null`-Zustand + `remove`) — Aufräumen für einen einzelnen, verworfenen
 /// Eingang, s. `build_one_input`. Gleicher Verwaisungs-Schutz wie in
@@ -1080,7 +1139,10 @@ fn build_pip_tail(
                 .map_err(|e| format!("videotestsrc (pip black): {e}"))?;
             black_src.set_property_from_str("pattern", "black");
             pipeline.add(&black_src).map_err(|e| format!("add pip black source: {e}"))?;
-            let (caps, _elements) = build_normalized_branch(pipeline, &black_src, "pip-black", width, height)?;
+            // Root-Cause-Fund Bugliste 2026-09-25 #5, s. `build_synthetic_
+            // branch`-Doku: synthetisches Schwarzbild braucht keine
+            // Konvertierungskette.
+            let (caps, _elements) = build_synthetic_branch(pipeline, &black_src, "pip-black", width, height)?;
             Ok((caps, None))
         }
     }
@@ -1174,14 +1236,14 @@ fn build(
             .add(&black_src_fg)
             .and_then(|()| pipeline.add(&black_src_bg))
             .map_err(|e| format!("add black sources (level {level_idx}): {e}"))?;
-        let (black_caps_fg, _) = build_normalized_branch(
+        let (black_caps_fg, _) = build_synthetic_branch(
             &pipeline,
             &black_src_fg,
             &format!("black-fg-l{level_idx}"),
             config.width,
             config.height,
         )?;
-        let (black_caps_bg, _) = build_normalized_branch(
+        let (black_caps_bg, _) = build_synthetic_branch(
             &pipeline,
             &black_src_bg,
             &format!("black-bg-l{level_idx}"),
@@ -1301,10 +1363,17 @@ fn build(
         let keyer_source_input = keyer_sources[level_idx]
             .as_ref()
             .and_then(|id| keyfill_inputs.iter().find(|k| &k.fill_sender_id == id));
-        let (keyer_tail, keyer_keyfill) = match keyer_source_input {
+        // Root-Cause-Fund Bugliste 2026-09-25 #5 (s. `build_synthetic_
+        // branch`-Doku): die synthetische Farbfläche (kein Fill+Key
+        // gewählt) braucht keine `videoconvert`/`videoscale`/`videorate`-
+        // Kette, ein echter externer Fill+Key-Flow (unbekannte Auflösung/
+        // Format) weiterhin schon — deshalb hier zweigeteilt statt wie
+        // vorher gemeinsam über `build_normalized_branch` danach.
+        let (keyer_caps, keyer_keyfill) = match keyer_source_input {
             Some(kf) => {
                 let (tail, fill_input, key_input) = build_keyfill_tail(&pipeline, context, kf)?;
-                (tail, Some((fill_input, key_input)))
+                let (caps, _) = build_normalized_branch(&pipeline, &tail, &format!("keyer-l{level_idx}"), config.width, config.height)?;
+                (caps, Some((fill_input, key_input)))
             }
             None => {
                 let keyer_src = gst::ElementFactory::make("videotestsrc")
@@ -1316,16 +1385,11 @@ fn build(
                 pipeline
                     .add(&keyer_src)
                     .map_err(|e| format!("add keyer source (level {level_idx}): {e}"))?;
-                (keyer_src, None)
+                let (caps, _) =
+                    build_synthetic_branch(&pipeline, &keyer_src, &format!("keyer-l{level_idx}"), config.width, config.height)?;
+                (caps, None)
             }
         };
-        let (keyer_caps, _) = build_normalized_branch(
-            &pipeline,
-            &keyer_tail,
-            &format!("keyer-l{level_idx}"),
-            config.width,
-            config.height,
-        )?;
         let comp_keyer_pad = comp
             .request_pad_simple("sink_2")
             .ok_or_else(|| format!("comp: request sink_2 (keyer) failed (level {level_idx})"))?;

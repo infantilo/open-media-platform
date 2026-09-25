@@ -1355,13 +1355,33 @@ fn discover(
     // nicht als DSK-Fill/Key-Quelle). Die Selbstreferenz EINER Ebene auf
     // sich selbst wird stattdessen erst beim Lesen gefiltert
     // (`level_get`s "crosspoint.inputs"-Zweig, per `sender_ids[level]`).
+    //
+    // **Root-Cause-Fund Bugliste 2026-09-25 #5** ("Video-Mixer M/E
+    // braucht 130% CPU selbst wenn er nur schwarz als Quelle hat"): die
+    // obige Nichtausschluss-Regel gilt WORTWÖRTLICH auch bei genau EINER
+    // Ebene (`level_count == 1`, der Standardfall laut Moduldoku
+    // `pipeline.rs` — "entspricht exakt dem alten Ein-Ebenen-Verhalten")
+    // — dort gibt es aber gar keine "ANDERE Ebene", die diesen Sender
+    // sinnvoll als Eingang lesen könnte: die einzige Ebene liest dann
+    // schlicht ihren EIGENEN PGM-Ausgang zurück, `build()`s "ein Zweig
+    // pro entdeckter Quelle" baut dafür einen VOLLEN, dauerhaft aktiven
+    // `MxlVideoInput`-Reader+Konvertierungskette+`tee`-Zweig auf, der nie
+    // auswählbar ist (von der API-Ebene aus gefiltert) und nie irgendeinen
+    // Zweck erfüllt — reine Verschwendung. Bei mehreres Ebenen
+    // (`own_sender_ids.len() > 1`) bleibt das Verhalten UNVERÄNDERT (echtes
+    // Mastereben-Routing braucht die Sichtbarkeit fremder eigener
+    // Ausgänge weiterhin).
     own_sender_ids: &[String],
 ) -> Result<(Vec<DiscoveredInput>, Vec<DiscoveredKeyFill>), String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
+    let exclude_own_from_inputs = own_sender_ids.len() <= 1;
 
     let mut discovered = Vec::new();
     for s in &senders {
         if s.transport != TRANSPORT_MXL || is_lowres_companion(s) {
+            continue;
+        }
+        if exclude_own_from_inputs && own_sender_ids.iter().any(|id| id == &s.id) {
             continue;
         }
         let Some(flow_id) = &s.flow_id else { continue };
