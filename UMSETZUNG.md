@@ -3183,6 +3183,184 @@ ungefiltert) — s. dortige Begründung.
 
 ---
 
+## 6c. Kapitel 22 — FFmpeg/FFprobe-Assistent (Wizard + Filter-Builder)
+
+Nutzerauftrag 2026-09-25 (Nachtrag 296): kein OMP-Bediener kennt die
+gültigen ffmpeg/ffprobe-Parameter/-Werte auswendig — heute muss man sie
+als rohe CLI-Argumente in den `script`-Workflow-Schritt tippen. Ziel:
+eine super-intuitive, geführte Bedienung (Wizards, Hilfetexte je
+Parameter, visueller Filter-Builder), die von einfachen
+Format-Konvertierungen bis zu komplexen Mehrspur-/Filter-Szenarien alles
+abdeckt — als **Referenz** diente ein älteres, eigenständiges NW.js/
+Electron-Projekt des Nutzers (`~/index.html`, ~9300 Zeilen), das
+`ffmpeg -h full`/`-h encoder=X`/`-h muxer=X`/`-pix_fmts`/`-codecs` per
+Regex parst und daraus dynamische Formulare baut; für komplexe Abläufe
+nutzte es zusätzlich Google Blockly (dort aber als generische visuelle
+Automatisierungssprache, nicht speziell für Filterketten). **Wichtig:
+kein 1:1-Nachbau** — andere Laufzeitumgebung (Browser-SPA ohne lokalen
+Prozesszugriff, kein NW.js), anderer, bereits vorhandener Unterbau.
+
+### 22.1 Bestandsaufnahme (existing)
+
+**`script`-Workflow-Schritt (`orchestrator/internal/process/
+executors.go`, `NewScriptExecutor`):** führt bereits ein
+allow-gelistetes Programm (`Command` muss Schlüssel von
+`allowedCommands` sein, in `main.go` per `exec.LookPath` aus
+`{"ffmpeg","ffprobe"}` ermittelt, Zeile ~808–814 — **nie ein roher
+Pfad/beliebiges Programm**, dieselbe Sicherheitsgrenze wie der
+Node-Katalog) mit einer rohen `Args []string` aus. Jedes Arg, das
+`${<expr>}` enthält, wird gegen denselben Ausdruckskontext wie
+Condition/Branch aufgelöst (`resolveScriptArg`/`expr.go`) — genau der
+Mechanismus, über den ein Wizard erzeugte Argumente mit
+Workflow-Variablen (z. B. `${input.path}`) mischen kann, ohne einen
+zweiten Templating-Mechanismus zu erfinden. **Reuse, nicht ersetzen.**
+
+**UI heute (`ui/graph/process-step-config.ts::buildScript` +
+`process-step-config-logic.ts::SCRIPT_TEMPLATES`):** ein
+Werkzeug-Dropdown (nur was `scriptCommands` vom Server als verfügbar
+meldet), vier fest einprogrammierte Vorlagen (Metadaten auslesen, Proxy,
+Vorschaubild, Audio-Extraktion) und darunter eine reine
+Zeile-pro-Argument-Liste ohne jedes Wissen über gültige Werte oder
+Bedeutung — **genau die Lücke aus der Aufgabenstellung.** `missingConfig`
+prüft nur „Command gesetzt", keine Argument-Validierung.
+
+**`omp-media-library` (`nodes/omp-media-library`, C17):** nutzt
+`ffprobe` bereits per `std::process::Command` für Metadaten-Extraktion
+(Rust-Seite) — ein zweiter, unabhängiger ffprobe-Aufrufpfad neben dem
+Go-Workflow-Schritt. Für die Introspektion (22.3, W1) ist der
+**Go-Orchestrator** die richtige Stelle (er kennt die Allow-Liste/
+Binärpfade bereits zentral, s. o.), nicht dieser Node.
+
+**UI-Canvas-Muster (`ui/graph/flow-canvas.ts`, ~2400 Zeilen, SVG,
+DOM-frei testbare Geometrie/Kompatibilitäts-Logik in eigenen Modulen,
+s. 21.1):** bereits zweimal wiederverwendet (Flow-Editor,
+`role-designer.ts`). **Präzedenzfall für den Filter-Graph-Builder
+(22.3, W3):** drittes DOM-Element auf derselben Koordinatenlogik statt
+einer neuen Zeichenbibliothek. Kein Blockly, kein Node-basiertes
+JS-Framework im Projekt (§4.5, „kein Framework-Zwang") — dabei bleibt es.
+
+### 22.2 Zielbild + Entscheidungen (2026-09-25)
+
+**Baukasten-Prinzip, kein Einzelfall-Feature:** Der vom Nutzer genannte
+Beispielfall („MXF-Datei mit 8 Tonspuren mit TTS-Kennungen je Spur") ist
+**keine zu implementierende Einzelfunktion**, sondern der Maßstab für
+die nötige Ausdruckskraft — der fertige Wizard/Filter-Builder muss ein
+solches Szenario aus seinen allgemeinen Bausteinen (Mehrfach-Eingänge/
+-Ausgänge, wiederholbare Stream-Gruppen mit Metadaten je Wiederholung,
+Muxer-Optionen) zusammensetzen können, ohne dass dafür ein
+MXF-spezifischer Sonderpfad gebaut wird.
+
+**Reihenfolge (bestätigt):** W1 (Introspektions-Fundament) → W2
+(geführter Formular-Wizard, ersetzt/erweitert `SCRIPT_TEMPLATES`) → W3
+(visueller Filter-Graph-Builder) → W4 (Verallgemeinerung/
+Erweiterbarkeits-Härtetest anhand mehrerer Referenzszenarien, MXF-Fall
+inklusive). Jede Stufe ist einzeln nutzbar/abnahmefähig — kein „Big
+Bang" am Ende.
+
+**Architekturentscheidung — Introspektion serverseitig im
+Go-Orchestrator:** `ffmpeg -h full`, `-h encoder=<name>`,
+`-h muxer=<name>`, `-h filter=<name>`, `-encoders`, `-decoders`,
+`-formats`, `-pix_fmts`, `-filters` einmal parsen (gleiches
+Regex-Pattern-Vorbild wie in der Referenzdatei, `regex_getAV_Options`
+etc. — **Muster übernehmen, keinen Code kopieren**, andere Sprache),
+Ergebnis cachen (Prozesslaufzeit reicht, ffmpeg-Version ändert sich
+nicht zur Laufzeit), über neue `/api/v1/tools/ffmpeg/...`-Endpunkte
+ausliefern. Alternative „im Browser selbst spawnen" (wie die
+NW.js-Referenz) entfällt — OMPs UI ist eine reine Browser-SPA ohne
+Prozesszugriff, das wäre ein Bruch der bestehenden Architektur.
+
+**Architekturentscheidung — Filter-Builder auf bestehendem
+SVG-Canvas-Muster (22.1), kein Blockly/keine neue Zeichenbibliothek.**
+
+**Lokaler-Assistent-Ausblick (LLM):** nur als Zukunftsnotiz in
+`ARCHITECTURE.md` §26.6 vorgemerkt, **keine Implementierung, kein
+Platzhalter-Code** in W1–W4. Der regelbasierte Wizard muss die
+Kernfälle (Baukasten-Prinzip oben) bereits ohne LLM abdecken können.
+
+### 22.3 Phasenplan
+
+#### W1 — FFmpeg/FFprobe-Introspektion im Orchestrator
+
+**Ziel:** Eine belastbare, gecachte JSON-Beschreibung dessen, was das
+auf dem Host installierte ffmpeg/ffprobe tatsächlich kann — Grundlage
+für jedes Formular danach.
+
+**Anweisung:** Neues internes Paket (z. B.
+`orchestrator/internal/ffmpegtools`), das beim ersten Zugriff (nicht
+beim Orchestrator-Start — ffmpeg könnte fehlen, s. bestehende
+`allowedCommands`-Ermittlung) `-h full`, `-encoders`, `-decoders`,
+`-formats`, `-pix_fmts`, `-filters` aufruft und parst; je Encoder/Muxer/
+Filter zusätzlich `-h encoder=X`/`-h muxer=X`/`-h filter=X` **on
+demand** (nicht alle vorab — das sind hunderte Prozessaufrufe) mit
+eigenem Cache. Endpunkte unter `/api/v1/tools/ffmpeg/` (z. B.
+`formats`, `encoders`, `filters`, `filters/{name}`), nur wenn `ffmpeg`/
+`ffprobe` in der Allow-Liste stehen (sonst 404, wie ein fehlendes
+Werkzeug heute schon `script`-Schritte ehrlich scheitern lässt).
+
+**Verifikation:** `curl localhost:8000/api/v1/tools/ffmpeg/encoders |
+jq` liefert eine echte, mit `ffmpeg -encoders` übereinstimmende Liste;
+`curl .../filters/scale | jq` liefert Optionen+Hilfetexte für genau den
+`scale`-Filter. Go-Unit-Tests parsen fest eingebettete Beispiel-Outputs
+(kein Live-ffmpeg-Zwang in CI).
+
+#### W2 — Geführter Formular-Wizard für `script`-Schritte
+
+**Ziel:** `SCRIPT_TEMPLATES` (heute 4 feste Einträge) wird zu einem
+echten, aus W1 gespeisten Assistenten — Intent wählen („Format
+konvertieren", „Tonspur extrahieren", „Mehrspur-Container bauen", …),
+dann ein aus den echten Parametern generiertes Formular mit
+Hilfetexten/erlaubten Werten statt freier Textfelder.
+
+**Anweisung:** `buildScript()` in `process-step-config.ts` um einen
+Wizard-Modus erweitern (klassischer Argument-Editor bleibt als
+„Erweitert"-Fallback erhalten, s. „nicht raten"-Prinzip — Experten
+dürfen weiterhin rohe Args tippen). Dropdown/Zahl/Freitext je nach
+Options-Typ aus W1, Hilfetext aus der geparsten Beschreibung als
+Tooltip/Kleingedrucktes. Wiederholbare Gruppen (z. B. „+ weitere
+Tonspur") für das Mehrspur-Szenario aus 22.2.
+
+**Verifikation:** `deno check`; Browser-Test — Intent „Tonspur
+extrahieren" wählen, Wizard zeigt Codec-Dropdown mit den echten von W1
+gelieferten Optionen inkl. Hilfetext, erzeugte `args` laufen als
+`script`-Schritt tatsächlich durch (echter ffmpeg-Aufruf, Ausgabedatei
+per `ffprobe` gegengeprüft).
+
+#### W3 — Visueller Filter-Graph-Builder
+
+**Ziel:** `-vf`/`-af`/`-filter_complex`-Ketten (inkl. Verzweigungen/
+Zusammenführungen, z. B. mehrere Eingänge → ein `amix`) ohne
+Ffmpeg-Filtersyntax-Kenntnis zusammenklicken.
+
+**Anweisung:** Neues Canvas-Element auf der Koordinaten-/
+Kompatibilitätslogik aus `flow-canvas.ts`/`geometry.ts` (22.1) — Filter
+als Kacheln mit Pads (Label-Ein-/Ausgänge wie `-filter_complex`s
+`[0:v]`-Syntax), Kanten = Filter-Verkettung, Kachel-Parameter aus W1
+(`filters/{name}`). Export erzeugt die tatsächliche
+`-filter_complex`-Zeichenkette für den `script`-Schritt aus W2.
+
+**Verifikation:** Ein im Builder gestecktes Beispiel (z. B. zwei
+Quellen → `overlay` → ein Ausgang) erzeugt eine `-filter_complex`-Zeile,
+die ein echter `ffmpeg`-Lauf ohne Fehler akzeptiert; Ergebnisbild per
+`ffprobe`/Sichtprüfung bestätigt die erwartete Überlagerung.
+
+#### W4 — Verallgemeinerung/Erweiterbarkeits-Härtetest
+
+**Ziel:** Beleg, dass W1–W3 tatsächlich ein Baukasten sind (22.2), nicht
+nur die vier ursprünglichen Templates neu verpackt.
+
+**Anweisung:** Mehrere bewusst unterschiedliche Referenzszenarien mit
+dem fertigen Wizard/Builder nachbauen, OHNE Sonder-Code je Szenario —
+darunter der genannte Beispielfall (Container mit N Tonspuren, je Spur
+eigene Metadaten/Kennung). Lücken, die dabei auffallen (z. B. ein in W1
+nicht abgedeckter Muxer-Optionstyp), fließen als Fix in W1–W3 zurück,
+nicht als Spezialfall in W4.
+
+**Verifikation:** Jedes Referenzszenario live erzeugt eine echte,
+per `ffprobe` gegengeprüfte Ausgabedatei mit den erwarteten
+Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
+
+---
+
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
 
 | Schritt | Status | Commit | Datum |
@@ -3431,3 +3609,5 @@ ungefiltert) — s. dortige Begründung.
 | Bugliste #7: GPU-Erkennung für GStreamer-Pipelines, mit live gefundenem Absturz-Risiko (Nachtrag 292) | teilweise | Nutzerauftrag "jetzt #6 und #7". Kritischer Vorab-Fund: naive `ElementFactory::find`-Existenzprüfung wäre auf virtio-gpu/virgl-Treibern (typisch für Crostini u. Ä.) aktiv falsch gewesen — `vaapipostproc` lädt anstandslos, SEGFAULTET aber zuverlässig bei echter Formatkonvertierung/Skalierung (per `gst-launch-1.0` reproduziert). Neues `omp_mediaio::hwaccel`: eigenständiges Helfer-Binary `omp-mediaio-hwaccel-selftest` führt den echten Funktionstest in einem wegwerfbaren Subprozess aus (5s-Timeout, Exit 0 = nutzbar), `HwAccel::probe()` einmal beim Node-Start, `build_convert_scale()` wählt `vaapipostproc` oder unverändert `videoconvert!videoscale`. Ausgerollt auf `omp-video-mixer-me` (`build_normalized_branch`+alle Aufrufer), auf diesem Host bewirkungslos (Selbsttest liefert `false`) aber live verifiziert: Instanz-Start <1s, `Healthy`, echter Viewer zeigt unverändertes PGM-Bild. Bewusst NICHT ausgerollt: `omp-switcher` (dieselbe fragile Highres/Lowres-Hot-Swap-Stelle wie bei Nachtrag 289 ausgespart), alle übrigen ~15 GStreamer-Nodes (Infrastruktur steht, mechanischer Umbau als Folgearbeit), H.264-Encode/Decode-Beschleunigung (auf diesem Host gar nicht verfügbar, unverifizierbar). `cargo build --workspace` + `cargo test -p omp-mediaio` (4 neu) + `-p omp-video-mixer-me` grün, Clippy sauber. Details `docs/decisions.md` Nachtrag 292. | 2026-09-25 |
 | KRITISCHE Korrektur zu Nachtrag 292: `omp-video-mixer-me` stürzte bei jedem echten Crosspoint-Eingang ab (Nachtrag 293) | erledigt | Beim Live-Testen von #6 fand der Orchestrator eine echte Sender-Instanz als Crosspoint-Kandidaten — der Mixer stürzte SOFORT ab (`try_into::<[gst::Element; 5]>()` panicte, weil `build_convert_scale` seit Nachtrag 292 GPU-abhängig 5 ODER 6 statt fest 5 Elemente liefert). Nachtrag-292-Verifikation hatte nur den leeren Standardfall (0 Quellen) geprüft, NIE `build_source_branch` erreicht — Lehre: Pipeline-Änderungen erst gegen echte verbundene Eingänge verifiziert, nicht nur den leeren Zustand. Fix: `SourceBranch` hält jetzt `chain_elements: Vec<gst::Element>` statt fünf einzeln benannter Felder, kein `try_into::<[_; N]>()` mehr. Live verifiziert: Orchestrator-Instanz + echter externer Sender als Crosspoint-Eingang, >2 Min. stabil (vorher Absturz binnen Millisekunden), `crosspoint.take` darauf und zurück auf Schwarz beide ohne Absturz. `cargo build --workspace` + Tests + Clippy grün. Details `docs/decisions.md` Nachtrag 293. | 2026-09-25 |
 | Bugliste #6: Switcher-UI auf Mixer-Niveau gehoben + optionale Vorschaubilder + `omp-source` erster vorschaubild-fähiger Switcher-Eingang (Nachtrag 294) | erledigt | Nutzerauftrag "jetzt #6 und #7". Per Headless-Chromium/CDP-Screenshot-Vergleich (nicht geraten) bestätigt: `omp-video-mixer-me` nutzt bereits `<omp-button>`/Design-Tokens (bereits professionell), `omp-switcher` hatte rohe ungestylte `<button>`-Elemente mit Ad-hoc-Farben — genau dieser Kontrast war die "kindliche Lösung". Fix 1: Switcher komplett auf das bewährte Mixer-Design umgestellt (`<omp-button>`, `color="onair"`, Design-Tokens). Fix 2: optionaler "Vorschaubilder"-Umschalter (localStorage-gemerkt) in BEIDEN Bundles — 16:9-Live-Vorschaubild je Quelle, sauberer "kein Bild"-Fallback ohne verfügbaren `previewUrl`-Stream, BLK bleibt immer die Text-Pille. Fix 3: `omp-source` (häufigste Testquelle) bekommt einen vierten `tee`-Zweig für MJPEG-Vorschau (`omp_mediaio::preview::build_mjpeg_branch`, gleiches Muster wie `omp-viewer`) + `previewUrl`-Parameter — ohne diesen Schritt hätte Fix 2 immer "kein Bild" gezeigt (die vier bisherigen `preview`-fähigen Nodes sind reine Empfänger, nie Switcher-Eingänge). Live verifiziert: echtes 320×180-JPEG von `omp-source` (Bearer-Header UND `?access_token=`-Query-Param, exakt der `<img>`-Tag-Weg), echte Switcher-Instanz entdeckte die Quelle korrekt, beide UI-Bundles im Test-Harness mit echtem `<omp-button>` gerendert (mit/ohne Vorschaubilder). Noch offen: Vorschaubild-Support für weitere Eingangs-Node-Typen (mxf-player/decklink/channel-player). `cargo build --workspace` + Clippy sauber. Details `docs/decisions.md` Nachtrag 294. | 2026-09-25 |
+| Fix: Thumbnail-Flicker (video-mixer-me/switcher) + hängender "Trennen"-Button nach Server-Disconnect (Nachtrag 295) | erledigt | Zwei aus dem Dogfooding von Nachtrag 291/294 gefundene Bugs. Root Cause 1: `refresh()`/`renderBusRow()` rissen bei jedem 2s-Poll die komplette Knopfreihe ab und bauten sie neu, wodurch jedes Vorschaubild-`<img>` zerstört und leer neu erzeugt wurde. Fix: Wiederverwendung bestehender `<omp-button>`-Knoten per `senderId`-Diff (`updateBusButton`/`updateInputButton`), nur `img.src` wird erneuert — der Browser zeigt währenddessen von selbst das alte Bild. Root Cause 2: `camera.html`s `onconnectionstatechange` rief `stop()` nie bei einem server-seitigen Disconnect auf, nur bei eigenem Klick. Fix: reagiert jetzt selbst auf `failed`/`closed` (sofort) und `disconnected` (4s Kulanzfrist gegen kurze Netz-Hänger). Live per echter CDP-Session verifiziert: dieselben `<img>`-DOM-Knoten überleben ≥3 reale Poll-Zyklen unverändert (Marker-Attribut-Test) bei weiterhin aktualisiertem `img.src`; echte WebRTC-Verbindung (Fake-Kamera-Device) + echter Revoke über die Orchestrator-API zeigt automatischen UI-Rücksprung auf "Verbinden" nach ~10s. Stolperstein: laufende Node-Instanzen serven `ui/bundle.js`/`camera.html` per `include_str!` compile-time-eingebettet — Fix erst nach `cargo build`+Neustart der Testinstanz sichtbar (s. Memory `feedback_include_str_requires_rebuild_to_test_ui_changes`). `cargo test -p omp-webrtc-gateway` grün. Commit `9d0decc`. | 2026-09-25 |
+| Kapitel 22 (FFmpeg/FFprobe-Assistent): Zielbild + Phasenplan W1–W4 festgelegt, KEIN Code (Nachtrag 296) | erledigt | Nutzerauftrag: geführte Wizard-/Filter-Builder-Bedienung für ffmpeg/ffprobe statt roher CLI-Argumente, Referenz war ein älteres NW.js-Projekt des Nutzers (dynamische ffmpeg-Hilfetext-Introspektion + Blockly). Bestandsaufnahme: bestehender `script`-Workflow-Schritt (Allow-Liste `orchestrator/main.go`, Executor `internal/process/executors.go`) + heutige starre `SCRIPT_TEMPLATES`/Rohargument-Liste (`ui/graph/process-step-config.ts`) sind der Erweiterungspunkt, kein neuer Node nötig. Nutzerentscheidungen: Reihenfolge Introspektion(W1)→Formular-Wizard(W2)→Filter-Graph-Builder(W3, auf bestehendem `flow-canvas.ts`-Koordinatenmuster statt Blockly)→Verallgemeinerungs-Härtetest(W4); der genannte "MXF mit 8 Tonspuren+TTS-Kennungen"-Fall ist ausdrücklich Maßstab für Baukasten-Ausdruckskraft, keine zu bauende Einzelfunktion; lokaler-LLM-Ausblick nur als Zukunftsnotiz (`ARCHITECTURE.md` §26.5), keine Implementierung. Details/Phasenplan: `ARCHITECTURE.md` §26, hier Kapitel 22. | 2026-09-25 |

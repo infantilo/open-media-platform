@@ -4182,3 +4182,90 @@ mit erkennbarem Fehlerpunkt zeigen. **Phase:** eigener künftiger
 Schritt (Umfang zu groß für eine Sitzung, §0 Punkt 2) — Umsetzungsreihen-
 folge/Scope-Schnitt (z. B. erst 25.1+25.2 ohne Cockpit-UI, dann 25.3)
 bei Beginn der Umsetzung mit dem Nutzer klären.
+
+## 26. FFmpeg/FFprobe-Assistent: geführte Bedienung statt roher CLI-Argumente (2026-09-25)
+
+Nutzerauftrag: kein Bediener kennt die gültigen ffmpeg/ffprobe-Parameter
+und deren erlaubte Werte auswendig — von einfachen
+Format-Konvertierungen bis zu komplexen Mehrspur-/Filter-Szenarien
+(Beispiel des Nutzers: „MXF-Datei mit 8 Tonspuren mit TTS-Kennungen je
+Spur", **als Maßstab für nötige Ausdruckskraft, nicht als zu bauende
+Einzelfunktion**) soll das aus geführten Formularen mit Hilfetexten und
+einem visuellen Filter-Builder machbar sein, ohne die CLI-Syntax zu
+kennen. Referenz für die Grundidee war ein älteres, eigenständiges
+NW.js/Electron-Projekt des Nutzers, das ffmpeg-Hilfetexte per Regex
+parst und daraus dynamische Formulare baut — Vorbild fürs Prinzip
+(dynamische Introspektion statt statisch gepflegter Parameterlisten),
+nicht zum 1:1-Übernehmen (andere Laufzeitumgebung: OMPs UI ist eine
+reine Browser-SPA ohne lokalen Prozesszugriff).
+
+### 26.1 Einordnung: Erweiterung des bestehenden `script`-Workflow-Schritts
+
+Der Workflow-Engine-Schritttyp `script`
+(`orchestrator/internal/process/executors.go`) führt bereits
+allow-gelistete Programme (`ffmpeg`/`ffprobe`, per `exec.LookPath`
+ermittelt) mit templatebaren Argumenten aus — dieselbe
+Sicherheitsgrenze wie „Orchestrator startet nur Katalog-Einträge, keine
+freien Kommandos" (§6.2). Der Assistent ersetzt/erweitert **nur die
+Art, wie die Argumente entstehen** (geführtes Formular statt
+Freitext-Liste) — nicht den Ausführungspfad. Details, Phasenplan
+(W1–W4) und die im Nutzerauftrag getroffenen Entscheidungen (Reihenfolge
+Introspektion → Wizard → Filter-Builder → Verallgemeinerungs-Härtetest):
+`UMSETZUNG.md` Kapitel 22.
+
+### 26.2 Introspektion serverseitig im Orchestrator, kein neuer Node
+
+`ffmpeg -h full`/`-h encoder=X`/`-h muxer=X`/`-h filter=X`/`-encoders`/
+`-filters`/`-pix_fmts` einmal parsen und cachen, dort wo die
+Allow-Liste/Binärpfade bereits zentral bekannt sind (Go-Orchestrator),
+ausgeliefert über `/api/v1/tools/ffmpeg/...`. Kein eigener Node dafür
+(dies ist ein Autoren-/Formular-Hilfsmittel, kein Medien-I/O) und kein
+Browser-seitiges Spawnen (wie die NW.js-Referenz) — passt nicht zur
+Browser-SPA-Architektur.
+
+### 26.3 Filter-Graph-Builder auf bestehendem Canvas-Muster
+
+Für die visuelle Filterketten-Erstellung (`-vf`/`-af`/
+`-filter_complex`) wird dieselbe SVG-Koordinaten-/Kompatibilitätslogik
+wiederverwendet, die bereits zweimal fürs Verkabeln (`flow-canvas.ts`)
+bzw. Rollen-Design (`role-designer.ts`) diente — drittes DOM-Element auf
+geteilter Logik statt einer neuen Zeichenbibliothek. Explizit **kein
+Blockly** (die NW.js-Referenz nutzte es für generische
+Automatisierungs-Makros, nicht speziell für Filterketten — diese Rolle
+deckt bei OMP bereits der Workflow-Graph-Editor ab) und kein sonstiges
+neues Node-basiertes JS-Framework (§4.5, „kein Framework-Zwang" gilt
+weiter).
+
+### 26.4 Baukasten-Prinzip statt Einzelfall-Features
+
+Jedes vom Nutzer genannte komplexe Szenario ist ein **Testfall für die
+Ausdruckskraft** der allgemeinen Bausteine (wiederholbare
+Stream-Gruppen mit Metadaten je Wiederholung, Mehrfach-Ein-/Ausgänge,
+Muxer-Optionen), nicht eine zu implementierende Spezialfunktion. Ein
+eigener „MXF-Mehrspur-Wizard" o. Ä. ist explizit **nicht** das Ziel —
+wenn ein Szenario nur mit Sonder-Code lösbar wäre, ist das ein Signal,
+dass dem Baukasten (W1–W3) noch ein allgemeiner Baustein fehlt, s.
+UMSETZUNG.md W4.
+
+### 26.5 Ausblick: Lokaler Assistent (vorgemerkt, nicht geplant)
+
+Langfristige Idee des Nutzers: ein kleines, rein lokal laufendes
+Sprachmodell (Kandidat: GGUF-Format, 1–3 Mrd. Parameter, über
+`llama.cpp` oder vergleichbar), das eine in natürlicher Sprache
+formulierte Aufgabe („erstelle eine MXF-Datei mit 8 Tonspuren mit
+TTS-Kennungen für jede Spur") in eine Vorbelegung des Wizards (Intent +
+Parameterwerte) übersetzt — **führt nichts selbstständig aus**, befüllt
+nur das ohnehin vorhandene, vom Bediener noch prüfbare Formular.
+
+**Status: nicht geplant, keine Implementierung, kein Platzhalter-Code**
+— der regelbasierte Wizard (26.4) muss die Kernfälle bereits ohne LLM
+abdecken können. Bedingungen, falls es später konkret angegangen wird
+(Open-Source-/Offline-Prinzip des Projekts, s. `CLAUDE.md`):
+
+- Vollständig lokal, keine Cloud-API-Aufrufe.
+- Permissiv lizenziertes Modell (keine „research-only"/Non-Commercial-
+  Klauseln, konsistent mit §20.7 „keine Produktnamen"/Lizenzfreiheit
+  des Gesamtprojekts).
+- Optional und deinstallierbar — OMP funktioniert unverändert vollständig
+  ohne dieses Modul (der Wizard ist die tragende Bedienoberfläche, das
+  LLM nur eine optionale Abkürzung davor).
