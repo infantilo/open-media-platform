@@ -191,7 +191,24 @@ pub fn render_svg(data: &str) -> Result<String, String> {
 /// dupliziert). `None`, wenn `path` (ohne Query-String) zu keiner
 /// dieser Routen passt — der Aufrufer prüft dann seine eigenen Routen
 /// weiter.
-pub fn route(store: &InviteStore, method: &str, path: &str, body: &[u8]) -> Option<RawResponse> {
+///
+/// `on_revoke` (Bugliste 2026-09-25 #1, "bei 'widerrufen' muss (optional
+/// durch Abfrage) die bestehende Verbindung getrennt werden können"):
+/// wird NUR nach einem erfolgreichen `DELETE /invites` aufgerufen, mit
+/// dem widerrufenen Token und dem `disconnect=true`-Query-Flag (von der
+/// Bedienoberfläche gesetzt, NACHDEM der Bediener die Rückfrage bestätigt
+/// hat — "optional durch Abfrage", nicht automatisch bei jedem Widerruf).
+/// Der Aufrufer (`CameraStore`/`MonitorStore`) entscheidet selbst, ob der
+/// widerrufene Token zur AKTUELL aktiven Sitzung gehört (`active_token`)
+/// und trennt in dem Fall per `gateway.teardown()`/`monitor.teardown()`
+/// — `invite.rs` kennt keine Sitzungen, nur Tokens.
+pub fn route(
+    store: &InviteStore,
+    method: &str,
+    path: &str,
+    body: &[u8],
+    on_revoke: impl FnOnce(&str, bool),
+) -> Option<RawResponse> {
     let text = |status: u16, msg: &str| RawResponse { status, content_type: "text/plain", body: msg.as_bytes().to_vec() };
     let bare_path = path.split('?').next().unwrap_or(path);
     match (method, bare_path) {
@@ -228,6 +245,8 @@ pub fn route(store: &InviteStore, method: &str, path: &str, body: &[u8]) -> Opti
         ("DELETE", "/invites") => {
             let token = query_param(path, "token");
             if store.revoke(token) {
+                let also_disconnect = query_param(path, "disconnect") == "true";
+                on_revoke(token, also_disconnect);
                 Some(text(200, "ok"))
             } else {
                 Some(text(404, "unknown token"))
@@ -318,34 +337,58 @@ mod tests {
     fn route_create_list_revoke_roundtrip() {
         let store = InviteStore::new();
 
-        let created = route(&store, "POST", "/invites", br#"{"label":"Test"}"#).expect("create response");
+        let created = route(&store, "POST", "/invites", br#"{"label":"Test"}"#, |_, _| {}).expect("create response");
         assert_eq!(created.status, 201);
         let created_json: Value = serde_json::from_slice(&created.body).expect("json");
         let token = created_json["token"].as_str().expect("token").to_string();
         assert_eq!(created_json["label"], "Test");
 
-        let listed = route(&store, "GET", "/invites", b"").expect("list response");
+        let listed = route(&store, "GET", "/invites", b"", |_, _| {}).expect("list response");
         let list_json: Value = serde_json::from_slice(&listed.body).expect("json");
         assert_eq!(list_json.as_array().expect("array").len(), 1);
 
         let revoke_path = format!("/invites?token={token}");
-        let revoked = route(&store, "DELETE", &revoke_path, b"").expect("revoke response");
+        let revoked = route(&store, "DELETE", &revoke_path, b"", |_, _| {}).expect("revoke response");
         assert_eq!(revoked.status, 200);
         assert!(!store.is_valid(&token));
 
         // Widerruf eines bereits widerrufenen Tokens ist ein ehrliches
         // 404, kein stiller Erfolg.
-        let revoked_again = route(&store, "DELETE", &revoke_path, b"").expect("second revoke response");
+        let revoked_again = route(&store, "DELETE", &revoke_path, b"", |_, _| {}).expect("second revoke response");
         assert_eq!(revoked_again.status, 404);
+    }
+
+    #[test]
+    fn route_revoke_calls_on_revoke_with_token_and_disconnect_flag() {
+        let store = InviteStore::new();
+        let invite = store.create("Kamera".to_string());
+
+        let mut seen: Option<(String, bool)> = None;
+        let revoke_path = format!("/invites?token={}&disconnect=true", invite.token);
+        let revoked = route(&store, "DELETE", &revoke_path, b"", |token, disconnect| {
+            seen = Some((token.to_string(), disconnect));
+        })
+        .expect("revoke response");
+        assert_eq!(revoked.status, 200);
+        assert_eq!(seen, Some((invite.token, true)));
+    }
+
+    #[test]
+    fn route_revoke_unknown_token_never_calls_on_revoke() {
+        let store = InviteStore::new();
+        let mut called = false;
+        let revoked = route(&store, "DELETE", "/invites?token=nope", b"", |_, _| called = true).expect("revoke response");
+        assert_eq!(revoked.status, 404);
+        assert!(!called);
     }
 
     #[test]
     fn route_qr_requires_data_param() {
         let store = InviteStore::new();
-        let missing = route(&store, "GET", "/invites/qr", b"").expect("response");
+        let missing = route(&store, "GET", "/invites/qr", b"", |_, _| {}).expect("response");
         assert_eq!(missing.status, 400);
 
-        let ok = route(&store, "GET", "/invites/qr?data=https%3A%2F%2Fexample.test%2F", b"").expect("response");
+        let ok = route(&store, "GET", "/invites/qr?data=https%3A%2F%2Fexample.test%2F", b"", |_, _| {}).expect("response");
         assert_eq!(ok.status, 200);
         assert_eq!(ok.content_type, "image/svg+xml");
     }
@@ -353,6 +396,6 @@ mod tests {
     #[test]
     fn route_unknown_path_returns_none() {
         let store = InviteStore::new();
-        assert!(route(&store, "GET", "/something-else", b"").is_none());
+        assert!(route(&store, "GET", "/something-else", b"", |_, _| {}).is_none());
     }
 }

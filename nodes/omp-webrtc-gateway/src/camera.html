@@ -28,6 +28,10 @@
   #setup .check { flex-direction:row; align-items:center; gap:8px; color:var(--text); font-size:15px; flex:1 1 100%; }
   #setup .check input { width:22px; height:22px; }
   #setup #start { width:100%; margin-top:16px; font-size:17px; padding:16px; }
+  /* Bugliste 2026-09-25 #2: gut sichtbarer, laienverständlicher Fehler-
+     Hinweis direkt im Setup-Bildschirm (s. HTML-Kommentar bei #setupError). */
+  .error-banner { margin-top:10px; padding:10px 12px; border-radius:8px; background:var(--err); color:#fff;
+                  font-size:14px; font-weight:600; line-height:1.35; }
 
   /* ---- Nach dem Verbinden: Kachel-Ansicht (Kamera + Retourbild) ---- */
   #live { display:none; flex-direction:column; flex:1; min-height:0; }
@@ -86,6 +90,14 @@
   </div>
   <button id="start" class="primary">Verbinden</button>
   <p class="dim" id="setupHint" style="font-size:13px;"></p>
+  <!-- Bugliste 2026-09-25 #2 ("wenn beim verbinden ein Fehler auftritt,
+       muss dieser gut sichtbar dargestellt werden"): vorher landete jeder
+       Verbindungsfehler NUR im technischen, standardmäßig eingeklappten
+       `#log` innerhalb von `#live` — einer Sektion, die bei einem
+       fehlgeschlagenen Connect nie sichtbar wird (`#setup` bleibt aktiv).
+       Diese Zeile sitzt direkt hier, wo der Nutzer nach einem
+       fehlgeschlagenen Versuch tatsächlich steht. -->
+  <p id="setupError" class="error-banner" hidden></p>
 </div>
 
 <!-- Nach dem Verbinden: Kamera + Retourbild halb/halb, Tap zum Vergrößern (Nutzerauftrag 2026-09-24). -->
@@ -121,6 +133,50 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const log = (t) => { const l = $('log'); l.textContent = new Date().toLocaleTimeString() + ' ' + t + '\n' + l.textContent; };
+
+// Bugliste 2026-09-25 #2: `showConnectError` ist die einzige Stelle, die
+// bei einem fehlgeschlagenen Verbindungsversuch etwas SICHTBARES zeigt
+// (`#setupError`, direkt im Setup-Bildschirm, wo der Nutzer nach einem
+// Fehlschlag tatsächlich steht) — `log()` bleibt zusätzlich als
+// technisches Detail im (weiterhin eingeklappten) `#log` erhalten, für
+// Fehlersuche durch die Regie/den Bediener per Bildschirmteilen o. Ä.
+const showConnectError = (friendlyMsg, technicalDetail) => {
+  const el = $('setupError');
+  el.textContent = friendlyMsg;
+  el.hidden = false;
+  log('FEHLER: ' + (technicalDetail || friendlyMsg));
+};
+const clearConnectError = () => { $('setupError').hidden = true; };
+
+// Übersetzt technische Fehler (DOMException-Namen von `getUserMedia`,
+// `WHIP <status>: …`/`WHEP <status>: …` aus `connect()`/`connectRetour()`)
+// in einen für Laien verständlichen Satz — Rohtext bleibt trotzdem im
+// `#log` erhalten (s. `showConnectError`), nichts geht verloren.
+function friendlyConnectError(e) {
+  const name = e && e.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Kein Zugriff auf Kamera/Mikrofon. Bitte in den Browser-Einstellungen erlauben und erneut versuchen.';
+  }
+  if (name === 'NotFoundError') {
+    return 'Keine Kamera gefunden. Bitte prüfen, ob eine Kamera vorhanden/aktiviert ist.';
+  }
+  if (name === 'NotReadableError') {
+    return 'Die Kamera wird bereits von einer anderen App verwendet. Bitte diese schließen und erneut versuchen.';
+  }
+  if (name === 'OverconstrainedError') {
+    return 'Die gewählte Auflösung/Bildrate wird von dieser Kamera nicht unterstützt. Bitte eine andere Einstellung wählen.';
+  }
+  const msg = (e && (e.message || String(e))) || '';
+  const statusMatch = /^(?:WHIP|WHEP) (\d+):/.exec(msg);
+  if (statusMatch) {
+    const status = Number(statusMatch[1]);
+    if (status === 401) {
+      return 'Diese Einladung ist ungültig oder wurde zurückgezogen. Bitte einen neuen Link/QR-Code vom Bediener/der Regie anfordern.';
+    }
+    return `Verbindung zum Server fehlgeschlagen (Code ${status}). Bitte erneut versuchen oder die Regie kontaktieren.`;
+  }
+  return 'Verbindung fehlgeschlagen. Bitte erneut versuchen oder die Regie kontaktieren.';
+}
 
 // Einladungs-Token (Nutzerwunsch 2026-09-23, "security!"): nur mit
 // gültigem `?token=` aus einem Einladungslink nimmt der Node `/whip`
@@ -219,9 +275,19 @@ function onTileTap(role) {
 }
 
 async function start() {
-  if (!window.isSecureContext) { log('FEHLER: Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).'); return; }
+  clearConnectError();
+  if (!window.isSecureContext) {
+    showConnectError(
+      'Diese Seite muss über eine sichere (https-)Verbindung geöffnet werden, sonst funktioniert der Kamera-Zugriff nicht.',
+      'Kein sicherer Kontext — Seite per HTTPS öffnen (Kamera-Zugriff).'
+    );
+    return;
+  }
   if (!inviteToken) {
-    log('FEHLER: kein Einladungslink — diese Seite ohne gültigen Link (mit "?token=…") geöffnet. Bitte den Link/QR-Code vom Bediener verwenden.');
+    showConnectError(
+      'Kein gültiger Einladungslink. Bitte den Link oder QR-Code vom Bediener/der Regie neu anfordern.',
+      'kein Einladungslink — diese Seite ohne gültigen Link (mit "?token=…") geöffnet.'
+    );
     return;
   }
   $('start').disabled = true;
@@ -273,7 +339,7 @@ async function start() {
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
     pollTimer = setInterval(pollStats, 500);
   } catch (e) {
-    log('FEHLER: ' + (e.message || e));
+    showConnectError(friendlyConnectError(e), e.message || String(e));
     await stop(true);
   }
 }

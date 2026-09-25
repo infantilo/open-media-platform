@@ -59,6 +59,12 @@ struct CameraStore {
     audio_flow_id: String,
     gateway: Arc<pipeline::Gateway>,
     invites: Arc<invite::InviteStore>,
+    // Bugliste 2026-09-25 #1: der Token, der die AKTUELL aktive WHIP-
+    // Sitzung eröffnet hat (`None` ohne aktive Sitzung) — ermöglicht dem
+    // `DELETE /invites?disconnect=true`-Pfad, gezielt NUR dann zu
+    // trennen, wenn der widerrufene Token tatsächlich zur laufenden
+    // Sitzung gehört (nicht z. B. zu einer bereits ersetzten/beendeten).
+    active_token: Mutex<Option<String>>,
 }
 
 impl ParamStore for CameraStore {
@@ -171,11 +177,18 @@ impl ParamStore for CameraStore {
                     return Some(text(400, "offer is not UTF-8".to_string()));
                 };
                 Some(match self.gateway.whip_offer(offer) {
-                    Ok(answer) => RawResponse {
-                        status: 201,
-                        content_type: "application/sdp",
-                        body: answer.into_bytes(),
-                    },
+                    Ok(answer) => {
+                        // Bugliste 2026-09-25 #1: dieser Token hat gerade
+                        // die (jede vorherige ersetzende, s. Moduldoku
+                        // "eine Kamera je Node") aktive Sitzung eröffnet.
+                        *self.active_token.lock().expect("lock poisoned") =
+                            Some(invite::token_from_query(path).to_string());
+                        RawResponse {
+                            status: 201,
+                            content_type: "application/sdp",
+                            body: answer.into_bytes(),
+                        }
+                    }
                     Err(e) => {
                         eprintln!("omp-webrtc-gateway: WHIP offer failed: {e}");
                         text(500, e)
@@ -184,9 +197,19 @@ impl ParamStore for CameraStore {
             }
             ("DELETE", "/whip") => {
                 self.gateway.teardown();
+                *self.active_token.lock().expect("lock poisoned") = None;
                 Some(text(200, "ok".to_string()))
             }
-            _ => invite::route(&self.invites, method, path, body).or_else(|| uibundle::route(method, bare_path)),
+            _ => invite::route(&self.invites, method, path, body, |token, also_disconnect| {
+                if also_disconnect {
+                    let mut active = self.active_token.lock().expect("lock poisoned");
+                    if active.as_deref() == Some(token) {
+                        self.gateway.teardown();
+                        *active = None;
+                    }
+                }
+            })
+            .or_else(|| uibundle::route(method, bare_path)),
         }
     }
 
@@ -285,6 +308,7 @@ async fn run_camera(common: Common) -> Result<(), Box<dyn std::error::Error + Se
         audio_flow_id: audio_flow_id.clone(),
         gateway: gateway.clone(),
         invites: Arc::new(invite::InviteStore::new()),
+        active_token: Mutex::new(None),
     });
 
     let handle = omp_node_sdk::start(
@@ -489,6 +513,9 @@ struct MonitorStore {
     connected_video: Arc<Mutex<String>>,
     connected_audio: Arc<Mutex<String>>,
     invites: Arc<invite::InviteStore>,
+    // S. `CameraStore::active_token`-Doku (Bugliste 2026-09-25 #1) — hier
+    // für die WHEP-Monitor-Sitzung (Retourbild) statt WHIP-Kamera.
+    active_token: Mutex<Option<String>>,
 }
 
 impl ParamStore for MonitorStore {
@@ -587,11 +614,16 @@ impl ParamStore for MonitorStore {
             ("POST", "/whep") => Some(match std::str::from_utf8(body) {
                 Err(_) => text(400, "offer is not UTF-8".to_string()),
                 Ok(offer) => match self.monitor.whep_offer(offer) {
-                    Ok(answer) => RawResponse {
-                        status: 201,
-                        content_type: "application/sdp",
-                        body: answer.into_bytes(),
-                    },
+                    Ok(answer) => {
+                        // Bugliste 2026-09-25 #1, s. `CameraStore`-Pendant.
+                        *self.active_token.lock().expect("lock poisoned") =
+                            Some(invite::token_from_query(path).to_string());
+                        RawResponse {
+                            status: 201,
+                            content_type: "application/sdp",
+                            body: answer.into_bytes(),
+                        }
+                    }
                     Err(e) => {
                         eprintln!("omp-webrtc-gateway: WHEP offer failed: {e}");
                         text(500, e)
@@ -600,9 +632,19 @@ impl ParamStore for MonitorStore {
             }),
             ("DELETE", "/whep") => {
                 self.monitor.teardown();
+                *self.active_token.lock().expect("lock poisoned") = None;
                 Some(text(200, "ok".to_string()))
             }
-            _ => invite::route(&self.invites, method, path, body).or_else(|| uibundle::route(method, bare_path)),
+            _ => invite::route(&self.invites, method, path, body, |token, also_disconnect| {
+                if also_disconnect {
+                    let mut active = self.active_token.lock().expect("lock poisoned");
+                    if active.as_deref() == Some(token) {
+                        self.monitor.teardown();
+                        *active = None;
+                    }
+                }
+            })
+            .or_else(|| uibundle::route(method, bare_path)),
         };
         if page.is_some() {
             return page;
@@ -723,6 +765,7 @@ async fn run_monitor(common: Common) -> Result<(), Box<dyn std::error::Error + S
         connected_video,
         connected_audio,
         invites: Arc::new(invite::InviteStore::new()),
+        active_token: Mutex::new(None),
     });
 
     let handle = omp_node_sdk::start(

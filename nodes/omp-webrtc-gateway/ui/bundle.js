@@ -342,8 +342,23 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       await refresh();
     };
 
+    // Bugliste 2026-09-25 #1 ("bei 'widerrufen' muss (optional durch
+    // Abfrage) die bestehende Verbindung getrennt werden können"): Widerruf
+    // selbst bleibt ein Klick ohne Rückfrage (jederzeit reversibel — eine
+    // neue Einladung ist sofort wieder angelegt), NUR das zusätzliche,
+    // schwerer rückgängig zu machende Trennen einer eventuell aktiven
+    // Verbindung wird per `window.confirm()` erfragt — gleiches Muster wie
+    // `nodes/omp-audio-mixer`/`omp-mxf-player`/`omp-playout-automation`s
+    // eigenständige UI-Bundles (kein `ui/kit`-Zugriff hier, s. `omp-video-
+    // mixer-me/ui/bundle.js`s `openModal`-Kommentar dazu). Server-seitig
+    // (`invite::route`) ist `disconnect=true` ohnehin ein No-Op, falls der
+    // Token gar nicht (mehr) zur aktiven Sitzung gehört.
     const revoke = async (token) => {
-      const res = await api(`/invites?token=${encodeURIComponent(token)}`, { method: "DELETE" });
+      const alsoDisconnect = window.confirm(
+        "Einladung widerrufen. Soll eine damit möglicherweise gerade aktive Verbindung sofort getrennt werden?"
+      );
+      const disconnectQuery = alsoDisconnect ? "&disconnect=true" : "";
+      const res = await api(`/invites?token=${encodeURIComponent(token)}${disconnectQuery}`, { method: "DELETE" });
       if (!res.ok) {
         showError(`Widerrufen fehlgeschlagen (${res.status})`);
         return;
@@ -351,9 +366,10 @@ class OmpWebrtcGatewayPanel extends HTMLElement {
       const pair = findPair(token);
       if (pair) {
         try {
-          await fetch(`/api/v1/nodes/${pair.monitorNodeId}/invites?token=${encodeURIComponent(pair.monitorToken)}`, {
-            method: "DELETE",
-          });
+          await fetch(
+            `/api/v1/nodes/${pair.monitorNodeId}/invites?token=${encodeURIComponent(pair.monitorToken)}${disconnectQuery}`,
+            { method: "DELETE" }
+          );
         } catch {
           // Best effort — eine verwaiste Retour-Einladung auf der
           // Monitor-Instanz ist kein Grund, den Widerruf der

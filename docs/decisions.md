@@ -29547,3 +29547,94 @@ Fund).
 **Dateien:** `nodes/omp-video-mixer-me/src/main.rs` (`discover()`),
 `nodes/omp-video-mixer-me/src/pipeline.rs` (`build_synthetic_branch`
 neu, vier Aufrufstellen umgestellt).
+
+## 2026-09-25 (Nachtrag 291) — Bugliste #1+#2: Handy-Kamera trennt aktive Verbindung bei Widerruf (optional) + sichtbare Fehleranzeige beim Verbinden
+
+Nutzerauftrag "fahre fort" — nächste zwei Punkte aus
+`bugliste 25.09.2026.txt`, beide `omp-webrtc-gateway` (Handy-Kamera/
+-Monitor) betreffend, gemeinsam bearbeitet (gleicher Node, gleiche
+Session).
+
+**#1 ("bei 'widerrufen' muss (optional durch Abfrage) die bestehende
+Verbindung getrennt werden können"):** `invite::InviteStore::revoke`
+kannte bisher nur den Token-Satz, nicht die laufende WHIP-/WHEP-Sitzung
+— ein Widerruf während eine Verbindung aktiv war, änderte an dieser
+GAR NICHTS ("eine Kamera je Node"/ein Monitor je Node, s. Moduldoku).
+**Fix:** `invite::route()` bekommt einen neuen `on_revoke(token,
+also_disconnect)`-Callback-Parameter, aufgerufen NUR nach erfolgreichem
+`DELETE /invites`, mit dem neuen `disconnect=true`-Query-Flag. Beide
+Aufrufer (`CameraStore`/`MonitorStore` in `main.rs`) bekommen ein neues
+`active_token: Mutex<Option<String>>`-Feld (gesetzt bei jedem
+erfolgreichen `POST /whip`/`/whep`, gelöscht bei `DELETE /whip`/`/whep`)
+und trennen in ihrem Callback per `gateway.teardown()`/
+`monitor.teardown()`, aber NUR wenn der widerrufene Token tatsächlich
+zur aktuell aktiven Sitzung gehört — ein Widerruf eines längst
+ersetzten/beendeten Tokens bleibt ein No-Op. UI (`ui/bundle.js`s
+`revoke()`): "optional durch Abfrage" per `window.confirm()` VOR dem
+`DELETE`-Aufruf (gleiches Muster wie `omp-audio-mixer`/`omp-mxf-player`/
+`omp-playout-automation`s eigenständige Bundles — kein `ui/kit`-Zugriff
+aus einem Node-Bundle heraus, s. `omp-video-mixer-me/ui/bundle.js`s
+`openModal`-Kommentar); der Widerruf selbst bleibt unbestätigt (jederzeit
+reversibel, eine neue Einladung ist sofort wieder angelegt), nur das
+schwerer rückgängig zu machende Trennen wird erfragt. Gepaarte
+Retourbild-Einladung (Kamera+Monitor) bekommt dasselbe `disconnect`-Flag
+mit.
+
+**#2 ("wenn beim Verbinden ein Fehler auftritt, muss dieser gut sichtbar
+dargestellt werden"):** ALLE drei Fehlerpfade in `camera.html`s `start()`
+(kein sicherer Kontext, kein/ungültiger Einladungs-Token, `openCamera()`/
+`connect()`-Fehlschlag) schrieben bisher NUR in `log()` — ein 12px, dim
+eingefärbtes, standardmäßig EINGEKLAPPTES Element (`#statusPanel`
+`display:none`) innerhalb von `#live`, einer Sektion, die bei einem
+fehlgeschlagenen Connect nie sichtbar wird (`#setup` bleibt aktiv, der
+Nutzer sieht buchstäblich nichts). **Fix:** neues `#setupError`-Banner
+direkt im Setup-Bildschirm (`--err`-rot, fett, gut lesbar), gefüllt über
+neues `showConnectError(friendlyMsg, technicalDetail)` (technisches
+Detail bleibt zusätzlich im `#log` erhalten). Neue
+`friendlyConnectError(e)` übersetzt bekannte technische Fehler in
+laienverständliche Sätze: `getUserMedia`-`DOMException`-Namen
+(`NotAllowedError`/`SecurityError` → Kamera-/Mikrofonzugriff verweigert,
+`NotFoundError` → keine Kamera gefunden, `NotReadableError` → Kamera von
+anderer App belegt, `OverconstrainedError` → Auflösung/Bildrate nicht
+unterstützt) sowie `WHIP <status>:`/`WHEP <status>:`-Fehler aus
+`connect()`/`connectRetour()` (401 speziell → "Einladung ungültig/
+zurückgezogen", sonst generische Server-Fehlermeldung mit Statuscode).
+Bewusst NICHT geändert: der separate `Retourbild-FEHLER`-Log-Zweig
+(Haupt-Kamera-Verbindung bereits erfolgreich, Nutzer sieht die Live-
+Ansicht samt Retour-Badge-Status — andere Schwere/Sichtbarkeitslage als
+der Haupt-Connect-Fehler, den #2 eigentlich meint).
+
+**Live end-to-end verifiziert (echte WebRTC-Verbindung, kein Mock):**
+`omp-webrtc-gateway-camera`-Instanz über den Orchestrator gestartet,
+`camera.html` per `chromium --headless=new --use-fake-device-for-media-
+stream --use-fake-ui-for-media-stream` über eine roh selbstgeschriebene
+CDP-über-WebSocket-Steuerung (kein `websocket-client`/`requests` in
+dieser Sandbox verfügbar) angesteuert:
+- Widerrufener Token vor dem Verbinden → `POST /whip` liefert real `401`
+  → `#setupError` sichtbar mit "Diese Einladung ist ungültig oder wurde
+  zurückgezogen..." (per DOM-Abfrage bestätigt, `hidden:false`).
+- Kein Token in der URL → `#setupError` sichtbar mit "Kein gültiger
+  Einladungslink...", noch bevor überhaupt eine Kamera-Anfrage passiert.
+- Echte Sitzung aufgebaut (`connectionState`→`connected`,
+  `sessionActive`→`true`), Token OHNE `disconnect=true` widerrufen →
+  Sitzung bleibt `connected` (Rückwärtskompatibilität bestätigt). Neue
+  Sitzung mit neuem Token aufgebaut, DIESMAL MIT `disconnect=true`
+  widerrufen → `connectionState` fällt auf `none`, `sessionActive` auf
+  `false` — echter `gateway.teardown()`-Aufruf bestätigt, nicht nur
+  Rückgabewert geprüft.
+
+`cargo build --workspace --bins` grün, `cargo clippy -p omp-webrtc-
+gateway -D warnings` sauber, `cargo test -p omp-webrtc-gateway` 18/18
+(2 neue Tests für `on_revoke`-Callback-Verhalten), `node --check` auf
+dem extrahierten `camera.html`-Skript sauber.
+
+**Noch offen, nicht Teil dieses Fixes:** #4 (Source-Node-CPU, vom Nutzer
+selbst als nicht prioritär markiert), #6 (Switcher/Mixer-UI-Redesign),
+#7 (GPU-Fallback-Erkennung).
+
+**Dateien:** `nodes/omp-webrtc-gateway/src/invite.rs` (`route()`-Signatur
++ zwei neue Tests), `nodes/omp-webrtc-gateway/src/main.rs`
+(`CameraStore`/`MonitorStore::active_token`), `nodes/omp-webrtc-gateway/
+src/camera.html` (`#setupError`, `showConnectError`,
+`friendlyConnectError`), `nodes/omp-webrtc-gateway/ui/bundle.js`
+(`revoke()`).
