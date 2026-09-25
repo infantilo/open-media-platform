@@ -3513,6 +3513,90 @@ nicht als Spezialfall in W4.
 per `ffprobe` gegengeprüfte Ausgabedatei mit den erwarteten
 Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
 
+**Status 2026-09-25: erledigt + live verifiziert — zwei echte
+Baukasten-Lücken gefunden UND behoben (nicht nur dokumentiert), alle
+vier Referenzszenarien live erzeugt + per `ffprobe` gegengeprüft.**
+
+Vier bewusst unterschiedliche Szenarien durch die TATSÄCHLICHE Shell-UI
+(ein Prozess mit vier `script`-Schritten, echte CDP-Session):
+
+1. **Mehrspur-MXF mit eigener Bildquelle** (3 Tonspuren, je eigene
+   Sprachdatei/Codec/Titel/Sprache + separate Bildquelle) — der
+   Kernfall aus dem Nutzerbeispiel, mit 3 statt 8 Spuren aus
+   Testlaufzeit-Gründen (der Mechanismus skaliert identisch).
+2. **Dieselbe Zusammenführung als MOV** (Metadaten-Kontrollprobe).
+3. **Tonspur extrahieren** (bislang nie durch die echte UI getestet,
+   nur unit-getestet) — echter Codec aus der W1-Liste (`libmp3lame`).
+4. **Filter-Graph mit dynamischem (N-Pad) Filter** (`amix`, drei echte
+   Audioquellen, Pad-Zahl live im Builder auf 3 gestellt, Pointer-Drag-
+   Verbindungen zu allen 3 Eingängen).
+
+**Zwei echte Baukasten-Lücken gefunden und behoben (nicht als
+Sonderfall umgangen):**
+
+- **Video-Quelle war an die erste Tonspur gekoppelt.** Der
+  `includeVideo`-Schalter aus W2 nahm die Bildspur aus Track 0s eigener
+  Datei — für das eigentliche Szenario (N *separate* Audiodateien, keine
+  davon hat Bild) unbrauchbar. Fix: `videoSourcePath` als eigener,
+  unabhängiger Baustein (`buildMultitrackArgs` in
+  `process-step-config-logic.ts`) — eigene erste `-i`-Eingabe, Tonspuren
+  rutschen entsprechend, ihre AUSGANGS-Stream-Indizes (für Codec/
+  Metadaten) bleiben unberührt. Neue Tests, DOM-Feld "Bildquelle
+  (optional)" ersetzt die Checkbox.
+- **Filter-Graphen mit mehreren Quellen (z. B. `amix` mit 3 Eingaben)
+  konnten im "Format konvertieren"-Assistenten nie wirklich laufen** —
+  der Assistent hatte nur EIN "Eingabedatei"-Feld (Index 0), der
+  Filter-Graph referenziert aber `0:a`/`1:a`/`2:a`. Fix:
+  `ConvertInput.additionalInputPaths` (`buildConvertArgs`) + neue
+  DOM-Sektion "Weitere Eingabedateien" (wiederholbare Liste, gleiches
+  Muster wie die Mehrspur-Tracks) — Eingabedatei oben bleibt Index 0,
+  jede weitere wird Index 1, 2, ….
+
+**Live beim tatsächlichen AUSFÜHREN (nicht nur Vorschau) gefundene
+ffmpeg-Eigenheiten, die den Wizard selbst NICHT betreffen:**
+
+- Reines `-c:v copy` einer H.264-Quelle in MXF scheiterte bei diesem
+  ffmpeg-Build ("Received non-video packet before header has been
+  written"); mit einem echten Encoder (`mpeg2video`) lief derselbe
+  Aufbau anstandslos. **Das wurde behoben, nicht nur dokumentiert:**
+  neues Feld "Video-Codec der Bildquelle" (`MultitrackInput.videoCodec`,
+  Default weiterhin "copy" — nur wer's braucht, muss umstellen) —
+  dieselbe Codec-Wahl, die Tonspuren im Assistenten schon hatten, war
+  bei der Bildquelle bisher hart einprogrammiert.
+- **Metadaten-Befund aus W2 bestätigt UND verallgemeinert:** nicht nur
+  MXF, auch MOV/MP4 (ffmpeg-Muxer `mov`) schreibt
+  `-metadata:s:a:N title=…/language=…` nicht in den Container (mit
+  `ffprobe` geprüft: Tags nach dem Mux leer) — nur Matroska hat es in
+  beiden Stichproben zuverlässig übernommen. Bestätigt: die Lücke liegt
+  konsistent bei ffmpegs jeweiliger Muxer-Implementierung, nicht im
+  Wizard-Mechanismus (`buildMultitrackArgs` erzeugt in allen Fällen
+  exakt dieselben, korrekten `-metadata:s:a:N`-Argumente). Keine
+  Code-Änderung nötig — reine Nutzerinformation für die Container-Wahl,
+  falls Track-Metadaten zwingend gebraucht werden.
+- Die Prozess-Engine lehnt unverbundene `script`-Schritte als
+  "unreachable" ab (`process: validation failed: step "…" is
+  unreachable`) — korrektes, bereits vor Kapitel 22 bestehendes
+  Verhalten des Workflow-Engines, kein Fund dieser Sitzung; hier nur
+  relevant, weil vier unabhängige Testschritte in einem Prozess ohne
+  Verbindungen angelegt wurden. Für W4 genügte die Verifikation je
+  Schritt-Konfiguration + echte Ausführung der erzeugten Argumente
+  (identisches Muster wie W2/W3), ein verbundener Gesamtprozess war
+  nicht Teil der Fragestellung.
+
+Alle vier Szenarien nach dem Fund+Fix real ausgeführt und per `ffprobe`
+gegengeprüft: Szenario 1 (3× `pcm_s16le`-Audio + `mpeg2video`-Video,
+korrekte Spurenreihenfolge), Szenario 3 (`mp3`-Ausgabe mit korrektem
+Codec), Szenario 4 (gemischtes Mono-PCM aus 3 Quellen). `deno check`
+für alle 24 Dateien in `ui/graph/` + `deno test` (125 Fälle) + `deno
+bundle` grün.
+
+**→ Kapitel 22 (W1–W4) damit inhaltlich abgeschlossen.** Verbleibende,
+bewusst nicht in Angriff genommene Ausblicke: `-h full` (globale
+CLI-Flags, W1-Scope-Schnitt), professionelle MXF-Mehrspur-Autorenschaft
+mit Track-Metadaten (bräuchte vermutlich BMXlib statt reinem ffmpeg,
+s. W2-Status), lokaler LLM-Assistent (ARCHITECTURE.md §26.5, nur
+vorgemerkt).
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3768,3 +3852,4 @@ Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
 | Kapitel 22 W1: FFmpeg/FFprobe-Introspektion im Orchestrator | erledigt | Neues Paket `orchestrator/internal/ffmpegtools` — Token-basiertes (nicht spaltenpositionsbasiertes) Parsen von `-encoders`/`-decoders`/`-formats`/`-pix_fmts`/`-filters` + `-h encoder\|decoder\|muxer\|demuxer\|filter=X` (inkl. Enum-Unterzeilen, `(from A to B)`/`(default X)`). Scope-Schnitt gegenüber Plan: `-h full` (globale CLI-Flags) bewusst ausgelassen — kleiner stabiler Flag-Satz, der eigentlich große/wertvolle Teil (hunderte codec-/filter-/muxer-spezifische AVOptions) ist voll abgedeckt. Live gefundener Stolperstein: ffmpeg polstert Namen nur bis zu einer Mindestbreite, ein langer Enum-Name (`autovariance-biased`) überschreitet sie — token-basiertes Parsing übersteht das, eine spaltenpositionsbasierte Regex hätte falsch geparst (als Testfall festgehalten). Neue Routen `GET /api/v1/tools/ffmpeg/{capabilities,encoders,decoders,formats,pix-fmts,filters,{kind}/{name}}` (`WithFFmpegTools`-Option, gleiches Muster wie `WithScriptCommands`), gespeist aus derselben `exec.LookPath`-Allow-Liste wie der `script`-Workflow-Schritt. Live gegen neu gebauten+gestarteten Orchestrator verifiziert: 217 Encoder/407 Formate/527 Filter/206 Pixelformate, `filter/scale` (38 Optionen), `encoder/libx264` (47 Optionen inkl. `-aq-mode`-Enum), `muxer/mxf` (`-signal_standard` mit allen 7 SMPTE/BT-Werten — genau das MXF-Beispielszenario aus 22.2). Ungültige Kategorie → 400, ohne Token → 401. `go build`/`vet`/`test ./...` für den ganzen `orchestrator`-Modulbaum grün. | 2026-09-25 |
 | Kapitel 22 W2: geführter ffmpeg-Formular-Wizard für `script`-Schritte | erledigt | Fünf Aufgaben ersetzen/erweitern die vier starren `SCRIPT_TEMPLATES`: Metadaten auslesen, Vorschaubild, Format/Codec konvertieren, Tonspur extrahieren, **Mehrspur-Container bauen** (Baukasten-Probe aus 22.2 — je Tonspur eigene Quelldatei + frei wählbarer Codec/Titel/Sprache, Container per echter Muxer-Liste inkl. AVOptions). „Erweitert (Rohargumente)" bleibt unverändert als Fallback. Neue reine Bausteine (`buildConvertArgs`/`buildExtractAudioArgs`/`buildMultitrackArgs`/`buildProbeArgs`/`buildThumbnailArgs`, 19 `deno test`-Fälle) + DOM-Seite (`ffmpegOptionsList`/`codecPicker`/`formatPicker`), gespeist von den W1-Endpunkten. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert (Prozess anlegen → Editor öffnen → script-Schritt → Assistent → Mehrspur-Container → echte Formate/Muxer-Optionen geladen → zweite Spur hinzugefügt → Vorschau korrekt → Übernehmen+Speichern persistierte über die echte API korrekt). Live-Fund beim tatsächlichen Ausführen des erzeugten Befehls: reines Audio-„MXF" scheitert an ffmpegs OP1a-Muxer (braucht zwingend eine Bildspur — dafür existiert der „Bildspur übernehmen"-Schalter), `mxf_opatom` erlaubt nur eine Spur pro Datei, und ffmpegs MXF-Muxer schreibt `-metadata:s:a:N`-Tags gar nicht in den Container (mit Matroska als Kontrollprobe bestätigt: derselbe Mechanismus funktioniert dort korrekt — die Lücke liegt allein in ffmpegs MXF-Implementierung, nicht im Wizard); erklärt rückblickend, warum die Referenz-App zusätzlich BMXlib nutzte. `deno check`/`deno test`/`deno bundle` grün. | 2026-09-25 |
 | Kapitel 22 W3: visueller Filter-Graph-Builder | erledigt | Neuer eigenständiger Baustein `filter-graph.ts` (funktionaler Modal-Dialog, kein Custom Element) + DOM-freie `filter-graph-logic.ts` (`compileFilterGraph` — Kahn-Topo-Sortierung, Zyklus-/Unverbunden-Erkennung, 14 `deno test`-Fälle); wiederverwendet NUR die generische Koordinaten-/Port-Mathematik aus `geometry.ts` (nicht `flow-canvas.ts` selbst, das ist NMOS-spezifisch). Knotenarten Eingang (roher Stream-Spezifizierer)/Filter (Name+Optionen aus echter `/api/v1/tools/ffmpeg/filters`-Liste, dynamische "N"-Pad-Filter einstellbar)/Ausgang (`-map`), Verbindungen per Pointer-Drag zwischen benannten Pads (Muster aus `process-editor.ts` übernommen). Gemeinsamer `ffmpeg-client.ts` aus W2 herausgezogen. Integriert in W2s "Format/Codec konvertieren": neuer Abschnitt "Filter (optional)", `buildConvertArgs` um `filterComplex`/`filterOutputLabels` erweitert. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert inkl. **echter simulierter Pointer-Drag-Verbindungen** (reale Bildschirmkoordinaten der Ports) zwischen Eingang→scale→Ausgang; "Übernehmen" compilierte fehlerfrei, gespeichert und über die echte Prozess-API bestätigt. Generierter Befehl zweimal tatsächlich ausgeführt (ohne und mit gesetzten Filter-Optionen `scale=w=640:h=360`) — beide Male `exit=0`, Ausgabeauflösung per `ffprobe` bestätigt. `deno check` für alle 24 Dateien in `ui/graph/` + `deno test` (122 Fälle) + `deno bundle` grün. | 2026-09-25 |
+| Kapitel 22 W4: Verallgemeinerungs-Härtetest — zwei echte Baukasten-Lücken gefunden+behoben, Kapitel 22 abgeschlossen | erledigt | Vier bewusst unterschiedliche Szenarien durch die echte UI (Mehrspur-MXF+eigene Bildquelle, dieselbe Zusammenführung als MOV, Tonspur extrahieren, Filter-Graph mit dynamischem `amix` N=3). Zwei echte Lücken gefunden UND behoben (nicht umgangen): (1) Bildquelle war an die erste Tonspur gekoppelt statt eigener Baustein — `videoSourcePath` löst das, Tonspuren rutschen im Eingabe-Index, AUSGANGS-Stream-Indizes bleiben unberührt; (2) Filter-Graphen mit mehreren Quellen (z. B. `amix` mit 3 Eingängen) konnten im Konvertieren-Assistenten nie laufen (nur 1 Eingabedatei-Feld) — neue Sektion "Weitere Eingabedateien" behebt das. Zusätzlich beim tatsächlichen Ausführen gefunden+behoben: `-c:v copy` von H.264 nach MXF schlägt bei diesem ffmpeg-Build fehl — neues Feld "Video-Codec der Bildquelle" (Default weiterhin `copy`). Bestätigt+verallgemeinert: MOV schreibt `-metadata:s:a:N`-Tags genauso wenig in den Container wie MXF (nur Matroska zuverlässig) — Wizard-Mechanismus nachweislich korrekt, reine ffmpeg-Muxer-Eigenheit, keine Code-Änderung nötig. Alle vier Szenarien nach Fund+Fix real ausgeführt + per `ffprobe` gegengeprüft. `deno check` (24 Dateien) + `deno test` (125 Fälle) + `deno bundle` grün. **Kapitel 22 (W1–W4) damit abgeschlossen.** | 2026-09-25 |

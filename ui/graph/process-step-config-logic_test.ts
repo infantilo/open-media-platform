@@ -184,6 +184,21 @@ Deno.test("buildConvertArgs inserts -filter_complex + one -map per output label 
   assertEquals(args, ["-y", "-i", "in.mp4", "-filter_complex", "[0:v]scale=w=640[s0]", "-map", "[s0]", "-c:v", "libx264", "out.mp4"]);
 });
 
+Deno.test("buildConvertArgs: additional inputs (for multi-source filter graphs like amix) become their own -i, before -filter_complex", () => {
+  const args = buildConvertArgs({
+    inputPath: "0.wav",
+    outputPath: "out.wav",
+    additionalInputPaths: ["1.wav", "2.wav"],
+    filterComplex: "[0:a][1:a][2:a]amix=inputs=3[s0]",
+    filterOutputLabels: ["s0"],
+  });
+  assertEquals(args, [
+    "-y", "-i", "0.wav", "-i", "1.wav", "-i", "2.wav",
+    "-filter_complex", "[0:a][1:a][2:a]amix=inputs=3[s0]", "-map", "[s0]",
+    "out.wav",
+  ]);
+});
+
 Deno.test("buildConvertArgs omits codec/format flags entirely when left unset (audio-only or container-inferred conversion)", () => {
   assertEquals(buildConvertArgs({ inputPath: "in.mov", outputPath: "out.mkv" }), ["-y", "-i", "in.mov", "out.mkv"]);
 });
@@ -230,16 +245,36 @@ Deno.test("buildMultitrackArgs: das Nutzerbeispiel — mehrere separate Dateien,
   ]);
 });
 
-Deno.test("buildMultitrackArgs maps the video track from the first input when includeVideo is set, before the audio maps", () => {
+Deno.test("buildMultitrackArgs: an independent video source is its own first input (W4-Fund — nicht die erste Tonspur)", () => {
   const args = buildMultitrackArgs({
-    outputPath: "out.mkv",
-    includeVideo: true,
-    tracks: [{ inputPath: "a.mkv", codec: "aac" }, { inputPath: "b.wav", codec: "aac" }],
+    outputPath: "out.mxf",
+    videoSourcePath: "bars.mp4",
+    tracks: [{ inputPath: "a.wav", codec: "aac" }, { inputPath: "b.wav", codec: "aac" }],
   });
-  assertEquals(args.slice(0, 4), ["-y", "-i", "a.mkv", "-i"]);
-  assertEquals(args.includes("-map"), true);
+  assertEquals(args.slice(0, 6), ["-y", "-i", "bars.mp4", "-i", "a.wav", "-i"]);
   const mapIdx = args.indexOf("-map");
-  assertEquals(args.slice(mapIdx, mapIdx + 8), ["-map", "0:v", "-c:v", "copy", "-map", "0:a", "-map", "1:a"]);
+  assertEquals(args.slice(mapIdx, mapIdx + 8), ["-map", "0:v", "-c:v", "copy", "-map", "1:a", "-map", "2:a"]);
+  // Trotz der um 1 verschobenen Eingabe-Indizes bleiben die
+  // AUSGANGS-Stream-Indizes für Codec/Metadaten unverändert (0,1,…) —
+  // sie zählen nur unter den Audio-Streams, nicht den Eingabedateien.
+  const c0 = args.indexOf("-c:a:0");
+  assertEquals(args[c0 + 1], "aac");
+});
+
+Deno.test("buildMultitrackArgs: video source defaults to -c:v copy, but an explicit codec overrides it (W4-Fund: plain copy into MXF can fail for some source codecs)", () => {
+  const withDefault = buildMultitrackArgs({ outputPath: "out.mxf", videoSourcePath: "bars.mp4", tracks: [{ inputPath: "a.wav" }] });
+  const i1 = withDefault.indexOf("-c:v");
+  assertEquals(withDefault[i1 + 1], "copy");
+
+  const withCodec = buildMultitrackArgs({ outputPath: "out.mxf", videoSourcePath: "bars.mp4", videoCodec: "mpeg2video", tracks: [{ inputPath: "a.wav" }] });
+  const i2 = withCodec.indexOf("-c:v");
+  assertEquals(withCodec[i2 + 1], "mpeg2video");
+});
+
+Deno.test("buildMultitrackArgs: without a video source, audio tracks stay at their own input index (no offset)", () => {
+  const args = buildMultitrackArgs({ outputPath: "out.wav", tracks: [{ inputPath: "a.wav" }] });
+  const mapIdx = args.indexOf("-map");
+  assertEquals(args[mapIdx + 1], "0:a");
 });
 
 Deno.test("buildProbeArgs matches the fixed ffprobe JSON invocation", () => {

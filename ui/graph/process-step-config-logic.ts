@@ -551,10 +551,18 @@ export interface ConvertInput {
   // je ein `-map "[label]"` für jeden Ausgang-Knoten des Graphen.
   filterComplex?: string;
   filterOutputLabels?: string[];
+  // Ein Filter-Graph kann mehrere Eingänge referenzieren (z. B. `amix`
+  // mit drei echten Quelldateien als "0:a"/"1:a"/"2:a") — `inputPath`
+  // allein deckt nur Eingabe-Index 0 ab. `additionalInputPaths[0]` wird
+  // Index 1, `[1]` Index 2 usw. (W4-Härtetest-Fund: ohne dieses Feld
+  // hätte ein Mehrfach-Eingang-Filter-Graph nie echt laufen können, der
+  // Assistent hätte stillschweigend ungültige `ffmpeg`-Aufrufe erzeugt).
+  additionalInputPaths?: string[];
 }
 
 export function buildConvertArgs(input: ConvertInput): string[] {
   const args = ["-y", "-i", input.inputPath];
+  for (const p of input.additionalInputPaths ?? []) args.push("-i", p);
   if (input.filterComplex) {
     args.push("-filter_complex", input.filterComplex);
     for (const label of input.filterOutputLabels ?? []) args.push("-map", `[${label}]`);
@@ -622,7 +630,23 @@ export interface MultitrackInput {
   outputPath: string;
   format?: string;
   muxerOptions?: Record<string, string>;
-  includeVideo?: boolean; // Bildspur aus der ERSTEN Eingabe unverändert übernehmen (-c:v copy)
+  // Eigene, von den Tonspuren UNABHÄNGIGE Bildquelle — z. B. ein
+  // Testbild oder eine echte Aufzeichnung. WICHTIG für Container wie
+  // MXF, deren OP1a-Muxer zwingend eine Bildspur verlangt (live
+  // gefunden, s. UMSETZUNG.md Kapitel 22 W2-Status). Bewusst NICHT
+  // "die erste Tonspur liefert auch das Bild" (frühere Fassung, per
+  // W4-Härtetest als Baukasten-Lücke gefunden — eine Tonspur ist eine
+  // Tonspur, eine Bildquelle ein eigener, unabhängiger Baustein).
+  videoSourcePath?: string;
+  // Ohne Angabe: `-c:v copy` (unverändert übernehmen). Live per W4-
+  // Härtetest gefunden: reines Stream-Copy einer H.264-Quelle in einen
+  // MXF-Container schlägt bei diesem ffmpeg-Build fehl ("Received
+  // non-video packet before header has been written") — mit einem
+  // echten Encoder (z. B. mpeg2video) lief derselbe Aufbau anstandslos.
+  // Eine feste Bildquelle ohne wählbaren Codec wäre also KEIN
+  // vollständiger Baustein gewesen — genau die Art Lücke, die W4 finden
+  // und beheben soll, nicht umgehen.
+  videoCodec?: string;
   tracks: MultitrackTrack[];
 }
 
@@ -633,9 +657,16 @@ export interface MultitrackInput {
 // später als zusätzliche Track-Quellart ergänzen, s. UMSETZUNG.md W4).
 export function buildMultitrackArgs(input: MultitrackInput): string[] {
   const args: string[] = ["-y"];
+  if (input.videoSourcePath) args.push("-i", input.videoSourcePath);
   for (const t of input.tracks) args.push("-i", t.inputPath);
-  if (input.includeVideo) args.push("-map", "0:v", "-c:v", "copy");
-  input.tracks.forEach((_, i) => args.push("-map", `${i}:a`));
+  // Die Bildquelle (falls gesetzt) ist IMMER die erste `-i`-Eingabe —
+  // Tonspur-Eingaben rutschen dadurch um eins nach hinten, ihre
+  // AUSGANGS-Stream-Indizes (":a:N" für Codec/Metadaten) bleiben davon
+  // unberührt, da die nur die Reihenfolge unter den Audio-Streams
+  // zählen, nicht die Eingabedatei-Nummer.
+  const audioInputOffset = input.videoSourcePath ? 1 : 0;
+  if (input.videoSourcePath) args.push("-map", "0:v", "-c:v", input.videoCodec || "copy");
+  input.tracks.forEach((_, i) => args.push("-map", `${i + audioInputOffset}:a`));
   input.tracks.forEach((t, i) => {
     if (t.codec) args.push(`-c:a:${i}`, t.codec);
     if (t.title) args.push(`-metadata:s:a:${i}`, `title=${t.title}`);

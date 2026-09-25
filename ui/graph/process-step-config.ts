@@ -780,6 +780,31 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
+  // Weitere Eingabedateien (W4-Härtetest-Fund): ein Filter-Graph kann
+  // mehrere Quellen referenzieren (z. B. `amix` mit drei echten
+  // Tondateien als "0:a"/"1:a"/"2:a") — "Eingabedatei" oben deckt nur
+  // Index 0 ab. Ohne dieses Feld hätte ein Mehrfach-Eingang-Filter-Graph
+  // nie wirklich laufen können.
+  const additionalInputs: { input: HTMLInputElement; row: HTMLElement }[] = [];
+  const additionalInputsList = h("div", "");
+  const addAdditionalInput = () => {
+    const t = templateInput("", "${input.path} oder ein eigener Pfad", vars);
+    const row = h("div", "display:flex;gap:4px;margin-top:4px;");
+    const rm = h("button", "", "✕");
+    rm.type = "button";
+    const entry = { input: t.input, row };
+    rm.addEventListener("click", () => {
+      additionalInputs.splice(additionalInputs.indexOf(entry), 1);
+      row.remove();
+    });
+    row.append(t.el, rm);
+    additionalInputs.push(entry);
+    additionalInputsList.appendChild(row);
+  };
+  const addAdditionalInputBtn = h("button", "margin-top:4px;", "+ weitere Eingabedatei");
+  addAdditionalInputBtn.type = "button";
+  addAdditionalInputBtn.addEventListener("click", () => addAdditionalInput());
+
   el.append(
     field("Eingabedatei", input.el, undefined, true),
     field("Ausgabedatei", output.el, undefined, true),
@@ -792,6 +817,12 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     filterSummary,
     filterBtn,
     filterClearBtn,
+    field(
+      "Weitere Eingabedateien",
+      additionalInputsList,
+      "Nur nötig, wenn der Filter oben mehr als eine Quelle referenziert — Eingabedatei oben ist Index 0, hier Index 1, 2, ….",
+    ),
+    addAdditionalInputBtn,
   );
   return {
     el,
@@ -799,6 +830,12 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
       const p = input.input.value.trim();
       const o = output.input.value.trim();
       if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const additionalPaths: string[] = [];
+      for (const entry of additionalInputs) {
+        const v = entry.input.value.trim();
+        if (!v) return { ok: false, error: "Eine weitere Eingabedatei ist leer." };
+        additionalPaths.push(v);
+      }
       const v = video.read();
       const a = audio.read();
       const f = fmt.read();
@@ -815,6 +852,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
           audioOptions: a.options,
           filterComplex: filterComplex || undefined,
           filterOutputLabels: filterComplex ? filterOutputLabels : undefined,
+          additionalInputPaths: additionalPaths.length ? additionalPaths : undefined,
         }),
       };
     },
@@ -855,10 +893,26 @@ function buildScriptWizardMultitrack(vars: VariableOption[]): ScriptWizardForm {
   const el = h("div", "");
   const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
   const fmt = formatPicker(vars, true);
-  const includeVideo = h("input");
-  includeVideo.type = "checkbox";
-  const includeVideoLabel = h("label", "display:flex;align-items:center;gap:4px;margin-top:6px;");
-  includeVideoLabel.append(includeVideo, document.createTextNode("Bildspur unverändert aus der ersten Spur übernehmen"));
+  // Eigene, von den Tonspuren UNABHÄNGIGE Bildquelle (W4-Härtetest-Fund,
+  // s. buildMultitrackArgs-Moduldoku in process-step-config-logic.ts):
+  // manche Container (z. B. MXFs OP1a-Muxer) verlangen zwingend eine
+  // Bildspur, auch wenn der eigentliche Zweck reine Mehrspur-Audio-
+  // Zusammenführung ist — eine der Tonspuren dafür zu missbrauchen wäre
+  // kein echter Baustein, sondern eine versteckte Annahme.
+  const videoSource = templateInput("", "leer lassen, falls nicht gebraucht", vars);
+  // Ohne wählbaren Codec bliebe die Bildquelle bei hartem `-c:v copy` —
+  // live gefunden (W4): reines Stream-Copy einer H.264-Quelle in MXF
+  // schlägt bei diesem ffmpeg-Build fehl ("Received non-video packet
+  // before header has been written"), ein echter Encoder (z. B.
+  // mpeg2video) läuft anstandslos. Leer = weiterhin `copy` (unverändert
+  // übernehmen), wie bisher — nur jetzt mit einem Ausweg.
+  const videoCodecSel = select([{ value: "", label: "unverändert übernehmen (copy)" }], "");
+  (async () => {
+    const codecs = await fetchFFmpegList<FFCodecEntry>("encoders");
+    const videoCodecs = codecs.filter((c) => c.mediaType === "video");
+    videoCodecSel.replaceChildren(new Option("unverändert übernehmen (copy)", ""));
+    for (const c of videoCodecs) videoCodecSel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
+  })();
 
   interface TrackRow {
     box: HTMLElement;
@@ -911,7 +965,16 @@ function buildScriptWizardMultitrack(vars: VariableOption[]): ScriptWizardForm {
   el.append(
     field("Ausgabedatei", output.el, undefined, true),
     field("Container", fmt.el, "Bestimmt Dateiendung/Struktur, z. B. mxf, mov, mkv.", true),
-    includeVideoLabel,
+    field(
+      "Bildquelle (optional)",
+      videoSource.el,
+      "Manche Container (z. B. MXF) verlangen zwingend eine Bildspur, auch für eine reine Tonspur-Zusammenführung — hier eine eigene Videodatei angeben, falls nötig.",
+    ),
+    field(
+      "Video-Codec der Bildquelle",
+      videoCodecSel,
+      "„Unverändert übernehmen“ scheitert bei manchen Container/Quell-Codec-Kombinationen (z. B. H.264 in MXF) — dann hier einen echten Encoder wählen.",
+    ),
     h("div", HELP_CSS + "margin-top:8px;", "Jede Tonspur kommt aus einer eigenen Quelldatei — z. B. je eine Sprachfassung."),
     list,
     addBtn,
@@ -933,7 +996,8 @@ function buildScriptWizardMultitrack(vars: VariableOption[]): ScriptWizardForm {
           outputPath: o,
           format: f.format || undefined,
           muxerOptions: f.options,
-          includeVideo: includeVideo.checked,
+          videoSourcePath: videoSource.input.value.trim() || undefined,
+          videoCodec: videoCodecSel.value || undefined,
           tracks: rows.map((r) => ({
             inputPath: r.pathInput.value.trim(),
             codec: r.codecSel.value || undefined,
