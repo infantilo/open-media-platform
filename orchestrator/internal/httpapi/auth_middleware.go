@@ -46,6 +46,9 @@ type AuthzChecker interface {
 	// Rechteverwaltung) — s. authz.Store.CreateGroupBinding-Doku.
 	CreateGroupBinding(groupID, workflowID, nodeID string, verb authz.Verb) (authz.Binding, error)
 	Delete(id string) error
+	// DeleteBySubject (Nutzerfund 2026-09-24) — s.
+	// authz.Store.DeleteBySubject-Doku, aufgerufen von handleDeleteUser.
+	DeleteBySubject(username string) error
 }
 
 // WorkflowRoleFinder löst auf, ob ein Node aktuell eine Rolle in einem

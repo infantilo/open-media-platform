@@ -135,6 +135,22 @@ func (s *Store) DeleteInstanceBinding(instanceID, workflowID string) error {
 	return err
 }
 
+// DeleteBySubject entfernt alle Rollenbindungen eines Nutzers (subject_type
+// = 'user') — aufgerufen von handleDeleteUser, damit ein gelöschter Nutzer
+// keine verwaisten Bindungen zurücklässt (Nutzerfund 2026-09-24, gleiche
+// Karteileichen-Klasse wie DeleteByWorkflow/DeleteInstanceBinding oben:
+// group_members hat eine echte FK mit ON DELETE CASCADE auf users, aber
+// role_bindings.subject ist polymorph — dafür ist kein Fremdschlüssel
+// ausdrückbar, s. 0028_groups.sql). Bewusst auf subject_type = 'user'
+// beschränkt: ohne den Typfilter könnte ein gleichlautendes Subject in
+// einer anderen Rolle (Gruppen-ID, Service-Token-Instanz-ID) versehentlich
+// mitgelöscht werden. Kein Fehler, wenn keine Bindungen existieren
+// (idempotent, s. Delete oben).
+func (s *Store) DeleteBySubject(username string) error {
+	_, err := s.db.Exec(`DELETE FROM role_bindings WHERE subject = $1 AND subject_type = 'user'`, username)
+	return err
+}
+
 // Check prüft, ob subject mindestens minVerb auf nodeID hat — entweder
 // über eine direkte Nutzer-Bindung (subject_type='user') ODER über eine
 // Gruppen-Bindung (subject_type='group'), deren Gruppe subject als

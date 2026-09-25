@@ -426,15 +426,16 @@ func (f fakeAuthSvc) IssueServiceToken(instanceID string) (string, time.Time, er
 
 // fakeAuthzSvc ist ein Test-Double für AuthzChecker.
 type fakeAuthzSvc struct {
-	allowed          bool
-	checkErr         error
-	workflowAllowed  bool
-	checkWorkflowErr error
-	bindings         []authz.Binding
-	loadErr          error
-	created          authz.Binding
-	createErr        error
-	deleteErr        error
+	allowed            bool
+	checkErr           error
+	workflowAllowed    bool
+	checkWorkflowErr   error
+	bindings           []authz.Binding
+	loadErr            error
+	created            authz.Binding
+	createErr          error
+	deleteErr          error
+	deleteBySubjectErr error
 }
 
 func (f fakeAuthzSvc) Check(subject, nodeID string, minVerb authz.Verb) (bool, error) {
@@ -456,6 +457,8 @@ func (f fakeAuthzSvc) CreateGroupBinding(groupID, workflowID, nodeID string, ver
 }
 
 func (f fakeAuthzSvc) Delete(id string) error { return f.deleteErr }
+
+func (f fakeAuthzSvc) DeleteBySubject(username string) error { return f.deleteBySubjectErr }
 
 // fakeAuditSvc implementiert sowohl AuditLogger als auch AuditReader —
 // zeichnet Log()-Aufrufe auf, damit Tests sie nachprüfen können.

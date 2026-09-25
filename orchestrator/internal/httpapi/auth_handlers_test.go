@@ -196,6 +196,62 @@ func TestHandleDeleteUserNotFound(t *testing.T) {
 	}
 }
 
+// TestHandleDeleteUserCleansUpRoleBindings verifiziert den Nutzerfund
+// 2026-09-24: role_bindings.subject ist polymorph (kein FK-Cascade wie bei
+// group_members möglich), also muss handleDeleteUser explizit aufräumen —
+// gleiche Karteileichen-Klasse wie der bereits gefixte Instanz-Bindungs-Leak
+// (commit 3f20e65).
+func TestHandleDeleteUserCleansUpRoleBindings(t *testing.T) {
+	authSvc := fakeAuthSvc{}
+	authzStore := recordingDeleteBySubject{fakeAuthzSvc{}, new(string)}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/users/bob", nil)
+	req.SetPathValue("name", "bob")
+	req = withPrincipal(req, "alice")
+	rec := httptest.NewRecorder()
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if *authzStore.got != "bob" {
+		t.Errorf("DeleteBySubject called with %q, want %q", *authzStore.got, "bob")
+	}
+}
+
+// TestHandleDeleteUserNotFoundSkipsBindingCleanup: wenn DeleteUser mit
+// "not found" fehlschlägt, darf DeleteBySubject nicht aufgerufen werden —
+// es gibt nichts aufzuräumen, und ein leerer/falscher Nutzername sollte nie
+// gegen role_bindings laufen.
+func TestHandleDeleteUserNotFoundSkipsBindingCleanup(t *testing.T) {
+	authSvc := fakeAuthSvc{deleteErr: auth.ErrUserNotFound}
+	authzStore := recordingDeleteBySubject{fakeAuthzSvc{}, new(string)}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/auth/users/ghost", nil)
+	req.SetPathValue("name", "ghost")
+	rec := httptest.NewRecorder()
+	handleDeleteUser(authSvc, authzStore, nil)(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+	if *authzStore.got != "" {
+		t.Errorf("DeleteBySubject called with %q, want not called at all", *authzStore.got)
+	}
+}
+
+// recordingDeleteBySubject wraps fakeAuthzSvc to capture the username
+// passed to DeleteBySubject.
+type recordingDeleteBySubject struct {
+	fakeAuthzSvc
+	got *string
+}
+
+func (r recordingDeleteBySubject) DeleteBySubject(username string) error {
+	*r.got = username
+	return r.fakeAuthzSvc.deleteBySubjectErr
+}
+
 func TestHandleDeleteRoleBindingBlocksLastAdminRemovingOwnBinding(t *testing.T) {
 	authzStore := fakeAuthzSvc{bindings: []authz.Binding{
 		{ID: "b1", Subject: "alice", NodeID: authz.AnyNode, Verb: authz.VerbAdmin},

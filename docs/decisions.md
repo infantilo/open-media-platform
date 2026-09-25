@@ -29271,3 +29271,64 @@ in `internal/httpapi`), `deno check`/`test ui/` (128/128) grün.
 Admin-Reset gesetzt werden (unbekannt, keine dokumentierte Dev-
 Fixture wie `admin`/`adminpass123`) — dem Nutzer mitgeteilt, kein
 stilles Vorgehen.
+
+## 2026-09-25 (Nachtrag 288) — Fix: `DELETE /api/v1/auth/users/{name}` ließ verwaiste `role_bindings` zurück
+
+Nutzerauftrag "proceed" — nächster offener, bereits live gefundener und
+dokumentierter Punkt (Nachtrag zu
+[[project_local_asset_paths_2026_09_24]]/`docs/HANDBUCH.md`-Session
+2026-09-24, dort beim Aufräumen einer Testinstallation entdeckt, aber
+nicht gefixt): `group_members` räumt sich per Fremdschlüssel-`CASCADE`
+selbst auf, wenn ein Nutzer gelöscht wird, `role_bindings` aber nicht —
+`subject` ist dort polymorph (Nutzername/Gruppen-ID/Service-Token-
+Instanz-ID je nach `subject_type`), ein Fremdschlüssel auf `users` ist
+dafür in Postgres nicht ausdrückbar (s. Kommentar in
+`0028_groups.sql`). `handleDeleteUser` rief bislang nur
+`authSvc.DeleteUser` auf und ließ jede Rollenbindung des gelöschten
+Nutzers stehen — bei Wiederverwendung desselben Nutzernamens hätte ein
+neuer Nutzer stillschweigend die alten Rechte geerbt. Gleiche
+Karteileichen-Klasse wie die bereits gefixten
+`DeleteByWorkflow`/`DeleteInstanceBinding` (Nachtrag 2026-07-28 bzw.
+2026-09-24, commit `3f20e65`).
+
+**Fix:** neue `authz.Store.DeleteBySubject(username string) error`
+(`orchestrator/internal/authz/store.go`) — `DELETE FROM role_bindings
+WHERE subject = $1 AND subject_type = 'user'`, bewusst mit
+`subject_type`-Filter, damit eine gleichlautende Gruppen-ID oder
+Service-Token-Instanz-ID nie mitgelöscht wird. In die `AuthzChecker`-
+Schnittstelle (`auth_middleware.go`) aufgenommen und aus
+`handleDeleteUser` (`auth_handlers.go`) aufgerufen, NACH dem
+eigentlichen `authSvc.DeleteUser` — best effort mit `slog.Warn` bei
+Fehler, gleiches Muster wie `workflows.Service.Delete`s Aufruf von
+`DeleteByWorkflow`: ein Fehler bei der Bindungs-Aufräumung darf das
+bereits erfolgreiche Löschen des Nutzers nicht mehr rückgängig machen
+oder blockieren.
+
+**Getestet:**
+- `internal/authz/store_test.go` — neuer `TestStoreDeleteBySubject`
+  gegen die echte (isolierte) Dev-Postgres via `internal/dbtest`:
+  löscht die Nutzer-Bindung, lässt eine gleichlautende Gruppen-Bindung
+  (`subject_type='group'`) unangetastet.
+- `internal/httpapi/auth_handlers_test.go` — zwei neue Tests:
+  `DeleteBySubject` wird mit dem korrekten Nutzernamen aufgerufen
+  (Recording-Wrapper-Pattern wie `recordingAuthz` in
+  `auth_middleware_test.go`), UND wird NICHT aufgerufen, wenn
+  `DeleteUser` mit "not found" fehlschlägt.
+- `go build ./...`, `go vet ./...`, `go test ./...` (alle 39 Pakete
+  grün, inkl. `internal/authz`/`internal/httpapi` real gegen die
+  laufende Dev-Patroni-Instanz via `OMP_POSTGRES_URL`).
+
+**Live verifiziert** (Orchestrator neu gebaut + neugestartet, `make
+stop && make start` — ein Go-Codeänderung lädt sich nicht in einen
+laufenden Prozess nach, s.
+[[project_local_asset_paths_2026_09_24]]): Testnutzer `test-delbind`
+angelegt, Rollenbindung `inst-mixer/operate` dafür angelegt, per `psql`
+gegen `omp-patroni-1` bestätigt (1 Zeile), `DELETE
+/api/v1/auth/users/test-delbind` (204), erneute `psql`-Abfrage: 0
+Zeilen. Testnutzer danach reibungslos gelöscht (Endzustand sauber,
+keine manuelle Nacharbeit nötig).
+
+**Noch offen, nicht Teil dieses Fixes:** dieselbe Karteileichen-Klasse
+könnte auch bei Gruppen-Löschung auftreten, falls dort je ein
+analoger Pfad fehlt — `handleDeleteGroup` wurde in dieser Session
+NICHT geprüft (Scope: nur der dokumentierte User-Delete-Fund).

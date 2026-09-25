@@ -67,6 +67,55 @@ func TestStoreCreateLoadDelete(t *testing.T) {
 	}
 }
 
+// TestStoreDeleteBySubject verifiziert den Nutzerfund 2026-09-24: ein
+// gelöschter Nutzer darf keine verwaisten role_bindings zurücklassen
+// (subject ist polymorph, kein FK-Cascade möglich — s. DeleteBySubject-
+// Doku). Prüft zusätzlich, dass eine gleichlautende Gruppen-Bindung
+// (subject_type='group') NICHT mitgelöscht wird.
+func TestStoreDeleteBySubject(t *testing.T) {
+	database := testDB(t)
+	store := NewStore(database)
+	subject := "test-authz-" + mustNewID(t)
+	t.Cleanup(func() { _, _ = database.Exec(`DELETE FROM role_bindings WHERE subject = $1`, subject) })
+
+	userBinding, err := store.Create(subject, "", "inst-mixer", VerbOperate)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	groupBinding, err := store.CreateGroupBinding(subject, "", "inst-switcher", VerbView)
+	if err != nil {
+		t.Fatalf("CreateGroupBinding() error = %v", err)
+	}
+
+	if err := store.DeleteBySubject(subject); err != nil {
+		t.Fatalf("DeleteBySubject() error = %v", err)
+	}
+
+	all, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	var sawUser, sawGroup bool
+	for _, b := range all {
+		if b.ID == userBinding.ID {
+			sawUser = true
+		}
+		if b.ID == groupBinding.ID {
+			sawGroup = true
+		}
+	}
+	if sawUser {
+		t.Errorf("Load() after DeleteBySubject() still contains the user binding %+v", userBinding)
+	}
+	if !sawGroup {
+		t.Errorf("Load() after DeleteBySubject() lost the group binding %+v, want it untouched", groupBinding)
+	}
+
+	if err := store.Delete(groupBinding.ID); err != nil {
+		t.Fatalf("cleanup Delete(group binding) error = %v", err)
+	}
+}
+
 func TestStoreCheck(t *testing.T) {
 	database := testDB(t)
 	store := NewStore(database)

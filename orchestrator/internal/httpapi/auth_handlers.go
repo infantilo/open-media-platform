@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -265,6 +266,17 @@ func handleDeleteUser(authSvc AuthService, authzStore AuthzChecker, groupSvc Gro
 			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		// Nutzerfund 2026-09-24: group_members räumt sich per FK/CASCADE
+		// selbst auf, role_bindings.subject ist aber polymorph (kein
+		// Fremdschlüssel möglich, s. authz.Store.DeleteBySubject-Doku) —
+		// ohne diesen Aufruf blieben Bindungen des gelöschten Nutzers
+		// verwaist und könnten bei Wiederverwendung desselben Nutzernamens
+		// alte Rechte zurückbringen. Best effort wie DeleteByWorkflow in
+		// workflows.Service.Delete: ein Fehler hier bricht das bereits
+		// erfolgreiche Löschen des Nutzers selbst nicht mehr ab.
+		if err := authzStore.DeleteBySubject(name); err != nil {
+			slog.Warn("auth: failed to clean up role bindings after user delete", "user", name, "error", err)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
