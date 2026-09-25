@@ -226,6 +226,24 @@ class OmpSwitcherPanel extends HTMLElement {
       return btn;
     };
 
+    // Bugliste 2026-09-25 Nachtrag ("Thumbnail-Flicker", s. gleiches
+    // Muster in omp-video-mixer-me/ui/bundle.js#updateBusButton):
+    // aktualisiert einen bereits vorhandenen Knopf statt ihn (und damit
+    // sein `<img>`) neu zu erzeugen — nur `img.src` wird neu gesetzt,
+    // der Browser zeigt dabei von selbst das alte Bild weiter, bis das
+    // neue fertig geladen ist.
+    const updateInputButton = (btn, input, sourceNodeId) => {
+      if (thumbsEnabled) {
+        const img = btn.querySelector("img");
+        if (img && sourceNodeId) img.src = previewSnapshotUrl(sourceNodeId);
+        const label = btn.querySelector(".thumb-label");
+        if (label) label.textContent = input.label;
+      } else {
+        btn.textContent = input.label;
+      }
+      return btn;
+    };
+
     const refresh = async () => {
       const [inputsRes, activeRes, { workflowBySender, senderNodeId }] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/inputs`),
@@ -236,34 +254,69 @@ class OmpSwitcherPanel extends HTMLElement {
       const inputs = (await inputsRes.json()).value || [];
       const active = (await activeRes.json()).value || "";
 
-      buttons.innerHTML = "";
+      // Bestehende Knöpfe per `senderId` einsammeln, BEVOR sie entfernt
+      // werden — wiederverwendbare Kandidaten für unten, statt eines
+      // pauschalen `buttons.innerHTML = ""`, das jedes Mal auch noch
+      // gültige Vorschaubild-`<img>`s zerstören würde.
+      const existingButtons = new Map();
+      for (const el of Array.from(buttons.children)) {
+        if (el.tagName === "OMP-BUTTON" && el.dataset.senderId !== undefined) {
+          existingButtons.set(el.dataset.senderId, el);
+        }
+        el.remove();
+      }
 
-      const blackBtn = document.createElement("omp-button");
-      blackBtn.className = "source";
-      blackBtn.textContent = "Schwarz";
-      blackBtn.active = active === "";
-      blackBtn.setAttribute("color", "onair");
-      blackBtn.addEventListener("click", () => select(""));
-      buttons.append(blackBtn);
+      const fragment = document.createDocumentFragment();
+
+      const appendButton = (senderId, makeNew, wantsThumb, sourceNodeId, updateFn) => {
+        const reused = existingButtons.get(senderId);
+        const hasImg = !!reused?.querySelector("img");
+        const reusable = reused
+          && reused.classList.contains("with-thumb") === wantsThumb
+          && hasImg === !!(wantsThumb && sourceNodeId);
+        const btn = reusable ? updateFn(reused) : makeNew();
+        if (reused) existingButtons.delete(senderId);
+        btn.dataset.senderId = senderId;
+        fragment.append(btn);
+        return btn;
+      };
+
+      appendButton("", () => {
+        const blackBtn = document.createElement("omp-button");
+        blackBtn.className = "source";
+        blackBtn.textContent = "Schwarz";
+        blackBtn.setAttribute("color", "onair");
+        blackBtn.addEventListener("click", () => select(""));
+        return blackBtn;
+      }, false, undefined, (btn) => btn).active = active === "";
 
       const own = inputs.filter((i) => workflowBySender.get(i.senderId)?.own);
       const rest = inputs.filter((i) => !workflowBySender.get(i.senderId)?.own);
       const appendGroup = (list) => {
         for (const input of list) {
-          buttons.append(makeInputButton(input, input.senderId === active, senderNodeId.get(input.senderId)));
+          const sourceNodeId = senderNodeId.get(input.senderId);
+          const wantsThumb = thumbsEnabled;
+          const btn = appendButton(
+            input.senderId,
+            () => makeInputButton(input, input.senderId === active, sourceNodeId),
+            wantsThumb,
+            sourceNodeId,
+            (reused) => updateInputButton(reused, input, sourceNodeId),
+          );
+          btn.active = input.senderId === active;
         }
       };
       if (own.length > 0 && rest.length > 0) {
         const ownLabel = document.createElement("div");
         ownLabel.className = "group-label";
         ownLabel.textContent = "Dieser Workflow";
-        buttons.append(ownLabel);
+        fragment.append(ownLabel);
         appendGroup(own);
 
         const restLabel = document.createElement("div");
         restLabel.className = "group-label";
         restLabel.textContent = "Andere Quellen";
-        buttons.append(restLabel);
+        fragment.append(restLabel);
         appendGroup(rest);
       } else {
         appendGroup(inputs);
@@ -273,8 +326,10 @@ class OmpSwitcherPanel extends HTMLElement {
         const empty = document.createElement("p");
         empty.className = "empty";
         empty.textContent = "keine Quellen entdeckt";
-        buttons.append(empty);
+        fragment.append(empty);
       }
+
+      buttons.append(fragment);
     };
 
     refresh();

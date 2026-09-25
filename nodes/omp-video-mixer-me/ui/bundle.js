@@ -443,6 +443,28 @@ class OmpVideoMixerMePanel extends HTMLElement {
       return btn;
     };
 
+    // Bugliste 2026-09-25 Nachtrag ("Thumbnail-Flicker"): `refresh()`
+    // pollt alle 2s und rief früher für JEDEN Knopf `makeBusButton` neu
+    // auf, was das `<img>` jedes Mal zerstörte und frisch (ohne Bild)
+    // neu erzeugte — dadurch flackerte das Vorschaubild bei jedem Poll
+    // kurz auf "kein Bild"/schwarz, bevor das neue Bild geladen war.
+    // Fix: ein bestehender Knopf mit gleicher `senderId` wird
+    // wiederverwendet, nur `img.src` wird neu gesetzt — der Browser
+    // zeigt dabei von selbst das alte Bild weiter, bis das neue fertig
+    // geladen ist (kein künstliches Aus-/Einblenden nötig).
+    const updateBusButton = (btn, label, senderId, sourceNodeId) => {
+      const wantsThumb = thumbsEnabled && !!senderId;
+      if (wantsThumb) {
+        const img = btn.querySelector("img");
+        if (img && sourceNodeId) img.src = previewSnapshotUrl(sourceNodeId);
+        const thumbLabel = btn.querySelector(".bus-thumb-label");
+        if (thumbLabel) thumbLabel.textContent = label;
+      } else {
+        btn.textContent = label;
+      }
+      return btn;
+    };
+
     const buildGroupedOptions = (selectEl, entries, ownSenderIds, placeholderLabel) => {
       selectEl.innerHTML = "";
       const placeholderOpt = document.createElement("option");
@@ -480,12 +502,39 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // — nur, wenn tatsächlich beide Gruppen (eigener Workflow + Rest)
     // nicht leer sind, sonst bleibt es bei der bisherigen flachen Liste.
     const renderBusRow = (call, container, entries, ownSenderIds, isProgram, activeId, color, levelOutputSenderIds, senderNodeId) => {
+      // Bugliste 2026-09-25 Nachtrag: nur die Knöpfe/Gruppen-Labels
+      // dieser Funktion einsammeln+entfernen (NICHT per `container.
+      // innerHTML = ""` von außen, s. `refresh()` oben) — so bleiben
+      // Knöpfe mit gleicher `senderId` als wiederverwendbare Kandidaten
+      // erhalten, bevor sie unten neu einsortiert werden.
+      const existingButtons = new Map();
+      for (const el of Array.from(container.children)) {
+        if (el.tagName === "OMP-BUTTON" && el.dataset.senderId !== undefined) {
+          existingButtons.set(el.dataset.senderId, el);
+        }
+        if (el.tagName === "OMP-BUTTON" || el.classList.contains("group-label")) {
+          el.remove();
+        }
+      }
+
+      const fragment = document.createDocumentFragment();
       const [blk, ...rest] = entries;
       const appendEntry = (entry) => {
-        const btn = makeBusButton(call, entry.label, entry.senderId, isProgram, senderNodeId?.get(entry.senderId));
+        const sourceNodeId = senderNodeId?.get(entry.senderId);
+        const reused = existingButtons.get(entry.senderId);
+        const wantsThumb = thumbsEnabled && !!entry.senderId;
+        const hasImg = !!reused?.querySelector("img");
+        const reusable = reused
+          && reused.classList.contains("with-thumb") === wantsThumb
+          && hasImg === !!(wantsThumb && sourceNodeId);
+        const btn = reusable
+          ? updateBusButton(reused, entry.label, entry.senderId, sourceNodeId)
+          : makeBusButton(call, entry.label, entry.senderId, isProgram, sourceNodeId);
+        if (reused) existingButtons.delete(entry.senderId);
+        btn.dataset.senderId = entry.senderId;
         btn.active = entry.senderId === activeId;
         btn.setAttribute("color", color);
-        container.append(btn);
+        fragment.append(btn);
       };
       appendEntry(blk);
 
@@ -497,7 +546,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const levelLabel = document.createElement("div");
           levelLabel.className = "group-label";
           levelLabel.textContent = "Mischerebenen";
-          container.append(levelLabel);
+          fragment.append(levelLabel);
           for (const entry of levelEntries) appendEntry(entry);
         }
       }
@@ -508,17 +557,18 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const ownLabel = document.createElement("div");
         ownLabel.className = "group-label";
         ownLabel.textContent = "Dieser Workflow";
-        container.append(ownLabel);
+        fragment.append(ownLabel);
         for (const entry of own) appendEntry(entry);
 
         const otherLabel = document.createElement("div");
         otherLabel.className = "group-label";
         otherLabel.textContent = "Andere Quellen";
-        container.append(otherLabel);
+        fragment.append(otherLabel);
         for (const entry of others) appendEntry(entry);
       } else {
         for (const entry of remaining) appendEntry(entry);
       }
+      container.append(fragment);
     };
 
     // Skalierungs-Review D5/Nutzerwunsch (docs/REVIEW-2026-07-17-
@@ -1083,8 +1133,11 @@ class OmpVideoMixerMePanel extends HTMLElement {
 
         renderPipRow();
 
-        pgmButtons.innerHTML = "";
-        pstButtons.innerHTML = "";
+        // Bugliste 2026-09-25 Nachtrag ("Thumbnail-Flicker"): hier
+        // NICHT mehr blind `pgmButtons.innerHTML = ""`/`pstButtons.
+        // innerHTML = ""` — das würde jedes Mal auch die noch gültigen
+        // Vorschaubild-`<img>`s zerstören. `renderBusRow` unten räumt
+        // seine eigenen Knöpfe/Gruppen-Labels selbst per Diff auf.
 
         // Kuratierte Kreuzschiene (Nutzerwunsch 2026-07-22): PGM/PST zeigen
         // nur noch BLK + angepinnte Quellen (+ in der Mastereben die festen
@@ -1099,6 +1152,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (level === 0) for (const id of otherLevelSenderIds) alwaysVisible.add(id);
         const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId));
         const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId }))];
+        // Nur dieses eine Hinweis-Element gezielt ersetzen (statt eines
+        // vollen `innerHTML = ""`), damit `renderBusRow`s wiederverwendete
+        // Knöpfe/Bilder unangetastet bleiben.
+        pstButtons.querySelector(":scope > p.empty")?.remove();
         if (visibleInputs.length === 0) {
           const empty = document.createElement("p");
           empty.className = "empty";

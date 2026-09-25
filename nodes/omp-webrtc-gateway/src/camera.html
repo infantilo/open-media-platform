@@ -199,6 +199,9 @@ const whepUrl = hasRetour ? monitorBase + '/whep?token=' + encodeURIComponent(mo
 let pc = null, camStream = null, sendStream = null, wakeLock = null, drawing = false, pollTimer = null;
 let retourPc = null;
 let clockOffset = 0;
+// Bugliste 2026-09-25 Nachtrag ("Trennen"-Button hängt fest): Timer für
+// die Kulanzfrist nach `disconnected`, s. `connect()`s `onconnectionstatechange`.
+let disconnectGraceTimer = null;
 
 $('setupHint').textContent = hasRetour
   ? 'Diese Einladung bringt auch ein Retourbild mit — nach dem Verbinden erscheinen Kamera- und Retourbild nebeneinander.'
@@ -346,6 +349,7 @@ async function start() {
 
 async function connect(stream) {
   pc = new RTCPeerConnection({ iceServers: [] });
+  const thisPc = pc;
   for (const t of stream.getTracks()) pc.addTrack(t, stream);
   // H.264 bevorzugen: Handys kodieren es in Hardware (geringe Latenz, wenig Akku).
   const caps = RTCRtpSender.getCapabilities('video').codecs;
@@ -353,7 +357,33 @@ async function connect(stream) {
   const vt = pc.getTransceivers().find((t) => t.sender.track && t.sender.track.kind === 'video');
   if (h264.length && vt) vt.setCodecPreferences([...h264, ...caps.filter((c) => c.mimeType !== 'video/H264')]);
   else log('WARNUNG: kein H.264 im Browser verfügbar');
-  pc.onconnectionstatechange = () => { $('conn').textContent = pc.connectionState; setBadges(); };
+  // Bugliste 2026-09-25 Nachtrag ("Trennen"-Button hängt nach
+  // server-seitigem Disconnect fest"): bislang wurde `stop()` NUR vom
+  // eigenen "Trennen"-Klick (oder dem Fehlerpfad in `start()`) erreicht
+  // — endete die Verbindung von SICH AUS (Regie widerruft die Einladung
+  // + `gateway.teardown()`), blieb `#live` mit dem "Verbindung trennen"-
+  // Button einfach stehen, obwohl längst nichts mehr verbunden war.
+  // `failed`/`closed` lösen den Reset sofort aus; `disconnected` (kann
+  // ein kurzer WLAN-Hänger sein, den die ICE-Sitzung von selbst wieder
+  // berapariert) bekommt erst eine kurze Kulanzfrist, damit ein
+  // Netzwerk-Blip nicht sofort die ganze Sitzung killt.
+  pc.onconnectionstatechange = () => {
+    $('conn').textContent = pc.connectionState;
+    setBadges();
+    const state = thisPc.connectionState;
+    if (state === 'connected' && disconnectGraceTimer) {
+      clearTimeout(disconnectGraceTimer);
+      disconnectGraceTimer = null;
+    } else if (state === 'failed' || state === 'closed') {
+      if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }
+      if (pc === thisPc) stop(false);
+    } else if (state === 'disconnected' && !disconnectGraceTimer) {
+      disconnectGraceTimer = setTimeout(() => {
+        disconnectGraceTimer = null;
+        if (pc === thisPc && thisPc.connectionState !== 'connected') stop(false);
+      }, 4000);
+    }
+  };
   await pc.setLocalDescription(await pc.createOffer());
   await new Promise((r) => { if (pc.iceGatheringState === 'complete') r(); else
     pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); });
@@ -430,6 +460,7 @@ async function pollStats() {
 async function stop(quiet) {
   drawing = false;
   clearInterval(pollTimer);
+  if (disconnectGraceTimer) { clearTimeout(disconnectGraceTimer); disconnectGraceTimer = null; }
   try { await fetch(whipUrl, { method: 'DELETE' }); } catch (_) {}
   if (pc) { pc.close(); pc = null; }
   if (retourPc) { retourPc.close(); retourPc = null; }
