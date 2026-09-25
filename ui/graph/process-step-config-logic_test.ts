@@ -173,6 +173,17 @@ Deno.test("buildConvertArgs orders -i before codec/options, format before the ou
   ]);
 });
 
+Deno.test("buildConvertArgs inserts -filter_complex + one -map per output label right after -i, before codec flags", () => {
+  const args = buildConvertArgs({
+    inputPath: "in.mp4",
+    outputPath: "out.mp4",
+    videoCodec: "libx264",
+    filterComplex: "[0:v]scale=w=640[s0]",
+    filterOutputLabels: ["s0"],
+  });
+  assertEquals(args, ["-y", "-i", "in.mp4", "-filter_complex", "[0:v]scale=w=640[s0]", "-map", "[s0]", "-c:v", "libx264", "out.mp4"]);
+});
+
 Deno.test("buildConvertArgs omits codec/format flags entirely when left unset (audio-only or container-inferred conversion)", () => {
   assertEquals(buildConvertArgs({ inputPath: "in.mov", outputPath: "out.mkv" }), ["-y", "-i", "in.mov", "out.mkv"]);
 });

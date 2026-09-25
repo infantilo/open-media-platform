@@ -3448,6 +3448,55 @@ Quellen → `overlay` → ein Ausgang) erzeugt eine `-filter_complex`-Zeile,
 die ein echter `ffmpeg`-Lauf ohne Fehler akzeptiert; Ergebnisbild per
 `ffprobe`/Sichtprüfung bestätigt die erwartete Überlagerung.
 
+**Status 2026-09-25: erledigt + live verifiziert.** Kein neues
+Canvas-Element auf `flow-canvas.ts` selbst (das ist NMOS-Sender/
+Receiver-spezifisch, 283 KB) — wiederverwendet wird, wie in §26.3
+vorgesehen, nur die DOM-freie Koordinaten-/Port-Layout-Mathematik aus
+`geometry.ts` (`screenToWorld`/`zoomAt`/`nodeHeight`/`portPosition`/
+`arrangeByFlow` — bereits generisch für "N Ein-/Ausgänge je Kachel",
+keine Anpassung nötig). Neuer, eigenständiger Baustein
+`filter-graph.ts` (funktionaler Modal-Dialog wie `openStepConfigModal`,
+kein eigenes Custom Element) + DOM-freie Kernlogik
+`filter-graph-logic.ts` (`parseFilterIO`, `filterOptionsToSpec`/
+`escapeFilterOptionValue`, `compileFilterGraph` — Kahn-Topo-Sortierung,
+Zyklus-/Unverbunden-/Ohne-Ausgang-Erkennung, 14 `deno test`-Fälle).
+Gemeinsamer Introspektions-Client `ffmpeg-client.ts` aus W2
+herausgezogen (Cache nicht doppelt für Wizard UND Filter-Builder).
+
+Knotenarten: **Eingang** (roher Stream-Spezifizierer wie `0:v`),
+**Filter** (Name+Optionen aus der echten `/api/v1/tools/ffmpeg/
+filters`-Liste bzw. -Detail, dynamische ("N") Pad-Filter wie `amix`
+bekommen ein einstellbares Zahlenfeld), **Ausgang** (wird zu `-map
+"[label]"`). Verbindungen per Pointer-Drag von einem Ausgangs- zu
+einem Eingangs-Pad (Muster aus `process-editor.ts` übernommen, nicht
+kopiert — andere Interaktionsgranularität, da Filter mehrere benannte
+Pads je Seite haben, ein Workflow-Schritt nur einen Ausgang). Integriert
+in W2s „Format/Codec konvertieren"-Assistent: neuer Abschnitt „Filter
+(optional)" mit Knopf „Filter-Kette bearbeiten …", `buildConvertArgs`
+(W2) um `filterComplex`/`filterOutputLabels` erweitert (fügt
+`-filter_complex …` + je Ausgang ein `-map "[…]"` direkt nach `-i` ein,
+vor den Codec-Flags).
+
+Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert
+(nicht isoliert): Prozess → Editor → script-Schritt → Assistent →
+„Format/Codec konvertieren" → Filter-Editor geöffnet → Eingang-Knoten
+(„0:v") + `scale`-Filter (echte Liste durchsucht, echte AVOptions
+geladen) + Ausgang-Knoten hinzugefügt → **echte simulierte
+Pointer-Drag-Verbindungen** (reale Bildschirmkoordinaten der Ports,
+nicht nur Klicks) zwischen den Ports gezogen → „Übernehmen" compilierte
+fehlerfrei zu `[0:v]scale[s0]` + `-map "[s0]"` → im äußeren Dialog
+korrekt in die Vorschau übernommen → gespeichert und per
+`GET .../process-definitions/{id}/versions` als exakt erwartete `args`
+bestätigt. **Tatsächlich ausgeführt** (nicht nur vorgeschaut): der
+generierte Befehl lief zweimal echt gegen eine erzeugte Testdatei durch
+— einmal ohne gesetzte Filter-Optionen (`scale` mit ffmpeg-Standardwerten)
+und einmal mit (`scale=w=640:h=360`) —, beide Male `exit=0`, per
+`ffprobe` bestätigte Ausgabeauflösung in beiden Fällen korrekt.
+
+`deno check` für alle 24 Dateien in `ui/graph/` grün, `deno test
+ui/graph/` 122 Fälle grün, `deno bundle` erfolgreich (47 Module, vorher
+44).
+
 #### W4 — Verallgemeinerung/Erweiterbarkeits-Härtetest
 
 **Ziel:** Beleg, dass W1–W3 tatsächlich ein Baukasten sind (22.2), nicht
@@ -3718,3 +3767,4 @@ Eigenschaften (Spurenzahl, Codec, Metadaten je Spur).
 | Kapitel 22 (FFmpeg/FFprobe-Assistent): Zielbild + Phasenplan W1–W4 festgelegt, KEIN Code (Nachtrag 296) | erledigt | Nutzerauftrag: geführte Wizard-/Filter-Builder-Bedienung für ffmpeg/ffprobe statt roher CLI-Argumente, Referenz war ein älteres NW.js-Projekt des Nutzers (dynamische ffmpeg-Hilfetext-Introspektion + Blockly). Bestandsaufnahme: bestehender `script`-Workflow-Schritt (Allow-Liste `orchestrator/main.go`, Executor `internal/process/executors.go`) + heutige starre `SCRIPT_TEMPLATES`/Rohargument-Liste (`ui/graph/process-step-config.ts`) sind der Erweiterungspunkt, kein neuer Node nötig. Nutzerentscheidungen: Reihenfolge Introspektion(W1)→Formular-Wizard(W2)→Filter-Graph-Builder(W3, auf bestehendem `flow-canvas.ts`-Koordinatenmuster statt Blockly)→Verallgemeinerungs-Härtetest(W4); der genannte "MXF mit 8 Tonspuren+TTS-Kennungen"-Fall ist ausdrücklich Maßstab für Baukasten-Ausdruckskraft, keine zu bauende Einzelfunktion; lokaler-LLM-Ausblick nur als Zukunftsnotiz (`ARCHITECTURE.md` §26.5), keine Implementierung. Details/Phasenplan: `ARCHITECTURE.md` §26, hier Kapitel 22. | 2026-09-25 |
 | Kapitel 22 W1: FFmpeg/FFprobe-Introspektion im Orchestrator | erledigt | Neues Paket `orchestrator/internal/ffmpegtools` — Token-basiertes (nicht spaltenpositionsbasiertes) Parsen von `-encoders`/`-decoders`/`-formats`/`-pix_fmts`/`-filters` + `-h encoder\|decoder\|muxer\|demuxer\|filter=X` (inkl. Enum-Unterzeilen, `(from A to B)`/`(default X)`). Scope-Schnitt gegenüber Plan: `-h full` (globale CLI-Flags) bewusst ausgelassen — kleiner stabiler Flag-Satz, der eigentlich große/wertvolle Teil (hunderte codec-/filter-/muxer-spezifische AVOptions) ist voll abgedeckt. Live gefundener Stolperstein: ffmpeg polstert Namen nur bis zu einer Mindestbreite, ein langer Enum-Name (`autovariance-biased`) überschreitet sie — token-basiertes Parsing übersteht das, eine spaltenpositionsbasierte Regex hätte falsch geparst (als Testfall festgehalten). Neue Routen `GET /api/v1/tools/ffmpeg/{capabilities,encoders,decoders,formats,pix-fmts,filters,{kind}/{name}}` (`WithFFmpegTools`-Option, gleiches Muster wie `WithScriptCommands`), gespeist aus derselben `exec.LookPath`-Allow-Liste wie der `script`-Workflow-Schritt. Live gegen neu gebauten+gestarteten Orchestrator verifiziert: 217 Encoder/407 Formate/527 Filter/206 Pixelformate, `filter/scale` (38 Optionen), `encoder/libx264` (47 Optionen inkl. `-aq-mode`-Enum), `muxer/mxf` (`-signal_standard` mit allen 7 SMPTE/BT-Werten — genau das MXF-Beispielszenario aus 22.2). Ungültige Kategorie → 400, ohne Token → 401. `go build`/`vet`/`test ./...` für den ganzen `orchestrator`-Modulbaum grün. | 2026-09-25 |
 | Kapitel 22 W2: geführter ffmpeg-Formular-Wizard für `script`-Schritte | erledigt | Fünf Aufgaben ersetzen/erweitern die vier starren `SCRIPT_TEMPLATES`: Metadaten auslesen, Vorschaubild, Format/Codec konvertieren, Tonspur extrahieren, **Mehrspur-Container bauen** (Baukasten-Probe aus 22.2 — je Tonspur eigene Quelldatei + frei wählbarer Codec/Titel/Sprache, Container per echter Muxer-Liste inkl. AVOptions). „Erweitert (Rohargumente)" bleibt unverändert als Fallback. Neue reine Bausteine (`buildConvertArgs`/`buildExtractAudioArgs`/`buildMultitrackArgs`/`buildProbeArgs`/`buildThumbnailArgs`, 19 `deno test`-Fälle) + DOM-Seite (`ffmpegOptionsList`/`codecPicker`/`formatPicker`), gespeist von den W1-Endpunkten. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert (Prozess anlegen → Editor öffnen → script-Schritt → Assistent → Mehrspur-Container → echte Formate/Muxer-Optionen geladen → zweite Spur hinzugefügt → Vorschau korrekt → Übernehmen+Speichern persistierte über die echte API korrekt). Live-Fund beim tatsächlichen Ausführen des erzeugten Befehls: reines Audio-„MXF" scheitert an ffmpegs OP1a-Muxer (braucht zwingend eine Bildspur — dafür existiert der „Bildspur übernehmen"-Schalter), `mxf_opatom` erlaubt nur eine Spur pro Datei, und ffmpegs MXF-Muxer schreibt `-metadata:s:a:N`-Tags gar nicht in den Container (mit Matroska als Kontrollprobe bestätigt: derselbe Mechanismus funktioniert dort korrekt — die Lücke liegt allein in ffmpegs MXF-Implementierung, nicht im Wizard); erklärt rückblickend, warum die Referenz-App zusätzlich BMXlib nutzte. `deno check`/`deno test`/`deno bundle` grün. | 2026-09-25 |
+| Kapitel 22 W3: visueller Filter-Graph-Builder | erledigt | Neuer eigenständiger Baustein `filter-graph.ts` (funktionaler Modal-Dialog, kein Custom Element) + DOM-freie `filter-graph-logic.ts` (`compileFilterGraph` — Kahn-Topo-Sortierung, Zyklus-/Unverbunden-Erkennung, 14 `deno test`-Fälle); wiederverwendet NUR die generische Koordinaten-/Port-Mathematik aus `geometry.ts` (nicht `flow-canvas.ts` selbst, das ist NMOS-spezifisch). Knotenarten Eingang (roher Stream-Spezifizierer)/Filter (Name+Optionen aus echter `/api/v1/tools/ffmpeg/filters`-Liste, dynamische "N"-Pad-Filter einstellbar)/Ausgang (`-map`), Verbindungen per Pointer-Drag zwischen benannten Pads (Muster aus `process-editor.ts` übernommen). Gemeinsamer `ffmpeg-client.ts` aus W2 herausgezogen. Integriert in W2s "Format/Codec konvertieren": neuer Abschnitt "Filter (optional)", `buildConvertArgs` um `filterComplex`/`filterOutputLabels` erweitert. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert inkl. **echter simulierter Pointer-Drag-Verbindungen** (reale Bildschirmkoordinaten der Ports) zwischen Eingang→scale→Ausgang; "Übernehmen" compilierte fehlerfrei, gespeichert und über die echte Prozess-API bestätigt. Generierter Befehl zweimal tatsächlich ausgeführt (ohne und mit gesetzten Filter-Optionen `scale=w=640:h=360`) — beide Male `exit=0`, Ausgabeauflösung per `ffprobe` bestätigt. `deno check` für alle 24 Dateien in `ui/graph/` + `deno test` (122 Fälle) + `deno bundle` grün. | 2026-09-25 |

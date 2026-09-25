@@ -14,8 +14,12 @@
 // Die gesamte Fachlogik (Variablen-Katalog, Regel-Baukasten, Dauern,
 // Pflichtfelder) liegt DOM-frei in process-step-config-logic.ts.
 import { apiFetch } from "../shell/connection.ts";
+import { fetchFFmpegDetail, fetchFFmpegList } from "./ffmpeg-client.ts";
 import { showToast } from "../kit/omp-toast.ts";
 import type { DraftDefinition, DraftStep, RetryPolicy } from "./process-editor-logic.ts";
+import type { Point } from "./geometry.ts";
+import type { FilterGraph } from "./filter-graph-logic.ts";
+import { openFilterGraphEditor } from "./filter-graph.ts";
 import {
   buildConvertArgs,
   buildExtractAudioArgs,
@@ -571,42 +575,8 @@ function buildServiceCall(cfg: Record<string, unknown>, vars: VariableOption[]):
 // als Experten-/Fallback-Pfad erhalten ("nicht raten"-Prinzip, s.
 // CLAUDE.md/UMSETZUNG.md §0) — wer will, tippt weiterhin freie Flags.
 
-const ffmpegListCache = new Map<string, Promise<unknown[]>>();
-function fetchFFmpegList<T>(which: string): Promise<T[]> {
-  if (!ffmpegListCache.has(which)) {
-    ffmpegListCache.set(
-      which,
-      (async () => {
-        try {
-          const res = await apiFetch(`/api/v1/tools/ffmpeg/${which}`);
-          return res.ok ? await res.json() : [];
-        } catch {
-          return [];
-        }
-      })(),
-    );
-  }
-  return ffmpegListCache.get(which)! as Promise<T[]>;
-}
-
-const ffmpegDetailCache = new Map<string, Promise<FFDetail | null>>();
-function fetchFFmpegDetail(kind: string, name: string): Promise<FFDetail | null> {
-  const key = `${kind}/${name}`;
-  if (!ffmpegDetailCache.has(key)) {
-    ffmpegDetailCache.set(
-      key,
-      (async () => {
-        try {
-          const res = await apiFetch(`/api/v1/tools/ffmpeg/${kind}/${encodeURIComponent(name)}`);
-          return res.ok ? await res.json() : null;
-        } catch {
-          return null;
-        }
-      })(),
-    );
-  }
-  return ffmpegDetailCache.get(key)!;
-}
+// Fetch+Cache liegt in `ffmpeg-client.ts` (W3 nutzt denselben Client für
+// den Filter-Builder, keine doppelte Introspektions-Anfrage/Cache).
 
 // Rendert die AVOptions eines Encoders/Muxers als Formularfelder (Art
 // je Typ, s. ffOptionControlKind — bool als Ja/Nein-<select>, gleiches
@@ -771,6 +741,45 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   const fmt = formatPicker(vars, false);
   const video = codecPicker("video", vars);
   const audio = codecPicker("audio", vars);
+
+  // Visueller Filter-Builder (Kapitel 22, W3) — bewusst nur innerhalb
+  // dieser einen Modal-Sitzung im Speicher gehalten (kein Persistieren
+  // über ein Schließen/Neuöffnen hinaus), gleiche Abwägung wie der
+  // Assistent insgesamt: neue Schritte starten im Assistenten, bereits
+  // konfigurierte im Erweitert-Modus (kein stilles Reinterpretieren).
+  let filterGraph: FilterGraph | null = null;
+  let filterPositions: Record<string, Point> | null = null;
+  let filterComplex = "";
+  let filterOutputLabels: string[] = [];
+  const filterSummary = h("div", HELP_CSS + "margin-top:2px;", "kein Filter gesetzt.");
+  const filterBtn = h("button", "margin-top:4px;", "Filter-Kette bearbeiten …");
+  filterBtn.type = "button";
+  const filterClearBtn = h("button", "margin-top:4px;margin-left:4px;", "Filter entfernen");
+  filterClearBtn.type = "button";
+  filterClearBtn.style.display = "none";
+  const syncFilterSummary = () => {
+    filterSummary.textContent = filterComplex ? `Filter aktiv (${filterGraph?.nodes.filter((n) => n.kind === "filter").length ?? 0} Filter-Schritt(e)).` : "kein Filter gesetzt.";
+    filterClearBtn.style.display = filterComplex ? "" : "none";
+  };
+  filterBtn.addEventListener("click", () => {
+    openFilterGraphEditor(document.body, filterGraph, filterPositions, (graph, positions, expr, labels) => {
+      filterGraph = graph;
+      filterPositions = positions;
+      filterComplex = expr;
+      filterOutputLabels = labels;
+      syncFilterSummary();
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  });
+  filterClearBtn.addEventListener("click", () => {
+    filterGraph = null;
+    filterPositions = null;
+    filterComplex = "";
+    filterOutputLabels = [];
+    syncFilterSummary();
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
   el.append(
     field("Eingabedatei", input.el, undefined, true),
     field("Ausgabedatei", output.el, undefined, true),
@@ -779,6 +788,10 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     field("Video-Codec", video.el, "Leer = ffmpeg-Standard für den Container."),
     section("Audio"),
     field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für den Container."),
+    section("Filter (optional)"),
+    filterSummary,
+    filterBtn,
+    filterClearBtn,
   );
   return {
     el,
@@ -800,6 +813,8 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
           videoOptions: v.options,
           audioCodec: a.codec || undefined,
           audioOptions: a.options,
+          filterComplex: filterComplex || undefined,
+          filterOutputLabels: filterComplex ? filterOutputLabels : undefined,
         }),
       };
     },

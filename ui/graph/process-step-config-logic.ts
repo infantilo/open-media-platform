@@ -460,6 +460,18 @@ export interface FFFormatEntry {
   muxing: boolean;
 }
 
+// Ein Filter aus `/api/v1/tools/ffmpeg/filters` (W1) — `io` ist ffmpegs
+// eigene Kurzform ("V->V", "AA->A", "N->N", "|->A"), s.
+// `filter-graph-logic.ts::parseFilterIO` (W3).
+export interface FFFilterEntry {
+  name: string;
+  description: string;
+  io: string;
+  timelineSupport: boolean;
+  sliceThreading: boolean;
+  commandSupport: boolean;
+}
+
 export interface FFOptionChoice {
   name: string;
   value?: string;
@@ -534,10 +546,19 @@ export interface ConvertInput {
   videoOptions?: Record<string, string>;
   audioCodec?: string;
   audioOptions?: Record<string, string>;
+  // Aus dem visuellen Filter-Builder (Kapitel 22, W3) — `filterComplex`
+  // ist die fertige `-filter_complex`-Zeichenkette, `filterOutputLabels`
+  // je ein `-map "[label]"` für jeden Ausgang-Knoten des Graphen.
+  filterComplex?: string;
+  filterOutputLabels?: string[];
 }
 
 export function buildConvertArgs(input: ConvertInput): string[] {
   const args = ["-y", "-i", input.inputPath];
+  if (input.filterComplex) {
+    args.push("-filter_complex", input.filterComplex);
+    for (const label of input.filterOutputLabels ?? []) args.push("-map", `[${label}]`);
+  }
   if (input.videoCodec) args.push("-c:v", input.videoCodec);
   args.push(...optionEntriesToArgs(input.videoOptions ?? {}));
   if (input.audioCodec) args.push("-c:a", input.audioCodec);
