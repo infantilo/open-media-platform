@@ -3597,6 +3597,31 @@ mit Track-Metadaten (bräuchte vermutlich BMXlib statt reinem ffmpeg,
 s. W2-Status), lokaler LLM-Assistent (ARCHITECTURE.md §26.5, nur
 vorgemerkt).
 
+**Nachtrag beim Dokumentations-Screenshot (22.4): ein echter, rein
+visueller CSS-Bug gefunden+behoben,** der von keinem
+der bisherigen automatisierten Tests hätte auffallen können —
+`ffmpegOptionsList`s Such-Filter (`process-step-config.ts`) setzte
+sichtbare Zeilen per `row.style.display = ""` zurück statt auf
+`"flex"`; das entfernt `field()`s `display:flex` komplett und lässt
+`<label>` auf Browser-Standard `display:inline` zurückfallen — Name,
+Steuerelement und Hilfetext mehrerer AVOptions verschmolzen dadurch
+optisch zu einer Textwurst (sichtbar erst im echten Screenshot, nicht
+in `deno test`/CDP-Wertprüfungen). Fix: `"flex"` statt `""`. Zeigt
+erneut (s. bereits mehrfach im Memory festgehaltene Lektion), dass
+funktionale Tests + Wert-Prüfungen ein echtes visuelles Review nicht
+ersetzen.
+
+### 22.4 Dokumentation aktualisiert (README.md, BENUTZERHANDBUCH.md)
+
+README.md („Business process engine“-Absatz + neuer „Most recently“-
+Absatz im Status-Abschnitt) und `docs/BENUTZERHANDBUCH.md` (neuer
+Abschnitt 5a.1 „Datei-Werkzeug (ffmpeg/ffprobe): der Assistent“, zwei
+echte Screenshots `docs/screenshots/prozess-ffmpeg-assistent.png` +
+`filter-graph-builder.png`, per echter CDP-Session aufgenommen — dabei
+der oben genannte CSS-Bug gefunden) auf Kapitel 22 (W1–W4) gebracht.
+`docs/HANDBUCH.md` (Dev-/Ops-Handbuch) bewusst unverändert — der
+Assistent ist ein Endnutzer-Feature ohne Auswirkung auf Aufbau/Betrieb.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3853,3 +3878,4 @@ vorgemerkt).
 | Kapitel 22 W2: geführter ffmpeg-Formular-Wizard für `script`-Schritte | erledigt | Fünf Aufgaben ersetzen/erweitern die vier starren `SCRIPT_TEMPLATES`: Metadaten auslesen, Vorschaubild, Format/Codec konvertieren, Tonspur extrahieren, **Mehrspur-Container bauen** (Baukasten-Probe aus 22.2 — je Tonspur eigene Quelldatei + frei wählbarer Codec/Titel/Sprache, Container per echter Muxer-Liste inkl. AVOptions). „Erweitert (Rohargumente)" bleibt unverändert als Fallback. Neue reine Bausteine (`buildConvertArgs`/`buildExtractAudioArgs`/`buildMultitrackArgs`/`buildProbeArgs`/`buildThumbnailArgs`, 19 `deno test`-Fälle) + DOM-Seite (`ffmpegOptionsList`/`codecPicker`/`formatPicker`), gespeist von den W1-Endpunkten. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert (Prozess anlegen → Editor öffnen → script-Schritt → Assistent → Mehrspur-Container → echte Formate/Muxer-Optionen geladen → zweite Spur hinzugefügt → Vorschau korrekt → Übernehmen+Speichern persistierte über die echte API korrekt). Live-Fund beim tatsächlichen Ausführen des erzeugten Befehls: reines Audio-„MXF" scheitert an ffmpegs OP1a-Muxer (braucht zwingend eine Bildspur — dafür existiert der „Bildspur übernehmen"-Schalter), `mxf_opatom` erlaubt nur eine Spur pro Datei, und ffmpegs MXF-Muxer schreibt `-metadata:s:a:N`-Tags gar nicht in den Container (mit Matroska als Kontrollprobe bestätigt: derselbe Mechanismus funktioniert dort korrekt — die Lücke liegt allein in ffmpegs MXF-Implementierung, nicht im Wizard); erklärt rückblickend, warum die Referenz-App zusätzlich BMXlib nutzte. `deno check`/`deno test`/`deno bundle` grün. | 2026-09-25 |
 | Kapitel 22 W3: visueller Filter-Graph-Builder | erledigt | Neuer eigenständiger Baustein `filter-graph.ts` (funktionaler Modal-Dialog, kein Custom Element) + DOM-freie `filter-graph-logic.ts` (`compileFilterGraph` — Kahn-Topo-Sortierung, Zyklus-/Unverbunden-Erkennung, 14 `deno test`-Fälle); wiederverwendet NUR die generische Koordinaten-/Port-Mathematik aus `geometry.ts` (nicht `flow-canvas.ts` selbst, das ist NMOS-spezifisch). Knotenarten Eingang (roher Stream-Spezifizierer)/Filter (Name+Optionen aus echter `/api/v1/tools/ffmpeg/filters`-Liste, dynamische "N"-Pad-Filter einstellbar)/Ausgang (`-map`), Verbindungen per Pointer-Drag zwischen benannten Pads (Muster aus `process-editor.ts` übernommen). Gemeinsamer `ffmpeg-client.ts` aus W2 herausgezogen. Integriert in W2s "Format/Codec konvertieren": neuer Abschnitt "Filter (optional)", `buildConvertArgs` um `filterComplex`/`filterOutputLabels` erweitert. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert inkl. **echter simulierter Pointer-Drag-Verbindungen** (reale Bildschirmkoordinaten der Ports) zwischen Eingang→scale→Ausgang; "Übernehmen" compilierte fehlerfrei, gespeichert und über die echte Prozess-API bestätigt. Generierter Befehl zweimal tatsächlich ausgeführt (ohne und mit gesetzten Filter-Optionen `scale=w=640:h=360`) — beide Male `exit=0`, Ausgabeauflösung per `ffprobe` bestätigt. `deno check` für alle 24 Dateien in `ui/graph/` + `deno test` (122 Fälle) + `deno bundle` grün. | 2026-09-25 |
 | Kapitel 22 W4: Verallgemeinerungs-Härtetest — zwei echte Baukasten-Lücken gefunden+behoben, Kapitel 22 abgeschlossen | erledigt | Vier bewusst unterschiedliche Szenarien durch die echte UI (Mehrspur-MXF+eigene Bildquelle, dieselbe Zusammenführung als MOV, Tonspur extrahieren, Filter-Graph mit dynamischem `amix` N=3). Zwei echte Lücken gefunden UND behoben (nicht umgangen): (1) Bildquelle war an die erste Tonspur gekoppelt statt eigener Baustein — `videoSourcePath` löst das, Tonspuren rutschen im Eingabe-Index, AUSGANGS-Stream-Indizes bleiben unberührt; (2) Filter-Graphen mit mehreren Quellen (z. B. `amix` mit 3 Eingängen) konnten im Konvertieren-Assistenten nie laufen (nur 1 Eingabedatei-Feld) — neue Sektion "Weitere Eingabedateien" behebt das. Zusätzlich beim tatsächlichen Ausführen gefunden+behoben: `-c:v copy` von H.264 nach MXF schlägt bei diesem ffmpeg-Build fehl — neues Feld "Video-Codec der Bildquelle" (Default weiterhin `copy`). Bestätigt+verallgemeinert: MOV schreibt `-metadata:s:a:N`-Tags genauso wenig in den Container wie MXF (nur Matroska zuverlässig) — Wizard-Mechanismus nachweislich korrekt, reine ffmpeg-Muxer-Eigenheit, keine Code-Änderung nötig. Alle vier Szenarien nach Fund+Fix real ausgeführt + per `ffprobe` gegengeprüft. `deno check` (24 Dateien) + `deno test` (125 Fälle) + `deno bundle` grün. **Kapitel 22 (W1–W4) damit abgeschlossen.** | 2026-09-25 |
+| Kapitel 22.4: README.md/BENUTZERHANDBUCH.md aktualisiert, echter CSS-Bug per Doku-Screenshot gefunden+behoben | erledigt | README.md ("Business process engine"-Absatz + neuer "Most recently"-Absatz im Status) und `docs/BENUTZERHANDBUCH.md` (neuer Abschnitt 5a.1, zwei echte per CDP aufgenommene Screenshots) auf den Assistenten/Filter-Builder gebracht. Beim Aufnehmen der Screenshots ein echter, rein visueller Bug gefunden: `ffmpegOptionsList`s Such-Filter setzte `row.style.display = ""` statt `"flex"` zurück — entfernt `field()`s `display:flex` komplett, `<label>` fällt auf Browser-Standard `inline` zurück, mehrere AVOptions verschmelzen optisch zu einer Zeile (kein `deno test`/CDP-Wertecheck hätte das gefunden, nur ein echtes Sichtreview). Fix: `"flex"` statt `""`. `docs/HANDBUCH.md` (Dev-/Ops) bewusst unverändert. | 2026-09-25 |

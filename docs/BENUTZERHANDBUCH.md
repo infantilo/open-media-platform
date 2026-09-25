@@ -296,9 +296,7 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 ![Prozess-Editor: Datei-Werkzeug → Bedingung → Benachrichtigung/Warten, mit Ja-/Nein-Verzweigung und Auslöser](screenshots/prozess-editor.png)
 
 - **Doppelklick auf eine Kachel** öffnet ein Formular für genau diesen
-  Schritt-Typ, ohne JSON: z. B. beim Datei-Werkzeug eine Vorlage
-  („Technische Metadaten auslesen“, „Proxy erzeugen“, „Vorschaubild“,
-  „Tonspur als WAV“), bei „Wenn … dann“ eine Regel aus
+  Schritt-Typ, ohne JSON: bei „Wenn … dann“ eine Regel aus
   *Wert · Vergleich · Wert*, bei der Node-Funktion die laufenden
   Microservices und ihre Funktionen als Auswahl. Fehlt eine
   Pflichtangabe, zeigt die Kachel „⚠ … fehlt“.
@@ -333,6 +331,55 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
   abbrechen; ihre Schritte und Genehmigungs-Aufgaben erscheinen darunter
   („Für mich beanspruchen" → „Genehmigen"/„Ablehnen"/„Änderungen
   anfordern").
+
+### 5a.1 Datei-Werkzeug (ffmpeg/ffprobe): der Assistent
+
+Beim Datei-Werkzeug öffnet der Doppelklick standardmäßig den
+**Assistenten** — ein Formular mit echten, von diesem Server
+tatsächlich unterstützten Werten (Container, Codecs, Filter samt
+Hilfetext), keine Rohargumente. Über **„Aufgabe"** stehen fünf geführte
+Abläufe zur Wahl:
+
+- **Technische Metadaten auslesen** — nur die Eingabedatei angeben,
+  liefert Codec/Auflösung/Dauer als JSON im Ergebnisfeld „Ausgabe
+  (stdout)“.
+- **Vorschaubild erzeugen** — Eingabe-/Ausgabedatei, Zeitpunkt und
+  Breite in Pixeln.
+- **Format/Codec konvertieren** — Container optional erzwingen,
+  Video-/Audio-Codec aus der echten Liste dieses Servers wählen; wird
+  ein Codec gewählt, erscheinen seine tatsächlichen Einstellungen
+  (samt Hilfetext, erlaubtem Wertebereich und Standardwert) darunter.
+- **Tonspur extrahieren** — wie Konvertieren, nur ohne Bild.
+- **Mehrspur-Container bauen** — mehrere Dateien (z. B. je eine
+  Sprachfassung) zu **einer** Ausgabedatei mit mehreren Tonspuren
+  zusammenführen: „+ weitere Tonspur“ fügt eine weitere Datei mit
+  eigenem Codec/Titel/Sprache hinzu. Manche Container (z. B. MXF)
+  verlangen zwingend eine Bildspur, auch für eine reine
+  Tonspur-Zusammenführung — dafür gibt es „Bildquelle (optional)“ samt
+  eigenem Video-Codec (Standard: unverändert übernehmen; schlägt das
+  bei einer bestimmten Quelle fehl, hier einen echten Encoder wählen).
+
+![Assistent: Aufgabe „Mehrspur-Container bauen“, echte Container-/Codec-Auswahl mit Hilfetexten](screenshots/prozess-ffmpeg-assistent.png)
+
+Bei „Format/Codec konvertieren“ öffnet **„Filter-Kette bearbeiten …“**
+einen eigenen, größeren Dialog: Filter aus der echten Filterliste
+dieses Servers suchen und als Kachel hinzufügen, per Ziehen vom
+farbigen Punkt einer Kachel auf den Eingang der nächsten verbinden.
+Ein „Eingang“-Baustein steht für eine Quelldatei (Kennung z. B. `0:v`),
+ein „Ausgang“-Baustein für das Ergebnis. Filter mit einstellbarer
+Eingangs-/Ausgangszahl (z. B. zum Mischen mehrerer Tonspuren) zeigen
+ein Zahlenfeld dafür. „Automatisch anordnen“ räumt die Kacheln auf,
+„Übernehmen“ baut daraus die tatsächliche Filterkette. Referenziert die
+Filterkette mehr als eine Quelle, erscheint im Hauptformular darunter
+„Weitere Eingabedateien“ — die erste Datei bleibt Kennung `0`, jede
+weitere zählt hoch.
+
+![Visueller Filter-Graph-Builder: Eingang → scale → Ausgang, echte Filterliste + Optionen links](screenshots/filter-graph-builder.png)
+
+Wer die rohe ffmpeg-Befehlszeile kennt, kann jederzeit auf
+**„Stattdessen rohe Argumente eingeben (Experten-Modus)"** umschalten —
+identisch zum bisherigen Verhalten, inklusive Vorlagen und „Befehlszeile
+einfügen …“.
 
 ## 5b. Assets
 

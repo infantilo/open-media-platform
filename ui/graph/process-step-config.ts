@@ -593,7 +593,13 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
 
   const applyFilter = () => {
     const q = search.value.trim().toLowerCase();
-    for (const f of fields) f.row.style.display = !q || f.searchText.includes(q) ? "" : "none";
+    // "" statt "flex" würde `display` komplett entfernen und `field()`s
+    // `display:flex` (Voraussetzung für die eigene column-Anordnung von
+    // Name/Steuerelement/Hilfetext) auf den Browser-Standard für
+    // <label> (inline) zurückfallen lassen — dann verschmelzen alle
+    // sichtbaren Zeilen optisch zu einer Textwurst (live per
+    // Dokumentations-Screenshot gefunden, s. UMSETZUNG.md Kapitel 22).
+    for (const f of fields) f.row.style.display = !q || f.searchText.includes(q) ? "flex" : "none";
   };
   search.addEventListener("input", applyFilter);
 

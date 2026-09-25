@@ -238,7 +238,17 @@ tested requirement, not an afterthought). The step vocabulary covers
 task, media function (drives any self-described node method through
 the same IS-12/14 contract the Flow Editor uses), service call,
 allow-listed shell script (`ffmpeg`/`ffprobe` auto-detected on the
-host, nothing else runs unless explicitly allow-listed), condition/
+host, nothing else runs unless explicitly allow-listed) — with a
+**guided assistant** on top rather than raw CLI flags: five tasks
+(read technical metadata, make a thumbnail, convert format/codec,
+extract an audio track, build a multi-track container) driven by the
+host's *actual* installed ffmpeg — real encoder/container/filter
+lists and their real options, valid ranges, and defaults, introspected
+live rather than hand-maintained, plus a visual drag-and-drop
+filter-graph builder (search a real filter, wire named pads, adjustable
+pad count for filters like `amix`) that compiles to the real
+`-filter_complex` syntax; raw arguments stay one click away for anyone
+who prefers them — condition/
 branch (a sandboxed expression language, no host access), parallel/
 join, wait/timer, human task/approval (assign, claim, decide, with
 optimistic-concurrency-safe state), notification, subworkflow, and
@@ -661,14 +671,35 @@ orchestrator). `omp-webrtc-gateway` landed as a new microservice pair
 (camera/monitor) so an ordinary phone browser can join the MXL fabric
 over WHIP/WHEP with zero install — gated by operator-issued, time-
 scoped invitation links/QR codes rather than a bare, guessable
-endpoint. Most recently of all, the platform gained multi-organization
-access scoping (Kapitel 21 B14): each user belongs to one organization,
-workflows/process definitions/assets/collections carry an owner
-organization, and every read/write on someone else's organization's
-object returns a plain not-found rather than a permission error or any
-other sign the object exists — live-verified with two real
-organizations and confirmed non-disruptive to all pre-existing,
-organization-less data (grandfathered into a default organization).
+endpoint. The platform also gained multi-organization access scoping
+(Kapitel 21 B14): each user belongs to one organization, workflows/
+process definitions/assets/collections carry an owner organization,
+and every read/write on someone else's organization's object returns a
+plain not-found rather than a permission error or any other sign the
+object exists — live-verified with two real organizations and
+confirmed non-disruptive to all pre-existing, organization-less data
+(grandfathered into a default organization).
+
+Most recently of all, Kapitel 22 turned the allow-listed `ffmpeg`/
+`ffprobe` script step from raw CLI flags into a guided assistant: five
+tasks (metadata, thumbnail, format/codec conversion, audio extraction,
+multi-track container) backed by the host's actually installed
+ffmpeg's real encoders/containers/filters and their real options —
+introspected live, not a hand-maintained list — plus a visual drag-and-
+drop filter-graph builder that compiles real filter names and pads
+into an actual `-filter_complex` string; the raw-arguments editor
+stays one click away. A hardening pass building several deliberately
+different real scenarios (a multi-track container with its own video
+source, the same as a different container as a metadata control test,
+audio extraction, a filter graph with a variable-pad-count filter)
+found and fixed two genuine gaps this way rather than special-casing
+around them — a video source wrongly tied to the first audio track,
+and multi-input filter graphs having no way to supply more than one
+input file — plus a third found by actually running the generated
+command: `-c:v copy` into MXF failing for some source codecs on the
+project's ffmpeg build, now a selectable encoder instead of a hard-
+coded assumption. Every scenario was run for real and checked with
+`ffprobe`, not just previewed.
 
 Open: the MXL writer clock drift and grouphint gap that `omp-scope`
 just made measurable, RDMA hardware integration (`verbs`/EFA providers,
