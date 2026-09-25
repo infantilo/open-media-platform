@@ -246,6 +246,22 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const nodeId = this.getAttribute("node-id");
     const shadow = this.attachShadow({ mode: "open" });
 
+    // Bugliste 2026-09-25 #6 ("optional einstellbar ... Vorschaubild ...
+    // der Operator drückt auf das Bild, das er auf PGM sehen will"):
+    // gleiches Muster wie `omp-switcher/ui/bundle.js` (dort ausführlicher
+    // kommentiert) — nur für Quellen, deren Node tatsächlich einen
+    // `previewUrl`-Stream anbietet, sonst bleibt es beim reinen
+    // beschrifteten Knopf.
+    const THUMBS_KEY = `omp-vmix-thumbs-${nodeId}`;
+    const STREAM_TOKEN_KEY = "omp-auth-token";
+    let thumbsEnabled = localStorage.getItem(THUMBS_KEY) === "1";
+    const previewSnapshotUrl = (sourceNodeId) => {
+      const token = localStorage.getItem(STREAM_TOKEN_KEY);
+      const base = `/api/v1/nodes/${sourceNodeId}/stream/previewUrl`;
+      const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
+      return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
+    };
+
     // Ebenenzahl VOR dem Aufbau der Bedienoberfläche ermitteln (s.
     // Moduldoku oben) — ein `async connectedCallback` ist zulässig
     // (der Rückgabewert wird vom Custom-Elements-Lifecycle ignoriert);
@@ -301,6 +317,29 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .bus-buttons omp-button {
         width: 68px; height: 34px; font-size: 10px; line-height: 1.15;
       }
+      /* Bugliste 2026-09-25 #6: Vorschaubild-Karte statt reiner Text-
+         Pille — der Operator "drückt auf das Bild" (Nutzerwunsch). */
+      .bus-buttons omp-button.with-thumb { width: 88px; height: auto; padding: 0 !important; }
+      .bus-buttons omp-button.with-thumb::part(button) { flex-direction: column; padding: 3px !important; gap: 3px; }
+      .bus-thumb {
+        width: 100%; aspect-ratio: 16/9; border-radius: 3px; overflow: hidden;
+        background: #000; position: relative; flex-shrink: 0;
+      }
+      .bus-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .bus-thumb .no-signal {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-size: 8px; color: var(--omp-text-disabled, #5f6368); text-transform: uppercase; letter-spacing: 0.04em;
+      }
+      .bus-thumb-label {
+        font-size: 9px; line-height: 1.15; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; max-width: 100%;
+      }
+      .thumbs-toggle {
+        display: flex; align-items: center; gap: 5px; cursor: pointer;
+        color: var(--omp-text-dim, #9aa0a6); font-size: var(--omp-font-size-xs, 11px);
+        user-select: none; margin-bottom: var(--omp-space-2, 8px);
+      }
+      .thumbs-toggle input { width: 14px; height: 14px; accent-color: var(--omp-info, #4285f4); cursor: pointer; }
       .bus-buttons .group-label {
         flex-basis: 100%; font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
         text-transform: uppercase; color: var(--omp-text-dim, #9aa0a6);
@@ -366,11 +405,41 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Geteilte, ebenenunabhängige Hilfsfunktionen — je einmal definiert,
     // von jeder Bank (buildBank unten) mit ihrem eigenen `call()`
     // aufgerufen, statt N-fach dupliziert zu werden.
-    const makeBusButton = (call, label, senderId, isProgram) => {
+    const makeBusButton = (call, label, senderId, isProgram, sourceNodeId) => {
       const btn = document.createElement("omp-button");
-      btn.textContent = label;
       const method = isProgram ? "crosspoint.take" : "crosspoint.select";
       btn.addEventListener("click", () => call(method, { senderId }));
+
+      // Kein Vorschaubild für BLK (`senderId === ""`, nichts anzuzeigen)
+      // — bleibt immer die kompakte Text-Pille, s. Moduldoku oben.
+      if (thumbsEnabled && senderId) {
+        btn.className = "with-thumb";
+        const thumb = document.createElement("div");
+        thumb.className = "bus-thumb";
+        if (sourceNodeId) {
+          const img = document.createElement("img");
+          img.alt = label;
+          const noSignal = document.createElement("div");
+          noSignal.className = "no-signal";
+          noSignal.textContent = "kein Bild";
+          noSignal.hidden = true;
+          img.addEventListener("load", () => { img.hidden = false; noSignal.hidden = true; });
+          img.addEventListener("error", () => { img.hidden = true; noSignal.hidden = false; });
+          img.src = previewSnapshotUrl(sourceNodeId);
+          thumb.append(img, noSignal);
+        } else {
+          const noSignal = document.createElement("div");
+          noSignal.className = "no-signal";
+          noSignal.textContent = "kein Bild";
+          thumb.append(noSignal);
+        }
+        const thumbLabel = document.createElement("div");
+        thumbLabel.className = "bus-thumb-label";
+        thumbLabel.textContent = label;
+        btn.append(thumb, thumbLabel);
+      } else {
+        btn.textContent = label;
+      }
       return btn;
     };
 
@@ -410,10 +479,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Kreuzschiene gruppiert nach `ownSenderIds` (Workflow-Zugehörigkeit)
     // — nur, wenn tatsächlich beide Gruppen (eigener Workflow + Rest)
     // nicht leer sind, sonst bleibt es bei der bisherigen flachen Liste.
-    const renderBusRow = (call, container, entries, ownSenderIds, isProgram, activeId, color, levelOutputSenderIds) => {
+    const renderBusRow = (call, container, entries, ownSenderIds, isProgram, activeId, color, levelOutputSenderIds, senderNodeId) => {
       const [blk, ...rest] = entries;
       const appendEntry = (entry) => {
-        const btn = makeBusButton(call, entry.label, entry.senderId, isProgram);
+        const btn = makeBusButton(call, entry.label, entry.senderId, isProgram, senderNodeId?.get(entry.senderId));
         btn.active = entry.senderId === activeId;
         btn.setAttribute("color", color);
         container.append(btn);
@@ -502,7 +571,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       for (const [senderId, nId] of senderNodeId) {
         if (nodeWorkflow.get(nId) === ownWorkflowId && ownWorkflowId) workflowOwnSenderIds.add(senderId);
       }
-      return { workflowOwnSenderIds, ownSenderIdByLevel };
+      return { workflowOwnSenderIds, ownSenderIdByLevel, senderNodeId };
     };
 
     // Baut EINE vollständige, unabhängige M/E-Bank für `level` (0-basiert)
@@ -520,7 +589,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body || {}),
-        }).then(() => refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds));
+        }).then(() => refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds, lastSenderNodeId));
 
       // Manueller T-Bar (s. Moduldoku): eigener, schlanker Aufruf OHNE
       // automatisches `refresh()` danach — bei pointermove-Takt würde
@@ -644,7 +713,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         // Server-Updates öffnen.
         sendTransitionPosition(tBar.value).finally(() => {
           tBarDragging = false;
-          refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds);
+          refresh(lastWorkflowOwnSenderIds, lastOtherLevelSenderIds, lastSenderNodeId);
         });
       });
 
@@ -701,6 +770,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
       let latestPipEnabled = false;
       let lastWorkflowOwnSenderIds = new Set();
       let lastOtherLevelSenderIds = new Set();
+      let lastSenderNodeId = new Map();
 
       // "Quellen"-Dialog (Nutzerauftrag 2026-09-04, s. Moduldoku):
       // ersetzt die frühere Inline-SRC-Reihe (+/×) + das nackte
@@ -963,9 +1033,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         pipRow.append(pipAddBtn);
       };
 
-      const refresh = async (workflowOwnSenderIds, otherLevelSenderIds) => {
+      const refresh = async (workflowOwnSenderIds, otherLevelSenderIds, senderNodeId) => {
         lastWorkflowOwnSenderIds = workflowOwnSenderIds;
         lastOtherLevelSenderIds = otherLevelSenderIds;
+        lastSenderNodeId = senderNodeId;
         const [
           inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
           pipEnabledRes, pipPresetsRes, pipActivePresetRes, pinnedRes, transRateRes, transitionPositionRes,
@@ -1035,8 +1106,8 @@ class OmpVideoMixerMePanel extends HTMLElement {
           pstButtons.append(empty);
         }
         const levelOutputSenderIds = level === 0 ? otherLevelSenderIds : undefined;
-        renderBusRow(call, pgmButtons, entries, workflowOwnSenderIds, true, program, "onair", levelOutputSenderIds);
-        renderBusRow(call, pstButtons, entries, workflowOwnSenderIds, false, preset, "preset", levelOutputSenderIds);
+        renderBusRow(call, pgmButtons, entries, workflowOwnSenderIds, true, program, "onair", levelOutputSenderIds, senderNodeId);
+        renderBusRow(call, pstButtons, entries, workflowOwnSenderIds, false, preset, "preset", levelOutputSenderIds, senderNodeId);
 
         keyerBtn.active = keyerEnabled;
       };
@@ -1050,9 +1121,21 @@ class OmpVideoMixerMePanel extends HTMLElement {
     const consoleList = document.createElement("div");
     consoleList.className = "console-list";
     for (const b of banks) consoleList.append(b.bankRow);
+    const thumbsToggle = document.createElement("label");
+    thumbsToggle.className = "thumbs-toggle";
+    const thumbsCheckbox = document.createElement("input");
+    thumbsCheckbox.type = "checkbox";
+    thumbsCheckbox.checked = thumbsEnabled;
+    thumbsToggle.append(thumbsCheckbox, document.createTextNode("Vorschaubilder"));
+    thumbsCheckbox.addEventListener("change", () => {
+      thumbsEnabled = thumbsCheckbox.checked;
+      localStorage.setItem(THUMBS_KEY, thumbsEnabled ? "1" : "0");
+      this._refresh?.();
+    });
+
     const consoleSection = document.createElement("omp-panel-section");
     consoleSection.setAttribute("label", "Video Mixer M/E");
-    consoleSection.append(consoleList);
+    consoleSection.append(thumbsToggle, consoleList);
 
     // Ebenen-Restart-Sektion (s. Moduldoku oben zu "Ebenenzahl live
     // ändern") — ermittelt Workflow/Rolle/aktuelles Format über einen
@@ -1212,14 +1295,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Ein gemeinsamer Graph/Workflows-Fetch je Poll für alle Banken (s.
     // `graphContext()`-Doku oben) statt N-facher Redundanz.
     const refreshAll = async () => {
-      const { workflowOwnSenderIds, ownSenderIdByLevel } = await graphContext();
+      const { workflowOwnSenderIds, ownSenderIdByLevel, senderNodeId } = await graphContext();
       // Mastereben = Ebene 1 (1-basiert, `level===0` intern) — deren
       // eigener Sender bleibt ausgeschlossen, alle anderen Ebenen-
       // Ausgänge werden feste PGM/PST-Tasten (s. Moduldoku oben).
       const otherLevelSenderIds = new Set(
         [...ownSenderIdByLevel.entries()].filter(([lvl]) => lvl !== 1).map(([, id]) => id),
       );
-      await Promise.all(banks.map((b) => b.refresh(workflowOwnSenderIds, otherLevelSenderIds)));
+      await Promise.all(banks.map((b) => b.refresh(workflowOwnSenderIds, otherLevelSenderIds, senderNodeId)));
     };
 
     refreshAll();

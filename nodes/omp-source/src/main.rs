@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use omp_mediaio::preview;
 use omp_node_sdk::is04::TRANSPORT_MXL;
 use omp_node_sdk::node::FlowSpec;
 use omp_node_sdk::{
@@ -46,6 +47,12 @@ struct SourceStore {
     lowres_flow_id: String,
     pattern: Arc<Mutex<String>>,
     pipeline: pipeline::PipelineHandle,
+    /// Bugliste 2026-09-25 #6: volle URL des `preview::spawn()`-Servers
+    /// (eigener Port) — dieselbe generische `/api/v1/nodes/{id}/stream/
+    /// previewUrl`-Orchestrator-Proxy-Route wie bei `omp-viewer` holt
+    /// sich diesen Wert und reicht ihn durch, kein `extra_route` hier
+    /// nötig.
+    preview_url: String,
 }
 
 impl ParamStore for SourceStore {
@@ -108,6 +115,17 @@ impl ParamStore for SourceStore {
                     range: None,
                     readonly: true,
                 },
+                // Bugliste 2026-09-25 #6: gleiches Muster/gleicher Name
+                // wie `omp-viewer`s `previewUrl` — `ui/shell/node-
+                // preview.ts`/das Switcher-UI-Bundle prüfen generisch auf
+                // diesen Parameternamen.
+                ParamSpec {
+                    name: "previewUrl".to_string(),
+                    kind: ParamType::String,
+                    unit: None,
+                    range: None,
+                    readonly: true,
+                },
             ],
             methods: vec![
                 MethodSpec {
@@ -128,6 +146,7 @@ impl ParamStore for SourceStore {
             "flowId" => Some(serde_json::json!(self.flow_id)),
             "lowresFlowId" => Some(serde_json::json!(self.lowres_flow_id)),
             "lowresActive" => Some(serde_json::json!(self.pipeline.lowres_preview_active())),
+            "previewUrl" => Some(serde_json::json!(self.preview_url)),
             "pattern" => Some(serde_json::json!(
                 *self.pattern.lock().expect("lock poisoned")
             )),
@@ -229,6 +248,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let shutdown = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
 
+    // Bugliste 2026-09-25 #6: eigener MJPEG-Vorschau-HTTP-Server, exakt
+    // dasselbe Muster wie `omp-viewer::main` — eigener, freier Port
+    // (`OMP_SOURCE_PREVIEW_PORT`, Default 0 = vom OS vergeben, dieselbe
+    // Mehrfachinstanz-Überlegung wie bei anderen Node-Ports), `preview_url`
+    // trägt Host+tatsächlich gebundenen Port.
+    let preview_port: u16 = env_or("OMP_SOURCE_PREVIEW_PORT", "0").parse()?;
+    let preview_broadcaster = Arc::new(preview::Broadcaster::new());
+    let preview_heartbeat = Arc::new(AtomicU64::new(0));
+    let actual_preview_port = preview::spawn(
+        &format!("0.0.0.0:{preview_port}"),
+        preview_broadcaster.clone(),
+        preview_heartbeat.clone(),
+    )?;
+    let preview_url = format!("http://{host}:{actual_preview_port}/preview");
+
     let pipeline_config = pipeline::Config {
         domain,
         flow_id: flow_id.clone(),
@@ -240,6 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         height,
         framerate_numerator,
         framerate_denominator,
+        preview_broadcaster,
     };
     let pipeline_shutdown = shutdown.clone();
     let pipeline_heartbeat = Arc::new(AtomicU64::new(0));
@@ -270,6 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         lowres_flow_id: lowres_flow_id.clone(),
         pattern,
         pipeline: pipeline_handle,
+        preview_url,
     });
 
     // Kapitel 15 Teil 2 (docs/END-GOAL-FEATURES.md §15.3b, docs/decisions.md
@@ -354,6 +390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // der Thread seit dem letzten 5s-Heartbeat-Tick nicht mehr
     // vorankam.
     handle.register_worker("pipeline", pipeline_heartbeat);
+    handle.register_worker("preview-accept", preview_heartbeat);
 
     let events = async {
         while let Some(event) = rx.recv().await {

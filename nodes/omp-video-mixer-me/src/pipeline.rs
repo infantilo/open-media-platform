@@ -750,11 +750,24 @@ fn remove_mxl_video_input(pipeline: &gst::Pipeline, mxl_input: MxlVideoInput) {
 /// (Rest 2) rückgebaut") — kein Hot-Swap-Ziel mehr.
 struct SourceBranch {
     mxl_input: MxlVideoInput,
-    queue: gst::Element,
-    videoconvert: gst::Element,
-    videoscale: gst::Element,
-    videorate: gst::Element,
-    caps: gst::Element,
+    /// Root-Cause-Fund Bugliste 2026-09-25 #7-Nachbesserung: vorher fünf
+    /// einzeln benannte Felder (`queue`/`videoconvert`/`videoscale`/
+    /// `videorate`/`caps`), die `build_normalized_branch` unter der
+    /// Annahme IMMER GENAU FÜNF Elemente zu liefern per `try_into()`
+    /// destrukturiert hatte — seit `omp_mediaio::hwaccel::
+    /// build_convert_scale` liefert die Konvertierungs-/Skalierungs-
+    /// Kette GPU-abhängig ZWEI (`vaapipostproc`+`capsfilter`) ODER DREI
+    /// (`videoconvert`+`videoscale`+`capsfilter`) Elemente statt fest
+    /// zwei — macht die Gesamtlänge variabel (5 ODER 6), `try_into::<[_;
+    /// 5]>()` paniert live reproduzierbar, sobald tatsächlich ein echter
+    /// Eingang verbunden wird (nicht beim reinen Schwarzbild-Fallback,
+    /// der `build_synthetic_branch` nutzt — deshalb bei der Nachtrag-
+    /// 292-Live-Verifikation unentdeckt geblieben, s. docs/decisions.md).
+    /// Keiner dieser fünf Namen wird je einzeln gebraucht (nur fürs
+    /// Aufräumen, s. `teardown_source_branch`) — ein `Vec` plus separat
+    /// gehaltenem `caps` (letztes Element, für den `caps->tee`-Link
+    /// gebraucht) reicht.
+    chain_elements: Vec<gst::Element>,
     tee: gst::Element,
     taps: Vec<SourceTap>,
 }
@@ -803,8 +816,10 @@ fn build_source_branch(
             return Err(format!("sync_state_with_parent ({name_suffix}): {e}"));
         }
     }
-    let [queue, videoconvert, videoscale, videorate, caps]: [gst::Element; 5] =
-        elements.try_into().expect("build_normalized_branch always returns exactly 5 elements");
+    // `caps` (letztes Element) verlinkt unten auf `tee` — s.
+    // `SourceBranch::chain_elements`-Doku für den Grund, warum hier kein
+    // fixes `[T; N]`-Destrukturieren mehr passiert.
+    let caps = elements.last().cloned().expect("build_normalized_branch always returns at least one element");
 
     let tee = match gst::ElementFactory::make("tee")
         .property("allow-not-linked", true)
@@ -812,34 +827,32 @@ fn build_source_branch(
     {
         Ok(t) => t,
         Err(e) => {
-            remove_elements(pipeline, &[queue, videoconvert, videoscale, videorate, caps]);
+            remove_elements(pipeline, &elements);
             remove_mxl_video_input(pipeline, mxl_input);
             return Err(format!("tee ({name_suffix}): {e}"));
         }
     };
     if let Err(e) = pipeline.add(&tee) {
-        remove_elements(pipeline, &[queue, videoconvert, videoscale, videorate, caps]);
+        remove_elements(pipeline, &elements);
         remove_mxl_video_input(pipeline, mxl_input);
         return Err(format!("add tee ({name_suffix}): {e}"));
     }
     if let Err(e) = tee.sync_state_with_parent() {
-        remove_elements(pipeline, &[queue, videoconvert, videoscale, videorate, caps, tee]);
+        remove_elements(pipeline, &elements);
+        remove_elements(pipeline, &[tee]);
         remove_mxl_video_input(pipeline, mxl_input);
         return Err(format!("sync_state_with_parent (tee {name_suffix}): {e}"));
     }
     if let Err(e) = gst::Element::link(&caps, &tee) {
-        remove_elements(pipeline, &[queue, videoconvert, videoscale, videorate, caps, tee]);
+        remove_elements(pipeline, &elements);
+        remove_elements(pipeline, &[tee]);
         remove_mxl_video_input(pipeline, mxl_input);
         return Err(format!("link caps->tee ({name_suffix}): {e}"));
     }
 
     Ok(SourceBranch {
         mxl_input,
-        queue,
-        videoconvert,
-        videoscale,
-        videorate,
-        caps,
+        chain_elements: elements,
         tee,
         taps: Vec::new(),
     })
@@ -854,15 +867,12 @@ fn teardown_source_branch(pipeline: &gst::Pipeline, branch: SourceBranch) {
         let _ = pipeline.remove(&tap.queue);
         branch.tee.release_request_pad(&tap.tee_pad);
     }
-    let elements = [
-        branch.queue.clone(),
-        branch.videoconvert.clone(),
-        branch.videoscale.clone(),
-        branch.videorate.clone(),
-        branch.caps.clone(),
-        branch.tee.clone(),
-    ];
-    remove_elements(pipeline, &elements);
+    // `branch.caps` steckt bereits in `chain_elements` (dessen letztes
+    // Element, s. `build_source_branch`) — kein doppelter Eintrag nötig,
+    // `remove_elements` verträgt ohnehin ein bereits entferntes Element
+    // (stiller No-Op, `let _ = pipeline.remove(el)`).
+    remove_elements(pipeline, &branch.chain_elements);
+    remove_elements(pipeline, &[branch.tee]);
     remove_mxl_video_input(pipeline, branch.mxl_input);
 }
 

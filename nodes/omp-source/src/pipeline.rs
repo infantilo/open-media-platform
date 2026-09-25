@@ -24,8 +24,25 @@ use gst::prelude::*;
 use gstreamer as gst;
 use omp_mediaio::Output;
 use omp_mediaio::mxl::{MxlAudioOutput, MxlContext, MxlVideoOutput};
+use omp_mediaio::preview;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
+
+// Bugliste 2026-09-25 #6 (Vorschaubild-Umschalter am Switcher/Mixer,
+// s. dortige UI-Bundle-Moduldoku): vierter `tee`-Zweig, exakt dasselbe
+// `omp_mediaio::preview::build_mjpeg_branch`-Muster wie `omp-viewer`/
+// `omp-multiviewer` — macht `omp-source` (die in dieser Entwicklungs-
+// umgebung mit Abstand häufigste Crosspoint-Eingangsquelle) zum ersten
+// tatsächlich vorschaubild-fähigen Switcher-Eingang; die anderen bisher
+// preview-fähigen Nodes (`omp-viewer`/`omp-multiviewer`/`-custom`/
+// `omp-scope`) sind reine Empfänger, kommen als Switcher-Eingang gar
+// nicht in Frage. Niedrige, feste Werte (kein einstellbares `previewFps`
+// wie bei `omp-viewer`) — reicht für eine Quellenauswahl-Kachel, keine
+// vollwertige Vorschau.
+const PREVIEW_WIDTH: u32 = 320;
+const PREVIEW_HEIGHT: u32 = 180;
+const PREVIEW_FPS: i32 = 5;
+const PREVIEW_JPEG_QUALITY: i32 = 70;
 
 /// Fallback, falls `main.rs` keine `OMP_WIDTH`/`OMP_HEIGHT`-Umgebungs-
 /// variable findet (Kapitel 15, docs/END-GOAL-FEATURES.md §15.3c,
@@ -67,6 +84,10 @@ pub struct Config {
     /// `FRAMERATE_NUMERATOR`/`FRAMERATE_DENOMINATOR` zurück), s. main.rs.
     pub framerate_numerator: u32,
     pub framerate_denominator: u32,
+    /// Bugliste 2026-09-25 #6: MJPEG-Vorschau-Broadcaster, in `main.rs`
+    /// vor dem Pipeline-Thread erzeugt (dort läuft auch der zugehörige
+    /// `preview::spawn()`-HTTP-Server) — hier nur durchgereicht.
+    pub preview_broadcaster: Arc<preview::Broadcaster>,
 }
 
 pub enum Event {
@@ -103,6 +124,12 @@ struct Pipeline {
     /// Ressource am Leben bleibt (`Drop`), s. `_mxl_output` oben.
     lowres_output: Arc<MxlVideoOutput>,
     lowres_active_count: Arc<AtomicUsize>,
+    /// Bugliste 2026-09-25 #6: MJPEG-Vorschau-Zweig (vierter `tee`-Tap)
+    /// — nur am Leben gehalten, nie einzeln angefasst (kein Referenz-
+    /// Gating wie bei `lowres_output`, die Vorschau läuft immer mit,
+    /// sobald ein Client tatsächlich pollt, s. `preview::Broadcaster`-
+    /// Moduldoku für das Push-nur-bei-Abonnent-Verhalten).
+    _mjpeg_elements: Vec<gst::Element>,
 }
 
 impl Pipeline {
@@ -178,6 +205,21 @@ impl Pipeline {
         // Doku in `omp-mediaio::mxl`), hier reicht ein reiner `queue`-Tap.
         gst::Element::link_many([&tee, &lowres_queue])
             .map_err(|e| PipelineError(format!("link lowres branch: {e}")))?;
+
+        // Bugliste 2026-09-25 #6: vierter `tee`-Zweig, MJPEG-über-HTTP-
+        // Vorschau — `build_mjpeg_branch` fordert seinen eigenen `queue`-
+        // Sink-Pad direkt vom `tee` an, kein eigener Zwischen-`queue` wie
+        // bei den drei Zweigen oben nötig.
+        let mjpeg_elements = preview::build_mjpeg_branch(
+            &pipeline,
+            &tee,
+            &config.preview_broadcaster,
+            PREVIEW_WIDTH,
+            PREVIEW_HEIGHT,
+            PREVIEW_FPS,
+            PREVIEW_JPEG_QUALITY,
+        )
+        .map_err(PipelineError)?;
 
         let mxl_context = Arc::new(
             MxlContext::new(&config.domain)
@@ -279,6 +321,7 @@ impl Pipeline {
             _mxl_audio_output: mxl_audio_output,
             lowres_output,
             lowres_active_count: Arc::new(AtomicUsize::new(0)),
+            _mjpeg_elements: mjpeg_elements,
         })
     }
 

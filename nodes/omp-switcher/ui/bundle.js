@@ -16,31 +16,117 @@
 // sichtbare Zwischenüberschrift), sobald mehr als eine Gruppe existiert
 // — bei fehlender Workflow-Nutzung (kein Workflow oder alle Quellen im
 // selben) bleibt die Liste unverändert flach, wie zuvor.
+//
+// Bugliste 2026-09-25 #6 ("switcher ... braucht ein professionelleres
+// design, unseres wirkt wie eine kindliche Lösung"): Vergleich mit
+// `omp-video-mixer-me/ui/bundle.js` (Screenshot-Vergleich, per Headless-
+// Chromium/CDP bestätigt) zeigte den Unterschied konkret — der Mixer
+// nutzt bereits `<omp-button>` (`ui/kit`, von der Shell geladen, s.
+// dortiger Moduldoku-Kommentar) mit dessen "gegossene Metall-Taste"-
+// Optik + `color="onair"/"preset"`-Tallys, der Switcher bisher rohe,
+// ungestylte `<button>`-Elemente mit fest verdrahteten Ad-hoc-Farben.
+// Fix: dieselbe `<omp-button>`-Komponente + dieselben `--omp-*`-Design-
+// Tokens wie der Mixer — kein neues Design erfunden, sondern das
+// bereits bewährte übernommen (`color="onair"`, da der Switcher direkt
+// PGM schneidet, keinen separaten Preset-Bus hat — passendste Semantik
+// von `ui/design-tokens.css`s Signalfarben). Zusätzlich (Nutzerwunsch
+// "optional einstellbar ... vorschaubild ... der Operator drückt auf
+// das Bild, das er auf PGM sehen will"): ein Umschalter blendet ein
+// kleines Live-Vorschaubild pro Quelle ein — nur für Quellen, deren
+// Node tatsächlich einen `previewUrl`-Stream anbietet (nicht jeder
+// Node-Typ hat das, s. `ui/shell/node-preview.ts`-Moduldoku; ohne
+// Vorschaubild bleibt es bei einem sauber gestylten, rein
+// beschrifteten Knopf statt eines kaputten Bild-Icons).
 class OmpSwitcherPanel extends HTMLElement {
   connectedCallback() {
     const nodeId = this.getAttribute("node-id");
     const shadow = this.attachShadow({ mode: "open" });
 
+    const THUMBS_KEY = `omp-switcher-thumbs-${nodeId}`;
+    const STREAM_TOKEN_KEY = "omp-auth-token";
+    let thumbsEnabled = localStorage.getItem(THUMBS_KEY) === "1";
+
     const style = document.createElement("style");
     style.textContent = `
-      :host { display: block; font-family: sans-serif; color: #eee; }
-      .buttons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+      :host {
+        display: block;
+        font-family: var(--omp-font, system-ui, sans-serif);
+        color: var(--omp-text, #e8eaed);
+        font-size: var(--omp-font-size-sm, 12px);
+      }
+      .toolbar {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: var(--omp-space-2, 8px); margin-bottom: var(--omp-space-2, 8px);
+      }
+      .toolbar-label {
+        font-size: var(--omp-font-size-xs, 11px); font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.06em;
+        color: var(--omp-text-dim, #9aa0a6);
+      }
+      .thumbs-toggle {
+        display: flex; align-items: center; gap: 5px; cursor: pointer;
+        color: var(--omp-text-dim, #9aa0a6); font-size: var(--omp-font-size-xs, 11px);
+        user-select: none;
+      }
+      .thumbs-toggle input { width: 14px; height: 14px; accent-color: var(--omp-info, #4285f4); cursor: pointer; }
+      .buttons { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
       .group-label {
-        flex-basis: 100%; font-size: 10px; text-transform: uppercase;
-        color: #888; margin: 6px 0 -2px;
+        flex-basis: 100%; font-size: var(--omp-font-size-xs, 11px); font-weight: 700;
+        text-transform: uppercase; letter-spacing: 0.06em;
+        color: var(--omp-text-dim, #9aa0a6); margin: 6px 0 -1px; padding-left: 2px;
+        border-left: 2px solid var(--omp-border, #2e3338);
       }
       .group-label:first-child { margin-top: 0; }
-      button {
-        cursor: pointer; padding: 6px 10px; border: 1px solid #555;
-        background: #222; color: #eee; border-radius: 4px;
+
+      /* Ohne Vorschaubilder: kompakte Pille, exakt wie omp-video-mixer-
+         mes Bus-Tasten dimensioniert. */
+      omp-button.source { width: 92px; height: 40px; font-size: 11px; line-height: 1.15; }
+
+      /* Mit Vorschaubildern: Karte mit 16:9-Bild + Beschriftung darunter
+         — der Operator "drückt auf das Bild" (Nutzerwunsch), Text bleibt
+         als eindeutiger Anker daneben, falls zwei Quellen ähnlich aussehen. */
+      omp-button.source.with-thumb { width: 120px; height: auto; padding: 0 !important; }
+      omp-button.source.with-thumb::part(button) { flex-direction: column; padding: 4px !important; gap: 4px; }
+      .thumb {
+        width: 100%; aspect-ratio: 16/9; border-radius: 3px; overflow: hidden;
+        background: #000; position: relative; flex-shrink: 0;
       }
-      button.active { background: #2e7d32; border-color: #4caf50; }
-      p.empty { font-size: 12px; color: #888; margin: 4px 0 0; }
+      .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .thumb .no-signal {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-size: 9px; color: var(--omp-text-disabled, #5f6368); text-transform: uppercase; letter-spacing: 0.05em;
+      }
+      .thumb-label {
+        font-size: 10px; line-height: 1.2; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; max-width: 100%;
+      }
+      p.empty {
+        font-size: var(--omp-font-size-xs, 11px); font-style: italic;
+        color: var(--omp-text-dim, #9aa0a6); margin: 4px 0 0;
+      }
     `;
+
+    const toolbar = document.createElement("div");
+    toolbar.className = "toolbar";
+    const toolbarLabel = document.createElement("span");
+    toolbarLabel.className = "toolbar-label";
+    toolbarLabel.textContent = "Quellen";
+    const thumbsToggle = document.createElement("label");
+    thumbsToggle.className = "thumbs-toggle";
+    const thumbsCheckbox = document.createElement("input");
+    thumbsCheckbox.type = "checkbox";
+    thumbsCheckbox.checked = thumbsEnabled;
+    thumbsToggle.append(thumbsCheckbox, document.createTextNode("Vorschaubilder"));
+    thumbsCheckbox.addEventListener("change", () => {
+      thumbsEnabled = thumbsCheckbox.checked;
+      localStorage.setItem(THUMBS_KEY, thumbsEnabled ? "1" : "0");
+      refresh();
+    });
+    toolbar.append(toolbarLabel, thumbsToggle);
 
     const buttons = document.createElement("div");
     buttons.className = "buttons";
-    shadow.append(style, buttons);
+    shadow.append(style, toolbar, buttons);
 
     const select = (senderId) => {
       fetch(`/api/v1/nodes/${nodeId}/methods/select`, {
@@ -54,6 +140,10 @@ class OmpSwitcherPanel extends HTMLElement {
     // ui/bundle.js#loadFollowTargets: GET /api/v1/graph liefert
     // senderId->nodeId (node.outputs[].id), GET /api/v1/workflows liefert
     // nodeId->workflowId (wf.runtime[role].nodeId) + workflowId->Label.
+    // Liefert zusätzlich `senderNodeId` selbst zurück (Bugliste #6:
+    // Grundlage für die Vorschaubild-URLs — derselbe Node, der den
+    // Sender veröffentlicht, liefert auch dessen `previewUrl`-Stream,
+    // falls vorhanden).
     const senderWorkflowLabel = async () => {
       const [graphRes, workflowsRes] = await Promise.all([
         fetch("/api/v1/graph"),
@@ -80,16 +170,64 @@ class OmpSwitcherPanel extends HTMLElement {
           }
         }
       }
-      const result = new Map();
+      const workflowBySender = new Map();
       for (const [senderId, nId] of senderNodeId) {
         const wfId = nodeWorkflow.get(nId);
-        if (wfId) result.set(senderId, { id: wfId, label: workflowLabel.get(wfId) || wfId, own: wfId === ownWorkflowId });
+        if (wfId) workflowBySender.set(senderId, { id: wfId, label: workflowLabel.get(wfId) || wfId, own: wfId === ownWorkflowId });
       }
-      return result;
+      return { workflowBySender, senderNodeId };
+    };
+
+    // Vorschaubild-Snapshot-URL — identisches Muster zu `ui/shell/node-
+    // preview.ts#previewSnapshotUrl` (eigenes, kleines Modul statt Import:
+    // Node-UI-Bundles sind eigenständig gebaut, kein Zugriff auf die
+    // Shell-eigenen TS-Module).
+    const previewSnapshotUrl = (sourceNodeId) => {
+      const token = localStorage.getItem(STREAM_TOKEN_KEY);
+      const base = `/api/v1/nodes/${sourceNodeId}/stream/previewUrl`;
+      const withToken = token ? `${base}?access_token=${encodeURIComponent(token)}` : base;
+      return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
+    };
+
+    const makeInputButton = (input, active, sourceNodeId) => {
+      const btn = document.createElement("omp-button");
+      btn.className = thumbsEnabled ? "source with-thumb" : "source";
+      btn.active = active;
+      btn.setAttribute("color", "onair");
+      btn.addEventListener("click", () => select(input.senderId));
+
+      if (thumbsEnabled) {
+        const thumb = document.createElement("div");
+        thumb.className = "thumb";
+        if (sourceNodeId) {
+          const img = document.createElement("img");
+          img.alt = input.label;
+          const noSignal = document.createElement("div");
+          noSignal.className = "no-signal";
+          noSignal.textContent = "kein Bild";
+          noSignal.hidden = true;
+          img.addEventListener("load", () => { img.hidden = false; noSignal.hidden = true; });
+          img.addEventListener("error", () => { img.hidden = true; noSignal.hidden = false; });
+          img.src = previewSnapshotUrl(sourceNodeId);
+          thumb.append(img, noSignal);
+        } else {
+          const noSignal = document.createElement("div");
+          noSignal.className = "no-signal";
+          noSignal.textContent = "kein Bild";
+          thumb.append(noSignal);
+        }
+        const label = document.createElement("div");
+        label.className = "thumb-label";
+        label.textContent = input.label;
+        btn.append(thumb, label);
+      } else {
+        btn.textContent = input.label;
+      }
+      return btn;
     };
 
     const refresh = async () => {
-      const [inputsRes, activeRes, senderWorkflow] = await Promise.all([
+      const [inputsRes, activeRes, { workflowBySender, senderNodeId }] = await Promise.all([
         fetch(`/api/v1/nodes/${nodeId}/params/inputs`),
         fetch(`/api/v1/nodes/${nodeId}/params/activeInput`),
         senderWorkflowLabel(),
@@ -100,40 +238,35 @@ class OmpSwitcherPanel extends HTMLElement {
 
       buttons.innerHTML = "";
 
-      const blackBtn = document.createElement("button");
+      const blackBtn = document.createElement("omp-button");
+      blackBtn.className = "source";
       blackBtn.textContent = "Schwarz";
-      blackBtn.className = active === "" ? "active" : "";
+      blackBtn.active = active === "";
+      blackBtn.setAttribute("color", "onair");
       blackBtn.addEventListener("click", () => select(""));
       buttons.append(blackBtn);
 
-      const makeInputButton = (input) => {
-        const btn = document.createElement("button");
-        btn.textContent = input.label;
-        btn.className = input.senderId === active ? "active" : "";
-        btn.addEventListener("click", () => select(input.senderId));
-        return btn;
+      const own = inputs.filter((i) => workflowBySender.get(i.senderId)?.own);
+      const rest = inputs.filter((i) => !workflowBySender.get(i.senderId)?.own);
+      const appendGroup = (list) => {
+        for (const input of list) {
+          buttons.append(makeInputButton(input, input.senderId === active, senderNodeId.get(input.senderId)));
+        }
       };
-
-      // Gruppieren nur, wenn es tatsächlich mehr als eine Gruppe gibt
-      // (eigener Workflow + mindestens ein Rest) — sonst bliebe die
-      // Liste bei "kein Workflow genutzt" unverändert flach, wie vor
-      // diesem Feature.
-      const own = inputs.filter((i) => senderWorkflow.get(i.senderId)?.own);
-      const rest = inputs.filter((i) => !senderWorkflow.get(i.senderId)?.own);
       if (own.length > 0 && rest.length > 0) {
         const ownLabel = document.createElement("div");
         ownLabel.className = "group-label";
         ownLabel.textContent = "Dieser Workflow";
         buttons.append(ownLabel);
-        for (const input of own) buttons.append(makeInputButton(input));
+        appendGroup(own);
 
         const restLabel = document.createElement("div");
         restLabel.className = "group-label";
         restLabel.textContent = "Andere Quellen";
         buttons.append(restLabel);
-        for (const input of rest) buttons.append(makeInputButton(input));
+        appendGroup(rest);
       } else {
-        for (const input of inputs) buttons.append(makeInputButton(input));
+        appendGroup(inputs);
       }
 
       if (inputs.length === 0) {

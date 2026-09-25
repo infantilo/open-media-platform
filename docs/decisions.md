@@ -29746,3 +29746,151 @@ bekannten, vorbestehenden Baseline).
 mediaio/src/bin/hwaccel_selftest.rs` (neu), `nodes/omp-mediaio/src/
 hwaccel.rs` (neu), `nodes/omp-mediaio/src/lib.rs` (`pub mod hwaccel`),
 `nodes/omp-video-mixer-me/src/pipeline.rs`+`src/main.rs`.
+
+## 2026-09-25 (Nachtrag 293) — KRITISCHE Korrektur zu Nachtrag 292: `omp-video-mixer-me` stürzte bei jedem echten Crosspoint-Eingang ab (Panic, nicht live erkannt)
+
+Nutzerauftrag "jetzt #6 und #7" — beim Live-Testen der #6-Arbeiten unten
+(neuer `omp-source`-Vorschau-Zweig als Switcher-Eingang) fand der
+Orchestrator selbstständig eine bereits laufende, von einer früheren
+Session übriggebliebene `omp-webrtc-gateway-camera`-Instanz als
+Crosspoint-Kandidaten — und `omp-video-mixer-me` STÜRZTE SOFORT AB,
+sobald das passierte (`restartCount` lief in der Orchestrator-API auf 4
+hoch, `make status`-Crash-Loop-Bremse griff danach).
+
+**Root Cause:** Nachtrag 292 (dieselbe Session, direkt vorher) hatte
+`build_normalized_branch`s Konvertierungs-/Skalierungskette auf
+`omp_mediaio::hwaccel::build_convert_scale` umgestellt — die liefert
+GPU-abhängig ZWEI (`vaapipostproc`+`capsfilter`) ODER DREI
+(`videoconvert`+`videoscale`+`capsfilter`) Elemente, macht die
+Gesamtlänge der zurückgegebenen `Vec<gst::Element>` damit variabel (5
+ODER 6) statt fest. `build_source_branch` (der Zweig für einen ECHTEN,
+per Crosspoint entdeckten Eingang — anders als die synthetischen
+Schwarz-/Farbflächen-Zweige, die `_`-verwerfen) destrukturierte diese
+`Vec` bisher blind in ein festes `[gst::Element; 5]` per `try_into()
+.expect(...)`: `thread panicked at pipeline.rs:807: build_normalized_
+branch always returns exactly 5 elements`.
+
+**Warum das bei Nachtrag 292 unentdeckt blieb:** die dortige Live-
+Verifikation lief ausschließlich gegen die Standardinstanz OHNE
+verbundene Crosspoint-Quelle — genau der Fall, der NIE `build_source_
+branch` erreicht (nur die synthetischen Zweige). Der Fehler war vom
+allerersten Commit an reproduzierbar, sobald irgendein echter Sender im
+Netz stand, was in Nachtrag 292 schlicht nicht geprüft wurde. Lehre
+(s. auch [[feedback_verify_fix_before_reporting_success]]): eine
+Pipeline-Änderung ist erst gegen die echte, dynamische Architektur
+verifiziert, wenn tatsächlich ein Eingang verbunden wird — nicht nur
+gegen den leeren Standardzustand.
+
+**Fix:** `SourceBranch` hält jetzt `chain_elements: Vec<gst::Element>`
+statt fünf einzeln benannter Felder (`queue`/`videoconvert`/
+`videoscale`/`videorate`/`caps`) — keiner dieser Namen wurde je einzeln
+gebraucht (nur zum Aufräumen in `teardown_source_branch`, plus `caps`
+für den `caps->tee`-Link, jetzt per `elements.last().cloned()` statt
+Destrukturierung). Kein `try_into::<[_; N]>()` mehr an dieser Stelle.
+
+**Live verifiziert (echte Crosspoint-Eingänge, nicht nur der leere
+Standardfall — genau die Lücke von Nachtrag 292):** Orchestrator-
+gestartete Standardinstanz + die real vorhandene `omp-webrtc-gateway-
+camera`-Instanz als entdeckter Eingang (identische Konstellation wie
+der ursprüngliche Absturz) — Instanz blieb über mehrere 5s-Prüfungen
+stabil (unverändertes `pid`, kein `restartCount`), `monitor.
+overallStatus`→`Healthy`, `crosspoint.inputs` listet den echten Sender,
+`crosspoint.take` darauf UND zurück auf Schwarz beide ohne Absturz.
+Zusätzlich das reine `SourceBranch`-Fixing separat per direkt
+gestartetem Binary gegen dieselbe Registry-Situation bestätigt (>2 Min.
+stabil, vorher Absturz binnen Millisekunden nach Sender-Erkennung).
+
+`cargo build --workspace --bins` grün, `cargo clippy -p omp-video-
+mixer-me -D warnings` unverändert bei denselben 8 vorbestehenden
+Fundstellen, `cargo test -p omp-video-mixer-me` grün (3/3).
+
+**Dateien:** `nodes/omp-video-mixer-me/src/pipeline.rs`
+(`SourceBranch`, `build_source_branch`, `teardown_source_branch`).
+
+## 2026-09-25 (Nachtrag 294) — Bugliste #6: Switcher-UI auf Mixer-Niveau gehoben + optionale Vorschaubilder + `omp-source` erster vorschaubild-fähiger Switcher-Eingang
+
+Nutzerauftrag "jetzt #6 und #7" (dieser Nachtrag deckt #6 ab, #7 s.
+Nachtrag 292/293). Zitat: "der switcher und video mixer m/e brauchen
+ein professionelleres design des ui. unseres wirkt derzeit wie eine
+kindliche Lösung. optional einstellbar sollten die Quellen-Buttons ein
+Vorschaubild der entsprechenden Quelle anzeigen. der Operator/
+Regisseur drückt also quasi auf das Bild, das er auf PGM sehen will."
+
+**Erster Schritt: tatsächlich SEHEN, nicht raten, was "kindlich"
+bedeutet.** Beide UI-Bundles in einem Test-Harness (`ui/design-
+tokens.css` + aus `ui/dist/shell.js` extrahiertes `<omp-button>`,
+gemockte `fetch()`-Antworten) per Headless-Chromium/CDP gerendert und
+per Screenshot verglichen (kein Raten am Code allein). Ergebnis: `omp-
+video-mixer-me` nutzt bereits `<omp-button>` (`ui/kit`, von der Shell
+geladen) mit dessen "gegossene Metall-Taste"-Optik + `color="onair"/
+"preset"`-Tallys — sieht bereits professionell aus. `omp-switcher`
+dagegen verwendete rohe, ungestylte `<button>`-Elemente mit fest
+verdrahteten Ad-hoc-Farben (`#222`/`#555`/`#2e7d32`) — GENAU dieser
+Kontrast ist die "kindliche Lösung".
+
+**Fix 1 — Switcher-Redesign:** komplette Übernahme des bereits
+bewährten Mixer-Designs (kein neues Design erfunden): `<omp-button>`
+statt roher `<button>`, `--omp-*`-Design-Tokens, `color="onair"` für
+den aktiven Eingang (der Switcher schneidet direkt PGM, hat keinen
+separaten Preset-Bus — passendste Signalfarbe aus `ui/design-
+tokens.css`). Workflow-Gruppierung (bereits vorhanden) unverändert
+erhalten.
+
+**Fix 2 — optionale Vorschaubilder (`omp-switcher` UND `omp-video-
+mixer-me`):** neuer Umschalter ("Vorschaubilder", pro Node in
+`localStorage` gemerkt) — aktiviert, zeigt jeder Quellen-Button ein
+16:9-Live-Vorschaubild (gleiches `?access_token=`-Query-Param-Muster
+wie `ui/shell/node-preview.ts`, eigenständig repliziert — Node-UI-
+Bundles haben keinen Zugriff auf Shell-TS-Module) statt reinen Texts;
+ohne verfügbaren `previewUrl`-Stream der Quelle (die meisten Node-Typen
+haben noch keinen) bleibt es bei einer sauber gestylten "kein Bild"-
+Karte statt eines kaputten Bild-Icons — "optional" im Sinn des
+Nutzerauftrags UND im Sinn "degradiert sauber, wenn nicht verfügbar".
+BLK/Schwarz bleibt bewusst immer die kompakte Text-Pille (nichts
+Sinnvolles anzuzeigen).
+
+**Fix 3 — `omp-source` bekommt tatsächlich einen `previewUrl`-Stream:**
+ohne diesen Schritt hätte Fix 2 in der Praxis IMMER "kein Bild" gezeigt
+— die bisher einzigen vier `preview`-fähigen Nodes (`omp-viewer`/
+`omp-multiviewer(-custom)`/`omp-scope`) sind reine Empfänger, kommen
+als Switcher-/Crosspoint-Eingang nie in Frage. `omp-source` (mit
+Abstand häufigste Testquelle in dieser Entwicklungsumgebung) bekommt
+jetzt einen vierten `tee`-Zweig (`omp_mediaio::preview::
+build_mjpeg_branch`, identisches Muster wie `omp-viewer`), eigenen
+MJPEG-Vorschau-HTTP-Server (`preview::spawn`, `OMP_SOURCE_PREVIEW_PORT`)
+und den `previewUrl`-Parameter.
+
+**Live verifiziert (jede Schicht einzeln UND end-to-end, kein Raten):**
+- `omp-source`-Instanz über den Orchestrator gestartet: `GET .../stream/
+  previewUrl` liefert ein echtes 320×180-JPEG (SMPTE-Farbbalken,
+  visuell bestätigt) — sowohl mit Bearer-Header als auch über den
+  `?access_token=`-Query-Parameter (exakt der Weg, den ein `<img>`-Tag
+  nutzen muss, keine Header setzbar).
+- Echte `omp-switcher`-Instanz entdeckte die `omp-source`-Instanz
+  korrekt als Crosspoint-Eingang (`GET .../params/inputs`).
+- Beide UI-Bundles im Test-Harness mit Umschalter EIN/AUS gerendert:
+  aktive Quelle korrekt rot/grün getallyt, Layout mit/ohne
+  Vorschaubilder beide sauber, "kein Bild"-Fallback korrekt für Quellen
+  ohne `previewUrl`.
+- `node --check` auf beiden `bundle.js`-Dateien sauber.
+
+**Noch offen, nicht Teil dieses Fixes:** Vorschaubild-Unterstützung für
+weitere Eingangs-Node-Typen (`omp-mxf-player(-direct)`,
+`omp-decklink`, `omp-channel-player`) — dieselbe `preview`-Feature-
+Erweiterung wie bei `omp-source`, hier bewusst nur für den in dieser
+Umgebung mit Abstand wichtigsten Fall umgesetzt. Eine bereits vor
+dieser Session laufende, herrenlose `omp-webrtc-gateway-camera`-Instanz
+(`WebRTC-Gateway (Handy-Kamera) (cda876d5)`) wurde beim Testen entdeckt,
+aber NICHT angefasst (unklare Herkunft, s. Session-Zusammenfassung) —
+der Nutzer sollte prüfen, ob sie noch gebraucht wird.
+
+`cargo build --workspace --bins` grün, `cargo test -p omp-source`
+(0 Tests, keine vorhanden) + Clippy sauber für alle drei betroffenen
+Rust-Pakete (`omp-source` neu clippy-clean, `omp-switcher`/`omp-video-
+mixer-me` unverändert bei ihren jeweils vorbestehenden Fundstellen).
+
+**Dateien:** `nodes/omp-switcher/ui/bundle.js` (komplett neu),
+`nodes/omp-video-mixer-me/ui/bundle.js` (`makeBusButton`/`renderBusRow`/
+`graphContext`/Toolbar), `nodes/omp-source/Cargo.toml` (`preview`-
+Feature), `nodes/omp-source/src/pipeline.rs`+`src/main.rs`
+(MJPEG-Vorschau-Zweig).
