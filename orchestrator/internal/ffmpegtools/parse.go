@@ -170,6 +170,68 @@ func ParseFilters(output string) []FilterEntry {
 	return out
 }
 
+// ParseGlobalOptions parst NUR den globalen/dateiübergreifenden Teil
+// von `ffmpeg -h full` ("Global options" bis "Subtitle options") —
+// bewusst NICHT die hunderte "<Name> encoder/decoder AVOptions:"-
+// Blöcke, die direkt danach folgen und den Großteil der ~15000 Zeilen
+// ausmachen (live an echter `ffmpeg 5.1.9`-Ausgabe geprüft): die deckt
+// Detail() je Encoder/Decoder/Muxer/Demuxer/Filter bereits vollständig
+// UND günstiger ab (on demand statt aller auf einmal). Eine Header-
+// Zeile ist hier "beginnt nicht mit '-' und endet mit ':'" (kein
+// Encoder/Filter-spezifisches Flags-Alphabet nötig, da dieser
+// Ausgabeteil gar keine Flags-Spalte hat); das Erreichen einer
+// Header-Zeile mit "AVOptions" darin beendet das Parsen komplett.
+//
+// Datenzeilen haben KEINE feste Spaltenbreite (dieselbe Falle wie bei
+// ParseDetail, hier ohne Flags-Spalte als Anker) — die erste Stelle
+// mit zwei oder mehr Leerzeichen trennt "-flag [Argument-Platzhalter]"
+// von der Beschreibung; live geprüft, dass kein Datensatz in diesem
+// Ausgabeteil ohne einen solchen Abstand auskommt.
+func ParseGlobalOptions(output string) []GlobalOption {
+	var out []GlobalOption
+	collecting := false
+	section := ""
+	for _, line := range strings.Split(output, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "-") && strings.HasSuffix(trimmed, ":") {
+			if strings.Contains(trimmed, "AVOptions") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "Global options") {
+				collecting = true
+			}
+			if collecting {
+				section = strings.TrimSuffix(trimmed, ":")
+			}
+			continue
+		}
+		if !collecting {
+			continue
+		}
+		idx := strings.Index(trimmed, "  ")
+		head, desc := trimmed, ""
+		if idx != -1 {
+			head, desc = strings.TrimSpace(trimmed[:idx]), strings.TrimSpace(trimmed[idx:])
+		}
+		parts := strings.Fields(head)
+		if len(parts) == 0 || !strings.HasPrefix(parts[0], "-") {
+			continue // unerwartetes Format — überspringen statt zu raten
+		}
+		arg := strings.Join(parts[1:], " ")
+		out = append(out, GlobalOption{
+			Name:        parts[0],
+			Arg:         arg,
+			Description: desc,
+			Section:     section,
+			HasArg:      arg != "",
+		})
+	}
+	return out
+}
+
 var (
 	typeTokenRe = regexp.MustCompile(`^<(\w+)>$`)
 	fromToRe    = regexp.MustCompile(`\(from (\S+) to (\S+)\)`)

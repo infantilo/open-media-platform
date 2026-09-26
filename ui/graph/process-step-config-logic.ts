@@ -728,9 +728,29 @@ export interface ConcatInput {
   audioCodec?: string;
   audioOptions?: Record<string, string>;
   clips: ConcatClip[];
+  // Verlustfrei (Nachtrag Kapitel 23, Nutzerauftrag "verlustfreies
+  // concat"): reines Stream-Copy über ffmpegs concat-PROTOKOLL
+  // (`-i "concat:a|b|c" -c copy`) statt der Filterkette oben — kein
+  // Neukodieren, keine Qualitätsverluste, aber echte ffmpeg-Grenzen:
+  // (1) nur für Container/Codecs zuverlässig, die das concat-Protokoll
+  // unterstützt (laut ffmpeg-Doku vor allem MPEG-1/2-PS/VOB und
+  // MPEG-TS — NICHT generell MP4/MOV/MKV), (2) das Protokoll kennt
+  // KEINEN Beschnitt — pro-Clip `trimStart`/`trimEnd` werden in diesem
+  // Modus bewusst ignoriert (Beschnitt + Verlustfreiheit gleichzeitig
+  // bräuchte einen zweistufigen Trim-dann-Concat-Ablauf mit
+  // Keyframe-genauem Vor-Schnitt je Clip, das ist ein eigener, größerer
+  // Baustein — hier bewusst nicht mitgebaut, s. UMSETZUNG.md). Ebenso
+  // werden Video-/Audio-Codec-Felder ignoriert (das WÄRE Neukodieren).
+  lossless?: boolean;
 }
 
 export function buildConcatArgs(input: ConcatInput): string[] {
+  if (input.lossless) {
+    const args: string[] = ["-y", "-i", `concat:${input.clips.map((c) => c.inputPath).join("|")}`, "-c", "copy"];
+    if (input.format) args.push("-f", input.format);
+    args.push(input.outputPath);
+    return args;
+  }
   const args: string[] = ["-y"];
   for (const c of input.clips) args.push("-i", c.inputPath);
   const filterParts: string[] = [];
@@ -896,6 +916,28 @@ export function globalFlagByName(name: string): GlobalFlagDef | undefined {
   return GLOBAL_FFMPEG_FLAGS.find((f) => f.name === name);
 }
 
+// ---- `-h full`: vollständige globale CLI-Flags vom Server (Kapitel 23, Schritt 5) ---------------
+//
+// `GLOBAL_FFMPEG_FLAGS` oben ist von Hand kuratiert (~34 Einträge) und
+// kennt echte Typen/Auswahllisten (z. B. `-loglevel`s 9 Werte) — Wissen,
+// das reiner `-h full`-Fließtext nicht hergibt. Diese Form
+// (orchestrator/internal/ffmpegtools::GlobalOption, aus dem in W1
+// bewusst ausgelassenen Teil von `-h full`) liefert dafür ALLE
+// ~165 globalen/dateiübergreifenden Flags des tatsächlich installierten
+// ffmpeg — als Fallback für alles, was die kuratierte Tabelle nicht
+// kennt, nicht als deren Ersatz.
+export interface FFGlobalOptionEntry {
+  name: string;
+  arg?: string;
+  description?: string;
+  section: string;
+  hasArg: boolean;
+}
+
+export function globalOptionEntryToFlagDef(entry: FFGlobalOptionEntry): GlobalFlagDef {
+  return { name: entry.name, type: entry.hasArg ? "text" : "boolean", description: entry.description ?? "" };
+}
+
 export interface ArgValidation {
   ok: boolean;
   message?: string;
@@ -908,7 +950,7 @@ export interface ArgValidation {
 // werden NICHT als Fehler markiert (roher Modus bleibt frei — nicht
 // jedes gültige ffmpeg-Flag ist hier oder in ffmpegtools erfasst),
 // nur bekannte Flags werden tatsächlich geprüft.
-export function validateArgValue(flag: string, value: string, dynamicOptions?: Map<string, FFOption>): ArgValidation {
+export function validateArgValue(flag: string, value: string, dynamicOptions?: Map<string, FFOption>, globalOverrides?: GlobalFlagDef[]): ArgValidation {
   const dynamic = dynamicOptions?.get(flag);
   if (dynamic) {
     if (value === "") return { ok: true };
@@ -930,7 +972,7 @@ export function validateArgValue(flag: string, value: string, dynamicOptions?: M
     }
     return { ok: true };
   }
-  const global = globalFlagByName(flag);
+  const global = globalFlagByName(flag) ?? globalOverrides?.find((f) => f.name === flag);
   if (!global) return { ok: true };
   if (global.type === "boolean") return value === "" ? { ok: true } : { ok: false, message: `"${flag}" nimmt keinen Wert (Ein-/Aus-Flag).` };
   if (value === "") return { ok: true };

@@ -13,6 +13,7 @@ import {
   type FFOption,
   flatStringObject,
   formatGoDuration,
+  globalOptionEntryToFlagDef,
   insertionText,
   missingConfig,
   optionEntriesToArgs,
@@ -333,6 +334,25 @@ Deno.test("buildConcatArgs: codec/format options land after the map flags, befor
   assertEquals(args.slice(-7), ["-c:v", "libx264", "-c:a", "aac", "-f", "matroska", "out.mkv"]);
 });
 
+Deno.test("buildConcatArgs: lossless mode uses the concat protocol + stream copy, ignores trim/codec fields entirely", () => {
+  const args = buildConcatArgs({
+    outputPath: "out.ts",
+    lossless: true,
+    videoCodec: "should-be-ignored",
+    clips: [
+      { inputPath: "a.ts", trimStart: "5" }, // trim silently ignored in lossless mode
+      { inputPath: "b.ts" },
+      { inputPath: "c.ts" },
+    ],
+  });
+  assertEquals(args, ["-y", "-i", "concat:a.ts|b.ts|c.ts", "-c", "copy", "out.ts"]);
+});
+
+Deno.test("buildConcatArgs: lossless mode still honors an explicit forced container", () => {
+  const args = buildConcatArgs({ outputPath: "out.ts", lossless: true, format: "mpegts", clips: [{ inputPath: "a.ts" }, { inputPath: "b.ts" }] });
+  assertEquals(args, ["-y", "-i", "concat:a.ts|b.ts", "-c", "copy", "-f", "mpegts", "out.ts"]);
+});
+
 // ---- Zeitgesteuerte Overlays (Kapitel 23, Schritt 4) ----------------------------------------------
 
 Deno.test("buildOverlayArgs: a text event escapes colons for drawtext and applies the timeline enable expression", () => {
@@ -389,4 +409,33 @@ Deno.test("validateArgValue: a dynamically looked-up AVOption (from the paramete
   assertEquals(validateArgValue("-crf", "999", dyn).ok, false);
   assertEquals(validateArgValue("-preset", "fast", dyn), { ok: true });
   assertEquals(validateArgValue("-preset", "ludicrous", dyn).ok, false);
+});
+
+// ---- `-h full`: vollständiger globaler CLI-Flag-Import (Kapitel 23, Schritt 5) --------------------
+
+Deno.test("globalOptionEntryToFlagDef: an argument placeholder means a value is expected, none means a value-less switch", () => {
+  assertEquals(globalOptionEntryToFlagDef({ name: "-ss", arg: "time_off", description: "set the start time offset", section: "Per-file main options", hasArg: true }), {
+    name: "-ss",
+    type: "text",
+    description: "set the start time offset",
+  });
+  assertEquals(globalOptionEntryToFlagDef({ name: "-shortest", description: "finish encoding within shortest input", section: "Advanced per-file options", hasArg: false }), {
+    name: "-shortest",
+    type: "boolean",
+    description: "finish encoding within shortest input",
+  });
+});
+
+Deno.test("validateArgValue: a flag unknown to the curated table is still checked once it's found via the full -h full import", () => {
+  const overrides = [
+    { name: "-vaapi_device", type: "text" as const, description: "set VAAPI hardware device" },
+    { name: "-hide_banner", type: "boolean" as const, description: "do not show program banner" },
+  ];
+  assertEquals(validateArgValue("-vaapi_device", "/dev/dri/renderD128", undefined, overrides), { ok: true });
+  assertEquals(validateArgValue("-hide_banner", "anything", undefined, overrides).ok, false);
+  // Die kuratierte Tabelle gewinnt bei überlappenden Namen (bessere
+  // Typisierung, z. B. echte Auswahllisten) — hier nur zur Absicherung,
+  // dass ein Override eine kuratierte Definition NICHT verdrängt.
+  const conflictingOverride = [{ name: "-loglevel", type: "text" as const, description: "irrelevant, sollte nie greifen" }];
+  assertEquals(validateArgValue("-loglevel", "not-a-real-level", undefined, conflictingOverride).ok, false);
 });

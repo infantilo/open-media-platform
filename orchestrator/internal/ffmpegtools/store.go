@@ -36,6 +36,15 @@ type Store struct {
 
 	detailMu sync.Mutex
 	details  map[string]*Detail
+
+	// `-h full` ist eine eigene, deutlich teurere Abfrage (~15000 Zeilen,
+	// der Großteil davon die pro-Encoder-AVOptions-Wiederholung, die wir
+	// gar nicht brauchen) — bewusst NICHT Teil von ensureLists() oben,
+	// eigenes Once/Cache, nur bei tatsächlichem Bedarf (Kapitel 23,
+	// Schritt 5) geladen.
+	globalOnce    sync.Once
+	globalErr     error
+	globalOptions []GlobalOption
 }
 
 // NewStore nimmt den bereits von main.go per exec.LookPath aufgelösten
@@ -128,6 +137,27 @@ func (s *Store) Filters() ([]FilterEntry, error) {
 		return nil, err
 	}
 	return s.filters, nil
+}
+
+// GlobalOptions liefert die globalen/dateiübergreifenden CLI-Flags aus
+// `ffmpeg -h full` (Kapitel 23, Schritt 5) — der in W1 bewusst
+// ausgelassene Scope-Schnitt (s. ParseGlobalOptions-Moduldoku), einmalig
+// pro Prozesslaufzeit geladen wie ensureLists(), aber separat gecached
+// (eigener, deutlich teurerer Aufruf).
+func (s *Store) GlobalOptions() ([]GlobalOption, error) {
+	s.globalOnce.Do(func() {
+		if !s.Available() {
+			s.globalErr = fmt.Errorf("ffmpegtools: ffmpeg ist auf diesem Host nicht in der Allow-Liste")
+			return
+		}
+		out, err := s.run("-hide_banner", "-h", "full")
+		if err != nil {
+			s.globalErr = err
+			return
+		}
+		s.globalOptions = ParseGlobalOptions(out)
+	})
+	return s.globalOptions, s.globalErr
 }
 
 // Detail liefert `ffmpeg -h <kind>=<name>`, gecached je (kind,name) —

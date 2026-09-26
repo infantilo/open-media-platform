@@ -240,6 +240,89 @@ func TestParseDetailMuxerWithoutOwnOptions(t *testing.T) {
 	}
 }
 
+// Wörtlicher Ausschnitt einer echten `ffmpeg 5.1.9 -h full`-Ausgabe
+// (Kapitel 23, Schritt 5) — Präambel ("Getting help:" etc., muss
+// übersprungen werden, da sie keine echten Flags sind, nur Hilfetext
+// ÜBER -h selbst), ein Ausschnitt aus "Global options"/"Advanced global
+// options", ein Sprung direkt zu "Subtitle options" (der Bereich
+// dazwischen ist irrelevant fürs Parsing-Verhalten) und der Übergang zu
+// "AVCodecContext AVOptions:", der das Parsen beenden muss (dahinter
+// folgen in der echten Ausgabe hunderte pro-Encoder-Blöcke, die absichtlich
+// NICHT hier, sondern on-demand über Detail() abgedeckt werden).
+const globalHelpFixture = `ffmpeg version 5.1.9-0+deb12u1 Copyright (c) 2000-2026 the FFmpeg developers
+Getting help:
+    -h      -- print basic options
+    -h long -- print more options
+    -h full -- print all options (including all format and codec specific options, very long)
+    -h type=name -- print all options for the named decoder/encoder/demuxer/muxer/filter/bsf/protocol
+    See man ffmpeg for detailed description of the options.
+
+Global options (affect whole program instead of just one file):
+-loglevel loglevel  set logging level
+-y                  overwrite output files
+-map_metadata outfile[,metadata]:infile[,metadata]  set metadata information of outfile from infile
+
+Advanced global options:
+-cpuflags flags     force specific cpu flags
+
+Subtitle options:
+-s size             set frame size (WxH or abbreviation)
+-sn                 disable subtitle
+
+
+AVCodecContext AVOptions:
+b                <int64>      E..V.......A..... set bitrate (from 0 to I64_MAX) (default 200000)
+`
+
+func TestParseGlobalOptions(t *testing.T) {
+	got := ParseGlobalOptions(globalHelpFixture)
+
+	// Präambel ("Getting help:" & Co.) darf keine Einträge erzeugen —
+	// weder die eingerückten "-h ..."-Zeilen noch der Fließtextsatz.
+	for _, o := range got {
+		if o.Name == "-h" {
+			t.Fatalf("preamble line was parsed as a real flag: %+v", o)
+		}
+	}
+
+	if len(got) != 6 {
+		t.Fatalf("expected 6 options, got %d: %+v", len(got), got)
+	}
+
+	if got[0].Name != "-loglevel" || got[0].Arg != "loglevel" || !got[0].HasArg || got[0].Section != "Global options (affect whole program instead of just one file)" {
+		t.Errorf("unexpected first entry: %+v", got[0])
+	}
+	if got[1].Name != "-y" || got[1].Arg != "" || got[1].HasArg {
+		t.Errorf("expected -y to be a value-less flag: %+v", got[1])
+	}
+	// Der Argument-Platzhalter selbst enthält Doppelpunkte/Klammern,
+	// aber KEIN doppeltes Leerzeichen — muss trotzdem als EIN
+	// Platzhalter-Token erkannt werden, nicht in die Beschreibung rutschen.
+	if got[2].Name != "-map_metadata" || got[2].Arg != "outfile[,metadata]:infile[,metadata]" {
+		t.Errorf("unexpected multi-bracket arg placeholder: %+v", got[2])
+	}
+	if got[2].Description != "set metadata information of outfile from infile" {
+		t.Errorf("unexpected description: %q", got[2].Description)
+	}
+
+	if got[3].Name != "-cpuflags" || got[3].Section != "Advanced global options" {
+		t.Errorf("unexpected advanced-global entry: %+v", got[3])
+	}
+
+	if got[4].Section != "Subtitle options" || got[5].Section != "Subtitle options" {
+		t.Errorf("expected both remaining entries in Subtitle options, got %+v / %+v", got[4], got[5])
+	}
+
+	// Der "AVCodecContext AVOptions:"-Übergang muss das Parsen beenden —
+	// "b" (eine AVOption, kein CLI-Flag, kein führendes "-") darf nicht
+	// auftauchen.
+	for _, o := range got {
+		if o.Name == "b" {
+			t.Fatalf("parsing did not stop at the AVOptions transition: %+v", got)
+		}
+	}
+}
+
 func TestValidKind(t *testing.T) {
 	for _, k := range []string{"encoder", "decoder", "muxer", "demuxer", "filter"} {
 		if !ValidKind(k) {

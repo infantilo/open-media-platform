@@ -72,6 +72,22 @@ type Option struct {
 	Choices     []OptionChoice `json:"choices,omitempty"`
 }
 
+// GlobalOption ist eine Zeile aus dem globalen/dateiübergreifenden Teil
+// von `ffmpeg -h full` (Kapitel 23, Schritt 5 — der in W1 bewusst
+// ausgelassene Scope-Schnitt) — NICHT die riesigen, pro Encoder/Decoder
+// wiederholten AVOptions-Blöcke am Ende derselben Ausgabe (die deckt
+// Detail() bereits vollständig und günstiger ab, s. ParseGlobalOptions).
+// Anders als eine AVOption hat ein globales Flag keinen erschöpfenden
+// Typ/Bereich/Auswahlliste in ffmpegs eigener Ausgabe — nur einen
+// Namen, einen optionalen Argument-Platzhalter und einen Hilfetext.
+type GlobalOption struct {
+	Name        string `json:"name"`
+	Arg         string `json:"arg,omitempty"`
+	Description string `json:"description,omitempty"`
+	Section     string `json:"section"`
+	HasArg      bool   `json:"hasArg"`
+}
+
 // Kind benennt, wonach `-h <kind>=<name>` fragt — bewusst eine enge
 // Allow-Liste statt eines freien Strings (Hygiene, s. ValidKind).
 type Kind string

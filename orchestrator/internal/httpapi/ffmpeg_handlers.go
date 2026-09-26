@@ -19,6 +19,7 @@ type FFmpegToolsService interface {
 	PixFmts() ([]ffmpegtools.PixFmtEntry, error)
 	Filters() ([]ffmpegtools.FilterEntry, error)
 	Detail(kind, name string) (*ffmpegtools.Detail, error)
+	GlobalOptions() ([]ffmpegtools.GlobalOption, error)
 }
 
 // WithFFmpegTools aktiviert `/api/v1/tools/ffmpeg/...` (UMSETZUNG.md
@@ -69,6 +70,8 @@ func handleFFmpegList(svc FFmpegToolsService, which string) http.HandlerFunc {
 			payload, err = svc.PixFmts()
 		case "filters":
 			payload, err = svc.Filters()
+		case "global-options":
+			payload, err = svc.GlobalOptions()
 		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -102,6 +102,52 @@ func TestStoreDetailAgainstRealFfmpeg(t *testing.T) {
 	}
 }
 
+func TestStoreGlobalOptionsAgainstRealFfmpeg(t *testing.T) {
+	path := requireFfmpeg(t)
+	s := NewStore(path)
+
+	opts, err := s.GlobalOptions()
+	if err != nil {
+		t.Fatalf("GlobalOptions: %v", err)
+	}
+	if len(opts) < 50 {
+		t.Fatalf("expected at least 50 global CLI flags from a real ffmpeg build, got %d", len(opts))
+	}
+	foundY, foundLoglevel := false, false
+	for _, o := range opts {
+		if o.Name == "-y" {
+			foundY = true
+			if o.HasArg {
+				t.Errorf("expected -y to be a value-less flag: %+v", o)
+			}
+		}
+		if o.Name == "-loglevel" {
+			foundLoglevel = true
+			if !o.HasArg {
+				t.Errorf("expected -loglevel to take an argument: %+v", o)
+			}
+		}
+		// Der riesige, absichtlich ausgesparte Per-Codec-Teil darf nicht
+		// auftauchen (z. B. "b" — eine AVOption, kein CLI-Flag).
+		if o.Name == "b" {
+			t.Errorf("parsing leaked into the per-codec AVOptions dump: %+v", o)
+		}
+	}
+	if !foundY || !foundLoglevel {
+		t.Errorf("expected both -y and -loglevel among global options, foundY=%v foundLoglevel=%v", foundY, foundLoglevel)
+	}
+
+	// Zweiter Aufruf muss aus dem Cache kommen (kein erneuter, teurer
+	// `-h full`-Spawn) — nur indirekt geprüft (gleiches Ergebnis).
+	opts2, err := s.GlobalOptions()
+	if err != nil {
+		t.Fatalf("GlobalOptions zweiter Aufruf: %v", err)
+	}
+	if len(opts2) != len(opts) {
+		t.Errorf("gecachtes Ergebnis weicht ab: %d vs %d", len(opts2), len(opts))
+	}
+}
+
 func TestValidKindRejectsUnknown(t *testing.T) {
 	path := requireFfmpeg(t)
 	s := NewStore(path)
@@ -119,6 +165,9 @@ func TestStoreUnavailableWithoutPath(t *testing.T) {
 		t.Error("expected an error when ffmpeg is unavailable")
 	}
 	if _, err := s.Detail("filter", "scale"); err == nil {
+		t.Error("expected an error when ffmpeg is unavailable")
+	}
+	if _, err := s.GlobalOptions(); err == nil {
 		t.Error("expected an error when ffmpeg is unavailable")
 	}
 }

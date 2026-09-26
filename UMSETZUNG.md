@@ -3909,6 +3909,89 @@ Flag-Tabelle + den vollständigen AVOption-Index praktisch abgedeckt),
 und ein Zusammenführen von Audio-Matrix und Filter-Graph-Editor in
 einer Sitzung (aktuell bewusst gegenseitig ersetzend).
 
+### 23.5 Nachtrag — echtes `-h full`-Parsing + verlustfreies Aneinanderhängen (erledigt 2026-09-26)
+
+Nutzerauftrag: die zwei in 23.4 als bewusst offen benannten Ausblicke
+("-h full"-Backend-Parsing, verlustfreies Concat) doch nachziehen.
+
+**`-h full`-Parsing** (`orchestrator/internal/ffmpegtools`): neue
+`GlobalOption`-Form + `ParseGlobalOptions` (`parse.go`) + `Store.
+GlobalOptions()` (`store.go`, eigenes `sync.Once`/Cache, getrennt von
+`ensureLists()` — ein `-h full`-Aufruf ist deutlich teurer als die
+anderen fünf zusammen). **Bewusster Scope-Schnitt gegenüber dem naiven
+"alles parsen":** `-h full` liefert nach den globalen/dateiübergreifenden
+Abschnitten ("Global options" … "Subtitle options", 165 Flags in 9
+Abschnitten) direkt im Anschluss hunderte "<Name> encoder/decoder
+AVOptions:"-Blöcke (den Großteil der ~15000 Zeilen) — exakt das, was
+`Detail()` je Encoder/Decoder/Muxer/Demuxer/Filter bereits vollständig
+UND günstiger (on demand statt alles auf einmal) abdeckt. `ParseGlobal
+Options` erkennt Header-Zeilen ("beginnt nicht mit '-', endet mit ':'")
+und BRICHT beim ersten `AVOptions`-Header komplett ab — der wertvolle,
+kleine Teil wird geparst, der riesige redundante Teil nie angefasst.
+Neue Route `GET /api/v1/tools/ffmpeg/global-options`. Datenzeilen haben
+wie bei `-h <kind>=<name>` keine feste Spaltenbreite (dieselbe Falle
+wie in W1) — die erste Stelle mit 2+ Leerzeichen trennt "-flag
+[Argument-Platzhalter]" von der Beschreibung, token- statt
+spaltenpositionsbasiert. Go-Tests mit wörtlich eingebettetem
+`-h full`-Ausschnitt (inkl. der zu überspringenden "Getting help:"-
+Präambel und des Übergangs zu "AVOptions:") + ein Integrationstest
+gegen den echten Host-ffmpeg (165 Flags, `-y` korrekt wertlos,
+`-loglevel` korrekt wertbehaftet, kein Leck aus dem AVOptions-Bereich).
+
+Frontend (`process-step-config-logic.ts`/`process-step-config.ts`):
+neuer Typ `FFGlobalOptionEntry` + `globalOptionEntryToFlagDef` (Argument-
+Platzhalter vorhanden → `"text"`, sonst → `"boolean"`); `validateArgValue`
+bekommt einen optionalen `globalOverrides`-Parameter — die kuratierte
+34-Einträge-Tabelle (echte Typisierung, z. B. `-loglevel`s neun echte
+Werte) gewinnt weiterhin bei Namensüberschneidung, der vollständige
+Import ist reiner Fallback für alles, was die Tabelle nicht kennt (z. B.
+`-vaapi_device`). Ein einziger, von `fetchFFmpegList` ohnehin gecachter
+Listen-Request (kein progressiver Import wie beim AVOption-Index — hier
+gibt es nur EINE Liste, keine hunderte Detail-Abfragen). Parameter-
+Explorer und Inline-Autovervollständigung durchsuchen jetzt beide
+Quellen; der Lade-Status zeigt beide Zähler getrennt
+("165 globale Flags (-h full) · 1150+ Parameter … durchsuchbar").
+
+Live per CDP gegen den echten, neu gestarteten Orchestrator verifiziert:
+`GET .../global-options` liefert 165 Einträge; Suche nach
+"vaapi_device" im Parameter-Explorer findet `-vaapi_device` (NIE in der
+kuratierten Tabelle enthalten) mit korrektem Hilfetext, Klick fügt es
+ein, Wertsetzung funktioniert.
+
+**Verlustfreies Aneinanderhängen** (`buildConcatArgs`, neues
+`ConcatInput.lossless`-Feld): Stream-Copy über ffmpegs **concat-
+PROTOKOLL** (`-i "concat:a|b|c" -c copy`) statt der bisherigen
+Filterkette — kein Neukodieren, keine Qualitätsverluste. **Bewusste,
+dokumentierte ffmpeg-Grenzen, kein Bug:** (1) das Protokoll ist laut
+ffmpeg-eigener Dokumentation nur für bestimmte Container zuverlässig
+(vor allem MPEG-1/2-PS/VOB und MPEG-TS — NICHT generell MP4/MOV/MKV),
+live an echten `.ts`-Testdateien bestätigt (funktioniert, mit einer
+harmlosen "corrupt input packet"-Warnung an der Nahtstelle, Ausgabedauer
+korrekt = Summe beider Clips); (2) das Protokoll kennt **keinen
+Beschnitt** — pro-Clip-Trim und Verlustfreiheit gleichzeitig bräuchte
+einen zweistufigen Ablauf (Keyframe-genauer Vor-Schnitt je Clip, dann
+Concat), das eine neue ffprobe-Frame-Introspektion UND einen
+mehrstufigen Workflow (mehrere Prozess-Schritte statt eines) bräuchte —
+**bewusst nicht gebaut**, da das eine deutlich größere Änderung wäre als
+"ein Häkchen ergänzen", und weil das Hinzufügen einer neuen HTTP-Route,
+die ffprobe auf einen vom Nutzer angegebenen Dateipfad loslässt, eine
+eigene Sicherheitsabwägung verdient (auch wenn dieselbe Fähigkeit über
+den bestehenden `script`-Workflow-Schritt schon heute erreichbar ist).
+Im Wizard blendet das Häkchen "Verlustfrei (Stream-Copy, kein
+Neukodieren)" die Beschnitt-Felder je Clip UND die Video-/Audio-Codec-
+Felder aus (nie ein Feld sichtbar, dessen Wert in diesem Modus wirkungslos
+wäre) und zeigt einen Hinweistext mit den obigen Einschränkungen.
+
+Live per CDP verifiziert: Häkchen gesetzt → Beschnitt-/Codec-Felder
+verschwinden sofort, Vorschau zeigt exakt `-y -i concat:a.ts|b.ts -c
+copy`. 4 neue `deno test`-Fälle. `deno check ui/**/*.ts`, `deno test
+ui/graph/` (140 Fälle), `deno bundle` (49 Module) sowie `go build/vet/
+test ./...` für den ganzen `orchestrator`-Modulbaum grün.
+
+**Weiterhin bewusst offen** (Greenfield, nur bei echtem Bedarf): pro-
+Clip-Beschnitt bei gleichzeitiger Verlustfreiheit (bräuchte ffprobe-
+Frame-Introspektion + einen mehrstufigen Workflow).
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -4169,3 +4252,4 @@ einer Sitzung (aktuell bewusst gegenseitig ersetzend).
 | Kapitel 23 Schritt 1: Sonderfall "Mehrspur-Container bauen" ausgebaut + Schieberegler-Grundlage für begrenzte AVOptions | erledigt | Nutzerkorrektur: der MXF-Mehrspur-Fall war Maßstab für Ausdruckskraft, keine zu bauende Einzelfunktion (§26.4/22.2) — W2 hatte ihn trotzdem als fünften festen `SCRIPT_INTENTS`-Eintrag gebaut. Entfernt: `MultitrackTrack`/`MultitrackInput`/`buildMultitrackArgs`, `buildScriptWizardMultitrack`, der `"multitrack"`-Intent + zugehörige Tests — Assistent bietet nur noch die vier echten Bausteine (Metadaten/Vorschaubild/Konvertieren/Tonspur extrahieren). Zugleich generische Verbesserung: `ffOptionControlKind` neue Art `"range"` + `optionRangeBounds` — numerische AVOptions mit echten (nicht ffmpegs Sentinel-Strings wie `FLT_MAX`) Ober-/Untergrenzen bekommen einen Schieberegler statt Freitext, automatisch in `ffmpegOptionsList` UND `filter-graph.ts`s eigener Feldlogik. Live per CDP gegen den echten Orchestrator verifiziert: Intent-Dropdown zeigt kein "Mehrspur-Container bauen" mehr; `libaom-av1`-Encoder erzeugt 10 Regler (u. a. `-crf` mit min=-1/max=63/step=1, Regler↔Zahlenfeld synchronisieren beidseitig); `acompressor`-Filterknoten im Filter-Graph-Editor erzeugt 9 Regler (u. a. `level_in` min=0.015625/max=64). `deno check ui/**/*.ts`, `deno test ui/graph/` (121 Fälle), `deno bundle` (47 Module) grün. Schritt 2-5 (generisches Ausgabespur-Mapping, grafische Audio-Matrix, Overlay-Timeline+Concat, Pro-Modus mit `-h full`) als eigene Folgesitzungen geplant, s. UMSETZUNG.md 23.2. | 2026-09-26 |
 | Kapitel 23 Schritt 3-5: grafische Audio-Matrix, zeitgesteuerte Overlays, Clips aneinanderhängen, Pro-Modus-Suche+Validierung | erledigt | Nutzerauftrag "sehr viel weiter und professioneller werden" — drei Schritte in einer Sitzung, da unabhängig voneinander. Audio-Matrix (`audio-matrix-logic.ts`/`audio-matrix.ts`, neu): Crosspoint-Tabelle Quellkanal×Ausgangsspur, kompiliert zu `pan`→`volume`→`adelay`→`amix`/`anull`, alternative Bedienoberfläche zum Filter-Graph-Editor für dieselben `ConvertInput.filterComplex`/`filterOutputLabels`-Felder. Overlay (`buildOverlayArgs`, neuer Intent): Text (`drawtext`)/Bild (`overlay`)-Ereignisse mit `enable='between(t,a,b)'`, escaptes drawtext-Colon/Quote, visuelle (nicht ziehbare) Zeitleiste. Concat (`buildConcatArgs`, neuer Intent "Clips aneinanderhängen"): concat-FILTER (nicht Demuxer) mit `trim`/`atrim`+`setpts`/`asetpts` je Clip, ↑/↓-umsortierbare Liste. Pro-Modus: statt Backend-`-h full`-Parsing eine von Hand gepflegte Tabelle globaler Flags (`GLOBAL_FFMPEG_FLAGS`, ~34 Einträge) PLUS ein progressiv im Hintergrund geladener, modul-weiter Index ALLER AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter (`ensureFullOptionIndex`, live ca. 1150+ Parameter, durchsuchbar bereits während des Ladens) PLUS Inline-Validierung/Autovervollständigung je Argumentzeile (`validateArgValue`, Nachbarschafts-Heuristik). Live per CDP gegen den echten Orchestrator verifiziert: Audio-Matrix erzeugte den exakt erwarteten Filterausdruck inkl. Gain/Delay/Mix; Overlay-Text korrekt escaped mit sichtbarem Zeitleisten-Balken; Concat mit 2 Clips erzeugte die erwartete Filterkette; Parameter-Suche "crf" fand `-crf` in 7 verschiedenen Encodern ohne vorheriges manuelles Aufklappen, Klick fügte es ein, Wert 999 (außerhalb -1..63) wurde live als Fehler markiert, Korrektur auf 30 klärte den Fehler, `-loglevel` mit ungültigem Wert zeigte die gültige Werteliste, Autovervollständigung schlug "-loglevel" beim Tippen von "-lo" vor. `deno check ui/**/*.ts`, `deno test ui/graph/` (132 Fälle), `deno bundle` (49 Module) grün. Bewusst NICHT Teil dieser Sitzung: Kapitel 23 Schritt 2 (generisches Ausgabespur-Mapping als eigentlicher Multitrack-Ersatz) — offener nächster Schritt, s. UMSETZUNG.md 23.3. Ebenfalls bewusst ausgelassen: automatische ffprobe-Kanalerkennung für die Audio-Matrix, `scheduler-view.ts`-Zieh-Mechanik für die Overlay-Zeitleiste, keyframe-genaues verlustfreies Concat, echtes `-h full`-Backend-Parsing. | 2026-09-26 |
 | Kapitel 23 Schritt 2: generisches Ausgabespur-Mapping — Kapitel 23 (Schritt 1-5) damit abgeschlossen | erledigt | Nutzerauftrag "fahre fort" — der tatsächliche, allgemeine Ersatz für die in Schritt 1 ausgebaute "Mehrspur-Container bauen"-Sonderfunktion. Neuer `OutputTrack`-Typ + `buildConvertArgs`-Verzweigung (`process-step-config-logic.ts`): wiederholbare "Ausgabespur"-Gruppen im Konvertieren-Formular, je Spur Quelle (roher Stream-Spezifizierer wie `0:a:0` ODER Filter-Graph-/Audio-Matrix-Label wie `[mxout0]`, mit Schnelleinfüge-Knöpfen für aktuell verfügbare Labels), Medientyp (Video/Audio/Untertitel), Codec inkl. AVOptions (wiederverwendet `ffmpegOptionsList`) und generische Schlüssel/Wert-Metadaten (wiederverwendet `keyValueEditor`, nicht auf title/language beschränkt). Sobald ≥1 Ausgabespur konfiguriert ist, übernimmt sie die Stream-Zuordnung vollständig (Einzelfelder Video-/Audio-Codec werden ausgeblendet, automatisches `-map` aus `filterOutputLabels` entfällt — vermeidet die ffmpeg-Falle "ein `-map` schaltet auf rein explizite Zuordnung um" in widersprüchlicher Mischform). Medientyp-Zähler laufen unabhängig je Typ (`a:0`/`a:1`/`v:0`), AVOptions bekommen denselben Spezifizierer-Suffix wie der Codec. 4 neue Testfälle. Live per CDP gegen den echten Orchestrator verifiziert: zwei Spuren angelegt ließ Einzelfelder sofort verschwinden; Quellen+generisches `title=Deutsch`-Metadatum erzeugten exakt die erwartete Vorschau; Audio-Matrix-Anwendung ließ einen Schnelleinfüge-Knopf "[mxout0] einfügen" live erscheinen, ein Klick füllte die Quelle korrekt, genau EIN `-map [mxout0]` (keine Dopplung mit dem automatischen Filter-Mapping). `deno check ui/**/*.ts`, `deno test ui/graph/` (136 Fälle), `deno bundle` (49 Module) grün. | 2026-09-26 |
+| Kapitel 23 Nachtrag: echtes `-h full`-Parsing + verlustfreies Aneinanderhängen | erledigt | Nutzerauftrag, zwei zuvor bewusst offen gelassene Ausblicke nachzuziehen. `-h full`: neues `orchestrator/internal/ffmpegtools::GlobalOption`/`ParseGlobalOptions`/`Store.GlobalOptions()` — parst NUR die globalen/dateiübergreifenden Abschnitte ("Global options"…"Subtitle options", 165 Flags), bricht beim ersten "AVOptions"-Header ab (der riesige, redundante Per-Codec-Teil wird nie angefasst, `Detail()` deckt den schon ab). Neue Route `GET /api/v1/tools/ffmpeg/global-options`. Go-Tests mit echtem `-h full`-Ausschnitt + Integrationstest gegen den echten Host-ffmpeg (165 Flags, `-y` wertlos, `-loglevel` wertbehaftet, kein Leck aus dem AVOptions-Bereich). Frontend: `FFGlobalOptionEntry`/`globalOptionEntryToFlagDef`, `validateArgValue` bekommt optionalen `globalOverrides`-Parameter — kuratierte Tabelle gewinnt bei Namensüberschneidung (echte Typisierung wie `-loglevel`s 9 Werte), der vollständige Import ist Fallback (z. B. `-vaapi_device`, nie kuratiert). Parameter-Explorer/Autovervollständigung durchsuchen beide Quellen. Verlustfreies Aneinanderhängen: neues `ConcatInput.lossless` nutzt ffmpegs concat-PROTOKOLL (`-i "concat:a\|b\|c" -c copy`) statt der Filterkette — kein Neukodieren. Bewusste, dokumentierte Grenzen (keine Bugs): nur für bestimmte Container zuverlässig (v. a. MPEG-TS/-PS, nicht generell MP4/MOV/MKV, live an echten .ts-Dateien bestätigt), kein Beschnitt möglich (Protokoll kennt keinen Trim — pro-Clip-Trim+Verlustfreiheit gleichzeitig bräuchte ffprobe-Frame-Introspektion + einen mehrstufigen Workflow, bewusst nicht gebaut, auch wegen der eigenen Sicherheitsabwägung einer neuen "ffprobe auf Nutzerpfad"-Route). Häkchen "Verlustfrei" blendet Beschnitt-/Codec-Felder aus. Live per CDP verifiziert: `/global-options` liefert 165 Einträge, Suche nach "vaapi_device" findet es (nie kuratiert), Einfügen+Wertsetzung funktioniert; Concat-Häkchen blendet Felder sofort aus, Vorschau zeigt exakt `-y -i concat:a.ts\|b.ts -c copy`. `deno check ui/**/*.ts`, `deno test ui/graph/` (140 Fälle), `deno bundle` (49 Module), `go build/vet/test ./...` (orchestrator), `make check` (voller Deno+Rust-Baum) grün. | 2026-09-26 |

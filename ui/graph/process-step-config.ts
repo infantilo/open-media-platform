@@ -36,10 +36,13 @@ import {
   type FFFormatEntry,
   type FFFilterEntry,
   type FFOption,
+  type FFGlobalOptionEntry,
   flatStringObject,
   formatGoDuration,
   GLOBAL_FFMPEG_FLAGS,
   globalFlagByName,
+  type GlobalFlagDef,
+  globalOptionEntryToFlagDef,
   insertionText,
   optionHelpText,
   optionRangeBounds,
@@ -126,6 +129,31 @@ async function ensureFullOptionIndex(onProgress: () => void): Promise<void> {
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
   fullOptionIndexReady = true;
   onProgress();
+}
+
+// Globale/dateiübergreifende CLI-Flags aus `ffmpeg -h full` (Kapitel
+// 23, Schritt 5 — der in W1 bewusst ausgelassene Scope-Schnitt, jetzt
+// nachgezogen). Nur EIN Listen-Request (nicht hunderte wie beim
+// AVOption-Index oben) — `fetchFFmpegList` cacht ohnehin je `which`,
+// dieses Modul hält zusätzlich die schon in `GlobalFlagDef` konvertierte
+// Form vor, damit `validateArgValue`/die Autovervollständigung sie ohne
+// erneute Konvertierung nutzen können.
+let fetchedGlobalFlagDefs: GlobalFlagDef[] = [];
+let globalFlagsLoaded = false;
+
+async function ensureGlobalFlags(onLoaded: () => void): Promise<void> {
+  if (globalFlagsLoaded) return;
+  const entries = await fetchFFmpegList<FFGlobalOptionEntry>("global-options");
+  fetchedGlobalFlagDefs = entries.map(globalOptionEntryToFlagDef);
+  globalFlagsLoaded = true;
+  onLoaded();
+}
+
+// Nachschlagen über BEIDE Quellen — kuratiert (bessere Typisierung,
+// z. B. `-loglevel`s Auswahlliste) zuerst, der vollständige `-h full`-
+// Import als Fallback für alles, was die kuratierte Tabelle nicht kennt.
+function lookupGlobalFlag(name: string): GlobalFlagDef | undefined {
+  return globalFlagByName(name) ?? fetchedGlobalFlagDefs.find((f) => f.name === name);
 }
 
 export interface StepConfigContext {
@@ -1207,6 +1235,13 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   }
   const rows: ClipRow[] = [];
   const list = h("div", "");
+  // Verlustfrei-Häkchen (weiter unten definiert) blendet pro-Clip
+  // Beschnitt-Felder aus — jede addClip()-Zeile trägt ihre beiden
+  // Feld-Wrapper hier ein, damit auch NACHTRÄGLICH per "+ weiterer Clip"
+  // hinzugefügte Zeilen sofort den aktuellen Sichtbarkeits-Zustand
+  // bekommen (s. syncLosslessVisibility).
+  const trimFieldsEls: HTMLElement[] = [];
+  let losslessActive = () => false; // durch die Checkbox weiter unten ersetzt
   const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Clip ${i + 1}`));
   const reorder = () => {
     list.replaceChildren(...rows.map((r) => r.box));
@@ -1243,13 +1278,11 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
       reorder();
     });
     btnRow.append(up, down, rm);
-    box.append(
-      heading,
-      field("Quelldatei", path.el, undefined, true),
-      field("Beschnitt Start (optional)", trimStart, "ffmpeg-Zeitangabe, z. B. 5 oder 00:00:05.5 — schneidet den Clip-Anfang weg."),
-      field("Beschnitt Ende (optional)", trimEnd, "ffmpeg-Zeitangabe — schneidet den Clip ab hier weg."),
-      btnRow,
-    );
+    const trimStartField = field("Beschnitt Start (optional)", trimStart, "ffmpeg-Zeitangabe, z. B. 5 oder 00:00:05.5 — schneidet den Clip-Anfang weg.");
+    const trimEndField = field("Beschnitt Ende (optional)", trimEnd, "ffmpeg-Zeitangabe — schneidet den Clip ab hier weg.");
+    trimStartField.style.display = trimEndField.style.display = losslessActive() ? "none" : "";
+    trimFieldsEls.push(trimStartField, trimEndField);
+    box.append(heading, field("Quelldatei", path.el, undefined, true), trimStartField, trimEndField, btnRow);
     rows.push(entry);
     reorder();
   };
@@ -1259,14 +1292,46 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
   addBtn.type = "button";
   addBtn.addEventListener("click", addClip);
 
+  // Verlustfrei (Nutzerauftrag "verlustfreies concat", Nachtrag Kapitel
+  // 23): Stream-Copy über ffmpegs concat-PROTOKOLL statt der Filterkette
+  // — kein Neukodieren, aber ohne Beschnitt-Unterstützung (das Protokoll
+  // kennt keinen Trim) und nur für bestimmte Container zuverlässig (laut
+  // ffmpeg-Doku vor allem MPEG-TS/-PS, NICHT generell MP4/MOV/MKV).
+  // Beschnitt-Felder + Codec-Wahl werden bei aktivem Häkchen ausgeblendet
+  // statt nur ignoriert, damit nie ein Feld sichtbar bleibt, dessen Wert
+  // in diesem Modus wirkungslos wäre.
+  const losslessCheckbox = h("input", "");
+  losslessCheckbox.type = "checkbox";
+  losslessActive = () => losslessCheckbox.checked;
+  const losslessNote = h(
+    "div",
+    HELP_CSS,
+    "Kein Beschnitt möglich, keine Codec-Wahl (bleibt exakt wie die Quellen) — nur zuverlässig für Container, die ffmpegs concat-Protokoll unterstützt (v. a. MPEG-TS/-PS, z. B. .ts-Dateien aus Zuspielungen). Bei inkompatiblen Quellen meldet ffmpeg beim Ausführen einen Fehler statt eine falsche Datei zu erzeugen.",
+  );
+  losslessNote.style.display = "none";
+  const codecFieldsEls: HTMLElement[] = [];
+  const syncLosslessVisibility = () => {
+    const lossless = losslessCheckbox.checked;
+    losslessNote.style.display = lossless ? "" : "none";
+    for (const el2 of trimFieldsEls) el2.style.display = lossless ? "none" : "";
+    for (const el2 of codecFieldsEls) el2.style.display = lossless ? "none" : "";
+  };
+  losslessCheckbox.addEventListener("change", syncLosslessVisibility);
+
+  const videoField = field("Video-Codec", video.el, "Alle Clips werden neu kodiert (Zusammenfügen per Filter, kein reiner Stream-Copy) — leer = ffmpeg-Standard.");
+  const audioField = field("Audio-Codec", audio.el);
+  codecFieldsEls.push(videoField, audioField);
+
   el.append(
     h("div", HELP_CSS + "margin-bottom:4px;", "Die Reihenfolge der Clips unten ist die Reihenfolge in der Ausgabedatei — mit ↑/↓ umsortieren."),
     list,
     addBtn,
     field("Ausgabedatei", output.el, undefined, true),
     field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
-    field("Video-Codec", video.el, "Alle Clips werden neu kodiert (Zusammenfügen per Filter, kein reiner Stream-Copy) — leer = ffmpeg-Standard."),
-    field("Audio-Codec", audio.el),
+    field("Verlustfrei (Stream-Copy, kein Neukodieren)", losslessCheckbox),
+    losslessNote,
+    videoField,
+    audioField,
   );
   return {
     el,
@@ -1280,20 +1345,22 @@ function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
       const f = fmt.read();
       const v = video.read();
       const a = audio.read();
+      const lossless = losslessCheckbox.checked;
       return {
         ok: true,
         command: "ffmpeg",
         args: buildConcatArgs({
           outputPath: o,
           format: f.format || undefined,
-          videoCodec: v.codec || undefined,
-          videoOptions: v.options,
-          audioCodec: a.codec || undefined,
-          audioOptions: a.options,
+          videoCodec: lossless ? undefined : v.codec || undefined,
+          videoOptions: lossless ? undefined : v.options,
+          audioCodec: lossless ? undefined : a.codec || undefined,
+          audioOptions: lossless ? undefined : a.options,
+          lossless,
           clips: rows.map((r) => ({
             inputPath: r.path.value.trim(),
-            trimStart: r.trimStart.value.trim() || undefined,
-            trimEnd: r.trimEnd.value.trim() || undefined,
+            trimStart: lossless ? undefined : r.trimStart.value.trim() || undefined,
+            trimEnd: lossless ? undefined : r.trimEnd.value.trim() || undefined,
           })),
         }),
       };
@@ -1483,6 +1550,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const dynamicOptions = new Map<string, FFOption>();
   const flagCandidates = (): { name: string; description: string }[] => [
     ...GLOBAL_FFMPEG_FLAGS.map((f) => ({ name: f.name, description: f.description })),
+    ...fetchedGlobalFlagDefs.filter((f) => !GLOBAL_FFMPEG_FLAGS.some((g) => g.name === f.name)).map((f) => ({ name: f.name, description: f.description })),
     ...[...dynamicOptions.entries()].map(([name, opt]) => ({ name, description: opt.description ?? "" })),
   ];
 
@@ -1495,9 +1563,9 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     for (let i = 1; i < argInputs.length; i++) {
       const flag = argInputs[i - 1].value.trim();
       if (!flag.startsWith("-")) continue;
-      const isKnownValueFlag = dynamicOptions.has(flag) || (globalFlagByName(flag) && globalFlagByName(flag)!.type !== "boolean");
+      const isKnownValueFlag = dynamicOptions.has(flag) || (lookupGlobalFlag(flag)?.type !== "boolean" && lookupGlobalFlag(flag) !== undefined);
       if (!isKnownValueFlag) continue;
-      const v = validateArgValue(flag, argInputs[i].value.trim(), dynamicOptions);
+      const v = validateArgValue(flag, argInputs[i].value.trim(), dynamicOptions, fetchedGlobalFlagDefs);
       if (!v.ok) {
         argStatuses[i].textContent = `⚠ ${flag}: ${v.message ?? "ungültiger Wert"}`;
         argStatuses[i].style.display = "block";
@@ -1615,7 +1683,7 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const kindLabel: Record<string, string> = { encoder: "Encoder", decoder: "Decoder", muxer: "Muxer/Container", demuxer: "Demuxer", filter: "Filter" };
   const insertGlobalFlag = (name: string) => {
     addArg(name);
-    const def = globalFlagByName(name);
+    const def = lookupGlobalFlag(name);
     if (def && def.type !== "boolean") addArg().focus();
   };
   const insertOption = (flagName: string, opt: FFOption) => {
@@ -1624,11 +1692,13 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     addArg().focus();
   };
   const updateExplorerIndexStatus = () => {
-    explorerIndexStatus.textContent = fullOptionIndexReady
-      ? `Vollständiger Parameter-Index geladen (${fullOptionIndex.length} Parameter durchsuchbar).`
+    const globalPart = globalFlagsLoaded ? `${fetchedGlobalFlagDefs.length} globale Flags (-h full)` : "globale Flags laden …";
+    const paramPart = fullOptionIndexReady
+      ? `${fullOptionIndex.length} Parameter`
       : fullOptionIndexStarted
-      ? `Parameter-Index lädt im Hintergrund … (${fullOptionIndex.length} bisher, Suche funktioniert schon währenddessen)`
-      : "";
+      ? `${fullOptionIndex.length} Parameter bisher (lädt weiter im Hintergrund)`
+      : "Parameter-Index lädt …";
+    explorerIndexStatus.textContent = `${globalPart} · ${paramPart} durchsuchbar.`;
   };
   const runExplorerSearch = async () => {
     const q = explorerSearch.value.trim().toLowerCase();
@@ -1638,6 +1708,16 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     for (const f of globalMatches) {
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
       row.innerHTML = `<b>${f.name}</b> <span style="color:var(--omp-text-dim);">(globales Flag)</span><div style="${HELP_CSS}">${f.description}</div>`;
+      row.addEventListener("click", () => insertGlobalFlag(f.name));
+      explorerResults.appendChild(row);
+    }
+    // Der vollständige `-h full`-Import (Kapitel 23, Schritt 5) — nur
+    // Treffer, die die kuratierte Tabelle oben nicht schon zeigte.
+    const curatedNames = new Set(GLOBAL_FFMPEG_FLAGS.map((f) => f.name));
+    const fetchedMatches = fetchedGlobalFlagDefs.filter((f) => !curatedNames.has(f.name) && (f.name.toLowerCase().includes(q) || f.description.toLowerCase().includes(q)));
+    for (const f of fetchedMatches) {
+      const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
+      row.innerHTML = `<b>${f.name}</b> <span style="color:var(--omp-text-dim);">(globales Flag, -h full)</span><div style="${HELP_CSS}">${f.description}</div>`;
       row.addEventListener("click", () => insertGlobalFlag(f.name));
       explorerResults.appendChild(row);
     }
@@ -1694,6 +1774,10 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     explorerPanel.style.display = opening ? "block" : "none";
     if (opening) {
       updateExplorerIndexStatus();
+      void ensureGlobalFlags(() => {
+        updateExplorerIndexStatus();
+        void runExplorerSearch();
+      });
       void ensureFullOptionIndex(() => {
         updateExplorerIndexStatus();
         void runExplorerSearch();
@@ -1701,7 +1785,11 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     }
   });
   explorerPanel.append(
-    field("Parameter suchen", explorerSearch, "Durchsucht globale Flags, ALLE AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter dieses Servers (z. B. \"crf\" findet direkt libx264s -crf) sowie Werkzeug-/Filter-Namen selbst — Klick auf einen Treffer fügt ihn als Argument ein."),
+    field(
+      "Parameter suchen",
+      explorerSearch,
+      "Durchsucht globale CLI-Flags (kuratiert + vollständig aus \"ffmpeg -h full\"), ALLE AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter dieses Servers (z. B. \"crf\" findet direkt libx264s -crf) sowie Werkzeug-/Filter-Namen selbst — Klick auf einen Treffer fügt ihn als Argument ein.",
+    ),
     explorerIndexStatus,
     explorerResults,
   );

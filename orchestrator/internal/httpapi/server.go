@@ -565,6 +565,11 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/tools/ffmpeg/formats", g.requireAuth(handleFFmpegList(options.ffmpegTools, "formats")))
 	mux.HandleFunc("GET /api/v1/tools/ffmpeg/pix-fmts", g.requireAuth(handleFFmpegList(options.ffmpegTools, "pix-fmts")))
 	mux.HandleFunc("GET /api/v1/tools/ffmpeg/filters", g.requireAuth(handleFFmpegList(options.ffmpegTools, "filters")))
+	// Kapitel 23, Schritt 5: globale/dateiübergreifende CLI-Flags aus
+	// `-h full` (der in W1 bewusst ausgelassene Scope-Schnitt) — eigene
+	// Route statt eines weiteren "kind", da GlobalOption kein `Detail()`-
+	// Gegenstück hat (kein `-h global=X` in ffmpeg).
+	mux.HandleFunc("GET /api/v1/tools/ffmpeg/global-options", g.requireAuth(handleFFmpegList(options.ffmpegTools, "global-options")))
 	mux.HandleFunc("GET /api/v1/tools/ffmpeg/{kind}/{name}", g.requireAuth(handleFFmpegDetail(options.ffmpegTools)))
 	mux.HandleFunc("GET /api/v1/process-definitions", g.requireAuth(handleListProcessDefinitions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore, options.domainAudit)))

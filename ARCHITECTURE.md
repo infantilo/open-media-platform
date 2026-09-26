@@ -4297,3 +4297,15 @@ UMSETZUNG.md 23.3 für die Begründung). Schritt 2 (generisches
 Ausgabespur-Mapping, der eigentliche Multitrack-Ersatz) direkt im
 Anschluss ebenfalls umgesetzt (UMSETZUNG.md 23.4) — **Kapitel 23
 (Schritt 1–5) damit inhaltlich abgeschlossen.**
+
+**Nachtrag 2 (2026-09-26):** die beiden zuvor als bewusst offen
+benannten Ausblicke doch nachgezogen — echtes `-h full`-Backend-Parsing
+(begrenzt auf die globalen/dateiübergreifenden Abschnitte, bricht vor
+dem riesigen redundanten Per-Codec-Teil ab) und verlustfreies
+Aneinanderhängen (ffmpegs concat-PROTOKOLL, `-c copy`, mit klar
+dokumentierten Grenzen: nur bestimmte Container, kein Beschnitt).
+Keyframe-genauer Vor-Schnitt bei gleichzeitiger Verlustfreiheit bleibt
+bewusst offen — bräuchte eine neue "ffprobe auf einen vom Nutzer
+angegebenen Dateipfad"-Route, deren Sicherheitsabwägung (auch wenn
+dieselbe Fähigkeit über den bestehenden `script`-Schritt schon heute
+erreichbar ist) eine eigene Entscheidung verdient, s. UMSETZUNG.md 23.5.
