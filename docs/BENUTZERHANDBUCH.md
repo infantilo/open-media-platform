@@ -337,8 +337,8 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 Beim Datei-Werkzeug öffnet der Doppelklick standardmäßig den
 **Assistenten** — ein Formular mit echten, von diesem Server
 tatsächlich unterstützten Werten (Container, Codecs, Filter samt
-Hilfetext), keine Rohargumente. Über **„Aufgabe"** stehen fünf geführte
-Abläufe zur Wahl:
+Hilfetext), keine Rohargumente. Über **„Aufgabe"** stehen sechs
+geführte Abläufe zur Wahl:
 
 - **Technische Metadaten auslesen** — nur die Eingabedatei angeben,
   liefert Codec/Auflösung/Dauer als JSON im Ergebnisfeld „Ausgabe
@@ -348,38 +348,93 @@ Abläufe zur Wahl:
 - **Format/Codec konvertieren** — Container optional erzwingen,
   Video-/Audio-Codec aus der echten Liste dieses Servers wählen; wird
   ein Codec gewählt, erscheinen seine tatsächlichen Einstellungen
-  (samt Hilfetext, erlaubtem Wertebereich und Standardwert) darunter.
+  darunter — Auswahlliste bei festen Werten, Schieberegler bei
+  Zahlenwerten mit bekannter Ober-/Untergrenze (z. B. `-crf`),
+  Kontrollkästchen bei Ja/Nein, sonst ein Textfeld — jeweils samt
+  Hilfetext, erlaubtem Wertebereich und Standardwert. Wer mehr als
+  eine unabhängige Ausgabespur braucht (siehe „Ausgabespuren“ unten)
+  lässt diese beiden Felder einfach leer.
 - **Tonspur extrahieren** — wie Konvertieren, nur ohne Bild.
-- **Mehrspur-Container bauen** — mehrere Dateien (z. B. je eine
-  Sprachfassung) zu **einer** Ausgabedatei mit mehreren Tonspuren
-  zusammenführen: „+ weitere Tonspur“ fügt eine weitere Datei mit
-  eigenem Codec/Titel/Sprache hinzu. Manche Container (z. B. MXF)
-  verlangen zwingend eine Bildspur, auch für eine reine
-  Tonspur-Zusammenführung — dafür gibt es „Bildquelle (optional)“ samt
-  eigenem Video-Codec (Standard: unverändert übernehmen; schlägt das
-  bei einer bestimmten Quelle fehl, hier einen echten Encoder wählen).
+- **Clips aneinanderhängen (Schnittliste)** — mehrere Dateien in einer
+  festgelegten Reihenfolge zu einer Ausgabedatei zusammenfügen, mit
+  ↑/↓ umsortierbar, je Clip optional mit Start-/End-Beschnitt. Das
+  Häkchen **„Verlustfrei (Stream-Copy, kein Neukodieren)“** schaltet
+  auf reinen Stream-Copy um (blendet dabei Beschnitt- und Codec-Felder
+  aus, da beides in diesem Modus wirkungslos wäre) — zuverlässig vor
+  allem für Container wie MPEG-TS/-PS, nicht generell für MP4/MOV/MKV
+  (siehe Hinweistext im Formular).
+- **Overlay/Senderkennung/Abspann zeitgesteuert einblenden** — beliebig
+  viele Text- (z. B. Bauchbinde, Abspann-Credits) oder Bild-Ereignisse
+  (z. B. Senderlogo), jedes mit eigenem Start-/Endzeitpunkt in Sekunden
+  und optionaler Position; eine schlichte Zeitleiste darüber zeigt zur
+  Orientierung, wie die Ereignisse zeitlich verteilt sind (nicht
+  ziehbar, nur zur Übersicht).
 
-![Assistent: Aufgabe „Mehrspur-Container bauen“, echte Container-/Codec-Auswahl mit Hilfetexten](screenshots/prozess-ffmpeg-assistent.png)
+![Assistent bei „Format/Codec konvertieren“: Filter-Kette/Audio-Matrix-Knöpfe und die generische Ausgabespuren-Liste](screenshots/prozess-ffmpeg-assistent.png)
 
-Bei „Format/Codec konvertieren“ öffnet **„Filter-Kette bearbeiten …“**
-einen eigenen, größeren Dialog: Filter aus der echten Filterliste
-dieses Servers suchen und als Kachel hinzufügen, per Ziehen vom
-farbigen Punkt einer Kachel auf den Eingang der nächsten verbinden.
-Ein „Eingang“-Baustein steht für eine Quelldatei (Kennung z. B. `0:v`),
-ein „Ausgang“-Baustein für das Ergebnis. Filter mit einstellbarer
-Eingangs-/Ausgangszahl (z. B. zum Mischen mehrerer Tonspuren) zeigen
-ein Zahlenfeld dafür. „Automatisch anordnen“ räumt die Kacheln auf,
-„Übernehmen“ baut daraus die tatsächliche Filterkette. Referenziert die
-Filterkette mehr als eine Quelle, erscheint im Hauptformular darunter
-„Weitere Eingabedateien“ — die erste Datei bleibt Kennung `0`, jede
-weitere zählt hoch.
+Innerhalb von „Format/Codec konvertieren“ gibt es zwei weitere
+Bausteine, die zusammen abdecken, was früher eine eigene, inzwischen
+wieder ausgebaute „Mehrspur-Container bauen“-Sonderfunktion war:
+
+- **„Audio-Matrix bearbeiten …“** öffnet ein Kreuzschienen-Raster:
+  Zeilen sind die Tonkanäle aller angegebenen Quelldateien (Haupt-
+  Eingabedatei plus beliebig viele „+ weitere Quelldatei“), Spalten
+  sind frei wählbare Ausgangsspuren. Jede Zelle hat einen Anteil in %
+  und eine Verzögerung in ms — eine Zelle mit Anteil 0 trägt nichts
+  bei, eine Ausgangsspur ganz ohne Beitrag wird gar nicht erst erzeugt.
+  So lassen sich Kanäle beliebig routen, anteilig mischen und
+  zueinander verzögern, ohne Filtersyntax zu kennen.
+
+  ![Audio-Matrix: Quellkanäle zweier Dateien, anteilig auf zwei Ausgangsspuren gemischt und verzögert](screenshots/audio-matrix.png)
+
+- **„+ Ausgabespur“** (weiter unten im Formular) legt beliebig viele
+  unabhängige, einzeln kodierte Ausgangsspuren an — Quelle (roher
+  Stream-Spezifizierer wie `0:a:0`, oder per Knopf ein Label aus der
+  Audio-Matrix/Filter-Kette wie `[mxout0]` übernehmen), Medientyp,
+  Codec samt Optionen und beliebige Metadaten-Schlüssel (nicht nur
+  Titel/Sprache — jeder Schlüssel, den ffmpeg versteht). Sobald
+  mindestens eine Ausgabespur angelegt ist, übernimmt diese Liste die
+  komplette Spurzuordnung; die einfachen Video-/Audio-Codec-Felder
+  weiter oben blenden sich dafür aus, damit nie zwei widersprüchliche
+  Angaben gleichzeitig sichtbar sind.
+
+Ebenfalls bei „Format/Codec konvertieren“ öffnet **„Filter-Kette
+bearbeiten …“** einen eigenen, größeren Dialog: Filter aus der echten
+Filterliste dieses Servers suchen und als Kachel hinzufügen, per
+Ziehen vom farbigen Punkt einer Kachel auf den Eingang der nächsten
+verbinden. Ein „Eingang“-Baustein steht für eine Quelldatei (Kennung
+z. B. `0:v`), ein „Ausgang“-Baustein für das Ergebnis. Filter mit
+einstellbarer Eingangs-/Ausgangszahl (z. B. zum Mischen mehrerer
+Tonspuren) zeigen ein Zahlenfeld dafür, Zahlenwerte mit bekannter
+Ober-/Untergrenze erscheinen als Schieberegler. „Automatisch anordnen“
+räumt die Kacheln auf, „Übernehmen“ baut daraus die tatsächliche
+Filterkette. Referenziert die Filterkette mehr als eine Quelle,
+erscheint im Hauptformular darunter „Weitere Eingabedateien“ — die
+erste Datei bleibt Kennung `0`, jede weitere zählt hoch. Audio-Matrix
+und Filter-Kette teilen sich dasselbe Ergebnis (die Filterkette hinter
+den Kulissen) und ersetzen sich daher gegenseitig, statt sich zu
+ergänzen — wer beides braucht, baut die Audio-Matrix-Logik von Hand als
+Filterkette nach.
 
 ![Visueller Filter-Graph-Builder: Eingang → scale → Ausgang, echte Filterliste + Optionen links](screenshots/filter-graph-builder.png)
 
 Wer die rohe ffmpeg-Befehlszeile kennt, kann jederzeit auf
-**„Stattdessen rohe Argumente eingeben (Experten-Modus)"** umschalten —
-identisch zum bisherigen Verhalten, inklusive Vorlagen und „Befehlszeile
-einfügen …“.
+**„Stattdessen rohe Argumente eingeben (Experten-Modus)"** umschalten.
+Auch hier muss niemand mehr Parameter auswendig kennen: bekannte Flags
+werden beim Tippen eines „-“ automatisch vorgeschlagen (Name +
+Hilfetext), und der eingegebene Wert wird sofort gegen die bekannte
+Definition geprüft (Zahlenbereich, Auswahlliste, Ja/Nein) — ein
+falscher Wert erscheint direkt als Warnung unter dem Feld. Der Knopf
+**„Parameter suchen …“** öffnet einen durchsuchbaren Katalog, der
+buchstäblich jeden Parameter dieses Servers umfasst: alle globalen
+ffmpeg-Flags (aus `ffmpeg -h full`) plus alle AVOptions aller
+installierten Encoder/Decoder/Muxer/Demuxer/Filter (typischerweise über
+1.000 Parameter insgesamt) — eine Suche nach z. B. „crf“ findet direkt
+`-crf` in jedem Encoder, der es kennt, ganz ohne diesen Encoder vorher
+von Hand aufzuklappen. Klick auf einen Treffer fügt ihn als neues
+Argument ein.
+
+![Experten-Modus: Parameter-Explorer findet "-crf" in sechs verschiedenen Encodern, mit echten Wertebereichen](screenshots/parameter-explorer.png)
 
 ## 5b. Assets
 

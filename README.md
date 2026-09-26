@@ -70,6 +70,14 @@ Although the project is still in its early stages, the current version is alread
 
 I'm excited to see how this approach evolves and look forward to exchanging ideas with everyone involved in software-defined broadcast systems, open standards, or modern media architectures.
 
+**Contents:** [Quickstart](#quickstart) · [Demo](#demo) ·
+[Screenshots](#screenshots) · [What's in the box](#whats-in-the-box)
+(standard-based core, flow editor & workflows, business process engine
+& asset catalog, microservices, reliability & operations) · [What
+OpenMediaPlatform does not do](#what-openmediaplatform-does-not-do) ·
+[Status](#status) · [License](#license) · [Related
+project](#related-project)
+
 ## Quickstart
 
 ```sh
@@ -239,16 +247,30 @@ task, media function (drives any self-described node method through
 the same IS-12/14 contract the Flow Editor uses), service call,
 allow-listed shell script (`ffmpeg`/`ffprobe` auto-detected on the
 host, nothing else runs unless explicitly allow-listed) — with a
-**guided assistant** on top rather than raw CLI flags: five tasks
-(read technical metadata, make a thumbnail, convert format/codec,
-extract an audio track, build a multi-track container) driven by the
-host's *actual* installed ffmpeg — real encoder/container/filter
-lists and their real options, valid ranges, and defaults, introspected
-live rather than hand-maintained, plus a visual drag-and-drop
-filter-graph builder (search a real filter, wire named pads, adjustable
-pad count for filters like `amix`) that compiles to the real
-`-filter_complex` syntax; raw arguments stay one click away for anyone
-who prefers them — condition/
+**guided assistant** on top rather than raw CLI flags, built entirely
+from the host's *actual* installed ffmpeg (real encoder/container/
+filter lists, their real options, valid ranges and defaults —
+introspected live, never hand-maintained, so it can't drift out of
+sync with the ffmpeg build it's actually driving): read technical
+metadata, make a thumbnail, convert format/codec (parameter fields
+adapt to what the chosen codec/container actually supports — a select/
+checkbox/range per option, not a blind text box), extract an audio
+track, concatenate clips into a "Schnittliste" (optionally as a true
+stream-copy with no re-encoding, for compatible source formats), and
+place timed text/image overlays (branding, credits) with a start/end
+per event. A graphical routing/mixing/delay matrix maps arbitrary
+source channels onto output tracks (percentage mix, millisecond
+delay), and output tracks themselves are a generic, repeatable
+building block — any number of independently-coded tracks with
+free-form metadata, not a fixed title/language pair. A visual
+drag-and-drop filter-graph builder (search a real filter, wire named
+pads, adjustable pad count for filters like `amix`) compiles to the
+real `-filter_complex` syntax. For anyone who needs a parameter the
+guided forms don't surface yet, an expert mode exposes literally every
+parameter across every installed encoder/decoder/muxer/demuxer/filter
+plus the full set of global CLI flags (over a thousand, all searchable
+by name or description, inserted with one click, validated inline as
+you type) — raw arguments are never more than one click away — condition/
 branch (a sandboxed expression language, no host access), parallel/
 join, wait/timer, human task/approval (assign, claim, decide, with
 optimistic-concurrency-safe state), notification, subworkflow, and
@@ -428,19 +450,24 @@ node has to satisfy.
   60 ms — deliberately asymmetric, because the standard is).
 
   This paid for itself on the first run. Pointed at a plain test
-  source, it measured that this project's own MXL writers drift against
-  the MXL clock: video stamps its grains about four frames into the
-  *future*, audio falls progressively behind. Both numbers were then
+  source, it measured that this project's own MXL writers drifted
+  against the MXL clock: video stamped its grains about four frames
+  into the *future*, audio fell progressively behind. Both numbers were
   confirmed independently by MXL's own `mxl-info` tool (audio: scope
-  +408 ms vs. `mxl-info` +406 ms). That is not a new bug — it is the
-  first actual measurement of a simplification `MxlVideoOutput` has
+  +408 ms vs. `mxl-info` +406 ms). That was not a new bug — it was the
+  first actual measurement of a simplification `MxlVideoOutput` had
   documented since day one ("index initialised once, incremented
   freely, no drift correction … a production source should switch to
-  the PTS-based method *if drift is observed*"). Nothing sounds wrong
-  today, because no consumer in OMP plays out by TAI stamp; it is a
-  latent defect that surfaces the moment one does. Fixing it belongs in
-  the writer path and is its own step — the measuring device that can
-  prove it is the prerequisite.
+  the PTS-based method *if drift is observed*"). Root-caused over the
+  following two sessions to a one-way ratchet in the write-index
+  calculation (a scheduling hiccup could push the index ahead of real
+  time, but the guard only ever compared upward, so it could never fall
+  back) and fixed by capping the ratchet and dropping a sample rather
+  than ever moving the index backward (which would corrupt MXL's own
+  ring buffer) — live-verified stable over a 96-second run afterward.
+  Full trail: `docs/decisions.md` Nachtrag 226/236/237. Exactly the kind
+  of latent defect a measuring device is supposed to catch before a
+  standards-facing consumer would have been misled by it.
 
 ## What OpenMediaPlatform does **not** do
 
@@ -463,19 +490,13 @@ Being upfront about the current edges, not just the highlights:
   drag. Only standalone (non-workflow) node instances can be moved
   today via drag-and-drop; migrating a workflow role needs the API
   directly for now.
-- **MXL writer timestamps drift against the MXL clock.** Measured, not
-  suspected: `omp-scope` (plus MXL's own `mxl-info` as an independent
-  check) shows the video writer stamping grains roughly four frames
-  ahead of the clock and the audio writer falling progressively behind,
-  so the A/V offset *as the timestamps describe it* is large and grows.
-  Nothing misbehaves audibly today — every consumer here plays out by
-  arrival time, not by TAI stamp — but a standards-facing consumer
-  would be misled. The cause is the documented simplification in the
-  MXL write path (grain index initialised once, then free-running, with
-  no drift correction); the fix belongs there and hasn't been made yet.
-  Related: OMP's own flow definitions use each flow's own ID as the
-  NMOS grouphint group name, so a source's video and audio flows never
-  share a group, which is exactly what that tag is for.
+- **NMOS grouphint not yet meaningful for video/audio pairs.** OMP's
+  own flow definitions use each flow's own ID as the NMOS grouphint
+  group name, so a source's video and audio flows never share a group
+  — which is exactly what that tag is for (a foreign controller can't
+  currently use it to recognize them as a pair). (The MXL writer clock
+  drift `omp-scope` originally found alongside this — see "What's in
+  the box" above — has since been root-caused and fixed.)
 - **No independent security audit.** Auth, mTLS, and audit logging
   exist and are exercised by the test suite, but there has been no
   external penetration test or formal security review.
@@ -494,220 +515,78 @@ the gap, contributions and issues are welcome.
 
 ## Status
 
-Architecture/tech stack decided (see `ARCHITECTURE.md`), implementation
-follows `UMSETZUNG.md` (status checklist there, continuously updated —
-that's where the actual current state lives, not here).
+Architecture/tech stack decided (see `ARCHITECTURE.md`); implementation
+follows `UMSETZUNG.md`, whose status checklist is the authoritative,
+continuously updated build log — every chapter/step, what changed, how
+it was verified, and the date. This section is a snapshot of where
+things stand, not a second copy of that history; most of what's listed
+here is already described in full under "What's in the box" above, so
+this stays short on purpose.
 
-Already in place: foundation, drag-and-drop flow editor, workflow
-objects/presets, the small control room (source/switcher/video mixer/
-audio mixer/player/multiviewer/playout automation/OGraf graphics, all
-launchable from the GUI), mixer presets (snapshot/recall), ST 2110
-video/AES67 audio (incl. Dante in AES67 mode, SAP discovery) plus a
-native ST 2110 gateway in addition to the SRT gateway, an opt-in PTP
-timebase for the 2110 paths (`OMP_PTP_DOMAIN`, verified live
-synchronized across two network namespaces), real **remote memory
-access** between two OMP hosts via MXL-native Fabrics
-(`omp-fabrics-gateway`, verified live over the software `tcp` provider
-— RDMA zero-copy testable without RDMA hardware, see
-`docs/HANDBUCH.md` §9.3), a highly available PostgreSQL backend
-(Patroni + etcd, automatic primary failover), mTLS orchestrator↔
-nodes, a local user/role model with login and audit log, a node SDK
-tutorial, remote-host discovery including a command channel (instances
-can also be started/stopped on a remote machine, via a host agent with
-a host-local catalog as the trust boundary), automatic process restart
-with a crash-loop brake, a metrics endpoint, plus an operations view
-with running instances (CPU/RAM per process), host resource history,
-and collected alarms. The flow editor itself automatically shows host
-zones on the same canvas once more than one host is registered (one
-zone per machine with live CPU/RAM, fixed lanes, toggleable) — makes it
-visible at a glance which instance is actually running on which host,
-not just in the separate hosts tab. A connection that would cross a
-host boundary over host-local MXL is flagged in a warning style right
-on the canvas, zones can be collapsed, and a standalone node's tile can
-be dragged into another zone to trigger a guided move (confirmation
-dialog, then stop/start/reconnect). Also added since then: a scheduler
-tab for time-driven start/stop of entire workflows (day/week/month
-view, drag-to-move/resize schedules), a resource preview (typical
-CPU/RAM load per node type right in the catalog, from real measurement
-history), a GUI import path for containerized third-party microservices
-(Podman images, admission check, multiple versions of the same type in
-parallel), and a placement engine (overload alarm + target-host
-suggestion, already accounts for other workflows' scheduled runs) —
-since Kapitel D6 Teil 4 configurable per workflow role between purely
-advisory (default), a confirmation window with automatic execution on
-expiry, and immediate automatic execution, each via a real
-make-before-break move to a healthy fallback host. Since Kapitel K7
-Teil 4 additionally an automatic hot-standby failover for critical
-roles (`Role.standbyFor`, triggered by crash-loop or host-offline
-detection, operator state carried over via the existing state
-export/import mechanism), plus, since D8, a workflow latency budget
-(`targetLatencyFrames`): the orchestrator hard-rejects wiring that
-can't meet the target and automatically compensates paths that are too
-short by assigning output delay to capable nodes (currently
-`omp-scaler`, `omp-video-mixer-me`). Since Kapitel 13 Teil 4, a running
-workflow's collapsed tile is placed in the host zone matching where its
-roles actually run (its own zone when split across hosts), instead of
-floating outside the host view; the operator console also now shows
-which host each assigned node UI is running on. Since Kapitel D9/D11,
-IS-05-01 (Connection API) conformance runs for real in CI against a
-running node, not just IS-04-02 against the registry — the official
-AMWA NMOS Testing Tool goes from 0 executed tests to 29 passing after
-adding the missing base-discovery endpoints and fixing real gaps it
-then surfaced (schema-incomplete default responses, PATCH accepting
-malformed bodies, a scheduled-activation TAI/UTC time bug), with every
-remaining accepted deviation named individually rather than skipped
-silently. The mock node also gained a real Sender-side IS-05 Connection
-API (staged/active/constraints/transporttype/transportfile, bulk POST),
-closing the one remaining exception group (`auto_connection_*`, which
-needs a real IS-04-registered sender to connect to) — CI now runs with
-zero accepted deviations for IS-05-01. The Connection API now also
-serves the current **AMWA IS-05 v1.2.0** release (Aug. 2024) side by
-side with v1.1.x — checked against the real v1.2.0 schemas/examples
-rather than assumed, with node-global version/bulk discovery and CORS
-preflight support added across all node implementations, Rust included
-(Go/mock-node side verified green against both API versions in CI;
-Rust nodes aren't part of the CI gate at all, verified locally instead —
-see `docs/decisions.md` Nachtrag 189–197 for the full trail). Since
-Kapitel D10, a real
-Blackmagic DeckLink SDI/IP capture
-card can be bridged to/from MXL (`omp-decklink`, both directions).
-Since D12, the orchestrator itself runs as a Raft-consensus cluster —
-one or more instances, automatic leader election, and the critical
-control-plane state (migration locks, crash-loop tracking, standby
-promotion, scheduler firing) survives a leader failover without
-duplicate or lost actions. Since D13, I/O cards (e.g. the DeckLink
-ports above) are a placement-aware resource: a real device inventory
-plus exclusive claim/release means the placement engine only ever
-starts an instance where the required port is actually free, with a
-clean rejection (and rollback) otherwise. Since D14, the NATS event bus
-is clustered too (three nodes, automatic client failover). Since D15,
-PostgreSQL itself is highly available via Patroni + etcd — a killed
-primary is automatically promoted from a replica within seconds, and
-the orchestrator's own database connection follows the failover with
-no restart. Together, D12/D14/D15 close every remaining single point of
-failure in the control plane (orchestrator process, event bus, and
-datastore are all redundant now). Also added since then: a guided
-Host-Setup wizard (bare-metal/VM/AWS, in the Hosts tab) and a Cluster
-tab under Administration (Raft status, plus a guided join/leave for
-growing or shrinking the orchestrator cluster) — both flows existed as
-API-only since D6/D12, now they're a walkthrough in the UI. Most
-recently, AMWA BCP-008-01/02 receiver/sender status monitoring landed
-across every node with a real network/hardware boundary
-(`omp-2110-gateway`, `omp-decklink`, `omp-aes67-gateway`,
-`omp-srt-gateway`) plus the MXL-internal nodes that most benefit from
-knowing whether an input's flow is actually readable
-(`omp-video-mixer-me`, `omp-viewer`, `omp-recorder`) — real signals
-throughout (GStreamer jitterbuffer stats, PTP lock, DeckLink cable
-lock, SRT connection stats), exposed as generic `monitor.*` parameters
-on each node's self-description.
+**Foundation & high availability** — Raft-clustered orchestrator (no
+control-plane SPOF), clustered NATS, Patroni/etcd-HA PostgreSQL,
+placement-aware I/O-port claims, mTLS orchestrator↔node, local user/
+role model with audit log and multi-organization access scoping,
+guided host- and cluster-onboarding wizards, hot-standby failover for
+critical roles, a workflow latency budget with automatic delay
+compensation.
 
-Since D16, the NMOS Registry can run over AMWA BCP-003-01 transport TLS
-instead of plaintext HTTP (opt-in, `make nmos-registry-tls-up`, same
-model as orchestrator↔node mTLS). Since D17/D18/D21, AMWA NMOS IS-08
-(Audio Channel Mapping) is live on all three gateway/card nodes that
-carry an independent audio path (`omp-aes67-gateway`, `omp-decklink`'s
-embedded SDI audio, and `omp-2110-gateway`'s new ST 2110-30 audio
-ingest/output) — a real `audiomixmatrix` routed live via the standard
-`/x-nmos/channelmapping/v1.0/` API, not just a status readout. Since
-D19/D20, a centralized observability system ties it all together: a
-trace ID follows every IS-05 connect/disconnect and generic-proxy
-request end to end, landing in one replicated log channel instead of
-scattered per-process stdout, surfaced through a "Diagnose" tab in the
-Flow Editor with live tailing, trace pivoting, and a graph overlay that
-highlights every tile a failing trace actually touched.
+**Flow editor & multi-host operation** — drag-and-drop canvas with
+automatic host zones once more than one host is registered (live CPU/
+RAM per zone, cross-host MXL connections flagged automatically), a
+guided move for standalone node tiles between hosts, a scheduler for
+time-driven workflow start/stop, a placement engine (overload alarm +
+target-host suggestion, configurable advisory/confirm/automatic), a GUI
+import path for third-party Podman-container microservices.
 
-Most recently, the measurement node `omp-scope` grew from a picture-and-
-level scope into a timing instrument: per-flow MXL transport latency,
-delay variation, cadence and dropped-grain counters read from the grain
-origin timestamps, lip-sync scored against EBU R 37, the writer's own
-flow declaration shown next to the measured reality, held black/freeze/
-silence alarms, and ITU-R BS.1770 true peak with an EBU R 128 compliance
-verdict — which immediately surfaced a real, independently confirmed
-clock-drift defect in this project's own MXL writers (see "What
-OpenMediaPlatform does not do"). The MXL core itself was also brought
-up to the current stable release, and interoperability against the MXL
-project's own independent reference tooling was verified directly, in
-both directions and down to actual pixels — see the MXL bullet above.
+**Standards conformance** — see the table near the top of this file
+for what's verified and how; in short, IS-04/IS-05 (both v1.1.x and
+v1.2.0) run 62/62 in CI with zero accepted exceptions, IS-08 audio
+channel mapping is live on every node with an independent audio path,
+BCP-008-01/02 receiver/sender health status is live on every node with
+a real network/hardware boundary, the NMOS Registry can run over
+BCP-003-01 transport TLS, MXL flows use the standardized BCP-007-03
+transport, and a real Blackmagic DeckLink SDI/IP card bridges to/from
+MXL in both directions.
 
-Most recently, the MXL transport moved from a proprietary
-`urn:x-omp:transport:mxl` to the now-standardized **AMWA BCP-007-03
-v1.0.0** transport (`urn:x-nmos:transport:mxl`, real
-`mxl_domain_id`/`mxl_flow_id` IS-05 transport parameters instead of
-transport-mismatched leftover RTP fields) — the gap a competing
-multi-vendor DMF interop showcase at IBC 2026 would otherwise have
-exposed immediately. Since the official AMWA NMOS Testing Tool has no
-BCP-007-03 suite yet (the spec is from August 2026), our own
-`contract-check` tool gained a schema-conformance check against the
-real published JSON schemas instead, live-verified against two
-IS-05-connected node instances. Checking that fix's blast radius also
-led to actually rebuilding MXL-native Fabrics with the RDMA feature
-flag on against the current MXL release, which surfaced (and fixed) a
-real regression: current MXL now requires an explicit transfer
-capability on fabrics setup that this project's fabrics wrapper never
-set, silently working only by the old library's lack of validation —
-re-verified live with a real one-sided RDMA write between two MXL
-domains, RDMA-hardware-free.
+**Business process engine, asset catalog, ffmpeg assistant** — Kapitel
+21 (definitions/versions/crash-recoverable executions, the full
+BPMN-style step vocabulary, reliable domain-event triggers, a visual
+step-graph editor, the asset/content domain model with collections,
+typed relationships, and real S3/MinIO-backed storage) and Kapitel 22/
+23 (the guided ffmpeg assistant described above, generalized into a
+graphical audio matrix, timed overlays, lossless-capable concatenation,
+generic multi-track output mapping, and a fully searchable/validated
+expert mode) — both described in full under "What's in the box".
 
-Most recently, Kapitel 21 added the business-process engine and
-asset/content domain model described above (definitions/versions/
-crash-recoverable executions, the full BPMN-style step vocabulary,
-reliable domain-event triggers via a Postgres outbox + clustered NATS
-JetStream, an HTTP API for both domains, and a visual drag-and-drop
-step-graph editor reusing the Flow Editor's own `ui/graph` primitives)
-— live-verified end to end against the real running orchestrator at
-every step, including a real browser click-through of the visual
-editor (genuine CDP-driven mouse drags, not just API calls) that
-created a step graph, connected it, and ran it to completion. The
-"Assets" tab followed, along with editing an existing process version
-in the visual editor.
+**Observability** — a trace ID follows every IS-05 connect/disconnect
+and generic-proxy request end to end into one replicated log channel, a
+"Diagnose" tab in the Flow Editor tails it live and pivots a failed
+connection straight to its trace, highlighting every tile it touched.
 
-Most recently, the asset/content domain model grew collections and
-typed asset-to-asset relationships, a generic link between a process
-execution and the specific asset version it produced/consumed, its own
-business-level audit trail separate from the general request audit
-log, and real MinIO/S3-backed storage for representations via
-presigned upload/download URLs (media bytes never proxy through the
-orchestrator). `omp-webrtc-gateway` landed as a new microservice pair
-(camera/monitor) so an ordinary phone browser can join the MXL fabric
-over WHIP/WHEP with zero install — gated by operator-issued, time-
-scoped invitation links/QR codes rather than a bare, guessable
-endpoint. The platform also gained multi-organization access scoping
-(Kapitel 21 B14): each user belongs to one organization, workflows/
-process definitions/assets/collections carry an owner organization,
-and every read/write on someone else's organization's object returns a
-plain not-found rather than a permission error or any other sign the
-object exists — live-verified with two real organizations and
-confirmed non-disruptive to all pre-existing, organization-less data
-(grandfathered into a default organization).
+**Measurement** — `omp-scope` is a timing instrument, not just a
+picture/level scope: per-flow MXL transport latency, delay variation,
+cadence/dropped-grain counters from the grain origin timestamps,
+lip-sync scored against EBU R 37, held black/freeze/silence alarms,
+EBU R 128 loudness with ITU-R BS.1770 true peak. Building it paid for
+itself immediately — see "What's in the box" above for the real
+clock-drift defect it found (and that has since been root-caused and
+fixed).
 
-Most recently of all, Kapitel 22 turned the allow-listed `ffmpeg`/
-`ffprobe` script step from raw CLI flags into a guided assistant: five
-tasks (metadata, thumbnail, format/codec conversion, audio extraction,
-multi-track container) backed by the host's actually installed
-ffmpeg's real encoders/containers/filters and their real options —
-introspected live, not a hand-maintained list — plus a visual drag-and-
-drop filter-graph builder that compiles real filter names and pads
-into an actual `-filter_complex` string; the raw-arguments editor
-stays one click away. A hardening pass building several deliberately
-different real scenarios (a multi-track container with its own video
-source, the same as a different container as a metadata control test,
-audio extraction, a filter graph with a variable-pad-count filter)
-found and fixed two genuine gaps this way rather than special-casing
-around them — a video source wrongly tied to the first audio track,
-and multi-input filter graphs having no way to supply more than one
-input file — plus a third found by actually running the generated
-command: `-c:v copy` into MXF failing for some source codecs on the
-project's ffmpeg build, now a selectable encoder instead of a hard-
-coded assumption. Every scenario was run for real and checked with
-`ffprobe`, not just previewed.
+**Fixed since first reported here:** the MXL writer clock drift above.
+`docs/decisions.md` Nachtrag 226/236/237 has the full three-session
+investigation trail, for anyone curious how "measured → root-caused →
+fixed" actually looked in practice.
 
-Open: the MXL writer clock drift and grouphint gap that `omp-scope`
-just made measurable, RDMA hardware integration (`verbs`/EFA providers,
-pending hardware procurement), an NDI gateway, proprietary Dante (Dante in
-AES67 mode already runs via `omp-aes67-gateway`), a drag-to-move UI
-for the already-built workflow-role migration backend (the flow
-editor now at least places a running workflow's tile in its correct
-host zone, see "What OpenMediaPlatform does not do" above).
+**Open** (see "What OpenMediaPlatform does not do" above for the full,
+qualified list): RDMA hardware integration (`verbs`/EFA providers,
+pending hardware procurement), an NDI gateway, proprietary Dante
+(Dante in AES67 mode already runs via `omp-aes67-gateway`), a
+drag-to-move UI for the already-built workflow-role migration backend,
+the NMOS grouphint gap for video/audio pairs, and — within the ffmpeg
+assistant — keyframe-exact lossless concatenation with per-clip
+trimming (today's lossless mode covers whole, untrimmed clips; trimming
+still means re-encoding).
 
 ## License
 
