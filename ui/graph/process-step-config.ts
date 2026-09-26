@@ -21,7 +21,7 @@ import type { Point } from "./geometry.ts";
 import type { FilterGraph } from "./filter-graph-logic.ts";
 import { openFilterGraphEditor } from "./filter-graph.ts";
 import { openAudioMatrixEditor } from "./audio-matrix.ts";
-import type { AudioMatrixCell, AudioMatrixSource } from "./audio-matrix-logic.ts";
+import type { AudioMatrixCell } from "./audio-matrix-logic.ts";
 import {
   buildConcatArgs,
   buildConvertArgs,
@@ -43,6 +43,7 @@ import {
   insertionText,
   optionHelpText,
   optionRangeBounds,
+  type OutputTrack,
   type OverlayEvent,
   pairsToObject,
   parseGoDuration,
@@ -896,6 +897,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
       filterComplex = expr;
       filterOutputLabels = labels;
       syncFilterSummary();
+      refreshAllQuickLabels();
       el.dispatchEvent(new Event("input", { bubbles: true }));
     });
   });
@@ -906,6 +908,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     filterOutputLabels = [];
     audioMatrixCells = [];
     syncFilterSummary();
+    refreshAllQuickLabels();
     el.dispatchEvent(new Event("input", { bubbles: true }));
   });
 
@@ -939,6 +942,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
         additionalInputsList.replaceChildren();
         for (const p of additionalPaths) addAdditionalInput(p);
         syncFilterSummary();
+        refreshAllQuickLabels();
         el.dispatchEvent(new Event("input", { bubbles: true }));
       },
     );
@@ -969,14 +973,131 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   addAdditionalInputBtn.type = "button";
   addAdditionalInputBtn.addEventListener("click", () => addAdditionalInput());
 
+  // ---- Ausgabespuren (Kapitel 23, Schritt 2) --------------------------
+  //
+  // Generischer Ersatz für die in Schritt 1 ausgebaute "Mehrspur-
+  // Container bauen"-Sonderfunktion: beliebig viele UNABHÄNGIGE
+  // Ausgabespuren, Quelle wahlweise ein roher Stream-Spezifizierer
+  // ("0:a:0") oder ein Filter-Graph-/Audio-Matrix-Ausgang ("[mxout0]").
+  // Sobald mindestens eine Spur konfiguriert ist, übernimmt diese Liste
+  // die Zuordnung VOLLSTÄNDIG (s. buildConvertArgs-Moduldoku) — die
+  // einfachen Video-/Audio-Codec-Felder oben werden dann ausgeblendet,
+  // damit nie zwei widersprüchliche Zuordnungen gleichzeitig sichtbar
+  // sind.
+  interface OutputTrackRow {
+    box: HTMLElement;
+    heading: HTMLElement;
+    source: HTMLInputElement;
+    mediaTypeSel: HTMLSelectElement;
+    codecSel: HTMLSelectElement;
+    optionsPanel: ReturnType<typeof ffmpegOptionsList>;
+    metadataEditor: ReturnType<typeof keyValueEditor>;
+  }
+  const outputTrackRows: OutputTrackRow[] = [];
+  const outputTracksList = h("div", "");
+  const renumberTracks = () => outputTrackRows.forEach((r, i) => (r.heading.textContent = `Ausgabespur ${i + 1}`));
+  // Die Schnelleinfüge-Knöpfe je Zeile ("[label] einfügen") hängen vom
+  // AKTUELLEN filterOutputLabels ab, das sich ändert, wann immer
+  // Filter-Kette oder Audio-Matrix bearbeitet werden — jede Zeile
+  // registriert hier ihre eigene Neuaufbau-Funktion, damit alle
+  // gemeinsam aktualisiert werden können (statt nur die Zeile, die
+  // gerade existierte, als die Labels sich das letzte Mal änderten).
+  const quickLabelRefreshers: (() => void)[] = [];
+  const refreshAllQuickLabels = () => quickLabelRefreshers.forEach((fn) => fn());
+  const syncSimpleCodecVisibility = () => {
+    const hide = outputTrackRows.length > 0;
+    for (const el2 of simpleCodecEls) el2.style.display = hide ? "none" : "";
+    simpleCodecNote.style.display = hide ? "" : "none";
+  };
+  const loadTrackCodecs = async (row: OutputTrackRow) => {
+    const list = await fetchFFmpegList<FFCodecEntry>("encoders");
+    const filtered = list.filter((c) => c.mediaType === row.mediaTypeSel.value);
+    row.codecSel.replaceChildren(new Option("– ffmpeg-Standard –", ""));
+    for (const c of filtered) row.codecSel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
+  };
+  const addOutputTrack = () => {
+    const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
+    const heading = h("div", "font-weight:600;", `Ausgabespur ${outputTrackRows.length + 1}`);
+    const source = templateInput("", "z. B. 0:a:0 — oder ein Label aus Filter-Kette/Audio-Matrix", vars);
+    const quickLabels = h("div", "display:flex;flex-wrap:wrap;gap:4px;margin-top:2px;");
+    const syncQuickLabels = () => {
+      quickLabels.replaceChildren();
+      for (const label of filterOutputLabels) {
+        const btn = h("button", "font-size:var(--omp-font-size-xs);", `[${label}] einfügen`);
+        btn.type = "button";
+        btn.addEventListener("click", () => {
+          source.input.value = `[${label}]`;
+          source.input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        quickLabels.appendChild(btn);
+      }
+    };
+    syncQuickLabels();
+    quickLabelRefreshers.push(syncQuickLabels);
+    const mediaTypeSel = select([{ value: "audio", label: "Audio" }, { value: "video", label: "Video" }, { value: "subtitle", label: "Untertitel" }], "audio");
+    const codecSel = select([{ value: "", label: "lade Codecs …" }], "");
+    const optionsPanel = ffmpegOptionsList(vars);
+    const metadataEditor = keyValueEditor([], { keyPlaceholder: "z. B. title, language, …", valuePlaceholder: "Wert", name: `track-meta-${outputTrackRows.length}` });
+    const rm = h("button", "margin-top:4px;", "Spur entfernen");
+    rm.type = "button";
+    const entry: OutputTrackRow = { box, heading, source: source.input, mediaTypeSel, codecSel, optionsPanel, metadataEditor };
+    mediaTypeSel.addEventListener("change", () => void loadTrackCodecs(entry));
+    codecSel.addEventListener("change", async () => {
+      if (!codecSel.value) {
+        optionsPanel.setOptions([], {});
+        return;
+      }
+      const detail = await fetchFFmpegDetail("encoder", codecSel.value);
+      optionsPanel.setOptions(detail?.options ?? [], {});
+    });
+    void loadTrackCodecs(entry);
+    rm.addEventListener("click", () => {
+      outputTrackRows.splice(outputTrackRows.indexOf(entry), 1);
+      quickLabelRefreshers.splice(quickLabelRefreshers.indexOf(syncQuickLabels), 1);
+      box.remove();
+      renumberTracks();
+      syncSimpleCodecVisibility();
+    });
+    box.append(
+      heading,
+      field("Quelle", source.el, "Roher Stream-Spezifizierer (z. B. 0:a:0 für Eingabedatei 0, erste Tonspur) oder ein Label aus Filter-Kette/Audio-Matrix (in eckigen Klammern).", true),
+      quickLabels,
+      field("Medientyp", mediaTypeSel),
+      field("Codec", codecSel, "Leer = ffmpeg-Standard."),
+      optionsPanel.el,
+      field("Metadaten (optional)", metadataEditor.el, "Beliebige Schlüssel, z. B. title, language (ISO-639-2) — nicht auf title/language beschränkt."),
+      rm,
+    );
+    outputTrackRows.push(entry);
+    outputTracksList.appendChild(box);
+    syncSimpleCodecVisibility();
+  };
+  const addOutputTrackBtn = h("button", "margin-top:6px;", "+ Ausgabespur");
+  addOutputTrackBtn.type = "button";
+  addOutputTrackBtn.addEventListener("click", addOutputTrack);
+
+  const simpleCodecEls: HTMLElement[] = [];
+  const simpleCodecNote = h(
+    "div",
+    HELP_CSS + "margin-top:4px;",
+    "Video-/Audio-Codec oben sind deaktiviert, solange unten mindestens eine Ausgabespur konfiguriert ist — die Ausgabespuren-Liste übernimmt die Zuordnung dann vollständig.",
+  );
+  simpleCodecNote.style.display = "none";
+  const videoSection = section("Video");
+  const videoField = field("Video-Codec", video.el, "Leer = ffmpeg-Standard für den Container.");
+  const audioSection = section("Audio");
+  const audioField = field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für den Container.");
+  simpleCodecEls.push(videoSection, videoField, audioSection, audioField);
+
   el.append(
     field("Eingabedatei", input.el, undefined, true),
     field("Ausgabedatei", output.el, undefined, true),
     field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
-    section("Video"),
-    field("Video-Codec", video.el, "Leer = ffmpeg-Standard für den Container."),
-    section("Audio"),
-    field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für den Container."),
+    videoSection,
+    videoField,
+    audioSection,
+    audioField,
+    simpleCodecNote,
     section("Filter (optional)"),
     filterSummary,
     filterBtn,
@@ -988,6 +1109,9 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
       "Nur nötig, wenn der Filter oben mehr als eine Quelle referenziert — Eingabedatei oben ist Index 0, hier Index 1, 2, ….",
     ),
     addAdditionalInputBtn,
+    section("Ausgabespuren (optional — für unabhängige Mehrfachspuren, z. B. mehrere Sprachfassungen)"),
+    outputTracksList,
+    addOutputTrackBtn,
   );
   return {
     el,
@@ -1000,6 +1124,18 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
         const v = entry.input.value.trim();
         if (!v) return { ok: false, error: "Eine weitere Eingabedatei ist leer." };
         additionalPaths.push(v);
+      }
+      const outputTracks: OutputTrack[] = [];
+      for (const row of outputTrackRows) {
+        const src = row.source.value.trim();
+        if (!src) return { ok: false, error: "Jede Ausgabespur braucht eine Quelle." };
+        outputTracks.push({
+          source: src,
+          mediaType: row.mediaTypeSel.value as OutputTrack["mediaType"],
+          codec: row.codecSel.value || undefined,
+          options: row.optionsPanel.read(),
+          metadata: pairsToObject(row.metadataEditor.read()),
+        });
       }
       const v = video.read();
       const a = audio.read();
@@ -1018,6 +1154,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
           filterComplex: filterComplex || undefined,
           filterOutputLabels: filterComplex ? filterOutputLabels : undefined,
           additionalInputPaths: additionalPaths.length ? additionalPaths : undefined,
+          outputTracks: outputTracks.length ? outputTracks : undefined,
         }),
       };
     },

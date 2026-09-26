@@ -585,19 +585,78 @@ export interface ConvertInput {
   // hätte ein Mehrfach-Eingang-Filter-Graph nie echt laufen können, der
   // Assistent hätte stillschweigend ungültige `ffmpeg`-Aufrufe erzeugt).
   additionalInputPaths?: string[];
+  // Generisches Ausgabespur-Mapping (Kapitel 23, Schritt 2) — ersetzt
+  // inhaltlich, was die in Schritt 1 ausgebaute "Mehrspur-Container
+  // bauen"-Sonderfunktion konnte, aber als allgemeiner Baustein:
+  // beliebig viele UNABHÄNGIGE Ausgabespuren, deren Quelle ein roher
+  // Stream-Spezifizierer ("0:a:0") ODER ein Filter-Graph-/Audio-Matrix-
+  // Ausgang ("[mxout0]") sein kann, mit generischer Schlüssel/Wert-
+  // Metadaten-Liste (ffmpeg erlaubt beliebige Metadaten-Schlüssel, nicht
+  // nur title/language). Wenn gesetzt, ÜBERNIMMT dieses Feld die
+  // Stream-Zuordnung VOLLSTÄNDIG (auch von `filterOutputLabels`, s. u.)
+  // — kein Vermischen von impliziter und expliziter Zuordnung, das wäre
+  // eine der klassischen ffmpeg-Stolperfallen (sobald IRGENDEIN `-map`
+  // gesetzt ist, mappt ffmpeg NUR noch explizit angegebene Streams).
+  outputTracks?: OutputTrack[];
 }
+
+export interface OutputTrack {
+  source: string; // z. B. "0:a:0" (roher Stream-Spezifizierer) oder "[mxout0]" (Filter-/Matrix-Ausgang, bereits in eckigen Klammern)
+  mediaType: "video" | "audio" | "subtitle";
+  codec?: string;
+  options?: Record<string, string>;
+  metadata?: Record<string, string>;
+}
+
+// AVOption-Flags sind ohne Stream-Spezifizierer mehrdeutig, sobald es
+// mehr als eine Spur desselben Medientyps gibt (z. B. zwei `-b:a`-Werte
+// für zwei Tonspuren) — der Suffix ":<typ>:<n>" ist auch bei nur EINER
+// Spur gültige ffmpeg-Syntax, deshalb hier immer angehängt (keine
+// Fallunterscheidung nötig).
+function trackOptionArgs(options: Record<string, string> | undefined, typeFlag: string, index: number): string[] {
+  const args: string[] = [];
+  for (const [name, value] of Object.entries(options ?? {})) {
+    if (value === "") continue;
+    args.push(`${name}:${typeFlag}:${index}`, value);
+  }
+  return args;
+}
+
+const TRACK_TYPE_FLAG: Record<OutputTrack["mediaType"], string> = { video: "v", audio: "a", subtitle: "s" };
 
 export function buildConvertArgs(input: ConvertInput): string[] {
   const args = ["-y", "-i", input.inputPath];
   for (const p of input.additionalInputPaths ?? []) args.push("-i", p);
+  const hasOutputTracks = (input.outputTracks?.length ?? 0) > 0;
   if (input.filterComplex) {
     args.push("-filter_complex", input.filterComplex);
-    for (const label of input.filterOutputLabels ?? []) args.push("-map", `[${label}]`);
+    // Bei aktiven Ausgabespuren übernehmen DEREN `source`-Felder die
+    // Zuordnung (auch zu Filter-/Matrix-Ausgängen) — das automatische
+    // "jeder Filter-Ausgang wird gemappt" gilt nur im einfachen Modus.
+    if (!hasOutputTracks) {
+      for (const label of input.filterOutputLabels ?? []) args.push("-map", `[${label}]`);
+    }
   }
-  if (input.videoCodec) args.push("-c:v", input.videoCodec);
-  args.push(...optionEntriesToArgs(input.videoOptions ?? {}));
-  if (input.audioCodec) args.push("-c:a", input.audioCodec);
-  args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  if (hasOutputTracks) {
+    const counters: Record<string, number> = {};
+    for (const t of input.outputTracks!) {
+      const typeFlag = TRACK_TYPE_FLAG[t.mediaType];
+      const index = counters[typeFlag] ?? 0;
+      counters[typeFlag] = index + 1;
+      args.push("-map", t.source);
+      if (t.codec) args.push(`-c:${typeFlag}:${index}`, t.codec);
+      args.push(...trackOptionArgs(t.options, typeFlag, index));
+      for (const [key, value] of Object.entries(t.metadata ?? {})) {
+        if (!key.trim()) continue;
+        args.push(`-metadata:s:${typeFlag}:${index}`, `${key}=${value}`);
+      }
+    }
+  } else {
+    if (input.videoCodec) args.push("-c:v", input.videoCodec);
+    args.push(...optionEntriesToArgs(input.videoOptions ?? {}));
+    if (input.audioCodec) args.push("-c:a", input.audioCodec);
+    args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  }
   if (input.format) args.push("-f", input.format);
   args.push(input.outputPath);
   return args;

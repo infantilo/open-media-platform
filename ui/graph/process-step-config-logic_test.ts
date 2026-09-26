@@ -225,6 +225,69 @@ Deno.test("buildConvertArgs omits codec/format flags entirely when left unset (a
   assertEquals(buildConvertArgs({ inputPath: "in.mov", outputPath: "out.mkv" }), ["-y", "-i", "in.mov", "out.mkv"]);
 });
 
+// ---- Generisches Ausgabespur-Mapping (Kapitel 23, Schritt 2) --------------------------------------
+
+Deno.test("buildConvertArgs: output tracks fully take over mapping, plain video/audio codec fields are ignored once present", () => {
+  const args = buildConvertArgs({
+    inputPath: "de.wav",
+    outputPath: "out.mxf",
+    videoCodec: "should-be-ignored",
+    audioCodec: "should-also-be-ignored",
+    additionalInputPaths: ["en.wav"],
+    outputTracks: [
+      { source: "0:a:0", mediaType: "audio", codec: "pcm_s16le", metadata: { title: "Deutsch", language: "deu" } },
+      { source: "1:a:0", mediaType: "audio", codec: "pcm_s16le", metadata: { title: "English", language: "eng" } },
+    ],
+  });
+  assertEquals(args, [
+    "-y", "-i", "de.wav", "-i", "en.wav",
+    "-map", "0:a:0", "-c:a:0", "pcm_s16le", "-metadata:s:a:0", "title=Deutsch", "-metadata:s:a:0", "language=deu",
+    "-map", "1:a:0", "-c:a:1", "pcm_s16le", "-metadata:s:a:1", "title=English", "-metadata:s:a:1", "language=eng",
+    "out.mxf",
+  ]);
+});
+
+Deno.test("buildConvertArgs: per-media-type indices count independently (two audio + one video track → a:0/a:1/v:0)", () => {
+  const args = buildConvertArgs({
+    inputPath: "in.mp4",
+    outputPath: "out.mkv",
+    outputTracks: [
+      { source: "0:a:0", mediaType: "audio", codec: "aac" },
+      { source: "0:v:0", mediaType: "video", codec: "libx264" },
+      { source: "1:a:0", mediaType: "audio", codec: "aac" },
+    ],
+  });
+  assertEquals(args, [
+    "-y", "-i", "in.mp4",
+    "-map", "0:a:0", "-c:a:0", "aac",
+    "-map", "0:v:0", "-c:v:0", "libx264",
+    "-map", "1:a:0", "-c:a:1", "aac",
+    "out.mkv",
+  ]);
+});
+
+Deno.test("buildConvertArgs: a track's AVOptions get the same stream-specifier suffix as its codec flag", () => {
+  const args = buildConvertArgs({
+    inputPath: "in.mp4",
+    outputPath: "out.mkv",
+    outputTracks: [{ source: "0:a:0", mediaType: "audio", codec: "aac", options: { "-b": "192k" } }],
+  });
+  assertEquals(args.slice(-5, -1), ["-c:a:0", "aac", "-b:a:0", "192k"]);
+});
+
+Deno.test("buildConvertArgs: an output track can source from a filter-graph/audio-matrix label, and suppresses the automatic filterOutputLabels mapping", () => {
+  const args = buildConvertArgs({
+    inputPath: "in.wav",
+    outputPath: "out.mkv",
+    filterComplex: "[0:a]pan=mono|c0=c0[mxout0]",
+    filterOutputLabels: ["mxout0"],
+    outputTracks: [{ source: "[mxout0]", mediaType: "audio", codec: "aac" }],
+  });
+  assertEquals(args, ["-y", "-i", "in.wav", "-filter_complex", "[0:a]pan=mono|c0=c0[mxout0]", "-map", "[mxout0]", "-c:a:0", "aac", "out.mkv"]);
+  // genau EIN "-map [mxout0]" — nicht zusätzlich das automatische aus filterOutputLabels
+  assertEquals(args.filter((a) => a === "-map").length, 1);
+});
+
 Deno.test("buildExtractAudioArgs always sends -vn and keeps the input/output order stable", () => {
   const args = buildExtractAudioArgs({ inputPath: "in.mp4", outputPath: "out.wav", audioCodec: "pcm_s24le", audioOptions: { "-ar": "48000" } });
   assertEquals(args, ["-y", "-i", "in.mp4", "-vn", "-c:a", "pcm_s24le", "-ar", "48000", "out.wav"]);

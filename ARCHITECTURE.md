@@ -4294,5 +4294,6 @@ skizzierte `-h full`-Backend-Parsing, sondern eine von Hand gepflegte
 Tabelle globaler Flags plus einen progressiv geladenen, clientseitigen
 Index aller AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter (s.
 UMSETZUNG.md 23.3 für die Begründung). Schritt 2 (generisches
-Ausgabespur-Mapping, der eigentliche Multitrack-Ersatz) bewusst noch
-offen — nächster Schritt.
+Ausgabespur-Mapping, der eigentliche Multitrack-Ersatz) direkt im
+Anschluss ebenfalls umgesetzt (UMSETZUNG.md 23.4) — **Kapitel 23
+(Schritt 1–5) damit inhaltlich abgeschlossen.**

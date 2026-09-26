@@ -3845,19 +3845,69 @@ Fehlfunktion):**
   selten gebrauchte globale Flags außerhalb der 34 kuratierten Einträge
   bleiben unadressierbar, bis das doch nachgezogen wird.
 
-**Weiterhin offen — nächster natürlicher Schritt:** Kapitel 23,
-**Schritt 2** (generisches Ausgabespur-Mapping: wiederholbare
-„Ausgabespur“-Gruppen im Konvertieren-Formular, Quelle =
-Eingabedatei+Stream-Index ODER Filtergraph-/Audio-Matrix-Ausgang, Codec
-inkl. AVOptions, Metadaten als generische Schlüssel/Wert-Liste) — das
-ist der tatsächliche, allgemeine Ersatz für das, was die in Schritt 1
-entfernte „Mehrspur-Container bauen“-Sonderfunktion konnte. Ohne
-Schritt 2 kann ein Nutzer heute zwar Audio grafisch routen/mischen
-(Audio-Matrix) und mehrere Dateien aneinanderhängen (Concat), aber
-einen Container mit mehreren UNABHÄNGIGEN, separat kodierten
-Ausgabespuren (z. B. mehrere Sprachfassungen mit je eigenem Titel/
-Sprache-Metadatum) müsste er weiterhin über den Filter-Graph-Editor
-oder den Pro-Modus von Hand zusammensetzen.
+### 23.4 Schritt 2 — Generisches Ausgabespur-Mapping (erledigt 2026-09-26)
+
+Der tatsächliche, allgemeine Ersatz für das, was die in Schritt 1
+ausgebaute „Mehrspur-Container bauen“-Sonderfunktion konnte — direkt
+im Anschluss an Schritt 3–5 nachgezogen (Nutzerauftrag „fahre fort“).
+
+Neue, wiederholbare „Ausgabespur“-Gruppe im „Format/Codec
+konvertieren“-Formular (`OutputTrack`-Typ +
+`buildConvertArgs`-Erweiterung in `process-step-config-logic.ts`): je
+Spur eine **Quelle** (roher Stream-Spezifizierer wie `0:a:0` ODER ein
+Filter-Graph-/Audio-Matrix-Ausgang wie `[mxout0]` — mit
+Schnelleinfüge-Knöpfen für alle aktuell verfügbaren Filter-/Matrix-
+Labels), ein **Medientyp** (Video/Audio/Untertitel, bestimmt die
+Codec-Liste), ein **Codec** inkl. AVOptions (wiederverwendet
+`ffmpegOptionsList`, keine Neuentwicklung) und **generische
+Schlüssel/Wert-Metadaten** (wiederverwendet `keyValueEditor` — beliebige
+Schlüssel, nicht auf `title`/`language` beschränkt wie die alte
+Sonderfunktion).
+
+**Sobald mindestens eine Ausgabespur konfiguriert ist, übernimmt sie
+die Stream-Zuordnung VOLLSTÄNDIG** (`buildConvertArgs` verzweigt intern):
+die einfachen Video-/Audio-Codec-Einzelfelder werden ausgeblendet (mit
+Hinweistext, warum), und ein eventuell automatisches `-map` aus
+`filterOutputLabels` entfällt — sonst entstünde die klassische ffmpeg-
+Stolperfalle „sobald irgendein `-map` gesetzt ist, gilt nur noch
+explizite Zuordnung“ in einer widersprüchlichen Mischform. Jede Spur
+bekommt `-map <source> -c:<v|a|s>:<n> <codec> <AVOptions>:<v|a|s>:<n>
+-metadata:s:<v|a|s>:<n> <key>=<value>...`, wobei `<n>` unabhängig je
+Medientyp hochzählt (zwei Audiospuren + eine Videospur → `a:0`/`a:1`/
+`v:0`). Der `<n>`-Suffix wird IMMER angehängt (auch bei nur einer Spur
+je Typ) — bei ffmpeg gültige Syntax, macht eine Fallunterscheidung
+überflüssig.
+
+4 neue `deno test`-Fälle (u. a.: Einzelfelder werden bei aktiven
+Ausgabespuren ignoriert; Medientyp-Zähler laufen unabhängig; AVOptions
+bekommen denselben Spezifizierer-Suffix wie der Codec; ein
+Filter-/Matrix-Label als Quelle unterdrückt das automatische Mapping,
+genau EIN `-map` pro Spur, keine Dopplung).
+
+Live per CDP gegen den echten, neu gestarteten Orchestrator verifiziert:
+zwei Ausgabespuren angelegt → Video-/Audio-Einzelfelder verschwanden
+sofort mit Hinweistext; Quellen `0:a:0`/`1:a:0` gesetzt, generisches
+Metadaten-Feld `title=Deutsch` auf Spur 1 gesetzt → Vorschau zeigte
+exakt `-map 0:a:0 -metadata:s:a:0 title=Deutsch -map 1:a:0`; danach die
+Audio-Matrix geöffnet, eine Zelle aktiviert, übernommen → der
+Schnelleinfüge-Knopf „[mxout0] einfügen“ erschien live in der ersten
+Spur, ein Klick füllte die Quelle korrekt, die Vorschau zeigte
+anschließend `-filter_complex […] -map [mxout0] -metadata:s:a:0
+title=Deutsch -map 1:a:0` — genau EIN `-map [mxout0]` (kein doppeltes
+automatisches Mapping aus `filterOutputLabels`). `deno check
+ui/**/*.ts`, `deno test ui/graph/` (136 Fälle), `deno bundle`
+(49 Module) grün.
+
+**Damit ist Kapitel 23 (Schritt 1–5) inhaltlich abgeschlossen.**
+Bewusst offen gebliebene Ausblicke (jeweils oben schon benannt, hier
+zur Übersicht gesammelt): keyframe-genaues verlustfreies Aneinander-
+hängen (braucht neue ffprobe-Frame-Introspektion), automatische
+ffprobe-Kanalerkennung für die Audio-Matrix (Kanalzahl wird aktuell vom
+Nutzer angegeben), eine ziehbare Overlay-Zeitleiste (aktuell nur
+visuell), echtes `-h full`-Backend-Parsing (durch die kuratierte
+Flag-Tabelle + den vollständigen AVOption-Index praktisch abgedeckt),
+und ein Zusammenführen von Audio-Matrix und Filter-Graph-Editor in
+einer Sitzung (aktuell bewusst gegenseitig ersetzend).
 
 ---
 
@@ -4118,3 +4168,4 @@ oder den Pro-Modus von Hand zusammensetzen.
 | Kapitel 22.4: README.md/BENUTZERHANDBUCH.md aktualisiert, echter CSS-Bug per Doku-Screenshot gefunden+behoben | erledigt | README.md ("Business process engine"-Absatz + neuer "Most recently"-Absatz im Status) und `docs/BENUTZERHANDBUCH.md` (neuer Abschnitt 5a.1, zwei echte per CDP aufgenommene Screenshots) auf den Assistenten/Filter-Builder gebracht. Beim Aufnehmen der Screenshots ein echter, rein visueller Bug gefunden: `ffmpegOptionsList`s Such-Filter setzte `row.style.display = ""` statt `"flex"` zurück — entfernt `field()`s `display:flex` komplett, `<label>` fällt auf Browser-Standard `inline` zurück, mehrere AVOptions verschmelzen optisch zu einer Zeile (kein `deno test`/CDP-Wertecheck hätte das gefunden, nur ein echtes Sichtreview). Fix: `"flex"` statt `""`. `docs/HANDBUCH.md` (Dev-/Ops) bewusst unverändert. | 2026-09-25 |
 | Kapitel 23 Schritt 1: Sonderfall "Mehrspur-Container bauen" ausgebaut + Schieberegler-Grundlage für begrenzte AVOptions | erledigt | Nutzerkorrektur: der MXF-Mehrspur-Fall war Maßstab für Ausdruckskraft, keine zu bauende Einzelfunktion (§26.4/22.2) — W2 hatte ihn trotzdem als fünften festen `SCRIPT_INTENTS`-Eintrag gebaut. Entfernt: `MultitrackTrack`/`MultitrackInput`/`buildMultitrackArgs`, `buildScriptWizardMultitrack`, der `"multitrack"`-Intent + zugehörige Tests — Assistent bietet nur noch die vier echten Bausteine (Metadaten/Vorschaubild/Konvertieren/Tonspur extrahieren). Zugleich generische Verbesserung: `ffOptionControlKind` neue Art `"range"` + `optionRangeBounds` — numerische AVOptions mit echten (nicht ffmpegs Sentinel-Strings wie `FLT_MAX`) Ober-/Untergrenzen bekommen einen Schieberegler statt Freitext, automatisch in `ffmpegOptionsList` UND `filter-graph.ts`s eigener Feldlogik. Live per CDP gegen den echten Orchestrator verifiziert: Intent-Dropdown zeigt kein "Mehrspur-Container bauen" mehr; `libaom-av1`-Encoder erzeugt 10 Regler (u. a. `-crf` mit min=-1/max=63/step=1, Regler↔Zahlenfeld synchronisieren beidseitig); `acompressor`-Filterknoten im Filter-Graph-Editor erzeugt 9 Regler (u. a. `level_in` min=0.015625/max=64). `deno check ui/**/*.ts`, `deno test ui/graph/` (121 Fälle), `deno bundle` (47 Module) grün. Schritt 2-5 (generisches Ausgabespur-Mapping, grafische Audio-Matrix, Overlay-Timeline+Concat, Pro-Modus mit `-h full`) als eigene Folgesitzungen geplant, s. UMSETZUNG.md 23.2. | 2026-09-26 |
 | Kapitel 23 Schritt 3-5: grafische Audio-Matrix, zeitgesteuerte Overlays, Clips aneinanderhängen, Pro-Modus-Suche+Validierung | erledigt | Nutzerauftrag "sehr viel weiter und professioneller werden" — drei Schritte in einer Sitzung, da unabhängig voneinander. Audio-Matrix (`audio-matrix-logic.ts`/`audio-matrix.ts`, neu): Crosspoint-Tabelle Quellkanal×Ausgangsspur, kompiliert zu `pan`→`volume`→`adelay`→`amix`/`anull`, alternative Bedienoberfläche zum Filter-Graph-Editor für dieselben `ConvertInput.filterComplex`/`filterOutputLabels`-Felder. Overlay (`buildOverlayArgs`, neuer Intent): Text (`drawtext`)/Bild (`overlay`)-Ereignisse mit `enable='between(t,a,b)'`, escaptes drawtext-Colon/Quote, visuelle (nicht ziehbare) Zeitleiste. Concat (`buildConcatArgs`, neuer Intent "Clips aneinanderhängen"): concat-FILTER (nicht Demuxer) mit `trim`/`atrim`+`setpts`/`asetpts` je Clip, ↑/↓-umsortierbare Liste. Pro-Modus: statt Backend-`-h full`-Parsing eine von Hand gepflegte Tabelle globaler Flags (`GLOBAL_FFMPEG_FLAGS`, ~34 Einträge) PLUS ein progressiv im Hintergrund geladener, modul-weiter Index ALLER AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter (`ensureFullOptionIndex`, live ca. 1150+ Parameter, durchsuchbar bereits während des Ladens) PLUS Inline-Validierung/Autovervollständigung je Argumentzeile (`validateArgValue`, Nachbarschafts-Heuristik). Live per CDP gegen den echten Orchestrator verifiziert: Audio-Matrix erzeugte den exakt erwarteten Filterausdruck inkl. Gain/Delay/Mix; Overlay-Text korrekt escaped mit sichtbarem Zeitleisten-Balken; Concat mit 2 Clips erzeugte die erwartete Filterkette; Parameter-Suche "crf" fand `-crf` in 7 verschiedenen Encodern ohne vorheriges manuelles Aufklappen, Klick fügte es ein, Wert 999 (außerhalb -1..63) wurde live als Fehler markiert, Korrektur auf 30 klärte den Fehler, `-loglevel` mit ungültigem Wert zeigte die gültige Werteliste, Autovervollständigung schlug "-loglevel" beim Tippen von "-lo" vor. `deno check ui/**/*.ts`, `deno test ui/graph/` (132 Fälle), `deno bundle` (49 Module) grün. Bewusst NICHT Teil dieser Sitzung: Kapitel 23 Schritt 2 (generisches Ausgabespur-Mapping als eigentlicher Multitrack-Ersatz) — offener nächster Schritt, s. UMSETZUNG.md 23.3. Ebenfalls bewusst ausgelassen: automatische ffprobe-Kanalerkennung für die Audio-Matrix, `scheduler-view.ts`-Zieh-Mechanik für die Overlay-Zeitleiste, keyframe-genaues verlustfreies Concat, echtes `-h full`-Backend-Parsing. | 2026-09-26 |
+| Kapitel 23 Schritt 2: generisches Ausgabespur-Mapping — Kapitel 23 (Schritt 1-5) damit abgeschlossen | erledigt | Nutzerauftrag "fahre fort" — der tatsächliche, allgemeine Ersatz für die in Schritt 1 ausgebaute "Mehrspur-Container bauen"-Sonderfunktion. Neuer `OutputTrack`-Typ + `buildConvertArgs`-Verzweigung (`process-step-config-logic.ts`): wiederholbare "Ausgabespur"-Gruppen im Konvertieren-Formular, je Spur Quelle (roher Stream-Spezifizierer wie `0:a:0` ODER Filter-Graph-/Audio-Matrix-Label wie `[mxout0]`, mit Schnelleinfüge-Knöpfen für aktuell verfügbare Labels), Medientyp (Video/Audio/Untertitel), Codec inkl. AVOptions (wiederverwendet `ffmpegOptionsList`) und generische Schlüssel/Wert-Metadaten (wiederverwendet `keyValueEditor`, nicht auf title/language beschränkt). Sobald ≥1 Ausgabespur konfiguriert ist, übernimmt sie die Stream-Zuordnung vollständig (Einzelfelder Video-/Audio-Codec werden ausgeblendet, automatisches `-map` aus `filterOutputLabels` entfällt — vermeidet die ffmpeg-Falle "ein `-map` schaltet auf rein explizite Zuordnung um" in widersprüchlicher Mischform). Medientyp-Zähler laufen unabhängig je Typ (`a:0`/`a:1`/`v:0`), AVOptions bekommen denselben Spezifizierer-Suffix wie der Codec. 4 neue Testfälle. Live per CDP gegen den echten Orchestrator verifiziert: zwei Spuren angelegt ließ Einzelfelder sofort verschwinden; Quellen+generisches `title=Deutsch`-Metadatum erzeugten exakt die erwartete Vorschau; Audio-Matrix-Anwendung ließ einen Schnelleinfüge-Knopf "[mxout0] einfügen" live erscheinen, ein Klick füllte die Quelle korrekt, genau EIN `-map [mxout0]` (keine Dopplung mit dem automatischen Filter-Mapping). `deno check ui/**/*.ts`, `deno test ui/graph/` (136 Fälle), `deno bundle` (49 Module) grün. | 2026-09-26 |
