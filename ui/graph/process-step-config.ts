@@ -23,7 +23,6 @@ import { openFilterGraphEditor } from "./filter-graph.ts";
 import {
   buildConvertArgs,
   buildExtractAudioArgs,
-  buildMultitrackArgs,
   buildProbeArgs,
   buildThumbnailArgs,
   DECISION_LABELS,
@@ -36,6 +35,7 @@ import {
   formatGoDuration,
   insertionText,
   optionHelpText,
+  optionRangeBounds,
   pairsToObject,
   parseGoDuration,
   parseRule,
@@ -578,6 +578,46 @@ function buildServiceCall(cfg: Record<string, unknown>, vars: VariableOption[]):
 // Fetch+Cache liegt in `ffmpeg-client.ts` (W3 nutzt denselben Client für
 // den Filter-Builder, keine doppelte Introspektions-Anfrage/Cache).
 
+// Schieberegler für AVOptions mit bekannten Ober-/Untergrenzen (Kapitel
+// 23, Schritt 1 — vorher liefen begrenzte Zahlenoptionen wie unbegrenzte
+// in ein reines Textfeld). Der Regler bleibt bis zur ersten Berührung
+// unberührt (kein künstlich erzwungener Wert, gleiches Prinzip wie beim
+// Freitext-"number"-Feld: leer gelassen → ffmpegs eigener Standard) —
+// `touched` hält das fest, `read()` liefert dann "" statt eines Werts.
+type RangeFieldElement = HTMLElement & { read(): string };
+
+function rangeField(opt: FFOption, initial: string): RangeFieldElement {
+  const bounds = optionRangeBounds(opt)!;
+  const defaultNum = Number(opt.default);
+  const startNum = initial !== "" ? Number(initial) : Number.isFinite(defaultNum) && defaultNum >= bounds.min && defaultNum <= bounds.max ? defaultNum : bounds.min;
+  let touched = initial !== "";
+
+  const wrap = h("div", "display:flex;align-items:center;gap:8px;") as unknown as RangeFieldElement;
+  const range = h("input", "flex:1;");
+  range.type = "range";
+  range.min = String(bounds.min);
+  range.max = String(bounds.max);
+  range.step = String(bounds.step);
+  range.value = String(startNum);
+  const numberOut = textInput(String(startNum));
+  numberOut.style.width = "84px";
+  numberOut.inputMode = "decimal";
+
+  range.addEventListener("input", () => {
+    numberOut.value = range.value;
+    touched = true;
+  });
+  numberOut.addEventListener("input", () => {
+    const n = Number(numberOut.value);
+    if (Number.isFinite(n)) range.value = String(Math.min(bounds.max, Math.max(bounds.min, n)));
+    touched = true;
+  });
+
+  wrap.append(range, numberOut);
+  wrap.read = () => (touched ? numberOut.value.trim() : "");
+  return wrap;
+}
+
 // Rendert die AVOptions eines Encoders/Muxers als Formularfelder (Art
 // je Typ, s. ffOptionControlKind — bool als Ja/Nein-<select>, gleiches
 // Muster wie buildMediaFunctions boolesche Node-Argumente). Suchfeld
@@ -631,6 +671,9 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
           i.inputMode = "decimal";
           control = i;
           read = () => i.value.trim();
+        } else if (kind === "range") {
+          control = rangeField(opt, initial);
+          read = (control as RangeFieldElement).read;
         } else {
           const t = templateInput(initial, opt.default ? `Standard: ${opt.default}` : "", vars);
           control = t.el;
@@ -887,135 +930,6 @@ function buildScriptWizardExtractAudio(vars: VariableOption[]): ScriptWizardForm
   };
 }
 
-// Baukasten-Baustein für Mehrspur-Container (UMSETZUNG.md 22.2) — jede
-// Spur kommt aus einer EIGENEN Quelldatei (z. B. acht Sprachfassungen),
-// bewusst nur Codec+Titel+Sprache je Spur (kein volles AVOptions-Panel
-// je Spur, das würde bei vielen Spuren den Assistenten sprengen; tiefere
-// Codec-Einstellungen bleiben "Format konvertieren"/Erweitert-Modus
-// vorbehalten). Deckt das Nutzerbeispiel ("MXF mit 8 Tonspuren + TTS-
-// Kennungen je Spur") vollständig ab, ohne dass MXF hier je erwähnt wird
-// — nur eine von vielen wählbaren Container-Optionen.
-function buildScriptWizardMultitrack(vars: VariableOption[]): ScriptWizardForm {
-  const el = h("div", "");
-  const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
-  const fmt = formatPicker(vars, true);
-  // Eigene, von den Tonspuren UNABHÄNGIGE Bildquelle (W4-Härtetest-Fund,
-  // s. buildMultitrackArgs-Moduldoku in process-step-config-logic.ts):
-  // manche Container (z. B. MXFs OP1a-Muxer) verlangen zwingend eine
-  // Bildspur, auch wenn der eigentliche Zweck reine Mehrspur-Audio-
-  // Zusammenführung ist — eine der Tonspuren dafür zu missbrauchen wäre
-  // kein echter Baustein, sondern eine versteckte Annahme.
-  const videoSource = templateInput("", "leer lassen, falls nicht gebraucht", vars);
-  // Ohne wählbaren Codec bliebe die Bildquelle bei hartem `-c:v copy` —
-  // live gefunden (W4): reines Stream-Copy einer H.264-Quelle in MXF
-  // schlägt bei diesem ffmpeg-Build fehl ("Received non-video packet
-  // before header has been written"), ein echter Encoder (z. B.
-  // mpeg2video) läuft anstandslos. Leer = weiterhin `copy` (unverändert
-  // übernehmen), wie bisher — nur jetzt mit einem Ausweg.
-  const videoCodecSel = select([{ value: "", label: "unverändert übernehmen (copy)" }], "");
-  (async () => {
-    const codecs = await fetchFFmpegList<FFCodecEntry>("encoders");
-    const videoCodecs = codecs.filter((c) => c.mediaType === "video");
-    videoCodecSel.replaceChildren(new Option("unverändert übernehmen (copy)", ""));
-    for (const c of videoCodecs) videoCodecSel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
-  })();
-
-  interface TrackRow {
-    box: HTMLElement;
-    heading: HTMLElement;
-    pathInput: HTMLInputElement;
-    codecSel: HTMLSelectElement;
-    lang: HTMLInputElement;
-    title: HTMLInputElement;
-  }
-  const rows: TrackRow[] = [];
-  const list = h("div", "");
-  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Tonspur ${i + 1}`));
-  const addTrack = () => {
-    const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
-    const heading = h("div", "font-weight:600;", `Tonspur ${rows.length + 1}`);
-    const path = templateInput("", "${input.path} oder ein eigener Pfad", vars);
-    const codecSel = select([{ value: "", label: "lade Audio-Codecs …" }], "");
-    (async () => {
-      const codecs = await fetchFFmpegList<FFCodecEntry>("encoders");
-      const audioCodecs = codecs.filter((c) => c.mediaType === "audio");
-      codecSel.replaceChildren(new Option("– ffmpeg-Standard –", ""));
-      for (const c of audioCodecs) codecSel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
-    })();
-    const lang = textInput("", "z. B. deu, eng (ISO-639-2)");
-    const title = textInput("", "z. B. Deutsch");
-    const rm = h("button", "margin-top:4px;", "Spur entfernen");
-    rm.type = "button";
-    const entry: TrackRow = { box, heading, pathInput: path.input, codecSel, lang, title };
-    rm.addEventListener("click", () => {
-      rows.splice(rows.indexOf(entry), 1);
-      box.remove();
-      renumber();
-    });
-    box.append(
-      heading,
-      field("Quelldatei", path.el, undefined, true),
-      field("Audio-Codec", codecSel),
-      field("Sprache", lang, "ISO-639-2-Kürzel — erscheint als Sprachkennung der Spur."),
-      field("Titel/Kennung", title, "Erscheint als Titel der Spur, z. B. der Name der Sprachfassung."),
-      rm,
-    );
-    rows.push(entry);
-    list.appendChild(box);
-  };
-  addTrack();
-  const addBtn = h("button", "margin-top:6px;", "+ weitere Tonspur");
-  addBtn.type = "button";
-  addBtn.addEventListener("click", addTrack);
-
-  el.append(
-    field("Ausgabedatei", output.el, undefined, true),
-    field("Container", fmt.el, "Bestimmt Dateiendung/Struktur, z. B. mxf, mov, mkv.", true),
-    field(
-      "Bildquelle (optional)",
-      videoSource.el,
-      "Manche Container (z. B. MXF) verlangen zwingend eine Bildspur, auch für eine reine Tonspur-Zusammenführung — hier eine eigene Videodatei angeben, falls nötig.",
-    ),
-    field(
-      "Video-Codec der Bildquelle",
-      videoCodecSel,
-      "„Unverändert übernehmen“ scheitert bei manchen Container/Quell-Codec-Kombinationen (z. B. H.264 in MXF) — dann hier einen echten Encoder wählen.",
-    ),
-    h("div", HELP_CSS + "margin-top:8px;", "Jede Tonspur kommt aus einer eigenen Quelldatei — z. B. je eine Sprachfassung."),
-    list,
-    addBtn,
-  );
-  return {
-    el,
-    read: () => {
-      const o = output.input.value.trim();
-      if (!o) return { ok: false, error: "Ausgabedatei fehlt." };
-      if (rows.length === 0) return { ok: false, error: "Mindestens eine Tonspur ist nötig." };
-      for (const r of rows) {
-        if (!r.pathInput.value.trim()) return { ok: false, error: "Jede Tonspur braucht eine Quelldatei." };
-      }
-      const f = fmt.read();
-      return {
-        ok: true,
-        command: "ffmpeg",
-        args: buildMultitrackArgs({
-          outputPath: o,
-          format: f.format || undefined,
-          muxerOptions: f.options,
-          videoSourcePath: videoSource.input.value.trim() || undefined,
-          videoCodec: videoCodecSel.value || undefined,
-          tracks: rows.map((r) => ({
-            inputPath: r.pathInput.value.trim(),
-            codec: r.codecSel.value || undefined,
-            language: r.lang.value.trim() || undefined,
-            title: r.title.value.trim() || undefined,
-          })),
-        }),
-      };
-    },
-  };
-}
-
 function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], commands: string[]): FormPart {
   const el = h("div", "");
   const hasFFmpeg = commands.includes("ffmpeg");
@@ -1115,9 +1029,6 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         break;
       case "extract_audio":
         activeForm = buildScriptWizardExtractAudio(vars);
-        break;
-      case "multitrack":
-        activeForm = buildScriptWizardMultitrack(vars);
         break;
       default:
         activeForm = null;

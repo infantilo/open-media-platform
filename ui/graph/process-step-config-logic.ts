@@ -404,15 +404,17 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
   },
 ];
 
-// ---- ffmpeg-Assistent (UMSETZUNG.md Kapitel 22, W2) --------------------------------------------
+// ---- ffmpeg-Assistent (UMSETZUNG.md Kapitel 22/23) ----------------------------------------------
 //
-// Baukasten-Prinzip (22.2): die Formulare unten bilden allgemeine
-// ffmpeg-Bausteine ab (Container/Codec wählen, AVOptions mit Hilfetext
-// statt Freitext, wiederholbare Tonspur-Gruppen) — KEIN
-// szenario-spezifischer Sonderpfad. "Mehrspur-Container bauen" deckt
-// das Nutzerbeispiel ("MXF mit 8 Tonspuren + TTS-Kennungen je Spur")
-// bereits vollständig ab, ohne dass MXF hier irgendwo als Sonderfall
-// vorkommt — nur eine von vielen möglichen Container-Wahlen.
+// Baukasten-Prinzip (ARCHITECTURE.md §26.4, UMSETZUNG.md 22.2): die
+// Formulare unten bilden allgemeine ffmpeg-Bausteine ab (Container/Codec
+// wählen, AVOptions mit Hilfetext statt Freitext) — KEIN
+// szenario-spezifischer Sonderpfad. Ein früherer fünfter Intent
+// "Mehrspur-Container bauen" (hart auf das MXF-Nutzerbeispiel
+// zugeschnitten) wurde in Kapitel 23 wieder ausgebaut, weil er genau der
+// Einzelfall-Sonderpfad war, den §26.4 ausschließen wollte — der Ersatz
+// (generisches Ausgabespur-Mapping) ist als Kapitel 23, Schritt 2
+// geplant, s. UMSETZUNG.md.
 //
 // Die tatsächlichen Optionswerte/-listen kommen zur Laufzeit von
 // `/api/v1/tools/ffmpeg/...` (orchestrator/internal/ffmpegtools, W1) —
@@ -423,7 +425,7 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
 // — die DOM-Seite (process-step-config.ts) schaltet direkt per `id`
 // auf den passenden Unterformular-Baustein.
 export interface ScriptIntent {
-  id: "probe" | "thumbnail" | "convert" | "extract_audio" | "multitrack";
+  id: "probe" | "thumbnail" | "convert" | "extract_audio";
   label: string;
   help: string;
 }
@@ -433,11 +435,6 @@ export const SCRIPT_INTENTS: ScriptIntent[] = [
   { id: "thumbnail", label: "Vorschaubild erzeugen", help: "Einzelbild aus einem Video, z. B. für eine Vorschaukachel." },
   { id: "convert", label: "Format/Codec konvertieren", help: "Container, Video-/Audio-Codec und deren Einstellungen frei wählen — mit echten erlaubten Werten und Hilfetexten von diesem Server." },
   { id: "extract_audio", label: "Tonspur extrahieren", help: "Nur den Ton einer Datei speichern, mit frei wählbarem Audio-Codec." },
-  {
-    id: "multitrack",
-    label: "Mehrspur-Container bauen",
-    help: "Mehrere Dateien (z. B. je eine Sprachfassung) zu EINER Ausgabedatei mit mehreren Tonspuren zusammenführen — Container, Codec und Titel/Sprache je Spur frei wählbar.",
-  },
 ];
 
 export function scriptIntentById(id: string): ScriptIntent | undefined {
@@ -497,7 +494,35 @@ export interface FFDetail {
 
 // ---- AVOption → Formularfeld-Art ---------------------------------------------------------------
 
-export type OptionControlKind = "select" | "checkbox" | "number" | "text";
+export type OptionControlKind = "select" | "checkbox" | "number" | "range" | "text";
+
+const NUMERIC_OPTION_TYPES = new Set(["int", "int64", "float", "double", "rational"]);
+
+function isFiniteNumberString(v: string | undefined): v is string {
+  return v !== undefined && v !== "" && Number.isFinite(Number(v));
+}
+
+export interface OptionRangeBounds {
+  min: number;
+  max: number;
+  step: number;
+}
+
+// Nur wenn BEIDE Grenzen von ffmpeg geliefert werden, ergibt ein
+// Schieberegler Sinn (Kapitel 23, Schritt 1 — vorher landeten begrenzte
+// Zahlenoptionen wie unbegrenzte in einem reinen Textfeld). Schrittweite
+// 1 für ganzzahlige Typen, sonst ein feines Hundertstel des Bereichs
+// (mind. 0.01) — grob genug für die HTML-Regler-Auflösung, fein genug,
+// dass Fließkomma-Bereiche nicht auf ganze Zahlen einrasten.
+export function optionRangeBounds(opt: FFOption): OptionRangeBounds | null {
+  if (!NUMERIC_OPTION_TYPES.has(opt.type)) return null;
+  if (!isFiniteNumberString(opt.min) || !isFiniteNumberString(opt.max)) return null;
+  const min = Number(opt.min);
+  const max = Number(opt.max);
+  if (!(max > min)) return null;
+  const step = opt.type === "int" || opt.type === "int64" ? 1 : Math.max((max - min) / 100, 0.01);
+  return { min, max, step };
+}
 
 // `flags`-Typ-Optionen (Bitmasken, z. B. "+global_header") lassen sich
 // KOMBINIEREN ("+"-getrennt) — dafür passt kein exklusives <select>,
@@ -506,7 +531,7 @@ export type OptionControlKind = "select" | "checkbox" | "number" | "text";
 export function ffOptionControlKind(opt: FFOption): OptionControlKind {
   if (opt.choices && opt.choices.length > 0 && opt.type !== "flags") return "select";
   if (opt.type === "boolean") return "checkbox";
-  if (opt.type === "int" || opt.type === "int64" || opt.type === "float" || opt.type === "double" || opt.type === "rational") return "number";
+  if (NUMERIC_OPTION_TYPES.has(opt.type)) return optionRangeBounds(opt) ? "range" : "number";
   return "text";
 }
 
@@ -613,69 +638,6 @@ export interface ThumbnailInput {
 
 export function buildThumbnailArgs(input: ThumbnailInput): string[] {
   return ["-y", "-ss", input.atTime, "-i", input.inputPath, "-frames:v", "1", "-vf", `scale=${input.widthPixels}:-2`, input.outputPath];
-}
-
-// Eine Tonspur der Mehrspur-Gruppe — bewusst NUR Codec+Titel+Sprache
-// (kein volles AVOptions-Panel je Spur, das würde bei z. B. 8 Spuren
-// den Assistenten sprengen); tiefere Codec-Einstellungen bleiben "Format
-// konvertieren" bzw. dem Erweitert-Modus vorbehalten.
-export interface MultitrackTrack {
-  inputPath: string;
-  codec?: string;
-  language?: string;
-  title?: string;
-}
-
-export interface MultitrackInput {
-  outputPath: string;
-  format?: string;
-  muxerOptions?: Record<string, string>;
-  // Eigene, von den Tonspuren UNABHÄNGIGE Bildquelle — z. B. ein
-  // Testbild oder eine echte Aufzeichnung. WICHTIG für Container wie
-  // MXF, deren OP1a-Muxer zwingend eine Bildspur verlangt (live
-  // gefunden, s. UMSETZUNG.md Kapitel 22 W2-Status). Bewusst NICHT
-  // "die erste Tonspur liefert auch das Bild" (frühere Fassung, per
-  // W4-Härtetest als Baukasten-Lücke gefunden — eine Tonspur ist eine
-  // Tonspur, eine Bildquelle ein eigener, unabhängiger Baustein).
-  videoSourcePath?: string;
-  // Ohne Angabe: `-c:v copy` (unverändert übernehmen). Live per W4-
-  // Härtetest gefunden: reines Stream-Copy einer H.264-Quelle in einen
-  // MXF-Container schlägt bei diesem ffmpeg-Build fehl ("Received
-  // non-video packet before header has been written") — mit einem
-  // echten Encoder (z. B. mpeg2video) lief derselbe Aufbau anstandslos.
-  // Eine feste Bildquelle ohne wählbaren Codec wäre also KEIN
-  // vollständiger Baustein gewesen — genau die Art Lücke, die W4 finden
-  // und beheben soll, nicht umgehen.
-  videoCodec?: string;
-  tracks: MultitrackTrack[];
-}
-
-// Jede Spur kommt aus einer EIGENEN Eingabedatei (z. B. acht separate
-// Sprachfassungen) statt aus mehreren Kanälen einer einzigen Datei —
-// deckt das Nutzerbeispiel direkt ab, ohne einen Sonderfall für "eine
-// Mehrkanaldatei aufteilen" zu brauchen (der ließe sich bei Bedarf
-// später als zusätzliche Track-Quellart ergänzen, s. UMSETZUNG.md W4).
-export function buildMultitrackArgs(input: MultitrackInput): string[] {
-  const args: string[] = ["-y"];
-  if (input.videoSourcePath) args.push("-i", input.videoSourcePath);
-  for (const t of input.tracks) args.push("-i", t.inputPath);
-  // Die Bildquelle (falls gesetzt) ist IMMER die erste `-i`-Eingabe —
-  // Tonspur-Eingaben rutschen dadurch um eins nach hinten, ihre
-  // AUSGANGS-Stream-Indizes (":a:N" für Codec/Metadaten) bleiben davon
-  // unberührt, da die nur die Reihenfolge unter den Audio-Streams
-  // zählen, nicht die Eingabedatei-Nummer.
-  const audioInputOffset = input.videoSourcePath ? 1 : 0;
-  if (input.videoSourcePath) args.push("-map", "0:v", "-c:v", input.videoCodec || "copy");
-  input.tracks.forEach((_, i) => args.push("-map", `${i + audioInputOffset}:a`));
-  input.tracks.forEach((t, i) => {
-    if (t.codec) args.push(`-c:a:${i}`, t.codec);
-    if (t.title) args.push(`-metadata:s:a:${i}`, `title=${t.title}`);
-    if (t.language) args.push(`-metadata:s:a:${i}`, `language=${t.language}`);
-  });
-  args.push(...optionEntriesToArgs(input.muxerOptions ?? {}));
-  if (input.format) args.push("-f", input.format);
-  args.push(input.outputPath);
-  return args;
 }
 
 // ---- Schlüssel/Wert-Objekte (Header, Payload, Eingaben) ---------------------------------------

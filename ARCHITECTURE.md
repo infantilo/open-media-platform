@@ -4269,3 +4269,20 @@ abdecken können. Bedingungen, falls es später konkret angegangen wird
 - Optional und deinstallierbar — OMP funktioniert unverändert vollständig
   ohne dieses Modul (der Wizard ist die tragende Bedienoberfläche, das
   LLM nur eine optionale Abkürzung davor).
+
+### 26.6 Korrektur 2026-09-26: Baukasten-Prinzip nachträglich durchgesetzt
+
+§26.4 verlangte ausdrücklich **kein** eigenes „MXF-Mehrspur-Wizard"-
+Sonderfeature — trotzdem entstand in UMSETZUNG.md Kapitel 22 W2 genau
+das: ein fünfter, fest einprogrammierter `SCRIPT_INTENTS`-Eintrag
+„Mehrspur-Container bauen“, hart auf das im Nutzerbeispiel genannte
+Szenario zugeschnitten. Per Nutzerkorrektur (UMSETZUNG.md Kapitel 23,
+Schritt 1) wieder ausgebaut — der Ersatz (ein generisches, wiederholbares
+Ausgabespur-Mapping, das dieselbe Fähigkeit ohne Sonderformular bietet)
+ist als Kapitel 23, Schritt 2 geplant. §26.1–26.5 bleiben unverändert
+gültig; korrigiert wird nur die W2-Umsetzung, keine Grundsatzentscheidung.
+Kapitel 23 erweitert außerdem das Zielbild um Bausteine, die §26 noch
+nicht explizit nannte (grafische Audio-Routing-/Mix-Matrix,
+zeitgesteuerte Overlays, Dateien-aneinanderhängen, ein „Pro-Modus" mit
+vollständiger, auch globale CLI-Flags umfassender Introspektion) — Details
+und Phasenplan in UMSETZUNG.md 6d.

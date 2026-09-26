@@ -3622,6 +3622,133 @@ der oben genannte CSS-Bug gefunden) auf Kapitel 22 (W1–W4) gebracht.
 `docs/HANDBUCH.md` (Dev-/Ops-Handbuch) bewusst unverändert — der
 Assistent ist ein Endnutzer-Feature ohne Auswirkung auf Aufbau/Betrieb.
 
+## 6d. Kapitel 23 — FFmpeg-Assistent: Baukasten statt Sonderfall (Korrektur zu Kapitel 22)
+
+Nutzerauftrag 2026-09-26: Kapitel 22 sollte laut eigenem Zielbild
+(ARCHITECTURE.md §26.4, 22.2 oben) ein **Baukasten** aus allgemeinen
+Bausteinen sein — der genannte Anwendungsfall („MXF-Datei mit 8
+Tonspuren + TTS-Kennungen je Spur“) war ausdrücklich **nur Maßstab für
+die nötige Ausdruckskraft, keine zu bauende Einzelfunktion**. In W2
+wurde daraus trotzdem ein fünfter, fest einprogrammierter
+`SCRIPT_INTENTS`-Eintrag „Mehrspur-Container bauen“ — exakt der
+Einzelfall-Sonderpfad, den §26.4 ausschließen wollte. Nutzerkorrektur:
+diesen Sonderfall wieder ausbauen; der Assistent muss stattdessen aus
+wirklich allgemeinen Bausteinen bestehen, die alles abdecken, was im
+professionellen TV-/Radio-/Online-Broadcast gebraucht wird — Format-
+abhängig nur relevante Parameter mit Default-Werten und passendem
+Steuerelement (Auswahl/Kontrollkästchen/Zahl/**Schieberegler**), eine
+**grafische Audio-Matrix** (Quell-/Zusatzdatei-Kanäle auf Ausgangsspuren
+routen, anteilig mischen, verzögern), **zeitgesteuerte Overlays**
+(Senderkennung/Bauchbinde/Abspann zu bestimmten Zeiten), Formate
+konvertieren, **mehrere Dateien aneinanderhängen**, und ein
+**Pro-Modus**, in dem buchstäblich jeder ffmpeg-/ffprobe-Wert
+adressierbar ist.
+
+### 23.1 Bestandsaufnahme
+
+- `ffmpegOptionsList` (`process-step-config.ts`) war bereits ein
+  **generischer** AVOption→Formularfeld-Renderer (nicht an die 5
+  Intents gebunden) — das „nur relevante Parameter je gewähltem
+  Codec/Container, mit Hilfetext+Default“-Ziel war über
+  `ffOptionControlKind`/`optionHelpText` bereits größtenteils erreicht;
+  es fehlte nur der explizit gewünschte Schieberegler für Zahlenwerte
+  mit bekannten Grenzen (s. Schritt 1 unten).
+- `filter-graph.ts`/`filter-graph-logic.ts` sind ein generischer
+  Knoten/Kanten-Graph-Editor: jeder ffmpeg-Filter (inkl. `amix`, `pan`,
+  `adelay`, `overlay`, `drawtext`, `concat`) funktioniert dort schon
+  HEUTE als Knoten mit dynamischen N-Pads, ohne Codeänderung am
+  Compiler (`compileFilterGraph`) — das richtige Fundament für
+  Audio-Matrix, Overlay-Timing und Concat, auch wenn die rohe
+  Knoten/Kanten-Bedienung für diese Aufgaben je eine eigene, intuitivere
+  Bedienoberfläche oben drauf braucht.
+- `ui/shell/scheduler-view.ts` liefert ein fertiges Muster für eine
+  Zeitachse (prozentual positionierte, per Pointer-Events
+  ziehbare/anpassbare Balken über einer Gesamtdauer) — direkt für die
+  Overlay-Zeitsteuerung übertragbar.
+- `ffmpegtools` (W1) parst bewusst NICHT `-h full` (globale CLI-Flags
+  wie `-ar`/`-r`/`-ss`/`-t`/`-to`) — expliziter Scope-Schnitt aus W1,
+  jetzt eine echte Lücke gegenüber „jeder Wert adressierbar“. Keyframe-/
+  Bild-Typ-Introspektion (`ffprobe -show_frames`/`pict_type`) existiert
+  gar nicht (Greenfield) — relevant für „an Keyframes/I-Frames
+  aneinanderhängen“ im verlustfreien Stream-Copy-Sinn.
+
+**Kein 1:1-Nachbau der Referenz-App** — §26.1–26.3 bleiben gültig.
+
+### 23.2 Schritt 1 — Ausbau + Regler-Grundlage (erledigt 2026-09-26)
+
+**Ausgebaut:** `MultitrackTrack`/`MultitrackInput`/`buildMultitrackArgs`
+und der `"multitrack"`-Eintrag aus `SCRIPT_INTENTS`
+(`process-step-config-logic.ts`); `buildScriptWizardMultitrack` und
+dessen `case`-Zweig in `renderIntent` (`process-step-config.ts`); die
+zugehörigen `deno test`-Fälle. Der Assistent bietet jetzt nur noch die
+vier echten Baukasten-Aufgaben: Metadaten auslesen, Vorschaubild,
+Format/Codec konvertieren, Tonspur extrahieren — live per CDP bestätigt
+(Intent-Dropdown zeigt exakt diese vier, kein „Mehrspur-Container
+bauen“ mehr).
+
+**Generische Verbesserung (kein Sonderfall je Assistent):**
+`ffOptionControlKind` bekam eine neue Rückgabeart `"range"` — numerische
+AVOptions (`int`/`int64`/`float`/`double`/`rational`) mit **sowohl**
+`min` **als auch** `max` als echten Zahlen (nicht ffmpegs Sentinel-
+Strings wie `"FLT_MAX"`/`"INT_MAX"`, die live als tatsächliche
+`max`-Werte vieler „eigentlich unbegrenzter“ Optionen gefunden wurden —
+z. B. `libx264`s `-crf` hat `max: "FLT_MAX"`, bleibt also bewusst
+Freitext) → Schieberegler statt Freitextfeld. Neue Hilfsfunktion
+`optionRangeBounds` liefert `{min, max, step}` (Schritt 1 bei
+Ganzzahlen, sonst ein Hundertstel des Bereichs, mind. 0.01). Wirkt
+automatisch überall, wo AVOptions gerendert werden:
+`ffmpegOptionsList` (`process-step-config.ts`, treibt convert/
+extract_audio/codec-/formatPicker) UND die separate, kompaktere
+Feldlogik in `filter-graph.ts`s `renderNode` (dort inline, da dieser
+Editor seine Felder in SVG-`foreignObject`s statt über die DOM-Helfer
+von `process-step-config.ts` rendert).
+
+Live per echter CDP-Session gegen den tatsächlich laufenden
+Orchestrator (`libaom-av1`-Encoder, `acompressor`-Audiofilter — beide
+haben echte, per `ffmpeg -h` gelieferte Zahlengrenzen) verifiziert: der
+Video-Codec-Wechsel auf `libaom-av1` im „Format/Codec konvertieren“-
+Formular erzeugt 10 Schieberegler (u. a. `-crf` mit `min="-1"
+max="63" step="1"`), Regler↔Zahlenfeld synchronisieren sich in beide
+Richtungen; das Hinzufügen eines `acompressor`-Filterknotens im
+Filter-Graph-Editor erzeugt dort ebenfalls 9 Schieberegler (u. a.
+`level_in` mit `min="0.015625" max="64"`). `deno check ui/graph/*.ts`
+und `deno check ui/**/*.ts`, `deno test ui/graph/` (121 Fälle,
+inkl. neuer Testfälle für `ffOptionControlKind`/`optionRangeBounds`),
+`deno bundle` (47 Module, keine hängenden Multitrack-Referenzen)
+grün.
+
+**Nicht Teil dieses Schritts** (geplant als eigene, für sich
+abnahmefähige Sitzungen, exakt im W1→W4-Rhythmus von Kapitel 22):
+
+- **Schritt 2 — Generisches Ausgabespur-Mapping**: ersetzt inhaltlich,
+  was „Mehrspur-Container bauen“ konnte, aber als allgemeiner Baustein
+  im „Format/Codec konvertieren“-Formular — wiederholbare
+  „Ausgabespur“-Gruppen (Quelle = Eingabedatei+Stream-Index ODER
+  Filtergraph-Ausgang; Codec inkl. AVOptions über `ffmpegOptionsList`;
+  Metadaten als generische Schlüssel/Wert-Liste statt hart codierter
+  `title`/`language`-Felder, da ffmpeg beliebige Metadaten-Schlüssel
+  erlaubt).
+- **Schritt 3 — Grafische Audio-Matrix**: Crosspoint-Raster
+  (Quellkanäle je Eingabe × Ausgangsspuren), Zelle = Anteil (0–100 %
+  bzw. dB) + Verzögerung (ms); kompiliert zu `pan`/`amix`/
+  `adelay`-Filterausdrücken. Architekturentscheidung (Empfehlung, zu
+  bestätigen bei Sitzungsbeginn): eigenständiges, direkt
+  `-filter_complex`-Fragmente erzeugendes Widget statt vorbefüllter
+  Knoten im Filter-Graph-Editor — tabellarische Aufgabe, ein
+  Graph-Editor ist dafür selbst zu technisch.
+- **Schritt 4 — Zeitgesteuerte Overlays + Aneinanderhängen**:
+  Zeitachsen-Editor (Muster: `scheduler-view.ts`) für `drawtext`/
+  `overlay`-Ereignisse mit Start/Ende → `enable='between(t,a,b)'`;
+  separat ein „Dateien nacheinander“-Baustein (automatisch erzeugter
+  `concat`-Filterknoten mit N dynamischen Pads — strukturell schon
+  möglich). Keyframe-genaues, verlustfreies Concat als separat
+  markierter Greenfield-Ausblick (braucht neue ffprobe-Frame-
+  Introspektion), nur bei echtem Bedarf.
+- **Schritt 5 — Pro-Modus**: `ffmpegtools` um `-h full` (globale
+  CLI-Flags, der in W1 bewusst ausgelassene Scope-Schnitt) erweitern +
+  im „Erweitert (Rohargumente)“-Modus eine Options-/Flag-Suche mit
+  Hilfetext aus der vollständigen Introspektion ergänzen.
+
 ---
 
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
@@ -3879,3 +4006,4 @@ Assistent ist ein Endnutzer-Feature ohne Auswirkung auf Aufbau/Betrieb.
 | Kapitel 22 W3: visueller Filter-Graph-Builder | erledigt | Neuer eigenständiger Baustein `filter-graph.ts` (funktionaler Modal-Dialog, kein Custom Element) + DOM-freie `filter-graph-logic.ts` (`compileFilterGraph` — Kahn-Topo-Sortierung, Zyklus-/Unverbunden-Erkennung, 14 `deno test`-Fälle); wiederverwendet NUR die generische Koordinaten-/Port-Mathematik aus `geometry.ts` (nicht `flow-canvas.ts` selbst, das ist NMOS-spezifisch). Knotenarten Eingang (roher Stream-Spezifizierer)/Filter (Name+Optionen aus echter `/api/v1/tools/ffmpeg/filters`-Liste, dynamische "N"-Pad-Filter einstellbar)/Ausgang (`-map`), Verbindungen per Pointer-Drag zwischen benannten Pads (Muster aus `process-editor.ts` übernommen). Gemeinsamer `ffmpeg-client.ts` aus W2 herausgezogen. Integriert in W2s "Format/Codec konvertieren": neuer Abschnitt "Filter (optional)", `buildConvertArgs` um `filterComplex`/`filterOutputLabels` erweitert. Live per echter CDP-Session durch die tatsächliche Shell-UI verifiziert inkl. **echter simulierter Pointer-Drag-Verbindungen** (reale Bildschirmkoordinaten der Ports) zwischen Eingang→scale→Ausgang; "Übernehmen" compilierte fehlerfrei, gespeichert und über die echte Prozess-API bestätigt. Generierter Befehl zweimal tatsächlich ausgeführt (ohne und mit gesetzten Filter-Optionen `scale=w=640:h=360`) — beide Male `exit=0`, Ausgabeauflösung per `ffprobe` bestätigt. `deno check` für alle 24 Dateien in `ui/graph/` + `deno test` (122 Fälle) + `deno bundle` grün. | 2026-09-25 |
 | Kapitel 22 W4: Verallgemeinerungs-Härtetest — zwei echte Baukasten-Lücken gefunden+behoben, Kapitel 22 abgeschlossen | erledigt | Vier bewusst unterschiedliche Szenarien durch die echte UI (Mehrspur-MXF+eigene Bildquelle, dieselbe Zusammenführung als MOV, Tonspur extrahieren, Filter-Graph mit dynamischem `amix` N=3). Zwei echte Lücken gefunden UND behoben (nicht umgangen): (1) Bildquelle war an die erste Tonspur gekoppelt statt eigener Baustein — `videoSourcePath` löst das, Tonspuren rutschen im Eingabe-Index, AUSGANGS-Stream-Indizes bleiben unberührt; (2) Filter-Graphen mit mehreren Quellen (z. B. `amix` mit 3 Eingängen) konnten im Konvertieren-Assistenten nie laufen (nur 1 Eingabedatei-Feld) — neue Sektion "Weitere Eingabedateien" behebt das. Zusätzlich beim tatsächlichen Ausführen gefunden+behoben: `-c:v copy` von H.264 nach MXF schlägt bei diesem ffmpeg-Build fehl — neues Feld "Video-Codec der Bildquelle" (Default weiterhin `copy`). Bestätigt+verallgemeinert: MOV schreibt `-metadata:s:a:N`-Tags genauso wenig in den Container wie MXF (nur Matroska zuverlässig) — Wizard-Mechanismus nachweislich korrekt, reine ffmpeg-Muxer-Eigenheit, keine Code-Änderung nötig. Alle vier Szenarien nach Fund+Fix real ausgeführt + per `ffprobe` gegengeprüft. `deno check` (24 Dateien) + `deno test` (125 Fälle) + `deno bundle` grün. **Kapitel 22 (W1–W4) damit abgeschlossen.** | 2026-09-25 |
 | Kapitel 22.4: README.md/BENUTZERHANDBUCH.md aktualisiert, echter CSS-Bug per Doku-Screenshot gefunden+behoben | erledigt | README.md ("Business process engine"-Absatz + neuer "Most recently"-Absatz im Status) und `docs/BENUTZERHANDBUCH.md` (neuer Abschnitt 5a.1, zwei echte per CDP aufgenommene Screenshots) auf den Assistenten/Filter-Builder gebracht. Beim Aufnehmen der Screenshots ein echter, rein visueller Bug gefunden: `ffmpegOptionsList`s Such-Filter setzte `row.style.display = ""` statt `"flex"` zurück — entfernt `field()`s `display:flex` komplett, `<label>` fällt auf Browser-Standard `inline` zurück, mehrere AVOptions verschmelzen optisch zu einer Zeile (kein `deno test`/CDP-Wertecheck hätte das gefunden, nur ein echtes Sichtreview). Fix: `"flex"` statt `""`. `docs/HANDBUCH.md` (Dev-/Ops) bewusst unverändert. | 2026-09-25 |
+| Kapitel 23 Schritt 1: Sonderfall "Mehrspur-Container bauen" ausgebaut + Schieberegler-Grundlage für begrenzte AVOptions | erledigt | Nutzerkorrektur: der MXF-Mehrspur-Fall war Maßstab für Ausdruckskraft, keine zu bauende Einzelfunktion (§26.4/22.2) — W2 hatte ihn trotzdem als fünften festen `SCRIPT_INTENTS`-Eintrag gebaut. Entfernt: `MultitrackTrack`/`MultitrackInput`/`buildMultitrackArgs`, `buildScriptWizardMultitrack`, der `"multitrack"`-Intent + zugehörige Tests — Assistent bietet nur noch die vier echten Bausteine (Metadaten/Vorschaubild/Konvertieren/Tonspur extrahieren). Zugleich generische Verbesserung: `ffOptionControlKind` neue Art `"range"` + `optionRangeBounds` — numerische AVOptions mit echten (nicht ffmpegs Sentinel-Strings wie `FLT_MAX`) Ober-/Untergrenzen bekommen einen Schieberegler statt Freitext, automatisch in `ffmpegOptionsList` UND `filter-graph.ts`s eigener Feldlogik. Live per CDP gegen den echten Orchestrator verifiziert: Intent-Dropdown zeigt kein "Mehrspur-Container bauen" mehr; `libaom-av1`-Encoder erzeugt 10 Regler (u. a. `-crf` mit min=-1/max=63/step=1, Regler↔Zahlenfeld synchronisieren beidseitig); `acompressor`-Filterknoten im Filter-Graph-Editor erzeugt 9 Regler (u. a. `level_in` min=0.015625/max=64). `deno check ui/**/*.ts`, `deno test ui/graph/` (121 Fälle), `deno bundle` (47 Module) grün. Schritt 2-5 (generisches Ausgabespur-Mapping, grafische Audio-Matrix, Overlay-Timeline+Concat, Pro-Modus mit `-h full`) als eigene Folgesitzungen geplant, s. UMSETZUNG.md 23.2. | 2026-09-26 |

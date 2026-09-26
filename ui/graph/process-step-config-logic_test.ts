@@ -5,7 +5,6 @@ import {
   branchLabelsFor,
   buildConvertArgs,
   buildExtractAudioArgs,
-  buildMultitrackArgs,
   buildProbeArgs,
   buildThumbnailArgs,
   ffOptionControlKind,
@@ -16,6 +15,7 @@ import {
   missingConfig,
   optionEntriesToArgs,
   optionHelpText,
+  optionRangeBounds,
   parseGoDuration,
   parseRule,
   ruleToExpression,
@@ -123,8 +123,27 @@ Deno.test("ffOptionControlKind classifies AVOptions by type/choices", () => {
   assertEquals(ffOptionControlKind(flagsType), "text"); // kombinierbar, kein exklusives <select>
 
   assertEquals(ffOptionControlKind({ name: "-b", type: "boolean", flags: "" }), "checkbox");
-  assertEquals(ffOptionControlKind({ name: "-crf", type: "float", flags: "" }), "number");
+  assertEquals(ffOptionControlKind({ name: "-crf", type: "float", flags: "" }), "number"); // keine Grenzen bekannt
   assertEquals(ffOptionControlKind({ name: "-preset", type: "string", flags: "" }), "text");
+});
+
+Deno.test("ffOptionControlKind/optionRangeBounds: numeric options with BOTH bounds known become a slider (Kapitel 23, Schritt 1)", () => {
+  const bounded: FFOption = { name: "-crf", type: "float", flags: "", min: "-1", max: "51" };
+  assertEquals(ffOptionControlKind(bounded), "range");
+  assertEquals(optionRangeBounds(bounded), { min: -1, max: 51, step: 0.52 });
+
+  const intBounded: FFOption = { name: "-qp", type: "int", flags: "", min: "0", max: "63" };
+  assertEquals(optionRangeBounds(intBounded), { min: 0, max: 63, step: 1 });
+
+  // Nur EINE Grenze reicht nicht — ein Regler ohne Ober- oder Untergrenze
+  // wäre nicht sinnvoll begrenzbar, bleibt Freitext.
+  assertEquals(ffOptionControlKind({ name: "-x", type: "int", flags: "", min: "0" }), "number");
+  assertEquals(ffOptionControlKind({ name: "-x", type: "int", flags: "", max: "10" }), "number");
+  assertEquals(optionRangeBounds({ name: "-x", type: "int", flags: "", min: "0" }), null);
+
+  // Wahlmöglichkeiten (choices) gehen vor — auch ein numerischer Typ mit
+  // festen Werten bleibt <select>, kein Regler.
+  assertEquals(ffOptionControlKind({ name: "-preset", type: "int", flags: "", min: "0", max: "9", choices: [{ name: "fast" }] }), "select");
 });
 
 Deno.test("optionHelpText composes description/range/default, and lists choices only for flags-type options", () => {
@@ -208,75 +227,6 @@ Deno.test("buildExtractAudioArgs always sends -vn and keeps the input/output ord
   assertEquals(args, ["-y", "-i", "in.mp4", "-vn", "-c:a", "pcm_s24le", "-ar", "48000", "out.wav"]);
 });
 
-Deno.test("buildMultitrackArgs: das Nutzerbeispiel — mehrere separate Dateien, je eine Tonspur mit eigenem Codec/Titel/Sprache", () => {
-  const args = buildMultitrackArgs({
-    outputPath: "out.mxf",
-    format: "mxf",
-    tracks: [
-      { inputPath: "de.wav", codec: "pcm_s16le", language: "deu", title: "Deutsch" },
-      { inputPath: "en.wav", codec: "pcm_s16le", language: "eng", title: "English" },
-    ],
-  });
-  assertEquals(args, [
-    "-y",
-    "-i",
-    "de.wav",
-    "-i",
-    "en.wav",
-    "-map",
-    "0:a",
-    "-map",
-    "1:a",
-    "-c:a:0",
-    "pcm_s16le",
-    "-metadata:s:a:0",
-    "title=Deutsch",
-    "-metadata:s:a:0",
-    "language=deu",
-    "-c:a:1",
-    "pcm_s16le",
-    "-metadata:s:a:1",
-    "title=English",
-    "-metadata:s:a:1",
-    "language=eng",
-    "-f",
-    "mxf",
-    "out.mxf",
-  ]);
-});
-
-Deno.test("buildMultitrackArgs: an independent video source is its own first input (W4-Fund — nicht die erste Tonspur)", () => {
-  const args = buildMultitrackArgs({
-    outputPath: "out.mxf",
-    videoSourcePath: "bars.mp4",
-    tracks: [{ inputPath: "a.wav", codec: "aac" }, { inputPath: "b.wav", codec: "aac" }],
-  });
-  assertEquals(args.slice(0, 6), ["-y", "-i", "bars.mp4", "-i", "a.wav", "-i"]);
-  const mapIdx = args.indexOf("-map");
-  assertEquals(args.slice(mapIdx, mapIdx + 8), ["-map", "0:v", "-c:v", "copy", "-map", "1:a", "-map", "2:a"]);
-  // Trotz der um 1 verschobenen Eingabe-Indizes bleiben die
-  // AUSGANGS-Stream-Indizes für Codec/Metadaten unverändert (0,1,…) —
-  // sie zählen nur unter den Audio-Streams, nicht den Eingabedateien.
-  const c0 = args.indexOf("-c:a:0");
-  assertEquals(args[c0 + 1], "aac");
-});
-
-Deno.test("buildMultitrackArgs: video source defaults to -c:v copy, but an explicit codec overrides it (W4-Fund: plain copy into MXF can fail for some source codecs)", () => {
-  const withDefault = buildMultitrackArgs({ outputPath: "out.mxf", videoSourcePath: "bars.mp4", tracks: [{ inputPath: "a.wav" }] });
-  const i1 = withDefault.indexOf("-c:v");
-  assertEquals(withDefault[i1 + 1], "copy");
-
-  const withCodec = buildMultitrackArgs({ outputPath: "out.mxf", videoSourcePath: "bars.mp4", videoCodec: "mpeg2video", tracks: [{ inputPath: "a.wav" }] });
-  const i2 = withCodec.indexOf("-c:v");
-  assertEquals(withCodec[i2 + 1], "mpeg2video");
-});
-
-Deno.test("buildMultitrackArgs: without a video source, audio tracks stay at their own input index (no offset)", () => {
-  const args = buildMultitrackArgs({ outputPath: "out.wav", tracks: [{ inputPath: "a.wav" }] });
-  const mapIdx = args.indexOf("-map");
-  assertEquals(args[mapIdx + 1], "0:a");
-});
-
 Deno.test("buildProbeArgs matches the fixed ffprobe JSON invocation", () => {
   assertEquals(buildProbeArgs({ inputPath: "${input.path}" }), ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", "${input.path}"]);
 });
@@ -286,15 +236,4 @@ Deno.test("buildThumbnailArgs scales by width, keeps aspect ratio via -2", () =>
     buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }),
     ["-y", "-ss", "00:00:05", "-i", "in.mp4", "-frames:v", "1", "-vf", "scale=480:-2", "out.jpg"],
   );
-});
-
-Deno.test("buildMultitrackArgs passes muxer-level options right before -f/output path", () => {
-  const args = buildMultitrackArgs({
-    outputPath: "out.mxf",
-    format: "mxf",
-    muxerOptions: { "-signal_standard": "bt601" },
-    tracks: [{ inputPath: "a.wav" }],
-  });
-  assertEquals(args.slice(-5, -1), ["-signal_standard", "bt601", "-f", "mxf"]);
-  assertEquals(args.at(-1), "out.mxf");
 });

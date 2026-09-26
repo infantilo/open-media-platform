@@ -27,6 +27,7 @@ import {
   zoomAt,
 } from "./geometry.ts";
 import { fetchFFmpegDetail, fetchFFmpegList } from "./ffmpeg-client.ts";
+import { optionRangeBounds } from "./process-step-config-logic.ts";
 import type { FFFilterEntry, FFOption } from "./process-step-config-logic.ts";
 import {
   compileFilterGraph,
@@ -327,24 +328,62 @@ export function openFilterGraphEditor(
           const row = h("div", "margin-bottom:2px;");
           const lbl = h("div", "color:#aaa;", opt.name);
           row.appendChild(lbl);
-          let input: HTMLInputElement | HTMLSelectElement;
+          // Begrenzte Zahlenoptionen (min+max von ffmpeg bekannt, z. B.
+          // scales Dimensionen) bekommen einen Regler statt eines reinen
+          // Textfelds (Kapitel 23, Schritt 1 — gleiches Prinzip wie
+          // ffmpegOptionsList in process-step-config.ts, hier separat
+          // umgesetzt, da dieser Editor seine Felder direkt in SVG-
+          // `foreignObject`s statt über die dortigen DOM-Helfer rendert).
+          const bounds = opt.choices && opt.choices.length > 0 ? null : optionRangeBounds(opt);
           if (opt.choices && opt.choices.length > 0) {
-            input = h("select", "width:100%;font-size:10px;");
+            const input = h("select", "width:100%;font-size:10px;");
             input.appendChild(new Option("– Standard –", ""));
             for (const c of opt.choices) input.appendChild(new Option(c.name, c.value || c.name));
+            input.value = node.options?.[opt.name] ?? "";
+            input.title = opt.description ?? "";
+            const setVal = () => {
+              node.options = { ...node.options, [opt.name]: input.value };
+            };
+            input.addEventListener("input", setVal);
+            input.addEventListener("change", setVal);
+            row.appendChild(input);
+          } else if (bounds) {
+            const wrap = h("div", "display:flex;align-items:center;gap:4px;");
+            const range = h("input", "flex:1;");
+            range.type = "range";
+            range.min = String(bounds.min);
+            range.max = String(bounds.max);
+            range.step = String(bounds.step);
+            const initial = node.options?.[opt.name] ?? "";
+            const startNum = initial !== "" && Number.isFinite(Number(initial)) ? Number(initial) : bounds.min;
+            range.value = String(startNum);
+            range.title = opt.description ?? "";
+            const num = h("input", "width:44px;font-size:10px;");
+            num.value = initial;
+            num.placeholder = opt.default ? `Standard: ${opt.default}` : "";
+            range.addEventListener("input", () => {
+              num.value = range.value;
+              node.options = { ...node.options, [opt.name]: range.value };
+            });
+            num.addEventListener("input", () => {
+              const n = Number(num.value);
+              if (Number.isFinite(n)) range.value = String(Math.min(bounds.max, Math.max(bounds.min, n)));
+              node.options = { ...node.options, [opt.name]: num.value.trim() };
+            });
+            wrap.append(range, num);
+            row.appendChild(wrap);
           } else {
-            input = h("input", "width:100%;box-sizing:border-box;font-size:10px;");
+            const input = h("input", "width:100%;box-sizing:border-box;font-size:10px;");
             input.placeholder = opt.default ? `Standard: ${opt.default}` : "";
+            input.value = node.options?.[opt.name] ?? "";
+            input.title = opt.description ?? "";
+            const setVal = () => {
+              node.options = { ...node.options, [opt.name]: input.value };
+            };
+            input.addEventListener("input", setVal);
+            input.addEventListener("change", setVal);
+            row.appendChild(input);
           }
-          input.value = node.options?.[opt.name] ?? "";
-          input.title = opt.description ?? "";
-          input.addEventListener("input", () => {
-            node.options = { ...node.options, [opt.name]: (input as HTMLInputElement).value };
-          });
-          input.addEventListener("change", () => {
-            node.options = { ...node.options, [opt.name]: (input as HTMLInputElement).value };
-          });
-          row.appendChild(input);
           fowrap.appendChild(row);
         }
         if (defs.length === 0) fowrap.appendChild(h("div", "color:#999;", "keine Optionen"));
