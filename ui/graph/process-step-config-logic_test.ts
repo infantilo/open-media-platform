@@ -3,8 +3,10 @@ import type { DraftDefinition } from "./process-editor-logic.ts";
 import {
   ancestorsOf,
   branchLabelsFor,
+  buildConcatArgs,
   buildConvertArgs,
   buildExtractAudioArgs,
+  buildOverlayArgs,
   buildProbeArgs,
   buildThumbnailArgs,
   ffOptionControlKind,
@@ -22,6 +24,7 @@ import {
   splitSeconds,
   toSeconds,
   triggerKinds,
+  validateArgValue,
   variableOptions,
 } from "./process-step-config-logic.ts";
 
@@ -236,4 +239,91 @@ Deno.test("buildThumbnailArgs scales by width, keeps aspect ratio via -2", () =>
     buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }),
     ["-y", "-ss", "00:00:05", "-i", "in.mp4", "-frames:v", "1", "-vf", "scale=480:-2", "out.jpg"],
   );
+});
+
+// ---- Clips aneinanderhängen (Kapitel 23, Schritt 2) -----------------------------------------------
+
+Deno.test("buildConcatArgs: trims only the clips that have trim points, always resets pts, joins via the concat filter", () => {
+  const args = buildConcatArgs({
+    outputPath: "out.mp4",
+    clips: [{ inputPath: "a.mp4" }, { inputPath: "b.mp4", trimStart: "5", trimEnd: "10" }],
+  });
+  assertEquals(args, [
+    "-y", "-i", "a.mp4", "-i", "b.mp4",
+    "-filter_complex",
+    "[0:v]setpts=PTS-STARTPTS[v0];[0:a]asetpts=PTS-STARTPTS[a0];" +
+      "[1:v]trim=start=5:end=10,setpts=PTS-STARTPTS[v1];[1:a]atrim=start=5:end=10,asetpts=PTS-STARTPTS[a1];" +
+      "[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][outa]",
+    "-map", "[outv]", "-map", "[outa]",
+    "out.mp4",
+  ]);
+});
+
+Deno.test("buildConcatArgs: codec/format options land after the map flags, before the output path", () => {
+  const args = buildConcatArgs({
+    outputPath: "out.mkv",
+    format: "matroska",
+    videoCodec: "libx264",
+    audioCodec: "aac",
+    clips: [{ inputPath: "a.mp4" }, { inputPath: "b.mp4" }, { inputPath: "c.mp4" }],
+  });
+  assertEquals(args.slice(-7), ["-c:v", "libx264", "-c:a", "aac", "-f", "matroska", "out.mkv"]);
+});
+
+// ---- Zeitgesteuerte Overlays (Kapitel 23, Schritt 4) ----------------------------------------------
+
+Deno.test("buildOverlayArgs: a text event escapes colons for drawtext and applies the timeline enable expression", () => {
+  const args = buildOverlayArgs({
+    inputPath: "in.mp4",
+    outputPath: "out.mp4",
+    events: [{ kind: "text", text: "Hallo:Welt", startSeconds: 1, endSeconds: 5 }],
+  });
+  assertEquals(args, [
+    "-y", "-i", "in.mp4",
+    "-filter_complex",
+    "[0:v]drawtext=text='Hallo\\:Welt':x=(w-text_w)/2:y=h-text_h-20:enable='between(t,1,5)'[v0]",
+    "-map", "[v0]", "-map", "0:a?",
+    "out.mp4",
+  ]);
+});
+
+Deno.test("buildOverlayArgs: an image event becomes its own -i input, chained after any preceding event", () => {
+  const args = buildOverlayArgs({
+    inputPath: "in.mp4",
+    outputPath: "out.mp4",
+    events: [
+      { kind: "text", text: "Intro", startSeconds: 0, endSeconds: 2 },
+      { kind: "image", imagePath: "logo.png", startSeconds: 0, endSeconds: 9999, x: "10", y: "10" },
+    ],
+  });
+  assertEquals(args.slice(0, 5), ["-y", "-i", "in.mp4", "-i", "logo.png"]);
+  const fc = args[args.indexOf("-filter_complex") + 1];
+  assertEquals(fc.includes("[v0][1:v]overlay=x=10:y=10:enable='between(t,0,9999)'[v1]"), true);
+  assertEquals(args.slice(-5), ["-map", "[v1]", "-map", "0:a?", "out.mp4"]);
+});
+
+// ---- Pro-Modus: globale Flags + Validierung (Kapitel 23, Schritt 5) -------------------------------
+
+Deno.test("validateArgValue: known global flags are checked by type, unknown flags pass through untouched", () => {
+  assertEquals(validateArgValue("-y", ""), { ok: true });
+  assertEquals(validateArgValue("-y", "true").ok, false); // -y nimmt keinen Wert
+  assertEquals(validateArgValue("-loglevel", "debug"), { ok: true });
+  assertEquals(validateArgValue("-loglevel", "bogus").ok, false);
+  assertEquals(validateArgValue("-ar", "48000"), { ok: true });
+  assertEquals(validateArgValue("-ar", "abc").ok, false);
+  assertEquals(validateArgValue("-ss", "00:01:23.5"), { ok: true });
+  assertEquals(validateArgValue("-ss", "5"), { ok: true });
+  assertEquals(validateArgValue("-ss", "abc").ok, false);
+  assertEquals(validateArgValue("-some-unknown-flag", "anything"), { ok: true });
+});
+
+Deno.test("validateArgValue: a dynamically looked-up AVOption (from the parameter explorer) is checked against its own type/range/choices", () => {
+  const dyn = new Map<string, FFOption>([
+    ["-crf", { name: "-crf", type: "float", flags: "", min: "-1", max: "51" }],
+    ["-preset", { name: "-preset", type: "string", flags: "", choices: [{ name: "fast" }, { name: "slow" }] }],
+  ]);
+  assertEquals(validateArgValue("-crf", "30", dyn), { ok: true });
+  assertEquals(validateArgValue("-crf", "999", dyn).ok, false);
+  assertEquals(validateArgValue("-preset", "fast", dyn), { ok: true });
+  assertEquals(validateArgValue("-preset", "ludicrous", dyn).ok, false);
 });

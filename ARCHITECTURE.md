@@ -4286,3 +4286,13 @@ nicht explizit nannte (grafische Audio-Routing-/Mix-Matrix,
 zeitgesteuerte Overlays, Dateien-aneinanderhängen, ein „Pro-Modus" mit
 vollständiger, auch globale CLI-Flags umfassender Introspektion) — Details
 und Phasenplan in UMSETZUNG.md 6d.
+
+**Nachtrag 2026-09-26 (noch am selben Tag):** Schritt 3–5 (Audio-Matrix,
+zeitgesteuerte Overlays, Aneinanderhängen, Pro-Modus-Suche/Validierung)
+bereits umgesetzt — der Pro-Modus nutzt dabei NICHT das ursprünglich
+skizzierte `-h full`-Backend-Parsing, sondern eine von Hand gepflegte
+Tabelle globaler Flags plus einen progressiv geladenen, clientseitigen
+Index aller AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter (s.
+UMSETZUNG.md 23.3 für die Begründung). Schritt 2 (generisches
+Ausgabespur-Mapping, der eigentliche Multitrack-Ersatz) bewusst noch
+offen — nächster Schritt.

@@ -20,9 +20,13 @@ import type { DraftDefinition, DraftStep, RetryPolicy } from "./process-editor-l
 import type { Point } from "./geometry.ts";
 import type { FilterGraph } from "./filter-graph-logic.ts";
 import { openFilterGraphEditor } from "./filter-graph.ts";
+import { openAudioMatrixEditor } from "./audio-matrix.ts";
+import type { AudioMatrixCell, AudioMatrixSource } from "./audio-matrix-logic.ts";
 import {
+  buildConcatArgs,
   buildConvertArgs,
   buildExtractAudioArgs,
+  buildOverlayArgs,
   buildProbeArgs,
   buildThumbnailArgs,
   DECISION_LABELS,
@@ -30,12 +34,16 @@ import {
   type FFCodecEntry,
   type FFDetail,
   type FFFormatEntry,
+  type FFFilterEntry,
   type FFOption,
   flatStringObject,
   formatGoDuration,
+  GLOBAL_FFMPEG_FLAGS,
+  globalFlagByName,
   insertionText,
   optionHelpText,
   optionRangeBounds,
+  type OverlayEvent,
   pairsToObject,
   parseGoDuration,
   parseRule,
@@ -49,10 +57,75 @@ import {
   type TimeUnit,
   toSeconds,
   UNIT_LABEL,
+  validateArgValue,
   type VariableOption,
   variableOptions,
   type OutputField,
 } from "./process-step-config-logic.ts";
+
+// ---- Pro-Modus: vollständiger Parameter-Index (Kapitel 23, Schritt 5) --------------------------
+//
+// "Jeder Parameter muss im Pro-Modus suchbar sein" — Suche nur über die
+// Encoder-/Decoder-/Muxer-/Demuxer-/Filter-NAMEN (wie in `codecPicker`/
+// `formatPicker`) fände z. B. "-crf" nicht, solange niemand `libx264`
+// vorher aufgeklappt hat. Deshalb hier ein EINMALIGER (nicht pro
+// Dialog-Öffnung), progressiver Hintergrund-Import aller AVOptions
+// aller Encoder/Decoder/Muxer/Demuxer/Filter dieses Servers — Modul-
+// weiter Zustand (überlebt Schließen/Neuöffnen des Dialogs innerhalb
+// derselben Seite), begrenzte Nebenläufigkeit (kein Ansturm von
+// hunderten gleichzeitigen Anfragen), `onProgress` lässt eine offene
+// Suche live nachziehen, während der Index noch wächst. Der Server
+// selbst cacht jede Detail-Antwort ohnehin pro Prozesslaufzeit
+// (`ffmpegtools`, W1) — dieser Import macht daraus einmalig einen
+// vollständig DURCHSUCHBAREN Katalog statt nur einzeln abrufbarer
+// Einträge.
+interface IndexedOption {
+  flag: string;
+  description: string;
+  source: string; // z. B. "libx264 (Encoder)"
+  opt: FFOption;
+}
+let fullOptionIndex: IndexedOption[] = [];
+let fullOptionIndexReady = false;
+let fullOptionIndexStarted = false;
+
+async function ensureFullOptionIndex(onProgress: () => void): Promise<void> {
+  if (fullOptionIndexStarted) return;
+  fullOptionIndexStarted = true;
+  const [encoders, decoders, formats, filters] = await Promise.all([
+    fetchFFmpegList<FFCodecEntry>("encoders"),
+    fetchFFmpegList<FFCodecEntry>("decoders"),
+    fetchFFmpegList<FFFormatEntry>("formats"),
+    fetchFFmpegList<FFFilterEntry>("filters"),
+  ]);
+  const entities: { kind: "encoder" | "decoder" | "muxer" | "demuxer" | "filter"; name: string; label: string }[] = [
+    ...encoders.map((c) => ({ kind: "encoder" as const, name: c.name, label: `${c.name} (Encoder)` })),
+    ...decoders.map((c) => ({ kind: "decoder" as const, name: c.name, label: `${c.name} (Decoder)` })),
+    ...formats.filter((f) => f.muxing).map((f) => ({ kind: "muxer" as const, name: f.name, label: `${f.name} (Muxer)` })),
+    ...formats.filter((f) => f.demuxing).map((f) => ({ kind: "demuxer" as const, name: f.name, label: `${f.name} (Demuxer)` })),
+    ...filters.map((f) => ({ kind: "filter" as const, name: f.name, label: `${f.name} (Filter)` })),
+  ];
+  const CONCURRENCY = 8;
+  let cursor = 0;
+  let processedSinceProgress = 0;
+  const worker = async () => {
+    while (cursor < entities.length) {
+      const entity = entities[cursor++];
+      const detail = await fetchFFmpegDetail(entity.kind, entity.name);
+      for (const opt of detail?.options ?? []) {
+        fullOptionIndex.push({ flag: opt.name, description: opt.description ?? "", source: entity.label, opt });
+      }
+      processedSinceProgress++;
+      if (processedSinceProgress >= 15) {
+        processedSinceProgress = 0;
+        onProgress();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
+  fullOptionIndexReady = true;
+  onProgress();
+}
 
 export interface StepConfigContext {
   def: DraftDefinition;
@@ -689,12 +762,18 @@ function ffmpegOptionsList(vars: VariableOption[]): { el: HTMLElement; setOption
   };
 }
 
-function codecPicker(mediaType: "video" | "audio", vars: VariableOption[]): { el: HTMLElement; read(): { codec: string; options: Record<string, string> } } {
+function codecPicker(
+  mediaType: "video" | "audio",
+  vars: VariableOption[],
+  withOptions = true,
+): { el: HTMLElement; read(): { codec: string; options: Record<string, string> } } {
   const wrap = h("div", "");
   const sel = select([{ value: "", label: "lade Codecs …" }], "");
-  const panel = ffmpegOptionsList(vars);
-  wrap.append(sel, panel.el);
+  const panel = withOptions ? ffmpegOptionsList(vars) : null;
+  wrap.append(sel);
+  if (panel) wrap.append(panel.el);
   const loadDetail = async () => {
+    if (!panel) return;
     if (!sel.value) {
       panel.setOptions([], {});
       return;
@@ -709,7 +788,7 @@ function codecPicker(mediaType: "video" | "audio", vars: VariableOption[]): { el
     for (const c of filtered) sel.appendChild(new Option(`${c.name} — ${c.description}`, c.name));
   })();
   sel.addEventListener("change", () => void loadDetail());
-  return { el: wrap, read: () => ({ codec: sel.value, options: panel.read() }) };
+  return { el: wrap, read: () => ({ codec: sel.value, options: panel ? panel.read() : {} }) };
 }
 
 function formatPicker(vars: VariableOption[], withOptions: boolean): { el: HTMLElement; read(): { format: string; options: Record<string, string> } } {
@@ -825,8 +904,44 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     filterPositions = null;
     filterComplex = "";
     filterOutputLabels = [];
+    audioMatrixCells = [];
     syncFilterSummary();
     el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+
+  // Grafische Audio-Matrix (Kapitel 23, Schritt 3) — ALTERNATIVE
+  // Bedienoberfläche für dieselben zwei Felder (filterComplex/
+  // filterOutputLabels) wie der manuelle Filter-Graph-Editor oben,
+  // nicht gleichzeitig aktiv (die zuletzt benutzte gewinnt, wie bei
+  // "Filter-Kette bearbeiten" auch — kein Zusammenführen zweier
+  // unabhängiger Filtergraphen). audioMatrixCells/-OutputCount bleiben
+  // erhalten, damit ein erneutes Öffnen die letzte Matrix zeigt.
+  let audioMatrixCells: AudioMatrixCell[] = [];
+  let audioMatrixOutputCount = 2;
+  const matrixBtn = h("button", "margin-top:4px;margin-left:4px;", "Audio-Matrix bearbeiten …");
+  matrixBtn.type = "button";
+  matrixBtn.title = "Quellkanäle aus dieser oder zusätzlichen Dateien grafisch auf Ausgangsspuren routen, mischen und verzögern.";
+  matrixBtn.addEventListener("click", () => {
+    openAudioMatrixEditor(
+      document.body,
+      input.input.value.trim(),
+      additionalInputs.map((e) => e.input.value.trim()),
+      audioMatrixOutputCount,
+      audioMatrixCells,
+      (additionalPaths, expr, labels, cells, outputCount) => {
+        filterGraph = null;
+        filterPositions = null;
+        filterComplex = expr;
+        filterOutputLabels = labels;
+        audioMatrixCells = cells;
+        audioMatrixOutputCount = outputCount;
+        additionalInputs.splice(0, additionalInputs.length);
+        additionalInputsList.replaceChildren();
+        for (const p of additionalPaths) addAdditionalInput(p);
+        syncFilterSummary();
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      },
+    );
   });
 
   // Weitere Eingabedateien (W4-Härtetest-Fund): ein Filter-Graph kann
@@ -836,8 +951,8 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
   // nie wirklich laufen können.
   const additionalInputs: { input: HTMLInputElement; row: HTMLElement }[] = [];
   const additionalInputsList = h("div", "");
-  const addAdditionalInput = () => {
-    const t = templateInput("", "${input.path} oder ein eigener Pfad", vars);
+  const addAdditionalInput = (value = "") => {
+    const t = templateInput(value, "${input.path} oder ein eigener Pfad", vars);
     const row = h("div", "display:flex;gap:4px;margin-top:4px;");
     const rm = h("button", "", "✕");
     rm.type = "button";
@@ -865,6 +980,7 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
     section("Filter (optional)"),
     filterSummary,
     filterBtn,
+    matrixBtn,
     filterClearBtn,
     field(
       "Weitere Eingabedateien",
@@ -930,6 +1046,270 @@ function buildScriptWizardExtractAudio(vars: VariableOption[]): ScriptWizardForm
   };
 }
 
+// ---- Clips aneinanderhängen (Schnittliste, Kapitel 23 Schritt 2) -------------------------------
+//
+// Wiederholbare, per Pfeil-Tasten umsortierbare Clip-Liste — die
+// Reihenfolge in der Liste IST die Reihenfolge im Ergebnis (kein
+// separates "Position"-Feld nötig). Reines DOM-Umordnen von
+// Kind-Elementen, kein Drag&Drop (robuster per CDP/Tastatur bedienbar,
+// gleiche Überlegung wie beim bereits vorhandenen Auf/Ab in anderen
+// Listen dieses Editors).
+function buildScriptWizardConcat(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
+  const fmt = formatPicker(vars, false);
+  const video = codecPicker("video", vars);
+  const audio = codecPicker("audio", vars);
+
+  interface ClipRow {
+    box: HTMLElement;
+    heading: HTMLElement;
+    path: HTMLInputElement;
+    trimStart: HTMLInputElement;
+    trimEnd: HTMLInputElement;
+  }
+  const rows: ClipRow[] = [];
+  const list = h("div", "");
+  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Clip ${i + 1}`));
+  const reorder = () => {
+    list.replaceChildren(...rows.map((r) => r.box));
+    renumber();
+  };
+  const addClip = () => {
+    const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
+    const heading = h("div", "font-weight:600;", `Clip ${rows.length + 1}`);
+    const path = templateInput("", "${input.path} oder ein eigener Pfad", vars);
+    const trimStart = textInput("", "leer = von Anfang an");
+    const trimEnd = textInput("", "leer = bis zum Ende");
+    const btnRow = h("div", "display:flex;gap:4px;margin-top:4px;");
+    const up = h("button", "", "↑");
+    const down = h("button", "", "↓");
+    const rm = h("button", "", "Clip entfernen");
+    up.type = down.type = rm.type = "button";
+    const entry: ClipRow = { box, heading, path: path.input, trimStart, trimEnd };
+    up.addEventListener("click", () => {
+      const i = rows.indexOf(entry);
+      if (i > 0) {
+        [rows[i - 1], rows[i]] = [rows[i], rows[i - 1]];
+        reorder();
+      }
+    });
+    down.addEventListener("click", () => {
+      const i = rows.indexOf(entry);
+      if (i >= 0 && i < rows.length - 1) {
+        [rows[i + 1], rows[i]] = [rows[i], rows[i + 1]];
+        reorder();
+      }
+    });
+    rm.addEventListener("click", () => {
+      rows.splice(rows.indexOf(entry), 1);
+      reorder();
+    });
+    btnRow.append(up, down, rm);
+    box.append(
+      heading,
+      field("Quelldatei", path.el, undefined, true),
+      field("Beschnitt Start (optional)", trimStart, "ffmpeg-Zeitangabe, z. B. 5 oder 00:00:05.5 — schneidet den Clip-Anfang weg."),
+      field("Beschnitt Ende (optional)", trimEnd, "ffmpeg-Zeitangabe — schneidet den Clip ab hier weg."),
+      btnRow,
+    );
+    rows.push(entry);
+    reorder();
+  };
+  addClip();
+  addClip();
+  const addBtn = h("button", "margin-top:6px;", "+ weiterer Clip");
+  addBtn.type = "button";
+  addBtn.addEventListener("click", addClip);
+
+  el.append(
+    h("div", HELP_CSS + "margin-bottom:4px;", "Die Reihenfolge der Clips unten ist die Reihenfolge in der Ausgabedatei — mit ↑/↓ umsortieren."),
+    list,
+    addBtn,
+    field("Ausgabedatei", output.el, undefined, true),
+    field("Container erzwingen (optional)", fmt.el, "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab."),
+    field("Video-Codec", video.el, "Alle Clips werden neu kodiert (Zusammenfügen per Filter, kein reiner Stream-Copy) — leer = ffmpeg-Standard."),
+    field("Audio-Codec", audio.el),
+  );
+  return {
+    el,
+    read: () => {
+      const o = output.input.value.trim();
+      if (!o) return { ok: false, error: "Ausgabedatei fehlt." };
+      if (rows.length < 2) return { ok: false, error: "Mindestens zwei Clips sind nötig." };
+      for (const r of rows) {
+        if (!r.path.value.trim()) return { ok: false, error: "Jeder Clip braucht eine Quelldatei." };
+      }
+      const f = fmt.read();
+      const v = video.read();
+      const a = audio.read();
+      return {
+        ok: true,
+        command: "ffmpeg",
+        args: buildConcatArgs({
+          outputPath: o,
+          format: f.format || undefined,
+          videoCodec: v.codec || undefined,
+          videoOptions: v.options,
+          audioCodec: a.codec || undefined,
+          audioOptions: a.options,
+          clips: rows.map((r) => ({
+            inputPath: r.path.value.trim(),
+            trimStart: r.trimStart.value.trim() || undefined,
+            trimEnd: r.trimEnd.value.trim() || undefined,
+          })),
+        }),
+      };
+    },
+  };
+}
+
+// ---- Zeitgesteuerte Overlays (Senderkennung/Bauchbinde/Abspann, Kapitel 23 Schritt 4) -----------
+//
+// Jedes Ereignis (Text ODER Bild) hat einen eigenen Start-/End-
+// Zeitpunkt in Sekunden — zusätzlich zu den Zahlenfeldern eine rein
+// visuelle, nicht-interaktive Zeitleiste zur Orientierung (Balken
+// proportional zur Gesamtdauer), im Stil der Balkendarstellung aus
+// ui/shell/scheduler-view.ts, aber bewusst ohne deren Zieh-Mechanik
+// (eigene, unabhängige Umsetzung — Zeitachse hier ist Sekunden über
+// die Medien-Gesamtdauer, nicht Uhrzeit über einen Kalendertag).
+function buildScriptWizardOverlay(vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const input = templateInput("${input.path}", "${input.path}", vars);
+  const output = templateInput("${input.outputPath}", "${input.outputPath}", vars);
+  const duration = textInput("60", "Gesamtdauer in Sekunden (für die Zeitleisten-Vorschau)");
+  duration.inputMode = "decimal";
+  const video = codecPicker("video", vars, false);
+  const audio = codecPicker("audio", vars, false);
+
+  const timeline = h("div", "position:relative;height:22px;background:var(--omp-surface-raised);border-radius:3px;margin:6px 0;overflow:hidden;");
+
+  interface EventRow {
+    box: HTMLElement;
+    heading: HTMLElement;
+    kindSel: HTMLSelectElement;
+    textInput: HTMLInputElement;
+    imagePath: HTMLInputElement;
+    imageField: HTMLElement;
+    textField: HTMLElement;
+    start: HTMLInputElement;
+    end: HTMLInputElement;
+    x: HTMLInputElement;
+    y: HTMLInputElement;
+    bar: HTMLElement;
+  }
+  const rows: EventRow[] = [];
+  const list = h("div", "");
+  const renumber = () => rows.forEach((r, i) => (r.heading.textContent = `Ereignis ${i + 1}`));
+  const redrawTimeline = () => {
+    const total = Math.max(Number(duration.value) || 0, 0.001);
+    for (const r of rows) {
+      const s = Math.max(Number(r.start.value) || 0, 0);
+      const e = Math.max(Number(r.end.value) || 0, s);
+      r.bar.style.left = `${Math.min((s / total) * 100, 100)}%`;
+      r.bar.style.width = `${Math.max(Math.min(((e - s) / total) * 100, 100), 0.5)}%`;
+    }
+  };
+  duration.addEventListener("input", redrawTimeline);
+  const addEvent = () => {
+    const box = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
+    const heading = h("div", "font-weight:600;", `Ereignis ${rows.length + 1}`);
+    const kindSel = select([{ value: "text", label: "Text (z. B. Bauchbinde, Abspann-Credits)" }, { value: "image", label: "Bild (z. B. Senderlogo)" }], "text");
+    const text = textInput("", "z. B. © Mein Sender 2026");
+    const imagePath = templateInput("", "${input.logoPath} oder ein eigener Pfad", vars);
+    const start = textInput("0", "Sekunden ab Anfang");
+    const end = textInput("5", "Sekunden ab Anfang");
+    start.inputMode = end.inputMode = "decimal";
+    const x = textInput("", "leer = mittig (Text) bzw. 0 (Bild)");
+    const y = textInput("", "leer = unten (Text) bzw. 0 (Bild)");
+    const textField = field("Text", text, "Doppelpunkt und Hochkomma werden automatisch escaped.");
+    const imageField = field("Bilddatei", imagePath.el, undefined, true);
+    imageField.style.display = "none";
+    const bar = h("div", "position:absolute;top:2px;bottom:2px;background:var(--omp-info);border-radius:2px;min-width:2px;");
+    bar.title = "";
+    timeline.appendChild(bar);
+    const syncKind = () => {
+      const isText = kindSel.value === "text";
+      textField.style.display = isText ? "" : "none";
+      imageField.style.display = isText ? "none" : "";
+    };
+    kindSel.addEventListener("change", syncKind);
+    syncKind();
+    [start, end].forEach((i) => i.addEventListener("input", redrawTimeline));
+    const btnRow = h("div", "display:flex;gap:4px;margin-top:4px;");
+    const rm = h("button", "", "Ereignis entfernen");
+    rm.type = "button";
+    const entry: EventRow = { box, heading, kindSel, textInput: text, imagePath: imagePath.input, imageField, textField, start, end, x, y, bar };
+    rm.addEventListener("click", () => {
+      rows.splice(rows.indexOf(entry), 1);
+      bar.remove();
+      box.remove();
+      renumber();
+      redrawTimeline();
+    });
+    btnRow.append(rm);
+    box.append(
+      heading,
+      field("Art", kindSel),
+      textField,
+      imageField,
+      field("Start (Sekunden)", start, undefined, true),
+      field("Ende (Sekunden)", end, undefined, true),
+      field("Position X (optional)", x, "ffmpeg-Ausdruck, z. B. 10 oder (w-overlay_w)/2."),
+      field("Position Y (optional)", y, "ffmpeg-Ausdruck, z. B. 10 oder h-overlay_h-20."),
+      btnRow,
+    );
+    rows.push(entry);
+    list.appendChild(box);
+    redrawTimeline();
+  };
+  addEvent();
+  const addBtn = h("button", "margin-top:6px;", "+ weiteres Ereignis");
+  addBtn.type = "button";
+  addBtn.addEventListener("click", addEvent);
+
+  el.append(
+    field("Eingabedatei (Video)", input.el, undefined, true),
+    field("Ausgabedatei", output.el, undefined, true),
+    field("Video-Codec", video.el, "Overlays erfordern eine Neukodierung des Bildes — leer = ffmpeg-Standard."),
+    field("Audio-Codec", audio.el, "Ton wird unverändert durchgereicht, falls vorhanden — Codec nur bei Bedarf setzen."),
+    field("Gesamtdauer (nur für die Zeitleisten-Vorschau)", duration),
+    h("div", HELP_CSS, "Zeitleiste (nicht ziehbar, nur zur Orientierung):"),
+    timeline,
+    list,
+    addBtn,
+  );
+  return {
+    el,
+    read: () => {
+      const p = input.input.value.trim();
+      const o = output.input.value.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (rows.length === 0) return { ok: false, error: "Mindestens ein Ereignis ist nötig." };
+      const events: OverlayEvent[] = [];
+      for (const r of rows) {
+        const s = Number(r.start.value);
+        const e = Number(r.end.value);
+        if (!Number.isFinite(s) || !Number.isFinite(e) || e <= s) return { ok: false, error: "Jedes Ereignis braucht eine gültige Start-/Endzeit (Ende > Start)." };
+        if (r.kindSel.value === "text") {
+          if (!r.textInput.value.trim()) return { ok: false, error: "Jedes Text-Ereignis braucht einen Text." };
+          events.push({ kind: "text", text: r.textInput.value, startSeconds: s, endSeconds: e, x: r.x.value.trim() || undefined, y: r.y.value.trim() || undefined });
+        } else {
+          if (!r.imagePath.value.trim()) return { ok: false, error: "Jedes Bild-Ereignis braucht eine Bilddatei." };
+          events.push({ kind: "image", imagePath: r.imagePath.value.trim(), startSeconds: s, endSeconds: e, x: r.x.value.trim() || undefined, y: r.y.value.trim() || undefined });
+        }
+      }
+      const v = video.read();
+      const a = audio.read();
+      return {
+        ok: true,
+        command: "ffmpeg",
+        args: buildOverlayArgs({ inputPath: p, outputPath: o, videoCodec: v.codec || undefined, audioCodec: a.codec || undefined, events }),
+      };
+    },
+  };
+}
+
 function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], commands: string[]): FormPart {
   const el = h("div", "");
   const hasFFmpeg = commands.includes("ffmpeg");
@@ -951,26 +1331,243 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   const tplHelp = h("span", HELP_CSS);
   const argsList = h("div", "");
   const argInputs: HTMLInputElement[] = [];
+  const argStatuses: HTMLElement[] = [];
+
+  // ---- Pro-Modus: Validierung + Autovervollständigung (Kapitel 23,
+  // Schritt 5) -----------------------------------------------------
+  //
+  // Jedes bekannte Flag wird geprüft (global aus GLOBAL_FFMPEG_FLAGS
+  // ODER eine per Parameter-Explorer bereits nachgeschlagene AVOption,
+  // s. dynamicOptions) — unbekannte Flags bleiben absichtlich
+  // unbewertet (roher Modus bleibt frei, s. Moduldoku zu
+  // validateArgValue). Einfache Nachbarschafts-Heuristik statt vollem
+  // ffmpeg-Grammatik-Parser: Zeile i gilt als WERT von Zeile i-1, wenn
+  // Zeile i-1 ein bekanntes, wertbehaftetes Flag ist.
+  const dynamicOptions = new Map<string, FFOption>();
+  const flagCandidates = (): { name: string; description: string }[] => [
+    ...GLOBAL_FFMPEG_FLAGS.map((f) => ({ name: f.name, description: f.description })),
+    ...[...dynamicOptions.entries()].map(([name, opt]) => ({ name, description: opt.description ?? "" })),
+  ];
+
+  const revalidateArgs = () => {
+    argStatuses.forEach((s) => {
+      s.textContent = "";
+      s.style.display = "none";
+    });
+    argInputs.forEach((input, i) => input.style.borderColor = "");
+    for (let i = 1; i < argInputs.length; i++) {
+      const flag = argInputs[i - 1].value.trim();
+      if (!flag.startsWith("-")) continue;
+      const isKnownValueFlag = dynamicOptions.has(flag) || (globalFlagByName(flag) && globalFlagByName(flag)!.type !== "boolean");
+      if (!isKnownValueFlag) continue;
+      const v = validateArgValue(flag, argInputs[i].value.trim(), dynamicOptions);
+      if (!v.ok) {
+        argStatuses[i].textContent = `⚠ ${flag}: ${v.message ?? "ungültiger Wert"}`;
+        argStatuses[i].style.display = "block";
+        argInputs[i].style.borderColor = "var(--omp-error)";
+      }
+    }
+    // Bekannte, wertlose (boolean-)Flags mit versehentlich gesetztem
+    // Wert in der EIGENEN Zeile markieren (z. B. "-y" gefolgt von
+    // "true" in derselben Zeile kommt nicht vor, da Flags/Werte immer
+    // eigene Zeilen sind — hier geht es um ein bekanntes Flag, dessen
+    // NÄCHSTE Zeile fälschlich wie ein Wert aussieht, obwohl es keinen
+    // nimmt; das wird oben bereits übersprungen, da isKnownValueFlag
+    // dafür false ist — kein weiterer Check nötig).
+  };
+
+  let autocompleteBox: HTMLElement | null = null;
+  const closeAutocomplete = () => {
+    autocompleteBox?.remove();
+    autocompleteBox = null;
+  };
+  const openAutocomplete = (forInput: HTMLInputElement) => {
+    closeAutocomplete();
+    const q = forInput.value.trim().toLowerCase();
+    if (!q.startsWith("-") || q.length < 1) return;
+    const matches = flagCandidates().filter((c) => c.name.toLowerCase().includes(q)).slice(0, 12);
+    if (matches.length === 0) return;
+    const rect = forInput.getBoundingClientRect();
+    const box = h(
+      "div",
+      `position:fixed;left:${rect.left}px;top:${rect.bottom + 2}px;width:${Math.max(rect.width, 260)}px;` +
+        "max-height:220px;overflow:auto;background:var(--omp-surface-raised);border:1px solid var(--omp-border);" +
+        "border-radius:4px;z-index:3000;box-shadow:0 4px 12px rgba(0,0,0,0.35);",
+    );
+    for (const c of matches) {
+      const row = h("div", "padding:4px 6px;cursor:pointer;font-size:var(--omp-font-size-xs);border-bottom:1px solid var(--omp-border);");
+      row.innerHTML = `<div style="font-family:ui-monospace,monospace;font-weight:600;">${c.name}</div>` + (c.description ? `<div style="color:var(--omp-text-dim);">${c.description}</div>` : "");
+      row.addEventListener("mousedown", (ev) => {
+        ev.preventDefault();
+        forInput.value = c.name;
+        forInput.dispatchEvent(new Event("input", { bubbles: true }));
+        closeAutocomplete();
+      });
+      box.appendChild(row);
+    }
+    autocompleteBox = box;
+    document.body.appendChild(box);
+  };
+
   const addArg = (v = "") => {
     const line = h("div", "display:grid;grid-template-columns:1fr auto auto;gap:4px;margin-top:4px;");
-    const i = textInput(v, "Argument", "arg");
+    const i = textInput(v, "Argument (z. B. -crf oder ein Wert)", "arg");
     i.style.fontFamily = "ui-monospace,monospace";
     argInputs.push(i);
+    const status = h("div", "grid-column:1;font-size:var(--omp-font-size-xs);color:var(--omp-error);display:none;");
+    argStatuses.push(status);
+    i.addEventListener("input", () => {
+      openAutocomplete(i);
+      revalidateArgs();
+    });
+    i.addEventListener("blur", () => window.setTimeout(closeAutocomplete, 150));
     const rm = h("button", "", "✕");
     rm.type = "button";
     rm.addEventListener("click", () => {
-      argInputs.splice(argInputs.indexOf(i), 1);
+      const idx = argInputs.indexOf(i);
+      argInputs.splice(idx, 1);
+      argStatuses.splice(idx, 1);
       line.remove();
+      status.remove();
+      revalidateArgs();
     });
     line.append(i, variableButton(vars, "template", () => i), rm);
-    argsList.appendChild(line);
+    argsList.append(line, status);
+    revalidateArgs();
+    return i;
   };
   const setArgs = (args: string[]) => {
     argInputs.length = 0;
+    argStatuses.length = 0;
     argsList.replaceChildren();
     for (const a of args) addArg(a);
   };
   setArgs(Array.isArray(cfg.args) ? (cfg.args as string[]) : []);
+
+  // ---- Parameter-Explorer: nach Encoder-/Decoder-/Muxer-/Demuxer-/
+  // Filter-Optionen suchen, per Klick als neues Argument einfügen
+  // (und für Validierung/Autovervollständigung merken) — deckt "jeder
+  // Parameter muss suchbar/adressierbar sein" auch im Experten-Modus
+  // ab, ohne beim Öffnen hunderte AVOption-Detailabfragen auf einmal
+  // auszulösen (nur Listen sind vorab bekannt, Details erst on-demand
+  // je angeklicktem Treffer — dasselbe Cache-Prinzip wie ffmpeg-client.ts).
+  const explorerToggle = h("button", "margin-top:8px;", "Parameter suchen …");
+  explorerToggle.type = "button";
+  const explorerPanel = h("div", "margin-top:4px;border:1px solid var(--omp-border);border-radius:4px;padding:6px;display:none;");
+  const explorerSearch = textInput("", "z. B. crf, libx264, scale, loglevel …");
+  const explorerIndexStatus = h("div", HELP_CSS + "margin-top:2px;");
+  const explorerResults = h("div", "max-height:260px;overflow:auto;margin-top:4px;");
+  let explorerCatalog: { name: string; kind: "encoder" | "decoder" | "muxer" | "demuxer" | "filter"; description: string }[] | null = null;
+  const loadExplorerCatalog = async () => {
+    if (explorerCatalog) return explorerCatalog;
+    const [encoders, decoders, formats, filters] = await Promise.all([
+      fetchFFmpegList<FFCodecEntry>("encoders"),
+      fetchFFmpegList<FFCodecEntry>("decoders"),
+      fetchFFmpegList<FFFormatEntry>("formats"),
+      fetchFFmpegList<FFFilterEntry>("filters"),
+    ]);
+    explorerCatalog = [
+      ...encoders.map((c) => ({ name: c.name, kind: "encoder" as const, description: c.description })),
+      ...decoders.map((c) => ({ name: c.name, kind: "decoder" as const, description: c.description })),
+      ...formats.filter((f) => f.muxing).map((f) => ({ name: f.name, kind: "muxer" as const, description: f.description })),
+      ...formats.filter((f) => f.demuxing).map((f) => ({ name: f.name, kind: "demuxer" as const, description: f.description })),
+      ...filters.map((f) => ({ name: f.name, kind: "filter" as const, description: f.description })),
+    ];
+    return explorerCatalog;
+  };
+  const kindLabel: Record<string, string> = { encoder: "Encoder", decoder: "Decoder", muxer: "Muxer/Container", demuxer: "Demuxer", filter: "Filter" };
+  const insertGlobalFlag = (name: string) => {
+    addArg(name);
+    const def = globalFlagByName(name);
+    if (def && def.type !== "boolean") addArg().focus();
+  };
+  const insertOption = (flagName: string, opt: FFOption) => {
+    dynamicOptions.set(flagName, opt);
+    addArg(flagName);
+    addArg().focus();
+  };
+  const updateExplorerIndexStatus = () => {
+    explorerIndexStatus.textContent = fullOptionIndexReady
+      ? `Vollständiger Parameter-Index geladen (${fullOptionIndex.length} Parameter durchsuchbar).`
+      : fullOptionIndexStarted
+      ? `Parameter-Index lädt im Hintergrund … (${fullOptionIndex.length} bisher, Suche funktioniert schon währenddessen)`
+      : "";
+  };
+  const runExplorerSearch = async () => {
+    const q = explorerSearch.value.trim().toLowerCase();
+    explorerResults.replaceChildren();
+    if (!q) return;
+    const globalMatches = GLOBAL_FFMPEG_FLAGS.filter((f) => f.name.toLowerCase().includes(q) || f.description.toLowerCase().includes(q));
+    for (const f of globalMatches) {
+      const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
+      row.innerHTML = `<b>${f.name}</b> <span style="color:var(--omp-text-dim);">(globales Flag)</span><div style="${HELP_CSS}">${f.description}</div>`;
+      row.addEventListener("click", () => insertGlobalFlag(f.name));
+      explorerResults.appendChild(row);
+    }
+    // Direkter Parameter-Treffer (z. B. "-crf" findet libx264, ohne dass
+    // der Encoder vorher von Hand aufgeklappt wurde) — der eigentliche
+    // Kern von "jeder Parameter muss suchbar sein".
+    const seen = new Set<string>();
+    const paramMatches = fullOptionIndex.filter((p) => p.flag.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)).slice(0, 30);
+    for (const p of paramMatches) {
+      const key = `${p.flag}@${p.source}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
+      row.innerHTML = `<span style="font-family:ui-monospace,monospace;font-weight:600;">${p.flag}</span> <span style="color:var(--omp-text-dim);">(${p.source})</span><div style="${HELP_CSS}">${optionHelpText(p.opt)}</div>`;
+      row.addEventListener("click", () => insertOption(p.flag, p.opt));
+      explorerResults.appendChild(row);
+    }
+    const catalog = await loadExplorerCatalog();
+    const catMatches = catalog.filter((c) => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)).slice(0, 25);
+    for (const c of catMatches) {
+      const row = h("div", "padding:4px;border-bottom:1px solid var(--omp-border);");
+      const head = h("div", "cursor:pointer;", "");
+      head.innerHTML = `<b>${c.name}</b> <span style="color:var(--omp-text-dim);">(${kindLabel[c.kind]})</span><div style="${HELP_CSS}">${c.description}</div>`;
+      const sub = h("div", "margin-left:10px;display:none;");
+      head.addEventListener("click", async () => {
+        if (sub.style.display === "none") {
+          sub.style.display = "block";
+          if (!sub.dataset.loaded) {
+            sub.dataset.loaded = "1";
+            const detail = await fetchFFmpegDetail(c.kind, c.name);
+            sub.replaceChildren();
+            for (const opt of detail?.options ?? []) {
+              const optRow = h("div", "padding:2px 4px;cursor:pointer;");
+              optRow.innerHTML = `<span style="font-family:ui-monospace,monospace;">${opt.name}</span> <span style="${HELP_CSS}">${optionHelpText(opt)}</span>`;
+              optRow.addEventListener("click", (ev) => {
+                ev.stopPropagation();
+                insertOption(opt.name, opt);
+              });
+              sub.appendChild(optRow);
+            }
+            if (!detail?.options?.length) sub.appendChild(h("div", HELP_CSS, "keine Optionen"));
+          }
+        } else {
+          sub.style.display = "none";
+        }
+      });
+      row.append(head, sub);
+      explorerResults.appendChild(row);
+    }
+  };
+  explorerSearch.addEventListener("input", () => void runExplorerSearch());
+  explorerToggle.addEventListener("click", () => {
+    const opening = explorerPanel.style.display === "none";
+    explorerPanel.style.display = opening ? "block" : "none";
+    if (opening) {
+      updateExplorerIndexStatus();
+      void ensureFullOptionIndex(() => {
+        updateExplorerIndexStatus();
+        void runExplorerSearch();
+      });
+    }
+  });
+  explorerPanel.append(
+    field("Parameter suchen", explorerSearch, "Durchsucht globale Flags, ALLE AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter dieses Servers (z. B. \"crf\" findet direkt libx264s -crf) sowie Werkzeug-/Filter-Namen selbst — Klick auf einen Treffer fügt ihn als Argument ein."),
+    explorerIndexStatus,
+    explorerResults,
+  );
   tpl.addEventListener("change", () => {
     const t = SCRIPT_TEMPLATES.find((x) => x.id === tpl.value);
     if (!t) return;
@@ -994,9 +1591,11 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     field("Werkzeug", cmd, commands.length ? `Auf diesem Server freigegeben: ${commands.join(", ")}.` : "Auf diesem Server ist kein Werkzeug freigegeben.", true),
     field("Vorlage", tpl),
     tplHelp,
-    field("Argumente", argsList, "Je Zeile ein Argument — Leerzeichen innerhalb einer Zeile bleiben erhalten (kein Anführungszeichen-Problem)."),
+    field("Argumente", argsList, "Je Zeile ein Argument — Leerzeichen innerhalb einer Zeile bleiben erhalten (kein Anführungszeichen-Problem). Bekannte Flags werden beim Tippen vorgeschlagen und ihr Wert geprüft."),
     addBtn,
     pasteBtn,
+    explorerToggle,
+    explorerPanel,
   );
 
   // ---- Assistent (aus W1 gespeist) ------------------------------------
@@ -1029,6 +1628,12 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         break;
       case "extract_audio":
         activeForm = buildScriptWizardExtractAudio(vars);
+        break;
+      case "concat":
+        activeForm = buildScriptWizardConcat(vars);
+        break;
+      case "overlay":
+        activeForm = buildScriptWizardOverlay(vars);
         break;
       default:
         activeForm = null;

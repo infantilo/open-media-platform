@@ -425,7 +425,7 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
 // — die DOM-Seite (process-step-config.ts) schaltet direkt per `id`
 // auf den passenden Unterformular-Baustein.
 export interface ScriptIntent {
-  id: "probe" | "thumbnail" | "convert" | "extract_audio";
+  id: "probe" | "thumbnail" | "convert" | "extract_audio" | "concat" | "overlay";
   label: string;
   help: string;
 }
@@ -433,8 +433,10 @@ export interface ScriptIntent {
 export const SCRIPT_INTENTS: ScriptIntent[] = [
   { id: "probe", label: "Technische Metadaten auslesen", help: "Liefert Codec, Auflösung, Dauer usw. als JSON im Ergebnis-Feld „Ausgabe (stdout)“." },
   { id: "thumbnail", label: "Vorschaubild erzeugen", help: "Einzelbild aus einem Video, z. B. für eine Vorschaukachel." },
-  { id: "convert", label: "Format/Codec konvertieren", help: "Container, Video-/Audio-Codec und deren Einstellungen frei wählen — mit echten erlaubten Werten und Hilfetexten von diesem Server." },
+  { id: "convert", label: "Format/Codec konvertieren", help: "Container, Video-/Audio-Codec und deren Einstellungen frei wählen — mit echten erlaubten Werten und Hilfetexten von diesem Server. Enthält auch die grafische Audio-Matrix und den Filter-Graph-Builder." },
   { id: "extract_audio", label: "Tonspur extrahieren", help: "Nur den Ton einer Datei speichern, mit frei wählbarem Audio-Codec." },
+  { id: "concat", label: "Clips aneinanderhängen (Schnittliste)", help: "Mehrere Dateien in einer festgelegten Reihenfolge zu einer Ausgabedatei zusammenfügen — je Clip optional mit Start-/End-Beschnitt." },
+  { id: "overlay", label: "Overlay/Senderkennung/Abspann zeitgesteuert einblenden", help: "Text (z. B. Bauchbinde, Abspann-Credits) oder ein Bild (z. B. Senderlogo) zu festgelegten Zeiten über das Video legen." },
 ];
 
 export function scriptIntentById(id: string): ScriptIntent | undefined {
@@ -638,6 +640,251 @@ export interface ThumbnailInput {
 
 export function buildThumbnailArgs(input: ThumbnailInput): string[] {
   return ["-y", "-ss", input.atTime, "-i", input.inputPath, "-frames:v", "1", "-vf", `scale=${input.widthPixels}:-2`, input.outputPath];
+}
+
+// ---- Clips aneinanderhängen (Schnittliste, Kapitel 23 Schritt 2) --------------------------------
+//
+// Allgemeiner Baustein ("N Dateien in fester Reihenfolge zu einer
+// zusammenfügen, je Clip optional beschnitten") — keine Szenario-
+// Bindung (kein "Sendungs-Schnittliste"-Sonderformular, funktioniert
+// für jede Abfolge beliebiger Clips). Nutzt den `concat`-FILTER (nicht
+// den `concat`-Demuxer, der eine separate Listendatei bräuchte, die
+// dieser Browser-SPA-Unterbau nicht schreiben kann) — jeder Clip wird
+// per `trim`/`atrim` beschnitten und per `setpts`/`asetpts` neu
+// referenziert (ffmpegs eigene Empfehlung für den concat-Filter, auch
+// ohne expliziten Beschnitt, da sonst Zeitstempel zwischen Segmenten
+// nicht sauber anschließen).
+
+export interface ConcatClip {
+  inputPath: string;
+  trimStart?: string; // ffmpegs Dauer-Syntax, z. B. "5" oder "00:00:05.5"
+  trimEnd?: string;
+}
+
+export interface ConcatInput {
+  outputPath: string;
+  format?: string;
+  videoCodec?: string;
+  videoOptions?: Record<string, string>;
+  audioCodec?: string;
+  audioOptions?: Record<string, string>;
+  clips: ConcatClip[];
+}
+
+export function buildConcatArgs(input: ConcatInput): string[] {
+  const args: string[] = ["-y"];
+  for (const c of input.clips) args.push("-i", c.inputPath);
+  const filterParts: string[] = [];
+  input.clips.forEach((c, i) => {
+    const trimOpts = [c.trimStart ? `start=${c.trimStart}` : "", c.trimEnd ? `end=${c.trimEnd}` : ""].filter(Boolean).join(":");
+    const vTrim = trimOpts ? `trim=${trimOpts},` : "";
+    const aTrim = trimOpts ? `atrim=${trimOpts},` : "";
+    filterParts.push(`[${i}:v]${vTrim}setpts=PTS-STARTPTS[v${i}]`);
+    filterParts.push(`[${i}:a]${aTrim}asetpts=PTS-STARTPTS[a${i}]`);
+  });
+  const concatInputs = input.clips.map((_, i) => `[v${i}][a${i}]`).join("");
+  filterParts.push(`${concatInputs}concat=n=${input.clips.length}:v=1:a=1[outv][outa]`);
+  args.push("-filter_complex", filterParts.join(";"), "-map", "[outv]", "-map", "[outa]");
+  if (input.videoCodec) args.push("-c:v", input.videoCodec);
+  args.push(...optionEntriesToArgs(input.videoOptions ?? {}));
+  if (input.audioCodec) args.push("-c:a", input.audioCodec);
+  args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  if (input.format) args.push("-f", input.format);
+  args.push(input.outputPath);
+  return args;
+}
+
+// ---- Zeitgesteuerte Overlays (Senderkennung/Bauchbinde/Abspann, Kapitel 23 Schritt 4) -----------
+//
+// Allgemeiner Baustein ("N Text-/Bild-Ereignisse, je mit eigenem
+// Start/Ende, über ein Video legen") — Text nutzt `drawtext`, ein Bild
+// (z. B. Senderlogo) `overlay` mit einer eigenen Bild-Eingabedatei je
+// Ereignis; beide über ffmpegs `enable='between(t,start,end)'`
+// zeitlich begrenzt. Ereignisse werden der Reihe nach verkettet (jedes
+// baut auf dem Video-Label des vorherigen auf), Reihenfolge in der
+// Liste = Reihenfolge im Filtergraph (bei Überlappung "zuletzt
+// gewinnt oben").
+
+function escapeDrawtextValue(v: string): string {
+  // ffmpegs Escaping für drawtext-Optionswerte: Backslash zuerst, dann
+  // Doppelpunkt (Optionstrenner) und Hochkomma (String-Begrenzer).
+  return v.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+}
+
+export interface OverlayTextEvent {
+  kind: "text";
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+  x?: string;
+  y?: string;
+  fontSize?: number;
+  fontColor?: string;
+}
+
+export interface OverlayImageEvent {
+  kind: "image";
+  imagePath: string;
+  startSeconds: number;
+  endSeconds: number;
+  x?: string;
+  y?: string;
+}
+
+export type OverlayEvent = OverlayTextEvent | OverlayImageEvent;
+
+export interface OverlayInput {
+  inputPath: string;
+  outputPath: string;
+  format?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  events: OverlayEvent[];
+}
+
+export function buildOverlayArgs(input: OverlayInput): string[] {
+  const args: string[] = ["-y", "-i", input.inputPath];
+  const imageInputIndex = new Map<number, number>();
+  let nextInputIndex = 1;
+  input.events.forEach((e, i) => {
+    if (e.kind === "image") {
+      args.push("-i", e.imagePath);
+      imageInputIndex.set(i, nextInputIndex++);
+    }
+  });
+
+  let currentLabel = "0:v";
+  const filterParts: string[] = [];
+  input.events.forEach((e, i) => {
+    const outLabel = `v${i}`;
+    const enable = `enable='between(t,${e.startSeconds},${e.endSeconds})'`;
+    if (e.kind === "text") {
+      const parts = [`text='${escapeDrawtextValue(e.text)}'`, `x=${e.x || "(w-text_w)/2"}`, `y=${e.y || "h-text_h-20"}`];
+      if (e.fontSize) parts.push(`fontsize=${e.fontSize}`);
+      if (e.fontColor) parts.push(`fontcolor=${e.fontColor}`);
+      parts.push(enable);
+      filterParts.push(`[${currentLabel}]drawtext=${parts.join(":")}[${outLabel}]`);
+    } else {
+      const imgIdx = imageInputIndex.get(i)!;
+      filterParts.push(`[${currentLabel}][${imgIdx}:v]overlay=x=${e.x || "0"}:y=${e.y || "0"}:${enable}[${outLabel}]`);
+    }
+    currentLabel = outLabel;
+  });
+
+  args.push("-filter_complex", filterParts.join(";"), "-map", `[${currentLabel}]`, "-map", "0:a?");
+  if (input.videoCodec) args.push("-c:v", input.videoCodec);
+  if (input.audioCodec) args.push("-c:a", input.audioCodec);
+  if (input.format) args.push("-f", input.format);
+  args.push(input.outputPath);
+  return args;
+}
+
+// ---- Pro-Modus: globale ffmpeg-Flags + Validierung/Autovervollständigung (Kapitel 23 Schritt 5) -
+//
+// `ffmpegtools` (W1) parst bewusst NICHT `-h full` (Scope-Schnitt,
+// s. UMSETZUNG.md) — die kleine, stabile Menge global gültiger
+// CLI-Flags (nicht codec-/muxer-spezifisch) ist hier deshalb von Hand
+// gepflegt, exakt der Teil, den W1 als "klein und stabil" eingestuft
+// hatte. Codec-/Muxer-/Filter-spezifische Flags kommen weiterhin
+// live von `ffmpegtools` (s. FLAG-Explorer in process-step-config.ts).
+export type GlobalFlagType = "boolean" | "time" | "number" | "text" | "select";
+
+export interface GlobalFlagDef {
+  name: string;
+  type: GlobalFlagType;
+  description: string;
+  choices?: string[];
+}
+
+export const GLOBAL_FFMPEG_FLAGS: GlobalFlagDef[] = [
+  { name: "-y", type: "boolean", description: "Ausgabedatei ohne Nachfrage überschreiben." },
+  { name: "-n", type: "boolean", description: "Niemals überschreiben — bricht ab, falls die Ausgabedatei existiert." },
+  { name: "-hide_banner", type: "boolean", description: "Unterdrückt ffmpegs Versions-/Build-Bannerausgabe." },
+  { name: "-loglevel", type: "select", description: "Ausführlichkeit der Konsolenausgabe.", choices: ["quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace"] },
+  { name: "-ss", type: "time", description: "Startzeit (vor -i: Eingabe-seeking, schnell; nach -i: Ausgabe-seeking, exakter)." },
+  { name: "-t", type: "time", description: "Maximale Dauer ab Startzeit." },
+  { name: "-to", type: "time", description: "Endzeit (Alternative zu -t)." },
+  { name: "-f", type: "text", description: "Container-Format erzwingen (sonst aus der Dateiendung abgeleitet)." },
+  { name: "-map", type: "text", description: "Wählt Streams für die Ausgabe aus, z. B. \"0:v\" oder \"1:a:0\"." },
+  { name: "-vn", type: "boolean", description: "Keine Videospur in die Ausgabe übernehmen." },
+  { name: "-an", type: "boolean", description: "Keine Tonspur in die Ausgabe übernehmen." },
+  { name: "-sn", type: "boolean", description: "Keine Untertitelspur in die Ausgabe übernehmen." },
+  { name: "-dn", type: "boolean", description: "Keine Datenspur in die Ausgabe übernehmen." },
+  { name: "-c", type: "text", description: "Codec für alle Streams (Kurzform für -c:v/-c:a/-c:s zusammen), z. B. \"copy\"." },
+  { name: "-c:v", type: "text", description: "Video-Codec, z. B. libx264 oder copy." },
+  { name: "-c:a", type: "text", description: "Audio-Codec, z. B. aac oder copy." },
+  { name: "-c:s", type: "text", description: "Untertitel-Codec." },
+  { name: "-b:v", type: "text", description: "Video-Zielbitrate, z. B. \"4M\"." },
+  { name: "-b:a", type: "text", description: "Audio-Zielbitrate, z. B. \"192k\"." },
+  { name: "-ar", type: "number", description: "Audio-Abtastrate in Hz, z. B. 48000." },
+  { name: "-ac", type: "number", description: "Anzahl Audiokanäle." },
+  { name: "-r", type: "number", description: "Video-Bildrate in fps." },
+  { name: "-s", type: "text", description: "Videoauflösung, z. B. \"1920x1080\"." },
+  { name: "-aspect", type: "text", description: "Seitenverhältnis, z. B. \"16:9\"." },
+  { name: "-vf", type: "text", description: "Video-Filterkette (Kurzform für -filter:v)." },
+  { name: "-af", type: "text", description: "Audio-Filterkette (Kurzform für -filter:a)." },
+  { name: "-filter_complex", type: "text", description: "Mehrfach-Ein-/Ausgang-Filtergraph." },
+  { name: "-metadata", type: "text", description: "Metadaten-Schlüssel=Wert, z. B. \"title=Mein Titel\"." },
+  { name: "-threads", type: "number", description: "Anzahl Encoding-Threads (0 = automatisch)." },
+  { name: "-shortest", type: "boolean", description: "Ausgabe bei der kürzesten Eingabespur beenden." },
+  { name: "-movflags", type: "text", description: "MOV/MP4-Muxer-Flags, z. B. \"+faststart\"." },
+  { name: "-g", type: "number", description: "GOP-Größe (Abstand zwischen Keyframes)." },
+  { name: "-bf", type: "number", description: "Maximale Anzahl aufeinanderfolgender B-Frames." },
+  { name: "-vsync", type: "select", description: "Zeitstempel-/Frame-Anpassung bei der Ausgabe.", choices: ["passthrough", "cfr", "vfr", "drop"] },
+];
+
+export function globalFlagByName(name: string): GlobalFlagDef | undefined {
+  return GLOBAL_FFMPEG_FLAGS.find((f) => f.name === name);
+}
+
+export interface ArgValidation {
+  ok: boolean;
+  message?: string;
+}
+
+// Validiert EIN Argument-Paar (Flag + evtl. folgender Wert) gegen die
+// bekannte Definition — global (Tabelle oben) oder eine im laufenden
+// Editor bereits nachgeschlagene AVOption (dynamicOptions, s.
+// Parameter-Explorer in process-step-config.ts). Unbekannte Flags
+// werden NICHT als Fehler markiert (roher Modus bleibt frei — nicht
+// jedes gültige ffmpeg-Flag ist hier oder in ffmpegtools erfasst),
+// nur bekannte Flags werden tatsächlich geprüft.
+export function validateArgValue(flag: string, value: string, dynamicOptions?: Map<string, FFOption>): ArgValidation {
+  const dynamic = dynamicOptions?.get(flag);
+  if (dynamic) {
+    if (value === "") return { ok: true };
+    if (dynamic.choices?.length && dynamic.type !== "flags") {
+      const ok = dynamic.choices.some((c) => (c.value || c.name) === value);
+      return ok ? { ok: true } : { ok: false, message: `Erwartet einen von: ${dynamic.choices.map((c) => c.name).join(", ")}` };
+    }
+    if (dynamic.type === "boolean") {
+      return value === "true" || value === "false" ? { ok: true } : { ok: false, message: 'Erwartet "true" oder "false".' };
+    }
+    const bounds = optionRangeBounds(dynamic);
+    if (bounds) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return { ok: false, message: "Erwartet eine Zahl." };
+      return n >= bounds.min && n <= bounds.max ? { ok: true } : { ok: false, message: `Erwartet einen Wert zwischen ${bounds.min} und ${bounds.max}.` };
+    }
+    if (dynamic.type === "int" || dynamic.type === "int64" || dynamic.type === "float" || dynamic.type === "double" || dynamic.type === "rational") {
+      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: "Erwartet eine Zahl." };
+    }
+    return { ok: true };
+  }
+  const global = globalFlagByName(flag);
+  if (!global) return { ok: true };
+  if (global.type === "boolean") return value === "" ? { ok: true } : { ok: false, message: `"${flag}" nimmt keinen Wert (Ein-/Aus-Flag).` };
+  if (value === "") return { ok: true };
+  switch (global.type) {
+    case "select":
+      return global.choices?.includes(value) ? { ok: true } : { ok: false, message: `Erwartet einen von: ${global.choices?.join(", ")}` };
+    case "number":
+      return Number.isFinite(Number(value)) ? { ok: true } : { ok: false, message: "Erwartet eine Zahl." };
+    case "time":
+      return /^-?(\d+:)?\d{1,2}:\d{1,2}(\.\d+)?$|^-?\d+(\.\d+)?$/.test(value) ? { ok: true } : { ok: false, message: 'Erwartet eine Dauer, z. B. "5" oder "00:01:23.5".' };
+    default:
+      return { ok: true };
+  }
 }
 
 // ---- Schlüssel/Wert-Objekte (Header, Payload, Eingaben) ---------------------------------------
