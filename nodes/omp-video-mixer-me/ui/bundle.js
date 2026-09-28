@@ -422,9 +422,20 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
           noSignal.textContent = "kein Bild";
-          noSignal.hidden = true;
-          img.addEventListener("load", () => { img.hidden = false; noSignal.hidden = true; });
-          img.addEventListener("error", () => { img.hidden = true; noSignal.hidden = false; });
+          // Bugfund 2026-09-28 (Nutzermeldung, live per CDP bestätigt:
+          // "kein Bild" blieb PERMANENT über einem erfolgreich geladenen
+          // Bild stehen): `.hidden` toggeln reicht hier NICHT — die CSS-
+          // Regeln `.bus-thumb img { display:block; }` und `.bus-thumb
+          // .no-signal { display:flex; }` haben beide höhere Spezifität
+          // (Klassen-Selektor) als die UA-Regel `[hidden]{display:none}`
+          // (Attribut-Selektor) und gewinnen deshalb IMMER, unabhängig
+          // vom `hidden`-Attribut — bestätigt per computed-style-Check
+          // (`getComputedStyle(...).display` blieb "flex" trotz
+          // `hidden=true`). Inline `style.display` hat Spezifität 1000
+          // und schlägt jede externe Regel zuverlässig.
+          noSignal.style.display = "none";
+          img.addEventListener("load", () => { img.style.display = ""; noSignal.style.display = "none"; });
+          img.addEventListener("error", () => { img.style.display = "none"; noSignal.style.display = ""; });
           img.src = previewSnapshotUrl(sourceNodeId);
           thumb.append(img, noSignal);
         } else {
