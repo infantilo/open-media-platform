@@ -189,6 +189,38 @@ class OmpSwitcherPanel extends HTMLElement {
       return `${withToken}${withToken.includes("?") ? "&" : "?"}_=${Date.now()}`;
     };
 
+    // Bugfund 2026-09-28 Teil 2 (identisch zu omp-video-mixer-me, gleiche
+    // Ursache — dort ausführlich dokumentiert): live per Pixel-genauem
+    // Sampling bestätigt, dass ein direktes `img.src = neueURL` kurz
+    // durch `complete=false`/`naturalWidth=0` läuft (Netzwerk-Ladezeit),
+    // NICHT durchgehend das alte Bild zeigt — die schwarze `.thumb`-
+    // Hintergrundfarbe scheint in diesem Moment durch. Server setzt
+    // bewusst `Cache-Control: no-store`, ein "vorab laden, dieselbe URL
+    // zuweisen"-Trick löst deshalb einen zweiten echten Roundtrip aus.
+    // Fix: als Blob laden + Object-URL zuweisen (keine Netzwerk-Wartezeit
+    // mehr beim Zuweisen). `img._previewToken` verhindert, dass eine
+    // ältere, langsamere Anfrage eine bereits fertige neuere überschreibt.
+    const loadPreviewImage = async (img, noSignal, url) => {
+      const token = (img._previewToken = (img._previewToken || 0) + 1);
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const blob = await res.blob();
+        if (img._previewToken !== token) return;
+        const objectUrl = URL.createObjectURL(blob);
+        const oldObjectUrl = img.dataset.blobUrl;
+        img.src = objectUrl;
+        img.dataset.blobUrl = objectUrl;
+        img.style.display = "";
+        noSignal.style.display = "none";
+        if (oldObjectUrl) URL.revokeObjectURL(oldObjectUrl);
+      } catch {
+        if (img._previewToken !== token) return;
+        img.style.display = "none";
+        noSignal.style.display = "";
+      }
+    };
+
     const makeInputButton = (input, active, sourceNodeId) => {
       const btn = document.createElement("omp-button");
       btn.className = thumbsEnabled ? "source with-thumb" : "source";
@@ -202,20 +234,17 @@ class OmpSwitcherPanel extends HTMLElement {
         if (sourceNodeId) {
           const img = document.createElement("img");
           img.alt = input.label;
+          img.style.display = "none"; // erst sichtbar, sobald das erste Bild wirklich geladen ist
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
           noSignal.textContent = "kein Bild";
-          // Bugfund 2026-09-28 (identischer Bug wie omp-video-mixer-me,
-          // gleiche Ursache): `.hidden` toggeln wird von `.thumb img {
-          // display:block; }`/`.thumb .no-signal { display:flex; }`
-          // (Klassen-Selektor, höhere Spezifität) immer überstimmt —
-          // "kein Bild" blieb dadurch permanent über einem erfolgreich
-          // geladenen Bild stehen. Inline `style.display` (Spezifität
-          // 1000) schlägt jede externe Regel zuverlässig.
+          // `.hidden` toggeln reicht hier NICHT: `.thumb .no-signal {
+          // display:flex; }` (Klassen-Selektor) überstimmt die UA-Regel
+          // `[hidden]{display:none}` (Attribut-Selektor) immer. Inline
+          // `style.display` hat Spezifität 1000 und schlägt jede externe
+          // Regel zuverlässig.
           noSignal.style.display = "none";
-          img.addEventListener("load", () => { img.style.display = ""; noSignal.style.display = "none"; });
-          img.addEventListener("error", () => { img.style.display = "none"; noSignal.style.display = ""; });
-          img.src = previewSnapshotUrl(sourceNodeId);
+          void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
           thumb.append(img, noSignal);
         } else {
           const noSignal = document.createElement("div");
@@ -236,13 +265,14 @@ class OmpSwitcherPanel extends HTMLElement {
     // Bugliste 2026-09-25 Nachtrag ("Thumbnail-Flicker", s. gleiches
     // Muster in omp-video-mixer-me/ui/bundle.js#updateBusButton):
     // aktualisiert einen bereits vorhandenen Knopf statt ihn (und damit
-    // sein `<img>`) neu zu erzeugen — nur `img.src` wird neu gesetzt,
-    // der Browser zeigt dabei von selbst das alte Bild weiter, bis das
-    // neue fertig geladen ist.
+    // sein `<img>`) neu zu erzeugen. Bild-Neuladen selbst läuft über
+    // `loadPreviewImage` oben (s. dortige Doku für den 2026-09-28
+    // gefundenen zweiten Teil desselben Symptoms).
     const updateInputButton = (btn, input, sourceNodeId) => {
       if (thumbsEnabled) {
         const img = btn.querySelector("img");
-        if (img && sourceNodeId) img.src = previewSnapshotUrl(sourceNodeId);
+        const noSignal = btn.querySelector(".no-signal");
+        if (img && noSignal && sourceNodeId) void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
         const label = btn.querySelector(".thumb-label");
         if (label) label.textContent = input.label;
       } else {
@@ -337,6 +367,15 @@ class OmpSwitcherPanel extends HTMLElement {
       }
 
       buttons.append(fragment);
+
+      // Übrig gebliebene, NICHT wiederverwendete Knöpfe geben ihre
+      // Object-URL frei (s. `loadPreviewImage` oben) — sonst häuft sich
+      // über eine lange Sitzung mit wechselnden Quellen ungenutzter
+      // Blob-Speicher an.
+      for (const orphan of existingButtons.values()) {
+        const blobUrl = orphan.querySelector("img")?.dataset.blobUrl;
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+      }
     };
 
     refresh();

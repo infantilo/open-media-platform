@@ -402,6 +402,50 @@ class OmpVideoMixerMePanel extends HTMLElement {
       [disabled] { opacity: 0.4; }
     `;
 
+    // Bugfund 2026-09-28 Teil 2 (Nutzermeldung: "kein Bild"-Text ist weg,
+    // aber es blitzt weiterhin zyklisch schwarz durch): live per
+    // Pixel-genauem `requestAnimationFrame`-Sampling bestätigt (nicht
+    // geraten) — direkt nach JEDER `img.src = neueURL`-Zuweisung lief das
+    // `<img>` tatsächlich kurz durch `complete=false`/`naturalWidth=0`
+    // (Netzwerk-Ladezeit), NICHT durchgehend das alte Bild weiter, wie
+    // der bisherige Kommentar unten annahm — die schwarze
+    // `.bus-thumb`-Hintergrundfarbe scheint in genau diesem Moment durch,
+    // unabhängig davon, dass derselbe `<img>`-Knoten wiederverwendet wird
+    // (Nachtrag-295-Fix betraf ein ANDERES, bereits behobenes Problem:
+    // Knoten-Neuerzeugung, nicht diesen Lade-Zwischenzustand). Ein
+    // simples "Bild vorab laden, dann dieselbe URL zuweisen" hilft NICHT
+    // — der Server setzt bewusst `Cache-Control: no-store` (kein
+    // veraltetes Bild einer anderen Instanz), eine zweite Zuweisung
+    // derselben URL löst deshalb einen zweiten echten Netzwerk-Roundtrip
+    // aus. Fix: als Blob laden + Object-URL zuweisen — die Object-URL
+    // zeigt auf bereits vollständig im Speicher liegende Daten, das
+    // Zuweisen an `img.src` braucht keinen Netzwerk-Wartezustand mehr
+    // (das Decodieren eines kleinen Vorschaubilds ist praktisch
+    // augenblicklich). `img._previewToken` verhindert, dass eine
+    // langsamere ältere Anfrage eine währenddessen bereits fertige
+    // neuere überschreibt (z. B. wenn Tally-Events refreshAll() öfter als
+    // alle 2s auslösen).
+    const loadPreviewImage = async (img, noSignal, url) => {
+      const token = (img._previewToken = (img._previewToken || 0) + 1);
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const blob = await res.blob();
+        if (img._previewToken !== token) return; // durch eine neuere Anfrage überholt
+        const objectUrl = URL.createObjectURL(blob);
+        const oldObjectUrl = img.dataset.blobUrl;
+        img.src = objectUrl;
+        img.dataset.blobUrl = objectUrl;
+        img.style.display = "";
+        noSignal.style.display = "none";
+        if (oldObjectUrl) URL.revokeObjectURL(oldObjectUrl);
+      } catch {
+        if (img._previewToken !== token) return;
+        img.style.display = "none";
+        noSignal.style.display = "";
+      }
+    };
+
     // Geteilte, ebenenunabhängige Hilfsfunktionen — je einmal definiert,
     // von jeder Bank (buildBank unten) mit ihrem eigenen `call()`
     // aufgerufen, statt N-fach dupliziert zu werden.
@@ -419,24 +463,18 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (sourceNodeId) {
           const img = document.createElement("img");
           img.alt = label;
+          img.style.display = "none"; // erst sichtbar, sobald das erste Bild wirklich geladen ist
           const noSignal = document.createElement("div");
           noSignal.className = "no-signal";
           noSignal.textContent = "kein Bild";
-          // Bugfund 2026-09-28 (Nutzermeldung, live per CDP bestätigt:
-          // "kein Bild" blieb PERMANENT über einem erfolgreich geladenen
-          // Bild stehen): `.hidden` toggeln reicht hier NICHT — die CSS-
-          // Regeln `.bus-thumb img { display:block; }` und `.bus-thumb
-          // .no-signal { display:flex; }` haben beide höhere Spezifität
-          // (Klassen-Selektor) als die UA-Regel `[hidden]{display:none}`
-          // (Attribut-Selektor) und gewinnen deshalb IMMER, unabhängig
-          // vom `hidden`-Attribut — bestätigt per computed-style-Check
-          // (`getComputedStyle(...).display` blieb "flex" trotz
-          // `hidden=true`). Inline `style.display` hat Spezifität 1000
-          // und schlägt jede externe Regel zuverlässig.
+          // `.hidden` toggeln reicht hier NICHT (s. Bugfund 2026-09-28
+          // Teil 1 oben in der Moduldoku): `.bus-thumb .no-signal {
+          // display:flex; }` (Klassen-Selektor) überstimmt die UA-Regel
+          // `[hidden]{display:none}` (Attribut-Selektor) immer. Inline
+          // `style.display` hat Spezifität 1000 und schlägt jede externe
+          // Regel zuverlässig.
           noSignal.style.display = "none";
-          img.addEventListener("load", () => { img.style.display = ""; noSignal.style.display = "none"; });
-          img.addEventListener("error", () => { img.style.display = "none"; noSignal.style.display = ""; });
-          img.src = previewSnapshotUrl(sourceNodeId);
+          void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
           thumb.append(img, noSignal);
         } else {
           const noSignal = document.createElement("div");
@@ -457,17 +495,16 @@ class OmpVideoMixerMePanel extends HTMLElement {
     // Bugliste 2026-09-25 Nachtrag ("Thumbnail-Flicker"): `refresh()`
     // pollt alle 2s und rief früher für JEDEN Knopf `makeBusButton` neu
     // auf, was das `<img>` jedes Mal zerstörte und frisch (ohne Bild)
-    // neu erzeugte — dadurch flackerte das Vorschaubild bei jedem Poll
-    // kurz auf "kein Bild"/schwarz, bevor das neue Bild geladen war.
-    // Fix: ein bestehender Knopf mit gleicher `senderId` wird
-    // wiederverwendet, nur `img.src` wird neu gesetzt — der Browser
-    // zeigt dabei von selbst das alte Bild weiter, bis das neue fertig
-    // geladen ist (kein künstliches Aus-/Einblenden nötig).
+    // neu erzeugte. Fix: ein bestehender Knopf mit gleicher `senderId`
+    // wird wiederverwendet, nur das Bild wird neu geladen (s.
+    // `loadPreviewImage` oben für den zweiten, 2026-09-28 gefundenen
+    // Teil desselben Symptoms — der eigentliche Lade-Zwischenzustand).
     const updateBusButton = (btn, label, senderId, sourceNodeId) => {
       const wantsThumb = thumbsEnabled && !!senderId;
       if (wantsThumb) {
         const img = btn.querySelector("img");
-        if (img && sourceNodeId) img.src = previewSnapshotUrl(sourceNodeId);
+        const noSignal = btn.querySelector(".no-signal");
+        if (img && noSignal && sourceNodeId) void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
         const thumbLabel = btn.querySelector(".bus-thumb-label");
         if (thumbLabel) thumbLabel.textContent = label;
       } else {
@@ -580,6 +617,18 @@ class OmpVideoMixerMePanel extends HTMLElement {
         for (const entry of remaining) appendEntry(entry);
       }
       container.append(fragment);
+
+      // Übrig gebliebene, NICHT wiederverwendete Knöpfe (ihre `senderId`
+      // ist nicht mehr in `entries`) geben ihre Object-URL frei (s.
+      // `loadPreviewImage` oben) — sonst häuft sich über eine lange
+      // Regie-Sitzung mit wechselnden Quellen langsam ungenutzter
+      // Blob-Speicher an, den der Garbage Collector allein NICHT
+      // freigibt (Object-URLs sind bis zum expliziten `revokeObjectURL`
+      // gültig).
+      for (const orphan of existingButtons.values()) {
+        const blobUrl = orphan.querySelector("img")?.dataset.blobUrl;
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+      }
     };
 
     // Skalierungs-Review D5/Nutzerwunsch (docs/REVIEW-2026-07-17-
