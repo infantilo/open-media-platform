@@ -379,13 +379,26 @@ wieder ausgebaute „Mehrspur-Container bauen“-Sonderfunktion war:
 - **„Audio-Matrix bearbeiten …“** öffnet ein Kreuzschienen-Raster:
   Zeilen sind die Tonkanäle aller angegebenen Quelldateien (Haupt-
   Eingabedatei plus beliebig viele „+ weitere Quelldatei“), Spalten
-  sind frei wählbare Ausgangsspuren. Jede Zelle hat einen Anteil in %
-  und eine Verzögerung in ms — eine Zelle mit Anteil 0 trägt nichts
-  bei, eine Ausgangsspur ganz ohne Beitrag wird gar nicht erst erzeugt.
-  So lassen sich Kanäle beliebig routen, anteilig mischen und
+  sind frei wählbare Ausgangsspuren. Je Quelldatei wählt man ein
+  **Kanal-Layout** (Mono/Stereo/5.1/7.1 oder „Eigene Anzahl“ für alles
+  andere) — die Zeilen zeigen dann echte Kanal-Namen (L/R/C/LFE/Ls/Rs
+  statt nur „Kanal 1/2/3“). Ein Klick auf eine Zelle öffnet einen
+  **Downmixer**-Dialog mit Gain-Regler (%, inklusive live berechneter
+  dB-Anzeige) und Verzögerung (ms) — eine Zelle ohne Anteil trägt
+  nichts bei, eine Ausgangsspur ganz ohne Beitrag wird gar nicht erst
+  erzeugt. So lassen sich Kanäle beliebig routen, anteilig mischen und
   zueinander verzögern, ohne Filtersyntax zu kennen.
 
-  ![Audio-Matrix: Quellkanäle zweier Dateien, anteilig auf zwei Ausgangsspuren gemischt und verzögert](screenshots/audio-matrix.png)
+  ![Audio-Matrix: 5.1-Quelle mit echten Kanal-Namen, zwei Ausgangsspuren per Downmix-Vorlage befüllt](screenshots/audio-matrix.png)
+
+  Für gängige Layout-Kombinationen bietet die Matrix eine
+  **Downmix-Vorlage** als Ein-Klick-Knopf neben dem Kanal-Layout an
+  (z. B. „5.1 → Stereo (ITU-Downmix, −3dB)“, „Stereo → Mono“, „Mono →
+  Stereo“) — sie füllt die passenden Zellen sofort mit sinnvollen
+  Vorgaben, die man danach wie jede andere Zelle per Klick nachjustieren
+  kann. Der Downmixer-Dialog einer einzelnen Zelle sieht so aus:
+
+  ![Downmixer-Dialog einer einzelnen Zelle: Gain-Regler mit Prozent- und dB-Anzeige, Verzögerung](screenshots/audio-matrix-downmixer.png)
 
 - **„+ Ausgabespur“** (weiter unten im Formular) legt beliebig viele
   unabhängige, einzeln kodierte Ausgangsspuren an — Quelle (roher

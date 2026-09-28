@@ -10,10 +10,54 @@
 // dieselben zwei Felder (`ConvertInput.filterComplex`/
 // `filterOutputLabels`), kein eigener Ausführungspfad.
 
+// Kanal-Layout-Labels (Kapitel 25 R2, 2026-09-28) — reine Beschriftung
+// für die Zeilenüberschriften der Matrix ("L"/"R"/"C" statt "Kanal 1/2/
+// 3"), ändert NICHTS an compileAudioMatrix (weiterhin rein index-
+// basiertes pan=c0..cN-1, s. oben) — die zugrundeliegende Kompilierung
+// bleibt für denselben Zellen-Zustand identisch zu Kapitel 23. Reihen-
+// folge je Layout entspricht ffmpegs/libavutils Standard-Kanalreihen-
+// folge (AV_CH_LAYOUT_STEREO/5POINT1/7POINT1), keine erfundene Ordnung.
+export type ChannelLayoutId = "mono" | "stereo" | "5.1" | "7.1" | "custom";
+
+export interface ChannelLayoutDef {
+  id: ChannelLayoutId;
+  label: string;
+  // Leer für "custom" — dort bleibt es bei der freien Kanalzahl +
+  // "Kanal N"-Beschriftung wie vor Kapitel 25 R2.
+  channelLabels: string[];
+}
+
+export const CHANNEL_LAYOUTS: ChannelLayoutDef[] = [
+  { id: "mono", label: "Mono (1)", channelLabels: ["Mono"] },
+  { id: "stereo", label: "Stereo (2)", channelLabels: ["L", "R"] },
+  { id: "5.1", label: "5.1 (6)", channelLabels: ["L", "R", "C", "LFE", "Ls", "Rs"] },
+  { id: "7.1", label: "7.1 (8)", channelLabels: ["L", "R", "C", "LFE", "Lb", "Rb", "Ls", "Rs"] },
+  { id: "custom", label: "Eigene Anzahl …", channelLabels: [] },
+];
+
+export function channelLayoutById(id: string): ChannelLayoutDef | undefined {
+  return CHANNEL_LAYOUTS.find((l) => l.id === id);
+}
+
+export function channelLayoutChannelCount(id: ChannelLayoutId): number {
+  return channelLayoutById(id)?.channelLabels.length ?? 0;
+}
+
+// Beschriftung einer einzelnen Zeile — fällt für "custom" oder einen
+// Index außerhalb der bekannten Labels (z. B. eine freie Kanalzahl >
+// Layout-Größe) auf die alte "Kanal N"-Form zurück, nie ein leeres Label.
+export function channelLabel(layoutId: ChannelLayoutId, channelIndex: number): string {
+  const label = channelLayoutById(layoutId)?.channelLabels[channelIndex];
+  return label ?? `Kanal ${channelIndex + 1}`;
+}
+
 export interface AudioMatrixSource {
   inputPath: string; // Index 0 = primäre Eingabedatei des Konvertieren-Formulars, 1..N = additionalInputPaths
   channelCount: number;
   label?: string;
+  // Nur Beschriftungs-/Voreinstellungs-Hilfe (s. o.) — optional, damit
+  // ältere gespeicherte Quellen ohne dieses Feld weiter funktionieren.
+  layout?: ChannelLayoutId;
 }
 
 // Eine Zelle mit `gainPercent <= 0` trägt nichts bei (= nicht
@@ -86,4 +130,87 @@ export function compileAudioMatrix(input: AudioMatrixInput): CompiledAudioMatrix
     outputLabels,
     additionalInputPaths: input.sources.slice(1).map((s) => s.inputPath),
   };
+}
+
+// ---- Downmix-Vorlagen (Kapitel 25 R2) -----------------------------------------------------------
+//
+// Baukasten-konform (ARCHITECTURE.md §26.4): keine Szenario-Bindung an
+// eine bestimmte Datei, nur "übliche Kanal-Layout-Kombination → sinnvolle
+// Start-Zellen" — der Nutzer kann jede erzeugte Zelle danach wie jede
+// andere per Hand nachjustieren. -3dB/70,7% ist der gebräuchlichste
+// Koeffizient für Center-/Surround-Beimischung bei einem Stereo-Downmix
+// (z. B. Dolby-Empfehlung) — LFE bleibt bewusst unberücksichtigt (auch
+// gängige Praxis), dokumentiert im `help`-Text statt stillschweigend
+// weggelassen.
+export interface DownmixPresetRoute {
+  sourceChannelIndex: number;
+  outputOffset: number;
+  gainPercent: number;
+}
+
+export interface DownmixPreset {
+  id: string;
+  label: string;
+  fromLayout: ChannelLayoutId;
+  outputCount: number;
+  help: string;
+  routes: DownmixPresetRoute[];
+}
+
+export const DOWNMIX_PRESETS: DownmixPreset[] = [
+  {
+    id: "mono-to-stereo",
+    label: "Mono → Stereo (dupliziert)",
+    fromLayout: "mono",
+    outputCount: 2,
+    help: "Der eine Kanal geht unverändert (100%) auf beide Ausgangsspuren.",
+    routes: [
+      { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 100 },
+      { sourceChannelIndex: 0, outputOffset: 1, gainPercent: 100 },
+    ],
+  },
+  {
+    id: "stereo-to-mono",
+    label: "Stereo → Mono (Summe, −3dB je Kanal)",
+    fromLayout: "stereo",
+    outputCount: 1,
+    help: "L und R werden mit je 70,7% (−3dB) auf eine Ausgangsspur summiert.",
+    routes: [
+      { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 70.7 },
+      { sourceChannelIndex: 1, outputOffset: 0, gainPercent: 70.7 },
+    ],
+  },
+  {
+    id: "5.1-to-stereo",
+    label: "5.1 → Stereo (ITU-Downmix, −3dB)",
+    fromLayout: "5.1",
+    outputCount: 2,
+    help: "L/R unverändert (100%), Center und der gleichseitige Surround-Kanal mit −3dB (70,7%) zugemischt. LFE bleibt bewusst unberücksichtigt (gängige Praxis) — bei Bedarf danach manuell ergänzen.",
+    routes: [
+      { sourceChannelIndex: 0, outputOffset: 0, gainPercent: 100 }, // L -> Lo
+      { sourceChannelIndex: 2, outputOffset: 0, gainPercent: 70.7 }, // C -> Lo
+      { sourceChannelIndex: 4, outputOffset: 0, gainPercent: 70.7 }, // Ls -> Lo
+      { sourceChannelIndex: 1, outputOffset: 1, gainPercent: 100 }, // R -> Ro
+      { sourceChannelIndex: 2, outputOffset: 1, gainPercent: 70.7 }, // C -> Ro
+      { sourceChannelIndex: 5, outputOffset: 1, gainPercent: 70.7 }, // Rs -> Ro
+    ],
+  },
+];
+
+export function downmixPresetsForLayout(layout: ChannelLayoutId | undefined): DownmixPreset[] {
+  return DOWNMIX_PRESETS.filter((p) => p.fromLayout === layout);
+}
+
+// Reine Berechnung — das Einfügen der Zellen (ggf. unter Beibehaltung
+// unberührter bestehender Zellen) ist Sache des Aufrufers (audio-
+// matrix.ts), damit ein Preset gezielt nachjustierbar bleibt statt die
+// ganze Matrix zu ersetzen.
+export function applyDownmixPreset(preset: DownmixPreset, sourceIndex: number, outputStart: number): AudioMatrixCell[] {
+  return preset.routes.map((r) => ({
+    sourceIndex,
+    channelIndex: r.sourceChannelIndex,
+    outputIndex: outputStart + r.outputOffset,
+    gainPercent: r.gainPercent,
+    delayMs: 0,
+  }));
 }

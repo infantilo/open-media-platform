@@ -4210,16 +4210,57 @@ generischen `extract_audio`-Aufgabe lud 85 echte, vom Host-ffmpeg
 gemeldete Encoder, Auswahl von "aac" aktualisierte die Vorschau live zu
 `-c:a aac`.
 
-#### R2 — Audio-Matrix: Kanal-Layout-Labels + Downmixer-Dialog je Zelle
+#### R2 — Audio-Matrix: Kanal-Layout-Labels + Downmixer-Dialog je Zelle (erledigt 2026-09-28)
 
-Kanal-Layout-Erkennung (aus ffprobe-Introspektion der Quelldatei, falls
-vorhanden) für Labels (mono/stereo/5.1 statt "Kanal 0/1/2"); Klick auf
-Zelle öffnet Gain/Delay-Dialog statt Inline-Dauerdarstellung; Presets für
-gängige Downmixe.
+**Scope-Korrektur gegenüber der ursprünglichen Planung:** "Kanal-Layout-
+Erkennung aus ffprobe-Introspektion der Quelldatei" hätte eine neue
+HTTP-Route gebraucht, die ffprobe auf einen vom Nutzer angegebenen
+Dateipfad loslässt — genau die Fähigkeit, die im Kapitel-23-Nachtrag
+bereits einmal bewusst NICHT gebaut wurde ("verdient eine eigene
+Sicherheitsabwägung", s. dort). Statt das hier beiläufig nachzuholen:
+**Kanal-Layout-AUSWAHL** statt -Erkennung — ein Dropdown je Quelle
+(Mono/Stereo/5.1/7.1/"Eigene Anzahl" als Fallback für alles andere,
+Reihenfolge je Layout nach ffmpegs/libavutils Standard-Kanalreihenfolge,
+keine erfundene Ordnung). Löst dieselbe Nutzerintention (echte Kanal-
+Namen statt "Kanal 0/1/2") ohne eine neue Angriffsfläche zu öffnen — bei
+echtem Bedarf an automatischer Erkennung ist das ein eigener,
+gesondert zu entscheidender Schritt.
 
-**Verifikation:** Live-CDP, Downmixer-Dialog öffnet/schließt korrekt,
-erzeugter `filterComplex` unverändert zu 25.1-Verhalten für denselben
-Matrix-Zustand (reine UI-Umstellung, keine Kompilier-Logik-Änderung).
+**Umgesetzt:** `audio-matrix-logic.ts` — `ChannelLayoutId`/
+`CHANNEL_LAYOUTS`/`channelLabel()` (reine Beschriftung, ändert nichts an
+`compileAudioMatrix`s index-basiertem `pan=c0..cN`); `DOWNMIX_PRESETS`/
+`applyDownmixPreset()` für die drei häufigsten Fälle (Mono→Stereo,
+Stereo→Mono, 5.1→Stereo nach ITU-Konvention, −3dB/70,7% für Center/
+Surround-Beimischung, LFE bewusst ausgeschlossen und im `help`-Text
+dokumentiert statt stillschweigend weggelassen). `audio-matrix.ts` —
+Kanal-Layout-Dropdown je Quelle ersetzt die reine Kanalzahl-Eingabe
+(bei "Eigene Anzahl" bleibt die alte Zahlen-Eingabe als Fallback
+erhalten); je nach Quell-Layout erscheint ein passender Downmix-
+Vorlage-Knopf; Zellen zeigen nur noch eine kompakte Zusammenfassung
+("70.7%" bzw. "+" wenn leer) statt zweier immer sichtbarer Zahlenfelder
+— Klick öffnet einen "Downmixer"-Dialog (Gain-Regler 0–200% + Zahlenfeld
++ live berechnete dB-Anzeige, Verzögerung in ms, Entfernen/Abbrechen/
+Übernehmen) im Stil des vom Nutzer genannten Referenzbilds. 10 neue
+`deno test`-Fälle (Kanal-Labels, Layout-Kanalzahlen, Preset-Filterung,
+Preset→Zellen-Berechnung inkl. Zusammenspiel mit `compileAudioMatrix`).
+
+**Verifikation:** live per echter CDP-Session gegen den echten laufenden
+Orchestrator (gleicher Prozess wie R1) — Kanal-Layout auf "5.1"
+umgestellt zeigte sofort die echten Zeilen-Labels L/R/C/LFE/Ls/Rs; Klick
+auf "5.1 → Stereo (ITU-Downmix, −3dB)" befüllte genau die erwarteten
+6 Zellen (L/R@100%, C/Ls/Rs@70,7%, LFE unberührt) — exakt wie
+`applyDownmixPreset` vorhersagt; ein Downmixer-Dialog für "C → Spur 1"
+zeigte korrekt 70,7% / "−3.0 dB", Regler auf 50% gezogen aktualisierte
+live auf "−6.0 dB" (20·log₁₀(0,5) ≈ −6,02, korrekt gerundet), Übernehmen
+änderte NUR diese eine Zelle (C → Spur 2 blieb unverändert bei 70,7%);
+finale Übernehmen-Kompilierung der gesamten Matrix erzeugte exakt den
+erwarteten `-filter_complex`-Ausdruck (`pan`→`volume`→`amix` je
+Ausgangsspur, `-map [mxout0] -map [mxout1]`) — Kompilier-Logik
+tatsächlich unverändert bestätigt, nicht nur behauptet. Zwei neue
+Handbuch-Screenshots (`docs/screenshots/audio-matrix.png` ersetzt,
+`audio-matrix-downmixer.png` neu) direkt aus dieser Live-Session.
+`deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno
+bundle` (49 Module) grün.
 
 #### R3 — "Auxinput"-Abschnitt für benannte Zusatzquellen
 
@@ -4503,3 +4544,4 @@ der Trefferliste.
 | Kapitel 23 Nachtrag: echtes `-h full`-Parsing + verlustfreies Aneinanderhängen | erledigt | Nutzerauftrag, zwei zuvor bewusst offen gelassene Ausblicke nachzuziehen. `-h full`: neues `orchestrator/internal/ffmpegtools::GlobalOption`/`ParseGlobalOptions`/`Store.GlobalOptions()` — parst NUR die globalen/dateiübergreifenden Abschnitte ("Global options"…"Subtitle options", 165 Flags), bricht beim ersten "AVOptions"-Header ab (der riesige, redundante Per-Codec-Teil wird nie angefasst, `Detail()` deckt den schon ab). Neue Route `GET /api/v1/tools/ffmpeg/global-options`. Go-Tests mit echtem `-h full`-Ausschnitt + Integrationstest gegen den echten Host-ffmpeg (165 Flags, `-y` wertlos, `-loglevel` wertbehaftet, kein Leck aus dem AVOptions-Bereich). Frontend: `FFGlobalOptionEntry`/`globalOptionEntryToFlagDef`, `validateArgValue` bekommt optionalen `globalOverrides`-Parameter — kuratierte Tabelle gewinnt bei Namensüberschneidung (echte Typisierung wie `-loglevel`s 9 Werte), der vollständige Import ist Fallback (z. B. `-vaapi_device`, nie kuratiert). Parameter-Explorer/Autovervollständigung durchsuchen beide Quellen. Verlustfreies Aneinanderhängen: neues `ConcatInput.lossless` nutzt ffmpegs concat-PROTOKOLL (`-i "concat:a\|b\|c" -c copy`) statt der Filterkette — kein Neukodieren. Bewusste, dokumentierte Grenzen (keine Bugs): nur für bestimmte Container zuverlässig (v. a. MPEG-TS/-PS, nicht generell MP4/MOV/MKV, live an echten .ts-Dateien bestätigt), kein Beschnitt möglich (Protokoll kennt keinen Trim — pro-Clip-Trim+Verlustfreiheit gleichzeitig bräuchte ffprobe-Frame-Introspektion + einen mehrstufigen Workflow, bewusst nicht gebaut, auch wegen der eigenen Sicherheitsabwägung einer neuen "ffprobe auf Nutzerpfad"-Route). Häkchen "Verlustfrei" blendet Beschnitt-/Codec-Felder aus. Live per CDP verifiziert: `/global-options` liefert 165 Einträge, Suche nach "vaapi_device" findet es (nie kuratiert), Einfügen+Wertsetzung funktioniert; Concat-Häkchen blendet Felder sofort aus, Vorschau zeigt exakt `-y -i concat:a.ts\|b.ts -c copy`. `deno check ui/**/*.ts`, `deno test ui/graph/` (140 Fälle), `deno bundle` (49 Module), `go build/vet/test ./...` (orchestrator), `make check` (voller Deno+Rust-Baum) grün. | 2026-09-26 |
 | Kapitel 24: Operator-UI — Minimieren/Maximieren/Vor-Reihenfolge/"Alle anordnen" für Konsolen-Kacheln | erledigt | Nutzerauftrag 2026-09-28: Node-UIs im Operator-UI sollen "mehr wie Fenster" aussehen. `console-board-logic.ts`: `TileLayout` um optionale `minimized`/`zIndex`-Felder erweitert (rückwärtskompatibel), neue reine Funktion `computeTileGridLayout` (quadratisches Raster für "Alle anordnen", 4 neue Tests). `console-board.ts`: zwei Fenster-Buttons je Titelleiste (Minimieren klappt an Ort und Stelle ein, bleibt weiter ziehbar; Maximieren füllt den Board-Bereich exakt, per `ResizeObserver` live nachgeführt, max. eine Kachel gleichzeitig), Klick/Ziehen auf eine Kachel hebt sie per z-index nach vorne, neue Symbolleiste "⊞ Alle anordnen" packt alle Kacheln in ein frisches Raster und klappt Minimiertes wieder auf. Live per **echtem CDP-Mausinput** verifiziert (headless Chromium, eigenständig gebündeltes Modul gegen drei Fake-Konsolen-Einträge) — dabei ein Testmethodik-Stolperstein selbst gefunden+korrigiert: synthetisches `dispatchEvent(PointerEvent)` erzeugt in Headless-Chrome keinen für `setPointerCapture` gültigen aktiven Pointer (`NotFoundError`), reales `page.mouse.move/down/up` (echte CDP-Input-Events) schon — danach alle Fälle bestätigt: Minimieren/Wiederherstellen, Maximieren mit exaktem Board-Fit + Auto-Wiederherstellung der vorherigen Kachel, Vor-Reihenfolge, echtes Ziehen (+70/+40px exakt), echtes Skalieren (+60/+50px exakt), minimierte Kachel bleibt ziehbar und rendert korrekt über anderen Kacheln, "Alle anordnen" übersteht Reload dank `localStorage`. `deno check ui/**/*.ts`, `deno test ui/` (176 Fälle, 4 neu), `deno bundle ui/shell/shell.ts` (49 Module) grün. Details UMSETZUNG.md Kapitel 24. Kapitel 25 (FFmpeg-Assistent: Aufgaben-Registry + erweiterte Audio-Matrix) geplant, noch nicht begonnen — s. UMSETZUNG.md 6f. | 2026-09-28 |
 | Kapitel 25 R1: generische Aufgaben-Registry für den ffmpeg-Assistenten (probe/thumbnail/extract_audio) | erledigt | Nutzerauftrag 2026-09-28 ("die ffmpeg-UI ist noch zu hardcoded"), Nutzerentscheidung "Registry + mehr Vorlagen". Scope-Korrektur beim tatsächlichen Umsetzen (§0 Punkt 8, sofort dokumentiert): ein voller Interpreter für alle 6 Aufgaben (wie ursprünglich in 25.3 skizziert) hätte eine riskante Mini-DSL für wiederholbare wechselseitig sichtbarkeitsgekoppelte Unterformulare gebraucht, verifiziert an nur 2 Vorbildern (`concat`/`overlay`) — stattdessen: `GENERIC_SCRIPT_TASKS`-Registry (`process-step-config-logic.ts`, Feldarten `template-text`/`text`/`codec-picker`/`format-picker`) + eine einzige `buildGenericScriptForm`-Rendering-Funktion (`process-step-config.ts`) für die drei wirklich flachen Aufgaben `probe`/`thumbnail`/`extract_audio`; `convert` (der generische Baukasten-Fluchtweg selbst)/`concat`/`overlay` bleiben bewusst bespoke. `ScriptIntent.id` von geschlossenem Union-Typ auf `string` gelockert. Die zugrundeliegenden `build<X>Args()`-Funktionen sind unverändert (Regressionssicherheit), nur eine neue `toArgs()`-Zwischenschicht ruft sie auf — kein sichtbarer Verhaltensunterschied, BENUTZERHANDBUCH.md unverändert gültig. 4 neue `deno test`-Fälle, alle 180 Tests grün, `deno bundle` (49 Module) grün. Live per echter CDP-Session gegen den echten laufenden Orchestrator verifiziert: neue Prozess-Definition angelegt, Datei-Werkzeug-Schritt hinzugefügt, "Technische Metadaten auslesen" erzeugte exakt die erwarteten ffprobe-Argumente, Durchwechseln aller 6 Aufgaben zeigte in jedem Fall korrekte Vorschau/Validierung (keine Regression bei den 3 weiterhin bespoke Aufgaben), Audio-Codec-Picker von `extract_audio` lud 85 echte Host-ffmpeg-Encoder, Auswahl "aac" aktualisierte die Vorschau live zu `-c:a aac`. Details UMSETZUNG.md 25.3 (R1). Nächster Schritt: R2 (Audio-Matrix Kanal-Layout-Labels + Downmixer-Dialog). | 2026-09-28 |
+| Kapitel 25 R2: Audio-Matrix — Kanal-Layout-Labels, Downmixer-Dialog je Zelle, Downmix-Vorlagen | erledigt | Nutzerentscheidung "visuell + funktional erweitern". Scope-Korrektur (§0 Punkt 8, sofort dokumentiert): "Kanal-Layout-ERKENNUNG aus ffprobe" hätte eine neue HTTP-Route gebraucht, die ffprobe auf einen vom Nutzer angegebenen Dateipfad loslässt — genau die im Kapitel-23-Nachtrag bereits bewusst NICHT gebaute Fähigkeit ("verdient eine eigene Sicherheitsabwägung"). Stattdessen Kanal-Layout-AUSWAHL: Dropdown je Quelle (Mono/Stereo/5.1/7.1/"Eigene Anzahl", ffmpeg-Standard-Kanalreihenfolge). `audio-matrix-logic.ts`: `ChannelLayoutId`/`CHANNEL_LAYOUTS`/`channelLabel()` (reine Beschriftung, `compileAudioMatrix` unverändert), `DOWNMIX_PRESETS`/`applyDownmixPreset()` (Mono→Stereo, Stereo→Mono, 5.1→Stereo nach ITU-Konvention −3dB, LFE bewusst ausgeschlossen+dokumentiert). `audio-matrix.ts`: Kanal-Layout-Dropdown ersetzt reine Kanalzahl-Eingabe, passender Downmix-Vorlage-Knopf je Quell-Layout, Zellen zeigen nur noch eine kompakte Zusammenfassung statt zweier immer sichtbarer Zahlenfelder — Klick öffnet "Downmixer"-Dialog (Gain-Regler 0–200% + Zahlenfeld + live dB-Anzeige, Verzögerung, Entfernen/Abbrechen/Übernehmen) im Stil des vom Nutzer genannten Referenzbilds. 10 neue Tests. Live per CDP gegen den echten Orchestrator verifiziert: Layout-Wechsel auf 5.1 zeigte echte L/R/C/LFE/Ls/Rs-Labels, Preset-Klick befüllte exakt die 6 erwarteten Zellen, Downmixer-Dialog zeigte korrekt 70,7%/−3.0dB und aktualisierte auf 50%/−6.0dB live, Übernehmen änderte nur die eine Zelle, finale Matrix-Kompilierung erzeugte exakt den erwarteten `-filter_complex` (Kompilier-Logik-Unverändertheit tatsächlich bestätigt). Zwei neue Handbuch-Screenshots direkt aus der Live-Session (`docs/screenshots/audio-matrix.png` ersetzt, `audio-matrix-downmixer.png` neu), BENUTZERHANDBUCH.md §5a.1 aktualisiert. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno bundle` (49 Module) grün. Nächster Schritt: R3 ("Auxinput"-Abschnitt für benannte Zusatzquellen). | 2026-09-28 |
