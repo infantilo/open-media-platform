@@ -1195,6 +1195,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+/// Löst `device_id` zu `node_id` auf und veröffentlicht das Tally-Event —
+/// wird per `tokio::spawn` als EIGENE, losgelöste Task gestartet (nicht
+/// `.await`et), s. `handle_events`-Aufrufstelle. Deshalb ausschließlich
+/// EIGENE (nicht geliehene) Werte als Parameter — Voraussetzung für eine
+/// `'static`-Task.
+///
+/// Bugfund 2026-09-28, zwei Teile, beide live root-caused statt geraten
+/// (Nutzermeldung "Sender X hat permanent Tally", dann Folgemeldung "die
+/// Knöpfe hängen jetzt"):
+///
+/// **Teil 1 (Freeze):** `handle_events` verarbeitet Ereignisse streng
+/// sequentiell (`while let Some(event) = rx.recv().await`) — ein
+/// hängender Registry-Lookup ODER NATS-`flush()` (`Publisher::
+/// publish_tally` hat selbst kein Timeout) fror dadurch die GESAMTE
+/// Schleife für immer ein: jedes folgende `ProgramChanged`-Ereignis (und
+/// damit `program_l`/Tally, die einzigen nach außen sichtbaren Programm-
+/// /Tally-Zustände) blieb für immer eingefroren, obwohl die Pipeline
+/// selbst (eigener Thread, `pipeline::run()`) weiterhin korrekt intern
+/// umschaltete — per Debug-Instrumentierung bestätigt: nach dem
+/// allerersten echten Tally-Publish beim Start blieb `handle_events` für
+/// den Rest der Sitzung bei JEDEM weiteren Kommando stumm.
+///
+/// **Teil 2 (Lag statt Freeze):** die erste Behebung wickelte diese
+/// Funktion noch MIT `.await` UND einem 3s-Timeout direkt in
+/// `handle_events` ab — behob den Freeze, aber jeder Tally-Publish
+/// schlägt auf diesem Host tatsächlich JEDES Mal fehl (Ursache noch
+/// offen, vermutlich ein hängender NATS-`flush()` — Registry-Lookup ist
+/// live auf <50ms gemessen), lief also JEDES Mal in die vollen 3
+/// Sekunden — bei zwei Aufrufen je Umschaltung (Tally AUS für die alte,
+/// AN für die neue Quelle) macht das bis zu 6 Sekunden BLOCKIERTE
+/// Wartezeit vor dem nächsten verarbeiteten Kommando: aus "eingefroren"
+/// wurde "spürbar träge", Nutzermeldung "die Knöpfe hängen jetzt".
+/// Endgültiger Fix: `tokio::spawn` statt `.await` — `handle_events`
+/// aktualisiert `program_l` weiterhin SOFORT und verarbeitet sofort
+/// danach das nächste Kommando, der (weiterhin per 3s-Timeout
+/// begrenzte) Tally-Versuch läuft komplett unabhängig im Hintergrund.
+/// Schlägt er fehl, bleibt nur die Tally-Anzeige im Flow Editor falsch —
+/// nie mehr die eigentliche Programm-Umschaltung.
+async fn resolve_and_publish_tally(
+    registry_url: String,
+    device_id: String,
+    cache: Arc<Mutex<HashMap<String, String>>>,
+    handle: omp_node_sdk::NodeHandle,
+    on: bool,
+) {
+    let work = async {
+        if let Some(node_id) = resolve_node_id(&registry_url, &device_id, &cache).await {
+            handle.publish_tally(&node_id, on).await;
+        }
+    };
+    if tokio::time::timeout(Duration::from_secs(3), work).await.is_err() {
+        eprintln!("omp-video-mixer-me: tally publish for device {device_id} (on={on}) timed out after 3s, giving up for this event");
+    }
+}
+
 /// Löst `device_id` per IS-04-Query-API zu `node_id` auf (gecacht) — nötig,
 /// weil die Sender-Liste (`discovery_loop`) nur `device_id` liefert, das
 /// Tally-Event aber die Node-Kachel im Graph adressieren muss.
@@ -1278,21 +1333,13 @@ async fn handle_events(
                         })
                     {
                         if let Some(device_id) = device_id_of(prev_sender) {
-                            if let Some(node_id) =
-                                resolve_node_id(&registry_url, &device_id, &node_id_cache).await
-                            {
-                                handle.publish_tally(&node_id, false).await;
-                            }
+                            tokio::spawn(resolve_and_publish_tally(registry_url.clone(), device_id, node_id_cache.clone(), handle.clone(), false));
                         }
                     }
                 }
                 if let Some(cur_sender) = &current {
                     if let Some(device_id) = device_id_of(cur_sender) {
-                        if let Some(node_id) =
-                            resolve_node_id(&registry_url, &device_id, &node_id_cache).await
-                        {
-                            handle.publish_tally(&node_id, true).await;
-                        }
+                        tokio::spawn(resolve_and_publish_tally(registry_url.clone(), device_id, node_id_cache.clone(), handle.clone(), true));
                     }
                 }
             }

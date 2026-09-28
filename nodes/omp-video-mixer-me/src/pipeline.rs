@@ -1096,6 +1096,30 @@ fn switch_isel(isel: &gst::Element, pads: &HashMap<String, gst::Pad>, black: &gs
     }
 }
 
+/// Ob für `level` gerade ein ECHTER Hintergrund-Animations-Thread läuft
+/// (nur `AutoTrans` startet einen) — anders als das gröbere
+/// `fading[level]`-Flag, das AUCH "T-Bar wurde per Hand gezogen und
+/// mitten in der Bewegung losgelassen, kein Thread aktiv" mit abdeckt
+/// (`SetTransitionPosition` setzt `fading[level]=true` beim Start einer
+/// Drag-Session, räumt es aber nur bei `pos>=1.0` wieder auf — ein an
+/// beliebiger Zwischenposition losgelassener T-Bar lässt es bewusst
+/// stehen, echtes Hardware-Verhalten: der Bediener kann eine Blende
+/// mitten parken). Bugfund 2026-09-28 (Nutzermeldung: eine Aufnahme auf
+/// Programm oder BLK schalten hatte gar keine Wirkung mehr, "alte"
+/// Quelle blieb dauerhaft on air) — `Cut`/`Take`/`AutoTrans` prüften
+/// bisher gegen genau dieses `fading[level]`, blockierten sich dadurch
+/// nach jedem nur teilweise gezogenen T-Bar selbst PERMANENT, obwohl der
+/// Code-Kommentar bei `Cut` das Gegenteil dokumentierte ("CUT ersetzt
+/// einen eventuell mitten geparkten manuellen Zug" — das war nie
+/// erreichbar, weil die Sperre davor schon griff). `SetTransitionPosition`
+/// selbst prüfte schon immer korrekt gegen den echten Thread-Zustand
+/// (s. dort) — dieselbe Prüfung jetzt auch hier.
+fn auto_trans_running(fade_threads: &[Arc<Mutex<Option<std::thread::JoinHandle<()>>>>], level: usize) -> bool {
+    fade_threads
+        .get(level)
+        .is_some_and(|h| h.lock().expect("lock poisoned").as_ref().is_some_and(|handle| !handle.is_finished()))
+}
+
 /// Liefert die `sender_id`s aus `inputs`, für die `build_one_input`
 /// keinen Pad in `pads` anlegen konnte (Registry-Discovery vs. tatsächlich
 /// lesbarer MXL-Flow ist ein bekanntes Zeitfenster, s. Moduldoku "Start-
@@ -1963,16 +1987,19 @@ pub fn run(
                 }
             }
             Ok(Command::Cut(level)) => {
-                if fading.get(level).is_none_or(|f| f.load(Ordering::Acquire)) {
-                    // Laufende Transition sofort abschließen statt
-                    // überlagern (einfache Sperre, siehe Moduldoku) —
-                    // ein unbekanntes `level` verhält sich wie "gesperrt"
-                    // (kein Effekt), nicht wie ein Panic.
+                if auto_trans_running(&fade_threads, level) {
+                    // Eine ECHT laufende Animation sofort abschließen
+                    // statt überlagern (einfache Sperre) — ein bloß
+                    // geparkter manueller T-Bar-Zug (kein Thread aktiv)
+                    // blockiert NICHT mehr, s. `auto_trans_running`-Doku.
                     continue;
                 }
-                if let (Some(p), Some(prog), Some(pre)) =
-                    (active.as_mut().and_then(|a| a.levels.get_mut(level)), program.get_mut(level), preset.get(level))
-                {
+                if let (Some(p), Some(prog), Some(pre), Some(fading_l)) = (
+                    active.as_mut().and_then(|a| a.levels.get_mut(level)),
+                    program.get_mut(level),
+                    preset.get(level),
+                    fading.get(level),
+                ) {
                     let previous = prog.clone();
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
@@ -1981,6 +2008,13 @@ pub fn run(
                     // Transition findet dort ein laufendes Bild vor).
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, pre);
                     *prog = applied;
+                    // Ein zuvor bloß geparkter manueller T-Bar-Zug wird
+                    // hier vollständig zurückgesetzt (Bugfund 2026-09-28)
+                    // — sonst hielte die NÄCHSTE T-Bar-Bewegung
+                    // fälschlich für bereits mitten in einer Drag-Session
+                    // zu sein (s. `SetTransitionPosition`s `dragging`-
+                    // Prüfung).
+                    fading_l.store(false, Ordering::Release);
                     let _ = tx.send(Event::ProgramChanged {
                         level,
                         previous,
@@ -1997,18 +2031,21 @@ pub fn run(
                 // Pad-Wechsel, kein Fade), aber gegen `sender_id` statt
                 // `preset` geschaltet — `preset`/`PresetChanged` bleiben
                 // unverändert, exakt die Zusicherung aus `take()`s Doku.
-                if fading.get(level).is_none_or(|f| f.load(Ordering::Acquire)) {
+                if auto_trans_running(&fade_threads, level) {
                     continue;
                 }
-                if let (Some(p), Some(prog)) =
-                    (active.as_mut().and_then(|a| a.levels.get_mut(level)), program.get_mut(level))
-                {
+                if let (Some(p), Some(prog), Some(fading_l)) = (
+                    active.as_mut().and_then(|a| a.levels.get_mut(level)),
+                    program.get_mut(level),
+                    fading.get(level),
+                ) {
                     let previous = prog.clone();
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &sender_id);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &sender_id);
                     *prog = applied;
+                    fading_l.store(false, Ordering::Release);
                     let _ = tx.send(Event::ProgramChanged {
                         level,
                         previous,
@@ -2018,7 +2055,7 @@ pub fn run(
                 }
             }
             Ok(Command::AutoTrans(level)) => {
-                if fading.get(level).is_none_or(|f| f.load(Ordering::Acquire)) {
+                if auto_trans_running(&fade_threads, level) {
                     continue;
                 }
                 if let (Some(p), Some(prog), Some(pre), Some(fading_l), Some(fade_thread_l), Some(rate)) = (
