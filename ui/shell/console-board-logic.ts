@@ -18,6 +18,13 @@ export interface TileLayout {
   y: number;
   width: number;
   height: number;
+  // Optional, rückwärtskompatibel zu bereits gespeicherten Layouts ohne
+  // diese Felder (Kapitel 24, 2026-09-28: echte Fenster-Semantik —
+  // Minimieren/Vor-Reihenfolge). `minimized` bleibt über Sitzungen hinweg
+  // erhalten (ein bewusst weggeklapptes Panel soll es nach Reload bleiben),
+  // `zIndex` ebenso (zuletzt fokussierte Kachel bleibt vorne).
+  minimized?: boolean;
+  zIndex?: number;
 }
 
 // Referenzgröße angelehnt an das bestehende ~280px-Parameter-Panel
@@ -43,6 +50,33 @@ export function computeDefaultLayout(index: number, containerWidth: number): Til
     width: DEFAULT_TILE_WIDTH,
     height: DEFAULT_TILE_HEIGHT,
   };
+}
+
+// "Alle anordnen" (Kapitel 24, 2026-09-28, Nutzerwunsch "auto-arrange/
+// tile"): anders als computeDefaultLayout (feste Komfort-Größe, nur für
+// neu erscheinende Einzelkacheln) packt diese Funktion ALLE Kacheln in
+// ein möglichst quadratisches Raster, das den sichtbaren Board-Bereich
+// ausfüllt — klassisches Tiling-WM-Verhalten statt einer Spalte fester
+// Breite. Wird nur bei explizitem Klick auf "Alle anordnen" aufgerufen,
+// überschreibt bestehende Positionen bewusst.
+export function computeTileGridLayout(count: number, containerWidth: number, containerHeight: number): TileLayout[] {
+  if (count === 0) return [];
+  const columns = Math.max(1, Math.ceil(Math.sqrt(count)));
+  const rows = Math.ceil(count / columns);
+  const width = Math.max(MIN_TILE_WIDTH, Math.floor((containerWidth - TILE_GAP * (columns + 1)) / columns));
+  const height = Math.max(MIN_TILE_HEIGHT, Math.floor((containerHeight - TILE_GAP * (rows + 1)) / rows));
+  const layouts: TileLayout[] = [];
+  for (let i = 0; i < count; i++) {
+    const col = i % columns;
+    const row = Math.floor(i / columns);
+    layouts.push({
+      x: TILE_GAP + col * (width + TILE_GAP),
+      y: TILE_GAP + row * (height + TILE_GAP),
+      width,
+      height,
+    });
+  }
+  return layouts;
 }
 
 // Baut die Layout-Map für den aktuellen Eintrags-Satz: gespeicherte

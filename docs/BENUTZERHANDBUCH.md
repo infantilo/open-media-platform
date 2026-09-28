@@ -678,11 +678,23 @@ Regieplatz sichtbar, nicht nur im Flow Editor (Abschnitt 2.5). Der
 Screenshot oben stammt aus einem Single-Host-Setup und zeigt deshalb
 kein Host-Label.
 
-Jede Kachel besitzt eine Titelleiste zum Verschieben (Ziehen) und einen
-Anfasser unten rechts zum Skalieren. Position und Größe werden pro
-Regieplatz im Browser gespeichert und bleiben über einen Seiten-Reload
-hinweg erhalten — passend zu einem fest installierten Regieplatz-
-Bildschirm, an dem stets derselbe Browser läuft.
+Jede Kachel verhält sich wie ein echtes Fenster: Titelleiste zum
+Verschieben (Ziehen), ein Anfasser unten rechts zum Skalieren, sowie in
+der Titelleiste zwei Knöpfe zum **Minimieren** (klappt die Kachel an Ort
+und Stelle auf die reine Titelleiste zusammen, bleibt weiter verschiebbar
+— erneuter Klick stellt sie wieder her) und **Maximieren** (füllt den
+gesamten sichtbaren Konsolenbereich; Maximieren einer anderen Kachel
+stellt die vorherige automatisch wieder her, es ist stets höchstens eine
+Kachel gleichzeitig maximiert). Ein Klick auf eine Kachel holt sie vor
+alle anderen. Oben rechts sorgt **„⊞ Alle anordnen"** dafür, dass alle
+Kacheln wieder in einem übersichtlichen Raster erscheinen und
+minimierte Kacheln dabei wieder aufklappen. Position, Größe,
+Minimiert-Zustand und Reihenfolge werden pro Regieplatz im Browser
+gespeichert und bleiben über einen Seiten-Reload hinweg erhalten —
+passend zu einem fest installierten Regieplatz-Bildschirm, an dem stets
+derselbe Browser läuft (maximiert startet dagegen nie automatisch wieder
+— das ist eine vorübergehende Fokus-Aktion, keine dauerhafte
+Layout-Entscheidung).
 
 Ohne eine zugewiesene Playout-Automation-Rolle steuert ein Operator rein
 manuell (Cut/Auto, Kreuzschiene, DSK/PIP) statt über eine Playlist —

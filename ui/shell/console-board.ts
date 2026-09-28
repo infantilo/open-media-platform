@@ -18,15 +18,33 @@
 // ui/graph/flow-canvas.ts.
 import { mountUIBundle } from "./ui-bundle.ts";
 import type { ConsoleEntry } from "./console-view.ts";
-import { diffEntries, reconcileLayouts, MIN_TILE_HEIGHT, MIN_TILE_WIDTH, type TileLayout } from "./console-board-logic.ts";
+import {
+  computeTileGridLayout,
+  diffEntries,
+  reconcileLayouts,
+  MIN_TILE_HEIGHT,
+  MIN_TILE_WIDTH,
+  type TileLayout,
+} from "./console-board-logic.ts";
 import { hasPreviewUrl, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
 const FALLBACK_CONTAINER_WIDTH = 1200;
+const FALLBACK_CONTAINER_HEIGHT = 800;
+// Titelleisten-Höhe im eingeklappten Zustand (Kapitel 24) — muss zur
+// tatsächlichen Header-Höhe passen (padding 6px*2 + Zeilenhöhe ~16px).
+const MINIMIZED_HEIGHT = 30;
 
 interface Tile {
   wrapper: HTMLDivElement;
   content: HTMLDivElement;
+  resizeHandle: HTMLDivElement;
+  minimizeBtn: HTMLButtonElement;
+  maximizeBtn: HTMLButtonElement;
   previewHandle?: MountedPreview;
+  // Nur im Speicher (Kapitel 24, 2026-09-28): Maximieren ist eine
+  // vorübergehende Fokus-Aktion, keine dauerhafte Layout-Entscheidung wie
+  // Minimieren — nach Neuladen der Seite startet keine Kachel maximiert.
+  maximized: boolean;
 }
 
 export class ConsoleBoard extends HTMLElement {
@@ -35,6 +53,21 @@ export class ConsoleBoard extends HTMLElement {
   #layouts: Record<string, TileLayout> = {};
   #tiles = new Map<string, Tile>();
   #emptyMessage!: HTMLParagraphElement;
+  // Laufender Zähler für z-index/Vor-Reihenfolge (Kapitel 24) — beim Laden
+  // gespeicherter Layouts auf deren höchsten Wert+1 gesetzt (s.
+  // #loadLayouts), damit eine neu hinzukommende Kachel nicht versehentlich
+  // vor eine kürzlich manuell nach vorne geholte Kachel rutscht.
+  #nextZIndex = 1;
+  // Höchstens eine Kachel gleichzeitig maximiert (klassisches
+  // Fenster-Verhalten) — zweiter Klick auf "maximieren" woanders stellt
+  // zuerst die vorherige Kachel wieder her.
+  #maximizedRoleId: string | null = null;
+  #resizeObserver?: ResizeObserver;
+  // Vermeidet ein localStorage-Schreiben bei jedem Klick INNERHALB der
+  // bereits vordersten Kachel (z. B. Tippen in ein Formularfeld des
+  // Node-UI-Bundles) — #bringToFront feuert auf jedes Pointerdown in der
+  // Kachel, nicht nur beim Ziehen.
+  #topRoleId: string | null = null;
 
   connectedCallback() {
     // Nutzerauftrag 2026-09-02 ("Console nach demselben Muster"): eigene
@@ -51,6 +84,32 @@ export class ConsoleBoard extends HTMLElement {
     this.#emptyMessage.textContent = "Keine Konsole für diesen Nutzer zugewiesen.";
     this.#emptyMessage.style.cssText = "padding:12px;display:none;";
     this.appendChild(this.#emptyMessage);
+
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = "position:sticky;top:0;display:flex;justify-content:flex-end;padding:6px 6px 0 6px;z-index:1000000;pointer-events:none;";
+    const arrangeBtn = document.createElement("button");
+    arrangeBtn.type = "button";
+    arrangeBtn.textContent = "⊞ Alle anordnen";
+    arrangeBtn.title = "Alle Kacheln in einem Raster neu anordnen und ausklappen";
+    arrangeBtn.style.cssText =
+      "pointer-events:auto;padding:4px 10px;border:1px solid var(--omp-border);border-radius:var(--omp-radius);" +
+      "background:var(--omp-surface-raised);color:var(--omp-text);cursor:pointer;font-size:var(--omp-font-size-sm);box-shadow:0 1px 4px rgba(0,0,0,0.4);";
+    arrangeBtn.addEventListener("click", () => this.#retileAll());
+    toolbar.appendChild(arrangeBtn);
+    this.appendChild(toolbar);
+
+    // Maximierte Kachel muss bei Board-Größenänderung (z. B. Browserfenster
+    // resized, Seitenleiste ein-/ausgeklappt) den sichtbaren Bereich weiter
+    // exakt ausfüllen — gleiches ResizeObserver-Muster wie bei der
+    // Alert-Leiste-/User-Widget-Überlappung (Kapitel 21).
+    this.#resizeObserver = new ResizeObserver(() => {
+      if (this.#maximizedRoleId) this.#applyMaximizedSize(this.#maximizedRoleId);
+    });
+    this.#resizeObserver.observe(this);
+  }
+
+  disconnectedCallback() {
+    this.#resizeObserver?.disconnect();
   }
 
   // Muss vor dem ersten setEntries()-Aufruf gesetzt sein — bestimmt den
@@ -66,12 +125,16 @@ export class ConsoleBoard extends HTMLElement {
   }
 
   #loadLayouts(): Record<string, TileLayout> {
+    let layouts: Record<string, TileLayout> = {};
     try {
       const raw = localStorage.getItem(this.#storageKey());
-      return raw ? (JSON.parse(raw) as Record<string, TileLayout>) : {};
+      layouts = raw ? (JSON.parse(raw) as Record<string, TileLayout>) : {};
     } catch {
-      return {};
+      layouts = {};
     }
+    const maxZ = Math.max(0, ...Object.values(layouts).map((l) => l.zIndex ?? 0));
+    this.#nextZIndex = maxZ + 1;
+    return layouts;
   }
 
   #saveLayouts() {
@@ -143,6 +206,27 @@ export class ConsoleBoard extends HTMLElement {
     }
     header.addEventListener("pointerdown", (ev) => this.#onDragStart(ev, entry.nodeRoleId));
 
+    const spacer = document.createElement("div");
+    spacer.style.cssText = "flex:1;min-width:6px;";
+    header.appendChild(spacer);
+
+    const windowButtonStyle =
+      "flex-shrink:0;width:18px;height:18px;line-height:16px;padding:0;border:1px solid var(--omp-border);" +
+      "border-radius:3px;background:var(--omp-surface);color:var(--omp-text-dim);cursor:pointer;font-size:11px;";
+    const minimizeBtn = document.createElement("button");
+    minimizeBtn.type = "button";
+    minimizeBtn.style.cssText = windowButtonStyle;
+    minimizeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    minimizeBtn.addEventListener("click", () => this.#toggleMinimize(entry.nodeRoleId));
+    header.appendChild(minimizeBtn);
+
+    const maximizeBtn = document.createElement("button");
+    maximizeBtn.type = "button";
+    maximizeBtn.style.cssText = windowButtonStyle;
+    maximizeBtn.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+    maximizeBtn.addEventListener("click", () => this.#toggleMaximize(entry.nodeRoleId));
+    header.appendChild(maximizeBtn);
+
     const content = document.createElement("div");
     content.style.cssText =
       "flex:1;min-height:0;overflow:auto;padding:8px;color:var(--omp-text);display:flex;flex-direction:column;gap:8px;";
@@ -156,8 +240,16 @@ export class ConsoleBoard extends HTMLElement {
     resizeHandle.addEventListener("pointerdown", (ev) => this.#onResizeStart(ev, entry.nodeRoleId));
 
     wrapper.append(header, content, resizeHandle);
+    // Klick/Ziehen irgendwo auf der Kachel (auch innerhalb des eigenen
+    // Node-UI-Bundles) holt sie nach vorne — Capture-Phase, damit es
+    // unabhängig davon feuert, ob ein Kind (z. B. Titelleiste, Fenster-
+    // Buttons) das Event später per stopPropagation in der Bubble-Phase
+    // anhält.
+    wrapper.addEventListener("pointerdown", () => this.#bringToFront(entry.nodeRoleId), { capture: true });
     this.appendChild(wrapper);
-    this.#tiles.set(entry.nodeRoleId, { wrapper, content });
+    this.#tiles.set(entry.nodeRoleId, { wrapper, content, resizeHandle, minimizeBtn, maximizeBtn, maximized: false });
+    this.#bringToFront(entry.nodeRoleId);
+    this.#updateWindowButtons(entry.nodeRoleId);
 
     await this.#loadTileContent(content, entry);
   }
@@ -213,7 +305,93 @@ export class ConsoleBoard extends HTMLElement {
     wrapper.style.left = `${layout.x}px`;
     wrapper.style.top = `${layout.y}px`;
     wrapper.style.width = `${layout.width}px`;
-    wrapper.style.height = `${layout.height}px`;
+    wrapper.style.height = layout.minimized ? `${MINIMIZED_HEIGHT}px` : `${layout.height}px`;
+    wrapper.style.zIndex = String(layout.zIndex ?? 0);
+  }
+
+  // Vor-Reihenfolge (Kapitel 24): "vorne" heißt hier "höchster z-index",
+  // kein DOM-Reordering nötig — vermeidet, dass ein Reorder mitten im
+  // Drag/Resize eines anderen Tiles dessen laufenden Pointer-Capture stört.
+  #bringToFront(roleId: string) {
+    if (this.#topRoleId === roleId) return;
+    const layout = this.#layouts[roleId];
+    const tile = this.#tiles.get(roleId);
+    if (!layout || !tile) return;
+    layout.zIndex = this.#nextZIndex++;
+    tile.wrapper.style.zIndex = String(layout.zIndex);
+    this.#topRoleId = roleId;
+    this.#saveLayouts();
+  }
+
+  #updateWindowButtons(roleId: string) {
+    const tile = this.#tiles.get(roleId);
+    const layout = this.#layouts[roleId];
+    if (!tile || !layout) return;
+    tile.minimizeBtn.textContent = layout.minimized ? "▢" : "–";
+    tile.minimizeBtn.title = layout.minimized ? "Wiederherstellen" : "Minimieren";
+    tile.maximizeBtn.textContent = tile.maximized ? "❐" : "▭";
+    tile.maximizeBtn.title = tile.maximized ? "Wiederherstellen" : "Maximieren";
+    tile.maximizeBtn.disabled = !!layout.minimized;
+    tile.maximizeBtn.style.opacity = layout.minimized ? "0.4" : "1";
+    tile.content.style.display = layout.minimized ? "none" : "flex";
+    tile.resizeHandle.style.display = layout.minimized || tile.maximized ? "none" : "block";
+  }
+
+  #toggleMinimize(roleId: string) {
+    const layout = this.#layouts[roleId];
+    const tile = this.#tiles.get(roleId);
+    if (!layout || !tile) return;
+    if (tile.maximized) this.#toggleMaximize(roleId); // erst wiederherstellen, dann einklappen
+    layout.minimized = !layout.minimized;
+    this.#applyLayout(tile.wrapper, layout);
+    this.#updateWindowButtons(roleId);
+    this.#saveLayouts();
+    if (!layout.minimized) this.#bringToFront(roleId);
+  }
+
+  #toggleMaximize(roleId: string) {
+    const layout = this.#layouts[roleId];
+    const tile = this.#tiles.get(roleId);
+    if (!layout || !tile) return;
+    if (tile.maximized) {
+      tile.maximized = false;
+      this.#maximizedRoleId = null;
+      this.#applyLayout(tile.wrapper, layout);
+    } else {
+      if (this.#maximizedRoleId && this.#maximizedRoleId !== roleId) this.#toggleMaximize(this.#maximizedRoleId);
+      tile.maximized = true;
+      this.#maximizedRoleId = roleId;
+      this.#applyMaximizedSize(roleId);
+      this.#bringToFront(roleId);
+    }
+    this.#updateWindowButtons(roleId);
+  }
+
+  #applyMaximizedSize(roleId: string) {
+    const tile = this.#tiles.get(roleId);
+    if (!tile) return;
+    tile.wrapper.style.left = "0px";
+    tile.wrapper.style.top = "0px";
+    tile.wrapper.style.width = `${this.clientWidth || FALLBACK_CONTAINER_WIDTH}px`;
+    tile.wrapper.style.height = `${this.clientHeight || FALLBACK_CONTAINER_HEIGHT}px`;
+  }
+
+  // "Alle anordnen" (Nutzerwunsch, Kapitel 24): setzt jede sichtbare
+  // Kachel auf ein frisches Raster zurück und klappt eingeklappte Kacheln
+  // dabei wieder auf — ein Reset-Kommando, kein inkrementelles Umsortieren.
+  #retileAll() {
+    if (this.#maximizedRoleId) this.#toggleMaximize(this.#maximizedRoleId);
+    const roleIds = this.#entries.map((e) => e.nodeRoleId);
+    const grid = computeTileGridLayout(roleIds.length, this.clientWidth || FALLBACK_CONTAINER_WIDTH, this.clientHeight || FALLBACK_CONTAINER_HEIGHT);
+    roleIds.forEach((roleId, i) => {
+      const layout = this.#layouts[roleId];
+      const tile = this.#tiles.get(roleId);
+      if (!layout || !tile) return;
+      Object.assign(layout, grid[i], { minimized: false, zIndex: layout.zIndex });
+      this.#applyLayout(tile.wrapper, layout);
+      this.#updateWindowButtons(roleId);
+    });
+    this.#saveLayouts();
   }
 
   // Pointer-Capture auf dem Element selbst (Titelleiste bzw. Resize-Griff)
@@ -229,7 +407,7 @@ export class ConsoleBoard extends HTMLElement {
     const header = ev.currentTarget as HTMLElement;
     const tile = this.#tiles.get(roleId);
     const base = this.#layouts[roleId];
-    if (!tile || !base) return;
+    if (!tile || !base || tile.maximized) return;
     header.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
     const startY = ev.clientY;
@@ -258,7 +436,7 @@ export class ConsoleBoard extends HTMLElement {
     const handle = ev.currentTarget as HTMLElement;
     const tile = this.#tiles.get(roleId);
     const base = this.#layouts[roleId];
-    if (!tile || !base) return;
+    if (!tile || !base || tile.maximized) return;
     handle.setPointerCapture(ev.pointerId);
     const startX = ev.clientX;
     const startY = ev.clientY;

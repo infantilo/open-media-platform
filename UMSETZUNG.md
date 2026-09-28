@@ -3994,6 +3994,212 @@ Frame-Introspektion + einen mehrstufigen Workflow).
 
 ---
 
+## 6e. Kapitel 24 — Operator-UI: echte Fenster (Minimieren/Maximieren/Vor-Reihenfolge/Anordnen)
+
+Nutzerauftrag 2026-09-28: die einzelnen Node-UIs im Operator-UI sollen
+"mehr wie Fenster (Scrollbalken, Minimize, Maximize, Resize) aussehen",
+dazu ein Auto-Arrange/Tile.
+
+### 24.1 Bestandsaufnahme (existing)
+
+`ui/shell/console-board.ts` (`<omp-console-board>`, aktiv sobald einem
+Operator in einem Workflow mehr als eine Rolle zugewiesen ist, s.
+Kapitel 12 Teil 5) hatte bereits: frei Ziehen (Titelleiste,
+Pointer-Capture), frei Skalieren (Eck-Griff, gegen `MIN_TILE_WIDTH`/
+`MIN_TILE_HEIGHT` geklemmt), pro-Workflow in `localStorage` persistiertes
+Layout, `overflow:auto` je Kachel-Inhalt (Scrollbalken war also schon
+da), sowie ein einfaches Auto-Flow-Raster (`computeDefaultLayout` in
+`console-board-logic.ts`) — aber NUR für neu erscheinende Einzelkacheln,
+kein Kommando "alle anordnen". Es gab **kein** Minimieren/Maximieren und
+**keine** Vor-Reihenfolge (Kacheln blieben in DOM-Anhänge-Reihenfolge
+gestapelt, ein Klick auf eine verdeckte Kachel holte sie nicht nach
+vorne).
+
+### 24.2 Zielbild + Entscheidungen (2026-09-28)
+
+- **Minimieren:** an Ort und Stelle einklappen (Kachel schrumpft auf
+  reine Titelleiste, Ziehen bleibt möglich, Zustand bleibt über
+  `localStorage` erhalten) — Nutzerentscheidung, explizit gegen eine
+  Ablage/Taskleiste am Rand (mehr Aufwand, unnötig bei der bisherigen
+  Kachelzahl pro Operator-Rolle).
+- **Maximieren:** genau eine Kachel gleichzeitig füllt den sichtbaren
+  Board-Bereich exakt aus (reagiert live auf Board-Größenänderung via
+  `ResizeObserver`, gleiches Muster wie die Alert-Leiste/User-Widget-
+  Überlappung aus Kapitel 21); Maximieren einer zweiten Kachel stellt die
+  erste automatisch wieder her — bewusst NUR im Speicher (kein
+  `localStorage`-Feld), ein Neuladen startet nie maximiert.
+- **Vor-Reihenfolge:** Klick/Ziehen auf eine Kachel (auch innerhalb ihres
+  eigenen Node-UI-Bundles) hebt ihren z-index über alle anderen — über
+  `localStorage` persistiert, damit eine zuletzt fokussierte Kachel nach
+  Neuladen vorne bleibt.
+- **"Alle anordnen":** neue Symbolleiste oben rechts im Board, packt ALLE
+  aktuell zugewiesenen Kacheln in ein möglichst quadratisches Raster, das
+  den sichtbaren Board-Bereich ausfüllt (`computeTileGridLayout`, anders
+  als `computeDefaultLayout`s feste Komfort-Breite) und klappt dabei
+  eingeklappte Kacheln wieder auf — ein Reset-Kommando.
+
+### 24.3 Umsetzung (erledigt 2026-09-28)
+
+`console-board-logic.ts`: `TileLayout` um optionale, rückwärtskompatible
+Felder `minimized`/`zIndex` erweitert; neue reine Funktion
+`computeTileGridLayout(count, containerWidth, containerHeight)` (4 neue
+`deno test`-Fälle).
+
+`console-board.ts`: Titelleiste bekommt zwei Fenster-Buttons
+(Minimieren/Maximieren), Symbolleiste mit "⊞ Alle anordnen"; neue private
+Methoden `#bringToFront`, `#toggleMinimize`, `#toggleMaximize`,
+`#applyMaximizedSize`, `#retileAll`, `#updateWindowButtons`;
+`#onDragStart`/`#onResizeStart` no-op während maximiert (Größe wird sonst
+vom Maximieren überschrieben); `ResizeObserver` auf dem Board-Element
+hält eine maximierte Kachel bei Board-Größenänderung exakt passend.
+
+**Live per echtem CDP-Mausinput verifiziert** (headless Chromium,
+eigenständig gebündeltes `console-board.ts` gegen drei Fake-Konsolen-
+Einträge, `page.mouse.move/down/up` statt synthetischer
+`dispatchEvent(PointerEvent)` — letzteres erzeugt in Headless-Chrome
+keinen für `setPointerCapture` gültigen aktiven Pointer, ergab beim
+ersten Testlauf einen `NotFoundError` und einen falschen "Drag tut
+nichts"-Befund): Minimieren (Höhe → 30px, Inhalt versteckt, Ziehen der
+eingeklappten Titelleiste funktioniert weiter und rendert über
+darunterliegenden Kacheln), Maximieren (füllt exakt den Board-Bereich,
+zweites Maximieren stellt die erste Kachel automatisch wieder her),
+Vor-Reihenfolge (Klick hebt z-index korrekt), echtes Ziehen (+70/+40 px
+exakt übernommen) und Skalieren (+60/+50 px exakt übernommen) per
+Maus-Simulation, "Alle anordnen" (Raster-Neuverteilung, übersteht
+Reload dank `localStorage`).
+
+`deno check ui/**/*.ts`, `deno test ui/` (176 Fälle, davon 4 neu),
+`deno bundle ui/shell/shell.ts` (49 Module) grün.
+
+---
+
+## 6f. Kapitel 25 — FFmpeg-Assistent: Aufgaben-Registry + erweiterte Audio-Matrix (geplant, 2026-09-28)
+
+Nutzerauftrag 2026-09-28: die ffmpeg-UI sei "noch zu hardcoded" — Aufgaben
+sollen erweiterbar sein und mehr Fälle für Radio/TV/Online abdecken statt
+"altmodisch" zu wirken; als Referenz für Audio-Shuffling/-Mixing diente
+ein Bild eines älteren, eigenständigen ffmpeg-Konverters des Nutzers
+(Kreuzschienen-Matrix mit Downmixer-Dialog je Zelle), für die
+Parameter-Suche ein Bild mit Live-Autocomplete (Kategorie-Badges +
+Hilfetext inline beim Tippen). **Wie in Kapitel 22/23 gilt: die Bilder
+sind der Maßstab für nötige Ausdruckskraft, keine 1:1 nachzubauende
+Sonderfunktion** (s. `feedback_examples_are_benchmarks_not_features` im
+Projekt-Gedächtnis).
+
+### 25.1 Bestandsaufnahme (existing, s. Kapitel 22/23)
+
+- **Aufgabenliste hardcoded:** `ScriptIntent`-Typ + `SCRIPT_INTENTS`-Array
+  (`ui/graph/process-step-config-logic.ts:427–440`) — genau 6 feste
+  Einträge (`probe`, `thumbnail`, `convert`, `extract_audio`, `concat`,
+  `overlay`). Jede neue Aufgabe braucht: Erweiterung der `id`-Union,
+  einen neuen Array-Eintrag, eine neue `build<X>Args()`-Funktion, einen
+  neuen Unterformular-Zweig in `process-step-config.ts` — drei
+  Code-Stellen statt einer Datenquelle. Historische Warnung: eine 5.
+  Aufgabe ("Mehrspur-Container bauen") wurde in Kapitel 23 bewusst
+  wieder entfernt, weil sie ein Einzelfall-Sonderpfad war — das
+  Baukasten-Prinzip (`ARCHITECTURE.md` §26.4) verlangt generische
+  Bausteine statt beliebig vieler Spezialfälle. Eine Registry darf dieses
+  Prinzip nicht aushebeln: sie muss weiterhin auf denselben generischen
+  Bausteinen (Audio-Matrix, Filter-Graph, Ausgabespur-Mapping) aufbauen,
+  nicht auf neuen Sonderpfaden je Vorlage.
+- **Audio-Matrix bereits mächtig:** `ui/graph/audio-matrix.ts` +
+  `audio-matrix-logic.ts` — echte N-Quellen×M-Ausgänge-Kreuzschiene mit
+  Gain (%) + Delay (ms) je Zelle, kompiliert zu `pan`→`volume`→`adelay`→
+  `amix`. Kein starres Raster wie im Referenzbild, sondern bereits
+  dynamisch nach Kanalzahl/Quellenzahl/Ausgabespur-Anzahl.
+- **Parameter-Suche bereits breit:** `process-step-config.ts` (Explorer
+  ab ~Zeile 1540), durchsucht kuratierte globale Flags + vollständigen
+  `-h full`-Import + einen Hintergrund-Index über JEDE AVOption jedes
+  Encoders/Decoders/Muxers/Demuxers/Filters (~1150+ Einträge), zeigt
+  Kategorie-Label (`kindLabel`) + zusammengesetzten Hilfetext
+  (Beschreibung/Bereich/Standard/Auswahlwerte). Matching ist reines
+  case-insensitives Substring (`.includes(q)`), keine Tippfehler-Toleranz.
+
+### 25.2 Zielbild + Entscheidungen (2026-09-28, Nutzerauswahl)
+
+1. **Aufgaben-Architektur — "Registry + mehr Vorlagen"** (Nutzerauswahl):
+   `SCRIPT_INTENTS` wird datengetrieben. Eine Aufgaben-Vorlage
+   beschreibt sich selbst (Formularfelder + Regel, wie aus den
+   ausgefüllten Werten ffmpeg-Argumente werden) statt in eine
+   fest verdrahtete `id`-Union + Switch-Verzweigung gegossen zu sein.
+   Neue Vorlage = neuer Datensatz, keine Änderung an der
+   Wizard-Rendering-Logik. **Wichtig, konsistent mit Kapitel 23:** die
+   Vorlagen selbst bleiben dünn und bauen auf den bestehenden generischen
+   Bausteinen auf (Audio-Matrix, Filter-Graph, Ausgabespur-Mapping,
+   Explorer-Suche) — die Registry ersetzt NICHT diese Bausteine, sie
+   macht nur das Vorlagen-Menü selbst erweiterbar. Nach dem
+   Registry-Umbau: breitere Vorlagen-Sammlung für Radio/TV/Online
+   ergänzen (z. B. Lautheit/EBU-R128-Normalisierung, Streaming-
+   Ausgabeleiter mit mehreren Bitraten, Untertitel-Einbrennen,
+   Stream-Copy-Passthrough) — jede davon nur noch ein Registry-Eintrag.
+2. **Audio-Matrix — "visuell + funktional erweitern"** (Nutzerauswahl):
+   Beschriftetes Kreuzschienen-Raster mit Kanal-Layout-Labels (mono/
+   stereo/5.1 statt reiner Kanalindizes), Klick auf eine Zelle öffnet
+   einen Gain/Delay-Dialog (wie der "Downmixer" im Referenzbild) statt
+   Dauer-Anzeige aller Zellwerte im Raster; zusätzlich funktional:
+   Kanal-Layout-Presets (z. B. 5.1→Stereo-Downmix), benannte
+   Zusatzquellen als eigener "Auxinput"-Abschnitt.
+3. **Minimieren-Analogie übernommen aus Kapitel 24:** keine gesonderte
+   Entscheidung nötig, betrifft nur Operator-UI.
+
+**Noch zu klären vor Schritt 1 (§0 Punkt 8):** exaktes Datenformat der
+Registry (TS-Objekt-Array im Frontend-Bundle vs. vom Server ausgelieferte
+Vorlagen unter `/api/v1/tools/ffmpeg/templates`) — Serverseitige Auslage-
+rung würde Vorlagen ohne neuen Deploy änderbar machen, ist aber ein
+größerer Eingriff (neuer Storage/Admin-UI für Vorlagenpflege) als eine
+reine Frontend-Registry. **Vorschlag:** zunächst Frontend-Registry (wie
+heute, nur datengetrieben statt Code-verzweigt) — deckt "neue Aufgabe
+ohne Wizard-Logik-Änderung" bereits ab, serverseitige Vorlagenpflege nur
+bei explizitem Bedarf nachziehen (YAGNI, gleiches Prinzip wie das bewusst
+offen gelassene pro-Clip-Beschnitt-Feature oben).
+
+### 25.3 Phasenplan (noch nicht begonnen)
+
+#### R1 — Registry-Fundament (Frontend)
+
+Datengetriebene `ScriptTemplate`-Beschreibung (Formularfeld-Liste +
+Argument-Bauregel) ersetzt `ScriptIntent`/`SCRIPT_INTENTS` UND die
+6 `build<X>Args()`-Funktionen durch einen einzigen generischen
+Interpreter; bestehende 6 Aufgaben werden als erste Registry-Einträge
+migriert (Verhalten muss unverändert bleiben — Regressionstest gegen
+bestehende `process-step-config-logic_test.ts`-Fälle).
+
+**Verifikation:** alle bestehenden Tests weiterhin grün, `deno bundle`
+grün, Live-CDP-Vergleich (Formular + erzeugte Argumente) für mindestens
+je 1 Fall aus jeder der 6 migrierten Aufgaben identisch zum Vorher-Stand.
+
+#### R2 — Audio-Matrix: Kanal-Layout-Labels + Downmixer-Dialog je Zelle
+
+Kanal-Layout-Erkennung (aus ffprobe-Introspektion der Quelldatei, falls
+vorhanden) für Labels (mono/stereo/5.1 statt "Kanal 0/1/2"); Klick auf
+Zelle öffnet Gain/Delay-Dialog statt Inline-Dauerdarstellung; Presets für
+gängige Downmixe.
+
+**Verifikation:** Live-CDP, Downmixer-Dialog öffnet/schließt korrekt,
+erzeugter `filterComplex` unverändert zu 25.1-Verhalten für denselben
+Matrix-Zustand (reine UI-Umstellung, keine Kompilier-Logik-Änderung).
+
+#### R3 — "Auxinput"-Abschnitt für benannte Zusatzquellen
+
+Zusätzliche Quelldateien in der Matrix bekommen einen eigenen,
+einklappbaren Abschnitt mit Namensfeld (statt nur "+ weitere Quelle").
+
+#### R4 — Neue Radio/TV/Online-Vorlagen als Registry-Einträge
+
+Je nach Bedarf (Nutzer entscheidet Reihenfolge/Auswahl vor Umsetzung,
+§0 Punkt 8): Lautheit/EBU-R128-Normalisierung, Streaming-Ausgabeleiter,
+Untertitel-Einbrennen, Stream-Copy-Passthrough — jede Vorlage einzeln
+abnahmefähig, kein Big-Bang.
+
+#### R5 — Parameter-Suche: Tippfehler-Toleranz + visuelle Auffrischung
+
+Fuzzy-Matching (z. B. einfache Levenshtein-Distanz oder Teilsequenz-Score
+statt reinem `.includes()`) zusätzlich zum bestehenden Substring-Treffer;
+visuelle Kategorie-Badges statt Klartext-Suffix, Tastatur-Navigation in
+der Trefferliste.
+
+---
+
 ## 7. Status-Checkliste (von Claude nach jedem Schritt pflegen)
 
 | Schritt | Status | Commit | Datum |
@@ -4253,3 +4459,4 @@ Frame-Introspektion + einen mehrstufigen Workflow).
 | Kapitel 23 Schritt 3-5: grafische Audio-Matrix, zeitgesteuerte Overlays, Clips aneinanderhängen, Pro-Modus-Suche+Validierung | erledigt | Nutzerauftrag "sehr viel weiter und professioneller werden" — drei Schritte in einer Sitzung, da unabhängig voneinander. Audio-Matrix (`audio-matrix-logic.ts`/`audio-matrix.ts`, neu): Crosspoint-Tabelle Quellkanal×Ausgangsspur, kompiliert zu `pan`→`volume`→`adelay`→`amix`/`anull`, alternative Bedienoberfläche zum Filter-Graph-Editor für dieselben `ConvertInput.filterComplex`/`filterOutputLabels`-Felder. Overlay (`buildOverlayArgs`, neuer Intent): Text (`drawtext`)/Bild (`overlay`)-Ereignisse mit `enable='between(t,a,b)'`, escaptes drawtext-Colon/Quote, visuelle (nicht ziehbare) Zeitleiste. Concat (`buildConcatArgs`, neuer Intent "Clips aneinanderhängen"): concat-FILTER (nicht Demuxer) mit `trim`/`atrim`+`setpts`/`asetpts` je Clip, ↑/↓-umsortierbare Liste. Pro-Modus: statt Backend-`-h full`-Parsing eine von Hand gepflegte Tabelle globaler Flags (`GLOBAL_FFMPEG_FLAGS`, ~34 Einträge) PLUS ein progressiv im Hintergrund geladener, modul-weiter Index ALLER AVOptions aller Encoder/Decoder/Muxer/Demuxer/Filter (`ensureFullOptionIndex`, live ca. 1150+ Parameter, durchsuchbar bereits während des Ladens) PLUS Inline-Validierung/Autovervollständigung je Argumentzeile (`validateArgValue`, Nachbarschafts-Heuristik). Live per CDP gegen den echten Orchestrator verifiziert: Audio-Matrix erzeugte den exakt erwarteten Filterausdruck inkl. Gain/Delay/Mix; Overlay-Text korrekt escaped mit sichtbarem Zeitleisten-Balken; Concat mit 2 Clips erzeugte die erwartete Filterkette; Parameter-Suche "crf" fand `-crf` in 7 verschiedenen Encodern ohne vorheriges manuelles Aufklappen, Klick fügte es ein, Wert 999 (außerhalb -1..63) wurde live als Fehler markiert, Korrektur auf 30 klärte den Fehler, `-loglevel` mit ungültigem Wert zeigte die gültige Werteliste, Autovervollständigung schlug "-loglevel" beim Tippen von "-lo" vor. `deno check ui/**/*.ts`, `deno test ui/graph/` (132 Fälle), `deno bundle` (49 Module) grün. Bewusst NICHT Teil dieser Sitzung: Kapitel 23 Schritt 2 (generisches Ausgabespur-Mapping als eigentlicher Multitrack-Ersatz) — offener nächster Schritt, s. UMSETZUNG.md 23.3. Ebenfalls bewusst ausgelassen: automatische ffprobe-Kanalerkennung für die Audio-Matrix, `scheduler-view.ts`-Zieh-Mechanik für die Overlay-Zeitleiste, keyframe-genaues verlustfreies Concat, echtes `-h full`-Backend-Parsing. | 2026-09-26 |
 | Kapitel 23 Schritt 2: generisches Ausgabespur-Mapping — Kapitel 23 (Schritt 1-5) damit abgeschlossen | erledigt | Nutzerauftrag "fahre fort" — der tatsächliche, allgemeine Ersatz für die in Schritt 1 ausgebaute "Mehrspur-Container bauen"-Sonderfunktion. Neuer `OutputTrack`-Typ + `buildConvertArgs`-Verzweigung (`process-step-config-logic.ts`): wiederholbare "Ausgabespur"-Gruppen im Konvertieren-Formular, je Spur Quelle (roher Stream-Spezifizierer wie `0:a:0` ODER Filter-Graph-/Audio-Matrix-Label wie `[mxout0]`, mit Schnelleinfüge-Knöpfen für aktuell verfügbare Labels), Medientyp (Video/Audio/Untertitel), Codec inkl. AVOptions (wiederverwendet `ffmpegOptionsList`) und generische Schlüssel/Wert-Metadaten (wiederverwendet `keyValueEditor`, nicht auf title/language beschränkt). Sobald ≥1 Ausgabespur konfiguriert ist, übernimmt sie die Stream-Zuordnung vollständig (Einzelfelder Video-/Audio-Codec werden ausgeblendet, automatisches `-map` aus `filterOutputLabels` entfällt — vermeidet die ffmpeg-Falle "ein `-map` schaltet auf rein explizite Zuordnung um" in widersprüchlicher Mischform). Medientyp-Zähler laufen unabhängig je Typ (`a:0`/`a:1`/`v:0`), AVOptions bekommen denselben Spezifizierer-Suffix wie der Codec. 4 neue Testfälle. Live per CDP gegen den echten Orchestrator verifiziert: zwei Spuren angelegt ließ Einzelfelder sofort verschwinden; Quellen+generisches `title=Deutsch`-Metadatum erzeugten exakt die erwartete Vorschau; Audio-Matrix-Anwendung ließ einen Schnelleinfüge-Knopf "[mxout0] einfügen" live erscheinen, ein Klick füllte die Quelle korrekt, genau EIN `-map [mxout0]` (keine Dopplung mit dem automatischen Filter-Mapping). `deno check ui/**/*.ts`, `deno test ui/graph/` (136 Fälle), `deno bundle` (49 Module) grün. | 2026-09-26 |
 | Kapitel 23 Nachtrag: echtes `-h full`-Parsing + verlustfreies Aneinanderhängen | erledigt | Nutzerauftrag, zwei zuvor bewusst offen gelassene Ausblicke nachzuziehen. `-h full`: neues `orchestrator/internal/ffmpegtools::GlobalOption`/`ParseGlobalOptions`/`Store.GlobalOptions()` — parst NUR die globalen/dateiübergreifenden Abschnitte ("Global options"…"Subtitle options", 165 Flags), bricht beim ersten "AVOptions"-Header ab (der riesige, redundante Per-Codec-Teil wird nie angefasst, `Detail()` deckt den schon ab). Neue Route `GET /api/v1/tools/ffmpeg/global-options`. Go-Tests mit echtem `-h full`-Ausschnitt + Integrationstest gegen den echten Host-ffmpeg (165 Flags, `-y` wertlos, `-loglevel` wertbehaftet, kein Leck aus dem AVOptions-Bereich). Frontend: `FFGlobalOptionEntry`/`globalOptionEntryToFlagDef`, `validateArgValue` bekommt optionalen `globalOverrides`-Parameter — kuratierte Tabelle gewinnt bei Namensüberschneidung (echte Typisierung wie `-loglevel`s 9 Werte), der vollständige Import ist Fallback (z. B. `-vaapi_device`, nie kuratiert). Parameter-Explorer/Autovervollständigung durchsuchen beide Quellen. Verlustfreies Aneinanderhängen: neues `ConcatInput.lossless` nutzt ffmpegs concat-PROTOKOLL (`-i "concat:a\|b\|c" -c copy`) statt der Filterkette — kein Neukodieren. Bewusste, dokumentierte Grenzen (keine Bugs): nur für bestimmte Container zuverlässig (v. a. MPEG-TS/-PS, nicht generell MP4/MOV/MKV, live an echten .ts-Dateien bestätigt), kein Beschnitt möglich (Protokoll kennt keinen Trim — pro-Clip-Trim+Verlustfreiheit gleichzeitig bräuchte ffprobe-Frame-Introspektion + einen mehrstufigen Workflow, bewusst nicht gebaut, auch wegen der eigenen Sicherheitsabwägung einer neuen "ffprobe auf Nutzerpfad"-Route). Häkchen "Verlustfrei" blendet Beschnitt-/Codec-Felder aus. Live per CDP verifiziert: `/global-options` liefert 165 Einträge, Suche nach "vaapi_device" findet es (nie kuratiert), Einfügen+Wertsetzung funktioniert; Concat-Häkchen blendet Felder sofort aus, Vorschau zeigt exakt `-y -i concat:a.ts\|b.ts -c copy`. `deno check ui/**/*.ts`, `deno test ui/graph/` (140 Fälle), `deno bundle` (49 Module), `go build/vet/test ./...` (orchestrator), `make check` (voller Deno+Rust-Baum) grün. | 2026-09-26 |
+| Kapitel 24: Operator-UI — Minimieren/Maximieren/Vor-Reihenfolge/"Alle anordnen" für Konsolen-Kacheln | erledigt | Nutzerauftrag 2026-09-28: Node-UIs im Operator-UI sollen "mehr wie Fenster" aussehen. `console-board-logic.ts`: `TileLayout` um optionale `minimized`/`zIndex`-Felder erweitert (rückwärtskompatibel), neue reine Funktion `computeTileGridLayout` (quadratisches Raster für "Alle anordnen", 4 neue Tests). `console-board.ts`: zwei Fenster-Buttons je Titelleiste (Minimieren klappt an Ort und Stelle ein, bleibt weiter ziehbar; Maximieren füllt den Board-Bereich exakt, per `ResizeObserver` live nachgeführt, max. eine Kachel gleichzeitig), Klick/Ziehen auf eine Kachel hebt sie per z-index nach vorne, neue Symbolleiste "⊞ Alle anordnen" packt alle Kacheln in ein frisches Raster und klappt Minimiertes wieder auf. Live per **echtem CDP-Mausinput** verifiziert (headless Chromium, eigenständig gebündeltes Modul gegen drei Fake-Konsolen-Einträge) — dabei ein Testmethodik-Stolperstein selbst gefunden+korrigiert: synthetisches `dispatchEvent(PointerEvent)` erzeugt in Headless-Chrome keinen für `setPointerCapture` gültigen aktiven Pointer (`NotFoundError`), reales `page.mouse.move/down/up` (echte CDP-Input-Events) schon — danach alle Fälle bestätigt: Minimieren/Wiederherstellen, Maximieren mit exaktem Board-Fit + Auto-Wiederherstellung der vorherigen Kachel, Vor-Reihenfolge, echtes Ziehen (+70/+40px exakt), echtes Skalieren (+60/+50px exakt), minimierte Kachel bleibt ziehbar und rendert korrekt über anderen Kacheln, "Alle anordnen" übersteht Reload dank `localStorage`. `deno check ui/**/*.ts`, `deno test ui/` (176 Fälle, 4 neu), `deno bundle ui/shell/shell.ts` (49 Module) grün. Details UMSETZUNG.md Kapitel 24. Kapitel 25 (FFmpeg-Assistent: Aufgaben-Registry + erweiterte Audio-Matrix) geplant, noch nicht begonnen — s. UMSETZUNG.md 6f. | 2026-09-28 |
