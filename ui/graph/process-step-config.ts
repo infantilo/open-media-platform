@@ -54,6 +54,7 @@ import {
   parseRule,
   RULE_OPERATORS,
   ruleToExpression,
+  searchEntries,
   SCRIPT_INTENTS,
   SCRIPT_TEMPLATES,
   splitSeconds,
@@ -196,6 +197,17 @@ function field(label: string, control: HTMLElement, help?: string, required = fa
   wrap.append(l, control);
   if (help) wrap.appendChild(h("span", HELP_CSS, help));
   return wrap;
+}
+
+// Kleine Pill-Badge (Kapitel 25 R5) — ersetzt die bisherigen
+// Klartext-Suffixe wie "(Encoder)" im Parameter-Explorer durch das
+// bereits bestehende `.omp-badge`-System (design-tokens.css), statt
+// erneut Ad-hoc-Inline-Farben zu erfinden. `variant: "cue"` markiert
+// einen reinen Tippfehler-Treffer (kein exakter Substring) sichtbar.
+function categoryBadge(text: string, variant?: "cue"): HTMLElement {
+  const b = h("span", "margin-left:6px;", text);
+  b.className = variant === "cue" ? "omp-badge omp-badge-cue" : "omp-badge";
+  return b;
 }
 
 function textInput(value = "", placeholder = "", name = ""): HTMLInputElement {
@@ -1651,9 +1663,16 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
   };
   const openAutocomplete = (forInput: HTMLInputElement) => {
     closeAutocomplete();
-    const q = forInput.value.trim().toLowerCase();
+    const q = forInput.value.trim();
     if (!q.startsWith("-") || q.length < 1) return;
-    const matches = flagCandidates().filter((c) => c.name.toLowerCase().includes(q)).slice(0, 12);
+    // Tippfehler-Toleranz (Kapitel 25 R5) auch hier: ein vertipptes Flag
+    // (z. B. "-crg" statt "-crf") bleibt in der Vorschlagsliste, nicht
+    // nur im großen Parameter-Explorer.
+    const matches = searchEntries(
+      q,
+      flagCandidates().map((c) => ({ name: c.name, description: c.description, value: c })),
+      12,
+    );
     if (matches.length === 0) return;
     const rect = forInput.getBoundingClientRect();
     const box = h(
@@ -1662,9 +1681,11 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         "max-height:220px;overflow:auto;background:var(--omp-surface-raised);border:1px solid var(--omp-border);" +
         "border-radius:4px;z-index:3000;box-shadow:0 4px 12px rgba(0,0,0,0.35);",
     );
-    for (const c of matches) {
+    for (const m of matches) {
+      const c = m.entry.value;
       const row = h("div", "padding:4px 6px;cursor:pointer;font-size:var(--omp-font-size-xs);border-bottom:1px solid var(--omp-border);");
-      row.innerHTML = `<div style="font-family:ui-monospace,monospace;font-weight:600;">${c.name}</div>` + (c.description ? `<div style="color:var(--omp-text-dim);">${c.description}</div>` : "");
+      row.innerHTML =
+        `<div style="font-family:ui-monospace,monospace;font-weight:600;">${m.fuzzy ? "≈ " : ""}${c.name}</div>` + (c.description ? `<div style="color:var(--omp-text-dim);">${c.description}</div>` : "");
       row.addEventListener("mousedown", (ev) => {
         ev.preventDefault();
         forInput.value = c.name;
@@ -1763,49 +1784,103 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       : "Parameter-Index lädt …";
     explorerIndexStatus.textContent = `${globalPart} · ${paramPart} durchsuchbar.`;
   };
+  // Tastatur-Navigation über alle Top-Level-Treffer hinweg (Kapitel 25
+  // R5) — bewusst NICHT auf die dynamisch nachgeladenen Unteroptionen
+  // eines aufgeklappten Katalog-Eintrags ausgeweitet (die erscheinen erst
+  // nach einem eigenen Klick/Enter auf den Katalog-Kopf, bleiben also
+  // weiterhin nur per Maus erreichbar) — hält die erste Umsetzung einfach
+  // und kollidiert nicht mit normaler Text-Cursor-Navigation im Suchfeld.
+  let navigableRows: { el: HTMLElement; activate: () => void }[] = [];
+  let activeIndex = -1;
+  const ACTIVE_ROW_BG = "color-mix(in srgb, var(--omp-info) 18%, transparent)";
+  const setActiveIndex = (i: number) => {
+    if (navigableRows[activeIndex]) navigableRows[activeIndex].el.style.background = "";
+    activeIndex = navigableRows.length === 0 ? -1 : Math.max(0, Math.min(i, navigableRows.length - 1));
+    const row = navigableRows[activeIndex];
+    if (row) {
+      row.el.style.background = ACTIVE_ROW_BG;
+      row.el.scrollIntoView({ block: "nearest" });
+    }
+  };
+  const addNavigableRow = (el: HTMLElement, activate: () => void) => {
+    const index = navigableRows.length;
+    el.addEventListener("mouseenter", () => setActiveIndex(index));
+    navigableRows.push({ el, activate });
+  };
+
   const runExplorerSearch = async () => {
-    const q = explorerSearch.value.trim().toLowerCase();
+    const q = explorerSearch.value.trim();
     explorerResults.replaceChildren();
+    navigableRows = [];
+    activeIndex = -1;
     if (!q) return;
-    const globalMatches = GLOBAL_FFMPEG_FLAGS.filter((f) => f.name.toLowerCase().includes(q) || f.description.toLowerCase().includes(q));
-    for (const f of globalMatches) {
+
+    const globalEntries = GLOBAL_FFMPEG_FLAGS.map((f) => ({ name: f.name, description: f.description, value: f }));
+    for (const m of searchEntries(q, globalEntries)) {
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
-      row.innerHTML = `<b>${f.name}</b> <span style="color:var(--omp-text-dim);">(globales Flag)</span><div style="${HELP_CSS}">${f.description}</div>`;
-      row.addEventListener("click", () => insertGlobalFlag(f.name));
+      const head = h("div", "");
+      head.append(h("b", "", m.entry.value.name), categoryBadge("globales Flag"));
+      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      row.append(head, h("div", HELP_CSS, m.entry.value.description));
+      const activate = () => insertGlobalFlag(m.entry.value.name);
+      row.addEventListener("click", activate);
+      addNavigableRow(row, activate);
       explorerResults.appendChild(row);
     }
+
     // Der vollständige `-h full`-Import (Kapitel 23, Schritt 5) — nur
     // Treffer, die die kuratierte Tabelle oben nicht schon zeigte.
     const curatedNames = new Set(GLOBAL_FFMPEG_FLAGS.map((f) => f.name));
-    const fetchedMatches = fetchedGlobalFlagDefs.filter((f) => !curatedNames.has(f.name) && (f.name.toLowerCase().includes(q) || f.description.toLowerCase().includes(q)));
-    for (const f of fetchedMatches) {
+    const fetchedEntries = fetchedGlobalFlagDefs.filter((f) => !curatedNames.has(f.name)).map((f) => ({ name: f.name, description: f.description, value: f }));
+    for (const m of searchEntries(q, fetchedEntries)) {
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
-      row.innerHTML = `<b>${f.name}</b> <span style="color:var(--omp-text-dim);">(globales Flag, -h full)</span><div style="${HELP_CSS}">${f.description}</div>`;
-      row.addEventListener("click", () => insertGlobalFlag(f.name));
+      const head = h("div", "");
+      head.append(h("b", "", m.entry.value.name), categoryBadge("globales Flag, -h full"));
+      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      row.append(head, h("div", HELP_CSS, m.entry.value.description));
+      const activate = () => insertGlobalFlag(m.entry.value.name);
+      row.addEventListener("click", activate);
+      addNavigableRow(row, activate);
       explorerResults.appendChild(row);
     }
+
     // Direkter Parameter-Treffer (z. B. "-crf" findet libx264, ohne dass
     // der Encoder vorher von Hand aufgeklappt wurde) — der eigentliche
-    // Kern von "jeder Parameter muss suchbar sein".
+    // Kern von "jeder Parameter muss suchbar sein". Auf 30 EINDEUTIGE
+    // Treffer begrenzt (nicht 30 rohe, dann dedupliziert — sonst könnten
+    // Duplikate die sichtbare Trefferzahl unter 30 drücken).
+    const paramEntries = fullOptionIndex.map((p) => ({ name: p.flag, description: p.description, value: p }));
     const seen = new Set<string>();
-    const paramMatches = fullOptionIndex.filter((p) => p.flag.toLowerCase().includes(q) || p.description.toLowerCase().includes(q)).slice(0, 30);
-    for (const p of paramMatches) {
-      const key = `${p.flag}@${p.source}`;
+    let paramShown = 0;
+    for (const m of searchEntries(q, paramEntries)) {
+      if (paramShown >= 30) break;
+      const key = `${m.entry.value.flag}@${m.entry.value.source}`;
       if (seen.has(key)) continue;
       seen.add(key);
+      paramShown++;
       const row = h("div", "padding:4px;cursor:pointer;border-bottom:1px solid var(--omp-border);");
-      row.innerHTML = `<span style="font-family:ui-monospace,monospace;font-weight:600;">${p.flag}</span> <span style="color:var(--omp-text-dim);">(${p.source})</span><div style="${HELP_CSS}">${optionHelpText(p.opt)}</div>`;
-      row.addEventListener("click", () => insertOption(p.flag, p.opt));
+      const head = h("div", "");
+      head.append(h("span", "font-family:ui-monospace,monospace;font-weight:600;", m.entry.value.flag), categoryBadge(m.entry.value.source));
+      if (m.fuzzy) head.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      row.append(head, h("div", HELP_CSS, optionHelpText(m.entry.value.opt)));
+      const activate = () => insertOption(m.entry.value.flag, m.entry.value.opt);
+      row.addEventListener("click", activate);
+      addNavigableRow(row, activate);
       explorerResults.appendChild(row);
     }
+
     const catalog = await loadExplorerCatalog();
-    const catMatches = catalog.filter((c) => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q)).slice(0, 25);
-    for (const c of catMatches) {
+    const catEntries = catalog.map((c) => ({ name: c.name, description: c.description, value: c }));
+    for (const m of searchEntries(q, catEntries, 25)) {
+      const c = m.entry.value;
       const row = h("div", "padding:4px;border-bottom:1px solid var(--omp-border);");
-      const head = h("div", "cursor:pointer;", "");
-      head.innerHTML = `<b>${c.name}</b> <span style="color:var(--omp-text-dim);">(${kindLabel[c.kind]})</span><div style="${HELP_CSS}">${c.description}</div>`;
+      const head = h("div", "cursor:pointer;");
+      const headText = h("div", "");
+      headText.append(h("b", "", c.name), categoryBadge(kindLabel[c.kind]));
+      if (m.fuzzy) headText.appendChild(categoryBadge("≈ Tippfehler?", "cue"));
+      head.append(headText, h("div", HELP_CSS, c.description));
       const sub = h("div", "margin-left:10px;display:none;");
-      head.addEventListener("click", async () => {
+      const toggle = async () => {
         if (sub.style.display === "none") {
           sub.style.display = "block";
           if (!sub.dataset.loaded) {
@@ -1826,12 +1901,31 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
         } else {
           sub.style.display = "none";
         }
-      });
+      };
+      head.addEventListener("click", () => void toggle());
+      addNavigableRow(head, () => void toggle());
       row.append(head, sub);
       explorerResults.appendChild(row);
     }
   };
   explorerSearch.addEventListener("input", () => void runExplorerSearch());
+  explorerSearch.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      setActiveIndex(activeIndex + 1);
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      setActiveIndex(activeIndex - 1);
+    } else if (ev.key === "Enter") {
+      if (activeIndex >= 0 && navigableRows[activeIndex]) {
+        ev.preventDefault();
+        navigableRows[activeIndex].activate();
+      }
+    } else if (ev.key === "Escape") {
+      explorerSearch.value = "";
+      void runExplorerSearch();
+    }
+  });
   explorerToggle.addEventListener("click", () => {
     const opening = explorerPanel.style.display === "none";
     explorerPanel.style.display = opening ? "block" : "none";

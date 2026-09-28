@@ -469,10 +469,19 @@ ffmpeg-Flags (aus `ffmpeg -h full`) plus alle AVOptions aller
 installierten Encoder/Decoder/Muxer/Demuxer/Filter (typischerweise über
 1.000 Parameter insgesamt) — eine Suche nach z. B. „crf“ findet direkt
 `-crf` in jedem Encoder, der es kennt, ganz ohne diesen Encoder vorher
-von Hand aufzuklappen. Klick auf einen Treffer fügt ihn als neues
-Argument ein.
+von Hand aufzuklappen. Jeder Treffer zeigt seine Kategorie als
+Beschriftung (z. B. „libx264 (Encoder)“, „Filter“, „globales Flag“).
+Ein Tippfehler im gesuchten Namen (z. B. „sacle“ statt „scale“, ein
+Zahlendreher wie „libx265“ statt „libx264“) findet den gemeinten
+Parameter trotzdem — solche Treffer sind zusätzlich mit **„≈
+Tippfehler?“** markiert, damit klar bleibt, dass der eingegebene Text
+nicht wörtlich vorkommt. Die Trefferliste lässt sich komplett über die
+Tastatur bedienen: **Pfeiltasten** wechseln den markierten Treffer,
+**Eingabetaste** fügt ihn ein (bei einem Flag mit Wert direkt gefolgt
+von einer leeren, fokussierten Wertzeile), **Esc** leert die Suche.
+Klick auf einen Treffer fügt ihn ebenso als neues Argument ein.
 
-![Experten-Modus: Parameter-Explorer findet "-crf" in sechs verschiedenen Encodern, mit echten Wertebereichen](screenshots/parameter-explorer.png)
+![Experten-Modus: Parameter-Explorer findet "cxf" per Tippfehler-Toleranz (Filter/Muxer/Demuxer), Kategorie-Badges statt Klartext](screenshots/prozess-ffmpeg-fuzzy-search.png)
 
 ## 5b. Assets
 

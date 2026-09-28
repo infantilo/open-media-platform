@@ -1361,6 +1361,85 @@ export function validateArgValue(flag: string, value: string, dynamicOptions?: M
   }
 }
 
+// ---- Parameter-Suche: Tippfehler-Toleranz (Kapitel 25 R5, 2026-09-28) --------------------------
+//
+// Der bestehende Parameter-Explorer (process-step-config.ts) fand bisher
+// nur exakte Teilzeichenketten-Treffer (`.includes(q)`) — ein einziger
+// Tippfehler in einem Flag-/Encoder-Namen (z. B. "libx264" als "libx265"
+// vertippt, oder Buchstaben vertauscht wie "sacle" statt "scale") zeigte
+// gar keinen Treffer. Fuzzy-Matching gilt bewusst NUR für kurze
+// Bezeichner (Flag-/Encoder-/Filter-Namen), nicht für Fließtext-
+// Beschreibungen — dort liefert die bestehende Substring-Suche bereits
+// sinnvolle Treffer, ein Tippfehler-Abgleich gegen ganze Sätze wäre nur
+// Rauschen.
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1] : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+// Editierbudget wächst mit der Anfragelänge, aber begrenzt auf 2 — kurze
+// Anfragen (z. B. "-y", "-i") sollen nicht beliebig viele zufällige
+// 1-Zeichen-Namen treffen, ein vertipptes 5+-Zeichen-Wort (Transposition
+// = 2 Edits in reinem Levenshtein) soll aber gefunden werden.
+export function isFuzzyMatch(query: string, candidateName: string, maxDistanceOverride?: number): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  const name = candidateName.toLowerCase();
+  if (name.includes(q)) return true;
+  const maxDistance = maxDistanceOverride ?? (q.length <= 3 ? 1 : 2);
+  // Grobe Vorabprüfung erspart den DP-Lauf für offensichtlich zu
+  // unterschiedliche Längen (eine Levenshtein-Distanz kann nie kleiner
+  // sein als der Längenunterschied).
+  if (Math.abs(name.length - q.length) > maxDistance) return false;
+  return levenshteinDistance(q, name) <= maxDistance;
+}
+
+export interface SearchableEntry<T> {
+  name: string;
+  description: string;
+  value: T;
+}
+
+export interface SearchMatch<T> {
+  entry: SearchableEntry<T>;
+  // true = nur per Tippfehler-Toleranz gefunden (kein exakter Substring-
+  // Treffer in Name ODER Beschreibung) — die DOM-Seite markiert das
+  // sichtbar (Kapitel 25 R5: "≈"-Badge), damit ein Treffer, der den
+  // eingegebenen Text gar nicht enthält, nicht wie ein normaler
+  // Substring-Treffer aussieht.
+  fuzzy: boolean;
+}
+
+// Exakte Substring-Treffer (Name ODER Beschreibung, wie bisher) zuerst,
+// danach reine Tippfehler-Treffer (nur Name) — hält das bisherige
+// Ranking-Verhalten für alle bestehenden Suchen unverändert und hängt
+// Tippfehler-Ergebnisse nur zusätzlich an.
+export function searchEntries<T>(query: string, entries: SearchableEntry<T>[], limit?: number): SearchMatch<T>[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const exact: SearchMatch<T>[] = [];
+  const fuzzy: SearchMatch<T>[] = [];
+  for (const entry of entries) {
+    if (entry.name.toLowerCase().includes(q) || entry.description.toLowerCase().includes(q)) {
+      exact.push({ entry, fuzzy: false });
+    } else if (isFuzzyMatch(q, entry.name)) {
+      fuzzy.push({ entry, fuzzy: true });
+    }
+  }
+  const combined = [...exact, ...fuzzy];
+  return limit ? combined.slice(0, limit) : combined;
+}
+
 // ---- Schlüssel/Wert-Objekte (Header, Payload, Eingaben) ---------------------------------------
 
 // flatStringObject: nur wenn ALLE Werte Strings sind, lässt sich ein

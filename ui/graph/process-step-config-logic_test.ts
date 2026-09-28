@@ -18,6 +18,8 @@ import {
   formatGoDuration,
   globalOptionEntryToFlagDef,
   insertionText,
+  isFuzzyMatch,
+  levenshteinDistance,
   missingConfig,
   optionEntriesToArgs,
   optionHelpText,
@@ -25,6 +27,7 @@ import {
   parseGoDuration,
   parseRule,
   ruleToExpression,
+  searchEntries,
   splitSeconds,
   toSeconds,
   triggerKinds,
@@ -681,4 +684,56 @@ Deno.test("validateArgValue: a flag unknown to the curated table is still checke
   // dass ein Override eine kuratierte Definition NICHT verdrängt.
   const conflictingOverride = [{ name: "-loglevel", type: "text" as const, description: "irrelevant, sollte nie greifen" }];
   assertEquals(validateArgValue("-loglevel", "not-a-real-level", undefined, conflictingOverride).ok, false);
+});
+
+// ---- Parameter-Suche: Tippfehler-Toleranz (Kapitel 25 R5) ------------------------------------------
+
+Deno.test("levenshteinDistance: identical strings are 0, single edits (insert/delete/substitute) are 1, a transposition is 2", () => {
+  assertEquals(levenshteinDistance("crf", "crf"), 0);
+  assertEquals(levenshteinDistance("crf", "crg"), 1); // Ersetzung
+  assertEquals(levenshteinDistance("crf", "crrf"), 1); // Einfügung
+  assertEquals(levenshteinDistance("crf", "cf"), 1); // Löschung
+  assertEquals(levenshteinDistance("scale", "sacle"), 2); // vertauschte Buchstaben (plain Levenshtein: 2 Ersetzungen)
+  assertEquals(levenshteinDistance("", "abc"), 3);
+  assertEquals(levenshteinDistance("abc", ""), 3);
+});
+
+Deno.test("isFuzzyMatch: exact substrings always match; short queries (<=3 chars) get a tighter budget than longer ones", () => {
+  assertEquals(isFuzzyMatch("crf", "libx264 -crf"), true); // echter Substring, kein Tippfehler nötig
+  assertEquals(isFuzzyMatch("crg", "crf"), true); // 1 Ersetzung, Budget 1 für 3-stellige Anfrage
+  assertEquals(isFuzzyMatch("cxg", "-crf"), false); // Distanz 3 (inkl. führendem "-") > Budget 1 für eine 3-stellige Anfrage
+  assertEquals(isFuzzyMatch("sacle", "scale"), true); // Transposition, Distanz 2, Budget 2 ab 4 Zeichen
+  assertEquals(isFuzzyMatch("logelvel", "loglevel"), true); // vertauschte Buchstaben, Distanz 2
+  assertEquals(isFuzzyMatch("completely-different", "scale"), false);
+  assertEquals(isFuzzyMatch("", "scale"), false);
+});
+
+Deno.test("searchEntries: exact substring hits (name or description) rank before fuzzy-only hits, both respect the limit", () => {
+  const entries = [
+    { name: "libx264", description: "H.264 / AVC encoder", value: 1 },
+    { name: "libx265", description: "H.265 / HEVC encoder", value: 2 },
+    { name: "libvpx", description: "VP8/VP9 encoder", value: 3 },
+  ];
+  // "libx264" ist ein exakter Substring-Treffer, "libx265" nur per
+  // Tippfehler-Toleranz (Distanz 1) — Reihenfolge muss exakt vor fuzzy bleiben.
+  const results = searchEntries("libx264", entries);
+  assertEquals(results.map((r) => [r.entry.name, r.fuzzy]), [
+    ["libx264", false],
+    ["libx265", true],
+  ]);
+});
+
+Deno.test("searchEntries: query matching only a description (not any name) still ranks as an exact (non-fuzzy) hit", () => {
+  const entries = [{ name: "libx264", description: "H.264 / AVC encoder", value: 1 }];
+  assertEquals(searchEntries("avc", entries), [{ entry: entries[0], fuzzy: false }]);
+});
+
+Deno.test("searchEntries: empty query returns no results, limit truncates the combined exact+fuzzy list", () => {
+  const entries = [
+    { name: "a", description: "", value: 1 },
+    { name: "a1", description: "", value: 2 },
+    { name: "a2", description: "", value: 3 },
+  ];
+  assertEquals(searchEntries("", entries), []);
+  assertEquals(searchEntries("a", entries, 2).length, 2);
 });

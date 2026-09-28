@@ -4362,12 +4362,69 @@ Screenshot (`docs/screenshots/prozess-ffmpeg-hls-ladder.png`),
 BENUTZERHANDBUCH.md §5a.1 um alle drei neuen Aufgaben ergänzt (dies IST
 ein sichtbarer Funktionszuwachs, anders als R1).
 
-#### R5 — Parameter-Suche: Tippfehler-Toleranz + visuelle Auffrischung
+#### R5 — Parameter-Suche: Tippfehler-Toleranz + visuelle Auffrischung (erledigt 2026-09-28, Kapitel 25 damit abgeschlossen)
 
-Fuzzy-Matching (z. B. einfache Levenshtein-Distanz oder Teilsequenz-Score
-statt reinem `.includes()`) zusätzlich zum bestehenden Substring-Treffer;
-visuelle Kategorie-Badges statt Klartext-Suffix, Tastatur-Navigation in
-der Trefferliste.
+Umgesetzt wie geplant, keine Scope-Korrektur nötig. **Fuzzy-Matching:**
+`levenshteinDistance`/`isFuzzyMatch`/`searchEntries<T>`
+(`process-step-config-logic.ts`) — echte, bewusst gewählte
+Levenshtein-Distanz (nicht Teilsequenz-Score: eine Buchstaben-
+Vertauschung wie "sacle"/"scale" ist per Levenshtein 2 Edits, per reiner
+Teilsequenz-Prüfung dagegen gar kein Treffer, s. Modulkommentar) —
+gilt bewusst NUR für kurze Bezeichner (Flag-/Encoder-/Filter-Namen),
+nicht für Fließtext-Beschreibungen (dort bleibt die bestehende Substring-
+Suche zuständig, ein Tippfehler-Abgleich gegen ganze Sätze wäre nur
+Rauschen). Editierbudget wächst mit der Anfragelänge (1 bis 3 Zeichen, 2
+ab 4 Zeichen) — kurze Anfragen wie "-y" sollen nicht beliebig viele
+zufällige Namen treffen. `searchEntries` generalisiert alle vier
+Ergebnis-Gruppen des Explorers (kuratierte globale Flags, `-h full`-
+Import, AVOption-Index, Encoder/Decoder/Muxer/Demuxer/Filter-Katalog) auf
+einen gemeinsamen Baustein statt vier duplizierten Filterausdrücken;
+exakte Substring-Treffer bleiben unverändert vorne einsortiert, reine
+Tippfehler-Treffer hängen dahinter — bestehendes Ranking-Verhalten also
+unverändert. Auch die inline "-"-Autovervollständigung in den rohen
+Argumentzeilen nutzt jetzt denselben Baustein (kleines "≈"-Präfix statt
+vollem Badge, da der Platz dort begrenzt ist).
+
+**Visuelle Kategorie-Badges:** neuer `categoryBadge()`-Helfer nutzt das
+bereits bestehende `.omp-badge`/`.omp-badge-cue`-System aus
+`design-tokens.css` (keine neuen Ad-hoc-Farben) — ersetzt die bisherigen
+Klartext-Suffixe wie "(Encoder)" durch echte Pill-Badges; ein reiner
+Tippfehler-Treffer bekommt zusätzlich eine auffällige "≈ Tippfehler?"-
+Badge (`.omp-badge-cue`, orange), damit ein Treffer, der den
+eingegebenen Text gar nicht enthält, nicht wie ein normaler Substring-
+Treffer aussieht.
+
+**Tastatur-Navigation:** Pfeiltasten wechseln einen hervorgehobenen
+Treffer über alle vier Ergebnis-Gruppen hinweg (ein gemeinsames
+`navigableRows`-Array, `mouseenter` synchronisiert die Hervorhebung
+auch bei Maus-Hover), Enter aktiviert den markierten Treffer (identisch
+zu einem Klick — fügt ein Flag/eine AVOption ein oder klappt einen
+Katalog-Eintrag auf), Esc leert die Suche. Bewusst NICHT auf die erst
+nach Aufklappen eines Katalog-Eintrags nachgeladenen Unteroptionen
+ausgeweitet (kollidiert sonst mit normaler Text-Cursor-Navigation im
+Suchfeld) und NICHT auf die inline "-"-Autovervollständigung (dort
+würden Pfeiltasten mit der Cursor-Bewegung im Text kollidieren).
+
+**Verifikation:** 5 neue `deno test`-Fälle (Levenshtein-Distanz inkl.
+Transposition, Editierbudget nach Anfragelänge, `searchEntries`-Ranking
+exakt-vor-fuzzy), alle 197 Tests grün, `deno bundle` (49 Module) grün.
+Live per CDP gegen den echten laufenden Orchestrator verifiziert: Suche
+nach "crf" zeigte echte Encoder-Kategorie-Badges (z. B. "libx264
+(Encoder)") für die exakten Treffer, gefolgt von per Tippfehler-Toleranz
+gefundenen Treffern (z. B. "cri"-Decoder, "caf"/"crc"-Muxer) korrekt mit
+"≈ Tippfehler?"-Badge markiert; Suche nach "cxf" (Tippfehler für keinen
+bestimmten realen Namen) fand korrekt "gxf"/"mxf"/"caf"/"lxf"-Muxer/
+Demuxer, alle richtig markiert. Tastatur-Test: Suche nach "loglevel"
+(genau ein Treffer) war automatisch hervorgehoben, Pfeil-runter/-hoch
+blieb korrekt auf dem einzigen Treffer geklemmt (kein Fehler bei nur
+einem Ergebnis), Enter fügte "-loglevel" korrekt als neues Argument ein
+UND direkt eine zweite, leere fokussierte Wertzeile (identisches
+Verhalten zum bisherigen Klick-Pfad). Neuer Handbuch-Screenshot
+(`docs/screenshots/prozess-ffmpeg-fuzzy-search.png`, ersetzt das
+veraltete `parameter-explorer.png`), BENUTZERHANDBUCH.md §5a.1
+aktualisiert.
+
+**Kapitel 25 (R1–R5) damit vollständig abgeschlossen.**
 
 ---
 
@@ -4635,3 +4692,4 @@ der Trefferliste.
 | Kapitel 25 R2: Audio-Matrix — Kanal-Layout-Labels, Downmixer-Dialog je Zelle, Downmix-Vorlagen | erledigt | Nutzerentscheidung "visuell + funktional erweitern". Scope-Korrektur (§0 Punkt 8, sofort dokumentiert): "Kanal-Layout-ERKENNUNG aus ffprobe" hätte eine neue HTTP-Route gebraucht, die ffprobe auf einen vom Nutzer angegebenen Dateipfad loslässt — genau die im Kapitel-23-Nachtrag bereits bewusst NICHT gebaute Fähigkeit ("verdient eine eigene Sicherheitsabwägung"). Stattdessen Kanal-Layout-AUSWAHL: Dropdown je Quelle (Mono/Stereo/5.1/7.1/"Eigene Anzahl", ffmpeg-Standard-Kanalreihenfolge). `audio-matrix-logic.ts`: `ChannelLayoutId`/`CHANNEL_LAYOUTS`/`channelLabel()` (reine Beschriftung, `compileAudioMatrix` unverändert), `DOWNMIX_PRESETS`/`applyDownmixPreset()` (Mono→Stereo, Stereo→Mono, 5.1→Stereo nach ITU-Konvention −3dB, LFE bewusst ausgeschlossen+dokumentiert). `audio-matrix.ts`: Kanal-Layout-Dropdown ersetzt reine Kanalzahl-Eingabe, passender Downmix-Vorlage-Knopf je Quell-Layout, Zellen zeigen nur noch eine kompakte Zusammenfassung statt zweier immer sichtbarer Zahlenfelder — Klick öffnet "Downmixer"-Dialog (Gain-Regler 0–200% + Zahlenfeld + live dB-Anzeige, Verzögerung, Entfernen/Abbrechen/Übernehmen) im Stil des vom Nutzer genannten Referenzbilds. 10 neue Tests. Live per CDP gegen den echten Orchestrator verifiziert: Layout-Wechsel auf 5.1 zeigte echte L/R/C/LFE/Ls/Rs-Labels, Preset-Klick befüllte exakt die 6 erwarteten Zellen, Downmixer-Dialog zeigte korrekt 70,7%/−3.0dB und aktualisierte auf 50%/−6.0dB live, Übernehmen änderte nur die eine Zelle, finale Matrix-Kompilierung erzeugte exakt den erwarteten `-filter_complex` (Kompilier-Logik-Unverändertheit tatsächlich bestätigt). Zwei neue Handbuch-Screenshots direkt aus der Live-Session (`docs/screenshots/audio-matrix.png` ersetzt, `audio-matrix-downmixer.png` neu), BENUTZERHANDBUCH.md §5a.1 aktualisiert. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno bundle` (49 Module) grün. Nächster Schritt: R3 ("Auxinput"-Abschnitt für benannte Zusatzquellen). | 2026-09-28 |
 | Kapitel 25 R3: Audio-Matrix — benannte, einklappbare "Auxinput"-Abschnitte für Zusatzquellen | erledigt | Jede Zusatzquelle bekommt in `audio-matrix.ts` einen eigenen, per Kopfzeilen-Klick ein-/ausklappbaren "Auxinput N"-Abschnitt mit editierbarem Namensfeld (füllt das seit R2 vorhandene `AudioMatrixSource.label`) statt einer weiteren Zeile in derselben Liste wie die Haupt-Eingabedatei — Tabellen-Zeilen übernehmen den Namen automatisch. Kanal-Layout-Auswahl + Downmix-Vorlage-Knöpfe aus R2 in einen gemeinsamen `buildLayoutControls()`-Baustein gezogen (keine Verdopplung mehr zwischen Haupt-/Zusatzquellen-Rendering). Reine DOM-Umstrukturierung, keine neue Logik nötig. Live per CDP gegen den echten Orchestrator verifiziert: zwei Auxinputs angelegt, einen auf "SW8-Trailer" benannt (Tabellenzeilen sofort aktualisiert), Ein-/Ausklappen einzeln pro Abschnitt bestätigt (Name bleibt über Re-Render erhalten), Entfernen des unbenannten Auxinput ließ den benannten unangetastet mit korrekt verschobenen Zellen-Indizes. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, unverändert), `deno bundle` (49 Module) grün. Neuer Handbuch-Screenshot, BENUTZERHANDBUCH.md §5a.1 aktualisiert. Nächster Schritt: R4 (neue Radio/TV/Online-Vorlagen als Registry-Einträge, Nutzer entscheidet Auswahl/Reihenfolge vorher). | 2026-09-28 |
 | Kapitel 25 R4: drei neue Radio/TV/Online-Vorlagen (Lautheit-Normalisierung, Passthrough/Remux, Streaming-Ausgabeleiter) + neuer "Gruppen"-Feldtyp | erledigt | Nutzerentscheidung (Rückfrage vor Umsetzung): Lautheit-Normalisierung (EBU R128), Verlustfreier Passthrough/Remux, Streaming-Ausgabeleiter (Multi-Bitrate HLS) — Untertitel-Einbrennen bewusst nicht gewählt. Die Ausgabeleiter brauchte den in R1 zurückgestellten "Gruppen"-Feldtyp (`GenericScriptGroupField`, wiederholbare Unterzeilen, `GenericScriptFormValues.groups`), jetzt an diesem ersten echten Fall umgesetzt statt vorab geraten — `renderGenericFields` in `process-step-config.ts` rendert Top-Level-Formular und Gruppenzeilen rekursiv über dieselbe Funktion. Drei neue reine Baustein-Funktionen (`buildLoudnormArgs`/`buildRemuxCopyArgs`/`buildHlsLadderArgs`) nach demselben Muster wie die bestehenden `build<X>Args`; die leicht falsch zu erratende HLS-Syntax (`-var_stream_map`/`-master_pl_name`/`-hls_segment_filename` mit `%v`) wurde VOR dem Schreiben des Codes live gegen den echten Host-ffmpeg ausprobiert, nicht aus dem Gedächtnis übernommen. 7 neue Tests + Fix der 3 bestehenden R1-Tests (neues Pflichtfeld `groups`), alle 192 Tests grün, `deno bundle` (49 Module) grün. Live per CDP gegen den echten Orchestrator verifiziert: alle drei Aufgaben im Dropdown, korrekte Vorschauen/Validierung, "+ weitere Rendition" fügte live eine dritte hinzu und aktualisierte die Filterkette korrekt. Den von der echten UI erzeugten 3-Renditionen-HLS-Befehl UND die loudnorm-/remux_copy-Befehle tatsächlich gegen echte Testdateien ausgeführt (nicht nur Zeichenketten geprüft) — alle exit 0, Master-Playlist+Sub-Playlists+Segmente per ffprobe bestätigt korrekt. Neuer Handbuch-Screenshot, BENUTZERHANDBUCH.md §5a.1 um alle drei neuen Aufgaben ergänzt (sichtbarer Funktionszuwachs). Nächster Schritt: R5 (Tippfehler-Toleranz + visuelle Auffrischung der Parameter-Suche). | 2026-09-28 |
+| Kapitel 25 R5: Parameter-Suche — Tippfehler-Toleranz, Kategorie-Badges, Tastatur-Navigation (Kapitel 25 R1–R5 damit vollständig abgeschlossen) | erledigt | `levenshteinDistance`/`isFuzzyMatch`/`searchEntries<T>` (`process-step-config-logic.ts`) generalisieren alle vier Explorer-Ergebnisgruppen auf einen Baustein; echte Levenshtein-Distanz bewusst statt Teilsequenz-Score (fängt Buchstaben-Vertauschungen wie "sacle"/"scale"), gilt nur für kurze Bezeichner (Flag-/Encoder-/Filter-Namen), nicht für Fließtext-Beschreibungen. `categoryBadge()` nutzt das bestehende `.omp-badge`/`.omp-badge-cue`-System statt neuer Ad-hoc-Farben, ersetzt Klartext-Suffixe wie "(Encoder)"; reine Tippfehler-Treffer bekommen zusätzlich eine "≈ Tippfehler?"-Badge. Pfeiltasten/Enter/Esc navigieren/aktivieren/leeren die Trefferliste über alle vier Gruppen hinweg (bewusst nicht auf nachgeladene Katalog-Unteroptionen oder die inline "-"-Autovervollständigung ausgeweitet — Kollision mit normaler Text-Cursor-Navigation). 5 neue Tests, alle 197 grün, `deno bundle` (49 Module) grün. Live per CDP gegen den echten Orchestrator verifiziert: "crf" zeigte echte Kategorie-Badges für exakte Treffer, gefolgt von korrekt "≈ Tippfehler?"-markierten Fuzzy-Treffern (cri/caf/crc); "cxf" fand gxf/mxf/caf/lxf korrekt per Tippfehler-Toleranz; Tastatur-Test mit "loglevel" (ein Treffer) bestätigte korrekte Klemmung bei Pfeiltasten und dass Enter identisch zu einem Klick ein Flag+Wertzeile einfügt. Neuer Handbuch-Screenshot ersetzt das veraltete `parameter-explorer.png`, BENUTZERHANDBUCH.md §5a.1 aktualisiert. | 2026-09-28 |
