@@ -4298,12 +4298,69 @@ bundle` (49 Module) grün. Neuer Handbuch-Screenshot
 (`docs/screenshots/audio-matrix-auxinput.png`), BENUTZERHANDBUCH.md
 §5a.1 aktualisiert.
 
-#### R4 — Neue Radio/TV/Online-Vorlagen als Registry-Einträge
+#### R4 — Neue Radio/TV/Online-Vorlagen als Registry-Einträge (erledigt 2026-09-28)
 
-Je nach Bedarf (Nutzer entscheidet Reihenfolge/Auswahl vor Umsetzung,
-§0 Punkt 8): Lautheit/EBU-R128-Normalisierung, Streaming-Ausgabeleiter,
-Untertitel-Einbrennen, Stream-Copy-Passthrough — jede Vorlage einzeln
-abnahmefähig, kein Big-Bang.
+**Nutzerentscheidung** (§0 Punkt 8, per Rückfrage vor Umsetzung): Lautheit-
+Normalisierung (EBU R128), Verlustfreier Passthrough/Remux und Streaming-
+Ausgabeleiter (Multi-Bitrate HLS) — **Untertitel-Einbrennen bewusst NICHT
+gewählt**, bleibt offen für einen späteren Bedarf.
+
+**Architektur-Vorarbeit, die dabei nötig wurde:** die Streaming-
+Ausgabeleiter braucht wiederholbare Renditions-Zeilen — genau der
+"Gruppen"-Feldtyp, den R1 bewusst zurückgestellt hatte ("sobald er an
+einem zweiten/dritten echten Fall verifiziert werden kann"). Jetzt
+umgesetzt: `GenericScriptGroupField` (`process-step-config-logic.ts`) —
+eine wiederholbare Liste von Unterzeilen, jede Zeile selbst eine flache
+Feldliste (bewusst nur eine Verschachtelungsebene genutzt, der
+Interpreter selbst schränkt das nicht künstlich ein); `GenericScript
+FormValues` bekommt ein `groups`-Feld (`Record<string,
+GenericScriptFormValues[]>`, rekursiv). DOM-Seite: `renderGenericFields`
+(`process-step-config.ts`) ersetzt das bisherige `buildGenericScriptForm`-
+Inline-Loop durch eine rekursive Funktion, die sowohl das Top-Level-
+Formular als auch jede Gruppenzeile rendert — Zeilen bekommen eine
+"Entfernen"-Schaltfläche (blockiert bei Erreichen von `minItems`) und die
+Gruppe eine "+ weitere Rendition"-Schaltfläche.
+
+**Drei neue reine Baustein-Funktionen** (`process-step-config-logic.ts`,
+demselben Muster wie `buildProbeArgs` etc. folgend): `buildLoudnormArgs`
+(EBU-R128-`loudnorm`-Filter, Bild immer `-c:v copy` — bewusst Einpass-
+Modus, der präzisere Zweipass-Modus bräuchte einen mehrstufigen mess-
+dann-anwenden-Ablauf, den ein einzelner `script`-Schritt nicht abbilden
+kann, dieselbe Art Grenze wie das bewusst nicht gebaute pro-Clip-
+Beschnitt+Verlustfreiheit-Feature aus Kapitel 23), `buildRemuxCopyArgs`
+(trivialer Container-Wechsel per `-c copy`), `buildHlsLadderArgs` (Split
++ Skalierung je Rendition, `-var_stream_map`, `-master_pl_name`,
+`-hls_segment_filename` mit `%v`-Platzhalter). Die genaue HLS-Syntax
+(leicht falsch zu erraten) wurde VOR dem Schreiben des Codes live gegen
+den echten Host-ffmpeg ausprobiert (zwei Renditionen, echte Video-
+Testquelle via `lavfi`/`testsrc`) — nicht aus dem Gedächtnis übernommen.
+Drei neue `GENERIC_SCRIPT_TASKS`-Einträge (`loudnorm`/`remux_copy`/
+`hls_ladder`) + passende `SCRIPT_INTENTS`-Einträge fürs "Aufgabe"-
+Dropdown.
+
+**Verifikation:** 7 neue `deno test`-Fälle (reine Builder + `toArgs`-
+Validierung je neuer Aufgabe, inkl. Rendition-Namens-Zeichensatz/
+-Eindeutigkeit/Zahlen-Validierung bei `hls_ladder`) plus Fix der 3
+bestehenden R1-Tests (`GenericScriptFormValues` braucht jetzt ein
+`groups`-Feld). Alle 192 Tests grün, `deno bundle` (49 Module) grün.
+Live per CDP gegen den echten laufenden Orchestrator: alle drei neuen
+Aufgaben im "Aufgabe"-Dropdown gefunden und ausgewählt; Lautheit-
+Normalisieren und Passthrough zeigten sofort die korrekten Standard-
+Vorschauen; Streaming-Ausgabeleiter zeigte zunächst korrekt die
+Validierungsmeldung ("Jede Rendition braucht einen Namen") bei den zwei
+leeren Standard-Renditionen, nach Ausfüllen (1080p/480p) exakt die
+erwartete 2-Renditionen-Filterkette, "+ weitere Rendition" fügte live
+eine dritte hinzu und aktualisierte Split/Map/`var_stream_map` korrekt
+auf 3. **Den von der echten UI erzeugten 3-Renditionen-Befehl
+tatsächlich gegen eine echte Testdatei ausgeführt** (nicht nur die
+Zeichenkette geprüft): exit 0, `master.m3u8` + drei Unterordner mit
+je einer validen Sub-Playlist und einem `ffprobe`-bestätigten H.264-
+Segment in der richtigen Auflösung; `loudnorm`- und `remux_copy`-Befehle
+ebenso real ausgeführt (exit 0, Ton normalisiert bzw. Container
+gewechselt, beide Streams per Stream-Copy erhalten). Neuer Handbuch-
+Screenshot (`docs/screenshots/prozess-ffmpeg-hls-ladder.png`),
+BENUTZERHANDBUCH.md §5a.1 um alle drei neuen Aufgaben ergänzt (dies IST
+ein sichtbarer Funktionszuwachs, anders als R1).
 
 #### R5 — Parameter-Suche: Tippfehler-Toleranz + visuelle Auffrischung
 
@@ -4577,3 +4634,4 @@ der Trefferliste.
 | Kapitel 25 R1: generische Aufgaben-Registry für den ffmpeg-Assistenten (probe/thumbnail/extract_audio) | erledigt | Nutzerauftrag 2026-09-28 ("die ffmpeg-UI ist noch zu hardcoded"), Nutzerentscheidung "Registry + mehr Vorlagen". Scope-Korrektur beim tatsächlichen Umsetzen (§0 Punkt 8, sofort dokumentiert): ein voller Interpreter für alle 6 Aufgaben (wie ursprünglich in 25.3 skizziert) hätte eine riskante Mini-DSL für wiederholbare wechselseitig sichtbarkeitsgekoppelte Unterformulare gebraucht, verifiziert an nur 2 Vorbildern (`concat`/`overlay`) — stattdessen: `GENERIC_SCRIPT_TASKS`-Registry (`process-step-config-logic.ts`, Feldarten `template-text`/`text`/`codec-picker`/`format-picker`) + eine einzige `buildGenericScriptForm`-Rendering-Funktion (`process-step-config.ts`) für die drei wirklich flachen Aufgaben `probe`/`thumbnail`/`extract_audio`; `convert` (der generische Baukasten-Fluchtweg selbst)/`concat`/`overlay` bleiben bewusst bespoke. `ScriptIntent.id` von geschlossenem Union-Typ auf `string` gelockert. Die zugrundeliegenden `build<X>Args()`-Funktionen sind unverändert (Regressionssicherheit), nur eine neue `toArgs()`-Zwischenschicht ruft sie auf — kein sichtbarer Verhaltensunterschied, BENUTZERHANDBUCH.md unverändert gültig. 4 neue `deno test`-Fälle, alle 180 Tests grün, `deno bundle` (49 Module) grün. Live per echter CDP-Session gegen den echten laufenden Orchestrator verifiziert: neue Prozess-Definition angelegt, Datei-Werkzeug-Schritt hinzugefügt, "Technische Metadaten auslesen" erzeugte exakt die erwarteten ffprobe-Argumente, Durchwechseln aller 6 Aufgaben zeigte in jedem Fall korrekte Vorschau/Validierung (keine Regression bei den 3 weiterhin bespoke Aufgaben), Audio-Codec-Picker von `extract_audio` lud 85 echte Host-ffmpeg-Encoder, Auswahl "aac" aktualisierte die Vorschau live zu `-c:a aac`. Details UMSETZUNG.md 25.3 (R1). Nächster Schritt: R2 (Audio-Matrix Kanal-Layout-Labels + Downmixer-Dialog). | 2026-09-28 |
 | Kapitel 25 R2: Audio-Matrix — Kanal-Layout-Labels, Downmixer-Dialog je Zelle, Downmix-Vorlagen | erledigt | Nutzerentscheidung "visuell + funktional erweitern". Scope-Korrektur (§0 Punkt 8, sofort dokumentiert): "Kanal-Layout-ERKENNUNG aus ffprobe" hätte eine neue HTTP-Route gebraucht, die ffprobe auf einen vom Nutzer angegebenen Dateipfad loslässt — genau die im Kapitel-23-Nachtrag bereits bewusst NICHT gebaute Fähigkeit ("verdient eine eigene Sicherheitsabwägung"). Stattdessen Kanal-Layout-AUSWAHL: Dropdown je Quelle (Mono/Stereo/5.1/7.1/"Eigene Anzahl", ffmpeg-Standard-Kanalreihenfolge). `audio-matrix-logic.ts`: `ChannelLayoutId`/`CHANNEL_LAYOUTS`/`channelLabel()` (reine Beschriftung, `compileAudioMatrix` unverändert), `DOWNMIX_PRESETS`/`applyDownmixPreset()` (Mono→Stereo, Stereo→Mono, 5.1→Stereo nach ITU-Konvention −3dB, LFE bewusst ausgeschlossen+dokumentiert). `audio-matrix.ts`: Kanal-Layout-Dropdown ersetzt reine Kanalzahl-Eingabe, passender Downmix-Vorlage-Knopf je Quell-Layout, Zellen zeigen nur noch eine kompakte Zusammenfassung statt zweier immer sichtbarer Zahlenfelder — Klick öffnet "Downmixer"-Dialog (Gain-Regler 0–200% + Zahlenfeld + live dB-Anzeige, Verzögerung, Entfernen/Abbrechen/Übernehmen) im Stil des vom Nutzer genannten Referenzbilds. 10 neue Tests. Live per CDP gegen den echten Orchestrator verifiziert: Layout-Wechsel auf 5.1 zeigte echte L/R/C/LFE/Ls/Rs-Labels, Preset-Klick befüllte exakt die 6 erwarteten Zellen, Downmixer-Dialog zeigte korrekt 70,7%/−3.0dB und aktualisierte auf 50%/−6.0dB live, Übernehmen änderte nur die eine Zelle, finale Matrix-Kompilierung erzeugte exakt den erwarteten `-filter_complex` (Kompilier-Logik-Unverändertheit tatsächlich bestätigt). Zwei neue Handbuch-Screenshots direkt aus der Live-Session (`docs/screenshots/audio-matrix.png` ersetzt, `audio-matrix-downmixer.png` neu), BENUTZERHANDBUCH.md §5a.1 aktualisiert. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno bundle` (49 Module) grün. Nächster Schritt: R3 ("Auxinput"-Abschnitt für benannte Zusatzquellen). | 2026-09-28 |
 | Kapitel 25 R3: Audio-Matrix — benannte, einklappbare "Auxinput"-Abschnitte für Zusatzquellen | erledigt | Jede Zusatzquelle bekommt in `audio-matrix.ts` einen eigenen, per Kopfzeilen-Klick ein-/ausklappbaren "Auxinput N"-Abschnitt mit editierbarem Namensfeld (füllt das seit R2 vorhandene `AudioMatrixSource.label`) statt einer weiteren Zeile in derselben Liste wie die Haupt-Eingabedatei — Tabellen-Zeilen übernehmen den Namen automatisch. Kanal-Layout-Auswahl + Downmix-Vorlage-Knöpfe aus R2 in einen gemeinsamen `buildLayoutControls()`-Baustein gezogen (keine Verdopplung mehr zwischen Haupt-/Zusatzquellen-Rendering). Reine DOM-Umstrukturierung, keine neue Logik nötig. Live per CDP gegen den echten Orchestrator verifiziert: zwei Auxinputs angelegt, einen auf "SW8-Trailer" benannt (Tabellenzeilen sofort aktualisiert), Ein-/Ausklappen einzeln pro Abschnitt bestätigt (Name bleibt über Re-Render erhalten), Entfernen des unbenannten Auxinput ließ den benannten unangetastet mit korrekt verschobenen Zellen-Indizes. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, unverändert), `deno bundle` (49 Module) grün. Neuer Handbuch-Screenshot, BENUTZERHANDBUCH.md §5a.1 aktualisiert. Nächster Schritt: R4 (neue Radio/TV/Online-Vorlagen als Registry-Einträge, Nutzer entscheidet Auswahl/Reihenfolge vorher). | 2026-09-28 |
+| Kapitel 25 R4: drei neue Radio/TV/Online-Vorlagen (Lautheit-Normalisierung, Passthrough/Remux, Streaming-Ausgabeleiter) + neuer "Gruppen"-Feldtyp | erledigt | Nutzerentscheidung (Rückfrage vor Umsetzung): Lautheit-Normalisierung (EBU R128), Verlustfreier Passthrough/Remux, Streaming-Ausgabeleiter (Multi-Bitrate HLS) — Untertitel-Einbrennen bewusst nicht gewählt. Die Ausgabeleiter brauchte den in R1 zurückgestellten "Gruppen"-Feldtyp (`GenericScriptGroupField`, wiederholbare Unterzeilen, `GenericScriptFormValues.groups`), jetzt an diesem ersten echten Fall umgesetzt statt vorab geraten — `renderGenericFields` in `process-step-config.ts` rendert Top-Level-Formular und Gruppenzeilen rekursiv über dieselbe Funktion. Drei neue reine Baustein-Funktionen (`buildLoudnormArgs`/`buildRemuxCopyArgs`/`buildHlsLadderArgs`) nach demselben Muster wie die bestehenden `build<X>Args`; die leicht falsch zu erratende HLS-Syntax (`-var_stream_map`/`-master_pl_name`/`-hls_segment_filename` mit `%v`) wurde VOR dem Schreiben des Codes live gegen den echten Host-ffmpeg ausprobiert, nicht aus dem Gedächtnis übernommen. 7 neue Tests + Fix der 3 bestehenden R1-Tests (neues Pflichtfeld `groups`), alle 192 Tests grün, `deno bundle` (49 Module) grün. Live per CDP gegen den echten Orchestrator verifiziert: alle drei Aufgaben im Dropdown, korrekte Vorschauen/Validierung, "+ weitere Rendition" fügte live eine dritte hinzu und aktualisierte die Filterkette korrekt. Den von der echten UI erzeugten 3-Renditionen-HLS-Befehl UND die loudnorm-/remux_copy-Befehle tatsächlich gegen echte Testdateien ausgeführt (nicht nur Zeichenketten geprüft) — alle exit 0, Master-Playlist+Sub-Playlists+Segmente per ffprobe bestätigt korrekt. Neuer Handbuch-Screenshot, BENUTZERHANDBUCH.md §5a.1 um alle drei neuen Aufgaben ergänzt (sichtbarer Funktionszuwachs). Nächster Schritt: R5 (Tippfehler-Toleranz + visuelle Auffrischung der Parameter-Suche). | 2026-09-28 |

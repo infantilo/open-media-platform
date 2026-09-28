@@ -440,6 +440,17 @@ export const SCRIPT_INTENTS: ScriptIntent[] = [
   { id: "extract_audio", label: "Tonspur extrahieren", help: "Nur den Ton einer Datei speichern, mit frei wählbarem Audio-Codec." },
   { id: "concat", label: "Clips aneinanderhängen (Schnittliste)", help: "Mehrere Dateien in einer festgelegten Reihenfolge zu einer Ausgabedatei zusammenfügen — je Clip optional mit Start-/End-Beschnitt." },
   { id: "overlay", label: "Overlay/Senderkennung/Abspann zeitgesteuert einblenden", help: "Text (z. B. Bauchbinde, Abspann-Credits) oder ein Bild (z. B. Senderlogo) zu festgelegten Zeiten über das Video legen." },
+  {
+    id: "loudnorm",
+    label: "Lautheit normalisieren (EBU R128)",
+    help: "Tonspur auf eine Ziel-Lautheit (LUFS) bringen, z. B. für Sendeabnahme (-23 LUFS) oder Streaming-Plattformen. Einpass-Verfahren — für eine noch präzisere Zweipass-Messung den Experten-Modus nutzen.",
+  },
+  { id: "remux_copy", label: "Verlustfreier Passthrough/Remux (Container wechseln)", help: "Container wechseln ohne Neukodierung (Stream-Copy) — schnell, aber nur zwischen kompatiblen Containern/Codecs möglich." },
+  {
+    id: "hls_ladder",
+    label: "Streaming-Ausgabeleiter (Multi-Bitrate HLS)",
+    help: "Mehrere Auflösungen/Bitraten gleichzeitig als HLS-Ausgabeleiter (Master-Playlist + je Rendition ein Unterordner) — für adaptives Streaming in Web-/App-Playern.",
+  },
 ];
 
 export function scriptIntentById(id: string): ScriptIntent | undefined {
@@ -499,17 +510,41 @@ export interface GenericScriptFormatPickerField extends GenericScriptFieldBase {
   withOptions?: boolean;
 }
 
-export type GenericScriptField = GenericScriptTemplateTextField | GenericScriptTextField | GenericScriptCodecPickerField | GenericScriptFormatPickerField;
+// "Gruppen"-Feldtyp (Kapitel 25 R4, 2026-09-28) — die in R1 bewusst
+// zurückgestellte Erweiterung: eine wiederholbare Liste von Unterzeilen,
+// jede Zeile selbst eine flache Liste von Feldern (kein verschachteltes
+// `group` — hält den Interpreter einfach, für den ersten echten Anwendungs-
+// fall, eine Streaming-Ausgabeleiter mit mehreren Renditionen, reicht
+// eine Ebene). Bewusst NICHT für `concat`/`overlay` nachgerüstet — deren
+// zeilenübergreifende Sichtbarkeitskopplung (Verlustfrei-Häkchen,
+// Text-/Bild-Umschaltung) bräuchte mehr als dieses einfache Wiederholen,
+// s. R1-Notiz oben.
+export interface GenericScriptGroupField extends GenericScriptFieldBase {
+  kind: "group";
+  itemFields: GenericScriptField[];
+  minItems?: number; // Standard 1
+  addLabel: string;
+  itemLabel(index: number): string;
+}
+
+export type GenericScriptField =
+  | GenericScriptTemplateTextField
+  | GenericScriptTextField
+  | GenericScriptCodecPickerField
+  | GenericScriptFormatPickerField
+  | GenericScriptGroupField;
 
 // Skalare Feldwerte (template-text/text) sind immer roher, ungetrimmter
 // Text — Trimmen/Parsen ist Sache der jeweiligen `toArgs`, dieselbe
 // Verantwortungsteilung wie bei den bisherigen `build<X>Args`-Aufrufern.
 // Picker-Felder (codec-picker/format-picker) liefern kein einfaches
 // String — sie werden separat unter `pickers` geführt statt eine
-// Einheitlichkeit vorzutäuschen, die es nicht gibt.
+// Einheitlichkeit vorzutäuschen, die es nicht gibt. `groups` hält je
+// `group`-Feld eine Liste von Unterzeilen-Werten (rekursiv derselbe Typ).
 export interface GenericScriptFormValues {
   scalars: Record<string, string>;
   pickers: Record<string, { codec?: string; format?: string; options: Record<string, string> }>;
+  groups: Record<string, GenericScriptFormValues[]>;
 }
 
 export type GenericScriptArgsResult = { ok: true; args: string[] } | { ok: false; error: string };
@@ -564,6 +599,115 @@ export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
       if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
       const a = v.pickers.audio;
       return { ok: true, args: buildExtractAudioArgs({ inputPath: p, outputPath: o, audioCodec: a?.codec || undefined, audioOptions: a?.options ?? {} }) };
+    },
+  },
+  {
+    id: "loudnorm",
+    command: "ffmpeg",
+    fields: [
+      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.outputPath}" },
+      {
+        kind: "text",
+        id: "targetLufs",
+        label: "Ziel-Lautheit (LUFS)",
+        defaultValue: "-23",
+        numeric: true,
+        help: "EBU R128 (Sendeabnahme Broadcast): -23. Häufige Streaming-Ziele: -16 (YouTube), -14 (Spotify/Apple Music).",
+      },
+      { kind: "text", id: "truePeak", label: "Maximaler True Peak (dBTP)", defaultValue: "-2", numeric: true, help: "EBU R128 empfiehlt -1 oder niedriger." },
+      { kind: "text", id: "loudnessRange", label: "Lautheits-Schwankungsbreite / LRA (LU)", defaultValue: "7", numeric: true },
+      { kind: "codec-picker", id: "audio", mediaType: "audio", label: "Audio-Codec", help: "Leer = ffmpeg-Standard für die gewählte Dateiendung. Das Bild wird immer unverändert übernommen (Stream-Copy)." },
+    ],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      const o = v.scalars.outputPath?.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const lufs = Number(v.scalars.targetLufs);
+      const tp = Number(v.scalars.truePeak);
+      const lra = Number(v.scalars.loudnessRange);
+      if (!Number.isFinite(lufs)) return { ok: false, error: "Ziel-Lautheit: keine gültige Zahl." };
+      if (!Number.isFinite(tp)) return { ok: false, error: "Maximaler True Peak: keine gültige Zahl." };
+      if (!Number.isFinite(lra) || lra <= 0) return { ok: false, error: "Lautheits-Schwankungsbreite: keine gültige Zahl größer 0." };
+      const a = v.pickers.audio;
+      return {
+        ok: true,
+        args: buildLoudnormArgs({ inputPath: p, outputPath: o, targetLufs: lufs, truePeakDb: tp, loudnessRangeLu: lra, audioCodec: a?.codec || undefined, audioOptions: a?.options ?? {} }),
+      };
+    },
+  },
+  {
+    id: "remux_copy",
+    command: "ffmpeg",
+    fields: [
+      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.outputPath}" },
+      { kind: "format-picker", id: "format", label: "Container erzwingen (optional)", withOptions: false, help: "Leer = ffmpeg leitet ihn aus der Endung der Ausgabedatei ab." },
+    ],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      const o = v.scalars.outputPath?.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const f = v.pickers.format;
+      return { ok: true, args: buildRemuxCopyArgs({ inputPath: p, outputPath: o, format: f?.format || undefined }) };
+    },
+  },
+  {
+    id: "hls_ladder",
+    command: "ffmpeg",
+    fields: [
+      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      {
+        kind: "template-text",
+        id: "outputDir",
+        label: "Ausgabeverzeichnis",
+        required: true,
+        defaultValue: "${input.outputDir}",
+        help: "Master-Playlist (master.m3u8) landet direkt hier, je Rendition ein Unterordner mit Segmenten.",
+      },
+      { kind: "text", id: "segmentSeconds", label: "Segmentlänge (Sekunden)", defaultValue: "6", numeric: true },
+      {
+        kind: "group",
+        id: "renditions",
+        label: "Renditionen",
+        help: "Mindestens eine — jede wird als eigene Bitrate/Auflösung in der Ausgabeleiter erzeugt. Name nur Buchstaben/Zahlen/Bindestrich (wird als Verzeichnisname verwendet).",
+        minItems: 2,
+        addLabel: "+ weitere Rendition",
+        itemLabel: (i) => `Rendition ${i + 1}`,
+        itemFields: [
+          { kind: "text", id: "label", label: "Name", defaultValue: "", placeholder: "z. B. 1080p", required: true },
+          { kind: "text", id: "width", label: "Breite (Pixel)", defaultValue: "1280", numeric: true, required: true },
+          { kind: "text", id: "height", label: "Höhe (Pixel)", defaultValue: "720", numeric: true, required: true },
+          { kind: "text", id: "videoBitrateKbps", label: "Video-Bitrate (kbit/s)", defaultValue: "2500", numeric: true, required: true },
+          { kind: "text", id: "audioBitrateKbps", label: "Audio-Bitrate (kbit/s)", defaultValue: "128", numeric: true, required: true },
+        ],
+      },
+    ],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      const dir = v.scalars.outputDir?.trim();
+      if (!p || !dir) return { ok: false, error: "Eingabedatei und Ausgabeverzeichnis sind Pflicht." };
+      const seg = Number(v.scalars.segmentSeconds);
+      if (!Number.isFinite(seg) || seg <= 0) return { ok: false, error: "Segmentlänge: keine gültige Zahl größer 0." };
+      const rows = v.groups.renditions ?? [];
+      if (rows.length === 0) return { ok: false, error: "Mindestens eine Rendition ist nötig." };
+      const renditions: HlsRendition[] = [];
+      for (const row of rows) {
+        const label = row.scalars.label?.trim();
+        const width = Number(row.scalars.width);
+        const height = Number(row.scalars.height);
+        const videoBitrateKbps = Number(row.scalars.videoBitrateKbps);
+        const audioBitrateKbps = Number(row.scalars.audioBitrateKbps);
+        if (!label) return { ok: false, error: "Jede Rendition braucht einen Namen." };
+        if (!/^[A-Za-z0-9-]+$/.test(label)) return { ok: false, error: `"${label}": Name darf nur Buchstaben, Zahlen und Bindestrich enthalten.` };
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) return { ok: false, error: `"${label}": Breite/Höhe müssen gültige Zahlen größer 0 sein.` };
+        if (!Number.isFinite(videoBitrateKbps) || videoBitrateKbps <= 0) return { ok: false, error: `"${label}": Video-Bitrate muss eine gültige Zahl größer 0 sein.` };
+        if (!Number.isFinite(audioBitrateKbps) || audioBitrateKbps <= 0) return { ok: false, error: `"${label}": Audio-Bitrate muss eine gültige Zahl größer 0 sein.` };
+        renditions.push({ label, width, height, videoBitrateKbps, audioBitrateKbps });
+      }
+      const labels = renditions.map((r) => r.label);
+      if (new Set(labels).size !== labels.length) return { ok: false, error: "Rendition-Namen müssen eindeutig sein." };
+      return { ok: true, args: buildHlsLadderArgs({ inputPath: p, outputDir: dir, segmentSeconds: seg, renditions }) };
     },
   },
 ];
@@ -984,6 +1128,106 @@ export function buildOverlayArgs(input: OverlayInput): string[] {
   if (input.audioCodec) args.push("-c:a", input.audioCodec);
   if (input.format) args.push("-f", input.format);
   args.push(input.outputPath);
+  return args;
+}
+
+// ---- Radio/TV/Online-Vorlagen (Kapitel 25 R4, 2026-09-28) --------------------------------------
+
+// Lautheit-Normalisierung (EBU R128 `loudnorm`-Filter) — Pflicht bei
+// praktisch jeder Sendeabnahme. Bewusst EINPASS-Modus (dynamisch, misst
+// und korrigiert im selben Durchlauf): der präzisere ZWEIPASS-Modus
+// bräuchte einen ersten Messlauf, dessen JSON-Ausgabe geparst und als
+// `measured_*`-Parameter in einen zweiten Lauf eingespeist wird — ein
+// mehrstufiger Ablauf, den ein einzelner `script`-Schritt nicht abbilden
+// kann (dieselbe Art Grenze wie beim bewusst nicht gebauten pro-Clip-
+// Beschnitt+Verlustfreiheit-Fall, s. Kapitel 23 Nachtrag). Bild wird
+// immer unverändert durchgereicht (`-c:v copy`) — der Filter ändert
+// ohnehin nur den Ton.
+export interface LoudnormInput {
+  inputPath: string;
+  outputPath: string;
+  targetLufs: number;
+  truePeakDb: number;
+  loudnessRangeLu: number;
+  audioCodec?: string;
+  audioOptions?: Record<string, string>;
+}
+
+export function buildLoudnormArgs(input: LoudnormInput): string[] {
+  const args = ["-y", "-i", input.inputPath, "-af", `loudnorm=I=${input.targetLufs}:TP=${input.truePeakDb}:LRA=${input.loudnessRangeLu}`, "-c:v", "copy"];
+  if (input.audioCodec) args.push("-c:a", input.audioCodec);
+  args.push(...optionEntriesToArgs(input.audioOptions ?? {}));
+  args.push(input.outputPath);
+  return args;
+}
+
+// Verlustfreier Passthrough/Remux — reiner Container-Wechsel ohne
+// Neukodierung, der einfachste aller Bausteine hier (`-c copy`).
+export interface RemuxCopyInput {
+  inputPath: string;
+  outputPath: string;
+  format?: string;
+}
+
+export function buildRemuxCopyArgs(input: RemuxCopyInput): string[] {
+  const args = ["-y", "-i", input.inputPath, "-c", "copy"];
+  if (input.format) args.push("-f", input.format);
+  args.push(input.outputPath);
+  return args;
+}
+
+// Streaming-Ausgabeleiter (Multi-Bitrate-HLS) — erster echter Anwendungsfall
+// des "Gruppen"-Feldtyps (s. GenericScriptGroupField oben). Struktur (Split
+// pro Rendition + `-var_stream_map` + `-master_pl_name`) live gegen den
+// echten Host-ffmpeg verifiziert (Kapitel 25 R4 unten), nicht geraten.
+// Video-Codec `libx264`/Audio-Codec `aac` bewusst fest (nicht je Rendition
+// wählbar) — der universell kompatible HLS-Standardfall; wer etwas anderes
+// braucht, nutzt den Filter-Graph-Builder/Experten-Modus.
+export interface HlsRendition {
+  label: string; // wird 1:1 als HLS-Variant-Name UND %v-Verzeichnisname verwendet
+  width: number;
+  height: number;
+  videoBitrateKbps: number;
+  audioBitrateKbps: number;
+}
+
+export interface HlsLadderInput {
+  inputPath: string;
+  outputDir: string;
+  segmentSeconds: number;
+  renditions: HlsRendition[];
+}
+
+export function buildHlsLadderArgs(input: HlsLadderInput): string[] {
+  const n = input.renditions.length;
+  const splitLabels = input.renditions.map((_, i) => `v${i}`);
+  const filterParts = [`[0:v]split=${n}${splitLabels.map((l) => `[${l}]`).join("")}`];
+  input.renditions.forEach((r, i) => {
+    filterParts.push(`[v${i}]scale=w=${r.width}:h=${r.height}[v${i}out]`);
+  });
+
+  const args = ["-y", "-i", input.inputPath, "-filter_complex", filterParts.join(";")];
+  input.renditions.forEach((r, i) => {
+    args.push("-map", `[v${i}out]`, `-c:v:${i}`, "libx264", `-b:v:${i}`, `${r.videoBitrateKbps}k`);
+  });
+  input.renditions.forEach((r, i) => {
+    args.push("-map", "0:a", `-c:a:${i}`, "aac", `-b:a:${i}`, `${r.audioBitrateKbps}k`);
+  });
+  args.push(
+    "-var_stream_map",
+    input.renditions.map((r, i) => `v:${i},a:${i},name:${r.label}`).join(" "),
+    "-master_pl_name",
+    "master.m3u8",
+    "-f",
+    "hls",
+    "-hls_time",
+    String(input.segmentSeconds),
+    "-hls_playlist_type",
+    "vod",
+    "-hls_segment_filename",
+    `${input.outputDir}/%v/seg_%03d.ts`,
+    `${input.outputDir}/%v/stream.m3u8`,
+  );
   return args;
 }
 

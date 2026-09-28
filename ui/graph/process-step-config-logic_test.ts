@@ -6,8 +6,11 @@ import {
   buildConcatArgs,
   buildConvertArgs,
   buildExtractAudioArgs,
+  buildHlsLadderArgs,
+  buildLoudnormArgs,
   buildOverlayArgs,
   buildProbeArgs,
+  buildRemuxCopyArgs,
   buildThumbnailArgs,
   ffOptionControlKind,
   type FFOption,
@@ -316,8 +319,8 @@ Deno.test("buildThumbnailArgs scales by width, keeps aspect ratio via -2", () =>
 // build<X>Args-Funktionen selbst sind unverändert, hier wird nur die
 // neue toArgs()-Verdrahtung (Feldnamen, Pflichtfeld-Prüfung) geprüft.
 
-Deno.test("genericScriptTaskById: probe/thumbnail/extract_audio are registered, convert/concat/overlay are not (still bespoke)", () => {
-  assertEquals(GENERIC_SCRIPT_TASKS.map((t) => t.id).sort(), ["extract_audio", "probe", "thumbnail"]);
+Deno.test("genericScriptTaskById: probe/thumbnail/extract_audio/loudnorm/remux_copy/hls_ladder are registered, convert/concat/overlay are not (still bespoke)", () => {
+  assertEquals(GENERIC_SCRIPT_TASKS.map((t) => t.id).sort(), ["extract_audio", "hls_ladder", "loudnorm", "probe", "remux_copy", "thumbnail"]);
   assertEquals(genericScriptTaskById("convert"), undefined);
   assertEquals(genericScriptTaskById("concat"), undefined);
   assertEquals(genericScriptTaskById("overlay"), undefined);
@@ -326,36 +329,36 @@ Deno.test("genericScriptTaskById: probe/thumbnail/extract_audio are registered, 
 Deno.test("generic 'probe' task: toArgs matches buildProbeArgs for the same input, errors when the file is missing", () => {
   const task = genericScriptTaskById("probe")!;
   assertEquals(task.command, "ffprobe");
-  assertEquals(task.toArgs({ scalars: { inputPath: "${input.path}" }, pickers: {} }), {
+  assertEquals(task.toArgs({ scalars: { inputPath: "${input.path}" }, pickers: {}, groups: {} }), {
     ok: true,
     args: buildProbeArgs({ inputPath: "${input.path}" }),
   });
-  assertEquals(task.toArgs({ scalars: { inputPath: "" }, pickers: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
-  assertEquals(task.toArgs({ scalars: { inputPath: "   " }, pickers: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
+  assertEquals(task.toArgs({ scalars: { inputPath: "" }, pickers: {}, groups: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
+  assertEquals(task.toArgs({ scalars: { inputPath: "   " }, pickers: {}, groups: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
 });
 
 Deno.test("generic 'thumbnail' task: toArgs matches buildThumbnailArgs, validates width and required paths", () => {
   const task = genericScriptTaskById("thumbnail")!;
   assertEquals(task.command, "ffmpeg");
   assertEquals(
-    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {} }),
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {}, groups: {} }),
     { ok: true, args: buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }) },
   );
   // Leeres Zeitfeld fällt auf denselben "00:00:05"-Standard zurück wie das
   // frühere bespoke Formular (textInput-Startwert war ebenfalls "00:00:05").
   assertEquals(
-    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "", widthPixels: "480" }, pickers: {} }),
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "", widthPixels: "480" }, pickers: {}, groups: {} }),
     { ok: true, args: buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }) },
   );
-  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {} }), {
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {}, groups: {} }), {
     ok: false,
     error: "Eingabe- und Ausgabedatei sind Pflicht.",
   });
-  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "0" }, pickers: {} }), {
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "0" }, pickers: {}, groups: {} }), {
     ok: false,
     error: "Breite: keine gültige Zahl.",
   });
-  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "abc" }, pickers: {} }), {
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "abc" }, pickers: {}, groups: {} }), {
     ok: false,
     error: "Breite: keine gültige Zahl.",
   });
@@ -365,16 +368,184 @@ Deno.test("generic 'extract_audio' task: toArgs matches buildExtractAudioArgs, w
   const task = genericScriptTaskById("extract_audio")!;
   assertEquals(task.command, "ffmpeg");
   assertEquals(
-    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: { audio: { codec: "pcm_s24le", options: { "-ar": "48000" } } } }),
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: { audio: { codec: "pcm_s24le", options: { "-ar": "48000" } } }, groups: {} }),
     { ok: true, args: buildExtractAudioArgs({ inputPath: "in.mp4", outputPath: "out.wav", audioCodec: "pcm_s24le", audioOptions: { "-ar": "48000" } }) },
   );
   // Kein Picker-Eintrag (Nutzer hat den Codec nie geöffnet) verhält sich
   // wie ein leerer Codec — ffmpeg-Standard für die Dateiendung.
   assertEquals(
-    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: {} }),
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: {}, groups: {} }),
     { ok: true, args: buildExtractAudioArgs({ inputPath: "in.mp4", outputPath: "out.wav", audioCodec: undefined, audioOptions: {} }) },
   );
-  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.wav" }, pickers: {} }), { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." });
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.wav" }, pickers: {}, groups: {} }), { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." });
+});
+
+// ---- Radio/TV/Online-Vorlagen (Kapitel 25 R4) ------------------------------------------------------
+
+Deno.test("buildLoudnormArgs: sets I/TP/LRA on the loudnorm filter, always copies video, omits -c:a when no codec chosen", () => {
+  assertEquals(
+    buildLoudnormArgs({ inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: -23, truePeakDb: -2, loudnessRangeLu: 7 }),
+    ["-y", "-i", "in.mp4", "-af", "loudnorm=I=-23:TP=-2:LRA=7", "-c:v", "copy", "out.mp4"],
+  );
+});
+
+Deno.test("buildLoudnormArgs: an explicit audio codec + options land right after the loudnorm filter", () => {
+  assertEquals(
+    buildLoudnormArgs({ inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: -16, truePeakDb: -1, loudnessRangeLu: 11, audioCodec: "aac", audioOptions: { "-b:a": "192k" } }),
+    ["-y", "-i", "in.mp4", "-af", "loudnorm=I=-16:TP=-1:LRA=11", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "out.mp4"],
+  );
+});
+
+Deno.test("generic 'loudnorm' task: toArgs matches buildLoudnormArgs, validates all three numeric fields", () => {
+  const task = genericScriptTaskById("loudnorm")!;
+  assertEquals(task.command, "ffmpeg");
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: "-23", truePeak: "-2", loudnessRange: "7" }, pickers: {}, groups: {} }),
+    { ok: true, args: buildLoudnormArgs({ inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: -23, truePeakDb: -2, loudnessRangeLu: 7 }) },
+  );
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.mp4", targetLufs: "-23", truePeak: "-2", loudnessRange: "7" }, pickers: {}, groups: {} }), {
+    ok: false,
+    error: "Eingabe- und Ausgabedatei sind Pflicht.",
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: "abc", truePeak: "-2", loudnessRange: "7" }, pickers: {}, groups: {} }), {
+    ok: false,
+    error: "Ziel-Lautheit: keine gültige Zahl.",
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: "-23", truePeak: "abc", loudnessRange: "7" }, pickers: {}, groups: {} }), {
+    ok: false,
+    error: "Maximaler True Peak: keine gültige Zahl.",
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.mp4", targetLufs: "-23", truePeak: "-2", loudnessRange: "0" }, pickers: {}, groups: {} }), {
+    ok: false,
+    error: "Lautheits-Schwankungsbreite: keine gültige Zahl größer 0.",
+  });
+});
+
+Deno.test("buildRemuxCopyArgs: stream-copies both, only adds -f when a container is forced", () => {
+  assertEquals(buildRemuxCopyArgs({ inputPath: "in.ts", outputPath: "out.mp4" }), ["-y", "-i", "in.ts", "-c", "copy", "out.mp4"]);
+  assertEquals(buildRemuxCopyArgs({ inputPath: "in.ts", outputPath: "out.dat", format: "mp4" }), ["-y", "-i", "in.ts", "-c", "copy", "-f", "mp4", "out.dat"]);
+});
+
+Deno.test("generic 'remux_copy' task: toArgs matches buildRemuxCopyArgs", () => {
+  const task = genericScriptTaskById("remux_copy")!;
+  assertEquals(task.command, "ffmpeg");
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.ts", outputPath: "out.mp4" }, pickers: { format: { format: "mp4", options: {} } }, groups: {} }),
+    { ok: true, args: buildRemuxCopyArgs({ inputPath: "in.ts", outputPath: "out.mp4", format: "mp4" }) },
+  );
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.mp4" }, pickers: {}, groups: {} }), { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." });
+});
+
+Deno.test("buildHlsLadderArgs: splits video once per rendition, scales+maps+bitrates each, builds var_stream_map/master playlist/segment pattern", () => {
+  const args = buildHlsLadderArgs({
+    inputPath: "in.mp4",
+    outputDir: "out",
+    segmentSeconds: 6,
+    renditions: [
+      { label: "1080p", width: 1920, height: 1080, videoBitrateKbps: 5000, audioBitrateKbps: 192 },
+      { label: "480p", width: 854, height: 480, videoBitrateKbps: 1200, audioBitrateKbps: 96 },
+    ],
+  });
+  assertEquals(args, [
+    "-y",
+    "-i",
+    "in.mp4",
+    "-filter_complex",
+    "[0:v]split=2[v0][v1];[v0]scale=w=1920:h=1080[v0out];[v1]scale=w=854:h=480[v1out]",
+    "-map",
+    "[v0out]",
+    "-c:v:0",
+    "libx264",
+    "-b:v:0",
+    "5000k",
+    "-map",
+    "[v1out]",
+    "-c:v:1",
+    "libx264",
+    "-b:v:1",
+    "1200k",
+    "-map",
+    "0:a",
+    "-c:a:0",
+    "aac",
+    "-b:a:0",
+    "192k",
+    "-map",
+    "0:a",
+    "-c:a:1",
+    "aac",
+    "-b:a:1",
+    "96k",
+    "-var_stream_map",
+    "v:0,a:0,name:1080p v:1,a:1,name:480p",
+    "-master_pl_name",
+    "master.m3u8",
+    "-f",
+    "hls",
+    "-hls_time",
+    "6",
+    "-hls_playlist_type",
+    "vod",
+    "-hls_segment_filename",
+    "out/%v/seg_%03d.ts",
+    "out/%v/stream.m3u8",
+  ]);
+});
+
+Deno.test("generic 'hls_ladder' task: toArgs validates rendition count, name charset, uniqueness, and numeric fields", () => {
+  const task = genericScriptTaskById("hls_ladder")!;
+  assertEquals(task.command, "ffmpeg");
+
+  const okValues = {
+    scalars: { inputPath: "in.mp4", outputDir: "out", segmentSeconds: "6" },
+    pickers: {},
+    groups: {
+      renditions: [
+        { scalars: { label: "1080p", width: "1920", height: "1080", videoBitrateKbps: "5000", audioBitrateKbps: "192" }, pickers: {}, groups: {} },
+        { scalars: { label: "480p", width: "854", height: "480", videoBitrateKbps: "1200", audioBitrateKbps: "96" }, pickers: {}, groups: {} },
+      ],
+    },
+  };
+  assertEquals(
+    task.toArgs(okValues),
+    {
+      ok: true,
+      args: buildHlsLadderArgs({
+        inputPath: "in.mp4",
+        outputDir: "out",
+        segmentSeconds: 6,
+        renditions: [
+          { label: "1080p", width: 1920, height: 1080, videoBitrateKbps: 5000, audioBitrateKbps: 192 },
+          { label: "480p", width: 854, height: 480, videoBitrateKbps: 1200, audioBitrateKbps: 96 },
+        ],
+      }),
+    },
+  );
+
+  assertEquals(task.toArgs({ ...okValues, groups: { renditions: [] } }), { ok: false, error: "Mindestens eine Rendition ist nötig." });
+
+  assertEquals(
+    task.toArgs({ ...okValues, groups: { renditions: [{ scalars: { label: "1080 p!", width: "1920", height: "1080", videoBitrateKbps: "5000", audioBitrateKbps: "192" }, pickers: {}, groups: {} }] } }),
+    { ok: false, error: '"1080 p!": Name darf nur Buchstaben, Zahlen und Bindestrich enthalten.' },
+  );
+
+  assertEquals(
+    task.toArgs({
+      ...okValues,
+      groups: {
+        renditions: [
+          { scalars: { label: "a", width: "1920", height: "1080", videoBitrateKbps: "5000", audioBitrateKbps: "192" }, pickers: {}, groups: {} },
+          { scalars: { label: "a", width: "854", height: "480", videoBitrateKbps: "1200", audioBitrateKbps: "96" }, pickers: {}, groups: {} },
+        ],
+      },
+    }),
+    { ok: false, error: "Rendition-Namen müssen eindeutig sein." },
+  );
+
+  assertEquals(
+    task.toArgs({ ...okValues, groups: { renditions: [{ scalars: { label: "x", width: "0", height: "1080", videoBitrateKbps: "5000", audioBitrateKbps: "192" }, pickers: {}, groups: {} }] } }),
+    { ok: false, error: '"x": Breite/Höhe müssen gültige Zahlen größer 0 sein.' },
+  );
 });
 
 // ---- Clips aneinanderhängen (Kapitel 23, Schritt 2) -----------------------------------------------

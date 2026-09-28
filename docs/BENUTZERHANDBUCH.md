@@ -337,7 +337,7 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 Beim Datei-Werkzeug öffnet der Doppelklick standardmäßig den
 **Assistenten** — ein Formular mit echten, von diesem Server
 tatsächlich unterstützten Werten (Container, Codecs, Filter samt
-Hilfetext), keine Rohargumente. Über **„Aufgabe"** stehen sechs
+Hilfetext), keine Rohargumente. Über **„Aufgabe"** stehen folgende
 geführte Abläufe zur Wahl:
 
 - **Technische Metadaten auslesen** — nur die Eingabedatei angeben,
@@ -369,6 +369,23 @@ geführte Abläufe zur Wahl:
   und optionaler Position; eine schlichte Zeitleiste darüber zeigt zur
   Orientierung, wie die Ereignisse zeitlich verteilt sind (nicht
   ziehbar, nur zur Übersicht).
+- **Lautheit normalisieren (EBU R128)** — Ziel-Lautheit (LUFS),
+  maximaler True Peak (dBTP) und Lautheits-Schwankungsbreite (LRA)
+  einstellbar, Standardwerte entsprechen EBU R128 (-23 LUFS/-2 dBTP/7
+  LU); Bild wird immer unverändert übernommen. Einpass-Verfahren — für
+  eine noch präzisere Zweipass-Messung den Experten-Modus nutzen.
+- **Verlustfreier Passthrough/Remux (Container wechseln)** — reiner
+  Container-Wechsel ohne Neukodierung, optional einen Container
+  erzwingen (sonst aus der Dateiendung abgeleitet).
+- **Streaming-Ausgabeleiter (Multi-Bitrate HLS)** — beliebig viele
+  Renditionen (Name, Auflösung, Video-/Audio-Bitrate, per „+ weitere
+  Rendition“ hinzufügbar/entfernbar), erzeugt eine Master-Playlist
+  (`master.m3u8`) im gewählten Ausgabeverzeichnis plus je Rendition
+  einen Unterordner mit Segmenten — für adaptives Streaming in Web-/
+  App-Playern. Rendition-Namen dürfen nur Buchstaben, Zahlen und
+  Bindestrich enthalten (werden als Verzeichnisnamen verwendet).
+
+  ![Assistent bei „Streaming-Ausgabeleiter“: drei Renditionen mit Name/Auflösung/Bitrate](screenshots/prozess-ffmpeg-hls-ladder.png)
 
 ![Assistent bei „Format/Codec konvertieren“: Filter-Kette/Audio-Matrix-Knöpfe und die generische Ausgabespuren-Liste](screenshots/prozess-ffmpeg-assistent.png)
 

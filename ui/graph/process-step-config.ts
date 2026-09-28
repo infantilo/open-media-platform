@@ -37,6 +37,8 @@ import {
   flatStringObject,
   formatGoDuration,
   genericScriptTaskById,
+  type GenericScriptField,
+  type GenericScriptFormValues,
   type GenericScriptTask,
   GLOBAL_FFMPEG_FLAGS,
   globalFlagByName,
@@ -858,12 +860,78 @@ interface ScriptWizardForm {
 // eingesammelten Werte an `task.toArgs()`. Eine neue einfache Aufgabe
 // braucht damit NUR einen neuen GENERIC_SCRIPT_TASKS-Eintrag — dieser
 // Code hier ändert sich nicht.
-function buildGenericScriptForm(task: GenericScriptTask, vars: VariableOption[]): ScriptWizardForm {
-  const el = h("div", "");
-  const scalarReaders: Record<string, () => string> = {};
-  const pickerReaders: Record<string, () => { codec?: string; format?: string; options: Record<string, string> }> = {};
+// Ein Satz Leser-Funktionen für eine Feldliste (Kapitel 25 R4) —
+// `collectGenericValues` liest sie in die `GenericScriptFormValues`-Form
+// ein, die `GenericScriptTask.toArgs()` erwartet. Getrennt von
+// `renderGenericFields` selbst, damit eine `group`-Zeile (rekursiv
+// dieselbe Feldliste wie das Top-Level-Formular) ihre eigenen Leser
+// bekommt, ohne mit denen anderer Zeilen/des äußeren Formulars zu
+// kollidieren.
+interface GenericFieldReaders {
+  scalarReaders: Record<string, () => string>;
+  pickerReaders: Record<string, () => { codec?: string; format?: string; options: Record<string, string> }>;
+  groupReaders: Record<string, () => GenericScriptFormValues[]>;
+}
 
-  for (const spec of task.fields) {
+function collectGenericValues(readers: GenericFieldReaders): GenericScriptFormValues {
+  return {
+    scalars: Object.fromEntries(Object.entries(readers.scalarReaders).map(([k, r]) => [k, r()])),
+    pickers: Object.fromEntries(Object.entries(readers.pickerReaders).map(([k, r]) => [k, r()])),
+    groups: Object.fromEntries(Object.entries(readers.groupReaders).map(([k, r]) => [k, r()])),
+  };
+}
+
+// Rendert eine Feldliste in `container` — vom Top-Level-Aufruf
+// (`buildGenericScriptForm`) UND rekursiv für jede Zeile eines
+// `group`-Felds (Kapitel 25 R4, s. GenericScriptGroupField-Doku in
+// process-step-config-logic.ts: bewusst nur eine Ebene tief genutzt,
+// der Interpreter selbst schränkt Verschachtelung aber nicht künstlich
+// ein).
+function renderGenericFields(container: HTMLElement, fields: GenericScriptField[], vars: VariableOption[]): GenericFieldReaders {
+  const scalarReaders: GenericFieldReaders["scalarReaders"] = {};
+  const pickerReaders: GenericFieldReaders["pickerReaders"] = {};
+  const groupReaders: GenericFieldReaders["groupReaders"] = {};
+
+  for (const spec of fields) {
+    if (spec.kind === "group") {
+      const minItems = spec.minItems ?? 1;
+      const rows: { rowEl: HTMLElement; heading: HTMLElement; readers: GenericFieldReaders }[] = [];
+      const list = h("div", "");
+      const renumber = () => rows.forEach((r, i) => (r.heading.textContent = spec.itemLabel(i)));
+      const addRow = () => {
+        const rowEl = h("div", "border:1px solid var(--omp-border);border-radius:4px;padding:6px;margin-top:6px;");
+        const heading = h("div", "font-weight:600;");
+        const rowFieldsWrap = h("div", "");
+        const readers = renderGenericFields(rowFieldsWrap, spec.itemFields, vars);
+        const rmBtn = h("button", "margin-top:4px;", "Entfernen");
+        rmBtn.type = "button";
+        rmBtn.addEventListener("click", () => {
+          if (rows.length <= minItems) return;
+          const idx = rows.findIndex((r) => r.rowEl === rowEl);
+          if (idx >= 0) rows.splice(idx, 1);
+          rowEl.remove();
+          renumber();
+        });
+        rowEl.append(heading, rowFieldsWrap, rmBtn);
+        rows.push({ rowEl, heading, readers });
+        list.appendChild(rowEl);
+        renumber();
+      };
+      for (let i = 0; i < minItems; i++) addRow();
+      const addBtn = h("button", "margin-top:6px;", spec.addLabel);
+      addBtn.type = "button";
+      addBtn.addEventListener("click", addRow);
+
+      const wrap = h("div", "display:flex;flex-direction:column;gap:2px;margin-top:8px;");
+      wrap.appendChild(h("span", HELP_CSS + "font-weight:600;", spec.label));
+      if (spec.help) wrap.appendChild(h("span", HELP_CSS, spec.help));
+      wrap.append(list, addBtn);
+      container.appendChild(wrap);
+
+      groupReaders[spec.id] = () => rows.map((r) => collectGenericValues(r.readers));
+      continue;
+    }
+
     let control: HTMLElement;
     if (spec.kind === "template-text") {
       const t = templateInput(spec.defaultValue ?? "", spec.placeholder ?? spec.defaultValue ?? "", vars);
@@ -889,15 +957,19 @@ function buildGenericScriptForm(task: GenericScriptTask, vars: VariableOption[])
         return { format: r.format, options: r.options };
       };
     }
-    el.appendChild(field(spec.label, control, spec.help, spec.required));
+    container.appendChild(field(spec.label, control, spec.help, spec.required));
   }
 
+  return { scalarReaders, pickerReaders, groupReaders };
+}
+
+function buildGenericScriptForm(task: GenericScriptTask, vars: VariableOption[]): ScriptWizardForm {
+  const el = h("div", "");
+  const readers = renderGenericFields(el, task.fields, vars);
   return {
     el,
     read: () => {
-      const scalars = Object.fromEntries(Object.entries(scalarReaders).map(([k, r]) => [k, r()]));
-      const pickers = Object.fromEntries(Object.entries(pickerReaders).map(([k, r]) => [k, r()]));
-      const result = task.toArgs({ scalars, pickers });
+      const result = task.toArgs(collectGenericValues(readers));
       if (!result.ok) return { ok: false, error: result.error };
       return { ok: true, command: task.command, args: result.args };
     },
