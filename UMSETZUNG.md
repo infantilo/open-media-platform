@@ -4262,10 +4262,41 @@ Handbuch-Screenshots (`docs/screenshots/audio-matrix.png` ersetzt,
 `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno
 bundle` (49 Module) grün.
 
-#### R3 — "Auxinput"-Abschnitt für benannte Zusatzquellen
+#### R3 — "Auxinput"-Abschnitt für benannte Zusatzquellen (erledigt 2026-09-28)
 
-Zusätzliche Quelldateien in der Matrix bekommen einen eigenen,
-einklappbaren Abschnitt mit Namensfeld (statt nur "+ weitere Quelle").
+Umgesetzt wie geplant, keine Scope-Korrektur nötig: jede Zusatzquelle
+(Index ≥1) bekommt in `audio-matrix.ts` einen eigenen, per Klick auf die
+Kopfzeile ein-/ausklappbaren "Auxinput N"-Abschnitt mit editierbarem
+Namensfeld (`src.label`, fällt bei leerem Namen weiter auf "Quelle N"
+zurück) statt einer weiteren Zeile in derselben Liste wie die Haupt-
+Eingabedatei. Die Kanal-Layout-Auswahl + Downmix-Vorlage-Knöpfe aus R2
+(bisher dupliziert zwischen Haupt- und Zusatzquellen-Rendering) wurden
+dabei in einen gemeinsamen `buildLayoutControls()`-Baustein gezogen —
+funktional unverändert, nur nicht mehr zweimal codiert. Tabellen-
+Zeilenbeschriftungen übernehmen den Namen automatisch (nutzten `src.label`
+bereits seit R2). Eingeklappt bleibt nur die Kopfzeile (Name + Entfernen)
+sichtbar — hält die Liste bei mehreren Zusatzquellen übersichtlich, wie
+es das Referenzbild mit "Auxinput [1]" vorschlägt.
+
+Keine neue reine Logik nötig (reine DOM-Umstrukturierung + ein
+Namensfeld, das ein bereits vorhandenes `AudioMatrixSource.label`-Feld
+befüllt) — deshalb keine neuen `audio-matrix-logic_test.ts`-Fälle in
+diesem Schritt.
+
+**Verifikation:** live per CDP gegen den echten laufenden Orchestrator
+(gleicher Prozess wie R1/R2): zwei Auxinput-Abschnitte per "+ weitere
+Quelldatei (Auxinput)" angelegt, beide standardmäßig aufgeklappt; einen
+auf "SW8-Trailer" benannt (Name der im Referenzbild genutzten Zelle) —
+Tabellen-Zeilen zeigten sofort "SW8-Trailer · L/R" statt "Quelle 2 ·
+L/R"; Kopfzeile angeklickt klappte NUR diesen Abschnitt ein (▾→▸, Pfad-/
+Kanal-Layout-Felder verschwinden), erneuter Klick wieder aus — Name
+blieb dabei korrekt erhalten (kein Re-Render-Datenverlust); den zweiten,
+unbenannten Auxinput entfernt (✕) — der benannte blieb unangetastet,
+Zellen-Indizes korrekt neu durchgezählt. `deno check ui/**/*.ts`, `deno
+test ui/` (185 Fälle, unverändert — reine UI-Umstrukturierung), `deno
+bundle` (49 Module) grün. Neuer Handbuch-Screenshot
+(`docs/screenshots/audio-matrix-auxinput.png`), BENUTZERHANDBUCH.md
+§5a.1 aktualisiert.
 
 #### R4 — Neue Radio/TV/Online-Vorlagen als Registry-Einträge
 
@@ -4545,3 +4576,4 @@ der Trefferliste.
 | Kapitel 24: Operator-UI — Minimieren/Maximieren/Vor-Reihenfolge/"Alle anordnen" für Konsolen-Kacheln | erledigt | Nutzerauftrag 2026-09-28: Node-UIs im Operator-UI sollen "mehr wie Fenster" aussehen. `console-board-logic.ts`: `TileLayout` um optionale `minimized`/`zIndex`-Felder erweitert (rückwärtskompatibel), neue reine Funktion `computeTileGridLayout` (quadratisches Raster für "Alle anordnen", 4 neue Tests). `console-board.ts`: zwei Fenster-Buttons je Titelleiste (Minimieren klappt an Ort und Stelle ein, bleibt weiter ziehbar; Maximieren füllt den Board-Bereich exakt, per `ResizeObserver` live nachgeführt, max. eine Kachel gleichzeitig), Klick/Ziehen auf eine Kachel hebt sie per z-index nach vorne, neue Symbolleiste "⊞ Alle anordnen" packt alle Kacheln in ein frisches Raster und klappt Minimiertes wieder auf. Live per **echtem CDP-Mausinput** verifiziert (headless Chromium, eigenständig gebündeltes Modul gegen drei Fake-Konsolen-Einträge) — dabei ein Testmethodik-Stolperstein selbst gefunden+korrigiert: synthetisches `dispatchEvent(PointerEvent)` erzeugt in Headless-Chrome keinen für `setPointerCapture` gültigen aktiven Pointer (`NotFoundError`), reales `page.mouse.move/down/up` (echte CDP-Input-Events) schon — danach alle Fälle bestätigt: Minimieren/Wiederherstellen, Maximieren mit exaktem Board-Fit + Auto-Wiederherstellung der vorherigen Kachel, Vor-Reihenfolge, echtes Ziehen (+70/+40px exakt), echtes Skalieren (+60/+50px exakt), minimierte Kachel bleibt ziehbar und rendert korrekt über anderen Kacheln, "Alle anordnen" übersteht Reload dank `localStorage`. `deno check ui/**/*.ts`, `deno test ui/` (176 Fälle, 4 neu), `deno bundle ui/shell/shell.ts` (49 Module) grün. Details UMSETZUNG.md Kapitel 24. Kapitel 25 (FFmpeg-Assistent: Aufgaben-Registry + erweiterte Audio-Matrix) geplant, noch nicht begonnen — s. UMSETZUNG.md 6f. | 2026-09-28 |
 | Kapitel 25 R1: generische Aufgaben-Registry für den ffmpeg-Assistenten (probe/thumbnail/extract_audio) | erledigt | Nutzerauftrag 2026-09-28 ("die ffmpeg-UI ist noch zu hardcoded"), Nutzerentscheidung "Registry + mehr Vorlagen". Scope-Korrektur beim tatsächlichen Umsetzen (§0 Punkt 8, sofort dokumentiert): ein voller Interpreter für alle 6 Aufgaben (wie ursprünglich in 25.3 skizziert) hätte eine riskante Mini-DSL für wiederholbare wechselseitig sichtbarkeitsgekoppelte Unterformulare gebraucht, verifiziert an nur 2 Vorbildern (`concat`/`overlay`) — stattdessen: `GENERIC_SCRIPT_TASKS`-Registry (`process-step-config-logic.ts`, Feldarten `template-text`/`text`/`codec-picker`/`format-picker`) + eine einzige `buildGenericScriptForm`-Rendering-Funktion (`process-step-config.ts`) für die drei wirklich flachen Aufgaben `probe`/`thumbnail`/`extract_audio`; `convert` (der generische Baukasten-Fluchtweg selbst)/`concat`/`overlay` bleiben bewusst bespoke. `ScriptIntent.id` von geschlossenem Union-Typ auf `string` gelockert. Die zugrundeliegenden `build<X>Args()`-Funktionen sind unverändert (Regressionssicherheit), nur eine neue `toArgs()`-Zwischenschicht ruft sie auf — kein sichtbarer Verhaltensunterschied, BENUTZERHANDBUCH.md unverändert gültig. 4 neue `deno test`-Fälle, alle 180 Tests grün, `deno bundle` (49 Module) grün. Live per echter CDP-Session gegen den echten laufenden Orchestrator verifiziert: neue Prozess-Definition angelegt, Datei-Werkzeug-Schritt hinzugefügt, "Technische Metadaten auslesen" erzeugte exakt die erwarteten ffprobe-Argumente, Durchwechseln aller 6 Aufgaben zeigte in jedem Fall korrekte Vorschau/Validierung (keine Regression bei den 3 weiterhin bespoke Aufgaben), Audio-Codec-Picker von `extract_audio` lud 85 echte Host-ffmpeg-Encoder, Auswahl "aac" aktualisierte die Vorschau live zu `-c:a aac`. Details UMSETZUNG.md 25.3 (R1). Nächster Schritt: R2 (Audio-Matrix Kanal-Layout-Labels + Downmixer-Dialog). | 2026-09-28 |
 | Kapitel 25 R2: Audio-Matrix — Kanal-Layout-Labels, Downmixer-Dialog je Zelle, Downmix-Vorlagen | erledigt | Nutzerentscheidung "visuell + funktional erweitern". Scope-Korrektur (§0 Punkt 8, sofort dokumentiert): "Kanal-Layout-ERKENNUNG aus ffprobe" hätte eine neue HTTP-Route gebraucht, die ffprobe auf einen vom Nutzer angegebenen Dateipfad loslässt — genau die im Kapitel-23-Nachtrag bereits bewusst NICHT gebaute Fähigkeit ("verdient eine eigene Sicherheitsabwägung"). Stattdessen Kanal-Layout-AUSWAHL: Dropdown je Quelle (Mono/Stereo/5.1/7.1/"Eigene Anzahl", ffmpeg-Standard-Kanalreihenfolge). `audio-matrix-logic.ts`: `ChannelLayoutId`/`CHANNEL_LAYOUTS`/`channelLabel()` (reine Beschriftung, `compileAudioMatrix` unverändert), `DOWNMIX_PRESETS`/`applyDownmixPreset()` (Mono→Stereo, Stereo→Mono, 5.1→Stereo nach ITU-Konvention −3dB, LFE bewusst ausgeschlossen+dokumentiert). `audio-matrix.ts`: Kanal-Layout-Dropdown ersetzt reine Kanalzahl-Eingabe, passender Downmix-Vorlage-Knopf je Quell-Layout, Zellen zeigen nur noch eine kompakte Zusammenfassung statt zweier immer sichtbarer Zahlenfelder — Klick öffnet "Downmixer"-Dialog (Gain-Regler 0–200% + Zahlenfeld + live dB-Anzeige, Verzögerung, Entfernen/Abbrechen/Übernehmen) im Stil des vom Nutzer genannten Referenzbilds. 10 neue Tests. Live per CDP gegen den echten Orchestrator verifiziert: Layout-Wechsel auf 5.1 zeigte echte L/R/C/LFE/Ls/Rs-Labels, Preset-Klick befüllte exakt die 6 erwarteten Zellen, Downmixer-Dialog zeigte korrekt 70,7%/−3.0dB und aktualisierte auf 50%/−6.0dB live, Übernehmen änderte nur die eine Zelle, finale Matrix-Kompilierung erzeugte exakt den erwarteten `-filter_complex` (Kompilier-Logik-Unverändertheit tatsächlich bestätigt). Zwei neue Handbuch-Screenshots direkt aus der Live-Session (`docs/screenshots/audio-matrix.png` ersetzt, `audio-matrix-downmixer.png` neu), BENUTZERHANDBUCH.md §5a.1 aktualisiert. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, 10 neu), `deno bundle` (49 Module) grün. Nächster Schritt: R3 ("Auxinput"-Abschnitt für benannte Zusatzquellen). | 2026-09-28 |
+| Kapitel 25 R3: Audio-Matrix — benannte, einklappbare "Auxinput"-Abschnitte für Zusatzquellen | erledigt | Jede Zusatzquelle bekommt in `audio-matrix.ts` einen eigenen, per Kopfzeilen-Klick ein-/ausklappbaren "Auxinput N"-Abschnitt mit editierbarem Namensfeld (füllt das seit R2 vorhandene `AudioMatrixSource.label`) statt einer weiteren Zeile in derselben Liste wie die Haupt-Eingabedatei — Tabellen-Zeilen übernehmen den Namen automatisch. Kanal-Layout-Auswahl + Downmix-Vorlage-Knöpfe aus R2 in einen gemeinsamen `buildLayoutControls()`-Baustein gezogen (keine Verdopplung mehr zwischen Haupt-/Zusatzquellen-Rendering). Reine DOM-Umstrukturierung, keine neue Logik nötig. Live per CDP gegen den echten Orchestrator verifiziert: zwei Auxinputs angelegt, einen auf "SW8-Trailer" benannt (Tabellenzeilen sofort aktualisiert), Ein-/Ausklappen einzeln pro Abschnitt bestätigt (Name bleibt über Re-Render erhalten), Entfernen des unbenannten Auxinput ließ den benannten unangetastet mit korrekt verschobenen Zellen-Indizes. `deno check ui/**/*.ts`, `deno test ui/` (185 Fälle, unverändert), `deno bundle` (49 Module) grün. Neuer Handbuch-Screenshot, BENUTZERHANDBUCH.md §5a.1 aktualisiert. Nächster Schritt: R4 (neue Radio/TV/Online-Vorlagen als Registry-Einträge, Nutzer entscheidet Auswahl/Reihenfolge vorher). | 2026-09-28 |

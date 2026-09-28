@@ -378,8 +378,16 @@ wieder ausgebaute „Mehrspur-Container bauen“-Sonderfunktion war:
 
 - **„Audio-Matrix bearbeiten …“** öffnet ein Kreuzschienen-Raster:
   Zeilen sind die Tonkanäle aller angegebenen Quelldateien (Haupt-
-  Eingabedatei plus beliebig viele „+ weitere Quelldatei“), Spalten
-  sind frei wählbare Ausgangsspuren. Je Quelldatei wählt man ein
+  Eingabedatei plus beliebig viele Zusatzquellen). Jede Zusatzquelle
+  bekommt einen eigenen, benennbaren **„Auxinput“**-Abschnitt (z. B.
+  „SW8-Trailer“ statt nur „Quelle 2“) — per Klick auf die Kopfzeile
+  ein-/ausklappbar, damit die Liste bei vielen Zusatzquellen
+  übersichtlich bleibt; der gewählte Name erscheint direkt als
+  Zeilen-Beschriftung im Raster darunter.
+
+  ![Audio-Matrix mit einem benannten, aufgeklappten Auxinput-Abschnitt („SW8-Trailer“)](screenshots/audio-matrix-auxinput.png)
+
+  Spalten sind frei wählbare Ausgangsspuren. Je Quelldatei wählt man ein
   **Kanal-Layout** (Mono/Stereo/5.1/7.1 oder „Eigene Anzahl“ für alles
   andere) — die Zeilen zeigen dann echte Kanal-Namen (L/R/C/LFE/Ls/Rs
   statt nur „Kanal 1/2/3“). Ein Klick auf eine Zelle öffnet einen

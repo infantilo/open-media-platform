@@ -49,6 +49,11 @@ export function openAudioMatrixEditor(
   let outputCount = Math.max(initialOutputCount, 1);
   const cells = new Map<string, AudioMatrixCell>();
   for (const c of initialCells) cells.set(`${c.sourceIndex}_${c.channelIndex}_${c.outputIndex}`, { ...c });
+  // Welche "Auxinput"-Abschnitte eingeklappt sind (Kapitel 25 R3) — rein
+  // im Speicher dieser Dialog-Instanz, wie die übrige Bedien-Feinheit
+  // dieses Modals auch nicht über einen Reopen hinweg gemerkt wird
+  // (nur `cells`/`outputCount`/Pfade werden vom Aufrufer gemerkt).
+  const collapsedAux = new Set<number>();
 
   const overlay = h("div");
   overlay.className = "omp-modal-overlay";
@@ -85,93 +90,145 @@ export function openAudioMatrixEditor(
     return `${sourceIndex}_${channelIndex}_${outputIndex}`;
   }
 
+  // Kanal-Layout-Auswahl + Downmix-Vorlagen-Knöpfe — identisch für die
+  // Haupt-Eingabedatei und jede Zusatzquelle, deshalb ein gemeinsamer
+  // Baustein statt Duplizierung zwischen den beiden Rendering-Zweigen
+  // unten.
+  function buildLayoutControls(src: AudioMatrixSource, srcIdx: number): HTMLElement {
+    const wrap = h("div", "display:flex;align-items:center;gap:6px;flex-wrap:wrap;");
+    wrap.appendChild(h("span", "font-size:var(--omp-font-size-xs);", "Kanal-Layout:"));
+    const layoutSelect = h("select", "");
+    for (const def of CHANNEL_LAYOUTS) layoutSelect.appendChild(new Option(def.label, def.id));
+    layoutSelect.value = src.layout ?? "custom";
+    const chInput = h("input", "width:48px;");
+    chInput.type = "number";
+    chInput.min = "1";
+    chInput.value = String(src.channelCount);
+    chInput.style.display = (src.layout ?? "custom") === "custom" ? "" : "none";
+    layoutSelect.addEventListener("change", () => {
+      const id = layoutSelect.value as ChannelLayoutId;
+      src.layout = id;
+      if (id !== "custom") src.channelCount = channelLayoutChannelCount(id);
+      chInput.value = String(src.channelCount);
+      chInput.style.display = id === "custom" ? "" : "none";
+      renderSources(); // Downmix-Vorlagen-Knöpfe hängen vom Layout ab
+      renderTable();
+    });
+    chInput.addEventListener("input", () => {
+      src.channelCount = Math.max(1, Number(chInput.value) || 1);
+      renderTable();
+    });
+    wrap.append(layoutSelect, chInput);
+    for (const preset of downmixPresetsForLayout(src.layout)) {
+      const presetBtn = h("button", "font-size:var(--omp-font-size-xs);", `↓ ${preset.label}`);
+      presetBtn.type = "button";
+      presetBtn.title = preset.help;
+      presetBtn.addEventListener("click", () => {
+        for (const cell of applyDownmixPreset(preset, srcIdx, 0)) {
+          cells.set(cellKey(cell.sourceIndex, cell.channelIndex, cell.outputIndex), cell);
+        }
+        outputCount = Math.max(outputCount, preset.outputCount);
+        showToast(`"${preset.label}" angewendet (Ausgangsspur 1${preset.outputCount > 1 ? `–${preset.outputCount}` : ""}).`, { variant: "info" });
+        renderOutputControl();
+        renderTable();
+      });
+      wrap.appendChild(presetBtn);
+    }
+    return wrap;
+  }
+
+  // Zusatzquellen entfernen — Zellen, die auf die entfernte (oder eine
+  // höhere) Quelle zeigten, würden sonst auf eine falsche Quelle
+  // verschieben: alle Zellen dieser Quelle löschen, höhere Indizes um 1
+  // nach unten verschieben.
+  function removeSource(i: number) {
+    sources.splice(i, 1);
+    collapsedAux.delete(i);
+    const next = new Map<string, AudioMatrixCell>();
+    for (const c of cells.values()) {
+      if (c.sourceIndex === i) continue;
+      const newIdx = c.sourceIndex > i ? c.sourceIndex - 1 : c.sourceIndex;
+      const moved = { ...c, sourceIndex: newIdx };
+      next.set(cellKey(moved.sourceIndex, moved.channelIndex, moved.outputIndex), moved);
+    }
+    cells.clear();
+    for (const [k, v] of next) cells.set(k, v);
+    renderSources();
+    renderTable();
+  }
+
   function renderSources() {
     sourcesSection.replaceChildren();
-    const heading = h("div", "font-weight:600;margin-bottom:4px;", "Quellen");
-    sourcesSection.appendChild(heading);
+    sourcesSection.appendChild(h("div", "font-weight:600;margin-bottom:4px;", "Quellen"));
+
+    // Haupt-Eingabedatei — immer genau eine, nicht einklappbar/entfernbar,
+    // kein Namensfeld (Anzeigename ist fest "Haupt-Eingabedatei").
+    const primary = sources[0];
+    const primaryRow = h("div", "display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;");
+    primaryRow.appendChild(h("span", "min-width:140px;font-size:var(--omp-font-size-xs);font-weight:600;", primary.label ?? "Haupt-Eingabedatei"));
+    primaryRow.appendChild(h("span", "flex:1;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);", primary.inputPath));
+    primaryRow.appendChild(buildLayoutControls(primary, 0));
+    sourcesSection.appendChild(primaryRow);
+
+    // Zusatzquellen als eigene, benennbare, einklappbare "Auxinput"-
+    // Abschnitte (Kapitel 25 R3, Nutzerauftrag/Referenzbild audiomatix.jpeg
+    // — dort hat jede Zusatzquelle einen eigenen benannten Bereich statt
+    // nur einer weiteren Zeile in derselben Liste wie die Haupt-
+    // Eingabedatei). Bei vielen Zusatzquellen hält Einklappen die Liste
+    // übersichtlich.
     sources.forEach((src, i) => {
-      const row = h("div", "display:flex;align-items:center;gap:6px;margin-bottom:4px;");
-      const label = h("span", "min-width:140px;font-size:var(--omp-font-size-xs);", src.label ?? `Quelle ${i + 1}`);
-      row.appendChild(label);
-      if (i === 0) {
-        const pathText = h("span", "flex:1;font-family:ui-monospace,monospace;font-size:var(--omp-font-size-xs);", src.inputPath);
-        row.appendChild(pathText);
-      } else {
+      if (i === 0) return;
+      const card = h("div", "border:1px solid var(--omp-border);border-radius:4px;margin-bottom:6px;overflow:hidden;");
+      const collapsed = collapsedAux.has(i);
+      const header = h("div", "display:flex;align-items:center;gap:6px;padding:4px 6px;background:var(--omp-surface-raised);cursor:pointer;");
+      header.title = collapsed ? "Ausklappen" : "Einklappen";
+      header.appendChild(h("span", "font-size:10px;width:10px;display:inline-block;flex-shrink:0;", collapsed ? "▸" : "▾"));
+      header.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);flex-shrink:0;", `Auxinput ${i}:`));
+      const nameInput = h("input", "flex:1;min-width:80px;");
+      nameInput.value = src.label ?? "";
+      nameInput.placeholder = `Zusatzquelle ${i} (Name optional)`;
+      nameInput.addEventListener("click", (ev) => ev.stopPropagation());
+      nameInput.addEventListener("input", () => {
+        src.label = nameInput.value.trim() || undefined;
+        renderTable();
+      });
+      header.appendChild(nameInput);
+      const rm = h("button", "", "✕");
+      rm.type = "button";
+      rm.title = "Diese Zusatzquelle entfernen";
+      rm.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        removeSource(i);
+      });
+      header.appendChild(rm);
+      header.addEventListener("click", () => {
+        if (collapsed) collapsedAux.delete(i);
+        else collapsedAux.add(i);
+        renderSources();
+      });
+      card.appendChild(header);
+
+      if (!collapsed) {
+        const body = h("div", "padding:6px;display:flex;flex-direction:column;gap:6px;");
+        const pathRow = h("div", "display:flex;align-items:center;gap:6px;");
+        pathRow.appendChild(h("span", "font-size:var(--omp-font-size-xs);color:var(--omp-text-dim);min-width:36px;", "Pfad:"));
         const pathInput = h("input", "flex:1;");
         pathInput.value = src.inputPath;
         pathInput.placeholder = "Pfad der zusätzlichen Quelldatei";
         pathInput.addEventListener("input", () => {
           src.inputPath = pathInput.value;
         });
-        row.appendChild(pathInput);
+        pathRow.appendChild(pathInput);
+        body.append(pathRow, buildLayoutControls(src, i));
+        card.appendChild(body);
       }
-      const layoutLabel = h("span", "font-size:var(--omp-font-size-xs);", "Kanal-Layout:");
-      const layoutSelect = h("select", "");
-      for (const def of CHANNEL_LAYOUTS) layoutSelect.appendChild(new Option(def.label, def.id));
-      layoutSelect.value = src.layout ?? "custom";
-      const chInput = h("input", "width:48px;");
-      chInput.type = "number";
-      chInput.min = "1";
-      chInput.value = String(src.channelCount);
-      chInput.style.display = (src.layout ?? "custom") === "custom" ? "" : "none";
-      layoutSelect.addEventListener("change", () => {
-        const id = layoutSelect.value as ChannelLayoutId;
-        src.layout = id;
-        if (id !== "custom") src.channelCount = channelLayoutChannelCount(id);
-        chInput.value = String(src.channelCount);
-        chInput.style.display = id === "custom" ? "" : "none";
-        renderSources(); // Downmix-Vorlagen-Knöpfe hängen vom Layout ab
-        renderTable();
-      });
-      chInput.addEventListener("input", () => {
-        src.channelCount = Math.max(1, Number(chInput.value) || 1);
-        renderTable();
-      });
-      row.append(layoutLabel, layoutSelect, chInput);
-      for (const preset of downmixPresetsForLayout(src.layout)) {
-        const presetBtn = h("button", "font-size:var(--omp-font-size-xs);", `↓ ${preset.label}`);
-        presetBtn.type = "button";
-        presetBtn.title = preset.help;
-        presetBtn.addEventListener("click", () => {
-          for (const cell of applyDownmixPreset(preset, i, 0)) {
-            cells.set(cellKey(cell.sourceIndex, cell.channelIndex, cell.outputIndex), cell);
-          }
-          outputCount = Math.max(outputCount, preset.outputCount);
-          showToast(`"${preset.label}" angewendet (Ausgangsspur 1${preset.outputCount > 1 ? `–${preset.outputCount}` : ""}).`, { variant: "info" });
-          renderOutputControl();
-          renderTable();
-        });
-        row.appendChild(presetBtn);
-      }
-      if (i > 0) {
-        const rm = h("button", "", "✕");
-        rm.type = "button";
-        rm.addEventListener("click", () => {
-          sources.splice(i, 1);
-          // Zellen, die auf die entfernte (oder eine höhere) Quelle
-          // zeigten, würden auf eine falsche Quelle verschieben —
-          // sauberer: alle Zellen dieser Quelle löschen, höhere Indizes
-          // um 1 nach unten verschieben.
-          const next = new Map<string, AudioMatrixCell>();
-          for (const c of cells.values()) {
-            if (c.sourceIndex === i) continue;
-            const newIdx = c.sourceIndex > i ? c.sourceIndex - 1 : c.sourceIndex;
-            const moved = { ...c, sourceIndex: newIdx };
-            next.set(cellKey(moved.sourceIndex, moved.channelIndex, moved.outputIndex), moved);
-          }
-          cells.clear();
-          for (const [k, v] of next) cells.set(k, v);
-          renderSources();
-          renderTable();
-        });
-        row.appendChild(rm);
-      }
-      sourcesSection.appendChild(row);
+      sourcesSection.appendChild(card);
     });
-    const addBtn = h("button", "margin-top:4px;", "+ weitere Quelldatei");
+
+    const addBtn = h("button", "margin-top:4px;", "+ weitere Quelldatei (Auxinput)");
     addBtn.type = "button";
     addBtn.addEventListener("click", () => {
-      sources.push({ inputPath: "", channelCount: 2 });
+      sources.push({ inputPath: "", channelCount: 2, layout: "stereo" });
       renderSources();
       renderTable();
     });
@@ -343,7 +400,7 @@ export function openAudioMatrixEditor(
   applyBtn.addEventListener("click", () => {
     for (let i = 1; i < sources.length; i++) {
       if (!sources[i].inputPath.trim()) {
-        showToast(`Quelle ${i + 1}: Pfad fehlt.`, { variant: "error" });
+        showToast(`${sources[i].label ?? `Auxinput ${i}`}: Pfad fehlt.`, { variant: "error" });
         return;
       }
     }
