@@ -1,5 +1,6 @@
 {
   "name": "omp-scope-panel",
   "version": "0.1.0",
-  "tag": "omp-scope-panel"
+  "tag": "omp-scope-panel",
+  "ownsPreview": true
 }

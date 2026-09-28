@@ -8,7 +8,7 @@
 // eine schmale Tab-Leiste nur dieser Einträge (§14: "nie ein Graph").
 import { mountUIBundle } from "./ui-bundle.ts";
 import { pickActiveEntry } from "./console-logic.ts";
-import { hasPreviewUrl, mountNodePreview, type MountedPreview } from "./node-preview.ts";
+import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
 export interface ConsoleEntry {
   workflowId: string;
@@ -131,11 +131,21 @@ export class ConsoleView extends HTMLElement {
     // Node einen previewUrl-Parameter hat — Nutzerfund 2026-08-25: ein
     // reiner Operator sah bisher nur das node-eigene Bundle (z. B. beim
     // Multiviewer nur dessen PIP-Layout-Editor), nie das Video selbst.
-    const showsPreview = await hasPreviewUrl(entry.uiBundleUrl);
+    // Ausnahme (Nutzerfund 2026-09-28, `ownsPreview`-Manifestfeld): Nodes
+    // wie omp-viewer/omp-scope zeigen ihr previewUrl-Bild bereits selbst
+    // groß als eigentlichen Bundle-Inhalt — der Aufsatz hier würde es nur
+    // sinnlos doppeln (ein reiner Operator sah dann zusätzlich zum echten
+    // PGM-Bild eine kleine, redundante zweite Kachel; ein Admin über den
+    // Engineering-Flow-Editor nie, weil der eine andere Vorschau-Kachel-
+    // Logik nutzt — s. `node-preview.ts#bundleOwnsPreview`-Doku).
+    const [showsPreview, ownsPreview] = await Promise.all([
+      hasPreviewUrl(entry.uiBundleUrl),
+      bundleOwnsPreview(entry.uiBundleUrl),
+    ]);
     if (this.#activeNodeRoleId !== nodeRoleId) return; // zwischenzeitlich weitergeklickt
     this.#panel.replaceChildren();
 
-    if (showsPreview) {
+    if (showsPreview && !ownsPreview) {
       this.#previewHandle = mountNodePreview(entry.uiBundleUrl);
       this.#panel.appendChild(this.#previewHandle.element);
     }

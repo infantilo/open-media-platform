@@ -28,7 +28,7 @@ class OmpViewerPanel extends HTMLElement {
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
       img {
-        display: block; max-width: 100%; background: #000;
+        display: block; width: 100%; background: #000;
         border: 1px solid #444;
       }
       p { font-size: 12px; color: #888; }

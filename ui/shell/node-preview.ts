@@ -46,6 +46,27 @@ export async function hasPreviewUrl(apiBase: string): Promise<boolean> {
   }
 }
 
+// bundleOwnsPreview prüft das `ownsPreview`-Manifestfeld (`ui/manifest.json`)
+// — Nutzerfund 2026-09-28: omp-viewer (und ebenso omp-scope, dessen
+// previewUrl-Bild bereits die eigentliche Waveform/Vektorskop-Ausgabe IST)
+// rendern ihr previewUrl-Bild bereits selbst GROSS als eigentlichen
+// Bundle-Inhalt — der generische Vorschau-Aufsatz oben (gedacht für Nodes
+// wie omp-multiviewer-custom, deren Bundle NUR eine Konfigurations-UI ohne
+// Video zeigt, s. Moduldoku) duplizierte dort das Bild sinnlos als
+// zusätzliche kleine Kachel ÜBER dem bereits vollständigen eigenen Bild.
+// Fehlt das Feld (alle anderen Node-Typen), bleibt das bisherige Verhalten
+// unverändert.
+export async function bundleOwnsPreview(apiBase: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${apiBase}/ui/manifest.json`);
+    if (!res.ok) return false;
+    const manifest = (await res.json()) as { ownsPreview?: boolean };
+    return !!manifest.ownsPreview;
+  } catch {
+    return false;
+  }
+}
+
 export interface MountedPreview {
   element: HTMLDivElement;
   dispose(): void;
