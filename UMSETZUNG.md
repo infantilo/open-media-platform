@@ -4155,18 +4155,60 @@ offen gelassene pro-Clip-Beschnitt-Feature oben).
 
 ### 25.3 Phasenplan (noch nicht begonnen)
 
-#### R1 — Registry-Fundament (Frontend)
+#### R1 — Registry-Fundament (Frontend) (erledigt 2026-09-28)
 
-Datengetriebene `ScriptTemplate`-Beschreibung (Formularfeld-Liste +
-Argument-Bauregel) ersetzt `ScriptIntent`/`SCRIPT_INTENTS` UND die
-6 `build<X>Args()`-Funktionen durch einen einzigen generischen
-Interpreter; bestehende 6 Aufgaben werden als erste Registry-Einträge
-migriert (Verhalten muss unverändert bleiben — Regressionstest gegen
-bestehende `process-step-config-logic_test.ts`-Fälle).
+**Scope-Korrektur gegenüber der ursprünglichen Planung (§0 Punkt 8, hier
+sofort dokumentiert statt separat nachgetragen):** die ursprüngliche
+Formulierung oben ("ersetzt ... UND die 6 build<X>Args()-Funktionen
+durch einen einzigen generischen Interpreter... bestehende 6 Aufgaben
+werden migriert") hätte einen vollen Interpreter mit Zeilen-Gruppen
+(wiederholbare Unterformulare für `concat`/`overlay`), Zeilen-lokaler
+Sichtbarkeitskopplung (Text- vs. Bild-Ereignis in `overlay`,
+Verlustfrei-Häkchen blendet Trim-/Codec-Felder in `concat` aus) und der
+Zeitleisten-Visualisierung von `overlay` gebraucht — beim tatsächlichen
+Lesen dieser drei Formulare zeigte sich, dass das eine eigene, riskante
+Mini-DSL für Fälle gewesen wäre, die aktuell nur 2× vorkommen (kein
+drittes Vorbild zur Verifikation der Abstraktion) und deren Komplexität
+gerade IHR Sinn ist (`convert` ist der generische Baukasten-Fluchtweg
+selbst, kein "Template"). Tatsächlich umgesetzt: `GENERIC_SCRIPT_TASKS`
+(`process-step-config-logic.ts`) + eine einzige Rendering-Funktion
+`buildGenericScriptForm` (`process-step-config.ts`) für die drei
+wirklich einfachen, flachen Aufgaben (`probe`/`thumbnail`/
+`extract_audio` — nur `template-text`/`text`/`codec-picker`/
+`format-picker`-Feldarten, keine Wiederholung, keine
+Sichtbarkeitskopplung); `convert`/`concat`/`overlay` bleiben bewusst
+bespoke Funktionen. `ScriptIntent.id` von einem geschlossenen Union-Typ
+auf `string` gelockert (rückwärtskompatibel), damit ein neuer
+Registry-Eintrag keine Typ-Änderung mehr braucht. Ein "Gruppen"-Feldtyp
+für wiederholbare Unterformulare (für die spätere Migration von
+`concat`/`overlay` sowie neue Vorlagen wie eine Streaming-Ausgabeleiter,
+R1b) folgt erst, sobald er an einem zweiten/dritten echten Fall
+verifiziert werden kann statt vorab geraten zu sein — kleinere,
+tatsächlich abgeschlossene Schritte statt eines großen, riskanten.
 
-**Verifikation:** alle bestehenden Tests weiterhin grün, `deno bundle`
-grün, Live-CDP-Vergleich (Formular + erzeugte Argumente) für mindestens
-je 1 Fall aus jeder der 6 migrierten Aufgaben identisch zum Vorher-Stand.
+Die zugrundeliegenden `build<X>Args()`-Funktionen selbst sind
+UNVERÄNDERT (weiterhin einzeln getestet) — die Registry ruft sie nur
+über eine neue, generische `toArgs()`-Zwischenschicht auf. Kein
+sichtbarer Verhaltensunterschied für Nutzer (BENUTZERHANDBUCH.md §5a.1
+bleibt unverändert gültig) — reiner Architektur-Schritt, der zukünftige
+einfache neue Aufgaben (R4) auf einen Registry-Eintrag statt drei
+Code-Stellen reduziert.
+
+**Verifikation:** 4 neue `deno test`-Fälle (Registry-Inhalt + `toArgs`
+je migrierter Aufgabe inkl. Pflichtfeld-/Zahl-Validierung), alle
+bestehenden 180 Tests weiterhin grün, `deno bundle` (49 Module) grün.
+Live per echter CDP-Session gegen den echten, laufenden Orchestrator
+verifiziert (neue Prozess-Definition angelegt, Datei-Werkzeug-Schritt
+hinzugefügt, Konfigurationsdialog geöffnet): "Technische Metadaten
+auslesen" erzeugte exakt `ffprobe -v error -print_format json
+-show_format -show_streams ${input.path}`; Wechsel durch alle sechs
+Aufgaben nacheinander (Vorschaubild/Tonspur extrahieren/Konvertieren/
+Aneinanderhängen/Overlay/zurück zu Metadaten) zeigte in jedem Fall die
+korrekt erwartete Vorschau bzw. Validierungsmeldung — keine Regression
+in den drei weiterhin bespoke Aufgaben; der Audio-Codec-Picker der
+generischen `extract_audio`-Aufgabe lud 85 echte, vom Host-ffmpeg
+gemeldete Encoder, Auswahl von "aac" aktualisierte die Vorschau live zu
+`-c:a aac`.
 
 #### R2 — Audio-Matrix: Kanal-Layout-Labels + Downmixer-Dialog je Zelle
 
@@ -4460,3 +4502,4 @@ der Trefferliste.
 | Kapitel 23 Schritt 2: generisches Ausgabespur-Mapping — Kapitel 23 (Schritt 1-5) damit abgeschlossen | erledigt | Nutzerauftrag "fahre fort" — der tatsächliche, allgemeine Ersatz für die in Schritt 1 ausgebaute "Mehrspur-Container bauen"-Sonderfunktion. Neuer `OutputTrack`-Typ + `buildConvertArgs`-Verzweigung (`process-step-config-logic.ts`): wiederholbare "Ausgabespur"-Gruppen im Konvertieren-Formular, je Spur Quelle (roher Stream-Spezifizierer wie `0:a:0` ODER Filter-Graph-/Audio-Matrix-Label wie `[mxout0]`, mit Schnelleinfüge-Knöpfen für aktuell verfügbare Labels), Medientyp (Video/Audio/Untertitel), Codec inkl. AVOptions (wiederverwendet `ffmpegOptionsList`) und generische Schlüssel/Wert-Metadaten (wiederverwendet `keyValueEditor`, nicht auf title/language beschränkt). Sobald ≥1 Ausgabespur konfiguriert ist, übernimmt sie die Stream-Zuordnung vollständig (Einzelfelder Video-/Audio-Codec werden ausgeblendet, automatisches `-map` aus `filterOutputLabels` entfällt — vermeidet die ffmpeg-Falle "ein `-map` schaltet auf rein explizite Zuordnung um" in widersprüchlicher Mischform). Medientyp-Zähler laufen unabhängig je Typ (`a:0`/`a:1`/`v:0`), AVOptions bekommen denselben Spezifizierer-Suffix wie der Codec. 4 neue Testfälle. Live per CDP gegen den echten Orchestrator verifiziert: zwei Spuren angelegt ließ Einzelfelder sofort verschwinden; Quellen+generisches `title=Deutsch`-Metadatum erzeugten exakt die erwartete Vorschau; Audio-Matrix-Anwendung ließ einen Schnelleinfüge-Knopf "[mxout0] einfügen" live erscheinen, ein Klick füllte die Quelle korrekt, genau EIN `-map [mxout0]` (keine Dopplung mit dem automatischen Filter-Mapping). `deno check ui/**/*.ts`, `deno test ui/graph/` (136 Fälle), `deno bundle` (49 Module) grün. | 2026-09-26 |
 | Kapitel 23 Nachtrag: echtes `-h full`-Parsing + verlustfreies Aneinanderhängen | erledigt | Nutzerauftrag, zwei zuvor bewusst offen gelassene Ausblicke nachzuziehen. `-h full`: neues `orchestrator/internal/ffmpegtools::GlobalOption`/`ParseGlobalOptions`/`Store.GlobalOptions()` — parst NUR die globalen/dateiübergreifenden Abschnitte ("Global options"…"Subtitle options", 165 Flags), bricht beim ersten "AVOptions"-Header ab (der riesige, redundante Per-Codec-Teil wird nie angefasst, `Detail()` deckt den schon ab). Neue Route `GET /api/v1/tools/ffmpeg/global-options`. Go-Tests mit echtem `-h full`-Ausschnitt + Integrationstest gegen den echten Host-ffmpeg (165 Flags, `-y` wertlos, `-loglevel` wertbehaftet, kein Leck aus dem AVOptions-Bereich). Frontend: `FFGlobalOptionEntry`/`globalOptionEntryToFlagDef`, `validateArgValue` bekommt optionalen `globalOverrides`-Parameter — kuratierte Tabelle gewinnt bei Namensüberschneidung (echte Typisierung wie `-loglevel`s 9 Werte), der vollständige Import ist Fallback (z. B. `-vaapi_device`, nie kuratiert). Parameter-Explorer/Autovervollständigung durchsuchen beide Quellen. Verlustfreies Aneinanderhängen: neues `ConcatInput.lossless` nutzt ffmpegs concat-PROTOKOLL (`-i "concat:a\|b\|c" -c copy`) statt der Filterkette — kein Neukodieren. Bewusste, dokumentierte Grenzen (keine Bugs): nur für bestimmte Container zuverlässig (v. a. MPEG-TS/-PS, nicht generell MP4/MOV/MKV, live an echten .ts-Dateien bestätigt), kein Beschnitt möglich (Protokoll kennt keinen Trim — pro-Clip-Trim+Verlustfreiheit gleichzeitig bräuchte ffprobe-Frame-Introspektion + einen mehrstufigen Workflow, bewusst nicht gebaut, auch wegen der eigenen Sicherheitsabwägung einer neuen "ffprobe auf Nutzerpfad"-Route). Häkchen "Verlustfrei" blendet Beschnitt-/Codec-Felder aus. Live per CDP verifiziert: `/global-options` liefert 165 Einträge, Suche nach "vaapi_device" findet es (nie kuratiert), Einfügen+Wertsetzung funktioniert; Concat-Häkchen blendet Felder sofort aus, Vorschau zeigt exakt `-y -i concat:a.ts\|b.ts -c copy`. `deno check ui/**/*.ts`, `deno test ui/graph/` (140 Fälle), `deno bundle` (49 Module), `go build/vet/test ./...` (orchestrator), `make check` (voller Deno+Rust-Baum) grün. | 2026-09-26 |
 | Kapitel 24: Operator-UI — Minimieren/Maximieren/Vor-Reihenfolge/"Alle anordnen" für Konsolen-Kacheln | erledigt | Nutzerauftrag 2026-09-28: Node-UIs im Operator-UI sollen "mehr wie Fenster" aussehen. `console-board-logic.ts`: `TileLayout` um optionale `minimized`/`zIndex`-Felder erweitert (rückwärtskompatibel), neue reine Funktion `computeTileGridLayout` (quadratisches Raster für "Alle anordnen", 4 neue Tests). `console-board.ts`: zwei Fenster-Buttons je Titelleiste (Minimieren klappt an Ort und Stelle ein, bleibt weiter ziehbar; Maximieren füllt den Board-Bereich exakt, per `ResizeObserver` live nachgeführt, max. eine Kachel gleichzeitig), Klick/Ziehen auf eine Kachel hebt sie per z-index nach vorne, neue Symbolleiste "⊞ Alle anordnen" packt alle Kacheln in ein frisches Raster und klappt Minimiertes wieder auf. Live per **echtem CDP-Mausinput** verifiziert (headless Chromium, eigenständig gebündeltes Modul gegen drei Fake-Konsolen-Einträge) — dabei ein Testmethodik-Stolperstein selbst gefunden+korrigiert: synthetisches `dispatchEvent(PointerEvent)` erzeugt in Headless-Chrome keinen für `setPointerCapture` gültigen aktiven Pointer (`NotFoundError`), reales `page.mouse.move/down/up` (echte CDP-Input-Events) schon — danach alle Fälle bestätigt: Minimieren/Wiederherstellen, Maximieren mit exaktem Board-Fit + Auto-Wiederherstellung der vorherigen Kachel, Vor-Reihenfolge, echtes Ziehen (+70/+40px exakt), echtes Skalieren (+60/+50px exakt), minimierte Kachel bleibt ziehbar und rendert korrekt über anderen Kacheln, "Alle anordnen" übersteht Reload dank `localStorage`. `deno check ui/**/*.ts`, `deno test ui/` (176 Fälle, 4 neu), `deno bundle ui/shell/shell.ts` (49 Module) grün. Details UMSETZUNG.md Kapitel 24. Kapitel 25 (FFmpeg-Assistent: Aufgaben-Registry + erweiterte Audio-Matrix) geplant, noch nicht begonnen — s. UMSETZUNG.md 6f. | 2026-09-28 |
+| Kapitel 25 R1: generische Aufgaben-Registry für den ffmpeg-Assistenten (probe/thumbnail/extract_audio) | erledigt | Nutzerauftrag 2026-09-28 ("die ffmpeg-UI ist noch zu hardcoded"), Nutzerentscheidung "Registry + mehr Vorlagen". Scope-Korrektur beim tatsächlichen Umsetzen (§0 Punkt 8, sofort dokumentiert): ein voller Interpreter für alle 6 Aufgaben (wie ursprünglich in 25.3 skizziert) hätte eine riskante Mini-DSL für wiederholbare wechselseitig sichtbarkeitsgekoppelte Unterformulare gebraucht, verifiziert an nur 2 Vorbildern (`concat`/`overlay`) — stattdessen: `GENERIC_SCRIPT_TASKS`-Registry (`process-step-config-logic.ts`, Feldarten `template-text`/`text`/`codec-picker`/`format-picker`) + eine einzige `buildGenericScriptForm`-Rendering-Funktion (`process-step-config.ts`) für die drei wirklich flachen Aufgaben `probe`/`thumbnail`/`extract_audio`; `convert` (der generische Baukasten-Fluchtweg selbst)/`concat`/`overlay` bleiben bewusst bespoke. `ScriptIntent.id` von geschlossenem Union-Typ auf `string` gelockert. Die zugrundeliegenden `build<X>Args()`-Funktionen sind unverändert (Regressionssicherheit), nur eine neue `toArgs()`-Zwischenschicht ruft sie auf — kein sichtbarer Verhaltensunterschied, BENUTZERHANDBUCH.md unverändert gültig. 4 neue `deno test`-Fälle, alle 180 Tests grün, `deno bundle` (49 Module) grün. Live per echter CDP-Session gegen den echten laufenden Orchestrator verifiziert: neue Prozess-Definition angelegt, Datei-Werkzeug-Schritt hinzugefügt, "Technische Metadaten auslesen" erzeugte exakt die erwarteten ffprobe-Argumente, Durchwechseln aller 6 Aufgaben zeigte in jedem Fall korrekte Vorschau/Validierung (keine Regression bei den 3 weiterhin bespoke Aufgaben), Audio-Codec-Picker von `extract_audio` lud 85 echte Host-ffmpeg-Encoder, Auswahl "aac" aktualisierte die Vorschau live zu `-c:a aac`. Details UMSETZUNG.md 25.3 (R1). Nächster Schritt: R2 (Audio-Matrix Kanal-Layout-Labels + Downmixer-Dialog). | 2026-09-28 |

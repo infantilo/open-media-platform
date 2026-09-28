@@ -25,10 +25,7 @@ import type { AudioMatrixCell } from "./audio-matrix-logic.ts";
 import {
   buildConcatArgs,
   buildConvertArgs,
-  buildExtractAudioArgs,
   buildOverlayArgs,
-  buildProbeArgs,
-  buildThumbnailArgs,
   DECISION_LABELS,
   ffOptionControlKind,
   type FFCodecEntry,
@@ -39,6 +36,8 @@ import {
   type FFGlobalOptionEntry,
   flatStringObject,
   formatGoDuration,
+  genericScriptTaskById,
+  type GenericScriptTask,
   GLOBAL_FFMPEG_FLAGS,
   globalFlagByName,
   type GlobalFlagDef,
@@ -851,42 +850,56 @@ interface ScriptWizardForm {
   read(): ScriptCompileResult;
 }
 
-function buildScriptWizardProbe(vars: VariableOption[]): ScriptWizardForm {
+// Generische Aufgaben-Registry (Kapitel 25 R1): EINE Rendering-Funktion
+// für jede in GENERIC_SCRIPT_TASKS registrierte einfache Aufgabe —
+// interpretiert deren deklarative `fields`-Liste, baut daraus dieselben
+// Bausteine, die bisher jede Aufgabe einzeln von Hand zusammensetzte
+// (templateInput/textInput/codecPicker/formatPicker), und übergibt die
+// eingesammelten Werte an `task.toArgs()`. Eine neue einfache Aufgabe
+// braucht damit NUR einen neuen GENERIC_SCRIPT_TASKS-Eintrag — dieser
+// Code hier ändert sich nicht.
+function buildGenericScriptForm(task: GenericScriptTask, vars: VariableOption[]): ScriptWizardForm {
   const el = h("div", "");
-  const input = templateInput("${input.path}", "${input.path}", vars);
-  el.appendChild(field("Zu prüfende Datei", input.el, undefined, true));
-  return {
-    el,
-    read: () => {
-      const p = input.input.value.trim();
-      if (!p) return { ok: false, error: "Zu prüfende Datei fehlt." };
-      return { ok: true, command: "ffprobe", args: buildProbeArgs({ inputPath: p }) };
-    },
-  };
-}
+  const scalarReaders: Record<string, () => string> = {};
+  const pickerReaders: Record<string, () => { codec?: string; format?: string; options: Record<string, string> }> = {};
 
-function buildScriptWizardThumbnail(vars: VariableOption[]): ScriptWizardForm {
-  const el = h("div", "");
-  const input = templateInput("${input.path}", "${input.path}", vars);
-  const output = templateInput("${input.thumbnailPath}", "${input.thumbnailPath}", vars);
-  const at = textInput("00:00:05", "hh:mm:ss");
-  const width = textInput("480", "Pixel");
-  width.inputMode = "numeric";
-  el.append(
-    field("Eingabedatei", input.el, undefined, true),
-    field("Ausgabedatei (Bild)", output.el, undefined, true),
-    field("Zeitpunkt im Video", at, "hh:mm:ss, z. B. 00:00:05."),
-    field("Breite in Pixeln", width, "Höhe wird proportional berechnet."),
-  );
+  for (const spec of task.fields) {
+    let control: HTMLElement;
+    if (spec.kind === "template-text") {
+      const t = templateInput(spec.defaultValue ?? "", spec.placeholder ?? spec.defaultValue ?? "", vars);
+      control = t.el;
+      scalarReaders[spec.id] = () => t.input.value.trim();
+    } else if (spec.kind === "text") {
+      const i = textInput(spec.defaultValue ?? "", spec.placeholder ?? "");
+      if (spec.numeric) i.inputMode = "numeric";
+      control = i;
+      scalarReaders[spec.id] = () => i.value.trim();
+    } else if (spec.kind === "codec-picker") {
+      const cp = codecPicker(spec.mediaType, vars, spec.withOptions ?? true);
+      control = cp.el;
+      pickerReaders[spec.id] = () => {
+        const r = cp.read();
+        return { codec: r.codec, options: r.options };
+      };
+    } else {
+      const fp = formatPicker(vars, spec.withOptions ?? true);
+      control = fp.el;
+      pickerReaders[spec.id] = () => {
+        const r = fp.read();
+        return { format: r.format, options: r.options };
+      };
+    }
+    el.appendChild(field(spec.label, control, spec.help, spec.required));
+  }
+
   return {
     el,
     read: () => {
-      const p = input.input.value.trim();
-      const o = output.input.value.trim();
-      const w = Number(width.value);
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
-      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: "Breite: keine gültige Zahl." };
-      return { ok: true, command: "ffmpeg", args: buildThumbnailArgs({ inputPath: p, outputPath: o, atTime: at.value.trim() || "00:00:05", widthPixels: w }) };
+      const scalars = Object.fromEntries(Object.entries(scalarReaders).map(([k, r]) => [k, r()]));
+      const pickers = Object.fromEntries(Object.entries(pickerReaders).map(([k, r]) => [k, r()]));
+      const result = task.toArgs({ scalars, pickers });
+      if (!result.ok) return { ok: false, error: result.error };
+      return { ok: true, command: task.command, args: result.args };
     },
   };
 }
@@ -1185,28 +1198,6 @@ function buildScriptWizardConvert(vars: VariableOption[]): ScriptWizardForm {
           outputTracks: outputTracks.length ? outputTracks : undefined,
         }),
       };
-    },
-  };
-}
-
-function buildScriptWizardExtractAudio(vars: VariableOption[]): ScriptWizardForm {
-  const el = h("div", "");
-  const input = templateInput("${input.path}", "${input.path}", vars);
-  const output = templateInput("${input.audioPath}", "${input.audioPath}", vars);
-  const audio = codecPicker("audio", vars);
-  el.append(
-    field("Eingabedatei", input.el, undefined, true),
-    field("Ausgabedatei", output.el, undefined, true),
-    field("Audio-Codec", audio.el, "Leer = ffmpeg-Standard für die gewählte Dateiendung."),
-  );
-  return {
-    el,
-    read: () => {
-      const p = input.input.value.trim();
-      const o = output.input.value.trim();
-      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
-      const a = audio.read();
-      return { ok: true, command: "ffmpeg", args: buildExtractAudioArgs({ inputPath: p, outputPath: o, audioCodec: a.codec || undefined, audioOptions: a.options }) };
     },
   };
 }
@@ -1842,17 +1833,8 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
     const intent = SCRIPT_INTENTS.find((i) => i.id === intentSel.value);
     intentHelp.textContent = intent?.help ?? "";
     switch (intentSel.value) {
-      case "probe":
-        activeForm = buildScriptWizardProbe(vars);
-        break;
-      case "thumbnail":
-        activeForm = buildScriptWizardThumbnail(vars);
-        break;
       case "convert":
         activeForm = buildScriptWizardConvert(vars);
-        break;
-      case "extract_audio":
-        activeForm = buildScriptWizardExtractAudio(vars);
         break;
       case "concat":
         activeForm = buildScriptWizardConcat(vars);
@@ -1860,8 +1842,13 @@ function buildScript(cfg: Record<string, unknown>, vars: VariableOption[], comma
       case "overlay":
         activeForm = buildScriptWizardOverlay(vars);
         break;
-      default:
-        activeForm = null;
+      default: {
+        // Kapitel 25 R1: jede sonstige (einfache) Aufgabe kommt aus der
+        // generischen Registry statt einem eigenen `case` — neue solche
+        // Aufgaben brauchen hier keine Änderung mehr.
+        const task = genericScriptTaskById(intentSel.value);
+        activeForm = task ? buildGenericScriptForm(task, vars) : null;
+      }
     }
     if (activeForm) dynamicArea.appendChild(activeForm.el);
     updatePreview();

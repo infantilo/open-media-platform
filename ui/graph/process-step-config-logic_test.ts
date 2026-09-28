@@ -27,6 +27,8 @@ import {
   triggerKinds,
   validateArgValue,
   variableOptions,
+  genericScriptTaskById,
+  GENERIC_SCRIPT_TASKS,
 } from "./process-step-config-logic.ts";
 
 const def: DraftDefinition = {
@@ -303,6 +305,76 @@ Deno.test("buildThumbnailArgs scales by width, keeps aspect ratio via -2", () =>
     buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }),
     ["-y", "-ss", "00:00:05", "-i", "in.mp4", "-frames:v", "1", "-vf", "scale=480:-2", "out.jpg"],
   );
+});
+
+// ---- Generische Aufgaben-Registry (Kapitel 25 R1) -------------------------------------------------
+//
+// Regressionstest: die generische Registry muss für dieselben Eingaben
+// exakt dieselben Argumente liefern wie die zuvor bestehenden, jetzt
+// entfernten bespoke Formulare (buildScriptWizardProbe/Thumbnail/
+// ExtractAudio in process-step-config.ts) — die zugrundeliegenden
+// build<X>Args-Funktionen selbst sind unverändert, hier wird nur die
+// neue toArgs()-Verdrahtung (Feldnamen, Pflichtfeld-Prüfung) geprüft.
+
+Deno.test("genericScriptTaskById: probe/thumbnail/extract_audio are registered, convert/concat/overlay are not (still bespoke)", () => {
+  assertEquals(GENERIC_SCRIPT_TASKS.map((t) => t.id).sort(), ["extract_audio", "probe", "thumbnail"]);
+  assertEquals(genericScriptTaskById("convert"), undefined);
+  assertEquals(genericScriptTaskById("concat"), undefined);
+  assertEquals(genericScriptTaskById("overlay"), undefined);
+});
+
+Deno.test("generic 'probe' task: toArgs matches buildProbeArgs for the same input, errors when the file is missing", () => {
+  const task = genericScriptTaskById("probe")!;
+  assertEquals(task.command, "ffprobe");
+  assertEquals(task.toArgs({ scalars: { inputPath: "${input.path}" }, pickers: {} }), {
+    ok: true,
+    args: buildProbeArgs({ inputPath: "${input.path}" }),
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "" }, pickers: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
+  assertEquals(task.toArgs({ scalars: { inputPath: "   " }, pickers: {} }), { ok: false, error: "Zu prüfende Datei fehlt." });
+});
+
+Deno.test("generic 'thumbnail' task: toArgs matches buildThumbnailArgs, validates width and required paths", () => {
+  const task = genericScriptTaskById("thumbnail")!;
+  assertEquals(task.command, "ffmpeg");
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {} }),
+    { ok: true, args: buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }) },
+  );
+  // Leeres Zeitfeld fällt auf denselben "00:00:05"-Standard zurück wie das
+  // frühere bespoke Formular (textInput-Startwert war ebenfalls "00:00:05").
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "", widthPixels: "480" }, pickers: {} }),
+    { ok: true, args: buildThumbnailArgs({ inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: 480 }) },
+  );
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "480" }, pickers: {} }), {
+    ok: false,
+    error: "Eingabe- und Ausgabedatei sind Pflicht.",
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "0" }, pickers: {} }), {
+    ok: false,
+    error: "Breite: keine gültige Zahl.",
+  });
+  assertEquals(task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.jpg", atTime: "00:00:05", widthPixels: "abc" }, pickers: {} }), {
+    ok: false,
+    error: "Breite: keine gültige Zahl.",
+  });
+});
+
+Deno.test("generic 'extract_audio' task: toArgs matches buildExtractAudioArgs, works with and without a chosen codec", () => {
+  const task = genericScriptTaskById("extract_audio")!;
+  assertEquals(task.command, "ffmpeg");
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: { audio: { codec: "pcm_s24le", options: { "-ar": "48000" } } } }),
+    { ok: true, args: buildExtractAudioArgs({ inputPath: "in.mp4", outputPath: "out.wav", audioCodec: "pcm_s24le", audioOptions: { "-ar": "48000" } }) },
+  );
+  // Kein Picker-Eintrag (Nutzer hat den Codec nie geöffnet) verhält sich
+  // wie ein leerer Codec — ffmpeg-Standard für die Dateiendung.
+  assertEquals(
+    task.toArgs({ scalars: { inputPath: "in.mp4", outputPath: "out.wav" }, pickers: {} }),
+    { ok: true, args: buildExtractAudioArgs({ inputPath: "in.mp4", outputPath: "out.wav", audioCodec: undefined, audioOptions: {} }) },
+  );
+  assertEquals(task.toArgs({ scalars: { inputPath: "", outputPath: "out.wav" }, pickers: {} }), { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." });
 });
 
 // ---- Clips aneinanderhängen (Kapitel 23, Schritt 2) -----------------------------------------------

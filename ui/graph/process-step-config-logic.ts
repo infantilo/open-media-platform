@@ -421,11 +421,14 @@ export const SCRIPT_TEMPLATES: ScriptTemplate[] = [
 // hier nur die reine, DOM-freie Umsetzung "AVOption → Formularfeld-Art"
 // und "ausgefüllte Werte → ffmpeg-Argumente".
 
-// `id` verdoppelt bewusst als Diskriminator (kein separates `kind`-Feld)
-// — die DOM-Seite (process-step-config.ts) schaltet direkt per `id`
-// auf den passenden Unterformular-Baustein.
+// `id` ist bewusst ein einfacher `string` (kein geschlossener Union-Typ
+// mehr, s. Kapitel 25 R1): ein per GENERIC_SCRIPT_TASKS (unten)
+// registriertes generisches Formular braucht hier nur einen zusätzlichen
+// Array-Eintrag, keine Typ-Erweiterung. Die drei weiterhin fest verdrahteten
+// Aufgaben (convert/concat/overlay, s. R1-Entscheidung) bleiben eigene
+// String-Literale, auf die process-step-config.ts's `switch` reagiert.
 export interface ScriptIntent {
-  id: "probe" | "thumbnail" | "convert" | "extract_audio" | "concat" | "overlay";
+  id: string;
   label: string;
   help: string;
 }
@@ -441,6 +444,132 @@ export const SCRIPT_INTENTS: ScriptIntent[] = [
 
 export function scriptIntentById(id: string): ScriptIntent | undefined {
   return SCRIPT_INTENTS.find((i) => i.id === id);
+}
+
+// ---- Generische Aufgaben-Registry (Kapitel 25 R1, 2026-09-28) ----------------------------------
+//
+// Nutzerauftrag: die ffmpeg-Aufgabenliste war "zu hardcoded" — jede neue
+// Aufgabe brauchte bisher Änderungen an drei Stellen (Union-Typ, eigene
+// `build<X>Args()`-Funktion, eigener DOM-Zweig in process-step-config.ts).
+// Ab hier beschreibt sich eine einfache, formularfeld-basierte Aufgabe
+// selbst: ein `GenericScriptTask` bündelt seine Formularfelder (deklarativ,
+// von einer einzigen generischen Rendering-Funktion — process-step-
+// config.ts#buildGenericScriptForm — interpretiert) mit einer reinen
+// `toArgs`-Funktion. Eine neue einfache Aufgabe ist damit EIN neuer
+// Array-Eintrag unten, keine Änderung an der Rendering-Logik.
+//
+// Bewusst NICHT hier: `convert`/`concat`/`overlay`. Das sind keine
+// "Vorlagen" im eigentlichen Sinn — `convert` ist der generische
+// Baukasten-Fluchtweg selbst (Audio-Matrix, Filter-Graph, Ausgabespur-
+// Mapping, s. Kapitel 23), `concat`/`overlay` brauchen wiederholbare
+// Unterformular-Gruppen mit Sichtbarkeits-Kopplung zwischen Zeilen (Text-
+// vs. Bild-Ereignis, Verlustfrei-Häkchen blendet Beschnitt-Felder aus) —
+// ein generischer "Gruppen"-Feldtyp dafür ist als eigener Schritt (Kapitel
+// 25 R1b) vorgesehen, sobald er an einem zweiten/dritten echten Fall
+// (z. B. einer Streaming-Ausgabeleiter mit mehreren Renditionen)
+// verifiziert werden kann statt vorab geraten zu sein.
+export interface GenericScriptFieldBase {
+  id: string;
+  label: string;
+  help?: string;
+  required?: boolean;
+}
+
+export interface GenericScriptTemplateTextField extends GenericScriptFieldBase {
+  kind: "template-text";
+  defaultValue?: string;
+  placeholder?: string;
+}
+
+export interface GenericScriptTextField extends GenericScriptFieldBase {
+  kind: "text";
+  defaultValue?: string;
+  placeholder?: string;
+  numeric?: boolean;
+}
+
+export interface GenericScriptCodecPickerField extends GenericScriptFieldBase {
+  kind: "codec-picker";
+  mediaType: "video" | "audio";
+  withOptions?: boolean;
+}
+
+export interface GenericScriptFormatPickerField extends GenericScriptFieldBase {
+  kind: "format-picker";
+  withOptions?: boolean;
+}
+
+export type GenericScriptField = GenericScriptTemplateTextField | GenericScriptTextField | GenericScriptCodecPickerField | GenericScriptFormatPickerField;
+
+// Skalare Feldwerte (template-text/text) sind immer roher, ungetrimmter
+// Text — Trimmen/Parsen ist Sache der jeweiligen `toArgs`, dieselbe
+// Verantwortungsteilung wie bei den bisherigen `build<X>Args`-Aufrufern.
+// Picker-Felder (codec-picker/format-picker) liefern kein einfaches
+// String — sie werden separat unter `pickers` geführt statt eine
+// Einheitlichkeit vorzutäuschen, die es nicht gibt.
+export interface GenericScriptFormValues {
+  scalars: Record<string, string>;
+  pickers: Record<string, { codec?: string; format?: string; options: Record<string, string> }>;
+}
+
+export type GenericScriptArgsResult = { ok: true; args: string[] } | { ok: false; error: string };
+
+export interface GenericScriptTask {
+  id: string;
+  command: "ffmpeg" | "ffprobe";
+  fields: GenericScriptField[];
+  toArgs(values: GenericScriptFormValues): GenericScriptArgsResult;
+}
+
+export const GENERIC_SCRIPT_TASKS: GenericScriptTask[] = [
+  {
+    id: "probe",
+    command: "ffprobe",
+    fields: [{ kind: "template-text", id: "inputPath", label: "Zu prüfende Datei", required: true, defaultValue: "${input.path}" }],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      if (!p) return { ok: false, error: "Zu prüfende Datei fehlt." };
+      return { ok: true, args: buildProbeArgs({ inputPath: p }) };
+    },
+  },
+  {
+    id: "thumbnail",
+    command: "ffmpeg",
+    fields: [
+      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: "Ausgabedatei (Bild)", required: true, defaultValue: "${input.thumbnailPath}" },
+      { kind: "text", id: "atTime", label: "Zeitpunkt im Video", defaultValue: "00:00:05", placeholder: "hh:mm:ss", help: "hh:mm:ss, z. B. 00:00:05." },
+      { kind: "text", id: "widthPixels", label: "Breite in Pixeln", defaultValue: "480", placeholder: "Pixel", numeric: true, help: "Höhe wird proportional berechnet." },
+    ],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      const o = v.scalars.outputPath?.trim();
+      const w = Number(v.scalars.widthPixels);
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      if (!Number.isFinite(w) || w <= 0) return { ok: false, error: "Breite: keine gültige Zahl." };
+      return { ok: true, args: buildThumbnailArgs({ inputPath: p, outputPath: o, atTime: v.scalars.atTime?.trim() || "00:00:05", widthPixels: w }) };
+    },
+  },
+  {
+    id: "extract_audio",
+    command: "ffmpeg",
+    fields: [
+      { kind: "template-text", id: "inputPath", label: "Eingabedatei", required: true, defaultValue: "${input.path}" },
+      { kind: "template-text", id: "outputPath", label: "Ausgabedatei", required: true, defaultValue: "${input.audioPath}" },
+      { kind: "codec-picker", id: "audio", mediaType: "audio", label: "Audio-Codec", help: "Leer = ffmpeg-Standard für die gewählte Dateiendung." },
+    ],
+    toArgs: (v) => {
+      const p = v.scalars.inputPath?.trim();
+      const o = v.scalars.outputPath?.trim();
+      if (!p || !o) return { ok: false, error: "Eingabe- und Ausgabedatei sind Pflicht." };
+      const a = v.pickers.audio;
+      return { ok: true, args: buildExtractAudioArgs({ inputPath: p, outputPath: o, audioCodec: a?.codec || undefined, audioOptions: a?.options ?? {} }) };
+    },
+  },
+];
+
+export function genericScriptTaskById(id: string): GenericScriptTask | undefined {
+  return GENERIC_SCRIPT_TASKS.find((t) => t.id === id);
 }
 
 // ---- ffmpeg-Introspektionsdaten (Formen von orchestrator/internal/ffmpegtools) -----------------
