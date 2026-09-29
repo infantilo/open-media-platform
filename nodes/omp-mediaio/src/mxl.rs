@@ -1675,6 +1675,17 @@ fn index_pts(
     let (Some(clock), Some(base)) = (element.clock(), element.base_time()) else {
         return IndexPts::NotPlaying;
     };
+    // Start-Race (s. `timebase::pts_plausible`): Uhr schon gesetzt, `base_time`
+    // aber noch 0 bzw. Element noch nicht PLAYING → noch nicht rechnen.
+    if base.nseconds() == 0 || element.current_state() != gst::State::Playing {
+        return IndexPts::NotPlaying;
+    }
+    let running_now = clock.time().nseconds().saturating_sub(base.nseconds());
+    // Selbstheilung: ein bereits verseuchter `last_pts` (weit in der Zukunft)
+    // würde sonst jeden echten PTS als "nicht monoton" verwerfen.
+    if last_pts.is_some_and(|last| !crate::timebase::pts_plausible(last, running_now)) {
+        *last_pts = None;
+    }
     let Ok(index_tai) = context.instance.index_to_timestamp(index, rate) else {
         return IndexPts::Skip;
     };
@@ -1694,6 +1705,9 @@ fn index_pts(
     let Some(pts) = tai_to_running(index_tai, base.nseconds(), clock_now, tai_now, tracker.latency_ns()) else {
         return IndexPts::Skip;
     };
+    if !crate::timebase::pts_plausible(pts, running_now) {
+        return IndexPts::NotPlaying;
+    }
     if last_pts.is_some_and(|last| pts <= last) {
         return IndexPts::Skip;
     }
@@ -1721,8 +1735,16 @@ fn read_loop(
     let period_ns = (1_000_000_000u64 * grain_rate.denominator.max(1) as u64) / grain_rate.numerator.max(1) as u64;
     let mut latency: Option<crate::timebase::LatencyTracker> = None;
     let mut last_pts: Option<u64> = None;
+    let dbg = std::env::var("OMP_MXL_DEBUG").is_ok();
+    let mut st = [0u32; 8]; // ok, mismatch, skip, notplaying, toolate, tooearly, pusherr, other
+    let mut st_t = std::time::Instant::now();
     while running.load(Ordering::Relaxed) {
         heartbeat.fetch_add(1, Ordering::Relaxed);
+        if dbg && st_t.elapsed() > Duration::from_secs(2) {
+            eprintln!("MXLDBG {flow_id} ok={} mismatch={} skip={} notplaying={} toolate={} tooearly={} pusherr={} idx={index} lastpts={last_pts:?} appsrc_state={:?}", st[0],st[1],st[2],st[3],st[4],st[5],st[6], app_src.current_state());
+            st = [0; 8];
+            st_t = std::time::Instant::now();
+        }
         match grain_reader.as_ref().expect("grain_reader is Some outside the FLOW_INVALID branch").get_grain_non_blocking(index) {
             Ok(grain) => {
                 // Veralteter Ringpuffer-Slot (Nachtrag 271): libmxl prüft
@@ -1733,6 +1755,7 @@ fn read_loop(
                 // Rücksprung im Bild). Überspringen: der PTS-Abstand lässt
                 // `videorate` das letzte Bild wiederholen.
                 if grain.index != index {
+                    st[1] += 1;
                     if grain.index < index {
                         index += 1;
                     } else {
@@ -1744,12 +1767,14 @@ fn read_loop(
                     match index_pts(context, app_src, grain_rate, index, period_ns, &mut latency, &mut last_pts) {
                         IndexPts::Push(pts) => Some(pts),
                         IndexPts::Skip => {
+                            st[2] += 1;
                             index += 1;
                             continue;
                         }
                         IndexPts::NotPlaying => {
                             // Pipeline noch nicht PLAYING (keine Uhr/
                             // base_time) — kurz warten, gleiches Grain erneut.
+                            st[3] += 1;
                             thread::sleep(Duration::from_millis(5));
                             continue;
                         }
@@ -1791,11 +1816,15 @@ fn read_loop(
                 // omp-viewer). Grain gilt als konsumiert, egal ob der Push
                 // ankam; nur bei Erfolg zaehlt er als "flowed".
                 if app_src.push_buffer(buffer).is_ok() {
+                    st[0] += 1;
                     flowed.store(true, Ordering::Relaxed);
+                } else {
+                    st[6] += 1;
                 }
                 index += 1;
             }
             Err(mxl::Error::OutOfRangeTooLate) => {
+                st[4] += 1;
                 // Live gefundener Busy-Loop (Nutzerreport "Viewer freezt
                 // nach DSK aktivieren", tatsächlich unabhängig von DSK
                 // reproduziert — reines Timing-Race, nicht deterministisch
@@ -1826,6 +1855,7 @@ fn read_loop(
                 thread::sleep(Duration::from_millis(5));
             }
             Err(mxl::Error::OutOfRangeTooEarly) => {
+                st[5] += 1;
                 // Noch nicht geschrieben — gleichen Index nach kurzem
                 // Rust-seitigem Backoff erneut versuchen.
                 //

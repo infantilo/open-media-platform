@@ -35,6 +35,22 @@ pub fn running_to_tai(running: u64, base_time: u64, clock_now: u64, tai_now: u64
 /// TAI-Nanosekunden → Pipeline-Laufzeit (Umkehrung von
 /// [`running_to_tai`]), plus `latency`. `None`, wenn das Ergebnis vor dem
 /// Pipeline-Start läge.
+/// Größter noch plausibler Vorlauf eines berechneten PTS vor der aktuellen
+/// Pipeline-Laufzeit: Latenz ist auf 1 s begrenzt (`LatencyTracker`), also
+/// ist alles darüber ein Rechenfehler, kein Zeitstempel.
+pub const MAX_PTS_AHEAD_NS: u64 = 10_000_000_000;
+
+/// Freeze-Ursache 2026-09-29: startet ein Reader-Thread, während die
+/// Pipeline gerade auf PLAYING geht, ist `clock()` schon gesetzt, aber
+/// `base_time()` noch 0 (ein gültiger `ClockTime`, kein `None`) — der PTS
+/// wird dann als Systemlaufzeit (Stunden!) berechnet. Jeder folgende, echte
+/// PTS liegt darunter und wurde von der Monotonie-Prüfung dauerhaft
+/// verworfen: der Eingang lieferte nie wieder ein Bild.
+/// `true` = PTS liegt in einem sinnvollen Bereich um die aktuelle Laufzeit.
+pub fn pts_plausible(pts: u64, running_now: u64) -> bool {
+    pts <= running_now.saturating_add(MAX_PTS_AHEAD_NS)
+}
+
 pub fn tai_to_running(tai: u64, base_time: u64, clock_now: u64, tai_now: u64, latency: u64) -> Option<u64> {
     let v = tai as i128 - tai_now as i128 + clock_now as i128 - base_time as i128 + latency as i128;
     (v >= 0).then_some(v as u64)
@@ -251,5 +267,23 @@ mod tests {
             t.observe(10_000_000_000);
         }
         assert_eq!(t.latency_periods, 5);
+    }
+}
+
+#[cfg(test)]
+mod pts_guard_tests {
+    use super::*;
+
+    #[test]
+    fn pts_near_running_time_is_plausible() {
+        assert!(pts_plausible(5_000_000_000, 5_000_000_000));
+        assert!(pts_plausible(6_000_000_000, 5_000_000_000)); // 1 s Latenz-Vorlauf
+        assert!(pts_plausible(0, 5_000_000_000));
+    }
+
+    #[test]
+    fn uptime_sized_pts_is_rejected() {
+        // Beobachtet: base_time=0 → PTS = Systemlaufzeit (~6 h) bei Laufzeit ~20 s.
+        assert!(!pts_plausible(21_808_627_498_926, 20_000_000_000));
     }
 }
