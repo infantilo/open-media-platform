@@ -26,7 +26,7 @@ import {
   MIN_TILE_WIDTH,
   type TileLayout,
 } from "./console-board-logic.ts";
-import { hasPreviewUrl, mountNodePreview, type MountedPreview } from "./node-preview.ts";
+import { hasPreviewUrl, bundleOwnsPreview, mountNodePreview, type MountedPreview } from "./node-preview.ts";
 
 const FALLBACK_CONTAINER_WIDTH = 1200;
 const FALLBACK_CONTAINER_HEIGHT = 800;
@@ -276,11 +276,24 @@ export class ConsoleBoard extends HTMLElement {
     loading.style.cssText = "color:var(--omp-text-dim);margin:0;";
     content.appendChild(loading);
 
-    const showsPreview = await hasPreviewUrl(entry.uiBundleUrl);
+    // Ausnahme (Nutzerfund 2026-09-28/29, `ownsPreview`-Manifestfeld, s.
+    // console-view.ts + node-preview.ts#bundleOwnsPreview): Nodes wie
+    // omp-viewer/omp-scope zeigen ihr previewUrl-Bild bereits selbst groß
+    // als eigentlichen Bundle-Inhalt — der Aufsatz hier würde es nur
+    // sinnlos doppeln. Der ursprüngliche Fix (27309d3) patchte nur
+    // console-view.ts (Einzel-Kachel); console-board.ts (Mehrfach-Kacheln,
+    // Kapitel 12 Teil 5) hatte denselben generischen Aufsatz-Code separat
+    // und blieb unkorrigiert — sichtbar wurde das nur, wenn ein Operator
+    // mehr als eine Konsolen-Rolle zugewiesen bekam (dann board statt
+    // view, s. shell.ts#createConsoleHost).
+    const [showsPreview, ownsPreview] = await Promise.all([
+      hasPreviewUrl(entry.uiBundleUrl),
+      bundleOwnsPreview(entry.uiBundleUrl),
+    ]);
     content.replaceChildren();
 
     let previewHandle: MountedPreview | undefined;
-    if (showsPreview) {
+    if (showsPreview && !ownsPreview) {
       previewHandle = mountNodePreview(entry.uiBundleUrl);
       content.appendChild(previewHandle.element);
     }
