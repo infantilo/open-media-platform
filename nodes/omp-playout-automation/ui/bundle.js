@@ -65,6 +65,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
       .status-row .mode-badge { padding: 3px 8px; border-radius: 3px; background: #333; }
       .status-row .mode-badge.onair { background: #2e7d32; }
+      omp-source-selector { min-width: 180px; max-width: 260px; }
       select.mode-select { background: #222; color: #eee; border: 1px solid #555; border-radius: 3px; }
       button.take {
         cursor: pointer; padding: 8px 18px; border: 1px solid #a33; border-radius: 4px;
@@ -299,7 +300,10 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       patternSelect.append(opt);
     }
     const fileSelect = document.createElement("select");
-    const liveSelect = document.createElement("select");
+    // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
+    const liveSelect = document.createElement("omp-source-selector");
+    liveSelect.emptyLabel = "— Quelle wählen —";
+    liveSelect.excludeRoles = ["low"];
     const durationInput = document.createElement("input");
     durationInput.type = "number";
     durationInput.placeholder = "Dauer (ms)";
@@ -499,24 +503,18 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       if (values.includes(prevValue)) selectEl.value = prevValue;
     };
 
-    // `entries`: [{value, text}] — für Live-Quellen (senderId != Label).
-    const buildKeyedOptions = (selectEl, entries, placeholderText) => {
-      const optionsKey = JSON.stringify(entries);
-      if (selectEl.dataset.optionsKey === optionsKey) return;
-      selectEl.dataset.optionsKey = optionsKey;
-      const prevValue = selectEl.value;
-      selectEl.replaceChildren();
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = placeholderText;
-      selectEl.append(placeholder);
-      for (const entry of entries) {
-        const opt = document.createElement("option");
-        opt.value = entry.value;
-        opt.textContent = entry.text;
-        selectEl.append(opt);
-      }
-      if (entries.some((e) => e.value === prevValue)) selectEl.value = prevValue;
+    // Quellen-Katalog (Workflow/Node/grouphint, 2 GETs) nur bei geänderter
+    // Senderliste oder alle 15 s neu laden, nicht bei jedem 2s-Poll.
+    let liveCatalogKey = "";
+    let liveCatalogAt = 0;
+    const refreshLiveSources = async (sources) => {
+      const key = JSON.stringify(sources);
+      if (key === liveCatalogKey && Date.now() - liveCatalogAt < 15000) return;
+      liveCatalogKey = key;
+      liveCatalogAt = Date.now();
+      const catalog = await customElements.get("omp-source-selector").loadCatalog(nodeId, sources);
+      liveSelect.currentWorkflowId = catalog.currentWorkflowId;
+      liveSelect.entries = catalog.entries;
     };
 
     // itemId -> { el, dragEl, numEl, iconEl, titleEl, durEl, timeEl, remTxt, remBarInner, startTypeBtn, cueBtn, removeBtn }
@@ -906,11 +904,7 @@ class OmpPlayoutAutomationPanel extends HTMLElement {
       // Ziel-Player-Spiegel befüllen.
       const availableSources = availableSourcesValue || [];
       buildSimpleOptions(fileSelect, mediaLibraryValue || [], "— Datei wählen —");
-      buildKeyedOptions(
-        liveSelect,
-        availableSources.map((s) => ({ value: s.senderId, text: s.label })),
-        "— Quelle wählen —"
-      );
+      await refreshLiveSources(availableSources);
       const liveLabelBySenderId = new Map(availableSources.map((s) => [s.senderId, s.label]));
 
       for (const [id, refs] of itemEls) {

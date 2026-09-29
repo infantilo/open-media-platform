@@ -41,6 +41,9 @@ type Port struct {
 	Label     string `json:"label"`
 	Format    string `json:"format"`
 	Transport string `json:"transport,omitempty"`
+	// GroupHint: roher NMOS-grouphint-Tag des Senders (nur Outputs), s.
+	// registry.SenderView.GroupHint.
+	GroupHint string `json:"groupHint,omitempty"`
 }
 
 // Node ist eine Kachel im Flow-Editor.
@@ -469,7 +472,7 @@ func buildNodes(views []registry.NodeView) []Node {
 			n.Inputs = append(n.Inputs, Port{ID: r.ID, Label: r.Label, Format: r.Format, Transport: r.Transport})
 		}
 		for _, sn := range v.Senders {
-			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label, Format: sn.Format, Transport: sn.Transport})
+			n.Outputs = append(n.Outputs, Port{ID: sn.ID, Label: sn.Label, Format: sn.Format, Transport: sn.Transport, GroupHint: sn.GroupHint})
 		}
 		nodes = append(nodes, n)
 	}

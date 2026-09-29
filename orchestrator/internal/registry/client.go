@@ -102,7 +102,7 @@ func (c *Client) fillSuspiciouslyEmptyDevices(ctx context.Context, views []NodeV
 						format = flowFormat[*s.FlowID]
 					}
 					views[ni].Senders = append(views[ni].Senders, SenderView{
-						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format, Transport: s.Transport,
+						ID: s.ID, Label: s.Label, DeviceID: s.DeviceID, Format: format, Transport: s.Transport, GroupHint: s.groupHint(),
 					})
 				}
 			}
@@ -244,6 +244,7 @@ func buildSnapshot(nodes []is04Node, devices []is04Device, senders []is04Sender,
 					DeviceID:  s.DeviceID,
 					Format:    format,
 					Transport: s.Transport,
+					GroupHint: s.groupHint(),
 				})
 			}
 

@@ -85,6 +85,7 @@ class OmpAudioMixerPanel extends HTMLElement {
         font-size: 10px; font-weight: 600; text-align: center; max-width: 152px;
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       }
+      .strip omp-source-selector { display: block; width: 100%; font-size: 10px; }
       .strip select { width: 100%; font-size: 10px; background: var(--omp-bg, #101214); color: var(--omp-text, #e8eaed); border: 1px solid var(--omp-border, #2e3338); }
       /* Nutzerfund (Verfeinerung): pro Band Gain/Freq/Q nebeneinander
          (nicht untereinander), darunter jeweils das nächste Band. Unter
@@ -310,7 +311,11 @@ class OmpAudioMixerPanel extends HTMLElement {
 
       const meter = document.createElement("omp-meter");
 
-      const sourceSelect = document.createElement("select");
+      // Hierarchischer Picker (ui/kit/omp-source-selector.ts) statt flachem
+      // <select>: gleiche Schnittstelle (.value / "change"), Wert bleibt die Sender-ID.
+      const sourceSelect = document.createElement("omp-source-selector");
+      sourceSelect.emptyLabel = "Intern (Testton)";
+      sourceSelect.accepts = ["audio"];
       sourceSelect.addEventListener("change", () =>
         call(`channel.${id}.setSource`, { senderId: sourceSelect.value }).then(poll),
       );
@@ -593,20 +598,13 @@ class OmpAudioMixerPanel extends HTMLElement {
     };
 
     let lastSourcesKey = "";
-    const rebuildSourceOptions = (sourceSelect, sources) => {
-      const current = sourceSelect.value;
-      sourceSelect.innerHTML = "";
-      const internalOpt = document.createElement("option");
-      internalOpt.value = "";
-      internalOpt.textContent = "Intern (Testton)";
-      sourceSelect.append(internalOpt);
-      for (const s of sources) {
-        const opt = document.createElement("option");
-        opt.value = s.senderId;
-        opt.textContent = s.label;
-        sourceSelect.append(opt);
-      }
-      sourceSelect.value = current;
+    // Quellen-Katalog (Workflow/Node/grouphint) einmal je Änderung/15 s für alle
+    // Kanäle laden, nicht je Kanal und Poll (2 GETs: /graph + /workflows).
+    let sourceCatalog = { entries: [], currentWorkflowId: null };
+    let sourceCatalogAt = 0;
+    const applySourceCatalog = (sourceSelect) => {
+      sourceSelect.currentWorkflowId = sourceCatalog.currentWorkflowId;
+      sourceSelect.entries = sourceCatalog.entries;
     };
 
     // Nutzerfund: "Follow Node-ID" musste von Hand eingetippt werden.
@@ -843,6 +841,11 @@ class OmpAudioMixerPanel extends HTMLElement {
       const sourcesKey = JSON.stringify(availableSources);
       const sourcesChanged = sourcesKey !== lastSourcesKey;
       lastSourcesKey = sourcesKey;
+      const catalogReloaded = sourcesChanged || Date.now() - sourceCatalogAt > 15000;
+      if (catalogReloaded) {
+        sourceCatalogAt = Date.now();
+        sourceCatalog = await customElements.get("omp-source-selector").loadCatalog(nodeId, availableSources);
+      }
 
       for (const ch of channels) {
         let refs = channelEls.get(ch.id);
@@ -853,8 +856,8 @@ class OmpAudioMixerPanel extends HTMLElement {
           console_.append(refs.el);
           isNew = true;
         }
-        if (isNew || sourcesChanged) {
-          rebuildSourceOptions(refs.sourceSelect, availableSources);
+        if (isNew || sourcesChanged || catalogReloaded) {
+          applySourceCatalog(refs.sourceSelect);
         }
         if (isNew) {
           rebuildFollowOptions(refs.followSelect);

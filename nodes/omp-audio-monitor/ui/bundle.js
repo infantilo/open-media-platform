@@ -121,21 +121,17 @@ class OmpAudioMonitorPanel extends HTMLElement {
     style.textContent = `
       :host { display: block; font-family: sans-serif; color: #eee; }
       p { font-size: 12px; color: #888; margin: 4px 0; }
-      select {
-        width: 100%; background: #222; color: #eee; border: 1px solid #555;
-        border-radius: 3px; padding: 4px; font-size: 12px; margin-bottom: 6px;
-      }
+      omp-source-selector { display: block; width: 100%; margin-bottom: 6px; }
       button {
         background: #333; color: #eee; border: 1px solid #555; border-radius: 3px;
         cursor: pointer; font-size: 12px; padding: 4px 10px;
       }
     `;
 
-    const select = document.createElement("select");
-    const placeholderOpt = document.createElement("option");
-    placeholderOpt.value = "";
-    placeholderOpt.textContent = "— Quelle wählen —";
-    select.appendChild(placeholderOpt);
+    // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
+    const select = document.createElement("omp-source-selector");
+    select.emptyLabel = "— Quelle wählen —";
+    select.accepts = ["audio"];
 
     const listenBtn = document.createElement("button");
     listenBtn.textContent = "▶ Abhören starten";
@@ -158,24 +154,25 @@ class OmpAudioMonitorPanel extends HTMLElement {
       return (await res.json()).value;
     };
 
+    let catalogKey = "";
+    let catalogAt = 0;
     const renderSources = async () => {
       const sources = (await getParam("availableSources")) || [];
       const connected = (await getParam("connectedFlowId")) || "";
-      const currentValue = select.value;
-      select.replaceChildren(placeholderOpt);
-      for (const s of sources) {
-        const opt = document.createElement("option");
-        opt.value = s.senderId;
-        opt.textContent = s.label;
-        select.appendChild(opt);
+      // Katalog (2 GETs) nur bei geänderter Senderliste oder alle 15 s neu laden.
+      const key = JSON.stringify(sources);
+      if (key !== catalogKey || Date.now() - catalogAt > 15000) {
+        catalogKey = key;
+        catalogAt = Date.now();
+        const catalog = await customElements.get("omp-source-selector").loadCatalog(nodeId, sources);
+        select.currentWorkflowId = catalog.currentWorkflowId;
+        select.entries = catalog.entries;
       }
-      // Aktuell verbundene Quelle nur beibehalten, wenn der Nutzer nicht
-      // gerade mitten in einer eigenen Auswahl ist (kein Wert gewählt).
-      if (!currentValue && connected) {
-        const match = sources.find((s) => s.senderId && select.querySelector(`option[value="${CSS.escape(s.senderId)}"]`));
+      // Unverändertes Verhalten: Aktuell verbundene Quelle nur vorbelegen, wenn
+      // der Nutzer nicht gerade mitten in einer eigenen Auswahl ist (kein Wert gewählt).
+      if (!select.value && connected) {
+        const match = sources.find((s) => s.senderId);
         if (match) select.value = match.senderId;
-      } else if (currentValue) {
-        select.value = currentValue;
       }
     };
 

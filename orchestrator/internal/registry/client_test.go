@@ -223,3 +223,20 @@ func TestGetJSONFollowsPagingLinks(t *testing.T) {
 		t.Fatalf("got %d items, want 3 across pages: %+v", len(got), got)
 	}
 }
+
+func TestBuildSnapshotCarriesGroupHint(t *testing.T) {
+	nodes := []is04Node{{ID: "node-1"}}
+	devices := []is04Device{{ID: "dev-1", NodeID: "node-1"}}
+	senders := []is04Sender{
+		{ID: "s-hint", DeviceID: "dev-1", Tags: map[string][]string{GroupHintTag: {"cam1:video"}}},
+		{ID: "s-none", DeviceID: "dev-1"},
+	}
+	views := buildSnapshot(nodes, devices, senders, nil, nil)
+	got := map[string]string{}
+	for _, s := range views[0].Senders {
+		got[s.ID] = s.GroupHint
+	}
+	if got["s-hint"] != "cam1:video" || got["s-none"] != "" {
+		t.Errorf("group hints = %+v, want s-hint=cam1:video, s-none empty", got)
+	}
+}

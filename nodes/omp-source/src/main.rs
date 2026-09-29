@@ -367,6 +367,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         bit_depth: 32,
                         source_id: None,
                     }),
+                    // Natural Group: Audio gehört zur selben Quelle wie das
+                    // Highres-Video (gleicher Gruppenname, Rolle `audio`) —
+                    // der Source-Selector (ui/kit) fasst so Video+Audio
+                    // zusammen. Discovery-Konsumenten (Switcher/Mixer/
+                    // Multiviewer/Player) werten nur Rolle `low` an
+                    // Video-Sendern aus, bleiben also unberührt.
+                    tags: HashMap::from([(
+                        "urn:x-nmos:tag:grouphint/v1.0".to_string(),
+                        vec![format!("{highres_group_name}:audio")],
+                    )]),
                     ..Default::default()
                 },
             ],

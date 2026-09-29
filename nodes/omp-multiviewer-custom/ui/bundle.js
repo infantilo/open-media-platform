@@ -43,6 +43,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     this._nodeId = this.getAttribute("node-id");
     this._layout = defaultLayout();
     this._sources = [];
+    this._catalog = null;
     this._selectedPipId = null;
     this._dirty = false;
     this._loadError = null;
@@ -176,6 +177,7 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       .spacer { flex:1; }
       .layouts-toolbar { padding-top: var(--omp-space-2, 8px); border-top: 1px solid var(--omp-border, #2e3338); }
       .layouts-toolbar select { max-width:160px; }
+      omp-source-selector { display:block; width:100%; }
       .layout-save-as-name { width:150px; }
       .toolbar-sep { width:1px; align-self:stretch; background: var(--omp-border, #2e3338); }
       .layout-import-label { display:inline-flex; align-items:center; gap:4px; font-size: var(--omp-font-size-sm, 12px); color: var(--omp-text, #e8eaed); background: var(--omp-surface-raised, #22262b); border:1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px); padding: var(--omp-space-1, 4px) var(--omp-space-2, 8px); cursor:pointer; }
@@ -228,6 +230,10 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
       if (sourcesRes.ok) {
         const body = await sourcesRes.json();
         this._sources = Array.isArray(body.value) ? body.value : [];
+        // Workflow/Node/grouphint-Metadaten für den hierarchischen Quellen-Picker
+        // (degradiert bei Fehlern zu Einträgen ohne Metadaten).
+        const catalog = await customElements.get("omp-source-selector").loadCatalog(this._nodeId, this._sources);
+        this._catalog = catalog;
       }
       if (layoutsRes.ok) {
         const body = await layoutsRes.json();
@@ -635,18 +641,15 @@ class OmpMultiviewerCustomPanel extends HTMLElement {
     }
 
     const sourceField = this._field("Quelle");
-    const select = document.createElement("select");
-    const noneOpt = document.createElement("option");
-    noneOpt.value = "";
-    noneOpt.textContent = "— keine Quelle —";
-    select.appendChild(noneOpt);
-    for (const src of this._sources) {
-      const opt = document.createElement("option");
-      opt.value = src.senderId;
-      opt.textContent = src.label || src.senderId;
-      if (src.senderId === pip.senderId) opt.selected = true;
-      select.appendChild(opt);
-    }
+    // Hierarchischer Picker (ui/kit/omp-source-selector.ts), Wert = Sender-ID wie zuvor.
+    const select = document.createElement("omp-source-selector");
+    select.emptyLabel = "— keine Quelle —";
+    select.accepts = ["video"];
+    select.excludeRoles = ["low"];
+    select.currentWorkflowId = this._catalog?.currentWorkflowId ?? null;
+    select.entries = this._catalog?.entries
+      ?? this._sources.map((src) => ({ id: src.senderId, label: src.label || src.senderId }));
+    select.value = pip.senderId || "";
     select.addEventListener("change", () => {
       pip.senderId = select.value || null;
       this._dirty = true;

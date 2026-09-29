@@ -38,6 +38,22 @@ type is04Sender struct {
 	DeviceID  string  `json:"device_id"`
 	FlowID    *string `json:"flow_id"`
 	Transport string  `json:"transport"`
+	// Tags: nur für `urn:x-nmos:tag:grouphint/v1.0` gelesen (s. GroupHintTag).
+	Tags map[string][]string `json:"tags"`
+}
+
+// GroupHintTag ist der NMOS-Parameter-Registry-Tag für Natural Groups
+// (Format "<group>:<role>[:<scope>]", Sender/Receiver-Tag).
+const GroupHintTag = "urn:x-nmos:tag:grouphint/v1.0"
+
+// groupHint liefert den ersten Grouphint-Tag-Wert unverändert ("" wenn
+// keiner vorhanden) — Parsing (Gruppe/Rolle) macht die UI
+// (ui/kit/source-selector-logic.ts), damit es genau eine Parse-Stelle gibt.
+func (s is04Sender) groupHint() string {
+	if v := s.Tags[GroupHintTag]; len(v) > 0 {
+		return v[0]
+	}
+	return ""
 }
 
 type is04Receiver struct {
@@ -90,6 +106,10 @@ type SenderView struct {
 	DeviceID  string `json:"device_id"`
 	Format    string `json:"format"`
 	Transport string `json:"transport,omitempty"`
+	// GroupHint ist der rohe erste `urn:x-nmos:tag:grouphint/v1.0`-Wert
+	// des Senders (leer, wenn nicht gesetzt) — Grundlage für die
+	// Natural-Group-Darstellung im Source-Selector.
+	GroupHint string `json:"group_hint,omitempty"`
 }
 
 // ReceiverView ist die normalisierte Sicht auf einen IS-04-Receiver. Das
