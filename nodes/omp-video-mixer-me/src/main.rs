@@ -41,7 +41,7 @@ use omp_node_sdk::{
     Descriptor, InvokeError, LatencyInfo, LatencyRange, MethodArg, MethodSpec, NodeConfig,
     ParamSpec, ParamStore, ParamType, RawResponse, SenderSpec, SetError,
 };
-use pipeline::{DEFAULT_TRANS_RATE_FRAMES, DiscoveredInput, DiscoveredKeyFill, DveBox};
+use pipeline::{DEFAULT_TRANS_RATE_FRAMES, DiscoveredInput, DiscoveredKeyFill, DveBox, TransKind};
 use serde_json::Value;
 
 /// PIP-Preset (`docs/END-GOAL-FEATURES.md` §3.4-Nachfolger, Nutzerauftrag
@@ -60,7 +60,47 @@ struct PipPreset {
     id: String,
     name: String,
     sender_id: Option<String>,
+    /// Haltposition ("Preset-Box").
     box_: DveBox,
+    /// Optionale Startposition (PIP fährt beim Einschalten von hier nach
+    /// `box_`) und Endposition (beim Ausschalten fährt es von `box_` dorthin).
+    /// Nur Start gesetzt = 2-Punkt (Rückfahrt nach Start), Start+Ende = 3-Punkt,
+    /// keins von beiden = wie bisher hartes Ein/Aus.
+    start: Option<DveBox>,
+    end: Option<DveBox>,
+    in_ms: u32,
+    out_ms: u32,
+}
+
+impl PipPreset {
+    /// Ziel der Ausfahrt (`end`, sonst `start`), `None` = kein Ausfahren.
+    fn exit_box(&self) -> Option<DveBox> {
+        self.end.or(self.start)
+    }
+}
+
+fn box_json(b: &DveBox) -> Value {
+    serde_json::json!({"x": b.x, "y": b.y, "width": b.width, "height": b.height})
+}
+
+fn opt_box_json(b: &Option<DveBox>) -> Value {
+    b.as_ref().map_or(Value::Null, box_json)
+}
+
+fn box_from_json(b: &Value) -> Option<DveBox> {
+    Some(DveBox {
+        x: b.get("x")?.as_f64()? as i32,
+        y: b.get("y")?.as_f64()? as i32,
+        width: b.get("width")?.as_f64()? as i32,
+        height: b.get("height")?.as_f64()? as i32,
+    })
+}
+
+/// Optionale Box aus flachen Methoden-Argumenten `<prefix>X/Y/Width/Height`
+/// (alle vier oder keins).
+fn opt_box_args(args: &serde_json::Map<String, Value>, prefix: &str) -> Option<DveBox> {
+    let num = |suffix: &str| args.get(&format!("{prefix}{suffix}")).and_then(Value::as_f64).map(|v| v as i32);
+    Some(DveBox { x: num("X")?, y: num("Y")?, width: num("Width")?, height: num("Height")? })
 }
 
 /// Kapitel 15 Teil 3 (Rest 2, docs/END-GOAL-FEATURES.md §15.3b/§15.4):
@@ -123,6 +163,8 @@ struct MixerStore {
     /// eigentliche Umrechnung/Anwendung läuft über
     /// `pipeline::PipelineHandle::set_trans_rate`.
     trans_rate: PerLevel<i32>,
+    /// `crosspoint.transType` (`TransKind::name`), Buchführung fürs `get()`.
+    trans_kind: PerLevel<TransKind>,
     /// Manueller T-Bar (`docs/END-GOAL-FEATURES.md` §3.4 Teil 2,
     /// Nutzerauftrag 2026-09-04): Live-Position 0..1, aktualisiert über
     /// `pipeline::Event::TransitionPositionChanged` (s. `handle_events`)
@@ -385,6 +427,13 @@ fn level_param_specs(level_count: usize, level: usize) -> Vec<ParamSpec> {
             readonly: true,
         },
         ParamSpec {
+            name: n("crosspoint.transType"),
+            kind: ParamType::String,
+            unit: None,
+            range: None,
+            readonly: true,
+        },
+        ParamSpec {
             name: n("crosspoint.pinnedSenderIds"),
             kind: ParamType::String,
             unit: None,
@@ -522,6 +571,10 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
         // dieselben Werte wie ein "echtes Pult" (PGM-Tasten-
         // Beschriftung, §3.3) zu zeigen.
         MethodSpec {
+            name: n("crosspoint.setTransType"),
+            args: vec![MethodArg { name: "type".to_string(), kind: ParamType::String }],
+        },
+        MethodSpec {
             name: n("crosspoint.setTransRate"),
             args: vec![MethodArg {
                 name: "frames".to_string(),
@@ -547,6 +600,18 @@ fn level_method_specs(level_count: usize, level: usize) -> Vec<MethodSpec> {
                 MethodArg { name: "y".to_string(), kind: ParamType::Number },
                 MethodArg { name: "width".to_string(), kind: ParamType::Number },
                 MethodArg { name: "height".to_string(), kind: ParamType::Number },
+                // Optionale Fahrt-Positionen (alle vier je Punkt oder keine)
+                // + Dauern in ms.
+                MethodArg { name: "startX".to_string(), kind: ParamType::Number },
+                MethodArg { name: "startY".to_string(), kind: ParamType::Number },
+                MethodArg { name: "startWidth".to_string(), kind: ParamType::Number },
+                MethodArg { name: "startHeight".to_string(), kind: ParamType::Number },
+                MethodArg { name: "endX".to_string(), kind: ParamType::Number },
+                MethodArg { name: "endY".to_string(), kind: ParamType::Number },
+                MethodArg { name: "endWidth".to_string(), kind: ParamType::Number },
+                MethodArg { name: "endHeight".to_string(), kind: ParamType::Number },
+                MethodArg { name: "inMs".to_string(), kind: ParamType::Number },
+                MethodArg { name: "outMs".to_string(), kind: ParamType::Number },
             ],
         },
         MethodSpec {
@@ -624,6 +689,9 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
         "crosspoint.transRate" => Some(serde_json::json!(
             *store.trans_rate[level].lock().expect("lock poisoned")
         )),
+        "crosspoint.transType" => Some(serde_json::json!(
+            store.trans_kind[level].lock().expect("lock poisoned").name()
+        )),
         "crosspoint.transitionPosition" => Some(serde_json::json!(
             *store.transition_position[level].lock().expect("lock poisoned")
         )),
@@ -637,6 +705,10 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
                         "name": p.name,
                         "senderId": p.sender_id,
                         "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
+                        "start": opt_box_json(&p.start),
+                        "end": opt_box_json(&p.end),
+                        "inMs": p.in_ms,
+                        "outMs": p.out_ms,
                     }))
                     .collect::<Vec<_>>()
             ))
@@ -694,6 +766,16 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         // NÄCHSTEN `autoTrans()`, s. `PipelineHandle::set_trans_rate`-
         // Doku. Obergrenze 250 Frames (10s @25fps) ist eine reine
         // Plausibilitätsschranke, keine UI-/Standardvorgabe.
+        "crosspoint.setTransType" => {
+            let kind = args
+                .get("type")
+                .and_then(Value::as_str)
+                .and_then(TransKind::from_name)
+                .ok_or(InvokeError::Unknown)?;
+            *store.trans_kind[level].lock().expect("lock poisoned") = kind;
+            store.pipeline.set_trans_kind(level, kind);
+            Ok(())
+        }
         "crosspoint.setTransRate" => {
             let frames = args
                 .get("frames")
@@ -736,14 +818,28 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
         }
         "pip.setEnabled" => {
             let enabled = args.get("enabled").and_then(Value::as_bool).ok_or(InvokeError::Unknown)?;
-            store.pipeline.set_pip_enabled(level, enabled);
             // Ausschalten löscht immer das "aktive Preset" (Nutzerauftrag
             // 2026-09-04) — kein Mixer-Button soll nach dem Ausschalten
             // fälschlich noch als aktiv leuchten, egal ob PIP zuvor per
             // Preset oder per Low-Level-`pip.setSource` gesetzt wurde.
             if !enabled {
-                *store.active_pip_preset[level].lock().expect("lock poisoned") = None;
+                let active_id = store.active_pip_preset[level].lock().expect("lock poisoned").take();
+                // Hat das aktive Preset eine Ausfahrt (Ende/Start + Dauer),
+                // fährt PIP dorthin und schaltet sich erst danach ab.
+                let exit = active_id.and_then(|id| {
+                    store.pip_presets[level].lock().expect("lock poisoned").iter().find(|p| p.id == id).cloned()
+                });
+                if let Some(preset) = exit
+                    && let Some(to) = preset.exit_box()
+                    && preset.out_ms > 0
+                    && *store.pip_enabled[level].lock().expect("lock poisoned")
+                {
+                    let from = *store.dve_box[level].lock().expect("lock poisoned");
+                    store.pipeline.pip_animate(level, from, to, preset.out_ms as u64, true);
+                    return Ok(());
+                }
             }
+            store.pipeline.set_pip_enabled(level, enabled);
             Ok(())
         }
         "pip.setSource" => {
@@ -805,14 +901,24 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 width: json_number(args, "width")?,
                 height: json_number(args, "height")?,
             };
+            let start = opt_box_args(args, "start");
+            let end = opt_box_args(args, "end");
+            let ms = |key: &str| {
+                args.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).map_or(0, |v| v.clamp(0.0, 60_000.0) as u32)
+            };
+            let (in_ms, out_ms) = (ms("inMs"), ms("outMs"));
             let mut presets = store.pip_presets[level].lock().expect("lock poisoned");
             match presets.iter_mut().find(|p| p.id == id) {
                 Some(existing) => {
                     existing.name = name;
                     existing.sender_id = sender_id;
                     existing.box_ = box_;
+                    existing.start = start;
+                    existing.end = end;
+                    existing.in_ms = in_ms;
+                    existing.out_ms = out_ms;
                 }
-                None => presets.push(PipPreset { id, name, sender_id, box_ }),
+                None => presets.push(PipPreset { id, name, sender_id, box_, start, end, in_ms, out_ms }),
             }
             Ok(())
         }
@@ -837,9 +943,16 @@ fn level_invoke(store: &MixerStore, name: &str, args: &serde_json::Map<String, V
                 .cloned()
                 .ok_or(InvokeError::Unknown)?;
             *store.pip_source[level].lock().expect("lock poisoned") = preset.sender_id.clone();
-            store.pipeline.set_pip_source(level, preset.sender_id);
+            store.pipeline.set_pip_source(level, preset.sender_id.clone());
             store.pipeline.set_dve_box(level, preset.box_);
             store.pipeline.set_pip_enabled(level, true);
+            // Mit Startposition + Einfahrdauer fährt PIP von dort in die
+            // Haltposition (die Box wird dabei sofort auf `start` gesetzt).
+            if let Some(from) = preset.start
+                && preset.in_ms > 0
+            {
+                store.pipeline.pip_animate(level, from, preset.box_, preset.in_ms as u64, false);
+            }
             *store.active_pip_preset[level].lock().expect("lock poisoned") = Some(preset.id);
             Ok(())
         }
@@ -877,6 +990,10 @@ impl MixerStore {
                     "name": p.name,
                     "senderId": p.sender_id,
                     "box": {"x": p.box_.x, "y": p.box_.y, "width": p.box_.width, "height": p.box_.height},
+                    "start": opt_box_json(&p.start),
+                    "end": opt_box_json(&p.end),
+                    "inMs": p.in_ms,
+                    "outMs": p.out_ms,
                 })
             })
             .collect();
@@ -890,6 +1007,7 @@ impl MixerStore {
             "pipSourceSenderId": self.pip_source[level].lock().expect("lock poisoned").clone(),
             "pinnedSenderIds": self.pinned[level].lock().expect("lock poisoned").clone(),
             "transRateFrames": *self.trans_rate[level].lock().expect("lock poisoned"),
+            "transType": self.trans_kind[level].lock().expect("lock poisoned").name(),
             // PIP-Presets (Nutzerauftrag 2026-09-04): ein Mixer-Snapshot
             // nimmt die selbst angelegten Presets mit, sonst würde ein
             // Restore die "Mixer"-Buttons der UI wieder verschwinden
@@ -959,6 +1077,10 @@ impl MixerStore {
             *self.trans_rate[level].lock().expect("lock poisoned") = frames;
             self.pipeline.set_trans_rate(level, frames as u32);
         }
+        if let Some(kind) = doc.get("transType").and_then(Value::as_str).and_then(TransKind::from_name) {
+            *self.trans_kind[level].lock().expect("lock poisoned") = kind;
+            self.pipeline.set_trans_kind(level, kind);
+        }
         // PIP-Presets (Nutzerauftrag 2026-09-04) — reine Buchführung wie
         // "pinnedSenderIds" oben, keine Pipeline-Wirkung (die aktive
         // Anzeige bleibt an `pipEnabled`/`pipSourceSenderId`/`dveBox`
@@ -977,7 +1099,11 @@ impl MixerStore {
                         width: b.get("width").and_then(Value::as_i64).unwrap_or(0) as i32,
                         height: b.get("height").and_then(Value::as_i64).unwrap_or(0) as i32,
                     };
-                    Some(PipPreset { id, name, sender_id, box_ })
+                    let start = p.get("start").and_then(box_from_json);
+                    let end = p.get("end").and_then(box_from_json);
+                    let in_ms = p.get("inMs").and_then(Value::as_u64).unwrap_or(0) as u32;
+                    let out_ms = p.get("outMs").and_then(Value::as_u64).unwrap_or(0) as u32;
+                    Some(PipPreset { id, name, sender_id, box_, start, end, in_ms, out_ms })
                 })
                 .collect();
             *self.pip_presets[level].lock().expect("lock poisoned") = restored;
@@ -1075,6 +1201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let trans_rate: PerLevel<i32> =
         (0..level_count).map(|_| Arc::new(Mutex::new(DEFAULT_TRANS_RATE_FRAMES as i32))).collect();
     let transition_position: PerLevel<f64> = (0..level_count).map(|_| Arc::new(Mutex::new(0.0))).collect();
+    let trans_kind: PerLevel<TransKind> = (0..level_count).map(|_| Arc::new(Mutex::new(TransKind::Mix))).collect();
     let pip_presets: PerLevel<Vec<PipPreset>> = (0..level_count).map(|_| Arc::new(Mutex::new(Vec::new()))).collect();
     let active_pip_preset: PerLevel<Option<String>> =
         (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
@@ -1092,6 +1219,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         pip_source: pip_source.clone(),
         pinned: pinned.clone(),
         trans_rate: trans_rate.clone(),
+        trans_kind: trans_kind.clone(),
         transition_position: transition_position.clone(),
         pip_presets: pip_presets.clone(),
         active_pip_preset: active_pip_preset.clone(),
@@ -1532,5 +1660,46 @@ async fn discovery_loop(
 
         *inputs.lock().expect("lock poisoned") = discovered.clone();
         pipeline.set_inputs(discovered);
+    }
+}
+
+#[cfg(test)]
+mod pip_preset_tests {
+    use super::*;
+
+    fn b(x: i32) -> DveBox {
+        DveBox { x, y: 0, width: 10, height: 10 }
+    }
+
+    fn preset(start: Option<DveBox>, end: Option<DveBox>) -> PipPreset {
+        PipPreset { id: "p".into(), name: "p".into(), sender_id: None, box_: b(5), start, end, in_ms: 0, out_ms: 0 }
+    }
+
+    #[test]
+    fn exit_box_prefers_end_then_start() {
+        assert_eq!(preset(None, None).exit_box(), None);
+        assert_eq!(preset(Some(b(1)), None).exit_box(), Some(b(1))); // 2-Punkt: zurück nach Start
+        assert_eq!(preset(Some(b(1)), Some(b(2))).exit_box(), Some(b(2))); // 3-Punkt
+        assert_eq!(preset(None, Some(b(2))).exit_box(), Some(b(2)));
+    }
+
+    #[test]
+    fn opt_box_args_needs_all_four_fields() {
+        let mut args = serde_json::Map::new();
+        for (k, v) in [("startX", 1), ("startY", 2), ("startWidth", 3)] {
+            args.insert(k.into(), serde_json::json!(v));
+        }
+        assert_eq!(opt_box_args(&args, "start"), None);
+        args.insert("startHeight".into(), serde_json::json!(4));
+        assert_eq!(opt_box_args(&args, "start"), Some(DveBox { x: 1, y: 2, width: 3, height: 4 }));
+        assert_eq!(opt_box_args(&args, "end"), None);
+    }
+
+    #[test]
+    fn box_json_roundtrip() {
+        let orig = DveBox { x: -213, y: 20, width: 200, height: 150 };
+        assert_eq!(box_from_json(&box_json(&orig)), Some(orig));
+        assert_eq!(box_from_json(&Value::Null), None);
+        assert_eq!(opt_box_json(&None), Value::Null);
     }
 }

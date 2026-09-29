@@ -97,7 +97,12 @@ const PIP_BOX_DEFAULT = { width: Math.round(WIDTH / 3), height: Math.round(HEIGH
 PIP_BOX_DEFAULT.x = WIDTH - PIP_BOX_DEFAULT.width - 16;
 PIP_BOX_DEFAULT.y = HEIGHT - PIP_BOX_DEFAULT.height - 16;
 const PIP_MIN_SIZE = 32; // wie nodes/omp-multiviewer-custom/ui/bundle.js::MIN_PIP_SIZE, hier dupliziert (kein Framework-Zwang, s. Moduldoku).
-const PIP_EDITOR_WIDTH = 260; // skalierte Editor-Canvas-Breite im Modal, Höhe folgt aus WIDTH/HEIGHT-Verhältnis.
+const PIP_EDITOR_WIDTH = 340;
+const PIP_DEFAULT_MS = 500; // Standarddauer Ein-/Ausfahrt im Editor
+// Start/Ende dürfen außerhalb des Bildes liegen (Einfliegen von außen): der
+// Editor zeigt deshalb um das Bild einen Rand von PIP_STAGE_MARGIN (Anteil
+// von WIDTH/HEIGHT).
+const PIP_STAGE_MARGIN = 0.4; // skalierte Editor-Canvas-Breite im Modal, Höhe folgt aus WIDTH/HEIGHT-Verhältnis.
 
 // 1000ms Default (25 Frames @25fps) — überschrieben, sobald `refresh()`
 // die echte `crosspoint.transRate` gelesen hat (s. `currentTransRateMs`
@@ -125,7 +130,7 @@ function newPresetId() {
 // Gemeinsames Overlay-Modal (Nutzerauftrag 2026-09-04, s. Moduldoku) —
 // eigenständig, an `document.body` gehängt (analog `ui/kit/
 // omp-confirm.ts`, aber ohne eigenen `ui/kit`-Export). Schließen per
-// Hintergrund-Klick, Escape oder dem "Schließen"-Button; `opts.onClose`
+// Hintergrund-Klick, Escape oder dem ✕-Button oben rechts; `opts.onClose`
 // läuft in jedem Fall genau einmal.
 function openModal(titleText, opts) {
   opts = opts || {};
@@ -151,6 +156,13 @@ function openModal(titleText, opts) {
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
         display: flex; flex-direction: column; gap: var(--omp-space-3, 12px);
       }
+      .omp-vmix-modal .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .omp-vmix-modal .close {
+        all: unset; cursor: pointer; width: 28px; height: 28px; line-height: 28px; text-align: center;
+        border-radius: var(--omp-radius, 6px); color: var(--omp-text-dim, #9aa0a6); font-size: 14px;
+      }
+      .omp-vmix-modal .close:hover { background: var(--omp-surface-raised, #22262b); color: var(--omp-text, #e8eaed); }
+      .omp-vmix-modal .close:focus-visible { outline: 2px solid var(--omp-info, #4285f4); }
       .omp-vmix-modal h3 {
         margin: 0; font-size: var(--omp-font-size-xs, 11px); font-weight: 700;
         letter-spacing: 0.06em; text-transform: uppercase;
@@ -178,6 +190,7 @@ function openModal(titleText, opts) {
         background-repeat: no-repeat, no-repeat;
         background-position: right 8px center, center;
       }
+      .omp-vmix-modal omp-source-selector { display: block; width: 100%; font-size: inherit; }
       .omp-vmix-modal select option { background: var(--omp-surface-raised, #22262b); color: var(--omp-text, #e8eaed); }
       .omp-vmix-modal .row { display: flex; gap: var(--omp-space-2, 8px); align-items: center; flex-wrap: wrap; }
       .omp-vmix-modal .actions { display: flex; justify-content: flex-end; gap: var(--omp-space-2, 8px); margin-top: var(--omp-space-1, 4px); }
@@ -210,10 +223,38 @@ function openModal(titleText, opts) {
         background: repeating-conic-gradient(#1c1f23 0% 25%, #16181b 0% 50%) 0 0 / 16px 16px;
         overflow: hidden; touch-action: none;
       }
-      .omp-vmix-modal .pip-editor-box {
-        position: absolute; box-sizing: border-box; border: 2px solid var(--omp-preset, #43a047);
-        background: rgba(67, 160, 71, 0.25); cursor: move;
+      .omp-vmix-modal .pip-editor-frame {
+        position: absolute; box-sizing: border-box; border: 1px dashed var(--omp-text-dim, #9aa0a6);
+        background: rgba(255, 255, 255, 0.04); pointer-events: none;
       }
+      .omp-vmix-modal .pip-editor-path { position: absolute; left: 0; top: 0; pointer-events: none; }
+      .omp-vmix-modal .pip-editor-path polyline { fill: none; stroke: var(--omp-text-dim, #9aa0a6); stroke-width: 1.5; stroke-dasharray: 4 3; }
+      .omp-vmix-modal .pip-editor-box {
+        position: absolute; box-sizing: border-box; border: 2px solid var(--pt, #43a047);
+        background: color-mix(in srgb, var(--pt, #43a047) 22%, transparent); cursor: move; opacity: 0.75;
+      }
+      .omp-vmix-modal .pip-editor-box.active { opacity: 1; z-index: 2; }
+      .omp-vmix-modal .pip-editor-tag {
+        position: absolute; left: 2px; top: 1px; font-size: 9px; font-weight: 700; color: var(--pt, #43a047);
+        pointer-events: none;
+      }
+      .omp-vmix-modal .pip-points { gap: 12px; }
+      .omp-vmix-modal .pip-point { display: flex; align-items: center; gap: 4px; }
+      .omp-vmix-modal .pip-point input[type="checkbox"] { margin: 0; }
+      .omp-vmix-modal .pip-point button, .omp-vmix-modal .row button {
+        all: unset; cursor: pointer; padding: 6px 10px; border-radius: var(--omp-radius, 6px);
+        border: 1px solid var(--omp-border, #2e3338); background: var(--omp-surface-raised, #22262b);
+        font-size: 11px;
+      }
+      .omp-vmix-modal .pip-point button.active { border-color: var(--pt); box-shadow: inset 0 0 0 1px var(--pt); font-weight: 700; }
+      .omp-vmix-modal .pip-point button:disabled { opacity: 0.4; cursor: default; }
+      .omp-vmix-modal .pip-ms { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--omp-text-dim, #9aa0a6); }
+      .omp-vmix-modal .pip-ms input {
+        width: 70px; height: 30px; box-sizing: border-box; padding: 0 6px; font-size: 12px;
+        color: var(--omp-text, #e8eaed); background: var(--omp-surface-raised, #22262b);
+        border: 1px solid var(--omp-border, #2e3338); border-radius: var(--omp-radius, 6px);
+      }
+      .omp-vmix-modal .pip-edge-label { font-size: 11px; color: var(--omp-text-dim, #9aa0a6); }
       .omp-vmix-modal .pip-editor-resize {
         position: absolute; right: 0; bottom: 0; width: 16px; height: 16px;
         cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--omp-text-dim, #9aa0a6) 50%);
@@ -222,7 +263,7 @@ function openModal(titleText, opts) {
     </style>
     <div class="backdrop" part="backdrop"></div>
     <div class="dialog" role="dialog" aria-label="${titleText}">
-      <h3>${titleText}</h3>
+      <div class="head"><h3>${titleText}</h3><button class="close" type="button" title="Schließen (Esc)" aria-label="Schließen">✕</button></div>
       <div class="body"></div>
     </div>
   `;
@@ -237,6 +278,7 @@ function openModal(titleText, opts) {
   };
   document.addEventListener("keydown", onKeyDown);
   overlay.querySelector(".backdrop").addEventListener("click", close);
+  overlay.querySelector(".close").addEventListener("click", close);
   document.body.appendChild(overlay);
   return { bodyEl, close };
 }
@@ -386,7 +428,9 @@ class OmpVideoMixerMePanel extends HTMLElement {
       .transition omp-button.cut { width: 100%; }
       .transition omp-button.auto { width: 100%; }
       .mix-wipe { display: flex; gap: 4px; width: 100%; }
-      .mix-wipe omp-button { flex: 1; height: 26px; font-size: 10px; }
+      .mix-wipe omp-button { flex: 1 1 0; min-width: 0; height: 26px; font-size: 10px; }
+      .mix-wipe omp-button::part(button) { padding: 0 2px; }
+      .wipe-caption { font-size: 9px; letter-spacing: 0.08em; color: var(--omp-text-dim, #9aa0a6); text-align: center; margin-top: 2px; }
       p.empty {
         font-size: var(--omp-font-size-xs, 11px); font-style: italic;
         color: var(--omp-text-dim, #9aa0a6); margin: 0;
@@ -513,34 +557,34 @@ class OmpVideoMixerMePanel extends HTMLElement {
       return btn;
     };
 
-    const buildGroupedOptions = (selectEl, entries, ownSenderIds, placeholderLabel) => {
-      selectEl.innerHTML = "";
-      const placeholderOpt = document.createElement("option");
-      placeholderOpt.value = "";
-      placeholderOpt.textContent = placeholderLabel;
-      selectEl.append(placeholderOpt);
-
-      const appendOption = (parent, e) => {
-        const opt = document.createElement("option");
-        opt.value = e.senderId;
-        opt.textContent = e.label;
-        parent.append(opt);
-      };
-      const own = entries.filter((e) => ownSenderIds.has(e.senderId));
-      const others = entries.filter((e) => !ownSenderIds.has(e.senderId));
-      if (own.length > 0 && others.length > 0) {
-        const ownGroup = document.createElement("optgroup");
-        ownGroup.label = "Dieser Workflow";
-        for (const e of own) appendOption(ownGroup, e);
-        selectEl.append(ownGroup);
-
-        const otherGroup = document.createElement("optgroup");
-        otherGroup.label = "Andere Quellen";
-        for (const e of others) appendOption(otherGroup, e);
-        selectEl.append(otherGroup);
-      } else {
-        for (const e of entries) appendOption(selectEl, e);
+    // Hierarchischer Quellen-Picker (ui/kit/omp-source-selector.ts) für die
+    // Dialog-Dropdowns (Pin-Liste, DSK, PIP): Wert = Sender-ID wie zuvor.
+    // `entries` = [{label, senderId}] (die vom Node angebotenen Eingänge);
+    // Workflow/Node/grouphint kommen aus einem kurz gecachten Katalog
+    // (2 GETs), nicht je Dialog-Öffnung/Neuaufbau.
+    let sourceCatalogCache = null; // { at, promise }
+    const sourceCatalog = () => {
+      if (!sourceCatalogCache || Date.now() - sourceCatalogCache.at > 5000) {
+        sourceCatalogCache = {
+          at: Date.now(),
+          promise: customElements.get("omp-source-selector").loadCatalog(nodeId),
+        };
       }
+      return sourceCatalogCache.promise;
+    };
+    const buildSourceSelector = (entries, placeholderLabel) => {
+      const el = document.createElement("omp-source-selector");
+      el.emptyLabel = placeholderLabel;
+      el.accepts = ["video"];
+      el.excludeRoles = ["low"];
+      // Sofort mit Label-only-Einträgen (kein "nicht verfügbar"-Flackern), dann mit Metadaten.
+      el.entries = entries.map((e) => ({ id: e.senderId, label: e.label }));
+      sourceCatalog().then((catalog) => {
+        const byId = new Map(catalog.entries.map((c) => [c.id, c]));
+        el.currentWorkflowId = catalog.currentWorkflowId;
+        el.entries = entries.map((e) => ({ ...(byId.get(e.senderId) || { id: e.senderId }), label: e.label }));
+      });
+      return el;
     };
 
     // Baut eine Bus-Reihe (PGM oder PST) auf: BLK zuerst, dann (nur
@@ -786,18 +830,54 @@ class OmpVideoMixerMePanel extends HTMLElement {
       tBar.setAttribute("min", "0");
       tBar.setAttribute("max", "1");
       tBar.setAttribute("value", "0");
+      // Transitionsart (Nutzerauftrag 2026-09-29): MIX, V-FADE (über
+      // Schwarz), SLIDE und PUSH in vier Richtungen. Gilt für AUTO und T-Bar;
+      // Auswahl per `crosspoint.setTransType`, Readback per
+      // `crosspoint.transType`.
+      const kindButtons = new Map();
+      const makeKindButton = (type, text, title) => {
+        const btn = document.createElement("omp-button");
+        btn.textContent = text;
+        btn.title = title;
+        btn.setAttribute("color", "cue");
+        btn.addEventListener("click", () => {
+          setKindActive(type);
+          call("crosspoint.setTransType", { type });
+        });
+        kindButtons.set(type, btn);
+        return btn;
+      };
+      const setKindActive = (type) => {
+        for (const [t, btn] of kindButtons) btn.active = t === type;
+      };
       const mixWipe = document.createElement("div");
       mixWipe.className = "mix-wipe";
-      const mixBtn = document.createElement("omp-button");
-      mixBtn.textContent = "MIX";
-      mixBtn.active = true;
-      mixBtn.setAttribute("color", "cue");
-      const wipeBtn = document.createElement("omp-button");
-      wipeBtn.textContent = "WIPE";
-      wipeBtn.setAttribute("disabled", "");
-      wipeBtn.title = "Wipe-Muster: außerhalb des aktuellen Scopes (ARCHITECTURE.md §13.1)";
-      mixWipe.append(mixBtn, wipeBtn);
-      transition.append(cutBtn, autoBtn, tBar, mixWipe);
+      mixWipe.append(
+        makeKindButton("mix", "MIX", "Überblendung"),
+        makeKindButton("vfade", "V-FADE", "Über Schwarz (ausgehendes Bild blendet ab, neues auf)"),
+      );
+      // Slide: neues Bild fährt über das alte; Push: es schiebt das alte hinaus.
+      // Pfeil = Bewegungsrichtung. Bewusst keine Crop-Wipes (s. pipeline.rs-Moduldoku).
+      const makeKindRow = (caption, prefix, what) => {
+        const cap = document.createElement("div");
+        cap.className = "wipe-caption";
+        cap.textContent = caption;
+        const row = document.createElement("div");
+        row.className = "mix-wipe";
+        for (const [suffix, arrow, dir] of [
+          ["R", "▶", "nach rechts"],
+          ["L", "◀", "nach links"],
+          ["D", "▼", "nach unten"],
+          ["U", "▲", "nach oben"],
+        ]) {
+          row.append(makeKindButton(prefix + suffix, arrow, `${what} ${dir}`));
+        }
+        return [cap, row];
+      };
+      const slideRow = makeKindRow("SLIDE", "slide", "Slide: neues Bild fährt über das alte,");
+      const pushRow = makeKindRow("PUSH", "push", "Push: neues Bild schiebt das alte hinaus,");
+      setKindActive("mix");
+      transition.append(cutBtn, autoBtn, tBar, mixWipe, ...slideRow, ...pushRow);
 
       console_.append(buses, transition);
       content.append(console_);
@@ -928,12 +1008,13 @@ class OmpVideoMixerMePanel extends HTMLElement {
           const available = latestInputs
             .filter((i) => !latestPinned.includes(i.senderId))
             .map((i) => ({ label: i.label, senderId: i.senderId }));
-          const picker = document.createElement("select");
-          buildGroupedOptions(picker, available, lastWorkflowOwnSenderIds, "Quelle hinzufügen…");
+          const picker = buildSourceSelector(available, "Quelle hinzufügen…");
           picker.addEventListener("change", async () => {
             if (!picker.value) return;
-            await call("crosspoint.pin", { senderId: picker.value });
-            latestPinned = [...latestPinned, picker.value];
+            const pinnedId = picker.value;
+            await call("crosspoint.pin", { senderId: pinnedId });
+            // Der 2s-Poll kann die ID während des await schon übernommen haben → nicht doppelt anhängen.
+            if (!latestPinned.includes(pinnedId)) latestPinned = [...latestPinned, pinnedId];
             renderPinnedList();
           });
           addRow.append(picker);
@@ -945,8 +1026,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         dskSection.className = "field";
         const dskLabel = document.createElement("label");
         dskLabel.textContent = "DSK-Quelle (Fill+Key)";
-        const dskSelect = document.createElement("select");
-        buildGroupedOptions(dskSelect, latestKeyerInputs, lastWorkflowOwnSenderIds, "Testfarbe");
+        const dskSelect = buildSourceSelector(latestKeyerInputs, "Testfarbe");
         dskSelect.value = latestKeyerSource;
         dskSelect.addEventListener("change", () => {
           call("keyer.setSource", { senderId: dskSelect.value });
@@ -961,13 +1041,29 @@ class OmpVideoMixerMePanel extends HTMLElement {
       // ist entweder ein bestehendes Preset (Bearbeiten) oder `null`
       // (Neuanlage mit `PIP_BOX_DEFAULT`).
       const openPipEditor = (preset) => {
+        // `box` = Haltposition; `start`/`end` optional (null = nicht
+        // benutzt): nur Start = 2-Punkt (Rückfahrt nach Start), Start+Ende
+        // = 3-Punkt, keins = hartes Ein/Aus wie bisher.
         const draft = preset
-          ? { id: preset.id, name: preset.name, senderId: preset.senderId || "", box: { ...preset.box } }
+          ? {
+              id: preset.id,
+              name: preset.name,
+              senderId: preset.senderId || "",
+              box: { ...preset.box },
+              start: preset.start ? { ...preset.start } : null,
+              end: preset.end ? { ...preset.end } : null,
+              inMs: preset.inMs > 0 ? preset.inMs : PIP_DEFAULT_MS,
+              outMs: preset.outMs > 0 ? preset.outMs : PIP_DEFAULT_MS,
+            }
           : {
               id: newPresetId(),
               name: `PIP ${latestPipPresets.length + 1}`,
               senderId: "",
               box: { ...PIP_BOX_DEFAULT },
+              start: null,
+              end: null,
+              inMs: PIP_DEFAULT_MS,
+              outMs: PIP_DEFAULT_MS,
             };
 
         // `onClose` (statt nur `close`s Aufrufer) fängt JEDEN Schließweg
@@ -992,81 +1088,249 @@ class OmpVideoMixerMePanel extends HTMLElement {
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
         sourceLabel.textContent = "Quelle";
-        const sourceSelect = document.createElement("select");
         const pipInputEntries = latestInputs.map((i) => ({ label: i.label, senderId: i.senderId }));
-        buildGroupedOptions(sourceSelect, pipInputEntries, lastWorkflowOwnSenderIds, "Schwarz");
+        const sourceSelect = buildSourceSelector(pipInputEntries, "Schwarz");
         sourceSelect.value = draft.senderId;
         sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
         sourceField.append(sourceLabel, sourceSelect);
 
+        // ── Punkte-Auswahl: Start/Ende optional zuschaltbar, "Halten" immer.
+        const pointsField = document.createElement("div");
+        pointsField.className = "field";
+        const pointsLabel = document.createElement("label");
+        pointsLabel.textContent = "Fahrt: Start → Halten → Ende";
+        const pointRow = document.createElement("div");
+        pointRow.className = "row pip-points";
+        const POINTS = [
+          { key: "start", text: "Start", color: "#4285f4", optional: true },
+          { key: "box", text: "Halten", color: "#43a047", optional: false },
+          { key: "end", text: "Ende", color: "#fb8c00", optional: true },
+        ];
+        let editing = "box";
+        const pointEls = new Map();
+        for (const pt of POINTS) {
+          const wrap = document.createElement("label");
+          wrap.className = "pip-point";
+          wrap.style.setProperty("--pt", pt.color);
+          let toggle = null;
+          if (pt.optional) {
+            toggle = document.createElement("input");
+            toggle.type = "checkbox";
+            toggle.checked = !!draft[pt.key];
+            toggle.title = `${pt.text}-Position verwenden`;
+            toggle.addEventListener("change", () => {
+              if (toggle.checked) {
+                // Neuer Punkt startet als Kopie der Haltposition, knapp außerhalb des Bildes.
+                draft[pt.key] = { ...draft.box, x: pt.key === "start" ? WIDTH : -draft.box.width };
+                editing = pt.key;
+              } else {
+                draft[pt.key] = null;
+                if (editing === pt.key) editing = "box";
+              }
+              syncPoints();
+            });
+            wrap.append(toggle);
+          }
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = pt.text;
+          btn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            if (!draft[pt.key]) return;
+            editing = pt.key;
+            syncPoints();
+          });
+          wrap.append(btn);
+          pointRow.append(wrap);
+          pointEls.set(pt.key, { wrap, btn, toggle });
+        }
+        const hint = document.createElement("p");
+        hint.className = "empty";
+
+        // Ein-/Ausfahrdauer (nur sichtbar, wenn Start bzw. Ende/Start existiert).
+        const timingRow = document.createElement("div");
+        timingRow.className = "row";
+        const makeMsInput = (labelText, key) => {
+          const wrap = document.createElement("label");
+          wrap.className = "pip-ms";
+          wrap.append(document.createTextNode(labelText));
+          const input = document.createElement("input");
+          input.type = "number";
+          input.min = "0";
+          input.max = "60000";
+          input.step = "50";
+          input.value = String(draft[key]);
+          input.addEventListener("input", () => (draft[key] = clamp(parseInt(input.value, 10) || 0, 0, 60000)));
+          wrap.append(input, document.createTextNode(" ms"));
+          return wrap;
+        };
+        const inMsWrap = makeMsInput("Einfahrt ", "inMs");
+        const outMsWrap = makeMsInput("Ausfahrt ", "outMs");
+        timingRow.append(inMsWrap, outMsWrap);
+
+        // Randstart-Schnellwahl für den gerade bearbeiteten Start/Ende-Punkt.
+        const edgeRow = document.createElement("div");
+        edgeRow.className = "row";
+        const edgeLabel = document.createElement("span");
+        edgeLabel.className = "pip-edge-label";
+        edgeLabel.textContent = "Außerhalb:";
+        edgeRow.append(edgeLabel);
+        const EDGES = [
+          ["◀ links", (b) => ({ ...b, x: -b.width })],
+          ["rechts ▶", (b) => ({ ...b, x: WIDTH })],
+          ["▲ oben", (b) => ({ ...b, y: -b.height })],
+          ["unten ▼", (b) => ({ ...b, y: HEIGHT })],
+        ];
+        for (const [text, fn] of EDGES) {
+          const eb = document.createElement("button");
+          eb.type = "button";
+          eb.textContent = text;
+          eb.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            if (editing === "box" || !draft[editing]) return;
+            draft[editing] = fn(draft[editing]);
+            renderBoxes();
+          });
+          edgeRow.append(eb);
+        }
+        pointsField.append(pointsLabel, pointRow, hint);
+
+        // ── Canvas mit Rand ("Stage"): Bild = umrandetes Rechteck in der Mitte.
         const editorField = document.createElement("div");
         editorField.className = "field";
-        const editorLabel = document.createElement("label");
-        editorLabel.textContent = "Größe & Position (ziehen zum Verschieben, Ecke zum Skalieren)";
         const canvasOuter = document.createElement("div");
         canvasOuter.className = "pip-editor-canvas-outer";
-        const scale = PIP_EDITOR_WIDTH / WIDTH;
-        const editorHeight = Math.round(HEIGHT * scale);
+        const marginX = Math.round(WIDTH * PIP_STAGE_MARGIN);
+        const marginY = Math.round(HEIGHT * PIP_STAGE_MARGIN);
+        const scale = PIP_EDITOR_WIDTH / (WIDTH + 2 * marginX);
+        const stageHeight = Math.round((HEIGHT + 2 * marginY) * scale);
         const canvas = document.createElement("div");
         canvas.className = "pip-editor-canvas";
         canvas.style.width = `${PIP_EDITOR_WIDTH}px`;
-        canvas.style.height = `${editorHeight}px`;
-        const box = document.createElement("div");
-        box.className = "pip-editor-box";
-        const resizeHandle = document.createElement("div");
-        resizeHandle.className = "pip-editor-resize";
-        box.append(resizeHandle);
-        canvas.append(box);
+        canvas.style.height = `${stageHeight}px`;
+        const frame = document.createElement("div");
+        frame.className = "pip-editor-frame";
+        frame.style.left = `${Math.round(marginX * scale)}px`;
+        frame.style.top = `${Math.round(marginY * scale)}px`;
+        frame.style.width = `${Math.round(WIDTH * scale)}px`;
+        frame.style.height = `${Math.round(HEIGHT * scale)}px`;
+        const svgNs = "http://www.w3.org/2000/svg";
+        const path = document.createElementNS(svgNs, "svg");
+        path.setAttribute("class", "pip-editor-path");
+        path.setAttribute("width", String(PIP_EDITOR_WIDTH));
+        path.setAttribute("height", String(stageHeight));
+        const pathLine = document.createElementNS(svgNs, "polyline");
+        path.append(pathLine);
+        canvas.append(frame, path);
+
+        const boxEls = new Map();
+        for (const pt of POINTS) {
+          const boxEl = document.createElement("div");
+          boxEl.className = "pip-editor-box";
+          boxEl.style.setProperty("--pt", pt.color);
+          const tag = document.createElement("span");
+          tag.className = "pip-editor-tag";
+          tag.textContent = pt.text;
+          const handle = document.createElement("div");
+          handle.className = "pip-editor-resize";
+          boxEl.append(tag, handle);
+          canvas.append(boxEl);
+          boxEls.set(pt.key, { boxEl, handle });
+        }
         canvasOuter.append(canvas);
-        editorField.append(editorLabel, canvasOuter);
+        const editorLabel = document.createElement("label");
+        editorLabel.textContent = "Ziehen zum Verschieben, Ecke zum Skalieren";
+        editorField.append(editorLabel, canvasOuter, edgeRow);
 
-        const renderBox = () => {
-          box.style.left = `${Math.round(draft.box.x * scale)}px`;
-          box.style.top = `${Math.round(draft.box.y * scale)}px`;
-          box.style.width = `${Math.round(draft.box.width * scale)}px`;
-          box.style.height = `${Math.round(draft.box.height * scale)}px`;
+        const toStage = (v, margin) => Math.round((v + margin) * scale);
+        const renderBoxes = () => {
+          const centers = [];
+          for (const pt of POINTS) {
+            const b = draft[pt.key];
+            const { boxEl, handle } = boxEls.get(pt.key);
+            boxEl.style.display = b ? "" : "none";
+            if (!b) continue;
+            boxEl.style.left = `${toStage(b.x, marginX)}px`;
+            boxEl.style.top = `${toStage(b.y, marginY)}px`;
+            boxEl.style.width = `${Math.round(b.width * scale)}px`;
+            boxEl.style.height = `${Math.round(b.height * scale)}px`;
+            boxEl.classList.toggle("active", editing === pt.key);
+            handle.style.display = editing === pt.key ? "" : "none";
+            centers.push(`${toStage(b.x + b.width / 2, marginX)},${toStage(b.y + b.height / 2, marginY)}`);
+          }
+          pathLine.setAttribute("points", centers.join(" "));
         };
-        renderBox();
+        // Halten: komplett im Bild; Start/Ende: beliebig bis vollständig außerhalb.
+        const limits = (key, b) => {
+          if (key === "box") return { minX: 0, maxX: Math.max(0, WIDTH - b.width), minY: 0, maxY: Math.max(0, HEIGHT - b.height) };
+          // Start/Ende dürfen komplett außerhalb des Bildes liegen (Einfliegen von außen).
+          return { minX: -b.width, maxX: WIDTH, minY: -b.height, maxY: HEIGHT };
+        };
+        const syncPoints = () => {
+          for (const pt of POINTS) {
+            const el = pointEls.get(pt.key);
+            const on = !!draft[pt.key];
+            el.btn.disabled = !on;
+            el.btn.classList.toggle("active", editing === pt.key);
+            if (el.toggle) el.toggle.checked = on;
+          }
+          const hasExit = !!(draft.end || draft.start);
+          inMsWrap.style.display = draft.start ? "" : "none";
+          outMsWrap.style.display = hasExit ? "" : "none";
+          edgeRow.style.display = editing === "box" ? "none" : "";
+          hint.textContent = !draft.start && !draft.end
+            ? "Ohne Start/Ende erscheint PIP direkt an der Haltposition."
+            : draft.start && draft.end
+              ? "3 Punkte: fährt von Start nach Halten; beim Ausschalten von Halten nach Ende."
+              : draft.start
+                ? "2 Punkte: fährt von Start nach Halten; beim Ausschalten zurück nach Start."
+                : "Beim Ausschalten fährt PIP von Halten nach Ende.";
+          renderBoxes();
+        };
 
-        // Drag/Resize — gleiches Muster wie
-        // nodes/omp-multiviewer-custom/ui/bundle.js#_onPipPointerDown/
-        // _onPointerMove/_onPointerUp (dort ausführlicher kommentiert),
-        // hier auf eine einzige Box vereinfacht; Listener nur, solange
-        // dieses Modal offen ist (`close()` unten räumt sie ab).
+        // Drag/Resize — gleiches Muster wie nodes/omp-multiviewer-custom/ui/
+        // bundle.js#_onPipPointerDown/_onPointerMove/_onPointerUp, hier mit
+        // bis zu drei Boxen; Pointerdown auf eine Box wählt sie zugleich aus.
+        // Listener nur, solange dieses Modal offen ist (`cleanup` unten).
         let drag = null;
-        const onPointerDown = (mode) => (ev) => {
+        const onPointerDown = (key, mode) => (ev) => {
           ev.preventDefault();
           ev.stopPropagation();
-          drag = {
-            mode,
-            startScreenX: ev.clientX,
-            startScreenY: ev.clientY,
-            startX: draft.box.x,
-            startY: draft.box.y,
-            startWidth: draft.box.width,
-            startHeight: draft.box.height,
-          };
+          if (editing !== key) {
+            editing = key;
+            syncPoints();
+          }
+          const b = draft[key];
+          drag = { key, mode, sx: ev.clientX, sy: ev.clientY, x: b.x, y: b.y, w: b.width, h: b.height };
         };
         const onPointerMove = (ev) => {
           if (!drag) return;
-          const dx = Math.round((ev.clientX - drag.startScreenX) / scale);
-          const dy = Math.round((ev.clientY - drag.startScreenY) / scale);
+          const b = draft[drag.key];
+          const dx = Math.round((ev.clientX - drag.sx) / scale);
+          const dy = Math.round((ev.clientY - drag.sy) / scale);
           if (drag.mode === "move") {
-            draft.box.x = clamp(drag.startX + dx, 0, Math.max(0, WIDTH - draft.box.width));
-            draft.box.y = clamp(drag.startY + dy, 0, Math.max(0, HEIGHT - draft.box.height));
+            const lim = limits(drag.key, b);
+            b.x = clamp(drag.x + dx, lim.minX, lim.maxX);
+            b.y = clamp(drag.y + dy, lim.minY, lim.maxY);
           } else {
-            draft.box.width = clamp(drag.startWidth + dx, PIP_MIN_SIZE, WIDTH - draft.box.x);
-            draft.box.height = clamp(drag.startHeight + dy, PIP_MIN_SIZE, HEIGHT - draft.box.y);
+            const maxW = (drag.key === "box" ? WIDTH : WIDTH + marginX) - b.x;
+            const maxH = (drag.key === "box" ? HEIGHT : HEIGHT + marginY) - b.y;
+            b.width = clamp(drag.w + dx, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxW));
+            b.height = clamp(drag.h + dy, PIP_MIN_SIZE, Math.max(PIP_MIN_SIZE, maxH));
           }
-          renderBox();
+          renderBoxes();
         };
         const onPointerUp = () => {
           drag = null;
         };
-        box.addEventListener("pointerdown", onPointerDown("move"));
-        resizeHandle.addEventListener("pointerdown", onPointerDown("resize"));
+        for (const pt of POINTS) {
+          const { boxEl, handle } = boxEls.get(pt.key);
+          boxEl.addEventListener("pointerdown", onPointerDown(pt.key, "move"));
+          handle.addEventListener("pointerdown", onPointerDown(pt.key, "resize"));
+        }
         window.addEventListener("pointermove", onPointerMove);
         window.addEventListener("pointerup", onPointerUp);
+        syncPoints();
 
         const actions = document.createElement("div");
         actions.className = "actions";
@@ -1089,7 +1353,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         saveBtn.textContent = "Speichern & Anzeigen";
         saveBtn.addEventListener("click", async () => {
           const name = draft.name.trim() || `PIP ${latestPipPresets.length + 1}`;
-          await call("pip.savePreset", {
+          const args = {
             id: draft.id,
             name,
             senderId: draft.senderId,
@@ -1097,16 +1361,29 @@ class OmpVideoMixerMePanel extends HTMLElement {
             y: draft.box.y,
             width: draft.box.width,
             height: draft.box.height,
-          });
+            inMs: draft.start ? draft.inMs : 0,
+            outMs: draft.end || draft.start ? draft.outMs : 0,
+          };
+          for (const key of ["start", "end"]) {
+            const b = draft[key];
+            if (!b) continue;
+            args[`${key}X`] = b.x;
+            args[`${key}Y`] = b.y;
+            args[`${key}Width`] = b.width;
+            args[`${key}Height`] = b.height;
+          }
+          await call("pip.savePreset", args);
+          // applyPreset setzt die Box auf Start zurück und fährt die Einfahrt
+          // erneut (auch wenn das Preset schon aktiv war).
           await call("pip.applyPreset", { id: draft.id });
           close();
         });
         actions.append(spacer, cancelBtn, saveBtn);
 
-        bodyEl.append(nameField, sourceField, editorField, actions);
+        bodyEl.append(nameField, sourceField, pointsField, timingRow, editorField, actions);
 
         // Läuft über `openModal`s `onClose`-Hook oben, egal auf welchem
-        // Weg das Modal schließt (Backdrop/Escape/Abbrechen/Speichern/
+        // Weg das Modal schließt (Backdrop/Escape/✕/Abbrechen/Speichern/
         // Löschen) — sonst blieben die window-Listener nach dem
         // Schließen aktiv (Leck + Doppel-Drag beim nächsten Öffnen).
         const cleanup = () => {
@@ -1150,6 +1427,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const [
           inputsRes, programRes, presetRes, keyerRes, keyerInputsRes, keyerSourceRes,
           pipEnabledRes, pipPresetsRes, pipActivePresetRes, pinnedRes, transRateRes, transitionPositionRes,
+          transTypeRes,
         ] = await Promise.all([
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.inputs")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.programInput")}`),
@@ -1163,6 +1441,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.pinnedSenderIds")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transRate")}`),
           fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transitionPosition")}`),
+          fetch(`/api/v1/nodes/${nodeId}/params/${prefixed("crosspoint.transType")}`),
         ]);
         if (!inputsRes.ok || !programRes.ok || !presetRes.ok) return;
         const inputs = (await inputsRes.json()).value || [];
@@ -1177,6 +1456,10 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const pinned = pinnedRes.ok ? (await pinnedRes.json()).value || [] : [];
         const transRateFrames = transRateRes.ok ? (await transRateRes.json()).value || 0 : 0;
         const transitionPosition = transitionPositionRes.ok ? (await transitionPositionRes.json()).value || 0 : 0;
+        if (transTypeRes.ok) {
+          const type = (await transTypeRes.json()).value;
+          if (kindButtons.has(type)) setKindActive(type);
+        }
         if (transRateFrames > 0) {
           currentTransRateMs = transRateFrames * MS_PER_TRANS_FRAME;
           for (const [frames, btn] of rateButtons) btn.active = frames === transRateFrames;

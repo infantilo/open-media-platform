@@ -30,9 +30,24 @@
 //! `cut()`/`autoTrans()`-Aufrufe ignoriert (`fading`-Sperre) — ausreichend
 //! fürs manuelle Bedienen; alles darüber hinaus (Warteschlange, weitere
 //! Transitionsarten) ist wie volle DVE/Keyer-Tiefe Community-Scope
-//! (`UMSETZUNG.md` C10). **Wipe-Transition bewusst nicht implementiert**
-//! (kein erprobtes Muster in PIPELINE CONTROLLER vorhanden, `docs/
-//! decisions.md` 2026-07-11) — nur Cut + Mix-AutoTrans.
+//! (`UMSETZUNG.md` C10). **Transitionsarten (`TransKind`, Nutzerauftrag
+//! 2026-09-29):** Mix, V-Fade (über Schwarz), Slide (neues Bild fährt über
+//! das stehende alte) und Push (neues Bild schiebt das alte hinaus) je in
+//! vier Richtungen — ausschließlich über Alpha und `xpos`/`ypos` der
+//! Compositor-Pads (sofort wirksam, KEINE Caps-Änderung, kein Element in
+//! der Signalkette). Gilt für AUTO und den manuellen T-Bar gleichermaßen
+//! (`apply_transition_frame`).
+//!
+//! **Bewusst KEIN Crop-Wipe (Freeze-Ursache, 2026-09-29):** ein erster Wurf
+//! nutzte `videocrop` vor den Compositor-Pads (echte Wipe-Kanten). Jede
+//! `videocrop`-Property-Änderung schickt aber ein RECONFIGURE stromaufwärts
+//! bis in die GETEILTE Quellenkette (`appsrc`→`videoconvert`→…→`tee`);
+//! scheitert dort die Neuverhandlung auch nur einmal transient
+//! (`videoconvert: not negotiated`), stoppt `appsrc` dauerhaft
+//! (`streaming stopped, reason not-negotiated`) — der Eingang liefert nie
+//! wieder ein Bild, der PGM-Ausgang friert bei Umschalten auf ihn ein.
+//! Regel: in dieser Pipeline nie zur Laufzeit etwas tun, das Caps neu
+//! verhandelt (Crop/Scale-Elemente umparametrieren, Relink).
 //!
 //! **Keyer:** kein Chroma-/Luma-Keying eines externen Eingangs (dafür
 //! fehlt im Dev-Sandbox mangels Kamera/Greenscreen-Footage ein
@@ -91,7 +106,7 @@
 //! Eingang.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -129,6 +144,116 @@ pub const DEFAULT_TRANS_RATE_FRAMES: u32 = 25;
 /// Dauer für `spawn_autotrans` um.
 fn frames_to_ms(frames: u32) -> u64 {
     frames as u64 * 1000 * FRAMERATE_DENOMINATOR as u64 / FRAMERATE_NUMERATOR as u64
+}
+
+/// Art der Überblendung (`crosspoint.transType`), s. Moduldoku.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransKind {
+    Mix,
+    /// Ausgehendes Bild blendet auf Schwarz, dann blendet das neue auf.
+    VFade,
+    /// Slide: das neue Bild fährt über das stehende alte. Pfeil = Bewegungsrichtung.
+    SlideR,
+    SlideL,
+    SlideD,
+    SlideU,
+    /// Push: das neue Bild schiebt das alte in dieselbe Richtung hinaus.
+    PushR,
+    PushL,
+    PushD,
+    PushU,
+}
+
+impl TransKind {
+    const ALL: [TransKind; 10] = [
+        Self::Mix,
+        Self::VFade,
+        Self::SlideR,
+        Self::SlideL,
+        Self::SlideD,
+        Self::SlideU,
+        Self::PushR,
+        Self::PushL,
+        Self::PushD,
+        Self::PushU,
+    ];
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|k| k.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Mix => "mix",
+            Self::VFade => "vfade",
+            Self::SlideR => "slideR",
+            Self::SlideL => "slideL",
+            Self::SlideD => "slideD",
+            Self::SlideU => "slideU",
+            Self::PushR => "pushR",
+            Self::PushL => "pushL",
+            Self::PushD => "pushD",
+            Self::PushU => "pushU",
+        }
+    }
+
+    fn from_u8(v: u8) -> Self {
+        Self::ALL.get(v as usize).copied().unwrap_or(Self::Mix)
+    }
+
+    fn to_u8(self) -> u8 {
+        Self::ALL.iter().position(|k| *k == self).unwrap_or(0) as u8
+    }
+
+    /// Bewegungsrichtung als Einheitsvektor (x, y) für Slide/Push, sonst `None`.
+    fn direction(self) -> Option<(i32, i32)> {
+        match self {
+            Self::SlideR | Self::PushR => Some((1, 0)),
+            Self::SlideL | Self::PushL => Some((-1, 0)),
+            Self::SlideD | Self::PushD => Some((0, 1)),
+            Self::SlideU | Self::PushU => Some((0, -1)),
+            _ => None,
+        }
+    }
+
+    fn is_push(self) -> bool {
+        matches!(self, Self::PushR | Self::PushL | Self::PushD | Self::PushU)
+    }
+}
+
+/// Diagnose (env `OMP_MXL_DEBUG`): zählt Puffer an ausgewählten Pads und gibt
+/// alle 2 s die Deltas aus. Nur zur Freeze-Analyse, ohne Wirkung wenn nicht gesetzt.
+static DBG_COUNTERS: std::sync::Mutex<Vec<(String, Arc<AtomicU64>, u64)>> = std::sync::Mutex::new(Vec::new());
+static DBG_THREAD: std::sync::Once = std::sync::Once::new();
+
+fn dbg_probe(pad: &gst::Pad, label: String) {
+    if std::env::var("OMP_MXL_DEBUG").is_err() {
+        return;
+    }
+    let counter = Arc::new(AtomicU64::new(0));
+    let c = counter.clone();
+    pad.add_probe(gst::PadProbeType::BUFFER, move |_, _| {
+        c.fetch_add(1, Ordering::Relaxed);
+        gst::PadProbeReturn::Ok
+    });
+    DBG_COUNTERS.lock().expect("lock").push((label, counter, 0));
+    DBG_THREAD.call_once(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let mut v = DBG_COUNTERS.lock().expect("lock");
+            let mut out = String::new();
+            for (label, counter, last) in v.iter_mut() {
+                let now = counter.load(Ordering::Relaxed);
+                if now != *last || label.contains("comp-out") {
+                    out.push_str(&format!(" {label}=+{}", now - *last));
+                }
+                *last = now;
+            }
+            if !out.is_empty() {
+                eprintln!("PIPEDBG{out}");
+            }
+        });
+    });
 }
 
 /// Feste DSK-Farbfläche des Keyers (ARGB, big-endian, wie
@@ -318,6 +443,10 @@ enum Command {
     SetKeyerSource(usize, Option<String>),
     SetPipEnabled(usize, bool),
     SetPipSource(usize, Option<String>),
+    /// PIP-Fahrt (Nutzerauftrag 2026-09-29): setzt die Box sofort auf
+    /// `from`, fährt in `duration_ms` (Ease in/out) nach `to`; mit
+    /// `then_disable` wird PIP am Ende ausgeschaltet.
+    PipAnimate { level: usize, from: DveBox, to: DveBox, duration_ms: u64, then_disable: bool },
 }
 
 #[derive(Clone)]
@@ -342,6 +471,9 @@ pub struct PipelineHandle {
     /// `AutoTrans` gelesen, kein Pipeline-Neuaufbau nötig, s.
     /// `set_trans_rate`. Ein Eintrag je Ebene.
     trans_rate_ms: Vec<Arc<AtomicU64>>,
+    /// `crosspoint.transType`: wie `trans_rate_ms` ein atomarer Store,
+    /// gelesen beim Start von AUTO bzw. bei jedem T-Bar-Schritt.
+    trans_kind: Vec<Arc<AtomicU8>>,
 }
 
 impl PipelineHandle {
@@ -414,6 +546,17 @@ impl PipelineHandle {
     /// NÄCHSTE(n) `autoTrans()`-Aufrufe dieser Ebene — eine bereits
     /// laufende Überblendung läuft mit ihrer ursprünglichen Dauer zu Ende
     /// (`spawn_autotrans` liest `duration_ms` einmalig beim Start).
+    pub fn set_trans_kind(&self, level: usize, kind: TransKind) {
+        if let Some(k) = self.trans_kind.get(level) {
+            k.store(kind.to_u8(), Ordering::Relaxed);
+        }
+    }
+
+    /// Startet eine PIP-Fahrt, s. `Command::PipAnimate`.
+    pub fn pip_animate(&self, level: usize, from: DveBox, to: DveBox, duration_ms: u64, then_disable: bool) {
+        let _ = self.commands.send(Command::PipAnimate { level, from, to, duration_ms, then_disable });
+    }
+
     pub fn set_trans_rate(&self, level: usize, frames: u32) {
         if let Some(r) = self.trans_rate_ms.get(level) {
             r.store(frames_to_ms(frames), Ordering::Relaxed);
@@ -528,7 +671,11 @@ fn build_keyfill_tail(
     context: &Arc<MxlContext>,
     keyfill: &DiscoveredKeyFill,
 ) -> Result<(gst::Element, MxlVideoInput, MxlVideoInput), String> {
-    let fill_input = MxlVideoInput::new(pipeline, context.clone(), &keyfill.fill_flow_id)
+    // `new_unsynced()` + `activate()` erst nach vollständiger Verlinkung
+    // unten (`docs/decisions.md` Nachtrag 272, s. ausführliche Doku bei
+    // `build_source_branch`) — gleicher Bug wäre hier sonst ebenso
+    // möglich (Fill/Key-Quelle friert dauerhaft ein).
+    let fill_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &keyfill.fill_flow_id)
         .map_err(|e| format!("MxlVideoInput(keyer-fill, {}): {e}", keyfill.fill_sender_id))?;
     let fill_caps = gst::ElementFactory::make("capsfilter")
         .property("caps", keyfill_fill_caps())
@@ -537,7 +684,7 @@ fn build_keyfill_tail(
     pipeline.add(&fill_caps).map_err(|e| format!("add keyer-fill caps: {e}"))?;
     gst::Element::link(&fill_input.tail, &fill_caps).map_err(|e| format!("link keyer-fill caps: {e}"))?;
 
-    let key_input = MxlVideoInput::new(pipeline, context.clone(), &keyfill.key_flow_id)
+    let key_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &keyfill.key_flow_id)
         .map_err(|e| format!("MxlVideoInput(keyer-key, {}): {e}", keyfill.key_sender_id))?;
     let key_caps = gst::ElementFactory::make("capsfilter")
         .property("caps", keyfill_key_caps())
@@ -563,6 +710,13 @@ fn build_keyfill_tail(
         .ok_or("keyer-key caps: no src pad")?
         .link(&alpha_alpha_pad)
         .map_err(|e| format!("link key to alphacombine: {e}"))?;
+
+    fill_input
+        .activate()
+        .map_err(|e| format!("activate MxlVideoInput(keyer-fill, {}): {e}", keyfill.fill_sender_id))?;
+    key_input
+        .activate()
+        .map_err(|e| format!("activate MxlVideoInput(keyer-key, {}): {e}", keyfill.key_sender_id))?;
 
     Ok((alphacombine, fill_input, key_input))
 }
@@ -800,7 +954,25 @@ fn build_source_branch(
     height: u32,
     hwaccel: omp_mediaio::hwaccel::HwAccel,
 ) -> Result<SourceBranch, String> {
-    let mxl_input = MxlVideoInput::new(pipeline, context.clone(), read_flow_id)
+    // `new_unsynced()` statt `new()` (`docs/decisions.md` Nachtrag 272,
+    // gleicher Fix wie bereits in `omp-switcher::pipeline::build_branch`
+    // — dessen Doku nannte diese Funktion hier sogar namentlich als
+    // strukturell ebenso betroffen, ohne dass es je nachgezogen wurde):
+    // das einphasige `new()` zog `mxl_input`s interne Kette (`appsrc`/
+    // `videoconvert`/`videoscale`/`videorate`) schon VOR der externen
+    // Verlinkung unten (bis zum `tee`) auf den Zustand der Eltern-
+    // Pipeline hoch — `appsrc`s eigener Streaming-Task konnte dadurch
+    // bereits zu pushen beginnen, BEVOR `tail` extern verlinkt war;
+    // `gst_base_src_loop` meldet dann `not-linked` und stellt sich
+    // PERMANENT ab, sobald ein echter Datenpuffer (nicht nur ein
+    // Sticky-Event) den noch unverlinkten Pad erreicht. Live gefunden
+    // (Nutzerreport 2026-09-29: "Quelle2 stallt beim Take, Preview-
+    // Thumbnail läuft aber weiter") — `isel_l0:sinkN` erhielt trotz
+    // korrekt empfangener stream-start/caps-Events NIE auch nur einen
+    // einzigen Puffer, per `GST_DEBUG=input-selector:6,GST_EVENT:5`
+    // bestätigt. `activate()` jetzt explizit erst ganz unten, NACH der
+    // vollständigen Verlinkung bis zum `tee`.
+    let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), read_flow_id)
         .map_err(|e| format!("MxlVideoInput({name_suffix}, {sender_id}): {e}"))?;
     let (_, elements) = match build_normalized_branch(pipeline, &mxl_input.tail, name_suffix, width, height, hwaccel) {
         Ok(r) => r,
@@ -848,6 +1020,25 @@ fn build_source_branch(
         remove_elements(pipeline, &[tee]);
         remove_mxl_video_input(pipeline, mxl_input);
         return Err(format!("link caps->tee ({name_suffix}): {e}"));
+    }
+
+    if let Some(pad) = mxl_input.tail.static_pad("src") {
+        dbg_probe(&pad, format!("{}/{name_suffix}/tail", pipeline.name()));
+    }
+    if let Some(pad) = caps.static_pad("src") {
+        dbg_probe(&pad, format!("{}/{name_suffix}/precap", pipeline.name()));
+    }
+    // `mxl_input`s eigene interne Kette erst JETZT hochziehen, nachdem
+    // sie bis zum `tee` vollständig extern verlinkt ist (s. Kommentar
+    // oben, Nachtrag 272) — der `tee` selbst toleriert noch unverlinkte
+    // Abgriffe (`allow-not-linked: true`, die kommen erst in
+    // `tap_source_branch`), nur `appsrc`s EIGENE Kette bis hierhin darf
+    // beim Aktivieren keine Lücke mehr haben.
+    if let Err(e) = mxl_input.activate() {
+        remove_elements(pipeline, &elements);
+        remove_elements(pipeline, &[tee]);
+        remove_mxl_video_input(pipeline, mxl_input);
+        return Err(format!("activate MxlVideoInput ({name_suffix}): {e}"));
     }
 
     Ok(SourceBranch {
@@ -927,6 +1118,9 @@ fn tap_source_branch(
         return Err(e);
     }
 
+    if let Some(pad) = queue.static_pad("src") {
+        dbg_probe(&pad, format!("{}/{name_suffix}/tap", pipeline.name()));
+    }
     branch.taps.push(SourceTap { queue, tee_pad });
     Ok(())
 }
@@ -1177,9 +1371,16 @@ fn build_pip_tail(
 ) -> Result<(gst::Element, Option<MxlVideoInput>), String> {
     match pip_source_input {
         Some(input) => {
-            let mxl_input = MxlVideoInput::new(pipeline, context.clone(), &input.flow_id)
+            // `new_unsynced()` + `activate()` erst nach vollständiger
+            // Verlinkung (`docs/decisions.md` Nachtrag 272, s. Doku bei
+            // `build_source_branch`) — gleicher Bug wäre hier sonst
+            // ebenso möglich (PIP-Quelle friert dauerhaft ein).
+            let mxl_input = MxlVideoInput::new_unsynced(pipeline, context.clone(), &input.flow_id)
                 .map_err(|e| format!("MxlVideoInput(pip, {}): {e}", input.sender_id))?;
             let (caps, _elements) = build_normalized_branch(pipeline, &mxl_input.tail, "pip", width, height, hwaccel)?;
+            mxl_input
+                .activate()
+                .map_err(|e| format!("activate MxlVideoInput(pip, {}): {e}", input.sender_id))?;
             Ok((caps, Some(mxl_input)))
         }
         None => {
@@ -1495,6 +1696,9 @@ fn build(
             .map_err(|e| format!("add comp out capsfilter (level {level_idx}): {e}"))?;
         gst::Element::link(&comp, &comp_out_caps)
             .map_err(|e| format!("link comp to caps (level {level_idx}): {e}"))?;
+        if let Some(pad) = comp_out_caps.static_pad("src") {
+            dbg_probe(&pad, format!("{}/comp-out{level_idx}", pipeline.name()));
+        }
 
         let mxl_output = MxlVideoOutput::new(
             &pipeline,
@@ -1625,10 +1829,81 @@ fn inputs_changed(current: &[DiscoveredInput], new: &[DiscoveredInput]) -> bool 
 /// Nach Ablauf: bg stumm schalten (alpha 0), `isel_bg` auf den neuen
 /// Programm-Eingang mitziehen (nächste Transition findet dort direkt ein
 /// laufendes Bild vor, kein kalter Wechsel).
+/// Alles, was ein Überblendungs-Frame anfasst (s. `apply_transition_frame`).
+#[derive(Clone)]
+struct TransPads {
+    fg: gst::Pad,
+    bg: gst::Pad,
+    width: i32,
+    height: i32,
+}
+
+fn set_pos(pad: &gst::Pad, x: i32, y: i32) {
+    pad.set_property("xpos", x);
+    pad.set_property("ypos", y);
+}
+
+/// Grundlage jeder Überblendung: alle Pads zurück an den Ursprung.
+fn reset_positions(t: &TransPads) {
+    set_pos(&t.fg, 0, 0);
+    set_pos(&t.bg, 0, 0);
+}
+
+/// Setzt EINEN Überblendungs-Frame für Position `pos` (0..1): `fg` ist das
+/// neue Bild (oben), `bg` das ausgehende. Gemeinsam für AUTO und T-Bar.
+/// Nur Alpha und Pad-Positionen — nichts, das Caps neu verhandelt.
+fn apply_transition_frame(t: &TransPads, kind: TransKind, pos: f64) {
+    let pos = pos.clamp(0.0, 1.0);
+    match kind {
+        // Neues Bild teiltransparent über dem (deckenden) alten = lineare
+        // Überblendung ohne Helligkeitseinbruch.
+        TransKind::Mix => {
+            t.fg.set_property("alpha", pos);
+            t.bg.set_property("alpha", 1.0f64);
+        }
+        TransKind::VFade => {
+            if pos < 0.5 {
+                t.fg.set_property("alpha", 0.0f64);
+                t.bg.set_property("alpha", 1.0 - 2.0 * pos);
+            } else {
+                t.fg.set_property("alpha", 2.0 * pos - 1.0);
+                t.bg.set_property("alpha", 0.0f64);
+            }
+        }
+        slide_or_push => {
+            let (dx, dy) = slide_or_push.direction().unwrap_or((1, 0));
+            t.bg.set_property("alpha", 1.0f64);
+            if pos <= 0.0 {
+                // Start: neues Bild komplett außerhalb und unsichtbar.
+                t.fg.set_property("alpha", 0.0f64);
+                reset_positions(t);
+                return;
+            }
+            let travel_x = (pos * t.width as f64).round() as i32;
+            let travel_y = (pos * t.height as f64).round() as i32;
+            // Neues Bild kommt von der Gegenseite herein: Position = -Richtung*(1-pos)*Größe.
+            let fg_x = dx * (travel_x - t.width);
+            let fg_y = dy * (travel_y - t.height);
+            let (bg_x, bg_y) = if slide_or_push.is_push() { (dx * travel_x, dy * travel_y) } else { (0, 0) };
+            t.fg.set_property("alpha", 1.0f64);
+            set_pos(&t.bg, bg_x, bg_y);
+            set_pos(&t.fg, fg_x, fg_y);
+        }
+    }
+}
+
+/// Endzustand nach einer abgeschlossenen Überblendung: neues Bild
+/// vollflächig oben an Position 0, ausgehendes Bild ausgeblendet.
+fn finish_transition(t: &TransPads) {
+    reset_positions(t);
+    t.fg.set_property("alpha", 1.0f64);
+    t.bg.set_property("alpha", 0.0f64);
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_autotrans(
-    fg_pad: gst::Pad,
-    bg_pad: gst::Pad,
+    pads: TransPads,
+    kind: TransKind,
     isel_bg: gst::Element,
     bg_target_pad: gst::Pad,
     fading: Arc<AtomicBool>,
@@ -1651,10 +1926,9 @@ fn spawn_autotrans(
                 std::thread::sleep(wait);
             }
             let t = (start.elapsed().as_millis() as f64 / duration_ms as f64).min(1.0);
-            fg_pad.set_property("alpha", t);
+            apply_transition_frame(&pads, kind, t);
         }
-        fg_pad.set_property("alpha", 1.0f64);
-        bg_pad.set_property("alpha", 0.0f64);
+        finish_transition(&pads);
         isel_bg.set_property("active-pad", &bg_target_pad);
 
         fading.store(false, Ordering::Release);
@@ -1704,6 +1978,13 @@ pub fn run(
         .map(|_| Arc::new(AtomicU64::new(frames_to_ms(DEFAULT_TRANS_RATE_FRAMES))))
         .collect();
 
+    let trans_kind: Vec<Arc<AtomicU8>> = (0..level_count).map(|_| Arc::new(AtomicU8::new(TransKind::Mix.to_u8()))).collect();
+    // Generationszähler je Ebene für PIP-Fahrten: jede neue Box-/PIP-Änderung
+    // erhöht ihn und bricht damit eine laufende Fahrt ab.
+    let pip_anim_gen: Vec<Arc<AtomicU64>> = (0..level_count).map(|_| Arc::new(AtomicU64::new(0))).collect();
+
+    // Art der gerade laufenden manuellen T-Bar-Session je Ebene (s. `SetTransitionPosition`).
+    let mut drag_kinds: Vec<TransKind> = vec![TransKind::Mix; level_count];
     let mut current_inputs: Vec<DiscoveredInput> = Vec::new();
     let mut keyfill_inputs: Vec<DiscoveredKeyFill> = Vec::new();
     let mut keyer_sources: Vec<Option<String>> = vec![None; level_count];
@@ -1739,11 +2020,13 @@ pub fn run(
 
     let (commands_tx, commands_rx): (Sender<Command>, Receiver<Command>) =
         std::sync::mpsc::channel();
+    let anim_tx = commands_tx.clone();
     let _ = ready.send(Ok(PipelineHandle {
         commands: commands_tx,
         flowed: flowed_slot.clone(),
         output_delays: output_delays.clone(),
         trans_rate_ms: trans_rate_ms.clone(),
+        trans_kind: trans_kind.clone(),
     }));
 
     /// Wartet auf einen laufenden Transition-Thread, falls vorhanden —
@@ -2004,6 +2287,9 @@ pub fn run(
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
+                    // Ein zuvor geparkter manueller Slide/Push hinterlässt sonst Versatz.
+                    set_pos(&p.comp_fg_pad, 0, 0);
+                    set_pos(&p.comp_bg_pad, 0, 0);
                     // isel_bg auf denselben Eingang mitziehen (nächste
                     // Transition findet dort ein laufendes Bild vor).
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, pre);
@@ -2043,6 +2329,9 @@ pub fn run(
                     let applied = switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, &sender_id);
                     p.comp_fg_pad.set_property("alpha", 1.0f64);
                     p.comp_bg_pad.set_property("alpha", 0.0f64);
+                    // Ein zuvor geparkter manueller Slide/Push hinterlässt sonst Versatz.
+                    set_pos(&p.comp_fg_pad, 0, 0);
+                    set_pos(&p.comp_bg_pad, 0, 0);
                     switch_isel(&p.isel_bg, &p.source_pads_bg, &p.black_pad_bg, &sender_id);
                     *prog = applied;
                     fading_l.store(false, Ordering::Release);
@@ -2085,14 +2374,22 @@ pub fn run(
                     // schalten — sonst zeigt ein Frame lang das neue Bild
                     // bei altem (vollem) Alpha, bevor der Thread unten
                     // überhaupt zum Zug kommt.
+                    let kind = trans_kind.get(level).map_or(TransKind::Mix, |k| TransKind::from_u8(k.load(Ordering::Relaxed)));
+                    let trans_pads = TransPads {
+                        fg: p.comp_fg_pad.clone(),
+                        bg: p.comp_bg_pad.clone(),
+                        width: config.width as i32,
+                        height: config.height as i32,
+                    };
+                    reset_positions(&trans_pads);
                     p.comp_bg_pad.set_property("alpha", 1.0f64);
                     p.comp_fg_pad.set_property("alpha", 0.0f64);
                     switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
                     *prog = pre.clone();
                     fading_l.store(true, Ordering::Release);
                     let handle = spawn_autotrans(
-                        p.comp_fg_pad.clone(),
-                        p.comp_bg_pad.clone(),
+                        trans_pads,
+                        kind,
                         p.isel_bg.clone(),
                         target_pad_bg,
                         fading_l.clone(),
@@ -2157,14 +2454,32 @@ pub fn run(
                         // alte Bild), nur OHNE sofortigen Programm-/
                         // Tally-Commit (der folgt erst bei `pos>=1.0`
                         // unten).
+                        // Die Art wird beim Start der Drag-Session festgehalten,
+                        // ein Wechsel mitten im Zug wirkt erst beim nächsten Zug.
+                        drag_kinds[level] =
+                            trans_kind.get(level).map_or(TransKind::Mix, |k| TransKind::from_u8(k.load(Ordering::Relaxed)));
+                        let start_pads = TransPads {
+                            fg: p.comp_fg_pad.clone(),
+                            bg: p.comp_bg_pad.clone(),
+                            width: config.width as i32,
+                            height: config.height as i32,
+                        };
+                        reset_positions(&start_pads);
                         p.comp_bg_pad.set_property("alpha", 1.0f64);
                         p.comp_fg_pad.set_property("alpha", 0.0f64);
                         switch_isel(&p.isel, &p.source_pads_fg, &p.black_pad_fg, pre);
                         fading_l.store(true, Ordering::Release);
                     }
-                    p.comp_fg_pad.set_property("alpha", pos);
-                    p.comp_bg_pad.set_property("alpha", 1.0 - pos);
+                    let kind = drag_kinds[level];
+                    let trans_pads = TransPads {
+                        fg: p.comp_fg_pad.clone(),
+                        bg: p.comp_bg_pad.clone(),
+                        width: config.width as i32,
+                        height: config.height as i32,
+                    };
+                    apply_transition_frame(&trans_pads, kind, pos);
                     if pos >= 1.0 {
+                        finish_transition(&trans_pads);
                         // Abschluss-Kommit (`docs/END-GOAL-FEATURES.md`
                         // §3.4 Teil 2) — identisch zum Ende von
                         // `spawn_autotrans`, inkl. T-Bar-Rückstellung auf
@@ -2181,13 +2496,62 @@ pub fn run(
                             // der Endanschlag erreicht wurde — Programm
                             // bleibt unverändert, Sperre wird wieder
                             // freigegeben.
+                            reset_positions(&trans_pads);
                             fading_l.store(false, Ordering::Release);
                         }
                         let _ = tx.send(Event::TransitionPositionChanged { level, position: pos });
                     }
                 }
             }
+            Ok(Command::PipAnimate { level, from, to, duration_ms, then_disable }) => {
+                if let (Some(b), Some(anim_gen)) = (dve_box.get_mut(level), pip_anim_gen.get(level)) {
+                    let my_gen = anim_gen.fetch_add(1, Ordering::AcqRel) + 1;
+                    *b = from;
+                    if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
+                        apply_dve_box(&p.comp_pip_pad, &from);
+                        let pad = p.comp_pip_pad.clone();
+                        let anim_gen = anim_gen.clone();
+                        let cmd_tx = anim_tx.clone();
+                        std::thread::spawn(move || {
+                            let steps = (duration_ms / STEP_MS).max(1);
+                            let start = std::time::Instant::now();
+                            for i in 1..=steps {
+                                let target = Duration::from_millis(duration_ms * i / steps);
+                                if let Some(wait) = target.checked_sub(start.elapsed()) {
+                                    std::thread::sleep(wait);
+                                }
+                                if anim_gen.load(Ordering::Acquire) != my_gen {
+                                    return; // von neuerer Box-/PIP-Änderung abgelöst
+                                }
+                                let t = (start.elapsed().as_millis() as f64 / duration_ms.max(1) as f64).min(1.0);
+                                let e = t * t * (3.0 - 2.0 * t); // Ease in/out
+                                let lerp = |a: i32, b: i32| (a as f64 + (b - a) as f64 * e).round() as i32;
+                                apply_dve_box(
+                                    &pad,
+                                    &DveBox {
+                                        x: lerp(from.x, to.x),
+                                        y: lerp(from.y, to.y),
+                                        width: lerp(from.width, to.width).max(2),
+                                        height: lerp(from.height, to.height).max(2),
+                                    },
+                                );
+                            }
+                            if anim_gen.load(Ordering::Acquire) != my_gen {
+                                return;
+                            }
+                            let _ = cmd_tx.send(Command::SetDveBox(level, to));
+                            if then_disable {
+                                let _ = cmd_tx.send(Command::SetPipEnabled(level, false));
+                            }
+                        });
+                    }
+                    let _ = tx.send(Event::DveBoxChanged { level, box_: from });
+                }
+            }
             Ok(Command::SetDveBox(level, box_)) => {
+                if let Some(g) = pip_anim_gen.get(level) {
+                    g.fetch_add(1, Ordering::AcqRel);
+                }
                 if let Some(b) = dve_box.get_mut(level) {
                     *b = box_;
                     if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
@@ -2197,6 +2561,9 @@ pub fn run(
                 }
             }
             Ok(Command::ResetDve(level)) => {
+                if let Some(g) = pip_anim_gen.get(level) {
+                    g.fetch_add(1, Ordering::AcqRel);
+                }
                 if let Some(b) = dve_box.get_mut(level) {
                     *b = DveBox::full_frame(config.width, config.height);
                     if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
@@ -2216,6 +2583,9 @@ pub fn run(
                 }
             }
             Ok(Command::SetPipEnabled(level, enabled)) => {
+                if let Some(g) = pip_anim_gen.get(level) {
+                    g.fetch_add(1, Ordering::AcqRel);
+                }
                 if let Some(e) = pip_enabled.get_mut(level) {
                     *e = enabled;
                     if let Some(p) = active.as_ref().and_then(|a| a.levels.get(level)) {
@@ -2304,4 +2674,30 @@ pub fn run(
 
     join_all_fades(&fade_threads, &fading);
     drop(active);
+}
+
+#[cfg(test)]
+mod trans_kind_tests {
+    use super::*;
+
+    #[test]
+    fn names_and_ids_roundtrip() {
+        for k in TransKind::ALL {
+            assert_eq!(TransKind::from_name(k.name()), Some(k));
+            assert_eq!(TransKind::from_u8(k.to_u8()), k);
+        }
+        assert_eq!(TransKind::from_name("nope"), None);
+        assert_eq!(TransKind::from_u8(200), TransKind::Mix);
+    }
+
+    #[test]
+    fn slide_and_push_directions() {
+        assert_eq!(TransKind::Mix.direction(), None);
+        assert_eq!(TransKind::VFade.direction(), None);
+        assert_eq!(TransKind::SlideR.direction(), Some((1, 0)));
+        assert_eq!(TransKind::PushL.direction(), Some((-1, 0)));
+        assert_eq!(TransKind::SlideD.direction(), Some((0, 1)));
+        assert_eq!(TransKind::PushU.direction(), Some((0, -1)));
+        assert!(TransKind::PushR.is_push() && !TransKind::SlideR.is_push());
+    }
 }

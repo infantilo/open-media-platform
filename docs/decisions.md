@@ -29894,3 +29894,221 @@ mixer-me` unverändert bei ihren jeweils vorbestehenden Fundstellen).
 `graphContext`/Toolbar), `nodes/omp-source/Cargo.toml` (`preview`-
 Feature), `nodes/omp-source/src/pipeline.rs`+`src/main.rs`
 (MJPEG-Vorschau-Zweig).
+
+## 2026-09-29 (Nachtrag 295) — Hierarchischer Source-Selector (`<omp-source-selector>`), erste Migration: `omp-audio-mixer` + `omp-audio-monitor`
+
+**Auftrag:** `../better source selector.txt` — flache Source-Dropdowns durch
+einen wiederverwendbaren, hierarchischen Picker ersetzen (Workflow → Node →
+NMOS Natural Group), mit `visible`/`selectable`, Medientyp-Filter, Suche,
+Tastatur, ohne Persistenz-Änderung.
+
+**Analyse-Befund (bestehende Architektur):**
+- Node-UIs sind eigenständige Vanilla-JS-Bundles (`include_str!`), die nur
+  die global registrierten `ui/kit`-Custom-Elements nutzen können → der
+  Selector ist ein Kit-Element, kein importierbares Modul.
+- Quellen-Dropdowns gab es in `omp-audio-mixer` (Kanalquelle),
+  `omp-audio-monitor`, `omp-playout-automation` u. a., jeweils flach aus
+  `availableSources` (`[{senderId,label}]`); Workflow-Zuordnung wurde pro
+  Node ad hoc aus `/api/v1/graph` + `/api/v1/workflows` gebaut (Switcher,
+  Mixer-Follow).
+- `grouphint` wurde bisher nur node-intern (Rust-Discovery, Lowres-Filter)
+  gelesen, **nicht** vom Orchestrator durchgereicht.
+- Es gibt **kein Per-Source-Berechtigungsmodell** (`authz` bindet
+  Subject/Node-Rolle/Verb, nicht einzelne Sender).
+
+**Umsetzung:**
+- Orchestrator: `registry.SenderView.GroupHint` / `graph.Port.GroupHint`
+  (`groupHint`, roher erster `urn:x-nmos:tag:grouphint/v1.0`-Wert). Nur
+  additiv; Parsing bewusst an genau einer Stelle (UI,
+  `parseGroupHint`).
+- `ui/kit/source-selector-logic.ts` (rein, getestet): `SourceEntry`,
+  `applyAccess`, `buildSourceTree` (Current workflow → Other workflows →
+  Other/unassigned; Node-Ebene; Natural Group nur bei ≥2 Mitgliedern
+  derselben Gruppe im selben Node bzw. `:global`-Scope), `filterTree`,
+  `visibleRows`, `pathToSource`.
+- `ui/kit/source-catalog.ts`: Adapter Graph+Workflows → `SourceEntry[]`
+  (Medientyp aus dem IS-04-Flow-Format, nie aus Namen). Der Selector selbst
+  ruft nie das Netz und berechnet keine Rechte.
+- `ui/kit/omp-source-selector.ts`: `<select>`-kompatible API (`.value`,
+  `change`-Event), Wert = Sender-ID wie zuvor → keine Migration gespeicherter
+  Workflows. Unbekannte gespeicherte IDs werden angezeigt, nie verworfen.
+- Zugriff: `entry.access` / Policy-Callback (`visible`, `selectable`);
+  Default sichtbar+wählbar. Kein neues Rechtesystem — die Abstraktion ist
+  vorbereitet, eine echte Quelle für Sperren existiert noch nicht.
+
+**Einschränkungen (echte Datenlage, nichts geraten):**
+1. (Im Folgeschritt behoben, s. unten) `omp-source` setzte als Gruppennamen
+   die Flow-UUID: Video-Highres und -Lowres teilen eine Gruppe (Rollen
+   `high`/`low`), der Audio-Sender trug **keinen** Grouphint. Video+Audio einer OMP-Quelle werden daher heute
+   nicht als Natural Group zusammengeführt (nur nach Node gruppiert). Fix
+   läge im Sender (gemeinsamer Gruppenname pro Quelle), nicht im Selector —
+   bewusst nicht Teil dieses Schritts (vgl. Nachtrag 226).
+2. `omp-audio-monitor`: die vorbestehende „aktuell verbundene Quelle
+   vorbelegen"-Logik wählt die *erste* Quelle statt der verbundenen (Vergleich
+   Flow-ID vs. Sender-ID) — unverändert übernommen, nicht Teil des Auftrags.
+3. Noch nicht migriert: `omp-playout-automation`, `omp-channel-player`
+   u. a. (schrittweise laut Auftrag §11).
+
+**Verifikation:** `deno test ui/` 217 grün (u. a. 20 neue), `deno check`,
+`go test ./internal/registry ./internal/graph`; live im Browser mit echten
+Mausklicks/Tastatur: Panel, Suche, Audio-Filter, Auswahl → Sender-ID im Node
+gespeichert, frischer Mount zeigt gespeicherte ID korrekt.
+
+**Dateien:** `ui/kit/{source-selector-logic,source-catalog,omp-source-selector}.ts`
+(+ `_test.ts`), `ui/kit/index.ts`, `nodes/omp-audio-mixer/ui/bundle.js`,
+`nodes/omp-audio-monitor/ui/bundle.js`, `orchestrator/internal/{registry,graph}`.
+
+**Folgeschritt (2026-09-29): `omp-source`-Audio-Grouphint + Migration `omp-playout-automation`.**
+- `omp-source`: Audio-Sender bekommt `urn:x-nmos:tag:grouphint/v1.0` =
+  `<highres-flow-id>:audio` (gleiche Gruppe wie Video-Highres). Alle
+  Discovery-Konsumenten (Switcher/Mixer/Multiviewer/Channel-Player) werten
+  nur Rolle `low` an Video-Sendern aus → unberührt. Live geprüft: Graph
+  liefert `…:audio`/`…:low`/`…:high` je Quelle. Andere Producer
+  (`omp-player`-Varianten etc.) noch nicht angepasst.
+- `omp-playout-automation`: Live-Quellen-Auswahl im Add-Formular nutzt
+  `<omp-source-selector>` (`excludeRoles: ["low"]`, kein Medientyp-Filter,
+  da je nach Player-Profil Video oder Audio); Katalog nur bei geänderter
+  Senderliste bzw. alle 15 s. `buildKeyedOptions` entfernt. Live: Picker
+  im Formular öffnet, Quelle mit Rolle „high" sichtbar.
+
+**Folgeschritt 2 (2026-09-29): Migration `omp-video-mixer-me`.**
+- Die drei Quellen-Dropdowns im Mixer (Pin-Liste „Quelle hinzufügen…",
+  DSK-Quelle, PIP-Preset-Quelle) nutzen `<omp-source-selector>`
+  (`accepts: ["video"]`, `excludeRoles: ["low"]`); `buildGroupedOptions`
+  entfällt. Katalog kurz gecacht (5 s). Die PGM/PST-Bus-Tasten sind keine
+  Dropdowns und bleiben unverändert.
+- Live geprüft (echte Klicks/Tastatur): Dialog „Quellen & DSK", Picker
+  zeigt reale Workflow-Gruppe („Other workflows → new group") und
+  „Other / unassigned", Suche + Enter pinnt die Quelle
+  (`crosspoint.pinnedSenderIds`).
+- Nebenfund/Fix: Pin-Handler hängte die ID an `latestPinned` an, obwohl der
+  2s-Poll sie während des `await` schon übernommen haben konnte → Quelle
+  erschien doppelt in der Pin-Liste. Jetzt mit Duplikat-Prüfung.
+- Selector-Panel ist mindestens so breit wie der Trigger.
+
+**Folgeschritt 3 (2026-09-29): Rest-Migration + Bestandsaufnahme.**
+- `omp-multiviewer-custom`: PIP-Quelle im Inspektor nutzt
+  `<omp-source-selector>` (`accepts: ["video"]`, `excludeRoles: ["low"]`);
+  Katalog wird beim Laden einmal geholt. Live geprüft: PIP anlegen →
+  Picker → Suche+Enter → Wert = Sender-ID.
+- Bestandsaufnahme aller Node-/Shell-UIs auf Sender-Dropdowns: damit sind
+  alle migriert (`omp-audio-mixer`, `-audio-monitor`, `-playout-automation`,
+  `-video-mixer-me`, `-multiviewer-custom`). Bewusst NICHT migriert, weil
+  keine Sender-Auswahl: `omp-switcher` (Tasten je Eingang statt Dropdown),
+  Ziel-Node-Selects der Automation und `omp-webrtc-gateway`-Retour
+  (wählen Nodes), Preset-/Format-/Template-/Asset-Selects in `omp-mxf-player*`,
+  `omp-ograf`, `omp-viewer`, Shell-Views und Flow-Canvas.
+
+## 2026-09-29 (Nachtrag 296) — `omp-video-mixer-me`: Close-Button, V-Fade + Wipes, PIP-Fahrt (3-/2-Punkt) mit grafischem Editor
+
+**Auftrag:** (0) Dialog „Quellen & DSK" hatte keinen Schließen-Knopf, (1) V-Fade
+und Wipes, (2) PIP-DVE mit Presets: Startposition, Haltposition, Endposition,
+2-/3-Punkt-Animation, mehrere Presets, grafischer Editor wie im Multiviewer.
+
+**0. Close-Button:** `openModal` hat oben rechts ein ✕ (zusätzlich zu Esc/Backdrop);
+gilt für alle Dialoge des Mixers (Quellen, PIP-Editor).
+
+**1. Transitionsarten** (`crosspoint.transType` / `crosspoint.setTransType`,
+je Ebene, im Mixer-Snapshot als `transType` persistiert):
+- `mix` (unverändert; jetzt ohne Helligkeitseinbruch auch beim T-Bar: fg-Alpha
+  = Position über deckendem bg statt bg = 1-Position), `vfade` (ausgehendes
+  Bild blendet auf Schwarz, danach das neue auf), Slide `slideR/L/D/U` (neues
+  Bild fährt über das stehende alte) und Push `pushR/L/D/U` (schiebt das alte
+  hinaus). **Korrektur (Nachtrag 297): die zunächst gebauten Crop-Wipes
+  (`wipeH…`, `box`) sind wieder entfernt — sie verursachten Freezes.**
+- Umsetzung ohne Topologie-Umbau zur Laufzeit: je ein statisch eingebautes
+  `videocrop` vor `comp_fg_pad` und `comp_bg_pad` (ohne Beschnitt Passthrough).
+  Wirkt für AUTO **und** manuellen T-Bar (`apply_transition_frame`; die Art
+  wird beim Start einer T-Bar-Session festgehalten).
+- **Live gefundene Falle:** `videocrop` greift erst am nächsten Puffer, `xpos/
+  ypos` eines Compositor-Pads sofort (Aggregator puffert ~200 ms) → jede
+  mitgeführte Pad-Verschiebung erzeugt Versatz-Frames. Darum ausschließlich
+  oben/links verankerte Beschnitte; die Rückwärts-Wipes decken das
+  AUSGEHENDE Bild oben auf (Z-Order fg/bg zur Laufzeit getauscht) und
+  beschneiden dessen rechte/untere Kante. Am Ende einer Wipe-AUTO wartet der
+  Thread 300 ms (`WIPE_DRAIN`), bis gepufferte beschnittene Frames durch sind.
+- **Nicht abgedeckt:** aus der Mitte wachsende Boxen, runde/diagonale SMPTE-
+  Muster (`smpte`/`shapewipe` bräuchten Zwei-Eingangs-Elemente im
+  Programmpfad — zu riskant für die PGM-Freeze-Lage).
+
+**2. PIP-Fahrt:** `PipPreset` bekam `start`, `end` (optionale Boxen), `inMs`,
+`outMs` (`pip.savePreset` mit `startX/Y/Width/Height`, `endX…`, `inMs`, `outMs`).
+- Aktivieren (`pip.applyPreset`): mit Start + `inMs>0` fährt PIP von Start nach
+  Halten (Ease in/out, eigener Thread, Abbruch über Generationszähler je Ebene,
+  jede Box-/PIP-Änderung bricht eine laufende Fahrt ab).
+- Deaktivieren (`pip.setEnabled false`) bei aktivem Preset mit Ausfahrt:
+  fährt von Halten nach **Ende, sonst Start** (2-Punkt = Rückfahrt), schaltet
+  PIP danach ab. Ohne Start/Ende bleibt das harte Ein/Aus wie vorher.
+- Editor (`openPipEditor`): Start/Ende per Häkchen zuschaltbar, Halten
+  immer; Canvas mit 40-%-Rand um das Bild (Start/Ende dürfen komplett
+  außerhalb liegen), gepunkteter Pfad S→H→E, Drag/Resize je Box,
+  „Außerhalb"-Schnellwahl, Ein-/Ausfahrdauer, Hilfetext 2-/3-Punkt.
+
+**Verifikation (live, Mixer + 2× `omp-source` rot/grün + `omp-viewer`):**
+Wipe H/V/Rev/Box-Frames mitten in der Fahrt als Viewer-Snapshots geprüft;
+T-Bar-Wipe bei 0,5 exakt geteilt, Commit bei 1,0; PIP-Fahrt einfahren/halten/
+ausfahren per Snapshot; UI mit echten Mausklicks (Tasten, ✕, Editor-Drag,
+Speichern, `pip.presets` mit allen Feldern). `cargo test -p omp-video-mixer-me`
+(8 Tests inkl. neuer Logiktests).
+
+**Offen / Befund:** der bereits dokumentierte PGM-Freeze (Nachträge 65/272)
+tritt weiterhin auf: im schnellen Umschalt-Testmuster friert der Ausgang
+auch mit reinem **Mix** (ohne jede Crop-Nutzung) in ~2 von 6 frischen Läufen
+ein; mit Wipes nicht häufiger — `videocrop` ist NICHT die Ursache (Gegenprobe
+mit deaktiviertem Crop). Kontrollierte Läufe (Takes zwischen den Transitionen,
+je 2× alle Wipe-Arten) blieben stabil.
+
+
+## 2026-09-29 (Nachtrag 297) — PGM-Freeze von `omp-video-mixer-me`: ZWEI Root Causes gefunden und behoben; Crop-Wipes durch Slide/Push ersetzt
+
+**Status:** die unter Nachtrag 65/272 offene, nie gefundene Ursache ist geklärt —
+es waren zwei unabhängige Fehler, die sich als dasselbe Symptom (Eingang liefert
+nie wieder ein Bild, PGM „friert“ beim Umschalten darauf ein, `programInput`
+meldet trotzdem den neuen Eingang) zeigten.
+
+**Repro (ohne Browser, reproduzierbar):** frischer Mixer + 2× `omp-source`
+(rot/grün) + `omp-viewer` am PGM; a) Eingangsmenge ändern (`omp-source` starten/
+löschen → Voll-Rebuild), b) schnell `select`+`autoTrans` im Wechsel. Danach
+`take` A/B/A/B: gleiche Viewer-Snapshot-Hashes = eingefroren. Vor den Fixes
+fror ca. jeder zweite Lauf ein.
+
+**Root Cause 1 — Start-Race im MXL-Reader (`omp-mediaio/src/mxl.rs::index_pts`):**
+startet ein Reader-Thread, während die Pipeline auf PLAYING geht, ist `clock()`
+schon gesetzt, `base_time()` aber noch **0** — und `Some(ClockTime(0))` ist ein
+gültiger Wert, kein `None`. Der PTS wurde als Systemlaufzeit (~6 h) berechnet,
+`last_pts` damit „in der Zukunft“ verseucht, und die Monotonie-Prüfung
+(`pts <= last_pts → Skip`) verwarf danach JEDES echte Bild für Stunden
+(`MXLDBG … skip=50 ok=0 lastpts=Some(21808627498926)`). Betraf jeden MXL-Leser
+(Mixer, Switcher, Viewer, … — nur Rebuilds/Pipeline-Neustarts mit laufenden
+Lesern lösen es aus, daher „nicht deterministisch pro Quelle“). **Fix:** Guard
+`base_time>0 && Element PLAYING`, Plausibilitätsprüfung
+(`timebase::pts_plausible`, PTS ≤ Laufzeit+10 s), Selbstheilung eines
+verseuchten `last_pts`. Unit-Tests in `timebase.rs`.
+
+**Root Cause 2 — `videocrop` (Crop-Wipes) killt die gemeinsame Quellenkette:**
+jede Property-Änderung an `videocrop` sendet RECONFIGURE stromaufwärts bis in
+die GETEILTE Kette (`appsrc→videoconvert→…→tee`); schlägt dort die
+Neuverhandlung einmal transient fehl (`videoconvert: not negotiated`), stoppt
+`appsrc` dauerhaft (`streaming stopped, reason not-negotiated`) — der Fehler
+wandert über `queue`/`tee` zur Quelle. **Fix:** kein Element mit
+Laufzeit-Caps-Änderung im Signalweg; Transitionen nur über Alpha und
+Pad-`xpos/ypos` (Slide/Push). Regel steht in der `pipeline.rs`-Moduldoku.
+Meine frühere Gegenprobe „ohne Crop friert es trotzdem ein“ war korrekt, aber
+durch Ursache 1 verdeckt — beide Ursachen mussten getrennt werden.
+
+**Diagnose-Hilfen (bleiben, nur bei gesetzter Umgebungsvariable aktiv):**
+`OMP_MXL_DEBUG=1` → `MXLDBG`-Zeile je Reader alle 2 s (ok/skip/notplaying/
+tooearly/toolate/pusherr, `lastpts`, appsrc-Zustand) und `PIPEDBG`-Zeilen
+(Puffer/2 s je Eingangskette: tail/precap/tap und `comp-out`). Freeze-Signatur:
+`skip>0 ok=0` (Ursache 1) bzw. `pusherr>0 ok=0` (appsrc tot, Ursache 2); Ketten
+mit +65 000 Puffern/s bei `precap` = `videorate` füllt eine Zeitlücke.
+
+**Verifikation:** vorher ~50 % der Läufe eingefroren; nachher 17/17 Rebuild-
+Zyklen (8× Quelle hinzufügen/entfernen, Check nach jedem Schritt) sowie 12/12
+frische Läufe mit 10 wechselnden Transitionen (Mix/V-Fade/Slide/Push) ohne
+Freeze; Slide/Push im Bild geprüft; `cargo test -p omp-mediaio -p
+omp-video-mixer-me` grün.
+
+**Offen:** laufende Instanzen behalten die alten Binaries → neu starten. Tally-
+Publish des Mixers läuft weiterhin in das 3-s-Timeout (separat, nicht Teil dieses
+Fixes).
