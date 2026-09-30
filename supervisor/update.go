@@ -287,7 +287,7 @@ func (u *updater) doUpdate(pkgPath string, pkg *update.Package, plan []planItem)
 	time.Sleep(sleepBeforeStop)
 	if out, err := exec.Command(u.srv.stopScript).CombinedOutput(); err != nil {
 		cleanup()
-		return updateResult{err: fmt.Errorf("stop-omp.sh: %w (%s)", err, strings.TrimSpace(string(out)))}
+		return updateResult{err: fmt.Errorf("stop-omp.sh: %w (%s)", err, tailText(string(out), 6))}
 	}
 
 	// 3. Tauschen.
@@ -345,7 +345,7 @@ func (u *updater) startOrchestrator() error {
 	cmd := exec.Command(u.srv.startScript)
 	cmd.Env = append(os.Environ(), "OMP_SKIP_BUILD=1")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("start-omp.sh: %w (%s)", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("start-omp.sh: %w (%s)", err, tailText(string(out), 6))
 	}
 	return nil
 }
@@ -570,6 +570,16 @@ func (u *updater) loadLastStatus() {
 		u.srv.status.data = snap
 		u.srv.status.mu.Unlock()
 	}
+}
+
+// tailText kürzt Skript-Ausgaben in Fehlermeldungen auf die letzten Zeilen.
+func tailText(s string, maxLines int) string {
+	s = strings.TrimSpace(s)
+	lines := strings.Split(s, "\n")
+	if len(lines) > maxLines {
+		lines = append([]string{"…"}, lines[len(lines)-maxLines:]...)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func errString(err error) string {
