@@ -32,16 +32,28 @@
 //   Funktion zu verlieren (danach normal ziehbar).
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { showToast } from "../kit/omp-toast.ts";
-
-interface Schedule {
-  id: string;
-  kind: "once" | "daily" | "weekly";
-  action: "start" | "stop";
-  at?: string;
-  timeOfDay?: string;
-  weekday?: number;
-  lastFiredAt?: string;
-}
+import {
+  addDays,
+  AUTO_LANE,
+  computeTimeline,
+  type Contribution,
+  DAY_MINUTES,
+  findBottlenecks,
+  fmtBytes,
+  fmtCores,
+  isOver,
+  laneCapacity,
+  type Level,
+  type LaneSlot,
+  occurrenceMinutes,
+  type ResHost,
+  type ResourceModel,
+  sameCalendarDate,
+  type Schedule,
+  slotUtilization,
+  startOfDay,
+  type Timeline,
+} from "./scheduler-logic.ts";
 
 // Definition hier bewusst als "unknown-durchgereichtes" Objekt typisiert
 // (nicht Feld für Feld wie in workflows-view.ts): dieser Tab ändert nur
@@ -64,7 +76,6 @@ const KIND_LABELS: Record<Schedule["kind"], string> = {
 const POLL_FALLBACK_INTERVAL_MS = 30000;
 const REFRESH_EVENT_TYPES = new Set(["workflow.updated", "lost-events"]);
 
-const DAY_MINUTES = 1440;
 const SNAP_MINUTES = 30;
 const MIN_DURATION_MINUTES = 30;
 const EDGE_PX = 8; // Randbereich eines Balkens, der als Resize-Griff zählt
@@ -73,12 +84,6 @@ const BAR_HEIGHT_PX = 22;
 
 type ViewMode = "day" | "week" | "month";
 
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
 function startOfWeek(d: Date): Date {
   // Montag-basiert (JS Date.getDay(): 0=So..6=Sa).
   const day = d.getDay();
@@ -86,16 +91,6 @@ function startOfWeek(d: Date): Date {
   const r = startOfDay(d);
   r.setDate(r.getDate() + diffToMonday);
   return r;
-}
-
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
-
-function sameCalendarDate(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 function fmtDayLabel(d: Date): string {
@@ -119,37 +114,8 @@ function toDatetimeLocalValue(iso: string): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function parseTimeOfDay(s: string | undefined): number | null {
-  if (!s) return null;
-  const parts = s.split(":");
-  if (parts.length !== 2) return null;
-  const h = Number(parts[0]);
-  const m = Number(parts[1]);
-  if (!Number.isFinite(h) || !Number.isFinite(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
-  return h * 60 + m;
-}
-
 function snap(minutes: number): number {
   return Math.round(minutes / SNAP_MINUTES) * SNAP_MINUTES;
-}
-
-// Ermittelt, ob/wann sched an diesem Kalendertag feuert — dieselbe
-// Grundidee wie orchestrator/internal/workflows/scheduler.go
-// occurrenceAt, hier clientseitig für die Grid-Darstellung (kein
-// Datenzugriff aufs Backend nötig, die rohen Schedules reichen).
-function occurrenceMinutes(s: Schedule, date: Date): number | null {
-  if (s.kind === "once") {
-    if (!s.at) return null;
-    const at = new Date(s.at);
-    if (!sameCalendarDate(at, date)) return null;
-    return at.getHours() * 60 + at.getMinutes();
-  }
-  if (s.kind === "daily") return parseTimeOfDay(s.timeOfDay);
-  if (s.kind === "weekly") {
-    if (s.weekday === undefined || date.getDay() !== s.weekday) return null;
-    return parseTimeOfDay(s.timeOfDay);
-  }
-  return null;
 }
 
 interface Instance {
@@ -213,6 +179,20 @@ class SchedulerView extends HTMLElement {
   // SSE-getriebener Zwischen-Render das gerade gezogene DOM-Element
   // unter dem Zeiger ersetzen und den Drag abbrechen.
   #dragging = false;
+  // Ressourcenmodell (GET /api/v1/scheduler/resources) — Host-Kapazitäten,
+  // Bedarf je Rolle. Null, solange nicht geladen (dann keine Ressourcen-
+  // Anzeige, der Rest funktioniert unverändert).
+  #model: ResourceModel | null = null;
+  // Womit "Neu ziehen" auf einer leeren Fläche einen Zeitplan anlegt.
+  #newKind: Schedule["kind"] = "once";
+  // Live-Vorschau beim Ziehen: ersetzt die Zeitpläne EINES Workflows nur
+  // für die Ressourcen-Berechnung, gespeichert wird erst beim Loslassen.
+  #preview: { wfId: string; schedules: Schedule[] } | null = null;
+  #resEl: HTMLElement | null = null;
+  #resDates: Date[] = [];
+  #resRaf = 0;
+  // Pro Workflow: Slot-Index -> Engpass-Beschreibung (Markierung der Balken).
+  #wfOver = new Map<string, Map<number, string[]>>();
 
   connectedCallback() {
     // position:relative ist Pflicht: #openAddMenu positioniert das
@@ -248,9 +228,13 @@ class SchedulerView extends HTMLElement {
   async #poll() {
     if (this.#dragging) return;
     try {
-      const res = await apiFetch("/api/v1/workflows");
+      const [res, resModel] = await Promise.all([
+        apiFetch("/api/v1/workflows"),
+        apiFetch("/api/v1/scheduler/resources").catch(() => null),
+      ]);
       if (!res.ok) return;
       this.#workflows = await res.json();
+      if (resModel && resModel.ok) this.#model = (await resModel.json()) as ResourceModel;
       this.#render();
     } catch {
       // Orchestrator kurzzeitig nicht erreichbar — nächster Poll holt es auf.
@@ -403,6 +387,24 @@ class SchedulerView extends HTMLElement {
     label.textContent = this.#rangeLabel();
     toolbar.appendChild(label);
 
+    if (this.#viewMode !== "month") {
+      const newLbl = document.createElement("label");
+      newLbl.style.cssText = "margin-left:auto;display:flex;align-items:center;gap:4px;color:var(--omp-text-dim);";
+      newLbl.title = "Auf eine leere Stelle einer Zeile ziehen, um einen Zeitplan anzulegen";
+      newLbl.append("Neu ziehen als:");
+      const sel = document.createElement("select");
+      (["once", "daily", "weekly"] as const).forEach((k) => {
+        const opt = document.createElement("option");
+        opt.value = k;
+        opt.textContent = KIND_LABELS[k];
+        if (k === this.#newKind) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener("change", () => (this.#newKind = sel.value as Schedule["kind"]));
+      newLbl.appendChild(sel);
+      toolbar.appendChild(newLbl);
+    }
+
     return toolbar;
   }
 
@@ -457,12 +459,361 @@ class SchedulerView extends HTMLElement {
       grid.appendChild(hourRow);
     }
 
+    // Ressourcen-Zeitachse vorab berechnen: die Balken markieren damit
+    // Überlast, der Ressourcen-Block darunter zeigt sie im Detail.
+    const timeline = this.#computeTimeline(dates, null);
+    this.#updateWorkflowOverloads(timeline);
+
     for (const wf of this.#workflows) {
       grid.appendChild(this.#renderWorkflowRow(wf, dates, totalMinutes));
     }
 
+    if (timeline && this.#model) {
+      grid.appendChild(this.#renderResources(dates, timeline));
+    }
+
     wrap.appendChild(grid);
     return wrap;
+  }
+
+  // ---- Ressourcen (Nutzerwunsch 2026-09-30) -------------------------------------
+
+  #slotsFor(dates: Date[]): Date[] {
+    const out: Date[] = [];
+    for (const d of dates) {
+      for (let m = 0; m < DAY_MINUTES; m += SNAP_MINUTES) {
+        const t = new Date(d);
+        t.setHours(0, m, 0, 0);
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
+  #computeTimeline(dates: Date[], override: { wfId: string; schedules: Schedule[] } | null): Timeline | null {
+    if (!this.#model) return null;
+    const map = new Map<string, Schedule[]>();
+    for (const wf of this.#workflows) {
+      map.set(wf.id, override && override.wfId === wf.id ? override.schedules : wf.definition.schedules ?? []);
+    }
+    return computeTimeline(this.#model, map, this.#slotsFor(dates), SNAP_MINUTES, new Date());
+  }
+
+  // Slot-Index -> Engpass-Text je Workflow, nur für die Lanes, auf denen der
+  // Workflow Rollen hat und in Slots, in denen er tatsächlich läuft.
+  #updateWorkflowOverloads(timeline: Timeline | null) {
+    this.#wfOver = new Map();
+    const model = this.#model;
+    if (!timeline || !model) return;
+    const bottlenecks = findBottlenecks(model, timeline);
+    if (bottlenecks.length === 0) return;
+    const laneLabel = (id: string) => (id === AUTO_LANE ? "Auto-Pool" : model.hosts.find((h) => h.id === id)?.label ?? id);
+    for (const mw of model.workflows) {
+      const lanes = new Set(mw.roles.map((r) => (r.hostId && timeline.has(r.hostId) ? r.hostId : AUTO_LANE)));
+      const perSlot = new Map<number, string[]>();
+      for (const b of bottlenecks) {
+        if (!lanes.has(b.laneId)) continue;
+        const slot = timeline.get(b.laneId)![b.slotIndex];
+        if (!slot.contribs.some((c) => c.wfId === mw.id)) continue; // läuft in diesem Slot gar nicht
+        const arr = perSlot.get(b.slotIndex) ?? [];
+        arr.push(`${laneLabel(b.laneId)}: ${b.what.join(", ")}`);
+        perSlot.set(b.slotIndex, arr);
+      }
+      if (perSlot.size > 0) this.#wfOver.set(mw.id, perSlot);
+    }
+  }
+
+  #slotLabel(dates: Date[], slotIndex: number): string {
+    const perDay = DAY_MINUTES / SNAP_MINUTES;
+    const dayIdx = Math.floor(slotIndex / perDay);
+    const minutes = (slotIndex % perDay) * SNAP_MINUTES;
+    const time = fmtMinutes(minutes);
+    return dates.length > 1 ? `${fmtDayLabel(dates[dayIdx])} ${time}` : time;
+  }
+
+  // Aufeinanderfolgende Slot-Indizes zu [von, bis]-Bereichen zusammenfassen.
+  #ranges(indices: number[]): [number, number][] {
+    const out: [number, number][] = [];
+    for (const i of [...indices].sort((a, b) => a - b)) {
+      const last = out[out.length - 1];
+      if (last && i === last[1] + 1) last[1] = i;
+      else out.push([i, i]);
+    }
+    return out;
+  }
+
+  #levelColor(level: Level, pct: number | null, threshold: number): string {
+    switch (level) {
+      case "over":
+        return "rgba(211,51,51,0.9)";
+      case "warn":
+        return "rgba(224,160,32,0.75)";
+      case "ok": {
+        const a = 0.22 + 0.4 * Math.min(1, (pct ?? 0) / threshold);
+        return `rgba(76,175,80,${a.toFixed(2)})`;
+      }
+      case "free":
+        return "rgba(76,175,80,0.08)";
+      default:
+        return "rgba(255,255,255,0.10)";
+    }
+  }
+
+  #renderResources(dates: Date[], timeline: Timeline): HTMLElement {
+    const box = document.createElement("div");
+    box.dataset.role = "resources";
+    box.style.cssText = "margin-top:14px;";
+    this.#resEl = box;
+    this.#resDates = dates;
+    this.#fillResources(box, dates, timeline);
+    return box;
+  }
+
+  // Live-Neuzeichnen (Ziehen): nur den Ressourcen-Block ersetzen.
+  #repaintResources() {
+    if (this.#resRaf) return;
+    this.#resRaf = requestAnimationFrame(() => {
+      this.#resRaf = 0;
+      const box = this.#resEl;
+      if (!box || !box.isConnected) return;
+      const tl = this.#computeTimeline(this.#resDates, this.#preview);
+      if (tl) this.#fillResources(box, this.#resDates, tl);
+    });
+  }
+
+  #fillResources(box: HTMLElement, dates: Date[], timeline: Timeline) {
+    const model = this.#model!;
+    box.replaceChildren();
+    const totalMinutes = dates.length * DAY_MINUTES;
+    const perDay = DAY_MINUTES / SNAP_MINUTES;
+
+    const head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:baseline;gap:10px;margin:0 0 4px;flex-wrap:wrap;";
+    const title = document.createElement("div");
+    title.className = "omp-h1";
+    title.style.cssText = "font-size:var(--omp-font-size-md);";
+    title.textContent = this.#preview ? "Ressourcen (Vorschau beim Ziehen)" : "Ressourcen (geplant)";
+    head.appendChild(title);
+    const legend = document.createElement("div");
+    legend.style.cssText = "display:flex;gap:8px;align-items:center;font-size:10px;color:var(--omp-text-dim);";
+    for (const [lvl, txt] of [["free", "frei"], ["ok", "ok"], ["warn", "knapp"], ["over", "Engpass"], ["unknown", "Bedarf/Kapazität unbekannt"]] as const) {
+      const item = document.createElement("span");
+      item.style.cssText = "display:inline-flex;align-items:center;gap:3px;";
+      const sw = document.createElement("span");
+      sw.style.cssText = `display:inline-block;width:10px;height:10px;border-radius:2px;background:${this.#levelColor(lvl, lvl === "ok" ? 60 : null, 85)};`;
+      item.append(sw, txt);
+      legend.appendChild(item);
+    }
+    head.appendChild(legend);
+    box.appendChild(head);
+
+    const hint = document.createElement("div");
+    hint.style.cssText = "font-size:10px;color:var(--omp-text-dim);margin-bottom:6px;";
+    hint.textContent =
+      "Geplanter Bedarf = gemessenes Profil je Node-Typ (CPU: 95. Perzentil, RAM: Maximum) aller Workflows, die zu diesem Zeitpunkt laufen, " +
+      "gegen die Kapazität des Hosts. Rollen ohne Messprofil sind schraffiert (Bedarf unbekannt, nicht null).";
+    box.appendChild(hint);
+
+    const laneIds = [...model.hosts.map((h) => h.id), AUTO_LANE];
+    const now = new Date();
+    for (const laneId of laneIds) {
+      const slots = timeline.get(laneId);
+      if (!slots) continue;
+      const cap = laneCapacity(model, laneId);
+      const host: ResHost | undefined = model.hosts.find((h) => h.id === laneId);
+      const isAuto = laneId === AUTO_LANE;
+
+      const anyDemand = slots.some((sl) => sl.cpuCores > 0 || sl.rssBytes > 0 || Object.keys(sl.io).length > 0 || sl.unknown.length > 0);
+      // Veraltete Host-Registrierungen (offline, nichts eingeplant) nur Rauschen.
+      if (host && !host.online && !host.local && !anyDemand) continue;
+      const utils = slots.map((sl) => slotUtilization(sl, cap, model.thresholds));
+
+      const block = document.createElement("div");
+      block.style.cssText = "margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid rgba(255,255,255,0.06);";
+
+      // Kopf: Name, Kapazität, live, Zusammenfassung.
+      const bh = document.createElement("div");
+      bh.style.cssText = "display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:3px;";
+      const name = document.createElement("span");
+      name.style.cssText = "font-weight:600;";
+      name.textContent = isAuto ? "Ohne Host-Festlegung (Auto-Platzierung)" : host!.label;
+      bh.appendChild(name);
+      const capTxt = document.createElement("span");
+      capTxt.style.cssText = "color:var(--omp-text-dim);font-size:11px;";
+      const capParts: string[] = [];
+      if (cap.cpuCores > 0) capParts.push(`${cap.cpuCores} Kerne`);
+      if (cap.memBytes > 0) capParts.push(`${fmtBytes(cap.memBytes)} RAM`);
+      for (const [k, n] of Object.entries(cap.io)) capParts.push(`${n}× ${k}`);
+      capTxt.textContent =
+        (isAuto ? "Summe aller erreichbaren Hosts: " : "") + (capParts.length ? capParts.join(" · ") : "Kapazität unbekannt");
+      bh.appendChild(capTxt);
+      if (host && !host.online && !host.local) {
+        const off = document.createElement("span");
+        off.style.cssText = "color:var(--omp-error, #d33);font-size:11px;";
+        off.textContent = "offline";
+        bh.appendChild(off);
+      }
+      if (host?.live) {
+        const live = document.createElement("span");
+        live.style.cssText = "font-size:11px;color:var(--omp-text-dim);";
+        live.title = "Momentaufnahme der aktuellen Auslastung (nicht die Planung)";
+        live.textContent =
+          `jetzt: CPU ${host.live.cpuPercent.toFixed(0)} % · RAM ${host.live.memPercent.toFixed(0)} %` +
+          (host.live.netPercent !== undefined ? ` · Netz ${host.live.netPercent.toFixed(0)} %` : "") +
+          (host.live.gpuPercent !== undefined ? ` · GPU ${host.live.gpuPercent.toFixed(0)} %` : "");
+        bh.appendChild(live);
+      }
+      block.appendChild(bh);
+
+      // Zusammenfassung: Engpässe und freie Reserve im sichtbaren Ausschnitt.
+      const overIdx = utils.map((u, i) => (isOver(u) ? i : -1)).filter((i) => i >= 0);
+      const sum = document.createElement("div");
+      sum.style.cssText = "font-size:11px;margin-bottom:3px;";
+      if (overIdx.length > 0) {
+        const parts = this.#ranges(overIdx).slice(0, 4).map(([a, b]) => {
+          const what = new Set<string>();
+          for (let i = a; i <= b; i++) {
+            if (utils[i].cpuLevel === "over") what.add("CPU");
+            if (utils[i].memLevel === "over") what.add("RAM");
+            utils[i].ioOver.forEach((k) => what.add(k));
+          }
+          return `${this.#slotLabel(dates, a)}–${this.#slotLabel(dates, b + 1 > dates.length * perDay - 1 ? b : b + 1)} (${[...what].join(", ")})`;
+        });
+        sum.style.color = "var(--omp-error, #e55)";
+        sum.textContent = `⚠ Engpass: ${parts.join(" · ")}${this.#ranges(overIdx).length > 4 ? " …" : ""}`;
+      } else if (anyDemand) {
+        const freeC = utils.map((u) => u.freeCores).filter((v): v is number => v !== null);
+        const freeM = utils.map((u) => u.freeMemBytes).filter((v): v is number => v !== null);
+        sum.style.color = "var(--omp-text-dim)";
+        sum.textContent =
+          "Kein Engpass. Freie Reserve (bis Grenzwert), Minimum im Ausschnitt: " +
+          [freeC.length ? `${fmtCores(Math.min(...freeC))} Kerne` : "", freeM.length ? `${fmtBytes(Math.min(...freeM))} RAM` : ""].filter(Boolean).join(" · ");
+      } else {
+        sum.style.color = "var(--omp-text-dim)";
+        sum.textContent = "Im Ausschnitt nichts eingeplant — komplett frei.";
+      }
+      block.appendChild(sum);
+
+      const rows: { label: string; kind: "cpu" | "mem" | "io"; key?: string }[] = [];
+      if (cap.cpuCores > 0 || slots.some((s2) => s2.cpuCores > 0)) rows.push({ label: "CPU", kind: "cpu" });
+      if (cap.memBytes > 0 || slots.some((s2) => s2.rssBytes > 0)) rows.push({ label: "RAM", kind: "mem" });
+      const ioKeys = new Set<string>([...Object.keys(cap.io), ...slots.flatMap((s2) => Object.keys(s2.io))]);
+      for (const k of [...ioKeys].sort()) rows.push({ label: k, kind: "io", key: k });
+
+      for (const r of rows) {
+        block.appendChild(this.#renderStrip(dates, totalMinutes, slots, utils, cap, r, now));
+      }
+      box.appendChild(block);
+    }
+  }
+
+  #renderStrip(
+    dates: Date[],
+    totalMinutes: number,
+    slots: LaneSlot[],
+    utils: ReturnType<typeof slotUtilization>[],
+    cap: ReturnType<typeof laneCapacity>,
+    row: { label: string; kind: "cpu" | "mem" | "io"; key?: string },
+    now: Date,
+  ): HTMLElement {
+    const model = this.#model!;
+    const perDay = DAY_MINUTES / SNAP_MINUTES;
+    const wrapRow = document.createElement("div");
+    wrapRow.style.cssText = "display:flex;align-items:stretch;height:14px;margin-bottom:2px;";
+    const lbl = document.createElement("div");
+    lbl.style.cssText = "width:140px;flex:0 0 140px;font-size:10px;color:var(--omp-text-dim);padding-right:6px;text-align:right;line-height:14px;";
+    lbl.textContent = row.label;
+    wrapRow.appendChild(lbl);
+
+    const track = document.createElement("div");
+    track.style.cssText = "position:relative;flex:1;display:flex;gap:0;background:rgba(255,255,255,0.03);";
+
+    // Gruppen: Tag/Woche = jeder Slot eine Zelle; Monat = ein Slot-Bündel je Tag.
+    const groups: number[][] = [];
+    if (this.#viewMode === "month") {
+      for (let d = 0; d < dates.length; d++) groups.push(Array.from({ length: perDay }, (_, i) => d * perDay + i));
+    } else {
+      for (let i = 0; i < slots.length; i++) groups.push([i]);
+    }
+
+    const metric = (i: number): number => {
+      const u = utils[i];
+      if (row.kind === "cpu") return u.cpuPercent ?? 0;
+      if (row.kind === "mem") return u.memPercent ?? 0;
+      const need = slots[i].io[row.key!] ?? 0;
+      return need;
+    };
+
+    for (const g of groups) {
+      let rep = g[0];
+      for (const i of g) if (metric(i) > metric(rep)) rep = i;
+      const u = utils[rep];
+      const slot = slots[rep];
+      let level: Level;
+      let pct: number | null = null;
+      let thr = 85;
+      let tip = "";
+      const when = this.#slotLabel(dates, rep);
+      if (row.kind === "cpu") {
+        pct = u.cpuPercent;
+        thr = model.thresholds.cpu;
+        level = u.cpuLevel;
+        tip = `${when} · CPU ${fmtCores(slot.cpuCores)} von ${cap.cpuCores || "?"} Kernen` +
+          (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
+          (u.freeCores !== null ? ` · frei bis Grenzwert: ${fmtCores(u.freeCores)} Kerne` : "");
+      } else if (row.kind === "mem") {
+        pct = u.memPercent;
+        thr = model.thresholds.mem;
+        level = u.memLevel;
+        tip = `${when} · RAM ${fmtBytes(slot.rssBytes)} von ${cap.memBytes ? fmtBytes(cap.memBytes) : "?"}` +
+          (pct !== null ? ` (${pct.toFixed(0)} %)` : "") +
+          (u.freeMemBytes !== null ? ` · frei bis Grenzwert: ${fmtBytes(u.freeMemBytes)}` : "");
+      } else {
+        const need = slot.io[row.key!] ?? 0;
+        const total = cap.io[row.key!] ?? 0;
+        level = need > total ? "over" : need > 0 ? (need === total ? "warn" : "ok") : "free";
+        pct = total > 0 ? (need / total) * 100 : null;
+        thr = 100;
+        tip = `${when} · ${row.key}: ${need} von ${total} Port(s) belegt · frei: ${Math.max(0, total - need)}`;
+      }
+      const contribs: Contribution[] = slot.contribs;
+      if (contribs.length > 0 && row.kind !== "io") {
+        const key = row.kind === "cpu" ? "cpuCores" : "rssBytes";
+        tip += "\n" + contribs
+          .filter((c) => c[key] > 0)
+          .sort((a, b) => b[key] - a[key])
+          .map((c) => `  ${c.wfName}/${c.role}: ${row.kind === "cpu" ? fmtCores(c.cpuCores) + " Kerne" : fmtBytes(c.rssBytes)}`)
+          .join("\n");
+      }
+      if (slot.unknown.length > 0) tip += `\n⚠ Bedarf unbekannt (kein Messprofil): ${slot.unknown.join(", ")}`;
+      if (this.#viewMode === "month") tip += "\n(ungünstigster Zeitpunkt des Tages)";
+
+      const cell = document.createElement("div");
+      cell.style.cssText = `flex:1;min-width:0;background:${this.#levelColor(level, pct, thr)};`;
+      if (slot.unknown.length > 0) {
+        cell.style.backgroundImage = "repeating-linear-gradient(45deg, rgba(255,255,255,0.28) 0 2px, transparent 2px 5px)";
+      }
+      cell.title = tip;
+      track.appendChild(cell);
+    }
+
+    this.#addNowMarker(track, dates, totalMinutes, now);
+    wrapRow.appendChild(track);
+    return wrapRow;
+  }
+
+  // Senkrechte Linie bei "jetzt", falls im sichtbaren Ausschnitt.
+  #addNowMarker(track: HTMLElement, dates: Date[], totalMinutes: number, now: Date) {
+    if (this.#viewMode === "month") return;
+    const idx = dates.findIndex((d) => sameCalendarDate(d, now));
+    if (idx < 0) return;
+    const minute = idx * DAY_MINUTES + now.getHours() * 60 + now.getMinutes();
+    const line = document.createElement("div");
+    line.style.cssText =
+      `position:absolute;top:0;bottom:0;left:${(minute / totalMinutes) * 100}%;width:2px;` +
+      "background:var(--omp-info, #5b9bd5);pointer-events:none;z-index:2;";
+    line.title = "jetzt";
+    track.appendChild(line);
   }
 
   #renderWorkflowRow(wf: Workflow, dates: Date[], totalMinutes: number): HTMLElement {
@@ -482,6 +833,7 @@ class SchedulerView extends HTMLElement {
       "position:relative;flex:1;background:rgba(255,255,255,0.03);" +
       "border-top:1px solid rgba(255,255,255,0.06);";
     track.dataset.role = "schedule-track";
+    track.style.touchAction = "none";
 
     // Tagestrenner (nur optisch, bei Tag-Ansicht ein einziges Segment).
     dates.forEach((_, i) => {
@@ -490,8 +842,12 @@ class SchedulerView extends HTMLElement {
       sep.style.cssText =
         `position:absolute;top:0;bottom:0;left:${(i / dates.length) * 100}%;` +
         `width:1px;background:rgba(255,255,255,0.1);`;
+      sep.dataset.sep = "1";
       track.appendChild(sep);
     });
+    this.#addNowMarker(track, dates, totalMinutes, new Date());
+    track.title = "Auf eine leere Stelle ziehen: neuen Zeitplan anlegen";
+    track.addEventListener("pointerdown", (ev) => this.#startCreateDrag(ev, track, wf, dates, totalMinutes));
 
     const schedules = wf.definition.schedules ?? [];
     for (const bar of buildBarsForDates(schedules, dates)) {
@@ -570,6 +926,19 @@ class SchedulerView extends HTMLElement {
       (bar.start ? `Start ${fmtMinutes(bar.start.minutes)}` : "kein Start") +
       " – " +
       (bar.stop ? `Stop ${fmtMinutes(bar.stop.minutes)}` : "kein Stop");
+    // Ressourcen-Engpass in der Laufzeit dieses Balkens? (roter Rand + Grund)
+    const over = this.#wfOver.get(wf.id);
+    if (over && right > left) {
+      const from = Math.floor(left / SNAP_MINUTES);
+      const to = Math.ceil(right / SNAP_MINUTES);
+      const reasons = new Set<string>();
+      for (let i = from; i < to; i++) for (const r of over.get(i) ?? []) reasons.add(r);
+      if (reasons.size > 0) {
+        el.style.borderColor = "var(--omp-error, #e55)";
+        el.style.boxShadow = "0 0 0 1px var(--omp-error, #e55)";
+        el.title += `\n⚠ Ressourcen-Engpass: ${[...reasons].join(" · ")}`;
+      }
+    }
 
     const timeLabel = document.createElement("span");
     timeLabel.style.cssText = "font-size:9px;color:var(--omp-text);pointer-events:none;white-space:nowrap;";
@@ -749,6 +1118,9 @@ class SchedulerView extends HTMLElement {
       }
       el.style.left = `${(currentLeft / totalMinutes) * 100}%`;
       el.style.width = `${((currentRight - currentLeft) / totalMinutes) * 100}%`;
+      // Live-Vorschau der Ressourcen für die neue Position.
+      this.#preview = { wfId: wf.id, schedules: this.#dragSchedules(wf, bar, currentLeft, currentRight, mode) };
+      this.#repaintResources();
     };
 
     const onUp = () => {
@@ -757,11 +1129,16 @@ class SchedulerView extends HTMLElement {
       el.removeEventListener("pointercancel", onUp);
       el.style.cursor = "grab";
       this.#dragging = false;
+      this.#preview = null;
       // Ein reiner Klick (auch die zwei Klicks eines Doppelklicks für
       // #openTimeEditor) darf keine unnötige PUT auslösen — nur
       // speichern, wenn sich tatsächlich etwas verschoben hat.
       if (currentLeft !== originalLeft || currentRight !== originalRight) {
-        this.#commitDrag(wf, bar, currentLeft, currentRight, mode);
+        const next = this.#dragSchedules(wf, bar, currentLeft, currentRight, mode);
+        this.#warnNewBottlenecks(wf, next);
+        void this.#persist(wf, next);
+      } else {
+        this.#repaintResources();
       }
     };
 
@@ -770,14 +1147,15 @@ class SchedulerView extends HTMLElement {
     el.addEventListener("pointercancel", onUp);
   }
 
-  // Schreibt die gezogene Position zurück in die betroffenen
-  // Schedule-Objekte (start und/oder stop) und speichert sofort.
-  // dateIndex/weekday werden aus der absoluten Minute (Tag*1440+Minute)
-  // zurückgerechnet — bei "weekly" ändert ein Tageswechsel während des
-  // Ziehens (nur in der Wochenansicht möglich) also tatsächlich den
-  // Wochentag, bei "once" das Datum, bei "daily" bleibt der Tag dank
+  // Liefert die Zeitpläne des Workflows mit der gezogenen Position
+  // (start und/oder stop verschoben) — OHNE zu speichern; #startDrag nutzt
+  // das für die Live-Vorschau der Ressourcen und speichert erst beim
+  // Loslassen. dateIndex/weekday werden aus der absoluten Minute
+  // (Tag*1440+Minute) zurückgerechnet — bei "weekly" ändert ein Tageswechsel
+  // während des Ziehens (nur in der Wochenansicht möglich) also tatsächlich
+  // den Wochentag, bei "once" das Datum, bei "daily" bleibt der Tag dank
   // lockedDateIndex ohnehin unverändert (s. #startDrag).
-  #commitDrag(wf: Workflow, bar: Bar, left: number, right: number, mode: DragMode) {
+  #dragSchedules(wf: Workflow, bar: Bar, left: number, right: number, mode: DragMode): Schedule[] {
     const dates = this.#visibleDates();
     const schedules = (wf.definition.schedules ?? []).map((s) => ({ ...s }));
 
@@ -804,8 +1182,118 @@ class SchedulerView extends HTMLElement {
       applyTo(bar.start, left);
       applyTo(bar.stop, right);
     }
+    return schedules;
+  }
 
-    void this.#persist(wf, schedules);
+  // Warnt beim Loslassen, wenn die neuen Zeitpläne Engpässe erzeugen, die es
+  // vorher nicht gab (der Nutzer entscheidet — gespeichert wird trotzdem).
+  #warnNewBottlenecks(wf: Workflow, next: Schedule[]) {
+    const model = this.#model;
+    if (!model) return;
+    const dates = this.#visibleDates();
+    const before = this.#computeTimeline(dates, null);
+    const after = this.#computeTimeline(dates, { wfId: wf.id, schedules: next });
+    if (!before || !after) return;
+    const key = (b: { laneId: string; slotIndex: number }) => `${b.laneId}#${b.slotIndex}`;
+    const had = new Set(findBottlenecks(model, before).map(key));
+    const fresh = findBottlenecks(model, after).filter((b) => !had.has(key(b)));
+    if (fresh.length === 0) return;
+    const laneLabel = (id: string) => (id === AUTO_LANE ? "Auto-Pool" : model.hosts.find((h) => h.id === id)?.label ?? id);
+    const parts = fresh.slice(0, 3).map((b) => `${laneLabel(b.laneId)} ${this.#slotLabel(dates, b.slotIndex)} (${b.what.join(", ")})`);
+    showToast(`⚠ Ressourcen-Engpass durch diese Änderung: ${parts.join(" · ")}${fresh.length > 3 ? ` … (+${fresh.length - 3})` : ""}`);
+  }
+
+  // Ziehen auf leerer Fläche einer Workflow-Zeile legt einen neuen Zeitplan
+  // (Start+Stop) an — Art laut Auswahl in der Werkzeugleiste. Auf EINEN Tag
+  // begrenzt (ein Paar gehört immer zu einem Tag).
+  #startCreateDrag(ev: PointerEvent, track: HTMLElement, wf: Workflow, dates: Date[], totalMinutes: number) {
+    const target = ev.target as HTMLElement;
+    if (ev.button !== 0 || (target !== track && !target.dataset.sep)) return;
+    ev.preventDefault();
+    const rect = track.getBoundingClientRect();
+    const toMinute = (clientX: number) =>
+      Math.max(0, Math.min(totalMinutes, snap(((clientX - rect.left) / rect.width) * totalMinutes)));
+    const anchor = Math.min(toMinute(ev.clientX), totalMinutes - SNAP_MINUTES);
+    const dayIdx = Math.min(dates.length - 1, Math.floor(anchor / DAY_MINUTES));
+    const dayStart = dayIdx * DAY_MINUTES;
+    const dayEnd = dayStart + DAY_MINUTES;
+
+    const ghost = document.createElement("div");
+    ghost.style.cssText =
+      `position:absolute;top:${(ROW_HEIGHT_PX - BAR_HEIGHT_PX) / 2}px;height:${BAR_HEIGHT_PX}px;` +
+      "background:rgba(91,155,213,0.35);border:1px dashed var(--omp-info);border-radius:3px;pointer-events:none;box-sizing:border-box;" +
+      "display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--omp-text);white-space:nowrap;";
+    track.appendChild(ghost);
+    track.setPointerCapture(ev.pointerId);
+    this.#dragging = true;
+
+    let left = anchor;
+    let right = anchor + SNAP_MINUTES;
+    const draw = () => {
+      ghost.style.left = `${(left / totalMinutes) * 100}%`;
+      ghost.style.width = `${((right - left) / totalMinutes) * 100}%`;
+      ghost.textContent = `${fmtMinutes(left - dayStart)}–${fmtMinutes(right - dayStart)}`;
+    };
+    draw();
+
+    const pair = (): Schedule[] => this.#buildPair(this.#newKind, dates[dayIdx], left - dayStart, right - dayStart);
+    const onMove = (m: PointerEvent) => {
+      const cur = Math.max(dayStart, Math.min(dayEnd, toMinute(m.clientX)));
+      left = Math.min(anchor, cur);
+      right = Math.max(anchor, cur);
+      if (right - left < SNAP_MINUTES) {
+        if (cur < anchor) left = Math.max(dayStart, right - SNAP_MINUTES);
+        else right = Math.min(dayEnd, left + SNAP_MINUTES);
+      }
+      draw();
+      this.#preview = { wfId: wf.id, schedules: [...(wf.definition.schedules ?? []), ...pair()] };
+      this.#repaintResources();
+    };
+    const cleanup = () => {
+      track.removeEventListener("pointermove", onMove);
+      track.removeEventListener("pointerup", onUp);
+      track.removeEventListener("pointercancel", onCancel);
+      ghost.remove();
+      this.#dragging = false;
+      this.#preview = null;
+    };
+    const onUp = () => {
+      const created = pair();
+      cleanup();
+      const next = [...(wf.definition.schedules ?? []), ...created];
+      this.#warnNewBottlenecks(wf, next);
+      void this.#persist(wf, next);
+    };
+    const onCancel = () => {
+      cleanup();
+      this.#repaintResources();
+    };
+    track.addEventListener("pointermove", onMove);
+    track.addEventListener("pointerup", onUp);
+    track.addEventListener("pointercancel", onCancel);
+  }
+
+  #buildPair(kind: Schedule["kind"], date: Date, startMin: number, stopMin: number): Schedule[] {
+    const start: Schedule = { id: crypto.randomUUID(), kind, action: "start" };
+    const stop: Schedule = { id: crypto.randomUUID(), kind, action: "stop" };
+    if (kind === "once") {
+      const a = new Date(date);
+      a.setHours(0, startMin, 0, 0);
+      const b = new Date(date);
+      // 24:00 = Mitternacht des Folgetags
+      b.setHours(0, stopMin, 0, 0);
+      start.at = a.toISOString();
+      stop.at = b.toISOString();
+    } else {
+      // "daily"/"weekly" kennen kein 24:00 — auf 23:59 begrenzen.
+      start.timeOfDay = fmtMinutes(Math.min(startMin, DAY_MINUTES - 1));
+      stop.timeOfDay = fmtMinutes(Math.min(stopMin, DAY_MINUTES - 1));
+      if (kind === "weekly") {
+        start.weekday = date.getDay();
+        stop.weekday = date.getDay();
+      }
+    }
+    return [start, stop];
   }
 
   // Monat-Ansicht: reine Übersicht (kein Drag, s. Datei-Kopfkommentar) —
@@ -865,6 +1353,11 @@ class SchedulerView extends HTMLElement {
 
       grid.appendChild(row);
     }
+
+    // Ressourcen je Tag (ungünstigster Zeitpunkt des Tages) — ein Blick
+    // über den Monat zeigt, wo Engpässe drohen und wo Platz ist.
+    const timeline = this.#computeTimeline(dates, null);
+    if (timeline && this.#model) grid.appendChild(this.#renderResources(dates, timeline));
 
     wrap.appendChild(grid);
     return wrap;
