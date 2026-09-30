@@ -15,6 +15,7 @@
 import { apiFetch, connectionMonitor } from "./connection.ts";
 import { whoami } from "./auth.ts";
 import { showToast } from "../kit/omp-toast.ts";
+import { confirmDialog } from "../kit/omp-confirm.ts";
 import "../graph/process-editor.ts";
 import type { DraftDefinition } from "../graph/process-editor-logic.ts";
 import type { ProcessEditor } from "../graph/process-editor.ts";
@@ -335,6 +336,31 @@ class ProcessView extends HTMLElement {
     this.#steps = [];
     this.#execTasks = [];
     void this.#loadVersionsAndExecutions(id).then(() => this.#render());
+    this.#render();
+  }
+
+  // Löscht die ausgewählte Prozess-Definition samt Versionen und
+  // Ausführungs-Historie (Nutzerwunsch 2026-09-30). Läuft noch eine
+  // Ausführung, lehnt der Server mit 409 ab — die Meldung wird angezeigt.
+  async #deleteDefinition(def: ProcessDefinition) {
+    const ok = await confirmDialog(
+      `Prozess „${def.name}" mit allen Versionen und der Ausführungs-Historie endgültig löschen?`,
+      { confirmLabel: "Löschen" },
+    );
+    if (!ok) return;
+    const res = await apiFetch(`/api/v1/process-definitions/${def.id}`, { method: "DELETE" });
+    if (!res.ok) {
+      showToast(`Löschen fehlgeschlagen: ${(await res.text()).trim()}`, { variant: "error" });
+      return;
+    }
+    showToast(`Prozess „${def.name}" gelöscht.`, { variant: "info" });
+    this.#selectedDefId = null;
+    this.#selectedExecId = null;
+    this.#versions = [];
+    this.#executions = [];
+    this.#steps = [];
+    this.#execTasks = [];
+    await this.#loadDefinitions();
     this.#render();
   }
 
@@ -743,12 +769,19 @@ class ProcessView extends HTMLElement {
     if (def) {
       const header = document.createElement("div");
       header.className = "omp-card";
-      header.innerHTML = `
+      header.style.cssText = "display:flex;justify-content:space-between;align-items:flex-start;gap:var(--omp-space-2);";
+      const info = document.createElement("div");
+      info.innerHTML = `
         <div class="omp-h1">${escapeHtml(def.name)}</div>
         <div style="color:var(--omp-text-dim);font-size:var(--omp-font-size-xs);margin-top:4px;">
           Angelegt von ${escapeHtml(def.createdBy)} am ${fmtTime(def.createdAt)}
         </div>
       `;
+      const delBtn = document.createElement("button");
+      delBtn.textContent = "Prozess löschen";
+      delBtn.title = "Löscht den Prozess mit allen Versionen und der Historie (nicht möglich, solange Ausführungen laufen)";
+      delBtn.addEventListener("click", () => void this.#deleteDefinition(def));
+      header.append(info, delBtn);
       wrap.appendChild(header);
     }
 

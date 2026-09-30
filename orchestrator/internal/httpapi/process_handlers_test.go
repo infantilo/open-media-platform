@@ -31,6 +31,7 @@ func (f *fakeHumanTaskStore) ListDefinitions() ([]process.ProcessDefinition, err
 func (f *fakeHumanTaskStore) UpdateDefinitionMeta(id, name, description, category string) (process.ProcessDefinition, error) {
 	return process.ProcessDefinition{}, nil
 }
+func (f *fakeHumanTaskStore) DeleteDefinition(id string) error { return nil }
 func (f *fakeHumanTaskStore) CreateVersion(processDefinitionID string, definition process.Definition, createdBy string) (process.ProcessVersion, error) {
 	return process.ProcessVersion{}, nil
 }

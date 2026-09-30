@@ -180,6 +180,30 @@ func handleUpdateProcessDefinition(svc ProcessStoreService) http.HandlerFunc {
 	}
 }
 
+// handleDeleteProcessDefinition liefert DELETE
+// /api/v1/process-definitions/{id} (204) — 409, solange noch Ausführungen
+// laufen (s. process.Store.DeleteDefinition).
+func handleDeleteProcessDefinition(svc ProcessStoreService, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		pd, err := svc.GetDefinition(id)
+		if err != nil {
+			writeProcessError(w, err)
+			return
+		}
+		if !orgMatches(r, pd.OwnerOrgID) {
+			writeOrgNotFound(w)
+			return
+		}
+		if err := svc.DeleteDefinition(id); err != nil {
+			writeProcessError(w, err)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "process_definition", id, "deleted", map[string]any{"name": pd.Name})
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // ---- ProcessVersion -----------------------------------------------------------------------------
 
 // handleListProcessVersions liefert GET
@@ -632,6 +656,7 @@ func writeProcessError(w http.ResponseWriter, err error) {
 	case errors.Is(err, process.ErrValidation):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, process.ErrConcurrentModification),
+		errors.Is(err, process.ErrInUse),
 		errors.Is(err, process.ErrVersionNotPublished),
 		errors.Is(err, statemachine.ErrInvalidTransition):
 		http.Error(w, err.Error(), http.StatusConflict)

@@ -30,6 +30,11 @@ var ErrConcurrentModification = errors.New("process: concurrent modification")
 // workflows.ErrValidation.
 var ErrValidation = errors.New("process: validation failed")
 
+// ErrInUse: die Definition kann nicht gelöscht werden, weil noch
+// Ausführungen laufen oder andere Prozesse auf ihre Ausführungen
+// verweisen — HTTP 409.
+var ErrInUse = errors.New("process: definition in use")
+
 // Store persistiert die Prozess-Engine-Domäne in Postgres
 // (db/migrations/0018_process.sql).
 type Store struct {
@@ -161,6 +166,67 @@ func (s *Store) UpdateDefinitionMeta(id, name, description, category string) (Pr
 		return ProcessDefinition{}, ErrNotFound
 	}
 	return s.GetDefinition(id)
+}
+
+// DeleteDefinition löscht eine ProcessDefinition samt allen Versionen und
+// der Ausführungs-Historie (Nutzerwunsch 2026-09-30: Prozesse löschen
+// können). Abgelehnt (ErrInUse) wird, solange eine Ausführung noch nicht
+// abgeschlossen ist (pending/running/waiting/paused/compensating) —
+// erst abbrechen, dann löschen — oder eine Ausführung eines ANDEREN
+// Prozesses eine dieser Ausführungen als Eltern-Ausführung referenziert.
+// Step-Ausführungen, Human Tasks und Asset-Links hängen per ON DELETE
+// CASCADE an den Ausführungen, Versionen an der Definition.
+func (s *Store) DeleteDefinition(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS (SELECT 1 FROM process_definitions WHERE id = $1)`, id).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return ErrNotFound
+	}
+
+	var active int
+	if err := tx.QueryRow(`
+		SELECT count(*) FROM process_executions
+		WHERE process_definition_id = $1
+		  AND status IN ('pending', 'running', 'waiting', 'paused', 'compensating')
+	`, id).Scan(&active); err != nil {
+		return err
+	}
+	if active > 0 {
+		return fmt.Errorf("%w: %d Ausführung(en) laufen noch — erst abbrechen", ErrInUse, active)
+	}
+
+	var foreign int
+	if err := tx.QueryRow(`
+		SELECT count(*) FROM process_executions c
+		JOIN process_executions p ON c.parent_execution_id = p.id
+		WHERE p.process_definition_id = $1 AND c.process_definition_id <> $1
+	`, id).Scan(&foreign); err != nil {
+		return err
+	}
+	if foreign > 0 {
+		return fmt.Errorf("%w: %d Ausführung(en) anderer Prozesse referenzieren diesen Prozess", ErrInUse, foreign)
+	}
+
+	// Selbstreferenz parent_execution_id innerhalb derselben Definition:
+	// erst lösen, dann löschen (unabhängig von der FK-Prüfreihenfolge).
+	if _, err := tx.Exec(`UPDATE process_executions SET parent_execution_id = NULL WHERE process_definition_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM process_executions WHERE process_definition_id = $1`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM process_definitions WHERE id = $1`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ---- ProcessVersion -----------------------------------------------

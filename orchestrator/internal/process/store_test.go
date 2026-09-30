@@ -3,6 +3,7 @@ package process
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/dbtest"
@@ -445,5 +446,39 @@ func TestHumanTaskLifecycle(t *testing.T) {
 	}
 	if len(byAssignee) != 1 {
 		t.Fatalf("ListHumanTasksByAssignee() = %d entries, want 1", len(byAssignee))
+	}
+}
+
+func TestDeleteDefinition(t *testing.T) {
+	s := NewStore(testDB(t))
+	pd, v := createPublishedVersion(t, s)
+	e, err := s.CreateExecution(CreateExecutionParams{ProcessDefinitionID: pd.ID, ProcessVersionID: v.ID, CreatedBy: "bob"})
+	if err != nil {
+		t.Fatalf("CreateExecution() error = %v", err)
+	}
+
+	// pending = noch nicht abgeschlossen -> abgelehnt.
+	if err := s.DeleteDefinition(pd.ID); !errors.Is(err, ErrInUse) {
+		t.Fatalf("DeleteDefinition() with pending execution: error = %v, want ErrInUse", err)
+	}
+	if _, err := s.GetDefinition(pd.ID); err != nil {
+		t.Fatalf("definition must survive a rejected delete: %v", err)
+	}
+
+	// Ausführung beenden -> Löschen räumt Definition, Versionen, Historie.
+	if _, err := s.db.Exec(`UPDATE process_executions SET status = 'completed' WHERE id = $1`, e.ID); err != nil {
+		t.Fatalf("set completed: %v", err)
+	}
+	if err := s.DeleteDefinition(pd.ID); err != nil {
+		t.Fatalf("DeleteDefinition() error = %v", err)
+	}
+	if _, err := s.GetDefinition(pd.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetDefinition() after delete: error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetExecution(e.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetExecution() after delete: error = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteDefinition(pd.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second DeleteDefinition() error = %v, want ErrNotFound", err)
 	}
 }

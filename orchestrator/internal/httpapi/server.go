@@ -188,6 +188,7 @@ type ProcessStoreService interface {
 	GetDefinition(id string) (process.ProcessDefinition, error)
 	ListDefinitions() ([]process.ProcessDefinition, error)
 	UpdateDefinitionMeta(id, name, description, category string) (process.ProcessDefinition, error)
+	DeleteDefinition(id string) error
 
 	CreateVersion(processDefinitionID string, definition process.Definition, createdBy string) (process.ProcessVersion, error)
 	GetVersion(id string) (process.ProcessVersion, error)
@@ -575,6 +576,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("POST /api/v1/process-definitions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessDefinition(processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}", g.requireAuth(handleGetProcessDefinition(processStore)))
 	mux.HandleFunc("PUT /api/v1/process-definitions/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleUpdateProcessDefinition(processStore)))
+	mux.HandleFunc("DELETE /api/v1/process-definitions/{id}", g.requireVerbGlobal(authz.VerbConfigure, handleDeleteProcessDefinition(processStore, options.domainAudit)))
 	mux.HandleFunc("GET /api/v1/process-definitions/{id}/versions", g.requireAuth(handleListProcessVersions(processStore)))
 	mux.HandleFunc("POST /api/v1/process-definitions/{id}/versions", g.requireVerbGlobal(authz.VerbConfigure, handleCreateProcessVersion(processStore)))
 	mux.HandleFunc("GET /api/v1/process-versions/{id}", g.requireAuth(handleGetProcessVersion(processStore)))
