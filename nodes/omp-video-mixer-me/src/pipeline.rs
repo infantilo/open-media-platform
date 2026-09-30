@@ -123,8 +123,8 @@ use tokio::sync::oneshot;
 /// 2026-07-17: Workflow-Auflösungs-Setting) — `Config::width`/`height`
 /// tragen den tatsächlich verwendeten Wert, diese Konstanten sind nur
 /// noch der Default dafür, keine feste Pipeline-Vorgabe mehr.
-pub const DEFAULT_WIDTH: u32 = 640;
-pub const DEFAULT_HEIGHT: u32 = 480;
+pub const DEFAULT_WIDTH: u32 = 1280;
+pub const DEFAULT_HEIGHT: u32 = 720;
 pub const FRAMERATE_NUMERATOR: u32 = 25;
 pub const FRAMERATE_DENOMINATOR: u32 = 1;
 

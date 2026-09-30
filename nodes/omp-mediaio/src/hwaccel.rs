@@ -129,7 +129,10 @@ pub fn build_convert_scale(
         Ok((caps_el.clone(), vec![postproc, caps_el]))
     } else {
         let convert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert ({name_suffix}): {e}"))?;
-        let scale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale ({name_suffix}): {e}"))?;
+        // `add-borders`: Seitenverhältnis der Quelle erhalten (Letterbox/
+        // Pillarbox) statt sie auf das Zielformat zu stauchen (Nutzerfund
+        // 2026-09-30: 16:9-Player über 4:3-Mixer-PGM verzerrt).
+        let scale = gst::ElementFactory::make("videoscale").property("add-borders", true).build().map_err(|e| format!("videoscale ({name_suffix}): {e}"))?;
         pipeline
             .add(&convert)
             .and_then(|()| pipeline.add(&scale))
