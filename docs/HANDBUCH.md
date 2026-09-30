@@ -4,20 +4,67 @@ Kurzanleitung für den lokalen Dev-Betrieb des Orchestrators. Architektur-
 Hintergrund steht in `ARCHITECTURE.md`, der Implementierungsplan in
 `UMSETZUNG.md` — hier geht es nur um „wie starte ich das Ding".
 
-## 1. Voraussetzungen
+## 1. Voraussetzungen und Preflight-Prüfung
 
 - **Go** (aktuelle Version, siehe `docs/decisions.md` 2026-07-07)
 - **Deno** (für das UI-Bundle, kein Node/npm nötig)
 - **Podman** (rootless; startet NATS + NMOS-Registry + PostgreSQL als Container)
+- Standardwerkzeuge: `make`, `curl`, `openssl`, `git`
+- Empfohlen: mindestens 4 GB RAM (8 GB und mehr für Medien-Nodes), 10 GB
+  freier Plattenplatz, Linux (x86_64 getestet)
 
 Nur für die Node-Contract-Demo-Services (`omp-source`/`-viewer`/
 `-switcher`, `nodes/`) zusätzlich nötig, **nicht** für den Orchestrator
 selbst:
-- **Rust/Cargo** (`make nodes` baut sie)
+- **Rust/Cargo** (`make nodes` baut sie; Edition 2024, mindestens 1.85)
+- **GStreamer** (Entwicklungsbibliotheken + die Plugin-Pakete
+  base/good/bad/ugly)
 - **MXL-Bibliothek** (`deploy/dev/install-mxl.sh`, siehe dessen
   Kopfkommentar) — ohne sie bauen die Nodes zwar (MXL wird per
   `libloading`/`dlopen` erst zur Laufzeit geladen), lassen sich aber nicht
   starten (`libmxl.so … cannot open shared object file`).
+
+### 1.1 Preflight: `make preflight`
+
+Vor der Erstinstallation (und bei jedem Problem) prüft
+
+```sh
+make preflight                                    # alles
+make preflight PREFLIGHT_ARGS="--for=start"       # nur, was make start braucht
+make preflight PREFLIGHT_ARGS="--strict"          # Warnungen wie Fehler behandeln
+make preflight PREFLIGHT_ARGS="--json"            # maschinenlesbar (eine Zeile je Prüfung)
+```
+
+(bzw. direkt `./deploy/dev/preflight.sh`), ob der Rechner alles hat. Jede
+Zeile ist ✔ in Ordnung, `!` Hinweis oder ✘ Fehler; zu jedem Problem steht
+darunter der **Befehl zur Behebung** für die erkannte Distribution
+(apt, dnf, pacman, zypper). Das Skript ändert nichts am System und braucht
+kein `sudo`. Geprüft wird:
+
+- **System:** Linux, Architektur, Arbeitsspeicher, CPU-Kerne, Plattenplatz.
+- **Werkzeuge:** `make`, `curl`, `openssl`, `git`, Go (Version gegen
+  `go.mod`), Deno.
+- **Container:** Podman vorhanden und funktionsfähig (`podman info`),
+  `subuid`/`subgid` für rootless, die benötigten Images (NATS, NMOS-Registry,
+  etcd — aus dem Makefile abgeleitet) und das lokal gebaute Postgres-Image;
+  fehlen Images, wird geprüft, ob die Registries erreichbar sind (sonst
+  Fehler mit Hinweis auf `podman save`/`load`).
+- **Ports:** 8000, 8091, 8010/8011, 4222–4224, 8222, 5432/5442/5452, 8008,
+  2379 — belegt ein **fremder** Prozess einen dieser Ports, steht sein Name
+  dabei. Belegung durch einen bereits laufenden OpenMediaPlatform-Stack ist
+  kein Fehler.
+- **Konfiguration:** Schreibrechte in `.run/` und `bin/`, Storage-Schlüssel,
+  Signaturschlüssel fürs System-Update (Hinweis, kein Fehler).
+- **Medien-Nodes** (nicht bei `--for=start`): Rust-Version, GStreamer-
+  Entwicklungsbibliotheken, GStreamer-Kernelemente (Mischer, Multiviewer,
+  MXF-Player …) und optionale (WebRTC, x264, SRT, ST 2110, Matroska),
+  gebaute MXL-Bibliothek, `/dev/shm`-Größe, ffmpeg/ffprobe.
+
+Exit-Code 0 = kein Fehler, 1 = mindestens ein Fehler. `make start` ruft
+die Kurzform (`--for=start --quiet`) automatisch auf und bricht bei
+Fehlern **vor** dem ersten Schritt ab; mit `OMP_SKIP_PREFLIGHT=1 make start`
+lässt sich die Prüfung überspringen (beim System-Update ist sie ohnehin
+aus).
 
 ## 2. Schnellstart
 
@@ -502,6 +549,9 @@ verlangte 1-Stunden-Verifikation ohne monotonen Anstieg ist noch
 offen (dokumentierte Folgearbeit, sprengt eine einzelne Sitzung).
 
 ## 8. Troubleshooting
+
+**Bei jedem Problem zuerst `make preflight`** (Abschnitt 1.1): es prüft Werkzeuge,
+Podman, Images, Ports und Rechte und nennt den Befehl zur Behebung.
 
 **Login-Formular erscheint, aber keine Zugangsdaten bekannt** — s.
 Abschnitt 3 oben (Standardnutzer `admin`/`adminpass123`, bzw.

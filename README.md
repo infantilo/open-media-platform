@@ -81,10 +81,13 @@ project](#related-project)
 ## Quickstart
 
 ```sh
-make start   # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
+make preflight   # first install: checks tools, Podman, images, ports — and tells you how to fix each problem
+make start       # NATS + NMOS registry + orchestrator, see docs/HANDBUCH.md
 ```
 
-Then open http://localhost:8000. Details/troubleshooting:
+`make start` runs the short form of the preflight check itself and stops
+with a clear message (cause + fix command for your distribution) instead
+of failing minutes later. Then open http://localhost:8000. Details/troubleshooting:
 [`docs/HANDBUCH.md`](docs/HANDBUCH.md). User guide for the UI (with
 screenshots): [`docs/BENUTZERHANDBUCH.md`](docs/BENUTZERHANDBUCH.md).
 (Both docs are in German — this README is the only English-language

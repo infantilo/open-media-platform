@@ -1,4 +1,4 @@
-.PHONY: update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
+.PHONY: preflight doctor update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
 
 GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update
 
@@ -34,6 +34,14 @@ ui:
 # suggeriert — dieser Vergleich war nicht fair, s. Nachtrag 163.
 nodes:
 	cd nodes && cargo build --workspace --bins
+
+# Prüft, ob dieser Rechner alles hat, was OpenMediaPlatform braucht
+# (Werkzeuge, Podman, Container-Images, Ports, GStreamer/MXL für die Medien-
+# Nodes) und nennt zu jedem Problem den Befehl zur Behebung. `make start`
+# ruft die Kurzform selbst auf. Optionen: PREFLIGHT_ARGS="--for=start|nodes
+# --quiet --strict --json".
+preflight doctor:
+	@./deploy/dev/preflight.sh $(PREFLIGHT_ARGS)
 
 # ---- System-Update-Pakete (docs/ENTWURF-SYSTEM-UPDATE.md) ----------------
 # `make update-keygen` einmalig: erzeugt das Ed25519-Schlüsselpaar. Den
@@ -93,6 +101,7 @@ contract:
 DEV_POSTGRES_URL := postgres://omp:omp@localhost:5432,localhost:5442,localhost:5452/omp?sslmode=disable&target_session_attrs=read-write
 
 test:
+	./deploy/dev/preflight_test.sh
 	$(foreach m,$(GO_MODULES),cd $(m) && OMP_POSTGRES_URL="$(DEV_POSTGRES_URL)" go test ./... && cd $(CURDIR) &&) true
 	cd nodes && cargo test --workspace
 

@@ -16,6 +16,19 @@ BIN="$ROOT_DIR/bin/omp-orchestrator"
 
 mkdir -p "$RUN_DIR" "$ROOT_DIR/bin"
 
+# Preflight: prüft vor dem Start, ob Werkzeuge, Podman, Images, Ports und
+# Rechte passen — und nennt bei Problemen Ursache + Abhilfe, statt erst nach
+# Minuten mit einer kryptischen Meldung abzubrechen. Nur Fehler brechen ab
+# (Warnungen werden angezeigt). Übersprungen bei OMP_SKIP_PREFLIGHT=1 und
+# beim System-Update (OMP_SKIP_BUILD=1, dort ist alles bereits geprüft).
+if [ "${OMP_SKIP_PREFLIGHT:-}" != "1" ] && [ "${OMP_SKIP_BUILD:-}" != "1" ]; then
+  if ! "$ROOT_DIR/deploy/dev/preflight.sh" --for=start --quiet; then
+    echo "" >&2
+    echo "Start abgebrochen. Beheben und erneut 'make start' — oder mit OMP_SKIP_PREFLIGHT=1 make start die Prüfung überspringen." >&2
+    exit 1
+  fi
+fi
+
 # mxl.env (LD_LIBRARY_PATH für libmxl.so, MXL_INFO_BIN, ...) muss VOR dem
 # Orchestrator-Start gesourct sein — jeder von ihm gestartete Node-Prozess
 # erbt sein Environment (internal/launcher/launcher.go buildEnv nutzt
