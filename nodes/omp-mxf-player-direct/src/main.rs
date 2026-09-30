@@ -60,11 +60,39 @@ fn probe_duration_ms(path: &Path) -> Option<u64> {
     rx.recv_timeout(std::time::Duration::from_secs(8)).ok().flatten()
 }
 
+/// Laufzeitzustand einer Ausgangsgruppe: die Gruppe selbst plus die IDs
+/// ihres NMOS-Senders und MXL-Flows (nötig zum späteren Abmelden).
+#[derive(Clone)]
+struct GroupRt {
+    group: presets::ProgramGroup,
+    sender_id: String,
+    flow_id: String,
+}
+
+/// Änderungen an der NMOS-Senderliste, vom synchronen `invoke` an den
+/// async Worker in `main()` (s. omp-viewer `ViewerCommand` — `invoke`
+/// läuft auf einem tiny_http-Thread, `add_sender` ist async).
+enum SenderChange {
+    Add { sender_id: String, flow_id: String, label: String, channels: u32 },
+    Remove { sender_id: String },
+}
+
+struct LiveState {
+    groups: Vec<GroupRt>,
+    presets: Vec<presets::AudioPreset>,
+}
+
 struct PlayerStore {
     pipeline: PipelineHandle,
     media_dir: PathBuf,
-    shuffle_presets: Vec<presets::AudioPreset>,
-    groups: Vec<presets::ProgramGroup>,
+    live: std::sync::Mutex<LiveState>,
+    state_path: PathBuf,
+    node_label: String,
+    sender_changes: tokio::sync::mpsc::UnboundedSender<SenderChange>,
+}
+
+fn sender_label(node_label: &str, group: &presets::ProgramGroup) -> String {
+    format!("{node_label} {}", group.label)
 }
 
 impl ParamStore for PlayerStore {
@@ -108,6 +136,13 @@ impl ParamStore for PlayerStore {
                 name: "setPreset".to_string(),
                 args: vec![MethodArg { name: "audioPreset".to_string(), kind: ParamType::String }],
             },
+            // Ganzes Dokument {groups:[{id,label,channels}],presets:[{id,label,
+            // routes}]} als JSON-String ersetzen (expliziter Save, kein
+            // Patch pro Feld) — legt Gruppen/Sender an bzw. löscht sie live.
+            MethodSpec {
+                name: "applySettings".to_string(),
+                args: vec![MethodArg { name: "settings".to_string(), kind: ParamType::String }],
+            },
         ];
 
         Descriptor { parameters, methods, latency: None }
@@ -140,10 +175,19 @@ impl ParamStore for PlayerStore {
                 Some(serde_json::json!(files))
             }
             "programGroups" => Some(serde_json::json!(
-                self.groups.iter().map(|g| serde_json::json!({"id": g.id, "label": g.label, "channels": g.channels})).collect::<Vec<_>>()
+                self.live
+                    .lock()
+                    .expect("lock poisoned")
+                    .groups
+                    .iter()
+                    .map(|g| serde_json::json!({"id": g.group.id, "label": g.group.label, "channels": g.group.channels}))
+                    .collect::<Vec<_>>()
             )),
             "shufflePresets" => Some(serde_json::json!(
-                self.shuffle_presets
+                self.live
+                    .lock()
+                    .expect("lock poisoned")
+                    .presets
                     .iter()
                     .map(|p| serde_json::json!({"id": p.id, "label": p.label, "routes": p.routes}))
                     .collect::<Vec<_>>()
@@ -196,8 +240,71 @@ impl ParamStore for PlayerStore {
             }
             "setPreset" => {
                 let preset_id = args.get("audioPreset").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
-                let preset = presets::find_preset(&self.shuffle_presets, preset_id).cloned().ok_or(InvokeError::Unknown)?;
+                let preset = presets::find_preset(&self.live.lock().expect("lock poisoned").presets, preset_id)
+                    .cloned()
+                    .ok_or(InvokeError::Unknown)?;
                 self.pipeline.set_preset(preset);
+                Ok(())
+            }
+            "applySettings" => {
+                let raw = args.get("settings").and_then(Value::as_str).ok_or(InvokeError::Unknown)?;
+                let new: presets::Settings =
+                    serde_json::from_str(raw).map_err(|e| InvokeError::Message(format!("ungültiges JSON: {e}")))?;
+                presets::validate(&new).map_err(InvokeError::Message)?;
+                let mut live = self.live.lock().expect("lock poisoned");
+
+                // Diff: unveränderte Gruppen (id+label+channels) behalten
+                // Sender/Flow; geänderte/neue bekommen neue IDs, entfernte
+                // bzw. geänderte werden abgemeldet.
+                let mut next: Vec<GroupRt> = Vec::with_capacity(new.groups.len());
+                let mut changes = Vec::new();
+                for g in &new.groups {
+                    let kept = live.groups.iter().find(|o| {
+                        o.group.id == g.id && o.group.label == g.label && o.group.channels == g.channels
+                    });
+                    match kept {
+                        Some(o) => next.push(o.clone()),
+                        None => {
+                            let rt = GroupRt {
+                                group: g.clone(),
+                                sender_id: omp_node_sdk::idgen::new_v4(),
+                                flow_id: omp_node_sdk::idgen::new_v4(),
+                            };
+                            changes.push(SenderChange::Add {
+                                sender_id: rt.sender_id.clone(),
+                                flow_id: rt.flow_id.clone(),
+                                label: sender_label(&self.node_label, g),
+                                channels: g.channels,
+                            });
+                            next.push(rt);
+                        }
+                    }
+                }
+                for old in &live.groups {
+                    if !next.iter().any(|n| n.sender_id == old.sender_id) {
+                        changes.push(SenderChange::Remove { sender_id: old.sender_id.clone() });
+                    }
+                }
+
+                presets::save_settings(&self.state_path, &new).map_err(|e| InvokeError::Message(format!("speichern: {e}")))?;
+
+                let current = self.pipeline.current_preset_id();
+                let preset = presets::find_preset(&new.presets, &current)
+                    .or_else(|| presets::find_preset(&new.presets, "stereo"))
+                    .or_else(|| new.presets.first())
+                    .cloned()
+                    .ok_or(InvokeError::Unknown)?;
+                self.pipeline.set_config(
+                    next.iter().map(|r| r.group.clone()).collect(),
+                    next.iter().map(|r| r.flow_id.clone()).collect(),
+                    preset,
+                );
+                live.groups = next;
+                live.presets = new.presets;
+                drop(live);
+                for c in changes {
+                    let _ = self.sender_changes.send(c);
+                }
                 Ok(())
             }
             _ => Err(InvokeError::Unknown),
@@ -255,7 +362,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let file_path = resolve_media_path(&media_dir, &file_arg)?;
     let file_path_str = file_path.to_string_lossy().to_string();
 
-    let settings = presets::default_settings();
+    let state_path = presets::state_path(instance_id.as_deref().unwrap_or("default"));
+    let settings = presets::load_settings(&state_path);
     let preset = presets::find_preset(&settings.presets, "stereo")
         .or_else(|| settings.presets.first())
         .cloned()
@@ -263,6 +371,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let video_flow_id = omp_node_sdk::idgen::new_v4();
     let group_flow_ids: Vec<String> = settings.groups.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
+    let group_sender_ids: Vec<String> = settings.groups.iter().map(|_| omp_node_sdk::idgen::new_v4()).collect();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<pipeline::Event>();
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
@@ -313,8 +422,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         label: Some(format!("{label} Programm")),
         ..Default::default()
     });
-    for (group, flow_id) in settings.groups.iter().zip(group_flow_ids.into_iter()) {
+    for ((group, flow_id), sender_id) in settings.groups.iter().zip(group_flow_ids.iter().cloned()).zip(group_sender_ids.iter().cloned()) {
         senders.push(SenderSpec {
+            id: Some(sender_id),
             transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
             flow: Some(omp_node_sdk::node::FlowSpec::Audio {
                 id: Some(flow_id),
@@ -324,16 +434,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 bit_depth: 32,
                 source_id: None,
             }),
-            label: Some(format!("{label} {}", group.label)),
+            label: Some(sender_label(&label, group)),
             ..Default::default()
         });
     }
 
+    let (sender_changes_tx, mut sender_changes_rx) = tokio::sync::mpsc::unbounded_channel::<SenderChange>();
+    let live_groups: Vec<GroupRt> = settings
+        .groups
+        .iter()
+        .zip(group_flow_ids.iter())
+        .zip(group_sender_ids.iter())
+        .map(|((g, f), s)| GroupRt { group: g.clone(), sender_id: s.clone(), flow_id: f.clone() })
+        .collect();
     let store: std::sync::Arc<dyn ParamStore> = std::sync::Arc::new(PlayerStore {
         pipeline: pipeline_handle.clone(),
         media_dir,
-        shuffle_presets: settings.presets,
-        groups: settings.groups,
+        live: std::sync::Mutex::new(LiveState { groups: live_groups, presets: settings.presets }),
+        state_path,
+        node_label: label.clone(),
+        sender_changes: sender_changes_tx,
     });
 
     let media_ready_pipeline = pipeline_handle.clone();
@@ -353,6 +473,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     )
     .await?;
 
+    let sender_worker = async {
+        while let Some(change) = sender_changes_rx.recv().await {
+            let result = match change {
+                SenderChange::Add { sender_id, flow_id, label, channels } => handle
+                    .add_sender(SenderSpec {
+                        id: Some(sender_id),
+                        transport: Some(omp_node_sdk::is04::TRANSPORT_MXL.to_string()),
+                        flow: Some(omp_node_sdk::node::FlowSpec::Audio {
+                            id: Some(flow_id),
+                            sample_rate_numerator: pipeline::SAMPLE_RATE,
+                            channel_count: channels,
+                            media_type: "audio/float32".to_string(),
+                            bit_depth: 32,
+                            source_id: None,
+                        }),
+                        label: Some(label),
+                        ..Default::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                SenderChange::Remove { sender_id } => handle.remove_sender(&sender_id).await,
+            };
+            if let Err(e) = result {
+                eprintln!("omp-mxf-player-direct: Sender-Änderung fehlgeschlagen: {e}");
+                handle.publish_alert(format!("Sender-Änderung fehlgeschlagen: {e}")).await;
+            }
+        }
+    };
+
     let events = async {
         while let Some(event) = rx.recv().await {
             match event {
@@ -371,6 +520,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         _ = events => {
             eprintln!("omp-mxf-player-direct: pipeline thread ended");
         }
+        _ = sender_worker => {}
     }
 
     // Kein eigener Teardown-Code hier: `pipeline::run()` läuft in einer

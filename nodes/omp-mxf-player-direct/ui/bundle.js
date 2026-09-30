@@ -53,6 +53,30 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
       .reference-controls { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
       .reference-controls select { max-width: 260px; }
       .empty-routes { color: #666; font-style: italic; font-size: 11px; }
+      .editor h4 { margin: 12px 0 4px; color: #9aa0a6; font-weight: normal; }
+      .editor input[type="text"], .editor input[type="number"] {
+        background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 3px; padding: 3px 6px;
+      }
+      .editor input[type="number"] { width: 56px; }
+      .editor button {
+        cursor: pointer; padding: 3px 9px; border-radius: 3px; border: 1px solid #555; background: #222; color: #eee;
+      }
+      .editor button.danger { border-color: #a33; }
+      .editor button.save { border-color: #4caf50; background: #2e7d32; font-weight: bold; }
+      .editor button:disabled { opacity: 0.4; cursor: default; }
+      .editor .bar { display: flex; gap: 6px; align-items: center; margin: 8px 0; flex-wrap: wrap; }
+      .editor .dirty { color: #f0b429; }
+      .editor .err { color: #ff6b6b; }
+      .xp { border-collapse: collapse; margin: 6px 0; font-size: 11px; }
+      .xp th, .xp td { border: 1px solid #333; padding: 0; text-align: center; }
+      .xp th { color: #9aa0a6; font-weight: normal; padding: 2px 6px; }
+      .xp th.grp { border-bottom: 2px solid #555; }
+      .xp td.trk { padding: 2px 8px; color: #9aa0a6; text-align: left; white-space: nowrap; }
+      .xp td.cell { width: 26px; height: 22px; cursor: pointer; }
+      .xp td.cell:hover { background: #2a2a2a; }
+      .xp td.cell.on { background: #2e7d32; }
+      .xp td.cell.on::after { content: "●"; color: #eee; }
+      .xp td.gsep, .xp th.gsep { border-left: 2px solid #555; }
     `;
 
     const statusRow = document.createElement("div");
@@ -129,27 +153,17 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     presetApplyBtn.addEventListener("click", () => call("setPreset", { audioPreset: presetSelect.value }).then(poll));
     presetRow.append(presetLabel, presetSelect, presetApplyBtn);
 
-    // Referenz-Panel (gleiches Muster wie omp-mxf-player/ui/bundle.js) —
-    // ein Preset-Name wie "stereo-dolbye-hoerfilm" wäre für den
-    // Bedienenden sonst reine Rateerei.
+    // Editor (Nutzerwunsch 2026-09-30): Ausgangsgruppen (= NMOS-Audiosender)
+    // und Shuffle-Presets dynamisch anlegen/löschen; Presets per
+    // Crosspoint-Matrix (Zeilen = MXF-Tonspuren, Spalten = Gruppenkanäle).
+    // Expliziter Speichern-Knopf (kein PUT pro Klick) — "Speichern" baut die
+    // Pipeline neu auf und meldet Sender live an/ab.
     const reference = document.createElement("details");
-    reference.className = "reference";
+    reference.className = "reference editor";
     const referenceSummary = document.createElement("summary");
-    referenceSummary.textContent = "Programmgruppen & Shuffle-Presets";
-    const groupsTable = document.createElement("table");
-    groupsTable.className = "groups-table";
-    const referenceControls = document.createElement("div");
-    referenceControls.className = "reference-controls";
-    const referenceLabel = document.createElement("label");
-    referenceLabel.textContent = "Routing anzeigen für:";
-    const referencePresetSelect = document.createElement("select");
-    referenceControls.append(referenceLabel, referencePresetSelect);
-    const routesTable = document.createElement("table");
-    routesTable.className = "routes-table";
-    const routesEmpty = document.createElement("div");
-    routesEmpty.className = "empty-routes";
-    routesEmpty.textContent = "Kein Preset ausgewählt.";
-    reference.append(referenceSummary, groupsTable, referenceControls, routesTable, routesEmpty);
+    referenceSummary.textContent = "Ausgangsgruppen & Shuffle-Presets bearbeiten";
+    const editorBody = document.createElement("div");
+    reference.append(referenceSummary, editorBody);
 
     shadow.append(style, statusRow, transportRow, scrubRow, loadRow, presetRow, reference);
 
@@ -176,56 +190,170 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
     let groups = [];
     let presets = [];
 
-    const renderGroupsTable = () => {
-      groupsTable.innerHTML = "";
-      const headerRow = document.createElement("tr");
-      for (const h of ["Programmgruppe", "Kanäle"]) {
-        const th = document.createElement("th");
-        th.textContent = h;
-        headerRow.append(th);
-      }
-      groupsTable.append(headerRow);
-      for (const g of groups) {
-        const row = document.createElement("tr");
-        const labelCell = document.createElement("td");
-        labelCell.textContent = g.label;
-        const channelsCell = document.createElement("td");
-        channelsCell.textContent = g.channels;
-        row.append(labelCell, channelsCell);
-        groupsTable.append(row);
-      }
+    // --- Editor-Entwurf (Kopie, unabhängig vom Poll) ---
+    let draft = null; // { groups, presets }
+    let dirty = false;
+    let selectedPresetId = null;
+    let errorText = "";
+    let shownTracks = 8; // Zeilenzahl der Matrix (Standard: 8 MXF-Tonspuren)
+
+    const clone = (x) => JSON.parse(JSON.stringify(x));
+    const slug = (text, taken) => {
+      const base = (text || "x").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
+      let id = base;
+      for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
+      return id;
+    };
+    const markDirty = () => { dirty = true; renderEditor(); };
+
+    const el = (tag, props = {}, ...children) => {
+      const node = Object.assign(document.createElement(tag), props);
+      node.append(...children);
+      return node;
     };
 
-    const renderRoutesTable = () => {
-      const presetId = referencePresetSelect.value;
-      const preset = presets.find((p) => p.id === presetId);
-      routesTable.innerHTML = "";
-      if (!preset || !preset.routes || preset.routes.length === 0) {
-        routesEmpty.style.display = "";
+    const trackCount = () => {
+      let max = shownTracks;
+      for (const p of draft.presets) for (const r of p.routes) max = Math.max(max, r.srcTrack);
+      return max;
+    };
+
+    const renderEditor = () => {
+      if (!draft) return;
+      editorBody.replaceChildren();
+
+      // Gruppen
+      editorBody.append(el("h4", { textContent: "Ausgangsgruppen (je ein Audio-Sender)" }));
+      const gt = el("table", { className: "groups-table" });
+      gt.append(el("tr", {}, ...["Name", "Kanäle", ""].map((h) => el("th", { textContent: h }))));
+      draft.groups.forEach((g, gi) => {
+        const nameIn = el("input", { type: "text", value: g.label });
+        nameIn.addEventListener("input", () => { g.label = nameIn.value; dirty = true; refreshBar(); });
+        nameIn.addEventListener("change", renderEditor);
+        const chIn = el("input", { type: "number", min: 1, max: 64, value: g.channels });
+        chIn.addEventListener("change", () => {
+          g.channels = Math.min(64, Math.max(1, Number(chIn.value) || 1));
+          for (const p of draft.presets) p.routes = p.routes.filter((r) => r.group !== g.id || r.groupChannel < g.channels);
+          markDirty();
+        });
+        const del = el("button", { className: "danger", textContent: "Löschen", disabled: draft.groups.length <= 1 });
+        del.addEventListener("click", () => {
+          draft.groups.splice(gi, 1);
+          for (const p of draft.presets) p.routes = p.routes.filter((r) => r.group !== g.id);
+          markDirty();
+        });
+        gt.append(el("tr", {}, el("td", {}, nameIn), el("td", {}, chIn), el("td", {}, del)));
+      });
+      editorBody.append(gt);
+      const addGroup = el("button", { textContent: "+ Gruppe" });
+      addGroup.addEventListener("click", () => {
+        const taken = new Set(draft.groups.map((g) => g.id));
+        const label = `Gruppe ${draft.groups.length + 1}`;
+        draft.groups.push({ id: slug(label, taken), label, channels: 2 });
+        markDirty();
+      });
+      editorBody.append(addGroup);
+
+      // Presets
+      editorBody.append(el("h4", { textContent: "Shuffle-Presets (Crosspoints)" }));
+      if (!draft.presets.some((p) => p.id === selectedPresetId)) selectedPresetId = draft.presets[0]?.id ?? null;
+      const preset = draft.presets.find((p) => p.id === selectedPresetId);
+
+      const presetSel = el("select");
+      for (const p of draft.presets) presetSel.append(el("option", { value: p.id, textContent: p.label }));
+      presetSel.value = selectedPresetId || "";
+      presetSel.addEventListener("change", () => { selectedPresetId = presetSel.value; renderEditor(); });
+      const nameIn = el("input", { type: "text", value: preset ? preset.label : "" });
+      nameIn.addEventListener("input", () => { if (preset) { preset.label = nameIn.value; dirty = true; refreshBar(); } });
+      nameIn.addEventListener("change", renderEditor);
+      const newBtn = el("button", { textContent: "+ Preset" });
+      newBtn.addEventListener("click", () => {
+        const taken = new Set(draft.presets.map((p) => p.id));
+        const label = `Preset ${draft.presets.length + 1}`;
+        const id = slug(label, taken);
+        draft.presets.push({ id, label, routes: [] });
+        selectedPresetId = id;
+        markDirty();
+      });
+      const dupBtn = el("button", { textContent: "Duplizieren", disabled: !preset });
+      dupBtn.addEventListener("click", () => {
+        const taken = new Set(draft.presets.map((p) => p.id));
+        const label = `${preset.label} Kopie`;
+        const id = slug(label, taken);
+        draft.presets.push({ id, label, routes: clone(preset.routes) });
+        selectedPresetId = id;
+        markDirty();
+      });
+      const delBtn = el("button", { className: "danger", textContent: "Löschen", disabled: !preset || draft.presets.length <= 1 });
+      delBtn.addEventListener("click", () => {
+        draft.presets = draft.presets.filter((p) => p.id !== selectedPresetId);
+        markDirty();
+      });
+      editorBody.append(el("div", { className: "bar" }, presetSel, nameIn, newBtn, dupBtn, delBtn));
+
+      if (preset) {
+        const tracks = trackCount();
+        const xp = el("table", { className: "xp" });
+        const head1 = el("tr", {}, el("th", { textContent: "Tonspur ↓ / Ausgang →" }));
+        const head2 = el("tr", {}, el("th"));
+        for (const g of draft.groups) {
+          head1.append(el("th", { className: "grp gsep", colSpan: g.channels, textContent: g.label }));
+          for (let c = 0; c < g.channels; c++) head2.append(el("th", { className: c === 0 ? "gsep" : "", textContent: String(c + 1) }));
+        }
+        xp.append(head1, head2);
+        for (let t = 1; t <= tracks; t++) {
+          const row = el("tr", {}, el("td", { className: "trk", textContent: `Tonspur ${t}` }));
+          for (const g of draft.groups) {
+            for (let c = 0; c < g.channels; c++) {
+              const idx = preset.routes.findIndex((r) => r.srcTrack === t && r.group === g.id && r.groupChannel === c);
+              const cell = el("td", { className: `cell${idx >= 0 ? " on" : ""}${c === 0 ? " gsep" : ""}` });
+              cell.title = `Tonspur ${t} → ${g.label} ${c + 1}`;
+              cell.addEventListener("click", () => {
+                if (idx >= 0) preset.routes.splice(idx, 1);
+                else preset.routes.push({ srcTrack: t, group: g.id, groupChannel: c });
+                markDirty();
+              });
+              row.append(cell);
+            }
+          }
+          xp.append(row);
+        }
+        editorBody.append(xp);
+        const moreTracks = el("button", { textContent: "+ Tonspur-Zeile" });
+        moreTracks.addEventListener("click", () => { shownTracks = Math.min(trackCount() + 1, 64); renderEditor(); });
+        editorBody.append(moreTracks);
+      }
+
+      const saveBtn = el("button", { className: "save", textContent: "Speichern & anwenden", disabled: !dirty });
+      saveBtn.addEventListener("click", save);
+      const revertBtn = el("button", { textContent: "Verwerfen", disabled: !dirty });
+      revertBtn.addEventListener("click", () => { dirty = false; errorText = ""; draft = clone({ groups, presets }); renderEditor(); });
+      const status = el("span", { className: "dirtystate" });
+      status.id = "editor-state";
+      editorBody.append(el("div", { className: "bar" }, saveBtn, revertBtn, status));
+      refreshBar();
+    };
+
+    const refreshBar = () => {
+      const st = editorBody.querySelector("#editor-state");
+      if (!st) return;
+      st.className = errorText ? "err" : dirty ? "dirty" : "";
+      st.textContent = errorText || (dirty ? "Ungespeicherte Änderungen" : "");
+    };
+
+    const save = async () => {
+      errorText = "";
+      const res = await call("applySettings", { settings: JSON.stringify({ groups: draft.groups, presets: draft.presets }) });
+      if (!res.ok) {
+        errorText = `Speichern fehlgeschlagen: ${(await res.text()).trim()}`;
+        renderEditor();
         return;
       }
-      routesEmpty.style.display = "none";
-      const headerRow = document.createElement("tr");
-      for (const h of ["MXF-Tonspur", "→ Programmgruppe", "Kanal"]) {
-        const th = document.createElement("th");
-        th.textContent = h;
-        headerRow.append(th);
-      }
-      routesTable.append(headerRow);
-      for (const route of preset.routes) {
-        const group = groups.find((g) => g.id === route.group);
-        const row = document.createElement("tr");
-        const trackCell = document.createElement("td");
-        trackCell.textContent = `Tonspur ${route.srcTrack}`;
-        const groupCell = document.createElement("td");
-        groupCell.textContent = group ? group.label : route.group;
-        const channelCell = document.createElement("td");
-        channelCell.textContent = route.groupChannel;
-        row.append(trackCell, groupCell, channelCell);
-        routesTable.append(row);
-      }
+      dirty = false;
+      draft = null;
+      await poll();
     };
-    referencePresetSelect.addEventListener("change", renderRoutesTable);
 
     // Nutzerfund 2026-08-20 (omp-mxf-player, identisches Gotcha hier):
     // ein offenes <select> klappt sofort zu, sobald seine Optionen neu
@@ -271,12 +399,15 @@ class OmpMxfPlayerDirectPanel extends HTMLElement {
 
       fillPresetOptions(presetSelect);
       if (shadow.activeElement !== presetSelect) presetSelect.value = audioPreset || "";
-      const previousReferenceSelection = referencePresetSelect.value;
-      fillPresetOptions(referencePresetSelect);
-      if (!referencePresetSelect.value && presets.length > 0) referencePresetSelect.value = presets[0].id;
-      if (presets.some((p) => p.id === previousReferenceSelection)) referencePresetSelect.value = previousReferenceSelection;
-      renderGroupsTable();
-      renderRoutesTable();
+      // Entwurf nur aus dem Poll übernehmen, solange nichts ungespeichert
+      // ist (sonst würde der Poll Änderungen des Bedieners überschreiben).
+      if (!dirty && !editorBody.contains(shadow.activeElement)) {
+        const fresh = clone({ groups, presets });
+        if (!draft || JSON.stringify(draft) !== JSON.stringify(fresh)) {
+          draft = fresh;
+          renderEditor();
+        }
+      }
 
       const isPlaying = status === "playing";
       statusEl.textContent = isPlaying ? "PLAYING" : "GESTOPPT";

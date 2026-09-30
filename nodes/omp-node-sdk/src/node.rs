@@ -208,6 +208,15 @@ impl MediaReadySource {
 struct RegisteredReceivers {
     device: Device,
     receivers: Vec<Receiver>,
+    /// Per [`NodeHandle::add_sender`] nach `start()` hinzugefügte Sender
+    /// samt zugehöriger Source/Flow (2026-09-30).
+    extra_senders: Vec<ExtraSender>,
+}
+
+struct ExtraSender {
+    sender: Sender,
+    source: Option<Source>,
+    flow: Option<FlowResource>,
 }
 
 /// Griff auf einen laufenden Node: Identität + (falls NATS erreichbar war)
@@ -305,6 +314,87 @@ impl NodeHandle {
     }
 }
 
+/// Baut Sender + (falls `spec.flow` gesetzt) Source + Flow aus einer
+/// [`SenderSpec`] — gemeinsame Logik von `start()` und
+/// [`NodeHandle::add_sender`] (2026-09-30, dynamische Audio-Gruppen von
+/// `omp-mxf-player-direct`).
+fn build_sender_parts(
+    id: &str,
+    i: usize,
+    spec: &SenderSpec,
+    device_id: &str,
+    node_label: &str,
+) -> (Sender, Option<Source>, Option<FlowResource>) {
+    let mut source_out: Option<Source> = None;
+    let mut flow_out: Option<FlowResource> = None;
+            let label = spec
+                .label
+                .clone()
+                .unwrap_or_else(|| format!("{} Sender {}", node_label, i + 1));
+            let mut sender = Sender::new(id, &label, device_id);
+            sender.manifest_href = spec.manifest_href.clone();
+            sender.tags = spec.tags.clone();
+            if let Some(transport) = &spec.transport {
+                sender.transport = transport.clone();
+            }
+            if let Some(flow_spec) = &spec.flow {
+                let source_id = match flow_spec {
+                    FlowSpec::Audio {
+                        source_id: Some(id),
+                        ..
+                    } => id.clone(),
+                    _ => crate::idgen::new_v4(),
+                };
+                let flow_id = flow_spec.id().clone().unwrap_or_else(crate::idgen::new_v4);
+                match flow_spec {
+                    FlowSpec::Video {
+                        frame_width,
+                        frame_height,
+                        grain_rate_numerator,
+                        grain_rate_denominator,
+                        ..
+                    } => {
+                        source_out = Some(Source::new_video(&source_id, &label, device_id));
+                        flow_out = Some(FlowResource::Video(Flow::new_video(
+                            &flow_id,
+                            &label,
+                            device_id,
+                            &source_id,
+                            *frame_width,
+                            *frame_height,
+                            *grain_rate_numerator,
+                            *grain_rate_denominator,
+                        )));
+                    }
+                    FlowSpec::Audio {
+                        sample_rate_numerator,
+                        channel_count,
+                        media_type,
+                        bit_depth,
+                        ..
+                    } => {
+                        source_out = Some(Source::new_audio(
+                            &source_id,
+                            &label,
+                            device_id,
+                            *channel_count,
+                        ));
+                        flow_out = Some(FlowResource::Audio(AudioFlow::new(
+                            &flow_id,
+                            &label,
+                            device_id,
+                            &source_id,
+                            *sample_rate_numerator,
+                            media_type,
+                            *bit_depth,
+                        )));
+                    }
+                }
+                sender.flow_id = Some(flow_id);
+            }
+    (sender, source_out, flow_out)
+}
+
 /// Baut ein einzelnes `Receiver`-Resource aus einer [`ReceiverSpec`] —
 /// gemeinsame Logik von `start()` (einmalig aus `NodeConfig::receivers`)
 /// und [`NodeHandle::add_receiver`] (2026-08-06, nach `start()` zur
@@ -346,6 +436,72 @@ fn build_receiver(
 }
 
 impl NodeHandle {
+    /// Registriert einen zusätzlichen Sender (samt Source/Flow) **nach**
+    /// `start()` — Gegenstück zu [`add_receiver`](Self::add_receiver),
+    /// erste Nutzung `omp-mxf-player-direct` (2026-09-30: Audio-Ausgangs-
+    /// gruppen zur Laufzeit anlegen/löschen). Device + Sender werden
+    /// sofort registriert und vom Heartbeat-Task ab jetzt mitgeführt.
+    pub async fn add_sender(&self, spec: SenderSpec) -> Result<Sender, BoxError> {
+        let id = spec.id.clone().unwrap_or_else(crate::idgen::new_v4);
+        let (sender, source, flow, device_snapshot) = {
+            let mut shared = self.shared_receivers.lock().expect("lock poisoned");
+            let index = shared.device.senders.len();
+            let (sender, source, flow) = build_sender_parts(&id, index, &spec, &shared.device.id, &self.label);
+            shared.device.senders.push(id.clone());
+            shared.device.version = is04::now_version();
+            shared.extra_senders.push(ExtraSender { sender: sender.clone(), source: source.clone(), flow: flow.clone() });
+            (sender, source, flow, shared.device.clone())
+        };
+        let registry = self.registry.clone();
+        let sender_for_register = sender.clone();
+        tokio::task::spawn_blocking(move || -> Result<(), is04::RegisterError> {
+            registry.register("device", &device_snapshot)?;
+            if let Some(source) = &source {
+                registry.register("source", source)?;
+            }
+            if let Some(flow) = &flow {
+                registry.register("flow", flow)?;
+            }
+            registry.register("sender", &sender_for_register)?;
+            Ok(())
+        })
+        .await??;
+        Ok(sender)
+    }
+
+    /// Entfernt einen per [`add_sender`](Self::add_sender) hinzugefügten
+    /// Sender samt Flow und Source wieder (idempotent).
+    pub async fn remove_sender(&self, sender_id: &str) -> Result<(), BoxError> {
+        let (removed, device_snapshot) = {
+            let mut shared = self.shared_receivers.lock().expect("lock poisoned");
+            let removed = shared
+                .extra_senders
+                .iter()
+                .position(|e| e.sender.id == sender_id)
+                .map(|pos| shared.extra_senders.remove(pos));
+            shared.device.senders.retain(|id| id != sender_id);
+            shared.device.version = is04::now_version();
+            (removed, shared.device.clone())
+        };
+        let registry = self.registry.clone();
+        let sender_id = sender_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<(), BoxError> {
+            registry.deregister_resource("senders", &sender_id).map_err(|e| -> BoxError { e.into() })?;
+            if let Some(removed) = removed {
+                if let Some(flow) = &removed.flow {
+                    registry.deregister_resource("flows", flow.id()).map_err(|e| -> BoxError { e.into() })?;
+                }
+                if let Some(source) = &removed.source {
+                    registry.deregister_resource("sources", &source.id).map_err(|e| -> BoxError { e.into() })?;
+                }
+            }
+            registry.register("device", &device_snapshot)?;
+            Ok(())
+        })
+        .await??;
+        Ok(())
+    }
+
     /// Registriert einen zusätzlichen Receiver **nach** `start()` — erste
     /// Nutzung in OMP (2026-08-06, `omp-viewer`s dynamische Audio-
     /// Eingänge: "wie viele Meter ich sehen will, ist eine Operator-
@@ -501,75 +657,12 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         .zip(&config.senders)
         .enumerate()
         .map(|(i, (id, spec))| {
-            let label = spec
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("{} Sender {}", config.label, i + 1));
-            let mut sender = Sender::new(id, &label, &device_id);
-            sender.manifest_href = spec.manifest_href.clone();
-            sender.tags = spec.tags.clone();
-            if let Some(transport) = &spec.transport {
-                sender.transport = transport.clone();
-            }
-            if let Some(flow_spec) = &spec.flow {
-                let source_id = match flow_spec {
-                    FlowSpec::Audio {
-                        source_id: Some(id),
-                        ..
-                    } => id.clone(),
-                    _ => crate::idgen::new_v4(),
-                };
-                let flow_id = flow_spec.id().clone().unwrap_or_else(crate::idgen::new_v4);
-                match flow_spec {
-                    FlowSpec::Video {
-                        frame_width,
-                        frame_height,
-                        grain_rate_numerator,
-                        grain_rate_denominator,
-                        ..
-                    } => {
-                        sources.push(Source::new_video(&source_id, &label, &device_id));
-                        flows.push(FlowResource::Video(Flow::new_video(
-                            &flow_id,
-                            &label,
-                            &device_id,
-                            &source_id,
-                            *frame_width,
-                            *frame_height,
-                            *grain_rate_numerator,
-                            *grain_rate_denominator,
-                        )));
-                    }
-                    FlowSpec::Audio {
-                        sample_rate_numerator,
-                        channel_count,
-                        media_type,
-                        bit_depth,
-                        ..
-                    } => {
-                        sources.push(Source::new_audio(
-                            &source_id,
-                            &label,
-                            &device_id,
-                            *channel_count,
-                        ));
-                        flows.push(FlowResource::Audio(AudioFlow::new(
-                            &flow_id,
-                            &label,
-                            &device_id,
-                            &source_id,
-                            *sample_rate_numerator,
-                            media_type,
-                            *bit_depth,
-                        )));
-                    }
-                }
-                sender.flow_id = Some(flow_id);
-            }
+            let (sender, source, flow) = build_sender_parts(id, i, spec, &device_id, &config.label);
+            sources.extend(source);
+            flows.extend(flow);
             sender
         })
         .collect();
-    let sender_count = senders.len();
     let receivers: Vec<Receiver> = receiver_ids
         .iter()
         .zip(&config.receivers)
@@ -620,6 +713,7 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
     let shared_receivers = Arc::new(std::sync::Mutex::new(RegisteredReceivers {
         device: device_res.clone(),
         receivers: receivers.clone(),
+        extra_senders: Vec::new(),
     }));
 
     let liveness = Arc::new(crate::liveness::LivenessMonitor::new());
@@ -697,7 +791,6 @@ pub async fn start(config: NodeConfig, store: Arc<dyn ParamStore>) -> Result<Nod
         shared_receivers,
         publisher,
         config.label,
-        sender_count,
         config.media_ready,
         liveness,
     ));
@@ -724,7 +817,6 @@ async fn heartbeat_loop(
     shared_receivers: Arc<std::sync::Mutex<RegisteredReceivers>>,
     publisher: Option<Arc<health::Publisher>>,
     label: String,
-    sender_count: usize,
     media_ready: MediaReadySource,
     liveness: Arc<crate::liveness::LivenessMonitor>,
 ) {
@@ -742,9 +834,17 @@ async fn heartbeat_loop(
         // `start()` hinzugefügter Receiver bei einer nötigen
         // Re-Registrierung (z. B. nach Registry-Neustart) wieder
         // verschwinden.
-        let (device_snapshot, receivers_snapshot) = {
+        let (device_snapshot, receivers_snapshot, all_sources, all_flows, all_senders) = {
             let shared = shared_receivers.lock().expect("lock poisoned");
-            (shared.device.clone(), shared.receivers.clone())
+            let mut all_sources = sources.clone();
+            let mut all_flows = flows.clone();
+            let mut all_senders = senders.clone();
+            for extra in &shared.extra_senders {
+                all_sources.extend(extra.source.clone());
+                all_flows.extend(extra.flow.clone());
+                all_senders.push(extra.sender.clone());
+            }
+            (shared.device.clone(), shared.receivers.clone(), all_sources, all_flows, all_senders)
         };
         match heartbeat_result {
             Ok(Ok(())) => {}
@@ -753,9 +853,9 @@ async fn heartbeat_loop(
                     &registry,
                     &node_res,
                     &device_snapshot,
-                    &sources,
-                    &flows,
-                    &senders,
+                    &all_sources,
+                    &all_flows,
+                    &all_senders,
                     &receivers_snapshot,
                 )
                 .await;
@@ -786,7 +886,7 @@ async fn heartbeat_loop(
                 node_id: node_id.clone(),
                 label: label.clone(),
                 status: if workers_alive { "ok" } else { "degraded" }.to_string(),
-                senders: sender_count,
+                senders: all_senders.len(),
                 receivers: receivers_snapshot.len(),
                 media_ready: media_ready.is_ready(),
             };

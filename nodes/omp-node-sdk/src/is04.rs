@@ -465,6 +465,15 @@ pub enum FlowResource {
     Audio(AudioFlow),
 }
 
+impl FlowResource {
+    pub fn id(&self) -> &str {
+        match self {
+            FlowResource::Video(f) => &f.id,
+            FlowResource::Audio(f) => &f.id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceiverSubscription {
     pub sender_id: Option<String>,
@@ -794,6 +803,17 @@ impl RegistryClient {
             "{}/x-nmos/registration/v1.3/resource/receivers/{}",
             self.base_url, receiver_id
         );
+        match ureq::delete(&url).call() {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::StatusCode(404)) => Ok(()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+
+    /// Meldet eine beliebige Ressource ab (`resource_type` im Plural:
+    /// `senders`/`flows`/`sources`); 404 zählt als Erfolg (idempotent).
+    pub fn deregister_resource(&self, resource_type: &str, id: &str) -> Result<(), String> {
+        let url = format!("{}/x-nmos/registration/v1.3/resource/{}/{}", self.base_url, resource_type, id);
         match ureq::delete(&url).call() {
             Ok(_) => Ok(()),
             Err(ureq::Error::StatusCode(404)) => Ok(()),

@@ -45,11 +45,9 @@ use serde::{Deserialize, Serialize};
 
 /// Eine dauerhaft aktive Audio-Ausgangsgruppe — Kanalzahl ändert sich nie
 /// zwischen Presets (nur die Routing-Koeffizienten tun das), s.
-/// `pipeline.rs`-Moduldoku zur A/B-Slot-Architektur. Kanalzahl-Änderungen
-/// selbst (neue/entfernte Gruppen) wirken erst nach einem Neustart der
-/// Instanz (neue NMOS-Sender werden nur beim Start registriert,
-/// Nutzerentscheidung 2026-08-06 — kein Live-Sender-Add/Remove-
-/// Mechanismus, wie bei jedem anderen Node in diesem System auch).
+/// `pipeline.rs`-Moduldoku zur A/B-Slot-Architektur. Neue/entfernte/
+/// geänderte Gruppen wirken seit 2026-09-30 live (`applySettings` in
+/// `main.rs`: Pipeline-Neuaufbau + `NodeHandle::add_sender`/`remove_sender`).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProgramGroup {
     pub id: String,
@@ -208,6 +206,80 @@ pub fn default_settings() -> Settings {
             ]),
         ],
     }
+}
+
+/// Strukturvalidierung — identische Regeln wie orchestrator
+/// `validateMxfPlayerSettings` (eindeutige, nicht-leere IDs, Kanalzahl
+/// 1..=64, Routes referenzieren vorhandene Gruppen/Kanäle), aber NUR
+/// mit Mindestens-eine-Gruppe/ein-Preset wie dort.
+pub fn validate(s: &Settings) -> Result<(), String> {
+    if s.groups.is_empty() {
+        return Err("mindestens eine Ausgangsgruppe nötig".into());
+    }
+    if s.presets.is_empty() {
+        return Err("mindestens ein Preset nötig".into());
+    }
+    let mut channels = std::collections::HashMap::new();
+    for g in &s.groups {
+        if g.id.trim().is_empty() || g.label.trim().is_empty() {
+            return Err("Gruppen-ID und -Name dürfen nicht leer sein".into());
+        }
+        if !(1..=64).contains(&g.channels) {
+            return Err(format!("Gruppe {}: Kanalzahl muss 1..64 sein", g.id));
+        }
+        if channels.insert(g.id.clone(), g.channels).is_some() {
+            return Err(format!("doppelte Gruppen-ID: {}", g.id));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    for p in &s.presets {
+        if p.id.trim().is_empty() || p.label.trim().is_empty() {
+            return Err("Preset-ID und -Name dürfen nicht leer sein".into());
+        }
+        if !seen.insert(p.id.clone()) {
+            return Err(format!("doppelte Preset-ID: {}", p.id));
+        }
+        for r in &p.routes {
+            let Some(ch) = channels.get(&r.group) else {
+                return Err(format!("Preset {}: unbekannte Gruppe {}", p.id, r.group));
+            };
+            if u32::from(r.group_channel) >= *ch {
+                return Err(format!("Preset {}: Kanal {} außerhalb von Gruppe {}", p.id, r.group_channel, r.group));
+            }
+            if r.src_track < 1 {
+                return Err(format!("Preset {}: srcTrack muss >= 1 sein", p.id));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Instanz-lokale Persistenz (Nutzerwunsch 2026-09-30): JSON-Datei unter
+/// `OMP_STATE_DIR` (Default `data/state`). Fehlt sie oder ist ungültig,
+/// gilt `default_settings()`.
+pub fn state_path(instance_key: &str) -> std::path::PathBuf {
+    let dir = std::env::var("OMP_STATE_DIR").unwrap_or_else(|_| "data/state".to_string());
+    let safe: String = instance_key.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).collect();
+    std::path::Path::new(&dir).join(format!("mxf-player-direct-{safe}.json"))
+}
+
+pub fn load_settings(path: &std::path::Path) -> Settings {
+    match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Settings>(&t).ok()) {
+        Some(s) if validate(&s).is_ok() => {
+            eprintln!("omp-mxf-player-direct: Einstellungen aus {} geladen", path.display());
+            s
+        }
+        _ => default_settings(),
+    }
+}
+
+pub fn save_settings(path: &std::path::Path, s: &Settings) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(s).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 pub fn find_preset<'a>(presets: &'a [AudioPreset], id: &str) -> Option<&'a AudioPreset> {

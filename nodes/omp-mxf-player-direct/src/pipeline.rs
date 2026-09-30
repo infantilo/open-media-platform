@@ -116,6 +116,10 @@ pub enum Command {
     Stop,
     Load(String),
     SetPreset(presets::AudioPreset),
+    /// Gruppen (samt MXL-Flow-IDs) und aktives Preset ersetzen —
+    /// Nutzerwunsch 2026-09-30 (Gruppen/Presets dynamisch in der UI).
+    /// Wirkt wie `SetPreset` per kompletten Neuaufbau.
+    SetConfig { groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset },
     Seek(u64),
 }
 
@@ -181,6 +185,10 @@ impl PipelineHandle {
 
     pub fn set_preset(&self, preset: presets::AudioPreset) {
         let _ = self.events.send(LoopEvent::Cmd(Command::SetPreset(preset)));
+    }
+
+    pub fn set_config(&self, groups: Vec<presets::ProgramGroup>, group_flow_ids: Vec<String>, preset: presets::AudioPreset) {
+        let _ = self.events.send(LoopEvent::Cmd(Command::SetConfig { groups, group_flow_ids, preset }));
     }
 
     pub fn seek(&self, position_ms: i64) {
@@ -382,6 +390,18 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
     gst::Element::link(&filesrc, &demux).map_err(|e| format!("link filesrc to mxfdemux: {e}"))?;
 
     let decodebin = gst::ElementFactory::make("decodebin").build().map_err(|e| format!("decodebin: {e}"))?;
+    // Deinterlace VOR videoconvert (Nutzerfund 2026-09-30: Kammartefakte bei
+    // Bewegung im Viewer). Der MXL-Flow ist als "progressive" deklariert
+    // (omp-mediaio::mxl), interlaced Quellmaterial (Broadcast-MXF 1080i)
+    // wurde bisher unverändert durchgereicht. `mode=auto` lässt
+    // progressive Quellen unberührt; `fields=top` liefert Einzelrate
+    // (25i -> 25p), passend zum festen Ausgangstakt.
+    let vdeint = gst::ElementFactory::make("deinterlace")
+        .property_from_str("mode", "auto")
+        .property_from_str("fields", "top")
+        .property_from_str("method", "greedyh")
+        .build()
+        .map_err(|e| format!("deinterlace: {e}"))?;
     let vconvert = gst::ElementFactory::make("videoconvert").build().map_err(|e| format!("videoconvert: {e}"))?;
     let vscale = gst::ElementFactory::make("videoscale").build().map_err(|e| format!("videoscale: {e}"))?;
     let vrate = gst::ElementFactory::make("videorate").build().map_err(|e| format!("videorate: {e}"))?;
@@ -392,13 +412,14 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
     let vqueue = gst::ElementFactory::make("queue").build().map_err(|e| format!("queue(video): {e}"))?;
     pipeline
         .add(&decodebin)
+        .and_then(|()| pipeline.add(&vdeint))
         .and_then(|()| pipeline.add(&vconvert))
         .and_then(|()| pipeline.add(&vscale))
         .and_then(|()| pipeline.add(&vrate))
         .and_then(|()| pipeline.add(&vcaps))
         .and_then(|()| pipeline.add(&vqueue))
         .map_err(|e| format!("add video chain: {e}"))?;
-    gst::Element::link_many([&vconvert, &vscale, &vrate, &vcaps, &vqueue]).map_err(|e| format!("link video chain: {e}"))?;
+    gst::Element::link_many([&vdeint, &vconvert, &vscale, &vrate, &vcaps, &vqueue]).map_err(|e| format!("link video chain: {e}"))?;
 
     // Zählt jeden Video-Buffer, der `vqueue`s Src-Pad passiert — ground
     // truth für "MxlVideoOutput bekommt gerade wirklich ein frisches
@@ -411,7 +432,7 @@ fn build(config: &Config, tx: UnboundedSender<Event>, events: std::sync::mpsc::S
         gst::PadProbeReturn::Ok
     });
 
-    let decodebin_sink = vconvert.static_pad("sink").ok_or("videoconvert: no sink pad")?;
+    let decodebin_sink = vdeint.static_pad("sink").ok_or("deinterlace: no sink pad")?;
     decodebin.connect_pad_added(move |_db, new_pad| {
         let Some(caps) = new_pad.current_caps() else { return };
         let Some(structure) = caps.structure(0) else { return };
@@ -943,7 +964,16 @@ pub fn run(
                     }
                 }
             }
-            Ok(LoopEvent::Cmd(Command::SetPreset(preset))) => {
+            Ok(LoopEvent::Cmd(cmd @ (Command::SetPreset(_) | Command::SetConfig { .. }))) => {
+                let preset = match cmd {
+                    Command::SetPreset(preset) => preset,
+                    Command::SetConfig { groups, group_flow_ids, preset } => {
+                        cfg.groups = groups;
+                        cfg.group_flow_ids = group_flow_ids;
+                        preset
+                    }
+                    _ => unreachable!(),
+                };
                 shared.lock().expect("lock poisoned").preset_id = preset.id.clone();
                 cfg.preset = preset;
                 if let Some(a) = active.take() {
