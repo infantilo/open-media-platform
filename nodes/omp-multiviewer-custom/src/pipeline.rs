@@ -434,6 +434,10 @@ fn build(config: &Config, context: &Arc<MxlContext>, broadcaster: &Arc<Broadcast
             gst::Caps::builder("video/x-raw")
                 .field("width", layout.canvas_width as i32)
                 .field("height", layout.canvas_height as i32)
+                // Format fest I420 (s. omp-multiviewer, 2026-09-30): der
+                // MJPEG-Zweig hat kein `videoconvert`, ein vom compositor
+                // gewähltes v210 blockierte ihn still.
+                .field("format", "I420")
                 .build(),
         )
         .build()
