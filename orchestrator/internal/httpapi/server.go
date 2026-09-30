@@ -351,6 +351,9 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
+	// Versionsstempel — unauthentifiziert wie /healthz (der Supervisor
+	// prüft damit nach einem Update, ob der neue Stand läuft).
+	mux.HandleFunc("GET /api/v1/version", handleVersion)
 	mux.HandleFunc("GET /api/v1/info", handleInfo)
 	// Bewusst unauthentifiziert wie /healthz (Prometheus-Scraper senden
 	// üblicherweise keinen Bearer-Token; Netzwerk-Isolation ist hier die
@@ -489,6 +492,13 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/admin/backups/{name}", g.requireVerbGlobal(authz.VerbAdmin, handleDownloadBackup(backupSvc)))
 	mux.HandleFunc("POST /api/v1/admin/backups/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadBackup(backupSvc)))
 	mux.HandleFunc("POST /api/v1/admin/restore", g.requireVerbGlobal(authz.VerbAdmin, handleRestore(backupSvc, supervisorClient)))
+
+	// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md).
+	// VerbAdmin: ein Update-Paket ist ausführbarer Code.
+	mux.HandleFunc("GET /api/v1/admin/updates", g.requireVerbGlobal(authz.VerbAdmin, handleListUpdates(options.updates, options.updateSup, launcherSvc)))
+	mux.HandleFunc("POST /api/v1/admin/updates/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadUpdate(options.updates, options.domainAudit)))
+	mux.HandleFunc("DELETE /api/v1/admin/updates/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUpdate(options.updates, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/updates/{id}/apply", g.requireVerbGlobal(authz.VerbAdmin, handleApplyUpdate(options.updates, options.updateSup, options.updateBackup, options.domainAudit)))
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).
 	// /register bewusst außerhalb von authGate — s. handleRegisterHost.

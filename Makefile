@@ -1,6 +1,6 @@
-.PHONY: build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
+.PHONY: update-keygen update-bundle build test check check-ci up down ci ui nodes contract start hosts stop status mtls-up mtls-down mtls-issue-certs nmos-registry-tls-up nmos-registry-tls-down nats-tls-up nats-tls-down backup restore proxy-up proxy-down soak
 
-GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check host-agent supervisor
+GO_MODULES := orchestrator nodes/mock tools/contract-check tools/nmos-conformance-check tools/update-bundle host-agent supervisor update
 
 build: ui
 	$(foreach m,$(GO_MODULES),cd $(m) && go build ./... && cd $(CURDIR) &&) true
@@ -34,6 +34,39 @@ ui:
 # suggeriert — dieser Vergleich war nicht fair, s. Nachtrag 163.
 nodes:
 	cd nodes && cargo build --workspace --bins
+
+# ---- System-Update-Pakete (docs/ENTWURF-SYSTEM-UPDATE.md) ----------------
+# `make update-keygen` einmalig: erzeugt das Ed25519-Schlüsselpaar. Den
+# PRIVATEN Schlüssel (UPDATE_KEY) geheim halten und nicht auf den Server
+# legen; die Datei update-trusted.pub kommt auf jeden Server nach
+# .run/update-trusted.pub (Vertrauensanker).
+#
+# `make update-bundle` baut fertige Binaries (Orchestrator mit
+# Versionsstempel, Supervisor, Host-Agent, UI-Bundle, alle im Katalog
+# referenzierten Node-Binaries aus nodes/target/<NODES_PROFILE>) und packt
+# sie SIGNIERT nach dist/omp-update-<UPDATE_VERSION>.tar.gz — im Browser
+# unter Admin → System-Update hochladen. UPDATE_VERSION muss numerisch
+# aufsteigen (Default: Datum + Uhrzeit).
+UPDATE_KEY ?= $(HOME)/.omp-update/update-signing.key
+UPDATE_VERSION ?= $(shell date +%Y.%-m.%-d.%H%M)
+NODES_PROFILE ?= debug
+VERSION_PKG := github.com/infantilo/openmediaplatform/orchestrator/internal/version
+
+update-keygen:
+	cd tools/update-bundle && go run . keygen -out $(dir $(UPDATE_KEY))
+
+update-bundle: ui nodes
+	@[ -f "$(UPDATE_KEY)" ] || (echo "Signaturschlüssel $(UPDATE_KEY) fehlt — 'make update-keygen' oder UPDATE_KEY=... setzen." >&2; exit 1)
+	mkdir -p dist/update
+	cd orchestrator && go build -ldflags "-X $(VERSION_PKG).Version=$(UPDATE_VERSION) -X $(VERSION_PKG).Commit=$$(git rev-parse --short HEAD) -X $(VERSION_PKG).BuiltAt=$$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o ../dist/update/omp-orchestrator .
+	cd supervisor && go build -o ../dist/update/omp-supervisor .
+	cd host-agent && go build -o ../dist/update/omp-host-agent .
+	cd tools/update-bundle && go run . pack -version "$(UPDATE_VERSION)" -key "$(UPDATE_KEY)" \
+		-commit "$$(git rev-parse --short HEAD)" -out ../../dist/omp-update-$(UPDATE_VERSION).tar.gz \
+		-orchestrator ../../dist/update/omp-orchestrator -supervisor ../../dist/update/omp-supervisor \
+		-host-agent ../../dist/update/omp-host-agent -ui-dir ../../ui/dist \
+		-catalog ../../deploy/catalog.json -nodes-dir ../../nodes/target/$(NODES_PROFILE) $(UPDATE_BUNDLE_ARGS)
+	@echo "Paket: dist/omp-update-$(UPDATE_VERSION).tar.gz"
 
 # Prüft den Node-Contract (ARCHITECTURE.md §5) gegen einen laufenden
 # Node (UMSETZUNG.md C9). NODE_URL erforderlich, z. B.:

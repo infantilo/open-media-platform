@@ -61,3 +61,49 @@ func (c *Client) TriggerRestore(ctx context.Context, file string) error {
 	}
 	return nil
 }
+
+// TriggerUpdate ruft POST {baseURL}/update mit {"file": <Pfad>} auf — der
+// Supervisor prüft das Paket selbst erneut und antwortet, sobald er den
+// Auftrag angenommen hat.
+func (c *Client) TriggerUpdate(ctx context.Context, file string) error {
+	body, err := json.Marshal(map[string]string{"file": file})
+	if err != nil {
+		return fmt.Errorf("request kodieren: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/update", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("request bauen: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("supervisor nicht erreichbar (läuft er? deploy/dev/start-supervisor.sh): %w", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusAccepted {
+		respBody, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("supervisor antwortete mit %d: %s", res.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+// Status liefert GET {baseURL}/status (Restore- und Update-Zustand) roh.
+func (c *Client) Status(ctx context.Context) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("supervisor nicht erreichbar: %w", err)
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("supervisor antwortete mit %d", res.StatusCode)
+	}
+	return json.RawMessage(data), nil
+}

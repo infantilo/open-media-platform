@@ -65,8 +65,11 @@ func envOr(key, fallback string) string {
 // sync.Mutex mitzukopieren.
 type statusData struct {
 	Busy    bool      `json:"busy"`
+	Kind    string    `json:"kind,omitempty"` // "restore"/"update"
 	File    string    `json:"file,omitempty"`
-	Phase   string    `json:"phase,omitempty"` // "stopping"/"restoring"/"starting"/""
+	Version string    `json:"version,omitempty"` // Ziel-Version eines Updates
+	Phase   string    `json:"phase,omitempty"`   // restore: "stopping"/"restoring"/"starting"; update: s. update.go
+	Detail  string    `json:"detail,omitempty"`  // Fortschrittstext/Log-Auszug
 	Started time.Time `json:"startedAt,omitempty"`
 	Ended   time.Time `json:"endedAt,omitempty"`
 	Ok      *bool     `json:"ok,omitempty"`
@@ -87,13 +90,25 @@ func (s *status) snapshot() statusData {
 }
 
 func (s *status) begin(file string) bool {
+	return s.beginKind("restore", file, "", "stopping")
+}
+
+// beginKind startet einen Vorgang (Restore ODER Update) — ein gemeinsames
+// Busy-Flag, damit beide nie gleichzeitig laufen.
+func (s *status) beginKind(kind, file, version, phase string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data.Busy {
 		return false
 	}
-	s.data = statusData{Busy: true, File: file, Phase: "stopping", Started: time.Now().UTC()}
+	s.data = statusData{Busy: true, Kind: kind, File: file, Version: version, Phase: phase, Started: time.Now().UTC()}
 	return true
+}
+
+func (s *status) setDetail(detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data.Detail = detail
 }
 
 func (s *status) setPhase(phase string) {
@@ -122,12 +137,14 @@ type server struct {
 	stopScript  string
 	startScript string
 	status      *status
+	upd         *updater
 }
 
 func (s *server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /restore", s.handleRestore)
+	mux.HandleFunc("POST /update", s.handleUpdate)
 	return mux
 }
 
@@ -366,6 +383,8 @@ func main() {
 		startScript: filepath.Join(rootDir, "deploy", "dev", "start-omp.sh"),
 		status:      &status{},
 	}
+	srv.upd = newUpdater(srv, rootDir)
+	srv.upd.loadLastStatus()
 
 	for _, script := range []string{srv.stopScript, srv.startScript} {
 		if _, err := os.Stat(script); err != nil {

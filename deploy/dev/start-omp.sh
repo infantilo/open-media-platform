@@ -92,11 +92,19 @@ make -C "$ROOT_DIR" up
 echo "==> Supervisor (Backup/Restore-Unterbau)"
 "$ROOT_DIR/deploy/dev/start-supervisor.sh"
 
-echo "==> UI-Bundle bauen"
-make -C "$ROOT_DIR" ui
+# OMP_SKIP_BUILD=1 (gesetzt vom Supervisor beim System-Update, docs/ENTWURF-
+# SYSTEM-UPDATE.md): das Update hat fertige Binaries + UI-Bundle
+# eingespielt — NICHT aus dem Quellcode neu bauen (das würde den
+# eingespielten Stand überschreiben und braucht Go/Deno auf dem Server).
+if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
+  echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertige Binaries)"
+else
+  echo "==> UI-Bundle bauen"
+  make -C "$ROOT_DIR" ui
 
-echo "==> Orchestrator-Binary bauen"
-( cd "$ROOT_DIR/orchestrator" && go build -o "$BIN" . )
+  echo "==> Orchestrator-Binary bauen"
+  ( cd "$ROOT_DIR/orchestrator" && go build -o "$BIN" . )
+fi
 
 echo "==> Orchestrator starten"
 # Absolute Pfade statt cd+relativer Defaults (orchestrator/internal/config/
@@ -113,6 +121,12 @@ export OMP_CATALOG_PATH="$ROOT_DIR/deploy/catalog.json"
 # Ordner wie backup-omp.sh/restore-omp.sh, gleicher Grund für den
 # absoluten Pfad wie bei OMP_UI_DIR/OMP_CATALOG_PATH oben.
 export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
+# System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md): Ablage
+# der Pakete + vertrauenswürdige Ed25519-Public-Keys (einer pro Zeile,
+# erzeugt mit `make update-keygen`). Ohne Schlüsseldatei wird jedes Paket
+# abgelehnt (OMP_UPDATE_ALLOW_UNSIGNED=true nur für die Entwicklung).
+export OMP_UPDATE_DIR="${OMP_UPDATE_DIR:-$ROOT_DIR/.updates}"
+export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"
 # mTLS (UMSETZUNG.md D3) ist per Default aus (OMP_MTLS_ENABLED unten nur
 # gesetzt, falls schon in der aufrufenden Shell exportiert) — die
 # Pfad-Variablen selbst müssen trotzdem immer absolut sein, aus demselben

@@ -233,7 +233,39 @@ const VERB_LABEL: Record<string, string> = {
 // importiert nichts aus app-shell.ts und umgekehrt (gleiches Muster wie
 // die anderen kleinen bewussten Dopplungen im Projekt, z. B.
 // STREAM_TOKEN_KEY in flow-canvas.ts).
-type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "cluster";
+interface UpdateComponent { id: string; target: string; sha256: string }
+interface UpdatePackage {
+  id: string;
+  version: string;
+  signed: boolean;
+  keyId?: string;
+  sha256: string;
+  size: number;
+  uploadedAt: string;
+  manifest: {
+    version: string;
+    gitCommit?: string;
+    builtAt?: string;
+    arch: string;
+    minFromVersion?: string;
+    migrations?: string[];
+    notes?: string;
+    components: UpdateComponent[];
+  };
+}
+interface UpdateHistoryEntry { time: string; from?: string; version: string; ok: boolean; rolledBack?: boolean; error?: string }
+interface UpdateOverview {
+  current: { version: string; commit?: string; builtAt?: string };
+  packages: UpdatePackage[];
+  history: UpdateHistoryEntry[];
+  trustedKeys: string[];
+  allowUnsigned: boolean;
+  outdatedInstances: number;
+  supervisor?: { busy: boolean; kind?: string; phase?: string; version?: string; ok?: boolean; error?: string; endedAt?: string };
+  supervisorError?: string;
+}
+
+type AdminTabId = "users" | "organizations" | "groups" | "bindings" | "catalog" | "storage" | "audit" | "diagnose" | "backup" | "update" | "cluster";
 const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "users", label: "Nutzer" },
   { id: "organizations", label: "Organisationen" },
@@ -244,6 +276,7 @@ const ADMIN_SUB_TABS: { id: AdminTabId; label: string }[] = [
   { id: "audit", label: "Audit-Log" },
   { id: "diagnose", label: "Diagnose" },
   { id: "backup", label: "Backup/Restore" },
+  { id: "update", label: "System-Update" },
   { id: "cluster", label: "Cluster" },
 ];
 const SUB_TAB_BUTTON_BASE =
@@ -407,6 +440,19 @@ class AdminView extends HTMLElement {
   #restoring = false;
   #reconnecting = false;
 
+  // System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md):
+  // Pakete sind signiert (Ed25519) und werden vom Orchestrator UND vom
+  // Supervisor geprüft; angewendet wird per Supervisor (Backup → Stop →
+  // Tausch → Start → Prüfung → ggf. Rollback). #updTyped ist die
+  // "Version eintippen"-Bestätigung.
+  #upd: UpdateOverview | null = null;
+  #updUploading = false;
+  #updSelected = "";
+  #updTyped = "";
+  #updBackup = true;
+  #updForce = false;
+  #updApplying = false;
+
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
   // Oberfläche (Nutzerauftrag 2026-08-27, gleicher Anlass wie
@@ -438,6 +484,7 @@ class AdminView extends HTMLElement {
     this.#loadWorkflows();
     this.#loadCatalog();
     this.#loadBackups();
+    this.#loadUpdates();
     this.#loadClusterStatus();
     this.#auditPollHandle = window.setInterval(() => this.#loadAudit(), AUDIT_POLL_FALLBACK_INTERVAL_MS);
     this.#logPollHandle = window.setInterval(() => this.#loadLogs(), LOG_POLL_FALLBACK_INTERVAL_MS);
@@ -1277,6 +1324,321 @@ class AdminView extends HTMLElement {
     })();
   }
 
+  // ---- System-Update -----------------------------------------------------
+
+  async #loadUpdates() {
+    try {
+      const res = await apiFetch("/api/v1/admin/updates");
+      if (res.ok) {
+        this.#upd = (await res.json()) as UpdateOverview;
+        if (this.#updSelected && !this.#upd.packages.some((p) => p.id === this.#updSelected)) {
+          this.#updSelected = "";
+          this.#updTyped = "";
+        }
+        this.#render();
+      }
+    } catch {
+      // Orchestrator kurzzeitig nicht erreichbar — der nächste Wechsel auf den Tab lädt neu.
+    }
+  }
+
+  async #uploadUpdate(file: File) {
+    this.#updUploading = true;
+    this.#error = "";
+    this.#render();
+    try {
+      // Rohe Bytes wie beim Backup-Upload; der Server streamt auf Platte
+      // und prüft Struktur, Prüfsummen und Signatur.
+      const res = await apiFetch("/api/v1/admin/updates/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/gzip" },
+        body: file,
+      });
+      if (!res.ok) {
+        this.#error = `Update-Paket abgelehnt: ${(await res.text()).trim()}`;
+        return;
+      }
+      const entry = (await res.json()) as UpdatePackage;
+      await this.#loadUpdates();
+      this.#updSelected = entry.id;
+      this.#updTyped = "";
+      this.#updForce = false;
+    } catch (err) {
+      this.#error = `Hochladen fehlgeschlagen: ${err}`;
+    } finally {
+      this.#updUploading = false;
+      this.#render();
+    }
+  }
+
+  async #deleteUpdate(id: string) {
+    const ok = await confirmDialog(`Update-Paket „${id}" vom Server löschen?`, { confirmLabel: "Löschen" });
+    if (!ok) return;
+    const res = await apiFetch(`/api/v1/admin/updates/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) {
+      this.#error = `Löschen fehlgeschlagen: ${(await res.text()).trim()}`;
+    }
+    await this.#loadUpdates();
+    this.#render();
+  }
+
+  async #applyUpdate(pkg: UpdatePackage) {
+    if (this.#updTyped !== pkg.version) return;
+    const migrations = pkg.manifest.migrations ?? [];
+    const confirmed = await confirmDialog(
+      `Version ${pkg.version} jetzt installieren? Der Server (Orchestrator) wird dafür neu gestartet und ` +
+        `ist einige Sekunden nicht erreichbar. Laufende Nodes bleiben in Betrieb, laufen aber bis zu ihrem ` +
+        `nächsten Neustart mit dem alten Stand.` +
+        (migrations.length > 0 ? ` Dieses Update ändert die Datenbank (${migrations.length} Migration(en)).` : ""),
+      { confirmLabel: "Installieren" },
+    );
+    if (!confirmed) return;
+
+    this.#updApplying = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const res = await apiFetch(`/api/v1/admin/updates/${encodeURIComponent(pkg.id)}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true, version: pkg.version, backup: this.#updBackup, force: this.#updForce }),
+      });
+      if (!res.ok) {
+        // Klarer Fehlschlag VOR dem eigentlichen Update (Prüfung, Backup,
+        // Supervisor) — der Server lebt unverändert weiter.
+        this.#error = `Update fehlgeschlagen: ${(await res.text()).trim()}`;
+        this.#updApplying = false;
+        this.#render();
+        return;
+      }
+    } catch {
+      // Mehrdeutig wie beim Restore (s. #restoreDatabase): Verbindungsfehler
+      // oder Prozess schon gestorben — beide führen in denselben Reconnect.
+    }
+    this.#waitForReconnectAndReload();
+  }
+
+  #renderUpdateSection(): HTMLElement {
+    if (this.#updApplying || this.#reconnecting) {
+      const box = document.createElement("div");
+      box.className = "omp-card";
+      box.innerHTML =
+        `<div class="omp-h1">Update läuft …</div>` +
+        `<div style="color:var(--omp-text-dim);margin-top:8px;">Der Server wird gesichert, angehalten, aktualisiert und neu ` +
+        `gestartet. Diese Seite lädt automatisch neu, sobald er wieder erreichbar ist (kann bis zu ~1–2 Minuten dauern). ` +
+        `Bei einem Fehler stellt der Supervisor den vorherigen Stand automatisch wieder her — das Ergebnis steht danach ` +
+        `hier unter „Verlauf“.</div>`;
+      return box;
+    }
+
+    const section = document.createElement("div");
+    const upd = this.#upd;
+
+    const head = document.createElement("div");
+    head.className = "omp-h1";
+    head.textContent = "System-Update";
+    section.appendChild(head);
+
+    const info = document.createElement("div");
+    info.style.cssText = "color:var(--omp-text-dim);margin:6px 0 12px;white-space:pre-wrap;";
+    if (!upd) {
+      info.textContent = "Wird geladen …";
+      section.appendChild(info);
+      return section;
+    }
+    const cur = upd.current;
+    info.textContent =
+      `Installiert: ${cur.version}${cur.commit ? ` (${cur.commit})` : ""}${cur.builtAt ? `, gebaut ${cur.builtAt}` : ""}\n` +
+      (upd.trustedKeys.length > 0
+        ? `Vertrauenswürdige Signaturschlüssel: ${upd.trustedKeys.join(", ")}`
+        : "Kein Signaturschlüssel hinterlegt (.run/update-trusted.pub) — Pakete werden abgelehnt.") +
+      (upd.allowUnsigned ? "\nACHTUNG: unsignierte Pakete sind erlaubt (OMP_UPDATE_ALLOW_UNSIGNED, nur Entwicklung)." : "");
+    section.appendChild(info);
+
+    if (upd.outdatedInstances > 0) {
+      const warn = document.createElement("div");
+      warn.style.cssText = "margin-bottom:12px;padding:6px 10px;border:1px solid var(--omp-warn, #b8860b);border-radius:var(--omp-radius);";
+      warn.textContent =
+        `${upd.outdatedInstances} laufende Node-Instanz(en) nutzen noch einen älteren Stand als die installierten Dateien ` +
+        `— sie werden beim nächsten Neustart (Instanz oder Workflow) aktualisiert.`;
+      section.appendChild(warn);
+    }
+
+    const sup = upd.supervisor;
+    if (sup && sup.kind === "update" && sup.busy) {
+      const busy = document.createElement("div");
+      busy.style.cssText = "margin-bottom:12px;";
+      busy.textContent = `Ein Update auf ${sup.version ?? "?"} läuft (Phase: ${sup.phase ?? "?"}).`;
+      section.appendChild(busy);
+    }
+    if (upd.supervisorError) {
+      const e = document.createElement("div");
+      e.style.cssText = "margin-bottom:12px;color:var(--omp-danger, #d33);";
+      e.textContent = `Supervisor nicht erreichbar: ${upd.supervisorError} — ohne ihn kann kein Update angewendet werden (deploy/dev/start-supervisor.sh).`;
+      section.appendChild(e);
+    }
+
+    // Upload
+    const uploadRow = document.createElement("div");
+    uploadRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:var(--omp-space-3);";
+    const uploadLabel = document.createElement("span");
+    uploadLabel.textContent = this.#updUploading ? "Wird hochgeladen und geprüft …" : "Update-Paket hochladen (.tar.gz):";
+    const uploadInput = document.createElement("input");
+    uploadInput.type = "file";
+    uploadInput.accept = ".gz,.tar.gz,application/gzip";
+    uploadInput.disabled = this.#updUploading;
+    uploadInput.addEventListener("change", () => {
+      if (uploadInput.files?.[0]) void this.#uploadUpdate(uploadInput.files[0]);
+    });
+    uploadRow.append(uploadLabel, uploadInput);
+    section.appendChild(uploadRow);
+
+    // Pakete
+    const pkgHead = document.createElement("div");
+    pkgHead.style.cssText = "font-weight:600;margin-bottom:6px;";
+    pkgHead.textContent = `Hochgeladene Pakete (${upd.packages.length})`;
+    section.appendChild(pkgHead);
+    if (upd.packages.length === 0) {
+      const empty = document.createElement("div");
+      empty.style.cssText = "color:var(--omp-text-dim);margin-bottom:12px;";
+      empty.textContent = "Noch kein Paket hochgeladen.";
+      section.appendChild(empty);
+    }
+    for (const pkg of upd.packages) {
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--omp-border);";
+      const label = document.createElement("span");
+      label.style.cssText = "flex:1;";
+      label.textContent =
+        `${pkg.version} · ${(pkg.size / (1024 * 1024)).toFixed(1)} MB · ${pkg.signed ? `signiert (${pkg.keyId})` : "NICHT signiert"}` +
+        ` · ${new Date(pkg.uploadedAt).toLocaleString()}`;
+      const pick = document.createElement("button");
+      pick.textContent = pkg.id === this.#updSelected ? "Ausgewählt" : "Auswählen";
+      pick.disabled = pkg.id === this.#updSelected;
+      pick.addEventListener("click", () => {
+        this.#updSelected = pkg.id;
+        this.#updTyped = "";
+        this.#updForce = false;
+        this.#render();
+      });
+      const del = document.createElement("button");
+      del.textContent = "Löschen";
+      del.addEventListener("click", () => void this.#deleteUpdate(pkg.id));
+      row.append(label, pick, del);
+      section.appendChild(row);
+    }
+
+    const selected = upd.packages.find((p) => p.id === this.#updSelected);
+    if (selected) {
+      const m = selected.manifest;
+      const detail = document.createElement("div");
+      detail.className = "omp-card";
+      detail.style.cssText = "margin-top:12px;";
+      const title = document.createElement("div");
+      title.style.cssText = "font-weight:600;margin-bottom:6px;";
+      title.textContent = `Version ${selected.version}`;
+      detail.appendChild(title);
+      const meta = document.createElement("div");
+      meta.style.cssText = "color:var(--omp-text-dim);white-space:pre-wrap;margin-bottom:8px;";
+      meta.textContent =
+        `Architektur: ${m.arch}${m.gitCommit ? ` · Commit ${m.gitCommit}` : ""}${m.builtAt ? ` · gebaut ${m.builtAt}` : ""}\n` +
+        `SHA-256: ${selected.sha256}\n` +
+        (m.minFromVersion ? `Voraussetzung: mindestens Version ${m.minFromVersion}\n` : "") +
+        (m.notes ? `Hinweis: ${m.notes}\n` : "");
+      detail.appendChild(meta);
+      if ((m.migrations ?? []).length > 0) {
+        const mig = document.createElement("div");
+        mig.style.cssText = "margin-bottom:8px;color:var(--omp-warn, #b8860b);";
+        mig.textContent = `Dieses Update ändert die Datenbank (${m.migrations!.join(", ")}). Ein Backup wird zwingend vorher angelegt.`;
+        detail.appendChild(mig);
+      }
+      const comps = document.createElement("table");
+      comps.style.cssText = "border-collapse:collapse;margin-bottom:8px;font-size:11px;";
+      for (const c of m.components) {
+        const tr = document.createElement("tr");
+        const a = document.createElement("td");
+        a.style.cssText = "padding:1px 10px 1px 0;";
+        a.textContent = c.id;
+        const b = document.createElement("td");
+        b.style.cssText = "padding:1px 0;color:var(--omp-text-dim);";
+        b.textContent = `→ ${c.target}`;
+        tr.append(a, b);
+        comps.appendChild(tr);
+      }
+      detail.appendChild(comps);
+
+      const backupLbl = document.createElement("label");
+      backupLbl.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:6px;";
+      const backupCb = document.createElement("input");
+      backupCb.type = "checkbox";
+      backupCb.checked = this.#updBackup || (m.migrations ?? []).length > 0;
+      backupCb.disabled = (m.migrations ?? []).length > 0;
+      backupCb.addEventListener("change", () => (this.#updBackup = backupCb.checked));
+      backupLbl.append(backupCb, document.createTextNode("Vorher ein Datenbank-Backup anlegen"));
+      detail.appendChild(backupLbl);
+
+      const forceLbl = document.createElement("label");
+      forceLbl.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:8px;";
+      const forceCb = document.createElement("input");
+      forceCb.type = "checkbox";
+      forceCb.checked = this.#updForce;
+      forceCb.addEventListener("change", () => (this.#updForce = forceCb.checked));
+      forceLbl.append(forceCb, document.createTextNode("Auch installieren, wenn nicht neuer als die installierte Version (Downgrade)"));
+      detail.appendChild(forceLbl);
+
+      const confirmLabel = document.createElement("div");
+      confirmLabel.style.cssText = "color:var(--omp-text-dim);margin-bottom:4px;";
+      confirmLabel.textContent = `Zur Bestätigung die Versionsnummer eintippen: ${selected.version}`;
+      detail.appendChild(confirmLabel);
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;align-items:center;";
+      const typed = document.createElement("input");
+      typed.type = "text";
+      typed.value = this.#updTyped;
+      typed.placeholder = selected.version;
+      const go = document.createElement("button");
+      go.textContent = "Jetzt installieren";
+      go.disabled = this.#updTyped !== selected.version || !selected.signed && !upd.allowUnsigned;
+      typed.addEventListener("input", () => {
+        this.#updTyped = typed.value;
+        go.disabled = this.#updTyped !== selected.version || (!selected.signed && !upd.allowUnsigned);
+      });
+      go.addEventListener("click", () => void this.#applyUpdate(selected));
+      row.append(typed, go);
+      detail.appendChild(row);
+      section.appendChild(detail);
+    }
+
+    // Verlauf
+    const histHead = document.createElement("div");
+    histHead.style.cssText = "font-weight:600;margin:16px 0 6px;";
+    histHead.textContent = "Verlauf";
+    section.appendChild(histHead);
+    if (upd.history.length === 0) {
+      const none = document.createElement("div");
+      none.style.cssText = "color:var(--omp-text-dim);";
+      none.textContent = "Noch kein Update durchgeführt.";
+      section.appendChild(none);
+    }
+    for (const h of upd.history) {
+      const line = document.createElement("div");
+      line.style.cssText = "padding:3px 0;white-space:pre-wrap;" + (h.ok ? "" : "color:var(--omp-danger, #d33);");
+      line.textContent =
+        `${new Date(h.time).toLocaleString()} · ${h.from ? `${h.from} → ` : ""}${h.version} · ` +
+        (h.ok ? "erfolgreich" : h.rolledBack ? "FEHLGESCHLAGEN, zurückgerollt" : "FEHLGESCHLAGEN") +
+        (h.error ? `\n${h.error}` : "");
+      section.appendChild(line);
+    }
+
+    const refresh = document.createElement("button");
+    refresh.style.cssText = "margin-top:12px;";
+    refresh.textContent = "Aktualisieren";
+    refresh.addEventListener("click", () => void this.#loadUpdates());
+    section.appendChild(refresh);
+    return section;
+  }
+
   // Löst POST /api/v1/admin/restore aus — nur erreichbar, wenn
   // #restoreTyped exakt #restoreSelected entspricht (s. #restoreSelected-
   // Doku), plus eine zusätzliche confirmDialog()-Rückfrage direkt davor
@@ -1601,6 +1963,9 @@ class AdminView extends HTMLElement {
         break;
       case "backup":
         this.appendChild(this.#renderBackupSection());
+        break;
+      case "update":
+        this.appendChild(this.#renderUpdateSection());
         break;
       case "cluster":
         this.appendChild(this.#renderClusterSection());

@@ -45,3 +45,6 @@ build/
 /.backups/
 /host-agent/host-agent
 /supervisor/supervisor
+
+# System-Update-Pakete (Upload-Ablage, Rollback-Kopien, Historie)
+/.updates/

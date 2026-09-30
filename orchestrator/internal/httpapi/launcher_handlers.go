@@ -143,7 +143,7 @@ func writeCatalogImportError(w http.ResponseWriter, err error) {
 // nachgetragen.
 func handleListInstances(svc LauncherService, hostMetrics HostMetricsReader) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		list := svc.List()
+		list := instancesWithOutdated(svc)
 		mergeInstanceMetrics(list, hostMetrics)
 		writeJSON(w, http.StatusOK, list)
 	}

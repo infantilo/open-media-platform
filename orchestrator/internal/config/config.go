@@ -187,6 +187,15 @@ type Config struct {
 	// lauscht nur auf 127.0.0.1, s. dessen Kopfkommentar zur
 	// Vertrauensgrenze.
 	SupervisorURL string
+	// UpdateDir/UpdatePubKeyFile/UpdateAllowUnsigned steuern das
+	// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md):
+	// Ablage der Pakete, Datei mit den vertrauenswürdigen Ed25519-
+	// Public-Keys (einer pro Zeile) und der Dev-Schalter für unsignierte
+	// Pakete. Ohne Schlüssel und ohne AllowUnsigned wird jedes Paket
+	// abgelehnt. start-omp.sh exportiert absolute Pfade.
+	UpdateDir           string
+	UpdatePubKeyFile    string
+	UpdateAllowUnsigned bool
 	// ClusterNodeID/ClusterRaftAddr/ClusterDataDir/ClusterPeers steuern
 	// die Raft-Konsens-Schicht zwischen Orchestrator-Instanzen
 	// (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — läuft immer (kein
@@ -299,8 +308,14 @@ func Load() Config {
 		// Default spiegelt backup-omp.shs BACKUP_KEEP=14 (bewusst hier
 		// dupliziert statt importiert, gleiches Muster wie die
 		// Placement-/Audit-Defaults oben).
-		BackupKeep:    getEnvInt("OMP_BACKUP_KEEP", 14),
-		SupervisorURL: getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
+		BackupKeep:       getEnvInt("OMP_BACKUP_KEEP", 14),
+		SupervisorURL:    getEnv("OMP_SUPERVISOR_URL", "http://127.0.0.1:8091"),
+		UpdateDir:        getEnv("OMP_UPDATE_DIR", "../.updates"),
+		UpdatePubKeyFile: getEnv("OMP_UPDATE_PUBKEY_FILE", "../.run/update-trusted.pub"),
+		UpdateAllowUnsigned: func() bool {
+			v, _ := strconv.ParseBool(getEnv("OMP_UPDATE_ALLOW_UNSIGNED", "false"))
+			return v
+		}(),
 		// Defaults ergeben einen einzelnen Ein-Knoten-Cluster auf einer
 		// unbenutzten lokalen Adresse — identisch zum heutigen
 		// Single-Host-Dev-Verhalten, solange nicht mehrere Instanzen

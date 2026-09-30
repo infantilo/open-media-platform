@@ -7,6 +7,7 @@ require (
 	github.com/hashicorp/raft v1.7.3
 	github.com/hashicorp/raft-boltdb/v2 v2.3.1
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/minio/minio-go/v7 v7.3.0
 	github.com/nats-io/nats.go v1.52.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/crypto v0.55.0
@@ -33,7 +34,6 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/minio/minio-go/v7 v7.3.0 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
@@ -48,6 +48,7 @@ require (
 
 require (
 	github.com/infantilo/openmediaplatform/tools/contract-check v0.0.0-00010101000000-000000000000
+	github.com/infantilo/openmediaplatform/update v0.0.0
 	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
@@ -55,3 +56,5 @@ require (
 )
 
 replace github.com/infantilo/openmediaplatform/tools/contract-check => ../tools/contract-check
+
+replace github.com/infantilo/openmediaplatform/update => ../update

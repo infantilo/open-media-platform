@@ -34,12 +34,21 @@ if curl -fs "http://$LISTEN/status" > /dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Supervisor-Binary bauen"
-( cd "$ROOT_DIR/supervisor" && go build -o "$BIN" . )
+if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
+  echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertiges Binary)"
+else
+  echo "==> Supervisor-Binary bauen"
+  ( cd "$ROOT_DIR/supervisor" && go build -o "$BIN" . )
+fi
 
 echo "==> Supervisor starten"
 export OMP_ROOT_DIR="$ROOT_DIR"
 export OMP_BACKUP_DIR="$ROOT_DIR/.backups"
+# System-Update (docs/ENTWURF-SYSTEM-UPDATE.md) — gleiche Pfade wie beim
+# Orchestrator (start-omp.sh); der Supervisor prüft Pakete selbst erneut.
+export OMP_UPDATE_DIR="${OMP_UPDATE_DIR:-$ROOT_DIR/.updates}"
+export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"
+export OMP_CATALOG_PATH="${OMP_CATALOG_PATH:-$ROOT_DIR/deploy/catalog.json}"
 export OMP_SUPERVISOR_LISTEN="$LISTEN"
 nohup "$BIN" > "$LOG_FILE" 2>&1 &
 echo $! > "$PID_FILE"

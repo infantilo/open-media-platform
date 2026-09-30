@@ -1,6 +1,6 @@
 # Entwurf: System-Update per Supervisor (Browser-Upload als Admin)
 
-Stand: 2026-09-30 · Status: **Entwurf, nichts davon ist implementiert.**
+Stand: 2026-09-30 · Status: **umgesetzt (siehe „Umsetzung“ am Ende), live getestet.**
 Auslöser: „Gibt es schon eine Möglichkeit, den Orchestrator/Server per UI zu
 updaten (Firmware-Update)?" — Antwort heute: nein. Vorhanden ist nur der
 Backup/Restore-Weg über `omp-supervisor` (`supervisor/main.go`), der
@@ -184,3 +184,59 @@ Update gleichzeitig → 409.
    bliebe `git pull` + `make start` der Weg; der Update-Knopf wäre dort
    nur zum Testen des Ablaufs. Soll `bin/` bzw. `nodes/target/release`
    das Ziel sein?
+
+## 10. Umsetzung (2026-09-30)
+
+Entscheidungen zu §9: **Signatur ab Phase 1 verpflichtend** (Ed25519,
+`OMP_UPDATE_ALLOW_UNSIGNED=true` nur für Entwicklung), **Node-Binaries und
+Supervisor sind von Anfang an Teil des Pakets**, **laufende Nodes laufen
+weiter und werden als „veraltet“ markiert**, Ziel sind **fertige Binaries**
+(`OMP_SKIP_BUILD=1` überspringt Go-/Deno-Build in `start-omp.sh`).
+
+Bausteine
+
+- `update/` — gemeinsames Go-Modul: Paketformat, Manifest, sichere
+  Prüfung (kein Symlink/`..`/absoluter Pfad/nicht gelistete Datei,
+  SHA-256, Ed25519), Entpacken, Versionsvergleich. Von Orchestrator,
+  Supervisor und Werkzeug gemeinsam genutzt.
+- `tools/update-bundle` — `keygen`, `pack`, `verify`; `make update-keygen`
+  und `make update-bundle` (Orchestrator mit Versionsstempel, Supervisor,
+  Host-Agent, UI, alle im Katalog referenzierten Nodes).
+- Orchestrator — `GET /api/v1/version` (offen), `GET/POST/DELETE
+  /api/v1/admin/updates…`, `POST …/{id}/apply` (Admin; getippte
+  Versionsbestätigung, Backup vorher — Pflicht bei Migrationen,
+  Mindestversion/Downgrade-Schutz, Domain-Audit). Instanzen mit
+  `outdated` (Binary jünger als Prozessstart).
+- Supervisor — `POST /update`: prüft erneut, stellt neben den Zielen bereit
+  (ohne Downtime), stop → tauschen (Vorgänger nach
+  `.updates/rollback/<ts>/`) → start → Version/Health prüfen →
+  automatischer Rollback; ersetzt sich zuletzt per `exec` (gleiche PID);
+  Verlauf in `.updates/history.json`. Ein gemeinsames Busy-Flag mit Restore.
+- UI — Admin → „System-Update“; Badge „veraltet“ in der Instanzenansicht.
+
+Einrichtung (einmalig)
+
+1. `make update-keygen` — privater Schlüssel unter `~/.omp-update/`
+   (geheim halten, nicht auf den Server), `update-trusted.pub` daneben.
+2. `update-trusted.pub` auf den Server nach `.run/update-trusted.pub`.
+3. Orchestrator und Supervisor einmal mit dem neuen Code starten
+   (`make stop && make start`) — danach reicht der Browser.
+
+Ablauf pro Update: `make update-bundle` → `dist/omp-update-<Version>.tar.gz`
+→ im Browser hochladen → prüfen → Version eintippen → installieren.
+
+Live geprüft am 2026-09-30: erfolgreiches Update (Orchestrator, UI,
+Supervisor per `exec`, Host-Agent, Node-Binary über den Katalog), manipuliertes
+Paket abgelehnt, absichtlich defekter Orchestrator → automatischer Rollback
+auf den vorherigen Stand.
+
+Noch nicht enthalten
+
+- **Remote-Hosts/Host-Agents auf anderen Maschinen** — nur die lokalen
+  Dateien werden ersetzt; entfernte Hosts brauchen einen eigenen
+  `update`-Befehl des Host-Agents.
+- **Cluster-Rolling-Update** (mehrere Orchestrator-Mitglieder).
+- Laufende Host-Agents/Nodes laufen bis zu ihrem Neustart mit dem alten
+  Binary weiter (Nodes werden markiert, Host-Agents nicht).
+- Im Entwicklungsbetrieb überschreibt ein späteres `make start` den
+  eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“).

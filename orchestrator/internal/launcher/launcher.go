@@ -137,6 +137,11 @@ type Instance struct {
 	// unterstützt (dokumentierte Folgearbeit, docs/decisions.md D6 Teil
 	// 2 — der Host-Agent meldet einen Absturz noch nicht zurück).
 	Crashed bool `json:"crashed,omitempty"`
+	// Outdated: das Binary dieses Typs wurde seit dem Prozessstart
+	// ersetzt (System-Update) — die Instanz läuft noch mit dem alten
+	// Stand, bis sie neu gestartet wird. Wird erst beim Ausliefern der
+	// Liste berechnet (httpapi.instancesWithOutdated), nicht gespeichert.
+	Outdated bool `json:"outdated,omitempty"`
 	// CrashMessage ist der Wait()-Fehler plus die letzten
 	// crashStderrLines Zeilen stderr der Instanz, nur gesetzt wenn Crashed.
 	CrashMessage string `json:"crashMessage,omitempty"`

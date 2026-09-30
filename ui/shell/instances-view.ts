@@ -29,6 +29,8 @@ interface LauncherInstance {
   pid: number;
   hostId?: string;
   crashed?: boolean;
+  // Binary seit dem Prozessstart ersetzt (System-Update) — läuft mit altem Stand.
+  outdated?: boolean;
   crashMessage?: string;
   restartCount?: number;
   cpuPercent?: number;
@@ -114,7 +116,10 @@ class InstancesView extends HTMLElement {
         const hostLabel = inst.hostId ? hosts.find((h) => h.id === inst.hostId)?.label || inst.hostId : "lokal";
         const status = inst.crashed
           ? `<span class="omp-badge omp-badge-error">Abgestürzt</span>`
-          : `<span class="omp-badge omp-badge-running">Läuft</span>`;
+          : `<span class="omp-badge omp-badge-running">Läuft</span>` +
+            (inst.outdated
+              ? ` <span class="omp-badge" title="Das Programm wurde durch ein Update ersetzt; diese Instanz läuft noch mit dem alten Stand bis zum nächsten Neustart.">veraltet</span>`
+              : "");
         const restarts =
           inst.restartCount ? `↻ ${inst.restartCount}×` : `<span style="color:var(--omp-text-dim);">–</span>`;
         const crashLine = inst.crashed
