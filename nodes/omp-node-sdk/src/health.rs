@@ -126,16 +126,22 @@ pub struct NatsTlsConfig {
 }
 
 impl NatsTlsConfig {
-    /// Liest `OMP_NATS_TLS_CERT_FILE`/`_KEY_FILE`/`_CA_FILE` — alle drei
-    /// leer/unbesetzt ist der Default (Klartext-NATS, unverändertes
-    /// Verhalten). `OMP_NATS_TLS_ENABLED` selbst wird hier NICHT
-    /// geprüft: `apply_tls` aktiviert TLS bereits automatisch, sobald
-    /// mindestens ein Pfad gesetzt ist — ein eigenes Enabled-Flag wäre
-    /// hier redundant (anders als in Go, wo `mtls.Config.Enabled` auch
-    /// den Fall "Datei-Pfade gesetzt, aber bewusst deaktiviert" abdeckt;
-    /// für den Rust-SDK-Fall reicht "keine Pfade gesetzt" als Aus-
-    /// Zustand, ein Node hat keinen eigenen Config-Mechanismus dafür).
+    /// Liest `OMP_NATS_TLS_CERT_FILE`/`_KEY_FILE`/`_CA_FILE` — aber NUR,
+    /// wenn `OMP_NATS_TLS_ENABLED` wahr ist (`1`/`true`, wie beim
+    /// Orchestrator, `config.go`). Bugfund 2026-09-30 ("AFV funktioniert
+    /// nicht mehr"): `start-omp.sh` exportiert die Pfad-Variablen IMMER
+    /// (Defaults unter `.run/mtls`), und `apply_tls` erzwang TLS schon
+    /// bei gesetzten Pfaden — gegen einen Klartext-NATS-Cluster (Default,
+    /// `make up`) verband sich dadurch KEIN Node mehr; `flush()` in
+    /// `publish_tally` hing für immer, Tally und damit Audio-Follow-Video
+    /// fielen still aus. Ohne das Enabled-Flag: Klartext, wie dokumentiert.
     pub fn from_env() -> Self {
+        let enabled = std::env::var("OMP_NATS_TLS_ENABLED")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false);
+        if !enabled {
+            return NatsTlsConfig { cert_file: None, key_file: None, ca_file: None };
+        }
         NatsTlsConfig {
             cert_file: std::env::var("OMP_NATS_TLS_CERT_FILE").ok(),
             key_file: std::env::var("OMP_NATS_TLS_KEY_FILE").ok(),
