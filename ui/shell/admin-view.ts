@@ -456,6 +456,7 @@ class AdminView extends HTMLElement {
   #updForce = false;
   #updApplying = false;
   #updPollHandle: number | null = null;
+  #restartingOutdated = false;
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -1413,6 +1414,47 @@ class AdminView extends HTMLElement {
     }, 2000);
   }
 
+  // Startet veraltete Instanzen (Binary durch ein Update ersetzt) neu —
+  // Workflow-Rollen über RestartRole (stabile IDs), freistehende Instanzen
+  // per Stop + Start. Bewusst eine eigene, bestätigte Aktion: ein Update
+  // startet nie selbstständig laufende Sendungen neu.
+  async #restartOutdated() {
+    const n = this.#upd?.outdatedInstances ?? 0;
+    const ok = await confirmDialog(
+      `${n} veraltete Instanz(en) jetzt neu starten? Ihre Signale unterbrechen sich dabei kurz ` +
+        `(Workflow-Rollen behalten Node-IDs und Bedienzustand).`,
+      { confirmLabel: "Neu starten" },
+    );
+    if (!ok) return;
+    this.#restartingOutdated = true;
+    this.#error = "";
+    this.#render();
+    try {
+      const res = await apiFetch("/api/v1/admin/updates/restart-outdated", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!res.ok) {
+        this.#error = `Neustart fehlgeschlagen: ${(await res.text()).trim()}`;
+      } else {
+        const body = (await res.json()) as { results: { label: string; ok: boolean; error?: string }[] };
+        const failed = body.results.filter((r) => !r.ok);
+        if (failed.length > 0) {
+          this.#error = `Nicht alle Instanzen neu gestartet: ${failed.map((f) => `${f.label} (${f.error})`).join("; ")}`;
+        }
+      }
+    } catch (err) {
+      this.#error = `Neustart fehlgeschlagen: ${err}`;
+    } finally {
+      this.#restartingOutdated = false;
+      // Telemetrie/Prozessstart brauchen einen Moment, bis das Badge verschwindet.
+      window.setTimeout(() => void this.#loadUpdates(), 3000);
+      await this.#loadUpdates();
+      this.#render();
+    }
+  }
+
   async #deleteUpdate(id: string) {
     const ok = await confirmDialog(`Update-Paket „${id}" vom Server löschen?`, { confirmLabel: "Löschen" });
     if (!ok) return;
@@ -1503,6 +1545,12 @@ class AdminView extends HTMLElement {
       warn.textContent =
         `${upd.outdatedInstances} laufende Node-Instanz(en) nutzen noch einen älteren Stand als die installierten Dateien ` +
         `— sie werden beim nächsten Neustart (Instanz oder Workflow) aktualisiert.`;
+      const restartBtn = document.createElement("button");
+      restartBtn.style.cssText = "margin-left:10px;";
+      restartBtn.textContent = this.#restartingOutdated ? "Startet neu …" : "Veraltete Instanzen jetzt neu starten";
+      restartBtn.disabled = this.#restartingOutdated;
+      restartBtn.addEventListener("click", () => void this.#restartOutdated());
+      warn.appendChild(restartBtn);
       section.appendChild(warn);
     }
 

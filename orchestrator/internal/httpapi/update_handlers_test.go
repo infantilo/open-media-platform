@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/backup"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 	"github.com/infantilo/openmediaplatform/update"
 )
 
@@ -350,5 +352,84 @@ func TestHostUpdateDownloadNeedsValidToken(t *testing.T) {
 	// Token einer anderen Paket-ID gilt nicht.
 	if rec := get("2026.10.1-aaaaaaaaaaaa", "good"); rec.Code != http.StatusForbidden {
 		t.Errorf("token for other package: %d, want 403", rec.Code)
+	}
+}
+
+type recordingLauncher struct {
+	fakeLauncherService
+	stopped []string
+	started []string
+}
+
+func (r *recordingLauncher) Stop(id string) error { r.stopped = append(r.stopped, id); return nil }
+func (r *recordingLauncher) StartLabeled(nodeType, version, hostID, label string, env map[string]string) (launcher.Instance, error) {
+	r.started = append(r.started, nodeType+"/"+label+"/"+env["K"])
+	return launcher.Instance{}, nil
+}
+
+type recordingWorkflows struct {
+	fakeWorkflowService
+	restarted []string
+}
+
+func (r *recordingWorkflows) RestartRole(_ context.Context, id, role, _ string, _ *int) error {
+	r.restarted = append(r.restarted, id+"/"+role)
+	return nil
+}
+
+func TestRestartOutdated(t *testing.T) {
+	dir := t.TempDir()
+	newBin := filepath.Join(dir, "omp-source")
+	oldBin := filepath.Join(dir, "omp-viewer")
+	for _, p := range []string{newBin, oldBin} {
+		_ = os.WriteFile(p, []byte("x"), 0o755)
+	}
+	future := time.Now().Add(time.Hour)
+	past := time.Now().Add(-24 * 365 * time.Hour)
+	_ = os.Chtimes(newBin, future, future) // ersetzt nach Prozessstart -> veraltet
+	_ = os.Chtimes(oldBin, past, past)     // älter als der Prozess -> aktuell
+
+	pid := os.Getpid()
+	lsvc := &recordingLauncher{fakeLauncherService: fakeLauncherService{
+		catalog: []launcher.CatalogEntry{
+			{Type: "omp-source", Command: []string{newBin}},
+			{Type: "omp-viewer", Command: []string{oldBin}},
+		},
+		instances: []launcher.Instance{
+			{ID: "wf-inst", Type: "omp-source", Label: "Quelle1", PID: pid},
+			{ID: "solo", Type: "omp-source", Label: "Solo", PID: pid, ExtraEnv: map[string]string{"K": "v"}},
+			{ID: "fresh", Type: "omp-viewer", Label: "Viewer", PID: pid},
+		},
+	}}
+	wsvc := &recordingWorkflows{fakeWorkflowService: fakeWorkflowService{list: []workflows.Workflow{
+		{ID: "wf1", Status: workflows.StatusStarted, Runtime: map[string]workflows.RoleRuntime{"Quelle1": {InstanceID: "wf-inst"}}},
+	}}}
+
+	call := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		handleRestartOutdated(lsvc, wsvc, fakeHostMetrics{}, nil)(rec, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body)))
+		return rec
+	}
+	if rec := call(`{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("no confirm: %d, want 400", rec.Code)
+	}
+	if len(lsvc.stopped)+len(wsvc.restarted) != 0 {
+		t.Fatal("nothing may be restarted without confirmation")
+	}
+	rec := call(`{"confirm":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(wsvc.restarted) != 1 || wsvc.restarted[0] != "wf1/Quelle1" {
+		t.Errorf("workflow role restart = %v, want [wf1/Quelle1]", wsvc.restarted)
+	}
+	if len(lsvc.stopped) != 1 || lsvc.stopped[0] != "solo" || len(lsvc.started) != 1 || lsvc.started[0] != "omp-source/Solo/v" {
+		t.Errorf("standalone restart: stopped=%v started=%v", lsvc.stopped, lsvc.started)
+	}
+	// Auswahl per instanceIds begrenzt.
+	lsvc.stopped, lsvc.started, wsvc.restarted = nil, nil, nil
+	call(`{"confirm":true,"instanceIds":["solo"]}`)
+	if len(wsvc.restarted) != 0 || len(lsvc.stopped) != 1 {
+		t.Errorf("selection ignored: restarted=%v stopped=%v", wsvc.restarted, lsvc.stopped)
 	}
 }

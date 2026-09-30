@@ -498,6 +498,7 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 	mux.HandleFunc("GET /api/v1/admin/updates", g.requireVerbGlobal(authz.VerbAdmin, handleListUpdates(options.updates, options.updateSup, launcherSvc, options.updateDist)))
 	mux.HandleFunc("POST /api/v1/admin/updates/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadUpdate(options.updates, options.domainAudit)))
 	mux.HandleFunc("DELETE /api/v1/admin/updates/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUpdate(options.updates, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/updates/restart-outdated", g.requireVerbGlobal(authz.VerbAdmin, handleRestartOutdated(launcherSvc, workflowSvc, hostMetrics, options.domainAudit)))
 	mux.HandleFunc("POST /api/v1/admin/updates/{id}/distribute", g.requireVerbGlobal(authz.VerbAdmin, handleDistributeUpdate(options.updates, options.updateDist, options.domainAudit)))
 	// Host-Agent-Download: bewusst außerhalb von authGate, Zugriff nur mit Einmal-Token.
 	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))

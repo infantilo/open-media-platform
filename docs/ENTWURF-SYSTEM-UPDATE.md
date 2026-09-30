@@ -251,7 +251,12 @@ Noch nicht enthalten
 
 - **Cluster-Rolling-Update** (mehrere Orchestrator-Mitglieder) — nicht
   testbar mit einem einzelnen Mitglied, bewusst nicht geraten.
-- Ein automatischer Neustart von Host-Agents/Nodes nach dem Update.
+- Ein **automatischer** Neustart von Host-Agents/Nodes nach dem Update —
+  bewusst nicht: ein Update startet nie selbstständig laufende Sendungen
+  neu. Stattdessen gibt es die bestätigte Aktion „Veraltete Instanzen jetzt
+  neu starten“ (Admin → System-Update, `POST /api/v1/admin/updates/
+  restart-outdated`): Workflow-Rollen per `RestartRole` (stabile IDs),
+  freistehende Instanzen per Stop + Start mit denselben Angaben.
 - Im Entwicklungsbetrieb überschreibt ein späteres `make start` den
   eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“);
   `start-hosts.sh` verhält sich genauso (außer mit `OMP_SKIP_BUILD=1`).

@@ -15,6 +15,7 @@ import (
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/launcher"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/updates"
 	"github.com/infantilo/openmediaplatform/orchestrator/internal/version"
+	"github.com/infantilo/openmediaplatform/orchestrator/internal/workflows"
 	"github.com/infantilo/openmediaplatform/update"
 )
 
@@ -320,6 +321,96 @@ func handleHostUpdateDownload(svc UpdateService, dist UpdateDistributor) http.Ha
 		}
 		w.Header().Set("Content-Type", "application/gzip")
 		http.ServeFile(w, r, e.File)
+	}
+}
+
+// restartResult ist das Ergebnis je Instanz.
+type restartResult struct {
+	InstanceID string `json:"instanceId"`
+	Label      string `json:"label"`
+	Mode       string `json:"mode"` // "workflow-role" | "standalone"
+	Ok         bool   `json:"ok"`
+	Error      string `json:"error,omitempty"`
+}
+
+// handleRestartOutdated: POST /api/v1/admin/updates/restart-outdated
+// {"confirm":true,"instanceIds":["…"]} — startet Instanzen neu, deren Binary
+// durch ein Update ersetzt wurde. Instanzen, die eine Workflow-Rolle
+// erfüllen, werden über RestartRole neu gestartet (stabile Node-/Device-IDs,
+// Rollenzustand bleibt erhalten); freistehende Instanzen per Stop + Start
+// mit denselben Angaben (Typ, Version, Host, Label, extraEnv). Ohne
+// instanceIds werden alle veralteten Instanzen neu gestartet. Bewusst eine
+// eigene, bestätigte Aktion — ein Update startet nie selbstständig
+// laufende Sendungen neu.
+func handleRestartOutdated(launcherSvc LauncherService, workflowSvc WorkflowService, hostMetrics HostMetricsReader, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Confirm     bool     `json:"confirm"`
+			InstanceIDs []string `json:"instanceIds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !body.Confirm {
+			http.Error(w, "Bestätigung erforderlich (confirm: true)", http.StatusBadRequest)
+			return
+		}
+		want := map[string]bool{}
+		for _, id := range body.InstanceIDs {
+			want[id] = true
+		}
+		list := instancesWithOutdated(launcherSvc)
+		mergeInstanceMetrics(list, hostMetrics)
+
+		// Rollen laufender Workflows: Instanz-ID -> (Workflow, Rolle).
+		type roleRef struct{ workflowID, role string }
+		roles := map[string]roleRef{}
+		if wfs, err := workflowSvc.List(); err == nil {
+			for _, wf := range wfs {
+				if wf.Status != workflows.StatusStarted {
+					continue
+				}
+				for role, rt := range wf.Runtime {
+					roles[rt.InstanceID] = roleRef{wf.ID, role}
+				}
+			}
+		}
+
+		results := []restartResult{}
+		for _, inst := range list {
+			if !inst.Outdated || (len(want) > 0 && !want[inst.ID]) {
+				continue
+			}
+			res := restartResult{InstanceID: inst.ID, Label: inst.Label}
+			if ref, ok := roles[inst.ID]; ok {
+				res.Mode = "workflow-role"
+				if err := workflowSvc.RestartRole(r.Context(), ref.workflowID, ref.role, "", nil); err != nil {
+					res.Error = err.Error()
+				} else {
+					res.Ok = true
+				}
+			} else {
+				res.Mode = "standalone"
+				if err := launcherSvc.Stop(inst.ID); err != nil {
+					res.Error = "stoppen: " + err.Error()
+				} else if _, err := launcherSvc.StartLabeled(inst.Type, inst.Version, inst.HostID, inst.Label, inst.ExtraEnv); err != nil {
+					res.Error = "starten: " + err.Error()
+				} else {
+					res.Ok = true
+				}
+			}
+			results = append(results, res)
+		}
+		okCount := 0
+		for _, res := range results {
+			if res.Ok {
+				okCount++
+			}
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "system_update", "restart-outdated", "instances_restarted",
+			map[string]any{"restarted": okCount, "total": len(results)})
+		writeJSON(w, http.StatusOK, map[string]any{"results": results})
 	}
 }
 
