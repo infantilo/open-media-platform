@@ -308,6 +308,106 @@ Skriptpaar wurde bei seiner Einführung einmal echt durchgespielt
 (Backup → Testnutzer angelegt → Restore → Testnutzer wieder weg,
 dokumentiert in `docs/decisions.md`), nicht nur gelesen/geschrieben.
 
+## 5b. System-Update (Browser-Upload)
+
+Neue Versionen des Servers lassen sich ohne Zugriff auf die Maschine
+einspielen: Administration → **System-Update** (Bedienung: `BENUTZERHANDBUCH.md`
+§7). Dieser Abschnitt beschreibt Einrichtung, Paketbau und Betrieb; das
+vollständige Konzept steht in `docs/ENTWURF-SYSTEM-UPDATE.md`.
+
+**Bausteine.** Der Orchestrator nimmt das Paket entgegen und prüft es;
+angewendet wird es vom eigenständigen **Supervisor** (derselbe Prozess wie
+beim Restore, `deploy/dev/start-supervisor.sh`), der den Orchestrator dafür
+anhalten und neu starten muss. Beide prüfen das Paket unabhängig
+voneinander — der Supervisor vertraut dem Orchestrator nicht, der ja gerade
+ersetzt wird.
+
+**Paketformat.** `omp-update-<Version>.tar.gz` mit `manifest.json`
+(Version, Architektur, Mindestversion, Migrationen, Komponenten mit
+SHA-256 und Ziel) und `manifest.sig` (Ed25519-Signatur über das
+Manifest). Abgelehnt wird jedes Archiv mit Symlinks, `..`/absoluten
+Pfaden, nicht im Manifest gelisteten Dateien, falscher Prüfsumme,
+falscher Architektur oder Zielen außerhalb der erlaubten Liste:
+`bin/omp-orchestrator`, `bin/omp-supervisor`, `bin/omp-host-agent`,
+`ui/dist/…` und `node:<omp-name>` (das über den Katalog auf den echten
+Pfad abgebildet wird, nur für Nodes, die im Katalog stehen).
+
+**Einrichtung (einmalig).**
+```sh
+make update-keygen                                  # erzeugt ~/.omp-update/update-signing.key (GEHEIM) und update-trusted.pub
+cp ~/.omp-update/update-trusted.pub .run/update-trusted.pub   # Vertrauensanker auf dem Server
+make stop && make start                             # Orchestrator + Supervisor laden den neuen Code
+```
+Den privaten Schlüssel nicht auf den Server legen. Ohne `.run/update-trusted.pub`
+lehnt der Server jedes Paket ab; `OMP_UPDATE_ALLOW_UNSIGNED=true` erlaubt
+unsignierte Pakete und ist nur für die Entwicklung gedacht.
+
+**Paket bauen.**
+```sh
+make update-bundle                    # baut Binaries + UI und packt sie signiert nach dist/
+make update-bundle UPDATE_VERSION=2026.10.1 NODES_PROFILE=release
+```
+Enthalten: Orchestrator (mit Versionsstempel), Supervisor, Host-Agent,
+UI-Bundle und alle im Katalog referenzierten Node-Programme aus
+`nodes/target/<NODES_PROFILE>`. Debug-Nodes summieren sich auf mehrere GB;
+für Pakete `NODES_PROFILE=release` verwenden. Die Version muss numerisch
+aufsteigen (Standard: Datum + Uhrzeit). Zusätzliche Optionen (Migrationen,
+Mindestversion, Hinweistext) über `UPDATE_BUNDLE_ARGS` bzw. direkt mit
+`cd tools/update-bundle && go run . pack -h`; `go run . verify -pub <Schlüssel> <Paket>`
+prüft ein Paket auf der Kommandozeile.
+
+**Ablauf beim Installieren.**
+1. Backup (Pflicht, wenn das Paket Datenbank-Migrationen enthält).
+2. Alle Dateien werden neben ihrem Ziel bereitgestellt und geprüft —
+   noch ohne Ausfall.
+3. Orchestrator anhalten (`stop-omp.sh`), Dateien atomar tauschen (die
+   Vorgänger liegen unter `.updates/rollback/<Zeitstempel>/`, die letzten
+   drei bleiben erhalten), Orchestrator starten (`start-omp.sh` mit
+   `OMP_SKIP_BUILD=1`, es wird also **nichts aus dem Quellcode gebaut**).
+4. Prüfung: `/healthz` und `GET /api/v1/version` müssen die neue Version
+   melden (Zeitlimit 90 s).
+5. Bei Fehlern **automatischer Rollback** und Neustart des alten Stands;
+   der Grund steht im Verlauf. Enthielt das Update Datenbank-Migrationen,
+   die bereits angewendet wurden, weist die Meldung ausdrücklich darauf
+   hin, dass das Schema neuer als das alte Programm sein kann — dann das
+   Backup über Backup/Restore einspielen (ein automatischer Datenbank-
+   Restore findet bewusst nicht statt).
+6. Ist der Supervisor selbst Teil des Pakets, ersetzt er sich zuletzt per
+   `exec` (gleiche PID). Schlägt der `exec` selbst fehl, läuft der alte
+   Supervisor weiter; stürzt das neue Programm erst nach dem Start ab,
+   muss er per `deploy/dev/start-supervisor.sh` neu gestartet werden.
+
+**Nodes und Host-Agents.** Laufende Prozesse behalten ihr altes Programm
+(Linux hält die alte Datei fest) und bleiben in Betrieb; sie gelten als
+**„veraltet"**, bis sie neu gestartet werden — Erkennung: das Programm ist
+jünger als der Prozessstart. „Veraltete Instanzen jetzt neu starten"
+(`POST /api/v1/admin/updates/restart-outdated`) startet Workflow-Rollen
+über RestartRole und freistehende Instanzen per Stop + Start neu.
+„An Remote-Hosts verteilen" (`POST /api/v1/admin/updates/{id}/distribute`)
+schickt jedem erreichbaren Host-Agent ein `update`-Kommando; der Agent
+lädt das Paket mit einem Einmal-Token vom eigenen Orchestrator, prüft es
+mit **seinem** Vertrauensanker (`OMP_UPDATE_PUBKEY_FILE` auf dem Host,
+in `start-hosts.sh` für die simulierten Hosts gesetzt) und ersetzt Agent-
+und Node-Programme seines lokalen Katalogs. Ein neuer Host-Agent wird erst
+nach dessen Neustart aktiv, weil ein Neustart seine verwalteten
+Kindprozesse verwaisen ließe.
+
+**Wichtige Umgebungsvariablen.** `OMP_UPDATE_DIR` (Ablage der Pakete,
+Rollback-Kopien und Verlauf, Standard `.updates/`),
+`OMP_UPDATE_PUBKEY_FILE` (Standard `.run/update-trusted.pub`),
+`OMP_UPDATE_ALLOW_UNSIGNED`, `OMP_SKIP_BUILD` (überspringt in
+`start-omp.sh`/`start-supervisor.sh`/`start-hosts.sh` den Quellcode-Build).
+
+**Entwicklungsbetrieb.** Ein späteres `make start` baut wieder aus dem
+Quellcode (Version „dev") und überschreibt damit einen eingespielten
+Stand. Der Update-Weg ist für Installationen mit fertigen Binaries
+gedacht; im Entwicklungsbetrieb bleibt `git pull` + `make start` der
+normale Weg.
+
+**Noch nicht enthalten.** Rollierendes Update mehrerer Orchestrator-
+Mitglieder (Cluster) und ein automatischer Neustart von Host-Agents/Nodes
+nach dem Update.
+
 ## 6. Remote-Zugriff / Reverse-Proxy (S7)
 
 Der Orchestrator selbst spricht nur Klartext-HTTP (`http://localhost:8000`)
@@ -426,6 +526,23 @@ von selbst; falls nicht, `podman logs omp-nmos-registry` prüfen.
 `deploy/dev/install-mxl.sh` nicht gelaufen ist (siehe Voraussetzungen oben).
 Betrifft nur die MXL-Nodes, nicht den Orchestrator/die UI.
 
+**Tally im Flow Editor bleibt aus, Audio-Follow-Video (AFV) schaltet nicht
+mit, im Orchestrator-Log stehen „tally publish … timed out"** — die Nodes
+erreichen NATS nicht. Häufige Ursache: die Pfad-Variablen
+`OMP_NATS_TLS_*` sind gesetzt (`start-omp.sh` exportiert Standardpfade
+unter `.run/mtls`), der NATS-Cluster läuft aber im Klartext. Der
+Node-SDK nutzt TLS zu NATS nur noch, wenn zusätzlich
+`OMP_NATS_TLS_ENABLED=true` gesetzt ist (Standard: Klartext). Prüfen: die
+NATS-Monitoring-Ports (`curl localhost:8222/connz`) müssen die
+`omp-node-sdk`-Verbindungen der Nodes zeigen.
+
+**System-Update wird abgelehnt** — „Signatur ungültig" heißt: der
+Schlüssel des Pakets steht nicht in `.run/update-trusted.pub` (bzw. es gibt
+die Datei nicht); „Architektur" heißt: das Paket wurde für eine andere
+Plattform gebaut; „Mindestversion" verlangt zuerst ein Zwischenupdate.
+Scheitert das Anwenden, steht der Grund samt automatischem Rollback im
+Reiter System-Update unter „Verlauf" und in `.run/supervisor.log`.
+
 **Podman rootless startet nicht** — siehe `deploy/quadlets/README.md` bzw.
 `docs/decisions.md` (2026-07-07, Toolchain-Installation) für die auf dieser
 Dev-Maschine verifizierte Konfiguration.
@@ -451,7 +568,7 @@ startbar ist.
 | **omp-mxf-player** | MXF-Datei-/Playlist-Player, cue/take-bedient (A/B-Slot), mit Programmgruppen-Audio-Shuffle. Kann zusätzlich eine entdeckte Live-MXL-Quelle als Playlist-Item abspielen. |
 | **omp-mxf-player-direct** | Diagnose-/Direkt-Variante von omp-mxf-player: kein A/B-Slot-Cue/Take, keine Playlist — spielt beim Start automatisch genau eine Datei direkt in die MXL-Ausgänge. |
 | **omp-channel-player** | Isel-freier, einzweigiger Player ohne Playlist/Cue-Take — `load()` ersetzt den aktuellen Inhalt sofort. Gedacht als eine von zwei physischen Quellen am Video-Mixer-Crosspoint für echten Crossfade. |
-| **omp-multiviewer** | Zeigt alle im Netz entdeckten MXL-Videoquellen automatisch als Kachel-Raster. Reines Monitoring, kein weiterverkettbares Programmsignal. |
+| **omp-multiviewer** | Zeigt entdeckte MXL-Videoquellen automatisch als Kachel-Raster. Läuft er als Rolle eines Workflows, zeigt er **nur die Quellen dieses Workflows** (Node-Tag `urn:x-omp:workflow`); manuell gestartet zeigt er alle. Reines Monitoring, kein weiterverkettbares Programmsignal. |
 | **omp-viewer** | Zeigt einen ausgewählten MXL-Videostream als MJPEG-Vorschau im Browser. |
 | **omp-playout-automation** | Automatisierte Playlist-Sequenzierung: steuert zwei omp-channel-player-Kanäle (A/B) und einen Bildmischer fern (Auto/Hold-Modus, Next/Next-Live/Stop, Cart-/Interrupt-Assets), echtes Xfade zwischen den beiden Kanälen. Keine eigene Medienpipeline. |
 | **omp-ograf** | Rendert eine EBU-OGraf-Grafikvorlage (Bauchbinde, Laufband u. a.) als Fill+Key-MXL-Ausgang für den Bildmischer-DSK. |

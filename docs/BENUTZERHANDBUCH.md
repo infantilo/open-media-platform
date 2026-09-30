@@ -74,8 +74,10 @@ dargestellt (im Screenshot oben: Source → Viewer, orange/aktiv).
 
 „Alle einpassen" (oben rechts) zentriert und skaliert die Ansicht auf
 alle vorhandenen Kacheln. Kachel-Positionen werden pro Nutzer
-gespeichert („Snapshot speichern" unten links sichert zusätzlich den
-kompletten Verbindungszustand als benanntes Preset, wiederherstellbar).
+gespeichert. Früher gab es unten links einen Knopf „Snapshot speichern";
+er ist entfallen. Bereits vorhandene Szenen erscheinen weiterhin als
+Knöpfe unten links und lassen sich per Klick anwenden — ohne gespeicherte
+Szenen bleibt die Leiste ausgeblendet.
 
 ### 2.4 Gruppieren
 
@@ -167,6 +169,15 @@ Ein Prozess, der abstürzt, wird automatisch neu gestartet (mit einer
 Bremse gegen Neustart-Schleifen) — die Neustarts-Spalte macht das
 sichtbar, ohne dass man die Logs durchsuchen muss.
 
+Nach einem **System-Update** (Abschnitt 7, „System-Update") trägt eine
+Instanz das Kennzeichen **„veraltet"**, wenn ihr Programm durch das Update
+ersetzt wurde, der laufende Prozess aber noch den alten Stand ausführt.
+Das gilt für Instanzen auf dem Orchestrator-Host genauso wie für Instanzen
+auf Remote-Hosts. Ein Update startet nie selbstständig laufende Sendungen
+neu; die Instanzen werden erst mit ihrem nächsten Neustart aktuell —
+gezielt über „Veraltete Instanzen jetzt neu starten" im Reiter
+System-Update.
+
 ## 4. Workflows
 
 Der Reiter **Workflows** verwaltet benannte, wiederverwendbare
@@ -242,26 +253,105 @@ auszurechnen.
 
 Der Reiter **Scheduler** zeigt für jeden Workflow eine eigene Zeile auf
 einer horizontalen Zeitachse — Tag- (30-Minuten-Raster), Wochen- (7 Tage,
-gleiche Auflösung, nur schmaler) und Monatsansicht (reiner Tage-
-Überblick ohne Uhrzeit, Klick springt in die Tagesansicht) über die drei
-Knöpfe oben umschaltbar, `◀`/`Heute`/`▶` navigiert:
+gleiche Auflösung, nur schmaler) und Monatsansicht (Tage-Überblick ohne
+Uhrzeit, Klick springt in die Tagesansicht) über die drei Knöpfe oben
+umschaltbar, `◀`/`Heute`/`▶` navigiert. Der blaue senkrechte Strich
+markiert „jetzt".
 
-![Scheduler: Tagesansicht mit einem Zeitplan-Balken](screenshots/scheduler.png)
+Unter den Workflow-Zeilen zeigt der Scheduler, **welche Ressourcen zu
+welcher Zeit belegt und wo noch frei sind** (Abschnitt 5.1). Das Wissen
+um verfügbare Ressourcen ist beim Planen der wichtigste Punkt: ein Zeitplan
+ist nur dann verlässlich, wenn der Host zur geplanten Zeit auch genug
+Reserve hat.
 
-- **„+"** am rechten Rand einer Workflow-Zeile legt ein neues Start-/
-  Stop-Paar mit Standardzeiten an (09:00–17:00), sofort per Maus
-  verschieb- und größenveränderbar — Loslassen speichert direkt, kein
-  separater „Speichern"-Schritt (anders als das Workflow-Formular in
-  Abschnitt 4).
+![Scheduler, Tagesansicht: mehrere geplante Workflows, darunter je Host die Ressourcen-Streifen; 18:00–19:00 ist Regie-Host-B überlastet](screenshots/scheduler.png)
+
+**Zeitpläne bearbeiten** — alles per Maus, Loslassen speichert sofort (kein
+separater „Speichern"-Schritt, anders als das Workflow-Formular in
+Abschnitt 4):
+
+- **Verschieben:** einen Balken in der Mitte anfassen und ziehen.
+- **Verlängern/Verkürzen:** den linken oder rechten Rand des Balkens
+  ziehen (Start bzw. Stop ändern sich einzeln).
+- **Neu anlegen:** auf eine **leere Stelle** einer Workflow-Zeile klicken,
+  gedrückt halten und über die gewünschte Dauer ziehen — beim Loslassen
+  entsteht ein Start-/Stop-Paar. Die Art (**einmalig**, **täglich**,
+  **wöchentlich**) wählst du oben rechts unter „Neu ziehen als". Ein
+  neuer Zeitplan gilt für den Tag, auf dem du gezogen hast (bei „täglich"
+  jeden Tag, bei „wöchentlich" an diesem Wochentag).
+- **„+"** am rechten Zeilenrand legt alternativ ein Paar mit
+  Standardzeiten an (09:00–17:00).
 - **Doppelklick** auf einen Balken öffnet exakte HH:MM-Eingabefelder
-  (Ziehen bleibt auf das 30-Minuten-Raster begrenzt).
-- Ein Zeitplan ist **einmalig**, **täglich** oder **wöchentlich**
-  (Wochentag wählbar) und löst je nach Balkenende **Start** oder **Stop**
-  des gesamten Workflows aus — technisch dieselbe Aktion, die auch ein
-  Klick auf „Start"/„Stop" im Workflows-Tab auslöst. Im Screenshot trägt
-  „Regie 1" vier Zeitpläne (ein tägliches und ein wöchentliches
-  Start/Stop-Paar); sichtbar ist hier der tägliche 10:00–16:30-Balken.
+  (Ziehen rastet auf 30 Minuten ein).
 - **„×"** an einem Balken löscht den Zeitplan.
+
+Ein Zeitplan löst je nach Balkenende **Start** oder **Stop** des ganzen
+Workflows aus — technisch dieselbe Aktion wie ein Klick auf „Start"/„Stop"
+im Workflows-Tab.
+
+![Neuen Zeitplan aufziehen: das gestrichelte Feld in der Zeile „Sonderübertragung", darunter die Ressourcen-Vorschau](screenshots/scheduler-ziehen.png)
+
+Während du ziehst, aktualisiert sich der Ressourcen-Block live
+(„Vorschau beim Ziehen") — du siehst sofort, ob die neue Lage einen Host
+überlastet. Erzeugt die Änderung beim Loslassen einen **neuen** Engpass,
+erscheint zusätzlich eine Warnung mit Host, Zeit und Ressource. Gespeichert
+wird trotzdem: der Scheduler informiert, entscheidet aber nicht für dich.
+
+### 5.1 Ressourcen: Engpässe und freie Kapazität
+
+Für jeden Host (und einen Streifen für Workflows **ohne Host-Festlegung**,
+die der Orchestrator zum Startzeitpunkt selbst platziert) zeigt der
+Ressourcen-Block:
+
+- **CPU** und **RAM** als Streifen über die Zeit, dazu je **I/O-Kartentyp**
+  (z. B. SDI-Eingänge) ein eigener Streifen — Bedarf gegen die Anzahl
+  vorhandener Ports.
+- **Farben:** dunkel = frei, grün = in Ordnung, gelb = knapp (ab 80 % des
+  Grenzwerts), **rot = Engpass** (über dem Grenzwert, standardmäßig 85 % CPU
+  und 90 % RAM — dieselben Werte, mit denen die Platzierung entscheidet).
+  Schraffiert = **Bedarf unbekannt**: für einen Node-Typ liegt noch kein
+  Messprofil vor. Das ist ausdrücklich nicht „null", sondern „nicht
+  bekannt" — solche Zeiträume können mehr Last bedeuten, als angezeigt.
+- Pro Host eine **Zusammenfassung**: entweder die Engpass-Zeiträume
+  („⚠ Engpass: 18:00–19:00 (CPU)") oder die **freie Reserve** bis zum
+  Grenzwert (Minimum im sichtbaren Ausschnitt, in Kernen und GB), oder
+  „komplett frei".
+- Neben dem Hostnamen die **aktuelle Auslastung** („jetzt: CPU 5 % · RAM
+  19 %") — eine Momentaufnahme, nicht die Planung.
+- Ein **Tooltip** an jeder Zelle nennt Zeit, Bedarf, Kapazität, die freie
+  Reserve und welche Workflows/Rollen wie viel beitragen.
+- Ein **Balken bekommt einen roten Rand**, wenn während seiner Laufzeit auf
+  einem seiner Hosts ein Engpass liegt (Grund im Tooltip).
+
+Wie der Bedarf entsteht: für jede Rolle eines Workflows, der zu dem
+Zeitpunkt läuft, zählt das **gemessene Profil ihres Node-Typs** auf dem
+festgelegten Host (fehlt es dort, das typweite Profil) — CPU als 95.
+Perzentil (in Kernen), RAM als Maximum. Ein Workflow zählt als laufend,
+wenn der Zeitplan ihn zu diesem Zeitpunkt gestartet hat; ein gerade von
+Hand gestarteter Workflow zählt bis zu seinem nächsten geplanten Stop.
+Grundlage sind die Messungen der Host-Agents; je länger ein Node-Typ schon
+gelaufen ist, desto belastbarer die Werte.
+
+![Scheduler, Wochenansicht: dieselben Workflows über sieben Tage, Engpässe täglich um 18 Uhr auf Regie-Host-B](screenshots/scheduler-woche.png)
+
+In der **Wochenansicht** wiederholen sich tägliche Zeitpläne erkennbar; in
+der **Monatsansicht** zeigt jede Tageszelle den **ungünstigsten Zeitpunkt
+des Tages** — ein schneller Blick, an welchen Tagen Engpässe drohen.
+
+![Scheduler, Monatsansicht](screenshots/scheduler-monat.png)
+
+**Grenzen, die man kennen sollte:**
+
+- Geplant wird nur, was **in Zeitplänen** steht. Von Hand zusätzlich
+  gestartete Instanzen sieht man nur in der „jetzt"-Angabe des Hosts.
+- Netz- und GPU-Auslastung erscheinen nur live, nicht in der Planung (für
+  sie gibt es keine Messprofile je Node-Typ).
+- Für den Streifen „ohne Host-Festlegung" gilt die Summe aller erreichbaren
+  Hosts als Kapazität; ob eine einzelne Rolle dort noch auf einen Host
+  passt, prüft die Anzeige nicht.
+- Zeitpläne, die über Mitternacht laufen (Start 22:00, Stop 06:00), werden
+  in der Ressourcenrechnung korrekt berücksichtigt; als Balken zeigt die
+  Tagesansicht sie heute nur, wenn Start und Stop am selben Tag liegen.
 
 Der Tab ist für alle Nutzer mit Lesezugriff sichtbar; Änderungen
 verlangen (wie das Workflow-Formular selbst) das Konfigurationsrecht auf
@@ -284,6 +374,11 @@ rechts deren Versionen, Ausführungen und offene Aufgaben.
 ![Prozesse: Definitionsliste links, Versionen und Ausführungen rechts](screenshots/prozesse.png)
 
 - **„+ Neu"** legt eine Definition an (nur Name/Beschreibung).
+- **„Prozess löschen"** (oben im Detailbereich der gewählten Definition)
+  entfernt den Prozess samt allen Versionen und der Ausführungs-Historie —
+  nach einer Sicherheitsabfrage und endgültig. Solange noch Ausführungen
+  laufen (auch wartende oder pausierte), lehnt der Server das Löschen ab;
+  dann zuerst die Ausführungen abbrechen.
 - **„+ Neue Version"** öffnet den grafischen Editor. Links stehen die
   **Bausteine**, gruppiert nach Aktionen (Node-Funktion, Web-Aufruf,
   Datei-Werkzeug ffmpeg/ffprobe, Benachrichtigung, Unterprozess),
@@ -566,15 +661,16 @@ Normalbetrieb bleibt er leer:
 ## 7. Administration
 
 Der Reiter **Administration** (nur sichtbar für Nutzer mit
-Administrationsrecht) verwaltet Nutzerkonten, Rollenbindungen, den
-Node-Katalog-Import/Export, zeigt ein Audit-Log aller schreibenden
-API-Zugriffe, erstellt/restauriert Datenbank-Sicherungen und verwaltet
-den Orchestrator-Cluster selbst — seit Nutzerwunsch 2026-08-13 (und
-seit 2026-08-27 um den Cluster-Reiter ergänzt) als sechs eigene
-Unter-Reiter (Nutzer/Rollenbindungen/Node-Katalog/Audit-Log/
-Backup-Restore/Cluster) statt einer einzigen, lang scrollenden Seite
-(der Screenshot unten zeigt noch den älteren Stand, die ersten vier
-Abschnitte untereinander, noch ohne Backup/Restore und Cluster):
+Administrationsrecht) verwaltet Nutzerkonten, Organisationen, Gruppen,
+Rollenbindungen, den Node-Katalog-Import/Export, Storage-Backends, zeigt
+ein Audit-Log aller schreibenden API-Zugriffe und Diagnose-Angaben,
+erstellt/restauriert Datenbank-Sicherungen, spielt **System-Updates** ein
+und verwaltet den Orchestrator-Cluster selbst. Die Bereiche liegen als
+eigene Unter-Reiter nebeneinander (Nutzer, Organisationen, Gruppen,
+Rollenbindungen, Node-Katalog, Storage, Audit-Log, Diagnose,
+Backup/Restore, System-Update, Cluster) statt untereinander (der
+Screenshot unten zeigt noch den älteren Stand, die ersten vier Abschnitte
+untereinander):
 
 ![Administration: Nutzer, Rollenbindungen, Node-Katalog, Audit-Log](screenshots/administration.png)
 
@@ -602,6 +698,48 @@ Abschnitte untereinander, noch ohne Backup/Restore und Cluster):
   Datenbankinhalt und lädt die Seite nach einigen Sekunden automatisch
   neu, sobald der Orchestrator wieder erreichbar ist (Details:
   `docs/HANDBUCH.md` §5, inkl. des dafür nötigen Supervisor-Prozesses).
+- **System-Update** — spielt eine neue Version des Servers per
+  Browser-Upload ein (Firmware-artig, ohne Zugriff auf die Maschine):
+
+  ![System-Update: hochgeladenes, signiertes Paket mit Inhalt, Backup-Häkchen und Versionsbestätigung](screenshots/system-update.png)
+
+  1. Ein **Update-Paket** (`.tar.gz`, vom Betreiber mit `make update-bundle`
+     gebaut und **signiert**) über „Update-Paket hochladen" auswählen. Der
+     Server prüft sofort Aufbau, Prüfsummen und die Signatur gegen die
+     hinterlegten Schlüssel (oben unter „Vertrauenswürdige
+     Signaturschlüssel" angezeigt). Ein unsigniertes, verändertes oder
+     beschädigtes Paket wird abgelehnt und nicht abgelegt.
+  2. Das Paket erscheint in der Liste; „Auswählen" zeigt Version,
+     Architektur, Commit, Prüfsumme, Hinweistext, **Voraussetzung**
+     (Mindestversion), die enthaltenen Komponenten (Orchestrator,
+     Supervisor, Host-Agent, Oberfläche, Node-Programme) und ob das Update
+     die **Datenbank ändert**.
+  3. **„Jetzt installieren"** wird erst aktiv, wenn du die Versionsnummer
+     exakt eintippst. Ein Datenbank-Backup vorher ist voreingestellt (bei
+     Datenbank-Änderungen Pflicht). „Downgrade" erlaubt ausdrücklich eine
+     ältere oder gleiche Version.
+  4. Der Server sichert, wird angehalten, aktualisiert und neu gestartet
+     (Sekunden bis wenige Minuten; die Seite lädt danach von selbst neu).
+     **Kommt die neue Version nicht gesund hoch, stellt der Supervisor den
+     vorherigen Stand automatisch wieder her.** Das Ergebnis steht unter
+     „Verlauf" (erfolgreich / fehlgeschlagen, zurückgerollt, mit Grund).
+  5. **Laufende Nodes bleiben in Betrieb.** Instanzen, deren Programm
+     ersetzt wurde, sind als **„veraltet"** gekennzeichnet (Reiter
+     Instanzen); oben im Update-Reiter zeigt eine Warnung ihre Anzahl mit
+     dem Knopf **„Veraltete Instanzen jetzt neu starten"** (mit
+     Sicherheitsabfrage; Workflow-Rollen behalten dabei Node-IDs und
+     Bedienzustand).
+  6. **„An Remote-Hosts verteilen"** schickt das Paket an alle
+     erreichbaren Host-Agents; jeder prüft es mit seinem eigenen
+     Schlüssel und ersetzt sein Agent-Programm und die Node-Programme aus
+     seinem lokalen Katalog. Das Ergebnis je Host erscheint live in der
+     Liste (ok / fehlgeschlagen / offline). Ein neues Host-Agent-Programm
+     wird erst nach dem Neustart des Agents aktiv.
+
+  Wichtig: Ein Update-Paket ist ausführbarer Code. Deshalb ist der Reiter
+  nur für Administratoren, jedes Hochladen/Installieren steht im Audit-Log,
+  und ohne hinterlegten Signaturschlüssel wird **jedes** Paket abgelehnt.
+  Einrichtung, Paket bauen und Fehlerbehebung: `docs/HANDBUCH.md` §5b.
 - **Cluster** — Redundanz des Orchestrators selbst (Raft-Konsens,
   `ARCHITECTURE.md` §19.3): eine Statuskarte zeigt die eigene Node-ID,
   Zustand (Leader/Follower), Term und angewandten Log-Index dieser

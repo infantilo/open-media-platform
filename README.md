@@ -142,13 +142,18 @@ counters, next to what the writer actually declares about the flow._
 </tr>
 <tr>
 <td width="33%"><img src="docs/screenshots/workflows.png" width="260"><br><sub>Workflow management — presets, snapshots, running state</sub></td>
-<td width="33%"><img src="docs/screenshots/scheduler.png" width="260"><br><sub>Time-driven start/stop scheduling — day/week/month view, drag-to-move/resize</sub></td>
+<td width="33%"><img src="docs/screenshots/scheduler.png" width="260"><br><sub>Scheduler with resource planning — per-host CPU/RAM/I-O timeline, bottlenecks in red, free capacity, drag to move/resize/create</sub></td>
 <td width="33%"><img src="docs/screenshots/gruppen.png" width="260"><br><sub>Grouped/nested tiles in the flow editor</sub></td>
 </tr>
 <tr>
 <td width="33%"><img src="docs/screenshots/alarme.png" width="260"><br><sub>Collected alarms across the whole fleet</sub></td>
 <td width="33%"><img src="docs/screenshots/administration.png" width="260"><br><sub>Administration: users, role bindings, node catalog, audit log</sub></td>
 <td width="33%"><img src="docs/screenshots/login.png" width="260"><br><sub>Login — local user/role model with audit log</sub></td>
+</tr>
+<tr>
+<td width="33%"><img src="docs/screenshots/scheduler-woche.png" width="260"><br><sub>Scheduler, week view: recurring plans and the daily 18:00 bottleneck on one host at a glance</sub></td>
+<td width="33%"><img src="docs/screenshots/scheduler-ziehen.png" width="260"><br><sub>Dragging out a new schedule — the resource strips preview the effect live</sub></td>
+<td width="33%"><img src="docs/screenshots/system-update.png" width="260"><br><sub>System update: signed package upload, content review, version confirmation, automatic rollback</sub></td>
 </tr>
 </table>
 
@@ -225,7 +230,18 @@ Full walkthroughs and context for every screen above are in
 - Reusable workflow objects (named role→role templates), snapshots/
   presets, grouping tiles into collapsible macro blocks, import/export.
 - A scheduler tab for time-driven start/stop of whole workflows
-  (day/week/month view, drag to move/resize).
+  (day/week/month view). Drag a bar to move it, drag its edges to
+  lengthen/shorten it, or drag on an empty spot of a row to create a
+  new schedule.
+- **Resource planning in the scheduler**: below the timeline, every host
+  gets CPU, RAM and I/O-port strips over time, computed from the
+  schedules and the *measured* per-node-type profiles (CPU 95th
+  percentile, RAM maximum) against the host's capacity. Bottlenecks turn
+  red (with the affected time range and resource), the free reserve up to
+  the placement threshold is shown per host, bars that run into a
+  bottleneck get a red outline, and roles without a measurement profile
+  are hatched ("demand unknown", never silently zero). While dragging, the
+  strips preview the change live; on drop a new bottleneck is called out.
 - Multi-host operation is visible on the same canvas, not a separate
   screen: once more than one host is registered, the flow editor shows
   a zone per host (live CPU/RAM, fixed lanes, toggleable), a connection
@@ -234,6 +250,22 @@ Full walkthroughs and context for every screen above are in
   and dragging a standalone node's tile into another zone triggers a
   guided move (stop, start on the target host, best-effort reconnect
   of its existing connections) after a confirmation dialog.
+
+**Operations**
+
+- **System update from the browser**: an admin uploads a signed update
+  package (Ed25519 signature, SHA-256 per file, strict archive checks),
+  reviews its content and confirms the version by typing it. The
+  standalone supervisor backs up the database, stages everything next to
+  its target (no downtime yet), stops the orchestrator, swaps the files
+  atomically, restarts it with the finished binaries (no source build) and
+  verifies health and version — **automatically rolling back** if the new
+  version does not come up. Running nodes keep running and are flagged
+  "outdated" until restarted (one confirmed action restarts them);
+  packages can also be distributed to remote host agents, which verify
+  them against their own trust anchor. See `docs/HANDBUCH.md` §5b.
+- Database backup/restore from the browser, an orchestrator cluster
+  (Raft) with guided join/leave, and an audit log of all write requests.
 
 **Business process engine & asset catalog**
 
@@ -332,7 +364,8 @@ functions: [`docs/HANDBUCH.md`](docs/HANDBUCH.md) §9):
   its own)
 - **omp-viewer** / **omp-multiviewer** — single-stream preview and
   auto-discovered multi-tile monitoring (with automatic low-res preview
-  fan-out)
+  fan-out); as a role in a workflow the multiviewer shows only that
+  workflow's sources
 - **omp-ograf** — EBU OGraf graphics overlay node (Fill+Key)
 - **omp-media-library** — file catalog with technical metadata
   (ffprobe) and mark-in/out segments
