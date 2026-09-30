@@ -6,7 +6,10 @@ aus einer echten, lokal laufenden Entwicklungsinstanz (`make start`),
 kein Mockup.
 
 Für den technischen Dev-Betrieb (Installation, `make`-Targets,
-Troubleshooting) siehe [`HANDBUCH.md`](HANDBUCH.md). Für Architektur-
+Troubleshooting) siehe [`HANDBUCH.md`](HANDBUCH.md). **Bei der
+Erstinstallation zuerst `make preflight` ausführen:** es prüft, ob der
+Rechner alles Nötige hat, und nennt zu jedem Problem den Befehl zur
+Behebung (`HANDBUCH.md` §1.1). Für Architektur-
 Hintergrund siehe [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## 1. Anmelden
