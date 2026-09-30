@@ -326,6 +326,9 @@ pub struct DiscoveredInput {
     /// Node-Auflösung, die `main.rs` fürs Tally-Event braucht (Tally
     /// zielt auf die Node-Kachel, Discovery liefert nur `device_id`).
     pub device_id: String,
+    /// Auflösung/Bildrate des Quell-Flows laut Registry (None, falls der
+    /// Flow keine trägt) — Grundlage der Formatabweichungs-Anzeige.
+    pub format: Option<omp_node_sdk::is04::VideoFormat>,
 }
 
 /// Ein per NMOS-Device gefundenes Fill+Key-Senderpaar (`main.rs::

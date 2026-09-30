@@ -91,6 +91,9 @@ pub struct DiscoveredInput {
     pub sender_id: String,
     pub label: String,
     pub flow_id: String,
+    /// Auflösung/Bildrate des Quell-Flows laut Registry (Formatabweichungs-
+    /// Anzeige, 2026-09-30).
+    pub format: Option<omp_node_sdk::is04::VideoFormat>,
     /// Sender-ID des Lowres-Begleiters (nur von `main.rs` für
     /// `activateLowresPreview`/`releaseLowresPreview` gebraucht, hier
     /// selbst ungenutzt — s. `lowres_flow_id`-Doku).

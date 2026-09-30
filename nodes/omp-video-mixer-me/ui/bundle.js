@@ -619,9 +619,14 @@ class OmpVideoMixerMePanel extends HTMLElement {
         const reusable = reused
           && reused.classList.contains("with-thumb") === wantsThumb
           && hasImg === !!(wantsThumb && sourceNodeId);
+        // Formatabweichung (Nutzerwunsch 2026-09-30): Quelle hat andere
+        // Auflösung/Bildrate als der Mixer — Warnsymbol + Tooltip.
+        const shownLabel = entry.mismatch ? `⚠ ${entry.label}` : entry.label;
         const btn = reusable
-          ? updateBusButton(reused, entry.label, entry.senderId, sourceNodeId)
-          : makeBusButton(call, entry.label, entry.senderId, isProgram, sourceNodeId);
+          ? updateBusButton(reused, shownLabel, entry.senderId, sourceNodeId)
+          : makeBusButton(call, shownLabel, entry.senderId, isProgram, sourceNodeId);
+        if (entry.mismatch) btn.title = `Abweichendes Format: ${entry.format || "?"} — Mixer: ${entry.mixerFormat || "?"}`;
+        else btn.removeAttribute("title");
         if (reused) existingButtons.delete(entry.senderId);
         btn.dataset.senderId = entry.senderId;
         btn.active = entry.senderId === activeId;
@@ -1007,7 +1012,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
           addRow.className = "row";
           const available = latestInputs
             .filter((i) => !latestPinned.includes(i.senderId))
-            .map((i) => ({ label: i.label, senderId: i.senderId }));
+            .map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
           const picker = buildSourceSelector(available, "Quelle hinzufügen…");
           picker.addEventListener("change", async () => {
             if (!picker.value) return;
@@ -1088,7 +1093,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         sourceField.className = "field";
         const sourceLabel = document.createElement("label");
         sourceLabel.textContent = "Quelle";
-        const pipInputEntries = latestInputs.map((i) => ({ label: i.label, senderId: i.senderId }));
+        const pipInputEntries = latestInputs.map((i) => ({ label: i.mismatch ? `⚠ ${i.label} (${i.format})` : i.label, senderId: i.senderId }));
         const sourceSelect = buildSourceSelector(pipInputEntries, "Schwarz");
         sourceSelect.value = draft.senderId;
         sourceSelect.addEventListener("change", () => (draft.senderId = sourceSelect.value));
@@ -1494,7 +1499,7 @@ class OmpVideoMixerMePanel extends HTMLElement {
         if (preset) alwaysVisible.add(preset);
         if (level === 0) for (const id of otherLevelSenderIds) alwaysVisible.add(id);
         const visibleInputs = inputs.filter((i) => alwaysVisible.has(i.senderId));
-        const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId }))];
+        const entries = [{ label: "BLK", senderId: "" }, ...visibleInputs.map((i) => ({ label: i.label, senderId: i.senderId, format: i.format, mixerFormat: i.mixerFormat, mismatch: !!i.mismatch }))];
         // Nur dieses eine Hinweis-Element gezielt ersetzen (statt eines
         // vollen `innerHTML = ""`), damit `renderBusRow`s wiederverwendete
         // Knöpfe/Bilder unangetastet bleiben.

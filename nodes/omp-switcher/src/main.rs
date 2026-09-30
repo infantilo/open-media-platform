@@ -29,6 +29,8 @@ use serde_json::Value;
 const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
 
 struct SwitcherStore {
+    width: u32,
+    height: u32,
     inputs: Arc<Mutex<Vec<DiscoveredInput>>>,
     active: Arc<Mutex<Option<String>>>,
     pipeline: pipeline::PipelineHandle,
@@ -76,7 +78,28 @@ impl ParamStore for SwitcherStore {
                 Some(serde_json::json!(
                     inputs
                         .iter()
-                        .map(|i| serde_json::json!({"senderId": i.sender_id, "label": i.label}))
+                        .map(|i| {
+                            // Formatabweichung zur Switcher-Auflösung/-Rate
+                            // (Nutzerwunsch 2026-09-30).
+                            let mismatch = i.format.is_some_and(|f| {
+                                f.width != self.width
+                                    || f.height != self.height
+                                    || !f.same_rate(pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR)
+                            });
+                            let own = omp_node_sdk::is04::VideoFormat {
+                                width: self.width,
+                                height: self.height,
+                                rate_num: pipeline::FRAMERATE_NUMERATOR,
+                                rate_den: pipeline::FRAMERATE_DENOMINATOR,
+                            };
+                            serde_json::json!({
+                                "senderId": i.sender_id,
+                                "label": i.label,
+                                "format": i.format.map(|f| f.describe()),
+                                "mismatch": mismatch,
+                                "ownFormat": own.describe(),
+                            })
+                        })
                         .collect::<Vec<_>>()
                 ))
             }
@@ -184,6 +207,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let active = Arc::new(Mutex::new(None::<String>));
 
     let store: Arc<dyn ParamStore> = Arc::new(SwitcherStore {
+        width,
+        height,
         inputs: inputs.clone(),
         active: active.clone(),
         pipeline: pipeline_handle.clone(),
@@ -320,7 +345,8 @@ fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<Discov
             continue;
         }
         let Some(flow_id) = &s.flow_id else { continue };
-        if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {
+        let Ok(info) = registry.get_flow_info(flow_id) else { continue };
+        if info.format != is04::FORMAT_VIDEO {
             continue;
         }
 
@@ -333,6 +359,7 @@ fn discover(registry: &RegistryClient, own_sender_id: &str) -> Result<Vec<Discov
         let lowres = group.and_then(|g| lowres_map.get(&g).cloned());
 
         discovered.push(DiscoveredInput {
+            format: info.video,
             sender_id: s.id.clone(),
             label: s.label.clone(),
             flow_id: flow_id.clone(),

@@ -465,6 +465,35 @@ pub enum FlowResource {
     Audio(AudioFlow),
 }
 
+/// Auflösung + Bildrate eines Video-Flows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoFormat {
+    pub width: u32,
+    pub height: u32,
+    pub rate_num: u32,
+    pub rate_den: u32,
+}
+
+impl VideoFormat {
+    /// Gleiche Bildrate (Kreuzmultiplikation, 30000/1001 != 30/1).
+    pub fn same_rate(&self, num: u32, den: u32) -> bool {
+        u64::from(self.rate_num) * u64::from(den) == u64::from(num) * u64::from(self.rate_den)
+    }
+
+    pub fn describe(&self) -> String {
+        let fps = f64::from(self.rate_num) / f64::from(self.rate_den);
+        let fps = if (fps - fps.round()).abs() < 0.005 { format!("{}", fps.round() as u32) } else { format!("{fps:.2}") };
+        format!("{}×{}@{}", self.width, self.height, fps)
+    }
+}
+
+/// Ergebnis von `RegistryClient::get_flow_info`.
+#[derive(Debug, Clone)]
+pub struct FlowInfo {
+    pub format: String,
+    pub video: Option<VideoFormat>,
+}
+
 impl FlowResource {
     pub fn id(&self) -> &str {
         match self {
@@ -699,6 +728,39 @@ impl RegistryClient {
                 .read_json::<FlowFormat>()
                 .map(|f| f.format)
                 .map_err(|e| QueryError::Request(e.to_string())),
+            Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
+            Err(e) => Err(QueryError::Request(e.to_string())),
+        }
+    }
+
+    /// Wie [`get_flow_format`](Self::get_flow_format), liefert aber
+    /// zusätzlich das Videoformat (Auflösung/Framerate), sofern der Flow
+    /// eines trägt (2026-09-30: Formatabweichungs-Anzeige im Mixer).
+    pub fn get_flow_info(&self, flow_id: &str) -> Result<FlowInfo, QueryError> {
+        #[derive(Deserialize)]
+        struct Rate {
+            numerator: u32,
+            denominator: u32,
+        }
+        #[derive(Deserialize)]
+        struct Raw {
+            format: String,
+            frame_width: Option<u32>,
+            frame_height: Option<u32>,
+            grain_rate: Option<Rate>,
+        }
+        let url = format!("{}/x-nmos/query/v1.3/flows/{}", self.base_url, flow_id);
+        match ureq::get(&url).call() {
+            Ok(mut resp) => {
+                let raw = resp.body_mut().read_json::<Raw>().map_err(|e| QueryError::Request(e.to_string()))?;
+                let video = match (raw.frame_width, raw.frame_height, raw.grain_rate) {
+                    (Some(width), Some(height), Some(r)) if r.denominator > 0 => {
+                        Some(VideoFormat { width, height, rate_num: r.numerator, rate_den: r.denominator })
+                    }
+                    _ => None,
+                };
+                Ok(FlowInfo { format: raw.format, video })
+            }
             Err(ureq::Error::StatusCode(code)) => Err(QueryError::Status(code)),
             Err(e) => Err(QueryError::Request(e.to_string())),
         }

@@ -118,6 +118,10 @@ const GROUPHINT_TAG: &str = "urn:x-nmos:tag:grouphint/v1.0";
 type PerLevel<T> = Vec<Arc<Mutex<T>>>;
 
 struct MixerStore {
+    /// Mixer-Auflösung (`OMP_WIDTH`/`OMP_HEIGHT`) für den Formatvergleich
+    /// der Eingänge in `level_get` ("crosspoint.inputs").
+    width: u32,
+    height: u32,
     /// Geteilter Quellen-Pool (Nutzerwunsch 2026-08-14: "teilen sich
     /// denselben Quellen-Pool") — EIN Eintrag für alle Ebenen, nicht
     /// `PerLevel`. Enthält seit dem Nachtrag 2026-08-14 ("Mastereben
@@ -644,7 +648,30 @@ fn level_get(store: &MixerStore, name: &str) -> Option<Value> {
                 inputs
                     .iter()
                     .filter(|i| &i.sender_id != own_id)
-                    .map(|i| serde_json::json!({"senderId": i.sender_id, "label": i.label}))
+                    .map(|i| {
+                        // Formatabweichung zur Mixer-Auflösung/-Rate
+                        // (Nutzerwunsch 2026-09-30) — die Quelle wird
+                        // trotzdem verarbeitet (skaliert/Letterbox bzw.
+                        // Rate umgetaktet), aber sichtbar gemacht.
+                        let mismatch = i.format.is_some_and(|f| {
+                            f.width != store.width
+                                || f.height != store.height
+                                || !f.same_rate(pipeline::FRAMERATE_NUMERATOR, pipeline::FRAMERATE_DENOMINATOR)
+                        });
+                        serde_json::json!({
+                            "senderId": i.sender_id,
+                            "label": i.label,
+                            "format": i.format.map(|f| f.describe()),
+                            "mismatch": mismatch,
+                            "mixerFormat": omp_node_sdk::is04::VideoFormat {
+                                width: store.width,
+                                height: store.height,
+                                rate_num: pipeline::FRAMERATE_NUMERATOR,
+                                rate_den: pipeline::FRAMERATE_DENOMINATOR,
+                            }
+                            .describe(),
+                        })
+                    })
                     .collect::<Vec<_>>()
             ))
         }
@@ -1207,6 +1234,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         (0..level_count).map(|_| Arc::new(Mutex::new(None))).collect();
 
     let store: Arc<dyn ParamStore> = Arc::new(MixerStore {
+        width,
+        height,
         inputs: inputs.clone(),
         sender_ids: sender_ids.clone(),
         program: program.clone(),
@@ -1567,11 +1596,13 @@ fn discover(
             continue;
         }
         let Some(flow_id) = &s.flow_id else { continue };
-        if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {
+        let Ok(info) = registry.get_flow_info(flow_id) else { continue };
+        if info.format != is04::FORMAT_VIDEO {
             continue;
         }
 
         discovered.push(DiscoveredInput {
+            format: info.video,
             sender_id: s.id.clone(),
             label: s.label.clone(),
             flow_id: flow_id.clone(),

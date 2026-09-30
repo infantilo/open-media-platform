@@ -221,6 +221,13 @@ class OmpSwitcherPanel extends HTMLElement {
       }
     };
 
+    // Formatabweichung (Nutzerwunsch 2026-09-30): Warnsymbol + Tooltip.
+    const shownLabel = (input) => (input.mismatch ? `⚠ ${input.label}` : input.label);
+    const setMismatchTitle = (btn, input) => {
+      if (input.mismatch) btn.title = `Abweichendes Format: ${input.format || "?"} — Switcher: ${input.ownFormat || "?"}`;
+      else btn.removeAttribute("title");
+    };
+
     const makeInputButton = (input, active, sourceNodeId) => {
       const btn = document.createElement("omp-button");
       btn.className = thumbsEnabled ? "source with-thumb" : "source";
@@ -254,10 +261,12 @@ class OmpSwitcherPanel extends HTMLElement {
         }
         const label = document.createElement("div");
         label.className = "thumb-label";
-        label.textContent = input.label;
+        label.textContent = shownLabel(input);
         btn.append(thumb, label);
+        setMismatchTitle(btn, input);
       } else {
-        btn.textContent = input.label;
+        btn.textContent = shownLabel(input);
+        setMismatchTitle(btn, input);
       }
       return btn;
     };
@@ -274,9 +283,11 @@ class OmpSwitcherPanel extends HTMLElement {
         const noSignal = btn.querySelector(".no-signal");
         if (img && noSignal && sourceNodeId) void loadPreviewImage(img, noSignal, previewSnapshotUrl(sourceNodeId));
         const label = btn.querySelector(".thumb-label");
-        if (label) label.textContent = input.label;
+        if (label) label.textContent = shownLabel(input);
+        setMismatchTitle(btn, input);
       } else {
-        btn.textContent = input.label;
+        btn.textContent = shownLabel(input);
+        setMismatchTitle(btn, input);
       }
       return btn;
     };
