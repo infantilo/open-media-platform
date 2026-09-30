@@ -277,10 +277,41 @@ fn discover(registry: &RegistryClient) -> Result<Vec<DiscoveredInput>, String> {
     let senders = registry.list_senders().map_err(|e| e.to_string())?;
     let lowres_map = lowres_by_group(&senders);
 
+    // Workflow-Scoping (Nutzerwunsch 2026-09-30): läuft dieser Multiviewer
+    // als Rolle eines Workflows (`OMP_WORKFLOW_ID`, vom Orchestrator
+    // gesetzt), zeigt er nur Quellen von Nodes DESSELBEN Workflows
+    // (NMOS-Node-Tag `urn:x-omp:workflow`) — sonst würde er bei vielen
+    // laufenden Workflows alle Signale aller Workflows kacheln. Manuell
+    // gestartet (keine Workflow-ID) bleibt es beim bisherigen "alle
+    // MXL-Video-Sender".
+    let own_workflow = std::env::var("OMP_WORKFLOW_ID").ok().filter(|w| !w.is_empty());
+    let node_workflow: HashMap<String, String> = if own_workflow.is_some() {
+        registry
+            .list_nodes()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .filter_map(|n| n.tags.get(is04::WORKFLOW_TAG).and_then(|v| v.first().cloned()).map(|w| (n.id, w)))
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let mut device_workflow: HashMap<String, Option<String>> = HashMap::new();
+
     let mut discovered = Vec::new();
     for s in &senders {
         if s.transport != TRANSPORT_MXL || is_lowres_companion(s) {
             continue;
+        }
+        if let Some(own) = &own_workflow {
+            let sender_workflow = device_workflow
+                .entry(s.device_id.clone())
+                .or_insert_with(|| {
+                    registry.get_device(&s.device_id).ok().and_then(|d| node_workflow.get(&d.node_id).cloned())
+                })
+                .clone();
+            if sender_workflow.as_deref() != Some(own.as_str()) {
+                continue;
+            }
         }
         let Some(flow_id) = &s.flow_id else { continue };
         if !matches!(registry.get_flow_format(flow_id), Ok(format) if format == is04::FORMAT_VIDEO) {

@@ -62,6 +62,14 @@ const maxRoleStateBytes = 1 << 20 // 1 MiB — ein Bedienzustand ist ein paar hu
 // eingetragen sein, sonst lehnt ein Remote-Host den Start komplett ab.
 const roleSeedEnvKey = "OMP_ROLE_SEED"
 
+// workflowIDEnvKey teilt einer Workflow-Rolle die ID ihres Workflows mit
+// (2026-09-30): omp-node-sdk trägt sie als NMOS-Node-Tag
+// `urn:x-omp:workflow` ein, damit z. B. der Automatic Multiviewer nur
+// die Quellen SEINES Workflows zeigt statt aller im Netz. Muss wie
+// OMP_ROLE_SEED in host-agent/internal/commands/commands.go
+// (allowedExtraEnvKeys) stehen.
+const workflowIDEnvKey = "OMP_WORKFLOW_ID"
+
 // withRoleSeed setzt roleSeedEnvKey deterministisch aus (Workflow-ID,
 // Rollenname) — dieselbe Rolle desselben Workflows bekommt bei jedem aus
 // runStart/runRestartRole gestarteten Prozess denselben Seed und damit
@@ -81,6 +89,7 @@ func withRoleSeed(env map[string]string, workflowID, roleName string) map[string
 	}
 	sum := sha256.Sum256([]byte(workflowID + "|" + roleName))
 	out[roleSeedEnvKey] = hex.EncodeToString(sum[:])
+	out[workflowIDEnvKey] = workflowID
 	return out
 }
 

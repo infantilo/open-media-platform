@@ -43,6 +43,11 @@ pub const TRANSPORT_MXL: &str = "urn:x-nmos:transport:mxl";
 /// teilen können).
 pub const INSTANCE_TAG: &str = "urn:x-omp:instance";
 
+/// Node-Tag mit der ID des Workflows, zu dem die Node gehört (aus
+/// `OMP_WORKFLOW_ID`, gesetzt vom Orchestrator für Workflow-Rollen). Fehlt
+/// bei manuell gestarteten Nodes.
+pub const WORKFLOW_TAG: &str = "urn:x-omp:workflow";
+
 /// `pub(crate)` seit 2026-08-06: `node::NodeHandle::add_receiver`/
 /// `remove_receiver` müssen `Device::version` selbst auffrischen, bevor
 /// sie das mutierte Device erneut registrieren (IS-04-Registries
