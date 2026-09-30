@@ -173,6 +173,8 @@ type InstanceSample struct {
 	InstanceID string  `json:"instanceId"`
 	CPUPercent float64 `json:"cpuPercent"`
 	RSSBytes   uint64  `json:"rssBytes"`
+	// Outdated: Binary seit dem Prozessstart ersetzt (System-Update).
+	Outdated bool `json:"outdated,omitempty"`
 }
 
 // cpuTimes ist die für die Auslastungsberechnung nötige Teilmenge der

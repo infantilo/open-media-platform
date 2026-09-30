@@ -230,13 +230,28 @@ Supervisor per `exec`, Host-Agent, Node-Binary über den Katalog), manipuliertes
 Paket abgelehnt, absichtlich defekter Orchestrator → automatischer Rollback
 auf den vorherigen Stand.
 
+Remote-Hosts (umgesetzt, live mit den simulierten Hosts geprüft)
+
+- `POST /api/v1/admin/updates/{id}/distribute` (Admin, Versionsbestätigung)
+  schickt jedem online gemeldeten Host-Agent per NATS ein `update`-Kommando
+  mit einem **Einmal-Token-Pfad**. Der Agent lädt das Paket nur von
+  SEINEM Orchestrator (`GET /api/v1/host-updates/{id}?token=…`, bewusst
+  außerhalb des Auth-Gates, Token nur für diese Paket-ID, 30 min), prüft es
+  mit seinem **eigenen** Vertrauensanker (`OMP_UPDATE_PUBKEY_FILE` auf dem
+  Host) und ersetzt nur das eigene Agent-Binary und Node-Binaries aus dem
+  **agent-lokalen** Katalog. Offline-Hosts werden übersprungen und gemeldet.
+- Ergebnis je Host live in der UI (Admin → System-Update → Paket →
+  „An Remote-Hosts verteilen“).
+- Kein Agent-Neustart (ein `exec` würde seine im Speicher gehaltenen
+  Kindprozesse verwaisen lassen): das neue Agent-Binary wird beim nächsten
+  Agent-Neustart aktiv. Instanzen auf Hosts werden über die Telemetrie als
+  „veraltet“ markiert (Binary jünger als Prozessstart).
+
 Noch nicht enthalten
 
-- **Remote-Hosts/Host-Agents auf anderen Maschinen** — nur die lokalen
-  Dateien werden ersetzt; entfernte Hosts brauchen einen eigenen
-  `update`-Befehl des Host-Agents.
-- **Cluster-Rolling-Update** (mehrere Orchestrator-Mitglieder).
-- Laufende Host-Agents/Nodes laufen bis zu ihrem Neustart mit dem alten
-  Binary weiter (Nodes werden markiert, Host-Agents nicht).
+- **Cluster-Rolling-Update** (mehrere Orchestrator-Mitglieder) — nicht
+  testbar mit einem einzelnen Mitglied, bewusst nicht geraten.
+- Ein automatischer Neustart von Host-Agents/Nodes nach dem Update.
 - Im Entwicklungsbetrieb überschreibt ein späteres `make start` den
-  eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“).
+  eingespielten Stand wieder mit einem Quellcode-Build (Version „dev“);
+  `start-hosts.sh` verhält sich genauso (außer mit `OMP_SKIP_BUILD=1`).

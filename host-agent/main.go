@@ -32,8 +32,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -206,6 +208,17 @@ func main() {
 	defer nc.Close()
 
 	executor := commands.NewExecutor(cat, registryURL, natsURL, orchestratorURL, st.HostID, nc)
+	// System-Update auf diesem Host (docs/ENTWURF-SYSTEM-UPDATE.md): der
+	// Agent prüft Pakete mit seinem EIGENEN Vertrauensanker. Ohne
+	// Schlüsseldatei lehnt er jedes Paket ab.
+	if selfPath, err := os.Executable(); err == nil {
+		executor.SetUpdateConfig(commands.UpdateConfig{
+			KeyFile:       envOr("OMP_UPDATE_PUBKEY_FILE", filepath.Join(filepath.Dir(statePath), "update-trusted.pub")),
+			AllowUnsigned: strings.EqualFold(envOr("OMP_UPDATE_ALLOW_UNSIGNED", "false"), "true"),
+			SelfPath:      selfPath,
+			Dir:           envOr("OMP_UPDATE_DIR", filepath.Join(filepath.Dir(statePath), "updates")),
+		})
+	}
 	cmdSubject := fmt.Sprintf("omp.host.%s.cmd", st.HostID)
 	cmdSub, err := nc.Subscribe(cmdSubject, func(msg *nats.Msg) {
 		req, err := commands.DecodeRequest(msg.Data)
@@ -214,11 +227,21 @@ func main() {
 			return
 		}
 		slog.Info("command received", "action", req.Action, "type", req.Type, "instance_id", req.InstanceID)
-		resp := executor.Handle(req)
-		if !resp.OK {
-			slog.Warn("command failed", "action", req.Action, "instance_id", req.InstanceID, "error", resp.Error)
+		handle := func() {
+			resp := executor.Handle(req)
+			if !resp.OK {
+				slog.Warn("command failed", "action", req.Action, "instance_id", req.InstanceID, "error", resp.Error)
+			}
+			_ = msg.Respond(commands.EncodeResponse(resp))
 		}
-		_ = msg.Respond(commands.EncodeResponse(resp))
+		if req.Action == "update" {
+			// Download + Prüfung kann Minuten dauern — nicht den
+			// Subscription-Callback blockieren (Start/Stop-Kommandos
+			// müssen weiter durchkommen).
+			go handle()
+			return
+		}
+		handle()
 	})
 	if err != nil {
 		slog.Error("command subscribe failed", "subject", cmdSubject, "error", err)
@@ -301,6 +324,7 @@ func main() {
 				InstanceID: inst.InstanceID,
 				CPUPercent: cpu,
 				RSSBytes:   rss,
+				Outdated:   inst.Outdated,
 			})
 		}
 		procSampler.Prune(keepPIDs)

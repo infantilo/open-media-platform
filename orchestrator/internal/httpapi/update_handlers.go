@@ -37,6 +37,21 @@ type UpdateService interface {
 	AllowUnsigned() bool
 }
 
+// UpdateDistributor verteilt ein Paket an Remote-Hosts (implementiert von
+// *updates.Distributor).
+type UpdateDistributor interface {
+	Start(e updates.Entry) (updates.Distribution, error)
+	Last() *updates.Distribution
+	CheckToken(id, token string) bool
+}
+
+// WithUpdateDistributor aktiviert die Verteilung an Remote-Hosts
+// (POST …/distribute) und den Token-geschützten Paket-Download für
+// Host-Agents (GET /api/v1/host-updates/{id}).
+func WithUpdateDistributor(d UpdateDistributor) HandlerOption {
+	return func(o *handlerOptions) { o.updateDist = d }
+}
+
 // UpdateSupervisor löst das Anwenden beim Supervisor aus und liest dessen
 // Status (implementiert von *supervisorclient.Client).
 type UpdateSupervisor interface {
@@ -65,7 +80,7 @@ func updatesDisabled(w http.ResponseWriter, svc UpdateService) bool {
 
 // handleListUpdates: GET /api/v1/admin/updates — Pakete, Historie,
 // Vertrauensanker, laufender Zustand.
-func handleListUpdates(svc UpdateService, sup UpdateSupervisor, launcherSvc LauncherService) http.HandlerFunc {
+func handleListUpdates(svc UpdateService, sup UpdateSupervisor, launcherSvc LauncherService, dist UpdateDistributor) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if updatesDisabled(w, svc) {
 			return
@@ -92,6 +107,11 @@ func handleListUpdates(svc UpdateService, sup UpdateSupervisor, launcherSvc Laun
 			"trustedKeys":       svc.TrustedKeyIDs(),
 			"allowUnsigned":     svc.AllowUnsigned(),
 			"outdatedInstances": outdated,
+		}
+		if dist != nil {
+			if last := dist.Last(); last != nil {
+				resp["distribution"] = last
+			}
 		}
 		if sup != nil {
 			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
@@ -224,6 +244,82 @@ func handleApplyUpdate(svc UpdateService, sup UpdateSupervisor, bk BackupService
 			"status": "update eingeleitet — der Server ist für einige Sekunden nicht erreichbar",
 			"backup": backupName,
 		})
+	}
+}
+
+// handleDistributeUpdate: POST /api/v1/admin/updates/{id}/distribute
+// {"confirm":true,"version":"…"} — schickt das Paket an alle Remote-Hosts.
+func handleDistributeUpdate(svc UpdateService, dist UpdateDistributor, domainAudit DomainAuditLogger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if updatesDisabled(w, svc) {
+			return
+		}
+		if dist == nil {
+			http.Error(w, "Verteilung an Hosts nicht konfiguriert", http.StatusNotImplemented)
+			return
+		}
+		var body struct {
+			Confirm bool   `json:"confirm"`
+			Version string `json:"version"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+			return
+		}
+		if !body.Confirm {
+			http.Error(w, "Bestätigung erforderlich (confirm: true)", http.StatusBadRequest)
+			return
+		}
+		e, err := svc.Verify(r.PathValue("id"))
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, updates.ErrNotFound) {
+				status = http.StatusNotFound
+			}
+			http.Error(w, fmt.Sprintf("Paket nicht verteilbar: %s", err), status)
+			return
+		}
+		if body.Version != e.Version {
+			http.Error(w, fmt.Sprintf("Bestätigung falsch: Version %q eintippen", e.Version), http.StatusBadRequest)
+			return
+		}
+		d, err := dist.Start(e)
+		if err != nil {
+			status := http.StatusInternalServerError
+			if errors.Is(err, updates.ErrBusy) {
+				status = http.StatusConflict
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+		logDomainAudit(domainAudit, actorFromRequest(r), "system_update", e.ID, "distribute_started",
+			map[string]any{"version": e.Version, "hosts": len(d.Hosts)})
+		writeJSON(w, http.StatusAccepted, d)
+	}
+}
+
+// handleHostUpdateDownload: GET /api/v1/host-updates/{id}?token=… — bewusst
+// außerhalb des Auth-Gates (Host-Agents haben keine Zugangsdaten); das
+// kurzlebige, nur für diese Paket-ID gültige Einmal-Token aus der
+// Verteilung ist die Zugriffskontrolle.
+func handleHostUpdateDownload(svc UpdateService, dist UpdateDistributor) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if svc == nil || dist == nil {
+			http.NotFound(w, r)
+			return
+		}
+		id := r.PathValue("id")
+		if !dist.CheckToken(id, r.URL.Query().Get("token")) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		e, err := svc.Get(id)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		http.ServeFile(w, r, e.File)
 	}
 }
 

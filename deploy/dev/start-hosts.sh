@@ -46,8 +46,12 @@ if [ -f "$MXL_ENV_FILE" ]; then
   source "$MXL_ENV_FILE"
 fi
 
-echo "==> Host-Agent-Binary bauen"
-( cd "$ROOT_DIR/host-agent" && go build -o "$BIN" . )
+if [ "${OMP_SKIP_BUILD:-}" = "1" ] && [ -x "$BIN" ]; then
+  echo "==> Bauen übersprungen (OMP_SKIP_BUILD=1, fertiges Binary)"
+else
+  echo "==> Host-Agent-Binary bauen"
+  ( cd "$ROOT_DIR/host-agent" && go build -o "$BIN" . )
+fi
 
 # id:label je simuliertem Host — bei Bedarf hier erweitern (dritter Host
 # etc.). Das Verzeichnis .run/<id> muss zum bereits persistierten
@@ -68,6 +72,12 @@ export OMP_NATS_TLS_CERT_FILE="${OMP_NATS_TLS_CERT_FILE:-$ROOT_DIR/.run/mtls/nat
 export OMP_NATS_TLS_KEY_FILE="${OMP_NATS_TLS_KEY_FILE:-$ROOT_DIR/.run/mtls/nats-client.key}"
 export OMP_NATS_TLS_CA_FILE="${OMP_NATS_TLS_CA_FILE:-$ROOT_DIR/.run/mtls/root_ca.crt}"
 
+# System-Update (docs/ENTWURF-SYSTEM-UPDATE.md): jeder Host-Agent prüft
+# Update-Pakete mit seinem EIGENEN Vertrauensanker — hier dieselbe
+# Schlüsseldatei wie beim Orchestrator (auf echten Remote-Hosts liegt
+# sie lokal auf dem Host). Ohne Datei lehnt der Agent jedes Paket ab.
+export OMP_UPDATE_PUBKEY_FILE="${OMP_UPDATE_PUBKEY_FILE:-$ROOT_DIR/.run/update-trusted.pub}"
+
 for entry in "${HOSTS[@]}"; do
   dir="${entry%%:*}"
   label="${entry#*:}"
@@ -86,6 +96,7 @@ for entry in "${HOSTS[@]}"; do
   OMP_HOST_AGENT_STATE_FILE="$STATE_FILE" \
   OMP_HOST_AGENT_LABEL="$label" \
   OMP_HOST_AGENT_CATALOG_PATH="$CATALOG" \
+  OMP_UPDATE_DIR="$RUN_DIR/updates" \
   nohup "$BIN" > "$LOG_FILE" 2>&1 &
   echo $! > "$PID_FILE"
 

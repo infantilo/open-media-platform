@@ -35,6 +35,7 @@ type handlerOptions struct {
 	updates         UpdateService
 	updateSup       UpdateSupervisor
 	updateBackup    BackupService
+	updateDist      UpdateDistributor
 }
 
 // WithAlarmAckStore aktiviert /api/v1/alarms/acks.

@@ -76,7 +76,7 @@ var allowedExtraEnvKeys = map[string]bool{
 
 // Request ist die auf omp.host.<hostId>.cmd empfangene Nachricht.
 type Request struct {
-	Action     string `json:"action"` // "start" | "stop"
+	Action     string `json:"action"` // "start" | "stop" | "update"
 	Type       string `json:"type,omitempty"`
 	InstanceID string `json:"instanceId"`
 	Label      string `json:"label,omitempty"`
@@ -99,6 +99,12 @@ type Request struct {
 	// Einträge, die kein Service-Token brauchen (fast alle) — harmlos,
 	// kein Node liest eine ungenutzte Env-Variable.
 	LaunchSecret string `json:"launchSecret,omitempty"`
+	// System-Update (Action "update", s. update.go): Pfad (relativ zum
+	// eigenen Orchestrator, inkl. Einmal-Token), erwartete Version und
+	// SHA-256 des Pakets.
+	UpdatePath    string `json:"updatePath,omitempty"`
+	UpdateVersion string `json:"updateVersion,omitempty"`
+	UpdateSHA256  string `json:"updateSha256,omitempty"`
 }
 
 // Response ist die Antwort auf Request.
@@ -106,6 +112,8 @@ type Response struct {
 	OK    bool   `json:"ok"`
 	PID   int    `json:"pid,omitempty"`
 	Error string `json:"error,omitempty"`
+	// Detail: Zusatzinformation bei Erfolg (z. B. Update-Ergebnis).
+	Detail string `json:"detail,omitempty"`
 }
 
 // ExitEvent ist die auf omp.host.<hostId>.events veröffentlichte
@@ -128,6 +136,7 @@ type ExitEvent struct {
 type runningInstance struct {
 	cmd        *exec.Cmd
 	stderrTail *tailBuffer
+	binPath    string // Katalog-Command[0], für die "veraltet"-Erkennung
 }
 
 // Executor führt Start-/Stop-Kommandos für die auf diesem Host lokal
@@ -139,6 +148,7 @@ type Executor struct {
 	orchestratorURL string
 	hostID          string
 	nc              Publisher
+	upd             *UpdateConfig
 
 	mu        sync.Mutex
 	instances map[string]*runningInstance
@@ -183,6 +193,8 @@ func NewExecutor(cat []catalog.Entry, registryURL, natsURL, orchestratorURL, hos
 type InstanceInfo struct {
 	InstanceID string
 	PID        int
+	// Outdated: das Binary wurde seit dem Prozessstart ersetzt (Update).
+	Outdated bool
 }
 
 // Instances liefert eine Momentaufnahme aller aktuell laufenden
@@ -192,7 +204,8 @@ func (e *Executor) Instances() []InstanceInfo {
 	defer e.mu.Unlock()
 	out := make([]InstanceInfo, 0, len(e.instances))
 	for id, ri := range e.instances {
-		out = append(out, InstanceInfo{InstanceID: id, PID: ri.cmd.Process.Pid})
+		pid := ri.cmd.Process.Pid
+		out = append(out, InstanceInfo{InstanceID: id, PID: pid, Outdated: binaryNewerThanProcess(ri.binPath, pid)})
 	}
 	return out
 }
@@ -204,6 +217,8 @@ func (e *Executor) Handle(req Request) Response {
 		return e.start(req)
 	case "stop":
 		return e.stop(req)
+	case "update":
+		return e.update(req)
 	default:
 		return Response{OK: false, Error: fmt.Sprintf("unknown action %q", req.Action)}
 	}
@@ -237,7 +252,7 @@ func (e *Executor) start(req Request) Response {
 	}
 
 	e.mu.Lock()
-	e.instances[req.InstanceID] = &runningInstance{cmd: cmd, stderrTail: stderrTail}
+	e.instances[req.InstanceID] = &runningInstance{cmd: cmd, stderrTail: stderrTail, binPath: entry.Command[0]}
 	e.mu.Unlock()
 
 	pid := cmd.Process.Pid

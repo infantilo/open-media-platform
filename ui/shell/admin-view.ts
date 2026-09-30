@@ -254,7 +254,10 @@ interface UpdatePackage {
   };
 }
 interface UpdateHistoryEntry { time: string; from?: string; version: string; ok: boolean; rolledBack?: boolean; error?: string }
+interface UpdateHostResult { hostId: string; label: string; state: string; detail?: string; updated: string }
+interface UpdateDistribution { packageId: string; version: string; running: boolean; hosts: UpdateHostResult[] }
 interface UpdateOverview {
+  distribution?: UpdateDistribution;
   current: { version: string; commit?: string; builtAt?: string };
   packages: UpdatePackage[];
   history: UpdateHistoryEntry[];
@@ -452,6 +455,7 @@ class AdminView extends HTMLElement {
   #updBackup = true;
   #updForce = false;
   #updApplying = false;
+  #updPollHandle: number | null = null;
 
   // Cluster-Sub-Tab (ARCHITECTURE.md §19.3, UMSETZUNG.md D12) — die
   // bisher UI-lose Raft-Status-/Join-/Leave-API bekommt hier eine
@@ -494,6 +498,7 @@ class AdminView extends HTMLElement {
   disconnectedCallback() {
     if (this.#auditPollHandle !== undefined) window.clearInterval(this.#auditPollHandle);
     if (this.#logPollHandle !== undefined) window.clearInterval(this.#logPollHandle);
+    if (this.#updPollHandle !== null) window.clearInterval(this.#updPollHandle);
     connectionMonitor.removeEventListener("sse-message", this.#onSseMessage);
   }
 
@@ -1371,6 +1376,43 @@ class AdminView extends HTMLElement {
     }
   }
 
+  // Verteilt das Paket an alle Remote-Hosts (Host-Agents laden es mit einem
+  // Einmal-Token, prüfen es mit ihrem eigenen Schlüssel und ersetzen Agent-
+  // und Node-Binaries). Ergebnis je Host erscheint live in der Liste.
+  async #distributeUpdate(pkg: UpdatePackage) {
+    const ok = await confirmDialog(
+      `Version ${pkg.version} an alle registrierten Remote-Hosts verteilen? Host-Agent und Node-Binaries auf den ` +
+        `Hosts werden ersetzt; ein neuer Host-Agent wird erst nach dessen Neustart aktiv, laufende Instanzen behalten ` +
+        `den alten Stand bis zu ihrem Neustart.`,
+      { confirmLabel: "Verteilen" },
+    );
+    if (!ok) return;
+    this.#error = "";
+    const res = await apiFetch(`/api/v1/admin/updates/${encodeURIComponent(pkg.id)}/distribute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true, version: pkg.version }),
+    });
+    if (!res.ok) {
+      this.#error = `Verteilen fehlgeschlagen: ${(await res.text()).trim()}`;
+      this.#render();
+      return;
+    }
+    await this.#loadUpdates();
+    this.#pollDistribution();
+  }
+
+  #pollDistribution() {
+    if (this.#updPollHandle !== null) return;
+    this.#updPollHandle = window.setInterval(async () => {
+      await this.#loadUpdates();
+      if (!this.#upd?.distribution?.running && this.#updPollHandle !== null) {
+        window.clearInterval(this.#updPollHandle);
+        this.#updPollHandle = null;
+      }
+    }, 2000);
+  }
+
   async #deleteUpdate(id: string) {
     const ok = await confirmDialog(`Update-Paket „${id}" vom Server löschen?`, { confirmLabel: "Löschen" });
     if (!ok) return;
@@ -1567,6 +1609,30 @@ class AdminView extends HTMLElement {
         comps.appendChild(tr);
       }
       detail.appendChild(comps);
+
+      // Verteilung an Remote-Hosts (unabhängig vom lokalen Installieren).
+      const dist = upd.distribution && upd.distribution.packageId === selected.id ? upd.distribution : null;
+      const distRow = document.createElement("div");
+      distRow.style.cssText = "margin-bottom:10px;";
+      const distBtn = document.createElement("button");
+      distBtn.textContent = dist?.running ? "Verteilung läuft …" : "An Remote-Hosts verteilen";
+      distBtn.disabled = !!dist?.running || (!selected.signed && !upd.allowUnsigned);
+      distBtn.addEventListener("click", () => void this.#distributeUpdate(selected));
+      distRow.appendChild(distBtn);
+      if (dist) {
+        const list = document.createElement("div");
+        list.style.cssText = "margin-top:6px;font-size:11px;";
+        for (const h of dist.hosts) {
+          const line = document.createElement("div");
+          line.style.cssText = "padding:1px 0;white-space:pre-wrap;" + (h.state === "failed" || h.state === "offline" ? "color:var(--omp-danger, #d33);" : "");
+          const mark = h.state === "ok" ? "✓" : h.state === "pending" ? "…" : "✗";
+          line.textContent = `${mark} ${h.label}: ${h.state}${h.detail ? ` — ${h.detail}` : ""}`;
+          list.appendChild(line);
+        }
+        if (dist.hosts.length === 0) list.textContent = "Keine Remote-Hosts registriert.";
+        distRow.appendChild(list);
+      }
+      detail.appendChild(distRow);
 
       const backupLbl = document.createElement("label");
       backupLbl.style.cssText = "display:flex;align-items:center;gap:6px;margin-bottom:6px;";

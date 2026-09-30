@@ -495,9 +495,12 @@ func NewHandler(cfg config.Config, nodes NodeLister, events EventSubscriber, gra
 
 	// System-Update per Browser-Upload (docs/ENTWURF-SYSTEM-UPDATE.md).
 	// VerbAdmin: ein Update-Paket ist ausführbarer Code.
-	mux.HandleFunc("GET /api/v1/admin/updates", g.requireVerbGlobal(authz.VerbAdmin, handleListUpdates(options.updates, options.updateSup, launcherSvc)))
+	mux.HandleFunc("GET /api/v1/admin/updates", g.requireVerbGlobal(authz.VerbAdmin, handleListUpdates(options.updates, options.updateSup, launcherSvc, options.updateDist)))
 	mux.HandleFunc("POST /api/v1/admin/updates/upload", g.requireVerbGlobal(authz.VerbAdmin, handleUploadUpdate(options.updates, options.domainAudit)))
 	mux.HandleFunc("DELETE /api/v1/admin/updates/{id}", g.requireVerbGlobal(authz.VerbAdmin, handleDeleteUpdate(options.updates, options.domainAudit)))
+	mux.HandleFunc("POST /api/v1/admin/updates/{id}/distribute", g.requireVerbGlobal(authz.VerbAdmin, handleDistributeUpdate(options.updates, options.updateDist, options.domainAudit)))
+	// Host-Agent-Download: bewusst außerhalb von authGate, Zugriff nur mit Einmal-Token.
+	mux.HandleFunc("GET /api/v1/host-updates/{id}", handleHostUpdateDownload(options.updates, options.updateDist))
 	mux.HandleFunc("POST /api/v1/admin/updates/{id}/apply", g.requireVerbGlobal(authz.VerbAdmin, handleApplyUpdate(options.updates, options.updateSup, options.updateBackup, options.domainAudit)))
 
 	// Remote-Host-Erkennung (ARCHITECTURE.md §18, UMSETZUNG.md D6 Teil 1).

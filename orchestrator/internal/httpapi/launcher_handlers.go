@@ -52,6 +52,7 @@ func mergeInstanceMetrics(list []launcher.Instance, hostMetrics HostMetricsReade
 			cpu, rss := im.CPUPercent, im.RSSBytes
 			list[i].CPUPercent = &cpu
 			list[i].RSSBytes = &rss
+			list[i].Outdated = im.Outdated
 			break
 		}
 	}

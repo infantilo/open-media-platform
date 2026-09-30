@@ -278,3 +278,77 @@ func TestProcessStartTimePlausible(t *testing.T) {
 		t.Errorf("start time %v implausible", st)
 	}
 }
+
+type fakeDistributor struct {
+	started  []updates.Entry
+	busy     bool
+	tokenFor map[string]string
+}
+
+func (f *fakeDistributor) Start(e updates.Entry) (updates.Distribution, error) {
+	if f.busy {
+		return updates.Distribution{}, updates.ErrBusy
+	}
+	f.started = append(f.started, e)
+	return updates.Distribution{PackageID: e.ID, Version: e.Version, Running: true}, nil
+}
+func (f *fakeDistributor) Last() *updates.Distribution { return nil }
+func (f *fakeDistributor) CheckToken(id, token string) bool {
+	return f.tokenFor[id] != "" && f.tokenFor[id] == token
+}
+
+func TestDistributeUpdate(t *testing.T) {
+	e := newUpdateEnv(t, false)
+	entry := decodeEntry(t, e.upload(t, e.pkg(t, "2026.10.0", nil, true)))
+	dist := &fakeDistributor{}
+	call := func(body string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
+		req.SetPathValue("id", entry.ID)
+		handleDistributeUpdate(e.svc, dist, nil)(rec, req)
+		return rec
+	}
+	if rec := call(`{"version":"2026.10.0"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("missing confirm: %d", rec.Code)
+	}
+	if rec := call(`{"confirm":true,"version":"1"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("wrong version: %d", rec.Code)
+	}
+	if len(dist.started) != 0 {
+		t.Fatal("nothing may start before a valid confirmation")
+	}
+	if rec := call(`{"confirm":true,"version":"2026.10.0"}`); rec.Code != http.StatusAccepted || len(dist.started) != 1 {
+		t.Errorf("valid: status=%d started=%d", rec.Code, len(dist.started))
+	}
+	dist.busy = true
+	if rec := call(`{"confirm":true,"version":"2026.10.0"}`); rec.Code != http.StatusConflict {
+		t.Errorf("busy: %d, want 409", rec.Code)
+	}
+}
+
+func TestHostUpdateDownloadNeedsValidToken(t *testing.T) {
+	e := newUpdateEnv(t, false)
+	entry := decodeEntry(t, e.upload(t, e.pkg(t, "2026.10.0", nil, true)))
+	dist := &fakeDistributor{tokenFor: map[string]string{entry.ID: "good"}}
+	get := func(id, token string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/host-updates/"+id+"?token="+token, nil)
+		req.SetPathValue("id", id)
+		handleHostUpdateDownload(e.svc, dist)(rec, req)
+		return rec
+	}
+	if rec := get(entry.ID, ""); rec.Code != http.StatusForbidden {
+		t.Errorf("no token: %d, want 403", rec.Code)
+	}
+	if rec := get(entry.ID, "bad"); rec.Code != http.StatusForbidden {
+		t.Errorf("bad token: %d, want 403", rec.Code)
+	}
+	rec := get(entry.ID, "good")
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("good token: %d len=%d", rec.Code, rec.Body.Len())
+	}
+	// Token einer anderen Paket-ID gilt nicht.
+	if rec := get("2026.10.1-aaaaaaaaaaaa", "good"); rec.Code != http.StatusForbidden {
+		t.Errorf("token for other package: %d, want 403", rec.Code)
+	}
+}
