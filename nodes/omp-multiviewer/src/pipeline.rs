@@ -235,9 +235,24 @@ fn build(
         }
     }
 
+    // Ausgabeformat des Grids fest auf I420 (Nutzerfund 2026-09-30, Automatic
+    // Multiviewer "nicht verbunden" trotz laufender Quelle): MXL liefert
+    // v210, ohne Vorgabe reichte die Kachelkette v210 bis zum `compositor`
+    // durch, der es als Ausgabeformat wählte — der MJPEG-Zweig
+    // (`videoscale ! videorate ! jpegenc`, kein `videoconvert`) kann v210
+    // nicht encodieren, die Aushandlung scheiterte still und der
+    // `compositor` blieb nach dem ersten Bild stehen (Vorschau dauerhaft
+    // 503).
+    let grid_caps = gst::ElementFactory::make("capsfilter")
+        .property("caps", gst::Caps::builder("video/x-raw").field("format", "I420").build())
+        .build()
+        .map_err(|e| format!("capsfilter (grid): {e}"))?;
+    pipeline.add(&grid_caps).map_err(|e| format!("add grid capsfilter: {e}"))?;
+    comp.link(&grid_caps).map_err(|e| format!("link compositor to grid capsfilter: {e}"))?;
+
     preview::build_mjpeg_branch(
         &pipeline,
-        &comp,
+        &grid_caps,
         broadcaster,
         canvas_width,
         canvas_height,
