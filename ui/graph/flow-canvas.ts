@@ -5335,14 +5335,12 @@ export class FlowCanvas extends HTMLElement {
   }
 
   // --- Snapshots/Szenen (UMSETZUNG.md B7) ---
+  // Der Knopf "Snapshot speichern" ist entfallen (Nutzerentscheidung
+  // 2026-09-30, nicht mehr nötig) — vorhandene Szenen lassen sich weiter
+  // per Chip anwenden.
 
   async #renderSnapshotBar() {
     this.#snapshotBar.replaceChildren();
-
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Snapshot speichern";
-    saveBtn.addEventListener("click", () => this.#saveSnapshot());
-    this.#snapshotBar.appendChild(saveBtn);
 
     const list = document.createElement("div");
     list.style.cssText = "display:flex;gap:6px;overflow-x:auto;min-width:0;flex:1;";
@@ -5367,26 +5365,8 @@ export class FlowCanvas extends HTMLElement {
     } catch {
       // Liste bleibt leer, wenn der Server (noch) nicht erreichbar ist.
     }
-  }
-
-  async #saveSnapshot() {
-    const label = prompt("Name der Szene:", "Neue Szene");
-    if (!label) return;
-
-    try {
-      const res = await apiFetch("/api/v1/snapshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label }),
-      });
-      if (!res.ok) {
-        this.#showToast(`Snapshot speichern fehlgeschlagen: ${res.status}`);
-        return;
-      }
-      await this.#renderSnapshotBar();
-    } catch (err) {
-      this.#showToast(`Snapshot speichern fehlgeschlagen: ${err}`);
-    }
+    // Ohne Szenen bleibt sonst eine leere Leiste am unteren Rand stehen.
+    this.#snapshotBar.style.display = list.childElementCount === 0 ? "none" : "flex";
   }
 
   async #applySnapshot(id: string) {
