@@ -390,6 +390,18 @@ func TestLeaveRemovesVoterAndPeerHTTPAddr(t *testing.T) {
 		t.Fatalf("peer http addr never appeared before Leave()")
 	}
 
+	// Der zu entfernende Knoten muss vor Leave() aufgeholt haben: ein
+	// entfernter Knoten erfährt seine Entfernung nur, wenn er den
+	// Konfigurationseintrag noch repliziert bekommt (der Leader repliziert
+	// ihn bis zum Eintrag und stoppt dann). Auf einem langsamen CI-Runner
+	// hing er sonst teils noch im Wahl-Zustand (AppliedIndex 0) und sah die
+	// Entfernung nie — ein Test-, kein Produktfehler.
+	if !waitFor(15*time.Second, func() bool {
+		return toRemove.Status().AppliedIndex >= leader.Status().LastIndex
+	}) {
+		t.Fatalf("node %s did not catch up before Leave(): remove=%+v leader=%+v", removedID, toRemove.Status(), leader.Status())
+	}
+
 	if err := leader.Leave(removedID); err != nil {
 		t.Fatalf("Leave() error = %v", err)
 	}
@@ -407,7 +419,7 @@ func TestLeaveRemovesVoterAndPeerHTTPAddr(t *testing.T) {
 	// Nachtrag 148), erkennt ihre Entfernung aber korrekt in der
 	// eigenen Konfigurationssicht: sie sieht sich selbst nicht mehr in
 	// ihrer eigenen Peers-Liste.
-	if !waitFor(10*time.Second, func() bool {
+	if !waitFor(15*time.Second, func() bool {
 		for _, p := range toRemove.Status().Peers {
 			if p.ID == removedID {
 				return false

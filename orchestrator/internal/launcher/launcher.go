@@ -1590,6 +1590,13 @@ func (l *Launcher) stopLocal(inst Instance) error {
 	}
 	if processAlive(inst.PID) {
 		_ = process.Kill()
+		// SIGKILL wirkt asynchron: kurz warten, bis der Prozess wirklich weg
+		// ist (die supervise()-Goroutine reapt ihn), damit Stop() mit
+		// "Prozess beendet" zurückkehrt statt mit "Kill gesendet".
+		killDeadline := time.Now().Add(2 * time.Second)
+		for processAlive(inst.PID) && time.Now().Before(killDeadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	return nil
 }
