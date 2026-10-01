@@ -102,6 +102,12 @@ func TestComputeRoleNetworkRealCatalog(t *testing.T) {
 	if math.Abs(a.TxMbps-2.768) > 0.01 || a.RxMbps != 0 || a.Estimated {
 		t.Errorf("aes67 source = %+v", a)
 	}
+	// WebRTC: Obergrenzen/Nennwerte, immer als Schätzung markiert
+	wc, _ := computeRoleNetwork(cat, def, workflows.Role{Name: "C", NodeType: "omp-webrtc-gateway-camera"})
+	wm, _ := computeRoleNetwork(cat, def, workflows.Role{Name: "M", NodeType: "omp-webrtc-gateway-monitor"})
+	if wc.RxMbps != 6.4 || wc.TxMbps != 0 || !wc.Estimated || wm.TxMbps != 4.3 || wm.RxMbps != 0 || !wm.Estimated {
+		t.Errorf("webrtc camera=%+v monitor=%+v", wc, wm)
+	}
 	in, _ := computeRoleNetwork(cat, def, def.Roles[3])
 	if !near(in.TxMbps, 9022.9) || in.RxMbps != 0 || in.Estimated {
 		t.Errorf("fabrics initiator = %+v", in)
