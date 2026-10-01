@@ -515,6 +515,39 @@ export function findBottlenecks(model: ResourceModel, timeline: Timeline): Bottl
   return out;
 }
 
+export interface WorkflowDemand {
+  cpuCores: number;
+  rssBytes: number;
+  netRxMbps: number;
+  netTxMbps: number;
+  gpuPercent: number;
+  gpuMemBytes: number;
+  roles: number;
+  // Rollen ohne Messprofil — ihr CPU/RAM-Bedarf fehlt in den Summen.
+  unknownRoles: number;
+}
+
+// Summe des Bedarfs aller Rollen eines Workflows (für die Sicherheitsabfrage
+// beim Anlegen eines Zeitplans). null, wenn das Modell den Workflow nicht kennt.
+export function workflowDemand(model: ResourceModel | null, wfId: string): WorkflowDemand | null {
+  const wf = model?.workflows.find((w) => w.id === wfId);
+  if (!wf) return null;
+  const d: WorkflowDemand = { cpuCores: 0, rssBytes: 0, netRxMbps: 0, netTxMbps: 0, gpuPercent: 0, gpuMemBytes: 0, roles: wf.roles.length, unknownRoles: 0 };
+  for (const r of wf.roles) {
+    if (r.known) {
+      d.cpuCores += r.cpuCores;
+      d.rssBytes += r.rssBytes;
+    } else {
+      d.unknownRoles++;
+    }
+    d.netRxMbps += r.netRxMbps ?? 0;
+    d.netTxMbps += r.netTxMbps ?? 0;
+    if (r.gpuKnown) d.gpuPercent += r.gpuPercent ?? 0;
+    d.gpuMemBytes += r.gpuMemBytes ?? 0;
+  }
+  return d;
+}
+
 export function fmtBytes(b: number): string {
   if (b >= 1 << 30) return `${(b / (1 << 30)).toFixed(1)} GB`;
   if (b >= 1 << 20) return `${Math.round(b / (1 << 20))} MB`;

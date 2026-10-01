@@ -42,6 +42,7 @@ import {
   fmtBytes,
   fmtCores,
   fmtMbps,
+  workflowDemand,
   isOver,
   laneCapacity,
   type Level,
@@ -318,7 +319,37 @@ class SchedulerView extends HTMLElement {
     void this.#persist(wf, schedules);
   }
 
+  // Offene Eingabe-Popups (Zeiten tippen, Anlegen bestätigen) hängen direkt
+  // an diesem Element — #render() ersetzt aber alle Kinder und würde sie bei
+  // jedem Poll/SSE-Ereignis (und nach jedem Speichern) wegwischen
+  // (Nutzerfund 2026-10-01: Zeit-Popup verschwand nach einer Sekunde).
+  // Solange eines offen ist, wird das Neuzeichnen zurückgestellt und beim
+  // Schließen nachgeholt.
+  #renderPending = false;
+
+  #popoverOpen(): boolean {
+    return this.querySelector('[data-role="time-editor"], [data-role="create-confirm"]') !== null;
+  }
+
+  #closePopover(panel: HTMLElement) {
+    panel.remove();
+    // Nachholen leicht verzögert: das Schließen geschieht oft per
+    // pointerdown auf ein anderes Bedienelement — ein sofortiges
+    // Neuzeichnen würde dessen Klick verschlucken (Element wäre ersetzt,
+    // bevor pointerup eintrifft).
+    if (this.#renderPending) {
+      window.setTimeout(() => {
+        if (this.#renderPending) this.#render();
+      }, 400);
+    }
+  }
+
   #render() {
+    if (this.#popoverOpen()) {
+      this.#renderPending = true;
+      return;
+    }
+    this.#renderPending = false;
     const container = document.createElement("div");
 
     container.appendChild(this.#renderToolbar());
@@ -1049,7 +1080,7 @@ class SchedulerView extends HTMLElement {
     const rect = anchor.getBoundingClientRect();
     const hostRect = this.getBoundingClientRect();
     panel.style.left = `${Math.min(Math.max(0, rect.left - hostRect.left), hostRect.width - 160)}px`;
-    panel.style.top = `${rect.bottom - hostRect.top + 2}px`;
+    panel.style.top = `${rect.bottom - hostRect.top + this.scrollTop + 2}px`;
 
     // Lokale, veränderbare Kopie — jede Feldänderung speichert sofort
     // (gleiche "committed on change"-Konvention wie beim Drag), operiert
@@ -1115,8 +1146,8 @@ class SchedulerView extends HTMLElement {
     this.appendChild(panel);
     const closeOnOutside = (ev: MouseEvent) => {
       if (!panel.contains(ev.target as Node)) {
-        panel.remove();
         document.removeEventListener("pointerdown", closeOnOutside, true);
+        this.#closePopover(panel);
       }
     };
     window.setTimeout(() => document.addEventListener("pointerdown", closeOnOutside, true), 0);
@@ -1244,22 +1275,141 @@ class SchedulerView extends HTMLElement {
     return schedules;
   }
 
-  // Warnt beim Loslassen, wenn die neuen Zeitpläne Engpässe erzeugen, die es
-  // vorher nicht gab (der Nutzer entscheidet — gespeichert wird trotzdem).
-  #warnNewBottlenecks(wf: Workflow, next: Schedule[]) {
+  // Engpässe, die die neuen Zeitpläne erzeugen und die es vorher nicht gab.
+  #newBottleneckParts(wf: Workflow, next: Schedule[]): string[] {
     const model = this.#model;
-    if (!model) return;
+    if (!model) return [];
     const dates = this.#visibleDates();
     const before = this.#computeTimeline(dates, null);
     const after = this.#computeTimeline(dates, { wfId: wf.id, schedules: next });
-    if (!before || !after) return;
+    if (!before || !after) return [];
     const key = (b: { laneId: string; slotIndex: number }) => `${b.laneId}#${b.slotIndex}`;
     const had = new Set(findBottlenecks(model, before).map(key));
     const fresh = findBottlenecks(model, after).filter((b) => !had.has(key(b)));
-    if (fresh.length === 0) return;
     const laneLabel = (id: string) => (id === AUTO_LANE ? "Auto-Pool" : model.hosts.find((h) => h.id === id)?.label ?? id);
     const parts = fresh.slice(0, 3).map((b) => `${laneLabel(b.laneId)} ${this.#slotLabel(dates, b.slotIndex)} (${b.what.join(", ")})`);
-    showToast(`⚠ Ressourcen-Engpass durch diese Änderung: ${parts.join(" · ")}${fresh.length > 3 ? ` … (+${fresh.length - 3})` : ""}`);
+    if (fresh.length > 3) parts.push(`… (+${fresh.length - 3})`);
+    return parts;
+  }
+
+  // Warnt beim Loslassen, wenn die neuen Zeitpläne Engpässe erzeugen, die es
+  // vorher nicht gab (der Nutzer entscheidet — gespeichert wird trotzdem).
+  #warnNewBottlenecks(wf: Workflow, next: Schedule[]) {
+    const parts = this.#newBottleneckParts(wf, next);
+    if (parts.length > 0) showToast(`⚠ Ressourcen-Engpass durch diese Änderung: ${parts.join(" · ")}`);
+  }
+
+  // Sicherheitsabfrage vor dem Anlegen eines per Ziehen erzeugten Zeitplans:
+  // zeigt Art, Start/Stop, Dauer, den Ressourcenbedarf des Workflows und
+  // neu entstehende Engpässe. Erst "Anlegen" speichert (Nutzerwunsch
+  // 2026-10-01); Abbrechen, Esc oder Klick daneben verwirft.
+  #confirmCreate(
+    wf: Workflow,
+    next: Schedule[],
+    info: { date: Date; startMin: number; stopMin: number },
+    anchorLeftPx: number,
+    anchorTopPx: number,
+  ) {
+    this.querySelector('[data-role="add-menu"]')?.remove();
+    this.querySelector('[data-role="time-editor"]')?.remove();
+    this.querySelector('[data-role="create-confirm"]')?.remove();
+
+    const panel = document.createElement("div");
+    panel.dataset.role = "create-confirm";
+    panel.className = "omp-popover";
+    panel.tabIndex = -1;
+    panel.style.cssText =
+      "position:absolute;padding:10px;z-index:20;display:flex;flex-direction:column;gap:6px;width:320px;max-width:calc(100% - 16px);box-sizing:border-box;";
+    const hostRect = this.getBoundingClientRect();
+    panel.style.left = `${Math.max(8, Math.min(anchorLeftPx - hostRect.left, hostRect.width - 336))}px`;
+    panel.style.top = `${anchorTopPx - hostRect.top + this.scrollTop + 4}px`;
+
+    const line = (label: string, value: string, color?: string) => {
+      const row = document.createElement("div");
+      row.style.cssText = "display:flex;gap:8px;font-size:12px;";
+      const l = document.createElement("span");
+      l.style.cssText = "color:var(--omp-text-dim);flex:0 0 76px;";
+      l.textContent = label;
+      const v = document.createElement("span");
+      v.style.cssText = `flex:1;${color ? `color:${color};` : ""}`;
+      v.textContent = value;
+      row.append(l, v);
+      panel.appendChild(row);
+    };
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-weight:600;";
+    title.textContent = `Zeitplan anlegen: ${wf.name}`;
+    panel.appendChild(title);
+
+    const kind = this.#newKind;
+    const art = kind === "once"
+      ? `Einmalig am ${fmtDayLabel(info.date)}`
+      : kind === "daily"
+      ? "Täglich"
+      : `Wöchentlich (${WEEKDAY_LABELS[info.date.getDay()]})`;
+    line("Art", art);
+    line("Start", fmtMinutes(info.startMin));
+    const stopLabel = fmtMinutes(info.stopMin) + (kind !== "once" && info.stopMin >= DAY_MINUTES ? " (als 23:59 gespeichert)" : "");
+    line("Stop", stopLabel);
+    const dur = info.stopMin - info.startMin;
+    line("Dauer", `${Math.floor(dur / 60) > 0 ? `${Math.floor(dur / 60)} h ` : ""}${dur % 60 > 0 || dur < 60 ? `${dur % 60} min` : ""}`.trim());
+
+    const d = workflowDemand(this.#model, wf.id);
+    if (d && d.roles > 0) {
+      const parts: string[] = [];
+      if (d.cpuCores > 0) parts.push(`CPU ${fmtCores(d.cpuCores)} Kerne`);
+      if (d.rssBytes > 0) parts.push(`RAM ${fmtBytes(d.rssBytes)}`);
+      if (d.netRxMbps > 0 || d.netTxMbps > 0) {
+        parts.push(`Netz ${d.netRxMbps > 0 ? "Rx " + fmtMbps(d.netRxMbps) : ""}${d.netRxMbps > 0 && d.netTxMbps > 0 ? " / " : ""}${d.netTxMbps > 0 ? "Tx " + fmtMbps(d.netTxMbps) : ""}`);
+      }
+      if (d.gpuPercent > 0) parts.push(`GPU ${Math.round(d.gpuPercent)} %`);
+      if (d.gpuMemBytes > 0) parts.push(`VRAM ${fmtBytes(d.gpuMemBytes)}`);
+      line("Bedarf", parts.length > 0 ? parts.join(" · ") : "unbekannt");
+      if (d.unknownRoles > 0) {
+        line("", `⚠ ${d.unknownRoles} von ${d.roles} Rolle(n) ohne Messprofil — Bedarf unvollständig`, "var(--omp-warning, #d9a400)");
+      }
+    }
+    const fresh = this.#newBottleneckParts(wf, next);
+    if (fresh.length > 0) line("Engpass", `⚠ ${fresh.join(" · ")}`, "var(--omp-error, #e55)");
+    else if (this.#model) line("Engpass", "✓ kein neuer Ressourcen-Engpass im sichtbaren Ausschnitt", "var(--omp-success, #5cb85c)");
+
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:6px;justify-content:flex-end;margin-top:4px;";
+    const cancel = document.createElement("button");
+    cancel.textContent = "Abbrechen";
+    const ok = document.createElement("button");
+    ok.textContent = "Anlegen";
+    ok.className = "omp-btn-primary";
+    btnRow.append(cancel, ok);
+    panel.appendChild(btnRow);
+
+    let closed = false;
+    const finish = (save: boolean) => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("pointerdown", onOutside, true);
+      this.#preview = null;
+      this.#closePopover(panel);
+      this.#repaintResources();
+      if (save) void this.#persist(wf, next);
+    };
+    const onOutside = (ev: Event) => {
+      if (!panel.contains(ev.target as Node)) finish(false);
+    };
+    cancel.addEventListener("click", () => finish(false));
+    ok.addEventListener("click", () => finish(true));
+    panel.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") finish(false);
+      else if (ev.key === "Enter") finish(true);
+    });
+
+    // Vorschau der Auswirkung bleibt in den Ressourcen-Streifen sichtbar.
+    this.#preview = { wfId: wf.id, schedules: next };
+    this.#repaintResources();
+    this.appendChild(panel);
+    ok.focus();
+    window.setTimeout(() => document.addEventListener("pointerdown", onOutside, true), 0);
   }
 
   // Ziehen auf leerer Fläche einer Workflow-Zeile legt einen neuen Zeitplan
@@ -1320,8 +1470,14 @@ class SchedulerView extends HTMLElement {
       const created = pair();
       cleanup();
       const next = [...(wf.definition.schedules ?? []), ...created];
-      this.#warnNewBottlenecks(wf, next);
-      void this.#persist(wf, next);
+      const leftPct = (left / totalMinutes) * rect.width;
+      this.#confirmCreate(
+        wf,
+        next,
+        { date: dates[dayIdx], startMin: left - dayStart, stopMin: right - dayStart },
+        rect.left + leftPct,
+        rect.bottom,
+      );
     };
     const onCancel = () => {
       cleanup();

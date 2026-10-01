@@ -11,6 +11,7 @@ import {
   type ResourceModel,
   type Schedule,
   slotUtilization,
+  workflowDemand,
 } from "./scheduler-logic.ts";
 
 const GB = 1024 ** 3;
@@ -304,4 +305,23 @@ Deno.test("VRAM: harte Grenze, GPU-Pool mit mehreren GPUs, Jetzt-Messung als Unt
   assertEquals(now.get("g2")![0].gpuMemBytes, 15 * GB);
   assertEquals(now.get("g2")![0].liveFloor.includes("VRAM"), true);
   assertEquals(now.get("g2")![0].gpuPercent, 20); // 10 % von 2 GPUs
+});
+
+Deno.test("workflowDemand: Summe der Rollen, unbekannte Rollen gezählt statt als 0", () => {
+  const m: ResourceModel = {
+    thresholds: { cpu: 85, mem: 90 },
+    hosts: [],
+    workflows: [{
+      id: "w", name: "W", status: "stopped",
+      roles: [
+        { name: "A", nodeType: "a", cpuCores: 1.5, cpuAvgCores: 1, rssBytes: GB, known: true, netTxMbps: 870, gpuKnown: true, gpuPercent: 40, gpuMemBytes: 2 * GB },
+        { name: "B", nodeType: "b", cpuCores: 0.5, cpuAvgCores: 0.4, rssBytes: GB, known: true, netRxMbps: 100 },
+        { name: "C", nodeType: "c", cpuCores: 0, cpuAvgCores: 0, rssBytes: 0, known: false },
+      ],
+    }],
+  };
+  const d = workflowDemand(m, "w")!;
+  assertEquals([d.cpuCores, d.rssBytes, d.netRxMbps, d.netTxMbps, d.gpuPercent, d.gpuMemBytes, d.roles, d.unknownRoles], [2, 2 * GB, 100, 870, 40, 2 * GB, 3, 1]);
+  assertEquals(workflowDemand(m, "nope"), null);
+  assertEquals(workflowDemand(null, "w"), null);
 });
